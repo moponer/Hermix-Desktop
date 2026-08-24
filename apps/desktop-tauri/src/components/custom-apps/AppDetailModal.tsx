@@ -213,8 +213,25 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
         </div>
 
         <div className="modal-body">
-          {error && <div className="modal-alert modal-alert--error">{error}</div>}
-          {success && <div className="modal-alert modal-alert--success">{success}</div>}
+          {error && (
+            <div className="modal-alert modal-alert--error" role="alert">
+              <span className="modal-alert__text">{error}</span>
+              <button
+                type="button"
+                className="modal-alert__dismiss"
+                onClick={() => setError(null)}
+                title="关闭"
+                aria-label="关闭错误提示"
+              >
+                <X size={12} strokeWidth={2} />
+              </button>
+            </div>
+          )}
+          {success && (
+            <div className="modal-alert modal-alert--success">
+              <span className="modal-alert__text">{success}</span>
+            </div>
+          )}
 
           {tab === "overview" && (
             <div className="app-detail-overview">

@@ -28,9 +28,15 @@ import { ThinkingDots, ReasoningBlock } from "./ThinkingBubble";
 export function ToolGroupCard({
   group,
   onPathClick,
+  awaitingApproval = false,
 }: {
   group: import("./messageParser").ToolGroup;
   onPathClick?: (path: string, e: React.MouseEvent) => void;
+  /** True when a sibling `kind: "approval_request"` step is still
+   *  pending the user's decision. Tool status flips from "运行中"
+   *  to "等待审批" so the user knows the agent is blocked on them,
+   *  not stuck mid-execution. */
+  awaitingApproval?: boolean;
 }) {
   const isRunning = group.status === "running";
   const isError = group.status === "error";
@@ -122,7 +128,9 @@ export function ToolGroupCard({
             </span>
           )}
           <span className={`tw-msg-state tw-msg-state--${isError ? "err" : isRunning ? "run" : "done"}`}>
-            {isRunning ? (
+            {awaitingApproval && isRunning ? (
+              <><AlertCircle size={11} className="shrink-0" />等待审批</>
+            ) : isRunning ? (
               <><Loader2 size={11} className="animate-spin shrink-0" />运行中</>
             ) : isError ? (
               <><AlertCircle size={11} className="shrink-0" />失败</>
@@ -216,6 +224,18 @@ export function ProcessTimeline({
   // genuinely stranded groups to "error" so reloads still surface real
   // interruptions.
   const streamComplete = !(isStreaming || hasRunningTool || keepOpen);
+  // Any pending inline approval card? Surface this so `ToolGroupCard`
+  // can switch its badge from "运行中" to "等待审批" — the agent is
+  // blocked on the user's decision, not actively executing. We don't
+  // have a stable tool_call_id → group.key mapping today (server's
+  // `RequestApproval` event carries `request_id` but no tool_call_id),
+  // so we broadcast the flag to every running group on this turn.
+  // That's slightly over-eager when several tools are running and
+  // only one is awaiting approval, but the user-perceived fix is
+  // identical: the card no longer lies about being mid-execution.
+  const awaitingApproval = steps.some(
+    (s) => s.kind === "approval_request" && s.meta.decision === null,
+  );
   const stepGroups = useMemo(
     () =>
       steps.map((s) =>
@@ -376,6 +396,7 @@ export function ProcessTimeline({
                 <ToolTimelineSection
                   groups={groups}
                   onPathClick={onPathClick}
+                  awaitingApproval={awaitingApproval}
                 />
               </div>
             );
@@ -419,17 +440,22 @@ export function ToolTimelineSection({
   groups,
   isStreaming: _isStreaming,
   onPathClick,
+  awaitingApproval = false,
 }: {
   groups: import("./messageParser").ToolGroup[];
   isStreaming?: boolean;
   onPathClick?: (path: string, e: React.MouseEvent) => void;
+  /** Forwarded to each `ToolGroupCard`. See ToolGroupCard for the
+   *  full rationale (replace "运行中" with "等待审批" so the user
+   *  knows the agent is blocked on their decision, not stuck). */
+  awaitingApproval?: boolean;
 }) {
   if (groups.length === 0) return null;
   return (
     <div className="tl-tools tl-tools--flat">
       <div className="tl-tools-list">
         {groups.map((g) => (
-          <ToolGroupCard key={g.key} group={g} onPathClick={onPathClick} />
+          <ToolGroupCard key={g.key} group={g} onPathClick={onPathClick} awaitingApproval={awaitingApproval} />
         ))}
       </div>
     </div>
