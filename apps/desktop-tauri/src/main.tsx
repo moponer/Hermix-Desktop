@@ -24,8 +24,8 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
 // 比让主人贴日志更直接——他自己能看到。
 if (import.meta.env.DEV) {
   // eslint-disable-next-line no-console
-  console.info(
-    `%c[hermix-ui build]%c running commit 84e229be (审批 ref race 双路 fallback, 2026-08-24)`,
+    console.info(
+    `%c[hermix-ui build]%c running commit d1eeb71c (审批 race flushSync 根治, 2026-08-24)`,
     "color:#1A1A1A;font-weight:600;background:#F0E68C;padding:2px 6px;border-radius:3px",
     "color:inherit",
   );
