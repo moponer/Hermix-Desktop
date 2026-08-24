@@ -1330,12 +1330,6 @@ streamPhaseRef.current = null;
       reason?: string;
       sessionId: string;
     }): Promise<{ decision: ApprovalDecision }> => {
-      // Diag: confirm the callback fired + which assistant we're targeting.
-      // 主人反复报告"卡在调用工具中看不到审批" — 这条日志让我们看出
-      // callback 是否真触发了、previousAssistantId 是否为空（null ⇒
-      // setSessions 时找不到 m.id 匹配的 message,step 永远建不上）。
-      // eslint-disable-next-line no-console
-      console.info(`[diag] approval cb requestId=${req.requestId} tool=${req.tool} previousAssistantId=${String(currentAssistantIdRef.current ?? "null")} sessionId=${req.sessionId}`);
       // The approval card belongs to the *current* assistant turn —
       // the agent is blocked waiting for the user, not starting a new
       // turn. We deliberately do NOT create a new assistant placeholder

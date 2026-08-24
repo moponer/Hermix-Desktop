@@ -474,15 +474,6 @@ export function createMessageHandler(ctx: StreamChatSendContext): (evt: MessageE
         // `expires_at` is Unix milliseconds. Older servers may omit it.
         const expiresAt: number | null =
           typeof ev?.expires_at === "number" ? ev.expires_at : null;
-        // Diag: confirm the wire format reached the frontend. 主人反复报告
-        // "卡在调用工具中看不到审批" — 这条日志让我们一眼看出事件丢了还是
-        // step 没建上。capture shape + wsState + 关键字段。
-        {
-          const wireShape = data?.event && typeof data.event === "object" && !Array.isArray(data.event) ? "nested" : "flat";
-          const wsState = ctx.wsRef.current?.readyState ?? -1;
-          // eslint-disable-next-line no-console
-          console.info(`[diag] approval recv shape=${wireShape} requestId=${String(requestId)} tool=${String(tool)} risk=${String(riskLevel)} hasCallback=${!!ctx.callbacks.onApprovalRequest} wsState=${wsState}`);
-        }
         if (!requestId) return;
         if (ctx.callbacks.onApprovalRequest) {
           ctx.callbacks
