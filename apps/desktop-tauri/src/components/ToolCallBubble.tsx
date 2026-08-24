@@ -236,6 +236,32 @@ export function ProcessTimeline({
   const awaitingApproval = steps.some(
     (s) => s.kind === "approval_request" && s.meta.decision === null,
   );
+  // Auto-scroll to a newly-arrived pending approval card. Without this,
+  // the user can be reading history (scrolled up) when an approval
+  // appears at the bottom of the stream — the card renders but stays
+  // off-screen, so the user keeps staring at "调用工具中" wondering
+  // what's stuck. We track which requestIds we've already announced
+  // so a resolved-then-re-pending dance doesn't re-trigger the scroll.
+  const approvalRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const scrolledApprovalIdsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const pendingStep = steps.find(
+      (s): s is Extract<typeof s, { kind: "approval_request" }> =>
+        s.kind === "approval_request" && s.meta.decision === null,
+    );
+    if (!pendingStep) return;
+    const pendingId = pendingStep.meta.requestId;
+    if (!pendingId || scrolledApprovalIdsRef.current.has(pendingId)) return;
+    scrolledApprovalIdsRef.current.add(pendingId);
+    // Defer one frame so React commits the new node to the DOM before
+    // we ask the browser to find it.
+    const raf = requestAnimationFrame(() => {
+      const el = approvalRefs.current.get(pendingId);
+      if (!el) return;
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [steps]);
   const stepGroups = useMemo(
     () =>
       steps.map((s) =>
@@ -421,7 +447,14 @@ export function ProcessTimeline({
               return null;
             }
             return (
-              <div key={`ps-${i}`} className="tl-approval-step">
+              <div
+                key={`ps-${i}`}
+                className="tl-approval-step"
+                ref={(el) => {
+                  if (el) approvalRefs.current.set(step.meta.requestId, el);
+                  else approvalRefs.current.delete(step.meta.requestId);
+                }}
+              >
                 <ApprovalRequestView
                   meta={step.meta}
                   onApprove={onApproveApproval}
