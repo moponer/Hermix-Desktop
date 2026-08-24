@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { flushSync } from "react-dom";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { Sidebar } from "./components/Sidebar";
 import { ChatView } from "./components/ChatView";
@@ -1243,20 +1244,32 @@ streamPhaseRef.current = null;
       }
     }
 
-    setSessions((prev) => prev.map((s) => {
-      if (s.id !== sessionId) return s;
-      // Insert user message + empty assistant placeholder
-      return {
-        ...s,
-        messages: [
-          ...s.messages,
-          userMsg,
-          { id: assistantId, role: "assistant", content: "", timestamp: new Date().toISOString() },
-        ],
-        updated_at: new Date().toISOString(),
-        title: computeAutoTitle(s, content),
-      };
-    }));
+    // 根治 request_approval race：placeholder 创建必须 sync commit。
+    // 旧逻辑 setSessions 创建 placeholder 后 await api.sendMessage，期间
+    // React batching 把 setState 推迟 commit。server < 1ms 内回
+    // request_approval → WS chunk 到达 → onApprovalRequest 跑
+    // setSessions 的 prev 还没包含 assistantId → approval step 永远建不上。
+    // flushSync 强制 React 同步 commit —— placeholder 立刻进 sessions state，
+    // 任何后续 setSessions updater（onApprovalRequest 的 step 写入、appendChunk
+    // 的文本写入）拿到的 prev 都包含这条 assistant message。
+    // 这是用户发消息瞬间的一次额外同步 commit，< 1ms 用户不可感知。
+    // flushSync 不触发 strict mode 双调用（它的二次执行只针对 render）。
+    flushSync(() => {
+      setSessions((prev) => prev.map((s) => {
+        if (s.id !== sessionId) return s;
+        // Insert user message + empty assistant placeholder
+        return {
+          ...s,
+          messages: [
+            ...s.messages,
+            userMsg,
+            { id: assistantId, role: "assistant", content: "", timestamp: new Date().toISOString() },
+          ],
+          updated_at: new Date().toISOString(),
+          title: computeAutoTitle(s, content),
+        };
+      }));
+    });
 
     // Fold attachment-derived overrides (image bytes + file paths) into
     // the overrides object sent to the backend. Centralised here so both
@@ -1345,69 +1358,16 @@ streamPhaseRef.current = null;
       // same step's `meta.decision`/`decidedAt` to flip the card
       // to its resolved one-line summary.
       //
-      // NOTE: do NOT advance `currentAssistantIdRef` here — the
+// NOTE: do NOT advance `currentAssistantIdRef` here — the
       // resumed LLM stream must target the same assistant.
       //
-      // The ref points at the assistant placeholder of the *current*
-      // turn. In normal flow `sendStream` sets it synchronously
-      // (App.tsx:1230) before any WS chunk can arrive, so this read
-      // is non-null. But several paths can leave the ref *misaligned
-      // with the actual session state* when `request_approval`
-      // arrives:
-      //   - the ref is null (cleared by `onDone`/onError/catch at
-      //     App.tsx:1549/2304/2360, or by
-      //     `resetChatStateForModelSwitch` at
-      //     chatStateReset.ts:95), and the new `sendStream` hasn't
-      //     re-primed it yet (line 1230) — residual WS chunks from
-      //     the previous stream still arrive;
-      //   - the ref is *non-null but the placeholder is not in
-      //     `sessions` yet*. This is a React 18 batching race:
-      //     `sendStream` calls `setSessions((prev) => prev.map(...))`
-      //     to append the empty assistant placeholder, then
-      //     `await`s `api.sendMessage`. The setState is enqueued in
-      //     React's batch queue and only committed in the next
-      //     microtask. The server emits `request_approval` within a
-      //     few ms of `send_message_stream` being invoked (LLM
-      //     resolved → tool_call → resource_guard → emit) — so the
-      //     WS chunk arrives and `onApprovalRequest` runs *before*
-      //     React commits the placeholder create. `setSessions`'s
-      //     `prev` still doesn't contain the ref'd message id, the
-      //     `m.id !== previousAssistantId` filter drops every row,
-      //     and the approval step never lands — the inline card
-      //     never renders, the ToolGroupCard keeps showing "运行中"
-      //     instead of "等待审批", and the user is stuck with no
-      //     recovery path short of a hard restart.
-      // In both cases we fall back to the latest assistant message
-      // in the same session via `sessionsRef.current` (a sync
-      // snapshot that is always up to date because it's the same
-      // ref `setSessions` writes to). The warn log keeps the
-      // underlying race observable; the error log fires only when
-      // even the fallback can't find an assistant message (which
-      // means the placeholder truly doesn't exist yet — investigate).
-      const refId = currentAssistantIdRef.current;
-      const targetSession = sessionsRef.current.find(
-        (s) => s.id === req.sessionId,
-      );
-      let previousAssistantId: string | null = null;
-      if (refId && targetSession?.messages.some((m) => m.id === refId)) {
-        previousAssistantId = refId;
-      } else {
-        const fallbackMsg = targetSession?.messages
-          .filter((m) => m.role === "assistant")
-          .at(-1);
-        previousAssistantId = fallbackMsg?.id ?? null;
-        if (fallbackMsg) {
-          console.warn(
-            `[approval] ref was ${refId ?? "null"} (matches=${
-              refId ? !!targetSession?.messages.some((m) => m.id === refId) : false
-            }) but fell back to last assistant in session ${req.sessionId}: ${fallbackMsg.id} for request_approval tool=${req.tool} requestId=${req.requestId}`,
-          );
-        } else {
-          console.error(
-            `[approval] no assistant message in session ${req.sessionId} for request_approval (ref was ${refId ?? "null"}, tool=${req.tool}, requestId=${req.requestId}); step dropped`,
-          );
-        }
-      }
+      // The ref points at the assistant placeholder of the current
+      // turn. Set synchronously by `sendStream` (App.tsx:1230) BEFORE
+      // any WS chunk can arrive. The placeholder itself is created
+      // under `flushSync` (App.tsx:1247) so it is guaranteed to be
+      // in `sessions` state by the time `request_approval` arrives
+      // — no React batching race, no fallback needed.
+      const previousAssistantId = currentAssistantIdRef.current;
       const meta: ApprovalMessageMeta = {
         requestId: req.requestId,
         tool: req.tool,
