@@ -1351,46 +1351,60 @@ streamPhaseRef.current = null;
       // The ref points at the assistant placeholder of the *current*
       // turn. In normal flow `sendStream` sets it synchronously
       // (App.tsx:1230) before any WS chunk can arrive, so this read
-      // is non-null. But several paths can leave it null when a
-      // `request_approval` arrives:
-      //   - user fired off a new turn right after the previous one
-      //     `onDone`-ed (line 2304 clears the ref), and the new
-      //     `sendStream` hasn't reached line 1230 yet — but a
-      //     *residual* WS chunk from the previous stream still
-      //     gets routed through this callback (rare race, only if
-      //     the previous WS wasn't actually closed by `cancelStream`).
-      //   - `resetChatStateForModelSwitch` (chatStateReset.ts:95)
-      //     cleared the ref mid-turn and the user re-sent without
-      //     `sendStream` re-priming the placeholder (defensive).
-      // In those cases `prev.map` filters every message out by
-      // `m.id !== null`, so the approval step never lands and the
-      // inline card never renders — the user is left looking at a
-      // stale "调用工具中" chip with no recovery path short of a
-      // hard restart. Falling back to the latest assistant message
-      // in the *same* session restores rendering deterministically;
-      // the warn log keeps the underlying race observable.
-      let previousAssistantId = currentAssistantIdRef.current;
-      if (!previousAssistantId) {
-        const fallbackMsg = sessionsRef.current
-          .find((s) => s.id === req.sessionId)
-          ?.messages
+      // is non-null. But several paths can leave the ref *misaligned
+      // with the actual session state* when `request_approval`
+      // arrives:
+      //   - the ref is null (cleared by `onDone`/onError/catch at
+      //     App.tsx:1549/2304/2360, or by
+      //     `resetChatStateForModelSwitch` at
+      //     chatStateReset.ts:95), and the new `sendStream` hasn't
+      //     re-primed it yet (line 1230) — residual WS chunks from
+      //     the previous stream still arrive;
+      //   - the ref is *non-null but the placeholder is not in
+      //     `sessions` yet*. This is a React 18 batching race:
+      //     `sendStream` calls `setSessions((prev) => prev.map(...))`
+      //     to append the empty assistant placeholder, then
+      //     `await`s `api.sendMessage`. The setState is enqueued in
+      //     React's batch queue and only committed in the next
+      //     microtask. The server emits `request_approval` within a
+      //     few ms of `send_message_stream` being invoked (LLM
+      //     resolved → tool_call → resource_guard → emit) — so the
+      //     WS chunk arrives and `onApprovalRequest` runs *before*
+      //     React commits the placeholder create. `setSessions`'s
+      //     `prev` still doesn't contain the ref'd message id, the
+      //     `m.id !== previousAssistantId` filter drops every row,
+      //     and the approval step never lands — the inline card
+      //     never renders, the ToolGroupCard keeps showing "运行中"
+      //     instead of "等待审批", and the user is stuck with no
+      //     recovery path short of a hard restart.
+      // In both cases we fall back to the latest assistant message
+      // in the same session via `sessionsRef.current` (a sync
+      // snapshot that is always up to date because it's the same
+      // ref `setSessions` writes to). The warn log keeps the
+      // underlying race observable; the error log fires only when
+      // even the fallback can't find an assistant message (which
+      // means the placeholder truly doesn't exist yet — investigate).
+      const refId = currentAssistantIdRef.current;
+      const targetSession = sessionsRef.current.find(
+        (s) => s.id === req.sessionId,
+      );
+      let previousAssistantId: string | null = null;
+      if (refId && targetSession?.messages.some((m) => m.id === refId)) {
+        previousAssistantId = refId;
+      } else {
+        const fallbackMsg = targetSession?.messages
           .filter((m) => m.role === "assistant")
           .at(-1);
         previousAssistantId = fallbackMsg?.id ?? null;
         if (fallbackMsg) {
           console.warn(
-            `[approval] currentAssistantIdRef was null for request_approval ` +
-              `tool=${req.tool} requestId=${req.requestId} — fell back to last ` +
-              `assistant message in session ${req.sessionId}: ${fallbackMsg.id}. ` +
-              `This is a race between WS chunk delivery and ref priming; ` +
-              `investigate if the fallback fires frequently.`,
+            `[approval] ref was ${refId ?? "null"} (matches=${
+              refId ? !!targetSession?.messages.some((m) => m.id === refId) : false
+            }) but fell back to last assistant in session ${req.sessionId}: ${fallbackMsg.id} for request_approval tool=${req.tool} requestId=${req.requestId}`,
           );
         } else {
           console.error(
-            `[approval] no assistant message exists in session ${req.sessionId} ` +
-              `when request_approval arrived (tool=${req.tool} requestId=${req.requestId}); ` +
-              `the inline approval step will be dropped. Check that sendStream ` +
-              `reached App.tsx:1230 before the WS chunk was routed.`,
+            `[approval] no assistant message in session ${req.sessionId} for request_approval (ref was ${refId ?? "null"}, tool=${req.tool}, requestId=${req.requestId}); step dropped`,
           );
         }
       }
