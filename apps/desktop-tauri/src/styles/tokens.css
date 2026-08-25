@@ -121,7 +121,7 @@
   --theme-bg-app:     #f7f7f7;                         /* 主区画布: 近白, 与侧栏拉开层次 */
   --theme-bg-sidebar: #e2e2e2;                        /* 侧栏灰面板, 比主区深一档, 分层明显 */
   --theme-bg-titlebar: #e0e0e0;                       /* 顶栏, 比侧栏再深一档 */
-  --theme-bg-chat: #f5f5f5;                            /* 会话画布: 白气泡浮于浅灰底, 与侧栏 #e6e6e6 明显分层 */
+  --theme-bg-chat: #e8e8e8;                            /* 会话画布: 比侧栏浅一档但明显灰, 白气泡浮起, 与菜单栏区分 */
 }
 
 .dark {
