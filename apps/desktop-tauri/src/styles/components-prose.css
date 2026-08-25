@@ -1804,6 +1804,16 @@
   max-height: 320px;
   padding: 0;
 }
+/* Inline approval card lives inside .msg-bubble-body (avatar is already
+   offset via the parent's gap:10px). The generic .footer-block
+   margin-left:32px was designed for standalone footer blocks and
+   double-offsets the card, leaving it visibly indented. Flush to the
+   message body edge and stretch to full width. */
+.approval-card.footer-block {
+  margin-left: 0;
+  width: 100%;
+  max-width: 100%;
+}
 .approval-card.is-resolved {
   max-height: 48px;
 }

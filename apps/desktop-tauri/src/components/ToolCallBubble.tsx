@@ -441,19 +441,35 @@ export function ProcessTimeline({
           // "waiting" surface. Resolved approvals collapse with
           // everything else.
           if (step.kind === "approval_request") {
-            if (!isStreaming && step.meta.decision === null) {
-              // Pending — always visible.
-            } else if (!expanded && !isStreaming) {
-              return null;
+            if (step.meta.decision === null) {
+              // PENDING — unconditional render. The user MUST see this
+              // to click it; the fold is irrelevant. Skipping the
+              // render under any condition is what produced the
+              // "重启就好" symptom (ref race left the timeline collapsed
+              // and `isStreaming=false` + `expanded=false` hid the card).
+              return (
+                <div
+                  key={`ps-${i}`}
+                  className="tl-approval-step"
+                  ref={(el) => {
+                    if (el) approvalRefs.current.set(step.meta.requestId, el);
+                    else approvalRefs.current.delete(step.meta.requestId);
+                  }}
+                >
+                  <ApprovalRequestView
+                    meta={step.meta}
+                    onApprove={onApproveApproval}
+                    onDeny={onDenyApproval}
+                  />
+                </div>
+              );
             }
+            // RESOLVED — follows the fold.
+            if (!expanded && !isStreaming) return null;
             return (
               <div
                 key={`ps-${i}`}
                 className="tl-approval-step"
-                ref={(el) => {
-                  if (el) approvalRefs.current.set(step.meta.requestId, el);
-                  else approvalRefs.current.delete(step.meta.requestId);
-                }}
               >
                 <ApprovalRequestView
                   meta={step.meta}

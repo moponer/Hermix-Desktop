@@ -82,7 +82,12 @@ export function mergeConsecutiveAssistantMessages(messages: ChatMessage[]): Chat
         (r.content && r.content.trim().length > 0) ||
         (r.tool_calls && r.tool_calls.length > 0) ||
         (r.execution_timeline && r.execution_timeline.length > 0) ||
-        (r.reasoningContent && r.reasoningContent.trim().length > 0)
+        (r.reasoningContent && r.reasoningContent.trim().length > 0) ||
+        // Empty assistant placeholders can still hold meaningful unified
+        // steps (e.g. a pending approval_request sitting mid-stream before
+        // any final text lands). Dropping the whole row here hides the
+        // approval card. Mirror isRowRenderable's hasUnifiedSteps rule.
+        (Array.isArray(r.unified_steps) && r.unified_steps.length > 0)
     );
     if (nonEmpty.length === 0) {
       // Whole run is empty placeholders → drop entirely.
@@ -113,9 +118,23 @@ export function mergeConsecutiveAssistantMessages(messages: ChatMessage[]): Chat
       } else if (toolEvents.length > 0) {
         singleSteps.push({ kind: "tools", events: toolEvents });
       }
+      // unified_steps is the authoritative real-time pipeline (streaming
+      // chunks + onApprovalRequest write into it). Rebuilding steps from
+      // legacy fields (reasoningContent/execution_timeline) silently drops
+      // any approval_request step — the user's active waiting surface.
+      // When the message already carries non-legacy steps, trust them.
+      const hasSpecialStep = (single.unified_steps ?? []).some(
+        (x) => x.kind !== "reasoning" && x.kind !== "tools" && x.kind !== "text",
+      );
       out.push({
         ...single,
-        unified_steps: dedupeTextSteps(singleSteps.length > 0 ? singleSteps : single.unified_steps),
+        unified_steps: dedupeTextSteps(
+          hasSpecialStep
+            ? single.unified_steps
+            : singleSteps.length > 0
+              ? singleSteps
+              : single.unified_steps,
+        ),
       });
       i = j;
       continue;
@@ -171,6 +190,12 @@ export function mergeConsecutiveAssistantMessages(messages: ChatMessage[]): Chat
       .filter((s): s is string => !!s && s.length > 0)
       .pop();
     const last = nonEmpty[nonEmpty.length - 1];
+    // Preserve any approval_request (and other non-legacy) steps carried
+    // by the original rows — reconstructing from legacy fields alone would
+    // drop the pending approval card. Rebuilt steps win for the rest.
+    const carriedSteps = nonEmpty.flatMap((r) => r.unified_steps ?? []).filter(
+      (x) => x.kind !== "reasoning" && x.kind !== "tools" && x.kind !== "text",
+    );
     out.push({
       ...last,
       content: mergedContent,
@@ -184,7 +209,13 @@ export function mergeConsecutiveAssistantMessages(messages: ChatMessage[]): Chat
         mergedReasoning.length > 0
           ? mergedReasoning
           : last.reasoningContent,
-      unified_steps: dedupeTextSteps(unifiedSteps.length > 0 ? unifiedSteps : undefined),
+      unified_steps: dedupeTextSteps(
+        carriedSteps.length > 0
+          ? [...(unifiedSteps.length > 0 ? unifiedSteps : []), ...carriedSteps]
+          : unifiedSteps.length > 0
+            ? unifiedSteps
+            : undefined,
+      ),
       stopReason: mergedStopReason ?? last.stopReason,
     });
     i = j;
@@ -304,5 +335,12 @@ export function isRowRenderable(m: ChatMessage): boolean {
     Array.isArray(m.execution_timeline) && m.execution_timeline.length > 0;
   const hasReasoning =
     typeof m.reasoningContent === "string" && m.reasoningContent.trim().length > 0;
-  return hasContent || hasToolCalls || hasTimeline || hasReasoning;
+  // Unified timeline may carry an inline `kind: "approval_request"`
+  // step while the message body is still empty (server blocked waiting
+  // for the user's allow/deny decision; LLM has not produced final
+  // text). Without this the row gets filtered out — the approval card
+  // would render nowhere even though its step is in `unified_steps`.
+  const hasUnifiedSteps =
+    Array.isArray(m.unified_steps) && m.unified_steps.length > 0;
+  return hasContent || hasToolCalls || hasTimeline || hasReasoning || hasUnifiedSteps;
 }

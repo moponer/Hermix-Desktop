@@ -28,7 +28,6 @@ import type { SubAgentState, SubAgentEventPayload } from "./types";
 import { useResizable } from "./hooks/useResizable";
 import { useWorkspaceRoot } from "./hooks/useWorkspaceRoot";
 import { useArtifacts } from "./hooks/useArtifacts";
-import { diagLog, nextDiagId } from "./lib/diag";
 import { resetChatStateForModelSwitch, type RefLike } from "./lib/chatStateReset";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { ToastContainer } from "./components/ToastContainer";
@@ -1128,15 +1127,6 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
     overrides?: import("./hooks/useStreamChat").ChatOverrides,
     attachments?: { images?: QueuedImage[]; attachedFilePaths?: string[] },
   ) => {
-    // ★ DIAG: trace every send_message_stream call to find the trigger chain
-    // Global counter survives remounts/HMR; shows whether handleSendMessage
-    // itself was called 1x or 10x. Pair with the timestamp so we can
-    // distinguish "10 calls in 50ms" (retry storm) from "10 calls in 60s"
-    // (user actually pressed Enter 10x).
-    const __diagId = nextDiagId();
-    const __diagTs = performance.now().toFixed(1);
-    diagLog(`[diag #${__diagId} @${__diagTs}ms] handleSendMessage ENTER`, { content, streamingSessionId, queueLen: messageQueue.length });
-    // Note: console.trace removed (was just stack; the 1-line call above is enough).
     let sessionId = activeSessionId;
     if (sessionId && !sessions.some((s) => s.id === sessionId)) { sessionId = null; setActiveSessionId(null); }
     // Clear any previous stream error for the *current* session — the
@@ -1367,7 +1357,18 @@ streamPhaseRef.current = null;
       // under `flushSync` (App.tsx:1247) so it is guaranteed to be
       // in `sessions` state by the time `request_approval` arrives
       // — no React batching race, no fallback needed.
-      const previousAssistantId = currentAssistantIdRef.current;
+      const previousAssistantId =
+        currentAssistantIdRef.current
+        ?? [...(sessions.find((s) => s.id === sessionId)?.messages ?? [])]
+          .reverse()
+          .find((m) => m.role === "assistant")?.id
+        ?? null;
+      if (!previousAssistantId) {
+        // No assistant message target — the approval step would be
+        // dropped. Keep the server blocked (never resolve the promise)
+        // so the tool doesn't run without an explicit decision.
+        return new Promise<{ decision: ApprovalDecision }>(() => {});
+      }
       const meta: ApprovalMessageMeta = {
         requestId: req.requestId,
         tool: req.tool,
@@ -2526,7 +2527,6 @@ return {
   useEffect(() => {
     if (!streaming && messageQueue.length > 0) {
       const next = messageQueue[0];
-      diagLog("[diag] queue drain: firing", { content: next.text, queueLen: messageQueue.length, streaming });
       setMessageQueue(prev => prev.slice(1));
       const queuedAttachments = next.images || next.attachedFilePaths
         ? { images: next.images, attachedFilePaths: next.attachedFilePaths }
@@ -2543,7 +2543,6 @@ return {
           ? { model: drainedModel }
           : undefined;
       handleSendMessage(next.text, undefined, drainedOverrides, queuedAttachments).catch((_cause) => {
-        diagLog("[diag] queue drain: handleSendMessage failed, re-enqueueing", { next: next.text, cause: _cause instanceof Error ? _cause.message : String(_cause) });
         // Limit retries: track per-message so a permanently failing
         // backend doesn't spin forever.
         const key = next.text.slice(0, 60); // first 60 chars as key
