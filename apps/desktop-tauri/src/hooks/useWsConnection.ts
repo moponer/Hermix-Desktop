@@ -1,5 +1,4 @@
 import { resolveWebSocketUrl } from "../api";
-import { diagLog, nextDiagId } from "../lib/diag";
 import type { StreamChatSendContext } from "./useStreamParser";
 
 /** Auto-retry cap for WS failures that occur before any content arrives. */
@@ -57,8 +56,6 @@ export function createConnector(
             if (ctx.sentToServerRef.current && ctx.retryCount < MAX_RETRIES) {
               ctx.retryCount++;
               const delay = RETRY_DELAYS_MS[Math.min(ctx.retryCount - 1, RETRY_DELAYS_MS.length - 1)];
-              const __sendDiagId3 = nextDiagId();
-              diagLog(`[diag #${__sendDiagId3}] onerror (mid-stream) → reconnect ${ctx.retryCount}/${MAX_RETRIES}, delay=${delay}ms`);
               ctx.updatePhase("reconnecting");
               ctx.wsRef.current = null;
               setTimeout(connect, delay);
@@ -77,8 +74,6 @@ export function createConnector(
           if (ctx.retryCount < MAX_RETRIES) {
             ctx.retryCount++;
             const delay = RETRY_DELAYS_MS[Math.min(ctx.retryCount - 1, RETRY_DELAYS_MS.length - 1)];
-            const __sendDiagId3 = nextDiagId();
-            diagLog(`[diag #${__sendDiagId3}] onerror → retry ${ctx.retryCount}/${MAX_RETRIES}, delay=${delay}ms`);
             ctx.updatePhase("reconnecting");
             ctx.wsRef.current = null;
             setTimeout(connect, delay);
@@ -101,8 +96,6 @@ export function createConnector(
             if (ctx.sentToServerRef.current && ctx.retryCount < MAX_RETRIES) {
               ctx.retryCount++;
               const delay = RETRY_DELAYS_MS[Math.min(ctx.retryCount - 1, RETRY_DELAYS_MS.length - 1)];
-              const __sendDiagId4 = nextDiagId();
-              diagLog(`[diag #${__sendDiagId4}] onclose (mid-stream) → reconnect ${ctx.retryCount}/${MAX_RETRIES}, delay=${delay}ms`);
               ctx.updatePhase("reconnecting");
               ctx.wsRef.current = null;
               setTimeout(connect, delay);
@@ -119,8 +112,6 @@ export function createConnector(
             if (ctx.retryCount < MAX_RETRIES) {
               ctx.retryCount++;
               const delay = RETRY_DELAYS_MS[Math.min(ctx.retryCount - 1, RETRY_DELAYS_MS.length - 1)];
-              const __sendDiagId4 = nextDiagId();
-              diagLog(`[diag #${__sendDiagId4}] onclose (no content) → retry ${ctx.retryCount}/${MAX_RETRIES}, delay=${delay}ms`);
               ctx.updatePhase("reconnecting");
               ctx.wsRef.current = null;
               setTimeout(connect, delay);

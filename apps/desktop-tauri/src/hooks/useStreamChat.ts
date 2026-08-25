@@ -1,5 +1,4 @@
 import { useState, useCallback, useRef, useEffect } from "react";
-import { diagLog, diagWarn, nextDiagId } from "../lib/diag";
 import type { AcuiDirective } from "../acui/types";
 import type { SubAgentEventPayload } from "../types";
 import { createPhaseController } from "./useStreamPhase";
@@ -311,17 +310,12 @@ export function useStreamChat(activeSessionId: string | null) {
         const DEDUP_WINDOW_MS = 15_000;
         const contentHash = computeSendDedupHash(sessionId, content);
         const now = Date.now();
-        const __sendDiagId = nextDiagId();
-        diagLog(`[diag #${__sendDiagId}] sendStream ENTER`, { sessionId, content, lastSend: lastSendRef.current, now });
         if (
           lastSendRef.current &&
           lastSendRef.current.hash === contentHash &&
           now - lastSendRef.current.ts < DEDUP_WINDOW_MS &&
           streamingSessionIdRef.current === sessionId
         ) {
-          diagWarn(
-            `[useStreamChat #${__sendDiagId}] dedup: same content sent ${now - lastSendRef.current.ts}ms ago, skipping`,
-          );
           resolve("");
           return;
         }

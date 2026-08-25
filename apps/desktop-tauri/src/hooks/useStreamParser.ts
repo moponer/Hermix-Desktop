@@ -7,7 +7,6 @@ import type {
   StreamCallbacks,
   PrefetchResultEntry,
 } from "./useStreamChat";
-import { diagLog, diagWarn, nextDiagId } from "../lib/diag";
 import { buildConnectedPayload, narrowSectionGateReport } from "./streamChatUtils";
 
 /** Context-usage snapshot pushed by the backend each turn. */
@@ -153,9 +152,6 @@ export function createMessageHandler(ctx: StreamChatSendContext): (evt: MessageE
         const payload = buildConnectedPayload(ctx.content, ctx.overrides);
         ctx.wsRef.current?.send(JSON.stringify(payload));
         ctx.sentToServerRef.current = true;
-        const __sendDiagId2 = nextDiagId();
-        const __sendDiagTs2 = performance.now().toFixed(1);
-        diagLog(`[diag #${__sendDiagId2} @${__sendDiagTs2}ms] WS connected → ws.send(payload) FIRED, retryCount=${ctx.retryCount}, textLen=${ctx.content.length}, sessionId=${ctx.sessionId}`);
         ctx.updatePhase("streaming");
         ctx.armTimeouts();
 
@@ -484,15 +480,13 @@ export function createMessageHandler(ctx: StreamChatSendContext): (evt: MessageE
               ctx.armTimeouts();
               // The `expired` decision means the server already settled this
               // request; do NOT send `approval_response` over the wire.
-              ctx.wsSendRaw(JSON.stringify({ type: "__diag", tag: "THEN", id: String(requestId), decision: String(resp.decision), ws: ctx.wsRef.current?.readyState ?? -1 }));
               if (resp.decision === "expired") return;
               // Always use `wsRef.current` (the live WS); the closure-captured
               // `ws` may have been replaced by a reconnect by the time the user
               // clicks.
               const liveWs = ctx.wsRef.current;
               if (!liveWs || liveWs.readyState !== WebSocket.OPEN) {
-                ctx.wsSendRaw(JSON.stringify({ type: "__diag", tag: "DROP", id: String(requestId), state: liveWs?.readyState ?? -1 }));
-                diagWarn(
+                console.warn(
                   `[approval] wsRef.current not OPEN (state=${liveWs?.readyState}) — click for ${requestId} dropped; user must retry`,
                 );
                 return;
@@ -507,10 +501,8 @@ export function createMessageHandler(ctx: StreamChatSendContext): (evt: MessageE
                   decision,
                 });
                 liveWs.send(payload);
-                ctx.wsSendRaw(JSON.stringify({ type: "__diag", tag: "SENT", id: String(requestId), decision }));
               } catch (e) {
-                ctx.wsSendRaw(JSON.stringify({ type: "__diag", tag: "ERR", id: String(requestId), err: String(e) }));
-                diagWarn(
+                console.warn(
                   `[approval] liveWs.send threw for ${requestId}: ${String(e)}`,
                 );
               }
