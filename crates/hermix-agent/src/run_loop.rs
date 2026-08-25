@@ -99,7 +99,7 @@ impl AgentLoop {
         tool_errors: &[ToolErrorRecord],
         session_started_hooks_fired: bool,
         persist_user_idx: Option<usize>,
-        finish_reason: Option<&str>,
+        _finish_reason: Option<&str>,
     ) -> Result<PreTurnAction, AgentError> {
         // (type-B diagnostic): INFO log every pre-turn setup
         // entry so a future hang between turns shows up in stdout.
@@ -141,42 +141,14 @@ impl AgentLoop {
         // --- `/steer` pre-API drain ---
         self.pre_api_apply_pending_steer(ctx);
 
-        // --- Max turns guard ---
-        // max_turns == 0 means unlimited — no turn cap. The real
-        // protections are: ErrorLoop hard stop (convergence detector),
-        // Cost Guard (max_cost_usd), and the LLM's natural stopping
-        // behavior (no tool calls → finalize). max_turns is a
-        // last-resort safety net for runaway loops that other
-        // mechanisms don't catch.
-        if self.config.max_turns > 0 && state.total_turns >= self.config.max_turns {
-            tracing::warn!(
-                "Max turns ({}) exceeded, requesting final summary",
-                self.config.max_turns
-            );
-            self.emit_status(
-                "lifecycle",
-                &format!(
-                    "已达到最大轮次限制 ({})，正在生成总结…",
-                    self.config.max_turns
-                ),
-            );
-            let summary_msg = self.handle_max_iterations(ctx).await?;
-            if let Some(msg) = summary_msg {
-                ctx.add_message(msg);
-            }
-            return Ok(PreTurnAction::Stop(self.finalize_agent_result(
-                ctx,
-                state.total_turns,
-                tool_errors,
-                state.cost_guard.accumulated_usage.clone(),
-                state.cost_guard.session_cost_usd,
-                session_started_hooks_fired,
-                persist_user_idx,
-                false,
-                false,
-                finish_reason.map(|s| s.to_string()),
-            )));
-        }
+        // --- Max turns: soft cap ---
+        // max_turns == 0 means unlimited. The real hard stops are:
+        // ErrorLoop (convergence detector), Cost Guard (max_cost_usd),
+        // and the LLM's natural stopping (no tool calls → finalize).
+        // max_turns is NOT a hard stop — hitting it triggers a progress
+        // summary (using the conversation's active model) and resets the
+        // turn counter so long tasks keep running. Without this, every
+        // task longer than max_turns turns is silently truncated.
 
         // --- Turn counter ---
         state.total_turns += 1;
@@ -287,6 +259,30 @@ impl AgentLoop {
             .unwrap_or(self.config.model.as_str())
             .to_string();
         let hook_ctx = serde_json::json!({"turn": state.total_turns, "model": active_model});
+
+        // Soft turn cap: at the boundary, summarize progress with the
+        // conversation's own model, inject the summary, reset the counter
+        // and keep going. Long tasks are no longer truncated at
+        // `max_turns`; CostGuard / ErrorLoop remain the hard stops.
+        if self.config.max_turns > 0 && state.total_turns >= self.config.max_turns {
+            tracing::warn!(
+                "Max turns ({}) reached — summarizing progress and continuing",
+                self.config.max_turns
+            );
+            self.emit_status(
+                "lifecycle",
+                &format!(
+                    "已执行 {} 轮，正在整理进度并继续…",
+                    self.config.max_turns
+                ),
+            );
+            let summary_msg = self.handle_max_iterations(ctx, &active_model).await?;
+            if let Some(msg) = summary_msg {
+                ctx.add_message(msg);
+            }
+            state.total_turns = 0;
+        }
+
         let pre_results = self.invoke_hook(HookType::PreLlmCall, &hook_ctx);
         self.inject_hook_context(&pre_results, ctx);
 

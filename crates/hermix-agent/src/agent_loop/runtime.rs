@@ -419,24 +419,22 @@ impl AgentLoop {
         crate::cost_routing::resolve_cost_degrade_model(&self.config)
     }
 
-    /// Ask the LLM for a final summary when the turn budget is exhausted.
+    /// Ask the LLM for a progress summary when the soft turn budget is
+    /// exhausted. Uses the conversation's own `active_model` (the same
+    /// one the main loop resolves for the LLM call) — the summary must
+    /// run on the model the user picked in the dialog, NOT on a cheap
+    /// router fallback that can resolve to an un-normalized model string
+    /// (e.g. `minimax:minimax-m3`) and 400 on strict providers.
     pub(crate) async fn handle_max_iterations(
         &self,
         ctx: &mut ContextManager,
+        active_model: &str,
     ) -> Result<Option<Message>, AgentError> {
-        // 用与主循环 D-step 相同的路由解析取模型名（run_loop.rs:284），
-        // 否则会回退到 config.model 的原始字符串（如小写
-        // `minimax:minimax-m3`），而 provider 只认解析后的
-        // `minimax:MiniMax-M3`，导致 summary 调用 400 后静默丢总结。
-        let active_model = self
-            .resolve_smart_runtime_route(ctx.get_messages())
-            .map(|r| r.model)
-            .unwrap_or_else(|| self.config.model.clone());
         crate::session_lifecycle::handle_max_iterations(
             &self.config,
             &self.llm_provider,
             ctx,
-            &active_model,
+            active_model,
         )
         .await
     }

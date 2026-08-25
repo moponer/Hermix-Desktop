@@ -618,19 +618,48 @@ pub async fn handle_max_iterations(
         "[SYSTEM] Maximum conversation turns reached. Please provide a brief summary of \
          what was accomplished and any remaining tasks.",
     ));
-    match llm_provider
-        .chat_completion(
+    let extra_body = extra_body_for_api_mode(config, &config.api_mode);
+    let summary_body = || {
+        llm_provider.chat_completion(
             ctx.get_messages(),
             &[],
             config.max_tokens,
             config.temperature,
             Some(active_model),
-            extra_body_for_api_mode(config, &config.api_mode).as_ref(),
+            extra_body.as_ref(),
         )
-        .await
-    {
+    };
+    match summary_body().await {
         Ok(response) => Ok(Some(response.message)),
         Err(e) => {
+            // The dialog's own model failed (rate limit / quota / provider
+            // error). Degrade to the configured default model once — the
+            // summary should run on the user's chosen model first; the
+            // default is only a fallback when that model is broken.
+            let fallback = (config.model.as_str() != active_model)
+                .then(|| config.model.as_str());
+            if let Some(fb) = fallback {
+                match llm_provider
+                    .chat_completion(
+                        ctx.get_messages(),
+                        &[],
+                        config.max_tokens,
+                        config.temperature,
+                        Some(fb),
+                        extra_body_for_api_mode(config, &config.api_mode).as_ref(),
+                    )
+                    .await
+                {
+                    Ok(response) => return Ok(Some(response.message)),
+                    Err(e2) => {
+                        tracing::warn!(
+                            error = %e2,
+                            "handle_max_iterations: fallback summary call failed; finalizing without summary"
+                        );
+                        return Ok(None);
+                    }
+                }
+            }
             tracing::warn!(
                 error = %e,
                 "handle_max_iterations: summary LLM call failed; finalizing without summary"
