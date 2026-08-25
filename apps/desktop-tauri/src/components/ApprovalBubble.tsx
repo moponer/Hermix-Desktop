@@ -9,7 +9,6 @@ import {
   Copy,
   FileText,
   Globe,
-  ShieldAlert,
   Terminal,
   Wrench,
   X,
@@ -44,10 +43,11 @@ function toolIcon(tool: string) {
  * "approval_request"` timeline step. Drives both the pending
  * "拒绝 / 允许" form and the resolved 1-line summary.
  *
- * 视觉层次 (三级):
- *   ① 头部 — 身份层: 需要确认 + 风险等级徽章
- *   ② 主体 — 工具身份 → 意图 → 将执行的命令
- *   ③ 底部 — 决策区: 拒绝 / 允许, 主从分明
+ * 严格两行布局 (主人反馈"看起来很乱"后砍级):
+ *   ① 第 1 行 — 信息 + 决策: 工具图标/名 + 意图摘要(左对齐),
+ *                拒绝 / 允许 按钮(最右侧)
+ *   ② 第 2 行 — 命令块: 标题栏"将执行" + 复制按钮 + 命令文本
+ * 风险等级通过工具图标染色 (高危红 / 中危橙 / 低危默认) 隐式传达.
  */
 export function ApprovalRequestView({
   meta,
@@ -74,21 +74,13 @@ export function ApprovalRequestView({
   const intent = meta.reason || argsIntent;
   const [copied, setCopied] = useState(false);
 
-  // Risk label + badge tint class.
+  // Risk class — drives the tool-icon tint.
+  // 高危红 / 中危橙 / 低危默认色.
   const riskKey = (meta.riskLevel ?? "dangerous").toLowerCase();
-  const riskLabel =
-    riskKey === "dangerous" ? "高危"
-    : riskKey === "caution" ? "中危"
-    : "低危";
   const riskBadgeCls =
     riskKey === "dangerous" ? "is-danger"
     : riskKey === "caution" ? "is-warn"
     : "is-safe";
-  // Container tint class — drives the header wash only.
-  const riskClass =
-    riskKey === "dangerous" ? "is-danger"
-    : riskKey === "caution" ? "is-warn"
-    : "";
   const ToolIco = toolIcon(meta.tool);
 
   const handleCopy = () => {
@@ -102,80 +94,62 @@ export function ApprovalRequestView({
   };
 
   return (
-    <div className={`approval-card footer-block h-enter ${riskClass}${decided ? " is-resolved" : ""}`}>
+    <div className={`approval-card footer-block h-enter${decided ? " is-resolved" : ""}`}>
       {/* Collapsible pending body — shrinks to the one-line summary
           when the card flips to `.is-resolved`. */}
       <div className="approval-full">
-        {/* ① 头部: 身份层 */}
-        <div className="apv-head">
-          <span className="apv-head-icon">
-            <ShieldAlert size={15} />
-          </span>
-          <div className="apv-head-text">
-            <span className="apv-head-title">需要你确认</span>
-            <span className="apv-head-sub">AI 助手请求执行以下操作</span>
-          </div>
-          <span className={`apv-risk ${riskBadgeCls}`}>{riskLabel}</span>
-        </div>
+        {/* 严格两行布局:
+            第 1 行: 信息 + 决策 — 工具图标/名 + 意图摘要(左对齐),
+                     拒绝/允许 按钮(最右侧)
+            第 2 行: 命令块 — 标题栏"将执行"+ 复制按钮 + 命令文本
+            风险等级通过工具图标染色隐式传达 (高危红/中危橙/低危默认),
+            不再单独显示徽章. */}
 
-        {/* ② 主体 */}
-        <div className="apv-body">
-          {/* 工具身份行 */}
-          <div className="apv-tool">
-            <span className="apv-tool-icon">
+        {/* ① 第 1 行: 信息 + 决策 */}
+        <div className="apv-decision-row">
+          <div className="apv-info">
+            <span className={`apv-tool-icon ${riskBadgeCls}`}>
               <ToolIco size={13} />
             </span>
             <span className="apv-tool-name">{meta.tool}</span>
-            <span className="apv-tool-tag">工具调用</span>
+            <span className="apv-sep">·</span>
+            <span className="apv-intent-text">{intent ?? "执行工具调用"}</span>
           </div>
-
-          {/* 意图 callout — LLM 解释的意图, 决策前先读意图 */}
-          {intent && (
-            <div className="apv-intent">
-              <span className="apv-intent-label">意图</span>
-              <span className="apv-intent-text">{intent}</span>
-            </div>
-          )}
-
-          {/* 命令块 — 将执行的动作, 可复制 */}
-          <div className="apv-cmd">
-            <div className="apv-cmd-head">
-              <span className="apv-cmd-label">将执行</span>
+          {isPending && (
+            <div className="apv-btns">
               <button
                 type="button"
-                className="apv-copy"
-                onClick={handleCopy}
-                aria-label="复制命令"
+                className="apv-deny"
+                onClick={() => onDeny?.(meta.requestId)}
               >
-                <Copy size={11} />
-                {copied ? "已复制" : "复制"}
+                拒绝
+              </button>
+              <button
+                type="button"
+                className="apv-allow"
+                onClick={() => onApprove?.(meta.requestId)}
+              >
+                允许
               </button>
             </div>
-            <pre className="apv-cmd-pre">{desc}</pre>
-          </div>
-
-          {/* ③ 底部决策区 — 拒绝 / 允许, 主从分明 */}
-          {isPending && (
-            <div className="apv-foot">
-              <span className="apv-foot-hint">拒绝将中止本次操作</span>
-              <div className="apv-btns">
-                <button
-                  type="button"
-                  className="apv-deny"
-                  onClick={() => onDeny?.(meta.requestId)}
-                >
-                  拒绝
-                </button>
-                <button
-                  type="button"
-                  className="apv-allow"
-                  onClick={() => onApprove?.(meta.requestId)}
-                >
-                  允许
-                </button>
-              </div>
-            </div>
           )}
+        </div>
+
+        {/* ② 第 2 行: 命令块 */}
+        <div className="apv-cmd">
+          <div className="apv-cmd-head">
+            <span className="apv-cmd-label">将执行</span>
+            <button
+              type="button"
+              className="apv-copy"
+              onClick={handleCopy}
+              aria-label="复制命令"
+            >
+              <Copy size={11} />
+              {copied ? "已复制" : "复制"}
+            </button>
+          </div>
+          <pre className="apv-cmd-pre">{desc}</pre>
         </div>
       </div>
 
