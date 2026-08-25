@@ -159,16 +159,29 @@ pub async fn get_model_info(State(state): State<HttpServerState>) -> Json<ModelI
     match model.as_deref().filter(|s| !s.trim().is_empty()) {
         Some(m) => {
             let (provider, model_name) = m.split_once(':').unwrap_or(("openai", m));
+            // Pull the context window from the static catalog + any
+            // per-provider override. Previously hardcoded 128000 which
+            // lied about e.g. gemini-2.5-flash (actual 1_048_576) and
+            // made the UI show "100% used" the moment a session
+            // crossed 128k tokens. The owner asked for the real value
+            // here — `get_model_context_length_with` honours the
+            // user-set provider override first, then falls through to
+            // the catalog (gemini-2.5-flash = 1_048_576, claude-4-6
+            // family = 1_000_000, gpt-5 = 128_000, etc.).
+            let ctx_length: u32 = hermix_intelligence::model_metadata::get_model_context_length_with(
+                &m,
+                Some(&state.config.llm_providers),
+            ) as u32;
             Json(ModelInfoResponse {
                 model: model_name.to_string(),
                 provider: provider.to_string(),
-                auto_context_length: 128000,
+                auto_context_length: ctx_length,
                 config_context_length: 0,
-                effective_context_length: 128000,
+                effective_context_length: ctx_length,
                 capabilities: serde_json::json!({
                     "supports_tools": true,
                     "supports_vision": true,
-                    "context_window": 128000,
+                    "context_window": ctx_length,
                 }),
             })
         }

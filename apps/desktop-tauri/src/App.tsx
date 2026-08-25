@@ -2475,7 +2475,19 @@ return {
    * approvalResolversRef / acui 等）声明之后——否则 TDZ 报错。
    */
   const handleSwitchModel = useCallback(
-    (_newId: string) => {
+    (newId: string) => {
+      // 同步更新本地 sessions state — 用户切模型后, activeSession.model
+      // 必须立刻反映新值, 否则下次 ChatView 重挂载读 session.model 回灌
+      // selectedModel 时, 用旧值(默认模型)覆盖用户选择 (主人反馈).
+      if (activeSessionId) {
+        setSessions((prev) =>
+          prev.map((s) =>
+            s.id === activeSessionId
+              ? { ...s, model: newId, updated_at: new Date().toISOString() }
+              : s,
+          ),
+        );
+      }
       resetChatStateForModelSwitch({
         cancelStream,
         wsSendRaw,
@@ -2505,6 +2517,7 @@ return {
       wsSendRaw,
       clearStreamError,
       activeSessionId,
+      setSessions,
       setStreamPhase,
       setRunningToolCount,
       setSubAgents,
