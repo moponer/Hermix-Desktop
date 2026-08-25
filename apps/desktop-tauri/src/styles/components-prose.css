@@ -1798,19 +1798,18 @@
   margin-top: 4px;
   margin-bottom: 12px;
   /* 容器底色: --color-bg-secondary 跟对话区 (--color-bg-primary)
-     拉开 1 档 (light: fafafa vs ffffff, dark: 2c2c2c vs 1f1f1f),
-     形成"卡片作为容器"的存在感. 这是层次基础, 不是装饰.
-     命令块 (--color-bg-tertiary) 再深 1 档, 形成容器→命令块的
-     2 层视觉分组. 风险色只上 reason 行小色块, 不染整卡. */
-  border-radius: 8px;
-  border: 0;
-  background: var(--color-bg-secondary, #fafafa);
+     拉开 1 档, 形成"卡片作为容器"的存在感. 细边框给卡片明确边界,
+     命令块 (--color-bg-primary 白) 再深 1 档, 形成 容器→命令块
+     的 2 层视觉分组. 风险色只染头部 (.apv-head), 不染整卡. */
+  border-radius: var(--radius-lg, 8px);
+  border: 1px solid var(--color-border-subtle, #ececec);
+  background: var(--color-bg-secondary, #f7f7f7);
   overflow: hidden;
   /* Collapse animation: when `.is-resolved` is added, the card
      smoothly shrinks from the full-card layout to the one-line
      summary row below. */
   transition: max-height 320ms cubic-bezier(0.4, 0, 0.2, 1);
-  max-height: 720px; /* generous ceiling; collapsed state shrinks to 48px */
+  max-height: 820px; /* generous ceiling; collapsed state shrinks to 48px */
   padding: 0;
 }
 .approval-card.is-resolved {
@@ -1855,7 +1854,7 @@
 .approval-full {
   display: flex;
   flex-direction: column;
-  max-height: 720px;
+  max-height: 820px;
   opacity: 1;
   transition: opacity 200ms ease, max-height 280ms cubic-bezier(0.4, 0, 0.2, 1);
 }
@@ -2435,4 +2434,284 @@
   border-radius: var(--radius-full);
 }
 .status-note svg { color: var(--color-text-faint); flex-shrink: 0; }
+
+/* ════════════════════════════════════════════════════════════════════
+   审批卡重设计 — .apv-* 内部层次 (ApprovalRequestView)
+   三级: ① 头部身份层 (apv-head) → ② 主体 (apv-body: 工具/意图/命令)
+         → ③ 底部决策区 (apv-foot: 拒绝/允许)
+   风险色只染头部 (is-danger 红 / is-warn 橙), 主体保持中性灰系;
+   主按钮近黑 (#1A1A1A), 拒绝描边红字, 主从分明. 无蓝紫.
+   ════════════════════════════════════════════════════════════════════ */
+
+/* ── ① 头部: 身份层 ─────────────────────────────────────────────── */
+.apv-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--color-bg-tertiary, #efefef);
+  border-bottom: 1px solid var(--color-border-subtle, #ececec);
+}
+.apv-head-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-md, 6px);
+  flex-shrink: 0;
+  background: var(--color-accent-soft, rgba(26, 26, 26, 0.10));
+  color: var(--color-accent, #1a1a1a);
+}
+.apv-head-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1;
+  min-width: 0;
+}
+.apv-head-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--color-text-primary, #1a1a1a);
+  line-height: 1.3;
+}
+.apv-head-sub {
+  font-size: 11.5px;
+  color: var(--color-text-tertiary, #666);
+  line-height: 1.3;
+}
+.apv-risk {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: var(--radius-full, 999px);
+  letter-spacing: 0.02em;
+}
+.apv-risk.is-danger { color: var(--color-error, #dc2626); background: var(--color-error-soft, rgba(220, 38, 38, 0.14)); }
+.apv-risk.is-warn   { color: var(--color-warning, #d97706); background: var(--color-warning-soft, rgba(217, 119, 6, 0.16)); }
+.apv-risk.is-safe   { color: var(--color-success, #16a34a); background: var(--color-success-soft, rgba(22, 163, 74, 0.14)); }
+
+/* 风险染色: 高危/中危时头部底色转淡红/淡橙, 作为整卡唯一色层 */
+.approval-card.is-danger .apv-head {
+  background: var(--color-error-soft, rgba(220, 38, 38, 0.10));
+  border-bottom-color: color-mix(in srgb, var(--color-error, #dc2626) 18%, transparent);
+}
+.approval-card.is-warn .apv-head {
+  background: var(--color-warning-soft, rgba(217, 119, 6, 0.10));
+  border-bottom-color: color-mix(in srgb, var(--color-warning, #d97706) 18%, transparent);
+}
+.approval-card.is-danger .apv-head-icon { background: var(--color-error-soft, rgba(220, 38, 38, 0.18)); color: var(--color-error, #dc2626); }
+.approval-card.is-warn .apv-head-icon { background: var(--color-warning-soft, rgba(217, 119, 6, 0.18)); color: var(--color-warning, #d97706); }
+
+/* ── ② 主体 ─────────────────────────────────────────────────────── */
+.apv-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+}
+
+/* 工具身份行 */
+.apv-tool {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.apv-tool-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-sm, 4px);
+  background: var(--color-bg-tertiary, #efefef);
+  color: var(--color-text-secondary, #333);
+  flex-shrink: 0;
+}
+.apv-tool-name {
+  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--color-text-primary, #1a1a1a);
+}
+.apv-tool-tag {
+  font-size: 10.5px;
+  color: var(--color-text-faint, #999);
+  padding: 1px 7px;
+  border: 1px solid var(--color-border-subtle, #ececec);
+  border-radius: var(--radius-full, 999px);
+}
+
+/* 意图 callout */
+.apv-intent {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 8px 11px;
+  border-radius: var(--radius-md, 6px);
+  background: var(--color-accent-soft, rgba(26, 26, 26, 0.06));
+  border-left: 2px solid var(--color-accent, #1a1a1a);
+}
+.apv-intent-label {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-secondary, #333);
+  padding-top: 1px;
+}
+.apv-intent-text {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--color-text-primary, #1a1a1a);
+}
+
+/* 命令块 */
+.apv-cmd {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--color-border-subtle, #ececec);
+  border-radius: var(--radius-md, 6px);
+  background: var(--color-bg-primary, #ffffff);
+  overflow: hidden;
+}
+.apv-cmd-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  background: var(--color-bg-tertiary, #efefef);
+  border-bottom: 1px solid var(--color-border-subtle, #ececec);
+}
+.apv-cmd-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-tertiary, #666);
+  letter-spacing: 0.02em;
+}
+.apv-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--color-text-tertiary, #666);
+  background: transparent;
+  border: 0;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm, 4px);
+  cursor: pointer;
+  font-family: inherit;
+  transition: background var(--duration-fast, 120ms) ease, color var(--duration-fast, 120ms) ease;
+}
+.apv-copy:hover {
+  background: var(--color-bg-secondary, #f7f7f7);
+  color: var(--color-text-primary, #1a1a1a);
+}
+.apv-cmd-pre {
+  margin: 0;
+  padding: 9px 11px;
+  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  color: var(--color-text-primary, #1a1a1a);
+  background: var(--color-bg-primary, #ffffff);
+}
+
+/* ── ③ 底部决策区 ───────────────────────────────────────────────── */
+.apv-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--color-border-subtle, #ececec);
+}
+.apv-foot-hint {
+  font-size: 11px;
+  color: var(--color-text-faint, #999);
+  line-height: 1.3;
+}
+.apv-btns {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.apv-deny,
+.apv-allow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 32px;
+  min-width: 72px;
+  padding: 0 16px;
+  border-radius: var(--radius-md, 6px);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+  font-family: inherit;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: background var(--duration-fast, 120ms) ease,
+              border-color var(--duration-fast, 120ms) ease,
+              color var(--duration-fast, 120ms) ease,
+              transform var(--duration-fast, 120ms) ease,
+              box-shadow var(--duration-fast, 120ms) ease;
+}
+.apv-deny:active:not(:disabled),
+.apv-allow:active:not(:disabled) { transform: scale(0.96); }
+.apv-deny:focus-visible,
+.apv-allow:focus-visible {
+  outline: 2px solid var(--color-accent, #1a1a1a);
+  outline-offset: 2px;
+}
+.apv-deny:disabled,
+.apv-allow:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* 拒绝: 描边可见 (非透明灰字), 红字警示, hover 填红 */
+.apv-deny {
+  background: var(--color-bg-primary, #ffffff);
+  border-color: color-mix(in srgb, var(--color-error, #dc2626) 35%, transparent);
+  color: var(--color-error, #dc2626);
+}
+.apv-deny:hover:not(:disabled) {
+  background: var(--color-error, #dc2626);
+  border-color: var(--color-error, #dc2626);
+  color: #ffffff;
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-error, #dc2626) 14%, transparent);
+}
+
+/* 允许: 近黑主按钮 (设计稿: 主按钮 #1A1A1A 白字) */
+.apv-allow {
+  background: var(--color-btn-primary-bg, #1a1a1a);
+  border-color: var(--color-btn-primary-bg, #1a1a1a);
+  color: var(--color-btn-primary-text, #ffffff);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+.apv-allow:hover:not(:disabled) {
+  background: var(--color-btn-primary-hover, #000000);
+  border-color: var(--color-btn-primary-hover, #000000);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.14);
+}
+
+/* 暗色适配 */
+.dark .approval-card {
+  border-color: var(--color-border-primary, #3a3a40);
+  background: var(--color-bg-secondary, #232328);
+}
+.dark .apv-head { border-bottom-color: var(--color-border-primary, #3a3a40); }
+.dark .apv-tool-icon { background: var(--color-bg-tertiary, #2e2e34); }
+.dark .apv-cmd { border-color: var(--color-border-primary, #3a3a40); }
+.dark .apv-cmd-head { background: var(--color-bg-tertiary, #2e2e34); border-bottom-color: var(--color-border-primary, #3a3a40); }
+.dark .apv-cmd-pre { background: var(--color-bg-primary, #1c1c20); }
+.dark .apv-foot { border-top-color: var(--color-border-primary, #3a3a40); }
+.dark .apv-deny { background: var(--color-bg-primary, #1c1c20); }
 
