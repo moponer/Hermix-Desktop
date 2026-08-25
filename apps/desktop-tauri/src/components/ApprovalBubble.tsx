@@ -6,14 +6,12 @@ import {
   AlertCircle,
   Check,
   Clock,
-  Copy,
   FileText,
   Globe,
   Terminal,
   Wrench,
   X,
 } from "lucide-react";
-import { useState } from "react";
 import type { ApprovalMessageMeta, ChatMessage } from "../types";
 import { describeToolArgs } from "./bubbleUtils";
 
@@ -46,7 +44,7 @@ function toolIcon(tool: string) {
  * 严格两行布局 (主人反馈"看起来很乱"后砍级):
  *   ① 第 1 行 — 信息 + 决策: 工具图标/名 + 意图摘要(左对齐),
  *                拒绝 / 允许 按钮(最右侧)
- *   ② 第 2 行 — 命令块: 标题栏"将执行" + 复制按钮 + 命令文本
+ *   ② 第 2 行 — 命令块: 直接展示命令文本 (标题栏/复制已移除)
  * 风险等级通过工具图标染色 (高危红 / 中危橙 / 低危默认) 隐式传达.
  */
 export function ApprovalRequestView({
@@ -72,7 +70,6 @@ export function ApprovalRequestView({
     return null;
   })();
   const intent = meta.reason || argsIntent;
-  const [copied, setCopied] = useState(false);
 
   // Risk class — drives the tool-icon tint.
   // 高危红 / 中危橙 / 低危默认色.
@@ -82,16 +79,6 @@ export function ApprovalRequestView({
     : riskKey === "caution" ? "is-warn"
     : "is-safe";
   const ToolIco = toolIcon(meta.tool);
-
-  const handleCopy = () => {
-    try {
-      void navigator.clipboard?.writeText(desc);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      /* clipboard unavailable — ignore */
-    }
-  };
 
   return (
     <div className={`approval-card footer-block h-enter${decided ? " is-resolved" : ""}`}>
@@ -135,20 +122,8 @@ export function ApprovalRequestView({
           )}
         </div>
 
-        {/* ② 第 2 行: 命令块 */}
+        {/* ② 第 2 行: 命令块 — 直接展示命令文本 */}
         <div className="apv-cmd">
-          <div className="apv-cmd-head">
-            <span className="apv-cmd-label">将执行</span>
-            <button
-              type="button"
-              className="apv-copy"
-              onClick={handleCopy}
-              aria-label="复制命令"
-            >
-              <Copy size={11} />
-              {copied ? "已复制" : "复制"}
-            </button>
-          </div>
           <pre className="apv-cmd-pre">{desc}</pre>
         </div>
       </div>

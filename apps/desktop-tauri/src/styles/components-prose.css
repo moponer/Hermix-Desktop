@@ -2560,49 +2560,16 @@
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.14);
 }
 
-/* ── 第 2 行: 命令块 ──────────────────────────────────────────── */
+/* ── 第 2 行: 命令块 (仅命令文本, 标题栏/复制已移除) ───────────── */
 .apv-cmd {
-  display: flex;
-  flex-direction: column;
+  border: 1px solid var(--color-bg-quaternary, #d0d0d0);
+  border-radius: var(--radius-md, 6px);
   background: var(--color-bg-primary, #ffffff);
-  /* 不再单独加边框 — 整卡已有边框, 命令块仅靠背景色拉层次 */
-}
-.apv-cmd-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 6px 14px;
-  background: var(--color-bg-secondary, #f7f7f7);
-  border-bottom: 1px solid var(--color-bg-quaternary, #d0d0d0);
-}
-.apv-cmd-label {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--color-text-tertiary, #666);
-  letter-spacing: 0.02em;
-}
-.apv-copy {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--color-text-tertiary, #666);
-  background: transparent;
-  border: 0;
-  padding: 2px 6px;
-  border-radius: var(--radius-sm, 4px);
-  cursor: pointer;
-  font-family: inherit;
-  transition: background var(--duration-fast, 120ms) ease, color var(--duration-fast, 120ms) ease;
-}
-.apv-copy:hover {
-  background: var(--color-bg-tertiary, #efefef);
-  color: var(--color-text-primary, #1a1a1a);
+  overflow: hidden;
 }
 .apv-cmd-pre {
   margin: 0;
-  padding: 10px 14px;
+  padding: 11px 14px;
   font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
   font-size: 12px;
   line-height: 1.6;
@@ -2621,7 +2588,7 @@
 }
 .dark .apv-decision-row { border-bottom-color: var(--color-bg-quaternary, #2e2e34); }
 .dark .apv-tool-icon { background: var(--color-bg-tertiary, #2e2e34); }
-.dark .apv-cmd-head { background: var(--color-bg-tertiary, #2e2e34); border-bottom-color: var(--color-bg-quaternary, #2e2e34); }
+.dark .apv-cmd { border-color: var(--color-bg-quaternary, #2e2e34); }
 .dark .apv-cmd-pre { background: var(--color-bg-primary, #1c1c20); }
 .dark .apv-foot { border-top-color: var(--color-border-primary, #3a3a40); }
 .dark .apv-deny { background: var(--color-bg-primary, #1c1c20); }

@@ -2,7 +2,7 @@
 <html lang="zh">
 <head>
 <meta charset="utf-8" />
-<title>审批卡预览 v3 — 两行布局</title>
+<title>审批卡预览 v4 — 两行布局(去掉命令块标题栏)</title>
 <style>
   :root{
     --color-bg-primary:#ffffff;
@@ -127,29 +127,16 @@
     box-shadow:0 1px 2px rgba(0,0,0,0.08);
   }
 
-  /* 第 2 行: 命令块 */
-  .apv-cmd{display:flex;flex-direction:column;background:var(--color-bg-primary,#ffffff);}
-  .apv-cmd-head{
-    display:flex;align-items:center;justify-content:space-between;
-    padding:6px 14px;background:var(--color-bg-secondary,#f7f7f7);
-    border-bottom:1px solid var(--color-bg-quaternary,#d0d0d0);
+  /* 第 2 行: 命令块 (仅命令文本, 标题栏已移除) */
+  .apv-cmd{
+    border:1px solid var(--color-bg-quaternary,#d0d0d0);
+    border-radius:var(--radius-md,6px);
+    background:var(--color-bg-primary,#ffffff);
+    overflow:hidden;
   }
-  body.dark .apv-cmd-head{
-    background:var(--color-bg-tertiary,#2e2e34);
-    border-bottom-color:var(--color-bg-quaternary,#2e2e34);
-  }
-  .apv-cmd-label{
-    font-size:11px;font-weight:600;color:var(--color-text-tertiary,#666);
-    letter-spacing:0.02em;
-  }
-  .apv-copy{
-    display:inline-flex;align-items:center;gap:3px;font-size:11px;font-weight:500;
-    color:var(--color-text-tertiary,#666);background:transparent;border:0;
-    padding:2px 6px;border-radius:var(--radius-sm,4px);cursor:pointer;font-family:inherit;
-  }
-  .apv-copy:hover{background:var(--color-bg-tertiary,#efefef);color:var(--color-text-primary);}
+  body.dark .apv-cmd{border-color:var(--color-bg-quaternary,#2e2e34);}
   .apv-cmd-pre{
-    margin:0;padding:10px 14px;
+    margin:0;padding:11px 14px;
     font-family:ui-monospace,"Cascadia Code",Menlo,monospace;
     font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-word;
     color:var(--color-text-primary);background:var(--color-bg-primary,#ffffff);
@@ -196,11 +183,11 @@
 
 <div class="row">
   <div class="col">
-    <div class="panel-title">浅色 · 5 种状态对照</div>
+    <div class="panel-title">浅色 · 4 种状态对照</div>
     <div class="ctx">
       <div class="msg">
         <div class="msg-meta">AI</div>
-        <div class="msg-text">主人:"看起来很乱" → 砍级, 严格两行布局: 第 1 行信息 + 决策, 第 2 行命令块.</div>
+        <div class="msg-text">主人:"中间这一行可以去掉了, 没啥作用将执行、复制没用" → 第 2 行只留命令文本.</div>
       </div>
 
       <!-- 1: 低危 + 短命令 -->
@@ -219,16 +206,14 @@
             <button class="apv-allow">允许</button>
           </div>
         </div>
-        <div class="apv-cmd">
-          <div class="apv-cmd-head">
-            <span class="apv-cmd-label">将执行</span>
-            <button class="apv-copy">复制</button>
+        <div style="padding:10px 14px 12px;">
+          <div class="apv-cmd">
+            <pre class="apv-cmd-pre">写入文件 "approval_test.txt"</pre>
           </div>
-          <pre class="apv-cmd-pre">写入文件 "approval_test.txt"</pre>
         </div>
       </div>
 
-      <!-- 2: 中危 + 长命令 (横向截图范围) -->
+      <!-- 2: 中危 + 长命令 -->
       <div class="approval-card">
         <div class="apv-decision-row">
           <div class="apv-info">
@@ -244,14 +229,12 @@
             <button class="apv-allow">允许</button>
           </div>
         </div>
-        <div class="apv-cmd">
-          <div class="apv-cmd-head">
-            <span class="apv-cmd-label">将执行</span>
-            <button class="apv-copy">复制</button>
-          </div>
-          <pre class="apv-cmd-pre">git status --short
+        <div style="padding:10px 14px 12px;">
+          <div class="apv-cmd">
+            <pre class="apv-cmd-pre">git status --short
 echo "---"
 git diff --stat HEAD~1 HEAD</pre>
+          </div>
         </div>
       </div>
 
@@ -271,12 +254,10 @@ git diff --stat HEAD~1 HEAD</pre>
             <button class="apv-allow">允许</button>
           </div>
         </div>
-        <div class="apv-cmd">
-          <div class="apv-cmd-head">
-            <span class="apv-cmd-label">将执行</span>
-            <button class="apv-copy">复制</button>
+        <div style="padding:10px 14px 12px;">
+          <div class="apv-cmd">
+            <pre class="apv-cmd-pre">Remove-Item -Recurse -Force F:\temp\hermix-target\hx-shell</pre>
           </div>
-          <pre class="apv-cmd-pre">Remove-Item -Recurse -Force F:\temp\hermix-target\hx-shell</pre>
         </div>
       </div>
 
@@ -289,7 +270,7 @@ git diff --stat HEAD~1 HEAD</pre>
           <span class="approval-summary-tool">write_file</span>
           <span class="approval-summary-desc">写入文件 "approval_test.txt"</span>
           <span class="approval-summary-badge approval-summary-badge-ok">你已允许</span>
-          <span class="approval-summary-result" style="color:#999;font-size:11.5px;">你已批准,操作继续执行</span>
+          <span style="color:#999;font-size:11.5px;">你已批准,操作继续执行</span>
         </div>
       </div>
 
@@ -306,11 +287,11 @@ git diff --stat HEAD~1 HEAD</pre>
         </div>
       </div>
     </div>
-    <div class="helper">浅色: 卡片 bg-secondary (#f7f7f7) + border #d0d0d0, 命令块 bg-primary (白).<br/>风险通过工具图标染色 (红/橙/灰) 隐式传达.</div>
+    <div class="helper">浅色: 卡片 bg-secondary (#f7f7f7) + border #d0d0d0, 命令块白底带边框.<br/>风险通过工具图标染色 (红/橙/灰) 隐式传达. 第 2 行无标题栏, 直接展示命令.</div>
   </div>
 
   <div class="col">
-    <div class="panel-title">深色 · 同 5 种状态</div>
+    <div class="panel-title">深色 · 同 4 种状态</div>
     <div class="ctx dark">
       <div class="msg">
         <div class="msg-meta">AI</div>
@@ -332,12 +313,10 @@ git diff --stat HEAD~1 HEAD</pre>
             <button class="apv-allow">允许</button>
           </div>
         </div>
-        <div class="apv-cmd">
-          <div class="apv-cmd-head">
-            <span class="apv-cmd-label">将执行</span>
-            <button class="apv-copy">复制</button>
+        <div style="padding:10px 14px 12px;">
+          <div class="apv-cmd">
+            <pre class="apv-cmd-pre">写入文件 "approval_test.txt"</pre>
           </div>
-          <pre class="apv-cmd-pre">写入文件 "approval_test.txt"</pre>
         </div>
       </div>
 
@@ -356,12 +335,10 @@ git diff --stat HEAD~1 HEAD</pre>
             <button class="apv-allow">允许</button>
           </div>
         </div>
-        <div class="apv-cmd">
-          <div class="apv-cmd-head">
-            <span class="apv-cmd-label">将执行</span>
-            <button class="apv-copy">复制</button>
+        <div style="padding:10px 14px 12px;">
+          <div class="apv-cmd">
+            <pre class="apv-cmd-pre">Remove-Item -Recurse -Force F:\temp\hermix-target\hx-shell</pre>
           </div>
-          <pre class="apv-cmd-pre">Remove-Item -Recurse -Force F:\temp\hermix-target\hx-shell</pre>
         </div>
       </div>
 
