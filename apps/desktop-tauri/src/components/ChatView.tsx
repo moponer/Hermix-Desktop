@@ -748,6 +748,7 @@ export function ChatView({
               onUndo={onUndo}
               onRestore={onRestore}
               onStop={stream.cancel}
+              activeComposerSessionId={session?.id}
               pendingImages={pendingImages}
               isProcessingFiles={isProcessingFiles}
               onRemoveImage={removePendingImage}
@@ -898,6 +899,7 @@ export function ChatView({
             onUndo={onUndo}
             onRestore={onRestore}
             onStop={stream.cancel}
+            activeComposerSessionId={session?.id}
             pendingImages={pendingImages}
             isProcessingFiles={isProcessingFiles}
             onRemoveImage={removePendingImage}

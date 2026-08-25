@@ -25,6 +25,31 @@ export function createConnector(
   ctx: StreamChatSendContext,
   onMessage: (evt: MessageEvent) => void,
 ): () => void {
+  // Tracks whether we already reported a connection-lost event for
+  // THIS send. Reset to `false` whenever the live WS opens (i.e. a
+  // reconnect succeeded), so a subsequent failure can re-fire the
+  // "network dropped" toast / banner without spamming it on every
+  // transient blip.
+  let hasReportedLost = false;
+  const reportLost = () => {
+    if (hasReportedLost) return;
+    hasReportedLost = true;
+    try {
+      ctx.onConnectionLost?.();
+    } catch (err) {
+      console.warn("[WS-CNX] onConnectionLost threw:", err);
+    }
+  };
+  const reportRestored = () => {
+    if (!hasReportedLost) return;
+    hasReportedLost = false;
+    try {
+      ctx.onConnectionRestored?.();
+    } catch (err) {
+      console.warn("[WS-CNX] onConnectionRestored threw:", err);
+    }
+  };
+
   const connect = () => {
     // Stale retry guard — if a new `send()` has started during the retry
     // delay, abort the reconnection attempt so we don't overwrite the new
@@ -34,6 +59,13 @@ export function createConnector(
       const ws = new WebSocket(resolveWebSocketUrl(ctx.sessionId));
       ctx.wsRef.current = ws;
       ctx.wsSessionIdRef.current = ctx.sessionId;
+
+      // First time the live socket reaches OPEN for this send after
+      // a previously-fired `onConnectionLost`: report restored so the
+      // caller can clear the visible "网络中断" affordance.
+      ws.onopen = () => {
+        reportRestored();
+      };
 
       // Approval responses are routed back to the original
       // `callbacks.onApprovalRequest(...)` Promise through a closure; the
@@ -57,10 +89,15 @@ export function createConnector(
               ctx.retryCount++;
               const delay = RETRY_DELAYS_MS[Math.min(ctx.retryCount - 1, RETRY_DELAYS_MS.length - 1)];
               ctx.updatePhase("reconnecting");
+              reportLost();
               ctx.wsRef.current = null;
               setTimeout(connect, delay);
               return;
             }
+            // Retries exhausted — surface the failure to the caller so the
+            // UI can show "网络中断" NOW instead of waiting for the
+            // server-side 180s hard timeout. The settle itself is unchanged.
+            reportLost();
             ctx.settle(ctx.fullText, undefined, undefined, "partial");
             return;
           }
@@ -68,6 +105,7 @@ export function createConnector(
           // `connected` and called `ws.send(payload)`), DO NOT retry — the
           // server is already processing it.
           if (ctx.sentToServerRef.current) {
+            reportLost();
             ctx.settle("", "Connection lost while server was processing the message", undefined, "error");
             return;
           }
@@ -75,10 +113,14 @@ export function createConnector(
             ctx.retryCount++;
             const delay = RETRY_DELAYS_MS[Math.min(ctx.retryCount - 1, RETRY_DELAYS_MS.length - 1)];
             ctx.updatePhase("reconnecting");
+            reportLost();
             ctx.wsRef.current = null;
             setTimeout(connect, delay);
             return;
           }
+          // Retries exhausted before any state we can recover from; surface
+          // to the caller, fall through to the legacy WebSocket-error settle.
+          reportLost();
           ctx.settle("", "WebSocket error", undefined, "error");
         }
       };
@@ -97,15 +139,20 @@ export function createConnector(
               ctx.retryCount++;
               const delay = RETRY_DELAYS_MS[Math.min(ctx.retryCount - 1, RETRY_DELAYS_MS.length - 1)];
               ctx.updatePhase("reconnecting");
+              reportLost();
               ctx.wsRef.current = null;
               setTimeout(connect, delay);
               return;
             }
+            // Retries exhausted — surface immediately so the UI can show
+            // "网络中断" without waiting on the server-side 180s hard timeout.
+            reportLost();
             ctx.settle(ctx.fullText, undefined, undefined, "partial");
           } else {
             // same hardening as onerror — if the message was already sent,
             // don't retry.
             if (ctx.sentToServerRef.current) {
+              reportLost();
               ctx.settle("", "Connection closed while server was processing the message", undefined, "error");
               return;
             }
@@ -113,10 +160,12 @@ export function createConnector(
               ctx.retryCount++;
               const delay = RETRY_DELAYS_MS[Math.min(ctx.retryCount - 1, RETRY_DELAYS_MS.length - 1)];
               ctx.updatePhase("reconnecting");
+              reportLost();
               ctx.wsRef.current = null;
               setTimeout(connect, delay);
               return;
             }
+            reportLost();
             ctx.settle("", "Connection closed", undefined, "error");
           }
         }
@@ -132,10 +181,12 @@ export function createConnector(
         ctx.retryCount++;
         const delay = RETRY_DELAYS_MS[Math.min(ctx.retryCount - 1, RETRY_DELAYS_MS.length - 1)];
         ctx.updatePhase("reconnecting");
+        reportLost();
         ctx.wsRef.current = null;
         setTimeout(connect, delay);
         return;
       }
+      reportLost();
       ctx.settle("", e instanceof Error ? e.message : String(e));
     }
   };

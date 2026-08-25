@@ -45,6 +45,19 @@ export interface StreamChatSendContext {
   // ── component-level refs (stable across sends) ──
   activeSendIdRef: MutableRefObject<number>;
   wsRef: MutableRefObject<WebSocket | null>;
+  // Tool callback for "WS reconnection exhausted and no events have
+  // been received yet" — fired by the connector ONLY when there is
+  // genuinely nothing else to fall back to (i.e. message was sent to
+  // the server). The caller is responsible for showing an
+  // immediately-visible "网络中断" toast and starting any fallback
+  // (REST polling, retry, etc.) so the user is not stuck on a stale
+  // "正在回复…" spinner for minutes.
+  onConnectionLost?: () => void;
+  // Tool callback for "WebSocket is back online after a retry attempt"
+  // — fires when the live WS transitions to OPEN after a previously
+  // fired `onConnectionLost`. Lets the caller clear the "网络中断"
+  // toast / banner once streaming resumes.
+  onConnectionRestored?: () => void;
   wsSessionIdRef: MutableRefObject<string | null>;
   doneRef: MutableRefObject<boolean>;
   sentToServerRef: MutableRefObject<boolean>;

@@ -54,7 +54,12 @@ export interface ComposerProps {
   onRemoveImage?: (index: number) => void;
   keepOriginalImage?: boolean;
   setKeepOriginalImage?: (v: boolean) => void;
-  onStop?: () => void;
+  onStop?: (sessionId?: string) => boolean;
+  /** Identifier of the session this Composer is rendered for. Threaded
+   *  into the stop-button click so the stream-chat hook can verify
+   *  that "stop" actually targets THIS conversation (defends against
+   *  the legacy "clicking stop on chat B kills chat A" bug). */
+  activeComposerSessionId?: string;
   onSwitchModel?: (newId: string) => void;
   permissionLevel: PermissionLevel;
   setPermissionLevel: (lvl: PermissionLevel) => void;
@@ -547,7 +552,7 @@ export function Composer(p: ComposerProps) {
 
           {p.isStreaming && p.messageQueue && p.messageQueue.length > 0 ? (
             <button
-              onClick={() => p.onStop?.()}
+              onClick={() => p.onStop?.(p.activeComposerSessionId)}
               className="flex items-center justify-center w-8 h-8 rounded-lg transition-all hover:opacity-90"
               style={{
                 background: "var(--color-error)",
@@ -559,7 +564,7 @@ export function Composer(p: ComposerProps) {
             </button>
           ) : (p.isStreaming || p.sending) ? (
             <button
-              onClick={() => p.onStop?.()}
+              onClick={() => p.onStop?.(p.activeComposerSessionId)}
               className="flex items-center justify-center w-8 h-8 rounded-lg transition-all hover:opacity-90"
               style={{
                 background: "var(--color-error)",

@@ -31,6 +31,7 @@ import { useArtifacts } from "./hooks/useArtifacts";
 import { resetChatStateForModelSwitch, type RefLike } from "./lib/chatStateReset";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { ToastContainer } from "./components/ToastContainer";
+import { toastError, toastInfo } from "./hooks/useToast";
 import { useAcuiState, type AcuiDecisionBus } from "./acui";
 import type { Artifact } from "./utils/artifacts";
 import { classifyArtifactKind } from "./utils/artifacts";
@@ -275,7 +276,7 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
   const streamChatApi = useStreamChat(activeSessionId);
   // 仅保留 App 自身（标题栏/指示器/审批流）需要的字段；流状态展示已
   // 改由 ChatView 通过 StreamChatContext 直接读，不再逐层透传。
-  const { streaming, streamingSessionId, setContextUsage, setUsageSnapshot, send: sendStream, cancel: cancelStream, wsSendRaw } = streamChatApi;
+  const { streaming, streamingSessionId, setContextUsage, setUsageSnapshot, setStreamingStatus: setStreamingStatusImpl, send: sendStream, cancel: cancelStream, wsSendRaw } = streamChatApi;
 
   // Session message eviction — clear the *previous* session's
   // messages array (keeping message_count) when switching away. This solves
@@ -2355,6 +2356,36 @@ return {
             // — sub-agents are never removed from the state map
             // once they complete, only on session switch.
             setTimeout(() => setSubAgents({}), 3000);
+          },
+          onConnectionLost: () => {
+            // Fires the instant the WS reconnect budget is exhausted
+            // and the connector has nothing left to fall back to.
+            // The user has been staring at "正在回复…" while the
+            // server silently burned through its 180s hard timeout —
+            // show a visible signal NOW so they know it's a network
+            // issue, not the model still thinking.
+            //
+            // Both forms matter:
+            // - toast is the dominant signal (most visible, survives
+            //   the StreamingBubble being replaced)
+            // - statusText routes through the existing streaming
+            //   indicator so even users who missed the toast see
+            //   the failure next to the model name.
+            const label = activeSessionId === sessionId
+              ? "网络中断，请稍候重试。"
+              : "网络中断（后台对话），请稍候重试。";
+            toastError(label);
+            setStreamingStatusImpl("网络中断 — 已发送消息等待重新连接");
+            // Tipping the phase into `reconnecting` keeps the
+            // existing StreamingBubble in its non-error branch while
+            // the connector runs its 3-step retry cascade; the
+            // user-facing status text we just pushed is already
+            // diagnostic enough without flipping the entire bubble
+            // into the red-error state.
+          },
+          onConnectionRestored: () => {
+            toastInfo("网络已恢复，正在继续接收回复。");
+            setStreamingStatusImpl(null);
           },
         },
         finalOverrides,

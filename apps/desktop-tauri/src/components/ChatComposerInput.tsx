@@ -19,13 +19,18 @@ export interface ChatComposerInputProps {
   disabled?: boolean;
   isStreaming?: boolean;
   onSend: (text: string) => void;
-  onStop?: () => void;
+  onStop?: (sessionId?: string) => boolean;
   onFilesAttach?: (files: File[]) => void;
+  /** Identifier of the conversation whose stop button is being rendered.
+   *  Threaded into the `onStop` call so the chat hook can scope the
+   *  cancellation to THIS session (defends against the legacy shared-state
+   *  bug where clicking Stop on conversation B killed conversation A). */
+  sessionId?: string;
 }
 
 export const ChatComposerInput = memo(
   forwardRef<ChatComposerInputHandle, ChatComposerInputProps>(function ChatComposerInput(
-    { placeholder = "输入消息...", disabled, isStreaming = false, onSend, onStop, onFilesAttach },
+    { placeholder = "输入消息...", disabled, isStreaming = false, onSend, onStop, onFilesAttach, sessionId },
     ref,
   ) {
     const [value, setValue] = useState("");
@@ -84,8 +89,17 @@ export const ChatComposerInput = memo(
     }, [value, disabled, isStreaming, onSend]);
 
     const handleStopClick = useCallback(() => {
-      onStop?.();
-    }, [onStop]);
+      // Thread the identifier of THIS conversation into the stop
+      // call so the chat hook can verify we're actually the active
+      // stream session (defends against the legacy "clicking Stop on
+      // chat B also cancels chat A" shared-state bug).
+      const stopped = onStop?.(sessionId);
+      if (stopped === false) {
+        console.log(
+          `[chat-composer] stop requested for ${sessionId ?? "(no-sid)"} but no matching stream — likely a parallel-chat race, no-op`,
+        );
+      }
+    }, [onStop, sessionId]);
 
     const canSend = !isStreaming && value.trim().length > 0 && !disabled;
 

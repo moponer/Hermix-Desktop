@@ -173,6 +173,19 @@ export interface StreamCallbacks {
   }) => Promise<{ answer: string }>;
   onDone?: (fullText: string, stopReason?: string, durationMs?: number) => void;
   onError?: (error: string, detail?: string, kind?: string) => void;
+  /**
+   * Fires when the WS reconnection budget is exhausted and the
+   * connector has nothing left to fall back to. The caller should
+   * surface "网络中断" toast / banner immediately and (optionally)
+   * kick off a REST polling fallback. Mirror of
+   * `StreamChatSendContext.onConnectionLost`.
+   */
+  onConnectionLost?: () => void;
+  /**
+   * Fires when a previously-lost connection transitions back to
+   * OPEN. Lets the caller clear the "网络中断" affordance.
+   */
+  onConnectionRestored?: () => void;
   onReasoningChunk?: (piece: string) => void;
   onSectionGate?: (info: {
     patched: Array<{
@@ -352,6 +365,11 @@ export function useStreamChat(activeSessionId: string | null) {
           activeSessionIdRef,
           onPrefetchRef,
           streamingSessionIdRef,
+          // WS lifecycle hooks forwarded from `callbacks`. Tracked here so
+          // the WS connector can fire them without going through the
+          // messaging handler.
+          onConnectionLost: callbacks.onConnectionLost,
+          onConnectionRestored: callbacks.onConnectionRestored,
           setStreamingSessionId,
           setStreamingStatus,
           setLastActivityAt,
@@ -528,7 +546,36 @@ export function useStreamChat(activeSessionId: string | null) {
     []
   );
 
-  const cancel = useCallback(() => {
+  /**
+   * Stop the in-flight stream.
+   *
+   * The optional `sessionId` guards against the "two conversations
+   * share the same stop button" bug: only settle the stream if the
+   * currently-active streaming session matches `sessionId`. This
+   * matters because `streamingSessionId` is a SINGLE shared slot at
+   * the React top level — without this guard, clicking Stop on
+   * ChatView B while ChatView A is the one that actually owns the
+   * active stream would still settle A, leaving the user
+   * bewildered ("I clicked stop on B, why did A die?").
+   *
+   * Returns `true` if a stream was actually cancelled, `false` if the
+   * call was a no-op (caller is not the active session, or nothing
+   * is streaming right now). The Composer uses this to know whether
+   * to fall back to its legacy "全局 cancel" behavior when called
+   * from contexts that don't have a sessionId handy.
+   */
+  const cancel = useCallback((sessionId?: string): boolean => {
+    const currentStreamId = streamingSessionIdRef.current;
+    if (sessionId !== undefined && currentStreamId !== sessionId) {
+      // Mismatched session — refuse to cancel. We deliberately do
+      // NOT touch `streamingSessionId` / `wsRef` here: that would
+      // belong to the OTHER conversation the user did not intend to
+      // stop.
+      console.log(
+        `[WS-CLOSE] site=cancel skipped: requested=${sessionId ?? "(none)"} active=${currentStreamId ?? "(none)"}`,
+      );
+      return false;
+    }
     // If there's an active send, settle it immediately so the
     // UI's `sending` state gets reset without waiting for the
     // asynchronous WS `onclose` event.  `settle()` is a no-op
@@ -548,9 +595,10 @@ export function useStreamChat(activeSessionId: string | null) {
     wsRef.current = null;
     streamingSessionIdRef.current = null;
     setStreamingSessionId(null);
+    return true;
   }, []);
 
-  return { send, streaming: streamingSessionId !== null, streamingSessionId, streamingStatus, lastActivityAt, compactionStatus, setCompactionStatus, contextUsage, setContextUsage, usageSnapshot, setUsageSnapshot, cancel, wsSendRaw };
+  return { send, streaming: streamingSessionId !== null, streamingSessionId, streamingStatus, setStreamingStatus, lastActivityAt, compactionStatus, setCompactionStatus, contextUsage, setContextUsage, usageSnapshot, setUsageSnapshot, cancel, wsSendRaw };
 }
 
 export type StreamChatApi = ReturnType<typeof useStreamChat>;
