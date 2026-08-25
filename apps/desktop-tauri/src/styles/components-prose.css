@@ -1792,24 +1792,20 @@
 .approval-card {
   display: flex;
   flex-direction: column;
-  /* Horizontal alignment delegated to `.footer-block`
-   * (margin-left: 32px, margin-right: 0) so this card sits on the
-   * same lane as `.sub-agent-panel` and `.file-change-block`. */
   margin-top: 4px;
   margin-bottom: 12px;
-  /* 容器底色: --color-bg-secondary 跟对话区 (--color-bg-primary)
-     拉开 1 档, 形成"卡片作为容器"的存在感. 细边框给卡片明确边界,
-     命令块 (--color-bg-primary 白) 再深 1 档, 形成 容器→命令块
-     的 2 层视觉分组. 风险色只染头部 (.apv-head), 不染整卡. */
-  border-radius: var(--radius-lg, 8px);
-  border: 1px solid var(--color-border-subtle, #ececec);
+  /* 卡片作为容器: 边框 + 阴影 + 圆角 + 容器底色 共同形成"升起"感.
+     浅色主题: border 用四级背景同明度 (#d0d0d0) + 极淡阴影,
+     跟白底对话区 (#ffffff) 拉开明确边界. 容器底色 --color-bg-secondary
+     跟对话区 --color-bg-primary 拉开 1 档, 命令块再深 1 档
+     (3 层视觉分组). */
+  border-radius: var(--radius-lg, 12px);
+  border: 1px solid var(--color-bg-quaternary, #d0d0d0);
   background: var(--color-bg-secondary, #f7f7f7);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.03);
   overflow: hidden;
-  /* Collapse animation: when `.is-resolved` is added, the card
-     smoothly shrinks from the full-card layout to the one-line
-     summary row below. */
   transition: max-height 320ms cubic-bezier(0.4, 0, 0.2, 1);
-  max-height: 820px; /* generous ceiling; collapsed state shrinks to 48px */
+  max-height: 820px;
   padding: 0;
 }
 .approval-card.is-resolved {
@@ -2444,20 +2440,25 @@
    ════════════════════════════════════════════════════════════════════ */
 
 /* ── ① 头部: 身份层 ─────────────────────────────────────────────── */
+/* 头部改为可换行布局: 图标 + 标题 在第一行, 风险徽章右上角浮动;
+   副标题独占第二行 (跨越整宽), 跟主体分割清晰. 头部背景用
+   --color-bg-tertiary 跟卡片容器 (--color-bg-secondary) 拉开 1 档,
+   形成"卡片→头部→主体"三段递进. */
 .apv-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
-  padding: 10px 14px;
+  gap: 10px 12px;
+  padding: 12px 16px;
   background: var(--color-bg-tertiary, #efefef);
-  border-bottom: 1px solid var(--color-border-subtle, #ececec);
+  border-bottom: 1px solid var(--color-bg-quaternary, #d0d0d0);
 }
 .apv-head-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
+  width: 28px;
+  height: 28px;
   border-radius: var(--radius-md, 6px);
   flex-shrink: 0;
   background: var(--color-accent-soft, rgba(26, 26, 26, 0.10));
@@ -2467,7 +2468,7 @@
   display: flex;
   flex-direction: column;
   gap: 1px;
-  flex: 1;
+  flex: 1 1 auto;
   min-width: 0;
 }
 .apv-head-title {
@@ -2488,9 +2489,10 @@
   gap: 3px;
   font-size: 11px;
   font-weight: 600;
-  padding: 3px 9px;
+  padding: 4px 10px;
   border-radius: var(--radius-full, 999px);
   letter-spacing: 0.02em;
+  margin-left: auto;
 }
 .apv-risk.is-danger { color: var(--color-error, #dc2626); background: var(--color-error-soft, rgba(220, 38, 38, 0.14)); }
 .apv-risk.is-warn   { color: var(--color-warning, #d97706); background: var(--color-warning-soft, rgba(217, 119, 6, 0.16)); }
@@ -2509,18 +2511,25 @@
 .approval-card.is-warn .apv-head-icon { background: var(--color-warning-soft, rgba(217, 119, 6, 0.18)); color: var(--color-warning, #d97706); }
 
 /* ── ② 主体 ─────────────────────────────────────────────────────── */
+/* 主体内部三段: 工具身份 (小背景块) → 意图 callout → 命令块 (白底块).
+   gap 14px 让三段呼吸, 工具身份块用 --color-bg-primary (白) 跟卡片
+   容器 (--color-bg-secondary) 拉开, 形成"白→灰→灰"的容器层次. */
 .apv-body {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 12px 14px;
+  gap: 12px;
+  padding: 14px 16px;
 }
 
-/* 工具身份行 */
+/* 工具身份行 — 整块背景, 跟卡片容器同级的"小容器" */
 .apv-tool {
   display: flex;
   align-items: center;
   gap: 8px;
+  padding: 8px 12px;
+  background: var(--color-bg-primary, #ffffff);
+  border: 1px solid var(--color-bg-quaternary, #d0d0d0);
+  border-radius: var(--radius-md, 6px);
 }
 .apv-tool-icon {
   display: inline-flex;
@@ -2540,22 +2549,23 @@
   color: var(--color-text-primary, #1a1a1a);
 }
 .apv-tool-tag {
+  margin-left: auto;
   font-size: 10.5px;
   color: var(--color-text-faint, #999);
-  padding: 1px 7px;
-  border: 1px solid var(--color-border-subtle, #ececec);
+  padding: 2px 8px;
+  border: 1px solid var(--color-bg-quaternary, #d0d0d0);
   border-radius: var(--radius-full, 999px);
 }
 
-/* 意图 callout */
+/* 意图 callout — 跟工具行同级, 也是独立块, 但用 accent 染色区分 */
 .apv-intent {
   display: flex;
-  gap: 8px;
+  gap: 10px;
   align-items: flex-start;
-  padding: 8px 11px;
+  padding: 10px 14px;
   border-radius: var(--radius-md, 6px);
   background: var(--color-accent-soft, rgba(26, 26, 26, 0.06));
-  border-left: 2px solid var(--color-accent, #1a1a1a);
+  border-left: 3px solid var(--color-accent, #1a1a1a);
 }
 .apv-intent-label {
   flex-shrink: 0;
@@ -2563,18 +2573,19 @@
   font-weight: 600;
   color: var(--color-text-secondary, #333);
   padding-top: 1px;
+  letter-spacing: 0.02em;
 }
 .apv-intent-text {
-  font-size: 12.5px;
-  line-height: 1.5;
+  font-size: 13px;
+  line-height: 1.55;
   color: var(--color-text-primary, #1a1a1a);
 }
 
-/* 命令块 */
+/* 命令块 — 独立白底容器, 标题栏深 1 档, 跟卡片容器同层次 */
 .apv-cmd {
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--color-border-subtle, #ececec);
+  border: 1px solid var(--color-bg-quaternary, #d0d0d0);
   border-radius: var(--radius-md, 6px);
   background: var(--color-bg-primary, #ffffff);
   overflow: hidden;
@@ -2583,9 +2594,9 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 10px;
+  padding: 7px 12px;
   background: var(--color-bg-tertiary, #efefef);
-  border-bottom: 1px solid var(--color-border-subtle, #ececec);
+  border-bottom: 1px solid var(--color-bg-quaternary, #d0d0d0);
 }
 .apv-cmd-label {
   font-size: 11px;
@@ -2614,10 +2625,10 @@
 }
 .apv-cmd-pre {
   margin: 0;
-  padding: 9px 11px;
+  padding: 10px 12px;
   font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
   font-size: 12px;
-  line-height: 1.55;
+  line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;
   overflow-wrap: anywhere;
@@ -2630,9 +2641,10 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
-  padding-top: 10px;
-  border-top: 1px solid var(--color-border-subtle, #ececec);
+  gap: 12px;
+  padding-top: 12px;
+  margin-top: 2px;
+  border-top: 1px solid var(--color-bg-quaternary, #d0d0d0);
 }
 .apv-foot-hint {
   font-size: 11px;
@@ -2704,14 +2716,18 @@
 
 /* 暗色适配 */
 .dark .approval-card {
-  border-color: var(--color-border-primary, #3a3a40);
+  border-color: var(--color-bg-quaternary, #2e2e34);
   background: var(--color-bg-secondary, #232328);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3), 0 1px 2px rgba(0, 0, 0, 0.2);
 }
-.dark .apv-head { border-bottom-color: var(--color-border-primary, #3a3a40); }
+.dark .apv-head { border-bottom-color: var(--color-bg-quaternary, #2e2e34); }
+.dark .apv-tool { border-color: var(--color-bg-quaternary, #2e2e34); }
 .dark .apv-tool-icon { background: var(--color-bg-tertiary, #2e2e34); }
-.dark .apv-cmd { border-color: var(--color-border-primary, #3a3a40); }
-.dark .apv-cmd-head { background: var(--color-bg-tertiary, #2e2e34); border-bottom-color: var(--color-border-primary, #3a3a40); }
+.dark .apv-tool-tag { border-color: var(--color-bg-quaternary, #2e2e34); }
+.dark .apv-cmd { border-color: var(--color-bg-quaternary, #2e2e34); }
+.dark .apv-cmd-head { background: var(--color-bg-tertiary, #2e2e34); border-bottom-color: var(--color-bg-quaternary, #2e2e34); }
 .dark .apv-cmd-pre { background: var(--color-bg-primary, #1c1c20); }
+.dark .apv-foot { border-top-color: var(--color-bg-quaternary, #2e2e34); }
 .dark .apv-foot { border-top-color: var(--color-border-primary, #3a3a40); }
 .dark .apv-deny { background: var(--color-bg-primary, #1c1c20); }
 
