@@ -1529,7 +1529,7 @@ fn dev_error_html(reason: &str, hint_path: &str) -> String {
     font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }}
   .wrap {{ min-height:100vh; display:flex; align-items:center; justify-content:center; padding:32px; }}
   .card {{ max-width:560px; width:100%; background:#1c1c20; border:1px solid #2e2e34;
-    border-radius:14px; padding:28px 32px; }}
+    border-radius:14px; padding:28px 32px; position:relative; }}
   .dot {{ width:10px; height:10px; border-radius:50%; background:#e5534b; display:inline-block; vertical-align:middle; margin-right:10px; }}
   h1 {{ font-size:18px; margin:0 0 16px; font-weight:600; }}
   .reason {{ background:#232328; border:1px solid #2e2e34; border-radius:8px;
@@ -1538,8 +1538,15 @@ fn dev_error_html(reason: &str, hint_path: &str) -> String {
   .tip {{ font-size:13px; line-height:1.75; color:#b8b8c4; margin:0; }}
   .tip code {{ background:#232328; padding:2px 6px; border-radius:4px; color:#d0d0dc; font-size:12px; }}
   strong {{ color:#fff; font-weight:600; }}
+  .close {{ position:absolute; top:14px; right:14px; width:28px; height:28px;
+    display:flex; align-items:center; justify-content:center; background:transparent;
+    border:1px solid #2e2e34; border-radius:6px; color:#9a9aa6; cursor:pointer;
+    font-size:16px; line-height:1; padding:0; transition:background .15s, color .15s, border-color .15s; }}
+  .close:hover {{ background:#232328; color:#fff; border-color:#3a3a44; }}
+  .close:focus-visible {{ outline:2px solid #d0d0dc; outline-offset:2px; }}
 </style></head>
 <body><div class="wrap"><div class="card">
+  <button type="button" class="close" onclick="window.close()" aria-label="关闭" title="关闭">×</button>
   <h1><span class="dot"></span>应用加载失败</h1>
   <p class="reason">{}</p>
   <p class="path">目标文件：{}</p>
