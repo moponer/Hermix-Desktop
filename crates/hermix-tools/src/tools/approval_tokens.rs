@@ -25,7 +25,7 @@ pub fn register(registry: &ToolRegistry) {
         Arc::new(|| true),
         vec![],
         false,
-        "Manage approval tokens: grant, revoke, check status.",
+        "Pre-authorization tokens that let matching tool calls auto-pass WITHOUT a popup. IMPORTANT: this is NOT how approval cards are triggered — approval cards are sent AUTOMATICALLY by the server when a high-risk tool (e.g. terminal) is invoked. Only use this to grant/revoke/list auto-approve tokens.",
         "🔐",
         None,
         RiskLevel::Safe,
@@ -235,7 +235,7 @@ impl ToolHandler for ApprovalTokenHandler {
 
         tool_schema(
             "approval_token",
-            "Manage approval tokens for tool execution. Grant tokens to auto-approve specific tool calls, revoke tokens, or check if a command has an approved token.",
+            "Pre-authorization tokens for tool execution. Grant a token to make matching tool calls (e.g. a command pattern) auto-approved WITHOUT an interactive approval card. This is NOT a trigger for approval cards — those are sent AUTOMATICALLY by the server when a high-risk tool call occurs. Actions: grant, revoke, check, list.",
             JsonSchema::object(props, vec!["action".into()]),
         )
     }

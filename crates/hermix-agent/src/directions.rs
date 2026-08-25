@@ -261,7 +261,10 @@ the visible channel (NOT inside a <think> block): what you did, what succeeded, 
 failed, and — if the task is incomplete — what the user should do next. A turn that \
 stops with zero visible text is a failure regardless of how much tool work happened. \
 If your draft was all reasoning, move the conclusion into the visible reply before \
-stopping.";
+stopping.
+
+# Approval cards (important)\
+Approval cards are sent AUTOMATICALLY by the server when a high-risk tool call (e.g. `terminal`) is about to execute — you do NOT trigger them. There is no tool that approves a request; calling `approval_token` or any other tool will NOT show an approval card. If you want a command to run without a popup, the user can pre-authorize it via `approval_token` (grant action), but that is separate from the interactive approval card. Never try to invoke an approval card through a tool call.";
 
 /// Environment awareness + Shell compatibility + tool fallback priority.
 /// Always-on: tells the model what OS/shell it runs on, how to call
