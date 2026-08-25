@@ -2444,7 +2444,6 @@
   justify-content: space-between;
   gap: 12px;
   padding: 11px 14px;
-  border-bottom: 1px solid var(--color-bg-quaternary, #d0d0d0);
 }
 .apv-info {
   display: flex;
@@ -2590,7 +2589,6 @@
   background: var(--color-bg-secondary, #232328);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
 }
-.dark .apv-decision-row { border-bottom-color: var(--color-bg-quaternary, #2e2e34); }
 .dark .apv-tool-icon { background: var(--color-bg-tertiary, #2e2e34); }
 .dark .apv-cmd { border-color: var(--color-bg-quaternary, #2e2e34); }
 .dark .apv-cmd-pre { background: var(--color-bg-primary, #1c1c20); }
