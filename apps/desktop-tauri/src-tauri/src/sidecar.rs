@@ -828,7 +828,15 @@ impl Default for WatchdogConfig {
     fn default() -> Self {
         Self {
             check_interval: Duration::from_secs(5),
-            max_consecutive_failures: 3,
+            // Cold start of `hermix.exe` can take up to ~70s (embedding
+            // model load, toolset init) before `/health` responds. With
+            // `max_consecutive_failures: 3` the watchdog killed the
+            // sidecar at ~15s — every restart re-paid the 70s cold start
+            // and got killed again → permanent restart loop, port never
+            // listens, app unusable (2026-08-25 incident). 30 failures ×
+            // 5s = 150s tolerance window: a cold start always wins, a
+            // genuinely hung server still restarts after 2.5min.
+            max_consecutive_failures: 30,
             max_restarts_before_give_up: 5,
         }
     }
