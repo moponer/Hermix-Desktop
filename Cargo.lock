@@ -2245,6 +2245,7 @@ dependencies = [
  "hermix-cua",
  "hermix-environments",
  "hermix-gateway",
+ "hermix-intelligence",
  "hermix-mcp",
  "hermix-plugin",
  "hermix-runtime",
