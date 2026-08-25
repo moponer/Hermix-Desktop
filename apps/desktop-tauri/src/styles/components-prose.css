@@ -1795,7 +1795,7 @@
   margin-top: 4px;
   margin-bottom: 12px;
   border-radius: var(--radius-lg, 10px);
-  border: 1px solid var(--color-bg-quaternary, #d0d0d0);
+  border: 1px solid var(--color-border-subtle, #ececec);
   background: var(--color-bg-secondary, #f7f7f7);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
   overflow: hidden;
@@ -2565,7 +2565,7 @@
      margin-left/right 14px 跟 .apv-decision-row (padding 11px 14px)
      的左右内边距对齐 — 同一条隐形垂直线. */
   margin: 12px 14px 14px;
-  border: 1px solid var(--color-bg-quaternary, #d0d0d0);
+  border: 1px solid var(--color-border-subtle, #ececec);
   border-radius: var(--radius-md, 6px);
   background: var(--color-bg-primary, #ffffff);
   overflow: hidden;
@@ -2583,14 +2583,15 @@
   background: var(--color-bg-primary, #ffffff);
 }
 
-/* 暗色适配 */
+/* 暗色适配 — 用 dark 主题真定义的 token (--color-border-subtle 等),
+   不依赖未定义的 --color-bg-quaternary */
 .dark .approval-card {
-  border-color: var(--color-bg-quaternary, #2e2e34);
+  border-color: var(--color-border-subtle, #343434);
   background: var(--color-bg-secondary, #232328);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
 }
-.dark .apv-tool-icon { background: var(--color-bg-tertiary, #2e2e34); }
-.dark .apv-cmd { border-color: var(--color-bg-quaternary, #2e2e34); }
+.dark .apv-tool-icon { background: var(--color-bg-tertiary, #383838); }
+.dark .apv-cmd { border-color: var(--color-border-subtle, #343434); }
 .dark .apv-cmd-pre { background: var(--color-bg-primary, #1c1c20); }
 .dark .apv-foot { border-top-color: var(--color-border-primary, #3a3a40); }
 .dark .apv-deny { background: var(--color-bg-primary, #1c1c20); }

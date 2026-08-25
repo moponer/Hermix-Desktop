@@ -18,8 +18,11 @@ function applyTheme(id: string) {
   // 同时 dark 主题挂 .dark 以兼容 tokens.css 的 .dark 选择器
   const DARK_THEMES = new Set(["dark", "rainforest"]);
   const wantDark = DARK_THEMES.has(id);
-  root.classList.toggle("dark", id === "dark");
-  if (body) body.classList.toggle("dark", id === "dark");
+  // 所有暗色主题都挂 .dark 类, 兼容 tokens.css / components-prose.css 的
+  // .dark 选择器 — 否则 rainforest 等非 "dark" id 的暗色主题下, .dark 段
+  // 全部失效, 边框/背景退回亮色 fallback.
+  root.classList.toggle("dark", wantDark);
+  if (body) body.classList.toggle("dark", wantDark);
   root.style.colorScheme = wantDark ? "dark" : "light";
 }
 
