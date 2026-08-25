@@ -2562,6 +2562,10 @@
 
 /* ── 第 2 行: 命令块 (仅命令文本, 标题栏/复制已移除) ───────────── */
 .apv-cmd {
+  /* margin-top 拉出与决策行的视觉间距 (替代 border-bottom 贴脸分隔);
+     margin-left/right 14px 跟 .apv-decision-row (padding 11px 14px)
+     的左右内边距对齐 — 同一条隐形垂直线. */
+  margin: 12px 14px 14px;
   border: 1px solid var(--color-bg-quaternary, #d0d0d0);
   border-radius: var(--radius-md, 6px);
   background: var(--color-bg-primary, #ffffff);
