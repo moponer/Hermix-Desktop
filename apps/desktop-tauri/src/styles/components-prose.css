@@ -54,7 +54,7 @@
 }
 .prose hr { border: 0; border-top: 1px solid var(--color-bg-tertiary); margin: 0.9em 0; }
 .prose table { border-collapse: collapse; margin: 0.5em 0; font-size: 0.92em; width: 100%; }
-.prose th, .prose td { padding: 0.4em 0.6em; border: 1px solid var(--color-bg-tertiary); }
+.prose th, .prose td { padding: 0.4em 0.6em; border: 1px solid var(--color-border-secondary); }
 .prose th { background: var(--color-bg-secondary); font-weight: 600; color: var(--color-text-primary); }
 .prose code {
   background: transparent;
@@ -383,6 +383,17 @@
   margin-left: 32px;
   margin-right: 0;
   box-sizing: border-box;
+}
+/* File-change block lives inside .tl-text-inner--meta (avatar offset is
+   already applied via .msg-bubble-assistant gap:10px). The generic
+   .footer-block margin-left:32px was designed for standalone footer
+   blocks and double-offsets the card, leaving it visibly indented on
+   the right. Flush to the message body edge and stretch to full width
+   so the right padding mirrors the left. */
+.file-change-block.footer-block {
+  margin-left: 0;
+  width: 100%;
+  max-width: 100%;
 }
 @media (min-width: 1024px) {
   .footer-block { max-width: 768px; }

@@ -632,8 +632,10 @@
 .dark .tw-msg-row:hover,
 .dark .tw-msg-row[data-open="true"],
 .dark .tw-msg-row:focus-visible {
-  /* v7 层次: 与 components.css 同名 dark override 同步 (transparent → hover bg) */
-  background: var(--color-bg-hover);
+  /* v8: 弱化 hover 高亮 — var(--color-bg-hover) = #2a2a30 vs card #1c1c20
+     差 14 RGB, 整行亮起太显眼像按钮. 用 6% 主色叠加 + row 内已用
+     8% progress, 视觉上一致且柔和. */
+  background: color-mix(in srgb, var(--color-text-primary) 6%, transparent);
 }
 .dark .tw-msg-main {
   color: var(--color-text-primary);
