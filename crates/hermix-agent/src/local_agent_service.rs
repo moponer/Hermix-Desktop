@@ -216,6 +216,13 @@ pub struct LocalAgentService {
     /// and wondering why long-context compression is silently degraded.
     /// `take_compression_quota_warning` consumes it at most once.
     compression_quota_warning: Arc<std::sync::Mutex<Option<String>>>,
+    /// when the one-shot compression LLM health check fails with a
+    /// non-quota error (e.g. 400 "unknown model" — custom-* provider not
+    /// promoted to front of the aux chain), store a user-facing warning
+    /// here so the next `send_message_stream` can surface it via a
+    /// `StreamEvent::CompactionStatus { state: "model_mismatch" }`.
+    /// `take_compression_model_warning` consumes it at most once.
+    compression_model_warning: Arc<std::sync::Mutex<Option<String>>>,
     /// Active interrupt controllers for in-flight streaming sessions,
     /// keyed by session_id. When the server shuts down, `interrupt_all()`
     /// calls `interrupt(None)` on every controller so the agent loop
@@ -240,6 +247,20 @@ fn is_quota_exhausted_error(s: &str) -> bool {
         || lower.contains("用量上限")
         || lower.contains("token plan")
         || lower.contains("quota")
+}
+
+/// Detect "unknown model" / 400 mismatches in the aux chain. Happens when
+/// the session's active model (typically a custom-* provider like agnes)
+/// isn't promoted to the front of the auxiliary chain — the bare model id
+/// lands on a different provider (e.g. minimax) that doesn't recognise it
+/// and 400s immediately. Distinguish from genuine quota errors so we can
+/// surface a distinct "model mismatch, compression degraded" banner.
+fn is_model_mismatch_error(s: &str) -> bool {
+    let lower = s.to_lowercase();
+    lower.contains("unknown model")
+        || lower.contains("model not found")
+        || lower.contains("unknown_model")
+        || (lower.contains("400") && lower.contains("model"))
 }
 
 impl LocalAgentService {
@@ -436,6 +457,19 @@ impl LocalAgentService {
         }
     }
 
+    /// Same drainable slot as `take_compression_quota_warning`, but for
+    /// "model mismatch / unknown model" errors that the health check
+    /// hits when the session's active model is behind a custom-* provider
+    /// that wasn't promoted to the front of the auxiliary chain. The
+    /// server surfaces it as a `CompactionStatus { state: "model_mismatch" }`
+    /// banner. Consumed at most once per error instance.
+    pub fn take_compression_model_warning(&self) -> Option<String> {
+        match self.compression_model_warning.lock() {
+            Ok(mut guard) => guard.take(),
+            Err(_) => None,
+        }
+    }
+
     /// Interrupt all active agent tasks so they gracefully stop and
     /// persist their partial output. Called by the server's shutdown
     /// path before the process exits. Each registered `InterruptController`
@@ -484,6 +518,7 @@ impl LocalAgentService {
             memory_router,
             compression_health_checked: std::sync::atomic::AtomicBool::new(false),
             compression_quota_warning: Arc::new(std::sync::Mutex::new(None)),
+            compression_model_warning: Arc::new(std::sync::Mutex::new(None)),
             active_interrupts: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         }
     }
@@ -511,6 +546,7 @@ impl LocalAgentService {
             memory_router,
             compression_health_checked: std::sync::atomic::AtomicBool::new(false),
             compression_quota_warning: Arc::new(std::sync::Mutex::new(None)),
+            compression_model_warning: Arc::new(std::sync::Mutex::new(None)),
             active_interrupts: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         }
     }
@@ -873,6 +909,7 @@ impl LocalAgentService {
         match crate::auxiliary_builder::build_auxiliary_client_with_config(
             hermix_intelligence::auxiliary::AuxiliaryConfig::default(),
             &gw_snapshot,
+            Some(&compressor_model),
         ) {
             (aux_client, summary) if !summary.registered.is_empty() => {
                 let aux = Arc::new(aux_client);
@@ -995,11 +1032,11 @@ impl LocalAgentService {
                         .swap(true, std::sync::atomic::Ordering::SeqCst);
                     if !already_checked {
                         let check_aux = aux.clone();
-                        // clone the warning slot so the
-                        // background health-check task can record a quota
-                        // exhaustion without borrowing `self` into the
-                        // `async move` closure.
+                        // Clone both warning slots so the background health-check task
+                        // can record quota / model mismatch failures without borrowing
+                        // `self` into the `async move` closure.
                         let warn_slot = self.compression_quota_warning.clone();
+                        let warn_slot_model = self.compression_model_warning.clone();
                         tokio::spawn(async move {
                             match crate::compression_health::startup_compression_llm_health_check(
                                 &*check_aux,
@@ -1030,6 +1067,21 @@ impl LocalAgentService {
                                                 "Token Plan 用量已达上限,压缩模型无法调用,长对话将不会自动压缩。请升级套餐或购买积分。"
                                                     .to_string(),
                                             );
+                                        }
+                                    } else if is_model_mismatch_error(&err_str) {
+                                        // Model-id / provider 错配 (e.g. "unknown model") —
+                                        // happens when the session's active model (custom-*
+                                        // like agnes) wasn't promoted to the front of the aux
+                                        // chain, so the bare model id first hits minimax that
+                                        // doesn't know it and 400s immediately. The fix is to
+                                        // promote the session's provider to the front; this
+                                        // branch catches the symptom and warns the user
+                                        // anyway so they see a banner instead of silent
+                                        // degraded compression.
+                                        if let Ok(mut guard) = warn_slot_model.lock() {
+                                            *guard = Some(format!(
+                                                "压缩模型与 provider 不匹配,压缩已回退到字符级裁剪: {err_str}"
+                                            ));
                                         }
                                     }
                                     tracing::warn!(
@@ -1387,6 +1439,14 @@ impl AgentService for LocalAgentService {
     /// `CompactionStatus` banner.
     fn take_compression_quota_warning(&self) -> Option<String> {
         LocalAgentService::take_compression_quota_warning(self)
+    }
+
+    /// Delegate to the inherent `take_compression_model_warning` so the
+    /// server can call this through `Arc<dyn AgentService>`. Same rationale
+    /// as `take_compression_quota_warning` — surfaces a model-id / provider
+    /// mismatch (400 unknown model) as a CompactionStatus banner.
+    fn take_compression_model_warning(&self) -> Option<String> {
+        LocalAgentService::take_compression_model_warning(self)
     }
 
     /// Delegate to the inherent `interrupt_all` method so the server

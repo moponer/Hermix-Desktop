@@ -1415,6 +1415,28 @@ pub(crate) async fn handle_ws_stream_send(
         });
     }
 
+    // 会话级 model/provider 错配 (custom-* provider 没被 promote 到 aux 链首)
+    // 会在 health check 时触发 400 "unknown model"。这类错误是永久性的 —
+    // 只要主模型还是那个 custom-* provider 就会每次压缩都 400。推一个
+    // `model_mismatch` banner 让用户知道 "长对话压缩会回退到字符级裁剪"。
+    if let Some(warn) = agent_service.take_compression_model_warning() {
+        let _ = tx.try_send(WsEnvelope {
+            version: 1,
+            request_id: request.request_id.clone(),
+            trace_id: trace_id.to_string(),
+            event: StreamEvent::CompactionStatus {
+                snapshot: serde_json::json!({
+                    "state": "model_mismatch",
+                    "last_failure_reason": warn,
+                    "last_changed_at_unix_ms": std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as u64)
+                        .unwrap_or(0),
+                }),
+            },
+        });
+    }
+
     //Clone hermix_home + session_persistence for crash dump
     // path inside the agent task's catch_unwind recovery.
     let hermix_home_clone = state.hermix_home.clone();

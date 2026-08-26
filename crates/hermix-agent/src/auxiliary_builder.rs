@@ -51,7 +51,7 @@ pub struct AuxiliaryWiringSummary {
 pub fn build_default_auxiliary_client(
     config: AuxiliaryConfig,
 ) -> (AuxiliaryClient, AuxiliaryWiringSummary) {
-    build_auxiliary_client_inner(config, None)
+    build_auxiliary_client_inner(config, None, None)
 }
 
 /// Build an [`AuxiliaryClient`] from both `config.yaml` and environment variables.
@@ -63,11 +63,31 @@ pub fn build_default_auxiliary_client(
 /// main conversation. Without this, a user who configured their key only in
 /// config.yaml (not as an env var) would see 401 errors from the compression
 /// health check even though normal conversations work fine.
+///
+/// `preferred_model` is the *session's active model* (e.g. the per-conversation
+/// override `"custom-agnes2-0:agnes-2.5-flash"`). It is promoted to the front
+/// of the aux chain so the compression summary — which sends the bare model id
+/// to the chain — hits the correct provider first instead of a wrong one that
+/// 400s on an "unknown model". This matters because the compression summary
+/// model follows the user's *active* model, which may differ from
+/// `config.yaml`'s global `model:`.
 pub fn build_auxiliary_client_with_config(
     config: AuxiliaryConfig,
     gateway: &GatewayConfig,
+    preferred_model: Option<&str>,
 ) -> (AuxiliaryClient, AuxiliaryWiringSummary) {
-    build_auxiliary_client_inner(config, Some(gateway))
+    build_auxiliary_client_inner(config, Some(gateway), preferred_model)
+}
+
+/// Map a `provider:model` (or bare model) string to the aux-chain candidate
+/// label that should be promoted for it. Mirrors the alias logic used when
+/// promoting `config.yaml`'s global `model:`.
+fn provider_label_for(model: &str) -> &str {
+    match crate::agent_builder::parse_model_string(model).0 {
+        "openai" => "custom",
+        "moonshot" => "kimi",
+        other => other,
+    }
 }
 
 /// Resolve an API key for a provider: config.yaml first, env var second.
@@ -116,6 +136,7 @@ fn resolve_base_url(
 fn build_auxiliary_client_inner(
     config: AuxiliaryConfig,
     gateway: Option<&GatewayConfig>,
+    preferred_model: Option<&str>,
 ) -> (AuxiliaryClient, AuxiliaryWiringSummary) {
     let mut summary = AuxiliaryWiringSummary {
         registered: Vec::new(),
@@ -281,17 +302,23 @@ fn build_auxiliary_client_inner(
     // 主 provider 不在链中时 promote 是 no-op, 由后续候选兜底。
     if let Some(gw) = gateway {
         if let Some(model) = gw.model.as_deref() {
-            let provider_name = crate::agent_builder::parse_model_string(model).0;
-            // 链内候选 label 与 provider 名的别名映射:
-            // openai 候选的 label 是 "custom" (candidate.rs label()),
-            // moonshot 与 kimi 同端点 (agent_builder.rs build_provider), label 是 "kimi"。
-            let label = match provider_name {
-                "openai" => "custom",
-                "moonshot" => "kimi",
-                other => other,
-            };
+            let label = provider_label_for(model);
             builder = builder.promote(label);
         }
+    }
+
+    // 会话实际使用的模型 (session override, 形如
+    // "custom-agnes2-0:agnes-2.5-flash") 优先提到链首: 压缩摘要跟随
+    // *当前* 主模型, 而上面那段按 config.yaml 全局 `model:` 排序 ——
+    // 当两者不一致时 (例如本会话切到了 agnes, 但全局 model 是别的
+    // provider), 链首不是 agnes, 裸 model 名 "agnes-2.5-flash" 先发到
+    // 错误 provider (minimax) 触发 400 "unknown model", 且 400 是
+    // 非重试错误 → 不 fallback → 压缩每次必失败。把 session 实际
+    // provider 提到最前 (在全局 promote 之后, 所以它最终在头部),
+    // 裸 model 名先发到正确 provider 即成功。
+    if let Some(model) = preferred_model {
+        let label = provider_label_for(model);
+        builder = builder.promote(label);
     }
 
     let client = builder.build();

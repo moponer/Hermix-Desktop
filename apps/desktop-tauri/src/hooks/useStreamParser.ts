@@ -655,7 +655,8 @@ export function createMessageHandler(ctx: StreamChatSendContext): (evt: MessageE
             rawState === "closed" ||
             rawState === "fallback" ||
             rawState === "pressure" ||
-            rawState === "quota_exhausted"
+            rawState === "quota_exhausted" ||
+            rawState === "model_mismatch"
               ? (rawState as import("../components/CompactionStatusBanner").CompactionState)
               : "closed";
           const toNumber = (v: unknown): number | undefined =>

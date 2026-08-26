@@ -570,6 +570,15 @@ pub trait AgentService: Send + Sync {
         None
     }
 
+    /// consume a previously-stored compression-model-mismatch warning
+    /// (set by the startup health check when it hits a 400 / "unknown model"
+    /// error from the aux chain's first candidate — usually because the
+    /// session's active provider wasn't promoted to the front of the chain).
+    /// Default returns `None`; only `LocalAgentService` populates the slot.
+    fn take_compression_model_warning(&self) -> Option<String> {
+        None
+    }
+
     /// Interrupt all active agent tasks so they gracefully stop,
     /// persist their partial output, and return. Called by the
     /// server's shutdown path before the process exits — without
