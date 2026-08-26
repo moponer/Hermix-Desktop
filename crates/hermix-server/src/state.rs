@@ -326,6 +326,20 @@ impl HttpServerState {
             &hermix_home,
         );
 
+        // workspace_build 工具注册（M2.3）。
+        // 必须放在 apply_persisted_toolset_state 之后——否则「workspace」
+        // toolset 会被用户持久化的 enabled_toolsets.json 默认关掉（新工具
+        // 尚未出现在用户的开关列表里）。
+        hermix_tools::tools::workspace_manager::register(
+            &tool_registry,
+            crate::workspace_backend::local_backend(),
+        );
+        // workspace_update_schema 工具注册（M2.5 增量迭代）。
+        hermix_tools::tools::workspace_manager::register_update(
+            &tool_registry,
+            crate::workspace_backend::local_backend(),
+        );
+
         //★ P1-② : load native plugins (.dll) from
         // $HERMIX_HOME/plugins/tools/ and /plugins/memory/.
         // Each directory must contain a `plugin.yaml` with a

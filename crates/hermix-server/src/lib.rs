@@ -149,6 +149,7 @@ pub mod voice;
 pub mod ws;
 pub mod ws_grace;
 pub mod util;
+pub mod workspace_backend;
 pub(crate) use util::*;
 pub mod routes;
 
