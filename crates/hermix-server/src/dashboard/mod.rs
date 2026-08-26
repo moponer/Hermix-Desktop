@@ -27,6 +27,7 @@ pub mod groupchat_api;
 pub mod groupchat_dispatcher;
 pub mod groupchat_sqlite;
 pub mod types;
+pub mod workspaces;
 
 // Re-export shared types used by multiple modules
 pub use types::*;
@@ -178,6 +179,42 @@ pub fn router() -> Router<HttpServerState> {
         .route("/api/migration/apply", post(migration::apply_migration))
         .route("/api/migration/skip", post(migration::skip_migration))
         .route("/api/migration/reset", post(migration::reset_migration))
+        // Workspaces — schema-driven workbenches (registry + definition).
+        .route(
+            "/api/workspaces",
+            get(workspaces::list_workspaces).post(workspaces::create_workspace),
+        )
+        .route(
+            "/api/workspaces/{id}",
+            get(workspaces::get_workspace)
+                .put(workspaces::rename_workspace)
+                .delete(workspaces::delete_workspace),
+        )
+        .route(
+            "/api/workspaces/{id}/schema",
+            put(workspaces::update_workspace_schema),
+        )
+        // 数据端点：打通 LocalSqliteStore（表名/列名过 schema 白名单）
+        .route(
+            "/api/workspaces/{id}/tables/{table}/query",
+            post(workspaces::query_table),
+        )
+        .route(
+            "/api/workspaces/{id}/tables/{table}/insert",
+            post(workspaces::insert_rows),
+        )
+        .route(
+            "/api/workspaces/{id}/tables/{table}/update",
+            post(workspaces::update_row),
+        )
+        .route(
+            "/api/workspaces/{id}/tables/{table}/delete",
+            post(workspaces::delete_row),
+        )
+        .route(
+            "/api/workspaces/{id}/tables/{table}/count",
+            post(workspaces::count_rows),
+        )
         .route("/ws/consciousness", get(consciousness::ws_consciousness))
         // GroupChat rooms
         .route(

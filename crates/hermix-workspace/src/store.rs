@@ -23,7 +23,8 @@ use crate::validate::validate_schema;
 // ---------------------------------------------------------------------------
 
 /// 过滤操作符。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum FilterOp {
     Eq,
     Ne,
@@ -50,7 +51,7 @@ impl FilterOp {
 }
 
 /// 单条件过滤（字段名须在工作台 schema 白名单内）。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Filter {
     pub field: String,
     pub op: FilterOp,

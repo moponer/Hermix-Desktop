@@ -37,6 +37,7 @@ hermix-cua = { workspace = true }
 hermix-task = { workspace = true }
 hermix-automation = { workspace = true }
 hermix-intelligence = { workspace = true }
+hermix-workspace = { workspace = true }
 async-trait = { workspace = true }
 tokio = { workspace = true }
 rusqlite = { workspace = true }
