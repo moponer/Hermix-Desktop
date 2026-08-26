@@ -1463,9 +1463,13 @@ fn main() -> wry::Result<()> {
     };
     hx_log(&format!("html source: {} bytes", html_source.len()));
 
-    // Phase 1：若多文件归档存在，优先走 app:// 加载（多文件）
-    // --html-url 提供远程 origin 时也走 with_url（带 origin，能 fetch app:// 协议）。
-    let use_app_protocol = read_self_archive().is_some() && html_arg.is_none() && html_url_arg.is_none();
+    // Phase 1：若多文件归档存在，优先走 app:// 加载（多文件）。
+    // dev 模式（--app-dir 设了 APP_DIR_FOR_DEV）也走 app://，让磁盘
+    // --app-dir 真正生效——否则会回退到壳旁 res_dir/index.html 的
+    // 旧快照（"运行旧版本"的根因）。--html-url 提供远程 origin 时走
+    // with_url（带 origin，能 fetch app:// 协议）。
+    let use_app_protocol = (read_self_archive().is_some() || get_app_dir_for_dev().is_some())
+        && html_arg.is_none() && html_url_arg.is_none();
     let webview = if use_app_protocol {
         // 用 app:// 协议加载，index.html 由归档提供，其它资源按相对解析
         hx_log("loading via app:// (multi-file archive present)");

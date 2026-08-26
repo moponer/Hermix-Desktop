@@ -52,10 +52,10 @@ pub fn register(registry: &ToolRegistry, manager: Arc<PluginManager>) {
             Arc::new(|| true),
             vec![],
             true,
-            "Create, update, list, package, and run user-facing desktop applications using hx-shell runtime (wry/WebView2). Actions: create, propose, approve, update, list, get, delete, package, run, validate, smoke, patch, read_doc, update_doc, log_iteration, search_iterations. Every app owns 4 docs (设计方案/开发计划进度/更新迭代/README) that the agent MUST read before any change and update after any change.",
+            "Create, update, list, package, and run user-facing desktop applications using hx-shell runtime (wry/WebView2). Actions: create, propose, approve, update, list, get, delete, package, run, validate, smoke, patch, read_doc, update_doc, log_iteration, search_iterations. Every app owns 4 docs (设计方案/开发计划进度/更新迭代/README) that the agent MUST read before any change and update after any change. WARNING: `delete` is destructive (appends the app to %TEMP%/hermix-trash/<id>-<ts> but still removes the install) — the agent must request explicit user confirmation before invoking `delete`. In Default permission mode the WS approval card will fire and the human must click 允许 before the call lands.",
             "📦",
             None,
-            RiskLevel::Caution,
+            RiskLevel::Dangerous,
             false,
         );
 }

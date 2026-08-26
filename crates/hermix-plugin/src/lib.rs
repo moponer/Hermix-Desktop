@@ -516,12 +516,28 @@ impl PluginManager {
             return Err(PluginError::NotFound(id.to_string()));
         }
 
-        std::fs::remove_dir_all(&plugin_dir)?;
+        // Move to trash instead of physical delete so the user can recover
+        // an app they just uninstalled. Same pattern as
+        // `apps/hx-packager/src/main.rs::cmd_uninstall` — mv to
+        // %TEMP%/hermix-trash/<id>-<unix_ts>/. WebView2 keeps file
+        // handles open, so rename-out of the source dir is the only
+        // safe release path on Windows (rm fails under the running app).
+        let unix_ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let trash_root = std::env::temp_dir().join("hermix-trash");
+        let trash_target = trash_root.join(format!("{id}-{unix_ts}"));
+        std::fs::create_dir_all(&trash_root)?;
+        std::fs::rename(&plugin_dir, &trash_target)?;
+        tracing::info!(
+            "uninstalled custom app: {id} → trash at {}",
+            trash_target.display()
+        );
 
         let mut plugins = self.plugins.write().expect("plugin lock poisoned");
         plugins.remove(id);
 
-        tracing::info!("uninstalled custom app: {}", id);
         Ok(())
     }
 
