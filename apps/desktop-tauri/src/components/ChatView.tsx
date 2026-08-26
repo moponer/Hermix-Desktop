@@ -836,7 +836,18 @@ export function ChatView({
             />
           )}
 
-          <CompactionStatusBanner status={stream.compactionStatus} onDismiss={() => stream.setCompactionStatus(null)} />
+          {/* Outer banner: breaker-state summary (idle/closed/half_open/open/fallback/pressure + complete/failed).
+              In-flight phases (starting/in_progress_fast/in_progress_llm) are rendered as an inline card
+              inside MessageList so the user sees exactly one "正在准备/正在压缩中" indicator at a time. */}
+          {stream.compactionStatus &&
+            !["starting", "in_progress_fast", "in_progress_llm"].includes(
+              stream.compactionStatus.phase ?? "idle",
+            ) && (
+              <CompactionStatusBanner
+                status={stream.compactionStatus}
+                onDismiss={() => stream.setCompactionStatus(null)}
+              />
+            )}
 
           {stream.contextUsage && stream.contextUsage.maxTokens > 0 ? (
             <div className="mb-1.5 flex justify-end px-1">

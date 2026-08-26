@@ -279,7 +279,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
               phase === "in_progress_llm";
             if (!active || inlineCompactionDismissed) return null;
             return (
-              <div className="compaction-inline-card">
+              <div className="compaction-inline-card pl-[32px]">
                 <CompactionStatusBanner
                   status={stream.compactionStatus}
                   onDismiss={() => setInlineCompactionDismissed(true)}

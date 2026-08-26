@@ -126,7 +126,6 @@ export function StreamErrorCard({
 
   return (
     <div className={`stream-error-card stream-error-card--${meta.tone}`} role="alert">
-      <div className="stream-error-card__rail" aria-hidden="true" />
       <div className="stream-error-card__main">
         <div className="stream-error-card__head">
           <span className="stream-error-card__icon" aria-hidden="true">

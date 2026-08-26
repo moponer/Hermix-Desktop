@@ -177,52 +177,49 @@ export function InlineApprovalCard({ request, onApprove, onDeny, resolved }: Inl
             {argsText && (
               <span className={`approval-args-text${!isPending ? " is-resolved" : ""}`}>{argsText}</span>
             )}
-            {isPending ? (
-              <div className="approval-actions">
-                <button
-                  onClick={() => onDeny(request.requestId)}
-                  className="approval-btn approval-btn-danger"
-                >
-                  <X size={12} />
-                  拒绝
-                </button>
-                <button
-                  onClick={() => onApprove(request.requestId)}
-                  className="approval-btn approval-btn-approve"
-                >
-                  <Check size={12} />
-                  允许
-                </button>
-              </div>
-            ) : (
-              <div className="approval-resolved-footer">
-                <span
-                  className={
-                    resolved === "approved"
-                      ? "approval-resolved-icon icon-ok"
-                      : resolved === "expired"
-                        ? "approval-resolved-icon icon-expired"
-                        : "approval-resolved-icon icon-deny"
-                  }
-                  aria-hidden
-                >
-                  {resolved === "approved" ? (
-                    <Check size={11} />
-                  ) : resolved === "expired" ? (
-                    <Clock size={11} />
-                  ) : (
-                    <X size={11} />
-                  )}
-                </span>
-                <span>
-                  {resolved === "approved"
-                    ? "操作已继续执行"
+            <div className={`approval-actions${!isPending ? " is-hidden" : ""}`}>
+              <button
+                onClick={() => onDeny(request.requestId)}
+                className="approval-btn approval-btn-danger"
+              >
+                <X size={12} />
+                拒绝
+              </button>
+              <button
+                onClick={() => onApprove(request.requestId)}
+                className="approval-btn approval-btn-approve"
+              >
+                <Check size={12} />
+                允许
+              </button>
+            </div>
+            <div className={`approval-resolved-footer${isPending ? " is-hidden" : ""}`}>
+              <span
+                className={
+                  resolved === "approved"
+                    ? "approval-resolved-icon icon-ok"
                     : resolved === "expired"
-                      ? "你的点击没赶上,操作已被自动取消;如仍想执行,请重新发起"
-                      : "操作已中止"}
-                </span>
-              </div>
-            )}
+                      ? "approval-resolved-icon icon-expired"
+                      : "approval-resolved-icon icon-deny"
+                }
+                aria-hidden
+              >
+                {resolved === "approved" ? (
+                  <Check size={11} />
+                ) : resolved === "expired" ? (
+                  <Clock size={11} />
+                ) : (
+                  <X size={11} />
+                )}
+              </span>
+              <span>
+                {resolved === "approved"
+                  ? "操作已继续执行"
+                  : resolved === "expired"
+                    ? "你的点击没赶上,操作已被自动取消;如仍想执行,请重新发起"
+                    : "操作已中止"}
+              </span>
+            </div>
           </div>
         </div>
       </div>

@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { useCurrentModel, MODEL_CONFIG_CHANGED_EVENT } from "../hooks/useCurrentModel";
 import { storage, STORAGE_KEYS } from "../utils/storageCompat";
-import { getModelList, saveModelList, apiUrl } from "../api";
+import { getModelList } from "../api";
 
 export const BUILTIN_PROVIDER_IDS = new Set([
   "minimax", "openai", "deepseek", "dashscope", "kimi",
@@ -75,81 +75,54 @@ export function useModelSelector() {
     };
     window.addEventListener("storage", onStorage);
 
+    // reconcile: mount 时只同步 defaultModel 兜底(localStorage 缺失时),
+    // 不主动 union / 不主动覆盖后端 enabled 列表。
+    //
+    // 历史教训: 旧实现从 4 个 source（localStorage.enabled / cache /
+    // backend.models / customProviders)做 union 再写回 localStorage +
+    // saveModelList → 用户在「自定义模型」区域取消勾选一个 model,
+    // 下次 mount 时又从 customProviders 把它 union 回来,等于
+    // 取消勾选彻底白做。同时 saveModelList 主动覆盖后端,跟
+    // toggleModel 的"用户主动 commit"语义冲突。
+    //
+    // 新规则: enabled list 单一来源 = localStorage, 只在用户主动
+    // toggle / setDefault 时变化；reconcile 只在下列场景兜底:
+    //   1) localStorage 缺失 → 用 backend.enabled 起步一次（首次安装场景）
+    //   2) localStorage 的 defaultModel 空 / 后端有 → 用后端 defaultModel
+    //   3) 任何场景都不主动调 saveModelList
     let cancelled = false;
     const reconcile = async () => {
       try {
-        const [backend, customProviders] = await Promise.all([
-          getModelList(),
-          fetch(apiUrl("/api/custom-providers"))
-            .then((r) => (r.ok ? r.json() : null))
-            .then((providers: { id: string; models: string[] }[] | null) => {
-              const out: { providerId: string; modelId: string }[] = [];
-              for (const p of providers || []) {
-                for (const mid of p.models || []) out.push({ providerId: p.id, modelId: mid });
-              }
-              return out;
-            })
-            .catch(() => [] as { providerId: string; modelId: string }[]),
-        ]);
+        const backend = await getModelList().catch(() => null);
         if (cancelled) return;
 
         let local: ModelConfigData = { enabled: [], defaultModel: "" };
+        let localMissing = false;
         try {
           const raw = storage.getItem(MODEL_CONFIG_KEY);
           if (raw) {
             const parsed = JSON.parse(raw) as ModelConfigData;
             if (parsed && Array.isArray(parsed.enabled)) local = parsed;
+          } else {
+            localMissing = true;
           }
         } catch {}
 
-        const union = new Map<string, { providerId: string; modelId: string }>();
-        const add = (p: string, m: string) => {
-          if (!p || !m) return;
-          union.set(`${p}:${m}`, { providerId: p, modelId: m });
-        };
-        for (const e of local.enabled) add(e.providerId, e.modelId);
-        try {
-          const cacheRaw = storage.getItem(STORAGE_KEYS.modelCache);
-          if (cacheRaw) {
-            const cache = JSON.parse(cacheRaw) as Record<string, string[]>;
-            for (const [pid, mids] of Object.entries(cache)) {
-              for (const mid of mids || []) add(pid, mid);
-            }
-          }
-        } catch {}
-        for (const e of backend?.models || []) add(e.provider_id, e.model_id);
-        for (const e of customProviders) add(e.providerId, e.modelId);
+        // 仅在 localStorage 完全缺失时（首次安装 / 清缓存）才兜底
+        // 用后端的 enabled —— 避免 mount 时反复覆盖用户已经勾选的状态。
+        const enabled: ModelConfigData["enabled"] = localMissing && backend?.models?.length
+          ? backend.models.map((m) => ({ providerId: m.provider_id, modelId: m.model_id }))
+          : local.enabled;
 
-        const defaultCandidate =
-          local.defaultModel ||
-          backend?.default_model ||
-          "";
-        if (defaultCandidate && !union.has(defaultCandidate)) {
-          const parts = defaultCandidate.split(":", 2);
-          if (parts[0] && parts[1]) union.set(defaultCandidate, { providerId: parts[0], modelId: parts[1] });
-        }
-
-        const enabled = Array.from(union.values());
         const defaultModel =
           local.defaultModel ||
           backend?.default_model ||
           (enabled.length > 0 ? `${enabled[0].providerId}:${enabled[0].modelId}` : "");
+
         const next: ModelConfigData = { enabled, defaultModel };
         storage.setItem(MODEL_CONFIG_KEY, JSON.stringify(next));
-        try {
-          const cache: Record<string, string[]> = {};
-          for (const m of enabled) {
-            if (!cache[m.providerId]) cache[m.providerId] = [];
-            if (!cache[m.providerId].includes(m.modelId)) cache[m.providerId].push(m.modelId);
-          }
-          storage.setItem(STORAGE_KEYS.modelCache, JSON.stringify(cache));
-        } catch {}
         setConfig(next);
         setSelectedModel((prev) => prev || defaultModel);
-        saveModelList(
-          enabled.map((e) => ({ provider_id: e.providerId, model_id: e.modelId })),
-          defaultModel || null,
-        );
       } catch {}
     };
     reconcile();

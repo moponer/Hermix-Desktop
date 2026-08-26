@@ -43,15 +43,15 @@ export function ToastContainer() {
       {toasts.map((t) => {
         const Icon = variantIcon[t.variant] ?? Info;
         const cls = variantClass[t.variant] ?? "toast--info";
+        const showProgress = t.duration > 0;
         return (
           <div
             key={t.id}
             className={`toast ${cls}`}
             onClick={() => dismissToast(t.id)}
           >
-            <span className="toast__rail" aria-hidden="true" />
             <span className="toast__icon" aria-hidden="true">
-              <Icon size={14} strokeWidth={2} />
+              <Icon size={14} strokeWidth={2.2} />
             </span>
             <span className="toast__msg">{t.message}</span>
             <button
@@ -60,8 +60,15 @@ export function ToastContainer() {
               aria-label="关闭"
               onClick={(e) => { e.stopPropagation(); dismissToast(t.id); }}
             >
-              <X size={12} strokeWidth={2} />
+              <X size={12} strokeWidth={2.2} />
             </button>
+            {showProgress && (
+              <span
+                className="toast__progress"
+                aria-hidden="true"
+                style={{ animationDuration: `${t.duration}ms` }}
+              />
+            )}
           </div>
         );
       })}

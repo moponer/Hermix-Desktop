@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
-import { Send, Square, FolderOpen, ChevronDown, ChevronRight, Sparkles, ShieldCheck, Image, X, Check, AlertTriangle, Lock } from "lucide-react";
+import { Send, Square, FolderOpen, ChevronDown, ChevronRight, Sparkles, ShieldCheck, Image, X, Check, AlertTriangle, Lock, Clock } from "lucide-react";
 import { usePopover } from "../hooks/usePopover";
 import { PopoverShell, PopoverBody } from "./PopoverShell";
 import { InlineExpertPanel } from "./InlineExpertPanel";
@@ -550,44 +550,77 @@ export function Composer(p: ComposerProps) {
             disabled={p.sending || p.isStreaming}
           />
 
-          {p.isStreaming && p.messageQueue && p.messageQueue.length > 0 ? (
-            <button
-              onClick={() => p.onStop?.(p.activeComposerSessionId)}
-              className="flex items-center justify-center w-8 h-8 rounded-lg transition-all hover:opacity-90"
-              style={{
-                background: "var(--color-error)",
-                color: "white",
-              }}
-              title="插话：停止当前回复并发送队列消息"
-            >
-              <Square size={12} fill="currentColor" />
-            </button>
-          ) : (p.isStreaming || p.sending) ? (
-            <button
-              onClick={() => p.onStop?.(p.activeComposerSessionId)}
-              className="flex items-center justify-center w-8 h-8 rounded-lg transition-all hover:opacity-90"
-              style={{
-                background: "var(--color-error)",
-                color: "white",
-              }}
-              title="停止生成"
-            >
-              <Square size={12} fill="currentColor" />
-            </button>
-          ) : (
-            <button
-              onClick={p.handleSubmit}
-              disabled={(!p.input.trim() && (!p.pendingImages || p.pendingImages.length === 0) && (!p.messageQueue || p.messageQueue.length === 0)) || p.sending || !!p.isProcessingFiles}
-              className="flex items-center justify-center w-8 h-8 rounded-lg transition-all disabled:opacity-30 disabled:cursor-not-allowed"
-              style={{
-                background: (p.input.trim() || (p.pendingImages && p.pendingImages.length > 0) || (p.messageQueue && p.messageQueue.length > 0)) ? "var(--color-accent)" : "var(--color-bg-tertiary)",
-                color: (p.input.trim() || (p.pendingImages && p.pendingImages.length > 0) || (p.messageQueue && p.messageQueue.length > 0)) ? "var(--color-accent-on-text)" : "var(--color-text-faint)",
-              }}
-              title="发送 (Enter)"
-            >
-              <Send size={13} />
-            </button>
-          )}
+          {(() => {
+            // Streaming 中输入框有内容时,发送按钮变成"加入队列"(绿色
+            // Send + Clock 叠加角标),点击/Enter 都会进队列等当前回复
+            // 完成后自动发。Square 停止按钮独立放到输入框右上角。
+            const canQueue = !!(p.isStreaming && (p.input.trim() || (p.pendingImages && p.pendingImages.length > 0)));
+            const hasContent =
+              !!p.input.trim() ||
+              !!(p.pendingImages && p.pendingImages.length > 0) ||
+              !!(p.messageQueue && p.messageQueue.length > 0);
+            // 队列路径永远可点：图片在压缩 / 上一条还没发完都跟"加入队列"
+            // 无关，等当前回复完才轮到它。只有"立即发送"路径要避开
+            // sending/isProcessingFiles 以免重复触发。
+            const sendDisabled =
+              !hasContent || (!canQueue && (p.sending || !!p.isProcessingFiles));
+            const inProgress = !!(p.isStreaming || p.sending);
+            // 空闲 OR (streaming 且有未发内容): 显示发送按钮(后者走
+            // canQueue 分支,变成"加入队列"语义)
+            const showSendButton = !inProgress || canQueue;
+            // 互斥显示:队列按钮亮起时隐藏 Square,空状态才让停。
+            const showStopButton = !!p.isStreaming && !canQueue;
+            return (
+              <>
+                {showSendButton && (
+                  <button
+                    onClick={p.handleSubmit}
+                    disabled={sendDisabled}
+                    className="relative flex items-center justify-center w-8 h-8 rounded-lg transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+                    style={{
+                      background: hasContent && canQueue
+                        ? "var(--color-success, #16a34a)"
+                        : hasContent
+                          ? "var(--color-accent)"
+                          : "var(--color-bg-tertiary)",
+                      color: hasContent ? "white" : "var(--color-text-faint)",
+                    }}
+                    title={canQueue ? "加入队列,等当前回复完成后自动发送 (Enter)" : "发送 (Enter)"}
+                  >
+                    <Send size={13} />
+                    {canQueue && (
+                      <Clock
+                        size={9}
+                        className="absolute -top-0.5 -right-0.5 p-[1px] rounded-full"
+                        style={{
+                          background: "var(--color-success, #16a34a)",
+                          color: "white",
+                        }}
+                      />
+                    )}
+                  </button>
+                )}
+                {showStopButton && (
+                  <button
+                    onClick={() => p.onStop?.(p.activeComposerSessionId)}
+                    className="flex items-center justify-center w-7 h-7 rounded-md transition-all hover:opacity-90"
+                    style={{
+                      background:
+                        "color-mix(in srgb, var(--color-error, #dc2626) 14%, transparent)",
+                      color: "var(--color-error, #dc2626)",
+                    }}
+                    title={
+                      p.messageQueue && p.messageQueue.length > 0
+                        ? `插话:停止当前回复并发送队列中的 ${p.messageQueue.length} 条消息`
+                        : "停止生成"
+                    }
+                  >
+                    <Square size={10} fill="currentColor" />
+                  </button>
+                )}
+              </>
+            );
+          })()}
         </div>
       </div>
     </div>

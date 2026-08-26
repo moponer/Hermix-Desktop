@@ -2685,7 +2685,15 @@ return {
       acuiBus={acuiBus}
       acuiStats={acui.stats}
       messageQueue={messageQueue}
-      onAddToQueue={(msg) => setMessageQueue(prev => prev.some((m) => m.text === msg.text) ? prev : [...prev, msg])}
+      onAddToQueue={(msg) => {
+        // 同文本不重复入队(防快速按 Enter 多次),
+        // 但仍返回新数组引用让 React 触发 re-render — 否则
+        // 重复添加相同文本时 Composer 看不到 queue 长度变化。
+        setMessageQueue(prev => {
+          if (prev.some((m) => m.text === msg.text)) return [...prev];
+          return [...prev, msg];
+        });
+      }}
       onClearQueue={() => setMessageQueue([])}
       onRemoveFromQueue={removeFromQueue}
       onEditQueueItem={editQueueItem}

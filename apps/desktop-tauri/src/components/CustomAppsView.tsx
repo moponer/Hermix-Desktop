@@ -121,16 +121,30 @@ export function CustomAppsView({ onStartCreateApp }: { onStartCreateApp?: () => 
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm("确定要删除此应用吗？此操作不可撤销。")) return;
     setError(null);
+    setSuccessMsg(null);
     try {
+      const app = apps.find((a) => a.id === id);
       await deleteCustomApp(id);
-      setSuccessMsg("应用已删除");
+      setSuccessMsg(`已删除「${app?.name ?? id}」→ 回收站（%TEMP%/hermix-trash/），可恢复`);
       await loadApps();
-      safeSetTimeout(() => setSuccessMsg(null), 2000);
+      safeSetTimeout(() => setSuccessMsg(null), 4000);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
+  };
+
+  // Deleting a custom app is destructive — show a confirmation modal
+  // rather than the native browser confirm(). The backend mv's the
+  // app to %TEMP%/hermix-trash/<id>-<ts> so the user can recover.
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
+  const requestDelete = (id: string, name: string) => setDeleteTarget({ id, name });
+  const cancelDelete = () => setDeleteTarget(null);
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
+    const { id } = deleteTarget;
+    setDeleteTarget(null);
+    await handleDelete(id);
   };
 
   const filteredApps = apps.filter((app) => {
@@ -233,7 +247,7 @@ export function CustomAppsView({ onStartCreateApp }: { onStartCreateApp?: () => 
                 onPackage={() => handlePackage(app.id)}
                 onOpenDist={() => app.dist_path && handleOpenDist(app.dist_path)}
                 onRun={() => handleRun(app.id)}
-                onDelete={() => handleDelete(app.id)}
+                onDelete={() => requestDelete(app.id, app.name)}
                 packaging={packagingId === app.id}
               />
             ))}
@@ -247,6 +261,50 @@ export function CustomAppsView({ onStartCreateApp }: { onStartCreateApp?: () => 
           onClose={() => setSelectedAppId(null)}
           onChanged={loadApps}
         />
+      )}
+
+      {deleteTarget && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center"
+          style={{ background: "rgba(0,0,0,0.5)" }}
+          onClick={cancelDelete}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="delete-confirm-title"
+        >
+          <div
+            className="rounded-2xl p-5 max-w-md w-[90%] shadow-xl"
+            style={{ background: "var(--color-bg-elevated)", border: "1px solid var(--color-border-primary)" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 id="delete-confirm-title" className="text-[15px] font-semibold text-text-primary mb-2">
+              删除应用
+            </h3>
+            <p className="text-[13px] text-text-secondary leading-relaxed">
+              确定要删除「<span className="font-medium text-text-primary">{deleteTarget.name}</span>」吗？
+            </p>
+            <p className="text-[12px] text-text-muted mt-2 leading-relaxed">
+              此操作会从 <code className="font-mono text-[11px] px-1 py-0.5 rounded">~/.hermix/custom-apps/{deleteTarget.id}/</code> 移到
+              <code className="font-mono text-[11px] px-1 py-0.5 rounded ml-1">%TEMP%/hermix-trash/{deleteTarget.id}-&lt;ts&gt;</code>。
+              <br />后悔可在回收站里恢复。
+            </p>
+            <div className="flex justify-end gap-2 mt-4">
+              <button
+                onClick={cancelDelete}
+                className="px-3 py-1.5 rounded-md text-[13px] text-text-secondary hover:bg-bg-hover"
+              >
+                取消
+              </button>
+              <button
+                onClick={confirmDelete}
+                className="px-3 py-1.5 rounded-md text-[13px] text-white transition-colors"
+                style={{ background: "var(--color-error, #dc2626)" }}
+              >
+                移到回收站
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
