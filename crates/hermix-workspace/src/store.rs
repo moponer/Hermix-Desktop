@@ -162,6 +162,40 @@ impl LocalSqliteStore {
         Ok(())
     }
 
+    /// 条件扫描（M4.2 零 LLM 条件提醒引擎）——按 WHERE 片段查询匹配行。
+    /// 白名单列 SELECT + 表名/条件片段均已在建设/迁移时校验；LIMIT 上限
+    /// 防大结果集拖垮通知通道（条件命中只需首 N 行）。
+    pub fn query_by_condition(
+        &self,
+        table: &str,
+        condition: &str,
+        limit: usize,
+    ) -> Result<Vec<Value>, StoreError> {
+        self.table_fields(table)?;
+        let cols = self.column_whitelist(table)?;
+        let mut sql = format!("SELECT {} FROM {table} WHERE ({condition})", cols.join(", "));
+        if limit > 0 {
+            sql.push_str(&format!(" LIMIT {limit}"));
+        }
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map([], |r| row_to_json(r, &cols))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    /// 条件命中总数（M4.2 条件引擎用，独立 COUNT 不受 limit 钳制）。
+    pub fn count_by_condition(&self, table: &str, condition: &str) -> Result<u64, StoreError> {
+        self.table_fields(table)?; // 表存在性
+        let sql = format!("SELECT COUNT(*) FROM {table} WHERE ({condition})");
+        let conn = self.conn()?;
+        let n: i64 = conn.query_row(&sql, [], |r| r.get(0))?;
+        Ok(n.max(0) as u64)
+    }
+
     fn conn(&self) -> Result<rusqlite::Connection, StoreError> {
         let conn = rusqlite::Connection::open(&self.db_path)
             .map_err(|e| StoreError::Io(format!("打开工作台 DB 失败: {e}")))?;
