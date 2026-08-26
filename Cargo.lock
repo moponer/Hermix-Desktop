@@ -2402,6 +2402,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "hermix-workspace"
+version = "0.1.1"
+dependencies = [
+ "chrono",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "hex"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
