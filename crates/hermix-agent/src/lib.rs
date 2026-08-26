@@ -26,7 +26,6 @@ pub mod auxiliary_builder;
 pub mod budget;
 pub mod consciousness;
 pub mod compression;
-pub mod compression_health;
 pub mod compression_ops;
 pub mod compression_pipeline;
 pub mod json_crusher;

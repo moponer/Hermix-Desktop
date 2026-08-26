@@ -16,9 +16,7 @@ export type CompactionState =
   | "half_open"     // breaker probing after a cooldown
   | "open"          // breaker tripped: LLM compaction skipped, no fallback
   | "fallback"      // breaker open + lightweight-prune engaged (recommended)
-  | "pressure"      // pressure-only signal (no breaker trip yet): just warn
-  | "quota_exhausted" // compression-model Token Plan quota hit 0
-  | "model_mismatch"; // session override model not promoted to aux chain front → compressed degrades to char-level
+  | "pressure";     // pressure-only signal (no breaker trip yet): just warn
 
 /**
  * Compression-process phase, surfaced by the Rust backend
@@ -182,18 +180,6 @@ const STATE_COPY: Record<
     tone: "text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-700/50",
     title: "上下文使用率偏高",
     body: "即将触发自动压缩,对话脉络保留,工具输出可能丢失。",
-  },
-  quota_exhausted: {
-    icon: ShieldAlert,
-    tone: "text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-900/20 border-rose-200 dark:border-rose-700/50",
-    title: "上下文压缩:Token 配额已耗尽",
-    body: "压缩模型无法调用,长对话将不会自动压缩。请升级 Token Plan 套餐或购买积分后重试。",
-  },
-  model_mismatch: {
-    icon: ShieldAlert,
-    tone: "text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-900/20 border-rose-200 dark:border-rose-700/50",
-    title: "上下文压缩:model/provider 不匹配",
-    body: "压缩代理的候选链未跟随当前主模型,LLM 压缩已回退到字符级裁剪。若你用的是自定义网关(如 agnes),在 Settings → LLM Providers 里把它设为默认 provider 可恢复 LLM 压缩。",
   },
 };
 

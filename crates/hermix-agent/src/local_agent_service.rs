@@ -201,28 +201,6 @@ pub struct LocalAgentService {
     /// holds. `None` means recall is disabled (e.g. test
     /// harnesses with no `hermix_home`).
     memory_router: Option<Arc<hermix_focus::MemoryRouter>>,
-    /// one-shot gate for the compression LLM health check.
-    /// `spawn_agent_loop` is called on every `send_message_stream`,
-    /// and previously each call spawned a new fire-and-forget health
-    /// check task — producing a 401 error log on every single message
-    /// when the aux API key was invalid. The check only needs to run
-    /// once per process lifetime; subsequent calls are pure noise.
-    compression_health_checked: std::sync::atomic::AtomicBool,
-    /// when the one-shot compression LLM health check fails
-    /// with a quota / 429 error, store a user-facing warning here. The
-    /// NEXT `send_message_stream` surfaces it via a `StreamEvent::
-    /// CompactionStatus` (quota_exhausted) so the user learns their
-    /// Token Plan is exhausted instead of only seeing a backend WARN log
-    /// and wondering why long-context compression is silently degraded.
-    /// `take_compression_quota_warning` consumes it at most once.
-    compression_quota_warning: Arc<std::sync::Mutex<Option<String>>>,
-    /// when the one-shot compression LLM health check fails with a
-    /// non-quota error (e.g. 400 "unknown model" — custom-* provider not
-    /// promoted to front of the aux chain), store a user-facing warning
-    /// here so the next `send_message_stream` can surface it via a
-    /// `StreamEvent::CompactionStatus { state: "model_mismatch" }`.
-    /// `take_compression_model_warning` consumes it at most once.
-    compression_model_warning: Arc<std::sync::Mutex<Option<String>>>,
     /// Active interrupt controllers for in-flight streaming sessions,
     /// keyed by session_id. When the server shuts down, `interrupt_all()`
     /// calls `interrupt(None)` on every controller so the agent loop
@@ -232,36 +210,6 @@ pub struct LocalAgentService {
 }
 
 pub type ProviderFactory = Arc<dyn Fn(&GatewayConfig, &str) -> Arc<dyn LlmProvider> + Send + Sync>;
-
-/// returns true when an LLM error string indicates a quota /
-/// rate-limit exhaustion — HTTP 429 or a provider-specific "用量上限" /
-/// "Token Plan" message. Used to decide whether the one-shot compression
-/// health check failure should be surfaced to the user as a quota warning
-/// (instead of staying buried in a backend WARN log).
-fn is_quota_exhausted_error(s: &str) -> bool {
-    let lower = s.to_lowercase();
-    lower.contains("429")
-        || lower.contains("too many requests")
-        || lower.contains("rate_limit")
-        || lower.contains("rate limit")
-        || lower.contains("用量上限")
-        || lower.contains("token plan")
-        || lower.contains("quota")
-}
-
-/// Detect "unknown model" / 400 mismatches in the aux chain. Happens when
-/// the session's active model (typically a custom-* provider like agnes)
-/// isn't promoted to the front of the auxiliary chain — the bare model id
-/// lands on a different provider (e.g. minimax) that doesn't recognise it
-/// and 400s immediately. Distinguish from genuine quota errors so we can
-/// surface a distinct "model mismatch, compression degraded" banner.
-fn is_model_mismatch_error(s: &str) -> bool {
-    let lower = s.to_lowercase();
-    lower.contains("unknown model")
-        || lower.contains("model not found")
-        || lower.contains("unknown_model")
-        || (lower.contains("400") && lower.contains("model"))
-}
 
 impl LocalAgentService {
     /// LAST-RESORT GUARD for empty assistant replies.
@@ -443,33 +391,6 @@ impl LocalAgentService {
         None
     }
 
-    /// consume a previously-stored compression-quota warning
-    /// (set by the one-shot startup health check when it hit a 429 / quota
-    /// error). Returns `Some(msg)` at most once; the server emits it as a
-    /// `StreamEvent::CompactionStatus` (quota_exhausted) so the user learns
-    /// their Token Plan is exhausted instead of only seeing a backend WARN
-    /// log. After the first `take` the slot is `None` until a future health
-    /// check (e.g. after a process restart) repopulates it.
-    pub fn take_compression_quota_warning(&self) -> Option<String> {
-        match self.compression_quota_warning.lock() {
-            Ok(mut guard) => guard.take(),
-            Err(_) => None,
-        }
-    }
-
-    /// Same drainable slot as `take_compression_quota_warning`, but for
-    /// "model mismatch / unknown model" errors that the health check
-    /// hits when the session's active model is behind a custom-* provider
-    /// that wasn't promoted to the front of the auxiliary chain. The
-    /// server surfaces it as a `CompactionStatus { state: "model_mismatch" }`
-    /// banner. Consumed at most once per error instance.
-    pub fn take_compression_model_warning(&self) -> Option<String> {
-        match self.compression_model_warning.lock() {
-            Ok(mut guard) => guard.take(),
-            Err(_) => None,
-        }
-    }
-
     /// Interrupt all active agent tasks so they gracefully stop and
     /// persist their partial output. Called by the server's shutdown
     /// path before the process exits. Each registered `InterruptController`
@@ -516,13 +437,9 @@ impl LocalAgentService {
             tirith: Some(Arc::new(TirithSecurity::from_default_or_bundled())),
             consciousness_tracker: None,
             memory_router,
-            compression_health_checked: std::sync::atomic::AtomicBool::new(false),
-            compression_quota_warning: Arc::new(std::sync::Mutex::new(None)),
-            compression_model_warning: Arc::new(std::sync::Mutex::new(None)),
             active_interrupts: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         }
     }
-
 
     /// Test-friendly constructor that allows overriding provider creation.
     pub fn new_with_provider_factory(
@@ -544,9 +461,6 @@ impl LocalAgentService {
             tirith: Some(Arc::new(TirithSecurity::from_default_or_bundled())),
             consciousness_tracker: None,
             memory_router,
-            compression_health_checked: std::sync::atomic::AtomicBool::new(false),
-            compression_quota_warning: Arc::new(std::sync::Mutex::new(None)),
-            compression_model_warning: Arc::new(std::sync::Mutex::new(None)),
             active_interrupts: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         }
     }
@@ -762,11 +676,24 @@ impl LocalAgentService {
             .iter()
             .map(|m| m.content.as_deref().unwrap_or("").len() as u64 / 4)
             .sum();
-        // Resolve the model's context window from metadata instead of
-        // hardcoding 200K. Falls back to DEFAULT_FALLBACK_CONTEXT (128K)
-        // for unknown models.
-        let model_name = self.config.lock().unwrap_or_else(|e| e.into_inner()).model.clone().unwrap_or_default();
-        let context_window = hermix_intelligence::model_metadata::get_model_context_length(&model_name) as u64;
+        // Resolve the model's context window from metadata. Pass
+        // `llm_providers` so per-provider overrides (e.g.
+        // `custom-agnes2-0.context_window` in config.yaml) take effect;
+        // without `_with`, unknown custom-provider models silently fall
+        // back to DEFAULT_FALLBACK_CONTEXT (128K) even when the operator
+        // configured a different window.
+        let (model_name, providers) = {
+            let cfg = self.config.lock().unwrap_or_else(|e| e.into_inner());
+            (
+                cfg.model.clone().unwrap_or_default(),
+                cfg.llm_providers.clone(),
+            )
+        };
+        let context_window =
+            hermix_intelligence::model_metadata::get_model_context_length_with(
+                &model_name,
+                Some(&providers),
+            ) as u64;
         let threshold_tokens: u64 = (context_window as f64 * 0.85) as u64;
         if est_tokens > threshold_tokens && messages.len() > 13 {
             tracing::warn!(
@@ -964,10 +891,23 @@ impl LocalAgentService {
                 // defaults so a `None` value still picks up the existing
                 // 2_000 / 12_000 baseline (no surprise regressions).
                 let mut comp_cfg = crate::compression::CompressorConfig::default();
-                // Set context_length to the actual model's context window
-                // instead of the hardcoded 200k default. This ensures all
-                // threshold calculations use the correct value.
-                comp_cfg.context_length = hermix_intelligence::model_metadata::get_model_context_length(&compressor_model) as u64;
+                // Set context_length to the actual model's context window.
+                // Pass `llm_providers` so per-provider overrides (e.g.
+                // `custom-agnes2-0.context_window`) take effect for
+                // custom-provider models that aren't in the static catalog;
+                // the bare `get_model_context_length` would silently fall
+                // back to DEFAULT_FALLBACK_CONTEXT (128K) otherwise.
+                {
+                    let cfg = self
+                        .config
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
+                    comp_cfg.context_length =
+                        hermix_intelligence::model_metadata::get_model_context_length_with(
+                            &compressor_model,
+                            Some(&cfg.llm_providers),
+                        ) as u64;
+                }
                 if let Some(v) = min_summary_tokens {
                     comp_cfg.min_summary_tokens = v;
                 }
@@ -1008,6 +948,9 @@ impl LocalAgentService {
                         .config()
                         .summary_model_override
                         .clone();
+                    // Reserved for the upcoming summary health check; suppress
+                    // the unused-variable warning until that wiring lands.
+                    let _ = check_model;
                     agent = agent.with_compressor(compressor);
                     tracing::info!(
                         "Advanced context compressor wired (aux providers: {:?}, breaker threshold={}, cooldown={}s)",
@@ -1015,89 +958,6 @@ impl LocalAgentService {
                         breaker_threshold,
                         breaker_cooldown_secs,
                     );
-                    // Fire-and-forget health check — verify the
-                    // compression model actually responds. Runs in the
-                    // background so it never blocks construction. A
-                    // failed check only logs a warning; the compressor
-                    // is already wired and the first real compression
-                    // will surface the error again at WARN level.
-                    // one-shot gate — `spawn_agent_loop` is
-                    // called on every `send_message_stream`, so without
-                    // this guard the health check fires on every single
-                    // message. When the aux API key is invalid (401),
-                    // that means a WARN log per message — pure noise.
-                    // The check only needs to run once per process
-                    // lifetime; the `AtomicBool` ensures that.
-                    let already_checked = self.compression_health_checked
-                        .swap(true, std::sync::atomic::Ordering::SeqCst);
-                    if !already_checked {
-                        let check_aux = aux.clone();
-                        // Clone both warning slots so the background health-check task
-                        // can record quota / model mismatch failures without borrowing
-                        // `self` into the `async move` closure.
-                        let warn_slot = self.compression_quota_warning.clone();
-                        let warn_slot_model = self.compression_model_warning.clone();
-                        tracing::info!(
-                            "spawning background compression LLM health check \
-                             (10s budget, 5s per-candidate) — \
-                             main conversation is NOT blocked by this"
-                        );
-                        tokio::spawn(async move {
-                            match crate::compression_health::startup_compression_llm_health_check(
-                                &*check_aux,
-                                check_model.as_deref(),
-                                10_000,
-                            )
-                            .await
-                            {
-                                Ok(report) => tracing::info!(
-                                    provider = %report.provider,
-                                    model    = %report.model,
-                                    latency  = report.latency_ms,
-                                    "compression LLM health check passed"
-                                ),
-                                Err(e) => {
-                                    // if the check failed because
-                                    // the Token Plan quota is exhausted (429),
-                                    // remember it so the NEXT message can warn
-                                    // the user via a `CompactionStatus` banner.
-                                    // Without this the quota error stays buried
-                                    // in this WARN log and the user never
-                                    // learns why long-context compression is
-                                    // silently degraded.
-                                    let err_str = e.to_string();
-                                    if is_quota_exhausted_error(&err_str) {
-                                        if let Ok(mut guard) = warn_slot.lock() {
-                                            *guard = Some(
-                                                "Token Plan 用量已达上限,压缩模型无法调用,长对话将不会自动压缩。请升级套餐或购买积分。"
-                                                    .to_string(),
-                                            );
-                                        }
-                                    } else if is_model_mismatch_error(&err_str) {
-                                        // Model-id / provider 错配 (e.g. "unknown model") —
-                                        // happens when the session's active model (custom-*
-                                        // like agnes) wasn't promoted to the front of the aux
-                                        // chain, so the bare model id first hits minimax that
-                                        // doesn't know it and 400s immediately. The fix is to
-                                        // promote the session's provider to the front; this
-                                        // branch catches the symptom and warns the user
-                                        // anyway so they see a banner instead of silent
-                                        // degraded compression.
-                                        if let Ok(mut guard) = warn_slot_model.lock() {
-                                            *guard = Some(format!(
-                                                "压缩模型与 provider 不匹配,压缩已回退到字符级裁剪: {err_str}"
-                                            ));
-                                        }
-                                    }
-                                    tracing::warn!(
-                                        error = %e,
-                                        "compression LLM health check failed; \
-                                         first real compression will surface the same error"
-                                    );
-                                }
-                            }
-                        });
-                    }
                 }
             }
             _ => {
@@ -1434,26 +1294,6 @@ impl LocalAgentService {
 
 #[async_trait]
 impl AgentService for LocalAgentService {
-    /// override the default `take_compression_quota_warning`
-    /// (returns `None`) by delegating to the inherent method we already
-    /// defined on `LocalAgentService`. See
-    /// `LocalAgentService::take_compression_quota_warning` for the
-    /// rationale (consume-at-most-once after a startup-time 429 health
-    /// check). This lets `Arc<dyn AgentService>` callers (i.e. the
-    /// server) still surface the quota warning as a
-    /// `CompactionStatus` banner.
-    fn take_compression_quota_warning(&self) -> Option<String> {
-        LocalAgentService::take_compression_quota_warning(self)
-    }
-
-    /// Delegate to the inherent `take_compression_model_warning` so the
-    /// server can call this through `Arc<dyn AgentService>`. Same rationale
-    /// as `take_compression_quota_warning` — surfaces a model-id / provider
-    /// mismatch (400 unknown model) as a CompactionStatus banner.
-    fn take_compression_model_warning(&self) -> Option<String> {
-        LocalAgentService::take_compression_model_warning(self)
-    }
-
     /// Delegate to the inherent `interrupt_all` method so the server
     /// can call this through `Arc<dyn AgentService>` on shutdown.
     fn interrupt_all(&self) {

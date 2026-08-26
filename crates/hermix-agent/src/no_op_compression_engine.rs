@@ -19,8 +19,7 @@ use hermix_core::{
 ///
 /// Use this when:
 /// - the auxiliary LLM is unavailable and you'd rather skip
-/// compression than ship broken summaries (see ,
-/// `startup_compression_llm_health_check`),
+/// compression than ship broken summaries,
 /// - the operator explicitly disabled compression via
 /// `agent.compression.engine = "noop"` in config,
 /// - tests need deterministic message preservation.
