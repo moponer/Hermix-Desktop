@@ -129,6 +129,15 @@ async fn execute_automation_run(
         }
     };
 
+    // 1.5 Workspace 条件自动化（M4.4 零 LLM 分支）：prompt 以
+    // `[workspace-condition]` 开头 → 走条件引擎（SQL 扫描 + 消息渲染），
+    // 不调 agent（零 token 成本）；否则走现有 LLM 统一路径。
+    if let Some(marker) = auto.prompt.strip_prefix("[workspace-condition]\n") {
+        let workspaces_root = hermix_config::paths::hermix_home().join("workspaces");
+        execute_workspace_condition(svc, bus, auto, &run_id, marker, &workspaces_root).await;
+        return;
+    }
+
     tracing::info!(
         automation_id = %auto.id,
         automation_name = %auto.name,
@@ -239,6 +248,96 @@ async fn execute_automation_run(
                 error = %e,
                 "automation trigger: failed to update task status"
             );
+        }
+    }
+}
+
+/// M4.4 零 LLM 分支：执行 workspace 条件自动化。
+/// `marker` 是注册时写入的 JSON `{ workspace_id, automation_id }`；
+/// 打开工作台 → 读最新 schema → 定位 condition 自动化 →
+/// 条件引擎（SQL 扫描 + 消息渲染）→ 命中则发通知，不调 agent（零 token）。
+/// `workspaces_root` 依赖注入：生产传 `hermix_home()/workspaces`，
+/// 测试传 tempdir（`hermix_home()` 无测试钩子）。
+async fn execute_workspace_condition(
+    svc: &AutomationService,
+    bus: &OrchestrationEventBus,
+    auto: &Automation,
+    run_id: &str,
+    marker: &str,
+    workspaces_root: &std::path::Path,
+) {
+    let marker: serde_json::Value = match serde_json::from_str(marker) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(automation_id = %auto.id, error = %e, "workspace-condition marker 解析失败");
+            let _ = svc.record_run_finish(run_id, "failed", None, Some(&format!("marker 解析失败: {e}")));
+            return;
+        }
+    };
+    let Some(workspace_id) = marker.get("workspace_id").and_then(|v| v.as_str()) else {
+        tracing::warn!(automation_id = %auto.id, "workspace-condition marker 缺 workspace_id");
+        let _ = svc.record_run_finish(run_id, "failed", None, Some("marker 缺 workspace_id".into()));
+        return;
+    };
+    let Some(automation_id) = marker.get("automation_id").and_then(|v| v.as_str()) else {
+        tracing::warn!(automation_id = %auto.id, "workspace-condition marker 缺 automation_id");
+        let _ = svc.record_run_finish(run_id, "failed", None, Some("marker 缺 automation_id".into()));
+        return;
+    };
+
+    // 打开工作台 → 读最新 schema（schema 更新后自动化定义自动最新）
+    let ws_svc = hermix_workspace::service::WorkspaceService::new(workspaces_root);
+    let store = match ws_svc.open_store(workspace_id) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(workspace_id, error = %e, "workspace-condition 打开工作台失败");
+            let _ = svc.record_run_finish(run_id, "failed", None, Some(&format!("打开工作台失败: {e}")));
+            return;
+        }
+    };
+    let schema = store.schema();
+    let Some(ws_auto) = schema.automations.iter().find(|a| match a {
+        hermix_workspace::model::Automation::Condition { id, .. } => id == automation_id,
+        hermix_workspace::model::Automation::LlmSummary { id, .. } => id == automation_id,
+    }) else {
+        tracing::warn!(workspace_id, automation_id, "工作台自动化不存在");
+        let _ = svc.record_run_finish(run_id, "failed", None, Some("自动化不存在".into()));
+        return;
+    };
+
+    // 条件引擎（零 LLM）：扫描 + 渲染（命中上限 50，防大结果集）
+    match hermix_workspace::run_condition_automation(&store, ws_auto, 50) {
+        Ok(result) => {
+            if result.total == 0 {
+                tracing::info!(workspace_id, automation_id, "workspace-condition 无命中");
+                let _ = svc.record_run_finish(run_id, "success", None, None);
+                return;
+            }
+            let preview: Vec<String> = result
+                .hits
+                .iter()
+                .take(3)
+                .map(|h| h.message.clone())
+                .collect();
+            tracing::info!(
+                workspace_id,
+                automation_id,
+                hits = result.total,
+                preview = ?preview,
+                "workspace-condition 命中，发通知"
+            );
+            // 通知送达：emit AutomationTriggered（前端已有 toast 处理；
+            // 条件引擎无 task，task_id 传空）
+            bus.emit(OrchestrationEvent::AutomationTriggered {
+                automation_id: auto.id.clone(),
+                automation_name: format!("{}（命中 {} 条）", auto.name, result.total),
+                task_id: String::new(),
+            });
+            let _ = svc.record_run_finish(run_id, "success", None, None);
+        }
+        Err(e) => {
+            tracing::warn!(workspace_id, automation_id, error = %e, "workspace-condition 引擎执行失败");
+            let _ = svc.record_run_finish(run_id, "failed", None, Some(&format!("条件引擎失败: {e}")));
         }
     }
 }
@@ -516,5 +615,154 @@ mod tests {
         let runs = svc.list_runs(&auto.id, 10).unwrap();
         assert!(!runs.is_empty());
         assert!(runs[0].task_id.is_some());
+    }
+
+    /// M4.5 手写调度链验收：条件命中 → 零 LLM 引擎执行 → run 记录
+    /// success + 通知事件（AutomationTriggered）发出，且不调 agent。
+    #[tokio::test]
+    async fn test_workspace_condition_trigger_hits_and_notifies() {
+        let (svc, _tmp) = test_automation_service();
+        let bus = OrchestrationEventBus::new();
+        let mut rx = bus.subscribe();
+
+        // 1. 建一个含 condition 自动化的工作台（tempdir 作为 workspaces root）
+        let ws_root = tempfile::tempdir().unwrap();
+        let schema: hermix_workspace::model::WorkspaceSchema =
+            serde_json::from_value(serde_json::json!({
+                "name": "车辆管理",
+                "modules": [
+                    { "type": "table", "id": "vehicles", "name": "车辆",
+                      "fields": [
+                        { "id": "plate", "name": "车牌", "type": "text", "required": true, "unique": true },
+                        { "id": "inspection_date", "name": "年检", "type": "date" }
+                      ] }
+                ],
+                "automations": [
+                    { "kind": "condition", "id": "a1", "name": "年检临期", "table": "vehicles",
+                      "condition": "inspection_date <= date('now','+7 days')",
+                      "message": "车辆 {plate} 年检临期", "frequency": "daily" }
+                ]
+            }))
+            .unwrap();
+        let mut seed = std::collections::HashMap::new();
+        seed.insert(
+            "vehicles".to_string(),
+            vec![serde_json::json!({ "plate": "京A1", "inspection_date": "2026-08-01" })],
+        );
+        let ws_id = hermix_workspace::builder::create_from_schema(ws_root.path(), schema, &seed)
+            .unwrap()
+            .id;
+
+        // 2. 注册占位自动化（prompt 带 marker，模拟 workspace_backend 注册）
+        let marker = serde_json::json!({ "workspace_id": ws_id, "automation_id": "a1" });
+        let auto = svc
+            .create(hermix_automation::CreateAutomationParams {
+                name: "[工作台] 年检临期".into(),
+                prompt: format!(
+                    "[workspace-condition]\n{}",
+                    serde_json::to_string(&marker).unwrap()
+                ),
+                schedule_type: hermix_automation::ScheduleType::Recurring,
+                rrule: Some("0 9 * * *".into()),
+                ..Default::default()
+            })
+            .unwrap();
+
+        // 3. 触发执行（零 LLM 分支，传 tempdir root 注入）。
+        //    模拟调度链前序：execute_automation_run 先 record_run_start
+        let run_id = svc.record_run_start(&auto.id).unwrap();
+        execute_workspace_condition(
+            &svc,
+            &bus,
+            &auto,
+            &run_id,
+            &serde_json::to_string(&marker).unwrap(),
+            ws_root.path(),
+        )
+        .await;
+
+        // 4. run 记录 success（无 agent 调用）
+        let runs = svc.list_runs(&auto.id, 10).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].status, "success");
+
+        // 5. 通知事件发出（AutomationTriggered，命中数进名字）
+        let event = tokio::time::timeout(Duration::from_millis(500), rx.recv())
+            .await
+            .expect("should emit notification event")
+            .expect("event");
+        match event {
+            OrchestrationEvent::AutomationTriggered {
+                automation_name, ..
+            } => {
+                assert!(automation_name.contains("命中 1 条"), "{automation_name}");
+            }
+            other => panic!("期望 AutomationTriggered，得到 {other:?}"),
+        }
+    }
+
+    /// M4.5 验收补充：条件无命中 → run success 但**不发**通知事件。
+    #[tokio::test]
+    async fn test_workspace_condition_no_hit_no_notification() {
+        let (svc, _tmp) = test_automation_service();
+        let bus = OrchestrationEventBus::new();
+
+        let ws_root = tempfile::tempdir().unwrap();
+        let schema: hermix_workspace::model::WorkspaceSchema =
+            serde_json::from_value(serde_json::json!({
+                "name": "车辆管理",
+                "modules": [
+                    { "type": "table", "id": "vehicles", "name": "车辆",
+                      "fields": [
+                        { "id": "plate", "name": "车牌", "type": "text", "required": true, "unique": true },
+                        { "id": "inspection_date", "name": "年检", "type": "date" }
+                      ] }
+                ],
+                "automations": [
+                    { "kind": "condition", "id": "a1", "name": "年检临期", "table": "vehicles",
+                      "condition": "inspection_date <= date('now','+7 days')",
+                      "message": "{plate}", "frequency": "daily" }
+                ]
+            }))
+            .unwrap();
+        // 种子日期在一年后 → 不命中
+        let mut seed = std::collections::HashMap::new();
+        seed.insert(
+            "vehicles".to_string(),
+            vec![serde_json::json!({ "plate": "京A2", "inspection_date": "2027-08-01" })],
+        );
+        let ws_id = hermix_workspace::builder::create_from_schema(ws_root.path(), schema, &seed)
+            .unwrap()
+            .id;
+
+        let marker = serde_json::json!({ "workspace_id": ws_id, "automation_id": "a1" });
+        let auto = svc
+            .create(hermix_automation::CreateAutomationParams {
+                name: "[工作台] 年检临期".into(),
+                prompt: format!(
+                    "[workspace-condition]\n{}",
+                    serde_json::to_string(&marker).unwrap()
+                ),
+                schedule_type: hermix_automation::ScheduleType::Recurring,
+                rrule: Some("0 9 * * *".into()),
+                ..Default::default()
+            })
+            .unwrap();
+
+        // 模拟调度链前序：record_run_start
+        let run_id = svc.record_run_start(&auto.id).unwrap();
+        execute_workspace_condition(
+            &svc,
+            &bus,
+            &auto,
+            &run_id,
+            &serde_json::to_string(&marker).unwrap(),
+            ws_root.path(),
+        )
+        .await;
+
+        let runs = svc.list_runs(&auto.id, 10).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].status, "success");
     }
 }

@@ -19,17 +19,32 @@ use hermix_core::ToolError;
 use hermix_tools::tools::workspace_data::WorkspaceDataBackend;
 use hermix_tools::tools::workspace_manager::WorkspaceBackend;
 use hermix_workspace::service::WorkspaceService;
-use hermix_workspace::{RegistryStore, WorkspaceSchema};
+use hermix_workspace::{RegistryStore, WorkspaceSchema, WorkspaceStore};
 
 /// 本地工作台建设后端。
 pub struct LocalWorkspaceBackend {
     /// 工作台根目录（`~/.hermix/workspaces/`）。
     root: PathBuf,
+    /// 自动化调度服务（M4.4：建设/迁移后同步注册自动化）。
+    /// 启动期注入：state.rs 在构造完 automation_service 后调用
+    /// `inject_automation_service`（工具注册早于 automation_service
+    /// 构造，故用 Mutex 事后注入）。
+    automation_service: Arc<std::sync::Mutex<Option<Arc<hermix_automation::AutomationService>>>>,
 }
 
 impl LocalWorkspaceBackend {
     pub fn new(root: PathBuf) -> Self {
-        Self { root }
+        Self {
+            root,
+            automation_service: Arc::new(std::sync::Mutex::new(None)),
+        }
+    }
+
+    /// 注入自动化调度服务（state.rs 启动期调用一次；幂等）。
+    pub fn inject_automation_service(&self, svc: Arc<hermix_automation::AutomationService>) {
+        if let Ok(mut guard) = self.automation_service.lock() {
+            *guard = Some(svc);
+        }
     }
 
     fn registry_path(&self) -> PathBuf {
@@ -43,6 +58,65 @@ impl LocalWorkspaceBackend {
 
     fn err(msg: impl Into<String>) -> ToolError {
         ToolError::ExecutionFailed(msg.into())
+    }
+
+    /// 建设/迁移成功后同步注册自动化（M4.4）。
+    /// - condition 类：注册占位触发点（prompt 带 `[workspace-condition]`
+    ///   标记 + workspace/automation id），触发侧每次读最新 schema 执行
+    ///   零 LLM 条件引擎——schema 更新后自动化定义自动最新。
+    /// - llm_summary 类：prompt 原文注册，走现有 agent.send_message
+    ///   （会话隔离 `automation:{id}` 天然具备）。
+    fn register_workspace_automations(
+        &self,
+        workspace_id: &str,
+        schema: &WorkspaceSchema,
+    ) {
+        let Some(svc) = self
+            .automation_service
+            .lock()
+            .ok()
+            .and_then(|g| g.clone())
+        else {
+            tracing::debug!(workspace_id, "无 automation_service，跳过自动化注册");
+            return;
+        };
+        for plan in hermix_workspace::automation_plan::plan_automations(workspace_id, schema) {
+            match &plan {
+                hermix_workspace::AutomationPlan::Condition { name, frequency, automation_id, .. } => {
+                    let marker = serde_json::json!({
+                        "workspace_id": workspace_id,
+                        "automation_id": automation_id,
+                    });
+                    let params = hermix_automation::CreateAutomationParams {
+                        name: format!("[工作台] {name}"),
+                        prompt: format!(
+                            "[workspace-condition]\n{}",
+                            serde_json::to_string(&marker).unwrap_or_default()
+                        ),
+                        schedule_type: hermix_automation::ScheduleType::Recurring,
+                        rrule: Some(hermix_workspace::automation_plan::frequency_to_rrule(frequency)),
+                        ..Default::default()
+                    };
+                    match svc.create(params) {
+                        Ok(_) => tracing::info!(workspace_id, automation_id, "condition 自动化已注册"),
+                        Err(e) => tracing::warn!(workspace_id, automation_id, error = %e, "condition 自动化注册失败"),
+                    }
+                }
+                hermix_workspace::AutomationPlan::LlmSummary { name, schedule, prompt, .. } => {
+                    let params = hermix_automation::CreateAutomationParams {
+                        name: format!("[工作台] {name}"),
+                        prompt: prompt.clone(),
+                        schedule_type: hermix_automation::ScheduleType::Recurring,
+                        rrule: Some(schedule.clone()),
+                        ..Default::default()
+                    };
+                    match svc.create(params) {
+                        Ok(_) => tracing::info!(workspace_id, "llm_summary 自动化已注册"),
+                        Err(e) => tracing::warn!(workspace_id, error = %e, "llm_summary 自动化注册失败"),
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -77,7 +151,10 @@ impl WorkspaceDataBackend for LocalWorkspaceBackend {
         limit: usize,
         offset: usize,
     ) -> Result<String, ToolError> {
-        let store = self.service().open_store(id).map_err(Self::err)?;
+        let store = self
+            .service()
+            .open_store(id)
+            .map_err(|e| Self::err(e.to_string()))?;
         let filters: Vec<hermix_workspace::Filter> =
             serde_json::from_value(filters).unwrap_or_default();
         let rows = store
@@ -87,7 +164,10 @@ impl WorkspaceDataBackend for LocalWorkspaceBackend {
     }
 
     async fn count(&self, id: &str, table: &str, filters: Value) -> Result<String, ToolError> {
-        let store = self.service().open_store(id).map_err(Self::err)?;
+        let store = self
+            .service()
+            .open_store(id)
+            .map_err(|e| Self::err(e.to_string()))?;
         let filters: Vec<hermix_workspace::Filter> =
             serde_json::from_value(filters).unwrap_or_default();
         let n = store
@@ -97,7 +177,10 @@ impl WorkspaceDataBackend for LocalWorkspaceBackend {
     }
 
     async fn insert(&self, id: &str, table: &str, rows: Value) -> Result<String, ToolError> {
-        let store = self.service().open_store(id).map_err(Self::err)?;
+        let store = self
+            .service()
+            .open_store(id)
+            .map_err(|e| Self::err(e.to_string()))?;
         let rows: Vec<Value> = rows.as_array().cloned().unwrap_or_default();
         let ids = store
             .insert(table, &rows, "agent")
@@ -106,7 +189,10 @@ impl WorkspaceDataBackend for LocalWorkspaceBackend {
     }
 
     async fn update(&self, id: &str, table: &str, row_id: &str, patch: Value) -> Result<String, ToolError> {
-        let store = self.service().open_store(id).map_err(Self::err)?;
+        let store = self
+            .service()
+            .open_store(id)
+            .map_err(|e| Self::err(e.to_string()))?;
         store
             .update(table, row_id, &patch, "agent")
             .map_err(|e| Self::err(format!("表[{table}]更新失败: {e}")))?;
@@ -114,7 +200,10 @@ impl WorkspaceDataBackend for LocalWorkspaceBackend {
     }
 
     async fn delete(&self, id: &str, table: &str, row_id: &str) -> Result<String, ToolError> {
-        let store = self.service().open_store(id).map_err(Self::err)?;
+        let store = self
+            .service()
+            .open_store(id)
+            .map_err(|e| Self::err(e.to_string()))?;
         store
             .delete(table, row_id)
             .map_err(|e| Self::err(format!("表[{table}]删除失败: {e}")))?;
@@ -148,7 +237,10 @@ impl WorkspaceBackend for LocalWorkspaceBackend {
             .create(&result.id, name, &ws_schema.icon, &result.id)
             .map_err(|e| ToolError::ExecutionFailed(format!("注册工作台失败: {e}")))?;
 
-        // 4. 返回结构化摘要（LLM 叙述"建设完成，请测试"）
+        // 4. 同步注册自动化到调度器（M4.4；失败不阻断建设，仅告警）
+        self.register_workspace_automations(&result.id, &ws_schema);
+
+        // 5. 返回结构化摘要（LLM 叙述"建设完成，请测试"）
         Ok(serde_json::json!({
             "ok": true,
             "id": result.id,
@@ -188,6 +280,9 @@ impl WorkspaceBackend for LocalWorkspaceBackend {
             .map_err(|e| ToolError::ExecutionFailed(format!("序列化新定义失败: {e}")))?;
         std::fs::write(&schema_path, raw)
             .map_err(|e| ToolError::ExecutionFailed(format!("写新定义失败: {e}")))?;
+
+        // 5. 同步注册/更新自动化到调度器（M4.4；失败不阻断迁移，仅告警）
+        self.register_workspace_automations(id, &new_schema);
 
         Ok(serde_json::json!({
             "ok": true,

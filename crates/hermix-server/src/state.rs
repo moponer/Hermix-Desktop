@@ -607,6 +607,8 @@ impl HttpServerState {
             &state.automation_service,
             &state.task_service,
         ) {
+            // M4.4: 把调度服务注入 workspace backend（建设/迁移后注册自动化）
+            ws_backend.inject_automation_service(auto_svc.clone());
             let handle = automation_trigger::start_automation_scheduler(
                 auto_svc.clone(),
                 state.agent_service(),
