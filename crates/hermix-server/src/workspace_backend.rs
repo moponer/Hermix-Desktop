@@ -13,10 +13,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use hermix_core::ToolError;
+use hermix_tools::tools::workspace_data::WorkspaceDataBackend;
 use hermix_tools::tools::workspace_manager::WorkspaceBackend;
+use hermix_workspace::service::WorkspaceService;
 use hermix_workspace::{RegistryStore, WorkspaceSchema};
 
 /// 本地工作台建设后端。
@@ -32,6 +34,91 @@ impl LocalWorkspaceBackend {
 
     fn registry_path(&self) -> PathBuf {
         self.root.join("registry.sqlite")
+    }
+
+    /// 数据服务层（解析 id → 目录/定义/store）。
+    fn service(&self) -> WorkspaceService {
+        WorkspaceService::new(self.root.clone())
+    }
+
+    fn err(msg: impl Into<String>) -> ToolError {
+        ToolError::ExecutionFailed(msg.into())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// WorkspaceDataBackend（M3.3/M3.4 数据工具族）
+// ---------------------------------------------------------------------------
+
+#[async_trait]
+impl WorkspaceDataBackend for LocalWorkspaceBackend {
+    async fn table_schema(&self, id: &str, table: &str) -> Result<String, ToolError> {
+        let svc = self.service();
+        let schema = svc
+            .read_schema(id)
+            .map_err(|e| Self::err(format!("工作台[{id}]: {e}")))?;
+        let fields = svc
+            .table_fields(&schema, table)
+            .map_err(|e| Self::err(e.to_string()))?;
+        Ok(serde_json::to_string(&json!({
+            "id": id,
+            "table": table,
+            "fields": fields,
+        }))
+        .unwrap_or_default())
+    }
+
+    async fn query(
+        &self,
+        id: &str,
+        table: &str,
+        filters: Value,
+        sort: Option<String>,
+        limit: usize,
+        offset: usize,
+    ) -> Result<String, ToolError> {
+        let store = self.service().open_store(id).map_err(Self::err)?;
+        let filters: Vec<hermix_workspace::Filter> =
+            serde_json::from_value(filters).unwrap_or_default();
+        let rows = store
+            .query(table, &filters, sort.as_deref(), limit, offset)
+            .map_err(|e| Self::err(format!("表[{table}]查询失败: {e}")))?;
+        Ok(serde_json::to_string(&rows).unwrap_or_default())
+    }
+
+    async fn count(&self, id: &str, table: &str, filters: Value) -> Result<String, ToolError> {
+        let store = self.service().open_store(id).map_err(Self::err)?;
+        let filters: Vec<hermix_workspace::Filter> =
+            serde_json::from_value(filters).unwrap_or_default();
+        let n = store
+            .count(table, &filters)
+            .map_err(|e| Self::err(format!("表[{table}]计数失败: {e}")))?;
+        Ok(json!({ "count": n }).to_string())
+    }
+
+    async fn insert(&self, id: &str, table: &str, rows: Value) -> Result<String, ToolError> {
+        let store = self.service().open_store(id).map_err(Self::err)?;
+        let rows: Vec<Value> = rows.as_array().cloned().unwrap_or_default();
+        let ids = store
+            .insert(table, &rows, "agent")
+            .map_err(|e| Self::err(format!("表[{table}]插入失败: {e}")))?;
+        Ok(json!({ "ok": true, "ids": ids }).to_string())
+    }
+
+    async fn update(&self, id: &str, table: &str, row_id: &str, patch: Value) -> Result<String, ToolError> {
+        let store = self.service().open_store(id).map_err(Self::err)?;
+        store
+            .update(table, row_id, &patch, "agent")
+            .map_err(|e| Self::err(format!("表[{table}]更新失败: {e}")))?;
+        Ok(json!({ "ok": true, "id": row_id }).to_string())
+    }
+
+    async fn delete(&self, id: &str, table: &str, row_id: &str) -> Result<String, ToolError> {
+        let store = self.service().open_store(id).map_err(Self::err)?;
+        store
+            .delete(table, row_id)
+            .map_err(|e| Self::err(format!("表[{table}]删除失败: {e}")))?;
+        Ok(json!({ "ok": true, "id": row_id }).to_string())
     }
 }
 
@@ -112,7 +199,9 @@ impl WorkspaceBackend for LocalWorkspaceBackend {
 }
 
 /// 便捷：构造已接线的 backend（供 state.rs 注册用）。
-pub fn local_backend() -> Arc<dyn WorkspaceBackend> {
+/// 返回具体类型以便同一实例同时注册 `WorkspaceBackend`（建设/迁移）
+/// 与 `WorkspaceDataBackend`（数据读写）两组工具。
+pub fn local_backend() -> Arc<LocalWorkspaceBackend> {
     Arc::new(LocalWorkspaceBackend::new(
         hermix_config::paths::hermix_home().join("workspaces"),
     ))
