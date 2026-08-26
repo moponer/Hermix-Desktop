@@ -135,7 +135,12 @@ fn ping_request(model: Option<&str>) -> AuxiliaryRequest {
     )
     .with_temperature(0.0)
     .with_max_tokens(8)
-    .with_timeout(Duration::from_millis(15_000));
+    // Per-candidate timeout kept tight (5s) so the health check can
+    // walk the whole chain inside its 10s budget without stalling
+    // startup. Previously 15s × 6 candidates could burn 90 seconds
+    // before failing — far longer than the user's tolerance for "the
+    // app didn't respond to my first message".
+    .with_timeout(Duration::from_millis(5_000));
     // When `model` is `None` (no `compaction.summary_model` override), omit the
     // model entirely so the auxiliary client falls back to the selected
     // candidate's own default model (e.g. `MiniMax-M3`). Passing a literal

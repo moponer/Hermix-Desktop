@@ -1037,11 +1037,16 @@ impl LocalAgentService {
                         // `self` into the `async move` closure.
                         let warn_slot = self.compression_quota_warning.clone();
                         let warn_slot_model = self.compression_model_warning.clone();
+                        tracing::info!(
+                            "spawning background compression LLM health check \
+                             (10s budget, 5s per-candidate) — \
+                             main conversation is NOT blocked by this"
+                        );
                         tokio::spawn(async move {
                             match crate::compression_health::startup_compression_llm_health_check(
                                 &*check_aux,
                                 check_model.as_deref(),
-                                30_000,
+                                10_000,
                             )
                             .await
                             {

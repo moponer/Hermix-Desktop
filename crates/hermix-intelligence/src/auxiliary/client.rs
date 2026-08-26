@@ -176,8 +176,9 @@ impl AuxiliaryClient {
         let extra_body = request.extra_body.clone();
 
         let mut errors: Vec<(String, String)> = Vec::new();
-
-        for candidate in chain.iter() {
+        let chain_len = chain.len();
+        for (idx, candidate) in chain.iter().enumerate() {
+            let candidate_is_last = idx + 1 == chain_len;
             let model = settings
                 .model
                 .clone()
@@ -207,11 +208,56 @@ impl AuxiliaryClient {
 
             match outcome {
                 Ok(Ok(response)) => {
+                    // An empty body is a *silent failure*: the provider
+                    // accepted the request but produced nothing useful
+                    // (model stripped its preamble, model doesn't support
+                    // the prompt shape, model returns `content: null`
+                    // for ultra-short inputs like the health-check ping).
+                    // Treat it as a fallback signal so other candidates
+                    // get a chance — short-circuiting here was the root
+                    // cause of "agnes-2.5-flash returned only 0 chars,
+                    // chain stops here, conversation halts" (when a real
+                    // compression fires the static fallback would mask
+                    // the issue, but the user-facing health-check warning
+                    // made it look like the whole loop was blocked).
+                    let body_chars = response
+                        .message
+                        .content
+                        .as_deref()
+                        .map(str::chars)
+                        .map(Iterator::count)
+                        .unwrap_or(0);
+                    if body_chars == 0 {
+                        // Only treat as fallback when there's another
+                        // candidate to try — otherwise this IS the final
+                        // answer and the caller can decide what to do.
+                        let is_last = candidate_is_last;
+                        if !is_last {
+                            tracing::info!(
+                                "auxiliary {}: provider {} returned empty body (0 chars); \
+                                 trying next candidate",
+                                task.as_key(),
+                                label
+                            );
+                            errors.push((
+                                label.clone(),
+                                "empty response (0 chars)".to_string(),
+                            ));
+                            continue;
+                        }
+                        tracing::warn!(
+                            "auxiliary {}: provider {} returned empty body (0 chars) \
+                             and is the last candidate in the chain",
+                            task.as_key(),
+                            label
+                        );
+                    }
                     tracing::debug!(
-                        "auxiliary {}: succeeded via {} ({})",
+                        "auxiliary {}: succeeded via {} ({}, {} body chars)",
                         task.as_key(),
                         label,
-                        model
+                        model,
+                        body_chars
                     );
                     return Ok(AuxiliaryResponse {
                         provider_label: label,
@@ -712,5 +758,174 @@ mod tests {
             .with_timeout(Duration::from_millis(40));
         let resp = client.call(req).await.unwrap();
         assert_eq!(resp.provider_label, "anthropic");
+    }
+
+    /// A non-final candidate that returns `Ok(Ok(response))` with empty
+    /// content must NOT short-circuit — the chain must try the next
+    /// candidate. Regression: agnes-2.5-flash returns `content: null` for
+    /// the health-check ping; without this fix the chain stops at agnes
+    /// and every later candidate is silently skipped, leaving the user
+    /// with a "0 chars" warning and a conversation that *looks* broken.
+    #[tokio::test]
+    async fn empty_body_falls_back_to_next_when_more_candidates() {
+        let p1 = ScriptedProvider::new("custom-agnes", vec![Outcome::Ok("".into())]);
+        let p2 = ScriptedProvider::new("openrouter", vec![Outcome::Ok("pong".into())]);
+
+        let client = AuxiliaryClient::builder()
+            .add_candidate(ProviderCandidate::new(
+                AuxiliarySource::DirectKey("custom-agnes".into()),
+                "agnes",
+                p1.clone(),
+            ))
+            .add_candidate(ProviderCandidate::new(
+                AuxiliarySource::OpenRouter,
+                "or",
+                p2.clone(),
+            ))
+            .build();
+
+        let resp = client
+            .call(AuxiliaryRequest::new(
+                AuxiliaryTask::Custom("health-check".into()),
+                vec![user_msg("ping")],
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            resp.provider_label, "openrouter",
+            "empty first response should fall through to openrouter"
+        );
+        assert_eq!(resp.text(), Some("pong"));
+        assert_eq!(p1.call_count(), 1);
+        assert_eq!(p2.call_count(), 1);
+    }
+
+    /// When the last (only) candidate returns empty content, surface it
+    /// — there's no point falling back, and callers (e.g. the compression
+    /// health check) need to know "yes I tried everything, all empty".
+    #[tokio::test]
+    async fn empty_body_on_last_candidate_returns_success_with_empty_text() {
+        let p1 = ScriptedProvider::new("custom-agnes", vec![Outcome::Ok("".into())]);
+
+        let client = AuxiliaryClient::builder()
+            .add_candidate(ProviderCandidate::new(
+                AuxiliarySource::DirectKey("custom-agnes".into()),
+                "agnes",
+                p1.clone(),
+            ))
+            .build();
+
+        let resp = client
+            .call(AuxiliaryRequest::new(
+                AuxiliaryTask::Custom("health-check".into()),
+                vec![user_msg("ping")],
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(resp.provider_label, "custom-agnes");
+        assert_eq!(
+            resp.text(),
+            Some(""),
+            "empty text should be returned as empty string, not None"
+        );
+        assert_eq!(p1.call_count(), 1);
+    }
+
+    /// When the response body's `content` is `None` (rather than
+    /// `Some("")`), the same fallback rule must apply — providers that
+    /// strip their preamble entirely often emit `null` content rather
+    /// than an empty string, and the chain shouldn't treat the two
+    /// differently.
+    #[tokio::test]
+    async fn null_content_falls_back_to_next_when_more_candidates() {
+        use hermix_core::{LlmResponse, Message, MessageRole, UsageStats};
+
+        struct NullContentProvider {
+            label: String,
+            calls: AtomicUsize,
+        }
+        #[async_trait]
+        impl LlmProvider for NullContentProvider {
+            async fn chat_completion(
+                &self,
+                _m: &[Message],
+                _t: &[ToolSchema],
+                _x: Option<u32>,
+                _temp: Option<f64>,
+                model: Option<&str>,
+                _eb: Option<&serde_json::Value>,
+            ) -> Result<LlmResponse, AgentError> {
+                self.calls.fetch_add(1, Ordering::Relaxed);
+                Ok(LlmResponse {
+                    message: Message {
+                        role: MessageRole::Assistant,
+                        content: None, // ← the bug case
+                        content_parts: None,
+                        tool_calls: None,
+                        tool_call_id: None,
+                        name: None,
+                        reasoning_content: None,
+                        cache_control: None,
+                        execution_timeline: None,
+                        unified_steps: None,
+                        ephemeral: false,
+                    },
+                    finish_reason: Some("stop".into()),
+                    model: model.unwrap_or("test").to_string(),
+                    usage: Some(UsageStats {
+                        prompt_tokens: 1,
+                        completion_tokens: 1,
+                        total_tokens: 2,
+                        estimated_cost: None,
+                        cache_read_tokens: 0,
+                        cache_creation_tokens: 0,
+                        reasoning_tokens: 0,
+                    }),
+                })
+            }
+            fn chat_completion_stream(
+                &self,
+                _m: &[Message],
+                _t: &[ToolSchema],
+                _x: Option<u32>,
+                _temp: Option<f64>,
+                _model: Option<&str>,
+                _eb: Option<&serde_json::Value>,
+            ) -> BoxStream<'static, Result<StreamChunk, AgentError>> {
+                Box::pin(futures::stream::empty())
+            }
+        }
+        let p1 = Arc::new(NullContentProvider {
+            label: "null-content".into(),
+            calls: AtomicUsize::new(0),
+        });
+        let p2 = ScriptedProvider::new("openrouter", vec![Outcome::Ok("ok".into())]);
+
+        let client = AuxiliaryClient::builder()
+            .add_candidate(ProviderCandidate::new(
+                AuxiliarySource::DirectKey("null-content".into()),
+                "nc",
+                p1.clone(),
+            ))
+            .add_candidate(ProviderCandidate::new(
+                AuxiliarySource::OpenRouter,
+                "or",
+                p2.clone(),
+            ))
+            .build();
+
+        let resp = client
+            .call(AuxiliaryRequest::new(
+                AuxiliaryTask::Custom("h".into()),
+                vec![user_msg("ping")],
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(resp.provider_label, "openrouter");
+        assert_eq!(p1.calls.load(Ordering::Relaxed), 1);
+        assert_eq!(p2.call_count(), 1);
     }
 }
