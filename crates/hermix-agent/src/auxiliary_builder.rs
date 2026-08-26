@@ -473,7 +473,7 @@ mod tests {
         gateway.llm_providers = providers;
 
         let (client, _) =
-            build_auxiliary_client_with_config(AuxiliaryConfig::default(), &gateway);
+            build_auxiliary_client_with_config(AuxiliaryConfig::default(), &gateway, None);
         let labels = client.chain_labels();
         assert_eq!(labels[0], "custom-agnes", "主 provider 必须提到链首, got {labels:?}");
     }
@@ -504,7 +504,7 @@ mod tests {
         gateway.llm_providers = providers;
 
         let (client, _) =
-            build_auxiliary_client_with_config(AuxiliaryConfig::default(), &gateway);
+            build_auxiliary_client_with_config(AuxiliaryConfig::default(), &gateway, None);
         let labels = client.chain_labels();
         assert_eq!(labels[0], "custom", "openai 主 model 应映射到 custom label, got {labels:?}");
     }
@@ -528,7 +528,7 @@ mod tests {
         gateway.llm_providers = providers;
 
         let (client, _) =
-            build_auxiliary_client_with_config(AuxiliaryConfig::default(), &gateway);
+            build_auxiliary_client_with_config(AuxiliaryConfig::default(), &gateway, None);
         assert_eq!(client.chain_labels(), vec!["custom"]);
     }
 }
