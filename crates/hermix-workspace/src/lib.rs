@@ -15,12 +15,18 @@
 //! - [`validate`] — schema 校验（标识符安全/类型/枚举/关系/视图/自动化引用）
 //! - [`store`] — `WorkspaceStore` trait + `LocalSqliteStore` 实现
 //! - [`registry`] — `registry.sqlite` 工作台列表 CRUD
+//! - [`builder`] — 对话建设管线（schema → 建目录/定义/DB/建表/导入/自测）
+//! - [`migrate`] — schema 增量迁移（加列/加表/枚举存量校验，删改保留数据）
 
+pub mod builder;
+pub mod migrate;
 pub mod model;
 pub mod registry;
 pub mod store;
 pub mod validate;
 
+pub use builder::{BuildError, BuildResult, TableStatus, create_from_schema};
+pub use migrate::{ColumnChange, MigrateError, MigrationReport, migrate_schema};
 pub use model::{
     Automation, DashboardWidget, Field, FieldType, Module, View, ViewType, WidgetType,
     WorkspaceSchema,

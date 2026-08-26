@@ -150,6 +150,18 @@ impl LocalSqliteStore {
         &self.schema
     }
 
+    /// 试跑一条自动化条件（M2 建设自测用）——只编译不返回数据。
+    /// `condition` 是单表 WHERE 片段（用户确认过的 schema 内字段），
+    /// 表名来自模块 id（已过标识符白名单）；LIMIT 0 保证零开销零污染。
+    pub fn probe_condition(&self, table: &str, condition: &str) -> Result<(), StoreError> {
+        self.table_fields(table)?; // 表存在性
+        let sql = format!("SELECT COUNT(*) FROM {table} WHERE ({condition}) LIMIT 0");
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(&sql)?;
+        let _ = stmt.query([])?;
+        Ok(())
+    }
+
     fn conn(&self) -> Result<rusqlite::Connection, StoreError> {
         let conn = rusqlite::Connection::open(&self.db_path)
             .map_err(|e| StoreError::Io(format!("打开工作台 DB 失败: {e}")))?;
@@ -332,7 +344,7 @@ impl LocalSqliteStore {
 // ---------------------------------------------------------------------------
 
 /// 字段类型 → SQLite 列类型。
-fn sqlite_type(t: FieldType) -> &'static str {
+pub(crate) fn sqlite_type(t: FieldType) -> &'static str {
     match t {
         FieldType::Text | FieldType::Enum | FieldType::Relation | FieldType::Attachment => "TEXT",
         FieldType::Number => "REAL",
