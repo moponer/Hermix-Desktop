@@ -1,5 +1,6 @@
 // Hermix Desktop API Client — REST 运行时（从 api.ts 拆分；类型见 ./types，WS 见 ./ws）
 import type { ChatMessage, Session, AutomationTask } from "../types";
+import type { WorkspaceEntry, WorkspaceDetail, WorkspaceSchema } from "../types";
 import { storage, STORAGE_KEYS } from "../utils/storageCompat";
 // v5: reuse detectToolError from messageParser for errorReason extraction
 // on reloaded tool messages — same helper as the live-streaming path.
@@ -196,6 +197,169 @@ export async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T>
 /** Fetch without parsing the response body. */
 async function fetchVoid(path: string, init?: RequestInit): Promise<void> {
   return fetchApi<void>(path, init, { parseJson: false });
+}
+
+// ── Workspaces（工作台）───────────────────────────────
+// 镜像后端 dashboard/workspaces.rs 的 /api/workspaces 端点。
+
+/** 列出全部工作台（注册表条目，updated 倒序）。 */
+export async function listWorkspaces(): Promise<WorkspaceEntry[]> {
+  return fetchJSON<WorkspaceEntry[]>("/api/workspaces");
+}
+
+/** 创建工作台（建注册表条目 + 目录 + 默认定义）。 */
+export async function createWorkspace(
+  name: string,
+  icon = "",
+): Promise<{ ok: boolean; id: string }> {
+  return fetchJSON<{ ok: boolean; id: string }>("/api/workspaces", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, icon }),
+  });
+}
+
+/** 获取工作台详情（注册表 + schema）。 */
+export async function getWorkspace(id: string): Promise<WorkspaceDetail> {
+  return fetchJSON<WorkspaceDetail>(`/api/workspaces/${encodeURIComponent(id)}`);
+}
+
+/** 重命名工作台（注册表 + 定义同步）。 */
+export async function renameWorkspace(
+  id: string,
+  name: string,
+  icon = "",
+): Promise<{ ok: boolean; id: string }> {
+  return fetchJSON<{ ok: boolean; id: string }>(
+    `/api/workspaces/${encodeURIComponent(id)}`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, icon }),
+    },
+  );
+}
+
+/** 删除工作台（注册表条目 + 数据目录）。 */
+export async function deleteWorkspace(id: string): Promise<{ ok: boolean; id: string }> {
+  return fetchJSON<{ ok: boolean; id: string }>(
+    `/api/workspaces/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+  );
+}
+
+/** 更新工作台定义（布局/模块变更持久化，后端校验后落盘）。 */
+export async function updateWorkspaceSchema(
+  id: string,
+  schema: WorkspaceSchema,
+): Promise<{ ok: boolean; id: string }> {
+  return fetchJSON<{ ok: boolean; id: string }>(
+    `/api/workspaces/${encodeURIComponent(id)}/schema`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(schema),
+    },
+  );
+}
+
+// ── 工作台数据 CRUD（打通后端 LocalSqliteStore）──────────────
+
+export interface WorkspaceQueryRequest {
+  filters?: WorkspaceFilter[];
+  sort?: string;
+  /** 0 = 不限；前端默认给上限防大表拖垮。 */
+  limit?: number;
+  offset?: number;
+}
+
+export interface WorkspaceFilter {
+  field: string;
+  op: "eq" | "ne" | "gt" | "gte" | "lt" | "lte" | "contains";
+  value: unknown;
+}
+
+/** 查询表行。 */
+export async function workspaceQueryTable(
+  workspaceId: string,
+  table: string,
+  req: WorkspaceQueryRequest = {},
+): Promise<Record<string, unknown>[]> {
+  return fetchJSON<Record<string, unknown>[]>(
+    `/api/workspaces/${encodeURIComponent(workspaceId)}/tables/${encodeURIComponent(table)}/query`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(req),
+    },
+  );
+}
+
+/** 插入行，返回行 id。 */
+export async function workspaceInsertRows(
+  workspaceId: string,
+  table: string,
+  rows: Record<string, unknown>[],
+  updatedBy = "user",
+): Promise<string[]> {
+  return fetchJSON<string[]>(
+    `/api/workspaces/${encodeURIComponent(workspaceId)}/tables/${encodeURIComponent(table)}/insert`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ rows, updated_by: updatedBy }),
+    },
+  );
+}
+
+/** 按主键更新行。 */
+export async function workspaceUpdateRow(
+  workspaceId: string,
+  table: string,
+  id: string,
+  patch: Record<string, unknown>,
+  updatedBy = "user",
+): Promise<{ ok: boolean; id: string }> {
+  return fetchJSON<{ ok: boolean; id: string }>(
+    `/api/workspaces/${encodeURIComponent(workspaceId)}/tables/${encodeURIComponent(table)}/update`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, patch, updated_by: updatedBy }),
+    },
+  );
+}
+
+/** 按主键删除行。 */
+export async function workspaceDeleteRow(
+  workspaceId: string,
+  table: string,
+  id: string,
+): Promise<{ ok: boolean; id: string }> {
+  return fetchJSON<{ ok: boolean; id: string }>(
+    `/api/workspaces/${encodeURIComponent(workspaceId)}/tables/${encodeURIComponent(table)}/delete`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    },
+  );
+}
+
+/** 计数。 */
+export async function workspaceCountRows(
+  workspaceId: string,
+  table: string,
+  filters: WorkspaceFilter[] = [],
+): Promise<number> {
+  return fetchJSON<number>(
+    `/api/workspaces/${encodeURIComponent(workspaceId)}/tables/${encodeURIComponent(table)}/count`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filters }),
+    },
+  );
 }
 
 // ── Orchestration Engine: Task CRUD ────────

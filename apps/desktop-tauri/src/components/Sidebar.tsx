@@ -2,7 +2,7 @@ import {
   MessageSquarePlus, Search, Settings,
   ChevronDown, ChevronRight,
   MessageSquare, Users, Plus, FolderOpen,
-  Boxes, MoreHorizontal, Loader2,
+  Boxes, MoreHorizontal, Loader2, LayoutDashboard,
   // Popover icons
   Pencil, Pin, Archive, Trash2, FolderOpenDot, Copy, FolderMinus,
   type LucideIcon,
@@ -58,6 +58,7 @@ const NAV_ITEMS: { icon: React.ElementType; label: string; page: NavPage }[] = [
   { icon: Search,   label: "搜索",    page: "search" },
   { icon: Users,    label: "群聊",    page: "groupchat" },
   { icon: Boxes,    label: "应用",    page: "customapps" },
+  { icon: LayoutDashboard, label: "工作台", page: "workspaces" },
 ];
 
 // 已移除：工具箱整合进系统配置面板，保留旧名称便于搜索残留引用。

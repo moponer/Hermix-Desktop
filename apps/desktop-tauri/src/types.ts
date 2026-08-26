@@ -535,9 +535,87 @@ export interface PluginSettings {
   tool_code_exec: boolean;
 }
 
-export type NavPage = "chat" | "search" | "systemconfig" | "automation" | "agents" | "groupchat" | "experts" | "analytics" | "customapps";
+export type NavPage = "chat" | "search" | "systemconfig" | "automation" | "agents" | "groupchat" | "experts" | "analytics" | "customapps" | "workspaces";
 // ↑ "experts" is kept for backward compat — it's now an alias of "agents"
 // with initialTab="builtin". Sidebar no longer exposes it directly.
+
+// ── Workspace（工作台）类型 — 镜像后端 hermix-workspace ────────────────
+
+/** 注册表条目（GET /api/workspaces 列表项）。 */
+export interface WorkspaceEntry {
+  id: string;
+  name: string;
+  icon: string;
+  dir: string;
+  created_at: number;
+  updated_at: number;
+}
+
+/** 工作台详情（注册表条目 + 定义 schema）。 */
+export interface WorkspaceDetail {
+  id: string;
+  name: string;
+  icon: string;
+  dir: string;
+  created_at: number;
+  updated_at: number;
+  schema: WorkspaceSchema;
+}
+
+/** 工作台定义 — 镜像 hermix_workspace::WorkspaceSchema（M1.4 渲染器消费）。 */
+export interface WorkspaceSchema {
+  schema_version: number;
+  name: string;
+  icon: string;
+  modules: WorkspaceModule[];
+  layout: unknown;
+  automations: unknown[];
+  permissions: unknown;
+}
+
+export type FieldType =
+  | "text"
+  | "number"
+  | "date"
+  | "datetime"
+  | "boolean"
+  | "enum"
+  | "relation"
+  | "attachment";
+
+export interface WorkspaceField {
+  id: string;
+  name: string;
+  type: FieldType;
+  required?: boolean;
+  unique?: boolean;
+  options?: string[];
+  target?: string;
+}
+
+export type ViewType = "grid" | "form" | "kanban" | "calendar";
+
+export interface WorkspaceView {
+  id: string;
+  name: string;
+  type: ViewType;
+  fields: string[];
+  group_by?: string;
+}
+
+export type WidgetType = "stat" | "chart" | "list";
+
+export interface DashboardWidget {
+  id: string;
+  type: WidgetType;
+  title: string;
+  query: string;
+}
+
+/** 模块 = 数据表 或 仪表盘（tagged union 与后端 serde 一致）。 */
+export type WorkspaceModule =
+  | { type: "table"; id: string; name: string; fields: WorkspaceField[]; views: WorkspaceView[] }
+  | { type: "dashboard"; id: string; name: string; widgets: DashboardWidget[] };
 
 // Re-export from api
 export type { SessionSummary, SystemStatus, HermesConfig, SkillInfo } from "./api";
