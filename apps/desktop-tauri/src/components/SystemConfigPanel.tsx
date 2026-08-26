@@ -9,9 +9,10 @@ import {
   Sparkles,
   Network,
   Image as ImageIcon,
+  PenLine,
   X,
 } from "lucide-react";
-import { ModelTab } from "./settings/ModelSettingsTab";
+import { ModelTab, CustomProvidersTab } from "./settings/ModelSettingsTab";
 import { BackendTab } from "./settings/BackendSettingsTab";
 import { AdvancedTab } from "./settings/AdvancedSettingsTab";
 import { PluginsTab, SkillsTab, ConnectorsTab, ToolsetsTab } from "./config/ToolTabs";
@@ -24,7 +25,7 @@ interface SystemConfigPanelProps {
 
 type CategoryId = "model" | "tools" | "backend" | "advanced";
 type ToolTabId = "plugins" | "skills" | "connectors" | "toolsets";
-type ModelTabId = "model" | "image";
+type ModelTabId = "model" | "image" | "custom";
 
 const CATEGORIES: { id: CategoryId; label: string; hint: string; icon: React.ElementType }[] = [
   { id: "model", label: "模型", hint: "配置大模型与图片生成", icon: Cpu },
@@ -43,6 +44,7 @@ const TOOL_TABS: { id: ToolTabId; label: string; icon: React.ElementType }[] = [
 const MODEL_TABS: { id: ModelTabId; label: string; icon: React.ElementType }[] = [
   { id: "model", label: "模型配置", icon: Cpu },
   { id: "image", label: "图像", icon: ImageIcon },
+  { id: "custom", label: "自定义模型", icon: PenLine },
 ];
 
 export function SystemConfigPanel({ onClose }: SystemConfigPanelProps) {
@@ -160,6 +162,11 @@ export function SystemConfigPanel({ onClose }: SystemConfigPanelProps) {
                 </div>
               )}
               {cat === "model" && modelTab === "image" && <Padded><ImageSettingsCard /></Padded>}
+              {cat === "model" && modelTab === "custom" && (
+                <div className="h-full min-h-0">
+                  <CustomProvidersTab />
+                </div>
+              )}
               {cat === "tools" && (
                 <div className="px-6 py-5 min-h-0">
                   <div className="max-w-4xl mx-auto">

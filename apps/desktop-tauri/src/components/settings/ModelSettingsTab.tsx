@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { Save, Check, AlertCircle, RefreshCw, ChevronRight, CheckCircle } from "lucide-react";
 import * as api from "../../api";
 import { storage } from "../../utils/storageCompat";
-import { writeModelConfigAndNotify } from "../../hooks/useCurrentModel";
+import { writeModelConfigAndNotify, MODEL_CONFIG_CHANGED_EVENT } from "../../hooks/useCurrentModel";
 import { ProviderIcon } from "../ProviderIcon";
 import { useSafeTimeout } from "../../hooks/useSafeTimeout";
 import { apiUrl } from "../../api";
@@ -29,45 +29,18 @@ export function ModelTab() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
-  // Track models for custom providers: key=custom-{id}, value=modelId[]
-  const [customModels, setCustomModels] = useState<Record<string, string[]>>({});
   // Track which custom provider IDs have an API key configured (from
   // /api/custom-providers → has_key). This is the authoritative source
   // because it reads config.yaml directly, unlike GET /api/env which
   // may read the wrong path before the backend is recompiled.
   const [customIdsWithKey, setCustomIdsWithKey] = useState<Set<string>>(new Set());
-  // Load custom providers from backend on mount, sync to config
+  // Load custom provider has_key state on mount. (Model list fetching /
+  // toggle 逻辑已搬到独立 <CustomProvidersTab /> sub-tab,这里只保留状态栏
+  // 用的 has_key 提示。)
   useEffect(() => {
     api.getCustomProviders().then((providers) => {
-      const cm: Record<string, string[]> = {};
       const withKey = new Set<string>();
-      const enabledSet = new Set(config.enabled.map((m) => `${m.providerId}:${m.modelId}`));
-      const newEnabled = [...config.enabled];
-      providers.forEach((p) => {
-        if (p.has_key) withKey.add(p.id);
-        const models = p.models.filter(Boolean);
-        if (models.length > 0) {
-          cm[p.id] = models;
-          models.forEach((mid) => {
-            const key = `${p.id}:${mid}`;
-            if (!enabledSet.has(key)) {
-              newEnabled.push({ providerId: p.id, modelId: mid });
-            }
-          });
-        }
-      });
-      if (Object.keys(cm).length > 0 || newEnabled.length > config.enabled.length) {
-        setCustomModels(cm);
-        setConfig((prev) => {
-          // 否则 mount 时把 custom provider 的模型加进 enabled → React state 改了但
-          // localStorage 永远空 → 重启后 ChatView 弹窗看不到这些模型。
-          const next = { ...prev, enabled: newEnabled };
-          writeModelConfigAndNotify(next);
-          return next;
-        });
-      }
-      // Always sync has_key state (even if no models — provider may exist
-      // with a key but zero models fetched yet).
+      providers.forEach((p) => { if (p.has_key) withKey.add(p.id); });
       setCustomIdsWithKey(withKey);
     }).catch((e) => { console.warn("[SettingsView] custom provider fetch failed:", e); });
   }, []);
@@ -304,67 +277,6 @@ export function ModelTab() {
     });
   }, []);
 
-  // ── Custom provider model handlers ──
-  const updateCustomModels = useCallback((providerId: string, models: string[]) => {
-    setCustomModels((prev) => {
-      const next = { ...prev, [providerId]: models };
-      return next;
-    });
-    setConfig((prev) => {
-      const existing = new Set(prev.enabled.map((m) => `${m.providerId}:${m.modelId}`));
-      const newEnabled = [...prev.enabled];
-      models.forEach((modelId) => {
-        const key = `${providerId}:${modelId}`;
-        if (!existing.has(key)) newEnabled.push({ providerId, modelId });
-      });
-      const next = { ...prev, enabled: newEnabled, defaultModel: prev.defaultModel || (models.length > 0 ? `${providerId}:${models[0]}` : prev.defaultModel) };
-      writeModelConfigAndNotify(next);
-      return next;
-    });
-  }, []);
-
-  const refreshCustomProviders = useCallback(() => {
-    api.getCustomProviders().then((providers) => {
-      const cm: Record<string, string[]> = {};
-      providers.forEach((p) => {
-        const models = p.models.filter(Boolean);
-        if (models.length > 0) {
-          cm[p.id] = models;
-        }
-      });
-      setCustomModels(cm);
-      // Re-add any models from providers into config
-      setConfig((prev) => {
-        const existing = new Set(prev.enabled.map((m) => `${m.providerId}:${m.modelId}`));
-        const newEnabled = [...prev.enabled];
-        Object.entries(cm).forEach(([pid, models]) => {
-          models.forEach((mid) => {
-            const key = `${pid}:${mid}`;
-            if (!existing.has(key)) newEnabled.push({ providerId: pid, modelId: mid });
-          });
-        });
-        const next = { ...prev, enabled: newEnabled };
-        writeModelConfigAndNotify(next);
-        return next;
-      });
-    }).catch((e) => { console.warn("[SettingsView] auto-correct sync failed:", e); });
-    // Also refresh env-var state so activeKeys (including CUSTOM_*_API_KEY)
-    // reflects the latest backend state without a full page refresh.
-    api.getEnvVars().then((envVars) => {
-      const keys: Record<string, boolean> = {};
-      PROVIDERS.forEach((p) => { keys[p.id] = !!envVars[p.keyEnvVar]?.is_set; });
-      for (const [varName, info] of Object.entries(envVars ?? {})) {
-        const m = /^CUSTOM_([A-Za-z0-9_-]+)_API_KEY$/.exec(varName);
-        if (m && (info as { is_set?: boolean })?.is_set) {
-          // Normalise to lowercase — provider ids are always lowercase
-          // (sanitized from user input via .toLowerCase()).
-          keys[`custom-${m[1].toLowerCase().replace(/_/g, "-")}`] = true;
-        }
-      }
-      setActiveKeys(keys);
-    }).catch((e) => { console.warn("[SettingsView] env keys fetch failed:", e); });
-  }, []);
-
   // ── Status banner ──
   let currentDefault = config.defaultModel;
   // Defensive repair: if defaultModel looks like "providerIdmodelId" (no
@@ -442,59 +354,36 @@ export function ModelTab() {
               </button>
             );
           })}
-          {/* Custom provider entry */}
-          <div className="mt-2 pt-2 border-t border-border-primary">
-            <button
-              onClick={() => setSelectedProvider({ id: "_custom", name: "自定义", baseUrl: "", keyEnvVar: "", description: "兼容 OpenAI API 的任意服务" })}
-              className={`w-full flex items-center gap-2 px-2 py-2 rounded text-left text-sm ${selectedProvider?.id === "_custom" ? "bg-accent/10 text-accent" : "text-text-secondary hover:bg-bg-tertiary hover:text-text-primary"}`}
-            >
-              <ProviderIcon providerId="custom" size={18} title="自定义" />
-              <div className="flex-1 min-w-0">
-                <div className="font-medium text-xs truncate">自定义</div>
-                <div className="text-[10px] text-text-muted truncate">兼容 OpenAI API 的任意服务</div>
-              </div>
-              <ChevronRight size={12} className="text-text-muted shrink-0" />
-            </button>
-            {/* Intentionally omitted: the "自定义" group used to render a
-                light card per custom provider here, duplicating the right
-                column's CustomProviderSection ("已配置的提供商"). Custom
-                provider management lives only there now, so no dead state
-                is left behind. */}
-          </div>
+          {/* "自定义提供商"已提升为顶部独立 sub-tab(由 SystemConfigPanel
+              的 modelTab="custom" 渲染),不在左栏底部展示。
+              旧实现注释保留参考价值:这里原本渲染一个按钮 + 每 provider
+              卡片,与右栏 CustomProviderSection 重复。 */}
         </div>
       </div>
 
-      {/* 右侧：选中供应商的配置 */}
+      {/* 右侧：选中供应商的配置。"自定义"已提升为独立 sub-tab,
+          不再在左栏底部(避免埋在 builtin 列表末尾看不见)。原本 selectedProvider
+          === "_custom" 会渲染内嵌的 CustomProviderSection,现已成为死路径,
+          ModelTab 只剩 builtin provider 的 key 输入 + 模型列表。 */}
       <div className="flex-1 overflow-y-auto min-h-0">
         {selectedProvider ? (
-          selectedProvider.id === "_custom" ? (
-            <CustomProviderSection
-              customModels={customModels}
-              onModelsFetched={updateCustomModels}
-              onRefresh={refreshCustomProviders}
-              toggleModel={toggleModel}
-              setDefault={setDefault}
-              config={config}
-              setConfig={setConfig}
-            />
-          ) : (
-            <div className="p-6 max-w-xl">
-              <h3 className="text-base font-semibold text-text-primary mb-1">{selectedProvider.name}</h3>
-              <p className="text-xs text-text-muted mb-4">{selectedProvider.description}</p>
+          <div className="p-6 max-w-xl">
+            <h3 className="text-base font-semibold text-text-primary mb-1">{selectedProvider.name}</h3>
+            <p className="text-xs text-text-muted mb-4">{selectedProvider.description}</p>
 
-              {error && (
-                <div className="flex items-center gap-2 px-3 py-2 mb-4 rounded-lg bg-red-500/10 border border-red-500/30 text-sm text-red-400">
-                  <AlertCircle size={14} /> {error}
-                </div>
-              )}
-              {info && (
-                <div className="flex items-center gap-2 px-3 py-2 mb-4 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-sm text-emerald-400">
-                  <CheckCircle size={14} /> {info}
-                </div>
-              )}
+            {error && (
+              <div className="flex items-center gap-2 px-3 py-2 mb-4 rounded-lg bg-red-500/10 border border-red-500/30 text-sm text-red-400">
+                <AlertCircle size={14} /> {error}
+              </div>
+            )}
+            {info && (
+              <div className="flex items-center gap-2 px-3 py-2 mb-4 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-sm text-emerald-400">
+                <CheckCircle size={14} /> {info}
+              </div>
+            )}
 
-              <div className="mb-4">
-                <label className="block text-xs font-medium text-text-primary mb-1">API Key</label>
+            <div className="mb-4">
+              <label className="block text-xs font-medium text-text-primary mb-1">API Key</label>
                 <div className="flex gap-2">
                   <input
                     type="password"
@@ -573,10 +462,9 @@ export function ModelTab() {
 
               {/* Config is auto-saved on every toggle/set-default. */}
             </div>
-          )
-        ) : (
-          <div className="flex items-center justify-center h-full text-text-muted text-sm">← 选择一个供应商进行配置</div>
-        )}
+          ) : (
+            <div className="flex items-center justify-center h-full text-text-muted text-sm">← 选择一个供应商进行配置</div>
+          )}
       </div>
       </div>
     </div>
@@ -613,6 +501,9 @@ export function CustomProviderSection({
   const [success, setSuccess] = useState("");
   const [providers, setProviders] = useState<api.CustomProviderSummary[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
+  // 互斥展开：同时只允许一个 provider 卡片展开。null = 全部折叠。
+  // 避免多 provider 时无限往下撑 + 与对话侧"按 provider 分组"心智模型一致。
+  const [expandedProviderId, setExpandedProviderId] = useState<string | null>(null);
   const [, setProviderModels] = useState<Record<string, string[]>>({});
 
   useEffect(() => {
@@ -634,20 +525,11 @@ export function CustomProviderSection({
       setProviderModels((prev) => ({ ...prev, [id]: models }));
       onModelsFetched(id, models);
       onRefresh();
-      // 不会把 modelId 加进 config.enabled，也不会持久化 → ChatView 弹窗看不到。
-      // 与内置 provider 的 fetchModels 一致，把新模型 merge 进 config.enabled 并写盘，
-      // 否则 ChatView 弹窗看不到这些模型。
-      setConfig((prev) => {
-        const existing = new Set(prev.enabled.map((m) => `${m.providerId}:${m.modelId}`));
-        const newEnabled = [...prev.enabled];
-        models.forEach((modelId) => {
-          if (!existing.has(`${id}:${modelId}`)) newEnabled.push({ providerId: id, modelId });
-        });
-        const next = { ...prev, enabled: newEnabled };
-        writeModelConfigAndNotify(next);
-        return next;
-      });
-      setSuccess(`成功获取 ${models.length} 个模型`);
+      // 与 reconcile 的"用户主动勾选才 enable"原则一致:fetched 后不
+      // 主动 writeModelConfigAndNotify,让用户在「自定义模型」区域手动
+      // 勾选要启用的。已存在于 config.enabled 的保持不动,新拉到的默认
+      // 未勾选(isEnabled = config.enabled 中不存在的视为取消勾选)。
+      setSuccess(`成功获取 ${models.length} 个模型,请在「自定义模型」区域勾选要启用的`);
     } catch (e) {
       setError(`获取模型失败: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -732,6 +614,24 @@ export function CustomProviderSection({
       setProviderModels((prev) => ({ ...prev, [safeId]: models }));
       onModelsFetched(safeId, models);
       onRefresh();
+      // 新建流程一次性 commit:把 fetched models 默认加进 enabled。
+      // updateCustomModels 改完不主动 push,这里由"提交"动作显式
+      // 写一次 enabled(等同于"用户预勾选 fetched models")。
+      setConfig((prev) => {
+        const existing = new Set(prev.enabled.map((m) => `${m.providerId}:${m.modelId}`));
+        const newEnabled = [...prev.enabled];
+        models.forEach((modelId) => {
+          const key = `${safeId}:${modelId}`;
+          if (!existing.has(key)) newEnabled.push({ providerId: safeId, modelId });
+        });
+        const next = {
+          ...prev,
+          enabled: newEnabled,
+          defaultModel: prev.defaultModel || (models.length > 0 ? `${safeId}:${models[0]}` : prev.defaultModel),
+        };
+        writeModelConfigAndNotify(next);
+        return next;
+      });
       setSuccess(`成功获取 ${models.length} 个模型`);
       setEditingId(null); setName(""); setApiUrl(""); setApiKey(""); setModelInput("");
     } catch (e: unknown) {
@@ -768,6 +668,29 @@ export function CustomProviderSection({
         if (models.length > 0) {
           setProviderModels((prev) => ({ ...prev, [targetId]: models }));
           onModelsFetched(targetId, models);
+          // 编辑模式 commit:把新加入的 model push 进 enabled(用户主动
+          // 编辑 modelInput 后 commit,与 reconcile 不主动 union 原则一致——
+          // 没在 modelInput 里出现的就不 push,已存在的保持)
+          if (editingId) {
+            setConfig((prev) => {
+              const existing = new Set(prev.enabled.map((m) => `${m.providerId}:${m.modelId}`));
+              const newEnabled = [...prev.enabled];
+              let changed = false;
+              models.forEach((modelId) => {
+                const key = `${targetId}:${modelId}`;
+                if (!existing.has(key)) {
+                  newEnabled.push({ providerId: targetId, modelId });
+                  changed = true;
+                }
+              });
+              if (changed) {
+                const next = { ...prev, enabled: newEnabled };
+                writeModelConfigAndNotify(next);
+                return next;
+              }
+              return prev;
+            });
+          }
         }
       }
       try {
@@ -805,98 +728,113 @@ export function CustomProviderSection({
         <p className="text-xs text-text-muted">配置兼容 OpenAI API 的任意 LLM 服务</p>
       </div>
 
-      {/* Saved providers list */}
+      {/* 已配置的提供商(默认折叠,互斥展开,展开后才显示模型勾选区)
+          替代旧的"已配置的提供商"+"自定义模型"两块独立渲染。
+          - 折叠态:provider 名字 + URL + 模型数 + 已启用数 + 操作按钮
+          - 展开态:头部收起,下方显示该 provider 的模型勾选区(2 列网格)
+          - 同一时刻只有一个 provider 展开(expandedProviderId 互斥)
+          - 头部操作按钮(测试/模型/编辑/删除)stopPropagation,不会触发展开 */}
       {providers.length > 0 && (
         <div className="space-y-2">
           <div className="text-[11px] text-text-muted uppercase tracking-wider">已配置的提供商</div>
-          {providers.map((p) => (
-            <div key={p.id} className="flex items-center gap-3 px-3 py-2.5 rounded-lg bg-bg-card border border-border-primary text-xs">
-              <div className="flex-1 min-w-0">
-                <div className="font-medium text-text-primary truncate">
-                  {p.display_name || p.id}
-                  {p.has_key && <span className="ml-1.5 w-1.5 h-1.5 rounded-full bg-green-400 inline-block" />}
-                </div>
-                <div className="text-[10px] text-text-muted truncate mt-0.5">{p.base_url || "—"} · {p.models.length} 模型</div>
-              </div>
-              <button onClick={() => handleTestConnection(p.id)} disabled={testing === p.id} className="shrink-0 px-2 py-1 rounded text-[10px] bg-bg-tertiary text-text-muted hover:text-accent hover:bg-accent/10 disabled:opacity-40">
-                {testing === p.id ? "..." : "测试"}
-              </button>
-              <button onClick={() => handleFetchModelsForSavedProvider(p.id)} disabled={fetching} className="shrink-0 px-2 py-1 rounded text-[10px] bg-bg-tertiary text-text-muted hover:text-accent hover:bg-accent/10 disabled:opacity-40">
-                模型
-              </button>
-              <button onClick={() => handleEdit(p)} className="shrink-0 px-2 py-1 rounded text-[10px] bg-bg-tertiary text-text-muted hover:text-accent hover:bg-accent/10">
-                编辑
-              </button>
-              <button onClick={() => handleDelete(p.id, p.models)} className="shrink-0 px-2 py-1 rounded text-[10px] bg-red-500/10 text-red-400 hover:bg-red-500/20">
-                删除
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* ── Custom provider models (enable/disable + set-default) ──
-          Models render in a 2-column grid with tight rows, so 5 models
-          take ~96px instead of 200+px and the "新建提供商" form below
-          stays visible. The "设为默认" button stays at the right of each
-          row (only when enabled), preserving the original interaction. */}
-      {Object.keys(customModels).length > 0 && (
-        <div>
-          <div className="text-[11px] text-text-muted uppercase tracking-wider mb-2">自定义模型 ({Object.keys(customModels).length})</div>
-          {Object.entries(customModels).map(([providerId, modelList]) => (
-            <div key={providerId} className="mb-3">
-              <div className="text-[11px] text-text-secondary font-medium mb-1">
-                {providerId.replace(/^custom-/, "")} · {modelList.length} 个
-              </div>
-              <div className="grid grid-cols-2 gap-1.5 max-h-32 overflow-y-auto rounded-lg border border-border-primary bg-bg-card p-2">
-                {modelList.map((modelId) => {
-                  const fullId = `${providerId}:${modelId}`;
-                  const isEnabled = config.enabled.some((m) => `${m.providerId}:${m.modelId}` === fullId);
-                  const isDefault = config.defaultModel === fullId;
-                  const ctx = config.modelContexts?.[fullId];
-                  return (
-                    <div key={`${providerId}-${modelId}`} className={`flex items-center gap-1.5 px-2 py-1 rounded text-[11px] ${isDefault ? "bg-accent/10 border border-accent/30" : "hover:bg-bg-tertiary"}`}>
-                      <button onClick={() => toggleModel(providerId, modelId)} className={`w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0 transition-colors ${isEnabled ? "bg-accent border-accent" : "bg-bg-card border-border-secondary hover:border-accent"}`}>
-                        {isEnabled
-                          ? <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M1.5 4l2 2 3-3" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                          : null}
-                      </button>
-                      <span className={`flex-1 min-w-0 truncate font-mono ${isEnabled ? "text-text-primary" : "text-text-muted"}`}>{modelId}</span>
-                      {isEnabled && (
-                        <>
-                          <select
-                            value={ctx ?? ""}
-                            onChange={(e) => {
-                              const v = e.target.value;
-                              setConfig((prev) => {
-                                const next = { ...prev, modelContexts: { ...(prev.modelContexts ?? {}), [fullId]: v ? Number(v) : 0 } };
-                                storage.setItem(MODEL_CONFIG_KEY, JSON.stringify(next));
-                                return next;
-                              });
-                              // Sync to backend
-                              if (providerId.startsWith("custom-")) {
-                                const ctx = { ...config.modelContexts, [fullId]: v ? Number(v) : 0 };
-                                api.updateCustomProviderModelContexts(providerId, ctx).catch((e) => { console.warn("[SettingsView] modelContext sync failed:", e); });
-                              }
-                            }}
-                            className="bg-bg-tertiary border border-border-secondary rounded px-1 py-0.5 text-[9px] text-text-muted outline-none"
-                          >
-                            <option value="">默认</option>
-                            {CONTEXT_WINDOW_OPTIONS.map((o) => (
-                              <option key={o.value} value={o.value}>{o.label}</option>
-                            ))}
-                          </select>
-                          <button onClick={() => setDefault(fullId)} className={`shrink-0 px-1.5 py-0.5 rounded text-[9px] ${isDefault ? "bg-accent text-accent-on-text" : "border border-border-secondary text-text-muted hover:border-accent hover:text-accent"}`}>
-                            {isDefault ? "默认" : "设为默认"}
-                          </button>
-                        </>
-                      )}
+          {providers.map((p) => {
+            const isExpanded = expandedProviderId === p.id;
+            const models = customModels[p.id] ?? [];
+            const enabledCount = models.filter((m) =>
+              config.enabled.some((e) => `${e.providerId}:${e.modelId}` === `${p.id}:${m}`)
+            ).length;
+            return (
+              <div key={p.id} className="rounded-lg bg-bg-card border border-border-primary overflow-hidden">
+                <div className="flex items-stretch gap-2 px-3 py-2 text-xs">
+                  {/* 头部可点击区:展开/折叠 */}
+                  <button
+                    onClick={() => setExpandedProviderId(isExpanded ? null : p.id)}
+                    aria-expanded={isExpanded}
+                    className="flex items-center gap-2 flex-1 min-w-0 text-left hover:text-accent transition-colors"
+                  >
+                    <ChevronRight size={14} className={`shrink-0 text-text-muted transition-transform duration-150 ${isExpanded ? "rotate-90" : ""}`} />
+                    <div className="flex-1 min-w-0">
+                      <div className="font-medium text-text-primary truncate flex items-center gap-1.5">
+                        {p.display_name || p.id}
+                        {p.has_key && <span className="w-1.5 h-1.5 rounded-full bg-green-400 inline-block shrink-0" />}
+                      </div>
+                      <div className="text-[10px] text-text-muted truncate mt-0.5">
+                        {p.base_url || "—"} · {models.length} 模型{models.length > 0 ? ` · 已启用 ${enabledCount}` : ""}
+                      </div>
                     </div>
-                  );
-                })}
+                  </button>
+                  {/* 操作按钮组:stopPropagation 防误触展开 */}
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button onClick={(e) => { e.stopPropagation(); handleTestConnection(p.id); }} disabled={testing === p.id} className="px-2 py-1 rounded text-[10px] bg-bg-tertiary text-text-muted hover:text-accent hover:bg-accent/10 disabled:opacity-40">
+                      {testing === p.id ? "..." : "测试"}
+                    </button>
+                    <button onClick={(e) => { e.stopPropagation(); handleFetchModelsForSavedProvider(p.id); }} disabled={fetching} className="px-2 py-1 rounded text-[10px] bg-bg-tertiary text-text-muted hover:text-accent hover:bg-accent/10 disabled:opacity-40">
+                      模型
+                    </button>
+                    <button onClick={(e) => { e.stopPropagation(); handleEdit(p); }} className="px-2 py-1 rounded text-[10px] bg-bg-tertiary text-text-muted hover:text-accent hover:bg-accent/10">
+                      编辑
+                    </button>
+                    <button onClick={(e) => { e.stopPropagation(); handleDelete(p.id, p.models); }} className="px-2 py-1 rounded text-[10px] bg-red-500/10 text-red-400 hover:bg-red-500/20">
+                      删除
+                    </button>
+                  </div>
+                </div>
+                {isExpanded && (
+                  <div className="border-t border-border-primary p-3 bg-bg-primary">
+                    {models.length === 0 ? (
+                      <div className="text-[11px] text-text-muted italic text-center py-3">
+                        暂无模型,点上方「模型」按钮重新获取
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-2 gap-1.5 max-h-64 overflow-y-auto">
+                        {models.map((modelId) => {
+                          const fullId = `${p.id}:${modelId}`;
+                          const isEnabled = config.enabled.some((m) => `${m.providerId}:${m.modelId}` === fullId);
+                          const isDefault = config.defaultModel === fullId;
+                          const ctx = config.modelContexts?.[fullId];
+                          return (
+                            <div key={modelId} className={`flex items-center gap-1.5 px-2 py-1.5 rounded text-[11px] ${isDefault ? "bg-accent/10 border border-accent/30" : "hover:bg-bg-tertiary"}`}>
+                              <button onClick={() => toggleModel(p.id, modelId)} className={`w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0 transition-colors ${isEnabled ? "bg-accent border-accent" : "bg-bg-card border-border-secondary hover:border-accent"}`}>
+                                {isEnabled
+                                  ? <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M1.5 4l2 2 3-3" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                                  : null}
+                              </button>
+                              <span className={`flex-1 min-w-0 truncate font-mono ${isEnabled ? "text-text-primary" : "text-text-muted"}`}>{modelId}</span>
+                              {isEnabled && (
+                                <>
+                                  <select
+                                    value={ctx ?? ""}
+                                    onChange={(e) => {
+                                      const v = e.target.value;
+                                      setConfig((prev) => {
+                                        const next = { ...prev, modelContexts: { ...(prev.modelContexts ?? {}), [fullId]: v ? Number(v) : 0 } };
+                                        storage.setItem(MODEL_CONFIG_KEY, JSON.stringify(next));
+                                        return next;
+                                      });
+                                      api.updateCustomProviderModelContexts(p.id, { ...config.modelContexts, [fullId]: v ? Number(v) : 0 }).catch((e) => { console.warn("[SettingsView] modelContext sync failed:", e); });
+                                    }}
+                                    className="bg-bg-tertiary border border-border-secondary rounded px-1 py-0.5 text-[9px] text-text-muted outline-none"
+                                  >
+                                    <option value="">默认</option>
+                                    {CONTEXT_WINDOW_OPTIONS.map((o) => (
+                                      <option key={o.value} value={o.value}>{o.label}</option>
+                                    ))}
+                                  </select>
+                                  <button onClick={() => setDefault(fullId)} className={`shrink-0 px-1.5 py-0.5 rounded text-[9px] ${isDefault ? "bg-accent text-accent-on-text" : "border border-border-secondary text-text-muted hover:border-accent hover:text-accent"}`}>
+                                    {isDefault ? "默认" : "设为默认"}
+                                  </button>
+                                </>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -987,6 +925,92 @@ export function CustomProviderSection({
         </button>
       </div>
 
+    </div>
+  );
+}
+
+// ── Custom Providers Tab (独立 sub-tab,与 ModelTab 并列) ──
+//
+// 把"自定义提供商"从 ModelTab 左栏底部提升为独立 sub-tab,不再混在
+// builtin provider 列表末尾看不见。CustomProvidersTab 持有自己的
+// config state,通过 localStorage + MODEL_CONFIG_CHANGED_EVENT 跟
+// ModelTab 保持同步(单一权威来源 = localStorage)。
+export function CustomProvidersTab() {
+  const safeSetTimeout = useSafeTimeout();
+  const [config, setConfig] = useState<ModelConfigData>(loadModelConfig);
+  const [customModels, setCustomModels] = useState<Record<string, string[]>>({});
+
+  // 监听其他 tab/组件写入的 MODEL_CONFIG_CHANGED_EVENT,把本组件的
+  // config state 重新拉一遍(localStorage 是单一权威来源)。
+  useEffect(() => {
+    const refresh = () => {
+      try {
+        const raw = storage.getItem(MODEL_CONFIG_KEY);
+        if (raw) setConfig({ modelContexts: {}, ...JSON.parse(raw) });
+      } catch {}
+    };
+    const onChanged = () => refresh();
+    window.addEventListener(MODEL_CONFIG_CHANGED_EVENT, onChanged);
+    const onStorage = (e: StorageEvent) => { if (e.key === MODEL_CONFIG_KEY) refresh(); };
+    window.addEventListener("storage", onStorage);
+    return () => {
+      window.removeEventListener(MODEL_CONFIG_CHANGED_EVENT, onChanged);
+      window.removeEventListener("storage", onStorage);
+    };
+  }, []);
+
+  const toggleModel = useCallback((providerId: string, modelId: string) => {
+    setConfig((prev) => {
+      const key = `${providerId}:${modelId}`;
+      const exists = prev.enabled.some((m) => `${m.providerId}:${m.modelId}` === key);
+      const newEnabled = exists
+        ? prev.enabled.filter((m) => `${m.providerId}:${m.modelId}` !== key)
+        : [...prev.enabled, { providerId, modelId }];
+      const defaultCleared = exists && prev.defaultModel === key;
+      const newConfig: ModelConfigData = { enabled: newEnabled, defaultModel: defaultCleared ? "" : prev.defaultModel, modelContexts: prev.modelContexts ?? {} };
+      safeSetTimeout(async () => {
+        writeModelConfigAndNotify(newConfig);
+        if (defaultCleared) {
+          try {
+            const backendCfg = await api.getConfig();
+            backendCfg.model = "";
+            await api.updateConfig(backendCfg);
+          } catch (e) { console.warn("CustomProvidersTab toggleModel: sync cleared default failed", e); }
+        }
+      }, 0);
+      return newConfig;
+    });
+  }, []);
+
+  const setDefault = useCallback((fullId: string) => {
+    setConfig((prev) => {
+      const newConfig = { ...prev, defaultModel: fullId };
+      safeSetTimeout(async () => {
+        writeModelConfigAndNotify(newConfig);
+        try {
+          const backendCfg = await api.getConfig();
+          backendCfg.model = fullId;
+          await api.updateConfig(backendCfg);
+        } catch (e) { console.warn("CustomProvidersTab setDefault: sync model failed", e); }
+      }, 0);
+      return newConfig;
+    });
+  }, []);
+
+  // CustomProvidersTab 不显示 builtin provider 列表,不需要 activeKeys;
+  // CustomProviderSection.handleFetchModelsForSavedProvider 里的 onRefresh()
+  // 在此为 no-op(它只 refresh 外面 ModelTab 的 activeKeys 元数据)。
+  return (
+    <div className="p-6">
+      <CustomProviderSection
+        customModels={customModels}
+        onModelsFetched={(id, models) => setCustomModels((prev) => ({ ...prev, [id]: models }))}
+        onRefresh={() => { /* no-op: CustomProvidersTab 不依赖 activeKeys */ }}
+        toggleModel={toggleModel}
+        setDefault={setDefault}
+        config={config}
+        setConfig={setConfig}
+      />
     </div>
   );
 }
