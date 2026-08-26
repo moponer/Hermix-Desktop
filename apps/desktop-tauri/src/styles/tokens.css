@@ -124,7 +124,10 @@
   --theme-bg-chat: #e8e8e8;                            /* 会话画布: 比侧栏浅一档但明显灰, 白气泡浮起, 与菜单栏区分 */
 }
 
-.dark {
+/* 用 :root.dark 而不是 .dark — 见上方 .dark { --theme-bg-* } 注释里对特异性
+   与继承链的完整解释. 这里定义的 token (--color-*, --shadow-*, --color-btn-*)
+   都应该只作用在 html 上, 由 CSS 变量继承传下去给 children. */
+:root.dark {
   --color-bg-app: #0f0f12;            /* page canvas: deep dark */
   --color-bg-primary: #1c1c20;        /* card: lighter than canvas (clear lift) */
   --color-bg-secondary: #232328;
@@ -193,8 +196,14 @@
 
   /* Scene surfaces — dark values as safety net.
      light 默认在 @theme 块。themes/dark.css 的 :root[data-theme="dark"]
-     特异性 (0,2,0) > .dark (0,1,0) 应当胜出；这里重复声明是为了
-     万一 dark.css 加载失败时仍能保证深色主题右侧面板不变成浅灰。 */
+     特异性 (0,2,0) > :root.dark (0,1,1) 应当胜出；这里重复声明是为了
+     万一 dark.css 加载失败时仍能保证深色主题右侧面板不变成浅灰。
+
+     关键: selector 必须是 :root.dark 而不是 .dark — 后者 (0,1,0) 会匹配
+     body 和 children, 覆盖 themes/*.css 双 :root 在 body 上的继承链,
+     导致 children 上的 var(--color-bg-*) 拿到 tokens 兜底值而非主题值。
+     useTheme 给 body 也挂了 .dark 类, 所以原 .dark 块在 body 上匹配,
+     rainforest 双 :root 块的 :root 部分不匹配 body — body 走兜底. */
   --theme-bg-app:     var(--color-bg-app);
   --theme-bg-sidebar: var(--color-bg-primary);
   --theme-bg-titlebar: #0e0e10;

@@ -1,94 +1,67 @@
 /*
- * Rainforest Theme (雨林 · 冷灰重配色)
- * 原墨绿主题，配色整体替换为冷灰(zinc 家族带极轻冷味) + 冷银 accent。
- * 透明度沿用原雨林的实色方案（面板/卡片/弹层全部不透明，杜绝背景内容透出）。
- * accent-soft / overlay-scrim / modal-outline 等本就半透明的 UI 语义变量，
- * 保留原雨林的 alpha，仅替换 RGB 为冷灰。
- * 无任何蓝紫；场景背景用实色冷灰（非 SVG 景、非玻璃）。
+ * Rainforest Theme (雨林 · 墨绿)
+ * 深森林绿静态色场 + 轻微暗角阴影，无动画、无粒子、无雨。
+ * 基底 = SVG 内部 radialGradient（墨绿场）+ 烘焙暗角（单条 data URI，无 CSS 线性渐变）。
+ * token 在暗色基础上整体染绿，accent 用低饱和鼠尾草绿，无任何蓝紫。
  *
- * NOTE: 不能用 @layer — 非层级化样式优先级高于 @theme 层级,
- * 才能确保 data-theme 变量覆盖 tokens.css 的 @theme 默认值。
+ * NOTE 1: 不能用 @layer — 非层级化样式优先级高于 @theme 层级,
+ * 才能确保 data-theme 变量覆盖 tokens.css 的 @theme 默认值;
+ * 一旦放进 @layer themes, 被先加载时层序反转, 变量会被 @theme 覆盖。
+ *
+ * NOTE 2: 双 :root 选择器把特异性提到 (0,3,0)，绝对赢过 tokens.css 的
+ * .dark 类 (0,1,0) — 否则在 bundle 顺序下，tokens.css 后置的 .dark 块
+ * 会覆盖 rainforest 的 token，导致 rainforest 显示成跟 dark 一样的灰色。
  */
-:root[data-theme="rainforest"] {
-  /* ── Surfaces（冷灰实色：沿用原雨林的不透明方案）── */
-  --color-bg-app:         #1a1f24;
-  --color-bg-primary:     #1c2228;
-  --color-bg-secondary:   #242b32;
-  --color-bg-tertiary:    #303840;
-  --color-bg-hover:       #2c343c;
-  --color-bg-active:      #38414a;
-  --color-bg-card:        #1a2026;
-  --color-bg-elevated:    #20272e;
-  --color-bg-code:        #0e1216;        /* 比卡片 #1a2026 深 2 档: 代码区独立 */
-  --color-bg-code-header: #161b21;        /* 比 code 浅 1 档: header 浮起 */
-  --color-bg-code-border: #33333a;
+:root[data-theme="rainforest"]:root {
+  --color-bg-app:         #0c2516;        /* 主背景边缘：深墨绿基色，足够沉 */
+  --color-bg-primary:     #1a3a26;        /* 侧栏：中墨绿，比主背景亮 5L 浮起 */
+  --color-bg-secondary:   #1f4530;
+  --color-bg-tertiary:    #2a5a3f;        /* 三级：明显墨绿 */
+  --color-bg-hover:       #23472f;
+  --color-bg-active:      #326047;
+  --color-bg-card:        #1a3a26;
+  --color-bg-elevated:    #234a35;        /* 弹层/menu/Toast — 比 sidebar 浅 2L 让层叠自然，不再"飘" */
+  --color-bg-code:        #0e2618;
+  --color-bg-code-header: #16321f;
+  --color-bg-code-border: #345a40;
 
-  --color-chat-assistant-bg: rgba(28, 34, 40, 0.48);
-  --color-chat-tool-bg:     rgba(36, 43, 50, 0.44);
+  --color-border-primary:   #3a6446;
+  --color-border-secondary: #4a7556;
+  --color-border-subtle:    #2c4a36;
 
-  /* ── Borders（冷灰实色描边，非玻璃白描边）── */
-  --color-border-primary:   #2e353c;
-  --color-border-secondary: #3c444c;
-  --color-border-strong:    #5a636c;
-  --color-border-subtle:    #272d33;
+  --color-text-primary:   #e8f3ea;        /* 主文字：绿白 */
+  --color-text-secondary: #c5d8c8;
+  --color-text-tertiary:  #a3bba6;
+  --color-text-muted:     #82a086;
+  --color-text-faint:     #608070;
+  --color-text-on-code:   #d4e6d7;
 
-  /* ── Text（近白，落在冷灰上清晰）── */
-  --color-text-primary:   #f6f7f8;
-  --color-text-secondary: #d7dbe0;
-  --color-text-tertiary:  #b6bcc3;
-  --color-text-muted:     #9aa1a9;
-  --color-text-faint:     #7c828a;
-  --color-text-on-code:   #e4e8ec;
+  --color-accent:            #7fc88f;     /* accent：明亮草绿，绿调明确 */
+  --color-accent-hover:      #95d8a3;
+  --color-accent-soft:       rgba(127, 200, 143, 0.14);
+  --color-accent-soft-strong: rgba(127, 200, 143, 0.24);
+  --color-accent-on-text:    #0e2618;
 
-  /* ── Accent（冷银 / 锆石白，零蓝紫）── */
-  --color-accent:            #c9ced4;
-  --color-accent-hover:      #e0e5ea;
-  --color-accent-soft:       rgba(201, 206, 212, 0.14);   /* α 沿用原雨林 0.14 */
-  --color-accent-soft-strong: rgba(201, 206, 212, 0.24);  /* α 沿用原雨林 0.24 */
-  --color-accent-on-text:    #1a1f24;
+  /* Semantic — 必须有，否则 fallback 到 tokens.css @theme 默认值(亮色 success/warning)
+     在 rainforest 主题下变成亮色提示色，破坏氛围 */
+  --color-success:         #4ade80;
+  --color-success-soft:    rgba(74, 222, 128, 0.16);
+  --color-error:           #f87171;
+  --color-error-soft:      rgba(248, 113, 113, 0.16);
+  --color-warning:         #fbbf24;       /* 暖琥珀，主人之前指定过 */
+  --color-warning-soft:    rgba(251, 191, 36, 0.18);
+  --color-info:            #38bdf8;
+  --color-info-soft:       rgba(56, 189, 248, 0.16);
 
-  /* ── Link（中性冷银，禁蓝）── */
-  --color-link:        #bcc3ca;
-  --color-link-hover:  #d8dee3;
-  --color-link-soft:        #aab2b9;
-  --color-link-soft-hover:  #c8cfd4;
+  --color-overlay-scrim:     rgba(0, 30, 15, 0.72);
+  --color-modal-outline:     rgba(232, 243, 234, 0.08);
 
-  /* ── Semantic（冷灰主题沿用暗色语义色）── */
-  --color-success: #3fcf72;
-  --color-success-soft: rgba(63, 207, 114, 0.14);
-  --color-error: #f26a6a;
-  --color-error-soft: rgba(242, 106, 106, 0.14);
-  --color-warning: #f0a83c;
-  --color-warning-soft: rgba(240, 168, 60, 0.16);
-  --color-text-warning: #f0a83c;
-  --color-info: #aeb8bf;
-  --color-info-soft: rgba(174, 184, 191, 0.16);
+  /* 墨绿静态场：径向渐变 + 烘焙暗角，单条 SVG data URI
+     中心 (#103a23) → 中段 (#0d2c19) → 边缘 (#0c2516)
+     中心仅比边缘亮 4L，整体沉到墨绿场，不再像"打了聚光灯" */
+  --theme-bg-app: url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1200 800' preserveAspectRatio='xMidYMid slice'%3E%3Cdefs%3E%3CradialGradient id='g' cx='50%25' cy='34%25' r='85%25'%3E%3Cstop offset='0%25' stop-color='%23103a23'/%3E%3Cstop offset='48%25' stop-color='%230d2c19'/%3E%3Cstop offset='100%25' stop-color='%230c2516'/%3E%3C/radialGradient%3E%3CradialGradient id='v' cx='50%25' cy='40%25' r='75%25'%3E%3Cstop offset='55%25' stop-color='%23000000' stop-opacity='0'/%3E%3Cstop offset='100%25' stop-color='%23000000' stop-opacity='0.42'/%3E%3C/radialGradient%3E%3C/defs%3E%3Crect width='1200' height='800' fill='url(%23g)'/%3E%3Crect width='1200' height='800' fill='url(%23v)'/%3E%3C/svg%3E");
 
-  /* ── Buttons（磨砂银：实色/半透明填充 + 冷银字/边）── */
-  --color-btn-primary-bg: #c9ced4;
-  --color-btn-primary-text: #1a1f24;
-  --color-btn-primary-hover: #e0e5ea;
-  --color-btn-secondary-bg: rgba(255, 255, 255, 0.07);
-  --color-btn-secondary-text: #d7dbe0;
-  --color-btn-secondary-hover: rgba(255, 255, 255, 0.13);
-  --color-btn-ghost-bg: transparent;
-  --color-btn-ghost-text: #c9ced4;
-  --color-btn-ghost-hover: rgba(255, 255, 255, 0.09);
-
-  /* ── Shadow ── */
-  --shadow-card: none;
-  --shadow-pop: 0 8px 28px rgba(0, 0, 0, 0.28);
-  --shadow-modal: 0 24px 70px rgba(0, 0, 0, 0.46), 0 8px 24px rgba(0, 0, 0, 0.30);
-
-  /* ── Overlay ── */
-  --color-overlay-scrim: rgba(14, 18, 22, 0.70);   /* α 沿用原雨林 0.70 */
-  --color-modal-outline: rgba(255, 255, 255, 0.08); /* α 沿用原雨林 0.08 */
-
-  /* ── 主题背景（实色冷灰，沿用原雨林不透明方案）── */
-  --theme-bg-app:      var(--color-bg-app);
-  --theme-bg-sidebar:  var(--color-bg-secondary);
-  /* titlebar 比 sidebar 深 1 档，形成原生标题栏视觉 */
-  --theme-bg-titlebar: #1f282f;
-  /* chat 比 sidebar 深 3 档（#141a20 vs #242b32），与左侧菜单栏明显区分 */
-  --theme-bg-chat:     #141a20;
+  --theme-bg-sidebar:  var(--color-bg-primary);
+  --theme-bg-titlebar: #08190f;          /* titlebar = bg-app 再深 1 档 */
+  --theme-bg-chat:     var(--color-bg-elevated);  /* chat = elevated 色（明显墨绿），跟 sidebar 区分 */
 }

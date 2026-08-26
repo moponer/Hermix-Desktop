@@ -8,7 +8,7 @@
  *   · 文字用暖深棕（非纯黑），层次分明
  *   · 禁止饱和蓝紫；金色/棕褐色系保留
  */
-:root[data-theme="sunset"] {
+:root[data-theme="sunset"]:root {
   /* ── Surfaces — 暖米色阶（从最浅到最深），全去掉纯白 ── */
   --color-bg-app:          #e8e2d8;       /* page canvas: 灰暖米（非纯黄） */
   --color-bg-primary:      #ede6da;       /* 主卡片：偏暖米，统一色调 */

@@ -3111,7 +3111,15 @@
   color: var(--color-text-primary);
 }
 .dark .chat-tool-call--tool {
-  background: var(--color-chat-tool-bg);
+  /* v9: 弱化 chat-tool-call 容器背景 — var(--color-chat-tool-bg)
+     = rgba(35,35,40,0.55) 叠 canvas #0f0f12 视觉 ≈ #1c1c1f, 整行
+     比上下文文本明显深一档, 主人截图反馈"看着很跳脱". 改用
+     color-mix(in srgb, --color-text-primary 4%, transparent), 与
+     row hover 6% / progress 8% 同手法语言, 默认态几乎透明但仍
+     保留 L1 视觉锚点; hover 时 .dark .tw-msg-row:hover 给 6% 自然
+     拉开两档. rainforest 主题复用 tokens.css 的 .dark 兜底,
+     一处改覆盖两个主题. */
+  background: color-mix(in srgb, var(--color-text-primary) 4%, transparent);
   color: var(--color-text-primary);
 }
 
@@ -3170,7 +3178,8 @@
   color: var(--color-text-primary);
 }
 [data-theme="dark"] .chat-tool-call--tool {
-  background: var(--color-chat-tool-bg);
+  /* v9 同步 — 同 .dark 版本, 用 4% 主色叠加替代 rgba(35,35,40,0.55) */
+  background: color-mix(in srgb, var(--color-text-primary) 4%, transparent);
   color: var(--color-text-primary);
 }
 [data-theme="dark"] .msg-bubble-body {

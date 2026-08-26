@@ -858,7 +858,12 @@
   color: var(--color-text-primary);
 }
 .dark .chat-tool-call--tool {
-  background: transparent;
+  /* 同步 components.css:3113 的 v9 改动 — 不再用 --color-chat-tool-bg
+     (rgba(35,35,40,0.55)), 改用 color-mix 4% 主色叠加, 与 row hover
+     6% / progress 8% 一致语言, 视觉不再跳脱. helpers.css 在 components.css
+     之前加载, 此条虽然被 components.css 覆盖, 同步写一遍避免 cascade
+     顺序调整时被旧 transparent 值回归. */
+  background: color-mix(in srgb, var(--color-text-primary) 4%, transparent);
   color: var(--color-text-primary);
 }
 
@@ -917,7 +922,8 @@
   color: var(--color-text-primary);
 }
 [data-theme="dark"] .chat-tool-call--tool {
-  background: transparent;
+  /* v9 同步 — 同 .dark 版本, 用 4% 主色叠加替代 rgba(35,35,40,0.55) */
+  background: color-mix(in srgb, var(--color-text-primary) 4%, transparent);
   color: var(--color-text-primary);
 }
 [data-theme="dark"] .msg-bubble-body {

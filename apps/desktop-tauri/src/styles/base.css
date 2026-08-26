@@ -104,7 +104,15 @@ code ::selection,
 .error-boundary-fallback__summary { cursor: pointer; font-size: 12px; color: var(--color-text-faint); }
 .error-boundary-fallback__pre { margin-top: 8px; padding: 12px; background: var(--color-bg-secondary); border-radius: var(--radius-md); font-size: 12px; overflow: auto; max-height: 200px; white-space: pre-wrap; word-break: break-word; color: var(--color-error); }
 
-/* ── Toast notifications (bottom-right, Linear/Vercel style) ────── */
+/* ── Toast notifications (bottom-right, premium borderless) ───────
+   Each toast is a floating pill: icon capsule carrying the variant
+   accent, and a thin progress strip along the bottom edge that
+   drains to 0 over the toast's lifetime so users can read the
+   remaining dwell time at a glance. The base rule uses a flat
+   elevated background that reads in any theme; the .dark upgrade
+   below layers the glass blur + tinted accent glow on top, so
+   light themes don't get a white toast bleeding into a white
+   page background. */
 .toast-container {
   position: fixed;
   right: 20px;
@@ -119,31 +127,62 @@ code ::selection,
   pointer-events: none;
 }
 .toast {
+  --toast-tint:        color-mix(in srgb, var(--toast-accent) 9%, transparent);
+  --toast-tint-soft:   color-mix(in srgb, var(--toast-accent) 5%, transparent);
+  --toast-halo:        color-mix(in srgb, var(--toast-accent) 18%, transparent);
+  --toast-bg-tint:     color-mix(in srgb, var(--toast-accent) 4%, transparent);
+  --toast-bg-fallback: var(--color-bg-elevated);
+  --toast-shadow:      color-mix(in srgb, var(--toast-accent) 14%, transparent);
   position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 9px;
-  min-width: 180px;
+  gap: 10px;
+  min-width: 200px;
   max-width: min(380px, calc(100vw - 32px));
-  padding: 8px 10px 8px 12px;
-  border-radius: var(--radius-md, 8px);
-  background: var(--color-bg-elevated);
-  border: 1px solid var(--color-border-primary);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12), 0 1px 3px rgba(0, 0, 0, 0.06);
+  padding: 10px 12px 12px 14px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--toast-bg-fallback);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.08),
+    0 6px 16px var(--toast-shadow);
   color: var(--color-text-primary);
   pointer-events: auto;
   cursor: pointer;
   overflow: hidden;
-  animation: toast-in 0.18s var(--ease-out);
+  isolation: isolate;
+  animation: toast-in 0.22s var(--ease-out);
+  transition: transform var(--duration-fast) ease, box-shadow var(--duration-fast) ease;
 }
-.toast__rail {
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 2px;
-  background: var(--toast-accent);
+.toast:hover {
+  transform: translateY(-1px);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.10),
+    0 10px 24px var(--toast-shadow);
 }
+/* Dark theme upgrade: glassy tinted wash + halo + soft accent glow */
+.dark .toast {
+  background:
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--color-bg-elevated) 92%, transparent),
+      color-mix(in srgb, var(--color-bg-elevated) 86%, transparent)),
+    var(--toast-bg-tint);
+  -webkit-backdrop-filter: blur(14px) saturate(135%);
+  backdrop-filter: blur(14px) saturate(135%);
+  box-shadow:
+    inset 0 0 0 1px var(--toast-halo),
+    0 1px 2px rgba(0, 0, 0, 0.25),
+    0 6px 18px color-mix(in srgb, var(--toast-accent) 14%, transparent),
+    0 18px 36px -12px color-mix(in srgb, var(--toast-accent) 22%, transparent);
+}
+.dark .toast:hover {
+  box-shadow:
+    inset 0 0 0 1px var(--toast-halo),
+    0 1px 2px rgba(0, 0, 0, 0.30),
+    0 8px 24px color-mix(in srgb, var(--toast-accent) 18%, transparent),
+    0 22px 44px -14px color-mix(in srgb, var(--toast-accent) 28%, transparent);
+}
+.toast__rail { display: none; }
 .toast--error    { --toast-accent: var(--color-error); }
 .toast--warning  { --toast-accent: var(--color-warning); }
 .toast--info     { --toast-accent: var(--color-info); }
@@ -153,37 +192,74 @@ code ::selection,
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 16px;
-  height: 16px;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
   color: var(--toast-accent);
+  background:
+    radial-gradient(circle at 30% 25%,
+      color-mix(in srgb, var(--toast-accent) 32%, transparent),
+      color-mix(in srgb, var(--toast-accent) 14%, transparent) 75%);
+  box-shadow:
+    0 0 0 3.5px color-mix(in srgb, var(--toast-accent) 9%, transparent),
+    inset 0 0 0 1px color-mix(in srgb, var(--toast-accent) 18%, transparent);
 }
 .toast__msg {
   flex: 1 1 auto;
   min-width: 0;
   font-size: 12.5px;
-  line-height: 1.45;
+  line-height: 1.4;
   color: var(--color-text-primary);
   word-break: break-word;
+  letter-spacing: 0.005em;
 }
 .toast__close {
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
   background: none;
   border: none;
   cursor: pointer;
   color: var(--color-text-muted);
   opacity: 0.55;
   padding: 0;
-  border-radius: var(--radius-sm, 4px);
+  border-radius: 999px;
   margin-left: 2px;
-  transition: opacity var(--duration-fast) ease, background var(--duration-fast) ease;
+  transition: opacity var(--duration-fast) ease, background var(--duration-fast) ease, color var(--duration-fast) ease, transform var(--duration-fast) ease;
 }
-.toast__close:hover { opacity: 0.95; background: var(--color-bg-tertiary); }
-@keyframes toast-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }
+.toast__close:hover {
+  opacity: 1;
+  background: color-mix(in srgb, var(--toast-accent) 12%, transparent);
+  color: var(--toast-accent);
+  transform: scale(1.06);
+}
+.toast__progress {
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: 6px;
+  height: 2px;
+  border-radius: 999px;
+  background: linear-gradient(90deg,
+    color-mix(in srgb, var(--toast-accent) 65%, transparent),
+    color-mix(in srgb, var(--toast-accent) 30%, transparent));
+  transform-origin: left center;
+  animation: toast-progress linear forwards;
+  animation-duration: inherit;
+  pointer-events: none;
+  z-index: -1;
+}
+@keyframes toast-progress {
+  from { transform: scaleX(1); opacity: 0.85; }
+  to   { transform: scaleX(0); opacity: 0.4; }
+}
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(-8px) scale(0.96); }
+  to   { opacity: 1; transform: translateY(0)    scale(1); }
+}
 
 /* ── Spreadsheet cell borders ─────────────────────────────────── */
 .cell-border-subtle {
