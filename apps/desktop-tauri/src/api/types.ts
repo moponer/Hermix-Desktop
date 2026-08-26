@@ -466,6 +466,8 @@ export interface CustomProviderSummary {
   base_url: string;
   has_key: boolean;
   models: string[];
+  context_window?: number;
+  model_contexts?: Record<string, number>;
 }
 
 export interface CustomProviderCreateRequest {
@@ -477,7 +479,10 @@ export interface CustomProviderCreateRequest {
 }
 
 export interface CustomProviderFetchModelsResponse {
-  models: { id: string }[];
+  // `context_window` 由后端 fetch_models 从 `/v1/models` 响应里探测并写入
+  // `LlmProviderConfig.model_contexts`（同时持久化到 config.yaml）。多数 OpenAI
+  // 兼容 API 不返回该字段 → `undefined` 时由前端 catalog 兜底或显式 128K 默认。
+  models: { id: string; context_window?: number }[];
   error: string | null;
 }
 

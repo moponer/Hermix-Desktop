@@ -14,6 +14,8 @@ import {
   loadModelCache,
   saveModelCache,
   CONTEXT_WINDOW_OPTIONS,
+  resolveContextWindow,
+  defaultOptionLabel,
   type ModelConfigData,
 } from "./settingsUtils";
 
@@ -418,9 +420,15 @@ export function ModelTab() {
                       const ctx = config.modelContexts?.[fullId];
                       return (
                         <div key={modelId} className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs ${isDefault ? "bg-accent/10 border border-accent/30" : "hover:bg-bg-tertiary"}`}>
-                          <button onClick={() => toggleModel(selectedProvider.id, modelId)} className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${isEnabled ? "bg-accent border-accent" : "bg-bg-card border-border-secondary hover:border-accent"}`}>
+                          <button onClick={() => {
+                            toggleModel(selectedProvider.id, modelId);
+                            const wasEnabled = config.enabled.some((m) => `${m.providerId}:${m.modelId}` === fullId);
+                            const newCount = wasEnabled ? config.enabled.length - 1 : config.enabled.length + 1;
+                            setInfo(wasEnabled ? `✓ 已取消 · 剩 ${newCount} 个模型启用中` : `✓ 已保存 · 共 ${newCount} 个模型启用中`);
+                            setTimeout(() => setInfo(""), 2500);
+                          }} className={`w-4 h-4 rounded border-2 flex items-center justify-center transition-colors ${isEnabled ? "bg-accent border-accent" : "bg-transparent border-text-muted hover:border-accent"}`}>
                             {isEnabled
-                              ? <svg width="9" height="9" viewBox="0 0 9 9" fill="none"><path d="M1.5 4.5l2 2 4-4" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                              ? <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 5l2 2 4-4" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
                               : null}
                           </button>
                           <span className={`flex-1 font-mono min-w-0 truncate ${isEnabled ? "text-text-primary" : "text-text-muted"}`}>{modelId}</span>
@@ -441,9 +449,10 @@ export function ModelTab() {
                                     api.updateCustomProviderModelContexts(selectedProvider.id, allCtx).catch((e) => { console.warn("[SettingsView] modelContext sync failed:", e); });
                                   }
                                 }}
+                                title="上下文窗口大小；空 = 后端 catalog 兜底（通常 128K）"
                                 className="bg-bg-tertiary border border-border-secondary rounded px-1 py-0.5 text-[10px] text-text-muted outline-none"
                               >
-                                <option value="">默认</option>
+                                <option value="">{defaultOptionLabel(resolveContextWindow(modelId, ctx, null))}</option>
                                 {CONTEXT_WINDOW_OPTIONS.map((o) => (
                                   <option key={o.value} value={o.value}>{o.label}</option>
                                 ))}
@@ -524,12 +533,45 @@ export function CustomProviderSection({
       if (models.length === 0) { setError("未返回任何模型"); setFetching(false); return; }
       setProviderModels((prev) => ({ ...prev, [id]: models }));
       onModelsFetched(id, models);
+      // 把后端探测的 per-model context_window merge 进 config.modelContexts
+      // —— 只填用户**没显式设过**的（`config.modelContexts[fullId]` 缺失
+      // 或 0）。后端 fetch_models 已把探测值持久化到 config.yaml 的
+      // `LlmProviderConfig.model_contexts`，但前端 localStorage 不知道；
+      // 这一步把"探测值"同步到 localStorage，UI 才能在 select 默认选项
+      // 显示"默认 (200K·探测)"。
+      const probedWithWindow = resp.models.filter((m) => typeof m.context_window === "number" && (m.context_window as number) > 0);
+      if (probedWithWindow.length > 0) {
+        setConfig((prev) => {
+          const current = prev.modelContexts ?? {};
+          const nextContexts: Record<string, number> = { ...current };
+          let changed = false;
+          for (const m of probedWithWindow) {
+            const key = `${id}:${m.id}`;
+            const cw = m.context_window as number;
+            if (!current[key] || current[key] === 0) {
+              nextContexts[key] = cw;
+              changed = true;
+            }
+          }
+          if (!changed) return prev;
+          const nextCfg = { ...prev, modelContexts: nextContexts };
+          writeModelConfigAndNotify(nextCfg);
+          // 同步到后端（custom provider 走 PUT /api/custom-providers/{id}/model-contexts）
+          api.updateCustomProviderModelContexts(id, nextContexts).catch((e) => { console.warn("[CustomProviderSection] sync probed contexts failed:", e); });
+          return nextCfg;
+        });
+      }
+      // 刷新 provider 列表（拿到最新 model_contexts 用于 select 默认项展示）
+      api.getCustomProviders().then((list) => setProviders(list)).catch(() => { /* non-fatal */ });
       onRefresh();
       // 与 reconcile 的"用户主动勾选才 enable"原则一致:fetched 后不
-      // 主动 writeModelConfigAndNotify,让用户在「自定义模型」区域手动
-      // 勾选要启用的。已存在于 config.enabled 的保持不动,新拉到的默认
-      // 未勾选(isEnabled = config.enabled 中不存在的视为取消勾选)。
-      setSuccess(`成功获取 ${models.length} 个模型,请在「自定义模型」区域勾选要启用的`);
+      // 主动 writeModelConfigAndNotify(关于 enabled),让用户在「自定义模型」
+      // 区域手动勾选要启用的。已存在于 config.enabled 的保持不动,新
+      // 拉到的默认未勾选。
+      const probedHint = probedWithWindow.length > 0
+        ? `, ${probedWithWindow.length} 个已自动填入探测的 context_window`
+        : "";
+      setSuccess(`成功获取 ${models.length} 个模型${probedHint},请在「自定义模型」区域勾选要启用的`);
     } catch (e) {
       setError(`获取模型失败: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -613,7 +655,9 @@ export function CustomProviderSection({
       setModelInput(models.join(", "));
       setProviderModels((prev) => ({ ...prev, [safeId]: models }));
       onModelsFetched(safeId, models);
-      onRefresh();
+      // 新建流程同步 merge 探测的 per-model context_window（与已配置 provider
+      // 处理路径一致：后端已持久化到 config.yaml，前端 localStorage 也要跟上）
+      const probedWithWindow = resp.models.filter((m) => typeof m.context_window === "number" && (m.context_window as number) > 0);
       // 新建流程一次性 commit:把 fetched models 默认加进 enabled。
       // updateCustomModels 改完不主动 push,这里由"提交"动作显式
       // 写一次 enabled(等同于"用户预勾选 fetched models")。
@@ -624,15 +668,32 @@ export function CustomProviderSection({
           const key = `${safeId}:${modelId}`;
           if (!existing.has(key)) newEnabled.push({ providerId: safeId, modelId });
         });
+        // 把探测的 context_window 同步进 modelContexts（新建流程 modelContexts 必为空，全填）
+        const currentContexts = prev.modelContexts ?? {};
+        const nextContexts: Record<string, number> = { ...currentContexts };
+        for (const m of probedWithWindow) {
+          const key = `${safeId}:${m.id}`;
+          if (!currentContexts[key] || currentContexts[key] === 0) {
+            nextContexts[key] = m.context_window as number;
+          }
+        }
         const next = {
           ...prev,
           enabled: newEnabled,
           defaultModel: prev.defaultModel || (models.length > 0 ? `${safeId}:${models[0]}` : prev.defaultModel),
+          modelContexts: nextContexts,
         };
         writeModelConfigAndNotify(next);
+        // 同步探测值到后端（与 handleFetchModelsForSavedProvider 一致）
+        if (probedWithWindow.length > 0) {
+          api.updateCustomProviderModelContexts(safeId, nextContexts).catch((e) => { console.warn("[CustomProviderSection] sync probed contexts (new) failed:", e); });
+        }
         return next;
       });
-      setSuccess(`成功获取 ${models.length} 个模型`);
+      // 刷新 provider 列表（拿到最新 model_contexts 给 select 默认项展示）
+      api.getCustomProviders().then((list) => setProviders(list)).catch(() => { /* non-fatal */ });
+      onRefresh();
+      setSuccess(`成功获取 ${models.length} 个模型${probedWithWindow.length > 0 ? `, ${probedWithWindow.length} 个已自动填入探测的 context_window` : ""}`);
       setEditingId(null); setName(""); setApiUrl(""); setApiKey(""); setModelInput("");
     } catch (e: unknown) {
       if (e instanceof Error) {
@@ -794,9 +855,19 @@ export function CustomProviderSection({
                           const ctx = config.modelContexts?.[fullId];
                           return (
                             <div key={modelId} className={`flex items-center gap-1.5 px-2 py-1.5 rounded text-[11px] ${isDefault ? "bg-accent/10 border border-accent/30" : "hover:bg-bg-tertiary"}`}>
-                              <button onClick={() => toggleModel(p.id, modelId)} className={`w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0 transition-colors ${isEnabled ? "bg-accent border-accent" : "bg-bg-card border-border-secondary hover:border-accent"}`}>
+                              <button onClick={() => {
+                                toggleModel(p.id, modelId);
+                                // 视觉反馈:绿色"已保存"banner,2.5s 自动清。
+                                // 否则主人以为勾选没生效 = "没法保存"。
+                                const wasEnabled = config.enabled.some((m) => `${m.providerId}:${m.modelId}` === fullId);
+                                const newCount = wasEnabled
+                                  ? config.enabled.length - 1
+                                  : config.enabled.length + 1;
+                                setSuccess(wasEnabled ? `✓ 已取消 · 剩 ${newCount} 个模型启用中` : `✓ 已保存 · 共 ${newCount} 个模型启用中`);
+                                setTimeout(() => setSuccess(""), 2500);
+                              }} className={`w-4 h-4 rounded border-2 flex items-center justify-center shrink-0 transition-colors ${isEnabled ? "bg-accent border-accent" : "bg-transparent border-text-muted hover:border-accent"}`}>
                                 {isEnabled
-                                  ? <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M1.5 4l2 2 3-3" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                                  ? <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 5l2 2 4-4" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
                                   : null}
                               </button>
                               <span className={`flex-1 min-w-0 truncate font-mono ${isEnabled ? "text-text-primary" : "text-text-muted"}`}>{modelId}</span>
@@ -813,14 +884,19 @@ export function CustomProviderSection({
                                       });
                                       api.updateCustomProviderModelContexts(p.id, { ...config.modelContexts, [fullId]: v ? Number(v) : 0 }).catch((e) => { console.warn("[SettingsView] modelContext sync failed:", e); });
                                     }}
+                                    title="上下文窗口大小；空 = 后端 catalog 兜底（通常 128K）"
                                     className="bg-bg-tertiary border border-border-secondary rounded px-1 py-0.5 text-[9px] text-text-muted outline-none"
                                   >
-                                    <option value="">默认</option>
+                                    <option value="">{defaultOptionLabel(resolveContextWindow(modelId, ctx, p.model_contexts?.[modelId]))}</option>
                                     {CONTEXT_WINDOW_OPTIONS.map((o) => (
                                       <option key={o.value} value={o.value}>{o.label}</option>
                                     ))}
                                   </select>
-                                  <button onClick={() => setDefault(fullId)} className={`shrink-0 px-1.5 py-0.5 rounded text-[9px] ${isDefault ? "bg-accent text-accent-on-text" : "border border-border-secondary text-text-muted hover:border-accent hover:text-accent"}`}>
+                                  <button onClick={() => {
+                                    setDefault(fullId);
+                                    setSuccess(`✓ 默认模型已设为 ${modelId}`);
+                                    setTimeout(() => setSuccess(""), 2500);
+                                  }} className={`shrink-0 px-1.5 py-0.5 rounded text-[9px] ${isDefault ? "bg-accent text-accent-on-text" : "border border-text-muted text-text-secondary hover:border-accent hover:text-accent"}`}>
                                     {isDefault ? "默认" : "设为默认"}
                                   </button>
                                 </>

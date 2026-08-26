@@ -65,6 +65,147 @@ export const CONTEXT_WINDOW_OPTIONS = [
   { label: "1M", value: 1_000_000 },
 ] as const;
 
+// ── Context window resolution (前端 catalog 镜像 + 来源透明化) ─────
+//
+// 后端权威链路在 `crates/hermix-intelligence/src/model_metadata.rs::get_model_context_length_with`:
+//   L1 providers.model_contexts[id] → L2 providers.context_window →
+//   L3 known_models() + DEFAULT_CONTEXT_LENGTHS → L4 DEFAULT_FALLBACK_CONTEXT (128_000)
+//
+// 前端只做 best-effort 镜像用来在 UI 上展示「默认（N·来源）」，命中规则
+// 跟后端 `DEFAULT_CONTEXT_LENGTHS` longest-key-first + contains 一致。
+// 前端 catalog miss 时显示 128K·兜底，与后端 fallback 完全对齐。
+export type ContextWindowSource =
+  | "user"      // 用户在 select 里手动选了具体值（CONTEXT_WINDOW_OPTIONS 之一）
+  | "probed"    // 后端 fetch_models 从 /v1/models 探测并持久化到 model_contexts
+  | "catalog"   // 命中前端 catalog 镜像（known_models() / DEFAULT_CONTEXT_LENGTHS 镜像）
+  | "fallback"; // 都 miss → 128K 兜底（与后端 DEFAULT_FALLBACK_CONTEXT 对齐）
+
+export interface ContextWindowResolution {
+  value: number;
+  source: ContextWindowSource;
+}
+
+// 前端 catalog 镜像（mirror of DEFAULT_CONTEXT_LENGTHS in
+// `crates/hermix-intelligence/src/model_metadata.rs:52-...`）。
+// 规则：longest-key-first + contains 匹配（lowercase），保持与后端一致。
+// 加新条目务必同步后端，反之亦然（避免 UI 显示「200K·catalog」但实际是 128K·兜底）。
+const CATALOG_PREFIX_TABLE: ReadonlyArray<readonly [string, number]> = [
+  // Claude 4.6 (1M)
+  ["claude-opus-4-6", 1_000_000],
+  ["claude-sonnet-4-6", 1_000_000],
+  ["claude-opus-4.6", 1_000_000],
+  ["claude-sonnet-4.6", 1_000_000],
+  ["claude", 200_000],
+  // OpenAI
+  ["gpt-4.1", 1_047_576],
+  ["gpt-5", 128_000],
+  ["gpt-4", 128_000],
+  // Google
+  ["gemini", 1_048_576],
+  ["gemma-4-31b", 256_000],
+  ["gemma-3", 131_072],
+  ["gemma", 8_192],
+  // DeepSeek
+  ["deepseek", 128_000],
+  // Meta
+  ["llama", 131_072],
+  // Qwen
+  ["qwen3-coder-plus", 1_000_000],
+  ["qwen3-coder", 262_144],
+  ["qwen", 131_072],
+  // MiniMax
+  ["minimax", 204_800],
+  // GLM
+  ["glm", 202_752],
+  // xAI Grok
+  ["grok-4-1-fast", 2_000_000],
+  ["grok-4-fast", 2_000_000],
+  ["grok-4.20", 2_000_000],
+  ["grok-code-fast", 256_000],
+  ["grok-4", 256_000],
+  ["grok-3", 131_072],
+  ["grok-2", 131_072],
+  ["grok", 131_072],
+  // Kimi / Moonshot
+  ["kimi", 200_000],
+  ["moonshot", 200_000],
+  // 主人自营（hermix）专属 provider，命中大模型给个合理兜底
+  ["agnes", 128_000],
+];
+
+const CATALOG_SORTED: ReadonlyArray<readonly [string, number]> =
+  [...CATALOG_PREFIX_TABLE].sort((a, b) => b[0].length - a[0].length);
+
+function lookupCatalog(modelId: string): number | null {
+  const m = modelId.toLowerCase();
+  for (const [key, value] of CATALOG_SORTED) {
+    if (m.includes(key)) return value;
+  }
+  return null;
+}
+
+export const DEFAULT_FALLBACK_CONTEXT = 128_000;
+
+/**
+ * 解析「当前 model 的 context_window 实际值 + 来源」。
+ *
+ * 优先级（与后端 `get_model_context_length_with` 一致）：
+ *   1. `userContext` > 0 → user（用户在 select 里选了具体值）
+ *   2. `probedContext` > 0 → probed（后端 fetch_models 探测 + 持久化）
+ *   3. 命中前端 catalog 镜像 → catalog
+ *   4. 都 miss → fallback (128K)
+ *
+ * @param modelId 例如 "gpt-4o" / "agnes-2.5-flash"
+ * @param userContext 来自 config.modelContexts[fullId]（用户在 select 选的值）
+ * @param probedContext 来自 GET /api/custom-providers 的 model_contexts（已持久化探测值）
+ */
+export function resolveContextWindow(
+  modelId: string,
+  userContext: number | null | undefined,
+  probedContext: number | null | undefined,
+): ContextWindowResolution {
+  if (typeof userContext === "number" && userContext > 0) {
+    return { value: userContext, source: "user" };
+  }
+  if (typeof probedContext === "number" && probedContext > 0) {
+    return { value: probedContext, source: "probed" };
+  }
+  const hit = lookupCatalog(modelId);
+  if (hit !== null) {
+    return { value: hit, source: "catalog" };
+  }
+  return { value: DEFAULT_FALLBACK_CONTEXT, source: "fallback" };
+}
+
+const SOURCE_LABEL: Record<ContextWindowSource, string> = {
+  user: "已配置",
+  probed: "探测",
+  catalog: "内置",
+  fallback: "兜底",
+};
+
+/**
+ * 把 tokens 数渲染成「128K / 200K / 1M / 2M」短标签（用于 select option 文案）。
+ */
+export function formatContextWindow(tokens: number): string {
+  if (tokens >= 1_000_000) {
+    const m = tokens / 1_000_000;
+    return Number.isInteger(m) ? `${m}M` : `${m.toFixed(1)}M`;
+  }
+  if (tokens >= 1_000) {
+    const k = Math.round(tokens / 1_000);
+    return `${k}K`;
+  }
+  return `${tokens}`;
+}
+
+/**
+ * 给 select 的默认 option 生成展示文案：「默认 (200K·catalog)」。
+ */
+export function defaultOptionLabel(resolution: ContextWindowResolution): string {
+  return `默认 (${formatContextWindow(resolution.value)}·${SOURCE_LABEL[resolution.source]})`;
+}
+
 // ── Advanced config ────────────────────────────────
 
 export interface AdvancedConfig {
