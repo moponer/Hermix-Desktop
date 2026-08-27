@@ -1,0 +1,23 @@
+[package]
+name = "hermix-coreutils"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Native Rust implementations of common coreutils commands for the hermix shell dispatch fast path."
+
+[dependencies]
+hermix-core = { workspace = true }
+walkdir = "2"
+regex = { workspace = true }
+chrono = { workspace = true }
+dirs = "5"
+filetime = "0.2"
+which = "6"
+flate2 = "1"
+base64 = { workspace = true }
+sha2 = { workspace = true }
+hex = "0.4"
+similar = "2"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+tar = "0.4"
+shell-words = "1.1"
