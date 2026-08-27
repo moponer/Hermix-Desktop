@@ -551,6 +551,21 @@ export interface WorkspaceEntry {
   updated_at: number;
 }
 
+/** 模板表清单项（GET /api/workspace-templates 的 tables 元素）。 */
+export interface TemplateTableMeta {
+  id: string;
+  name: string;
+}
+
+/** 内置工作台模板元信息（M6.3：列表页展示用，不含 schema 全文）。 */
+export interface TemplateMeta {
+  id: string;
+  name: string;
+  icon: string;
+  description: string;
+  tables: TemplateTableMeta[];
+}
+
 /** 工作台详情（注册表条目 + 定义 schema）。 */
 export interface WorkspaceDetail {
   id: string;

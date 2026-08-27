@@ -1,6 +1,6 @@
 // Hermix Desktop API Client — REST 运行时（从 api.ts 拆分；类型见 ./types，WS 见 ./ws）
 import type { ChatMessage, Session, AutomationTask } from "../types";
-import type { WorkspaceEntry, WorkspaceDetail, WorkspaceSchema } from "../types";
+import type { WorkspaceEntry, WorkspaceDetail, WorkspaceSchema, TemplateMeta } from "../types";
 import { storage, STORAGE_KEYS } from "../utils/storageCompat";
 // v5: reuse detectToolError from messageParser for errorReason extraction
 // on reloaded tool messages — same helper as the live-streaming path.
@@ -217,6 +217,23 @@ export async function createWorkspace(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name, icon }),
   });
+}
+
+// ── Workspace Templates（内置模板，M6）─────────────────────
+
+/** 内置模板列表（元信息 + 表清单，不含 schema 全文）。 */
+export async function listWorkspaceTemplates(): Promise<TemplateMeta[]> {
+  return fetchJSON<TemplateMeta[]>("/api/workspace-templates");
+}
+
+/** 按模板一键建工作台（返回新工作台 id + 自测摘要）。 */
+export async function createWorkspaceFromTemplate(
+  templateId: string,
+): Promise<{ ok: boolean; id: string; name: string; smoke: string[] }> {
+  return fetchJSON<{ ok: boolean; id: string; name: string; smoke: string[] }>(
+    `/api/workspace-templates/${encodeURIComponent(templateId)}/create`,
+    { method: "POST" },
+  );
 }
 
 /** 获取工作台详情（注册表 + schema）。 */

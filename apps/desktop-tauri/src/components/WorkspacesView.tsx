@@ -18,11 +18,17 @@ import {
   Trash2,
   Loader2,
   LayoutDashboard,
+  LayoutGrid,
   X,
 } from "lucide-react";
 import type { Layout } from "react-grid-layout";
 import * as api from "../api";
-import type { WorkspaceDetail, WorkspaceEntry, WorkspaceModule } from "../types";
+import type {
+  WorkspaceDetail,
+  WorkspaceEntry,
+  WorkspaceModule,
+  TemplateMeta,
+} from "../types";
 import { toastError, toastSuccess } from "../hooks/useToast";
 import { WorkspaceRenderer } from "./workspace/WorkspaceRenderer";
 
@@ -51,6 +57,10 @@ export function WorkspacesView() {
   const [actingId, setActingId] = useState<string | null>(null);
   // 布局保存防抖 timer
   const layoutTimer = useRef<number | null>(null);
+  // 模板选择（M6.5）：懒加载一次 + 面板开关
+  const [templates, setTemplates] = useState<TemplateMeta[] | null>(null);
+  const [showTemplates, setShowTemplates] = useState(false);
+  const [creatingTemplate, setCreatingTemplate] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -149,6 +159,39 @@ export function WorkspacesView() {
       toastError(`创建工作台失败: ${String(e)}`);
     }
   }, [draft, refresh]);
+
+  // 打开模板面板（懒加载一次）
+  const openTemplates = useCallback(async () => {
+    setShowTemplates((prev) => !prev);
+    if (templates === null) {
+      try {
+        setTemplates(await api.listWorkspaceTemplates());
+      } catch (e) {
+        toastError(`加载模板失败: ${String(e)}`);
+        setShowTemplates(false);
+      }
+    }
+  }, [templates]);
+
+  // 按模板一键建工作台（复用 create_from_schema；成功后切到新 tab）
+  const handleCreateFromTemplate = useCallback(
+    async (tpl: TemplateMeta) => {
+      if (creatingTemplate) return; // 防连点
+      setCreatingTemplate(tpl.id);
+      try {
+        const { id, name, smoke } = await api.createWorkspaceFromTemplate(tpl.id);
+        toastSuccess(`工作台「${name}」已按模板创建${smoke.length ? "" : ""}`);
+        setShowTemplates(false);
+        await refresh();
+        setActiveId(id);
+      } catch (e) {
+        toastError(`按模板创建失败: ${String(e)}`);
+      } finally {
+        setCreatingTemplate(null);
+      }
+    },
+    [creatingTemplate, refresh],
+  );
 
   const handleRename = useCallback(
     async (id: string) => {
@@ -275,6 +318,73 @@ export function WorkspacesView() {
             <Plus size={13} /> 新建
           </button>
         )}
+
+        {/* 模板按钮（M6.5）：一键按预置台账创建 */}
+        <div className="relative shrink-0">
+          <button
+            onClick={() => void openTemplates()}
+            className="flex items-center gap-1 rounded-md px-2 py-1 text-[12px] transition-opacity hover:opacity-80"
+            style={{ color: "var(--color-text-secondary)" }}
+            title="从模板创建工作台"
+          >
+            <LayoutGrid size={13} /> 模板
+          </button>
+          {showTemplates && (
+            <div
+              className="absolute right-0 top-full z-30 mt-1 w-72 rounded-lg border p-2 shadow-lg"
+              style={{
+                borderColor: "var(--color-border-secondary)",
+                background: "var(--color-bg-elevated)",
+              }}
+              onMouseLeave={() => setShowTemplates(false)}
+            >
+              <div className="mb-1.5 text-[12px] font-medium" style={{ color: "var(--color-text-primary)" }}>
+                预置工作台模板
+              </div>
+              {templates === null ? (
+                <div className="flex items-center gap-1.5 py-2 text-[12px]" style={{ color: "var(--color-text-faint)" }}>
+                  <Loader2 size={13} className="animate-spin" /> 加载中…
+                </div>
+              ) : (
+                <div className="flex max-h-72 flex-col gap-1.5 overflow-y-auto">
+                  {templates.map((t) => (
+                    <button
+                      key={t.id}
+                      disabled={creatingTemplate !== null}
+                      onClick={() => void handleCreateFromTemplate(t)}
+                      className="flex w-full flex-col gap-0.5 rounded-md border px-2.5 py-2 text-left transition-colors"
+                      style={{
+                        borderColor: "var(--color-border-secondary)",
+                        background: "var(--color-bg-base)",
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.opacity = "0.85";
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.opacity = "1";
+                      }}
+                    >
+                      <span className="flex items-center gap-1.5 text-[12.5px] font-medium" style={{ color: "var(--color-text-primary)" }}>
+                        {creatingTemplate === t.id ? (
+                          <Loader2 size={12} className="animate-spin" />
+                        ) : (
+                          <LayoutGrid size={12} />
+                        )}
+                        {t.name}
+                      </span>
+                      <span className="text-[11.5px] leading-snug" style={{ color: "var(--color-text-secondary)" }}>
+                        {t.description}
+                      </span>
+                      <span className="text-[11px]" style={{ color: "var(--color-text-faint)" }}>
+                        {t.tables.map((tb) => tb.name).join(" · ")}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* ── 内容区（M1.4 起由 WorkspaceRenderer 渲染 schema 模块） ── */}
