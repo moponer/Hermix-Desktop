@@ -345,6 +345,7 @@ mod tests {
         // 应当排除：点开头、dist、src
         std::fs::create_dir_all(tmp.join("dist")).unwrap();
         std::fs::write(tmp.join("dist").join("skip.txt"), b"x").unwrap();
+        std::fs::create_dir_all(tmp.join("src")).unwrap();
         std::fs::write(tmp.join("src").join("main.tsx"), b"ignored").unwrap();
 
         let archive = build(&tmp).unwrap();

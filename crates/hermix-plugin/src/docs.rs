@@ -414,7 +414,14 @@ mod tests {
     use serde_json::json;
 
     fn make_tmp(suffix: &str) -> std::path::PathBuf {
-        std::env::temp_dir().join(format!("docs_{}_{}", std::process::id(), suffix))
+        // 并行测试线程可能传相同 suffix；无序号会互踩同一 temp 目录（随机失败）。
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static SEQ: AtomicU32 = AtomicU32::new(0);
+        let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "docs_{}_{suffix}_{seq}",
+            std::process::id()
+        ))
     }
 
     fn make_manifest() -> PluginManifest {
