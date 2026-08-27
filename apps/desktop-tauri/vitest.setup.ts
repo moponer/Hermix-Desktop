@@ -8,3 +8,14 @@
  * because the matcher lives in a separate package.
  */
 import "@testing-library/jest-dom/vitest";
+
+// jsdom 没有 ResizeObserver（TableView 虚拟滚动视口测量依赖它）；
+// WebView2 真机必有，这里仅补测试环境 stub。
+if (typeof globalThis.ResizeObserver === "undefined") {
+  class ResizeObserverStub {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  (globalThis as { ResizeObserver?: unknown }).ResizeObserver = ResizeObserverStub;
+}

@@ -878,7 +878,12 @@ use super::*;
         };
 
         let cfg = AgentConfig {
-            max_turns: 1,
+            // 软上限语义（run_loop 重构后）：边界轮不再硬停，而是先发一次
+            // 额外的进度总结调用再继续；且 do_pre_turn_setup 先自增
+            // total_turns 再判边界，max_turns=1 会让首轮预处理就触发软上限、
+            // 吞掉本次要测的首个空响应调用。给足余量，隔离出被测的
+            // 「空响应内层重试」路径。
+            max_turns: 10,
             empty_content_max_retries: 1,
             ..AgentConfig::default()
         };
