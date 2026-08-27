@@ -255,6 +255,12 @@ impl LocalSqliteStore {
 
 
     fn conn(&self) -> Result<rusqlite::Connection, StoreError> {
+        // 防御：工作台目录缺失时自动创建（正常由 builder 建，但目录被
+        // 手动删除/迁移后可重建，幂等 no-op）。
+        if let Some(parent) = self.db_path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| StoreError::Io(format!("创建工作台 DB 目录失败: {e}")))?;
+        }
         let conn = rusqlite::Connection::open(&self.db_path)
             .map_err(|e| StoreError::Io(format!("打开工作台 DB 失败: {e}")))?;
         if let Err(e) =

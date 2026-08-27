@@ -58,6 +58,12 @@ pub struct RegistryStore {
 }
 
 fn open_with_wal(path: &Path) -> Result<rusqlite::Connection, RegistryStoreError> {
+    // 首次使用/新机器上 `~/.hermix/workspaces/` 可能不存在——SQLite 不会
+    // 自建父目录，必须先 create_dir_all（存在则 no-op，幂等）。
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| RegistryStoreError::Io(format!("创建 registry 目录失败: {e}")))?;
+    }
     let conn = rusqlite::Connection::open(path)
         .map_err(|e| RegistryStoreError::Io(format!("打开 registry db 失败: {e}")))?;
     if let Err(e) =
@@ -248,5 +254,24 @@ mod tests {
             store.remove("ghost"),
             Err(RegistryStoreError::NotFound(_))
         ));
+    }
+
+    /// 首次使用/新机器：父目录不存在时 open 自动建目录（SQLite 不自建）。
+    #[test]
+    fn open_creates_missing_parent_dir() {
+        let base = tempfile::tempdir().expect("tmp");
+        // 深层嵌套目录，父目录链完全不存在
+        let db_path = base
+            .path()
+            .join("does-not-exist")
+            .join("workspaces")
+            .join("registry.sqlite");
+        let store = RegistryStore::open(&db_path).expect("open 应自动建目录");
+        assert!(db_path.parent().expect("parent").exists(), "父目录应被创建");
+        assert!(db_path.exists(), "db 文件应存在");
+
+        // 打开后可正常读写（目录创建与表结构一次性就绪）
+        store.create("ws-1", "车辆管理", "car", "ws-1").expect("create");
+        assert_eq!(store.list().expect("list").len(), 1);
     }
 }
