@@ -1,281 +1,103 @@
-<div align="center">
-
 # Hermix Desktop
 
-**自进化的 AI 助手。零安装，零环境。**
+本地优先的 Windows 桌面 AI 助手。Rust 后端 + React 前端，经 Tauri v2 打包为免安装便携应用：
+对话、工具执行、定时自动化、以及面向管理台账场景的「工作台」（schema 驱动的自定义数据应用）
+都在本机闭环，数据不依赖任何云端托管。
 
-`约 200K 行 Rust` · `1,834 个测试` · `18 个 crate` · `33 个内置 Skill` · `~80MB 解压即用`
-
-[下载 zip](#) · [文档](#) · [更新日志](#) · [问题反馈](#)
-
-</div>
-
----
-
-## 一句话定位
-
-> 下载 zip，解压到任意位置（推荐 D/E/F 盘），双击 `Hermix.exe`，开始用。
+当前为 **Windows x64（MSVC）单平台**项目，无跨平台目标，也没有云服务依赖。
 
 ---
 
 ## 核心能力
 
-- **与 AI 对话** — 支持 10 种大模型（OpenAI、Anthropic、Qwen、DeepSeek、Kimi、MiniMax、NousResearch、Copilot、OpenRouter、本地）
-- **帮你干活** — 读文件、写代码、执行命令（白名单内）、搜索网页、操作浏览器、文件格式转换
-- **记住你的偏好** — 5 层跨会话记忆架构（FocusStack + 向量召回 + 结构化记忆 + 持久化存储 + 文件记忆）
-- **30+ 工具** — 文件、终端、搜索、视觉、语音、网页摘要、任务编排、看屏点屏
-- **33 个内置 Skill** — 12 个开发类 + 11 个办公类 + 10 个生活类，LLM 自主判断何时调用
-- **电脑操控** — [自研 Windows 原生栈](#自研能力--电脑操控)，AI 能直接看屏幕、点鼠标、敲键盘
-- **定时任务** — cron 定时提醒/拉取
-- **GroupChat 多智能体** — 内置总管调度 + 多角色协作
+| 能力 | 说明 |
+|---|---|
+| Agent 对话 | 多 provider LLM 接入（内置十余家厂商注册表 + 自定义 OpenAI 兼容接入），工具调用、子代理派发、上下文压缩、审批引擎 |
+| 工作台 | 用户以自然语言或模板生成台账类数据应用：每工作台独立 SQLite、表/看板/仪表盘视图、只读/删保护（readonly / allow_delete）、行级 CRUD 由 REST 与 LLM 工具共用同一权限门 |
+| .hwx 分发 | 工作台导出为 JSON bundle 文件导入他机；冲突按 LWW（行级 updated_at 较新者胜）合并，保留行主键与时间线 |
+| 自动化 | cron/rrule 定时任务、SQL 条件提醒（零 LLM 扫描）、LLM 定时总结，调度器与会话隔离打通 |
+| 内置技能 | 打包内嵌技能目录（`builtin-skills/`）+ 人格配置（`builtin-soul/`），启动期落盘到用户数据目录 |
 
----
+后端以 **axum** 提供 `127.0.0.1:3000` 上的 HTTP/WebSocket API（前端与外部调用共用同一套接口），
+Tauri 主进程把可执行名 `hermix` 作为 sidecar 拉起。
 
-## 怎么用（3 步）
+## 构建与验证
 
-1. **下载** `Hermix-Desktop-Windows-x64.zip`（约 80MB）
-2. **解压** 到任意位置（推荐 `D:\Hermix Desktop\`）
-3. **双击** `Hermix.exe`
+环境要求：
 
-首次启动会引导你填一个 API key（支持 OpenAI / Anthropic / 国产模型），然后就能开始对话了。
+- Windows 10+ x64，Rust stable MSVC 工具链。MSVC linker（rust-lld 与 LIBPATH）已在
+  `.cargo/config.toml` 写死，任何终端直接用 `cargo` 即可，无需额外环境脚本
+- Node.js ≥ 20 与 pnpm（仅前端需要）
 
----
-
-## 自研能力 — 电脑操控（Computer-Use）
-
-> 让 AI 像人一样 **看屏幕、点鼠标、敲键盘**。全程 Windows 平台原生自研，不集成任何三方桌面自动化运行时。
-
-### 14 个工具
-
-| Phase | 工具 | 作用 |
-|-------|------|------|
-| 1 | `cua_screenshot` | 截屏，返回 base64 PNG |
-| 1 | `cua_screen_info` | 列出所有显示器 |
-| 1 | `cua_left_click` | 鼠标点击 |
-| 1 | `cua_type_text` | Unicode 文本输入 |
-| 1 | `cua_press_key` | 组合键 / 单键 |
-| 2-B | `cua_list_windows` | 枚举顶层窗口 |
-| 2-B | `cua_window_at_point` | 返回坐标处窗口 |
-| 2-B | `cua_click_window` | 激活并点击窗口 |
-| 2-C | `cua_ui_tree` | UIA 元素树 |
-| 2-C | `cua_ui_find` | 按属性找元素 |
-| 2-C | `cua_ui_click` | 点击 UIA 元素 |
-| 2-C | `cua_ui_focus` | 聚焦 UIA 元素 |
-| 2-C | `cua_ui_invoke` | 触发 UIA 动作 |
-
-### 全栈自研，Windows 原生 API
-
-| 能力 | 实现 | 关键点 |
-|------|------|--------|
-| 截屏（主路径） | DXGI Output Duplication | GPU 直采，比 GDI 快 5-10x |
-| 截屏（fallback） | BitBlt + GDI | 工具永不失效 |
-| 鼠标/键盘输入 | Win32 SendInput | 系统级事件，Unicode 完整支持 |
-| 窗口识别 | EnumWindows + GetWindowRect | hwnd 双向、可见性过滤 |
-| UIA 元素交互 | UIAutomation COM | IUIAutomationElement / InvokePattern |
-| 离线 OCR | Windows.Media.Ocr | 无 token、Win10 1809+ 内置 |
-| 浏览器自动化 | 自研 CDP 客户端 | tokio_tungstenite，零三方 driver |
-
-### 双层安全审批
-
-- **任务级一次** — 同一 session 内同类型操作只批一次
-- **destructive 每次** — 不可逆操作每次弹窗
-- **硬拦截** — Ctrl+Alt+Del、Win+L、Alt+F4 直接拒绝
-- **限速** — 默认 30 ops/s
-- **完整审计** — 每次操作写入 `~/.hermix/cua/sessions/<session_id>/trace.jsonl`
-
----
-
-## Skill 体系
-
-### 20 个内置 Skill
-
-**开发类（7 个）**：架构设计、API 设计、代码审查、数据库设计、前端架构、系统化调试、TDD 实践
-
-**DevOps（1 个）**：DevOps 实践
-
-**办公类（3 个）**：计划撰写、写作助手、OfficeCLI
-
-**金融类（2 个）**：投资分析、财务规划
-
-**生活类（2 个）**：旅游规划、健康指导
-
-**写作类（1 个）**：网络小说
-
-**Hermix 专属（3 个）**：存储分析器、马尾、自定义应用开发
-
-### Skill 增强机制
-
-- **LLM 自主判断 + 触发关键词引导** — LLM 自主决定是否调用 Skill，索引中暴露触发关键词（⚡标记）辅助 LLM 匹配
-- **触发条件** — 每个 Skill 包含触发条件、执行步骤、输出格式
-- **Skill 优先约束** — `SKILL_USAGE_GUIDANCE` + `TOOL_USAGE_GUIDANCE` 中的 Skill-first rule 要求 LLM 在有匹配 Skill 时先遵循 Skill 再用工具
-- **索引分组** — Skill 索引按 category 分组显示，便于 LLM 选择
-
----
-
-## 架构概览
-
-```
-用户输入 → 意图识别 → 工具路由 → Agent 循环 → 结果验证 → 输出
-                ↓                ↓              ↓
-          5 层记忆系统    30+ 工具后端    压缩/恢复
-                ↓                ↓              ↓
-        FocusStack       安全审批引擎    Gateway 安全网
-        向量召回         会话级记忆      五步压缩管道
-```
-
-### 核心 crate
-
-| Crate | 职责 |
-|-------|------|
-| `hermix-agent` | Agent 循环、LLM 提供商、记忆系统、上下文管理 |
-| `hermix-tools` | 30+ 工具后端、审批引擎、CUA handler |
-| `hermix-server` | HTTP/WebSocket + Dashboard + Skill 管理 |
-| `hermix-intelligence` | 智能路由、工具路由器、上下文引擎 |
-| `hermix-focus` | FocusStack 5 状态机、记忆显著性评分 |
-| `hermix-config` | 配置加载、路径管理、便携式部署 |
-| `hermix-cua` | 自研电脑操控栈（DXGI / SendInput / UIA / OCR / CDP） |
-| `hermix-core` | 核心类型、路径安全、工具 schema |
-| `hermix-skills` | 技能管理、专家注册 |
-| `hermix-gateway` | 多平台适配、GroupChat 管理 |
-
-### 关键特性
-
-- **5 层记忆架构**：L5 MEMORY.md/USER.md → L4 Session 持久化 → L3 FocusStack → L2 结构化记忆 → L1 向量嵌入
-- **Gateway 85% 安全网**：上下文超 85% 自动截断，防 token 爆炸
-- **五步压缩管道**：Prune → Snip Ancient → Boundary → Context Collapse → Assemble
-- **结果验证机制**：工具执行后自动验证（文件修改、退出码、错误检测）
-- **环境感知**：Git 状态、项目类型自动检测
-- **工具调用上限**：单轮最多 20 次工具调用，防止死循环
-- **会话级审批记忆**：同一操作只批一次，跨会话保留
-- **写竞争抖动**：并发写入随机延迟，防数据库锁冲突
-- **任务焦点指导**：长对话自动注入焦点恢复指令
-- **4 层权限防护**：PermissionLevel + Tirith + RiskLevel + ApprovalManager
-
----
-
-## 数据存放在哪
-
-| 类型 | 内容 | 路径 |
-|------|------|------|
-| **用户配置和数据** | config.yaml、.env、auth.json、sessions.db、memory_store.db | `~/.hermix/` |
-| **应用瞬态** | WebView2 缓存、日志 | `<安装目录>/webview-cache`、`<安装目录>/logs` |
-
-```
-安装目录/                    ← 解压位置（任意盘）
-├── Hermix.exe              # 主程序（Tauri v2, ~25MB）
-├── hermix-server.exe       # 后端服务（Rust, ~16MB）
-├── hermix.exe              # CLI 备用（无 GUI 场景）
-├── webview-cache/          # WebView2 缓存（可清）
-└── logs/                   # 日志（滚动 7 天）
-
-~/.hermix/                  ← 你的数据
-├── config.yaml             # API Key 配置
-├── .env                    # 环境变量密钥
-├── auth.json               # 认证令牌
-├── sessions.db             # 聊天历史（SQLite + FTS5）
-├── memory_store.db         # 长期记忆
-├── enabled_toolsets.json   # 工具集开关
-├── approval_allowlist.json # 审批允许列表
-├── skills/                 # 技能
-└── dashboard-plugins/      # 面板插件
-```
-
-**备份建议**：整个 `~/.hermix/` 目录就是你的全部"记忆 + 技能 + 配置 + 历史"。安装目录删了重下一个就行，数据不丢。
-
----
-
-## 构建（开发者向）
-
-> **直接跑 cargo 命令即可**，无需 source 任何环境脚本。链接器（`rust-lld.exe` + 显式 LIBPATH）已配置在 `.cargo/config.toml`，不依赖 `LIB` 环境变量。本机 Rust 装在 `C:\Program Files\Rust stable MSVC 1.92`。
->
-> 产物位置：`.cargo/config.toml` 与 `src-tauri/.cargo/config.toml` 均**不配置** target-dir（铁律）。项目约定**统一产物到仓库根 `<仓库根>/release/target/`**：`npm run dev` / `npm run build` 脚本已自动 `set CARGO_TARGET_DIR=..\..\release\target`（含 hx-shell 壳），前后端 + Tauri 应用 + NSIS 安装包全部落入该目录。⚠️ **裸跑 `cargo tauri dev/build`（不走 npm）必须先手动 `set CARGO_TARGET_DIR=..\..\release\target`**，否则 cargo 会在 `src-tauri/target/` 或仓库根 `target/` 新建散目录（已废弃）。
-
-### 产物位置
-
-项目约定统一（推荐，npm 脚本自动设好 `CARGO_TARGET_DIR=..\..\release\target`）：
-
-```
-<仓库根>/release/target/
-├── debug/      # dev：hermix.exe（后端 sidecar）+ tauri 应用
-├── release/    # build：hermix.exe + hermix-desktop.exe + hx-shell.exe + NSIS bundle
-└── （所有 workspace crate 的中间产物）
-```
-
-hx-shell 壳（独立 workspace）经 npm 脚本同样落入此处；由 `package.json` 的 `_:sync-shell`
-（→ `src-tauri/resources/loader`，装包资源）与 `_:sync-shell-runtime`（→ `~/.hermix/loader`，
-运行时）在 build/dev 期同步最新 `hx-shell.exe`（注：`build.rs` 因编译时机限制无法自同步，已弃用）。
-
-⚠️ 以下旧目录已废弃（不要再产生，会偏离统一约定并散落）：
-- `<仓库根>/target/`（仓库根裸跑 cargo 的默认位置）
-- `apps/desktop-tauri/src-tauri/target/`（tauri 裸跑的默认位置）
-- `apps/hx-shell/target/`（旧 993M 独立目录，已删除 + 去掉 `config.toml` 硬编码 target-dir）
-
-### 编译命令
+常用命令：
 
 ```bash
-# 全 workspace 编译检查（~3-5 分钟）
-cargo check --workspace --all-targets
+cargo check --workspace --all-targets    # 全量编译检查（应为 0 error / 0 warning）
 
-# 全 workspace 测试（~10-15 分钟，1,834 个）
-cargo test --workspace --lib
+cargo test --workspace --lib             # 全部单元测试（约 1,054 个）
 
-# 前端类型检查
-cd apps/desktop-tauri && pnpm tsc --noEmit
+cd apps/desktop-tauri && pnpm install    # 首次安装前端依赖
+pnpm tsc --noEmit                        # 前端类型检查（EXIT=0 为过）
+pnpm vitest run                          # 前端测试（15 个文件 / 131 个用例）
+
+./scripts/ci-gate.sh                     # CI 总闸：编译 + 测试 + tsc + 行数红线扫描
 ```
 
-### 编译产物
+构建产物统一落在仓库外层 `release/target/`；`target/`、`node_modules/`、运行时数据目录
+（`hermix-data/` 等）均已 gitignore。打正式包走 Tauri NSIS 流程产出便携 zip。
 
-```bash
-# 只产 desktop exe（~15-30 分钟，含所有 workspace crate 链接）
-cd apps/desktop-tauri && cargo tauri build --no-bundle
-
-# desktop exe + Windows NSIS 安装包（~15-30 分钟，首次会自动下载 NSIS 工具）
-cd apps/desktop-tauri && cargo tauri build
-```
-
-产物落 `<仓库根>/release/target/release/`：
+## 仓库结构
 
 ```
-├── hermix-desktop.exe                    # 裸 exe（内嵌前端 + spawn sidecar）
-├── hermix.exe                            # 后端 sidecar（server, 端口 3000）
-└── bundle/nsis/Hermix Desktop_*_x64-setup.exe   # Windows 安装包 ★
+├── Cargo.toml                 # cargo workspace（resolver = 2，24 个 crate）
+├── crates/
+│   ├── hermix-core            # 基础类型：Message / LlmResponse / ToolError …
+│   ├── hermix-config          # 配置加载、provider 注册表唯一真理源、路径管理
+│   ├── hermix-agent           # Agent 循环内核：run_loop / 会话生命周期 / 重试 /
+│   │                          #   上下文分层 / 空响应处理 / 子代理编排
+│   ├── hermix-tools           # 30+ 工具后端 + 审批引擎 + 凭证防护
+│   ├── hermix-intelligence    # 工具路由、思考模式
+│   ├── hermix-focus           # FocusStack / 记忆显著性
+│   ├── hermix-workspace       # 工作台引擎：schema 校验/迁移/store/service/
+│   │                          #   权限模型/.hwx 包/内置模板/条件引擎
+│   ├── hermix-automation      # 调度器（cron/rrule 任务与触发器）
+│   ├── hermix-mcp             # MCP 客户端接入
+│   ├── hermix-gateway         # 供应商网关适配
+│   ├── hermix-server          # axum HTTP/WS API + Dashboard 处理器；
+│   │                          #   产出二进制 `hermix`（Tauri sidecar 入口）
+│   └── …                      # 其余领域 crate：voice / cua / task / transport /
+│                              #   telemetry / skills / plugin / acp / runtime /
+│                              #   environments / coreutils / shell-parser / cron
+├── apps/
+│   ├── desktop-tauri/         # Tauri v2 桌面壳 + React 19 / Tailwind 4 / Vite 前端
+│   │                          #   （前端源码 src/，Rust 壳在 src-tauri/，独立 sub-workspace）
+│   ├── hx-shell/              # Custom App Shell 运行时
+│   ├── hx-packager/           # 自定义应用打包工具
+│   └── playground/            # 前端实验场
+├── sdk/                       # protocol-fixtures（协议黄金样本）、typescript 类型包
+├── scripts/                   # ci-gate.sh、图标生成、主题 token 检查等工程脚本
+├── docs/                      # 设计方案与历史审查报告（含《工作台架构设计方案》）
+├── AGENTS.md                  # 贡献者约定、代码六步决策阶梯、核心原则 —— 改码前必读
+└── SOUL.md                    # 助手人格定义（同步打包进 builtin-soul/）
 ```
 
-`--no-bundle` 只跳过打包步骤（适合本地跑，快几分钟）；完整 `cargo tauri build` 额外产 NSIS 安装包（压缩 + 安装向导 + 快捷方式 + 卸载注册，分发给别人用）。两者 exe 代码完全一致。
+## 前端速览
 
-**Windows MSVC 构建**：源码编译需要 MSVC 环境。链接器用 `rust-lld.exe`（`.cargo/config.toml` 已配 + 显式 LIBPATH，不依赖 `LIB` 环境变量），产物统一落在 `<仓库根>/release/target/`（由 npm 脚本的 `CARGO_TARGET_DIR` 控制；裸跑须手动设）。
+`apps/desktop-tauri/src/` 下按域组织组件：聊天主流（含消息渲染与流式协议适配）、模型选择器
+（以后端 `/api/model/list` 为持久权威、`/api/providers/meta` 做厂商分组）、设置中心、群聊，
+以及工作台全链路渲染（Tab 容器 → schema 渲染器 → 表格/表单/仪表盘组件）。API 封装集中在
+`src/api/rest.ts`，类型镜像在 `src/types.ts` 与后端 serde 结构一一对应。
 
----
+## 贡献约定（摘要）
 
-## 常见问题
+- 改动必须附带验证证据：`cargo check` + 相关 crate 测试 + `pnpm tsc`，提交前跑 `scripts/ci-gate.sh`
+- 单文件超过 2500 行会被 CI 门警告；新增依赖遵循"标准库 > 平台原生 > 已有依赖"阶梯
+- 错误要精准暴露，禁止静默吞结果；跨入口不变量放单一分发点强制（如工作台写权限经
+  `WorkspaceService::open_writable` 能力句柄），不做"每个入口各自记得检查"
+- 详见 [AGENTS.md](AGENTS.md)
 
-**Q: 数据会越来越大?**
-A: 正常用半年约 500MB。如果上 GB，检查是不是装了太多"技能"和"插件"。
+## 文档
 
-**Q: 跑在 macOS / Linux?**
-A: 暂不支持。只承诺 Windows 桌面端。
-
-**Q: 数据会上传?**
-A: 不会。Hermix Desktop 不收集任何遥测。你说的话/你传的文件，只发给你配置的 LLM 服务商。
-
-**Q: 怎么升级?**
-A: 重新下载 zip → 解压 → 双击 exe。数据保留在 `~/.hermix/`，自动读取。
-
-**Q: 换电脑怎么办?**
-A: 把 `~/.hermix/` 拷到新电脑相同位置即可。
-
----
-
-## 技术栈
-
-- **后端**: Rust 18 个 crate，~200K 行
-- **前端**: React 19 + Tauri v2 + Tailwind 4
-- **运行时**: 静态二进制，无 Python/Node 依赖
-- **数据**: SQLite + FTS5 + JSON + 文件树
-- **测试**: 1,834 个单元测试
-
----
-
-## 许可证
-
-MIT — 见 [LICENSE](LICENSE)。
+- 《工作台架构设计方案》（含实施落地对照表）：`docs/工作台架构设计方案.md`
+- M7 全栈审查报告与修复记录：`docs/CODE_REVIEW_2026-08-27_M7-workspace.md`
+- 架构演进与专项计划存档：`docs/`

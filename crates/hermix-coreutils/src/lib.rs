@@ -270,7 +270,7 @@ fn cmd_cat(args: &[String], cwd: &Path) -> Result<CommandOutput, io::Error> {
         }
         let path = resolve(cwd, a);
         match fs::read(&path) {
-            Ok(mut buf) => {
+            Ok(buf) => {
                 match std::str::from_utf8(&buf) {
                     Ok(s) => out.push_str(s),
                     Err(_) => {
@@ -1467,7 +1467,6 @@ pub mod tier4 {
     //! a `tar` impl is a small follow-up if the LLM actually asks for
     //! it.
     use super::*;
-    use std::io::Read as _;
     use zip::read::ZipArchive;
     use zip::write::SimpleFileOptions;
 

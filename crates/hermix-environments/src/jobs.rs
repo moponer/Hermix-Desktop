@@ -166,7 +166,8 @@ impl JobRegistry {
             .stderr(Stdio::from(append_file(&job_dir.join("stderr.log"))?));
         #[cfg(windows)]
         {
-            use std::os::windows::process::CommandExt as _;
+            // tokio::process::Command 的 creation_flags 是 Windows 固有方法，
+            // 无需 std::os::windows::process::CommandExt trait 导入
             const CREATE_NO_WINDOW: u32 = 0x0800_0000;
             cmd.creation_flags(CREATE_NO_WINDOW);
         }

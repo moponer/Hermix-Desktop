@@ -173,7 +173,7 @@ fn contains_shell_meta(s: &str) -> bool {
                 // looks like a glob (not a literal `[` in a flag arg).
                 // Heuristic: bracket immediately followed by at least one
                 // unquoted `]`.
-                if let Some(close) = find_unescaped_close_bracket(bytes, i + 1) {
+                if let Some(_close) = find_unescaped_close_bracket(bytes, i + 1) {
                     return true;
                 }
             }

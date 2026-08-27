@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
 
-use hermix_plugin::{PluginManager, manifest::PluginManifest, manifest::WindowConfig};
+use hermix_plugin::PluginManager;
 
 const SHELL: &str = r"<repo>\apps\desktop-tauri\src-tauri\resources\loader\hx-shell.exe";
 const LOADER_DLL: &str = r"<repo>\apps\desktop-tauri\src-tauri\resources\loader\WebView2Loader.dll";

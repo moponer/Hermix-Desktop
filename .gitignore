@@ -159,3 +159,7 @@ apps/desktop-tauri/src-tauri/resources/esbuild/
 # Root-level ad-hoc preview / upload temp files
 /rainforest-bg-preview.html
 /upload_*.jpg
+
+# Agent-run work outputs & root preview leftovers
+/outputs/
+/approval-card-preview.html
