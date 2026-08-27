@@ -21,12 +21,15 @@
 //! - [`condition`] — 条件提醒引擎（M4.2 零 LLM：SQL 扫描 + 消息渲染）
 //! - [`automation_plan`] — 自动化注册计划（M4.3/M4.4：workspace 自动化
 //!   → 调度器注册数据，数据层与调度层解耦）
+//! - [`package`] — .hwx 工作台包（M5.2：导出/校验/解析，JSON bundle
+//!   防脏包；LWW 合并 M5.5）
 
 pub mod automation_plan;
 pub mod builder;
 pub mod condition;
 pub mod migrate;
 pub mod model;
+pub mod package;
 pub mod registry;
 pub mod service;
 pub mod store;
@@ -36,6 +39,7 @@ pub use automation_plan::{AutomationPlan, frequency_to_rrule, plan_automations};
 pub use builder::{BuildError, BuildResult, TableStatus, create_from_schema};
 pub use condition::{ConditionError, ConditionHit, ConditionScanResult, render_message, run_condition_automation};
 pub use migrate::{ColumnChange, MigrateError, MigrationReport, migrate_schema};
+pub use package::{HwxPackage, PackageError, export_package, merge_rows, parse_package, to_bytes, validate_package};
 pub use service::{ServiceError, WorkspaceService};
 pub use model::{
     Automation, DashboardWidget, Field, FieldType, Module, View, ViewType, WidgetType,
