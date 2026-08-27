@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from "react";
-import { Save, Check, AlertCircle, RefreshCw, ChevronRight, CheckCircle } from "lucide-react";
+import { useState, useEffect, useCallback, useMemo } from "react";
+import { Check, AlertCircle, RefreshCw, ChevronRight, Star, Trash2, CheckCircle, Save } from "lucide-react";
 import * as api from "../../api";
 import { storage } from "../../utils/storageCompat";
 import { writeModelConfigAndNotify, MODEL_CONFIG_CHANGED_EVENT } from "../../hooks/useCurrentModel";
@@ -20,49 +20,47 @@ import {
 } from "./settingsUtils";
 
 // ── Model Tab ──────────────────────────────────────
+//
+// 选择器优先布局（三段式垂直）：
+//   1. 默认模型 — 顶部紧凑的两级 [Provider ▾] [Model ▾] 选择器（与聊天主窗
+//      ModelSelector 同款体验）；每次操作触发"✓ 已保存"绿色 banner + 行内
+//      700ms 绿闪，保存体感明确
+//   2. 已启用模型 — 紧凑列表：每行 provider chip + model + 上下文窗口 +
+//      ⭐/默认 + ✕ 移除；这是用户操作的主界面
+//   3. 供应商 — 折叠面板，展开后填 API Key + 获取模型；首次自动 mount-fetch
+//      仍保留以保持原使用体感
 
 export function ModelTab() {
   const safeSetTimeout = useSafeTimeout();
   const [config, setConfig] = useState<ModelConfigData>(loadModelConfig);
-  const [selectedProvider, setSelectedProvider] = useState<ProviderDef | null>(null);
-  const [keyInput, setKeyInput] = useState("");
-  const [activeKeys, setActiveKeys] = useState<Record<string, boolean>>({});
   const [fetchedModels, setFetchedModels] = useState<Record<string, string[]>>(loadModelCache);
-  const [loading, setLoading] = useState(false);
+  const [loadingProvider, setLoadingProvider] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
-  // Track which custom provider IDs have an API key configured (from
-  // /api/custom-providers → has_key). This is the authoritative source
-  // because it reads config.yaml directly, unlike GET /api/env which
-  // may read the wrong path before the backend is recompiled.
+  const [activeKeys, setActiveKeys] = useState<Record<string, boolean>>({});
   const [customIdsWithKey, setCustomIdsWithKey] = useState<Set<string>>(new Set());
-  // Load custom provider has_key state on mount. (Model list fetching /
-  // toggle 逻辑已搬到独立 <CustomProvidersTab /> sub-tab,这里只保留状态栏
-  // 用的 has_key 提示。)
+  const [expandedProviders, setExpandedProviders] = useState<Set<string>>(new Set());
+  const [providerKeyInput, setProviderKeyInput] = useState<Record<string, string>>({});
+  // 单行短暂绿闪用的 key（fid），700ms 后自清
+  const [flashKey, setFlashKey] = useState<string | null>(null);
+
+  // ── Custom provider has_key (authoritative from server) ──
   useEffect(() => {
     api.getCustomProviders().then((providers) => {
       const withKey = new Set<string>();
       providers.forEach((p) => { if (p.has_key) withKey.add(p.id); });
       setCustomIdsWithKey(withKey);
-    }).catch((e) => { console.warn("[SettingsView] custom provider fetch failed:", e); });
+    }).catch((e) => { console.warn("[ModelTab] custom provider fetch failed:", e); });
   }, []);
 
+  // ── Auto-fetch on mount: 保留原行为（configured builtin 一次性拉取并启用）──
   useEffect(() => {
     api.getEnvVars().then(async (envVars) => {
       const keys: Record<string, boolean> = {};
       PROVIDERS.forEach((p) => { keys[p.id] = !!envVars[p.keyEnvVar]?.is_set; });
-      // Also check custom provider env vars.
-      // Custom providers store keys as `CUSTOM_{id}_API_KEY`.
-      // We extract the provider id (`custom-{id}`) and mark it as configured.
-      // NOTE: env var names are UPPERCASE, but provider ids are lowercase
-      // (sanitized from the user-supplied name via `.toLowerCase()`).
-      // We must normalise the extracted suffix to lowercase so the
-      // activeKeys key matches the provider id used everywhere else.
       for (const [varName, info] of Object.entries(envVars ?? {})) {
         const m = /^CUSTOM_([A-Za-z0-9_-]+)_API_KEY$/.exec(varName);
         if (m && (info as { is_set?: boolean })?.is_set) {
-          // Strip any existing "custom-" prefix from the captured suffix
-          // to prevent double-prefix like "custom-custom-agnes-...".
           const raw = m[1].toLowerCase().replace(/_/g, "-");
           const normalized = raw.replace(/^custom-/, "");
           keys[`custom-${normalized}`] = true;
@@ -70,17 +68,11 @@ export function ModelTab() {
       }
       setActiveKeys(keys);
 
-      // mount 时先从 localStorage 缓存恢复模型列表：若 API fetch 静默失败
-      // （网络/TLS/DNS），不读缓存会让 fetchedModels 永远为空，UI 不显示任何模型。
+      // 从缓存恢复（fetch 失败时不让 UI 全空）
       const cached = loadModelCache();
-      if (Object.keys(cached).length > 0) {
-        setFetchedModels(cached);
-        // 从缓存恢复 config（如果有）。
-        const cachedCfg = loadModelConfig();
-        if (cachedCfg.enabled.length > 0) {
-          setConfig(cachedCfg);
-        }
-      }
+      if (Object.keys(cached).length > 0) setFetchedModels(cached);
+      const cachedCfg = loadModelConfig();
+      if (cachedCfg.enabled.length > 0) setConfig(cachedCfg);
 
       const fetchPromises = PROVIDERS.filter((p) => keys[p.id]).map(async (p) => {
         const MAX_RETRIES = 2;
@@ -92,31 +84,24 @@ export function ModelTab() {
               body: JSON.stringify({ key: p.keyEnvVar }),
             });
             if (!revealResp.ok) {
-              console.warn(`[SettingsView] reveal failed for ${p.id}: HTTP ${revealResp.status}`);
               if (attempt < MAX_RETRIES) await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
               continue;
             }
             const { value: apiKey } = await revealResp.json();
-            if (!apiKey) {
-              console.warn(`[SettingsView] reveal returned empty key for ${p.id}`);
-              break;
-            }
-
+            if (!apiKey) break;
             const modelsResp = await fetch(`${p.baseUrl}/models`, {
               headers: { Authorization: `Bearer ${apiKey}` },
             });
             if (!modelsResp.ok) {
-              console.warn(`[SettingsView] models fetch failed for ${p.id}: HTTP ${modelsResp.status}`);
               if (attempt < MAX_RETRIES) await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
               continue;
             }
             const data = await modelsResp.json();
             const models: string[] = (data.data || []).map((m: { id: string }) => m.id).sort();
             if (models.length > 0) {
-              console.info(`[SettingsView] fetched ${models.length} models for ${p.id}:`, models);
               setFetchedModels((prev) => ({ ...prev, [p.id]: models }));
               setConfig((prev) => {
-                const existing = new Set(prev.enabled.map((m) => `${m.providerId}:${m.modelId}`));
+                const existing = new Set(prev.enabled.map((m) => fullId(m.providerId, m.modelId)));
                 const newEnabled = [...prev.enabled];
                 models.forEach((modelId) => {
                   if (!existing.has(`${p.id}:${modelId}`)) newEnabled.push({ providerId: p.id, modelId });
@@ -126,358 +111,454 @@ export function ModelTab() {
                 writeModelConfigAndNotify(next);
                 return next;
               });
-            } else {
-              console.warn(`[SettingsView] ${p.id} returned 0 models`);
             }
-            break; // success or empty — don't retry
+            break;
           } catch (err) {
-            console.error(`[SettingsView] fetch error for ${p.id} (attempt ${attempt + 1}):`, err);
             if (attempt < MAX_RETRIES) await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
           }
         }
       });
       await Promise.allSettled(fetchPromises);
-
-      // 延迟重试：如果 fetch 全失败（后端可能还没 ready），
-      // 3 秒后再试一次。Tauri 启动时 Rust server 初始化需要几秒，
-      // SettingsView mount 时 3000 端口可能还没 accept connections。
-      const configuredProviderIds = PROVIDERS.filter((p) => keys[p.id]).map((p) => p.id);
-      if (configuredProviderIds.length > 0) {
-        safeSetTimeout(async () => {
-          try {
-            const envVars2 = await api.getEnvVars();
-            const keys2: Record<string, boolean> = {};
-            PROVIDERS.forEach((p) => { keys2[p.id] = !!envVars2[p.keyEnvVar]?.is_set; });
-            for (const p of PROVIDERS.filter((p) => keys2[p.id])) {
-              try {
-                const revealResp = await fetch(apiUrl("/api/env/reveal"), {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ key: p.keyEnvVar }),
-                });
-                if (!revealResp.ok) continue;
-                const { value: apiKey } = await revealResp.json();
-                if (!apiKey) continue;
-                const modelsResp = await fetch(`${p.baseUrl}/models`, {
-                  headers: { Authorization: `Bearer ${apiKey}` },
-                });
-                if (!modelsResp.ok) continue;
-                const data = await modelsResp.json();
-                const models: string[] = (data.data || []).map((m: { id: string }) => m.id).sort();
-                if (models.length > 0) {
-                  console.info(`[SettingsView] retry fetched ${models.length} models for ${p.id}`);
-                  setFetchedModels((prev) => ({ ...prev, [p.id]: models }));
-                  setConfig((prev) => {
-                    const existing = new Set(prev.enabled.map((m) => `${m.providerId}:${m.modelId}`));
-                    const newEnabled = [...prev.enabled];
-                    models.forEach((mid) => {
-                      if (!existing.has(`${p.id}:${mid}`)) newEnabled.push({ providerId: p.id, modelId: mid });
-                    });
-                    const next = { enabled: newEnabled, defaultModel: prev.defaultModel || `${p.id}:${models[0]}`, modelContexts: prev.modelContexts ?? {} };
-                    writeModelConfigAndNotify(next);
-                    return next;
-                  });
-                }
-              } catch (err) {
-                console.error(`[SettingsView] delayed retry error for ${p.id}:`, err);
-              }
-            }
-          } catch {}
-        }, 3000);
-      }
-    }).catch((err) => { console.error("[SettingsView] mount env fetch error:", err); });
+    }).catch((err) => { console.error("[ModelTab] mount env fetch error:", err); });
   }, []);
 
+  // 缓存 fetchedModels → localStorage
   useEffect(() => { saveModelCache(fetchedModels); }, [fetchedModels]);
 
-  const selectProvider = (p: ProviderDef) => {
-    setSelectedProvider(p);
-    setKeyInput("");
-    setError("");
-  };
+  // Banner 自动 3s 清除
+  useEffect(() => {
+    if (!info && !error) return;
+    const t = window.setTimeout(() => { setInfo(""); setError(""); }, 3000);
+    return () => window.clearTimeout(t);
+  }, [info, error]);
 
-  const fetchModels = useCallback(async () => {
-    if (!selectedProvider) return;
-    const key = keyInput.trim();
-    if (!key) { setError("请填写 API Key"); return; }
-    setLoading(true);
-    setError("");
-    setInfo("");
-    try {
-      const resp = await fetch(`${selectedProvider.baseUrl}/models`, { headers: { Authorization: `Bearer ${key}` } });
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const data = await resp.json();
-      const models: string[] = (data.data || []).map((m: { id: string }) => m.id).sort();
-      if (models.length === 0) { setError("未返回任何模型"); setLoading(false); return; }
-      setFetchedModels((prev) => ({ ...prev, [selectedProvider.id]: models }));
-      await api.setEnvVar(selectedProvider.keyEnvVar, key);
-      setActiveKeys((prev) => ({ ...prev, [selectedProvider.id]: true }));
-      setConfig((prev) => {
-        const existing = new Set(prev.enabled.map((m) => `${m.providerId}:${m.modelId}`));
-        const newEnabled = [...prev.enabled];
-        models.forEach((modelId) => { if (!existing.has(`${selectedProvider.id}:${modelId}`)) newEnabled.push({ providerId: selectedProvider.id, modelId }); });
-        const next = { ...prev, enabled: newEnabled };
-        // 与 toggleModel / setDefault 一致，setConfig 之后立即 writeModelConfigAndNotify 同步出去。
-        writeModelConfigAndNotify(next);
-        return next;
-      });
-      try {
-        const corrected = await api.autoCorrectConfig();
-        if (corrected.report) { setInfo(`✅ 已自动路由：${corrected.message}`); }
-      } catch (autoErr) { console.warn("auto-correct failed:", autoErr); }
-    } catch (e) { setError(`获取失败: ${e instanceof Error ? e.message : String(e)}`); }
-    setLoading(false);
-  }, [selectedProvider, keyInput]);
+  const providerName = useCallback((pid: string): string => {
+    const def = PROVIDERS.find((p) => p.id === pid);
+    return def?.name ?? pid.replace(/^custom-/, "");
+  }, []);
 
-  // ── Toggle model enable/disable (auto-saves) ──
-  const toggleModel = useCallback((providerId: string, modelId: string) => {
+  const flashSaved = useCallback((fullId: string) => {
+    setInfo("✓ 已保存");
+    setFlashKey(fullId);
+    window.setTimeout(() => setFlashKey((k) => (k === fullId ? null : k)), 700);
+  }, []);
+
+  const setDefault = useCallback((providerId: string, modelId: string) => {
+    const fid = fullId(providerId, modelId);
     setConfig((prev) => {
-      const key = `${providerId}:${modelId}`;
-      const exists = prev.enabled.some((m) => `${m.providerId}:${m.modelId}` === key);
-      const newEnabled = exists
-        ? prev.enabled.filter((m) => `${m.providerId}:${m.modelId}` !== key)
-        : [...prev.enabled, { providerId, modelId }];
-      const defaultCleared = exists && prev.defaultModel === key;
-      const newConfig: ModelConfigData = { enabled: newEnabled, defaultModel: defaultCleared ? "" : prev.defaultModel, modelContexts: prev.modelContexts ?? {} };
-      // Auto-save every toggle immediately — no separate "save" step.
+      if (prev.defaultModel === fid) return prev;
+      const newConfig: ModelConfigData = { ...prev, defaultModel: fid, modelContexts: prev.modelContexts ?? {} };
       safeSetTimeout(async () => {
         writeModelConfigAndNotify(newConfig);
-        // If the default model was just disabled, sync the cleared
-        // default to the backend so the agent loop doesn't keep
-        // using a model the user explicitly turned off.
+        try {
+          const backendCfg = await api.getConfig();
+          backendCfg.model = fid;
+          await api.updateConfig(backendCfg);
+        } catch (e) { console.warn("setDefault backend sync failed:", e); }
+      }, 0);
+      return newConfig;
+    });
+    flashSaved(fid);
+  }, [safeSetTimeout, flashSaved]);
+
+  const toggleModel = useCallback((providerId: string, modelId: string) => {
+    const fid = fullId(providerId, modelId);
+    setConfig((prev) => {
+      const key = fid;
+      const exists = prev.enabled.some((m) => fullId(m.providerId, m.modelId) === key);
+      const newEnabled = exists
+        ? prev.enabled.filter((m) => fullId(m.providerId, m.modelId) !== key)
+        : [...prev.enabled, { providerId, modelId }];
+      const defaultCleared = exists && prev.defaultModel === key;
+      const newConfig: ModelConfigData = {
+        enabled: newEnabled,
+        defaultModel: defaultCleared ? "" : prev.defaultModel,
+        modelContexts: prev.modelContexts ?? {},
+      };
+      safeSetTimeout(async () => {
+        writeModelConfigAndNotify(newConfig);
         if (defaultCleared) {
           try {
             const backendCfg = await api.getConfig();
             backendCfg.model = "";
             await api.updateConfig(backendCfg);
-          } catch (e) {
-            console.warn("toggleModel: failed to sync cleared default to backend", e);
-          }
+          } catch (e) { console.warn("toggleModel backend sync failed:", e); }
         }
       }, 0);
       return newConfig;
     });
-  }, []);
+    flashSaved(fid);
+  }, [safeSetTimeout, flashSaved]);
 
-  const setDefault = useCallback((fullId: string) => {
+  const setModelContext = useCallback((providerId: string, modelId: string, ctx: number | null) => {
+    const fid = fullId(providerId, modelId);
     setConfig((prev) => {
-      const newConfig = { ...prev, defaultModel: fullId };
+      const nextContexts = { ...(prev.modelContexts ?? {}) };
+      if (ctx == null || ctx === 0) delete nextContexts[fid];
+      else nextContexts[fid] = ctx;
+      const next = { ...prev, modelContexts: nextContexts };
       safeSetTimeout(async () => {
-        writeModelConfigAndNotify(newConfig);
-        // Also sync the model to the backend so the agent loop
-        // uses it immediately — otherwise the frontend localStorage
-        // config and the backend config.yaml drift apart.
-        try {
-          const backendCfg = await api.getConfig();
-          backendCfg.model = fullId;
-          await api.updateConfig(backendCfg);
-        } catch (e) {
-          console.warn("setDefault: failed to sync model to backend", e);
+        writeModelConfigAndNotify(next);
+        // custom provider 还要把 modelContexts 推给后端
+        if (providerId.startsWith("custom-")) {
+          try { await api.updateCustomProviderModelContexts(providerId, nextContexts); }
+          catch (e) { console.warn("setModelContext sync failed:", e); }
         }
       }, 0);
-      return newConfig;
+      return next;
     });
-  }, []);
+    flashSaved(fid);
+  }, [safeSetTimeout, flashSaved]);
 
-  // ── Status banner ──
-  let currentDefault = config.defaultModel;
-  // Defensive repair: if defaultModel looks like "providerIdmodelId" (no
-  // colon separator — can happen with stale localStorage or old backend
-  // values), try to split on a known custom provider id boundary.
-  if (currentDefault && !currentDefault.includes(":")) {
-    for (const cpId of customIdsWithKey) {
-      if (currentDefault.startsWith(cpId) && currentDefault.length > cpId.length) {
-        currentDefault = `${cpId}:${currentDefault.slice(cpId.length)}`;
-        break;
+  /** 从供应商折叠面板触发的获取模型:可接受 (a) 用户在面板里输入的 key
+   *  → 写 env + 拉取；(b) 已配置 key → 直接拉取。 */
+  const fetchModelsForProvider = useCallback(async (p: ProviderDef) => {
+    setLoadingProvider(p.id);
+    setError("");
+    try {
+      let apiKey = "";
+      const typedKey = providerKeyInput[p.id]?.trim();
+      if (typedKey) {
+        await api.setEnvVar(p.keyEnvVar, typedKey);
+        apiKey = typedKey;
+        setActiveKeys((prev) => ({ ...prev, [p.id]: true }));
+      } else {
+        // 探测后端 env 已有的 key
+        const reveal = await fetch(apiUrl("/api/env/reveal"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ key: p.keyEnvVar }),
+        });
+        if (reveal.ok) {
+          const data = await reveal.json();
+          apiKey = data.value ?? "";
+        }
       }
+      if (!apiKey) {
+        setError("请填写 API Key 后再获取");
+        setLoadingProvider(null);
+        return;
+      }
+      const resp = await fetch(`${p.baseUrl}/models`, { headers: { Authorization: `Bearer ${apiKey}` } });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+      const models: string[] = (data.data || []).map((m: { id: string }) => m.id).sort();
+      if (models.length === 0) { setError("未返回任何模型"); setLoadingProvider(null); return; }
+      setFetchedModels((prev) => ({ ...prev, [p.id]: models }));
+      setConfig((prev) => {
+        const existing = new Set(prev.enabled.map((m) => fullId(m.providerId, m.modelId)));
+        const newEnabled = [...prev.enabled];
+        models.forEach((mid) => {
+          if (!existing.has(fullId(p.id, mid))) newEnabled.push({ providerId: p.id, modelId: mid });
+        });
+        const newDefault = prev.defaultModel || (newEnabled.length > 0 ? fullId(p.id, models[0]) : "");
+        const next = { ...prev, enabled: newEnabled, defaultModel: newDefault, modelContexts: prev.modelContexts ?? {} };
+        writeModelConfigAndNotify(next);
+        return next;
+      });
+      try {
+        const r = await api.autoCorrectConfig();
+        if (r.report) setInfo(`✓ ${r.message}`);
+      } catch {}
+    } catch (e) {
+      setError(`获取失败: ${e instanceof Error ? e.message : String(e)}`);
     }
-  }
-  const currentProvider = currentDefault ? currentDefault.split(":")[0] : null;
-  const configuredProviders = PROVIDERS.filter((p) => activeKeys[p.id]);
-  const currentProviderConfigured = currentProvider
-    ? currentProvider.startsWith("custom-")
-      // Two sources: (1) env-var scan (works after backend recompile),
-      // (2) /api/custom-providers has_key (works immediately).
-      ? !!activeKeys[currentProvider] || customIdsWithKey.has(currentProvider)
-      : configuredProviders.some((p) => p.id === currentProvider)
-    : false;
-  const noDefaultAtAll = !currentDefault;
-  const mismatchDetected = noDefaultAtAll || (currentProvider != null && !currentProviderConfigured);
-  // Also count custom providers that have keys configured (stored in activeKeys
-  // by the CUSTOM_*_API_KEY scan at mount). This ensures the banner still shows
-  // mismatch warnings even when only custom providers are available.
-  const customConfiguredCount = Object.keys(activeKeys).filter(
-    (k) => k.startsWith("custom-") && activeKeys[k]
-  ).length;
-  const hasAnyConfigured = configuredProviders.length > 0 || customConfiguredCount > 0;
-  const showMismatchBanner = mismatchDetected && (hasAnyConfigured || noDefaultAtAll);
+    setLoadingProvider(null);
+  }, [providerKeyInput]);
+
+  // ── Derived ──
+  const enabledRows = useMemo(() => {
+    return config.enabled
+      .filter((e) => {
+        // custom provider 若 key 已被后端删除,这里不再展示（防僵尸）
+        return e.providerId.startsWith("custom-")
+          ? customIdsWithKey.has(e.providerId)
+          : true;
+      })
+      .map((e) => {
+        const fid = fullId(e.providerId, e.modelId);
+        return {
+          ...e,
+          fid,
+          providerName: providerName(e.providerId),
+          isCustom: e.providerId.startsWith("custom-"),
+          isDefault: config.defaultModel === fid,
+          ctx: config.modelContexts?.[fid],
+        };
+      });
+  }, [config.enabled, config.defaultModel, config.modelContexts, customIdsWithKey, providerName]);
+
+  const selectableProviders = useMemo(() => {
+    const out: { id: string; name: string }[] = [];
+    PROVIDERS.forEach((p) => {
+      if (activeKeys[p.id]) out.push({ id: p.id, name: p.name });
+    });
+    customIdsWithKey.forEach((id) => out.push({ id, name: providerName(id) }));
+    return out;
+  }, [activeKeys, customIdsWithKey, providerName]);
+
+  const defaultProvId = config.defaultModel?.split(":")[0] ?? "";
+  const defaultModelId = config.defaultModel?.split(":")[1] ?? "";
+  const defaultModels = fetchedModels[defaultProvId] ?? [];
+  const hasAnyConfigurable = selectableProviders.length > 0;
+
+  const toggleProviderExpanded = (id: string) => {
+    setExpandedProviders((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
 
   return (
     <div className="flex flex-col h-full">
-      {showMismatchBanner && (
-        <div className="flex items-start gap-3 px-4 py-3 border-b border-warning/30 bg-warning-soft text-text-primary" role="alert">
-          <AlertCircle size={16} className="mt-0.5 shrink-0 text-warning" />
-          <div className="flex-1 min-w-0 text-xs leading-relaxed">
-            <div className="font-semibold mb-1 text-warning">
-              {noDefaultAtAll ? "尚未设置默认模型" : `默认模型「${currentDefault}」使用的 provider 未配置`}
-            </div>
-            <div className="text-text-secondary">
-              {noDefaultAtAll ? "从左侧选一个供应商并点击「获取模型」即可启用。已配置的供应商：" : "已配置的供应商："}
-              {(configuredProviders.length > 0 || customConfiguredCount > 0) ? (
-                <span className="font-medium text-warning">
-                  {[
-                    ...configuredProviders.map((p) => p.name),
-                    ...Object.keys(activeKeys).filter((k) => k.startsWith("custom-") && activeKeys[k]),
-                  ].join("、")}
-                </span>
-              ) : <span className="italic">无</span>}
-              。{noDefaultAtAll ? "保存后即可开始对话。" : "你可以在下方「可用模型」中点 ★ 设为默认，或在左侧为该 provider 添加 Key。"}
-            </div>
-          </div>
+      {/* ── sticky save/error banner ── */}
+      {(info || error) && (
+        <div
+          role="status"
+          className={`sticky top-0 z-10 flex items-center gap-2 px-4 py-2 text-[12px] border-b ${
+            error
+              ? "bg-red-500/10 border-red-500/30 text-red-400"
+              : "bg-emerald-500/10 border-emerald-500/30 text-emerald-400"
+          }`}
+        >
+          {error ? <AlertCircle size={14} /> : <Check size={14} />}
+          <span>{info || error}</span>
         </div>
       )}
-      <div className="flex flex-1 min-h-0">
-      {/* 左侧：供应商列表 */}
-      <div className="w-56 border-r border-border-primary bg-bg-primary overflow-y-auto shrink-0">
-        <div className="py-1">
-          <div className="text-[11px] text-text-muted uppercase tracking-wider mb-1 px-2">供应商</div>
-          {PROVIDERS.map((p) => {
-            const isActive = selectedProvider?.id === p.id;
-            const connected = activeKeys[p.id];
-            return (
-              <button key={p.id} onClick={() => selectProvider(p)} className={`w-full flex items-center gap-2 px-2 py-2 rounded text-left text-sm ${isActive ? "bg-accent/10 text-accent" : "text-text-secondary hover:bg-bg-tertiary hover:text-text-primary"}`}>
-                <ProviderIcon providerId={p.id} size={18} title={p.name} />
-                <div className="flex-1 min-w-0">
-                  <div className="font-medium text-xs truncate">{p.name}</div>
-                  <div className="text-[10px] text-text-muted truncate">{p.description}</div>
-                </div>
-                {connected && <span className="w-1.5 h-1.5 rounded-full bg-green-400 shrink-0" />}
-                <ChevronRight size={12} className="text-text-muted shrink-0" />
-              </button>
-            );
-          })}
-          {/* "自定义提供商"已提升为顶部独立 sub-tab(由 SystemConfigPanel
-              的 modelTab="custom" 渲染),不在左栏底部展示。
-              旧实现注释保留参考价值:这里原本渲染一个按钮 + 每 provider
-              卡片,与右栏 CustomProviderSection 重复。 */}
-        </div>
-      </div>
 
-      {/* 右侧：选中供应商的配置。"自定义"已提升为独立 sub-tab,
-          不再在左栏底部(避免埋在 builtin 列表末尾看不见)。原本 selectedProvider
-          === "_custom" 会渲染内嵌的 CustomProviderSection,现已成为死路径,
-          ModelTab 只剩 builtin provider 的 key 输入 + 模型列表。 */}
-      <div className="flex-1 overflow-y-auto min-h-0">
-        {selectedProvider ? (
-          <div className="p-6 max-w-xl">
-            <h3 className="text-base font-semibold text-text-primary mb-1">{selectedProvider.name}</h3>
-            <p className="text-xs text-text-muted mb-4">{selectedProvider.description}</p>
-
-            {error && (
-              <div className="flex items-center gap-2 px-3 py-2 mb-4 rounded-lg bg-red-500/10 border border-red-500/30 text-sm text-red-400">
-                <AlertCircle size={14} /> {error}
-              </div>
-            )}
-            {info && (
-              <div className="flex items-center gap-2 px-3 py-2 mb-4 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-sm text-emerald-400">
-                <CheckCircle size={14} /> {info}
-              </div>
-            )}
-
-            <div className="mb-4">
-              <label className="block text-xs font-medium text-text-primary mb-1">API Key</label>
-                <div className="flex gap-2">
-                  <input
-                    type="password"
-                    value={keyInput}
-                    onChange={(e) => setKeyInput(e.target.value)}
-                    placeholder={activeKeys[selectedProvider.id] ? "已配置，输入新 Key 以更新" : `输入 ${selectedProvider.name} API Key...`}
-                    className="flex-1 bg-bg-tertiary border border-border-primary rounded-lg px-3 py-2 text-sm text-text-primary placeholder-text-muted outline-none"
-                    onKeyDown={(e) => e.key === "Enter" && fetchModels()}
-                  />
-                  <button
-                    onClick={fetchModels}
-                    disabled={loading || !keyInput.trim()}
-                    className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm bg-accent hover:bg-accent-hover text-accent-on-text disabled:opacity-40"
-                  >
-                    {loading ? <RefreshCw size={14} className="animate-spin" /> : <Check size={14} />}
-                    {loading ? "获取中" : "获取模型"}
-                  </button>
-                </div>
-              </div>
-
-              {/* 模型列表 */}
-              {fetchedModels[selectedProvider.id] && (
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs font-medium text-text-primary">可用模型（{fetchedModels[selectedProvider.id].length}）</span>
-                  </div>
-                  <div className="space-y-1 max-h-80 overflow-y-auto rounded-lg border border-border-primary bg-bg-card p-2">
-                    {fetchedModels[selectedProvider.id].map((modelId) => {
-                      const fullId = `${selectedProvider.id}:${modelId}`;
-                      const isEnabled = config.enabled.some((m) => `${m.providerId}:${m.modelId}` === fullId);
-                      const isDefault = config.defaultModel === fullId;
-                      const ctx = config.modelContexts?.[fullId];
-                      return (
-                        <div key={modelId} className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs ${isDefault ? "bg-accent/10 border border-accent/30" : "hover:bg-bg-tertiary"}`}>
-                          <button onClick={() => {
-                            toggleModel(selectedProvider.id, modelId);
-                            const wasEnabled = config.enabled.some((m) => `${m.providerId}:${m.modelId}` === fullId);
-                            const newCount = wasEnabled ? config.enabled.length - 1 : config.enabled.length + 1;
-                            setInfo(wasEnabled ? `✓ 已取消 · 剩 ${newCount} 个模型启用中` : `✓ 已保存 · 共 ${newCount} 个模型启用中`);
-                            setTimeout(() => setInfo(""), 2500);
-                          }} className={`w-4 h-4 rounded border-2 flex items-center justify-center transition-colors ${isEnabled ? "bg-accent border-accent" : "bg-transparent border-text-muted hover:border-accent"}`}>
-                            {isEnabled
-                              ? <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 5l2 2 4-4" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                              : null}
-                          </button>
-                          <span className={`flex-1 font-mono min-w-0 truncate ${isEnabled ? "text-text-primary" : "text-text-muted"}`}>{modelId}</span>
-                          {isEnabled && (
-                            <>
-                              <select
-                                value={ctx ?? ""}
-                                onChange={(e) => {
-                                  const v = e.target.value;
-                                  setConfig((prev) => {
-                                    const next = { ...prev, modelContexts: { ...(prev.modelContexts ?? {}), [fullId]: v ? Number(v) : 0 } };
-                                    storage.setItem(MODEL_CONFIG_KEY, JSON.stringify(next));
-                                    return next;
-                                  });
-                                  // Sync to backend for custom providers
-                                  if (selectedProvider?.id.startsWith("custom-")) {
-                                    const allCtx = { ...config.modelContexts, [fullId]: v ? Number(v) : 0 };
-                                    api.updateCustomProviderModelContexts(selectedProvider.id, allCtx).catch((e) => { console.warn("[SettingsView] modelContext sync failed:", e); });
-                                  }
-                                }}
-                                title="上下文窗口大小；空 = 后端 catalog 兜底（通常 128K）"
-                                className="bg-bg-tertiary border border-border-secondary rounded px-1 py-0.5 text-[10px] text-text-muted outline-none"
-                              >
-                                <option value="">{defaultOptionLabel(resolveContextWindow(modelId, ctx, null))}</option>
-                                {CONTEXT_WINDOW_OPTIONS.map((o) => (
-                                  <option key={o.value} value={o.value}>{o.label}</option>
-                                ))}
-                              </select>
-                              <button onClick={() => setDefault(fullId)} className={`px-2 py-0.5 rounded text-[10px] ${isDefault ? "bg-accent text-accent-on-text" : "border border-border-secondary text-text-muted hover:border-accent hover:text-accent"}`}>
-                                {isDefault ? "默认" : "设为默认"}
-                              </button>
-                            </>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
+      <div className="flex-1 overflow-y-auto">
+        {/* ── SECTION 1: 默认模型 ── */}
+        <section className="px-6 py-5 border-b border-border-primary">
+          <div className="flex items-center gap-2 mb-3">
+            <Star size={14} className="text-accent" />
+            <h2 className="text-[15px] font-semibold text-text-primary">默认模型</h2>
+          </div>
+          {hasAnyConfigurable ? (
+            <div className="flex flex-wrap items-center gap-2 max-w-2xl">
+              <select
+                value={defaultProvId}
+                onChange={(e) => {
+                  const newProv = e.target.value;
+                  if (newProv === defaultProvId) return;
+                  const newModel = fetchedModels[newProv]?.[0] ?? "";
+                  if (newModel) setDefault(newProv, newModel);
+                  else setInfo("→请先在「供应商」中获取该提供商的模型");
+                }}
+                className="bg-bg-card border border-border-primary rounded px-2.5 py-1.5 text-[13px] text-text-primary outline-none min-w-[140px]"
+              >
+                <option value="">选择供应商</option>
+                {selectableProviders.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+              <select
+                value={defaultModelId}
+                onChange={(e) => {
+                  if (defaultProvId && e.target.value) setDefault(defaultProvId, e.target.value);
+                }}
+                disabled={!defaultProvId}
+                className="bg-bg-card border border-border-primary rounded px-2.5 py-1.5 text-[13px] text-text-primary outline-none min-w-[180px] disabled:opacity-40 font-mono"
+              >
+                <option value="">选择模型</option>
+                {defaultModels.map((m) => (
+                  <option key={m} value={m}>{m}</option>
+                ))}
+              </select>
+              {config.defaultModel && (
+                <span className="text-[11px] text-text-faint ml-1">⭐ 当前默认</span>
               )}
-
-              {/* Config is auto-saved on every toggle/set-default. */}
             </div>
           ) : (
-            <div className="flex items-center justify-center h-full text-text-muted text-sm">← 选择一个供应商进行配置</div>
+            <p className="text-[12px] text-text-muted">尚未配置任何供应商,展开下方「供应商」配置 API Key 后获取模型即可。</p>
           )}
-      </div>
+          {!config.defaultModel && hasAnyConfigurable && (
+            <p className="text-[11px] text-warning mt-2">⚠ 未设置默认模型,聊天无法开始</p>
+          )}
+        </section>
+
+        {/* ── SECTION 2: 已启用模型 ── */}
+        <section className="px-6 py-5 border-b border-border-primary">
+          <div className="flex items-center gap-2 mb-3">
+            <Check size={14} className="text-text-secondary" />
+            <h2 className="text-[15px] font-semibold text-text-primary">
+              已启用模型
+              <span className="ml-1 text-text-muted text-[12px] font-normal">({enabledRows.length})</span>
+            </h2>
+          </div>
+          {enabledRows.length === 0 ? (
+            <p className="text-[12px] text-text-muted italic py-3">尚未启用任何模型。展开下方「供应商」→ 获取模型 → 在「已启用模型」勾选启用。</p>
+          ) : (
+            <ul className="space-y-1.5">
+              {enabledRows.map((row) => (
+                <EnabledModelRow
+                  key={row.fid}
+                  row={row}
+                  flashed={flashKey === row.fid}
+                  onSetDefault={() => setDefault(row.providerId, row.modelId)}
+                  onRemove={() => toggleModel(row.providerId, row.modelId)}
+                  onSetContext={(v) => setModelContext(row.providerId, row.modelId, v)}
+                />
+              ))}
+            </ul>
+          )}
+        </section>
+
+        {/* ── SECTION 3: 供应商折叠面板 ── */}
+        <section className="px-6 py-5">
+          <h2 className="text-[15px] font-semibold text-text-primary mb-3">供应商</h2>
+          <div className="space-y-1.5">
+            {PROVIDERS.map((p) => (
+              <ProviderAccordionItem
+                key={p.id}
+                provider={p}
+                expanded={expandedProviders.has(p.id)}
+                configured={activeKeys[p.id]}
+                modelCount={fetchedModels[p.id]?.length ?? 0}
+                loading={loadingProvider === p.id}
+                keyInput={providerKeyInput[p.id] ?? ""}
+                onToggle={() => toggleProviderExpanded(p.id)}
+                onKeyInputChange={(v) => setProviderKeyInput((prev) => ({ ...prev, [p.id]: v }))}
+                onFetch={() => fetchModelsForProvider(p)}
+              />
+            ))}
+          </div>
+          <p className="mt-4 text-[11px] text-text-muted italic">自定义 OpenAI 兼容服务商请前往「自定义提供商」标签页配置。</p>
+        </section>
       </div>
     </div>
   );
+}
+
+// ── 已启用模型行 ──
+function EnabledModelRow({ row, flashed, onSetDefault, onRemove, onSetContext }: {
+  row: {
+    providerId: string;
+    modelId: string;
+    providerName: string;
+    isDefault: boolean;
+    isCustom: boolean;
+    ctx?: number;
+    fid: string;
+  };
+  flashed: boolean;
+  onSetDefault: () => void;
+  onRemove: () => void;
+  onSetContext: (v: number | null) => void;
+}) {
+  return (
+    <li
+      className={`flex items-center gap-2 px-3 py-2 rounded-lg text-[12px] border transition-colors ${
+        flashed
+          ? "bg-emerald-500/10 border-emerald-500/40"
+          : row.isDefault
+            ? "bg-accent/10 border-accent/30"
+            : "bg-bg-card border-border-primary hover:bg-bg-tertiary"
+      }`}
+    >
+      <ProviderIcon providerId={row.providerId} size={16} title={row.providerName} />
+      <span className="font-mono text-text-primary truncate min-w-0 flex-1">{row.modelId}</span>
+      <span className="text-[10px] text-text-faint uppercase shrink-0">
+        {row.isCustom ? "CUSTOM" : "BUILTIN"}
+      </span>
+      <select
+        value={row.ctx ?? ""}
+        onChange={(e) => onSetContext(e.target.value ? Number(e.target.value) : null)}
+        title="上下文窗口;空=后端 catalog 兜底"
+        className="bg-bg-tertiary border border-border-secondary rounded px-1.5 py-0.5 text-[10px] text-text-muted outline-none"
+      >
+        <option value="">{defaultOptionLabel(resolveContextWindow(row.modelId, row.ctx, null))}</option>
+        {CONTEXT_WINDOW_OPTIONS.map((o) => (
+          <option key={o.value} value={o.value}>{o.label}</option>
+        ))}
+      </select>
+      {row.isDefault ? (
+        <span className="text-[10px] text-accent font-semibold shrink-0">⭐ 默认</span>
+      ) : (
+        <button
+          onClick={onSetDefault}
+          className="text-[10px] px-2 py-0.5 rounded border border-border-secondary text-text-muted hover:border-accent hover:text-accent shrink-0"
+        >
+          设为默认
+        </button>
+      )}
+      <button
+        onClick={onRemove}
+        title="取消启用"
+        className="p-0.5 rounded text-text-muted hover:text-red-400 hover:bg-red-500/10 shrink-0"
+      >
+        <Trash2 size={12} />
+      </button>
+    </li>
+  );
+}
+
+// ── 供应商折叠面板 ──
+function ProviderAccordionItem({ provider, expanded, configured, modelCount, loading, keyInput, onToggle, onKeyInputChange, onFetch }: {
+  provider: ProviderDef;
+  expanded: boolean;
+  configured: boolean;
+  modelCount: number;
+  loading: boolean;
+  keyInput: string;
+  onToggle: () => void;
+  onKeyInputChange: (v: string) => void;
+  onFetch: () => void;
+}) {
+  return (
+    <div className="rounded-lg border border-border-primary bg-bg-card overflow-hidden">
+      <button
+        onClick={onToggle}
+        className="w-full flex items-center gap-2 px-3 py-2 text-left text-[12px] hover:bg-bg-tertiary"
+      >
+        <ChevronRight
+          size={14}
+          className={`shrink-0 text-text-muted transition-transform duration-150 ${expanded ? "rotate-90" : ""}`}
+        />
+        <ProviderIcon providerId={provider.id} size={16} title={provider.name} />
+        <div className="flex-1 min-w-0">
+          <div className="font-medium text-text-primary truncate">{provider.name}</div>
+          <div className="text-[10px] text-text-muted truncate">{provider.description}</div>
+        </div>
+        {configured && <span className="w-1.5 h-1.5 rounded-full bg-green-400 shrink-0" />}
+        {modelCount > 0 && (
+          <span className="text-[10px] text-text-faint shrink-0">{modelCount} 模型</span>
+        )}
+      </button>
+      {expanded && (
+        <div className="border-t border-border-primary p-3 bg-bg-primary space-y-2">
+          <div className="flex gap-2">
+            <input
+              type="password"
+              value={keyInput}
+              onChange={(e) => onKeyInputChange(e.target.value)}
+              placeholder={configured ? "已配置,输入新 Key 以更新" : `输入 ${provider.name} API Key`}
+              className="flex-1 bg-bg-tertiary border border-border-primary rounded px-2.5 py-1.5 text-[12px] text-text-primary placeholder-text-muted outline-none"
+              onKeyDown={(e) => { if (e.key === "Enter") onFetch(); }}
+            />
+            <button
+              onClick={onFetch}
+              disabled={loading}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded text-[12px] bg-accent hover:bg-accent-hover text-accent-on-text disabled:opacity-40 shrink-0"
+            >
+              <RefreshCw size={12} className={loading ? "animate-spin" : ""} />
+              {loading ? "获取中" : configured ? "重新获取" : "获取模型"}
+            </button>
+          </div>
+          <p className="text-[10px] text-text-muted">
+            {modelCount > 0
+              ? `已获取 ${modelCount} 个模型 → 切到上方「已启用模型」勾选启用`
+              : "填写 API Key 后点击获取,模型会缓存到本地并自动启用"}
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── helpers ──
+function fullId(providerId: string, modelId: string): string {
+  return `${providerId}:${modelId}`;
 }
 
 // ── Custom Provider Section (form + model list) ──────────
@@ -511,7 +592,6 @@ export function CustomProviderSection({
   const [providers, setProviders] = useState<api.CustomProviderSummary[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
   // 互斥展开：同时只允许一个 provider 卡片展开。null = 全部折叠。
-  // 避免多 provider 时无限往下撑 + 与对话侧"按 provider 分组"心智模型一致。
   const [expandedProviderId, setExpandedProviderId] = useState<string | null>(null);
   const [, setProviderModels] = useState<Record<string, string[]>>({});
 
@@ -520,7 +600,7 @@ export function CustomProviderSection({
   }, []);
 
   const safeId = name.trim()
-    ? `custom-${name.trim().toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff_-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "")}`
+    ? `custom-${name.trim().toLowerCase().replace(/[^a-z0-9一-龥_-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "")}`
     : "";
 
   const handleFetchModelsForSavedProvider = async (id: string) => {
@@ -533,12 +613,6 @@ export function CustomProviderSection({
       if (models.length === 0) { setError("未返回任何模型"); setFetching(false); return; }
       setProviderModels((prev) => ({ ...prev, [id]: models }));
       onModelsFetched(id, models);
-      // 把后端探测的 per-model context_window merge 进 config.modelContexts
-      // —— 只填用户**没显式设过**的（`config.modelContexts[fullId]` 缺失
-      // 或 0）。后端 fetch_models 已把探测值持久化到 config.yaml 的
-      // `LlmProviderConfig.model_contexts`，但前端 localStorage 不知道；
-      // 这一步把"探测值"同步到 localStorage，UI 才能在 select 默认选项
-      // 显示"默认 (200K·探测)"。
       const probedWithWindow = resp.models.filter((m) => typeof m.context_window === "number" && (m.context_window as number) > 0);
       if (probedWithWindow.length > 0) {
         setConfig((prev) => {
@@ -556,18 +630,12 @@ export function CustomProviderSection({
           if (!changed) return prev;
           const nextCfg = { ...prev, modelContexts: nextContexts };
           writeModelConfigAndNotify(nextCfg);
-          // 同步到后端（custom provider 走 PUT /api/custom-providers/{id}/model-contexts）
           api.updateCustomProviderModelContexts(id, nextContexts).catch((e) => { console.warn("[CustomProviderSection] sync probed contexts failed:", e); });
           return nextCfg;
         });
       }
-      // 刷新 provider 列表（拿到最新 model_contexts 用于 select 默认项展示）
       api.getCustomProviders().then((list) => setProviders(list)).catch(() => { /* non-fatal */ });
       onRefresh();
-      // 与 reconcile 的"用户主动勾选才 enable"原则一致:fetched 后不
-      // 主动 writeModelConfigAndNotify(关于 enabled),让用户在「自定义模型」
-      // 区域手动勾选要启用的。已存在于 config.enabled 的保持不动,新
-      // 拉到的默认未勾选。
       const probedHint = probedWithWindow.length > 0
         ? `, ${probedWithWindow.length} 个已自动填入探测的 context_window`
         : "";
@@ -634,7 +702,6 @@ export function CustomProviderSection({
     setSaving(true);
     setError("");
     try {
-      // Step 1: persist the provider
       await api.createCustomProvider({
         id: safeId,
         display_name: name.trim(),
@@ -642,10 +709,8 @@ export function CustomProviderSection({
         api_key: apiKey.trim(),
         models: modelInput.trim() || undefined,
       });
-      // Step 2: refresh list
       const updated = await api.getCustomProviders();
       setProviders(updated);
-      // Step 3: fetch models
       setSaving(false);
       setFetching(true);
       const resp = await api.fetchCustomProviderModels(safeId);
@@ -655,12 +720,7 @@ export function CustomProviderSection({
       setModelInput(models.join(", "));
       setProviderModels((prev) => ({ ...prev, [safeId]: models }));
       onModelsFetched(safeId, models);
-      // 新建流程同步 merge 探测的 per-model context_window（与已配置 provider
-      // 处理路径一致：后端已持久化到 config.yaml，前端 localStorage 也要跟上）
       const probedWithWindow = resp.models.filter((m) => typeof m.context_window === "number" && (m.context_window as number) > 0);
-      // 新建流程一次性 commit:把 fetched models 默认加进 enabled。
-      // updateCustomModels 改完不主动 push,这里由"提交"动作显式
-      // 写一次 enabled(等同于"用户预勾选 fetched models")。
       setConfig((prev) => {
         const existing = new Set(prev.enabled.map((m) => `${m.providerId}:${m.modelId}`));
         const newEnabled = [...prev.enabled];
@@ -668,7 +728,6 @@ export function CustomProviderSection({
           const key = `${safeId}:${modelId}`;
           if (!existing.has(key)) newEnabled.push({ providerId: safeId, modelId });
         });
-        // 把探测的 context_window 同步进 modelContexts（新建流程 modelContexts 必为空，全填）
         const currentContexts = prev.modelContexts ?? {};
         const nextContexts: Record<string, number> = { ...currentContexts };
         for (const m of probedWithWindow) {
@@ -684,13 +743,11 @@ export function CustomProviderSection({
           modelContexts: nextContexts,
         };
         writeModelConfigAndNotify(next);
-        // 同步探测值到后端（与 handleFetchModelsForSavedProvider 一致）
         if (probedWithWindow.length > 0) {
           api.updateCustomProviderModelContexts(safeId, nextContexts).catch((e) => { console.warn("[CustomProviderSection] sync probed contexts (new) failed:", e); });
         }
         return next;
       });
-      // 刷新 provider 列表（拿到最新 model_contexts 给 select 默认项展示）
       api.getCustomProviders().then((list) => setProviders(list)).catch(() => { /* non-fatal */ });
       onRefresh();
       setSuccess(`成功获取 ${models.length} 个模型${probedWithWindow.length > 0 ? `, ${probedWithWindow.length} 个已自动填入探测的 context_window` : ""}`);
@@ -729,9 +786,6 @@ export function CustomProviderSection({
         if (models.length > 0) {
           setProviderModels((prev) => ({ ...prev, [targetId]: models }));
           onModelsFetched(targetId, models);
-          // 编辑模式 commit:把新加入的 model push 进 enabled(用户主动
-          // 编辑 modelInput 后 commit,与 reconcile 不主动 union 原则一致——
-          // 没在 modelInput 里出现的就不 push,已存在的保持)
           if (editingId) {
             setConfig((prev) => {
               const existing = new Set(prev.enabled.map((m) => `${m.providerId}:${m.modelId}`));
@@ -762,7 +816,6 @@ export function CustomProviderSection({
           setSuccess(editingId ? "已更新" : "已保存");
         }
       } catch { /* non-fatal */ }
-      // Set default to first model if not yet set
       setConfig((prev) => {
         if (!prev.defaultModel) {
           const models = modelInput.split(",").map((m) => m.trim()).filter(Boolean);
@@ -789,12 +842,6 @@ export function CustomProviderSection({
         <p className="text-xs text-text-muted">配置兼容 OpenAI API 的任意 LLM 服务</p>
       </div>
 
-      {/* 已配置的提供商(默认折叠,互斥展开,展开后才显示模型勾选区)
-          替代旧的"已配置的提供商"+"自定义模型"两块独立渲染。
-          - 折叠态:provider 名字 + URL + 模型数 + 已启用数 + 操作按钮
-          - 展开态:头部收起,下方显示该 provider 的模型勾选区(2 列网格)
-          - 同一时刻只有一个 provider 展开(expandedProviderId 互斥)
-          - 头部操作按钮(测试/模型/编辑/删除)stopPropagation,不会触发展开 */}
       {providers.length > 0 && (
         <div className="space-y-2">
           <div className="text-[11px] text-text-muted uppercase tracking-wider">已配置的提供商</div>
@@ -807,7 +854,6 @@ export function CustomProviderSection({
             return (
               <div key={p.id} className="rounded-lg bg-bg-card border border-border-primary overflow-hidden">
                 <div className="flex items-stretch gap-2 px-3 py-2 text-xs">
-                  {/* 头部可点击区:展开/折叠 */}
                   <button
                     onClick={() => setExpandedProviderId(isExpanded ? null : p.id)}
                     aria-expanded={isExpanded}
@@ -824,7 +870,6 @@ export function CustomProviderSection({
                       </div>
                     </div>
                   </button>
-                  {/* 操作按钮组:stopPropagation 防误触展开 */}
                   <div className="flex items-center gap-1 shrink-0">
                     <button onClick={(e) => { e.stopPropagation(); handleTestConnection(p.id); }} disabled={testing === p.id} className="px-2 py-1 rounded text-[10px] bg-bg-tertiary text-text-muted hover:text-accent hover:bg-accent/10 disabled:opacity-40">
                       {testing === p.id ? "..." : "测试"}
@@ -857,12 +902,8 @@ export function CustomProviderSection({
                             <div key={modelId} className={`flex items-center gap-1.5 px-2 py-1.5 rounded text-[11px] ${isDefault ? "bg-accent/10 border border-accent/30" : "hover:bg-bg-tertiary"}`}>
                               <button onClick={() => {
                                 toggleModel(p.id, modelId);
-                                // 视觉反馈:绿色"已保存"banner,2.5s 自动清。
-                                // 否则主人以为勾选没生效 = "没法保存"。
                                 const wasEnabled = config.enabled.some((m) => `${m.providerId}:${m.modelId}` === fullId);
-                                const newCount = wasEnabled
-                                  ? config.enabled.length - 1
-                                  : config.enabled.length + 1;
+                                const newCount = wasEnabled ? config.enabled.length - 1 : config.enabled.length + 1;
                                 setSuccess(wasEnabled ? `✓ 已取消 · 剩 ${newCount} 个模型启用中` : `✓ 已保存 · 共 ${newCount} 个模型启用中`);
                                 setTimeout(() => setSuccess(""), 2500);
                               }} className={`w-4 h-4 rounded border-2 flex items-center justify-center shrink-0 transition-colors ${isEnabled ? "bg-accent border-accent" : "bg-transparent border-text-muted hover:border-accent"}`}>
@@ -1007,22 +1048,23 @@ export function CustomProviderSection({
 
 // ── Custom Providers Tab (独立 sub-tab,与 ModelTab 并列) ──
 //
-// 把"自定义提供商"从 ModelTab 左栏底部提升为独立 sub-tab,不再混在
-// builtin provider 列表末尾看不见。CustomProvidersTab 持有自己的
-// config state,通过 localStorage + MODEL_CONFIG_CHANGED_EVENT 跟
-// ModelTab 保持同步(单一权威来源 = localStorage)。
+// 单一权威来源 = localStorage。挂载时立即从 loadModelCache() 拉一份
+// （修旧 bug：useState({}) 导致切回 tab 后模型列表空白）。
 export function CustomProvidersTab() {
   const safeSetTimeout = useSafeTimeout();
   const [config, setConfig] = useState<ModelConfigData>(loadModelConfig);
-  const [customModels, setCustomModels] = useState<Record<string, string[]>>({});
+  // BUGFIX: 旧版 useState({}) 造成切回 tab 时「暂无模型」。挂载即从缓存拉，
+  //       任何写后即可见；MODEL_CONFIG_CHANGED_EVENT 也会再刷新一次。
+  const [customModels, setCustomModels] = useState<Record<string, string[]>>(loadModelCache);
 
   // 监听其他 tab/组件写入的 MODEL_CONFIG_CHANGED_EVENT,把本组件的
-  // config state 重新拉一遍(localStorage 是单一权威来源)。
+  // config + 缓存都重新拉一遍(单一权威来源 = localStorage)。
   useEffect(() => {
     const refresh = () => {
       try {
         const raw = storage.getItem(MODEL_CONFIG_KEY);
         if (raw) setConfig({ modelContexts: {}, ...JSON.parse(raw) });
+        setCustomModels(loadModelCache());
       } catch {}
     };
     const onChanged = () => refresh();
@@ -1073,9 +1115,6 @@ export function CustomProvidersTab() {
     });
   }, []);
 
-  // CustomProvidersTab 不显示 builtin provider 列表,不需要 activeKeys;
-  // CustomProviderSection.handleFetchModelsForSavedProvider 里的 onRefresh()
-  // 在此为 no-op(它只 refresh 外面 ModelTab 的 activeKeys 元数据)。
   return (
     <div className="p-6">
       <CustomProviderSection
