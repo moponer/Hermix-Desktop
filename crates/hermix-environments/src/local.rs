@@ -9,6 +9,10 @@ use tokio::process::Command as TokioCommand;
 
 use hermix_core::console_decode::decode_console_output;
 use hermix_core::{AgentError, CommandOutput, TerminalBackend};
+use hermix_coreutils as coreutils;
+use hermix_shell_parser::{parse, ParsedKind};
+
+pub use crate::jobs::{JobRegistry, JobStatus, JobSummary, LogStream};
 
 // `decode_console_output` is re-exported by `hermix-core::console_decode`
 // since the Windows-first hardening pass. The local
@@ -100,6 +104,11 @@ pub struct LocalBackend {
     /// Optional workspace root. When set, used as the default working
     /// directory for commands that don't specify their own `workdir`.
     pub workspace_root: Option<PathBuf>,
+    /// Optional background-job registry. `None` until the caller
+    /// wires one in (via `with_jobs_registry`). Tools like
+    /// `jobs_start` etc. require this; the legacy
+    /// `background_processes` PID list keeps working without it.
+    pub jobs: Option<Arc<JobRegistry>>,
 }
 
 impl LocalBackend {
@@ -110,6 +119,7 @@ impl LocalBackend {
             max_output_size,
             background_processes: Arc::new(Mutex::new(Vec::new())),
             workspace_root: None,
+            jobs: None,
         }
     }
 
@@ -117,6 +127,56 @@ impl LocalBackend {
     pub fn with_workspace_root(mut self, root: PathBuf) -> Self {
         self.workspace_root = Some(root);
         self
+    }
+
+    /// Wire a background-job registry. Required for the four
+    /// `jobs_*` tool methods below to be usable.
+    pub fn with_jobs_registry(mut self, registry: Arc<JobRegistry>) -> Self {
+        self.jobs = Some(registry);
+        self
+    }
+
+    /// Spawn a command as a backgrounded, persistent job. Requires
+    /// `with_jobs_registry` to have been called. The returned id is
+    /// what `jobs_list` / `jobs_stop` / `jobs_log` accept.
+    pub async fn jobs_start(
+        &self,
+        command: &str,
+        cwd: &std::path::Path,
+    ) -> Result<String, AgentError> {
+        let reg = self.jobs.as_ref().ok_or_else(|| {
+            AgentError::Io("jobs registry not configured on this backend".to_string())
+        })?;
+        reg.clone()
+            .start(command, cwd)
+            .await
+            .map_err(|e: std::io::Error| AgentError::Io(format!("jobs_start: {}", e)))
+    }
+
+    pub async fn jobs_list(&self) -> Result<Vec<JobSummary>, AgentError> {
+        let reg = self.jobs.as_ref().ok_or_else(|| {
+            AgentError::Io("jobs registry not configured on this backend".to_string())
+        })?;
+        reg.list()
+            .await
+            .map_err(|e: std::io::Error| AgentError::Io(format!("jobs_list: {}", e)))
+    }
+
+    pub async fn jobs_stop(&self, id: &str) -> Result<JobSummary, AgentError> {
+        let reg = self.jobs.as_ref().ok_or_else(|| {
+            AgentError::Io("jobs registry not configured on this backend".to_string())
+        })?;
+        reg.stop(id)
+            .await
+            .map_err(|e: std::io::Error| AgentError::Io(format!("jobs_stop: {}", e)))
+    }
+
+    pub fn jobs_log_path(&self, id: &str, stream: LogStream) -> Result<PathBuf, AgentError> {
+        let reg = self.jobs.as_ref().ok_or_else(|| {
+            AgentError::Io("jobs registry not configured on this backend".to_string())
+        })?;
+        reg.log_path(id, stream)
+            .map_err(|e| AgentError::Io(format!("jobs_log: {}", e)))
     }
 }
 
@@ -356,8 +416,46 @@ impl TerminalBackend for LocalBackend {
             .map(std::path::PathBuf::from)
             .or_else(|| self.workspace_root.clone())
             .map(|p| hermix_core::path_security::strip_win32_long_path_buf(&p));
-        if let Some(dir) = effective_dir {
+        if let Some(ref dir) = effective_dir {
             cmd.current_dir(dir);
+        }
+
+        // Native dispatch fast-path (Tier1/2/4 coreutils). Skip when:
+        //   * background — background commands must keep their PID for
+        //     later tools (jobs_list, jobs_stop). Native dispatch
+        //     completes synchronously and has no PID to track.
+        //   * pty — already handled above; this branch only runs when
+        //     pty == false.
+        //   * shell-meta or unparseable input — fall through to the
+        //     existing cmd.exe / powershell paths.
+        if !background {
+            let cwd = effective_dir
+                .clone()
+                .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+            match parse(command) {
+                Ok(parsed) if parsed.kind == ParsedKind::Pure => {
+                    match coreutils::dispatch(&parsed.program, &parsed.args, &cwd) {
+                        Ok(Some(out)) => return Ok(out),
+                        Ok(None) => {
+                            // Not in our dictionary — fall through to shell.
+                        }
+                        Err(e) => {
+                            return Err(AgentError::Io(format!(
+                                "coreutils {}: {}",
+                                parsed.program, e
+                            )));
+                        }
+                    }
+                }
+                Ok(_) => {
+                    // Empty or ShellMeta — fall through to shell.
+                }
+                Err(e) => {
+                    // Unbalanced quote — let the shell produce a
+                    // diagnostic instead of swallowing it.
+                    tracing::debug!(error = %e, "coreutils parse failed; falling back to shell");
+                }
+            }
         }
 
         if background {

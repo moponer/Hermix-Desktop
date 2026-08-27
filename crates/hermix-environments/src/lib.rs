@@ -15,6 +15,7 @@
 //! See [`training`] for traits and notes aligned with `PARITY_PLAN.md` Week 3.
 
 pub mod file_sync;
+pub mod jobs;
 pub mod local;
 pub mod local_isolation;
 pub mod manager;
