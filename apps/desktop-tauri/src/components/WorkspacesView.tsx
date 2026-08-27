@@ -345,6 +345,10 @@ export function WorkspacesView() {
                 <div className="flex items-center gap-1.5 py-2 text-[12px]" style={{ color: "var(--color-text-faint)" }}>
                   <Loader2 size={13} className="animate-spin" /> 加载中…
                 </div>
+              ) : templates.length === 0 ? (
+                <div className="py-2 text-[12px]" style={{ color: "var(--color-text-faint)" }}>
+                  暂无可用模板
+                </div>
               ) : (
                 <div className="flex max-h-72 flex-col gap-1.5 overflow-y-auto">
                   {templates.map((t) => (
@@ -352,16 +356,10 @@ export function WorkspacesView() {
                       key={t.id}
                       disabled={creatingTemplate !== null}
                       onClick={() => void handleCreateFromTemplate(t)}
-                      className="flex w-full flex-col gap-0.5 rounded-md border px-2.5 py-2 text-left transition-colors"
+                      className="flex w-full flex-col gap-0.5 rounded-md border px-2.5 py-2 text-left transition-opacity hover:opacity-85 disabled:opacity-50"
                       style={{
                         borderColor: "var(--color-border-secondary)",
                         background: "var(--color-bg-base)",
-                      }}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.opacity = "0.85";
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.opacity = "1";
                       }}
                     >
                       <span className="flex items-center gap-1.5 text-[12.5px] font-medium" style={{ color: "var(--color-text-primary)" }}>
@@ -402,7 +400,49 @@ export function WorkspacesView() {
             color: "var(--color-text-faint)",
           }}
         >
-          {entries.length === 0 ? "创建或选择一个工作台开始" : "加载中…"}
+          {entries.length === 0 ? (
+            /* M7.4 空工作台引导：从模板 or 对话创建 二选一 */
+            <div className="flex flex-col items-center gap-3 px-6 py-8 text-center">
+              <LayoutDashboard size={28} style={{ color: "var(--color-text-faint)" }} />
+              <div>
+                <div className="text-[13.5px] font-medium" style={{ color: "var(--color-text-primary)" }}>
+                  创建你的第一个工作台
+                </div>
+                <div className="mt-1 max-w-xs text-[12px] leading-relaxed">
+                  从预置台账模板一键开始，或在对话中描述需求，AI 会自动为你建设
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => void openTemplates()}
+                  className="flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-[12.5px] transition-opacity hover:opacity-80"
+                  style={{
+                    borderColor: "var(--color-border-secondary)",
+                    background: "var(--color-bg-elevated)",
+                    color: "var(--color-text-primary)",
+                  }}
+                >
+                  <LayoutGrid size={13} /> 从模板开始
+                </button>
+                <button
+                  onClick={() => {
+                    setMode("creating");
+                    setActingId(null);
+                    setDraft("");
+                  }}
+                  className="flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-[12.5px] transition-opacity hover:opacity-80"
+                  style={{
+                    borderColor: "var(--color-border-secondary)",
+                    color: "var(--color-text-secondary)",
+                  }}
+                >
+                  <Plus size={13} /> 新建空白
+                </button>
+              </div>
+            </div>
+          ) : (
+            "加载中…"
+          )}
         </div>
       )}
     </div>
