@@ -15,9 +15,12 @@ import type { WorkspaceField, WorkspaceModule } from "../../types";
 interface FormViewProps {
   module: Extract<WorkspaceModule, { type: "table" }>;
   initialValues?: Record<string, unknown>;
-  onSubmit: (values: Record<string, unknown>) => void;
+  /** 允许异步；失败时应由调用方 toast，本组件保持表单开启不丢输入。 */
+  onSubmit: (values: Record<string, unknown>) => void | Promise<void>;
   onCancel?: () => void;
   submitLabel?: string;
+  /** Relation 字段候选：目标表行清单（缺省退化为文本输入）。 */
+  relationCandidates?: Record<string, { id: string; label: string }[]>;
 }
 
 type FormState = Record<string, string | boolean>;
@@ -28,6 +31,7 @@ export function FormView({
   onSubmit,
   onCancel,
   submitLabel = "保存",
+  relationCandidates,
 }: FormViewProps) {
   const [values, setValues] = useState<FormState>(() => {
     const init: FormState = {};
@@ -46,6 +50,7 @@ export function FormView({
     return init;
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
 
   const setField = (id: string, v: string | boolean) =>
     setValues((prev) => ({ ...prev, [id]: v }));
@@ -72,7 +77,9 @@ export function FormView({
         out[f.id] = v === "" ? null : v;
       }
     }
-    onSubmit(out);
+    // 异步提交：失败时上层 toast 且表单保持开启（不静默吞结果）
+    setBusy(true);
+    Promise.resolve(onSubmit(out)).finally(() => setBusy(false));
   };
 
   const fields = useMemo(() => module.fields, [module.fields]);
@@ -97,6 +104,7 @@ export function FormView({
               field={f}
               value={values[f.id]}
               error={errors[f.id]}
+              candidates={relationCandidates?.[f.target ?? ""]}
               onChange={(v) => setField(f.id, v)}
             />
           ))}
@@ -105,7 +113,8 @@ export function FormView({
       <div className="flex shrink-0 items-center gap-2 border-t px-4 py-2.5" style={{ borderColor: "var(--color-border-subtle)" }}>
         <button
           onClick={handleSubmit}
-          className="rounded-md px-4 py-1.5 text-[12px] font-medium transition-opacity hover:opacity-85"
+          disabled={busy}
+          className="rounded-md px-4 py-1.5 text-[12px] font-medium transition-opacity hover:opacity-85 disabled:opacity-50"
           style={{ background: "var(--color-accent)", color: "var(--color-accent-on-text)" }}
         >
           {submitLabel}
@@ -128,11 +137,14 @@ function FieldInput({
   field,
   value,
   error,
+  candidates,
   onChange,
 }: {
   field: WorkspaceField;
   value: string | boolean;
   error?: string;
+  /** Relation 候选（field.target 表的行清单）。 */
+  candidates?: { id: string; label: string }[];
   onChange: (v: string | boolean) => void;
 }) {
   const label = (
@@ -215,27 +227,46 @@ function FieldInput({
         />
       );
       break;
-    case "relation":
-      control = (
-        <input
-          id={`ws-f-${field.id}`}
-          type="text"
-          value={typeof value === "string" ? value : ""}
-          onChange={(e) => onChange(e.target.value)}
-          placeholder={`关联 ${field.target ?? "?"} 表行 id`}
-          className="w-full rounded-md border px-2.5 py-1.5 text-[12.5px] outline-none"
-          style={inputStyle}
-        />
-      );
+    case "relation": {
+      // 有候选清单（父层已缓存目标表行）→ 下拉选择；否则退化为文本输入。
+      // 不要求用户手输行 UUID——那等价于没有这个字段。
+      if (candidates && candidates.length > 0) {
+        control = (
+          <select
+            id={`ws-f-${field.id}`}
+            value={typeof value === "string" ? value : ""}
+            onChange={(e) => onChange(e.target.value)}
+            className="w-full rounded-md border px-2.5 py-1.5 text-[12.5px] outline-none"
+            style={inputStyle}
+          >
+            <option value="">（不关联）</option>
+            {candidates.map((c) => (
+              <option key={c.id} value={c.id}>{c.label}</option>
+            ))}
+          </select>
+        );
+      } else {
+        control = (
+          <input
+            id={`ws-f-${field.id}`}
+            type="text"
+            value={typeof value === "string" ? value : ""}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder={`关联 ${field.target ?? "?"} 表行 id`}
+            className="w-full rounded-md border px-2.5 py-1.5 text-[12.5px] outline-none"
+            style={inputStyle}
+          />
+        );
+      }
       break;
+    }
     case "attachment":
+      // 上传通道（files/<row_id>/）后端未落地，禁用并说明，防止静默丢文件
       control = (
-        <input
-          id={`ws-f-${field.id}`}
-          type="file"
-          className="w-full rounded-md border px-2.5 py-1.5 text-[12px] outline-none"
-          style={inputStyle}
-        />
+        <span className="flex items-center gap-2 text-[11.5px]" style={{ color: "var(--color-text-faint)" }}>
+          <input id={`ws-f-${field.id}`} type="file" disabled className="rounded-md border px-2.5 py-1.5 text-[12px]" style={inputStyle} />
+          附件上传即将支持，请先通过对话附带文件
+        </span>
       );
       break;
     default: // text

@@ -11,7 +11,7 @@
  * - 删除两段式确认（点 🗑 → 变 "确认删除?" → 再点执行，失焦取消）
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Plus,
   Pencil,
@@ -30,7 +30,7 @@ import type {
   TemplateMeta,
 } from "../types";
 import { toastError, toastSuccess } from "../hooks/useToast";
-import { WorkspaceRenderer } from "./workspace/WorkspaceRenderer";
+import { WorkspaceRenderer, workspacePermissions } from "./workspace/WorkspaceRenderer";
 
 type TabMode = "idle" | "creating" | "renaming" | "confirm-delete";
 
@@ -38,6 +38,8 @@ type TabMode = "idle" | "creating" | "renaming" | "confirm-delete";
 const TABLE_QUERY_LIMIT = 500;
 /** 布局拖拽持久化防抖（ms）——react-grid-layout 拖拽过程频繁回调。 */
 const LAYOUT_SAVE_DEBOUNCE_MS = 500;
+/** 行标签展示时排除的系统列。 */
+const ROW_SYS_KEYS = new Set(["id", "created_at", "updated_at", "updated_by"]);
 
 function tableModules(schema: WorkspaceDetail["schema"]): Extract<WorkspaceModule, { type: "table" }>[] {
   return (schema.modules ?? []).filter(
@@ -45,11 +47,47 @@ function tableModules(schema: WorkspaceDetail["schema"]): Extract<WorkspaceModul
   );
 }
 
+function dashboardModules(schema: WorkspaceDetail["schema"]): Extract<WorkspaceModule, { type: "dashboard" }>[] {
+  return (schema.modules ?? []).filter(
+    (m): m is Extract<WorkspaceModule, { type: "dashboard" }> => m.type === "dashboard",
+  );
+}
+
+/**
+ * stat 卡受控查询的最小解析器：`count` / `count from <表>` /
+ * `count [from <表>] where <字段>=<值>`。
+ * 其余 DSL 形态后端尚无白名单解释器，返回 null 保持组件空态——不猜语义。
+ */
+export function parseCountStatQuery(
+  query: string,
+): { table?: string; field?: string; value?: string } | null {
+  const m = /^count(?:\s+from\s+(\w+))?(?:\s+where\s+(\w+)\s*=\s*(.+))?$/i.exec(query.trim());
+  if (!m) return null;
+  const value = m[3]?.trim().replace(/^['"](.*)['"]$/, "$1");
+  return { table: m[1], field: m[2], value };
+}
+
+/** Relation 下拉的行展示标签：常见命名字段优先，退化为首个非系统文本列。 */
+function rowLabel(row: Record<string, unknown>): string {
+  for (const key of ["name", "title"]) {
+    if (typeof row[key] === "string" && row[key]) return row[key] as string;
+  }
+  for (const [k, v] of Object.entries(row)) {
+    if (ROW_SYS_KEYS.has(k)) continue;
+    if (typeof v === "string" && v) return v;
+  }
+  return String(row["id"] ?? "");
+}
+
 export function WorkspacesView() {
   const [entries, setEntries] = useState<WorkspaceEntry[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [detail, setDetail] = useState<WorkspaceDetail | null>(null);
   const [tableRows, setTableRows] = useState<Record<string, Record<string, unknown>[]>>({});
+  /** 各表服务端总行数（rows 超 500 截断时的提示依据）。 */
+  const [tableCounts, setTableCounts] = useState<Record<string, number | null>>({});
+  /** 仪表盘组件数据：widgetId → 数据（当前支持 stat 计数）。 */
+  const [widgetData, setWidgetData] = useState<Record<string, unknown>>({});
   const [loading, setLoading] = useState(true);
   const [mode, setMode] = useState<TabMode>("idle");
   const [draft, setDraft] = useState("");
@@ -81,11 +119,13 @@ export function WorkspacesView() {
     void refresh();
   }, [refresh]);
 
-  // activeId 变化 → 拉详情 + 各表行数据
+  // activeId 变化 → 拉详情 + 各表行数据 + 计数 + stat 组件计数
   useEffect(() => {
     if (!activeId) {
       setDetail(null);
       setTableRows({});
+      setTableCounts({});
+      setWidgetData({});
       return;
     }
     let cancelled = false;
@@ -94,21 +134,61 @@ export function WorkspacesView() {
       .then(async (d) => {
         if (cancelled) return;
         setDetail(d);
-        // 拉取每个 table 模块的行（并发，各自上限）
-        const rowsMap: Record<string, Record<string, unknown>[]> = {};
         const tables = tableModules(d.schema);
-        await Promise.all(
-          tables.map(async (t) => {
-            try {
-              rowsMap[t.id] = await api.workspaceQueryTable(activeId, t.id, {
-                limit: TABLE_QUERY_LIMIT,
-              });
-            } catch (e) {
-              if (!cancelled) toastError(`加载表「${t.name}」失败: ${String(e)}`);
-            }
-          }),
-        );
-        if (!cancelled) setTableRows(rowsMap);
+        await Promise.all([
+          // 行数据（各表独立上限，失败逐表提示不阻塞其余）
+          Promise.all(
+            tables.map(async (t) => {
+              try {
+                const rows = await api.workspaceQueryTable(activeId, t.id, {
+                  limit: TABLE_QUERY_LIMIT,
+                });
+                if (cancelled) return;
+                setTableRows((prev) => ({ ...prev, [t.id]: rows }));
+              } catch (e) {
+                if (!cancelled) toastError(`加载表「${t.name}」失败: ${String(e)}`);
+              }
+            }),
+          ),
+          // 表计数（仅作截断提示，失败降级为未知）
+          Promise.all(
+            tables.map(async (t) => {
+              try {
+                const n = await api.workspaceCountRows(activeId, t.id);
+                if (cancelled) return;
+                setTableCounts((prev) => ({ ...prev, [t.id]: n }));
+              } catch {
+                /* 提示性数据，忽略 */
+              }
+            }),
+          ),
+          // stat 组件计数（受控查询 count[from T][where f=v]，未识别的 DSL 留空）
+          Promise.all(
+            dashboardModules(d.schema).flatMap((dash) =>
+              dash.widgets
+                .filter((w) => w.type === "stat")
+                .map(async (w) => {
+                  const q = parseCountStatQuery(w.query);
+                  if (!q) return;
+                  const table = q.table ?? tables[0]?.id;
+                  if (!table) return;
+                  try {
+                    const n = await api.workspaceCountRows(
+                      activeId,
+                      table,
+                      q.field
+                        ? [{ field: q.field, op: "eq", value: q.value ?? "" }]
+                        : [],
+                    );
+                    if (cancelled) return;
+                    setWidgetData((prev) => ({ ...prev, [w.id]: n }));
+                  } catch {
+                    /* 组件留空态 */
+                  }
+                }),
+            ),
+          ),
+        ]);
       })
       .catch((e) => {
         if (!cancelled) toastError(`加载工作台详情失败: ${String(e)}`);
@@ -125,7 +205,8 @@ export function WorkspacesView() {
     };
   }, []);
 
-  /** 布局拖拽/缩放 → 更新本地 schema 并防抖持久化回后端。 */
+  /** 布局拖拽/缩放 → 更新本地 schema 并防抖持久化回后端（仅 layout 层，
+   *  避免整 schema 快照覆盖 LLM 并发的模块/字段修改）。 */
   const handleLayoutChange = useCallback((moduleId: string, layout: Layout) => {
     setDetail((prev) => {
       if (!prev) return prev;
@@ -133,17 +214,114 @@ export function WorkspacesView() {
         prev.schema.layout && typeof prev.schema.layout === "object"
           ? (prev.schema.layout as Record<string, Layout>)
           : {};
-      const schema = { ...prev.schema, layout: { ...prevLayout, [moduleId]: layout } };
-      // 防抖保存（拖拽过程频繁回调，只在停止后落盘）
+      const nextLayout = { ...prevLayout, [moduleId]: layout };
+      const schema = { ...prev.schema, layout: { ...nextLayout } };
       if (layoutTimer.current !== null) window.clearTimeout(layoutTimer.current);
       layoutTimer.current = window.setTimeout(() => {
         void api
-          .updateWorkspaceSchema(prev.id, schema)
+          .updateWorkspaceLayout(prev.id, nextLayout)
           .catch((e) => toastError(`保存布局失败: ${String(e)}`));
       }, LAYOUT_SAVE_DEBOUNCE_MS);
       return { ...prev, schema };
     });
   }, []);
+
+  const perms = useMemo(
+    () => (detail ? workspacePermissions(detail.schema) : { canWrite: true, canDelete: true }),
+    [detail],
+  );
+
+  /** 写操作后重拉单表：行数据 + 计数 + 引用该表的 stat 组件。 */
+  const reloadTable = useCallback(async (tableId: string) => {
+    if (!activeId || !detail) return;
+    try {
+      const rows = await api.workspaceQueryTable(activeId, tableId, { limit: TABLE_QUERY_LIMIT });
+      setTableRows((prev) => ({ ...prev, [tableId]: rows }));
+    } catch (e) {
+      toastError(`刷新表数据失败: ${String(e)}`);
+    }
+    try {
+      const n = await api.workspaceCountRows(activeId, tableId);
+      setTableCounts((prev) => ({ ...prev, [tableId]: n }));
+    } catch {
+      /* 提示性计数，忽略 */
+    }
+    for (const dash of dashboardModules(detail.schema)) {
+      for (const w of dash.widgets) {
+        if (w.type !== "stat") continue;
+        const q = parseCountStatQuery(w.query);
+        if (!q || (q.table ?? tableModules(detail.schema)[0]?.id) !== tableId) continue;
+        try {
+          const n = await api.workspaceCountRows(
+            activeId,
+            tableId,
+            q.field ? [{ field: q.field, op: "eq", value: q.value ?? "" }] : [],
+          );
+          setWidgetData((prev) => ({ ...prev, [w.id]: n }));
+        } catch {
+          /* 组件留空态 */
+        }
+      }
+    }
+  }, [activeId, detail]);
+
+  // ── 行 CRUD（M7 前端接通）——错误 toast 后向上抛，FormView 保持表单开启 ──
+  const handleInsert = useCallback(
+    async (moduleId: string, values: Record<string, unknown>) => {
+      if (!activeId) return;
+      try {
+        await api.workspaceInsertRows(activeId, moduleId, [values], "user");
+        toastSuccess("已新增");
+      } catch (e) {
+        toastError(`新增失败: ${String(e)}`);
+        throw e;
+      }
+      await reloadTable(moduleId);
+    },
+    [activeId, reloadTable],
+  );
+
+  const handleUpdateRow = useCallback(
+    async (moduleId: string, rowId: string, patch: Record<string, unknown>) => {
+      if (!activeId) return;
+      try {
+        await api.workspaceUpdateRow(activeId, moduleId, rowId, patch, "user");
+        toastSuccess("已保存");
+      } catch (e) {
+        toastError(`保存失败: ${String(e)}`);
+        throw e;
+      }
+      await reloadTable(moduleId);
+    },
+    [activeId, reloadTable],
+  );
+
+  /** 删除永不 reject（调用方是 fire-and-forget 按钮）。 */
+  const handleDeleteRow = useCallback(
+    async (moduleId: string, rowId: string) => {
+      if (!activeId) return;
+      try {
+        await api.workspaceDeleteRow(activeId, moduleId, rowId);
+        toastSuccess("已删除");
+        await reloadTable(moduleId);
+      } catch (e) {
+        toastError(`删除失败: ${String(e)}`);
+      }
+    },
+    [activeId, reloadTable],
+  );
+
+  /** Relation 下拉候选：已加载的各表行 → {id, label}。 */
+  const relationCandidates = useMemo(() => {
+    const out: Record<string, { id: string; label: string }[]> = {};
+    for (const [tid, rows] of Object.entries(tableRows)) {
+      out[tid] = rows
+        .slice(0, 200)
+        .map((r) => ({ id: String(r["id"] ?? ""), label: rowLabel(r) }))
+        .filter((c) => c.id !== "");
+    }
+    return out;
+  }, [tableRows]);
 
   const handleCreate = useCallback(async () => {
     const name = draft.trim();
@@ -160,9 +338,10 @@ export function WorkspacesView() {
     }
   }, [draft, refresh]);
 
-  // 打开模板面板（懒加载一次）
-  const openTemplates = useCallback(async () => {
-    setShowTemplates((prev) => !prev);
+  // 打开模板面板（懒加载一次）。toggle 语义只用于顶栏按钮；空态引导用
+  // showTemplatePanel 强制打开，避免「开着再点反而关闭」。
+  const showTemplatePanel = useCallback(async () => {
+    setShowTemplates(true);
     if (templates === null) {
       try {
         setTemplates(await api.listWorkspaceTemplates());
@@ -173,6 +352,14 @@ export function WorkspacesView() {
     }
   }, [templates]);
 
+  const toggleTemplatePanel = useCallback(() => {
+    if (showTemplates) {
+      setShowTemplates(false);
+      return;
+    }
+    void showTemplatePanel();
+  }, [showTemplates, showTemplatePanel]);
+
   // 按模板一键建工作台（复用 create_from_schema；成功后切到新 tab）
   const handleCreateFromTemplate = useCallback(
     async (tpl: TemplateMeta) => {
@@ -180,7 +367,7 @@ export function WorkspacesView() {
       setCreatingTemplate(tpl.id);
       try {
         const { id, name, smoke } = await api.createWorkspaceFromTemplate(tpl.id);
-        toastSuccess(`工作台「${name}」已按模板创建${smoke.length ? "" : ""}`);
+        toastSuccess(`已按模板创建「${name}」（${smoke.length} 项自测通过）`);
         setShowTemplates(false);
         await refresh();
         setActiveId(id);
@@ -248,6 +435,15 @@ export function WorkspacesView() {
         onMouseLeave={resetMode}
       >
         <LayoutDashboard size={15} style={{ color: "var(--color-text-faint)" }} />
+        {detail && !perms.canWrite && (
+          <span
+            className="shrink-0 rounded-md border px-1.5 py-0.5 text-[11px]"
+            title="该工作台为只读（permissions.mode=readonly），不能增删改数据"
+            style={{ borderColor: "var(--color-border-secondary)", color: "var(--color-text-faint)" }}
+          >
+            🔒 只读
+          </span>
+        )}
         {loading ? (
           <Loader2 size={14} className="animate-spin" style={{ color: "var(--color-text-faint)" }} />
         ) : entries.length === 0 ? (
@@ -322,7 +518,7 @@ export function WorkspacesView() {
         {/* 模板按钮（M6.5）：一键按预置台账创建 */}
         <div className="relative shrink-0">
           <button
-            onClick={() => void openTemplates()}
+            onClick={toggleTemplatePanel}
             className="flex items-center gap-1 rounded-md px-2 py-1 text-[12px] transition-opacity hover:opacity-80"
             style={{ color: "var(--color-text-secondary)" }}
             title="从模板创建工作台"
@@ -387,10 +583,19 @@ export function WorkspacesView() {
 
       {/* ── 内容区（M1.4 起由 WorkspaceRenderer 渲染 schema 模块） ── */}
       {detail ? (
+        /* key=activeId：工作台切换时重挂载，模块选中态不跨工作台漂移 */
         <WorkspaceRenderer
+          key={detail.id}
           detail={detail}
           tableRows={tableRows}
+          tableCounts={tableCounts}
+          perms={perms}
+          widgetData={widgetData}
+          relationCandidates={relationCandidates}
           onLayoutChange={handleLayoutChange}
+          onInsert={perms.canWrite ? handleInsert : undefined}
+          onUpdate={perms.canWrite ? handleUpdateRow : undefined}
+          onDeleteRow={handleDeleteRow}
         />
       ) : (
         <div
@@ -414,7 +619,7 @@ export function WorkspacesView() {
               </div>
               <div className="flex items-center gap-2">
                 <button
-                  onClick={() => void openTemplates()}
+                  onClick={() => void showTemplatePanel()}
                   className="flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-[12.5px] transition-opacity hover:opacity-80"
                   style={{
                     borderColor: "var(--color-border-secondary)",

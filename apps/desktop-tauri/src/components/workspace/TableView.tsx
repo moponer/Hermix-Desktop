@@ -1,36 +1,72 @@
 /**
  * TableView — 工作台数据表视图（M1.4）。
  *
- * 基于 @tanstack/react-table v8（headless 列模型/排序/过滤）+
- * 自研窗口化虚拟滚动（复用 SpreadsheetView 的行窗口方案：
- * 固定行高 + scrollTop 窗口 + translateY 平移层，大表不卡）。
+ * 基于 @tanstack/react-table v8（headless 列模型）+
+ * 自研窗口化虚拟滚动（固定行高 + scrollTop 窗口 + translateY 平移层，
+ * 大表不卡；视口高度走 ResizeObserver，窗口缩放后即时生效）。
  *
- * 数据来源：M1.4 由调用方传入 `rows`（M1.6 起走后端
- * `LocalSqliteStore` REST API，本组件无需感知数据来源）。
+ * 写操作（M7 接通）：新增/编辑弹 FormView、删除两段确认（无 hover 取消，
+ * 键盘可达）。能力由父层传入——只读工作台不渲染任何写入口。
  */
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   flexRender,
   getCoreRowModel,
   useReactTable,
   type ColumnDef,
 } from "@tanstack/react-table";
+import { Pencil, Plus, Trash2 } from "lucide-react";
 import type { WorkspaceField, WorkspaceModule } from "../../types";
+import { FormView } from "./FormView";
 
 const ROW_HEIGHT = 28; // px — 与 .ws-table-row 的 CSS 高度一致
 const OVERSCAN = 6; // 可见窗口上下各多渲染的行数
+/** 删除两段确认的自动复位（ms）——超时未确认回到普通态。 */
+const DELETE_CONFIRM_RESET_MS = 3000;
 
 type TableRow = Record<string, unknown>;
+
+export interface WorkspacePerms {
+  canWrite: boolean;
+  canDelete: boolean;
+}
 
 interface TableViewProps {
   module: Extract<WorkspaceModule, { type: "table" }>;
   rows: TableRow[];
-  /** 加载态（M1.6 接 REST 后使用）。 */
+  /** 加载态。 */
   loading?: boolean;
+  /** 服务端全表行数：超过已加载 rows.length 时提示截断。 */
+  totalCount?: number | null;
+  /** 权限（缺省可读写）；只读时不渲染写入口。 */
+  perms?: WorkspacePerms;
+  /** 新增行（values 已过 FormView 必填校验与类型转换）。 */
+  onInsert?: (moduleId: string, values: Record<string, unknown>) => Promise<void>;
+  /** 按主键更新行。 */
+  onUpdate?: (moduleId: string, rowId: string, patch: Record<string, unknown>) => Promise<void>;
+  /** 按主键删行。 */
+  onDeleteRow?: (moduleId: string, rowId: string) => Promise<void>;
+  /** Relation 字段候选：目标表 id → 行清单（FormView 关系下拉）。 */
+  relationCandidates?: Record<string, { id: string; label: string }[]>;
 }
 
-export function TableView({ module, rows, loading = false }: TableViewProps) {
+interface EditingState {
+  mode: "add" | "edit";
+  row?: TableRow;
+}
+
+export function TableView({
+  module,
+  rows,
+  loading = false,
+  totalCount = null,
+  perms = { canWrite: true, canDelete: true },
+  onInsert,
+  onUpdate,
+  onDeleteRow,
+  relationCandidates,
+}: TableViewProps) {
   // 列定义来自 schema 字段（id/展示名/类型），与后端校验同一份白名单
   const columns = useMemo<ColumnDef<TableRow>[]>(
     () =>
@@ -52,7 +88,19 @@ export function TableView({ module, rows, loading = false }: TableViewProps) {
 
   const containerRef = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
-  const viewportH = containerRef.current?.clientHeight ?? 400;
+  // 视口高度不读渲染期 DOM：初始 fallback，挂载/窗口变化经 ResizeObserver 更新
+  const [viewportH, setViewportH] = useState(400);
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    setViewportH(el.clientHeight);
+    const ro = new ResizeObserver(() => setViewportH(el.clientHeight));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const [editing, setEditing] = useState<EditingState | null>(null);
+  const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null);
 
   // 可见行窗口
   const allRows = table.getRowModel().rows;
@@ -72,16 +120,49 @@ export function TableView({ module, rows, loading = false }: TableViewProps) {
     );
   }
 
+  const showOpsColumn = Boolean(onInsert || onUpdate || onDeleteRow);
+  const truncated = totalCount !== null && totalCount > rows.length;
+
+  const submitEditing = async (values: Record<string, unknown>) => {
+    if (!editing) return;
+    if (editing.mode === "add") {
+      await onInsert?.(module.id, values);
+    } else {
+      await onUpdate?.(module.id, String(editing.row?.["id"] ?? ""), values);
+    }
+    // 走到这里即成功（失败由 FormView 捕获并保持表单开启，上层已 toast）
+    setEditing(null);
+  };
+
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      {/* 工具条：表名 + 行数 */}
+    <div className="relative flex min-h-0 flex-1 flex-col">
+      {/* 工具条：表名 + 行数（含截断提示）+ 新增入口 */}
       <div
         className="flex shrink-0 items-center gap-2 px-3 py-1.5 text-[11.5px]"
         style={{ color: "var(--color-text-secondary)", borderBottom: "1px solid var(--color-border-subtle)" }}
       >
         <span className="font-medium" style={{ color: "var(--color-text-primary)" }}>{module.name}</span>
-        <span>{rows.length} 行</span>
+        <span>
+          {rows.length} 行{truncated ? `（已截断，共 ${totalCount} 行）` : ""}
+        </span>
         {loading && <span className="animate-pulse">加载中…</span>}
+        {perms.canWrite && onInsert && (
+          <button
+            onClick={() => setEditing({ mode: "add" })}
+            className="ml-auto flex items-center gap-1 rounded-md border px-2 py-0.5 transition-opacity hover:opacity-80"
+            style={{
+              borderColor: "var(--color-border-secondary)",
+              color: "var(--color-text-primary)",
+            }}
+          >
+            <Plus size={12} /> 新增行
+          </button>
+        )}
+        {!perms.canWrite && (
+          <span className="ml-auto rounded-md border px-2 py-0.5" style={{ borderColor: "var(--color-border-secondary)", color: "var(--color-text-faint)" }}>
+            只读
+          </span>
+        )}
       </div>
 
       {/* 表格滚动区 */}
@@ -111,6 +192,18 @@ export function TableView({ module, rows, loading = false }: TableViewProps) {
                     {flexRender(header.column.columnDef.header, header.getContext())}
                   </th>
                 ))}
+                {showOpsColumn && (
+                  <th
+                    className="w-20 whitespace-nowrap px-3 py-1.5 text-left text-[11.5px] font-medium"
+                    style={{
+                      background: "var(--color-bg-elevated)",
+                      color: "var(--color-text-secondary)",
+                      borderBottom: "1px solid var(--color-border-secondary)",
+                    }}
+                  >
+                    操作
+                  </th>
+                )}
               </tr>
             ))}
           </thead>
@@ -121,37 +214,128 @@ export function TableView({ module, rows, loading = false }: TableViewProps) {
           <div style={{ transform: `translateY(${padTop}px)` }}>
             <table className="w-full" style={{ borderCollapse: "collapse" }}>
               <tbody>
-                {visibleRows.map((row) => (
-                  <tr
-                    key={row.id}
-                    className="ws-table-row"
-                    style={{
-                      height: ROW_HEIGHT,
-                      borderBottom: "1px solid var(--color-border-subtle)",
-                    }}
-                  >
-                    {row.getVisibleCells().map((cell) => (
-                      <td
-                        key={cell.id}
-                        className="truncate px-3 text-[12px]"
-                        style={{
-                          color: "var(--color-text-primary)",
-                          maxWidth: 240,
-                          whiteSpace: "nowrap",
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
-                        }}
-                      >
-                        {formatCell(cell.getValue())}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
+                {visibleRows.map((row) => {
+                  const rowId = String(row.original["id"] ?? "");
+                  const confirming = confirmingDeleteId === rowId;
+                  return (
+                    <tr
+                      key={row.id}
+                      className="ws-table-row group"
+                      style={{
+                        height: ROW_HEIGHT,
+                        borderBottom: "1px solid var(--color-border-subtle)",
+                      }}
+                    >
+                      {row.getVisibleCells().map((cell) => (
+                        <td
+                          key={cell.id}
+                          className="truncate px-3 text-[12px]"
+                          style={{
+                            color: "var(--color-text-primary)",
+                            maxWidth: 240,
+                            whiteSpace: "nowrap",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                          }}
+                        >
+                          {formatCell(cell.getValue())}
+                        </td>
+                      ))}
+                      {showOpsColumn && (
+                        <td className="whitespace-nowrap px-2 text-[11px]">
+                          {confirming ? (
+                            <>
+                              <button
+                                onClick={() => {
+                                  void onDeleteRow?.(module.id, rowId).finally(() =>
+                                    setConfirmingDeleteId(null),
+                                  );
+                                }}
+                                disabled={!perms.canDelete}
+                                title={perms.canDelete ? undefined : "该工作台禁止删除行"}
+                                className="mr-1 font-semibold underline disabled:cursor-not-allowed disabled:opacity-40"
+                                style={{ color: "var(--color-error)" }}
+                              >
+                                确认删除
+                              </button>
+                              <button onClick={() => setConfirmingDeleteId(null)}>取消</button>
+                            </>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 opacity-30 transition-opacity group-hover:opacity-100">
+                              {perms.canWrite && onUpdate && (
+                                <button
+                                  onClick={() => setEditing({ mode: "edit", row: row.original })}
+                                  title="编辑行"
+                                  className="rounded p-0.5 hover:opacity-70"
+                                >
+                                  <Pencil size={11} />
+                                </button>
+                              )}
+                              {perms.canDelete && onDeleteRow && (
+                                <button
+                                  onClick={() => {
+                                    setConfirmingDeleteId(rowId);
+                                    window.setTimeout(
+                                      () =>
+                                        setConfirmingDeleteId((cur) =>
+                                          cur === rowId ? null : cur,
+                                        ),
+                                      DELETE_CONFIRM_RESET_MS,
+                                    );
+                                  }}
+                                  title="删除行"
+                                  className="rounded p-0.5 hover:opacity-70"
+                                  style={{ color: "var(--color-error)" }}
+                                >
+                                  <Trash2 size={11} />
+                                </button>
+                              )}
+                            </span>
+                          )}
+                        </td>
+                      )}
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
         </div>
+
+        {allRows.length === 0 && !loading && (
+          <div
+            className="flex items-center justify-center py-8 text-[12px]"
+            style={{ color: "var(--color-text-faint)" }}
+          >
+            {perms.canWrite ? "还没有数据，点「新增行」或直接告诉 Hermix 记一条" : "暂无数据"}
+          </div>
+        )}
       </div>
+
+      {/* 新增 / 编辑面板（内联覆盖层） */}
+      {editing && (
+        <div
+          className="absolute inset-0 z-20 flex items-start justify-center pt-6"
+          style={{ background: "color-mix(in srgb, var(--color-bg-base) 72%, transparent)" }}
+        >
+          <div
+            className="max-h-full w-[520px] overflow-y-auto rounded-lg border shadow-lg"
+            style={{
+              borderColor: "var(--color-border-secondary)",
+              background: "var(--color-bg-elevated)",
+            }}
+          >
+            <FormView
+              module={module}
+              initialValues={editing.mode === "edit" ? editing.row : undefined}
+              submitLabel={editing.mode === "add" ? "新增" : "保存"}
+              relationCandidates={relationCandidates}
+              onCancel={() => setEditing(null)}
+              onSubmit={(values) => submitEditing(values)}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

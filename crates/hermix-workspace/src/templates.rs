@@ -11,6 +11,7 @@
 //! 列表/详情只暴露元信息，schema 在建工作台时按需取用。
 
 use crate::model::WorkspaceSchema;
+#[cfg(test)]
 use crate::validate::validate_schema;
 
 /// 模板元信息 + 定义。
@@ -193,6 +194,7 @@ pub struct TemplateTableMeta {
 }
 
 /// 从 schema 提取全部表 id（测试辅助，按模块顺序）。
+#[cfg(test)]
 fn store_schema_tables(schema: &WorkspaceSchema) -> Vec<String> {
     schema
         .modules

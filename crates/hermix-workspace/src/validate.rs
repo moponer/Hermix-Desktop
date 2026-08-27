@@ -15,7 +15,7 @@
 //! 返回首个错误（`Err(ValidationError::Invalid(msg))`），消息带具体
 //! 位置（如 `module[vehicles].field[status]`），便于 LLM 修正后重试。
 
-use crate::model::{Automation, Field, Module, View, WorkspaceSchema};
+use crate::model::{Automation, Field, Module, PermissionMode, View, WorkspaceSchema};
 
 /// Schema 校验错误。
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -30,10 +30,12 @@ pub fn validate_schema(schema: &WorkspaceSchema) -> Result<(), ValidationError> 
         return err("工作台 name 不能为空");
     }
 
-    // 0. 权限（M7.2）：mode 必须是合法值；allow_delete 必须是布尔
+    // 0. 权限（M7.2）：mode 若存在必须是合法枚举字符串（非字符串同样拒绝，
+    //    否则运行时按缺省 readwrite 解析，权限收紧会被静默吞掉）；
+    //    allow_delete 必须是布尔。合法值集合以 PermissionMode::parse 为准。
     if let Some(perms_obj) = schema.permissions.as_object() {
-        if let Some(mode) = perms_obj.get("mode").and_then(|v| v.as_str()) {
-            if mode != "readwrite" && mode != "readonly" {
+        if let Some(mode) = perms_obj.get("mode") {
+            if mode.as_str().and_then(PermissionMode::parse).is_none() {
                 return err(&format!(
                     "permissions.mode 必须是 readwrite/readonly，得到 {mode}"
                 ));

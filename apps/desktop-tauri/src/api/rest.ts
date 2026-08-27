@@ -236,6 +236,31 @@ export async function createWorkspaceFromTemplate(
   );
 }
 
+/** 仅替换布局层（拖拽保存专用，避免整 schema 快照覆盖 LLM 并发修改）。 */
+export async function updateWorkspaceLayout(
+  id: string,
+  layout: unknown,
+): Promise<{ ok: boolean; id: string }> {
+  return fetchJSON<{ ok: boolean; id: string }>(
+    `/api/workspaces/${encodeURIComponent(id)}/layout`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ layout }),
+    },
+  );
+}
+
+/** 内置 provider 元数据（id + 配钥环境变量名）——分组/提示的唯一真理源。 */
+export interface ProviderMeta {
+  id: string;
+  env_var: string;
+}
+
+export async function getProviderMeta(): Promise<ProviderMeta[]> {
+  return fetchJSON<ProviderMeta[]>("/api/providers/meta");
+}
+
 /** 获取工作台详情（注册表 + schema）。 */
 export async function getWorkspace(id: string): Promise<WorkspaceDetail> {
   return fetchJSON<WorkspaceDetail>(`/api/workspaces/${encodeURIComponent(id)}`);

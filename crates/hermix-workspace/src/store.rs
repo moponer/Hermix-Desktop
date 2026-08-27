@@ -196,6 +196,64 @@ impl LocalSqliteStore {
         Ok(n.max(0) as u64)
     }
 
+    /// 整表替换（.hwx LWW 合并）：事务内清空后按合并结果重灌，返回行数。
+    ///
+    /// 行对象可携带原 `id` / `created_at` / `updated_at` / `updated_by`
+    /// ——行主键不重生成，关系外键引用与 LWW 时间线保持稳定；缺省字段
+    /// 走正常生成路径（id 生成新 UUID，时间戳交 DDL default）。
+    /// 写权限由调用方（`WorkspaceService::open_writable`）把守；
+    /// 不受 allow_delete 约束——合并语义是"更新整表"，不是删除数据。
+    /// 任一行失败整体回滚（含 DELETE），不留半替换状态。
+    pub fn replace_table_rows(&self, table: &str, rows: &[Value]) -> Result<usize, StoreError> {
+        self.table_fields(table)?;
+        let conn = self.conn()?;
+        let tx = conn.unchecked_transaction()?;
+        tx.execute(&format!("DELETE FROM {table}"), [])
+            .map_err(StoreError::Sqlite)?;
+        for row in rows {
+            let obj = row.as_object().ok_or_else(|| {
+                StoreError::Validation(format!("{table} 行数据必须是 JSON 对象"))
+            })?;
+            let mut params = self.row_to_params(table, row, "import")?;
+            // 合并保真：显式携带的系统列优先于本次写入的默认值
+            let override_sys = |key: &str| -> Option<rusqlite::types::Value> {
+                obj.get(key)?.as_str().map(|s| rusqlite::types::Value::Text(s.to_string()))
+            };
+            if let Some(v) = override_sys("updated_by") {
+                params.retain(|(k, _)| k != "updated_by");
+                params.push(("updated_by".to_string(), v));
+            }
+            if !params.iter().any(|(k, _)| k == "updated_by") {
+                params.push((
+                    "updated_by".to_string(),
+                    rusqlite::types::Value::Text("import".to_string()),
+                ));
+            }
+            for key in ["created_at", "updated_at"] {
+                if let Some(v) = override_sys(key) {
+                    params.retain(|(k, _)| k != key);
+                    params.push((key.to_string(), v));
+                }
+            }
+
+            let cols: Vec<&str> = params.iter().map(|(k, _)| k.as_str()).collect();
+            let placeholders: Vec<String> =
+                (1..=params.len()).map(|i| format!("?{i}")).collect();
+            let sql = format!(
+                "INSERT INTO {table} ({}) VALUES ({})",
+                cols.join(", "),
+                placeholders.join(", ")
+            );
+            let values: Vec<rusqlite::types::Value> =
+                params.into_iter().map(|(_, v)| v).collect();
+            tx.execute(&sql, rusqlite::params_from_iter(values.iter()))
+                .map_err(StoreError::Sqlite)?;
+        }
+        tx.commit().map_err(StoreError::Sqlite)?;
+        Ok(rows.len())
+    }
+
+
     fn conn(&self) -> Result<rusqlite::Connection, StoreError> {
         let conn = rusqlite::Connection::open(&self.db_path)
             .map_err(|e| StoreError::Io(format!("打开工作台 DB 失败: {e}")))?;
@@ -332,8 +390,15 @@ impl LocalSqliteStore {
                 }
             }
         }
-        // 系统列
-        out.push(("id".to_string(), rusqlite::types::Value::Text(uuid_v4())));
+        // 系统列。id：调用方显式提供则沿用（merge 导入保留行主键、关系引用
+        // 与 LWW 时间线不断裂），否则生成新 UUID。
+        let id = obj
+            .get("id")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.trim().is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(uuid_v4);
+        out.push(("id".to_string(), rusqlite::types::Value::Text(id)));
         out.push(("updated_by".to_string(), rusqlite::types::Value::Text(updated_by.to_string())));
         Ok(out)
     }

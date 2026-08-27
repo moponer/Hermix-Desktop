@@ -87,6 +87,9 @@ export function ChartWidget({
 
 // ── List ────────────────────────────────────────────────────
 
+/** 系统列不进展示值（UUID/时间戳混进列表毫无信息量）。 */
+const RESERVED_ROW_KEYS = new Set(["id", "created_at", "updated_at", "updated_by"]);
+
 export function ListWidget({
   widget,
   rows,
@@ -104,11 +107,16 @@ export function ListWidget({
           </div>
         ) : (
           <ul className="flex flex-col gap-1">
-            {list.map((row, i) => (
-              <li key={i} className="truncate text-[12px]" style={{ color: "var(--color-text-primary)" }}>
-                {Object.values(row).join(" · ")}
-              </li>
-            ))}
+            {list.map((row, i) => {
+              const values = Object.entries(row)
+                .filter(([k, v]) => !RESERVED_ROW_KEYS.has(k) && v !== null && v !== undefined)
+                .map(([, v]) => String(v));
+              return (
+                <li key={row["id"] ? String(row["id"]) : i} className="truncate text-[12px]" style={{ color: "var(--color-text-primary)" }}>
+                  {values.join(" · ")}
+                </li>
+              );
+            })}
           </ul>
         )}
       </div>

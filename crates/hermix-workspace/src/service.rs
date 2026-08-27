@@ -17,7 +17,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::model::{Field, Module, WorkspaceSchema};
-use crate::store::LocalSqliteStore;
+use crate::store::{LocalSqliteStore, WorkspaceStore};
 
 // ---------------------------------------------------------------------------
 // 错误
@@ -83,35 +83,25 @@ impl WorkspaceService {
             .map_err(|e| ServiceError::Store(e.to_string()))
     }
 
-    /// 写权限校验（M7.3）：只读工作台拒绝 insert/update。
-    /// 数据端点与 LLM 工具 backend 在写操作前统一调用。
-    pub fn check_write(&self, id: &str) -> Result<(), ServiceError> {
+    /// 打开工作台数据存储并确认写权限（M7.3）。
+    ///
+    /// 只读工作台 → `PermissionDenied`；返回的 [`Writable`] 是写能力的
+    /// 类型化载体——REST 数据端点、LLM 工具后端与 import 合并都必须
+    /// 经由它写数据。单次读盘同时完成解析与权限判定（不二次读 schema）。
+    pub fn open_writable(&self, id: &str) -> Result<Writable, ServiceError> {
         let schema = self.read_schema(id)?;
         let perms = schema.permissions_parsed();
-        if perms.can_write() {
-            Ok(())
-        } else {
-            Err(ServiceError::PermissionDenied(
-                format!("工作台[{id}]为只读（permissions.mode=readonly），拒绝写操作"),
-            ))
+        if !perms.can_write() {
+            return Err(ServiceError::PermissionDenied(format!(
+                "工作台[{id}]为只读（permissions.mode=readonly），拒绝写操作"
+            )));
         }
-    }
-
-    /// 删除权限校验（M7.3）：只读 或 allow_delete=false 拒绝删除。
-    pub fn check_delete(&self, id: &str) -> Result<(), ServiceError> {
-        let schema = self.read_schema(id)?;
-        let perms = schema.permissions_parsed();
-        if perms.can_delete() {
-            Ok(())
-        } else {
-            Err(ServiceError::PermissionDenied(
-                format!(
-                    "工作台[{id}]禁止删除（mode={}, allow_delete={}）",
-                    perms.mode.as_str(),
-                    perms.allow_delete
-                ),
-            ))
-        }
+        let store = LocalSqliteStore::open(self.data_path(id), schema)
+            .map_err(|e| ServiceError::Store(e.to_string()))?;
+        Ok(Writable {
+            store,
+            allow_delete: perms.allow_delete,
+        })
     }
 
     /// 表字段白名单（供工具 schema 注入 / 校验用）。
@@ -138,6 +128,65 @@ impl WorkspaceService {
             })
             .collect()
     }
+}
+
+// ---------------------------------------------------------------------------
+// Writable — 已通过写权限门的存储句柄（M7.3 能力模式）
+// ---------------------------------------------------------------------------
+
+/// 写能力的类型化载体：写操作只存在于 `Writable` 上，漏做权限检查在
+/// 结构上不可能；只读工作台永远拿不到本类型（`open_writable` 拒绝）。
+#[derive(Debug)]
+pub struct Writable {
+    store: LocalSqliteStore,
+    allow_delete: bool,
+}
+
+impl Writable {
+    pub fn insert(
+        &self,
+        table: &str,
+        rows: &[serde_json::Value],
+        updated_by: &str,
+    ) -> Result<Vec<String>, ServiceError> {
+        self.store
+            .insert(table, rows, updated_by)
+            .map_err(store_err)
+    }
+
+    pub fn update(
+        &self,
+        table: &str,
+        id: &str,
+        patch: &serde_json::Value,
+        updated_by: &str,
+    ) -> Result<(), ServiceError> {
+        self.store
+            .update(table, id, patch, updated_by)
+            .map_err(store_err)
+    }
+
+    /// 删行。`allow_delete=false` 的工作台在此拒绝。
+    pub fn delete(&self, table: &str, id: &str) -> Result<(), ServiceError> {
+        if !self.allow_delete {
+            return Err(ServiceError::PermissionDenied(
+                "该工作台禁止删除行（permissions.allow_delete=false）".to_string(),
+            ));
+        }
+        self.store.delete(table, id).map_err(store_err)
+    }
+
+    /// 整表替换（.hwx LWW 合并专用）：见 [`LocalSqliteStore::replace_table_rows`]。
+    /// 受写权限门保护、不受 allow_delete 约束——合并语义是"更新整表"。
+    pub fn replace_rows(&self, table: &str, rows: &[serde_json::Value]) -> Result<usize, ServiceError> {
+        self.store
+            .replace_table_rows(table, rows)
+            .map_err(store_err)
+    }
+}
+
+fn store_err(e: crate::store::StoreError) -> ServiceError {
+    ServiceError::Store(e.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -322,39 +371,79 @@ mod tests {
     }
 
     #[test]
-    fn check_write_allows_default_workspace() {
+    fn open_writable_allows_default_workspace() {
         let dir = tempfile::tempdir().expect("tmp");
         let id = build_sample(dir.path());
         let svc = WorkspaceService::new(dir.path());
-        assert!(svc.check_write(&id).is_ok(), "默认工作台应可写");
-        assert!(svc.check_delete(&id).is_ok(), "默认工作台应可删");
+        let w = svc.open_writable(&id).expect("默认工作台应可写");
+        assert!(w.delete("vehicles", "ghost-row").is_err(), "行不存在仍应报错而非权限拒绝");
     }
 
     #[test]
-    fn check_write_rejects_readonly_workspace() {
+    fn open_writable_rejects_readonly_workspace() {
         let dir = tempfile::tempdir().expect("tmp");
         let id = build_with_permissions(
             dir.path(),
             serde_json::json!({ "mode": "readonly", "allow_delete": false }),
         );
         let svc = WorkspaceService::new(dir.path());
-        let err = svc.check_write(&id).unwrap_err();
-        assert!(matches!(err, ServiceError::PermissionDenied(_)), "{err}");
-        let err = svc.check_delete(&id).unwrap_err();
+        let err = svc.open_writable(&id).unwrap_err();
         assert!(matches!(err, ServiceError::PermissionDenied(_)), "{err}");
     }
 
     #[test]
-    fn check_delete_rejects_when_allow_delete_false() {
+    fn writable_delete_rejected_when_allow_delete_false() {
         let dir = tempfile::tempdir().expect("tmp");
         let id = build_with_permissions(
             dir.path(),
             serde_json::json!({ "mode": "readwrite", "allow_delete": false }),
         );
         let svc = WorkspaceService::new(dir.path());
+        let w = svc.open_writable(&id).expect("可写");
         // 可写但禁删
-        assert!(svc.check_write(&id).is_ok());
-        let err = svc.check_delete(&id).unwrap_err();
+        let err = w.delete("vehicles", "whatever").unwrap_err();
         assert!(matches!(err, ServiceError::PermissionDenied(_)), "{err}");
+        // 整表替换（合并路径）不受 allow_delete 约束——语义是更新不是删除
+        w.replace_rows("vehicles", &[serde_json::json!({ "plate": "京B00001" })])
+            .expect("merge 替换应放行");
+    }
+
+    #[test]
+    fn replace_rows_preserves_row_identity_and_timeline() {
+        // P0-3 回归：导入携带原 id/updated_at 的行必须原样保留，
+        // 否则 relation 外键悬空、LWW 时间线被重置。
+        let dir = tempfile::tempdir().expect("tmp");
+        let id = build_sample(dir.path());
+        let svc = WorkspaceService::new(dir.path());
+
+        // 先建一行拿到真实系统列
+        let w = svc.open_writable(&id).expect("open");
+        let rid = w
+            .insert("drivers", &[serde_json::json!({ "name": "张三" })], "user")
+            .expect("insert")
+            .pop()
+            .expect("id");
+        let store = svc.open_store(&id).expect("store");
+        let original = store.query("drivers", &[], None, 10, 0).expect("query").pop().expect("row");
+
+        // 模拟 merge：携带原 id + updated_at 重灌
+        let merged = serde_json::json!({
+            "id": rid,
+            "name": "张三改",
+            "created_at": original["created_at"],
+            "updated_at": original["updated_at"],
+        });
+        w.replace_rows("drivers", &[merged]).expect("replace");
+
+        let rows = svc.open_store(&id).expect("re-open").query("drivers", &[], None, 10, 0).expect("query");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["id"], rid.as_str(), "行主键不得重生成");
+        assert_eq!(rows[0]["updated_at"], original["updated_at"], "时间线不得重置");
+
+        // 不带 id 的新行走正常生成路径
+        w.replace_rows("drivers", &[serde_json::json!({ "name": "王五" })]).expect("replace2");
+        let rows = svc.open_store(&id).expect("re-open").query("drivers", &[], None, 10, 0).expect("query");
+        assert_eq!(rows.len(), 1);
+        assert_ne!(rows[0]["id"], rid.as_str());
     }
 }

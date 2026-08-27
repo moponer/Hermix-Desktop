@@ -155,8 +155,9 @@ impl WorkspaceDataBackend for LocalWorkspaceBackend {
             .service()
             .open_store(id)
             .map_err(|e| Self::err(e.to_string()))?;
-        let filters: Vec<hermix_workspace::Filter> =
-            serde_json::from_value(filters).unwrap_or_default();
+        // 非法过滤条件必须显式报错：静默当无过滤会返回错误结果集
+        let filters: Vec<hermix_workspace::Filter> = serde_json::from_value(filters)
+            .map_err(|e| ToolError::InvalidParams(format!("filters 解析失败: {e}")))?;
         let rows = store
             .query(table, &filters, sort.as_deref(), limit, offset)
             .map_err(|e| Self::err(format!("表[{table}]查询失败: {e}")))?;
@@ -168,8 +169,8 @@ impl WorkspaceDataBackend for LocalWorkspaceBackend {
             .service()
             .open_store(id)
             .map_err(|e| Self::err(e.to_string()))?;
-        let filters: Vec<hermix_workspace::Filter> =
-            serde_json::from_value(filters).unwrap_or_default();
+        let filters: Vec<hermix_workspace::Filter> = serde_json::from_value(filters)
+            .map_err(|e| ToolError::InvalidParams(format!("filters 解析失败: {e}")))?;
         let n = store
             .count(table, &filters)
             .map_err(|e| Self::err(format!("表[{table}]计数失败: {e}")))?;
@@ -177,43 +178,27 @@ impl WorkspaceDataBackend for LocalWorkspaceBackend {
     }
 
     async fn insert(&self, id: &str, table: &str, rows: Value) -> Result<String, ToolError> {
-        let svc = self.service();
-        // M7.3: 只读工作台拒绝写操作（LLM 工具与 REST 同源校验）
-        svc.check_write(id)
-            .map_err(|e| Self::err(e.to_string()))?;
-        let store = svc
-            .open_store(id)
-            .map_err(|e| Self::err(e.to_string()))?;
-        let rows: Vec<Value> = rows.as_array().cloned().unwrap_or_default();
-        let ids = store
+        // 写能力句柄：只读工作台在此被拒（LLM 工具与 REST 同源校验）
+        let writable = self.service().open_writable(id).map_err(|e| Self::err(e.to_string()))?;
+        let rows: Vec<Value> = serde_json::from_value(rows)
+            .map_err(|e| ToolError::InvalidParams(format!("rows 必须是 JSON 数组: {e}")))?;
+        let ids = writable
             .insert(table, &rows, "agent")
             .map_err(|e| Self::err(format!("表[{table}]插入失败: {e}")))?;
         Ok(json!({ "ok": true, "ids": ids }).to_string())
     }
 
     async fn update(&self, id: &str, table: &str, row_id: &str, patch: Value) -> Result<String, ToolError> {
-        let svc = self.service();
-        // M7.3: 只读工作台拒绝写操作
-        svc.check_write(id)
-            .map_err(|e| Self::err(e.to_string()))?;
-        let store = svc
-            .open_store(id)
-            .map_err(|e| Self::err(e.to_string()))?;
-        store
+        let writable = self.service().open_writable(id).map_err(|e| Self::err(e.to_string()))?;
+        writable
             .update(table, row_id, &patch, "agent")
             .map_err(|e| Self::err(format!("表[{table}]更新失败: {e}")))?;
         Ok(json!({ "ok": true, "id": row_id }).to_string())
     }
 
     async fn delete(&self, id: &str, table: &str, row_id: &str) -> Result<String, ToolError> {
-        let svc = self.service();
-        // M7.3: 只读 或 allow_delete=false 拒绝删除
-        svc.check_delete(id)
-            .map_err(|e| Self::err(e.to_string()))?;
-        let store = svc
-            .open_store(id)
-            .map_err(|e| Self::err(e.to_string()))?;
-        store
+        let writable = self.service().open_writable(id).map_err(|e| Self::err(e.to_string()))?;
+        writable
             .delete(table, row_id)
             .map_err(|e| Self::err(format!("表[{table}]删除失败: {e}")))?;
         Ok(json!({ "ok": true, "id": row_id }).to_string())
@@ -261,9 +246,10 @@ impl WorkspaceBackend for LocalWorkspaceBackend {
     }
 
     async fn update_schema(&self, id: &str, schema: Value) -> Result<String, ToolError> {
-        let ws_dir = self.root.join(id);
-        let schema_path = ws_dir.join("workspace.json");
-        let data_path = ws_dir.join("data.sqlite");
+        // 路径解析走 service 层，与 dashboard 端点共享同一份目录约定
+        let svc = self.service();
+        let schema_path = svc.schema_path(id);
+        let data_path = svc.data_path(id);
 
         // 1. 读当前定义（不存在 → NotFound）
         let old_raw = std::fs::read(&schema_path).map_err(|e| {

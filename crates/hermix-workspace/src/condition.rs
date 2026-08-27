@@ -128,7 +128,6 @@ pub fn run_condition_automation(
 mod tests {
     use super::*;
     use crate::builder::create_from_schema;
-    use crate::store::WorkspaceStore;
     use std::collections::HashMap;
 
     fn build_vehicle_db() -> (tempfile::TempDir, String) {

@@ -30,7 +30,7 @@ pub struct TemplateCreateResponse {
 }
 
 pub async fn create_from_template(
-    State(state): State<HttpServerState>,
+    State(_state): State<HttpServerState>,
     Path(id): Path<String>,
 ) -> Result<Json<TemplateCreateResponse>, HttpError> {
     let tpl = get_template(&id).ok_or_else(|| HttpError {

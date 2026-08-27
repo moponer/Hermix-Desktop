@@ -585,7 +585,16 @@ export interface WorkspaceSchema {
   modules: WorkspaceModule[];
   layout: unknown;
   automations: unknown[];
-  permissions: unknown;
+  /** 权限（镜像后端 M7.2 解析视图）：缺省 = readwrite + 允许删除。 */
+  permissions: WorkspacePermissions;
+}
+
+/** 工作台权限契约（与 hermix_workspace::WorkspacePermissions 对齐；
+ * 后端校验保证出现即合法，未知键保留兼容旧自由 JSON）。 */
+export interface WorkspacePermissions {
+  mode?: "readwrite" | "readonly";
+  allow_delete?: boolean;
+  [key: string]: unknown;
 }
 
 export type FieldType =

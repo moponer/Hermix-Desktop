@@ -32,7 +32,7 @@ pub use loader::{
     apply_user_config_patch, auto_correct_model, default_model_for_provider,
     env_var_name_for_provider, load_config, load_user_config_file, provider_api_key_from_env,
     provider_has_key, save_config_yaml, user_config_field_display, validate_config,
-    AutoCorrectReport, ConfigError,
+    AutoCorrectReport, BUILTIN_PROVIDER_ENV_VARS, ConfigError,
 };
 pub use managed_gateway::{
     build_vendor_gateway_url, coerce_modal_mode, env_var_enabled, get_tool_gateway_scheme,

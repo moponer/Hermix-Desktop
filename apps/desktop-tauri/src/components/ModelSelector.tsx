@@ -1,13 +1,15 @@
 import { useState, useEffect, useMemo } from "react";
 import { useCurrentModel, MODEL_CONFIG_CHANGED_EVENT } from "../hooks/useCurrentModel";
 import { storage, STORAGE_KEYS } from "../utils/storageCompat";
-import { getModelList } from "../api";
+import { getModelList, getProviderMeta } from "../api";
 
+/** 静态兜底清单——权威来源是后端 /api/providers/meta（BUILTIN_PROVIDER_ENV_VARS），
+ *  拉取失败时才落到这里。禁止在此再增厂商：改 hermix-config。 */
 export const BUILTIN_PROVIDER_IDS = new Set([
   "minimax", "openai", "deepseek", "dashscope", "kimi",
   "siliconflow", "openrouter", "zhipu", "volcengine",
   "anthropic", "copilot", "qwen", "moonshot",
-  "baichuan", "tencent", "spark", "yi",
+  "nous", "baichuan", "tencent", "spark", "yi",
 ]);
 
 const MODEL_CONFIG_KEY = STORAGE_KEYS.modelConfig;
@@ -108,21 +110,32 @@ export function useModelSelector() {
           }
         } catch {}
 
-        // 仅在 localStorage 完全缺失时（首次安装 / 清缓存）才兜底
-        // 用后端的 enabled —— 避免 mount 时反复覆盖用户已经勾选的状态。
-        const enabled: ModelConfigData["enabled"] = localMissing && backend?.models?.length
-          ? backend.models.map((m) => ({ providerId: m.provider_id, modelId: m.model_id }))
-          : local.enabled;
+        // 后端请求成功 → 其集合即权威（空列表也是权威：全部 provider
+        // 未配钥时本地残留条目同样该清）；请求失败（backend===null）→
+        // 保留本地态，离线不吞勾选。
+        const rawBackend = backend?.models ?? [];
+        const backendIds = new Set(rawBackend.map((m) => `${m.provider_id}:${m.model_id}`));
+        const baseEnabled =
+          localMissing && rawBackend.length
+            ? rawBackend.map((m) => ({ providerId: m.provider_id, modelId: m.model_id }))
+            : local.enabled;
+        const enabled = backend !== null
+          ? baseEnabled.filter((e) => backendIds.has(`${e.providerId}:${e.modelId}`))
+          : baseEnabled;
 
+        // orphan-aware 默认模型：优先有效的本地默认，其次后端默认，最后取首项。
+        const validIds = new Set(enabled.map((e) => `${e.providerId}:${e.modelId}`));
         const defaultModel =
-          local.defaultModel ||
-          backend?.default_model ||
-          (enabled.length > 0 ? `${enabled[0].providerId}:${enabled[0].modelId}` : "");
+          (local.defaultModel && validIds.has(local.defaultModel)) ? local.defaultModel
+            : (backend?.default_model && validIds.has(backend.default_model)) ? backend.default_model
+              : (enabled.length > 0 ? `${enabled[0].providerId}:${enabled[0].modelId}` : "");
 
         const next: ModelConfigData = { enabled, defaultModel };
         storage.setItem(MODEL_CONFIG_KEY, JSON.stringify(next));
         setConfig(next);
-        setSelectedModel((prev) => prev || defaultModel);
+        setSelectedModel((prev) =>
+          (prev && validIds.has(prev)) ? prev : (validIds.has(defaultModel) ? defaultModel : "")
+        );
       } catch {}
     };
     reconcile();
@@ -138,14 +151,31 @@ export function useModelSelector() {
     if (defaultModel) setSelectedModel((prev) => (prev === "" ? defaultModel : prev));
   }, [defaultModel]);
 
+  // 后端权威 builtin 清单（覆盖静态兜底可能缺失的厂商）
+  const [metaIds, setMetaIds] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    let ok = true;
+    getProviderMeta()
+      .then((list) => {
+        if (ok) setMetaIds(new Set(list.map((m) => m.id)));
+      })
+      .catch(() => {
+        /* 分组降级用静态清单，拉取失败不打扰用户 */
+      });
+    return () => {
+      ok = false;
+    };
+  }, []);
+
   const models = useMemo(() => {
     return config.enabled.map((m) => ({ id: `${m.providerId}:${m.modelId}`, display: m.modelId, provider: m.providerId }));
   }, [config]);
 
   const byProvider = useMemo(() => {
+    const builtin = metaIds.size > 0 ? (id: string) => BUILTIN_PROVIDER_IDS.has(id) || metaIds.has(id) : (id: string) => BUILTIN_PROVIDER_IDS.has(id);
     const map = new Map<string, { provider: string; models: typeof models; isCustom: boolean }>();
     for (const m of models) {
-      const isCustom = !BUILTIN_PROVIDER_IDS.has(m.provider);
+      const isCustom = !builtin(m.provider);
       const entry = map.get(m.provider);
       if (entry) {
         entry.models.push(m);
@@ -154,7 +184,7 @@ export function useModelSelector() {
       }
     }
     return Array.from(map.values());
-  }, [models]);
+  }, [models, metaIds]);
 
   const availableExtras = useMemo(() => {
     try {

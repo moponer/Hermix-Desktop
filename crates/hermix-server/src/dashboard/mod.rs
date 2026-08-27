@@ -65,6 +65,9 @@ pub fn router() -> Router<HttpServerState> {
             "/api/model/list",
             get(config::get_model_list).put(config::update_model_list),
         )
+        // Builtin provider metadata (id + env var) — single source of truth
+        // in hermix-config; the frontend groups builtin/custom from here.
+        .route("/api/providers/meta", get(config::get_provider_meta))
         // Env
         .route(
             "/api/env",
@@ -194,6 +197,12 @@ pub fn router() -> Router<HttpServerState> {
         .route(
             "/api/workspaces/{id}/schema",
             put(workspaces::update_workspace_schema),
+        )
+        // 布局专用端点：拖拽保存只动 layout 层，避免整 schema 快照回写
+        // 覆盖 LLM 并发修改（丢失更新）
+        .route(
+            "/api/workspaces/{id}/layout",
+            put(workspaces::update_workspace_layout),
         )
         // M5 协作分发：.hwx 导出 / 导入（JSON bundle，防脏包校验）
         .route(

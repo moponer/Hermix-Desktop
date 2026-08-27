@@ -46,7 +46,7 @@ pub use templates::{
     TemplateMeta, TemplateTableMeta, WorkspaceTemplate, get_template, list_template_metas,
     list_templates,
 };
-pub use service::{ServiceError, WorkspaceService};
+pub use service::{ServiceError, Writable, WorkspaceService};
 pub use model::{
     Automation, DashboardWidget, Field, FieldType, Module, PermissionMode, View, ViewType,
     WidgetType, WorkspacePermissions, WorkspaceSchema,

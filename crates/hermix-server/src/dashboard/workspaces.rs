@@ -188,14 +188,19 @@ pub async fn rename_workspace(
         message: e.to_string(),
     })?;
 
-    // 定义同步改名（若存在）
+    // 定义同步改名（若存在）。序列化/写盘失败只降级不回滚——注册表已改名，
+    // 但必须留痕，否则两边名字静默漂移无从排查。
     if let Ok(mut schema) = read_schema(&state, &id) {
         schema.name = name;
         if !req.icon.is_empty() {
             schema.icon = req.icon;
         }
-        if let Ok(raw) = serde_json::to_vec_pretty(&schema) {
-            let _ = std::fs::write(schema_path(&state, &id), raw);
+        match serde_json::to_vec_pretty(&schema)
+            .map_err(|e| e.to_string())
+            .and_then(|raw| std::fs::write(schema_path(&state, &id), raw).map_err(|e| e.to_string()))
+        {
+            Ok(()) => {}
+            Err(e) => tracing::warn!(workspace = %id, error = %e, "改名同步到定义文件失败，注册表与定义名可能漂移"),
         }
     }
 
@@ -215,11 +220,31 @@ pub async fn delete_workspace(
         status: axum::http::StatusCode::NOT_FOUND,
         message: e.to_string(),
     })?;
-    // 数据目录删除失败不阻断（注册表已删，目录残留由后续清理兜底）
+    // 数据目录删除失败不阻断（注册表已删，目录残留由后续清理兜底），但必须留痕
     let dir = ws_dir(&state, &id);
     if dir.exists() {
-        let _ = std::fs::remove_dir_all(&dir);
+        if let Err(e) = std::fs::remove_dir_all(&dir) {
+            tracing::warn!(workspace = %id, error = %e, "工作台数据目录删除失败，目录残留");
+        }
     }
+    Ok(Json(WorkspaceOkResponse { ok: true, id }))
+}
+
+/// PUT /api/workspaces/{id}/layout — 仅替换布局层。
+///
+/// 独立于 schema 端点的原因：布局拖拽防抖保存持有的是打开时的 schema
+/// 快照，整 schema 回写会把期间 LLM 增删的模块/字段覆盖掉（丢失更新）。
+pub async fn update_workspace_layout(
+    State(state): State<HttpServerState>,
+    Path(id): Path<String>,
+    Json(req): Json<LayoutUpdateRequest>,
+) -> Result<Json<WorkspaceOkResponse>, HttpError> {
+    let mut schema = read_schema(&state, &id)?;
+    schema.layout = req.layout;
+    let raw = serde_json::to_vec_pretty(&schema)
+        .map_err(|e| server_err(&format!("序列化工作台定义失败: {e}")))?;
+    std::fs::write(schema_path(&state, &id), raw)
+        .map_err(|e| server_err(&format!("写入工作台定义失败: {e}")))?;
     Ok(Json(WorkspaceOkResponse { ok: true, id }))
 }
 
@@ -293,6 +318,12 @@ pub struct TableCountRequest {
     pub filters: Vec<Filter>,
 }
 
+/// PUT /{id}/layout 请求体。
+#[derive(Debug, Clone, Deserialize)]
+pub struct LayoutUpdateRequest {
+    pub layout: serde_json::Value,
+}
+
 fn default_updated_by() -> String {
     "user".to_string()
 }
@@ -314,12 +345,11 @@ pub async fn insert_rows(
     Path((id, table)): Path<TablePath>,
     Json(req): Json<TableInsertRequest>,
 ) -> Result<Json<Vec<String>>, HttpError> {
-    // M7.3: 只读工作台拒绝写操作
-    hermix_workspace::WorkspaceService::new(workspaces_root(&state))
-        .check_write(&id)
-        .map_err(|e| HttpError { status: axum::http::StatusCode::FORBIDDEN, message: e.to_string() })?;
-    let store = open_data_store(&state, &id)?;
-    let ids = store
+    // 写能力句柄：只读工作台在此被拒（403），LLM 工具与 REST 同源校验
+    let writable = hermix_workspace::WorkspaceService::new(workspaces_root(&state))
+        .open_writable(&id)
+        .map_err(HttpError::from)?;
+    let ids = writable
         .insert(&table, &req.rows, &req.updated_by)
         .map_err(|e| server_err(&e.to_string()))?;
     Ok(Json(ids))
@@ -330,12 +360,10 @@ pub async fn update_row(
     Path((id, table)): Path<TablePath>,
     Json(req): Json<TableUpdateRequest>,
 ) -> Result<Json<WorkspaceOkResponse>, HttpError> {
-    // M7.3: 只读工作台拒绝写操作
-    hermix_workspace::WorkspaceService::new(workspaces_root(&state))
-        .check_write(&id)
-        .map_err(|e| HttpError { status: axum::http::StatusCode::FORBIDDEN, message: e.to_string() })?;
-    let store = open_data_store(&state, &id)?;
-    store
+    let writable = hermix_workspace::WorkspaceService::new(workspaces_root(&state))
+        .open_writable(&id)
+        .map_err(HttpError::from)?;
+    writable
         .update(&table, &req.id, &req.patch, &req.updated_by)
         .map_err(|e| server_err(&e.to_string()))?;
     Ok(Json(WorkspaceOkResponse { ok: true, id }))
@@ -346,12 +374,10 @@ pub async fn delete_row(
     Path((id, table)): Path<TablePath>,
     Json(req): Json<TableDeleteRequest>,
 ) -> Result<Json<WorkspaceOkResponse>, HttpError> {
-    // M7.3: 只读 或 allow_delete=false 拒绝删除
-    hermix_workspace::WorkspaceService::new(workspaces_root(&state))
-        .check_delete(&id)
-        .map_err(|e| HttpError { status: axum::http::StatusCode::FORBIDDEN, message: e.to_string() })?;
-    let store = open_data_store(&state, &id)?;
-    store
+    let writable = hermix_workspace::WorkspaceService::new(workspaces_root(&state))
+        .open_writable(&id)
+        .map_err(HttpError::from)?;
+    writable
         .delete(&table, &req.id)
         .map_err(|e| server_err(&e.to_string()))?;
     Ok(Json(WorkspaceOkResponse { ok: true, id }))
@@ -456,7 +482,11 @@ pub async fn import_workspace(
                 })?;
 
             let target_id = target.id.clone();
-            let target_schema = read_schema(&state, &target_id)?;
+            // 写权限门（M7.3）：只读工作台拒绝合并写入（此前整条 import
+            // 路径绕过了数据端点的权限检查，可清空 readonly 工作台）
+            let writable = hermix_workspace::WorkspaceService::new(workspaces_root(&state))
+                .open_writable(&target_id)
+                .map_err(HttpError::from)?;
             let store = open_data_store(&state, &target_id)?;
 
             // LWW 合并：每表 本地行 + 包行（按 id 对齐，updated_at 较新者胜）
@@ -468,9 +498,11 @@ pub async fn import_workspace(
                             .query(id, &[], None, 0, 0)
                             .map_err(|e| server_err(&format!("表[{id}]读取失败: {e}")))?;
                         let merged = hermix_workspace::merge_rows(&local, incoming);
-                        // 全量重写该表（合并结果）
-                        rewrite_table(&store, id, &merged)?;
-                        merged_counts.insert(id.clone(), merged.len());
+                        // 事务内整表替换，行主键/时间线保留（LWW 语义）
+                        let n = writable
+                            .replace_rows(id, &merged)
+                            .map_err(|e| server_err(&format!("表[{id}]合并失败: {e}")))?;
+                        merged_counts.insert(id.clone(), n);
                     }
                 }
             }
@@ -510,42 +542,4 @@ pub async fn import_workspace(
             "无效 mode: {other}（支持 new / merge）"
         ))),
     }
-}
-
-/// 全量重写一张表（merge 模式用）：清空后批量插入合并结果。
-/// 表内数据由 LWW 合并产生，清空重写是安全幂等的（行 id 保留）。
-fn rewrite_table(
-    store: &LocalSqliteStore,
-    table: &str,
-    rows: &[serde_json::Value],
-) -> Result<(), HttpError> {
-    let ids: Vec<String> = store
-        .query(table, &[], None, 0, 0)
-        .map_err(|e| server_err(&format!("表[{table}]读取失败: {e}")))?
-        .iter()
-        .filter_map(|r| r.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()))
-        .collect();
-    for rid in &ids {
-        store
-            .delete(table, rid)
-            .map_err(|e| server_err(&format!("表[{table}]清空失败: {e}")))?;
-    }
-    if !rows.is_empty() {
-        // 保留包内原始 id/updated_at/updated_by（merge 语义：行主键 UUID 不重生成）
-        let rows_with_sys = rows
-            .iter()
-            .map(|r| {
-                let mut v = r.clone();
-                let o = v.as_object_mut().expect("行是对象");
-                if !o.contains_key("updated_by") {
-                    o.insert("updated_by".into(), serde_json::json!("import"));
-                }
-                v
-            })
-            .collect::<Vec<_>>();
-        store
-            .insert(table, &rows_with_sys, "import")
-            .map_err(|e| server_err(&format!("表[{table}]导入失败: {e}")))?;
-    }
-    Ok(())
 }

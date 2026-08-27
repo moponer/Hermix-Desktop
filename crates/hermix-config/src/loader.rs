@@ -684,27 +684,39 @@ pub fn apply_env_overrides(config: &mut GatewayConfig) {
 // Auto-correct model
 // ---------------------------------------------------------------------------
 
-/// Map a provider name to its well-known API key env var. Mirrors
-/// `hermix-agent::agent_builder::env_var_name_for_provider` so a
-/// single source of truth can eventually replace both — for now we
-/// duplicate the list to keep `hermix-config` free of agent deps.
+/// 内置 provider 注册表（id → 配钥环境变量名）——全项目唯一真理源。
+/// hermix-agent / server / 前端均由此派生，禁止再手写平行副本
+/// （此前 config 与 agent 各持一份且已漂移，agent 独有 baichuan/
+/// tencent/spark/yi 四家，导致 provider_has_key 不认识它们）。
+pub const BUILTIN_PROVIDER_ENV_VARS: &[(&str, &str)] = &[
+    ("openai", "OPENAI_API_KEY"),
+    ("anthropic", "ANTHROPIC_API_KEY"),
+    ("openrouter", "OPENROUTER_API_KEY"),
+    ("deepseek", "DEEPSEEK_API_KEY"),
+    ("qwen", "DASHSCOPE_API_KEY"),
+    ("kimi", "MOONSHOT_API_KEY"),
+    ("moonshot", "MOONSHOT_API_KEY"),
+    ("minimax", "MINIMAX_API_KEY"),
+    ("nous", "NOUS_API_KEY"),
+    ("copilot", "GITHUB_COPILOT_TOKEN"),
+    ("siliconflow", "SILICONFLOW_API_KEY"),
+    ("zhipu", "ZHIPU_API_KEY"),
+    ("volcengine", "ARK_API_KEY"),
+    ("dashscope", "DASHSCOPE_API_KEY"),
+    // 4 个国内厂商（2026-08 自 agent 侧副本合并）
+    ("baichuan", "BAICHUAN_API_KEY"),
+    ("tencent", "HUNYUAN_API_KEY"),
+    ("spark", "SPARK_API_KEY"),
+    ("yi", "YI_API_KEY"),
+];
+
+/// Map a provider name to its well-known API key env var.
 pub fn env_var_name_for_provider(provider: &str) -> &'static str {
-    match provider {
-        "openai" => "OPENAI_API_KEY",
-        "anthropic" => "ANTHROPIC_API_KEY",
-        "openrouter" => "OPENROUTER_API_KEY",
-        "deepseek" => "DEEPSEEK_API_KEY",
-        "qwen" => "DASHSCOPE_API_KEY",
-        "kimi" | "moonshot" => "MOONSHOT_API_KEY",
-        "minimax" => "MINIMAX_API_KEY",
-        "nous" => "NOUS_API_KEY",
-        "copilot" => "GITHUB_COPILOT_TOKEN",
-        "siliconflow" => "SILICONFLOW_API_KEY",
-        "zhipu" => "ZHIPU_API_KEY",
-        "volcengine" => "ARK_API_KEY",
-        "dashscope" => "DASHSCOPE_API_KEY",
-        _ => "<unknown provider>",
-    }
+    BUILTIN_PROVIDER_ENV_VARS
+        .iter()
+        .find(|(id, _)| *id == provider)
+        .map(|(_, var)| *var)
+        .unwrap_or("<unknown provider>")
 }
 
 /// Default model for each provider when the user hasn't picked one.

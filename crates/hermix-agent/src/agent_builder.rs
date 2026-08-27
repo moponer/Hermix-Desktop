@@ -237,44 +237,13 @@ pub fn bridge_tool_registry(
 // provider_api_key_from_env
 // ---------------------------------------------------------------------------
 
-/// Resolve an API key / token for a named LLM provider from well-known
-/// environment variables.
-pub fn provider_api_key_from_env(provider: &str) -> Option<String> {
-    let var = env_var_name_for_provider(provider);
-    if var == "<unknown provider>" {
-        return None;
-    }
-    std::env::var(var).ok().filter(|s| !s.is_empty())
-}
+// 唯一真理源在 hermix-config（含 custom-* 前缀解析与全部内置厂商）；
+// 此处 re-export 保持既有公开 API 不变，禁止在本 crate 再手写平行映射。
+pub use hermix_config::provider_api_key_from_env;
 
-/// Canonical environment variable name for a given provider. Public so the
-/// CLI / desktop settings panel can render the same hint.
-pub fn env_var_name_for_provider(provider: &str) -> &'static str {
-    match provider {
-        "openai" => "OPENAI_API_KEY",
-        "anthropic" => "ANTHROPIC_API_KEY",
-        "openrouter" => "OPENROUTER_API_KEY",
-        "deepseek" => "DEEPSEEK_API_KEY",
-        "qwen" => "DASHSCOPE_API_KEY",
-        "kimi" | "moonshot" => "MOONSHOT_API_KEY",
-        "minimax" => "MINIMAX_API_KEY",
-        "nous" => "NOUS_API_KEY",
-        "copilot" => "GITHUB_COPILOT_TOKEN",
-        // Settings-view providers that were missing from this map —
-        // without them the /api/env-set key is invisible to
-        // provider_api_key_from_env, causing "no API key" errors.
-        "siliconflow" => "SILICONFLOW_API_KEY",
-        "zhipu"       => "ZHIPU_API_KEY",
-        "volcengine"  => "ARK_API_KEY",
-        "dashscope"   => "DASHSCOPE_API_KEY",
-        // 4 个新增国内厂商
-        "baichuan"    => "BAICHUAN_API_KEY",
-        "tencent"     => "HUNYUAN_API_KEY",
-        "spark"       => "SPARK_API_KEY",
-        "yi"          => "YI_API_KEY",
-        _ => "<unknown provider>",
-    }
-}
+// 同上：env 变量名映射的唯一真理源在 hermix-config（BUILTIN_PROVIDER_ENV_VARS），
+// re-export 保持 CLI / desktop settings 面板既有引用不变。
+pub use hermix_config::env_var_name_for_provider;
 
 // ---------------------------------------------------------------------------
 // build_provider

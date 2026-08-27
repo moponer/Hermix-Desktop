@@ -217,6 +217,10 @@ pub async fn create_custom_provider(
         env::write_env_file(&state.hermix_home, &env_vars);
     }
 
+    // 模型选择联动：若 config.model 指向无钥 provider，自动改指可用者
+    // （必须在持久化/推送之前执行，否则修正结果被丢弃成死变异）
+    let correction = hermix_config::auto_correct_model(&mut config);
+
     // Persist to config.yaml
     let mut to_save = config.clone();
     to_save.home_dir = None;
@@ -236,10 +240,16 @@ pub async fn create_custom_provider(
     })?;
     state.agent_service.set_config(cfg_value);
 
-    // Run auto-correct so the model selector picks up the new provider
-    let _ = hermix_config::auto_correct_model(&mut config);
-
-    tracing::info!(provider = %req.id, "custom provider created");
+    match &correction {
+        Some(r) => tracing::info!(
+            provider = %req.id,
+            before = ?r.before,
+            after = %r.after,
+            reason = %r.reason,
+            "custom provider created; default model auto-corrected"
+        ),
+        None => tracing::info!(provider = %req.id, "custom provider created"),
+    }
 
     Ok(Json(OkResponse { ok: true }))
 }
@@ -263,6 +273,17 @@ pub async fn delete_custom_provider(
     let mut config = read_gateway_config(&state)?;
 
     config.llm_providers.remove(&id);
+
+    // 级联清理：删除 provider 后同步移除 model_selector 中引用该 provider_id
+    // 的孤儿条目，否则前端下拉仍可选中已删 provider，发消息才在 build_provider 崩。
+    if let Some(sel) = config.model_selector.as_mut() {
+        sel.enabled.retain(|e| e.provider_id != id);
+        if let Some(d) = &sel.default_model {
+            if d.split_once(':').map(|(p, _)| p) == Some(id.as_str()) {
+                sel.default_model = None;
+            }
+        }
+    }
 
     // Unset env vars (runtime)
     let env_id = id.trim_start_matches("custom-").to_uppercase();

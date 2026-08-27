@@ -235,11 +235,32 @@ pub async fn get_model_list(State(state): State<HttpServerState>) -> Json<ModelL
         .and_then(|v| serde_json::from_value(v).ok())
         .unwrap_or_else(|| state.config.as_ref().clone());
 
+    // 仅保留后端确实已配置的条目，避免下拉展示 provider 改名/删除后残留
+    // 的孤儿模型（orphan）。判定必须复用 hermix_config::provider_has_key
+    // （config api_key 或环境变量任一命中）——此前只查 config 字段的半份
+    // 副本会把纯 env 配钥的内置 provider 全部误杀出下拉。
+    let is_configured = |pid: &str| hermix_config::provider_has_key(&cfg, pid);
+
     if let Some(sel) = &cfg.model_selector {
         if !sel.enabled.is_empty() || sel.default_model.is_some() {
+            let models: Vec<hermix_config::ModelSelectorEntry> = sel
+                .enabled
+                .iter()
+                .filter(|e| is_configured(&e.provider_id))
+                .cloned()
+                .collect();
+            let default_model = sel
+                .default_model
+                .as_ref()
+                .filter(|d| {
+                    d.split_once(':')
+                        .map(|(p, _)| models.iter().any(|m| m.provider_id == p))
+                        .unwrap_or(false)
+                })
+                .cloned();
             return Json(ModelListResponse {
-                models: sel.enabled.clone(),
-                default_model: sel.default_model.clone(),
+                models,
+                default_model,
             });
         }
     }
@@ -248,7 +269,7 @@ pub async fn get_model_list(State(state): State<HttpServerState>) -> Json<ModelL
     let mut models = Vec::new();
     for (pid, pc) in &cfg.llm_providers {
         if let Some(m) = &pc.model {
-            if !m.trim().is_empty() {
+            if !m.trim().is_empty() && is_configured(pid) {
                 models.push(hermix_config::ModelSelectorEntry {
                     provider_id: pid.clone(),
                     model_id: m.clone(),
@@ -256,9 +277,17 @@ pub async fn get_model_list(State(state): State<HttpServerState>) -> Json<ModelL
             }
         }
     }
+    let default_model = match &cfg.model {
+        Some(d) if d.split_once(':').map(|(p, _)| is_configured(p)).unwrap_or(false) => {
+            Some(d.clone())
+        }
+        _ => models
+            .first()
+            .map(|m| format!("{}:{}", m.provider_id, m.model_id)),
+    };
     Json(ModelListResponse {
         models,
-        default_model: cfg.model.clone(),
+        default_model,
     })
 }
 
@@ -304,4 +333,15 @@ pub async fn update_model_list(
     state.agent_service.set_config(cfg_value);
 
     Ok(Json(OkResponse { ok: true }))
+}
+
+/// GET /api/providers/meta — 内置 provider 元数据（id + 配钥环境变量名）。
+/// 唯一真理源 `hermix_config::BUILTIN_PROVIDER_ENV_VARS`；前端据此做
+/// builtin/自定义分组与环境变量提示，替代散落各处的硬编码副本。
+pub async fn get_provider_meta() -> Json<serde_json::Value> {
+    let items: Vec<serde_json::Value> = hermix_config::BUILTIN_PROVIDER_ENV_VARS
+        .iter()
+        .map(|(id, env_var)| serde_json::json!({ "id": id, "env_var": env_var }))
+        .collect();
+    Json(serde_json::Value::Array(items))
 }

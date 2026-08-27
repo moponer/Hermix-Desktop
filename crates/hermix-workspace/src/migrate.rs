@@ -94,7 +94,7 @@ pub fn migrate_schema(
 
     // 建表/补列走 LocalSqliteStore::open（幂等 ensure_schema 建新表），
     // ALTER ADD COLUMN 走事务内裸 DDL。
-    let store = LocalSqliteStore::open(db_path, new_schema.clone())
+    let _store = LocalSqliteStore::open(db_path, new_schema.clone())
         .map_err(|e| MigrateError::Io(e.to_string()))?;
     let conn = store_conn(db_path)?;
 
@@ -145,7 +145,7 @@ pub fn migrate_schema(
             if let Some(old_fields) = old_tables.get(id) {
                 let new_field_ids: std::collections::HashSet<&str> =
                     fields.iter().map(|f| f.id.as_str()).collect();
-                for (fid, old_f) in old_fields {
+                for (fid, _old_f) in old_fields {
                     if !new_field_ids.contains(fid.as_str()) {
                         report.removed_columns.push(ColumnChange {
                             table: id.clone(),
@@ -248,7 +248,7 @@ fn count_invalid_enum(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::{Filter, FilterOp, WorkspaceStore};
+    use crate::store::WorkspaceStore;
 
     fn schema_v1() -> WorkspaceSchema {
         serde_json::from_value(serde_json::json!({

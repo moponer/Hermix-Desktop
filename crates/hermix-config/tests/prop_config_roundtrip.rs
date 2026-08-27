@@ -10,7 +10,7 @@ use std::collections::HashMap;
 
 use hermix_config::{
     AdvancedSettingsConfig, AgentLoopBehaviorConfig, ApprovalConfig, CompactionConfig,
-    DailyReset, GatewayConfig, IdleReset, ModelSelectorConfig, PlatformConfig, ProfileConfig,
+    DailyReset, GatewayConfig, IdleReset, PlatformConfig, ProfileConfig,
     SessionConfig, SessionResetPolicy, SkillsSettings, SmartModelRoutingConfig,
     StreamingConfig, TerminalConfig, ToolCapabilityConfig, ToolsSettings,
     UnauthorizedDmBehavior,

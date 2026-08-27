@@ -227,9 +227,10 @@ const fn default_schema_version() -> u32 {
 // ---------------------------------------------------------------------------
 
 /// 工作台访问模式。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PermissionMode {
     /// 可读可写（默认）。
+    #[default]
     ReadWrite,
     /// 只读：拒绝 insert/update（数据端点 + LLM 工具统一校验）。
     ReadOnly,
@@ -243,7 +244,8 @@ impl PermissionMode {
         }
     }
 
-    fn parse(s: &str) -> Option<Self> {
+    /// 合法枚举字符串的唯一解析入口（validate 复用，杜绝字面量真理源分叉）。
+    pub(crate) fn parse(s: &str) -> Option<Self> {
         match s {
             "readwrite" => Some(PermissionMode::ReadWrite),
             "readonly" => Some(PermissionMode::ReadOnly),
@@ -263,31 +265,27 @@ pub struct WorkspacePermissions {
     pub allow_delete: bool,
 }
 
-impl WorkspacePermissions {
-    pub fn from_value(v: &serde_json::Value) -> Self {
-        let mut perms = WorkspacePermissions {
+impl Default for WorkspacePermissions {
+    fn default() -> Self {
+        Self {
             mode: PermissionMode::ReadWrite,
             allow_delete: true,
-        };
+        }
+    }
+}
+
+impl WorkspacePermissions {
+    pub fn from_value(v: &serde_json::Value) -> Self {
+        let mut perms = Self::default();
         if let Some(obj) = v.as_object() {
-            if let Some(m) = obj.get("mode").and_then(|x| x.as_str()) {
-                if let Some(pm) = PermissionMode::parse(m) {
-                    perms.mode = pm;
-                }
+            if let Some(pm) = obj.get("mode").and_then(|x| x.as_str()).and_then(PermissionMode::parse) {
+                perms.mode = pm;
             }
             if let Some(b) = obj.get("allow_delete").and_then(|x| x.as_bool()) {
                 perms.allow_delete = b;
             }
         }
         perms
-    }
-
-    /// 默认权限（readwrite + 允许删除）。
-    pub fn default_workspace() -> Self {
-        WorkspacePermissions {
-            mode: PermissionMode::ReadWrite,
-            allow_delete: true,
-        }
     }
 
     /// 是否允许写（insert/update）。
@@ -306,9 +304,7 @@ impl WorkspaceSchema {
     pub fn permissions_parsed(&self) -> WorkspacePermissions {
         WorkspacePermissions::from_value(&self.permissions)
     }
-}
 
-impl WorkspaceSchema {
     /// 按 id 查模块。
     pub fn module(&self, id: &str) -> Option<&Module> {
         self.modules.iter().find(|m| m.id() == id)
@@ -494,5 +490,21 @@ mod tests {
         .expect("parse");
         let err = crate::validate::validate_schema(&schema).unwrap_err().to_string();
         assert!(err.contains("布尔"), "{err}");
+    }
+
+    #[test]
+    fn permissions_non_string_mode_rejected() {
+        // mode 为非字符串 → 校验拒绝。若放行，运行时按缺省 readwrite
+        // 解析，写入者的权限收紧会被静默吞掉（fail-open）。
+        for raw in [
+            r#"{"name":"t","permissions":{"mode":true}}"#,
+            r#"{"name":"t","permissions":{"mode":1}}"#,
+        ] {
+            let schema: WorkspaceSchema = serde_json::from_str(raw).expect("parse");
+            assert!(
+                crate::validate::validate_schema(&schema).is_err(),
+                "非字符串 mode 应被拒绝: {raw}"
+            );
+        }
     }
 }
