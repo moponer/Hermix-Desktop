@@ -7,7 +7,7 @@
    ════════════════════════════════════════════════════════════════════ */
 :root[data-theme="sunset"]:root {
   /* Surfaces — 明度阶梯 */
-  --color-bg-app: #f6f1e8;
+  --color-bg-app: #efe5d2;
   --color-bg-primary: #fffdf8;
   --color-bg-secondary: #faf4ea;
   --color-bg-tertiary: #f0e7d6;
@@ -96,9 +96,9 @@
   --shadow-pop: 0 4px 12px rgba(87, 60, 32, 0.09), 0 2px 4px rgba(87, 60, 32, 0.05);
   --shadow-modal: 0 20px 56px rgba(87, 60, 32, 0.18), 0 8px 22px rgba(87, 60, 32, 0.09);
 
-  /* Scene surfaces */
-  --theme-bg-app: #f6f1e8;
-  --theme-bg-sidebar: #fbf6ec;
-  --theme-bg-titlebar: #eee4d0;
-  --theme-bg-chat: #faf4e9;
+  /* Scene surfaces — 拉大 luma 间距让左右上下分层清晰（侧栏暗框 + 内容亮卡） */
+  --theme-bg-app: #efe5d2;
+  --theme-bg-sidebar: #e8dcc0;
+  --theme-bg-titlebar: #d8c9a8;
+  --theme-bg-chat: #faf2e0;
 }

@@ -1,7 +1,7 @@
 {
   "id": "light",
-  "label": "浅色",
-  "description": "默认浅色",
+  "label": "青墨",
+  "description": "中性石墨纸面 + 靛蓝强调",
   "builtin": true,
   "colorScheme": "light"
 }

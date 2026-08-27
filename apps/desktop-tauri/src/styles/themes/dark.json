@@ -1,7 +1,7 @@
 {
   "id": "dark",
-  "label": "深色",
-  "description": "默认深色",
+  "label": "玄铁",
+  "description": "近黑曜石层叠 + 紫罗兰电光",
   "builtin": true,
   "colorScheme": "dark"
 }
