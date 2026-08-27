@@ -30,6 +30,22 @@ pub fn validate_schema(schema: &WorkspaceSchema) -> Result<(), ValidationError> 
         return err("工作台 name 不能为空");
     }
 
+    // 0. 权限（M7.2）：mode 必须是合法值；allow_delete 必须是布尔
+    if let Some(perms_obj) = schema.permissions.as_object() {
+        if let Some(mode) = perms_obj.get("mode").and_then(|v| v.as_str()) {
+            if mode != "readwrite" && mode != "readonly" {
+                return err(&format!(
+                    "permissions.mode 必须是 readwrite/readonly，得到 {mode}"
+                ));
+            }
+        }
+        if let Some(ad) = perms_obj.get("allow_delete") {
+            if !ad.is_boolean() {
+                return err("permissions.allow_delete 必须是布尔");
+            }
+        }
+    }
+
     // 1. 模块 id 全局唯一
     let mut seen_modules: Vec<&str> = Vec::new();
     for m in &schema.modules {

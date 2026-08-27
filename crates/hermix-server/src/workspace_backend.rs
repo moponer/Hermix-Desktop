@@ -177,8 +177,11 @@ impl WorkspaceDataBackend for LocalWorkspaceBackend {
     }
 
     async fn insert(&self, id: &str, table: &str, rows: Value) -> Result<String, ToolError> {
-        let store = self
-            .service()
+        let svc = self.service();
+        // M7.3: 只读工作台拒绝写操作（LLM 工具与 REST 同源校验）
+        svc.check_write(id)
+            .map_err(|e| Self::err(e.to_string()))?;
+        let store = svc
             .open_store(id)
             .map_err(|e| Self::err(e.to_string()))?;
         let rows: Vec<Value> = rows.as_array().cloned().unwrap_or_default();
@@ -189,8 +192,11 @@ impl WorkspaceDataBackend for LocalWorkspaceBackend {
     }
 
     async fn update(&self, id: &str, table: &str, row_id: &str, patch: Value) -> Result<String, ToolError> {
-        let store = self
-            .service()
+        let svc = self.service();
+        // M7.3: 只读工作台拒绝写操作
+        svc.check_write(id)
+            .map_err(|e| Self::err(e.to_string()))?;
+        let store = svc
             .open_store(id)
             .map_err(|e| Self::err(e.to_string()))?;
         store
@@ -200,8 +206,11 @@ impl WorkspaceDataBackend for LocalWorkspaceBackend {
     }
 
     async fn delete(&self, id: &str, table: &str, row_id: &str) -> Result<String, ToolError> {
-        let store = self
-            .service()
+        let svc = self.service();
+        // M7.3: 只读 或 allow_delete=false 拒绝删除
+        svc.check_delete(id)
+            .map_err(|e| Self::err(e.to_string()))?;
+        let store = svc
             .open_store(id)
             .map_err(|e| Self::err(e.to_string()))?;
         store

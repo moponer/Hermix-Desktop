@@ -48,8 +48,8 @@ pub use templates::{
 };
 pub use service::{ServiceError, WorkspaceService};
 pub use model::{
-    Automation, DashboardWidget, Field, FieldType, Module, View, ViewType, WidgetType,
-    WorkspaceSchema,
+    Automation, DashboardWidget, Field, FieldType, Module, PermissionMode, View, ViewType,
+    WidgetType, WorkspacePermissions, WorkspaceSchema,
 };
 pub use registry::{RegistryEntry, RegistryStore, RegistryStoreError};
 pub use store::{Filter, FilterOp, LocalSqliteStore, StoreError, WorkspaceStore};

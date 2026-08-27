@@ -314,6 +314,10 @@ pub async fn insert_rows(
     Path((id, table)): Path<TablePath>,
     Json(req): Json<TableInsertRequest>,
 ) -> Result<Json<Vec<String>>, HttpError> {
+    // M7.3: 只读工作台拒绝写操作
+    hermix_workspace::WorkspaceService::new(workspaces_root(&state))
+        .check_write(&id)
+        .map_err(|e| HttpError { status: axum::http::StatusCode::FORBIDDEN, message: e.to_string() })?;
     let store = open_data_store(&state, &id)?;
     let ids = store
         .insert(&table, &req.rows, &req.updated_by)
@@ -326,6 +330,10 @@ pub async fn update_row(
     Path((id, table)): Path<TablePath>,
     Json(req): Json<TableUpdateRequest>,
 ) -> Result<Json<WorkspaceOkResponse>, HttpError> {
+    // M7.3: 只读工作台拒绝写操作
+    hermix_workspace::WorkspaceService::new(workspaces_root(&state))
+        .check_write(&id)
+        .map_err(|e| HttpError { status: axum::http::StatusCode::FORBIDDEN, message: e.to_string() })?;
     let store = open_data_store(&state, &id)?;
     store
         .update(&table, &req.id, &req.patch, &req.updated_by)
@@ -338,6 +346,10 @@ pub async fn delete_row(
     Path((id, table)): Path<TablePath>,
     Json(req): Json<TableDeleteRequest>,
 ) -> Result<Json<WorkspaceOkResponse>, HttpError> {
+    // M7.3: 只读 或 allow_delete=false 拒绝删除
+    hermix_workspace::WorkspaceService::new(workspaces_root(&state))
+        .check_delete(&id)
+        .map_err(|e| HttpError { status: axum::http::StatusCode::FORBIDDEN, message: e.to_string() })?;
     let store = open_data_store(&state, &id)?;
     store
         .delete(&table, &req.id)

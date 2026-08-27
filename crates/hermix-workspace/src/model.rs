@@ -222,6 +222,92 @@ const fn default_schema_version() -> u32 {
     1
 }
 
+// ---------------------------------------------------------------------------
+// 权限模型（M7.2）— 工作台级读写保护
+// ---------------------------------------------------------------------------
+
+/// 工作台访问模式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PermissionMode {
+    /// 可读可写（默认）。
+    ReadWrite,
+    /// 只读：拒绝 insert/update（数据端点 + LLM 工具统一校验）。
+    ReadOnly,
+}
+
+impl PermissionMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PermissionMode::ReadWrite => "readwrite",
+            PermissionMode::ReadOnly => "readonly",
+        }
+    }
+
+    fn parse(s: &str) -> Option<Self> {
+        match s {
+            "readwrite" => Some(PermissionMode::ReadWrite),
+            "readonly" => Some(PermissionMode::ReadOnly),
+            _ => None,
+        }
+    }
+}
+
+/// 解析后的权限（从 `WorkspaceSchema.permissions` Value 提取）。
+///
+/// `permissions` 字段保持 `serde_json::Value`（兼容旧工作台任意 JSON），
+/// 本结构是**解析视图**，缺省 = readwrite + 允许删除（现有行为不变）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct WorkspacePermissions {
+    pub mode: PermissionMode,
+    /// 是否允许删除行（防 LLM 误删的独立开关）。
+    pub allow_delete: bool,
+}
+
+impl WorkspacePermissions {
+    pub fn from_value(v: &serde_json::Value) -> Self {
+        let mut perms = WorkspacePermissions {
+            mode: PermissionMode::ReadWrite,
+            allow_delete: true,
+        };
+        if let Some(obj) = v.as_object() {
+            if let Some(m) = obj.get("mode").and_then(|x| x.as_str()) {
+                if let Some(pm) = PermissionMode::parse(m) {
+                    perms.mode = pm;
+                }
+            }
+            if let Some(b) = obj.get("allow_delete").and_then(|x| x.as_bool()) {
+                perms.allow_delete = b;
+            }
+        }
+        perms
+    }
+
+    /// 默认权限（readwrite + 允许删除）。
+    pub fn default_workspace() -> Self {
+        WorkspacePermissions {
+            mode: PermissionMode::ReadWrite,
+            allow_delete: true,
+        }
+    }
+
+    /// 是否允许写（insert/update）。
+    pub fn can_write(&self) -> bool {
+        self.mode == PermissionMode::ReadWrite
+    }
+
+    /// 是否允许删行。
+    pub fn can_delete(&self) -> bool {
+        self.can_write() && self.allow_delete
+    }
+}
+
+impl WorkspaceSchema {
+    /// 解析本工作台的权限（缺省 readwrite + 允许删除）。
+    pub fn permissions_parsed(&self) -> WorkspacePermissions {
+        WorkspacePermissions::from_value(&self.permissions)
+    }
+}
+
 impl WorkspaceSchema {
     /// 按 id 查模块。
     pub fn module(&self, id: &str) -> Option<&Module> {
@@ -342,5 +428,71 @@ mod tests {
         assert_eq!(m.name(), "A");
         assert!(m.table_fields().is_some());
         assert!(m.table_fields().unwrap().is_empty());
+    }
+
+    // ---------------------------------------------------------------------
+    // 权限模型（M7.2）
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn permissions_default_is_readwrite_and_delete_allowed() {
+        // 缺省（无 permissions 字段 / 空对象 / 任意旧 JSON）→ 现有行为不变
+        for raw in [
+            r#"{"name":"t"}"#,
+            r#"{"name":"t","permissions":{}}"#,
+            r#"{"name":"t","permissions":{"roles":["owner"]}}"#, // 旧版自由 JSON
+        ] {
+            let schema: WorkspaceSchema = serde_json::from_str(raw).expect("parse");
+            let p = schema.permissions_parsed();
+            assert_eq!(p.mode, PermissionMode::ReadWrite);
+            assert!(p.can_write());
+            assert!(p.can_delete());
+        }
+    }
+
+    #[test]
+    fn permissions_readonly_blocks_write_but_allows_query() {
+        let schema: WorkspaceSchema = serde_json::from_str(
+            r#"{"name":"t","permissions":{"mode":"readonly","allow_delete":false}}"#,
+        )
+        .expect("parse");
+        let p = schema.permissions_parsed();
+        assert_eq!(p.mode, PermissionMode::ReadOnly);
+        assert!(!p.can_write());
+        assert!(!p.can_delete());
+        // 只读工作台仍可读（查询不校验写权限）
+        assert_eq!(p.mode.as_str(), "readonly");
+    }
+
+    #[test]
+    fn permissions_readwrite_with_delete_lock() {
+        let schema: WorkspaceSchema = serde_json::from_str(
+            r#"{"name":"t","permissions":{"mode":"readwrite","allow_delete":false}}"#,
+        )
+        .expect("parse");
+        let p = schema.permissions_parsed();
+        assert!(p.can_write()); // 可写
+        assert!(!p.can_delete()); // 但禁止删行
+    }
+
+    #[test]
+    fn permissions_invalid_mode_rejected_by_validate() {
+        // mode 非法值 → validate_schema 拒绝（防 LLM/前端写入坏权限）
+        let schema: WorkspaceSchema = serde_json::from_str(
+            r#"{"name":"t","permissions":{"mode":"admin"}}"#,
+        )
+        .expect("parse");
+        let err = crate::validate::validate_schema(&schema).unwrap_err().to_string();
+        assert!(err.contains("readwrite"), "{err}");
+    }
+
+    #[test]
+    fn permissions_non_bool_allow_delete_rejected() {
+        let schema: WorkspaceSchema = serde_json::from_str(
+            r#"{"name":"t","permissions":{"allow_delete":"yes"}}"#,
+        )
+        .expect("parse");
+        let err = crate::validate::validate_schema(&schema).unwrap_err().to_string();
+        assert!(err.contains("布尔"), "{err}");
     }
 }

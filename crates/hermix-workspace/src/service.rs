@@ -33,6 +33,8 @@ pub enum ServiceError {
     Store(String),
     #[error("表[{0}]不存在")]
     TableNotFound(String),
+    #[error("权限拒绝: {0}")]
+    PermissionDenied(String),
 }
 
 // ---------------------------------------------------------------------------
@@ -79,6 +81,37 @@ impl WorkspaceService {
         let schema = self.read_schema(id)?;
         LocalSqliteStore::open(self.data_path(id), schema)
             .map_err(|e| ServiceError::Store(e.to_string()))
+    }
+
+    /// 写权限校验（M7.3）：只读工作台拒绝 insert/update。
+    /// 数据端点与 LLM 工具 backend 在写操作前统一调用。
+    pub fn check_write(&self, id: &str) -> Result<(), ServiceError> {
+        let schema = self.read_schema(id)?;
+        let perms = schema.permissions_parsed();
+        if perms.can_write() {
+            Ok(())
+        } else {
+            Err(ServiceError::PermissionDenied(
+                format!("工作台[{id}]为只读（permissions.mode=readonly），拒绝写操作"),
+            ))
+        }
+    }
+
+    /// 删除权限校验（M7.3）：只读 或 allow_delete=false 拒绝删除。
+    pub fn check_delete(&self, id: &str) -> Result<(), ServiceError> {
+        let schema = self.read_schema(id)?;
+        let perms = schema.permissions_parsed();
+        if perms.can_delete() {
+            Ok(())
+        } else {
+            Err(ServiceError::PermissionDenied(
+                format!(
+                    "工作台[{id}]禁止删除（mode={}, allow_delete={}）",
+                    perms.mode.as_str(),
+                    perms.allow_delete
+                ),
+            ))
+        }
     }
 
     /// 表字段白名单（供工具 schema 注入 / 校验用）。
@@ -268,5 +301,60 @@ mod tests {
             )
             .unwrap_err();
         assert!(err.to_string().contains("枚举") || err.to_string().contains("options"));
+    }
+
+    // ---------------------------------------------------------------------
+    // 权限校验（M7.3）
+    // ---------------------------------------------------------------------
+
+    /// 构造带指定 permissions 的工作台。
+    fn build_with_permissions(root: &Path, permissions: serde_json::Value) -> String {
+        let schema: WorkspaceSchema = serde_json::from_value(serde_json::json!({
+            "name": "权限测试",
+            "permissions": permissions,
+            "modules": [
+                { "type": "table", "id": "vehicles", "name": "车辆",
+                  "fields": [ { "id": "plate", "name": "车牌", "type": "text", "required": true, "unique": true } ] }
+            ]
+        }))
+        .expect("schema");
+        create_from_schema(root, schema, &HashMap::new()).expect("build").id
+    }
+
+    #[test]
+    fn check_write_allows_default_workspace() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let id = build_sample(dir.path());
+        let svc = WorkspaceService::new(dir.path());
+        assert!(svc.check_write(&id).is_ok(), "默认工作台应可写");
+        assert!(svc.check_delete(&id).is_ok(), "默认工作台应可删");
+    }
+
+    #[test]
+    fn check_write_rejects_readonly_workspace() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let id = build_with_permissions(
+            dir.path(),
+            serde_json::json!({ "mode": "readonly", "allow_delete": false }),
+        );
+        let svc = WorkspaceService::new(dir.path());
+        let err = svc.check_write(&id).unwrap_err();
+        assert!(matches!(err, ServiceError::PermissionDenied(_)), "{err}");
+        let err = svc.check_delete(&id).unwrap_err();
+        assert!(matches!(err, ServiceError::PermissionDenied(_)), "{err}");
+    }
+
+    #[test]
+    fn check_delete_rejects_when_allow_delete_false() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let id = build_with_permissions(
+            dir.path(),
+            serde_json::json!({ "mode": "readwrite", "allow_delete": false }),
+        );
+        let svc = WorkspaceService::new(dir.path());
+        // 可写但禁删
+        assert!(svc.check_write(&id).is_ok());
+        let err = svc.check_delete(&id).unwrap_err();
+        assert!(matches!(err, ServiceError::PermissionDenied(_)), "{err}");
     }
 }
