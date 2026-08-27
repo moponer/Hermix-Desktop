@@ -14,6 +14,7 @@ use std::path::PathBuf;
 
 use axum::extract::{Path, State};
 use axum::Json;
+use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
 
 use crate::{HttpError, HttpServerState};
@@ -354,4 +355,185 @@ pub async fn count_rows(
         .count(&table, &req.filters)
         .map_err(|e| server_err(&e.to_string()))?;
     Ok(Json(n))
+}
+
+// ---------------------------------------------------------------------------
+// 导出 / 导入（M5 协作分发）
+// ---------------------------------------------------------------------------
+
+/// GET /api/workspaces/{id}/export → .hwx 包下载（定义 + 全量数据）。
+/// 文件名 `{ws_id}.hwx`（避免中文名编码问题；显示名在包内）。
+pub async fn export_workspace(
+    State(state): State<HttpServerState>,
+    Path(id): Path<String>,
+) -> Result<axum::response::Response, HttpError> {
+    let schema = read_schema(&state, &id)?;
+    let store = open_data_store(&state, &id)?;
+    let pkg = hermix_workspace::export_package(&store, &schema)
+        .map_err(|e| server_err(&format!("导出工作台失败: {e}")))?;
+    let bytes = hermix_workspace::to_bytes(&pkg)
+        .map_err(|e| server_err(&format!("序列化包失败: {e}")))?;
+
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    headers.insert(
+        axum::http::header::CONTENT_DISPOSITION,
+        axum::http::HeaderValue::from_str(&format!("attachment; filename=\"{id}.hwx\""))
+            .map_err(|e| server_err(&format!("响应头构造失败: {e}")))?,
+    );
+    Ok((
+        axum::http::StatusCode::OK,
+        headers,
+        bytes,
+    )
+        .into_response())
+}
+
+/// POST /api/workspaces/import — 导入 .hwx 包（JSON body）。
+/// 冲突策略（`mode`）：
+/// - `new`（默认）：新建工作台，包内 id 重生成，避免覆盖本机同名
+/// - `merge`：合并到已有工作台（按 id 匹配，LWW 每行 updated_at 比对）
+#[derive(Debug, Clone, Deserialize)]
+pub struct WorkspaceImportRequest {
+    /// .hwx 包内容（`parse_package` 的输入）。
+    pub package: serde_json::Value,
+    #[serde(default)]
+    pub mode: String,
+}
+
+/// 导入结果。
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkspaceImportResponse {
+    pub ok: bool,
+    /// 新建时为新工作台 id；merge 时为目标工作台 id。
+    pub id: String,
+    pub mode: String,
+    /// 各表导入行数（merge 模式为合并后总行数）。
+    pub tables: std::collections::HashMap<String, usize>,
+}
+
+pub async fn import_workspace(
+    State(state): State<HttpServerState>,
+    Json(req): Json<WorkspaceImportRequest>,
+) -> Result<Json<WorkspaceImportResponse>, HttpError> {
+    // 1. 解析 + 校验包（防脏包：格式标记/版本/schema/表 id/字段白名单/必填/枚举）
+    let raw = serde_json::to_vec(&req.package)
+        .map_err(|e| bad_req(&format!("包序列化失败: {e}")))?;
+    let pkg = hermix_workspace::parse_package(&raw)
+        .map_err(|e| bad_req(&format!("包无效: {e}")))?;
+
+    let mode = req.mode.as_str();
+    match mode {
+        "merge" => {
+            // 2a. merge：按包内工作台名找本机已有工作台
+            let registry = open_registry(&state)?;
+            let entries = registry
+                .list()
+                .map_err(|e| server_err(&format!("读取工作台注册表失败: {e}")))?;
+            let target = entries
+                .iter()
+                .find(|e| e.name == pkg.workspace.name)
+                .ok_or_else(|| {
+                    bad_req(&format!(
+                        "merge 模式需要本机存在同名工作台「{}」，未找到；可改用 new 模式",
+                        pkg.workspace.name
+                    ))
+                })?;
+
+            let target_id = target.id.clone();
+            let target_schema = read_schema(&state, &target_id)?;
+            let store = open_data_store(&state, &target_id)?;
+
+            // LWW 合并：每表 本地行 + 包行（按 id 对齐，updated_at 较新者胜）
+            let mut merged_counts = std::collections::HashMap::new();
+            for m in &pkg.workspace.modules {
+                if let hermix_workspace::Module::Table { id, .. } = m {
+                    if let Some(incoming) = pkg.tables.get(id) {
+                        let local = store
+                            .query(id, &[], None, 0, 0)
+                            .map_err(|e| server_err(&format!("表[{id}]读取失败: {e}")))?;
+                        let merged = hermix_workspace::merge_rows(&local, incoming);
+                        // 全量重写该表（合并结果）
+                        rewrite_table(&store, id, &merged)?;
+                        merged_counts.insert(id.clone(), merged.len());
+                    }
+                }
+            }
+
+            Ok(Json(WorkspaceImportResponse {
+                ok: true,
+                id: target_id,
+                mode: "merge".into(),
+                tables: merged_counts,
+            }))
+        }
+        "new" | "" => {
+            // 2b. new：新建工作台（定义 + 数据；id 由 create_from_schema 生成）
+            let ws_name = pkg.workspace.name.clone();
+            let ws_icon = pkg.workspace.icon.clone();
+            let result =
+                hermix_workspace::builder::create_from_schema(&workspaces_root(&state), pkg.workspace, &pkg.tables)
+                    .map_err(|e| server_err(&format!("建设工作台失败: {e}")))?;
+            // 注册进 registry
+            let registry = open_registry(&state)?;
+            registry
+                .create(&result.id, &ws_name, &ws_icon, &result.id)
+                .map_err(|e| server_err(&format!("注册工作台失败: {e}")))?;
+
+            let mut counts = std::collections::HashMap::new();
+            for t in &result.tables {
+                counts.insert(t.id.clone(), t.rows);
+            }
+            Ok(Json(WorkspaceImportResponse {
+                ok: true,
+                id: result.id,
+                mode: "new".into(),
+                tables: counts,
+            }))
+        }
+        other => Err(bad_req(&format!(
+            "无效 mode: {other}（支持 new / merge）"
+        ))),
+    }
+}
+
+/// 全量重写一张表（merge 模式用）：清空后批量插入合并结果。
+/// 表内数据由 LWW 合并产生，清空重写是安全幂等的（行 id 保留）。
+fn rewrite_table(
+    store: &LocalSqliteStore,
+    table: &str,
+    rows: &[serde_json::Value],
+) -> Result<(), HttpError> {
+    let ids: Vec<String> = store
+        .query(table, &[], None, 0, 0)
+        .map_err(|e| server_err(&format!("表[{table}]读取失败: {e}")))?
+        .iter()
+        .filter_map(|r| r.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()))
+        .collect();
+    for rid in &ids {
+        store
+            .delete(table, rid)
+            .map_err(|e| server_err(&format!("表[{table}]清空失败: {e}")))?;
+    }
+    if !rows.is_empty() {
+        // 保留包内原始 id/updated_at/updated_by（merge 语义：行主键 UUID 不重生成）
+        let rows_with_sys = rows
+            .iter()
+            .map(|r| {
+                let mut v = r.clone();
+                let o = v.as_object_mut().expect("行是对象");
+                if !o.contains_key("updated_by") {
+                    o.insert("updated_by".into(), serde_json::json!("import"));
+                }
+                v
+            })
+            .collect::<Vec<_>>();
+        store
+            .insert(table, &rows_with_sys, "import")
+            .map_err(|e| server_err(&format!("表[{table}]导入失败: {e}")))?;
+    }
+    Ok(())
 }

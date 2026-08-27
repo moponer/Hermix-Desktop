@@ -194,6 +194,15 @@ pub fn router() -> Router<HttpServerState> {
             "/api/workspaces/{id}/schema",
             put(workspaces::update_workspace_schema),
         )
+        // M5 协作分发：.hwx 导出 / 导入（JSON bundle，防脏包校验）
+        .route(
+            "/api/workspaces/{id}/export",
+            get(workspaces::export_workspace),
+        )
+        .route(
+            "/api/workspaces/import",
+            post(workspaces::import_workspace),
+        )
         // 数据端点：打通 LocalSqliteStore（表名/列名过 schema 白名单）
         .route(
             "/api/workspaces/{id}/tables/{table}/query",
