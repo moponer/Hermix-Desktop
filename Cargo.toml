@@ -40,6 +40,8 @@ members = [
     "crates/hermix-automation",
     "crates/hermix-plugin",
     "crates/hermix-workspace",
+    "crates/hermix-shell-parser",
+    "crates/hermix-coreutils",
 ]
 
 [workspace.package]
@@ -102,6 +104,8 @@ hermix-task = { path = "crates/hermix-task" }
 hermix-automation = { path = "crates/hermix-automation" }
 hermix-plugin = { path = "crates/hermix-plugin" }
 hermix-workspace = { path = "crates/hermix-workspace" }
+hermix-shell-parser = { path = "crates/hermix-shell-parser" }
+hermix-coreutils = { path = "crates/hermix-coreutils" }
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
