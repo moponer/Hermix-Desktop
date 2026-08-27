@@ -1,56 +1,106 @@
-/* Dark theme
- * tokens.css 中 :root.dark 已经覆盖所有变量, 这里只声明选择器,
- * 让 data-theme="dark" 也命中同一份变量, 与 .dark 兼容.
- *
- * NOTE 1: 非 @layer — 非层级化样式优先级高于 @theme 层级，
- * 确保 data-theme 变量覆盖 tokens.css 的 @theme 默认值。
- *
- * NOTE 2: 双 :root 选择器把特异性提到 (0,3,0)，绝对赢过 tokens.css 的
- * .dark 类 (0,1,0) — 否则 bundle 顺序下 tokens.css 后置 .dark 块
- * 会覆盖本主题 token，导致 dark 主题回退到 .dark 兜底值（视觉无变化）。
- */
+/* ════════════════════════════════════════════════════════════════════
+   Dark — 「曜石 Obsidian」
+   ──────────────────────────────────────────────────────────────────
+   近黑层叠 + 紫罗兰电光强调。面与面之间只靠 4–8% 明度差和发丝边框
+   分层；饱和度只属于 accent 与语义色，大面积永远是中性炭。
+
+   本文件是暗色的唯一真相源（tokens.css 的 .dark 块已废除）。
+   完整覆盖 CONTRACT 全部色彩令牌 —— 缺一项 checker 即失败。
+   ════════════════════════════════════════════════════════════════════ */
 :root[data-theme="dark"]:root {
-  --color-bg-app:         #141414;
-  --color-bg-primary:     #1f1f1f;
-  --color-bg-secondary:   #2c2c2c;        /* 左栏背景：纯中性炭灰，贴近 WorkBuddy 暗色左栏，提亮去冷味 */
-  --color-bg-tertiary:    #383838;
-  --color-bg-hover:       #333333;
-  --color-bg-active:      #444444;
-  --color-bg-card:        #1f1f1f;
-  --color-bg-elevated:    #2a2a2a;
-  --color-bg-code:        #171717;        /* 比卡片 #1f1f1f 深 2 档 (∆L -3): 代码区明显独立 */
-  --color-bg-code-header: #202020;        /* 比 code 浅 1 档: header 浮在代码区之上 */
-  --color-bg-code-border: #3a3a3a;
+  /* Surfaces — 明度阶梯 app < card < secondary < hover < active */
+  --color-bg-app: #0b0b0e;
+  --color-bg-primary: #141418;
+  --color-bg-secondary: #1c1c22;
+  --color-bg-tertiary: #232329;
+  --color-bg-quaternary: #2c2c34;
+  --color-bg-hover: #202027;
+  --color-bg-active: #2a2a33;
+  --color-bg-card: #141418;
+  --color-bg-card-hover: #191920;
+  --color-bg-elevated: #1d1d24;
+  --color-bg-inset: #101015;
+  --color-bg-input: #17171d;
+  --color-bg-base: #0f0f13;
 
-  --color-border-primary:   #3a3a3a;
-  --color-border-secondary: #4a4a4a;
-  --color-border-subtle:    #343434;
+  /* Code / chat */
+  --color-bg-code: #121218;
+  --color-bg-code-header: #1a1a21;
+  --color-bg-code-border: #26262e;
+  --color-chat-assistant-bg: #15151a;
+  --color-chat-tool-bg: rgba(28, 28, 34, 0.6);
+  --color-chat-terminal-bg: #07070a;
 
-  --color-text-primary:   #fafafa;
-  --color-text-secondary: #d4d4d8;
-  --color-text-tertiary:  #b0b0b8;
-  --color-text-muted:     #9b9ba4;
-  --color-text-faint:     #76767e;
-  --color-text-on-code:   #e0e0e6;
+  /* Borders */
+  --color-border-subtle: #212128;
+  --color-border-primary: #2b2b33;
+  --color-border-secondary: #3a3a44;
+  --color-border: #383842;
+  --color-border-strong: #f4f4f5;
 
-  --color-accent:            #d4d4d8;
-  --color-accent-hover:      #e4e4e7;
-  --color-accent-soft:       rgba(212, 212, 216, 0.12);
-  --color-accent-soft-strong: rgba(212, 212, 216, 0.22);
-  --color-accent-on-text:    #0f172a;
+  /* Text — 四级层次，为 AA 对比整体提亮 */
+  --color-text-primary: #f4f4f5;
+  --color-text-secondary: #d6d6dc;
+  --color-text-tertiary: #adadb7;
+  --color-text-muted: #90909a;
+  --color-text-faint: #6d6d78;
+  --color-text-on-code: #e2e2e8;
 
-  --color-overlay-scrim:     rgba(0, 0, 0, 0.72);
-  --color-modal-outline:     rgba(250, 250, 250, 0.08);
-}
-/* 在暗色主题里清掉场景背景, 避免让人感觉在白底 + 飘雪 */
-:root[data-theme="dark"]:root {
-  --theme-bg-app: var(--color-bg-app);
-  /* sidebar 用 bg-primary (#1f1f1f) 而不是 bg-secondary (#2c2c2c) —
-     主人的参考配色：侧栏 #1f1f1f 浮在聊天 #141414 之上 */
-  --theme-bg-sidebar: var(--color-bg-primary);
-  /* titlebar 比 sidebar 深 2 档 (#0e vs #1f)，原生标题栏感 */
-  --theme-bg-titlebar: #0e0e10;
-  /* chat 用独立浅色而非 bg-app (#141414) — 原值偏黑，主人两次反馈"背景太深"，
-     改到 #252528（比 sidebar #1f1f1f 浅 6 像素，让内容区浮起来，符合"内层比外层亮"层次） */
-  --theme-bg-chat: #252528;
+  /* Accent — violet 电紫 */
+  --color-accent: #7c5cf5;
+  --color-accent-hover: #8f74ff;
+  --color-accent-on-text: #ffffff;
+  --color-accent-soft: rgba(124, 92, 245, 0.14);
+  --color-accent-soft-strong: rgba(124, 92, 245, 0.24);
+
+  /* Link（同族提亮版本保证小字号可读） */
+  --color-link: #9c85ff;
+  --color-link-hover: #b3a2ff;
+  --color-link-soft: #90909a;
+  --color-link-soft-hover: #9c85ff;
+
+  /* Semantic 四色组（dark 提亮、soft 降饱和防刺） */
+  --color-success: #3fbf75;
+  --color-success-soft: rgba(63, 191, 117, 0.14);
+  --color-error: #ef6060;
+  --color-error-soft: rgba(239, 96, 96, 0.14);
+  --color-warning: #eab23c;
+  --color-warning-soft: rgba(234, 178, 60, 0.15);
+  --color-text-warning: #eec25f;
+  --color-info: #97a3b5;
+  --color-info-soft: rgba(151, 163, 181, 0.14);
+
+  /* Status chips */
+  --color-chip-model-bg: rgba(124, 92, 245, 0.16);
+  --color-chip-model-fg: #c3b4ff;
+  --color-chip-workspace-bg: rgba(63, 191, 130, 0.14);
+  --color-chip-workspace-fg: #6fdcab;
+  --color-chip-permission-bg: rgba(234, 178, 60, 0.15);
+  --color-chip-permission-fg: #f0cd76;
+
+  /* Overlay */
+  --color-overlay-scrim: rgba(4, 4, 6, 0.68);
+  --color-modal-outline: rgba(244, 244, 245, 0.08);
+
+  /* Buttons */
+  --color-btn-primary-bg: #7c5cf5;
+  --color-btn-primary-text: #ffffff;
+  --color-btn-primary-hover: #8f74ff;
+  --color-btn-secondary-bg: #1c1c22;
+  --color-btn-secondary-text: #d6d6dc;
+  --color-btn-secondary-hover: #232329;
+  --color-btn-ghost-bg: transparent;
+  --color-btn-ghost-text: #adadb7;
+  --color-btn-ghost-hover: #202027;
+
+  /* Shadows — 暗色阴影加深才可感知 */
+  --shadow-card: none;
+  --shadow-pop: 0 6px 18px rgba(0, 0, 0, 0.45), 0 2px 6px rgba(0, 0, 0, 0.35);
+  --shadow-modal: 0 24px 64px rgba(0, 0, 0, 0.55), 0 10px 26px rgba(0, 0, 0, 0.4);
+
+  /* Scene surfaces — 内层比外层亮的层次原则 */
+  --theme-bg-app: #0b0b0e;
+  --theme-bg-sidebar: #141418;
+  --theme-bg-titlebar: #08080a;
+  --theme-bg-chat: #111116;
 }

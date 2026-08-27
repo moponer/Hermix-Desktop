@@ -6,9 +6,11 @@
  * 受控查询片段（后端白名单校验），组件自身不执行任何 SQL。
  */
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as echarts from "echarts";
 import type { DashboardWidget } from "../../types";
+import { THEME_CHANGED_EVENT } from "../../hooks/useTheme";
+import { isDarkTheme } from "../../styles/themes/registry";
 
 /** 组件通用外壳。 */
 function WidgetShell({ title, children }: { title: string; children: React.ReactNode }) {
@@ -46,15 +48,25 @@ export function ChartWidget({
   option,
 }: {
   widget: DashboardWidget;
-  /** ECharts option（M1.6 起由后端查询结果构造）。 */
+  /** ECharts option。 */
   option?: echarts.EChartsOption;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const chartRef = useRef<echarts.ECharts | null>(null);
+  // 主题切换 → 销毁重建实例，让内置 'dark' 主题与文字色整套换血
+  const [, bumpTheme] = useState(0);
+
+  useEffect(() => {
+    const onThemeChange = () => bumpTheme((n) => n + 1);
+    window.addEventListener(THEME_CHANGED_EVENT, onThemeChange);
+    return () => window.removeEventListener(THEME_CHANGED_EVENT, onThemeChange);
+  }, []);
+
+  const isDark = isDarkTheme(document.documentElement.dataset.theme);
 
   useEffect(() => {
     if (!ref.current) return;
-    const chart = echarts.init(ref.current);
+    const chart = echarts.init(ref.current, isDark ? "dark" : undefined);
     chartRef.current = chart;
     const ro = new ResizeObserver(() => chart.resize());
     ro.observe(ref.current);
@@ -63,7 +75,7 @@ export function ChartWidget({
       chart.dispose();
       chartRef.current = null;
     };
-  }, []);
+  }, [isDark]);
 
   useEffect(() => {
     chartRef.current?.setOption(

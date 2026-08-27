@@ -2,5 +2,6 @@
   "id": "rainforest",
   "label": "雨林·墨绿",
   "description": "深森林绿静态色场 + 轻微暗角阴影",
-  "builtin": true
+  "builtin": true,
+  "colorScheme": "dark"
 }

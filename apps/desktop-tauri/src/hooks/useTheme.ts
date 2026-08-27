@@ -1,11 +1,14 @@
-﻿﻿﻿﻿import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { storage, STORAGE_KEYS } from "../utils/storageCompat";
-import { THEMES, isKnownTheme } from "../styles/themes/registry";
+import { THEMES, isKnownTheme, isDarkTheme } from "../styles/themes/registry";
 
 // 主题 = 任一已发现的 .css (light / dark / rainforest / 用户新增)
 // 数据源：themes/registry.ts 的 THEMES 数组 (auto-discover)
 // 持久化键：hermix.desktop.theme
 export type ThemeMode = string;
+
+/** 主题切换后派发；非 React 集成点（ECharts 等三方实例）监听它重建。 */
+export const THEME_CHANGED_EVENT = "hermix:theme-changed";
 
 function applyTheme(id: string) {
   if (typeof document === "undefined") return;
@@ -14,16 +17,13 @@ function applyTheme(id: string) {
   // 单一 data-theme = 主题唯一来源
   root.dataset.theme = id;
   if (body) body.dataset.theme = id;
-  // 暗色主题集合：这些主题需要 colorScheme=dark 以正确渲染原生控件（滚动条等）
-  // 同时 dark 主题挂 .dark 以兼容 tokens.css 的 .dark 选择器
-  const DARK_THEMES = new Set(["dark", "rainforest"]);
-  const wantDark = DARK_THEMES.has(id);
-  // 所有暗色主题都挂 .dark 类, 兼容 tokens.css / components-prose.css 的
-  // .dark 选择器 — 否则 rainforest 等非 "dark" id 的暗色主题下, .dark 段
-  // 全部失效, 边框/背景退回亮色 fallback.
+  // .dark 类 = 历史兼容残留（个别 css 选择器仍引用），值来自 registry
+  // 元数据 —— 不存在任何硬编码主题名单。
+  const wantDark = isDarkTheme(id);
   root.classList.toggle("dark", wantDark);
   if (body) body.classList.toggle("dark", wantDark);
   root.style.colorScheme = wantDark ? "dark" : "light";
+  window.dispatchEvent(new CustomEvent(THEME_CHANGED_EVENT, { detail: id }));
 }
 
 function readStored(): ThemeMode {
@@ -40,14 +40,6 @@ export function useTheme() {
   useEffect(() => {
     applyTheme(mode);
     try { storage.setItem(STORAGE_KEYS.theme, mode); } catch {}
-  }, [mode]);
-
-  // 主题不依赖 prefers-color-scheme (system 已退出) -- 保留监听以备扩展.
-  useEffect(() => {
-    const mq = window.matchMedia("(prefers-color-scheme: dark)");
-    const handler = () => { if (mode === "dark") applyTheme("dark"); };
-    mq.addEventListener("change", handler);
-    return () => mq.removeEventListener("change", handler);
   }, [mode]);
 
   const setMode = useCallback((next: ThemeMode) => setModeState(next), []);

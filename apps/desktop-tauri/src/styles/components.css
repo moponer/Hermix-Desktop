@@ -1401,23 +1401,18 @@
   color: var(--color-link-soft-hover);
 }
 
-[data-theme="light"] .file-pill.is-created  { color: #15803d; border-color: rgba(34, 197, 94, 0.30); background: rgba(34, 197, 94, 0.10); }
-[data-theme="light"] .file-pill.is-created  svg { color: #15803d; }
-[data-theme="light"] .file-pill.is-modified { color: #0369a1; border-color: rgba(59, 130, 246, 0.30); background: rgba(59, 130, 246, 0.10); }
-[data-theme="light"] .file-pill.is-modified svg { color: #0369a1; }
-[data-theme="light"] .file-pill.is-deleted  { color: #b91c1c; border-color: rgba(239, 68, 68, 0.30); background: rgba(239, 68, 68, 0.10); }
-[data-theme="light"] .file-pill.is-deleted  svg { color: #b91c1c; }
-[data-theme="light"] .file-pill.is-renamed  { color: #b45309; border-color: rgba(245, 158, 11, 0.30); background: rgba(245, 158, 11, 0.10); }
-[data-theme="light"] .file-pill.is-renamed  svg { color: #b45309; }
-
-[data-theme="dark"]  .file-pill.is-created  { color: #4ade80; border-color: rgba(34, 197, 94, 0.40); background: rgba(34, 197, 94, 0.16); }
-[data-theme="dark"]  .file-pill.is-created  svg { color: #4ade80; }
-[data-theme="dark"]  .file-pill.is-modified { color: #60a5fa; border-color: rgba(59, 130, 246, 0.40); background: rgba(59, 130, 246, 0.16); }
-[data-theme="dark"]  .file-pill.is-modified svg { color: #60a5fa; }
-[data-theme="dark"]  .file-pill.is-deleted  { color: #f87171; border-color: rgba(239, 68, 68, 0.40); background: rgba(239, 68, 68, 0.16); }
-[data-theme="dark"]  .file-pill.is-deleted  svg { color: #f87171; }
-[data-theme="dark"]  .file-pill.is-renamed  { color: #fbbf24; border-color: rgba(245, 158, 11, 0.40); background: rgba(245, 158, 11, 0.16); }
-[data-theme="dark"]  .file-pill.is-renamed  svg { color: #fbbf24; }
+/* 文件态胶囊 —— 语义令牌版（主题无关）。四态分别映射
+   success/info/error/warning；值随当前主题自动切换。
+   禁止再写 [data-theme] 字面色覆盖块（历史两块已迁除）。 */
+.file-pill.is-created  { color: var(--color-success); border-color: color-mix(in srgb, var(--color-success) 35%, transparent); background: var(--color-success-soft); }
+.file-pill.is-created:hover  svg,
+.file-pill.is-created      svg,
+.file-pill.is-modified svg,
+.file-pill.is-deleted  svg,
+.file-pill.is-renamed  svg { color: inherit; }
+.file-pill.is-modified { color: var(--color-info);     border-color: color-mix(in srgb, var(--color-info) 35%, transparent);     background: var(--color-info-soft); }
+.file-pill.is-deleted  { color: var(--color-error);    border-color: color-mix(in srgb, var(--color-error) 35%, transparent);    background: var(--color-error-soft); }
+.file-pill.is-renamed  { color: var(--color-warning);  border-color: color-mix(in srgb, var(--color-warning) 35%, transparent);  background: var(--color-warning-soft); }
 
 /* ── Inline path link (assistant prose) ──────────────────────
    Flat link style — no chip background, no border, no icon. Renders

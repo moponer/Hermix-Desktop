@@ -1,67 +1,106 @@
-/*
- * Rainforest Theme (雨林 · 墨绿)
- * 深森林绿静态色场 + 轻微暗角阴影，无动画、无粒子、无雨。
- * 基底 = SVG 内部 radialGradient（墨绿场）+ 烘焙暗角（单条 data URI，无 CSS 线性渐变）。
- * token 在暗色基础上整体染绿，accent 用低饱和鼠尾草绿，无任何蓝紫。
- *
- * NOTE 1: 不能用 @layer — 非层级化样式优先级高于 @theme 层级,
- * 才能确保 data-theme 变量覆盖 tokens.css 的 @theme 默认值;
- * 一旦放进 @layer themes, 被先加载时层序反转, 变量会被 @theme 覆盖。
- *
- * NOTE 2: 双 :root 选择器把特异性提到 (0,3,0)，绝对赢过 tokens.css 的
- * .dark 类 (0,1,0) — 否则在 bundle 顺序下，tokens.css 后置的 .dark 块
- * 会覆盖 rainforest 的 token，导致 rainforest 显示成跟 dark 一样的灰色。
- */
+/* ════════════════════════════════════════════════════════════════════
+   Rainforest — 「暮苔 Dusk Moss」（暗色族）
+   ──────────────────────────────────────────────────────────────────
+   深绿黑基底上覆一层低饱和苔原灰绿文字轴；hero 强调色是萤薄荷
+   teal-mint，只出现在链接/主按钮/焦点态。语义四色沿用暗色惯例提亮。
+
+   暗色族：json 元数据 "colorScheme":"dark" 由 registry 驱动，
+   不再依赖 useTheme 的硬编码清单。
+   ════════════════════════════════════════════════════════════════════ */
 :root[data-theme="rainforest"]:root {
-  --color-bg-app:         #0c2516;        /* 主背景边缘：深墨绿基色，足够沉 */
-  --color-bg-primary:     #1a3a26;        /* 侧栏：中墨绿，比主背景亮 5L 浮起 */
-  --color-bg-secondary:   #1f4530;
-  --color-bg-tertiary:    #2a5a3f;        /* 三级：明显墨绿 */
-  --color-bg-hover:       #23472f;
-  --color-bg-active:      #326047;
-  --color-bg-card:        #1a3a26;
-  --color-bg-elevated:    #234a35;        /* 弹层/menu/Toast — 比 sidebar 浅 2L 让层叠自然，不再"飘" */
-  --color-bg-code:        #0e2618;
-  --color-bg-code-header: #16321f;
-  --color-bg-code-border: #345a40;
+  /* Surfaces */
+  --color-bg-app: #0c1210;
+  --color-bg-primary: #121a16;
+  --color-bg-secondary: #192220;
+  --color-bg-tertiary: #202d27;
+  --color-bg-quaternary: #2a3d33;
+  --color-bg-hover: #1c2923;
+  --color-bg-active: #26352d;
+  --color-bg-card: #121a16;
+  --color-bg-card-hover: #17211c;
+  --color-bg-elevated: #1a2621;
+  --color-bg-inset: #101712;
+  --color-bg-input: #131d17;
+  --color-bg-base: #0e1511;
 
-  --color-border-primary:   #3a6446;
-  --color-border-secondary: #4a7556;
-  --color-border-subtle:    #2c4a36;
+  /* Code / chat */
+  --color-bg-code: #101914;
+  --color-bg-code-header: #18231d;
+  --color-bg-code-border: #24352c;
+  --color-chat-assistant-bg: #131d17;
+  --color-chat-tool-bg: rgba(25, 36, 30, 0.6);
+  --color-chat-terminal-bg: #070d09;
 
-  --color-text-primary:   #e8f3ea;        /* 主文字：绿白 */
-  --color-text-secondary: #c5d8c8;
-  --color-text-tertiary:  #a3bba6;
-  --color-text-muted:     #82a086;
-  --color-text-faint:     #608070;
-  --color-text-on-code:   #d4e6d7;
+  /* Borders */
+  --color-border-subtle: #1c2822;
+  --color-border-primary: #26362d;
+  --color-border-secondary: #35483c;
+  --color-border: #324439;
+  --color-border-strong: #ecf5ee;
 
-  --color-accent:            #7fc88f;     /* accent：明亮草绿，绿调明确 */
-  --color-accent-hover:      #95d8a3;
-  --color-accent-soft:       rgba(127, 200, 143, 0.14);
-  --color-accent-soft-strong: rgba(127, 200, 143, 0.24);
-  --color-accent-on-text:    #0e2618;
+  /* Text */
+  --color-text-primary: #e8f1e9;
+  --color-text-secondary: #c4d3c6;
+  --color-text-tertiary: #9db2a0;
+  --color-text-muted: #85a08b;
+  --color-text-faint: #66796c;
+  --color-text-on-code: #dbe8dd;
 
-  /* Semantic — 必须有，否则 fallback 到 tokens.css @theme 默认值(亮色 success/warning)
-     在 rainforest 主题下变成亮色提示色，破坏氛围 */
-  --color-success:         #4ade80;
-  --color-success-soft:    rgba(74, 222, 128, 0.16);
-  --color-error:           #f87171;
-  --color-error-soft:      rgba(248, 113, 113, 0.16);
-  --color-warning:         #fbbf24;       /* 暖琥珀，主人之前指定过 */
-  --color-warning-soft:    rgba(251, 191, 36, 0.18);
-  --color-info:            #38bdf8;
-  --color-info-soft:       rgba(56, 189, 248, 0.16);
+  /* Accent — 萤薄荷 teal-mint */
+  --color-accent: #2dd4bf;
+  --color-accent-hover: #43e2cd;
+  --color-accent-on-text: #06281f;
+  --color-accent-soft: rgba(45, 212, 191, 0.13);
+  --color-accent-soft-strong: rgba(45, 212, 191, 0.21);
 
-  --color-overlay-scrim:     rgba(0, 30, 15, 0.72);
-  --color-modal-outline:     rgba(232, 243, 234, 0.08);
+  /* Link */
+  --color-link: #7ce3d0;
+  --color-link-hover: #a2efe1;
+  --color-link-soft: #85a08b;
+  --color-link-soft-hover: #7ce3d0;
 
-  /* 墨绿静态场：径向渐变 + 烘焙暗角，单条 SVG data URI
-     中心 (#103a23) → 中段 (#0d2c19) → 边缘 (#0c2516)
-     中心仅比边缘亮 4L，整体沉到墨绿场，不再像"打了聚光灯" */
-  --theme-bg-app: url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1200 800' preserveAspectRatio='xMidYMid slice'%3E%3Cdefs%3E%3CradialGradient id='g' cx='50%25' cy='34%25' r='85%25'%3E%3Cstop offset='0%25' stop-color='%23103a23'/%3E%3Cstop offset='48%25' stop-color='%230d2c19'/%3E%3Cstop offset='100%25' stop-color='%230c2516'/%3E%3C/radialGradient%3E%3CradialGradient id='v' cx='50%25' cy='40%25' r='75%25'%3E%3Cstop offset='55%25' stop-color='%23000000' stop-opacity='0'/%3E%3Cstop offset='100%25' stop-color='%23000000' stop-opacity='0.42'/%3E%3C/radialGradient%3E%3C/defs%3E%3Crect width='1200' height='800' fill='url(%23g)'/%3E%3Crect width='1200' height='800' fill='url(%23v)'/%3E%3C/svg%3E");
+  /* Semantic 四色组 */
+  --color-success: #4ade80;
+  --color-success-soft: rgba(74, 222, 128, 0.14);
+  --color-error: #ef6060;
+  --color-error-soft: rgba(239, 96, 96, 0.14);
+  --color-warning: #eab23c;
+  --color-warning-soft: rgba(234, 178, 60, 0.15);
+  --color-text-warning: #eec25f;
+  --color-info: #86a8b8;
+  --color-info-soft: rgba(134, 168, 184, 0.14);
 
-  --theme-bg-sidebar:  var(--color-bg-primary);
-  --theme-bg-titlebar: #08190f;          /* titlebar = bg-app 再深 1 档 */
-  --theme-bg-chat:     var(--color-bg-elevated);  /* chat = elevated 色（明显墨绿），跟 sidebar 区分 */
+  /* Status chips */
+  --color-chip-model-bg: rgba(45, 212, 191, 0.14);
+  --color-chip-model-fg: #93eadb;
+  --color-chip-workspace-bg: rgba(116, 190, 143, 0.16);
+  --color-chip-workspace-fg: #a4debc;
+  --color-chip-permission-bg: rgba(234, 178, 60, 0.15);
+  --color-chip-permission-fg: #f0cd76;
+
+  /* Overlay */
+  --color-overlay-scrim: rgba(4, 10, 7, 0.68);
+  --color-modal-outline: rgba(236, 245, 238, 0.08);
+
+  /* Buttons */
+  --color-btn-primary-bg: #1f9e8c;
+  --color-btn-primary-text: #06281f;
+  --color-btn-primary-hover: #26b89f;
+  --color-btn-secondary-bg: #192220;
+  --color-btn-secondary-text: #c4d3c6;
+  --color-btn-secondary-hover: #202d27;
+  --color-btn-ghost-bg: transparent;
+  --color-btn-ghost-text: #9db2a0;
+  --color-btn-ghost-hover: #1c2823;
+
+  /* Shadows */
+  --shadow-card: none;
+  --shadow-pop: 0 6px 18px rgba(0, 10, 5, 0.45), 0 2px 6px rgba(0, 10, 5, 0.32);
+  --shadow-modal: 0 24px 64px rgba(0, 10, 5, 0.55), 0 10px 26px rgba(0, 10, 5, 0.38);
+
+  /* Scene surfaces */
+  --theme-bg-app: #0c1210;
+  --theme-bg-sidebar: #121a16;
+  --theme-bg-titlebar: #080d0a;
+  --theme-bg-chat: #101813;
 }

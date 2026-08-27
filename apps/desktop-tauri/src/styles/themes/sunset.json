@@ -2,5 +2,6 @@
   "id": "sunset",
   "label": "暖阳希望",
   "description": "晨光暖白底 + 蜂蜜金强调色，明亮温暖的亮色主题",
-  "builtin": true
+  "builtin": true,
+  "colorScheme": "light"
 }

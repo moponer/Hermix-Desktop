@@ -1,9 +1,8 @@
-﻿/*
- * Light theme
- * 这里只显式声明 data-theme="light" 选择器, 让切换器从其它主题切回
- * light 时也能命中并清空 override.
- *
- * NOTE: 非 @layer — 非层级化样式优先级高于 @theme 层级，
- * 确保 data-theme 变量覆盖 tokens.css 的 @theme 默认值。
- */
-:root[data-theme="light"] { /* 在 tokens.css 中已默认设置; 这里留空即可 */ }
+/* ════════════════════════════════════════════════════════════════════
+   Light — 「石墨·靛 Graphite Indigo」（亮色基线）
+   ──────────────────────────────────────────────────────────────────
+   light = tokens.css @theme 默认值本身，本文件只保留 data-theme 命中点，
+   让从其它主题切回时能清空覆盖。不要在这里写任何颜色 —— 改默认值去
+   tokens.css。契约校验对 light 的"有效取值集 = 本文件 ∪ tokens 默认"判定。
+   ════════════════════════════════════════════════════════════════════ */
+:root[data-theme="light"] { /* 取值即 tokens.css 的 @theme 默认层 */ }

@@ -1,87 +1,30 @@
 /* ════════════════════════════════════════════════════════════════════
-   tokens.css — Design system primitives
+   tokens.css — Design System 单一真理源
    ──────────────────────────────────────────────────────────────────
-   All colors, type scale, spacing, radius, shadow, animation tokens.
-   Swap this file to re-skin the entire app.
+   分层结构（切换主题只换取值，不换令牌名 —— 这是硬性契约）：
 
-   Light default + .dark override follows the "Classic Gray/White" system
-   the user picked on · Light: sidebar/right = #e2e2e2 gray panel, main = #f7f7f7近白, chat canvas = #f5f5f5
-     · Dark:  sidebar = #27272a, main = #18181b
-     · No blue, no purple, no gradients
+     本文件      = 亮色基线（@theme 默认值）+ 结构性令牌（字体/间距/圆角/
+                   动效，这些跨主题恒定，任何主题不得重复声明）
+     themes/<id>.css = 每套主题一张【纯取值表】：只允许一个
+                   :root[data-theme="<id>"]:root { --token: value } 块，
+                   且必须覆盖下方 CONTRACT 色彩令牌清单的全集。
+     .dark 类    = 已废除。暗色系主题（json 里 "colorScheme":"dark"）
+                   由 themes/dark.css 自身的完整取值表负责，不再有
+                   第二份散落的暗色覆盖（历史漂移源，勿复活）。
+
+   新增主题三步：① 复制 themes/_template 注释头任一现有主题文件改名
+   ② 填满 CONTRACT 全部色彩令牌 ③ 配一份 <id>.json（label/colorScheme）。
+   registry 自动发现，无需改任何 TS。
+
+   校验器：node scripts/check-theme-tokens.mjs（含完整性/孤儿/裸色三项），
+   组件代码中禁止出现字面色值与 Tailwind 原生调色板类 —— 一律走变量。
    ════════════════════════════════════════════════════════════════════ */
 
+/* ------------------------------------------------------------------
+ * 一、结构性令牌（跨主题恒定 · @theme 层 · 主题文件禁止覆盖）
+ * ------------------------------------------------------------------ */
 @theme {
-  /* ── Surfaces — 设计稿: bg-primary=#FFFFFF 主内容, bg-secondary=#F7F7F7 侧栏/输入, bg-tertiary=#EFEFEF 控件/分割线, hover=#E5E5E5 ── */
-  --color-bg-app: #f2f2f2;            /* page canvas: 比 secondary 浅一档, 形成主区背景 */
-  --color-bg-primary: #ffffff;        /* card / inner white container (浮在 app 上) */
-  --color-bg-secondary: #f7f7f7;      /* sidebar, input area — 设计稿二级 */
-  --color-bg-tertiary: #efefef;       /* controls, chips, inline code — 设计稿三级 */
-  --color-bg-hover: #e5e5e5;          /* hover over white — 设计稿四级 */
-  --color-bg-active: #dcdcdc;         /* active/selected over white */
-  --color-bg-card: #ffffff;
-  --color-bg-card-hover: #f7f7f7;
-  --color-bg-elevated: #ffffff;       /* popovers, modals: white over cream */
-  --color-bg-code: #efefef;          /* 浅色独立代码块: 等同 bg-tertiary */
-  --color-bg-code-header: #f5f5f5;    /* 比 code 浅 1 档 */
-  --color-bg-code-border: #dcdcdc;    /* 清晰但不抢眼 */
-  --color-chat-assistant-bg: #ffffff;      /* 主回复气泡 (light: 等同 bg-primary 白底) */
-  --color-chat-tool-bg: #f7f7f7;          /* 工具调用卡片 (light: 等同 bg-secondary) */
-  --color-chat-terminal-bg: #000000;      /* 终端/代码输出背景 */
-
-
-  /* ── Borders — 设计稿: 分割线=#EFEFEF(三级), 边框=#D0D0D0(五级) ── */
-  --color-border-primary: #e0e0e0;    /* main divider — 接近设计稿 #EFEFEF */
-  --color-border-secondary: #d0d0d0;  /* input outline — 设计稿五级 */
-  --color-border-strong: #1a1a1a;     /* strong emphasis */
-  --color-border-subtle: #ececec;     /* very light hint */
-
-  /* ── Text (4 级层次) — 设计稿: 一级#1A1A1A, 二级#333333, 三级#666666, 四级#999999 ── */
-  --color-text-primary: #1a1a1a;      /* 标题、主要文字 */
-  --color-text-secondary: #333333;    /* 正文 */
-  --color-text-tertiary: #666666;     /* 次要信息 */
-  --color-text-muted: #71717a;
-  --color-text-faint: #999999;        /* 占位符、禁用态 */
-  --color-text-on-code: #3a3a3c;
-
-  /* ── Accent (近黑色 #1A1A1A, 设计稿主色) ── */
-  --color-accent: #1a1a1a;
-  --color-accent-hover: #000000;
-  --color-accent-soft: rgba(26, 26, 26, 0.10);
-  --color-accent-soft-strong: rgba(26, 26, 26, 0.18);
-  --color-accent-on-text: #ffffff;
-
-  /* ── Link (中性灰, 禁蓝紫) ── */
-  --color-link: #1a1a1a;
-  --color-link-hover: #000000;
-
-  /* ── Link-soft ── */
-  --color-link-soft: #71717a;
-  --color-link-soft-hover: #1a1a1a;
-
-  /* ── Semantic (必要且无蓝紫) ── */
-  --color-success: #16a34a;
-  --color-success-soft: rgba(22, 163, 74, 0.14);
-  --color-error: #dc2626;
-  --color-error-soft: rgba(220, 38, 38, 0.14);
-  --color-warning: #d97706;
-  --color-warning-soft: rgba(217, 119, 6, 0.16);
-  --color-text-warning: #d97706;       /* warning text — used by StreamingBubble/InliningThinkingDot */
-  /* 主操作色 = info，中性灰族（非饱和蓝） */
-  --color-info: #3f3f46;
-  --color-info-soft: rgba(63, 63, 70, 0.14);
-
-  /* ── Buttons — 设计稿: 主按钮#1A1A1A白字, 次按钮透明黑字1px#D0D0D0边框 ── */
-  --color-btn-primary-bg: #1a1a1a;
-  --color-btn-primary-text: #ffffff;
-  --color-btn-primary-hover: #000000;
-  --color-btn-secondary-bg: transparent;
-  --color-btn-secondary-text: #1a1a1a;
-  --color-btn-secondary-hover: #f7f7f7;
-  --color-btn-ghost-bg: transparent;
-  --color-btn-ghost-text: #52525b;
-  --color-btn-ghost-hover: rgba(82, 82, 91, 0.06);
-
-  /* ── Type scale (对标 WorkBuddy) ── */
+  /* Type scale */
   --font-size-display: 22px;
   --font-size-h1: 16px;
   --font-size-h2: 14px;
@@ -89,7 +32,13 @@
   --font-size-meta: 12px;
   --font-size-tiny: 11px;
 
-  /* ── Spacing (8/12/16/20/24 px 为主) ── */
+  /* Font families（Tailwind4 @theme 规范命名；旧名 --font-family-primary 走尾部别名） */
+  --font-sans: "Inter", "Segoe UI Variable", "Segoe UI", system-ui,
+    -apple-system, "PingFang SC", "Microsoft YaHei UI", sans-serif;
+  --font-mono: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo,
+    Consolas, monospace;
+
+  /* Spacing scale */
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
@@ -98,7 +47,7 @@
   --space-6: 24px;
   --space-8: 32px;
 
-  /* ── Radius ── */
+  /* Radius scale */
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 8px;
@@ -106,106 +55,124 @@
   --radius-2xl: 12px;
   --radius-full: 999px;
 
-  /* ── Shadow (克制:默认无,只在 modal/elevated 上有) ── */
-  --shadow-card: none;
-  --shadow-pop: 0 4px 12px rgba(0,0,0,0.08), 0 2px 4px rgba(0,0,0,0.04);
-  --shadow-modal: 0 20px 60px rgba(0, 0, 0, 0.15), 0 8px 24px rgba(0, 0, 0, 0.08);
-
-  /* ── Animation ── */
+  /* Motion */
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --duration-fast: 120ms;
   --duration-base: 160ms;
   --duration-slow: 240ms;
 
-  /* ── Scene surfaces — 设计稿对齐 ── */
-  --theme-bg-app:     #f7f7f7;                         /* 主区画布: 近白, 与侧栏拉开层次 */
-  --theme-bg-sidebar: #e2e2e2;                        /* 侧栏灰面板, 比主区深一档, 分层明显 */
-  --theme-bg-titlebar: #e0e0e0;                       /* 顶栏, 比侧栏再深一档 */
-  --theme-bg-chat: #e8e8e8;                            /* 会话画布: 比侧栏浅一档但明显灰, 白气泡浮起, 与菜单栏区分 */
+  /* ------------------------------------------------------------------
+   * 二、色彩令牌 · LIGHT 基线取值（Graphite Indigo 石墨靛蓝）
+   *    暗色等其余主题在 themes/*.css 各自给出全套同 名 覆盖。
+   *
+   *    设计语言：中性石墨灰阶做面（唯一饱和度只允许出现在 hero 强调色
+   *    与语义四色上）；层次靠明度阶梯而非色相跳跃；发丝边框承担分区。
+   * ------------------------------------------------------------------ */
+
+  /* Surfaces — 明度阶梯 app<secondary<card<hover<active */
+  --color-bg-app: #f5f5f6;
+  --color-bg-primary: #ffffff;
+  --color-bg-secondary: #fafafa;
+  --color-bg-tertiary: #f0f0f2;
+  --color-bg-quaternary: #e6e6ea;
+  --color-bg-hover: #ebebed;
+  --color-bg-active: #e2e2e6;
+  --color-bg-card: #ffffff;
+  --color-bg-card-hover: #f9f9fa;
+  --color-bg-elevated: #ffffff;
+  --color-bg-inset: #ececee;
+  --color-bg-input: #ffffff;
+  --color-bg-base: #fbfbfc;
+
+  /* Code / chat 场景面板 */
+  --color-bg-code: #f2f2f4;
+  --color-bg-code-header: #eaeaec;
+  --color-bg-code-border: #dcdce0;
+  --color-chat-assistant-bg: #ffffff;
+  --color-chat-tool-bg: #f7f7f8;
+  --color-chat-terminal-bg: #16161d;
+
+  /* Borders — 发丝线分级 */
+  --color-border-subtle: #eeeef0;
+  --color-border-primary: #e2e2e6;
+  --color-border-secondary: #d2d2d8;
+  --color-border: #cfcfd5;
+  --color-border-strong: #18181b;
+
+  /* Text — 四级层次 */
+  --color-text-primary: #18181b;
+  --color-text-secondary: #424247;
+  --color-text-tertiary: #66666d;
+  --color-text-muted: #8b8b93;
+  --color-text-faint: #a6a6ae;
+  --color-text-on-code: #33333a;
+
+  /* Accent — hero 强调色（indigo 唯一饱和来源） */
+  --color-accent: #4f46e5;
+  --color-accent-hover: #4338ca;
+  --color-accent-on-text: #ffffff;
+  --color-accent-soft: rgba(79, 70, 229, 0.09);
+  --color-accent-soft-strong: rgba(79, 70, 229, 0.16);
+
+  /* Link */
+  --color-link: #4f46e5;
+  --color-link-hover: #4338ca;
+  --color-link-soft: #6b7280;
+  --color-link-soft-hover: #3730a3;
+
+  /* Semantic 四色组 — soft 即浅底，色相与正文语义一一对应 */
+  --color-success: #16803c;
+  --color-success-soft: rgba(22, 128, 60, 0.11);
+  --color-error: #d43030;
+  --color-error-soft: rgba(212, 48, 48, 0.10);
+  --color-warning: #b45309;
+  --color-warning-soft: rgba(180, 83, 9, 0.12);
+  --color-text-warning: #b45309;
+  --color-info: #475569;
+  --color-info-soft: rgba(71, 85, 105, 0.11);
+
+  /* Status chips（Composer 会话状态胶囊六件套） */
+  --color-chip-model-bg: #eef0fe;
+  --color-chip-model-fg: #4038c7;
+  --color-chip-workspace-bg: #e7f2ee;
+  --color-chip-workspace-fg: #0f6b53;
+  --color-chip-permission-bg: #fdf0e3;
+  --color-chip-permission-fg: #92500e;
+
+  /* Overlay */
+  --color-overlay-scrim: rgba(15, 15, 20, 0.42);
+  --color-modal-outline: rgba(15, 15, 20, 0.06);
+
+  /* Buttons */
+  --color-btn-primary-bg: #4f46e5;
+  --color-btn-primary-text: #ffffff;
+  --color-btn-primary-hover: #4338ca;
+  --color-btn-secondary-bg: transparent;
+  --color-btn-secondary-text: #18181b;
+  --color-btn-secondary-hover: #f0f0f2;
+  --color-btn-ghost-bg: transparent;
+  --color-btn-ghost-text: #66666d;
+  --color-btn-ghost-hover: rgba(24, 24, 27, 0.05);
+
+  /* Shadows（亮色克制三档） */
+  --shadow-card: none;
+  --shadow-pop: 0 4px 12px rgba(18, 18, 23, 0.07), 0 2px 4px rgba(18, 18, 23, 0.04);
+  --shadow-modal: 0 20px 56px rgba(18, 18, 23, 0.16), 0 8px 22px rgba(18, 18, 23, 0.08);
+
+  /* Scene surfaces — 应用骨架四大区 */
+  --theme-bg-app: #f5f5f6;
+  --theme-bg-sidebar: #fafafa;
+  --theme-bg-titlebar: #ededf0;
+  --theme-bg-chat: #f0f0f2;
 }
 
-/* 用 :root.dark 而不是 .dark — 见上方 .dark { --theme-bg-* } 注释里对特异性
-   与继承链的完整解释. 这里定义的 token (--color-*, --shadow-*, --color-btn-*)
-   都应该只作用在 html 上, 由 CSS 变量继承传下去给 children. */
-:root.dark {
-  --color-bg-app: #0f0f12;            /* page canvas: deep dark */
-  --color-bg-primary: #1c1c20;        /* card: lighter than canvas (clear lift) */
-  --color-bg-secondary: #232328;
-  --color-bg-tertiary: #2e2e34;
-  --color-bg-hover: #2a2a30;
-  --color-bg-active: #353539;
-  --color-bg-card: #1c1c20;
-  --color-bg-card-hover: #232328;
-  --color-bg-elevated: #25252a;
-  --color-bg-code: #1a1d23;          /* deeper than --color-bg-card (#232328) */
-  --color-bg-code-border: #33333a;   /* was rgba(0,0,0,0.35) — solid, visible border */
-  --color-bg-code-header: #22252b;   /* was #1a1d23 — now lighter than code bg for visual lift */
-  --color-chat-assistant-bg: #1c1c20;        /* 主回复气泡 (dark: 等同 bg-primary #1c1c20 卡色, 跟主区 #0f0f12 拉开 1 档,不变蓝) */
-  --color-chat-tool-bg: rgba(35, 35, 40, 0.55); /* 工具调用卡片 (dark: 用 bg-secondary #232328 同色灰带透明叠加,不引蓝紫) */
-
-
-  --color-border-primary: #3a3a40;     /* was #2e2e32 — brighter for visible dividers */
-  --color-border-secondary: #4a4a52;   /* was #3f3f46 — brighter input outlines */
-  --color-border-strong: #fafafa;
-  --color-border-subtle: #34343a;      /* was #2c2c32 — slightly brighter so borders register */
-
-  --color-text-primary: #fafafa;
-  --color-text-secondary: #d4d4d8;
-  --color-text-tertiary: #b0b0b8;      /* was #a1a1aa — brighter for icon/label legibility */
-  --color-text-muted: #9b9ba4;        /* was #71717a — brighter, meets WCAG AA on #1c1c20 */
-  --color-text-faint: #76767e;        /* was #52525b — much brighter, section headers/meta now readable */
-  --color-text-on-code: #e0e0e6;      /* was #d4d4d8 — brighter code text on dark bg */
-
-  --color-accent: #d4d4d8;
-  --color-accent-hover: #e4e4e7;
-  --color-accent-soft: rgba(212, 212, 216, 0.12);
-  --color-accent-soft-strong: rgba(212, 212, 216, 0.22);
-  --color-accent-on-text: #0f172a;
-
-  /* ── Link (暗模式) ── 设计铁律禁蓝: 用中性 zinc 灰 */
-  --color-link: #d4d4d8;
-  --color-link-hover: #e4e4e7;
-
-  /* ── Link-soft: 暗模式下中性 zinc 灰（文件变更等辅助场景，禁蓝） ── */
-  --color-link-soft: #9b9ba4;        /* 中性灰, 同 text-muted */
-  --color-link-soft-hover: #d4d4d8;  /* 同 text-secondary */
-
-  --color-success: #22c55e;
-  --color-success-soft: rgba(34, 197, 94, 0.12);
-  --color-error: #ef4444;
-  --color-error-soft: rgba(239, 68, 38, 0.12);
-  --color-warning: #f59e0b;
-  --color-warning-soft: rgba(245, 158, 11, 0.15);
-  --color-text-warning: #f59e0b;       /* warning text — dark mode: brighter amber */
-  --color-info: #94a3b8;
-  --color-info-soft: rgba(148, 163, 184, 0.14);
-
-  --color-btn-primary-bg: #64748b;     /* was #cbd5e1 — moderate slate, not blinding white */
-  --color-btn-primary-text: #ffffff;   /* was #0f172a — white text on slate button */
-  --color-btn-primary-hover: #78859a;  /* was #e2e8f0 — slightly lighter slate */
-  --color-btn-secondary-bg: #27272a;
-  --color-btn-secondary-text: #d4d4d8;
-  --color-btn-secondary-hover: #3f3f46;
-  --color-btn-ghost-bg: transparent;
-  --color-btn-ghost-text: #b0b0b8;     /* was #a1a1aa — brighter ghost button text */
-  --color-btn-ghost-hover: #27272a;
-
-  --shadow-card: none;
-  --shadow-pop: 0 4px 12px rgba(0,0,0,0.08), 0 2px 4px rgba(0,0,0,0.04);
-  --shadow-modal: 0 12px 40px rgba(0, 0, 0, 0.35), 0 4px 16px rgba(0, 0, 0, 0.25);
-
-  /* Scene surfaces — dark values as safety net.
-     light 默认在 @theme 块。themes/dark.css 的 :root[data-theme="dark"]
-     特异性 (0,2,0) > :root.dark (0,1,1) 应当胜出；这里重复声明是为了
-     万一 dark.css 加载失败时仍能保证深色主题右侧面板不变成浅灰。
-
-     关键: selector 必须是 :root.dark 而不是 .dark — 后者 (0,1,0) 会匹配
-     body 和 children, 覆盖 themes/*.css 双 :root 在 body 上的继承链,
-     导致 children 上的 var(--color-bg-*) 拿到 tokens 兜底值而非主题值。
-     useTheme 给 body 也挂了 .dark 类, 所以原 .dark 块在 body 上匹配,
-     rainforest 双 :root 块的 :root 部分不匹配 body — body 走兜底. */
-  --theme-bg-app:     var(--color-bg-app);
-  --theme-bg-sidebar: var(--color-bg-primary);
-  --theme-bg-titlebar: #0e0e10;
-  --theme-bg-chat: var(--color-bg-app);
+/* ------------------------------------------------------------------
+ * 三、兼容别名（历史引用不改也能活 —— 新代码禁止再引用这些名字）
+ * ------------------------------------------------------------------ */
+:root {
+  --font-family-primary: var(--font-sans);
+  --color-error-bg: var(--color-error-soft);
+  --color-warning-bg: var(--color-warning-soft);
+  --color-error-text: var(--color-error);
+  --color-text-success: var(--color-success);
 }
