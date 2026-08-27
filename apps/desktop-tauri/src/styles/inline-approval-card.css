@@ -15,6 +15,26 @@
        浅红底 + 红字,两者对比 + 体积都拉满,请求按钮一眼可见
    ════════════════════════════════════════════════════════════════════ */
 
+/* ── §1.5. 整张卡折叠动画（resolve 后立刻收回，避免"1 秒空白"） ──
+   父层不主动 unmount 卡片（show 队列按 outcome 决定），而服务端
+   下一条消息从 WS 回来前有几 ms~几 s 的延迟。如果卡片一直以"已允许 +
+   操作已继续执行"的最小残留态挂着，用户感受是 resolve 之后 LLM 在
+   装死。h-leaving 让卡片在 240ms 内整体 max-height → 0、opacity → 0，
+   下条消息到达时直接占位，看起来像无缝衔接。prefers-reduced-motion
+   走 media query 兜底立即消失。 */
+.h-leaving {
+  animation: approval-card-leave 240ms cubic-bezier(0.4, 0, 0.2, 1) forwards;
+  overflow: hidden;
+  pointer-events: none;
+}
+@keyframes approval-card-leave {
+  from { opacity: 1; max-height: 200px; }
+  to   { opacity: 0; max-height: 0; margin: 0; padding: 0; border: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .h-leaving { animation: none; opacity: 0; max-height: 0; }
+}
+
 /* ── §2. Pill row (line 1: tool pill + risk badge + status pill) ── */
 .approval-pills {
   display: flex;

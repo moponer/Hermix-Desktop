@@ -128,7 +128,11 @@ export function InlineApprovalCard({ request, onApprove, onDeny, resolved }: Inl
   const argsText = describeToolAction(request.tool, request.args);
 
   return (
-    <div className="h-enter">
+    // h-leaving 折叠到 0 高度 — 决策一做出整张卡直接收回，避免“1 秒空白”：
+    // 旧版 is-resolved 后卡片只把 actions 区折叠，行 2 留空 + “已允许”小标，
+    // 视觉上半空不空；新版 resolve 触发外层折叠动画，父层下一个消息到达时
+    // 直接占位，不留空隙。
+    <div className={`h-enter ${!isPending ? "h-leaving" : ""}`}>
       <div className="flex-1 min-w-0">
         {/* Header — only while pending. Resolved cards let the status
             pill ("已允许 / 已拒绝 / 已超时") speak for itself; the
