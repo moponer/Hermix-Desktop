@@ -23,6 +23,7 @@
 //!   → 调度器注册数据，数据层与调度层解耦）
 //! - [`package`] — .hwx 工作台包（M5.2：导出/校验/解析，JSON bundle
 //!   防脏包；LWW 合并 M5.5）
+//! - [`templates`] — 内置工作台模板（M6.2：人员/车辆/安全预置台账）
 
 pub mod automation_plan;
 pub mod builder;
@@ -33,6 +34,7 @@ pub mod package;
 pub mod registry;
 pub mod service;
 pub mod store;
+pub mod templates;
 pub mod validate;
 
 pub use automation_plan::{AutomationPlan, frequency_to_rrule, plan_automations};
@@ -40,6 +42,10 @@ pub use builder::{BuildError, BuildResult, TableStatus, create_from_schema};
 pub use condition::{ConditionError, ConditionHit, ConditionScanResult, render_message, run_condition_automation};
 pub use migrate::{ColumnChange, MigrateError, MigrationReport, migrate_schema};
 pub use package::{HwxPackage, PackageError, export_package, merge_rows, parse_package, to_bytes, validate_package};
+pub use templates::{
+    TemplateMeta, TemplateTableMeta, WorkspaceTemplate, get_template, list_template_metas,
+    list_templates,
+};
 pub use service::{ServiceError, WorkspaceService};
 pub use model::{
     Automation, DashboardWidget, Field, FieldType, Module, View, ViewType, WidgetType,

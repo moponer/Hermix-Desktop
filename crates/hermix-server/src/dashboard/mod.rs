@@ -10,6 +10,7 @@ pub mod analytics;
 pub mod cua;
 pub mod automation;
 pub mod config;
+pub mod workspace_templates;
 pub mod consciousness;
 pub mod env;
 pub mod logs;
@@ -202,6 +203,15 @@ pub fn router() -> Router<HttpServerState> {
         .route(
             "/api/workspaces/import",
             post(workspaces::import_workspace),
+        )
+        // M6 模板：预置台账模板列表 + 一键建工作台
+        .route(
+            "/api/workspace-templates",
+            get(workspace_templates::list_templates),
+        )
+        .route(
+            "/api/workspace-templates/{id}/create",
+            post(workspace_templates::create_from_template),
         )
         // 数据端点：打通 LocalSqliteStore（表名/列名过 schema 白名单）
         .route(
