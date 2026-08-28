@@ -606,6 +606,10 @@ font-size: 12px;
   padding: 8px 10px;
   border-radius: var(--radius-lg);
   background: var(--color-bg-tertiary);
+  /* sticky 底部钉住：不管中间 sections 多长 / zoom 多大，user-card 始终在侧栏底部可见 */
+  position: sticky;
+  bottom: 0;
+  z-index: 10;
 }
 .user-card-avatar {
   display: flex;
@@ -645,7 +649,7 @@ font-size: 12px;
 
 /* ── Top action (菜单样式的新建对话等) ── */
 .sidebar-topnav {
-  padding: 12px 12px 4px;
+  padding: 10px 12px;
 }
 .sidebar-topnav .nav-item-primary {
   border-radius: 8px;
