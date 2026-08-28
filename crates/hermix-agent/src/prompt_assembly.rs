@@ -873,6 +873,32 @@ fn build_stable_layer(
     硬性要求：目标存在于 task_tracker（跨回合持久）与当日 daily_memory；任何>1步的任务都必须有 task 条目与进度更新；会话开始已自动创建当日 daily_memory 骨架，你只需填内容；目标达成即停止，不要为看起来在干活而重复工具调用。"#,
     );
 
+    // Temp-file hygiene: agent frequently authors scratch files
+    // (test scripts under /tmp, debug dumps, fixture data, one-off
+    // parse outputs). Without an explicit cleanup rule the user's
+    // workspace accumulates dead artifacts after every run. This
+    // block sits next to the Operating Principles because the same
+    // "completion" step that writes `conclusions` is the natural
+    // moment to also tidy up the scratch tree.
+    builder = builder.with_block(
+        r#"## 临时文件自清理 (Temp File Hygiene)
+任何由本会话创建、且非用户原始输入的文件，都视作"临时文件"——除非用户在请求里明确说"保留/不要删"，否则必须在本任务收尾时清理：
+1. 写入位置仅限以下三类（其它位置必须先问用户）：
+   - `target/` / `node_modules/` / `.git/` 下（构建/版本目录，会被 git/build 自动忽略）
+   - 系统临时目录（`$TMPDIR` / `std::env::temp_dir()` / `%TEMP%`）
+   - 任务沙箱根目录下的 `.scratch/` 子目录（任务结束整目录删）
+2. 不允许把临时文件写到：
+   - 用户家目录根 (`~/`、`C:\Users\<user>\`)
+   - 项目根目录（与用户源文件混在一起）
+   - 任何 dotfile（`.bashrc` / `.zshrc` / `.profile` / `Cargo.toml` 等配置）
+3. 收尾顺序（与 Operating Principles 第 7 步"收尾总结"合并执行）：
+   a. 验证结论已写入 progress 段
+   b. 删除本任务产生的所有临时文件/目录
+   c. 在 daily_memory 的 conclusions 段末尾追加一句「临时文件：已清理 N 个（M 个保留）」，让用户知道清扫结果
+   d. 若发现需要保留的文件（用户指定或产物类），用 `file_change` 事件或 final message 明确告知用户路径
+   反面案例：写 `/tmp/probe.py` 验证后不删、写项目根 `test_output.txt`、在 `~/` 下创建 `notes.md`。这些都是污染行为。"#,
+    );
+
     // 自定义应用开发闭环纪律: validate+patch 外科手术式修复, 禁止整篇重写/整篇读入上下文.
     builder = builder.with_block(
         r#"## 自定义应用开发循环纪律 (Custom App Dev Loop)
