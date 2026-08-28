@@ -5,6 +5,7 @@ import {
   Boxes, MoreHorizontal, Loader2, LayoutDashboard,
   // Popover icons
   Pencil, Pin, Archive, Trash2, FolderOpenDot, Copy, FolderMinus,
+  Settings,
   type LucideIcon,
 } from "lucide-react";
 import { clsx } from "clsx";
@@ -40,6 +41,7 @@ interface SidebarProps {
   onRoomSelect?: (roomId: string | null) => void;
   /** Create a blank chat with this workspace already selected. */
   onNewChatInWorkspace?: (workspacePath: string) => void;
+  onOpenSettings?: () => void;
 }
 
 /* ── Group Chat Room types (API-backed) ── */
@@ -77,6 +79,7 @@ export function Sidebar({
   onDeleteSession,
   onRoomSelect,
   onNewChatInWorkspace,
+  onOpenSettings,
 }: SidebarProps) {
   const { workspaces, add: addWorkspace, remove: removeWorkspace, rename: renameWorkspace } = useWorkspaces();
   const pinnedArchived = usePinnedArchived();
@@ -664,6 +667,15 @@ export function Sidebar({
             {profile.displayName}
           </span>
           <ConnectionIndicator />
+          {onOpenSettings && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onOpenSettings(); }}
+              className="user-card-action"
+              title="设置"
+            >
+              <Settings size={13} />
+            </button>
+          )}
         </div>
         <UserMenuPopover
           open={menuOpen}

@@ -3037,7 +3037,6 @@ return {
     <div className="app-shell">
       <TitleBar
         onToggleSidebar={() => setSidebarOpen((v) => !v)}
-        onOpenSettings={() => setShowConfigModal(true)}
       />
       {denialBanner && (() => {
         const sub =
@@ -3102,6 +3101,7 @@ return {
               storage.setItem(STORAGE_KEYS.draftWorkspace, workspacePath);
               void handleNewChat();
             }}
+            onOpenSettings={() => setShowConfigModal(true)}
           />
           </ErrorBoundary>
           <div

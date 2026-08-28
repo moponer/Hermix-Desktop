@@ -2193,7 +2193,7 @@
    the resolved-state fold so the visual contract matches the
    single-card path. */
 .tl-approval-step--batch .approval-card {
-  border-left: 3px solid color-mix(in srgb, var(--color-warn, #d97706) 60%, transparent);
+  /* no accent border — clean flat card */
 }
 .apv-batch-list {
   list-style: none;
