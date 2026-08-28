@@ -37,7 +37,18 @@ import type { Artifact } from "./utils/artifacts";
 import { classifyArtifactKind } from "./utils/artifacts";
 import * as api from "./api";
 import { registerBuiltinsToBackend } from "./data/builtinExperts";
-import type { NavPage, Session, ChatMessage, ApprovalDecision, QueuedMessage, QueuedImage, ChatMessageImage, ApprovalMessageMeta, TimelineStep } from "./types";
+import type {
+  NavPage,
+  Session,
+  ChatMessage,
+  ApprovalDecision,
+  QueuedMessage,
+  QueuedImage,
+  ChatMessageImage,
+  ApprovalMessageMeta,
+  ApprovalBatchMessageMeta,
+  TimelineStep,
+} from "./types";
 // expandTimelineToMessages and detectToolError imports removed —
 // tools are now tracked in the assistant's execution_timeline, not expanded
 // into separate role:tool messages.
@@ -455,7 +466,19 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
    * `approval_response`.
    */
   const approvalResolversRef = useRef<
-    Map<string, (decision: ApprovalDecision) => void>
+    Map<
+      string,
+      (decision: Exclude<ApprovalDecision, null>, remember?: boolean) => void
+    >
+  >(new Map());
+  // Same shape, keyed by `batch_id`. Resolves the promise returned
+  // by `onApprovalBatchRequest` when the user clicks Allow / Deny /
+  // Always on a batched card.
+  const approvalBatchResolversRef = useRef<
+    Map<
+      string,
+      (decision: Exclude<ApprovalDecision, null>, remember?: boolean) => void
+    >
   >(new Map());
   // Retry timers for approval responses — cleaned up when approval is resolved
   const approvalRetryTimersRef = useRef<Map<string, ReturnType<typeof setInterval>>>(new Map());
@@ -866,12 +889,17 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
     (
       requestId: string,
       decision: Exclude<ApprovalDecision, null>,
+      remember?: boolean,
     ): ApprovalDecision | null => {
       // Helper: flip a single assistant message's
       // `kind: "approval_request"` step to the given decision. Used
       // in both the live (resolver present) and stale (resolver gone)
       // branches below.
-      const stampDecision = (s: Session, decision: ApprovalDecision): Session => ({
+      const stampDecision = (
+        s: Session,
+        decision: ApprovalDecision,
+        remember?: boolean,
+      ): Session => ({
         ...s,
         messages: s.messages.map((m) => {
           const steps = m.unified_steps;
@@ -891,6 +919,7 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
                 ...step.meta,
                 decision,
                 decidedAt: new Date().toISOString(),
+                ...(remember ? { remembered: true } : {}),
               },
             };
           });
@@ -900,7 +929,7 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
 
       const resolver = approvalResolversRef.current.get(requestId);
       if (resolver) {
-        resolver(decision);
+        resolver(decision, remember);
         approvalResolversRef.current.delete(requestId);
         // also drop the session-ownership mapping kept for the REST fallback
         pendingApprovalSessionsRef.current.delete(requestId);
@@ -916,7 +945,7 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
           clearTimeout(timeoutTimer);
           approvalTimeoutTimersRef.current.delete(requestId);
         }
-        setSessions((prev) => prev.map((s) => stampDecision(s, decision)));
+        setSessions((prev) => prev.map((s) => stampDecision(s, decision, remember)));
         return decision;
       }
       // Stale click — the resolver is already gone. The
@@ -933,9 +962,9 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
   );
 
   const handleApproveApproval = useCallback(
-    (requestId: string) => {
+    (requestId: string, remember?: boolean) => {
       const now = Date.now();
-      console.info(`[APPROVAL-CLICK] id=${requestId} t=${now}`);
+      console.info(`[APPROVAL-CLICK] id=${requestId} t=${now} remember=${remember === true}`);
 
       // removed the App.tsx `wsSendRaw(payload)` step that used
       // to live here. It was REDUNDANT with the main WS path in
@@ -969,7 +998,9 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
       // created by onApprovalRequest), with activeSessionId as fallback.
       const restPayload = JSON.stringify({
         request_id: requestId,
-        decision: "approved",
+        // 「以后自动允许」→ wire `always` (server persists into the
+        // durable allowlist); plain allow keeps the legacy string.
+        decision: remember === true ? "always" : "approved",
       });
       const restSid =
         pendingApprovalSessionsRef.current.get(requestId) ?? activeSessionId;
@@ -1010,7 +1041,7 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
 
       // Resolve the promise immediately so the UI updates
       // AND triggers the main WS path (useStreamChat.ts:1175 liveWs.send)
-      resolveApproval(requestId, "approved");
+      resolveApproval(requestId, "approved", remember);
     },
     [activeSessionId, resolveApproval],
   );
@@ -1064,6 +1095,134 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
     [activeSessionId, resolveApproval],
   );
 
+
+  // -----------------------------------------------------------------
+  // Batch approval resolution — counterpart of `resolveApproval`
+  // for the WS-coalesced batch path. The single `decision` applies
+  // to every item in the batch (no per-item granularity at the wire
+  // level). The card's `meta.decision` flips in lock-step with the
+  // server's per-item `resolve_approval_message` writes.
+  // -----------------------------------------------------------------
+  const resolveApprovalBatch = useCallback(
+    (
+      batchId: string,
+      decision: Exclude<ApprovalDecision, null>,
+      remember?: boolean,
+    ): ApprovalDecision | null => {
+      const stampBatchDecision = (
+        s: Session,
+        decision: ApprovalDecision,
+        remember?: boolean,
+      ): Session => ({
+        ...s,
+        messages: s.messages.map((m) => {
+          const steps = m.unified_steps;
+          if (!steps || steps.length === 0) return m;
+          let touched = false;
+          const next = steps.map((step): TimelineStep => {
+            if (step.kind !== "approval_request_batch") return step;
+            if (step.meta.batchId !== batchId) return step;
+            if (step.meta.decision) return step;
+            touched = true;
+            return {
+              ...step,
+              meta: {
+                ...step.meta,
+                decision,
+                decidedAt: new Date().toISOString(),
+                ...(remember ? { remembered: true } : {}),
+              },
+            };
+          });
+          return touched ? { ...m, unified_steps: next } : m;
+        }),
+      });
+
+      const resolver = approvalBatchResolversRef.current.get(batchId);
+      if (resolver) {
+        resolver(decision, remember);
+        approvalBatchResolversRef.current.delete(batchId);
+        pendingApprovalSessionsRef.current.delete(batchId);
+        const retryTimer = approvalRetryTimersRef.current.get(batchId);
+        if (retryTimer) {
+          clearInterval(retryTimer);
+          approvalRetryTimersRef.current.delete(batchId);
+        }
+        const timeoutTimer = approvalTimeoutTimersRef.current.get(batchId);
+        if (timeoutTimer) {
+          clearTimeout(timeoutTimer);
+          approvalTimeoutTimersRef.current.delete(batchId);
+        }
+        setSessions((prev) =>
+          prev.map((s) => stampBatchDecision(s, decision, remember)),
+        );
+        return decision;
+      }
+      // Stale click — batch already settled (timeout / resolve /
+      // disconnect). Mark the card `expired` so the user sees the
+      // honest "your click did not register" state.
+      setSessions((prev) =>
+        prev.map((s) => stampBatchDecision(s, "expired")),
+      );
+      return null;
+    },
+    [],
+  );
+
+  const handleApproveBatch = useCallback(
+    (batchId: string, remember?: boolean) => {
+      console.info(
+        `[APPROVAL-BATCH-CLICK] id=${batchId} t=${Date.now()} remember=${remember === true}`,
+      );
+      // REST 1s fallback — same shape as the single-item path. The
+      // existing `/v1/sessions/{sid}/approval` endpoint will treat
+      // `batch_id` as an unknown request_id (no-op, logged); the WS
+      // path is authoritative for batches. We still POST so a future
+      // server can pick it up without touching the client.
+      const restPayload = JSON.stringify({
+        batch_id: batchId,
+        decision: remember === true ? "always" : "approved",
+      });
+      const restSid =
+        pendingApprovalSessionsRef.current.get(batchId) ?? activeSessionId;
+      if (restSid) {
+        const restUrl = api.apiUrl(`/v1/sessions/${restSid}/approval`);
+        setTimeout(async () => {
+          try {
+            const res = await fetch(restUrl, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: restPayload,
+            });
+            const data = await res.json().catch(() => ({}));
+            if (data?.matched) {
+              console.warn(
+                `[APPROVAL-BATCH-REST] id=${batchId} matched=true — REST delivered`,
+              );
+            } else {
+              console.info(
+                `[APPROVAL-BATCH-REST] id=${batchId} matched=false — idempotent miss`,
+              );
+            }
+          } catch (e) {
+            console.error(
+              `[APPROVAL-BATCH-REST-FAIL] id=${batchId} error=${String(e)}`,
+            );
+          }
+        }, 1000);
+      }
+      resolveApprovalBatch(batchId, "approved", remember);
+    },
+    [activeSessionId, resolveApprovalBatch],
+  );
+
+  const handleDenyBatch = useCallback(
+    (batchId: string) => {
+      console.info(`[APPROVAL-BATCH-DENY] id=${batchId} t=${Date.now()}`);
+      resolveApprovalBatch(batchId, "denied");
+    },
+    [resolveApprovalBatch],
+  );
 
   /**
    * User answered a pending clarify card. Resolves the matching
@@ -1333,7 +1492,7 @@ streamPhaseRef.current = null;
       /** LLM-supplied one-line rationale (terminal schema `reason`). */
       reason?: string;
       sessionId: string;
-    }): Promise<{ decision: ApprovalDecision }> => {
+    }): Promise<{ decision: ApprovalDecision; remember?: boolean }> => {
       // The approval card belongs to the *current* assistant turn —
       // the agent is blocked waiting for the user, not starting a new
       // turn. We deliberately do NOT create a new assistant placeholder
@@ -1436,12 +1595,102 @@ streamPhaseRef.current = null;
       approvalTimeoutTimersRef.current.set(req.requestId, timer);
     }
 
-    return new Promise<{ decision: ApprovalDecision }>((resolve) => {
-      approvalResolversRef.current.set(req.requestId, (decision) => resolve({ decision }));
+    return new Promise<{ decision: ApprovalDecision; remember?: boolean }>((resolve) => {
+      approvalResolversRef.current.set(
+        req.requestId,
+        (decision, remember) => resolve({ decision, remember }),
+      );
       // record which session owns this request so the REST fallback hits the
       // right `/v1/sessions/<sid>/approval` endpoint
       pendingApprovalSessionsRef.current.set(req.requestId, sessionId);
     });
+    };
+
+    /**
+     * Server coalesced N parallel approvals into one batch envelope
+     * (see `crates/hermix-server::coalescer::ApprovalCoalescer`).
+     * Render one card with N sub-items; resolve all with a single
+     * `ApprovalBatchResponse` decision. Mirrors `onApprovalRequest`
+     * but the meta carries a `batchId` instead of a single
+     * `requestId`, and the deadline timer is taken from the EARLIEST
+     * expires_at (any later item with shorter remaining time will
+     * already have been auto-denied on the server; we render the
+     * loosest deadline to match what the server commits to).
+     */
+    const onApprovalBatchRequest = (req: {
+      batchId: string;
+      items: import("./types").ApprovalRequestItem[];
+      sessionId: string;
+    }): Promise<{ decision: ApprovalDecision; remember?: boolean }> => {
+      const previousAssistantId =
+        currentAssistantIdRef.current
+        ?? [...(sessions.find((s) => s.id === req.sessionId)?.messages ?? [])]
+          .reverse()
+          .find((m) => m.role === "assistant")?.id
+        ?? null;
+      if (!previousAssistantId) {
+        // No assistant target — keep the server blocked.
+        return new Promise<{ decision: ApprovalDecision }>(() => {});
+      }
+      const batchMeta: ApprovalBatchMessageMeta = {
+        batchId: req.batchId,
+        items: req.items,
+        decision: null,
+        decidedAt: null,
+      };
+      const step: TimelineStep = {
+        kind: "approval_request_batch",
+        meta: batchMeta,
+        // Anchor the batch to the FIRST item's request_id for the
+        // `toolCallId` linkage (used by the live cursor highlight
+        // in the tool timeline). Not all items share the same id.
+        toolCallId: req.items[0]?.requestId ?? req.batchId,
+        createdAt: new Date().toISOString(),
+      };
+      setSessions((prev) => prev.map((s) => {
+        if (s.id !== req.sessionId) return s;
+        const messages = s.messages.map((m) => {
+          if (m.id !== previousAssistantId) return m;
+          const existing = m.unified_steps ?? [];
+          if (existing.some(
+            (x) =>
+              x.kind === "approval_request_batch"
+              && x.meta.batchId === req.batchId,
+          )) return m;
+          return { ...m, unified_steps: [...existing, step] };
+        });
+        return {
+          ...s,
+          messages,
+          updated_at: new Date().toISOString(),
+        };
+      }));
+
+      // Frontend timeout against the EARLIEST expires_at among items —
+      // if any item would auto-deny server-side, the whole batch
+      // collapses once we mark it `expired`. Server races will keep
+      // the registry honest regardless; this is the UI-only honest
+      // reflection.
+      const earliestExpires = req.items
+        .map((it) => it.expiresAt)
+        .filter((v): v is number => typeof v === "number")
+        .reduce<number | null>((acc, v) => (acc === null || v < acc ? v : acc), null);
+      if (earliestExpires !== null) {
+        const delay = Math.max(0, earliestExpires - Date.now());
+        const timer = setTimeout(() => {
+          approvalTimeoutTimersRef.current.delete(req.batchId);
+          resolveApprovalBatch(req.batchId, "expired");
+        }, delay);
+        approvalTimeoutTimersRef.current.set(req.batchId, timer);
+      }
+
+      return new Promise<{ decision: ApprovalDecision; remember?: boolean }>((resolve) => {
+        approvalBatchResolversRef.current.set(
+          req.batchId,
+          (decision, remember) => resolve({ decision, remember }),
+        );
+        pendingApprovalSessionsRef.current.set(req.batchId, req.sessionId);
+      });
     };
 
     const onClarifyRequest = (req: {
@@ -1989,6 +2238,7 @@ return {
             }));
           },
           onApprovalRequest,
+          onApprovalBatchRequest,
           onClarifyRequest,
           // 用户点击停止时（cancelStream）在 WS 关闭前触发：直接把仍在途的
           // 审批请求以 denied 否决发往后端，使 agent loop 立即解除阻塞，而非
@@ -2007,6 +2257,22 @@ return {
               }
             });
             approvalResolversRef.current.clear();
+            // Batch approvals: same "cancel ⇒ deny all" semantics
+            // but wire a single batch frame so the server resolves
+            // every member under that batch_id.
+            approvalBatchResolversRef.current.forEach((_resolver, batchId) => {
+              const sent = wsSendRaw(
+                JSON.stringify({
+                  type: "approval_responses_batch",
+                  batch_id: batchId,
+                  decision: "denied",
+                }),
+              );
+              if (!sent) {
+                console.error(`[CANCEL-APPROVAL-BATCH] ws not open, drop deny id=${batchId}`);
+              }
+            });
+            approvalBatchResolversRef.current.clear();
             approvalRetryTimersRef.current.forEach((t) => clearInterval(t));
             approvalRetryTimersRef.current.clear();
             approvalTimeoutTimersRef.current.forEach((t) => clearTimeout(t));
@@ -2330,6 +2596,12 @@ return {
             // would leak forever.
             approvalResolversRef.current.forEach((resolver) => resolver("denied"));
             approvalResolversRef.current.clear();
+            // Batch resolvers share the same lifecycle — the WS
+            // already closed, so the in-flight responses are moot;
+            // mark them all `denied` (stale card → `expired` via the
+            // missing-resolver branch in `resolveApprovalBatch`).
+            approvalBatchResolversRef.current.forEach((resolver) => resolver("denied"));
+            approvalBatchResolversRef.current.clear();
             // Clean up retry timers
             approvalRetryTimersRef.current.forEach((timer) => clearInterval(timer));
             approvalRetryTimersRef.current.clear();
@@ -2680,6 +2952,8 @@ return {
       onWorkspaceChange={onWorkspaceChange}
       onApproveApproval={handleApproveApproval}
       onDenyApproval={handleDenyApproval}
+      onApproveBatchApproval={handleApproveBatch}
+      onDenyBatchApproval={handleDenyBatch}
       onAnswerClarify={handleAnswerClarify}
       acuiState={acui.state}
       acuiBus={acuiBus}
@@ -2784,7 +3058,6 @@ return {
           <Sidebar
             page={page}
             onPageChange={setPage}
-            onOpenSettings={() => setShowConfigModal(true)}
             sessions={sessions}
             activeSessionId={activeSessionId}
             streamingSessionId={streamingSessionId}

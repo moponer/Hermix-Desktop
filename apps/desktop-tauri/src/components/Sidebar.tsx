@@ -1,5 +1,5 @@
 import {
-  MessageSquarePlus, Search, Settings,
+  MessageSquarePlus, Search,
   ChevronDown, ChevronRight,
   MessageSquare, Users, Plus, FolderOpen,
   Boxes, MoreHorizontal, Loader2, LayoutDashboard,
@@ -11,6 +11,7 @@ import { clsx } from "clsx";
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
 import { ConnectionIndicator } from "./ConnectionIndicator";
+import { invoke } from "@tauri-apps/api/core";
 import type { Session, NavPage } from "../types";
 import { useWorkspaces } from "../hooks/useWorkspaces";
 import { usePinnedArchived } from "../hooks/usePinnedArchived";
@@ -22,11 +23,11 @@ import { toastSuccess, toastError } from "../hooks/useToast";
 import { useUserProfile } from "../hooks/useUserProfile";
 import { UserAvatar } from "./UserAvatar";
 import { EditProfileDialog } from "./EditProfileDialog";
+import { UserMenuPopover } from "./UserMenuPopover";
 
 interface SidebarProps {
   page: NavPage;
   onPageChange: (page: NavPage) => void;
-  onOpenSettings?: () => void;
   sessions: Session[];
   activeSessionId: string | null;
   /** Session ID that currently has an active WS stream (model working). */
@@ -68,7 +69,6 @@ const NAV_ITEMS: { icon: React.ElementType; label: string; page: NavPage }[] = [
 export function Sidebar({
   page,
   onPageChange,
-  onOpenSettings,
   sessions,
   activeSessionId,
   streamingSessionId,
@@ -84,6 +84,8 @@ export function Sidebar({
 
   const { profile, setProfile } = useUserProfile();
   const [editOpen, setEditOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const userCardRef = useRef<HTMLDivElement>(null);
 
   // Sort: pinned first, then archived last, otherwise keep original order.
   // React.useMemo on the array is enough; the hook already re-renders us
@@ -639,19 +641,17 @@ export function Sidebar({
         </section>
       </div>
 
-      {/* Bottom: user + settings */}
-      <div className="px-3 pb-3 pt-2 stack-v" style={{ gap: 8, flexShrink: 0 }}>
+      {/* Bottom: user card + pop menu */}
+      <div className="px-3 pb-3 pt-2" style={{ flexShrink: 0 }}>
         <div
+          ref={userCardRef}
           className="user-card"
           role="button"
           tabIndex={0}
           style={{ cursor: "pointer" }}
-          onClick={() => setEditOpen(true)}
+          onClick={() => setMenuOpen((v) => !v)}
           onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === " ") {
-              e.preventDefault();
-              setEditOpen(true);
-            }
+            if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setMenuOpen((v) => !v); }
           }}
         >
           <UserAvatar name={profile.displayName} avatarDataUrl={profile.avatarDataUrl} size={28} />
@@ -659,24 +659,21 @@ export function Sidebar({
             {profile.displayName}
           </span>
           <ConnectionIndicator />
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onOpenSettings?.();
-            }}
-            className="user-card-action"
-            title="设置"
-          >
-            <Settings size={13} />
-          </button>
         </div>
+        <UserMenuPopover
+          open={menuOpen}
+          onClose={() => setMenuOpen(false)}
+          anchorRef={userCardRef}
+          onNavigateAnalytics={() => onPageChange("analytics")}
+          onDisconnect={() => {
+            /* restart sidecar = soft disconnect/reconnect */
+            invoke("restart_sidecar").catch(() => {});
+          }}
+        />
         {editOpen && (
           <EditProfileDialog
             current={profile}
-            onSave={(next) => {
-              setProfile(next);
-              setEditOpen(false);
-            }}
+            onSave={(next) => { setProfile(next); setEditOpen(false); }}
             onClose={() => setEditOpen(false)}
           />
         )}
