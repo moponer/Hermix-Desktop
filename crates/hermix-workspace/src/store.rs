@@ -13,6 +13,7 @@
 
 use std::path::{Path, PathBuf};
 
+use rusqlite::OptionalExtension;
 use serde_json::Value;
 
 use crate::model::{FieldType, Module, WorkspaceSchema};
@@ -129,6 +130,19 @@ pub struct LocalSqliteStore {
     schema: WorkspaceSchema,
 }
 
+/// 变更记录（P6 序列化给 REST/前端）。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ChangeEntry {
+    pub seq: i64,
+    pub table: String,
+    pub row_id: String,
+    pub op: String,
+    pub before: Option<Value>,
+    pub after: Option<Value>,
+    pub changed_by: String,
+    pub changed_at: String,
+}
+
 impl LocalSqliteStore {
     /// 打开（或创建）工作台 DB 并按 schema 建表。
     /// schema 必须通过 `validate_schema`，否则返回 `StoreError::Validation`。
@@ -185,6 +199,256 @@ impl LocalSqliteStore {
             out.push(r?);
         }
         Ok(out)
+    }
+
+    /// 关键字搜索（P1 前端筛选）——跨全部文本类字段 OR LIKE，参数化防注入。
+    /// 仅搜 `Text`/`Enum`（Relation 存目标行 id、Attachment 存路径，不参与全文）。
+    /// 空 keyword 直接返回空（调用方只在非空时调用）。
+    pub fn search_text(
+        &self,
+        table: &str,
+        keyword: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<Value>, StoreError> {
+        if keyword.trim().is_empty() {
+            return Ok(Vec::new());
+        }
+        let fields = self.table_fields(table)?;
+        let cols = self.column_whitelist(table)?;
+        let searchable: Vec<&str> = fields
+            .iter()
+            .filter(|f| matches!(f.field_type, FieldType::Text | FieldType::Enum))
+            .map(|f| f.id.as_str())
+            .collect();
+        if searchable.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut sql = format!("SELECT {} FROM {table} WHERE ", cols.join(", "));
+        let mut wheres: Vec<String> = Vec::new();
+        for (i, col) in searchable.iter().enumerate() {
+            wheres.push(format!("{col} LIKE ?{}", i + 1));
+        }
+        sql.push_str(&wheres.join(" OR "));
+        if limit > 0 {
+            sql.push_str(&format!(" LIMIT {limit} OFFSET {offset}"));
+        }
+        let needle = format!("%{}%", keyword);
+        let params: Vec<rusqlite::types::Value> = (0..searchable.len())
+            .map(|_| rusqlite::types::Value::Text(needle.clone()))
+            .collect();
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(params.iter()), |r| {
+            row_to_json(r, &cols)
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    /// 关键字搜索命中总数（分页用），空 keyword 返回全表数。
+    pub fn count_search_text(&self, table: &str, keyword: &str) -> Result<u64, StoreError> {
+        let fields = self.table_fields(table)?;
+        let searchable: Vec<&str> = fields
+            .iter()
+            .filter(|f| matches!(f.field_type, FieldType::Text | FieldType::Enum))
+            .map(|f| f.id.as_str())
+            .collect();
+        if searchable.is_empty() {
+            return Ok(0);
+        }
+        if keyword.trim().is_empty() {
+            return self.count(table, &[]);
+        }
+        let mut sql = format!("SELECT COUNT(*) FROM {table} WHERE ");
+        let mut wheres: Vec<String> = Vec::new();
+        for (i, col) in searchable.iter().enumerate() {
+            wheres.push(format!("{col} LIKE ?{}", i + 1));
+        }
+        sql.push_str(&wheres.join(" OR "));
+        let needle = format!("%{}%", keyword);
+        let params: Vec<rusqlite::types::Value> = (0..searchable.len())
+            .map(|_| rusqlite::types::Value::Text(needle.clone()))
+            .collect();
+        let conn = self.conn()?;
+        conn.query_row(&sql, rusqlite::params_from_iter(params.iter()), |r| r.get(0))
+            .map_err(StoreError::Sqlite)
+    }
+
+    // ---------------------------------------------------------------------
+    // 变更历史（P6）：change_log 记录 + 查询 + 撤销
+    // ---------------------------------------------------------------------
+
+    /// 按 id 查单行（审计 before/after 用；不存在 → None）。
+    fn query_row_by_id(&self, table: &str, id: &str) -> Result<Option<Value>, StoreError> {
+        let rows = self.query(
+            table,
+            &[Filter {
+                field: "id".into(),
+                op: FilterOp::Eq,
+                value: Value::String(id.to_string()),
+            }],
+            None,
+            1,
+            0,
+        )?;
+        Ok(rows.into_iter().next())
+    }
+
+    /// 写一条变更记录（before/after 为 JSON 文本；insert 无 before、delete 无 after）。
+    fn log_change(
+        &self,
+        conn: &rusqlite::Connection,
+        table: &str,
+        row_id: &str,
+        op: &str,
+        before: Option<&Value>,
+        after: Option<&Value>,
+        changed_by: &str,
+    ) -> Result<(), StoreError> {
+        let to_text = |v: Option<&Value>| -> Result<Option<String>, StoreError> {
+            v.map(|v| serde_json::to_string(v))
+                .transpose()
+                .map_err(|e| StoreError::Io(e.to_string()))
+        };
+        conn.execute(
+            "INSERT INTO change_log (tbl, row_id, op, before, after, changed_by) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                table,
+                row_id,
+                op,
+                to_text(before)?,
+                to_text(after)?,
+                changed_by
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// 最近变更（按 seq 倒序，limit 上限防大结果集）。
+    pub fn list_changes(&self, table: &str, limit: usize) -> Result<Vec<ChangeEntry>, StoreError> {
+        self.table_fields(table)?;
+        let conn = self.conn()?;
+        let n = limit.clamp(1, 50);
+        let mut stmt = conn.prepare(
+            "SELECT seq, tbl, row_id, op, before, after, changed_by, changed_at
+             FROM change_log WHERE tbl = ?1 ORDER BY seq DESC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![table, n as i64], |r| {
+            Ok(ChangeEntry {
+                seq: r.get(0)?,
+                table: r.get(1)?,
+                row_id: r.get(2)?,
+                op: r.get(3)?,
+                before: r
+                    .get::<_, Option<String>>(4)?
+                    .and_then(|s| serde_json::from_str(&s).ok()),
+                after: r
+                    .get::<_, Option<String>>(5)?
+                    .and_then(|s| serde_json::from_str(&s).ok()),
+                changed_by: r.get(6)?,
+                changed_at: r.get(7)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    /// 撤销该表最近一条变更（insert→删行；update→before 覆盖；delete→before 重建）。
+    /// 返回撤销的变更记录；无变更返回 None。撤销本身不写新 change_log。
+    pub fn undo_last(&self, table: &str) -> Result<Option<ChangeEntry>, StoreError> {
+        self.table_fields(table)?;
+        let conn = self.conn()?;
+        let last: Option<(i64, String, String, Option<String>, Option<String>, String, String)> =
+            conn.query_row(
+                "SELECT seq, row_id, op, before, after, changed_by, changed_at
+                 FROM change_log WHERE tbl = ?1 ORDER BY seq DESC LIMIT 1",
+                [table],
+                |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                        r.get(6)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((seq, row_id, op, before, after, changed_by, changed_at)) = last else {
+            return Ok(None);
+        };
+        let tx = conn.unchecked_transaction()?;
+        match op.as_str() {
+            "insert" => {
+                // 撤销插入 = 删行
+                tx.execute(&format!("DELETE FROM {table} WHERE id = ?1"), [&row_id])?;
+            }
+            "update" => {
+                // 撤销更新 = 用 before 覆盖该行（保留 id/created_at）
+                let before_val = before
+                    .as_deref()
+                    .and_then(|s| serde_json::from_str::<Value>(s).ok())
+                    .ok_or_else(|| StoreError::Io("变更记录缺 before".to_string()))?;
+                tx.execute(&format!("DELETE FROM {table} WHERE id = ?1"), [&row_id])?;
+                let params = self.row_to_params(table, &before_val, "undo")?;
+                let cols: Vec<&str> = params.iter().map(|(k, _)| k.as_str()).collect();
+                let placeholders: Vec<String> =
+                    (1..=params.len()).map(|i| format!("?{i}")).collect();
+                let sql = format!(
+                    "INSERT INTO {table} ({}) VALUES ({})",
+                    cols.join(", "),
+                    placeholders.join(", ")
+                );
+                let values: Vec<rusqlite::types::Value> =
+                    params.into_iter().map(|(_, v)| v).collect();
+                tx.execute(&sql, rusqlite::params_from_iter(values.iter()))?;
+            }
+            "delete" => {
+                // 撤销删除 = 用 before 重建行
+                let before_val = before
+                    .as_deref()
+                    .and_then(|s| serde_json::from_str::<Value>(s).ok())
+                    .ok_or_else(|| StoreError::Io("变更记录缺 before".to_string()))?;
+                let params = self.row_to_params(table, &before_val, "undo")?;
+                let cols: Vec<&str> = params.iter().map(|(k, _)| k.as_str()).collect();
+                let placeholders: Vec<String> =
+                    (1..=params.len()).map(|i| format!("?{i}")).collect();
+                let sql = format!(
+                    "INSERT INTO {table} ({}) VALUES ({})",
+                    cols.join(", "),
+                    placeholders.join(", ")
+                );
+                let values: Vec<rusqlite::types::Value> =
+                    params.into_iter().map(|(_, v)| v).collect();
+                tx.execute(&sql, rusqlite::params_from_iter(values.iter()))?;
+            }
+            _ => {
+                return Err(StoreError::Io(format!("未知变更类型: {op}")));
+            }
+        }
+        tx.execute("DELETE FROM change_log WHERE seq = ?1", [seq])?;
+        tx.commit()?;
+        Ok(Some(ChangeEntry {
+            seq,
+            table: table.to_string(),
+            row_id,
+            op,
+            before: before
+                .and_then(|s| serde_json::from_str::<Value>(s.as_str()).ok()),
+            after: after
+                .and_then(|s| serde_json::from_str::<Value>(s.as_str()).ok()),
+            changed_by,
+            changed_at,
+        }))
     }
 
     /// 条件命中总数（M4.2 条件引擎用，独立 COUNT 不受 limit 钳制）。
@@ -323,6 +587,20 @@ impl LocalSqliteStore {
                     .map_err(|e| StoreError::Sqlite(e))?;
             }
         }
+        // P6 变更历史：change_log 表（每工作台一份，记录 insert/update/delete）
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS change_log (
+                seq        INTEGER PRIMARY KEY AUTOINCREMENT,
+                tbl        TEXT NOT NULL,
+                row_id     TEXT NOT NULL,
+                op         TEXT NOT NULL,
+                before     TEXT,
+                after      TEXT,
+                changed_by TEXT NOT NULL,
+                changed_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );",
+        )
+        .map_err(StoreError::Sqlite)?;
         Ok(())
     }
 
@@ -632,7 +910,13 @@ impl WorkspaceStore for LocalSqliteStore {
                 params.into_iter().map(|(_, v)| v).collect();
             let res = conn.execute(&sql, rusqlite::params_from_iter(values.iter()));
             match res {
-                Ok(_) => ids.push(id),
+                Ok(_) => {
+                    // P6 audit：记录插入后的完整行（含默认时间戳）
+                    if let Ok(Some(after)) = self.query_row_by_id(table, &id) {
+                        let _ = self.log_change(&conn, table, &id, "insert", None, Some(&after), updated_by);
+                    }
+                    ids.push(id)
+                }
                 Err(rusqlite::Error::SqliteFailure(e, _)) => {
                     if e.code == rusqlite::ErrorCode::ConstraintViolation {
                         let msg = e.to_string();
@@ -682,9 +966,15 @@ impl WorkspaceStore for LocalSqliteStore {
         let conn = self.conn()?;
         let values: Vec<rusqlite::types::Value> =
             all_params.into_iter().map(|(_, v)| v).collect();
+        // P6 audit：更新前快照（撤销锚点）
+        let before = self.query_row_by_id(table, id)?;
         let n = conn.execute(&sql, rusqlite::params_from_iter(values.iter()))?;
         if n == 0 {
             return Err(StoreError::RowNotFound(id.to_string()));
+        }
+        // P6 audit：更新后快照 + 记录
+        if let Ok(Some(after)) = self.query_row_by_id(table, id) {
+            let _ = self.log_change(&conn, table, id, "update", before.as_ref(), Some(&after), updated_by);
         }
         Ok(())
     }
@@ -692,12 +982,18 @@ impl WorkspaceStore for LocalSqliteStore {
     fn delete(&self, table: &str, id: &str) -> Result<(), StoreError> {
         self.table_fields(table)?;
         let conn = self.conn()?;
+        // P6 audit：删除前快照（撤销重建锚点）
+        let before = self.query_row_by_id(table, id)?;
         let n = conn.execute(
             &format!("DELETE FROM {table} WHERE id = ?1"),
             [id],
         )?;
         if n == 0 {
             return Err(StoreError::RowNotFound(id.to_string()));
+        }
+        // P6 audit：记录（before 为删前完整行，after 无）
+        if let Some(b) = before {
+            let _ = self.log_change(&conn, table, id, "delete", Some(&b), None, "user");
         }
         Ok(())
     }
@@ -999,5 +1295,194 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("options"), "{err}");
+    }
+
+    // ---------------------------------------------------------------------
+    // 关键字搜索（P1）
+    // ---------------------------------------------------------------------
+
+    fn seed_vehicles(store: &LocalSqliteStore) {
+        store
+            .insert(
+                "vehicles",
+                &[
+                    serde_json::json!({ "plate": "京A12345", "status": "在用", "mileage": 12000, "active": true, "inspection_date": "2027-03-15" }),
+                    serde_json::json!({ "plate": "京B67890", "status": "维修", "mileage": 8000, "active": false }),
+                    serde_json::json!({ "plate": "沪C00001", "status": "在用", "mileage": 50000, "active": true }),
+                ],
+                "user",
+            )
+            .expect("seed");
+    }
+
+    #[test]
+    fn search_text_matches_any_text_field() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let store = open_temp(&dir);
+        seed_vehicles(&store);
+
+        // 命中 text 字段（plate 含 京A）
+        let rows = store.search_text("vehicles", "京A", 10, 0).expect("search");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["plate"], serde_json::json!("京A12345"));
+
+        // 命中 enum 字段（status=维修）
+        let rows = store.search_text("vehicles", "维修", 10, 0).expect("search2");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["plate"], serde_json::json!("京B67890"));
+
+        // 跨字段 OR：搜索词可匹配任意文本类字段
+        let rows = store.search_text("vehicles", "0", 10, 0).expect("search3");
+        assert!(rows.len() >= 2, "plate 含 0 的行应被命中: {}", rows.len());
+    }
+
+    #[test]
+    fn search_text_ignores_non_text_fields_and_empty_keyword() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let store = open_temp(&dir);
+        seed_vehicles(&store);
+
+        // number 字段不参与搜索（12000 是 mileage 值，不命中）
+        let rows = store.search_text("vehicles", "12000", 10, 0).expect("search");
+        assert!(rows.is_empty(), "number 字段不应被搜索");
+
+        // 空 keyword → 空结果
+        let rows = store.search_text("vehicles", "", 10, 0).expect("empty");
+        assert!(rows.is_empty());
+        let rows = store.search_text("vehicles", "   ", 10, 0).expect("blank");
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn count_search_text_matches_search() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let store = open_temp(&dir);
+        seed_vehicles(&store);
+
+        let n = store.count_search_text("vehicles", "在用").expect("count");
+        assert_eq!(n, 2, "status=在用 两行");
+
+        // 空 keyword → 全表数
+        let n = store.count_search_text("vehicles", "").expect("all");
+        assert_eq!(n, 3);
+    }
+
+    // ---------------------------------------------------------------------
+    // 变更历史 + 撤销（P6）
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn change_log_records_ops_in_order() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let store = open_temp(&dir);
+        seed_vehicles(&store);
+
+        // insert 产生一条 insert 记录
+        let changes = store.list_changes("vehicles", 20).expect("list");
+        assert_eq!(changes.len(), 3, "三行插入各一条");
+        assert!(changes.iter().all(|c| c.op == "insert"));
+
+        // update 产生 update 记录（倒序第一条）
+        let rows = store.query("vehicles", &[], None, 1, 0).expect("q");
+        let rid = rows[0]["id"].as_str().unwrap().to_string();
+        store
+            .update("vehicles", &rid, &serde_json::json!({ "status": "维修" }), "user")
+            .expect("update");
+        let changes = store.list_changes("vehicles", 20).expect("list2");
+        assert_eq!(changes[0].op, "update");
+        assert_eq!(changes[0].row_id, rid);
+        assert!(changes[0].before.is_some(), "update 应有 before");
+        assert!(changes[0].after.is_some(), "update 应有 after");
+
+        // delete 产生 delete 记录（before 快照）
+        store.delete("vehicles", &rid).expect("delete");
+        let changes = store.list_changes("vehicles", 20).expect("list3");
+        assert_eq!(changes[0].op, "delete");
+        assert!(changes[0].before.is_some(), "delete 应有 before 快照");
+        assert!(changes[0].after.is_none(), "delete 无 after");
+    }
+
+    #[test]
+    fn undo_insert_removes_row() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let store = open_temp(&dir);
+        seed_vehicles(&store);
+
+        let ids = store
+            .insert(
+                "vehicles",
+                &[serde_json::json!({ "plate": "京D99999", "status": "在用" })],
+                "user",
+            )
+            .expect("insert");
+        let new_id = &ids[0];
+        // 撤销最近一条 insert → 该行消失
+        let undone = store.undo_last("vehicles").expect("undo").expect("有记录");
+        assert_eq!(undone.op, "insert");
+        assert_eq!(undone.row_id, *new_id);
+        let rows = store
+            .query(
+                "vehicles",
+                &[Filter { field: "id".into(), op: FilterOp::Eq, value: serde_json::json!(new_id) }],
+                None,
+                1,
+                0,
+            )
+            .expect("q");
+        assert!(rows.is_empty(), "撤销后行应消失");
+        // 撤销记录本身也清除：seed 3 条 + 新增 1 条 = 4 条 → 3 条
+        let cl = store.list_changes("vehicles", 20).expect("cl");
+        assert_eq!(cl.len(), 3, "被撤销的记录应从 change_log 清除（seed 3 条仍在）");
+    }
+
+    #[test]
+    fn undo_update_restores_before() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let store = open_temp(&dir);
+        seed_vehicles(&store);
+
+        let rows = store.query("vehicles", &[], None, 1, 0).expect("q");
+        let rid = rows[0]["id"].as_str().unwrap().to_string();
+        let old_status = rows[0]["status"].clone();
+        store
+            .update("vehicles", &rid, &serde_json::json!({ "status": "维修" }), "user")
+            .expect("update");
+
+        store.undo_last("vehicles").expect("undo").expect("有记录");
+        let after = store
+            .query(
+                "vehicles",
+                &[Filter { field: "id".into(), op: FilterOp::Eq, value: serde_json::json!(rid) }],
+                None,
+                1,
+                0,
+            )
+            .expect("q");
+        assert_eq!(after[0]["status"], old_status, "撤销更新后恢复原值");
+    }
+
+    #[test]
+    fn undo_delete_restores_row_with_id() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let store = open_temp(&dir);
+        seed_vehicles(&store);
+
+        let rows = store.query("vehicles", &[], None, 1, 0).expect("q");
+        let rid = rows[0]["id"].as_str().unwrap().to_string();
+        let plate = rows[0]["plate"].clone();
+        store.delete("vehicles", &rid).expect("delete");
+
+        store.undo_last("vehicles").expect("undo").expect("有记录");
+        let after = store
+            .query(
+                "vehicles",
+                &[Filter { field: "id".into(), op: FilterOp::Eq, value: serde_json::json!(rid) }],
+                None,
+                1,
+                0,
+            )
+            .expect("q");
+        assert_eq!(after.len(), 1, "撤销删除后行重建");
+        assert_eq!(after[0]["plate"], plate, "重建保留原 id 与字段");
     }
 }

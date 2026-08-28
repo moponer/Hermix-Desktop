@@ -222,6 +222,24 @@ pub fn router() -> Router<HttpServerState> {
             "/api/workspace-templates/{id}/create",
             post(workspace_templates::create_from_template),
         )
+        // P3 自动化可视化：定义列表 + 触发记录
+        .route(
+            "/api/workspaces/{id}/automations",
+            get(workspaces::list_automations),
+        )
+        .route(
+            "/api/workspaces/{id}/automations/runs",
+            get(workspaces::automation_runs),
+        )
+        // P5 附件：base64 上传 + 读取（文件名白名单防穿越）
+        .route(
+            "/api/workspaces/{id}/files/upload",
+            post(workspaces::upload_file),
+        )
+        .route(
+            "/api/workspaces/{id}/files/{filename}",
+            get(workspaces::get_file),
+        )
         // 数据端点：打通 LocalSqliteStore（表名/列名过 schema 白名单）
         .route(
             "/api/workspaces/{id}/tables/{table}/query",
@@ -242,6 +260,15 @@ pub fn router() -> Router<HttpServerState> {
         .route(
             "/api/workspaces/{id}/tables/{table}/count",
             post(workspaces::count_rows),
+        )
+        // P6 变更历史：最近变更 + 撤销
+        .route(
+            "/api/workspaces/{id}/tables/{table}/changes",
+            get(workspaces::list_table_changes),
+        )
+        .route(
+            "/api/workspaces/{id}/tables/{table}/undo",
+            post(workspaces::undo_last_change),
         )
         .route("/ws/consciousness", get(consciousness::ws_consciousness))
         // GroupChat rooms

@@ -290,6 +290,9 @@ pub struct TableQueryRequest {
     pub limit: usize,
     #[serde(default)]
     pub offset: usize,
+    /// 关键字搜索（P1）：非空时跨全部文本类字段 OR LIKE（store.search_text）。
+    #[serde(default)]
+    pub keyword: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -316,6 +319,9 @@ pub struct TableDeleteRequest {
 pub struct TableCountRequest {
     #[serde(default)]
     pub filters: Vec<Filter>,
+    /// 关键字搜索（P1）：非空时按 search 口径计数。
+    #[serde(default)]
+    pub keyword: Option<String>,
 }
 
 /// PUT /{id}/layout 请求体。
@@ -334,9 +340,14 @@ pub async fn query_table(
     Json(req): Json<TableQueryRequest>,
 ) -> Result<Json<Vec<serde_json::Value>>, HttpError> {
     let store = open_data_store(&state, &id)?;
-    let rows = store
-        .query(&table, &req.filters, req.sort.as_deref(), req.limit, req.offset)
-        .map_err(|e| server_err(&e.to_string()))?;
+    let rows = match req.keyword.as_deref().map(str::trim) {
+        Some(kw) if !kw.is_empty() => store
+            .search_text(&table, kw, req.limit, req.offset)
+            .map_err(|e| server_err(&e.to_string()))?,
+        _ => store
+            .query(&table, &req.filters, req.sort.as_deref(), req.limit, req.offset)
+            .map_err(|e| server_err(&e.to_string()))?,
+    };
     Ok(Json(rows))
 }
 
@@ -389,10 +400,189 @@ pub async fn count_rows(
     Json(req): Json<TableCountRequest>,
 ) -> Result<Json<u64>, HttpError> {
     let store = open_data_store(&state, &id)?;
-    let n = store
-        .count(&table, &req.filters)
-        .map_err(|e| server_err(&e.to_string()))?;
+    let n = match req.keyword.as_deref().map(str::trim) {
+        Some(kw) if !kw.is_empty() => store
+            .count_search_text(&table, kw)
+            .map_err(|e| server_err(&e.to_string()))?,
+        _ => store
+            .count(&table, &req.filters)
+            .map_err(|e| server_err(&e.to_string()))?,
+    };
     Ok(Json(n))
+}
+
+/// GET /api/workspaces/{id}/tables/{table}/changes — 最近变更记录（P6）。
+pub async fn list_table_changes(
+    State(state): State<HttpServerState>,
+    Path((id, table)): Path<TablePath>,
+) -> Result<Json<Vec<hermix_workspace::store::ChangeEntry>>, HttpError> {
+    let store = open_data_store(&state, &id)?;
+    let changes = store
+        .list_changes(&table, 20)
+        .map_err(|e| server_err(&e.to_string()))?;
+    Ok(Json(changes))
+}
+
+/// POST /api/workspaces/{id}/tables/{table}/undo — 撤销该表最近一条变更（P6）。
+/// 返回撤销的变更记录（无变更时返回 null）。
+pub async fn undo_last_change(
+    State(state): State<HttpServerState>,
+    Path((id, table)): Path<TablePath>,
+) -> Result<Json<Option<hermix_workspace::store::ChangeEntry>>, HttpError> {
+    let store = open_data_store(&state, &id)?;
+    let undone = store
+        .undo_last(&table)
+        .map_err(|e| server_err(&e.to_string()))?;
+    Ok(Json(undone))
+}
+
+// ---------------------------------------------------------------------------
+// 自动化可视化（P3）
+// ---------------------------------------------------------------------------
+
+/// GET /api/workspaces/{id}/automations — 工作台自动化定义列表（schema 内）。
+pub async fn list_automations(
+    State(state): State<HttpServerState>,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<hermix_workspace::Automation>>, HttpError> {
+    let schema = read_schema(&state, &id)?;
+    Ok(Json(schema.automations))
+}
+
+/// 单条自动化的触发记录（自动化 id + 最近 runs）。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AutomationRunsEntry {
+    pub automation_id: String,
+    pub runs: Vec<hermix_automation::AutomationRun>,
+}
+
+/// GET /api/workspaces/{id}/automations/runs — 每个自动化的最近触发记录
+/// （最多 5 条；automation_service 未启动时 runs 为空）。
+pub async fn automation_runs(
+    State(state): State<HttpServerState>,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<AutomationRunsEntry>>, HttpError> {
+    let schema = read_schema(&state, &id)?;
+    let svc = state.automation_service.clone();
+    let mut out = Vec::new();
+    for auto in &schema.automations {
+        let aid = auto.id().to_string();
+        let runs = match &svc {
+            Some(s) => s.list_runs(&aid, 5).unwrap_or_default(),
+            None => Vec::new(),
+        };
+        out.push(AutomationRunsEntry {
+            automation_id: aid,
+            runs,
+        });
+    }
+    Ok(Json(out))
+}
+
+// ---------------------------------------------------------------------------
+// 附件上传 / 读取（P5）— base64 JSON 通道（零新依赖，axum 未启用 multipart）
+// ---------------------------------------------------------------------------
+
+/// POST /api/workspaces/{id}/files/upload — 上传附件。
+/// body: `{ name, data_base64 }`；存 `files/<uuid>.<ext>`，返回相对路径
+/// （作为 attachment 字段值落库）。
+#[derive(Debug, Clone, Deserialize)]
+pub struct FileUploadRequest {
+    pub name: String,
+    pub data_base64: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FileUploadResponse {
+    pub ok: bool,
+    /// 相对路径（`files/<filename>`），attachment 字段存此值。
+    pub path: String,
+}
+
+pub async fn upload_file(
+    State(state): State<HttpServerState>,
+    Path(id): Path<String>,
+    Json(req): Json<FileUploadRequest>,
+) -> Result<Json<FileUploadResponse>, HttpError> {
+    use base64::Engine as _;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(req.data_base64.trim())
+        .map_err(|e| bad_req(&format!("base64 解码失败: {e}")))?;
+    if bytes.is_empty() {
+        return Err(bad_req("空文件"));
+    }
+    if bytes.len() > 20 * 1024 * 1024 {
+        return Err(bad_req("附件超过 20MB 上限"));
+    }
+    // 文件名只取安全扩展名（用户文件名不落盘，防注入/穿越）
+    let ext = std::path::Path::new(&req.name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .filter(|e| !e.is_empty() && e.len() <= 10)
+        .unwrap_or_else(|| "bin".to_string());
+    let filename = format!("{}.{ext}", uuid::Uuid::new_v4().simple());
+    let dir = ws_dir(&state, &id).join("files");
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| server_err(&format!("创建附件目录失败: {e}")))?;
+    std::fs::write(dir.join(&filename), &bytes)
+        .map_err(|e| server_err(&format!("写入附件失败: {e}")))?;
+    Ok(Json(FileUploadResponse {
+        ok: true,
+        path: format!("files/{filename}"),
+    }))
+}
+
+/// 按扩展名推断 Content-Type（覆盖常见图片/文档）。
+fn mime_from_ext(ext: &str) -> &'static str {
+    match ext {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "pdf" => "application/pdf",
+        "csv" => "text/csv",
+        "json" => "application/json",
+        "txt" | "md" | "log" => "text/plain",
+        _ => "application/octet-stream",
+    }
+}
+
+/// GET /api/workspaces/{id}/files/{filename} — 读取附件。
+/// filename 白名单校验（无路径穿越），Content-Type 按扩展名。
+pub async fn get_file(
+    State(state): State<HttpServerState>,
+    Path((id, filename)): Path<(String, String)>,
+) -> Result<axum::response::Response, HttpError> {
+    // 防路径穿越：只允许纯文件名（无分隔符/..）
+    if filename.is_empty()
+        || filename.contains('/')
+        || filename.contains('\\')
+        || filename.contains("..")
+    {
+        return Err(bad_req("非法文件名"));
+    }
+    let path = ws_dir(&state, &id).join("files").join(&filename);
+    let bytes = std::fs::read(&path).map_err(|_| HttpError {
+        status: axum::http::StatusCode::NOT_FOUND,
+        message: "附件不存在".to_string(),
+    })?;
+    let ext = std::path::Path::new(&filename)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static(mime_from_ext(ext)),
+    );
+    Ok((
+        axum::http::StatusCode::OK,
+        headers,
+        bytes,
+    )
+        .into_response())
 }
 
 // ---------------------------------------------------------------------------

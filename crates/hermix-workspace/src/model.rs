@@ -197,6 +197,22 @@ pub enum Automation {
     },
 }
 
+impl Automation {
+    /// 自动化 id（Condition/LlmSummary 共用访问）。
+    pub fn id(&self) -> &str {
+        match self {
+            Automation::Condition { id, .. } | Automation::LlmSummary { id, .. } => id,
+        }
+    }
+
+    /// 自动化展示名。
+    pub fn name(&self) -> &str {
+        match self {
+            Automation::Condition { name, .. } | Automation::LlmSummary { name, .. } => name,
+        }
+    }
+}
+
 /// 工作台定义 — `workspace.json` 的完整结构。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkspaceSchema {
