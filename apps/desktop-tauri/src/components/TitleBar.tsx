@@ -1,13 +1,13 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Menu, Minus, Square, X } from "lucide-react";
+import { Menu, Minus, Square, X, Settings } from "lucide-react";
 import { useCallback } from "react";
-import { ThemeToggle } from "./ThemeToggle";
 
 interface TitleBarProps {
   onToggleSidebar: () => void;
+  onOpenSettings?: () => void;
 }
 
-export function TitleBar({ onToggleSidebar }: TitleBarProps) {
+export function TitleBar({ onToggleSidebar, onOpenSettings }: TitleBarProps) {
   const handleMinimize = useCallback(() => {
     try {
       void getCurrentWindow().minimize();
@@ -49,7 +49,7 @@ export function TitleBar({ onToggleSidebar }: TitleBarProps) {
       {/* 空白间隔区 — `no-drag` 让点击穿透到下层按钮 */}
       <div className="no-drag flex-1" />
 
-      {/* 左侧按钮组: 折叠菜单 + 主题切换. `no-drag` 包一层即可. */}
+      {/* 左侧按钮组: 折叠菜单 + 设置. `no-drag` 包一层即可. */}
       <div className="titlebar-group no-drag">
         <button
           type="button"
@@ -60,7 +60,17 @@ export function TitleBar({ onToggleSidebar }: TitleBarProps) {
         >
           <Menu size={18} />
         </button>
-        <ThemeToggle compact />
+        {onOpenSettings && (
+          <button
+            type="button"
+            onClick={onOpenSettings}
+            className="icon-btn"
+            aria-label="设置"
+            title="设置"
+          >
+            <Settings size={16} />
+          </button>
+        )}
       </div>
 
       {/* Window controls: minimize / maximize / close.
