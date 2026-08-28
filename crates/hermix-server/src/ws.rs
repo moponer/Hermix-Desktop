@@ -1,12 +1,66 @@
 //! WebSocket upgrade handlers: stream send, groupchat, event bridging.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use axum::extract::{Path, State, WebSocketUpgrade};
 use axum::extract::ws::{Message as WsMessage, WebSocket};
+use hermix_tools::extract_trust_signature;
 
 
 use super::*;
+
+/// Per-session broadcast channel registry. Lets reconnecting WS clients
+/// observe events from an agent task that is already running but lost
+/// its previous subscriber (transient WS drop, laptop sleep, switch tab).
+///
+/// The sender is created lazily on the first event for a given
+/// `session_id` and dropped when the agent task naturally completes
+/// (`session_broadcast_drop` in the `agent_handle` completion block) —
+/// at which point any still-subscribed receivers see `Closed` and exit
+/// their forward loop.
+///
+/// Events emitted BEFORE a subscriber attaches are NOT replayed here.
+/// That's covered by the DB transcript snapshot the front-end loads at
+/// reconnect time (`/api/sessions/{sid}/messages`). The broadcast is
+/// only the running-progress tail.
+type SessionBroadcastMap = Arc<Mutex<HashMap<String, tokio::sync::broadcast::Sender<WsEnvelope>>>>;
+
+static SESSION_BROADCASTS: OnceLock<SessionBroadcastMap> = OnceLock::new();
+
+fn session_broadcasts() -> &'static SessionBroadcastMap {
+    SESSION_BROADCASTS.get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
+}
+
+/// Get-or-create the per-session broadcast sender. Returns a cheap
+/// clone of the underlying `broadcast::Sender` (which itself wraps an
+/// Arc internally), so callers can stash it in a long-lived task
+/// without holding the registry mutex.
+fn session_broadcast_get_or_create(
+    session_id: &str,
+) -> tokio::sync::broadcast::Sender<WsEnvelope> {
+    let map = session_broadcasts();
+    let mut guard = map.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(tx) = guard.get(session_id) {
+        return tx.clone();
+    }
+    let (tx, _rx) = tokio::sync::broadcast::channel::<WsEnvelope>(256);
+    guard.insert(session_id.to_string(), tx.clone());
+    tx
+}
+
+/// Drop the per-session broadcast sender. Called when the agent task
+/// completes — no further events will ever be produced for this
+/// session. Existing subscribers (reconnect forwarders parked in
+/// `spawn_broadcast_forwarder`) see `Closed` on their next `recv()` and
+/// exit cleanly. A no-op if no sender was ever created for this
+/// session (e.g. short messages that completed before any event was
+/// published).
+fn session_broadcast_drop(session_id: &str) {
+    if let Ok(mut g) = session_broadcasts().lock() {
+        g.remove(session_id);
+    }
+}
 
 pub(crate) async fn ws_upgrade(
     ws: WebSocketUpgrade,
@@ -285,10 +339,59 @@ pub(crate) async fn handle_ws_stream_send(
         handles.remove(&active_key)
     };
     if let Some(handle) = stale_handle {
+        // (autonomous-continuation): same (session, text) has a live
+        // task — was the previous forward loop's agent still running
+        // when this retry arrived? Two sub-cases:
+        //   a. handle is `is_finished()` — the agent already exited
+        //      (Done was sent, forward loop is also exited). We treat
+        //      this as a zombie handle and abort + free locks so the
+        //      new send below can take over the active_sessions slot.
+        //      This is the previous behavior.
+        //   b. handle is NOT finished — the agent is genuinely still
+        //      running. With the autonomous-continuation policy (see
+        //      ws_grace.rs), we MUST NOT abort it: doing so would
+        //      strand in-flight tool calls and the user-retry message
+        //      (which is identical to the in-flight one) doesn't
+        //      actually want a new task — it's a retry of a stuck UI.
+        //      We therefore decline the new send: surface a Status
+        //      event on the CURRENT socket (not a new agent task) so
+        //      the front-end knows "this session already has a live
+        //      task; the previous one is still progressing — please
+        //      wait or click Stop". The DB transcript snapshot the
+        //      front-end already pulled at connect shows past turns;
+        //      live progress continues via the broadcast channel.
+        let handle_finished = handle.is_finished();
+        if !handle_finished {
+            tracing::info!(
+                session = %session_id,
+                text_len = request.text.len(),
+                "reconnect-while-running: declining retry — agent task is still in flight (autonomous continuation)"
+            );
+            // Send a structured Status describing the situation. The
+            // front-end surfaces this as a non-blocking banner (no
+            // red error UI). Wording avoids LLM-generated copy —
+            // it is a fixed protocol-level message.
+            let envelope = WsEnvelope {
+                version: 1,
+                request_id: request.request_id.clone().or_else(|| Some(trace_id.to_string())),
+                trace_id: trace_id.to_string(),
+                event: StreamEvent::Status {
+                    content: format!(
+                        "{{\"event\":\"task_in_flight\",\"message\":\"此会话已有正在运行的智能体任务（自动继续中）。新消息未触发新任务；请等待当前任务完成或在 UI 中点击「停止」。\"}}"
+                    ),
+                },
+            };
+            if let Ok(json) = serde_json::to_string(&envelope) {
+                let _ = sender
+                    .send(WsMessage::Text(json.into()))
+                    .await;
+            }
+            return;
+        }
         tracing::warn!(
             session = %session_id,
             text_len = request.text.len(),
-            "retry override: same (session,text) still has a live task — aborting stale task and taking over"
+            "retry override: same (session,text) has a zombie handle (agent already exited) — cleaning up and taking over"
         );
         // Abort the zombie task (same mechanism as the Stop button's
         // `agent_handle.abort()`). Its cleanup `remove` won't run, so we
@@ -568,50 +671,39 @@ pub(crate) async fn handle_ws_stream_send(
             // round-trip.
             // The closure is sync (it holds a `std::sync::Mutex` for
             // both maps — the agent loop calls this on a tokio
-            // worker thread) and extracts the canonical "command"
-            // string from the params for `terminal` tool calls.
-            // Non-terminal tools with their own allowable params
-            // (e.g. `web_extract`'s URL) can extend this branch
-            // later; the MVP only short-circuits terminal commands,
-            // matching the upstream Hermes allowlist semantics.
+            // worker thread) and extracts a tool-specific signature
+            // string from the params (e.g. first word for terminal,
+            // exact path for write_file, domain for web_extract,
+            // tool name for cua_*) via `extract_trust_signature`.
+            // The allowlist gates on `tool` so a write_file
+            // entry can't accidentally match a terminal call.
             let user_allowlist = state.user_allowlist.clone();
             let session_bypass = state.session_bypass.clone();
             let sid_for_check = session_id.to_string();
             Some(Arc::new(move |tool: &str, params: &serde_json::Value| -> bool {
-                // Extract the canonical command string for
-                // allowlist matching. We support `command` and
-                // `cmd` keys (the latter is a non-standard but
-                // seen-in-the-wild alias used by some tool
-                // wrappers).
-                let command = params
-                    .get("command")
-                    .or_else(|| params.get("cmd"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                if command.is_empty() {
+                let Some(signature) = extract_trust_signature(tool, params) else {
                     return false;
-                }
+                };
                 // Session-bypass first — it has fewer entries (in
                 // practice) and avoids the disk-backed allowlist
                 // lock when both would match.
                 if let Ok(map) = session_bypass.lock() {
                     if let Some(patterns) = map.get(&sid_for_check) {
                         for re in patterns {
-                            if re.is_match(command) {
+                            if re.is_match(&signature) {
                                 return true;
                             }
                         }
                     }
                 }
-                // Persistent allowlist.
+                // Persistent allowlist (now tool-gated).
                 if let Ok(guard) = user_allowlist.lock() {
                     if let Some(al) = guard.as_ref() {
-                        if al.matches(command) {
+                        if al.matches(tool, &signature) {
                             return true;
                         }
                     }
                 }
-                let _ = tool; // currently only `terminal` benefits, but kept for forward-compat
                 false
             }))
         },
@@ -621,6 +713,19 @@ pub(crate) async fn handle_ws_stream_send(
             let rid = request.request_id.clone();
             let sid = session_id.to_string();
             let persistence = state.session_persistence.clone();
+            // Coalesce N parallel `request_approval` events emitted
+            // in the same synchronous pre-dispatch pass into one
+            // batch envelope — see `coalescer::ApprovalCoalescer`.
+            // The single-item `RequestApproval` envelope still flows
+            // through `coalescer` for non-batched sessions: with one
+            // item the batch carries just that one item under a
+            // synthetic batch_id, which the client must handle.
+            let coalescer = crate::coalescer::ApprovalCoalescer::with_default_window(
+                tx,
+                state.approval_registry.clone(),
+                rid.clone().unwrap_or_default(),
+                trace.clone(),
+            );
             Some(Arc::new(move |extra: serde_json::Value| {
                 let request_id = extra
                     .get("request_id")
@@ -650,36 +755,6 @@ pub(crate) async fn handle_ws_stream_send(
                     .and_then(|v| v.as_str())
                     .map(|s| s.trim().to_string())
                     .filter(|s| !s.is_empty());
-                // The previous implementation used `try_send` here,
-                // which silently dropped the event if the bounded
-                // mpsc was momentarily full (channel cap is 128, set
-                // in `handle_ws_stream_send`). For most events that's
-                // fine — the next chunk will land a moment later and
-                // the UI catches up. For `request_approval` it is
-                // catastrophic: if the event is dropped the client
-                // never sees the inline card, the user can't click
-                // allow/deny, the oneshot in `ApprovalRegistry` parks
-                // forever, and the agent's `AwaitApproval` is never
-                // resolved — the stream appears to "stuck thinking"
-                // with no recovery path short of a hard restart.
-                // The first attempted fix wrapped `blocking_send` in
-                // `tokio::task::block_in_place`, but `on_event` is a
-                // SYNCHRONOUS `Fn(Value) -> ()` invoked from inside
-                // `decide_pre_tool_dispatch` (a sync function called
-                // from a tokio task). Calling `block_in_place` from
-                // this path panics with "Cannot drop a runtime in a
-                // context where blocking is not allowed" when the
-                // worker pool tears down — see tokio-1.51.1
-                // `runtime/blocking/shutdown.rs:51:21`.
-                // The current fix: spawn a fire-and-forget task that
-                // owns the `tx` clone and awaits `tx.send(envelope)`.
-                // This guarantees delivery (no `try_send` drop), keeps
-                // the synchronous `on_event` call site non-blocking,
-                // and never touches the blocking pool — eliminating
-                // the panic. The cost is the usual tokio::spawn
-                // overhead (~5μs); the bounded channel still back-
-                // pressures if the WS reader falls behind (the
-                // `.await` parks until the consumer catches up).
                 // Compute the deadline once and share it between the
                 // WS envelope (live countdown) and the persisted
                 // `ApprovalRecord` (reload countdown). Two separate
@@ -688,69 +763,26 @@ pub(crate) async fn handle_ws_stream_send(
                 // it would mean the reload-rendered countdown
                 // doesn't match what they saw live.
                 let expires_at_ms = compute_approval_deadline_ms();
-                let envelope = WsEnvelope {
-                    version: 1,
-                    request_id: rid.clone(),
-                    trace_id: trace.clone(),
-                    event: StreamEvent::RequestApproval {
+                // Hand off to the coalescer. It owns the WS push:
+                // batches items emitted within the window into one
+                // `RequestApprovalsBatch` envelope, or sends a
+                // single-item batch envelope for non-batched cases.
+                // The earlier fire-and-forget `tokio::spawn { tx.send }`
+                // dance was needed only because `on_event` is a sync
+                // closure invoked from a tokio task — `coalescer.push`
+                // handles the spawn itself, so the envelope never
+                // gets dropped on a momentarily-full channel.
+                coalescer.push(
+                    sid.clone(),
+                    hermix_transport::RequestApprovalItem {
                         request_id: request_id.clone(),
                         tool: tool.clone(),
                         arguments: arguments.clone(),
                         risk: risk.clone(),
-                        reason,
-                        // Wall-clock deadline (Unix ms) when the
-                        // server will auto-deny this request. Drives
-                        // the front-end countdown UI so the user
-                        // always knows how much budget they have
-                        // before the silent auto-deny. Computed
-                        // here and cloned into both the WS envelope
-                        // (live UI) and the persisted
-                        // `ApprovalRecord` (so a session reload can
-                        // re-render the countdown against the
-                        // original deadline, not a fresh one).
+                        reason: reason.clone(),
                         expires_at: expires_at_ms,
-                        // 4-state approval: once / session / always /
-                        // deny. The server sends the full set on
-                        // every approval card so the desktop UI
-                        // can render a single consistent button
-                        // group; clients that don't know about
-                        // `session` or `always` will see two extra
-                        // button labels and can ignore them
-                        // (back-compat). The downstream
-                        // `WsClientMessage::ApprovalResponse`
-                        // payload accepts all four values plus
-                        // the legacy 2-state `approved`/`denied`.
-                        choices: vec![
-                            hermix_transport::ApprovalChoice::Once,
-                            hermix_transport::ApprovalChoice::Session,
-                            hermix_transport::ApprovalChoice::Always,
-                            hermix_transport::ApprovalChoice::Deny,
-                        ],
                     },
-                };
-                // Move clones into the spawn — the outer `Fn` closure
-                // cannot move `tx` / `request_id` (those are needed
-                // again below for the persistence write), and the
-                // inner `async move` consumes whatever it captures.
-                let tx_for_send = tx.clone();
-                let request_id_for_log = request_id.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = tx_for_send.send(envelope).await {
-                        // The only failure mode of `Sender::send` is
-                        // "channel closed" — i.e. the WS task already
-                        // dropped its receiver (client disconnected,
-                        // or the outer stream settled). There is no
-                        // recoverable action: the user is gone. Log
-                        // at debug level so a noisy disconnect
-                        // doesn't fill the log, but keep the warning
-                        // observable for postmortem.
-                        tracing::debug!(
-                            error = %e,
-                            request_id = %request_id_for_log,
-                            "approval event dropped: WS receiver closed"
-                        );
-                    }
-                });
+                );
                 // Persist the approval row to the session timeline so it
                 // can be replayed across reloads. The decision will be
                 // filled in by `resolve_approval_message` when the user
@@ -761,7 +793,11 @@ pub(crate) async fn handle_ws_stream_send(
                 // The deadline uses the SAME value the WS envelope
                 // carried — the countdown rendered after a reload
                 // must agree with the original countdown the user
-                // saw live.
+                // saw live. Batch path is purely a UI convenience for
+                // the live turn; each `request_id` still gets its
+                // own row, and `resolve_approval_message` works
+                // identically whether the resolve came via a batch
+                // client frame or an individual one.
                 let record = hermix_agent::session_persistence::ApprovalRecord {
                     request_id: request_id.clone(),
                     tool: tool.clone(),
@@ -769,12 +805,6 @@ pub(crate) async fn handle_ws_stream_send(
                     risk,
                     decision: None,
                     decided_at: None,
-                    // Same `expires_at_ms` the WS envelope carried —
-                    // a session reload must show the user the
-                    // remaining time against the *original*
-                    // deadline, not a freshly recomputed one
-                    // (otherwise the countdown would briefly jump
-                    // backwards or forwards across a page refresh).
                     expires_at: expires_at_ms,
                     linked_assistant_id: None,
                 };
@@ -1470,6 +1500,13 @@ pub(crate) async fn handle_ws_stream_send(
             let mut rs = recent_sends.lock().unwrap_or_else(|e| e.into_inner());
             rs.remove(&active_key_clone);
         }
+        // Drop the per-session broadcast sender so any still-attached
+        // reconnect forwarder (from a stale-handle takeover) sees
+        // `Closed` on its next `recv()` and exits cleanly. Must happen
+        // AFTER the lock-release block above: `session_broadcast_drop`
+        // also takes the broadcast registry mutex, and concurrent
+        // forking could otherwise observe a half-released session.
+        session_broadcast_drop(&session_id_clone);
 
         // If the socket is dead, the send will fail silently;
         // log it for diagnostics. The frontend will get
@@ -1662,6 +1699,13 @@ pub(crate) async fn handle_ws_stream_send(
         // Release the per-session stream lock so future sends
         // (same or different content) for this session are allowed.
         active_sessions.lock().unwrap_or_else(|e| e.into_inner()).remove(&active_key_clone);
+        // Self-clean the live-task handle. With the autonomous-
+        // continuation policy the graceful-disconnect timer no longer
+        // unconditionally removes this entry (doing so while the agent
+        // is still running would open a double-spawn window on
+        // reconnect), so the agent must release its own slot on
+        // natural completion.
+        active_handles.lock().unwrap_or_else(|e| e.into_inner()).remove(&active_key_clone);
         // drop the recent_sends entry on stream completion
         // (success OR error). Otherwise a failed send ("LLM busy, try
         // later") leaves the text in the dedup map for DEDUP_WINDOW_SECS
@@ -1790,6 +1834,15 @@ pub(crate) async fn handle_ws_stream_send(
                             schedule_grace_disconnect();
                             break;
                         }
+                        // Mirror the envelope to any reconnecting subscribers
+                        // (forwarders spawned by `spawn_broadcast_forwarder`
+                        // in the stale-handle takeover path). Non-blocking:
+                        // a slow subscriber gets `Lagged` on its next recv
+                        // and the dropped events are re-pulled from the DB
+                        // transcript. No subscriber = no-op (the broadcast
+                        // channel drops the event without buffering).
+                        let _ = session_broadcast_get_or_create(session_id)
+                            .send(event_json);
                     }
                     None => {
                         exit_branch = "rx_none";
@@ -1947,7 +2000,7 @@ pub(crate) async fn handle_ws_stream_send(
                                             &request_id,
                                             choice,
                                         ).await;
-                                        if let Ok(Some(cmd)) = lookup_pending_command(
+                                        if let Ok(Some((tool, params))) = lookup_pending_approval(
                                             &state,
                                             session_id,
                                             &request_id,
@@ -1955,11 +2008,60 @@ pub(crate) async fn handle_ws_stream_send(
                                             record_approval_side_effect(
                                                 &state,
                                                 session_id,
-                                                &cmd,
+                                                &tool,
+                                                &params,
                                                 choice,
                                             );
                                         }
                                     }
+                                }
+WsClientMessage::ApprovalBatchResponse { batch_id, decision } => {
+                                    tracing::info!(
+                                        session = %session_id,
+                                        batch_id = %batch_id,
+                                        decision = %decision,
+                                        "ws_stream_send: received approval_responses_batch during streaming"
+                                    );
+                                    let choice =
+                                        hermix_transport::ApprovalChoice::from_decision_str(&decision)
+                                            .unwrap_or_else(|| {
+                                                tracing::warn!(
+                                                    session = %session_id,
+                                                    batch_id = %batch_id,
+                                                    decision = %decision,
+                                                    "unknown approval decision in batch; downgrading to Deny"
+                                                );
+                                                hermix_transport::ApprovalChoice::Deny
+                                            });
+                                    let outcome = if choice.is_approved() {
+                                        hermix_core::ApprovalOutcome::Approved
+                                    } else {
+                                        hermix_core::ApprovalOutcome::DeniedByUser
+                                    };
+                                    let pairs = state.approval_registry.resolve_batch(
+                                        session_id,
+                                        &batch_id,
+                                        outcome,
+                                    );
+                                    let mut resolved_count = 0usize;
+                                    for (rid, ok) in pairs {
+                                        if ok {
+                                            util::record_approval_resolution(
+                                                &state,
+                                                session_id,
+                                                &rid,
+                                                choice,
+                                            ).await;
+                                            resolved_count += 1;
+                                        }
+                                    }
+                                    tracing::debug!(
+                                        session = %session_id,
+                                        batch_id = %batch_id,
+                                        ?choice,
+                                        resolved = resolved_count,
+                                        "approval_responses_batch (streaming) resolved"
+                                    );
                                 }
                                 WsClientMessage::ClarifyResponse { request_id, answer } => {
                                     tracing::info!(
@@ -3002,7 +3104,7 @@ pub(crate) async fn handle_ws_stream(socket: WebSocket, state: HttpServerState, 
                                     &request_id,
                                     choice,
                                 ).await;
-                                if let Ok(Some(cmd)) = lookup_pending_command(
+                                if let Ok(Some((tool, params))) = lookup_pending_approval(
                                     &state,
                                     &session_id,
                                     &request_id,
@@ -3010,7 +3112,8 @@ pub(crate) async fn handle_ws_stream(socket: WebSocket, state: HttpServerState, 
                                     record_approval_side_effect(
                                         &state,
                                         &session_id,
-                                        &cmd,
+                                        &tool,
+                                        &params,
                                         choice,
                                     );
                                 } else {
@@ -3028,6 +3131,62 @@ pub(crate) async fn handle_ws_stream(socket: WebSocket, state: HttpServerState, 
                                 ?choice,
                                 approved,
                                 "resolved approval response (4-state)"
+                            );
+                            continue;
+                        }
+                        WsClientMessage::ApprovalBatchResponse { batch_id, decision } => {
+                            tracing::info!(
+                                session = %session_id,
+                                batch_id = %batch_id,
+                                decision = %decision,
+                                "ws_stream: received approval_responses_batch",
+                            );
+                            let choice =
+                                hermix_transport::ApprovalChoice::from_decision_str(&decision)
+                                    .unwrap_or_else(|| {
+                                        tracing::warn!(
+                                            session = %session_id,
+                                            batch_id = %batch_id,
+                                            decision = %decision,
+                                            "unknown approval decision in batch; downgrading to Deny (fail-closed)"
+                                        );
+                                        hermix_transport::ApprovalChoice::Deny
+                                    });
+                            let outcome = if choice.is_approved() {
+                                hermix_core::ApprovalOutcome::Approved
+                            } else {
+                                hermix_core::ApprovalOutcome::DeniedByUser
+                            };
+                            let pairs = state.approval_registry.resolve_batch(
+                                &session_id,
+                                &batch_id,
+                                outcome,
+                            );
+                            tracing::info!(
+                                session = %session_id,
+                                batch_id = %batch_id,
+                                ?choice,
+                                items = pairs.len(),
+                                "approval_responses_batch resolve",
+                            );
+                            let mut resolved_count = 0usize;
+                            for (rid, ok) in pairs {
+                                if ok {
+                                    util::record_approval_resolution(
+                                        &state,
+                                        &session_id,
+                                        &rid,
+                                        choice,
+                                    ).await;
+                                    resolved_count += 1;
+                                }
+                            }
+                            tracing::debug!(
+                                session = %session_id,
+                                batch_id = %batch_id,
+                                ?choice,
+                                resolved = resolved_count,
+                                "resolved approval_responses_batch (4-state)"
                             );
                             continue;
                         }
@@ -3312,73 +3471,67 @@ pub(crate) async fn handle_ws_stream(socket: WebSocket, state: HttpServerState, 
     }
 }
 
-/// Pull the canonical "command" string out of the persisted
-/// approval row for a given `(session_id, request_id)`. Returns
-/// `Ok(Some(cmd))` on hit, `Ok(None)` if the row was already
-/// resolved / evicted, `Err` on a DB error. Used by the
-/// 4-state `session` / `always` side-effect handlers below to
-/// know which command to add to the bypass / persistent list.
-/// P6 : for resource-scope approvals (file/terminal
-/// outside the declared permission profile), also extracts the
-/// `path` argument so the `Always` choice can persist the path to
-/// `config.yaml::permission_profile.granted_paths`. Returns `None`
-/// for both fields when the row doesn't exist or isn't a resource
-/// approval.
-/// IMPORTANT : both call sites invoke this helper
-/// **after** `approval_registry.resolve()`, which removes the
-/// pending row. The earlier `is_pending` guard therefore always
-/// returned `false` and silently dropped every Session/Always
-/// grant. We now rely on the persisted `messages.extra` row
-/// alone — the registry state is irrelevant for resource
-/// extraction because the data lives in SQLite.
-pub(crate) async fn lookup_pending_command(
+/// Returns the `tool` name and the raw `arguments` object from the
+/// persisted approval row so callers can re-derive the trust
+/// signature for any tool type. Used by the WS + REST `Always` /
+/// `Session` side-effect paths.
+///
+/// Like every approval lookup here, this runs **after**
+/// `approval_registry.resolve()` has removed the pending entry —
+/// the SQLite `messages.extra` row is the only surviving source.
+pub(crate) async fn lookup_pending_approval(
     state: &HttpServerState,
     session_id: &str,
     request_id: &str,
-) -> Result<Option<String>, String> {
-    // Offload the synchronous SQLite read to a blocking thread so the approval
-    // handler — which runs on the async executor that also serves every
-    // WebSocket heartbeat — never stalls on disk I/O or a db write lock.
-    //
+) -> Result<Option<(String, serde_json::Value)>, String> {
     let db_path = state.session_persistence.db_path().to_path_buf();
     let session_id = session_id.to_string();
     let request_id = request_id.to_string();
     tokio::task::spawn_blocking(move || {
-    // Pull the original arguments from the persisted approval
-    // message so we can extract the `command` field.
-    let needle = format!("%\"request_id\":\"{}\"%", request_id);
-    let conn = rusqlite::Connection::open(&db_path)
-        .map_err(|e| format!("open sessions db: {e}"))?;
-    let mut stmt = conn
-        .prepare(
-            "SELECT extra FROM messages
-             WHERE session_id = ?1 AND role = 'approval' AND extra LIKE ?2
-             LIMIT 1",
-        )
-        .map_err(|e| format!("prepare: {e}"))?;
-    let extra: Option<String> = match stmt.query_row(
-        rusqlite::params![session_id, needle],
-        |row| row.get::<_, Option<String>>(0),
-    ) {
-        Ok(s) => s,
-        Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
-        Err(e) => return Err(format!("query: {e}")),
-    };
-    let Some(extra) = extra else {
-        return Ok(None);
-    };
-    let v: serde_json::Value = serde_json::from_str(&extra)
-        .map_err(|e| format!("parse extra: {e}"))?;
-    let command = v
-        .get("arguments")
-        .and_then(|a| a.get("command"))
-        .or_else(|| v.get("arguments").and_then(|a| a.get("cmd")))
-        .and_then(|c| c.as_str())
-        .map(|s| s.to_string());
-    Ok(command)
+        let needle = format!("%\"request_id\":\"{}\"%", request_id);
+        let conn = rusqlite::Connection::open(&db_path)
+            .map_err(|e| format!("open sessions db: {e}"))?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT extra FROM messages
+                 WHERE session_id = ?1 AND role = 'approval' AND extra LIKE ?2
+                 LIMIT 1",
+            )
+            .map_err(|e| format!("prepare: {e}"))?;
+        let extra: Option<String> = match stmt.query_row(
+            rusqlite::params![session_id, needle],
+            |row| row.get::<_, Option<String>>(0),
+        ) {
+            Ok(s) => s,
+            Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
+            Err(e) => return Err(format!("query: {e}")),
+        };
+        let Some(extra) = extra else {
+            return Ok(None);
+        };
+        let v: serde_json::Value = serde_json::from_str(&extra)
+            .map_err(|e| format!("parse extra: {e}"))?;
+        let tool = v
+            .get("tool")
+            .and_then(|t| t.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        // Persisted arguments may be a JSON object or stringified
+        // JSON; tolerate both by parsing if it looks like a JSON
+        // value (starts with `{` or `[`).
+        let args_value: serde_json::Value = match v.get("arguments") {
+            Some(serde_json::Value::Object(_)) | Some(serde_json::Value::Array(_)) => {
+                v.get("arguments").cloned().unwrap_or(serde_json::Value::Null)
+            }
+            Some(serde_json::Value::String(s)) if s.trim_start().starts_with('{') => {
+                serde_json::from_str(s).unwrap_or(serde_json::Value::Null)
+            }
+            _ => serde_json::Value::Null,
+        };
+        Ok(Some((tool, args_value)))
     })
     .await
-    .map_err(|e| format!("lookup_pending_command join error: {e}"))?
+    .map_err(|e| format!("lookup_pending_approval join error: {e}"))?
 }
 
 /// P6 : lookup variant for **resource-scope** approvals
