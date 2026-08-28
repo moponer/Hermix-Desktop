@@ -650,6 +650,11 @@ export function Sidebar({
           tabIndex={0}
           style={{ cursor: "pointer" }}
           onClick={() => setMenuOpen((v) => !v)}
+          onDoubleClick={() => {
+            /* 紧急重置缩放：双击 user-card 恢复 100%（防死锁） */
+            document.documentElement.style.zoom = "1";
+            try { storage.setItem("hermix.desktop.ui-scale", "1"); } catch {}
+          }}
           onKeyDown={(e) => {
             if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setMenuOpen((v) => !v); }
           }}

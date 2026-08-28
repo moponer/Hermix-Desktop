@@ -175,6 +175,38 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
+  // ── 全局缩放快捷键（防死锁：缩放太大看不到菜单时用键盘恢复）──
+  useEffect(() => {
+    const SCALE_KEY = "hermix.desktop.ui-scale";
+    const onKey = (e: KeyboardEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      if (e.key === "0") {
+        e.preventDefault();
+        document.documentElement.style.zoom = "1";
+        try { storage.setItem(SCALE_KEY, "1"); } catch {}
+        return;
+      }
+      if (e.key === "=" || e.key === "+") {
+        e.preventDefault();
+        const cur = Number(document.documentElement.style.zoom) || 1;
+        const next = Math.min(1.5, Math.round((cur + 0.1) * 10) / 10);
+        document.documentElement.style.zoom = String(next);
+        try { storage.setItem(SCALE_KEY, String(next)); } catch {}
+        return;
+      }
+      if (e.key === "-") {
+        e.preventDefault();
+        const cur = Number(document.documentElement.style.zoom) || 1;
+        const next = Math.max(0.7, Math.round((cur - 0.1) * 10) / 10);
+        document.documentElement.style.zoom = String(next);
+        try { storage.setItem(SCALE_KEY, String(next)); } catch {}
+        return;
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   const [activeSessionId, setActiveSessionIdRaw] = useState<string | null>(() => {
     try { return storage.getItem(ACTIVE_SESSION_KEY); } catch { return null; }
   });
