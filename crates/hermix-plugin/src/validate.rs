@@ -324,6 +324,22 @@ pub fn validate_custom_app(app_dir: &Path) -> ValidationReport {
     // 让 agent 开发循环在声明「开发完成」前拦截违规，实现「一次性到位」。
     check_frontend_quality(&combined_code, &mut issues);
 
+    // B+ HTML 体积上限：>1MB 警告——大 HTML 拖慢 WebView 加载与交互响应
+    //（"慢/点击没反应"的常见源头之一），交付前提示精简或拆分。
+    if let Ok(meta) = std::fs::metadata(app_dir.join("index.html")) {
+        if meta.len() > 1024 * 1024 {
+            issues.push(issue(
+                "warning",
+                "frontend",
+                format!(
+                    "index.html 体积 {}KB 超过 1MB 阈值——大 HTML 会拖慢 WebView \
+                     加载与交互响应（慢/点击没反应的高发源头），建议精简或按模块拆分",
+                    meta.len() / 1024
+                ),
+            ));
+        }
+    }
+
     let ok = !issues.iter().any(|i| i.level == "error");
     ValidationReport { ok, issues }
 }

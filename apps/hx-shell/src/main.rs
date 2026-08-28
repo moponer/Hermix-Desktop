@@ -474,6 +474,49 @@ fn hx_append_file(args: &serde_json::Value) -> serde_json::Value {
     }
 }
 
+/// logRuntimeError({kind, message, source, line, col}) — A2 运行时错误落盘。
+/// 写 `<app_dir>/.runtime-errors.log`（dev 模式有 --app-dir）；无 app_dir 时
+/// 写 exe 目录旁 `hx-runtime-errors.log`。追加写，超 512KB 清空防膨胀。
+/// run 后 LLM/用户可读该文件拿到真实 JS 错误，杜绝"一切正常"的假完成。
+fn hx_log_runtime_error(args: &serde_json::Value) -> serde_json::Value {
+    let kind = args.get("kind").and_then(|v| v.as_str()).unwrap_or("error");
+    let message = args.get("message").and_then(|v| v.as_str()).unwrap_or("");
+    let source = args.get("source").and_then(|v| v.as_str()).unwrap_or("");
+    let line = args.get("line").and_then(|v| v.as_u64()).unwrap_or(0);
+    let col = args.get("col").and_then(|v| v.as_u64()).unwrap_or(0);
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let entry = format!("[{ts}] {kind}: {message} (at {source}:{line}:{col})\n");
+
+    let target: std::path::PathBuf = match get_app_dir_for_dev() {
+        Some(dir) => dir.join(".runtime-errors.log"),
+        None => std::env::current_exe()
+            .ok()
+            .and_then(|e| e.parent().map(|p| p.to_path_buf()))
+            .map(|d| d.join("hx-runtime-errors.log"))
+            .unwrap_or_default(),
+    };
+    if target.as_os_str().is_empty() {
+        return serde_json::json!({"ok": false, "err": "no log target"});
+    }
+    use std::io::Write;
+    match std::fs::OpenOptions::new().create(true).append(true).open(&target) {
+        Ok(mut f) => {
+            let _ = f.write_all(entry.as_bytes());
+            // 防无限膨胀：>512KB 只留最新一条
+            if let Ok(meta) = std::fs::metadata(&target) {
+                if meta.len() > 512 * 1024 {
+                    let _ = std::fs::write(&target, entry.as_bytes());
+                }
+            }
+            serde_json::json!({"ok": true})
+        }
+        Err(e) => serde_json::json!({"ok": false, "err": e.to_string()}),
+    }
+}
+
 /// removeFile(path) — 删除文件
 fn hx_remove_file(args: &serde_json::Value) -> serde_json::Value {
     let path = args.get(0).and_then(|v| v.as_str()).unwrap_or("");
@@ -979,6 +1022,8 @@ static APP_ARCHIVE: std::sync::OnceLock<Option<ParsedArchive>> = std::sync::Once
 /// Phase 6 dev 模式：startup 时若传 --app-dir，写入此 PathBuf，
 /// `app://` 请求查表时优先 PE 归档 fallback 磁盘，相对外联全活。
 static APP_DIR_FOR_DEV: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
+/// dev 模式标志（--dev）：仅 dev runner 显式传入，控制 app:// handler 优先磁盘而非内嵌归档。
+static DEV_MODE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
 fn get_app_archive() -> Option<&'static ParsedArchive> {
     APP_ARCHIVE.get_or_init(|| {
@@ -1066,7 +1111,30 @@ fn app_protocol_handler(_webview_id: &str, request: Request<Vec<u8>>) -> Respons
     } else {
         uri_path
     };
-    // 1) prod 模式：PE 归档优先
+    // dev 模式（--dev --app-dir）：磁盘优先，加载最新源码而非 loader 内嵌旧归档。
+    // 仅显式 --dev 才磁盘优先，避免破坏 prod 打包 exe 的 portable（内嵌归档）语义。
+    if DEV_MODE.get().copied().unwrap_or(false) {
+        if let Some(app_dir) = get_app_dir_for_dev() {
+            let fs_path = app_dir.join(relpath);
+            // 防越界：relpath 含 ".." 拒绝（防 ../etc/passwd）
+            if relpath.contains("..") {
+                return http::Response::builder()
+                    .status(403)
+                    .header(CONTENT_TYPE, "text/plain")
+                    .body(Cow::Owned(b"forbidden: relative path with ..".to_vec()))
+                    .unwrap();
+            }
+            if let Ok(bytes) = std::fs::read(&fs_path) {
+                let mime = mime_type(relpath);
+                return http::Response::builder()
+                    .header(CONTENT_TYPE, mime)
+                    .header("Access-Control-Allow-Origin", "*")
+                    .body(Cow::Owned(bytes))
+                    .unwrap();
+            }
+        }
+    }
+    // prod / 默认：PE 归档优先（portable，脱离应用目录也能跑）
     if let Some(archive) = get_app_archive() {
         for (rp, offset, length) in &archive.entries {
             if rp == relpath {
@@ -1082,10 +1150,9 @@ fn app_protocol_handler(_webview_id: &str, request: Request<Vec<u8>>) -> Respons
             }
         }
     }
-    // 2) dev 模式：磁盘 host（spec §8.7 Phase 6）
+    // 兜底：无 --dev 但 exe 无内嵌归档（纯壳）时仍尝试磁盘加载
     if let Some(app_dir) = get_app_dir_for_dev() {
         let fs_path = app_dir.join(relpath);
-        // 防越界：relpath 含 ".." 拒绝（防 ../etc/passwd）
         if relpath.contains("..") {
             return http::Response::builder()
                 .status(403)
@@ -1210,6 +1277,32 @@ fn main() -> wry::Result<()> {
               } catch(e) {
                 if (typeof console !== 'undefined') console.error('hx init error:', e);
               }
+
+              // ── A2 运行时错误捕获（防假完成）：JS 错误 → logRuntimeError → 落盘 ──
+              // dev/测试阶段把 window.onerror + unhandledrejection 写回宿主日志，
+              // LLM/用户 run 后可读 .runtime-errors.log 拿到真实错误，而非"一切正常"。
+              try {
+                window.__hx_reportError = function(kind, msg, src, line, col) {
+                  try {
+                    window.invoke('logRuntimeError', {
+                      kind: kind,
+                      message: String(msg || ''),
+                      source: String(src || ''),
+                      line: line || 0,
+                      col: col || 0
+                    }).catch(function(){});
+                  } catch (e) {}
+                };
+                window.onerror = function(msg, src, line, col, err) {
+                  window.__hx_reportError('error', msg, src, line, col);
+                  return false; // 不吞错误，页面默认行为保留
+                };
+                window.onunhandledrejection = function(ev) {
+                  var r = ev && ev.reason;
+                  var m = (r && r.message) ? r.message : String(r || '');
+                  window.__hx_reportError('unhandledrejection', m, '', 0, 0);
+                };
+              } catch (e) {}
             })();
         "#;
 
@@ -1240,6 +1333,9 @@ fn main() -> wry::Result<()> {
         .iter()
         .position(|a| a == "--app-id")
         .and_then(|i| args.get(i + 1).cloned());
+    // dev 模式标志：仅 run_dev 显式传入，控制 app:// handler 优先磁盘加载
+    let dev_mode_arg = args.iter().any(|a| a == "--dev");
+    let _ = DEV_MODE.set(dev_mode_arg);
     let app_dir_path: Option<std::path::PathBuf> = app_dir_arg.clone().map(std::path::PathBuf::from);
     let base_dir: Option<std::path::PathBuf> = app_dir_path
         .clone()
@@ -1415,6 +1511,8 @@ fn main() -> wry::Result<()> {
                 "win_setTitle" => hx_win_control("setTitle", &a, &win_ipc),
                 "win_startDrag" => hx_win_control("startDrag", &a, &win_ipc),
                 "win_isMaximized" => hx_win_control("isMaximized", &a, &win_ipc),
+                // A2 运行时错误捕获（防假完成）：JS onerror → 落盘 .runtime-errors.log
+                "logRuntimeError" => hx_log_runtime_error(&a),
                 // 磁盘清理器专用（向后兼容）
                 "shell_temp_file" => hx_shell_temp_file(&a),
                 "shell_fs_write" => hx_shell_fs_write(&a),

@@ -52,7 +52,7 @@ pub fn register(registry: &ToolRegistry, manager: Arc<PluginManager>) {
             Arc::new(|| true),
             vec![],
             true,
-            "Create, update, list, package, and run user-facing desktop applications using hx-shell runtime (wry/WebView2). Actions: create, propose, approve, update, list, get, delete, package, run, validate, smoke, patch, read_doc, update_doc, log_iteration, search_iterations. Every app owns 4 docs (设计方案/开发计划进度/更新迭代/README) that the agent MUST read before any change and update after any change. WARNING: `delete` is destructive (appends the app to %TEMP%/hermix-trash/<id>-<ts> but still removes the install) — the agent must request explicit user confirmation before invoking `delete`. In Default permission mode the WS approval card will fire and the human must click 允许 before the call lands.",
+            "Create, update, list, package, and run user-facing desktop applications using hx-shell runtime (wry/WebView2). Actions: create, propose, approve, update, list, get, delete, package, run, validate, smoke, patch, read_doc, update_doc, log_iteration, search_iterations. Every app owns 4 docs (设计方案/开发计划进度/更新迭代/README) that the agent MUST read before any change and update after any change. WARNING: `delete` is destructive (appends the app to %TEMP%/hermix-trash/<id>-<ts> but still removes the install) — the agent must request explicit user confirmation before invoking `delete`. In Default permission mode the WS approval card will fire and the human must click 允许 before the call lands. HARD RULE (防假完成): create/update 已自动跑 L0-L3 静态校验，失败会返回 error；修改后必须 run 测试版并读取 `<app_dir>/.runtime-errors.log`（不存在=无 JS 运行时错误），确认页面交互真实可用后才能向用户声称「完成/已实现」——绝不允许只凭代码写完就宣布完成。",
             "📦",
             None,
             RiskLevel::Dangerous,
@@ -165,11 +165,28 @@ impl CustomAppManagerHandler {
         // C 修复: 写后刷新内存, 让 list 只读内存也能看到新 app
         let _ = self.manager.scan_plugins();
 
+        // A1 强制门禁（防假完成）：创建后自动静态校验（L0-L3，不含 docs），
+        // 失败即 error——不允许"创建成功但代码是坏的"直接声称完成。
+        let report = validate_custom_app(&plugin_dir);
+        if !report.ok {
+            let issues: Vec<String> = report
+                .issues
+                .iter()
+                .map(|i| format!("  - [{}] {}", i.code, i.message))
+                .collect();
+            return Err(ToolError::ExecutionFailed(format!(
+                "应用 '{}' 已写入磁盘但自动校验未通过（{} 项问题），请修复后调用 update：\n{}",
+                entry.manifest.name,
+                report.issues.len(),
+                issues.join("\n")
+            )));
+        }
+
         let response: AppResponse = (&entry).into();
         let result = json!({
             "success": true,
             "message": format!(
-                "应用 '{}' 创建成功。docs/ 下已初始化 4 个 md, 后续 update 须先读 docs/ 再动手, 每次改动后须 log_iteration 与更新对应 md.",
+                "应用 '{}' 创建成功，且已通过自动校验（L0-L3 静态关卡）。docs/ 下已初始化 4 个 md, 后续 update 须先读 docs/ 再动手, 每次改动后须 log_iteration 与更新对应 md.",
                 entry.manifest.name
             ),
             "app": response,
@@ -292,6 +309,24 @@ impl CustomAppManagerHandler {
             .map_err(|e| ToolError::ExecutionFailed(format!("更新应用失败: {e}")))?;
         // C 修复: 写后刷新内存, 让 list 只读内存也能看到更新
         let _ = self.manager.scan_plugins();
+
+        // A1 强制门禁（防假完成）：更新后自动静态校验（L0-L3），失败即
+        // error——LLM 必须修复到通过才能进入"完成"状态，杜绝带病交付。
+        if changes_code {
+            let report = validate_custom_app(&app_dir);
+            if !report.ok {
+                let issues: Vec<String> = report
+                    .issues
+                    .iter()
+                    .map(|i| format!("  - [{}] {}", i.code, i.message))
+                    .collect();
+                return Err(ToolError::ExecutionFailed(format!(
+                    "应用 '{id}' 已更新但自动校验未通过（{} 项问题），请继续修复后再次 update：\n{}",
+                    report.issues.len(),
+                    issues.join("\n")
+                )));
+            }
+        }
 
         let mut log_result: Option<String> = None;
         if let Some(note) = iteration_note {
