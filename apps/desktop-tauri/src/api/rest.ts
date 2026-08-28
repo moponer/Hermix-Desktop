@@ -313,6 +313,8 @@ export interface WorkspaceQueryRequest {
   /** 0 = 不限；前端默认给上限防大表拖垮。 */
   limit?: number;
   offset?: number;
+  /** 关键字搜索（P1）：非空时跨全部文本类字段 OR LIKE（store.search_text）。 */
+  keyword?: string;
 }
 
 export interface WorkspaceFilter {
@@ -388,19 +390,117 @@ export async function workspaceDeleteRow(
   );
 }
 
-/** 计数。 */
+/** 计数（可带 filters 或 keyword——搜索口径计数走 count_search_text）。 */
 export async function workspaceCountRows(
   workspaceId: string,
   table: string,
   filters: WorkspaceFilter[] = [],
+  keyword?: string,
 ): Promise<number> {
   return fetchJSON<number>(
     `/api/workspaces/${encodeURIComponent(workspaceId)}/tables/${encodeURIComponent(table)}/count`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ filters }),
+      body: JSON.stringify({ filters, keyword: keyword || undefined }),
     },
+  );
+}
+
+// ── 工作台导出 / 导入（M5 协作分发，P2 前端 UI）──────────────
+
+/** 导出工作台为 .hwx 包（GET export → blob，触发浏览器下载）。 */
+export async function exportWorkspace(workspaceId: string): Promise<Blob> {
+  const response = await fetch(apiUrl(`/api/workspaces/${encodeURIComponent(workspaceId)}/export`), {
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => response.statusText);
+    throw new Error(text || `HTTP ${response.status}`);
+  }
+  return response.blob();
+}
+
+/** 导入 .hwx 包（mode: new 新建 / merge 合并到同名工作台）。 */
+export async function importWorkspace(
+  pkg: Record<string, unknown>,
+  mode: "new" | "merge" = "new",
+): Promise<{ ok: boolean; id: string; mode: string; tables: Record<string, number> }> {
+  return fetchJSON<{ ok: boolean; id: string; mode: string; tables: Record<string, number> }>(
+    "/api/workspaces/import",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ package: pkg, mode }),
+    },
+  );
+}
+
+// ── 工作台自动化可视化（P3）────────────────────────────
+
+/** 工作台自动化定义列表（schema 内）。 */
+export async function listWorkspaceAutomations(
+  workspaceId: string,
+): Promise<import("../types").WorkspaceAutomation[]> {
+  return fetchJSON<import("../types").WorkspaceAutomation[]>(
+    `/api/workspaces/${encodeURIComponent(workspaceId)}/automations`,
+  );
+}
+
+/** 每个自动化的最近触发记录（最多 5 条）。 */
+export async function workspaceAutomationRuns(
+  workspaceId: string,
+): Promise<import("../types").AutomationRunsEntry[]> {
+  return fetchJSON<import("../types").AutomationRunsEntry[]>(
+    `/api/workspaces/${encodeURIComponent(workspaceId)}/automations/runs`,
+  );
+}
+
+// ── 附件（P5）──────────────────────────────────────────
+
+/** 上传附件（base64 JSON 通道），返回相对路径（attachment 字段值）。 */
+export async function uploadWorkspaceFile(
+  workspaceId: string,
+  name: string,
+  dataBase64: string,
+): Promise<{ ok: boolean; path: string }> {
+  return fetchJSON<{ ok: boolean; path: string }>(
+    `/api/workspaces/${encodeURIComponent(workspaceId)}/files/upload`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, data_base64: dataBase64 }),
+    },
+  );
+}
+
+/** 附件读取 URL（attachment 字段值为相对路径时拼接完整地址）。 */
+export function workspaceFileUrl(workspaceId: string, path: string): string {
+  // path 形如 "files/<filename>"——只取文件名部分拼到端点（防多余前缀）
+  const filename = path.split("/").pop() ?? path;
+  return apiUrl(`/api/workspaces/${encodeURIComponent(workspaceId)}/files/${encodeURIComponent(filename)}`);
+}
+
+// ── 变更历史 + 撤销（P6）─────────────────────────────
+
+/** 表最近变更（最多 20 条，倒序）。 */
+export async function listTableChanges(
+  workspaceId: string,
+  table: string,
+): Promise<import("../types").ChangeEntry[]> {
+  return fetchJSON<import("../types").ChangeEntry[]>(
+    `/api/workspaces/${encodeURIComponent(workspaceId)}/tables/${encodeURIComponent(table)}/changes`,
+  );
+}
+
+/** 撤销该表最近一条变更，返回被撤销的记录（无变更时 null）。 */
+export async function undoLastChange(
+  workspaceId: string,
+  table: string,
+): Promise<import("../types").ChangeEntry | null> {
+  return fetchJSON<import("../types").ChangeEntry | null>(
+    `/api/workspaces/${encodeURIComponent(workspaceId)}/tables/${encodeURIComponent(table)}/undo`,
+    { method: "POST" },
   );
 }
 

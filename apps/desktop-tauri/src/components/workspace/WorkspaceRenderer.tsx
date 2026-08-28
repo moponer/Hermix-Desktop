@@ -42,6 +42,12 @@ interface WorkspaceRendererProps {
   onDeleteRow?: (moduleId: string, rowId: string) => Promise<void>;
   /** Relation 字段候选：目标表 id → 行清单。 */
   relationCandidates?: Record<string, { id: string; label: string }[]>;
+  /** 查询回调（P1）：关键字/页码变化透传给 TableView，上层拉数据。 */
+  onQuery?: (moduleId: string, keyword: string, page: number) => void;
+  /** 分页大小（P1）。 */
+  pageSize?: number;
+  /** 工作台 id（P5 附件预览/上传需要）。 */
+  workspaceId?: string;
 }
 
 export function WorkspaceRenderer({
@@ -56,6 +62,9 @@ export function WorkspaceRenderer({
   onUpdate,
   onDeleteRow,
   relationCandidates,
+  onQuery,
+  pageSize,
+  workspaceId,
 }: WorkspaceRendererProps) {
   const modules = detail.schema.modules ?? [];
   // 只随 mount 取初值；工作台切换靠父层 key 重挂载复位
@@ -110,6 +119,9 @@ export function WorkspaceRenderer({
             onInsert={onInsert}
             onUpdate={onUpdate}
             onDeleteRow={onDeleteRow}
+            onQuery={onQuery ? (keyword, page) => onQuery(active.id, keyword, page) : undefined}
+            pageSize={pageSize}
+            workspaceId={workspaceId}
           />
         ) : null}
       </div>
@@ -156,6 +168,9 @@ function ModuleContent({
   onInsert,
   onUpdate,
   onDeleteRow,
+  onQuery,
+  pageSize,
+  workspaceId,
 }: {
   module: WorkspaceModule;
   rows: Record<string, unknown>[];
@@ -169,6 +184,9 @@ function ModuleContent({
   onInsert?: (moduleId: string, values: Record<string, unknown>) => Promise<void>;
   onUpdate?: (moduleId: string, rowId: string, patch: Record<string, unknown>) => Promise<void>;
   onDeleteRow?: (moduleId: string, rowId: string) => Promise<void>;
+  onQuery?: (keyword: string, page: number) => void;
+  pageSize?: number;
+  workspaceId?: string;
 }) {
   if (module.type === "table") {
     return (
@@ -182,6 +200,9 @@ function ModuleContent({
         onUpdate={onUpdate}
         onDeleteRow={onDeleteRow}
         relationCandidates={relationCandidates}
+        onQuery={onQuery}
+        pageSize={pageSize}
+        workspaceId={workspaceId}
       />
     );
   }

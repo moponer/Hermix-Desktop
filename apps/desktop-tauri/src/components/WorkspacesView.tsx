@@ -19,6 +19,11 @@ import {
   Loader2,
   LayoutDashboard,
   LayoutGrid,
+  Download,
+  Upload,
+  Bell,
+  Settings,
+  Undo2,
   X,
 } from "lucide-react";
 import type { Layout } from "react-grid-layout";
@@ -28,6 +33,9 @@ import type {
   WorkspaceEntry,
   WorkspaceModule,
   TemplateMeta,
+  WorkspaceAutomation,
+  AutomationRunsEntry,
+  ChangeEntry,
 } from "../types";
 import { toastError, toastSuccess } from "../hooks/useToast";
 import { WorkspaceRenderer, workspacePermissions } from "./workspace/WorkspaceRenderer";
@@ -99,6 +107,16 @@ export function WorkspacesView() {
   const [templates, setTemplates] = useState<TemplateMeta[] | null>(null);
   const [showTemplates, setShowTemplates] = useState(false);
   const [creatingTemplate, setCreatingTemplate] = useState<string | null>(null);
+  // 自动化提醒面板（P3）：懒加载 + 开关
+  const [automations, setAutomations] = useState<WorkspaceAutomation[] | null>(null);
+  const [automationRuns, setAutomationRuns] = useState<AutomationRunsEntry[] | null>(null);
+  const [showAutomations, setShowAutomations] = useState(false);
+  // 设置面板（P4）：只读保护切换 + 模块清单
+  const [showSettings, setShowSettings] = useState(false);
+  const [savingPerms, setSavingPerms] = useState(false);
+  // 变更历史（P6）：各表最近变更（懒加载）+ 撤销中状态
+  const [changesByTable, setChangesByTable] = useState<Record<string, ChangeEntry[]>>({});
+  const [undoingTable, setUndoingTable] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -265,6 +283,31 @@ export function WorkspacesView() {
     }
   }, [activeId, detail]);
 
+  // P1：关键字/页码查询——TableView 搜索框/分页触发，服务端 limit/offset 拉取
+  const PAGE_SIZE = 100;
+  const handleTableQuery = useCallback(
+    async (tableId: string, keyword: string, page: number) => {
+      if (!activeId) return;
+      try {
+        const rows = await api.workspaceQueryTable(activeId, tableId, {
+          keyword: keyword || undefined,
+          limit: PAGE_SIZE,
+          offset: page * PAGE_SIZE,
+        });
+        setTableRows((prev) => ({ ...prev, [tableId]: rows }));
+      } catch (e) {
+        toastError(`搜索失败: ${String(e)}`);
+      }
+      try {
+        const n = await api.workspaceCountRows(activeId, tableId, [], keyword || undefined);
+        setTableCounts((prev) => ({ ...prev, [tableId]: n }));
+      } catch {
+        /* 提示性计数，忽略 */
+      }
+    },
+    [activeId],
+  );
+
   // ── 行 CRUD（M7 前端接通）——错误 toast 后向上抛，FormView 保持表单开启 ──
   const handleInsert = useCallback(
     async (moduleId: string, values: Record<string, unknown>) => {
@@ -423,6 +466,141 @@ export function WorkspacesView() {
     setDraft("");
   }, []);
 
+  // ── 自动化提醒面板（P3）：懒加载定义 + 触发记录 ──────────
+  const openAutomations = useCallback(async () => {
+    if (!activeId) return;
+    setShowAutomations((prev) => !prev);
+    if (automations === null) {
+      try {
+        const [defs, runs] = await Promise.all([
+          api.listWorkspaceAutomations(activeId),
+          api.workspaceAutomationRuns(activeId),
+        ]);
+        setAutomations(defs);
+        setAutomationRuns(runs);
+      } catch (e) {
+        toastError(`加载提醒失败: ${String(e)}`);
+        setShowAutomations(false);
+      }
+    }
+  }, [activeId, automations]);
+
+  // ── 设置面板（P4）：只读保护切换 ─────────────────────────
+  const handleToggleReadonly = useCallback(async () => {
+    if (!detail || !activeId || savingPerms) return;
+    setSavingPerms(true);
+    try {
+      const cur = (detail.schema.permissions ?? {}) as {
+        mode?: string;
+        allow_delete?: boolean;
+      };
+      const nextMode =
+        cur.mode === "readonly" ? ("readwrite" as const) : ("readonly" as const);
+      // 类型从 detail.schema 推断（WorkspaceSchema），无需显式导入
+      const schema = {
+        ...detail.schema,
+        permissions: { ...cur, mode: nextMode },
+      };
+      await api.updateWorkspaceSchema(activeId, schema);
+      setDetail((prev) => (prev ? { ...prev, schema } : prev));
+      toastSuccess(nextMode === "readonly" ? "已开启只读保护" : "已恢复可读写");
+    } catch (e) {
+      toastError(`保存权限失败: ${String(e)}`);
+    } finally {
+      setSavingPerms(false);
+    }
+  }, [detail, activeId, savingPerms]);
+
+  // ── 变更历史（P6）：懒加载各表最近变更 + 撤销 ────────────
+  const loadChanges = useCallback(async () => {
+    if (!activeId || !detail) return;
+    const tables = tableModules(detail.schema);
+    for (const t of tables) {
+      try {
+        const changes = await api.listTableChanges(activeId, t.id);
+        setChangesByTable((prev) => ({ ...prev, [t.id]: changes }));
+      } catch {
+        /* 变更列表失败不阻塞设置面板 */
+      }
+    }
+  }, [activeId, detail]);
+
+  const handleUndoTable = useCallback(
+    async (tableId: string) => {
+      if (!activeId || undoingTable) return;
+      setUndoingTable(tableId);
+      try {
+        const undone = await api.undoLastChange(activeId, tableId);
+        if (!undone) {
+          toastError("该表没有可撤销的变更");
+          return;
+        }
+        toastSuccess(`已撤销「${undone.op === "insert" ? "新增" : undone.op === "update" ? "修改" : "删除"}」操作`);
+        await loadChanges();
+        await reloadTable(tableId); // 行数据 + 计数同步刷新
+      } catch (e) {
+        toastError(`撤销失败: ${String(e)}`);
+      } finally {
+        setUndoingTable(null);
+      }
+    },
+    [activeId, undoingTable, loadChanges, reloadTable],
+  );
+
+  // ── 导出 / 导入（P2）─────────────────────────────────────
+  const [exporting, setExporting] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const importFileRef = useRef<HTMLInputElement | null>(null);
+
+  /** 导出当前工作台为 .hwx（GET export → blob 下载）。 */
+  const handleExport = useCallback(async () => {
+    if (!activeId || exporting) return;
+    setExporting(true);
+    try {
+      const blob = await api.exportWorkspace(activeId);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${activeId}.hwx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toastSuccess("工作台已导出 .hwx");
+    } catch (e) {
+      toastError(`导出失败: ${String(e)}`);
+    } finally {
+      setExporting(false);
+    }
+  }, [activeId, exporting]);
+
+  /** 选择 .hwx 文件 → 解析 → 导入（new 模式新建）。 */
+  const handleImportFile = useCallback(
+    async (file: File) => {
+      setImporting(true);
+      try {
+        const text = await file.text();
+        const pkg = JSON.parse(text) as Record<string, unknown>;
+        if (pkg.format !== "hermix-workspace") {
+          toastError("不是有效的 .hwx 工作台包");
+          return;
+        }
+        const res = await api.importWorkspace(pkg, "new");
+        toastSuccess(
+          `已导入「${String(pkg.name ?? res.id)}」（${Object.values(res.tables ?? {}).reduce((s, n) => s + n, 0)} 行数据）`,
+        );
+        await refresh();
+        setActiveId(res.id);
+      } catch (e) {
+        toastError(`导入失败: ${String(e)}`);
+      } finally {
+        setImporting(false);
+        if (importFileRef.current) importFileRef.current.value = "";
+      }
+    },
+    [refresh],
+  );
+
   return (
     <div className="flex h-full flex-col px-4 py-3">
       {/* ── Tab 栏 ── */}
@@ -525,6 +703,113 @@ export function WorkspacesView() {
           >
             <LayoutGrid size={13} /> 模板
           </button>
+
+          {/* P2：导出 .hwx / 导入 .hwx */}
+          <div className="flex shrink-0 items-center gap-0.5 border-l pl-1.5" style={{ borderColor: "var(--color-border-subtle)" }}>
+            <button
+              onClick={() => void handleExport()}
+              disabled={!activeId || exporting}
+              className="flex items-center gap-1 rounded-md px-2 py-1 text-[12px] transition-opacity hover:opacity-80 disabled:opacity-40"
+              style={{ color: "var(--color-text-secondary)" }}
+              title="导出当前工作台为 .hwx 包"
+            >
+              {exporting ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />} 导出
+            </button>
+            <button
+              onClick={() => importFileRef.current?.click()}
+              disabled={importing}
+              className="flex items-center gap-1 rounded-md px-2 py-1 text-[12px] transition-opacity hover:opacity-80 disabled:opacity-40"
+              style={{ color: "var(--color-text-secondary)" }}
+              title="导入 .hwx 工作台包"
+            >
+              {importing ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />} 导入
+            </button>
+            <input
+              ref={importFileRef}
+              type="file"
+              accept=".hwx,application/json"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) void handleImportFile(f);
+              }}
+            />
+          </div>
+
+          {/* P3：自动化提醒 */}
+          <div className="relative shrink-0">
+            <button
+              onClick={() => void openAutomations()}
+              disabled={!activeId}
+              className="flex items-center gap-1 rounded-md px-2 py-1 text-[12px] transition-opacity hover:opacity-80 disabled:opacity-40"
+              style={{ color: "var(--color-text-secondary)" }}
+              title="查看工作台提醒"
+            >
+              <Bell size={13} /> 提醒
+            </button>
+            {showAutomations && (
+              <div
+                className="absolute right-0 top-full z-30 mt-1 w-80 rounded-lg border p-2 shadow-lg"
+                style={{
+                  borderColor: "var(--color-border-secondary)",
+                  background: "var(--color-bg-elevated)",
+                }}
+                onMouseLeave={() => setShowAutomations(false)}
+              >
+                <div className="mb-1.5 text-[12px] font-medium" style={{ color: "var(--color-text-primary)" }}>
+                  工作台提醒
+                </div>
+                {automations === null ? (
+                  <div className="flex items-center gap-1.5 py-2 text-[12px]" style={{ color: "var(--color-text-faint)" }}>
+                    <Loader2 size={13} className="animate-spin" /> 加载中…
+                  </div>
+                ) : automations.length === 0 ? (
+                  <div className="py-2 text-[12px]" style={{ color: "var(--color-text-faint)" }}>
+                    还没有提醒 —— 在对话中告诉 Hermix「新增年检临期提醒」即可
+                  </div>
+                ) : (
+                  <div className="flex max-h-80 flex-col gap-1.5 overflow-y-auto">
+                    {automations.map((a) => {
+                      const runs = automationRuns?.find((r) => r.automation_id === a.id)?.runs ?? [];
+                      const isCond = a.kind === "condition";
+                      return (
+                        <div
+                          key={a.id}
+                          className="rounded-md border px-2.5 py-2"
+                          style={{ borderColor: "var(--color-border-secondary)", background: "var(--color-bg-base)" }}
+                        >
+                          <div className="flex items-center gap-1.5 text-[12px] font-medium" style={{ color: "var(--color-text-primary)" }}>
+                            {a.name}
+                            <span
+                              className="rounded px-1 text-[10px]"
+                              style={{ background: "var(--color-bg-elevated)", color: "var(--color-text-faint)" }}
+                            >
+                              {isCond ? "条件提醒" : "定时分析"}
+                            </span>
+                          </div>
+                          <div className="mt-0.5 text-[11px]" style={{ color: "var(--color-text-secondary)" }}>
+                            {isCond ? (
+                              <>
+                                频率 {a.frequency} · 条件 <code className="text-[10px]">{a.condition}</code>
+                              </>
+                            ) : (
+                              <>计划 {a.schedule}</>
+                            )}
+                          </div>
+                          {runs.length > 0 && (
+                            <div className="mt-1 border-t pt-1 text-[10.5px]" style={{ borderColor: "var(--color-border-subtle)", color: "var(--color-text-faint)" }}>
+                              最近触发 {runs.length} 次 · 最新 {new Date(runs[0].started_at).toLocaleString()}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
           {showTemplates && (
             <div
               className="absolute right-0 top-full z-30 mt-1 w-72 rounded-lg border p-2 shadow-lg"
@@ -579,6 +864,143 @@ export function WorkspacesView() {
             </div>
           )}
         </div>
+
+        {/* P4：工作台设置（只读保护切换 + 模块清单 + 权限状态；P6 变更历史） */}
+        <div className="relative shrink-0">
+          <button
+            onClick={() => {
+              setShowSettings((prev) => !prev);
+              void loadChanges();
+            }}
+            disabled={!activeId}
+            className="flex items-center gap-1 rounded-md px-2 py-1 text-[12px] transition-opacity hover:opacity-80 disabled:opacity-40"
+            style={{ color: "var(--color-text-secondary)" }}
+            title="工作台设置"
+          >
+            <Settings size={13} /> 设置
+          </button>
+          {showSettings && detail && (
+            <div
+              className="absolute right-0 top-full z-30 mt-1 w-72 rounded-lg border p-2 shadow-lg"
+              style={{
+                borderColor: "var(--color-border-secondary)",
+                background: "var(--color-bg-elevated)",
+              }}
+              onMouseLeave={() => setShowSettings(false)}
+            >
+              <div className="mb-1.5 text-[12px] font-medium" style={{ color: "var(--color-text-primary)" }}>
+                工作台设置
+              </div>
+              {/* 权限状态 + 只读保护切换 */}
+              <div className="rounded-md border px-2.5 py-2" style={{ borderColor: "var(--color-border-secondary)", background: "var(--color-bg-base)" }}>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-[12px]" style={{ color: "var(--color-text-primary)" }}>
+                    {perms.canWrite ? "可读写" : "🔒 只读保护"}
+                    <span className="ml-1.5 text-[10.5px]" style={{ color: "var(--color-text-faint)" }}>
+                      允许删除：{perms.canDelete ? "是" : "否"}
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => void handleToggleReadonly()}
+                    disabled={savingPerms}
+                    className="rounded-md border px-2 py-0.5 text-[11px] transition-opacity hover:opacity-80 disabled:opacity-50"
+                    style={{ borderColor: "var(--color-border-secondary)", color: "var(--color-text-secondary)" }}
+                  >
+                    {savingPerms ? (
+                      <Loader2 size={11} className="animate-spin" />
+                    ) : perms.canWrite ? (
+                      "开启只读"
+                    ) : (
+                      "恢复可写"
+                    )}
+                  </button>
+                </div>
+                <div className="mt-1 text-[10.5px]" style={{ color: "var(--color-text-faint)" }}>
+                  只读保护下所有写入（含 LLM 工具）都会被拒绝
+                </div>
+              </div>
+              {/* 模块清单 */}
+              <div className="mt-1.5 flex max-h-56 flex-col gap-1 overflow-y-auto">
+                <div className="text-[11px]" style={{ color: "var(--color-text-faint)" }}>
+                  模块（{detail.schema.modules?.length ?? 0}）
+                </div>
+                {(detail.schema.modules ?? []).map((m) => (
+                  <div
+                    key={m.id}
+                    className="flex items-center justify-between rounded border px-2 py-1 text-[11.5px]"
+                    style={{ borderColor: "var(--color-border-subtle)", color: "var(--color-text-secondary)" }}
+                  >
+                    <span className="truncate">{m.type === "table" ? "🗂️" : "📊"} {m.name}</span>
+                    <span className="shrink-0 text-[10px]" style={{ color: "var(--color-text-faint)" }}>
+                      {m.type === "table" ? `${m.fields.length} 字段` : `${m.widgets?.length ?? 0} 组件`}
+                    </span>
+                  </div>
+                ))}
+              </div>
+              {/* P6 变更历史：各表最近变更 + 撤销 */}
+              <div className="mt-1.5 flex max-h-60 flex-col gap-1.5 overflow-y-auto">
+                <div className="text-[11px]" style={{ color: "var(--color-text-faint)" }}>
+                  变更历史（撤销最近操作）
+                </div>
+                {tableModules(detail.schema).length === 0 ? (
+                  <div className="py-1 text-[11px]" style={{ color: "var(--color-text-faint)" }}>
+                    暂无表模块
+                  </div>
+                ) : (
+                  tableModules(detail.schema).map((t) => {
+                    const changes = changesByTable[t.id] ?? [];
+                    return (
+                      <div key={t.id} className="rounded border px-2 py-1.5" style={{ borderColor: "var(--color-border-subtle)" }}>
+                        <div className="flex items-center justify-between">
+                          <span className="truncate text-[11.5px]" style={{ color: "var(--color-text-secondary)" }}>
+                            {t.name}
+                          </span>
+                          <button
+                            onClick={() => void handleUndoTable(t.id)}
+                            disabled={undoingTable !== null || changes.length === 0}
+                            className="flex shrink-0 items-center gap-1 rounded border px-1.5 py-0.5 text-[10.5px] transition-opacity hover:opacity-80 disabled:opacity-40"
+                            style={{ borderColor: "var(--color-border-secondary)", color: "var(--color-text-secondary)" }}
+                            title="撤销该表最近一次操作"
+                          >
+                            {undoingTable === t.id ? (
+                              <Loader2 size={10} className="animate-spin" />
+                            ) : (
+                              <Undo2 size={10} />
+                            )}
+                            撤销
+                          </button>
+                        </div>
+                        {changes.length === 0 ? (
+                          <div className="mt-0.5 text-[10.5px]" style={{ color: "var(--color-text-faint)" }}>
+                            暂无变更
+                          </div>
+                        ) : (
+                          <div className="mt-0.5 flex flex-col gap-0.5">
+                            {changes.slice(0, 3).map((c) => (
+                              <div key={c.seq} className="flex items-center gap-1.5 text-[10.5px]" style={{ color: "var(--color-text-faint)" }}>
+                                <span
+                                  className="rounded px-1"
+                                  style={{
+                                    background: c.op === "insert" ? "var(--color-bg-elevated)" : c.op === "update" ? "var(--color-bg-tertiary)" : "var(--color-error-bg, var(--color-bg-elevated))",
+                                  }}
+                                >
+                                  {c.op === "insert" ? "新增" : c.op === "update" ? "修改" : "删除"}
+                                </span>
+                                <span className="truncate">
+                                  {c.changed_at.slice(0, 16).replace("T", " ")} · {c.changed_by}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* ── 内容区（M1.4 起由 WorkspaceRenderer 渲染 schema 模块） ── */}
@@ -596,6 +1018,9 @@ export function WorkspacesView() {
           onInsert={perms.canWrite ? handleInsert : undefined}
           onUpdate={perms.canWrite ? handleUpdateRow : undefined}
           onDeleteRow={handleDeleteRow}
+          onQuery={handleTableQuery}
+          pageSize={PAGE_SIZE}
+          workspaceId={detail.id}
         />
       ) : (
         <div

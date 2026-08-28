@@ -36,6 +36,10 @@ export interface ApprovalMessageMeta {
   args?: unknown;
   riskLevel?: string;
   decision?: ApprovalDecision | null;
+  /** True when the grant came from the「以后自动允许」button — the
+   *  server has persisted this call's signature into the allowlist.
+   *  Display-only: drives the resolved summary wording. */
+  remembered?: boolean;
   decidedAt?: string | null;
   /** Wall-clock deadline (Unix milliseconds) when the server
    *  will auto-deny this request. Mirrors the server's
@@ -325,7 +329,19 @@ export interface ExecutionTimelineEvent {
   approval_risk_level?: string;
   approval_reason?: string | null;
   approval_expires_at?: number | null;
-  approval_decision?: "approved" | "denied" | "expired" | null;
+  /** Wire `decision` persisted in the DB `extra` blob. Backend stores
+   *  the canonical 4-state strings (`once`/`session`/`always`/`deny`)
+   *  plus legacy `approved`/`expired` — normalize at ingestion
+   *  (protocolAdapter), don't compare raw values against this union. */
+  approval_decision?:
+    | "approved"
+    | "denied"
+    | "expired"
+    | "once"
+    | "session"
+    | "always"
+    | "deny"
+    | null;
   approval_decided_at?: string | null;
   /** Stable WS `tool_call_id` for tool_* events. Used by callers that
    *  need to correlate streamed chunks with their parent invocation
@@ -435,7 +451,50 @@ export type TimelineStep =
    * the render path link the approval card back to its tool entry
    * when the user wants to inspect call metadata.
    */
-  | { kind: "approval_request"; meta: ApprovalMessageMeta; toolCallId: string; createdAt: string };
+  | { kind: "approval_request"; meta: ApprovalMessageMeta; toolCallId: string; createdAt: string }
+  /**
+   * Inline permission card for a **batch** of high-risk tool calls
+   * that the agent loop fanned out within one synchronous
+   * pre-dispatch pass. The WS layer coalesces N parallel
+   * `RequestApproval` events into one `RequestApprovalsBatch`
+   * envelope; this step kind lets the UI render one card with N
+   * sub-items and resolve all of them with a single button click
+   * (`decision` applies uniformly). Mirrors
+   * `crates/hermix_transport::StreamEvent::RequestApprovalsBatch`
+   * on the wire.
+   */
+  | {
+      kind: "approval_request_batch";
+      meta: ApprovalBatchMessageMeta;
+      toolCallId: string;
+      createdAt: string;
+    };
+
+/** Per-item shape inside an [`ApprovalBatchMessageMeta`]. Mirrors
+ *  the backend `RequestApprovalItem` field-for-field. */
+export interface ApprovalRequestItem {
+  requestId: string;
+  tool: string;
+  args?: unknown;
+  risk?: string;
+  reason?: string | null;
+  /** Wall-clock deadline (Unix ms) — see `ApprovalMessageMeta::expiresAt`. */
+  expiresAt?: number | null;
+}
+
+/** Meta for a batch approval step. Same display semantics as
+ *  `ApprovalMessageMeta` but the `requestId` slot is replaced by
+ *  `batchId` (server-assigned, runtime-only) plus the full items
+ *  list. `decision` / `decidedAt` flip together for the whole batch
+ *  (one click resolves everything). */
+export interface ApprovalBatchMessageMeta {
+  batchId: string;
+  items: ApprovalRequestItem[];
+  /** Display-only — true when the user granted via「以后自动允许」. */
+  remembered?: boolean;
+  decision?: ApprovalDecision | null;
+  decidedAt?: string | null;
+}
 
 /** (C3 marker protocol): wire-mirror of the backend's
  *  `SectionGateReport`. Field names match the `serde(rename=...)`
@@ -584,9 +643,56 @@ export interface WorkspaceSchema {
   icon: string;
   modules: WorkspaceModule[];
   layout: unknown;
-  automations: unknown[];
+  automations: WorkspaceAutomation[];
   /** 权限（镜像后端 M7.2 解析视图）：缺省 = readwrite + 允许删除。 */
   permissions: WorkspacePermissions;
+}
+
+/** 工作台自动化（镜像 hermix_workspace::Automation，P3 提醒可视化）。 */
+export type WorkspaceAutomation =
+  | {
+      kind: "condition";
+      id: string;
+      name: string;
+      table: string;
+      condition: string;
+      message: string;
+      frequency: string;
+    }
+  | {
+      kind: "llm_summary";
+      id: string;
+      name: string;
+      schedule: string;
+      prompt: string;
+      output: string;
+    };
+
+/** 单个自动化的最近触发记录（P3）。 */
+export interface AutomationRunsEntry {
+  automation_id: string;
+  runs: AutomationRun[];
+}
+
+/** 触发记录（镜像 hermix_automation::AutomationRun 关键字段）。 */
+export interface AutomationRun {
+  id: string;
+  automation_id: string;
+  started_at: number;
+  status?: string;
+  summary?: string;
+}
+
+/** 变更记录（P6，镜像 hermix_workspace::store::ChangeEntry）。 */
+export interface ChangeEntry {
+  seq: number;
+  table: string;
+  row_id: string;
+  op: "insert" | "update" | "delete";
+  before?: Record<string, unknown> | null;
+  after?: Record<string, unknown> | null;
+  changed_by: string;
+  changed_at: string;
 }
 
 /** 工作台权限契约（与 hermix_workspace::WorkspacePermissions 对齐；

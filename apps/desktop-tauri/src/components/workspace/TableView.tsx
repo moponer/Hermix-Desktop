@@ -16,14 +16,17 @@ import {
   useReactTable,
   type ColumnDef,
 } from "@tanstack/react-table";
-import { Pencil, Plus, Trash2 } from "lucide-react";
+import { Pencil, Plus, Search, Trash2 } from "lucide-react";
 import type { WorkspaceField, WorkspaceModule } from "../../types";
+import * as api from "../../api";
 import { FormView } from "./FormView";
 
 const ROW_HEIGHT = 28; // px — 与 .ws-table-row 的 CSS 高度一致
 const OVERSCAN = 6; // 可见窗口上下各多渲染的行数
 /** 删除两段确认的自动复位（ms）——超时未确认回到普通态。 */
 const DELETE_CONFIRM_RESET_MS = 3000;
+/** 关键字搜索防抖（ms）——输入停顿后才触发服务端查询。 */
+const SEARCH_DEBOUNCE_MS = 300;
 
 type TableRow = Record<string, unknown>;
 
@@ -49,6 +52,12 @@ interface TableViewProps {
   onDeleteRow?: (moduleId: string, rowId: string) => Promise<void>;
   /** Relation 字段候选：目标表 id → 行清单（FormView 关系下拉）。 */
   relationCandidates?: Record<string, { id: string; label: string }[]>;
+  /** 查询回调（P1）：关键字（空串=全表）或页码变化时触发，上层拉数据。 */
+  onQuery?: (keyword: string, page: number) => void;
+  /** 分页大小（默认 100，与服务端 limit/offset 配合）。 */
+  pageSize?: number;
+  /** 工作台 id（P5 附件预览 URL 需要）。 */
+  workspaceId?: string;
 }
 
 interface EditingState {
@@ -66,8 +75,34 @@ export function TableView({
   onUpdate,
   onDeleteRow,
   relationCandidates,
+  onQuery,
+  pageSize = 100,
+  workspaceId,
 }: TableViewProps) {
-  // 列定义来自 schema 字段（id/展示名/类型），与后端校验同一份白名单
+  // P1：关键字搜索（防抖）+ 分页（页码 0 基，配合服务端 limit/offset）
+  const [searchInput, setSearchInput] = useState("");
+  const [page, setPage] = useState(0);
+  const searchTimer = useRef<number | null>(null);
+
+  const handleSearchChange = (v: string) => {
+    setSearchInput(v);
+    if (searchTimer.current !== null) window.clearTimeout(searchTimer.current);
+    // 输入停顿后才触发服务端查询；回到第 1 页
+    searchTimer.current = window.setTimeout(() => {
+      setPage(0);
+      onQuery?.(v.trim(), 0);
+    }, SEARCH_DEBOUNCE_MS);
+  };
+
+  const handlePageChange = (next: number) => {
+    setPage(next);
+    onQuery?.(searchInput.trim(), next);
+  };
+
+  const totalPages = totalCount !== null ? Math.max(1, Math.ceil(totalCount / pageSize)) : 1;
+
+  // 列定义来自 schema 字段（id/展示名/类型），与后端校验同一份白名单。
+  // attachment 字段：files/ 路径 → 图片缩略图或文件名（P5）。
   const columns = useMemo<ColumnDef<TableRow>[]>(
     () =>
       module.fields.map((f: WorkspaceField) => ({
@@ -76,8 +111,31 @@ export function TableView({
         accessorFn: (row: TableRow) => row[f.id] ?? null,
         size: 180,
         minSize: 80,
+        ...(f.type === "attachment"
+          ? {
+              cell: ({ getValue }: { getValue: () => unknown }) => {
+                const v = String(getValue() ?? "");
+                if (!v) return null;
+                if (v.startsWith("files/") && workspaceId) {
+                  const url = api.workspaceFileUrl(workspaceId, v);
+                  if (/\.(png|jpe?g|gif|webp|svg)$/i.test(v)) {
+                    return (
+                      <img
+                        src={url}
+                        alt={v}
+                        className="h-4 w-auto rounded align-middle"
+                        title={v}
+                      />
+                    );
+                  }
+                  return <span className="text-[11px]">{v.split("/").pop()}</span>;
+                }
+                return <span className="text-[11px]">{v}</span>;
+              },
+            }
+          : {}),
       })),
-    [module.fields],
+    [module.fields, workspaceId],
   );
 
   const table = useReactTable({
@@ -146,10 +204,58 @@ export function TableView({
           {rows.length} 行{truncated ? `（已截断，共 ${totalCount} 行）` : ""}
         </span>
         {loading && <span className="animate-pulse">加载中…</span>}
+
+        {/* P1：关键字搜索（防抖）+ 分页 */}
+        {onQuery && (
+          <div className="ml-auto flex items-center gap-1.5">
+            <div className="relative">
+              <Search
+                size={11}
+                className="pointer-events-none absolute left-1.5 top-1/2 -translate-y-1/2"
+                style={{ color: "var(--color-text-faint)" }}
+              />
+              <input
+                value={searchInput}
+                onChange={(e) => handleSearchChange(e.target.value)}
+                placeholder="搜索…"
+                className="w-36 rounded-md border py-0.5 pl-6 pr-1.5 text-[11.5px] outline-none"
+                style={{
+                  borderColor: "var(--color-border-secondary)",
+                  background: "var(--color-bg-input, var(--color-bg-base))",
+                  color: "var(--color-text-primary)",
+                }}
+              />
+            </div>
+            <div className="flex items-center gap-0.5">
+              <button
+                onClick={() => handlePageChange(Math.max(0, page - 1))}
+                disabled={page <= 0}
+                className="rounded px-1.5 py-0.5 transition-opacity hover:opacity-80 disabled:opacity-40"
+                style={{ color: "var(--color-text-secondary)" }}
+                title="上一页"
+              >
+                ‹
+              </button>
+              <span className="px-1 tabular-nums" style={{ color: "var(--color-text-faint)" }}>
+                {page + 1}/{totalPages}
+              </span>
+              <button
+                onClick={() => handlePageChange(Math.min(totalPages - 1, page + 1))}
+                disabled={page >= totalPages - 1}
+                className="rounded px-1.5 py-0.5 transition-opacity hover:opacity-80 disabled:opacity-40"
+                style={{ color: "var(--color-text-secondary)" }}
+                title="下一页"
+              >
+                ›
+              </button>
+            </div>
+          </div>
+        )}
+
         {perms.canWrite && onInsert && (
           <button
             onClick={() => setEditing({ mode: "add" })}
-            className="ml-auto flex items-center gap-1 rounded-md border px-2 py-0.5 transition-opacity hover:opacity-80"
+            className="flex items-center gap-1 rounded-md border px-2 py-0.5 transition-opacity hover:opacity-80"
             style={{
               borderColor: "var(--color-border-secondary)",
               color: "var(--color-text-primary)",
@@ -159,7 +265,7 @@ export function TableView({
           </button>
         )}
         {!perms.canWrite && (
-          <span className="ml-auto rounded-md border px-2 py-0.5" style={{ borderColor: "var(--color-border-secondary)", color: "var(--color-text-faint)" }}>
+          <span className="rounded-md border px-2 py-0.5" style={{ borderColor: "var(--color-border-secondary)", color: "var(--color-text-faint)" }}>
             只读
           </span>
         )}
@@ -330,6 +436,7 @@ export function TableView({
               initialValues={editing.mode === "edit" ? editing.row : undefined}
               submitLabel={editing.mode === "add" ? "新增" : "保存"}
               relationCandidates={relationCandidates}
+              workspaceId={workspaceId}
               onCancel={() => setEditing(null)}
               onSubmit={(values) => submitEditing(values)}
             />

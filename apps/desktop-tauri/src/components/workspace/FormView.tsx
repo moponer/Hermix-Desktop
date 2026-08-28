@@ -11,6 +11,7 @@
 
 import { useMemo, useState } from "react";
 import type { WorkspaceField, WorkspaceModule } from "../../types";
+import * as api from "../../api";
 
 interface FormViewProps {
   module: Extract<WorkspaceModule, { type: "table" }>;
@@ -21,6 +22,8 @@ interface FormViewProps {
   submitLabel?: string;
   /** Relation 字段候选：目标表行清单（缺省退化为文本输入）。 */
   relationCandidates?: Record<string, { id: string; label: string }[]>;
+  /** 工作台 id（P5 附件上传需要）。 */
+  workspaceId?: string;
 }
 
 type FormState = Record<string, string | boolean>;
@@ -32,6 +35,7 @@ export function FormView({
   onCancel,
   submitLabel = "保存",
   relationCandidates,
+  workspaceId,
 }: FormViewProps) {
   const [values, setValues] = useState<FormState>(() => {
     const init: FormState = {};
@@ -105,6 +109,7 @@ export function FormView({
               value={values[f.id]}
               error={errors[f.id]}
               candidates={relationCandidates?.[f.target ?? ""]}
+              workspaceId={workspaceId}
               onChange={(v) => setField(f.id, v)}
             />
           ))}
@@ -138,6 +143,7 @@ function FieldInput({
   value,
   error,
   candidates,
+  workspaceId,
   onChange,
 }: {
   field: WorkspaceField;
@@ -145,6 +151,8 @@ function FieldInput({
   error?: string;
   /** Relation 候选（field.target 表的行清单）。 */
   candidates?: { id: string; label: string }[];
+  /** 工作台 id（P5 附件上传需要）。 */
+  workspaceId?: string;
   onChange: (v: string | boolean) => void;
 }) {
   const label = (
@@ -260,15 +268,43 @@ function FieldInput({
       }
       break;
     }
-    case "attachment":
-      // 上传通道（files/<row_id>/）后端未落地，禁用并说明，防止静默丢文件
+    case "attachment": {
+      // P5：选择文件 → FileReader base64 → 上传 → 值 = 相对路径（files/<name>）
+      const current = typeof value === "string" ? value : "";
       control = (
-        <span className="flex items-center gap-2 text-[11.5px]" style={{ color: "var(--color-text-faint)" }}>
-          <input id={`ws-f-${field.id}`} type="file" disabled className="rounded-md border px-2.5 py-1.5 text-[12px]" style={inputStyle} />
-          附件上传即将支持，请先通过对话附带文件
-        </span>
+        <div className="flex flex-col gap-1">
+          <input
+            id={`ws-f-${field.id}`}
+            type="file"
+            className="rounded-md border px-2.5 py-1.5 text-[12px]"
+            style={inputStyle}
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (!f || !workspaceId) return;
+              const reader = new FileReader();
+              reader.onload = () => {
+                const b64 = String(reader.result).split(",")[1] ?? "";
+                void (async () => {
+                  try {
+                    const res = await api.uploadWorkspaceFile(workspaceId, f.name, b64);
+                    onChange(res.path);
+                  } catch (err) {
+                    console.error("上传附件失败", err);
+                  }
+                })();
+              };
+              reader.readAsDataURL(f);
+            }}
+          />
+          {current && (
+            <span className="truncate text-[11px]" style={{ color: "var(--color-text-secondary)" }}>
+              已选: {current}
+            </span>
+          )}
+        </div>
       );
       break;
+    }
     default: // text
       control = (
         <input
