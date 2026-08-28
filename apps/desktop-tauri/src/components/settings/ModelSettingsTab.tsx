@@ -39,7 +39,7 @@ export function ModelTab() {
   const [info, setInfo] = useState("");
   const [activeKeys, setActiveKeys] = useState<Record<string, boolean>>({});
   const [customIdsWithKey, setCustomIdsWithKey] = useState<Set<string>>(new Set());
-  const [expandedProviders, setExpandedProviders] = useState<Set<string>>(new Set());
+  const [selectedProviderId, setSelectedProviderId] = useState<string | null>(null);
   const [providerKeyInput, setProviderKeyInput] = useState<Record<string, string>>({});
   // 单行短暂绿闪用的 key（fid），700ms 后自清
   const [flashKey, setFlashKey] = useState<string | null>(null);
@@ -302,13 +302,7 @@ export function ModelTab() {
   const defaultModels = fetchedModels[defaultProvId] ?? [];
   const hasAnyConfigurable = selectableProviders.length > 0;
 
-  const toggleProviderExpanded = (id: string) => {
-    setExpandedProviders((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
-    });
-  };
+  // select 下拉直接控制 selectedProviderId，无需 toggle 函数
 
   return (
     <div className="flex flex-col h-full">
@@ -404,26 +398,83 @@ export function ModelTab() {
           )}
         </section>
 
-        {/* ── SECTION 3: 供应商折叠面板 ── */}
+        {/* ── SECTION 3: 供应商选择器 ── */}
         <section className="px-6 py-5">
           <h2 className="text-[15px] font-semibold text-text-primary mb-3">供应商</h2>
-          <div className="space-y-1.5">
-            {PROVIDERS.map((p) => (
-              <ProviderAccordionItem
-                key={p.id}
-                provider={p}
-                expanded={expandedProviders.has(p.id)}
-                configured={activeKeys[p.id]}
-                modelCount={fetchedModels[p.id]?.length ?? 0}
-                loading={loadingProvider === p.id}
-                keyInput={providerKeyInput[p.id] ?? ""}
-                onToggle={() => toggleProviderExpanded(p.id)}
-                onKeyInputChange={(v) => setProviderKeyInput((prev) => ({ ...prev, [p.id]: v }))}
-                onFetch={() => fetchModelsForProvider(p)}
-              />
-            ))}
+          <div className="flex items-center gap-3">
+            <select
+              value={selectedProviderId ?? ""}
+              onChange={(e) => setSelectedProviderId(e.target.value || null)}
+              className="flex-1 bg-bg-card border border-border-primary rounded-lg px-3 py-2.5 text-[13px] text-text-primary outline-none focus:border-accent appearance-none cursor-pointer"
+            >
+              <option value="" disabled>选择供应商...</option>
+              {PROVIDERS.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {activeKeys[p.id] ? "✓ " : ""}{p.name} — {p.description}
+                </option>
+              ))}
+            </select>
+            {selectedProviderId && (
+              <button
+                onClick={() => setSelectedProviderId(null)}
+                className="text-[12px] text-text-muted hover:text-text-primary px-2 py-1 shrink-0"
+                title="收起"
+              >
+                收起
+              </button>
+            )}
           </div>
-          <p className="mt-4 text-[11px] text-text-muted italic">自定义 OpenAI 兼容服务商请前往「自定义提供商」标签页配置。</p>
+
+          {/* 选中后的配置面板 */}
+          {selectedProviderId && (() => {
+            const p = PROVIDERS.find((x) => x.id === selectedProviderId);
+            if (!p) return null;
+            const configured = activeKeys[p.id] ?? false;
+            const modelCount = fetchedModels[p.id]?.length ?? 0;
+            const loading = loadingProvider === p.id;
+            const keyInput = providerKeyInput[p.id] ?? "";
+            return (
+              <div className="mt-3 rounded-lg border border-border-primary bg-bg-card overflow-hidden">
+                <div className="flex items-center gap-2 px-3 py-2.5 border-b border-border-primary">
+                  <ProviderIcon providerId={p.id} size={18} title={p.name} />
+                  <div className="flex-1 min-w-0">
+                    <div className="font-medium text-[13px] text-text-primary">{p.name}</div>
+                    <div className="text-[10px] text-text-muted">{p.description}</div>
+                  </div>
+                  {configured && <span className="w-2 h-2 rounded-full bg-green-400 shrink-0" title="已配置 API Key" />}
+                  {modelCount > 0 && (
+                    <span className="text-[11px] text-text-faint shrink-0">{modelCount} 模型</span>
+                  )}
+                </div>
+                <div className="p-3 space-y-2">
+                  <div className="flex gap-2">
+                    <input
+                      type="password"
+                      value={keyInput}
+                      onChange={(e) => setProviderKeyInput((prev) => ({ ...prev, [p.id]: e.target.value }))}
+                      placeholder={configured ? "已配置,输入新 Key 以更新" : `输入 ${p.name} API Key`}
+                      className="flex-1 bg-bg-tertiary border border-border-primary rounded px-2.5 py-1.5 text-[12px] text-text-primary placeholder-text-muted outline-none"
+                      onKeyDown={(e) => { if (e.key === "Enter") fetchModelsForProvider(p); }}
+                    />
+                    <button
+                      onClick={() => fetchModelsForProvider(p)}
+                      disabled={loading}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded text-[12px] bg-accent hover:bg-accent-hover text-accent-on-text disabled:opacity-40 shrink-0"
+                    >
+                      <RefreshCw size={12} className={loading ? "animate-spin" : ""} />
+                      {loading ? "获取中" : configured ? "重新获取" : "获取模型"}
+                    </button>
+                  </div>
+                  <p className="text-[10px] text-text-muted">
+                    {modelCount > 0
+                      ? `已获取 ${modelCount} 个模型 → 切到上方「已启用模型」勾选启用`
+                      : "填写 API Key 后点击获取,模型会缓存到本地并自动启用"}
+                  </p>
+                </div>
+              </div>
+            );
+          })()}
+          <p className="mt-4 text-[11px] text-text-muted italic">自定义 OpenAI 兼容服务商请前往「自定义模型」标签页配置。</p>
         </section>
       </div>
     </div>
@@ -490,69 +541,6 @@ function EnabledModelRow({ row, flashed, onSetDefault, onRemove, onSetContext }:
         <Trash2 size={12} />
       </button>
     </li>
-  );
-}
-
-// ── 供应商折叠面板 ──
-function ProviderAccordionItem({ provider, expanded, configured, modelCount, loading, keyInput, onToggle, onKeyInputChange, onFetch }: {
-  provider: ProviderDef;
-  expanded: boolean;
-  configured: boolean;
-  modelCount: number;
-  loading: boolean;
-  keyInput: string;
-  onToggle: () => void;
-  onKeyInputChange: (v: string) => void;
-  onFetch: () => void;
-}) {
-  return (
-    <div className="rounded-lg border border-border-primary bg-bg-card overflow-hidden">
-      <button
-        onClick={onToggle}
-        className="w-full flex items-center gap-2 px-3 py-2 text-left text-[12px] hover:bg-bg-tertiary"
-      >
-        <ChevronRight
-          size={14}
-          className={`shrink-0 text-text-muted transition-transform duration-150 ${expanded ? "rotate-90" : ""}`}
-        />
-        <ProviderIcon providerId={provider.id} size={16} title={provider.name} />
-        <div className="flex-1 min-w-0">
-          <div className="font-medium text-text-primary truncate">{provider.name}</div>
-          <div className="text-[10px] text-text-muted truncate">{provider.description}</div>
-        </div>
-        {configured && <span className="w-1.5 h-1.5 rounded-full bg-green-400 shrink-0" />}
-        {modelCount > 0 && (
-          <span className="text-[10px] text-text-faint shrink-0">{modelCount} 模型</span>
-        )}
-      </button>
-      {expanded && (
-        <div className="border-t border-border-primary p-3 bg-bg-primary space-y-2">
-          <div className="flex gap-2">
-            <input
-              type="password"
-              value={keyInput}
-              onChange={(e) => onKeyInputChange(e.target.value)}
-              placeholder={configured ? "已配置,输入新 Key 以更新" : `输入 ${provider.name} API Key`}
-              className="flex-1 bg-bg-tertiary border border-border-primary rounded px-2.5 py-1.5 text-[12px] text-text-primary placeholder-text-muted outline-none"
-              onKeyDown={(e) => { if (e.key === "Enter") onFetch(); }}
-            />
-            <button
-              onClick={onFetch}
-              disabled={loading}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded text-[12px] bg-accent hover:bg-accent-hover text-accent-on-text disabled:opacity-40 shrink-0"
-            >
-              <RefreshCw size={12} className={loading ? "animate-spin" : ""} />
-              {loading ? "获取中" : configured ? "重新获取" : "获取模型"}
-            </button>
-          </div>
-          <p className="text-[10px] text-text-muted">
-            {modelCount > 0
-              ? `已获取 ${modelCount} 个模型 → 切到上方「已启用模型」勾选启用`
-              : "填写 API Key 后点击获取,模型会缓存到本地并自动启用"}
-          </p>
-        </div>
-      )}
-    </div>
   );
 }
 
