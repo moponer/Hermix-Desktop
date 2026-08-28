@@ -21,7 +21,9 @@ import { describeToolArgs } from "./bubbleUtils";
  */
 export interface ApprovalRequestViewProps {
   meta: ApprovalMessageMeta;
-  onApprove?: (requestId: string) => void;
+  /** `remember=true` carries the「以后自动允许」intent through to the
+   *  server-side allowlist; defaults to false (one-shot allow). */
+  onApprove?: (requestId: string, remember?: boolean) => void;
   onDeny?: (requestId: string) => void;
 }
 
@@ -118,6 +120,14 @@ export function ApprovalRequestView({
               >
                 允许
               </button>
+              <button
+                type="button"
+                className="apv-always"
+                title="相同命令之后将自动同意，不再询问"
+                onClick={() => onApprove?.(meta.requestId, true)}
+              >
+                以后自动允许
+              </button>
             </div>
           )}
         </div>
@@ -128,7 +138,7 @@ export function ApprovalRequestView({
         </div>
       </div>
 
-      {/* Collapsed one-line summary (resolved state) — tool | desc | status | result */}
+      {/* Collapsed one-line summary (resolved state) */}
       {decided && (
         <div className="approval-summary">
           <span className={`approval-summary-icon approval-summary-icon-${approved ? "ok" : isExpired ? "expired" : "err"}`}>
@@ -139,16 +149,16 @@ export function ApprovalRequestView({
                 : <X size={12} />}
           </span>
           <span className="approval-summary-tool">{meta.tool}</span>
+          <span className="approval-summary-sep">·</span>
           <span className="approval-summary-desc">{desc}</span>
-          <span className={`approval-summary-badge approval-summary-badge-${approved ? "ok" : isExpired ? "expired" : "err"}`}>
-            {approved ? "你已允许" : isExpired ? "已超时" : "你已拒绝"}
-          </span>
-          <span className="approval-summary-result">
+          <span className="approval-summary-status">
             {approved
-              ? "你已批准，操作继续执行"
+              ? meta.remembered
+                ? "已批准 · 自动通过"
+                : "已批准 · 继续执行"
               : isExpired
-                ? "超时未处理，操作已自动取消"
-                : "你已拒绝，操作已中止"}
+                ? "已超时 · 已取消"
+                : "已拒绝 · 已中止"}
           </span>
         </div>
       )}
@@ -171,7 +181,7 @@ export function ApprovalCard({
 }: {
   message: ChatMessage;
   workspaceRoot?: string | null;
-  onApprove?: (requestId: string) => void;
+  onApprove?: (requestId: string, remember?: boolean) => void;
   onDeny?: (requestId: string) => void;
 }) {
   const meta = message.approval;

@@ -1937,20 +1937,19 @@
 .approval-summary {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 0 14px;
+  gap: 6px;
+  padding: 0 16px;
   height: 0;
   opacity: 0;
   overflow: hidden;
   transition: height 280ms cubic-bezier(0.4, 0, 0.2, 1),
               opacity 180ms ease 60ms,
               padding 280ms ease;
-  white-space: nowrap;
 }
 .approval-card.is-resolved .approval-summary {
-  height: 48px;
+  height: 44px;
   opacity: 1;
-  padding: 0 14px;
+  padding: 0 16px;
 }
 
 .approval-summary-icon {
@@ -1976,10 +1975,22 @@
 .approval-summary-desc {
   font-size: 11.5px;
   color: var(--color-text-secondary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  flex: 1;
-  min-width: 0;
+  flex-shrink: 0;
+}
+
+.approval-summary-sep {
+  color: var(--color-text-tertiary, #aaa);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+/* 右侧状态文字 — push to end via margin-left: auto on parent gap,
+   or use flex:1 + text-align right approach. Simpler: status gets ml-auto */
+.approval-summary-status {
+  font-size: 11px;
+  color: var(--color-text-tertiary, #999);
+  margin-left: auto;
+  flex-shrink: 0;
 }
 
 .approval-summary-badge {
@@ -2131,6 +2142,124 @@
 }
 .dark .approval-card.is-warn .approval-head {
   background: rgba(217, 119, 6, 0.14);
+}
+
+/* Reasoning ticker — single-line rolling indicator beside the
+   bottom-of-chat status pill. Shows the latest captured reasoning
+   line when the user has the fold closed; cycles every 3s by
+   default (component prop). The pill + ticker share a row via the
+   `.msg-channel` flex container in `ChatIndicators.tsx`. */
+.reasoning-ticker {
+  display: inline-flex;
+  align-items: center;
+  max-width: 320px;
+  height: 22px;
+  line-height: 22px;
+  padding: 0 10px;
+  margin-left: 10px;
+  border-radius: 11px;
+  background: var(--color-bg-secondary, rgba(0, 0, 0, 0.04));
+  color: var(--color-text-secondary, #475569);
+  font-size: 12px;
+  font-style: italic;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  border: 1px solid color-mix(in srgb, var(--color-text-faint, #94a3b8) 24%, transparent);
+  vertical-align: middle;
+}
+.dark .reasoning-ticker {
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.65);
+}
+.reasoning-ticker-line {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  animation: reasoning-ticker-fade 200ms ease-out;
+}
+@keyframes reasoning-ticker-fade {
+  from { opacity: 0; transform: translateY(2px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .reasoning-ticker-line { animation: none; }
+}
+
+/* Batch approval card — `kind: "approval_request_batch"` step in the
+   process timeline. Renders one card with a list of sub-actions;
+   the `.tl-approval--leaving` collapse-out keyframe (above) drives
+   the resolved-state fold so the visual contract matches the
+   single-card path. */
+.tl-approval-step--batch .approval-card {
+  border-left: 3px solid color-mix(in srgb, var(--color-warn, #d97706) 60%, transparent);
+}
+.apv-batch-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 200px;
+  overflow-y: auto;
+  border-top: 1px solid color-mix(in srgb, var(--color-text-faint, #94a3b8) 18%, transparent);
+  padding-top: 8px;
+}
+.apv-batch-item {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-text-secondary, #475569);
+}
+.apv-batch-tool {
+  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-weight: 600;
+  color: var(--color-text-primary, #1a1a1a);
+}
+.apv-batch-sep {
+  color: var(--color-text-faint, #94a3b8);
+}
+.apv-batch-intent {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+/* Resolve-then-collapse for inline timeline approval cards. Pinned
+   to the wrapper `<div class="tl-approval-step">` so the collapse
+   takes down the whole card row in the assistant's process timeline,
+   not just the inner `.approval-card` body. Timing: a brief summary
+   beat (~0.6s) gives the user time to read the resolved status,
+   then the wrapper folds to 0 height over 280ms. With `forwards` the
+   card stays in its zero-height state for the rest of the live turn
+   (preventing the ~1s dead-air that an instant unmount would leave
+   until the next LLM event arrives). */
+@keyframes tl-approval-leave {
+  to {
+    max-height: 0;
+    opacity: 0;
+    margin-top: 0;
+    margin-bottom: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    border-width: 0;
+    overflow: hidden;
+  }
+}
+.tl-approval-step.tl-approval--leaving {
+  animation: tl-approval-leave 280ms cubic-bezier(0.4, 0, 0.2, 1) 600ms forwards;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tl-approval-step.tl-approval--leaving {
+    animation-duration: 1ms;
+    animation-delay: 0ms;
+  }
 }
 
 /* Command block — full text, no ellipsis, with copy button */
@@ -2632,6 +2761,24 @@
   background: var(--color-btn-primary-hover, #000000);
   border-color: var(--color-btn-primary-hover, #000000);
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.14);
+}
+
+/* 以后自动允许: 第三档，描边淡，hover 时次主调强调；不带阴影 */
+.apv-always {
+  background: transparent;
+  border-color: color-mix(in srgb, var(--color-btn-primary-bg, #1a1a1a) 28%, transparent);
+  color: var(--color-btn-primary-bg, #1a1a1a);
+}
+.apv-always:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-btn-primary-bg, #1a1a1a) 8%, transparent);
+  border-color: var(--color-btn-primary-bg, #1a1a1a);
+}
+.dark .apv-always {
+  color: var(--color-btn-primary-text, #ffffff);
+  border-color: color-mix(in srgb, var(--color-btn-primary-text, #ffffff) 30%, transparent);
+}
+.dark .apv-always:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-btn-primary-text, #ffffff) 10%, transparent);
 }
 
 /* ── 第 2 行: 命令块 (仅命令文本, 标题栏/复制已移除) ───────────── */
