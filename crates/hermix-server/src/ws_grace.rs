@@ -82,14 +82,36 @@ pub fn schedule_grace_disconnect(
         if let Ok(mut g) = pg.lock() {
             g.remove(&gk);
         }
-        // Soft-signal the orphaned agent task to drain. The agent
-        // removes its own `active_handles` entry on the
-        // approval-wakeup branch; this remove() is a belt-and-
-        // suspenders guard for the unlikely case the agent is past
-        // its approval wait and just looping on tool output.
+        // Autonomous-continuation policy: a WS disconnect MUST NOT
+        // interrupt the agent *loop*. The agent keeps running in the
+        // background and persists its result; a reconnecting client
+        // resumes via the `completed_keys` replay path (or observes
+        // the still-running task).
+        //
+        // We still fire `notify.notify_one()` so any *pending approval
+        // wait* wakes immediately as `ChannelClosed` and the agent
+        // self-drains that turn (auto-denies + continues) instead of
+        // blocking until the 30s approval timeout. What we no longer
+        // do is call `InterruptController::interrupt` to halt future
+        // turns — that removal lives in `local_agent_service.rs`.
+        //
+        // `active_handles` cleanup is gated on the agent having
+        // actually finished. If the agent is still alive at grace
+        // time we leave the entry in place — removing it would open
+        // a double-spawn window if a reconnect arrives while the
+        // autonomous task is running. The agent removes its own
+        // `active_handles` entry on natural completion (see
+        // `handle_ws_stream_send`'s completion block in ws.rs).
         notify.notify_one();
-        if let Ok(mut g) = ah.lock() {
-            g.remove(&gk);
+        let finished = ah
+            .lock()
+            .ok()
+            .and_then(|g| g.get(&gk).map(|h| h.is_finished()))
+            .unwrap_or(false);
+        if finished {
+            if let Ok(mut g) = ah.lock() {
+                g.remove(&gk);
+            }
         }
     });
 

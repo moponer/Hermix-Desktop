@@ -2668,35 +2668,21 @@ impl AgentService for LocalAgentService {
                 guard.insert(sid, ctrl);
             }
         }
-        // (WS-disconnect early-exit): spawn a background task that
-        // watches the `shutdown` Notify. When the server's WS forward
-        // loop detects the client disconnected (heartbeat ping fail,
-        // socket send fail, or close frame received), it fires
-        // `notify_one()` on this Notify. This task translates that
-        // signal into an `interrupt()` on the agent's
-        // InterruptController, so the agent loop's existing
-        // `take_interrupt_graceful()` check (which runs before each
-        // LLM call) catches it at the next turn boundary and exits
-        // gracefully — instead of continuing to make LLM API calls
-        // when no client is listening.
+        // (WS-disconnect autonomous-continuation): the `shutdown`
+        // Notify is still wired into the agent's `AgentOverrides` so
+        // that `tool_dispatch` can race *pending approval waits*
+        // against it — when the WS drops, an in-flight approval wakeup
+        // fires `ChannelClosed` and the agent self-drains that turn
+        // (writes a denial note + continues) instead of blocking on
+        // the 30s approval timeout.
         //
-        // IMPORTANT: this only prevents FUTURE LLM calls. If the
-        // agent is in the middle of an LLM call when the WS dies,
-        // that call will complete (we can't cancel an in-flight HTTP
-        // request), but the agent won't start a new turn. The partial
-        // result from the current turn IS persisted by
-        // `graceful_interrupt_result`.
-        if let Some(ref shutdown_notify) = effective_overrides.shutdown {
-            let ctrl = agent.interrupt.clone();
-            let notify = shutdown_notify.clone();
-            tokio::spawn(async move {
-                notify.notified().await;
-                tracing::info!(
-                    "WS disconnect detected via shutdown Notify — interrupting agent loop to prevent wasted LLM calls"
-                );
-                ctrl.interrupt(None);
-            });
-        }
+        // What we deliberately NO LONGER do here is `interrupt()` the
+        // agent loop on disconnect. The agent keeps running in the
+        // background regardless of client connection state and
+        // persists its final result; a reconnecting client resumes
+        // via the `completed_keys` replay path. This is the
+        // "autonomously continue" policy — a transient disconnect
+        // must never abort an in-flight task.
         let result = agent
             .run_stream(messages.clone(), None, Some(boxed_on_chunk))
             .await;
