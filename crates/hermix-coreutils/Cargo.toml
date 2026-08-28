@@ -21,3 +21,4 @@ similar = "2"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 tar = "0.4"
 shell-words = "1.1"
+sysinfo = { workspace = true }

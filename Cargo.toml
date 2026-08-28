@@ -154,6 +154,7 @@ indexmap = { version = "2", features = ["serde"] }
 once_cell = "1"
 md5 = "0.7"
 tiktoken-rs = "0.6"
+sysinfo = "0.33"
 proptest = "1"
 
 # Plugin/extension registration via link-time collection

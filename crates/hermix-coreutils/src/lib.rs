@@ -13,6 +13,8 @@
 //! Tier2 (text processing, in [`tier2`]): `sed / diff / tr / cut /
 //! rev / paste / tee / xargs / sha256sum`.
 //!
+//! Tier3 (system information, in [`tier3`]): `ps / df / du / whoami`.
+//!
 //! Tier4 (compression, in [`tier4`]): `zip / unzip / zipinfo`.
 //!
 //! Anything not in scope returns `Ok(None)` from [`dispatch`], which
@@ -97,6 +99,11 @@ pub fn dispatch(
         "zip" => Some(tier4::cmd_zip(args, cwd)?),
         "unzip" => Some(tier4::cmd_unzip(args, cwd)?),
         "zipinfo" => Some(tier4::cmd_zipinfo(args, cwd)?),
+        // Tier3
+        "ps" => Some(tier3::cmd_ps(args, cwd)?),
+        "df" => Some(tier3::cmd_df(args, cwd)?),
+        "du" => Some(tier3::cmd_du(args, cwd)?),
+        "whoami" => Some(tier3::cmd_whoami(args, cwd)?),
         // Not ours
         _ => None,
     };
@@ -1623,6 +1630,212 @@ pub mod tier4 {
             ));
         }
         Ok(ok(out))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tier3: system information commands (ps / df / du / whoami)
+// ---------------------------------------------------------------------------
+pub mod tier3 {
+    //! System information commands. Sub-module to keep `lib.rs` manageable.
+    use super::*;
+    use sysinfo::{Disks, System};
+
+    /// Format a byte count into a human-readable string (e.g. "1.5K", "2.3M").
+    fn human_bytes(bytes: u64) -> String {
+        const UNITS: &[&str] = &["B", "K", "M", "G", "T", "P"];
+        let mut size = bytes as f64;
+        let mut unit = 0;
+        while size >= 1024.0 && unit < UNITS.len() - 1 {
+            size /= 1024.0;
+            unit += 1;
+        }
+        if unit == 0 {
+            format!("{}B", bytes)
+        } else {
+            format!("{:.1}{}", size, UNITS[unit])
+        }
+    }
+
+    /// `whoami` — print the effective user name.
+    pub fn cmd_whoami(_args: &[String], _cwd: &Path) -> Result<CommandOutput, std::io::Error> {
+        #[cfg(windows)]
+        let name = std::env::var("USERNAME").unwrap_or_default();
+        #[cfg(not(windows))]
+        let name = std::env::var("USER").unwrap_or_default();
+        if name.is_empty() {
+            return Ok(fail("whoami: unable to determine user\n".into(), EXIT_FAIL));
+        }
+        Ok(ok(format!("{}\n", name)))
+    }
+
+    /// `du` — summarize disk usage of files/directories.
+    pub fn cmd_du(args: &[String], cwd: &Path) -> Result<CommandOutput, std::io::Error> {
+        let mut human = false;
+        let mut paths: Vec<String> = Vec::new();
+        for a in args {
+            match a.as_str() {
+                "-h" | "--human-readable" => human = true,
+                "-s" | "--summarize" => {}
+                _ if a.starts_with('-') => {}
+                _ => paths.push(a.clone()),
+            }
+        }
+        if paths.is_empty() {
+            paths.push(String::new());
+        }
+        let mut out = String::new();
+        for p in &paths {
+            let target = if p.is_empty() {
+                cwd.to_path_buf()
+            } else {
+                resolve(cwd, p)
+            };
+            let mut total: u64 = 0;
+            for entry in WalkDir::new(&target).into_iter().filter_map(|e| e.ok()) {
+                if entry.file_type().is_file() {
+                    if let Ok(meta) = entry.metadata() {
+                        total += meta.len();
+                    }
+                }
+            }
+            if human {
+                out.push_str(&format!("{}\t{}\n", human_bytes(total), target.display()));
+            } else {
+                out.push_str(&format!("{}\t{}\n", total, target.display()));
+            }
+        }
+        Ok(ok(out))
+    }
+
+    /// `df` — report file system disk space usage.
+    pub fn cmd_df(args: &[String], _cwd: &Path) -> Result<CommandOutput, std::io::Error> {
+        let human = args.iter().any(|a| a == "-h" || a == "--human-readable");
+        let disks = Disks::new_with_refreshed_list();
+        let mut out = String::new();
+        if human {
+            out.push_str("Filesystem  Size  Used  Avail  Use%  Mounted\n");
+        } else {
+            out.push_str("Filesystem  1K-blocks  Used  Available  Use%  Mounted\n");
+        }
+        for disk in disks.list() {
+            let total = disk.total_space();
+            let avail = disk.available_space();
+            let used = total.saturating_sub(avail);
+            let use_pct = if total > 0 {
+                format!("{}%", (used * 100) / total)
+            } else {
+                "-".to_string()
+            };
+            let name = disk.name().to_string_lossy();
+            let mp = disk.mount_point().display();
+            if human {
+                out.push_str(&format!(
+                    "{:<10}  {:<5}  {:<5}  {:<5}  {:<4}  {}\n",
+                    name,
+                    human_bytes(total),
+                    human_bytes(used),
+                    human_bytes(avail),
+                    use_pct,
+                    mp
+                ));
+            } else {
+                out.push_str(&format!(
+                    "{:<10}  {:<10}  {:<10}  {:<10}  {:<4}  {}\n",
+                    name,
+                    total / 1024,
+                    used / 1024,
+                    avail / 1024,
+                    use_pct,
+                    mp
+                ));
+            }
+        }
+        Ok(ok(out))
+    }
+
+    /// `ps` — report a snapshot of current processes.
+    pub fn cmd_ps(args: &[String], _cwd: &Path) -> Result<CommandOutput, std::io::Error> {
+        let verbose = args.iter().any(|a| {
+            a == "aux" || a == "-e" || a == "-a" || a == "a" || a == "-f" || a == "-ef"
+        });
+        let mut sys = System::new_all();
+        sys.refresh_all();
+        let mut rows: Vec<(String, String, u64, String)> = Vec::new();
+        for (pid, proc) in sys.processes() {
+            rows.push((
+                format!("{}", pid),
+                proc.name().to_string_lossy().into_owned(),
+                proc.memory(),
+                format!("{}", proc.status()),
+            ));
+        }
+        rows.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut out = String::new();
+        if verbose {
+            out.push_str("PID  MEM_KB  STATUS  NAME\n");
+            for (pid, name, mem, status) in &rows {
+                out.push_str(&format!("{:<8}  {:<8}  {:<8}  {}\n", pid, mem, status, name));
+            }
+        } else {
+            out.push_str("PID  NAME\n");
+            for (pid, name, _, _) in &rows {
+                out.push_str(&format!("{:<8}  {}\n", pid, name));
+            }
+        }
+        Ok(ok(out))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn whoami_returns_nonempty() {
+            let out = cmd_whoami(&[], Path::new(".")).unwrap();
+            assert_eq!(out.exit_code, 0);
+            assert!(!out.stdout.trim().is_empty());
+        }
+
+        #[test]
+        fn du_current_dir() {
+            let out = cmd_du(&[], Path::new(".")).unwrap();
+            assert_eq!(out.exit_code, 0);
+        }
+
+        #[test]
+        fn du_human() {
+            let out = cmd_du(&["-h".into()], Path::new(".")).unwrap();
+            assert_eq!(out.exit_code, 0);
+            assert!(out.stdout.contains('\t'));
+        }
+
+        #[test]
+        fn df_lists_disks() {
+            let out = cmd_df(&[], Path::new(".")).unwrap();
+            assert_eq!(out.exit_code, 0);
+            assert!(out.stdout.contains("Mounted"));
+        }
+
+        #[test]
+        fn df_human() {
+            let out = cmd_df(&["-h".into()], Path::new(".")).unwrap();
+            assert_eq!(out.exit_code, 0);
+        }
+
+        #[test]
+        fn ps_lists_processes() {
+            let out = cmd_ps(&[], Path::new(".")).unwrap();
+            assert_eq!(out.exit_code, 0);
+            assert!(out.stdout.contains("NAME"));
+        }
+
+        #[test]
+        fn ps_verbose() {
+            let out = cmd_ps(&["aux".into()], Path::new(".")).unwrap();
+            assert_eq!(out.exit_code, 0);
+            assert!(out.stdout.contains("STATUS"));
+        }
     }
 }
 
