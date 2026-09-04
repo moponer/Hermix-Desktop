@@ -12,6 +12,16 @@ async fn main() -> Result<(), AgentError> {
     init_telemetry_from_env("hermes-server", "info");
 
     let config = load_config(None).map_err(|e| AgentError::Config(e.to_string()))?;
+
+    // --stdio：接管 stdin/stdout 跑 JSON Lines 多路复用协议（桌面端 IPC），
+    // 不绑定任何 TCP 端口；默认（无 flag）保持 HTTP/WS TCP 监听。
+    if std::env::args().any(|a| a == "--stdio") {
+        let state = hermix_server::HttpServerState::build(config)
+            .await?
+            .with_automation_scheduler();
+        return hermix_server::stdio_session::run_stdio_server(state).await;
+    }
+
     let addr: SocketAddr = env_compat("HERMIX_SERVER_ADDR", "HERMES_SERVER_ADDR")
         .or_else(|| env_compat("HERMIX_DASHBOARD_ADDR", "HERMES_DASHBOARD_ADDR"))
         .or_else(|| env_compat("HERMIX_HTTP_ADDR", "HERMES_HTTP_ADDR"))

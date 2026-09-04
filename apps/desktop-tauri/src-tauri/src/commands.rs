@@ -155,18 +155,27 @@ pub fn restart_app(app: tauri::AppHandle) {
 
 #[tauri::command]
 pub async fn get_server_status(state: tauri::State<'_, AppState>) -> Result<ServerStatus, String> {
-    // Extract values under lock, then drop lock before await
-    let (running, base_url) = {
-        let sb = state.sidecar.lock().map_err(|e| e.to_string())?;
-        (sb.is_running(), sb.base_url())
+    // stdio transport — no TCP port. Readiness is "child alive AND bridge
+    // round-trips /health". We round-trip a real HTTP frame through the
+    // bridge (rather than just checking `is_healthy()`) so a stuck
+    // writer — child still alive but stdout pipe buffer full — is also
+    // surfaced as not-healthy. The 2s budget mirrors the TCP era's
+    // reqwest::get timeout.
+    let running = {
+        let mut sb = state.sidecar.lock().map_err(|e| e.to_string())?;
+        sb.is_running()
     };
 
     let healthy = if running {
-        // Clone base_url, drop lock, then do async health check
-        let url = format!("{base_url}/health");
-        match reqwest::get(&url).await {
-            Ok(resp) => resp.status().is_success(),
-            Err(_) => false,
+        match crate::stdio_bridge::global() {
+            Some(bridge) => {
+                let fut = bridge.http_request("GET", "/health", None);
+                matches!(
+                    tokio::time::timeout(std::time::Duration::from_secs(2), fut).await,
+                    Ok(Ok(reply)) if reply.contains("\"status\":\"ok\"")
+                )
+            }
+            None => false,
         }
     } else {
         false
@@ -175,8 +184,8 @@ pub async fn get_server_status(state: tauri::State<'_, AppState>) -> Result<Serv
     Ok(ServerStatus {
         running,
         healthy,
-        port: 3000,
-        base_url,
+        port: 0,
+        base_url: "stdio://local".into(),
     })
 }
 
@@ -184,8 +193,56 @@ pub async fn get_server_status(state: tauri::State<'_, AppState>) -> Result<Serv
 pub struct ServerStatus {
     pub running: bool,
     pub healthy: bool,
+    /// Legacy field, kept at `0` because the stdio transport doesn't
+    /// bind a TCP port. UI code that still reads it (status panes,
+    /// health banners) sees `0` and falls through to the `healthy`
+    /// boolean instead of trying to build a TCP URL.
     pub port: u16,
+    /// Legacy field, kept as a sentinel so any caller still diffing
+    /// against the TCP-era `http://127.0.0.1:3000` string can detect
+    /// the transport switch and fall back to its bridge-invoke path.
     pub base_url: String,
+}
+
+/// Forward an HTTP-style request to the stdio bridge. The backend
+/// (`hermix-server`) exposes the same REST surface via the `http`
+/// channel inside its stdio multiplex — this command is the single
+/// chokepoint the front-end uses for everything that was previously
+/// `fetch('http://127.0.0.1:3000/api/...')`. The reply is the raw
+/// JSON envelope string (`{"status":N,"body":"…","enc":"utf8"|"base64"}`)
+/// from the server; callers parse it on the JS side so this layer stays
+/// transport-only and doesn't duplicate HTTP status branching.
+#[tauri::command]
+pub async fn backend_http_request(
+    method: String,
+    path: String,
+    body: Option<String>,
+) -> Result<String, String> {
+    let bridge = crate::stdio_bridge::global()
+        .ok_or_else(|| "stdio bridge not initialised".to_string())?;
+    bridge.http_request(&method, &path, body.as_deref()).await
+}
+
+/// Send an upstream frame on a non-HTTP channel (e.g. `stream:<sid>`,
+/// `groupchat:<room>`, or a custom app-specific channel). Payload is
+/// the verbatim JSON the server expects on that channel — the bridge
+/// does not parse or wrap it, so callers own their protocol shape.
+/// Used by the streaming hooks to send `SendMessageRequest` /
+/// `groupchat send` frames after the WebSocket surface was retired.
+#[tauri::command]
+pub async fn backend_channel_send(channel: String, payload: String) -> Result<(), String> {
+    let bridge = crate::stdio_bridge::global()
+        .ok_or_else(|| "stdio bridge not initialised".to_string())?;
+    bridge.send_to_channel(&channel, &payload)
+}
+
+/// Cheap liveness probe used by `BackendStatus` and `checkBackendHealth`.
+/// Returns true once `stdio_bridge::init_global` has handed the child's
+/// stdin/stdout to the bridge — i.e. once a sidecar generation is live.
+/// Does NOT round-trip a frame, so it's safe to call on a render loop.
+#[tauri::command]
+pub fn backend_ready() -> bool {
+    crate::stdio_bridge::global().is_some()
 }
 
 /// Read a file for the "产物" (artifact) preview pane in the right sidebar or
@@ -475,9 +532,12 @@ fn effective_allowed_roots(workspace_root: Option<&str>) -> Vec<PathBuf> {
 }
 
 #[tauri::command]
-pub fn restart_sidecar(state: tauri::State<'_, AppState>) -> Result<String, String> {
+pub fn restart_sidecar(
+    state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<String, String> {
     let mut sb = state.sidecar.lock().map_err(|e| format!("lock: {e}"))?;
-    sb.restart()?;
+    sb.restart(&app)?;
     Ok("restarted".to_string())
 }
 

@@ -5,6 +5,7 @@ pub mod commands_cua;
 pub mod officecli;
 pub mod portable_env;
 pub mod sidecar;
+pub mod stdio_bridge;
 pub mod webview2_probe;
 
 use sidecar::{HermixSidecar, WatchdogConfig};
@@ -455,12 +456,12 @@ pub fn run() {
             let state = handle.state::<AppState>();
             let started = {
                 let mut sb = state.sidecar.lock().unwrap();
-                sb.start().is_ok()
+                sb.start(&handle).is_ok()
             };
 
             if started {
-                // Start the watchdog: if /health fails 3 times in a row
-                // (5s interval = 15s of total outage), automatically
+                // Start the watchdog: if the bridge is unhealthy 30 times
+                // in a row (5s interval = 150s of total outage), automatically
                 // restart the sidecar with exponential backoff.
                 // After 5 consecutive restart failures, gives up and
                 // requires manual restart.
@@ -472,22 +473,14 @@ pub fn run() {
 
                 let handle2 = handle.clone();
                 tauri::async_runtime::spawn(async move {
-                    // Poll /health until the server is actually ready,
-                    // then emit the ready event so the frontend can
-                    // transition out of the splash screen.
-                    let deadline = std::time::Instant::now()
-                        + std::time::Duration::from_secs(30);
-                    let url = "http://127.0.0.1:3000/health";
-                    let mut ready = false;
-                    while std::time::Instant::now() < deadline {
-                        if let Ok(resp) = reqwest::get(url).await {
-                            if resp.status().is_success() {
-                                ready = true;
-                                break;
-                            }
-                        }
-                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                    }
+                    // Round-trip /health through the stdio bridge until
+                    // the server is actually serving requests, then emit
+                    // the ready event so the frontend can transition
+                    // out of the splash screen. `wait_until_ready` is a
+                    // free function (no `&self` borrow) so the spawned
+                    // future stays Send-able across the `.await`.
+                    let ready =
+                        HermixSidecar::wait_until_ready(std::time::Duration::from_secs(30)).await;
                     if ready {
                         println!("[Hermix] Server ready (health check passed)");
                     } else {
@@ -525,6 +518,12 @@ pub fn run() {
             commands::restart_sidecar,
             commands::render_office_preview,
             commands::get_runtime_info,
+            // stdio bridge chokepoints — every REST call and every
+            // WS-style upstream frame the frontend needs now flows
+            // through one of these three commands.
+            commands::backend_http_request,
+            commands::backend_channel_send,
+            commands::backend_ready,
             // Settings → Backend → Python 运行时探测。`python_detect`
             // 列出 override / env / sibling
             // / PATH 四档候选，给 UI 看；`set_python_override` 把

@@ -139,6 +139,7 @@ chrono::Utc::now().timestamp_millis()
 /// message on the same WebSocket, which looks up and completes the channel.
 
 pub mod approval;
+pub mod coalescer;
 pub use approval::ApprovalRegistry;
 
 pub mod state;
@@ -146,6 +147,8 @@ pub use state::{ClarifyBroadcast, HttpServerState};
 pub mod errors;
 pub use errors::HttpError;
 pub mod voice;
+pub mod transport;
+pub mod stdio_session;
 pub mod ws;
 pub mod ws_grace;
 pub mod util;

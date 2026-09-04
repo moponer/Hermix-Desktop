@@ -4,11 +4,10 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use axum::extract::{Path, State, WebSocketUpgrade};
-use axum::extract::ws::{Message as WsMessage, WebSocket};
 use hermix_tools::extract_trust_signature;
 
-
 use super::*;
+use crate::transport::{Transport, TransportSink, TransportSource, WsTransport};
 
 /// Per-session broadcast channel registry. Lets reconnecting WS clients
 /// observe events from an agent task that is already running but lost
@@ -67,82 +66,79 @@ pub(crate) async fn ws_upgrade(
     Path(session_id): Path<String>,
     State(state): State<HttpServerState>,
 ) -> Response {
-    ws.on_upgrade(move |socket| handle_ws(socket, state, session_id))
+    ws.on_upgrade(move |socket| handle_ws(WsTransport::new(socket), state, session_id))
 }
 
-pub(crate) async fn handle_ws(mut socket: WebSocket, state: HttpServerState, session_id: String) {
-    let _ = socket
-        .send(WsMessage::Text(
-            format!("connected session={}", session_id).into(),
-        ))
+pub(crate) async fn handle_ws(
+    transport: impl Transport,
+    state: HttpServerState,
+    session_id: String,
+) {
+    let (mut sink, mut source) = transport.split();
+    let _ = sink
+        .send(format!("connected session={}", session_id))
         .await;
-    while let Some(Ok(msg)) = socket.next().await {
-        match msg {
-            WsMessage::Text(text) => {
-                let parsed: Option<SendMessageRequest> = match serde_json::from_str(&text) {
-                    Ok(v) => Some(v),
-                    Err(e) => {
-                        tracing::warn!(error = %e, "failed to parse WS text as SendMessageRequest");
-                        None
-                    }
-                };
-                let request = parsed.unwrap_or_else(|| SendMessageRequest {
-                    text: text.to_string(),
-                    model: None,
-                    provider: None,
-                    personality: None,
-                    system_prompt: None,
-                    tools: None,
-                    workspace: None,
-                    permission: None,
-                    user_id: None,
-                    request_id: None,
-                    images: None,
-                    image: None,
-                    image_mime_type: None,
-                    skills: None,
-                });
+    while let Some(text) = source.recv().await {
+        let parsed: Option<SendMessageRequest> = match serde_json::from_str(&text) {
+            Ok(v) => Some(v),
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to parse WS text as SendMessageRequest");
+                None
+            }
+        };
+        let request = parsed.unwrap_or_else(|| SendMessageRequest {
+            text: text.clone(),
+            model: None,
+            provider: None,
+            personality: None,
+            system_prompt: None,
+            tools: None,
+            workspace: None,
+            permission: None,
+            user_id: None,
+            request_id: None,
+            images: None,
+            image: None,
+            image_mime_type: None,
+            skills: None,
+        });
 
-                // Build AgentOverrides from request
-                let overrides = hermix_core::traits::AgentOverrides {
-                    model: request.model.clone(),
-                    provider: request.provider.clone(),
-                    personality: request.personality.clone(),
-                    system_prompt: request.system_prompt.clone(),
-                    tools: request.tools.clone(),
-                    workspace: request.workspace.clone(),
-                    permission: parse_permission_level(request.permission.as_deref()),
-                    images: convert_wire_images(&request.images),
-                    image: None,
-                    image_mime_type: None,
+        // Build AgentOverrides from request
+        let overrides = hermix_core::traits::AgentOverrides {
+            model: request.model.clone(),
+            provider: request.provider.clone(),
+            personality: request.personality.clone(),
+            system_prompt: request.system_prompt.clone(),
+            tools: request.tools.clone(),
+            workspace: request.workspace.clone(),
+            permission: parse_permission_level(request.permission.as_deref()),
+            images: convert_wire_images(&request.images),
+            image: None,
+            image_mime_type: None,
             skills: request.skills.clone(),
             memory_dir: None,
             approval_requester: None,
-                    on_event: None,
-                    pre_approval_checker: None,
-                    on_prefetch_intent: None,
-                    // type-B: see sibling `/api/sessions/.../messages`
-                    // initializer; no WS → no shutdown token → falls back to
-                    // plain `rx.await`.
-                    shutdown: None,
-                };
+            on_event: None,
+            pre_approval_checker: None,
+            on_prefetch_intent: None,
+            // type-B: see sibling `/api/sessions/.../messages`
+            // initializer; no WS → no shutdown token → falls back to
+            // plain `rx.await`.
+            shutdown: None,
+        };
 
-                // Call agent service
-                match state
-                    .agent_service
-                    .send_message(&session_id, &request.text, overrides)
-                    .await
-                {
-                    Ok(reply) => {
-                        let _ = socket.send(WsMessage::Text(reply.text.into())).await;
-                    }
-                    Err(err) => {
-                        let _ = socket.send(WsMessage::Text(err.to_string().into())).await;
-                    }
-                }
+        // Call agent service
+        match state
+            .agent_service
+            .send_message(&session_id, &request.text, overrides)
+            .await
+        {
+            Ok(reply) => {
+                let _ = sink.send(reply.text).await;
             }
-            WsMessage::Close(_) => break,
-            _ => {}
+            Err(err) => {
+                let _ = sink.send(err.to_string()).await;
+            }
         }
     }
 }
@@ -157,7 +153,7 @@ pub(crate) async fn ws_stream_upgrade(
     Path(session_id): Path<String>,
     State(state): State<HttpServerState>,
 ) -> Response {
-    ws.on_upgrade(move |socket| handle_ws_stream(socket, state, session_id))
+    ws.on_upgrade(move |socket| handle_ws_stream(WsTransport::new(socket), state, session_id))
 }
 
 /// Compute the dedup key for `(session_id, text)`. Stable across
@@ -278,8 +274,8 @@ pub(crate) fn check_recent_send(state: &HttpServerState, session_id: &str, text:
 /// Extracted so the `WsClientMessage::Send` path and the legacy
 /// `SendMessageRequest` / plain-text path share the same logic.
 pub(crate) async fn handle_ws_stream_send(
-    sender: &mut futures::stream::SplitSink<WebSocket, WsMessage>,
-    receiver: &mut futures::stream::SplitStream<WebSocket>,
+    sender: &mut dyn TransportSink,
+    receiver: &mut dyn TransportSource,
     state: &HttpServerState,
     session_id: &str,
     trace_id: &str,
@@ -382,9 +378,7 @@ pub(crate) async fn handle_ws_stream_send(
                 },
             };
             if let Ok(json) = serde_json::to_string(&envelope) {
-                let _ = sender
-                    .send(WsMessage::Text(json.into()))
-                    .await;
+                let _ = sender.send(json).await;
             }
             return;
         }
@@ -427,7 +421,7 @@ pub(crate) async fn handle_ws_stream_send(
             },
         };
         if let Ok(json) = serde_json::to_string(&envelope) {
-            let _ = sender.send(WsMessage::Text(json.into())).await;
+            let _ = sender.send(json).await;
         }
         return;
     }
@@ -458,7 +452,7 @@ pub(crate) async fn handle_ws_stream_send(
             },
         };
         if let Ok(json) = serde_json::to_string(&envelope) {
-            let _ = sender.send(WsMessage::Text(json.into())).await;
+            let _ = sender.send(json).await;
         }
         return;
     }
@@ -502,7 +496,7 @@ pub(crate) async fn handle_ws_stream_send(
             },
         };
         if let Ok(json) = serde_json::to_string(&envelope) {
-            let _ = sender.send(WsMessage::Text(json.into())).await;
+            let _ = sender.send(json).await;
         }
         return;
     }
@@ -755,6 +749,14 @@ pub(crate) async fn handle_ws_stream_send(
                     .and_then(|v| v.as_str())
                     .map(|s| s.trim().to_string())
                     .filter(|s| !s.is_empty());
+                // Backend-computed before/after diff for file-mutating calls
+                // (see `hermix_agent::approval_diff`). `None` for shapes that
+                // can't be diffed — the client keeps its plain-description
+                // fallback.
+                let diff = extra
+                    .get("diff")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
                 // Compute the deadline once and share it between the
                 // WS envelope (live countdown) and the persisted
                 // `ApprovalRecord` (reload countdown). Two separate
@@ -781,6 +783,7 @@ pub(crate) async fn handle_ws_stream_send(
                         risk: risk.clone(),
                         reason: reason.clone(),
                         expires_at: expires_at_ms,
+                        diff: diff.clone(),
                     },
                 );
                 // Persist the approval row to the session timeline so it
@@ -807,6 +810,7 @@ pub(crate) async fn handle_ws_stream_send(
                     decided_at: None,
                     expires_at: expires_at_ms,
                     linked_assistant_id: None,
+                    diff,
                 };
                 if let Err(e) = persistence.append_approval_message(&sid, &record) {
                     tracing::warn!(
@@ -1042,11 +1046,12 @@ pub(crate) async fn handle_ws_stream_send(
                                 .get("denial_kind")
                                 .and_then(|d| d.as_str())
                                 .map(String::from);
+                            let is_error = extra.get("is_error").and_then(|e| e.as_bool());
                             WsEnvelope {
                                 version: 1,
                                 request_id: request_id.clone(),
                                 trace_id: trace_id_for_stream.clone(),
-                                event: StreamEvent::ToolComplete { tool_call_id, tool, content, denial_kind },
+                                event: StreamEvent::ToolComplete { tool_call_id, tool, content, denial_kind, is_error },
                             }
                         }
                         "file_change" => {
@@ -1804,11 +1809,7 @@ pub(crate) async fn handle_ws_stream_send(
                         let mut send_ok = false;
                         for _attempt in 0..WS_SEND_RETRY_MAX {
                             if sender
-                                .send(WsMessage::Text(
-                                    serde_json::to_string(&event_json)
-                                        .unwrap_or_default()
-                                        .into(),
-                                ))
+                                .send(serde_json::to_string(&event_json).unwrap_or_default())
                                 .await
                                 .is_ok()
                             {
@@ -1871,7 +1872,7 @@ pub(crate) async fn handle_ws_stream_send(
                 // catches dead connections in ~15s, the client catches
                 // them in ~300s (or immediately if the browser's TCP
                 // stack reports the socket close).
-                if sender.send(WsMessage::Ping(Bytes::new())).await.is_err() {
+                if sender.ping().await.is_err() {
                     exit_branch = "heartbeat_ping_fail";
                     was_client_disconnect = true;
                     ws_disconnected.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -1890,9 +1891,11 @@ pub(crate) async fn handle_ws_stream_send(
                     trace_id: trace_id_heartbeat.clone(),
                     event: StreamEvent::Heartbeat,
                 };
-                if sender.send(WsMessage::Text(
-                    serde_json::to_string(&hb).unwrap_or_default().into(),
-                )).await.is_err() {
+                if sender
+                    .send(serde_json::to_string(&hb).unwrap_or_default())
+                    .await
+                    .is_err()
+                {
                     exit_branch = "heartbeat_text_fail";
                     was_client_disconnect = true;
                     ws_disconnected.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -1917,9 +1920,9 @@ pub(crate) async fn handle_ws_stream_send(
             // frontend's streaming guard already prevents sending a new
             // message while a stream is in flight, and the dedup
             // mechanism would reject duplicates anyway.
-            msg = receiver.next() => {
-                match msg {
-                    Some(Ok(WsMessage::Text(text))) => {
+            text = receiver.recv() => {
+                match text {
+                    Some(text) => {
                         if let Ok(ws_msg) = serde_json::from_str::<hermix_transport::WsClientMessage>(&text) {
                             match ws_msg {
                                 WsClientMessage::ApprovalResponse { request_id, decision } => {
@@ -2091,9 +2094,9 @@ WsClientMessage::ApprovalBatchResponse { batch_id, decision } => {
                                         trace_id: trace_id_heartbeat.clone(),
                                         event: StreamEvent::Pong,
                                     };
-                                    let _ = sender.send(WsMessage::Text(
-                                        serde_json::to_string(&pong).unwrap_or_default().into(),
-                                    )).await;
+                                    let _ = sender
+                                        .send(serde_json::to_string(&pong).unwrap_or_default())
+                                        .await;
                                 }
                                 other => {
                                     // Send messages during streaming are
@@ -2112,31 +2115,10 @@ WsClientMessage::ApprovalBatchResponse { batch_id, decision } => {
                             }
                         }
                     }
-                    Some(Ok(WsMessage::Close(_))) => {
-                        exit_branch = "ws_close_frame";
-                        was_client_disconnect = true;
-                        ws_disconnected.store(true, std::sync::atomic::Ordering::SeqCst);
-                        schedule_grace_disconnect();
-                        break;
-                    }
-                    Some(Ok(_)) => {
-                        // Binary / Pong / Ping — ignore
-                    }
-                    Some(Err(e)) => {
-                        tracing::warn!(
-                            session = %session_id,
-                            error = %e,
-                            "ws_stream_send: socket read error during streaming"
-                        );
-                        exit_branch = "ws_read_err";
-                        was_client_disconnect = true;
-                        ws_disconnected.store(true, std::sync::atomic::Ordering::SeqCst);
-                        schedule_grace_disconnect();
-                        break;
-                    }
                     None => {
+                        // Close 帧 / 读错误 / 流结束三种情况已在 transport
+                        // 层（WsSource::recv）就地记日志并归一为 None。
                         exit_branch = "ws_read_none";
-                        // Stream ended (socket closed)
                         was_client_disconnect = true;
                         ws_disconnected.store(true, std::sync::atomic::Ordering::SeqCst);
                         schedule_grace_disconnect();
@@ -2161,22 +2143,24 @@ pub(crate) async fn ws_groupchat_upgrade(
     Path(room_id): Path<String>,
     State(state): State<HttpServerState>,
 ) -> Response {
-    ws.on_upgrade(move |socket| handle_ws_groupchat(socket, state, room_id))
+    ws.on_upgrade(move |socket| handle_ws_groupchat(WsTransport::new(socket), state, room_id))
 }
 
 /// Handle a group chat session over WebSocket.
 /// The client sends `{"type":"send","text":"..."}` and the server
 /// streams each agent's reply chunk by chunk. After receiving the
-/// initial message, the socket is moved into a background sender task
+/// initial message, the sink is moved into a background sender task
 /// and the handler returns — the frontend opens a **new** WS connection
 /// per message, same as the REST API call pattern but with streaming.
 pub(crate) async fn handle_ws_groupchat(
-    mut socket: WebSocket,
+    transport: impl Transport,
     state: HttpServerState,
     room_id: String,
 ) {
     use hermix_gateway::groupchat::persistence::AgentRole;
     use tokio::sync::mpsc;
+
+    let (mut sink, mut source) = transport.split();
 
     // Send Connected
     let trace_id = hermix_transport::new_trace_id();
@@ -2186,21 +2170,21 @@ pub(crate) async fn handle_ws_groupchat(
         trace_id: trace_id.clone(),
         event: StreamEvent::Connected { session_id: room_id.clone() },
     };
-    let _ = socket.send(WsMessage::Text(
-        serde_json::to_string(&connected).unwrap_or_default().into(),
-    )).await;
+    let _ = sink
+        .send(serde_json::to_string(&connected).unwrap_or_default())
+        .await;
 
-    // Wait for exactly one Send message, then move socket into sender task
+    // Wait for exactly one Send message, then move sink into sender task
     let text = loop {
-        match socket.next().await {
-            Some(Ok(WsMessage::Text(t))) => {
+        match source.recv().await {
+            Some(t) => {
                 if let Ok(ws_msg) = serde_json::from_str::<hermix_transport::WsClientMessage>(&t) {
                     if let hermix_transport::WsClientMessage::Send { ref text, .. } = ws_msg {
                         break text.clone();
                     }
                 }
             }
-            _ => return, // connection closed
+            None => return, // connection closed
         }
     };
 
@@ -2248,16 +2232,14 @@ pub(crate) async fn handle_ws_groupchat(
     };
     let trace_id_for_engine = trace_id.clone();
     let socket_task = tokio::spawn(async move {
-        let mut socket = socket;
+        let mut sink = sink;
         let mut broadcast_rx = broadcast_rx;
         loop {
             tokio::select! {
                 env = rx.recv() => {
                     let Some(env) = env else { break };
-                    if socket
-                        .send(WsMessage::Text(
-                            serde_json::to_string(&env).unwrap_or_default().into(),
-                        ))
+                    if sink
+                        .send(serde_json::to_string(&env).unwrap_or_default())
                         .await
                         .is_err()
                     {
@@ -2278,12 +2260,8 @@ pub(crate) async fn handle_ws_groupchat(
                                     trace_id: trace_id_for_engine.clone(),
                                     event: stream_ev,
                                 };
-                                let send_ok = socket
-                                    .send(WsMessage::Text(
-                                        serde_json::to_string(&env)
-                                            .unwrap_or_default()
-                                            .into(),
-                                    ))
+                                let send_ok = sink
+                                    .send(serde_json::to_string(&env).unwrap_or_default())
                                     .await
                                     .is_ok();
                                 if !send_ok {
@@ -2301,12 +2279,8 @@ pub(crate) async fn handle_ws_groupchat(
                                         room_id: room_id_for_done.clone(),
                                     },
                                 };
-                                let _ = socket
-                                    .send(WsMessage::Text(
-                                        serde_json::to_string(&done_env)
-                                            .unwrap_or_default()
-                                            .into(),
-                                    ))
+                                let _ = sink
+                                    .send(serde_json::to_string(&done_env).unwrap_or_default())
                                     .await;
                                 break;
                             }
@@ -2833,14 +2807,18 @@ pub(crate) fn todo_change_to_stream(
 }
 
 /// Streaming WebSocket handler.
-pub(crate) async fn handle_ws_stream(socket: WebSocket, state: HttpServerState, session_id: String) {
-    // split the WebSocket into sender/receiver halves so that
+pub(crate) async fn handle_ws_stream(
+    transport: impl Transport,
+    state: HttpServerState,
+    session_id: String,
+) {
+    // split the transport into sender/receiver halves so that
     // handle_ws_stream_send can simultaneously forward agent events TO the
     // client AND read approval_response/clarify_response FROM the client.
-    // Before this split, the select! loop in handle_ws_stream_send only
-    // wrote to the socket — it never read from it — so approval clicks
-    // sat unread in the WS buffer until the 30s timeout fired.
-    let (mut sender, mut receiver) = socket.split();
+    // Before this split, the forward loop only wrote to the socket — it
+    // never read from it — so approval clicks sat unread in the WS buffer
+    // until the 30s timeout fired.
+    let (mut sender, mut receiver) = transport.split();
     let trace_id_base = hermix_transport::new_trace_id();
     let connected = WsEnvelope {
         version: 1,
@@ -2851,9 +2829,7 @@ pub(crate) async fn handle_ws_stream(socket: WebSocket, state: HttpServerState, 
         },
     };
     let _ = sender
-        .send(WsMessage::Text(
-            serde_json::to_string(&connected).unwrap_or_default().into(),
-        ))
+        .send(serde_json::to_string(&connected).unwrap_or_default())
         .await;
 
     // Commit D — WS hydrate: send an authoritative per-session
@@ -2956,16 +2932,13 @@ pub(crate) async fn handle_ws_stream(socket: WebSocket, state: HttpServerState, 
             },
         };
         let _ = sender
-            .send(WsMessage::Text(
-                serde_json::to_string(&hydrate).unwrap_or_default().into(),
-            ))
+            .send(serde_json::to_string(&hydrate).unwrap_or_default())
             .await;
     }
 
-    while let Some(Ok(msg)) = receiver.next().await {
-        match msg {
-            WsMessage::Text(text) => {
-                let trace_id = trace_id_base.clone();
+    while let Some(text) = receiver.recv().await {
+        {
+            let trace_id = trace_id_base.clone();
                 // Tdiagnostic — log every WS message receipt.
                 tracing::info!(
                     session = %session_id,
@@ -3243,8 +3216,8 @@ pub(crate) async fn handle_ws_stream(socket: WebSocket, state: HttpServerState, 
                             // Fall through to the send handling below.
                             // We use a helper to avoid code duplication.
                             handle_ws_stream_send(
-                                &mut sender,
-                                &mut receiver,
+                                &mut *sender,
+                                &mut *receiver,
                                 &state,
                                 &session_id,
                                 &trace_id,
@@ -3353,9 +3326,7 @@ pub(crate) async fn handle_ws_stream(socket: WebSocket, state: HttpServerState, 
                                         },
                                     };
                                     let _ = sender
-                                        .send(WsMessage::Text(
-                                            serde_json::to_string(&event).unwrap_or_default().into(),
-                                        ))
+                                        .send(serde_json::to_string(&event).unwrap_or_default())
                                         .await;
                                 }
                                 Err(e) => {
@@ -3423,9 +3394,9 @@ pub(crate) async fn handle_ws_stream(socket: WebSocket, state: HttpServerState, 
                                 trace_id: trace_id_base.clone(),
                                 event: StreamEvent::Pong,
                             };
-                            let _ = sender.send(WsMessage::Text(
-                                serde_json::to_string(&pong).unwrap_or_default().into(),
-                            )).await;
+                            let _ = sender
+                                .send(serde_json::to_string(&pong).unwrap_or_default())
+                                .await;
                             continue;
                         }
                     }
@@ -3456,17 +3427,14 @@ pub(crate) async fn handle_ws_stream(socket: WebSocket, state: HttpServerState, 
                     skills: None,
                 });
                 handle_ws_stream_send(
-                    &mut sender,
-                    &mut receiver,
+                    &mut *sender,
+                    &mut *receiver,
                     &state,
                     &session_id,
                     &trace_id,
                     request,
                 )
                 .await;
-            }
-            WsMessage::Close(_) => break,
-            _ => {}
         }
     }
 }
