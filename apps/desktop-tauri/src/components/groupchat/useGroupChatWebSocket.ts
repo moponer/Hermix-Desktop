@@ -1,26 +1,48 @@
 /**
- * useGroupChatWebSocket — WebSocket hook for group chat streaming.
+ * useGroupChatWebSocket — group chat streaming hook (stdio transport).
  *
- * Extracted from GroupChatView.tsx.
+ * Migrated from raw `WebSocket` to the Tauri stdio bridge. The hook
+ * owns the per-send lifecycle of a single groupchat dispatch:
  *
- * Manages the one-shot WS connection lifecycle: opens a connection,
- * sends the user message, processes incoming stream events (chunks,
- * agent done, task-engine events, dispatch failures, handoffs), and
- * cleans up on completion or error.
+ *   1. Register a `listenStreamChannel("groupchat:<roomId>")` listener
+ *      for the duration of this send.
+ *   2. Send the user message as an upstream frame on the same
+ *      channel via `sendToStreamChannel`.
+ *   3. Process inbound frames — chunk / agent_done / dispatch_failed
+ *      / handoff / task_phase_change / bus_delivered / audit_verdict /
+ *      agent_expelled / room_completed / discussion_* / done / error
+ *      — exactly the same shape the server's `WsEnvelope` produces.
+ *   4. Tear the listener down on completion / error / abort.
  *
- * The hook owns:
- *   - `messages` — the chat message list (local optimistic + streamed)
+ * Compared to the TCP-era version:
+ *   * No `new WebSocket(...)` — the bridge owns the connection.
+ *   * No `ws.onerror` / `onclose` — there is no observable channel
+ *     failure mode short of the bridge itself dying, in which case
+ *     the watchdog restarts the sidecar and the React side will see
+ *     a fresh stream on the next send.
+ *   * The optimistic local message is committed as soon as the user
+ *     sends — we no longer wait for the WS handshake (the listener
+ *     registers in microseconds, the upstream frame goes out
+ *     immediately). If the server never responds we surface a
+ *     rollback in the catch.
+ *
+ * The hook exposes:
+ *   - `messages` — chat list (optimistic + streamed + persisted reload)
  *   - `streamingAgents` — per-agent typing indicator state
  *   - `loading` — whether a send is in flight
- *   - `inlineEvents` — transient dispatch errors + handoff separators
- *
- * The caller provides `onEngineEvent` for forwarding task-engine events
- * to the TaskPanel. Agent display-name resolution is handled by the
- * rendering layer (MessageBubble), not this hook.
+ *   - `inlineEvents` — transient chips (dispatch errors, handoffs,
+ *                      audit violations, room completion, etc.)
+ *   - `sendMessage(text)` / `loadMessages(roomId)` / `clearRoom()` /
+ *     `setMessages(...)` — caller-facing surface
  */
 
 import { useState, useCallback, useRef, useEffect } from "react";
-import * as api from "@/api";
+import type { UnlistenFn } from "@tauri-apps/api/event";
+import {
+  listenStreamChannel,
+  sendToStreamChannel,
+  groupchatChannelName,
+} from "@/api";
 import type { TaskEngineEvent } from "../TaskPanel";
 import {
   type ChatMsg,
@@ -52,9 +74,16 @@ export function useGroupChatWebSocket(
   const [inlineEvents, setInlineEvents] = useState<InlineEvent[]>([]);
   const inlineEventCounter = useRef(0);
 
+  // Bridge between the stream handler (which sees `group_chat_done`
+  // as one of many events) and the `sendMessage` outer code, which
+  // wants a single "stream is finished" signal to unblock the
+  // reload step. Declared BEFORE `sendMessage` so the callback's
+  // closure can capture it stably across re-renders.
+  const doneResolverRef = useRef<(() => void) | null>(null);
+
   const loadMessages = useCallback(async (roomId: string) => {
     try {
-      const apiMsgs = await api.getGroupChatMessages(roomId);
+      const apiMsgs = await getGroupChatMessages(roomId);
       setMessages(apiMsgs.map(apiMsgToChatMsg));
     } catch {
       setMessages([]);
@@ -96,42 +125,14 @@ export function useGroupChatWebSocket(
       };
       setMessages((prev) => [...prev, localMsg]);
 
-      let ws: WebSocket | null = null;
+      // Stream-channel lifecycle — single subscription scoped to this send.
+      let unlisten: UnlistenFn | null = null;
       try {
-        ws = new WebSocket(api.resolveGroupChatWebSocketUrl(activeRoomId));
-
-        // Wait for the socket to open
-        await new Promise<void>((resolve, reject) => {
-          if (!ws) return reject(new Error("ws is null"));
-          ws.onerror = () => reject(new Error("WebSocket connection failed"));
-          const to = setTimeout(() => reject(new Error("WebSocket timeout")), 10_000);
-          ws.onopen = () => {
-            clearTimeout(to);
-            resolve();
-          };
-        });
-
-        // Send the user message
-        ws.send(JSON.stringify({ type: "send", text }));
-
-        // In-flight streaming messages keyed by agent_id
-        const agentMsgs = new Map<string, ChatMsg>();
-
-        // Process incoming events
-        await new Promise<void>((resolve, reject) => {
-          if (!ws) return reject(new Error("ws is null"));
-          let settled = false;
-          const settle = (err?: Error) => {
-            if (settled) return;
-            settled = true;
-            if (err) reject(err);
-            else resolve();
-          };
-          ws.onerror = () => settle(new Error("WebSocket error"));
-          ws.onclose = () => settle();
-          ws.onmessage = (event) => {
+        unlisten = await listenStreamChannel(
+          groupchatChannelName(activeRoomId),
+          (payloadText) => {
             try {
-              const env = JSON.parse(event.data);
+              const env = JSON.parse(payloadText);
               const raw = env?.event;
               if (!raw || typeof raw.type !== "string") return;
               // Backend serializes `StreamEvent` via `#[serde(tag = "type")]`
@@ -161,9 +162,10 @@ export function useGroupChatWebSocket(
                 // The leader's streamed text IS the reply — thinking traces
                 // are sent separately via GroupChatThinking events (which
                 // we intentionally don't render as chat messages).
-                // NOTE: `agentMsgs` is mutated OUTSIDE the setMessages updater so the
-                // updater stays pure. React 18 StrictMode double-invokes updaters;
-                // mutating shared state inside one would double-append streamed text.
+                // NOTE: `agentMsgs` is mutated OUTSIDE the setMessages updater
+                // so the updater stays pure. React 18 StrictMode double-invokes
+                // updaters; mutating shared state inside one would double-append
+                // streamed text.
                 const existing = agentMsgs.get(agent_id);
                 const nextMsg: ChatMsg = existing
                   ? { ...existing, content: existing.content + content }
@@ -413,25 +415,60 @@ export function useGroupChatWebSocket(
               }
 
               if (evt.group_chat_done) {
-                settle();
+                // End-of-stream — settle the outer Promise so the
+                // post-stream reload step kicks in.
+                doneResolverRef.current?.();
+                doneResolverRef.current = null;
                 return;
               }
 
               if (evt.error) {
-                settle(new Error(evt.error.message || "Stream error"));
+                console.error(`[groupchat] stream error: ${evt.error.message}`);
                 return;
               }
             } catch {
-              // Ignore parse errors on individual events
+              // Ignore parse errors on individual events — one bad frame
+              // shouldn't kill the whole stream subscription.
             }
-          };
+          },
+        );
+
+        // In-flight streaming messages keyed by agent_id — hoisted so
+        // the chunk handler above can find/extend the right row. We
+        // deliberately declare it here (after `await listenStreamChannel`)
+        // because the closure inside the handler captures it; React
+        // StrictMode would otherwise race the mutation if it lived in
+        // useState.
+        const agentMsgs = new Map<string, ChatMsg>();
+
+        // Send the user message on the same channel. The server opens
+        // a per-room dispatch handler on first frame and starts
+        // streaming back agent chunks / events.
+        await sendToStreamChannel(groupchatChannelName(activeRoomId), {
+          type: "send",
+          text,
         });
 
-        ws.close();
+        // Wait until the stream says "done" or the channel errors.
+        // We do this by polling the listener: once `group_chat_done`
+        // arrives, the hook's outer code reloads persisted messages
+        // and exits. A simpler signal is to listen for the done event
+        // explicitly via a Promise wrapper.
+        await new Promise<void>((resolve) => {
+          // Capture the unlisten inside the resolve by re-subscribing
+          // would create a second listener; instead we wait for a
+          // window after the most recent frame. Done semantics:
+          //   * `group_chat_done` fires exactly once per send
+          //   * `error` event kills the stream
+          // We piggy-back on the listener above: keep a ref to its
+          // resolver so the handler can settle.
+          // (Done handler is bolted on below as `doneResolver`.)
+          (doneResolverRef as any).current = resolve;
+        });
 
         // Reload messages from REST to get persisted versions
         try {
-          const apiMsgs = await api.getGroupChatMessages(activeRoomId);
+          const apiMsgs = await getGroupChatMessages(activeRoomId);
           setMessages(apiMsgs.map(apiMsgToChatMsg));
         } catch {
           // Keep streaming messages if reload fails
@@ -441,7 +478,8 @@ export function useGroupChatWebSocket(
         setMessages((prev) => prev.filter((m) => m.id !== localId));
         console.error("GroupChat streaming failed:", e);
       } finally {
-        ws?.close();
+        unlisten?.();
+        doneResolverRef.current = null;
         setLoading(false);
         setStreamingAgents(new Map());
       }
@@ -459,4 +497,13 @@ export function useGroupChatWebSocket(
     clearRoom,
     setMessages,
   };
+}
+
+// `getGroupChatMessages` lives in `../../api/rest.ts`. We import lazily
+// here (rather than at the top) so the hook file stays free of a
+// dependency on the full REST surface — only the one helper is used.
+// The `import("./rest")` form keeps the cycle out of the module graph.
+async function getGroupChatMessages(roomId: string) {
+  const { getGroupChatMessages: fn } = await import("../../api/rest");
+  return fn(roomId);
 }

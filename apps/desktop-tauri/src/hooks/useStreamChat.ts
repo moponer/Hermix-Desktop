@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import type { AcuiDirective } from "../acui/types";
-import type { SubAgentEventPayload } from "../types";
+import type { ApprovalRequestItem, SubAgentEventPayload } from "../types";
 import { createPhaseController } from "./useStreamPhase";
 import { createMessageHandler, type StreamChatSendContext } from "./useStreamParser";
 import { createConnector } from "./useWsConnection";
@@ -121,7 +122,14 @@ export interface StreamCallbacks {
   onPhaseChange?: (phase: StreamPhase) => void;
   onChunk?: (text: string) => void;
   onToolStart?: (info: { toolCallId: string; tool: string; content?: string }) => void;
-  onToolComplete?: (info: { toolCallId: string; tool: string; content?: string; denialKind?: string }) => void;
+  onToolComplete?: (info: {
+    toolCallId: string;
+    tool: string;
+    content?: string;
+    denialKind?: string;
+    /** Server-authoritative `ToolResult::is_error`. */
+    isError?: boolean;
+  }) => void;
   onToolChunk?: (info: {
     toolCallId: string;
     tool: string;
@@ -164,7 +172,16 @@ export interface StreamCallbacks {
     expiresAt?: number | null;
     reason?: string;
     sessionId: string;
-  }) => Promise<{ decision: "approved" | "denied" | "expired" }>;
+  }) => Promise<{ decision: "approved" | "denied" | "expired"; remember?: boolean }>;
+  /** Server coalesced N parallel approvals into one card. The
+   *  settlement promise carries the single decision (no per-item
+   *  granularity at the wire level) plus an optional
+   *  `remember=true` that translates to wire decision `always`. */
+onApprovalBatchRequest?: (req: {
+    batchId: string;
+    items: ApprovalRequestItem[];
+    sessionId: string;
+  }) => Promise<{ decision: "approved" | "denied" | "expired"; remember?: boolean }>;
   onClarifyRequest?: (req: {
     requestId: string;
     question: string;
@@ -228,18 +245,32 @@ export function useStreamChat(activeSessionId: string | null) {
       reasoningTokens: number;
     } | null>(null);
   const [lastActivityAt, setLastActivityAt] = useState<number | null>(null);
-  const wsRef = useRef<WebSocket | null>(null);
-  // type-B observability + direct-send: send a raw WS text
-  // frame on the live socket. Returns false (no-op) if the socket is
-  // missing or not OPEN, so callers can distinguish "sent" from
-  // "dropped". Used by the approval flow so the click handler can
-  // emit `approval_response` directly AND so we can route diagnostics to
-  // the server log (the webview console is invisible in Tauri).
+  // stdio bridge: wsRef now holds the listener-unlisten function (the
+  // bridge never "closes" — the channel disappears only when the
+  // server stops, which the watchdog handles out-of-band). We keep
+  // the `.close()`-shape call sites so the rest of the file does
+  // not need to know about the transport.
+  const wsRef = useRef<(() => void) | null>(null);
+  // type-B observability + direct-send: send a raw text frame on the
+  // live `stream:<sessionId>` channel via the stdio bridge. Returns
+  // false (no-op) if the channel is not currently subscribed, so
+  // callers can distinguish "sent" from "dropped". Used by the
+  // approval flow so the click handler can emit `approval_response`
+  // directly AND so we can route diagnostics to the server log.
   const wsSendRaw = useCallback((text: string): boolean => {
-    const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    const unlisten = wsRef.current;
+    if (!unlisten) return false;
     try {
-      ws.send(text);
+      // Channel is implicit in the global "send raw on the
+      // currently-streaming session" rule — caller is App.tsx's
+      // approval/clarity path, which only fires while a stream is
+      // active, and `streamingSessionIdRef` tells us which channel.
+      const sid = streamingSessionIdRef.current;
+      if (!sid) return false;
+      void invoke<void>("backend_channel_send", {
+        channel: `stream:${sid}`,
+        payload: text,
+      });
       return true;
     } catch {
       return false;
@@ -291,7 +322,7 @@ export function useStreamChat(activeSessionId: string | null) {
   useEffect(() => {
     return () => {
       console.log("[WS-CLOSE] site=unmount (组件卸载时仍有在途流，主动关闭 WS)");
-      wsRef.current?.close();
+      wsRef.current?.();
       wsRef.current = null;
     };
   }, []);
@@ -496,6 +527,19 @@ export function useStreamChat(activeSessionId: string | null) {
           if (pending) callbacks.onChunk?.(pending);
 
           ctx.doneRef.current = true;
+          // Stream is ending (done/error/cancel) — clear any in-flight
+          // compaction banner. Without this, a compression whose terminal
+          // snapshot never arrives (cancel, WS drop, backend panic) leaves
+          // the "压缩中" spinner stuck forever. Terminal phases
+          // (complete/failed) are kept so the user still sees the result.
+          setCompactionStatus((prev) =>
+            prev &&
+            (prev.phase === "starting" ||
+              prev.phase === "in_progress_fast" ||
+              prev.phase === "in_progress_llm")
+              ? null
+              : prev,
+          );
           if (keepSessionAlive) {
             console.log(`[WS-KEEPALIVE] site=settle reason=${reason ?? "interrupted"} (outcome!=completed, session preserved)`);
           } else {
@@ -503,7 +547,7 @@ export function useStreamChat(activeSessionId: string | null) {
             setStreamingSessionId(null);
             setStreamingStatus(null);
             console.log(`[WS-CLOSE] site=settle reason=${reason ?? "natural-done"}`);
-            wsRef.current?.close();
+            wsRef.current?.();
             wsRef.current = null;
           }
           if (reason) stopReason = reason;
@@ -590,8 +634,19 @@ export function useStreamChat(activeSessionId: string | null) {
     }
     // Defensive: ensure WS is closed and streaming state is cleared
     // even if settle() somehow didn't run.
-    console.log("[WS-CLOSE] site=cancel (用户点击停止的防御性兜底)");
-    wsRef.current?.close();
+    // Log the real caller instead of claiming user intent: `cancel()` has
+    // TWO callers — the Composer stop button AND `chatStateReset`
+    // (session/model switch). The old hardcoded "用户点击停止" text fired
+    // for both, which made "the stream died by itself" reports
+    // undiagnosable.
+    const cancelCaller =
+      new Error()
+        .stack?.split("\n")
+        .slice(2, 4)
+        .map((l) => l.trim())
+        .join(" <- ") ?? "unknown";
+    console.log(`[WS-CLOSE] site=cancel caller=${cancelCaller}`);
+    wsRef.current?.();
     wsRef.current = null;
     streamingSessionIdRef.current = null;
     setStreamingSessionId(null);

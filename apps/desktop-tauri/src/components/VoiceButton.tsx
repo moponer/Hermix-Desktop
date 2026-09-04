@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback } from "react";
 import { Mic } from "lucide-react";
-import { apiUrl } from "../api";
+import * as api from "../api";
 
 interface VoiceButtonProps {
   onTranscribe: (text: string) => void;
@@ -94,22 +94,26 @@ export function VoiceButton({ onTranscribe, disabled }: VoiceButtonProps) {
         stream.getTracks().forEach(t => t.stop());
         try {
           const pcmBase64 = await webmBlobToPcmBase64(blob);
-          const res = await fetch(apiUrl("/v1/voice/transcribe"), {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              pcm_base64: pcmBase64,
-              sample_rate: 16000,
-              language: "zh",
-            }),
-          });
-          if (!res.ok) {
-            return;
-          }
-          const { text } = (await res.json()) as { text?: string };
+          // stdio bridge: same /v1/voice/transcribe endpoint, just
+          // routed through `invoke("backend_http_request")` instead
+          // of `fetch('http://127.0.0.1:3000/...')`. Body now goes
+          // through the bridge's JSON envelope so it has to be a real
+          // JSON value, not a string — the old `headers` form is
+          // unnecessary (fetchJSON sets content-type when body is set).
+          const { text } = await api.fetchJSON<{ text?: string }>(
+            "/v1/voice/transcribe",
+            {
+              method: "POST",
+              body: JSON.stringify({
+                pcm_base64: pcmBase64,
+                sample_rate: 16000,
+                language: "zh",
+              }),
+            },
+          );
           if (text) onTranscribe(text);
         } catch {
-          // network error / mic not supported / permission denied / decode error
+          // bridge round-trip failed / mic unsupported / permission denied
         }
       };
       rec.start();
@@ -132,7 +136,7 @@ export function VoiceButton({ onTranscribe, disabled }: VoiceButtonProps) {
           : "text-text-muted hover:text-text-primary hover:bg-bg-tertiary"
       } disabled:opacity-30`}
     >
-      <Mic size={12} />
+      <Mic className="icon-sm" />
       <span>{active ? "停止" : "语音"}</span>
     </button>
   );

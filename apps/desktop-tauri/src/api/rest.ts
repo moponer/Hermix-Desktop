@@ -58,145 +58,157 @@ import type {
   AnalyticsDebugResponse,
 } from "./types";
 
-export const API_BASE = "http://127.0.0.1:3000";
-export const WS_BASE = "ws://127.0.0.1:3000";
+// Transport switched from `fetch()` over `127.0.0.1:3000` to
+// `invoke<string>("backend_http_request")` over the Tauri stdio
+// bridge. `API_BASE` / `WS_BASE` / `apiUrl()` no longer exist —
+// there is no host or port. Anything that still needs the old
+// sentinel (e.g. `providerConfig.ts`'s "user left the provider URL
+// blank" fallback) must hard-code its own now.
 
-export function apiUrl(path: string): string {
-  return `${API_BASE}${path.startsWith("/") ? path : `/${path}`}`;
+// ── Stdio transport primitives ─────────────────────────────────
+//
+// All REST-style calls go through the Tauri stdio bridge:
+//   1. The bridge (`stdio_bridge.rs::http_request`) sends a JSON Lines
+//      frame on the sidecar's stdin with a fresh request_id.
+//   2. The server's stdio multiplex (`hermix-server::stdio_session`)
+//      dispatches the frame into the same axum router the TCP era
+//      exposed — handler code is unchanged.
+//   3. The reply is returned as a JSON envelope
+//      `{"status":N,"body":"…","enc":"utf8"|"base64"}` so the
+//      front-end only ever has one parser.
+
+import { invoke } from "@tauri-apps/api/core";
+
+/** Per-request timeout. The stdio bridge has its own 120s oneshot
+ *  timeout; we add a 10s client-side `AbortSignal` so a hung request
+ *  can be cancelled from the React side without waiting for the
+ *  bridge to give up. */
+const REQUEST_TIMEOUT_MS = 10_000;
+
+/** HTTP-style envelope returned by `backend_http_request`. The
+ *  server's stdio handler wraps every axum response in this shape
+ *  so the front-end only ever has one parser. Binary bodies come
+ *  back as `enc="base64"` so UTF-8 framing can't corrupt them. */
+export interface ApiReply {
+  status: number;
+  body: string;
+  enc: "utf8" | "base64";
 }
 
-/** Wait n milliseconds without blocking the event loop. */
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+/** Lowest-level entry point. Sends a JSON Lines frame on the stdio
+ *  bridge's `http` channel, awaits the matching request_id reply,
+ *  and returns the envelope (status + body + enc) for the caller
+ *  to interpret. Throws on bridge error / timeout — those are
+ *  genuinely fatal (no bridge = no backend). */
+export async function apiInvoke(
+  method: string,
+  path: string,
+  body?: unknown,
+  signal?: AbortSignal,
+): Promise<ApiReply> {
+  const payload = body === undefined ? null : JSON.stringify(body);
+  const timeoutSignal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+  const combined = signal
+    ? AbortSignal.any([signal, timeoutSignal])
+    : timeoutSignal;
 
-// ── Circuit breaker ─────────────────────────────────────────────
-// When the backend is unreachable, multiple components fire requests
-// simultaneously, each going through withRetry (N retries each).
-// ERR_INSUFFICIENT_RESOURCES also produces TypeError: Failed to fetch,
-// so withRetry retries — creating a positive feedback loop that exhausts
-// the browser's connection pool (Chrome limits ~6 concurrent per origin).
-// The circuit breaker breaks this cycle: after N consecutive network
-// failures across ALL callers, all requests are immediately rejected for
-// a cooldown period, giving the browser time to reclaim sockets.
-
-let _consecutiveFailures = 0;
-const CIRCUIT_FAILURE_THRESHOLD = 8;
-const CIRCUIT_COOLDOWN_MS = 15_000;
-let _circuitTrippedUntil = 0;
-
-/** True when the circuit breaker is in cooldown — all requests are
- *  immediately rejected without hitting the network. Components that
- *  poll (BackendStatus, CustomAppsView) should check this to skip. */
-export function isCircuitTripped(): boolean {
-  return Date.now() < _circuitTrippedUntil;
-}
-
-function _recordFailure() {
-  _consecutiveFailures++;
-  if (_consecutiveFailures >= CIRCUIT_FAILURE_THRESHOLD && _circuitTrippedUntil <= Date.now()) {
-    _circuitTrippedUntil = Date.now() + CIRCUIT_COOLDOWN_MS;
-    console.warn(
-      `[circuit] Tripped after ${_consecutiveFailures} consecutive network failures — ` +
-      `cooldown ${CIRCUIT_COOLDOWN_MS}ms. All API requests will be rejected until ${new Date(_circuitTrippedUntil).toLocaleTimeString()}.`,
-    );
-  }
-}
-
-function _recordSuccess() {
-  if (_consecutiveFailures > 0) {
-    _consecutiveFailures = 0;
-    _circuitTrippedUntil = 0;
-  }
-}
-
-/**
- * Retry wrapper: if fetch throws a network error (ECONNREFUSED / ECONNRESET
- * — i.e., the sidecar hasn't bound port 3000 yet), retry up to 3 times with
- * exponential backoff (200ms … 800ms). This avoids the boot-time console
- * spam of ERR_CONNECTION_REFUSED errors.
- *
- * **Circuit breaker**: after CIRCUIT_FAILURE_THRESHOLD consecutive network
- * failures across all callers, the circuit trips and all subsequent requests
- * are immediately rejected for CIRCUIT_COOLDOWN_MS. This prevents the
- * positive feedback loop where ERR_INSUFFICIENT_RESOURCES causes retries
- * that further exhaust the browser's connection pool.
- *
- * If the request succeeds but returns non-2xx, throw immediately (don't retry
- * HTTP errors — those are real problems, not startup races).
- */
-async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
-  // Circuit breaker: reject immediately if tripped.
-  if (isCircuitTripped()) {
-    throw new TypeError("Failed to fetch (circuit breaker open)");
-  }
-
-  const MAX_RETRIES = 3;
-  const BASE_DELAY_MS = 200;
-
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    try {
-      const result = await fn();
-      _recordSuccess();
-      return result;
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      // Only retry on network-level errors (TypeError from fetch when the
-      // server isn't listening yet). Don't retry on HTTP 4xx/5xx responses
-      // or on AbortError (timeout — retrying would make overload worse).
-      if (!msg.includes("Failed to fetch") && !msg.includes("NetworkError")) {
-        throw err;
-      }
-      _recordFailure();
-      // If the circuit just tripped, stop retrying immediately.
-      if (isCircuitTripped()) {
-        throw err;
-      }
-      if (attempt >= MAX_RETRIES) {
-        throw err;
-      }
-      const delayMs = BASE_DELAY_MS * (1 << attempt); // 200, 400, 800
-      await sleep(delayMs);
-    }
-  }
-  throw new Error("retry exhausted"); // unreachable, just for TS
-}
-
-/** Per-request timeout in milliseconds. Prevents connections from
- *  hanging indefinitely when the backend is slow or unresponsive,
- *  which would otherwise exhaust the browser's connection pool. */
-const FETCH_TIMEOUT_MS = 10_000;
-
-async function fetchApi<T = void>(path: string, init?: RequestInit, { parseJson = true }: { parseJson?: boolean } = {}): Promise<T> {
-  return withRetry(async () => {
-    // Combine a per-request timeout with any caller-provided signal
-    // so long-running requests don't hold connections open indefinitely.
-    const timeoutSignal = AbortSignal.timeout(FETCH_TIMEOUT_MS);
-    const signal = init?.signal
-      ? AbortSignal.any([init.signal, timeoutSignal])
-      : timeoutSignal;
-    const response = await fetch(apiUrl(path), { ...init, signal });
-    if (!response.ok) {
-      const text = await response.text().catch(() => response.statusText);
-      throw new Error(text || `HTTP ${response.status}`);
-    }
-    if (parseJson) {
-      return response.json() as T;
-    }
-    return undefined as T;
+  // Tauri forwards the optional 3rd arg as `body` to the Rust
+  // command — when null we still pass it so the Rust signature
+  // (which expects `Option<String>`) is happy.
+  const raw = await invoke<string>("backend_http_request", {
+    method,
+    path,
+    body: payload,
   });
+  if (combined.aborted) {
+    throw new DOMException("request aborted", "AbortError");
+  }
+
+  // Server reply is the bridge envelope; parse eagerly so callers
+  // can branch on `status` before decoding the body.
+  return JSON.parse(raw) as ApiReply;
 }
 
-/** Fetch a JSON response from the API. Exported so modules that need
- *  raw endpoint access (e.g. customAppApi.ts) can share the circuit
- *  breaker, timeout, and retry infrastructure. */
+/** JSON fetch over the stdio bridge. Throws on non-2xx, mirroring
+ *  the old `fetch()` semantics so call sites keep their
+ *  `try { ... } catch { return null }` shape. */
 export async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
-  return fetchApi<T>(path, init, { parseJson: true });
+  const method = (init?.method ?? "GET").toUpperCase();
+  const body =
+    init?.body == null
+      ? undefined
+      : typeof init.body === "string"
+        ? init.body
+        : JSON.stringify(init.body);
+  const reply = await apiInvoke(method, path, body, init?.signal ?? undefined);
+  if (reply.status < 200 || reply.status >= 300) {
+    const message = reply.enc === "utf8"
+      ? (() => {
+          try {
+            const parsed = JSON.parse(reply.body) as { message?: unknown };
+            return typeof parsed.message === "string" ? parsed.message : reply.body;
+          } catch {
+            return reply.body;
+          }
+        })()
+      : reply.body;
+    throw new Error(message || `HTTP ${reply.status}`);
+  }
+  if (reply.enc === "base64") {
+    // Binary path — caller asked for a Blob, not JSON. We don't try
+    // to infer here; `fetchJSONBinary` is the explicit choice.
+    throw new Error("fetchJSON: response is binary; use fetchJSONBinary");
+  }
+  try {
+    return JSON.parse(reply.body) as T;
+  } catch (e) {
+    throw new Error(`fetchJSON: malformed JSON body: ${String(e)}`);
+  }
 }
 
-/** Fetch without parsing the response body. */
+/** Binary fetch — used by `exportWorkspace` to receive the .hwx
+ *  archive bytes without going through JSON. */
+export async function fetchJSONBinary(
+  method: string,
+  path: string,
+): Promise<Blob> {
+  const reply = await apiInvoke(method, path);
+  if (reply.status < 200 || reply.status >= 300) {
+    throw new Error(`HTTP ${reply.status}: ${reply.body}`);
+  }
+  if (reply.enc !== "base64") {
+    throw new Error("fetchJSONBinary: expected base64 envelope");
+  }
+  const bin = atob(reply.body);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return new Blob([out]);
+}
+
+/** POST/DELETE without a JSON response body. Throws on non-2xx,
+ *  identical to `fetchJSON` minus the decode step. */
 async function fetchVoid(path: string, init?: RequestInit): Promise<void> {
-  return fetchApi<void>(path, init, { parseJson: false });
+  const method = (init?.method ?? "GET").toUpperCase();
+  const body =
+    init?.body == null
+      ? undefined
+      : typeof init.body === "string"
+        ? init.body
+        : JSON.stringify(init.body);
+  const reply = await apiInvoke(method, path, body, init?.signal ?? undefined);
+  if (reply.status < 200 || reply.status >= 300) {
+    throw new Error(`HTTP ${reply.status}: ${reply.body}`);
+  }
+}
+
+/** Legacy stub — kept so `isCircuitTripped` imports from `../api`
+ *  don't break. The stdio bridge doesn't have a comparable failure
+ *  mode (its on-wire errors are surfaced as Rust `Result::Err`,
+ *  not as connection-pool starvation), so the circuit is permanently
+ *  closed. Components that polled this to gate UI can keep polling
+ *  and just always see `false`. */
+export function isCircuitTripped(): boolean {
+  return false;
 }
 
 // ── Workspaces（工作台）───────────────────────────────
@@ -259,6 +271,23 @@ export interface ProviderMeta {
 
 export async function getProviderMeta(): Promise<ProviderMeta[]> {
   return fetchJSON<ProviderMeta[]>("/api/providers/meta");
+}
+
+/** 后端权威解析一批模型的上下文窗口（值 + 来源分层）。
+ *  后端拥有 catalog（`get_model_context_length_with_source`），前端不再本地镜像
+ *  `DEFAULT_CONTEXT_LENGTHS` —— 那份手抄表与后端必然漂移。 */
+export async function resolveContextWindows(
+  models: string[],
+): Promise<Record<string, { value: number; source: string }>> {
+  if (models.length === 0) return {};
+  const res = await fetchJSON<{
+    windows: Record<string, { value: number; source: string }>;
+  }>("/api/models/context-windows", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ models }),
+  });
+  return res.windows ?? {};
 }
 
 /** 获取工作台详情（注册表 + schema）。 */
@@ -407,24 +436,45 @@ export async function workspaceCountRows(
   );
 }
 
-// ── 工作台导出 / 导入（M5 协作分发，P2 前端 UI）──────────────
-
-/** 导出工作台为 .hwx 包（GET export → blob，触发浏览器下载）。 */
-export async function exportWorkspace(workspaceId: string): Promise<Blob> {
-  const response = await fetch(apiUrl(`/api/workspaces/${encodeURIComponent(workspaceId)}/export`), {
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-  });
-  if (!response.ok) {
-    const text = await response.text().catch(() => response.statusText);
-    throw new Error(text || `HTTP ${response.status}`);
-  }
-  return response.blob();
+/** 分组计数（仪表盘 chart 组件用，列名由后端 schema 白名单校验）。 */
+export async function workspaceGroupCount(
+  workspaceId: string,
+  table: string,
+  groupBy: string,
+  limit?: number,
+): Promise<{ groups: { label: string; count: number }[] }> {
+  return fetchJSON<{ groups: { label: string; count: number }[] }>(
+    `/api/workspaces/${encodeURIComponent(workspaceId)}/tables/${encodeURIComponent(table)}/group_count`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ group_by: groupBy, limit }),
+    },
+  );
 }
 
-/** 导入 .hwx 包（mode: new 新建 / merge 合并到同名工作台）。 */
+// ── 工作台导出 / 导入（M5 协作分发，P2 前端 UI）──────────────
+
+/** 导出工作台为 .hwx 包（GET export → blob，触发浏览器下载）。
+ *  Binary path goes through the stdio bridge's `base64` envelope —
+ *  the server encodes the .hwx archive as base64 and we decode it
+ *  back into a Blob here. No streaming, but .hwx files are small
+ *  (< 50 MB by the upload API's limit) so this is fine. */
+export async function exportWorkspace(workspaceId: string): Promise<Blob> {
+  return fetchJSONBinary(
+    "GET",
+    `/api/workspaces/${encodeURIComponent(workspaceId)}/export`,
+  );
+}
+
+/** 导入 .hwx 包。
+ *  - `new`    新建工作台（包内 id 重生成，避免覆盖本机同名）
+ *  - `merge`   整表 LWW 合并到同名工作台（每行 updated_at 比对）
+ *  - `upsert`  按表 unique 字段逐行 INSERT/UPDATE（适合"定期再导同一份名单"）
+ */
 export async function importWorkspace(
   pkg: Record<string, unknown>,
-  mode: "new" | "merge" = "new",
+  mode: "new" | "merge" | "upsert" = "new",
 ): Promise<{ ok: boolean; id: string; mode: string; tables: Record<string, number> }> {
   return fetchJSON<{ ok: boolean; id: string; mode: string; tables: Record<string, number> }>(
     "/api/workspaces/import",
@@ -474,11 +524,15 @@ export async function uploadWorkspaceFile(
   );
 }
 
-/** 附件读取 URL（attachment 字段值为相对路径时拼接完整地址）。 */
+/** 附件读取 URL（attachment 字段值为相对路径时拼接完整地址）。
+ *  Returns a `stdio://workspace-file/<workspaceId>/<filename>` sentinel
+ *  that the document-level image interceptor in `App.tsx` rewrites
+ *  into a blob URL once the bridge responds. Keeping the call site
+ *  synchronous (the URL is handed straight to `<img src=…>`) avoids
+ *  refactoring the cell renderer in `TableView.tsx`. */
 export function workspaceFileUrl(workspaceId: string, path: string): string {
-  // path 形如 "files/<filename>"——只取文件名部分拼到端点（防多余前缀）
   const filename = path.split("/").pop() ?? path;
-  return apiUrl(`/api/workspaces/${encodeURIComponent(workspaceId)}/files/${encodeURIComponent(filename)}`);
+  return `stdio://workspace-file/${encodeURIComponent(workspaceId)}/${encodeURIComponent(filename)}`;
 }
 
 // ── 变更历史 + 撤销（P6）─────────────────────────────
@@ -1316,11 +1370,13 @@ export const deleteEnvVar = async (key: string): Promise<boolean> => {
 export const autoCorrectConfig = async (): Promise<AutoCorrectResponse> =>
   fetchJSON("/api/config/auto-correct", { method: "POST" });
 
+/** Cheap liveness check used by `BackendStatus` and the splash screen.
+ *  Goes through the bridge's `backend_ready` command — that one is a
+ *  synchronous `bool` that does NOT round-trip a frame, so it's safe
+ *  to call on a render loop without poisoning the request_id table. */
 export const checkBackendHealth = async (): Promise<boolean> => {
   try {
-    const resp = await fetch(apiUrl("/health"), { signal: AbortSignal.timeout(3000) });
-    const data = await resp.json();
-    return data.status === "ok";
+    return await invoke<boolean>("backend_ready");
   } catch {
     return false;
   }
@@ -1532,14 +1588,19 @@ export const toggleTickLoop = async (enabled: boolean): Promise<TickLoopStatus> 
 export const listGroupChatRooms = async (): Promise<GroupChatRoom[]> =>
   fetchJSON<GroupChatRoom[]>("/api/groupchat/rooms");
 
-/** Fetch a single room by id. */
+/** Fetch a single room by id. Returns `null` on 404 (room deleted
+ *  between list and detail fetch) so callers can fall back gracefully
+ *  without a try/catch. */
 export const getGroupChatRoom = async (roomId: string): Promise<GroupChatRoom | null> => {
-  const response = await fetch(apiUrl(`/api/groupchat/rooms/${encodeURIComponent(roomId)}`));
-  if (response.status === 404) return null;
-  if (!response.ok) {
-    throw new Error(`Failed to fetch room ${roomId}: HTTP ${response.status}`);
+  try {
+    return await fetchJSON<GroupChatRoom>(
+      `/api/groupchat/rooms/${encodeURIComponent(roomId)}`,
+    );
+  } catch (e) {
+    // 404 → null; everything else → rethrow so the caller can decide.
+    if (e instanceof Error && /404/.test(e.message)) return null;
+    throw e;
   }
-  return (await response.json()) as GroupChatRoom;
 };
 
 export const createGroupChatRoom = async (

@@ -27,6 +27,7 @@ import type { StreamPhase, TodoSnapshotItem } from "./hooks/useStreamChat";
 import type { SubAgentState, SubAgentEventPayload } from "./types";
 import { useResizable } from "./hooks/useResizable";
 import { useWorkspaceRoot } from "./hooks/useWorkspaceRoot";
+import { refreshWorkspaces } from "./hooks/useWorkspaceRegistry";
 import { useArtifacts } from "./hooks/useArtifacts";
 import { resetChatStateForModelSwitch, type RefLike } from "./lib/chatStateReset";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -1028,41 +1029,42 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
       // session if the user switched tabs. Now reads the authoritative
       // session from pendingApprovalSessionsRef (set when the card was
       // created by onApprovalRequest), with activeSessionId as fallback.
-      const restPayload = JSON.stringify({
+      const restPayload = {
         request_id: requestId,
         // 「以后自动允许」→ wire `always` (server persists into the
         // durable allowlist); plain allow keeps the legacy string.
         decision: remember === true ? "always" : "approved",
-      });
+      };
       const restSid =
         pendingApprovalSessionsRef.current.get(requestId) ?? activeSessionId;
       if (restSid) {
-        const restUrl = api.apiUrl(`/v1/sessions/${restSid}/approval`);
         setTimeout(async () => {
           try {
-            const res = await fetch(restUrl, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: restPayload,
-            });
-            const data = await res.json();
+            const data = await api.fetchJSON<{ matched: boolean }>(
+              `/v1/sessions/${encodeURIComponent(restSid)}/approval`,
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(restPayload),
+              },
+            );
             // matched=true  → REST was the path that actually delivered
-            // (WS likely dropped the message — worth
+            // (bridge likely dropped the message — worth
             // keeping the loud console.error so we can
             // grep hermix-fresh.log / WebView2 console
             // to detect a recurrence).
-            // matched=false → idempotent miss, the WS path already
-            // resolved the registry entry first. NOT
+            // matched=false → idempotent miss, the upstream channel
+            // path already resolved the registry entry first. NOT
             // an error — log at info level so it
             // stops looking like a red failure in the
             // console.
             if (data.matched) {
               console.warn(
-                `[APPROVAL-REST] id=${requestId} matched=true — REST delivered (WS path likely dropped the message)`,
+                `[APPROVAL-REST] id=${requestId} matched=true — REST delivered (upstream channel likely dropped the message)`,
               );
             } else {
               console.info(
-                `[APPROVAL-REST] id=${requestId} matched=false — idempotent miss, WS path already resolved this request`,
+                `[APPROVAL-REST] id=${requestId} matched=false — idempotent miss, upstream channel already resolved this request`,
               );
             }
           } catch (e) {
@@ -1072,7 +1074,8 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
       }
 
       // Resolve the promise immediately so the UI updates
-      // AND triggers the main WS path (useStreamChat.ts:1175 liveWs.send)
+      // AND triggers the main upstream channel path
+      // (useStreamChat.ts connected-frame send).
       resolveApproval(requestId, "approved", remember);
     },
     [activeSessionId, resolveApproval],
@@ -1083,34 +1086,35 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
       console.info(`[APPROVAL-DENY] id=${requestId} t=${Date.now()}`);
 
       // mirror the approve-path cleanup — drop the redundant
-      // wsSendRaw() step here too. The main WS path in useStreamChat.ts
-      // (the `.then(resp => ...)` after `resolveApproval()`) handles
-      // sending `approval_response` over the live WS, with a proper
-      // wsRef.current OPEN guard. The REST fallback below is what
-      // actually catches WebView2's silent WS message loss.
-      const restPayload = JSON.stringify({
+      // wsSendRaw() step here too. The main upstream channel path in
+      // useStreamChat.ts (the `.then(resp => ...)` after
+      // `resolveApproval()`) handles sending `approval_response` over
+      // the live `stream:<sid>` channel. The REST fallback below is
+      // what actually catches silent message loss across the bridge.
+      const restPayload = {
         request_id: requestId,
         decision: "denied",
-      });
+      };
       const restSid =
         pendingApprovalSessionsRef.current.get(requestId) ?? activeSessionId;
       if (restSid) {
-        const restUrl = api.apiUrl(`/v1/sessions/${restSid}/approval`);
         setTimeout(async () => {
           try {
-            const res = await fetch(restUrl, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: restPayload,
-            });
-            const data = await res.json();
+            const data = await api.fetchJSON<{ matched: boolean }>(
+              `/v1/sessions/${encodeURIComponent(restSid)}/approval`,
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(restPayload),
+              },
+            );
             if (data.matched) {
               console.error(
-                `[APPROVAL-DENY-REST] id=${requestId} matched=true — REST delivered (WS path likely dropped the message)`,
+                `[APPROVAL-DENY-REST] id=${requestId} matched=true — REST delivered (upstream channel likely dropped the message)`,
               );
             } else {
               console.log(
-                `[APPROVAL-DENY-REST] id=${requestId} matched=false — idempotent miss, WS path already resolved this request`,
+                `[APPROVAL-DENY-REST] id=${requestId} matched=false — idempotent miss, upstream channel already resolved this request`,
               );
             }
           } catch (e) {
@@ -1207,26 +1211,27 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
         `[APPROVAL-BATCH-CLICK] id=${batchId} t=${Date.now()} remember=${remember === true}`,
       );
       // REST 1s fallback — same shape as the single-item path. The
-      // existing `/v1/sessions/{sid}/approval` endpoint will treat
-      // `batch_id` as an unknown request_id (no-op, logged); the WS
-      // path is authoritative for batches. We still POST so a future
-      // server can pick it up without touching the client.
-      const restPayload = JSON.stringify({
-        batch_id: batchId,
+      // backend `approve_via_rest` only reads `request_id`, so reuse it
+      // with the batch id (resolved via the WS batch path; REST is a
+      // benign idempotent miss if WS already handled it). Drop the old
+      // `batch_id` key — it was rejected with HTTP 400 (missing request_id).
+      const restPayload = {
+        request_id: batchId,
         decision: remember === true ? "always" : "approved",
-      });
+      };
       const restSid =
         pendingApprovalSessionsRef.current.get(batchId) ?? activeSessionId;
       if (restSid) {
-        const restUrl = api.apiUrl(`/v1/sessions/${restSid}/approval`);
         setTimeout(async () => {
           try {
-            const res = await fetch(restUrl, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: restPayload,
-            });
-            const data = await res.json().catch(() => ({}));
+            const data = await api.fetchJSON<{ matched?: boolean }>(
+              `/v1/sessions/${encodeURIComponent(restSid)}/approval`,
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(restPayload),
+              },
+            );
             if (data?.matched) {
               console.warn(
                 `[APPROVAL-BATCH-REST] id=${batchId} matched=true — REST delivered`,
@@ -1826,7 +1831,7 @@ streamPhaseRef.current = null;
             const rawForFriendly = err || detail || "";
             const looksRaw = /API error|LLM API error|unknown status code|overloaded|rate limit|timeout|connection refused|unauthorized|forbidden|401|403|429|5\d{2}/i.test(rawForFriendly);
             const friendly = looksRaw ? localizeStreamError(detail ?? err) : rawForFriendly;
-            const errText = `⚠️ ${friendly}`;
+            const errText = friendly;
             // Promote the (possibly coarse) `code` shipped by the
             // backend's `user_facing_agent_error` into the
             // StreamErrorCard's category taxonomy. When the backend
@@ -1954,11 +1959,20 @@ streamPhaseRef.current = null;
               };
             }));
           },
-          onToolComplete: ({ toolCallId, tool, content, denialKind }) => {
+          onToolComplete: ({ toolCallId, tool, content, denialKind, isError }) => {
             // 工具调用被拒绝时（用户拒绝 / 超时 / 连接中断）弹顶部横幅，
             // 对应 agent 注入的"告诉用户"提示。`"policy"` 是静默硬拦截，跳过。
             if (denialKind && denialKind !== "policy") {
               showDenialBanner(denialKind, tool);
+            }
+            // Agent 侧改动工作台（建/改结构/删）后刷新注册表，让左侧栏
+            // 与 @work 联想立即可见新工作台，无需重启或手动 CRUD。
+            if (
+              tool === "workspace_build" ||
+              tool === "workspace_update_schema" ||
+              tool === "workspace_delete"
+            ) {
+              void refreshWorkspaces();
             }
             // Append a `tool_complete` event to the
             // assistant's execution_timeline. No separate tool message,
@@ -1975,6 +1989,9 @@ streamPhaseRef.current = null;
               tool_call_id: toolCallId,
               content: content ?? "",
               created_at: new Date().toISOString(),
+              // Server-authoritative failure flag; persisted so a reload
+              // marks the card failed without inspecting the payload text.
+              is_error: isError,
             };
 
             setSessions((prev) => prev.map((s) => {
@@ -2207,32 +2224,27 @@ return {
                     steps.splice(i, 1);
                   }
                   if (convertedTexts.length > 0) {
-                    // The converted text was previously in
-                    // `message.content` (accumulated by onChunk).
-                    // Move it to `reasoningContent` so the final
-                    // persisted state is correct.
-                    const fullConverted = convertedTexts.join("");
-                    // Remove the converted text from the end of
-                    // `content` (it was appended by onChunk).
-                    if (contentFix && fullConverted) {
-                      // Strip the retro-converted text from the end of
-                      // `content`. The fragment originated from `content`
-                      // (appended by appendChunk), so it is normally an
-                      // exact suffix. Tolerate trailing whitespace that may
-                      // have crept in between chunks (the fragile
-                      // `endsWith` below used to miss those cases and leave
-                      // the body text double-rendered as both body and
-                      // reasoning).
-                      const tail = contentFix.replace(/\s+$/, "");
-                      if (tail.endsWith(fullConverted)) {
-                        contentFix = contentFix.slice(0, tail.length - fullConverted.length);
-                      } else if (contentFix.trim() === fullConverted.trim()) {
-                        // Whole body was retro-converted (untagged-reasoning
-                        // case) — nothing should remain as body text.
-                        contentFix = "";
-                      }
-                    }
-                    reasoningFix = fullConverted + reasoningFix;
+                    // Rebuild the visible body from the text steps that
+                    // REMAIN after the conversion instead of stripping a
+                    // suffix off `content`.
+                    //
+                    // `appendChunk` writes every chunk to BOTH
+                    // `message.content` and a `text` step, so the two are
+                    // always the same string — but suffix (`endsWith`)
+                    // matching silently failed whenever they diverged
+                    // (sanitizer trims, interleaved tool steps), leaving
+                    // the same text rendered as BOTH body and reasoning.
+                    // At this point the converted steps have already been
+                    // spliced out, so joining what's left is exact and
+                    // needs no string matching at all.
+                    contentFix = steps.reduce(
+                      (acc, s) =>
+                        s.kind === "text"
+                          ? acc + (s as { content: string }).content
+                          : acc,
+                      "",
+                    );
+                    reasoningFix = convertedTexts.join("") + reasoningFix;
                   }
                   // Now append the new reasoning piece.
                   steps = appendReasoningStep(steps, piece);
@@ -2700,7 +2712,7 @@ return {
       // already set currentAssistantIdRef.current = null. Capture
       // first, use inside setSessions updater.
       const assistantIdAtCatch = currentAssistantIdRef.current;
-      const errText = `⚠️ ${localizeStreamError(String(e))}`;
+      const errText = localizeStreamError(String(e));
       setSessions((prev) => prev.map((s) => {
         if (s.id !== sessionId) return s;
         return {
@@ -3084,7 +3096,7 @@ return {
 
         {/* Left sidebar — grid column 1 controls width; wrapper handles mobile slide */}
         <div
-          className={`${sidebarOpen ? "translate-x-0" : "-translate-x-full"} transition-transform duration-200 absolute md:relative z-20 h-full min-h-0 overflow-hidden`}
+          className={`${sidebarOpen ? "translate-x-0" : "-translate-x-full"} transition-transform duration-slow absolute md:relative z-20 h-full min-h-0 overflow-hidden`}
         >
           <ErrorBoundary name="侧边栏">
           <Sidebar

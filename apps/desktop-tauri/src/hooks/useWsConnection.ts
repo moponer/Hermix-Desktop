@@ -1,194 +1,82 @@
-import { resolveWebSocketUrl } from "../api";
+import { listenStreamChannel, streamChannelName } from "../api";
 import type { StreamChatSendContext } from "./useStreamParser";
 
-/** Auto-retry cap for WS failures that occur before any content arrives. */
-const MAX_RETRIES = 3;
-/** Backoff steps between retry attempts (ms). */
-const RETRY_DELAYS_MS = [500, 1000, 2000];
-
 /**
- * Build the WS connection factory (`doConnect`) as a standalone function.
+ * Build the `stream:<sessionId>` subscription factory (`doConnect`).
  *
- * This is a verbatim lift of the original `doConnect` body from
- * `useStreamChat.ts`: it opens `new WebSocket(resolveWebSocketUrl(...))`,
- * wires the supplied `onMessage` handler plus the retry-aware
- * `onerror` / `onclose` handlers, and (before any content arrives) retries
- * up to `MAX_RETRIES` times. Once content has arrived (`hasAnyStreamEvent`
- * / `hasContent` / `sentToServerRef`), it stops retrying and settles
- * "partial" / "error" instead — duplicating a live agent loop would double
- * the assistant reply.
+ * Migrated to the stdio bridge: instead of opening a raw `WebSocket`
+ * with retry/backoff, we register a single `listen("stdio-frame")`
+ * filter on the bridge and store the unlisten fn in `ctx.wsRef`.
+ * The bridge owns the underlying transport — there is no per-channel
+ * reconnect to worry about, because the bridge is single-connection;
+ * if the sidecar dies the watchdog restarts the whole process and
+ * the React side will see the new channel as a fresh send (a re-render
+ * of the chat panel picks up the new subscription automatically).
  *
- * Returns the `connect` function so the caller can both kick off the first
- * attempt and schedule retries (`setTimeout(connect, delay)`).
+ * Compared to the TCP-era version, this drops:
+ *   * `MAX_RETRIES` / `RETRY_DELAYS_MS` — there is nothing to retry
+ *     against; a bridge round-trip either succeeds or returns an
+ *     error.
+ *   * `ws.onopen` / `onerror` / `onclose` — the bridge emits a single
+ *     `stdio-frame` event per server frame and never closes the
+ *     stream from underneath us while the sidecar is alive.
+ *   * `hasReportedLost` / `reportLost` / `reportRestored` — there is
+ *     no observable "lost → restored" cycle at the channel layer.
+ *     If the sidecar dies, the user sees the splash screen toast
+ *     from `BackendStatus` instead of an in-stream banner.
+ *
+ * The returned `connect()` is still a no-arg function so the caller
+ * (`useStreamChat.ts`) can fire-and-forget it from inside its send
+ * closure without restructuring.
  */
 export function createConnector(
   ctx: StreamChatSendContext,
-  onMessage: (evt: MessageEvent) => void,
+  onMessage: (payloadText: string) => void,
 ): () => void {
-  // Tracks whether we already reported a connection-lost event for
-  // THIS send. Reset to `false` whenever the live WS opens (i.e. a
-  // reconnect succeeded), so a subsequent failure can re-fire the
-  // "network dropped" toast / banner without spamming it on every
-  // transient blip.
-  let hasReportedLost = false;
-  const reportLost = () => {
-    if (hasReportedLost) return;
-    hasReportedLost = true;
-    try {
-      ctx.onConnectionLost?.();
-    } catch (err) {
-      console.warn("[WS-CNX] onConnectionLost threw:", err);
-    }
-  };
-  const reportRestored = () => {
-    if (!hasReportedLost) return;
-    hasReportedLost = false;
-    try {
-      ctx.onConnectionRestored?.();
-    } catch (err) {
-      console.warn("[WS-CNX] onConnectionRestored threw:", err);
-    }
-  };
-
   const connect = () => {
-    // Stale retry guard — if a new `send()` has started during the retry
-    // delay, abort the reconnection attempt so we don't overwrite the new
-    // send's WS in `wsRef.current`.
+    // Stale retry guard — if a new `send()` has started during the
+    // tiny window between `connect()` being scheduled and the
+    // listener actually registering, abort the subscription so we
+    // don't leak listeners for a dead send.
     if (ctx.activeSendIdRef.current !== ctx.mySendId) return;
-    try {
-      const ws = new WebSocket(resolveWebSocketUrl(ctx.sessionId));
-      ctx.wsRef.current = ws;
-      ctx.wsSessionIdRef.current = ctx.sessionId;
 
-      // First time the live socket reaches OPEN for this send after
-      // a previously-fired `onConnectionLost`: report restored so the
-      // caller can clear the visible "网络中断" affordance.
-      ws.onopen = () => {
-        reportRestored();
-      };
+    // Single async registration — wrap in an IIFE so the rest of
+    // the function can stay synchronous-looking and matches the
+    // shape the caller expects.
+    void (async () => {
+      try {
+        const unlisten = await listenStreamChannel(
+          streamChannelName(ctx.sessionId),
+          (payloadText) => {
+            if (ctx.activeSendIdRef.current !== ctx.mySendId) return;
+            onMessage(payloadText);
+          },
+        );
 
-      // Approval responses are routed back to the original
-      // `callbacks.onApprovalRequest(...)` Promise through a closure; the
-      // request id flows in the WS frame and the corresponding resolver lives
-      // in `App.tsx` via `approvalResolversRef`. Stale resolver cleanup
-      // therefore happens in App.tsx when a stream settles or the session
-      // changes — not here.
-
-      ws.onmessage = onMessage;
-
-      ws.onerror = () => {
-        // Stale WS guard.
-        if (ctx.activeSendIdRef.current !== ctx.mySendId) return;
-        if (!ctx.doneRef.current) {
-          // 流式进行中（已收到内容/已发给后端）断连：自动重连续跑而非
-          // settle("partial") 卡住。后端 takeover 会 abort 仍在 grace
-          // 宽限期内盲跑的旧 agent，新 send 从持久化历史续跑；重连耗尽才
-          // 保留 partial。
-          if (ctx.hasAnyStreamEvent || ctx.hasContent) {
-            if (ctx.sentToServerRef.current && ctx.retryCount < MAX_RETRIES) {
-              ctx.retryCount++;
-              const delay = RETRY_DELAYS_MS[Math.min(ctx.retryCount - 1, RETRY_DELAYS_MS.length - 1)];
-              ctx.updatePhase("reconnecting");
-              reportLost();
-              ctx.wsRef.current = null;
-              setTimeout(connect, delay);
-              return;
-            }
-            // Retries exhausted — surface the failure to the caller so the
-            // UI can show "网络中断" NOW instead of waiting for the
-            // server-side 180s hard timeout. The settle itself is unchanged.
-            reportLost();
-            ctx.settle(ctx.fullText, undefined, undefined, "partial");
-            return;
-          }
-          // if the message was already sent to the server (we received
-          // `connected` and called `ws.send(payload)`), DO NOT retry — the
-          // server is already processing it.
-          if (ctx.sentToServerRef.current) {
-            reportLost();
-            ctx.settle("", "Connection lost while server was processing the message", undefined, "error");
-            return;
-          }
-          if (ctx.retryCount < MAX_RETRIES) {
-            ctx.retryCount++;
-            const delay = RETRY_DELAYS_MS[Math.min(ctx.retryCount - 1, RETRY_DELAYS_MS.length - 1)];
-            ctx.updatePhase("reconnecting");
-            reportLost();
-            ctx.wsRef.current = null;
-            setTimeout(connect, delay);
-            return;
-          }
-          // Retries exhausted before any state we can recover from; surface
-          // to the caller, fall through to the legacy WebSocket-error settle.
-          reportLost();
-          ctx.settle("", "WebSocket error", undefined, "error");
+        // Another send replaced us while we were awaiting the
+        // listener — drop immediately so we don't accumulate
+        // subscriptions for dead sessions.
+        if (ctx.activeSendIdRef.current !== ctx.mySendId) {
+          unlisten();
+          return;
         }
-      };
-      ws.onclose = () => {
-        // Stale WS guard — this is the critical fix. When settle() closes the
-        // WS, the `onclose` event is queued as a macro task. By the time it
-        // fires, a new `send()` may have already started.
+
+        ctx.wsRef.current = unlisten;
+        ctx.wsSessionIdRef.current = ctx.sessionId;
+      } catch (e) {
+        // Listener registration failed (bridge not initialised,
+        // window torn down, etc.). Surface the failure to the
+        // caller so the UI can show "网络中断" NOW instead of
+        // waiting on the server-side 180s hard timeout.
         if (ctx.activeSendIdRef.current !== ctx.mySendId) return;
-        if (!ctx.doneRef.current) {
-          if (ctx.hasAnyStreamEvent || ctx.hasContent) {
-            // 流式进行中（已收到内容/已发给后端）断连：自动重连续跑，
-            // 不再 settle("partial") 卡住让用户手动发消息。后端 takeover
-            // 会 abort 仍在 grace 宽限期内盲跑的旧 agent，新 send 从
-            // 持久化历史续跑；重连次数耗尽才保留 partial。
-            if (ctx.sentToServerRef.current && ctx.retryCount < MAX_RETRIES) {
-              ctx.retryCount++;
-              const delay = RETRY_DELAYS_MS[Math.min(ctx.retryCount - 1, RETRY_DELAYS_MS.length - 1)];
-              ctx.updatePhase("reconnecting");
-              reportLost();
-              ctx.wsRef.current = null;
-              setTimeout(connect, delay);
-              return;
-            }
-            // Retries exhausted — surface immediately so the UI can show
-            // "网络中断" without waiting on the server-side 180s hard timeout.
-            reportLost();
-            ctx.settle(ctx.fullText, undefined, undefined, "partial");
-          } else {
-            // same hardening as onerror — if the message was already sent,
-            // don't retry.
-            if (ctx.sentToServerRef.current) {
-              reportLost();
-              ctx.settle("", "Connection closed while server was processing the message", undefined, "error");
-              return;
-            }
-            if (ctx.retryCount < MAX_RETRIES) {
-              ctx.retryCount++;
-              const delay = RETRY_DELAYS_MS[Math.min(ctx.retryCount - 1, RETRY_DELAYS_MS.length - 1)];
-              ctx.updatePhase("reconnecting");
-              reportLost();
-              ctx.wsRef.current = null;
-              setTimeout(connect, delay);
-              return;
-            }
-            reportLost();
-            ctx.settle("", "Connection closed", undefined, "error");
-          }
-        }
-        // Note: stale approval resolvers are cleared by App.tsx when
-        // `streamingSessionId` flips to null. We deliberately do not
-        // re-implement that cleanup here — `useStreamChat` doesn't own those
-        // resolvers, App.tsx does.
-      };
-    } catch (e) {
-      // WS constructor threw (unlikely — URL parsing error, etc.) Try once
-      // more before settling.
-      if (!ctx.hasAnyStreamEvent && !ctx.hasContent && ctx.retryCount < MAX_RETRIES) {
-        ctx.retryCount++;
-        const delay = RETRY_DELAYS_MS[Math.min(ctx.retryCount - 1, RETRY_DELAYS_MS.length - 1)];
-        ctx.updatePhase("reconnecting");
-        reportLost();
-        ctx.wsRef.current = null;
-        setTimeout(connect, delay);
-        return;
+        ctx.settle(
+          "",
+          e instanceof Error ? e.message : String(e),
+          undefined,
+          "error",
+        );
       }
-      reportLost();
-      ctx.settle("", e instanceof Error ? e.message : String(e));
-    }
+    })();
   };
 
   return connect;

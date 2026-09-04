@@ -3,7 +3,7 @@
    Used by AgentsView, AIGenerateWizard, TestDialog.
    ════════════════════════════════════════════════════════════════ */
 
-import { apiUrl } from "../../api";
+import { fetchJSON, apiInvoke } from "../../api";
 import { storage, STORAGE_KEYS } from "../../utils/storageCompat";
 import type { AgentPersona } from "./types";
 import { pickColor } from "./types";
@@ -11,12 +11,12 @@ import { pickColor } from "./types";
 export const STORAGE_KEY = STORAGE_KEYS.agents;
 
 /** Load agents from the backend API, falling back to localStorage
- *  if the server is unreachable (e.g. running in standalone mode). */
+ *  if the server is unreachable (e.g. running in standalone mode).
+ *  The server call goes through the stdio bridge's `http` channel —
+ *  same axum route, just inside a JSON Lines envelope. */
 export async function loadAgentsAsync(): Promise<AgentPersona[]> {
   try {
-    const resp = await fetch(apiUrl("/api/agents/custom"));
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    const data = await resp.json() as { agents: AgentPersona[] };
+    const data = await fetchJSON<{ agents: AgentPersona[] }>("/api/agents/custom");
     if (!data.agents || !Array.isArray(data.agents)) return [];
     // Migrate old records to new shape
     return data.agents.map((a) => ({
@@ -52,12 +52,7 @@ export function loadAgentsLocal(): AgentPersona[] {
  *  localStorage batch-save if the server is unreachable. */
 export async function saveAgentAsync(agent: AgentPersona): Promise<void> {
   try {
-    const resp = await fetch(apiUrl("/api/agents/custom"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(agent),
-    });
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    await apiInvoke("POST", "/api/agents/custom", agent);
   } catch {
     // Fallback: merge into the localStorage cache (don't clobber other agents)
     upsertAgentLocal(agent);
@@ -68,10 +63,7 @@ export async function saveAgentAsync(agent: AgentPersona): Promise<void> {
  *  localStorage batch-save if the server is unreachable. */
 export async function deleteAgentAsync(id: string, remaining: AgentPersona[]): Promise<void> {
   try {
-    const resp = await fetch(apiUrl(`/api/agents/custom/${encodeURIComponent(id)}`), {
-      method: "DELETE",
-    });
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    await apiInvoke("DELETE", `/api/agents/custom/${encodeURIComponent(id)}`);
   } catch {
     saveAgentsLocal(remaining);
   }

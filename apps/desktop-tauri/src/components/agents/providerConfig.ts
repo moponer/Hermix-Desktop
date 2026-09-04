@@ -8,7 +8,7 @@
    each, ~50 lines of literal copy-paste). Collapsed here.
    ════════════════════════════════════════════════════════════════ */
 
-import { API_BASE } from "../../api";
+import { fetchJSON } from "../../api";
 import { storage, STORAGE_KEYS } from "../../utils/storageCompat";
 
 export const PROVIDER_URLS: Record<string, string> = {
@@ -52,32 +52,32 @@ export interface ProviderConfig {
  *
  * Returns `{ apiUrl, apiKey }` — caller passes both to its chat-completions
  * fetch. On any failure returns the user's stored values (may be empty).
+ *
+ * Stdio transport: backend calls go through `fetchJSON` (which is the
+ * `invoke("backend_http_request")` chokepoint). The local-backend
+ * auto-detect path used to compare the user-supplied `apiUrl` against
+ * the old `API_BASE` sentinel ("http://127.0.0.1:3000"); that sentinel
+ * is gone now, so the comparison drops — anything the user explicitly
+ * stored is honoured, otherwise we auto-detect.
  */
 export async function resolveProviderConfig(): Promise<ProviderConfig> {
-  let apiUrl = storage.getItem(STORAGE_KEYS.agentsServerUrl) || "";
+  const userUrl = storage.getItem(STORAGE_KEYS.agentsServerUrl) || "";
+  let apiUrl = userUrl;
   let apiKey = storage.getItem(STORAGE_KEYS.agentsApiKey) || "";
 
-  // If no custom server URL is set (or it points back at the local backend),
-  // auto-detect from backend model config.
-  if (!apiUrl || apiUrl === API_BASE) {
+  if (!apiUrl) {
     try {
-      const modelResp = await fetch(`${API_BASE}/api/model/info`);
-      if (modelResp.ok) {
-        const modelInfo = await modelResp.json() as { provider?: string };
-        const provider = modelInfo.provider || "openai";
-        apiUrl = PROVIDER_URLS[provider] || PROVIDER_URLS.openai;
+      const modelInfo = await fetchJSON<{ provider?: string }>("/api/model/info");
+      const provider = modelInfo.provider || "openai";
+      apiUrl = PROVIDER_URLS[provider] || PROVIDER_URLS.openai;
 
-        const envKey = PROVIDER_ENV_KEYS[provider] || PROVIDER_ENV_KEYS.openai;
-        const revealResp = await fetch(`${API_BASE}/api/env/reveal`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ key: envKey }),
-        });
-        if (revealResp.ok) {
-          const revealData = await revealResp.json() as { value?: string };
-          if (revealData.value) apiKey = revealData.value;
-        }
-      }
+      const envKey = PROVIDER_ENV_KEYS[provider] || PROVIDER_ENV_KEYS.openai;
+      const revealData = await fetchJSON<{ value?: string }>("/api/env/reveal", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key: envKey }),
+      });
+      if (revealData.value) apiKey = revealData.value;
     } catch {
       // Auto-detect failed — fall back to whatever the user stored.
     }

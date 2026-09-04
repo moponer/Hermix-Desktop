@@ -1,4 +1,6 @@
 import type { MutableRefObject, Dispatch, SetStateAction } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { streamChannelName } from "../api";
 import type { AcuiDirective } from "../acui/types";
 import type { CompactionStatus } from "../components/CompactionStatusBanner";
 import type {
@@ -44,7 +46,11 @@ export interface StreamChatSendContext {
 
   // ── component-level refs (stable across sends) ──
   activeSendIdRef: MutableRefObject<number>;
-  wsRef: MutableRefObject<WebSocket | null>;
+  // Holds the stdio-bridge listener unlisten function (was
+  // `WebSocket | null` in the TCP era). The connector assigns
+  // `listenStreamChannel(...)`'s returned fn here on connect and
+  // calls it to tear down.
+  wsRef: MutableRefObject<(() => void) | null>;
   // Tool callback for "WS reconnection exhausted and no events have
   // been received yet" — fired by the connector ONLY when there is
   // genuinely nothing else to fall back to (i.e. message was sent to
@@ -121,14 +127,16 @@ export interface StreamChatSendContext {
  * is preserved byte-for-byte in behaviour; only the closure-local
  * variables were renamed to their `ctx.*` equivalents.
  */
-export function createMessageHandler(ctx: StreamChatSendContext): (evt: MessageEvent) => void {
-  // Reset the IDLE timer (300s). Called on every received WS event. If
-  // no event arrives within IDLE_TIMEOUT_MS, the stream is considered
-  // abandoned and we settle with "timeout". Mirrors the same constant
-  // used by `resetIdleTimeout` in `send`.
+export function createMessageHandler(
+  ctx: StreamChatSendContext,
+): (payloadText: string) => void {
+  // Reset the IDLE timer (300s). Called on every received bridge
+  // frame. If no frame arrives within IDLE_TIMEOUT_MS, the stream
+  // is considered abandoned and we settle with "timeout". Mirrors
+  // the same constant used by `resetIdleTimeout` in `send`.
   const IDLE_TIMEOUT_MS = 300_000;
 
-  return (evt: MessageEvent) => {
+  return (payloadText: string) => {
     // Stale WS guard — if a new send has started, ignore events from the old WS.
     if (ctx.activeSendIdRef.current !== ctx.mySendId) return;
     // Reset the idle timeout on every received event. As long as the agent is
@@ -158,12 +166,22 @@ export function createMessageHandler(ctx: StreamChatSendContext): (evt: MessageE
     // — same reasoning as the idle guard above.
     if (!ctx.approvalPending) ctx.resetStaleTimer();
     try {
-      const data: any = JSON.parse(String(evt.data));
+      const data: any = JSON.parse(payloadText);
 
       // Connected event — send the user message + per-request overrides
+      // on the same `stream:<sessionId>` channel via the stdio bridge.
       if (data?.type === "connected" || data?.event?.type === "connected") {
         const payload = buildConnectedPayload(ctx.content, ctx.overrides);
-        ctx.wsRef.current?.send(JSON.stringify(payload));
+        // Fire-and-forget: the bridge's invoke round-trip is what
+        // would have been a WS `send` in the TCP era. We do not
+        // await — the parser stays synchronous-looking, and a
+        // transient invoke failure is recoverable (the upstream
+        // approval/clarity path already has its own retry via
+        // `wsSendRaw`).
+        void invoke<void>("backend_channel_send", {
+          channel: streamChannelName(ctx.sessionId),
+          payload: JSON.stringify(payload),
+        });
         ctx.sentToServerRef.current = true;
         ctx.updatePhase("streaming");
         ctx.armTimeouts();
@@ -239,13 +257,18 @@ export function createMessageHandler(ctx: StreamChatSendContext): (evt: MessageE
         // here.
         const denialKind =
           data?.denial_kind || data?.event?.denial_kind || undefined;
+        // Server-authoritative failure flag (`ToolResult::is_error`).
+        // `undefined` means a server build that predates the flag.
+        const rawIsError = data?.is_error ?? data?.event?.is_error;
+        const isError =
+          typeof rawIsError === "boolean" ? rawIsError : undefined;
         // Flip toolRunningRef back to false BEFORE resetStaleTimer so the
         // watchdog gets re-armed for a fresh STALE window.
         ctx.toolRunningRef.current = false;
         ctx.hasAnyStreamEvent = true;
         ctx.setLastActivityAt(Date.now());
         ctx.resetStaleTimer();
-        ctx.callbacks.onToolComplete?.({ toolCallId, tool, content: evtContent, denialKind });
+        ctx.callbacks.onToolComplete?.({ toolCallId, tool, content: evtContent, denialKind, isError });
         return;
       }
 
@@ -494,29 +517,45 @@ export function createMessageHandler(ctx: StreamChatSendContext): (evt: MessageE
               // The `expired` decision means the server already settled this
               // request; do NOT send `approval_response` over the wire.
               if (resp.decision === "expired") return;
+              // Restore the streaming placeholder cleared when the card
+              // opened. There is a ~1s gap between the user's click and the
+              // agent loop's next WS event; without this the chat shows dead
+              // whitespace where the waiting card used to be.
+              ctx.streamingSessionIdRef.current = ctx.sessionId;
+              ctx.setStreamingSessionId(ctx.sessionId);
               // Always use `wsRef.current` (the live WS); the closure-captured
               // `ws` may have been replaced by a reconnect by the time the user
               // clicks.
-              const liveWs = ctx.wsRef.current;
-              if (!liveWs || liveWs.readyState !== WebSocket.OPEN) {
+              const liveUnlisten = ctx.wsRef.current;
+              if (!liveUnlisten) {
                 console.warn(
-                  `[approval] wsRef.current not OPEN (state=${liveWs?.readyState}) — click for ${requestId} dropped; user must retry`,
+                  `[approval] no active stream subscription — click for ${requestId} dropped; user must retry`,
                 );
                 return;
               }
               try {
-                // Server expects "approved" or "denied" (exact match against
-                // `decision == "approved"` in lib.rs:1225).
-                const decision = resp.decision === "approved" ? "approved" : "denied";
+                // Wire decisions: legacy two-state `approved`/`denied`
+                // (server maps them to Once/Deny) plus grant persistence —
+                // 「以后自动允许」sends `always`, which the server stores
+                // into the durable allowlist for identical future calls.
+                const decision =
+                  resp.remember === true
+                    ? "always"
+                    : resp.decision === "approved"
+                      ? "approved"
+                      : "denied";
                 const payload = JSON.stringify({
                   type: "approval_response",
                   request_id: requestId,
                   decision,
                 });
-                liveWs.send(payload);
+                void invoke<void>("backend_channel_send", {
+                  channel: streamChannelName(ctx.sessionId),
+                  payload,
+                });
               } catch (e) {
                 console.warn(
-                  `[approval] liveWs.send threw for ${requestId}: ${String(e)}`,
+                  `[approval] backend_channel_send threw for ${requestId}: ${String(e)}`,
                 );
               }
             })
@@ -524,16 +563,107 @@ export function createMessageHandler(ctx: StreamChatSendContext): (evt: MessageE
               // Re-arm idle/stale timers.
               ctx.approvalPending = false;
               ctx.armTimeouts();
-              const liveWs = ctx.wsRef.current;
-              if (!liveWs || liveWs.readyState !== WebSocket.OPEN) return;
+              // Denial also resumes the agent loop — restore the streaming
+              // placeholder here too (same dead-air rationale as above).
+              ctx.streamingSessionIdRef.current = ctx.sessionId;
+              ctx.setStreamingSessionId(ctx.sessionId);
+              const liveUnlisten = ctx.wsRef.current;
+              if (!liveUnlisten) return;
               try {
-                liveWs.send(
-                  JSON.stringify({
+                void invoke<void>("backend_channel_send", {
+                  channel: streamChannelName(ctx.sessionId),
+                  payload: JSON.stringify({
                     type: "approval_response",
                     request_id: requestId,
                     decision: "denied",
                   }),
+                });
+              } catch {}
+            });
+        }
+        return;
+      }
+
+      // Batch approval: server coalesced N parallel approvals into one
+      // envelope (see `coalescer::ApprovalCoalescer`). Single decision
+      // applies to every item; we mirror the single-item branch's
+      // streaming-placeholder restoration + WS send.
+      if (evtType === "request_approvals_batch" || evtType === "RequestApprovalsBatch") {
+        ctx.approvalPending = true;
+        if (ctx.idleTimeout !== null) { clearTimeout(ctx.idleTimeout); ctx.idleTimeout = null; }
+        if (ctx.staleStreamTimer !== null) { clearTimeout(ctx.staleStreamTimer); ctx.staleStreamTimer = null; }
+        ctx.streamingSessionIdRef.current = null;
+        ctx.setStreamingSessionId(null);
+        ctx.setStreamingStatus(null);
+        const ev = data?.event ?? data;
+        const batchId = ev?.batch_id ?? ev?.batchId;
+        const rawItems = Array.isArray(ev?.items) ? ev.items : [];
+        if (!batchId || rawItems.length === 0) return;
+        const items = rawItems.map((it: Record<string, unknown>) => ({
+          requestId: (it?.request_id ?? it?.requestId ?? "") as string,
+          tool: (it?.tool ?? "tool") as string,
+          args: it?.arguments ?? it?.args,
+          risk: (it?.risk ?? undefined) as string | undefined,
+          reason: typeof it?.reason === "string" ? (it.reason as string) : null,
+          expiresAt: typeof it?.expires_at === "number" ? (it.expires_at as number) : null,
+          // Backend pre-computed unified diff for file-mutating items;
+          // non-file tools (run_command / http / …) leave it absent.
+          diff: typeof it?.diff === "string" ? (it.diff as string) : null,
+        }));
+        if (ctx.callbacks.onApprovalBatchRequest) {
+          ctx.callbacks
+            .onApprovalBatchRequest({ batchId, items, sessionId: ctx.sessionId })
+            .then((resp) => {
+              ctx.approvalPending = false;
+              ctx.armTimeouts();
+              if (resp.decision === "expired") return;
+              ctx.streamingSessionIdRef.current = ctx.sessionId;
+              ctx.setStreamingSessionId(ctx.sessionId);
+              const liveUnlisten = ctx.wsRef.current;
+              if (!liveUnlisten) {
+                console.warn(
+                  `[approval-batch] no active stream subscription — click for ${batchId} dropped; user must retry`,
                 );
+                return;
+              }
+              try {
+                const decision =
+                  resp.remember === true
+                    ? "always"
+                    : resp.decision === "approved"
+                      ? "approved"
+                      : "denied";
+                const payload = JSON.stringify({
+                  type: "approval_responses_batch",
+                  batch_id: batchId,
+                  decision,
+                });
+                void invoke<void>("backend_channel_send", {
+                  channel: streamChannelName(ctx.sessionId),
+                  payload,
+                });
+              } catch (e) {
+                console.warn(
+                  `[approval-batch] backend_channel_send threw for ${batchId}: ${String(e)}`,
+                );
+              }
+            })
+            .catch(() => {
+              ctx.approvalPending = false;
+              ctx.armTimeouts();
+              ctx.streamingSessionIdRef.current = ctx.sessionId;
+              ctx.setStreamingSessionId(ctx.sessionId);
+              const liveUnlisten = ctx.wsRef.current;
+              if (!liveUnlisten) return;
+              try {
+                void invoke<void>("backend_channel_send", {
+                  channel: streamChannelName(ctx.sessionId),
+                  payload: JSON.stringify({
+                    type: "approval_responses_batch",
+                    batch_id: batchId,
+                    decision: "denied",
+                  }),
+                });
               } catch {}
             });
         }
@@ -557,29 +687,31 @@ export function createMessageHandler(ctx: StreamChatSendContext): (evt: MessageE
               // stale-click hardening — use wsRef.current so a reconnect between
               // `clarify_request` arrival and the user's answer doesn't silently
               // drop the reply.
-              const liveWs = ctx.wsRef.current;
-              if (!liveWs || liveWs.readyState !== WebSocket.OPEN) return;
+              const liveUnlisten = ctx.wsRef.current;
+              if (!liveUnlisten) return;
               try {
-                liveWs.send(
-                  JSON.stringify({
+                void invoke<void>("backend_channel_send", {
+                  channel: streamChannelName(ctx.sessionId),
+                  payload: JSON.stringify({
                     type: "clarify_response",
                     request_id: requestId,
                     answer: resp.answer ?? "",
                   }),
-                );
+                });
               } catch {}
             })
             .catch(() => {
-              const liveWs = ctx.wsRef.current;
-              if (!liveWs || liveWs.readyState !== WebSocket.OPEN) return;
+              const liveUnlisten = ctx.wsRef.current;
+              if (!liveUnlisten) return;
               try {
-                liveWs.send(
-                  JSON.stringify({
+                void invoke<void>("backend_channel_send", {
+                  channel: streamChannelName(ctx.sessionId),
+                  payload: JSON.stringify({
                     type: "clarify_response",
                     request_id: requestId,
                     answer: "",
                   }),
-                );
+                });
               } catch {}
             });
         }

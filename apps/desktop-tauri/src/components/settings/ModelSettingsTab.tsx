@@ -1,11 +1,14 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { Check, AlertCircle, RefreshCw, ChevronRight, Star, Trash2, CheckCircle, Save } from "lucide-react";
+import { Check, AlertCircle, RefreshCw, ChevronRight, Star, Trash2, CheckCircle, Save, AlertTriangle } from "lucide-react";
 import * as api from "../../api";
 import { storage } from "../../utils/storageCompat";
 import { writeModelConfigAndNotify, MODEL_CONFIG_CHANGED_EVENT } from "../../hooks/useCurrentModel";
 import { ProviderIcon } from "../ProviderIcon";
 import { useSafeTimeout } from "../../hooks/useSafeTimeout";
-import { apiUrl } from "../../api";
+import {
+  useContextWindows,
+  type ContextWindowEntry,
+} from "../../hooks/useContextWindows";
 import {
   ProviderDef,
   PROVIDERS,
@@ -78,16 +81,12 @@ export function ModelTab() {
         const MAX_RETRIES = 2;
         for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
           try {
-            const revealResp = await fetch(apiUrl("/api/env/reveal"), {
+            const revealData = await api.fetchJSON<{ value?: string }>("/api/env/reveal", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ key: p.keyEnvVar }),
             });
-            if (!revealResp.ok) {
-              if (attempt < MAX_RETRIES) await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
-              continue;
-            }
-            const { value: apiKey } = await revealResp.json();
+            const apiKey = revealData.value;
             if (!apiKey) break;
             const modelsResp = await fetch(`${p.baseUrl}/models`, {
               headers: { Authorization: `Bearer ${apiKey}` },
@@ -138,7 +137,7 @@ export function ModelTab() {
   }, []);
 
   const flashSaved = useCallback((fullId: string) => {
-    setInfo("✓ 已保存");
+    setInfo("已保存");
     setFlashKey(fullId);
     window.setTimeout(() => setFlashKey((k) => (k === fullId ? null : k)), 700);
   }, []);
@@ -224,14 +223,15 @@ export function ModelTab() {
         setActiveKeys((prev) => ({ ...prev, [p.id]: true }));
       } else {
         // 探测后端 env 已有的 key
-        const reveal = await fetch(apiUrl("/api/env/reveal"), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ key: p.keyEnvVar }),
-        });
-        if (reveal.ok) {
-          const data = await reveal.json();
+        try {
+          const data = await api.fetchJSON<{ value?: string }>("/api/env/reveal", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ key: p.keyEnvVar }),
+          });
           apiKey = data.value ?? "";
+        } catch {
+          // No reveal — fall through to "请填写 API Key" below.
         }
       }
       if (!apiKey) {
@@ -258,7 +258,7 @@ export function ModelTab() {
       });
       try {
         const r = await api.autoCorrectConfig();
-        if (r.report) setInfo(`✓ ${r.message}`);
+        if (r.report) setInfo(r.message);
       } catch {}
     } catch (e) {
       setError(`获取失败: ${e instanceof Error ? e.message : String(e)}`);
@@ -288,6 +288,10 @@ export function ModelTab() {
       });
   }, [config.enabled, config.defaultModel, config.modelContexts, customIdsWithKey, providerName]);
 
+  // 上下文窗口由后端权威解析 —— 后端拥有 catalog，前端不再手抄一份。
+  const enabledFids = useMemo(() => enabledRows.map((r) => r.fid), [enabledRows]);
+  const contextWindows = useContextWindows(enabledFids);
+
   const selectableProviders = useMemo(() => {
     const out: { id: string; name: string }[] = [];
     PROVIDERS.forEach((p) => {
@@ -316,7 +320,7 @@ export function ModelTab() {
               : "bg-emerald-500/10 border-emerald-500/30 text-emerald-400"
           }`}
         >
-          {error ? <AlertCircle size={14} /> : <Check size={14} />}
+          {error ? <AlertCircle className="icon-md" /> : <Check className="icon-md" />}
           <span>{info || error}</span>
         </div>
       )}
@@ -325,7 +329,7 @@ export function ModelTab() {
         {/* ── SECTION 1: 默认模型 ── */}
         <section className="px-6 py-5 border-b border-border-primary">
           <div className="flex items-center gap-2 mb-3">
-            <Star size={14} className="text-accent" />
+            <Star className="icon-md text-accent" />
             <h2 className="text-[15px] font-semibold text-text-primary">默认模型</h2>
           </div>
           {hasAnyConfigurable ? (
@@ -360,21 +364,21 @@ export function ModelTab() {
                 ))}
               </select>
               {config.defaultModel && (
-                <span className="text-[11px] text-text-faint ml-1">⭐ 当前默认</span>
+                <span className="text-[11px] text-text-faint ml-1"><Star size={10} className="inline-block align-[-1px] mr-0.5" />当前默认</span>
               )}
             </div>
           ) : (
-            <p className="text-[12px] text-text-muted">尚未配置任何供应商,展开下方「供应商」配置 API Key 后获取模型即可。</p>
+            <p className="text-[12px] text-text-muted">尚未配置任何供应商，展开下方「供应商」配置 API Key 后获取模型即可。</p>
           )}
           {!config.defaultModel && hasAnyConfigurable && (
-            <p className="text-[11px] text-warning mt-2">⚠ 未设置默认模型,聊天无法开始</p>
+            <p className="text-[11px] text-warning mt-2"><AlertTriangle className="icon-sm inline-block align-[-1px] mr-1" />未设置默认模型，聊天无法开始</p>
           )}
         </section>
 
         {/* ── SECTION 2: 已启用模型 ── */}
         <section className="px-6 py-5 border-b border-border-primary">
           <div className="flex items-center gap-2 mb-3">
-            <Check size={14} className="text-text-secondary" />
+            <Check className="icon-md text-text-secondary" />
             <h2 className="text-[15px] font-semibold text-text-primary">
               已启用模型
               <span className="ml-1 text-text-muted text-[12px] font-normal">({enabledRows.length})</span>
@@ -388,6 +392,7 @@ export function ModelTab() {
                 <EnabledModelRow
                   key={row.fid}
                   row={row}
+                  backend={contextWindows[row.fid]}
                   flashed={flashKey === row.fid}
                   onSetDefault={() => setDefault(row.providerId, row.modelId)}
                   onRemove={() => toggleModel(row.providerId, row.modelId)}
@@ -410,7 +415,7 @@ export function ModelTab() {
               <option value="" disabled>选择供应商...</option>
               {PROVIDERS.map((p) => (
                 <option key={p.id} value={p.id}>
-                  {activeKeys[p.id] ? "✓ " : ""}{p.name} — {p.description}
+                  {activeKeys[p.id] && <Check className="icon-sm inline-block align-[-1px] mr-0.5" />}{p.name} — {p.description}
                 </option>
               ))}
             </select>
@@ -436,10 +441,10 @@ export function ModelTab() {
             return (
               <div className="mt-3 rounded-lg border border-border-primary bg-bg-card overflow-hidden">
                 <div className="flex items-center gap-2 px-3 py-2.5 border-b border-border-primary">
-                  <ProviderIcon providerId={p.id} size={18} title={p.name} />
+                  <ProviderIcon providerId={p.id} className="icon-lg" title={p.name} />
                   <div className="flex-1 min-w-0">
                     <div className="font-medium text-[13px] text-text-primary">{p.name}</div>
-                    <div className="text-[10px] text-text-muted">{p.description}</div>
+                    <div className="text-[11px] text-text-muted">{p.description}</div>
                   </div>
                   {configured && <span className="w-2 h-2 rounded-full bg-green-400 shrink-0" title="已配置 API Key" />}
                   {modelCount > 0 && (
@@ -452,7 +457,7 @@ export function ModelTab() {
                       type="password"
                       value={keyInput}
                       onChange={(e) => setProviderKeyInput((prev) => ({ ...prev, [p.id]: e.target.value }))}
-                      placeholder={configured ? "已配置,输入新 Key 以更新" : `输入 ${p.name} API Key`}
+                      placeholder={configured ? "已配置，输入新 Key 以更新" : `输入 ${p.name} API Key`}
                       className="flex-1 bg-bg-tertiary border border-border-primary rounded px-2.5 py-1.5 text-[12px] text-text-primary placeholder-text-muted outline-none"
                       onKeyDown={(e) => { if (e.key === "Enter") fetchModelsForProvider(p); }}
                     />
@@ -461,14 +466,14 @@ export function ModelTab() {
                       disabled={loading}
                       className="flex items-center gap-1.5 px-3 py-1.5 rounded text-[12px] bg-accent hover:bg-accent-hover text-accent-on-text disabled:opacity-40 shrink-0"
                     >
-                      <RefreshCw size={12} className={loading ? "animate-spin" : ""} />
+                      <RefreshCw className={`icon-sm ${loading ? "animate-spin" : ""}`} />
                       {loading ? "获取中" : configured ? "重新获取" : "获取模型"}
                     </button>
                   </div>
-                  <p className="text-[10px] text-text-muted">
+                  <p className="text-[11px] text-text-muted">
                     {modelCount > 0
                       ? `已获取 ${modelCount} 个模型 → 切到上方「已启用模型」勾选启用`
-                      : "填写 API Key 后点击获取,模型会缓存到本地并自动启用"}
+                      : "填写 API Key 后点击获取，模型会缓存到本地并自动启用"}
                   </p>
                 </div>
               </div>
@@ -482,7 +487,7 @@ export function ModelTab() {
 }
 
 // ── 已启用模型行 ──
-function EnabledModelRow({ row, flashed, onSetDefault, onRemove, onSetContext }: {
+function EnabledModelRow({ row, flashed, onSetDefault, onRemove, onSetContext, backend }: {
   row: {
     providerId: string;
     modelId: string;
@@ -493,6 +498,8 @@ function EnabledModelRow({ row, flashed, onSetDefault, onRemove, onSetContext }:
     fid: string;
   };
   flashed: boolean;
+  /** 后端权威解析结果（后端拥有 catalog，前端不再镜像）。 */
+  backend?: ContextWindowEntry;
   onSetDefault: () => void;
   onRemove: () => void;
   onSetContext: (v: number | null) => void;
@@ -507,28 +514,28 @@ function EnabledModelRow({ row, flashed, onSetDefault, onRemove, onSetContext }:
             : "bg-bg-card border-border-primary hover:bg-bg-tertiary"
       }`}
     >
-      <ProviderIcon providerId={row.providerId} size={16} title={row.providerName} />
+      <ProviderIcon providerId={row.providerId} className="icon-lg" title={row.providerName} />
       <span className="font-mono text-text-primary truncate min-w-0 flex-1">{row.modelId}</span>
-      <span className="text-[10px] text-text-faint uppercase shrink-0">
+      <span className="text-[11px] text-text-faint uppercase shrink-0">
         {row.isCustom ? "CUSTOM" : "BUILTIN"}
       </span>
       <select
         value={row.ctx ?? ""}
         onChange={(e) => onSetContext(e.target.value ? Number(e.target.value) : null)}
         title="上下文窗口;空=后端 catalog 兜底"
-        className="bg-bg-tertiary border border-border-secondary rounded px-1.5 py-0.5 text-[10px] text-text-muted outline-none"
+        className="bg-bg-tertiary border border-border-secondary rounded px-1.5 py-0.5 text-[11px] text-text-muted outline-none"
       >
-        <option value="">{defaultOptionLabel(resolveContextWindow(row.modelId, row.ctx, null))}</option>
+        <option value="">{defaultOptionLabel(resolveContextWindow(row.ctx, backend))}</option>
         {CONTEXT_WINDOW_OPTIONS.map((o) => (
           <option key={o.value} value={o.value}>{o.label}</option>
         ))}
       </select>
       {row.isDefault ? (
-        <span className="text-[10px] text-accent font-semibold shrink-0">⭐ 默认</span>
+        <span className="text-[11px] text-accent font-semibold shrink-0"><Star size={10} className="inline-block align-[-1px] mr-0.5" />默认</span>
       ) : (
         <button
           onClick={onSetDefault}
-          className="text-[10px] px-2 py-0.5 rounded border border-border-secondary text-text-muted hover:border-accent hover:text-accent shrink-0"
+          className="text-[11px] px-2 py-0.5 rounded border border-border-secondary text-text-muted hover:border-accent hover:text-accent shrink-0"
         >
           设为默认
         </button>
@@ -538,7 +545,7 @@ function EnabledModelRow({ row, flashed, onSetDefault, onRemove, onSetContext }:
         title="取消启用"
         className="p-0.5 rounded text-text-muted hover:text-red-400 hover:bg-red-500/10 shrink-0"
       >
-        <Trash2 size={12} />
+        <Trash2 className="icon-sm" />
       </button>
     </li>
   );
@@ -586,6 +593,13 @@ export function CustomProviderSection({
   useEffect(() => {
     api.getCustomProviders().then((list) => setProviders(list)).catch((e) => { console.warn("[SettingsView] getCustomProviders failed:", e); });
   }, []);
+
+  // 上下文窗口由后端权威解析 —— 后端拥有 catalog，前端不再手抄一份。
+  const providerModelIds = useMemo(
+    () => providers.flatMap((p) => (p.models ?? []).map((m) => `${p.id}:${m}`)),
+    [providers],
+  );
+  const contextWindows = useContextWindows(providerModelIds);
 
   const safeId = name.trim()
     ? `custom-${name.trim().toLowerCase().replace(/[^a-z0-9一-龥_-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "")}`
@@ -847,28 +861,28 @@ export function CustomProviderSection({
                     aria-expanded={isExpanded}
                     className="flex items-center gap-2 flex-1 min-w-0 text-left hover:text-accent transition-colors"
                   >
-                    <ChevronRight size={14} className={`shrink-0 text-text-muted transition-transform duration-150 ${isExpanded ? "rotate-90" : ""}`} />
+                    <ChevronRight className={`icon-md ${`shrink-0 text-text-muted transition-transform duration-base ${isExpanded ? "rotate-90" : ""}`}`} />
                     <div className="flex-1 min-w-0">
                       <div className="font-medium text-text-primary truncate flex items-center gap-1.5">
                         {p.display_name || p.id}
                         {p.has_key && <span className="w-1.5 h-1.5 rounded-full bg-green-400 inline-block shrink-0" />}
                       </div>
-                      <div className="text-[10px] text-text-muted truncate mt-0.5">
+                      <div className="text-[11px] text-text-muted truncate mt-0.5">
                         {p.base_url || "—"} · {models.length} 模型{models.length > 0 ? ` · 已启用 ${enabledCount}` : ""}
                       </div>
                     </div>
                   </button>
                   <div className="flex items-center gap-1 shrink-0">
-                    <button onClick={(e) => { e.stopPropagation(); handleTestConnection(p.id); }} disabled={testing === p.id} className="px-2 py-1 rounded text-[10px] bg-bg-tertiary text-text-muted hover:text-accent hover:bg-accent/10 disabled:opacity-40">
+                    <button onClick={(e) => { e.stopPropagation(); handleTestConnection(p.id); }} disabled={testing === p.id} className="px-2 py-1 rounded text-[11px] bg-bg-tertiary text-text-muted hover:text-accent hover:bg-accent/10 disabled:opacity-40">
                       {testing === p.id ? "..." : "测试"}
                     </button>
-                    <button onClick={(e) => { e.stopPropagation(); handleFetchModelsForSavedProvider(p.id); }} disabled={fetching} className="px-2 py-1 rounded text-[10px] bg-bg-tertiary text-text-muted hover:text-accent hover:bg-accent/10 disabled:opacity-40">
+                    <button onClick={(e) => { e.stopPropagation(); handleFetchModelsForSavedProvider(p.id); }} disabled={fetching} className="px-2 py-1 rounded text-[11px] bg-bg-tertiary text-text-muted hover:text-accent hover:bg-accent/10 disabled:opacity-40">
                       模型
                     </button>
-                    <button onClick={(e) => { e.stopPropagation(); handleEdit(p); }} className="px-2 py-1 rounded text-[10px] bg-bg-tertiary text-text-muted hover:text-accent hover:bg-accent/10">
+                    <button onClick={(e) => { e.stopPropagation(); handleEdit(p); }} className="px-2 py-1 rounded text-[11px] bg-bg-tertiary text-text-muted hover:text-accent hover:bg-accent/10">
                       编辑
                     </button>
-                    <button onClick={(e) => { e.stopPropagation(); handleDelete(p.id, p.models); }} className="px-2 py-1 rounded text-[10px] bg-red-500/10 text-red-400 hover:bg-red-500/20">
+                    <button onClick={(e) => { e.stopPropagation(); handleDelete(p.id, p.models); }} className="px-2 py-1 rounded text-[11px] bg-red-500/10 text-red-400 hover:bg-red-500/20">
                       删除
                     </button>
                   </div>
@@ -877,7 +891,7 @@ export function CustomProviderSection({
                   <div className="border-t border-border-primary p-3 bg-bg-primary">
                     {models.length === 0 ? (
                       <div className="text-[11px] text-text-muted italic text-center py-3">
-                        暂无模型,点上方「模型」按钮重新获取
+                        暂无模型，点上方「模型」按钮重新获取
                       </div>
                     ) : (
                       <div className="grid grid-cols-2 gap-1.5 max-h-64 overflow-y-auto">
@@ -892,7 +906,7 @@ export function CustomProviderSection({
                                 toggleModel(p.id, modelId);
                                 const wasEnabled = config.enabled.some((m) => `${m.providerId}:${m.modelId}` === fullId);
                                 const newCount = wasEnabled ? config.enabled.length - 1 : config.enabled.length + 1;
-                                setSuccess(wasEnabled ? `✓ 已取消 · 剩 ${newCount} 个模型启用中` : `✓ 已保存 · 共 ${newCount} 个模型启用中`);
+                                setSuccess(wasEnabled ? `已取消 · 剩 ${newCount} 个模型启用中` : `已保存 · 共 ${newCount} 个模型启用中`);
                                 setTimeout(() => setSuccess(""), 2500);
                               }} className={`w-4 h-4 rounded border-2 flex items-center justify-center shrink-0 transition-colors ${isEnabled ? "bg-accent border-accent" : "bg-transparent border-text-muted hover:border-accent"}`}>
                                 {isEnabled
@@ -914,18 +928,18 @@ export function CustomProviderSection({
                                       api.updateCustomProviderModelContexts(p.id, { ...config.modelContexts, [fullId]: v ? Number(v) : 0 }).catch((e) => { console.warn("[SettingsView] modelContext sync failed:", e); });
                                     }}
                                     title="上下文窗口大小；空 = 后端 catalog 兜底（通常 128K）"
-                                    className="bg-bg-tertiary border border-border-secondary rounded px-1 py-0.5 text-[9px] text-text-muted outline-none"
+                                    className="bg-bg-tertiary border border-border-secondary rounded px-1 py-0.5 text-[11px] text-text-muted outline-none"
                                   >
-                                    <option value="">{defaultOptionLabel(resolveContextWindow(modelId, ctx, p.model_contexts?.[modelId]))}</option>
+                                    <option value="">{defaultOptionLabel(resolveContextWindow(ctx, contextWindows[fullId]))}</option>
                                     {CONTEXT_WINDOW_OPTIONS.map((o) => (
                                       <option key={o.value} value={o.value}>{o.label}</option>
                                     ))}
                                   </select>
                                   <button onClick={() => {
                                     setDefault(fullId);
-                                    setSuccess(`✓ 默认模型已设为 ${modelId}`);
+                                    setSuccess(`默认模型已设为 ${modelId}`);
                                     setTimeout(() => setSuccess(""), 2500);
-                                  }} className={`shrink-0 px-1.5 py-0.5 rounded text-[9px] ${isDefault ? "bg-accent text-accent-on-text" : "border border-text-muted text-text-secondary hover:border-accent hover:text-accent"}`}>
+                                  }} className={`shrink-0 px-1.5 py-0.5 rounded text-[11px] ${isDefault ? "bg-accent text-accent-on-text" : "border border-text-muted text-text-secondary hover:border-accent hover:text-accent"}`}>
                                     {isDefault ? "默认" : "设为默认"}
                                   </button>
                                 </>
@@ -945,12 +959,12 @@ export function CustomProviderSection({
 
       {error && (
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/30 text-sm text-red-400">
-          <AlertCircle size={14} /> {error}
+          <AlertCircle className="icon-md" /> {error}
         </div>
       )}
       {success && (
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-sm text-emerald-400">
-          <CheckCircle size={14} /> {success}
+          <CheckCircle className="icon-md" /> {success}
         </div>
       )}
 
@@ -961,7 +975,7 @@ export function CustomProviderSection({
             {editingId ? "编辑提供商" : "新建提供商"}
           </div>
           {editingId && (
-            <button onClick={handleCancelEdit} className="text-[10px] text-text-muted hover:text-text-primary">
+            <button onClick={handleCancelEdit} className="text-[11px] text-text-muted hover:text-text-primary">
               取消编辑
             </button>
           )}
@@ -975,8 +989,8 @@ export function CustomProviderSection({
             placeholder="例如：我的服务"
             className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-2 text-sm text-text-primary placeholder-text-muted outline-none"
           />
-          {!editingId && safeId && <p className="text-[10px] text-text-muted mt-1">模型 ID 前缀: {safeId}:</p>}
-          {editingId && <p className="text-[10px] text-text-muted mt-1">提供商 ID: {editingId}</p>}
+          {!editingId && safeId && <p className="text-[11px] text-text-muted mt-1">模型 ID 前缀: {safeId}:</p>}
+          {editingId && <p className="text-[11px] text-text-muted mt-1">提供商 ID: {editingId}</p>}
         </div>
 
         <div>
@@ -1014,11 +1028,11 @@ export function CustomProviderSection({
               disabled={fetching || saving || !apiUrl.trim() || !apiKey.trim()}
               className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm bg-accent hover:bg-accent-hover text-accent-on-text disabled:opacity-40"
             >
-              {fetching ? <RefreshCw size={14} className="animate-spin" /> : saving ? "保存中..." : <Check size={14} />}
+              {fetching ? <RefreshCw className="icon-md animate-spin" /> : saving ? "保存中..." : <Check className="icon-md" />}
               {fetching ? "获取中" : saving ? "保存中..." : "获取模型"}
             </button>
           </div>
-          <p className="text-[10px] text-text-muted mt-1">填写名称、API URL 和 API Key 后点击"获取模型"自动填充，或手动输入</p>
+          <p className="text-[11px] text-text-muted mt-1">填写名称、API URL 和 API Key 后点击"获取模型"自动填充，或手动输入</p>
         </div>
 
         <button
@@ -1026,7 +1040,7 @@ export function CustomProviderSection({
           disabled={saving || (!editingId && !apiKey.trim())}
           className="flex items-center gap-2 px-4 py-2 rounded-lg bg-accent hover:bg-accent-hover text-accent-on-text text-sm disabled:opacity-40"
         >
-          <Save size={14} /> {saving ? "保存中..." : editingId ? "更新配置" : "保存配置"}
+          <Save className="icon-md" /> {saving ? "保存中..." : editingId ? "更新配置" : "保存配置"}
         </button>
       </div>
 
