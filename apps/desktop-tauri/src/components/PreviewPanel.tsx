@@ -1,13 +1,15 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { openImageViewer } from "./imageViewer";
 import { createPortal } from "react-dom";
 import {
   X, Copy, ExternalLink, FolderOpen,
   Loader2, AlertTriangle, WrapText,
 } from "lucide-react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import remarkBreaks from "remark-breaks";
+import { markdownToHast } from "satteri";
+import { toJsxRuntime } from "hast-util-to-jsx-runtime";
+import { Fragment, jsx, jsxs } from "react/jsx-runtime";
+import type { ReactNode } from "react";
+import { hardenSoftLineBreaks } from "../lib/softBreaks";
 import { CodeView } from "./CodeView";
 import { CodeBlock } from "./MarkdownBody";
 import { SpreadsheetView } from "./SpreadsheetView";
@@ -214,7 +216,10 @@ export function PreviewPanel({
 
   const codeLang = artifact ? detectLanguage(artifact.name) : null;
 
-  const isDark = typeof document !== "undefined" && document.documentElement.classList.contains("dark");
+  // 深色判定走 colorScheme（useTheme 设置）；.dark 类已废除，contains 检测永远 false
+  const isDark =
+    typeof document !== "undefined" &&
+    document.documentElement.style.colorScheme === "dark";
 
   const openContainingDir = () => {
     if (!artifact) return;
@@ -297,8 +302,8 @@ export function PreviewPanel({
             onClick={onBack}
             title="关闭预览"
             className="head-action is-danger"
-           aria-label="关闭预览">
-            <X size={14} />
+            aria-label="关闭预览">
+            <X className="icon-md" />
           </button>
         </div>
 
@@ -323,7 +328,7 @@ export function PreviewPanel({
                 className={clsx("head-action", wrap && "is-active")}
                 aria-label={wrap ? "取消自动换行" : "开启自动换行"}
               >
-                <WrapText size={13} />
+                <WrapText className="icon-md" />
               </button>
             )}
             {(previewState.status === "text" || previewState.status === "markdown") && (
@@ -343,7 +348,7 @@ export function PreviewPanel({
                 className="head-action"
                 aria-label="复制内容"
               >
-                <Copy size={13} />
+                <Copy className="icon-md" />
               </button>
             )}
             <button
@@ -355,7 +360,7 @@ export function PreviewPanel({
               className="head-action"
               aria-label="用默认程序打开"
             >
-              <ExternalLink size={13} />
+              <ExternalLink className="icon-md" />
             </button>
             <button
               type="button"
@@ -364,7 +369,7 @@ export function PreviewPanel({
               className="head-action"
               aria-label="在资源管理器中打开"
             >
-              <FolderOpen size={13} />
+              <FolderOpen className="icon-md" />
             </button>
           </div>
         </div>
@@ -383,13 +388,13 @@ export function PreviewPanel({
         <div className="preview-pane-inner flex-1 overflow-auto min-h-0">
           {previewState.status === "loading" && (
             <div className="flex items-center justify-center h-full gap-2 text-[12px] text-text-muted preview-loading">
-              <Loader2 size={13} className="animate-spin" />
+              <Loader2 className="icon-md animate-spin" />
               正在读取文件…
             </div>
           )}
           {previewState.status === "error" && (
             <div className="flex items-start gap-2 p-4 text-[12px] text-error min-w-0">
-              <AlertTriangle size={13} className="shrink-0 mt-0.5" />
+              <AlertTriangle className="icon-md shrink-0 mt-0.5" />
               <span className="break-words [overflow-wrap:anywhere] whitespace-pre-wrap min-w-0 flex-1">{previewState.message}</span>
             </div>
           )}
@@ -458,37 +463,10 @@ export function PreviewPanel({
           {previewState.status === "markdown" && (
             <div className="preview-md-host">
               <article className="preview-md-body">
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm, remarkBreaks]}
-                  components={{
-                    a: ({ href, children, ...rest }) => (
-                      <a
-                        href={href}
-                        onClick={(e) => {
-                          if (href && /^https?:\/\//i.test(href)) {
-                            e.preventDefault();
-                            openExternalUrl(href);
-                          }
-                        }}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        {...rest}
-                      >
-                        {children}
-                      </a>
-                    ),
-                    code({ className, children, ...props }) {
-                      const match = /language-([\w-]+)/.exec(className || "");
-                      const codeString = String(children).replace(/\n$/, "");
-                      if (match) {
-                        return <CodeBlock language={match[1].toLowerCase()} code={codeString} isDark={isDark} />;
-                      }
-                      return <code {...props}>{children}</code>;
-                    },
-                  }}
-                >
-                  {previewState.content}
-                </ReactMarkdown>
+                <MarkdownPreview
+                  content={previewState.content}
+                  isDark={isDark}
+                />
               </article>
             </div>
           )}
@@ -574,7 +552,7 @@ export function PreviewPanel({
               )}
               {previewState.status === "error" && (
                 <div className="flex items-start gap-2 p-6 text-[12px] text-error min-w-0">
-                  <AlertTriangle size={13} className="shrink-0 mt-0.5" />
+                  <AlertTriangle className="icon-md shrink-0 mt-0.5" />
                   <span className="break-words [overflow-wrap:anywhere] whitespace-pre-wrap min-w-0 flex-1">{previewState.message}</span>
                 </div>
               )}
@@ -586,7 +564,7 @@ export function PreviewPanel({
               )}
               {previewState.status === "loading" && (
                 <div className="flex items-center justify-center h-full gap-2 text-[12px] text-text-muted">
-                  <Loader2 size={13} className="animate-spin" />
+                  <Loader2 className="icon-md animate-spin" />
                   正在读取文件…
                 </div>
               )}
@@ -613,4 +591,52 @@ export function PreviewPanel({
       )}
     </div>
   );
+}
+
+/* ── Markdown preview (satteri pipeline) ──────────────────────── */
+
+// 内联轻量组件：satteri + hast-util-to-jsx-runtime 渲染 .md 文件预览。
+// 与 MarkdownBody 的差别：
+//   - 不接 PathLink（preview 本地文件，自有 onClick 路由）
+//   - 链接拦截外部 https:// 让 openExternalUrl 走系统浏览器
+//   - 不需要 streaming 节流（preview 一次性读全文）
+function MarkdownPreview({ content, isDark }: { content: string; isDark: boolean }) {
+  const rendered = useMemo<ReactNode>(() => {
+    const hardened = hardenSoftLineBreaks(content);
+    const hast = markdownToHast(hardened, { features: { gfm: true } });
+    return toJsxRuntime(hast, {
+      Fragment,
+      jsx,
+      jsxs,
+      components: {
+        a({ href, children, ...rest }: { href?: string; children?: ReactNode }) {
+          return (
+            <a
+              href={href}
+              onClick={(e) => {
+                if (href && /^https?:\/\//i.test(href)) {
+                  e.preventDefault();
+                  openExternalUrl(href);
+                }
+              }}
+              target="_blank"
+              rel="noopener noreferrer"
+              {...rest}
+            >
+              {children}
+            </a>
+          );
+        },
+        code({ className, children, ...props }: { className?: string; children?: ReactNode }) {
+          const match = /language-([\w-]+)/.exec(className || "");
+          const codeString = String(children ?? "").replace(/\n$/, "");
+          if (match) {
+            return <CodeBlock language={match[1]!.toLowerCase()} code={codeString} isDark={isDark} />;
+          }
+          return <code {...props}>{children}</code>;
+        },
+      },
+    });
+  }, [content, isDark]);
+  return <>{rendered}</>;
 }
