@@ -363,6 +363,14 @@ pub enum StreamEvent {
         /// matched by a visible cue. `None` for a normal success.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         denial_kind: Option<String>,
+        /// Authoritative failure flag straight from `ToolResult::is_error`.
+        /// `Some(true)` when the tool failed on execution or was denied;
+        /// `Some(false)` on success; `None` for events that predate the
+        /// flag. Lets the front-end mark failed calls from a fact instead
+        /// of regex-guessing the payload text (which mis-flagged any normal
+        /// output starting with "Error"/"Failed").
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        is_error: Option<bool>,
     },
     /// A live chunk of tool output (stdout / stderr). Replaces the
     /// old ad-hoc `[tool: x] y (n/m)` text wrap. Carries enough
@@ -456,6 +464,31 @@ pub enum StreamEvent {
         /// matches the choice's `value`.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         choices: Vec<ApprovalChoice>,
+        /// Unified before/after diff for file-mutating calls (backend-computed
+        /// at request time — it needs the target file's current contents).
+        /// `None` for non-file tools or shapes the backend can't diff; the
+        /// client keeps its plain-description fallback.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        diff: Option<String>,
+    },
+    /// Server → client: a **batch** of pending approval requests that
+    /// the agent loop emitted in the same synchronous pre-dispatch
+    /// pass (e.g. an LLM turn that fan-out-fanouts N parallel high-risk
+    /// tool calls). The WS layer coalesces these into one envelope so
+    /// the client can render one card and resolve all requests with a
+    /// single button click. The `batch_id` is a runtime-only id —
+    /// it is **not** persisted to SQLite; reloading the session will
+    /// surface each `request_id` as its own `RequestApproval` row
+    /// again, which is the intended semantics (history is per-call;
+    /// the batch is a UI convenience for the live turn only).
+    /// The client echoes back via
+    /// [`WsClientMessage::ApprovalBatchResponse`] with the same
+    /// `batch_id`. The single `decision` applies to every item in
+    /// the batch — there is no per-item granularity at the wire
+    /// level.
+    RequestApprovalsBatch {
+        batch_id: String,
+        items: Vec<RequestApprovalItem>,
     },
     /// Surface memory writes / updates / deletes /
     /// summaries in the conversation so the user can always see what
@@ -893,6 +926,25 @@ DiscussionConcluded {
 }
 
 /// One row in the task list. Same shape as
+/// One item inside a [`StreamEvent::RequestApprovalsBatch`]. Same
+/// per-call shape as a standalone `RequestApproval`, just bundled
+/// so the client can render N sub-rows under one batch card.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RequestApprovalItem {
+    pub request_id: String,
+    pub tool: String,
+    pub arguments: serde_json::Value,
+    pub risk: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<i64>,
+    /// Backend-computed unified before/after diff for file-mutating calls.
+    /// `None` when the shape can't be diffed — client keeps its fallback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff: Option<String>,
+}
+
 /// `hermix_tools::backends::todo::TodoItem`, but defined here so the
 /// transport crate doesn't depend on hermix-tools (which would form
 /// a cycle hermix-server → hermix-tools → hermix-transport).
@@ -991,6 +1043,21 @@ pub enum WsClientMessage {
     /// `Deny` on the server side (fail-closed).
     ApprovalResponse {
         request_id: String,
+        decision: String,
+    },
+    /// Response to a [`StreamEvent::RequestApprovalsBatch`]. One
+    /// `decision` applies to **every** item in the batch — the
+    /// protocol deliberately does not offer per-item granularity so
+    /// the UI is a single card with N listed sub-actions and three
+    /// buttons (deny / approve / always-approve).
+    ///
+    /// `decision` is the same free-form string as [`ApprovalResponse`]:
+    /// `"approved"`, `"denied"`, `"always"`, `"session"`, `"once"`,
+    /// `"deny"`, `"yes"`, `"no"`, `"true"`, `"false"` — all routed
+    /// through [`ApprovalChoice::from_decision_str`] (case-insensitive,
+    /// unknown values fail-closed to Deny).
+    ApprovalBatchResponse {
+        batch_id: String,
         decision: String,
     },
     /// Response to a [`StreamEvent::ClarifyRequest`]. The free-form `answer`
@@ -1144,6 +1211,7 @@ mod tests {
             reason: Some("destructive command".into()),
             expires_at: Some(1_700_000_000_000),
             choices: vec![],
+            diff: None,
         };
         let value = serde_json::to_value(&event).expect("serialize");
         assert_eq!(value["type"], "request_approval");
@@ -1180,6 +1248,7 @@ mod tests {
                 ApprovalChoice::Always,
                 ApprovalChoice::Deny,
             ],
+            diff: None,
         };
         let value = serde_json::to_value(&event).expect("serialize");
         assert_eq!(value["choices"], serde_json::json!(["once", "session", "always", "deny"]));
@@ -1204,6 +1273,7 @@ mod tests {
             reason: None,
             expires_at: None,
             choices: vec![],
+            diff: None,
         };
         let value = serde_json::to_value(&event).expect("serialize");
         // `None` is `skip_serializing_if` — the field is absent on the
