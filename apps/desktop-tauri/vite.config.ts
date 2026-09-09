@@ -24,6 +24,22 @@ export default defineConfig({
     esbuildOptions: {
       target: "es2022",
     },
+    // satteri 的浏览器 wasm 链用 `new URL("./x.wasm", import.meta.url)` 取
+    // wasm 字节。预打包(esbuild optimizeDeps)会把 `import.meta.url` 改写成
+    // `.vite/deps/` 下的路径，相对 wasm 在该目录不存在 → dev server 的 SPA
+    // 回退返回 index.html(<!doctype) → WebAssembly.instantiate 报
+    // "expected magic word ... found 3c 21 64 6f"。排除后 vite 按
+    // /@fs/.../node_modules 原样服务真实 .wasm 文件，dev 才可加载。
+    // 仅影响 dev 预打包；production build 仍由 rollup 正常 emit wasm 资源。
+    exclude: [
+      "satteri",
+      "@bruits/satteri-wasm32-wasi",
+      "@napi-rs/wasm-runtime",
+      "@emnapi/core",
+      "@emnapi/runtime",
+      "@emnapi/wasi-threads",
+      "@tybys/wasm-util",
+    ],
   },
   build: {
     target: "es2022",
