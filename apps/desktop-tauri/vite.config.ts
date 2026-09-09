@@ -1,6 +1,10 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import path from "path";
+// Fix the satteri wasm worker's bare-specifier URL in node_modules before
+// anything resolves it (dev pre-bundling and production build both load this
+// config). Idempotent — see scripts/patch-satteri-wasm.mjs.
+import "./scripts/patch-satteri-wasm.mjs";
 
 export default defineConfig({
   plugins: [react()],
