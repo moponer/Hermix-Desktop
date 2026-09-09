@@ -19,6 +19,30 @@
         } catch (e) {}
       })();
     </script>
+    <script>
+      // 启动遮罩终极保险 —— 独立于 main.tsx 的模块图运行（经典脚本，不依赖任何 import）。
+      // 若 main.tsx 因某个依赖在求值期抛错而整体崩掉，第 122 行那个 22s 兜底根本不会注册，
+      // 这里的内联兜底仍能无条件关掉 splash，避免界面永久卡在启动页。
+      (function () {
+        var SP_FALLBACK_MS = 10000;
+        function hideSplash() {
+          var s = document.getElementById("splash");
+          if (s && !s.classList.contains("hide")) {
+            s.classList.add("hide");
+            setTimeout(function () { if (s.parentNode) s.parentNode.removeChild(s); }, 400);
+          }
+        }
+        window.__hermixHideSplash = hideSplash;
+        setTimeout(hideSplash, SP_FALLBACK_MS);
+        // 把模块求值/运行期错误打到 console，便于无头探测抓取真实根因（安装版无 devtools 时也留痕）。
+        window.addEventListener("error", function (e) {
+          try { console.error("[hermix-boot] error:", e.message, (e.filename || "") + ":" + (e.lineno || 0)); } catch (_) {}
+        });
+        window.addEventListener("unhandledrejection", function (e) {
+          try { console.error("[hermix-boot] unhandledrejection:", e.reason && (e.reason.stack || e.reason.message || e.reason)); } catch (_) {}
+        });
+      })();
+    </script>
     <style>
       /* ── Splash tokens — clean, minimal ── */
       :root {
