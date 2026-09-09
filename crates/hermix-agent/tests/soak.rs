@@ -45,6 +45,9 @@ mod soak {
                 pagefile_usage: usize,
                 peak_pagefile_usage: usize,
             }
+            // GetProcessMemoryInfo 在 psapi.lib；GetCurrentProcess 在 kernel32
+            //（默认链接），link 指令只是追加搜索库，不影响前者解析。
+            #[link(name = "psapi")]
             extern "system" {
                 fn GetCurrentProcess() -> *mut std::ffi::c_void;
                 fn GetProcessMemoryInfo(
