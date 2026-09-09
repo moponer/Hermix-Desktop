@@ -17,9 +17,19 @@ process.env.CARGO_TARGET_DIR = targetDir;
 const mode = process.argv[2] || "dev";
 const isRelease = mode === "build" || mode === "release";
 
+// Windows 上 npm 的真实可执行文件是 npm.cmd，不带 shell 直接 spawn "npm" 会 ENOENT
+// （Git Bash / 任何非 cmd 父进程下都会踩到，npm run 内部注入 cmd 才掩盖了这个问题）。
+const npmBin = process.platform === "win32" ? "npm.cmd" : "npm";
+
+// .cmd/.bat 不是 PE 可执行文件, 必须交给 cmd.exe 解释, 否则 spawnSync 直接 EINVAL。
+function spawnOpts(cmd, opts) {
+  const needShell = process.platform === "win32" && /\.(cmd|bat)$/i.test(cmd);
+  return { stdio: "inherit", ...(needShell ? { shell: true } : {}), ...opts };
+}
+
 function sh(cmd, args, opts = {}) {
   console.log(`[${mode}] $ ${cmd} ${args.join(" ")}`);
-  const r = spawnSync(cmd, args, { stdio: "inherit", ...opts });
+  const r = spawnSync(cmd, args, spawnOpts(cmd, opts));
   if (r.error) {
     console.error(`[${mode}] failed to spawn ${cmd}:`, r.error);
     process.exit(1);
@@ -30,7 +40,7 @@ function sh(cmd, args, opts = {}) {
 // 非致命：失败不中断主流程（与原始 `|| echo skipped` 语义一致）。
 function shOptional(cmd, args) {
   console.log(`[${mode}] $ ${cmd} ${args.join(" ")} (best-effort)`);
-  const r = spawnSync(cmd, args, { stdio: "inherit" });
+  const r = spawnSync(cmd, args, spawnOpts(cmd));
   if (r.status !== 0) console.warn(`[${mode}] hx-shell 运行时同步已跳过（dev 模式不构建 hx-shell，不影响本体开发调试）`);
 }
 
@@ -51,14 +61,14 @@ if (mode === "dev") {
   copyFileSync(src, dst);
   console.log(`[dev] Sidecar updated: ${dst}`);
   console.log(`[dev] Starting Tauri dev (产物也写入 ${targetDir})...`);
-  shOptional("npm", ["run", "_:sync-shell-runtime"]);
+  shOptional(npmBin, ["run", "_:sync-shell-runtime"]);
   sh("cargo", ["tauri", "dev"]);
 } else {
-  sh("npm", ["run", "_:build-shell"]);
-  sh("npm", ["run", "_:sync-shell"]);
-  sh("npm", ["run", "_:sync-shell-runtime"]);
-  sh("npm", ["run", "build:backend"]);
-  sh("npm", ["run", "_:ensure-sidecar"]);
+  sh(npmBin, ["run", "_:build-shell"]);
+  sh(npmBin, ["run", "_:sync-shell"]);
+  sh(npmBin, ["run", "_:sync-shell-runtime"]);
+  sh(npmBin, ["run", "build:backend"]);
+  sh(npmBin, ["run", "_:ensure-sidecar"]);
   console.log(`[build] Building Tauri installer (CARGO_TARGET_DIR=${targetDir})...`);
   sh("cargo", ["tauri", "build"]);
 }
