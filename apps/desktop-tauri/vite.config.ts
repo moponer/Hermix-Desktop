@@ -15,7 +15,18 @@ export default defineConfig({
     port: 1420,
     strictPort: true,
   },
+  // WebView2 (Chromium 100+) 原生支持 top-level await。默认 es2020 目标会让
+  // satteri 的 wasm loader 在 esbuild 阶段直接报 "Top-level await is not available"。
+  esbuild: {
+    target: "es2022",
+  },
+  optimizeDeps: {
+    esbuildOptions: {
+      target: "es2022",
+    },
+  },
   build: {
+    target: "es2022",
     outDir: "../../release/frontend",
     emptyOutDir: true,
     // 主 JS bundle ~2.4MB (桌面本地加载, WebView2 读本地文件无感)。
