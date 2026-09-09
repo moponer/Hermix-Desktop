@@ -34,7 +34,7 @@ use std::sync::Mutex;
 
 use base64::Engine as _;
 
-use axum::body::{Bytes, Body};
+use axum::body::Body;
 use axum::extract::{Path, State};
 use axum::http::header;
 use axum::http::{HeaderValue, Method, StatusCode};
@@ -43,7 +43,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use chrono::Utc;
-use futures::{FutureExt, SinkExt, StreamExt};
+use futures::FutureExt;
 use std::panic::AssertUnwindSafe;
 use hermix_config::GatewayConfig;
 use hermix_agent::python_alignment::ThinkBlockParser;
