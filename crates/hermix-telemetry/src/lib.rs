@@ -24,6 +24,9 @@ pub struct TelemetryConfig {
     /// OTLP HTTP traces URL base (`http://host:4318`) or full path (`.../v1/traces`).
     /// Active when crate is built with `--features otlp`.
     pub otlp_endpoint: Option<String>,
+    /// stdio 传输模式下必须置 true：stdout 被 JSON Lines 协议独占，日志行混入
+    /// 会被对端当帧解析，触发 "unparseable frame" 死循环。
+    pub log_to_stderr: bool,
 }
 
 impl Default for TelemetryConfig {
@@ -33,13 +36,18 @@ impl Default for TelemetryConfig {
             json: false,
             service_name: "hermes".to_string(),
             otlp_endpoint: None,
+            log_to_stderr: false,
         }
     }
 }
 
 /// Build [`TelemetryConfig`] from environment and call [`init_telemetry`].
 /// Honors `RUST_LOG` / `HERMES_LOG_JSON` / `HERMES_OTLP_ENDPOINT` like the CLI and HTTP binaries.
-pub fn init_telemetry_from_env(service_name: impl Into<String>, default_level: impl AsRef<str>) {
+pub fn init_telemetry_from_env(
+    service_name: impl Into<String>,
+    default_level: impl AsRef<str>,
+    log_to_stderr: bool,
+) {
     let level = tracing_subscriber::EnvFilter::try_from_default_env()
         .map(|f| f.to_string())
         .unwrap_or_else(|_| default_level.as_ref().to_string());
@@ -48,6 +56,7 @@ pub fn init_telemetry_from_env(service_name: impl Into<String>, default_level: i
         json: env_compat("HERMIX_LOG_JSON", "HERMES_LOG_JSON").as_deref() == Some("1"),
         service_name: service_name.into(),
         otlp_endpoint: env_compat("HERMIX_OTLP_ENDPOINT", "HERMES_OTLP_ENDPOINT"),
+        log_to_stderr,
     };
     init_telemetry(&cfg);
 }
@@ -86,11 +95,23 @@ pub fn init_telemetry(config: &TelemetryConfig) {
     };
 
     let fmt_base = tracing_subscriber::fmt::layer().with_target(false);
-    let _ = if config.json {
-        reg.with(filter).with(fmt_base.json()).try_init()
+    if config.log_to_stderr {
+        if config.json {
+            let _ = reg
+                .with(filter)
+                .with(fmt_base.json().with_writer(std::io::stderr))
+                .try_init();
+        } else {
+            let _ = reg
+                .with(filter)
+                .with(fmt_base.with_writer(std::io::stderr))
+                .try_init();
+        }
+    } else if config.json {
+        let _ = reg.with(filter).with(fmt_base.json()).try_init();
     } else {
-        reg.with(filter).with(fmt_base).try_init()
-    };
+        let _ = reg.with(filter).with(fmt_base).try_init();
+    }
 }
 
 #[derive(Default)]

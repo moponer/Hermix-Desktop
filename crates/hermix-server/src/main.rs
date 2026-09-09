@@ -9,13 +9,16 @@ use hermix_telemetry::init_telemetry_from_env;
 
 #[tokio::main]
 async fn main() -> Result<(), AgentError> {
-    init_telemetry_from_env("hermes-server", "info");
+    // --stdio 时 stdout 是 JSON Lines 协议通道，日志必须走 stderr，否则日志行
+    // 会被桌面端当帧解析（unparseable frame 死循环 + 启动卡死）。
+    let stdio = std::env::args().any(|a| a == "--stdio");
+    init_telemetry_from_env("hermes-server", "info", stdio);
 
     let config = load_config(None).map_err(|e| AgentError::Config(e.to_string()))?;
 
     // --stdio：接管 stdin/stdout 跑 JSON Lines 多路复用协议（桌面端 IPC），
     // 不绑定任何 TCP 端口；默认（无 flag）保持 HTTP/WS TCP 监听。
-    if std::env::args().any(|a| a == "--stdio") {
+    if stdio {
         let state = hermix_server::HttpServerState::build(config)
             .await?
             .with_automation_scheduler();
