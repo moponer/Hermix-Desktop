@@ -31,6 +31,12 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
+    "windows": {
+      "nsis": {
+        "languages": ["SimpChinese"],
+        "displayLanguageSelector": false
+      }
+    },
     "createUpdaterArtifacts": false,
     "externalBin": [
       "binaries/hermix",
