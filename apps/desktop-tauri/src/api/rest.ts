@@ -106,7 +106,16 @@ export async function apiInvoke(
   body?: unknown,
   signal?: AbortSignal,
 ): Promise<ApiReply> {
-  const payload = body === undefined ? null : JSON.stringify(body);
+  // 调用点传入的 body 已经是 JSON 文本（fetchJSON 里 JSON.stringify 的产物）。
+  // 这里绝不能再 stringify 一次：字符串会被再包一层引号，server 端把该文本
+  // 原样作为 axum 请求体，Json extractor 收到的是字符串而非对象 →
+  // 422 "invalid type: string ..., expected struct X"。非字符串（对象）才序列化。
+  const payload =
+    body === undefined
+      ? null
+      : typeof body === "string"
+        ? body
+        : JSON.stringify(body);
   const timeoutSignal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
   const combined = signal
     ? AbortSignal.any([signal, timeoutSignal])
