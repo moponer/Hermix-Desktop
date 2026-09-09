@@ -59,6 +59,11 @@ if (import.meta.env.DEV) {
 // succeeds — the two paths race to whoever fires first.
 const HEALTH_TIMEOUT_MS = 20_000;
 const HEALTH_POLL_MS = 500;
+// 终极兜底：无论 health 探测 / server-ready 事件是否到达，到时无条件关掉
+// splash。防止 `invoke("backend_ready")` 在异常情况下永久 pending 把整段
+// 关闭逻辑钉死，导致界面永远卡在启动页。splash 只是加载遮罩，真正后端离线
+// 状态由 BackendStatus / ConnectionIndicator 呈现，关掉遮罩不丢任何信息。
+const HARD_FALLBACK_MS = 22_000;
 
 function dismissSplash() {
   // 先停掉 CSS 自推进动画并补满，再淡出——否则进度条停在中途就消失。
@@ -80,19 +85,28 @@ function safeDismiss(timedOut = false) {
   dismissed = true;
   dismissSplash();
   if (timedOut) {
-    // 20s 内 bridge 仍未回 /health 200 算真失败。
-    // bridge 初始化后 round-trip 必然成功（curl/手动 invoke 已验证），
-    // 走到这里意味着 hermix.exe 真的没起来 / spawn 失败 / bridge 未初始化。
+    // pollHealth 20s 内仍未拿到 backend_ready=true 算真失败（hermix.exe
+    // 没起来 / spawn 失败 / bridge 未初始化）。splash 已关，离线状态交由
+    // 顶栏连接指示器呈现。
     toastWarning("后端服务未就绪（20s）。如果一直无法使用，请尝试重启。");
   }
+}
+
+// 单次 health 探测，自带超时 race：即使 `invoke("backend_ready")` 永久
+// pending，本次探测也会在 timeoutMs 后判定为 false，轮询不会被单个 hung
+// invoke 拖死（否则 while 循环永远停在 await 上，20s 兜底也到不了）。
+function checkOnce(timeoutMs: number): Promise<boolean> {
+  return Promise.race([
+    api.checkBackendHealth(),
+    new Promise<boolean>((resolve) => setTimeout(() => resolve(false), timeoutMs)),
+  ]);
 }
 
 async function pollHealth() {
   const deadline = Date.now() + HEALTH_TIMEOUT_MS;
   while (Date.now() < deadline) {
     try {
-      const ready = await api.checkBackendHealth();
-      if (ready) {
+      if (await checkOnce(2_000)) {
         safeDismiss(false);
         return;
       }
@@ -103,6 +117,10 @@ async function pollHealth() {
   }
   safeDismiss(true);
 }
+
+// 终极兜底：先于所有探测注册，保证 splash 永不永久卡住。
+setTimeout(() => safeDismiss(false), HARD_FALLBACK_MS);
+
 pollHealth();
 
 // Tauri 端 server-ready 事件（旧机制，保留兼容）：收到即 dismiss。
@@ -119,6 +137,10 @@ function setSplashStage(text: string) {
 
 listen<string>("hermix:boot-stage", (event) => {
   setSplashStage(event.payload);
+  // Rust 端最后一步会 emit "服务已就绪，正在进入主界面"——收到即关。
+  if (event.payload && event.payload.includes("就绪")) {
+    safeDismiss(false);
+  }
 });
 
 invoke<string>("boot_stage")
