@@ -68,6 +68,27 @@
         z-index: 10;
       }
 
+      /* ── Window controls: 无边框窗口, 启动卡住时给用户退路 ── */
+      .sp-win-controls {
+        position: absolute;
+        top: 0; right: 0;
+        height: 40px;
+        display: flex;
+        z-index: 20;
+        -webkit-app-region: no-drag;
+      }
+      .sp-win-btn {
+        width: 46px; height: 40px;
+        border: 0; padding: 0;
+        background: transparent;
+        color: var(--sp-ink-soft);
+        display: flex; align-items: center; justify-content: center;
+        cursor: pointer;
+        transition: background 0.15s ease, color 0.15s ease;
+      }
+      .sp-win-btn:hover { background: rgba(128, 128, 128, 0.16); }
+      .sp-win-btn.sp-close:hover { background: #c42b1c; color: #fff; }
+
       /* ── Stage ── */
       .sp-stage {
         position: relative;
@@ -177,6 +198,20 @@
         <!-- Drag region for titlebar -->
         <div class="sp-titlebar" aria-hidden="true"></div>
 
+        <!-- 无边框窗口没有系统标题栏, 启动异常时靠这两个按钮退出 -->
+        <div class="sp-win-controls">
+          <button class="sp-win-btn" id="sp-minimize" type="button" title="最小化" aria-label="最小化">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
+              <path d="M2 6h8" />
+            </svg>
+          </button>
+          <button class="sp-win-btn sp-close" id="sp-close" type="button" title="关闭" aria-label="关闭">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
+              <path d="M2.5 2.5l7 7M9.5 2.5l-7 7" />
+            </svg>
+          </button>
+        </div>
+
         <div class="sp-stage">
           <!-- Mascot -->
           <img class="sp-logo" src="./mascot-256.png"
@@ -192,40 +227,15 @@
             </div>
           </div>
 
-          <div class="sp-sub">Preparing runtime...</div>
+          <!-- 阶段文案由 main.tsx 按 Tauri 端 hermix:boot-stage 事件实时更新 -->
+          <div class="sp-sub" id="sp-stage-text">正在初始化…</div>
         </div>
       </div>
     </div>
 
-    <!-- Real startup status: polls /health, fills progress bar. -->
-    <script>
-      (function() {
-        var bar = document.getElementById("sp-progress-bar");
-        if (!bar) return;
-
-        // Poll /health — on success, fill bar to 100%
-        var pollTimer = setInterval(function() {
-          fetch("http://127.0.0.1:3000/health", { mode: "no-cors" })
-            .then(function() {
-              clearInterval(pollTimer);
-              // Stop CSS animation and snap to 100%
-              bar.classList.remove("animating");
-              bar.style.width = "100%";
-            })
-            .catch(function() {});
-        }, 500);
-
-        // Clean up if splash is removed
-        var observer = new MutationObserver(function() {
-          if (!document.getElementById("splash")) {
-            clearInterval(pollTimer);
-            observer.disconnect();
-          }
-        });
-        observer.observe(document.body, { childList: true, subtree: true });
-      })();
-    </script>
-
+    <!-- 启动状态由 /src/main.tsx 驱动: 走 stdio bridge 探活, 并按
+         hermix:boot-stage 事件刷新阶段文案。此处不再内联 HTTP 轮询
+         —— stdio 模式没有 HTTP 服务, 内联 fetch 必然全部失败。 -->
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

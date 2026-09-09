@@ -1,6 +1,8 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { listen } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import * as api from "./api";
 import App from "./App";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -59,6 +61,12 @@ const HEALTH_TIMEOUT_MS = 20_000;
 const HEALTH_POLL_MS = 500;
 
 function dismissSplash() {
+  // 先停掉 CSS 自推进动画并补满，再淡出——否则进度条停在中途就消失。
+  const bar = document.getElementById("sp-progress-bar");
+  if (bar) {
+    bar.classList.remove("animating");
+    bar.style.width = "100%";
+  }
   const splash = document.getElementById("splash");
   if (splash) {
     splash.classList.add("hide");
@@ -101,3 +109,33 @@ pollHealth();
 listen("hermix:server-ready", () => {
   setTimeout(() => safeDismiss(false), 600);
 });
+
+// 启动阶段文案：Rust setup 的每个真实步骤都会 emit `hermix:boot-stage`。
+// setup 可能早于前端 listen，所以挂载后回查一次当前阶段补上丢失的事件。
+function setSplashStage(text: string) {
+  const el = document.getElementById("sp-stage-text");
+  if (el && text) el.textContent = text;
+}
+
+listen<string>("hermix:boot-stage", (event) => {
+  setSplashStage(event.payload);
+});
+
+invoke<string>("boot_stage")
+  .then(setSplashStage)
+  .catch(() => {
+    // 纯浏览器调试下没有 Tauri command，忽略即可。
+  });
+
+// 无边框窗口没有系统标题栏：启动异常卡住时，用户得能最小化/关闭。
+(function bindSplashWindowControls() {
+  const bind = (id: string, action: () => void) => {
+    document.getElementById(id)?.addEventListener("click", action);
+  };
+  bind("sp-minimize", () => {
+    void getCurrentWindow().minimize().catch(() => {});
+  });
+  bind("sp-close", () => {
+    void getCurrentWindow().close().catch(() => {});
+  });
+})();
