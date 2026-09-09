@@ -341,6 +341,26 @@ pub struct AppState {
     pub sidecar: Arc<Mutex<HermixSidecar>>,
 }
 
+/// 最近一次启动阶段文案。启动页用它显示真实进度；setup 早于前端 listen，
+/// 所以除 emit 外还要能回查，否则错过事件就永远停在初始文案。
+static BOOT_STAGE: std::sync::OnceLock<Mutex<String>> = std::sync::OnceLock::new();
+
+fn set_boot_stage(handle: &tauri::AppHandle, stage: &str) {
+    let slot = BOOT_STAGE.get_or_init(|| Mutex::new(String::new()));
+    if let Ok(mut g) = slot.lock() {
+        *g = stage.to_string();
+    }
+    let _ = handle.emit("hermix:boot-stage", stage.to_string());
+}
+
+#[tauri::command]
+fn boot_stage() -> String {
+    BOOT_STAGE
+        .get()
+        .and_then(|s| s.lock().ok().map(|g| g.clone()))
+        .unwrap_or_default()
+}
+
 pub fn run() {
     // ── WebView2 / Chromium 启动参数 ──
     //
@@ -428,14 +448,21 @@ pub fn run() {
                 }
             };
 
+            // 启动阶段广播：写入静态最近阶段并 emit，供启动页显示真实进度。
+            // 早期阶段可能早于前端 listen，故另提供 boot_stage command 拉取当前值。
+            let handle = app.handle().clone();
+            set_boot_stage(&handle, "正在准备运行环境…");
+
             // 1b. Materialize built-in skills into HERMIX_HOME/skills/ on first
             //     run. These ship *inside the binary* (include_str!), so no
             //     resource-dir lookup is required — they work even in dev
             //     builds. Bundled (marketplace) skills still come from the
             //     Tauri resource dir below.
+            set_boot_stage(&handle, "正在解包内置技能…");
             let skills_dir = hermix_home.join("skills");
             ensure_builtin_skills(&skills_dir);
             if let Ok(resource_dir) = app.path().resource_dir() {
+                set_boot_stage(&handle, "正在准备运行时组件…");
                 ensure_bundled_skills(&resource_dir, &skills_dir);
                 ensure_loader(&resource_dir, &hermix_home);
             } else {
@@ -451,8 +478,9 @@ pub fn run() {
                 sidecar: sidecar.clone(),
             });
 
+            set_boot_stage(&handle, "正在启动本地服务…");
+
             // Start hermix serve in background
-            let handle = app.handle().clone();
             let state = handle.state::<AppState>();
             let started = {
                 let mut sb = state.sidecar.lock().unwrap();
@@ -472,6 +500,7 @@ pub fn run() {
                 );
 
                 let handle2 = handle.clone();
+                set_boot_stage(&handle, "正在等待服务就绪…");
                 tauri::async_runtime::spawn(async move {
                     // Round-trip /health through the stdio bridge until
                     // the server is actually serving requests, then emit
@@ -487,6 +516,8 @@ pub fn run() {
                         println!("[Hermix] Server health check timed out after 30s, emitting ready anyway");
                     }
                     let _ = handle2.emit("hermix:server-ready", ());
+                    // 事件已带 handle2（clone），这里用原 handle 标注最终阶段。
+                    set_boot_stage(&handle, "服务已就绪，正在进入主界面");
                 });
             }
             Ok(())
@@ -518,6 +549,7 @@ pub fn run() {
             commands::restart_sidecar,
             commands::render_office_preview,
             commands::get_runtime_info,
+            boot_stage,
             // stdio bridge chokepoints — every REST call and every
             // WS-style upstream frame the frontend needs now flows
             // through one of these three commands.
