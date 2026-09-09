@@ -362,17 +362,35 @@ impl HermixSidecar {
         let start = std::time::Instant::now();
         while std::time::Instant::now() < start + deadline {
             if let Some(bridge) = crate::stdio_bridge::global() {
-                if let Ok(reply) = bridge.http_request("GET", "/health", None).await {
-                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&reply) {
-                        let body = parsed
-                            .get("body")
-                            .and_then(|b| b.as_str())
-                            .unwrap_or("");
-                        if body.contains("\"status\":\"ok\"") || body.contains("status\":\"ok\"") {
-                            return true;
-                        }
-                    }
+                // stdio 模式下不依赖 HTTP `/health` 往返判定就绪：bridge 初始化即代表
+                // sidecar（hermix.exe）已 spawn 并就绪。原实现轮询 `bridge.http_request`
+                // 在 stdio 下可能永久 pending（无 HTTP server 承接帧），导致本函数卡死、
+                // `server-ready` 事件永不 emit，前端永远停在启动态。
+                // 仍做一次带超时的 /health 健全性探测：成功且 ok 立即就绪；超时/失败则
+                // 降级为「bridge 已初始化即就绪」，保证 `server-ready` 必达。
+                let probe = tokio::time::timeout(
+                    Duration::from_secs(3),
+                    bridge.http_request("GET", "/health", None),
+                )
+                .await;
+                let http_ok = match probe {
+                    Ok(Ok(reply)) => serde_json::from_str::<serde_json::Value>(&reply)
+                        .ok()
+                        .and_then(|p| {
+                            p.get("body")
+                                .and_then(|b| b.as_str())
+                                .map(|b| b.contains("\"status\":\"ok\"") || b.contains("status\":\"ok\""))
+                        })
+                        .unwrap_or(false),
+                    _ => false,
+                };
+                if http_ok {
+                    return true;
                 }
+                eprintln!(
+                    "[Hermix] /health probe did not confirm ok; treating bridge-init as ready (stdio mode)"
+                );
+                return true;
             }
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
