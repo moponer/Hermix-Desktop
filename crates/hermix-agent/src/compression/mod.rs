@@ -397,6 +397,84 @@ pub fn summarize_tool_result(tool_name: &str, tool_args: &str, tool_content: &st
     format!("[ALREADY EXECUTED] [{tool_name}] {args_str}{suffix}")
 }
 
+/// Roll up stale / giant tool-result bodies so context pressure drains
+/// continuously instead of spiking to the compression threshold.
+/// Idempotent: already-short bodies (incl. previously rolled-up rows)
+/// pass through unchanged.
+///
+/// Two tiers:
+/// - messages older than `protect_last_n` from the tail: bodies over
+///   [`ROLLUP_MIN_CHARS`] are replaced with a `summarize_tool_result`
+///   one-liner — the "之前轮次" continuous drain (Pass1 in `compress()`
+///   only runs at trigger time; this runs every turn).
+/// - in-window giants over `giant_chars` are also rolled up, except the
+///   last [`ROLLUP_PROTECT_LAST_ROWS`] tool rows whose exact output the
+///   agent may still reference (compression-trigger tier).
+///
+/// Returns `(message index, original content)` for every replaced row
+/// so callers can archive the originals before they vanish from ctx
+/// (the compression path already archives via `archive_context_section`
+/// first, so it can ignore the return value).
+pub fn rollup_tool_results(
+    messages: &mut Vec<Message>,
+    protect_last_n: usize,
+    giant_chars: usize,
+) -> Vec<(usize, String)> {
+    const ROLLUP_MIN_CHARS: usize = 400;
+    const ROLLUP_PROTECT_LAST_ROWS: usize = 2;
+
+    let mut rolled = Vec::new();
+    let n = messages.len();
+    if n == 0 {
+        return rolled;
+    }
+    // Map tool_call_id -> (tool name, args) from assistant tool_calls so
+    // rolled-up rows keep their real identity in the one-line summary.
+    let mut call_meta: std::collections::HashMap<String, (String, String)> =
+        std::collections::HashMap::new();
+    for msg in messages.iter() {
+        if msg.role == MessageRole::Assistant {
+            if let Some(tcs) = msg.tool_calls.as_ref() {
+                for tc in tcs {
+                    call_meta.insert(
+                        tc.id.clone(),
+                        (tc.function.name.clone(), tc.function.arguments.clone()),
+                    );
+                }
+            }
+        }
+    }
+    for (i, msg) in messages.iter_mut().enumerate() {
+        if msg.role != MessageRole::Tool {
+            continue;
+        }
+        let content = match msg.content.as_deref() {
+            Some(c) => c,
+            None => continue,
+        };
+        let len = content.chars().count();
+        let dist_from_tail = n.saturating_sub(i);
+        let stale = dist_from_tail > protect_last_n;
+        let roll = if stale {
+            len > ROLLUP_MIN_CHARS
+        } else {
+            len > giant_chars && dist_from_tail > ROLLUP_PROTECT_LAST_ROWS
+        };
+        if !roll {
+            continue;
+        }
+        let (name, args) = msg
+            .tool_call_id
+            .as_deref()
+            .and_then(|id| call_meta.get(id))
+            .cloned()
+            .unwrap_or_else(|| ("tool".to_string(), "{}".to_string()));
+        rolled.push((i, content.to_string()));
+        msg.content = Some(summarize_tool_result(&name, &args, content));
+    }
+    rolled
+}
+
 /// Shrink long string values inside a tool-call arguments JSON blob while
 /// preserving JSON validity. Non-string values (paths, ints, booleans) are
 /// preserved intact. If the arguments are not valid JSON, the original string
@@ -439,6 +517,13 @@ const SUMMARY_FAILURE_COOLDOWN: Duration = Duration::from_secs(600);
 /// Short cooldown used when the auxiliary chain only has one registered
 /// candidate — see [`ContextCompressor::arm_cooldown`] for rationale.
 const SUMMARY_FAILURE_COOLDOWN_SHORT: Duration = Duration::from_secs(30);
+/// Hard deadline for the LLM summary round-trip inside `compress()`.
+/// The serialized prompt can reach ~150K tokens, so generation
+/// legitimately needs 60-180s — while each auxiliary candidate only
+/// gets its per-task timeout (45s) before the chain failover. Without
+/// this bound the stream freezes for N×45s. On expiry `compress()`
+/// falls back to the static marker (the designed safety net).
+const SUMMARY_LLM_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Count tokens in text using tiktoken (cl100k_base encoding, used by
 /// GPT-4/3.5 and most modern models). Falls back to chars/4 if the

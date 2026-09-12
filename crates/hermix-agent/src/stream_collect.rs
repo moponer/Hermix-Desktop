@@ -912,24 +912,46 @@ pub(crate) async fn collect_stream_inner(
         }
     }
 
-    // filter out tool calls with empty function names.
-    // MiniMax M2.7 streaming sometimes creates placeholder tool call
-    // entries (via the index-based delta assembly above) whose `name`
-    // field never arrives — the name delta was either lost in transit
-    // or the model emitted the tool call as raw XML that the sanitizer
-    // already stripped. Without this filter, `process_post_response`
-    // sees `has_tool_calls = true` (vec is non-empty) and returns
-    // `Continue`, but then `run_stream` filters them out at line ~1315
-    // and falls into the `decide_empty_response` path — which in
-    // autonomous_mode fires a nudge that re-drives the LLM to re-run
-    // the same tools. Filtering here ensures `process_post_response`
-    // sees the correct state (no valid tool calls → `Finalize`).
+    // Recover degenerate tool-call names (MiniMax-M3 streaming compat).
+    // The non-streaming Anthropic adapter (anthropic_adapter.rs) already
+    // extracts the real name from the nested `input` object; mirror it here
+    // so streaming turns don't silently finalize into a fragment when the
+    // `name` delta never arrives. The real name is delivered inside the
+    // tool call's `arguments` JSON (`name` / `tool` / `function.name`).
+    for tc in &mut tool_calls {
+        if tc.function.name.is_empty() || tc.function.name == "tool_call" {
+            if let Ok(serde_json::Value::Object(map)) =
+                serde_json::from_str::<serde_json::Value>(&tc.function.arguments)
+            {
+                for key in ["name", "tool", "function"] {
+                    if let Some(v) = map.get(key) {
+                        let extracted = if key == "function" {
+                            v.get("name").and_then(|n| n.as_str())
+                        } else {
+                            v.as_str()
+                        };
+                        if let Some(n) = extracted {
+                            if !n.is_empty() && n != "tool_call" {
+                                tc.function.name = n.to_string();
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Filter out tool calls with genuinely unrecoverable empty function
+    // names. Was added to avoid the autonomous nudge loop when a placeholder
+    // entry's name is truly missing; now only fires after the recovery pass
+    // above has had a chance to fix degenerate names.
     let empty_name_count = tool_calls.iter().filter(|tc| tc.function.name.is_empty()).count();
     if empty_name_count > 0 {
-        tracing::info!(
+        tracing::warn!(
             total = tool_calls.len(),
             empty_names = empty_name_count,
-            "Filtering out tool calls with empty function names (streaming placeholder entries)"
+            "Tool calls with unrecoverable empty function names dropped; turn will finalize"
         );
         tool_calls.retain(|tc| !tc.function.name.is_empty());
     }

@@ -416,6 +416,7 @@ impl AgentLoop {
                     &tc.function.name,
                     &res.content,
                     res.denial_kind.as_deref().unwrap_or(""),
+                    res.is_error,
                 );
             }
         }
@@ -437,7 +438,7 @@ impl AgentLoop {
                         "file_path": change.path,
                         "file_summary": change.summary,
                     }).to_string();
-                    cb(&synth_id, &synth_name, &payload, "");
+                    cb(&synth_id, &synth_name, &payload, "", false);
                 }
             }
         }
@@ -623,6 +624,23 @@ impl AgentLoop {
         }
 
         self.emit_background_review_metrics(state.total_turns, ctx);
+
+        // Continuous tool-result roll-up: drain stale tool bodies every
+        // turn so context pressure doesn't spike to the compression
+        // threshold. Idempotent + cheap; Pass1 inside compress() stays
+        // as the final safety net. Originals are appended to the
+        // per-session evidence log BEFORE they vanish from ctx so the
+        // one-line summaries stay backed by recoverable full text.
+        let rolled =
+            crate::compression::rollup_tool_results(ctx.get_messages_mut(), 30, 8_000);
+        if !rolled.is_empty() {
+            crate::archive::append_rollup_archive(
+                &hermix_config::paths::hermix_home(),
+                self.config.session_id.as_deref(),
+                &rolled,
+            );
+            ctx.recompute_total_tokens();
+        }
 
         // Context pressure check
         let total_tokens = ctx.total_tokens();

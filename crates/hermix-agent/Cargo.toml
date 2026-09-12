@@ -42,6 +42,8 @@ libloading = { workspace = true }
 # without pulling in the heavier `rand` dependency for a few random u64s.
 fastrand = "2"
 fs4 = { workspace = true }
+# Approval-card diff: unified before/after for file-mutating tool calls.
+similar = "2"
 
 [dev-dependencies]
 proptest = { workspace = true }

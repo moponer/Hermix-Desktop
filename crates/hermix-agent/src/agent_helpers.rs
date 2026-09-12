@@ -380,7 +380,11 @@ pub struct AgentCallbacks {
     /// `""` for a normal success, `"policy"` for a hardline gate, and
     /// `"user_denied"` / `"timed_out"` / `"channel_closed"` for a
     /// user-facing denial the frontend should surface as a banner.
-    pub on_tool_complete: Option<Box<dyn Fn(&str, &str, &str, &str) + Send + Sync>>,
+    /// `is_error` is the authoritative `ToolResult::is_error` flag —
+    /// `true` when the call failed on execution or was denied. Carried
+    /// through to the wire so the front-end never has to infer failure
+    /// from the payload text.
+    pub on_tool_complete: Option<Box<dyn Fn(&str, &str, &str, &str, bool) + Send + Sync>>,
     /// Called for each stream delta.
     pub on_stream_delta: Option<Box<dyn Fn(&str) + Send + Sync>>,
     /// Called after each completed LLM step (full response assembled).

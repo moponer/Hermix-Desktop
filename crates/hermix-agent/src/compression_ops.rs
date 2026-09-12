@@ -542,7 +542,14 @@ pub async fn auto_compress_if_over_threshold<F>(
 
     // Prefer the advanced LLM-powered compressor when available.
     if let Some(ref compressor) = compressor {
-        let messages = ctx.get_messages().to_vec();
+        let mut messages = ctx.get_messages().to_vec();
+        // Roll up stale + in-window giant tool bodies before the LLM
+        // summary serialization. Pass1 inside `compress()` only covers
+        // pre-boundary rows; the tail window and giant in-window outputs
+        // would otherwise be serialized verbatim (~150K tokens), blowing
+        // the aux per-candidate timeout. The archive above already kept
+        // the full text for retrieval.
+        crate::compression::rollup_tool_results(&mut messages, 30, 8_000);
         // (P1): pressure-tiered compression. Moderate
         // pressure (< 85%) takes the fast path — archive + dedup
         // + score-drop + static fallback, no LLM call, so the

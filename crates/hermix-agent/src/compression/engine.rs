@@ -457,11 +457,33 @@ impl ContextCompressor {
             }
             (None, false)
         } else {
-            match self.generate_summary(&turns_to_summarize).await {
-                Ok(s) => (s, true),
-                Err(err) => {
+            // Bound the LLM summary round-trip with a hard deadline.
+            // The prompt can be ~150K tokens; generation needs 60-180s,
+            // but every aux candidate only gets its per-task timeout
+            // (45s) before failover — so an unbounded await freezes the
+            // stream for N×45s while the banner shows "压缩中". On
+            // expiry we fall back to the static marker, which is the
+            // designed safety net (context still frees up, just without
+            // a semantic handoff).
+            match tokio::time::timeout(
+                SUMMARY_LLM_TIMEOUT,
+                self.generate_summary(&turns_to_summarize),
+            )
+            .await
+            {
+                Ok(Ok(s)) => (s, true),
+                Ok(Err(err)) => {
                     if !self.config.quiet_mode {
                         tracing::warn!("Summary generation error (using fallback): {err}");
+                    }
+                    (None, false)
+                }
+                Err(_elapsed) => {
+                    if !self.config.quiet_mode {
+                        tracing::warn!(
+                            "Summary LLM call timed out after {:?} — using static fallback",
+                            SUMMARY_LLM_TIMEOUT
+                        );
                     }
                     (None, false)
                 }

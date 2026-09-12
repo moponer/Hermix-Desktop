@@ -793,6 +793,7 @@
             decided_at: None,
             expires_at: None,
             linked_assistant_id: linked.map(|s| s.to_string()),
+            diff: None,
         }
     }
 

@@ -1235,6 +1235,10 @@ impl LocalAgentService {
                     };
                     let request_id = tc.id.clone();
                     let tool_name = tc.function.name.clone();
+                    // Before/after diff for the approval card (backend-owned;
+                    // `None` for call shapes we can't diff — UI keeps its
+                    // plain-description fallback).
+                    let diff = crate::approval_diff::approval_diff(&tool_name, params);
                     let rx = requester(session_id.to_string(), request_id.clone());
                     on_event_fn(serde_json::json!({
                         "event": "request_approval",
@@ -1242,6 +1246,7 @@ impl LocalAgentService {
                         "tool": tool_name,
                         "arguments": params,
                         "risk": "caution",
+                        "diff": diff,
                     }));
                     return ToolDispatchDecision::AwaitApproval(rx);
                 }
@@ -1280,6 +1285,8 @@ impl LocalAgentService {
         };
         let request_id = tc.id.clone();
         let tool_name = tc.function.name.clone();
+        // Before/after diff for the approval card (backend-owned).
+        let diff = crate::approval_diff::approval_diff(&tool_name, &raw_params);
         let rx = requester(session_id.to_string(), request_id.clone());
         on_event_fn(serde_json::json!({
             "event": "request_approval",
@@ -1287,6 +1294,7 @@ impl LocalAgentService {
             "tool": tool_name,
             "arguments": raw_params,
             "risk": risk.as_str(),
+            "diff": diff,
         }));
         ToolDispatchDecision::AwaitApproval(rx)
     }
@@ -2038,6 +2046,7 @@ impl AgentService for LocalAgentService {
                         file_path: None,
                         change_type: None,
                         file_summary: None,
+                        is_error: None,
                     });
                 }
             },
@@ -2124,6 +2133,7 @@ impl AgentService for LocalAgentService {
                         file_path: None,
                         change_type: None,
                         file_summary: None,
+                        is_error: None,
                     });
                 }
                 tool_start_forwarder(StreamChunk {
@@ -2193,6 +2203,7 @@ impl AgentService for LocalAgentService {
                                     file_path: None,
                                     change_type: None,
                                     file_summary: None,
+                                    is_error: None,
                                 });
                             }
                             tool_start_forwarder(StreamChunk {
@@ -2214,7 +2225,7 @@ impl AgentService for LocalAgentService {
                         }
                 }
             })),
-            on_tool_complete: Some(Box::new(move |tool_call_id, tool_name, output, denial_kind| {
+            on_tool_complete: Some(Box::new(move |tool_call_id, tool_name, output, denial_kind, is_error| {
                 // Pre-cloned at the call-site (see `tl_for_tool_complete`).
                 let timeline_buffer = tl_for_tool_complete.clone();
                 // file_change events are synthetic — `agent_loop.rs`
@@ -2255,6 +2266,7 @@ impl AgentService for LocalAgentService {
                             file_path: Some(file_path.clone()),
                             change_type: Some(change_type.clone()),
                             file_summary: file_summary.clone(),
+                            is_error: None,
                         });
                     }
                     tool_complete_forwarder(StreamChunk {
@@ -2306,6 +2318,7 @@ impl AgentService for LocalAgentService {
                                 file_path: None,
                                 change_type: None,
                                 file_summary: None,
+                                is_error: None,
                             });
                         }
                         tool_complete_forwarder(StreamChunk {
@@ -2345,6 +2358,7 @@ impl AgentService for LocalAgentService {
                         file_path: None,
                         change_type: None,
                         file_summary: None,
+                        is_error: Some(is_error),
                     });
                 }
                 tool_complete_forwarder(StreamChunk {
@@ -2357,6 +2371,7 @@ impl AgentService for LocalAgentService {
                             "tool": tool_name,
                             "content": output,
                             "denial_kind": if denial_kind.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(denial_kind.to_string()) },
+                            "is_error": is_error,
                         })),
                     }),
                     finish_reason: None,
@@ -2407,6 +2422,7 @@ impl AgentService for LocalAgentService {
                         file_path: None,
                         change_type: None,
                         file_summary: None,
+                        is_error: None,
                     });
                 }
                 fwd(StreamChunk {
@@ -2570,6 +2586,8 @@ impl AgentService for LocalAgentService {
                             (approval_requester.as_ref(), on_event.as_ref())
                         {
                             let request_id = tc.id.clone();
+                            let diff =
+                                crate::approval_diff::approval_diff(&tc.function.name, &raw_params);
                             let rx = req(sid.clone(), request_id.clone());
                             on_ev(serde_json::json!({
                                 "event": "request_approval",
@@ -2578,6 +2596,7 @@ impl AgentService for LocalAgentService {
                                 "arguments": raw_params,
                                 "risk": "resource",
                                 "resource": resource,
+                                "diff": diff,
                             }));
                             return ToolDispatchDecision::AwaitApproval(rx);
                         }

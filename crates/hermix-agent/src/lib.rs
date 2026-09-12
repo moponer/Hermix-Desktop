@@ -22,6 +22,7 @@ pub mod agent_helpers;
 pub mod agent_loop;
 pub mod archive;
 pub mod api_bridge;
+pub mod approval_diff;
 pub mod auxiliary_builder;
 pub mod budget;
 pub mod consciousness;

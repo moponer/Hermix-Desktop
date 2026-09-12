@@ -749,6 +749,7 @@ impl SessionPersistence {
                 decided_at: None,
                 expires_at: None,
                 linked_assistant_id: None,
+                diff: None,
             }
         });
         record.decision = Some(decision.to_string());

@@ -294,6 +294,50 @@ pub fn custom_apps_index_prompt(config: &AgentConfig) -> Option<String> {
     Some(block)
 }
 
+/// 已建工作台索引提示：每工作台一行 `@work:<id> — <name>`，让 LLM 知道已有哪些
+/// 工作台、用 @work:<id> 引用，避免重复创建。Deliberately tiny per entry
+/// (id + name only)；完整 schema 通过 `workspace_table_schema` / `workspace_query`
+/// 按需获取。
+///
+/// 数据源：`~/.hermix/workspaces/<ws_id>/workspace.json` 的 `name` 字段。
+/// 注册表 registry.sqlite 的权威 name 与其同步（重命名操作双写定义+注册表），
+/// 直接扫 json 避免为索引引入 rusqlite 依赖。
+pub fn workspaces_index_prompt(config: &AgentConfig) -> Option<String> {
+    let workspaces_dir = config
+        .hermix_home
+        .clone()
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(hermix_config::paths::hermix_home)
+        .join("workspaces");
+    let read_dir = std::fs::read_dir(&workspaces_dir).ok()?;
+    let mut entries: Vec<String> = Vec::new();
+    for dir in read_dir.flatten() {
+        let ws_json = dir.path().join("workspace.json");
+        let Ok(raw) = std::fs::read_to_string(&ws_json) else {
+            continue;
+        };
+        let Ok(def) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            continue;
+        };
+        let name = def.get("name").and_then(|v| v.as_str()).unwrap_or_default();
+        if name.is_empty() {
+            continue;
+        }
+        let id = dir.file_name().to_string_lossy().into_owned();
+        entries.push(format!("@work:{id} — {name}"));
+    }
+    if entries.is_empty() {
+        return None;
+    }
+    entries.sort();
+    let mut block = String::from(
+        "## 已建的工作台\n\
+         用户提到工作台或用 @work:<id> 引用时, 说明它已存在: 用 workspace_* 工具查询/操作; \
+         不要重复创建已存在的工作台（要改结构用 workspace_update_schema）。\n",
+    );
+    block.push_str(&entries.join("\n"));
+    Some(block)
+}
 /// Split `"provider:model"` notation. Returns `(provider, model)` where
 /// provider falls back to `config.provider` and finally `"openai"`.
 pub fn extract_provider_and_model<'a>(
@@ -1047,6 +1091,13 @@ fn build_context_layer(
     // every turn; details fetched on demand via `custom_app_manager get`.
     if let Some(apps_index) = custom_apps_index_prompt(config) {
         builder = builder.with_block(&apps_index);
+    }
+
+    // Workspaces index: same pattern as custom apps — one tiny line per
+    // existing workspace so the LLM knows what's already built and won't
+    // recreate it; details fetched on demand via workspace_* tools.
+    if let Some(ws_index) = workspaces_index_prompt(config) {
+        builder = builder.with_block(&ws_index);
     }
 
     let rendered = builder.build().to_string();

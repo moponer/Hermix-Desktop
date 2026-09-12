@@ -1,6 +1,12 @@
 //! Summary generation: budget, serialize, prompt build, LLM summary, cooldown.
 use std::time::{Duration, Instant};
 
+/// Soft cap for the serialized summary block (≈60K tokens at 4 chars/token).
+/// Keeps the LLM summary call inside a practical input size so generation
+/// finishes within the aux chain's per-candidate timeout instead of
+/// timing out and freezing the stream.
+const MAX_SERIALIZE_CHARS: usize = 240_000;
+
 
 use hermix_core::{
     Message, MessageRole,
@@ -68,7 +74,22 @@ impl ContextCompressor {
                 }
             }
         }
-        parts.join("\n\n")
+        let joined = parts.join("\n\n");
+        // Cap the serialized block (~60K tokens). An unbounded block
+        // (485 msgs ≈ 150K+ tokens) makes the LLM summary outlast the
+        // aux chain's per-candidate timeout and freeze the stream for
+        // N×45s. Head+tail preservation keeps the oldest task context
+        // and the newest work leading into the protected tail.
+        if joined.len() > MAX_SERIALIZE_CHARS {
+            truncate_middle(
+                &joined,
+                MAX_SERIALIZE_CHARS,
+                MAX_SERIALIZE_CHARS * 2 / 3,
+                MAX_SERIALIZE_CHARS / 3,
+            )
+        } else {
+            joined
+        }
     }
 
     pub(crate) fn build_summary_prompt(&self, content_block: &str, summary_budget: u64) -> String {

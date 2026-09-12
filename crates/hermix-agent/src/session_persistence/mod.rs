@@ -147,6 +147,14 @@ pub struct ApprovalRecord {
     /// inline card in the right spot after a reload.
     #[serde(default)]
     pub linked_assistant_id: Option<String>,
+    /// Backend-computed unified before/after diff for file-mutating calls
+    /// (see `hermix_agent::approval_diff`). Persisted so a reloaded
+    /// approval card shows the same diff the live card did. `None` for
+    /// rows persisted before the field shipped and for call shapes that
+    /// can't be diffed — the front-end keeps its plain-description
+    /// fallback in that case.
+    #[serde(default)]
+    pub diff: Option<String>,
 }
 
 fn default_risk() -> String {

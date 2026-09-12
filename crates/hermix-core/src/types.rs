@@ -236,6 +236,12 @@ pub struct ExecutionTimelineEvent {
     pub change_type: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file_summary: Option<String>,
+    /// Single source of truth for whether a `tool_complete` event
+    /// represents a failure (`ToolResult::is_error`). Persisted so a
+    /// reloaded session marks failed tool cards from this flag instead
+    /// of re-guessing from the prose payload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_error: Option<bool>,
 }
 
 impl Message {

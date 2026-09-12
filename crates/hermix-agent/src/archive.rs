@@ -213,6 +213,58 @@ fn append_session_index(
     }
 }
 
+/// Append rolled-up tool-result originals to a per-session evidence log
+/// (`<hermix_home>/sessions/<sid>/tool-rollup-archive.md`) so the
+/// continuous `rollup_tool_results` drain never destroys recoverable
+/// output — the one-line summaries living in ctx stay backed by the
+/// full text on disk. **Best-effort**: failures only log, never
+/// propagate — rolling up context pressure is never worth failing a
+/// turn over.
+pub fn append_rollup_archive(
+    hermix_home: &Path,
+    session_id: Option<&str>,
+    originals: &[(usize, String)],
+) {
+    let Some(sid) = session_id.filter(|s| !s.is_empty()) else {
+        return;
+    };
+    if originals.is_empty() {
+        return;
+    }
+    let path = hermix_home.join("sessions").join(sid).join("tool-rollup-archive.md");
+    if let Some(parent) = path.parent() {
+        if let Err(e) = fs::create_dir_all(parent) {
+            tracing::warn!(
+                "rollup archive: failed to create dir {}: {e}",
+                parent.display()
+            );
+            return;
+        }
+    }
+    let now = Local::now();
+    let mut buf = String::with_capacity(128 + originals.iter().map(|(_, c)| c.len() + 96).sum::<usize>());
+    for (idx, content) in originals {
+        buf.push_str(&format!(
+            "\n## {} — message #{} ({} chars)\n\n```\n{}\n```\n",
+            now.format("%Y-%m-%d %H:%M:%S"),
+            idx,
+            content.len(),
+            content
+        ));
+    }
+    if let Err(e) = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .and_then(|mut f| std::io::Write::write_all(&mut f, buf.as_bytes()))
+    {
+        tracing::warn!(
+            "rollup archive: failed to append to {}: {e}",
+            path.display()
+        );
+    }
+}
+
 /// Read all archived refs for a session from its index file. Returns
 /// an empty `Vec` when the session has never been archived (the
 /// common case for short sessions).

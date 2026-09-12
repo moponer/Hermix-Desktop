@@ -426,15 +426,54 @@ pub fn get_model_context_length_with(
     model: &str,
     providers: Option<&HashMap<String, LlmProviderConfig>>,
 ) -> u64 {
+    get_model_context_length_with_source(model, providers).0
+}
+
+/// Which tier produced a resolved context window. Reported to the client so
+/// the UI can label a number's origin ("探测" / "内置" / "兜底") instead of
+/// re-deriving it — the front-end used to hand-mirror `DEFAULT_CONTEXT_LENGTHS`,
+/// and the two copies drifted apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextSource {
+    /// `LlmProviderConfig::model_contexts[model_id]` — probed from the
+    /// provider's `/v1/models` and persisted.
+    Probed,
+    /// `LlmProviderConfig::context_window` — provider-wide default.
+    Provider,
+    /// Static catalog (`known_models()` or `DEFAULT_CONTEXT_LENGTHS`).
+    Catalog,
+    /// Nothing matched — `DEFAULT_FALLBACK_CONTEXT`.
+    Fallback,
+}
+
+impl ContextSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Probed => "probed",
+            Self::Provider => "provider",
+            Self::Catalog => "catalog",
+            Self::Fallback => "fallback",
+        }
+    }
+}
+
+/// Same resolution order as [`get_model_context_length_with`], but also
+/// reports which tier won. This is the authoritative lookup — clients
+/// should ask for it rather than replicating the catalog.
+pub fn get_model_context_length_with_source(
+    model: &str,
+    providers: Option<&HashMap<String, LlmProviderConfig>>,
+) -> (u64, ContextSource) {
     // 1. custom-{provider_id}:{model_id} → provider override
     if let Some(providers) = providers {
         if let Some((provider_id, model_id)) = model.split_once(':') {
             if let Some(provider) = providers.get(provider_id) {
                 if let Some(&ctx) = provider.model_contexts.get(model_id) {
-                    return ctx;
+                    return (ctx, ContextSource::Probed);
                 }
                 if let Some(ctx) = provider.context_window {
-                    return ctx;
+                    return (ctx, ContextSource::Provider);
                 }
             }
         }
@@ -446,13 +485,13 @@ pub fn get_model_context_length_with(
     // flat and avoids accidental infinite recursion.)
     let model_lower = model.to_lowercase();
     if let Some(info) = get_model_info(model) {
-        return info.context_window;
+        return (info.context_window, ContextSource::Catalog);
     }
     let mut entries: Vec<_> = DEFAULT_CONTEXT_LENGTHS.to_vec();
     entries.sort_by_key(|b| std::cmp::Reverse(b.0.len()));
     for (key, length) in entries {
         if model_lower.contains(key) {
-            return length;
+            return (length, ContextSource::Catalog);
         }
     }
 
@@ -465,7 +504,7 @@ pub fn get_model_context_length_with(
         fallback_tokens = DEFAULT_FALLBACK_CONTEXT,
         "model not in catalog and no provider override; using DEFAULT_FALLBACK_CONTEXT"
     );
-    DEFAULT_FALLBACK_CONTEXT
+    (DEFAULT_FALLBACK_CONTEXT, ContextSource::Fallback)
 }
 
 /// Get the next lower probe tier for context length probing.
