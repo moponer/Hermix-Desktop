@@ -88,9 +88,12 @@ export function isChatModel(modelId: string): boolean {
  *
  * 优先级：
  *   1. `providerDefault`（后端 `default_model_for_provider` 的人工清单，
- *      如 openai→gpt-4o、siliconflow→Qwen/Qwen2.5-72B-Instruct）
+ *      如 openai→gpt-4o、siliconflow→Qwen/Qwen2.5-72B-Instruct）—— 只要该模型
+ *      确实在可用列表里就采信，不受下面的启发式过滤影响（后端清单是权威）
  *   2. 该 provider 探测到的对话模型中字典序第一个
- *   3. `null` —— 一个能用的都没有，调用方应提示用户手选，不硬塞
+ *   3. `null` —— 一个对话模型都没有（例如只提供 embedding 的端点）。
+ *      **不回退到非对话模型**：那会让默认值指向一个根本不能聊天的模型，
+ *      还会与"只自动启用对话模型"的 enabled 列表自相矛盾。调用方应提示手选。
  *
  * @param providerDefault 后端下发的权威默认（`GET /api/providers/meta`）
  */
@@ -98,15 +101,58 @@ export function pickDefaultModel(
   models: string[],
   providerDefault?: string,
 ): string | null {
-  const chat = models.filter(isChatModel);
-  const pool = chat.length > 0 ? chat : models;
   if (providerDefault) {
-    const exact = pool.find((m) => m === providerDefault);
+    const exact = models.find((m) => m === providerDefault);
     if (exact) return exact;
-    const ci = pool.find((m) => m.toLowerCase() === providerDefault.toLowerCase());
+    const ci = models.find((m) => m.toLowerCase() === providerDefault.toLowerCase());
     if (ci) return ci;
   }
-  return pool.length > 0 ? pool[0] : null;
+  const chat = models.filter(isChatModel);
+  return chat.length > 0 ? chat[0] : null;
+}
+
+/** `"provider:model"` 拼装 —— 与 useCurrentModel / ModelSelector 的约定一致。 */
+function fullId(providerId: string, modelId: string): string {
+  return `${providerId}:${modelId}`;
+}
+
+/**
+ * 把探测到的模型并入模型配置。
+ *
+ * 只自动启用**可对话**模型（`isChatModel`）：厂商 `/v1/models` 返回的是全量
+ * 目录，含 embedding / rerank / tts / 图像模型，全量塞进「已启用模型」会让
+ * 列表爆炸，还可能把非对话模型顶成默认。未自动启用的模型仍留在 modelCache，
+ * 可在聊天窗口的模型选择器里手动勾选。
+ *
+ * 默认模型只在原本为空时补一个，优先命中后端权威清单（`defaults`）。
+ * 无变化时返回原对象（引用相等），调用方可据此跳过落盘。
+ */
+export function mergeFetchedModels(
+  base: ModelConfigData,
+  probed: { id: string; models: string[] }[],
+  defaults: Record<string, string> = {},
+): ModelConfigData {
+  if (probed.length === 0) return base;
+  const seen = new Set(base.enabled.map((m) => fullId(m.providerId, m.modelId)));
+  const enabled = [...base.enabled];
+  for (const { id, models } of probed) {
+    for (const modelId of models.filter(isChatModel)) {
+      const key = fullId(id, modelId);
+      if (!seen.has(key)) {
+        seen.add(key);
+        enabled.push({ providerId: id, modelId });
+      }
+    }
+  }
+  let defaultModel = base.defaultModel;
+  if (!defaultModel) {
+    for (const { id, models } of probed) {
+      const picked = pickDefaultModel(models, defaults[id]);
+      if (picked) { defaultModel = fullId(id, picked); break; }
+    }
+  }
+  if (enabled.length === base.enabled.length && defaultModel === base.defaultModel) return base;
+  return { enabled, defaultModel, modelContexts: base.modelContexts ?? {} };
 }
 
 // ── Context window resolution (后端权威解析 + 来源透明化) ─────

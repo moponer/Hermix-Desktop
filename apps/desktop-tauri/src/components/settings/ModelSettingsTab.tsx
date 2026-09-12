@@ -21,6 +21,7 @@ import {
   defaultOptionLabel,
   isChatModel,
   pickDefaultModel,
+  mergeFetchedModels,
   type ModelConfigData,
 } from "./settingsUtils";
 
@@ -69,33 +70,7 @@ async function probeProviderModels(keyEnvVar: string, baseUrl: string): Promise<
  *
  * 默认模型只在原本为空时补一个，优先命中后端权威清单（`defaults`）。
  */
-function mergeFetchedModels(
-  base: ModelConfigData,
-  probed: { id: string; models: string[] }[],
-  defaults: Record<string, string>,
-): ModelConfigData {
-  if (probed.length === 0) return base;
-  const seen = new Set(base.enabled.map((m) => fullId(m.providerId, m.modelId)));
-  const enabled = [...base.enabled];
-  for (const { id, models } of probed) {
-    for (const modelId of models.filter(isChatModel)) {
-      const key = fullId(id, modelId);
-      if (!seen.has(key)) {
-        seen.add(key);
-        enabled.push({ providerId: id, modelId });
-      }
-    }
-  }
-  let defaultModel = base.defaultModel;
-  if (!defaultModel) {
-    for (const { id, models } of probed) {
-      const picked = pickDefaultModel(models, defaults[id]);
-      if (picked) { defaultModel = fullId(id, picked); break; }
-    }
-  }
-  if (enabled.length === base.enabled.length && defaultModel === base.defaultModel) return base;
-  return { enabled, defaultModel, modelContexts: base.modelContexts ?? {} };
-}
+// 实现已抽到 settingsUtils.ts（纯函数 + 单测覆盖，此前埋在本文件里没法测）。
 
 // ── Model Tab ──────────────────────────────────────
 //

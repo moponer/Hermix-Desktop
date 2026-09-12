@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { isChatModel, pickDefaultModel } from "./settingsUtils";
+import { isChatModel, mergeFetchedModels, pickDefaultModel } from "./settingsUtils";
+import type { ModelConfigData } from "./settingsUtils";
 
 // 回归背景：厂商 `/v1/models` 返回的是全量目录（含 embedding / 图像 /
 // 语音 / 旧版 completion 模型）。此前「获取模型」直接取 `models.sort()[0]`
@@ -76,12 +77,71 @@ describe("pickDefaultModel", () => {
     expect(pickDefaultModel(SILICONFLOW_CATALOG)).toBe("Qwen/Qwen2.5-72B-Instruct");
   });
 
-  it("全是非对话模型时退回原始列表，避免一个都不选", () => {
-    expect(pickDefaultModel(["text-embedding-3-small", "tts-1"])).toBe("text-embedding-3-small");
+  it("唯一候选是权威默认时不对话也采信（后端清单是权威）", () => {
+    // 启发式过滤只用于"没有权威默认时的兜底挑选"，不该推翻后端明确指定的模型
+    expect(pickDefaultModel(["dall-e-3"], "dall-e-3")).toBe("dall-e-3");
+  });
+
+  it("全是非对话模型时返回 null，不回退到不能聊天的模型", () => {
+    expect(pickDefaultModel(["text-embedding-3-small", "tts-1"])).toBeNull();
+    expect(pickDefaultModel(["BAAI/bge-m3"])).toBeNull();
   });
 
   it("空列表返回 null（调用方应提示手选，不硬塞默认）", () => {
     expect(pickDefaultModel([])).toBeNull();
     expect(pickDefaultModel([], "gpt-4o")).toBeNull();
+  });
+});
+
+const empty: ModelConfigData = { enabled: [], defaultModel: "", modelContexts: {} };
+
+describe("mergeFetchedModels", () => {
+  it("新机器首次挂载：启用可对话模型并补默认模型", () => {
+    const next = mergeFetchedModels(empty, [{ id: "deepseek", models: ["deepseek-chat", "deepseek-reasoner"] }], {
+      deepseek: "deepseek-chat",
+    });
+    expect(next.enabled).toEqual([
+      { providerId: "deepseek", modelId: "deepseek-chat" },
+      { providerId: "deepseek", modelId: "deepseek-reasoner" },
+    ]);
+    expect(next.defaultModel).toBe("deepseek:deepseek-chat");
+  });
+
+  it("不把非对话模型塞进已启用列表", () => {
+    const next = mergeFetchedModels(empty, [{ id: "openai", models: OPENAI_CATALOG }], { openai: "gpt-4o" });
+    const ids = next.enabled.map((e) => `${e.providerId}:${e.modelId}`);
+    expect(ids).toEqual(["openai:gpt-3.5-turbo", "openai:gpt-4o"]);
+    expect(ids).not.toContain("openai:babbage-002");
+    expect(ids).not.toContain("openai:tts-1");
+  });
+
+  it("已启用的模型不重复添加", () => {
+    const base: ModelConfigData = {
+      enabled: [{ providerId: "deepseek", modelId: "deepseek-chat" }],
+      defaultModel: "deepseek:deepseek-chat",
+      modelContexts: {},
+    };
+    const next = mergeFetchedModels(base, [{ id: "deepseek", models: ["deepseek-chat"] }], {});
+    expect(next).toBe(base); // 引用相等 → 调用方可跳过落盘
+    expect(next.enabled).toHaveLength(1);
+  });
+
+  it("已有默认模型时不被覆盖", () => {
+    const base: ModelConfigData = {
+      enabled: [],
+      defaultModel: "kimi:moonshot-v1-128k",
+      modelContexts: {},
+    };
+    const next = mergeFetchedModels(base, [{ id: "openai", models: ["gpt-4o"] }], { openai: "gpt-4o" });
+    expect(next.defaultModel).toBe("kimi:moonshot-v1-128k");
+  });
+
+  it("没有探测结果时原样返回", () => {
+    expect(mergeFetchedModels(empty, [])).toBe(empty);
+  });
+
+  it("模型列表全是非对话模型时不硬设默认", () => {
+    const next = mergeFetchedModels(empty, [{ id: "siliconflow", models: ["BAAI/bge-m3"] }], {});
+    expect(next.defaultModel).toBe("");
   });
 });
