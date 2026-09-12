@@ -361,6 +361,7 @@ impl HxShellPackager {
         let child = std::process::Command::new(&self.shell_path)
             .arg("--app-dir")
             .arg(app_dir)
+            .arg("--dev")
             .arg("--app-id")
             .arg(id)
             .current_dir(app_dir)

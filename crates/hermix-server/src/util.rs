@@ -4,21 +4,34 @@
 
 
 use super::*;
+use hermix_tools::extract_trust_signature;
 
 pub(crate) fn record_approval_side_effect(
     state: &HttpServerState,
     session_id: &str,
-    command: &str,
+    tool: &str,
+    params: &serde_json::Value,
     choice: hermix_transport::ApprovalChoice,
 ) {
     match choice {
         hermix_transport::ApprovalChoice::Session => {
-            // Build a `^command$` regex (escaped, like
-            // `UserAllowlist::add_literal`) and append to the
-            // session's bypass list. Duplicates are tolerated —
-            // the `pre_approval_checker` short-circuits on the
-            // first match anyway.
-            let pattern = format!("^{}$", regex::escape(command));
+            // Extract the per-tool signature and append a regex
+            // match for it to the session's bypass list. Tool-
+            // aware: a write_file bypass doesn't accidentally
+            // match a terminal call (the pre-checker computes
+            // the same signature per call).
+            let Some(signature) = extract_trust_signature(tool, params) else {
+                tracing::warn!(tool, "session-bypass: no extractable signature; side effect skipped");
+                return;
+            };
+            // Session scope grants the same thing `always` does, minus
+            // restart survival: hit ⇔ identical trust signature. The
+            // signature is itself a fully-anchored regex fragment
+            // (`^sudo\b.*`, ...), so it must be stored as an **escaped
+            // literal** — compiling it as a raw pattern would try to
+            // match the anchor/meta characters in the rebuilt text and
+            // never hit anything.
+            let pattern = format!("^{}$", regex::escape(&signature));
             match Regex::new(&pattern) {
                 Ok(re) => {
                     if let Ok(mut map) = state.session_bypass.lock() {
@@ -27,14 +40,16 @@ pub(crate) fn record_approval_side_effect(
                             .push(re);
                         tracing::info!(
                             session = %session_id,
-                            command = %command,
-                            "session-bypass: added command"
+                            tool = %tool,
+                            signature = %signature,
+                            "session-bypass: added"
                         );
                     }
                 }
                 Err(e) => {
                     tracing::warn!(
-                        command = %command,
+                        tool = %tool,
+                        signature = %signature,
                         error = %e,
                         "session-bypass: failed to compile pattern; side effect skipped"
                     );
@@ -42,19 +57,31 @@ pub(crate) fn record_approval_side_effect(
             }
         }
         hermix_transport::ApprovalChoice::Always => {
-            // Append to the persistent `UserAllowlist`. We
-            // lazily initialize the `Option<UserAllowlist>` on
-            // the first `always` if the server started up with
-            // no allowlist (a fresh install picking "Always
-            // Allow" for the first time).
+            let Some(signature) = extract_trust_signature(tool, params) else {
+                tracing::warn!(tool, "always-allow: no extractable signature; side effect skipped");
+                return;
+            };
+            // Pick a human-readable hint for the entry (command →
+            // path → url → tool). The hint shows up in the
+            // allowlist list output; matching is against the
+            // compiled pattern, not the hint.
+            let hint = params
+                .get("command")
+                .or_else(|| params.get("cmd"))
+                .or_else(|| params.get("path"))
+                .or_else(|| params.get("url"))
+                .and_then(|v| v.as_str())
+                .unwrap_or(tool)
+                .to_string();
             if let Ok(mut guard) = state.user_allowlist.lock() {
                 if guard.is_none() {
                     *guard = Some(UserAllowlist::new());
                 }
                 if let Some(al) = guard.as_mut() {
-                    if let Err(e) = al.add_literal(command) {
+                    if let Err(e) = al.add_literal_for(tool, &signature, &hint) {
                         tracing::warn!(
-                            command = %command,
+                            tool = %tool,
+                            signature = %signature,
                             error = %e,
                             "always-allow: failed to add entry; side effect skipped"
                         );
@@ -84,7 +111,7 @@ pub(crate) fn record_approval_side_effect(
                         );
                     } else {
                         tracing::info!(
-                            command = %command,
+                            tool = %tool,
                             path = %path.display(),
                             "always-allow: persisted to disk"
                         );
@@ -226,6 +253,40 @@ pub(crate) fn redact_sensitive(input: &str) -> String {
         }
     }
     out
+}
+
+/// Side-effects for one resolved approval — `resolve_approval_message`
+/// in the DB plus, for Session/Always choices, the resource-scope
+/// `permission_profile` push and the durable allowlist entry. The
+/// registry resolve itself is the caller's responsibility (so the
+/// batch path can iterate the registry's `resolve_batch` result
+/// without re-resolving already-resolved members).
+pub(crate) async fn record_approval_resolution(
+    state: &HttpServerState,
+    session_id: &str,
+    request_id: &str,
+    choice: hermix_transport::ApprovalChoice,
+) {
+    let decision_str = match choice {
+        hermix_transport::ApprovalChoice::Once => "once",
+        hermix_transport::ApprovalChoice::Session => "session",
+        hermix_transport::ApprovalChoice::Always => "always",
+        hermix_transport::ApprovalChoice::Deny => "deny",
+    };
+    let _ = state
+        .session_persistence
+        .resolve_approval_message(session_id, request_id, decision_str);
+    if matches!(
+        choice,
+        hermix_transport::ApprovalChoice::Session | hermix_transport::ApprovalChoice::Always
+    ) {
+        record_resource_approval_side_effect(state, session_id, request_id, choice).await;
+        if let Ok(Some((tool, params))) =
+            ws::lookup_pending_approval(state, session_id, request_id).await
+        {
+            record_approval_side_effect(state, session_id, &tool, &params, choice);
+        }
+    }
 }
 
 /// turn a raw `AgentError` from the agent loop into a

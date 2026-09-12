@@ -141,6 +141,66 @@ pub fn validate_custom_app(app_dir: &Path) -> ValidationReport {
         ));
     }
 
+    // ── L0-图标: 卡片左上角 logo 的可视性门禁 ──
+    // 卡片 logo 的解析链是 icon_file(PNG) → icon(emoji / lucide 图标名) →
+    // 类目兜底。两种失败模式都能在打包前静态查出来, 却长期没人拦:
+    //   1) 缺 `icon` —— 前端只剩灰底 Boxes 方块, 用户眼里就是"没有 logo";
+    //   2) `icon_file` 指向不存在的文件 —— <img> 直接 404, 左上角一片空白。
+    // 二者都提到 error 级, 强制 agent 在 validate 阶段自己发现并补齐,
+    // 而不是等用户在卡片上看到空洞。
+    let icon = manifest
+        .get("icon")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    if icon.is_empty() {
+        issues.push(issue(
+            "error",
+            "manifest",
+            "manifest 的 `icon` 为空 — 应用卡片左上角会显示为无标识的灰色方块。\
+             请填一个 lucide 图标名（如 music / camera / calculator / notebook-pen / \
+             folder-tree），或单个 emoji，然后重新校验。",
+        ));
+    } else if icon.starts_with("data:") {
+        issues.push(issue(
+            "warning",
+            "manifest",
+            "`icon` 字段不支持 data URI — 前端按 lucide 图标名或 emoji 解析, \
+             data URI 会被整体忽略并回退到类目兜底图标。自定义 PNG 图标请改用 `icon_file`。",
+        ));
+    }
+
+    if let Some(icon_file) = manifest.get("icon_file").and_then(|v| v.as_str()) {
+        if !app_dir.join(icon_file).exists() {
+            issues.push(issue(
+                "error",
+                "manifest",
+                format!(
+                    "`icon_file` 指向的图标文件不存在: {icon_file} — 卡片 <img> 会 404, \
+                     左上角显示为空白。请补齐该文件, 或删掉 `icon_file` 改用 `icon` 图标名。"
+                ),
+            ));
+        }
+    }
+
+    // tile_color 只影响容器底色, 错了不至于看不见图标, 给 warning 即可。
+    if let Some(tc) = manifest.get("tile_color").and_then(|v| v.as_str()) {
+        let t = tc.trim();
+        let valid = t.starts_with('#')
+            && (t.len() == 4 || t.len() == 7 || t.len() == 9)
+            && t.as_bytes()[1..].iter().all(|c| c.is_ascii_hexdigit());
+        if !valid {
+            issues.push(issue(
+                "warning",
+                "manifest",
+                format!(
+                    "`tile_color` 格式无效: {tc} — 应为 #RGB / #RRGGBB / #RRGGBBAA, \
+                     当前会回退为默认灰底"
+                ),
+            ));
+        }
+    }
+
     // 收集已声明的权限
     let declared_perms: Vec<String> = manifest
         .get("permissions")

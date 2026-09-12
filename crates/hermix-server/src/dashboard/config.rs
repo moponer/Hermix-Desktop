@@ -201,6 +201,61 @@ pub async fn get_model_info(State(state): State<HttpServerState>) -> Json<ModelI
     }
 }
 
+/// Request for `POST /api/models/context-windows`.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct ContextWindowsRequest {
+    /// Full `"provider:model"` ids to resolve.
+    pub models: Vec<String>,
+}
+
+/// One resolved context window — the value plus the tier that produced it.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ResolvedContextWindow {
+    pub value: u64,
+    /// `"probed"` | `"provider"` | `"catalog"` | `"fallback"`.
+    pub source: String,
+}
+
+/// Response for `POST /api/models/context-windows`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ContextWindowsResponse {
+    /// Keyed by the requested model id.
+    pub windows: std::collections::HashMap<String, ResolvedContextWindow>,
+}
+
+/// POST /api/models/context-windows — authoritative context-window
+/// resolution for a batch of models.
+///
+/// The settings UI used to hand-mirror the backend's static catalog
+/// (`DEFAULT_CONTEXT_LENGTHS`) just so it could label where a number came
+/// from; the two copies drifted apart. The backend owns the catalog, so it
+/// now answers the question directly.
+pub async fn resolve_context_windows(
+    State(state): State<HttpServerState>,
+    Json(body): Json<ContextWindowsRequest>,
+) -> Json<ContextWindowsResponse> {
+    let providers = &state.config.llm_providers;
+    let windows = body
+        .models
+        .iter()
+        .map(|m| {
+            let (value, source) =
+                hermix_intelligence::model_metadata::get_model_context_length_with_source(
+                    m,
+                    Some(providers),
+                );
+            (
+                m.clone(),
+                ResolvedContextWindow {
+                    value,
+                    source: source.as_str().to_string(),
+                },
+            )
+        })
+        .collect();
+    Json(ContextWindowsResponse { windows })
+}
+
 /// Response for `GET /api/model/list`.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ModelListResponse {

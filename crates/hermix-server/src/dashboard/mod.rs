@@ -68,6 +68,12 @@ pub fn router() -> Router<HttpServerState> {
         // Builtin provider metadata (id + env var) — single source of truth
         // in hermix-config; the frontend groups builtin/custom from here.
         .route("/api/providers/meta", get(config::get_provider_meta))
+        // Authoritative context-window resolution (value + source tier), so
+        // the settings UI stops mirroring the static catalog.
+        .route(
+            "/api/models/context-windows",
+            post(config::resolve_context_windows),
+        )
         // Env
         .route(
             "/api/env",
@@ -261,6 +267,11 @@ pub fn router() -> Router<HttpServerState> {
             "/api/workspaces/{id}/tables/{table}/count",
             post(workspaces::count_rows),
         )
+        // M1.6 仪表盘 chart 分组聚合
+        .route(
+            "/api/workspaces/{id}/tables/{table}/group_count",
+            post(workspaces::group_count),
+        )
         // P6 变更历史：最近变更 + 撤销
         .route(
             "/api/workspaces/{id}/tables/{table}/changes",
@@ -269,6 +280,11 @@ pub fn router() -> Router<HttpServerState> {
         .route(
             "/api/workspaces/{id}/tables/{table}/undo",
             post(workspaces::undo_last_change),
+        )
+        // M2 变更历史清理
+        .route(
+            "/api/workspaces/{id}/change-log/purge",
+            post(workspaces::purge_change_log),
         )
         .route("/ws/consciousness", get(consciousness::ws_consciousness))
         // GroupChat rooms

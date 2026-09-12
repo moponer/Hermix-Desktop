@@ -95,7 +95,7 @@ tags:
 
 ### 设计提案模板（`propose` 的 `proposal` 必含以下章节，缺一不可）
 
-- **① 名称**：app 名称、id（字母数字-_）、category、icon（emoji 或 SVG 名或 tile_color）
+- **① 名称**：app 名称、id（字母数字-_）、category、**icon（必填** —— 一个 lucide 图标名，如 `music`/`camera`/`calculator`/`notebook-pen`/`folder-tree`；缺省会让卡片左上角显示为无标识灰块，validate L0 直接判 error）
 - **② 功能**：功能范围、核心用例、数据存哪（hx 写文件的路径/目录约定）、是否需要联网
 - **③ 界面布局**：明暗两套配色 token（浅色优先、中性灰、禁蓝紫）、整体布局基线、V7 无边框壳必须自实现标题栏（拖动 + 最小化/最大化/关闭）
 - **④ 交互效果**：主要交互流、涉及哪些 `hx.*` API（getInfo/readFile/writeFile/exec/openDialog/win.* 等）、关键反馈/状态文案
@@ -103,6 +103,10 @@ tags:
   - 运行模式：纯 HTML（`index_html`）还是 TS/React（`app_source`）
   - `manifest.permissions`：声明用到的权限（fs-read/fs-write/exec/dialog/app/clipboard/net），须与所用 hx API 一致（validate L2 校验）
   - 窗口配置：`window_config` 的 width/height/resizable/title
+  - 图标三选一，validate L0 强制校验：
+    - `icon`（必填）：lucide 图标名，见 `apps/desktop-tauri/src-tauri/resources/icons/` 清单（文件名去 `.svg`）。**不接受 data URI** —— 会被引擎忽略并回退到类目兜底
+    - `icon_file`（可选）：放 app 目录下的自定义 PNG 文件名。声明了但文件不存在 → error（卡片 `<img>` 404，左上角直接空白）
+    - `tile_color`（可选）：`#RRGGBB`/`#RRGGBBAA` 图标容器底色，格式非法只给 warning
   - 主题约束：浅色优先、禁高饱和蓝紫、禁 emoji（界面/按钮/manifest icon）
   - 禁止项自查：禁 `<input type=file>`（用 openDialog/saveDialog）、禁 CDN 外链、禁 Tauri/Node API、禁 `fetch('app://')`
   - 复用来源：是否复用 OSS（项目/版本/License）
@@ -117,7 +121,9 @@ tags:
 4. **复用检索闸门**：能力点先搜 GitHub（MIT/Apache/BSD），不可达切 Gitee/GitCode；记录 项目/版本/License/嵌入方式；无合适才自研
 5. **写码**（`index_html` 或 `app_source` TSX），严格按设计 token + 前端默认标准（浅色/中性灰/禁蓝紫/禁 emoji/禁 CDN/必带标题栏/必含主题切换）
 6. `validate` 循环到 `ok=true`（L0 manifest/L1 HTML/L2 权限/L3 前端质量/L4 文档一致性），不得带 error 交付
-7. **`run`** 测试版即时预览（`hx-shell --html` 加载 dev.html）；要确认无报错调 `smoke`
+7. **`run`** 测试版即时预览（`hx-shell --app-dir <app目录> --dev --app-id <id>`，走 `app://` 协议直接加载磁盘最新源码，不重新打 exe）；要确认无报错调 `smoke`
+   - 测试版窗口**按 F12 打开 WebView2 开发者工具**（Console/Elements/Network 齐全），查运行时报错、DOM、请求就靠它；打包后的正式 exe 不响应 F12
+   - 页面自身的 JS 错误还会自动落盘到应用目录的 `.runtime-errors.log`
 8. **更新文档**：每次改动后 → `update_doc` 把状态写进 开发计划进度.md；bug 修复后 → `log_iteration` 把【问题/根因/修复/验证】追加到 更新迭代.md；交付前 → `update_doc` README.md 给最终用户看
 9. **代码审查闸门**：对照 code-review.md + frontend-architecture.md，跑 smoke 确认无运行时/控制台报错，提示友好
 10. 交付说明：去哪运行（run 测试版 / package 出 exe）、如何打包、如何回来 `update` 继续

@@ -1390,15 +1390,46 @@ pub(crate) async fn approve_via_rest(
         hermix_core::ApprovalOutcome::DeniedByUser
     };
 
-    let matched = state
+    // 2026-08-29 fix (approval stuck after batch approve): the batch
+    // REST fallback sends the coalescer's `batch_id` in the
+    // `request_id` field (the frontend reuses the same key for both
+    // shapes — see App.tsx handleApproveBatch). A bare `resolve` on a
+    // batch_id ALWAYS misses (the id lives in the batches map, not the
+    // per-request map), so when the live WS dropped the
+    // `approval_responses_batch` frame the fallback was a no-op and —
+    // with DEFAULT_APPROVAL_TIMEOUT = ZERO (no auto-deny) — the agent
+    // blocked on AwaitApproval forever. Try the batch fan-out first;
+    // fall back to the single-request resolve for legacy single-item
+    // payloads.
+    let batch_pairs = state
         .approval_registry
-        .resolve(&session_id, request_id, outcome);
+        .resolve_batch(&session_id, request_id, outcome.clone());
+    let batch_matched = batch_pairs.iter().filter(|(_, ok)| *ok).count();
+    let matched = if batch_matched > 0 {
+        // Record side effects per resolved member (same policy as the
+        // WS streaming batch path: only members that actually resolved).
+        for (rid, ok) in &batch_pairs {
+            if *ok {
+                crate::util::record_approval_resolution(
+                    &state, &session_id, rid, choice,
+                )
+                .await;
+            }
+        }
+        true
+    } else {
+        let single = state
+            .approval_registry
+            .resolve(&session_id, request_id, outcome);
+        single
+    };
 
     tracing::info!(
         session_id = %session_id,
         request_id = %request_id,
         decision = %decision,
         matched,
+        batch_resolved = batch_matched,
         "REST approval: {}",
         if matched { "hit" } else { "miss — no pending entry" }
     );
@@ -1439,10 +1470,10 @@ pub(crate) async fn approve_via_rest(
         // touching the profile. The regular command-side-effect then
         // runs as the fallback.
         record_resource_approval_side_effect(&state, &session_id, request_id, choice).await;
-        if let Ok(Some(cmd)) =
-            ws::lookup_pending_command(&state, &session_id, request_id).await
+        if let Ok(Some((tool, params))) =
+            ws::lookup_pending_approval(&state, &session_id, request_id).await
         {
-            record_approval_side_effect(&state, &session_id, &cmd, choice);
+            record_approval_side_effect(&state, &session_id, &tool, &params, choice);
         }
     }
 
