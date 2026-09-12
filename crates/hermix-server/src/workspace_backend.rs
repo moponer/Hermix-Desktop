@@ -198,8 +198,9 @@ impl WorkspaceDataBackend for LocalWorkspaceBackend {
 
     async fn delete(&self, id: &str, table: &str, row_id: &str) -> Result<String, ToolError> {
         let writable = self.service().open_writable(id).map_err(|e| Self::err(e.to_string()))?;
+        // M5：审计来源固定标 "llm"，与 LLM 工具族其它操作一致。
         writable
-            .delete(table, row_id)
+            .delete(table, row_id, "llm")
             .map_err(|e| Self::err(format!("表[{table}]删除失败: {e}")))?;
         Ok(json!({ "ok": true, "id": row_id }).to_string())
     }

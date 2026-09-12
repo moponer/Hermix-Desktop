@@ -517,7 +517,7 @@ mod tests {
             .iter()
             .filter_map(|r| r["id"].as_str().map(|s| s.to_string()))
         {
-            store.delete("vehicles", &rid).expect("delete");
+            store.delete("vehicles", &rid, "import").expect("delete");
         }
         store
             .insert("vehicles", &merged, "import")

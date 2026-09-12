@@ -313,6 +313,9 @@ pub struct TableUpdateRequest {
 #[derive(Debug, Clone, Deserialize)]
 pub struct TableDeleteRequest {
     pub id: String,
+    /// M5：审计来源（user / llm / automation）。缺省按 "user"。
+    #[serde(default = "default_updated_by")]
+    pub updated_by: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -389,7 +392,7 @@ pub async fn delete_row(
         .open_writable(&id)
         .map_err(HttpError::from)?;
     writable
-        .delete(&table, &req.id)
+        .delete(&table, &req.id, &req.updated_by)
         .map_err(|e| server_err(&e.to_string()))?;
     Ok(Json(WorkspaceOkResponse { ok: true, id }))
 }
@@ -411,6 +414,42 @@ pub async fn count_rows(
     Ok(Json(n))
 }
 
+/// POST /api/workspaces/{id}/tables/{table}/group_count — 分组计数（M1.6 仪表盘 chart 用）。
+/// body: `{ group_by: String, limit?: usize }`，列名过 schema 白名单。
+#[derive(Debug, Clone, Deserialize)]
+pub struct GroupCountRequest {
+    pub group_by: String,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GroupCountResponse {
+    pub groups: Vec<GroupCountEntry>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GroupCountEntry {
+    pub label: String,
+    pub count: u64,
+}
+
+pub async fn group_count(
+    State(state): State<HttpServerState>,
+    Path((id, table)): Path<TablePath>,
+    Json(req): Json<GroupCountRequest>,
+) -> Result<Json<GroupCountResponse>, HttpError> {
+    let store = open_data_store(&state, &id)?;
+    let limit = req.limit.unwrap_or(20).clamp(1, 100);
+    let rows = store
+        .count_group_by(&table, &req.group_by, limit)
+        .map_err(|e| bad_req(&e.to_string()))?;
+    let groups = rows
+        .into_iter()
+        .map(|(label, count)| GroupCountEntry { label, count })
+        .collect();
+    Ok(Json(GroupCountResponse { groups }))
+}
+
 /// GET /api/workspaces/{id}/tables/{table}/changes — 最近变更记录（P6）。
 pub async fn list_table_changes(
     State(state): State<HttpServerState>,
@@ -423,14 +462,52 @@ pub async fn list_table_changes(
     Ok(Json(changes))
 }
 
+/// POST /api/workspaces/{id}/change-log/purge — 清理 change_log（M2）。
+/// body: `{ older_than_days: 90, keep_recent_undone: 20 }`
+/// 返回被清理的记录数。`older_than_days <= 0` 表示不按时间清理；`keep_recent_undone` 保留最近 N 条已撤销行（不清理）——避免"撤销链"被彻底抹掉。
+pub async fn purge_change_log(
+    State(state): State<HttpServerState>,
+    Path(id): Path<String>,
+    Json(req): Json<PurgeChangeLogRequest>,
+) -> Result<Json<WorkspaceOkResponse>, HttpError> {
+    let writable = hermix_workspace::WorkspaceService::new(workspaces_root(&state))
+        .open_writable(&id)
+        .map_err(HttpError::from)?;
+    let n = writable
+        .purge_change_log(req.older_than_days, req.keep_recent_undone)
+        .map_err(|e| server_err(&e.to_string()))?;
+    tracing::info!(workspace = %id, purged = n, "change_log 清理完成");
+    Ok(Json(WorkspaceOkResponse { ok: true, id }))
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PurgeChangeLogRequest {
+    #[serde(default = "default_purge_days")]
+    pub older_than_days: i64,
+    #[serde(default = "default_keep_undone")]
+    pub keep_recent_undone: usize,
+}
+fn default_purge_days() -> i64 {
+    90
+}
+fn default_keep_undone() -> usize {
+    20
+}
+
 /// POST /api/workspaces/{id}/tables/{table}/undo — 撤销该表最近一条变更（P6）。
 /// 返回撤销的变更记录（无变更时返回 null）。
+///
+/// H2：撤销也是写（把行从 before 还原到 after），必须走 `open_writable` 闸门——
+/// 只读工作台在此 403，与 update/ INSERT/ delete 同源校验。撤销可能恢复被删行，
+/// 不受 `allow_delete` 约束（Writable 不挡这层）。
 pub async fn undo_last_change(
     State(state): State<HttpServerState>,
     Path((id, table)): Path<TablePath>,
 ) -> Result<Json<Option<hermix_workspace::store::ChangeEntry>>, HttpError> {
-    let store = open_data_store(&state, &id)?;
-    let undone = store
+    let writable = hermix_workspace::WorkspaceService::new(workspaces_root(&state))
+        .open_writable(&id)
+        .map_err(HttpError::from)?;
+    let undone = writable
         .undo_last(&table)
         .map_err(|e| server_err(&e.to_string()))?;
     Ok(Json(undone))
@@ -453,17 +530,22 @@ pub async fn list_automations(
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct AutomationRunsEntry {
     pub automation_id: String,
+    /// L4：调度器是否启用——前端用这个显式标记"暂无运行记录"的
+    /// 原因（没启动调度器 vs 调度器空跑），而不是永远显示空列表让用户
+    /// 误以为自动化从来没跑过。
+    pub available: bool,
     pub runs: Vec<hermix_automation::AutomationRun>,
 }
 
 /// GET /api/workspaces/{id}/automations/runs — 每个自动化的最近触发记录
-/// （最多 5 条；automation_service 未启动时 runs 为空）。
+/// （最多 5 条；automation_service 未启动时 runs 为空且 available=false）。
 pub async fn automation_runs(
     State(state): State<HttpServerState>,
     Path(id): Path<String>,
 ) -> Result<Json<Vec<AutomationRunsEntry>>, HttpError> {
     let schema = read_schema(&state, &id)?;
     let svc = state.automation_service.clone();
+    let available = svc.is_some();
     let mut out = Vec::new();
     for auto in &schema.automations {
         let aid = auto.id().to_string();
@@ -473,6 +555,7 @@ pub async fn automation_runs(
         };
         out.push(AutomationRunsEntry {
             automation_id: aid,
+            available,
             runs,
         });
     }
@@ -499,6 +582,18 @@ pub struct FileUploadResponse {
     pub path: String,
 }
 
+/// M6：允许上传的附件扩展名白名单。设计 §17.3「类型白名单」对齐——
+/// 含 `.exe` / `.bat` / `.html` / `.svg` 等可执行/脚本类一律拒绝；防止钓鱼面
+/// （`<img src=".svg">` 自身不执行 SVG 脚本，但浏览器对 `<a href=".html">`
+/// 直链下载 + 二次跳转里仍构成社工链路）。
+const ALLOWED_ATTACHMENT_EXTS: &[&str] = &[
+    "png", "jpg", "jpeg", "gif", "webp", // 图片
+    "pdf",                                      // 文档
+    "csv", "json",                              // 数据
+    "txt", "md", "log",                          // 文本
+    "xlsx", "xls",                               // 表格（前端解析依赖）
+];
+
 pub async fn upload_file(
     State(state): State<HttpServerState>,
     Path(id): Path<String>,
@@ -514,13 +609,20 @@ pub async fn upload_file(
     if bytes.len() > 20 * 1024 * 1024 {
         return Err(bad_req("附件超过 20MB 上限"));
     }
-    // 文件名只取安全扩展名（用户文件名不落盘，防注入/穿越）
-    let ext = std::path::Path::new(&req.name)
+    // 文件名只取安全扩展名（用户文件名不落盘，防注入/穿越）。
+    // 扩展名命中 ALLOWED_ATTACHMENT_EXTS 才放行；否则返回 400（拒绝可执行/脚本类）。
+    let raw_ext = std::path::Path::new(&req.name)
         .extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_lowercase())
-        .filter(|e| !e.is_empty() && e.len() <= 10)
-        .unwrap_or_else(|| "bin".to_string());
+        .filter(|e| !e.is_empty() && e.len() <= 10);
+    let ext = match raw_ext {
+        Some(e) if ALLOWED_ATTACHMENT_EXTS.contains(&e.as_str()) => e,
+        _ => return Err(bad_req(&format!(
+            "不支持的附件扩展名；允许: {}",
+            ALLOWED_ATTACHMENT_EXTS.join(", ")
+        ))),
+    };
     let filename = format!("{}.{ext}", uuid::Uuid::new_v4().simple());
     let dir = ws_dir(&state, &id).join("files");
     std::fs::create_dir_all(&dir)
@@ -533,7 +635,8 @@ pub async fn upload_file(
     }))
 }
 
-/// 按扩展名推断 Content-Type（覆盖常见图片/文档）。
+/// 按扩展名推断 Content-Type（覆盖常见图片/文档）。与 ALLOWED_ATTACHMENT_EXTS 对齐：
+/// 白名单外的扩展根本不会上传，所以这里不需要兜底类型，按精确映射返回。
 fn mime_from_ext(ext: &str) -> &'static str {
     match ext {
         "png" => "image/png",
@@ -545,6 +648,8 @@ fn mime_from_ext(ext: &str) -> &'static str {
         "csv" => "text/csv",
         "json" => "application/json",
         "txt" | "md" | "log" => "text/plain",
+        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "xls" => "application/vnd.ms-excel",
         _ => "application/octet-stream",
     }
 }
@@ -728,8 +833,56 @@ pub async fn import_workspace(
                 tables: counts,
             }))
         }
+        "upsert" => {
+            // 2c. upsert（L5）：合并到已有工作台，按表 unique 字段逐行 INSERT/UPDATE
+            // — 适合"定期再导同一份名单"的场景，避免整表覆盖丢失中间改动。
+            let registry = open_registry(&state)?;
+            let entries = registry
+                .list()
+                .map_err(|e| server_err(&format!("读取工作台注册表失败: {e}")))?;
+            let target = entries
+                .iter()
+                .find(|e| e.name == pkg.workspace.name)
+                .ok_or_else(|| {
+                    bad_req(&format!(
+                        "upsert 模式需要本机存在同名工作台「{}」，未找到；可改用 new 模式",
+                        pkg.workspace.name
+                    ))
+                })?;
+            let target_id = target.id.clone();
+            let writable = hermix_workspace::WorkspaceService::new(workspaces_root(&state))
+                .open_writable(&target_id)
+                .map_err(HttpError::from)?;
+            // 校验包内表与目标工作台定义兼容（不重建表——只刷数据）
+            hermix_workspace::validate_schema(&pkg.workspace)
+                .map_err(|e| bad_req(&format!("包内 schema 校验失败: {e}")))?;
+            let mut counts = std::collections::HashMap::new();
+            for m in &pkg.workspace.modules {
+                if let hermix_workspace::Module::Table { id, .. } = m {
+                    if let Some(incoming) = pkg.tables.get(id) {
+                        let (_ins, _upd) = writable
+                            .upsert_by_unique(id, incoming, "import")
+                            .map_err(|e| server_err(&format!("表[{id}] upsert 失败: {e}")))?;
+                        // upsert 后表行数即"upsert 前 + 真正新增 - 0"，统一为入参行数
+                        // （schema 定义表存在则非空）。前端 UI 拿表行数做"已导入 N 行"提示。
+                        counts.insert(id.clone(), incoming.len());
+                        tracing::info!(
+                            table = %id,
+                            rows = incoming.len(),
+                            "upsert 导入完成"
+                        );
+                    }
+                }
+            }
+            Ok(Json(WorkspaceImportResponse {
+                ok: true,
+                id: target_id,
+                mode: "upsert".into(),
+                tables: counts,
+            }))
+        }
         other => Err(bad_req(&format!(
-            "无效 mode: {other}（支持 new / merge）"
+            "无效 mode: {other}（支持 new / merge / upsert）"
         ))),
     }
 }

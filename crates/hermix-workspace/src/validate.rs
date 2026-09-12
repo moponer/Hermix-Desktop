@@ -11,6 +11,9 @@
 //! - **引用完整性**：视图字段/`group_by` 必须存在于所属表；Relation 的
 //!   `target` 必须指向已存在的表模块；Automation 的 `table` 必须存在。
 //! - **id 唯一性**：模块/字段/视图/组件 id 在各自作用域内唯一。
+//! - **布局合法性**：`layout` 的键必须是已存在的 dashboard 模块，每项必须含
+//!   `i/x/y/w/h`、`i` 必须在 widgets 内、尺寸与坐标必须落在 12 列网格内
+//!   （重叠不拦，react-grid-layout 会推开，且存量数据可能已重叠）。
 //!
 //! 返回首个错误（`Err(ValidationError::Invalid(msg))`），消息带具体
 //! 位置（如 `module[vehicles].field[status]`），便于 LLM 修正后重试。
@@ -91,6 +94,83 @@ pub fn validate_schema(schema: &WorkspaceSchema) -> Result<(), ValidationError> 
         }
     }
 
+    // 5. 布局（LLM 编排画布的唯一入口，从源头拦截越界/悬空布局）
+    validate_layout(schema)?;
+
+    Ok(())
+}
+
+/// 布局网格列数 — 与前端 `DashboardView.tsx` 的 `COLS` 对齐。
+const GRID_COLS: f64 = 12.0;
+
+/// 校验 `schema.layout`（react-grid-layout 可序列化输出）：
+/// - 顶层必须是对象，键必须是已存在的模块 id（悬空即报）；
+/// - 每个 item 必须含 `i/x/y/w/h`，尺寸与坐标必须落在网格内
+///   （`w ∈ [1,12]`、`h ≥ 1`、`x/y ≥ 0`、`x+w ≤ 12`）；
+/// - 键指向 **dashboard** 时额外校验 `i` 在 widgets 内；键指向 **table** 时
+///   只校几何（table 无 widgets 概念，内置的空数组占位属正常存量）。
+///
+/// **重叠不拒绝**：react-grid-layout 渲染时会自动推开，且存量工作台可能已有
+/// 重叠布局，严格拒绝会破坏既有数据。这里只拦"渲染不出东西"的硬错误。
+fn validate_layout(schema: &WorkspaceSchema) -> Result<(), ValidationError> {
+    let layout = match schema.layout.as_object() {
+        Some(o) if !o.is_empty() => o,
+        _ => return Ok(()),
+    };
+
+    for (module_id, raw_items) in layout {
+        // None = table 等非 dashboard 模块，无 widgets 可核对，只做几何校验。
+        let widgets = match schema.module(module_id) {
+            Some(Module::Dashboard { widgets, .. }) => Some(widgets),
+            Some(_) => None,
+            None => return err(&format!("layout[{module_id}] 引用的模块不存在")),
+        };
+        let items = match raw_items.as_array() {
+            Some(a) => a,
+            None => return err(&format!("layout[{module_id}] 必须是数组")),
+        };
+
+        for (idx, item) in items.iter().enumerate() {
+            let loc = format!("layout[{module_id}][{idx}]");
+            let obj = match item.as_object() {
+                Some(o) => o,
+                None => return err(&format!("{loc} 必须是对象（含 i/x/y/w/h）")),
+            };
+            let num = |key: &str| -> Option<f64> { obj.get(key).and_then(|v| v.as_f64()) };
+            let i = match obj.get("i").and_then(|v| v.as_str()) {
+                Some(s) => s,
+                None => return err(&format!("{loc} 缺少 i（组件 id）")),
+            };
+            if let Some(widgets) = widgets {
+                if !widgets.iter().any(|w| w.id == i) {
+                    return err(&format!("{loc} 的 i[{i}] 不在模块[{module_id}]的 widgets 中"));
+                }
+            }
+            for key in ["x", "y", "w", "h"] {
+                if num(key).is_none() {
+                    return err(&format!("{loc} 的 {key} 必须是数值"));
+                }
+            }
+            let x = num("x").unwrap_or(0.0);
+            let y = num("y").unwrap_or(0.0);
+            let w = num("w").unwrap_or(0.0);
+            let h = num("h").unwrap_or(0.0);
+            if w < 1.0 {
+                return err(&format!("{loc} 的 w 必须 ≥ 1（网格共 {} 列）", GRID_COLS));
+            }
+            if h < 1.0 {
+                return err(&format!("{loc} 的 h 必须 ≥ 1"));
+            }
+            if x < 0.0 || y < 0.0 {
+                return err(&format!("{loc} 的 x/y 不能为负"));
+            }
+            if x + w > GRID_COLS {
+                return err(&format!(
+                    "{loc} 越界：x({x}) + w({w}) 超过 {GRID_COLS} 列网格"
+                ));
+            }
+        }
+    }
     Ok(())
 }
 
@@ -329,5 +409,91 @@ mod tests {
                 "fields":[{"id":"x","name":"X","type":"text"},{"id":"x","name":"Y","type":"text"}]}]}"#,
         );
         assert!(validate_schema(&s).unwrap_err().to_string().contains("重复"));
+    }
+
+    // -----------------------------------------------------------------
+    // 布局校验（LLM 编排画布的质量底线）
+    // -----------------------------------------------------------------
+
+    /// 带一个 dashboard 模块（含 stat/chart 两个组件）的最小 schema 前缀，
+    /// 各用例拼上不同 layout 复用。
+    const DASH: &str = r#"{"name":"t","modules":[{"type":"dashboard","id":"ov","name":"总览",
+        "widgets":[
+            {"id":"w1","type":"stat","title":"在用","query":"count where status=在用"},
+            {"id":"w2","type":"chart","title":"趋势","query":"count group by month"}
+        ]}]}"#;
+
+    fn with_layout(layout: &str) -> WorkspaceSchema {
+        parse(&format!(
+            r#"{{"name":"t","modules":[{{"type":"dashboard","id":"ov","name":"总览",
+                "widgets":[{{"id":"w1","type":"stat","title":"在用","query":"q1"}}]}}],
+                "layout":{layout}}}"#
+        ))
+    }
+
+    #[test]
+    fn layout_valid_passes() {
+        let s = with_layout(r#"{"ov":[{"i":"w1","x":0,"y":0,"w":3,"h":2}]}"#);
+        assert!(validate_schema(&s).is_ok());
+        // 空 layout / 无 layout 一律放行（前端 autoLayout 兜底）
+        assert!(validate_schema(&parse(DASH)).is_ok());
+        assert!(validate_schema(&parse(r#"{"name":"t"}"#)).is_ok());
+
+        // table 模块的空数组占位放行 —— 内置模板（如人员管理）就是这种形态，
+        // table 无 widgets 概念，几何越界仍会被拦，但不要求 i 匹配 widgets。
+        let s = parse(
+            r#"{"name":"t","modules":[{"type":"table","id":"a","name":"A","fields":[]}],
+                "layout":{"a":[]}}"#,
+        );
+        assert!(validate_schema(&s).is_ok());
+    }
+
+    #[test]
+    fn layout_width_overflow_rejected() {
+        // w=13 在 12 列网格里越界
+        let s = with_layout(r#"{"ov":[{"i":"w1","x":0,"y":0,"w":13,"h":2}]}"#);
+        let err = validate_schema(&s).unwrap_err().to_string();
+        assert!(err.contains("越界"), "{err}");
+
+        // x=8 + w=6 = 14 同样越界
+        let s = with_layout(r#"{"ov":[{"i":"w1","x":8,"y":0,"w":6,"h":2}]}"#);
+        let err = validate_schema(&s).unwrap_err().to_string();
+        assert!(err.contains("越界"), "{err}");
+    }
+
+    #[test]
+    fn layout_dangling_widget_rejected() {
+        // i 指向不存在的组件 → 渲染时该布局项无所指
+        let s = with_layout(r#"{"ov":[{"i":"ghost","x":0,"y":0,"w":3,"h":2}]}"#);
+        let err = validate_schema(&s).unwrap_err().to_string();
+        assert!(err.contains("ghost"), "{err}");
+
+        // layout 的键不是已存在的 dashboard 模块
+        let s = with_layout(r#"{"nope":[{"i":"w1","x":0,"y":0,"w":3,"h":2}]}"#);
+        let err = validate_schema(&s).unwrap_err().to_string();
+        assert!(err.contains("nope"), "{err}");
+    }
+
+    #[test]
+    fn layout_bad_geometry_rejected() {
+        // 缺字段 / 零尺寸 / 负坐标
+        let s = with_layout(r#"{"ov":[{"i":"w1","x":0,"y":0,"w":3}]}"#);
+        assert!(validate_schema(&s).unwrap_err().to_string().contains("h"));
+
+        let s = with_layout(r#"{"ov":[{"i":"w1","x":0,"y":0,"w":0,"h":2}]}"#);
+        let err = validate_schema(&s).unwrap_err().to_string();
+        assert!(err.contains("w 必须"), "{err}");
+
+        let s = with_layout(r#"{"ov":[{"i":"w1","x":-1,"y":0,"w":3,"h":2}]}"#);
+        assert!(validate_schema(&s).unwrap_err().to_string().contains("不能为负"));
+    }
+
+    #[test]
+    fn layout_overlap_allowed() {
+        // 重叠不拒绝：react-grid-layout 会推开，且存量数据可能已重叠
+        let s = with_layout(
+            r#"{"ov":[{"i":"w1","x":0,"y":0,"w":6,"h":2},{"i":"w1","x":2,"y":0,"w":6,"h":2}]}"#,
+        );
+        assert!(validate_schema(&s).is_ok());
     }
 }

@@ -167,13 +167,66 @@ impl Writable {
     }
 
     /// 删行。`allow_delete=false` 的工作台在此拒绝。
-    pub fn delete(&self, table: &str, id: &str) -> Result<(), ServiceError> {
+    /// `updated_by` 记操作来源（user / llm / automation）供审计追溯。
+    pub fn delete(
+        &self,
+        table: &str,
+        id: &str,
+        updated_by: &str,
+    ) -> Result<(), ServiceError> {
         if !self.allow_delete {
             return Err(ServiceError::PermissionDenied(
                 "该工作台禁止删除行（permissions.allow_delete=false）".to_string(),
             ));
         }
-        self.store.delete(table, id).map_err(store_err)
+        self.store.delete(table, id, updated_by).map_err(store_err)
+    }
+
+    /// 撤销最近一条变更（H2 修复）：仅写权限可调用——只读工作台撤销也算写。
+    /// 撤销把行从 before 还原到 after，必然是写入，所以走同一道闸门。
+    /// 不受 allow_delete 约束（撤销可能涉及恢复被删行）。
+    pub fn undo_last(
+        &self,
+        table: &str,
+    ) -> Result<Option<crate::store::ChangeEntry>, ServiceError> {
+        self.store.undo_last(table).map_err(store_err)
+    }
+
+    /// M2：清理 change_log（手动 / 定时调度）。
+    pub fn purge_change_log(
+        &self,
+        older_than_days: i64,
+        keep_recent_undone: usize,
+    ) -> Result<usize, ServiceError> {
+        self.store
+            .purge_change_log(older_than_days, keep_recent_undone)
+            .map_err(store_err)
+    }
+
+    /// 分组计数（仪表盘 chart 组件用）——透传到 store，列名白名单由 store 把守。
+    pub fn count_group_by(
+        &self,
+        table: &str,
+        group_by: &str,
+        limit: usize,
+    ) -> Result<Vec<(String, u64)>, ServiceError> {
+        self.store
+            .count_group_by(table, group_by, limit)
+            .map_err(store_err)
+    }
+
+    /// L5 upsert：按 unique 字段逐行 INSERT/UPDATE。
+    /// 仅写权限可调用（不与 `allow_delete` 耦合——upsert 不删行）。
+    /// 找不到 unique 字段时降级为整表替换（store.upsert_by_unique 内部处理）。
+    pub fn upsert_by_unique(
+        &self,
+        table: &str,
+        rows: &[serde_json::Value],
+        updated_by: &str,
+    ) -> Result<(usize, usize), ServiceError> {
+        self.store
+            .upsert_by_unique(table, rows, updated_by)
+            .map_err(store_err)
     }
 
     /// 整表替换（.hwx LWW 合并专用）：见 [`LocalSqliteStore::replace_table_rows`]。
@@ -337,7 +390,7 @@ mod tests {
         assert_eq!(running.len(), 2, "两行都应为在用");
 
         // 6. 删除（workspace_delete）+ 计数（workspace_count）
-        store.delete("vehicles", row_id).expect("delete");
+        store.delete("vehicles", row_id, "user").expect("delete");
         let n = store.count("vehicles", &[]).expect("count");
         assert_eq!(n, 1);
 
@@ -376,7 +429,7 @@ mod tests {
         let id = build_sample(dir.path());
         let svc = WorkspaceService::new(dir.path());
         let w = svc.open_writable(&id).expect("默认工作台应可写");
-        assert!(w.delete("vehicles", "ghost-row").is_err(), "行不存在仍应报错而非权限拒绝");
+        assert!(w.delete("vehicles", "ghost-row", "user").is_err(), "行不存在仍应报错而非权限拒绝");
     }
 
     #[test]
@@ -401,7 +454,7 @@ mod tests {
         let svc = WorkspaceService::new(dir.path());
         let w = svc.open_writable(&id).expect("可写");
         // 可写但禁删
-        let err = w.delete("vehicles", "whatever").unwrap_err();
+        let err = w.delete("vehicles", "whatever", "user").unwrap_err();
         assert!(matches!(err, ServiceError::PermissionDenied(_)), "{err}");
         // 整表替换（合并路径）不受 allow_delete 约束——语义是更新不是删除
         w.replace_rows("vehicles", &[serde_json::json!({ "plate": "京B00001" })])
