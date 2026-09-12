@@ -472,10 +472,149 @@
   })();
 
   // ─────────────────────────────────────────────────────────
-  // 9. 版本号 (spec §6.1 / §8.4 验收用)
+  // 9. 图片加载兜底 — 失败 / 加载中动态占位 (shimmer + 图标)
+  //     全局捕获 <img> error（capture），在失败 img 外包裹一层，
+  //     渲染 shimmer 动画 + 居中图标，避免破图 / 空白。
+  //     不影响成功加载的图片；纯样式兜底，不替换业务 DOM 结构。
+  // ─────────────────────────────────────────────────────────
+  (function imageFallback() {
+    const CSS_ID = "__hx_img_fallback__";
+    if (document.getElementById(CSS_ID)) return;
+    const style = document.createElement("style");
+    style.id = CSS_ID;
+    style.textContent = [
+      "@keyframes hx-shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }",
+      ".hx-img-fallback { position: relative; display: inline-block; min-width: 48px; min-height: 48px;",
+      "  background: linear-gradient(90deg,#eceef1 25%,#f6f7f9 37%,#eceef1 63%);",
+      "  background-size: 400% 100%; animation: hx-shimmer 1.4s ease infinite;",
+      "  border-radius: 8px; overflow: hidden; vertical-align: middle; }",
+      ".hx-img-fallback > img { display: none; }",
+      ".hx-img-fallback.is-loaded { background: none; animation: none; }",
+      ".hx-img-fallback.is-loaded > img { display: inline-block; }",
+      ".hx-img-fallback.is-loaded::after { content: none; }",
+      ".hx-img-fallback::after { content: ''; position: absolute; inset: 0;",
+      "  background: url('data:image/svg+xml;utf8,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2224%22 height=%2224%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22%23999%22 stroke-width=%222%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Crect width=%2218%22 height=%2218%22 x=%223%22 y=%223%22 rx=%222%22/%3E%3Ccircle cx=%229%22 cy=%229%22 r=%222%22/%3E%3Cpath d=%22m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21%22/%3E%3C/svg%3E') center / 32px no-repeat; }",
+    ].join("");
+    const mount = () => { if (document.head) document.head.appendChild(style); };
+    if (document.head) mount();
+    else document.addEventListener("DOMContentLoaded", mount);
+
+    document.addEventListener("error", function (e) {
+      const el = e.target;
+      if (!el || el.tagName !== "IMG" || el.dataset.hxFallback) return;
+      if (el.complete && el.naturalWidth > 0) return; // 已成功加载，忽略
+      el.dataset.hxFallback = "1";
+      const wrap = document.createElement("span");
+      wrap.className = "hx-img-fallback";
+      const w = el.getAttribute("width") || el.style.width;
+      const h = el.getAttribute("height") || el.style.height;
+      if (w) wrap.style.width = String(w);
+      if (h) wrap.style.height = String(h);
+      if (el.parentNode) el.parentNode.replaceChild(wrap, el);
+      wrap.appendChild(el);
+      // 暴露重置入口：图片后续加载成功时移除兜底
+      el.addEventListener("load", function () {
+        if (el.naturalWidth > 0) { wrap.classList.add("is-loaded"); }
+      });
+    }, true);
+  })();
+
+  // ─────────────────────────────────────────────────────────
+  // 10. 媒体源兜底 — hxfile:// 经 blob 桥接喂 <audio>/<video>
+  //     根因: 自定义 scheme (hxfile://) 不在 Chromium 媒体源白名单,
+  //           直接 <audio src="hxfile://..."> 会被网络层拒绝 → code=4 Format error。
+  //           壳统一在 runtime 注入层拦截 play(),把 hxfile:// src 转成
+  //           blob: URL 再播放 (blob: 属媒体白名单)。
+  //     路径: 优先 fetch(hxfile://) 字节直转 blob (最快,不占 JS 堆字符串);
+  //           fetch 因 scheme 被网络层拦截或非 2xx → fallback window.hx.readFileBytes (IPC)。
+  //     覆盖不改 app 代码(设 src 后立即 play / autoplay)的场景。
+  // ─────────────────────────────────────────────────────────
+  (function mediaSourceFallback() {
+    const HXFILE = /^hxfile:\/\//i;
+    const cache = new Map();
+
+    function hxfileToLocalPath(url) {
+      let p = url.replace(/^hxfile:\/\/localhost\//i, "").replace(/^hxfile:\/\/\//i, "");
+      try { p = decodeURIComponent(p); } catch (_) {}
+      return p;
+    }
+    function mimeFromPath(p) {
+      const m = /\.([a-z0-9]+)$/i.exec(p || "");
+      const ext = (m && m[1] || "").toLowerCase();
+      const MAP = {
+        mp3: "audio/mpeg", flac: "audio/flac", wav: "audio/wav", ogg: "audio/ogg",
+        m4a: "audio/mp4", aac: "audio/aac", wma: "audio/x-ms-wma",
+        mp4: "video/mp4", webm: "video/webm", mov: "video/quicktime", mkv: "video/x-matroska",
+      };
+      return MAP[ext] || "";
+    }
+    function base64ToUint8(base64) {
+      const bin = atob(base64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      return bytes;
+    }
+
+    // url → (blob: URL)。非 hxfile 原样返回。结果缓存避免重复 fetch。
+    async function mediaUrl(url) {
+      if (!HXFILE.test(url)) return url;
+      if (cache.has(url)) return cache.get(url);
+      const p = (async () => {
+        try {
+          const r = await fetch(url, { cache: "no-store" });
+          if (!r.ok) throw new Error("HTTP " + r.status);
+          const blob = await r.blob();
+          return URL.createObjectURL(blob);
+        } catch (e) {
+          // fetch 失败(scheme 被网络层拦截 / 非 2xx) → fallback IPC 读字节
+          try {
+            const localPath = hxfileToLocalPath(url);
+            const res = await window.hx.readFileBytes(localPath);
+            if (!res || !res.ok) throw new Error("readFileBytes: " + (res && res.err));
+            const blob = new Blob([base64ToUint8(res.data)], {
+              type: mimeFromPath(localPath) || "application/octet-stream",
+            });
+            return URL.createObjectURL(blob);
+          } catch (e2) {
+            console.error("[Hermix.media] 加载失败:", url, e2);
+            throw e2;
+          }
+        }
+      })();
+      cache.set(url, p);
+      p.catch(() => cache.delete(url)); // 失败不永久阻塞同 url
+      return p;
+    }
+    Hermix.mediaUrl = mediaUrl;
+
+    // 拦截 play(): src 是 hxfile:// 时,await blob 就绪再真正 play。
+    const origPlay = HTMLMediaElement.prototype.play;
+    HTMLMediaElement.prototype.play = function () {
+      const src = this.src || this.currentSrc || "";
+      if (HXFILE.test(src)) {
+        return mediaUrl(src).then((blobUrl) => {
+          this.src = blobUrl; // 设 blob: 后 currentSrc 变更,后续 play 不拦截
+          return origPlay.call(this);
+        }).catch((e) => {
+          console.error("[Hermix.media] play fallback failed:", e);
+          return Promise.reject(e);
+        });
+      }
+      return origPlay.call(this);
+    };
+
+    // 显式预加载 helper: app 也可 Hermix.loadMedia(el, hxfileUrl) 主动触发
+    Hermix.loadMedia = function (el, url) {
+      return mediaUrl(url).then((blobUrl) => { el.src = blobUrl; return blobUrl; });
+    };
+  })();
+
+  // ─────────────────────────────────────────────────────────
+  // 11. 版本号 (spec §6.1 / §8.4 验收用)
   // ─────────────────────────────────────────────────────────
   Hermix.runtime = { version: "1.0.0", capabilities: [
     "store", "defineComponent", "icon", "route", "storage", "sqlite", "screenshot",
+    "imgFallback", "mediaBlob",
   ] };
 
 })(window.Hermix = window.Hermix || {});

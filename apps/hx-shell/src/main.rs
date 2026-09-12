@@ -38,15 +38,25 @@
 use std::borrow::Cow;
 use std::path::PathBuf;
 
-use tao::event::{Event, WindowEvent};
-use tao::event_loop::{ControlFlow, EventLoop};
-use tao::window::{Icon, WindowBuilder};
-use wry::http::{header::CONTENT_TYPE, Request, Response};
+use tao::dpi::{LogicalPosition, LogicalSize, Position};
+use tao::event::{ElementState, Event, KeyEvent, WindowEvent};
+use tao::keyboard::KeyCode;
+use tao::event_loop::{ControlFlow, EventLoop, EventLoopProxy};
+use tao::platform::windows::WindowExtWindows;
+use tao::window::{Icon, Window, WindowBuilder};
+use notify::Watcher;
+use wry::http::{
+    header::{ACCEPT_RANGES, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, RANGE},
+    Request, Response,
+};
 use wry::WebViewBuilder;
 
 const MAGIC: &[u8] = b"HXAPP1";
 
-pub const BUILD_PROBE: &str = "BUILD_PROBE_2026_DC_V7";
+// 版本探针 — ensure_shell_deployed 靠比对该串里的数字决定是否覆盖
+// ~/.hermix/loader/hx-shell.exe。壳的能力发生变化（如新增 devtools/F12）
+// 必须 bump，否则旧壳一直不换，新功能在已安装的机器上永远不生效。
+pub const BUILD_PROBE: &str = "BUILD_PROBE_2026_DC_V9";
 
 // 自定义应用 PE 资源 (RT_RCDATA 整数 id)，与 hermix_plugin::icon_library 约定一致。
 // 取代旧版「exe 末尾拼接 payload」：尾部附加大块数据会触发 Defender
@@ -435,6 +445,8 @@ fn hx_get_info() -> serde_json::Value {
             "getInfo":        {"params": [], "returns": "{ok, data: this_object}"},
             "fileUrl":        {"params": ["path: string"], "returns": "string", "note": "path → hxfile:// URL for <audio>/<img>/<video>"},
             "showMessage":    {"params": ["msg: string"], "returns": "{ok, data}"},
+            "notify":        {"params": ["title: string", "body: string"], "returns": "{ok}", "note": "原生系统通知（Windows 任务栏气泡）"},
+            "watchDir":      {"params": ["path: string", "callback: (ev)=>void"], "returns": "()=>void (调用即停止监听)", "note": "目录变更监听，事件推回 callback"},
         },
         // ── 窗口控制（无装饰窗口标题栏）──
         "win": {
@@ -446,6 +458,11 @@ fn hx_get_info() -> serde_json::Value {
                 "setTitle":       {"params": ["title: string"], "returns": "{ok}"},
                 "startDrag":      {"params": [], "returns": "{ok, err?}", "note": "鼠标按下标题栏时调用，启动窗口拖动"},
                 "isMaximized":    {"params": [], "returns": "{ok, data: bool}"},
+                "resize":         {"params": ["w: number", "h: number"], "returns": "{ok}", "note": "逻辑像素"},
+                "pin":            {"params": ["on: boolean"], "returns": "{ok, data: {pinned: bool}}", "note": "置顶"},
+                "setPosition":    {"params": ["x: number", "y: number"], "returns": "{ok}", "note": "逻辑像素，屏幕坐标"},
+                "center":         {"params": [], "returns": "{ok}", "note": "居中到当前显示器"},
+                "restore":        {"params": [], "returns": "{ok}", "note": "退出最大化"},
             },
         },
         // ── 自定义协议 ──
@@ -842,8 +859,202 @@ fn hx_win_control(
         "isMaximized" => {
             serde_json::json!({"ok": true, "data": window.is_maximized()})
         }
+        "resize" => {
+            let w = args.get(0).and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let h = args.get(1).and_then(|v| v.as_f64()).unwrap_or(0.0);
+            if w > 0.0 && h > 0.0 {
+                window.set_inner_size(LogicalSize::new(w, h));
+            }
+            serde_json::json!({"ok": true})
+        }
+        "pin" => {
+            let on = args.get(0).and_then(|v| v.as_bool()).unwrap_or(false);
+            window.set_always_on_top(on);
+            serde_json::json!({"ok": true, "data": {"pinned": on}})
+        }
+        "setPosition" => {
+            let x = args.get(0).and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let y = args.get(1).and_then(|v| v.as_f64()).unwrap_or(0.0);
+            window.set_outer_position(LogicalPosition::new(x, y));
+            serde_json::json!({"ok": true})
+        }
+        "center" => {
+            if let Some(mon) = window.current_monitor() {
+                let scale = mon.scale_factor();
+                let ox = mon.position().x as f64 / scale;
+                let oy = mon.position().y as f64 / scale;
+                let mw = mon.size().width as f64 / scale;
+                let mh = mon.size().height as f64 / scale;
+                let sz = window.outer_size().to_logical::<f64>(scale);
+                let x = ox + (mw - sz.width) / 2.0;
+                let y = oy + (mh - sz.height) / 2.0;
+                window.set_outer_position(LogicalPosition::new(x, y));
+            }
+            serde_json::json!({"ok": true})
+        }
+        "restore" => {
+            window.set_maximized(false);
+            serde_json::json!({"ok": true})
+        }
         _ => serde_json::json!({"ok": false, "err": format!("unknown win command: {cmd}")}),
     }
+}
+
+// ------------------------------------------------------------------
+// 窗口体验增强：几何持久化 + 原生通知 + 目录监听
+// 仅做"体验"，不做安全边界（按主人拍板：不引入运行时权限沙箱）
+// ------------------------------------------------------------------
+
+/// 窗口几何持久化：记到 <app_dir>/window-state.json（app_dir 缺省 / anonymous 时跳过）
+fn load_window_state(app_dir: Option<&std::path::Path>) -> Option<(f64, f64, f64, f64)> {
+    let dir = app_dir?;
+    let s = std::fs::read_to_string(dir.join("window-state.json")).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&s).ok()?;
+    let x = v["x"].as_f64()?;
+    let y = v["y"].as_f64()?;
+    let w = v["w"].as_f64()?;
+    let h = v["h"].as_f64()?;
+    Some((x, y, w, h))
+}
+
+fn save_window_state(app_dir: Option<&std::path::Path>, g: (f64, f64, f64, f64)) {
+    if let Some(dir) = app_dir {
+        let _ = std::fs::create_dir_all(dir);
+        let s = serde_json::json!({"x": g.0, "y": g.1, "w": g.2, "h": g.3}).to_string();
+        let _ = std::fs::write(dir.join("window-state.json"), s);
+    }
+}
+
+fn save_window_geom(app_dir: &Option<std::path::PathBuf>, window: &Window) {
+    if app_dir.is_none() {
+        return;
+    }
+    let scale = window.scale_factor();
+    let pos = window.outer_position().unwrap_or_default().to_logical::<f64>(scale);
+    let sz = window.outer_size().to_logical::<f64>(scale);
+    save_window_state(app_dir.as_deref(), (pos.x, pos.y, sz.width, sz.height));
+}
+
+/// 原生系统通知（Windows 任务栏气泡），零新依赖走 windows-sys Shell_NotifyIconW
+#[cfg(windows)]
+fn hx_notify(window: &std::sync::Arc<Window>, args: &serde_json::Value) -> serde_json::Value {
+    use windows_sys::Win32::UI::Shell::Shell_NotifyIconW;
+    use windows_sys::Win32::UI::Shell::NOTIFYICONDATAW;
+    let title = args.get(0).and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let body = args.get(1).and_then(|v| v.as_str()).unwrap_or("").to_string();
+    if body.is_empty() {
+        return serde_json::json!({"ok": false, "err": "empty body"});
+    }
+    let hwnd = window.hwnd();
+    static UID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+    let uid = UID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let mut nid: NOTIFYICONDATAW = unsafe { std::mem::zeroed() };
+    nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
+    nid.hWnd = hwnd;
+    nid.uID = uid;
+    nid.uFlags = 0x10; // NIF_INFO
+    set_wide(&mut nid.szInfoTitle, &title);
+    set_wide(&mut nid.szInfo, &body);
+    nid.dwInfoFlags = 0x1; // NIIF_INFO
+    nid.Anonymous.uTimeout = 5000;
+    unsafe {
+        Shell_NotifyIconW(0x0, &nid); // NIM_ADD
+        Shell_NotifyIconW(0x1, &nid); // NIM_MODIFY 触发气泡
+    }
+    let hwnd2 = hwnd;
+    let uid2 = uid;
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(6));
+        let mut n: NOTIFYICONDATAW = unsafe { std::mem::zeroed() };
+        n.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
+        n.hWnd = hwnd2;
+        n.uID = uid2;
+        unsafe { Shell_NotifyIconW(0x2, &n); } // NIM_DELETE
+    });
+    serde_json::json!({"ok": true})
+}
+
+#[cfg(not(windows))]
+fn hx_notify(_window: &std::sync::Arc<Window>, _args: &serde_json::Value) -> serde_json::Value {
+    serde_json::json!({"ok": false, "err": "notify only supported on windows"})
+}
+
+/// 把 &str 写入固定长度 u16 数组（含尾零），用于 NOTIFYICONDATAW 的 sz* 字段
+fn set_wide(dst: &mut [u16], s: &str) {
+    let w: Vec<u16> = s.encode_utf16().chain(std::iter::once(0)).collect();
+    let n = dst.len().min(w.len());
+    dst[..n].copy_from_slice(&w[..n]);
+    if n < dst.len() {
+        dst[n] = 0;
+    }
+}
+
+/// 目录监听事件队列：watcher 线程把 JS 推入队列并唤醒主线程，由事件循环 evaluate_script
+/// （WebView 非 Send，不能在 watcher 线程直接调用；用 EventLoopProxy 回主线程派发）
+static WEBVIEW_EVENTS: std::sync::OnceLock<std::sync::Mutex<Vec<String>>> =
+    std::sync::OnceLock::new();
+
+/// 目录监听：watcher 放在独立线程，停止信号经 mpsc 送达（规避 watcher 的 Send 约束）
+static WATCH_STOPS: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::HashMap<String, std::sync::mpsc::Sender<()>>>,
+> = std::sync::OnceLock::new();
+
+fn hx_start_watch(
+    args: &serde_json::Value,
+    proxy: &EventLoopProxy<()>,
+) -> serde_json::Value {
+    let path = args.get(0).and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let id = args.get(1).and_then(|v| v.as_str()).unwrap_or("").to_string();
+    if path.is_empty() || id.is_empty() {
+        return serde_json::json!({"ok": false, "err": "path and id required"});
+    }
+    let id_clone = id.clone();
+    let proxy = proxy.clone();
+    let handler = move |res: notify::Result<notify::Event>| {
+        let ev = match res {
+            Ok(e) => serde_json::json!({
+                "kind": format!("{:?}", e.kind),
+                "paths": e.paths.iter().map(|p| p.to_string_lossy().to_string()).collect::<Vec<_>>(),
+            }),
+            Err(err) => serde_json::json!({"kind": "error", "error": err.to_string()}),
+        };
+        let js = format!("window.__hx_onWatchEvent({:?}, {})", id_clone, ev);
+        if let Some(q) = WEBVIEW_EVENTS.get() {
+            q.lock().unwrap().push(js);
+        }
+        let _ = proxy.send_event(());
+    };
+    match notify::recommended_watcher(handler) {
+        Ok(mut watcher) => {
+            if let Err(e) = watcher.watch(std::path::Path::new(&path), notify::RecursiveMode::NonRecursive) {
+                return serde_json::json!({"ok": false, "err": format!("watch failed: {e}")});
+            }
+            let (tx, rx) = std::sync::mpsc::channel::<()>();
+            std::thread::spawn(move || {
+                let _ = rx.recv(); // 阻塞到 stop 信号，随后 drop(watcher) 停止监听
+                drop(watcher);
+            });
+            WATCH_STOPS
+                .get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+                .lock()
+                .unwrap()
+                .insert(id.clone(), tx);
+            serde_json::json!({"ok": true, "data": {"id": id}})
+        }
+        Err(e) => serde_json::json!({"ok": false, "err": format!("watcher init failed: {e}")}),
+    }
+}
+
+fn hx_stop_watch(args: &serde_json::Value) -> serde_json::Value {
+    let id = args.get(0).and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let removed = WATCH_STOPS
+        .get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+        .lock()
+        .unwrap()
+        .remove(&id)
+        .map(|tx| tx.send(()).is_ok())
+        .unwrap_or(false);
+    serde_json::json!({"ok": true, "data": {"removed": removed}})
 }
 
 // ------------------------------------------------------------------
@@ -1178,6 +1389,10 @@ fn app_protocol_handler(_webview_id: &str, request: Request<Vec<u8>>) -> Respons
 }
 
 /// hxfile:// 协议处理器：从 URL 路径读取本地文件
+///
+/// 必须实现 HTTP Range：`<audio>/<video>` 的媒体管线依赖 Range 做渐进下载与
+/// seek，缺 Content-Length / Accept-Ranges 时媒体元素无法确定资源长度，
+/// 直接抛 MEDIA_ERR_SRC_NOT_SUPPORTED (code 4, "Format error")。
 fn hxfile_handler(_webview_id: &str, request: Request<Vec<u8>>) -> Response<Cow<'static, [u8]>> {
     let uri_path = request.uri().path();
     hx_log(&format!("hxfile: {}", uri_path));
@@ -1190,23 +1405,97 @@ fn hxfile_handler(_webview_id: &str, request: Request<Vec<u8>>) -> Response<Cow<
         percent_decode(uri_path)
     };
 
-    match std::fs::read(&file_path) {
-        Ok(content) => {
-            let mime = mime_type(&file_path);
-            http::Response::builder()
-                .header(CONTENT_TYPE, mime)
-                .header("Access-Control-Allow-Origin", "*")
-                .body(Cow::Owned(content))
-                .unwrap()
-        }
+    let content = match std::fs::read(&file_path) {
+        Ok(c) => c,
         Err(e) => {
             hx_log(&format!("hxfile error: {} → {}", file_path, e));
-            http::Response::builder()
+            return http::Response::builder()
                 .header(CONTENT_TYPE, "text/plain")
                 .status(404)
                 .body(Cow::Owned(format!("File not found: {file_path}").into_bytes()))
+                .unwrap();
+        }
+    };
+
+    let mime = mime_type(&file_path);
+    let total = content.len() as u64;
+
+    // 空文件无法切片，直接全量返回（同时避免 total-1 下溢）
+    if total == 0 {
+        return http::Response::builder()
+            .status(200)
+            .header(CONTENT_TYPE, mime)
+            .header(CONTENT_LENGTH, "0")
+            .header(ACCEPT_RANGES, "bytes")
+            .header("Access-Control-Allow-Origin", "*")
+            .body(Cow::Owned(content))
+            .unwrap();
+    }
+
+    let range = request
+        .headers()
+        .get(RANGE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| parse_range_header(s, total));
+
+    match range {
+        Some((start, end)) if start < total && start <= end => {
+            let end = end.min(total - 1);
+            let slice = content[start as usize..=end as usize].to_vec();
+            let len = slice.len();
+            hx_log(&format!(
+                "hxfile 206: {} bytes {}-{}/{}",
+                file_path, start, end, total
+            ));
+            http::Response::builder()
+                .status(206)
+                .header(CONTENT_TYPE, mime)
+                .header(CONTENT_LENGTH, len.to_string())
+                .header(ACCEPT_RANGES, "bytes")
+                .header(CONTENT_RANGE, format!("bytes {}-{}/{}", start, end, total))
+                .header("Access-Control-Allow-Origin", "*")
+                .body(Cow::Owned(slice))
                 .unwrap()
         }
+        // Range 越界（start 超出文件长度）
+        Some(_) => http::Response::builder()
+            .status(416)
+            .header(CONTENT_TYPE, "text/plain")
+            .header(CONTENT_RANGE, format!("bytes */{total}"))
+            .body(Cow::Owned(b"range not satisfiable".to_vec()))
+            .unwrap(),
+        // 无 Range → 全量；仍带 Accept-Ranges 告知媒体元素支持 seek
+        None => http::Response::builder()
+            .status(200)
+            .header(CONTENT_TYPE, mime)
+            .header(CONTENT_LENGTH, content.len().to_string())
+            .header(ACCEPT_RANGES, "bytes")
+            .header("Access-Control-Allow-Origin", "*")
+            .body(Cow::Owned(content))
+            .unwrap(),
+    }
+}
+
+/// 解析 `Range` 头 → (start, end) 闭区间。
+/// 支持 `bytes=a-b` / `bytes=a-` / `bytes=-suffix` 三种形式。
+fn parse_range_header(value: &str, total: u64) -> Option<(u64, u64)> {
+    let rest = value.trim().strip_prefix("bytes=")?;
+    let (start_s, end_s) = rest.split_once('-')?;
+    let start_s = start_s.trim();
+    let end_s = end_s.trim();
+    if start_s.is_empty() {
+        // bytes=-N：取末尾 N 字节
+        let n: u64 = end_s.parse().ok()?;
+        let start = total.saturating_sub(n);
+        Some((start, total.saturating_sub(1)))
+    } else {
+        let start: u64 = start_s.parse().ok()?;
+        let end = if end_s.is_empty() {
+            total.saturating_sub(1)
+        } else {
+            end_s.parse::<u64>().ok()?
+        };
+        Some((start, end))
     }
 }
 
@@ -1258,12 +1547,26 @@ fn main() -> wry::Result<()> {
                   getInfo: function() { return window.invoke('getInfo', {}); },
                   fileUrl: function(path) {
                     if (!path) return '';
-                    var p = String(path).replace(/\\\\/g, '/');
+                    // 本段位于 Rust raw string 内，故写 /\\/g 让 JS 收到 /\\/g（匹配单个反斜杠）
+                    var p = String(path).replace(/\\/g, '/');
                     if (p.charAt(0) === '/') p = p.slice(1);
                     p = encodeURIComponent(p).replace(/%2F/gi, '/');
                     return 'hxfile://localhost/' + p;
                   },
                   showMessage: function(msg) { return Promise.resolve({ok: true, data: String(msg || '')}); },
+                  notify: function(title, body) { return window.invoke('notify', [title || '', body || '']); },
+                  watchDir: function(path, cb) {
+                    if (typeof cb !== 'function') return function(){};
+                    var id = 'w' + (++window.__hx_watch_id);
+                    window.__hx_watch_cbs[id] = cb;
+                    window.invoke('startWatch', [path || '', id]).then(function(r){
+                      if (!r || !r.ok) { delete window.__hx_watch_cbs[id]; }
+                    });
+                    return function() {
+                      delete window.__hx_watch_cbs[id];
+                      window.invoke('stopWatch', [id]);
+                    };
+                  },
                   win: {
                     minimize: function() { return window.invoke('win_minimize', {}); },
                     maximize: function() { return window.invoke('win_maximize', {}); },
@@ -1272,7 +1575,19 @@ fn main() -> wry::Result<()> {
                     setTitle: function(title) { return window.invoke('win_setTitle', [title || '']); },
                     startDrag: function() { return window.invoke('win_startDrag', {}); },
                     isMaximized: function() { return window.invoke('win_isMaximized', {}); },
+                    resize: function(w, h) { return window.invoke('win_resize', [w || 0, h || 0]); },
+                    pin: function(on) { return window.invoke('win_pin', [!!on]); },
+                    setPosition: function(x, y) { return window.invoke('win_setPosition', [x || 0, y || 0]); },
+                    center: function() { return window.invoke('win_center', {}); },
+                    restore: function() { return window.invoke('win_restore', {}); },
                   },
+                };
+                // 目录监听回调注册表 + 事件分发（Rust watch 线程经 evaluate_script 调此）
+                window.__hx_watch_cbs = {};
+                window.__hx_watch_id = 0;
+                window.__hx_onWatchEvent = function(id, ev) {
+                  var cb = window.__hx_watch_cbs[id];
+                  if (cb) { try { cb(ev); } catch (e) {} }
                 };
               } catch(e) {
                 if (typeof console !== 'undefined') console.error('hx init error:', e);
@@ -1302,6 +1617,23 @@ fn main() -> wry::Result<()> {
                   var m = (r && r.message) ? r.message : String(r || '');
                   window.__hx_reportError('unhandledrejection', m, '', 0, 0);
                 };
+              } catch (e) {}
+            })();
+        "#;
+
+    // dev 运行模式专用：F12 → WebView2 开发者工具。
+    // 走页面内 keydown 而非 tao 的 WindowEvent::KeyboardInput —— WebView2 是
+    // 子窗口且默认吞掉浏览器加速键，宿主事件循环未必能收到 F12，而页面内
+    // 监听器一定能收到（除非应用自己 preventDefault）。
+    const DEVTOOLS_KEY_JS: &str = r#"
+            (function(){
+              try {
+                window.addEventListener('keydown', function(ev){
+                  if (ev.key === 'F12' || ev.keyCode === 123) {
+                    ev.preventDefault();
+                    if (window.invoke) window.invoke('openDevtools', {});
+                  }
+                }, true);
               } catch (e) {}
             })();
         "#;
@@ -1389,6 +1721,8 @@ fn main() -> wry::Result<()> {
     hx_log(&format!("=== hx-shell start {} ===", BUILD_PROBE));
     hx_log(&format!("exe: {:?}", std::env::current_exe().ok()));
     let event_loop = EventLoop::new();
+    // 主线程事件代理：目录监听线程无法持有非 Send 的 WebView，改经此 proxy 回主线程 evaluate_script
+    let event_proxy = event_loop.create_proxy();
     hx_log("event_loop created");
     // 解析尾部 icon 段（若有），用作窗口标题栏 + 任务栏图标
     let window_icon = read_self_icon().and_then(|(rgba, w, h)| {
@@ -1426,7 +1760,13 @@ fn main() -> wry::Result<()> {
         .with_inner_size(tao::dpi::LogicalSize::new(WIN_W_LOGICAL, WIN_H_LOGICAL))
         .with_window_icon(window_icon)
         .with_decorations(false); // 无原生标题栏 — 应用自行实现标题栏 + 窗口控制按钮
-    if let Some(pos) = start_position {
+    // 几何持久化：优先恢复上次位置/尺寸；无存档则用居中默认
+    if let Some((sx, sy, sw, sh)) = load_window_state(app_dir_path.as_deref()) {
+        win_builder = win_builder
+            .with_inner_size(LogicalSize::new(sw, sh))
+            .with_position(Position::Logical(LogicalPosition::new(sx, sy)));
+        hx_log(&format!("restored window geom: {}x{} @ ({}, {})", sw, sh, sx, sy));
+    } else if let Some(pos) = start_position {
         win_builder = win_builder.with_position(pos);
     }
     let window = win_builder
@@ -1463,11 +1803,16 @@ fn main() -> wry::Result<()> {
         )
         .unwrap_or_else(|_| "\"anonymous\"".into()),
     );
+    // dev 运行模式（--dev / --html）才装配 F12 → devtools。打包后的 prod exe
+    // 保持干净：终端用户按 F12 不该弹出调试窗口。
+    let dev_enabled = dev_mode_arg || html_arg.is_some();
+    let init_devtools: &str = if dev_enabled { DEVTOOLS_KEY_JS } else { "" };
     let init_full: String = String::from(INIT_SCRIPT_BASE)
         + &init_app_id_prefix
-        + HERMIX_RUNTIME_JS;
+        + HERMIX_RUNTIME_JS
+        + init_devtools;
     hx_log(&format!(
-        "init script: {} bytes (runtime {} bytes)",
+        "init script: {} bytes (runtime {} bytes, devtools_key={dev_enabled})",
         init_full.len(),
         HERMIX_RUNTIME_JS.len()
     ));
@@ -1511,8 +1856,18 @@ fn main() -> wry::Result<()> {
                 "win_setTitle" => hx_win_control("setTitle", &a, &win_ipc),
                 "win_startDrag" => hx_win_control("startDrag", &a, &win_ipc),
                 "win_isMaximized" => hx_win_control("isMaximized", &a, &win_ipc),
+                "win_resize" => hx_win_control("resize", &a, &win_ipc),
+                "win_pin" => hx_win_control("pin", &a, &win_ipc),
+                "win_setPosition" => hx_win_control("setPosition", &a, &win_ipc),
+                "win_center" => hx_win_control("center", &a, &win_ipc),
+                "win_restore" => hx_win_control("restore", &a, &win_ipc),
+                "notify" => hx_notify(&win_ipc, &a),
+                "startWatch" => hx_start_watch(&a, &event_proxy),
+                "stopWatch" => hx_stop_watch(&a),
                 // A2 运行时错误捕获（防假完成）：JS onerror → 落盘 .runtime-errors.log
                 "logRuntimeError" => hx_log_runtime_error(&a),
+                // dev 运行模式：F12 / 右键 → 打开 WebView2 开发者工具
+                "openDevtools" => hx_open_devtools(&wv_ref),
                 // 磁盘清理器专用（向后兼容）
                 "shell_temp_file" => hx_shell_temp_file(&a),
                 "shell_fs_write" => hx_shell_fs_write(&a),
@@ -1529,7 +1884,9 @@ fn main() -> wry::Result<()> {
             }
         })
         // init_script — Phase 3 拼好的完整 init 串（含 runtime.js）
-        .with_initialization_script(&init_full);
+        .with_initialization_script(&init_full)
+        // WebView2 的 AreDevToolsEnabled 开关。dev 运行模式开，prod exe 关。
+        .with_devtools(dev_enabled);
 
     // --html <path>：直接加载外部 html 文件（测试版 / dev 模式），不读 exe 内 payload、
 
@@ -1593,17 +1950,101 @@ fn main() -> wry::Result<()> {
     webview_ref.lock().unwrap().replace(webview);
     hx_log("enter event_loop");
 
+    let wv_for_key = webview_ref.clone();
+    let w_for_state = window.clone();
+    let app_dir_for_state = app_dir_path.clone();
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::WaitUntil(
             std::time::Instant::now() + std::time::Duration::from_millis(500));
-        if let Event::WindowEvent {
-            event: WindowEvent::CloseRequested,
-            ..
-        } = event
-        {
-            *control_flow = ControlFlow::Exit
+        match event {
+            Event::WindowEvent {
+                event: WindowEvent::CloseRequested,
+                ..
+            } => {
+                save_window_geom(&app_dir_for_state, w_for_state.as_ref());
+                *control_flow = ControlFlow::Exit
+            }
+            Event::WindowEvent {
+                event: WindowEvent::Resized(_),
+                ..
+            } => {
+                save_window_geom(&app_dir_for_state, w_for_state.as_ref());
+            }
+            Event::WindowEvent {
+                event: WindowEvent::Moved(_),
+                ..
+            } => {
+                save_window_geom(&app_dir_for_state, w_for_state.as_ref());
+            }
+            // 目录监听事件：watcher 线程经 proxy 唤醒，此处回主线程派发到 WebView
+            Event::UserEvent(_) => {
+                if let Some(q) = WEBVIEW_EVENTS.get() {
+                    let pending: Vec<String> = q.lock().unwrap().drain(..).collect();
+                    if let Ok(g) = wv_for_key.lock() {
+                        if let Some(w) = g.as_ref() {
+                            for js in pending {
+                                let _ = w.evaluate_script(&js);
+                            }
+                        }
+                    }
+                }
+            }
+            // F12 兜底路径：应用自己 preventDefault 掉 keydown 时，WebView2 会把
+            // 未处理的加速键转发给宿主窗口，这里仍能收到。主路径是 init script
+            // 里的页面内 keydown 监听，两条路都指向同一个 hx_open_devtools。
+            Event::WindowEvent {
+                event:
+                    WindowEvent::KeyboardInput {
+                        event:
+                            KeyEvent {
+                                physical_key: KeyCode::F12,
+                                state: ElementState::Pressed,
+                                ..
+                            },
+                        ..
+                    },
+                ..
+            } if dev_enabled => {
+                hx_open_devtools(&wv_for_key);
+            }
+            _ => {}
         }
     });
+}
+
+/// 打开 WebView2 开发者工具（dev 运行模式的 F12 落点）。
+///
+/// 这里**不写** `#[cfg(feature = "devtools")]`：那是 wry 的 feature，不是本
+/// crate 的，写在 hx-shell 里只是个永不成立的空 cfg（rustc 会报 unexpected
+/// cfg 并静默编译掉整段）。真正的门在 wry 侧 —— Cargo.toml 常开
+/// `wry/devtools` 后 `open_devtools()` 在 release 下就存在。
+///
+/// Windows 下 wry 的 `close_devtools` / `is_devtools_open` 都是空实现，所以
+/// 用一个进程级标志去重：重复按 F12 不再叠开新窗口，重开应用即可再次调试。
+fn hx_open_devtools(wv: &std::sync::Mutex<Option<wry::WebView>>) -> serde_json::Value {
+    static OPENED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if OPENED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        hx_log("devtools already opened — ignoring repeat F12");
+        return serde_json::json!({ "ok": true, "data": "already_open" });
+    }
+    let opened = match wv.lock() {
+        Ok(guard) => match guard.as_ref() {
+            Some(webview) => {
+                webview.open_devtools();
+                hx_log("devtools opened (F12)");
+                true
+            }
+            None => false,
+        },
+        Err(e) => {
+            hx_log(&format!("devtools lock poisoned: {e}"));
+            false
+        }
+    };
+    if !opened {
+        OPENED.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+    serde_json::json!({ "ok": opened })
 }
 
 // HTML 转义（防 XSS / 路径特殊字符破坏页面结构）
@@ -1668,4 +2109,37 @@ fn exe_dir() -> PathBuf {
         .ok()
         .and_then(|p| p.parent().map(|d| d.to_path_buf()))
         .unwrap_or_else(|| PathBuf::from("."))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn range_full_form() {
+        assert_eq!(parse_range_header("bytes=0-1023", 5000), Some((0, 1023)));
+    }
+
+    #[test]
+    fn range_open_ended() {
+        assert_eq!(parse_range_header("bytes=1000-", 5000), Some((1000, 4999)));
+    }
+
+    #[test]
+    fn range_suffix() {
+        assert_eq!(parse_range_header("bytes=-500", 5000), Some((4500, 4999)));
+    }
+
+    #[test]
+    fn range_rejects_malformed() {
+        assert_eq!(parse_range_header("items=0-1", 5000), None);
+        assert_eq!(parse_range_header("bytes=abc", 5000), None);
+        assert_eq!(parse_range_header("bytes=0", 5000), None);
+    }
+
+    #[test]
+    fn range_empty_file_no_underflow() {
+        // total=0 不得 panic；调用方以 start < total 判为 416
+        assert_eq!(parse_range_header("bytes=0-", 0), Some((0, 0)));
+    }
 }
