@@ -39,9 +39,9 @@ export function InlineClarifyCard({
         {/* Header — compact: avatar · name · meta */}
         <div className="flex items-center gap-2 mb-1.5">
           <div className="approval-avatar" style={{ background: "var(--color-info-soft)", color: "var(--color-info)" }}>
-            <HelpCircle size={12} />
+            <HelpCircle className="icon-sm" />
           </div>
-          <span className="text-[12.5px] font-semibold text-text-primary">Hermix 在问</span>
+          <span className="text-[13px] font-semibold text-text-primary">Hermix 在问</span>
           <span className="h-tiny">{"\u00b7"} 等待你的回答</span>
         </div>
 
@@ -50,7 +50,7 @@ export function InlineClarifyCard({
           {/* Line 1: Question text */}
           <div className="approval-pills" style={{ alignItems: "flex-start" }}>
             <span className="approval-tool-pill" style={{ maxWidth: "100%", whiteSpace: "normal" }}>
-              <HelpCircle size={11} className="shrink-0 mt-0.5" />
+              <HelpCircle className="icon-sm shrink-0 mt-0.5" />
               <span style={{ lineHeight: 1.5 }}>{request.question}</span>
             </span>
             <span className="approval-pill approval-pill-pending ml-auto">
@@ -95,7 +95,7 @@ export function InlineClarifyCard({
                 className="approval-btn approval-btn-approve"
                 style={{ height: 30, padding: "0 12px" }}
               >
-                <Send size={12} />
+                <Send className="icon-sm" />
                 发送
               </button>
             </div>

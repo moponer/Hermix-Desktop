@@ -59,11 +59,18 @@ export interface MessageListProps {
   onTodoPatch?: (id: string, patch: { status?: string; title?: string; priority?: string }) => Promise<unknown>;
   justPatchedTodoRef?: React.MutableRefObject<Set<string>>;
   onPathClick?: (path: string) => void;
-  onApproveApproval?: (requestId: string) => void;
+  onApproveApproval?: (requestId: string, remember?: boolean) => void;
   onDenyApproval?: (requestId: string) => void;
+  onApproveBatchApproval?: (batchId: string, remember?: boolean) => void;
+  onDenyBatchApproval?: (batchId: string) => void;
+  onReasoningFoldChange?: (folded: boolean) => void;
   onAnswerClarify?: (requestId: string, answer: string) => void;
   workspaceRoot?: string | null;
   sending: boolean;
+  /** Captured reasoning lines for the bottom-of-chat ticker. */
+  reasoningLines?: string[];
+  /** Whether the latest reported fold state is "folded". */
+  reasoningFolded?: boolean;
 }
 
 // Memoized wrapper around the full MessageBubble.
@@ -72,6 +79,9 @@ const MemoMessageBubble = memo(MessageBubble, (prev, next) => {
   if (prev.workspaceRoot !== next.workspaceRoot) return false;
   if (prev.onApproveApproval !== next.onApproveApproval) return false;
   if (prev.onDenyApproval !== next.onDenyApproval) return false;
+  if (prev.onApproveBatchApproval !== next.onApproveBatchApproval) return false;
+  if (prev.onDenyBatchApproval !== next.onDenyBatchApproval) return false;
+  if (prev.onReasoningFoldChange !== next.onReasoningFoldChange) return false;
   if (prev.onAnswerClarify !== next.onAnswerClarify) return false;
   if (prev.showHeader !== next.showHeader) return false;
   if (prev.isStreaming !== next.isStreaming) return false;
@@ -108,9 +118,14 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
     onPathClick,
     onApproveApproval,
     onDenyApproval,
+    onApproveBatchApproval,
+    onDenyBatchApproval,
+    onReasoningFoldChange,
     onAnswerClarify,
     workspaceRoot,
     sending,
+    reasoningLines,
+    reasoningFolded,
   } = props;
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -213,7 +228,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
   return (
     <div className="relative flex-1 min-h-0">
       <div ref={scrollContainerRef} onScroll={handleContainerScroll} className="absolute inset-0 overflow-y-auto px-3 sm:px-4 py-5">
-        <div className="msg-stream-list max-w-[720px] lg:max-w-[800px] xl:max-w-[920px] mx-auto space-y-5">
+        <div className="msg-stream-list max-w-wide lg:max-w-[800px] xl:max-w-[920px] mx-auto space-y-5">
           {streamRow.map((row, idx) => {
             if (row.kind === "todo") {
               return (
@@ -256,6 +271,9 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
                 workspaceRoot={workspaceRoot}
                 onApproveApproval={onApproveApproval}
                 onDenyApproval={onDenyApproval}
+                onApproveBatchApproval={onApproveBatchApproval}
+                onDenyBatchApproval={onDenyBatchApproval}
+                onReasoningFoldChange={onReasoningFoldChange}
                 onAnswerClarify={onAnswerClarify}
                 showHeader={showHeader}
                 isStreaming={!!streamingAssistantId && msg.id === streamingAssistantId}
@@ -325,6 +343,8 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
                   pendingToolsCount={pendingToolsCount}
                   visible
                   replying={isStreaming}
+                  reasoningLines={reasoningLines}
+                  reasoningFolded={reasoningFolded ?? false}
                 />
               );
             }
@@ -353,7 +373,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
 
       {showScrollToBottom && (
         <div className="absolute left-0 right-0 bottom-5 z-20 pointer-events-none">
-          <div className="max-w-[720px] lg:max-w-[800px] xl:max-w-[920px] mx-auto px-3 sm:px-4 relative">
+          <div className="max-w-wide lg:max-w-[800px] xl:max-w-[920px] mx-auto px-3 sm:px-4 relative">
             <button
               type="button"
               onClick={() => scrollToBottom(true)}
@@ -367,7 +387,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
               title="滚动到底部"
               aria-label="滚动到底部"
             >
-              <ArrowDown size={18} />
+              <ArrowDown className="icon-lg" />
             </button>
           </div>
         </div>

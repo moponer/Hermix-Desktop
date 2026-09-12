@@ -16,6 +16,7 @@ import type { Workspace } from "../hooks/useWorkspaces";
 import type { ExpertDef } from "../data/builtinExperts";
 import type { QueuedMessage, Session } from "../types";
 import type { CustomAppSummary } from "../lib/customAppApi";
+import type { WorkspaceEntry } from "../types";
 import type { PendingImage } from "./chatUtils";
 
 export interface ComposerProps {
@@ -73,6 +74,8 @@ export interface ComposerProps {
   onSendFromQueue?: (idx: number) => void;
   session?: Session | null;
   customApps?: CustomAppSummary[];
+  /** 已建工作台（@work 联想数据源）。 */
+  workbenches?: WorkspaceEntry[];
 }
 
 export function Composer(p: ComposerProps) {
@@ -116,7 +119,7 @@ export function Composer(p: ComposerProps) {
 
   return (
     <div
-      className="rounded-2xl transition-all relative"
+      className="rounded-xl transition-colors relative"
       style={{
         background: "var(--color-bg-primary)",
         border: "1px solid var(--color-border-primary)",
@@ -149,7 +152,7 @@ export function Composer(p: ComposerProps) {
     >
       {draggingFiles && (
         <div
-          className="absolute inset-0 z-10 rounded-2xl flex items-center justify-center pointer-events-none"
+          className="absolute inset-0 z-10 rounded-xl flex items-center justify-center pointer-events-none"
           style={{
             background: "color-mix(in srgb, var(--color-chip-workspace-fg) 12%, transparent)",
             border: "2px dashed color-mix(in srgb, var(--color-chip-workspace-fg) 60%, transparent)",
@@ -177,7 +180,7 @@ export function Composer(p: ComposerProps) {
                   className="max-w-full max-h-full object-contain"
                 />
                 {img.isCompressed && (
-                  <span className="absolute bottom-0 left-0 right-0 text-[8px] leading-tight bg-black/65 text-white text-center">
+                  <span className="absolute bottom-0 left-0 right-0 text-[11px] leading-tight bg-black/65 text-white text-center">
                     {formatBytes(img.sizeBytes)}
                   </span>
                 )}
@@ -260,6 +263,7 @@ export function Composer(p: ComposerProps) {
         onKeyDown={p.handleKeyDown}
         textareaRef={p.textareaRef}
         apps={p.customApps ?? []}
+        workbenches={p.workbenches}
         isStreaming={p.isStreaming}
         placeholder={p.placeholder}
         onFilesAttach={p.onFilesAttach}
@@ -274,7 +278,7 @@ export function Composer(p: ComposerProps) {
           <div className="relative">
             <button
               onClick={() => setExpertPanelOpen((v) => !v)}
-              className={`flex items-center shrink-0 text-[12.5px] transition-colors rounded-md ${
+              className={`flex items-center shrink-0 text-[13px] transition-colors rounded-md ${
                 toolbarCompact ? "px-1.5 py-1" : "gap-1.5 px-2 py-1 max-w-[140px]"
               } ${
                 p.expert
@@ -285,7 +289,7 @@ export function Composer(p: ComposerProps) {
               }`}
               title={p.expert ? `已雇佣：${p.expert.name}` : "选择专家"}
             >
-              <Sparkles size={12} className={p.expert ? "text-[color:var(--color-chip-model-fg)]" : "text-text-muted"} />
+              <Sparkles className={`icon-sm ${p.expert ? "text-[color:var(--color-chip-model-fg)]" : "text-text-muted"}`} />
               <span
                 className={toolbarCompact ? "max-w-0 overflow-hidden whitespace-nowrap" : "truncate"}
               >
@@ -297,7 +301,7 @@ export function Composer(p: ComposerProps) {
                   onClick={(e) => { e.stopPropagation(); p.setExpert(null); }}
                   className="ml-0.5 hover:opacity-70 shrink-0 text-text-muted"
                 >
-                  <X size={11} />
+                  <X className="icon-sm" />
                 </span>
               )}
             </button>
@@ -311,7 +315,7 @@ export function Composer(p: ComposerProps) {
                 projToggle();
               }}
               disabled={p.workspaceLocked}
-              className={`flex items-center shrink-0 text-[12.5px] transition-colors rounded-md ${
+              className={`flex items-center shrink-0 text-[13px] transition-colors rounded-md ${
                 toolbarCompact ? "px-1.5 py-1" : "gap-1.5 px-2 py-1 max-w-[160px]"
               } ${
                 p.workspaceLocked
@@ -329,9 +333,9 @@ export function Composer(p: ComposerProps) {
               }
             >
               {p.workspaceLocked ? (
-                <Lock size={12} className="text-text-faint" />
+                <Lock className="icon-sm text-text-faint" />
               ) : (
-                <FolderOpen size={12} className={p.activeWorkspace ? "text-[color:var(--color-chip-workspace-fg)]" : "text-text-faint"} />
+                <FolderOpen className={`icon-sm ${p.activeWorkspace ? "text-[color:var(--color-chip-workspace-fg)]" : "text-text-faint"}`} />
               )}
               <span
                 className={toolbarCompact ? "max-w-0 overflow-hidden whitespace-nowrap" : "truncate"}
@@ -351,7 +355,7 @@ export function Composer(p: ComposerProps) {
                 {p.workspaces.length > 0 && (
                   <>
                     <div className="my-1 border-t border-border-primary" />
-                    <div className="px-2.5 py-1 text-[11.5px] text-text-secondary font-medium">工作目录</div>
+                    <div className="px-2.5 py-1 text-[12px] text-text-secondary font-medium">工作目录</div>
                     <PopoverBody maxHeight="max-h-48">
                       {p.workspaces.map((ws) => (
                         <button
@@ -362,12 +366,12 @@ export function Composer(p: ComposerProps) {
                           }`}
                           title={ws.path}
                         >
-                          <FolderOpen size={15} className="shrink-0 text-[color:var(--color-chip-workspace-fg)] opacity-70" />
+                          <FolderOpen className="icon-md shrink-0 text-[color:var(--color-chip-workspace-fg)] opacity-70" />
                           <div className="flex-1 min-w-0">
-                            <div className="text-[12.5px] text-text-primary truncate">{ws.name}</div>
-                            <div className="text-[10.5px] text-text-faint truncate">{ws.path}</div>
+                            <div className="text-[13px] text-text-primary truncate">{ws.name}</div>
+                            <div className="text-[11px] text-text-faint truncate">{ws.path}</div>
                           </div>
-                          {p.activeWorkspace?.id === ws.id && <Check size={14} className="text-[color:var(--color-chip-workspace-fg)] shrink-0" />}
+                          {p.activeWorkspace?.id === ws.id && <Check className="icon-md text-[color:var(--color-chip-workspace-fg)] shrink-0" />}
                         </button>
                       ))}
                     </PopoverBody>
@@ -388,7 +392,7 @@ export function Composer(p: ComposerProps) {
             <button
               ref={permTriggerRef as React.RefObject<HTMLButtonElement>}
               onClick={permToggle}
-              className={`flex items-center shrink-0 text-[12.5px] transition-colors rounded-md ${
+              className={`flex items-center shrink-0 text-[13px] transition-colors rounded-md ${
                 toolbarCompact ? "px-1.5 py-1" : "gap-1.5 px-2 py-1 max-w-[160px]"
               } ${
                 p.permissionLevel === "full"
@@ -398,8 +402,8 @@ export function Composer(p: ComposerProps) {
               title="权限级别"
             >
               {p.permissionLevel === "full"
-                ? <AlertTriangle size={12} className="text-[color:var(--color-chip-permission-fg)]" />
-                : <ShieldCheck size={12} className="text-text-muted" />}
+                ? <AlertTriangle className="icon-sm text-[color:var(--color-chip-permission-fg)]" />
+                : <ShieldCheck className="icon-sm text-text-muted" />}
               <span
                 className={toolbarCompact ? "max-w-0 overflow-hidden whitespace-nowrap" : "truncate"}
               >
@@ -408,7 +412,7 @@ export function Composer(p: ComposerProps) {
             </button>
             {permOpen && (
               <PopoverShell containerRef={permContainerRef} triggerRef={permTriggerRef} width="md" side="top">
-                <div className="px-2.5 py-1 text-[11.5px] text-text-secondary font-medium">权限级别</div>
+                <div className="px-2.5 py-1 text-[12px] text-text-secondary font-medium">权限级别</div>
                 <PopoverBody maxHeight="max-h-48">
                   {PERMISSION_LEVELS.map((lvl) => (
                     <button
@@ -421,14 +425,14 @@ export function Composer(p: ComposerProps) {
                       <div className="flex items-start gap-2">
                         <span className="shrink-0 mt-0.5">
                           {lvl.id === "full"
-                            ? <AlertTriangle size={16} className="text-[color:var(--color-chip-permission-fg)]" />
-                            : <ShieldCheck size={16} className="text-[color:var(--color-chip-workspace-fg)]" />}
+                            ? <AlertTriangle className="icon-lg text-[color:var(--color-chip-permission-fg)]" />
+                            : <ShieldCheck className="icon-lg text-[color:var(--color-chip-workspace-fg)]" />}
                         </span>
                         <div className="flex-1 min-w-0">
-                          <div className="text-[12.5px] text-text-primary font-medium">{lvl.label}</div>
-                          <div className="text-[10.5px] text-text-faint mt-0.5 leading-snug">{lvl.description}</div>
+                          <div className="text-[13px] text-text-primary font-medium">{lvl.label}</div>
+                          <div className="text-[11px] text-text-faint mt-0.5 leading-snug">{lvl.description}</div>
                         </div>
-                        {p.permissionLevel === lvl.id && <Check size={14} className="text-[color:var(--color-chip-model-fg)] shrink-0 mt-0.5" />}
+                        {p.permissionLevel === lvl.id && <Check className="icon-md text-[color:var(--color-chip-model-fg)] shrink-0 mt-0.5" />}
                       </div>
                     </button>
                   ))}
@@ -443,16 +447,16 @@ export function Composer(p: ComposerProps) {
             <button
               ref={modelTriggerRef as React.RefObject<HTMLButtonElement>}
               onClick={(p.byProvider && p.byProvider.length > 0) ? modelToggle : () => { p.onOpenSettings?.("model"); setModelOpen(false); }}
-              className={`flex items-center gap-1.5 px-2 py-1 text-[12.5px] transition-colors rounded-md max-w-[240px] ${
+              className={`flex items-center gap-1.5 px-2 py-1 text-[13px] transition-colors rounded-md max-w-narrow ${
                 (p.byProvider && p.byProvider.length > 0)
                   ? "text-text-secondary hover:bg-bg-hover hover:text-text-primary cursor-pointer"
                   : "text-[color:var(--color-chip-permission-fg)] hover:bg-[#FAECE7]/60 cursor-pointer"
               }`}
               title={(p.byProvider && p.byProvider.length > 0) ? "切换模型" : "未配置模型，点击直达 设置 → 模型配置"}
             >
-              <ProviderIcon providerId={p.selectedModel?.split(":")[0] || "custom"} size={14} title={p.selectedModel} />
+              <ProviderIcon providerId={p.selectedModel?.split(":")[0] || "custom"} className="icon-md" title={p.selectedModel} />
               <span className="truncate">{p.currentDisplay}</span>
-              <ChevronDown size={11} className="shrink-0 opacity-60" />
+              <ChevronDown className="icon-sm shrink-0 opacity-60" />
             </button>
             {modelOpen && (
               <PopoverShell containerRef={modelContainerRef} triggerRef={modelTriggerRef} align="right" width="md" side="top">
@@ -461,7 +465,7 @@ export function Composer(p: ComposerProps) {
                     <span className="inline-block w-1 h-4 rounded-sm bg-accent" aria-hidden="true" />
                     <span className="text-[13px] text-text-primary font-semibold tracking-wide">切换模型</span>
                   </div>
-                  <span className="text-[10.5px] text-text-muted font-mono">
+                  <span className="text-[11px] text-text-muted font-mono">
                     {p.byProvider.reduce((acc, g) => acc + g.models.length, 0)} 个 · {p.byProvider.length} 厂商
                   </span>
                 </div>
@@ -469,7 +473,7 @@ export function Composer(p: ComposerProps) {
                   {!p.byProvider || p.byProvider.length === 0 ? (
                     <div className="px-2.5 py-3 text-center">
                       <p className="text-[12px] text-text-muted">暂无可用模型</p>
-                      <p className="text-[10.5px] text-text-muted mt-1">请到「设置 → 模型管理」添加</p>
+                      <p className="text-[11px] text-text-muted mt-1">请到「设置 → 模型管理」添加</p>
                     </div>
                   ) : (
                     <>
@@ -493,17 +497,17 @@ export function Composer(p: ComposerProps) {
                               aria-expanded={expanded}
                             >
                               {expanded
-                                ? <ChevronDown size={11} className="text-text-muted shrink-0" />
-                                : <ChevronRight size={11} className="text-text-muted shrink-0" />
+                                ? <ChevronDown className="icon-sm text-text-muted shrink-0" />
+                                : <ChevronRight className="icon-sm text-text-muted shrink-0" />
                               }
-                              <ProviderIcon providerId={group.provider} size={13} title={group.provider} />
-                              <span className="text-[11.5px] text-text-secondary font-medium truncate">
+                              <ProviderIcon providerId={group.provider} className="icon-md" title={group.provider} />
+                              <span className="text-[12px] text-text-secondary font-medium truncate">
                                 {group.provider}
                                 {group.isCustom && (
-                                  <span className="ml-1 text-[10px] text-text-faint">· 自定义</span>
+                                  <span className="ml-1 text-[11px] text-text-faint">· 自定义</span>
                                 )}
                               </span>
-                              <span className="text-[10px] text-text-faint font-mono ml-auto shrink-0">
+                              <span className="text-[11px] text-text-faint font-mono ml-auto shrink-0">
                                 {group.models.length}
                                 {currentModelDisplay && (
                                   <span className="ml-1.5 text-text-muted truncate">
@@ -527,7 +531,7 @@ export function Composer(p: ComposerProps) {
                                     }`}
                                   >
                                     <span className="truncate font-mono text-[12px] text-text-primary">{m.display}</span>
-                                    {p.selectedModel === m.id && <Check size={13} className="text-[color:var(--color-chip-model-fg)] shrink-0" />}
+                                    {p.selectedModel === m.id && <Check className="icon-md text-[color:var(--color-chip-model-fg)] shrink-0" />}
                                   </button>
                                 ))}
                               </div>
@@ -577,7 +581,7 @@ export function Composer(p: ComposerProps) {
                   <button
                     onClick={p.handleSubmit}
                     disabled={sendDisabled}
-                    className="relative flex items-center justify-center w-8 h-8 rounded-lg transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+                    className="relative flex items-center justify-center w-8 h-8 rounded-lg transition-opacity disabled:opacity-30 disabled:cursor-not-allowed"
                     style={{
                       background: hasContent && canQueue
                         ? "var(--color-success, #16a34a)"
@@ -586,9 +590,9 @@ export function Composer(p: ComposerProps) {
                           : "var(--color-bg-tertiary)",
                       color: hasContent ? "white" : "var(--color-text-faint)",
                     }}
-                    title={canQueue ? "加入队列,等当前回复完成后自动发送 (Enter)" : "发送 (Enter)"}
+                    title={canQueue ? "加入队列，等当前回复完成后自动发送 (Enter)" : "发送 (Enter)"}
                   >
-                    <Send size={13} />
+                    <Send className="icon-md" />
                     {canQueue && (
                       <Clock
                         size={9}
@@ -604,7 +608,7 @@ export function Composer(p: ComposerProps) {
                 {showStopButton && (
                   <button
                     onClick={() => p.onStop?.(p.activeComposerSessionId)}
-                    className="flex items-center justify-center w-7 h-7 rounded-md transition-all hover:opacity-90"
+                    className="flex items-center justify-center w-7 h-7 rounded-md transition-opacity hover:opacity-90"
                     style={{
                       background:
                         "color-mix(in srgb, var(--color-error, #dc2626) 14%, transparent)",
@@ -612,7 +616,7 @@ export function Composer(p: ComposerProps) {
                     }}
                     title={
                       p.messageQueue && p.messageQueue.length > 0
-                        ? `插话:停止当前回复并发送队列中的 ${p.messageQueue.length} 条消息`
+                        ? `插话：停止当前回复并发送队列中的 ${p.messageQueue.length} 条消息`
                         : "停止生成"
                     }
                   >

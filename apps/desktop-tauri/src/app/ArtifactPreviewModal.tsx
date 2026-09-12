@@ -62,7 +62,7 @@ export function ArtifactPreviewModal({
         // not "floating void"
         className="flex flex-col shadow-2xl
                    w-[min(1100px,92vw)] h-[88vh] mt-[5vh] mb-[5vh]
-                   rounded-2xl overflow-hidden
+                   rounded-xl overflow-hidden
                    border border-[color:var(--color-border-subtle)]
                    outline outline-2 outline-[color:color-mix(in_srgb,var(--color-text-primary)_6%,transparent)]
                    outline-offset-[-2px]

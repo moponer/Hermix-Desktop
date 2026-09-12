@@ -187,7 +187,7 @@ export function ComputerTab({
             className="computer-nav-btn"
             aria-label="后退"
           >
-            <ArrowLeft size={14} />
+            <ArrowLeft className="icon-md" />
           </button>
           <button
             type="button"
@@ -197,7 +197,7 @@ export function ComputerTab({
             className="computer-nav-btn"
             aria-label="前进"
           >
-            <ArrowRight size={14} />
+            <ArrowRight className="icon-md" />
           </button>
           <button
             type="button"
@@ -207,7 +207,7 @@ export function ComputerTab({
             className="computer-nav-btn"
             aria-label="上一级"
           >
-            <ArrowUp size={14} />
+            <ArrowUp className="icon-md" />
           </button>
           <button
             type="button"
@@ -217,7 +217,7 @@ export function ComputerTab({
             className="computer-nav-btn"
             aria-label="刷新"
           >
-            <RefreshCw size={13} className={loading ? "animate-spin" : ""} />
+            <RefreshCw className={`icon-md ${loading ? "animate-spin" : ""}`} />
           </button>
         </div>
 
@@ -250,7 +250,7 @@ export function ComputerTab({
             title="列表视图"
             aria-label="列表视图"
           >
-            <List size={13} />
+            <List className="icon-md" />
           </button>
           <button
             type="button"
@@ -259,7 +259,7 @@ export function ComputerTab({
             title="详细信息"
             aria-label="详细信息"
           >
-            <FileText size={13} />
+            <FileText className="icon-md" />
           </button>
           <button
             type="button"
@@ -268,7 +268,7 @@ export function ComputerTab({
             title="大图标视图"
             aria-label="大图标视图"
           >
-            <LayoutGrid size={13} />
+            <LayoutGrid className="icon-md" />
           </button>
         </div>
       </div>
@@ -276,13 +276,13 @@ export function ComputerTab({
       <div ref={scrollRef} className="flex-1 overflow-y-auto computer-body min-h-0">
         {loading && (
           <div className="flex items-center gap-2 px-3 py-8 justify-center text-xs text-text-muted">
-            <Loader2 size={14} className="animate-spin" />
-            正在加载目录…
+            <Loader2 className="icon-md animate-spin" />
+            加载中…
           </div>
         )}
         {error && (
           <div className="flex items-start gap-2 px-3 py-4 text-xs text-error">
-            <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+            <AlertTriangle className="icon-md shrink-0 mt-0.5" />
             <span className="break-words [overflow-wrap:anywhere] whitespace-pre-wrap min-w-0 flex-1">{error}</span>
           </div>
         )}
@@ -308,9 +308,9 @@ export function ComputerTab({
               >
                 <span className="computer-list-icon">
                   {entry.isDir ? (
-                    <Folder size={13} className="text-accent" />
+                    <Folder className="icon-md text-accent" />
                   ) : (
-                    <FileTypeIcon name={entry.name} size={13} />
+                    <FileTypeIcon name={entry.name} className="icon-md" />
                   )}
                 </span>
                 <span className="computer-list-name truncate">{entry.name}</span>
@@ -340,9 +340,9 @@ export function ComputerTab({
                 <span className="computer-detail-col-name">
                   <span className="computer-list-icon">
                     {entry.isDir ? (
-                      <Folder size={13} className="text-accent" />
+                      <Folder className="icon-md text-accent" />
                     ) : (
-                      <FileTypeIcon name={entry.name} size={13} />
+                      <FileTypeIcon name={entry.name} className="icon-md" />
                     )}
                   </span>
                   <span className="truncate">{entry.name}</span>

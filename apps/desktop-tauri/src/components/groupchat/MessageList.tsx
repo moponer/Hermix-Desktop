@@ -154,9 +154,9 @@ export const MessageList = memo(function MessageList({
           </p>
           {onOpenMembers && (
             <button onClick={onOpenMembers}
-              className="flex items-center gap-1.5 px-5 rounded-lg text-[13px] font-medium transition-all active:scale-95"
+              className="flex items-center gap-1.5 px-5 rounded-lg text-[13px] font-medium transition-[color,background-color,border-color,transform] active:scale-95"
               style={{ height: 36, background: "var(--color-accent)", color: "var(--color-accent-on-text)" }}>
-              <UserPlus size={14} />邀请成员
+              <UserPlus className="icon-md" />邀请成员
             </button>
           )}
         </div>

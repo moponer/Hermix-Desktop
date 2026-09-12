@@ -71,28 +71,28 @@ export function RightSidebar({ open, onClose, artifacts, selectedId, onSelectArt
         <TabButton
           active={activeTab === "computer"}
           onClick={() => setActiveTab("computer")}
-          icon={<Monitor size={13} />}
+          icon={<Monitor className="icon-md" />}
           label="电脑"
         />
         <TabButton
           active={activeTab === "products"}
           onClick={() => setActiveTab("products")}
-          icon={<FolderOpen size={13} />}
+          icon={<FolderOpen className="icon-md" />}
           label="产物"
           badge={artifacts.length > 0 ? artifacts.length : undefined}
         />
         <TabButton
           active={activeTab === "browser"}
           onClick={() => setActiveTab("browser")}
-          icon={<Globe size={13} />}
+          icon={<Globe className="icon-md" />}
           label="浏览器"
         />
         <button
           onClick={onClose}
           title="关闭右侧栏"
           className="ml-auto p-1.5 m-1 rounded-md hover:bg-bg-hover text-text-muted hover:text-text-primary transition-colors"
-         aria-label="关闭右侧栏">
-          <X size={13} />
+          aria-label="关闭右侧栏">
+          <X className="icon-md" />
         </button>
       </div>
 
@@ -153,7 +153,7 @@ function TabButton({
       {icon}
       {label}
       {badge !== undefined && (
-        <span className="ml-1 px-1.5 py-0.5 text-[10px] rounded-full bg-accent/20 text-accent">
+        <span className="ml-1 px-1.5 py-0.5 text-[11px] rounded-full bg-accent/20 text-accent">
           {badge}
         </span>
       )}

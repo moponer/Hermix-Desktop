@@ -19,7 +19,7 @@
 //   like "rename all files").
 
 import { useState, useCallback, useMemo, type MutableRefObject } from "react";
-import { ChevronDown, ChevronRight, ListTodo, Loader2 } from "lucide-react";
+import { ChevronDown, ChevronRight, ListTodo, Loader2, Check, X, Circle } from "lucide-react";
 import { clsx } from "clsx";
 import * as api from "../api";
 import type { TodoItem } from "../api";
@@ -39,8 +39,11 @@ function priorityLabel(p: string): string {
   return p === "high" ? "高" : p === "low" ? "低" : "中";
 }
 
-function statusGlyph(s: string): string {
-  return s === "completed" ? "✓" : s === "failed" ? "✗" : s === "in_progress" ? "◐" : "○";
+function statusGlyph(s: string) {
+  if (s === "completed") return <Check className="icon-sm text-success" />;
+  if (s === "failed") return <X className="icon-sm text-error" />;
+  if (s === "in_progress") return <Loader2 className="icon-sm animate-spin text-warning" />;
+  return <Circle className="icon-sm text-text-faint" />;
 }
 
 export interface TodoListCardProps {
@@ -125,9 +128,9 @@ toastError("任务状态更新失败");
         type="button"
       >
         {collapsed
-          ? <ChevronRight size={12} className="todo-card-chevron" />
-          : <ChevronDown size={12} className="todo-card-chevron" />}
-        <ListTodo size={13} className="todo-card-icon" />
+          ? <ChevronRight className="icon-sm todo-card-chevron" />
+          : <ChevronDown className="icon-sm todo-card-chevron" />}
+        <ListTodo className="icon-md todo-card-icon" />
         <span className="todo-card-title">
           {groupTitle || "任务清单"}
         </span>
@@ -192,7 +195,7 @@ function TodoRow({
         aria-pressed={isDone}
       >
         {busy
-          ? <Loader2 size={12} className="todo-row-spin" />
+          ? <Loader2 className="icon-sm todo-row-spin" />
           : <span className="todo-row-glyph">{statusGlyph(item.status)}</span>}
       </button>
       <div className="todo-row-body">

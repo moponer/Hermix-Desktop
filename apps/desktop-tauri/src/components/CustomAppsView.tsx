@@ -179,7 +179,7 @@ export function CustomAppsView({ onStartCreateApp }: { onStartCreateApp?: () => 
             }}
             title="创建新应用"
           >
-            <Plus size={16} />
+            <Plus className="icon-lg" />
             创建新应用
           </button>
           <button
@@ -188,7 +188,7 @@ export function CustomAppsView({ onStartCreateApp }: { onStartCreateApp?: () => 
             disabled={loading}
             title="刷新"
           >
-            <RefreshCw size={16} className={loading ? "spin" : ""} />
+            <RefreshCw className={`icon-lg ${loading ? "spin" : ""}`} />
           </button>
         </div>
         <p className="custom-apps-view__subtitle">
@@ -209,7 +209,7 @@ export function CustomAppsView({ onStartCreateApp }: { onStartCreateApp?: () => 
 
       <div className="custom-apps-view__toolbar">
         <div className="custom-apps-view__search">
-          <Search size={16} />
+          <Search className="icon-lg" />
           <input
             type="text"
             placeholder="搜索应用..."
@@ -223,7 +223,7 @@ export function CustomAppsView({ onStartCreateApp }: { onStartCreateApp?: () => 
         {loading && apps.length === 0 ? (
           <div className="custom-apps-view__empty">
             <div className="custom-apps-view__empty-spinner" />
-            <p>加载中...</p>
+            <p>加载中…</p>
           </div>
         ) : filteredApps.length === 0 ? (
           <div className="custom-apps-view__empty">
@@ -273,7 +273,7 @@ export function CustomAppsView({ onStartCreateApp }: { onStartCreateApp?: () => 
           aria-labelledby="delete-confirm-title"
         >
           <div
-            className="rounded-2xl p-5 max-w-md w-[90%] shadow-xl"
+            className="rounded-xl p-5 max-w-md w-[90%] shadow-xl"
             style={{ background: "var(--color-bg-elevated)", border: "1px solid var(--color-border-primary)" }}
             onClick={(e) => e.stopPropagation()}
           >

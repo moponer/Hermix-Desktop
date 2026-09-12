@@ -9,6 +9,7 @@
  */
 import { useState, useRef, useEffect } from "react";
 import { Loader2, X, Pencil, Send } from "lucide-react";
+import { ReasoningTicker } from "./ReasoningTicker";
 
 /**
  * AgentActivityIndicator — single source of truth for "agent is still
@@ -28,11 +29,20 @@ export function AgentActivityIndicator({
   pendingToolsCount,
   visible,
   replying = false,
+  reasoningLines,
+  reasoningFolded = false,
 }: {
   pendingToolsCount: number;
   visible: boolean;
   /** true when the LLM is actively streaming the answer body. */
   replying?: boolean;
+  /** Captured reasoning lines from the active turn. Rendered as a
+   *  single-line rolling ticker beside the pill when present and
+   *  the user has folded the reasoning block. */
+  reasoningLines?: string[];
+  /** Whether the reasoning fold is currently closed. The ticker
+   *  only mounts when both this and `reasoningLines` are present. */
+  reasoningFolded?: boolean;
 }) {
   if (!visible) return null;
   const runningTools = pendingToolsCount > 0;
@@ -54,12 +64,17 @@ export function AgentActivityIndicator({
     label = "正在分析结果…";
     state = "thinking";
   }
+  const tickerEl =
+    reasoningFolded && reasoningLines && reasoningLines.length > 0 ? (
+      <ReasoningTicker lines={reasoningLines} />
+    ) : null;
   return (
     <div className="msg-channel agent-activity" data-state={state}>
       <div className="agent-activity-pill">
-        <Loader2 size={11} className="animate-spin text-text-accent" />
+        <Loader2 className="icon-sm animate-spin text-text-accent" />
         <span>{label}</span>
       </div>
+      {tickerEl}
     </div>
   );
 }
@@ -154,7 +169,7 @@ export function QueueItemRow({
 
   return (
     <li className="group flex items-start gap-1.5 rounded px-2 py-1 hover:bg-bg-tertiary/50 transition-colors">
-      <span className="shrink-0 mt-0.5 text-[10px] font-mono tabular-nums text-text-faint w-4 text-center">
+      <span className="shrink-0 mt-0.5 text-[11px] font-mono tabular-nums text-text-faint w-4 text-center">
         {index + 1}
       </span>
 
@@ -179,7 +194,7 @@ export function QueueItemRow({
           <div className="flex items-center gap-1.5 mt-1">
             <button
               onClick={commit}
-              className="text-[10px] px-1.5 py-0.5 rounded font-medium"
+              className="text-[11px] px-1.5 py-0.5 rounded font-medium"
               style={{
                 background: "var(--color-accent)",
                 color: "var(--color-accent-on-text)",
@@ -189,11 +204,11 @@ export function QueueItemRow({
             </button>
             <button
               onClick={cancel}
-              className="text-[10px] text-text-muted hover:text-text-primary px-1.5 py-0.5 rounded hover:bg-bg-tertiary"
+              className="text-[11px] text-text-muted hover:text-text-primary px-1.5 py-0.5 rounded hover:bg-bg-tertiary"
             >
               取消
             </button>
-            <span className="text-[10px] text-text-faint">
+            <span className="text-[11px] text-text-faint">
               Enter 保存 · Shift+Enter 换行 · Esc 取消
             </span>
           </div>
@@ -218,7 +233,7 @@ export function QueueItemRow({
                 aria-label="编辑队列项"
                 className="p-1 rounded text-text-muted hover:text-text-primary hover:bg-bg-tertiary"
               >
-                <Pencil size={11} />
+                <Pencil className="icon-sm" />
               </button>
             )}
             {canSend && (
@@ -228,7 +243,7 @@ export function QueueItemRow({
                 aria-label="立即发送此条"
                 className="p-1 rounded text-text-muted hover:text-accent hover:bg-bg-tertiary"
               >
-                <Send size={11} />
+                <Send className="icon-sm" />
               </button>
             )}
             {canRemove && (
@@ -238,7 +253,7 @@ export function QueueItemRow({
                 aria-label="删除此条"
                 className="p-1 rounded text-text-muted hover:text-red-400 hover:bg-bg-tertiary"
               >
-                <X size={11} />
+                <X className="icon-sm" />
               </button>
             )}
           </div>

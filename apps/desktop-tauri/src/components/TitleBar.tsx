@@ -57,7 +57,7 @@ export function TitleBar({ onToggleSidebar }: TitleBarProps) {
           aria-label="切换侧边栏"
           title="切换侧边栏"
         >
-          <Menu size={18} />
+          <Menu className="icon-lg" />
         </button>
       </div>
 
@@ -76,7 +76,7 @@ export function TitleBar({ onToggleSidebar }: TitleBarProps) {
           title="最小化"
           aria-label="最小化"
         >
-          <Minus size={16} />
+          <Minus className="icon-lg" />
         </button>
         <button
           type="button"
@@ -86,7 +86,7 @@ export function TitleBar({ onToggleSidebar }: TitleBarProps) {
           title="最大化"
           aria-label="最大化"
         >
-          <Square size={14} />
+          <Square className="icon-md" />
         </button>
         <button
           type="button"
@@ -96,7 +96,7 @@ export function TitleBar({ onToggleSidebar }: TitleBarProps) {
           title="关闭"
           aria-label="关闭"
         >
-          <X size={18} />
+          <X className="icon-lg" />
         </button>
       </div>
     </div>

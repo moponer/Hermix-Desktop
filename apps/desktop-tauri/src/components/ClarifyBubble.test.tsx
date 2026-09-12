@@ -17,12 +17,12 @@ describe("ClarifyCard", () => {
   it("renders the question and choice buttons when pending", () => {
     const msg = makeMessage({
       requestId: "r1",
-      question: "选择方案?",
+      question: "选择方案？",
       choices: ["A", "B"],
     });
     render(<ClarifyCard message={msg} />);
     expect(screen.getByText("需要您确认")).toBeTruthy();
-    expect(screen.getByText("选择方案?")).toBeTruthy();
+    expect(screen.getByText("选择方案？")).toBeTruthy();
     expect(screen.getByText("A")).toBeTruthy();
     expect(screen.getByText("B")).toBeTruthy();
   });
@@ -30,7 +30,7 @@ describe("ClarifyCard", () => {
   it("disappears (renders nothing) once answered", () => {
     const msg = makeMessage({
       requestId: "r1",
-      question: "选择方案?",
+      question: "选择方案？",
       choices: ["A", "B"],
       answer: "A",
     });
@@ -41,7 +41,7 @@ describe("ClarifyCard", () => {
   it("does not render the resolved '您的回答' footer when answered", () => {
     const msg = makeMessage({
       requestId: "r1",
-      question: "选择方案?",
+      question: "选择方案？",
       choices: ["A", "B"],
       answer: "A",
     });
@@ -53,7 +53,7 @@ describe("ClarifyCard", () => {
     const onAnswer = vi.fn();
     const msg = makeMessage({
       requestId: "r1",
-      question: "选择方案?",
+      question: "选择方案？",
       choices: ["A", "B"],
     });
     render(<ClarifyCard message={msg} onAnswer={onAnswer} />);

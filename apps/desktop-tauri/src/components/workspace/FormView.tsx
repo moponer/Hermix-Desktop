@@ -12,6 +12,7 @@
 import { useMemo, useState } from "react";
 import type { WorkspaceField, WorkspaceModule } from "../../types";
 import * as api from "../../api";
+import { toastError } from "../../hooks/useToast";
 
 interface FormViewProps {
   module: Extract<WorkspaceModule, { type: "table" }>;
@@ -97,7 +98,7 @@ export function FormView({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex shrink-0 items-center gap-2 px-3 py-1.5 text-[11.5px]" style={{ color: "var(--color-text-secondary)", borderBottom: "1px solid var(--color-border-subtle)" }}>
+      <div className="flex shrink-0 items-center gap-2 px-3 py-1.5 text-[12px]" style={{ color: "var(--color-text-secondary)", borderBottom: "1px solid var(--color-border-subtle)" }}>
         <span className="font-medium" style={{ color: "var(--color-text-primary)" }}>{module.name} — 表单</span>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
@@ -190,7 +191,7 @@ function FieldInput({
           id={`ws-f-${field.id}`}
           value={typeof value === "string" ? value : ""}
           onChange={(e) => onChange(e.target.value)}
-          className="w-full rounded-md border px-2.5 py-1.5 text-[12.5px] outline-none"
+          className="w-full rounded-md border px-2.5 py-1.5 text-[13px] outline-none"
           style={inputStyle}
         >
           {(field.options ?? []).map((o) => (
@@ -206,7 +207,7 @@ function FieldInput({
           type="number"
           value={typeof value === "string" ? value : ""}
           onChange={(e) => onChange(e.target.value)}
-          className="w-full rounded-md border px-2.5 py-1.5 text-[12.5px] outline-none"
+          className="w-full rounded-md border px-2.5 py-1.5 text-[13px] outline-none"
           style={inputStyle}
         />
       );
@@ -218,7 +219,7 @@ function FieldInput({
           type="date"
           value={typeof value === "string" ? value : ""}
           onChange={(e) => onChange(e.target.value)}
-          className="w-full rounded-md border px-2.5 py-1.5 text-[12.5px] outline-none"
+          className="w-full rounded-md border px-2.5 py-1.5 text-[13px] outline-none"
           style={inputStyle}
         />
       );
@@ -230,7 +231,7 @@ function FieldInput({
           type="datetime-local"
           value={typeof value === "string" ? value : ""}
           onChange={(e) => onChange(e.target.value)}
-          className="w-full rounded-md border px-2.5 py-1.5 text-[12.5px] outline-none"
+          className="w-full rounded-md border px-2.5 py-1.5 text-[13px] outline-none"
           style={inputStyle}
         />
       );
@@ -244,7 +245,7 @@ function FieldInput({
             id={`ws-f-${field.id}`}
             value={typeof value === "string" ? value : ""}
             onChange={(e) => onChange(e.target.value)}
-            className="w-full rounded-md border px-2.5 py-1.5 text-[12.5px] outline-none"
+            className="w-full rounded-md border px-2.5 py-1.5 text-[13px] outline-none"
             style={inputStyle}
           >
             <option value="">（不关联）</option>
@@ -261,7 +262,7 @@ function FieldInput({
             value={typeof value === "string" ? value : ""}
             onChange={(e) => onChange(e.target.value)}
             placeholder={`关联 ${field.target ?? "?"} 表行 id`}
-            className="w-full rounded-md border px-2.5 py-1.5 text-[12.5px] outline-none"
+            className="w-full rounded-md border px-2.5 py-1.5 text-[13px] outline-none"
             style={inputStyle}
           />
         );
@@ -279,8 +280,14 @@ function FieldInput({
             className="rounded-md border px-2.5 py-1.5 text-[12px]"
             style={inputStyle}
             onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (!f || !workspaceId) return;
+              const input = e.currentTarget;
+              const f = input.files?.[0];
+              if (!f) return;
+              if (!workspaceId) {
+                toastError("工作台未就绪，无法上传附件");
+                input.value = "";
+                return;
+              }
               const reader = new FileReader();
               reader.onload = () => {
                 const b64 = String(reader.result).split(",")[1] ?? "";
@@ -289,7 +296,10 @@ function FieldInput({
                     const res = await api.uploadWorkspaceFile(workspaceId, f.name, b64);
                     onChange(res.path);
                   } catch (err) {
-                    console.error("上传附件失败", err);
+                    toastError(`上传附件失败: ${String(err)}`);
+                  } finally {
+                    // 清空 input 以便重选同一文件也能再次触发 onChange
+                    input.value = "";
                   }
                 })();
               };
@@ -312,7 +322,7 @@ function FieldInput({
           type="text"
           value={typeof value === "string" ? value : ""}
           onChange={(e) => onChange(e.target.value)}
-          className="w-full rounded-md border px-2.5 py-1.5 text-[12.5px] outline-none"
+          className="w-full rounded-md border px-2.5 py-1.5 text-[13px] outline-none"
           style={inputStyle}
         />
       );

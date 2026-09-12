@@ -6,6 +6,8 @@ import {
   Power,
   X,
   Pencil,
+
+  AlertTriangle,
 } from "lucide-react";
 import * as api from "../api";
 import type { AutomationTask } from "../types";
@@ -132,15 +134,15 @@ export function AutomationView() {
               到点自动用当前会话的 agent 跑 prompt。
             </p>
             {error && (
-              <p className="text-[13px] text-error mt-2">⚠️ {error}</p>
+              <p className="text-[13px] text-error mt-2 flex items-start gap-1.5"><AlertTriangle className="icon-md shrink-0 mt-0.5" /><span>{error}</span></p>
             )}
           </div>
           <div className="flex items-center gap-2 shrink-0">
             <button
               onClick={() => setCreating(true)}
               className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-accent text-bg-primary text-[13px] font-medium hover:bg-accent-hover"
-            >
-              <Plus size={13} /> 新建自动化
+>
+              <Plus className="icon-md" /> 新建自动化
             </button>
           </div>
         </div>
@@ -292,7 +294,7 @@ function TaskCard({
           onClick={onDelete}
           className="flex items-center gap-1 px-2 py-1 text-[13px] text-text-faint hover:text-error hover:bg-bg-hover rounded"
           title="删除"
-         aria-label="删除">
+          aria-label="删除">
           <Trash2 size={10} />
         </button>
         <div className="flex-1" />
@@ -377,7 +379,7 @@ function TaskEditor({
             className="modal-close"
             aria-label="关闭"
           >
-            <X size={16} />
+            <X className="icon-lg" />
           </button>
         </div>
 

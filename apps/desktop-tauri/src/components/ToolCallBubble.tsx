@@ -10,6 +10,7 @@ import {
 import { MarkdownBody } from "./MarkdownBody";
 import type { ChatMessage, TimelineStep } from "../types";
 import { ApprovalRequestView } from "./ApprovalBubble";
+import { ApprovalBatchView } from "./ApprovalBatchBubble";
 import {
   parseContent, groupTimeline,
   type FileChangeEntry, type MemoryUpdateEntry, type MemoryRecallEntry,
@@ -101,7 +102,7 @@ export function ToolGroupCard({
         data-state={isError ? "err" : isRunning ? "run" : "ok"}
       >
         <span className="tw-msg-icon-tile">
-          <Icon size={11} className="tw-msg-icon-svg" />
+          <Icon className="icon-sm tw-msg-icon-svg" />
         </span>
         <span className="tw-msg-verb">{verb}</span>
         {primary && (
@@ -129,17 +130,17 @@ export function ToolGroupCard({
           )}
           <span className={`tw-msg-state tw-msg-state--${isError ? "err" : isRunning ? "run" : "done"}`}>
             {awaitingApproval && isRunning ? (
-              <><AlertCircle size={11} className="shrink-0" />等待审批</>
+              <><AlertCircle className="icon-sm shrink-0" />等待审批</>
             ) : isRunning ? (
-              <><Loader2 size={11} className="animate-spin shrink-0" />运行中</>
+              <><Loader2 className="icon-sm animate-spin shrink-0" />运行中</>
             ) : isError ? (
-              <><AlertCircle size={11} className="shrink-0" />失败</>
+              <><AlertCircle className="icon-sm shrink-0" />失败</>
             ) : (
-              <><Check size={11} className="shrink-0" />已完成</>
+              <><Check className="icon-sm shrink-0" />已完成</>
             )}
           </span>
           {hasOutput && (
-            <span className="tw-msg-chev">{open ? <ChevronDown size={11} /> : <ChevronRight size={11} />}</span>
+            <span className="tw-msg-chev">{open ? <ChevronDown className="icon-sm" /> : <ChevronRight className="icon-sm" />}</span>
           )}
         </span>
       </button>
@@ -147,7 +148,7 @@ export function ToolGroupCard({
         <div className="tw-msg-err-hint" onClick={() => setOpen(true)} title="点击展开完整输出">
           <AlertCircle size={10} className="shrink-0" />
           <span className="truncate">{resultPeek}</span>
-          <ChevronRight size={11} className="shrink-0 tw-msg-chev-err" />
+          <ChevronRight className="icon-sm shrink-0 tw-msg-chev-err" />
         </div>
       )}
       {open && hasOutput && !isError && (
@@ -167,6 +168,9 @@ export function ProcessTimeline({
   onPathClick,
   onApproveApproval,
   onDenyApproval,
+  onApproveBatchApproval,
+  onDenyBatchApproval,
+  onReasoningFoldChange,
 }: {
   steps: TimelineStep[];
   isStreaming?: boolean;
@@ -186,8 +190,17 @@ export function ProcessTimeline({
   /** Forwarded to inline `kind: "approval_request"` step rendering
    *  (`<ApprovalRequestView>`). Without these the 拒绝 / 允许
    *  buttons are dead. */
-  onApproveApproval?: (requestId: string) => void;
+  onApproveApproval?: (requestId: string, remember?: boolean) => void;
   onDenyApproval?: (requestId: string) => void;
+  /** Forwarded to inline `kind: "approval_request_batch"` step
+   *  rendering (`<ApprovalBatchView>`). One batch card resolves
+   *  N parallel high-risk tool calls with a single click. */
+  onApproveBatchApproval?: (batchId: string, remember?: boolean) => void;
+  onDenyBatchApproval?: (batchId: string) => void;
+  /** Fires every time `expanded` flips — used by the parent to
+   *  decide whether the bottom-of-chat `<ReasoningTicker>` should
+   *  show (only when the user has folded the reasoning block). */
+  onReasoningFoldChange?: (folded: boolean) => void;
 }) {
   // Streaming → always expanded (no fold UI shown at all).
   // Paused (keepOpen) → also expanded: the agent is awaiting approval /
@@ -201,6 +214,16 @@ export function ProcessTimeline({
   // Truly settled → default collapsed; user can click to expand.
   const [userOverride, setUserOverride] = useState<boolean | null>(null);
   const expanded = isStreaming || keepOpen || hasRunningTool ? true : (userOverride ?? false);
+
+  // Report fold state up to the parent so the bottom-of-chat
+  // `<ReasoningTicker>` can mount when the user has folded this
+  // assistant's reasoning block. Default state (before any toggle)
+  // counts as folded since that's the visual default on settled
+  // turns — the parent only mounts the ticker when there's actual
+  // reasoning to display.
+  useEffect(() => {
+    onReasoningFoldChange?.(!expanded);
+  }, [expanded, onReasoningFoldChange]);
 
   // When a new turn starts (live → settled → live again), drop the
   // user's manual override so the auto-collapse default kicks in.
@@ -245,18 +268,22 @@ export function ProcessTimeline({
   const approvalRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const scrolledApprovalIdsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
-    const pendingStep = steps.find(
+    // 收集所有 pending approval — 多 batch 同时出现时支持 FIFO 顺序滚动到首个未滚过的，
+    // 避免历史滚到中段时后续 batch 卡片被静默插入底部视野外.
+    const pendingSteps = steps.filter(
       (s): s is Extract<typeof s, { kind: "approval_request" }> =>
         s.kind === "approval_request" && s.meta.decision === null,
     );
-    if (!pendingStep) return;
-    const pendingId = pendingStep.meta.requestId;
-    if (!pendingId || scrolledApprovalIdsRef.current.has(pendingId)) return;
-    scrolledApprovalIdsRef.current.add(pendingId);
+    const nextStep = pendingSteps.find(
+      (s) => s.meta.requestId && !scrolledApprovalIdsRef.current.has(s.meta.requestId),
+    );
+    if (!nextStep || !nextStep.meta.requestId) return;
+    const nextId = nextStep.meta.requestId;
+    scrolledApprovalIdsRef.current.add(nextId);
     // Defer one frame so React commits the new node to the DOM before
     // we ask the browser to find it.
     const raf = requestAnimationFrame(() => {
-      const el = approvalRefs.current.get(pendingId);
+      const el = approvalRefs.current.get(nextId);
       if (!el) return;
       el.scrollIntoView({ behavior: "smooth", block: "center" });
     });
@@ -362,11 +389,11 @@ export function ProcessTimeline({
           title={reasoningSteps.length > 0 ? "思考过程（点击展开/收起）" : settledLabel}
         >
           {expanded ? (
-            <ChevronDown size={12} className="reasoning-chevron reasoning-chevron-open" />
+            <ChevronDown className="icon-sm reasoning-chevron reasoning-chevron-open" />
           ) : (
-            <ChevronRight size={12} className="reasoning-chevron" />
+            <ChevronRight className="icon-sm reasoning-chevron" />
           )}
-          <CheckCircle2 size={11} className="tl-process-check" />
+          <CheckCircle2 className="icon-sm tl-process-check" />
           <span className="reasoning-label">
             {reasoningSteps.length > 0 ? "思考" : settledLabel}
           </span>
@@ -464,17 +491,63 @@ export function ProcessTimeline({
                 </div>
               );
             }
-            // RESOLVED — follows the fold.
-            if (!expanded && !isStreaming) return null;
+            // RESOLVED — collapses after a brief summary beat during
+            // the live turn (avoids the ~1s blank an instant unmount
+            // would leave until the agent loop's next WS event arrives);
+            // hidden behind the fold only when the turn has settled.
+            // Wrapper gets `.tl-approval--leaving` while still live so
+            // the CSS keyframe (600ms delay → 280ms fold) drives the
+            // collapse. `forwards` keeps the card at 0 height for the
+            // rest of the turn — no flicker on the next streamed chunk.
+            const turnActive = isStreaming || expanded;
+            if (!turnActive) return null;
+            const showLeaving = isStreaming && !expanded;
             return (
               <div
                 key={`ps-${i}`}
-                className="tl-approval-step"
+                className={`tl-approval-step${showLeaving ? " tl-approval--leaving" : ""}`}
               >
                 <ApprovalRequestView
                   meta={step.meta}
                   onApprove={onApproveApproval}
                   onDeny={onDenyApproval}
+                />
+              </div>
+            );
+          }
+          if (step.kind === "approval_request_batch") {
+            // Batch — same shape as single: pending always visible,
+            // resolved follows the fold with the leaving animation.
+            if (step.meta.decision === null) {
+              return (
+                <div
+                  key={`ps-${i}`}
+                  className="tl-approval-step tl-approval-step--batch"
+                  ref={(el) => {
+                    if (el) approvalRefs.current.set(step.meta.batchId, el);
+                    else approvalRefs.current.delete(step.meta.batchId);
+                  }}
+                >
+                  <ApprovalBatchView
+                    meta={step.meta}
+                    onApprove={onApproveBatchApproval}
+                    onDeny={onDenyBatchApproval}
+                  />
+                </div>
+              );
+            }
+            const turnActive = isStreaming || expanded;
+            if (!turnActive) return null;
+            const showLeaving = isStreaming && !expanded;
+            return (
+              <div
+                key={`ps-${i}`}
+                className={`tl-approval-step tl-approval-step--batch${showLeaving ? " tl-approval--leaving" : ""}`}
+              >
+                <ApprovalBatchView
+                  meta={step.meta}
+                  onApprove={onApproveBatchApproval}
+                  onDeny={onDenyBatchApproval}
                 />
               </div>
             );
@@ -523,6 +596,9 @@ export function UnifiedTimelineRenderer({
   durationMs,
   onApproveApproval,
   onDenyApproval,
+  onApproveBatchApproval,
+  onDenyBatchApproval,
+  onReasoningFoldChange,
 }: {
   steps: TimelineStep[];
   isStreaming?: boolean;
@@ -542,6 +618,14 @@ export function UnifiedTimelineRenderer({
    *  `kind: "approval_request"` step's 拒绝 / 允许 buttons. */
   onApproveApproval?: (requestId: string) => void;
   onDenyApproval?: (requestId: string) => void;
+  /** Forwarded to ProcessTimeline for the batch approval step
+   *  (`<ApprovalBatchView>`). */
+  onApproveBatchApproval?: (batchId: string, remember?: boolean) => void;
+  onDenyBatchApproval?: (batchId: string) => void;
+  /** Fires every time `expanded` flips — used by the parent to
+   *  decide whether the bottom-of-chat `<ReasoningTicker>` should
+   *  show (only when the user has folded the reasoning block). */
+  onReasoningFoldChange?: (folded: boolean) => void;
 }) {
   const hasTools = toolCalls.length > 0;
   const hasAnyToolStep = steps.some((s) => s.kind === "tools");
@@ -581,6 +665,9 @@ export function UnifiedTimelineRenderer({
         onPathClick={onPathClick}
         onApproveApproval={onApproveApproval}
         onDenyApproval={onDenyApproval}
+        onApproveBatchApproval={onApproveBatchApproval}
+        onDenyBatchApproval={onDenyBatchApproval}
+        onReasoningFoldChange={onReasoningFoldChange}
       />
 
       {/* Trailing meta blocks — file changes / memory updates /
@@ -613,8 +700,12 @@ export function UnifiedTimelineRenderer({
       )}
 
       {/* Gap thinking animation: only shown when tools are running
-          but we have NOT yet rendered any tool cards. */}
-      {hasRunningTool && !hasTools && !hasAnyReasoningStep && (
+          but we have NOT yet rendered any tool cards.
+          NOTE: must also require isStreaming — once the stream settles,
+          hasRunningTool becomes stale (activeTurnMsgIds clears on next
+          react cycle) and showing "正在处理…" on a settled message
+          contradicts the idle WaitForInputIndicator below it. */}
+      {isStreaming && hasRunningTool && !hasTools && !hasAnyReasoningStep && (
         <div className="tl-iteration">
           <ThinkingDots label="正在处理" />
         </div>
@@ -644,7 +735,7 @@ export function FileChangeBlock({
   return (
     <div className="file-change-block footer-block">
       <div className="file-change-header">
-        <FileText size={12} className="shrink-0" />
+        <FileText className="icon-sm shrink-0" />
         <span>文件变更</span>
         <span className="file-change-count">（{changes.length}个）</span>
       </div>
@@ -670,9 +761,9 @@ export function FileChangeBlock({
           type="button"
           className="file-pill-toggle"
           onClick={() => setExpanded(true)}
-        >
+>
           查看全部变更
-          <ArrowRight size={11} />
+          <ArrowRight className="icon-sm" />
         </button>
       )}
       {expanded && hidden > 0 && (
@@ -682,7 +773,7 @@ export function FileChangeBlock({
           onClick={() => setExpanded(false)}
         >
           收起
-          <ChevronDown size={11} className="rotate-180" />
+          <ChevronDown className="icon-sm rotate-180" />
         </button>
       )}
     </div>
@@ -691,12 +782,12 @@ export function FileChangeBlock({
 export function MemoryUpdateBlock({ updates }: { updates: MemoryUpdateEntry[] }) {
   const iconFor = (action: MemoryUpdateEntry["action"]) => {
     switch (action) {
-      case "write": return <FilePlus size={12} className="shrink-0" />;
-      case "update": return <Edit3 size={12} className="shrink-0" />;
-      case "delete": return <Trash2 size={12} className="shrink-0" />;
-      case "summarize": return <Brain size={12} className="shrink-0" />;
-      case "cleanup": return <Trash2 size={12} className="shrink-0" />;
-      case "snapshot": return <Database size={12} className="shrink-0" />;
+      case "write": return <FilePlus className="icon-sm shrink-0" />;
+      case "update": return <Edit3 className="icon-sm shrink-0" />;
+      case "delete": return <Trash2 className="icon-sm shrink-0" />;
+      case "summarize": return <Brain className="icon-sm shrink-0" />;
+      case "cleanup": return <Trash2 className="icon-sm shrink-0" />;
+      case "snapshot": return <Database className="icon-sm shrink-0" />;
     }
   };
   const labelFor = (action: MemoryUpdateEntry["action"]) => {
@@ -724,7 +815,7 @@ export function MemoryUpdateBlock({ updates }: { updates: MemoryUpdateEntry[] })
   return (
     <div className="memory-update-block">
       <div className="memory-update-header">
-        <Brain size={12} className="shrink-0 text-zinc-400" />
+        <Brain className="icon-sm shrink-0 text-zinc-400" />
         <span>记忆</span>
         <span className="memory-update-count">（{updates.length}条）</span>
       </div>
@@ -769,9 +860,9 @@ export function MemoryRecallBlock({ recalls }: { recalls: MemoryRecallEntry[] })
             className="memory-recall-row"
             title={`第 ${r.turnNumber} 轮 ${labelFor(r.trigger)}`}
           >
-            <Brain size={12} className="shrink-0 text-zinc-500" />
+            <Brain className="icon-sm shrink-0 text-zinc-500" />
             <span className="memory-recall-label">
-              💭 第 {r.turnNumber} 轮 想到 {r.count} 条
+              第 {r.turnNumber} 轮 想到 {r.count} 条
             </span>
             <span className="memory-recall-trigger">
               {labelFor(r.trigger)}
@@ -895,7 +986,7 @@ export function ToolMessageCard({
         data-state={isError ? "err" : isRunning ? "run" : "ok"}
       >
         <span className="tw-msg-icon-tile">
-          <Icon size={11} className="tw-msg-icon-svg" />
+          <Icon className="icon-sm tw-msg-icon-svg" />
         </span>
 
         {/* Verb (e.g. "执行命令") — right next to the icon tile */}
@@ -939,8 +1030,8 @@ export function ToolMessageCard({
             </span>
           )}
           {/* Status uses small icons + text in muted / success / warning
-              tones — never raw blue/red characters: 已完成 → ✓; 失败 → ⚠;
-              运行中 → ⏵; 已中断 → ⚠. */}
+              tones — never raw blue/red characters: 已完成 → Check;
+              失败 / 已中断 → AlertTriangle; 运行中 → Loader. */}
           {(() => {
             // Memory tool: render the structured status as the badge
             // — "未查到对应内容" / "匹配到多条" / "成功" / "失败".
@@ -948,15 +1039,15 @@ export function ToolMessageCard({
             const memBadge = (st: string) => {
               switch (st) {
                 case "success":
-                  return <><Check size={11} className="shrink-0" /> 成功</>;
+                  return <><Check className="icon-sm shrink-0" /> 成功</>;
                 case "not_found":
-                  return <><SearchX size={11} className="shrink-0" /> 未查到对应内容</>;
+                  return <><SearchX className="icon-sm shrink-0" /> 未查到对应内容</>;
                 case "ambiguous":
-                  return <><AlertTriangle size={11} className="shrink-0" /> 匹配到多条</>;
+                  return <><AlertTriangle className="icon-sm shrink-0" /> 匹配到多条</>;
                 case "error":
-                  return <><AlertCircle size={11} className="shrink-0" /> 失败</>;
+                  return <><AlertCircle className="icon-sm shrink-0" /> 失败</>;
                 default:
-                  return <><Check size={11} className="shrink-0" /> 成功</>;
+                  return <><Check className="icon-sm shrink-0" /> 成功</>;
               }
             };
             if (memResult && !isRunning) {
@@ -970,17 +1061,17 @@ export function ToolMessageCard({
               <span className={`tw-msg-state tw-msg-state--${isError ? "err" : isRunning ? "run" : "done"}`}>
                 {isRunning ? (
                   <>
-                    <Loader2 size={11} className="animate-spin shrink-0" />
+                    <Loader2 className="icon-sm animate-spin shrink-0" />
                     运行中
                   </>
                 ) : isError ? (
                   <>
-                    <AlertCircle size={11} className="shrink-0" />
+                    <AlertCircle className="icon-sm shrink-0" />
                     失败
                   </>
                 ) : (
                   <>
-                    <Check size={11} className="shrink-0" />
+                    <Check className="icon-sm shrink-0" />
                     已完成
                   </>
                 )}
@@ -988,7 +1079,7 @@ export function ToolMessageCard({
             );
           })()}
           {hasOutput && (
-            <span className="tw-msg-chev">{open ? <ChevronDown size={11} /> : <ChevronRight size={11} />}</span>
+            <span className="tw-msg-chev">{open ? <ChevronDown className="icon-sm" /> : <ChevronRight className="icon-sm" />}</span>
           )}
         </span>
       </button>
@@ -1005,7 +1096,7 @@ export function ToolMessageCard({
         >
           <AlertCircle size={10} className="shrink-0" />
           <span className="truncate">{resultPeek}</span>
-          <ChevronRight size={11} className="shrink-0 tw-msg-chev-err" />
+          <ChevronRight className="icon-sm shrink-0 tw-msg-chev-err" />
         </div>
       )}
 
@@ -1070,7 +1161,7 @@ export function LiveTerminal({ content, running }: { content: string; running: b
   }, []);
 
   const handleCopy = async () => {
-    const text = displayContent || (running ? "" : "(无输出)");
+    const text = displayContent || (running ? "" : "（无输出）");
     if (!text) return;
     try {
       if (navigator.clipboard?.writeText) {
@@ -1117,7 +1208,7 @@ export function LiveTerminal({ content, running }: { content: string; running: b
         <pre className="tw-msg-output-text">{displayContent}</pre>
       ) : (
         <span className="tw-msg-output-empty">
-          {running ? "等待输出…" : "(无输出)"}
+          {running ? "等待输出…" : "（无输出）"}
         </span>
       )}
     </div>
@@ -1154,7 +1245,7 @@ export function ToolCallsFallback({ calls }: { calls: NonNullable<ChatMessage["t
         <div key={`tc-${tc.name || i}`} className="tool-row tool-done">
           <span className="rail-dot" />
           <div className="tool-head cursor-default">
-            <Wrench size={12} className="text-text-muted" />
+            <Wrench className="icon-sm text-text-muted" />
             <span className="tool-name">{tc.name}</span>
             <StatusPill status={tc.status} />
           </div>

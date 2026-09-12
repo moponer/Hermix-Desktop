@@ -152,7 +152,7 @@ export function TaskPanel({
       >
         {/* Header */}
         <div className="flex items-center gap-2.5 px-4 py-3 border-b border-border-subtle">
-          <ListChecks size={16} style={{ color: "var(--color-warning)" }} />
+          <ListChecks className="icon-lg" style={{ color: "var(--color-warning)" }} />
           <div className="flex-1 min-w-0">
             <h2 className="text-[14px] font-bold text-text-primary truncate">
               任务面板
@@ -166,7 +166,7 @@ export function TaskPanel({
             onClick={onClose}
             className="p-1.5 rounded-md text-text-muted hover:text-text-secondary hover:bg-bg-tertiary transition-colors"
           >
-            <X size={14} />
+            <X className="icon-md" />
           </button>
         </div>
 
@@ -205,9 +205,9 @@ export function TaskPanel({
                 className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-bg-tertiary/40 transition-colors"
               >
                 {showTimeline ? (
-                  <ChevronDown size={12} className="text-text-muted" />
+                  <ChevronDown className="icon-sm text-text-muted" />
                 ) : (
-                  <ChevronRight size={12} className="text-text-muted" />
+                  <ChevronRight className="icon-sm text-text-muted" />
                 )}
                 <span className="text-[11.5px] font-semibold text-text-secondary">
                   引擎实时事件
@@ -238,11 +238,11 @@ export function TaskPanel({
                 className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-bg-tertiary/40 transition-colors"
               >
                 {showAudit ? (
-                  <ChevronDown size={12} className="text-text-muted" />
+                  <ChevronDown className="icon-sm text-text-muted" />
                 ) : (
-                  <ChevronRight size={12} className="text-text-muted" />
+                  <ChevronRight className="icon-sm text-text-muted" />
                 )}
-                <Scale size={12} style={{ color: "var(--color-warning)" }} />
+                <Scale className="icon-sm" style={{ color: "var(--color-warning)" }} />
                 <span className="text-[11.5px] font-semibold text-text-secondary">
                   阎罗审计
                 </span>
@@ -336,7 +336,7 @@ function TaskDetail({
                 border: "1px solid color-mix(in srgb, var(--color-success) 35%, transparent)",
               }}
             >
-              <CheckCircle2 size={12} />
+              <CheckCircle2 className="icon-sm" />
               批准方案
             </button>
             <button
@@ -421,7 +421,7 @@ function SubtaskRow({
         onClick={onToggle}
         className="w-full flex items-center gap-2 px-2.5 py-2 text-left hover:bg-bg-tertiary/60 transition-colors"
       >
-        {expanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+        {expanded ? <ChevronDown className="icon-sm" /> : <ChevronRight className="icon-sm" />}
         <span
           className="w-5 h-5 rounded-full flex items-center justify-center text-[9.5px] font-bold shrink-0"
           style={{
@@ -525,7 +525,7 @@ function ReviewBlock({
       style={{ background: bg, boxShadow: `inset 0 0 0 1px ${ring}` }}
     >
       <div className="flex items-center gap-1.5 text-[10.5px]">
-        <Icon size={11} style={{ color: accent }} />
+        <Icon className="icon-sm" style={{ color: accent }} />
         <span className="font-semibold" style={{ color: accent }}>
           审查{label}
         </span>
@@ -717,14 +717,14 @@ function TimelineRow({
     case "room_completed":
       return (
         <div className="flex items-center gap-2 px-1.5 py-1 text-[11px] text-text-secondary font-semibold">
-          <CheckCircle2 size={11} style={{ color: "var(--color-success)" }} />
+          <CheckCircle2 className="icon-sm" style={{ color: "var(--color-success)" }} />
           房间任务全部完成
         </div>
       );
     case "discussion_started": {
       return (
         <div className="flex items-start gap-2 px-1.5 py-1 text-[11px] text-text-secondary">
-          <MessageSquare size={11} style={{ color: "var(--color-accent)" }} className="mt-0.5 flex-shrink-0" />
+          <MessageSquare style={{ color: "var(--color-accent)" }} className="icon-sm mt-0.5 flex-shrink-0" />
           <div className="flex-1 min-w-0">
             <span className="font-semibold">讨论开始</span>
             <span className="text-text-muted ml-1">{event.topic}</span>
@@ -736,7 +736,7 @@ function TimelineRow({
     case "discussion_concluded":
       return (
         <div className="flex items-center gap-2 px-1.5 py-1 text-[11px] text-text-secondary font-semibold">
-          <CheckCircle2 size={11} style={{ color: "var(--color-success)" }} />
+          <CheckCircle2 className="icon-sm" style={{ color: "var(--color-success)" }} />
           讨论结束（共{event.total_rounds}轮）
         </div>
       );
@@ -757,7 +757,7 @@ function AuditRow({
   if (event.kind === "agent_expelled") {
     return (
       <div className="flex items-start gap-2 px-1.5 py-1.5 rounded-sm bg-bg-tertiary/60 border-l-2 border-border-strong">
-        <Skull size={12} style={{ color: "var(--color-error)" }} className="mt-0.5 flex-shrink-0" />
+        <Skull style={{ color: "var(--color-error)" }} className="icon-sm mt-0.5 flex-shrink-0" />
         <div className="flex-1 min-w-0">
           <div className="text-[11px] font-bold text-text-primary">
             {event.agent_id} 被开除
@@ -784,7 +784,7 @@ function AuditRow({
       className="flex items-start gap-2 px-1.5 py-1.5 rounded-sm bg-bg-tertiary/40 border-l-2"
       style={{ borderLeftColor: accent }}
     >
-      <Scale size={11} style={{ color: accent }} className="mt-0.5 flex-shrink-0" />
+      <Scale style={{ color: accent }} className="icon-sm mt-0.5 flex-shrink-0" />
       <div className="flex-1 min-w-0">
         <div className="flex items-baseline gap-1.5">
           <span className="text-[11px] font-semibold text-text-primary">
@@ -918,7 +918,7 @@ function AnnouncementSection({
           "border-border-subtle text-text-muted hover:text-text-secondary hover:border-border-strong",
         )}
       >
-        <Megaphone size={11} className="opacity-50 group-hover/ann:opacity-80" />
+        <Megaphone className="icon-sm opacity-50 group-hover/ann:opacity-80" />
         <span className="flex-1">点此发布群公告（项目目标 / 本周重点）</span>
         <Pencil size={10} className="opacity-0 group-hover/ann:opacity-60" />
       </button>
@@ -937,7 +937,7 @@ function AnnouncementSection({
         }}
       >
         <div className="flex items-center gap-2 text-[11px] font-semibold text-text-secondary">
-          <Megaphone size={13} style={{ color: "var(--color-warning)" }} />
+          <Megaphone className="icon-md" style={{ color: "var(--color-warning)" }} />
           <span>编辑群公告</span>
         </div>
         <textarea
@@ -968,7 +968,7 @@ function AnnouncementSection({
             )}
             style={{ background: "var(--color-warning)" }}
           >
-            <Check size={11} />
+            <Check className="icon-sm" />
             发布
           </button>
           <button
@@ -1006,9 +1006,7 @@ function AnnouncementSection({
         borderColor: "hsla(43, 96%, 56%, 0.20)",
       }}
     >
-      <Megaphone
-        size={12}
-        className="shrink-0 mt-0.5"
+      <Megaphone className="icon-sm shrink-0 mt-0.5"
         style={{ color: "var(--color-warning)" }}
       />
       <div className="flex-1 min-w-0">

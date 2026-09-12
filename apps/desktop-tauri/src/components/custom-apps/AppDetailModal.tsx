@@ -35,6 +35,7 @@ import {
 } from "../../lib/customAppApi";
 import { formatCategory, formatPermission, permHint } from "./labels";
 import { resolveAppIconEl } from "./iconResolver";
+import { CodeView } from "../CodeView";
 
 interface AppDetailModalProps {
   appId: string;
@@ -151,7 +152,7 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
     return (
       <div className="modal-overlay" onClick={onClose}>
         <div className="modal-content modal-content--wide" onClick={(e) => e.stopPropagation()}>
-          <div className="modal-loading">加载中...</div>
+          <div className="modal-loading">加载中…</div>
         </div>
       </div>
     );
@@ -168,6 +169,10 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
   }
 
   const { manifest, is_packaged, dist_path } = app;
+  // 只读态走站内 CodeView：虚拟行号（>300 行才虚拟化）+ refractor 高亮 +
+  // 主题跟随，与聊天/预览两处共用同一套渲染，不另起一套 <pre>。
+  const codeSource = codeFile === "app_source" ? appSource : indexHtml;
+  const codeLanguage = codeFile === "app_source" ? "tsx" : "html";
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -184,7 +189,7 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
             {is_packaged && <span className="modal-header__badge modal-header__badge--success">已打包</span>}
           </div>
           <button className="modal-close" onClick={onClose} aria-label="关闭">
-            <X size={18} />
+            <X className="icon-lg" />
           </button>
         </div>
 
@@ -193,7 +198,7 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
             className={`modal-tab ${tab === "overview" ? "modal-tab--active" : ""}`}
             onClick={() => setTab("overview")}
           >
-            <LayoutGrid size={14} /> 概览
+            <LayoutGrid className="icon-md" /> 概览
           </button>
           <button
             className={`modal-tab ${tab === "code" ? "modal-tab--active" : ""}`}
@@ -202,13 +207,13 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
               setEditing(false);
             }}
           >
-            <Code2 size={14} /> 代码
+            <Code2 className="icon-md" /> 代码
           </button>
           <button
             className={`modal-tab ${tab === "readme" ? "modal-tab--active" : ""}`}
             onClick={() => setTab("readme")}
           >
-            <BookOpen size={14} /> 说明
+            <BookOpen className="icon-md" /> 说明
           </button>
         </div>
 
@@ -223,7 +228,7 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
                 title="关闭"
                 aria-label="关闭错误提示"
               >
-                <X size={12} strokeWidth={2} />
+                <X className="icon-sm" strokeWidth={2} />
               </button>
             </div>
           )}
@@ -243,17 +248,17 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
                     <code className="app-detail-meta__value">{manifest.id}</code>
                   </div>
                   <div className="app-detail-meta__item">
-                    <User size={13} />
+                    <User className="icon-md" />
                     <span className="app-detail-meta__label">作者</span>
                     <span className="app-detail-meta__value">{manifest.author || "—"}</span>
                   </div>
                   <div className="app-detail-meta__item">
-                    <Folder size={13} />
+                    <Folder className="icon-md" />
                     <span className="app-detail-meta__label">分类</span>
                     <span className="app-detail-meta__value">{manifest.category ? formatCategory(manifest.category) : "—"}</span>
                   </div>
                   <div className="app-detail-meta__item">
-                    <Maximize size={13} />
+                    <Maximize className="icon-md" />
                     <span className="app-detail-meta__label">窗口</span>
                     <span className="app-detail-meta__value">
                       {manifest.window_config.width} × {manifest.window_config.height}
@@ -275,7 +280,7 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
                   <div className="app-detail-perms">
                     {manifest.permissions.map((p) => (
                       <span key={p} className="app-detail-perms__item" title={`${permHint(p)}（${p}）`}>
-                        <Shield size={12} />
+                        <Shield className="icon-sm" />
                         {formatPermission(p)}
                       </span>
                     ))}
@@ -295,21 +300,24 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
                     className={`app-detail-filebar__item ${codeFile === "app_source" ? "app-detail-filebar__item--active" : ""}`}
                     onClick={() => setCodeFile("app_source")}
                   >
-                    <FileCode2 size={14} /> main.tsx
+                    <FileCode2 className="icon-md" /> main.tsx
                   </button>
                 )}
                 <button
                   className={`app-detail-filebar__item ${codeFile === "index_html" ? "app-detail-filebar__item--active" : ""}`}
                   onClick={() => setCodeFile("index_html")}
                 >
-                  <FileCode2 size={14} /> index.html
+                  <FileCode2 className="icon-md" /> index.html
                 </button>
               </div>
-              <div className="app-detail-code__editor-wrap">
+              {/* preview-pane class 让 code-view.css 里的 .code-viewport /
+                  .code-gutter / .code-pre 规则命中（这套样式统一挂在
+                  .preview-pane 作用域下，该 class 自身无独立样式，零副作用） */}
+              <div className="app-detail-code__editor-wrap preview-pane">
                 {editing ? (
                   <textarea
                     className="app-detail-code__editor"
-                    value={codeFile === "app_source" ? appSource : indexHtml}
+                    value={codeSource}
                     onChange={(e) => {
                       if (codeFile === "app_source") {
                         setAppSource(e.target.value);
@@ -320,13 +328,12 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
                     spellCheck={false}
                     placeholder={codeFile === "app_source" ? "TypeScript/React 源代码" : "HTML 源代码"}
                   />
+                ) : codeSource ? (
+                  <CodeView source={codeSource} language={codeLanguage} />
                 ) : (
-                  <pre className="app-detail-code__view">
-                    <code>
-                      {(codeFile === "app_source" ? appSource : indexHtml) ||
-                        `// 此应用没有 ${codeFile === "app_source" ? "TypeScript" : "HTML"} 源代码`}
-                    </code>
-                  </pre>
+                  <div className="app-detail-code__empty">
+                    此应用没有 {codeFile === "app_source" ? "TypeScript" : "HTML"} 源代码
+                  </div>
                 )}
               </div>
             </div>
@@ -337,28 +344,28 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
               {/* Badges */}
               <div className="app-detail-readme__badges">
                 <span className="app-detail-badge app-detail-badge--version">
-                  <Tag size={11} /> v{manifest.version}
+                  <Tag className="icon-sm" /> v{manifest.version}
                 </span>
                 <span className="app-detail-badge app-detail-badge--author">
-                  <User size={11} /> {manifest.author || "未知"}
+                  <User className="icon-sm" /> {manifest.author || "未知"}
                 </span>
                 <span className="app-detail-badge app-detail-badge--category">
-                  <Folder size={11} /> {manifest.category ? formatCategory(manifest.category) : "其他"}
+                  <Folder className="icon-sm" /> {manifest.category ? formatCategory(manifest.category) : "其他"}
                 </span>
                 {is_packaged ? (
                   <span className="app-detail-badge app-detail-badge--success">
-                    <CheckCircle2 size={11} /> 已打包
+                    <CheckCircle2 className="icon-sm" /> 已打包
                   </span>
                 ) : (
                   <span className="app-detail-badge app-detail-badge--muted">
-                    <Box size={11} /> 未打包
+                    <Box className="icon-sm" /> 未打包
                   </span>
                 )}
                 <span className="app-detail-badge app-detail-badge--info">
-                  <Maximize size={11} /> {manifest.window_config.width}x{manifest.window_config.height}
+                  <Maximize className="icon-sm" /> {manifest.window_config.width}x{manifest.window_config.height}
                 </span>
                 <span className="app-detail-badge app-detail-badge--info">
-                  <HardDrive size={11} /> hx-shell
+                  <HardDrive className="icon-sm" /> hx-shell
                 </span>
               </div>
 
@@ -390,7 +397,7 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
                   <div className="app-detail-readme__perms">
                     {manifest.permissions.map((p) => (
                       <span key={p} className="app-detail-badge app-detail-badge--perm" title={p}>
-                        <Shield size={11} /> {formatPermission(p)}
+                        <Shield className="icon-sm" /> {formatPermission(p)}
                       </span>
                     ))}
                   </div>
@@ -402,7 +409,7 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
               {/* Usage */}
               <section className="app-detail-readme__section">
                 <h4 className="app-detail-readme__heading">
-                  <Terminal size={14} /> 使用方法
+                  <Terminal className="icon-md" /> 使用方法
                 </h4>
                 <div className="app-detail-readme__text">
                   <p>1. 点击右下角"运行"按钮在本地启动应用</p>
@@ -414,7 +421,7 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
               {/* Update */}
               <section className="app-detail-readme__section">
                 <h4 className="app-detail-readme__heading">
-                  <RefreshCcw size={14} /> 更新方法
+                  <RefreshCcw className="icon-md" /> 更新方法
                 </h4>
                 <div className="app-detail-readme__text">
                   <p>1. 在"代码"标签页编辑源码后点击"保存"</p>
@@ -426,7 +433,7 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
               {/* Distribution */}
               <section className="app-detail-readme__section">
                 <h4 className="app-detail-readme__heading">
-                  <Download size={14} /> 分发方法
+                  <Download className="icon-md" /> 分发方法
                 </h4>
                 <div className="app-detail-readme__text">
                   <p>1. 打包后在 dist/ 目录生成独立 EXE（单文件，含 HTML 注入）</p>
@@ -460,7 +467,7 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
                     onClick={handleSave}
                     disabled={saving}
                   >
-                    <Save size={14} />
+                    <Save className="icon-md" />
                     {saving ? "保存中..." : "保存"}
                   </button>
                   <button className="app-detail-btn app-detail-btn--ghost" onClick={cancelEdit}>
@@ -469,7 +476,7 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
                 </>
               ) : (
                 <button className="app-detail-btn app-detail-btn--secondary" onClick={() => setEditing(true)}>
-                  <Pencil size={14} /> 编辑代码
+                  <Pencil className="icon-md" /> 编辑代码
                 </button>
               )}
             </div>
@@ -482,10 +489,10 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
             title="刷新"
             aria-label="刷新"
           >
-            <RefreshCw size={14} className={loading ? "spin" : ""} />
+            <RefreshCw className={`icon-md ${loading ? "spin" : ""}`} />
           </button>
           <button className="app-detail-btn app-detail-btn--primary" onClick={handleRun}>
-            <Play size={14} /> 运行
+            <Play className="icon-md" /> 运行
           </button>
           {is_packaged ? (
             <>
@@ -495,7 +502,7 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
                 disabled={packaging}
                 title="重新打包为可分发到其他电脑的独立 EXE"
               >
-                <RefreshCw size={14} />
+                <RefreshCw className="icon-md" />
                 {packaging ? "打包中..." : "重新打包"}
               </button>
               <button
@@ -503,7 +510,7 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
                 onClick={handleOpenDist}
                 title="打开打包后的应用目录"
               >
-                <FolderOpen size={14} /> 打开目录
+                <FolderOpen className="icon-md" /> 打开目录
               </button>
             </>
           ) : (
@@ -512,7 +519,7 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
               onClick={handlePackage}
               disabled={packaging}
             >
-              <Package size={14} />
+              <Package className="icon-md" />
               {packaging ? "打包中..." : "打包"}
             </button>
           )}

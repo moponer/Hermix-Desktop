@@ -61,7 +61,7 @@ export function AiGenerateButton({
       title={error ?? "AI 生成结构化 PROMPT"}
       className="flex items-center gap-1 px-2 py-1 rounded text-text-muted hover:text-text-primary hover:bg-bg-tertiary disabled:opacity-30 disabled:cursor-not-allowed transition-colors text-[12px]"
     >
-      {loading ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
+      {loading ? <Loader2 className="icon-sm animate-spin" /> : <Sparkles className="icon-sm" />}
       <span>AI 生成</span>
     </button>
   );

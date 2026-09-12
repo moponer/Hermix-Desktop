@@ -140,7 +140,7 @@ function StreamingArtifactCardImpl({ text, isStreaming }: StreamingArtifactCardP
   return (
     <div className="my-2 rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-bg-secondary)] p-2.5">
       <div className="flex items-center gap-1.5 mb-1.5 text-text-faint">
-        <Box size={13} className="shrink-0" />
+        <Box className="icon-md shrink-0" />
         <span className="h-tiny">
           {openCount > 0
             ? `正在生成 ${artifacts.length} 个文件…`
@@ -153,11 +153,11 @@ function StreamingArtifactCardImpl({ text, isStreaming }: StreamingArtifactCardP
           return (
             <div key={a.key} className="flex items-center gap-2">
               {a.open ? (
-                <Loader2 size={13} className="text-text-warning animate-spin shrink-0" />
+                <Loader2 className="icon-md text-text-warning animate-spin shrink-0" />
               ) : (
-                <Check size={13} className="text-text-secondary shrink-0" />
+                <Check className="icon-md text-text-secondary shrink-0" />
               )}
-              <FileCode2 size={13} className="text-text-secondary shrink-0" />
+              <FileCode2 className="icon-md text-text-secondary shrink-0" />
               <span className="text-sm text-text-secondary font-mono truncate max-w-[180px]">
                 {a.name}
               </span>

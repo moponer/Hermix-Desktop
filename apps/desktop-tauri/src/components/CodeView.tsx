@@ -282,7 +282,7 @@ export function CodeView({
         title={copied ? "已复制" : failed ? "复制失败" : "复制全部代码"}
         aria-label={copied ? "已复制" : failed ? "复制失败" : "复制全部代码"}
       >
-        {copied ? <Check size={14} /> : failed ? <X size={14} /> : <Copy size={14} />}
+        {copied ? <Check className="icon-md" /> : failed ? <X className="icon-md" /> : <Copy className="icon-md" />}
       </button>
 
       <div className="code-flex">

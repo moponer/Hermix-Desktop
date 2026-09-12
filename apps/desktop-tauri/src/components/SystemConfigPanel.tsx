@@ -101,7 +101,7 @@ export function SystemConfigPanel({ onClose, initialCategory }: SystemConfigPane
             title="关闭 (Esc)"
             aria-label="关闭"
           >
-            <X size={15} />
+            <X className="icon-md" />
           </button>
         </div>
 
@@ -115,10 +115,10 @@ export function SystemConfigPanel({ onClose, initialCategory }: SystemConfigPane
                 onClick={() => { setCat(id); if (id === "model") setModelTab("model"); if (id === "tools") setToolTab("connectors"); }}
                 className={clsxNav(cat === id)}
               >
-                <Icon size={15} className="shrink-0 opacity-70" />
+                <Icon className="icon-md shrink-0 opacity-70" />
                 <span className="flex-1 min-w-0">
                   <span className="block text-[13px] leading-tight truncate font-medium">{label}</span>
-                  <span className="block text-[10.5px] text-text-muted leading-tight truncate">{hint}</span>
+                  <span className="block text-[11px] text-text-muted leading-tight truncate">{hint}</span>
                 </span>
               </button>
             ))}
@@ -132,13 +132,13 @@ export function SystemConfigPanel({ onClose, initialCategory }: SystemConfigPane
                   <button
                     key={id}
                     onClick={() => setModelTab(id)}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12.5px] transition-colors whitespace-nowrap ${
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] transition-colors whitespace-nowrap ${
                       modelTab === id
                         ? "bg-bg-tertiary text-text-primary font-medium"
                         : "text-text-muted hover:text-text-secondary hover:bg-bg-hover"
                     }`}
-                  >
-                    <Icon size={13} />
+>
+                    <Icon className="icon-md" />
                     {label}
                   </button>
                 ))}
@@ -146,13 +146,13 @@ export function SystemConfigPanel({ onClose, initialCategory }: SystemConfigPane
                   <button
                     key={id}
                     onClick={() => setToolTab(id)}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12.5px] transition-colors whitespace-nowrap ${
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] transition-colors whitespace-nowrap ${
                       toolTab === id
                         ? "bg-bg-tertiary text-text-primary font-medium"
                         : "text-text-muted hover:text-text-secondary hover:bg-bg-hover"
                     }`}
                   >
-                    <Icon size={13} />
+                    <Icon className="icon-md" />
                     {label}
                   </button>
                 ))}
@@ -246,7 +246,7 @@ function ImageSettingsCard() {
         <div className="flex items-center justify-between">
           <div>
             <div className="text-sm text-text-primary">启用图片生成</div>
-            <div className="text-[11.5px] text-text-muted mt-0.5">开启后，对话中可调用图片生成技能。</div>
+            <div className="text-[12px] text-text-muted mt-0.5">开启后，对话中可调用图片生成技能。</div>
           </div>
           <ToggleSwitch enabled={cfg.enabled} onToggle={() => update({ enabled: !cfg.enabled })} />
         </div>

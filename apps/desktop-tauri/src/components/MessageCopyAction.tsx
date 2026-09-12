@@ -35,7 +35,7 @@ export function MessageCopyAction({
         title="复制消息"
         aria-label="复制消息"
       >
-        {copied ? <Check size={12} /> : <Copy size={12} />}
+        {copied ? <Check className="icon-sm" /> : <Copy className="icon-sm" />}
         <span>{copied ? "已复制" : "复制"}</span>
       </button>
     </div>

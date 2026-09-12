@@ -129,18 +129,18 @@ function WindowListPreview({ output }: { output?: string }) {
               <div className="flex-1 min-w-0">
                 <div
                   className="truncate text-text-primary"
-                  title={w.title || "(无标题)"}
+                  title={w.title || "（无标题）"}
                 >
                   {w.title || <span className="italic text-text-faint">（无标题）</span>}
                 </div>
-                <div className="flex items-center gap-1.5 text-[10.5px] text-text-faint mt-0.5">
+                <div className="flex items-center gap-1.5 text-[11px] text-text-faint mt-0.5">
                   <span className="font-mono">{w.class_name || "—"}</span>
                   <span>·</span>
                   <span className="font-mono">pid {w.process_id}</span>
                 </div>
               </div>
               {/* HWND + rect */}
-              <div className="shrink-0 text-right font-mono text-[10.5px] text-text-faint leading-tight">
+              <div className="shrink-0 text-right font-mono text-[11px] text-text-faint leading-tight">
                 <div title="窗口句柄（可传给 cua_click_window）">
                   hwnd <span className="text-text-secondary">0x{w.hwnd.toString(16)}</span>
                 </div>
@@ -203,7 +203,7 @@ function WindowAtPointPreview({ output }: { output?: string }) {
         {w ? (
           <span className="truncate text-text-primary" title={w.title || w.class_name}>
             {w.title || <span className="italic text-text-faint">（无标题）</span>}
-            <span className="ml-1.5 text-text-faint font-mono text-[10.5px]">
+            <span className="ml-1.5 text-text-faint font-mono text-[11px]">
               {w.class_name} · pid {w.process_id}
             </span>
           </span>
@@ -280,7 +280,7 @@ function UiTreePreview({ output }: { output?: string }) {
           空树
         </div>
       ) : (
-        <ul className="divide-y divide-border-primary/30 max-h-80 overflow-auto font-mono text-[11.5px]">
+        <ul className="divide-y divide-border-primary/30 max-h-80 overflow-auto font-mono text-[12px]">
           {elements.map((el) => {
             const indentPx = Math.min(el.depth, 8) * 12;
             const disabledCls = el.is_enabled ? "" : "text-text-faint italic";
@@ -301,16 +301,16 @@ function UiTreePreview({ output }: { output?: string }) {
                 style={{ paddingLeft: 8 + indentPx }}
               >
                 <div className="flex items-baseline gap-1.5 truncate">
-                  <span className="shrink-0 text-text-faint text-[10px]">
+                  <span className="shrink-0 text-text-faint text-[11px]">
                     [{el.control_type}]
                   </span>
-                  <span className="truncate text-text-primary" title={el.name || "(未命名)"}>
+                  <span className="truncate text-text-primary" title={el.name || "（未命名）"}>
                     {el.name || <span className="italic text-text-faint">（未命名）</span>}
                     {focusMarker}
                     {offscreenMarker}
                   </span>
                 </div>
-                <div className="flex items-center gap-2 mt-0.5 text-[10px] text-text-faint">
+                <div className="flex items-center gap-2 mt-0.5 text-[11px] text-text-faint">
                   {el.automation_id && (
                     <span title="automation_id">
                       id=<span className="text-text-secondary">{el.automation_id}</span>
@@ -398,17 +398,17 @@ function UiFindPreview({ output }: { output?: string }) {
                 className={`px-2.5 py-1.5 hover:bg-bg-tertiary/40 text-[12px] ${disabledCls}`}
               >
                 <div className="flex items-baseline gap-1.5 truncate">
-                  <span className="shrink-0 text-text-faint font-mono text-[10px]">
+                  <span className="shrink-0 text-text-faint font-mono text-[11px]">
                     [{el.control_type}]
                   </span>
-                  <span className="truncate text-text-primary" title={el.name || "(未命名)"}>
+                  <span className="truncate text-text-primary" title={el.name || "（未命名）"}>
                     {el.name || <span className="italic text-text-faint">（未命名）</span>}
                     {focusMarker && (
                       <span className="ml-1 text-text-secondary" title="当前焦点">{focusMarker}</span>
                     )}
                   </span>
                 </div>
-                <div className="flex items-center gap-2 mt-0.5 text-[10.5px] text-text-faint font-mono">
+                <div className="flex items-center gap-2 mt-0.5 text-[11px] text-text-faint font-mono">
                   {el.automation_id && <span>id={el.automation_id}</span>}
                   {el.class_name && <span>· {el.class_name}</span>}
                   {el.process_id > 0 && <span>· pid {el.process_id}</span>}

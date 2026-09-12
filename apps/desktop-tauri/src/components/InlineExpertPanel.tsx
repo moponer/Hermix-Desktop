@@ -8,13 +8,13 @@
    ════════════════════════════════════════════════════════════════ */
 
 import { useState, useMemo, useRef, useEffect } from "react";
-import { Search, X, ArrowRight, Check } from "lucide-react";
+import { Search, X, ArrowRight, Check, AlertTriangle } from "lucide-react";
 import { clsx } from "clsx";
 import {
-  BUILTIN_EXPERTS,
   EXPERT_CATEGORIES,
   type ExpertDef,
 } from "../data/builtinExperts";
+import { useExpertCatalog } from "../hooks/useExpert";
 
 interface InlineExpertPanelProps {
   currentExpertId: string | null;
@@ -34,6 +34,15 @@ export function InlineExpertPanel({
   const searchRef = useRef<HTMLInputElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 
+  // Backend-authoritative catalog. `source` distinguishes the live list
+  // from the locally-bundled one; the UI surfaces the difference instead
+  // of silently degrading (previously this panel always rendered
+  // BUILTIN_EXPERTS and never told anyone).
+  const { experts, source, loading } = useExpertCatalog();
+  // Gate on `!loading` so the banner doesn't flash during the first fetch —
+  // it means "we tried and fell back", not "we haven't asked yet".
+  const usingFallback = !loading && source === "builtin-fallback";
+
   // Auto-focus search on mount
   useEffect(() => {
     searchRef.current?.focus();
@@ -50,7 +59,7 @@ export function InlineExpertPanel({
 
   // Filter experts
   const filtered = useMemo(() => {
-    let list: ExpertDef[] = BUILTIN_EXPERTS;
+    let list: ExpertDef[] = experts;
     if (activeCategory !== "全部") {
       list = list.filter((e) => e.category === activeCategory);
     }
@@ -65,16 +74,16 @@ export function InlineExpertPanel({
       );
     }
     return list;
-  }, [activeCategory, search]);
+  }, [activeCategory, search, experts]);
 
   // Category counts (only non-empty)
   const categoryCounts = useMemo(() => {
     const counts: Record<string, number> = {};
-    for (const e of BUILTIN_EXPERTS) {
+    for (const e of experts) {
       counts[e.category] = (counts[e.category] || 0) + 1;
     }
     return counts;
-  }, []);
+  }, [experts]);
 
   return (
     <div
@@ -92,20 +101,20 @@ export function InlineExpertPanel({
       {/* Search + close row */}
       <div className="flex items-center gap-2 px-4 pt-3 pb-2">
         <div className="relative flex-1">
-          <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-text-faint" />
+          <Search className="icon-md absolute left-2.5 top-1/2 -translate-y-1/2 text-text-faint" />
           <input
             ref={searchRef}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="搜索专家名称、角色、类别..."
-            className="w-full pl-8 pr-3 py-1.5 rounded-lg bg-bg-card text-[12.5px] text-text-primary placeholder-text-faint outline-none border border-border-subtle focus:border-accent/40 transition-colors"
+            className="w-full pl-8 pr-3 py-1.5 rounded-lg bg-bg-card text-[13px] text-text-primary placeholder-text-faint outline-none border border-border-subtle focus:border-accent/40 transition-colors"
           />
           {search && (
             <button
               onClick={() => setSearch("")}
               className="absolute right-2 top-1/2 -translate-y-1/2 text-text-faint hover:text-text-muted"
             >
-              <X size={12} />
+              <X className="icon-sm" />
             </button>
           )}
         </div>
@@ -114,9 +123,23 @@ export function InlineExpertPanel({
           className="p-1.5 rounded-md text-text-muted hover:text-text-primary hover:bg-bg-hover transition-colors"
           title="关闭"
         >
-          <X size={14} />
+          <X className="icon-md" />
         </button>
       </div>
+
+      {/* Degraded-source banner — visible, never silent. The backend owns
+          the expert catalog; when it can't be reached we fall back to the
+          bundled list and SAY SO instead of pretending it's the live one. */}
+      {usingFallback && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="mx-4 mb-1 flex items-center gap-1.5 px-2 py-1 rounded-md bg-bg-tertiary text-[11px] text-warning"
+        >
+          <AlertTriangle aria-hidden="true" className="icon-sm shrink-0" />
+          <span>未能连接专家服务，当前显示内置清单</span>
+        </div>
+      )}
 
       {/* Category tabs */}
       <div className="flex items-center gap-1 px-4 pb-2 overflow-x-auto" style={{ scrollbarWidth: "none" }}>
@@ -124,7 +147,7 @@ export function InlineExpertPanel({
           active={activeCategory === "全部"}
           onClick={() => setActiveCategory("全部")}
           label="全部"
-          count={BUILTIN_EXPERTS.length}
+          count={experts.length}
         />
         {EXPERT_CATEGORIES.map((cat) => {
           const count = categoryCounts[cat];
@@ -155,7 +178,7 @@ export function InlineExpertPanel({
                 key={e.id}
                 onClick={() => onSelect(e.id)}
                 className={clsx(
-                  "group flex items-center gap-2 p-2 rounded-lg text-left transition-all hover:-translate-y-px",
+                  "group flex items-center gap-2 p-2 rounded-lg text-left transition-[color,background-color,border-color,transform] hover:-translate-y-px",
                   currentExpertId === e.id
                     ? "bg-accent/10 ring-1 ring-accent/30"
                     : "bg-bg-card hover:bg-bg-hover hover:shadow-sm",
@@ -165,15 +188,15 @@ export function InlineExpertPanel({
                   {e.avatar}
                 </div>
                 <div className="min-w-0 flex-1">
-                  <div className="text-[11.5px] font-medium text-text-primary truncate leading-tight">
+                  <div className="text-[12px] font-medium text-text-primary truncate leading-tight">
                     {e.name}
                   </div>
-                  <div className="text-[10px] text-text-muted truncate mt-0.5">
+                  <div className="text-[11px] text-text-muted truncate mt-0.5">
                     {e.role}
                   </div>
                 </div>
                 {currentExpertId === e.id && (
-                  <Check size={12} className="text-accent shrink-0" />
+                  <Check className="icon-sm text-accent shrink-0" />
                 )}
               </button>
             ))}
@@ -187,9 +210,9 @@ export function InlineExpertPanel({
           <button
             onClick={() => { onOpenFullCatalog(); onClose(); }}
             className="flex items-center gap-1.5 text-[11px] text-accent hover:text-accent/80 transition-colors"
-          >
+>
             全部专家
-            <ArrowRight size={11} />
+            <ArrowRight className="icon-sm" />
           </button>
         </div>
       )}
@@ -219,7 +242,7 @@ function CategoryTab({
       )}
     >
       {label}
-      <span className={clsx("text-[9.5px]", active ? "text-accent-on-text/70" : "text-text-faint")}>
+      <span className={clsx("text-[11px]", active ? "text-accent-on-text/70" : "text-text-faint")}>
         {count}
       </span>
     </button>

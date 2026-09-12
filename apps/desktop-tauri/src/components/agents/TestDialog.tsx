@@ -88,7 +88,7 @@ export function TestDialog({ agent, onClose }: TestDialogProps) {
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "var(--color-overlay-scrim)" }} onClick={onClose}>
       <div
         onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-md h-[600px] max-h-[80vh] rounded-2xl bg-bg-card overflow-hidden flex flex-col shadow-2xl"
+        className="w-full max-w-md h-[600px] max-h-[80vh] rounded-xl bg-bg-card overflow-hidden flex flex-col shadow-2xl"
       >
         {/* Header */}
         <div className="flex items-center gap-2.5 p-3.5">
@@ -100,10 +100,10 @@ export function TestDialog({ agent, onClose }: TestDialogProps) {
           </div>
           <div className="min-w-0 flex-1">
             <p className="text-[13px] font-semibold text-text-primary truncate">{agent.name}</p>
-            <p className="text-[10.5px] text-text-muted truncate">{agent.role}</p>
+            <p className="text-[11px] text-text-muted truncate">{agent.role}</p>
           </div>
           <button onClick={onClose} aria-label="关闭" className="p-1.5 rounded-md text-text-muted hover:text-text-primary hover:bg-bg-hover">
-            <X size={14} />
+            <X className="icon-md" />
           </button>
         </div>
 
@@ -119,7 +119,7 @@ export function TestDialog({ agent, onClose }: TestDialogProps) {
               <div key={`msg-${m.role}-${i}`} className={clsx("flex", m.role === "user" ? "justify-end" : "justify-start")}>
                 <div
                   className={clsx(
-                    "max-w-[80%] rounded-xl px-3 py-2 text-[12.5px] leading-relaxed",
+                    "max-w-[80%] rounded-xl px-3 py-2 text-[13px] leading-relaxed",
                     m.role === "user"
                       ? "bg-bg-tertiary text-text-primary"
                       : "text-text-primary"
@@ -141,7 +141,7 @@ export function TestDialog({ agent, onClose }: TestDialogProps) {
             onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }}}
             placeholder={`问 ${agent.name} 任何问题...`}
             disabled={streaming}
-            className="flex-1 rounded-lg bg-bg-tertiary px-3 py-2 text-[12.5px] text-text-primary placeholder:text-text-faint outline-none"
+            className="flex-1 rounded-lg bg-bg-tertiary px-3 py-2 text-[13px] text-text-primary placeholder:text-text-faint outline-none"
           />
           <button
             onClick={send}
@@ -150,7 +150,7 @@ export function TestDialog({ agent, onClose }: TestDialogProps) {
             className="p-2 rounded-lg disabled:opacity-40"
             style={{ background: "var(--color-btn-primary-bg)", color: "var(--color-btn-primary-text)" }}
           >
-            <ArrowRight size={14} />
+            <ArrowRight className="icon-md" />
           </button>
         </div>
       </div>

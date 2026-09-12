@@ -273,7 +273,7 @@ export function RoomMemberDialog({
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-2xl max-h-[85vh] rounded-2xl bg-bg-elevated border border-border-primary shadow-pop overflow-hidden flex flex-col relative"
+        className="w-full max-w-2xl max-h-[85vh] rounded-xl bg-bg-elevated border border-border-primary shadow-pop overflow-hidden flex flex-col relative"
         style={{ transform: "translateZ(0)" }}
       >
         {/* P1.5 — tier transition toast */}
@@ -291,7 +291,7 @@ export function RoomMemberDialog({
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 bg-bg-secondary">
           <div className="flex items-center gap-2 min-w-0">
-            <Users size={16} className="text-text-secondary shrink-0" />
+            <Users className="icon-lg text-text-secondary shrink-0" />
             <h3 className="text-[14px] font-semibold text-text-primary truncate">
               {roomName} — 成员管理
             </h3>
@@ -301,7 +301,7 @@ export function RoomMemberDialog({
             className="p-1 rounded-md hover:bg-bg-hover text-text-muted shrink-0"
             aria-label="关闭"
           >
-            <X size={16} />
+            <X className="icon-lg" />
           </button>
         </div>
 
@@ -314,13 +314,13 @@ export function RoomMemberDialog({
               aria-selected={tab === t}
               onClick={() => { setTab(t); setError(null); }}
               className={clsx(
-                "flex-1 px-4 py-2.5 text-[12.5px] font-medium transition-colors flex items-center justify-center gap-1.5",
+                "flex-1 px-4 py-2.5 text-[13px] font-medium transition-colors flex items-center justify-center gap-1.5",
                 tab === t
                   ? "text-accent border-b-2 border-accent"
                   : "text-text-muted hover:text-text-primary"
               )}
             >
-              {t === "current" ? <Users size={12} /> : <UserPlus size={12} />}
+              {t === "current" ? <Users className="icon-sm" /> : <UserPlus className="icon-sm" />}
               <span>{t === "current" ? "当前" : "邀请"}</span>
               <span
                 className="text-[12px] px-1.5 py-px rounded-md font-semibold"
@@ -339,8 +339,7 @@ export function RoomMemberDialog({
         <div className="px-4 py-2.5 bg-bg-secondary space-y-2">
           <div className="relative">
             <Search
-              size={12}
-              className="absolute left-2.5 top-1/2 -translate-y-1/2 text-text-faint pointer-events-none"
+              className="icon-sm absolute left-2.5 top-1/2 -translate-y-1/2 text-text-faint pointer-events-none"
             />
             <input
               value={search}
@@ -355,10 +354,10 @@ export function RoomMemberDialog({
               className="flex items-start gap-2 px-2.5 py-1.5 rounded-lg text-[13px] leading-snug"
               style={{ background: "var(--color-error-soft)", color: "var(--color-error)" }}
             >
-              <AlertCircle size={12} className="shrink-0 mt-[1px]" />
+              <AlertCircle className="icon-sm shrink-0 mt-[1px]" />
               <span className="flex-1 break-words">{error}</span>
               <button onClick={() => setError(null)} className="text-current opacity-60 hover:opacity-100">
-                <X size={11} />
+                <X className="icon-sm" />
               </button>
             </div>
           )}
@@ -385,7 +384,7 @@ export function RoomMemberDialog({
                 agents={agents}
                 emptyText={agents.length === 0 ? "请先在「专家」页面创建专家" : "暂无成员 · 切到「邀请」标签添加"}
                 actionLabel="请出"
-                actionIcon={<LogOut size={11} />}
+                actionIcon={<LogOut className="icon-sm" />}
                 actionStyle="danger"
                 busyAgentId={busyAgentId}
                 onAction={handleKick}
@@ -440,11 +439,11 @@ export function RoomMemberDialog({
                       type="button"
                       disabled={isBusy}
                       onClick={() => handleInvite(agent.id)}
-                      className="shrink-0 inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[13px] font-medium transition-all hover:opacity-90"
+                      className="shrink-0 inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[13px] font-medium transition-[color,background-color,border-color,opacity] hover:opacity-90"
                       style={{ background: "var(--color-btn-primary-bg)", color: "var(--color-btn-primary-text)" }}
                     >
-                      <Check size={11} />
-                      <span>{isBusy ? "处理中..." : "邀请"}</span>
+                      <Check className="icon-sm" />
+                      <span>{isBusy ? "处理中…" : "邀请"}</span>
                     </button>
                   </li>
                 );
@@ -473,7 +472,7 @@ export function RoomMemberDialog({
  *  Visual distinction rules (no gradient — see project 视觉铁律):
  *   - solid tinted background (amber 8%) to set it apart from
  *     user-invited members
- *   - 👑 glyph avatar instead of agent letter
+ *   - Crown icon instead of agent letter
  *   - "系统内置" tag replaces the action button — leader can't be
  *     invited, kicked, or have its model overridden
  *
@@ -496,7 +495,7 @@ function LeaderRow({
       style={{ background: "hsla(43, 96%, 56%, 0.08)" }}
       title="项目总管 · 系统内置 · 不可邀请、不可请出、不可修改模型"
     >
-      {/* Leader avatar — 👑 glyph over amber tinted bg, no gradient. */}
+      {/* Leader avatar — Crown icon over amber tinted bg, no gradient. */}
       <div
         className="shrink-0 rounded-full flex items-center justify-center font-semibold"
         style={{
@@ -509,7 +508,7 @@ function LeaderRow({
           boxShadow: "inset 0 0 0 1px hsla(43, 96%, 50%, 0.55)",
         }}
       >
-        <Crown size={14} strokeWidth={2.4} />
+        <Crown className="icon-md" strokeWidth={2.4} />
       </div>
       <div className="flex-1 min-w-0">
         <p className="text-[14px] font-medium text-text-primary truncate flex items-center gap-1.5">
@@ -661,7 +660,7 @@ function MemberList({
                 title={`给 ${alias ?? agent.name} 点赞 +20`}
                 aria-label="点赞"
               >
-                <ThumbsUp size={12} />
+                <ThumbsUp className="icon-sm" />
               </button>
               <button
                 type="button"
@@ -671,10 +670,10 @@ function MemberList({
                 title={`给 ${alias ?? agent.name} 差评 -20`}
                 aria-label="差评"
               >
-                <ThumbsDown size={12} />
+                <ThumbsDown className="icon-sm" />
               </button>
             </div>
-            {/* Inline edit for display name (别名). Click the pencil to
+            {/* Inline edit for display name （别名）. Click the pencil to
                 open an input; Enter saves, Esc cancels, blank input
                 clears the alias (reverts to agent's global name). */}
             <button
@@ -692,7 +691,7 @@ function MemberList({
               title="设置本房间别名"
               aria-label="设置别名"
             >
-              <Pencil size={12} />
+              <Pencil className="icon-sm" />
             </button>
             {/* Per-room model select. First option = "agent default",
                 remaining = enabled models from SettingsView. If no
@@ -726,7 +725,7 @@ function MemberList({
               disabled={isBusy}
               onClick={() => onAction(agent.id)}
               className={clsx(
-                "shrink-0 inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[13px] font-medium transition-all",
+                "shrink-0 inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[13px] font-medium transition-[color,background-color,border-color,opacity]",
                 isBusy && "opacity-60 cursor-wait",
                 "hover:opacity-90"
               )}
@@ -741,7 +740,7 @@ function MemberList({
               }
             >
               {actionIcon}
-              <span>{isBusy ? "处理中..." : actionLabel}</span>
+              <span>{isBusy ? "处理中…" : actionLabel}</span>
             </button>
           </li>
         );

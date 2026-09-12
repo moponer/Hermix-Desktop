@@ -47,12 +47,12 @@ export function ThemeToggle({ compact = false }: { compact?: boolean }) {
             key={t.id}
             type="button"
             onClick={() => { setMode(t.id); setOpen(false); }}
-            className={`w-full flex items-center gap-2 px-2.5 py-1.5 text-left text-[12.5px] hover:bg-bg-hover transition-colors ${active ? "text-accent" : "text-text-primary"}`}
+            className={`w-full flex items-center gap-2 px-2.5 py-1.5 text-left text-[13px] hover:bg-bg-hover transition-colors ${active ? "text-accent" : "text-text-primary"}`}
             role="menuitem"
           >
-            <Icon size={13} className="shrink-0 opacity-80" />
+            <Icon className="icon-md shrink-0 opacity-80" />
             <span className="grow truncate">{t.label}</span>
-            {active && <Check size={12} className="shrink-0" />}
+            {active && <Check className="icon-sm shrink-0" />}
           </button>
         );
       })}
@@ -68,9 +68,9 @@ export function ThemeToggle({ compact = false }: { compact?: boolean }) {
           onClick={() => setOpen((v) => !v)}
           className="icon-btn"
           aria-label={`主题: ${label}`}
-          title={`主题: ${label} (点击展开)`}
+          title={`主题: ${label} （点击展开）`}
         >
-          <CurIcon size={18} />
+          <CurIcon className="icon-lg" />
         </button>
         {menu}
       </div>
@@ -86,9 +86,9 @@ export function ThemeToggle({ compact = false }: { compact?: boolean }) {
         className="flex items-center gap-1.5 h-7 px-2 rounded-md border border-border-primary bg-bg-elevated text-text-secondary hover:bg-bg-hover transition-colors"
         title={`主题: ${label}`}
       >
-        <CurIcon size={13} />
+        <CurIcon className="icon-md" />
         <span className="text-[12px]">{label}</span>
-        <ChevronDown size={11} className="opacity-60" />
+        <ChevronDown className="icon-sm opacity-60" />
       </button>
       {menu}
     </div>

@@ -53,9 +53,15 @@ interface ToolGroup {
  * MarkdownBody, etc. via the inline renderer chain). Kept
  * structurally identical: any change here MUST be mirrored in
  * `messageParser.detectToolError` and vice versa.
+ *
+ * `isError` is the server's `ToolResult::is_error` flag and wins
+ * outright when present: `false` means the call succeeded, so no text
+ * inspection happens and normal output that merely starts with "Error"
+ * is never mis-reported as a failure.
  */
-function detectToolError(content?: string): string | null {
+function detectToolError(content?: string, isError?: boolean): string | null {
   if (!content) return null;
+  if (isError === false) return null;
   const trimmed = content.trim();
   if (!trimmed) return null;
   if (/^(Failed|Error|ERR|Tool execution failed)/i.test(trimmed)) {
@@ -218,7 +224,7 @@ export function groupEvents(
     grp.events.push(ev);
     if (ev.type === "tool_start" && !grp.args) grp.args = ev.arguments;
     if (ev.type === "tool_complete") {
-      const errReason = detectToolError(ev.content);
+      const errReason = detectToolError(ev.content, ev.is_error);
       grp.status = errReason ? "error" : "done";
       grp.endedAt = ev.created_at;
       if (errReason && !grp.statusNote) grp.statusNote = errReason;
@@ -353,6 +359,11 @@ const TOOL_VERB: Record<string, string> = {
   delegate_task: "已委派子agent",
   delegate: "已委派子agent",
   get_subagent_result: "已获取子agent结果",
+  // 2026-08-29: custom app management — the row previously showed the
+  // raw English tool name ("custom_app_manager patch 运行中", user
+  // feedback). Sub-action (list/patch/run/…) is surfaced by the
+  // primary-arg line via describeToolArgs in bubbleUtils.
+  custom_app_manager: "自定义应用管理",
 };
 
 function toolVerb(tool: string): string {
@@ -564,7 +575,11 @@ function ToolRow({ group }: { group: ToolGroup }) {
   // row. Running tools still show a spinner + accent-tinted icon to
   // signal "actively working".
   const [open, setOpen] = useState(false);
-  const label = group.tool && group.tool.trim() ? group.tool : toolVerb(group.tool);
+  // 2026-08-29: prefer the Chinese verb over the raw tool name — the
+  // row previously read "custom_app_manager patch 运行中" (user asked
+  // for a Chinese explanation of what's actually running). The
+  // original English name stays available in the row title tooltip.
+  const label = toolVerb(group.tool || "tool");
 
   // (, Hermes 对标): when a tool is still
   // running, the duration chip previously stayed frozen at
@@ -672,9 +687,9 @@ function ToolRow({ group }: { group: ToolGroup }) {
         <span className="tw-msg-main">
           <span className="tw-msg-icon">
             {isRunning ? (
-              <Loader2 size={12} className="tw-msg-spin" />
+              <Loader2 className="icon-sm tw-msg-spin" />
             ) : (
-              <Icon size={12} className="tw-msg-icon-svg" />
+              <Icon className="icon-sm tw-msg-icon-svg" />
             )}
           </span>
 
@@ -748,7 +763,7 @@ function ToolRow({ group }: { group: ToolGroup }) {
               duplicate). */}
           {hasBody && !isError && (
             <span className="tw-msg-chev">
-              {open ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+              {open ? <ChevronDown className="icon-sm" /> : <ChevronRight className="icon-sm" />}
             </span>
           )}
         </span>
@@ -831,7 +846,7 @@ function LiveTerminal({ content, running }: { content: string; running: boolean 
   }, []);
 
   const handleCopy = async () => {
-    const text = displayContent || (running ? "" : "(无输出)");
+    const text = displayContent || (running ? "" : "（无输出）");
     if (!text) return;
     try {
       if (navigator.clipboard?.writeText) {
@@ -879,7 +894,7 @@ function LiveTerminal({ content, running }: { content: string; running: boolean 
         <pre className="tw-msg-output-text">{displayContent}</pre>
       ) : (
         <span className="tw-msg-output-empty">
-          {running ? "等待输出…" : "(无输出)"}
+          {running ? "等待输出…" : "（无输出）"}
         </span>
       )}
     </div>

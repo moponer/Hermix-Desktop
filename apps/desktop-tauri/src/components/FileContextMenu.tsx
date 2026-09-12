@@ -79,7 +79,7 @@ export function FileExplorerContextMenu({
             onClick={() => onAction(item.action)}
             className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-text-primary hover:bg-bg-hover transition-colors text-left"
           >
-            <item.icon size={13} className="shrink-0 text-text-muted" />
+            <item.icon className="icon-md shrink-0 text-text-muted" />
             {item.label}
           </button>
         </div>

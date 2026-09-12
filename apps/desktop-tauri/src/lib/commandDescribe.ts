@@ -35,14 +35,14 @@ function summarizeReadableCommand(decoded: string): {
 
   if (/\b(remove-item|rm|del|rd|rmdir|remove-childitem)\b/.test(c) ||
       /remove-item\s+-recurse/.test(c)) {
-    return { summary: "⚠ 删除文件/目录（可能递归）", danger: true };
+    return { summary: "删除文件/目录（可能递归）", danger: true };
   }
   if (/\b(invoke-webrequest|iwr|wget|curl|downloadfile|downloadstring)\b/.test(c) ||
       /system\.net\.webclient/.test(c)) {
-    return { summary: "⚠ 从网络下载文件/内容", danger: true };
+    return { summary: "从网络下载文件/内容", danger: true };
   }
   if (/\b(set-itemproperty|new-itemproperty|remove-itemproperty|reg\s+add)\b/.test(c)) {
-    return { summary: "⚠ 修改注册表", danger: true };
+    return { summary: "修改注册表", danger: true };
   }
   if (/\b(stop-process|start-process|taskkill)\b/.test(c)) {
     return { summary: "启动/终止进程", danger: true };
@@ -81,6 +81,6 @@ export function describeShellCommand(raw: string): CommandDescription {
   }
   const display = raw.trim().length > 120 ? raw.trim().slice(0, 117) + "…" : raw.trim();
   const { danger } = summarizeReadableCommand(raw);
-  const prefix = danger ? "⚠ 执行危险命令: " : "执行命令: ";
+  const prefix = danger ? "执行危险命令: " : "执行命令: ";
   return { text: prefix + display, danger, wasEncoded: false };
 }

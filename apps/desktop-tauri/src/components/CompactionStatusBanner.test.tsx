@@ -44,22 +44,22 @@ describe("CompactionStatusBanner", () => {
 
   it("closed state shows '正常' status", () => {
     renderBanner("closed");
-    expect(screen.getByText(/上下文自动压缩:正常/)).toBeInTheDocument();
+    expect(screen.getByText(/上下文自动压缩：正常/)).toBeInTheDocument();
   });
 
   it("half_open state shows '恢复探测中' status", () => {
     renderBanner("half_open");
-    expect(screen.getByText(/上下文自动压缩:恢复探测中/)).toBeInTheDocument();
+    expect(screen.getByText(/上下文自动压缩：恢复探测中/)).toBeInTheDocument();
   });
 
   it("open state shows '已熔断' status", () => {
     renderBanner("open");
-    expect(screen.getByText(/上下文自动压缩:已熔断/)).toBeInTheDocument();
+    expect(screen.getByText(/上下文自动压缩：已熔断/)).toBeInTheDocument();
   });
 
   it("fallback state shows '轻量裁剪' status", () => {
     renderBanner("fallback");
-    expect(screen.getByText(/上下文自动压缩:已切换轻量裁剪/)).toBeInTheDocument();
+    expect(screen.getByText(/上下文自动压缩：已切换轻量裁剪/)).toBeInTheDocument();
   });
 
   it("pressure state shows '使用率偏高' warning", () => {
@@ -123,7 +123,7 @@ describe("CompactionStatusBanner", () => {
 
     it("starting phase shows '正在准备' with spinner", () => {
       const { container } = renderWithPhase("starting");
-      expect(screen.getByText(/上下文压缩:正在准备/)).toBeInTheDocument();
+      expect(screen.getByText(/上下文压缩：正在准备/)).toBeInTheDocument();
       // Loader2 icon should carry the `animate-spin` class so the
       // mid-attempt phases read as "actively working".
       expect(container.querySelector(".animate-spin")).toBeTruthy();
@@ -131,32 +131,32 @@ describe("CompactionStatusBanner", () => {
 
     it("in_progress_fast phase shows the fast-path copy", () => {
       const { container } = renderWithPhase("in_progress_fast");
-      expect(screen.getByText(/上下文压缩:正在压缩中\(快速通道\)/)).toBeInTheDocument();
+      expect(screen.getByText(/上下文压缩：正在压缩中（快速通道）/)).toBeInTheDocument();
       expect(container.querySelector(".animate-spin")).toBeTruthy();
     });
 
     it("in_progress_llm phase shows the LLM-summary copy", () => {
       const { container } = renderWithPhase("in_progress_llm");
-      expect(screen.getByText(/上下文压缩:正在压缩中\(LLM 摘要\)/)).toBeInTheDocument();
+      expect(screen.getByText(/上下文压缩：正在压缩中（LLM 摘要）/)).toBeInTheDocument();
       expect(container.querySelector(".animate-spin")).toBeTruthy();
     });
 
     it("complete phase shows the success copy with no spinner", () => {
       const { container } = renderWithPhase("complete");
-      expect(screen.getByText(/上下文压缩:已完成/)).toBeInTheDocument();
+      expect(screen.getByText(/上下文压缩：已完成/)).toBeInTheDocument();
       expect(container.querySelector(".animate-spin")).toBeFalsy();
     });
 
     it("failed phase shows the failure copy", () => {
       renderWithPhase("failed");
-      expect(screen.getByText(/上下文压缩:本轮失败/)).toBeInTheDocument();
+      expect(screen.getByText(/上下文压缩：本轮失败/)).toBeInTheDocument();
     });
 
     it("idle phase falls back to the breaker-state copy (back-compat)", () => {
       // Explicit `phase: "idle"` should behave exactly like the
       // pre-phase banner — driven purely by `state`.
       renderWithPhase("idle");
-      expect(screen.getByText(/上下文自动压缩:正常/)).toBeInTheDocument();
+      expect(screen.getByText(/上下文自动压缩：正常/)).toBeInTheDocument();
     });
 
     it("undefined phase falls back to the breaker-state copy (older snapshots)", () => {

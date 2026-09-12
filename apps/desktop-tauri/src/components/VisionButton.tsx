@@ -44,7 +44,7 @@ export function VisionButton({ onFilesAttach, disabled }: VisionButtonProps) {
         title="上传文档或图片（视觉理解）"
         className="flex items-center gap-1 px-2 py-1 rounded text-text-muted hover:text-text-primary hover:bg-bg-tertiary disabled:opacity-30 transition-colors text-[12px]"
       >
-        <FileText size={12} />
+        <FileText className="icon-sm" />
         <span>文档图片</span>
       </button>
     </>

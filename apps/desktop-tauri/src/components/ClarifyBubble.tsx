@@ -16,7 +16,7 @@ export function ClarifyCard({
     // contract violation. Show a small banner rather than a silent gap.
     return (
       <div className="h-enter flex items-center gap-2 text-[12px] text-text-faint italic">
-        <AlertCircle size={12} />
+        <AlertCircle className="icon-sm" />
         <span>澄清请求数据缺失</span>
       </div>
     );
@@ -32,11 +32,11 @@ export function ClarifyCard({
         style={{ background: "rgba(20, 184, 166, 0.10)" }}
         title="需要确认"
       >
-        <HelpCircle size={12} className="text-accent" />
+        <HelpCircle className="icon-sm text-accent" />
       </div>
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-1.5 mb-1 flex-wrap">
-          <span className="text-[12.5px] font-semibold text-text-primary">需要您确认</span>
+          <span className="text-[13px] font-semibold text-text-primary">需要您确认</span>
           <span className="h-tiny">· {formatRelativeTime(message.timestamp)}</span>
           {answered && <span className="pill pill-success">已答复</span>}
         </div>
@@ -107,7 +107,7 @@ export function ClarifyComposer({
             }
           }}
           placeholder={hasChoices ? "或直接输入自定义回答" : "请输入您的回答"}
-          className="flex-1 px-2.5 py-1.5 rounded-md text-[12.5px] outline-none"
+          className="flex-1 px-2.5 py-1.5 rounded-md text-[13px] outline-none"
           style={{
             background: "var(--color-bg-tertiary)",
             color: "var(--color-text-primary)",

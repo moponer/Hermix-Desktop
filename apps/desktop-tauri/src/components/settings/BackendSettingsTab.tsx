@@ -49,7 +49,7 @@ export function BackendTab() {
           ? <div className="mt-3 text-xs text-text-muted">当前模型：<span className="text-text-primary font-medium">{defaultModel}</span></div>
           : <div className="mt-3 text-xs text-text-muted">当前模型：<span className="text-amber-400">未设置（请到「模型配置」选择一个）</span></div>}
         <button onClick={async () => { const ok = await api.checkBackendHealth(); setHealth(ok); }} className="mt-3 flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-secondary text-xs text-text-secondary hover:text-text-primary">
-          <RefreshCw size={12} /> 刷新状态
+          <RefreshCw className="icon-sm" /> 刷新状态
         </button>
       </div>
       <div className="rounded-xl border border-border-primary bg-bg-card p-4">
@@ -60,7 +60,7 @@ export function BackendTab() {
               启用后 AI 助手保持后台活跃状态，支持持续监控与定时任务。
             </p>
             {tickLoopRunning && (
-              <span className="inline-flex items-center gap-1 mt-1 text-[10px] text-green-400">
+              <span className="inline-flex items-center gap-1 mt-1 text-[11px] text-green-400">
                 <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
                 运行中
               </span>
@@ -174,7 +174,7 @@ export function PythonRuntimePanel() {
           disabled={probeLoading}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-secondary text-xs text-text-secondary hover:text-text-primary disabled:opacity-40 shrink-0"
         >
-          <RefreshCw size={12} className={probeLoading ? "animate-spin" : ""} />
+          <RefreshCw className={`icon-sm ${probeLoading ? "animate-spin" : ""}`} />
           {probeLoading ? "检测中" : "重新检测"}
         </button>
       </div>
@@ -237,7 +237,7 @@ export function PythonRuntimePanel() {
             disabled={overrideSaving}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs bg-accent hover:bg-accent-hover text-accent-on-text disabled:opacity-40 shrink-0"
           >
-            <Save size={12} />
+            <Save className="icon-sm" />
             {overrideSaving ? "保存中" : "保存"}
           </button>
         </div>

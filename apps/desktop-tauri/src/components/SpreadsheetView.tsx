@@ -114,9 +114,9 @@ export function SpreadsheetView({ model, fileName }: SpreadsheetViewProps) {
               className="p-1 rounded hover:bg-bg-hover disabled:opacity-30 text-text-muted"
               title="上一个工作表"
             >
-              <ChevronLeft size={11} />
+              <ChevronLeft className="icon-sm" />
             </button>
-            <span className="text-[11.5px] font-medium px-1.5 min-w-[60px] text-center truncate text-text-primary">
+            <span className="text-[12px] font-medium px-1.5 min-w-[60px] text-center truncate text-text-primary">
               {current.name}
             </span>
             <button
@@ -126,19 +126,19 @@ export function SpreadsheetView({ model, fileName }: SpreadsheetViewProps) {
               className="p-1 rounded hover:bg-bg-hover disabled:opacity-30 text-text-muted"
               title="下一个工作表"
             >
-              <ChevronRight size={11} />
+              <ChevronRight className="icon-sm" />
             </button>
           </div>
         )}
 
         {/* Search input */}
         <div className="flex items-center gap-1.5 flex-1 min-w-0 max-w-[280px] px-2 py-1 rounded bg-bg-tertiary">
-          <Search size={11} className="text-text-muted shrink-0" />
+          <Search className="icon-sm text-text-muted shrink-0" />
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="在表格内搜索…"
-            className="flex-1 bg-transparent text-[11.5px] outline-none min-w-0 placeholder:text-text-faint"
+            className="flex-1 bg-transparent text-[12px] outline-none min-w-0 placeholder:text-text-faint"
           />
           {query && (
             <button
@@ -161,7 +161,7 @@ export function SpreadsheetView({ model, fileName }: SpreadsheetViewProps) {
           className="flex items-center gap-1 text-[11px] px-2 py-1 rounded hover:bg-bg-hover text-text-muted hover:text-text-primary"
           title="导出当前工作表为 CSV"
         >
-          <Download size={11} />
+          <Download className="icon-sm" />
           导出 CSV
         </button>
       </div>
@@ -224,7 +224,7 @@ function SheetTable({ header, data }: SheetTableProps) {
       style={{ background: "var(--color-bg-primary)" }}
     >
       <table
-        className="text-[11.5px] font-sans"
+        className="text-[12px] font-sans"
         style={{
           borderCollapse: "separate",
           borderSpacing: 0,
@@ -330,7 +330,7 @@ function DataRow({ rowIdx, row, colCount }: { rowIdx: number; row: string[]; col
       style={{ height: ROW_HEIGHT }}
     >
       <td
-        className="sticky text-center text-text-faint font-mono text-[10.5px] cell-border-right-subtle"
+        className="sticky text-center text-text-faint font-mono text-[11px] cell-border-right-subtle"
         style={{
           left: 0,
           position: "sticky",

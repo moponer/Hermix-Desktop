@@ -68,8 +68,8 @@ const LOOK: Record<string, { bg: string; label: string }> = {
   md:   { bg: "#083fa1", label: "M"    },
   mdx:  { bg: "#083fa1", label: "M"    },
   markdown: { bg: "#083fa1", label: "M" },
-  txt:  { bg: "#475569", label: "TXT"  },
-  rst:  { bg: "#475569", label: "R"    },
+  txt:  { bg: "#6b6b6b", label: "TXT"  },
+  rst:  { bg: "#6b6b6b", label: "R"    },
   // ── Code — branded colors ────────────────────────────────
   ts:   { bg: "#3178c6", label: "TS"   },
   tsx:  { bg: "#3178c6", label: "TX"   },

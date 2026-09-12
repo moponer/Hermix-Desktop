@@ -51,7 +51,7 @@ export function ToastContainer() {
             onClick={() => dismissToast(t.id)}
           >
             <span className="toast__icon" aria-hidden="true">
-              <Icon size={14} strokeWidth={2.2} />
+              <Icon className="icon-md" strokeWidth={2.2} />
             </span>
             <span className="toast__msg">{t.message}</span>
             <button
@@ -60,7 +60,7 @@ export function ToastContainer() {
               aria-label="关闭"
               onClick={(e) => { e.stopPropagation(); dismissToast(t.id); }}
             >
-              <X size={12} strokeWidth={2.2} />
+              <X className="icon-sm" strokeWidth={2.2} />
             </button>
             {showProgress && (
               <span

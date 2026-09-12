@@ -56,7 +56,7 @@ export function SubAgentPanel({ subAgents }: { subAgents: Record<string, SubAgen
       }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
-        <Sparkles size={14} style={{ color: "var(--color-accent)" }} />
+        <Sparkles className="icon-md" style={{ color: "var(--color-accent)" }} />
         <span style={{ fontWeight: 600, fontSize: 13, color: "var(--color-text-primary)" }}>
           子代理
         </span>
@@ -97,7 +97,7 @@ export function SubAgentPanel({ subAgents }: { subAgents: Record<string, SubAgen
                     minWidth: 0,
                   }}
                 >
-                  {sa.task || "(无任务描述)"}
+                  {sa.task || "（无任务描述）"}
                 </span>
                 <span
                   className="inline-flex items-center gap-1 rounded-full font-semibold"
@@ -109,7 +109,7 @@ export function SubAgentPanel({ subAgents }: { subAgents: Record<string, SubAgen
                     flexShrink: 0,
                   }}
                 >
-                  <Icon size={11} className={sa.phase === "started" ? "animate-spin shrink-0" : undefined} />
+                  <Icon className={`icon-sm ${sa.phase === "started" ? "animate-spin shrink-0" : undefined}`} />
                   {cfg.label}
                 </span>
               </div>

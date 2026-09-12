@@ -16,7 +16,12 @@ import { useModelSelector } from "./ModelSelector";
 import { Composer } from "./Composer";
 import { MessageList, type MessageListHandle, type StreamRow } from "./MessageList";
 import { useCustomApps } from "../hooks/useCustomApps";
-import { buildAppPrefix } from "../lib/appMention";
+import { useWorkspaceRegistry } from "../hooks/useWorkspaceRegistry";
+import {
+  MENTION_TRIGGER_APP,
+  MENTION_TRIGGER_WORK,
+  buildMentionPrefix,
+} from "../lib/appMention";
 import {
   usePermissionLevel,
   useSessionExpert,
@@ -68,7 +73,7 @@ function ModelStatusBar({
           aria-label="切换产物栏"
           data-right-open={rightOpen ? "true" : "false"}
         >
-          <PanelRight size={14} />
+          <PanelRight className="icon-md" />
         </button>
       )}
     </div>
@@ -110,8 +115,10 @@ interface ChatViewProps {
   rightOpen?: boolean;
   onToggleRight?: () => void;
   onPathClick?: (path: string) => void;
-  onApproveApproval?: (requestId: string) => void;
+  onApproveApproval?: (requestId: string, remember?: boolean) => void;
   onDenyApproval?: (requestId: string) => void;
+  onApproveBatchApproval?: (batchId: string, remember?: boolean) => void;
+  onDenyBatchApproval?: (batchId: string) => void;
   onAnswerClarify?: (requestId: string, answer: string) => void;
   messageLoadError?: string | null;
   onRetryLoad?: () => void;
@@ -172,6 +179,8 @@ export function ChatView({
   subAgents,
   onApproveApproval,
   onDenyApproval,
+  onApproveBatchApproval,
+  onDenyBatchApproval,
   onPathClick,
   onAnswerClarify,
   messageLoadError,
@@ -197,6 +206,8 @@ export function ChatView({
   const isStreaming = stream.streamingSessionId === session?.id;
   const [input, setInput] = useState("");
   const { apps: customApps } = useCustomApps();
+  // 工作台注册表 entries — 供 @work 联想与发送时【目标工作台】头。
+  const { entries: workbenchEntries } = useWorkspaceRegistry();
   const [sending, setSending] = useState(false);
   const [inlineCompactionDismissed, setInlineCompactionDismissed] = useState(false);
   useEffect(() => {
@@ -439,6 +450,34 @@ export function ChatView({
       : null;
   const streamingAssistantId = streamingEntry?.id ?? null;
   const streamingMsg = streamingEntry?.msg ?? null;
+
+  // Reasoning lines extracted from the active (streaming) assistant's
+  // `unified_steps` for the bottom-of-chat `<ReasoningTicker>`. The
+  // ticker only shows when the user has folded the reasoning block
+  // (`reasoningFolded`); otherwise the same content is visible inline
+  // inside the expanded fold. Source = the live `streamingMsg` so
+  // the ticker reflects the active turn, not historical folds.
+  const reasoningLines = useMemo<string[]>(() => {
+    if (!streamingMsg) return [];
+    const steps = streamingMsg.unified_steps;
+    if (!steps) return [];
+    return steps
+      .filter((s): s is { kind: "reasoning"; content: string } =>
+        s.kind === "reasoning")
+      .map((s) => s.content);
+  }, [streamingMsg]);
+  // Fold state mirrored up from the latest `<ProcessTimeline>`.
+  // Starts `false` (2026-08-29 user feedback): during a live stream the
+  // thinking block is always expanded inline, so the ticker must stay
+  // dormant — reasoning is readable right there, a rolling duplicate is
+  // pure noise. Only a REAL `folded=true` report (user manually closed a
+  // fold) may mount the ticker. Multi-assistant sessions report from
+  // each ProcessTimeline in render order — the streaming assistant's
+  // update always wins last.
+  const [reasoningFolded, setReasoningFolded] = useState(false);
+  const handleReasoningFoldChange = useCallback((folded: boolean) => {
+    setReasoningFolded(folded);
+  }, []);
   const hasPendingApproval = useMemo(
     () => (session?.messages ?? []).some((m) => m.role === "approval" && !m.approval?.decision),
     [session?.messages],
@@ -479,11 +518,30 @@ export function ChatView({
     const nonStreamingRaw = streamingAssistantId
       ? session?.messages.filter((m) => m.id !== streamingAssistantId) ?? []
       : session?.messages ?? [];
-    // Merge legacy role: "tool" messages into preceding assistant's
-    // execution_timeline so they render inline instead of as separate rows.
-    const mergedTools = mergeLegacyToolMessages(nonStreamingRaw);
-    const visibleNonStreaming = mergedTools.filter(isRowRenderable);
-    const restMsgs = mergeConsecutiveAssistantMessages(visibleNonStreaming);
+    // Defensive: `mergeLegacyToolMessages` /
+    // `mergeConsecutiveAssistantMessages` walk every row in order and
+    // crash on a single corrupt entry (e.g. a timeline item with a
+    // `tool_call_id` of the wrong type). Without this try/catch the
+    // crash bubbles into React's render phase, kills the whole
+    // `MessageList` tree, and the user sees "only the last 2 approval
+    // cards survived" because that's what was on-screen before the
+    // crash. Wrap in try/catch and fall back to the raw messages so
+    // the user always sees SOMETHING.
+    let restMsgs: ChatMessage[];
+    try {
+      // Merge legacy role: "tool" messages into preceding assistant's
+      // execution_timeline so they render inline instead of as separate rows.
+      const mergedTools = mergeLegacyToolMessages(nonStreamingRaw);
+      const visibleNonStreaming = mergedTools.filter(isRowRenderable);
+      restMsgs = mergeConsecutiveAssistantMessages(visibleNonStreaming);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error(
+        "[ChatView] chat pipeline crashed, falling back to raw messages:",
+        err,
+      );
+      restMsgs = nonStreamingRaw.filter(isRowRenderable);
+    }
     if (!streamingAssistantId || !streamingMsg) return restMsgs;
     const rawIdx = session?.messages.findIndex((m) => m.id === streamingAssistantId) ?? -1;
     if (rawIdx < 0) return [...restMsgs, streamingMsg];
@@ -556,7 +614,9 @@ export function ChatView({
 
   const handleSubmit = async () => {
     const trimmed = input.trim();
-    const finalText = buildAppPrefix(trimmed, customApps);
+    // @app → 目标自定义应用头；@work → 目标工作台头（两个可同时出现）。
+    let finalText = buildMentionPrefix(trimmed, customApps, MENTION_TRIGGER_APP, "自定义应用", "app_id");
+    finalText = buildMentionPrefix(finalText, workbenchEntries, MENTION_TRIGGER_WORK, "工作台", "workspace_id");
     if (!trimmed && pendingImages.length === 0 && filePaths.length === 0) return;
     if (isProcessingFiles) return;
     const attachedImages: QueuedImage[] = pendingImages.map((img) => ({
@@ -637,8 +697,8 @@ export function ChatView({
   if (messageLoadError) {
     return (
       <div
-        className="flex-1 flex flex-col items-center justify-center px-8 min-h-0"
-        style={{ background: "var(--theme-bg-chat, var(--color-bg-primary))", overflow: "visible" }}
+        className="chat-surface flex-1 flex flex-col items-center justify-center px-8 min-h-0"
+        style={{ overflow: "visible" }}
       >
         <div className="w-full max-w-md flex flex-col items-center py-12 text-center">
           <div
@@ -669,7 +729,7 @@ export function ChatView({
               className="btn btn-primary"
               type="button"
             >
-              <ArrowUp size={14} />
+              <ArrowUp className="icon-md" />
               <span>重试</span>
             </button>
             <button
@@ -690,10 +750,7 @@ export function ChatView({
     && ((session as Session & { message_count?: number }).message_count ?? 0) > 0;
   if (isLoadingExisting) {
     return (
-      <div
-        className="flex-1 flex flex-col items-center justify-center px-8 min-h-0"
-        style={{ background: "var(--theme-bg-chat, var(--color-bg-primary))" }}
-      >
+      <div className="chat-surface flex-1 flex flex-col items-center justify-center px-8 min-h-0">
         <div className="flex flex-col items-center gap-3 text-center">
           <div
             className="w-9 h-9 rounded-full border-2 border-border-primary border-t-text-muted animate-spin"
@@ -707,7 +764,7 @@ export function ChatView({
 
   if (!session || session.messages.length === 0) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center px-8 min-h-0" style={{ background: "var(--theme-bg-chat, var(--color-bg-primary))", overflow: "visible" }}>
+      <div className="chat-surface flex-1 flex flex-col items-center justify-center px-8 min-h-0" style={{ overflow: "visible" }}>
         <div className="w-full max-w-3xl flex flex-col items-center py-12">
           <div className="relative mb-4">
             <img
@@ -724,6 +781,7 @@ export function ChatView({
           <div className="w-full">
             <Composer
               input={input} setInput={setInput} handleKeyDown={handleKeyDown} handleSubmit={handleSubmit} customApps={customApps}
+              workbenches={workbenchEntries}
               textareaRef={textareaRef} sending={sending} isStreaming={false}
               activeWorkspace={activeWorkspace} workspaces={workspaces} workspaceLocked={workspaceLocked}
               onSelectWorkspace={(p) => setWorkspace(p)}
@@ -775,7 +833,7 @@ export function ChatView({
   }
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden min-h-0" style={{ background: "var(--theme-bg-chat, var(--color-bg-primary))" }}>
+    <div className="chat-surface flex-1 flex flex-col overflow-hidden min-h-0">
       <ModelStatusBar
         title={session?.title}
         rightOpen={rightOpen}
@@ -809,13 +867,18 @@ export function ChatView({
         onPathClick={onPathClick}
         onApproveApproval={onApproveApproval}
         onDenyApproval={onDenyApproval}
+        onApproveBatchApproval={onApproveBatchApproval}
+        onDenyBatchApproval={onDenyBatchApproval}
         onAnswerClarify={onAnswerClarify}
         workspaceRoot={workspaceRoot}
         sending={sending}
+        reasoningLines={reasoningLines}
+        reasoningFolded={reasoningFolded}
+        onReasoningFoldChange={handleReasoningFoldChange}
       />
 
       <div className="px-3 sm:px-4 pb-4 shrink-0">
-        <div className="max-w-[720px] lg:max-w-[800px] xl:max-w-[920px] mx-auto">
+        <div className="max-w-wide lg:max-w-[800px] xl:max-w-[920px] mx-auto">
           {acuiState && acuiState.cards.length > 0 && (
             <AcuiPanel
               state={acuiState}
@@ -855,8 +918,8 @@ export function ChatView({
               {(() => {
                 const fmt = (n: number) => n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1_000 ? `${Math.round(n / 1_000)}k` : String(n);
                 const pct = Math.min(100, (stream.contextUsage.usedTokens / stream.contextUsage.maxTokens) * 100);
-                const dotColor = pct >= 95 ? "bg-rose-500" : pct >= 85 ? "bg-amber-500" : "bg-emerald-500";
-                const textColor = pct >= 95 ? "text-rose-600 dark:text-rose-400" : pct >= 85 ? "text-amber-600 dark:text-amber-400" : "text-text-secondary";
+                const dotColor = pct >= 95 ? "bg-error" : pct >= 85 ? "bg-warning" : "bg-success";
+                const textColor = pct >= 95 ? "text-error" : pct >= 85 ? "text-warning" : "text-text-secondary";
                 let cacheInfo = "";
                 if (stream.usageSnapshot) {
                   const cacheRead = stream.usageSnapshot.cacheReadTokens;
@@ -880,7 +943,7 @@ export function ChatView({
             </div>
           ) : !isStreaming && (
             <div className="mb-1.5 flex justify-end px-1">
-              <span className="text-[10px] text-text-faint">—</span>
+              <span className="text-[11px] text-text-faint">—</span>
             </div>
           )}
 

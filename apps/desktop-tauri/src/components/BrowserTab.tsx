@@ -94,13 +94,13 @@ export function BrowserTab() {
         }`} />
         <span className="text-[11px] text-text-muted">
           {status === "ready" ? pageTitle || "就绪" :
-           status === "loading" ? "加载中..." :
+           status === "loading" ? "加载中…" :
            status === "error" ? "错误" : "未连接"}
         </span>
         {status === "ready" && (
           <button
             onClick={handleScreenshot}
-            className="ml-auto px-2 py-0.5 rounded text-[10px] text-text-muted hover:bg-bg-hover transition-colors"
+            className="ml-auto px-2 py-0.5 rounded text-[11px] text-text-muted hover:bg-bg-hover transition-colors"
           >
             截图
           </button>
@@ -117,8 +117,8 @@ export function BrowserTab() {
       {/* Action Result */}
       {actionResult && (
         <div className="px-3 py-2 border-b border-border-primary">
-          <pre className="text-[10.5px] text-text-muted whitespace-pre-wrap break-all max-h-32 overflow-y-auto">{actionResult}</pre>
-          <button onClick={() => setActionResult(null)} className="text-[10px] text-accent hover:underline mt-1">清除</button>
+          <pre className="text-[11px] text-text-muted whitespace-pre-wrap break-all max-h-32 overflow-y-auto">{actionResult}</pre>
+          <button onClick={() => setActionResult(null)} className="text-[11px] text-accent hover:underline mt-1">清除</button>
         </div>
       )}
 
@@ -127,17 +127,17 @@ export function BrowserTab() {
         <div className="text-xs font-medium text-text-primary">快捷操作</div>
         <div className="grid grid-cols-2 gap-2">
           <QuickAction
-            icon={<Search size={14} />}
+            icon={<Search className="icon-md" />}
             label="搜索页面"
             onClick={() => handleEvaluate("document.title", "页面标题")}
           />
           <QuickAction
-            icon={<Eye size={14} />}
+            icon={<Eye className="icon-md" />}
             label="元素检查"
             onClick={() => handleEvaluate("document.querySelector('h1')?.textContent || '(无 h1)'", "H1 检查")}
           />
           <QuickAction
-            icon={<Copy size={14} />}
+            icon={<Copy className="icon-md" />}
             label="复制内容"
             onClick={async () => {
               await handleEvaluate("document.body.innerText.slice(0, 5000)", "页面文本");
@@ -145,7 +145,7 @@ export function BrowserTab() {
             }}
           />
           <QuickAction
-            icon={<FileText size={14} />}
+            icon={<FileText className="icon-md" />}
             label="提取文本"
             onClick={() => handleEvaluate("document.body.innerText.slice(0, 2000)", "页面文本")}
           />

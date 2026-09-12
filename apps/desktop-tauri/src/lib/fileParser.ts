@@ -46,7 +46,7 @@ export function parseByExtension(
       return {
         kind: "error",
         message:
-          "旧版 .doc (二进制) 不支持，请用 Word 另存为 .docx 后重试。",
+          "旧版 .doc （二进制） 不支持，请用 Word 另存为 .docx 后重试。",
       };
     }
     if (

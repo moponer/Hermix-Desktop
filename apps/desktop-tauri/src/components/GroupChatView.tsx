@@ -272,10 +272,7 @@ export function GroupChatView({ initialRoomId }: GroupChatViewProps = {}) {
   return (
     <>
       {/* Outer container: recessed chat background */}
-      <div
-        className="h-full flex flex-col overflow-hidden p-3"
-        style={{ background: "var(--theme-bg-chat, var(--color-bg-app))" }}
-      >
+      <div className="chat-surface h-full flex flex-col overflow-hidden p-3">
         {activeRoom && roomTone ? (
           /* Single card container: header + messages + input */
           <div
@@ -373,10 +370,10 @@ export function GroupChatView({ initialRoomId }: GroupChatViewProps = {}) {
                   const btn = document.querySelector("[data-testid='sidebar-new-room-btn']") as HTMLButtonElement | null;
                   btn?.click();
                 }}
-                className="inline-flex items-center gap-1.5 px-5 py-2 rounded-lg text-[13px] font-medium transition-all active:scale-95"
+                className="inline-flex items-center gap-1.5 px-5 py-2 rounded-lg text-[13px] font-medium transition-[color,background-color,border-color,transform] active:scale-95"
                 style={{ background: "var(--color-accent)", color: "var(--color-accent-on-text)" }}
               >
-                <Plus size={14} />创建房间
+                <Plus className="icon-md" />创建房间
               </button>
             </div>
           </div>

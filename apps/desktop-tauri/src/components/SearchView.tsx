@@ -28,8 +28,7 @@ export function SearchView({ sessions, onSelectSession }: SearchViewProps) {
         {/* Search input */}
         <div className="relative mb-6">
           <Search
-            size={18}
-            className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted"
+            className="icon-lg absolute left-3 top-1/2 -translate-y-1/2 text-text-muted"
           />
           <input
             type="text"
@@ -60,7 +59,7 @@ export function SearchView({ sessions, onSelectSession }: SearchViewProps) {
                 className="w-full text-left p-4 rounded-xl bg-bg-card border border-border-primary hover:bg-bg-card-hover hover:border-border-secondary"
               >
                 <div className="flex items-center gap-2 mb-1">
-                  <MessageSquare size={14} className="text-text-muted" />
+                  <MessageSquare className="icon-md text-text-muted" />
                   <span className="text-sm font-medium text-text-primary">
                     {session.title}
                   </span>

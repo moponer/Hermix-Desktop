@@ -36,7 +36,7 @@ export function BuiltInExpertsTab() {
   return (
     <div className="p-6">
       <div className="max-w-7xl mx-auto">
-        <p className="text-[12.5px] text-text-muted mb-4">
+        <p className="text-[13px] text-text-muted mb-4">
           Hermix 内置的专家角色 — 涵盖产品、技术、金融、营销、内容创作等领域。在对话界面点击"专家"选择使用。
         </p>
         <div className="flex items-center gap-2 mb-3">
@@ -44,7 +44,7 @@ export function BuiltInExpertsTab() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="搜索专家、角色、类别..."
-            className="flex-1 px-3 py-1.5 rounded-md bg-bg-card text-[12.5px] text-text-primary placeholder-text-faint outline-none"
+            className="flex-1 px-3 py-1.5 rounded-md bg-bg-card text-[13px] text-text-primary placeholder-text-faint outline-none"
           />
         </div>
         <div className="flex items-center gap-1.5 mb-5 overflow-x-auto" style={{ scrollbarWidth: "none" }}>
@@ -93,31 +93,31 @@ function CategoryChip({
     <button
       onClick={onClick}
       className={clsx(
-        "flex items-center gap-1 px-2.5 py-1 rounded-full text-[11.5px] whitespace-nowrap",
+        "flex items-center gap-1 px-2.5 py-1 rounded-full text-[12px] whitespace-nowrap",
         active
           ? "bg-accent text-accent-on-text"
           : "bg-bg-tertiary text-text-muted hover:text-text-primary",
       )}
     >
       {label}
-      <span className={clsx("text-[10px]", active ? "text-accent-on-text/80" : "text-text-faint")}>{count}</span>
+      <span className={clsx("text-[11px]", active ? "text-accent-on-text/80" : "text-text-faint")}>{count}</span>
     </button>
   );
 }
 
 function ExpertCard({ expert }: { expert: ExpertDef }) {
   return (
-    <div className="rounded-xl bg-bg-card p-3.5 transition-all hover:-translate-y-0.5 hover:shadow-md">
+    <div className="rounded-xl bg-bg-card p-3.5 transition-[color,background-color,border-color,transform,box-shadow] hover:-translate-y-0.5 hover:shadow-md">
       <div className="flex items-start gap-2.5">
         <div className="w-9 h-9 rounded-full flex items-center justify-center text-[20px] shrink-0 bg-bg-tertiary">
           {expert.avatar}
         </div>
         <div className="min-w-0 flex-1">
           <div className="mb-0.5">
-            <h3 className="text-[12.5px] font-semibold text-text-primary truncate leading-tight">
+            <h3 className="text-[13px] font-semibold text-text-primary truncate leading-tight">
               {expert.name}
             </h3>
-            <p className="text-[10.5px] text-text-muted truncate mt-0.5">
+            <p className="text-[11px] text-text-muted truncate mt-0.5">
               {expert.role}
             </p>
           </div>
@@ -125,11 +125,11 @@ function ExpertCard({ expert }: { expert: ExpertDef }) {
             {expert.description}
           </p>
           <div className="flex flex-wrap gap-1 mt-2">
-            <span className="px-1.5 py-0.5 rounded text-[10px] text-text-secondary bg-bg-tertiary">
+            <span className="px-1.5 py-0.5 rounded text-[11px] text-text-secondary bg-bg-tertiary">
               {expert.category}
             </span>
             {expert.toolset && (
-              <span className="px-1.5 py-0.5 rounded text-[10px] text-text-secondary bg-bg-tertiary">
+              <span className="px-1.5 py-0.5 rounded text-[11px] text-text-secondary bg-bg-tertiary">
                 {expert.toolset}
               </span>
             )}

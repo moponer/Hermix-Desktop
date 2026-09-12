@@ -68,6 +68,9 @@ export function AssistantMessage({
   message, workspaceRoot: _workspaceRoot, showHeader = true, onPathClick, isStreaming, keepOpen = false, hasRunningTool: hasRunningToolProp, expertCutoffAt: _expertCutoffAt,
   onApproveApproval,
   onDenyApproval,
+  onApproveBatchApproval,
+  onDenyBatchApproval,
+  onReasoningFoldChange,
 }: {
   message: ChatMessage;
   workspaceRoot?: string | null;
@@ -81,6 +84,15 @@ export function AssistantMessage({
    */
   onApproveApproval?: (requestId: string) => void;
   onDenyApproval?: (requestId: string) => void;
+  /** Batch approval handlers for `kind: "approval_request_batch"`
+   *  steps — one button click resolves N parallel high-risk tool
+   *  calls. Forwarded to `<UnifiedTimelineRenderer>`. */
+  onApproveBatchApproval?: (batchId: string, remember?: boolean) => void;
+  onDenyBatchApproval?: (batchId: string) => void;
+  /** Forwards fold-state changes from `<ProcessTimeline>` up to
+   *  `<ChatView>`, which decides whether to mount the bottom-of-chat
+   *  `<ReasoningTicker>`. */
+  onReasoningFoldChange?: (folded: boolean) => void;
   /**
    * Whether to render the avatar + name + time + model + stop chip.
    * The copy action is rendered below the message body, even though
@@ -222,6 +234,9 @@ export function AssistantMessage({
           durationMs={message.durationMs}
           onApproveApproval={onApproveApproval}
           onDenyApproval={onDenyApproval}
+          onApproveBatchApproval={onApproveBatchApproval}
+          onDenyBatchApproval={onDenyBatchApproval}
+          onReasoningFoldChange={onReasoningFoldChange}
         />
 
         {/* Backend badge (outside card so it reads as meta, not part of answer) */}
@@ -246,7 +261,7 @@ export function SystemMessage({ message }: { message: ChatMessage }) {
   const preview = full.length > PREVIEW ? full.slice(0, PREVIEW) + "…" : full;
   return (
     <div className="flex gap-2 items-center justify-center my-2 h-enter">
-      <AlertCircle size={12} className="text-text-faint" />
+      <AlertCircle className="icon-sm text-text-faint" />
       <span className="h-tiny italic text-text-faint">{preview}</span>
     </div>
   );

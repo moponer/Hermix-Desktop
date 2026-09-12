@@ -5,7 +5,7 @@ import {
   Boxes, MoreHorizontal, Loader2, LayoutDashboard,
   // Popover icons
   Pencil, Pin, Archive, Trash2, FolderOpenDot, Copy, FolderMinus,
-  Settings,
+  Settings, LayoutGrid, Download, Upload, Bell,
   type LucideIcon,
 } from "lucide-react";
 import { clsx } from "clsx";
@@ -13,7 +13,7 @@ import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
 import { ConnectionIndicator } from "./ConnectionIndicator";
 import { invoke } from "@tauri-apps/api/core";
-import type { Session, NavPage } from "../types";
+import type { Session, NavPage, WorkspaceEntry } from "../types";
 import { useWorkspaces } from "../hooks/useWorkspaces";
 import { usePinnedArchived } from "../hooks/usePinnedArchived";
 import { openInExplorer, copyText } from "../desktopBridge";
@@ -25,6 +25,17 @@ import { useUserProfile } from "../hooks/useUserProfile";
 import { UserAvatar } from "./UserAvatar";
 import { EditProfileDialog } from "./EditProfileDialog";
 import { UserMenuPopover } from "./UserMenuPopover";
+import {
+  createWorkspace,
+  deleteWorkspace,
+  exportWorkspaceFile,
+  importWorkspacePackage,
+  renameWorkspace as renameWorkspaceEntry,
+  setActiveWorkspace,
+  useWorkspaceRegistry,
+  type WorkspaceImportMode,
+} from "../hooks/useWorkspaceRegistry";
+import { AutomationPanel, SettingsPanel, TemplatePanel } from "./workspace/WorkspacePanels";
 
 interface SidebarProps {
   page: NavPage;
@@ -53,15 +64,18 @@ interface ChatRoom {
   createdAt: number;
 }
 
+/** 工作台管理面板（侧栏二级菜单打开的对话框）。 */
+type WsPanel = "none" | "templates" | "automations" | "settings";
+
 
 /* ── Nav item — 4 核心功能 ── */
 
+// 工作台不在此列 —— 它带二级菜单（工作台列表 + 管理动作），单独渲染。
 const NAV_ITEMS: { icon: React.ElementType; label: string; page: NavPage }[] = [
   { icon: MessageSquare, label: "对话",   page: "chat" },
   { icon: Search,   label: "搜索",    page: "search" },
   { icon: Users,    label: "群聊",    page: "groupchat" },
   { icon: Boxes,    label: "应用",    page: "customapps" },
-  { icon: LayoutDashboard, label: "工作台", page: "workspaces" },
 ];
 
 // 已移除：工具箱整合进系统配置面板，保留旧名称便于搜索残留引用。
@@ -162,6 +176,21 @@ export function Sidebar({
 
   const [chatsCollapsed, setChatsCollapsed] = useState(false);
   const [spacesCollapsed, setSpacesCollapsed] = useState(false);
+
+  // ── 工作台二级菜单 ──
+  // 画布（WorkspacesView）只渲染内容，新建 / 重命名 / 删除 / 模板 / 导入 /
+  // 导出 / 提醒 / 设置 全部收在这里。
+  const { entries: wsEntries, activeId: wsActiveId, detail: wsDetail } = useWorkspaceRegistry();
+  const [wsExpanded, setWsExpanded] = useState(true);
+  const [wsPanel, setWsPanel] = useState<WsPanel>("none");
+  const [wsNameDialog, setWsNameDialog] = useState<{
+    title: string;
+    current: string;
+    onConfirm: (name: string) => void;
+  } | null>(null);
+  const importFileRef = useRef<HTMLInputElement | null>(null);
+  // 导入模式用 ref 传递：文件选择是异步回调，闭包 state 会读到旧值。
+  const importModeRef = useRef<WorkspaceImportMode>("new");
 
   // SystemConfig 已由 系统配置 按钮直接跳转，无需 popup 状态。
 
@@ -336,6 +365,58 @@ export function Sidebar({
     });
   }, [renameWorkspace]);
 
+  /* ── 工作台菜单 ── */
+  const pickImportFile = (mode: WorkspaceImportMode) => {
+    importModeRef.current = mode;
+    importFileRef.current?.click();
+  };
+
+  const handleImportFile = useCallback(async (file: File) => {
+    try {
+      const pkg = JSON.parse(await file.text()) as Record<string, unknown>;
+      if (pkg.format !== "hermix-workspace") {
+        toastError("不是有效的 .hwx 工作台包");
+        return;
+      }
+      await importWorkspacePackage(pkg, importModeRef.current);
+    } catch (e) {
+      toastError(`导入失败: ${String(e)}`);
+    }
+  }, []);
+
+  /** 需要激活工作台才能执行的动作：没选中时先提示，而不是静默失败。 */
+  const needActive = (action: () => void) => () => {
+    if (!wsActiveId) {
+      toastError("请先在下方选择一个工作台");
+      return;
+    }
+    action();
+  };
+
+  const wsGroupMenu: MenuItemSpec[] = [
+    { key: "new", label: "新建工作台", icon: Plus, onClick: () => setWsNameDialog({
+      title: "新建工作台",
+      current: "",
+      onConfirm: (name) => void createWorkspace(name),
+    }) },
+    { key: "template", label: "从模板新建", icon: LayoutGrid, onClick: () => setWsPanel("templates"), dividerBefore: true },
+    { key: "import-new", label: "导入（新建）", icon: Upload, onClick: () => pickImportFile("new"), dividerBefore: true },
+    { key: "import-merge", label: "导入（合并）", icon: Upload, onClick: () => pickImportFile("merge") },
+    { key: "import-upsert", label: "导入（增量同步）", icon: Upload, onClick: () => pickImportFile("upsert") },
+    { key: "export", label: "导出 .hwx", icon: Download, onClick: needActive(() => void exportWorkspaceFile(wsActiveId as string)), dividerBefore: true },
+    { key: "automation", label: "提醒", icon: Bell, onClick: needActive(() => setWsPanel("automations")) },
+    { key: "settings", label: "设置", icon: Settings, onClick: needActive(() => setWsPanel("settings")) },
+  ];
+
+  const wsItemMenu = (e: WorkspaceEntry): MenuItemSpec[] => [
+    { key: "rename", label: "重命名", icon: Pencil, onClick: () => setWsNameDialog({
+      title: "重命名工作台",
+      current: e.name,
+      onConfirm: (name) => void renameWorkspaceEntry(e.id, name),
+    }) },
+    { key: "delete", label: "删除", icon: Trash2, onClick: () => requestDelete(e.id, e.name, "将删除该工作台及其全部数据与模块。", () => void deleteWorkspace(e.id)), danger: true },
+  ];
+
   const promptRenameRoom = useCallback((id: string, current: string) => {
     setRenameState({
       title: "重命名聊天室",
@@ -360,7 +441,7 @@ export function Sidebar({
           title="新建对话"
           aria-label="新建对话"
         >
-          <MessageSquarePlus size={16} />
+          <MessageSquarePlus className="icon-lg" />
           <span>新建对话</span>
         </button>
       </nav>
@@ -373,10 +454,90 @@ export function Sidebar({
             onClick={() => onPageChange(p)}
             className={clsx("nav-item", page === p && "nav-item-active")}
           >
-            <Icon size={16} />
+            <Icon className="icon-lg" />
             <span>{label}</span>
           </button>
         ))}
+
+        {/* 工作台 —— 带二级菜单：工作台列表（点击切换画布）+ 管理动作 */}
+        <div className={clsx("sidebar-row nav-item", page === "workspaces" && "is-active")}>
+          <button
+            type="button"
+            onClick={() => {
+              setWsExpanded((v) => !v);
+              onPageChange("workspaces");
+            }}
+            className="sidebar-row-main"
+            title="工作台"
+            aria-expanded={wsExpanded}
+          >
+            {wsExpanded
+              ? <ChevronDown className="icon-md shrink-0" />
+              : <ChevronRight className="icon-md shrink-0" />}
+            <LayoutDashboard className="icon-lg" />
+            <span className="truncate-1">工作台</span>
+            {wsEntries.length > 0 && (
+              <span className="sidebar-row-meta">{wsEntries.length}</span>
+            )}
+          </button>
+          <div className="sidebar-row-actions">
+            <button
+              type="button"
+              onClick={() => setWsNameDialog({
+                title: "新建工作台",
+                current: "",
+                onConfirm: (name) => void createWorkspace(name),
+              })}
+              className="sidebar-action-btn"
+              title="新建工作台"
+              aria-label="新建工作台"
+            >
+              <Plus className="icon-lg" />
+            </button>
+            <SidebarMenu label="工作台操作" items={wsGroupMenu} />
+          </div>
+        </div>
+        {wsExpanded && (
+          <div className="sidebar-project-sessions max-h-44 overflow-y-auto">
+            {wsEntries.length === 0 ? (
+              <p className="sidebar-section-empty">暂无工作台</p>
+            ) : (
+              wsEntries.map((e) => (
+                <div
+                  key={e.id}
+                  className={clsx("sidebar-row", e.id === wsActiveId && "is-active")}
+                >
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveWorkspace(e.id);
+                      onPageChange("workspaces");
+                    }}
+                    className="sidebar-row-main"
+                    title={e.name}
+                  >
+                    <LayoutDashboard className="icon-md shrink-0" />
+                    <span className="truncate-1">{e.name}</span>
+                  </button>
+                  <div className="sidebar-row-actions">
+                    <SidebarMenu label="工作台操作" items={wsItemMenu(e)} />
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        )}
+        <input
+          ref={importFileRef}
+          type="file"
+          accept=".hwx,application/json"
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) void handleImportFile(f);
+            e.target.value = "";
+          }}
+        />
       </nav>
 
       {/* Three independent scrollable sections */}
@@ -390,8 +551,8 @@ export function Sidebar({
               aria-expanded={!chatsCollapsed}
             >
               {chatsCollapsed
-                ? <ChevronRight size={14} className="shrink-0" />
-                : <ChevronDown size={14} className="shrink-0" />}
+                ? <ChevronRight className="icon-md shrink-0" />
+                : <ChevronDown className="icon-md shrink-0" />}
               <span>对话</span>
               <span className="section-header-count">{ungroupedSessions.length}</span>
             </button>
@@ -425,8 +586,8 @@ export function Sidebar({
                         disabled={disabled}
                       >
                         {s.id === streamingSessionId
-                          ? <Loader2 size={13} className="animate-spin text-accent shrink-0" />
-                          : isRemoving ? <Loader2 size={13} className="animate-spin" /> : null}
+                          ? <Loader2 className="icon-md animate-spin text-accent shrink-0" />
+                          : isRemoving ? <Loader2 className="icon-md animate-spin" /> : null}
                         <span className={clsx("truncate-1", isRemoving && "opacity-60")}>{s.title || "新建对话"}</span>
                         <span className="sidebar-row-meta">{formatRelativeTime(s.updated_at)}</span>
                         {isPinned(s.id, "session") && <Pin size={10} className="sidebar-row-pin" />}
@@ -456,8 +617,8 @@ export function Sidebar({
               aria-expanded={!spacesCollapsed}
             >
               {spacesCollapsed
-                ? <ChevronRight size={14} className="shrink-0" />
-                : <ChevronDown size={14} className="shrink-0" />}
+                ? <ChevronRight className="icon-md shrink-0" />
+                : <ChevronDown className="icon-md shrink-0" />}
               <span>项目</span>
               <span className="section-header-count">{workspaces.length}</span>
             </button>
@@ -478,13 +639,13 @@ export function Sidebar({
                   <div key={ws.id} className={clsx("sidebar-project", wsRemoving && "is-removing", wsDeleting && "is-deleting")}>
                     <div className="sidebar-project-row">
                       <button onClick={() => !wsDisabled && wsSessions.length > 0 && toggleWsCollapsed(ws.id)} className="sidebar-project-toggle" disabled={wsDisabled || wsSessions.length === 0}>
-                        <FolderOpen size={13} className="list-row-icon" />
-                        {wsRemoving ? <Loader2 size={13} className="animate-spin" /> : null}
+                        <FolderOpen className="icon-md list-row-icon" />
+                        {wsRemoving ? <Loader2 className="icon-md animate-spin" /> : null}
                         <span className={clsx("sidebar-project-name", wsRemoving && "opacity-60")}>{ws.name}</span>
                         {wsPinned && <Pin size={10} className="sidebar-row-pin" />}
                         {collapsed
-                          ? <ChevronRight size={12} className="list-row-chevron ml-auto" />
-                          : <ChevronDown  size={12} className="list-row-chevron ml-auto" />}
+                          ? <ChevronRight className="icon-sm list-row-chevron ml-auto" />
+                          : <ChevronDown  className="icon-sm list-row-chevron ml-auto" />}
                       </button>
                       <div className="sidebar-row-actions">
                         <SidebarMenu label="项目操作" items={workspaceMenu(ws)} />
@@ -516,8 +677,8 @@ export function Sidebar({
                                 disabled={psDisabled}
                               >
                                 {s.id === streamingSessionId
-                                  ? <Loader2 size={13} className="animate-spin text-accent shrink-0" />
-                                  : psRemoving ? <Loader2 size={13} className="animate-spin" /> : null}
+                                  ? <Loader2 className="icon-md animate-spin text-accent shrink-0" />
+                                  : psRemoving ? <Loader2 className="icon-md animate-spin" /> : null}
                                 <span className={clsx("truncate-1", psRemoving && "opacity-60")}>{s.title || "新建对话"}</span>
                                 <span className="sidebar-row-meta">{formatRelativeTime(s.updated_at)}</span>
                                 {isPinned(s.id, "session") && <Pin size={10} className="sidebar-row-pin" />}
@@ -551,8 +712,8 @@ export function Sidebar({
               aria-expanded={!groupChatCollapsed}
             >
               {groupChatCollapsed
-                ? <ChevronRight size={14} className="shrink-0" />
-                : <ChevronDown size={14} className="shrink-0" />}
+                ? <ChevronRight className="icon-md shrink-0" />
+                : <ChevronDown className="icon-md shrink-0" />}
               <span>聊天室</span>
               {chatRooms.length > 0 && (
                 <span className="section-header-count">{chatRooms.length}</span>
@@ -598,7 +759,7 @@ export function Sidebar({
                       title="创建"
                       aria-label="创建"
                     >
-                      <Plus size={14} />
+                      <Plus className="icon-md" />
                     </button>
                     <button
                       onClick={() => { setShowNewRoom(false); setNewRoomName(""); setCreateRoomError(null); }}
@@ -628,7 +789,7 @@ export function Sidebar({
                     aria-busy={roomDisabled}
                   >
                     <div className={clsx("sidebar-row-main", roomRemoving && "opacity-60")}>
-                      {roomRemoving ? <Loader2 size={13} className="animate-spin" /> : <Users size={13} />}
+                      {roomRemoving ? <Loader2 className="icon-md animate-spin" /> : <Users className="icon-md" />}
                       <span className="truncate-1">{room.name}</span>
                       {isPinned(room.id, "room") && <Pin size={10} className="sidebar-row-pin" />}
                     </div>
@@ -673,7 +834,7 @@ export function Sidebar({
               className="user-card-action"
               title="设置"
             >
-              <Settings size={13} />
+              <Settings className="icon-md" />
             </button>
           )}
         </div>
@@ -700,6 +861,36 @@ export function Sidebar({
         onConfirm={() => { const s = confirmState; setConfirmState(null); s?.onConfirm(); }}
         onCancel={() => setConfirmState(null)}
       />
+      {wsPanel !== "none" && (
+        <WorkspacePanelDialog
+          title={
+            wsPanel === "templates" ? "从模板新建工作台"
+            : wsPanel === "automations" ? "工作台提醒"
+            : "工作台设置"
+          }
+          onClose={() => setWsPanel("none")}
+        >
+          {wsPanel === "templates" && (
+            <TemplatePanel onPicked={() => setWsPanel("none")} />
+          )}
+          {wsPanel === "automations" && wsActiveId && (
+            <AutomationPanel workspaceId={wsActiveId} />
+          )}
+          {wsPanel === "settings" &&
+            (wsDetail ? (
+              <SettingsPanel detail={wsDetail} />
+            ) : (
+              <span className="text-[12px] text-text-muted">加载工作台详情…</span>
+            ))}
+        </WorkspacePanelDialog>
+      )}
+      {wsNameDialog && (
+        <RenameDialog
+          state={wsNameDialog}
+          onConfirm={(next) => { const s = wsNameDialog; setWsNameDialog(null); s?.onConfirm(next); }}
+          onCancel={() => setWsNameDialog(null)}
+        />
+      )}
       <RenameDialog
         state={renameState}
         onConfirm={(next) => { const s = renameState; setRenameState(null); s?.onConfirm(next); }}
@@ -813,7 +1004,7 @@ function SidebarMenu({ label, items }: { label: string; items: MenuItemSpec[] })
         title={label}
         aria-label={label}
       >
-        <MoreHorizontal size={16} />
+        <MoreHorizontal className="icon-lg" />
       </button>
       {open && pos && createPortal(
         <SidebarPopoverBody
@@ -859,8 +1050,8 @@ function RenameDialog({
       />
       <div
         className={clsx(
-          "relative z-10 w-full max-w-[420px] flex flex-col",
-          "rounded-2xl border shadow-2xl",
+          "relative z-10 w-full max-w-base flex flex-col",
+          "rounded-xl border shadow-2xl",
           "bg-bg-secondary border-border-subtle",
         )}
       >
@@ -869,7 +1060,7 @@ function RenameDialog({
             className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
             style={{ background: "hsla(210, 70%, 55%, 0.12)" }}
           >
-            <Pencil size={16} style={{ color: "hsl(210, 70%, 50%)" }} />
+            <Pencil className="icon-lg" style={{ color: "hsl(210, 70%, 50%)" }} />
           </div>
           <div className="flex-1 min-w-0">
             <h2 className="text-[14px] font-bold text-text-primary">{state.title}</h2>
@@ -892,7 +1083,7 @@ function RenameDialog({
             onClick={() => onConfirm(trimmed)}
             disabled={!canConfirm}
             className={clsx(
-              "flex items-center gap-1.5 px-4 py-2 rounded-lg text-[12.5px] font-bold",
+              "flex items-center gap-1.5 px-4 py-2 rounded-lg text-[13px] font-bold",
               "text-accent-on-text transition-opacity",
               canConfirm ? "hover:opacity-90" : "opacity-50 cursor-not-allowed",
             )}
@@ -904,13 +1095,57 @@ function RenameDialog({
             type="button"
             onClick={onCancel}
             className={clsx(
-              "flex items-center gap-1.5 px-4 py-2 rounded-lg text-[12.5px] font-semibold",
+              "flex items-center gap-1.5 px-4 py-2 rounded-lg text-[13px] font-semibold",
               "text-text-muted hover:text-text-secondary hover:bg-bg-tertiary transition-colors",
             )}
           >
             取消
           </button>
         </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+/** 工作台管理面板外壳 —— 与 RenameDialog 同款模态，内容来自 WorkspacePanels。 */
+function WorkspacePanelDialog({
+  title,
+  onClose,
+  children,
+}: {
+  title: string;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  return createPortal(
+    <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+      <button
+        type="button"
+        aria-label="关闭"
+        onClick={onClose}
+        className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+      />
+      <div
+        className={clsx(
+          "relative z-10 w-full max-w-base flex flex-col",
+          "rounded-xl border shadow-2xl",
+          "bg-bg-secondary border-border-subtle",
+        )}
+      >
+        <div className="flex items-center justify-between gap-3 px-5 py-4 border-b border-border-subtle">
+          <h2 className="text-[14px] font-bold text-text-primary">{title}</h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="sidebar-action-btn"
+            title="关闭"
+            aria-label="关闭"
+          >
+            <span aria-hidden>×</span>
+          </button>
+        </div>
+        <div className="px-5 py-4">{children}</div>
       </div>
     </div>,
     document.body,
@@ -942,8 +1177,8 @@ function DeleteConfirmDialog({
       />
       <div
         className={clsx(
-          "relative z-10 w-full max-w-[420px] flex flex-col",
-          "rounded-2xl border shadow-2xl",
+          "relative z-10 w-full max-w-base flex flex-col",
+          "rounded-xl border shadow-2xl",
           "bg-bg-secondary border-border-subtle",
         )}
       >
@@ -952,14 +1187,14 @@ function DeleteConfirmDialog({
             className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
             style={{ background: "hsla(150, 60%, 50%, 0.12)" }}
           >
-            <Trash2 size={16} style={{ color: "hsl(150, 60%, 45%)" }} />
+            <Trash2 className="icon-lg" style={{ color: "hsl(150, 60%, 45%)" }} />
           </div>
           <div className="flex-1 min-w-0">
             <h2 className="text-[14px] font-bold text-text-primary">{state.title}</h2>
             <p className="mt-1 text-[12px] text-text-muted whitespace-pre-wrap leading-relaxed">
               {state.body}
             </p>
-            <p className="mt-2 text-[10.5px] text-text-faint">
+            <p className="mt-2 text-[11px] text-text-faint">
               此操作不可恢复
             </p>
           </div>
@@ -969,7 +1204,7 @@ function DeleteConfirmDialog({
             type="button"
             onClick={onCancel}
             className={clsx(
-              "flex items-center gap-1.5 px-4 py-2 rounded-lg text-[12.5px] font-semibold",
+              "flex items-center gap-1.5 px-4 py-2 rounded-lg text-[13px] font-semibold",
               "text-text-muted hover:text-text-secondary hover:bg-bg-tertiary transition-colors",
             )}
           >
@@ -979,7 +1214,7 @@ function DeleteConfirmDialog({
             type="button"
             onClick={onConfirm}
             className={clsx(
-              "flex items-center gap-1.5 px-4 py-2 rounded-lg text-[12.5px] font-bold",
+              "flex items-center gap-1.5 px-4 py-2 rounded-lg text-[13px] font-bold",
               "text-white transition-opacity hover:opacity-90",
             )}
             style={{ background: "hsl(0, 70%, 50%)" }}

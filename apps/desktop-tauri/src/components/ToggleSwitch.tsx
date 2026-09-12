@@ -55,7 +55,7 @@ export function ToggleSwitch({
     >
       <span
         className={[
-          "pointer-events-none absolute top-[3px] flex items-center justify-center rounded-full shadow transition-all duration-150",
+          "pointer-events-none absolute top-[3px] flex items-center justify-center rounded-full shadow transition-colors duration-base",
           enabled ? "left-[23px] w-5 h-5 bg-white text-success" : "left-[3px] w-5 h-5 bg-bg-card text-text-muted",
         ].join(" ")}
       >

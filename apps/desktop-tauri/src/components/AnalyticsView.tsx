@@ -82,7 +82,7 @@ export function AnalyticsView() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full">
-        <div className="text-text-faint">加载中...</div>
+        <div className="text-text-faint">加载中…</div>
       </div>
     );
   }
@@ -265,7 +265,7 @@ export function AnalyticsView() {
                 m.estimated_cache_hit_rate,
               );
               const estNote = m.estimated_cache_hit_rate != null && m.cache_read_tokens === 0
-                ? " (估算)"
+                ? " （估算）"
                 : "";
               return (
                 <div key={m.model} className="flex items-center justify-between text-sm">
@@ -448,7 +448,7 @@ function DebugPanel({
                   </div>
                   {t.error && <div className="text-red-300 mt-1 break-words">{t.error}</div>}
                   {t.sample.length > 0 && (
-                    <pre className="mt-1.5 max-h-40 overflow-auto text-[10px] text-text-faint whitespace-pre-wrap">
+                    <pre className="mt-1.5 max-h-40 overflow-auto text-[11px] text-text-faint whitespace-pre-wrap">
                       {JSON.stringify(t.sample, null, 2)}
                     </pre>
                   )}

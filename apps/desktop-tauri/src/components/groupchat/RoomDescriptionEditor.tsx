@@ -118,7 +118,7 @@ export const RoomDescriptionEditor = memo(function RoomDescriptionEditor({
             title="编辑描述"
             data-testid="room-description-edit"
           >
-            <Edit3 size={11} />
+            <Edit3 className="icon-sm" />
           </button>
         )}
       </div>
@@ -171,7 +171,7 @@ export const RoomDescriptionEditor = memo(function RoomDescriptionEditor({
             title="清空描述"
             data-testid="room-description-clear"
           >
-            <X size={11} /> 清空
+            <X className="icon-sm" /> 清空
           </button>
         )}
         <button
@@ -187,7 +187,7 @@ export const RoomDescriptionEditor = memo(function RoomDescriptionEditor({
           className="btn btn-primary btn-sm"
           data-testid="room-description-save"
         >
-          <Check size={11} /> {saving ? "保存中…" : "保存"}
+          <Check className="icon-sm" /> {saving ? "保存中…" : "保存"}
         </button>
       </div>
     </div>

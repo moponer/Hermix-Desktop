@@ -35,6 +35,10 @@ export interface ApprovalMessageMeta {
   tool: string;
   args?: unknown;
   riskLevel?: string;
+  /** Backend-computed unified before/after diff for file-mutating calls
+   *  (`hermix_agent::approval_diff`, mirrored into `ApprovalRecord::diff`).
+   *  `null`/absent → the card keeps its plain-description fallback. */
+  diff?: string | null;
   decision?: ApprovalDecision | null;
   /** True when the grant came from the「以后自动允许」button — the
    *  server has persisted this call's signature into the allowlist.
@@ -312,6 +316,10 @@ export interface ExecutionTimelineEvent {
   arguments?: string;
   chunk_index?: number;
   chunk_total?: number;
+  /** Server-authoritative failure flag for `tool_complete`
+   *  (`ToolResult::is_error`). When present the UI marks the call failed
+   *  from this fact instead of regex-inspecting the payload text. */
+  is_error?: boolean;
   created_at: string;
   /** approval_request-only fields — front-end uses these to render
    *  the inline permission card directly from a tool timeline, so the
@@ -478,6 +486,10 @@ export interface ApprovalRequestItem {
   args?: unknown;
   risk?: string;
   reason?: string | null;
+  /** Backend-computed unified before/after diff for file-mutating calls
+   *  (`hermix_agent::approval_diff`). `null`/absent → keep the
+   *  plain-description fallback; never fabricate a diff client-side. */
+  diff?: string | null;
   /** Wall-clock deadline (Unix ms) — see `ApprovalMessageMeta::expiresAt`. */
   expiresAt?: number | null;
 }

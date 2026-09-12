@@ -23,6 +23,8 @@ import {
   Trash2,
   MessagesSquare,
   Zap,
+
+  Check,
 } from "lucide-react";
 import type { AgentPersona } from "../agents/types";
 import type * as api from "@/api";
@@ -83,21 +85,21 @@ export const RoomHeader = memo(function RoomHeader({
     {
       key: "task",
       label: "任务面板",
-      icon: <ListChecks size={14} />,
+      icon: <ListChecks className="icon-md" />,
       onClick: () => { closeMenu(); onOpenTask(); },
     },
     {
       key: "members",
       label: "成员",
-      icon: <Users size={14} />,
+      icon: <Users className="icon-md" />,
       onClick: () => { closeMenu(); onOpenMembers(); },
     },
     ...(onChatModeChange ? [{
       key: "mode",
       label: room.chatMode === "free_chat" ? "闲聊模式" : "协作模式",
       icon: room.chatMode === "free_chat"
-        ? <MessagesSquare size={14} />
-        : <Zap size={14} />,
+        ? <MessagesSquare className="icon-md" />
+        : <Zap className="icon-md" />,
       toggle: true,
       active: room.chatMode === "task_collab",
       onClick: () => {
@@ -109,13 +111,13 @@ export const RoomHeader = memo(function RoomHeader({
     {
       key: "settings",
       label: "房间规则",
-      icon: <Settings size={14} />,
+      icon: <Settings className="icon-md" />,
       onClick: () => { closeMenu(); onOpenSettings(); },
     },
     {
       key: "delete",
       label: "删除房间",
-      icon: <Trash2 size={14} />,
+      icon: <Trash2 className="icon-md" />,
       onClick: () => { closeMenu(); onDeleteRoom(); },
       danger: true,
     },
@@ -136,7 +138,7 @@ export const RoomHeader = memo(function RoomHeader({
             </h3>
             {room.activeTask && (
               <span
-                className="shrink-0 flex items-center gap-1 text-[10.5px] px-1.5 py-0.5 rounded-full font-medium"
+                className="shrink-0 flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded-full font-medium"
                 style={{
                   background: "color-mix(in srgb, var(--color-warning) 14%, transparent)",
                   color: "var(--color-warning)",
@@ -152,7 +154,7 @@ export const RoomHeader = memo(function RoomHeader({
           {/* Meta line: members · description */}
           <div className="mt-0.5 flex items-center gap-1.5 text-[12px] text-text-muted flex-wrap">
             <span className="flex items-center gap-1">
-              <Users size={11} className="shrink-0 opacity-70" />
+              <Users className="icon-sm shrink-0 opacity-70" />
               {hasMemberChip
                 ? `${memberCount} 名成员`
                 : "还没有协作成员"}
@@ -175,7 +177,7 @@ export const RoomHeader = memo(function RoomHeader({
             title="更多操作"
             aria-label="更多操作"
           >
-            <MoreHorizontal size={15} />
+            <MoreHorizontal className="icon-md" />
           </button>
           {menuOpen && (
             <div
@@ -200,7 +202,7 @@ export const RoomHeader = memo(function RoomHeader({
                     <span className="shrink-0 opacity-70">{item.icon}</span>
                     <span className={isToggle && ("active" in item) && item.active ? "font-medium" : ""}>{item.label}</span>
                     {isToggle && ("active" in item) && item.active && (
-                      <span className="ml-auto text-[10px]" style={{ color: "var(--color-accent)" }}>✓</span>
+                      <span className="ml-auto flex items-center" style={{ color: "var(--color-accent)" }}><Check className="icon-sm" /></span>
                     )}
                   </button>
                 );

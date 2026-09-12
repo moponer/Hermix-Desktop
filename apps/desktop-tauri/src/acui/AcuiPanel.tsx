@@ -218,11 +218,11 @@ export function AcuiPanel({ state, registry, decide, className, defaultCollapsed
           <button
             type="button"
             onClick={toggleCollapsed}
-            className="flex items-center gap-1.5 text-[10.5px] text-text-faint hover:text-text-secondary transition-colors w-full"
+            className="flex items-center gap-1.5 text-[11px] text-text-faint hover:text-text-secondary transition-colors w-full"
             aria-expanded={!collapsed}
           >
-            {collapsed ? <ChevronRight size={11} /> : <ChevronDown size={11} />}
-            <ListChecks size={11} />
+            {collapsed ? <ChevronRight className="icon-sm" /> : <ChevronDown className="icon-sm" />}
+            <ListChecks className="icon-sm" />
             <span>
               {collapsed ? "展开" : "收起"} {detailNodes.length} 项
             </span>
@@ -299,9 +299,9 @@ function AwakeningSummaryBanner({ summary }: { summary: AwakeningSummary }) {
       }`}
     >
       {isHealthy ? (
-        <CheckCircle2 size={12} className="shrink-0" />
+        <CheckCircle2 className="icon-sm shrink-0" />
       ) : (
-        <AlertTriangle size={12} className="shrink-0" />
+        <AlertTriangle className="icon-sm shrink-0" />
       )}
       <span className="font-medium">
         {isHealthy ? "系统自检通过" : "部分检查异常"}
@@ -318,7 +318,7 @@ function AwakeningSummaryBanner({ summary }: { summary: AwakeningSummary }) {
           <span className="font-mono text-text-faint">{elapsedText}</span>
         </>
       )}
-      <Sparkles size={11} className="ml-auto shrink-0 text-text-faint" />
+      <Sparkles className="icon-sm ml-auto shrink-0 text-text-faint" />
     </div>
   );
 }

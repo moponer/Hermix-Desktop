@@ -149,22 +149,22 @@ export function AgentsView({
           <button
             onClick={() => switchTab("my")}
             className={clsx(
-              "px-3 py-1 rounded-md text-[12.5px]",
+              "px-3 py-1 rounded-md text-[13px]",
               tab === "my" ? "bg-accent-soft text-accent font-medium" : "text-text-muted hover:text-text-primary"
             )}
           >
             我的专家
-            {agents.length > 0 && <span className="ml-1 text-[10.5px] text-text-faint">{agents.length}</span>}
+            {agents.length > 0 && <span className="ml-1 text-[11px] text-text-faint">{agents.length}</span>}
           </button>
           <button
             onClick={() => switchTab("builtin")}
             className={clsx(
-              "px-3 py-1 rounded-md text-[12.5px]",
+              "px-3 py-1 rounded-md text-[13px]",
               tab === "builtin" ? "bg-accent-soft text-accent font-medium" : "text-text-muted hover:text-text-primary"
             )}
           >
             内置专家
-            <span className="ml-1 text-[10.5px] text-text-faint">{BUILTIN_EXPERTS.length}</span>
+            <span className="ml-1 text-[11px] text-text-faint">{BUILTIN_EXPERTS.length}</span>
           </button>
         </div>
         <div className="flex gap-2">
@@ -175,14 +175,14 @@ export function AgentsView({
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] font-medium"
                 style={{ background: "var(--color-btn-secondary-bg)", color: "var(--color-btn-secondary-text)" }}
               >
-                <Plus size={14} /> 手动创建
+                <Plus className="icon-md" /> 手动创建
               </button>
               <button
                 onClick={() => setMode("generate")}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] font-medium"
                 style={{ background: "var(--color-btn-primary-bg)", color: "var(--color-btn-primary-text)" }}
               >
-                <Sparkles size={14} /> AI 生成
+                <Sparkles className="icon-md" /> AI 生成
               </button>
             </>
           )}
@@ -192,7 +192,7 @@ export function AgentsView({
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] font-medium"
               style={{ background: "var(--color-btn-secondary-bg)", color: "var(--color-btn-secondary-text)" }}
             >
-              <ArrowLeft size={14} /> 返回列表
+              <ArrowLeft className="icon-md" /> 返回列表
             </button>
           )}
         </div>
@@ -230,7 +230,7 @@ export function AgentsView({
                   <>
                     {/* Sort tabs */}
                     <div className="flex items-center justify-between mb-4">
-                      <div className="flex items-center gap-1 text-[11.5px]">
+                      <div className="flex items-center gap-1 text-[12px]">
                         <span className="text-text-faint">排序:</span>
                         {([["recent", "最近使用"], ["popular", "最常使用"], ["name", "按名称"]] as const).map(([k, l]) => (
                           <button

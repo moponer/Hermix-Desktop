@@ -115,12 +115,12 @@ interface StreamingBubbleProps {
 const STATUS_MAP: Record<StreamPhase, { icon: React.ReactNode; label: string; className: string }> = {
   streaming:    { icon: null,                                                                       label: "正在思考…", className: "text-text-faint italic" },
   connecting:   { icon: null,                                                                       label: "正在连接…", className: "text-text-faint italic" },
-  slow:         { icon: <AlertTriangle size={11} className="text-text-warning" />,                  label: "响应较慢",  className: "text-text-warning" },
-  reconnecting: { icon: <AlertTriangle size={11} className="text-text-warning" />,                  label: "正在重连…", className: "text-text-warning italic" },
-  completed:    { icon: null,                                                                       label: "",          className: "" },
-  error:        { icon: <XCircle size={11} className="text-text-secondary" />,                     label: "出错了",     className: "text-text-secondary italic" },
-  timeout:      { icon: <Clock size={11} className="text-text-warning" />,                         label: "超时",      className: "text-text-warning italic" },
-  partial:      { icon: <Clock size={11} className="text-text-secondary" />,                       label: "未完成",    className: "text-text-secondary italic" },
+  slow:         { icon: <AlertTriangle aria-hidden="true" className="icon-sm text-text-warning" />,  label: "响应较慢",  className: "text-text-warning" },
+  reconnecting: { icon: <AlertTriangle aria-hidden="true" className="icon-sm text-text-warning" />,  label: "正在重连…", className: "text-text-warning italic" },
+  completed:    { icon: null,                                                                          label: "",          className: "" },
+  error:        { icon: <XCircle aria-hidden="true" className="icon-sm text-text-secondary" />,        label: "出错了",     className: "text-text-secondary italic" },
+  timeout:      { icon: <Clock aria-hidden="true" className="icon-sm text-text-warning" />,           label: "超时",      className: "text-text-warning italic" },
+  partial:      { icon: <Clock aria-hidden="true" className="icon-sm text-text-secondary" />,         label: "未完成",    className: "text-text-secondary italic" },
   idle:         { icon: null, label: "", className: "" },
 };
 
@@ -238,7 +238,7 @@ function StreamingBubbleImpl({
                 例外：重试/错误状态（retrying、invalid tool、truncated）
                 传达了关键诊断信息，即使在流式态也应展示。 */}
             {statusText && (!STREAMING_PHASES.has(effectivePhase) || isRetryStatus(statusText)) && (
-              <span className="h-tiny text-text-faint max-w-[240px] truncate">
+              <span role="status" aria-live="polite" className="h-tiny text-text-faint max-w-narrow truncate">
                 {statusText}
               </span>
             )}

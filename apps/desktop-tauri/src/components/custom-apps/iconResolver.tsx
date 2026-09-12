@@ -9,7 +9,7 @@
 //   4) category 命中 CATEGORY_DEFAULT (媒体/文件工具/...) → 兜底 lucide 图标
 //   5) Boxes 图标 (绝对兜底)
 
-import type { ComponentType, ReactNode } from "react";
+import { useState, type ComponentType, type ReactNode } from "react";
 import {
   Music,
   Music2,
@@ -244,26 +244,13 @@ export interface ResolveIconOpts {
   strokeWidth?: number;
 }
 
-export function resolveAppIconEl(app: IconLike, opts: ResolveIconOpts = {}): ReactNode {
-  const { spanClassName, imgClassName, size = 20, strokeWidth = 1.75 } = opts;
-
-  // 用户上传的 PNG 自带完整视觉, 不叠 tile_color (否则会把 PNG 盖掉).
-  if (app.icon_file) {
-    return (
-      <img
-        className={imgClassName}
-        src={`/api/custom-apps/${encodeURIComponent(app.id)}/icon`}
-        alt={app.name}
-        draggable={false}
-      />
-    );
-  }
-  // emoji 自身有色彩 + 字体渲染, 叠方块底会变花 (主人拍板跳过).
-  if (isEmoji(app.icon)) {
-    return <span className={spanClassName}>{app.icon}</span>;
-  }
-  // lucide 形态: tile_color 存在时强制固定方块色 + 白前景, 不再让 CSS hover
-  // 覆盖 (主人要"背景不透明", 行为应该稳定); 不存在时回退到 CSS 默认灰底.
+/**
+ * 最终的 lucide 形态渲染 — emoji 与 PNG 之后的兜底。
+ * tile_color 存在时强制固定方块色 + 白前景, 不再让 CSS hover 覆盖
+ * (主人要"背景不透明", 行为应该稳定); 不存在时回退到 CSS 默认灰底.
+ */
+function renderLucideFallback(app: IconLike, opts: ResolveIconOpts): ReactNode {
+  const { spanClassName, size = 20, strokeWidth = 1.75 } = opts;
   const LucideIcon = lookupIcon(app) ?? CATEGORY_DEFAULT[app.category ?? ""] ?? Boxes;
   const tile = app.tile_color?.trim();
   const spanStyle: React.CSSProperties | undefined = tile
@@ -274,4 +261,38 @@ export function resolveAppIconEl(app: IconLike, opts: ResolveIconOpts = {}): Rea
       <LucideIcon size={size} strokeWidth={strokeWidth} />
     </span>
   );
+}
+
+/**
+ * 自定义 PNG 图标。manifest 声明了 icon_file 但文件实际不存在时,
+ * /api/custom-apps/{id}/icon 会 404 —— 裸 <img> 会在卡片左上角留下一片
+ * 空白（比没图标更难看）。加载失败就地降级到 lucide 兜底, 保证任何情况
+ * 下都有一个可辨识的图标。
+ */
+function IconImage({ app, opts }: { app: IconLike; opts: ResolveIconOpts }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) return renderLucideFallback(app, opts);
+  return (
+    <img
+      className={opts.imgClassName}
+      src={`/api/custom-apps/${encodeURIComponent(app.id)}/icon`}
+      alt={app.name}
+      draggable={false}
+      onError={() => setFailed(true)}
+    />
+  );
+}
+
+export function resolveAppIconEl(app: IconLike, opts: ResolveIconOpts = {}): ReactNode {
+  const { spanClassName } = opts;
+
+  // 用户上传的 PNG 自带完整视觉, 不叠 tile_color (否则会把 PNG 盖掉).
+  if (app.icon_file) {
+    return <IconImage app={app} opts={opts} />;
+  }
+  // emoji 自身有色彩 + 字体渲染, 叠方块底会变花 (主人拍板跳过).
+  if (isEmoji(app.icon)) {
+    return <span className={spanClassName}>{app.icon}</span>;
+  }
+  return renderLucideFallback(app, opts);
 }

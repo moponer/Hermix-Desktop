@@ -320,10 +320,15 @@ export function mergeLegacyToolMessages(messages: ChatMessage[]): ChatMessage[] 
  */
 export function isRowRenderable(m: ChatMessage): boolean {
   if (m.role === "user") {
-    return (
-      (typeof m.content === "string" && m.content.trim().length > 0) ||
-      (Array.isArray(m.images) && m.images.length > 0)
-    );
+    // Always render user rows. Some legacy / interrupted sends persisted
+    // `content = NULL` (e.g. when the user submitted an image-only or
+    // audio-only message and the write path skipped `content`). The
+    // previous filter silently dropped those rows, and the chat
+    // timeline had a visible "gap" right before a tool-call burst —
+    // the user reported the rest of the session "disappeared" when in
+    // fact a few user placeholders had been elided. Render them as
+    // "(no text content)" so the timeline stays intact.
+    return true;
   }
   if (m.role !== "assistant") return true;
   if (m.stopReason && m.stopReason.length > 0) return true;

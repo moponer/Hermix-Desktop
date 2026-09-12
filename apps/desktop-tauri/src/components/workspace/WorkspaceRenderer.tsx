@@ -11,10 +11,12 @@
  * key={workspaceId} 重挂载，模块选中态不跨工作台漂移。
  */
 
+import { FolderOpen, BarChart3 } from "lucide-react";
 import { useState } from "react";
 import type { Layout } from "react-grid-layout";
 import type { WorkspaceDetail, WorkspaceModule, WorkspaceSchema } from "../../types";
 import { TableView, type WorkspacePerms } from "./TableView";
+import type * as echarts from "echarts";
 import { DashboardView } from "./DashboardView";
 
 /** 解析权限视图（M7.3 契约）：缺省 = 可读写 + 允许删除（与后端一致）。 */
@@ -37,6 +39,8 @@ interface WorkspaceRendererProps {
   perms?: WorkspacePerms;
   /** 仪表盘组件数据：widgetId → 数据（stat=数值 / list=行数组）。 */
   widgetData?: Record<string, unknown>;
+  /** 仪表盘 chart ECharts option：widgetId → option（M1.6）。 */
+  widgetChartOptions?: Record<string, echarts.EChartsOption>;
   onInsert?: (moduleId: string, values: Record<string, unknown>) => Promise<void>;
   onUpdate?: (moduleId: string, rowId: string, patch: Record<string, unknown>) => Promise<void>;
   onDeleteRow?: (moduleId: string, rowId: string) => Promise<void>;
@@ -58,6 +62,7 @@ export function WorkspaceRenderer({
   onLayoutChange,
   perms,
   widgetData = {},
+  widgetChartOptions,
   onInsert,
   onUpdate,
   onDeleteRow,
@@ -109,6 +114,7 @@ export function WorkspaceRenderer({
             loading={loading}
             perms={perms ?? workspacePermissions(detail.schema)}
             widgetData={widgetData}
+            widgetChartOptions={widgetChartOptions}
             relationCandidates={relationCandidates}
             layout={(detail.schema.layout as Record<string, Layout> | undefined)?.[active.id]}
             onLayoutChange={
@@ -138,7 +144,7 @@ function ModuleTab({
   active: boolean;
   onClick: () => void;
 }) {
-  const icon = module.type === "table" ? "🗂️" : "📊";
+  const icon = module.type === "table" ? <FolderOpen className="icon-sm" /> : <BarChart3 className="icon-sm" />;
   return (
     <button
       onClick={onClick}
@@ -162,6 +168,7 @@ function ModuleContent({
   loading,
   perms,
   widgetData,
+  widgetChartOptions,
   relationCandidates,
   layout,
   onLayoutChange,
@@ -178,6 +185,7 @@ function ModuleContent({
   loading: boolean;
   perms: WorkspacePerms;
   widgetData: Record<string, unknown>;
+  widgetChartOptions?: Record<string, echarts.EChartsOption>;
   relationCandidates?: Record<string, { id: string; label: string }[]>;
   layout?: Layout;
   onLayoutChange?: (l: Layout) => void;
@@ -213,6 +221,7 @@ function ModuleContent({
       layout={layout}
       onLayoutChange={onLayoutChange}
       widgetData={widgetData}
+      widgetChartOptions={widgetChartOptions}
     />
   );
 }

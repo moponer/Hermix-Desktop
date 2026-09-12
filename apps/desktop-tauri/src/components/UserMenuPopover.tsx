@@ -103,9 +103,9 @@ export function UserMenuPopover({ open, onClose, anchorRef, onNavigateAnalytics,
             onClick={() => { setMode(t.id); setSubMenu(null); }}
             className={clsx("user-menu-item", active && "is-active")}
           >
-            <Icon size={14} className="shrink-0 opacity-70" />
+            <Icon className="icon-md shrink-0 opacity-70" />
             <span className="flex-1 truncate">{t.label}</span>
-            {active && <Check size={12} className="shrink-0 text-accent" />}
+            {active && <Check className="icon-sm shrink-0 text-accent" />}
           </button>
         );
       })}
@@ -121,10 +121,10 @@ export function UserMenuPopover({ open, onClose, anchorRef, onNavigateAnalytics,
             onClick={() => handleSetScale(o.value)}
             className={clsx("user-menu-item", active && "is-active")}
           >
-            <ZoomIn size={14} className={clsx("shrink-0 opacity-70", active && "text-accent")} />
+            <ZoomIn className={`icon-md ${clsx("shrink-0 opacity-70", active && "text-accent")}`} />
             <span className="flex-1">{o.label}</span>
-            <span className="text-[10px] text-text-faint">{Math.round(o.value * 100)}%</span>
-            {active && <Check size={12} className="shrink-0 text-accent" />}
+            <span className="text-[11px] text-text-faint">{Math.round(o.value * 100)}%</span>
+            {active && <Check className="icon-sm shrink-0 text-accent" />}
           </button>
         );
       })}
@@ -140,9 +140,9 @@ export function UserMenuPopover({ open, onClose, anchorRef, onNavigateAnalytics,
             onClick={() => handleSetLang(o.value)}
             className={clsx("user-menu-item", active && "is-active")}
           >
-            <Globe size={14} className={clsx("shrink-0 opacity-70", active && "text-accent")} />
+            <Globe className={`icon-md ${clsx("shrink-0 opacity-70", active && "text-accent")}`} />
             <span className="flex-1">{o.label}</span>
-            {active && <Check size={12} className="shrink-0 text-accent" />}
+            {active && <Check className="icon-sm shrink-0 text-accent" />}
           </button>
         );
       })}
@@ -187,12 +187,12 @@ export function UserMenuPopover({ open, onClose, anchorRef, onNavigateAnalytics,
                 onClick={() => item.hasSub ? setSubMenu(subMenu === item.key ? null : item.key) : item.onClick?.()}
                 className={clsx("user-menu-row", item.danger && "is-danger", showSub && "is-open")}
               >
-                <Icon size={15} className={clsx("shrink-0", item.danger ? "text-red-400" : "text-text-secondary")} />
+                <Icon className={`icon-md ${clsx("shrink-0", item.danger ? "text-red-400" : "text-text-secondary")}`} />
                 <span className="flex-1 text-left truncate">{item.label}</span>
                 {item.hasSub ? (
                   <>
                     <span className="text-[11px] text-text-faint mr-1">{!showSub ? currentLabel(item.key) : ""}</span>
-                    <ChevronRight size={14} className={clsx("shrink-0 text-text-faint transition-transform duration-150", showSub && "rotate-90")} />
+                    <ChevronRight className={`icon-md ${clsx("shrink-0 text-text-faint transition-transform duration-base", showSub && "rotate-90")}`} />
                   </>
                 ) : null}
               </button>

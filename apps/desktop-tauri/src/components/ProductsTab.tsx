@@ -32,12 +32,12 @@ export function ProductsTab({
       {/* Search + filter */}
       <div className="px-3 pb-3 space-y-2 mt-1">
         <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-bg-tertiary focus-within:ring-1 focus-within:ring-accent/30 transition">
-          <Search size={12} className="text-text-muted shrink-0" />
+          <Search className="icon-sm text-text-muted shrink-0" />
           <input
             value={query}
             onChange={(e) => onQueryChange(e.target.value)}
             placeholder="搜索文件名或路径…"
-            className="flex-1 bg-transparent text-[12.5px] text-text-primary placeholder:text-text-faint outline-none min-w-0"
+            className="flex-1 bg-transparent text-[13px] text-text-primary placeholder:text-text-faint outline-none min-w-0"
           />
         </div>
         <div className="flex items-center gap-1 flex-wrap">
@@ -49,7 +49,7 @@ export function ProductsTab({
                 key={f.key}
                 onClick={() => onFilterChange(f.key)}
                 className={clsx(
-                  "flex items-center gap-1 text-[11.5px] px-2 py-1 rounded-md transition-colors",
+                  "flex items-center gap-1 text-[12px] px-2 py-1 rounded-md transition-colors",
                   active
                     ? "bg-accent-soft text-accent font-semibold"
                     : "text-text-muted hover:bg-bg-hover hover:text-text-secondary",
@@ -74,7 +74,7 @@ export function ProductsTab({
             </p>
             {artifacts.length === 0 && typeof window !== "undefined"
               && window.localStorage?.getItem("hermixDebugArtifacts") === "1" && (
-              <p className="mt-3 text-[10.5px] text-text-faint font-mono leading-relaxed">
+              <p className="mt-3 text-[11px] text-text-faint font-mono leading-relaxed">
                 raw={rawCount ?? artifacts.length} · verified={artifacts.length}
                 <br />
                 workspaceRoot={workspaceRoot ?? "(null)"}
@@ -96,9 +96,9 @@ export function ProductsTab({
                   )}
               >
                 <span className="shrink-0" style={{ display: "inline-flex" }}>
-                  <FileTypeIcon name={a.name} size={14} />
+                  <FileTypeIcon name={a.name} className="icon-md" />
                 </span>
-                <span className="text-[12.5px] text-text-primary truncate leading-tight flex-1 min-w-0">
+                <span className="text-[13px] text-text-primary truncate leading-tight flex-1 min-w-0">
                   {a.name}
                 </span>
               </button>

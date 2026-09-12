@@ -14,14 +14,12 @@ function applyTheme(id: string) {
   if (typeof document === "undefined") return;
   const root = document.documentElement;
   const body = document.body;
-  // 单一 data-theme = 主题唯一来源
+  // 单一 data-theme = 主题唯一来源（语义 token 由 themes/<id>.css 按
+  // :root[data-theme="<id>"] 提供整套取值；.dark 类已废除，暗色判断
+  // 一律走 isDarkTheme(id) 或 root.style.colorScheme，禁止再挂类）。
   root.dataset.theme = id;
   if (body) body.dataset.theme = id;
-  // .dark 类 = 历史兼容残留（个别 css 选择器仍引用），值来自 registry
-  // 元数据 —— 不存在任何硬编码主题名单。
   const wantDark = isDarkTheme(id);
-  root.classList.toggle("dark", wantDark);
-  if (body) body.classList.toggle("dark", wantDark);
   root.style.colorScheme = wantDark ? "dark" : "light";
   window.dispatchEvent(new CustomEvent(THEME_CHANGED_EVENT, { detail: id }));
 }

@@ -147,10 +147,9 @@ toastError("后端服务重启失败，请尝试手动重启");
       disabled={restarting}
       className="ml-1 p-0.5 rounded hover:bg-white/10 transition-colors disabled:opacity-50"
       title="重启后端服务"
-     aria-label="重启后端服务">
+      aria-label="重启后端服务">
       <RefreshCw
-        size={11}
-        className={restarting ? "animate-spin text-text-muted" : "text-text-muted"}
+        className={`icon-sm ${restarting ? "animate-spin text-text-muted" : "text-text-muted"}`}
       />
     </button>
   ) : null;
@@ -159,7 +158,7 @@ toastError("后端服务重启失败，请尝试手动重启");
     if (gaveUp) {
       return (
         <div className="flex items-center gap-1.5 px-2 py-1 rounded text-[11px] text-amber-400" title="后端多次重启失败，需要手动重启">
-          <WifiOff size={11} className="text-amber-400" />
+          <WifiOff className="icon-sm text-amber-400" />
           <span>重启失败</span>
           {restartBtn}
         </div>
@@ -168,7 +167,7 @@ toastError("后端服务重启失败，请尝试手动重启");
     if (restarting) {
       return (
         <div className="flex items-center gap-1.5 px-2 py-1 rounded text-[11px] text-zinc-400" title="后端正在重启...">
-          <RefreshCw size={11} className="animate-spin text-zinc-400" />
+          <RefreshCw className="icon-sm animate-spin text-zinc-400" />
           <span>重启中...</span>
         </div>
       );
@@ -179,7 +178,7 @@ toastError("后端服务重启失败，请尝试手动重启");
       // and trust that we're doing work.
       return (
         <div className="flex items-center gap-1.5 px-2 py-1 rounded text-[11px] text-text-muted" title="本地后端正在启动...">
-          <Loader2 size={11} className="animate-spin text-text-muted" />
+          <Loader2 className="icon-sm animate-spin text-text-muted" />
           <span>正在连接</span>
         </div>
       );
@@ -187,7 +186,7 @@ toastError("后端服务重启失败，请尝试手动重启");
     if (state === "offline") {
       return (
         <div className="flex items-center gap-1.5 px-2 py-1 rounded text-[11px] text-text-muted" title="本地模式 — 后端未连接">
-          <WifiOff size={11} className="text-text-muted" />
+          <WifiOff className="icon-sm text-text-muted" />
           <span>离线</span>
           {restartBtn}
         </div>
@@ -195,7 +194,7 @@ toastError("后端服务重启失败，请尝试手动重启");
     }
     return (
       <div className="flex items-center gap-1.5 px-2 py-1 rounded text-[11px] text-text-muted" title="本地模式 — 内嵌 agent 运行时">
-        <Cpu size={11} className="text-success" />
+        <Cpu className="icon-sm text-success" />
         <span>本地已连接</span>
       </div>
     );
@@ -214,17 +213,17 @@ toastError("后端服务重启失败，请尝试手动重启");
     >
       {state === "connecting" ? (
         <>
-          <Loader2 size={11} className="animate-spin text-text-muted" />
+          <Loader2 className="icon-sm animate-spin text-text-muted" />
           <span>正在连接</span>
         </>
       ) : state === "online" ? (
         <>
-          <Wifi size={11} className="text-success" />
+          <Wifi className="icon-sm text-success" />
           <span>已连接</span>
         </>
       ) : (
         <>
-          <WifiOff size={11} className="text-text-muted" />
+          <WifiOff className="icon-sm text-text-muted" />
           <span>离线</span>
           {restartBtn}
         </>

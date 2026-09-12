@@ -183,19 +183,19 @@ export function ImageLightbox() {
         }}
       >
         <ToolbarBtn title="放大" onClick={() => zoomBy(1.2)}>
-          <ZoomIn size={18} />
+          <ZoomIn className="icon-lg" />
         </ToolbarBtn>
         <ToolbarBtn title="缩小" onClick={() => zoomBy(1 / 1.2)}>
-          <ZoomOut size={18} />
+          <ZoomOut className="icon-lg" />
         </ToolbarBtn>
         <ToolbarBtn title="适应屏幕" onClick={reset}>
-          <Maximize2 size={18} />
+          <Maximize2 className="icon-lg" />
         </ToolbarBtn>
         <ToolbarBtn title="向左旋转" onClick={() => rotate(-90)}>
-          <RotateCcw size={18} />
+          <RotateCcw className="icon-lg" />
         </ToolbarBtn>
         <ToolbarBtn title="向右旋转" onClick={() => rotate(90)}>
-          <RotateCw size={18} />
+          <RotateCw className="icon-lg" />
         </ToolbarBtn>
         <span
           style={{
@@ -206,10 +206,10 @@ export function ImageLightbox() {
           }}
         />
         <ToolbarBtn title="下载原图" onClick={onDownload}>
-          <Download size={18} />
+          <Download className="icon-lg" />
         </ToolbarBtn>
         <ToolbarBtn title="关闭 (Esc)" onClick={close}>
-          <X size={18} />
+          <X className="icon-lg" />
         </ToolbarBtn>
       </div>
 

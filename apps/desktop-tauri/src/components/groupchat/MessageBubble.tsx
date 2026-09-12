@@ -34,7 +34,7 @@ export const DispatchErrorCard = memo(function DispatchErrorCard({
     <div className="flex justify-center animate-in py-1">
       <div className="inline-flex items-start gap-2.5 px-4 py-2.5 rounded-xl border max-w-[80%]"
         style={{ background: "var(--color-error-soft)", borderColor: "var(--color-error-soft)" }}>
-        <AlertCircle size={14} className="shrink-0 mt-0.5" style={{ color: "var(--color-error)" }} />
+        <AlertCircle className="icon-md shrink-0 mt-0.5" style={{ color: "var(--color-error)" }} />
         <div className="min-w-0 flex-1">
           <p className="text-[13px] font-medium" style={{ color: "var(--color-error)" }}>
             {isLeader ? "总管调度失败" : `${agentName} 回复失败`}
@@ -65,7 +65,7 @@ export const HandoffSeparator = memo(function HandoffSeparator({
       <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[12px] font-medium shrink-0"
         style={{ background: "var(--color-bg-tertiary)", color: "var(--color-text-muted)" }}
         title={reason}>
-        <ArrowRightCircle size={11} />
+        <ArrowRightCircle className="icon-sm" />
         <span className="truncate">{label}</span>
       </div>
       <div className="flex-1" />
@@ -104,7 +104,7 @@ export const AgentExpelledCard = memo(function AgentExpelledCard({
       <div className="inline-flex items-start gap-2.5 px-4 py-2.5 rounded-xl border max-w-[80%]"
         style={{ background: "var(--color-warning-soft)", borderColor: "var(--color-warning-soft)" }}
         data-testid="room-agent-expelled-card">
-        <AlertCircle size={14} className="shrink-0 mt-0.5" style={{ color: "var(--color-warning)" }} />
+        <AlertCircle className="icon-md shrink-0 mt-0.5" style={{ color: "var(--color-warning)" }} />
         <div className="min-w-0 flex-1">
           <p className="text-[13px] font-medium" style={{ color: "var(--color-warning)" }}>
             {agentName || "成员"} 已被移出房间
@@ -130,7 +130,7 @@ export const AuditVerdictCard = memo(function AuditVerdictCard({
       <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[12px] font-medium shrink-0 max-w-[80%]"
         style={{ background: "var(--color-error-soft)", color: "var(--color-error)" }}
         title={reason} data-testid="room-audit-verdict-card">
-        <AlertCircle size={11} />
+        <AlertCircle className="icon-sm" />
         <span className="truncate">{agentName || "成员"} 触发违规{deltaText}</span>
       </div>
       <div className="flex-1" />
@@ -152,9 +152,9 @@ function RawContentToggle({ metadata }: { metadata: string }) {
           {(() => {
             try {
               const parsed = JSON.parse(metadata);
-              return parsed.raw ?? "(无原始内容)";
+              return parsed.raw ?? "（无原始内容）";
             } catch {
-              return "(无法解析)";
+              return "（无法解析）";
             }
           })()}
         </pre>
@@ -207,7 +207,7 @@ const LeaderBubble = memo(function LeaderBubble({
         <div className="w-7 h-7 rounded-full flex items-center justify-center shrink-0"
           style={{ background: "var(--color-accent-soft)", color: "var(--color-accent)" }}
           title="项目总管">
-          <Crown size={13} strokeWidth={2.4} />
+          <Crown className="icon-md" strokeWidth={2.4} />
         </div>
       )}
       <div className={clsx("min-w-0 flex-1", isConsecutive && "mt-1")}>
@@ -215,7 +215,7 @@ const LeaderBubble = memo(function LeaderBubble({
         {!isConsecutive && (
           <div className="flex items-center gap-1.5 mb-1">
             <span className="text-[13px] text-text-primary font-medium">{displayName}</span>
-            <span className="text-[10.5px] px-1.5 py-0.5 rounded font-medium"
+            <span className="text-[11px] px-1.5 py-0.5 rounded font-medium"
               style={{ background: "var(--color-accent-soft)", color: "var(--color-accent)" }}>
               总管
             </span>

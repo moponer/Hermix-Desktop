@@ -1,4 +1,5 @@
 import { AlertTriangle, CheckCircle2, Loader2, ShieldAlert, ShieldCheck, TimerReset, Wrench } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 
 /**
  * CompactionStatus — what the agent_loop compaction pipeline is doing
@@ -114,36 +115,36 @@ const PHASE_COPY: Record<
   },
   starting: {
     icon: Loader2,
-    tone: "text-sky-700 dark:text-sky-300 bg-sky-50 dark:bg-sky-900/20 border-sky-200 dark:border-sky-700/50",
-    title: "上下文压缩:正在准备",
-    body: "检测到上下文使用率已超阈值,即将开始压缩,请稍候…",
+    tone: "text-text-secondary bg-info-soft border-border-primary",
+    title: "上下文压缩：正在准备",
+    body: "检测到上下文使用率已超阈值，即将开始压缩，请稍候…",
     spinning: true,
   },
   in_progress_fast: {
     icon: Loader2,
-    tone: "text-sky-700 dark:text-sky-300 bg-sky-50 dark:bg-sky-900/20 border-sky-200 dark:border-sky-700/50",
-    title: "上下文压缩:正在压缩中(快速通道)",
-    body: "中等压力 — 正在执行去重 + 评分裁剪 + 静态摘要,不调用 LLM。",
+    tone: "text-text-secondary bg-info-soft border-border-primary",
+    title: "上下文压缩：正在压缩中（快速通道）",
+    body: "中等压力 — 正在执行去重 + 评分裁剪 + 静态摘要，不调用 LLM。",
     spinning: true,
   },
   in_progress_llm: {
     icon: Loader2,
-    tone: "text-sky-700 dark:text-sky-300 bg-sky-50 dark:bg-sky-900/20 border-sky-200 dark:border-sky-700/50",
-    title: "上下文压缩:正在压缩中(LLM 摘要)",
-    body: "高压力 — 正在调用 LLM 生成结构化摘要以腾出空间,请稍候几秒。",
+    tone: "text-text-secondary bg-info-soft border-border-primary",
+    title: "上下文压缩：正在压缩中（LLM 摘要）",
+    body: "高压力 — 正在调用 LLM 生成结构化摘要以腾出空间，请稍候几秒。",
     spinning: true,
   },
   complete: {
     icon: CheckCircle2,
-    tone: "text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-900/20 border-emerald-200 dark:border-emerald-700/50",
-    title: "上下文压缩:已完成",
-    body: "本轮压缩已结束,新一轮对话可以继续正常进行。",
+    tone: "text-success bg-success-soft border-success-soft",
+    title: "上下文压缩：已完成",
+    body: "本轮压缩已结束，新一轮对话可以继续正常进行。",
   },
   failed: {
     icon: TimerReset,
-    tone: "text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-700/50",
-    title: "上下文压缩:本轮失败",
-    body: "压缩未成功,已记录失败原因;下次触发时会再次尝试。",
+    tone: "text-warning bg-warning-soft border-warning-soft",
+    title: "上下文压缩：本轮失败",
+    body: "压缩未成功，已记录失败原因;下次触发时会再次尝试。",
   },
 };
 
@@ -153,37 +154,62 @@ const STATE_COPY: Record<
 > = {
   closed: {
     icon: ShieldCheck,
-    tone: "text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-900/20 border-emerald-200 dark:border-emerald-700/50",
-    title: "上下文自动压缩:正常",
-    body: "达到阈值时,自动用 LLM 总结中间对话以腾出空间。",
+    tone: "text-success bg-success-soft border-success-soft",
+    title: "上下文自动压缩：正常",
+    body: "达到阈值时，自动用 LLM 总结中间对话以腾出空间。",
   },
   half_open: {
     icon: Wrench,
-    tone: "text-sky-700 dark:text-sky-300 bg-sky-50 dark:bg-sky-900/20 border-sky-200 dark:border-sky-700/50",
-    title: "上下文自动压缩:恢复探测中",
-    body: "熔断器冷却完毕,正在试探一次新的压缩。",
+    tone: "text-text-secondary bg-info-soft border-border-primary",
+    title: "上下文自动压缩：恢复探测中",
+    body: "熔断器冷却完毕，正在试探一次新的压缩。",
   },
   open: {
     icon: ShieldAlert,
-    tone: "text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-900/20 border-rose-200 dark:border-rose-700/50",
-    title: "上下文自动压缩:已熔断",
-    body: "压缩连续失败,已停止尝试,以免继续烧 token。",
+    tone: "text-error bg-error-soft border-error-soft",
+    title: "上下文自动压缩：已熔断",
+    body: "压缩连续失败，已停止尝试，以免继续烧 token。",
   },
   fallback: {
     icon: Wrench,
-    tone: "text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-700/50",
-    title: "上下文自动压缩:已切换轻量裁剪",
-    body: "熔断器断开,改为只删 tool_result 块以省 token,不调 LLM。",
+    tone: "text-warning bg-warning-soft border-warning-soft",
+    title: "上下文自动压缩：已切换轻量裁剪",
+    body: "熔断器断开，改为只删 tool_result 块以省 token,不调 LLM。",
   },
   pressure: {
     icon: AlertTriangle,
-    tone: "text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-700/50",
+    tone: "text-warning bg-warning-soft border-warning-soft",
     title: "上下文使用率偏高",
-    body: "即将触发自动压缩,对话脉络保留,工具输出可能丢失。",
+    body: "即将触发自动压缩，对话脉络保留，工具输出可能丢失。",
   },
 };
 
 export function CompactionStatusBanner({ status, onDismiss }: CompactionStatusBannerProps) {
+  // Elapsed-wait timer for the in-flight compression phases — the LLM
+  // summary round-trip can take tens of seconds; showing "已等待 Ns"
+  // turns an opaque spinner into a measurable wait. Hooks sit before
+  // the `if (!status)` early return to keep call order stable.
+  const phase = status?.phase;
+  const isCompacting =
+    phase === "starting" || phase === "in_progress_fast" || phase === "in_progress_llm";
+  const [now, setNow] = useState(() => Date.now());
+  const startRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!isCompacting) {
+      // Left the in-flight phases (complete/failed/idle) — reset so a
+      // later compression attempt starts its timer from zero.
+      startRef.current = null;
+      return;
+    }
+    if (startRef.current === null) startRef.current = status?.lastChangedAt ?? Date.now();
+    setNow(Date.now());
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [isCompacting, status?.lastChangedAt]);
+  const elapsedSecs = isCompacting
+    ? Math.max(0, Math.round((now - (startRef.current ?? now)) / 1000))
+    : 0;
+
   if (!status) return null;
 
   // UI-level state promotion: even if the backend breaker hasn't tripped,
@@ -219,12 +245,29 @@ export function CompactionStatusBanner({ status, onDismiss }: CompactionStatusBa
   return (
     <div className={`mb-2 px-3 py-2.5 rounded-xl border text-[13px] flex items-start gap-2.5 ${copy.tone}`}>
       <Icon
-        size={16}
-        className={`shrink-0 mt-0.5 ${"spinning" in copy && copy.spinning ? "animate-spin" : ""}`}
+        className={`icon-lg ${`shrink-0 mt-0.5 ${"spinning" in copy && copy.spinning ? "animate-spin" : ""}`}`}
       />
       <div className="flex-1 min-w-0 leading-snug">
         <div className="font-medium">{copy.title}</div>
         <div className="opacity-90 mt-0.5">{copy.body}</div>
+        {isCompacting && (
+          <div className="mt-2">
+            <div
+              className="h-1 rounded-full bg-bg-active overflow-hidden"
+              role="progressbar"
+              aria-label="上下文压缩进行中"
+            >
+              <div
+                className="h-full rounded-full bg-text-tertiary/70"
+                style={{ width: "35%", animation: "compaction-indeterminate 1.4s ease-in-out infinite" }}
+              />
+            </div>
+            <div className="opacity-70 mt-1" role="status" aria-live="polite">
+              已等待 {elapsedSecs}s
+              {phase === "in_progress_llm" && " · 超过 60s 自动降级为静态摘要"}
+            </div>
+          </div>
+        )}
         {(usedLabel || status.consecutiveFailures || status.lastFailureReason) && (
           <div className="opacity-80 mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
             {usedLabel && <span>当前用量:{usedLabel}</span>}
@@ -238,7 +281,7 @@ export function CompactionStatusBanner({ status, onDismiss }: CompactionStatusBa
       {onDismiss && (
         <button
           onClick={onDismiss}
-          className="shrink-0 ml-1 p-0.5 rounded-md hover:bg-black/5 dark:hover:bg-white/5 transition-colors opacity-70 hover:opacity-100"
+          className="shrink-0 ml-1 p-0.5 rounded-md hover:bg-bg-active transition-colors opacity-70 hover:opacity-100"
           title="关闭"
           aria-label="关闭压缩状态提示"
         >

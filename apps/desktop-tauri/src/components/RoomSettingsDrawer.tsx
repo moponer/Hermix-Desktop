@@ -132,17 +132,17 @@ toastError("保存聊天室设置失败");
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "var(--color-overlay-scrim)", contain: "layout style paint" }} onClick={onClose}>
       <div
         onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-lg max-h-[80vh] rounded-2xl bg-bg-elevated border border-border-primary shadow-pop overflow-hidden flex flex-col"
+        className="w-full max-w-lg max-h-[80vh] rounded-xl bg-bg-elevated border border-border-primary shadow-pop overflow-hidden flex flex-col"
         style={{ transform: "translateZ(0)" }}
       >
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 bg-bg-secondary">
           <div className="flex items-center gap-2">
-            <Settings size={16} className="text-text-secondary" />
+            <Settings className="icon-lg text-text-secondary" />
             <h3 className="text-[14px] font-semibold text-text-primary">{roomName} — 规则设置</h3>
           </div>
           <button onClick={onClose} aria-label="关闭" className="p-1 rounded-md hover:bg-bg-hover text-text-muted">
-            <X size={16} />
+            <X className="icon-lg" />
           </button>
         </div>
 
@@ -153,7 +153,7 @@ toastError("保存聊天室设置失败");
               key={t}
               onClick={() => setTab(t)}
               className={clsx(
-                "px-4 py-2 text-[12.5px] font-medium transition-colors",
+                "px-4 py-2 text-[13px] font-medium transition-colors",
                 tab === t ? "text-accent border-b-2 border-accent" : "text-text-muted hover:text-text-primary"
               )}
             >
@@ -169,7 +169,7 @@ toastError("保存聊天室设置失败");
               {/* Built-in rules (read-only) */}
               <div>
                 <div className="flex items-center gap-1.5 mb-2">
-                  <Shield size={13} className="text-accent" />
+                  <Shield className="icon-md text-accent" />
                   <span className="text-[13px] font-semibold text-text-primary">内置安全规则</span>
                   <span className="text-[12px] text-text-faint">（不可修改）</span>
                 </div>
@@ -185,7 +185,7 @@ toastError("保存聊天室设置失败");
               {/* Global constraints */}
               <div>
                 <div className="flex items-center gap-1.5 mb-2">
-                  <AlertTriangle size={13} className="text-warning" />
+                  <AlertTriangle className="icon-md text-warning" />
                   <span className="text-[13px] font-semibold text-text-primary">全局规则</span>
                   <span className="text-[12px] text-text-faint">（适用于所有专家）</span>
                 </div>
@@ -289,7 +289,7 @@ toastError("保存聊天室设置失败");
               {/* Penalty policy */}
               <div>
                 <div className="flex items-center gap-1.5 mb-2">
-                  <Star size={13} className="text-warning" />
+                  <Star className="icon-md text-warning" />
                   <span className="text-[13px] font-semibold text-text-primary">惩处策略</span>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
@@ -318,7 +318,7 @@ toastError("保存聊天室设置失败");
 
           {tab === "general" && (
             <div className="space-y-4">
-              {/* ── Idle chat (闲聊) ──────────────────────────── */}
+              {/* ── Idle chat （闲聊） ──────────────────────────── */}
               <div className="rounded-xl bg-bg-tertiary p-3 space-y-3">
                 <label className="flex items-start gap-3 cursor-pointer">
                   <input
@@ -331,12 +331,12 @@ toastError("保存聊天室设置失败");
                   />
                   <div className="flex-1">
                     <div className="flex items-center gap-1.5 text-[13px] font-semibold text-text-primary">
-                      <MessageCircle size={13} className="text-accent" />
+                      <MessageCircle className="icon-md text-accent" />
                       启用闲聊模式
                     </div>
                     <div className="text-[12px] text-text-muted mt-0.5">
-                      开启后,空闲的成员会按设定间隔自动发起分享经验 / 总结任务 / 学习心得的短消息。
-                      关闭后定时器立即停止,不再产生闲聊消息。
+                      开启后，空闲的成员会按设定间隔自动发起分享经验 / 总结任务 / 学习心得的短消息。
+                      关闭后定时器立即停止，不再产生闲聊消息。
                     </div>
                   </div>
                 </label>
@@ -346,7 +346,7 @@ toastError("保存聊天室设置失败");
                   !allowIdleChat && "opacity-40 pointer-events-none"
                 )}>
                   <div className="flex items-center gap-3">
-                    <Clock size={12} className="text-text-faint" />
+                    <Clock className="icon-sm text-text-faint" />
                     <label className="text-[13px] text-text-secondary whitespace-nowrap">
                       闲聊间隔 (秒)
                     </label>
@@ -361,7 +361,7 @@ toastError("保存聊天室设置失败");
                     />
                   </div>
                   <div className="text-[12px] text-text-faint pl-5">
-                    建议 60-600 秒。太短会刷屏,太长看不到效果。
+                    建议 60-600 秒。太短会刷屏，太长看不到效果。
                   </div>
                 </div>
               </div>
@@ -369,7 +369,7 @@ toastError("保存聊天室设置失败");
               {/* ── Concurrency ──────────────────────────────── */}
               <div className="rounded-xl bg-bg-tertiary p-3 space-y-2">
                 <div className="flex items-center gap-1.5 text-[13px] font-semibold text-text-primary">
-                  <Users size={13} className="text-accent" />
+                  <Users className="icon-md text-accent" />
                   并发上限
                 </div>
                 <div className="text-[12px] text-text-muted">
@@ -401,12 +401,12 @@ toastError("保存聊天室设置失败");
                   />
                   <div className="flex-1">
                     <div className="flex items-center gap-1.5 text-[13px] font-semibold text-text-primary">
-                      <CheckCircle2 size={13} className="text-accent" />
+                      <CheckCircle2 className="icon-md text-accent" />
                       需要总管审批
                     </div>
                     <div className="text-[12px] text-text-muted mt-0.5">
-                      开启后,总管拆解出的子任务在派发给成员前需要总管确认。
-                      关闭后直接派发,响应更快。
+                      开启后，总管拆解出的子任务在派发给成员前需要总管确认。
+                      关闭后直接派发，响应更快。
                     </div>
                   </div>
                 </label>
@@ -414,7 +414,7 @@ toastError("保存聊天室设置失败");
 
               {!settingsLoaded && (
                 <div className="text-[12px] text-text-faint text-center py-2">
-                  正在加载设置…
+                  加载中…
                 </div>
               )}
             </div>

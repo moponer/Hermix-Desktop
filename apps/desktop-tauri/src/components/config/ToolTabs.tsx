@@ -1,3 +1,4 @@
+import { ToggleSwitch } from "../ToggleSwitch";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Search,
@@ -99,7 +100,7 @@ export function PluginsTab({ query, onQuery }: { query: string; onQuery: (q: str
             return (
               <PluginCard
                 key={plugin.id}
-                icon={<plugin.icon size={16} />}
+                icon={<plugin.icon className="icon-lg" />}
                 name={plugin.name}
                 description={plugin.description}
                 badge={plugin.category}
@@ -107,7 +108,7 @@ export function PluginsTab({ query, onQuery }: { query: string; onQuery: (q: str
                 saving={savingId === plugin.id}
                 disabled={loading}
                 noBorder
-                rightIcon={<ArrowUpRight size={12} />}
+                rightIcon={<ArrowUpRight className="icon-sm" />}
                 onToggle={() => togglePlugin(plugin, !enabled)}
               />
             );
@@ -192,8 +193,8 @@ export function SkillsTab({ query, onQuery }: { query: string; onQuery: (q: stri
           disabled={loading}
           className="btn-secondary btn-sm flex-shrink-0"
           title="刷新技能列表"
-         aria-label="刷新技能列表">
-          <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
+          aria-label="刷新技能列表">
+          <RefreshCw className={`icon-md ${loading ? "animate-spin" : ""}`} />
         </button>
       </div>
 
@@ -307,43 +308,20 @@ function SkillCard({ skill, catLabel, onToggle }: {
           <button onClick={openContent}
             className="w-9 h-9 rounded-lg bg-bg-tertiary flex items-center justify-center text-text-secondary shrink-0 hover:bg-bg-surface transition-colors"
             title="查看技能内容"
-           aria-label="查看技能内容">
-            <Wand2 size={14} />
+            aria-label="查看技能内容">
+            <Wand2 className="icon-md" />
           </button>
           <div className="min-w-0 flex-1 cursor-pointer" onClick={openContent}>
             <div className="flex items-center gap-2">
               <span className="text-sm text-text-primary truncate">{skill.name}</span>
-              <span className="text-[10px] uppercase tracking-wider text-text-muted border border-border-primary rounded px-1.5 py-0.5 shrink-0">
+              <span className="text-[11px] uppercase tracking-wider text-text-muted border border-border-primary rounded px-1.5 py-0.5 shrink-0">
                 {catLabel(skill.category) || "skill"}
               </span>
             </div>
             <p className="text-xs text-text-muted mt-0.5 truncate">{skill.description || "（无描述）"}</p>
           </div>
-          <ArrowUpRight size={12} className="text-text-faint shrink-0" />
-          <button
-            onClick={(e) => { e.stopPropagation(); requestToggle(); }}
-            disabled={toggling}
-            className={`relative h-6 w-10 rounded-full transition-colors shrink-0 ${
-              skill.enabled
-                ? "bg-success"
-                : "bg-bg-tertiary border border-border-secondary"
-            } ${toggling ? "opacity-60 cursor-wait" : "cursor-pointer"}`}
-            title={skill.enabled ? "禁用" : "启用"}
-            aria-label={skill.enabled ? "禁用" : "启用"}
-          >
-            <span
-              className={`absolute top-[3px] flex items-center justify-center rounded-full shadow transition-all duration-150 ${
-                skill.enabled
-                  ? "left-[23px] w-5 h-5 bg-white text-success"
-                  : "left-[3px] w-5 h-5 bg-bg-card text-text-muted"
-              }`}
-            >
-              {skill.enabled
-                ? <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 5l2 2 4-4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                : <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2.5 2.5l5 5M7.5 2.5l-5 5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/></svg>
-              }
-            </span>
-          </button>
+          <ArrowUpRight className="icon-sm text-text-faint shrink-0" />
+          <ToggleSwitch enabled={skill.enabled} onToggle={requestToggle} disabled={toggling} offLabel="禁用" onLabel="启用" className="shrink-0" />
         </div>
       </div>
 
@@ -397,7 +375,7 @@ function SkillContentModal({ skill, catLabel, content, loading, onClose }: {
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal-card modal-card-lg" onClick={(e) => e.stopPropagation()} style={{ maxHeight: "80vh", display: "flex", flexDirection: "column" }}>
         <div className="modal-header" style={{ flexShrink: 0 }}>
-          <div className="modal-icon modal-icon-info"><Sparkles size={18} /></div>
+          <div className="modal-icon modal-icon-info"><Sparkles className="icon-lg" /></div>
           <div className="modal-title-block">
             <h3 className="modal-title">{skill.name}</h3>
             <p className="modal-subtitle">
@@ -405,12 +383,12 @@ function SkillContentModal({ skill, catLabel, content, loading, onClose }: {
             </p>
           </div>
           <button onClick={onClose} className="modal-close" aria-label="关闭">
-            <X size={16} />
+            <X className="icon-lg" />
           </button>
         </div>
         <div style={{ flex: 1, overflow: "auto", padding: "12px 16px" }}>
           {loading ? (
-            <div className="text-xs text-text-muted animate-pulse">加载中...</div>
+            <div className="text-xs text-text-muted animate-pulse">加载中…</div>
           ) : content ? (
             <pre className="text-xs text-text-secondary leading-relaxed whitespace-pre-wrap">
               {content}
@@ -463,7 +441,7 @@ function ConfirmDialog({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="modal-header">
-          <div className="modal-icon modal-icon-warn"><AlertTriangle size={18} /></div>
+          <div className="modal-icon modal-icon-warn"><AlertTriangle className="icon-lg" /></div>
           <div className="modal-title-block">
             <h3 className="modal-title">{title}</h3>
             <p className="modal-subtitle">{message}</p>
@@ -473,7 +451,7 @@ function ConfirmDialog({
             className="modal-close"
             aria-label="关闭"
           >
-            <X size={16} />
+            <X className="icon-lg" />
           </button>
         </div>
         <div className="modal-footer">
@@ -489,7 +467,7 @@ function ConfirmDialog({
             disabled={busy}
             className="modal-btn modal-btn-danger"
           >
-            {busy ? "处理中..." : confirmLabel}
+            {busy ? "处理中…" : confirmLabel}
           </button>
         </div>
       </div>
@@ -630,8 +608,8 @@ export function ConnectorsTab({ query, onQuery }: { query: string; onQuery: (q: 
       <SearchBar query={query} onQuery={onQuery} />
 
       <div className="flex items-center justify-between mb-3">
-        <span className="text-[11.5px] text-text-muted">
-          MCP (Model Context Protocol) 服务,通过 stdio 启动本地子进程或 HTTP/SSE 连接远程端点。
+        <span className="text-[12px] text-text-muted">
+          MCP (Model Context Protocol) 服务，通过 stdio 启动本地子进程或 HTTP/SSE 连接远程端点。
         </span>
         <div className="flex items-center gap-2">
           <button
@@ -639,7 +617,7 @@ export function ConnectorsTab({ query, onQuery }: { query: string; onQuery: (q: 
             className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-accent hover:bg-bg-tertiary"
             title="添加自定义 MCP 服务"
           >
-            <Plus size={11} /> 添加 MCP
+            <Plus className="icon-sm" /> 添加 MCP
           </button>
         </div>
       </div>
@@ -665,7 +643,7 @@ export function ConnectorsTab({ query, onQuery }: { query: string; onQuery: (q: 
           {addMode === "paste" ? (
             <>
               <div>
-                <label className="text-[10.5px] text-text-muted">粘贴配置（Claude Desktop / Cursor 风格 mcpServers JSON）</label>
+                <label className="text-[11px] text-text-muted">粘贴配置（Claude Desktop / Cursor 风格 mcpServers JSON）</label>
                 <textarea
                   value={pasteJson}
                   onChange={(e) => setPasteJson(e.target.value)}
@@ -684,11 +662,11 @@ export function ConnectorsTab({ query, onQuery }: { query: string; onQuery: (q: 
             <>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-[10.5px] text-text-muted">名称</label>
+                  <label className="text-[11px] text-text-muted">名称</label>
                   <input value={newServer.name} onChange={(e) => setNewServer((p) => ({ ...p, name: e.target.value }))} placeholder="my-mcp-server" className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary border border-border-secondary" />
                 </div>
                 <div>
-                  <label className="text-[10.5px] text-text-muted">传输方式</label>
+                  <label className="text-[11px] text-text-muted">传输方式</label>
                   <select value={newServer.transport} onChange={(e) => setNewServer((p) => ({ ...p, transport: e.target.value as api.McpTransport }))} className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary border border-border-secondary">
                     <option value="stdio">stdio</option>
                     <option value="http">http</option>
@@ -697,26 +675,26 @@ export function ConnectorsTab({ query, onQuery }: { query: string; onQuery: (q: 
                 {newServer.transport === "stdio" ? (
                   <>
                     <div>
-                      <label className="text-[10.5px] text-text-muted">Command</label>
+                      <label className="text-[11px] text-text-muted">Command</label>
                       <input value={newServer.command} onChange={(e) => setNewServer((p) => ({ ...p, command: e.target.value }))} placeholder="npx" className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary border border-border-secondary" />
                     </div>
                     <div>
-                      <label className="text-[10.5px] text-text-muted">Args (空格分隔)</label>
+                      <label className="text-[11px] text-text-muted">Args （空格分隔）</label>
                       <input value={newServer.args} onChange={(e) => setNewServer((p) => ({ ...p, args: e.target.value }))} placeholder="-y @modelcontextprotocol/server-filesystem /tmp" className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary border border-border-secondary" />
                     </div>
                   </>
                 ) : (
                   <div className="col-span-2">
-                    <label className="text-[10.5px] text-text-muted">URL</label>
+                    <label className="text-[11px] text-text-muted">URL</label>
                     <input value={newServer.url} onChange={(e) => setNewServer((p) => ({ ...p, url: e.target.value }))} placeholder="https://example.com/mcp" className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary border border-border-secondary" />
                   </div>
                 )}
                 <div className="col-span-2">
-                  <label className="text-[10.5px] text-text-muted">环境变量 (每行 KEY=value)</label>
+                  <label className="text-[11px] text-text-muted">环境变量 (每行 KEY=value)</label>
                   <textarea value={newServer.env} onChange={(e) => setNewServer((p) => ({ ...p, env: e.target.value }))} placeholder={"API_KEY=xxx"} rows={2} className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary border border-border-secondary resize-none" />
                 </div>
                 <div className="col-span-2">
-                  <label className="text-[10.5px] text-text-muted">描述 (可选)</label>
+                  <label className="text-[11px] text-text-muted">描述 （可选）</label>
                   <input value={newServer.description} onChange={(e) => setNewServer((p) => ({ ...p, description: e.target.value }))} placeholder="自定义文件系统 MCP" className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary border border-border-secondary" />
                 </div>
               </div>
@@ -786,55 +764,35 @@ function ConnectorRow({
   return (
     <div className="h-enter flex items-start gap-3 px-3 py-2.5 rounded-xl bg-bg-card/70 hover:bg-bg-card">
       <div className="w-9 h-9 rounded-lg bg-bg-tertiary flex items-center justify-center text-text-secondary shrink-0">
-        <Icon size={16} />
+        <Icon className="icon-lg" />
       </div>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className="text-sm text-text-primary truncate">{server.name}</span>
-          <span className="text-[10px] uppercase tracking-wider text-text-muted bg-bg-tertiary rounded px-1.5 py-0.5">
+          <span className="text-[11px] uppercase tracking-wider text-text-muted bg-bg-tertiary rounded px-1.5 py-0.5">
             {server.transport}
           </span>
           {server.enabled && (
-            <span className="text-[10px] text-accent bg-accent-soft/40 rounded px-1.5 py-0.5">启用中</span>
+            <span className="text-[11px] text-accent bg-accent-soft/40 rounded px-1.5 py-0.5">启用中</span>
           )}
         </div>
         {server.description && (
           <p className="text-xs text-text-muted mt-0.5 line-clamp-2">{server.description}</p>
         )}
-        <p className="text-[10.5px] font-mono text-text-faint mt-1 truncate">
+        <p className="text-[11px] font-mono text-text-faint mt-1 truncate">
           {server.transport === "stdio"
             ? `${server.command ?? "?"} ${(server.args ?? []).join(" ")}`
             : server.url ?? "(no url)"}
         </p>
       </div>
       <div className="flex items-center gap-1.5 shrink-0">
-        <button
-          onClick={() => onToggle(!server.enabled)}
-          className={`relative h-7 w-11 rounded-full transition-colors ${
-            server.enabled ? "bg-success" : "bg-bg-tertiary border border-border-secondary"
-          }`}
-          title={server.enabled ? "停用" : "启用"}
-          aria-label={server.enabled ? "停用" : "启用"}
-        >
-          <span
-            className={`absolute top-0.5 flex items-center justify-center rounded-full shadow transition-all duration-150 ${
-              server.enabled
-                ? "left-[22px] w-6 h-6 bg-white text-success"
-                : "left-0.5 w-6 h-6 bg-bg-card text-text-muted"
-            }`}
-          >
-            {server.enabled
-              ? <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 6l2.5 2.5 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
-              : <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
-            }
-          </span>
-        </button>
+        <ToggleSwitch enabled={server.enabled} onToggle={() => onToggle(!server.enabled)} offLabel="停用" onLabel="启用" />
         <button
           onClick={onRemove}
           className="h-7 w-7 rounded-md text-text-muted hover:text-error hover:bg-error/10 flex items-center justify-center"
           title="删除"
-         aria-label="删除">
-          <Trash2 size={13} />
+          aria-label="删除">
+          <Trash2 className="icon-md" />
         </button>
       </div>
     </div>
@@ -976,7 +934,7 @@ export function ToolsetsTab({ query, onQuery }: { query: string; onQuery: (q: st
             className="text-text-muted hover:text-text-primary text-xs"
             aria-label="关闭错误提示"
           >
-            ✕
+            <X className="icon-sm" />
           </button>
         </div>
       )}
@@ -989,7 +947,7 @@ export function ToolsetsTab({ query, onQuery }: { query: string; onQuery: (q: st
             className="text-text-muted hover:text-text-primary text-xs"
             aria-label="关闭警告"
           >
-            ✕
+            <X className="icon-sm" />
           </button>
         </div>
       )}
@@ -1039,12 +997,12 @@ function ToolsetCard({
   return (
     <div className="group flex items-start gap-3 px-3 py-2.5 rounded-xl bg-bg-card/80 hover:bg-bg-card">
       <div className="w-9 h-9 rounded-lg bg-bg-tertiary flex items-center justify-center text-text-secondary shrink-0">
-        <Icon size={16} />
+        <Icon className="icon-lg" />
       </div>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className="text-sm text-text-primary truncate">{toolset.label}</span>
-          <span className="text-[10px] uppercase tracking-wider text-text-muted border border-border-primary rounded px-1.5 py-0.5">
+          <span className="text-[11px] uppercase tracking-wider text-text-muted border border-border-primary rounded px-1.5 py-0.5">
             {toolset.tools.length} 个工具
           </span>
         </div>
@@ -1052,43 +1010,20 @@ function ToolsetCard({
         {toolset.tools.length > 0 && (
           <div className="flex flex-wrap gap-1 mt-1.5">
             {toolset.tools.slice(0, 6).map((tool) => (
-              <span key={tool} className="text-[10px] text-text-secondary bg-bg-tertiary rounded px-1.5 py-0.5">
+              <span key={tool} className="text-[11px] text-text-secondary bg-bg-tertiary rounded px-1.5 py-0.5">
                 {tool}
               </span>
             ))}
             {toolset.tools.length > 6 && (
-              <span className="text-[10px] text-text-muted">+{toolset.tools.length - 6}</span>
+              <span className="text-[11px] text-text-muted">+{toolset.tools.length - 6}</span>
             )}
           </div>
         )}
       </div>
       <div className="shrink-0 mt-1.5 flex flex-col items-end gap-1">
-        <button
-          type="button"
-          role="switch"
-          aria-checked={enabled}
-          aria-label={`${enabled ? "关闭" : "启用"} ${toolset.label} 工具集`}
-          disabled={saving}
-          onClick={() => onToggle(toolset.name, !enabled)}
-          className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
-            enabled ? "bg-accent" : "bg-bg-tertiary"
-          } ${saving ? "opacity-60 cursor-wait" : "cursor-pointer"}`}
-        >
-          <span
-            className={`absolute top-[3px] flex items-center justify-center rounded-full shadow transition-all duration-150 ${
-              enabled
-                ? "left-[19px] w-4 h-4 bg-white text-accent"
-                : "left-[3px] w-4 h-4 bg-bg-card text-text-muted"
-            }`}
-          >
-            {enabled
-              ? <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 5l2 2 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
-              : <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2.5 2.5l5 5M7.5 2.5l-5 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
-            }
-          </span>
-        </button>
+        <ToggleSwitch enabled={enabled} onToggle={() => onToggle(toolset.name, !enabled)} disabled={saving} offLabel={`关闭 ${toolset.label} 工具集`} onLabel={`启用 ${toolset.label} 工具集`} />
         <span
-          className={`text-[10px] uppercase tracking-wider ${
+          className={`text-[11px] uppercase tracking-wider ${
             enabled ? "text-success" : "text-text-muted"
           }`}
         >
@@ -1113,7 +1048,7 @@ export function SearchBar({
   return (
     <div className="flex items-center gap-2 mb-5">
       <div className="relative flex-1">
-        <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
+        <Search className="icon-md absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
         <input
           value={query}
           onChange={(e) => onQuery(e.target.value)}
@@ -1221,37 +1156,14 @@ function PluginCard({
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className="text-sm text-text-primary truncate">{name}</span>
-          <span className="text-[10px] uppercase tracking-wider text-text-muted border border-border-primary rounded px-1.5 py-0.5 shrink-0">
+          <span className="text-[11px] uppercase tracking-wider text-text-muted border border-border-primary rounded px-1.5 py-0.5 shrink-0">
             {badge}
           </span>
         </div>
         <p className="text-xs text-text-muted mt-0.5 truncate">{description}</p>
       </div>
       {rightIcon && <span className="shrink-0 text-text-faint">{rightIcon}</span>}
-      <button
-        onClick={onToggle}
-        disabled={saving || disabled}
-        className={`relative h-6 w-10 rounded-full transition-colors shrink-0 ${
-          enabled
-            ? "bg-success"
-            : "bg-bg-tertiary border border-border-secondary"
-        } ${saving ? "opacity-60 cursor-wait" : "cursor-pointer"}`}
-        title={enabled ? "禁用" : "启用"}
-        aria-label={enabled ? "禁用" : "启用"}
-      >
-        <span
-          className={`absolute top-[3px] flex items-center justify-center rounded-full shadow transition-all duration-150 ${
-            enabled
-              ? "left-[23px] w-5 h-5 bg-white text-success"
-              : "left-[3px] w-5 h-5 bg-bg-card text-text-muted"
-          }`}
-        >
-          {enabled
-            ? <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 5l2 2 4-4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/></svg>
-            : <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2.5 2.5l5 5M7.5 2.5l-5 5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/></svg>
-          }
-        </span>
-      </button>
+      <ToggleSwitch enabled={enabled} onToggle={onToggle} disabled={saving || disabled} offLabel="禁用" onLabel="启用" className="shrink-0" />
     </div>
   );
 }

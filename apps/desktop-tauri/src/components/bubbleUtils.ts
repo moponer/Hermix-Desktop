@@ -158,6 +158,15 @@ const TOOL_CATEGORIES: ToolCategory[] = [
     verb: "读取剪贴板",
     kind: "clipboard",
   },
+  // 2026-08-29: custom app management — placed before the catch-all
+  // so toolVerb returns a meaningful Chinese verb instead of the raw
+  // English tool name (user feedback: tool rows and batch approval
+  // cards showed "custom_app_manager" verbatim).
+  {
+    keywords: ["custom_app_manager", "custom_app", "app_manager"],
+    verb: "自定义应用管理",
+    kind: "other",
+  },
   {
     keywords: ["lint", "format", "prettier", "eslint", "check", "validate", "audit"],
     verb: "代码检查",
@@ -640,6 +649,26 @@ export function summarizeArgs(args: unknown): string {
   }
 }
 
+/** Format a flat object as human-readable "key: value, key: value" brief.
+ *  Nested objects / arrays truncate to JSON.stringify single-line.
+ *  Used by approval batch items to avoid raw JSON dump in the UI. */
+export function formatArgsBrief(args: unknown): string {
+  if (args == null) return "";
+  if (typeof args !== "object" || Array.isArray(args)) {
+    return String(args).length > 120 ? String(args).slice(0, 120) + "…" : String(args);
+  }
+  const a = args as Record<string, unknown>;
+  const parts: string[] = [];
+  for (const [k, v] of Object.entries(a)) {
+    if (v == null) continue;
+    const sv = typeof v === "object" ? JSON.stringify(v) : String(v);
+    const trimmed = sv.length > 80 ? sv.slice(0, 80) + "…" : sv;
+    parts.push(`${k}: ${trimmed}`);
+    if (parts.length >= 6) { parts.push("…"); break; } // cap entries
+  }
+  return parts.join(",  ");
+}
+
 /**
  * Render tool args as a clean key→value list instead of a raw
  * JSON code block.  Objects become aligned rows; primitives /
@@ -714,6 +743,37 @@ export function describeToolArgs(tool: string, args: unknown): string {
     if (action === "replace") return `编辑${targetText}`;
     if (action === "remove") return `删除${targetText}`;
     return `记忆操作: ${action || "未知"}`;
+  }
+  // 2026-08-29: custom app management — the batch approval card and
+  // tool rows previously dumped raw args JSON here (user feedback:
+  // "审批卡片中也要中文显示大概要运行什么"). Map the action verb to
+  // Chinese and surface the app id so the user can tell WHICH app the
+  // call touches — critical when a batch contains two same-tool items
+  // that only differ by target app.
+  if (tool.includes("custom_app")) {
+    const action = typeof a.action === "string" ? a.action : "";
+    const appId =
+      (typeof a.app_id === "string" && a.app_id) ||
+      (typeof a.id === "string" && a.id) ||
+      (typeof a.name === "string" && a.name) ||
+      "";
+    const appLabel = appId ? ` "${appId}"` : "";
+    const ACTION_VERBS: Record<string, string> = {
+      list: "列出已安装应用",
+      get: "查看应用",
+      create: "创建应用",
+      update: "更新应用",
+      patch: "修改应用",
+      package: "打包应用",
+      install: "安装应用",
+      uninstall: "卸载应用",
+      delete: "删除应用",
+      run: "运行应用",
+      dev: "开发模式运行应用",
+    };
+    const verb = ACTION_VERBS[action];
+    if (verb) return `${verb}${appLabel}`;
+    return `应用管理操作 (${action || "未知"})${appLabel}`;
   }
   return summarizeArgs(args);
 }

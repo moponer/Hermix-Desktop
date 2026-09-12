@@ -17,7 +17,7 @@ export function AgentCard({ agent, onEdit, onDelete, onTest }: AgentCardProps) {
     agent.usageCount < 10  ? "常用" : "推荐";
 
   return (
-    <div className="group relative rounded-xl bg-bg-card p-3.5 transition-all hover:-translate-y-0.5 hover:shadow-md">
+    <div className="group relative rounded-xl bg-bg-card p-3.5 transition-[color,background-color,border-color,transform,box-shadow] hover:-translate-y-0.5 hover:shadow-md">
       <div className="flex items-start gap-2.5">
         {/* Round avatar */}
         <div className="w-9 h-9 rounded-full flex items-center justify-center text-[20px] shrink-0 bg-bg-tertiary">
@@ -28,15 +28,15 @@ export function AgentCard({ agent, onEdit, onDelete, onTest }: AgentCardProps) {
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-2 mb-0.5">
             <div className="min-w-0 flex-1">
-              <h3 className="text-[12.5px] font-semibold text-text-primary truncate leading-tight">
+              <h3 className="text-[13px] font-semibold text-text-primary truncate leading-tight">
                 {agent.name}
               </h3>
-              <p className="text-[10.5px] text-text-muted truncate mt-0.5">
+              <p className="text-[11px] text-text-muted truncate mt-0.5">
                 {agent.role || "AI 助手"}
               </p>
             </div>
             <span
-              className="text-[9.5px] font-medium px-1.5 py-0.5 rounded shrink-0 mt-0.5 bg-accent-soft text-accent"
+              className="text-[11px] font-medium px-1.5 py-0.5 rounded shrink-0 mt-0.5 bg-accent-soft text-accent"
             >
               {label}
             </span>
@@ -53,13 +53,13 @@ export function AgentCard({ agent, onEdit, onDelete, onTest }: AgentCardProps) {
               {visibleSkills.map((s) => (
                 <span
                   key={s}
-                  className="px-1.5 py-0.5 rounded text-[10px] text-text-secondary bg-bg-tertiary"
+                  className="px-1.5 py-0.5 rounded text-[11px] text-text-secondary bg-bg-tertiary"
                 >
                   {s}
                 </span>
               ))}
               {visibleSkills.length === 0 && agent.specialty && (
-                <span className="px-1.5 py-0.5 rounded text-[10px] text-text-secondary bg-bg-tertiary">
+                <span className="px-1.5 py-0.5 rounded text-[11px] text-text-secondary bg-bg-tertiary">
                   {agent.specialty}
                 </span>
               )}
@@ -73,10 +73,10 @@ export function AgentCard({ agent, onEdit, onDelete, onTest }: AgentCardProps) {
         <button
           onClick={onTest}
           title="快速测试"
-          className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-[11.5px] font-medium transition-all hover:opacity-90"
+          className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-[12px] font-medium transition-[color,background-color,border-color,opacity] hover:opacity-90"
           style={{ background: "var(--color-btn-secondary-bg)", color: "var(--color-btn-secondary-text)" }}
         >
-          <Play size={11} />
+          <Play className="icon-sm" />
           测试
         </button>
         <button
@@ -84,16 +84,16 @@ export function AgentCard({ agent, onEdit, onDelete, onTest }: AgentCardProps) {
           title="编辑"
           className="p-1.5 rounded-lg hover:bg-bg-hover"
           style={{ color: "var(--color-btn-ghost-text)" }}
-         aria-label="编辑">
-          <Edit3 size={11} />
+          aria-label="编辑">
+          <Edit3 className="icon-sm" />
         </button>
         <button
           onClick={onDelete}
           title="删除"
           className="p-1.5 rounded-lg hover:bg-error-soft"
           style={{ color: "var(--color-btn-ghost-text)" }}
-         aria-label="删除">
-          <Trash2 size={11} />
+          aria-label="删除">
+          <Trash2 className="icon-sm" />
         </button>
       </div>
     </div>

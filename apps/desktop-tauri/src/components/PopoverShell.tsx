@@ -127,7 +127,7 @@ export function PopoverShell({
       aria-modal="false"
       style={anchorStyle}
       onPointerDown={(e) => e.stopPropagation()}
-      className={`${widthClass} shrink-0 rounded-[10px] bg-bg-elevated border border-border-primary shadow-pop p-1.5 overflow-hidden z-[60] ${legacyClass} ${className}`}
+      className={`${widthClass} shrink-0 rounded-xl bg-bg-elevated border border-border-primary shadow-pop p-1.5 overflow-hidden z-[60] ${legacyClass} ${className}`}
     >
       {children}
     </div>
@@ -151,7 +151,7 @@ export function PopoverHeader({
 }) {
   return (
     <div className={`px-2.5 pt-1 pb-1 flex items-center justify-between ${className}`}>
-      <span className="text-[10.5px] font-semibold text-text-faint">
+      <span className="text-[11px] font-semibold text-text-faint">
         {children}
       </span>
       {right}

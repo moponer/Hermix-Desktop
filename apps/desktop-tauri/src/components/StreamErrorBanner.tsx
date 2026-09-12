@@ -129,7 +129,7 @@ export function StreamErrorCard({
       <div className="stream-error-card__main">
         <div className="stream-error-card__head">
           <span className="stream-error-card__icon" aria-hidden="true">
-            <meta.Icon size={14} strokeWidth={2} />
+            <meta.Icon className="icon-md" strokeWidth={2} />
           </span>
           <span className="stream-error-card__title">{meta.title}</span>
           <button
@@ -139,7 +139,7 @@ export function StreamErrorCard({
             title="关闭"
             aria-label="关闭错误提示"
           >
-            <X size={13} strokeWidth={2} />
+            <X className="icon-md" strokeWidth={2} />
           </button>
         </div>
         <div className="stream-error-card__message">{message}</div>
@@ -151,10 +151,8 @@ export function StreamErrorCard({
             onToggle={(e) => setExpanded((e.target as HTMLDetailsElement).open)}
           >
             <summary>
-              <ChevronDown
-                size={11}
-                strokeWidth={2}
-                className={`stream-error-card__chev ${expanded ? "is-open" : ""}`}
+              <ChevronDown strokeWidth={2}
+                className={`icon-sm ${`stream-error-card__chev ${expanded ? "is-open" : ""}`}`}
               />
               技术详情
             </summary>
@@ -181,12 +179,12 @@ export function StreamErrorCard({
               >
                 {copied ? (
                   <>
-                    <CheckCheck size={11} strokeWidth={2} />
+                    <CheckCheck className="icon-sm" strokeWidth={2} />
                     <span>已复制</span>
                   </>
                 ) : (
                   <>
-                    <Copy size={11} strokeWidth={2} />
+                    <Copy className="icon-sm" strokeWidth={2} />
                     <span>复制错误码</span>
                   </>
                 )}

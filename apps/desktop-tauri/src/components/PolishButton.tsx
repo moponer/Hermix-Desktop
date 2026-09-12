@@ -99,14 +99,14 @@ export function PolishButton({
       onClick={handleClick}
       disabled={!canAct}
       title={title}
-      className="flex items-center justify-center w-8 h-8 rounded-lg transition-all disabled:opacity-30 disabled:cursor-not-allowed text-text-muted hover:text-text-primary hover:bg-bg-tertiary"
+      className="flex items-center justify-center w-8 h-8 rounded-lg transition-[color,background-color,border-color,opacity] disabled:opacity-30 disabled:cursor-not-allowed text-text-muted hover:text-text-primary hover:bg-bg-tertiary"
     >
       {loading ? (
-        <Loader2 size={14} className="animate-spin" />
+        <Loader2 className="icon-md animate-spin" />
       ) : showingPolished ? (
-        <RotateCcw size={14} />
+        <RotateCcw className="icon-md" />
       ) : (
-        <Sparkles size={14} />
+        <Sparkles className="icon-md" />
       )}
     </button>
   );

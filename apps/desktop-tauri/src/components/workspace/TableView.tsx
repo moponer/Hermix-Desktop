@@ -196,7 +196,7 @@ export function TableView({
     <div className="relative flex min-h-0 flex-1 flex-col">
       {/* 工具条：表名 + 行数（含截断提示）+ 新增入口 */}
       <div
-        className="flex shrink-0 items-center gap-2 px-3 py-1.5 text-[11.5px]"
+        className="flex shrink-0 items-center gap-2 px-3 py-1.5 text-[12px]"
         style={{ color: "var(--color-text-secondary)", borderBottom: "1px solid var(--color-border-subtle)" }}
       >
         <span className="font-medium" style={{ color: "var(--color-text-primary)" }}>{module.name}</span>
@@ -210,15 +210,14 @@ export function TableView({
           <div className="ml-auto flex items-center gap-1.5">
             <div className="relative">
               <Search
-                size={11}
-                className="pointer-events-none absolute left-1.5 top-1/2 -translate-y-1/2"
+                className="icon-sm pointer-events-none absolute left-1.5 top-1/2 -translate-y-1/2"
                 style={{ color: "var(--color-text-faint)" }}
               />
               <input
                 value={searchInput}
                 onChange={(e) => handleSearchChange(e.target.value)}
                 placeholder="搜索…"
-                className="w-36 rounded-md border py-0.5 pl-6 pr-1.5 text-[11.5px] outline-none"
+                className="w-36 rounded-md border py-0.5 pl-6 pr-1.5 text-[12px] outline-none"
                 style={{
                   borderColor: "var(--color-border-secondary)",
                   background: "var(--color-bg-input, var(--color-bg-base))",
@@ -261,7 +260,7 @@ export function TableView({
               color: "var(--color-text-primary)",
             }}
           >
-            <Plus size={12} /> 新增行
+            <Plus className="icon-sm" /> 新增行
           </button>
         )}
         {!perms.canWrite && (
@@ -288,7 +287,7 @@ export function TableView({
                 {hg.headers.map((header) => (
                   <th
                     key={header.id}
-                    className="whitespace-nowrap px-3 py-1.5 text-left text-[11.5px] font-medium"
+                    className="whitespace-nowrap px-3 py-1.5 text-left text-[12px] font-medium"
                     style={{
                       background: "var(--color-bg-elevated)",
                       color: "var(--color-text-secondary)",
@@ -300,7 +299,7 @@ export function TableView({
                 ))}
                 {showOpsColumn && (
                   <th
-                    className="w-20 whitespace-nowrap px-3 py-1.5 text-left text-[11.5px] font-medium"
+                    className="w-20 whitespace-nowrap px-3 py-1.5 text-left text-[12px] font-medium"
                     style={{
                       background: "var(--color-bg-elevated)",
                       color: "var(--color-text-secondary)",
@@ -374,7 +373,7 @@ export function TableView({
                                   title="编辑行"
                                   className="rounded p-0.5 hover:opacity-70"
                                 >
-                                  <Pencil size={11} />
+                                  <Pencil className="icon-sm" />
                                 </button>
                               )}
                               {perms.canDelete && onDeleteRow && (
@@ -393,7 +392,7 @@ export function TableView({
                                   className="rounded p-0.5 hover:opacity-70"
                                   style={{ color: "var(--color-error)" }}
                                 >
-                                  <Trash2 size={11} />
+                                  <Trash2 className="icon-sm" />
                                 </button>
                               )}
                             </span>
@@ -450,7 +449,7 @@ export function TableView({
 /** 单元格格式化：布尔/枚举/关系友好展示。 */
 function formatCell(v: unknown): string {
   if (v === null || v === undefined) return "—";
-  if (typeof v === "boolean") return v ? "✓" : "✗";
+  if (typeof v === "boolean") return v ? "是" : "否";
   if (typeof v === "number") return String(v);
   return String(v);
 }

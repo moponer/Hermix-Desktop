@@ -241,21 +241,21 @@ const PathPreviewAcui: AcuiComponent = ({ show }) => {
           {path}
         </span>
         {sizeText && (
-          <span className="shrink-0 text-[10px] text-text-faint font-mono">{sizeText}</span>
+          <span className="shrink-0 text-[11px] text-text-faint font-mono">{sizeText}</span>
         )}
         {modText && (
-          <span className="shrink-0 text-[10px] text-text-faint">{modText}</span>
+          <span className="shrink-0 text-[11px] text-text-faint">{modText}</span>
         )}
       </div>
       {/* Line 2: preview snippet */}
       {previewText && (
-        <pre className="text-[10.5px] font-mono text-text-muted whitespace-pre-wrap break-all leading-snug">
+        <pre className="text-[11px] font-mono text-text-muted whitespace-pre-wrap break-all leading-snug">
           {previewText}
         </pre>
       )}
       {/* Line 3: reason */}
       {props.reason && (
-        <div className="text-[10.5px] text-text-muted">{props.reason}</div>
+        <div className="text-[11px] text-text-muted">{props.reason}</div>
       )}
     </div>
   );

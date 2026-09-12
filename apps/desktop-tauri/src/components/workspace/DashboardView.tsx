@@ -17,11 +17,22 @@ import GridLayout, {
   useContainerWidth,
 } from "react-grid-layout";
 import "react-grid-layout/css/styles.css";
+import type * as echarts from "echarts";
 import type { WorkspaceModule } from "../../types";
 import { DashboardWidgetView } from "./DashboardWidgets";
 
 const COLS = 12;
 const ROW_HEIGHT = 30;
+
+/**
+ * 组件默认尺寸档位 — LLM 未给 layout 时的兜底铺排，也作为 SKILL 里的推荐档位。
+ * 依据内容高度：stat 只需一行大数字，chart 需要足够绘图区，list 需能容 5+ 行。
+ */
+const DEFAULT_SIZE: Record<string, { w: number; h: number }> = {
+  stat: { w: 3, h: 2 },
+  chart: { w: 6, h: 4 },
+  list: { w: 4, h: 4 },
+};
 
 interface DashboardViewProps {
   module: Extract<WorkspaceModule, { type: "dashboard" }>;
@@ -31,6 +42,8 @@ interface DashboardViewProps {
   onLayoutChange?: (layout: Layout) => void;
   /** 组件数据：widgetId → 数据（M1.6 起由后端查询填充）。 */
   widgetData?: Record<string, unknown>;
+  /** Chart 组件 ECharts option：widgetId → option（M1.6 起由 WorkspacesView 生成）。 */
+  widgetChartOptions?: Record<string, echarts.EChartsOption>;
 }
 
 export function DashboardView({
@@ -38,6 +51,7 @@ export function DashboardView({
   layout,
   onLayoutChange,
   widgetData,
+  widgetChartOptions,
 }: DashboardViewProps) {
   const { width, containerRef, mounted } = useContainerWidth();
   const widgets = module.widgets ?? [];
@@ -53,13 +67,27 @@ export function DashboardView({
     );
   }
 
-  // 无布局时自动铺排：每个组件 3 列宽 × 4 行高，逐行堆叠
-  const autoLayout: LayoutItem[] = widgets.map((w, i) => {
-    const perRow = Math.floor(COLS / 3);
-    const col = (i % perRow) * 3;
-    const row = Math.floor(i / perRow) * 4;
-    return { i: w.id, x: col, y: row, w: 3, h: 4, minW: 2, minH: 2 };
-  });
+  // 无布局时按组件类型档位流式铺排：行内放不下就换行，行高取该行最高组件，
+  // 保证同排顶边对齐（替代早期"一律 3×4"的一刀切兜底）。
+  const autoLayout: LayoutItem[] = (() => {
+    const items: LayoutItem[] = [];
+    let x = 0;
+    let y = 0;
+    let rowH = 0;
+    for (const w of widgets) {
+      const size = DEFAULT_SIZE[w.type] ?? { w: 4, h: 4 };
+      const width = Math.min(size.w, COLS);
+      if (x + width > COLS) {
+        x = 0;
+        y += rowH;
+        rowH = 0;
+      }
+      items.push({ i: w.id, x, y, w: width, h: size.h, minW: 2, minH: 2 });
+      x += width;
+      rowH = Math.max(rowH, size.h);
+    }
+    return items;
+  })();
 
   const current: Layout = layout && layout.length > 0 ? layout : autoLayout;
 
@@ -82,7 +110,11 @@ export function DashboardView({
         >
           {widgets.map((w) => (
             <div key={w.id}>
-              <DashboardWidgetView widget={w} data={widgetData?.[w.id]} />
+              <DashboardWidgetView
+                widget={w}
+                data={widgetData?.[w.id]}
+                chartOption={widgetChartOptions?.[w.id]}
+              />
             </div>
           ))}
         </GridLayout>

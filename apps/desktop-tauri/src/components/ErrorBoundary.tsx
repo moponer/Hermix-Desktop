@@ -4,6 +4,7 @@
 // Wrap individual top-level views so a crash in one panel doesn't
 // white-screen the entire desktop shell.
 
+import { AlertTriangle } from "lucide-react";
 import { Component, type ReactNode } from "react";
 
 interface Props {
@@ -39,7 +40,7 @@ export class ErrorBoundary extends Component<Props, State> {
     if (this.state.hasError) {
       return (
         <div className="error-boundary-fallback">
-          <div className="error-boundary-fallback__icon">⚠</div>
+          <div className="error-boundary-fallback__icon"><AlertTriangle size={26} /></div>
           <h2 className="error-boundary-fallback__title">
             {this.props.name ? `${this.props.name} 发生错误` : "页面发生错误"}
           </h2>

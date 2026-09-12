@@ -9,7 +9,7 @@
 // sees them, so a leaked directive shows up as a missing substitution in
 // the builder rather than a chat row full of `<system-reminder>…</system-reminder>`.
 
-import type { ChatMessage, ToolMessageMeta, ApprovalMessageMeta } from "./types";
+import type { ChatMessage, ToolMessageMeta, ApprovalMessageMeta, ApprovalDecision } from "./types";
 import { parseMemoryResult } from "./utils/memoryToolResult";
 
 // The shape the server actually returns. Snake_case; optional id /
@@ -40,6 +40,10 @@ export type WireMessage = {
   }>;
   tool_name?: string;
   tool_arguments?: string;
+  /** Server-authoritative failure flag (`ToolResult::is_error`) for
+   *  tool rows. Lets `buildToolMeta` mark a failure from a fact instead
+   *  of regex-inspecting `content`. */
+  is_error?: boolean;
   execution_timeline?: ChatMessage["execution_timeline"];
   extra?: {
     request_id?: string;
@@ -50,6 +54,10 @@ export type WireMessage = {
     decided_at?: string | null;
     expires_at?: number | null;
     linked_assistant_id?: string | null;
+    /** Server-pre-computed unified before/after diff for file-mutating
+     *  approvals (write_file / edit_file). Absent for non-file tools
+     *  and for sessions persisted before the diff feature shipped. */
+    diff?: string | null;
   };
   /** Extensibility index — backend may send extra fields. */
   [k: string]: unknown;
@@ -93,15 +101,15 @@ function projectToolCalls(
 /**
  * Build the typed `tool` meta for a `role: "tool"` row.
  *
- * `errorReason` extraction reuses `detectToolError` so the reload
- * path and the live-stream path agree on which tool outputs count
- * as errors (otherwise a `shell exit 1` row would render as
- * "completed" on reload but red on a fresh stream — see v5 in
- * `getSessionMessages`).
+ * `errorReason` extraction reuses `detectToolError`, now gated on the
+ * server's authoritative `is_error` flag so the reload path and the
+ * live-stream path agree on which tool outputs count as errors
+ * (otherwise a `shell exit 1` row would render as "completed" on
+ * reload but red on a fresh stream — see v5 in `getSessionMessages`).
  */
 function buildToolMeta(
   wire: WireMessage,
-  detectToolError: (content: string) => string | null,
+  detectToolError: (content: string, isError?: boolean) => string | null,
 ): ToolMessageMeta {
   const startedAt = wire.timestamp ?? new Date().toISOString();
   const base: ToolMessageMeta = {
@@ -109,7 +117,7 @@ function buildToolMeta(
     args: wire.tool_arguments,
     status: "done",
     output: wire.content,
-    errorReason: detectToolError(wire.content) ?? undefined,
+    errorReason: detectToolError(wire.content, wire.is_error) ?? undefined,
     startedAt,
     completedAt: startedAt,
   };
@@ -129,6 +137,25 @@ function buildToolMeta(
 }
 
 /**
+ * DB `extra.decision` stores backend-canonical strings
+ * (`once`/`session`/`always`/`deny`) — map them onto the UI display
+ * union: every grant tier reads as "approved", `deny` as "denied".
+ */
+function normalizeApprovalDecision(raw: unknown): ApprovalDecision | null {
+  switch (raw) {
+    case "approved":
+    case "once":
+    case "session":
+    case "always":
+      return "approved";
+    case "deny":
+      return "denied";
+    default:
+      return null;
+  }
+}
+
+/**
  * Build the typed `approval` meta for a `role: "approval"` row. Maps
  * the snake_case `extra` blob (mirrors `ApprovalRecord` 1:1) into the
  * camelCase shape that `InlineApprovalCard` expects.
@@ -140,7 +167,11 @@ function buildApprovalMeta(wire: WireMessage): ApprovalMessageMeta {
     tool: ex.tool ?? "tool",
     args: ex.arguments,
     riskLevel: ex.risk,
-    decision: ex.decision ?? null,
+    // Backend may have pre-computed a unified before/after diff for
+    // file-mutating calls (write_file / edit_file). Absent / null →
+    // the card falls back to the plain-description panel.
+    diff: typeof ex.diff === "string" ? ex.diff : null,
+    decision: normalizeApprovalDecision(ex.decision),
     decidedAt: ex.decided_at ?? null,
     expiresAt: typeof ex.expires_at === "number" ? ex.expires_at : null,
     linkedAssistantId: ex.linked_assistant_id ?? null,
@@ -163,7 +194,7 @@ export function wireToChatMessage(
   wire: WireMessage,
   rowIndex: number,
   sessionId: string,
-  detectToolError: (content: string) => string | null,
+  detectToolError: (content: string, isError?: boolean) => string | null,
 ): ChatMessage | null {
   // Drop rows the renderer should never see.
   if (
@@ -354,12 +385,38 @@ function looksLikeUntaggedReasoning(text: string): boolean {
 export function wireArrayToChatMessages(
   wires: ReadonlyArray<WireMessage>,
   sessionId: string,
-  detectToolError: (content: string) => string | null,
+  detectToolError: (content: string, isError?: boolean) => string | null,
 ): ChatMessage[] {
   const out: ChatMessage[] = [];
   wires.forEach((wire, i) => {
-    // Tool rows: merge into the preceding assistant message's
-    // execution_timeline instead of creating a standalone message.
+    // Defensive: one bad row (truncated JSON, missing required
+    // field, etc.) used to throw out of this loop and reject the
+    // whole `getSessionMessages` promise — so a single corrupt
+    // message hid the entire 250-row history behind the welcome
+    // screen. Skip the bad row, log it, and keep going.
+    try {
+      projectOne(wire, i, sessionId, detectToolError, out);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[protocolAdapter] dropping wire row role=${wire.role} idx=${i} (projection failed):`,
+        err,
+      );
+    }
+  });
+  return out;
+}
+
+function projectOne(
+  wire: WireMessage,
+  i: number,
+  sessionId: string,
+  detectToolError: (content: string, isError?: boolean) => string | null,
+  out: ChatMessage[],
+): void {
+  // Tool rows: merge into the preceding assistant message's
+  // execution_timeline instead of creating a standalone message.
+  try {
     if (wire.role === "tool") {
       const ts = wire.created_at ?? wire.timestamp ?? new Date().toISOString();
       // Find the last assistant message in the output array.
@@ -437,8 +494,9 @@ export function wireArrayToChatMessages(
         content: stripSystemDirectives(projected.content),
       });
     }
-  });
-  return out;
+  } finally {
+    // `out` is mutated in place; no cleanup needed.
+  }
 }
 
 export const __test_only__ = { stripSystemDirectives, SYSTEM_DIRECTIVES_REGEX };

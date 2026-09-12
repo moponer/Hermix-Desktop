@@ -261,7 +261,7 @@ export function groupTimeline(
       // payload. Without this, every tool that exited non-zero
       // would render as a green "成功" pill on reload — masking
       // the fact that the command actually failed.
-      const errReason = detectToolError(ev.content);
+      const errReason = detectToolError(ev.content, ev.is_error);
       grp.status = errReason ? "error" : "done";
       grp.endedAt = ev.created_at;
       if (errReason) grp.statusNote = errReason;
@@ -300,13 +300,20 @@ export function groupTimeline(
  * invocation ended in error. Returns a short human-readable reason
  * when an error is detected, or `null` when the call looks healthy.
  *
- * Three error shapes we recognise, in priority order:
+ * `isError` is the server's authoritative `ToolResult::is_error` flag.
+ * Pass it whenever it is available: `false` short-circuits to `null`
+ * (the server knows the call succeeded, so no text inspection happens),
+ * `true` means "this failed — extract the reason", and `undefined`
+ * means the row predates the flag and we still fall back to inspecting
+ * the payload.
+ *
+ * Payload shapes we extract a reason from, in priority order:
  *   1. JSON wrapper with `exit_code !== 0` and either `error` or
  *      `stderr` non-empty   — terminal / shell / execute_command
  *   2. JSON wrapper with top-level `error` field
  *      — generic tool errors propagated by the agent runtime
  *   3. Plain-text payloads that begin with `Failed` / `Error` /
- *      `Tool execution failed` / `ERR`   — last-ditch heuristic
+ *      `Tool execution failed` / `ERR`   — legacy fallback only
  *
  * Why we duplicate this in two places: `tool_complete.content` is
  * the canonical payload but `groupTimeline` needs to decide on the
@@ -315,11 +322,17 @@ export function groupTimeline(
  * derive the same answer for the *expanded* per-call message. The
  * two share the exact same logic via this helper.
  */
-export function detectToolError(content?: string): string | null {
+export function detectToolError(content?: string, isError?: boolean): string | null {
   if (!content) return null;
   const trimmed = content.trim();
   if (!trimmed) return null;
-  // Plain-text error prefix heuristic.
+  // Authoritative: the server now sends `ToolResult::is_error` alongside
+  // every `tool_complete`. When the flag is present it wins outright, so a
+  // perfectly normal output that happens to begin with "Error" is no longer
+  // mis-reported as a failure.
+  if (isError === false) return null;
+  // Only reached when the server says the call failed (`true`) or when the
+  // row predates the flag (`undefined`, legacy persisted sessions).
   if (/^(Failed|Error|ERR|Tool execution failed)/i.test(trimmed)) {
     return trimmed.length > 120 ? trimmed.slice(0, 117) + "…" : trimmed;
   }

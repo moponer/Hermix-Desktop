@@ -200,7 +200,7 @@ export const ChatComposerInput = memo(
             <button
               type="button"
               onClick={handleStopClick}
-              className="flex items-center justify-center w-8 h-8 rounded-lg transition-all active:scale-95 hover:opacity-90"
+              className="flex items-center justify-center w-8 h-8 rounded-lg transition-[transform,opacity] active:scale-95 hover:opacity-90"
               style={{
                 background: "var(--color-error)",
                 color: "white",
@@ -208,14 +208,14 @@ export const ChatComposerInput = memo(
               title="停止生成"
               aria-label="停止生成"
             >
-              <Square size={12} fill="currentColor" />
+              <Square className="icon-sm" fill="currentColor" />
             </button>
           ) : (
             <button
               type="button"
               onClick={handleSendClick}
               disabled={!canSend}
-              className="flex items-center justify-center w-8 h-8 rounded-lg transition-all active:scale-95 disabled:cursor-not-allowed"
+              className="flex items-center justify-center w-8 h-8 rounded-lg transition-transform active:scale-95 disabled:cursor-not-allowed"
               style={{
                 background: canSend ? "var(--color-accent)" : "var(--color-bg-tertiary)",
                 color: canSend ? "var(--color-accent-on-text)" : "var(--color-text-faint)",
@@ -224,7 +224,7 @@ export const ChatComposerInput = memo(
               title="发送 (Enter)"
               aria-label="发送 (Enter)"
             >
-              <Send size={13} />
+              <Send className="icon-md" />
             </button>
           )}
         </div>

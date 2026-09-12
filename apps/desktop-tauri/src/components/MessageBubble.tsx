@@ -42,8 +42,11 @@ interface MessageBubbleProps {
    * pending-approval / running-tool signals; defaults false.
    */
   keepOpen?: boolean;
-  onApproveApproval?: (requestId: string) => void;
+  onApproveApproval?: (requestId: string, remember?: boolean) => void;
   onDenyApproval?: (requestId: string) => void;
+  onApproveBatchApproval?: (batchId: string, remember?: boolean) => void;
+  onDenyBatchApproval?: (batchId: string) => void;
+  onReasoningFoldChange?: (folded: boolean) => void;
   onAnswerClarify?: (requestId: string, answer: string) => void;
   /** Click handler for absolute/relative paths mentioned in tool
    *  rows and the file-change list.  Used to pop the inline file
@@ -88,6 +91,8 @@ interface MessageBubbleProps {
 export function MessageBubble({
   message, workspaceRoot,
   onApproveApproval, onDenyApproval, onAnswerClarify,
+  onApproveBatchApproval, onDenyBatchApproval,
+  onReasoningFoldChange,
   onPathClick,
   showHeader = true,
   isStreaming = false,
@@ -144,6 +149,9 @@ export function MessageBubble({
       expertCutoffAt={expertCutoffAt}
       onApproveApproval={onApproveApproval}
       onDenyApproval={onDenyApproval}
+      onApproveBatchApproval={onApproveBatchApproval}
+      onDenyBatchApproval={onDenyBatchApproval}
+      onReasoningFoldChange={onReasoningFoldChange}
     />
   );
 }

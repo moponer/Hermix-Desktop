@@ -76,7 +76,7 @@ export const AwakeningCard: AcuiComponent = ({ show }) => {
     <div
       data-acui-kind="awakening"
       data-acui-completed={completed || undefined}
-      className={`relative px-3.5 py-2.5 rounded-[10px] border h-enter transition-colors ${
+      className={`relative px-3.5 py-2.5 rounded-xl border h-enter transition-colors ${
         completed
           ? healthy
             ? "bg-emerald-500/5 border-emerald-500/20"
@@ -88,18 +88,18 @@ export const AwakeningCard: AcuiComponent = ({ show }) => {
       <div className="flex items-center gap-2 mb-1.5">
         {completed ? (
           healthy ? (
-            <CheckCircle2 size={12} className="text-emerald-300 shrink-0" />
+            <CheckCircle2 className="icon-sm text-emerald-300 shrink-0" />
           ) : (
-            <AlertTriangle size={12} className="text-amber-300 shrink-0" />
+            <AlertTriangle className="icon-sm text-amber-300 shrink-0" />
           )
         ) : (
-          <Sparkles size={12} className="text-accent shrink-0" />
+          <Sparkles className="icon-sm text-accent shrink-0" />
         )}
-        <span className="text-[12.5px] font-semibold text-text-primary truncate">
+        <span className="text-[13px] font-semibold text-text-primary truncate">
           {phase}
         </span>
         {subphase && !completed && (
-          <span className="text-[10.5px] text-text-muted truncate max-w-[160px]" title={subphase}>
+          <span className="text-[11px] text-text-muted truncate max-w-[160px]" title={subphase}>
             · {subphase}
           </span>
         )}
@@ -107,7 +107,7 @@ export const AwakeningCard: AcuiComponent = ({ show }) => {
           {tick}/{totalTicks}
         </span>
         {!completed && (
-          <Loader2 size={11} className="text-accent animate-spin shrink-0" />
+          <Loader2 className="icon-sm text-accent animate-spin shrink-0" />
         )}
       </div>
 
@@ -122,7 +122,7 @@ export const AwakeningCard: AcuiComponent = ({ show }) => {
           return (
             <div
               key={`tick-${i}`}
-              className={`h-1 rounded-full transition-colors duration-200 ${
+              className={`h-1 rounded-full transition-colors duration-slow ${
                 isCurrent
                   ? "w-3 bg-accent"
                   : filled
@@ -133,7 +133,7 @@ export const AwakeningCard: AcuiComponent = ({ show }) => {
           );
         })}
         {totalTicks > 30 && (
-          <div className="text-[10px] text-text-faint ml-1">
+          <div className="text-[11px] text-text-faint ml-1">
             +{totalTicks - 30}
           </div>
         )}

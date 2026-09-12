@@ -149,7 +149,7 @@ export function InlineApprovalCard({ request, onApprove, onDeny, resolved }: Inl
           {/* Line 1: Tool pill + Risk badge + Status */}
           <div className="approval-pills">
             <span className="approval-tool-pill">
-              <Icon size={11} className="shrink-0" />
+              <Icon className="icon-sm shrink-0" />
               <span className="font-mono">{request.tool}</span>
             </span>
             <span className={badge.cls}>
@@ -186,14 +186,14 @@ export function InlineApprovalCard({ request, onApprove, onDeny, resolved }: Inl
                 onClick={() => onDeny(request.requestId)}
                 className="approval-btn approval-btn-danger"
               >
-                <X size={12} />
+                <X className="icon-sm" />
                 拒绝
               </button>
               <button
                 onClick={() => onApprove(request.requestId)}
                 className="approval-btn approval-btn-approve"
               >
-                <Check size={12} />
+                <Check className="icon-sm" />
                 允许
               </button>
             </div>
@@ -209,18 +209,18 @@ export function InlineApprovalCard({ request, onApprove, onDeny, resolved }: Inl
                 aria-hidden
               >
                 {resolved === "approved" ? (
-                  <Check size={11} />
+                  <Check className="icon-sm" />
                 ) : resolved === "expired" ? (
-                  <Clock size={11} />
+                  <Clock className="icon-sm" />
                 ) : (
-                  <X size={11} />
+                  <X className="icon-sm" />
                 )}
               </span>
               <span>
                 {resolved === "approved"
                   ? "操作已继续执行"
                   : resolved === "expired"
-                    ? "你的点击没赶上,操作已被自动取消;如仍想执行,请重新发起"
+                    ? "你的点击没赶上，操作已被自动取消;如仍想执行，请重新发起"
                     : "操作已中止"}
               </span>
             </div>
