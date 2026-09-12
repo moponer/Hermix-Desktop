@@ -53,8 +53,8 @@ pub use dispatch::{dispatch_single, dispatch_tools, DispatchedResult};
 
 // Re-export approval types
 pub use approval::{
-    check_approval, is_readonly_command, ApprovalDecision, ApprovalManager,
-    TerminalApprovalContext, UserAllowlist, UserAllowlistEntry,
+    check_approval, extract_trust_signature, is_readonly_command, ApprovalDecision,
+    ApprovalManager, TerminalApprovalContext, UserAllowlist, UserAllowlistEntry,
 };
 
 //Re-export context types

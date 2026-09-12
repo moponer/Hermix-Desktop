@@ -42,7 +42,7 @@ pub mod allowlist;
 
 pub use engine::{check_approval, is_readonly_command, ApprovalManager};
 pub use model::{ApprovalDecision, TerminalApprovalContext};
-pub use allowlist::{UserAllowlist, UserAllowlistEntry};
+pub use allowlist::{extract_trust_signature, UserAllowlist, UserAllowlistEntry};
 pub use persist::{load_session_approvals, persist_session_approvals};
 
 // Re-exported so the inline `mod tests` (`use super::*`) can reach them.
@@ -409,37 +409,118 @@ mod tests {
         let al = UserAllowlist::new();
         assert!(al.is_empty());
         assert_eq!(al.len(), 0);
-        assert!(!al.matches("sudo apt install foo"));
+        assert!(!al.matches("terminal", "sudo apt install foo"));
         assert_eq!(al.iter().count(), 0);
     }
 
-    /// `UserAllowlist::add` with a valid regex compiles and matches.
+    /// `UserAllowlist::add` (back-compat terminal alias) with a
+    /// valid regex compiles and matches.
     #[test]
     fn user_allowlist_add_valid_regex() {
         let mut al = UserAllowlist::new();
         al.add(r"^sudo apt install \S+$", "sudo apt install foo")
             .expect("valid regex should compile");
         assert_eq!(al.len(), 1);
-        assert!(al.matches("sudo apt install foo"));
-        assert!(al.matches("sudo apt install ripgrep"));
+        assert!(al.matches("terminal", "sudo apt install foo"));
+        assert!(al.matches("terminal", "sudo apt install ripgrep"));
         // Boundary: a different subcommand doesn't match.
-        assert!(!al.matches("sudo apt remove foo"));
+        assert!(!al.matches("terminal", "sudo apt remove foo"));
+        // Tool gate: even if the regex would match, a different tool
+        // doesn't.
+        assert!(!al.matches("write_file", "sudo apt install foo"));
     }
 
-    /// `UserAllowlist::add_literal` regex-escapes special chars so
-    /// the stored command is matched exactly.
+    /// `UserAllowlist::add_literal_for` regex-escapes special chars
+    /// so the stored signature is matched exactly.
     #[test]
     fn user_allowlist_add_literal_escapes_specials() {
         let mut al = UserAllowlist::new();
-        al.add_literal("git push --force origin main")
+        al.add_literal_for("terminal", "git push --force origin main", "git push --force origin main")
             .expect("literal add should always succeed for a valid string");
-        assert!(al.matches("git push --force origin main"));
+        assert!(al.matches("terminal", "git push --force origin main"));
         // The `*` in `origin*main` (if treated as a regex) would
         // match anything; escaping must prevent that.
-        assert!(!al.matches("git push --force originXmain"));
+        assert!(!al.matches("terminal", "git push --force originXmain"));
         // The literal was wrapped in `^...$`, so a prefix doesn't
         // match either.
-        assert!(!al.matches("git push --force origin main --tags"));
+        assert!(!al.matches("terminal", "git push --force origin main --tags"));
+        // Different tool — even exact-string match shouldn't hit.
+        assert!(!al.matches("bash", "git push --force origin main"));
+    }
+
+    /// Idempotency: re-granting the same `(tool, value)` pair is a
+    /// no-op — the WS and REST-fallback delivery paths can both
+    /// reach `add_literal_for` for one user click.
+    #[test]
+    fn user_allowlist_add_literal_for_is_idempotent() {
+        let mut al = UserAllowlist::new();
+        al.add_literal_for("terminal", "git push --force origin main", "hint")
+            .unwrap();
+        al.add_literal_for("terminal", "git push --force origin main", "hint")
+            .unwrap();
+        assert_eq!(al.len(), 1, "duplicate (tool, value) grant must not double-append");
+        // Same literal under a different tool stays a distinct entry.
+        al.add_literal_for("write_file", "git push --force origin main", "hint")
+            .unwrap();
+        assert_eq!(al.len(), 2);
+    }
+
+    /// Back-compat: `recompile` upgrades `tool == ""` legacy entries
+    /// to `"terminal"` so old allowlist files keep working.
+    #[test]
+    fn user_allowlist_legacy_empty_tool_migrated_to_terminal() {
+        // Simulate an old allowlist file (no `tool` field on entries).
+        let raw = serde_json::json!([
+            { "pattern": "^cargo\\b.*$", "command_hint": "cargo test", "added_at_unix": 1700000000 }
+        ]);
+        let bytes = serde_json::to_vec(&raw).unwrap();
+        // Reuse the public load path via a tempfile so we exercise
+        // the migration in `recompile`, not just the in-memory path.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("allowlist.json");
+        std::fs::write(&path, &bytes).unwrap();
+        let al = UserAllowlist::load(&path);
+        assert_eq!(al.len(), 1);
+        // Empty tool migrated to terminal — so a terminal call with
+        // a matching signature hits the legacy entry.
+        assert!(al.matches("terminal", "cargo test -p hermix-workspace"));
+        assert!(!al.matches("write_file", "cargo test"));
+    }
+
+    /// `extract_trust_signature` per-tool rules.
+    #[test]
+    fn extract_trust_signature_per_tool() {
+        // terminal / bash / shell / *_terminal: first word of command
+        for cmd in ["terminal", "bash", "shell", "exec_terminal"] {
+            let sig = extract_trust_signature(cmd, &serde_json::json!({"command": "cargo test -p x"}));
+            assert_eq!(sig, Some(r"^cargo\b.*".to_string()), "{cmd}");
+        }
+        // `cmd` alias also works
+        let sig = extract_trust_signature("terminal", &serde_json::json!({"cmd": "pnpm install foo"}));
+        assert_eq!(sig, Some(r"^pnpm\b.*".to_string()));
+        // empty / whitespace-only command → None (fail closed, not a
+        // synthesized "any" pattern).
+        assert_eq!(
+            extract_trust_signature("terminal", &serde_json::json!({"command": ""})),
+            None
+        );
+        // write_file / patch: exact path
+        let sig = extract_trust_signature("write_file", &serde_json::json!({"path": "F:/work/qcc/foo.txt"}));
+        assert_eq!(sig, Some(r"^F:/work/qcc/foo\.txt$".to_string()));
+        let sig = extract_trust_signature("patch", &serde_json::json!({"path": "/etc/nginx.conf"}));
+        assert_eq!(sig, Some(r"^/etc/nginx\.conf$".to_string()));
+        // web_extract / browser with URL: domain prefix
+        let sig = extract_trust_signature("web_extract", &serde_json::json!({"url": "https://example.com/page?q=1"}));
+        assert_eq!(sig, Some(r"^https?://(?:www\.)?example\.com(/.*)?$".to_string()));
+        // www. prefix stripped from anchor
+        let sig = extract_trust_signature("browser", &serde_json::json!({"url": "https://www.acme.io/path"}));
+        assert_eq!(sig, Some(r"^https?://(?:www\.)?acme\.io(/.*)?$".to_string()));
+        // web_extract with no URL → falls back to tool-name match
+        let sig = extract_trust_signature("web_extract", &serde_json::json!({}));
+        assert_eq!(sig, Some(r"^web_extract$".to_string()));
+        // cua_* / memory / skills / web_search: tool-name match
+        assert_eq!(extract_trust_signature("cua_click", &serde_json::json!({})), Some(r"^cua_click$".to_string()));
+        assert_eq!(extract_trust_signature("memory", &serde_json::json!({"action": "store"})), Some(r"^memory$".to_string()));
     }
 
     /// `UserAllowlist::add` with an invalid regex returns an error
@@ -482,8 +563,8 @@ mod tests {
         let loaded = UserAllowlist::load(&path);
         assert_eq!(loaded.len(), 2);
         // Match behavior survives the JSON roundtrip.
-        assert!(loaded.matches("sudo apt install foo"));
-        assert!(loaded.matches("kill -9 1234"));
+        assert!(loaded.matches("terminal", "sudo apt install foo"));
+        assert!(loaded.matches("terminal", "kill -9 1234"));
         // Order is preserved (we serialize as a JSON array, not a
         // map, so insertion order is stable).
         let hints: Vec<_> = loaded.iter().map(|e| e.command_hint.clone()).collect();
@@ -543,8 +624,8 @@ mod tests {
         let al = UserAllowlist::load(&path);
         // The two valid entries are kept, the invalid one is dropped.
         assert_eq!(al.len(), 2);
-        assert!(al.matches("sudo apt install foo"));
-        assert!(al.matches("kill -9 1234"));
+        assert!(al.matches("terminal", "sudo apt install foo"));
+        assert!(al.matches("terminal", "kill -9 1234"));
     }
 
     /// `save` creates the parent directory if missing.

@@ -433,8 +433,10 @@ impl ApprovalManager {
         // 4. User allowlist — if any pattern matches, downgrade to
         //    Approved. The allowlist is the user's "I trust this
         //    enough to skip the prompt next time" decision.
+        //    Shell-rule evaluation always uses the `terminal` tool
+        //    (the engine runs only on shell commands).
         if let Some(al) = &self.user_allowlist {
-            if al.matches(command) {
+            if al.matches("terminal", command) {
                 return ApprovalDecision::Approved;
             }
         }

@@ -12,6 +12,15 @@ use super::*;
 #[derive(Clone)]
 pub struct ApprovalRegistry {
     inner: Arc<std::sync::Mutex<HashMap<String, HashMap<String, oneshot::Sender<ApprovalOutcome>>>>>,
+    /// `session_id → batch_id → request_ids`. Populated when the WS
+    /// layer coalesces N concurrent approval requests into one
+    /// [`StreamEvent::RequestApprovalsBatch`] envelope; consulted by
+    /// [`Self::resolve_batch`] so the client's single decision can
+    /// fan out into N registry resolves. Entries are removed by
+    /// `resolve_batch` once drained; stale entries (session
+    /// disconnected, batch never answered) leak but are bounded by
+    /// session count × batch count, in practice <100.
+    batches: Arc<std::sync::Mutex<HashMap<String, HashMap<String, Vec<String>>>>>,
     default_timeout: Duration,
 }
 
@@ -32,6 +41,7 @@ impl ApprovalRegistry {
     pub fn with_timeout(default_timeout: Duration) -> Self {
         Self {
             inner: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            batches: Arc::new(std::sync::Mutex::new(HashMap::new())),
             default_timeout,
         }
     }
@@ -152,6 +162,56 @@ impl ApprovalRegistry {
             .get(session_id)
             .map(|s| s.contains_key(request_id))
             .unwrap_or(false)
+    }
+
+    /// Record a batch id and the request ids it covers for a given
+    /// session. Called by the WS coalescer right before it emits the
+    /// [`StreamEvent::RequestApprovalsBatch`] envelope. The vector is
+    /// moved in (cheap clone on each request_id string).
+    pub fn register_batch(
+        &self,
+        session_id: &str,
+        batch_id: &str,
+        request_ids: Vec<String>,
+    ) {
+        let mut batches = self.batches.lock().unwrap_or_else(|e| e.into_inner());
+        batches
+            .entry(session_id.to_string())
+            .or_default()
+            .insert(batch_id.to_string(), request_ids);
+    }
+
+    /// Resolve every request in a batch with the same outcome and
+    /// return a vector of `(request_id, resolved_flag)` pairs in
+    /// the same order the batch was registered. A `false` flag
+    /// means the individual request was already resolved (by timeout
+    /// or duplicate response) and the side effect should be skipped.
+    /// The batch entry is removed on completion; a missing batch id
+    /// is treated as no-op (returns empty vec) — idempotent under
+    /// duplicate responses.
+    pub fn resolve_batch(
+        &self,
+        session_id: &str,
+        batch_id: &str,
+        outcome: ApprovalOutcome,
+    ) -> Vec<(String, bool)> {
+        let request_ids = {
+            let mut batches = self.batches.lock().unwrap_or_else(|e| e.into_inner());
+            batches
+                .get_mut(session_id)
+                .and_then(|m| m.remove(batch_id))
+                .unwrap_or_default()
+        };
+        if request_ids.is_empty() {
+            return Vec::new();
+        }
+        request_ids
+            .into_iter()
+            .map(|rid| {
+                let resolved = self.resolve(session_id, &rid, outcome.clone());
+                (rid, resolved)
+            })
+            .collect()
     }
 }
 
@@ -602,15 +662,17 @@ mod approval_registry_tests {
         }
     }
 
-    /// `Session` choice: adds the command to the per-session bypass
-    /// map, and the resulting pre-approval check hits.
+    /// `Session` choice: compiles the extracted terminal signature
+    /// (first word of the command) into the per-session bypass map,
+    /// matching whatever the same-tool pre-checker rebuilds later.
     #[test]
     fn session_choice_adds_to_session_bypass() {
         let state = test_state(tempfile::tempdir().unwrap().path().to_path_buf());
         record_approval_side_effect(
             &state,
             "sess-A",
-            "sudo apt install ripgrep",
+            "terminal",
+            &serde_json::json!({"command": "sudo apt install ripgrep"}),
             hermix_transport::ApprovalChoice::Session,
         );
 
@@ -618,9 +680,13 @@ mod approval_registry_tests {
         let map = state.session_bypass.lock().unwrap_or_else(|e| e.into_inner());
         let patterns = map.get("sess-A").expect("sess-A entry");
         assert_eq!(patterns.len(), 1);
-        assert!(patterns[0].is_match("sudo apt install ripgrep"));
-        // A similar but not-equal command does not match.
-        assert!(!patterns[0].is_match("sudo apt install fd"));
+        // Trust granularity is first-word-of-command: any `sudo …`
+        // invocation hits, unrelated binaries don't. Signatures are
+        // fully anchored regex fragments — stored as escaped literals
+        // and matched against the same text the checker rebuilds per
+        // call (identical semantics to the persistent allowlist).
+        assert!(patterns[0].is_match("^sudo\\b.*"));
+        assert!(!patterns[0].is_match("^ls\\b.*"));
     }
 
     /// `Always` choice: lazily creates the persistent `UserAllowlist`
@@ -639,7 +705,8 @@ mod approval_registry_tests {
         record_approval_side_effect(
             &state,
             "sess-A",
-            "systemctl restart nginx",
+            "terminal",
+            &serde_json::json!({"command": "systemctl restart nginx"}),
             hermix_transport::ApprovalChoice::Always,
         );
 
@@ -670,12 +737,23 @@ mod approval_registry_tests {
         // In-memory check is the authoritative one for this
         // test (it verifies the side-effect ran; the on-disk
         // roundtrip is covered by `hermix-tools::approval`
-        // tests).
+        // tests). End-to-end composition check: rebuild the
+        // signature exactly like the pre-approval checker does,
+        // and confirm a future identical call auto-approves.
+        let sig_of =
+            |cmd: &str| -> String {
+                hermix_tools::extract_trust_signature(
+                    "terminal",
+                    &serde_json::json!({ "command": cmd }),
+                )
+                .unwrap()
+            };
         let al = state.user_allowlist.lock().unwrap_or_else(|e| e.into_inner());
         let al = al.as_ref().expect("lazy-init created the allowlist");
-        assert!(al.matches("systemctl restart nginx"));
-        // Different command — no match.
-        assert!(!al.matches("systemctl restart mysql"));
+        assert!(al.matches("terminal", &sig_of("systemctl restart nginx")));
+        assert!(al.matches("terminal", &sig_of("systemctl restart mysql")));
+        // Different first word — no match.
+        assert!(!al.matches("terminal", &sig_of("ls -la")));
     }
 
     /// `Once` choice: no-op. The state is unchanged.
@@ -685,7 +763,8 @@ mod approval_registry_tests {
         record_approval_side_effect(
             &state,
             "sess-A",
-            "ls -la",
+            "terminal",
+            &serde_json::json!({"command": "ls -la"}),
             hermix_transport::ApprovalChoice::Once,
         );
         assert!(state.session_bypass.lock().unwrap_or_else(|e| e.into_inner()).is_empty());
@@ -699,7 +778,8 @@ mod approval_registry_tests {
         record_approval_side_effect(
             &state,
             "sess-A",
-            "rm -rf /",
+            "terminal",
+            &serde_json::json!({"command": "rm -rf /"}),
             hermix_transport::ApprovalChoice::Deny,
         );
         assert!(state.session_bypass.lock().unwrap_or_else(|e| e.into_inner()).is_empty());
@@ -715,13 +795,15 @@ mod approval_registry_tests {
         record_approval_side_effect(
             &state,
             "sess-A",
-            "sudo apt install foo",
+            "terminal",
+            &serde_json::json!({"command": "sudo apt install foo"}),
             hermix_transport::ApprovalChoice::Session,
         );
         record_approval_side_effect(
             &state,
             "sess-A",
-            "systemctl restart nginx",
+            "terminal",
+            &serde_json::json!({"command": "systemctl restart nginx"}),
             hermix_transport::ApprovalChoice::Session,
         );
         let map = state.session_bypass.lock().unwrap_or_else(|e| e.into_inner());
@@ -876,37 +958,95 @@ mod approval_registry_tests {
         assert_eq!(total_deduped, 249, "exactly 249 deduped under 50-thread storm");
     }
 
-    /// Two `Always` approvals for the same command do NOT
-    /// double-write the file (each save is full overwrite, so the
-    /// file is just rewritten with the same content — but the
-    /// in-memory `UserAllowlist` does keep duplicate entries,
-    /// since the MVP is "every approval is recorded"). This
-    /// matches the upstream Hermes semantics ("once always,
-    /// always always" — duplicates are tolerated, the UI can
-    /// dedupe on display).
+    /// Two `Always` approvals for the same command stay a single
+    /// entry. `UserAllowlist::add_literal_for` is idempotent on
+    /// `(tool, pattern)` because both the WS and REST-fallback
+    /// delivery paths can reach this side effect for one user click;
+    /// duplicate regex entries would bloat the allowlist file.
     #[test]
     fn always_choice_dedupes_in_memory() {
-        // Note: UserAllowlist::add_literal does NOT dedupe — it
-        // appends a new entry. This test pins that behavior so a
-        // future dedupe pass shows up as a test diff.
         let state = test_state(tempfile::tempdir().unwrap().path().to_path_buf());
+        let params = serde_json::json!({"command": "docker system prune"});
         record_approval_side_effect(
             &state,
             "sess-A",
-            "docker system prune",
+            "terminal",
+            &params,
             hermix_transport::ApprovalChoice::Always,
         );
         record_approval_side_effect(
             &state,
             "sess-A",
-            "docker system prune",
+            "terminal",
+            &params,
             hermix_transport::ApprovalChoice::Always,
         );
         let al = state.user_allowlist.lock().unwrap_or_else(|e| e.into_inner());
         let al = al.as_ref().unwrap();
-        // No dedupe — both entries stored. This is a known
-        // MVP limitation; the UI can show distinct timestamps
-        // to avoid surprising the user.
-        assert_eq!(al.len(), 2);
+        assert_eq!(al.len(), 1, "re-granting the same command must not duplicate");
+    }
+
+    // -----------------------------------------------------------------
+    // Batch resolution — the WS coalescer funnels N pending approvals
+    // under one batch_id; a single `resolve_batch` call must fan out
+    // to every receiver in registration order, and members that were
+    // already resolved (timeout / duplicate response) must come back
+    // as `resolved=false` so the caller can skip their side-effect
+    // pipeline.
+    // -----------------------------------------------------------------
+
+    #[tokio::test]
+    async fn batch_resolve_fires_all_receivers_with_same_outcome() {
+        let reg = ApprovalRegistry::new();
+        let rxs: Vec<_> = (0..3)
+            .map(|i| reg.request_approval("sess-A", &format!("req-{i}")))
+            .collect();
+        reg.register_batch(
+            "sess-A",
+            "batch-1",
+            (0..3).map(|i| format!("req-{i}")).collect(),
+        );
+        let pairs = reg.resolve_batch("sess-A", "batch-1", hermix_core::ApprovalOutcome::Approved);
+        assert_eq!(pairs.len(), 3);
+        assert!(pairs.iter().all(|(_, ok)| *ok));
+        for (i, rx) in rxs.into_iter().enumerate() {
+            assert_eq!(
+                rx.await.unwrap(),
+                hermix_core::ApprovalOutcome::Approved,
+                "receiver {i} must receive Approved"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn batch_resolve_unknown_id_is_noop() {
+        let reg = ApprovalRegistry::new();
+        let pairs = reg.resolve_batch("sess-A", "missing", hermix_core::ApprovalOutcome::Approved);
+        assert!(pairs.is_empty());
+    }
+
+    #[tokio::test]
+    async fn batch_resolve_reports_already_resolved_members() {
+        let reg = ApprovalRegistry::new();
+        // Register all three, then resolve #1 directly (simulating
+        // a duplicate / timeout race). `resolve_batch` for the
+        // remaining two must report them as still resolved=true,
+        // and #1 as resolved=false.
+        let _rxs: Vec<_> = (0..3)
+            .map(|i| reg.request_approval("sess-A", &format!("req-{i}")))
+            .collect();
+        reg.register_batch(
+            "sess-A",
+            "batch-1",
+            (0..3).map(|i| format!("req-{i}")).collect(),
+        );
+        assert!(reg.resolve("sess-A", "req-1", hermix_core::ApprovalOutcome::DeniedByUser));
+        let pairs = reg.resolve_batch("sess-A", "batch-1", hermix_core::ApprovalOutcome::Approved);
+        assert_eq!(pairs.len(), 3);
+        let by_id: std::collections::HashMap<_, _> =
+            pairs.into_iter().map(|(k, v)| (k, v)).collect();
+        assert!(!by_id["req-1"], "req-1 was already resolved");
+        assert!(by_id["req-0"]);
+        assert!(by_id["req-2"]);
     }
 }
