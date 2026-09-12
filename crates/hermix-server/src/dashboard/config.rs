@@ -335,13 +335,57 @@ pub async fn update_model_list(
     Ok(Json(OkResponse { ok: true }))
 }
 
-/// GET /api/providers/meta — 内置 provider 元数据（id + 配钥环境变量名）。
-/// 唯一真理源 `hermix_config::BUILTIN_PROVIDER_ENV_VARS`；前端据此做
-/// builtin/自定义分组与环境变量提示，替代散落各处的硬编码副本。
+/// GET /api/providers/meta — 内置 provider 元数据（id + 配钥环境变量名 +
+/// 权威默认模型）。唯一真理源 `hermix_config::BUILTIN_PROVIDER_ENV_VARS` 与
+/// `hermix_config::default_model_for_provider`；前端据此做 builtin/自定义分组、
+/// 环境变量提示，以及**首次配置时自动选中哪个模型**。
+///
+/// 下发 `default_model` 是为了让桌面端不必自己猜：厂商 `/v1/models` 返回的
+/// 是全量目录（含 embedding / 图像模型），按字典序取第一个会选中
+/// `babbage-002` 这类非对话模型；这里给的是人工维护的可对话默认。
 pub async fn get_provider_meta() -> Json<serde_json::Value> {
     let items: Vec<serde_json::Value> = hermix_config::BUILTIN_PROVIDER_ENV_VARS
         .iter()
-        .map(|(id, env_var)| serde_json::json!({ "id": id, "env_var": env_var }))
+        .map(|(id, env_var)| {
+            // `default_model_for_provider` 对未收录的 provider 返回占位符
+            // "default"，这不是一个真实模型名，下发成 null 让前端走自己的候选池。
+            let dm = hermix_config::default_model_for_provider(id);
+            serde_json::json!({
+                "id": id,
+                "env_var": env_var,
+                "default_model": if dm == "default" { serde_json::Value::Null } else { serde_json::json!(dm) },
+            })
+        })
         .collect();
     Json(serde_json::Value::Array(items))
+}
+
+#[cfg(test)]
+mod provider_meta_tests {
+    use super::get_provider_meta;
+
+    /// `/api/providers/meta` 必须下发权威默认模型，且 `default_model_for_provider`
+    /// 的占位符 `"default"` 不能当成真实模型名漏给前端 —— 否则桌面端首次自动
+    /// 选型会选中一个不存在的模型，聊天直接报错。
+    #[tokio::test]
+    async fn exposes_default_model_and_hides_placeholder() {
+        let items = get_provider_meta().await.0;
+        let items = items.as_array().expect("meta must be a JSON array");
+        assert!(!items.is_empty());
+
+        let find = |id: &str| items.iter().find(|v| v["id"] == id);
+        let openai = find("openai").expect("openai is a builtin provider");
+        assert_eq!(openai["default_model"], "gpt-4o");
+        assert_eq!(openai["env_var"], "OPENAI_API_KEY");
+
+        // baichuan 在 BUILTIN_PROVIDER_ENV_VARS 里但不在 default_model_for_provider
+        // 的清单里 → 必须是 null，不能是占位符。
+        let baichuan = find("baichuan").expect("baichuan is a builtin provider");
+        assert!(baichuan["default_model"].is_null());
+
+        assert!(
+            items.iter().all(|v| v["default_model"] != "default"),
+            "placeholder leaked into api response"
+        );
+    }
 }

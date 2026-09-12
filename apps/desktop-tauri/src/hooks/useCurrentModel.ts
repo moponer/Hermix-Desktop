@@ -140,6 +140,23 @@ export function useCurrentModel(): CurrentModel {
 }
 
 /**
+ * 后端落盘失败的上报钩子。
+ *
+ * `writeModelConfigAndNotify` 的后端写入是"本地已生效、后端可能失败"的
+ * 不对称操作：localStorage 写了、`config.yaml` 没写，UI 就会显示"已配置"
+ * 而聊天实际报"未配置模型"。此前这个失败被 `.catch(() => {})` 静默吞掉。
+ * 由设置面板挂载时注册，失败即弹 banner。
+ */
+type ModelPersistErrorHandler = (error: unknown) => void;
+
+let persistErrorHandler: ModelPersistErrorHandler | null = null;
+
+/** 注册/注销后端落盘失败回调（设置面板挂载时注册，卸载时传 null）。 */
+export function setModelPersistErrorHandler(handler: ModelPersistErrorHandler | null): void {
+  persistErrorHandler = handler;
+}
+
+/**
  * Helper for writers: persist a new model config and notify all
  * `useCurrentModel` consumers in this tab. Call this from
  * `SettingsView` saves so the "后端设置" tab updates immediately
@@ -147,22 +164,27 @@ export function useCurrentModel(): CurrentModel {
  *
  * also mirror the config to the backend (`PUT /api/model/list`)
  * so the chat model switcher stays stable across restarts even if
- * `localStorage` is wiped. The backend call is fire-and-forget — a
- * failure here must never break the local write or the in-tab event
- * broadcast.
+ * `localStorage` is wiped.
+ *
+ * 返回的 Promise 在**后端写入落地后** resolve —— 调用方 `await` 它可以保证
+ * 顺序（例如"先写默认模型再调 auto-correct"，否则 auto-correct 会按 provider
+ * 优先级把用户刚选的默认模型改掉）。后端失败不 reject（本地写入已是事实），
+ * 而是通过 `setModelPersistErrorHandler` 注册的回调上报，保证失败可见。
  */
-export function writeModelConfigAndNotify(cfg: ModelConfigData): void {
+export function writeModelConfigAndNotify(cfg: ModelConfigData): Promise<void> {
   storage.setItem(MODEL_CONFIG_KEY, JSON.stringify(cfg));
   window.dispatchEvent(new CustomEvent(MODEL_CONFIG_CHANGED_EVENT));
-  // Persist to backend (authoritative, durable). Fire-and-forget — a
-  // failure here must never break the local write or the in-tab event
-  // broadcast. `saveModelList` is statically imported: api.ts is already
-  // in the main bundle (imported by many components), so a dynamic import
-  // here would not split a chunk and only added a Vite warning.
+  // Persist to backend (authoritative, durable). `saveModelList` is statically
+  // imported: api.ts is already in the main bundle (imported by many
+  // components), so a dynamic import here would not split a chunk and only
+  // added a Vite warning.
   // Frontend `ModelConfigData.enabled` uses camelCase; the backend
   // `ModelSelectorEntry` uses snake_case — map here.
-  saveModelList(
+  return saveModelList(
     cfg.enabled.map((e) => ({ provider_id: e.providerId, model_id: e.modelId })),
     cfg.defaultModel || null,
-  ).catch(() => {});
+  ).catch((e) => {
+    console.error("[model] persist model list to backend failed:", e);
+    persistErrorHandler?.(e);
+  });
 }

@@ -4,6 +4,7 @@ import { PanelRight, ArrowUp, AlertTriangle } from "lucide-react";
 import { resolveSessionSelectedModel } from "../utils/sessionModel";
 import type { ChatMessage, QueuedMessage, QueuedImage, SubAgentState, Session } from "../types";
 import type { ChatOverrides, StreamPhase, TodoSnapshotItem } from "../hooks/useStreamChat";
+import type { ConfigCategory } from "./SystemConfigPanel";
 import { CompactionStatusBanner } from "./CompactionStatusBanner";
 import { mergeConsecutiveAssistantMessages, isRowRenderable, shouldShowAssistantHeader, mergeLegacyToolMessages } from "./chatUtils";
 import type { PendingImage } from "./chatUtils";
@@ -99,7 +100,7 @@ interface ChatViewProps {
   onOpenSessionSettings?: () => void;
   onShareSession?: () => void;
   onOpenExperts?: () => void;
-  onOpenSettings?: () => void;
+  onOpenSettings?: (category?: ConfigCategory) => void;
   onOpenComputer?: () => void;
   onUndo?: () => void;
   onRestore?: () => void;

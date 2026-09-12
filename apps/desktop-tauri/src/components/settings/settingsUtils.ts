@@ -65,6 +65,50 @@ export const CONTEXT_WINDOW_OPTIONS = [
   { label: "1M", value: 1_000_000 },
 ] as const;
 
+// ── 对话模型判定 / 默认模型挑选 ─────────────────────
+//
+// 厂商 `/v1/models` 返回的是**全量目录**，含 embedding / rerank / tts /
+// 图像模型。此前「获取模型」直接取 `models.sort()[0]` 当默认模型，于是
+// OpenAI 会选中 `babbage-002`、硅基流动会选中 `BAAI/bge-*` —— 配完点
+// 聊天直接报错，而后端 `auto_correct_model` 救不了（它只判 provider 有
+// 没有 key，不判模型能不能对话）。
+//
+// 判定改为「黑名单排除」，未知模型名一律放行（宁可选错也别漏掉新模型）。
+
+const NON_CHAT_MODEL_PATTERN =
+  /(embedding|embed-|-embed|rerank|tts|whisper|audio|speech|voice|dall-e|image|moderation|bge-|gte-|m3e|bce-|clip|sdxl|stable-diffusion|flux|kolors|wanx|cosyvoice|sambert|paraformer|sensevoice|nomic|babbage|davinci|curie)/i;
+
+/** 该模型是否可作为对话模型自动启用 / 自动设为默认。 */
+export function isChatModel(modelId: string): boolean {
+  return !NON_CHAT_MODEL_PATTERN.test(modelId);
+}
+
+/**
+ * 挑一个 provider 的默认模型。
+ *
+ * 优先级：
+ *   1. `providerDefault`（后端 `default_model_for_provider` 的人工清单，
+ *      如 openai→gpt-4o、siliconflow→Qwen/Qwen2.5-72B-Instruct）
+ *   2. 该 provider 探测到的对话模型中字典序第一个
+ *   3. `null` —— 一个能用的都没有，调用方应提示用户手选，不硬塞
+ *
+ * @param providerDefault 后端下发的权威默认（`GET /api/providers/meta`）
+ */
+export function pickDefaultModel(
+  models: string[],
+  providerDefault?: string,
+): string | null {
+  const chat = models.filter(isChatModel);
+  const pool = chat.length > 0 ? chat : models;
+  if (providerDefault) {
+    const exact = pool.find((m) => m === providerDefault);
+    if (exact) return exact;
+    const ci = pool.find((m) => m.toLowerCase() === providerDefault.toLowerCase());
+    if (ci) return ci;
+  }
+  return pool.length > 0 ? pool[0] : null;
+}
+
 // ── Context window resolution (前端 catalog 镜像 + 来源透明化) ─────
 //
 // 后端权威链路在 `crates/hermix-intelligence/src/model_metadata.rs::get_model_context_length_with`:

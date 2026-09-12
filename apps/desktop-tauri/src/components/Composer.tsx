@@ -8,6 +8,7 @@ import { VoiceButton } from "./VoiceButton";
 import { VisionButton } from "./VisionButton";
 import { PolishButton } from "./PolishButton";
 import { ProviderIcon } from "./ProviderIcon";
+import type { ConfigCategory } from "./SystemConfigPanel";
 import { AppMentionInput } from "./AppMentionInput";
 import { formatBytes } from "../utils/imageCompressor";
 import { PERMISSION_LEVELS, type PermissionLevel } from "../hooks/useExpert";
@@ -43,7 +44,7 @@ export interface ComposerProps {
   categories: import("../data/builtinExperts").ExpertCategory[];
   byCategory: Record<string, ExpertDef[]>;
   onOpenExperts?: () => void;
-  onOpenSettings?: () => void;
+  onOpenSettings?: (category?: ConfigCategory) => void;
   onOpenComputer?: () => void;
   onPickRecent?: (id: string) => void;
   onUndo?: () => void;
@@ -441,13 +442,13 @@ export function Composer(p: ComposerProps) {
           <div className="relative">
             <button
               ref={modelTriggerRef as React.RefObject<HTMLButtonElement>}
-              onClick={(p.byProvider && p.byProvider.length > 0) ? modelToggle : () => { p.onOpenSettings?.(); setModelOpen(false); }}
+              onClick={(p.byProvider && p.byProvider.length > 0) ? modelToggle : () => { p.onOpenSettings?.("model"); setModelOpen(false); }}
               className={`flex items-center gap-1.5 px-2 py-1 text-[12.5px] transition-colors rounded-md max-w-[240px] ${
                 (p.byProvider && p.byProvider.length > 0)
                   ? "text-text-secondary hover:bg-bg-hover hover:text-text-primary cursor-pointer"
                   : "text-[color:var(--color-chip-permission-fg)] hover:bg-[#FAECE7]/60 cursor-pointer"
               }`}
-              title={(p.byProvider && p.byProvider.length > 0) ? "切换模型" : "未配置模型，点击前往 设置 → 模型管理"}
+              title={(p.byProvider && p.byProvider.length > 0) ? "切换模型" : "未配置模型，点击直达 设置 → 模型配置"}
             >
               <ProviderIcon providerId={p.selectedModel?.split(":")[0] || "custom"} size={14} title={p.selectedModel} />
               <span className="truncate">{p.currentDisplay}</span>

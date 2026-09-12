@@ -10,7 +10,7 @@ import { useStreamChat } from "./hooks/useStreamChat";
 import { AppProviders } from "./app/AppProviders";
 import { renderRoutes, type RouteContext } from "./app/routes";
 import { ArtifactPreviewModal } from "./app/ArtifactPreviewModal";
-import { SystemConfigPanel } from "./components/SystemConfigPanel";
+import { SystemConfigPanel, type ConfigCategory } from "./components/SystemConfigPanel";
 import { useAppBootstrap } from "./app/useAppBootstrap";
 import {
   readDraftWorkspace,
@@ -114,6 +114,16 @@ export default function App() {
   const [page, setPageRaw] = useState<NavPage>("chat");
   // 系统配置弹窗（非路由跳转）
   const [showConfigModal, setShowConfigModal] = useState(false);
+  // 弹窗打开时落在哪个分类。默认「模型」：配置入口绝大多数是"没配模型/想换
+  // 模型"，此前硬编码落在「工具」→ 用户点了"配置模型"却看到插件页。
+  const [configCategory, setConfigCategory] = useState<ConfigCategory>("model");
+
+  /** 打开系统配置弹窗。`category` 让调用方指定落点（如聊天输入框的
+   *  "未配置模型"入口应直达「模型」），缺省「模型」。 */
+  const openSettings = (category: ConfigCategory = "model") => {
+    setConfigCategory(category);
+    setShowConfigModal(true);
+  };
   // 「自定义应用」页「创建新应用」按钮跳转时注入的预填指令（一次性消费）。
   const [pendingPrefill, setPendingPrefill] = useState<string | null>(null);
   // 视口自适应面板最小宽度 — 窗口缩小时缩小主列/左列最小宽
@@ -2982,7 +2992,7 @@ return {
       }}
       justPatchedTodoRef={justPatchedTodoRef}
       onOpenExperts={() => setPage("experts")}
-      onOpenSettings={() => setShowConfigModal(true)}
+      onOpenSettings={openSettings}
       onOpenComputer={openComputer}
       onUndo={handleUndo}
       onRestore={handleRestore}
@@ -3113,7 +3123,7 @@ return {
               storage.setItem(STORAGE_KEYS.draftWorkspace, workspacePath);
               void handleNewChat();
             }}
-            onOpenSettings={() => setShowConfigModal(true)}
+            onOpenSettings={openSettings}
           />
           </ErrorBoundary>
           <div
@@ -3189,7 +3199,9 @@ return {
       )}
       <ToastContainer />
       <ImageLightbox />
-      {showConfigModal && <SystemConfigPanel onClose={() => setShowConfigModal(false)} />}
+      {showConfigModal && (
+        <SystemConfigPanel initialCategory={configCategory} onClose={() => setShowConfigModal(false)} />
+      )}
     </div>
     </AppProviders>
   );

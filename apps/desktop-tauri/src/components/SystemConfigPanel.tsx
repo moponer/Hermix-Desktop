@@ -21,9 +21,13 @@ import { storage, STORAGE_KEYS } from "../utils/storageCompat";
 
 interface SystemConfigPanelProps {
   onClose: () => void;
+  /** 打开时落在哪个分类。默认「模型」——本应用的配置入口绝大多数是
+   *  "没配模型/想换模型"，落到「工具」会让用户以为点错了地方。 */
+  initialCategory?: ConfigCategory;
 }
 
-type CategoryId = "model" | "tools" | "backend" | "advanced";
+export type ConfigCategory = "model" | "tools" | "backend" | "advanced";
+type CategoryId = ConfigCategory;
 type ToolTabId = "plugins" | "skills" | "connectors" | "toolsets";
 type ModelTabId = "model" | "image" | "custom";
 
@@ -47,8 +51,8 @@ const MODEL_TABS: { id: ModelTabId; label: string; icon: React.ElementType }[] =
   { id: "custom", label: "自定义模型", icon: PenLine },
 ];
 
-export function SystemConfigPanel({ onClose }: SystemConfigPanelProps) {
-  const [cat, setCat] = useState<CategoryId>("tools");
+export function SystemConfigPanel({ onClose, initialCategory }: SystemConfigPanelProps) {
+  const [cat, setCat] = useState<CategoryId>(initialCategory ?? "model");
   const [toolTab, setToolTab] = useState<ToolTabId>("connectors");
   const [modelTab, setModelTab] = useState<ModelTabId>("model");
   const [query, setQuery] = useState("");

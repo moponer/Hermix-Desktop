@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import { Check, AlertCircle, RefreshCw, ChevronRight, Star, Trash2, CheckCircle, Save, AlertTriangle } from "lucide-react";
 import * as api from "../../api";
 import { storage } from "../../utils/storageCompat";
-import { writeModelConfigAndNotify, MODEL_CONFIG_CHANGED_EVENT } from "../../hooks/useCurrentModel";
+import { writeModelConfigAndNotify, MODEL_CONFIG_CHANGED_EVENT, setModelPersistErrorHandler } from "../../hooks/useCurrentModel";
 import { ProviderIcon } from "../ProviderIcon";
 import { useSafeTimeout } from "../../hooks/useSafeTimeout";
 import {
@@ -19,8 +19,83 @@ import {
   CONTEXT_WINDOW_OPTIONS,
   resolveContextWindow,
   defaultOptionLabel,
+  isChatModel,
+  pickDefaultModel,
   type ModelConfigData,
 } from "./settingsUtils";
+
+// ── 厂商模型探测 / 配置合并 ─────────────────────────
+
+/** 直接向厂商 `/v1/models` 取模型清单（前端直连厂商域名：CSP `connect-src
+ *  已放行 https:`，CORS 由厂商返回 ACAO 头）。任何失败都返回空列表，不抛。 */
+async function probeProviderModels(keyEnvVar: string, baseUrl: string): Promise<string[]> {
+  const MAX_RETRIES = 2;
+  try {
+    const reveal = await api.fetchJSON<{ value?: string }>("/api/env/reveal", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key: keyEnvVar }),
+    });
+    const apiKey = reveal.value;
+    if (!apiKey) return [];
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const resp = await fetch(`${baseUrl}/models`, {
+          headers: { Authorization: `Bearer ${apiKey}` },
+        });
+        if (!resp.ok) {
+          if (attempt < MAX_RETRIES) await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+          continue;
+        }
+        const data = await resp.json();
+        return ((data.data || []) as { id: string }[]).map((m) => m.id).sort();
+      } catch {
+        if (attempt < MAX_RETRIES) await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+      }
+    }
+  } catch (e) {
+    console.warn("[ModelTab] reveal api key failed:", e);
+  }
+  return [];
+}
+
+/**
+ * 把探测到的模型并入配置。
+ *
+ * 只自动启用**可对话**模型（`isChatModel`）：厂商 `/v1/models` 返回的是全量
+ * 目录，含 embedding / rerank / tts / 图像模型，全量塞进「已启用模型」会让
+ * 列表爆炸，还可能把非对话模型顶成默认。未自动启用的模型仍留在 modelCache，
+ * 可在聊天窗口的模型选择器里手动勾选。
+ *
+ * 默认模型只在原本为空时补一个，优先命中后端权威清单（`defaults`）。
+ */
+function mergeFetchedModels(
+  base: ModelConfigData,
+  probed: { id: string; models: string[] }[],
+  defaults: Record<string, string>,
+): ModelConfigData {
+  if (probed.length === 0) return base;
+  const seen = new Set(base.enabled.map((m) => fullId(m.providerId, m.modelId)));
+  const enabled = [...base.enabled];
+  for (const { id, models } of probed) {
+    for (const modelId of models.filter(isChatModel)) {
+      const key = fullId(id, modelId);
+      if (!seen.has(key)) {
+        seen.add(key);
+        enabled.push({ providerId: id, modelId });
+      }
+    }
+  }
+  let defaultModel = base.defaultModel;
+  if (!defaultModel) {
+    for (const { id, models } of probed) {
+      const picked = pickDefaultModel(models, defaults[id]);
+      if (picked) { defaultModel = fullId(id, picked); break; }
+    }
+  }
+  if (enabled.length === base.enabled.length && defaultModel === base.defaultModel) return base;
+  return { enabled, defaultModel, modelContexts: base.modelContexts ?? {} };
+}
 
 // ── Model Tab ──────────────────────────────────────
 //
@@ -46,6 +121,17 @@ export function ModelTab() {
   const [providerKeyInput, setProviderKeyInput] = useState<Record<string, string>>({});
   // 单行短暂绿闪用的 key（fid），700ms 后自清
   const [flashKey, setFlashKey] = useState<string | null>(null);
+  // 后端权威默认模型（provider id → model），用于首次自动选中可对话模型
+  const [providerDefaults, setProviderDefaults] = useState<Record<string, string>>({});
+
+  // 写后端失败必须可见：localStorage 写了、config.yaml 没写时，UI 显示"已配置"
+  // 而聊天报"未配置模型"。此前这个失败被静默吞掉。
+  useEffect(() => {
+    setModelPersistErrorHandler((e) => {
+      setError(`已保存到本地，但写入后端失败：${e instanceof Error ? e.message : String(e)}`);
+    });
+    return () => setModelPersistErrorHandler(null);
+  }, []);
 
   // ── Custom provider has_key (authoritative from server) ──
   useEffect(() => {
@@ -74,50 +160,47 @@ export function ModelTab() {
       // 从缓存恢复（fetch 失败时不让 UI 全空）
       const cached = loadModelCache();
       if (Object.keys(cached).length > 0) setFetchedModels(cached);
-      const cachedCfg = loadModelConfig();
-      if (cachedCfg.enabled.length > 0) setConfig(cachedCfg);
 
-      const fetchPromises = PROVIDERS.filter((p) => keys[p.id]).map(async (p) => {
-        const MAX_RETRIES = 2;
-        for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-          try {
-            const revealData = await api.fetchJSON<{ value?: string }>("/api/env/reveal", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ key: p.keyEnvVar }),
-            });
-            const apiKey = revealData.value;
-            if (!apiKey) break;
-            const modelsResp = await fetch(`${p.baseUrl}/models`, {
-              headers: { Authorization: `Bearer ${apiKey}` },
-            });
-            if (!modelsResp.ok) {
-              if (attempt < MAX_RETRIES) await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
-              continue;
-            }
-            const data = await modelsResp.json();
-            const models: string[] = (data.data || []).map((m: { id: string }) => m.id).sort();
-            if (models.length > 0) {
-              setFetchedModels((prev) => ({ ...prev, [p.id]: models }));
-              setConfig((prev) => {
-                const existing = new Set(prev.enabled.map((m) => fullId(m.providerId, m.modelId)));
-                const newEnabled = [...prev.enabled];
-                models.forEach((modelId) => {
-                  if (!existing.has(`${p.id}:${modelId}`)) newEnabled.push({ providerId: p.id, modelId });
-                });
-                const newDefault = prev.defaultModel || (newEnabled.length > 0 ? `${p.id}:${models[0]}` : "");
-                const next = { enabled: newEnabled, defaultModel: newDefault, modelContexts: prev.modelContexts ?? {} };
-                writeModelConfigAndNotify(next);
-                return next;
-              });
-            }
-            break;
-          } catch (err) {
-            if (attempt < MAX_RETRIES) await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
-          }
+      // 后端权威的"每家该用哪个模型"清单 —— 首次自动选中优先命中它，
+      // 而不是厂商 /v1/models 全量目录里字典序第一个（那可能是 embedding）。
+      const defaults = await api.getProviderDefaults().catch(() => ({} as Record<string, string>));
+      setProviderDefaults(defaults);
+
+      // localStorage 缺失（新机器 / WebView2 缓存被清）→ 用后端持久化列表起步
+      // 一次，避免"config.yaml 有配置、设置面板却显示未启用"的两端不一致。
+      let base = loadModelConfig();
+      let rehydrated = false;
+      if (storage.getItem(MODEL_CONFIG_KEY) === null) {
+        const backend = await api.getModelList().catch(() => null);
+        if (backend && backend.models.length > 0) {
+          base = {
+            enabled: backend.models.map((m) => ({ providerId: m.provider_id, modelId: m.model_id })),
+            defaultModel: backend.default_model ?? "",
+            modelContexts: {},
+          };
+          rehydrated = true;
         }
-      });
-      await Promise.allSettled(fetchPromises);
+      }
+
+      const probed = await Promise.all(
+        PROVIDERS.filter((p) => keys[p.id]).map(async (p) => ({
+          id: p.id,
+          models: await probeProviderModels(p.keyEnvVar, p.baseUrl),
+        })),
+      );
+      const usable = probed.filter((r) => r.models.length > 0);
+      if (usable.length > 0) {
+        const mergedCache = { ...cached };
+        usable.forEach((r) => { mergedCache[r.id] = r.models; });
+        setFetchedModels(mergedCache);
+      }
+
+      const next = mergeFetchedModels(base, usable, defaults);
+      setConfig(next);
+      // await 后才结束：写后端失败会经 persistErrorHandler 弹 banner，不再静默。
+      // `rehydrated` 为真时即使内容没变也要落盘一次，把后端恢复的清单写回 local
+      // storage，让设置面板与聊天窗口的模型列表立刻一致。
+      if (rehydrated || next !== base) await writeModelConfigAndNotify(next);
     }).catch((err) => { console.error("[ModelTab] mount env fetch error:", err); });
   }, []);
 
@@ -148,12 +231,10 @@ export function ModelTab() {
       if (prev.defaultModel === fid) return prev;
       const newConfig: ModelConfigData = { ...prev, defaultModel: fid, modelContexts: prev.modelContexts ?? {} };
       safeSetTimeout(async () => {
-        writeModelConfigAndNotify(newConfig);
-        try {
-          const backendCfg = await api.getConfig();
-          backendCfg.model = fid;
-          await api.updateConfig(backendCfg);
-        } catch (e) { console.warn("setDefault backend sync failed:", e); }
+        // `PUT /api/model/list` 已把 `config.model` 同步成 default_model（后端
+        // config.rs 保证），无需再多一次 getConfig/updateConfig 全量回写 ——
+        // 那次回写是"读磁盘→整份覆盖"，会把刚落盘的选择器列表抹掉。
+        await writeModelConfigAndNotify(newConfig);
       }, 0);
       return newConfig;
     });
@@ -175,7 +256,9 @@ export function ModelTab() {
         modelContexts: prev.modelContexts ?? {},
       };
       safeSetTimeout(async () => {
-        writeModelConfigAndNotify(newConfig);
+        // 先 await 落盘选择器列表，再回读整份 config 改 model：否则 getConfig 可能
+        // 读到未更新的 config.yaml，PUT /api/config 整份覆盖时把刚写的选择器抹掉。
+        await writeModelConfigAndNotify(newConfig);
         if (defaultCleared) {
           try {
             const backendCfg = await api.getConfig();
@@ -242,29 +325,30 @@ export function ModelTab() {
       const resp = await fetch(`${p.baseUrl}/models`, { headers: { Authorization: `Bearer ${apiKey}` } });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = await resp.json();
-      const models: string[] = (data.data || []).map((m: { id: string }) => m.id).sort();
+      const models: string[] = ((data.data || []) as { id: string }[]).map((m) => m.id).sort();
       if (models.length === 0) { setError("未返回任何模型"); setLoadingProvider(null); return; }
       setFetchedModels((prev) => ({ ...prev, [p.id]: models }));
-      setConfig((prev) => {
-        const existing = new Set(prev.enabled.map((m) => fullId(m.providerId, m.modelId)));
-        const newEnabled = [...prev.enabled];
-        models.forEach((mid) => {
-          if (!existing.has(fullId(p.id, mid))) newEnabled.push({ providerId: p.id, modelId: mid });
-        });
-        const newDefault = prev.defaultModel || (newEnabled.length > 0 ? fullId(p.id, models[0]) : "");
-        const next = { ...prev, enabled: newEnabled, defaultModel: newDefault, modelContexts: prev.modelContexts ?? {} };
-        writeModelConfigAndNotify(next);
-        return next;
-      });
+
+      // 先 await 落盘再调 auto-correct：否则 auto-correct 会抢在前端写盘之前，
+      // 按 provider 优先级把用户刚选的默认模型改掉（UI 显示 A、实际跑 B）。
+      const next = mergeFetchedModels(config, [{ id: p.id, models }], providerDefaults);
+      setConfig(next);
+      await writeModelConfigAndNotify(next);
+
+      const chatCount = models.filter(isChatModel).length;
+      let message = chatCount < models.length
+        ? `已启用 ${chatCount} 个对话模型；另有 ${models.length - chatCount} 个非对话模型未启用，可在聊天窗口的模型选择器里手动勾选`
+        : "";
       try {
         const r = await api.autoCorrectConfig();
-        if (r.report) setInfo(r.message);
+        if (r.report) message = r.message;
       } catch {}
+      if (message) setInfo(message);
     } catch (e) {
       setError(`获取失败: ${e instanceof Error ? e.message : String(e)}`);
     }
     setLoadingProvider(null);
-  }, [providerKeyInput]);
+  }, [providerKeyInput, config, providerDefaults]);
 
   // ── Derived ──
   const enabledRows = useMemo(() => {
@@ -723,6 +807,8 @@ export function CustomProviderSection({
       setProviderModels((prev) => ({ ...prev, [safeId]: models }));
       onModelsFetched(safeId, models);
       const probedWithWindow = resp.models.filter((m) => typeof m.context_window === "number" && (m.context_window as number) > 0);
+      // 默认模型不取字典序第一个（可能是 embedding / rerank 模型）
+      const pickedDefault = pickDefaultModel(models);
       setConfig((prev) => {
         const existing = new Set(prev.enabled.map((m) => `${m.providerId}:${m.modelId}`));
         const newEnabled = [...prev.enabled];
@@ -741,7 +827,7 @@ export function CustomProviderSection({
         const next = {
           ...prev,
           enabled: newEnabled,
-          defaultModel: prev.defaultModel || (models.length > 0 ? `${safeId}:${models[0]}` : prev.defaultModel),
+          defaultModel: prev.defaultModel || (pickedDefault ? `${safeId}:${pickedDefault}` : prev.defaultModel),
           modelContexts: nextContexts,
         };
         writeModelConfigAndNotify(next);
@@ -821,8 +907,10 @@ export function CustomProviderSection({
       setConfig((prev) => {
         if (!prev.defaultModel) {
           const models = modelInput.split(",").map((m) => m.trim()).filter(Boolean);
-          if (models.length > 0) {
-            const next = { ...prev, defaultModel: `${targetId}:${models[0]}` };
+          // 用户手填的模型清单也按"可对话优先"挑默认，不取字典序第一个
+          const picked = pickDefaultModel(models);
+          if (picked) {
+            const next = { ...prev, defaultModel: `${targetId}:${picked}` };
             writeModelConfigAndNotify(next);
             return next;
           }

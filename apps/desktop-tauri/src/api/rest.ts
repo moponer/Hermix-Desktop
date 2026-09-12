@@ -272,14 +272,27 @@ export async function updateWorkspaceLayout(
   );
 }
 
-/** 内置 provider 元数据（id + 配钥环境变量名）——分组/提示的唯一真理源。 */
+/** 内置 provider 元数据（id + 配钥环境变量名 + 权威默认模型）——分组/提示/自动选型的唯一真理源。 */
 export interface ProviderMeta {
   id: string;
   env_var: string;
+  /** 后端 `default_model_for_provider` 的人工清单；未收录的 provider 为 null。 */
+  default_model?: string | null;
 }
 
 export async function getProviderMeta(): Promise<ProviderMeta[]> {
   return fetchJSON<ProviderMeta[]>("/api/providers/meta");
+}
+
+/** 各内置 provider 的权威默认模型（id → model）。首次配置时用来选中一个
+ *  真正能对话的模型，而不是厂商 `/v1/models` 全量目录里字典序第一个。 */
+export async function getProviderDefaults(): Promise<Record<string, string>> {
+  const list = await getProviderMeta();
+  const out: Record<string, string> = {};
+  for (const m of list) {
+    if (m.default_model) out[m.id] = m.default_model;
+  }
+  return out;
 }
 
 /** 后端权威解析一批模型的上下文窗口（值 + 来源分层）。
