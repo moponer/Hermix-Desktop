@@ -1,7 +1,7 @@
 {
   "id": "sunset",
   "label": "夕照",
-  "description": "奶油蜜金纸 + 落日橙",
+  "description": "深暖褐晚霞 + 霞橙",
   "builtin": true,
-  "colorScheme": "light"
+  "colorScheme": "dark"
 }

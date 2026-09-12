@@ -67,8 +67,8 @@
   --color-warning: #eab23c;
   --color-warning-soft: rgba(234, 178, 60, 0.15);
   --color-text-warning: #eec25f;
-  --color-info: #86a8b8;
-  --color-info-soft: rgba(134, 168, 184, 0.14);
+  --color-info: #93a39b;
+  --color-info-soft: rgba(147, 163, 155, 0.14);
 
   /* Status chips */
   --color-chip-model-bg: rgba(45, 212, 191, 0.14);

@@ -25,7 +25,10 @@
   border-bottom-color: transparent;
   opacity: 1;
 }
-.prose h1, .prose h2, .prose h3, .prose h4 {
+.prose h1,
+.prose h2,
+.prose h3,
+.prose h4 {
   color: var(--color-text-primary);
   font-weight: 600;
   margin: 1em 0 0.4em;
@@ -36,7 +39,8 @@
 .prose h2 { font-size: 1.22em; }
 .prose h3 { font-size: 1.08em; }
 .prose h4 { font-size: 0.98em; color: var(--color-text-secondary); }
-.prose ul, .prose ol { 
+.prose ul,
+.prose ol { 
   padding-left: 1.4em; 
   margin: 0.7em 0; 
   list-style-position: outside;
@@ -54,7 +58,8 @@
 }
 .prose hr { border: 0; border-top: 1px solid var(--color-bg-tertiary); margin: 0.9em 0; }
 .prose table { border-collapse: collapse; margin: 0.5em 0; font-size: 0.92em; width: 100%; }
-.prose th, .prose td { padding: 0.4em 0.6em; border: 1px solid var(--color-border-secondary); }
+.prose th,
+.prose td { padding: 0.4em 0.6em; border: 1px solid var(--color-border-secondary); }
 .prose th { background: var(--color-bg-secondary); font-weight: 600; color: var(--color-text-primary); }
 .prose code {
   background: transparent;
@@ -62,7 +67,7 @@
   border-radius: 0;
   font-size: 0.95em;
   color: var(--color-text-primary);
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-family: var(--font-mono);
   font-weight: 500;
   border: none;
   text-decoration: underline 1px var(--color-border-subtle);
@@ -87,9 +92,6 @@
    之前依赖 --color-bg-code-header 给 toolbar, 但代码区本身没设,
    在浅色主题下跟卡片白底几乎看不出差别. */
 .code-block-wrapper,
-.code-block-toolbar + .code-block-body {
-  background: var(--color-bg-code);
-}
 /* Inside the CodeBlock component, the outer wrapper owns the
    rounded corners and the spacing. Reset the `.prose pre` rules
    so the toolbar and the code area are flush (no margin, no
@@ -119,7 +121,7 @@
   display: block;
   overflow-x: auto;
   text-decoration: none;
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-family: var(--font-mono);
 }
 
 /* ── Message flow ── */
@@ -166,23 +168,6 @@
    in the same column rhythm as the regular MessageBubble
    (showHeader=true), so streaming text doesn't "jump" when the
    stream completes and switches to the final bubble layout. */
-.msg-bubble-assistant {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  min-height: 28px;
-}
-.msg-bubble-avatar {
-  flex-shrink: 0;
-  margin-top: 1px;
-}
-.msg-bubble-body {
-  flex: 1;
-  min-width: 0;
-  font-size: var(--font-size-body, 14px);
-  line-height: 1.72;
-  color: var(--color-text-primary);
-}
 
 /* ── Vertical rhythm ── */
 .msg-stack { display: flex; flex-direction: column; }
@@ -217,20 +202,6 @@
   background: color-mix(in srgb, var(--color-accent) 8%, transparent);
   /* 无边框，仅靠底色 */
 }
-.agent-activity-dot-stack {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  width: 18px;
-  height: 12px;
-}
-.agent-activity-bounce-dot {
-  width: 4px;
-  height: 4px;
-  border-radius: 999px;
-  background: var(--color-text-secondary);
-  animation: agent-activity-bounce 1.2s ease-in-out infinite;
-}
 .agent-activity-bounce-dot--delay1 { animation-delay: 0.15s; }
 .agent-activity-bounce-dot--delay2 { animation-delay: 0.30s; }
 @keyframes agent-activity-bounce {
@@ -264,29 +235,6 @@
   /* 加 italic 表达"轻量、非强制提示"语义 */
   font-style: italic;
 }
-.wait-for-input-dots {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  /* Reserve a stable hit-box so the dots don't shift if we ever
-     change the count. The dots themselves are 3px circles; the
-     gap is between their bounding boxes, not the dot centers. */
-  padding: 3px 0;
-  height: 10px;
-}
-.wait-for-input-dot {
-  display: inline-block;
-  width: 3px;
-  height: 3px;
-  border-radius: 50%;
-  background: var(--color-text-faint);
-  /* Slower, gentler bounce than agent-activity dots — the agent
-     has fully stopped, so the indicator should feel calm, not
-     urgent. ~1.8s cycle. */
-  animation: wait-for-input-bounce 1.8s cubic-bezier(0.4, 0, 0.2, 1) infinite;
-  /* opacity 基线 0.25, bounce 峰值 0.65, 更克制 */
-  opacity: 0.25;
-}
 .wait-for-input-dot--delay1 { animation-delay: 0.18s; }
 .wait-for-input-dot--delay2 { animation-delay: 0.36s; }
 @keyframes wait-for-input-bounce {
@@ -303,26 +251,6 @@
 /* ── Channel label (soft chip) ──
    章节用"小灰胶囊"——纯背景色 + 文字，无边框。
    边框在 12.5px 的字号下显得过粗，去掉后更贴近"分组标记"而不是"控件"。 */
-.channel-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 2px 8px 2px 6px;
-  border-radius: var(--radius-full);
-  font-size: 10.5px;
-  font-weight: 500;
-  letter-spacing: 0.01em;
-  color: var(--color-text-muted);
-  background: var(--color-bg-secondary);
-  border: 0;  /* 无边框，仅靠浅灰底色 */
-}
-.channel-label svg { color: var(--color-text-faint); flex-shrink: 0; }
-.channel-label-count {
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
-  font-size: 10px;
-  color: var(--color-text-faint);
-  margin-left: auto;
-}
 
 /* ── Artifact card ──
    简洁列表项 — 仅一行: 文件图标 + 文件名 + 扩展 chip.
@@ -343,20 +271,6 @@
 }
 
 /* 文件类型 chip — 替代 4 宫格摘要, 文件信息收敛成一行 */
-.artifact-ext {
-  display: inline-flex;
-  align-items: center;
-  padding: 1px 6px;
-  border-radius: 3px;
-  font-size: 10px;
-  font-weight: 500;
-  color: var(--color-text-faint);
-  background: var(--color-bg-tertiary);
-  letter-spacing: 0.02em;
-  border: 0;
-  flex-shrink: 0;
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
-}
 
 /* 文件信息不另起摘要块: 类型收敛到 .artifact-ext chip, 完整路径用
    title tooltip 表达, 不在卡片内铺开。 */
@@ -442,7 +356,7 @@
   color: var(--color-link-soft);
   cursor: pointer;
   text-decoration: none;
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-family: var(--font-mono);
   transition: color var(--duration-fast) ease;
 }
 .file-change-link:hover {
@@ -450,23 +364,6 @@
   color: var(--color-link-soft-hover);
 }
 
-[data-theme="light"] .file-pill.is-created  { color: #15803d; border-color: rgba(34, 197, 94, 0.30); background: rgba(34, 197, 94, 0.10); }
-[data-theme="light"] .file-pill.is-created  svg { color: #15803d; }
-[data-theme="light"] .file-pill.is-modified { color: #b45309; border-color: rgba(245, 158, 11, 0.30); background: rgba(245, 158, 11, 0.10); }
-[data-theme="light"] .file-pill.is-modified svg { color: #b45309; }
-[data-theme="light"] .file-pill.is-deleted  { color: #b91c1c; border-color: rgba(239, 68, 68, 0.30); background: rgba(239, 68, 68, 0.10); }
-[data-theme="light"] .file-pill.is-deleted  svg { color: #b91c1c; }
-[data-theme="light"] .file-pill.is-renamed  { color: #b45309; border-color: rgba(245, 158, 11, 0.30); background: rgba(245, 158, 11, 0.10); }
-[data-theme="light"] .file-pill.is-renamed  svg { color: #b45309; }
-
-[data-theme="dark"]  .file-pill.is-created  { color: #4ade80; border-color: rgba(34, 197, 94, 0.40); background: rgba(34, 197, 94, 0.16); }
-[data-theme="dark"]  .file-pill.is-created  svg { color: #4ade80; }
-[data-theme="dark"]  .file-pill.is-modified { color: #fbbf24; border-color: rgba(245, 158, 11, 0.40); background: rgba(245, 158, 11, 0.16); }
-[data-theme="dark"]  .file-pill.is-modified svg { color: #fbbf24; }
-[data-theme="dark"]  .file-pill.is-deleted  { color: #f87171; border-color: rgba(239, 68, 68, 0.40); background: rgba(239, 68, 68, 0.16); }
-[data-theme="dark"]  .file-pill.is-deleted  svg { color: #f87171; }
-[data-theme="dark"]  .file-pill.is-renamed  { color: #fbbf24; border-color: rgba(245, 158, 11, 0.40); background: rgba(245, 158, 11, 0.16); }
-[data-theme="dark"]  .file-pill.is-renamed  svg { color: #fbbf24; }
 
 /* ── Inline path link (assistant prose) ──────────────────────
    Flat link style — no chip background, no border, no icon. Renders
@@ -690,7 +587,7 @@
   color: #fbbf24; /* amber-400, allowed */
 }
 .memory-recall-keys {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
   color: var(--color-text-faint);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -708,48 +605,7 @@
    the dark-mode-only override below layers the glassy radial
    wash + tint glow + backdrop blur on top, so light themes don't
    get a flat white card pinned to a flat white background. The
-   .dark class is set by useTheme for every DARK_THEMES id
-   (dark + rainforest), so the upgrade applies uniformly. */
-.stream-error-card {
-  --sec-tint:        color-mix(in srgb, var(--color-warning) 6%, transparent);
-  --sec-tint-strong: color-mix(in srgb, var(--color-warning) 11%, transparent);
-  --sec-halo:        color-mix(in srgb, var(--color-warning) 12%, transparent);
-  --sec-glow:        color-mix(in srgb, var(--color-warning) 18%, transparent);
-  --sec-bg-fallback: var(--color-bg-elevated);
-  --sec-shadow:      color-mix(in srgb, var(--color-warning) 8%, transparent);
-  display: flex;
-  align-items: stretch;
-  gap: 10px;
-  position: relative;
-  width: 100%;
-  margin: 12px 0 10px;
-  padding: 11px 13px 12px 12px;
-  border: 0;
-  border-radius: var(--radius-lg, 12px);
-  background: var(--sec-bg-fallback);
-  box-shadow:
-    0 1px 2px var(--sec-shadow),
-    0 6px 16px var(--sec-shadow);
-  color: var(--color-text-secondary);
-  font-size: 13px;
-  line-height: 1.55;
-  overflow: hidden;
-}
 /* Dark theme upgrade: glassy tinted wash + halo + soft glow */
-.dark .stream-error-card {
-  background:
-    radial-gradient(120% 140% at 0% 0%, var(--sec-tint-strong), transparent 55%),
-    linear-gradient(180deg,
-      color-mix(in srgb, var(--color-bg-elevated) 96%, transparent),
-      color-mix(in srgb, var(--color-bg-elevated) 90%, transparent));
-  -webkit-backdrop-filter: blur(10px) saturate(125%);
-  backdrop-filter: blur(10px) saturate(125%);
-  box-shadow:
-    inset 0 0 0 1px var(--sec-halo),
-    0 1px 2px color-mix(in srgb, var(--color-warning) 4%, transparent),
-    0 8px 24px color-mix(in srgb, var(--color-warning) 9%, transparent),
-    0 24px 48px -16px color-mix(in srgb, var(--color-warning) 14%, transparent);
-}
 .stream-error-card--amber-strong {
   --sec-tint:        color-mix(in srgb, var(--color-warning) 9%, transparent);
   --sec-tint-strong: color-mix(in srgb, var(--color-warning) 16%, transparent);
@@ -761,9 +617,6 @@
   --sec-tint-strong: color-mix(in srgb, var(--color-warning) 7%, transparent);
   --sec-halo:        color-mix(in srgb, var(--color-warning) 8%, transparent);
   --sec-glow:        color-mix(in srgb, var(--color-warning) 10%, transparent);
-}
-.stream-error-card__rail {
-  display: none;
 }
 .stream-error-card__main {
   display: flex;
@@ -903,7 +756,7 @@
   line-height: 1.55;
   white-space: pre-wrap;
   word-break: break-word;
-  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-family: var(--font-mono);
 }
 .stream-error-card__actions {
   display: flex;
@@ -948,71 +801,10 @@
   color: var(--color-text-primary);
 }
 
-
-.tasks-block {
-  overflow: visible;
-  padding: 6px 10px;
-  border-radius: var(--radius-md);
-  background: var(--color-bg-secondary);
-  border: 1px solid var(--color-border-subtle);
-}
-.tasks-progress {
-  height: 2px;
-  background: var(--color-bg-tertiary);
-  overflow: hidden;
-  border-radius: var(--radius-full);
-}
-.tasks-progress-bar {
-  height: 100%;
-  background: var(--color-success);
-  transition: width 0.4s ease;
-}
-.tasks-header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 2px 0 4px;
-  font-size: 12px;
-  color: var(--color-text-secondary);
-}
-.tasks-header svg {
-  flex-shrink: 0;
-}
-.tasks-header-count {
-  margin-left: auto;
-  font-size: 11.5px;
-  color: var(--color-text-faint);
-}
-.tasks-list {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.task-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 6px;
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--color-text-primary);
-  border-radius: var(--radius-sm);
-}
-.task-row:hover {
-  background: var(--color-bg-hover);
-}
-.task-row svg {
-  flex-shrink: 0;
-}
 .task-row.done { color: var(--color-text-secondary); }
 .task-row.done .task-text {
   text-decoration: line-through;
   opacity: 0.7;
-}
-.task-text {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 /* ── Tool timeline ── */
@@ -1070,7 +862,7 @@
 }
 .tool-head:hover { background: var(--color-bg-secondary); }
 .tool-name {
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 11.5px;
   font-weight: 500;
   color: var(--color-text-primary);
@@ -1079,68 +871,15 @@
    for `terminal`, the path for `read_file`/`write_file`, the URL
    for `browser`). Renders right after the tool name in a slightly
    muted monospace so the eye still parses it as "the same row". */
-.tool-args {
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
-  font-size: 11px;
-  color: var(--color-text-muted);
-  max-width: 38ch;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  direction: rtl; /* keep the *trailing* part of long paths visible
-                     (file name) instead of the leading root */
-  text-align: left;
-  margin-left: 2px;
-}
 .tool-args[data-ltr="1"],
-.tool-msg-args[data-ltr="1"] {
-  /* search_files hints (path · "query") and browser URLs read
-     better left-to-right, otherwise the path tail gets clipped. */
-  direction: ltr;
-}
-.tool-args::before { content: "·"; margin-right: 6px; color: var(--color-text-faint); }
 
 /* Inline progress note attached from a `status` event (e.g. "正在处理").
    Sits next to the running tool's "执行中" badge so the user can see
    what the LLM is doing mid-flight without spawning a separate row
    in the timeline — that was the source of the "3 rows per tool call"
    visual chaos. */
-.tool-status-note {
-  font-size: 11px;
-  color: var(--color-text-faint);
-  font-style: italic;
-  max-width: 28ch;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  margin-left: 4px;
-}
 /* Same hint, used by the inline role=tool message card. Slightly
    wider allowed because the row is single-line. */
-.tool-msg-args {
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
-  font-size: 11px;
-  color: var(--color-text-muted);
-  max-width: 48ch;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  direction: rtl;
-  text-align: left;
-  margin-left: 4px;
-}
-.tool-msg-args::before { content: "·"; margin-right: 6px; color: var(--color-text-faint); }
-.tool-body {
-  margin-top: 4px;
-  padding: 8px 10px;
-  background: var(--color-bg-secondary);
-  border-radius: var(--radius-md);
-  border: 1px solid var(--color-border-subtle);
-  max-height: 320px;
-  overflow: auto;
-  font-size: 11.5px;
-  line-height: 1.55;
-}
 
 /* ── Tool result panel (collapsible, no header bar) ───────────────
    折叠面板不保留头部：头部 "(运行中/输出/已中断)" 标签 + 脉冲绿点
@@ -1237,112 +976,15 @@
    Kept so any leftover call site that hasn't migrated to
    `.tool-output*` still renders something sensible instead of
    unstyled markup. New code should use `.tool-output`. ──────── */
-.tool-terminal {
-  background: var(--color-bg-code);
-  border-top: 1px solid var(--color-border-subtle);
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
-}
-.tool-terminal-bar {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 7px 10px 6px 12px;
-  background: var(--color-bg-code-header);
-  border-bottom: 1px solid color-mix(in srgb, var(--color-border-subtle) 60%, transparent);
-}
-.tool-terminal-dot {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  flex-shrink: 0;
-  transition: filter var(--duration-fast) ease;
-}
-.tool-terminal-dot:nth-child(1) { background: #ff5f56; }
-.tool-terminal-dot:nth-child(2) { background: #ffbd2e; }
-.tool-terminal-dot:nth-child(3) { background: #27c93f; }
-.tool-terminal[data-running="true"] .tool-terminal-dot {
-  animation: terminal-dot-pulse 1.4s ease-in-out infinite;
-}
-.tool-terminal[data-running="true"] .tool-terminal-dot:nth-child(2) { animation-delay: 0.15s; }
-.tool-terminal[data-running="true"] .tool-terminal-dot:nth-child(3) { animation-delay: 0.3s; }
 @keyframes terminal-dot-pulse {
   0%, 100% { filter: brightness(0.85); }
   50%      { filter: brightness(1.15); }
-}
-.tool-terminal-title {
-  margin-left: 8px;
-  font-size: 10.5px;
-  color: var(--color-text-muted);
-  letter-spacing: 0.04em;
-  font-weight: 500;
-  text-transform: uppercase;
-}
-.tool-terminal[data-running="true"] .tool-terminal-title {
-  color: var(--color-accent);
-}
-.tool-terminal[data-running="true"] .tool-terminal-title::after {
-  content: "▌";
-  margin-left: 4px;
-  color: var(--color-accent);
-  animation: h-caret 1s steps(2) infinite;
 }
 @keyframes h-caret {
   0%, 50%   { opacity: 1; }
   50.01%, 100% { opacity: 0; }
 }
-.tool-terminal-copy {
-  margin-left: auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  padding: 2px 6px;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  border: 1px solid transparent;
-  color: var(--color-text-faint);
-  font-size: 10px;
-  font-family: var(--font-sans, system-ui);
-  cursor: pointer;
-  opacity: 0;
-  transition:
-    opacity var(--duration-fast) ease,
-    background var(--duration-fast) ease,
-    color var(--duration-fast) ease,
-    border-color var(--duration-fast) ease;
-}
 .tool-terminal:hover .tool-terminal-copy,
-.tool-terminal-copy:focus-visible {
-  opacity: 1;
-}
-.tool-terminal-copy:hover {
-  background: var(--color-bg-tertiary);
-  color: var(--color-text-secondary);
-  border-color: var(--color-border-subtle);
-}
-.tool-terminal-copy[data-copied="true"] {
-  color: var(--color-success);
-  background: color-mix(in srgb, var(--color-success) 10%, transparent);
-  border-color: color-mix(in srgb, var(--color-success) 22%, transparent);
-  opacity: 1;
-}
-.tool-terminal-body {
-  margin: 0;
-  padding: 10px 14px;
-  max-height: 320px;
-  overflow: auto;
-  font-size: 11.5px;
-  line-height: 1.55;
-  color: var(--color-text-primary);
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-variant-ligatures: none;
-}
-.tool-terminal-body::-webkit-scrollbar { width: 8px; height: 8px; }
-.tool-terminal-body::-webkit-scrollbar-thumb {
-  background: color-mix(in srgb, var(--color-text-faint) 40%, transparent);
-  border-radius: 4px;
-}
-.tool-terminal-body::-webkit-scrollbar-track { background: transparent; }
 
 /* ── Premium tool event card ──────────────────────────────────────
    WorkBuddy-style compact row per tool, with a click-to-expand
@@ -1376,7 +1018,9 @@
   padding-left: 0;
 }
 .tw-msg:hover { border: 0; box-shadow: none; background: transparent; }
-.tw-msg--run, .tw-msg--err, .tw-msg--ok { border: 0; background: transparent; position: static; }
+.tw-msg--run,
+.tw-msg--err,
+.tw-msg--ok { border: 0; background: transparent; position: static; }
 
 /* ── Consecutive tool calls (same agent): visually grouped ───────
    .msg-stream > * + * 的全局 12px 间距会让同一 agent 连续调用工具时
@@ -1449,7 +1093,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--color-text-muted);
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
   min-width: 0;
   flex-shrink: 10;
@@ -1509,7 +1153,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--color-text-muted);
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 12.5px;
   min-width: 0;
   flex-shrink: 10;
@@ -1610,16 +1254,6 @@
    Renders as muted prose right after the primary arg, so the user
    sees "已读取 path · 正在处理" on a single line instead of a
    separate card. */
-.tw-msg-note {
-  font-size: 11.5px;
-  color: var(--color-text-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  min-width: 0;
-  font-style: italic;
-  margin-right: 4px;
-}
 
 /* Right-side meta group (duration / stats / state / chevron).
    `padding-left` keeps the badge from colliding with the
@@ -1636,7 +1270,7 @@
 /* Duration shown on the right of the row, before the status badge.
    Tiny monospace so it aligns with the badge baseline. */
 .tw-msg-dur {
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 10.5px;
   color: var(--color-text-faint);
   letter-spacing: -0.01em;
@@ -1661,7 +1295,7 @@
   height: 100%;
   background: linear-gradient(
     90deg,
-    var(--color-accent, #475569) 0%,
+    var(--color-accent) 0%,
     var(--color-accent-soft, rgba(71, 85, 105, 0.10)) 100%
   );
   /* Soft shimmer so the bar feels "alive" instead of frozen
@@ -1691,9 +1325,6 @@
   letter-spacing: 0;
   color: var(--color-text-faint);
 }
-.tw-msg-state--done { color: var(--color-success); }
-.tw-msg-state--run  { color: var(--color-accent); }
-.tw-msg-state--err  { color: var(--color-warning); }
 
 /* Status pill — used in the ACUI right panel (ToolEventCard) to
    surface the run state in a small icon+text chip. 状态用 muted/success/warning
@@ -1737,7 +1368,7 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
   font-weight: 400;
   line-height: 1;
@@ -1864,10 +1495,24 @@
   background: var(--color-bg-secondary, #f7f7f7);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
   overflow: hidden;
-  transition: max-height 320ms cubic-bezier(0.4, 0, 0.2, 1);
+  transition:
+    max-height 320ms cubic-bezier(0.4, 0, 0.2, 1),
+    backdrop-filter var(--duration-base, 160ms) ease,
+    background-color var(--duration-base, 160ms) ease;
   /* 两行布局高度: padding 11+11 + 图标 22 + 命令块 head 26 + 命令 pre 28~ */
   max-height: 320px;
   padding: 0;
+}
+/* 浅色基线（青墨）走 liquid glass；暗色族保持上方 .approval-card 实色样式 */
+:root[data-theme="light"] .approval-card {
+  /* Liquid glass — 禁装饰性边框铁律：去掉 border，改用 inset shadow + glass shadow 做边缘 */
+  background: var(--glass-liquid-bg);
+  backdrop-filter: var(--glass-liquid-blur);
+  -webkit-backdrop-filter: var(--glass-liquid-blur);
+  box-shadow:
+    var(--glass-inset-highlight),
+    var(--glass-inset-shadow),
+    var(--glass-shadow);
 }
 /* Inline approval card lives inside .msg-bubble-body (avatar is already
    offset via the parent's gap:10px). The generic .footer-block
@@ -1888,33 +1533,6 @@
    工具名 + reason 文字 (LLM 解释的意图). 主人要求"reason 行做标题栏",
    移除右侧"等待你的决定"状态文本(状态信息由风险色 + 按钮隐性传达).
    风险时整栏染浅红/浅橙, 满足"层次" + "不分割"双诉求. */
-.approval-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 12px;
-  font-size: 12.5px;
-  line-height: 1.4;
-  border-radius: 8px 8px 0 0;
-  background: var(--color-bg-tertiary, #ededee);
-  color: var(--color-text-secondary);
-}
-.approval-head-tool {
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
-  font-size: 11.5px;
-  font-weight: 600;
-  color: var(--color-text-primary);
-  flex-shrink: 0;
-}
-.approval-head-reason {
-  flex: 1;
-  min-width: 0;
-  color: var(--color-text-primary);
-  font-weight: 500;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 
 /* Full-card layout (pending state). Wrapper carries opacity +
    max-height transitions so the visible swap is animated, not a flash. */
@@ -1961,9 +1579,6 @@
   justify-content: center;
   flex-shrink: 0;
 }
-.approval-summary-icon-ok { background: rgba(75, 122, 94, 0.14); color: #4b7a5e; }
-.approval-summary-icon-err { background: rgba(198, 40, 40, 0.14); color: #c62828; }
-.approval-summary-icon-expired { background: var(--color-bg-tertiary, rgba(128,128,128,0.14)); color: var(--color-text-secondary); }
 
 .approval-summary-tool {
   font-size: 12.5px;
@@ -1993,31 +1608,7 @@
   flex-shrink: 0;
 }
 
-.approval-summary-badge {
-  font-size: 11px;
-  font-weight: 500;
-  padding: 2px 9px;
-  border-radius: 999px;
-  flex-shrink: 0;
-}
-.approval-summary-badge-ok {
-  background: rgba(75, 122, 94, 0.12);
-  color: #4b7a5e;
-}
-.approval-summary-badge-err {
-  background: rgba(198, 40, 40, 0.10);
-  color: #c62828;
-}
-.approval-summary-badge-expired {
-  background: var(--color-bg-tertiary, rgba(128,128,128,0.12));
-  color: var(--color-text-secondary);
-}
 
-.approval-summary-result {
-  font-size: 11.5px;
-  color: var(--color-text-tertiary, #888);
-  flex-shrink: 0;
-}
 
 /* ================================================================
    Approval card v2 — `.tw-msg` family integration.
@@ -2038,94 +1629,15 @@
   transition: opacity 120ms ease;
 }
 .approval-btn:hover { opacity: 0.86; }
-.approval-btn--deny {
-  background: transparent;
-  border: 0.5px solid var(--color-border-secondary, rgba(128,128,128,0.3));
-  color: var(--color-text-secondary);
-  background-color: var(--color-bg-secondary, #fafafa);
-}
-.approval-btn--allow {
-  border: 0;
-  background: var(--color-success, #16a34a);
-  color: #fff;
-}
-.approval-btn--allow:hover { background: color-mix(in srgb, var(--color-success, #16a34a) 85%, #000); }
 
-.approval-cmd-bar {
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
-  margin: 0;
-}
-.approval-cmd {
-  flex: 1;
-  min-width: 0;
-  margin: 0;
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
-  font-size: 12px;
-  line-height: 1.55;
-  white-space: pre-wrap;
-  word-break: break-word;
-  overflow-wrap: anywhere;
-  /* 命令块: 跟容器同色,靠 monospace font + 左侧 2px 细线表达"代码区"
-     语义;不再独立铺色块,跟 reason/按钮保持视觉连贯 */
-  background: transparent;
-  border-left: 2px solid var(--color-border-subtle, #ececef);
-  border-radius: 0;
-  padding: 4px 0 4px 10px;
-  color: var(--color-text-primary);
-}
-.dark .approval-cmd { border-left-color: var(--color-border-subtle, #2c2c32); }
 
-.approval-reason-row {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  margin: 0 0 0 22px;
-  font-size: 12.5px;
-  line-height: 1.5;
-}
-.approval-reason-label {
-  color: var(--color-text-tertiary, #888);
-  flex-shrink: 0;
-  font-weight: 500;
-  font-size: 11.5px;
-}
-.approval-reason-text {
-  color: var(--color-text-secondary);
-}
 
-.approval-result-tail {
-  color: var(--color-text-tertiary, #888);
-  font-weight: 400;
-  margin-left: 2px;
-}
 
 /* Title bar — risk color tints create clear header/body hierarchy */
 /* Body zone */
-.approval-body {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 10px 12px;
-}
 
 /* LLM-supplied rationale — shown above the command so the user
    reads intent before evidence (the command itself). */
-.approval-reason {
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
-  font-size: 12.5px;
-  line-height: 1.55;
-  color: var(--color-text-secondary);
-  background: var(--color-bg-tertiary, #ededee);
-  border-radius: 8px;
-  padding: 8px 11px;
-  margin: 0;
-}
-.dark .approval-reason { background: var(--color-bg-tertiary, #2e2e34); }
-.approval-reason svg { flex-shrink: 0; margin-top: 3px; color: var(--color-text-tertiary); }
 
 /* Risk tint — 风险色集中在标题栏(.approval-head)上, is-danger 红 /
    is-warn 橙, reason/命令/按钮不染色. 标题栏是整卡唯一的色层,
@@ -2137,18 +1649,15 @@
 .approval-card.is-warn .approval-head {
   background: rgba(217, 119, 6, 0.10);
 }
-.dark .approval-card.is-danger .approval-head {
-  background: rgba(198, 40, 40, 0.14);
-}
-.dark .approval-card.is-warn .approval-head {
-  background: rgba(217, 119, 6, 0.14);
-}
 
-/* Reasoning ticker — single-line rolling indicator beside the
-   bottom-of-chat status pill. Shows the latest captured reasoning
-   line when the user has the fold closed; cycles every 3s by
-   default (component prop). The pill + ticker share a row via the
-   `.msg-channel` flex container in `ChatIndicators.tsx`. */
+/* Reasoning ticker — single-line indicator beside the
+   bottom-of-chat status pill. Shows the LATEST captured reasoning
+   line when the user has actually folded the reasoning block
+   (initial state is unfolded → ticker dormant, 2026-08-29 user
+   feedback). Overflowing lines scroll on a fast marquee loop
+   instead of ellipsing into a static snapshot. The pill + ticker
+   share a row via the `.msg-channel` flex container in
+   `ChatIndicators.tsx`. */
 .reasoning-ticker {
   display: inline-flex;
   align-items: center;
@@ -2159,7 +1668,7 @@
   margin-left: 10px;
   border-radius: 11px;
   background: var(--color-bg-secondary, rgba(0, 0, 0, 0.04));
-  color: var(--color-text-secondary, #475569);
+  color: var(--color-text-secondary);
   font-size: 12px;
   font-style: italic;
   overflow: hidden;
@@ -2168,10 +1677,6 @@
   border: 1px solid color-mix(in srgb, var(--color-text-faint, #94a3b8) 24%, transparent);
   vertical-align: middle;
 }
-.dark .reasoning-ticker {
-  background: rgba(255, 255, 255, 0.04);
-  color: rgba(255, 255, 255, 0.65);
-}
 .reasoning-ticker-line {
   display: inline-block;
   max-width: 100%;
@@ -2179,12 +1684,34 @@
   text-overflow: ellipsis;
   animation: reasoning-ticker-fade 200ms ease-out;
 }
+/* Marquee variant — only applied when the line overflows (JS probe).
+   Fast loop: hold the head briefly so it's readable, sweep to the
+   tail (~4.8s for 300px+), quick return. `calc(-100% + 320px)` ends
+   with the text's right edge aligned to the pill's right edge
+   (100% = span width, 320px = pill max-width). */
+.reasoning-ticker-line.reasoning-ticker-marquee {
+  overflow: visible;
+  text-overflow: clip;
+  animation:
+    reasoning-ticker-fade 200ms ease-out,
+    reasoning-ticker-scroll 6s linear 200ms infinite;
+}
 @keyframes reasoning-ticker-fade {
   from { opacity: 0; transform: translateY(2px); }
   to   { opacity: 1; transform: translateY(0); }
 }
+@keyframes reasoning-ticker-scroll {
+  0%   { transform: translateX(0); }
+  8%   { transform: translateX(0); }
+  88%  { transform: translateX(calc(-100% + 320px)); }
+  96%  { transform: translateX(calc(-100% + 320px)); }
+  100% { transform: translateX(0); }
+}
 @media (prefers-reduced-motion: reduce) {
-  .reasoning-ticker-line { animation: none; }
+  .reasoning-ticker-line,
+  .reasoning-ticker-line.reasoning-ticker-marquee {
+    animation: none;
+  }
 }
 
 /* Batch approval card — `kind: "approval_request_batch"` step in the
@@ -2197,31 +1724,34 @@
 }
 .apv-batch-list {
   list-style: none;
-  margin: 8px 0 0;
+  margin: 10px 0 0;
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
   max-height: 200px;
   overflow-y: auto;
   border-top: 1px solid color-mix(in srgb, var(--color-text-faint, #94a3b8) 18%, transparent);
-  padding-top: 8px;
+  padding-top: 10px;
 }
 .apv-batch-item {
   display: flex;
-  align-items: baseline;
-  gap: 6px;
+  align-items: center;
+  gap: 8px;
   font-size: 12px;
   line-height: 1.5;
-  color: var(--color-text-secondary, #475569);
+  color: var(--color-text-secondary);
+  padding: 5px 0;
 }
 .apv-batch-tool {
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
-  font-weight: 600;
-  color: var(--color-text-primary, #1a1a1a);
+  font-family: var(--font-mono);
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  flex-shrink: 0;
 }
 .apv-batch-sep {
   color: var(--color-text-faint, #94a3b8);
+  flex-shrink: 0;
 }
 .apv-batch-intent {
   overflow: hidden;
@@ -2263,155 +1793,18 @@
 }
 
 /* Command block — full text, no ellipsis, with copy button */
-.approval-cmd-bar {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-}
-.approval-cmd {
-  flex: 1;
-  min-width: 0;
-  margin: 0;
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
-  font-size: 12px;
-  line-height: 1.55;
-  white-space: pre-wrap;
-  word-break: break-word;
-  overflow-wrap: anywhere;
-  /* 命令块: 跟容器同色,靠 monospace font + 左侧 2px 细线表达"代码区"
-     语义;不再独立铺色块,跟 reason/按钮保持视觉连贯.
-     [注意: 1979 行还有一份相同选择器, 这是更晚定义的,会覆盖前者] */
-  background: transparent;
-  border-left: 2px solid var(--color-border-subtle, #ececef);
-  border-radius: 0;
-  padding: 4px 0 4px 10px;
-  color: var(--color-text-primary);
-  /* never truncate — legacy bug clipped dangerous commands at ellipsis */
-}
-.dark .approval-cmd { border-left-color: var(--color-border-subtle, #2c2c32); }
 
-.approval-note {
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.55;
-  color: var(--color-text-tertiary, #888);
-}
 
 /* Pending state — waiting pulse + buttons */
-.approval-foot {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-  padding-top: 2px;
-}
-.approval-btns { display: flex; gap: 8px; }
 .approval-btn-deny,
-.approval-btn-allow {
-  font-size: 12px;
-  font-weight: 500;
-  height: 26px;
-  padding: 0 12px;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: background var(--duration-fast) ease, border-color var(--duration-fast) ease,
-              color var(--duration-fast) ease, transform var(--duration-fast) ease;
-}
-.approval-btn-deny {
-  background: transparent;
-  border: 0.5px solid var(--color-border-secondary, rgba(128,128,128,0.3));
-  color: var(--color-text-secondary);
-}
-.approval-btn-deny:hover:not(:disabled) {
-  background: var(--color-error, #dc2626);
-  border-color: var(--color-error, #dc2626);
-  color: #ffffff;
-}
-.approval-btn-allow {
-  border: 0;
-  background: var(--color-success, #16a34a);
-  color: #fff;
-}
-.approval-btn-allow:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--color-success, #16a34a) 85%, #000);
-}
 .approval-btn-deny:active:not(:disabled),
-.approval-btn-allow:active:not(:disabled) { transform: scale(0.96); }
 .approval-btn-deny:focus-visible,
-.approval-btn-allow:focus-visible {
-  outline: 2px solid var(--color-success, #16a34a);
-  outline-offset: 2px;
-}
 
 /* Resolved state — status badge + one-line text */
-.approval-result {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  padding-top: 2px;
-}
-.approval-badge {
-  display: inline-flex;
-  align-items: center;
-  font-size: 12px;
-  font-weight: 500;
-  padding: 3px 10px;
-  border-radius: 999px;
-}
-.approval-badge.is-ok {
-  background: rgba(75, 122, 94, 0.12);
-  color: #4b7a5e;
-}
-.approval-badge.is-err {
-  background: rgba(198, 40, 40, 0.10);
-  color: #c62828;
-}
-.approval-badge.is-expired {
-  background: var(--color-bg-tertiary, rgba(128,128,128,0.12));
-  color: var(--color-text-secondary);
-}
-.approval-result-text {
-  font-size: 12px;
-  color: var(--color-text-secondary);
-}
 
 /* Legacy class shims — kept so any leftover references in the
    codebase don't error during the migration window; nothing new
    should reference these. */
-.approval-inner { min-width: 0; }
-.approval-tool {
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--color-text-primary);
-  white-space: nowrap;
-}
-.approval-desc {
-  font-size: 11.5px;
-  color: var(--color-text-secondary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.approval-countdown-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 10.5px;
-  font-weight: 500;
-  letter-spacing: 0.01em;
-  color: var(--color-text-secondary, #4a4a50);
-  background: var(--color-bg-tertiary, #ededee);
-  border: 1px solid var(--color-border-subtle, #ececef);
-  padding: 2px 8px;
-  border-radius: 999px;
-  font-variant-numeric: tabular-nums;
-  flex-shrink: 0;
-  white-space: nowrap;
-}
-.dark .approval-countdown-pill {
-  color: var(--color-text-secondary, #c8c8cc);
-  border-color: var(--color-border-subtle, #2c2c32);
-}
 .approval-countdown-pill.is-danger {
   color: var(--color-error, #dc2626);
   background: color-mix(in srgb, var(--color-error, #dc2626) 12%, transparent);
@@ -2439,26 +1832,6 @@
 }
 
 /* Decision state text (after user responds) */
-.approval-decision {
-  font-size: 11.5px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  padding: 3px 12px;
-  border-radius: 999px;
-  white-space: nowrap;
-}
-.approval-decision.is-ok {
-  color: var(--color-success);
-  background: color-mix(in srgb, var(--color-success) 12%, transparent);
-}
-.approval-decision.is-err {
-  color: var(--color-error);
-  background: color-mix(in srgb, var(--color-error) 12%, transparent);
-}
-.approval-decision.is-expired {
-  color: var(--color-text-muted, #888);
-  background: var(--color-bg-tertiary, #ededee);
-}
 
 /* ── Action buttons (pending state) ──
    重做：按钮默认就有实色，不依赖 hover。
@@ -2499,52 +1872,17 @@
 .approval-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* Deny — soft red wash, always visible */
-.approval-btn--deny {
-  background: color-mix(in srgb, var(--color-error, #dc2626) 10%, transparent);
-  border-color: color-mix(in srgb, var(--color-error, #dc2626) 30%, transparent);
-  color: var(--color-error, #dc2626);
-}
-.approval-btn--deny:hover:not(:disabled) {
-  background: var(--color-error, #dc2626);
-  border-color: var(--color-error, #dc2626);
-  color: #ffffff;
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-error, #dc2626) 15%, transparent);
-}
 
 /* Approve — solid green fill, always visible */
-.approval-btn--ok {
-  background: var(--color-success, #16a34a);
-  border-color: var(--color-success, #16a34a);
-  color: #ffffff;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
-}
-.approval-btn--ok:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--color-success, #16a34a) 85%, #000);
-  border-color: color-mix(in srgb, var(--color-success, #16a34a) 85%, #000);
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.10),
-              0 0 0 3px color-mix(in srgb, var(--color-success, #16a34a) 15%, transparent);
-}
 
 /* ── Decision-state — FLAT, color lives in the pill ──
    卡片无背景; 决策色走 .approval-summary 系列里的 icon + badge. */
 .approval-card--ok,
 .approval-card--deny,
-.approval-card--expired {
-  background: transparent;
-}
 
 /* ── Resolved footer text — spacing only, NO divider line ──
    The old 1px dashed border-top read as a "stitched box". The card's
    own surface + the gap above the footer are enough separation. */
-.approval-footer {
-  margin-top: 10px;
-  font-size: 11.5px;
-  line-height: 1.5;
-  color: var(--color-text-muted, #888);
-}
-.dark .approval-footer {
-  color: var(--color-text-muted, #999);
-}
 
 /* ── Thinking dots (processing gap) ───────────────────────────────
    Three animated dots with staggered delay. Inline flow, sits at
@@ -2575,61 +1913,12 @@
 }
 
 /* ── Old tool message classes (legacy, kept for backward compat) ── */
-.tool-msg {
-  margin: 2px 0;
-}
-.tool-msg-row {
-  display: flex;
-  align-items: center;
-  gap: 0;
-  width: 100%;
-  padding: 3px 8px 3px 6px;
-  border-radius: var(--radius-sm);
-  border: 0;
-  background: transparent;
-  text-align: left;
-  transition: background var(--duration-fast) ease;
-  line-height: 1;
-}
-.tool-msg-row:hover:not(:disabled) { background: var(--color-bg-tertiary); }
-.tool-msg-row:disabled:hover { background: transparent; }
-.tool-msg--running .tool-msg-row {
-  position: relative;
-  background: color-mix(in srgb, var(--color-accent) 4%, transparent);
-  padding-left: 10px;
-  margin-left: -2px;
-}
-.tool-msg--running .tool-msg-row::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 3px;
-  bottom: 3px;
-  width: 2px;
-  border-radius: 2px;
-  background: var(--color-accent);
-  animation: tool-row-pulse-bar 1.4s ease-in-out infinite;
-}
 @keyframes tool-row-pulse-bar {
   0%, 100% { opacity: 0.55; }
   50%      { opacity: 1; }
 }
 
 /* ── Status note (chip) ── */
-.status-note {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 10px 3px 8px;
-  margin-left: 16px;
-  font-size: 11px;
-  font-style: italic;
-  color: var(--color-text-muted);
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--radius-full);
-}
-.status-note svg { color: var(--color-text-faint); flex-shrink: 0; }
 
 /* ════════════════════════════════════════════════════════════════════
    审批卡 — 严格两行布局 (主人: "看起来很乱" → 砍层级)
@@ -2646,13 +1935,13 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 11px 14px;
+  gap: 14px;
+  padding: 12px 16px;
 }
 .apv-info {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   flex: 1;
   min-width: 0;
   /* 允许 intent 长文本收缩截断, 不挤压按钮组 */
@@ -2678,7 +1967,7 @@
   color: var(--color-warning, #d97706);
 }
 .apv-tool-name {
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 12.5px;
   font-weight: 600;
   color: var(--color-text-primary, #1a1a1a);
@@ -2702,7 +1991,7 @@
 }
 .apv-btns {
   display: flex;
-  gap: 6px;
+  gap: 8px;
   flex-shrink: 0;
 }
 .apv-deny,
@@ -2773,13 +2062,6 @@
   background: color-mix(in srgb, var(--color-btn-primary-bg, #1a1a1a) 8%, transparent);
   border-color: var(--color-btn-primary-bg, #1a1a1a);
 }
-.dark .apv-always {
-  color: var(--color-btn-primary-text, #ffffff);
-  border-color: color-mix(in srgb, var(--color-btn-primary-text, #ffffff) 30%, transparent);
-}
-.dark .apv-always:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--color-btn-primary-text, #ffffff) 10%, transparent);
-}
 
 /* ── 第 2 行: 命令块 (仅命令文本, 标题栏/复制已移除) ───────────── */
 .apv-cmd {
@@ -2795,7 +2077,7 @@
 .apv-cmd-pre {
   margin: 0;
   padding: 11px 14px;
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.6;
   white-space: pre-wrap;
@@ -2807,14 +2089,282 @@
 
 /* 暗色适配 — 用 dark 主题真定义的 token (--color-border-subtle 等),
    不依赖未定义的 --color-bg-quaternary */
-.dark .approval-card {
-  border-color: var(--color-border-subtle, #343434);
-  background: var(--color-bg-secondary, #232328);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
-}
-.dark .apv-tool-icon { background: var(--color-bg-tertiary, #383838); }
-.dark .apv-cmd { border-color: var(--color-border-subtle, #343434); }
-.dark .apv-cmd-pre { background: var(--color-bg-primary, #1c1c20); }
-.dark .apv-foot { border-top-color: var(--color-border-primary, #3a3a40); }
-.dark .apv-deny { background: var(--color-bg-primary, #1c1c20); }
 
+/* ════════════════════════════════════════════════════════════════════
+   § 19.  APPROVAL BATCH — 现代重设计 (2026-08-30)
+   ──────────────────────────────────────────────────────────────────
+   5 层信息架构: 头(标签+风险+项数) → 动词+目标 → 文件块 → diff 折叠 → 决策区.
+   旧 .apv-decision-row / .apv-info / .apv-btns / .apv-allow / .apv-deny /
+   .apv-always 类保留不动, 供 ApprovalBubble 复用 — ApprovalBubble
+   同步改造留作下轮. 新类用 apv-shell / apv-header / 等前缀. */
+
+.apv-shell {
+  padding: 14px 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* ① Header */
+.apv-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.apv-header-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.apv-header-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-text-muted, #71717a);
+}
+.apv-header-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--color-text-faint, #a1a1aa);
+}
+.apv-header-sep { color: var(--color-text-faint, #d4d4d8); }
+.apv-header-count { font-variant-numeric: tabular-nums; }
+
+/* Risk chip — 复用 ApprovalBubble 既有 .approval-pill 配色哲学 */
+.risk-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  line-height: 1.5;
+}
+.risk-chip.is-dangerous {
+  color: var(--color-error, #dc2626);
+  background: color-mix(in srgb, var(--color-error, #dc2626) 12%, transparent);
+}
+.risk-chip.is-caution {
+  color: var(--color-warning, #d97706);
+  background: color-mix(in srgb, var(--color-warning, #d97706) 12%, transparent);
+}
+.risk-chip.is-safe {
+  color: var(--color-success, #16a34a);
+  background: color-mix(in srgb, var(--color-success, #16a34a) 12%, transparent);
+}
+
+/* ② Verb row */
+.apv-verb-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 2px 0 2px;
+}
+.apv-verb {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-text-primary, #0f0f12);
+  letter-spacing: -0.005em;
+}
+.apv-target {
+  font-size: 13px;
+  color: var(--color-text-muted, #71717a);
+  font-family: var(--font-mono);
+}
+
+/* ③ File block */
+.apv-file-block {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  background: var(--color-bg-secondary, #fafafa);
+  border: 1px solid var(--color-border-subtle, #ececef);
+  border-radius: 7px;
+}
+.apv-file-path {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--color-text-primary, #0f0f12);
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.apv-file-stats {
+  font-size: 11px;
+  color: var(--color-text-faint, #a1a1aa);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* ④ Diff toggle */
+.apv-diff-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 9px;
+  background: transparent;
+  border: 1px dashed var(--color-border-primary, #e4e4e7);
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--color-text-secondary, #52525b);
+  cursor: pointer;
+  align-self: flex-start;
+  transition: background var(--duration-fast, 120ms) ease,
+              border-color var(--duration-fast, 120ms) ease,
+              color var(--duration-fast, 120ms) ease;
+}
+.apv-diff-toggle:hover {
+  background: var(--color-bg-hover, #f0f0f2);
+  border-color: var(--color-border-secondary, #d4d4d8);
+  color: var(--color-text-primary, #0f0f12);
+}
+.apv-diff-toggle:focus-visible {
+  outline: 2px solid var(--color-accent, #1a1a1a);
+  outline-offset: 2px;
+}
+.apv-diff-content {
+  padding: 9px 11px;
+  background: var(--color-bg-secondary, #fafafa);
+  border: 1px solid var(--color-border-subtle, #ececef);
+  border-radius: 6px;
+  animation: apv-diff-enter var(--duration-fast, 120ms) ease-out both;
+}
+.apv-diff-placeholder {
+  font-size: 12px;
+  color: var(--color-text-faint, #a1a1aa);
+  font-style: italic;
+  line-height: 1.55;
+}
+/* .apv-cmd-pre 嵌套在 .apv-diff-content 时由外层容器接管 padding/bg,
+   避免双重 padding + 双背景. */
+.apv-diff-content .apv-cmd-pre {
+  padding: 0;
+  background: transparent;
+}
+/* Batch diff stacking — 每个文件一块, 上方贴个文件头. */
+.apv-diff-block + .apv-diff-block {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--color-border-subtle, #ececef);
+}
+.apv-diff-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.apv-diff-file {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--color-text-primary, #0f0f12);
+}
+.apv-diff-kind {
+  font-size: 11px;
+  color: var(--color-text-faint, #a1a1aa);
+}
+@keyframes apv-diff-enter {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .apv-diff-content { animation: none; }
+}
+
+/* ⑤ Actions */
+.apv-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--color-border-subtle, #ececef);
+}
+.apv-shortcut {
+  font-size: 11px;
+  color: var(--color-text-faint, #a1a1aa);
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.apv-shortcut kbd {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  padding: 1px 5px;
+  border: 1px solid var(--color-border-primary, #e4e4e7);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--color-bg-primary, #ffffff);
+  color: var(--color-text-secondary, #52525b);
+  margin-right: 3px;
+}
+.apv-btns {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* Buttons — 现代化替换 .apv-allow/.apv-deny/.apv-always;
+   ApprovalBubble 仍用旧类 (下轮再同步改造). */
+.apv-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 30px;
+  min-width: 72px;
+  padding: 0 14px;
+  border-radius: var(--radius-md, 6px);
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1;
+  font-family: inherit;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: background var(--duration-fast, 120ms) ease,
+              border-color var(--duration-fast, 120ms) ease,
+              color var(--duration-fast, 120ms) ease,
+              transform var(--duration-fast, 120ms) ease,
+              box-shadow var(--duration-fast, 120ms) ease;
+}
+.apv-btn:active:not(:disabled) { transform: scale(0.96); }
+.apv-btn:focus-visible {
+  outline: 2px solid var(--color-accent, #1a1a1a);
+  outline-offset: 2px;
+}
+.apv-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.apv-btn-primary {
+  background: var(--color-btn-primary-bg, #1a1a1a);
+  border-color: var(--color-btn-primary-bg, #1a1a1a);
+  color: var(--color-btn-primary-text, #ffffff);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+.apv-btn-primary:hover:not(:disabled) {
+  background: var(--color-btn-primary-hover, #000000);
+  border-color: var(--color-btn-primary-hover, #000000);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.14);
+}
+
+.apv-btn-danger {
+  background: var(--color-bg-primary, #ffffff);
+  border-color: color-mix(in srgb, var(--color-error, #dc2626) 35%, transparent);
+  color: var(--color-error, #dc2626);
+}
+.apv-btn-danger:hover:not(:disabled) {
+  background: var(--color-error, #dc2626);
+  border-color: var(--color-error, #dc2626);
+  color: #ffffff;
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-error, #dc2626) 14%, transparent);
+}

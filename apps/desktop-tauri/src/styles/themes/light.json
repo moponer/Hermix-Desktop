@@ -1,7 +1,7 @@
 {
   "id": "light",
   "label": "青墨",
-  "description": "中性石墨纸面 + 靛蓝强调",
+  "description": "暖米纸面 + 陶土棕强调 + Liquid Glass 浮层",
   "builtin": true,
   "colorScheme": "light"
 }

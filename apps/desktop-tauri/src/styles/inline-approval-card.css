@@ -59,12 +59,8 @@
   overflow: hidden;
   line-height: 1.3;
 }
-.dark .approval-tool-pill {
-  background: var(--color-bg-tertiary, #2e2e34);
-  color: var(--color-text-primary, #e4e4e7);
-}
 .approval-tool-pill .font-mono {
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-family: var(--font-mono);
   font-weight: 500;
   font-size: 10.5px;
 }
@@ -96,9 +92,6 @@
   color: var(--color-text-muted, #777);
   background: var(--color-bg-tertiary, #ededee);
 }
-.dark .approval-pill-expired {
-  background: var(--color-bg-tertiary, #2e2e34);
-}
 
 /* Risk-level badge (高危/中危/低危) */
 .approval-pill-dangerous {
@@ -125,7 +118,7 @@
 .approval-args-text {
   flex: 1 1 auto;
   min-width: 0;
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 10.5px;
   color: var(--color-text-secondary, #52525b);
   background: var(--color-bg-primary, #ffffff);
@@ -137,10 +130,6 @@
   white-space: nowrap;
   max-width: 100%;
   line-height: 1.4;
-}
-.dark .approval-args-text {
-  background: var(--color-bg-primary, #1c1c20);
-  border-color: var(--color-border-subtle, #2c2c32);
 }
 
 .approval-actions {
@@ -183,10 +172,6 @@
     margin-top 280ms ease 60ms,
     padding-top 280ms ease 60ms,
     border-top-width 280ms ease 60ms;
-}
-.dark .approval-resolved-footer {
-  border-top-color: var(--color-border-subtle, #2c2c32);
-  color: var(--color-text-muted, #999);
 }
 .approval-resolved-footer:not(.is-hidden) {
   margin-top: 6px;
@@ -270,9 +255,6 @@
   padding: 6px 10px;
   color: var(--color-text-secondary, #555);
 }
-.dark .approval-args-text.is-resolved {
-  color: var(--color-text-secondary, #b8b8bc);
-}
 
 /* ── §3a. Action buttons — BIG & high-contrast ─────────────────────
    按钮绝不能做成透明 / 11.5px 灰字的幽灵样式 (否则鼠标不在上面时
@@ -317,24 +299,24 @@
   transform: scale(0.96);
 }
 .approval-btn:focus-visible {
-  outline: 2px solid var(--color-accent, #475569);
+  outline: 2px solid var(--color-accent);
   outline-offset: 2px;
 }
 .approval-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* Primary action — solid accent fill, on-accent text */
 .approval-btn-approve {
-  background: var(--color-btn-primary-bg, #475569);
-  border-color: var(--color-btn-primary-bg, #475569);
+  background: var(--color-btn-primary-bg);
+  border-color: var(--color-btn-primary-bg);
   color: var(--color-btn-primary-text, #ffffff);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08),
-              0 0 0 0 color-mix(in srgb, var(--color-accent, #475569) 30%, transparent);
+              0 0 0 0 color-mix(in srgb, var(--color-accent) 30%, transparent);
 }
 .approval-btn-approve:hover:not(:disabled) {
   background: var(--color-btn-primary-hover, #334155);
   border-color: var(--color-btn-primary-hover, #334155);
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.10),
-              0 0 0 4px color-mix(in srgb, var(--color-accent, #475569) 18%, transparent);
+              0 0 0 4px color-mix(in srgb, var(--color-accent) 18%, transparent);
 }
 
 /* Danger action — soft red wash but always present, even pre-hover */
@@ -361,11 +343,6 @@
   background: var(--color-bg-hover, #f0f0f2);
   border-color: var(--color-border-secondary, #d4d4d8);
 }
-.dark .approval-btn-secondary {
-  background: var(--color-bg-primary, #1c1c20);
-  border-color: var(--color-border-primary, #2e2e32);
-}
-
 
 .msg-card.approval-card {
   /* 内嵌审批卡同样收窄到 520px，与 MessageBubble 版审批卡对齐。 */
@@ -412,7 +389,7 @@
   font-weight: 600;
 }
 .denial-banner__title code {
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   padding: 0 4px;
   border-radius: 4px;

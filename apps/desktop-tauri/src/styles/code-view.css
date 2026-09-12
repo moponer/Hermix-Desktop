@@ -21,6 +21,14 @@
      · 行号当前行高亮 = CSS-only：[data-active-line="N"] ~ .code-ln[data-line="N"]
 
    参照：lucide-react 官网代码区 / shadcn-ui-docs / Linear。
+
+   ────────────────────────────────────────────────────────────────────
+   ⚠️ 级联契约：本文件的组件类（`.preview-head` / `.preview-filename` /
+   `.preview-lang` / `.preview-path` / `.head-action` / `.preview-body` 等）
+   拥有各自元素的视觉属性。不要在 markup 中给这些元素叠加同属性
+   Tailwind utility（例如不要给 `.preview-filename` 加 `text-base`）——
+   Tailwind utility 优先级高于普通组件选择器，会无声覆盖。
+   如果真要覆盖，请在组件选择器下加 `:where(...)` 显式降权。
    ════════════════════════════════════════════════════════════════════ */
 
 /* ── 文件图标磁贴（保留） ──────────────────────────────────────── */
@@ -44,17 +52,17 @@
   pointer-events: none;
   background: transparent;
 }
-.file-icon-tile svg { color: #fff !important; }
+.file-icon-tile svg { color: #fff; }
 
 /* ════════════════════════════════════════════════════════════════════
    头部 — 保留两行结构
    ════════════════════════════════════════════════════════════════════ */
 
 .preview-pane .preview-head {
-  display: flex !important;
-  flex-direction: column !important;
-  gap: 0 !important;
-  padding: 18px 22px 14px !important;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 18px 22px 14px;
   /* Gradient header — auto-adapts: in dark mode bg-code-header is
      a deeper shade, in light mode it's a soft cream. The 1px
      bottom border uses a slightly tinted color so it reads as
@@ -63,13 +71,13 @@
     180deg,
     color-mix(in srgb, var(--color-bg-code-header) 100%, transparent) 0%,
     color-mix(in srgb, var(--color-bg-code-header) 88%, var(--color-bg-primary)) 100%
-  ) !important;
+  );
   border-bottom: 1px solid color-mix(
     in srgb,
     var(--color-border-subtle) 70%,
     transparent
   );
-  font-family: var(--font-family-primary, "Inter", system-ui, sans-serif) !important;
+  font-family: var(--font-sans);
   flex-shrink: 0;
   position: relative;
 }
@@ -91,49 +99,49 @@
   pointer-events: none;
 }
 .preview-pane .preview-head.is-fullscreen {
-  padding: 14px 28px !important;
+  padding: 14px 28px;
 }
 
 /* Row 1: icon · name · lang · spacer · close */
 .preview-pane .preview-head-row1 {
-  display: flex !important;
-  align-items: center !important;
-  gap: 12px !important;
+  display: flex;
+  align-items: center;
+  gap: 12px;
   min-height: 32px;
 }
-.preview-pane .preview-head-spacer { flex: 1 1 auto !important; min-width: 8px; }
+.preview-pane .preview-head-spacer { flex: 1 1 auto; min-width: 8px; }
 
 /* 文件名 — 升级到 14px / 600，对齐 VS Code 标签栏字号
    保留字重对比但不再"小字"——标题信息需做美化处理 */
 .preview-pane .preview-filename {
-  font-size: 14px !important;
-  font-weight: 600 !important;
+  font-size: 14px;
+  font-weight: 600;
   color: var(--color-text-primary);
   letter-spacing: -0.01em;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   line-height: 1.25;
-  font-family: inherit !important;
+  font-family: inherit;
   min-width: 0;
 }
 
 /* 语言徽章 — 升级为带边框的精致 chip */
 .preview-pane .preview-lang {
-  display: inline-flex !important;
-  align-items: center !important;
-  gap: 5px !important;
-  padding: 3px 9px 3px 7px !important;
-  margin: 0 !important;
-  background: color-mix(in srgb, var(--color-info) 12%, transparent) !important;
-  color: var(--color-info) !important;
-  font-size: 10px !important;
-  font-weight: 600 !important;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px 3px 7px;
+  margin: 0;
+  background: color-mix(in srgb, var(--color-info) 12%, transparent);
+  color: var(--color-info);
+  font-size: 10px;
+  font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   border-radius: 999px;
   border: 1px solid color-mix(in srgb, var(--color-info) 22%, transparent);
-  font-family: inherit !important;
+  font-family: inherit;
   flex-shrink: 0;
   line-height: 1.3;
   /* subtle inner highlight for premium feel */
@@ -149,22 +157,22 @@
 
 /* Row 2: path · action group */
 .preview-pane .preview-head-row2 {
-  display: flex !important;
-  align-items: center !important;
-  gap: 10px !important;
-  margin-top: 8px !important;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
   min-height: 24px;
 }
 
 /* 路径：单行省略 + 改进 hover */
 .preview-pane .preview-path {
-  flex: 1 1 auto !important;
+  flex: 1 1 auto;
   min-width: 0;
-  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace !important;
-  font-size: 11px !important;
-  font-weight: 400 !important;
-  color: color-mix(in srgb, var(--color-info) 78%, var(--color-text-muted)) !important;
-  text-decoration: none !important;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 400;
+  color: color-mix(in srgb, var(--color-info) 78%, var(--color-text-muted));
+  text-decoration: none;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -185,29 +193,29 @@
   line-height: 1;
 }
 .preview-pane .preview-path:hover {
-  color: var(--color-info) !important;
-  text-decoration: underline !important;
+  color: var(--color-info);
+  text-decoration: underline;
   text-decoration-color: color-mix(in srgb, var(--color-info) 50%, transparent);
   text-underline-offset: 3px;
 }
 
 /* 操作按钮组 */
 .preview-pane .preview-head-actions {
-  display: flex !important;
-  align-items: center !important;
-  gap: 4px !important;
+  display: flex;
+  align-items: center;
+  gap: 4px;
   flex-shrink: 0;
 }
 
 /* 行数/大小 元信息 */
 .preview-pane .preview-stats {
-  display: inline-flex !important;
-  align-items: center !important;
-  gap: 4px !important;
-  font-size: 10px !important;
-  font-weight: 400 !important;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 400;
   color: var(--color-text-faint);
-  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace !important;
+  font-family: var(--font-mono);
   letter-spacing: 0.01em;
   margin-right: 4px;
 }
@@ -215,9 +223,9 @@
 
 /* 头部动作按钮 */
 .preview-pane .head-action {
-  display: inline-flex !important;
-  align-items: center !important;
-  justify-content: center !important;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 26px;
   height: 26px;
   border-radius: 6px;
@@ -229,7 +237,7 @@
     background var(--duration-fast) ease,
     color var(--duration-fast) ease,
     transform var(--duration-fast) ease;
-  font-family: inherit !important;
+  font-family: inherit;
 }
 .preview-pane .head-action:hover {
   background: color-mix(in srgb, var(--color-text-faint) 18%, transparent);
@@ -297,8 +305,11 @@
   opacity: 0.85;
 }
 
+/* !important 必要：上一条规则 `(0,4,0)` 比本条 `(0,3,0)` 优先级更高，
+   必须用 !important 才能让鼠标 hover 在按钮上时 opacity 跳到 1，
+   否则会停留在 0.85。文件其他位置已无 !important。 */
 .preview-pane .code-copy-btn:hover {
-  opacity: 1 !important;
+  opacity: 1;
   background: var(--color-bg-hover);
 }
 
@@ -414,15 +425,15 @@
    状态栏
    ════════════════════════════════════════════════════════════════════ */
 .preview-pane .code-status {
-  display: flex !important;
-  align-items: center !important;
-  gap: 12px !important;
-  height: 22px !important;
-  padding: 0 12px !important;
-  background: var(--color-bg-code-header, var(--color-bg-tertiary)) !important;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 22px;
+  padding: 0 12px;
+  background: var(--color-bg-code-header, var(--color-bg-tertiary));
   border-top: 1px solid var(--color-border-subtle);
-  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-  font-size: 10px !important;
+  font-family: var(--font-mono);
+  font-size: 10px;
   color: var(--color-text-faint);
   flex-shrink: 0;
 }
@@ -439,12 +450,12 @@
    全屏覆盖层
    ════════════════════════════════════════════════════════════════════ */
 .preview-fullscreen {
-  position: fixed !important;
-  inset: 0 !important;
-  z-index: 60 !important;
-  display: flex !important;
-  flex-direction: column !important;
-  background: var(--color-bg-primary) !important;
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg-primary);
 }
 
 /* Body of the preview pane — slight top-shadow to visually
@@ -492,43 +503,43 @@
   50% { opacity: 1; }
 }
 .preview-fullscreen-body {
-  flex: 1 1 auto !important;
-  display: flex !important;
-  flex-direction: column !important;
-  min-height: 0 !important;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 .preview-fullscreen-scroll {
-  flex: 1 1 auto !important;
-  overflow: auto !important;
-  min-height: 0 !important;
+  flex: 1 1 auto;
+  overflow: auto;
+  min-height: 0;
 }
 
 /* Office iframe must fill its flex parent — block + height:100% defeats
    the inline-baseline gap that would otherwise leave a 4px strip. */
 .preview-fullscreen-scroll > div,
 .preview-pane-inner > div:has(> iframe) {
-  display: flex !important;
-  flex-direction: column !important;
-  height: 100% !important;
-  min-height: 0 !important;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
 }
 .preview-fullscreen-scroll iframe,
 .preview-pane-inner iframe {
-  display: block !important;
-  flex: 1 1 auto !important;
-  width: 100% !important;
-  height: 100% !important;
-  min-height: 0 !important;
+  display: block;
+  flex: 1 1 auto;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
 }
 
 /* ════════════════════════════════════════════════════════════════════
    图片预览 — 居中、可缩放、棋盘格背景显示透明通道
    ════════════════════════════════════════════════════════════════════ */
 .preview-pane .preview-image-stage {
-  flex: 1 1 auto !important;
-  display: flex !important;
-  align-items: center !important;
-  justify-content: center !important;
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   /* Checkered background — exposes alpha channel for PNG/WebP,
      common case for screenshots / icons.  12px squares are a
      good balance between visible alpha and not-busy. */
@@ -548,19 +559,19 @@
       color-mix(in srgb, var(--color-text-faint) 12%, transparent) 75%);
   background-size: 16px 16px;
   background-position: 0 0, 0 8px, 8px -8px, -8px 0;
-  padding: 24px !important;
-  overflow: auto !important;
-  min-height: 0 !important;
+  padding: 24px;
+  overflow: auto;
+  min-height: 0;
 }
 .preview-pane .preview-image-img {
   /* `max-width: 100%` so wide screenshots don't blow out the
      modal; `max-height: 100%` so portraits don't push the
      status bar off-screen.  Object-fit keeps aspect ratio. */
-  max-width: 100% !important;
-  max-height: 100% !important;
-  width: auto !important;
-  height: auto !important;
-  display: block !important;
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  display: block;
   border-radius: 4px;
   box-shadow:
     0 4px 12px rgba(0, 0, 0, 0.18),
@@ -574,16 +585,16 @@
    仿 GitHub README 排版，但主题色直接走 modal 文本色
    ════════════════════════════════════════════════════════════════════ */
 .preview-pane .preview-md-host {
-  flex: 1 1 auto !important;
-  overflow: auto !important;
-  min-height: 0 !important;
+  flex: 1 1 auto;
+  overflow: auto;
+  min-height: 0;
   background: var(--color-bg-code);
 }
 .preview-pane .preview-md-body {
   max-width: 780px;
   margin: 0 auto;
   padding: 32px 40px 64px;
-  font-family: var(--font-family-primary, "Inter", system-ui, sans-serif);
+  font-family: var(--font-sans);
   font-size: 14px;
   line-height: 1.7;
   color: var(--color-text-primary);
@@ -763,7 +774,7 @@
    ════════════════════════════════════════════════════════════════════ */
 
 .computer-tab {
-  font-family: var(--font-family-primary, "Inter", system-ui, sans-serif);
+  font-family: var(--font-sans);
 }
 
 /* ── Toolbar ──────────────────────────────────────────────── */

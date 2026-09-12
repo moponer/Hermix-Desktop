@@ -1,104 +1,105 @@
 /* ════════════════════════════════════════════════════════════════════
-   Sunset — 「熔金 Molten」（亮色族）
+   Sunset — 「晚霞 Dusk Ember」（暗色族）
    ──────────────────────────────────────────────────────────────────
-   奶油纸面 + 落日橙 hero。v2 修正：恢复微暖白卡片拉开明度层次
-   （上一版全面去白导致结构发糊），文字轴改 stone 暖炭与底色同族，
-   hero 只允许出现在主按钮/链接/焦点态。
+   深暖褐黑画布 + 霞橙 hero。2026-08-31 由浅色奶油纸面改为暗色系：
+   与青墨(燕麦浅暖)/玄铁(冷深灰)/深林(深绿)拉开性格，填补"深色暖调"空缺。
+   色轴：深暖褐做面（全中性带黄底调），文字暖白，霞橙只出现在
+   主按钮/链接/焦点态（沿用"唯一饱和来源"纪律）。
    ════════════════════════════════════════════════════════════════════ */
 :root[data-theme="sunset"]:root {
-  /* Surfaces — 明度阶梯 */
-  --color-bg-app: #efe5d2;
-  --color-bg-primary: #fffdf8;
-  --color-bg-secondary: #faf4ea;
-  --color-bg-tertiary: #f0e7d6;
-  --color-bg-quaternary: #ddd0b7;
-  --color-bg-hover: #f3ecdd;
-  --color-bg-active: #e9decb;
-  --color-bg-card: #fffdf8;
-  --color-bg-card-hover: #faf4e9;
-  --color-bg-elevated: #fffcf5;
-  --color-bg-inset: #ede3d1;
-  --color-bg-input: #fffefb;
-  --color-bg-base: #f9f4eb;
+  /* Surfaces — 明度阶梯（深暖褐，层间 4-8 级微妙过渡） */
+  --color-bg-app: #1d1915;
+  --color-bg-primary: #26211b;
+  --color-bg-secondary: #2b251e;
+  --color-bg-tertiary: #332c23;
+  --color-bg-quaternary: #3d3428;
+  --color-bg-hover: #2f2820;
+  --color-bg-active: #393026;
+  --color-bg-card: #26211b;
+  --color-bg-card-hover: #2d261e;
+  --color-bg-elevated: #2a241d;
+  --color-bg-inset: #211c17;
+  --color-bg-input: #241f19;
+  --color-bg-base: #221d18;
 
   /* Code / chat */
-  --color-bg-code: #f1e8d7;
-  --color-bg-code-header: #f7f1e3;
-  --color-bg-code-border: #ddd2bc;
-  --color-chat-assistant-bg: #fffdf8;
-  --color-chat-tool-bg: #f7f1e4;
-  --color-chat-terminal-bg: #211d19;
+  --color-bg-code: #2e271f;
+  --color-bg-code-header: #332b22;
+  --color-bg-code-border: #463b2b;
+  --color-chat-assistant-bg: #26211b;
+  --color-chat-tool-bg: #2b241c;
+  --color-chat-terminal-bg: #120f0c;
 
   /* Borders */
-  --color-border-subtle: #efe7d6;
-  --color-border-primary: #e3d8c1;
-  --color-border-secondary: #d0c2a4;
-  --color-border: #cec0a2;
-  --color-border-strong: #292524;
+  --color-border-subtle: #332c23;
+  --color-border-primary: #3e3529;
+  --color-border-secondary: #4d4231;
+  --color-border: #544836;
+  --color-border-strong: #e8dcc4;
 
-  /* Text — warm stone 轴 */
-  --color-text-primary: #292524;
-  --color-text-secondary: #57534e;
-  --color-text-tertiary: #78716c;
-  --color-text-muted: #8f887c;
-  --color-text-faint: #aaa196;
-  --color-text-on-code: #30291f;
+  /* Text — 暖白轴 */
+  --color-text-primary: #e8e0d2;
+  --color-text-secondary: #b8ac98;
+  --color-text-tertiary: #968a76;
+  --color-text-muted: #7d7260;
+  --color-text-faint: #645b4c;
+  --color-text-on-code: #e0d6c2;
 
-  /* Accent — 落日橙 */
-  --color-accent: #e0620d;
-  --color-accent-hover: #c45105;
+  /* Accent — 霞橙 */
+  --color-accent: #e0701c;
+  --color-accent-hover: #c85e10;
   --color-accent-on-text: #ffffff;
-  --color-accent-soft: rgba(224, 98, 13, 0.10);
-  --color-accent-soft-strong: rgba(224, 98, 13, 0.18);
+  --color-accent-soft: rgba(224, 112, 28, 0.16);
+  --color-accent-soft-strong: rgba(224, 112, 28, 0.24);
 
   /* Link */
-  --color-link: #c2410c;
-  --color-link-hover: #9a3412;
-  --color-link-soft: #8f887c;
-  --color-link-soft-hover: #c2410c;
+  --color-link: #e0701c;
+  --color-link-hover: #ff8a3d;
+  --color-link-soft: #968a76;
+  --color-link-soft-hover: #e0701c;
 
-  /* Semantic 四色组（hue 全部暖化与底色同族） */
-  --color-success: #15803d;
-  --color-success-soft: rgba(21, 128, 61, 0.11);
-  --color-error: #dc2626;
-  --color-error-soft: rgba(220, 38, 38, 0.10);
-  --color-warning: #b45309;
-  --color-warning-soft: rgba(180, 83, 9, 0.12);
-  --color-text-warning: #b45309;
-  --color-info: #857260;
-  --color-info-soft: rgba(133, 114, 96, 0.12);
+  /* Semantic 四色组（暗底用亮化版保证对比度） */
+  --color-success: #34a35e;
+  --color-success-soft: rgba(52, 163, 94, 0.16);
+  --color-error: #e5484d;
+  --color-error-soft: rgba(229, 72, 77, 0.16);
+  --color-warning: #d97706;
+  --color-warning-soft: rgba(217, 119, 6, 0.18);
+  --color-text-warning: #d97706;
+  --color-info: #b8ac98;
+  --color-info-soft: rgba(184, 172, 152, 0.14);
 
   /* Status chips */
-  --color-chip-model-bg: rgba(224, 98, 13, 0.11);
-  --color-chip-model-fg: #9a4708;
-  --color-chip-workspace-bg: rgba(21, 128, 61, 0.10);
-  --color-chip-workspace-fg: #166534;
-  --color-chip-permission-bg: rgba(180, 130, 40, 0.14);
-  --color-chip-permission-fg: #8a5a08;
+  --color-chip-model-bg: rgba(224, 112, 28, 0.18);
+  --color-chip-model-fg: #ff9a4d;
+  --color-chip-workspace-bg: rgba(52, 163, 94, 0.16);
+  --color-chip-workspace-fg: #5cc584;
+  --color-chip-permission-bg: rgba(217, 119, 6, 0.18);
+  --color-chip-permission-fg: #e8a23d;
 
   /* Overlay */
-  --color-overlay-scrim: rgba(41, 37, 36, 0.42);
-  --color-modal-outline: rgba(41, 37, 36, 0.07);
+  --color-overlay-scrim: rgba(0, 0, 0, 0.55);
+  --color-modal-outline: rgba(255, 255, 255, 0.08);
 
   /* Buttons */
-  --color-btn-primary-bg: #e0620d;
+  --color-btn-primary-bg: #e0701c;
   --color-btn-primary-text: #ffffff;
-  --color-btn-primary-hover: #c45105;
+  --color-btn-primary-hover: #c85e10;
   --color-btn-secondary-bg: transparent;
-  --color-btn-secondary-text: #57534e;
-  --color-btn-secondary-hover: #f0e7d6;
+  --color-btn-secondary-text: #b8ac98;
+  --color-btn-secondary-hover: #332c23;
   --color-btn-ghost-bg: transparent;
-  --color-btn-ghost-text: #78716c;
-  --color-btn-ghost-hover: rgba(224, 98, 13, 0.07);
+  --color-btn-ghost-text: #968a76;
+  --color-btn-ghost-hover: rgba(224, 112, 28, 0.10);
 
-  /* Shadows（暖色阴影比纯黑柔和） */
+  /* Shadows（暗色主题阴影加深，浮层靠亮度对比） */
   --shadow-card: none;
-  --shadow-pop: 0 4px 12px rgba(87, 60, 32, 0.09), 0 2px 4px rgba(87, 60, 32, 0.05);
-  --shadow-modal: 0 20px 56px rgba(87, 60, 32, 0.18), 0 8px 22px rgba(87, 60, 32, 0.09);
+  --shadow-pop: 0 4px 12px rgba(0, 0, 0, 0.35), 0 2px 4px rgba(0, 0, 0, 0.20);
+  --shadow-modal: 0 20px 56px rgba(0, 0, 0, 0.55), 0 8px 22px rgba(0, 0, 0, 0.35);
 
-  /* Scene surfaces — 拉大 luma 间距让左右上下分层清晰（侧栏暗框 + 内容亮卡） */
-  --theme-bg-app: #efe5d2;
-  --theme-bg-sidebar: #e8dcc0;
-  --theme-bg-titlebar: #d8c9a8;
-  --theme-bg-chat: #faf2e0;
+  /* Scene surfaces — 深暖褐单色，无层次对比 */
+  --theme-bg-app: #1d1915;
+  --theme-bg-sidebar: #211c17;
+  --theme-bg-titlebar: #171310;
+  --theme-bg-chat: #1d1915;
 }

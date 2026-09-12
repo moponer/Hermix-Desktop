@@ -19,63 +19,19 @@
   font-size: 0.85em;
 }
 
-.inline-thinking-dot--gap {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 4px 0 2px 0;
-  padding: 0;
-  width: fit-content;
-}
 
-.inline-thinking-dot--quiet {
-  opacity: 0.45;
-}
 
-.inline-thinking-dot--warning {
-  color: var(--color-text-warning, #ca8a04);
-}
 
-.inline-thinking-dot--sm {
-  gap: 6px;
-  font-size: 0.78em;
-}
 
 /* ── Three-dot pulse ──────────────────────────────────────────── */
-.inline-thinking-dot__dots {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-}
 
-.inline-thinking-dot__dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: currentColor;
-  animation: h-dot-pulse 1.4s ease-in-out infinite;
-}
 
-.inline-thinking-dot--sm .inline-thinking-dot__dot {
-  width: 4px;
-  height: 4px;
-}
 
 /* Stagger each dot by 0.2s */
-.inline-thinking-dot__dot:nth-child(1) { animation-delay: 0s; }
-.inline-thinking-dot__dot:nth-child(2) { animation-delay: 0.2s; }
-.inline-thinking-dot__dot:nth-child(3) { animation-delay: 0.4s; }
 
 /* Warning variant: slower pulse */
-.inline-thinking-dot--warning .inline-thinking-dot__dot {
-  animation-duration: 1.8s;
-}
 
 /* Quiet variant: even slower, lower opacity */
-.inline-thinking-dot--quiet .inline-thinking-dot__dot {
-  animation-duration: 2.2s;
-  opacity: 0.6;
-}
 
 @keyframes h-dot-pulse {
   0%, 100% { opacity: 0.25; transform: scale(0.85); }
@@ -83,21 +39,8 @@
 }
 
 /* ── Hint text ────────────────────────────────────────────────── */
-.inline-thinking-dot__hint {
-  font-size: 0.92em;
-  letter-spacing: 0.02em;
-  white-space: nowrap;
-  color: currentColor;
-  opacity: 0.85;
-}
 
-.inline-thinking-dot--gap .inline-thinking-dot__hint {
-  font-size: 0.9em;
-}
 
-.inline-thinking-dot--sm .inline-thinking-dot__hint {
-  font-size: 0.86em;
-}
 
 /* ── Reduced motion ───────────────────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {
@@ -115,29 +58,9 @@
    - 严格只在 StreamingBubble 内部渲染（isStreaming=true）,
      历史消息重载时 isStreaming=false → 根本不渲染此组件,
      自然满足"恢复历史不显示"的边界. */
-.inline-thinking-dot--shimmer .inline-thinking-dot__hint {
-  background-image: linear-gradient(
-    90deg,
-    var(--color-text-muted, #6b7280) 0%,
-    var(--color-text-muted, #6b7280) 35%,
-    var(--color-text-primary, #e5e7eb) 50%,
-    var(--color-text-muted, #6b7280) 65%,
-    var(--color-text-muted, #6b7280) 100%
-  );
-  background-size: 250% 100%;
-  background-position: 100% 0;
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  -webkit-text-fill-color: transparent;
-  animation: h-text-shimmer 1.8s ease-in-out infinite;
-}
 
 @keyframes h-text-shimmer {
   0%   { background-position: 100% 0; }
   100% { background-position: -50% 0; }
 }
 
-.inline-thinking-dot--shimmer {
-  margin-left: 0; /* shimmer 变体不带点, 收紧与前文的距离 */
-}

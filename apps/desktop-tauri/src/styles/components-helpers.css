@@ -6,7 +6,7 @@
   from { opacity: 0; transform: translateY(2px); }
   to   { opacity: 1; transform: translateY(0); }
 }
-.h-enter { animation: h-fade-up var(--duration-fast) ease-out both; }
+.h-enter { animation: h-fade-up var(--duration-fast) var(--ease-out) both; }
 
 @keyframes h-modal-in {
   from { opacity: 0; transform: scale(0.96) translateY(8px); }
@@ -59,10 +59,10 @@
   flex-shrink: 0;
 }
 .prefetch-chip .prefetch-label {
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-family: var(--font-mono);
 }
 .prefetch-chip .prefetch-confidence {
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 10px;
   color: var(--color-text-faint);
 }
@@ -153,7 +153,7 @@
 }
 
 .thought-stream-hint {
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-family: var(--font-mono);
   color: var(--color-text-secondary);
   font-weight: 500;
   letter-spacing: 0.02em;
@@ -174,7 +174,7 @@
   padding: 1px 6px;
   border-radius: var(--radius-full);
   font-size: 10px;
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-family: var(--font-mono);
   color: var(--color-text-muted);
   background: var(--color-bg-primary);
   border: 1px solid var(--color-border-subtle);
@@ -220,17 +220,6 @@
    color, no border, no background. The only visual hint is a subtle
    separator line above so the user can tell where scratch work ends
    and the final reply begins. There is no chevron/collapse UI. */
-.reasoning-inline {
-  /* 思考与正文视觉无差别 — 无 margin / 无 padding / 无分隔线。
-     完全继承 body 的 font-size / line-height / color，
-     让 think 内容像普通段落一样自然流入正文流。 */
-  margin: 0;
-  padding: 0;
-  font-size: inherit;
-  line-height: inherit;
-  color: inherit;
-  white-space: pre-wrap;
-}
 
 /* 不渲染分隔线 — 视觉与正文完全无差别 */
 
@@ -275,64 +264,19 @@
   letter-spacing: 0.02em;
 }
 
-.reasoning-count {
-  font-size: 10.5px;
-  color: var(--color-text-faint);
-  padding: 1px 5px;
-  border-radius: var(--radius-full);
-  background: var(--color-bg-tertiary);
-  opacity: 0.9;
-}
 
 /* reasoning body — left accent rail + soft tint, like a margin note */
-.reasoning-body {
-  background: var(--color-bg-secondary);
-  border-left: 2px solid var(--color-border-secondary);
-  /* 防止长 token(URL / base64 / 代码行 / 文件哈希)横向溢出气泡。思考内容
-     最终会被外层 ProcessTimeline 整体折叠，因此这里不再设置内部滚动。 */
-  word-break: break-word;
-  overflow-wrap: anywhere;
-  max-height: none;
-  overflow: visible;
-  /* MarkdownBody 处理格式化，不需要 pre-wrap */
-  margin-top: 4px;
-  padding: 8px 12px;
-  border-radius: 0 var(--radius-md) var(--radius-md) 0;
-  font-size: 13px;
-  color: var(--color-text-secondary);
-  line-height: 1.6;
-  font-family: inherit;
-}
 /* 缩小 reasoning 内的 prose — 正文 14px，思考 13px */
-.reasoning-body :is(p, li, td, th, blockquote) {
+.tl-reasoning-row :is(li, td, th, blockquote) {
   font-size: 13px;
   line-height: 1.55;
 }
-.reasoning-body :is(h1, h2, h3, h4) {
+.tl-reasoning-row :is(h2, h3, h4) {
   margin-top: 0.5em;
   margin-bottom: 0.3em;
   font-size: 0.95em;
 }
-.reasoning-body pre {
-  font-size: 12px;
-}
 
-.reasoning-bullets {
-  list-style: decimal;
-  margin: 6px 0 0 0;
-  padding: 0 0 0 20px;
-  color: var(--color-text-faint);
-  font-style: italic;
-}
-.reasoning-bullets > .reasoning-bullet {
-  margin: 3px 0;
-  padding-left: 2px;
-}
-.reasoning-bullets > .reasoning-bullet::marker {
-  color: var(--color-text-faint);
-  font-size: 10.5px;
-  font-style: normal;
-}
 
 /* ── 5a-0. Timeline Iterations — 轮次分组系统 ────────── */
 .tl-iterations {
@@ -398,28 +342,12 @@
   opacity: 1;
 }
 
-.tl-process-spinner {
-  animation: tl-process-spin 0.9s linear infinite;
-  color: var(--color-text-faint);
-}
 
 .tl-process-check {
   color: var(--color-text-success, #5a9a6e);
 }
 /* P4-3: warning-tinted icon when any tool in the turn errored */
-.tl-process-check--err {
-  color: var(--color-text-warning, #c97a3a);
-}
 
-.tl-process-pulse {
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--color-accent, #d4a85f);
-  margin-left: 4px;
-  animation: tl-process-pulse 1.4s ease-in-out infinite;
-}
 
 @keyframes tl-process-spin {
   from { transform: rotate(0deg); }
@@ -429,6 +357,31 @@
 @keyframes tl-process-pulse {
   0%, 100% { opacity: 0.4; }
   50%      { opacity: 1; }
+}
+
+/* ── LLM 输出 prose 区域（青墨·主人要求 2026-08-31） ──────
+   主区为浅色时直接铺在主区背景上，不要白底卡片/不要 frosted glass：
+   文字本身就是内容，prose 流应当与对话区背景融合，不该包在任何盒子里。 */
+:root[data-theme="light"] .tl-process-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0;
+  margin: 4px 0;
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  border-radius: 0;
+  box-shadow: none;
+  transition: none;
+}
+:root[data-theme="light"] .tl-process-body:hover {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  :root[data-theme="light"] .tl-process-body { transition: none; }
 }
 
 .tl-process-body {
@@ -447,9 +400,6 @@
 }
 
 /* ── 5a-0b-old. Reasoning Block (legacy) — kept for back-compat ── */
-.tl-reasoning {
-  /* gap 由父 .tl-iteration 管理，这里无需额外 margin */
-}
 
 /* ── 5a-0b1. Reasoning Row — normal message prose ──
    流式时 reasoning 段和正文混在一起流出，视觉上就是一段普通
@@ -473,11 +423,6 @@
   line-height: inherit;
 }
 
-.tl-reasoning-row :is(h1, h2, h3, h4) {
-  margin-top: 0.5em;
-  margin-bottom: 0.3em;
-  font-size: 0.95em;
-}
 
 .tl-reasoning-row pre {
   font-size: 12px;
@@ -561,9 +506,6 @@
   border-radius: 0;
   transition: color var(--duration-fast) ease;
 }
-.chat-tool-call--assistant {
-  background: var(--color-chat-assistant-bg, #ffffff);
-}
 .chat-tool-call--tool {
   background: transparent;
   margin-left: 0;
@@ -588,61 +530,16 @@
    下这些组件仍显示浅色硬编码值, 内容不可见)。 */
 
 /* 消息气泡 - 硬编码白底需换成深色 app 底色 */
-.dark .msg-card,
-.dark .msg-bubble-assistant {
-  color-scheme: dark;
-}
 
 /* ── Timeline Iterations — dark mode ── */
-.dark .tl-text-inner {
-  color: var(--color-text-primary);
-}
-.dark .tl-text-inner--meta {
-  border-top-color: var(--color-border-subtle);
-}
-.dark .reasoning-body {
-  color: var(--color-text-secondary);
-}
 
 /* 用户气泡 — dark mode 用中性炭灰底 + 淡边框，避免 accent 冷灰/蓝味 */
-.dark .msg-bubble-user {
-  background: var(--color-bg-tertiary);
-  border-color: var(--color-border-subtle);
-}
-.dark .msg-bubble-user:hover {
-  background: var(--color-bg-hover);
-}
 
 /* 用户消息附属 (file-pill 等已有独立 dark 规则) */
 
 /* 对话流中 agent-activity pill */
-.dark .agent-activity-pill {
-  color: var(--color-text-secondary);
-  background: var(--color-bg-tertiary);
-}
-.dark .agent-activity[data-state="tools"] .agent-activity-pill {
-  color: var(--color-accent);
-  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
-}
 
 /* ── Tool event cards (tw-msg) ── */
-.dark .tw-msg-row {
-  color: var(--color-text-primary);
-}
-.dark .tw-msg-row:hover,
-.dark .tw-msg-row[data-open="true"],
-.dark .tw-msg-row:focus-visible {
-  /* v8: 弱化 hover 高亮 — var(--color-bg-hover) = #2a2a30 vs card #1c1c20
-     差 14 RGB, 整行亮起太显眼像按钮. 用 6% 主色叠加 + row 内已用
-     8% progress, 视觉上一致且柔和. */
-  background: color-mix(in srgb, var(--color-text-primary) 6%, transparent);
-}
-.dark .tw-msg-main {
-  color: var(--color-text-primary);
-}
-.dark .tw-msg-result-peek {
-  color: var(--color-text-muted);
-}
 /* 工具调用展开后跟正文一样, 没有层次感.
    解法: 输出区用 --color-bg-code (独立背景) + 左 border (rail),
    形成"代码/终端面板"感, 跟 chat 气泡/思考区明显分层. 主题色自动适配
@@ -657,28 +554,18 @@
   transition: background var(--duration-fast) ease,
               border-color var(--duration-fast) ease;
 }
-.dark .tw-msg-output {
-  background: var(--color-bg-code);
-  color: var(--color-text-primary);
-}
 .tw-msg-output-text {
   color: inherit;
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.55;
   white-space: pre-wrap;
   word-break: break-word;
 }
-.dark .tw-msg-output-text {
-  color: inherit;
-}
 .tw-msg-output-empty {
   color: var(--color-text-faint);
   font-family: ui-monospace, Menlo, monospace;
   font-size: 12px;
-}
-.dark .tw-msg-output-empty {
-  color: var(--color-text-faint);
 }
 .tw-msg-output-copy {
   color: var(--color-text-muted);
@@ -689,66 +576,24 @@
   background: var(--color-bg-hover);
   color: var(--color-text-primary);
 }
-.dark .tw-msg-output-copy {
-  color: var(--color-text-muted);
-}
-.dark .tw-msg-output-copy:hover {
-  background: var(--color-bg-hover);
-  color: var(--color-text-primary);
-}
 
 /* ── StreamingBubble meta 行 ── */
-.dark .text-text-faint {
-  color: var(--color-text-faint);
-}
-.dark .text-text-warning {
-  color: var(--color-text-warning);
-}
 
 /* ── ToolEventCard (tool-event-card.css 或这里的 .tool-event-*) ── */
 /* tool-terminal-dot 是 macOS 红绿灯语义色, 不需要改 */
 
 /* ── InlineThinkingDot ── 用 CSS 变量 + fallback, 不需要额外 dark 规则 */
 /* 但 orb 内的 #fff 高光在暗色太亮, 调暗 */
-.dark .inline-thinking-dot__orb-core {
-  /* 保持梯度核心但弱化白色高光 */
-  background: radial-gradient(circle at 30% 30%, rgba(255,255,255,0.6) 0%, var(--color-accent, #cbd5e1) 55%, var(--color-accent, #cbd5e1) 100%);
-}
 
 /* tool terminal 红绿灯 dots 保持原色 (语义色) */
 
 /* ── archive refs banner ── */
-.dark .h-compact {
-  color: var(--color-text-faint);
-}
 
 /* ── 端连接器 (chat-composer-input) ── */
-.dark .h-chat-input {
-  background: var(--color-bg-secondary);
-  border-color: var(--color-border-primary);
-  color: var(--color-text-primary);
-}
-.dark .h-chat-input:focus {
-  border-color: var(--color-accent);
-  box-shadow: 0 0 0 1px var(--color-accent-soft);
-}
-.dark .h-chat-input::placeholder {
-  color: var(--color-text-faint);
-}
 
 /* ── 消息行右侧 copy 按钮 ── */
-.dark .msg-bubble-body button {
-  color: var(--color-text-faint);
-}
-.dark .msg-bubble-body button:hover {
-  color: var(--color-text-primary);
-}
 
 /* ── markdown 段落内联代码 ── */
-.dark .h-inline-code {
-  background: var(--color-bg-tertiary);
-  color: var(--color-text-primary);
-}
 
 /* ── markdown 代码块 ── 用 tokens.css 的 --color-bg-code 和 --color-bg-code-header */
 /* 已由 CSS 变量覆盖 */
@@ -765,170 +610,33 @@
    全部用 token vars — 不写 hardcoded 色, 保证一致性。 */
 
 /* ── Markdown prose container ── */
-.dark .prose {
-  color: var(--color-text-primary);
-}
-.dark .prose a {
-  color: var(--color-link);
-}
-.dark .prose a:hover {
-  color: var(--color-link-hover);
-}
-.dark .prose h1, .dark .prose h2, .dark .prose h3, .dark .prose h4 {
-  color: var(--color-text-primary);
-}
-.dark .prose blockquote {
-  color: var(--color-text-secondary);
-  border-left-color: var(--color-border-primary);
-}
-.dark .prose hr {
-  border-top-color: var(--color-bg-tertiary);
-}
-.dark .prose th, .dark .prose td {
-  border-color: var(--color-bg-tertiary);
-  color: var(--color-text-primary);
-}
-.dark .prose th {
-  background: var(--color-bg-secondary);
-}
-.dark .prose code {
-  background: transparent;
-  color: var(--color-text-primary);
-  border-color: transparent;
-}
-.dark .prose pre {
-  color: var(--color-text-on-code);
-}
-.dark .prose pre code {
-  color: inherit;
-}
 
 /* ── CodeBlock wrapper (.code-block-body + toolbar) ── */
-.dark .code-block-wrapper {
-  background: var(--color-bg-code);
-  border-color: var(--color-bg-code-border);
-}
-.dark .code-block-header {
-  background: var(--color-bg-code-header);
-  border-bottom-color: var(--color-bg-code-border);
-  color: var(--color-text-secondary);
-}
 
 /* ── Message body text color ── 默认让 .msg-bubble-body 跟随主前景色,
    这样 prose 内的 a/code/em 自动响应暗色 (它们都 inherit 的). */
-.dark .msg-bubble-body {
-  color: var(--color-text-primary);
-}
 
 /* ── Approval card ── */
 /* light/dark 都是 var(--color-bg-card) 切换, 但 hover/border 需要单独保 */
-.dark .approval-card {
-  background: var(--color-bg-secondary);
-}
-.dark .approval-card:hover {
-  background: var(--color-bg-card-hover);
-}
 
 /* ── Prefetch chip ── */
-.dark .prefetch-chip {
-  background: var(--color-accent-soft);
-  color: var(--color-accent);
-}
-.dark .prefetch-label {
-  color: var(--color-text-primary);
-}
 
 /* ── H-* helper utilities (状态条和打包) ── */
-.dark .h-tiny {
-  color: var(--color-text-muted);
-}
 
 /* ── agent-activity 弹点 dot ── */
-.dark .agent-activity-bounce-dot {
-  background: var(--color-text-secondary);
-}
-.dark .wait-for-input-dot {
-  background: var(--color-text-faint);
-}
 
 /* ── chat-tool-call 兜底
    tokens.css 已切 light/dark 变量, 但有些 cascade 顺序问题, 显式覆盖 */
-.dark .chat-tool-call--assistant {
-  background: var(--color-chat-assistant-bg);
-  color: var(--color-text-primary);
-}
-.dark .chat-tool-call--tool {
-  /* 同步 components.css:3113 的 v9 改动 — 不再用 --color-chat-tool-bg
-     (rgba(35,35,40,0.55)), 改用 color-mix 4% 主色叠加, 与 row hover
-     6% / progress 8% 一致语言, 视觉不再跳脱. helpers.css 在 components.css
-     之前加载, 此条虽然被 components.css 覆盖, 同步写一遍避免 cascade
-     顺序调整时被旧 transparent 值回归. */
-  background: color-mix(in srgb, var(--color-text-primary) 4%, transparent);
-  color: var(--color-text-primary);
-}
 
 /* ── tw-msg 附加 dark 兜底 ── */
-.dark .tw-msg {
-  color: var(--color-text-primary);
-}
-.dark .tw-msg-peek {
-  color: var(--color-text-muted);
-}
-.dark .tw-msg-verb {
-  color: var(--color-text-secondary);
-}
-.dark .tw-msg-sep {
-  color: var(--color-border-secondary);
-}
-.dark .tw-msg-xn {
-  color: var(--color-text-faint);
-}
-.dark .tw-msg-primary {
-  color: var(--color-text-primary);
-}
-.dark .tw-msg-note {
-  color: var(--color-text-muted);
-}
-.dark .tw-msg-dur {
-  color: var(--color-text-faint);
-}
-.dark .tw-msg-progress {
-  background: color-mix(in srgb, var(--color-text-primary) 8%, transparent);
-}
-.dark .tw-msg-err-hint {
-  color: var(--color-error);
-  background: var(--color-error-soft);
-}
 
 /* ── InlineThinkingDot ── (warning 状态在 dark 用 warning-soft) */
-.dark .inline-thinking-dot--warning {
-  background: var(--color-warning-soft);
-  color: var(--color-text-warning);
-}
 
 /* ── Tool terminal 红绿灯 dots: 不变 (macOS red/yellow/green 语义色) ── */
 
 /* ── scrollbar in dark: 调亮一档, 不然太黑看不见 ── */
-.dark ::-webkit-scrollbar-thumb {
-  background: var(--color-bg-tertiary);
-}
-.dark ::-webkit-scrollbar-thumb:hover {
-  background: var(--color-text-faint);
-}
 
 /* ── [data-theme="dark"] 与 .dark 同步覆盖 (有些旧 CSS 用属性选择器) ── */
-[data-theme="dark"] .chat-tool-call--assistant {
-  background: var(--color-chat-assistant-bg);
-  color: var(--color-text-primary);
-}
-[data-theme="dark"] .chat-tool-call--tool {
-  /* v9 同步 — 同 .dark 版本, 用 4% 主色叠加替代 rgba(35,35,40,0.55) */
-  background: color-mix(in srgb, var(--color-text-primary) 4%, transparent);
-  color: var(--color-text-primary);
-}
-[data-theme="dark"] .msg-bubble-body {
-  color: var(--color-text-primary);
-}
 
 /* ════════════════════════════════════════════════════════════════════
    § X.  TODO CARD (live task list — TodoItemUpserted / Removed)
@@ -958,8 +666,8 @@
 }
 .todo-card-header:hover { background: var(--color-bg-hover); }
 .todo-card-chevron { color: var(--color-text-faint); flex-shrink: 0; }
-.todo-card-icon    { color: var(--color-text-secondary); flex-shrink: 0; }
-.todo-card-title   {
+.todo-card-icon { color: var(--color-text-secondary); flex-shrink: 0; }
+.todo-card-title {
   font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.02em;
@@ -967,14 +675,10 @@
   flex: 1;
 }
 .todo-card-count {
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
   color: var(--color-text-faint);
   flex-shrink: 0;
-}
-.todo-card-spin {
-  color: var(--color-text-faint);
-  animation: li-pulse 1.2s ease-in-out infinite;
 }
 .todo-card-body {
   display: flex;
@@ -1152,61 +856,13 @@ background: rgba(76, 175, 80, 0.12);
 color: #4caf50;
 }
 
-.custom-apps-view__env-status {
-display: flex;
-align-items: center;
-justify-content: space-between;
-gap: 8px;
-padding: 8px 14px;
-border-radius: var(--radius-sm, 6px);
-font-size: 13px;
-margin-bottom: 12px;
-}
 
-.custom-apps-view__env-status.--ready {
-background: rgba(76, 175, 80, 0.08);
-color: #4caf50;
-border: 1px solid rgba(76, 175, 80, 0.2);
-}
 
-.custom-apps-view__env-status.--warning {
-background: rgba(255, 193, 7, 0.08);
-color: #ffc107;
-border: 1px solid rgba(255, 193, 7, 0.2);
-}
 
-.custom-apps-view__env-info {
-display: flex;
-align-items: center;
-gap: 6px;
-}
 
-.custom-apps-view__env-text {
-flex: 1;
-}
 
-.custom-apps-view__env-action {
-display: flex;
-align-items: center;
-gap: 4px;
-background: rgba(255, 193, 7, 0.15);
-color: #ffc107;
-border: 1px solid rgba(255, 193, 7, 0.3);
-padding: 4px 10px;
-border-radius: 4px;
-font-size: 12px;
-cursor: pointer;
-white-space: nowrap;
-}
 
-.custom-apps-view__env-action:hover {
-background: rgba(255, 193, 7, 0.25);
-}
 
-.custom-apps-view__env-installing {
-font-size: 12px;
-opacity: 0.7;
-}
 
 .custom-apps-view__toolbar {
   display: flex;
@@ -1466,14 +1122,7 @@ opacity: 0.7;
   background: rgba(108, 99, 255, 0.25);
 }
 
-.custom-app-card__btn--open {
-  background: rgba(108, 99, 255, 0.15);
-  color: #6c63ff;
-}
 
-.custom-app-card__btn--open:hover {
-  background: rgba(108, 99, 255, 0.25);
-}
 
 .custom-app-card__btn--delete {
   background: transparent;
@@ -1543,14 +1192,6 @@ opacity: 0.7;
   flex-shrink: 0;
 }
 
-.app-detail-info__icon-preview {
-  width: 24px;
-  height: 24px;
-  object-fit: contain;
-  border-radius: 4px;
-  vertical-align: middle;
-  margin-right: 6px;
-}
 
 .modal-header__title h2 {
   font-size: 18px;
@@ -1665,40 +1306,11 @@ opacity: 0.7;
   color: #4caf50;
 }
 
-.app-detail-info__row {
-  display: flex;
-  padding: 8px 0;
-  font-size: 13px;
-}
 
-.app-detail-info__label {
-  width: 100px;
-  flex-shrink: 0;
-  color: var(--color-text-muted, #888);
-}
 
-.app-detail-info__value {
-  color: var(--color-text-primary, #e0e0e0);
-  word-break: break-all;
-}
 
-.app-detail-info__tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
 
-.app-detail-info__tag {
-  font-size: 11px;
-  padding: 2px 8px;
-  border-radius: var(--radius-sm, 4px);
-  background: var(--color-bg-tertiary, #2a2a3e);
-  color: var(--color-text-secondary, #aaa);
-}
 
-.app-detail-code {
-  height: 400px;
-}
 
 .app-detail-code__editor {
   width: 100%;
@@ -1716,23 +1328,7 @@ opacity: 0.7;
   tab-size: 2;
 }
 
-.app-detail-code__view {
-  width: 100%;
-  height: 100%;
-  overflow: auto;
-  background: var(--color-bg-primary, #0d0d1a);
-  border: 1px solid var(--color-border, #2a2a3e);
-  border-radius: var(--radius-sm, 6px);
-  padding: 12px;
-  margin: 0;
-}
 
-.app-detail-code__view code {
-  font-family: "Cascadia Code", "Fira Code", monospace;
-  font-size: 13px;
-  line-height: 1.5;
-  color: var(--color-text-primary, #e0e0e0);
-}
 
 .modal-footer {
   display: flex;
@@ -1762,23 +1358,9 @@ opacity: 0.7;
   cursor: not-allowed;
 }
 
-.btn--primary {
-  background: #6c63ff;
-  color: #fff;
-}
 
-.btn--primary:hover:not(:disabled) {
-  background: #5a52d5;
-}
 
-.btn--secondary {
-  background: var(--color-bg-tertiary, #2a2a3e);
-  color: var(--color-text-secondary, #aaa);
-}
 
-.btn--secondary:hover:not(:disabled) {
-  background: var(--color-bg-quaternary, #333350);
-}
 
 /* ── App Detail Modal (redesigned 2026-07-27) ───────────────────────
    Card-based overview, clearer tab semantics, code file switcher,
@@ -1788,6 +1370,26 @@ opacity: 0.7;
   padding: 0;
   display: flex;
   flex-direction: column;
+  /* flex item 默认 min-height:auto — 内容多高它就不肯矮于多高。长代码因此
+     把弹窗顶破 .modal-content 的 max-height:85vh：页脚被推出屏幕，代码区
+     也拿不到确定高度，height:100% 和内部滚动条一起失效（表现为"代码没法
+     滚动查看"）。归零后弹窗锁在 85vh，代码区靠 flex:1 + min-height:0 拿到
+     确定高度并在内部滚动；概览/说明两个 tab 仍由 modal-body 自己滚。 */
+  min-height: 0;
+}
+
+.app-detail-code__empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  min-height: 240px;
+  padding: 24px;
+  color: var(--color-text-muted, #71717a);
+  font-size: 13px;
+  text-align: center;
+  border: 1px dashed var(--color-border-subtle, #ececef);
+  border-radius: var(--radius-md, 6px);
 }
 
 .app-detail-modal .modal-alert {
@@ -1852,7 +1454,7 @@ opacity: 0.7;
 }
 
 .app-detail-meta__value code {
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   background: var(--color-bg-secondary, #fafafa);
   padding: 1px 5px;
@@ -1965,23 +1567,7 @@ opacity: 0.7;
   border-color: var(--color-border-secondary, #d4d4d8);
 }
 
-.app-detail-code__view {
-  width: 100%;
-  height: 100%;
-  overflow: auto;
-  background: var(--color-bg-primary, #ffffff);
-  border: 1px solid var(--color-border-subtle, #ececef);
-  border-radius: var(--radius-md, 6px);
-  padding: 14px;
-  margin: 0;
-}
 
-.app-detail-code__view code {
-  font-family: "Cascadia Code", "Fira Code", monospace;
-  font-size: 13px;
-  line-height: 1.55;
-  color: var(--color-text-primary, #2e2e2e);
-}
 
 /* Redesigned buttons */
 .app-detail-btn {

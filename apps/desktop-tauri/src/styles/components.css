@@ -84,16 +84,14 @@
   flex-shrink: 0;
   width: 100%;       /* fill parent wrapper (the wrapper controls the actual width) */
 }
-.pane-left   { background: var(--color-bg-secondary); }
+.pane-left { background: var(--color-bg-secondary); }
 /* .pane-main 的 min-width 故意不再写 — 由 .app-body 的 grid-template-columns
    里 minmax(720px, 1fr) 声明性保证, 避免与 grid track 的 min 双重约束造成
    奇怪的溢出行为 (历史教训: 同时给 track 和 item 设 min-width 在窄视口
    下会导致 inflexible 列被压扁到只剩图标竖排)。 */
-/* 主区背景 = 淡灰 (--color-bg-app = #f5f5f7) — 跟左栏/右栏/卡片(白)拉出 1 档色差,
-   卡片 .bg-bg-card 白底就自然浮起来。
-   2026-06-18 修: 之前用 --color-bg-primary (白) 导致卡片跟主区贴墙。 */
-.pane-main   { background: var(--color-bg-app); flex: 1; border-top-left-radius: 12px; border-top-right-radius: 12px; }
-.pane-right  { background: var(--color-bg-secondary); }
+/* 主区背景 = 中性冷灰（对话流阅读区，body 背景亦跟随） —
+   .pane-main 的 background 由 components-layout.css 定义（统一用 --theme-bg-chat），
+   此处不重复声明，避免 cascade 冲突。 */
 
 .pane-resizer {
   position: absolute;
@@ -104,10 +102,10 @@
   background: transparent;
   transition: background var(--duration-fast) ease;
 }
-.pane-resizer:hover  { background: var(--color-accent-soft); }
+.pane-resizer:hover { background: var(--color-accent-soft); }
 .pane-resizer:active { background: var(--color-accent-soft-strong); }
 .pane-resizer-right { right: 0; }
-.pane-resizer-left  { left: 0; }
+.pane-resizer-left { left: 0; }
 
 .pane-overlay {
   position: fixed;
@@ -174,7 +172,6 @@
   transition: background var(--duration-fast) ease, color var(--duration-fast) ease;
 }
 .titlebar-btn:hover { background: var(--color-bg-hover); color: var(--color-text-secondary); }
-.titlebar-btn-active { color: var(--color-accent); background: var(--color-accent-soft); }
 .titlebar-btn-danger:hover { background: var(--color-error); color: #ffffff; }
 
 /* (品牌已上移至 TitleBar,Sidebar 不再单独显示 — 避免双层标题栏) */
@@ -206,9 +203,9 @@
   text-align: left;
   transition: background var(--duration-fast) ease, color var(--duration-fast) ease;
 }
-.nav-item:hover  { background: var(--color-bg-hover); color: var(--color-text-primary); }
+.nav-item:hover { background: var(--color-bg-hover); color: var(--color-text-primary); }
 .nav-item-active { background: var(--color-bg-active); color: var(--color-text-primary); }
-.nav-item svg    { flex-shrink: 0; }
+.nav-item svg { flex-shrink: 0; }
 
 /* ════════════════════════════════════════════════════════════════════
    § 5.  SECTION HEADER (collapsible group label)
@@ -217,12 +214,6 @@
    Hierarchy level 1 — the faintest, smallest "label" tier.
    Visually separates major sections (Workspaces / Ungrouped / Chat Rooms). */
 
-.section-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 14px 4px 6px;
-}
 .section-header-toggle {
   display: flex;
   align-items: center;
@@ -239,89 +230,25 @@
   transition: color var(--duration-fast) ease;
 }
 .section-header-toggle:hover { color: var(--color-text-muted); }
-.section-header-icon { color: var(--color-text-faint); flex-shrink: 0; }
 .section-header-count {
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
   color: var(--color-text-faint);
   margin-left: 2px;
 }
-.section-header-add {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 4px 6px;
-  border-radius: var(--radius-md);
-  color: var(--color-text-muted);
-  background: transparent;
-  border: 0;
-  cursor: pointer;
-  transition: background var(--duration-fast) ease, color var(--duration-fast) ease;
-}
-.section-header-add:hover { background: var(--color-bg-hover); color: var(--color-text-primary); }
 
 /* ════════════════════════════════════════════════════════════════════
    § 6.  LIST ITEMS (chat session / workspace / chat room)
    ════════════════════════════════════════════════════════════════════ */
 
-.list-item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  border-radius: var(--radius-lg);
-  cursor: pointer;
-  transition: background var(--duration-fast) ease, color var(--duration-fast) ease;
-  color: var(--color-text-secondary);
-}
-.list-item:hover  { background: var(--color-bg-hover); }
-.list-item-active { background: var(--color-bg-active); color: var(--color-text-primary); }
 
 /* Main row: title + time + pulse indicator */
-.list-item-main {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: 1;
-  min-width: 0;
-}
-.list-item-title {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--color-text-primary);
-  line-height: 1.3;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  flex: 1;
-  min-width: 0;
-}
 /* Time — right-aligned, faint
  *
  * v3 主人反馈：会话列表去掉 "几小时前 / 几天前" 时间戳。SessionItem
  * 已不再渲染这个 span，规则保留原始样式只作为占位（其它位置如有
  * 需要可恢复使用）。 */
-.list-item-time {
-  font-size: 11px;
-  color: var(--color-text-faint);
-  flex-shrink: 0;
-  white-space: nowrap;
-}
 /* Pulse dot — shows when model is actively streaming into this session */
-.list-item-pulse {
-  display: inline-flex;
-  align-items: center;
-  flex-shrink: 0;
-  margin-left: 2px;
-}
-.list-item-pulse-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 999px;
-  background: var(--color-accent);
-  animation: li-pulse 1.4s ease-in-out infinite;
-  box-shadow: 0 0 6px color-mix(in srgb, var(--color-accent) 50%, transparent);
-}
 @keyframes li-pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
   50%      { opacity: 0.4; transform: scale(0.8); }
@@ -329,14 +256,6 @@
 
 /* Active dot — static indicator that "this is the active session".
  * PLAN_UI_ENHANCEMENT §3.3: 激活项用小圆点区分，非激活项显示相对时间。 */
-.list-item-active-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 999px;
-  background: var(--color-accent);
-  flex-shrink: 0;
-  box-shadow: 0 0 4px color-mix(in srgb, var(--color-accent) 50%, transparent);
-}
 
 /* Message count meta (below title)
  *
@@ -345,29 +264,6 @@
  * 不再生效。但聊天室（ChatRoom）列表仍用它显示 "N 个成员"，所以
  * 保留原始样式，只是不再被会话列表触发。
  */
-.list-item-meta   {
-  font-size: 11px;
-  color: var(--color-text-faint);
-  line-height: 1.3;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-.list-item-action {
-  opacity: 0;
-  padding: 4px;
-  border-radius: var(--radius-md);
-  color: var(--color-text-muted);
-  background: transparent;
-  border: 0;
-  cursor: pointer;
-  transition: opacity var(--duration-fast) ease, color var(--duration-fast) ease, background var(--duration-fast) ease;
-  flex-shrink: 0;
-  margin-top: 2px;
-}
-.list-item:hover .list-item-action { opacity: 1; }
-.list-item-action:hover { color: var(--color-error); }
 
 /* ── List group (嵌套 children, e.g. workspace 下的 session) ──
  *
@@ -375,78 +271,13 @@
  * 16px left margin + 2px faint accent-left border = clear depth cue.
  * v3 主人反馈：工作区下的会话列表不应该有左侧的粗分隔线。
  */
-.list-group {
-  margin-left: 16px;
-  padding-left: 10px;
-  border-left: 1.5px solid var(--color-border-subtle);
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin-top: 2px;
-  margin-bottom: 4px;
-  max-height: 240px;
-  overflow-y: auto;
-}
-.list-group-empty {
-  font-size: 11px;
-  color: var(--color-text-faint);
-  font-style: italic;
-  padding: 4px 8px;
-}
 
 /* ── List row (workspace / chat room header with chevron) ──
  *
  * Hierarchy level 2 — parent folder / category row.
  * Slightly compact, semi-bold name with accent icon = "this is a container". */
-.list-row {
-  display: flex;
-  align-items: center;
-  border-radius: var(--radius-md);
-  padding: 3px 6px;
-  transition: background var(--duration-fast) ease;
-}
-.list-row:hover { background: var(--color-bg-hover); }
-.list-row-toggle {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: 1;
-  min-width: 0;
-  padding: 6px;
-  text-align: left;
-  background: transparent;
-  border: 0;
-  cursor: pointer;
-  color: var(--color-text-primary);
-}
 .list-row-chevron { color: var(--color-text-faint); flex-shrink: 0; }
-.list-row-icon    { color: var(--color-accent); flex-shrink: 0; }
-.list-row-name    {
-  font-size: 12.5px;
-  font-weight: 500;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.list-row-count   {
-  font-size: var(--font-size-tiny);
-  color: var(--color-text-faint);
-  flex-shrink: 0;
-  margin-left: 4px;
-}
-.list-row-action {
-  opacity: 0;
-  padding: 4px;
-  border-radius: var(--radius-md);
-  color: var(--color-text-muted);
-  background: transparent;
-  border: 0;
-  cursor: pointer;
-  transition: opacity var(--duration-fast) ease, color var(--duration-fast) ease;
-  flex-shrink: 0;
-}
-.list-row:hover .list-row-action { opacity: 1; }
-.list-row-action:hover { color: var(--color-error); }
+.list-row-icon { color: var(--color-accent); flex-shrink: 0; }
 
 /* ════════════════════════════════════════════════════════════════════
    § 7.  USER CARD (sidebar bottom)
@@ -459,17 +290,6 @@
   padding: 8px 10px;
   border-radius: var(--radius-lg);
   background: var(--color-bg-tertiary);
-}
-.user-card-avatar {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: var(--radius-full);
-  background: var(--color-accent-soft);
-  color: var(--color-accent);
-  flex-shrink: 0;
 }
 .user-card-name {
   flex: 1;
@@ -586,8 +406,6 @@
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .btn-sm { padding: 4px 10px; font-size: 12px; }
-.btn-md { padding: 7px 14px; font-size: 13px; }
-.btn-lg { padding: 10px 18px; font-size: 14px; }
 
 .btn-primary {
   background: var(--color-btn-primary-bg);
@@ -603,18 +421,7 @@
 }
 .btn-secondary:hover:not(:disabled) { background: var(--color-btn-secondary-hover); }
 
-.btn-ghost {
-  background: transparent;
-  color: var(--color-text-secondary);
-}
-.btn-ghost:hover:not(:disabled) { background: var(--color-bg-hover); color: var(--color-text-primary); }
 
-.btn-danger {
-  background: var(--color-bg-elevated);
-  color: var(--color-error);
-  border-color: var(--color-border-primary);
-}
-.btn-danger:hover:not(:disabled) { background: var(--color-error-soft); }
 
 /* ── Icon button (square, no text) ── */
 .icon-btn {
@@ -630,18 +437,17 @@
   cursor: pointer;
   transition: background var(--duration-fast) ease, color var(--duration-fast) ease;
 }
-.icon-btn:hover  { background: var(--color-bg-hover); color: var(--color-text-primary); }
-.icon-btn-active { color: var(--color-accent); background: var(--color-accent-soft); }
+.icon-btn:hover { background: var(--color-bg-hover); color: var(--color-text-primary); }
 
 /* ════════════════════════════════════════════════════════════════════
    § 9.  FORM FIELDS
    ════════════════════════════════════════════════════════════════════ */
 
 .field { display: flex; flex-direction: column; gap: 4px; }
-.field-label { font-size: 11.5px; font-weight: 500; color: var(--color-text-primary); }
-.field-hint  { font-size: 10.5px; color: var(--color-text-muted); margin-top: 2px; }
 
-.input, .textarea, .select {
+.input,
+.textarea,
+.select {
   width: 100%;
   padding: 7px 10px;
   font-size: 12.5px;
@@ -654,11 +460,13 @@
   transition: border-color var(--duration-fast) ease;
 }
 .input:focus, .textarea:focus, .select:focus,
-.input:focus-visible, .textarea:focus-visible, .select:focus-visible {
+.input:focus-visible,
+.textarea:focus-visible,
+.select:focus-visible {
   outline: none;
   border-color: var(--color-border-secondary);
 }
-.textarea { min-height: 70px; resize: vertical; line-height: 1.5; font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace; }
+.textarea { min-height: 70px; resize: vertical; line-height: 1.5; font-family: var(--font-mono); }
 
 /* Strip chrome for fields embedded in a parent (e.g. chat composer) */
 [data-no-border] {
@@ -673,40 +481,12 @@
    § 10.  PANE HEADER (right sidebar / empty state / etc.)
    ════════════════════════════════════════════════════════════════════ */
 
-.pane-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  height: 44px;
-  padding: 0 16px;
-  flex-shrink: 0;
-}
-.pane-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--color-text-primary);
-}
-.pane-subtitle {
-  font-size: 11px;
-  color: var(--color-text-muted);
-  margin-top: 2px;
-}
-.pane-content {
-  flex: 1;
-  overflow-y: auto;
-  min-height: 0;
-}
 
 .divider {
   height: 1px;
   background: var(--color-border-primary);
   border: 0;
   margin: 0;
-}
-.divider-v {
-  width: 1px;
-  background: var(--color-border-primary);
-  align-self: stretch;
 }
 
 /* ════════════════════════════════════════════════════════════════════
@@ -721,41 +501,16 @@
   border-radius: var(--radius-sm);
   font-size: 10.5px;
   font-weight: 500;
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-family: var(--font-mono);
   background: var(--color-bg-tertiary);
   color: var(--color-text-primary);
 }
-.tag-primary  { background: var(--color-accent-soft-strong); color: var(--color-text-primary); }
-.tag-success  { background: var(--color-success-soft); color: var(--color-success); }
-.tag-warning  { background: var(--color-warning-soft); color: var(--color-warning); }
-.tag-error    { background: var(--color-error-soft);   color: var(--color-error); }
-.tag-info     { background: var(--color-info-soft);    color: var(--color-info); }
 
-.status-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: var(--radius-full);
-  background: var(--color-text-faint);
-  flex-shrink: 0;
-}
-.status-dot-online  { background: var(--color-success); }
-.status-dot-offline { background: var(--color-text-faint); }
-.status-dot-error   { background: var(--color-error); }
-.status-dot-running { background: var(--color-warning); animation: status-pulse 1.6s ease-in-out infinite; }
 @keyframes status-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }
 }
 
-.status-text {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 2px 8px;
-  font-size: 11px;
-  color: var(--color-text-muted);
-  border-radius: var(--radius-sm);
-}
 
 /* ════════════════════════════════════════════════════════════════════
    § 12.  PILLS (status inline, no bg)
@@ -774,10 +529,8 @@
   border: 0;
 }
 .pill-success { color: var(--color-success); }
-.pill-error   { color: var(--color-error); }
+.pill-error { color: var(--color-error); }
 .pill-warning { color: var(--color-warning); }
-.pill-info    { color: var(--color-info); }
-.pill-muted   { color: var(--color-text-muted); }
 
 /* ════════════════════════════════════════════════════════════════════
    § 13.  COMPOSER (chat input area)
@@ -789,45 +542,22 @@
   border: 1px solid var(--color-border-primary);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
   overflow: visible;
+  transition:
+    backdrop-filter var(--duration-base, 160ms) ease,
+    background-color var(--duration-base, 160ms) ease;
 }
-.composer-textarea {
-  display: block;
-  width: 100%;
-  padding: 14px 16px 8px;
-  font-size: 15px;
-  line-height: 1.6;
-  color: var(--color-text-primary);
-  background: transparent;
-  border: 0;
-  outline: 0;
-  resize: none;
-  font-family: inherit;
-  max-height: 192px;
-  overflow-y: auto;
-}
-.composer-textarea::placeholder { color: var(--color-text-faint); }
-.composer-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 6px 12px 10px;
+/* 浅色基线（青墨）走 liquid glass；暗色族保持上方 .composer 实色样式 */
+:root[data-theme="light"] .composer {
+  background: var(--glass-liquid-bg);
+  backdrop-filter: var(--glass-liquid-blur);
+  -webkit-backdrop-filter: var(--glass-liquid-blur);
+  /* 禁装饰性边框铁律：去掉 border，改用 inset shadow + glass shadow */
+  box-shadow:
+    var(--glass-inset-highlight),
+    var(--glass-inset-shadow),
+    var(--glass-shadow);
 }
 
-.composer-send {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  border-radius: var(--radius-lg);
-  background: var(--color-btn-primary-bg);
-  color: var(--color-btn-primary-text);
-  border: 0;
-  cursor: pointer;
-  transition: background var(--duration-fast) ease, transform var(--duration-fast) ease;
-}
-.composer-send:hover:not(:disabled) { background: var(--color-btn-primary-hover); transform: scale(1.05); }
-.composer-send:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
 
 /* ════════════════════════════════════════════════════════════════════
    § 14.  EMPTY STATES
@@ -842,35 +572,30 @@
   text-align: center;
   color: var(--color-text-muted);
 }
-.empty-icon {
-  width: 56px;
-  height: 56px;
-  border-radius: var(--radius-2xl);
-  background: var(--color-bg-tertiary);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin-bottom: 20px;
-  color: var(--color-text-muted);
-}
-.empty-title {
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--color-text-primary);
-  margin-bottom: 8px;
-  letter-spacing: -0.01em;
-}
-.empty-desc {
-  font-size: 13px;
-  color: var(--color-text-muted);
-  line-height: 1.6;
-  max-width: 380px;
-}
 
 /* ════════════════════════════════════════════════════════════════════
    § 15.  POPOVER (v2 design: white card / 1px border / soft shadow)
    ════════════════════════════════════════════════════════════════════ */
 
+/* Popover 浮层 — 浅色基线 liquid-strong（青墨主题玻璃感）；
+   暗色族（dark/rainforest）走原 :root 下的 .popover 兜底（实色 + 边 + 阴影）。 */
+:root[data-theme="light"] .popover {
+  position: absolute;
+  z-index: 50;
+  margin-top: 6px;
+  border-radius: var(--radius-xl);
+  background: var(--glass-liquid-strong-bg);
+  backdrop-filter: var(--glass-liquid-strong-blur);
+  -webkit-backdrop-filter: var(--glass-liquid-strong-blur);
+  /* 禁装饰性边框铁律：去掉 border，改用 inset highlight + glass shadow */
+  box-shadow:
+    var(--glass-inset-highlight),
+    var(--glass-inset-shadow),
+    var(--glass-shadow);
+  padding: 6px;
+  min-width: 200px;
+  animation: modal-scale-in var(--duration-base, 160ms) var(--ease-out, cubic-bezier(0.16, 1, 0.3, 1)) both;
+}
 .popover {
   position: absolute;
   z-index: 50;
@@ -882,27 +607,6 @@
   padding: 6px;
   min-width: 200px;
 }
-.popover-header {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--color-text-secondary);
-  padding: 6px 10px 4px;
-}
-.popover-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 6px 10px;
-  font-size: 12px;
-  color: var(--color-text-secondary);
-  background: transparent;
-  border: 0;
-  cursor: pointer;
-  border-radius: var(--radius-md);
-  text-align: left;
-}
-.popover-item:hover  { background: var(--color-bg-hover); color: var(--color-text-primary); }
 .popover-item.active { color: var(--color-text-primary); background: var(--color-bg-hover); font-weight: 500; }
 
 /* ════════════════════════════════════════════════════════════════════
@@ -949,12 +653,11 @@
   flex-shrink: 0;
   font-size: 18px;
 }
-.modal-icon-warn  { background: var(--color-warning-soft); color: var(--color-warning); }
-.modal-icon-info  { background: var(--color-bg-tertiary);  color: var(--color-text-primary); }
-.modal-icon-error { background: var(--color-error-soft);   color: var(--color-error); }
+.modal-icon-warn { background: var(--color-warning-soft); color: var(--color-warning); }
+.modal-icon-info { background: var(--color-bg-tertiary);  color: var(--color-text-primary); }
 
 .modal-title-block { flex: 1; min-width: 0; }
-.modal-title    { font-size: 14.5px; font-weight: 600; color: var(--color-text-primary); line-height: 1.3; }
+.modal-title { font-size: 14.5px; font-weight: 600; color: var(--color-text-primary); line-height: 1.3; }
 .modal-subtitle { font-size: 12px; color: var(--color-text-muted); margin-top: 4px; line-height: 1.5; }
 
 .modal-close {
@@ -969,24 +672,8 @@
 }
 .modal-close:hover { color: var(--color-text-primary); background: var(--color-bg-hover); }
 
-.modal-pills { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 0 20px 12px; }
-.modal-args {
-  background: var(--color-bg-tertiary);
-  border: 1px solid var(--color-border-primary);
-  border-radius: var(--radius-lg);
-  padding: 12px;
-  max-height: 180px;
-  overflow-y: auto;
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
-  font-size: 11.5px;
-  color: var(--color-text-primary);
-  white-space: pre-wrap;
-  word-break: break-all;
-  line-height: 1.5;
-  margin: 0 20px 16px;
-}
-.modal-body  { padding: 0 20px 16px; font-size: 12.5px; color: var(--color-text-primary); line-height: 1.5; }
-.modal-form  { padding: 0 20px 8px; display: flex; flex-direction: column; gap: 12px; max-height: 50vh; overflow-y: auto; }
+.modal-body { padding: 0 20px 16px; font-size: 12.5px; color: var(--color-text-primary); line-height: 1.5; }
+.modal-form { padding: 0 20px 8px; display: flex; flex-direction: column; gap: 12px; max-height: 50vh; overflow-y: auto; }
 .modal-footer {
   display: flex;
   gap: 8px;
@@ -996,7 +683,7 @@
 .modal-footer .btn { flex: 1; }
 
 /* ── Modal form fields (used by AutomationView / PluginsView editors) ── */
-.modal-field     { display: flex; flex-direction: column; gap: 3px; }
+.modal-field { display: flex; flex-direction: column; gap: 3px; }
 .modal-field-label { font-size: 11.5px; font-weight: 500; color: var(--color-text-secondary); }
 .modal-field-hint { font-size: 10.5px; color: var(--color-text-faint); line-height: 1.45; margin-top: 1px; }
 
@@ -1054,7 +741,6 @@
 }
 .modal-btn-danger:hover:not(:disabled) { background: var(--color-error); color: var(--color-bg-primary); }
 
-
 /* ════════════════════════════════════════════════════════════════════
    § 17.  CARDS
    ════════════════════════════════════════════════════════════════════ */
@@ -1066,12 +752,7 @@
   padding: 16px;
   transition: background var(--duration-fast) ease, border-color var(--duration-fast) ease;
 }
-.card-interactive { cursor: pointer; }
-.card-interactive:hover { background: var(--color-bg-card-hover); border-color: var(--color-border-secondary); }
 
-.card-title    { font-size: 13.5px; font-weight: 600; color: var(--color-text-primary); margin-bottom: 4px; }
-.card-subtitle { font-size: 11.5px; color: var(--color-text-muted); margin-bottom: 12px; }
-.card-body     { font-size: 12.5px; color: var(--color-text-secondary); line-height: 1.6; }
 
 /* ════════════════════════════════════════════════════════════════════
    § 18.  PROSE & MESSAGE FLOW
@@ -1100,7 +781,10 @@
   border-bottom-color: transparent;
   opacity: 1;
 }
-.prose h1, .prose h2, .prose h3, .prose h4 {
+.prose h1,
+.prose h2,
+.prose h3,
+.prose h4 {
   color: var(--color-text-primary);
   font-weight: 600;
   margin: 1em 0 0.4em;
@@ -1111,7 +795,8 @@
 .prose h2 { font-size: 1.22em; }
 .prose h3 { font-size: 1.08em; }
 .prose h4 { font-size: 0.98em; color: var(--color-text-secondary); }
-.prose ul, .prose ol { 
+.prose ul,
+.prose ol { 
   padding-left: 1.6em; 
   margin: 0.5em 0; 
   list-style-position: outside;
@@ -1129,7 +814,8 @@
 }
 .prose hr { border: 0; border-top: 1px solid var(--color-bg-tertiary); margin: 0.9em 0; }
 .prose table { border-collapse: collapse; margin: 0.5em 0; font-size: 0.92em; width: 100%; }
-.prose th, .prose td { padding: 0.4em 0.6em; border: 1px solid var(--color-border-secondary); }
+.prose th,
+.prose td { padding: 0.4em 0.6em; border: 1px solid var(--color-border-secondary); }
 .prose th { background: var(--color-bg-secondary); font-weight: 600; color: var(--color-text-primary); }
 .prose code {
   background: var(--color-bg-tertiary);
@@ -1137,7 +823,7 @@
   border-radius: 4px;
   font-size: 0.95em;
   color: var(--color-text-primary);
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-family: var(--font-mono);
   font-weight: 500;
   border: 1px solid var(--color-border-subtle);
 }
@@ -1181,7 +867,7 @@
   line-height: 1.5;
   display: block;
   overflow-x: auto;
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-family: var(--font-mono);
 }
 
 /* ── Message flow (v6 refined 2026-07-10) ──
@@ -1219,23 +905,6 @@
    in the same column rhythm as the regular MessageBubble
    (showHeader=true), so streaming text doesn't "jump" when the
    stream completes and switches to the final bubble layout. */
-.msg-bubble-assistant {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  min-height: 28px;
-}
-.msg-bubble-avatar {
-  flex-shrink: 0;
-  margin-top: 1px;
-}
-.msg-bubble-body {
-  flex: 1;
-  min-width: 0;
-  font-size: var(--font-size-body, 14px);
-  line-height: 1.72;
-  color: var(--color-text-primary);
-}
 
 /* ── Vertical rhythm ── */
 .msg-stack { display: flex; flex-direction: column; }
@@ -1270,20 +939,6 @@
   background: color-mix(in srgb, var(--color-accent) 8%, transparent);
   /* v5: 无边框，仅靠底色 */
 }
-.agent-activity-dot-stack {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  width: 18px;
-  height: 12px;
-}
-.agent-activity-bounce-dot {
-  width: 4px;
-  height: 4px;
-  border-radius: 999px;
-  background: var(--color-text-secondary);
-  animation: agent-activity-bounce 1.2s ease-in-out infinite;
-}
 .agent-activity-bounce-dot--delay1 { animation-delay: 0.15s; }
 .agent-activity-bounce-dot--delay2 { animation-delay: 0.30s; }
 @keyframes agent-activity-bounce {
@@ -1317,29 +972,6 @@
   /* v9: 加 italic 表达"轻量、非强制提示"语义 */
   font-style: italic;
 }
-.wait-for-input-dots {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  /* Reserve a stable hit-box so the dots don't shift if we ever
-     change the count. The dots themselves are 3px circles; the
-     gap is between their bounding boxes, not the dot centers. */
-  padding: 3px 0;
-  height: 10px;
-}
-.wait-for-input-dot {
-  display: inline-block;
-  width: 3px;
-  height: 3px;
-  border-radius: 50%;
-  background: var(--color-text-faint);
-  /* Slower, gentler bounce than agent-activity dots — the agent
-     has fully stopped, so the indicator should feel calm, not
-     urgent. ~1.8s cycle. */
-  animation: wait-for-input-bounce 1.8s cubic-bezier(0.4, 0, 0.2, 1) infinite;
-  /* v9: opacity 基线降到 0.25, bounce 峰值 0.65, 更克制 */
-  opacity: 0.25;
-}
 .wait-for-input-dot--delay1 { animation-delay: 0.18s; }
 .wait-for-input-dot--delay2 { animation-delay: 0.36s; }
 @keyframes wait-for-input-bounce {
@@ -1356,26 +988,6 @@
 /* ── Channel label (soft chip) ──
    v5: 章节用"小灰胶囊"——纯背景色 + 文字，无边框。
    边框在 12.5px 的字号下显得过粗，去掉后更贴近"分组标记"而不是"控件"。 */
-.channel-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 2px 8px 2px 6px;
-  border-radius: var(--radius-full);
-  font-size: 10.5px;
-  font-weight: 500;
-  letter-spacing: 0.01em;
-  color: var(--color-text-muted);
-  background: var(--color-bg-secondary);
-  border: 0;  /* v5: 无边框，仅靠浅灰底色 */
-}
-.channel-label svg { color: var(--color-text-faint); flex-shrink: 0; }
-.channel-label-count {
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
-  font-size: 10px;
-  color: var(--color-text-faint);
-  margin-left: auto;
-}
 
 /* ── Artifact card (v10) ──
    简洁列表项 — 仅一行: 文件图标 + 文件名 + 扩展 chip.
@@ -1397,20 +1009,6 @@
 }
 
 /* v10: 文件类型 chip (替代 v9 的 4 宫格摘要) */
-.artifact-ext {
-  display: inline-flex;
-  align-items: center;
-  padding: 1px 6px;
-  border-radius: 3px;
-  font-size: 10px;
-  font-weight: 500;
-  color: var(--color-text-faint);
-  background: var(--color-bg-tertiary);
-  letter-spacing: 0.02em;
-  border: 0;
-  flex-shrink: 0;
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
-}
 
 /* v10 移除 .artifact-summary / .artifact-cell / .artifact-tag —
    见 git diff. 信息折叠到文件类型 chip, 文件路径用 title tooltip 表达. */
@@ -1462,7 +1060,7 @@
   color: var(--color-link-soft);
   cursor: pointer;
   text-decoration: none;
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-family: var(--font-mono);
   transition: color var(--duration-fast) ease;
 }
 .file-change-link:hover {
@@ -1473,15 +1071,10 @@
 /* 文件态胶囊 —— 语义令牌版（主题无关）。四态分别映射
    success/info/error/warning；值随当前主题自动切换。
    禁止再写 [data-theme] 字面色覆盖块（历史两块已迁除）。 */
-.file-pill.is-created  { color: var(--color-success); border-color: color-mix(in srgb, var(--color-success) 35%, transparent); background: var(--color-success-soft); }
 .file-pill.is-created:hover  svg,
 .file-pill.is-created      svg,
 .file-pill.is-modified svg,
 .file-pill.is-deleted  svg,
-.file-pill.is-renamed  svg { color: inherit; }
-.file-pill.is-modified { color: var(--color-info);     border-color: color-mix(in srgb, var(--color-info) 35%, transparent);     background: var(--color-info-soft); }
-.file-pill.is-deleted  { color: var(--color-error);    border-color: color-mix(in srgb, var(--color-error) 35%, transparent);    background: var(--color-error-soft); }
-.file-pill.is-renamed  { color: var(--color-warning);  border-color: color-mix(in srgb, var(--color-warning) 35%, transparent);  background: var(--color-warning-soft); }
 
 /* ── Inline path link (assistant prose) ──────────────────────
    Flat link style — no chip background, no border, no icon. Renders
@@ -1605,70 +1198,10 @@
 }
 
 /* ── Task block (compact inline style) ── */
-.tasks-block {
-  overflow: visible;
-  padding: 6px 10px;
-  border-radius: var(--radius-md);
-  background: var(--color-bg-secondary);
-  border: 1px solid var(--color-border-subtle);
-}
-.tasks-progress {
-  height: 2px;
-  background: var(--color-bg-tertiary);
-  overflow: hidden;
-  border-radius: var(--radius-full);
-}
-.tasks-progress-bar {
-  height: 100%;
-  background: var(--color-success);
-  transition: width 0.4s ease;
-}
-.tasks-header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 2px 0 4px;
-  font-size: 12px;
-  color: var(--color-text-secondary);
-}
-.tasks-header svg {
-  flex-shrink: 0;
-}
-.tasks-header-count {
-  margin-left: auto;
-  font-size: 11.5px;
-  color: var(--color-text-faint);
-}
-.tasks-list {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.task-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 6px;
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--color-text-primary);
-  border-radius: var(--radius-sm);
-}
-.task-row:hover {
-  background: var(--color-bg-hover);
-}
-.task-row svg {
-  flex-shrink: 0;
-}
 .task-row.done { color: var(--color-text-secondary); }
 .task-row.done .task-text {
   text-decoration: line-through;
   opacity: 0.7;
-}
-.task-text {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 /* ── Tool timeline ── */
@@ -1726,7 +1259,7 @@
 }
 .tool-head:hover { background: var(--color-bg-secondary); }
 .tool-name {
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 11.5px;
   font-weight: 500;
   color: var(--color-text-primary);
@@ -1735,68 +1268,15 @@
    for `terminal`, the path for `read_file`/`write_file`, the URL
    for `browser`). Renders right after the tool name in a slightly
    muted monospace so the eye still parses it as "the same row". */
-.tool-args {
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
-  font-size: 11px;
-  color: var(--color-text-muted);
-  max-width: 38ch;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  direction: rtl; /* keep the *trailing* part of long paths visible
-                     (file name) instead of the leading root */
-  text-align: left;
-  margin-left: 2px;
-}
 .tool-args[data-ltr="1"],
-.tool-msg-args[data-ltr="1"] {
-  /* search_files hints (path · "query") and browser URLs read
-     better left-to-right, otherwise the path tail gets clipped. */
-  direction: ltr;
-}
-.tool-args::before { content: "·"; margin-right: 6px; color: var(--color-text-faint); }
 
 /* Inline progress note attached from a `status` event (e.g. "正在处理").
    Sits next to the running tool's "执行中" badge so the user can see
    what the LLM is doing mid-flight without spawning a separate row
    in the timeline — that was the source of the "3 rows per tool call"
    visual chaos. */
-.tool-status-note {
-  font-size: 11px;
-  color: var(--color-text-faint);
-  font-style: italic;
-  max-width: 28ch;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  margin-left: 4px;
-}
 /* Same hint, used by the inline role=tool message card. Slightly
    wider allowed because the row is single-line. */
-.tool-msg-args {
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
-  font-size: 11px;
-  color: var(--color-text-muted);
-  max-width: 48ch;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  direction: rtl;
-  text-align: left;
-  margin-left: 4px;
-}
-.tool-msg-args::before { content: "·"; margin-right: 6px; color: var(--color-text-faint); }
-.tool-body {
-  margin-top: 4px;
-  padding: 8px 10px;
-  background: var(--color-bg-secondary);
-  border-radius: var(--radius-md);
-  border: 1px solid var(--color-border-subtle);
-  max-height: 320px;
-  overflow: auto;
-  font-size: 11.5px;
-  line-height: 1.55;
-}
 
 /* ── Tool result panel (collapsible, no header bar) ───────────────
    v2 2026-06-18 主人反馈:
@@ -1821,7 +1301,9 @@
   /* v7 层次: 终端块从 transparent 改成 code 区底色 + 边框, 比气泡
      (#1c1c20 dark / #ffffff light) 深一档, 制造"内嵌代码块"层次.
      L0 bubble → L1 卡片 hairline → L2 terminal 形成可视深度, 折叠头
-     默认 transparent 保持紧凑, hover 态再叠 highlight. 无蓝紫. */
+     默认 transparent 保持紧凑, hover 态再叠 highlight. 无蓝紫.
+     2026-08-31 主人反馈：LLM 输出区域不要背景卡片 → light 主题覆盖为 transparent
+     （暗色主题保留 code 区底色，维持"内嵌代码块"层次） */
   background: var(--color-bg-code);
   border: 1px solid var(--color-bg-code-border);
   border-radius: 6px;
@@ -1840,6 +1322,16 @@
   color: var(--color-text-primary);
   font-variant-ligatures: none;
   letter-spacing: 0.2px;
+}
+/* ── 2026-08-31 主人反馈：LLM 输出区域不要背景卡片 ──────
+   light 主题下覆盖为 transparent + 无边框，让 prose/terminal 内容
+   直接铺在主区雾绿底上；暗色主题保持原 code 区底色（内嵌代码块层次） */
+:root[data-theme="light"] .tw-msg-output {
+  background: transparent;
+  border: 0;
+  padding: 9px 0;
+  border-radius: 0;
+  max-height: none;
 }
 .tw-msg-output[data-empty="true"] {
   padding: 8px 12px;
@@ -1908,112 +1400,15 @@
    Kept so any leftover call site that hasn't migrated to
    `.tool-output*` still renders something sensible instead of
    unstyled markup. New code should use `.tool-output`. ──────── */
-.tool-terminal {
-  background: var(--color-bg-code);
-  border-top: 1px solid var(--color-border-subtle);
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
-}
-.tool-terminal-bar {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 7px 10px 6px 12px;
-  background: var(--color-bg-code-header);
-  border-bottom: 1px solid color-mix(in srgb, var(--color-border-subtle) 60%, transparent);
-}
-.tool-terminal-dot {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  flex-shrink: 0;
-  transition: filter var(--duration-fast) ease;
-}
-.tool-terminal-dot:nth-child(1) { background: #ff5f56; }
-.tool-terminal-dot:nth-child(2) { background: #ffbd2e; }
-.tool-terminal-dot:nth-child(3) { background: #27c93f; }
-.tool-terminal[data-running="true"] .tool-terminal-dot {
-  animation: terminal-dot-pulse 1.4s ease-in-out infinite;
-}
-.tool-terminal[data-running="true"] .tool-terminal-dot:nth-child(2) { animation-delay: 0.15s; }
-.tool-terminal[data-running="true"] .tool-terminal-dot:nth-child(3) { animation-delay: 0.3s; }
 @keyframes terminal-dot-pulse {
   0%, 100% { filter: brightness(0.85); }
   50%      { filter: brightness(1.15); }
-}
-.tool-terminal-title {
-  margin-left: 8px;
-  font-size: 10.5px;
-  color: var(--color-text-muted);
-  letter-spacing: 0.04em;
-  font-weight: 500;
-  text-transform: uppercase;
-}
-.tool-terminal[data-running="true"] .tool-terminal-title {
-  color: var(--color-accent);
-}
-.tool-terminal[data-running="true"] .tool-terminal-title::after {
-  content: "▌";
-  margin-left: 4px;
-  color: var(--color-accent);
-  animation: h-caret 1s steps(2) infinite;
 }
 @keyframes h-caret {
   0%, 50%   { opacity: 1; }
   50.01%, 100% { opacity: 0; }
 }
-.tool-terminal-copy {
-  margin-left: auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  padding: 2px 6px;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  border: 1px solid transparent;
-  color: var(--color-text-faint);
-  font-size: 10px;
-  font-family: var(--font-sans, system-ui);
-  cursor: pointer;
-  opacity: 0;
-  transition:
-    opacity var(--duration-fast) ease,
-    background var(--duration-fast) ease,
-    color var(--duration-fast) ease,
-    border-color var(--duration-fast) ease;
-}
 .tool-terminal:hover .tool-terminal-copy,
-.tool-terminal-copy:focus-visible {
-  opacity: 1;
-}
-.tool-terminal-copy:hover {
-  background: var(--color-bg-tertiary);
-  color: var(--color-text-secondary);
-  border-color: var(--color-border-subtle);
-}
-.tool-terminal-copy[data-copied="true"] {
-  color: var(--color-success);
-  background: color-mix(in srgb, var(--color-success) 10%, transparent);
-  border-color: color-mix(in srgb, var(--color-success) 22%, transparent);
-  opacity: 1;
-}
-.tool-terminal-body {
-  margin: 0;
-  padding: 10px 14px;
-  max-height: 320px;
-  overflow: auto;
-  font-size: 11.5px;
-  line-height: 1.55;
-  color: var(--color-text-primary);
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-variant-ligatures: none;
-}
-.tool-terminal-body::-webkit-scrollbar { width: 8px; height: 8px; }
-.tool-terminal-body::-webkit-scrollbar-thumb {
-  background: color-mix(in srgb, var(--color-text-faint) 40%, transparent);
-  border-radius: 4px;
-}
-.tool-terminal-body::-webkit-scrollbar-track { background: transparent; }
 
 /* ── Premium tool event card ──────────────────────────────────────
    WorkBuddy-style compact row per tool, with a click-to-expand
@@ -2050,7 +1445,9 @@
   padding-left: 0;
 }
 .tw-msg:hover { border: 0; box-shadow: none; }
-.tw-msg--run, .tw-msg--err, .tw-msg--ok { border: 0; background: transparent; position: static; }
+.tw-msg--run,
+.tw-msg--err,
+.tw-msg--ok { border: 0; background: transparent; position: static; }
 
 /* ── Consecutive tool calls (same agent): visually grouped ───────
    .msg-stream > * + * 给 12px (Round 15 加, 解决 user 消息无上边距),
@@ -2144,7 +1541,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--color-text-muted);
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
   min-width: 0;
   flex-shrink: 10;
@@ -2197,7 +1594,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--color-text-muted);
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 12.5px;
   min-width: 0;
   flex-shrink: 10;
@@ -2271,16 +1668,6 @@
    Renders as muted prose right after the primary arg, so the user
    sees "已读取 path · 正在处理" on a single line instead of a
    separate card. */
-.tw-msg-note {
-  font-size: 11.5px;
-  color: var(--color-text-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  min-width: 0;
-  font-style: italic;
-  margin-right: 4px;
-}
 
 /* Right-side meta group (duration / stats / state / chevron).
    `padding-left` keeps the badge from colliding with the
@@ -2297,7 +1684,7 @@
 /* Duration shown on the right of the row, before the status badge.
    Tiny monospace so it aligns with the badge baseline. */
 .tw-msg-dur {
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 10.5px;
   color: var(--color-text-faint);
   letter-spacing: -0.01em;
@@ -2355,9 +1742,6 @@
   letter-spacing: 0;
   color: var(--color-text-faint);
 }
-.tw-msg-state--done { color: var(--color-success); }
-.tw-msg-state--run  { color: var(--color-accent); }
-.tw-msg-state--err  { color: var(--color-warning); }
 
 /* Status pill — used in the ACUI right panel (ToolEventCard) to
    surface the run state in a small icon+text chip. 2026-06-30
@@ -2405,7 +1789,7 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
   font-weight: 400;
   line-height: 1;
@@ -2507,10 +1891,8 @@
    全部走 components-prose.css 的 .approval-card 系列.
    这里仅保留风险/决策状态色, 用于 prose 主样式之外的兜底/覆盖. */
 
-
 /* Decision-state card tints — 已弃用. 新设计走 prose.css 的
    .approval-card--ok/--deny/--expired (transparent, flat). */
-
 
 /* ── Thinking dots (processing gap) ───────────────────────────────
    Three animated dots with staggered delay. Inline flow, sits at
@@ -2541,61 +1923,12 @@
 }
 
 /* ── Old tool message classes (legacy, kept for backward compat) ── */
-.tool-msg {
-  margin: 2px 0;
-}
-.tool-msg-row {
-  display: flex;
-  align-items: center;
-  gap: 0;
-  width: 100%;
-  padding: 3px 8px 3px 6px;
-  border-radius: var(--radius-sm);
-  border: 0;
-  background: transparent;
-  text-align: left;
-  transition: background var(--duration-fast) ease;
-  line-height: 1;
-}
-.tool-msg-row:hover:not(:disabled) { background: var(--color-bg-tertiary); }
-.tool-msg-row:disabled:hover { background: transparent; }
-.tool-msg--running .tool-msg-row {
-  position: relative;
-  background: color-mix(in srgb, var(--color-accent) 4%, transparent);
-  padding-left: 10px;
-  margin-left: -2px;
-}
-.tool-msg--running .tool-msg-row::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 3px;
-  bottom: 3px;
-  width: 2px;
-  border-radius: 2px;
-  background: var(--color-accent);
-  animation: tool-row-pulse-bar 1.4s ease-in-out infinite;
-}
 @keyframes tool-row-pulse-bar {
   0%, 100% { opacity: 0.55; }
   50%      { opacity: 1; }
 }
 
 /* ── Status note (chip) ── */
-.status-note {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 10px 3px 8px;
-  margin-left: 16px;
-  font-size: 11px;
-  font-style: italic;
-  color: var(--color-text-muted);
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--radius-full);
-}
-.status-note svg { color: var(--color-text-faint); flex-shrink: 0; }
 
 /* ════════════════════════════════════════════════════════════════════
    § 19.  ANIMATION HELPERS
@@ -2658,10 +1991,10 @@
   flex-shrink: 0;
 }
 .prefetch-chip .prefetch-label {
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-family: var(--font-mono);
 }
 .prefetch-chip .prefetch-confidence {
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 10px;
   color: var(--color-text-faint);
 }
@@ -2752,7 +2085,7 @@
 }
 
 .thought-stream-hint {
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-family: var(--font-mono);
   color: var(--color-text-secondary);
   font-weight: 500;
   letter-spacing: 0.02em;
@@ -2773,7 +2106,7 @@
   padding: 1px 6px;
   border-radius: var(--radius-full);
   font-size: 10px;
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-family: var(--font-mono);
   color: var(--color-text-muted);
   background: var(--color-bg-primary);
   border: 1px solid var(--color-border-subtle);
@@ -2819,17 +2152,6 @@
    color, no border, no background. The only visual hint is a subtle
    separator line above so the user can tell where scratch work ends
    and the final reply begins. There is no chevron/collapse UI. */
-.reasoning-inline {
-  /* v5: 思考与正文视觉无差别 — 无 margin / 无 padding / 无分隔线。
-     完全继承 body 的 font-size / line-height / color，
-     让 think 内容像普通段落一样自然流入正文流。 */
-  margin: 0;
-  padding: 0;
-  font-size: inherit;
-  line-height: inherit;
-  color: inherit;
-  white-space: pre-wrap;
-}
 
 /* v5: 不渲染分隔线 — 视觉与正文完全无差别 */
 
@@ -2874,37 +2196,9 @@
   letter-spacing: 0.02em;
 }
 
-.reasoning-count {
-  font-size: 10.5px;
-  color: var(--color-text-faint);
-  padding: 1px 5px;
-  border-radius: var(--radius-full);
-  background: var(--color-bg-tertiary);
-  opacity: 0.9;
-}
 
 /* v6: reasoning body — left accent rail + soft tint, like a margin note */
-.reasoning-body {
-  background: var(--color-bg-secondary);
-  border-left: 2px solid var(--color-border-secondary);
-}
 
-.reasoning-bullets {
-  list-style: decimal;
-  margin: 6px 0 0 0;
-  padding: 0 0 0 20px;
-  color: var(--color-text-faint);
-  font-style: italic;
-}
-.reasoning-bullets > .reasoning-bullet {
-  margin: 3px 0;
-  padding-left: 2px;
-}
-.reasoning-bullets > .reasoning-bullet::marker {
-  color: var(--color-text-faint);
-  font-size: 10.5px;
-  font-style: normal;
-}
 
 /* ── 5a. 主回复 vs 工具调用 视觉区分 ──
    通过 tokens.css 的 CSS 变量自动响应 light/dark:
@@ -2916,9 +2210,6 @@
 .chat-tool-call {
   border-radius: var(--radius-lg);
   transition: background var(--duration-fast) ease;
-}
-.chat-tool-call--assistant {
-  background: var(--color-chat-assistant-bg, #ffffff);
 }
 .chat-tool-call--tool {
   background: transparent;
@@ -2952,124 +2243,32 @@
    background/color 需要显式 `.dark` 选择器. */
 
 /* 消息气泡 - 硬编码白底需换成深色 app 底色 */
-.dark .msg-card,
-.dark .msg-bubble-assistant {
-  color-scheme: dark;
-}
 
 /* 用户气泡 — dark mode 用 accent-soft 保持与浅色一致的设计语言 */
-.dark .msg-bubble-user {
-  background: var(--color-accent-soft);
-  border-color: color-mix(in srgb, var(--color-accent) 18%, transparent);
-}
-.dark .msg-bubble-user:hover {
-  background: color-mix(in srgb, var(--color-accent) 16%, transparent);
-}
 
 /* 用户消息附属 (file-pill 等已有独立 dark 规则) */
 
 /* 对话流中 agent-activity pill */
-.dark .agent-activity-pill {
-  color: var(--color-text-secondary);
-  background: var(--color-bg-tertiary);
-}
-.dark .agent-activity[data-state="tools"] .agent-activity-pill {
-  color: var(--color-accent);
-  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
-}
 
 /* ── Tool event cards (tw-msg) ── */
-.dark .tw-msg-row {
-  color: var(--color-text-secondary);
-}
-.dark .tw-msg-row:hover,
-.dark .tw-msg-row[data-open="true"],
-.dark .tw-msg-row:focus-visible {
-  /* v8: 弱化 hover 高亮 — components-helpers.css 同名规则的 .dark 覆盖
-     把整行用 --color-bg-hover (#2a2a30) 染亮, vs card #1c1c20 差 14 RGB
-     太显眼. 用 6% 主色叠加替代, 与 row 内 progress 8% 一致柔和. */
-  background: color-mix(in srgb, var(--color-text-primary) 6%, transparent);
-  color: var(--color-text-primary);
-}
-.dark .tw-msg-main {
-  color: var(--color-text-primary);
-}
-.dark .tw-msg-result-peek {
-  color: var(--color-text-muted);
-}
-.dark .tw-msg-output {
-  /* v7: dark 主题覆盖 — 用 canvas 色 (#0f0f12) 拉层次, 比 #1c1c20 卡片
-     深 13/255, 明显内嵌. light 主题走 --color-bg-code (#ededee). */
-  background: var(--color-bg-app);
-  border-color: var(--color-bg-code-border);
-  color: var(--color-text-primary);
-}
-.dark .tw-msg-output-text {
-  color: inherit;
-}
-.dark .tw-msg-output-empty {
-  color: var(--color-text-faint);
-}
-.dark .tw-msg-output-copy {
-  color: var(--color-text-muted);
-}
-.dark .tw-msg-output-copy:hover {
-  background: var(--color-bg-hover);
-  color: var(--color-text-primary);
-}
 
 /* ── StreamingBubble meta 行 ── */
-.dark .text-text-faint {
-  color: var(--color-text-faint);
-}
-.dark .text-text-warning {
-  color: var(--color-text-warning);
-}
 
 /* ── ToolEventCard (tool-event-card.css 或这里的 .tool-event-*) ── */
 /* tool-terminal-dot 是 macOS 红绿灯语义色, 不需要改 */
 
 /* ── InlineThinkingDot ── 用 CSS 变量 + fallback, 不需要额外 dark 规则 */
 /* 但 orb 内的 #fff 高光在暗色太亮, 调暗 */
-.dark .inline-thinking-dot__orb-core {
-  /* 保持梯度核心但弱化白色高光 */
-  background: radial-gradient(circle at 30% 30%, rgba(255,255,255,0.6) 0%, var(--color-accent, #cbd5e1) 55%, var(--color-accent, #cbd5e1) 100%);
-}
 
 /* tool terminal 红绿灯 dots 保持原色 (语义色) */
 
 /* ── archive refs banner ── */
-.dark .h-compact {
-  color: var(--color-text-faint);
-}
 
 /* ── 端连接器 (chat-composer-input) ── */
-.dark .h-chat-input {
-  background: var(--color-bg-secondary);
-  border-color: var(--color-border-primary);
-  color: var(--color-text-primary);
-}
-.dark .h-chat-input:focus {
-  border-color: var(--color-accent);
-  box-shadow: 0 0 0 1px var(--color-accent-soft);
-}
-.dark .h-chat-input::placeholder {
-  color: var(--color-text-faint);
-}
 
 /* ── 消息行右侧 copy 按钮 ── */
-.dark .msg-bubble-body button {
-  color: var(--color-text-faint);
-}
-.dark .msg-bubble-body button:hover {
-  color: var(--color-text-primary);
-}
 
 /* ── markdown 段落内联代码 ── */
-.dark .h-inline-code {
-  background: var(--color-bg-tertiary);
-  color: var(--color-text-primary);
-}
 
 /* ── markdown 代码块 ── 用 tokens.css 的 --color-bg-code 和 --color-bg-code-header */
 /* 已由 CSS 变量覆盖 */
@@ -3088,167 +2287,33 @@
    全部用 token vars — 不写 hardcoded 色, 保证一致性. */
 
 /* ── Markdown prose container ── */
-.dark .prose {
-  color: var(--color-text-primary);
-}
-.dark .prose a {
-  color: var(--color-link);
-}
-.dark .prose a:hover {
-  color: var(--color-link-hover);
-}
-.dark .prose h1, .dark .prose h2, .dark .prose h3, .dark .prose h4 {
-  color: var(--color-text-primary);
-}
-.dark .prose blockquote {
-  color: var(--color-text-secondary);
-  border-left-color: var(--color-border-primary);
-}
-.dark .prose hr {
-  border-top-color: var(--color-bg-tertiary);
-}
-.dark .prose th, .dark .prose td {
-  border-color: var(--color-bg-tertiary);
-  color: var(--color-text-primary);
-}
-.dark .prose th {
-  background: var(--color-bg-secondary);
-}
-.dark .prose code {
-  background: var(--color-bg-tertiary);
-  color: var(--color-text-primary);
-  border-color: var(--color-border-subtle);
-}
-.dark .prose pre {
-  color: var(--color-text-on-code);
-}
-.dark .prose pre code {
-  color: inherit;
-}
 
 /* ── CodeBlock wrapper (.code-block-body + toolbar) ── */
-.dark .code-block-wrapper {
-  background: var(--color-bg-code);
-  border-color: var(--color-bg-code-border);
-}
-.dark .code-block-header {
-  background: var(--color-bg-code-header);
-  border-bottom-color: var(--color-bg-code-border);
-  color: var(--color-text-secondary);
-}
 
 /* ── Message body text color ── 默认让 .msg-bubble-body 跟随主前景色,
    这样 prose 内的 a/code/em 自动响应暗色 (它们都 inherit 的). */
-.dark .msg-bubble-body {
-  color: var(--color-text-primary);
-}
 
 /* Approval card dark 兜底已弃用 (旧 .approval-card 走 row + bg-card).
    新 flat 卡片无背景无边框, 不需要 dark 覆盖. */
 
 /* ── Prefetch chip ── */
-.dark .prefetch-chip {
-  background: var(--color-accent-soft);
-  color: var(--color-accent);
-}
-.dark .prefetch-label {
-  color: var(--color-text-primary);
-}
 
 /* ── H-* helper utilities (Round 12 状态条和打包) ── */
-.dark .h-tiny {
-  color: var(--color-text-muted);
-}
 
 /* ── agent-activity 弹点 dot ── */
-.dark .agent-activity-bounce-dot {
-  background: var(--color-text-secondary);
-}
-.dark .wait-for-input-dot {
-  background: var(--color-text-faint);
-}
 
 /* ── chat-tool-call 兜底 (Round 13)
    tokens.css 已切 light/dark 变量, 但有些 cascade 顺序问题, 显式覆盖 */
-.dark .chat-tool-call--assistant {
-  background: var(--color-chat-assistant-bg);
-  color: var(--color-text-primary);
-}
-.dark .chat-tool-call--tool {
-  /* v9: 弱化 chat-tool-call 容器背景 — var(--color-chat-tool-bg)
-     = rgba(35,35,40,0.55) 叠 canvas #0f0f12 视觉 ≈ #1c1c1f, 整行
-     比上下文文本明显深一档, 主人截图反馈"看着很跳脱". 改用
-     color-mix(in srgb, --color-text-primary 4%, transparent), 与
-     row hover 6% / progress 8% 同手法语言, 默认态几乎透明但仍
-     保留 L1 视觉锚点; hover 时 .dark .tw-msg-row:hover 给 6% 自然
-     拉开两档. rainforest 主题复用 tokens.css 的 .dark 兜底,
-     一处改覆盖两个主题. */
-  background: color-mix(in srgb, var(--color-text-primary) 4%, transparent);
-  color: var(--color-text-primary);
-}
 
 /* ── tw-msg 附加 dark 兜底 ── */
-.dark .tw-msg {
-  color: var(--color-text-primary);
-}
-.dark .tw-msg-peek {
-  color: var(--color-text-muted);
-}
-.dark .tw-msg-verb {
-  color: var(--color-text-secondary);
-}
-.dark .tw-msg-sep {
-  color: var(--color-border-secondary);
-}
-.dark .tw-msg-xn {
-  color: var(--color-text-faint);
-}
-.dark .tw-msg-primary {
-  color: var(--color-text-primary);
-}
-.dark .tw-msg-note {
-  color: var(--color-text-muted);
-}
-.dark .tw-msg-dur {
-  color: var(--color-text-faint);
-}
-.dark .tw-msg-progress {
-  background: color-mix(in srgb, var(--color-text-primary) 8%, transparent);
-}
-.dark .tw-msg-err-hint {
-  color: var(--color-error);
-  background: var(--color-error-soft);
-}
 
 /* ── InlineThinkingDot ── (warning 状态在 dark 用 warning-soft) */
-.dark .inline-thinking-dot--warning {
-  background: var(--color-warning-soft);
-  color: var(--color-text-warning);
-}
 
 /* ── Tool terminal 红绿灯 dots: 不变 (macOS red/yellow/green 语义色) ── */
 
 /* ── scrollbar in dark: 调亮一档, 不然太黑看不见 ── */
-.dark ::-webkit-scrollbar-thumb {
-  background: var(--color-bg-tertiary);
-}
-.dark ::-webkit-scrollbar-thumb:hover {
-  background: var(--color-text-faint);
-}
 
 /* ── [data-theme="dark"] 与 .dark 同步覆盖 (有些旧 CSS 用属性选择器) ── */
-[data-theme="dark"] .chat-tool-call--assistant {
-  background: var(--color-chat-assistant-bg);
-  color: var(--color-text-primary);
-}
-[data-theme="dark"] .chat-tool-call--tool {
-  /* v9 同步 — 同 .dark 版本, 用 4% 主色叠加替代 rgba(35,35,40,0.55) */
-  background: color-mix(in srgb, var(--color-text-primary) 4%, transparent);
-  color: var(--color-text-primary);
-}
-[data-theme="dark"] .msg-bubble-body {
-  color: var(--color-text-primary);
-}
 
 /* ════════════════════════════════════════════════════════════════════
    § X.  TODO CARD (live task list — TodoItemUpserted / Removed)
@@ -3278,8 +2343,8 @@
 }
 .todo-card-header:hover { background: var(--color-bg-hover); }
 .todo-card-chevron { color: var(--color-text-faint); flex-shrink: 0; }
-.todo-card-icon    { color: var(--color-text-secondary); flex-shrink: 0; }
-.todo-card-title   {
+.todo-card-icon { color: var(--color-text-secondary); flex-shrink: 0; }
+.todo-card-title {
   font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.02em;
@@ -3287,14 +2352,10 @@
   flex: 1;
 }
 .todo-card-count {
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
   color: var(--color-text-faint);
   flex-shrink: 0;
-}
-.todo-card-spin {
-  color: var(--color-text-faint);
-  animation: li-pulse 1.2s ease-in-out infinite;
 }
 .todo-card-body {
   display: flex;
