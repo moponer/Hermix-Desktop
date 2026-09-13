@@ -16,7 +16,6 @@ import type { Workspace } from "../hooks/useWorkspaces";
 import type { ExpertDef } from "../data/builtinExperts";
 import type { QueuedMessage, Session } from "../types";
 import type { CustomAppSummary } from "../lib/customAppApi";
-import type { WorkspaceEntry } from "../types";
 import type { PendingImage } from "./chatUtils";
 
 export interface ComposerProps {
@@ -74,8 +73,6 @@ export interface ComposerProps {
   onSendFromQueue?: (idx: number) => void;
   session?: Session | null;
   customApps?: CustomAppSummary[];
-  /** 已建工作台（@work 联想数据源）。 */
-  workbenches?: WorkspaceEntry[];
 }
 
 export function Composer(p: ComposerProps) {
@@ -263,7 +260,6 @@ export function Composer(p: ComposerProps) {
         onKeyDown={p.handleKeyDown}
         textareaRef={p.textareaRef}
         apps={p.customApps ?? []}
-        workbenches={p.workbenches}
         isStreaming={p.isStreaming}
         placeholder={p.placeholder}
         onFilesAttach={p.onFilesAttach}

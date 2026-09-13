@@ -19,7 +19,7 @@ use crate::state::HttpServerState;
 use crate::transport::{ChannelSink, ChannelSource, Transport};
 
 const OUTBOUND_BUFFER: usize = 256;
-/// oneshot 响应体收集上限（.hwx 导出包可能较大，与 HTTP 层 body limit 同量级）。
+/// oneshot 响应体收集上限（与 HTTP 层 body limit 同量级，覆盖大文件/大结果导出场景）。
 const HTTP_RESPONSE_LIMIT: usize = 64 * 1024 * 1024;
 
 /// 入站帧：信封拆包失败或 channel 缺失时忽略并告警（对端 bug，不应崩溃服务）。

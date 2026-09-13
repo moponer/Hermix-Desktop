@@ -27,7 +27,6 @@ import type { StreamPhase, TodoSnapshotItem } from "./hooks/useStreamChat";
 import type { SubAgentState, SubAgentEventPayload } from "./types";
 import { useResizable } from "./hooks/useResizable";
 import { useWorkspaceRoot } from "./hooks/useWorkspaceRoot";
-import { refreshWorkspaces } from "./hooks/useWorkspaceRegistry";
 import { useArtifacts } from "./hooks/useArtifacts";
 import { resetChatStateForModelSwitch, type RefLike } from "./lib/chatStateReset";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -1974,15 +1973,6 @@ streamPhaseRef.current = null;
             // 对应 agent 注入的"告诉用户"提示。`"policy"` 是静默硬拦截，跳过。
             if (denialKind && denialKind !== "policy") {
               showDenialBanner(denialKind, tool);
-            }
-            // Agent 侧改动工作台（建/改结构/删）后刷新注册表，让左侧栏
-            // 与 @work 联想立即可见新工作台，无需重启或手动 CRUD。
-            if (
-              tool === "workspace_build" ||
-              tool === "workspace_update_schema" ||
-              tool === "workspace_delete"
-            ) {
-              void refreshWorkspaces();
             }
             // Append a `tool_complete` event to the
             // assistant's execution_timeline. No separate tool message,

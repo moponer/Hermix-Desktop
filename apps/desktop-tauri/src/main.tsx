@@ -8,7 +8,6 @@ import App from "./App";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { toastWarning } from "./hooks/useToast";
 import { ToastContainer } from "./components/ToastContainer";
-import { installWorkspaceFileInterceptor } from "./lib/workspaceFileInterceptor";
 import "./styles/globals.css";
 import "./styles/inline-thinking-dot.css";
 // components.css ships a project-wide `.h-enter` animation shorthand;
@@ -26,12 +25,6 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
     </ErrorBoundary>
   </React.StrictMode>,
 );
-
-// Translate `stdio://workspace-file/...` URLs (sentinels emitted by
-// `api.workspaceFileUrl`) into real blob URLs by round-tripping the
-// bridge. Installed once at boot — see `workspaceFileInterceptor.ts`
-// for the dedup + cache rules.
-installWorkspaceFileInterceptor();
 
 // 不甩活验证：每次构建时把当前 commit hash 打到 console，
 // 主人刷新 devtools 后搜 "hermix-ui build" 能立刻看到当前运行的是哪次 commit。

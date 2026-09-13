@@ -595,13 +595,6 @@ const BUILTIN_SKILLS: &[(&str, &str, &str)] = &[
         "custom-app-development",
         include_str!("skills/custom-app-development.md"),
     ),
-    // workspace-development: 工作台（Workspace）开发指南（Schema 驱动台账/管理面板），
-    // 与 custom-app-development 同分类；内置为 seed 分发，运行期副本 ~/.hermix/skills/hermix/。
-    (
-        "hermix",
-        "workspace-development",
-        include_str!("skills/workspace-development.md"),
-    ),
 ];
 
 /// Materialise the bundled builtin skills into `skills_dir`. Returns the

@@ -10,7 +10,6 @@ pub mod analytics;
 pub mod cua;
 pub mod automation;
 pub mod config;
-pub mod workspace_templates;
 pub mod consciousness;
 pub mod env;
 pub mod logs;
@@ -28,7 +27,6 @@ pub mod groupchat_api;
 pub mod groupchat_dispatcher;
 pub mod groupchat_sqlite;
 pub mod types;
-pub mod workspaces;
 
 // Re-export shared types used by multiple modules
 pub use types::*;
@@ -189,103 +187,6 @@ pub fn router() -> Router<HttpServerState> {
         .route("/api/migration/apply", post(migration::apply_migration))
         .route("/api/migration/skip", post(migration::skip_migration))
         .route("/api/migration/reset", post(migration::reset_migration))
-        // Workspaces — schema-driven workbenches (registry + definition).
-        .route(
-            "/api/workspaces",
-            get(workspaces::list_workspaces).post(workspaces::create_workspace),
-        )
-        .route(
-            "/api/workspaces/{id}",
-            get(workspaces::get_workspace)
-                .put(workspaces::rename_workspace)
-                .delete(workspaces::delete_workspace),
-        )
-        .route(
-            "/api/workspaces/{id}/schema",
-            put(workspaces::update_workspace_schema),
-        )
-        // 布局专用端点：拖拽保存只动 layout 层，避免整 schema 快照回写
-        // 覆盖 LLM 并发修改（丢失更新）
-        .route(
-            "/api/workspaces/{id}/layout",
-            put(workspaces::update_workspace_layout),
-        )
-        // M5 协作分发：.hwx 导出 / 导入（JSON bundle，防脏包校验）
-        .route(
-            "/api/workspaces/{id}/export",
-            get(workspaces::export_workspace),
-        )
-        .route(
-            "/api/workspaces/import",
-            post(workspaces::import_workspace),
-        )
-        // M6 模板：预置台账模板列表 + 一键建工作台
-        .route(
-            "/api/workspace-templates",
-            get(workspace_templates::list_templates),
-        )
-        .route(
-            "/api/workspace-templates/{id}/create",
-            post(workspace_templates::create_from_template),
-        )
-        // P3 自动化可视化：定义列表 + 触发记录
-        .route(
-            "/api/workspaces/{id}/automations",
-            get(workspaces::list_automations),
-        )
-        .route(
-            "/api/workspaces/{id}/automations/runs",
-            get(workspaces::automation_runs),
-        )
-        // P5 附件：base64 上传 + 读取（文件名白名单防穿越）
-        .route(
-            "/api/workspaces/{id}/files/upload",
-            post(workspaces::upload_file),
-        )
-        .route(
-            "/api/workspaces/{id}/files/{filename}",
-            get(workspaces::get_file),
-        )
-        // 数据端点：打通 LocalSqliteStore（表名/列名过 schema 白名单）
-        .route(
-            "/api/workspaces/{id}/tables/{table}/query",
-            post(workspaces::query_table),
-        )
-        .route(
-            "/api/workspaces/{id}/tables/{table}/insert",
-            post(workspaces::insert_rows),
-        )
-        .route(
-            "/api/workspaces/{id}/tables/{table}/update",
-            post(workspaces::update_row),
-        )
-        .route(
-            "/api/workspaces/{id}/tables/{table}/delete",
-            post(workspaces::delete_row),
-        )
-        .route(
-            "/api/workspaces/{id}/tables/{table}/count",
-            post(workspaces::count_rows),
-        )
-        // M1.6 仪表盘 chart 分组聚合
-        .route(
-            "/api/workspaces/{id}/tables/{table}/group_count",
-            post(workspaces::group_count),
-        )
-        // P6 变更历史：最近变更 + 撤销
-        .route(
-            "/api/workspaces/{id}/tables/{table}/changes",
-            get(workspaces::list_table_changes),
-        )
-        .route(
-            "/api/workspaces/{id}/tables/{table}/undo",
-            post(workspaces::undo_last_change),
-        )
-        // M2 变更历史清理
-        .route(
-            "/api/workspaces/{id}/change-log/purge",
-            post(workspaces::purge_change_log),
-        )
         .route("/ws/consciousness", get(consciousness::ws_consciousness))
         // GroupChat rooms
         .route(

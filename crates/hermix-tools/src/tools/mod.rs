@@ -57,8 +57,6 @@ pub mod task_manager;
 pub mod task_tracker;
 pub mod approval_tokens;
 pub mod file_converter;
-pub mod workspace_manager;
-pub mod workspace_data;
 pub mod tool_search;
 pub mod tool_chain;
 pub mod tts;

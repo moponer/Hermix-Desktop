@@ -326,19 +326,6 @@ impl HttpServerState {
             &hermix_home,
         );
 
-        // workspace_build 工具注册（M2.3）。
-        // 必须放在 apply_persisted_toolset_state 之后——否则「workspace」
-        // toolset 会被用户持久化的 enabled_toolsets.json 默认关掉（新工具
-        // 尚未出现在用户的开关列表里）。
-        let ws_backend = crate::workspace_backend::local_backend();
-        hermix_tools::tools::workspace_manager::register(&tool_registry, ws_backend.clone());
-        // workspace_update_schema 工具注册（M2.5 增量迭代）。
-        hermix_tools::tools::workspace_manager::register_update(
-            &tool_registry,
-            ws_backend.clone(),
-        );
-        // workspace 数据工具族注册（M3.3/M3.4 读写 6 工具，共用同一 backend）。
-        hermix_tools::tools::workspace_data::register(&tool_registry, ws_backend.clone());
 
         //★ P1-② : load native plugins (.dll) from
         // $HERMIX_HOME/plugins/tools/ and /plugins/memory/.
@@ -607,8 +594,6 @@ impl HttpServerState {
             &state.automation_service,
             &state.task_service,
         ) {
-            // M4.4: 把调度服务注入 workspace backend（建设/迁移后注册自动化）
-            ws_backend.inject_automation_service(auto_svc.clone());
             let handle = automation_trigger::start_automation_scheduler(
                 auto_svc.clone(),
                 state.agent_service(),

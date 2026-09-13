@@ -16,10 +16,8 @@ import { useModelSelector } from "./ModelSelector";
 import { Composer } from "./Composer";
 import { MessageList, type MessageListHandle, type StreamRow } from "./MessageList";
 import { useCustomApps } from "../hooks/useCustomApps";
-import { useWorkspaceRegistry } from "../hooks/useWorkspaceRegistry";
 import {
   MENTION_TRIGGER_APP,
-  MENTION_TRIGGER_WORK,
   buildMentionPrefix,
 } from "../lib/appMention";
 import {
@@ -206,8 +204,6 @@ export function ChatView({
   const isStreaming = stream.streamingSessionId === session?.id;
   const [input, setInput] = useState("");
   const { apps: customApps } = useCustomApps();
-  // 工作台注册表 entries — 供 @work 联想与发送时【目标工作台】头。
-  const { entries: workbenchEntries } = useWorkspaceRegistry();
   const [sending, setSending] = useState(false);
   const [inlineCompactionDismissed, setInlineCompactionDismissed] = useState(false);
   useEffect(() => {
@@ -614,9 +610,8 @@ export function ChatView({
 
   const handleSubmit = async () => {
     const trimmed = input.trim();
-    // @app → 目标自定义应用头；@work → 目标工作台头（两个可同时出现）。
+    // @app → 目标自定义应用头。
     let finalText = buildMentionPrefix(trimmed, customApps, MENTION_TRIGGER_APP, "自定义应用", "app_id");
-    finalText = buildMentionPrefix(finalText, workbenchEntries, MENTION_TRIGGER_WORK, "工作台", "workspace_id");
     if (!trimmed && pendingImages.length === 0 && filePaths.length === 0) return;
     if (isProcessingFiles) return;
     const attachedImages: QueuedImage[] = pendingImages.map((img) => ({
@@ -781,7 +776,6 @@ export function ChatView({
           <div className="w-full">
             <Composer
               input={input} setInput={setInput} handleKeyDown={handleKeyDown} handleSubmit={handleSubmit} customApps={customApps}
-              workbenches={workbenchEntries}
               textareaRef={textareaRef} sending={sending} isStreaming={false}
               activeWorkspace={activeWorkspace} workspaces={workspaces} workspaceLocked={workspaceLocked}
               onSelectWorkspace={(p) => setWorkspace(p)}

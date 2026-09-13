@@ -1,21 +1,17 @@
-// mention — parse, highlight and serialise @app / @work mentions.
+// mention — parse, highlight and serialise @app mentions.
 //
-// A mention is a literal trigger token ("@app" / "@work") followed by a single
-// (whitespace-delimited) item name, e.g. "@app 本地音乐" or "@work 车辆台账".
-// The name must match a known custom app / workspace so we can resolve it to a
+// A mention is a literal trigger token ("@app") followed by a single
+// (whitespace-delimited) item name, e.g. "@app 本地音乐".
+// The name must match a known custom app so we can resolve it to a
 // stable id at send time.
 
 /** 自定义应用触发词。 */
 export const MENTION_TRIGGER_APP = "@app";
-/** 工作台触发词。 */
-export const MENTION_TRIGGER_WORK = "@work";
 
 // Dark-blue (still legible on both light and dark themes — a true navy would
 // be invisible on the dark composer background). Swap for a deeper navy if the
 // app is ever forced to a light-only theme.
 export const MENTION_COLOR = "#3b82f6";
-// 工作台 mention 高亮色 — 与 @app 区分，用项目暖 accent（陶土棕）。
-export const MENTION_COLOR_WORK = "#c96442";
 
 export interface ActiveMention {
   /** index of the '@' in the trigger */
@@ -122,7 +118,7 @@ export function extractMentions(
  * to. When no mention is present the text is returned unchanged (ongoing
  * conversations that already resolved the target need no extra hint).
  *
- * @param label   展示标签，如 "自定义应用" / "工作台"
+ * @param label   展示标签，如 "自定义应用"
  * @param idKey   注入的 id 字段名，如 "app_id" / "workspace_id"
  */
 export function buildMentionPrefix(

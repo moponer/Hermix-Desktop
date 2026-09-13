@@ -1,21 +1,18 @@
-// AppMentionInput — chat textarea with @app / @work mentions.
+// AppMentionInput — chat textarea with @app mentions.
 //
 // Architecture: a transparent <textarea> sits on top of a backdrop <div> that
-// renders the same text with "@app <name>" / "@work <name>" segments coloured.
+// renders the same text with "@app <name>" segments coloured.
 // The textarea owns input/caret; the backdrop owns colour. When the user types
-// "@app" an inline card lists the installed custom apps; "@work" lists the
-// workspaces. Picking one inserts a resolved "<trigger> <name> " token.
+// "@app" an inline card lists the installed custom apps.
+// Picking one inserts a resolved "<trigger> <name> " token.
 // No extra deps, no contentEditable.
 
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Plus } from "lucide-react";
 import type { CustomAppSummary } from "../lib/customAppApi";
-import type { WorkspaceEntry } from "../types";
 import {
   MENTION_COLOR,
-  MENTION_COLOR_WORK,
   MENTION_TRIGGER_APP,
-  MENTION_TRIGGER_WORK,
   applyMention,
   detectActiveMention,
   splitMentions,
@@ -27,11 +24,6 @@ import {
 // agent 收到后按 custom-app-development 规范走创建流程（需求梳理→方案规划→开发→验证）。
 const CREATE_NEW_APP_ID = "__create_new_app__";
 
-// 虚拟"创建工作台"快捷项 id — 始终作为 @work 面板的第一项。
-// 选中后插入 "@work 创建工作台 需求："，引导用户描述需求，
-// agent 收到后按 workspace-development 规范走建设流程（schema 提案→确认→build→测试→迭代）。
-const CREATE_NEW_WORK_ID = "__create_new_work__";
-
 interface Props {
   value: string;
   onChange: (v: string) => void;
@@ -39,8 +31,6 @@ interface Props {
   onKeyDown: (e: React.KeyboardEvent) => void;
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
   apps: CustomAppSummary[];
-  /** 已建工作台（@work 联想列表）。 */
-  workbenches?: WorkspaceEntry[];
   disabled?: boolean;
   isStreaming?: boolean;
   placeholder?: string;
@@ -62,7 +52,6 @@ function AppMentionInputImpl({
   onKeyDown,
   textareaRef,
   apps,
-  workbenches = [],
   disabled,
   isStreaming,
   placeholder,
@@ -74,31 +63,28 @@ function AppMentionInputImpl({
   const pendingCaret = useRef<number | null>(null);
   const blurTimer = useRef<number | null>(null);
 
-  const isWork = active?.trigger === MENTION_TRIGGER_WORK;
-
   const filtered = useMemo(() => {
     const q = (active?.query ?? "").trim().toLowerCase();
-    if (isWork) {
-      if (!q) return workbenches;
-      return workbenches.filter((w) => w.name.toLowerCase().includes(q));
-    }
     if (!q) return apps;
     return apps.filter((a) => a.name.toLowerCase().includes(q));
-  }, [apps, workbenches, active, isWork]);
+  }, [apps, active]);
 
-  // 列表首项恒为虚拟创建快捷项，其余为已装应用 / 已建工作台。
+  // 列表首项恒为虚拟创建快捷项，其余为已装应用。
   const items = useMemo<MentionItemView[]>(() => {
-    const head = isWork
-      ? { id: CREATE_NEW_WORK_ID, name: "创建工作台 需求：", description: "让 AI 从零建设一个新的工作台", isCreate: true }
-      : { id: CREATE_NEW_APP_ID, name: "创建新应用 应用要求：", description: "让 AI 从零开发一个新的桌面应用", isCreate: true };
-    const rest = (isWork ? filtered : filtered).map((it) => ({
+    const head = {
+      id: CREATE_NEW_APP_ID,
+      name: "创建新应用 应用要求：",
+      description: "让 AI 从零开发一个新的桌面应用",
+      isCreate: true,
+    };
+    const rest = filtered.map((it) => ({
       id: it.id,
       name: it.name,
       description: "description" in it ? (it.description as string | undefined) : undefined,
       isCreate: false,
     }));
     return [head, ...rest];
-  }, [filtered, isWork]);
+  }, [filtered]);
 
   useEffect(() => {
     if (pendingCaret.current != null && textareaRef.current) {
@@ -121,19 +107,10 @@ function AppMentionInputImpl({
     const v = e.target.value;
     const caret = e.target.selectionStart ?? v.length;
     onChange(v);
-    // 两个 trigger 都检测，取更靠近光标的那个。
     const appM = detectActiveMention(v, caret, MENTION_TRIGGER_APP);
-    const workM = detectActiveMention(v, caret, MENTION_TRIGGER_WORK);
     let next: ActiveMentionWithTrigger | null = null;
-    if (appM && workM) {
-      next =
-        appM.start >= workM.start
-          ? { ...appM, trigger: MENTION_TRIGGER_APP }
-          : { ...workM, trigger: MENTION_TRIGGER_WORK };
-    } else if (appM) {
+    if (appM) {
       next = { ...appM, trigger: MENTION_TRIGGER_APP };
-    } else if (workM) {
-      next = { ...workM, trigger: MENTION_TRIGGER_WORK };
     }
     setActive(next);
     setSelIdx(0);
@@ -190,11 +167,9 @@ function AppMentionInputImpl({
   };
 
   const backdropText = value.endsWith("\n") ? value + " " : value;
-  const segments = splitMentions(backdropText, [MENTION_TRIGGER_APP, MENTION_TRIGGER_WORK]);
+  const segments = splitMentions(backdropText, [MENTION_TRIGGER_APP]);
 
-  const panelTitle = isWork
-    ? `工作台 · ${workbenches.length}`
-    : `自定义应用 · ${apps.length}`;
+  const panelTitle = `自定义应用 · ${apps.length}`;
 
   return (
     <div className="relative">
@@ -214,7 +189,7 @@ function AppMentionInputImpl({
           seg.mention ? (
             <span
               key={i}
-              style={{ color: seg.trigger === MENTION_TRIGGER_WORK ? MENTION_COLOR_WORK : MENTION_COLOR }}
+              style={{ color: MENTION_COLOR }}
             >
               {seg.text}
             </span>
@@ -293,7 +268,7 @@ function AppMentionInputImpl({
                     style={{ color: item.isCreate ? "var(--color-accent, #b8860b)" : "var(--color-text-primary)" }}
                   >
                     {item.isCreate && <Plus className="icon-md" />}
-                    {item.isCreate ? (isWork ? "创建工作台" : "创建新应用") : item.name}
+                    {item.isCreate ? "创建新应用" : item.name}
                   </span>
                   {item.description && (
                     <span

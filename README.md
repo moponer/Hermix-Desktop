@@ -1,7 +1,7 @@
 # Hermix Desktop
 
 本地优先的 Windows 桌面 AI 助手。Rust 后端 + React 前端，经 Tauri v2 打包为免安装便携应用：
-对话、工具执行、定时自动化、以及面向管理台账场景的「工作台」（schema 驱动的自定义数据应用）
+对话、工具执行、定时自动化、自定义应用（custom app）
 都在本机闭环，数据不依赖任何云端托管。
 
 当前为 **Windows x64（MSVC）单平台**项目，无跨平台目标，也没有云服务依赖。
@@ -13,8 +13,7 @@
 | 能力 | 说明 |
 |---|---|
 | Agent 对话 | 多 provider LLM 接入（内置十余家厂商注册表 + 自定义 OpenAI 兼容接入），工具调用、子代理派发、上下文压缩、审批引擎 |
-| 工作台 | 用户以自然语言或模板生成台账类数据应用：每工作台独立 SQLite、表/看板/仪表盘视图、只读/删保护（readonly / allow_delete）、行级 CRUD 由 REST 与 LLM 工具共用同一权限门 |
-| .hwx 分发 | 工作台导出为 JSON bundle 文件导入他机；冲突按 LWW（行级 updated_at 较新者胜）合并，保留行主键与时间线 |
+| 自定义应用 | 用户以自然语言或模板生成真代码应用：独立窗口、真分发、可复用技能，是唯一的"用户自造能力"入口 |
 | 自动化 | cron/rrule 定时任务、SQL 条件提醒（零 LLM 扫描）、LLM 定时总结，调度器与会话隔离打通 |
 | 内置技能 | 打包内嵌技能目录（`builtin-skills/`）+ 人格配置（`builtin-soul/`），启动期落盘到用户数据目录 |
 
@@ -49,7 +48,7 @@ pnpm vitest run                          # 前端测试（15 个文件 / 131 个
 ## 仓库结构
 
 ```
-├── Cargo.toml                 # cargo workspace（resolver = 2，24 个 crate）
+├── Cargo.toml                 # cargo workspace（resolver = 2）
 ├── crates/
 │   ├── hermix-core            # 基础类型：Message / LlmResponse / ToolError …
 │   ├── hermix-config          # 配置加载、provider 注册表唯一真理源、路径管理
@@ -58,8 +57,6 @@ pnpm vitest run                          # 前端测试（15 个文件 / 131 个
 │   ├── hermix-tools           # 30+ 工具后端 + 审批引擎 + 凭证防护
 │   ├── hermix-intelligence    # 工具路由、思考模式
 │   ├── hermix-focus           # FocusStack / 记忆显著性
-│   ├── hermix-workspace       # 工作台引擎：schema 校验/迁移/store/service/
-│   │                          #   权限模型/.hwx 包/内置模板/条件引擎
 │   ├── hermix-automation      # 调度器（cron/rrule 任务与触发器）
 │   ├── hermix-mcp             # MCP 客户端接入
 │   ├── hermix-gateway         # 供应商网关适配
@@ -76,7 +73,7 @@ pnpm vitest run                          # 前端测试（15 个文件 / 131 个
 │   └── playground/            # 前端实验场
 ├── sdk/                       # protocol-fixtures（协议黄金样本）、typescript 类型包
 ├── scripts/                   # ci-gate.sh、图标生成、主题 token 检查等工程脚本
-├── docs/                      # 设计方案与历史审查报告（含《工作台架构设计方案》）
+├── docs/                      # 设计方案与历史审查报告
 ├── AGENTS.md                  # 贡献者约定、代码六步决策阶梯、核心原则 —— 改码前必读
 └── SOUL.md                    # 助手人格定义（同步打包进 builtin-soul/）
 ```
@@ -84,20 +81,16 @@ pnpm vitest run                          # 前端测试（15 个文件 / 131 个
 ## 前端速览
 
 `apps/desktop-tauri/src/` 下按域组织组件：聊天主流（含消息渲染与流式协议适配）、模型选择器
-（以后端 `/api/model/list` 为持久权威、`/api/providers/meta` 做厂商分组）、设置中心、群聊，
-以及工作台全链路渲染（Tab 容器 → schema 渲染器 → 表格/表单/仪表盘组件）。API 封装集中在
-`src/api/rest.ts`，类型镜像在 `src/types.ts` 与后端 serde 结构一一对应。
+（以后端 `/api/model/list` 为持久权威、`/api/providers/meta` 做厂商分组）、设置中心、群聊、
+自定义应用渲染。API 封装集中在 `src/api/rest.ts`，类型镜像在 `src/types.ts` 与后端 serde 结构一一对应。
 
 ## 贡献约定（摘要）
 
 - 改动必须附带验证证据：`cargo check` + 相关 crate 测试 + `pnpm tsc`，提交前跑 `scripts/ci-gate.sh`
 - 单文件超过 2500 行会被 CI 门警告；新增依赖遵循"标准库 > 平台原生 > 已有依赖"阶梯
-- 错误要精准暴露，禁止静默吞结果；跨入口不变量放单一分发点强制（如工作台写权限经
-  `WorkspaceService::open_writable` 能力句柄），不做"每个入口各自记得检查"
+- 错误要精准暴露，禁止静默吞结果；跨入口不变量放单一分发点强制，不做"每个入口各自记得检查"
 - 详见 [AGENTS.md](AGENTS.md)
 
 ## 文档
 
-- 《工作台架构设计方案》（含实施落地对照表）：`docs/工作台架构设计方案.md`
-- M7 全栈审查报告与修复记录：`docs/CODE_REVIEW_2026-08-27_M7-workspace.md`
 - 架构演进与专项计划存档：`docs/`
