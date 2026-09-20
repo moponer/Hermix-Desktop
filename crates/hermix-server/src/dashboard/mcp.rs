@@ -328,8 +328,9 @@ async fn sync_runtime_after_change(
     }
 }
 
-/// POST /api/mcp/servers/reset — restore the 5 official seeds. Wipes any
-/// user-added entries; useful after a botched import.
+/// POST /api/mcp/servers/reset — reset to the seed state. Wipes any
+/// user-added entries; useful after a botched import. Official seeds
+/// were removed, so the reset state is an empty list.
 pub async fn reset_to_official(
     State(state): State<HttpServerState>,
 ) -> Result<Json<McpServersState>, (StatusCode, String)> {

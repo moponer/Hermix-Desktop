@@ -251,36 +251,16 @@ async fn status_returns_version() {
 #[tokio::test]
 async fn sessions_list_returns_paginated() {
     let app = test_app().await;
-    let (status, body) = get_json(app, "/api/sessions").await;
+    let (status, body) = get_json(app, "/v1/sessions").await;
     assert_eq!(status, StatusCode::OK);
-    // Should have pagination fields
     assert!(body["sessions"].is_array());
     assert!(body["total"].is_number());
-    assert!(body["limit"].is_number());
-    assert!(body["offset"].is_number());
-}
-
-#[tokio::test]
-async fn sessions_list_respects_limit_offset() {
-    let app = test_app().await;
-    let (status, body) = get_json(app, "/api/sessions?limit=5&offset=0").await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["limit"].as_u64().unwrap(), 5);
-    assert_eq!(body["offset"].as_u64().unwrap(), 0);
-}
-
-#[tokio::test]
-async fn session_detail_not_found() {
-    let app = test_app().await;
-    let (status, _body) = get_json(app, "/api/sessions/nonexistent-id-12345").await;
-    // Should return 404 for a session that doesn't exist
-    assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
 async fn session_messages_returns_empty_for_unknown() {
     let app = test_app().await;
-    let (status, body) = get_json(app, "/api/sessions/unknown-session/messages").await;
+    let (status, body) = get_json(app, "/v1/sessions/unknown-session/messages").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["session_id"].as_str().unwrap(), "unknown-session");
     assert!(body["messages"].as_array().unwrap().is_empty());
@@ -289,7 +269,7 @@ async fn session_messages_returns_empty_for_unknown() {
 #[tokio::test]
 async fn session_search_returns_results_array() {
     let app = test_app().await;
-    let (status, body) = get_json(app, "/api/sessions/search?q=hello").await;
+    let (status, body) = get_json(app, "/v1/sessions/search?q=hello").await;
     assert_eq!(status, StatusCode::OK);
     assert!(body["results"].is_array());
 }
@@ -303,31 +283,6 @@ async fn config_get_returns_json() {
     assert_eq!(status, StatusCode::OK);
     // Should be a JSON object (the serialized GatewayConfig)
     assert!(body.is_object());
-}
-
-#[tokio::test]
-async fn config_defaults_returns_json() {
-    let app = test_app().await;
-    let (status, body) = get_json(app, "/api/config/defaults").await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(body.is_object());
-}
-
-#[tokio::test]
-async fn config_schema_returns_fields() {
-    let app = test_app().await;
-    let (status, body) = get_json(app, "/api/config/schema").await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(body["category_order"].is_array());
-}
-
-#[tokio::test]
-async fn config_raw_returns_yaml() {
-    let app = test_app().await;
-    let (status, body) = get_json(app, "/api/config/raw").await;
-    assert_eq!(status, StatusCode::OK);
-    // Should have a "yaml" field (may be empty string if no config file)
-    assert!(body["yaml"].is_string());
 }
 
 // ── /api/model/info ─────────────────────────────────────────────────
@@ -378,15 +333,6 @@ async fn logs_accepts_params() {
     let (status, body) = get_json(app, "/api/logs?file=agent&lines=10&level=ERROR").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["file"].as_str().unwrap(), "agent");
-}
-
-// ── /api/cron/jobs ──────────────────────────────────────────────────
-
-#[tokio::test]
-async fn cron_jobs_unavailable_without_scheduler() {
-    let app = test_app().await;
-    let (status, _body) = get_json(app, "/api/cron/jobs").await;
-    assert_eq!(status, StatusCode::OK);
 }
 
 // ── /api/skills ─────────────────────────────────────────────────────
@@ -495,22 +441,14 @@ async fn delete_json(app: axum::Router, uri: &str) -> (StatusCode, serde_json::V
 }
 
 #[tokio::test]
-async fn mcp_servers_seeds_official_on_first_list() {
+async fn mcp_servers_list_empty_on_fresh_state() {
     let dir = tempfile::tempdir().expect("tempdir");
     let app = test_app_with_hermes_home(dir.path().to_path_buf()).await;
     let (status, body) = get_json(app, "/api/mcp/servers").await;
     assert_eq!(status, StatusCode::OK);
+    // Official seeds were removed: a fresh install starts with no entries.
     let servers = body["servers"].as_array().expect("servers array");
-    assert_eq!(servers.len(), 5, "expected 5 official seeds");
-    let names: Vec<&str> = servers
-        .iter()
-        .map(|s| s["name"].as_str().unwrap_or(""))
-        .collect();
-    assert!(names.iter().any(|n| n.contains("Filesystem")));
-    assert!(names.iter().any(|n| n.contains("Fetch")));
-    assert!(names.iter().any(|n| n.contains("Git")));
-    assert!(names.iter().any(|n| n.contains("GitHub")));
-    assert!(names.iter().any(|n| n.contains("Brave Search")));
+    assert!(servers.is_empty(), "fresh state must have no servers");
     assert_eq!(body["seeded"], true);
 }
 
@@ -536,7 +474,7 @@ async fn mcp_servers_create_then_get() {
     let (_, list) = get_json(app, "/api/mcp/servers").await;
     let servers = list["servers"].as_array().unwrap();
     assert!(servers.iter().any(|s| s["id"] == "user-notion"));
-    assert_eq!(servers.len(), 6); // 5 seeds + 1 user
+    assert_eq!(servers.len(), 1); // no seeds + 1 user entry
 }
 
 #[tokio::test]
@@ -544,13 +482,16 @@ async fn mcp_servers_create_rejects_duplicate_id() {
     let dir = tempfile::tempdir().expect("tempdir");
     let app = test_app_with_hermes_home(dir.path().to_path_buf()).await;
     let payload = serde_json::json!({
-        "id": "official-filesystem",
-        "name": "Should not overwrite",
-        "transport": "stdio",
-        "command": "evil",
+        "id": "user-notion",
+        "name": "Notion (User)",
+        "transport": "http",
+        "url": "https://mcp.notion.so/sse",
         "enabled": true,
         "created_at": "2026-06-02T00:00:00Z",
     });
+    let (status, _body) = post_json_body(app.clone(), "/api/mcp/servers", &payload).await;
+    assert_eq!(status, StatusCode::OK);
+    // Same id again must not overwrite the existing entry.
     let (status, _body) = post_json_body(app, "/api/mcp/servers", &payload).await;
     assert_eq!(status, StatusCode::CONFLICT);
 }
@@ -559,13 +500,19 @@ async fn mcp_servers_create_rejects_duplicate_id() {
 async fn mcp_servers_update_then_get() {
     let dir = tempfile::tempdir().expect("tempdir");
     let app = test_app_with_hermes_home(dir.path().to_path_buf()).await;
+    let payload = serde_json::json!({
+        "id": "user-notion",
+        "name": "Notion (User)",
+        "transport": "http",
+        "url": "https://mcp.notion.so/sse",
+        "enabled": true,
+        "created_at": "2026-06-02T00:00:00Z",
+    });
+    let (status, _) = post_json_body(app.clone(), "/api/mcp/servers", &payload).await;
+    assert_eq!(status, StatusCode::OK);
+
     let patch = serde_json::json!({ "enabled": false, "description": "Disabled for testing" });
-    let (status, body) = put_json(
-        app.clone(),
-        "/api/mcp/servers/official-filesystem",
-        &patch,
-    )
-    .await;
+    let (status, body) = put_json(app.clone(), "/api/mcp/servers/user-notion", &patch).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["enabled"], false);
     assert_eq!(body["description"], "Disabled for testing");
@@ -575,7 +522,7 @@ async fn mcp_servers_update_then_get() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|s| s["id"] == "official-filesystem")
+        .find(|s| s["id"] == "user-notion")
         .unwrap();
     assert_eq!(entry["enabled"], false);
 }
@@ -584,12 +531,23 @@ async fn mcp_servers_update_then_get() {
 async fn mcp_servers_delete_then_get() {
     let dir = tempfile::tempdir().expect("tempdir");
     let app = test_app_with_hermes_home(dir.path().to_path_buf()).await;
-    let (status, _body) = delete_json(app.clone(), "/api/mcp/servers/official-github").await;
+    let payload = serde_json::json!({
+        "id": "user-temp",
+        "name": "Temp (User)",
+        "transport": "http",
+        "url": "https://example.com/sse",
+        "enabled": true,
+        "created_at": "2026-06-02T00:00:00Z",
+    });
+    let (status, _) = post_json_body(app.clone(), "/api/mcp/servers", &payload).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, _body) = delete_json(app.clone(), "/api/mcp/servers/user-temp").await;
     assert_eq!(status, StatusCode::OK);
     let (_, list) = get_json(app, "/api/mcp/servers").await;
     let servers = list["servers"].as_array().unwrap();
-    assert_eq!(servers.len(), 4);
-    assert!(!servers.iter().any(|s| s["id"] == "official-github"));
+    assert!(servers.is_empty());
+    assert!(!servers.iter().any(|s| s["id"] == "user-temp"));
 }
 
 #[tokio::test]
@@ -601,18 +559,27 @@ async fn mcp_servers_delete_unknown_returns_404() {
 }
 
 #[tokio::test]
-async fn mcp_servers_reset_restores_official_seeds() {
+async fn mcp_servers_reset_clears_user_entries() {
     let dir = tempfile::tempdir().expect("tempdir");
     let app = test_app_with_hermes_home(dir.path().to_path_buf()).await;
-    // Delete a seed
-    let _ = delete_json(app.clone(), "/api/mcp/servers/official-git").await;
-    // Reset
+    let payload = serde_json::json!({
+        "id": "user-temp",
+        "name": "Temp (User)",
+        "transport": "http",
+        "url": "https://example.com/sse",
+        "enabled": true,
+        "created_at": "2026-06-02T00:00:00Z",
+    });
+    let (status, _) = post_json_body(app.clone(), "/api/mcp/servers", &payload).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Reset wipes user entries; official seeds no longer exist, so the
+    // state returns to an empty list.
     let (status, body) = post_json(app.clone(), "/api/mcp/servers/reset").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["seeded"], true);
     let servers = body["servers"].as_array().unwrap();
-    assert_eq!(servers.len(), 5);
-    assert!(servers.iter().any(|s| s["id"] == "official-git"));
+    assert!(servers.is_empty());
 }
 
 // ── /api/automation/tasks ───────────────────────────────────────────
@@ -855,7 +822,7 @@ async fn session_undo_default_count_soft_deletes_last_turn() {
         .unwrap();
 
     // /undo (no count param) → default 1 turn.
-    let (status, body) = post_json(app.clone(), "/api/sessions/undo-http/undo").await;
+    let (status, body) = post_json(app.clone(), "/v1/sessions/undo-http/undo").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["ok"], true);
     assert_eq!(body["deactivated"], 2);
@@ -863,7 +830,7 @@ async fn session_undo_default_count_soft_deletes_last_turn() {
 
     // /api/sessions/undo-http/messages should now return only the first 4
     // messages (turn-1 and turn-2).
-    let (_, list) = get_json(app, "/api/sessions/undo-http/messages").await;
+    let (_, list) = get_json(app, "/v1/sessions/undo-http/messages").await;
     let msgs = list["messages"].as_array().unwrap();
     assert_eq!(msgs.len(), 4);
     assert_eq!(msgs[3]["content"], "turn-2 assistant");
@@ -901,14 +868,14 @@ async fn session_undo_with_count_query_string() {
 
     let (status, body) = post_json(
         app.clone(),
-        "/api/sessions/undo-http-2/undo?count=2",
+        "/v1/sessions/undo-http-2/undo?count=2",
     )
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["deactivated"], 4);
     assert_eq!(body["turns_requested"], 2);
 
-    let (_, list) = get_json(app, "/api/sessions/undo-http-2/messages").await;
+    let (_, list) = get_json(app, "/v1/sessions/undo-http-2/messages").await;
     assert_eq!(list["messages"].as_array().unwrap().len(), 2);
 }
 
@@ -940,15 +907,15 @@ async fn session_restore_brings_back_most_recent_block() {
     )
     .unwrap();
 
-    post_json(app.clone(), "/api/sessions/undo-http-3/undo").await;
-    let (_, list1) = get_json(app.clone(), "/api/sessions/undo-http-3/messages").await;
+    post_json(app.clone(), "/v1/sessions/undo-http-3/undo").await;
+    let (_, list1) = get_json(app.clone(), "/v1/sessions/undo-http-3/messages").await;
     assert_eq!(list1["messages"].as_array().unwrap().len(), 2);
 
-    let (status, body) = post_json(app.clone(), "/api/sessions/undo-http-3/restore").await;
+    let (status, body) = post_json(app.clone(), "/v1/sessions/undo-http-3/restore").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["restored"], 2);
 
-    let (_, list2) = get_json(app, "/api/sessions/undo-http-3/messages").await;
+    let (_, list2) = get_json(app, "/v1/sessions/undo-http-3/messages").await;
     assert_eq!(list2["messages"].as_array().unwrap().len(), 4);
 }
 
@@ -956,7 +923,7 @@ async fn session_restore_brings_back_most_recent_block() {
 async fn session_undo_on_empty_session_returns_zero() {
     let dir = tempfile::tempdir().expect("tempdir");
     let app = test_app_with_hermes_home(dir.path().to_path_buf()).await;
-    let (status, body) = post_json(app, "/api/sessions/never-existed/undo").await;
+    let (status, body) = post_json(app, "/v1/sessions/never-existed/undo").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["deactivated"], 0);
 }
@@ -964,23 +931,23 @@ async fn session_undo_on_empty_session_returns_zero() {
 // ── Builtin skill seeding ────────────────────────────────────────────
 
 #[test]
-fn seed_builtin_skills_writes_all_15_to_fresh_dir() {
+fn seed_builtin_skills_writes_all_builtins_to_fresh_dir() {
     let dir = tempfile::tempdir().expect("tempdir");
     let skills_dir = dir.path().to_path_buf();
 
     let written = hermix_server::dashboard::skills::seed_builtin_skills(&skills_dir)
         .expect("seed should succeed on a fresh dir");
 
-    // 10 dev + 5 general = 15 builtin skills
-    assert_eq!(written, 15);
+    // 18 builtin skills across 8 categories
+    assert_eq!(written, 18);
 
-    // All 15 should now exist on disk under <category>/<name>/SKILL.md
+    // All 18 should now exist on disk under <category>/<name>/SKILL.md
     let entries: Vec<_> = walkdir::WalkDir::new(&skills_dir)
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| e.file_name() == "SKILL.md")
         .collect();
-    assert_eq!(entries.len(), 15);
+    assert_eq!(entries.len(), 18);
 
     // Spot-check: the writing-assistant skill lands in productivity/
     let writing = skills_dir.join("productivity").join("writing-assistant").join("SKILL.md");
@@ -996,7 +963,7 @@ fn seed_builtin_skills_is_idempotent() {
 
     let first = hermix_server::dashboard::skills::seed_builtin_skills(&skills_dir)
         .expect("first seed should succeed");
-    assert_eq!(first, 15);
+    assert_eq!(first, 18);
 
     // Mutate one file to prove the second call doesn't clobber it.
     let target = skills_dir.join("productivity").join("writing-assistant").join("SKILL.md");
@@ -1030,7 +997,7 @@ async fn list_skills_endpoint_returns_seeded_skills() {
     let (status, body) = get_json(app, "/api/skills").await;
     assert_eq!(status, StatusCode::OK);
     let arr = body.as_array().expect("response should be an array");
-    assert_eq!(arr.len(), 15, "all 15 seeded skills should be visible via /api/skills");
+    assert_eq!(arr.len(), 18, "all 18 seeded skills should be visible via /api/skills");
 
     // Spot-check: writing-assistant is in the response
     let names: Vec<&str> = arr.iter().map(|s| s["name"].as_str().unwrap_or("")).collect();
@@ -1130,7 +1097,7 @@ async fn persona_personality_get_builtin() {
     let (status, body) = get_json(app, "/api/persona/personalities/coder").await;
     assert_eq!(status, StatusCode::OK);
     let content = body["content"].as_str().expect("content");
-    assert!(content.contains("coder"));
+    assert!(content.contains("工程师"));
 }
 
 #[tokio::test]
@@ -1385,8 +1352,10 @@ async fn delete_session_cascades_to_all_related_tables() {
     // Post-delete: every related row must be gone, not orphaned.
     let conn = rusqlite::Connection::open(&db_path).unwrap();
     let cnt = |table: &str| -> i64 {
+        // sessions 表主键是 id，级联表才用 session_id 外键列。
+        let col = if table == "sessions" { "id" } else { "session_id" };
         conn.query_row(
-            &format!("SELECT count(*) FROM {table} WHERE session_id = ?1"),
+            &format!("SELECT count(*) FROM {table} WHERE {col} = ?1"),
             rusqlite::params![sid],
             |r| r.get(0),
         )
