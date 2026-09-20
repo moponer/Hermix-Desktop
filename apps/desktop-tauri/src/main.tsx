@@ -16,6 +16,11 @@ import "./styles/inline-thinking-dot.css";
 // carrying both classes.
 import "./styles/components.css";
 import "./styles/inline-approval-card.css";
+import { restoreScale } from "./utils/uiScale";
+
+// 恢复上次界面缩放。必须早于 React 渲染：否则首帧按 100% 布局、第二帧才跳到
+// 用户设定值，会看到一次明显的整体缩放跳变。
+restoreScale();
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

@@ -8,33 +8,24 @@ import {
 import { useTheme } from "../hooks/useTheme";
 import { THEMES } from "../styles/themes/registry";
 import { storage } from "../utils/storageCompat";
+import { SCALE_OPTIONS, applyScale, readScale } from "../utils/uiScale";
 
 const THEME_ICONS: Record<string, React.ElementType> = {
   light: Sun, dark: Moon, rainforest: Trees, sunset: Sunrise,
 };
 
-const SCALE_OPTIONS = [
-  { label: "小", value: 0.85 },
-  { label: "标准", value: 1 },
-  { label: "大", value: 1.15 },
-  { label: "特大", value: 1.3 },
-] as const;
+/** 档位标签属于 UI 层，取值本身由 utils/uiScale 定义（那里同时派发重算事件）。 */
+const SCALE_CHOICES = SCALE_OPTIONS.map((value, i) => ({
+  value,
+  label: ["小", "标准", "大", "特大"][i] ?? `${Math.round(value * 100)}%`,
+}));
 
 const LANG_OPTIONS = [
   { label: "简体中文", value: "zh-CN" },
   { label: "English", value: "en" },
 ] as const;
 
-const SCALE_KEY = "hermix.desktop.ui-scale";
 const LANG_KEY = "hermix.desktop.lang";
-
-function readScale(): number {
-  try { return Number(storage.getItem(SCALE_KEY)) || 1; } catch { return 1; }
-}
-function writeScale(v: number) {
-  try { storage.setItem(SCALE_KEY, String(v)); } catch {}
-  document.documentElement.style.zoom = String(v);
-}
 
 function readLang(): string {
   try { return storage.getItem(LANG_KEY) || "zh-CN"; } catch { return "zh-CN"; }
@@ -81,8 +72,7 @@ export function UserMenuPopover({ open, onClose, anchorRef, onNavigateAnalytics,
   }, [open, anchorRef]);
 
   const handleSetScale = useCallback((v: number) => {
-    setScale(v);
-    writeScale(v);
+    setScale(applyScale(v));
   }, []);
 
   const handleSetLang = useCallback((v: string) => {
@@ -114,7 +104,7 @@ export function UserMenuPopover({ open, onClose, anchorRef, onNavigateAnalytics,
 
   const scaleSub = subMenu === "scale" && (
     <div className="user-menu-sub" role="menu">
-      {SCALE_OPTIONS.map((o) => {
+      {SCALE_CHOICES.map((o) => {
         const active = Math.abs(scale - o.value) < 0.02;
         return (
           <button key={o.value} type="button" role="menuitem"
@@ -152,7 +142,7 @@ export function UserMenuPopover({ open, onClose, anchorRef, onNavigateAnalytics,
   const currentLabel = (key: string) => {
     switch (key) {
       case "theme": return THEMES.find((t) => t.id === mode)?.label ?? mode;
-      case "scale": return SCALE_OPTIONS.find((o) => Math.abs(scale - o.value) < 0.02)?.label ?? `${Math.round(scale * 100)}%`;
+      case "scale": return SCALE_CHOICES.find((o) => Math.abs(scale - o.value) < 0.02)?.label ?? `${Math.round(scale * 100)}%`;
       case "lang": return LANG_OPTIONS.find((o) => o.value === lang)?.label ?? lang;
       default: return "";
     }
