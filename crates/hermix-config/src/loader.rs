@@ -483,6 +483,11 @@ pub fn user_config_field_display(config: &GatewayConfig, key: &str) -> Result<St
 }
 
 /// Serialize `GatewayConfig` to YAML. Creates parent directories. Omits `home_dir` from output.
+///
+/// Write is atomic (tmp file + rename): `std::fs::write` truncates in place,
+/// so a concurrent reader (agent loop startup, another request thread) can
+/// observe an empty or half-written file and lose every provider — the
+/// symptom class was "chat stuck replying with zero persisted messages".
 pub fn save_config_yaml(path: &Path, config: &GatewayConfig) -> Result<(), ConfigError> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(io_to_config_error)?;
@@ -490,7 +495,22 @@ pub fn save_config_yaml(path: &Path, config: &GatewayConfig) -> Result<(), Confi
     let mut to_save = config.clone();
     to_save.home_dir = None;
     let yaml = serde_yaml::to_string(&to_save).map_err(yaml_to_config_error)?;
-    std::fs::write(path, yaml).map_err(io_to_config_error)?;
+    // Unique tmp name per save: two concurrent saves sharing one tmp file
+    // could interleave writes and rename away a half-written payload.
+    static TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let file_name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "config.yaml".to_string());
+    let tmp = path.with_file_name(format!(
+        ".{}.{}.{}.tmp",
+        file_name,
+        std::process::id(),
+        seq
+    ));
+    std::fs::write(&tmp, yaml).map_err(io_to_config_error)?;
+    std::fs::rename(&tmp, path).map_err(io_to_config_error)?;
     Ok(())
 }
 

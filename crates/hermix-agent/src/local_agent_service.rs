@@ -1768,6 +1768,13 @@ impl AgentService for LocalAgentService {
         // persist at line ~1935 loses the user's message entirely.
         // The non-streaming `send_message` already has this pattern
         // (see line ~1120); this is its streaming analogue.
+        //INFO 锚点: 与 handle_ws_stream_send 入口/agent spawn 配对，
+        // 用于二分「发送后转圈、message_count=0」的断点位置。
+        tracing::info!(
+            session_id = %session_id,
+            messages_len = messages.len(),
+            "send_message_stream: reached early_persist"
+        );
         if let Err(e) = self
             .session_persistence
             .persist_session_with_compression(

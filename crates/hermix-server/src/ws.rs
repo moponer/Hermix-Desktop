@@ -293,7 +293,9 @@ pub(crate) async fn handle_ws_stream_send(
     //诊断日志来排查。原为 eprintln 永久输出， 改为可关闭的
     //   tracing::debug!。
     //   测试：handle_ws_stream_send_tests（隐式 — 通过 dedup 逻辑覆盖）
-    tracing::debug!(
+    //INFO（原 debug）: 入口日志是排查「发送后一直转圈、消息未落库」的
+    // 第一锚点 —— 默认日志级别滤掉 debug 会让现场完全不可见。
+    tracing::info!(
         target: "ws_stream_send",
         session = %session_id,
         text_len = request.text.len(),
@@ -1435,6 +1437,12 @@ pub(crate) async fn handle_ws_stream_send(
     //Clone trace_id for the heartbeat arm before the spawn
     // moves trace_id_owned into the agent task closure.
     let trace_id_heartbeat = trace_id_owned.clone();
+    tracing::info!(
+        target: "ws_stream_send",
+        session = %session_id_clone,
+        text_len = request_text.len(),
+        "handle_ws_stream_send: spawning agent task"
+    );
     let agent_handle = tokio::spawn(async move {
         let agent_task_started = std::time::Instant::now();
         //( / ): wrap the agent call in
