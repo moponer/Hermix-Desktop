@@ -1446,7 +1446,7 @@ async fn delete_session_is_atomic_under_foreign_key_violation() {
 
     // Manually break the cascade: re-plant a `compression_archives`
     // row AFTER the function has finished — that simulates a race
-    // where some other writer (groupchat summarizer, etc.) re-creates
+    // where some other writer re-creates
     // a child row between our pre-flight and the DELETE. We then
     // assert the DELETE itself either succeeds (preferred) or 500s
     // without leaving the session half-deleted.

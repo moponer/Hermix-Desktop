@@ -255,11 +255,10 @@ pub struct AgentConfig {
     ///
     /// When `Some(dir)`, the `memory` tool and the memory prompt/
     /// prefetch injections read/write under `dir` instead of the
-    /// global `<hermix_home>/memories`. This is what enables per-session
-    /// (private 1:1 chat) and per-room (group chat) memory isolation,
-    /// so a group chat's manager/members cannot read memories that were
-    /// stored during a private conversation, and different group-chat
-    /// rooms cannot read each other's memories.
+    /// (private 1:1 chat) and per-override-scope memory isolation,
+    /// so a scoped agent cannot read memories that were stored in
+    /// another scope, and different overrides cannot read each
+    /// other's memories.
     ///
     /// `None` keeps the legacy behaviour: fall back to the global
     /// `<hermix_home>/memories` directory (single shared scope).
@@ -926,9 +925,8 @@ impl Default for AgentConfig {
 impl AgentConfig {
     /// Resolve the scoped memory directory for this agent's memory backend.
     ///
-    /// * When `memory_dir` is set, it is used verbatim — this is the
-    ///   group-chat room scope (or any caller-supplied override) and points
-    ///   at `<hermix_home>/data/groupchat/<room_id>/memories`.
+    /// * When `memory_dir` is set, it is used verbatim — any caller-supplied
+    ///   scope override (e.g. a multi-agent room).
     /// * Otherwise (private 1:1 chat) the directory is auto-derived per
     ///   session as `<hermix_home>/sessions/<session_id>/memories`.
     ///
@@ -1097,13 +1095,13 @@ mod tests {
     fn memory_isolation_resolves_scoped_dirs() {
         // Room scope: memory_dir wins verbatim, no global fallback.
         let room = AgentConfig {
-            memory_dir: Some("/x/data/groupchat/room-7/memories".into()),
+            memory_dir: Some("/x/custom/scope-7/memories".into()),
             session_id: Some("ignored".into()),
             ..AgentConfig::default()
         };
         assert_eq!(
             room.resolved_memory_dir(),
-            std::path::PathBuf::from("/x/data/groupchat/room-7/memories")
+            std::path::PathBuf::from("/x/custom/scope-7/memories")
         );
         assert!(!room.memory_reads_global_fallback());
 

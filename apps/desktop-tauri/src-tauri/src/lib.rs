@@ -2,6 +2,7 @@ pub mod browser_cleanup;
 pub mod commands;
 pub mod commands_custom_app;
 pub mod commands_cua;
+pub mod commands_workbench;
 pub mod officecli;
 pub mod portable_env;
 pub mod sidecar;
@@ -590,6 +591,13 @@ pub fn run() {
             commands_custom_app::custom_app_open_dir,
             commands_custom_app::custom_app_validate,
             commands_custom_app::custom_app_smoke_test,
+            commands_workbench::workbench_create,
+            commands_workbench::workbench_list,
+            commands_workbench::workbench_read,
+            commands_workbench::workbench_write,
+            commands_workbench::workbench_files,
+            commands_workbench::workbench_entry_path,
+            commands_workbench::workbench_bind_session,
         ])
         .run(tauri::generate_context!())
         .expect("error while running hermix-desktop");

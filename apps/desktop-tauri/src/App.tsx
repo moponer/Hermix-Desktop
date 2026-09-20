@@ -142,7 +142,7 @@ export default function App() {
   const [mainMinWidth, setMainMinWidth] = useState(() => computeMainMinWidth(window.innerWidth));
   const [leftMin, setLeftMin] = useState(() => computeLeftMin(window.innerWidth));
   // 包装 setPage: 右栏是 chat 专属 UI，切到任意非对话页时主动关闭产物栏
-  // （agents/experts/settings/plugins/automation/search/groupchat）。
+  // （agents/experts/settings/plugins/automation/search）。
   const setPage = useCallback((p: NavPage) => {
     setPageRaw(p);
     if (p !== "chat") setRightOpen(false);
@@ -183,7 +183,6 @@ const handlePreviewFileFromExplorer = useCallback((path: string, name: string) =
   const editQueueItem = useCallback((idx: number, newText: string) => {
     setMessageQueue((prev) => prev.map((m, i) => (i === idx ? { ...m, text: newText } : m)));
   }, []);
-const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
 
   // 视口自适应 — 窗口尺寸变化时重算面板最小宽度
   // 对应 computeMainMinWidth / computeLeftMin 的分档逻辑。
@@ -3059,7 +3058,6 @@ return {
   const routesCtx: RouteContext = {
     sessions,
     handleSelectSession,
-    selectedRoomId,
     startCreateAppFlow,
     chatNode: chatViewNode,
   };
@@ -3132,7 +3130,6 @@ return {
             onNewChat={handleNewChat}
             onSelectSession={handleSelectSession}
             onDeleteSession={handleDeleteSession}
-            onRoomSelect={setSelectedRoomId}
             onNewChatInWorkspace={(workspacePath) => {
               storage.setItem(STORAGE_KEYS.draftWorkspace, workspacePath);
               void handleNewChat();

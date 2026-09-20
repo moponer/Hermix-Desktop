@@ -294,8 +294,7 @@ export interface MarkdownBodyProps {
   content: string;
   /** Path-click handler for linking tool results to the preview
    *  sidebar. Optional — when omitted, path-click is a no-op
-   *  (GroupChatView and other non-main-chat contexts don't have
-   *  a sidebar to open). */
+   *  (non-main-chat contexts don't have a sidebar to open). */
   onPathClick?: (path: string, e: React.MouseEvent) => void;
 }
 

@@ -183,7 +183,7 @@ pub(crate) async fn list_sessions(State(state): State<HttpServerState>) -> Json<
     };
     let mut stmt = match conn.prepare(
         "SELECT id, title, created_at, updated_at, message_count, model, workspace, expert_id \
-         FROM sessions WHERE id NOT LIKE 'groupchat-%' ORDER BY updated_at DESC",
+         FROM sessions ORDER BY updated_at DESC",
     ) {
         Ok(stmt) => stmt,
         Err(_) => {

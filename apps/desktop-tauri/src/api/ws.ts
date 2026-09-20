@@ -1,7 +1,7 @@
 // Hermix Desktop — streaming-channel helpers (stdio transport).
 //
-// History: this file used to expose `resolveWebSocketUrl()` /
-// `resolveGroupChatWebSocketUrl()` which built `ws://127.0.0.1:3000/...`
+// History: this file used to expose `resolveWebSocketUrl()` which
+// built `ws://127.0.0.1:3000/...`
 // URLs and the streaming hooks opened raw `new WebSocket(...)` sockets.
 // Migrated to the stdio bridge: every "WebSocket" is now a logical
 // channel on the bridge's stdout, identified by name.
@@ -10,14 +10,13 @@
 // `hermix-server/src/stdio_session.rs::spawn_connection_handler`):
 //
 //   * `stream:<session_id>`    — single-session streaming chat
-//   * `groupchat:<room_id>`    — group chat dispatch + streaming
 //   * any other string         — legacy "main" channel, runs
 //                                `handle_ws` on the server
 //
-// The downstream side is handled by `listenStreamChannel` /
-// `listenGroupChatChannel` — they wrap Tauri's `listen("stdio-frame")`
-// and filter by channel name. Upstream frames go through
-// `sendToStreamChannel` / `sendToGroupChatChannel`, which call
+// The downstream side is handled by `listenStreamChannel` — it wraps
+// Tauri's `listen("stdio-frame")`
+// and filters by channel name. Upstream frames go through
+// `sendToStreamChannel`, which calls
 // `invoke("backend_channel_send")`.
 
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -27,7 +26,6 @@ import { invoke } from "@tauri-apps/api/core";
  *  `handle_ws_stream(session_id)`. Mirrors the prefix in
  *  `stdio_session.rs::spawn_connection_handler`. */
 export const STREAM_CHANNEL_PREFIX = "stream:";
-export const GROUPCHAT_CHANNEL_PREFIX = "groupchat:";
 
 /** Build the channel name for a single-session stream. The same string
  *  is reused for every frame sent on this session's upstream pipe,
@@ -35,10 +33,6 @@ export const GROUPCHAT_CHANNEL_PREFIX = "groupchat:";
  *  the lifetime of the stream. */
 export function streamChannelName(sessionId: string): string {
   return `${STREAM_CHANNEL_PREFIX}${sessionId}`;
-}
-
-export function groupchatChannelName(roomId: string): string {
-  return `${GROUPCHAT_CHANNEL_PREFIX}${roomId}`;
 }
 
 /** Subscribe to all frames whose `channel` matches the given exact
@@ -63,8 +57,8 @@ export async function listenStreamChannel(
 
 /** Send a JSON Lines frame upstream on a non-HTTP channel. The
  *  payload is the verbatim JSON the server expects on that channel —
- *  `SendMessageRequest` for `stream:<sid>`, `{ type: "send", text }`
- *  for `groupchat:<room>`, etc. The bridge does NOT wrap or parse
+ *  `SendMessageRequest` for `stream:<sid>`, etc. The bridge does NOT
+ *  wrap or parse
  *  the payload, so callers own their protocol shape. */
 export async function sendToStreamChannel(
   channel: string,

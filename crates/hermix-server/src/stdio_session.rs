@@ -4,7 +4,7 @@
 //! - 入站 `{"channel": "stream:<session_id>", "payload": "<JSON 文本>"}`
 //! - 出站同形；payload 按字符串嵌入，对端需两层 parse
 //!
-//! channel 命名对齐原 WS 路由语义（`stream:` / `groupchat:` / 其余为主通道），
+//! channel 命名对齐原 WS 路由语义（`stream:` / 其余为主通道），
 //! 首次出现的 channel 会 spawn 对应 handler；handler 退出后该通道自动摘除，
 //! 同名 channel 再次出现视为重连并新建虚拟连接。
 
@@ -232,9 +232,6 @@ fn spawn_connection_handler(
     tokio::spawn(async move {
         let channel_for_log = channel.clone();
         match channel.split_once(':') {
-            Some(("groupchat", room_id)) => {
-                crate::ws::handle_ws_groupchat(transport, state, room_id.to_string()).await;
-            }
             Some(("stream", session_id)) => {
                 crate::ws::handle_ws_stream(transport, state, session_id.to_string()).await;
             }
@@ -274,7 +271,7 @@ mod envelope_tests {
         assert_eq!(f.channel, "http");
     }
 
-    /// 非 http 通道（stream/groupchat）没有 request_id 是正常的，
+    /// 非 http 通道（stream）没有 request_id 是正常的，
     /// 不应因此丢掉整帧。
     #[test]
     fn parse_inbound_tolerates_missing_request_id() {

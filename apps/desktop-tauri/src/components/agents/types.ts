@@ -1,7 +1,6 @@
 /* ════════════════════════════════════════════════════════════════
    Agents domain types — pure data, no React, no side effects.
-   Re-exported from AgentsView.tsx for back-compat with TaskPanel,
-   GroupChatView, RoomMemberDialog (which import AgentPersona).
+   Re-exported from AgentsView.tsx for back-compat.
    ════════════════════════════════════════════════════════════════ */
 
 export interface AgentPersona {

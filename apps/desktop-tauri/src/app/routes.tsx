@@ -5,7 +5,6 @@ import type { ReactNode } from "react";
 import type { NavPage, Session } from "../types";
 import { AutomationView } from "../components/AutomationView";
 import { AgentsView } from "../components/AgentsView";
-import { GroupChatView } from "../components/GroupChatView";
 import { AnalyticsView } from "../components/AnalyticsView";
 import { CustomAppsView } from "../components/CustomAppsView";
 
@@ -14,7 +13,6 @@ import { CustomAppsView } from "../components/CustomAppsView";
 export interface RouteContext {
   sessions: Session[];
   handleSelectSession: (id: string) => void;
-  selectedRoomId: string | null;
   startCreateAppFlow: () => void;
   chatNode: ReactNode;
 }
@@ -28,8 +26,6 @@ export function renderRoutes(page: NavPage, ctx: RouteContext): ReactNode {
       return <AutomationView />;
     case "agents":
       return <AgentsView />;
-    case "groupchat":
-      return <GroupChatView initialRoomId={ctx.selectedRoomId} />;
     case "experts":
       return <AgentsView initialTab="builtin" />;
     case "analytics":

@@ -105,11 +105,6 @@ pub struct HttpServerState {
     /// TickLoop lifecycle manager. Default ON at startup; can be
     /// toggled via `POST /api/v1/tickloop`.
     pub tickloop_manager: hermix_runtime::TickLoopManager,
-    /// GroupChat manager for collaborative multi-agent chat rooms.
-    /// Always constructed — even when SQLite fails, we fall back to
-    /// an in-memory persistence backend — so callers can unwrap
-    /// freely without worrying about 503.
-    pub groupchat_mgr: Arc<hermix_gateway::groupchat::GroupChatManager>,
     /// MCP (Model Context Protocol) manager — connects to the external
     /// MCP servers the user configured in the dashboard's "连接器" tab,
     /// registers their tools into the shared `tool_registry`, and
@@ -121,9 +116,6 @@ pub struct HttpServerState {
     /// server startup, immediately after `tool_registry` is built so
     /// the very first LLM turn sees MCP tools.
     pub mcp_manager: Arc<hermix_mcp::McpManager>,
-    /// S5 task engine runtime. Owns the per-room scheduler/bus/audit
-    /// state and bridges WS events into scheduler actions.
-    pub task_engine: Option<Arc<hermix_gateway::groupchat::TaskEngineRuntime>>,
     /// Per-process broadcast sender for todo mutations. The `todo` tool
     /// holds the same sender; the WS handler subscribes per-session
     /// (filtering by `session_id` carried in `TodoChange.session_id`
@@ -178,14 +170,6 @@ impl HttpServerState {
             hermix_tools::tools::task_tracker::register(&self.tool_registry, backend);
             tracing::info!("Registered task_tracker tools (task_create, task_update, task_list, task_get, present_files)");
         }
-    }
-
-    /// Access the GroupChat manager for collaborative multi-agent rooms.
-    /// Never returns `None` — the manager is always constructed at
-    /// startup (falling back to in-memory persistence if SQLite fails),
-    /// so callers can use this directly without 503 guards.
-    pub fn groupchat_manager(&self) -> Arc<hermix_gateway::groupchat::GroupChatManager> {
-        self.groupchat_mgr.clone()
     }
 
     /// Access the agent service that backs chat endpoints. Always present
@@ -518,9 +502,6 @@ impl HttpServerState {
 
         let (llm_provider_name, llm_probe_url) = extract_llm_probe_url(&config).unzip();
 
-        let groupchat_mgr =
-            Self::init_groupchat_manager(&hermix_home, Some(agent_service.clone()));
-
         let metrics = crate::metrics::MetricsCollector::new(&hermix_home);
 
         let state = Self {
@@ -547,11 +528,7 @@ impl HttpServerState {
                     ..hermix_runtime::TickLoopConfig::default()
                 },
             ),
-            groupchat_mgr: groupchat_mgr.clone(),
             mcp_manager,
-            task_engine: Some(Arc::new(
-                hermix_gateway::groupchat::TaskEngineRuntime::new(groupchat_mgr),
-            )),
             // dedup map for retry-storm protection. See
             // the `recent_sends` field doc on the struct. Cleared
             // on server restart, which is fine because the WS
@@ -743,8 +720,6 @@ impl HttpServerState {
 
         let (llm_provider_name, llm_probe_url) = extract_llm_probe_url(&config).unzip();
 
-        let groupchat_mgr = Self::init_groupchat_manager(&hermix_home, Some(agent_service.clone()));
-
         let metrics = crate::metrics::MetricsCollector::new(&hermix_home);
 
         let state = Self {
@@ -771,11 +746,7 @@ impl HttpServerState {
                     ..hermix_runtime::TickLoopConfig::default()
                 },
             ),
-            groupchat_mgr: groupchat_mgr.clone(),
             mcp_manager,
-            task_engine: Some(Arc::new(
-                hermix_gateway::groupchat::TaskEngineRuntime::new(groupchat_mgr),
-            )),
             // dedup map for retry-storm protection. See
             // the `recent_sends` field doc on the struct. Cleared
             // on server restart, which is fine because the WS
@@ -826,72 +797,5 @@ impl HttpServerState {
         self.automation_scheduler = Some(scheduler);
         self
     }
-
-    /// Build a [`GroupChatManager`] with SQLite-backed persistence
-    /// (falling back to in-memory when the DB can't be opened) and
-    /// optionally wire an `AgentService` as its dispatcher.
-    /// Always returns a manager — when every persistence backend fails,
-    /// a blank in-memory manager is the final fallback, so the front-end
-    /// never sees 503 for groupchat operations.
-    pub(crate) fn init_groupchat_manager(
-        hermix_home: &std::path::Path,
-        agent_service: Option<Arc<dyn hermix_core::traits::AgentService>>,
-    ) -> Arc<hermix_gateway::groupchat::GroupChatManager> {
-        let db: Arc<dyn hermix_gateway::groupchat::RoomPersistence> =
-            match crate::dashboard::groupchat_sqlite::SqliteRoomPersistence::new(hermix_home) {
-                Ok(sqlite) => Arc::new(sqlite),
-                Err(e) => {
-                    tracing::warn!(
-                        "SQLite groupchat persistence failed, using in-memory: {}",
-                        e
-                    );
-                    Arc::new(hermix_gateway::groupchat::InMemoryRoomPersistence::new())
-                }
-            };
-        let mgr = Arc::new(hermix_gateway::groupchat::GroupChatManager::new(db));
-        // Wrap in a Mutex so retries can release the lock between
-        // attempts (see the `Connection::open` retry loop in
-        // `SqliteRoomPersistence::new`).
-        if let Some(svc) = agent_service {
-            let dispatcher = Arc::new(
-                crate::dashboard::groupchat_dispatcher::ServerAgentDispatcher::new(svc, mgr.clone()),
-            );
-            mgr.set_dispatcher(dispatcher);
-        }
-        // P1.3 — wire up the idle chat publish hook. When a member
-        // agent generates an idle chat message that the dispatcher
-        // successfully returns, this hook persists the message into
-        // the room and awards a small rank bonus (+3) to the
-        // author. The hook spawns a detached task so the dispatcher
-        // future returns without waiting on db writes. Failures are
-        // traced but never propagate — idle chat is best-effort.
-        let mgr_for_hook = mgr.clone();
-        mgr.install_idle_publish_hook(std::sync::Arc::new(move |room_id, agent_id, content| {
-            let mgr_inner = mgr_for_hook.clone();
-            let room_id = room_id.to_string();
-            let agent_id = agent_id.to_string();
-            let content = content.to_string();
-            tokio::spawn(async move {
-                if let Err(e) = mgr_inner
-                    .send_message(&room_id, &agent_id, &agent_id, &content)
-                    .await
-                {
-                    tracing::warn!(
-                        "idle publish hook: send_message failed for room={} agent={}: {}",
-                        room_id, agent_id, e
-                    );
-                }
-                if let Err(e) = mgr_inner
-                    .adjust_member_score(&room_id, &agent_id, 3)
-                    .await
-                {
-                    tracing::warn!(
-                        "idle publish hook: adjust_member_score failed for room={} agent={}: {}",
-                        room_id, agent_id, e
-                    );
-                }
-            });
-        }));
-        mgr
-    }
 }
+

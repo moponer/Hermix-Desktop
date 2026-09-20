@@ -1,6 +1,6 @@
 // Lightweight pin/archive persistence (frontend-only; no backend schema change).
 //
-// Three independent scopes — "session" / "workspace" / "room" — each on its
+// Two independent scopes — "session" / "workspace" — each on its
 // own localStorage key, so deleting one object class can't pollute another
 // class's ID set.
 //
@@ -15,7 +15,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { storage, STORAGE_KEYS } from "../utils/storageCompat";
 
-export type PinnedArchivedScope = "session" | "workspace" | "room";
+export type PinnedArchivedScope = "session" | "workspace";
 
 interface PinnedArchivedState {
   pinned: Record<PinnedArchivedScope, Set<string>>;
@@ -23,14 +23,13 @@ interface PinnedArchivedState {
 }
 
 const EMPTY_STATE: PinnedArchivedState = {
-  pinned:    { session: new Set(), workspace: new Set(), room: new Set() },
-  archived:  { session: new Set(), workspace: new Set(), room: new Set() },
+  pinned:    { session: new Set(), workspace: new Set() },
+  archived:  { session: new Set(), workspace: new Set() },
 };
 
 const STORAGE_KEYS_BY_SCOPE: Record<PinnedArchivedScope, { pinned: string; archived: string }> = {
   session:   { pinned: STORAGE_KEYS.pinnedSessions,   archived: STORAGE_KEYS.archivedSessions },
   workspace: { pinned: STORAGE_KEYS.pinnedWorkspaces, archived: STORAGE_KEYS.archivedWorkspaces },
-  room:      { pinned: STORAGE_KEYS.pinnedRooms,      archived: STORAGE_KEYS.archivedRooms },
 };
 
 function loadSet(key: string): Set<string> {
@@ -50,12 +49,10 @@ function loadAll(): PinnedArchivedState {
     pinned: {
       session:   loadSet(STORAGE_KEYS_BY_SCOPE.session.pinned),
       workspace: loadSet(STORAGE_KEYS_BY_SCOPE.workspace.pinned),
-      room:      loadSet(STORAGE_KEYS_BY_SCOPE.room.pinned),
     },
     archived: {
       session:   loadSet(STORAGE_KEYS_BY_SCOPE.session.archived),
       workspace: loadSet(STORAGE_KEYS_BY_SCOPE.workspace.archived),
-      room:      loadSet(STORAGE_KEYS_BY_SCOPE.room.archived),
     },
   };
 }

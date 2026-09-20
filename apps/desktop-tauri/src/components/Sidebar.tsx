@@ -1,7 +1,7 @@
 import {
   MessageSquarePlus,
   ChevronDown, ChevronRight,
-  MessageSquare, Users, Plus, FolderOpen,
+  MessageSquare, Plus, FolderOpen,
   Boxes, MoreHorizontal, Loader2,
   // Popover icons
   Pencil, Pin, Archive, Trash2, FolderOpenDot, Copy, FolderMinus,
@@ -45,9 +45,6 @@ interface SidebarProps {
   onNewChat: () => void;
   onSelectSession: (id: string) => void;
   onDeleteSession: (id: string) => void;
-  /** Called when a group chat room is selected, created, or deleted in the sidebar.
-   *  Pass `null` to clear the current selection (e.g. after deletion). */
-  onRoomSelect?: (roomId: string | null) => void;
   /** Create a blank chat with this workspace already selected. */
   onNewChatInWorkspace?: (workspacePath: string) => void;
   onOpenSettings?: () => void;
@@ -57,15 +54,6 @@ interface SidebarProps {
   onOpenSearch?: () => void;
 }
 
-/* ── Group Chat Room types (API-backed) ── */
-
-interface ChatRoom {
-  id: string;
-  name: string;
-  agentIds: string[];
-  createdAt: number;
-}
-
 /* ── Nav item — 核心功能 ── */
 
 // "搜索"已从主导航移除：它的本质是动作而非位置，做成独立页面会让用户
@@ -73,7 +61,6 @@ interface ChatRoom {
 // 触发浮层（见 SessionPickerDialog），搜完即走。
 const NAV_ITEMS: { icon: React.ElementType; label: string; page: NavPage }[] = [
   { icon: MessageSquare, label: "对话",   page: "chat" },
-  { icon: Users,    label: "群聊",    page: "groupchat" },
   { icon: Boxes,    label: "应用",    page: "customapps" },
 ];
 
@@ -90,7 +77,6 @@ export function Sidebar({
   onNewChat,
   onSelectSession,
   onDeleteSession,
-  onRoomSelect,
   onNewChatInWorkspace,
   onOpenSettings,
   onCollapseSidebar,
@@ -118,7 +104,7 @@ export function Sidebar({
   // React.useMemo on the array is enough; the hook already re-renders us
   // when its localStorage state changes.
   const sortByPinArchive = useCallback(
-    <T extends { id: string }>(items: T[], scope: "session" | "workspace" | "room"): T[] => {
+    <T extends { id: string }>(items: T[], scope: "session" | "workspace"): T[] => {
       return [...items].sort((a, b) => {
         const ap = isPinned(a.id, scope) ? 0 : 1;
         const bp = isPinned(b.id, scope) ? 0 : 1;
@@ -229,13 +215,6 @@ export function Sidebar({
     });
   };
 
-    const [groupChatCollapsed, setGroupChatCollapsed] = useState(false);
-  const [chatRooms, setChatRooms] = useState<ChatRoom[]>([]);
-  const [newRoomName, setNewRoomName] = useState("");
-  const [showNewRoom, setShowNewRoom] = useState(false);
-  const [creatingRoom, setCreatingRoom] = useState(false);
-  const [createRoomError, setCreateRoomError] = useState<string | null>(null);
-
   // Delete flow: in-app confirm dialog (replaces native window.confirm) +
   // collapse animation + success/error toast.
   // confirmState  = pending in-app confirm dialog (null = hidden).
@@ -285,43 +264,6 @@ export function Sidebar({
     });
   }, [removingIds, deletingIds, runDelete]);
 
-  useEffect(() => {
-    api.listGroupChatRooms().then((rooms) => {
-      setChatRooms(rooms.map((r) => ({
-        id: r.id,
-        name: r.name,
-        agentIds: r.agent_ids,
-        createdAt: new Date(r.created_at).getTime(),
-      })));
-    }).catch((e) => { console.warn("[Sidebar] fetch rooms failed:", e); });
-  }, []);
-
-  const handleCreateRoom = useCallback(async () => {
-    const trimmed = newRoomName.trim();
-    if (!trimmed || creatingRoom) return;
-    setCreatingRoom(true);
-    setCreateRoomError(null);
-    try {
-      const room = await api.createGroupChatRoom(trimmed);
-      setChatRooms((prev) => [...prev, {
-        id: room.id,
-        name: room.name,
-        agentIds: room.agent_ids,
-        createdAt: new Date(room.created_at).getTime(),
-      }]);
-      setNewRoomName("");
-      setShowNewRoom(false);
-      onRoomSelect?.(room.id);
-      onPageChange("groupchat");
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      console.error("Failed to create room:", e);
-      setCreateRoomError(`创建聊天室失败:${msg}`);
-    } finally {
-      setCreatingRoom(false);
-    }
-  }, [newRoomName, creatingRoom, onPageChange, onRoomSelect]);
-
 
   /* ── 子项 / 项目组菜单构造器 ── */
   // 单条会话菜单（参考图 5）：重命名 / 置顶 / 归档 / 删除 — 无分割线
@@ -342,21 +284,7 @@ export function Sidebar({
     { key: "copy-path", label: "复制路径", icon: Copy, onClick: () => handleCopy(ws.path, "已复制路径") },
   ];
 
-  // 聊天室菜单：与 session 同样 4 项 — 无分割线
-  const roomMenu = (room: ChatRoom): MenuItemSpec[] => [
-    { key: "rename", label: "重命名", icon: Pencil, onClick: () => promptRenameRoom(room.id, room.name) },
-    { key: "pin", label: isPinned(room.id, "room") ? "取消置顶" : "置顶", icon: Pin, onClick: () => togglePin(room.id, "room") },
-    { key: "archive", label: isArchived(room.id, "room") ? "取消归档" : "归档", icon: Archive, onClick: () => toggleArchive(room.id, "room") },
-    { key: "delete", label: "删除", icon: Trash2, onClick: () => requestDelete(room.id, room.name, "将解散该聊天室。", doDeleteRoom(room.id)), danger: true },
-  ];
 
-  // 聊天室删除:必须先 await 后端 API,否则 GroupChatView 的 rooms 状态(挂在另一个 useState)仍是陈旧列表,
-  // 删除后右侧仍会渲染已删的房间。等后端确认删除后再通知 App 清除 selectedRoomId,触发 GroupChatView 切回空态。
-  const doDeleteRoom = useCallback((id: string) => async () => {
-    await api.deleteGroupChatRoom(id);
-    setChatRooms((prev) => prev.filter((r) => r.id !== id));
-    onRoomSelect?.(null);
-  }, [onRoomSelect]);
 
   const handleCopy = useCallback(async (text: string, successMsg: string) => {
     const ok = await copyText(text);
@@ -392,17 +320,6 @@ export function Sidebar({
     });
   }, [renameWorkspace]);
 
-  /* ── 聊天室 ── */
-  const promptRenameRoom = useCallback((id: string, current: string) => {
-    setRenameState({
-      title: "重命名聊天室",
-      current,
-      onConfirm: (next) => {
-        setChatRooms((prev) => prev.map((r) => (r.id === id ? { ...r, name: next } : r)));
-        toastSuccess("已重命名");
-      },
-    });
-  }, []);
 
   return (
     <aside className="pane pane-left">
@@ -648,106 +565,6 @@ export function Sidebar({
           )}
         </section>
 
-        {/* ── 聊天室 ── */}
-        <section className="sidebar-section">
-          <div className="sidebar-section-header">
-            <button
-              onClick={() => setGroupChatCollapsed((v) => !v)}
-              className="section-header-toggle"
-              aria-expanded={!groupChatCollapsed}
-            >
-              {groupChatCollapsed
-                ? <ChevronRight className="icon-md shrink-0" />
-                : <ChevronDown className="icon-md shrink-0" />}
-              <span>聊天室</span>
-              {chatRooms.length > 0 && (
-                <span className="section-header-count">{chatRooms.length}</span>
-              )}
-            </button>
-          </div>
-          {!groupChatCollapsed && (
-            <div className="sidebar-section-body">
-              {showNewRoom && (
-                <div className="sidebar-new-room">
-                  {createRoomError && (
-                    <div className="sidebar-new-room-error" role="alert">
-                      <span>{createRoomError}</span>
-                      <button
-                        onClick={() => setCreateRoomError(null)}
-                        title="关闭"
-                        type="button"
-                      >
-                        <span aria-hidden>×</span>
-                      </button>
-                    </div>
-                  )}
-                  <div className="sidebar-new-room-row">
-                    <input
-                      autoFocus
-                      value={newRoomName}
-                      onChange={(e) => {
-                        setNewRoomName(e.target.value);
-                        if (createRoomError) setCreateRoomError(null);
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" && !creatingRoom) handleCreateRoom();
-                        if (e.key === "Escape") { setShowNewRoom(false); setNewRoomName(""); setCreateRoomError(null); }
-                      }}
-                      placeholder="聊天室名称"
-                      disabled={creatingRoom}
-                      className="input"
-                    />
-                    <button
-                      onClick={handleCreateRoom}
-                      disabled={!newRoomName.trim() || creatingRoom}
-                      className="icon-btn"
-                      title="创建"
-                      aria-label="创建"
-                    >
-                      <Plus className="icon-md" />
-                    </button>
-                    <button
-                      onClick={() => { setShowNewRoom(false); setNewRoomName(""); setCreateRoomError(null); }}
-                      disabled={creatingRoom}
-                      className="icon-btn"
-                      title="取消"
-                      aria-label="取消"
-                    >
-                      <span aria-hidden>×</span>
-                    </button>
-                  </div>
-                </div>
-              )}
-              {chatRooms.length === 0 && !showNewRoom && (
-                <p className="sidebar-section-empty">暂无聊天室</p>
-              )}
-              {sortByPinArchive(chatRooms, "room").map((room) => {
-                const roomRemoving = removingIds.has(room.id);
-                const roomDeleting = deletingIds.has(room.id);
-                const roomDisabled = roomRemoving || roomDeleting;
-                const roomArchived = isArchived(room.id, "room");
-                return (
-                  <div
-                    key={room.id}
-                    onClick={() => !roomDisabled && (onRoomSelect?.(room.id), onPageChange("groupchat"))}
-                    className={clsx("sidebar-row", roomArchived && "is-archived", roomRemoving && "is-removing", roomDeleting && "is-deleting")}
-                    aria-busy={roomDisabled}
-                  >
-                    <div className={clsx("sidebar-row-main", roomRemoving && "opacity-60")}>
-                      {roomRemoving ? <Loader2 className="icon-md animate-spin" /> : <Users className="icon-md" />}
-                      <span className="truncate-1">{room.name}</span>
-                      {isPinned(room.id, "room") && <Pin size={10} className="sidebar-row-pin" />}
-                    </div>
-                    <span className="sidebar-row-meta">{room.agentIds.length} 个成员</span>
-                    <div className="sidebar-row-actions">
-                      <SidebarMenu label="聊天室操作" items={roomMenu(room)} />
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </section>
       </div>
 
       {/* Bottom: user card + pop menu */}

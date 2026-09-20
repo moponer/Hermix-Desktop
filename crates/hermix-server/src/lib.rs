@@ -316,7 +316,6 @@ pub fn router(state: HttpServerState) -> Router {
         .route("/v1/commands", post(routes::exec_command))
         .route("/v1/ws/{session_id}", get(ws::ws_upgrade))
         .route("/v1/ws-stream/{session_id}", get(ws::ws_stream_upgrade))
-        .route("/v1/ws-groupchat/{room_id}", get(ws::ws_groupchat_upgrade))
         .route("/v1/llm/warmup", post(routes::warm_up_provider_handler))
         // Expert catalog (driven by the desktop client's bundled built-ins).
         .route("/v1/experts", get(routes::list_experts).post(routes::register_expert))

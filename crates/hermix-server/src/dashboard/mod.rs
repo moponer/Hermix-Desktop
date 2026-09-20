@@ -23,14 +23,11 @@ pub mod skills;
 pub mod status;
 pub mod stubs;
 pub mod transcribe;
-pub mod groupchat_api;
-pub mod groupchat_dispatcher;
-pub mod groupchat_sqlite;
 pub mod types;
 
 // Re-export shared types used by multiple modules
 pub use types::*;
-use axum::routing::{delete, get, post, put, patch};
+use axum::routing::{delete, get, post, put};
 use axum::Router;
 
 use crate::HttpServerState;
@@ -188,125 +185,6 @@ pub fn router() -> Router<HttpServerState> {
         .route("/api/migration/skip", post(migration::skip_migration))
         .route("/api/migration/reset", post(migration::reset_migration))
         .route("/ws/consciousness", get(consciousness::ws_consciousness))
-        // GroupChat rooms
-        .route(
-            "/api/groupchat/rooms",
-            get(groupchat_api::list_rooms).post(groupchat_api::create_room),
-        )
-        .route(
-            "/api/groupchat/rooms/{room_id}",
-            get(groupchat_api::get_room).delete(groupchat_api::delete_room),
-        )
-        .route(
-            "/api/groupchat/rooms/{room_id}/agents",
-            put(groupchat_api::update_agents),
-        )
-        .route(
-            "/api/groupchat/rooms/{room_id}/agents/{agent_id}",
-            post(groupchat_api::invite_agent)
-                .delete(groupchat_api::kick_agent)
-                .patch(groupchat_api::update_member_model),
-        )
-        .route(
-            "/api/groupchat/rooms/{room_id}/agents/{agent_id}/display-name",
-            patch(groupchat_api::update_member_display_name),
-        )
-        .route(
-            "/api/groupchat/rooms/{room_id}/members",
-            get(groupchat_api::list_room_members),
-        )
-        .route(
-            "/api/groupchat/rooms/{room_id}/ranks",
-            get(groupchat_api::list_room_ranks),
-        )
-        .route(
-            "/api/groupchat/rooms/{room_id}/leader",
-            put(groupchat_api::set_leader),
-        )
-        .route(
-            "/api/groupchat/rooms/{room_id}/settings",
-            get(groupchat_api::get_settings).put(groupchat_api::update_settings),
-        )
-        .route(
-            "/api/groupchat/rooms/{room_id}/message",
-            post(groupchat_api::send_message),
-        )
-        .route(
-            "/api/groupchat/rooms/{room_id}/messages",
-            get(groupchat_api::get_messages),
-        )
-        .route(
-            "/api/groupchat/rooms/{room_id}/approve",
-            post(groupchat_api::approve),
-        )
-        .route(
-            "/api/groupchat/rooms/{room_id}/reject",
-            post(groupchat_api::reject),
-        )
-        .route(
-            "/api/groupchat/rooms/{room_id}/rules",
-            put(groupchat_api::update_rules),
-        )
-        // P2 — Announcement: publish (POST) replaces, DELETE clears.
-        // Same path; different methods. POST also accepts empty body
-        // to clear (sugar — DELETE is the canonical clear verb).
-        .route(
-            "/api/groupchat/rooms/{room_id}/announcement",
-            post(groupchat_api::publish_announcement)
-                .delete(groupchat_api::clear_announcement),
-        )
-        // P4 — room description (free-form text shown in chat header).
-        // Same shape as announcement: PATCH publishes (or clears when the
-        // body is empty), DELETE clears unconditionally.
-        .route(
-            "/api/groupchat/rooms/{room_id}/description",
-            patch(groupchat_api::update_description)
-                .delete(groupchat_api::clear_description),
-        )
-        // Chat mode toggle: "task_collab" vs "free_chat".
-        .route(
-            "/api/groupchat/rooms/{room_id}/chat-mode",
-            patch(groupchat_api::update_chat_mode),
-        )
-        // P2 — Tasks: history list + active single-get.
-        .route(
-            "/api/groupchat/rooms/{room_id}/tasks",
-            get(groupchat_api::list_room_tasks),
-        )
-        .route(
-            "/api/groupchat/rooms/{room_id}/tasks/active",
-            get(groupchat_api::get_active_task),
-        )
-        // P2 — Subtask update: status flip + result text. PATCH is
-        // idempotent — sending the same payload twice yields the
-        // same row state.
-        .route(
-            "/api/groupchat/subtasks/{subtask_id}",
-            patch(groupchat_api::update_subtask),
-        )
-        // P1.4 — vote +20/-20
-        .route(
-            "/api/groupchat/rooms/{room_id}/vote",
-            post(groupchat_api::vote),
-        )
-        // P4 — dispute + overturn
-        .route(
-            "/api/groupchat/rooms/{room_id}/dispute",
-            post(groupchat_api::dispute_violation),
-        )
-        .route(
-            "/api/groupchat/rooms/{room_id}/overturn",
-            post(groupchat_api::overturn_violation),
-        )
-        // P2.2 — discussion status query + cancel
-        .route(
-            "/api/groupchat/rooms/{room_id}/discussion",
-            get(groupchat_api::get_discussion_status),
-        )
-        .route(
-            "/api/groupchat/rooms/{room_id}/discussion/cancel",
-            post(groupchat_api::cancel_discussion),
-        )
         // §2 Polish — doc rewrite endpoints used by the desktop
         // "润色" / "改写" affordances. `polish::post_polish_chat`
         // rebuilds a natural-language message, `polish::post_polish_automation`

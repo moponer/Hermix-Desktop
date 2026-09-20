@@ -57,7 +57,6 @@ pub mod message_helpers;
 pub mod native_plugin;
 pub mod no_op_compression_engine;
 pub mod oauth_refresh;
-pub mod group_chat;
 pub mod orchestrator;
 pub mod pii_redact;
 pub mod plugins;

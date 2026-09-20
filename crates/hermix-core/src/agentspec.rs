@@ -1,35 +1,18 @@
-//! Shared agent-spec data model (Groupchat 未来④ — Agent 抽象统一, ).
+//! Shared agent-spec data model — canonical Agent 抽象。
 //!
 //! Pulls the openai-agents-python `Agent` dataclass vocabulary
 //! (`agent_id`, `display_name`, `instructions`, `tools`, `handoffs`,
 //! `model_override`) into hermix-core as a single canonical struct so any
 //! downstream crate can speak the same language:
 //!
-//! - `hermix_gateway::groupchat::RoomAgentContract` is **the groupchat-
-//!   specific** shape; it carries room/role fields like `role: AgentRole`
-//!   that don't belong in `AgentSpecData`.
 //! - `hermix_agent::agent_config::AgentConfig` is **the runtime-shaped**
 //!   config for an in-flight agent loop.
 //!
-//! Until this module landed, there was no neutral ground — `AgentConfig`
-//! didn't carry an `agent_id`, and `RoomAgentContract` carried `role` but
-//! no path to the runtime config. This struct is what bridges the two:
-//! conversion helpers (`from_contract`, `from_overrides`) produce one
-//! without copying logic, and downstream dispatchers can consume either
-//! side via the same shape.
-//!
-//! Scope of this commit is deliberately narrow:
-//!   - the struct + serde + 3 unit tests for ordering / dedup / serde
-//!   - `from_contract` adapter (clones the relevant subset of a
-//!     `RoomAgentContract`)
-//!   - `from_overrides` adapter (pulls `agent_id`/`display_name` notes
-//!     from `AgentOverrides` where present in traits.rs)
-//!
-//! Runtime integration (plumbing `AgentSpecData` through
-//! `ServerAgentDispatcher`, swapping `EffectiveToolAccess` to consult
-//! the spec's `tools` field, etc.) is a separate commit — same approach
-//! we used for Session/Tracing/Tool-policy: foundation first, integration
-//! next.
+//! `AgentConfig` doesn't carry an `agent_id`; this struct is the neutral
+//! ground between a static spec and the runtime config. The
+//! `spec_from_contract_parts` constructor produces one field-by-field
+//! without copying logic, and downstream dispatchers can consume it via
+//! the same shape.
 
 use serde::{Deserialize, Serialize};
 
@@ -37,8 +20,8 @@ use serde::{Deserialize, Serialize};
 /// [openai-agents-python `Agent`](https://github.com/openai/openai-agents-python)
 /// dataclass field set.
 ///
-/// `Clone` and `Serialize + Deserialize` round-trip cleanly so a
-/// `RoomAgentContract` built server-side can pass through the WS layer to
+/// `Clone` and `Serialize + Deserialize` round-trip cleanly so a spec
+/// built server-side can pass through the WS layer to
 /// the frontend or sit in a SQLite row without bespoke (de)serializers.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentSpecData {
@@ -56,9 +39,8 @@ pub struct AgentSpecData {
     pub instructions: String,
 
     /// Tools this agent is allowed to invoke. Empty = inherit whatever
-    /// the agent loop exposes by default. Pair with
-    /// `hermix_gateway::groupchat::tool_policy_eval::EffectiveToolAccess`
-    /// at dispatch time to layer room rules onto this static whitelist.
+    /// the agent loop exposes by default. Dispatchers may layer runtime
+    /// policy on top of this static whitelist.
     #[serde(default)]
     pub tools: Vec<String>,
 
@@ -91,12 +73,9 @@ impl AgentSpecData {
     }
 }
 
-/// Adapter: build an [`AgentSpecData`] from a `RoomAgentContract`-like
-/// subset. Kept as a free function so we don't need `hermix-core` to take
-/// a dependency on `hermix-gateway` (which would invert the desired
-/// layering: hermix-core → hermix-gateway, not the other way around).
-///
-/// Pass the values explicitly — see [`spec_from_contract_parts`] below.
+/// Adapter: build an [`AgentSpecData`] from an explicit field subset.
+/// Kept as a free function so callers never need to construct the struct
+/// literal directly.
 pub fn spec_from_contract_parts(
     agent_id: impl Into<String>,
     display_name: impl Into<String>,

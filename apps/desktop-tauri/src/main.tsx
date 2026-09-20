@@ -15,6 +15,7 @@ import "./styles/inline-thinking-dot.css";
 // it so the ACUI approval card's leave animation wins for elements
 // carrying both classes.
 import "./styles/components.css";
+import "./styles/workbench.css";
 import "./styles/inline-approval-card.css";
 import { restoreScale } from "./utils/uiScale";
 

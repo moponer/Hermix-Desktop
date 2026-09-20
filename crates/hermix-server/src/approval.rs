@@ -640,11 +640,7 @@ mod approval_registry_tests {
             tickloop_manager: hermix_runtime::TickLoopManager::new(
                 hermix_runtime::TickLoopConfig::default(),
             ),
-            groupchat_mgr: Arc::new(hermix_gateway::groupchat::GroupChatManager::new(
-                Arc::new(hermix_gateway::groupchat::InMemoryRoomPersistence::new()),
-            )),
             mcp_manager: hermix_mcp::ArcMcpManager::new(Arc::new(hermix_tools::ToolRegistry::new())),
-            task_engine: None,
             // dedup map. See the production `build`
             // path; test_state mirrors it.
             recent_sends: Arc::new(std::sync::Mutex::new(HashMap::new())),

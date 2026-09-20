@@ -12,8 +12,7 @@ use crate::tools::session_stamper::SessionStamper;
 use crate::ToolRegistry;
 use std::sync::Arc;
 
-/// Channel capacity for the todo event bus. Mirrors
-/// `hermix_gateway::groupchat::runtime::ROOM_EVENT_CHANNEL_CAPACITY`.
+/// Channel capacity for the todo event bus.
 pub const TODO_EVENT_CHANNEL_CAPACITY: usize = 256;
 
 /// Per-tool broadcast payload. The wire format is `TodoSnapshotItem`

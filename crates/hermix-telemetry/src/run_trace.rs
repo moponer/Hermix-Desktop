@@ -1,6 +1,6 @@
 //! In-memory per-run trace recorder (Telemetry future② — Tracing, ).
 //!
-//! Goal: give the agent loop / groupchat runtime a queryable per-`trace_id`
+//! Goal: give the agent loop runtime a queryable per-`trace_id`
 //! timeline of phase boundaries, tool calls, and LLM call start/end — useful
 //! for debugging multi-agent runs and matching the eventual openai-agents-
 //! python `Tracing` parity. This is deliberately an in-memory bounded buffer

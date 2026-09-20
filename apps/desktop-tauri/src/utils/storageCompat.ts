@@ -129,8 +129,6 @@ export const STORAGE_KEYS = {
   // migrated to per-session storage on first send.
   draftExpertId: "hermix.desktop.draft.expertId",
   draftWorkspace: "hermix.desktop.draft.workspace",
-  groupChatRooms: "hermix-chat-rooms",
-  groupChatMessages: "hermix-groupchat-messages",
   mcpServers: "hermix.mcp.servers",
   // Agents view generate-flow: backend URL + key (per-user override).
   agentsServerUrl: "hermix.agents.server_url",
@@ -140,10 +138,8 @@ export const STORAGE_KEYS = {
   // Sidebar: 置顶 / 归档（按 scope 分 key,避免一类对象的 ID 影响另一类）。
   pinnedSessions:    "hermix.desktop.pinned.sessions",
   pinnedWorkspaces:  "hermix.desktop.pinned.workspaces",
-  pinnedRooms:       "hermix.desktop.pinned.rooms",
   archivedSessions:  "hermix.desktop.archived.sessions",
   archivedWorkspaces:"hermix.desktop.archived.workspaces",
-  archivedRooms:     "hermix.desktop.archived.rooms",
   // 本地用户档案（无登录体系，纯本机可编辑）：{displayName, avatarDataUrl, handle}
   userProfile: "hermix.user.profile",
   // 图片生成本地偏好（前端持久化，图片生成能力接入前作为集中配置入口）
