@@ -163,3 +163,18 @@ apps/desktop-tauri/src-tauri/resources/esbuild/
 # Agent-run work outputs & root preview leftovers
 /outputs/
 /approval-card-preview.html
+
+# 手工安装的 npm tarball / 解包目录。pnpm 会跳过 wasm32 的 optionalDependencies，
+# satteri 的浏览器侧 wasm 栈必须手工拉包，过程中留下这些中间产物。
+satteri-win32.tgz
+apps/desktop-tauri/_sat_pkg/
+apps/desktop-tauri/satteri_verify.mjs
+
+# 工具运行期的临时草稿（python 解包脚本留下的空文件等）
+# 不带尾斜杠：这些残留实测是**文件**不是目录，`_tmp_*/` 匹配不到
+apps/desktop-tauri/_tmp_*
+
+# 其他 IDE / agent 工具的本地状态目录
+.atomcode/
+.zcode/
+/windows_cmd_analysis.md
