@@ -974,7 +974,7 @@ mod tests {
     use crate::oauth_refresh::OAuthRefresh;
     use async_stream::stream;
     use futures::stream::BoxStream;
-    use hermix_core::{AgentError, LlmProvider, LlmResponse, StreamDelta};
+    use hermix_core::{AgentError, FunctionCallDelta, LlmProvider, LlmResponse, StreamDelta, ToolCallDelta};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
@@ -1664,6 +1664,105 @@ mod tests {
                     resp.finish_reason
                 );
             }
+        }
+    }
+
+    /// MiniMax-M3 streaming compat: the `name` delta never arrives while the
+    /// real name rides inside the `arguments` JSON. The flush-time recovery
+    /// pass must backfill `function.name` from `arguments` instead of
+    /// silently dropping the call (which would nudge the autonomous loop).
+    ///
+    /// Covers both degenerate shapes seen in the wild:
+    /// - `name` absent entirely,
+    /// - `name` delivered as the placeholder `"tool_call"`.
+    struct NamelessToolCallProvider {
+        /// `None` → name delta absent; `Some(s)` → degenerate name delta.
+        name_delta: Option<&'static str>,
+    }
+
+    #[async_trait::async_trait]
+    impl LlmProvider for NamelessToolCallProvider {
+        async fn chat_completion(
+            &self,
+            _messages: &[hermix_core::Message],
+            _tools: &[hermix_core::ToolSchema],
+            _max_tokens: Option<u32>,
+            _temperature: Option<f64>,
+            _model: Option<&str>,
+            _extra_body: Option<&serde_json::Value>,
+        ) -> Result<LlmResponse, AgentError> {
+            Ok(LlmResponse {
+                message: hermix_core::Message::assistant(String::new()),
+                usage: None,
+                model: String::from("minimax-m3"),
+                finish_reason: Some(String::from("tool_calls")),
+            })
+        }
+
+        fn chat_completion_stream(
+            &self,
+            _messages: &[hermix_core::Message],
+            _tools: &[hermix_core::ToolSchema],
+            _max_tokens: Option<u32>,
+            _temperature: Option<f64>,
+            _model: Option<&str>,
+            _extra_body: Option<&serde_json::Value>,
+        ) -> BoxStream<'static, Result<StreamChunk, AgentError>> {
+            let name_delta = self.name_delta;
+            Box::pin(stream! {
+                yield Ok(StreamChunk {
+                    delta: Some(StreamDelta {
+                        content: None,
+                        tool_calls: Some(vec![ToolCallDelta {
+                            index: 0,
+                            id: Some(String::from("call_m3_1")),
+                            function: Some(FunctionCallDelta {
+                                name: name_delta.map(String::from),
+                                arguments: Some(String::from(
+                                    "{\"name\":\"read_file\",\"path\":\"a.txt\"}",
+                                )),
+                            }),
+                        }]),
+                        extra: None,
+                    }),
+                    finish_reason: None,
+                    usage: None,
+                });
+                yield Ok(StreamChunk {
+                    delta: None,
+                    finish_reason: Some(String::from("tool_calls")),
+                    usage: None,
+                });
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn minimax_m3_missing_name_delta_recovers_from_arguments() {
+        for name_delta in [None, Some("tool_call")] {
+            let provider = Arc::new(NamelessToolCallProvider { name_delta });
+            let outcome = drive_collect(provider, /* stream_overall = */ 5)
+                .await
+                .expect("stream should complete");
+            let outcome = match outcome {
+                StreamCollectOutcome::Complete(resp) => resp,
+                other => panic!("expected Complete, got {:?}", other),
+            };
+            let msg = &outcome.message;
+            let tcs = msg
+                .tool_calls
+                .as_ref()
+                .expect("tool_calls must survive the nameless-name flush");
+            assert_eq!(tcs.len(), 1, "degenerate tool call must not be dropped");
+            assert_eq!(
+                tcs[0].function.name, "read_file",
+                "name must be recovered from the arguments JSON (name_delta={:?})",
+                name_delta
+            );
+            assert_eq!(
+                tcs[0].function.arguments, "{\"name\":\"read_file\",\"path\":\"a.txt\"}",
+                "arguments must be preserved verbatim"
+            );
         }
     }
 }
