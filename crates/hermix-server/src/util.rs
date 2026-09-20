@@ -309,8 +309,9 @@ pub(crate) fn user_facing_agent_error(e: &str) -> (String, String) {
     /// stripped string otherwise.
     fn extract_provider_message(raw: &str) -> String {
         // Strip repeated "LLM API error: API error:" wrappers
+        // (replace is global — one pass removes every occurrence;
+        // a second identical replace would be a no-op)
         let stripped = raw
-            .replace("LLM API error: ", "")
             .replace("LLM API error: ", "")
             .replace("API error ", "");
         // Try to extract the provider's own message from JSON

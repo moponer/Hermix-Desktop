@@ -1602,12 +1602,14 @@ pub(crate) async fn handle_ws_stream_send(
                             // Always surface the raw backend error (e.g.
                             // an LLM 401/402/429 body) so the front-end
                             // can show it as a collapsible "技术详情".
-                            // A separate `Error` event with code
-                            // "backend_error" is already emitted above
-                            // for the finish_reason=error branch; this
-                            // `Done.error` ensures the same detail rides
-                            // along on the terminal event regardless of
-                            // which branch the front-end takes.
+                            // The finish_reason=error branch above already
+                            // emitted a separate `Error` event carrying a
+                            // classified code (quota_exhausted /
+                            // provider_overloaded / auth_error /
+                            // agent_error); this `Done.error` ensures the
+                            // same detail rides along on the terminal
+                            // event regardless of which branch the
+                            // front-end takes.
                             error: reply.last_error.clone(),
                         },
                     })
