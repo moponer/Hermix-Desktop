@@ -1,26 +1,35 @@
 import {
-  MessageSquarePlus, Search,
+  MessageSquarePlus,
   ChevronDown, ChevronRight,
   MessageSquare, Users, Plus, FolderOpen,
   Boxes, MoreHorizontal, Loader2,
   // Popover icons
   Pencil, Pin, Archive, Trash2, FolderOpenDot, Copy, FolderMinus,
-  Settings,
+  Settings, PanelLeftClose, Search,
   type LucideIcon,
 } from "lucide-react";
 import { clsx } from "clsx";
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
+import { getVersion } from "@tauri-apps/api/app";
 import { ConnectionIndicator } from "./ConnectionIndicator";
+import { SessionPickerDialog } from "./SessionPickerDialog";
+import {
+  resolveVisibleCount,
+  resolveRevealAction,
+  LIST_PREVIEW_COUNT,
+  type ListReveal,
+} from "./sidebarListReveal";
 import { invoke } from "@tauri-apps/api/core";
 import type { Session, NavPage } from "../types";
 import { useWorkspaces } from "../hooks/useWorkspaces";
 import { usePinnedArchived } from "../hooks/usePinnedArchived";
 import { openInExplorer, copyText } from "../desktopBridge";
 import { storage, sessionKey } from "../utils/storageCompat";
+import { applyScale } from "../utils/uiScale";
 import { formatRelativeTime } from "../utils/time";
 import * as api from "../api";
-import { toastSuccess, toastError } from "../hooks/useToast";
+import { toastSuccess, toastError, toastInfo } from "../hooks/useToast";
 import { useUserProfile } from "../hooks/useUserProfile";
 import { UserAvatar } from "./UserAvatar";
 import { EditProfileDialog } from "./EditProfileDialog";
@@ -42,6 +51,10 @@ interface SidebarProps {
   /** Create a blank chat with this workspace already selected. */
   onNewChatInWorkspace?: (workspacePath: string) => void;
   onOpenSettings?: () => void;
+  /** 折叠左侧栏。这一行是侧栏自身的头部，折叠入口归此最直观。 */
+  onCollapseSidebar?: () => void;
+  /** 打开会话搜索浮层。搜索是"动作"而非"页面"，所以不占导航位。 */
+  onOpenSearch?: () => void;
 }
 
 /* ── Group Chat Room types (API-backed) ── */
@@ -53,11 +66,13 @@ interface ChatRoom {
   createdAt: number;
 }
 
-/* ── Nav item — 4 核心功能 ── */
+/* ── Nav item — 核心功能 ── */
 
+// "搜索"已从主导航移除：它的本质是动作而非位置，做成独立页面会让用户
+// 为了搜一次付两次页面切换的代价，还会丢掉当前视图。现改为标题栏图标
+// 触发浮层（见 SessionPickerDialog），搜完即走。
 const NAV_ITEMS: { icon: React.ElementType; label: string; page: NavPage }[] = [
   { icon: MessageSquare, label: "对话",   page: "chat" },
-  { icon: Search,   label: "搜索",    page: "search" },
   { icon: Users,    label: "群聊",    page: "groupchat" },
   { icon: Boxes,    label: "应用",    page: "customapps" },
 ];
@@ -78,6 +93,8 @@ export function Sidebar({
   onRoomSelect,
   onNewChatInWorkspace,
   onOpenSettings,
+  onCollapseSidebar,
+  onOpenSearch,
 }: SidebarProps) {
   const { workspaces, add: addWorkspace, remove: removeWorkspace, rename: renameWorkspace } = useWorkspaces();
   const pinnedArchived = usePinnedArchived();
@@ -87,6 +104,15 @@ export function Sidebar({
   const [editOpen, setEditOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const userCardRef = useRef<HTMLDivElement>(null);
+
+  // 应用版本（来自 tauri.conf.json 的 version）。纯浏览器调试下没有 Tauri
+  // command，取不到就显示空串 —— 版本是装饰性信息，缺了不该让侧栏报错。
+  const [version, setVersion] = useState("");
+  useEffect(() => {
+    getVersion()
+      .then(setVersion)
+      .catch(() => {});
+  }, []);
 
   // Sort: pinned first, then archived last, otherwise keep original order.
   // React.useMemo on the array is enough; the hook already re-renders us
@@ -160,6 +186,38 @@ export function Sidebar({
 
   const [chatsCollapsed, setChatsCollapsed] = useState(false);
   const [spacesCollapsed, setSpacesCollapsed] = useState(false);
+
+  // 列表归集状态。"对话"分组与每个项目的会话列表各持一份，互不干扰。
+  const [chatsReveal, setChatsReveal] = useState<ListReveal>("preview");
+  const [wsReveal, setWsReveal] = useState<Record<string, ListReveal>>({});
+  // "查看全部"弹窗的打开目标：null 关闭；{ wsPath: null } 表示对话分组；
+  // { wsPath: string } 表示某个项目。
+  const [pickerTarget, setPickerTarget] = useState<{ wsPath: string | null; title: string } | null>(null);
+
+  // 列表变短后（删会话、切换项目）旧的展开状态会残留，导致"明明只剩 3 条
+  // 却记着已展开"。归零到折叠态即可，代价只是一次多余的重渲染。
+  useEffect(() => {
+    if (ungroupedSessions.length <= LIST_PREVIEW_COUNT && chatsReveal !== "preview") {
+      setChatsReveal("preview");
+    }
+  }, [ungroupedSessions.length, chatsReveal]);
+
+  // 项目列表同理，但要逐项判断：一个项目变短不该影响其他项目的展开状态。
+  // 只清真正需要复位的那些 key，避免每次会话变动都替换整个对象
+  // （那会让所有项目行重渲染）。
+  useEffect(() => {
+    setWsReveal((prev) => {
+      const stale = Object.keys(prev).filter((id) => {
+        const ws = workspaces.find((w) => w.id === id);
+        if (!ws) return true; // 项目已移除，连状态一起丢
+        return (sessionsByWs[ws.path] || []).length <= LIST_PREVIEW_COUNT;
+      });
+      if (stale.length === 0) return prev;
+      const next = { ...prev };
+      for (const id of stale) delete next[id];
+      return next;
+    });
+  }, [workspaces, sessionsByWs]);
 
   // SystemConfig 已由 系统配置 按钮直接跳转，无需 popup 状态。
 
@@ -348,7 +406,41 @@ export function Sidebar({
 
   return (
     <aside className="pane pane-left">
-      {/* Brand 已移至顶部 TitleBar,这里直接开始 CTA,避免双层标题栏 */}
+      {/* 侧栏头部：版本 + 折叠 / 搜索。
+          品牌不放这里 —— 窗口标题栏已有 logo + 应用名，再来一份就是重复。
+          这一行的职责只有两个：报告自己跑的是哪个版本，以及提供作用于
+          侧栏自身的动作（折叠）。搜索紧邻折叠，都是「这一列」的高频操作。 */}
+      <div className="sidebar-head">
+        {version ? (
+          <span className="sidebar-head-version" title={`Hermix v${version}`}>v{version}</span>
+        ) : (
+          <span className="sidebar-head-version" />
+        )}
+        <div className="sidebar-head-actions">
+          {onCollapseSidebar && (
+            <button
+              type="button"
+              onClick={onCollapseSidebar}
+              className="icon-btn"
+              aria-label="折叠侧边栏"
+              title="折叠侧边栏"
+            >
+              <PanelLeftClose className="icon-md" />
+            </button>
+          )}
+          {onOpenSearch && (
+            <button
+              type="button"
+              onClick={onOpenSearch}
+              className="icon-btn"
+              aria-label="搜索对话"
+              title="搜索对话"
+            >
+              <Search className="icon-md" />
+            </button>
+          )}
+        </div>
+      </div>
 
       {/* Top action list — 菜单式, 首项 = 新建对话 */}
       <nav className="nav sidebar-topnav" style={{ flexShrink: 0 }}>
@@ -401,7 +493,9 @@ export function Sidebar({
               {ungroupedSessions.length === 0 ? (
                 <p className="sidebar-section-empty">暂无对话</p>
               ) : (
-                sortByPinArchive(ungroupedSessions, "session").map((s) => {
+                sortByPinArchive(ungroupedSessions, "session")
+                  .slice(0, resolveVisibleCount(ungroupedSessions.length, chatsReveal))
+                  .map((s) => {
                   const isRemoving = removingIds.has(s.id);
                   const isDeleting = deletingIds.has(s.id);
                   const disabled = isRemoving || isDeleting;
@@ -438,11 +532,15 @@ export function Sidebar({
                   );
                 })
               )}
-              {ungroupedSessions.length >= 5 && (
-                <button type="button" className="sidebar-show-more" title="查看全部对话">
-                  查看更多({ungroupedSessions.length})
-                </button>
-              )}
+              <ListRevealButton
+                action={resolveRevealAction(ungroupedSessions.length, chatsReveal)}
+                label="对话"
+                onExpand={() => setChatsReveal("expanded")}
+                onCollapse={() => setChatsReveal("preview")}
+                onOpenPicker={() =>
+                  setPickerTarget({ wsPath: null, title: "全部对话" })
+                }
+              />
             </div>
           )}
         </section>
@@ -469,6 +567,7 @@ export function Sidebar({
               ) : (
                 sortByPinArchive(workspaces, "workspace").map((ws) => {
                 const wsSessions = sessionsByWs[ws.path] || [];
+                const reveal = wsReveal[ws.id] ?? "preview";
                 const collapsed = collapsedWs.has(ws.id);
                 const wsRemoving = removingIds.has(ws.id);
                 const wsDeleting = deletingIds.has(ws.id);
@@ -492,7 +591,9 @@ export function Sidebar({
                     </div>
                     {!collapsed && wsSessions.length > 0 && (
                       <div className="sidebar-project-sessions">
-                        {sortByPinArchive(wsSessions, "session").map((s) => {
+                        {sortByPinArchive(wsSessions, "session")
+                          .slice(0, resolveVisibleCount(wsSessions.length, reveal))
+                          .map((s) => {
                           const psRemoving = removingIds.has(s.id);
                           const psDeleting = deletingIds.has(s.id);
                           const psDisabled = psRemoving || psDeleting;
@@ -528,11 +629,16 @@ export function Sidebar({
                             </div>
                           );
                         })}
-                        {wsSessions.length >= 5 && (
-                          <button type="button" className="sidebar-show-more sidebar-show-more-inset" title="查看全部会话">
-                            查看更多({wsSessions.length})
-                          </button>
-                        )}
+                        <ListRevealButton
+                          inset
+                          action={resolveRevealAction(wsSessions.length, reveal)}
+                          label={ws.name}
+                          onExpand={() => setWsReveal((p) => ({ ...p, [ws.id]: "expanded" }))}
+                          onCollapse={() => setWsReveal((p) => ({ ...p, [ws.id]: "preview" }))}
+                          onOpenPicker={() =>
+                            setPickerTarget({ wsPath: ws.path, title: ws.name })
+                          }
+                        />
                       </div>
                     )}
                   </div>
@@ -654,9 +760,9 @@ export function Sidebar({
           style={{ cursor: "pointer" }}
           onClick={() => setMenuOpen((v) => !v)}
           onDoubleClick={() => {
-            /* 紧急重置缩放：双击 user-card 恢复 100%（防死锁） */
-            document.documentElement.style.zoom = "1";
-            try { storage.setItem("hermix.desktop.ui-scale", "1"); } catch {}
+            /* 紧急重置缩放：双击 user-card 恢复 100%（防死锁）。
+               走 applyScale 而非直接写 style，保证布局层收到重算事件。 */
+            applyScale(1);
           }}
           onKeyDown={(e) => {
             if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setMenuOpen((v) => !v); }
@@ -683,8 +789,16 @@ export function Sidebar({
           anchorRef={userCardRef}
           onNavigateAnalytics={() => onPageChange("analytics")}
           onDisconnect={() => {
-            /* restart sidecar = soft disconnect/reconnect */
-            invoke("restart_sidecar").catch(() => {});
+            /* restart sidecar = soft disconnect/reconnect.
+               必须给可见反馈：静默失败时按钮看起来毫无作用（"点断开连接
+               无效"），用户无法区分是没执行、还是执行了但连不上。 */
+            toastInfo("正在断开并重连后端服务…");
+            invoke("restart_sidecar")
+              .then(() => toastInfo("后端服务已重连"))
+              .catch((e) => {
+                console.error("[Sidebar] restart_sidecar failed:", e);
+                toastError("断开重连失败，请稍后重试");
+              });
           }}
         />
         {editOpen && (
@@ -705,11 +819,82 @@ export function Sidebar({
         onConfirm={(next) => { const s = renameState; setRenameState(null); s?.onConfirm(next); }}
         onCancel={() => setRenameState(null)}
       />
+      <SessionPickerDialog
+        open={pickerTarget !== null}
+        title={pickerTarget?.title ?? "全部对话"}
+        // 对话分组传全量未分组会话；项目场景传该项目的会话。搜索范围随之
+        // 收窄到当前列表，符合"我只在这个列表里找"的直觉。
+        sessions={
+          pickerTarget
+            ? pickerTarget.wsPath === null
+              ? ungroupedSessions
+              : sessionsByWs[pickerTarget.wsPath] || []
+            : []
+        }
+        onSelect={onSelectSession}
+        onClose={() => setPickerTarget(null)}
+      />
     </aside>
   );
 }
 
 /* ── Scoped helpers ── */
+
+/**
+ * 列表底部那一个按钮。三态归集（折叠 / 就地展开 / 查看全部）的交互出口，
+ * 全部逻辑集中在 `resolveRevealAction`，这里只负责把 action 映射成外观。
+ */
+function ListRevealButton({
+  action,
+  label,
+  inset,
+  onExpand,
+  onCollapse,
+  onOpenPicker,
+}: {
+  action: ReturnType<typeof resolveRevealAction>;
+  /** 列表名，用于 title 提示（"查看全部对话" / "查看全部 <项目名>"）。 */
+  label: string;
+  /** 项目内嵌列表需要额外缩进以对齐子项文本。 */
+  inset?: boolean;
+  onExpand: () => void;
+  onCollapse: () => void;
+  onOpenPicker: () => void;
+}) {
+  if (!action) return null;
+  const cls = clsx("sidebar-show-more", inset && "sidebar-show-more-inset");
+
+  if (action.kind === "collapse") {
+    return (
+      <button type="button" className={cls} onClick={onCollapse} title="收起">
+        收起
+      </button>
+    );
+  }
+  if (action.kind === "expand") {
+    return (
+      <button
+        type="button"
+        className={cls}
+        onClick={onExpand}
+        title={`查看更多（还有 ${action.hidden} 条）`}
+      >
+        查看更多（{action.hidden}）
+      </button>
+    );
+  }
+  return (
+    <button
+      type="button"
+      className={cls}
+      onClick={onOpenPicker}
+      title={`在弹窗中查看全部「${label}」并搜索`}
+    >
+     查看全部（{action.hidden}）…
+    </button>
+  );
+}
+
 
 type MenuItemSpec = {
   key: string;

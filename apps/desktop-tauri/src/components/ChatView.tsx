@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { useStreamChatContext } from "../context/StreamChatContext";
-import { PanelRight, ArrowUp, AlertTriangle } from "lucide-react";
+import { PanelRight, PanelLeftOpen, Search, ArrowUp, AlertTriangle } from "lucide-react";
+import { SidebarRevealRow } from "./SidebarRevealRow";
 import { resolveSessionSelectedModel } from "../utils/sessionModel";
 import type { ChatMessage, QueuedMessage, QueuedImage, SubAgentState, Session } from "../types";
 import type { ChatOverrides, StreamPhase, TodoSnapshotItem } from "../hooks/useStreamChat";
@@ -40,33 +41,69 @@ function ModelStatusBar({
   title,
   rightOpen,
   onToggleRight,
+  sidebarCollapsed,
+  onExpandSidebar,
+  onOpenSearch,
 }: {
   title?: string;
   rightOpen?: boolean;
   onToggleRight?: () => void;
+  sidebarCollapsed?: boolean;
+  onExpandSidebar?: () => void;
+  onOpenSearch?: () => void;
 }) {
-  if (!title) return null;
-  const displayTitle = title.length > 80 ? title.slice(0, 77) + "…" : title;
+  // 侧栏折叠时，展开 + 搜索按钮直接嵌在本行标题左侧（用户拍板：与对话标题
+  // 同一行，不另起浮层）。折叠但会话尚无标题（title 未生成）时也必须渲染
+  // 本行 —— 否则展开入口随侧栏一起消失，用户再也打不开侧栏。
+  const showLeftActions = !!sidebarCollapsed && !!onExpandSidebar;
+  if (!title && !showLeftActions) return null;
+  const displayTitle = title && title.length > 80 ? title.slice(0, 77) + "…" : title;
   const showRightToggle = !!onToggleRight;
   return (
     <div
       className="px-4 sm:px-6 pt-3 pb-2 flex items-center gap-2 rounded-t-xl shrink-0"
       style={{ color: "var(--color-text-primary)" }}
     >
-      <span
-        className="truncate flex-1 min-w-0"
-        style={{
-          fontSize: "14px",
-          fontWeight: 600,
-          letterSpacing: "-0.005em",
-        }}
-      >
-        {displayTitle}
-      </span>
+      {showLeftActions && (
+        <>
+          <button
+            type="button"
+            onClick={onExpandSidebar}
+            className="icon-btn"
+            aria-label="展开侧边栏"
+            title="展开侧边栏"
+          >
+            <PanelLeftOpen className="icon-md" />
+          </button>
+          {onOpenSearch && (
+            <button
+              type="button"
+              onClick={onOpenSearch}
+              className="icon-btn"
+              aria-label="搜索对话"
+              title="搜索对话"
+            >
+              <Search className="icon-md" />
+            </button>
+          )}
+        </>
+      )}
+      {displayTitle && (
+        <span
+          className="truncate flex-1 min-w-0"
+          style={{
+            fontSize: "14px",
+            fontWeight: 600,
+            letterSpacing: "-0.005em",
+          }}
+        >
+          {displayTitle}
+        </span>
+      )}
       {showRightToggle && (
         <button
           onClick={onToggleRight}
-          className="titlebar-btn"
+          className={`titlebar-btn${displayTitle ? "" : " ml-auto"}`}
           title={rightOpen ? "关闭产物栏" : "打开产物栏"}
           aria-label="切换产物栏"
           data-right-open={rightOpen ? "true" : "false"}
@@ -112,6 +149,9 @@ interface ChatViewProps {
   onWorkspaceChange?: (sessionId: string | null | undefined, path: string | null) => void;
   rightOpen?: boolean;
   onToggleRight?: () => void;
+  sidebarCollapsed?: boolean;
+  onExpandSidebar?: () => void;
+  onOpenSearch?: () => void;
   onPathClick?: (path: string) => void;
   onApproveApproval?: (requestId: string, remember?: boolean) => void;
   onDenyApproval?: (requestId: string) => void;
@@ -173,6 +213,9 @@ export function ChatView({
   onWorkspaceChange,
   rightOpen,
   onToggleRight,
+  sidebarCollapsed,
+  onExpandSidebar,
+  onOpenSearch,
   todoGroups, onTodoPatch, justPatchedTodoRef,
   subAgents,
   onApproveApproval,
@@ -695,6 +738,11 @@ export function ChatView({
         className="chat-surface flex-1 flex flex-col items-center justify-center px-8 min-h-0"
         style={{ overflow: "visible" }}
       >
+        {sidebarCollapsed && onExpandSidebar && (
+          <div className="self-start w-full">
+            <SidebarRevealRow onExpand={onExpandSidebar} onOpenSearch={onOpenSearch} />
+          </div>
+        )}
         <div className="w-full max-w-md flex flex-col items-center py-12 text-center">
           <div
             className="w-14 h-14 rounded-full flex items-center justify-center mb-5"
@@ -746,6 +794,11 @@ export function ChatView({
   if (isLoadingExisting) {
     return (
       <div className="chat-surface flex-1 flex flex-col items-center justify-center px-8 min-h-0">
+        {sidebarCollapsed && onExpandSidebar && (
+          <div className="self-start w-full">
+            <SidebarRevealRow onExpand={onExpandSidebar} onOpenSearch={onOpenSearch} />
+          </div>
+        )}
         <div className="flex flex-col items-center gap-3 text-center">
           <div
             className="w-9 h-9 rounded-full border-2 border-border-primary border-t-text-muted animate-spin"
@@ -760,6 +813,11 @@ export function ChatView({
   if (!session || session.messages.length === 0) {
     return (
       <div className="chat-surface flex-1 flex flex-col items-center justify-center px-8 min-h-0" style={{ overflow: "visible" }}>
+        {sidebarCollapsed && onExpandSidebar && (
+          <div className="self-start w-full">
+            <SidebarRevealRow onExpand={onExpandSidebar} onOpenSearch={onOpenSearch} />
+          </div>
+        )}
         <div className="w-full max-w-3xl flex flex-col items-center py-12">
           <div className="relative mb-4">
             <img
@@ -832,6 +890,9 @@ export function ChatView({
         title={session?.title}
         rightOpen={rightOpen}
         onToggleRight={onToggleRight}
+        sidebarCollapsed={sidebarCollapsed}
+        onExpandSidebar={onExpandSidebar}
+        onOpenSearch={onOpenSearch}
       />
 
       <MessageList

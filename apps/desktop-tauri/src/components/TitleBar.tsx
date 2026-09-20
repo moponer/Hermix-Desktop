@@ -1,12 +1,11 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Menu, Minus, Square, X } from "lucide-react";
+import { Minus, Square, X } from "lucide-react";
 import { useCallback } from "react";
 
-interface TitleBarProps {
-  onToggleSidebar: () => void;
-}
-
-export function TitleBar({ onToggleSidebar }: TitleBarProps) {
+/** 标题栏只承担「窗口」层级的动作：拖拽 + 最小化 / 最大化 / 关闭。
+ *  侧栏折叠与搜索是「内容」层级，已移入侧栏头部（Sidebar 的 .sidebar-head）——
+ *  它们控制的区域就在那一行下面，放这里比隔着整个屏幕更贴切。 */
+export function TitleBar() {
   const handleMinimize = useCallback(() => {
     try {
       void getCurrentWindow().minimize();
@@ -48,25 +47,12 @@ export function TitleBar({ onToggleSidebar }: TitleBarProps) {
       {/* 空白间隔区 — `no-drag` 让点击穿透到下层按钮 */}
       <div className="no-drag flex-1" />
 
-      {/* 左侧按钮组: 折叠菜单. `no-drag` 包一层即可. */}
-      <div className="titlebar-group no-drag">
-        <button
-          type="button"
-          onClick={onToggleSidebar}
-          className="icon-btn"
-          aria-label="切换侧边栏"
-          title="切换侧边栏"
-        >
-          <Menu className="icon-lg" />
-        </button>
-      </div>
-
       {/* Window controls: minimize / maximize / close.
           Each button carries both `no-drag` and `data-tauri-no-drag`:
-          `-webkit-app-region: no-drag` does not inherit, so a parent
-          drag region alone would swallow the child button's clicks.
-          `data-tauri-no-drag` is Tauri's recommended marker and wins
-          regardless of CSS specificity / import order. */}
+          the class covers the CSS path, while `data-tauri-no-drag` is
+          Tauri's own marker and wins regardless of CSS specificity or
+          import order — belt and braces, since a swallowed click here
+          would leave the window undraggable-but-unclosable. */}
       <div className="flex">
         <button
           type="button"

@@ -19,7 +19,12 @@
 .app-shell {
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  /* 用 100% 而非 100vh：界面缩放走的是根元素 `zoom`（App.tsx / UserMenuPopover.tsx），
+     而 `zoom` 只改布局尺寸、不改视口单位 —— 100vh 仍是 100% 物理视口。放大到 1.3
+     时外壳实际占 130% 视口高，超出部分被裁掉（底部输入框消失）；缩小到 0.85 时
+     外壳只占 85%，底部留一条空白。html/body 都是 height:100%，所以 100%
+     天然跟随当前缩放后的可用高度。 */
+  height: 100%;
   background: var(--color-bg-primary);
   color: var(--color-text-primary);
   overflow: hidden;
@@ -28,24 +33,28 @@
 .app-body {
   display: grid;
   /* 三列布局，关闭任一列时彻底归零 track。
-     - 主列 minmax(var(--pane-main-min), 1fr) → min 跟随 App.tsx 的
-       MAIN_MIN_WIDTH（默认 580），不能硬编码成 720：否则右列想撑到
-       640 时 grid 空间不足，被压回 480，"右列装不下中文长文件名"。
-     - 右列 minmax(0, var(--ab-right-w)) → 上限跟随 App.tsx 的
+     - 左列 minmax(0, var(--ab-left-w, 200px)) → 默认 200，可拖到 360；
+       min 取 0 而非 --left-min，否则左列本身就成了整行 min-content 宽度的下限。
+     - 主列 minmax(0, 1fr) → 下限取 0，让主区在窄视口能被压缩。
+     - 右列 minmax(0, var(--ab-right-w, 640px)) → 上限跟随 App.tsx 的
        right.width（用户拖动的当前值，默认 640）。硬编码 minmax(0px, 480px)
        会把 max 锁死在 480，right.width 设到 640 也没用，track 仍被夹到 480。
-     - 左列 minmax(200, var(--ab-left-w, 200px)) → 默认 200, 可拖到 360。
-     视口 ≥ 1280 (LEFT_MIN + MAIN_FLOOR + RIGHT_OPENED_MIN = 1280) 时三列共存。
+     **为什么不给主列写 580 硬下限**：580 + 200 + 右侧宽度一旦超过视口，
+     grid 会把整行撑出 .app-body，而 .app-body 是 overflow: hidden ——
+     溢出不产生滚动条，直接被裁掉，右侧/右列凭空消失。窗口缩到 780、
+     或界面缩放到 1.3（等效视口 = 视口 / 1.3）都必然触发。
+     最小可读宽度改由下方 @container 规则在窄视口下接管，而不是写死 track。
+     ⚠ 改 track 前先读 .app-shell 的 `height: 100%` 注释：界面缩放的实现方式
+     （根元素 zoom）决定了这里不能出现「像素硬下限」。
      视口 < 1140 时右列自动关闭 (见 [data-right-open="false"])。
-     左侧栏折叠时也要把第一列归零 (见 [data-left-open="false"])：否则只把
+     左侧栏折叠时要把第一列归零 (见 [data-left-open="false"])：否则只把
      外层 div translate-x-full 移走，grid 仍占 200px，main 不扩张，视觉上
-     留下一条空白，像"sidebar 没真正折叠"。用与右列相同的 data-left-open
-     模式把第一列归零。 */
-  --col-left:  minmax(var(--left-min, 200px), var(--ab-left-w, 200px));
-  --col-right: minmax(0px, var(--ab-right-w, 640px));
+     留下一条空白，像"sidebar 没真正折叠"。 */
+  --col-left:  minmax(0, var(--ab-left-w, 200px));
+  --col-right: minmax(0, var(--ab-right-w, 640px));
   grid-template-columns:
     var(--col-left)
-    minmax(var(--pane-main-min, 580px), 1fr)
+    minmax(0, 1fr)
     var(--col-right);
   grid-template-rows: minmax(0, 1fr);  /* minmax(0, ...) not bare 1fr —
                         bare `1fr` expands to `minmax(auto, 1fr)` where the
@@ -158,12 +167,6 @@
   border-bottom: 1px solid var(--color-border-primary);
   /* 不设 overflow:hidden — 让 titlebar 内下拉（如 ThemeToggle）能向下溢出显示 */
 }
-.titlebar-group {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  padding-left: 6px;
-}
 
 .titlebar-brand {
   display: flex;
@@ -188,6 +191,48 @@
   color: var(--color-text-secondary);
   letter-spacing: -0.01em;
   pointer-events: none;
+}
+
+/* ── 侧栏头部：版本 + 折叠 / 搜索 ──────────────────────────────
+   这一行是侧栏自身的头部，宽度 = 侧栏宽度，按钮离它控制的对象最近。
+   品牌不放这里：窗口标题栏已有 logo + 应用名，重复一份是噪音。
+   高度对齐标题栏的 40px，两行在视觉上接成同一水平带。 */
+.sidebar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  height: 40px;
+  flex-shrink: 0;
+  padding: 0 6px 0 10px;
+  user-select: none;
+}
+/* 版本号用最小字级 + faint 色：它是"确认自己跑的是哪版"的信息，
+   不需要参与视觉竞争，扫一眼能找到即可。空占位保持右侧按钮靠右。 */
+.sidebar-head-version {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-tiny);
+  color: var(--color-text-faint);
+  white-space: nowrap;
+}
+.sidebar-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+/* 侧栏折叠后，主区顶部的动作行（展开 + 搜索）。
+   真实行而非绝对定位浮层：对话标题、「专家」「自动化」等页头都在主区
+   左上，浮层必然压住其一；真实行把页面内容整体推下去，谁都不被盖。
+   对话中不渲染此行 —— 按钮直接嵌进 ModelStatusBar 标题行（同一行）。 */
+.sidebar-reveal-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 40px;
+  flex-shrink: 0;
+  padding: 0 6px;
 }
 
 .titlebar-btn {
@@ -738,6 +783,11 @@ height: 26px;
   text-align: left;
   cursor: pointer;
   border-radius: var(--radius-sm);
+  /* 文案含计数与（"查看全部"场景下的）项目名，长名字会把这行撑成两行。
+     截断比换行好：它是列表尾部的辅助行，不该抢条目的视觉重量。 */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   transition: color var(--duration-fast) ease, background var(--duration-fast) ease;
 }
 .sidebar-show-more:hover {

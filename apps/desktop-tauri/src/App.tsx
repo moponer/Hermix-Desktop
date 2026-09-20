@@ -2,10 +2,12 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { flushSync } from "react-dom";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { Sidebar } from "./components/Sidebar";
+import { SidebarRevealRow } from "./components/SidebarRevealRow";
 import { ChatView } from "./components/ChatView";
 import { ImageLightbox } from "./components/ImageLightbox";
 import { RightSidebar, type RightTab } from "./components/RightSidebar";
 import { TitleBar } from "./components/TitleBar";
+import { SessionPickerDialog } from "./components/SessionPickerDialog";
 import { useStreamChat } from "./hooks/useStreamChat";
 import { AppProviders } from "./app/AppProviders";
 import { renderRoutes, type RouteContext } from "./app/routes";
@@ -53,6 +55,7 @@ import type {
 // tools are now tracked in the assistant's execution_timeline, not expanded
 // into separate role:tool messages.
 import { storage, STORAGE_KEYS, sessionKey } from "./utils/storageCompat";
+import { applyScale, readScale, UI_SCALE_EVENT } from "./utils/uiScale";
 
 const LEFT_KEY = STORAGE_KEYS.sidebarWidth;
 
@@ -85,22 +88,32 @@ const RIGHT_DEFAULT = 640;
 // 后者是被动收缩，这里是用户主动请求更多空间。
 // setSize 失败时仍 setRightOpen(true)，让 layout 走退化路径（窗口不够宽则右栏内容窄显示）。
 // 默认视口 1920 时: 左 200 + 主 1080 + 右 640 = 1920.
-/* 自适应 MAIN_MIN_WIDTH — 按视口动态缩小主列最小宽，避免窄窗口下左列 + 主列
-   合计最小宽度超过视口：
-   - 视口 ≥ 1400px: MAIN_MIN_WIDTH = 580（舒适宽）
-   - 视口 1000~1399px: MAIN_MIN_WIDTH = 480（中等）
-   - 视口 800~999px: MAIN_MIN_WIDTH = 400（紧凑）
-   - 视口 < 800px: MAIN_MIN_WIDTH = 360（最小可读）
-   同时 LEFT_MIN 也随视口降低。对应的三列共存阈值随之降到 920。 */
+/* 自适应 MAIN_MIN_WIDTH — 按**等效视口**动态缩小主列最小宽，避免窄窗口下
+   左列 + 主列合计最小宽度超过视口：
+   - 等效视口 ≥ 1400px: MAIN_MIN_WIDTH = 580（舒适宽）
+   - 等效视口 1000~1399px: MAIN_MIN_WIDTH = 480（中等）
+   - 等效视口 800~999px: MAIN_MIN_WIDTH = 400（紧凑）
+   - 等效视口 < 800px: MAIN_MIN_WIDTH = 360（最小可读）
+   同时 LEFT_MIN 也随视口降低。对应的三列共存阈值随之降到 920。
+
+   注意「等效」二字：zoom 会改变真实可用宽度但不改变 window.innerWidth，
+   所以分档前必须除以 zoom，见下方 currentZoom()。 */
+function currentZoom(): number {
+  const z = Number(document.documentElement.style.zoom);
+  return z > 0 ? z : 1;
+}
+
 function computeMainMinWidth(vw: number): number {
-  if (vw >= 1400) return 580;
-  if (vw >= 1000) return 480;
-  if (vw >= 800) return 400;
+  const eff = vw / currentZoom();
+  if (eff >= 1400) return 580;
+  if (eff >= 1000) return 480;
+  if (eff >= 800) return 400;
   return 360;
 }
 function computeLeftMin(vw: number): number {
-  if (vw >= 1200) return 200;
-  if (vw >= 900) return 160;
+  const eff = vw / currentZoom();
+  if (eff >= 1200) return 200;
+  if (eff >= 900) return 160;
   return 120;
 }
 
@@ -175,6 +188,8 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
   // 视口自适应 — 窗口尺寸变化时重算面板最小宽度
   // 对应 computeMainMinWidth / computeLeftMin 的分档逻辑。
   // 放在这里（useEffect 最前面），确保每次 resize 都更新。
+  // 同时监听 ui-scale 事件：缩放会改变等效视口宽（innerWidth 不变），
+  // 不重算的话，在窄窗口放大后三列总最小宽会超过真实可用宽度而撑破布局。
   useEffect(() => {
     const onResize = () => {
       setMainMinWidth(computeMainMinWidth(window.innerWidth));
@@ -182,36 +197,26 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
     };
     onResize(); // 初始化执行一次
     window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
+    window.addEventListener(UI_SCALE_EVENT, onResize);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      window.removeEventListener(UI_SCALE_EVENT, onResize);
+    };
   }, []);
 
   // ── 全局缩放快捷键（防死锁：缩放太大看不到菜单时用键盘恢复）──
   useEffect(() => {
-    const SCALE_KEY = "hermix.desktop.ui-scale";
     const onKey = (e: KeyboardEvent) => {
       if (!e.ctrlKey && !e.metaKey) return;
       if (e.key === "0") {
         e.preventDefault();
-        document.documentElement.style.zoom = "1";
-        try { storage.setItem(SCALE_KEY, "1"); } catch {}
+        applyScale(1);
         return;
       }
-      if (e.key === "=" || e.key === "+") {
-        e.preventDefault();
-        const cur = Number(document.documentElement.style.zoom) || 1;
-        const next = Math.min(1.5, Math.round((cur + 0.1) * 10) / 10);
-        document.documentElement.style.zoom = String(next);
-        try { storage.setItem(SCALE_KEY, String(next)); } catch {}
-        return;
-      }
-      if (e.key === "-") {
-        e.preventDefault();
-        const cur = Number(document.documentElement.style.zoom) || 1;
-        const next = Math.max(0.7, Math.round((cur - 0.1) * 10) / 10);
-        document.documentElement.style.zoom = String(next);
-        try { storage.setItem(SCALE_KEY, String(next)); } catch {}
-        return;
-      }
+      const step = e.key === "=" || e.key === "+" ? 0.1 : e.key === "-" ? -0.1 : 0;
+      if (step === 0) return;
+      e.preventDefault();
+      applyScale(readScale() + step);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -249,6 +254,9 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
   }, [activeSessionId]);
 
   const [sidebarOpen, setSidebarOpen] = useState(true);
+
+  // 全局搜索浮层。从主导航摘掉"搜索"页后由标题栏图标触发。
+  const [searchOpen, setSearchOpen] = useState(false);
 
   const [rightOpen, setRightOpen] = useState<boolean>(() => {
     try { return storage.getItem(RIGHT_OPEN_KEY) !== "false"; } catch { return false; }
@@ -684,7 +692,10 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
 
   useEffect(() => {
     const recompute = () => {
-      const vw = window.innerWidth;
+      // 用等效视口宽度（物理视口 ÷ zoom）。缩放不改变 window.innerWidth，
+      // 直接用 innerWidth 会在放大后误判"窗口很宽"，把右栏留在三列共存状态，
+      // 而真实可用宽度已装不下三列 → 整行溢出被裁。
+      const vw = window.innerWidth / currentZoom();
       // 三列共存下限 = state 中的 leftMin + mainMinWidth + RIGHT_MIN(360).
       // 动态计算：视口缩小时 leftMin 和 mainMinWidth 都缩,
       // 临界阈值随之降低, 右栏可以在更小的窗口下保持打开.
@@ -704,7 +715,11 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
     };
     recompute();
     window.addEventListener("resize", recompute);
-    return () => window.removeEventListener("resize", recompute);
+    window.addEventListener(UI_SCALE_EVENT, recompute);
+    return () => {
+      window.removeEventListener("resize", recompute);
+      window.removeEventListener(UI_SCALE_EVENT, recompute);
+    };
   }, [rightOpen, left.setWidth, right.setWidth, leftMin, mainMinWidth]);
 
   // Load sessions
@@ -1356,13 +1371,15 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
         session = await api.createSession(title, draftWs ?? undefined);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        // No sessionId yet (createSession failed before one was minted) —
-        // we route the error to the welcome-screen sentinel so the user
-        // sees it in the empty conversation, not in some other session.
+        // 不要把所有失败都说成"后端未启动或不可达"：会话创建失败的成因
+        // 至少有三类 —— 后端真不可达（网络）、请求被拒（4xx，协议/参数
+        // 问题）、服务端异常（5xx）。把它们混成一句"未启动"会把一个
+        // 确定性的 422 说成环境问题，用户按提示去查端口永远治不好。
+        // 按分类给出对应处置，原文压进 detail 供复制排障。
         setStreamError(null, {
-          message:
-            `后端服务未启动或不可达 (${msg})。` +
-            `请检查 hermix.exe 是否在 target/debug/ 下、端口 3000 是否被占用。`,
+          message: localizeStreamError(msg),
+          kind: classifyStreamErrorKind(msg),
+          detail: msg,
         });
         return;
       }
@@ -3030,6 +3047,9 @@ return {
       prefetchIntent={prefetchIntent}
       rightOpen={rightOpen}
       onToggleRight={handleToggleRight}
+      sidebarCollapsed={!sidebarOpen}
+      onExpandSidebar={() => setSidebarOpen(true)}
+      onOpenSearch={() => setSearchOpen(true)}
       onEnterWelcome={handleEnterWelcome}
       onPathClick={handlePathClick}
       pendingFileAttachment={pendingFileAttachment}
@@ -3047,8 +3067,12 @@ return {
   return (
     <AppProviders value={streamChatApi}>
     <div className="app-shell">
-      <TitleBar
-        onToggleSidebar={() => setSidebarOpen((v) => !v)}
+      <TitleBar />
+      <SessionPickerDialog
+        open={searchOpen}
+        sessions={sessions}
+        onSelect={handleSelectSession}
+        onClose={() => setSearchOpen(false)}
       />
       {denialBanner && (() => {
         const sub =
@@ -3114,6 +3138,8 @@ return {
               void handleNewChat();
             }}
             onOpenSettings={openSettings}
+            onCollapseSidebar={() => setSidebarOpen(false)}
+            onOpenSearch={() => setSearchOpen(true)}
           />
           </ErrorBoundary>
           <div
@@ -3131,8 +3157,25 @@ return {
             pushed below usable width. Three-column layout never wraps —
             it auto-collapses to two columns at 1140px. */}
         <ErrorBoundary name="主内容区">
-        <main className="pane pane-main min-w-0 flex-1">
-          {renderRoutes(page, routesCtx)}
+        <main className="pane pane-main min-w-0 flex-1 flex flex-col">
+          {/* 侧栏折叠后的展开入口。必须放在主区：折叠按钮本身在侧栏内部，
+              侧栏一 translate 滑出视口就跟着没了，没有这个按钮用户再也打不开。
+              分两种形态（用户拍板「与对话标题同一行、不重叠」）：
+              - 对话页：不渲染此行 —— 按钮直接嵌进 ChatView 的 ModelStatusBar
+                标题行（props: sidebarCollapsed/onExpandSidebar/onOpenSearch）；
+              - 其余页面：主区顶部渲染一条真实动作行，页面内容被推到行下方，
+                不与「专家」「自动化」等页头重叠。
+              main 因此改为 flex column：路由内容包在弹性容器里占剩余高度，
+              动作行出现时页面整体下移，不会把内容顶出可视区。 */}
+          {!sidebarOpen && page !== "chat" && (
+            <SidebarRevealRow
+              onExpand={() => setSidebarOpen(true)}
+              onOpenSearch={() => setSearchOpen(true)}
+            />
+          )}
+          <div className="min-h-0 flex-1">
+            {renderRoutes(page, routesCtx)}
+          </div>
         </main>
         </ErrorBoundary>        {/* Right sidebar — grid column 3; 0px when closed (collapsed), full
             width when open. Grid ensures main content (column 2, 1fr) is
