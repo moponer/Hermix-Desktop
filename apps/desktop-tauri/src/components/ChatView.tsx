@@ -735,14 +735,14 @@ export function ChatView({
   if (messageLoadError) {
     return (
       <div
-        className="chat-surface flex-1 flex flex-col items-center justify-center px-8 min-h-0"
+        className="chat-surface flex-1 flex flex-col px-8 min-h-0"
         style={{ overflow: "visible" }}
       >
         {sidebarCollapsed && onExpandSidebar && (
-          <div className="self-start w-full">
-            <SidebarRevealRow onExpand={onExpandSidebar} onOpenSearch={onOpenSearch} />
-          </div>
+          <SidebarRevealRow onExpand={onExpandSidebar} onOpenSearch={onOpenSearch} />
         )}
+        {/* 工具行必须贴顶 —— 居中只作用于下面的内容区，否则行被 justify-center 拉下去 */}
+        <div className="flex-1 min-h-0 flex flex-col items-center justify-center">
         <div className="w-full max-w-md flex flex-col items-center py-12 text-center">
           <div
             className="w-14 h-14 rounded-full flex items-center justify-center mb-5"
@@ -784,6 +784,7 @@ export function ChatView({
             </button>
           </div>
         </div>
+        </div>
       </div>
     );
   }
@@ -793,12 +794,11 @@ export function ChatView({
     && ((session as Session & { message_count?: number }).message_count ?? 0) > 0;
   if (isLoadingExisting) {
     return (
-      <div className="chat-surface flex-1 flex flex-col items-center justify-center px-8 min-h-0">
+      <div className="chat-surface flex-1 flex flex-col px-8 min-h-0">
         {sidebarCollapsed && onExpandSidebar && (
-          <div className="self-start w-full">
-            <SidebarRevealRow onExpand={onExpandSidebar} onOpenSearch={onOpenSearch} />
-          </div>
+          <SidebarRevealRow onExpand={onExpandSidebar} onOpenSearch={onOpenSearch} />
         )}
+        <div className="flex-1 min-h-0 flex flex-col items-center justify-center">
         <div className="flex flex-col items-center gap-3 text-center">
           <div
             className="w-9 h-9 rounded-full border-2 border-border-primary border-t-text-muted animate-spin"
@@ -806,18 +806,19 @@ export function ChatView({
           />
           <p className="text-[13px] text-text-muted">正在恢复对话...</p>
         </div>
+        </div>
       </div>
     );
   }
 
   if (!session || session.messages.length === 0) {
     return (
-      <div className="chat-surface flex-1 flex flex-col items-center justify-center px-8 min-h-0" style={{ overflow: "visible" }}>
+      <div className="chat-surface flex-1 flex flex-col px-8 min-h-0" style={{ overflow: "visible" }}>
         {sidebarCollapsed && onExpandSidebar && (
-          <div className="self-start w-full">
-            <SidebarRevealRow onExpand={onExpandSidebar} onOpenSearch={onOpenSearch} />
-          </div>
+          <SidebarRevealRow onExpand={onExpandSidebar} onOpenSearch={onOpenSearch} />
         )}
+        {/* 工具行必须贴顶 —— 居中只作用于下面的内容区，否则行被 justify-center 拉下去 */}
+        <div className="flex-1 min-h-0 flex flex-col items-center justify-center">
         <div className="w-full max-w-3xl flex flex-col items-center py-12">
           <div className="relative mb-4">
             <img
@@ -879,6 +880,7 @@ export function ChatView({
               />
             )}
           </div>
+        </div>
         </div>
       </div>
     );
