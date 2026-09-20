@@ -116,67 +116,78 @@ code ::selection,
 .error-boundary-fallback__summary { cursor: pointer; font-size: 12px; color: var(--color-text-faint); }
 .error-boundary-fallback__pre { margin-top: 8px; padding: 12px; background: var(--color-bg-secondary); border-radius: var(--radius-md); font-size: 12px; overflow: auto; max-height: 200px; white-space: pre-wrap; word-break: break-word; color: var(--color-error); }
 
-/* ── Toast notifications (bottom-right, premium borderless) ───────
-   Each toast is a floating pill: icon capsule carrying the variant
-   accent, and a thin progress strip along the bottom edge that
-   drains to 0 over the toast's lifetime so users can read the
-   remaining dwell time at a glance. The base rule uses a flat
-   elevated background that reads in any theme; the .dark upgrade
-   below layers the glass blur + tinted accent glow on top, so
-   light themes don't get a white toast bleeding into a white
-   page background. */
+/* ── Toast notifications (top-center, card) ──────────────────────
+   顶部居中的提示卡。三条硬约束，改动前先读：
+
+   1. **形状跟随项目容器体系**：一律 `--radius-lg`，禁 `999px` 胶囊。
+      胶囊是移动端 snackbar 的语言，跟 PopoverShell(rounded-xl) /
+      对话框 / 审批卡这套方角体系不搭。
+   2. **位置顶部居中，非垂直居中**：垂直正中最挡正文与输入框，
+      且"新建对话"就在画面中央，两者会打架。顶部降入符合"系统通告"
+      的空间语义（与 TitleBar 同侧），也不遮挡阅读区。
+   3. **颜色全走语义 token**：用 `--color-*-soft` 系列，禁 `color-mix`
+      现调与字面 rgba。tokens.css 顶部契约要求组件只用变量，手调色
+      会绕过主题系统 —— 换主题时这里就成了漂移源。
+   ───────────────────────────────────────────────────────────────── */
 .toast-container {
   position: fixed;
-  right: 20px;
-  bottom: 20px;
+  top: 0;
+  left: 0;
+  right: 0;
   z-index: 9999;
   display: flex;
-  flex-direction: column-reverse;
-  align-items: flex-end;
+  flex-direction: column;
+  align-items: center;
   gap: 8px;
-  width: max-content;
-  max-width: calc(100vw - 32px);
+  /* TitleBar 固定 40px（components-layout.css .titlebar），留间距让
+     toast 落在其下方而不是压在窗口控制按钮上。 */
+  padding: 50px 16px 0;
   pointer-events: none;
 }
 .toast {
-  --toast-tint:        color-mix(in srgb, var(--toast-accent) 9%, transparent);
-  --toast-tint-soft:   color-mix(in srgb, var(--toast-accent) 5%, transparent);
-  --toast-halo:        color-mix(in srgb, var(--toast-accent) 18%, transparent);
-  --toast-bg-tint:     color-mix(in srgb, var(--toast-accent) 4%, transparent);
-  --toast-bg-fallback: var(--color-bg-elevated);
-  --toast-shadow:      color-mix(in srgb, var(--toast-accent) 14%, transparent);
   position: relative;
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 10px;
-  min-width: 200px;
-  max-width: min(380px, calc(100vw - 32px));
-  padding: 10px 12px 12px 14px;
-  border: 0;
-  border-radius: 999px;
-  background: var(--toast-bg-fallback);
-  box-shadow:
-    0 1px 2px rgba(0, 0, 0, 0.08),
-    0 6px 16px var(--toast-shadow);
+  min-width: 240px;
+  max-width: min(420px, calc(100vw - 32px));
+  padding: 10px 12px 10px 14px;
+  border: 1px solid var(--color-border-primary);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-elevated);
+  box-shadow: var(--shadow-pop);
   color: var(--color-text-primary);
   pointer-events: auto;
   cursor: pointer;
   overflow: hidden;
-  isolation: isolate;
-  animation: toast-in 0.22s var(--ease-out);
-  transition: transform var(--duration-fast) ease, box-shadow var(--duration-fast) ease;
+  animation: toast-in 0.2s var(--ease-out);
+  transition:
+    box-shadow var(--duration-fast) ease,
+    border-color var(--duration-fast) ease;
 }
 .toast:hover {
-  transform: translateY(-1px);
-  box-shadow:
-    0 1px 2px rgba(0, 0, 0, 0.10),
-    0 10px 24px var(--toast-shadow);
+  /* 只深一档边框 + 用标准弹出层阴影，不引入新的视觉重量 */
+  border-color: var(--color-border-secondary);
+  box-shadow: var(--shadow-modal);
 }
-/* Dark theme upgrade: glassy tinted wash + halo + soft accent glow */
-.toast--error { --toast-accent: var(--color-error); }
-.toast--warning { --toast-accent: var(--color-warning); }
-.toast--info { --toast-accent: var(--color-info); }
-.toast--success { --toast-accent: var(--color-success); }
+/* 左侧 3px 色条承担变体标识。比图标底光环安静得多，也不抢文字；
+   色条与图标同色，语义重复但不冗余 —— 扫视时靠色条，细读时靠图标。 */
+.toast::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--toast-accent);
+}
+.toast--error   { --toast-accent: var(--color-error);   --toast-wash: var(--color-error-soft); }
+.toast--warning { --toast-accent: var(--color-warning); --toast-wash: var(--color-warning-soft); }
+.toast--info    { --toast-accent: var(--color-info);    --toast-wash: var(--color-info-soft); }
+.toast--success { --toast-accent: var(--color-success); --toast-wash: var(--color-success-soft); }
+
+/* 柔和底块取代原来的径向渐变光环：单色、无光晕，
+   与 --color-*-soft 令牌同源，跨主题自动跟随。 */
 .toast__icon {
   flex-shrink: 0;
   display: inline-flex;
@@ -184,24 +195,17 @@ code ::selection,
   justify-content: center;
   width: 22px;
   height: 22px;
-  border-radius: 999px;
+  border-radius: var(--radius-md);
   color: var(--toast-accent);
-  background:
-    radial-gradient(circle at 30% 25%,
-      color-mix(in srgb, var(--toast-accent) 32%, transparent),
-      color-mix(in srgb, var(--toast-accent) 14%, transparent) 75%);
-  box-shadow:
-    0 0 0 3.5px color-mix(in srgb, var(--toast-accent) 9%, transparent),
-    inset 0 0 0 1px color-mix(in srgb, var(--toast-accent) 18%, transparent);
+  background: var(--toast-wash);
 }
 .toast__msg {
   flex: 1 1 auto;
   min-width: 0;
-  font-size: 12.5px;
-  line-height: 1.4;
+  font-size: var(--font-size-meta);
+  line-height: 1.45;
   color: var(--color-text-primary);
   word-break: break-word;
-  letter-spacing: 0.005em;
 }
 .toast__close {
   flex-shrink: 0;
@@ -210,45 +214,50 @@ code ::selection,
   justify-content: center;
   width: 20px;
   height: 20px;
+  padding: 0;
   background: none;
   border: none;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   color: var(--color-text-muted);
-  opacity: 0.55;
-  padding: 0;
-  border-radius: 999px;
-  margin-left: 2px;
-  transition: opacity var(--duration-fast) ease, background var(--duration-fast) ease, color var(--duration-fast) ease, transform var(--duration-fast) ease;
+  opacity: 0.6;
+  transition:
+    opacity var(--duration-fast) ease,
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
 }
 .toast__close:hover {
   opacity: 1;
-  background: color-mix(in srgb, var(--toast-accent) 12%, transparent);
+  background: var(--toast-wash);
   color: var(--toast-accent);
-  transform: scale(1.06);
 }
 .toast__progress {
   position: absolute;
   left: 14px;
   right: 14px;
-  bottom: 6px;
+  bottom: 5px;
   height: 2px;
   border-radius: 999px;
-  background: linear-gradient(90deg,
-    color-mix(in srgb, var(--toast-accent) 65%, transparent),
-    color-mix(in srgb, var(--toast-accent) 30%, transparent));
+  background: var(--toast-accent);
+  opacity: 0.35;
   transform-origin: left center;
   animation: toast-progress linear forwards;
   animation-duration: inherit;
   pointer-events: none;
-  z-index: -1;
 }
 @keyframes toast-progress {
-  from { transform: scaleX(1); opacity: 0.85; }
-  to   { transform: scaleX(0); opacity: 0.4; }
+  from { transform: scaleX(1); opacity: 0.35; }
+  to   { transform: scaleX(0); opacity: 0.15; }
 }
+/* 从上方外侧降入 —— toast 现在停在顶部居中，起点必须比落点更高，
+   否则会看着像从内容区里"长出来"。 */
 @keyframes toast-in {
-  from { opacity: 0; transform: translateY(-8px) scale(0.96); }
-  to   { opacity: 1; transform: translateY(0)    scale(1); }
+  from { opacity: 0; transform: translateY(-12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .toast { animation: none; }
+  .toast__progress { animation: none; }
 }
 
 /* ── Spreadsheet cell borders ─────────────────────────────────── */
