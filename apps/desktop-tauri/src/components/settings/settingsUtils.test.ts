@@ -144,4 +144,37 @@ describe("mergeFetchedModels", () => {
     const next = mergeFetchedModels(empty, [{ id: "siliconflow", models: ["BAAI/bge-m3"] }], {});
     expect(next.defaultModel).toBe("");
   });
+
+  it("用户移除过的模型（墓碑）不再自动加回", () => {
+    // 回归背景：厂商目录里必然还挂着被移除的模型，没有墓碑时每次合并都会
+    // 把刚删的模型原样复活（"删除后刷新还在"）。
+    const base: ModelConfigData = {
+      enabled: [],
+      defaultModel: "",
+      modelContexts: {},
+      dismissed: ["deepseek:deepseek-chat"],
+    };
+    const next = mergeFetchedModels(
+      base,
+      [{ id: "deepseek", models: ["deepseek-chat", "deepseek-reasoner"] }],
+      {},
+    );
+    const ids = next.enabled.map((e) => `${e.providerId}:${e.modelId}`);
+    expect(ids).toEqual(["deepseek:deepseek-reasoner"]);
+  });
+
+  it("墓碑随合并结果保留，不被丢弃", () => {
+    const base: ModelConfigData = {
+      enabled: [],
+      defaultModel: "",
+      modelContexts: {},
+      dismissed: ["openai:gpt-4o"],
+    };
+    const next = mergeFetchedModels(
+      base,
+      [{ id: "openai", models: ["gpt-4o", "gpt-3.5-turbo"] }],
+      {},
+    );
+    expect(next.dismissed).toEqual(["openai:gpt-4o"]);
+  });
 });

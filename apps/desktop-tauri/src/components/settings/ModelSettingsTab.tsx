@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import { Check, AlertCircle, RefreshCw, ChevronRight, Star, Trash2, CheckCircle, Save, AlertTriangle } from "lucide-react";
 import * as api from "../../api";
 import { storage } from "../../utils/storageCompat";
-import { writeModelConfigAndNotify, MODEL_CONFIG_CHANGED_EVENT, setModelPersistErrorHandler } from "../../hooks/useCurrentModel";
+import { writeModelConfigAndNotify, syncModelConfigLocal, MODEL_CONFIG_CHANGED_EVENT, setModelPersistErrorHandler } from "../../hooks/useCurrentModel";
 import { ProviderIcon } from "../ProviderIcon";
 import { useSafeTimeout } from "../../hooks/useSafeTimeout";
 import {
@@ -117,7 +117,7 @@ export function ModelTab() {
     }).catch((e) => { console.warn("[ModelTab] custom provider fetch failed:", e); });
   }, []);
 
-  // ── Auto-fetch on mount: 保留原行为（configured builtin 一次性拉取并启用）──
+  // ── Auto-fetch on mount：探测已配置厂商的目录缓存供手动勾选；enabled 以后端为准 ──
   useEffect(() => {
     api.getEnvVars().then(async (envVars) => {
       const keys: Record<string, boolean> = {};
@@ -141,20 +141,21 @@ export function ModelTab() {
       const defaults = await api.getProviderDefaults().catch(() => ({} as Record<string, string>));
       setProviderDefaults(defaults);
 
-      // localStorage 缺失（新机器 / WebView2 缓存被清）→ 用后端持久化列表起步
-      // 一次，避免"config.yaml 有配置、设置面板却显示未启用"的两端不一致。
-      let base = loadModelConfig();
-      let rehydrated = false;
-      if (storage.getItem(MODEL_CONFIG_KEY) === null) {
-        const backend = await api.getModelList().catch(() => null);
-        if (backend && backend.models.length > 0) {
-          base = {
-            enabled: backend.models.map((m) => ({ providerId: m.provider_id, modelId: m.model_id })),
-            defaultModel: backend.default_model ?? "",
-            modelContexts: {},
-          };
-          rehydrated = true;
-        }
+      // 已启用列表的起点是后端持久化清单（config.yaml 的 model_selector）——
+      // 它是权威，localStorage 只在后端不可达时兜底。此前反过来（localStorage
+      // 为主、后端仅在缺失时恢复），两端各自演化时删除/修改互相覆盖。
+      // 这里**不做自动合并**：探测到的目录只缓存进 modelCache 供手动勾选，
+      // 被动改写 enabled 会把用户刚移除的模型原样复活（"删除后刷新还在"）。
+      const local = loadModelConfig();
+      const backend = await api.getModelList().catch(() => null);
+      let base = local;
+      if (backend) {
+        base = {
+          enabled: backend.models.map((m) => ({ providerId: m.provider_id, modelId: m.model_id })),
+          defaultModel: backend.default_model ?? "",
+          modelContexts: {},
+          dismissed: local.dismissed,
+        };
       }
 
       const probed = await Promise.all(
@@ -170,12 +171,10 @@ export function ModelTab() {
         setFetchedModels(mergedCache);
       }
 
-      const next = mergeFetchedModels(base, usable, defaults);
-      setConfig(next);
-      // await 后才结束：写后端失败会经 persistErrorHandler 弹 banner，不再静默。
-      // `rehydrated` 为真时即使内容没变也要落盘一次，把后端恢复的清单写回 local
-      // storage，让设置面板与聊天窗口的模型列表立刻一致。
-      if (rehydrated || next !== base) await writeModelConfigAndNotify(next);
+      setConfig(base);
+      // 后端值镜像进 localStorage（含 CustomEvent 通知），让设置面板与聊天
+      // 窗口的模型列表立即一致——后端已是事实，无需再回写一次后端。
+      if (backend) syncModelConfigLocal(base);
     }).catch((err) => { console.error("[ModelTab] mount env fetch error:", err); });
   }, []);
 
@@ -229,6 +228,11 @@ export function ModelTab() {
         enabled: newEnabled,
         defaultModel: defaultCleared ? "" : prev.defaultModel,
         modelContexts: prev.modelContexts ?? {},
+        // 移除写墓碑：厂商 /v1/models 目录里必然还挂着该模型，没有墓碑的话
+        // 「获取模型」的自动合并会把它加回来；重新启用则撤掉墓碑。
+        dismissed: exists
+          ? [...new Set([...(prev.dismissed ?? []), key])]
+          : (prev.dismissed ?? []).filter((d) => d !== key),
       };
       safeSetTimeout(async () => {
         // 先 await 落盘选择器列表，再回读整份 config 改 model：否则 getConfig 可能

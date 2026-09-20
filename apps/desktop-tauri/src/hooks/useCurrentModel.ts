@@ -157,6 +157,15 @@ export function setModelPersistErrorHandler(handler: ModelPersistErrorHandler | 
 }
 
 /**
+ * 仅写 localStorage + 通知本页所有 `useCurrentModel` 消费者，不落后端。
+ * 用于挂载时把后端权威清单镜像进本地缓存——后端已是事实，无需再回写。
+ */
+export function syncModelConfigLocal(cfg: ModelConfigData): void {
+  storage.setItem(MODEL_CONFIG_KEY, JSON.stringify(cfg));
+  window.dispatchEvent(new CustomEvent(MODEL_CONFIG_CHANGED_EVENT));
+}
+
+/**
  * Helper for writers: persist a new model config and notify all
  * `useCurrentModel` consumers in this tab. Call this from
  * `SettingsView` saves so the "后端设置" tab updates immediately

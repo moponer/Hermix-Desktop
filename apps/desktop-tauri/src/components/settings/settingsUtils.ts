@@ -37,7 +37,18 @@ export const PROVIDERS: ProviderDef[] = [
 export const MODEL_CONFIG_KEY = STORAGE_KEYS.modelConfig;
 export const MODEL_CACHE_KEY = STORAGE_KEYS.modelCache;
 
-export interface ModelConfigData { enabled: { providerId: string; modelId: string }[]; defaultModel: string; modelContexts: Record<string, number> }
+export interface ModelConfigData {
+  enabled: { providerId: string; modelId: string }[];
+  defaultModel: string;
+  modelContexts: Record<string, number>;
+  /**
+   * 用户显式移除过的模型（`provider:model` 全量 ID）。厂商 `/v1/models`
+   * 是全量目录，被移除的模型必然仍在目录里——没有墓碑的话，每次进入
+   * 设置页的自动合并都会把刚删的模型原样加回（"删除后刷新还在"）。
+   * 仅存在于前端 localStorage，不随 `PUT /api/model/list` 上送。
+   */
+  dismissed?: string[];
+}
 
 export function loadModelConfig(): ModelConfigData {
   try {
@@ -124,6 +135,10 @@ function fullId(providerId: string, modelId: string): string {
  * 列表爆炸，还可能把非对话模型顶成默认。未自动启用的模型仍留在 modelCache，
  * 可在聊天窗口的模型选择器里手动勾选。
  *
+ * `base.dismissed` 里的条目（用户显式移除过的模型）不再自动加回——目录里
+ * 必然还挂着它们，没有墓碑过滤的话每次合并都会复活刚删的模型。用户重新
+ * 启用时由调用方撤掉墓碑。
+ *
  * 默认模型只在原本为空时补一个，优先命中后端权威清单（`defaults`）。
  * 无变化时返回原对象（引用相等），调用方可据此跳过落盘。
  */
@@ -134,11 +149,12 @@ export function mergeFetchedModels(
 ): ModelConfigData {
   if (probed.length === 0) return base;
   const seen = new Set(base.enabled.map((m) => fullId(m.providerId, m.modelId)));
+  const dismissed = new Set(base.dismissed ?? []);
   const enabled = [...base.enabled];
   for (const { id, models } of probed) {
     for (const modelId of models.filter(isChatModel)) {
       const key = fullId(id, modelId);
-      if (!seen.has(key)) {
+      if (!seen.has(key) && !dismissed.has(key)) {
         seen.add(key);
         enabled.push({ providerId: id, modelId });
       }
@@ -152,7 +168,7 @@ export function mergeFetchedModels(
     }
   }
   if (enabled.length === base.enabled.length && defaultModel === base.defaultModel) return base;
-  return { enabled, defaultModel, modelContexts: base.modelContexts ?? {} };
+  return { enabled, defaultModel, modelContexts: base.modelContexts ?? {}, dismissed: base.dismissed };
 }
 
 // ── Context window resolution (后端权威解析 + 来源透明化) ─────
