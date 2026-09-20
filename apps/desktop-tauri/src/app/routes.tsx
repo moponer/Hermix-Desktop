@@ -3,7 +3,6 @@
 // 的映射集中为一张路由表，App 主区只需调用 renderRoutes 即可。
 import type { ReactNode } from "react";
 import type { NavPage, Session } from "../types";
-import { SearchView } from "../components/SearchView";
 import { AutomationView } from "../components/AutomationView";
 import { AgentsView } from "../components/AgentsView";
 import { GroupChatView } from "../components/GroupChatView";
@@ -25,8 +24,6 @@ export function renderRoutes(page: NavPage, ctx: RouteContext): ReactNode {
   switch (page) {
     case "chat":
       return ctx.chatNode;
-    case "search":
-      return <SearchView sessions={ctx.sessions} onSelectSession={ctx.handleSelectSession} />;
     case "automation":
       return <AutomationView />;
     case "agents":
