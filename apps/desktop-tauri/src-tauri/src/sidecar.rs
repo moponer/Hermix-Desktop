@@ -203,16 +203,11 @@ impl HermixSidecar {
         let stderr = child.stderr.take();
 
         if !crate::stdio_bridge::init_global(app.clone(), stdin, stdout) {
-            // Bridge already initialised — a previous sidecar generation
-            // is somehow still hanging around. Kill the new child and
-            // surface the diagnostic so `setup` aborts instead of
-            // creating a zombie.
+            // 只可能发生在 BRIDGE 读写锁中毒时 —— 正常重启路径下
+            // `init_global` 会用本代替换旧代并返回 true。
             let _ = child.kill();
             let _ = child.wait();
-            return Err(
-                "stdio bridge already initialised — a previous sidecar generation is still alive"
-                    .into(),
-            );
+            return Err("stdio bridge lock poisoned — cannot hand over stdio".into());
         }
         self.bridge_ready.store(true, Ordering::SeqCst);
 
@@ -304,6 +299,9 @@ impl HermixSidecar {
         // Drop the bridge readiness flag so callers stop treating this
         // generation as healthy.
         self.bridge_ready.store(false, Ordering::SeqCst);
+        // 同步标记全局桥已死：`backend_ready` / `backend_http_request`
+        // 据此立刻报告离线，不再往已死子进程的 stdin 写帧。
+        crate::stdio_bridge::mark_dead();
         // Release Job Object handle (triggers KILL_ON_JOB_CLOSE if any
         // child processes remain, but we already killed above).
         #[cfg(windows)]
@@ -362,12 +360,9 @@ impl HermixSidecar {
         let start = std::time::Instant::now();
         while std::time::Instant::now() < start + deadline {
             if let Some(bridge) = crate::stdio_bridge::global() {
-                // stdio 模式下不依赖 HTTP `/health` 往返判定就绪：bridge 初始化即代表
-                // sidecar（hermix.exe）已 spawn 并就绪。原实现轮询 `bridge.http_request`
-                // 在 stdio 下可能永久 pending（无 HTTP server 承接帧），导致本函数卡死、
-                // `server-ready` 事件永不 emit，前端永远停在启动态。
-                // 仍做一次带超时的 /health 健全性探测：成功且 ok 立即就绪；超时/失败则
-                // 降级为「bridge 已初始化即就绪」，保证 `server-ready` 必达。
+                // 用真实 /health 往返判定就绪。注意探测的是**这一代**桥：
+                // 重启后 `global()` 已指向新代，不会拿旧代的成功结果
+                // 误判新代为就绪。
                 let probe = tokio::time::timeout(
                     Duration::from_secs(3),
                     bridge.http_request("GET", "/health", None),
@@ -387,13 +382,14 @@ impl HermixSidecar {
                 if http_ok {
                     return true;
                 }
-                eprintln!(
-                    "[Hermix] /health probe did not confirm ok; treating bridge-init as ready (stdio mode)"
-                );
-                return true;
+                // 探测未通过不直接返回 true：那会让启动页在服务真正可用前
+            // 就报"就绪"，用户随后发消息必然失败。继续在 deadline 内重试，
+            // 把"慢启动"和"起不来"区分开。
+                eprintln!("[Hermix] /health probe not ok yet, retrying…");
             }
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
+        eprintln!("[Hermix] wait_until_ready: deadline elapsed without a healthy /health");
         false
     }
 

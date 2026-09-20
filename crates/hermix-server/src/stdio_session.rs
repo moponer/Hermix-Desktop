@@ -27,6 +27,10 @@ const HTTP_RESPONSE_LIMIT: usize = 64 * 1024 * 1024;
 struct InboundFrame {
     channel: String,
     payload: String,
+    /// 信封级 request_id。桥以它为键配对 REST 应答（`pending_http`）；
+    /// 不回填则应答永远带空 id，桥找不到 waiter，每个请求都会挂到
+    /// 120s 超时才失败——前端表现为"发送失败 / 后端未启动"。
+    request_id: Option<String>,
 }
 
 fn parse_inbound(line: &str) -> Option<InboundFrame> {
@@ -36,7 +40,12 @@ fn parse_inbound(line: &str) -> Option<InboundFrame> {
         serde_json::Value::String(s) => s.clone(),
         other => other.to_string(),
     };
-    Some(InboundFrame { channel, payload })
+    let request_id = v
+        .get("request_id")
+        .and_then(|r| r.as_str())
+        .filter(|r| !r.is_empty())
+        .map(String::from);
+    Some(InboundFrame { channel, payload, request_id })
 }
 
 /// stdio 主循环：读 stdin → 路由到虚拟连接；各虚拟连接的出站统一写 stdout。
@@ -99,8 +108,11 @@ pub async fn run_stdio_server(state: HttpServerState) -> Result<(), hermix_core:
                 if frame.channel == "http" {
                     let app = app.clone();
                     let writer = writer_tx.clone();
+                    // 信封级 request_id 透传进 handler，由它回填到应答信封，
+                    // 桥才能按 id 配对（否则应答 request_id 为空，请求悬挂）。
+                    let request_id = frame.request_id.clone();
                     tokio::spawn(async move {
-                        let reply = handle_http_frame(app, &frame.payload).await;
+                        let reply = handle_http_frame(app, &frame.payload, request_id.as_deref()).await;
                         let _ = writer.send(reply).await;
                     });
                     continue;
@@ -137,13 +149,23 @@ pub async fn run_stdio_server(state: HttpServerState) -> Result<(), hermix_core:
 /// 处理一帧 REST 请求：payload 形如
 /// `{"method":"GET","path":"/api/...","body":"...","request_id":"n"}`。
 /// 响应信封 payload 为 `{"status":S,"body":"...","enc":"utf8"|"base64"}`。
-async fn handle_http_frame(app: axum::Router, payload: &str) -> String {
+async fn handle_http_frame(
+    app: axum::Router,
+    payload: &str,
+    envelope_request_id: Option<&str>,
+) -> String {
     let parsed: serde_json::Value = serde_json::from_str(payload).unwrap_or(serde_json::Value::Null);
-    let request_id = parsed
-        .get("request_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
+    // 优先用信封级 id：桥以信封 id 为配对键，payload 内的同名字段是历史
+    // 遗留（HTTP 时代客户端自带），两者不一致时必须以信封为准。
+    let request_id = envelope_request_id
+        .map(String::from)
+        .or_else(|| {
+            parsed
+                .get("request_id")
+                .and_then(|v| v.as_str())
+                .map(String::from)
+        })
+        .unwrap_or_default();
     let method = parsed
         .get("method")
         .and_then(|v| v.as_str())
@@ -234,5 +256,39 @@ struct ChannelTransport {
 impl Transport for ChannelTransport {
     fn split(self) -> (Box<dyn crate::transport::TransportSink>, Box<dyn crate::transport::TransportSource>) {
         (Box::new(self.sink), Box::new(self.source))
+    }
+}
+
+#[cfg(test)]
+mod envelope_tests {
+    use super::*;
+
+    /// 信封级 request_id 必须被解析出来。桥以它为键配对 REST 应答；
+    /// 丢了这个字段，应答会带空 id，桥永远找不到 waiter，每个请求都
+    /// 要等满 120s 超时才失败（前端表现为"后端不可达"）。
+    #[test]
+    fn parse_inbound_keeps_envelope_request_id() {
+        let line = r#"{"channel":"http","request_id":"42","payload":"{\"method\":\"GET\"}"}"#;
+        let f = parse_inbound(line).expect("frame parses");
+        assert_eq!(f.request_id.as_deref(), Some("42"));
+        assert_eq!(f.channel, "http");
+    }
+
+    /// 非 http 通道（stream/groupchat）没有 request_id 是正常的，
+    /// 不应因此丢掉整帧。
+    #[test]
+    fn parse_inbound_tolerates_missing_request_id() {
+        let line = r#"{"channel":"stream:s1","payload":"{}"}"#;
+        let f = parse_inbound(line).expect("frame parses");
+        assert!(f.request_id.is_none());
+    }
+
+    /// 空字符串等同于缺失：桥不会用空串做配对键，
+    /// 回一个空 id 与不回没有区别。
+    #[test]
+    fn parse_inbound_treats_empty_request_id_as_absent() {
+        let line = r#"{"channel":"http","request_id":"","payload":"{}"}"#;
+        let f = parse_inbound(line).expect("frame parses");
+        assert!(f.request_id.is_none());
     }
 }

@@ -218,8 +218,15 @@ pub async fn backend_http_request(
     path: String,
     body: Option<String>,
 ) -> Result<String, String> {
-    let bridge = crate::stdio_bridge::global()
-        .ok_or_else(|| "stdio bridge not initialised".to_string())?;
+    // 桥不在位 / 该代已死时返回 503 信封而不是 Err 字符串：前者是
+    // "后端不可达"（可重试、用户应看到离线提示），后者会被前端当成
+    // 协议异常。返回信封让前端与其他失败走同一条分类链路。
+    if !crate::stdio_bridge::is_live() {
+        return Ok("{\"status\":503,\"body\":\"backend offline\",\"enc\":\"utf8\"}".into());
+    }
+    let Some(bridge) = crate::stdio_bridge::global() else {
+        return Ok("{\"status\":503,\"body\":\"backend offline\",\"enc\":\"utf8\"}".into());
+    };
     bridge.http_request(&method, &path, body.as_deref()).await
 }
 
@@ -231,18 +238,56 @@ pub async fn backend_http_request(
 /// `groupchat send` frames after the WebSocket surface was retired.
 #[tauri::command]
 pub async fn backend_channel_send(channel: String, payload: String) -> Result<(), String> {
+    if !crate::stdio_bridge::is_live() {
+        return Err("backend offline".to_string());
+    }
     let bridge = crate::stdio_bridge::global()
-        .ok_or_else(|| "stdio bridge not initialised".to_string())?;
+        .ok_or_else(|| "backend offline".to_string())?;
     bridge.send_to_channel(&channel, &payload)
 }
 
-/// Cheap liveness probe used by `BackendStatus` and `checkBackendHealth`.
-/// Returns true once `stdio_bridge::init_global` has handed the child's
-/// stdin/stdout to the bridge — i.e. once a sidecar generation is live.
-/// Does NOT round-trip a frame, so it's safe to call on a render loop.
+/// Real liveness probe used by `BackendStatus` and `checkBackendHealth`.
+///
+/// Round-trips an actual `/health` frame through the bridge instead of
+/// reporting "a bridge object exists". The old implementation returned
+/// `global().is_some()`, which is true from the instant the sidecar is
+/// spawned until the process exits — including every case where the child
+/// is a zombie, the stdout reader died, or the server stopped answering.
+/// Those are exactly the states where the user sees a green "connected"
+/// dot while every send fails, so the probe must observe the child, not
+/// the shell's own bookkeeping.
+///
+/// Budget: 2s. The bridge has its own 120s oneshot timeout; a dead child
+/// normally wakes waiters immediately via the stdout-EOF path, but a
+/// half-open pipe would otherwise hang the caller for two minutes.
 #[tauri::command]
-pub fn backend_ready() -> bool {
-    crate::stdio_bridge::global().is_some()
+pub async fn backend_ready() -> bool {
+    if !crate::stdio_bridge::is_live() {
+        return false;
+    }
+    let Some(bridge) = crate::stdio_bridge::global() else {
+        return false;
+    };
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        bridge.http_request("GET", "/health", None),
+    )
+    .await
+    {
+        // 信封是 `{"status":N,"body":"…"}`；200 即真正在位。
+        Ok(Ok(reply)) => serde_json::from_str::<serde_json::Value>(&reply)
+            .ok()
+            .and_then(|v| v.get("status").and_then(|s| s.as_u64()))
+            .is_some_and(|s| (200..300).contains(&s)),
+        Ok(Err(e)) => {
+            eprintln!("[Hermix] backend_ready: probe failed: {e}");
+            false
+        }
+        Err(_) => {
+            eprintln!("[Hermix] backend_ready: probe timed out");
+            false
+        }
+    }
 }
 
 /// Read a file for the "产物" (artifact) preview pane in the right sidebar or
@@ -532,13 +577,22 @@ fn effective_allowed_roots(workspace_root: Option<&str>) -> Vec<PathBuf> {
 }
 
 #[tauri::command]
-pub fn restart_sidecar(
+pub async fn restart_sidecar(
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    let mut sb = state.sidecar.lock().map_err(|e| format!("lock: {e}"))?;
-    sb.restart(&app)?;
-    Ok("restarted".to_string())
+    // 必须 async：`restart()` → `stop()` 会等最多 3s 优雅退出再 kill/wait，
+    // 同步命令会在主线程上把这 3s 卡死，窗口直接无响应（用户点"重启"
+    // 看到的就是界面冻住）。spawn_blocking 把它挪到阻塞线程池，
+    // 命令立即返回、UI 保持可交互。
+    let sb = state.sidecar.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut guard = sb.lock().map_err(|e| format!("lock: {e}"))?;
+        guard.restart(&app)?;
+        Ok::<_, String>("restarted".to_string())
+    })
+    .await
+    .map_err(|e| format!("restart task failed: {e}"))?
 }
 
 const OFFICE_EXTENSIONS: &[&str] = &["docx", "doc", "xlsx", "xls", "pptx", "ppt"];
