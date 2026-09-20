@@ -3173,7 +3173,10 @@ return {
               onOpenSearch={() => setSearchOpen(true)}
             />
           )}
-          <div className="min-h-0 flex-1">
+          {/* 必须是 flex column：chat-surface/AutomationView 靠 flex-1 撑满，
+              AgentsView/AnalyticsView 靠 h-full —— 两者都要求本容器高度确定
+              且为 flex 上下文，缺 flex 会让对话区塌成内容高（输入框被顶上去）。 */}
+          <div className="min-h-0 flex-1 flex flex-col">
             {renderRoutes(page, routesCtx)}
           </div>
         </main>
