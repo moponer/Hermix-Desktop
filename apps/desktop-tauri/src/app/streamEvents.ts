@@ -94,6 +94,21 @@ export function localizeStreamError(err: string): string {
   if (/(rate\s*limit|429|too\s+many\s+requests|quota|usage\s+limit|用量上限|token\s+plan)/i.test(extracted)) {
     return "用量已达上限或触发限流，请稍后重试或检查账户配额。";
   }
+  // 本地后端（stdio 桥）不可达：桥未初始化 / 子进程已退出。
+  // 必须排在 provider 的 503 分支之前 —— 两者最终都是 503，但处置相反：
+  // provider 503 是"等一会儿再试"，后端 503 是"本地服务没起来，去重启"。
+  if (/backend\s+offline|backend\s+exited|stdio\s+bridge\s+not\s+initialised/i.test(extracted)) {
+    return "本地后端未运行。请点击标题栏连接指示灯重启服务后重试。";
+  }
+  // 本地后端的 4xx：请求被自己人拒绝（协议/参数不匹配），与网络无关。
+  // 原文（含 axum 的字段级报错）已经由调用方压进 detail 供复制，
+  // 这里只给一句不误导的结论，避免用户去查端口。
+  if (/^HTTP\s+4\d\d\b/.test(extracted)) {
+    return "请求被后端拒绝（协议或参数不匹配）。请复制技术详情反馈，无需检查网络或端口。";
+  }
+  if (/^HTTP\s+5\d\d\b/.test(extracted)) {
+    return "后端处理请求时出错。请稍后重试；若持续出现请复制技术详情反馈。";
+  }
   // Provider overloaded / service unavailable (529 / 503 / 5xx)
   if (/(529|overloaded|负载较高|service\s+unavailable|503|server\s+error)/i.test(extracted)) {
     return "AI 服务暂时过载，请稍后重试。";
@@ -132,6 +147,15 @@ export function localizeStreamError(err: string): string {
  */
 export function classifyStreamErrorKind(err: string): StreamErrorKind {
   const e = err || "";
+  // 本地后端不可达优先判定：它的 4xx 是"请求被自己人拒绝"（协议 bug），
+  // 与 provider 的 401/400 语义完全不同，放在后面会被误分类成 auth /
+  // bad_request，把用户引向"检查 API key"这条错误的路。
+  if (/^HTTP\s+4\d\d\b/.test(e) || /backend\s+offline|backend\s+exited|stdio\s+bridge\s+not\s+initialised/i.test(e)) {
+    return "bad_request";
+  }
+  if (/^HTTP\s+5\d\d\b/.test(e)) {
+    return "overloaded";
+  }
   if (/(529|overloaded|负载较高|service\s+unavailable|503|server\s+error|api\s*error\s*5\d{2})/i.test(e)) {
     return "overloaded";
   }
