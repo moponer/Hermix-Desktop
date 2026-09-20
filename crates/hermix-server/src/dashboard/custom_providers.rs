@@ -221,14 +221,8 @@ pub async fn create_custom_provider(
     // （必须在持久化/推送之前执行，否则修正结果被丢弃成死变异）
     let correction = hermix_config::auto_correct_model(&mut config);
 
-    // Persist to config.yaml
-    let mut to_save = config.clone();
-    to_save.home_dir = None;
-    let yaml = serde_yaml::to_string(&to_save).map_err(|e| HttpError {
-        status: axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-        message: format!("failed to serialize config: {}", e),
-    })?;
-    std::fs::write(&config_path, yaml).map_err(|e| HttpError {
+    // Persist to config.yaml（原子写，并发读者不会读到半截文件）
+    hermix_config::loader::save_config_yaml(&config_path, &config).map_err(|e| HttpError {
         status: axum::http::StatusCode::INTERNAL_SERVER_ERROR,
         message: format!("failed to write config: {}", e),
     })?;
@@ -298,14 +292,8 @@ pub async fn delete_custom_provider(
         env::write_env_file(&state.hermix_home, &env_vars);
     }
 
-    // Persist
-    let mut to_save = config.clone();
-    to_save.home_dir = None;
-    let yaml = serde_yaml::to_string(&to_save).map_err(|e| HttpError {
-        status: axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-        message: format!("failed to serialize config: {}", e),
-    })?;
-    std::fs::write(&config_path, yaml).map_err(|e| HttpError {
+    // Persist（原子写，并发读者不会读到半截文件）
+    hermix_config::loader::save_config_yaml(&config_path, &config).map_err(|e| HttpError {
         status: axum::http::StatusCode::INTERNAL_SERVER_ERROR,
         message: format!("failed to write config: {}", e),
     })?;
@@ -534,10 +522,7 @@ pub async fn update_model_contexts(
     let model_contexts: HashMap<String, u64> = req.model_contexts.into_iter().filter(|(_, v)| *v > 0).collect();
     let count = model_contexts.len();
     config.llm_providers.entry(id.clone()).or_insert_with(hermix_config::LlmProviderConfig::default).model_contexts = model_contexts;
-    let mut to_save = config.clone();
-    to_save.home_dir = None;
-    let yaml = serde_yaml::to_string(&to_save).map_err(|e| HttpError { status: axum::http::StatusCode::INTERNAL_SERVER_ERROR, message: format!("failed to serialize config: {}", e) })?;
-    std::fs::write(&config_path, yaml).map_err(|e| HttpError { status: axum::http::StatusCode::INTERNAL_SERVER_ERROR, message: format!("failed to write config: {}", e) })?;
+    hermix_config::loader::save_config_yaml(&config_path, &config).map_err(|e| HttpError { status: axum::http::StatusCode::INTERNAL_SERVER_ERROR, message: format!("failed to write config: {}", e) })?;
     tracing::info!(provider = %id, count, "model_contexts updated");
     Ok(Json(OkResponse { ok: true }))
 }

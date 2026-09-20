@@ -488,15 +488,13 @@ pub fn user_config_field_display(config: &GatewayConfig, key: &str) -> Result<St
 /// so a concurrent reader (agent loop startup, another request thread) can
 /// observe an empty or half-written file and lose every provider — the
 /// symptom class was "chat stuck replying with zero persisted messages".
-pub fn save_config_yaml(path: &Path, config: &GatewayConfig) -> Result<(), ConfigError> {
+/// 原子写文本文件：写入同目录唯一 tmp（pid+序号，防并发保存互踩）后 rename。
+/// 直接 `std::fs::write` 是 truncate+write，写盘期间并发读者会读到空文件/
+/// 半截 YAML，把 providers 等整段配置丢掉。
+pub fn write_yaml_atomic(path: &Path, yaml: &str) -> Result<(), ConfigError> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(io_to_config_error)?;
     }
-    let mut to_save = config.clone();
-    to_save.home_dir = None;
-    let yaml = serde_yaml::to_string(&to_save).map_err(yaml_to_config_error)?;
-    // Unique tmp name per save: two concurrent saves sharing one tmp file
-    // could interleave writes and rename away a half-written payload.
     static TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let seq = TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let file_name = path
@@ -512,6 +510,13 @@ pub fn save_config_yaml(path: &Path, config: &GatewayConfig) -> Result<(), Confi
     std::fs::write(&tmp, yaml).map_err(io_to_config_error)?;
     std::fs::rename(&tmp, path).map_err(io_to_config_error)?;
     Ok(())
+}
+
+pub fn save_config_yaml(path: &Path, config: &GatewayConfig) -> Result<(), ConfigError> {
+    let mut to_save = config.clone();
+    to_save.home_dir = None;
+    let yaml = serde_yaml::to_string(&to_save).map_err(yaml_to_config_error)?;
+    write_yaml_atomic(path, &yaml)
 }
 
 // ---------------------------------------------------------------------------

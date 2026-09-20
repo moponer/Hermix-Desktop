@@ -123,7 +123,9 @@ pub async fn update_config(
         status: axum::http::StatusCode::BAD_REQUEST,
         message: format!("invalid config: {}", e),
     })?;
-    std::fs::write(&config_path, yaml).map_err(|e| HttpError {
+    // 原子写（tmp+rename）：整份覆盖期间并发读者（load_config）会读到空/
+    // 半截 YAML，把 providers 等整段配置丢掉。
+    hermix_config::loader::write_yaml_atomic(&config_path, &yaml).map_err(|e| HttpError {
         status: axum::http::StatusCode::INTERNAL_SERVER_ERROR,
         message: format!("failed to write config: {}", e),
     })?;
