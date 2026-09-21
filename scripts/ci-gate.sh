@@ -13,9 +13,12 @@
 #      async-runtime blocking — each hit needs human review)
 #   6. Theme token static guard: no hardcoded #hex / rgb() in .tsx/.ts
 #      outside the registered EXCEPTIONS list (see docs/design/THEME_SYSTEM.md)
+#   7. Advisory: source files > 2500 lines (god-file drift)
+#   8. No `TODO: pre-existing` / `FIXME: pre-existing` debt markers
+#      (see AGENTS.md "Conventions" — don't introduce them)
 #
-# Hard gates (exit non-zero on failure): 1, 2, 3, 6
-# Soft gates (warn but continue): 4, 5
+# Hard gates (exit non-zero on failure): 1, 2, 3, 6, 8
+# Soft gates (warn but continue): 4, 5, 7
 #
 # Usage (from repo root, in any terminal):
 #   ./scripts/ci-gate.sh
@@ -33,7 +36,7 @@ echo ""
 #-----------------------------------------------------------------------
 # 1. Compile check
 #-----------------------------------------------------------------------
-echo "=== [1/6] cargo check --workspace --all-targets ==="
+echo "=== [1/8] cargo check --workspace --all-targets ==="
 cargo check --workspace --all-targets
 echo ""
 
@@ -47,7 +50,7 @@ echo ""
 #    lint. Those require code review (see P0-4 cdp.rs / P0-5 session.rs
 #    for the patterns to avoid: nested locks, lock-held-during-long-read).
 #-----------------------------------------------------------------------
-echo "=== [2/6] clippy await_holding_lock guard ==="
+echo "=== [2/8] clippy await_holding_lock guard ==="
 if rustup component list --installed 2>/dev/null | grep -q '^clippy'; then
   cargo clippy --workspace --all-targets -- \
     -D clippy::await_holding_lock
@@ -60,14 +63,14 @@ echo ""
 #-----------------------------------------------------------------------
 # 3. Unit tests
 #-----------------------------------------------------------------------
-echo "=== [3/6] cargo test --workspace --lib ==="
+echo "=== [3/8] cargo test --workspace --lib ==="
 cargo test --workspace --lib
 echo ""
 
 #-----------------------------------------------------------------------
 # 4. Frontend type check (soft gate — pre-existing errors are common)
 #-----------------------------------------------------------------------
-echo "=== [4/6] pnpm tsc --noEmit (frontend) ==="
+echo "=== [4/8] pnpm tsc --noEmit (frontend) ==="
 if [ -d apps/desktop-tauri ]; then
   (cd apps/desktop-tauri && pnpm tsc --noEmit) || {
     echo "  WARNING: frontend tsc failed (may be pre-existing — check output above)"
@@ -84,7 +87,7 @@ echo ""
 #    to confirm it's NOT on an async path. When a sleep IS needed in
 #    async code, use tokio::time::sleep instead.
 #-----------------------------------------------------------------------
-echo "=== [5/6] advisory: std::thread::sleep in non-test src ==="
+echo "=== [5/8] advisory: std::thread::sleep in non-test src ==="
 sleep_hits=$(grep -rn 'std::thread::sleep' \
   crates/*/src/ --include='*.rs' \
   | grep -v 'mod tests' \
@@ -110,7 +113,7 @@ echo ""
 #
 #    Need: node >= 18. The script uses no external deps.
 #-----------------------------------------------------------------------
-echo "=== [6/6] theme token guard ==="
+echo "=== [6/8] theme token guard ==="
 if [ -f scripts/check-theme-tokens.mjs ]; then
   if command -v node >/dev/null 2>&1; then
     node scripts/check-theme-tokens.mjs 1>&2 || exit 1
@@ -130,7 +133,7 @@ echo ""
 #    blocked, but surfaces drift back toward god files.
 #    See AGENTS.md "Code simplification discipline" for the 100k-line goal.
 #-----------------------------------------------------------------------
-echo "=== [7/7] advisory: source files > 2500 lines ==="
+echo "=== [7/8] advisory: source files > 2500 lines ==="
 over_limit=$(find crates apps/desktop-tauri/src -type f \( -name '*.rs' -o -name '*.ts' -o -name '*.tsx' \) \
   -exec wc -l {} + 2>/dev/null | awk '$1 > 2500 {print}' | sort -rn)
 if [ -n "$over_limit" ]; then
@@ -141,6 +144,19 @@ if [ -n "$over_limit" ]; then
 else
   echo "  (none over 2500 lines — clean)"
 fi
+echo ""
+
+echo "=== [8/8] pre-existing debt markers ==="
+debt_hits=$(grep -rn -E '(TODO|FIXME): pre-existing' \
+  crates/ apps/desktop-tauri/src/ \
+  --include='*.rs' --include='*.ts' --include='*.tsx' \
+  2>/dev/null || true)
+if [ -n "$debt_hits" ]; then
+  echo "  FAIL: pre-existing debt markers found — fix the defect instead of marking it:"
+  echo "$debt_hits" | sed 's/^/    /'
+  exit 1
+fi
+echo "  OK: no TODO/FIXME: pre-existing markers"
 echo ""
 
 echo "============================================"
