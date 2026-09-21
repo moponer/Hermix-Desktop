@@ -2897,9 +2897,15 @@ async fn handle_inbound_frame(
                 image_mime_type,
                 skills,
             };
-                // Fall through to the send handling below.
-                // We use a helper to avoid code duplication.
-                handle_ws_stream_send(
+                // Return the inner outcome verbatim. This turn may have
+                // consumed a mid-stream user message and needs it re-driven
+                // by the caller's loop — swallowing the value here (the
+                // previous bare call + `return ...Completed`) silently
+                // dropped that text, so a message sent during streaming
+                // never ran and the chat just never answered. The legacy
+                // fallback at the bottom of this function returns verbatim
+                // too; the asymmetry between these two arms was the bug.
+                return handle_ws_stream_send(
                     &mut *sender,
                     &mut *receiver,
                     &state,
@@ -2908,7 +2914,6 @@ async fn handle_inbound_frame(
                     request,
                 )
                 .await;
-                return StreamSendOutcome::Completed;
             }
             WsClientMessage::Ping => {
                 //: respond to client application-level
@@ -2960,6 +2965,38 @@ async fn handle_inbound_frame(
         request,
     )
     .await;
+}
+
+#[cfg(test)]
+mod inbound_frame_outcome_tests {
+    /// Every arm that dispatches a turn must return the inner
+    /// `StreamSendOutcome` verbatim. `handle_inbound_frame` has two such
+    /// arms (`WsClientMessage::Send` and the legacy fallback); one of them
+    /// used to call `handle_ws_stream_send` bare and then discard the value
+    /// with `return StreamSendOutcome::Completed`, which silently dropped
+    /// any user message consumed mid-stream — the chat just never answered.
+    /// Types can't catch that (a swallowed value still type-checks), so
+    /// assert the shape of the source instead. Verified to fail on the
+    /// buggy revision (`propagated == 1`) and pass on the fix.
+    #[test]
+    fn every_dispatch_arm_returns_its_outcome() {
+        let src = include_str!("ws.rs");
+        // 匹配串拆开写，否则本断言的两个字面量会把自己也数进去。
+        let call = concat!("handle_ws_stream_send", "(");
+        let ret_call = concat!("return handle_ws_stream_send", "(");
+        let dispatches = src.matches(call).count();
+        let propagated = src.matches(ret_call).count();
+        // 1 definition + 2 call sites; both call sites must `return`.
+        assert_eq!(
+            dispatches, 3,
+            "unexpected number of handle_ws_stream_send references"
+        );
+        assert_eq!(
+            propagated, 2,
+            "a dispatch arm stopped returning its StreamSendOutcome — \
+             a deferred mid-stream user message would be dropped again"
+        );
+    }
 }
 
 /// Returns the `tool` name and the raw `arguments` object from the
