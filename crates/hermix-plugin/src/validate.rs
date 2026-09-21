@@ -965,7 +965,8 @@ mod tests {
     use super::*;
 
     fn good_manifest() -> String {
-        r#"{"name":"测试","id":"test-app","category":"developer"}"#.to_string()
+        r#"{"name":"测试","id":"test-app","category":"developer","icon":"folder-tree"}"#
+            .to_string()
     }
 
     #[test]
@@ -975,7 +976,7 @@ mod tests {
         std::fs::create_dir_all(tmp.join("src")).unwrap();
         std::fs::write(
             tmp.join("manifest.json"),
-            r#"{"name":"测试","id":"test-tsx","category":"developer","permissions":["fs-read","exec"]}"#,
+            r#"{"name":"测试","id":"test-tsx","category":"developer","icon":"notebook-pen","permissions":["fs-read","exec"]}"#,
         )
         .unwrap();
         // Auto-generated HTML shell (TypeScript mode)
@@ -1044,7 +1045,7 @@ function App() { return <div>hello</div>; }
         std::fs::create_dir_all(&tmp).unwrap();
         std::fs::write(
             tmp.join("manifest.json"),
-            r#"{"name":"测试","id":"test-good","category":"developer","permissions":["fs-read"]}"#,
+            r#"{"name":"测试","id":"test-good","category":"developer","icon":"notebook-pen","permissions":["fs-read"]}"#,
         )
         .unwrap();
         std::fs::write(
@@ -1064,7 +1065,7 @@ function App() { return <div>hello</div>; }
         std::fs::create_dir_all(&tmp).unwrap();
         std::fs::write(
             tmp.join("manifest.json"),
-            r#"{"name":"测试","id":"test-new","category":"developer","permissions":["fs-read","exec"]}"#,
+            r#"{"name":"测试","id":"test-new","category":"developer","icon":"calculator","permissions":["fs-read","exec"]}"#,
         )
         .unwrap();
         std::fs::write(
