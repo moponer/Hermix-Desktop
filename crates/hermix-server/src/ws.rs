@@ -332,11 +332,17 @@ pub(crate) async fn handle_ws_stream_send(
     // retry storm / queue re-drain, still coalesced as before.
     let active_key = dedup_key(session_id, &request.text);
 
+    // Peek without removing: the `!is_finished()` branch below DECLINES this
+    // send and must leave the live handle registered. Removing it up front
+    // stranded the in-flight task — its cleanup `remove` never runs (the task
+    // is still running), so `active_handles` lost the entry permanently and
+    // `active_sessions` stayed locked forever. Every later retry then fell
+    // into the dedup branch and produced a silent empty reply.
     let stale_handle = {
-        let mut handles = state.active_handles.lock().unwrap_or_else(|e| e.into_inner());
-        handles.remove(&active_key)
+        let handles = state.active_handles.lock().unwrap_or_else(|e| e.into_inner());
+        handles.get(&active_key).map(|h| h.is_finished())
     };
-    if let Some(handle) = stale_handle {
+    if let Some(handle_finished) = stale_handle {
         // (autonomous-continuation): same (session, text) has a live
         // task — was the previous forward loop's agent still running
         // when this retry arrived? Two sub-cases:
@@ -358,7 +364,6 @@ pub(crate) async fn handle_ws_stream_send(
         //      wait or click Stop". The DB transcript snapshot the
         //      front-end already pulled at connect shows past turns;
         //      live progress continues via the broadcast channel.
-        let handle_finished = handle.is_finished();
         if !handle_finished {
             tracing::info!(
                 session = %session_id,
@@ -382,6 +387,27 @@ pub(crate) async fn handle_ws_stream_send(
             if let Ok(json) = serde_json::to_string(&envelope) {
                 let _ = sender.send(json).await;
             }
+            // Status alone is NOT terminal — the front-end's handler only
+            // updates the status line and returns, so the send promise never
+            // settles and the UI keeps rendering "正在思考…" next to a live
+            // task that will never emit into THIS send. A terminal `Done`
+            // settles this send cleanly while the in-flight task keeps
+            // running and its real output lands via the broadcast channel /
+            // the next reconnect.
+            let done = WsEnvelope {
+                version: 1,
+                request_id: request.request_id.clone().or_else(|| Some(trace_id.to_string())),
+                trace_id: trace_id.to_string(),
+                event: StreamEvent::Done {
+                    content: String::new(),
+                    finish_reason: Some("task_in_flight".to_string()),
+                    outcome: Some("completed".to_string()),
+                    error: None,
+                },
+            };
+            if let Ok(json) = serde_json::to_string(&done) {
+                let _ = sender.send(json).await;
+            }
             return;
         }
         tracing::warn!(
@@ -389,10 +415,20 @@ pub(crate) async fn handle_ws_stream_send(
             text_len = request.text.len(),
             "retry override: same (session,text) has a zombie handle (agent already exited) — cleaning up and taking over"
         );
+        // Take the finished handle out of the registry now — the peek above
+        // deliberately left the map untouched so the decline branch could
+        // keep a live handle registered.
+        let zombie = state
+            .active_handles
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&active_key);
         // Abort the zombie task (same mechanism as the Stop button's
         // `agent_handle.abort()`). Its cleanup `remove` won't run, so we
         // free the locks here ourselves.
-        handle.abort();
+        if let Some(handle) = zombie {
+            handle.abort();
+        }
         state.active_sessions.lock().unwrap_or_else(|e| e.into_inner()).remove(&active_key);
         state.recent_sends.lock().unwrap_or_else(|e| e.into_inner()).remove(&active_key);
         // Cancel the soft-disconnect's pending grace timer for this key.
@@ -2109,20 +2145,88 @@ WsClientMessage::ApprovalBatchResponse { batch_id, decision } => {
                                         .await;
                                 }
                                 other => {
-                                    // Send messages during streaming are
-                                    // intentionally ignored — the frontend's
-                                    // streaming guard prevents new sends, and
-                                    // the dedup mechanism would reject
-                                    // duplicates. Other message types are
-                                    // similarly dropped (they'll be re-sent
-                                    // if needed after the stream ends).
-                                    tracing::debug!(
-                                        session = %session_id,
-                                        msg_type = ?other,
-                                        "ignoring incoming WS message during streaming"
+                                    // A Send arriving while this stream is
+                                    // already forwarding is NOT silently
+                                    // droppable. The old code assumed the
+                                    // frontend's streaming guard made this
+                                    // unreachable and dropped the message at
+                                    // `debug!` level — so when a user did
+                                    // manage to send (or a reconnect re-sent
+                                    // queued input), the message vanished with
+                                    // zero log and zero UI feedback, and the
+                                    // user saw a chat that simply never
+                                    // answered.
+                                    //
+                                    // We cannot start a second concurrent
+                                    // task on this session, so the honest
+                                    // answer is a terminal `Done` carrying the
+                                    // reason. That settles the sender's stream
+                                    // promise instead of hanging it, and the
+                                    // message stays visible in the transcript
+                                    // for the user to retry.
+                                    let is_send = matches!(
+                                        other,
+                                        hermix_transport::WsClientMessage::Send { .. }
                                     );
+                                    if is_send {
+                                        tracing::warn!(
+                                            session = %session_id,
+                                            msg_type = ?other,
+                                            "incoming message during streaming — \
+                                             declined with a terminal Done (session busy)"
+                                        );
+                                        let done = WsEnvelope {
+                                            version: 1,
+                                            request_id: None,
+                                            trace_id: trace_id.to_string(),
+                                            event: StreamEvent::Done {
+                                                content: String::new(),
+                                                finish_reason: Some("task_in_flight".to_string()),
+                                                outcome: Some("completed".to_string()),
+                                                error: None,
+                                            },
+                                        };
+                                        let _ = sender
+                                            .send(serde_json::to_string(&done).unwrap_or_default())
+                                            .await;
+                                    } else {
+                                        // Other control frames (ping variants,
+                                        // late acks) are still safe to drop.
+                                        tracing::debug!(
+                                            session = %session_id,
+                                            msg_type = ?other,
+                                            "ignoring incoming WS message during streaming"
+                                        );
+                                    }
                                 }
                             }
+                        } else {
+                            // Bare (non-`WsClientMessage`) frames — the desktop
+                            // client's legacy `{"type":"message","text":…}`
+                            // shape lands here. Previously this branch did not
+                            // exist, so the frame fell straight through the
+                            // match and vanished: no log, no event, and the
+                            // sender's promise never settled, leaving the chat
+                            // stuck on "正在思考…". Decline it explicitly.
+                            tracing::warn!(
+                                session = %session_id,
+                                len = text.len(),
+                                "unparsed frame during streaming — declining with a terminal Done"
+                            );
+                            let done = WsEnvelope {
+                                version: 1,
+                                request_id: None,
+                                trace_id: trace_id.to_string(),
+                                event: StreamEvent::Done {
+                                    content: String::new(),
+                                    finish_reason: Some("task_in_flight".to_string()),
+                                    outcome: Some("completed".to_string()),
+                                    error: None,
+                                },
+                            };
+                            let _ = sender
+                                .send(serde_json::to_string(&done).unwrap_or_default())
+                                .await;
                         }
                     }
                     None => {
