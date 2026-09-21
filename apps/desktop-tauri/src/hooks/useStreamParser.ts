@@ -9,7 +9,7 @@ import type {
   StreamCallbacks,
   PrefetchResultEntry,
 } from "./useStreamChat";
-import { buildConnectedPayload, narrowSectionGateReport } from "./streamChatUtils";
+import { narrowSectionGateReport } from "./streamChatUtils";
 
 /** Context-usage snapshot pushed by the backend each turn. */
 export interface ContextUsage {
@@ -114,6 +114,11 @@ export interface StreamChatSendContext {
   resetStaleTimer: () => void;
   scheduleChunkFlush: () => void;
   wsSendRaw: (text: string) => boolean;
+  /** Send this turn's user message upstream. Idempotent — the second
+   *  call on the same send is a no-op, because both the `connected`
+   *  branch and the "listener registration completed" path may try to
+   *  dispatch it. */
+  dispatchUserMessage: () => void;
 }
 
 /**
@@ -168,30 +173,17 @@ export function createMessageHandler(
     try {
       const data: any = JSON.parse(payloadText);
 
-      // Connected event — send the user message + per-request overrides
-      // on the same `stream:<sessionId>` channel via the stdio bridge.
+      // Connected event — the transport is (re)established. The user
+      // message is dispatched via `ctx.dispatchUserMessage()` rather
+      // than inline, because on the stdio bridge this event is NOT
+      // guaranteed to arrive for every send (see the connector: a
+      // channel is created once per session and survives across
+      // sends, so only the first send on a session ever sees
+      // `connected`). `dispatchUserMessage` is idempotent, so
+      // whichever of the two paths fires first wins and the other is
+      // a no-op.
       if (data?.type === "connected" || data?.event?.type === "connected") {
-        const payload = buildConnectedPayload(ctx.content, ctx.overrides);
-        // Fire-and-forget: the bridge's invoke round-trip is what
-        // would have been a WS `send` in the TCP era. We do not
-        // await — the parser stays synchronous-looking, and a
-        // transient invoke failure is recoverable (the upstream
-        // approval/clarity path already has its own retry via
-        // `wsSendRaw`).
-        void invoke<void>("backend_channel_send", {
-          channel: streamChannelName(ctx.sessionId),
-          payload: JSON.stringify(payload),
-        });
-        ctx.sentToServerRef.current = true;
-        ctx.updatePhase("streaming");
-        ctx.armTimeouts();
-
-        // 30s slow-hint timer: if first chunk hasn't arrived by then,
-        // the stream is still alive (WS open, no done/error yet). Handle
-        // is tracked so settle()/disarmTimeouts() can cancel it.
-        ctx.slowHintTimer = setTimeout(() => {
-          if (!ctx.firstChunkReceived && !ctx.doneRef.current) ctx.updatePhase("slow");
-        }, 30_000);
+        ctx.dispatchUserMessage();
         return;
       }
 

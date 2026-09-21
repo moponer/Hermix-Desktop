@@ -63,6 +63,24 @@ export function createConnector(
 
         ctx.wsRef.current = unlisten;
         ctx.wsSessionIdRef.current = ctx.sessionId;
+
+        // ── Dispatch now that the listener is live ───────────────
+        // This is the stdio-era replacement for "wait for the socket
+        // to open, then send". The bridge creates ONE channel per
+        // session and keeps it alive across sends, so the server only
+        // emits `connected` for the first send on a session. Waiting
+        // for `connected` on every subsequent send deadlocked the
+        // UI: nothing was ever dispatched upstream, no event ever
+        // came back, and the bubble sat on "正在思考…" forever.
+        //
+        // Ordering matters — the listener must be registered BEFORE
+        // the frame goes out, otherwise a fast server reply could
+        // race ahead of the subscription and be dropped by the
+        // channel filter in `listenStreamChannel`. `dispatchUserMessage`
+        // is idempotent, so when the server DOES still send
+        // `connected` (first send on a session), that path finds the
+        // flag already set and does nothing.
+        ctx.dispatchUserMessage();
       } catch (e) {
         // Listener registration failed (bridge not initialised,
         // window torn down, etc.). Surface the failure to the

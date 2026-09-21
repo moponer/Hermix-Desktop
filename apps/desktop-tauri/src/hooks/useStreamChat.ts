@@ -5,7 +5,12 @@ import type { ApprovalRequestItem, SubAgentEventPayload } from "../types";
 import { createPhaseController } from "./useStreamPhase";
 import { createMessageHandler, type StreamChatSendContext } from "./useStreamParser";
 import { createConnector } from "./useWsConnection";
-import { computeSendDedupHash, stripActivityMarkers } from "./streamChatUtils";
+import {
+  buildConnectedPayload,
+  computeSendDedupHash,
+  stripActivityMarkers,
+} from "./streamChatUtils";
+import { streamChannelName } from "../api";
 
 /**
  * Single row in the live task list. Mirrors
@@ -429,6 +434,7 @@ export function useStreamChat(activeSessionId: string | null) {
           resetStaleTimer: () => {},
           scheduleChunkFlush: () => {},
           wsSendRaw,
+          dispatchUserMessage: () => {},
         };
 
         // Phase tracking lives in its own controller now.
@@ -481,6 +487,46 @@ export function useStreamChat(activeSessionId: string | null) {
           resetIdleTimeout();
           resetStaleTimer();
         };
+
+        // ── Dispatch this turn's user message ────────────────────
+        // Idempotent by design. Two code paths may call it:
+        //   1. the parser's `connected` branch (TCP-era behaviour,
+        //      preserved for any transport that still emits it), and
+        //   2. the connector, immediately after its listener is
+        //      registered.
+        //
+        // Path 2 exists because the stdio bridge creates one channel
+        // per session and keeps it alive across sends, so only the
+        // FIRST send on a session ever receives `connected`. Every
+        // later send used to wait forever for an event that would
+        // never arrive — the message was never dispatched at all and
+        // the UI sat on "正在思考…" indefinitely with zero traffic
+        // upstream. Whichever path fires first dispatches; the other
+        // is a cheap no-op.
+        const dispatchUserMessage = () => {
+          if (ctx.sentToServerRef.current) return;
+          if (ctx.doneRef.current) return;
+          const payload = buildConnectedPayload(ctx.content, ctx.overrides);
+          // Fire-and-forget: the bridge's invoke round-trip is what
+          // would have been a WS `send` in the TCP era. A transient
+          // invoke failure is recoverable (the upstream
+          // approval/clarity path already has its own retry via
+          // `wsSendRaw`).
+          void invoke<void>("backend_channel_send", {
+            channel: streamChannelName(ctx.sessionId),
+            payload: JSON.stringify(payload),
+          });
+          ctx.sentToServerRef.current = true;
+          ctx.updatePhase("streaming");
+          armTimeouts();
+
+          // 30s slow-hint timer: if the first chunk hasn't arrived by
+          // then, the stream is still alive (no done/error yet).
+          ctx.slowHintTimer = setTimeout(() => {
+            if (!ctx.firstChunkReceived && !ctx.doneRef.current) ctx.updatePhase("slow");
+          }, 30_000);
+        };
+        ctx.dispatchUserMessage = dispatchUserMessage;
         const disarmTimeouts = () => {
           if (ctx.idleTimeout !== null) {
             clearTimeout(ctx.idleTimeout);
