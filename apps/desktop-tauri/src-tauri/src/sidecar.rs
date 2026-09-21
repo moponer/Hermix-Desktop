@@ -551,10 +551,16 @@ mod windows_job_object {
         _peak_job_memory_used: usize,
     }
 
+    /// 字段顺序与宽度必须逐字节对齐 `JOBOBJECT_BASIC_LIMIT_INFORMATION`。
+    /// 这里的 `LimitFlags` 是**第 3 个**字段（offset 16）；曾把它写在末尾
+    /// 并省掉该字段，导致结构体只有 136 字节（权威值 144），
+    /// `SetInformationJobObject` 返回 `ERROR_BAD_LENGTH (24)`，
+    /// KILL_ON_JOB_CLOSE 从未真正生效。
     #[repr(C)]
     struct JobObjectBasicLimitInformation {
-        _process_user_mode_time: i64,
-        _process_kernel_mode_time: i64,
+        _per_process_user_time_limit: i64,
+        _per_job_user_time_limit: i64,
+        limit_flags: u32,
         _min_working_set_size: usize,
         _max_working_set_size: usize,
         _active_process_limit: u32,
@@ -583,6 +589,7 @@ mod windows_job_object {
         ) -> i32;
         fn AssignProcessToJobObject(hjob: *mut c_void, hprocess: *mut c_void) -> i32;
         fn CloseHandle(hobject: *mut c_void) -> i32;
+        fn GetLastError() -> u32;
     }
 
     pub unsafe fn create_and_assign(pid: u32) -> Option<usize> {
@@ -594,8 +601,9 @@ mod windows_job_object {
 
             let mut info = JobObjectExtendedLimitInformation {
                 basic_limit_information: JobObjectBasicLimitInformation {
-                    _process_user_mode_time: 0,
-                    _process_kernel_mode_time: 0,
+                    _per_process_user_time_limit: 0,
+                    _per_job_user_time_limit: 0,
+                    limit_flags: JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
                     _min_working_set_size: 0,
                     _max_working_set_size: 0,
                     _active_process_limit: 0,
@@ -616,10 +624,26 @@ mod windows_job_object {
                 _peak_process_memory_used: 0,
                 _peak_job_memory_used: 0,
             };
-            info.basic_limit_information._priority_class = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-
             let class = 9; // JobObjectExtendedLimitInformation
-            SetInformationJobObject(job, class, &info as *const _ as *const c_void, std::mem::size_of_val(&info) as u32);
+            // 必须查返回值：结构体布局写错时这里会以 ERROR_BAD_LENGTH 失败，
+            // 但 AssignProcessToJobObject 仍会成功 —— Job 里没有任何限制，
+            // 于是「绑定成功」的假象掩盖了「兜底不存在」。静默失败过一次，
+            // 代价是 sidecar 在父进程 exit() 后长期残留，不再重蹈。
+            let set_ok = SetInformationJobObject(
+                job,
+                class,
+                &info as *const _ as *const c_void,
+                std::mem::size_of_val(&info) as u32,
+            );
+            if set_ok == 0 {
+                eprintln!(
+                    "[Hermix] Warning: SetInformationJobObject failed (err={}), \
+                     KILL_ON_JOB_CLOSE not armed — sidecar would outlive the app",
+                    GetLastError()
+                );
+                CloseHandle(job);
+                return None;
+            }
 
             const PROCESS_SET_QUOTA: u32 = 0x0100;
             const PROCESS_TERMINATE: u32 = 0x0001;
@@ -647,6 +671,70 @@ mod windows_job_object {
     pub unsafe fn close(handle: usize) {
         unsafe {
             CloseHandle(handle as *mut c_void);
+        }
+    }
+
+    #[cfg(test)]
+    mod layout_tests {
+        use super::*;
+
+        /// 结构体布局是 `SetInformationJobObject` 的入参契约：尺寸差一个
+        /// 字节它就返回 `ERROR_BAD_LENGTH (24)`，而 `AssignProcessToJobObject`
+        /// 照样成功 —— 兜底静默消失，sidecar 在父进程退出后残留。
+        /// 曾经 BasicLimit 少了 `LimitFlags` 字段（56 vs 64），
+        /// Extended 落到 136 vs 144。这两个数字就是契约本身。
+        #[test]
+        fn job_object_structs_match_windows_abi() {
+            assert_eq!(
+                std::mem::size_of::<JobObjectBasicLimitInformation>(),
+                64,
+                "JOBOBJECT_BASIC_LIMIT_INFORMATION must be 64 bytes on x64 — \
+                 check that `limit_flags` is the 3rd field and no field is missing"
+            );
+            assert_eq!(
+                std::mem::size_of::<JobObjectExtendedLimitInformation>(),
+                144,
+                "JOBOBJECT_EXTENDED_LIMIT_INFORMATION must be 144 bytes on x64"
+            );
+        }
+
+        /// `limit_flags` 必须在 offset 16（两个 i64 之后）。
+        /// 这个偏移一旦挪位，KILL_ON_JOB_CLOSE 就写进了别的字段。
+        #[test]
+        fn limit_flags_sits_at_offset_16() {
+            let info = JobObjectExtendedLimitInformation {
+                basic_limit_information: JobObjectBasicLimitInformation {
+                    _per_process_user_time_limit: 0,
+                    _per_job_user_time_limit: 0,
+                    limit_flags: JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+                    _min_working_set_size: 0,
+                    _max_working_set_size: 0,
+                    _active_process_limit: 0,
+                    _affinity: 0,
+                    _priority_class: 0,
+                    _scheduling_class: 0,
+                },
+                _io_info: IoCounter {
+                    _read_operation_count: 0,
+                    _write_operation_count: 0,
+                    _other_operation_count: 0,
+                    _read_transfer_count: 0,
+                    _write_transfer_count: 0,
+                    _other_transfer_count: 0,
+                },
+                _process_memory_limit: 0,
+                _job_memory_limit: 0,
+                _peak_process_memory_used: 0,
+                _peak_job_memory_used: 0,
+            };
+            let base = &info as *const _ as usize;
+            let flags = &info.basic_limit_information.limit_flags as *const _ as usize;
+            assert_eq!(
+                flags - base,
+                16,
+                "limit_flags must sit right after the two i64 time limits"
+            );
+            assert_eq!(info.basic_limit_information.limit_flags, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE);
         }
     }
 }
