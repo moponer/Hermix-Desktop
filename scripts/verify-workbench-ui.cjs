@@ -29,10 +29,28 @@ module.exports = async (page) => {
           currentWebview: { label: "main", windowLabel: "main" },
         },
         transformCallback: () => 1,
+        // workbenchEntryUrl() 会调 convertFileSrc(path, "asset") 把磁盘路径
+        // 转成 asset:// URL。伪实现里少了它 → 抛错 → entryUrl 落成 null →
+        // 画布永远显示「工作台入口未就绪」。这不是应用的 bug，是 harness
+        // 缺口。dev 下 vite 的 public/ 直接可服务，转成 http 路径才能真的
+        // 加载进 iframe。
+        convertFileSrc: (filePath, protocol = "asset") => {
+          const pub = "apps/desktop-tauri/public/";
+          const norm = String(filePath).replace(/\\/g, "/");
+          const idx = norm.indexOf(pub);
+          if (protocol === "asset" && idx >= 0) {
+            return `http://[::1]:1420/${norm.slice(idx + pub.length)}`;
+          }
+          return `http://[::1]:1420/${norm.split("/").pop()}`;
+        },
         invoke: (cmd, args) => {
           if (cmd === "workbench_list") return Promise.resolve(list);
           if (cmd === "workbench_entry_path") {
-            return Promise.resolve("<repo>/.workbuddy/memory/nonexistent.html");
+            // 指向真实存在的文件：不存在的路径只会让画布走降级分支
+            // （显示 "工作台入口未就绪"），那验不到画布真的渲染。
+            return Promise.resolve(
+              "<repo>/apps/desktop-tauri/public/demo-render.html",
+            );
           }
           if (cmd === "workbench_ensure_session") return Promise.resolve(args.sessionId);
           if (cmd === "workbench_set_primary") return Promise.resolve(undefined);
@@ -59,9 +77,15 @@ module.exports = async (page) => {
           }
           return Promise.resolve("{}");
         },
-        unregisterListener: () => {},
         plugins: {},
       },
+    });
+    // `unregisterListener` 挂在独立对象上，不在 `__TAURI_INTERNALS__` 里。
+    // 放错位置会报 unhandledrejection: Cannot read properties of undefined
+    // (reading 'unregisterListener')，并把工作台的 effect 打断在半路。
+    Object.defineProperty(window, "__TAURI_EVENT_PLUGIN_INTERNALS__", {
+      configurable: true,
+      value: { unregisterListener: () => {}, registerListener: () => 1 },
     });
   }, LIST);
 
@@ -69,7 +93,10 @@ module.exports = async (page) => {
   page.on("console", (m) => { if (m.type() === "error") logs.push(m.text().slice(0, 160)); });
 
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto("http://localhost:1420");
+  // vite dev server 只监听 IPv6 `[::1]`（netstat 里没有 127.0.0.1 那条）。
+  // 写 `localhost` 时 chromium 会先试 IPv4 并在那里挂住 → goto 超时。
+  // 直接钉 IPv6 字面量。
+  await page.goto(process.env.HERMIX_DEV_URL || "http://[::1]:1420");
   await page.waitForTimeout(2500);
 
   // 侧栏里点到工作台
@@ -87,6 +114,10 @@ module.exports = async (page) => {
       dots: all(".wb-tab-dot").length,
       hasShell: !!t(".wb-shell"),
       hasFrameZone: !!t(".wb-canvas"),
+      // 画布真的渲染出 iframe 了吗？「工作台入口未就绪」是 entryUrl 为空的
+      // 降级文案，跟 hasFrameZone 同时为真也说明画布是空的 —— 分开报。
+      hasFrame: !!t(".wb-frame"),
+      canvasEmpty: t(".wb-canvas-empty")?.textContent.trim() ?? null,
       chatWidth: t(".wb-chat") ? Math.round(t(".wb-chat").getBoundingClientRect().width) : 0,
       // 空态
       emptyTitle: t(".wb-empty-title")?.textContent.trim() ?? null,
@@ -103,3 +134,36 @@ module.exports = async (page) => {
   await page.screenshot({ path: shot });
   return JSON.stringify({ scenario, ...probe, errors: logs, shot }, null, 2);
 };
+
+// 直接 `node scripts/verify-workbench-ui.cjs [场景]` 就能跑。之前这个文件
+// 只导出函数、没有 runner，`node` 跑它只会静默退出（exit 0、零输出）——
+// 看起来像「全绿」，其实一个断言都没执行。
+if (require.main === module) {
+  (async () => {
+    const PW = process.env.PLAYWRIGHT_MODULE
+      || "<USERPROFILE>/AppData/Roaming/npm/node_modules/playwright";
+    let chromium;
+    try {
+      ({ chromium } = require(PW));
+    } catch {
+      console.error(`找不到 playwright（试过 ${PW}）。设 PLAYWRIGHT_MODULE 指向其安装目录。`);
+      process.exit(1);
+    }
+
+    const browser = await chromium.launch({
+      // 本机没下过 playwright 自带的 chromium（ms-playwright 里只有 daemon
+      // 目录），直接用系统 Chrome。没有就退到 Edge —— 两个都装了的机器上
+      // 这一层不该让脚本跑不起来。
+      channel: process.env.PW_CHANNEL || "chrome",
+    }).catch(() => chromium.launch({ channel: "msedge" }));
+    try {
+      const page = await browser.newPage();
+      console.log(await module.exports(page));
+    } finally {
+      await browser.close();
+    }
+  })().catch((e) => {
+    console.error(e);
+    process.exit(1);
+  });
+}
