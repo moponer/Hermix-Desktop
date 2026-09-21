@@ -465,19 +465,20 @@ export function createMessageHandler(
         const content =
           typeof evtContent === "string" ? evtContent : "";
         ctx.setStreamingStatus(content || null);
-        // `task_in_flight` means the backend declined this send because the
-        // session already has a running agent task. That is a terminal answer
-        // to THIS send: nothing else will arrive on it. Without settling the
-        // send promise never resolves and the "正在思考…" bubble hangs forever
-        // next to a task that is emitting elsewhere. Surface the message as a
-        // soft notice instead of a red error (the task itself is healthy).
+        // `task_in_flight` on a Status means the backend consumed a user
+        // message that arrived mid-stream and QUEUED it — the turn for it
+        // runs as soon as the current one finishes, and its output lands on
+        // this same send. So this is NOT terminal: settling here would end
+        // the bubble before the queued turn ever produced anything, and the
+        // real answer would have nowhere to render.
+        //
+        // Keep the send promise alive and re-arm the timers, so that if the
+        // queued turn never materialises (backend restarted, agent died) the
+        // idle/stale path still settles the bubble instead of hanging it
+        // forever. The Status text is already shown as the chip above, so the
+        // user knows their message was queued.
         if (content.includes('"task_in_flight"')) {
-          ctx.settle(
-            "",
-            undefined,
-            "task_in_flight",
-            "completed",
-          );
+          ctx.armTimeouts();
           return;
         }
         return;

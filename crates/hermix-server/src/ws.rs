@@ -270,6 +270,22 @@ pub(crate) fn check_recent_send(state: &HttpServerState, session_id: &str, text:
     None
 }
 
+/// Outcome of one `handle_ws_stream_send` call.
+///
+/// The forward loop reads the same inbound channel it is driven by
+/// (approval clicks arrive mid-stream), and `TransportSource` is a plain
+/// read cursor — so a frame consumed there cannot be pushed back and has
+/// to be handed to the caller instead.
+pub(crate) enum StreamSendOutcome {
+    /// The turn completed normally; the main loop takes the next frame.
+    Completed,
+    /// A user message arrived *while the turn was streaming*. Its raw
+    /// wire text is carried here and must be re-driven by the caller.
+    /// The frontend has already been told to keep waiting via a
+    /// `task_in_flight` `Status`.
+    DeferredUserMessage(String),
+}
+
 /// Handle a single `SendMessageRequest` inside a streaming WS session.
 /// Extracted so the `WsClientMessage::Send` path and the legacy
 /// `SendMessageRequest` / plain-text path share the same logic.
@@ -280,7 +296,7 @@ pub(crate) async fn handle_ws_stream_send(
     session_id: &str,
     trace_id: &str,
     request: SendMessageRequest,
-) {
+) -> StreamSendOutcome {
     use tokio::sync::mpsc;
 
     //( / ): replaced unconditional eprintln
@@ -408,7 +424,7 @@ pub(crate) async fn handle_ws_stream_send(
             if let Ok(json) = serde_json::to_string(&done) {
                 let _ = sender.send(json).await;
             }
-            return;
+            return StreamSendOutcome::Completed;
         }
         tracing::warn!(
             session = %session_id,
@@ -461,7 +477,7 @@ pub(crate) async fn handle_ws_stream_send(
         if let Ok(json) = serde_json::to_string(&envelope) {
             let _ = sender.send(json).await;
         }
-        return;
+        return StreamSendOutcome::Completed;
     }
 
     // Item 2: if this exact (session, text) already COMPLETED and we still
@@ -492,7 +508,7 @@ pub(crate) async fn handle_ws_stream_send(
         if let Ok(json) = serde_json::to_string(&envelope) {
             let _ = sender.send(json).await;
         }
-        return;
+        return StreamSendOutcome::Completed;
     }
 
     // session-level active-stream lock. After the override
@@ -536,7 +552,7 @@ pub(crate) async fn handle_ws_stream_send(
         if let Ok(json) = serde_json::to_string(&envelope) {
             let _ = sender.send(json).await;
         }
-        return;
+        return StreamSendOutcome::Completed;
     }
 
     // Bounded queue to cap memory under slow clients. The `try_send`
@@ -1826,6 +1842,13 @@ pub(crate) async fn handle_ws_stream_send(
     // arm we exited through and surface it on the EXITED line.
     let exit_branch: &'static str;
 
+    // Set when a user message arrives through the concurrent read arm
+    // below while this turn is still streaming. `receiver` is a read
+    // cursor, so the frame is consumed there and cannot be pushed back —
+    // the raw text is handed to the caller, which re-drives the main loop
+    // on it once this turn returns.
+    let mut pending_user_msg: Option<String> = None;
+
     // 优雅断连：延迟软杀 agent loop。实现细节见
     // `ws_grace::schedule_grace_disconnect`：立即释放 active_sessions
     // （让前端重连的 send 不被 is_duplicate 卡死），grace 后才 notify
@@ -2157,37 +2180,43 @@ WsClientMessage::ApprovalBatchResponse { batch_id, decision } => {
                                     // user saw a chat that simply never
                                     // answered.
                                     //
-                                    // We cannot start a second concurrent
-                                    // task on this session, so the honest
-                                    // answer is a terminal `Done` carrying the
-                                    // reason. That settles the sender's stream
-                                    // promise instead of hanging it, and the
-                                    // message stays visible in the transcript
-                                    // for the user to retry.
+                                    // We cannot start a second concurrent task
+                                    // on this session — but we also cannot
+                                    // just answer the frame and forget it:
+                                    // `receiver` is a read cursor, so once the
+                                    // frame is consumed the text is gone.
+                                    // Hand it to the caller, which re-drives
+                                    // the main loop after this turn returns.
                                     let is_send = matches!(
                                         other,
                                         hermix_transport::WsClientMessage::Send { .. }
                                     );
                                     if is_send {
+                                        pending_user_msg = Some(text.clone());
                                         tracing::warn!(
                                             session = %session_id,
                                             msg_type = ?other,
                                             "incoming message during streaming — \
-                                             declined with a terminal Done (session busy)"
+                                             deferred to the main loop (session busy)"
                                         );
-                                        let done = WsEnvelope {
+                                        // Non-terminal Status only. A terminal
+                                        // `Done` would settle the frontend's
+                                        // send promise for a turn that never
+                                        // ran — the user sees an empty reply and
+                                        // no hint that their message is queued.
+                                        // The Status renders as a banner and
+                                        // keeps the promise alive until the
+                                        // deferred turn produces the answer.
+                                        let status = WsEnvelope {
                                             version: 1,
                                             request_id: None,
                                             trace_id: trace_id.to_string(),
-                                            event: StreamEvent::Done {
-                                                content: String::new(),
-                                                finish_reason: Some("task_in_flight".to_string()),
-                                                outcome: Some("completed".to_string()),
-                                                error: None,
+                                            event: StreamEvent::Status {
+                                                content: "{\"event\":\"task_in_flight\",\"message\":\"上一条消息仍在处理中，你的新消息已排队，将在当前任务结束后自动发送。\"}".to_string(),
                                             },
                                         };
                                         let _ = sender
-                                            .send(serde_json::to_string(&done).unwrap_or_default())
+                                            .send(serde_json::to_string(&status).unwrap_or_default())
                                             .await;
                                     } else {
                                         // Other control frames (ping variants,
@@ -2207,25 +2236,28 @@ WsClientMessage::ApprovalBatchResponse { batch_id, decision } => {
                             // exist, so the frame fell straight through the
                             // match and vanished: no log, no event, and the
                             // sender's promise never settled, leaving the chat
-                            // stuck on "正在思考…". Decline it explicitly.
+                            // stuck on "正在思考…".
+                            //
+                            // Same treatment as the typed `Send` arm above:
+                            // the frame is consumed either way, so hand it to
+                            // the caller to re-drive and answer with a
+                            // non-terminal Status.
+                            pending_user_msg = Some(text.clone());
                             tracing::warn!(
                                 session = %session_id,
                                 len = text.len(),
-                                "unparsed frame during streaming — declining with a terminal Done"
+                                "unparsed frame during streaming — deferred to the main loop"
                             );
-                            let done = WsEnvelope {
+                            let status = WsEnvelope {
                                 version: 1,
                                 request_id: None,
                                 trace_id: trace_id.to_string(),
-                                event: StreamEvent::Done {
-                                    content: String::new(),
-                                    finish_reason: Some("task_in_flight".to_string()),
-                                    outcome: Some("completed".to_string()),
-                                    error: None,
+                                event: StreamEvent::Status {
+                                    content: "{\"event\":\"task_in_flight\",\"message\":\"上一条消息仍在处理中，你的新消息已排队，将在当前任务结束后自动发送。\"}".to_string(),
                                 },
                             };
                             let _ = sender
-                                .send(serde_json::to_string(&done).unwrap_or_default())
+                                .send(serde_json::to_string(&status).unwrap_or_default())
                                 .await;
                         }
                     }
@@ -2246,8 +2278,13 @@ WsClientMessage::ApprovalBatchResponse { batch_id, decision } => {
         session = %session_id,
         exit_branch,
         was_client_disconnect = was_client_disconnect,
+        pending_user_msg = pending_user_msg.is_some(),
         "ws_stream: rx forward loop EXITED — handle_ws_stream_send returning"
     );
+    match pending_user_msg {
+        Some(text) => StreamSendOutcome::DeferredUserMessage(text),
+        None => StreamSendOutcome::Completed,
+    }
 }
 /// Translate a `TodoChange` (emitted by the `todo` tool) into a
 /// wire-level [`StreamEvent`] that the desktop `useStreamChat`
@@ -2527,347 +2564,382 @@ pub(crate) async fn handle_ws_stream(
             .await;
     }
 
-    while let Some(text) = receiver.recv().await {
-        {
-            let trace_id = trace_id_base.clone();
-                // Tdiagnostic — log every WS message receipt.
-                tracing::info!(
-                    session = %session_id,
-                    text_preview = %text.chars().take(80).collect::<String>(),
-                    "ws_stream: received Text message"
-                );
-
-                // Try structured WsClientMessage first (v2 protocol).
-                if let Ok(ws_msg) = serde_json::from_str::<WsClientMessage>(&text) {
-                    match ws_msg {
-                        WsClientMessage::ApprovalResponse { request_id, decision } => {
-                            // INFO-level receipt log. The
-                            // previous `debug!` (line 5753 below) was
-                            // invisible at the default log level, so
-                            // when the user's click "disappeared" and
-                            // the registry timed out at 30s, we had
-                            // no way to distinguish "click never left
-                            // the client" from "click arrived but
-                            // server mis-routed it". Now the
-                            // receipt is loud enough to grep and
-                            // pairs naturally with the WARN
-                            // `approval request timed out`.
-                            tracing::info!(
-                                session = %session_id,
-                                request_id = %request_id,
-                                decision = %decision,
-                                "ws_stream: received approval_response",
-                            );
-                            // Parse the 4-state decision. Unknown /
-                            // empty values log and downgrade to
-                            // `Deny` (fail-closed — never auto-
-                            // approve on garbage input).
-                            let choice = hermix_transport::ApprovalChoice::from_decision_str(
-                                &decision,
-                            );
-                            let choice = match choice {
-                                Some(c) => c,
-                                None => {
-                                    tracing::warn!(
-                                        session = %session_id,
-                                        request_id = %request_id,
-                                        decision = %decision,
-                                        "unknown approval decision; downgrading to Deny (fail-closed)"
-                                    );
-                                    hermix_transport::ApprovalChoice::Deny
-                                }
-                            };
-                            // The legacy 2-state semantics
-                            // (`approved` / `denied`) and the 4-state
-                            // semantics share the same registry
-                            // resolution: any non-Deny choice approves
-                            // the current call.
-                            let approved = choice.is_approved();
-                            let outcome = if approved {
-                                hermix_core::ApprovalOutcome::Approved
-                            } else {
-                                hermix_core::ApprovalOutcome::DeniedByUser
-                            };
-                            let matched = state.approval_registry.resolve(
-                                &session_id,
-                                &request_id,
-                                outcome,
-                            );
-                            // matched/miss diagnostic.
-                            // `matched=false` means the request_id was
-                            // not found in the pending approvals map —
-                            // either the entry was already timed out,
-                            // the (session, request_id) key never
-                            // existed, or this is a duplicate resolve.
-                            // Paired with the `received` log above and
-                            // the `timed out (default deny)` WARN in
-                            // ApprovalRegistry, this one line tells us
-                            // whether the click reached the right slot.
-                            tracing::info!(
-                                session = %session_id,
-                                request_id = %request_id,
-                                matched = matched,
-                                "approval_response resolve: {}",
-                                if matched { "hit" } else { "miss — no pending entry" },
-                            );
-                            // The DB stores the decision as a free-form
-                            // string, so we persist the canonical 4-state
-                            // name (`"once"` / `"session"` / `"always"`
-                            // / `"deny"`) — older rows that store the
-                            // legacy 2-state values keep working
-                            // unchanged. The UI reads `extra.decision`
-                            // verbatim and the user-facing card flips
-                            // color to match.
-                            let decision_str = match choice {
-                                hermix_transport::ApprovalChoice::Once => "once",
-                                hermix_transport::ApprovalChoice::Session => "session",
-                                hermix_transport::ApprovalChoice::Always => "always",
-                                hermix_transport::ApprovalChoice::Deny => "deny",
-                            };
-                            if let Err(e) = state
-                                .session_persistence
-                                .resolve_approval_message(
-                                    &session_id,
-                                    &request_id,
-                                    decision_str,
-                                )
-                            {
-                                tracing::warn!(
-                                    error = %e,
-                                    request_id = %request_id,
-                                    "failed to persist approval decision"
-                                );
-                            }
-                            // 4-state side effects: `session` and
-                            // `always` need to update their respective
-                            // stores. The command to record is the
-                            // `command` (or `cmd`) string from the
-                            // persisted approval row's `arguments` JSON.
-                            // If the row has been GC'd between the
-                            // request and the response (it shouldn't —
-                            // the registry keeps the request alive), we
-                            // skip the side effect and log.
-                            // Only record on the first successful
-                            // resolve — duplicate responses would
-                            // otherwise re-grant the same path /
-                            // re-add the same allowlist regex (P6 fix
-                            //).
-                            if matched
-                                && matches!(
-                                    choice,
-                                    hermix_transport::ApprovalChoice::Session
-                                        | hermix_transport::ApprovalChoice::Always
-                                )
-                            {
-                                //P6 : resource-scope path
-                                // first, command-path as fallback for
-                                // legacy Danger-tier terminal approvals.
-                                record_resource_approval_side_effect(
-                                    &state,
-                                    &session_id,
-                                    &request_id,
-                                    choice,
-                                ).await;
-                                if let Ok(Some((tool, params))) = lookup_pending_approval(
-                                    &state,
-                                    &session_id,
-                                    &request_id,
-                                ).await {
-                                    record_approval_side_effect(
-                                        &state,
-                                        &session_id,
-                                        &tool,
-                                        &params,
-                                        choice,
-                                    );
-                                } else {
-                                    tracing::warn!(
-                                        session = %session_id,
-                                        request_id = %request_id,
-                                        "session/always picked but original command \
-                                         not found in approval row; side effect skipped"
-                                    );
-                                }
-                            }
-                            tracing::debug!(
-                                session = %session_id,
-                                request_id = %request_id,
-                                ?choice,
-                                approved,
-                                "resolved approval response (4-state)"
-                            );
-                            continue;
-                        }
-                        WsClientMessage::ApprovalBatchResponse { batch_id, decision } => {
-                            tracing::info!(
-                                session = %session_id,
-                                batch_id = %batch_id,
-                                decision = %decision,
-                                "ws_stream: received approval_responses_batch",
-                            );
-                            let choice =
-                                hermix_transport::ApprovalChoice::from_decision_str(&decision)
-                                    .unwrap_or_else(|| {
-                                        tracing::warn!(
-                                            session = %session_id,
-                                            batch_id = %batch_id,
-                                            decision = %decision,
-                                            "unknown approval decision in batch; downgrading to Deny (fail-closed)"
-                                        );
-                                        hermix_transport::ApprovalChoice::Deny
-                                    });
-                            let outcome = if choice.is_approved() {
-                                hermix_core::ApprovalOutcome::Approved
-                            } else {
-                                hermix_core::ApprovalOutcome::DeniedByUser
-                            };
-                            let pairs = state.approval_registry.resolve_batch(
-                                &session_id,
-                                &batch_id,
-                                outcome,
-                            );
-                            tracing::info!(
-                                session = %session_id,
-                                batch_id = %batch_id,
-                                ?choice,
-                                items = pairs.len(),
-                                "approval_responses_batch resolve",
-                            );
-                            let mut resolved_count = 0usize;
-                            for (rid, ok) in pairs {
-                                if ok {
-                                    util::record_approval_resolution(
-                                        &state,
-                                        &session_id,
-                                        &rid,
-                                        choice,
-                                    ).await;
-                                    resolved_count += 1;
-                                }
-                            }
-                            tracing::debug!(
-                                session = %session_id,
-                                batch_id = %batch_id,
-                                ?choice,
-                                resolved = resolved_count,
-                                "resolved approval_responses_batch (4-state)"
-                            );
-                            continue;
-                        }
-                        WsClientMessage::ClarifyResponse { request_id, answer } => {
-                            // Wake the blocked `clarify` tool call. If the
-                            // request id is unknown (timed out, dropped,
-                            // resolved twice) we just log — never fail the
-                            // WS exchange.
-                            if let Err(e) = state
-                                .clarify_dispatcher
-                                .respond_by_id(&request_id, answer)
-                                .await
-                            {
-                                tracing::warn!(
-                                    error = %e,
-                                    request_id = %request_id,
-                                    "no pending clarify to resolve"
-                                );
-                            }
-                            continue;
-                        }
-                        WsClientMessage::Send {
-                            text,
-                            model,
-                            provider,
-                            personality,
-                            system_prompt,
-                            tools,
-                            workspace,
-                            permission,
-                            user_id,
-                            request_id,
-                            images,
-                            image,
-                            image_mime_type,
-                            skills,
-                        } => {
-                        let request = SendMessageRequest {
-                            text,
-                            model,
-                            provider,
-                            personality,
-                            system_prompt,
-                            tools,
-                            workspace,
-                            permission,
-                            user_id,
-                            request_id,
-                            images,
-                            image,
-                            image_mime_type,
-                            skills,
-                        };
-                            // Fall through to the send handling below.
-                            // We use a helper to avoid code duplication.
-                            handle_ws_stream_send(
-                                &mut *sender,
-                                &mut *receiver,
-                                &state,
-                                &session_id,
-                                &trace_id,
-                                request,
-                            )
-                            .await;
-                            continue;
-                        }
-                        WsClientMessage::Ping => {
-                            //: respond to client application-level
-                            // ping with Pong even when no stream is active.
-                            let pong = WsEnvelope {
-                                version: 1,
-                                request_id: None,
-                                trace_id: trace_id_base.clone(),
-                                event: StreamEvent::Pong,
-                            };
-                            let _ = sender
-                                .send(serde_json::to_string(&pong).unwrap_or_default())
-                                .await;
-                            continue;
-                        }
-                    }
-                }
-
-                // Legacy plain-text / SendMessageRequest fallback.
-                let parsed: Option<SendMessageRequest> = match serde_json::from_str(&text) {
-                    Ok(v) => Some(v),
-                    Err(e) => {
-                        tracing::warn!(error = %e, "failed to parse WS text as SendMessageRequest");
-                        None
-                    }
-                };
-                let request = parsed.unwrap_or_else(|| SendMessageRequest {
-                    text: text.to_string(),
-                    model: None,
-                    provider: None,
-                    personality: None,
-                    system_prompt: None,
-                    tools: None,
-                    workspace: None,
-                    permission: None,
-                    user_id: None,
-                    request_id: None,
-                    images: None,
-                    image: None,
-                    image_mime_type: None,
-                    skills: None,
-                });
-                handle_ws_stream_send(
+    while let Some(first) = receiver.recv().await {
+        // A turn's `handle_ws_stream_send` can hand back a user message it
+        // consumed mid-stream. Re-drive it here rather than waiting for the
+        // user to send something else — the read cursor already advanced
+        // past it, so dropping it means the chat silently never answers.
+        let mut next = Some(first);
+        while let Some(text) = next.take() {
+            if let StreamSendOutcome::DeferredUserMessage(deferred) =
+                handle_inbound_frame(
                     &mut *sender,
                     &mut *receiver,
                     &state,
                     &session_id,
-                    &trace_id,
-                    request,
+                    &trace_id_base,
+                    text,
                 )
-                .await;
+                .await
+            {
+                next = Some(deferred);
+            }
         }
+    }
+}
+
+/// Handle one inbound frame of a streaming session.
+///
+/// Extracted from the session loop so a turn that consumed a mid-stream
+/// user message can hand the text straight back and have the caller
+/// re-drive it, instead of the message dying with the advanced cursor.
+async fn handle_inbound_frame(
+    sender: &mut dyn TransportSink,
+    receiver: &mut dyn TransportSource,
+    state: &HttpServerState,
+    session_id: &str,
+    trace_id_base: &str,
+    text: String,
+) -> StreamSendOutcome {
+    {
+        let trace_id = trace_id_base;
+            // Tdiagnostic — log every WS message receipt.
+            tracing::info!(
+                session = %session_id,
+                text_preview = %text.chars().take(80).collect::<String>(),
+                "ws_stream: received Text message"
+            );
+
+            // Try structured WsClientMessage first (v2 protocol).
+            if let Ok(ws_msg) = serde_json::from_str::<WsClientMessage>(&text) {
+                match ws_msg {
+                    WsClientMessage::ApprovalResponse { request_id, decision } => {
+                        // INFO-level receipt log. The
+                        // previous `debug!` (line 5753 below) was
+                        // invisible at the default log level, so
+                        // when the user's click "disappeared" and
+                        // the registry timed out at 30s, we had
+                        // no way to distinguish "click never left
+                        // the client" from "click arrived but
+                        // server mis-routed it". Now the
+                        // receipt is loud enough to grep and
+                        // pairs naturally with the WARN
+                        // `approval request timed out`.
+                        tracing::info!(
+                            session = %session_id,
+                            request_id = %request_id,
+                            decision = %decision,
+                            "ws_stream: received approval_response",
+                        );
+                        // Parse the 4-state decision. Unknown /
+                        // empty values log and downgrade to
+                        // `Deny` (fail-closed — never auto-
+                        // approve on garbage input).
+                        let choice = hermix_transport::ApprovalChoice::from_decision_str(
+                            &decision,
+                        );
+                        let choice = match choice {
+                            Some(c) => c,
+                            None => {
+                                tracing::warn!(
+                                    session = %session_id,
+                                    request_id = %request_id,
+                                    decision = %decision,
+                                    "unknown approval decision; downgrading to Deny (fail-closed)"
+                                );
+                                hermix_transport::ApprovalChoice::Deny
+                            }
+                        };
+                        // The legacy 2-state semantics
+                        // (`approved` / `denied`) and the 4-state
+                        // semantics share the same registry
+                        // resolution: any non-Deny choice approves
+                        // the current call.
+                        let approved = choice.is_approved();
+                        let outcome = if approved {
+                            hermix_core::ApprovalOutcome::Approved
+                        } else {
+                            hermix_core::ApprovalOutcome::DeniedByUser
+                        };
+                        let matched = state.approval_registry.resolve(
+                            &session_id,
+                            &request_id,
+                            outcome,
+                        );
+                        // matched/miss diagnostic.
+                        // `matched=false` means the request_id was
+                        // not found in the pending approvals map —
+                        // either the entry was already timed out,
+                        // the (session, request_id) key never
+                        // existed, or this is a duplicate resolve.
+                        // Paired with the `received` log above and
+                        // the `timed out (default deny)` WARN in
+                        // ApprovalRegistry, this one line tells us
+                        // whether the click reached the right slot.
+                        tracing::info!(
+                            session = %session_id,
+                            request_id = %request_id,
+                            matched = matched,
+                            "approval_response resolve: {}",
+                            if matched { "hit" } else { "miss — no pending entry" },
+                        );
+                        // The DB stores the decision as a free-form
+                        // string, so we persist the canonical 4-state
+                        // name (`"once"` / `"session"` / `"always"`
+                        // / `"deny"`) — older rows that store the
+                        // legacy 2-state values keep working
+                        // unchanged. The UI reads `extra.decision`
+                        // verbatim and the user-facing card flips
+                        // color to match.
+                        let decision_str = match choice {
+                            hermix_transport::ApprovalChoice::Once => "once",
+                            hermix_transport::ApprovalChoice::Session => "session",
+                            hermix_transport::ApprovalChoice::Always => "always",
+                            hermix_transport::ApprovalChoice::Deny => "deny",
+                        };
+                        if let Err(e) = state
+                            .session_persistence
+                            .resolve_approval_message(
+                                &session_id,
+                                &request_id,
+                                decision_str,
+                            )
+                        {
+                            tracing::warn!(
+                                error = %e,
+                                request_id = %request_id,
+                                "failed to persist approval decision"
+                            );
+                        }
+                        // 4-state side effects: `session` and
+                        // `always` need to update their respective
+                        // stores. The command to record is the
+                        // `command` (or `cmd`) string from the
+                        // persisted approval row's `arguments` JSON.
+                        // If the row has been GC'd between the
+                        // request and the response (it shouldn't —
+                        // the registry keeps the request alive), we
+                        // skip the side effect and log.
+                        // Only record on the first successful
+                        // resolve — duplicate responses would
+                        // otherwise re-grant the same path /
+                        // re-add the same allowlist regex (P6 fix
+                        //).
+                        if matched
+                            && matches!(
+                                choice,
+                                hermix_transport::ApprovalChoice::Session
+                                    | hermix_transport::ApprovalChoice::Always
+                            )
+                        {
+                            //P6 : resource-scope path
+                            // first, command-path as fallback for
+                            // legacy Danger-tier terminal approvals.
+                            record_resource_approval_side_effect(
+                                &state,
+                                &session_id,
+                                &request_id,
+                                choice,
+                            ).await;
+                            if let Ok(Some((tool, params))) = lookup_pending_approval(
+                                &state,
+                                &session_id,
+                                &request_id,
+                            ).await {
+                                record_approval_side_effect(
+                                    &state,
+                                    &session_id,
+                                    &tool,
+                                    &params,
+                                    choice,
+                                );
+                            } else {
+                                tracing::warn!(
+                                    session = %session_id,
+                                    request_id = %request_id,
+                                    "session/always picked but original command \
+                                     not found in approval row; side effect skipped"
+                                );
+                            }
+                        }
+                        tracing::debug!(
+                            session = %session_id,
+                            request_id = %request_id,
+                            ?choice,
+                            approved,
+                            "resolved approval response (4-state)"
+                        );
+                        return StreamSendOutcome::Completed;
+                    }
+                    WsClientMessage::ApprovalBatchResponse { batch_id, decision } => {
+                        tracing::info!(
+                            session = %session_id,
+                            batch_id = %batch_id,
+                            decision = %decision,
+                            "ws_stream: received approval_responses_batch",
+                        );
+                        let choice =
+                            hermix_transport::ApprovalChoice::from_decision_str(&decision)
+                                .unwrap_or_else(|| {
+                                    tracing::warn!(
+                                        session = %session_id,
+                                        batch_id = %batch_id,
+                                        decision = %decision,
+                                        "unknown approval decision in batch; downgrading to Deny (fail-closed)"
+                                    );
+                                    hermix_transport::ApprovalChoice::Deny
+                                });
+                        let outcome = if choice.is_approved() {
+                            hermix_core::ApprovalOutcome::Approved
+                        } else {
+                            hermix_core::ApprovalOutcome::DeniedByUser
+                        };
+                        let pairs = state.approval_registry.resolve_batch(
+                            &session_id,
+                            &batch_id,
+                            outcome,
+                        );
+                        tracing::info!(
+                            session = %session_id,
+                            batch_id = %batch_id,
+                            ?choice,
+                            items = pairs.len(),
+                            "approval_responses_batch resolve",
+                        );
+                        let mut resolved_count = 0usize;
+                        for (rid, ok) in pairs {
+                            if ok {
+                                util::record_approval_resolution(
+                                    &state,
+                                    &session_id,
+                                    &rid,
+                                    choice,
+                                ).await;
+                                resolved_count += 1;
+                            }
+                        }
+                        tracing::debug!(
+                            session = %session_id,
+                            batch_id = %batch_id,
+                            ?choice,
+                            resolved = resolved_count,
+                            "resolved approval_responses_batch (4-state)"
+                        );
+                        return StreamSendOutcome::Completed;
+                    }
+                    WsClientMessage::ClarifyResponse { request_id, answer } => {
+                        // Wake the blocked `clarify` tool call. If the
+                        // request id is unknown (timed out, dropped,
+                        // resolved twice) we just log — never fail the
+                        // WS exchange.
+                        if let Err(e) = state
+                            .clarify_dispatcher
+                            .respond_by_id(&request_id, answer)
+                            .await
+                        {
+                            tracing::warn!(
+                                error = %e,
+                                request_id = %request_id,
+                                "no pending clarify to resolve"
+                            );
+                        }
+                        return StreamSendOutcome::Completed;
+                    }
+                    WsClientMessage::Send {
+                        text,
+                        model,
+                        provider,
+                        personality,
+                        system_prompt,
+                        tools,
+                        workspace,
+                        permission,
+                        user_id,
+                        request_id,
+                        images,
+                        image,
+                        image_mime_type,
+                        skills,
+                    } => {
+                    let request = SendMessageRequest {
+                        text,
+                        model,
+                        provider,
+                        personality,
+                        system_prompt,
+                        tools,
+                        workspace,
+                        permission,
+                        user_id,
+                        request_id,
+                        images,
+                        image,
+                        image_mime_type,
+                        skills,
+                    };
+                        // Fall through to the send handling below.
+                        // We use a helper to avoid code duplication.
+                        handle_ws_stream_send(
+                            &mut *sender,
+                            &mut *receiver,
+                            &state,
+                            &session_id,
+                            &trace_id,
+                            request,
+                        )
+                        .await;
+                        return StreamSendOutcome::Completed;
+                    }
+                    WsClientMessage::Ping => {
+                        //: respond to client application-level
+                        // ping with Pong even when no stream is active.
+                        let pong = WsEnvelope {
+                            version: 1,
+                            request_id: None,
+                            trace_id: trace_id_base.to_string(),
+                            event: StreamEvent::Pong,
+                        };
+                        let _ = sender
+                            .send(serde_json::to_string(&pong).unwrap_or_default())
+                            .await;
+                        return StreamSendOutcome::Completed;
+                    }
+                }
+            }
+
+            // Legacy plain-text / SendMessageRequest fallback.
+            let parsed: Option<SendMessageRequest> = match serde_json::from_str(&text) {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to parse WS text as SendMessageRequest");
+                    None
+                }
+            };
+            let request = parsed.unwrap_or_else(|| SendMessageRequest {
+                text: text.to_string(),
+                model: None,
+                provider: None,
+                personality: None,
+                system_prompt: None,
+                tools: None,
+                workspace: None,
+                permission: None,
+                user_id: None,
+                request_id: None,
+                images: None,
+                image: None,
+                image_mime_type: None,
+                skills: None,
+            });
+            return handle_ws_stream_send(
+                &mut *sender,
+                &mut *receiver,
+                &state,
+                &session_id,
+                &trace_id,
+                request,
+            )
+            .await;
     }
 }
 
