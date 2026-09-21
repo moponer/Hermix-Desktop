@@ -2255,6 +2255,7 @@ dependencies = [
  "image",
  "regex-lite",
  "resvg",
+ "rusqlite",
  "serde",
  "serde_json",
  "sha2",

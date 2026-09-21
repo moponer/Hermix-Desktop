@@ -29,6 +29,21 @@ pub mod hx_packager;
 pub use hx_packager::{HxShellPackager, PackageMode, HxPackError};
 pub mod docs;
 pub use docs::{init_docs, check_docs_consistency, DocsReport};
+pub mod workbench_lint;
+pub use workbench_lint::{lint_files, Violation};
+pub mod workbench;
+/// 工作台算法工具箱。内容是 TS 而不是 Rust —— 它随 SDK 注入 iframe 执行，
+/// 在 Rust 侧编译没有意义。放在 `src/` 下是为了跟 SDK 源码同目录便于对照。
+pub const WB_TOOLS_TS: &str = include_str!("workbench_tools.rs");
+
+pub mod workbench_gateway;
+pub use workbench_gateway::{db_exec, db_query, fs_list, fs_read, fs_write};
+pub use workbench::{
+    create_workbench, format_module_index, format_violations, lint_workbench, list_code_files,
+    list_workbenches, module_index, read_code_file, read_manifest, set_deps, undo_history,
+    undo_last, vendor_dir, vendor_index, workbench_dir, workbenches_dir, write_code_file,
+    write_manifest, ModuleEntry, VendorLib, WorkbenchManifest,
+};
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
