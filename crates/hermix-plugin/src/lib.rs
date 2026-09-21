@@ -40,8 +40,9 @@ pub mod workbench_gateway;
 pub use workbench_gateway::{db_exec, db_query, fs_list, fs_read, fs_write};
 pub use workbench::{
     create_workbench, format_module_index, format_violations, lint_workbench, list_code_files,
-    list_workbenches, module_index, read_code_file, read_manifest, set_deps, undo_history,
-    undo_last, vendor_dir, vendor_index, workbench_dir, workbenches_dir, write_code_file,
+    list_workbenches, module_index, read_code_file, read_manifest, set_deps, set_primary,
+    undo_history, undo_last, vendor_dir, vendor_index, workbench_dir, workbenches_dir,
+    write_code_file,
     write_manifest, ModuleEntry, VendorLib, WorkbenchManifest,
 };
 
