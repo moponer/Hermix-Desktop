@@ -863,6 +863,58 @@ mod approval_registry_tests {
         assert_eq!(k1, k2);
     }
 
+    /// Regression: the `reconnect-while-running` decline path must NOT
+    /// consume the live handle.
+    ///
+    /// Symptom this locks down: user sends a message while a task is still
+    /// running → backend declines with a `task_in_flight` Status, but the
+    /// old code had already `remove`d the handle from `active_handles`
+    /// before deciding. The in-flight task's own cleanup `remove` never runs
+    /// (it is still running), so the registry entry was lost permanently and
+    /// `active_sessions` stayed locked forever. Every later retry for that
+    /// `(session, text)` then fell into the dedup branch, which answers with
+    /// an empty `Done` — the UI dropped the bubble and showed no reply.
+    #[tokio::test]
+    async fn decline_path_must_not_consume_live_handle() {
+        let state = test_state(tempfile::tempdir().unwrap().path().to_path_buf());
+        let key = ws::dedup_key("sess-A", "你好");
+
+        // Simulate a live task: a handle that will not finish.
+        let live = tokio::spawn(async {
+            tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+        });
+        state
+            .active_handles
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(key.clone(), live);
+
+        // A second identical send peeks the handle. The peek must be
+        // side-effect free — the routing decision below is what takes it out.
+        let peeked_finished = {
+            let handles = state.active_handles.lock().unwrap_or_else(|e| e.into_inner());
+            handles.get(&key).map(|h| h.is_finished())
+        };
+        assert_eq!(peeked_finished, Some(false), "live task must be seen as running");
+        let still_registered = {
+            let handles = state.active_handles.lock().unwrap_or_else(|e| e.into_inner());
+            handles.contains_key(&key)
+        };
+        assert!(
+            still_registered,
+            "peeking a live handle must leave it registered"
+        );
+
+        // Cleanup so the spawned task does not outlive the test.
+        let taken = {
+            let mut handles = state.active_handles.lock().unwrap_or_else(|e| e.into_inner());
+            handles.remove(&key)
+        };
+        if let Some(h) = taken {
+            h.abort();
+        }
+    }
+
     /// Storm simulation: 9 identical sends within 10s must collapse
     /// to 1 fresh + 8 deduped, with the dedup map holding exactly
     /// 1 entry at the end. This is the exact scenario the user hit
