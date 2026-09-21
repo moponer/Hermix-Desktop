@@ -593,6 +593,7 @@ pub fn run() {
             commands_custom_app::custom_app_smoke_test,
             commands_workbench::workbench_create,
             commands_workbench::workbench_list,
+            commands_workbench::workbench_set_primary,
             commands_workbench::workbench_read,
             commands_workbench::workbench_write,
             commands_workbench::workbench_files,

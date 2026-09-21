@@ -13,7 +13,10 @@ import { WorkbenchView } from "../components/WorkbenchView";
  *  由 App 预先渲染为 `chatNode` 元素传入，保持逻辑零改写。 */
 export interface RouteContext {
   sessions: Session[];
+  /** 切会话并跳回对话页 —— 侧栏、搜索结果用这个。 */
   handleSelectSession: (id: string) => void;
+  /** 只切会话，不动当前页面 —— 工作台页面用这个。 */
+  selectSessionOnly: (id: string) => void;
   startCreateAppFlow: () => void;
   chatNode: ReactNode;
 }
@@ -37,7 +40,7 @@ export function renderRoutes(page: NavPage, ctx: RouteContext): ReactNode {
       return (
         <WorkbenchView
           chatNode={ctx.chatNode}
-          onSelectSession={ctx.handleSelectSession}
+          onSelectSession={ctx.selectSessionOnly}
         />
       );
     default:

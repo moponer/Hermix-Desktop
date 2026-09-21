@@ -869,7 +869,15 @@ const handlePreviewFileFromExplorer = useCallback((path: string, name: string) =
     setPage("chat");
   }, [setActiveSessionId, setPage]);
 
-  const handleSelectSession = useCallback(async (id: string) => {
+  /**
+   * 切到某个会话并跳回对话页。侧栏/搜索结果该用这个。
+   *
+   * 内部分成两步：`selectSessionOnly` 只切 activeSessionId，这里额外补
+   * `setPage("chat")`。分成两个是因为工作台页面也要切会话（每个工作台
+   * 有自己的侧栏），但它绝不能把宿主从工作台页面踢回对话页 ——
+   * 那会让工作台一挂载就自己关掉自己。
+   */
+  const selectSessionOnly = useCallback((id: string) => {
     // Do NOT cancel the active stream when switching sessions.
     // The previous implementation called `cancelStream()` which closed the
     // WebSocket, killing any in-flight agent task on the old session.
@@ -884,7 +892,6 @@ const handlePreviewFileFromExplorer = useCallback((path: string, name: string) =
     // re-set it immediately; otherwise we dont want a stale chip.
     setStreamPhase(null);
     setActiveSessionId(id);
-    setPage("chat");
     if (window.innerWidth < 768) setSidebarOpen(false);
 
     // The activeSessionId effect will fetch messages from the server
@@ -894,7 +901,12 @@ const handlePreviewFileFromExplorer = useCallback((path: string, name: string) =
     // between two concurrent fetches overwriting each other's results.
     // 若会话已有内存中的消息（如刚结束的流式对话），effect 跳过 fetch
     // 直接复用内存 state。
-  }, [clearStreamError, activeSessionId, setActiveSessionId, setPage]);
+  }, [clearStreamError, activeSessionId, setActiveSessionId]);
+
+  const handleSelectSession = useCallback(async (id: string) => {
+    selectSessionOnly(id);
+    setPage("chat");
+  }, [selectSessionOnly, setPage]);
 
   const handleDeleteSession = useCallback(async (id: string) => {
     // the previous implementation called `api.deleteSession`
@@ -3058,6 +3070,7 @@ return {
   const routesCtx: RouteContext = {
     sessions,
     handleSelectSession,
+    selectSessionOnly,
     startCreateAppFlow,
     chatNode: chatViewNode,
   };

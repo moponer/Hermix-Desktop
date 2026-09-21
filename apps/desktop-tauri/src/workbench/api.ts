@@ -11,12 +11,18 @@ export interface WorkbenchManifest {
   updated_at: number;
   /** 依赖白名单内的第三方库名，宿主据此注入 importmap。 */
   deps: string[];
+  /** 主工作台标记。工作台页面默认显示主台，全局至多一个为 true。 */
+  is_primary: boolean;
 }
 
 export const workbenchCreate = (name: string) =>
   invoke<WorkbenchManifest>("workbench_create", { name });
 
 export const workbenchList = () => invoke<WorkbenchManifest[]>("workbench_list");
+
+/** 设为主工作台，其余自动清掉标记。 */
+export const workbenchSetPrimary = (id: string) =>
+  invoke<void>("workbench_set_primary", { id });
 
 export const workbenchRead = (id: string, path: string) =>
   invoke<string>("workbench_read", { id, path });

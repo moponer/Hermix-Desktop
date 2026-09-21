@@ -108,6 +108,10 @@ pub struct WorkbenchManifest {
     /// 依赖白名单内的第三方库名，宿主据此注入 importmap。
     #[serde(default)]
     pub deps: Vec<String>,
+    /// 主工作台标记。工作台页面默认显示主台，其余靠上方 tab 切换。
+    /// 全局至多一个为 true；设新主台时旧标记由 `set_primary` 清掉。
+    #[serde(default)]
+    pub is_primary: bool,
 }
 
 pub fn workbenches_dir() -> PathBuf {
@@ -803,6 +807,9 @@ pub fn create_workbench(name: &str) -> Result<WorkbenchManifest, String> {
         created_at: now,
         updated_at: now,
         deps: Vec::new(),
+        // 第一个工作台自动成为主台 —— 否则建完仍停在空态，
+        // 用户得再手动指定一次才有东西可看。
+        is_primary: list_workbenches().map(|v| v.is_empty()).unwrap_or(false),
     };
     write_manifest(&manifest)?;
     Ok(manifest)
@@ -1010,6 +1017,36 @@ pub fn list_workbenches() -> Result<Vec<WorkbenchManifest>, String> {
     }
     out.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
     Ok(out)
+}
+
+/// 设 `id` 为主工作台，清掉其余工作台的标记。
+///
+/// 一次扫全表而不是只改目标 —— 标记是「全局至多一个」的互斥约束，
+/// 增量维护迟早会因为手工改 manifest 或删目录而留下多个 true，
+/// 那时工作台页面就得靠排序猜该显示谁。全清全写把不变式钉死在这。
+pub fn set_primary(id: &str) -> Result<(), String> {
+    let all = list_workbenches()?;
+    if !all.iter().any(|m| m.id == id) {
+        return Err(format!("workbench not found: {}", id));
+    }
+    for mut m in all {
+        let want = m.id == id;
+        if m.is_primary != want {
+            m.is_primary = want;
+            write_manifest(&m)?;
+        }
+    }
+    Ok(())
+}
+
+/// 主工作台；没有显式标记时回落到最近更新的那个。
+///
+/// 回落保证「删掉主台」不会让页面变成空态 —— 用户还有别的工作台时
+/// 直接看最近用的那个，比让他重新指定更少一步。
+pub fn primary_workbench(list: &[WorkbenchManifest]) -> Option<&WorkbenchManifest> {
+    list.iter()
+        .find(|m| m.is_primary)
+        .or_else(|| list.first())
 }
 
 pub fn read_code_file(id: &str, rel: &str) -> Result<String, String> {
@@ -1322,5 +1359,43 @@ mod tests {
         assert!(out.contains("<head>") && out.contains("</head>"));
 
         assert!(replace_between("<head></head>", render_importmap(&[])).is_err());
+    }
+
+    /// 主台标记是「全局至多一个」的互斥约束 —— 增量维护迟早会留下多个
+    /// true，那时工作台页面只能靠排序猜该显示谁。set_primary 必须一次
+    /// 扫全表把不变式钉死。
+    #[test]
+    fn set_primary_clears_previous_marker() {
+        let tmp = std::env::temp_dir().join(format!("hx-wb-primary-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        // HERMIX_HOME 是进程级全局，测试并行跑会互相踩；这里串行化到
+        // 单测内部完成读写，别的测试不碰这个变量。
+        std::env::set_var("HERMIX_HOME", &tmp);
+
+        let a = create_workbench("甲工作台").unwrap();
+        assert!(a.is_primary, "第一个工作台应自动成为主台");
+        let b = create_workbench("乙工作台").unwrap();
+        assert!(!b.is_primary, "后续工作台不应自动抢主台");
+
+        set_primary(&b.id).unwrap();
+        let list = list_workbenches().unwrap();
+        assert_eq!(
+            list.iter().filter(|m| m.is_primary).count(),
+            1,
+            "主台必须至多一个"
+        );
+        assert_eq!(primary_workbench(&list).unwrap().id, b.id);
+
+        // 没有显式标记时回落到最近的，而不是返回 None —— 否则删掉主台
+        // 会让页面变空态，而用户明明还有工作台可用。
+        let stripped: Vec<WorkbenchManifest> = list
+            .into_iter()
+            .map(|m| WorkbenchManifest { is_primary: false, ..m })
+            .collect();
+        assert!(primary_workbench(&stripped).is_some());
+        assert!(primary_workbench(&[]).is_none());
+
+        assert!(set_primary("不存在的工作台").is_err());
+        let _ = fs::remove_dir_all(&tmp);
     }
 }

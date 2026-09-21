@@ -9,7 +9,7 @@ use tauri::Emitter;
 use hermix_plugin::{
     create_workbench, db_exec, db_query, format_module_index, format_violations, fs_list, fs_read,
     fs_write, lint_workbench, list_code_files, list_workbenches, module_index, read_code_file,
-    read_manifest, set_deps, undo_history, undo_last, vendor_index, vendor_dir,
+    read_manifest, set_deps, set_primary, undo_history, undo_last, vendor_index, vendor_dir,
     workbench_dir, write_code_file, write_manifest,
 };
 
@@ -25,6 +25,12 @@ pub async fn workbench_create(name: String) -> Result<serde_json::Value, String>
 pub async fn workbench_list() -> Result<serde_json::Value, String> {
     let list = list_workbenches()?;
     serde_json::to_value(list).map_err(|e| format!("serialize list: {e}"))
+}
+
+/// 把 `id` 设为主工作台。工作台页面默认显示主台，其余靠上方 tab 切换。
+#[tauri::command]
+pub async fn workbench_set_primary(id: String) -> Result<(), String> {
+    set_primary(&id)
 }
 
 /// 读取代码层某个文件。

@@ -1,6 +1,19 @@
 /* 工作台宿主外壳：左侧画布渲染工作台代码，右侧对话栏由宿主渲染。
    对话栏与折叠按钮属于宿主 chrome，工作台代码无权改动或隐藏。 */
 
+.wb-page {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* 首次列表加载完成前占位，避免空态闪一下又跳走。 */
+.wb-boot {
+  flex: 1;
+}
+
 .wb-shell {
   display: flex;
   flex: 1;
@@ -52,37 +65,149 @@
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
-  width: 380px;
+  /* ChatView 自带欢迎页与输入框工具条，380px 装不下会顶出横向滚动条。
+     460px 是「消息气泡不换行到难看、又不抢画布」的折中；上限用 vw 挡
+     住窄屏，否则画布会被挤到只剩一条。 */
+  width: min(460px, 38vw);
+  min-width: 320px;
   min-height: 0;
   border-left: 1px solid var(--color-border);
+  /* 对话内容是 flex 列，必须挡住自身溢出，不然欢迎页会横向顶破容器。 */
+  overflow-x: hidden;
   background: var(--color-bg-app);
 }
 
-/* 工作台列表面板 */
+/* tab 条：多个工作台时出现。主台只决定默认落到哪个，切 tab 不改变主台。 */
 
-.wb-list {
+.wb-tabs {
+  display: flex;
+  align-items: stretch;
+  flex-shrink: 0;
+  gap: 2px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-bg-secondary);
+  overflow-x: auto;
+}
+
+.wb-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  padding: 7px 12px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.wb-tab:hover {
+  color: var(--color-text-primary);
+  background: var(--color-bg-hover);
+}
+
+.wb-tab-active {
+  color: var(--color-text-primary);
+  border-bottom-color: var(--color-text-primary);
+}
+
+/* 主台标记：一个点就够，不用文字占位置。 */
+.wb-tab-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--color-text-primary);
+}
+
+.wb-tab-new {
+  padding: 7px 10px;
+  font-size: 14px;
+}
+
+.wb-tab-input {
+  flex-shrink: 0;
+  width: 140px;
+  margin: 4px 0;
+  padding: 4px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-input);
+  color: var(--color-text-primary);
+  font-size: 13px;
+}
+
+/* 空态：一个工作台都没有时教用户怎么起步 */
+
+.wb-empty {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 24px;
+  gap: 20px;
+  flex: 1;
+  min-height: 0;
+  padding: 48px;
   overflow-y: auto;
 }
 
-.wb-list-head {
+.wb-empty-title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 500;
+  color: var(--color-text-primary);
+}
+
+.wb-empty-lead {
+  margin: 0;
+  max-width: 620px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--color-text-secondary);
+}
+
+.wb-empty-block {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 620px;
+}
+
+.wb-empty-block-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.wb-empty-block-title {
+  font-size: 13px;
+  color: var(--color-text-primary);
+}
+
+.wb-empty-prompt {
+  margin: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-card);
+  color: var(--color-text-primary);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+
+.wb-empty-create {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.wb-list-title {
+.wb-error {
   margin: 0;
-  font-size: 15px;
-  font-weight: 500;
-  color: var(--color-text-primary);
-}
-
-.wb-list-hint {
-  margin: 0;
+  padding: 8px 16px;
   font-size: 12px;
   color: var(--color-text-secondary);
 }
@@ -112,29 +237,7 @@
   background: var(--color-bg-hover);
 }
 
-.wb-card-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 12px 16px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  background: var(--color-bg-card);
-  box-shadow: var(--shadow-card);
-  cursor: pointer;
-}
-
-.wb-card-row:hover {
-  background: var(--color-bg-card-hover);
-}
-
-.wb-card-name {
-  font-size: 14px;
-  color: var(--color-text-primary);
-}
-
-.wb-card-meta {
-  font-size: 12px;
-  color: var(--color-text-secondary);
+.wb-btn:disabled {
+  cursor: default;
+  opacity: 0.5;
 }
