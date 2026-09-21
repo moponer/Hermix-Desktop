@@ -100,7 +100,24 @@ impl HealthBreakdown {
 fn has_section(body: &str, heading: &str) -> bool {
     body.lines().any(|line| {
         let trimmed = line.trim_start();
-        trimmed.starts_with("## ") && trimmed[3..].trim().eq_ignore_ascii_case(heading)
+        if !trimmed.starts_with("## ") {
+            return false;
+        }
+        let title = trimmed[3..].trim();
+        // Exact match, or the canonical heading is used as a prefix
+        // followed by a separator — real skills write `## 实践指南：数据与
+        // 本机能力` / `## Core Concepts: Foo` and stranding those at 0.0
+        // punished the skill for adding a clarifying subtitle.
+        if title.eq_ignore_ascii_case(heading) {
+            return true;
+        }
+        let Some(rest) = title.get(heading.len()..) else {
+            return false;
+        };
+        title
+            .get(..heading.len())
+            .is_some_and(|p| p.eq_ignore_ascii_case(heading))
+            && rest.starts_with([':', '：', '(', '（', '-', '—', ' '])
     })
 }
 
@@ -133,6 +150,9 @@ const TRIGGER_PHRASES: &[&str] = &[
     "激活时",
     "以下场景",
     "在以下情况",
+    "涉及",
+    "触发词",
+    "相关任务",
 ];
 
 /// Check if the description contains a trigger phrase.
@@ -257,12 +277,15 @@ fn score_skill_md_inner(
         body,
         &[
             "When to Activate",
+            "When to Use",
             "何时激活",
             "适用场景",
             "使用场景",
             "激活时机",
             "触发条件",
             "激活条件",
+            "何时使用",
+            "适用范围",
         ],
     ) {
         1.0
@@ -281,9 +304,13 @@ fn score_skill_md_inner(
             "核心实践",
             "核心框架",
             "核心原则",
+            "核心立场",
+            "核心理念",
             "指令",
             "原则",
             "执行步骤",
+            "工作流",
+            "操作步骤",
         ],
     ) {
         1.0
@@ -302,6 +329,9 @@ fn score_skill_md_inner(
             "例子",
             "实践",
             "实战",
+            "用法",
+            "调用方式",
+            "完整示例",
         ],
     ) {
         1.0
@@ -310,21 +340,56 @@ fn score_skill_md_inner(
     };
 
     // --- 6. ## Gotchas (0.05) ---
-    b.gotchas = if has_any_section(body, &["Gotchas", "注意事项", "常见错误", "避坑", "陷阱"]) {
+    b.gotchas = if has_any_section(
+        body,
+        &[
+            "Gotchas",
+            "注意事项",
+            "常见错误",
+            "避坑",
+            "陷阱",
+            "硬性规则",
+            "硬规则",
+            "约束",
+            "禁止事项",
+        ],
+    ) {
         1.0
     } else {
         0.0
     };
 
     // --- 7. ## Integration (0.05) ---
-    b.integration = if has_any_section(body, &["Integration", "集成", "整合", "衔接"]) {
+    b.integration = if has_any_section(
+        body,
+        &[
+            "Integration",
+            "集成",
+            "整合",
+            "衔接",
+            "协作",
+            "与用户对话",
+            "与其他模块的配合",
+        ],
+    ) {
         1.0
     } else {
         0.0
     };
 
     // --- 8. ## References (0.05) ---
-    b.references = if has_any_section(body, &["References", "参考", "参考资料", "引用", "来源"]) {
+    b.references = if has_any_section(
+        body,
+        &[
+            "References",
+            "参考",
+            "参考资料",
+            "引用",
+            "来源",
+            "相关文档",
+            "延伸阅读",
+        ],
+    ) {
         1.0
     } else {
         0.0
@@ -504,6 +569,41 @@ mod tests {
             "expected 0.5 partial credit, got {}",
             b.frontmatter_description
         );
+    }
+
+    /// A canonical heading followed by a clarifying subtitle must still
+    /// score. Real skills write `## 实践指南：数据与本机能力` — stranding
+    /// that at 0.0 punished the skill for being MORE specific.
+    #[test]
+    fn heading_with_subtitle_still_scores() {
+        for title in [
+            "## 实践指南：数据与本机能力",
+            "## 核心概念：目录与骨架",
+            "## Core Concepts: Directory Layout",
+            "## Gotchas (read this first)",
+            "## References — internal",
+        ] {
+            let body = format!("{title}\n\ncontent\n");
+            let canonical = title
+                .trim_start_matches("## ")
+                .split([':', '：', '(', '—'])
+                .next()
+                .unwrap()
+                .trim()
+                .to_string();
+            assert!(
+                has_section(&body, &canonical),
+                "subtitle form must match: {title} (canonical={canonical})"
+            );
+        }
+    }
+
+    /// A longer heading that merely STARTS with the canonical words but
+    /// has no separator is a different section — must not match.
+    #[test]
+    fn heading_prefix_without_separator_does_not_match() {
+        assert!(!has_section("## 实践指南针\n", "实践指南"));
+        assert!(!has_section("## ReferencesAndNotes\n", "References"));
     }
 
     #[test]
