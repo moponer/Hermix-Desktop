@@ -17,6 +17,14 @@ export interface RouteContext {
   handleSelectSession: (id: string) => void;
   /** 只切会话，不动当前页面 —— 工作台页面用这个。 */
   selectSessionOnly: (id: string) => void;
+  /**
+   * 把会话登记进宿主的会话表，已存在的跳过。
+   *
+   * 工作台的对话不在主对话列表里（列表按归属过滤过），但对话栏复用
+   * 的是宿主那份 ChatView，它只认宿主会话表里的对象 —— 不登记就渲染
+   * 不出来。登记只补不覆盖，避免把已加载好的消息冲成空。
+   */
+  upsertSessions: (list: Session[]) => void;
   startCreateAppFlow: () => void;
   chatNode: ReactNode;
 }
@@ -41,6 +49,7 @@ export function renderRoutes(page: NavPage, ctx: RouteContext): ReactNode {
         <WorkbenchView
           chatNode={ctx.chatNode}
           onSelectSession={ctx.selectSessionOnly}
+          onRegisterSessions={ctx.upsertSessions}
         />
       );
     default:

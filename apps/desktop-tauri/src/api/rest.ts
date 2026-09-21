@@ -394,11 +394,20 @@ function toSession(s: SessionSummary): Session {
     workspace: s.workspace ?? undefined,
     model: s.model ?? undefined,
     expert_id: s.expert_id ?? undefined,
+    workbench_id: s.workbench_id ?? undefined,
   };
 }
 
-export const getSessions = async (): Promise<Session[]> => {
-  const res = await fetchJSON<{ sessions: SessionSummary[] }>("/v1/sessions");
+/**
+ * List sessions. Omitting `workbenchId` returns only ordinary chats —
+ * the backend filters `workbench_id IS NULL`, so workbench conversations
+ * never appear in the main sidebar.
+ */
+export const getSessions = async (workbenchId?: string): Promise<Session[]> => {
+  const qs = workbenchId
+    ? `?workbench_id=${encodeURIComponent(workbenchId)}`
+    : "";
+  const res = await fetchJSON<{ sessions: SessionSummary[] }>(`/v1/sessions${qs}`);
   return res.sessions.map(toSession);
 };
 
@@ -418,12 +427,17 @@ export const deleteSession = async (id: string): Promise<boolean> => {
 
 /**
  * PATCH /v1/sessions/{id}
- * Update session metadata (workspace, expert_id, model).
- * Only the fields present in `patch` are updated.
+ * Update session metadata (workspace, expert_id, model, workbench_id).
+ * Only the fields present in `patch` are updated; `null` clears a field.
  */
 export const updateSessionMetadata = async (
   id: string,
-  patch: { workspace?: string | null; expert_id?: string | null; model?: string | null },
+  patch: {
+    workspace?: string | null;
+    expert_id?: string | null;
+    model?: string | null;
+    workbench_id?: string | null;
+  },
 ): Promise<void> => {
   await fetchVoid(`/v1/sessions/${encodeURIComponent(id)}`, {
     method: "PATCH",

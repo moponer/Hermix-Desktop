@@ -8,7 +8,8 @@
 // 绑定会话，再把宿主 activeSessionId 切过去，右侧 chatNode 随之换成该
 // 会话的消息流。切换即隔离，不需要宿主另起一套会话栈。
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { createSession } from "../api/rest";
+import { createSession, getSessions, updateSessionMetadata } from "../api/rest";
+import type { Session } from "../types";
 import {
   workbenchCreate,
   workbenchEnsureSession,
@@ -22,6 +23,8 @@ import { WorkbenchEmpty } from "./WorkbenchEmpty";
 interface WorkbenchViewProps {
   chatNode: ReactNode;
   onSelectSession: (id: string) => void;
+  /** 把本工作台的会话登记给宿主，让对话栏渲染得到。 */
+  onRegisterSessions: (list: Session[]) => void;
 }
 
 /**
@@ -41,7 +44,11 @@ const pickPrimary = (list: WorkbenchManifest[]) => {
   );
 };
 
-export function WorkbenchView({ chatNode, onSelectSession }: WorkbenchViewProps) {
+export function WorkbenchView({
+  chatNode,
+  onSelectSession,
+  onRegisterSessions,
+}: WorkbenchViewProps) {
   const [items, setItems] = useState<WorkbenchManifest[]>([]);
   const [active, setActive] = useState<WorkbenchManifest | null>(null);
   const [ready, setReady] = useState(false);
@@ -59,12 +66,22 @@ export function WorkbenchView({ chatNode, onSelectSession }: WorkbenchViewProps)
    *
    * 已绑定的工作台沿用原会话 —— 每次新建会让 skill 常驻漂到新会话，
    * 而画布用的是当前 active 会话，一错位 agent 就没了工作台 skill。
+   *
+   * 会话还要盖上本工作台的归属戳（`sessions.workbench_id`）。没有这个
+   * 戳，它就是个普通会话：会混进主对话列表，用户能从主侧栏点进一段
+   * 脱离工作台上下文的历史。盖戳是「这个对话属于谁」的唯一依据。
    */
   const open = useCallback(
     async (manifest: WorkbenchManifest) => {
       try {
         const fresh = manifest.session_id ?? (await createSession(manifest.name)).id;
         const sessionId = await workbenchEnsureSession(manifest.id, fresh);
+        // 每次打开都盖一次：老工作台的会话是在有这个字段之前建的，
+        // 补戳让它们也归位。已盖过的重复写入同一个值，无副作用。
+        await updateSessionMetadata(sessionId, { workbench_id: manifest.id });
+        // 登记给宿主 —— 主对话列表按归属把它们过滤掉了，这里不补一条
+        // 对话栏就没有可渲染的会话对象。
+        onRegisterSessions(await getSessions(manifest.id));
         setActive({ ...manifest, session_id: sessionId });
         onSelectSession(sessionId);
         setError(null);
@@ -72,7 +89,7 @@ export function WorkbenchView({ chatNode, onSelectSession }: WorkbenchViewProps)
         setError(String(e));
       }
     },
-    [onSelectSession],
+    [onSelectSession, onRegisterSessions],
   );
 
   // 首次挂载落到主台 —— 空态只在「一个工作台都没有」时出现。

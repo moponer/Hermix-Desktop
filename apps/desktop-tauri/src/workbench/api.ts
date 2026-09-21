@@ -1,6 +1,10 @@
 // 工作台存储层的前端封装。
 // 工作台在宿主内运行、无需打包，因此不走 sidecar HTTP，直接走 Tauri IPC。
+//
+// 例外：会话归属（`sessions.workbench_id`）走 HTTP —— 会话表由 sidecar
+// 持有，桌面端直接开库会和它抢写锁，只能经由后端改。
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { getSessions, updateSessionMetadata } from "../api/rest";
 
 export interface WorkbenchManifest {
   id: string;
@@ -36,15 +40,30 @@ export const workbenchBindSession = (id: string, sessionId: string) =>
   invoke<void>("workbench_bind_session", { id, sessionId });
 
 /**
- * 确保会话已绑定。`sessionId` 由调用方（前端）准备 —— 会话创建走 HTTP，
- * Rust 侧拿不到。
+ * 确保会话已绑定，并把它划归本工作台的对话空间。
+ * `sessionId` 由调用方（前端）准备 —— 会话创建走 HTTP，Rust 侧拿不到。
  *
  * 绑一次就够，之后每次打开都返回同一个：反复绑定会让 skill 常驻落在
  * 最后一次的 id 上，而宿主外壳用的是当前 activeSessionId，两侧错位时
  * agent 就丢掉 skill。所以这里只绑不覆盖。
+ *
+ * 归属标记同样在这里落库（`sessions.workbench_id`）—— 只有打了标记，
+ * 主对话列表才会把它排除掉，本工作台的列表才能查到它。标记走 HTTP
+ * PATCH 而不是让桌面端直接写 sessions.db，避免和 sidecar 抢写锁。
  */
 export const workbenchEnsureSession = (id: string, sessionId: string) =>
   invoke<string>("workbench_ensure_session", { id, sessionId });
+
+/**
+ * 把会话划归某个工作台（或传 null 归还给普通对话）。
+ * 归属决定这个会话出现在哪个对话列表里，是两侧不互串的唯一依据。
+ */
+export const setSessionWorkbench = (sessionId: string, workbenchId: string | null) =>
+  updateSessionMetadata(sessionId, { workbench_id: workbenchId });
+
+/** 某个工作台自己的会话列表。不传 id 则是普通对话列表。 */
+export const listWorkbenchSessions = (workbenchId?: string) =>
+  getSessions(workbenchId);
 
 /**
  * 跑 lint 规则表。返回带「文件:行号 + 规则 ID + 修法」的文本，空串表示通过。

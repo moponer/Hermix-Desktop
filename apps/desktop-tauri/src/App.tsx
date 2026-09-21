@@ -243,6 +243,33 @@ const handlePreviewFileFromExplorer = useCallback((path: string, name: string) =
   const activeSessionIdRef = useRef(activeSessionId);
   useEffect(() => { activeSessionIdRef.current = activeSessionId; }, [activeSessionId]);
 
+  /**
+   * 进出工作台时接管主对话的落点。
+   *
+   * 工作台的对话栏复用宿主那份 ChatView，要看哪个工作台的对话就得把
+   * `activeSessionId` 指过去 —— 那是**覆盖**不是切换：离开工作台页面
+   * 回到主对话时指针还停在工作台的会话上，主对话凭空跳进别人家的历史。
+   * 进门前记住、出门时还回去，两边各留各的位置。
+   *
+   * 放在 effect 里而不是塞进 `setPage`：恢复要读 `activeSessionId` 的当前
+   * 值，而它的 ref 声明在后面，写进 setPage 会撞上 TDZ。
+   */
+  const chatSessionBeforeWorkbenchRef = useRef<string | null>(null);
+  const prevPageRef = useRef(page);
+  useEffect(() => {
+    const prev = prevPageRef.current;
+    prevPageRef.current = page;
+    if (prev !== "workbench" && page === "workbench") {
+      chatSessionBeforeWorkbenchRef.current = activeSessionIdRef.current;
+    } else if (prev === "workbench" && page !== "workbench") {
+      const back = chatSessionBeforeWorkbenchRef.current;
+      chatSessionBeforeWorkbenchRef.current = null;
+      // 只在指针还停在工作台的会话上时才收回 —— 用户中途自己点过别的
+      // 会话，那个选择更新，不该被覆盖。
+      if (back) setActiveSessionId(back);
+    }
+  }, [page, setActiveSessionId]);
+
   // 切换会话时立即把上下文用量重置为 null，避免上一个会话的后台 stream 事件或
   // 残留值污染当前会话的 context-usage 进度条。contextUsage / usageSnapshot 这两个
   // state 只在 WS 事件与 restoredCtx 处写入，没有任何切换重置；reset 后进度条在新
@@ -787,6 +814,18 @@ const handlePreviewFileFromExplorer = useCallback((path: string, name: string) =
 
   const activeSession = sessions.find((s) => s.id === activeSessionId) ?? null;
 
+  /**
+   * 主对话空间能看见的会话。`sessions` 里还会混着当前工作台的会话
+   * （工作台需要它才能渲染对话栏），但它们归工作台所有，出现在主侧栏
+   * 就等于把工作台的对话摆到普通对话旁边 —— 点进去得到一段脱离了
+   * 工作台上下文的历史，两个空间就此串味。所以列表出口一律过滤，
+   * `activeSession` 仍查全量，保证工作台的对话栏渲染得到。
+   */
+  const chatSessions = useMemo(
+    () => sessions.filter((s) => !s.workbench_id),
+    [sessions],
+  );
+
   const { rawArtifacts, artifacts, selectedArtifactId, setSelectedArtifactId, handlePathClick } = useArtifacts({
     activeSession,
     workspaceRoot,
@@ -902,6 +941,22 @@ const handlePreviewFileFromExplorer = useCallback((path: string, name: string) =
     // 若会话已有内存中的消息（如刚结束的流式对话），effect 跳过 fetch
     // 直接复用内存 state。
   }, [clearStreamError, activeSessionId, setActiveSessionId]);
+
+  /**
+   * 把会话登记进宿主会话表，已存在的跳过。
+   *
+   * 工作台的对话被主对话列表按归属过滤掉了，但对话栏复用的仍是宿主
+   * 那份 ChatView，它只认宿主会话表里的对象 —— 不登记就渲染不出东西。
+   * 只补不覆盖：已登记的会话可能已经加载好消息，覆盖会把它冲成空。
+   */
+  const upsertSessions = useCallback((incoming: Session[]) => {
+    if (incoming.length === 0) return;
+    setSessions((prev) => {
+      const known = new Set(prev.map((s) => s.id));
+      const added = incoming.filter((s) => !known.has(s.id));
+      return added.length > 0 ? [...prev, ...added] : prev;
+    });
+  }, []);
 
   const handleSelectSession = useCallback(async (id: string) => {
     selectSessionOnly(id);
@@ -3071,6 +3126,7 @@ return {
     sessions,
     handleSelectSession,
     selectSessionOnly,
+    upsertSessions,
     startCreateAppFlow,
     chatNode: chatViewNode,
   };
@@ -3081,7 +3137,7 @@ return {
       <TitleBar />
       <SessionPickerDialog
         open={searchOpen}
-        sessions={sessions}
+        sessions={chatSessions}
         onSelect={handleSelectSession}
         onClose={() => setSearchOpen(false)}
       />
@@ -3137,7 +3193,7 @@ return {
           <Sidebar
             page={page}
             onPageChange={setPage}
-            sessions={sessions}
+            sessions={chatSessions}
             activeSessionId={activeSessionId}
             streamingSessionId={streamingSessionId}
             onNewChat={handleNewChat}

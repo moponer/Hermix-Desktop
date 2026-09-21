@@ -549,6 +549,13 @@ export interface Session {
   model?: string;
   /** Selected expert ID for this session (from sessions.expert_id column). */
   expert_id?: string;
+  /**
+   * Id of the workbench that owns this session (sessions.workbench_id).
+   * Undefined for ordinary chats — those are the only ones the main
+   * sidebar lists. Workbench-bound sessions belong to that workbench's
+   * own conversation space and must never surface in the main list.
+   */
+  workbench_id?: string;
 }
 
 export interface Project {

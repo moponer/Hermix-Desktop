@@ -130,6 +130,8 @@ export interface SessionSummary {
   workspace?: string | null;
   /** The expert ID selected for this session. */
   expert_id?: string | null;
+  /** Id of the workbench owning this session. Absent/null means ordinary chat. */
+  workbench_id?: string | null;
 }
 
 export interface DashboardSession {
