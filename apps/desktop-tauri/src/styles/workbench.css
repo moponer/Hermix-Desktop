@@ -1,0 +1,140 @@
+/* 工作台宿主外壳：左侧画布渲染工作台代码，右侧对话栏由宿主渲染。
+   对话栏与折叠按钮属于宿主 chrome，工作台代码无权改动或隐藏。 */
+
+.wb-shell {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+
+.wb-canvas {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  background: var(--color-bg-primary);
+}
+
+.wb-frame {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: var(--color-bg-primary);
+}
+
+.wb-canvas-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+.wb-toggle {
+  flex-shrink: 0;
+  width: 18px;
+  border: 0;
+  border-left: 1px solid var(--color-border);
+  background: var(--color-bg-secondary);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+}
+
+.wb-toggle:hover {
+  background: var(--color-bg-hover);
+}
+
+.wb-chat {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  width: 380px;
+  min-height: 0;
+  border-left: 1px solid var(--color-border);
+  background: var(--color-bg-app);
+}
+
+/* 工作台列表面板 */
+
+.wb-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 24px;
+  overflow-y: auto;
+}
+
+.wb-list-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.wb-list-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--color-text-primary);
+}
+
+.wb-list-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.wb-input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-input);
+  color: var(--color-text-primary);
+  font-size: 13px;
+}
+
+.wb-btn {
+  padding: 6px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.wb-btn:hover {
+  background: var(--color-bg-hover);
+}
+
+.wb-card-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-card);
+  box-shadow: var(--shadow-card);
+  cursor: pointer;
+}
+
+.wb-card-row:hover {
+  background: var(--color-bg-card-hover);
+}
+
+.wb-card-name {
+  font-size: 14px;
+  color: var(--color-text-primary);
+}
+
+.wb-card-meta {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}

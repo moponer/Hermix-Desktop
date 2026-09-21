@@ -6,7 +6,7 @@ edition = "2021"
 [workspace]
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = [ "protocol-asset" ] }
 tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"

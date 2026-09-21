@@ -5,7 +5,7 @@ import {
   Boxes, MoreHorizontal, Loader2,
   // Popover icons
   Pencil, Pin, Archive, Trash2, FolderOpenDot, Copy, FolderMinus,
-  Settings, PanelLeftClose, Search,
+  Settings, PanelLeftClose, Search, LayoutDashboard,
   type LucideIcon,
 } from "lucide-react";
 import { clsx } from "clsx";
@@ -62,6 +62,7 @@ interface SidebarProps {
 const NAV_ITEMS: { icon: React.ElementType; label: string; page: NavPage }[] = [
   { icon: MessageSquare, label: "对话",   page: "chat" },
   { icon: Boxes,    label: "应用",    page: "customapps" },
+  { icon: LayoutDashboard, label: "工作台", page: "workbench" },
 ];
 
 // 已移除：工具箱整合进系统配置面板，保留旧名称便于搜索残留引用。

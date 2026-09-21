@@ -7,6 +7,7 @@ import { AutomationView } from "../components/AutomationView";
 import { AgentsView } from "../components/AgentsView";
 import { AnalyticsView } from "../components/AnalyticsView";
 import { CustomAppsView } from "../components/CustomAppsView";
+import { WorkbenchView } from "../components/WorkbenchView";
 
 /** 渲染各非 chat 页面所需的 App 级依赖。chat 页面 props 复杂，
  *  由 App 预先渲染为 `chatNode` 元素传入，保持逻辑零改写。 */
@@ -32,6 +33,13 @@ export function renderRoutes(page: NavPage, ctx: RouteContext): ReactNode {
       return <AnalyticsView />;
     case "customapps":
       return <CustomAppsView onStartCreateApp={ctx.startCreateAppFlow} />;
+    case "workbench":
+      return (
+        <WorkbenchView
+          chatNode={ctx.chatNode}
+          onSelectSession={ctx.handleSelectSession}
+        />
+      );
     default:
       return null;
   }

@@ -598,6 +598,19 @@ pub fn run() {
             commands_workbench::workbench_files,
             commands_workbench::workbench_entry_path,
             commands_workbench::workbench_bind_session,
+            commands_workbench::workbench_ensure_session,
+            commands_workbench::workbench_lint,
+            commands_workbench::workbench_set_deps,
+            commands_workbench::workbench_vendor_index,
+            commands_workbench::workbench_vendor_dir,
+            commands_workbench::workbench_module_index,
+            commands_workbench::workbench_db_query,
+            commands_workbench::workbench_db_exec,
+            commands_workbench::workbench_fs_read,
+            commands_workbench::workbench_fs_write,
+            commands_workbench::workbench_fs_list,
+            commands_workbench::workbench_undo,
+            commands_workbench::workbench_history,
         ])
         .run(tauri::generate_context!())
         .expect("error while running hermix-desktop");
