@@ -1003,6 +1003,63 @@ mod delete_session_wal_regression_tests {
             "empty db must report 'no such table' so callers can degrade"
         );
     }
+
+    /// 会话列表必须按归属切分：默认只给普通对话，传了 workbench_id 只给
+    /// 那一个工作台的。改回无条件 `SELECT ... ORDER BY` 就等于把工作台的
+    /// 对话摆回主侧栏 —— 用户点进去拿到一段脱离工作台上下文的历史，两个
+    /// 对话空间重新串成一条。这里钉住 SQL 的形状，因为过滤发生在 SQL 里
+    /// 而不是 Rust 里，类型系统管不到。
+    #[test]
+    fn session_list_is_scoped_by_workbench_ownership() {
+        // 钉住的是常量的**值**，不是「源码里出现过这个字符串」——后者是
+        // 自指：字面量就写在常量定义里，怎么改都成立（试过把值换成
+        // `1 = 1`，那条断言照样绿）。值只能在这里硬编码期望。
+        assert_eq!(
+            routes::DEFAULT_SESSION_SCOPE_SQL,
+            "workbench_id IS NULL",
+            "default scope must exclude workbench-bound sessions, \
+             otherwise their conversations leak into the main sidebar"
+        );
+        assert_eq!(
+            routes::WORKBENCH_SESSION_SCOPE_SQL,
+            "workbench_id = ?1",
+            "workbench scope must be a bound parameter, not string interpolation"
+        );
+        // 再确认 SQL 真的引用了这两个常量 —— 不然有人可以绕开它们
+        // 直接把条件写死在语句里，上面两条就形同虚设。
+        let src = include_str!("routes.rs");
+        let default_use = concat!("{DEFAULT", "_SESSION_SCOPE_SQL}");
+        let workbench_use = concat!("{WORKBENCH", "_SESSION_SCOPE_SQL}");
+        assert!(
+            src.contains(default_use),
+            "list_sessions stopped using DEFAULT_SESSION_SCOPE_SQL"
+        );
+        assert!(
+            src.contains(workbench_use),
+            "list_sessions stopped using WORKBENCH_SESSION_SCOPE_SQL"
+        );
+    }
+
+    /// 归属必须是可写的，而且只能经由 PATCH 写 —— 桌面端直接开 sessions.db
+    /// 会和 sidecar 抢写锁。这两条一起保证「会话归谁」有唯一入口。
+    #[test]
+    fn workbench_id_is_writable_through_patch_only() {
+        let routes_src = include_str!("routes.rs");
+        assert!(
+            routes_src.contains("UPDATE sessions SET workbench_id = ?1"),
+            "PATCH /v1/sessions can no longer set workbench_id — \
+             sessions cannot be assigned to a workbench"
+        );
+        let plugin_src = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../apps/desktop-tauri/src-tauri/src/commands_workbench.rs"
+        ));
+        assert!(
+            !plugin_src.contains("sessions.db"),
+            "desktop code must not open sessions.db directly — \
+             it would race the sidecar's own writes; go through PATCH"
+        );
+    }
 }
 
 // ===========================================================================

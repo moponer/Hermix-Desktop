@@ -220,6 +220,10 @@ pub struct SessionSummary {
     /// The expert ID selected for this session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expert_id: Option<String>,
+    /// Id of the workbench this session belongs to. `None` for an ordinary
+    /// chat — those are the only ones the main sidebar lists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workbench_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

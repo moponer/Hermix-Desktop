@@ -170,7 +170,26 @@ pub(crate) async fn client_telemetry_event(
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
-pub(crate) async fn list_sessions(State(state): State<HttpServerState>) -> Json<ListSessionsResponse> {
+/// SQL 过滤片段：默认范围（普通对话）与按工作台范围。
+/// 抽成常量是为了让回归测试引用同一份字面量 —— 过滤条件写在 SQL 里，
+/// 类型系统管不到，只能靠断言钉住，而断言若另抄一份字符串就会漂移。
+pub(crate) const DEFAULT_SESSION_SCOPE_SQL: &str = "workbench_id IS NULL";
+pub(crate) const WORKBENCH_SESSION_SCOPE_SQL: &str = "workbench_id = ?1";
+
+/// `?workbench_id=<id>` scopes the list to one workbench's sessions.
+/// Omitting it returns **only ordinary chats** (`workbench_id IS NULL`) —
+/// workbench conversations live in their own space and must not show up in
+/// the main sidebar, otherwise clicking one jumps out of the workbench
+/// context and the two histories read as a single thread.
+#[derive(Debug, Deserialize)]
+pub(crate) struct ListSessionsQuery {
+    workbench_id: Option<String>,
+}
+
+pub(crate) async fn list_sessions(
+    State(state): State<HttpServerState>,
+    Query(q): Query<ListSessionsQuery>,
+) -> Json<ListSessionsResponse> {
     let db_path = hermix_config::paths::data_dir_in(&state.hermix_home).join("sessions.db");
     let conn = match open_sessions_db_for_read(&db_path) {
         Ok(conn) => conn,
@@ -181,10 +200,17 @@ pub(crate) async fn list_sessions(State(state): State<HttpServerState>) -> Json<
             });
         }
     };
-    let mut stmt = match conn.prepare(
-        "SELECT id, title, created_at, updated_at, message_count, model, workspace, expert_id \
-         FROM sessions ORDER BY updated_at DESC",
-    ) {
+    // Bind the scope into the SQL rather than filtering in Rust: a stray
+    // row leaking into the main list is exactly the bug being fixed, and
+    // "load everything then drop" would keep the window open for it.
+    let sql = "SELECT id, title, created_at, updated_at, message_count, model, workspace, \
+               expert_id, workbench_id FROM sessions WHERE ";
+    let scoped = q.workbench_id.clone();
+    let stmt = match &scoped {
+        Some(_) => conn.prepare(&format!("{sql}{WORKBENCH_SESSION_SCOPE_SQL} ORDER BY updated_at DESC")),
+        None => conn.prepare(&format!("{sql}{DEFAULT_SESSION_SCOPE_SQL} ORDER BY updated_at DESC")),
+    };
+    let mut stmt = match stmt {
         Ok(stmt) => stmt,
         Err(_) => {
             return Json(ListSessionsResponse {
@@ -193,23 +219,31 @@ pub(crate) async fn list_sessions(State(state): State<HttpServerState>) -> Json<
             });
         }
     };
-    let sessions: Vec<SessionSummary> = stmt
-        .query_map([], |row| {
-            Ok(SessionSummary {
-                id: row.get::<_, String>(0)?,
-                title: row
-                    .get::<_, Option<String>>(1)?
-                    .unwrap_or_else(|| "New chat".to_string()),
-                created_at: row.get::<_, String>(2)?,
-                updated_at: row.get::<_, String>(3)?,
-                message_count: row.get::<_, i64>(4).unwrap_or(0) as usize,
-                model: row.get::<_, Option<String>>(5).ok().flatten(),
-                workspace: row.get::<_, Option<String>>(6).ok().flatten(),
-                expert_id: row.get::<_, Option<String>>(7).ok().flatten(),
-            })
+    let bind = |row: &rusqlite::Row| {
+        Ok(SessionSummary {
+            id: row.get::<_, String>(0)?,
+            title: row
+                .get::<_, Option<String>>(1)?
+                .unwrap_or_else(|| "New chat".to_string()),
+            created_at: row.get::<_, String>(2)?,
+            updated_at: row.get::<_, String>(3)?,
+            message_count: row.get::<_, i64>(4).unwrap_or(0) as usize,
+            model: row.get::<_, Option<String>>(5).ok().flatten(),
+            workspace: row.get::<_, Option<String>>(6).ok().flatten(),
+            expert_id: row.get::<_, Option<String>>(7).ok().flatten(),
+            workbench_id: row.get::<_, Option<String>>(8).ok().flatten(),
         })
-        .map(|rows| rows.filter_map(Result::ok).collect())
-        .unwrap_or_default();
+    };
+    let sessions: Vec<SessionSummary> = match &scoped {
+        Some(id) => stmt
+            .query_map(rusqlite::params![id.clone()], bind)
+            .map(|rows| rows.filter_map(Result::ok).collect())
+            .unwrap_or_default(),
+        None => stmt
+            .query_map([], bind)
+            .map(|rows| rows.filter_map(Result::ok).collect())
+            .unwrap_or_default(),
+    };
     Json(ListSessionsResponse {
         total: sessions.len(),
         sessions,
@@ -260,6 +294,10 @@ pub(crate) async fn create_session(
         model: state.config.model.as_deref().map(|s| s.to_string()),
         workspace: req.project.clone(),
         expert_id: None,
+        // A freshly created session is always an ordinary chat. Binding it
+        // to a workbench happens afterwards via PATCH — the caller knows
+        // the workbench id, this endpoint does not.
+        workbench_id: None,
     }))
 }
 
@@ -330,6 +368,20 @@ pub(crate) async fn patch_session(
                 .map_err(|e| HttpError { status: StatusCode::INTERNAL_SERVER_ERROR, message: e.to_string() })?;
         } else if let Some(s) = v.as_str() {
             conn.execute("UPDATE sessions SET expert_id = ?1 WHERE id = ?2", rusqlite::params![s, sid.clone()])
+                .map_err(|e| HttpError { status: StatusCode::INTERNAL_SERVER_ERROR, message: e.to_string() })?;
+        }
+    }
+    // `workbench_id` moves a session between the ordinary chat space and a
+    // workbench's own space. `null` un-marks it (returns it to the main
+    // list). This is the only writer of that column — the desktop side
+    // never opens sessions.db directly, which would race the sidecar's
+    // own writes.
+    if let Some(v) = req.get("workbench_id") {
+        if v.is_null() {
+            conn.execute("UPDATE sessions SET workbench_id = NULL WHERE id = ?1", [sid.clone()])
+                .map_err(|e| HttpError { status: StatusCode::INTERNAL_SERVER_ERROR, message: e.to_string() })?;
+        } else if let Some(s) = v.as_str() {
+            conn.execute("UPDATE sessions SET workbench_id = ?1 WHERE id = ?2", rusqlite::params![s, sid.clone()])
                 .map_err(|e| HttpError { status: StatusCode::INTERNAL_SERVER_ERROR, message: e.to_string() })?;
         }
     }

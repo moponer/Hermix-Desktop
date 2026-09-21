@@ -167,6 +167,21 @@ impl SessionPersistence {
             }
         }
 
+        // Migration: add `workbench_id` so a session knows which workbench
+        // (if any) it belongs to. NULL is an ordinary chat; non-NULL marks a
+        // workbench-bound session, letting the main sidebar exclude it and
+        // the workbench sidebar scope to its own id. Without this both
+        // conversation spaces draw from one flat pool and leak into each
+        // other's lists.
+        if let Err(e) = conn.execute("ALTER TABLE sessions ADD COLUMN workbench_id TEXT", []) {
+            let msg = e.to_string();
+            if !msg.contains("duplicate column") && !msg.contains("no such table") {
+                return Err(AgentError::Io(format!(
+                    "Failed to migrate sessions.workbench_id: {e}"
+                )));
+            }
+        }
+
         // Migration: execution_timeline (tool call events) and
         // reasoning_content (LLM think blocks). Without these columns,
         // tool cards show as stale "运行中" on reload and thinking
