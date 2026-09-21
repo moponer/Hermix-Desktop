@@ -473,6 +473,21 @@ export function createMessageHandler(
         const content =
           typeof evtContent === "string" ? evtContent : "";
         ctx.setStreamingStatus(content || null);
+        // `task_in_flight` means the backend declined this send because the
+        // session already has a running agent task. That is a terminal answer
+        // to THIS send: nothing else will arrive on it. Without settling the
+        // send promise never resolves and the "正在思考…" bubble hangs forever
+        // next to a task that is emitting elsewhere. Surface the message as a
+        // soft notice instead of a red error (the task itself is healthy).
+        if (content.includes('"task_in_flight"')) {
+          ctx.settle(
+            "",
+            undefined,
+            "task_in_flight",
+            "completed",
+          );
+          return;
+        }
         return;
       }
 
@@ -882,6 +897,19 @@ export function createMessageHandler(
         const text = (typeof evtContent === "string" && evtContent.length > 0)
           ? evtContent
           : ctx.fullText;
+        // A `deduped` / `task_in_flight` Done carries no content by design —
+        // it is a protocol-level "this send was coalesced, the real answer
+        // is elsewhere" marker. Settling with an empty string renders as
+        // "the bubble vanished and no reply appeared", which reads as a
+        // broken app. Give the user an explicit, honest line instead.
+        const resolvedText =
+          text.length > 0
+            ? text
+            : reason === "deduped"
+              ? "上一条相同的消息刚刚已经发送过，无需重复发送。"
+              : reason === "task_in_flight"
+                ? "此会话已有正在运行的任务，你的新消息没有触发新一轮处理。请等待当前任务完成，或点击「停止」后再发送。"
+                : text;
         const isWatchdogOrTimeout =
           reason === "turn_transition_stall" ||
           reason === "no_first_chunk" ||
@@ -890,7 +918,7 @@ export function createMessageHandler(
           ? "timeout"
           : "completed";
         ctx.settle(
-          text,
+          resolvedText,
           undefined,
           reason,
           phase,
