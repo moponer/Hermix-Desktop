@@ -22,6 +22,8 @@ pub mod text_utils;
 pub mod plugin_abi;
 pub mod runtime;
 pub mod permission_profile;
+// 内核接缝（C3）：内核只认这些 trait，业务只实现它们
+pub mod seams;
 
 #[cfg(test)]
 pub mod test_generators;
@@ -69,6 +71,16 @@ pub use tool_call_parser::{
 
 // Re-export the streaming tool-call XML sanitizer
 pub use tool_call_sanitizer::ToolCallSanitizer;
+
+// Re-export the kernel seams (C3)
+pub use seams::{
+    AttachmentKind, DirEntry, Envelope, ExecOutput, ExecWorld, Fs, FsError, Op, Sandbox, Shell,
+    ShellError, ShellErrorKind, ToolAttachment, ToolOutput, Transport, TransportError, Verdict,
+};
+pub use seams::local::{
+    FixedExecWorld, InMemoryFs, LocalExecWorld, LocalFs, LocalSandbox, LocalShell, NoopTransport,
+    NullShell,
+};
 
 // Re-export ACUI directive types
 pub use acui::{AcuiDirective, AcuiHide, AcuiPosition, AcuiShow, AcuiState, AcuiUpdate};

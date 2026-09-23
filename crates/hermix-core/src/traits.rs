@@ -7,6 +7,7 @@ use serde_json::Value;
 use tokio::sync::Notify;
 
 use crate::errors::{AgentError, GatewayError, ToolError};
+use crate::seams::ToolOutput;
 use crate::tool_schema::ToolSchema;
 use crate::types::{CommandOutput, LlmResponse, Message, Skill, SkillMeta, StreamChunk};
 use crate::ApprovalOutcome;
@@ -49,10 +50,19 @@ pub trait LlmProvider: Send + Sync {
 #[async_trait]
 pub trait ToolHandler: Send + Sync {
     /// Execute the tool with the given parameters.
+    ///
+    /// 遗留的字符串返回值路径。新工具应直接实现 [`execute_structured`]；
+    /// 未迁移的工具通过默认实现自动获得结构化输出，因此这里暂不删除。
     async fn execute(&self, params: Value) -> Result<String, ToolError>;
 
     /// Return the schema describing this tool's parameters.
     fn schema(&self) -> ToolSchema;
+
+    /// 结构化返回值：文本与二进制产物分开，避免靠字符串猜内容类型。
+    /// 内核与调度路径一律调这个方法，不调 `execute`。
+    async fn execute_structured(&self, params: Value) -> Result<ToolOutput, ToolError> {
+        Ok(ToolOutput::text(self.execute(params).await?))
+    }
 }
 
 // ---------------------------------------------------------------------------
