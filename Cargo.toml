@@ -20,6 +20,7 @@ exclude = []
 members = [
     "crates/hermix-store",
     "crates/hermix-session",
+    "crates/hermix-context",
     "crates/hermix-transport",
     "crates/hermix-core",
     "crates/hermix-agent",
@@ -83,6 +84,7 @@ expect_used = "warn"
 # Internal crates
 hermix-store = { path = "crates/hermix-store" }
 hermix-session = { path = "crates/hermix-session" }
+hermix-context = { path = "crates/hermix-context" }
 hermix-core = { path = "crates/hermix-core" }
 hermix-transport = { path = "crates/hermix-transport" }
 hermix-agent = { path = "crates/hermix-agent" }
