@@ -38,6 +38,10 @@ use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
+pub mod sqlite_sink;
+
+pub use sqlite_sink::SqliteSink;
+
 /// One entry in the session's append-only log.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Entry {
@@ -183,8 +187,17 @@ impl Draft {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
 
-        // Assign sequence numbers only after the durable write — the
-        // entries are not part of the session yet.
+        // Sequence numbers are assigned *before* the durable write so
+        // the sink receives complete entries (a sink that persists
+        // them needs a real seq, not the placeholder 0). `next_seq` is
+        // only advanced once the write has succeeded, so a rejected
+        // commit leaves the session — including its sequence counter —
+        // exactly as it was.
+        let start = inner.next_seq;
+        for (i, entry) in self.staged.iter_mut().enumerate() {
+            entry.seq = start + i as u64;
+        }
+
         if let Err(e) = persist(&self.staged) {
             tracing::warn!(error = %e, "session: commit rejected by persistence sink");
             inner.line = LineState::Free;
@@ -192,9 +205,8 @@ impl Draft {
         }
 
         let mut committed = Vec::with_capacity(self.staged.len());
-        for mut entry in self.staged.drain(..) {
-            entry.seq = inner.next_seq;
-            inner.next_seq += 1;
+        for entry in self.staged.drain(..) {
+            inner.next_seq = entry.seq + 1;
             committed.push(entry.clone());
             inner.entries.push(entry);
         }
