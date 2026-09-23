@@ -121,11 +121,16 @@ export function Sidebar({
   // Group sessions by their bound workspace.
   // Source of truth: session.workspace (backend DB), not localStorage.
   // localStorage can be cleared or out of sync after app restart.
+  //
+  // 工作台会话不进入主侧栏：它只在「工作台」页面内的子侧栏渲染，
+  // 主对话列表按归属过滤掉。memory: 侧栏/搜索框收 chatSessions（过滤 workbench_id）。
   const { sessionsByWs, ungrouped: ungroupedSessions, orphanPaths } = useMemo(() => {
     const byWs: Record<string, Session[]> = {};
     const rest: Session[] = [];
     const orphans = new Set<string>();
     for (const s of sessions) {
+      // 工作台归属：会话绑了 workbench_id 就只在该工作台内可见。
+      if (s.workbench_id) continue;
       let wsPath: string | null = s.workspace ?? null;
       if (!wsPath) {
         try { wsPath = storage.getItem(sessionKey(s.id, "workspace")); } catch {}
