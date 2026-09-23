@@ -11,10 +11,12 @@ import {
   Image as ImageIcon,
   PenLine,
   X,
+  Activity,
 } from "lucide-react";
 import { ModelTab, CustomProvidersTab } from "./settings/ModelSettingsTab";
 import { BackendTab } from "./settings/BackendSettingsTab";
 import { AdvancedTab } from "./settings/AdvancedSettingsTab";
+import { DiagnosticsTab } from "./settings/DiagnosticsTab";
 import { PluginsTab, SkillsTab, ConnectorsTab, ToolsetsTab } from "./config/ToolTabs";
 import { ToggleSwitch } from "./ToggleSwitch";
 import { storage, STORAGE_KEYS } from "../utils/storageCompat";
@@ -26,7 +28,7 @@ interface SystemConfigPanelProps {
   initialCategory?: ConfigCategory;
 }
 
-export type ConfigCategory = "model" | "tools" | "backend" | "advanced";
+export type ConfigCategory = "model" | "tools" | "backend" | "advanced" | "diagnostics";
 type CategoryId = ConfigCategory;
 type ToolTabId = "plugins" | "skills" | "connectors" | "toolsets";
 type ModelTabId = "model" | "image" | "custom";
@@ -36,6 +38,7 @@ const CATEGORIES: { id: CategoryId; label: string; hint: string; icon: React.Ele
   { id: "tools", label: "工具", hint: "插件、技能、连接器与工具集", icon: Boxes },
   { id: "backend", label: "后端", hint: "本地后端服务与健康", icon: Server },
   { id: "advanced", label: "高级", hint: "高级选项与实验功能", icon: SlidersHorizontal },
+  { id: "diagnostics", label: "诊断", hint: "查看后端日志与排错", icon: Activity },
 ];
 
 const TOOL_TABS: { id: ToolTabId; label: string; icon: React.ElementType }[] = [
@@ -183,6 +186,7 @@ export function SystemConfigPanel({ onClose, initialCategory }: SystemConfigPane
               )}
               {cat === "backend" && <Padded><BackendTab /></Padded>}
               {cat === "advanced" && <Padded><AdvancedTab /></Padded>}
+              {cat === "diagnostics" && <Padded wide><DiagnosticsTab /></Padded>}
             </div>
           </div>
         </div>
@@ -192,10 +196,10 @@ export function SystemConfigPanel({ onClose, initialCategory }: SystemConfigPane
   );
 }
 
-function Padded({ children }: { children: React.ReactNode }) {
+function Padded({ children, wide }: { children: React.ReactNode; wide?: boolean }) {
   return (
     <div className="px-6 py-5 min-h-0">
-      <div className="max-w-2xl mx-auto">{children}</div>
+      <div className={wide ? "max-w-5xl mx-auto" : "max-w-2xl mx-auto"}>{children}</div>
     </div>
   );
 }

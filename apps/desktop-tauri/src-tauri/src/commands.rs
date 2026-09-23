@@ -153,6 +153,170 @@ pub fn restart_app(app: tauri::AppHandle) {
     app.restart();
 }
 
+// ── Diagnostics / log surface (P0-7 / STABILITY-PLAN §3.1) ──────────
+//
+// The packaged Tauri app's stderr is dropped by `windows_subsystem =
+// "windows"`, so end-user reports of "the agent stopped responding" used
+// to be uninvestigatable. The Rust sidecar now writes a rolling log
+// file to `<hermix_home>/logs/`, and these commands let the frontend
+// tail that file, open the directory in Explorer/Finder, and export
+// a snapshot for support tickets.
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogFileInfo {
+    /// Absolute directory containing the rolling log files.
+    pub dir: String,
+    /// All rotated log files in the directory, newest first.
+    pub files: Vec<LogFileEntry>,
+    /// Combined byte size of all listed files (sanity check for the
+    /// diagnostics panel — disk-pressure indicator).
+    pub total_bytes: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogFileEntry {
+    pub name: String,
+    pub path: String,
+    pub size_bytes: u64,
+    /// Last-modification unix seconds; used to sort "newest first".
+    pub modified_secs: i64,
+}
+
+/// Path to the canonical log directory. Mirrors the default in
+/// `hermix-telemetry::init_telemetry_from_env` (which writes
+/// `<hermix_home>/logs/server.<date>.log`). Kept in sync via the same
+/// `hermix_home()` rule; we don't import hermix-config (desktop crate
+/// is a standalone workspace) so we recompute the same way.
+fn log_dir() -> PathBuf {
+    resolve_data_dir().join("logs")
+}
+
+/// Read the log directory and return metadata for every file in it.
+/// Returns an empty list (not an error) when the directory does not
+/// exist yet — first-launch users should not see "command failed".
+#[tauri::command]
+pub fn list_backend_log_files() -> Result<LogFileInfo, String> {
+    let dir = log_dir();
+    let mut files: Vec<LogFileEntry> = Vec::new();
+    let mut total_bytes: u64 = 0;
+    if dir.is_dir() {
+        let entries = std::fs::read_dir(&dir).map_err(|e| e.to_string())?;
+        for e in entries.flatten() {
+            let p = e.path();
+            if !p.is_file() {
+                continue;
+            }
+            let meta = match e.metadata() {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+            let size = meta.len();
+            total_bytes = total_bytes.saturating_add(size);
+            let modified_secs = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            files.push(LogFileEntry {
+                name: p
+                    .file_name()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+                path: p.to_string_lossy().into_owned(),
+                size_bytes: size,
+                modified_secs,
+            });
+        }
+        files.sort_by(|a, b| b.modified_secs.cmp(&a.modified_secs));
+    }
+    Ok(LogFileInfo {
+        dir: dir.to_string_lossy().into_owned(),
+        files,
+        total_bytes,
+    })
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackendLogTail {
+    pub path: String,
+    pub file_name: String,
+    pub total_lines: u64,
+    /// Last `tail_lines` lines (or fewer when the file is shorter).
+    /// Newest-line-last ordering — matches `tail -n` for human reading.
+    pub lines: Vec<String>,
+}
+
+/// Return the last `tail_lines` of the most recently modified log file.
+/// Falls back to the legacy single file `server.log` when present.
+#[tauri::command]
+pub fn read_backend_log_tail(tail_lines: u64) -> Result<BackendLogTail, String> {
+    let dir = log_dir();
+    if !dir.is_dir() {
+        return Err(format!(
+            "日志目录不存在：{}（首次启动尚未生成日志）",
+            dir.display()
+        ));
+    }
+    let mut newest: Option<PathBuf> = None;
+    let mut newest_secs: i64 = 0;
+    for e in std::fs::read_dir(&dir).map_err(|e| e.to_string())?.flatten() {
+        let p = e.path();
+        if !p.is_file() {
+            continue;
+        }
+        let secs = e
+            .metadata()
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        if secs >= newest_secs {
+            newest_secs = secs;
+            newest = Some(p);
+        }
+    }
+    let path = match newest {
+        Some(p) => p,
+        None => return Err(format!("日志目录为空：{}", dir.display())),
+    };
+    let contents = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    // Cheap newline split; log files here are MB-scale at worst.
+    let all_lines: Vec<&str> = contents.split('\n').collect();
+    let total_lines = all_lines.len() as u64;
+    let wanted = tail_lines.max(1) as usize;
+    let start = all_lines.len().saturating_sub(wanted);
+    let lines: Vec<String> = all_lines[start..]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    Ok(BackendLogTail {
+        path: path.to_string_lossy().into_owned(),
+        file_name: path
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        total_lines,
+        lines,
+    })
+}
+
+/// Open the log directory in the OS file explorer.
+#[tauri::command]
+pub fn open_log_directory() -> Result<String, String> {
+    let dir = log_dir();
+    if !dir.exists() {
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    }
+    let p = dir.to_string_lossy().into_owned();
+    open::that(&p).map_err(|e| e.to_string())?;
+    Ok(p)
+}
+
 #[tauri::command]
 pub async fn get_server_status(state: tauri::State<'_, AppState>) -> Result<ServerStatus, String> {
     // stdio transport — no TCP port. Readiness is "child alive AND bridge

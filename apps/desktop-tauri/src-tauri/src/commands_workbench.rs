@@ -7,10 +7,10 @@
 use tauri::Emitter;
 
 use hermix_plugin::{
-    create_workbench, db_exec, db_query, format_module_index, format_violations, fs_list, fs_read,
-    fs_write, lint_workbench, list_code_files, list_workbenches, module_index, read_code_file,
-    read_manifest, set_deps, set_primary, undo_history, undo_last, vendor_index, vendor_dir,
-    workbench_dir, write_code_file, write_manifest,
+    create_workbench, db_exec, db_query, delete_workbench, format_module_index, format_violations,
+    fs_list, fs_read, fs_write, lint_workbench, list_code_files, list_workbenches, module_index,
+    read_code_file, read_manifest, set_deps, set_primary, undo_history, undo_last, vendor_index,
+    vendor_dir, workbench_dir, write_code_file, write_manifest,
 };
 
 /// 新建一个工作台：预生成骨架目录并返回 manifest。
@@ -31,6 +31,14 @@ pub async fn workbench_list() -> Result<serde_json::Value, String> {
 #[tauri::command]
 pub async fn workbench_set_primary(id: String) -> Result<(), String> {
     set_primary(&id)
+}
+
+/// 软删工作台：目录移入 `workbenches/_trash/`，可找回。
+/// 会话归属戳的清理由前端在调用本命令前经 HTTP PATCH 完成 ——
+/// 会话库归 sidecar 独占写，这里不碰。
+#[tauri::command]
+pub async fn workbench_delete(id: String) -> Result<String, String> {
+    delete_workbench(&id).map(|p| p.display().to_string())
 }
 
 /// 读取代码层某个文件。

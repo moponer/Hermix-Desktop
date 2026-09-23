@@ -547,6 +547,34 @@ impl CronScheduler {
         Ok(())
     }
 
+    /// Remove every job bound to a workbench (`CronJob.workbench_id`).
+    /// Called when a workbench is deleted so its scheduled tasks don't
+    /// outlive it (WORKBENCH_CHAT_REDESIGN_PLAN 方案 D.4 对抗性审查).
+    /// Idempotent: a workbench with no jobs returns an empty Vec.
+    pub async fn remove_jobs_for_workbench(&self, workbench_id: &str) -> Result<Vec<String>, CronError> {
+        let ids: Vec<String> = {
+            let guard = self.jobs.lock().await;
+            guard
+                .values()
+                .filter(|j| j.workbench_id.as_deref() == Some(workbench_id))
+                .map(|j| j.id.clone())
+                .collect()
+        };
+        for id in &ids {
+            // remove_job errors only on JobNotFound — impossible here since
+            // we just listed them under the lock; ignore defensively anyway.
+            let _ = self.remove_job(id).await;
+        }
+        if !ids.is_empty() {
+            tracing::info!(
+                "Removed {} cron job(s) bound to workbench '{}'",
+                ids.len(),
+                workbench_id
+            );
+        }
+        Ok(ids)
+    }
+
     /// Manually trigger a cron job to run immediately.
     /// The job is executed regardless of its schedule or status (except
     /// Completed jobs). The run count is not incremented for manual triggers.
@@ -633,5 +661,33 @@ mod tests {
         let loaded = sched.get_job(&id).await.expect("get");
         assert_eq!(loaded.prompt, "hello");
         assert_eq!(sched.list_jobs().await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_remove_jobs_for_workbench_cascades_and_is_idempotent() {
+        let sched = make_test_scheduler();
+
+        // 两个任务绑定同一工作台，一个普通任务不绑定。
+        let mut wb_job_a = CronJob::new("0 8 * * *", "daily summary");
+        wb_job_a.workbench_id = Some("wb-x".into());
+        let mut wb_job_b = CronJob::new("0 9 * * *", "weekly report");
+        wb_job_b.workbench_id = Some("wb-x".into());
+        let plain_job = CronJob::new("0 10 * * *", "not workbench");
+
+        sched.create_job(wb_job_a).await.expect("create a");
+        sched.create_job(wb_job_b).await.expect("create b");
+        sched.create_job(plain_job).await.expect("create plain");
+
+        let removed = sched.remove_jobs_for_workbench("wb-x").await.expect("cascade");
+        assert_eq!(removed.len(), 2, "both workbench-bound jobs removed");
+
+        // 绑定工作台的任务没了，普通任务留下。
+        let remaining = sched.list_jobs().await;
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].prompt, "not workbench");
+
+        // 幂等：再删一次返回空，不报错。
+        let again = sched.remove_jobs_for_workbench("wb-x").await.expect("idempotent");
+        assert!(again.is_empty());
     }
 }

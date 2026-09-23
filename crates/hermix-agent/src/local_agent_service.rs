@@ -1031,6 +1031,14 @@ impl LocalAgentService {
         if let Some(md) = overrides.memory_dir.as_ref() {
             config.memory_dir = Some(md.clone());
         }
+        // Workbench binding: gates the `workbench.context` direction and
+        // pins the `workbench` skill every turn (MODULE_DESIGN §13 layer 3 —
+        // the session exists only to serve this workbench, so the skill is
+        // resident with zero intent detection). Ordinary chats: both None.
+        config.workbench_id = overrides.workbench_id.clone();
+        if overrides.workbench_id.is_some() && !config.ephemeral_skills.iter().any(|s| s == "workbench") {
+            config.ephemeral_skills.push("workbench".to_string());
+        }
         let allowed = overrides
             .tools
             .as_ref()
@@ -3330,6 +3338,7 @@ mod override_tests {
             on_event: None,
             pre_approval_checker: None,
             skills: None,
+            workbench_id: None,
             memory_dir: None,
             on_prefetch_intent: None,
             shutdown: None,
@@ -3362,6 +3371,7 @@ mod override_tests {
             on_event: None,
             pre_approval_checker: None,
             skills: None,
+            workbench_id: None,
             memory_dir: None,
             on_prefetch_intent: None,
             shutdown: None,

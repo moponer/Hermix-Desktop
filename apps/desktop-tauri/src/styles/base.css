@@ -67,6 +67,13 @@ code ::selection,
   outline-offset: 2px;
   border-radius: var(--radius-sm, 4px);
 }
+/* 文本输入类退出全局 2px outline —— 输入框自身已有边框，粗 outline 叠上去
+   显得笨重。焦点反馈改由 1px 边框着色承担（见 components.css .input:focus）。 */
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: none;
+}
 
 /* ── Reduced motion ─────────────────────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {

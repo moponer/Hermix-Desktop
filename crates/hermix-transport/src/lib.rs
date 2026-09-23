@@ -300,6 +300,11 @@ pub struct SendMessageRequest {
     /// `skills_system_prompt` on top of any server-enabled skills.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skills: Option<Vec<String>>,
+    /// Id of the workbench this session belongs to. `Some` gates the
+    /// `workbench.context` direction and pins the `workbench` skill;
+    /// ordinary chats are `None` and never see either (anti-leak).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workbench_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -909,6 +914,13 @@ pub enum WsClientMessage {
     /// `"deny"`, `"yes"`, `"no"`, `"true"`, `"false"` — all routed
     /// through [`ApprovalChoice::from_decision_str`] (case-insensitive,
     /// unknown values fail-closed to Deny).
+    ///
+    /// Wire tag is `approval_responses_batch` — the client mirrors the
+    /// outbound `request_approvals_batch` envelope (approvals/batch +
+    /// request→response symmetry), NOT the snake_case of the variant
+    /// name (`approval_batch_response`). The `alias` keeps the
+    /// snake_case form accepted so old frontends/clients still resolve.
+    #[serde(rename = "approval_responses_batch", alias = "approval_batch_response")]
     ApprovalBatchResponse {
         batch_id: String,
         decision: String,

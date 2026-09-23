@@ -245,6 +245,9 @@ export function ChatView({
 }: ChatViewProps) {
   const stream = useStreamChatContext();
   const isStreaming = stream.streamingSessionId === session?.id;
+  // 工作台会话（workbench_id 已盖戳）→ 右栏差异化文案：欢迎页、placeholder
+  // 都说"这台工作台"的事，而不是复读主对话的通用问候（方案 A）。
+  const isWorkbenchChat = !!session?.workbench_id;
   const [input, setInput] = useState("");
   const { apps: customApps } = useCustomApps();
   const [sending, setSending] = useState(false);
@@ -820,20 +823,32 @@ export function ChatView({
         {/* 工具行必须贴顶 —— 居中只作用于下面的内容区，否则行被 justify-center 拉下去 */}
         <div className="flex-1 min-h-0 flex flex-col items-center justify-center">
         <div className="w-full max-w-3xl flex flex-col items-center py-12">
-          <div className="relative mb-4">
-            <img
-              src="/mascot-256.png"
-              alt="Hermix吉祥物"
-              className="w-[140px] h-[140px] object-contain select-none"
-              draggable={false}
-            />
-          </div>
-          <h1 className="text-2xl font-bold text-text-primary mb-2 tracking-tight">你好！我是 Hermix</h1>
-          <p className="text-sm text-text-secondary text-center mb-6 max-w-xs leading-relaxed">
-            一个智能 AI 助手。告诉我你的目标，我来帮你拆解并完成。
-          </p>
+          {isWorkbenchChat ? (
+            <>
+              <h1 className="text-xl font-semibold text-text-primary mb-2 tracking-tight">这台工作台由你说了算</h1>
+              <p className="text-sm text-text-secondary text-center mb-6 max-w-xs leading-relaxed">
+                要加什么功能、改哪里、录什么数据，直接说。改完自动应用到画布。
+              </p>
+            </>
+          ) : (
+            <>
+              <div className="relative mb-4">
+                <img
+                  src="/mascot-256.png"
+                  alt="Hermix吉祥物"
+                  className="w-[140px] h-[140px] object-contain select-none"
+                  draggable={false}
+                />
+              </div>
+              <h1 className="text-2xl font-bold text-text-primary mb-2 tracking-tight">你好！我是 Hermix</h1>
+              <p className="text-sm text-text-secondary text-center mb-6 max-w-xs leading-relaxed">
+                一个智能 AI 助手。告诉我你的目标，我来帮你拆解并完成。
+              </p>
+            </>
+          )}
           <div className="w-full">
             <Composer
+              variant={isWorkbenchChat ? "workbench" : "default"}
               input={input} setInput={setInput} handleKeyDown={handleKeyDown} handleSubmit={handleSubmit} customApps={customApps}
               textareaRef={textareaRef} sending={sending} isStreaming={false}
               activeWorkspace={activeWorkspace} workspaces={workspaces} workspaceLocked={workspaceLocked}
@@ -867,7 +882,7 @@ export function ChatView({
               onFilesAttach={handleFilesAttach}
               keepOriginalImage={keepOriginalImage}
               setKeepOriginalImage={setKeepOriginalImage}
-              placeholder="Hermix帮你做事 — 写作、规划、分析、学习、开发..."
+              placeholder={isWorkbenchChat ? "告诉这台工作台要加什么、改什么、查什么..." : "Hermix帮你做事 — 写作、规划、分析、学习、开发..."}
               session={session}
             />
             {streamError && (
@@ -1005,6 +1020,7 @@ export function ChatView({
           )}
 
           <Composer
+            variant={isWorkbenchChat ? "workbench" : "default"}
             input={input} setInput={setInput} handleKeyDown={handleKeyDown} handleSubmit={handleSubmit}
             textareaRef={textareaRef} sending={sending} isStreaming={isStreaming}
             activeWorkspace={activeWorkspace} workspaces={workspaces} workspaceLocked={workspaceLocked}
@@ -1038,7 +1054,7 @@ export function ChatView({
             onFilesAttach={handleFilesAttach}
             keepOriginalImage={keepOriginalImage}
             setKeepOriginalImage={setKeepOriginalImage}
-            placeholder="输入消息..."
+            placeholder={isWorkbenchChat ? "告诉这台工作台要加什么、改什么..." : "输入消息..."}
             session={session}
             messageQueue={messageQueue}
             onAddToQueue={onAddToQueue}

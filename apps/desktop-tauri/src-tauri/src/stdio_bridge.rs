@@ -69,12 +69,27 @@ pub fn mark_dead() {
     BRIDGE_LIVE.store(false, Ordering::SeqCst);
 }
 
-/// 只有调用方仍是**当前代**时才标记死亡。旧代读线程在新代接管后退出
-/// 是正常现象（它属于已被替换的那一代），不能因此把新代判死。
-fn mark_dead_if_current(gen: u64) {
+/// Same as [`mark_dead`] but emits the `hermix:stream-bridge-dead` event to the
+/// frontend so any in-flight stream settle()s immediately rather than waiting
+/// on a 300s timeout. Called from the stdout reader's exit branch.
+///
+/// The generation check guards against races where an old reader thread is
+/// still exiting while a new generation has already taken over — in that case
+/// the live flag is preserved (it now belongs to the new bridge, not the dying
+/// one) but the notification still fires (front-end listeners decide whether
+/// to act on it; the event carries the originator generation).
+fn mark_dead_and_notify(app: &AppHandle, gen: u64, reason: &str) {
     if BRIDGE_GEN.load(Ordering::SeqCst) == gen {
         BRIDGE_LIVE.store(false, Ordering::SeqCst);
     }
+    let _ = app.emit(
+        "hermix:stream-bridge-dead",
+        serde_json::json!({
+            "reason": reason,
+            "generation": gen,
+            "current_generation": BRIDGE_GEN.load(Ordering::SeqCst),
+        }),
+    );
 }
 
 /// stdout 帧的信封（出站方向由 server 生成）。
@@ -175,7 +190,10 @@ impl StdioBridge {
             // stdout 关闭：唤醒所有等待者以免永久挂起，并把本代标记为已死。
             // 标记必须在这里做（子进程退出的唯一可观测点），否则
             // `backend_ready` 会继续对一个已经死掉的子进程报 "在线"。
-            mark_dead_if_current(my_gen);
+            //
+            // 同时 emit `hermix:stream-bridge-dead`，前端监听可在 100ms 内把
+            // 卡死的流 settle() 掉；避免等上 300s/600s 的 fallback 定时器。
+            mark_dead_and_notify(&app, my_gen, "stdout closed");
             if let Ok(mut p) = inner.pending_http.lock() {
                 for (_, tx) in p.drain() {
                     let _ = tx.send("{\"status\":503,\"body\":\"backend exited\",\"enc\":\"utf8\"}".into());

@@ -9,6 +9,7 @@ description = "Custom app system for user-facing desktop applications with zero-
 [dependencies]
 hermix-core = { workspace = true }
 hermix-config = { workspace = true }
+chrono = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

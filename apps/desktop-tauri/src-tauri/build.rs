@@ -3,14 +3,16 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 /// `hermix` sidecar — workspace 内部 crate, 必须先 `cargo build` 才有产物,
-/// 然后从 release/target 拷到 Tauri externalBin 要求的 binaries/ 路径.
+/// 然后从仓库根 target/ (<repo_root>/target/<profile>/hermix.exe, cargo 默认产物位置,
+/// 见 .cargo/config.toml 注释: 不配置 target-dir) 拷到 Tauri externalBin 要求的 binaries/ 路径.
+/// 注意: 历史遗留的 release/target/ 是陈旧路径, 绝不能再指向它.
 ///
 /// Tauri externalBin 校验逻辑: `binaries/{name}-{target_triple}.exe` 必须存在
 /// 否则 `tauri_build::build()` 会 fail. 所以 `cargo build -p hermix-server --release`
 /// 必须先跑. 复制顺序: tauri.conf.json `beforeBuildCommand` 之前完成.
 fn copy_workspace_sidecar(manifest_dir: &Path, profile: &str) {
     let src = manifest_dir
-        .join("../../../release/target")
+        .join("../../../target")
         .join(profile)
         .join("hermix.exe");
     let dst = manifest_dir.join("binaries").join("hermix-x86_64-pc-windows-msvc.exe");

@@ -365,6 +365,13 @@ pub struct AgentOverrides {
     /// here is *added*, never removed.
     #[serde(default)]
     pub skills: Option<Vec<String>>,
+    /// Workbench bound to this session (`SendMessageRequest.workbench_id`).
+    /// `Some` makes the agent inject the `workbench.context` direction and
+    /// pin the `workbench` skill into the system prompt every turn —
+    /// ordinary chats (None) never see either. See
+    /// WORKBENCH_CHAT_REDESIGN_PLAN B / MODULE_DESIGN §13 layer 3.
+    #[serde(default)]
+    pub workbench_id: Option<String>,
     /// Callback to register an approval request with the WS handler.
     /// Arguments: `(session_id, request_id)` →
     /// `oneshot::Receiver<ApprovalOutcome>`. The receiver resolves when
@@ -428,6 +435,7 @@ impl std::fmt::Debug for AgentOverrides {
             .field("image", &self.image)
             .field("image_mime_type", &self.image_mime_type)
             .field("skills", &self.skills)
+            .field("workbench_id", &self.workbench_id)
             .field(
                 "approval_requester",
                 &self.approval_requester.as_ref().map(|_| "<callback>"),
@@ -463,6 +471,7 @@ impl PartialEq for AgentOverrides {
             && self.image == other.image
             && self.image_mime_type == other.image_mime_type
             && self.skills == other.skills
+            && self.workbench_id == other.workbench_id
     }
 }
 

@@ -3,9 +3,10 @@
 //! 单独一个测试二进制，因为要改 `HERMIX_HOME` 指向临时目录 —— env 是进程级的，
 //! 混进 lib 单测会污染其它用例。
 
+use hermix_plugin::workbench::workbench_dir;
 use hermix_plugin::{
-    create_workbench, db_exec, db_query, fs_read, fs_write, list_code_files, read_code_file,
-    undo_history, undo_last, write_code_file,
+    create_workbench, db_exec, db_query, delete_workbench, fs_read, fs_write, list_code_files,
+    list_workbenches, read_code_file, undo_history, undo_last, write_code_file,
 };
 use serde_json::json;
 
@@ -111,5 +112,23 @@ fn workbench_end_to_end() {
         ] {
             assert!(files.iter().any(|f| f == expected), "缺 {expected}: {files:?}");
         }
+    }
+
+    // ── 软删 ──
+    // 目录移入 _trash 可找回，list 不再返回；重复删/删不存在的要报错。
+    {
+        let s = sandbox("delete");
+        let trash_dest = delete_workbench(&s.id).expect("delete");
+        assert!(trash_dest.exists(), "recycled dir must exist: {trash_dest:?}");
+        assert!(!workbench_dir(&s.id).exists(), "original dir must be gone");
+        assert!(
+            !list_workbenches().expect("list").iter().any(|m| m.id == s.id),
+            "deleted workbench must not appear in list"
+        );
+        // 二次删除：目录已不在，报错而不是静默成功。
+        assert!(delete_workbench(&s.id).is_err());
+        // 路径穿越 id 必须拒 —— id 直接拼路径。
+        assert!(delete_workbench("../escape").is_err());
+        assert!(delete_workbench("").is_err());
     }
 }

@@ -112,6 +112,7 @@ export interface StreamChatSendContext {
   disarmTimeouts: () => void;
   resetIdleTimeout: () => void;
   resetStaleTimer: () => void;
+  resetMidStreamSilenceTimer: () => void;
   scheduleChunkFlush: () => void;
   wsSendRaw: (text: string) => boolean;
   /** Send this turn's user message upstream. Idempotent — the second
@@ -169,7 +170,10 @@ export function createMessageHandler(
     }
     // Arm the stale timer on every WS event. Skip while an approval is pending
     // — same reasoning as the idle guard above.
-    if (!ctx.approvalPending) ctx.resetStaleTimer();
+    if (!ctx.approvalPending) {
+      ctx.resetStaleTimer();
+      ctx.resetMidStreamSilenceTimer();
+    }
     try {
       const data: any = JSON.parse(payloadText);
 
@@ -194,7 +198,10 @@ export function createMessageHandler(
       if (evtType === "text") {
         // Reset the stale-stream timer on every text chunk so tool-only turns
         // (no user-visible output) don't keep the stream alive indefinitely.
+        // Also reset mid-stream silence watchdog — any event = the connection
+        // is making forward progress.
         ctx.resetStaleTimer();
+        ctx.resetMidStreamSilenceTimer();
         ctx.firstChunkReceived = true;
         if (ctx.getPhase() === "slow") ctx.updatePhase("streaming");
         const piece = typeof evtContent === "string" ? evtContent : "";
@@ -260,6 +267,7 @@ export function createMessageHandler(
         ctx.hasAnyStreamEvent = true;
         ctx.setLastActivityAt(Date.now());
         ctx.resetStaleTimer();
+        ctx.resetMidStreamSilenceTimer();
         ctx.callbacks.onToolComplete?.({ toolCallId, tool, content: evtContent, denialKind, isError });
         return;
       }

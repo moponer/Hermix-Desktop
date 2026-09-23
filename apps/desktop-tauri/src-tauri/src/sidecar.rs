@@ -599,7 +599,7 @@ mod windows_job_object {
                 return None;
             }
 
-            let mut info = JobObjectExtendedLimitInformation {
+            let info = JobObjectExtendedLimitInformation {
                 basic_limit_information: JobObjectBasicLimitInformation {
                     _per_process_user_time_limit: 0,
                     _per_job_user_time_limit: 0,

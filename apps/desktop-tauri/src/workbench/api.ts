@@ -3,7 +3,7 @@
 //
 // 例外：会话归属（`sessions.workbench_id`）走 HTTP —— 会话表由 sidecar
 // 持有，桌面端直接开库会和它抢写锁，只能经由后端改。
-import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
 import { getSessions, updateSessionMetadata } from "../api/rest";
 
 export interface WorkbenchManifest {
@@ -27,6 +27,10 @@ export const workbenchList = () => invoke<WorkbenchManifest[]>("workbench_list")
 /** 设为主工作台，其余自动清掉标记。 */
 export const workbenchSetPrimary = (id: string) =>
   invoke<void>("workbench_set_primary", { id });
+
+/** 软删工作台：目录移入 `_trash/` 可找回。返回回收站路径。 */
+export const workbenchDelete = (id: string) =>
+  invoke<string>("workbench_delete", { id });
 
 export const workbenchRead = (id: string, path: string) =>
   invoke<string>("workbench_read", { id, path });
@@ -129,10 +133,19 @@ export const workbenchGateway = (
 };
 
 /**
- * 画布入口地址。转成 asset:// 而不是直接用 file:// ——
- * file:// 下 ES module 会被 CORS 拦下，importmap 与相对路径全部失效。
+ * 画布入口地址。走 asset 协议而不是 file:// —— file:// 下 ES module
+ * 会被 CORS 拦下，importmap 与相对路径全部失效。
+ *
+ * 不能用 convertFileSrc：它把整个路径 encodeURIComponent，Windows 反斜杠
+ * 全部变成 %5C，iframe 的 base URL 里一个路径分隔符都不剩 —— 相对资源
+ * （./styles/tokens.css、../../_vendor/wb-sdk.js）会被解析到站点根，
+ * asset 协议拿到 `styles/...` 这种相对路径直接 403，画布整面白屏。
+ * 这里手工拼：段内编码、分隔符保留字面 `/`；Rust 侧 percent-decode 后
+ * 得到 `C:/...` 正斜杠路径，File::open 与 scope 判定（先 canonicalize）
+ * 都照常通过。
  */
 export const workbenchEntryUrl = async (id: string): Promise<string> => {
   const path = await invoke<string>("workbench_entry_path", { id });
-  return convertFileSrc(path, "asset");
+  const segments = path.replace(/\\/g, "/").split("/");
+  return `http://asset.localhost/${segments.map(encodeURIComponent).join("/")}`;
 };

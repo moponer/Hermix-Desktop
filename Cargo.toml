@@ -124,6 +124,10 @@ eventsource-stream = "0.2"
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+# (P0-7 / STABILITY-PLAN §3.1) rolling file logs in packaged Tauri app —
+# #![windows_subsystem="windows"] eats stderr, so traces must persist to disk
+# to be diagnosable from a release build.
+tracing-appender = "0.2"
 
 # CLI & TUI
 clap = { version = "4", features = ["derive"] }

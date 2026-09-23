@@ -438,12 +438,15 @@ export const updateSessionMetadata = async (
     model?: string | null;
     workbench_id?: string | null;
   },
-): Promise<void> => {
-  await fetchVoid(`/v1/sessions/${encodeURIComponent(id)}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(patch),
-  });
+): Promise<{ rows_affected: number }> => {
+  return fetchJSON<{ ok: boolean; rows_affected: number }>(
+    `/v1/sessions/${encodeURIComponent(id)}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    },
+  );
 };
 
 /**

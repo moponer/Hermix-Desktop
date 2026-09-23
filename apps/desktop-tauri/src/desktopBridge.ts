@@ -207,6 +207,45 @@ export async function listDirectory(
   return invoke("list_directory", { path, workspaceRoot: workspaceRoot ?? null });
 }
 
+// ── Diagnostics / logs (P0-7) ──────────────────────────────────────
+//
+// Backend writes rolling logs to `<data_dir>/logs/*.log` (these were
+// previously unreachable because the packaged Tauri app's stderr is
+// dropped). The settings panel surfaces these so users and support
+// have a single clickable place to see what's actually happening.
+
+export interface LogFileEntry {
+  name: string;
+  path: string;
+  sizeBytes: number;
+  modifiedSecs: number;
+}
+
+export interface LogFileInfo {
+  dir: string;
+  files: LogFileEntry[];
+  totalBytes: number;
+}
+
+export interface BackendLogTail {
+  path: string;
+  fileName: string;
+  totalLines: number;
+  lines: string[];
+}
+
+export async function listBackendLogFiles(): Promise<LogFileInfo> {
+  return invoke("list_backend_log_files");
+}
+
+export async function readBackendLogTail(tailLines: number): Promise<BackendLogTail> {
+  return invoke("read_backend_log_tail", { tailLines });
+}
+
+export async function openLogDirectory(): Promise<string> {
+  return invoke("open_log_directory");
+}
+
 // Aliases for SettingsView compatibility
 // `openSettingsDirectory` is the legacy name used by SettingsView.
 // It's a deprecated alias for `openDataDir`; callers should migrate

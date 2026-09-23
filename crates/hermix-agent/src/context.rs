@@ -896,6 +896,10 @@ pub struct RouteContext<'a> {
     /// L1 Domain Mode detection result for this turn.
     /// `None` means domain detection was not run (legacy path).
     pub domain_mode: Option<DomainMode>,
+    /// Workbench bound to this session (`SendMessageRequest.workbench_id`).
+    /// `Some` gates the `workbench.context` direction — ordinary chats never
+    /// see workbench context (anti-leak, WORKBENCH_CHAT_REDESIGN_PLAN B.1/R5).
+    pub workbench_id: Option<&'a str>,
 }
 
 impl<'a> Default for RouteContext<'a> {
@@ -907,6 +911,7 @@ impl<'a> Default for RouteContext<'a> {
             autonomous_mode: false,
             tool_call_count: 0,
             domain_mode: None,
+            workbench_id: None,
         }
     }
 }
@@ -1532,7 +1537,8 @@ let ctx = RouteContext {
                     autonomous_mode: false,
                     tool_call_count: 0,
                     domain_mode: None,
-                };
+            workbench_id: None,
+        };
         let mut b = SystemPromptBuilder::new();
         b = b.with_directions(vec![
             SystemDir::new("format.full", DirRoute::FirstTurn, "FULL"),
@@ -1567,6 +1573,7 @@ let ctx = RouteContext {
             autonomous_mode: false,
             tool_call_count: 0,
             domain_mode: None,
+            workbench_id: None,
         };
         let mut b = SystemPromptBuilder::new();
         b = b.with_directions(vec![
@@ -1625,7 +1632,8 @@ let ctx = RouteContext {
                     autonomous_mode: false,
                     tool_call_count: 0,
                     domain_mode: None,
-                };
+            workbench_id: None,
+        };
         let prompt = format!(
             "{}\n\n{}\n\n{}\n\n{}\n\n{}",
             Section::Identity.default_body(),
@@ -1658,7 +1666,8 @@ let ctx = RouteContext {
                     autonomous_mode: false,
                     tool_call_count: 0,
                     domain_mode: None,
-                };
+            workbench_id: None,
+        };
         let prompt = "no identity block at all, just some prose.";
         let (patched, report) = Section::audit_and_patch(prompt, &ctx);
         // With empty tool_names, required = {Identity, Timestamp, WorkingDir}.
@@ -1696,6 +1705,7 @@ let ctx = RouteContext {
             autonomous_mode: false,
             tool_call_count: 0,
             domain_mode: None,
+            workbench_id: None,
         };
         // Provide identity + timestamp + working_dir (the three always-
         // required sections); tool sections deliberately missing.
@@ -1733,6 +1743,7 @@ let ctx = RouteContext {
             autonomous_mode: false,
             tool_call_count: 0,
             domain_mode: None,
+            workbench_id: None,
         };
         // Only identity present, no tool / no working-dir / no timestamp.
         let prompt = Section::Identity.default_body().to_string();
@@ -1764,6 +1775,7 @@ let ctx = RouteContext {
             autonomous_mode: false,
             tool_call_count: 0,
             domain_mode: None,
+            workbench_id: None,
         };
         assert_eq!(
             DirRoute::HadAnyToolUse.matches(&trivial),

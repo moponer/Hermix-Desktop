@@ -400,6 +400,13 @@ pub struct AgentConfig {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ephemeral_skills: Vec<String>,
 
+    /// Workbench bound to this session. `Some` gates the `workbench.context`
+    /// direction (module index / vendor / manifest injected per-turn) —
+    /// ordinary chats never see workbench context. Wired from
+    /// `SendMessageRequest.workbench_id`; see WORKBENCH_CHAT_REDESIGN_PLAN B.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workbench_id: Option<String>,
+
     /// Session-level hard spend limit in USD. When reached, the loop trips
     /// the cost gate and returns early with a summary system message.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -911,6 +918,7 @@ impl Default for AgentConfig {
             llm_providers: HashMap::new(),
             context_pressure_ratio: None,
             ephemeral_skills: Vec::new(),
+            workbench_id: None,
             max_routed_tools: default_max_routed_tools(),
             active_toolsets: Vec::new(),
             autonomous_mode: default_autonomous_mode(),

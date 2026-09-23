@@ -495,6 +495,27 @@ Always close `</think>` before visible text. The think block is for reasoning, n
         BROWSER_TOOL_SELECTION_GUIDANCE,
     ));
 
+    // Workbench context — only for sessions bound to a workbench
+    // (`workbench_id IS NOT NULL`). Injects manifest + module_index +
+    // vendor_index, re-assembled every turn (local dir scan is ms-cheap,
+    // so the LLM always sees the latest code state — plan B.2/B.3).
+    // Ordinary chats never receive this block (anti-leak, plan R5).
+    if let Some(wb_id) = route_ctx.workbench_id {
+        match crate::directions::build_workbench_context(wb_id) {
+            Ok(ctx_block) => dirs.push(SystemDir::new(
+                "workbench.context",
+                DirRoute::Always,
+                ctx_block,
+            )),
+            Err(e) => {
+                // Degrade gracefully: skip the block, never block the request.
+                tracing::warn!(target: "hermix.directions",
+                    workbench_id = wb_id, error = %e,
+                    "workbench.context assembly failed; skipping direction");
+            }
+        }
+    }
+
     // Tool-specific guidance blocks, each gated by its own route.
     if tool_names.contains("memory") {
         dirs.push(SystemDir::new(
@@ -710,6 +731,166 @@ fn extract_conventions_section(text: &str) -> Option<String> {
     }
 }
 
+/// Assemble the `## WORKBENCH CONTEXT` block for a workbench-bound session.
+/// Reads manifest + module_index + vendor_index fresh every call — all local
+/// disk scans (ms-cheap), so the LLM always sees the latest code state and
+/// no cache-invalidation machinery is needed (plan B.2/B.3). Failure returns
+/// `Err` and the caller skips the direction instead of blocking the request.
+pub(crate) fn build_workbench_context(workbench_id: &str) -> Result<String, String> {
+    use hermix_plugin::workbench::{
+        format_module_index, module_index, read_manifest, vendor_index,
+    };
+
+    let manifest = read_manifest(workbench_id)?;
+    let modules = format_module_index(&module_index(workbench_id)?);
+    let vendors: Vec<String> = {
+        let mut names: Vec<String> = vendor_index()
+            .into_keys()
+            .collect();
+        names.sort();
+        names
+    };
+
+    let mut b = String::from("## WORKBENCH CONTEXT（自动注入，工作台对话专用）\n\n");
+    b.push_str("### 工作台信息\n");
+    b.push_str(&format!("- id: {}\n", manifest.id));
+    b.push_str(&format!("- name: {}\n", manifest.name));
+    if !vendors.is_empty() {
+        b.push_str(&format!("- 已装 vendor: [{}]\n", vendors.join(", ")));
+    }
+    b.push_str(&format!(
+        "- 代码目录: {}\n",
+        hermix_plugin::workbench::workbench_dir(workbench_id)
+            .join("code")
+            .display()
+    ));
+    if !modules.is_empty() {
+        b.push_str("\n### 已有模块（复用优先，禁止重写同类功能）\n");
+        b.push_str(&modules);
+        b.push('\n');
+    }
+    // 运营上下文（plan 方案 D.2）：业务数据现状，让右栏 LLM 能直接替用户
+    // 干活（录数据/汇总）。空库/无库时静默省略，不报错。
+    let data_summary = build_workbench_data_summary(workbench_id);
+    if !data_summary.is_empty() {
+        b.push_str("\n### 业务数据现状（运营上下文，经 wb.db 网关操作）\n");
+        b.push_str(&data_summary);
+    }
+    Ok(b)
+}
+
+/// 查工作台 `data/workbench.db` 的业务表现状：每表 schema + 行数 + 末 3 行
+/// 样本。大表（>500 行）不给样本只给 count —— 具体数据 agent 用网关工具
+/// 现查，不全量注入（零上下文膨胀）。库不存在/为空/查询失败都返回空串
+/// （静默降级：无业务数据的工作台不注入运营段）。
+fn build_workbench_data_summary(workbench_id: &str) -> String {
+    use rusqlite::Connection;
+
+    const SAMPLE_ROWS: usize = 3;
+    const SAMPLE_ROW_LIMIT: i64 = 500;
+
+    let db_path = hermix_plugin::workbench::workbench_dir(workbench_id)
+        .join("data")
+        .join("workbench.db");
+    if !db_path.exists() {
+        return String::new();
+    }
+    let conn = match Connection::open_with_flags(
+        &db_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    ) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(target: "hermix.directions",
+                workbench_id, error = %e, "workbench data summary: open failed; skipping");
+            return String::new();
+        }
+    };
+
+    let table_names: Vec<String> = match conn.prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+    ) {
+        Ok(mut stmt) => stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .and_then(|rows| rows.collect::<Result<Vec<_>, _>>())
+            .unwrap_or_default(),
+        Err(e) => {
+            tracing::warn!(target: "hermix.directions",
+                workbench_id, error = %e, "workbench data summary: table scan failed; skipping");
+            return String::new();
+        }
+    };
+    if table_names.is_empty() {
+        return String::new();
+    }
+
+    let mut b = String::new();
+    for table in &table_names {
+        // 表名来自 sqlite_master 自身，非用户输入，但引号包裹仍属一致性纪律。
+        let count: i64 = conn
+            .query_row(
+                &format!("SELECT COUNT(*) FROM \"{table}\""),
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        let schema: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name = ?1",
+                [table],
+                |row| row.get(0),
+            )
+            .unwrap_or_default();
+        b.push_str(&format!("- 表 {table}：{count} 行\n"));
+        if !schema.is_empty() {
+            b.push_str(&format!("  schema: {schema}\n"));
+        }
+        if count > 0 && count <= SAMPLE_ROW_LIMIT {
+            // 末几行样本：让 LLM 知道数据长什么样、最近一条是什么。
+            b.push_str(&format!(
+                "  最近数据（SELECT * ORDER BY rowid DESC LIMIT {SAMPLE_ROWS}）:\n"
+            ));
+            if let Ok(mut stmt) =
+                conn.prepare(&format!("SELECT * FROM \"{table}\" ORDER BY rowid DESC LIMIT {SAMPLE_ROWS}"))
+            {
+                let col_names: Vec<String> = stmt
+                    .column_names()
+                    .into_iter()
+                    .map(|s| s.to_string())
+                    .collect();
+                let mut rows = match stmt.query([]) {
+                    Ok(r) => r,
+                    Err(_) => continue,
+                };
+                while let Ok(Some(row)) = rows.next() {
+                    let cells: Vec<String> = col_names
+                        .iter()
+                        .map(|c| {
+                            row.get_ref(c.as_str())
+                                .map(|v| match v {
+                                    rusqlite::types::ValueRef::Null => "NULL".into(),
+                                    rusqlite::types::ValueRef::Integer(i) => i.to_string(),
+                                    rusqlite::types::ValueRef::Real(f) => f.to_string(),
+                                    rusqlite::types::ValueRef::Text(t) => {
+                                        String::from_utf8_lossy(t).into_owned()
+                                    }
+                                    rusqlite::types::ValueRef::Blob(_) => "<blob>".into(),
+                                })
+                                .unwrap_or_else(|_| "?".into())
+                        })
+                        .collect();
+                    b.push_str(&format!("    {}\n", cells.join(" | ")));
+                }
+            }
+        } else if count > SAMPLE_ROW_LIMIT {
+            b.push_str(&format!(
+                "  (行数超 {SAMPLE_ROW_LIMIT}，样本省略 —— 需要数据时用 db_query 现查)\n"
+            ));
+        }
+    }
+    b
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -748,6 +929,7 @@ mod tests {
             autonomous_mode: false,
             tool_call_count: 0,
             domain_mode: None,
+            workbench_id: None,
         };
         let dirs = collect_directions(&ctx, Some("禁用蓝紫配色"));
         assert!(dirs.iter().any(|d| {
@@ -765,6 +947,7 @@ mod tests {
             autonomous_mode: false,
             tool_call_count: 0,
             domain_mode: None,
+            workbench_id: None,
         };
         let dirs = collect_directions(&ctx, None);
         assert!(!dirs.iter().any(|d| d.tag == "project.conventions"));
@@ -780,6 +963,7 @@ mod tests {
             autonomous_mode: false,
             tool_call_count: 0,
             domain_mode: Some(DomainMode::Code),
+            workbench_id: None,
         };
         let dirs = collect_directions(&ctx, None);
         assert!(dirs.iter().any(|d| {
@@ -797,6 +981,7 @@ mod tests {
             autonomous_mode: false,
             tool_call_count: 0,
             domain_mode: Some(DomainMode::Research),
+            workbench_id: None,
         };
         let dirs = collect_directions(&ctx, None);
         assert!(dirs.iter().any(|d| {
@@ -814,6 +999,7 @@ mod tests {
             autonomous_mode: false,
             tool_call_count: 0,
             domain_mode: Some(DomainMode::Chat),
+            workbench_id: None,
         };
         let dirs = collect_directions(&ctx, None);
         assert!(!dirs.iter().any(|d| d.tag == "domain.directive"),
@@ -830,6 +1016,7 @@ mod tests {
             autonomous_mode: false,
             tool_call_count: 0,
             domain_mode: None,
+            workbench_id: None,
         };
         let dirs = collect_directions(&ctx, None);
         assert!(!dirs.iter().any(|d| d.tag == "domain.directive"),

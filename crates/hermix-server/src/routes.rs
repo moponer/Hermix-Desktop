@@ -351,23 +351,29 @@ pub(crate) async fn patch_session(
         message: e.to_string(),
     })?;
     let sid = session_id;
+    // Total rows touched across all SET clauses. Returned to the caller so
+    // it can tell "PATCH applied" from "PATCH matched nothing" — the latter
+    // used to look like success (ok:true) while the workbench binding was
+    // silently dropped, which is how orphan sessions piled up in the
+    // workbench list (front-end retried open() → new session each time).
+    let mut rows_affected: usize = 0;
     // Build SET clauses dynamically based on what's in the request.
     // A key present with `null` means "clear this field".
     if let Some(v) = req.get("workspace") {
         if v.is_null() {
-            conn.execute("UPDATE sessions SET workspace = NULL WHERE id = ?1", [sid.clone()])
+            rows_affected += conn.execute("UPDATE sessions SET workspace = NULL WHERE id = ?1", [sid.clone()])
                 .map_err(|e| HttpError { status: StatusCode::INTERNAL_SERVER_ERROR, message: e.to_string() })?;
         } else if let Some(s) = v.as_str() {
-            conn.execute("UPDATE sessions SET workspace = ?1 WHERE id = ?2", rusqlite::params![s, sid.clone()])
+            rows_affected += conn.execute("UPDATE sessions SET workspace = ?1 WHERE id = ?2", rusqlite::params![s, sid.clone()])
                 .map_err(|e| HttpError { status: StatusCode::INTERNAL_SERVER_ERROR, message: e.to_string() })?;
         }
     }
     if let Some(v) = req.get("expert_id") {
         if v.is_null() {
-            conn.execute("UPDATE sessions SET expert_id = NULL WHERE id = ?1", [sid.clone()])
+            rows_affected += conn.execute("UPDATE sessions SET expert_id = NULL WHERE id = ?1", [sid.clone()])
                 .map_err(|e| HttpError { status: StatusCode::INTERNAL_SERVER_ERROR, message: e.to_string() })?;
         } else if let Some(s) = v.as_str() {
-            conn.execute("UPDATE sessions SET expert_id = ?1 WHERE id = ?2", rusqlite::params![s, sid.clone()])
+            rows_affected += conn.execute("UPDATE sessions SET expert_id = ?1 WHERE id = ?2", rusqlite::params![s, sid.clone()])
                 .map_err(|e| HttpError { status: StatusCode::INTERNAL_SERVER_ERROR, message: e.to_string() })?;
         }
     }
@@ -378,23 +384,23 @@ pub(crate) async fn patch_session(
     // own writes.
     if let Some(v) = req.get("workbench_id") {
         if v.is_null() {
-            conn.execute("UPDATE sessions SET workbench_id = NULL WHERE id = ?1", [sid.clone()])
+            rows_affected += conn.execute("UPDATE sessions SET workbench_id = NULL WHERE id = ?1", [sid.clone()])
                 .map_err(|e| HttpError { status: StatusCode::INTERNAL_SERVER_ERROR, message: e.to_string() })?;
         } else if let Some(s) = v.as_str() {
-            conn.execute("UPDATE sessions SET workbench_id = ?1 WHERE id = ?2", rusqlite::params![s, sid.clone()])
+            rows_affected += conn.execute("UPDATE sessions SET workbench_id = ?1 WHERE id = ?2", rusqlite::params![s, sid.clone()])
                 .map_err(|e| HttpError { status: StatusCode::INTERNAL_SERVER_ERROR, message: e.to_string() })?;
         }
     }
     if let Some(v) = req.get("model") {
         if v.is_null() {
-            conn.execute("UPDATE sessions SET model = NULL WHERE id = ?1", [sid.clone()])
+            rows_affected += conn.execute("UPDATE sessions SET model = NULL WHERE id = ?1", [sid.clone()])
                 .map_err(|e| HttpError { status: StatusCode::INTERNAL_SERVER_ERROR, message: e.to_string() })?;
         } else if let Some(s) = v.as_str() {
-            conn.execute("UPDATE sessions SET model = ?1 WHERE id = ?2", rusqlite::params![s, sid.clone()])
+            rows_affected += conn.execute("UPDATE sessions SET model = ?1 WHERE id = ?2", rusqlite::params![s, sid.clone()])
                 .map_err(|e| HttpError { status: StatusCode::INTERNAL_SERVER_ERROR, message: e.to_string() })?;
         }
     }
-    Ok(Json(serde_json::json!({ "ok": true })))
+    Ok(Json(serde_json::json!({ "ok": true, "rows_affected": rows_affected })))
 }
 
 // ---------------------------------------------------------------------------
@@ -1325,6 +1331,7 @@ pub(crate) async fn send_message(
         image: None,
         image_mime_type: None,
         skills: req.skills.clone(),
+        workbench_id: req.workbench_id.clone(),
         memory_dir: None,
         approval_requester: None,
         on_event: None,

@@ -519,6 +519,7 @@ pub fn build_system_prompt_with_tool_errors(
             autonomous_mode: config.autonomous_mode,
             tool_call_count,
             domain_mode: None,
+            workbench_id: config.workbench_id.as_deref(),
         };
         let project_conventions = config
             .workspace
@@ -666,6 +667,7 @@ pub fn build_system_prompt(
             autonomous_mode: config.autonomous_mode,
             tool_call_count,
             domain_mode: None,
+            workbench_id: config.workbench_id.as_deref(),
         };
         let project_conventions = config
             .workspace
@@ -1168,6 +1170,7 @@ pub fn resolve_initial_system_prompt_with_tool_errors(
             autonomous_mode: config.autonomous_mode,
             tool_call_count,
             domain_mode: None,
+            workbench_id: config.workbench_id.as_deref(),
         };
         let (patched, report) = Section::audit_and_patch(&prompt, &route_ctx);
         if report.had_patches() {

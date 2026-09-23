@@ -109,6 +109,16 @@ impl CronRunner {
              Focus on completing the assigned task.\n\nTask: {}",
             job.prompt
         ));
+        // Workbench-bound job: the scheduled task operates on a workbench, so
+        // give the run the same workbench knowledge as its right-panel chat —
+        // workbench.context direction + resident `workbench` skill (方案 D.4).
+        // No extra delivery mechanism needed: the injected context carries
+        // schema/data state, and the runner's own delivery config returns
+        // results to the user.
+        config.workbench_id = job.workbench_id.clone();
+        if job.workbench_id.is_some() {
+            config.ephemeral_skills = vec!["workbench".to_string()];
+        }
 
         // Build tool list, excluding the cronjob tool to prevent recursive scheduling
         let tools = self.filtered_tool_schemas();

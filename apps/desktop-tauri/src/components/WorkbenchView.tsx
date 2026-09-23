@@ -8,11 +8,13 @@
 // 绑定会话，再把宿主 activeSessionId 切过去，右侧 chatNode 随之换成该
 // 会话的消息流。切换即隔离，不需要宿主另起一套会话栈。
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { createSession, getSessions, updateSessionMetadata } from "../api/rest";
 import type { Session } from "../types";
 import {
+  workbenchBindSession,
   workbenchCreate,
-  workbenchEnsureSession,
+  workbenchDelete,
   workbenchList,
   workbenchSetPrimary,
   type WorkbenchManifest,
@@ -64,24 +66,79 @@ export function WorkbenchView({
   /**
    * 打开工作台：先确保它有绑定会话，再切过去。
    *
-   * 已绑定的工作台沿用原会话 —— 每次新建会让 skill 常驻漂到新会话，
-   * 而画布用的是当前 active 会话，一错位 agent 就没了工作台 skill。
-   *
-   * 会话还要盖上本工作台的归属戳（`sessions.workbench_id`）。没有这个
-   * 戳，它就是个普通会话：会混进主对话列表，用户能从主侧栏点进一段
-   * 脱离工作台上下文的历史。盖戳是「这个对话属于谁」的唯一依据。
+   * 三件事：
+   * 1. 孤儿检测 —— `manifest.session_id` 可能指向一个已被清理的会话
+   *    （手工删表 / 切换账户 / 数据库迁移）。`workbench_ensure_session`
+   *    看到已绑就**不覆盖**，会把孤儿 id 一直返回下去 —— `PATCH` 找不到
+   *    行也不会报错，结果是「工作台页面打开了，但归属戳永远打不上，对话
+   *    漏进主侧栏」。发现孤儿就重建一次会话并绑回去。
+   * 2. 戳必须确认写进去了 —— `PATCH` 对不存在的 session_id 返回
+   *    `Ok(0 rows)`，前端拿不到「写没写成功」的反馈。打戳后再拉一次该工作台
+   *    的会话列表，目标 session 必须出现在里面，否则报错。
+   * 3. 登记给宿主 —— 主对话列表按归属过滤掉了工作台会话，这里不补一条
+   *    对话栏就没有可渲染的会话对象。
    */
   const open = useCallback(
     async (manifest: WorkbenchManifest) => {
       try {
-        const fresh = manifest.session_id ?? (await createSession(manifest.name)).id;
-        const sessionId = await workbenchEnsureSession(manifest.id, fresh);
-        // 每次打开都盖一次：老工作台的会话是在有这个字段之前建的，
-        // 补戳让它们也归位。已盖过的重复写入同一个值，无副作用。
-        await updateSessionMetadata(sessionId, { workbench_id: manifest.id });
-        // 登记给宿主 —— 主对话列表按归属把它们过滤掉了，这里不补一条
-        // 对话栏就没有可渲染的会话对象。
-        onRegisterSessions(await getSessions(manifest.id));
+        // 1. 孤儿检测 —— 判据优先用「本工作台已打戳的会话」，manifest.session_id
+        //    只是 hint。**不能只信 manifest.session_id**：open() 之后只更新了
+        //    active、没同步 items，tab 重新点开时 items 里的 session_id 是过期
+        //    旧值（可能 null），若以它为闸门就会每次都新建一条 —— 这就是
+        //    「重启/点 tab 越堆越多」的真正根。用 scope 列表兜底最稳：
+        //    - scoped 里命中 manifest.session_id → 直接用（已归位）
+        //    - scoped 非空但 id 对不上 → 取第一个已归属本台的，复用不新建
+        //    - manifest.session_id 仍存在但还没打戳 → 复用并补戳
+        //    - 都没有 → 真孤儿/首次打开，新建 + 无条件绑定
+        const [normal, scoped] = await Promise.all([
+          getSessions().catch(() => [] as Session[]),
+          getSessions(manifest.id).catch(() => [] as Session[]),
+        ]);
+        const boundInScoped =
+          manifest.session_id !== null
+            ? scoped.find((s) => s.id === manifest.session_id)
+            : undefined;
+        let sessionId: string;
+        if (boundInScoped) {
+          sessionId = boundInScoped.id;
+        } else if (scoped.length > 0 && scoped[0].id) {
+          sessionId = scoped[0].id;
+        } else if (
+          manifest.session_id !== null &&
+          normal.some((s) => s.id === manifest.session_id)
+        ) {
+          sessionId = manifest.session_id;
+        } else {
+          // 必须走无条件绑定的 workbench_bind_session：ensure_session 见
+          // 「manifest 已绑」就原样返回旧 id，孤儿 id 永远换不掉，后续
+          // PATCH 打戳 0 行直接报错卡死 —— 重建会话就永远建不回去。
+          sessionId = await createSession(manifest.name).then((s) => s.id);
+          await workbenchBindSession(manifest.id, sessionId);
+        }
+        // 2. 盖戳。每次都盖：老工作台的会话可能是 migration 之前建的，
+        // 补戳让它们归位；已盖过的重复写入同一个值，无副作用。
+        const patchResult = await updateSessionMetadata(sessionId, {
+          workbench_id: manifest.id,
+        });
+        // 2b. 打戳必须真实生效 —— 0 行匹配 = 会话行不存在（PATCH 曾静默
+        // 返回 ok，导致孤儿堆积）。这里显式失败，走 catch 落 error 而非
+        // 假装成功。
+        if (patchResult.rows_affected === 0) {
+          throw new Error(
+            `failed to bind session ${sessionId} to workbench ${manifest.id} (PATCH matched 0 rows — session row missing)`,
+          );
+        }
+        // 3. 验收 —— 重新拉一次工作台列表，确认目标 session 真的被打了戳。
+        const verified = await getSessions(manifest.id);
+        if (!verified.some((s) => s.id === sessionId)) {
+          throw new Error(
+            `failed to bind session ${sessionId} to workbench ${manifest.id} \
+             (PATCH succeeded but session not found in workbench list)`,
+          );
+        }
+        // 4. 登记给宿主会话表 —— 主对话列表按归属过滤掉了工作台会话，
+        // 这里不补一条，对话栏就没有可渲染的会话对象。
+        onRegisterSessions(verified);
         setActive({ ...manifest, session_id: sessionId });
         onSelectSession(sessionId);
         setError(null);
@@ -161,6 +218,41 @@ export function WorkbenchView({
     [load],
   );
 
+  // 删除工作台（软删，目录进 _trash 可找回）。
+  // 三件事：清掉绑定会话的归属戳（sessions.db 归 sidecar，只能走 HTTP
+  // PATCH，直接删目录会让会话永远卡在指向已消失工作台的状态）→ 软删
+  // 目录 → 若删的是当前打开的台，落回剩余列表的主台（没有就进空态）。
+  const remove = useCallback(
+    async (manifest: WorkbenchManifest) => {
+      try {
+        // 绑定会话可能已被用户手工删除 —— PATCH 404 时继续删目录，
+        // 不能让一个孤儿戳挡住删除本身。
+        if (manifest.session_id) {
+          try {
+            await updateSessionMetadata(manifest.session_id, { workbench_id: null });
+          } catch {
+            // 会话已不存在：戳随行一起没了，无需处理。
+          }
+        }
+        await workbenchDelete(manifest.id);
+        const list = await load();
+        setActive((prev) => {
+          if (!prev || prev.id !== manifest.id) return prev;
+          const next = pickPrimary(list.filter((w) => w.id !== manifest.id));
+          if (next) {
+            void open(next);
+            return { ...next, session_id: next.session_id };
+          }
+          return null; // 一个不剩 → 空态
+        });
+        setError(null);
+      } catch (e) {
+        setError(String(e));
+      }
+    },
+    [load, open],
+  );
+
   if (!ready) return <div className="wb-boot" />;
   if (!active) return <WorkbenchEmpty items={items} onCreate={create} error={error} />;
 
@@ -168,27 +260,155 @@ export function WorkbenchView({
     <div className="wb-page">
       <div className="wb-tabs" role="tablist">
         {items.map((wb) => (
-          <button
+          <TabItem
             key={wb.id}
-            type="button"
-            role="tab"
-            aria-selected={wb.id === active.id}
-            className={`wb-tab${wb.id === active.id ? " wb-tab-active" : ""}`}
-            onClick={() => void open(wb)}
-            onContextMenu={(e) => {
-              e.preventDefault();
-              void markPrimary(wb);
-            }}
-            title="右键设为主工作台（下次打开工作台页面时默认显示它）"
-          >
-            {wb.is_primary && <span className="wb-tab-dot" aria-label="主工作台" />}
-            {wb.name}
-          </button>
+            manifest={wb}
+            active={wb.id === active.id}
+            onOpen={() => void open(wb)}
+            onMarkPrimary={() => void markPrimary(wb)}
+            onDelete={() => void remove(wb)}
+          />
         ))}
         <NewTab onCreate={create} />
       </div>
-      {error && <p className="wb-error">{error}</p>}
+      {error && <p className="wb-error-inline">{error}</p>}
       <WorkbenchShell manifest={active} chatNode={chatNode} />
+    </div>
+  );
+}
+
+/**
+ * 单个 tab：左键打开；右键弹菜单（设为主工作台 / 卸载）。
+ *
+ * 删除用两段式确认：菜单里点「卸载工作台」先变成「确认卸载？」，
+ * 再点一次才真删 —— 误触右键多点一下不至于丢掉一台工作台。
+ * 点菜单外任意处收起（document 监听在菜单开着时才挂）。
+ */
+function TabItem({
+  manifest,
+  active,
+  onOpen,
+  onMarkPrimary,
+  onDelete,
+}: {
+  manifest: WorkbenchManifest;
+  active: boolean;
+  onOpen: () => void;
+  onMarkPrimary: () => void;
+  onDelete: () => void;
+}) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number }>({
+    top: 0,
+    left: 0,
+  });
+  const rootRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const close = (e: MouseEvent) => {
+      // 菜单经 portal 挂在 body 上，不在 rootRef 子树里 —— 内点判定必须
+      // 把菜单容器也算上，否则点菜单项自身先触发「外点关闭」，菜单被卸，
+      // click 永远到不了按钮（卸载/设主台看起来「没反应」）。
+      const t = e.target as Node;
+      if (!rootRef.current?.contains(t) && !menuRef.current?.contains(t)) {
+        setMenuOpen(false);
+        setConfirming(false);
+      }
+    };
+    // tab 条有 overflow-x:auto，菜单若留在内部会被纵向裁掉（CSS 规则：
+    // 一个轴设 auto 会把另一个轴的 visible 算成 auto）。挂到 body + fixed
+    // 定位彻底脱离裁剪；任何滚动都意味着位置失效，直接收起。
+    const onScroll = () => {
+      setMenuOpen(false);
+      setConfirming(false);
+    };
+    document.addEventListener("mousedown", close);
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", onScroll);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", onScroll);
+    };
+  }, [menuOpen]);
+
+  const openMenu = () => {
+    const rect = rootRef.current?.getBoundingClientRect();
+    if (rect) setMenuPos({ top: rect.bottom + 4, left: rect.left + rect.width / 2 });
+    setConfirming(false);
+    setMenuOpen(true);
+  };
+
+  const closeMenu = () => {
+    setMenuOpen(false);
+    setConfirming(false);
+  };
+
+  return (
+    <div className="wb-tab-item" ref={rootRef}>
+      <button
+        type="button"
+        role="tab"
+        aria-selected={active}
+        className={`wb-tab${active ? " wb-tab-active" : ""}`}
+        onClick={onOpen}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          openMenu();
+        }}
+        title={manifest.name}
+      >
+        {manifest.is_primary && <span className="wb-tab-dot" aria-label="主工作台" />}
+        {manifest.name}
+      </button>
+      {menuOpen &&
+        createPortal(
+          <div
+            className="wb-tab-menu"
+            role="menu"
+            ref={menuRef}
+            // 水平居中于 tab：left 锚在 tab 中点，translateX(-50%) 回拉半宽。
+            style={{
+              position: "fixed",
+              top: menuPos.top,
+              left: menuPos.left,
+              transform: "translateX(-50%)",
+            }}
+          >
+            <button
+              type="button"
+              role="menuitem"
+              className="wb-tab-menu-item"
+              onClick={() => {
+                onMarkPrimary();
+                closeMenu();
+              }}
+            >
+              设为主工作台
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className={`wb-tab-menu-item wb-tab-menu-danger${confirming ? " wb-tab-menu-confirm" : ""}`}
+              onClick={() => {
+                if (!confirming) {
+                  setConfirming(true);
+                  return;
+                }
+                onDelete();
+                closeMenu();
+              }}
+              onBlur={() => setConfirming(false)}
+              title="代码与数据移入回收站（_trash），可手工找回"
+            >
+              {confirming ? "确认卸载？" : "卸载工作台"}
+            </button>
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }

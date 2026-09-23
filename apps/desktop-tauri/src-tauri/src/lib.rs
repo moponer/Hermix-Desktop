@@ -449,6 +449,25 @@ pub fn run() {
                 }
             };
 
+            // 1a-2. Runtime asset-protocol scope. The static scope in
+            //    tauri.conf.json (`$HOME/.hermix/**`) fails on Windows when
+            //    (a) portable mode redirects HERMIX_HOME elsewhere, or (b)
+            //    the drive-letter case / path separators don't match the
+            //    glob (WebView2 requests then 403 on every workbench
+            //    asset). Authorize the REAL hermix_home directory here —
+            //    one source of truth, matches whatever mode we booted in.
+            {
+                use tauri::Manager;
+                let wb_root = hermix_home.join("workbenches");
+                let scope = app.asset_protocol_scope();
+                if let Err(e) = scope.allow_directory(&wb_root, true) {
+                    eprintln!(
+                        "[Hermix] asset scope: failed to allow {}: {e}",
+                        wb_root.display()
+                    );
+                }
+            }
+
             // 启动阶段广播：写入静态最近阶段并 emit，供启动页显示真实进度。
             // 早期阶段可能早于前端 listen，故另提供 boot_stage command 拉取当前值。
             let handle = app.handle().clone();
@@ -542,6 +561,9 @@ pub fn run() {
             commands::pick_directory,
             commands::open_external_url,
             commands::restart_app,
+            commands::list_backend_log_files,
+            commands::read_backend_log_tail,
+            commands::open_log_directory,
             commands::get_server_status,
             commands::read_artifact_file,
             commands::read_artifact_file_bytes,
@@ -594,6 +616,7 @@ pub fn run() {
             commands_workbench::workbench_create,
             commands_workbench::workbench_list,
             commands_workbench::workbench_set_primary,
+            commands_workbench::workbench_delete,
             commands_workbench::workbench_read,
             commands_workbench::workbench_write,
             commands_workbench::workbench_files,

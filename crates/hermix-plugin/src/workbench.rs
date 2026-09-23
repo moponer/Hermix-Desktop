@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use hermix_config::paths::hermix_home;
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 use crate::workbench_lint::{lint_files, Violation};
@@ -1037,6 +1038,37 @@ pub fn set_primary(id: &str) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// 软删工作台：整个目录移入 `workbenches/_trash/<id>-<时间戳>/`。
+///
+/// data/ 与 sessions/ 跟代码在同一目录树下，一起进回收站 —— 「回滚只动
+/// code/」是版本回退的纪律，删除是另一个操作：整台撤下，可找回（用户
+/// 误删还有救），不做硬删。会话归属戳（sessions.workbench_id）由调用方
+/// 经 HTTP PATCH 清理 —— sessions.db 归 sidecar 独占写，这里不直接碰。
+/// 被删的是主台时，主台标记随目录一起消失，`primary_workbench` 的回落
+/// 逻辑会自动落到最近更新的那个，无需在这里补选。
+pub fn delete_workbench(id: &str) -> Result<PathBuf, String> {
+    // id 拼进路径，先挡路径穿越：合法 id 是 "workbench-<毫秒>" 纯 ASCII。
+    if !id
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+    {
+        return Err(format!("invalid workbench id: {}", id));
+    }
+    let src = workbench_dir(id);
+    if !src.exists() {
+        return Err(format!("workbench not found: {}", id));
+    }
+    let trash = workbenches_dir().join("_trash");
+    fs::create_dir_all(&trash).map_err(|e| format!("create trash dir: {}", e))?;
+    let dest = trash.join(format!(
+        "{}-{}",
+        id,
+        Utc::now().timestamp_millis()
+    ));
+    fs::rename(&src, &dest).map_err(|e| format!("move to trash: {}", e))?;
+    Ok(dest)
 }
 
 /// 主工作台；没有显式标记时回落到最近更新的那个。

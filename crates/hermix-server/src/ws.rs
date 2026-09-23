@@ -101,6 +101,7 @@ pub(crate) async fn handle_ws(
             image: None,
             image_mime_type: None,
             skills: None,
+            workbench_id: None,
         });
 
         // Build AgentOverrides from request
@@ -116,6 +117,7 @@ pub(crate) async fn handle_ws(
             image: None,
             image_mime_type: None,
             skills: request.skills.clone(),
+            workbench_id: request.workbench_id.clone(),
             memory_dir: None,
             approval_requester: None,
             on_event: None,
@@ -703,6 +705,7 @@ pub(crate) async fn handle_ws_stream_send(
         image_mime_type: request.image_mime_type.clone(),
         memory_dir: None,
         skills: request.skills.clone(),
+        workbench_id: request.workbench_id.clone(),
         approval_requester: {
             let registry = state.approval_registry.clone();
             Some(Arc::new(move |sess_id: String, req_id: String| {
@@ -2896,6 +2899,7 @@ async fn handle_inbound_frame(
                 image,
                 image_mime_type,
                 skills,
+                workbench_id: None,
             };
                 // Return the inner outcome verbatim. This turn may have
                 // consumed a mid-stream user message and needs it re-driven
@@ -2955,6 +2959,7 @@ async fn handle_inbound_frame(
         image: None,
         image_mime_type: None,
         skills: None,
+        workbench_id: None,
     });
     return handle_ws_stream_send(
         &mut *sender,

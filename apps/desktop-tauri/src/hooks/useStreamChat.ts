@@ -332,6 +332,58 @@ export function useStreamChat(activeSessionId: string | null) {
     };
   }, []);
 
+  // (P0-7 / STABILITY-PLAN §3.2) — listen for the stdio bridge death event
+  // emitted by `stdio_bridge::mark_dead_and_notify` in the Tauri host.
+  // Without this hook, an in-flight stream survives `stdout closed` for as
+  // long as `STALE_STREAM_TIMEOUT_MS` (300s). The server emits this event
+  // on the same generation as the active reader, so we only settle when the
+  // bridge death *actually* belongs to the send we are running (active
+  // generation match is implied by "the only possible listener is this
+  // current effect, mounted at most once").
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    // Dynamic import: tauri listene API is browser-side at runtime.
+    void import("@tauri-apps/api/event")
+      .then(({ listen }) => {
+        if (cancelled) return;
+        listen<{ reason: string; generation: number; current_generation: number }>(
+          "hermix:stream-bridge-dead",
+          (evt) => {
+            // Settle the in-flight stream IMMEDIATELY — the bridge wrote no
+            // more frames; nothing left to wait for. Skip when no stream is
+            // currently active to avoid stale-event spam during app shutdown.
+            const settle = settleRef.current;
+            if (!settle) return;
+            console.warn(
+              `[WS-BRIDGE-DEAD] site=stdio_bridge reason=${evt.payload?.reason ?? "unknown"} gen=${evt.payload?.generation}/${evt.payload?.current_generation}`,
+            );
+            settle(
+              "",
+              "连接中断：后端进程已退出，请重新发送。",
+              "bridge_dead",
+              "error",
+              evt.payload?.reason,
+              false,
+              "bridge_dead",
+            );
+          },
+        ).then((u) => {
+          if (cancelled) {
+            u();
+            return;
+          }
+          unlisten = u;
+        });
+      })
+      .catch((e) => console.error("[WS-BRIDGE-DEAD] listener attach failed", e));
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
   const send = useCallback(
     (
       sessionId: string,
@@ -432,6 +484,7 @@ export function useStreamChat(activeSessionId: string | null) {
           disarmTimeouts: () => {},
           resetIdleTimeout: () => {},
           resetStaleTimer: () => {},
+          resetMidStreamSilenceTimer: () => {},
           scheduleChunkFlush: () => {},
           wsSendRaw,
           dispatchUserMessage: () => {},
@@ -463,6 +516,36 @@ export function useStreamChat(activeSessionId: string | null) {
         const IDLE_TIMEOUT_MS = 300_000;
         const STALE_STREAM_TIMEOUT_MS = 300_000;
         const TOOL_STALE_CAP_MS = STALE_STREAM_TIMEOUT_MS * 2;
+        // (P0-7 / STABILITY-PLAN §3.3) — mid-stream silence watchdog:
+        // after at least one chunk has arrived, fire `mid_stream_silence`
+        // if no event (chunk/tool/file/etc.) is observed for
+        // MID_STREAM_SILENCE_MS — catches the "14% 永久不动" class of hangs
+        // where the backend is alive but stuck (deadlock, blocked syscall,
+        // provider stalled, etc.) and never sends a terminal event.
+        // Tools in flight get the longer TOOL_STALE_CAP_MS window.
+        const MID_STREAM_SILENCE_MS = 60_000;
+        let midStreamSilenceTimer: ReturnType<typeof setTimeout> | null = null;
+        const resetMidStreamSilenceTimer = () => {
+          if (midStreamSilenceTimer !== null) clearTimeout(midStreamSilenceTimer);
+          if (!ctx.firstChunkReceived) return;
+          const cap = ctx.toolRunningRef.current
+            ? TOOL_STALE_CAP_MS
+            : MID_STREAM_SILENCE_MS;
+          midStreamSilenceTimer = setTimeout(() => {
+            if (!ctx.doneRef.current) {
+              console.warn(
+                `[WS-STALL] site=mid_stream_silence tool_running=${ctx.toolRunningRef.current} elapsed_ms=${cap}`,
+              );
+              ctx.settle(
+                "",
+                undefined,
+                "mid_stream_silence",
+                "timeout",
+                `后端 ${Math.round(cap / 1000)}s 内无任何事件`,
+              );
+            }
+          }, cap);
+        };
         const resetIdleTimeout = () => {
           if (ctx.idleTimeout !== null) clearTimeout(ctx.idleTimeout);
           ctx.idleTimeout = setTimeout(() => {
@@ -486,7 +569,12 @@ export function useStreamChat(activeSessionId: string | null) {
         const armTimeouts = () => {
           resetIdleTimeout();
           resetStaleTimer();
+          resetMidStreamSilenceTimer();
         };
+        // Expose so the parser can re-arm on every tool/chunk event without
+        // dragging a new closure through the message handler.
+        ctx.armTimeouts = armTimeouts;
+        ctx.resetMidStreamSilenceTimer = resetMidStreamSilenceTimer;
 
         // ── Dispatch this turn's user message ────────────────────
         // Idempotent by design. Two code paths may call it:
@@ -541,11 +629,15 @@ export function useStreamChat(activeSessionId: string | null) {
             ctx.slowHintTimer = null;
           }
           ctx.toolRunningRef.current = false;
+          if (midStreamSilenceTimer !== null) {
+            clearTimeout(midStreamSilenceTimer);
+            midStreamSilenceTimer = null;
+          }
         };
-        ctx.armTimeouts = armTimeouts;
         ctx.disarmTimeouts = disarmTimeouts;
         ctx.resetIdleTimeout = resetIdleTimeout;
         ctx.resetStaleTimer = resetStaleTimer;
+        ctx.resetMidStreamSilenceTimer = resetMidStreamSilenceTimer;
         disarmTimeoutsRef.current = disarmTimeouts;
 
         const settle = (

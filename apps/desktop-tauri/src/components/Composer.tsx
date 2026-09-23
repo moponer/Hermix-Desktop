@@ -55,6 +55,8 @@ export interface ComposerProps {
   onRemoveImage?: (index: number) => void;
   keepOriginalImage?: boolean;
   setKeepOriginalImage?: (v: boolean) => void;
+  /** workbench = 工作台右栏：隐藏专家/目录等主对话专属 chip（工作台有自己的 skill 与代码目录，选这些是噪音）。 */
+  variant?: "default" | "workbench";
   onStop?: (sessionId?: string) => boolean;
   /** Identifier of the session this Composer is rendered for. Threaded
    *  into the stop-button click so the stream-chat hook can verify
@@ -270,6 +272,10 @@ export function Composer(p: ComposerProps) {
         className="px-3 pb-3 pt-1 flex flex-wrap items-center gap-x-1 gap-y-1"
         data-compact={toolbarCompact ? "true" : "false"}
       >
+        {/* 工作台右栏（variant="workbench"）没有专家/目录概念 —— skill 常驻、
+            代码目录固定，这两个 chip 是主对话专属，渲染出来只会误导。 */}
+        {p.variant !== "workbench" && (
+        <>
         <div className="flex items-center gap-0.5 min-w-0 shrink-0">
           <div className="relative">
             <button
@@ -437,6 +443,8 @@ export function Composer(p: ComposerProps) {
             )}
           </div>
         </div>
+        </>
+        )}
 
         <div className="flex items-center gap-0.5 ml-auto shrink-0">
           <div className="relative">
