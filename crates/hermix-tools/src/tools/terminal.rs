@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use hermix_core::{
     path_security::{forbidden_win32_prefix, detect_shell_metacharacters, strip_win32_long_path},
-    tool_schema, ApprovalOutcome, CommandOutput, JsonSchema, TerminalBackend, ToolError,
-    ToolHandler, ToolSchema, traits::RiskLevel,
+    tool_schema, ApprovalOutcome, CommandOutput, JsonSchema, Shell, ShellError, TerminalBackend,
+    ToolError, ToolHandler, ToolSchema, traits::RiskLevel,
 };
 
 use crate::approval::{ApprovalDecision, ApprovalManager, TerminalApprovalContext};
@@ -90,6 +90,11 @@ pub struct TerminalHandler {
     /// empty (default `TerminalApprovalContext`), the legacy
     /// "reply `HERMIX_CONFIRM=1`" flow runs — backward-compatible.
     approval_ctx: Arc<std::sync::Mutex<TerminalApprovalContext>>,
+    /// 接缝 `Shell`：C3 接缝用于把执行失败归类成结构化的
+    /// `ShellErrorKind`，给模型可执行指令而不是裸 stderr。提供了就走
+    /// 接缝，没提供继续把 `AgentError::to_string()` 透传——保留既有
+    /// 8 个 terminal 测试的形状。
+    shell: Option<Arc<dyn Shell>>,
 }
 
 impl TerminalHandler {
@@ -113,7 +118,16 @@ impl TerminalHandler {
             approval: ApprovalManager::new(),
             default_workspace: terminal_workspace,
             approval_ctx: terminal_approval_ctx,
+            shell: None,
         }
+    }
+
+    /// 给后续迁移阶段使用：把 `Shell` seam 接进 terminal tool，
+    /// 让执行失败的 stderr 输出走 `Shell::classify` + `instruction()`
+    /// 而不是裸回灌。当前 `register()` 默认不传，等主进程装配接入。
+    pub fn with_shell(mut self, shell: Arc<dyn Shell>) -> Self {
+        self.shell = Some(shell);
+        self
     }
 
     /// Update the default workspace for the next and subsequent tool calls.
@@ -540,6 +554,36 @@ async fn execute_inner(
             .await
         {
             Ok(output) => {
+                // 接缝路径：exit_code != 0 时不再裸回灌 stderr，而是把
+                // 输出喂给 `Shell::classify`，命中结构化 `ShellErrorKind`
+                // 就输出 `ShellError::instruction()`（"换做法"），未命中
+                // 退回 `format_command_output`（保留既有 8 个测试的形状）。
+                //
+                // SEAMS_DESIGN §3 决策 C 的实际落地：Windows 同一类失败
+                // 有 N 种面，归一后才能阻止模型盲试循环。
+                if output.exit_code != 0 {
+                    if let Some(shell) = this.shell.as_ref() {
+                        let exec = hermix_core::ExecOutput {
+                            code: output.exit_code,
+                            stdout: output.stdout.clone(),
+                            stderr: output.stderr.clone(),
+                            timed_out: false,
+                        };
+                        if let Some(kind) = shell.classify(&exec) {
+                            let detail = if !output.stderr.is_empty() {
+                                output.stderr.trim()
+                            } else {
+                                output.stdout.trim()
+                            };
+                            let err = ShellError::classified(kind, detail);
+                            return Err(ToolError::from_message(format!(
+                                "{}\n\n--- stderr ---\n{}",
+                                err.instruction(),
+                                output.stderr
+                            )));
+                        }
+                    }
+                }
                 let mut result = format_command_output(&output);
                 if let Some(nudge) = binary_nudge {
                     result.push_str(&format!(
@@ -1304,5 +1348,176 @@ mod tests {
         assert!(formatted.contains("out"));
         assert!(formatted.contains("err"));
         assert!(formatted.contains("exit code: 1"));
+    }
+
+    // -- 渐进迁移：终端失败输出接到 `Shell` seam（SEAMS_DESIGN §3 C）--
+    // 验证 exit_code != 0 且提供 shell 时，stderr 输出走
+    // `Shell::classify` + `ShellError::instruction()`，给模型可执行指令
+    // 而不是裸 stderr + "原样重试"。同时也验证未提供 shell 时退化为
+    // 老路径，老测试零回归。
+
+    /// 失败输出可控的 MockBackend：根据预置列表返回 (exit_code, stdout, stderr)。
+    struct FailingMockBackend {
+        seq: std::sync::Arc<std::sync::Mutex<Vec<(i32, String, String)>>>,
+    }
+
+    #[async_trait]
+    impl TerminalBackend for FailingMockBackend {
+        async fn execute_command(
+            &self,
+            cmd: &str,
+            _timeout: Option<u64>,
+            _workdir: Option<&str>,
+            _bg: bool,
+            _pty: bool,
+        ) -> Result<CommandOutput, AgentError> {
+            let mut g = self.seq.lock().unwrap();
+            let (code, out, err) = g.remove(0);
+            // 把命令名塞 stdout 让测试能在分支里看到原始 cmd
+            let out = if out.is_empty() {
+                format!("out:{cmd}")
+            } else {
+                out
+            };
+            Ok(CommandOutput { exit_code: code, stdout: out, stderr: err })
+        }
+        async fn read_file(
+            &self,
+            _path: &str,
+            _offset: Option<u64>,
+            _limit: Option<u64>,
+        ) -> Result<String, AgentError> {
+            Ok(String::new())
+        }
+        async fn write_file(&self, _path: &str, _content: &str) -> Result<(), AgentError> {
+            Ok(())
+        }
+        async fn file_exists(&self, _path: &str) -> Result<bool, AgentError> {
+            Ok(true)
+        }
+    }
+
+    fn make_failing(seq: Vec<(i32, String, String)>) -> Arc<FailingMockBackend> {
+        Arc::new(FailingMockBackend {
+            seq: Arc::new(std::sync::Mutex::new(seq)),
+        })
+    }
+
+    fn make_handler(
+        backend: Arc<dyn TerminalBackend>,
+        shell: Option<Arc<dyn Shell>>,
+    ) -> TerminalHandler {
+        let h = TerminalHandler::new(
+            backend,
+            Arc::new(std::sync::RwLock::new(None)),
+            Arc::new(std::sync::Mutex::new(TerminalApprovalContext::default())),
+        );
+        match shell {
+            Some(s) => h.with_shell(s),
+            None => h,
+        }
+    }
+
+    #[tokio::test]
+    async fn failing_command_surfaces_structured_instruction_via_seam() {
+        // 中文 Windows 上"不是内部或外部命令"——分类必须是 CommandNotFound，
+        // 输出必须是结构化指令（"改用…完整路径"），不能是"原样重试"。
+        let backend = make_failing(vec![(
+            1,
+            String::new(),
+            "'foo' 不是内部或外部命令，也不是可运行的程序".into(),
+        )]);
+        let shell: Arc<dyn Shell> = Arc::new(hermix_core::LocalShell::default());
+        let handler = make_handler(backend, Some(shell));
+        let err = handler
+            .execute(json!({"command": "foo"}))
+            .await
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("完整路径"),
+            "expected structured instruction, got: {msg}"
+        );
+        assert!(
+            !msg.contains("再试一次") && !msg.contains("retry"),
+            "must NOT echo the legacy 'retry' pattern, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn access_denied_maps_to_actionable_hint() {
+        // 用 `echo` 类无害命令绕过 approval 拦截——接缝 classify 看的是
+        // backend 返回的 stderr，不是命令名本身。
+        let backend = make_failing(vec![(
+            5,
+            String::new(),
+            "Access is denied.".into(),
+        )]);
+        let shell: Arc<dyn Shell> = Arc::new(hermix_core::LocalShell::default());
+        let handler = make_handler(backend, Some(shell));
+        let err = handler.execute(json!({"command": "echo x"})).await.unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("权限不足") || msg.contains("受保护目录"), "got: {msg}");
+    }
+
+    #[tokio::test]
+    async fn file_locked_maps_to_actionable_hint() {
+        let backend = make_failing(vec![(
+            32,
+            String::new(),
+            "The process cannot access the file because it is being used by another process."
+                .into(),
+        )]);
+        let shell: Arc<dyn Shell> = Arc::new(hermix_core::LocalShell::default());
+        let handler = make_handler(backend, Some(shell));
+        let err = handler.execute(json!({"command": "echo x"})).await.unwrap_err();
+        assert!(err.to_string().contains("被占用") || err.to_string().contains("新路径"));
+    }
+
+    #[tokio::test]
+    async fn unknown_failure_still_returns_some_instruction_not_bare_stderr() {
+        // stderr 命中不了任何已知模式——分类为 Unknown，但 instruction
+        // 仍然是结构化的（"先读 stderr 定位…不要原样重复"），不是
+        // 把原始 stderr 整段回灌。
+        let backend = make_failing(vec![(
+            99,
+            String::new(),
+            "some weird internal-only error message".into(),
+        )]);
+        let shell: Arc<dyn Shell> = Arc::new(hermix_core::LocalShell::default());
+        let handler = make_handler(backend, Some(shell));
+        let err = handler.execute(json!({"command": "weird"})).await.unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("不要原样重复"), "got: {msg}");
+        // 原始 stderr 仍以 "--- stderr ---" 形式附带，便于调试，
+        // 但 instruction 始终在前。
+        assert!(msg.contains("--- stderr ---"), "stderr section missing, got: {msg}");
+        assert!(msg.find("不要原样重复").unwrap() < msg.find("--- stderr ---").unwrap());
+    }
+
+    #[tokio::test]
+    async fn exit_code_zero_never_goes_through_seam() {
+        // exit_code = 0 即使有 shell seam 也不该触发指令输出。
+        let backend = make_failing(vec![(0, "hello".into(), String::new())]);
+        let shell: Arc<dyn Shell> = Arc::new(hermix_core::LocalShell::default());
+        let handler = make_handler(backend, Some(shell));
+        let result = handler.execute(json!({"command": "echo hi"})).await.unwrap();
+        assert_eq!(result, "hello");
+    }
+
+    #[tokio::test]
+    async fn no_seam_means_legacy_bare_stderr_path_preserved() {
+        // 没传 shell seam 时，exit_code != 0 走老路径：format_command_output
+        // 把 stderr 直接拼进结果。这条测试是"零回归"的钉子——主进程装配
+        // 接入 shell seam 前，所有现有调用点行为不变。
+        let backend = make_failing(vec![(
+            1,
+            String::new(),
+            "'foo' 不是内部或外部命令".into(),
+        )]);
+        let handler = make_handler(backend, None);
+        let result = handler.execute(json!({"command": "foo"})).await.unwrap();
+        assert!(result.contains("不是内部或外部命令"));
+        assert!(result.contains("[exit code: 1]"));
     }
 }
