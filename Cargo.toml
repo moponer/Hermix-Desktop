@@ -23,14 +23,12 @@ members = [
     "crates/hermix-agent",
     "crates/hermix-tools",
     "crates/hermix-cua",
-    "crates/hermix-gateway",
     "crates/hermix-cron",
     "crates/hermix-skills",
     "crates/hermix-mcp",
     "crates/hermix-environments",
     "crates/hermix-config",
     "crates/hermix-intelligence",
-    "crates/hermix-acp",
     "crates/hermix-focus",
     "crates/hermix-server",
     "crates/hermix-telemetry",
@@ -86,14 +84,12 @@ hermix-transport = { path = "crates/hermix-transport" }
 hermix-agent = { path = "crates/hermix-agent" }
 hermix-tools = { path = "crates/hermix-tools" }
 hermix-cua = { path = "crates/hermix-cua" }
-hermix-gateway = { path = "crates/hermix-gateway" }
 hermix-cron = { path = "crates/hermix-cron" }
 hermix-skills = { path = "crates/hermix-skills" }
 hermix-mcp = { path = "crates/hermix-mcp" }
 hermix-environments = { path = "crates/hermix-environments" }
 hermix-config = { path = "crates/hermix-config" }
 hermix-intelligence = { path = "crates/hermix-intelligence" }
-hermix-acp = { path = "crates/hermix-acp" }
 hermix-focus = { path = "crates/hermix-focus" }
 hermix-server = { path = "crates/hermix-server" }
 hermix-telemetry = { path = "crates/hermix-telemetry" }

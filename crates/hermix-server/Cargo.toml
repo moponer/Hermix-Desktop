@@ -26,7 +26,6 @@ hermix-tools = { workspace = true }
 hermix-plugin = { workspace = true }
 hermix-config = { workspace = true }
 hermix-cron = { workspace = true }
-hermix-gateway = { workspace = true }
 hermix-skills = { workspace = true }
 hermix-environments = { workspace = true }
 hermix-telemetry = { workspace = true }
