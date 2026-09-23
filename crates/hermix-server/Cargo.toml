@@ -24,6 +24,7 @@ hermix-store = { workspace = true }
 hermix-transport = { workspace = true }
 hermix-agent = { workspace = true }
 hermix-tools = { workspace = true }
+hermix-context = { workspace = true }
 hermix-plugin = { workspace = true }
 hermix-config = { workspace = true }
 hermix-cron = { workspace = true }
@@ -56,13 +57,18 @@ libc = "0.2"
 reqwest = { version = "0.12", default-features = false, features = ["stream", "json", "rustls-tls", "multipart"] }
 base64 = { workspace = true }
 regex = { workspace = true }
+# `test_state.rs` lives in the lib tree (gated by `#![cfg(any(test,
+# feature = "test-helpers"))]`) and uses `tempfile::tempdir` — so it
+# must be a regular `[dependencies]` entry, not dev-only, otherwise
+# `cargo test --features test-helpers` fails to build the lib.
+tempfile = "3"
 
 [dev-dependencies]
 http-body-util = "0.1"
 tracing-subscriber = { workspace = true }
 proptest = { workspace = true }
-tempfile = "3"
 walkdir = "2"
+hermix-context = { workspace = true }
 
 [lints]
 workspace = true

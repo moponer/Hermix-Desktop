@@ -665,6 +665,7 @@ mod approval_registry_tests {
             session_persistence,
             cron_scheduler: None,
             skill_store: None,
+            boot: Arc::new(hermix_context::Boot::local(hermix_context::BootProfile::new())),
             runtime_gateway_running: None,
             agent_service: Arc::new(hermix_agent::LocalAgentService::new(
                 Arc::new(hermix_config::GatewayConfig::default()),

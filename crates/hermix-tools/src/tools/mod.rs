@@ -98,6 +98,9 @@ pub fn register_all(
     skill_provider: Arc<dyn SkillProvider>,
     browser_backend: Arc<dyn BrowserBackend>,
     todo_event_tx: Option<tokio::sync::broadcast::Sender<todo::TodoChange>>,
+    // 接缝：主进程装配（hermix-context::boot）注入 fs/shell。`None` 时
+    // file/terminal 工具退回老路径。tests 不需要传。
+    seams: Option<hermix_context::BootSeams>,
 ) {
     //P1.2 per-tool migration (completed ):
     disk_cleanup::register(registry);
@@ -151,7 +154,7 @@ pub fn register_all(
     // search get local backends (LocalPatchBackend / LocalSearchBackend)
     // because they need fuzzy-match + ripgrep semantics that the
     // TerminalBackend trait doesn't expose.
-    file::register(registry, terminal_backend.clone());
+    file::register(registry, terminal_backend.clone(), seams.as_ref().map(|s| s.fs.clone()));
     //P1.8 : office_cli was previously implemented but
     // never registered. Add it next to `file` and `terminal` so the
     // `essential::ESSENTIAL_TOOLSETS["office"]` floor finds a real
@@ -188,6 +191,7 @@ pub fn register_all(
         terminal_backend,
         registry.terminal_workspace_handle(),
         registry.terminal_approval_ctx_handle(),
+        seams.as_ref().map(|s| s.shell.clone()),
         //TODO(-terminal): pass registry.terminal_permission_profile_handle
         // once `TerminalHandler::new` accepts the handle and gates commands/paths
         // against `PermissionProfile.granted_commands` / `granted_paths`. Until

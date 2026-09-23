@@ -1976,6 +1976,9 @@ dependencies = [
 name = "hermix-context"
 version = "0.1.1"
 dependencies = [
+ "async-trait",
+ "hermix-core",
+ "tokio",
  "tracing",
 ]
 
@@ -2215,6 +2218,7 @@ dependencies = [
  "hermix-agent",
  "hermix-automation",
  "hermix-config",
+ "hermix-context",
  "hermix-core",
  "hermix-cron",
  "hermix-cua",
@@ -2351,6 +2355,7 @@ dependencies = [
  "fs4",
  "futures",
  "hermix-config",
+ "hermix-context",
  "hermix-core",
  "hermix-cua",
  "hermix-plugin",

@@ -26,6 +26,12 @@ pub struct HttpServerState {
     pub session_persistence: Arc<hermix_agent::session_persistence::SessionPersistence>,
     pub cron_scheduler: Option<Arc<hermix_cron::CronScheduler>>,
     pub skill_store: Option<Arc<dyn hermix_skills::SkillStore>>,
+    /// 进程级装配：持有 provider 注册 guard，保证 fs/shell/sandbox/transport
+    /// 服务与进程同寿命。`Boot::seams()` 把同一组 provider 实例传给
+    /// `register_builtin_tools`——避免业务侧各自 `Arc::new(LocalFs)` 重复构造。
+    /// `Arc` 包裹是因为 `Boot` 持有不可 Clone 的 `ServiceGuard`，
+    /// 而 `HttpServerState` 自身需要 Clone（多个 WS handler 共享）。
+    pub boot: Arc<hermix_context::Boot>,
     pub runtime_gateway_running: Option<Arc<AtomicBool>>,
     pub(crate) agent_service: Arc<dyn hermix_core::traits::AgentService>,
     pub approval_registry: ApprovalRegistry,
@@ -240,6 +246,12 @@ impl HttpServerState {
         // ordinary tool output.
         let clarify_dispatcher = hermix_tools::ClarifyDispatcher::new();
         let (clarify_broadcast, _) = tokio::sync::broadcast::channel::<ClarifyBroadcast>(64);
+        // 进程级装配（C4）。`boot` 持有 service 注册 guard——必须活到
+        // `HttpServerState` 析构；`boot_seams` 把同一组 provider 实例
+        // 传给 `register_builtin_tools`，让 file/terminal 工具真接 Fs/Shell
+        // seam 而不是退回老路径。
+        let boot = hermix_context::Boot::local(hermix_context::BootProfile::new());
+        let boot_seams = boot.seams();
         // Background pump: subscribes to dispatcher snapshots and
         // broadcasts each new pending `clarify` to every connected
         // WebSocket. The desktop UI filters by session id before showing
@@ -299,6 +311,7 @@ impl HttpServerState {
             None,
             Some(todo_event_tx.clone()),
             Some(custom_app_manager.clone()),
+            Some(boot_seams.clone()),
         );
         // with whatever the user last persisted in
         // `enabled_toolsets.json`. Without this, every restart
@@ -538,6 +551,7 @@ impl HttpServerState {
             session_persistence: session_persistence.clone(),
             cron_scheduler: Some(cron_scheduler),
             skill_store: Some(skill_store),
+            boot: Arc::new(boot),
             runtime_gateway_running: None,
             agent_service,
             approval_registry: ApprovalRegistry::new(),
@@ -655,6 +669,12 @@ impl HttpServerState {
             hermix_tools::tools::todo::TodoChange,
         >(hermix_tools::tools::todo::TODO_EVENT_CHANNEL_CAPACITY);
 
+        // 进程级装配（C4）。同 build_with_hermes_home——保证两个 build
+        // 路径产出的 HttpServerState 都能把接缝实例注入到 file/terminal
+        // 工具。详见同函数上方的注释。
+        let boot = hermix_context::Boot::local(hermix_context::BootProfile::new());
+        let boot_seams = boot.seams();
+
         // (custom_apps wiring fix): construct a shared
         // PluginManager for the custom-app system and clone it into
         // both `state.custom_app_manager` (HTTP API at /api/custom-apps)
@@ -679,6 +699,7 @@ impl HttpServerState {
             None,
             Some(todo_event_tx.clone()),
             Some(custom_app_manager.clone()),
+            Some(boot_seams.clone()),
         );
 
         // MCP wiring (mirrors `build_with_hermes_home`). Construct
@@ -783,6 +804,7 @@ impl HttpServerState {
             session_persistence: session_persistence.clone(),
             cron_scheduler: Some(cron_scheduler),
             skill_store: Some(skill_store),
+            boot: Arc::new(boot),
             runtime_gateway_running: None,
             agent_service,
             approval_registry: ApprovalRegistry::new(),

@@ -39,6 +39,9 @@ pub fn register_builtin_tools(
     enabled_toolsets: Option<HashSet<String>>,
     todo_event_tx: Option<tokio::sync::broadcast::Sender<crate::tools::todo::TodoChange>>,
     custom_app_manager: Option<Arc<hermix_plugin::PluginManager>>,
+    // 接缝：主进程装配（hermix-context::boot）注入 fs/shell。`None` 时
+    // 退回 file/terminal 的老路径。tests + 没装配的调用方都传 None。
+    seams: Option<hermix_context::BootSeams>,
 ) {
     // 1. Browser backend. We construct it here (not inside
     // `tools::browser::register`) because the allowlist / port /
@@ -80,6 +83,7 @@ pub fn register_builtin_tools(
         skill_provider,
         browser_backend,
         todo_event_tx,
+        seams,
     );
     crate::tools::clarify::register(registry, clarify_backend);
     // Mark interactive tools that must not run in parallel with others.
@@ -257,6 +261,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let risk = registry
             .risk_level("terminal")
@@ -294,6 +299,8 @@ mod tests {
             Some(Arc::new(PluginManager::new(
                 std::env::temp_dir().join("hermix-test-custom-apps"),
             ))),
+            // 接缝 `None`：tests 不需要真接缝，验证 register 路径老形状不变。
+            None,
         );
         registry
     }

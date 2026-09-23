@@ -32,14 +32,15 @@ use crate::ToolRegistry;
 /// - `patch` → Caution (mutating edits)
 /// - `search_files` → Caution (no destructive power, but the file-
 /// toolset is uniformly Caution for consistency)
-pub fn register(registry: &ToolRegistry, terminal_backend: Arc<dyn TerminalBackend>) {
+pub fn register(
+    registry: &ToolRegistry,
+    terminal_backend: Arc<dyn TerminalBackend>,
+    // 接缝 `Fs`：主进程装配注入。`None` 时 ReadFileHandler/WriteFileHandler
+    // 走 TerminalBackend（带 offset/limit 的旧路径）；提供了就走 Fs seam
+    // （不带 offset/limit 的简单路径）。tests + 没装配的调用方传 None。
+    fs: Option<Arc<dyn Fs>>,
+) {
     use crate::backends::file::{LocalPatchBackend, LocalSearchBackend};
-
-    // `fs` 留给未来的渐进迁移：ReadFileHandler/WriteFileHandler 接受可选
-    // 的 Fs seam，提供了就走接缝（不带 offset/limit 的简单路径），没
-    // 提供就继续走 TerminalBackend（带 offset/limit 的旧路径），不破坏
-    // 既有 6 个文件工具的形状。
-    let fs: Option<Arc<dyn Fs>> = None;
 
     registry.register_with_risk(
         "read_file",

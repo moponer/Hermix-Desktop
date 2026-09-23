@@ -47,9 +47,20 @@ impl BootProfile {
     }
 }
 
+/// 已暴露给业务层的接缝实例。把 `Boot` 装配出的 provider 引用传出，
+/// 让 `hermix-tools` 的 register 函数能拿到同一个 Arc 实例——而不是
+/// 各自构造一遍。S2 共享 provider 的语义在此落地：换 provider 是改
+/// `Boot::local` 一处，工具层拿到的是同一个 Arc。
+#[derive(Clone)]
+pub struct BootSeams {
+    pub fs: Arc<dyn Fs>,
+    pub shell: Arc<dyn Shell>,
+}
+
 /// 已装配的进程。持有注册 guard——guard 掉了服务就注销，所以必须活到进程结束。
 pub struct Boot {
     ctx: Context,
+    seams: BootSeams,
     _guards: Vec<ServiceGuard>,
 }
 
@@ -68,13 +79,20 @@ impl Boot {
         let exec: Arc<dyn ExecWorld> = world.clone();
 
         let guards = vec![
-            ctx.provide(fs),
-            ctx.provide(shell),
+            ctx.provide(fs.clone()),
+            ctx.provide(shell.clone()),
             ctx.provide(sandbox),
             ctx.provide(transport),
             ctx.provide(exec),
         ];
-        Self { ctx, _guards: guards }
+        Self { ctx, seams: BootSeams { fs, shell }, _guards: guards }
+    }
+
+    /// 给业务层（工具 register、agent loop 等）拿去调用接缝的实例。
+    /// 这是接缝从「Context 内可见」升级到「外部可见」的唯一通道——避免
+    /// 每个调用方各自 `Arc::new(LocalFs)` 又造一遍。
+    pub fn seams(&self) -> BootSeams {
+        self.seams.clone()
     }
 
     pub fn context(&self) -> &Context {
@@ -127,6 +145,16 @@ mod tests {
         assert!(boot.context().has::<Arc<dyn Sandbox>>());
         assert!(boot.context().has::<Arc<dyn Transport>>());
         assert!(boot.context().has::<Arc<dyn ExecWorld>>());
+    }
+
+    /// 业务层从 boot 取 seams：返回的实例与 boot 内部的 Context 注册实例
+    /// 是同一个 Arc——避免重复构造。
+    #[test]
+    fn boot_seams_are_the_same_arcs_as_in_the_context() {
+        let boot = Boot::local(BootProfile::new());
+        let s = boot.seams();
+        let from_ctx: Arc<dyn Fs> = (*boot.context().get::<Arc<dyn Fs>>().unwrap()).clone();
+        assert!(Arc::ptr_eq(&s.fs, &from_ctx));
     }
 
     #[test]

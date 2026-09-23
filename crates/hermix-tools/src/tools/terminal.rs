@@ -41,12 +41,19 @@ pub fn register(
     backend: Arc<dyn TerminalBackend>,
     terminal_workspace: Arc<std::sync::RwLock<Option<std::path::PathBuf>>>,
     terminal_approval_ctx: Arc<std::sync::Mutex<TerminalApprovalContext>>,
+    // 接缝 `Shell`：主进程装配注入。`None` 时 terminal 退回老路径
+    // （format_command_output 裸 stderr + [exit code: N]）。
+    shell: Option<Arc<dyn Shell>>,
 ) {
-    let handler = Arc::new(TerminalHandler::new(
+    let mut handler = TerminalHandler::new(
         backend,
         terminal_workspace,
         terminal_approval_ctx,
-    ));
+    );
+    if let Some(s) = shell {
+        handler = handler.with_shell(s);
+    }
+    let handler = Arc::new(handler);
     let schema = handler.schema();
     registry.register_with_risk(
         "terminal",
