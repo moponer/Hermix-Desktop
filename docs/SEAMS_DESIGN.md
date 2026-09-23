@@ -160,7 +160,7 @@ pub trait Transport: Send + Sync {
 - [x] 1. `hermix-core` 加接缝（Fs/Shell/ExecWorld/Sandbox/Transport 新建，Llm/Memory/Skills 复用）→ 编译验证
 - [x] 2. 默认 provider：`LocalFs` / `LocalShell` / `LocalExecWorld` / `LocalSandbox` / `NoopTransport` / `InMemoryFs`
 - [x] 3. 换 provider 集成测试：`swapping_fs_provider_is_invisible_to_callers`（内存 Fs 替换磁盘 Fs，上层函数不变）
-- [ ] 4. C4 Boot/profile：把接缝装配成进程级 provider 表
+- [x] 4. C4 Boot/profile：`hermix-context::boot` 把接缝装配成进程级 provider 表（9 个测试）
 - [ ] 5. 业务侧逐个迁移，**不一次性切换**
 
 ## 6. 落地中的两个实测发现

@@ -6,7 +6,12 @@ license = { workspace = true }
 description = "Service registry with reversible registration: a registration unwinds when its guard is dropped."
 
 [dependencies]
+hermix-core = { workspace = true }
 tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+async-trait = { workspace = true }
 
 [lints]
 workspace = true

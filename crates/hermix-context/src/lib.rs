@@ -26,6 +26,14 @@
 //! remove it if it is still the one registered (compared by pointer).
 //! A superseded guard's drop is a no-op. See
 //! [`tests::superseded_guard_drop_does_not_remove_the_replacement`].
+//!
+//! ## Boot
+//!
+//! [`boot`] assembles the kernel seams (Fs / Shell / Sandbox / Transport /
+//! ExecWorld) into a root scope. Registration is reversible there too, so
+//! dropping the assembled process unregisters every provider with it.
+
+pub mod boot;
 
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
