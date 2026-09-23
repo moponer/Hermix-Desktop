@@ -9,14 +9,25 @@
     <meta name="color-scheme" content="light dark" />
     <title>Hermix Desktop</title>
     <script>
-      // Theme bootstrap (runs before React to avoid FOUC)
+      // Theme bootstrap — 早于 React / Vite 加载运行，避免 FOUC。
+      // 与 useTheme.ts 共用 STORAGE_KEYS.theme = "hermix.desktop.theme"。
+      // 主程序挂载后 useTheme 会再 readStored() 一次（已存 key 同名），不会覆写。
+      // 暗色兜底：没设置主题且系统偏好暗色 → 默认 dark。
       (function() {
-        try {
-          var t = localStorage.getItem("hermes.desktop.theme");
-          if (t === "dark" || (t !== "light" && window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches)) {
-            document.documentElement.classList.add("dark");
-          }
-        } catch (e) {}
+        var root = document.documentElement;
+        function apply(id) {
+          root.setAttribute("data-theme", id);
+          try { root.style.colorScheme = id === "light" ? "light" : "dark"; } catch (_) {}
+        }
+        var stored = null;
+        try { stored = localStorage.getItem("hermix.desktop.theme"); } catch (_) {}
+        if (stored === "light" || stored === "dark" || stored === "rainforest" || stored === "sunset") {
+          apply(stored);
+        } else {
+          var darkPref = false;
+          try { darkPref = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches; } catch (_) {}
+          apply(darkPref ? "dark" : "light");
+        }
       })();
     </script>
     <script>
@@ -44,20 +55,49 @@
       })();
     </script>
     <style>
-      /* ── Splash tokens — clean, minimal ── */
+      /* ── Splash tokens · 4 主题 ── */
+      /* 单一 splash 变量映射：跟主题 token 同名，避免 splash 与主程序两套。
+         主程序 themes/<id>.css 加载后会重新覆盖这些变量；splash 在 React 挂载
+         前显示，靠这里兜底。 */
       :root {
-        --sp-bg: #ffffff;
-        --sp-ink: #1c1c1e;
-        --sp-ink-soft: #8e8e93;
-        --sp-accent: #22c55e;
-        --sp-track: #e5e5ea;
+        --sp-bg: var(--color-bg-app, #f5f4ed);
+        --sp-ink: var(--color-text-primary, #3d3d3a);
+        --sp-ink-soft: var(--color-text-tertiary, #78776f);
+        --sp-accent: var(--color-accent, #c96442);
+        --sp-track: var(--color-border-subtle, #f0eee6);
       }
-      html.dark {
-        --sp-bg: #0f0f12;
-        --sp-ink: #f5f5f7;
-        --sp-ink-soft: #636366;
-        --sp-accent: #22c55e;
-        --sp-track: #2c2c2e;
+
+      /* 暗色兜底：当 :root 上的 --color-* 未定义时（Vite 还没加载 themes/*.css），
+         按 data-theme 直接给值。主程序挂载后 useTheme 会按 data-theme 命中
+         themes/<id>.css，--color-* 已定义，下面这套覆盖自动让位（值已对齐）。 */
+      html[data-theme="light"]:root,
+      :root:not([data-theme]) {
+        --sp-bg: #f5f4ed;
+        --sp-ink: #3d3d3a;
+        --sp-ink-soft: #78776f;
+        --sp-accent: #c96442;
+        --sp-track: #f0eee6;
+      }
+      html[data-theme="dark"]:root {
+        --sp-bg: #0b0b0b;
+        --sp-ink: #f4f4f4;
+        --sp-ink-soft: #adadad;
+        --sp-accent: #e0620d;
+        --sp-track: #212121;
+      }
+      html[data-theme="rainforest"]:root {
+        --sp-bg: #0c1210;
+        --sp-ink: #e8f1e9;
+        --sp-ink-soft: #85a08b;
+        --sp-accent: #2dd4bf;
+        --sp-track: #1c2822;
+      }
+      html[data-theme="sunset"]:root {
+        --sp-bg: #1d1915;
+        --sp-ink: #e8e0d2;
+        --sp-ink-soft: #7d7260;
+        --sp-accent: #e0701c;
+        --sp-track: #332c23;
       }
 
       html, body, #root { height: 100%; margin: 0; }
