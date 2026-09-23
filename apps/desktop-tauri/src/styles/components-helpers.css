@@ -359,7 +359,7 @@
   50%      { opacity: 1; }
 }
 
-/* ── LLM 输出 prose 区域（青墨·主人要求 2026-08-31） ──────
+/* ── LLM 输出 prose 区域（暖纸·主人要求 2026-08-31） ──────
    主区为浅色时直接铺在主区背景上，不要白底卡片/不要 frosted glass：
    文字本身就是内容，prose 流应当与对话区背景融合，不该包在任何盒子里。 */
 :root[data-theme="light"] .tl-process-body {

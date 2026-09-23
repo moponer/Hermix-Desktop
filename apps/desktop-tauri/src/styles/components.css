@@ -466,7 +466,8 @@
 .textarea:focus-visible,
 .select:focus-visible {
   outline: none;
-  border-color: var(--color-border-secondary);
+  /* 焦点反馈走 1px 边框着色，不叠粗 outline（base.css 已豁免输入类）。 */
+  border-color: var(--color-accent, var(--color-border-secondary));
 }
 .textarea { min-height: 70px; resize: vertical; line-height: 1.5; font-family: var(--font-mono); }
 
@@ -548,7 +549,7 @@
     backdrop-filter var(--duration-base, 160ms) ease,
     background-color var(--duration-base, 160ms) ease;
 }
-/* 浅色基线（青墨）走 liquid glass；暗色族保持上方 .composer 实色样式 */
+/* 浅色基线（暖纸）走 liquid glass；暗色族保持上方 .composer 实色样式 */
 :root[data-theme="light"] .composer {
   background: var(--glass-liquid-bg);
   backdrop-filter: var(--glass-liquid-blur);
@@ -579,7 +580,7 @@
    § 15.  POPOVER (v2 design: white card / 1px border / soft shadow)
    ════════════════════════════════════════════════════════════════════ */
 
-/* Popover 浮层 — 浅色基线 liquid-strong（青墨主题玻璃感）；
+/* Popover 浮层 — 浅色基线 liquid-strong（暖纸主题玻璃感）；
    暗色族（dark/rainforest）走原 :root 下的 .popover 兜底（实色 + 边 + 阴影）。 */
 :root[data-theme="light"] .popover {
   position: absolute;
@@ -706,7 +707,8 @@
 .modal-input:focus,
 .modal-textarea:focus {
   border-color: var(--color-accent);
-  box-shadow: 0 0 0 2px var(--color-accent-soft);
+  /* 1px 细光圈：与 1px 边框同权重的焦点反馈，不再叠 2px 粗圈。 */
+  box-shadow: 0 0 0 1px var(--color-accent-soft);
 }
 .modal-textarea { resize: vertical; min-height: 60px; }
 

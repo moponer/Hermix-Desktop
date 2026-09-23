@@ -1503,7 +1503,7 @@
   max-height: 320px;
   padding: 0;
 }
-/* 浅色基线（青墨）走 liquid glass；暗色族保持上方 .approval-card 实色样式 */
+/* 浅色基线（暖纸）走 liquid glass；暗色族保持上方 .approval-card 实色样式 */
 :root[data-theme="light"] .approval-card {
   /* Liquid glass — 禁装饰性边框铁律：去掉 border，改用 inset shadow + glass shadow 做边缘 */
   background: var(--glass-liquid-bg);
