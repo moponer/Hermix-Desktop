@@ -7,7 +7,8 @@ use indexmap::IndexMap;
 use serde_json::{json, Value};
 
 use hermix_core::{
-    tool_schema, traits::RiskLevel, JsonSchema, TerminalBackend, ToolError, ToolHandler, ToolSchema,
+    tool_schema, traits::RiskLevel, Fs, FsError, JsonSchema, TerminalBackend, ToolError, ToolHandler,
+    ToolSchema,
 };
 
 use std::path::{Path, PathBuf};
@@ -34,11 +35,17 @@ use crate::ToolRegistry;
 pub fn register(registry: &ToolRegistry, terminal_backend: Arc<dyn TerminalBackend>) {
     use crate::backends::file::{LocalPatchBackend, LocalSearchBackend};
 
+    // `fs` 留给未来的渐进迁移：ReadFileHandler/WriteFileHandler 接受可选
+    // 的 Fs seam，提供了就走接缝（不带 offset/limit 的简单路径），没
+    // 提供就继续走 TerminalBackend（带 offset/limit 的旧路径），不破坏
+    // 既有 6 个文件工具的形状。
+    let fs: Option<Arc<dyn Fs>> = None;
+
     registry.register_with_risk(
         "read_file",
         "file",
-        ReadFileHandler::new(terminal_backend.clone()).schema(),
-        Arc::new(ReadFileHandler::new(terminal_backend.clone())),
+        ReadFileHandler::new(terminal_backend.clone(), fs.clone()).schema(),
+        Arc::new(ReadFileHandler::new(terminal_backend.clone(), fs.clone())),
         Arc::new(|| true),
         vec![],
         true,
@@ -51,8 +58,8 @@ pub fn register(registry: &ToolRegistry, terminal_backend: Arc<dyn TerminalBacke
     registry.register_with_risk(
         "write_file",
         "file",
-        WriteFileHandler::new(terminal_backend.clone()).schema(),
-        Arc::new(WriteFileHandler::new(terminal_backend)),
+        WriteFileHandler::new(terminal_backend.clone(), fs.clone()).schema(),
+        Arc::new(WriteFileHandler::new(terminal_backend, fs)),
         Arc::new(|| true),
         vec![],
         true,
@@ -170,11 +177,15 @@ pub fn to_absolute_path(path: &str) -> String {
 /// Tool for reading file contents via the terminal backend.
 pub struct ReadFileHandler {
     backend: Arc<dyn TerminalBackend>,
+    /// 接缝 `Fs`：提供了就走接缝（不带 offset/limit 的简单路径）。
+    /// `None` 时继续走 `backend`，保留既有的 offset/limit 切片语义。
+    /// 渐进迁移期两个都能用，不破坏既有调用点。
+    fs: Option<Arc<dyn Fs>>,
 }
 
 impl ReadFileHandler {
-    pub fn new(backend: Arc<dyn TerminalBackend>) -> Self {
-        Self { backend }
+    pub fn new(backend: Arc<dyn TerminalBackend>, fs: Option<Arc<dyn Fs>>) -> Self {
+        Self { backend, fs }
     }
 }
 
@@ -191,14 +202,36 @@ impl ToolHandler for ReadFileHandler {
         crate::credential_guard::check_path_traversal_advisory(path);
 
         let offset = params.get("offset").and_then(|v| v.as_u64());
-
         let limit = params.get("limit").and_then(|v| v.as_u64());
 
-        let content = self
-            .backend
-            .read_file(path, offset, limit)
-            .await
-            .map_err(|e| ToolError::from_message(e.to_string()))?;
+        // 接缝路径：只接受整文件读取；offset/limit 留给上层切片。
+        // 用户配 Fs 但又传 offset/limit 时报错——避免行为分裂。
+        let content = if let Some(fs) = &self.fs {
+            if offset.is_some() || limit.is_some() {
+                return Err(ToolError::InvalidParams(
+                    "read_file on the Fs seam does not accept offset/limit; \
+                     the caller must slice the result."
+                        .into(),
+                ));
+            }
+            match fs.read(Path::new(path)).await {
+                Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+                Err(FsError::NotFound(p)) => {
+                    return Err(ToolError::from_message(format!("file not found: {}", p.display())));
+                }
+                Err(FsError::Denied(p)) => {
+                    return Err(ToolError::from_message(format!("permission denied: {}", p.display())));
+                }
+                Err(FsError::Io(e)) => {
+                    return Err(ToolError::from_message(e));
+                }
+            }
+        } else {
+            self.backend
+                .read_file(path, offset, limit)
+                .await
+                .map_err(|e| ToolError::from_message(e.to_string()))?
+        };
 
         // Character-level output cap. The backend's `limit` is line-based
         // and optional — a huge file (e.g. a multi-MB log) or a file with
@@ -270,11 +303,14 @@ impl ToolHandler for ReadFileHandler {
 /// Tool for writing content to files via the terminal backend.
 pub struct WriteFileHandler {
     backend: Arc<dyn TerminalBackend>,
+    /// 接缝 `Fs`：提供了就走接缝（不含任何 offset/limit 的纯写入）。
+    /// `None` 时继续走 `backend`，保留既有调用点与测试。
+    fs: Option<Arc<dyn Fs>>,
 }
 
 impl WriteFileHandler {
-    pub fn new(backend: Arc<dyn TerminalBackend>) -> Self {
-        Self { backend }
+    pub fn new(backend: Arc<dyn TerminalBackend>, fs: Option<Arc<dyn Fs>>) -> Self {
+        Self { backend, fs }
     }
 }
 
@@ -292,24 +328,28 @@ impl ToolHandler for WriteFileHandler {
             .ok_or_else(|| ToolError::InvalidParams("Missing 'content' parameter".into()))?;
 
         CredentialGuard::new().check_write_access(Path::new(path), content)?;
-//: advisory path traversal check — logs but does not block.
-crate::credential_guard::check_path_traversal_advisory(path);
+        //: advisory path traversal check — logs but does not block.
+        crate::credential_guard::check_path_traversal_advisory(path);
 
-        self.backend
-            .write_file(path, content)
-            .await
-            .map_err(|e| ToolError::from_message(e.to_string()))?;
+        if let Some(fs) = &self.fs {
+            fs.write(Path::new(path), content.as_bytes()).await.map_err(|e| match e {
+                FsError::Denied(p) => ToolError::from_message(format!("permission denied: {}", p.display())),
+                FsError::NotFound(p) => ToolError::from_message(format!("path missing: {}", p.display())),
+                FsError::Io(msg) => ToolError::from_message(msg),
+            })?;
+        } else {
+            self.backend
+                .write_file(path, content)
+                .await
+                .map_err(|e| ToolError::from_message(e.to_string()))?;
+        }
 
         // Always report the absolute path so the LLM and front-end can
         // refer back to it without re-deriving. `to_absolute_path` falls back
         // to a non-canonicalized form if the file is on a path that can't be
         // canonicalized (rare, but happens with bind-mounts / junctions).
         let abs = to_absolute_path(path);
-        Ok(format!(
-            "Successfully wrote {} bytes to {}",
-            content.len(),
-            abs
-        ))
+        Ok(format!("Successfully wrote {} bytes to {}", content.len(), abs))
     }
 
     fn schema(&self) -> ToolSchema {
@@ -1178,7 +1218,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_file_handler() {
-        let handler = ReadFileHandler::new(Arc::new(MockBackend));
+        let handler = ReadFileHandler::new(Arc::new(MockBackend), None);
         // Use the cross-platform temp dir instead of hardcoding
         // `/tmp/test.txt` — that path is Unix-only and was the
         // reason the test silently passed on Linux but always
@@ -1196,7 +1236,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_file_handler() {
-        let handler = WriteFileHandler::new(Arc::new(MockBackend));
+        let handler = WriteFileHandler::new(Arc::new(MockBackend), None);
         let path = std::env::temp_dir().join("hermix_test_write.txt");
         let path_str = path.to_string_lossy().to_string();
         let result = handler
@@ -1208,16 +1248,74 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_file_schema() {
-        let handler = ReadFileHandler::new(Arc::new(MockBackend));
+        let handler = ReadFileHandler::new(Arc::new(MockBackend), None);
         let schema = handler.schema();
         assert_eq!(schema.name, "read_file");
     }
 
     #[tokio::test]
     async fn test_write_file_schema() {
-        let handler = WriteFileHandler::new(Arc::new(MockBackend));
+        let handler = WriteFileHandler::new(Arc::new(MockBackend), None);
         let schema = handler.schema();
         assert_eq!(schema.name, "write_file");
+    }
+
+    // -- 渐进迁移：提供 `Fs` seam 后走接缝路径 -----------------------
+    // 测试读写的真实数据落到了 InMemoryFs 而不是 MockBackend，验证：
+    //   1) 工具拿到 `Option<Arc<dyn Fs>>` 后能正确分流；
+    //   2) 接缝路径的错误映射（NotFound → 工具错误）正常工作；
+    //   3) 同时传 offset/limit + Fs 时拒绝（避免行为分裂）。
+
+    #[tokio::test]
+    async fn read_file_uses_fs_seam_when_provided() {
+        let fs: Arc<dyn Fs> = Arc::new(hermix_core::InMemoryFs::default());
+        fs.write(Path::new("/virtual/foo.txt"), b"hello seam").await.unwrap();
+
+        let handler = ReadFileHandler::new(Arc::new(MockBackend), Some(fs.clone()));
+        let result = handler.execute(json!({"path": "/virtual/foo.txt"})).await.unwrap();
+        assert!(result.contains("hello seam"), "got: {result}");
+    }
+
+    #[tokio::test]
+    async fn read_file_seam_rejects_offset_limit() {
+        let fs: Arc<dyn Fs> = Arc::new(hermix_core::InMemoryFs::default());
+        let handler = ReadFileHandler::new(Arc::new(MockBackend), Some(fs));
+        let err = handler.execute(json!({"path": "/x", "offset": 1})).await.unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("does not accept offset/limit"), "got: {msg}");
+    }
+
+    #[tokio::test]
+    async fn read_file_seam_surfaces_not_found() {
+        let fs: Arc<dyn Fs> = Arc::new(hermix_core::InMemoryFs::default());
+        let handler = ReadFileHandler::new(Arc::new(MockBackend), Some(fs));
+        let err = handler.execute(json!({"path": "/nope.txt"})).await.unwrap_err();
+        assert!(err.to_string().contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn write_file_uses_fs_seam_when_provided() {
+        let fs: Arc<dyn Fs> = Arc::new(hermix_core::InMemoryFs::default());
+        let handler = WriteFileHandler::new(Arc::new(MockBackend), Some(fs.clone()));
+        let result = handler
+            .execute(json!({"path": "/virtual/out.txt", "content": "abc"}))
+            .await
+            .unwrap();
+        assert!(result.contains("Successfully wrote 3 bytes"));
+        // 数据落到了 InMemoryFs
+        let got = fs.read(Path::new("/virtual/out.txt")).await.unwrap();
+        assert_eq!(got, b"abc".to_vec());
+    }
+
+    #[tokio::test]
+    async fn write_file_without_seam_still_uses_terminal_backend() {
+        // 验证"没传 fs"时不退化到接缝，老路径不变。
+        let handler = WriteFileHandler::new(Arc::new(MockBackend), None);
+        let result = handler
+            .execute(json!({"path": "/dev/null", "content": "x"}))
+            .await
+            .unwrap();
+        assert!(result.contains("Successfully wrote"));
     }
 
     // -- to_absolute_path: literal pass-through contract -----------------
