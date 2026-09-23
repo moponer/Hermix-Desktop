@@ -770,6 +770,48 @@ impl SessionPersistence {
         Ok(())
     }
 
+    /// Sweep all approval rows still in the pending state and stamp them
+    /// with `decision = "superseded"`. Called once at server startup so a
+    /// crashed/killed server never leaves the next session staring at a
+    /// half-answered card — every abandoned request is auto-resolved and
+    /// the front-end renders the "已超时 · 操作已自动取消" chip instead of
+    /// a clickable button. Already-resolved rows (`decision != null`)
+    /// are left untouched; only pending ones (`decision IS NULL`) flip.
+    /// Returns the number of rows actually superseded so the caller can
+    /// log the count for diagnostics.
+    ///
+    /// Implementation note: we lean on SQLite's `json_set` / `json_extract`
+    /// (available via `rusqlite`'s `modern_sqlite` feature) instead of
+    /// round-tripping through Rust for every row — startup touches every
+    /// pending card in the whole DB at once, not one at a time.
+    pub fn supersede_pending_approvals(&self) -> Result<usize, AgentError> {
+        self.ensure_db()?;
+        let conn = open_with_wal(&self.db_path)?;
+        let now = Utc::now().to_rfc3339();
+        // `json_valid(extra)` guards against legacy/corrupt blobs (the
+        // `extra` column was added before strict JSON validation). If the
+        // blob isn't valid JSON we skip it — better to leave the row
+        // untouched than to overwrite it with garbage via `json_set`.
+        // `json_extract(extra, '$.decision') IS NULL` catches both
+        // `decision: null` (current schema) and rows missing the field
+        // entirely (very old data).
+        let n = conn
+            .execute(
+                "UPDATE messages
+                 SET extra = json_set(extra,
+                                      '$.decision', 'superseded',
+                                      '$.decided_at', ?1)
+                 WHERE role = 'approval'
+                   AND json_valid(extra)
+                   AND json_extract(extra, '$.decision') IS NULL",
+                rusqlite::params![now],
+            )
+            .map_err(|e| AgentError::Io(format!(
+                "Failed to supersede pending approvals at startup: {e}"
+            )))?;
+        Ok(n)
+    }
+
     /// Load the full conversation timeline (LLM messages + approval rows)
     /// in arrival order. This is what the UI wants for `get_session_messages`.
     /// Approval rows are returned as `SessionEntry::Approval` so the

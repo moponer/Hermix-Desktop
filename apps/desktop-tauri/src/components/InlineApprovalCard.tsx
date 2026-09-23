@@ -220,7 +220,7 @@ export function InlineApprovalCard({ request, onApprove, onDeny, resolved }: Inl
                 {resolved === "approved"
                   ? "操作已继续执行"
                   : resolved === "expired"
-                    ? "你的点击没赶上，操作已被自动取消;如仍想执行，请重新发起"
+                    ? "操作已自动取消；如仍想执行，请重新发起"
                     : "操作已中止"}
               </span>
             </div>

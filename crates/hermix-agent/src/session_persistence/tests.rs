@@ -920,6 +920,140 @@
         sp.resolve_approval_message("does-not-exist", "req-z", "approved").unwrap();
     }
 
+    /// Bug #4 (恢复对话后审批原样恢复) — startup sweep flips any
+    /// `decision === None` approval row to `"superseded"`. Already-resolved
+    /// rows (`approved` / `denied`) MUST stay untouched (we'd otherwise
+    /// silently invalidate previous user decisions on every restart).
+    #[test]
+    fn test_supersede_pending_approvals_flips_only_null_decisions() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sp = SessionPersistence::new(tmp.path());
+
+        // Create the session row up front so the FK constraint
+        // (`messages.session_id REFERENCES sessions.id`) is satisfied
+        // before the approval INSERTs. `persist_session` does this as a
+        // side effect, but the test doesn't need real ones.
+        sp.ensure_db().unwrap();
+        let conn = super::open_with_wal(&sp.db_path).unwrap();
+        conn.execute(
+            "INSERT INTO sessions (id, created_at, updated_at)
+             VALUES ('sweep-a', '2026-09-23T00:00:00Z', '2026-09-23T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+
+        // Session A: one pending + one already-approved + one already-denied.
+        sp.append_approval_message(
+            "sweep-a",
+            &make_approval("req-pending", "terminal_run", Some("r0")),
+        )
+        .unwrap();
+        sp.append_approval_message(
+            "sweep-a",
+            &make_approval("req-approved", "terminal_run", Some("r1")),
+        )
+        .unwrap();
+        sp.append_approval_message(
+            "sweep-a",
+            &make_approval("req-denied", "terminal_run", Some("r2")),
+        )
+        .unwrap();
+        // Resolve two of them. `req-pending` stays at decision=None.
+        sp.resolve_approval_message("sweep-a", "req-approved", "approved")
+            .unwrap();
+        sp.resolve_approval_message("sweep-a", "req-denied", "deny")
+            .unwrap();
+
+        // Sweep. Should flip exactly one row (the still-pending one).
+        let n = sp.supersede_pending_approvals().unwrap();
+        assert_eq!(n, 1, "exactly one pending row should flip");
+
+        // Reload and verify per-row decision.
+        let entries = sp.load_session_with_approvals("sweep-a").unwrap();
+        let approvals: Vec<&ApprovalRecord> = entries
+            .iter()
+            .filter_map(|e| match e {
+                SessionEntry::Approval(r) => Some(r),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(approvals.len(), 3, "all three rows still present");
+
+        // Build (request_id → decision) map for stable lookup order.
+        let map: std::collections::HashMap<&str, Option<&str>> = approvals
+            .iter()
+            .map(|r| (r.request_id.as_str(), r.decision.as_deref()))
+            .collect();
+        assert_eq!(
+            map["req-pending"], Some("superseded"),
+            "pending row must flip to superseded"
+        );
+        assert_eq!(
+            map["req-approved"], Some("approved"),
+            "already-approved row must NOT be touched"
+        );
+        assert_eq!(
+            map["req-denied"], Some("deny"),
+            "already-denied row must NOT be touched"
+        );
+
+        // decided_at must be stamped on the superseded row only.
+        let stamped: Vec<&&ApprovalRecord> = approvals
+            .iter()
+            .filter(|r| r.request_id == "req-pending")
+            .collect();
+        assert_eq!(stamped.len(), 1);
+        assert!(
+            stamped[0].decided_at.is_some(),
+            "superseded row must have decided_at stamped"
+        );
+
+        // Idempotence: a second sweep finds nothing pending and returns 0.
+        let n2 = sp.supersede_pending_approvals().unwrap();
+        assert_eq!(n2, 0, "second sweep is a no-op");
+    }
+
+    /// `supersede_pending_approvals` must not touch rows whose `extra`
+    /// blob is malformed (non-JSON). Better to leave them alone than to
+    /// overwrite them with `json_set` artifacts on every restart.
+    #[test]
+    fn test_supersede_skips_invalid_json_extra() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sp = SessionPersistence::new(tmp.path());
+
+        // Insert a raw approval row with an `extra` blob that's NOT
+        // valid JSON. We bypass `append_approval_message` because that
+        // helper always serializes a well-formed `ApprovalRecord`. Also
+        // create the parent session row for the FK constraint.
+        sp.ensure_db().unwrap();
+        let conn = super::open_with_wal(&sp.db_path).unwrap();
+        conn.execute(
+            "INSERT INTO sessions (id, created_at, updated_at)
+             VALUES ('garbage', '2026-09-23T00:00:00Z', '2026-09-23T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO messages (session_id, role, content, tool_call_id, tool_calls, created_at, active, extra)
+             VALUES ('garbage', 'approval', NULL, NULL, NULL, '2026-09-23T00:00:00Z', 1, 'not-json')",
+            [],
+        )
+        .unwrap();
+
+        let n = sp.supersede_pending_approvals().unwrap();
+        assert_eq!(n, 0, "invalid JSON row must be skipped");
+
+        // The blob is untouched.
+        let raw: String = conn
+            .query_row(
+                "SELECT extra FROM messages WHERE session_id = 'garbage'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap();
+        assert_eq!(raw, "not-json", "corrupt blob must not be overwritten");
+    }
+
     #[test]
     fn test_undo_also_deactivates_approval_rows_in_range() {
         let tmp = tempfile::tempdir().unwrap();

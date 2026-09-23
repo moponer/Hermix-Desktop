@@ -28,7 +28,7 @@ use serde::{Deserialize, Serialize};
 // Best-effort: if WAL mode is rejected (read-only file, exclusive
 // lock held, etc.) we log a warning and continue — `busy_timeout`
 // alone still resolves the silent-drop bug.
-fn open_with_wal(path: &Path) -> Result<rusqlite::Connection, AgentError> {
+pub(crate) fn open_with_wal(path: &Path) -> Result<rusqlite::Connection, AgentError> {
     let conn = rusqlite::Connection::open(path)
         .map_err(|e| AgentError::Io(format!("Failed to open sessions db: {e}")))?;
     if let Err(e) =

@@ -451,6 +451,33 @@ impl HttpServerState {
             tracing::error!(error = %e, "session db ensure_db failed at startup");
         }
 
+        // Sweep pending approvals from any previous session that never
+        // got a user decision. Without this, reloading a session that
+        // was active right before a server crash would re-render the
+        // approval card with its buttons still clickable — but the
+        // in-memory approval registry is gone, so clicking would be a
+        // silent no-op (the LLM never sees the decision, agent loop is
+        // already dead). Marking them `superseded` lets the front-end
+        // render the "已超时 · 操作已自动取消" chip instead, preserving
+        // visibility without dangling buttons. Errors are logged but
+        // don't fail startup — a stuck sweep is much better than a
+        // server that refuses to boot.
+        match session_persistence.supersede_pending_approvals() {
+            Ok(0) => {}
+            Ok(n) => {
+                tracing::info!(
+                    superseded = n,
+                    "startup: marked pending approvals as superseded (previous session crashed / killed before user decided)"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "startup: failed to supersede pending approvals; stale cards may render as clickable"
+                );
+            }
+        }
+
         //a single consciousness tracker shared by the
         // agent service (writer) and the dashboard endpoints
         // (readers via REST + WebSocket broadcast).
@@ -690,6 +717,33 @@ impl HttpServerState {
         // the user has no way to know what went wrong. Log loudly.
         if let Err(e) = session_persistence.ensure_db() {
             tracing::error!(error = %e, "session db ensure_db failed at startup");
+        }
+
+        // Sweep pending approvals from any previous session that never
+        // got a user decision. Without this, reloading a session that
+        // was active right before a server crash would re-render the
+        // approval card with its buttons still clickable — but the
+        // in-memory approval registry is gone, so clicking would be a
+        // silent no-op (the LLM never sees the decision, agent loop is
+        // already dead). Marking them `superseded` lets the front-end
+        // render the "已超时 · 操作已自动取消" chip instead, preserving
+        // visibility without dangling buttons. Errors are logged but
+        // don't fail startup — a stuck sweep is much better than a
+        // server that refuses to boot.
+        match session_persistence.supersede_pending_approvals() {
+            Ok(0) => {}
+            Ok(n) => {
+                tracing::info!(
+                    superseded = n,
+                    "startup: marked pending approvals as superseded (previous session crashed / killed before user decided)"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "startup: failed to supersede pending approvals; stale cards may render as clickable"
+                );
+            }
         }
 
         // Initialize cron scheduler backed by $HERMIX_HOME/data/cron

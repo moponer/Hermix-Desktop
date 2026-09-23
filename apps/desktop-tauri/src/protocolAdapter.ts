@@ -138,8 +138,12 @@ function buildToolMeta(
 
 /**
  * DB `extra.decision` stores backend-canonical strings
- * (`once`/`session`/`always`/`deny`) — map them onto the UI display
- * union: every grant tier reads as "approved", `deny` as "denied".
+ * (`once`/`session`/`always`/`deny`/`superseded`) — map them onto the UI
+ * display union: every grant tier reads as "approved", `deny` as "denied",
+ * `superseded` (stamped by the startup sweep on any pending card that
+ * never got a user decision) as "expired" — the user sees the same
+ * "已超时 · 操作已自动取消" chip as a TTL-expired request, since both
+ * outcomes mean "this can never be acted on, but here's what happened".
  */
 function normalizeApprovalDecision(raw: unknown): ApprovalDecision | null {
   switch (raw) {
@@ -150,6 +154,12 @@ function normalizeApprovalDecision(raw: unknown): ApprovalDecision | null {
       return "approved";
     case "deny":
       return "denied";
+    case "superseded":
+      // Stamped by `supersede_pending_approvals` at server startup for
+      // approvals left pending when the previous session crashed/was
+      // killed. Same UX as a TTL-expired card — "you can't click, but
+      // here's why it disappeared".
+      return "expired";
     default:
       return null;
   }
