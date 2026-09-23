@@ -2243,6 +2243,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "hermix-session"
+version = "0.1.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tracing",
+]
+
+[[package]]
 name = "hermix-shell-parser"
 version = "0.1.0"
 dependencies = [
