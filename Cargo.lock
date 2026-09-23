@@ -2215,6 +2215,7 @@ dependencies = [
  "hermix-plugin",
  "hermix-runtime",
  "hermix-skills",
+ "hermix-store",
  "hermix-task",
  "hermix-telemetry",
  "hermix-tools",
@@ -2270,6 +2271,16 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "hermix-store"
+version = "0.1.1"
+dependencies = [
+ "rusqlite",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tracing",
 ]
 
 [[package]]

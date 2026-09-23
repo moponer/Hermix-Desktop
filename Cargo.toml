@@ -18,6 +18,7 @@ resolver = "2"
 # explicitly per member.
 exclude = []
 members = [
+    "crates/hermix-store",
     "crates/hermix-transport",
     "crates/hermix-core",
     "crates/hermix-agent",
@@ -79,6 +80,7 @@ expect_used = "warn"
 
 [workspace.dependencies]
 # Internal crates
+hermix-store = { path = "crates/hermix-store" }
 hermix-core = { path = "crates/hermix-core" }
 hermix-transport = { path = "crates/hermix-transport" }
 hermix-agent = { path = "crates/hermix-agent" }

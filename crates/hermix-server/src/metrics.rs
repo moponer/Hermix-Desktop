@@ -38,6 +38,10 @@ pub struct MetricEvent {
 #[derive(Clone)]
 pub struct MetricsCollector {
     inner: Arc<Mutex<MetricsInner>>,
+    /// `None` when the database could not be opened. Metrics are
+    /// observability data — losing them must not stop the app, so the
+    /// collector degrades to in-memory-only instead of failing.
+    store: Option<Arc<hermix_store::Store>>,
 }
 
 struct MetricsInner {
@@ -47,21 +51,29 @@ struct MetricsInner {
     counters: HashMap<String, f64>,
     /// Latency samples for percentile calculation.
     latency_samples: HashMap<String, Vec<f64>>,
-    /// Path to the SQLite DB file.
-    db_path: std::path::PathBuf,
 }
 
 impl MetricsCollector {
     /// Create a new collector backed by `hermix_home/metrics.db`.
     pub fn new(hermix_home: &Path) -> Self {
         let db_path = hermix_home.join("metrics.db");
+        let store = match hermix_store::Store::open(&db_path, hermix_store::OpenMode::Write) {
+            Ok(s) => Some(Arc::new(s)),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "metrics: metrics.db unavailable; metrics stay in memory only"
+                );
+                None
+            }
+        };
         let collector = Self {
             inner: Arc::new(Mutex::new(MetricsInner {
                 buffer: Vec::new(),
                 counters: HashMap::new(),
                 latency_samples: HashMap::new(),
-                db_path,
             })),
+            store,
         };
         collector.ensure_db();
         collector
@@ -176,50 +188,59 @@ impl MetricsCollector {
     }
 
     fn ensure_db(&self) {
-        let Ok(inner) = self.inner.lock() else {
+        let Some(store) = &self.store else {
             return;
         };
-        let conn = match rusqlite::Connection::open(&inner.db_path) {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::warn!(error = %e, "metrics: failed to open DB");
-                return;
-            }
-        };
-        let _ = conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS metric_events (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp TEXT NOT NULL,
-                metric_type TEXT NOT NULL,
-                value REAL NOT NULL,
-                label TEXT
+        store.write(|conn| {
+            let _ = conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS metric_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    metric_type TEXT NOT NULL,
+                    value REAL NOT NULL,
+                    label TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_metric_type ON metric_events(metric_type);
+                CREATE INDEX IF NOT EXISTS idx_timestamp ON metric_events(timestamp);",
             );
-            CREATE INDEX IF NOT EXISTS idx_metric_type ON metric_events(metric_type);
-            CREATE INDEX IF NOT EXISTS idx_timestamp ON metric_events(timestamp);",
-        );
+        });
     }
 
     fn write_to_db(&self, events: &[MetricEvent]) -> Result<(), rusqlite::Error> {
-        let Ok(inner) = self.inner.lock() else {
+        let Some(store) = &self.store else {
             return Ok(());
         };
-        let mut conn = rusqlite::Connection::open(&inner.db_path)?;
-        let tx = conn.transaction()?;
-        {
-            let mut stmt = tx.prepare(
-                "INSERT INTO metric_events (timestamp, metric_type, value, label) VALUES (?1, ?2, ?3, ?4)",
-            )?;
-            for e in events {
-                stmt.execute(rusqlite::params![
-                    &e.timestamp,
-                    &e.metric_type,
-                    e.value,
-                    e.label.as_deref(),
-                ])?;
+        // One connection is reused for the life of the collector
+        // instead of re-opening the file per flush: the old code paid
+        // a full open + WAL handshake on every batch.
+        let Some(outcome) = store.write(|conn| {
+            let tx = match conn.transaction() {
+                Ok(t) => t,
+                Err(e) => return Err(e),
+            };
+            {
+                let mut stmt = match tx.prepare(
+                    "INSERT INTO metric_events (timestamp, metric_type, value, label) VALUES (?1, ?2, ?3, ?4)",
+                ) {
+                    Ok(s) => s,
+                    Err(e) => return Err(e),
+                };
+                for e in events {
+                    if let Err(e) = stmt.execute(rusqlite::params![
+                        &e.timestamp,
+                        &e.metric_type,
+                        e.value,
+                        e.label.as_deref(),
+                    ]) {
+                        return Err(e);
+                    }
+                }
             }
-        }
-        tx.commit()?;
-        Ok(())
+            tx.commit()
+        }) else {
+            return Ok(());
+        };
+        outcome
     }
 }
 

@@ -20,6 +20,7 @@ path = "src/main.rs"
 
 [dependencies]
 hermix-core = { workspace = true }
+hermix-store = { workspace = true }
 hermix-transport = { workspace = true }
 hermix-agent = { workspace = true }
 hermix-tools = { workspace = true }
