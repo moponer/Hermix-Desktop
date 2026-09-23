@@ -543,6 +543,39 @@ export const renameSession = async (id: string, title: string): Promise<boolean>
   return true;
 };
 
+/** One still-pending approval as returned by the hydration endpoint.
+ *  `tool` / `arguments` may be the placeholder ("unknown" / null) when the
+ *  persisted row hasn't been written yet — the UI falls back to its own
+ *  transcript for the card label in that case. */
+export interface PendingApprovalItem {
+  request_id: string;
+  tool: string;
+  arguments: unknown;
+  /** Server-emitted deadline (Unix ms). `null` when the server never set
+   *  one — the UI then renders no countdown. */
+  expires_at: number | null;
+}
+
+/** List the approvals still live in the session's ApprovalRegistry.
+ *  Used after a reconnect / `task_in_flight` settle to re-render approval
+ *  cards the client missed while its socket was closed. An empty list is a
+ *  normal outcome (nothing pending), NOT an error — callers must not treat
+ *  it as a failure. Network errors resolve to an empty list with a console
+ *  warning so the UI never blocks on hydration. */
+export const getPendingApprovals = async (
+  id: string,
+): Promise<PendingApprovalItem[]> => {
+  try {
+    const res = await fetchJSON<{ approvals: PendingApprovalItem[] }>(
+      `/v1/sessions/${encodeURIComponent(id)}/approvals/pending`,
+    );
+    return res.approvals ?? [];
+  } catch (e) {
+    console.warn(`getPendingApprovals(${id}) failed — returning empty`, e);
+    return [];
+  }
+};
+
 export const getSessionMessages = async (id: string): Promise<SessionMessagesResult> => {
   const res = await fetchJSON<{
     messages: WireMessage[];

@@ -2540,6 +2540,36 @@ return {
           onDone: (text, stopReason, durationMs) => {
             setPrefetchIntent(null);
             setStreamPhase(null);
+            // `task_in_flight` settle: the backend saw this retry land on a
+            // session whose agent is still running, so it closed THIS socket
+            // (a terminal `Done` with finish_reason=task_in_flight). The real
+            // turn keeps running on the in-flight agent task, and — crucially
+            // — any approval card that was in flight when the socket closed
+            // was NEVER re-delivered on the new connection, so it is now an
+            // orphan the user can't see (and the agent is still blocked on
+            // its `AwaitApproval`). Hydrate: pull the session's still-pending
+            // approvals from the backend and re-project each one through the
+            // normal `onApprovalRequest` path so the card renders again and a
+            // click unblocks the loop. Empty result is a normal state (nothing
+            // pending) — never settle the UI on it.
+            if (stopReason === "task_in_flight") {
+              void api
+                .getPendingApprovals(sessionId)
+                .then((pending) => {
+                  for (const item of pending) {
+                    void onApprovalRequest({
+                      requestId: item.request_id,
+                      tool: item.tool,
+                      args: item.arguments,
+                      expiresAt: item.expires_at,
+                      sessionId,
+                    });
+                  }
+                })
+                .catch((e) =>
+                  console.error("[APPROVAL-HYDRATE] task_in_flight reproject failed", e),
+                );
+            }
             // Multi-turn agent loop fix.
             // `text` here is `fullText` from useStreamChat — the
             // accumulated text from ALL `text` events across ALL LLM

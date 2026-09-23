@@ -1412,6 +1412,45 @@ pub(crate) async fn restore_session(
     })))
 }
 
+/// GET /v1/sessions/{session_id}/approvals/pending
+///
+/// Lists approvals whose `AwaitApproval` is still unresolved in this
+/// session. The client calls this after a `task_in_flight` settle or
+/// a reconnect: the socket that carried the original
+/// `request_approvals_batch` frame was closed, so without this the
+/// card never renders and the agent stays blocked forever.
+///
+/// An empty `approvals` array is a normal outcome (nothing is
+/// waiting), never an error. Because an entry only exists while its
+/// oneshot is unresolved, a non-empty list is authoritative proof
+/// that the loop is still alive and blocked — no separate
+/// "is the task running" probe is needed.
+pub(crate) async fn list_pending_approvals(
+    State(state): State<HttpServerState>,
+    Path(session_id): Path<String>,
+) -> Result<Json<serde_json::Value>, HttpError> {
+    let request_ids = state.approval_registry.list_pending(&session_id);
+    let mut approvals = Vec::new();
+    for rid in request_ids {
+        let (tool, arguments, expires_at) =
+            match crate::ws::lookup_pending_approval(&state, &session_id, &rid).await {
+                Ok(Some(t)) => t,
+                // Row not yet persisted / DB hiccup — the id is still
+                // pending in the registry, so surface it with
+                // placeholder fields; the front end falls back to its
+                // transcript's tool name for the card label.
+                _ => ("unknown".to_string(), serde_json::Value::Null, None),
+            };
+        approvals.push(serde_json::json!({
+            "request_id": rid,
+            "tool": tool,
+            "arguments": arguments,
+            "expires_at": expires_at,
+        }));
+    }
+    Ok(Json(serde_json::json!({ "approvals": approvals })))
+}
+
 /// POST /v1/sessions/{session_id}/approval
 /// REST fallback for approval responses when WebSocket delivery fails.
 /// The frontend sends the approval via HTTP when `ws.send()` returns true
@@ -1529,7 +1568,7 @@ pub(crate) async fn approve_via_rest(
         // touching the profile. The regular command-side-effect then
         // runs as the fallback.
         record_resource_approval_side_effect(&state, &session_id, request_id, choice).await;
-        if let Ok(Some((tool, params))) =
+        if let Ok(Some((tool, params, _expires_at))) =
             ws::lookup_pending_approval(&state, &session_id, request_id).await
         {
             record_approval_side_effect(&state, &session_id, &tool, &params, choice);

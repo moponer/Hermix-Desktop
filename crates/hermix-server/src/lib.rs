@@ -304,6 +304,12 @@ pub fn router(state: HttpServerState) -> Router {
             "/v1/sessions/{session_id}/approval",
             post(routes::approve_via_rest),
         )
+        // Re-project approvals the client missed while its socket was
+        // closed (task_in_flight settle / reconnect).
+        .route(
+            "/v1/sessions/{session_id}/approvals/pending",
+            get(routes::list_pending_approvals),
+        )
         // todo (task list) HTTP endpoints. The LLM
         // goes through the `todo` tool over WS; the desktop TodoPanel
         // hits these endpoints for hydration (GET) and manual

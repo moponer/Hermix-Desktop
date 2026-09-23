@@ -281,7 +281,7 @@ pub(crate) async fn record_approval_resolution(
         hermix_transport::ApprovalChoice::Session | hermix_transport::ApprovalChoice::Always
     ) {
         record_resource_approval_side_effect(state, session_id, request_id, choice).await;
-        if let Ok(Some((tool, params))) =
+        if let Ok(Some((tool, params, _expires_at))) =
             ws::lookup_pending_approval(state, session_id, request_id).await
         {
             record_approval_side_effect(state, session_id, &tool, &params, choice);

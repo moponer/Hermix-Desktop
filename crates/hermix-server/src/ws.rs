@@ -2096,7 +2096,7 @@ pub(crate) async fn handle_ws_stream_send(
                                             &request_id,
                                             choice,
                                         ).await;
-                                        if let Ok(Some((tool, params))) = lookup_pending_approval(
+                                        if let Ok(Some((tool, params, _expires_at))) = lookup_pending_approval(
                                             &state,
                                             session_id,
                                             &request_id,
@@ -2764,7 +2764,7 @@ async fn handle_inbound_frame(
                         &request_id,
                         choice,
                     ).await;
-                    if let Ok(Some((tool, params))) = lookup_pending_approval(
+                    if let Ok(Some((tool, params, _expires_at))) = lookup_pending_approval(
                         &state,
                         &session_id,
                         &request_id,
@@ -3012,11 +3012,16 @@ mod inbound_frame_outcome_tests {
 /// Like every approval lookup here, this runs **after**
 /// `approval_registry.resolve()` has removed the pending entry —
 /// the SQLite `messages.extra` row is the only surviving source.
+///
+/// Returns `(tool, arguments, expires_at_ms)`. The deadline is
+/// carried alongside so a re-projected card (one rebuilt on a fresh
+/// connection after the original socket closed) still shows a
+/// countdown instead of hanging forever in the UI.
 pub(crate) async fn lookup_pending_approval(
     state: &HttpServerState,
     session_id: &str,
     request_id: &str,
-) -> Result<Option<(String, serde_json::Value)>, String> {
+) -> Result<Option<(String, serde_json::Value, Option<i64>)>, String> {
     let db_path = state.session_persistence.db_path().to_path_buf();
     let session_id = session_id.to_string();
     let request_id = request_id.to_string();
@@ -3061,7 +3066,11 @@ pub(crate) async fn lookup_pending_approval(
             }
             _ => serde_json::Value::Null,
         };
-        Ok(Some((tool, args_value)))
+        // Deadline is optional: approvals created before the field
+        // existed (or ones with no timeout) simply carry `None`, and
+        // the front end then renders no countdown.
+        let expires_at = v.get("expires_at").and_then(|t| t.as_i64());
+        Ok(Some((tool, args_value, expires_at)))
     })
     .await
     .map_err(|e| format!("lookup_pending_approval join error: {e}"))?

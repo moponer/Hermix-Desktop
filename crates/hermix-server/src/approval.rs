@@ -164,6 +164,22 @@ impl ApprovalRegistry {
             .unwrap_or(false)
     }
 
+    /// Request ids still awaiting a decision for one session.
+    ///
+    /// A non-empty result is authoritative proof that the agent loop
+    /// is blocked on `AwaitApproval` right now: an entry only exists
+    /// while its oneshot is unresolved (resolve and timeout both
+    /// remove it). The `GET /approvals/pending` endpoint uses this to
+    /// re-project approval cards a client missed while its socket was
+    /// closed — an empty vec means "nothing live", not "error".
+    pub fn list_pending(&self, session_id: &str) -> Vec<String> {
+        let sessions = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        sessions
+            .get(session_id)
+            .map(|s| s.keys().cloned().collect())
+            .unwrap_or_default()
+    }
+
     /// Record a batch id and the request ids it covers for a given
     /// session. Called by the WS coalescer right before it emits the
     /// [`StreamEvent::RequestApprovalsBatch`] envelope. The vector is
@@ -536,6 +552,37 @@ mod approval_registry_tests {
         let reg = ApprovalRegistry::with_timeout(std::time::Duration::ZERO);
         assert!(!reg.is_pending("sess-a", "never-requested"));
         assert!(!reg.is_pending("never-session", "req-1"));
+    }
+
+    #[tokio::test]
+    async fn list_pending_lists_live_requests_and_drops_resolved() {
+        let reg = ApprovalRegistry::with_timeout(std::time::Duration::ZERO);
+        assert!(
+            reg.list_pending("sess-a").is_empty(),
+            "unknown session must yield an empty list, not an error"
+        );
+
+        let _rx1 = reg.request_approval("sess-a", "req-1");
+        let _rx2 = reg.request_approval("sess-a", "req-2");
+        let mut listed = reg.list_pending("sess-a");
+        listed.sort();
+        assert_eq!(listed, vec!["req-1".to_string(), "req-2".to_string()]);
+
+        assert!(reg.resolve("sess-a", "req-1", hermix_core::ApprovalOutcome::Approved));
+        assert_eq!(
+            reg.list_pending("sess-a"),
+            vec!["req-2".to_string()],
+            "resolved entries must disappear so the client never renders a dead card"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_pending_is_scoped_to_one_session() {
+        let reg = ApprovalRegistry::with_timeout(std::time::Duration::ZERO);
+        let _rx_a = reg.request_approval("sess-a", "req-a");
+        let _rx_b = reg.request_approval("sess-b", "req-b");
+        assert_eq!(reg.list_pending("sess-a"), vec!["req-a".to_string()]);
+        assert_eq!(reg.list_pending("sess-b"), vec!["req-b".to_string()]);
     }
 
     //duplicate request_id rejection ----------------------
