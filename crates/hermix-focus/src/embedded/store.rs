@@ -18,15 +18,14 @@ impl EmbeddedMemoryBackend {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let conn = Connection::open(&path)?;
-        // (round 5): enable busy_timeout so concurrent writes
-        // from session_persistence + memory_router + compression are
-        // retried by sqlite itself for up to 5 s instead of failing
-        // with `database is locked`. This is the in-process backstop —
-        // longer-term we still need a cross-process retry loop, but
-        // for the desktop app where the focus DB is owned by a single
-        // process this eliminates the bulk of the contention.
-        let _ = conn.execute_batch("PRAGMA busy_timeout = 5000");
+        // Goes through hermix-store so this database gets the same
+        // journal mode as every other one. It previously set only
+        // `busy_timeout` and never enabled WAL, which left it running
+        // delete-journaling against databases that everyone else has
+        // in WAL — readers and writers then block each other, and the
+        // busy timeout alone cannot fix that.
+        let conn = hermix_store::open_connection(&path, hermix_store::OpenMode::Write)
+            .map_err(|e| MemoryError::Unavailable(format!("open memory db: {e}")))?;
         let backend = Self {
             conn: Mutex::new(conn),
             path,

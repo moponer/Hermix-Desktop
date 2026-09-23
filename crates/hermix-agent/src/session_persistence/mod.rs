@@ -29,17 +29,11 @@ use serde::{Deserialize, Serialize};
 // lock held, etc.) we log a warning and continue — `busy_timeout`
 // alone still resolves the silent-drop bug.
 pub(crate) fn open_with_wal(path: &Path) -> Result<rusqlite::Connection, AgentError> {
-    let conn = rusqlite::Connection::open(path)
-        .map_err(|e| AgentError::Io(format!("Failed to open sessions db: {e}")))?;
-    if let Err(e) =
-        conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;")
-    {
-        tracing::warn!(
-            "session_persistence: WAL/busy_timeout PRAGMA failed ({e}); \
-             continuing with default journaling — concurrent writes may still race"
-        );
-    }
-    Ok(conn)
+    // Delegates to hermix-store so the pragmas here cannot drift from
+    // the ones the server-side readers apply — that drift is what
+    // produced the "database disk image is malformed" reports.
+    hermix_store::open_connection(path, hermix_store::OpenMode::Write)
+        .map_err(|e| AgentError::Io(format!("Failed to open sessions db: {e}")))
 }
 
 /// Application-level retry with random jitter for write contention.

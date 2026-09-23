@@ -77,6 +77,46 @@ pub enum StoreError {
     Pragma(rusqlite::Error),
 }
 
+/// Open a connection with the pragmas [`OpenMode`] requires, handed
+/// back unwrapped.
+///
+/// This exists for the incremental migration of the ~40 call sites
+/// that already own a `Mutex<Connection>`: they can swap their raw
+/// `Connection::open` for this one line and keep their existing
+/// locking, instead of being rewritten onto [`Store`] all at once.
+/// New code should prefer [`Store::open`].
+pub fn open_connection(
+    path: impl AsRef<Path>,
+    mode: OpenMode,
+) -> Result<Connection, StoreError> {
+    let path = path.as_ref().to_path_buf();
+    let path_str = path.display().to_string();
+    let conn = Connection::open(&path).map_err(|source| StoreError::Open {
+        path: path_str.clone(),
+        source,
+    })?;
+
+    let timeout = match mode {
+        OpenMode::Write => WRITE_BUSY_TIMEOUT,
+        OpenMode::Read => READ_BUSY_TIMEOUT,
+    };
+    conn.busy_timeout(timeout).map_err(StoreError::Pragma)?;
+
+    if let Err(e) = conn.execute_batch("PRAGMA journal_mode = WAL;") {
+        tracing::warn!(
+            db_path = %path_str,
+            error = %e,
+            "hermix-store: WAL pragma rejected; continuing with default journaling"
+        );
+    }
+
+    if mode == OpenMode::Read {
+        let _ = conn.execute_batch("PRAGMA wal_checkpoint(PASSIVE);");
+    }
+
+    Ok(conn)
+}
+
 /// An open database handle.
 ///
 /// The connection sits behind a mutex because `rusqlite::Connection`
@@ -96,35 +136,7 @@ impl Store {
     /// alone already resolves the silent-lost-write failure.
     pub fn open(path: impl AsRef<Path>, mode: OpenMode) -> Result<Self, StoreError> {
         let path = path.as_ref().to_path_buf();
-        let path_str = path.display().to_string();
-        let conn = Connection::open(&path).map_err(|source| StoreError::Open {
-            path: path_str.clone(),
-            source,
-        })?;
-
-        let timeout = match mode {
-            OpenMode::Write => WRITE_BUSY_TIMEOUT,
-            OpenMode::Read => READ_BUSY_TIMEOUT,
-        };
-        conn.busy_timeout(timeout)
-            .map_err(StoreError::Pragma)?;
-
-        if let Err(e) = conn.execute_batch("PRAGMA journal_mode = WAL;") {
-            tracing::warn!(
-                db_path = %path_str,
-                error = %e,
-                "hermix-store: WAL pragma rejected; continuing with default journaling"
-            );
-        }
-
-        // Read paths checkpoint passively so they never read a WAL
-        // header from a page the writer abandoned when it was killed
-        // mid-transaction — the direct cause of the
-        // "database disk image is malformed" reports.
-        if mode == OpenMode::Read {
-            let _ = conn.execute_batch("PRAGMA wal_checkpoint(PASSIVE);");
-        }
-
+        let conn = open_connection(&path, mode)?;
         Ok(Self {
             conn: Mutex::new(conn),
             path,
