@@ -8,7 +8,9 @@
 // 本机文件怎么被访问」始终是宿主说了算，代码层改不出花来。
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import { workbenchEntryUrl, workbenchGateway, type WorkbenchManifest } from "../workbench/api";
+import { WorkbenchChat } from "./WorkbenchChat";
 
 const collapseKey = (id: string) => `hermix.workbench.${id}.chatCollapsed`;
 
@@ -20,6 +22,8 @@ interface WorkbenchShellProps {
 }
 
 export function WorkbenchShell({ manifest, chatNode }: WorkbenchShellProps) {
+  // chatNode 包上工作台专属 chrome（chip + 改动状态条），让右栏一眼区别于主对话。
+  const chat = <WorkbenchChat manifest={manifest} chatNode={chatNode} />;
   const [entryUrl, setEntryUrl] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState(
     () => localStorage.getItem(collapseKey(manifest.id)) === "1",
@@ -51,6 +55,29 @@ export function WorkbenchShell({ manifest, chatNode }: WorkbenchShellProps) {
       void un.then((fn) => fn());
     };
   }, [manifest.id]);
+
+  // 让宿主主题色透出 iframe：onLoad 时把 html/body 背景强制透明，
+  // 父容器 .wb-canvas 的 var(--color-bg-primary) 即可透出。
+  // 工作台代码若主动设 !important 背景色，宿主不阻拦 —— 这里只兜底
+  // "未开发工作台"的默认白底，让默认态跟随主程序主题。
+  // memory: 主题色系不同启动的也不同 —— 默认画布不能割裂。
+  useEffect(() => {
+    const frame = frameRef.current;
+    if (!frame) return;
+    const apply = () => {
+      try {
+        const doc = frame.contentDocument;
+        if (!doc) return;
+        doc.documentElement.style.background = "transparent";
+        doc.body.style.setProperty("background", "transparent", "important");
+      } catch {
+        // cross-origin — 跳过兜底。
+      }
+    };
+    apply();
+    frame.addEventListener("load", apply);
+    return () => frame.removeEventListener("load", apply);
+  }, [reloadToken, entryUrl]);
 
   useEffect(() => {
     const onMessage = async (e: MessageEvent) => {
@@ -97,7 +124,7 @@ export function WorkbenchShell({ manifest, chatNode }: WorkbenchShellProps) {
   }, [manifest.id]);
 
   return (
-    <div className="wb-shell">
+    <div className={`wb-shell${collapsed ? " wb-shell-collapsed" : ""}`}>
       <div className="wb-canvas">
         {entryUrl ? (
           <iframe
@@ -106,11 +133,14 @@ export function WorkbenchShell({ manifest, chatNode }: WorkbenchShellProps) {
             className="wb-frame"
             src={entryUrl}
             title={manifest.name}
+            allowTransparency
           />
         ) : (
           <div className="wb-canvas-empty">工作台入口未就绪</div>
         )}
       </div>
+      {/* 悬浮式折叠钮：平时隐形不占宽度，鼠标靠近分隔线才浮现。
+          展开态浮在右栏左缘（点它收起），折叠态浮在画布右缘（点它展开）。 */}
       <button
         type="button"
         className="wb-toggle"
@@ -118,9 +148,9 @@ export function WorkbenchShell({ manifest, chatNode }: WorkbenchShellProps) {
         title={collapsed ? "展开对话栏" : "收起对话栏"}
         aria-label={collapsed ? "展开对话栏" : "收起对话栏"}
       >
-        {collapsed ? "‹" : "›"}
+        {collapsed ? <ChevronLeft className="icon-sm" /> : <ChevronRight className="icon-sm" />}
       </button>
-      {!collapsed && <div className="wb-chat">{chatNode}</div>}
+      {!collapsed && <div className="wb-chat">{chat}</div>}
     </div>
   );
 }

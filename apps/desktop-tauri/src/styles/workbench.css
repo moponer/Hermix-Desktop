@@ -15,6 +15,7 @@
 }
 
 .wb-shell {
+  position: relative; /* 悬浮折叠钮的定位锚点 */
   display: flex;
   flex: 1;
   min-height: 0;
@@ -33,7 +34,7 @@
   flex: 1;
   min-width: 0;
   border: 0;
-  background: var(--color-bg-primary);
+  background: transparent; /* 让父容器 .wb-canvas 的 var(--color-bg-primary) 透出 */
 }
 
 .wb-canvas-empty {
@@ -45,20 +46,59 @@
   font-size: 13px;
 }
 
+/* 悬浮折叠钮：absolute 脱流不占布局宽度。常显半透明 —— 纯 hover 浮现
+   等于把入口藏起来，用户根本不知道它能收起；hover/聚焦才提到全显。
+   展开态骑在右栏左缘分隔线上；折叠态（wb-shell-collapsed）浮在画布
+   右缘，成为唯一的展开入口。 */
 .wb-toggle {
-  flex-shrink: 0;
-  width: 18px;
-  border: 0;
-  border-left: 1px solid var(--color-border);
-  background: var(--color-bg-secondary);
+  position: absolute;
+  top: 50%;
+  z-index: 40;
+  width: 22px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-bg-card);
   color: var(--color-text-secondary);
   cursor: pointer;
-  font-size: 13px;
-  line-height: 1;
+  opacity: 0.55;
+  transform: translate(-50%, -50%);
+  transition: opacity var(--duration-fast, 120ms) ease,
+    background var(--duration-fast, 120ms) ease, color var(--duration-fast, 120ms) ease;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.1);
 }
 
-.wb-toggle:hover {
+/* 展开态：骑在分隔线上。右栏实际宽度 = clamp(320px, 38vw, 460px)
+   （width: min(460px,38vw) + min-width:320px 合成的效果），钮心必须
+   用同一个表达式，窄窗口下 38vw < 320px 时才不会错位进对话栏内部。 */
+.wb-shell:not(.wb-shell-collapsed) .wb-toggle {
+  right: clamp(320px, 38vw, 460px);
+}
+
+/* 折叠态：浮在画布右缘。 */
+.wb-shell-collapsed .wb-toggle {
+  right: 0;
+  transform: translate(50%, -50%);
+}
+
+/* hover 靠近（按钮本体或其热区）浮现。热区由本体 22px 宽 + ::before
+   扩展命中区承担，不用恒占宽的独立列。 */
+.wb-toggle:hover,
+.wb-toggle:focus-visible {
+  opacity: 1;
   background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+/* 扩大命中热区：钮两侧各 8px 透明区，靠近分隔线即可触发 hover。 */
+.wb-toggle::before {
+  content: "";
+  position: absolute;
+  inset: -4px -8px;
 }
 
 .wb-chat {
@@ -77,6 +117,76 @@
   background: var(--color-bg-app);
 }
 
+/* 工作台对话栏 chrome：chip + 消息流 + 状态条。
+   只做标识与反馈，不碰 ChatView 内部 —— 消息流逻辑仍由宿主 chatNode 提供。 */
+
+.wb-chat-frame {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.wb-chat-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-bg-secondary);
+  color: var(--color-text-primary);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.wb-chat-chip-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wb-chat-chip-tag {
+  margin-left: auto;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-primary);
+  color: var(--color-text-tertiary);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.wb-chat-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.wb-chat-status {
+  flex-shrink: 0;
+  padding: 4px 12px;
+  border-top: 1px solid var(--color-border);
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  background: var(--color-bg-secondary);
+}
+
+.wb-chat-status-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--color-text-secondary);
+}
+
+.wb-chat-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--color-success, #16a34a);
+}
+
 /* tab 条：多个工作台时出现。主台只决定默认落到哪个，切 tab 不改变主台。 */
 
 .wb-tabs {
@@ -88,6 +198,56 @@
   border-bottom: 1px solid var(--color-border);
   background: var(--color-bg-secondary);
   overflow-x: auto;
+}
+
+/* tab 右键菜单：挂在 tab 容器（wb-tab-item）下方。 */
+
+.wb-tab-item {
+  position: relative;
+  display: flex;
+  flex-shrink: 0;
+}
+
+.wb-tab-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 30;
+  min-width: 140px;
+  padding: 4px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-card);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  display: flex;
+  flex-direction: column;
+}
+
+.wb-tab-menu-item {
+  padding: 6px 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-primary);
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.wb-tab-menu-item:hover {
+  background: var(--color-bg-hover);
+}
+
+.wb-tab-menu-danger {
+  color: var(--color-error, #dc2626);
+}
+
+/* 二次确认态：整行填充警示色，让"再点一下就真删"足够醒目。 */
+.wb-tab-menu-confirm,
+.wb-tab-menu-confirm:hover {
+  background: var(--color-error, #dc2626);
+  color: #fff;
 }
 
 .wb-tab {
@@ -140,12 +300,14 @@
   font-size: 13px;
 }
 
-/* 空态：一个工作台都没有时教用户怎么起步 */
+/* 空态：一个工作台都没有时的起步界面（方案 C 定案版：零教学，居中单列） */
 
 .wb-empty {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
   flex: 1;
   min-height: 0;
   padding: 48px;
@@ -161,55 +323,37 @@
 
 .wb-empty-lead {
   margin: 0;
-  max-width: 620px;
   font-size: 13px;
   line-height: 1.7;
   color: var(--color-text-secondary);
 }
 
-.wb-empty-block {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  max-width: 620px;
-}
-
-.wb-empty-block-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.wb-empty-block-title {
-  font-size: 13px;
-  color: var(--color-text-primary);
-}
-
-.wb-empty-prompt {
-  margin: 0;
-  padding: 14px 16px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  background: var(--color-bg-card);
-  color: var(--color-text-primary);
-  font-family: inherit;
-  font-size: 13px;
-  line-height: 1.7;
-  white-space: pre-wrap;
-}
-
+/* 容器要有「框感」：跟底色拉开一级明度 + 发丝边框（保守 token 路线，
+   不改共享 token 值 —— 方案 C 定案 6）。 */
 .wb-empty-create {
   display: flex;
   align-items: center;
   gap: 8px;
+  width: 100%;
+  max-width: 360px;
+  padding: 10px;
+  border: 1px solid var(--color-border-primary, var(--color-border));
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-hover);
 }
 
-.wb-error {
+.wb-error-inline {
   margin: 0;
-  padding: 8px 16px;
+  max-width: 360px;
   font-size: 12px;
-  color: var(--color-text-secondary);
+  color: var(--color-error, #dc2626);
+  word-break: break-all;
+}
+
+.wb-empty-hint {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--color-text-tertiary);
 }
 
 .wb-input {
@@ -221,6 +365,13 @@
   background: var(--color-bg-input);
   color: var(--color-text-primary);
   font-size: 13px;
+}
+
+/* 焦点反馈走 1px 边框着色（输入类已豁免全局 2px outline）。 */
+.wb-input:focus,
+.wb-input:focus-visible {
+  outline: none;
+  border-color: var(--color-accent, var(--color-border));
 }
 
 .wb-btn {
