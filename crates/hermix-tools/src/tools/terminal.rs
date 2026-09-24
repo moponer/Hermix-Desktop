@@ -652,8 +652,11 @@ impl ContextAware for TerminalHandler {
         params: Value,
         ctx: &ToolCallContext,
     ) -> Result<String, ToolError> {
-        // 同样：来源取自 ctx；context.rs 还没把它装上，先 Local 兜底。
-        execute_inner(self, params, ctx.workspace.clone(), &ctx.approval_ctx, &Origin::Local).await
+        // 来源由调度方在 ToolCallContext.origin 里带入（§5.5 第 5 层）：
+        // - 桌面 WS 路径（LocalAgentService）固定填 Local；
+        // - HTTP 路径由 request_guard → Extension<Origin> → handler 覆盖填入；
+        // - 测试 / 头less 走 ctx default = Local。
+        execute_inner(self, params, ctx.workspace.clone(), &ctx.approval_ctx, &ctx.origin).await
     }
 }
 
@@ -1638,5 +1641,73 @@ mod tests {
             msg.contains("denied") || msg.contains("deny") || msg.contains("Denied"),
             "got: {msg}"
         );
+    }
+
+    // ----- §5.5 第 5 层接线：execute_with_context 路径服从 ctx.origin -----
+
+    /// agent loop 路径（dispatch_with_context → execute_with_context）：
+    /// PairedDevice ctx 触发 confirm，Local session 批准不能继承。
+    #[tokio::test]
+    async fn execute_with_context_paired_device_prompts() {
+        let backend = Arc::new(MockBackend {
+            captured_workdir: std::sync::Arc::new(std::sync::Mutex::new(None)),
+        });
+        let handler = make_handler(backend, None);
+        // Local 已 session-批准过 `del` 家族
+        handler.approval.approve_for_session("del x.txt");
+
+        let ctx = ToolCallContext {
+            origin: Origin::PairedDevice { device_id: "d1".into() },
+            ..ToolCallContext::for_session("s1")
+        };
+        let err = handler
+            .execute_with_context(json!({"command": "del x.txt"}), &ctx)
+            .await
+            .expect_err("PairedDevice ctx 下必须 prompt，不能继承 Local 批准");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("confirmation") || msg.contains("确认"),
+            "got: {msg}"
+        );
+    }
+
+    /// agent loop 路径：Unpaired ctx 一律 Denied，纵深防御。
+    #[tokio::test]
+    async fn execute_with_context_unpaired_denies_destructive() {
+        let backend = Arc::new(MockBackend {
+            captured_workdir: std::sync::Arc::new(std::sync::Mutex::new(None)),
+        });
+        let handler = make_handler(backend, None);
+        let ctx = ToolCallContext {
+            origin: Origin::Unpaired,
+            ..ToolCallContext::for_session("s1")
+        };
+        let err = handler
+            .execute_with_context(json!({"command": "rm -rf /"}), &ctx)
+            .await
+            .expect_err("Unpaired ctx 下灾难命令必须 Denied");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("denied") || msg.contains("Denied"),
+            "got: {msg}"
+        );
+    }
+
+    /// Local ctx 下只读命令放行——证明 ctx.origin 不影响默认桌面路径。
+    #[tokio::test]
+    async fn execute_with_context_local_runs_readonly() {
+        let backend = Arc::new(MockBackend {
+            captured_workdir: std::sync::Arc::new(std::sync::Mutex::new(None)),
+        });
+        let handler = make_handler(backend, None);
+        let ctx = ToolCallContext {
+            origin: Origin::Local,
+            ..ToolCallContext::for_session("s1")
+        };
+        let result = handler
+            .execute_with_context(json!({"command": "Get-ComputerInfo"}), &ctx)
+            .await
+            .expect("Local ctx 下只读命令应放行");
+        assert!(!result.is_empty());
     }
 }

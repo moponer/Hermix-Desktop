@@ -1483,6 +1483,10 @@ impl AgentService for LocalAgentService {
             message_id: Some(upcoming_assistant_id.clone()),
             stdout_cb: std::sync::Arc::new(std::sync::Mutex::new(None)),
             active_call_id: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            // §5.5 第 5 层：桌面 WS 路径固定 Local。HTTP 路径走独立 dispatcher
+            // （handler 从 axum Extension<Origin> 取出来覆盖）；这里不加分支，
+            // 等配对 / TLS 落地后再扩。
+            origin: hermix_core::Origin::Local,
         });
 
         // P0 (memory isolation): give this agent its own scoped memory
@@ -1879,6 +1883,10 @@ impl AgentService for LocalAgentService {
             message_id: Some(upcoming_assistant_id.clone()),
             stdout_cb: std::sync::Arc::new(std::sync::Mutex::new(None)),
             active_call_id: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            // §5.5 第 5 层：桌面 WS 路径固定 Local。HTTP 路径走独立 dispatcher
+            // （handler 从 axum Extension<Origin> 取出来覆盖）；这里不加分支，
+            // 等配对 / TLS 落地后再扩。
+            origin: hermix_core::Origin::Local,
         });
 
         // P0 (memory isolation): give this agent its own scoped memory

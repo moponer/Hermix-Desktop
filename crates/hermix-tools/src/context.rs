@@ -32,7 +32,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use hermix_core::{PermissionProfile, ToolError};
+use hermix_core::{Origin, PermissionProfile, ToolError};
 use serde_json::Value;
 
 use crate::approval::TerminalApprovalContext;
@@ -86,6 +86,18 @@ pub struct ToolCallContext {
     /// Updated per tool-call by the stream loop so the stdout callback
     /// can emit `tool_stdout` events with the correct ID.
     pub active_call_id: Arc<Mutex<Option<String>>>,
+
+    /// 来源（§5.5 第 5 层）。由调度方根据连接属性填入：
+    /// - `LocalAgentService`（桌面 WS）固定写 `Origin::Local`；
+    /// - HTTP 路由在 `dispatch_with_context` 之前从 `Extension<Origin>`
+    ///   读取后填入（`hermix-server/src/security.rs` 的 `request_guard`
+    ///   已经把推导结果塞进 axum Extension，handler 桥接时取出来覆盖）；
+    /// - 测试 / 头less 调用走 `Default::default()` ⇒ `Origin::Local`，
+    ///   与"桌面直连"语义一致。
+    /// 工具实现（terminal / 后续 code_execution 等）在
+    /// `execute_with_context` 里读 `ctx.origin` 走来源感知审批，
+    /// 而不是接收 `&Origin` 参数——这样新增 ContextAware 工具零样板。
+    pub origin: Origin,
 }
 
 impl ToolCallContext {

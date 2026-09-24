@@ -5,9 +5,14 @@
 //! 取决策，不允许各自维护第二份表。
 
 /// 请求来源。
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `Default = Local`：未显式设置时退回本地（最宽松），
+/// 与 `ToolCallContext::default()` 的"agent loop 桌面 WS 始终 Local"语义一致。
+/// HTTP 路径会由 `security::request_guard` 显式覆盖为实际推导结果。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum Origin {
     /// 桌面端自身发起的请求（用户直接操作）。
+    #[default]
     Local,
     /// 已配对设备（手机端）发起的请求。
     PairedDevice {
@@ -120,6 +125,12 @@ mod tests {
         assert_eq!(remote.may(Capability::ConfigMutation), Decision::Denied);
         assert_eq!(remote.may(Capability::DeviceManagement), Decision::Denied);
         assert_eq!(remote.may(Capability::WorkbenchAccess), Decision::Denied);
+    }
+
+    #[test]
+    fn default_origin_is_local() {
+        // ToolCallContext::default() 依赖此语义：未显式设置 ⇒ 桌面直连。
+        assert_eq!(Origin::default(), Origin::Local);
     }
 
     #[test]
