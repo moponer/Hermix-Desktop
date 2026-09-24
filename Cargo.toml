@@ -121,6 +121,14 @@ serde_yaml = "0.9"
 reqwest = { version = "0.12", default-features = false, features = ["stream", "json", "rustls-tls"] }
 tokio-tungstenite = "0.24"
 eventsource-stream = "0.2"
+# (§5.5 第 2 层) TLS listener + 自签证书生成；指纹固定是设备配对 TOFU 的根基。
+# (§5.5 第 2 层) 0.7.2+ 内置 rustls TLS；CryptoProvider 由本仓显式
+# 指定 ring（tls.rs::build_server_config），避免 provider 图谱歧义。
+axum-server = { version = "0.7.2", features = ["tls-rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rustls-pemfile = "2"
+rcgen = "0.13"
+time = { version = "0.3", features = ["std"] }
 
 # Error handling & logging
 thiserror = "2"

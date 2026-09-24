@@ -140,6 +140,7 @@ chrono::Utc::now().timestamp_millis()
 
 pub mod approval;
 pub mod coalescer;
+pub mod tls;
 pub use approval::ApprovalRegistry;
 
 pub mod state;
@@ -428,11 +429,23 @@ pub fn router(state: HttpServerState) -> Router {
 
 pub async fn run_server(addr: SocketAddr, config: GatewayConfig) -> Result<(), AgentError> {
     let state = HttpServerState::build(config).await?.with_automation_scheduler();
-    run_server_with_state(addr, state).await
+    // §5.5 第 2 层：TLS 监听器由 HERMIX_TLS_ADDR 显式开启（可选双监听器：
+    // plaintext 保持现有暴露面语义，TLS 面向远程设备）。env 读法放在这里
+    // 而不是 main.rs，是为了 run_server 的调用方零改动。
+    let tls_addr = tls::tls_addr_from_env();
+    run_server_with_tls(addr, tls_addr, state).await
 }
 
 pub async fn run_server_with_state(
     addr: SocketAddr,
+    state: HttpServerState,
+) -> Result<(), AgentError> {
+    run_server_with_tls(addr, None, state).await
+}
+
+pub async fn run_server_with_tls(
+    addr: SocketAddr,
+    tls_addr: Option<SocketAddr>,
     state: HttpServerState,
 ) -> Result<(), AgentError> {
     //clone TickLoop manager before moving state into the router.
@@ -487,6 +500,8 @@ pub async fn run_server_with_state(
     tickloop_mgr.start(Some(tracker)).await;
 
     let mut shutdown_rx = shutdown_rx;
+    // TLS 联动用副本：shutdown 闭包 move 走原 rx。
+    let shutdown_rx_for_tls = shutdown_rx.clone();
     let shutdown = async move {
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {
@@ -526,6 +541,73 @@ pub async fn run_server_with_state(
         }
         tickloop_mgr.stop().await;
     };
+
+    // §5.5 第 2 层：可选 TLS 监听器。plaintext 主监听器行为不变；
+    // TLS listener 用同一 router（Router: Clone），shutdown 联动。
+    if let Some(tls_addr) = tls_addr {
+        let dir = tls::tls_dir();
+        let material = tls::ensure_tls_material(&dir)?;
+        let server_config = tls::build_server_config(&material)?;
+        tracing::info!(
+            "TLS listener on {tls_addr}, cert sha256={} (TOFU 指纹固定锚点)",
+            material.fingerprint_sha256
+        );
+        drop(material);
+
+        // 复用 SO_REUSEADDR socket 装配（与 plaintext 相同的两步法）。
+        let tls_socket = tokio::net::TcpSocket::new_v4()
+            .map_err(|e| AgentError::Io(format!("TcpSocket::new_v4(tls): {e}")))?;
+        tls_socket
+            .set_reuseaddr(true)
+            .map_err(|e| AgentError::Io(format!("set_reuseaddr(tls): {e}")))?;
+        tls_socket.bind(tls_addr).map_err(|e| {
+            AgentError::Io(format!("tls bind {tls_addr} failed: {e}"))
+        })?;
+        let tls_listener = tls_socket.listen(1024).map_err(|e| {
+            AgentError::Io(format!("tls listen on {tls_addr}: {e}"))
+        })?;
+        let std_listener = tls_listener
+            .into_std()
+            .map_err(|e| AgentError::Io(format!("tls into_std: {e}")))?;
+        std_listener
+            .set_nonblocking(false)
+            .map_err(|e| AgentError::Io(format!("tls set_nonblocking: {e}")))?;
+
+        let shutdown_tls_handle = axum_server::Handle::new();
+        let rustls_config =
+            axum_server::tls_rustls::RustlsConfig::from_config(Arc::new(server_config));
+        let tls_server = axum_server::tls_rustls::from_tcp_rustls(
+            std_listener,
+            rustls_config,
+        )
+        .handle(shutdown_tls_handle.clone())
+        .serve(app.clone().into_make_service_with_connect_info::<SocketAddr>());
+
+        // shutdown 联动：watch 通道变化 → TLS listener 优雅退出。
+        let mut shutdown_rx_tls = shutdown_rx_for_tls.clone();
+        tokio::spawn(async move {
+            let _ = shutdown_rx_tls.changed().await;
+            shutdown_tls_handle.graceful_shutdown(Some(std::time::Duration::from_secs(2)));
+        });
+
+        return tokio::select! {
+            r = async {
+                axum::serve(
+                    listener,
+                    app.into_make_service_with_connect_info::<SocketAddr>(),
+                )
+                .with_graceful_shutdown(shutdown)
+                .await
+                .map_err(|e| AgentError::Io(e.to_string()))
+            } => r,
+            r = async {
+                tls_server
+                    .await
+                    .map_err(|e| AgentError::Io(e.to_string()))
+            } => r,
+        };
+    }
+
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
