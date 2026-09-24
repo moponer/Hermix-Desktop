@@ -1,40 +1,16 @@
-//! 传输层抽象：解耦「客户端 ↔ 服务端」全双工通道与具体传输方式。
+//! 传输层实现：WebSocket（TCP）与 stdio 管道两种具体传输。
 //!
-//! handler 只依赖本模块的 trait，不感知底层是 WebSocket（TCP）还是 stdio 管道。
-//! 拆成独立的入/出站半，是为了让 handler 能并发读写——审批响应等 out-of-band
-//! 消息必须在推流的同时被读取，否则会堆积在接收缓冲区直到超时。
+//! 契约 trait（`Transport` / `TransportSink` / `TransportSource`）已下沉到
+//! `hermix-transport`（P0「传输两套合一」：类型与契约单点定义），这里
+//! re-export 保持既有调用点 `crate::transport::…` 零改动；本模块只保留
+//! 具体实现。
 
 use async_trait::async_trait;
 use axum::extract::ws::{Message as WsMessage, WebSocket};
 use futures::{SinkExt, StreamExt};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines, Stdin, Stdout};
 
-pub type TransportError = Box<dyn std::error::Error + Send + Sync>;
-pub type TransportResult<T> = Result<T, TransportError>;
-
-/// 出站半：服务端 → 客户端，逐条发送 JSON 文本。
-#[async_trait]
-pub trait TransportSink: Send {
-    async fn send(&mut self, text: String) -> TransportResult<()>;
-    /// 传输层保活探针。WS 实现发协议级 Ping 帧刷新 NAT/中间盒空闲计时器，
-    /// 并通过发送失败及早发现死连接；无帧概念的传输（stdio）默认空操作。
-    async fn ping(&mut self) -> TransportResult<()> {
-        Ok(())
-    }
-    /// 正常关闭出站方向；缓冲区刷新失败即视为错误。
-    async fn close(&mut self) -> TransportResult<()>;
-}
-
-/// 入站半：客户端 → 服务端，逐条读取 JSON 文本；`None` 表示对端已关闭。
-#[async_trait]
-pub trait TransportSource: Send {
-    async fn recv(&mut self) -> Option<String>;
-}
-
-/// 全双工传输。拆成独立的入/出站半供 handler 并发持有。
-pub trait Transport: Send {
-    fn split(self) -> (Box<dyn TransportSink>, Box<dyn TransportSource>);
-}
+pub use hermix_transport::{Transport, TransportError, TransportResult, TransportSink, TransportSource};
 
 type WsSplitSink = futures::stream::SplitSink<WebSocket, WsMessage>;
 type WsSplitStream = futures::stream::SplitStream<WebSocket>;

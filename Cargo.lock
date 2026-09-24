@@ -2262,7 +2262,6 @@ dependencies = [
  "hermix-config",
  "hermix-context",
  "hermix-core",
- "hermix-cron",
  "hermix-cua",
  "hermix-environments",
  "hermix-intelligence",
@@ -2437,6 +2436,7 @@ dependencies = [
 name = "hermix-transport"
 version = "0.1.1"
 dependencies = [
+ "async-trait",
  "hermix-core",
  "serde",
  "serde_json",

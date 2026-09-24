@@ -1,5 +1,41 @@
 use serde::{Deserialize, Serialize};
 
+// ---------------------------------------------------------------------------
+// 传输契约（自 server/transport.rs 下沉，P0「传输两套合一」）
+//
+// 「客户端 ↔ 服务端」全双工通道的最小接口。handler 只依赖这三个 trait，
+// 不感知底层是 WebSocket 还是 stdio 管道。拆成独立的入/出站半，是为了让
+// handler 能并发读写——审批响应等 out-of-band 消息必须在推流的同时被
+// 读取，否则会堆积在接收缓冲区直到超时。
+// ---------------------------------------------------------------------------
+
+pub type TransportError = Box<dyn std::error::Error + Send + Sync>;
+pub type TransportResult<T> = Result<T, TransportError>;
+
+/// 出站半：服务端 → 客户端，逐条发送 JSON 文本。
+#[async_trait::async_trait]
+pub trait TransportSink: Send {
+    async fn send(&mut self, text: String) -> TransportResult<()>;
+    /// 传输层保活探针。WS 实现发协议级 Ping 帧刷新 NAT/中间盒空闲计时器，
+    /// 并通过发送失败及早发现死连接；无帧概念的传输（stdio）默认空操作。
+    async fn ping(&mut self) -> TransportResult<()> {
+        Ok(())
+    }
+    /// 正常关闭出站方向；缓冲区刷新失败即视为错误。
+    async fn close(&mut self) -> TransportResult<()>;
+}
+
+/// 入站半：客户端 → 服务端，逐条读取 JSON 文本；`None` 表示对端已关闭。
+#[async_trait::async_trait]
+pub trait TransportSource: Send {
+    async fn recv(&mut self) -> Option<String>;
+}
+
+/// 全双工传输。拆成独立的入/出站半供 handler 并发持有。
+pub trait Transport: Send {
+    fn split(self) -> (Box<dyn TransportSink>, Box<dyn TransportSource>);
+}
+
 // Re-export the core `ToolCall` shape so the wire-format
 // `ProtocolMessage::tool_calls` field (and any other payload that
 // round-trips a tool call) can name the type without forcing every

@@ -24,7 +24,6 @@ pub struct HttpServerState {
     pub tool_registry: Arc<ToolRegistry>,
     pub hermix_home: std::path::PathBuf,
     pub session_persistence: Arc<hermix_agent::session_persistence::SessionPersistence>,
-    pub cron_scheduler: Option<Arc<hermix_cron::CronScheduler>>,
     pub skill_store: Option<Arc<dyn hermix_skills::SkillStore>>,
     /// 进程级装配：持有 provider 注册 guard，保证 fs/shell/sandbox/transport
     /// 服务与进程同寿命。`Boot::seams()` 把同一组 provider 实例传给
@@ -519,12 +518,6 @@ impl HttpServerState {
         let agent_service: Arc<dyn hermix_core::traits::AgentService> =
             Arc::new(agent_service_inner);
 
-        // Initialize cron scheduler backed by `$hermix_home/data/cron`
-        let cron_dir = hermix_config::paths::data_dir_in(&hermix_home).join("cron");
-        let cron_scheduler = Arc::new(hermix_cron::cli_support::cron_scheduler_for_data_dir(
-            cron_dir,
-        ));
-
         // Initialize skill store
         let skill_store: Arc<dyn hermix_skills::SkillStore> = Arc::new(
             hermix_skills::FileSkillStore::new(hermix_skills::FileSkillStore::default_dir()),
@@ -558,7 +551,6 @@ impl HttpServerState {
             tool_registry,
             hermix_home,
             session_persistence: session_persistence.clone(),
-            cron_scheduler: Some(cron_scheduler),
             skill_store: Some(skill_store),
             boot: Arc::new(boot),
             runtime_gateway_running: None,
@@ -791,12 +783,6 @@ impl HttpServerState {
             }
         }
 
-        // Initialize cron scheduler backed by $HERMIX_HOME/data/cron
-        let cron_dir = hermix_config::paths::data_dir_in(&hermix_home).join("cron");
-        let cron_scheduler = Arc::new(hermix_cron::cli_support::cron_scheduler_for_data_dir(
-            cron_dir,
-        ));
-
         // Initialize skill store
         let skill_store: Arc<dyn hermix_skills::SkillStore> = Arc::new(
             hermix_skills::FileSkillStore::new(hermix_skills::FileSkillStore::default_dir()),
@@ -830,7 +816,6 @@ impl HttpServerState {
             tool_registry,
             hermix_home,
             session_persistence: session_persistence.clone(),
-            cron_scheduler: Some(cron_scheduler),
             skill_store: Some(skill_store),
             boot: Arc::new(boot),
             runtime_gateway_running: None,

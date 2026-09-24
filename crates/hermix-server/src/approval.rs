@@ -663,7 +663,6 @@ mod approval_registry_tests {
             tool_registry: Arc::new(hermix_tools::ToolRegistry::new()),
             hermix_home,
             session_persistence,
-            cron_scheduler: None,
             skill_store: None,
             boot: Arc::new(hermix_context::Boot::local(hermix_context::BootProfile::new())),
             runtime_gateway_running: None,
