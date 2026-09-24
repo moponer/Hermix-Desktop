@@ -18,12 +18,14 @@
 //!
 
 pub mod context;
+pub mod effect;
 pub mod repository;
 pub mod results;
 pub mod service;
 
 // Re-export primary types
 pub use context::parse_at_references;
+pub use effect::{EffectLog, RecoveryAction, ToolIntent, ToolOutcome};
 pub use repository::{TaskRepository, TaskRepositoryError};
 pub use results::TaskResults;
 pub use service::{CreateTaskParams, TaskService, TaskServiceError};
