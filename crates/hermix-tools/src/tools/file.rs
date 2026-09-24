@@ -7,8 +7,8 @@ use indexmap::IndexMap;
 use serde_json::{json, Value};
 
 use hermix_core::{
-    tool_schema, traits::RiskLevel, Fs, FsError, JsonSchema, TerminalBackend, ToolError, ToolHandler,
-    ToolSchema,
+    tool_schema, traits::RiskLevel, AttachmentKind, Fs, FsError, JsonSchema, TerminalBackend,
+    ToolError, ToolHandler, ToolOutput, ToolSchema,
 };
 
 use std::path::{Path, PathBuf};
@@ -795,8 +795,32 @@ impl Default for ReadImageHandler {
     fn default() -> Self { Self::new() }
 }
 
+/// 共享读取逻辑：`execute` 与 `execute_structured` 都从这里拿 bytes。
+/// `execute_structured`（S4 接缝）拿原始 bytes 包成 `AttachmentKind::Image`
+/// attachment；`execute` 拿 bytes 编码 base64 后塞 JSON 字符串。
+/// 两条路径一致——只是 attachment 表达形式不同。
+fn read_image_bytes(path: &str) -> Result<(Vec<u8>, String), ToolError> {
+    let bytes = std::fs::read(path).map_err(|e| {
+        ToolError::from_message(format!("cannot read image file '{path}': {e}"))
+    })?;
+    // Reject obviously non-image files (> 50 MB) to avoid base64-ing
+    // huge binaries by mistake.
+    if bytes.len() > 50 * 1024 * 1024 {
+        return Err(ToolError::ExecutionFailed(format!(
+            "file '{path}' is {} bytes — too large for image reading \
+             (max 50 MB). Use read_file for large files.",
+            bytes.len()
+        )));
+    }
+    let mime = mime_from_ext(path).to_string();
+    Ok((bytes, mime))
+}
+
 #[async_trait]
 impl ToolHandler for ReadImageHandler {
+    /// 老的字符串返回路径：base64 JSON 字符串。**保留向后兼容**——目前
+    /// 还有不少调用方按 `"_image_data"` 字段解析。迁移到
+    /// `execute_structured` 后这条路径才能砍。
     async fn execute(&self, params: Value) -> Result<String, ToolError> {
         let path = params
             .get("path")
@@ -813,28 +837,7 @@ impl ToolHandler for ReadImageHandler {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
-        let bytes = std::fs::read(path).map_err(|e| {
-            ToolError::from_message(format!("cannot read image file '{path}': {e}"))
-        })?;
-
-        // Reject obviously non-image files (> 50 MB) to avoid base64-ing
-        // huge binaries by mistake.
-        if bytes.len() > 50 * 1024 * 1024 {
-            return Err(ToolError::ExecutionFailed(format!(
-                "file '{path}' is {} bytes — too large for image reading \
-                 (max 50 MB). Use read_file for large files.",
-                bytes.len()
-            )));
-        }
-
-        let mime = mime_from_ext(path);
-        let b64 = general_purpose::STANDARD.encode(&bytes);
-
         if ocr {
-            // Local OCR engine (oar-ocr / PP-OCRv5 mobile) was removed from
-            // the build. The image is still returned via `_image_data` below
-            // so the LLM can read it with its own vision; surface a clear
-            // note instead of calling an engine that no longer exists.
             return Err(ToolError::ExecutionFailed(
                 "Local OCR has been removed from this build. The image is still returned via \
                  `_image_data` — let the LLM read it with vision, or delegate to a sub-agent \
@@ -842,6 +845,9 @@ impl ToolHandler for ReadImageHandler {
                     .into(),
             ));
         }
+
+        let (bytes, mime) = read_image_bytes(path)?;
+        let b64 = general_purpose::STANDARD.encode(&bytes);
 
         Ok(json!({
             "tool": "read_image",
@@ -852,6 +858,30 @@ impl ToolHandler for ReadImageHandler {
             "_image_data": b64,
         })
         .to_string())
+    }
+
+    /// S4 接缝兑现：图片作为结构化 attachment，文本只放 metadata。
+    /// 前端拿到 ToolOutput 后能从 attachment 直接渲染图片，不用解析 base64
+    /// 字符串。LLM 这边看到的 text 部分是「path + mime + size」摘要，
+    /// 实际像素走 multimodal 通道。
+    async fn execute_structured(&self, params: Value) -> Result<ToolOutput, ToolError> {
+        let path = params
+            .get("path")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::InvalidParams(
+                "missing 'path' — pass a local image file path (.png/.jpg/.gif/.webp)".into(),
+            ))?;
+        if path.is_empty() {
+            return Err(ToolError::InvalidParams("'path' must be non-empty".into()));
+        }
+
+        let (bytes, mime) = read_image_bytes(path)?;
+        let text = format!(
+            "Read image: path={path} mime={mime} size_bytes={}",
+            bytes.len()
+        );
+        Ok(ToolOutput::text(text)
+            .with_attachment(AttachmentKind::Image, &mime, bytes))
     }
 
     fn schema(&self) -> ToolSchema {
@@ -1156,6 +1186,74 @@ mod tests {
             .decode(out["_image_data"].as_str().unwrap())
             .unwrap();
         assert_eq!(decoded, bytes);
+        let _ = std::fs::remove_file(&p);
+    }
+
+    // -- S4 接缝兑现：read_image 的 execute_structured 把图片作为
+    // attachment 而不是塞 base64 字符串。验证：
+    //   1) ToolOutput.attachments 有一项 Image
+    //   2) attachment bytes 与磁盘文件一致
+    //   3) text 部分只是 metadata 摘要，没有 base64 数据
+    //   4) 老 execute() 路径仍然返回 base64 JSON 字符串（向后兼容）
+
+    fn tiny_png_path(name: &str) -> std::path::PathBuf {
+        // 1x1 red PNG
+        let png_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+        let bytes = base64::engine::general_purpose::STANDARD.decode(png_b64).unwrap();
+        let p = std::env::temp_dir().join(name);
+        std::fs::write(&p, &bytes).unwrap();
+        p
+    }
+
+    #[tokio::test]
+    async fn read_image_structured_returns_attachment_not_base64() {
+        use hermix_core::traits::ToolHandler as _;
+        let p = tiny_png_path("read_image_s4_1.png");
+        let out = ReadImageHandler::new()
+            .execute_structured(json!({ "path": p.to_str().unwrap() }))
+            .await
+            .unwrap();
+        assert!(!out.is_error);
+        assert_eq!(out.attachments.len(), 1, "expected one image attachment");
+        let att = &out.attachments[0];
+        assert_eq!(att.kind, AttachmentKind::Image);
+        assert_eq!(att.mime, "image/png");
+        // text 段是 metadata 摘要，绝不含 base64
+        assert!(out.text.contains("image/png"), "got text: {}", out.text);
+        assert!(!out.text.contains("base64"), "text should not mention base64");
+        assert!(!out.text.contains("data:image"), "text should not embed base64");
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[tokio::test]
+    async fn read_image_structured_attachment_bytes_round_trip_file() {
+        use hermix_core::traits::ToolHandler as _;
+        let p = tiny_png_path("read_image_s4_2.png");
+        let original = std::fs::read(&p).unwrap();
+        let out = ReadImageHandler::new()
+            .execute_structured(json!({ "path": p.to_str().unwrap() }))
+            .await
+            .unwrap();
+        assert_eq!(out.attachments.len(), 1);
+        assert_eq!(
+            out.attachments[0].data, original,
+            "attachment bytes must equal on-disk bytes (no resize path on tiny png)"
+        );
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[tokio::test]
+    async fn read_image_legacy_execute_still_returns_base64_string() {
+        // 零回归钉子：老 execute() 调用方仍在解析 `_image_data` 字段。
+        use serde_json::Value;
+        let p = tiny_png_path("read_image_s4_3.png");
+        let out = ReadImageHandler::new()
+            .execute(json!({ "path": p.to_str().unwrap() }))
+            .await
+            .unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["mime_type"], "image/png");
+        assert!(v["_image_data"].as_str().unwrap().len() > 0);
         let _ = std::fs::remove_file(&p);
     }
 
