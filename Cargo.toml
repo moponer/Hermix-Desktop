@@ -22,6 +22,7 @@ members = [
     "crates/hermix-session",
     "crates/hermix-context",
     "crates/hermix-transport",
+    "crates/hermix-protocol",
     "crates/hermix-core",
     "crates/hermix-agent",
     "crates/hermix-tools",
@@ -87,6 +88,7 @@ hermix-session = { path = "crates/hermix-session" }
 hermix-context = { path = "crates/hermix-context" }
 hermix-core = { path = "crates/hermix-core" }
 hermix-transport = { path = "crates/hermix-transport" }
+hermix-protocol = { path = "crates/hermix-protocol" }
 hermix-agent = { path = "crates/hermix-agent" }
 hermix-tools = { path = "crates/hermix-tools" }
 hermix-cua = { path = "crates/hermix-cua" }

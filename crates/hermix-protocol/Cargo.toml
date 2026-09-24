@@ -1,0 +1,16 @@
+[package]
+name = "hermix-protocol"
+version = "0.1.1"
+edition = "2021"
+description = "L3 wire protocol: Envelope + EventKind + Route + seq anchor (design §3.5)"
+
+[lib]
+doctest = false
+
+[dependencies]
+hermix-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }

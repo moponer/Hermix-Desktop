@@ -139,6 +139,16 @@ pub struct HttpServerState {
     /// task — which would double-execute non-idempotent tools. Cleared
     /// when a fresh agent starts for that key.
     pub completed_keys: Arc<std::sync::Mutex<std::collections::HashMap<String, String>>>,
+    /// L3 seq 源（P4，设计 §3.5）：进程级单调递增计数器。
+    /// 每条 Envelope 下行帧带 seq，客户端重连用最后收到的 seq 锚
+    /// 重新订阅；seq 间隙允许（客户端只做大小比较）。`AtomicU64`
+    /// 无锁——广播热路径每次 fetch_add(1)。
+    ///
+    /// P5 attachment 模型落地后此字段被 SessionScopus seq 域替代
+    /// （每 session 独立计数，支持快照压缩后重连补发）。本阶段
+    /// 进程级 16n 已满足「同视图」验收（设计 §4：任何时刻接入
+    /// 都能复原同一会话状态）。
+    pub seq: std::sync::Arc<std::sync::atomic::AtomicU64>,
     /// H3 — agent "consciousness stream" tracker. The
     /// desktop UI subscribes to this over WebSocket and renders the
     /// samples as a full-screen ECG visualization. Cheap to clone
@@ -655,7 +665,7 @@ impl HttpServerState {
             active_handles: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             pending_grace: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             completed_keys: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
-            // Todo event bus — created lazily below in `build()` after
+            seq: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             // we know the runtime config. Initialised to None here so
             // the early struct literal doesn't need to await anything.
             todo_event_tx: Some(todo_event_tx.clone()),
@@ -934,6 +944,7 @@ impl HttpServerState {
             active_handles: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             pending_grace: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             completed_keys: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            seq: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             todo_event_tx: Some(todo_event_tx.clone()), // injected after register_builtin_tools below
             orchestration_bus: OrchestrationEventBus::new(),
             metrics,
