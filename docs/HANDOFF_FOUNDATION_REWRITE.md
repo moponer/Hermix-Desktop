@@ -1,8 +1,8 @@
 # 交接文档：Hermix 底座重写 + 网络安全层（给后续开发 agent）
 
 > 更新时间：2026-09-24。本文是唯一权威交接入口。动手前**必须完整读完本文 + 必读文档清单**，禁止跳读后自行发挥。
-> 当前累计 34 个 commit（15 + 本批 19），工作区除 §7 未跟踪遗留物外干净。最近 commit：`adfc8ca5`。
-> 本批新增 commit：`87bb2b9a` / `b51a32a1` / `3cc45b72` / `f062c5ad` / `e1a75115` / `20b6eda8` / `ab7aad02` / `c208f10f` / `9d897704` / `640eeb57` / `6979313c` / `a8f4e547` / `63e3b174` / `0918f7a5` / `cead162d` / `5fab0ec2` / `6892a043` / `29392b57` / `e651c311` / `adfc8ca5`。
+> 当前累计 36 个 commit（15 + 本批 21），工作区除 §7 未跟踪遗留物外干净。最近 commit：`e91ac42e`。
+> 本批新增 commit：`87bb2b9a` / `b51a32a1` / `3cc45b72` / `f062c5ad` / `e1a75115` / `20b6eda8` / `ab7aad02` / `c208f10f` / `9d897704` / `640eeb57` / `6979313c` / `a8f4e547` / `63e3b174` / `0918f7a5` / `cead162d` / `5fab0ec2` / `6892a043` / `29392b57` / `e651c311` / `adfc8ca5` / `acf1fea1` / `e91ac42e`。
 
 ---
 
@@ -96,7 +96,7 @@
 ```
 hermix-tools lib: 691 passed（terminal 31）
 hermix-agent lib: 1050 passed（含 P5 水位单调性测试 test_session_seq_watermark_monotonicity）
-hermix-server lib: 177 passed（pairing 8 / security 12（含 §3.3 scopes 细粒度 4） / tls 4）
+hermix-server lib: 183 passed（pairing 8 / security 12（含 §3.3 scopes 细粒度 4）/ 审计 6 / tls 4）
 hermix-protocol: 3 passed
 hermix-core lib: 173 passed（§3.3 Capability 派生 Hash 零回归）
 全仓 cargo check --workspace --all-targets 绿
@@ -154,7 +154,30 @@ CARGO_INCREMENTAL=0 cargo test -p <crate> --lib   # 改了哪个 crate 测哪个
 - 设备管理 UI 编辑 scopes（`DevicesTab.tsx` 加能力位勾选，撤销/编辑流程）
 - 测试基线更新：hermix-server 177 passed（+4：scopes 解析 ×2 / 矩阵∩能力位 / pair 写入闭环）；hermix-core 173 passed（+Hash 派生零回归）
 
-### 3.4 手机客户端
+### 3.5 设计文档 §7 其余阶段（P2 会话内核后续 / P6 防滥用 + 审计 / P8 soak）
+
+**已落**（本批次——P6 防滥用 + 审计最小切片）：
+- `pairing.rs` 新增 `audit_log` 表（与 `paired_devices` 同库 `devices.db`，`open` 时建；`ts`/`event`/`device_id`/`source_ip`/`decision` 五列 + `idx_audit_ts` 索引）
+- `AuditEvent` 枚举（`Pairing`/`Auth`/`Grant`/`Revoke` 四类，`as_str` 落盘字符串形式）+ `AuditRow` 结构体（模块顶层，供读侧展示）
+- `DeviceRegistry::record_audit(event, device_id, source_ip, decision)` 旁路写 API（失败仅 `tracing::warn`，不阻断主路径）+ `list_audit(limit)` 读 API（时间倒序，limit 钳制 1..=1000）
+- `request_source_ip(peer, headers)` 来源 IP 提取（XFF 第一跳优先，回退连接对端；`None` 落 `NULL`）
+- 四个安全关口接审计落盘：
+  - `complete_pairing`（pair 成功后落 `Pairing` 行）
+  - `security.rs::request_guard` 的 `authenticate` 命中点（token 命中 → `Auth`/`allowed`；出示 token 未命中 → `Auth`/`denied`）
+  - `list_devices`（查询落 `Grant` 行）
+  - `revoke_device`（撤销命中落 `Revoke`/`revoked`；未命中落 `Revoke`/`not_found` 便于排查滥用扫描）
+- 测试（+6）：`record_audit_writes_and_list_audit_reads`（落库→读库闭环 + 时间倒序 + Auth 行 device_id=None）/ `list_audit_respects_limit`（limit 钳制）/ `audit_events_map_to_stable_strings`（四事件字符串）/ `pair_revoke_lifecycle_emits_audit_events`（生命周期审计）/ `request_source_ip_prefers_xff_first_hop` / `request_source_ip_falls_back_to_peer_when_no_xff`
+
+**未做**（P6 剩余 + P2/P8）：
+- **NeedsLocalConfirmation 关口消费点接通**：`origin.rs` 定义了 `DangerousTool` 的 `NeedsLocalConfirmation` 判定（§3.3 的矩阵∩能力位也已落），但**全仓无消费者**——工具关口 / 审批引擎按 `origin` + `device_scopes` 实际拒绝/降级远程高危工具还没接（需接工具关口批次，本批次只落审计原语）
+- **T6 暴力破解 IP 锁定**：设计文档明写"随手机客户端批次补"（配对码 120s TTL + 一次性消费 + 全局 rate limiter 已够本批次；指数退避 + 5 次锁定 15min 是 YAGNI 延后项）
+- **连接数上限 / 请求大小上限 / 空闲超时**：设计 §5.5 附表四件套（每设备 4 条 / 全局 64 条 / 16MiB payload / 5min 空闲）未落——属网络层加固批次
+- **审计日志管理端点 / 诊断 tab 展示**：`list_audit` 读 API 已落，但 `GET /api/audit` 端点 + `DiagnosticsTab.tsx` 展示还没接（UI 批次）
+- **P2 会话内核后续**：`hermix-session` crate 新建（Session + 变更线 + commit 协议 + Entry 模型）是设计 §7 的大工程，非本批次
+- **P8 soak**：8h SLO（内存 ≤200MB / fd 不增长 / task 数稳定 / 0 未处理 panic）headless 不可行，实机依赖，blocked
+- 测试基线更新：hermix-server 177→183 passed（+6 审计测试）；全仓 cargo check --workspace 绿
+
+### 3.6 手机客户端
 
 **D6 已拍板不在本期**，另立项目。本期交付的协议契约：QR 负载结构、4 个配对端点、TLS 指纹 TOFU，见 `pairing.rs` 与本文档。
 
