@@ -96,6 +96,15 @@ export interface StreamChatSendContext {
   chunkRaf: number | null;
   retryCount: number;
 
+  // ── P5 L3 seq 对账（设计 §3.5 / §6.3 P7）──────────────────────────
+  // 本 attachment 的本地 seq 水位：每收到一帧带可选 `seq` 字段的
+  // WsEnvelope（`data.seq`，控制帧为 null），把 max 记在这里。
+  // 重连对账（useStreamChat 的 onConnectionLost 路径）用它作
+  // `subscribeSessionSnapshot` 的 since_seq——已追上（服务端
+  // lastSeq <= 本水位）回空增量刷新锚；落后回全量快照整体替换。
+  // 只增不减（max 语义），跨 send 不重置（per-attachment 持久水位）。
+  lastLocalSeq: number;
+
   // ── helper closures wired from `send` ──
   updatePhase: (next: StreamPhase) => void;
   getPhase: () => StreamPhase;
@@ -176,6 +185,21 @@ export function createMessageHandler(
     }
     try {
       const data: any = JSON.parse(payloadText);
+
+      // P5 L3 seq 对账：可选 seq 字段（WsEnvelope.seq，控制帧为
+      // null/undefined——`Connected`/`Status`/合成 `Done` 无对账语义，
+      // 只有广播镜像点取号的被镜像事件帧嵌 seq）。max 语义只增
+      // 不减；没有 seq 的帧跳过（不重置水位）。重连对账时用
+      // `ctx.lastLocalSeq` 作 subscribe 的 since_seq。
+      const frameSeq =
+        typeof data?.seq === "number"
+          ? data.seq
+          : typeof data?.event?.seq === "number"
+            ? data.event.seq
+            : null;
+      if (frameSeq !== null && frameSeq > ctx.lastLocalSeq) {
+        ctx.lastLocalSeq = frameSeq;
+      }
 
       // Connected event — the transport is (re)established. The user
       // message is dispatched via `ctx.dispatchUserMessage()` rather

@@ -1,4 +1,5 @@
 import { listenStreamChannel, streamChannelName } from "../api";
+import { subscribeSessionSnapshot } from "../api/rest";
 import type { StreamChatSendContext } from "./useStreamParser";
 
 /**
@@ -87,6 +88,34 @@ export function createConnector(
         // caller so the UI can show "网络中断" NOW instead of
         // waiting on the server-side 180s hard timeout.
         if (ctx.activeSendIdRef.current !== ctx.mySendId) return;
+
+        // P5 L3 seq 对账（设计 §3.5 / §6.3 P7）：连接丢失后拉一次
+        // 订阅快照对账——携本 attachment 的本地 seq 水位
+        // (`ctx.lastLocalSeq`)作 since_seq。服务端按 §3.1 双分支
+        // 回：已追上（空增量 + fullSnapshot=false）客户端只刷新水位；
+        // 落后（全量快照 + fullSnapshot=true）客户端整体替换本地
+        // 会话状态。best-effort——快照端点本身走 stdio bridge 的
+        // http 通道，若 bridge 已死此调用会 reject，吞掉异常不
+        // 影响 settle（对账是"锦上添花"，settle 才是"必须有"）。
+        try {
+          const snap = await subscribeSessionSnapshot(
+            ctx.sessionId,
+            ctx.lastLocalSeq,
+          );
+          // 刷新本地水位到服务端持久 seq（跨重启有效）——下次
+          // 重连的 since_seq 锚。max 语义：不降。
+          if (snap.lastSeq > ctx.lastLocalSeq) ctx.lastLocalSeq = snap.lastSeq;
+          ctx.callbacks.onReconciled?.({
+            sessionId: snap.sessionId,
+            messages: snap.messages,
+            lastSeq: snap.lastSeq,
+            fullSnapshot: snap.fullSnapshot,
+          });
+        } catch {
+          // bridge 死 / 快照端点 4xx —— 对账不可得，settle 仍走
+          // 原错误路径（下方）。不影响主流程。
+        }
+
         ctx.settle(
           "",
           e instanceof Error ? e.message : String(e),

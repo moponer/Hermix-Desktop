@@ -218,6 +218,40 @@ export async function getProviderMeta(): Promise<ProviderMeta[]> {
   return fetchJSON<ProviderMeta[]>("/api/providers/meta");
 }
 
+// ── P5 L3 订阅快照（设计 §3.5 / 设计 §6.3 P7 前端对账）────────────────
+// 服务端 `GET /v1/sessions/{id}/subscribe?since_seq=N` 的客户端封装。
+// 重连对账时调用：携本 attachment 的本地 seq 水位（since_seq），
+// 服务端回「已追上 → 空增量 + fullSnapshot=false」或「落后 → 全量
+// 快照 + fullSnapshot=true」。payload 里 messages 是
+// `get_session_messages` 的同一份快照构造（含压缩归档子会话 + 审批卡片），
+// 已追上分支回空数组（客户端不替换本地会话状态，只刷新水位）。
+export interface SubscribeSnapshot {
+  sessionId: string;
+  /** 已追上（since_seq >= lastSeq）→ 空数组；落后 → 全量快照条目。 */
+  messages: unknown[];
+  /** 持久 seq 水位（客户端下次重连的 since_seq 权威锚，跨重启有效）。 */
+  lastSeq: number;
+  /** 客户端本次传入的 since_seq（回显，便于对账断言）。 */
+  sinceSeq: number;
+  /** true = 落后全量快照（客户端整体替换本地会话状态）；
+   *  false = 已追上空增量（客户端刷新水位、不替换状态）。 */
+  fullSnapshot: boolean;
+}
+
+/** 订阅快照端点。sinceSeq 缺省 0（首次重连，必然落后 → 全量快照）。
+ *  走 stdio bridge `http` 通道（apiInvoke → backend_http_request），与
+ *  其它 REST 同一传输——订阅端点本身是 GET，无 body。 */
+export async function subscribeSessionSnapshot(
+  sessionId: string,
+  sinceSeq = 0,
+  signal?: AbortSignal,
+): Promise<SubscribeSnapshot> {
+  return fetchJSON<SubscribeSnapshot>(
+    `/v1/sessions/${encodeURIComponent(sessionId)}/subscribe?since_seq=${sinceSeq}`,
+    { method: "GET", signal },
+  );
+}
+
 /** 各内置 provider 的权威默认模型（id → model）。首次配置时用来选中一个
  *  真正能对话的模型，而不是厂商 `/v1/models` 全量目录里字典序第一个。 */
 export async function getProviderDefaults(): Promise<Record<string, string>> {

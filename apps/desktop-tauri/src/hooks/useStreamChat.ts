@@ -208,6 +208,24 @@ onApprovalBatchRequest?: (req: {
    * OPEN. Lets the caller clear the "网络中断" affordance.
    */
   onConnectionRestored?: () => void;
+  /**
+   * P5 L3 seq 对账（设计 §3.5 / §6.3 P7）：WS 连接丢失后
+   * （bridge 死 / 监听器注册失败），connector 调
+   * `subscribeSessionSnapshot(sessionId, lastLocalSeq)` 对账，
+   * 把结果交给此回调——组件据此刷新本地会话状态。
+   * `fullSnapshot=true`（落后）→ 用 `messages` 整体替换本地会话
+   * 状态；`fullSnapshot=false`（已追上空增量）→ 仅刷新本地 seq
+   * 锚（`lastSeq`），不替换消息。`lastSeq` 始终更新本地水位，
+   * 供下次重连作 since_seq。
+   * 与 `onConnectionRestored` 区分：那个是「连接回来了」的事件
+   * 回调（无数据）；这个是「连接丢失后拉了一次对账」的数据回调。
+   */
+  onReconciled?: (snapshot: {
+    sessionId: string;
+    messages: unknown[];
+    lastSeq: number;
+    fullSnapshot: boolean;
+  }) => void;
   onReasoningChunk?: (piece: string) => void;
   onSectionGate?: (info: {
     patched: Array<{
@@ -476,6 +494,10 @@ export function useStreamChat(activeSessionId: string | null) {
           chunkBuffer: "",
           chunkRaf: null,
           retryCount: 0,
+          // P5 L3 seq 对账：本 attachment 的本地 seq 水位初值 0。
+          // 首帧带 seq 时由 useStreamParser 更新（max 语义）；重连
+          // 对账时作 subscribeSessionSnapshot 的 since_seq。
+          lastLocalSeq: 0,
           // Helpers are wired in below (after they're defined).
           updatePhase: () => {},
           getPhase: () => "idle",
