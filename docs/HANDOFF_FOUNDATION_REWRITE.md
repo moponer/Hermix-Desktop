@@ -1,8 +1,8 @@
 # 交接文档：Hermix 底座重写 + 网络安全层（给后续开发 agent）
 
 > 更新时间：2026-09-24。本文是唯一权威交接入口。动手前**必须完整读完本文 + 必读文档清单**，禁止跳读后自行发挥。
-> 当前累计 45 个 commit（15 + 本批 30），工作区除 §7 未跟踪遗留物外干净。最近 commit：`9ff58666`。
-> 本批新增 commit：`87bb2b9a` / `b51a32a1` / `3cc45b72` / `f062c5ad` / `e1a75115` / `20b6eda8` / `ab7aad02` / `c208f10f` / `9d897704` / `640eeb57` / `6979313c` / `a8f4e547` / `63e3b174` / `0918f7a5` / `cead162d` / `5fab0ec2` / `6892a043` / `29392b57` / `e651c311` / `adfc8ca5` / `acf1fea1` / `e91ac42e` / `fd238361` / `fc2f425a` / `d7abee4d` / `e5f728a1` / `f985eade` / `bc8a6e6c` / `64d145de` / `9ff58666`。
+> 当前累计 47 个 commit（15 + 本批 32），工作区除 §7 未跟踪遗留物外干净。最近 commit：`e3955b7a`（端点级消费点代码批次）+ `bc2f7da`（上批 T6 文档批次）。
+> 本批新增 commit：`87bb2b9a` / `b51a32a1` / `3cc45b72` / `f062c5ad` / `e1a75115` / `20b6eda8` / `ab7aad02` / `c208f10f` / `9d897704` / `640eeb57` / `6979313c` / `a8f4e547` / `63e3b174` / `0918f7a5` / `cead162d` / `5fab0ec2` / `6892a043` / `29392b57` / `e651c311` / `adfc8ca5` / `acf1fea1` / `e91ac42e` / `fd238361` / `fc2f425a` / `d7abee4d` / `e5f728a1` / `f985eade` / `bc8a6e6c` / `64d145de` / `9ff58666` / `bc2f7da` / `e3955b7a` / （端点级消费点文档批次，待提交）。
 
 ---
 
@@ -154,9 +154,9 @@ CARGO_INCREMENTAL=0 cargo test -p <crate> --lib   # 改了哪个 crate 测哪个
 
 **未做**（§3.3 剩余）：
 - `device_pubkey` 列仍占位（签名密钥协商批次，需设备侧公钥生成 + 落库，未启动）
-- HTTP 端点级 Capability 消费点接通（`http.rs` 按 `origin` + `device_scopes` 做端点级判定——本批次只接通了**工具层关口**（`terminal.rs`），HTTP 端点级判定属各端点批次）
+- ~~HTTP 端点级 Capability 消费点接通~~ → **已落**（本批次，见 §3.3 续落段）：`check_capability`/`check_capability_from_extensions` 落到 6 个高危 handler（`/v1/commands` + `/v1/automations/{id}/trigger` DangerousTool / `/api/pairing/devices/{id}` DELETE DeviceManagement / `/api/config` PUT + `/api/env` PUT/DELETE ConfigMutation），PairedDevice 来源未配能力位 → 403，Local 放行，矩阵 Denied 纵深兜底。axum 0.8 的 `MethodRouter::route_layer`/`Router::route_layer` 都接不住 `FromFn` 中间件层（类型面不匹配），故走 handler 内联判定（零路由结构改动，六行级别）
 - 设备管理 UI 编辑 scopes（`DevicesTab.tsx` 加能力位勾选，撤销/编辑流程）
-- 测试基线更新：hermix-tools 697 passed（+6 能力位集测试）；hermix-agent 1050 passed（零回归）；全仓 cargo check --workspace 绿
+- 测试基线更新：hermix-server 188→193 passed（+5 端点级能力位判定测试 `check_capability_*`）；hermix-tools 697 passed / hermix-agent 1050 passed（零回归）；全仓 cargo check --workspace 绿
 
 ### 3.5 设计文档 §7 其余阶段（P2 会话内核后续 / P6 防滥用 + 审计 / P8 soak）
 
