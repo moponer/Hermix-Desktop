@@ -2816,6 +2816,36 @@ return {
             toastInfo("网络已恢复，正在继续接收回复。");
             setStreamingStatusImpl(null);
           },
+          // P7 前端 seq 对账（设计 §3.5/§6.3）：WS 连接丢失后（bridge
+          // 死 / listener 注册失败），useWsConnection 的 catch 路径已拉
+          // 一次订阅快照对账，把结果交到这里消费。`fullSnapshot` 双分支：
+          // - true（落后）→ 用快照 messages 整体替换该 session 的本地
+          //   会话状态（丢弃本地、以后端权威源为准）
+          // - false（已追上空增量）→ 仅刷新本地 seq 锚，不替换消息
+          //   （本地状态 == 服务端，无需动数据）
+          // 消息类型：订阅端点回的服务端 `SessionMessagesResponse.messages`
+          // （ProtocolMessage 形态），与本地 `ChatMessage[]` 同源于
+          // `GET /v1/sessions` 的 session 加载路径（同一 loader），
+          // 直接断言回填——不做二次转换（本地 ChatMessage 本就是
+          // 该 loader 的产物）。best-effort：对账失败（bridge 死时
+          // 快照调用 reject）由 useWsConnection 吞掉，这里收不到回调。
+          onReconciled: (snapshot) => {
+            if (snapshot.fullSnapshot) {
+              const reloaded = snapshot.messages as ChatMessage[];
+              setSessions((prev) => prev.map((s) => {
+                if (s.id !== snapshot.sessionId) return s;
+                return {
+                  ...s,
+                  messages: reloaded,
+                  updated_at: new Date().toISOString(),
+                };
+              }));
+            }
+            // fullSnapshot=false（已追上）：仅刷新本地 seq 水位（由
+            // useStreamParser 的 ctx.lastLocalSeq 持有，已在本批次
+            // hooks 层完成），UI 不替换消息——空增量意味着本地状态
+            // 已是最新。此处无需额外 UI 动作。
+          },
         },
         finalOverrides,
       );
