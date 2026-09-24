@@ -13,27 +13,37 @@ use super::*;
 /// EffectLog → EffectSink 适配器（P3 Effect Sandwich 装配）。
 /// 单笔持久化失败吞掉降级为不记录——三明治是崩溃恢复依据，
 /// 不能阻断工具执行。
-struct EffectLogSink(hermix_task::EffectLog);
+///
+/// `registry` 用 Weak 持 ToolRegistry 查 risk_level——Safe 视为幂等
+/// （只读 / 无副作用），恢复时按幂等语义重放；非幂等走 needs_review。
+/// Weak 避免 EffectLogSink(Arc) → ToolRegistry 的引用环。
+struct EffectLogSink {
+    log: hermix_task::EffectLog,
+    registry: std::sync::Weak<ToolRegistry>,
+}
 
 impl hermix_tools::EffectSink for EffectLogSink {
     fn record_intent(&self, tool: &str, args_json: &str) -> String {
+        // 查注册表拿 risk_level；查不到（工具未注册 / Arc 已 drop）
+        // 按非幂等保守侧。Safe ⇒ 幂等（只读类工具）。
+        let idempotent = self.registry.upgrade().is_some_and(|reg| {
+            reg.risk_level(tool) == Some(hermix_core::traits::RiskLevel::Safe)
+        });
         let intent = hermix_task::ToolIntent {
             id: hermix_task::effect::new_intent_id(),
             task_id: String::new(),
             tool: tool.to_string(),
             args_json: args_json.to_string(),
-            // 幂等默认 false：非幂等在恢复时走 needs_review（保守侧）。
-            // 幂等声明来源（schema 标注）落定后再翻真。
-            idempotent: false,
+            idempotent,
             created_at: chrono::Utc::now().timestamp(),
         };
         let id = intent.id.clone();
-        let _ = self.0.record_intent(&intent);
+        let _ = self.log.record_intent(&intent);
         id
     }
 
     fn record_outcome(&self, intent_id: &str, status: &str, summary: &str) {
-        let _ = self.0.resolve_intent(intent_id, status, summary);
+        let _ = self.log.resolve_intent(intent_id, status, summary);
     }
 }
 
@@ -297,7 +307,10 @@ impl HttpServerState {
                 Ok(_) => {}
                 Err(e) => tracing::warn!("startup recovery scan failed: {e}"),
             }
-            tool_registry.set_effect_sink(Arc::new(EffectLogSink(effect_log)));
+            tool_registry.set_effect_sink(Arc::new(EffectLogSink {
+                log: effect_log,
+                registry: Arc::downgrade(&tool_registry),
+            }));
         }
         // Register builtin tools (file, shell, browser, etc.)
         let terminal_backend: Arc<dyn hermix_core::TerminalBackend> =
@@ -720,9 +733,11 @@ impl HttpServerState {
         {
             let effects_path =
                 hermix_config::paths::hermix_home().join("data").join("effects.db");
-            tool_registry.set_effect_sink(Arc::new(EffectLogSink(hermix_task::EffectLog::new(
-                effects_path,
-            ))));
+            let effect_log = hermix_task::EffectLog::new(effects_path);
+            tool_registry.set_effect_sink(Arc::new(EffectLogSink {
+                log: effect_log,
+                registry: Arc::downgrade(&tool_registry),
+            }));
         }
         // Register builtin tools (file, shell, browser, etc.)
         let terminal_backend: Arc<dyn hermix_core::TerminalBackend> =
