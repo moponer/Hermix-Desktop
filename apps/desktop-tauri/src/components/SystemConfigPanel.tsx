@@ -4,6 +4,7 @@ import {
   Cpu,
   Boxes,
   Server,
+  Smartphone,
   SlidersHorizontal,
   Plug,
   Sparkles,
@@ -17,6 +18,7 @@ import { ModelTab, CustomProvidersTab } from "./settings/ModelSettingsTab";
 import { BackendTab } from "./settings/BackendSettingsTab";
 import { AdvancedTab } from "./settings/AdvancedSettingsTab";
 import { DiagnosticsTab } from "./settings/DiagnosticsTab";
+import { DevicesTab } from "./settings/DevicesTab";
 import { PluginsTab, SkillsTab, ConnectorsTab, ToolsetsTab } from "./config/ToolTabs";
 import { ToggleSwitch } from "./ToggleSwitch";
 import { storage, STORAGE_KEYS } from "../utils/storageCompat";
@@ -28,7 +30,7 @@ interface SystemConfigPanelProps {
   initialCategory?: ConfigCategory;
 }
 
-export type ConfigCategory = "model" | "tools" | "backend" | "advanced" | "diagnostics";
+export type ConfigCategory = "model" | "tools" | "backend" | "advanced" | "diagnostics" | "devices";
 type CategoryId = ConfigCategory;
 type ToolTabId = "plugins" | "skills" | "connectors" | "toolsets";
 type ModelTabId = "model" | "image" | "custom";
@@ -38,6 +40,7 @@ const CATEGORIES: { id: CategoryId; label: string; hint: string; icon: React.Ele
   { id: "tools", label: "工具", hint: "插件、技能、连接器与工具集", icon: Boxes },
   { id: "backend", label: "后端", hint: "本地后端服务与健康", icon: Server },
   { id: "advanced", label: "高级", hint: "高级选项与实验功能", icon: SlidersHorizontal },
+  { id: "devices", label: "设备管理", hint: "配对新设备与撤销权限", icon: Smartphone },
   { id: "diagnostics", label: "诊断", hint: "查看后端日志与排错", icon: Activity },
 ];
 
@@ -186,6 +189,7 @@ export function SystemConfigPanel({ onClose, initialCategory }: SystemConfigPane
               )}
               {cat === "backend" && <Padded><BackendTab /></Padded>}
               {cat === "advanced" && <Padded><AdvancedTab /></Padded>}
+              {cat === "devices" && <Padded wide><DevicesTab /></Padded>}
               {cat === "diagnostics" && <Padded wide><DiagnosticsTab /></Padded>}
             </div>
           </div>
