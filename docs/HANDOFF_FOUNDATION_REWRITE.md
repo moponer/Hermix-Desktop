@@ -1,8 +1,8 @@
 # 交接文档：Hermix 底座重写 + 网络安全层（给后续开发 agent）
 
 > 更新时间：2026-09-24。本文是唯一权威交接入口。动手前**必须完整读完本文 + 必读文档清单**，禁止跳读后自行发挥。
-> 当前累计 40 个 commit（15 + 本批 25），工作区除 §7 未跟踪遗留物外干净。最近 commit：`d7abee4d`。
-> 本批新增 commit：`87bb2b9a` / `b51a32a1` / `3cc45b72` / `f062c5ad` / `e1a75115` / `20b6eda8` / `ab7aad02` / `c208f10f` / `9d897704` / `640eeb57` / `6979313c` / `a8f4e547` / `63e3b174` / `0918f7a5` / `cead162d` / `5fab0ec2` / `6892a043` / `29392b57` / `e651c311` / `adfc8ca5` / `acf1fea1` / `e91ac42e` / `fd238361` / `fc2f425a` / `d7abee4d`。
+> 当前累计 42 个 commit（15 + 本批 27），工作区除 §7 未跟踪遗留物外干净。最近 commit：`f985eade`。
+> 本批新增 commit：`87bb2b9a` / `b51a32a1` / `3cc45b72` / `f062c5ad` / `e1a75115` / `20b6eda8` / `ab7aad02` / `c208f10f` / `9d897704` / `640eeb57` / `6979313c` / `a8f4e547` / `63e3b174` / `0918f7a5` / `cead162d` / `5fab0ec2` / `6892a043` / `29392b57` / `e651c311` / `adfc8ca5` / `acf1fea1` / `e91ac42e` / `fd238361` / `fc2f425a` / `d7abee4d` / `e5f728a1` / `f985eade`。
 
 ---
 
@@ -149,12 +149,14 @@ CARGO_INCREMENTAL=0 cargo test -p <crate> --lib   # 改了哪个 crate 测哪个
 - `hermix-core::origin::Capability` 派生 `Hash`（`HashSet<Capability>` 需要）
 - `security.rs` 加 `parse_device_scopes`（JSON 数组字符串 → `HashSet<Capability>`，未知能力位名忽略=保守不授予）+ `effective_decision_for_paired`（**矩阵 ∩ 能力位**：矩阵 `Denied` 的即使能力位误配也保持 `Denied` 纵深防御；矩阵 `Allowed`/`NeedsLocalConfirmation` 的，能力位未配即降 `Denied`；非设备来源透传矩阵判定）
 - `request_guard` 来源推导后把命中设备的 `device_scopes`（`Option<HashSet<Capability>>`）装进 Extension，与 `origin` 并列——下游（http 端点 / 工具层关口）按 `origin` 取设备 id 再查此集判定
+- **工具关口消费点接通**（本批次续落）：`hermix-tools` 的 `ApprovalManager` 新增 `check_approval_for_origin_with_scopes(command, origin, device_scopes)`（§3.3 矩阵∩能力位落到审批引擎）——`PairedDevice` 下未配 `DangerousTool` 能力位的设备连 shell 都跑不了（直接 `Denied`，§3.3 D5 拍板"最小集 `["chat"]` 设备连 shell 都跑不了"落地）；配了 `DangerousTool` 则回矩阵 `NeedsLocalConfirmation` 语义（需桌面确认）；只读命令（`READONLY_PATTERNS`）是 `Chat` 级语义不需 `DangerousTool`，仍放行；灾难命令（`DENIED_PATTERNS`）在任何能力位配置下都 `Denied`。`ToolCallContext` 加 `device_scopes: Option<HashSet<Capability>>` 字段（默认 `None`，桌面 WS 路径无设备维度）；`terminal.rs` 关口从 `ctx.device_scopes` 读能力位集传入。旧的 `check_approval_for_origin`（无能力位维度）保留为零回归入口，7 个现有调用方零改动
+- 新增 6 个能力位集行为测试（`engine.rs`）：未配 `DangerousTool` 拒 shell / 配了仍需桌面确认 / 只读放行 / 灾难命令不可覆盖 / `Local` 忽略 `scopes` / `None` 与旧行为一致
 
 **未做**（§3.3 剩余）：
 - `device_pubkey` 列仍占位（签名密钥协商批次，需设备侧公钥生成 + 落库，未启动）
-- 下游 Capability 消费点接通（`http.rs` / 审批引擎 / 工具层关口按 `origin` + `device_scopes` 实际做端点/工具级判定——本批次只落 `security.rs` 的判定原语 + Extension 装配，消费点接入属各关口批次）
+- HTTP 端点级 Capability 消费点接通（`http.rs` 按 `origin` + `device_scopes` 做端点级判定——本批次只接通了**工具层关口**（`terminal.rs`），HTTP 端点级判定属各端点批次）
 - 设备管理 UI 编辑 scopes（`DevicesTab.tsx` 加能力位勾选，撤销/编辑流程）
-- 测试基线更新：hermix-server 177 passed（+4：scopes 解析 ×2 / 矩阵∩能力位 / pair 写入闭环）；hermix-core 173 passed（+Hash 派生零回归）
+- 测试基线更新：hermix-tools 697 passed（+6 能力位集测试）；hermix-agent 1050 passed（零回归）；全仓 cargo check --workspace 绿
 
 ### 3.5 设计文档 §7 其余阶段（P2 会话内核后续 / P6 防滥用 + 审计 / P8 soak）
 
@@ -195,9 +197,9 @@ CARGO_INCREMENTAL=0 cargo test -p <crate> --lib   # 改了哪个 crate 测哪个
 **未做**（P6 剩余 + P2 剩余 + P8 8h 全量）：
 - **P2 EntryRecord 完整对齐**：设计 `EntryRecord` 8 字段（`id`/`conversation_id`/`kind`/`model`/`data`/`head`/`edits`/`by_task_id`）本批次只对齐 `by_task_id` + `conversation_id` 两个核心归属字段；`id`（单调 Id 类型）/ `model: Option<Vec<Message>>` / `head` / `edits: Vec<ContextEdit>` 属 L2 任务运行时批次（§3.4），需 `hermix-task` 的 `TaskRecord` + `Checkpoint` 模型先落
 - **P2 消息读写切换接入 server**：`hermix-session` 当前 0 处被引用（孤岛），把 `getSessionMessages` / 消息写路径从 `local_agent_service.rs`（4364 行上帝文件）切到 Session entry 派生需跨 P2/P5/P7 批次 + 真机 100 次重连对账，不在本批次
-- **P6 剩余**：NeedsLocalConfirmation 关口消费点接通（工具关口批次）/ T6 暴力破解 IP 锁定 / 连接数+请求大小+空闲超时四件套（设计文档明写"随手机客户端批次补"）/ 审计日志管理端点 + DiagnosticsTab 展示（UI 批次）
+- **P6 剩余**：T6 暴力破解 IP 锁定 / 连接数+请求大小+空闲超时四件套（设计文档明写"随手机客户端批次补"）/ 审计日志管理端点 + DiagnosticsTab 展示（UI 批次）。~~NeedsLocalConfirmation 关口消费点接通（工具关口批次）~~ → **已落**（本批次，见 §3.3 续落段）：`check_approval_for_origin_with_scopes` 把矩阵∩能力位判定落到 `terminal.rs` 工具关口消费点（`PairedDevice` 未配 `DangerousTool` 直接 `Denied` shell；配了回 `NeedsLocalConfirmation` 语义需桌面确认）
 - **P8 8h 全量 SLO**：8h soak（内存 ≤200MB / fd 不增长 / task 数稳定 / 0 未处理 panic）headless 不可行，实机依赖，blocked。本批次落的是 60s 短探针 headless 切片（四项 SLO 测量 + 真实 session 协议循环）；8h 全量走 `--ignored` 变体（实机 nightly）。另外短探针跑 `cargo test` 期间可能触发 `hermix-cua` 的 rustc ICE（增量缓存损坏，`rm -rf target/debug/incremental` + `CARGO_INCREMENTAL=0` 可规避，属编译器 pre-existing bug 非本项目缺陷）
-- 测试基线：hermix-server 183 passed / hermix-session 15 passed / hermix-agent lib 1050 passed + soak 2 passed / 全仓 cargo check --workspace 绿
+- 测试基线：hermix-server 183 passed / hermix-session 15 passed / hermix-tools 697 passed（含 6 能力位集测试）/ hermix-agent lib 1050 passed + soak 2 passed / 全仓 cargo check --workspace 绿
 
 ### 3.6 手机客户端
 
