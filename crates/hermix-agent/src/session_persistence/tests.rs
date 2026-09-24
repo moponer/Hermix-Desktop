@@ -1543,3 +1543,45 @@
             .expect("child summary present");
         assert_eq!(loaded, "orphan parent test");
     }
+
+    /// P5 L3 seq 域对账（设计 §3.5）：持久 seq 水位单调性 + 订阅端点
+    /// 双分支判定所需的权威源。验收口径：
+    /// - 新 session 的 `last_seq_for` 从 0 开始（`session_seq` 无行）
+    /// - `next_seq_for` 100 次循环单调递增（1,2,…,100），每回合一次
+    /// - 循环结束后 `last_seq_for` == 100（水位同步，无空洞）
+    /// - 同 session 续接：`next_seq_for` 接着 101 取号（跨"重启"单调）
+    /// 这是订阅端点"已追上 / 落后"双分支判定（`since_seq >= last_seq`）
+    /// 与 P7 前端对账（客户端携 lastSeq 重连）的持久水位基础。
+    #[test]
+    fn test_session_seq_watermark_monotonicity() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sp = SessionPersistence::new(tmp.path());
+
+        // 新 session 无 session_seq 行 → last_seq 读 0。
+        let sid = "seq-monotonicity-session";
+        assert_eq!(sp.last_seq_for(sid).expect("read fresh"), 0);
+
+        // 100 回合循环：每回合取一个号，严格单调递增 1..=100。
+        for expected in 1..=100u64 {
+            let got = sp.next_seq_for(sid).expect("allocate");
+            assert_eq!(
+                got, expected,
+                "seq 第 {expected} 次取号应 == {expected}，实际 {got}"
+            );
+            // 取完即同步水位（与 flush 同事务的语义在测试里由
+            // last_seq_for 直接观测）。
+            assert_eq!(sp.last_seq_for(sid).expect("watermark"), got);
+        }
+
+        // 循环后水位 == 100（100 次取号无空洞）。
+        assert_eq!(sp.last_seq_for(sid).expect("final watermark"), 100);
+
+        // 同 session 续接：接着 101 取号（模拟跨重启单调）。
+        assert_eq!(sp.next_seq_for(sid).expect("continue"), 101);
+        assert_eq!(sp.last_seq_for(sid).expect("post-continue"), 101);
+
+        // 不同 session 的 seq 域彼此独立（隔离，不串号）。
+        let other = "seq-monotonicity-other";
+        assert_eq!(sp.last_seq_for(other).expect("other fresh"), 0);
+        assert_eq!(sp.next_seq_for(other).expect("other first"), 1);
+    }

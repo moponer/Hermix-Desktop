@@ -149,6 +149,13 @@ pub struct HttpServerState {
     /// 进程级 16n 已满足「同视图」验收（设计 §4：任何时刻接入
     /// 都能复原同一会话状态）。
     pub seq: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    /// P5 多端 attachment 锚（设计 §3.5）：进程级单调计数器，
+    /// 每条 WS 连接建立时 `fetch_add(1)` 分配 attachment_id。
+    /// 与 `seq` 同一模式（`AtomicU64` 无锁，per-connection 取号
+    /// 在热路径外，开销可忽略）。可选——老前端忽略 `attachment_id`
+    /// 字段不报错；新前端读取此值区分"同一 attachment 重连"与
+    /// "新 attachment 挂载"（zombie 分支 attachment-aware 改造用）。
+    pub attachment_seq: std::sync::Arc<std::sync::atomic::AtomicU64>,
     /// H3 — agent "consciousness stream" tracker. The
     /// desktop UI subscribes to this over WebSocket and renders the
     /// samples as a full-screen ECG visualization. Cheap to clone
@@ -666,6 +673,7 @@ impl HttpServerState {
             pending_grace: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             completed_keys: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             seq: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            attachment_seq: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             // we know the runtime config. Initialised to None here so
             // the early struct literal doesn't need to await anything.
             todo_event_tx: Some(todo_event_tx.clone()),
@@ -945,6 +953,7 @@ impl HttpServerState {
             pending_grace: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             completed_keys: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             seq: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            attachment_seq: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             todo_event_tx: Some(todo_event_tx.clone()), // injected after register_builtin_tools below
             orchestration_bus: OrchestrationEventBus::new(),
             metrics,

@@ -696,6 +696,7 @@ mod approval_registry_tests {
             pending_grace: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             completed_keys: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             seq: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            attachment_seq: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             todo_event_tx: None,
             orchestration_bus: OrchestrationEventBus::new(),
             metrics,

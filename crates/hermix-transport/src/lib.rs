@@ -377,6 +377,13 @@ pub struct WsEnvelope {
     /// 就绪前的过渡态，零行为变化）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub seq: Option<u64>,
+    /// P5 多端 attachment 锚（设计 §3.5）：server 生成 per-connection
+    /// 的 attachment_id。可选字段——老前端反序列化时忽略不报错；
+    /// 新前端（多端并存）读取此字段区分"同一 attachment 重连"与
+    /// "新 attachment 挂载"。`None` = 帧未挂 attachment_id（P5 多端
+    /// 模型落地前的过渡态，零行为变化；单端场景所有帧皆 `None`）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attachment_id: Option<u64>,
 }
 
 /// Default `outcome` for a `Done` event when the sender doesn't set
@@ -1028,6 +1035,7 @@ mod tests {
             request_id: Some("req-1".into()),
             trace_id: "trace-1".into(),
             seq: None,
+            attachment_id: None,
             event: StreamEvent::Done {
                 content: "ok".into(),
                 finish_reason: None,

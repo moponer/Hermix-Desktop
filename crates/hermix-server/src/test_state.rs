@@ -102,6 +102,7 @@ pub fn empty_state() -> HttpServerState {
         pending_grace: Arc::new(std::sync::Mutex::new(HashMap::new())),
         completed_keys: Arc::new(std::sync::Mutex::new(HashMap::new())),
         seq: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        attachment_seq: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
         todo_event_tx: None,
         orchestration_bus: crate::OrchestrationEventBus::new(),
         metrics,
@@ -158,6 +159,7 @@ fn build_state_with_home(home: PathBuf) -> HttpServerState {
         pending_grace: Arc::new(std::sync::Mutex::new(HashMap::new())),
         completed_keys: Arc::new(std::sync::Mutex::new(HashMap::new())),
         seq: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        attachment_seq: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
         // Todo event bus. Test fixtures don't exercise
         // the WS forwarder, so None is fine.
         todo_event_tx: None,
