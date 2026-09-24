@@ -10,7 +10,6 @@ pub mod analytics;
 pub mod cua;
 pub mod automation;
 pub mod config;
-pub mod consciousness;
 pub mod env;
 pub mod logs;
 pub mod mcp;
@@ -18,7 +17,6 @@ pub mod migration;
 pub mod persona;
 pub mod plugins_inspect;
 pub mod polish;
-pub mod researcher;
 pub mod skills;
 pub mod status;
 pub mod stubs;
@@ -110,8 +108,6 @@ pub fn router() -> Router<HttpServerState> {
             "/api/dashboard/plugin-manifests",
             get(stubs::get_plugin_manifests),
         )
-        .route("/api/dashboard/themes", get(stubs::get_themes))
-        .route("/api/dashboard/theme", put(stubs::set_theme))
         // MCP server CRUD (config layer; actual spawn handled by hermes-mcp)
         .route(
             "/api/mcp/servers",
@@ -184,7 +180,6 @@ pub fn router() -> Router<HttpServerState> {
         .route("/api/migration/apply", post(migration::apply_migration))
         .route("/api/migration/skip", post(migration::skip_migration))
         .route("/api/migration/reset", post(migration::reset_migration))
-        .route("/ws/consciousness", get(consciousness::ws_consciousness))
         // §2 Polish — doc rewrite endpoints used by the desktop
         // "润色" / "改写" affordances. `polish::post_polish_chat`
         // rebuilds a natural-language message, `polish::post_polish_automation`
