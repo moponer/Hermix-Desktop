@@ -1,8 +1,8 @@
 # 交接文档：Hermix 底座重写 + 网络安全层（给后续开发 agent）
 
 > 更新时间：2026-09-24。本文是唯一权威交接入口。动手前**必须完整读完本文 + 必读文档清单**，禁止跳读后自行发挥。
-> 当前累计 26 个 commit（15 + 本批 11），工作区除 §7 未跟踪遗留物外干净。最近 commit：`63e3b174`。
-> 本批新增 commit：`87bb2b9a` / `b51a32a1` / `3cc45b72` / `f062c5ad` / `e1a75115` / `20b6eda8` / `ab7aad02` / `c208f10f` / `9d897704` / `640eeb57` / `6979313c` / `a8f4e547` / `63e3b174`。
+> 当前累计 31 个 commit（15 + 本批 16），工作区除 §7 未跟踪遗留物外干净。最近 commit：`0918f7a5`。
+> 本批新增 commit：`87bb2b9a` / `b51a32a1` / `3cc45b72` / `f062c5ad` / `e1a75115` / `20b6eda8` / `ab7aad02` / `c208f10f` / `9d897704` / `640eeb57` / `6979313c` / `a8f4e547` / `63e3b174` / `0918f7a5` / `cead162d` / `5fab0ec2`。
 
 ---
 
@@ -95,7 +95,7 @@
 
 ```
 hermix-tools lib: 691 passed（terminal 31）
-hermix-agent lib: 1049 passed
+hermix-agent lib: 1050 passed（含 P5 水位单调性测试 test_session_seq_watermark_monotonicity）
 hermix-server lib: 173 passed（pairing 8 / security 8 / tls 4）
 hermix-protocol: 3 passed
 全仓 cargo check --workspace --all-targets 绿
@@ -117,9 +117,10 @@ CARGO_INCREMENTAL=0 cargo test -p <crate> --lib   # 改了哪个 crate 测哪个
 - P5 切片（`640eeb57`）：seq 填值热路径（广播镜像点 fetch_add 取号）+ 订阅快照端点 `GET /v1/sessions/{id}/subscribe?since_seq=N`
 - P5 seq 持久层（`6979313c`）：`session_seq` 表（migration v9）+ `last_seq_for`/`next_seq_for` API + 事务内取号（回合级计数器，跨重启不丢）
 - P5 端点升级（`a8f4e547`）：订阅端点从"统一回全量"升级为 seq 域驱动双分支——已追上（since_seq >= last_seq）回空增量 + `fullSnapshot=false`；落后回全量快照 + `true`。持久 seq 水位（`lastSeq` 字段）成为客户端下次重连的权威锚（跨重启有效，取代易失的进程级 `state.seq`）
+- P5 多端 attachment 协议层（本批次）：`WsEnvelope.attachment_id` 字段（server 生成 per-connection，老前端忽略不报错）+ `HttpServerState.attachment_seq` 进程级单调计数器 + `handle_ws_stream` 连接建立时 `fetch_add` 取号挂 `Connected` 帧 + zombie 分支 attachment-aware 注释（第二端发同一条消息时第一端 live handle 走 `task_in_flight` 拒绝分支不踢线，只 zombie handle 才 abort + 接管）
 
 **未做**（P5 全量剩余）：
-- attachment 多端挂载模型：同一 Session 多 attachment（桌面/手机/WebUI）互不踢线。现有 `stale_handle` 接管模型是单 attachment（重连即接管旧 handle），多端互不干扰需 attachment 列表 + 每 attachment 独立转发器
+- attachment 多端挂载模型**业务逻辑**：本批次只落协议层基础（attachment_id 字段 + 生成器），`active_handles` / `active_sessions` 的 key 仍 session 级（`dedup_key`，未加 attachment 维度）——多端并存靠 `SESSION_BROADCASTS` 多 receiver 扇出 + 新 attachment 走 live 拒绝分支已覆盖"不踢线"验收，但"每 attachment 独立转发器 + 列表管理"需 key 升级（跨模块改造，P5 全量验收批次）
 - 精确增量切出：本批"落后时回全量"是因为 `messages.id` 被 flush 的 DELETE+INSERT 重置不能当 seq 载体；需 `messages` 表带 `seq` 列（schema 膨胀，P5 全量批次）后翻 `fullSnapshot` 真正的增量语义
 - 旧补发三补丁下线：`SESSION_BROADCASTS` / `completed_keys` / `pending_grace`——需 P5 全量验收（两端挂载互不干扰 + 100 次重连对账）后专项拆，见 `640eeb57` commit 正文对抗式审查定界
 - 验收：两端同时挂载同一 Session，互不干扰；断线重连 100 次 UI 状态 == 后端快照
