@@ -132,7 +132,7 @@ CARGO_INCREMENTAL=0 cargo test -p <crate> --lib   # 改了哪个 crate 测哪个
 - `useStreamChat.ts`：`StreamCallbacks.onReconciled` 可选回调 + ctx 构造点 `lastLocalSeq: 0` 初值
 - `useWsConnection.ts`：catch 路径（bridge 死 / listener 注册失败）settle 前调 `subscribeSessionSnapshot(ctx.sessionId, ctx.lastLocalSeq)` 对账（best-effort：bridge 死时快照调用 reject 被吞，settle 仍走原错误路径；对账是锦上添花，settle 是必须有）。`fullSnapshot=true` → `onReconciled` 交组件整体替换本地会话状态；`false` → 仅刷新本地 seq 锚（`lastSeq`）
 
-**未做**（P7 剩余，下一批次）：组件侧（`ChatView` / `StreamChatContext`）接入 `onReconciled` 回调——消费对账结果（`fullSnapshot` 分支 + `lastSeq` 水位）刷新 UI 会话状态。本批按设计 §6.3「0 组件改动」约束只落 hooks + rest 层，组件接线属独立批次。
+**未做**（P7 剩余，下一批次）：~~组件侧（`ChatView` / `StreamChatContext`）接入 `onReconciled` 回调~~ → 已落 `App.tsx` 的 `sendStream` callbacks（`onReconciled` 接线：`fullSnapshot=true` 用快照 messages 回填 `sessions` state，`false` 仅刷 seq 锚）。P7 全量验收剩余：实机断线重连 100 次对账测试（设计 §3.1 验收项）——需真机触发 bridge 死 + 观察 `onReconciled` 回填路径，属 P5/P7 联合验收批次。
 
 ### 3.3 安全第 4 层 scopes 细粒度
 
