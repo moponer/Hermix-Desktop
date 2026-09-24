@@ -1,8 +1,8 @@
 # 交接文档：Hermix 底座重写 + 网络安全层（给后续开发 agent）
 
 > 更新时间：2026-09-24。本文是唯一权威交接入口。动手前**必须完整读完本文 + 必读文档清单**，禁止跳读后自行发挥。
-> 当前累计 38 个 commit（15 + 本批 23），工作区除 §7 未跟踪遗留物外干净。最近 commit：`fd238361`。
-> 本批新增 commit：`87bb2b9a` / `b51a32a1` / `3cc45b72` / `f062c5ad` / `e1a75115` / `20b6eda8` / `ab7aad02` / `c208f10f` / `9d897704` / `640eeb57` / `6979313c` / `a8f4e547` / `63e3b174` / `0918f7a5` / `cead162d` / `5fab0ec2` / `6892a043` / `29392b57` / `e651c311` / `adfc8ca5` / `acf1fea1` / `e91ac42e` / `fd238361`。
+> 当前累计 40 个 commit（15 + 本批 25），工作区除 §7 未跟踪遗留物外干净。最近 commit：`d7abee4d`。
+> 本批新增 commit：`87bb2b9a` / `b51a32a1` / `3cc45b72` / `f062c5ad` / `e1a75115` / `20b6eda8` / `ab7aad02` / `c208f10f` / `9d897704` / `640eeb57` / `6979313c` / `a8f4e547` / `63e3b174` / `0918f7a5` / `cead162d` / `5fab0ec2` / `6892a043` / `29392b57` / `e651c311` / `adfc8ca5` / `acf1fea1` / `e91ac42e` / `fd238361` / `fc2f425a` / `d7abee4d`。
 
 ---
 
@@ -96,6 +96,7 @@
 ```
 hermix-tools lib: 691 passed（terminal 31）
 hermix-agent lib: 1050 passed（含 P5 水位单调性测试 test_session_seq_watermark_monotonicity）
+hermix-agent soak: 2 passed + 1 ignored（P8 60s headless 探针 + 8h --ignored 全量）
 hermix-server lib: 183 passed（pairing 8 / security 12（含 §3.3 scopes 细粒度 4）/ 审计 6 / tls 4）
 hermix-session lib: 15 passed（P2 不变量 I1/I8 + EntryRecord 对齐 round-trip）
 hermix-protocol: 3 passed
@@ -180,12 +181,23 @@ CARGO_INCREMENTAL=0 cargo test -p <crate> --lib   # 改了哪个 crate 测哪个
   - 2 个 round-trip 测试：`task_attribution_survives_the_roundtrip` / `entries_without_attribution_default_to_none`
 - 测试基线更新：hermix-session 13→15 passed（+2 EntryRecord round-trip）；`SessionError` 新增 `Poisoned` 变体（原 `Persist` 变体在 `commit` 失败路径被 `Poisoned` 取代——I8 语义：失败即致命，不再允许调用方"重试"）
 
-**未做**（P6 剩余 + P2 剩余 + P8）：
+**已落**（P8 稳定性验证——短 soak 探针 headless 切片）：
+- `hermix-agent/tests/soak.rs` 重写：合成 1KB 分配探针 → **真实 hermix-session 提交协议循环**（每轮 `begin`→`append`/`append_with_task`/`set_conversation`→`commit` 经 `SqliteSink` 写盘 + `load` 回读校验），让探针真跑会话内核的持久化路径而非空转
+- **四项 SLO 测量补齐**（原探针仅测 RSS 1 项，头部注释声称的 fd + task 数完全没实现）：
+  - 内存：`get_rss_bytes`（`GetProcessMemoryInfo`，原有）
+  - 句柄数（≈fd）：`get_handle_count`（Windows `GetProcessHandleCount`，kernel32；非 Windows 返回 0 并跳过该检查）
+  - task 数稳定：`spawn_probe_task` + `TASKS_SPAWNED`/`TASKS_FINISHED` 原子计数近似活跃 task（泄漏 → delta 持续增长；终值断言 ≤ 8）
+  - 0 未处理 panic：循环体 `catch_unwind` 包裹同步 session 工作 + 探针 task 的 `JoinError` 计入 panic 数
+- **60s headless 探针**（`soak_60s_headless_probe`，非 ignored，CI `cargo test --workspace` 默认跑）：`HERMIX_SOAK_SECS` 可覆盖时长（默认 60s）。8h 全量 SLO 验证保留 `--ignored` 变体（实机 nightly）
+- 句柄数增长预算 64（WAL checkpoint 周期 1-2 句柄/次的舒适上限）；内存 SLO 沿用 200MB
+- 测试基线：hermix-agent lib 1050 passed（零回归）/ `soak` 2 passed + 1 ignored
+
+**未做**（P6 剩余 + P2 剩余 + P8 8h 全量）：
 - **P2 EntryRecord 完整对齐**：设计 `EntryRecord` 8 字段（`id`/`conversation_id`/`kind`/`model`/`data`/`head`/`edits`/`by_task_id`）本批次只对齐 `by_task_id` + `conversation_id` 两个核心归属字段；`id`（单调 Id 类型）/ `model: Option<Vec<Message>>` / `head` / `edits: Vec<ContextEdit>` 属 L2 任务运行时批次（§3.4），需 `hermix-task` 的 `TaskRecord` + `Checkpoint` 模型先落
 - **P2 消息读写切换接入 server**：`hermix-session` 当前 0 处被引用（孤岛），把 `getSessionMessages` / 消息写路径从 `local_agent_service.rs`（4364 行上帝文件）切到 Session entry 派生需跨 P2/P5/P7 批次 + 真机 100 次重连对账，不在本批次
 - **P6 剩余**：NeedsLocalConfirmation 关口消费点接通（工具关口批次）/ T6 暴力破解 IP 锁定 / 连接数+请求大小+空闲超时四件套（设计文档明写"随手机客户端批次补"）/ 审计日志管理端点 + DiagnosticsTab 展示（UI 批次）
-- **P8 soak**：8h SLO（内存 ≤200MB / fd 不增长 / task 数稳定 / 0 未处理 panic）headless 不可行，实机依赖，blocked。`hermix-agent/tests/soak.rs` 现有 10min 合成循环探针（仅测内存 1 项，fd/task 未实现）
-- 测试基线：hermix-server 183 passed / hermix-session 15 passed / 全仓 cargo check --workspace 绿
+- **P8 8h 全量 SLO**：8h soak（内存 ≤200MB / fd 不增长 / task 数稳定 / 0 未处理 panic）headless 不可行，实机依赖，blocked。本批次落的是 60s 短探针 headless 切片（四项 SLO 测量 + 真实 session 协议循环）；8h 全量走 `--ignored` 变体（实机 nightly）。另外短探针跑 `cargo test` 期间可能触发 `hermix-cua` 的 rustc ICE（增量缓存损坏，`rm -rf target/debug/incremental` + `CARGO_INCREMENTAL=0` 可规避，属编译器 pre-existing bug 非本项目缺陷）
+- 测试基线：hermix-server 183 passed / hermix-session 15 passed / hermix-agent lib 1050 passed + soak 2 passed / 全仓 cargo check --workspace 绿
 
 ### 3.6 手机客户端
 
