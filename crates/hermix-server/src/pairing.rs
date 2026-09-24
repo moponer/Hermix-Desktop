@@ -30,8 +30,64 @@ use serde::{Deserialize, Serialize};
 use crate::state::HttpServerState;
 use crate::tls;
 
+/// 取请求的来源 IP（字符串形式，供审计行 `source_ip` 列）。
+/// 优先 X-Forwarded-For 第一跳（TLS 终结在反代后），回退到连接对端。
+/// 返回 `None`（未捕获）由 `record_audit` 落 `NULL`，不阻断审计行。
+pub fn request_source_ip(
+    peer: Option<&std::net::SocketAddr>,
+    headers: &axum::http::HeaderMap,
+) -> Option<String> {
+    if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
+        // 第一跳（最接近客户端）
+        if let Some(first) = xff.split(',').next() {
+            let first = first.trim();
+            if !first.is_empty() {
+                return Some(first.to_string());
+            }
+        }
+    }
+    peer.map(|sa| sa.to_string())
+}
+
 /// 配对码有效期。设计文档 §5.5 第 3 层：120 秒。
 pub const PAIRING_TTL: Duration = Duration::from_secs(120);
+
+/// 审计事件枚举（字符串形式落盘，便于 `grep` / 跨语言消费）。
+/// 对应设计文档 §5.5 附表四类：pairing / auth / grant / revoke。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuditEvent {
+    /// 设备配对成功（`pair` 落库后）。
+    Pairing,
+    /// 凭证认证（`authenticate` 命中，含成功/撤销/失败）。
+    Auth,
+    /// 授权判定（`request_guard` 装 `device_scopes` 进 Extension 后，
+    /// 下游关口按矩阵∩能力位判定时）。
+    Grant,
+    /// 设备撤销（`revoke` 落库后）。
+    Revoke,
+}
+
+impl AuditEvent {
+    /// 落盘用的字符串形式（`audit_log.event` 列）。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AuditEvent::Pairing => "pairing",
+            AuditEvent::Auth => "auth",
+            AuditEvent::Grant => "grant",
+            AuditEvent::Revoke => "revoke",
+        }
+    }
+}
+
+/// 审计行（读侧展示用，按时间倒序，最多 `limit` 条）。
+#[derive(Debug, Clone, Serialize)]
+pub struct AuditRow {
+    pub ts: i64,
+    pub event: String,
+    pub device_id: Option<String>,
+    pub source_ip: Option<String>,
+    pub decision: Option<String>,
+}
 
 /// 新设备默认能力位（§5.5 第 4 层细粒度授权，D5 拍板"会话级：可发消息
 /// 看会话，高危工具强制桌面确认"）。JSON 数组字符串形式，直接写进
@@ -77,7 +133,15 @@ impl DeviceRegistry {
                     issued_at     INTEGER NOT NULL,
                     last_seen_at  INTEGER,
                     revoked_at    INTEGER
-                 );",
+                 );
+                 CREATE TABLE IF NOT EXISTS audit_log (
+                    ts            INTEGER NOT NULL,
+                    event         TEXT NOT NULL,
+                    device_id     TEXT,
+                    source_ip     TEXT,
+                    decision      TEXT
+                 );
+                 CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts);",
             )
             .is_ok()
         });
@@ -213,6 +277,79 @@ impl DeviceRegistry {
             })
             .unwrap_or(false)
     }
+
+    // ------------------------------------------------------------------
+    // §5.5 防滥用（全局）审计日志：配对/认证/授权/撤销 全部落盘。
+    // 设计文档 §5.5 附表：含时间、device_id、来源 IP、决策。
+    // 同库 `devices.db`（与 paired_devices 共享连接），`audit_log` 表
+    // 在 `open` 时建。审计写入失败不回滚主操作（审计是旁路观测，
+    // 不是主路径的一部分）——返回 Err 仅记 tracing，主路径不受影响。
+    // 类型定义（AuditEvent / AuditRow）在模块顶层。
+    // ------------------------------------------------------------------
+
+    /// 落盘一条审计行（旁路：失败仅 tracing，不影响主路径）。
+    ///
+    /// 参数：
+    /// - `event`：四类事件之一（`AuditEvent::as_str` 形式落盘）
+    /// - `device_id`：相关设备 id（认证失败/未配对 = `None`）
+    /// - `source_ip`：来源 IP（字符串形式；`None` = 未捕获）
+    /// - `decision`：判定结果（`"allowed"` / `"denied"` / `"needs_local_confirmation"`
+    ///   / `"revoked"` 等自由文本；`None` = 不适用）
+    pub fn record_audit(
+        &self,
+        event: AuditEvent,
+        device_id: Option<String>,
+        source_ip: Option<String>,
+        decision: Option<String>,
+    ) {
+        let now = chrono::Utc::now().timestamp();
+        let event_str = event.as_str().to_string();
+        let ok = self.store.write(|conn| {
+            conn.execute(
+                "INSERT INTO audit_log (ts, event, device_id, source_ip, decision)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![
+                    now,
+                    event_str,
+                    device_id,
+                    source_ip,
+                    decision
+                ],
+            )
+            .is_ok()
+        });
+        if ok != Some(true) {
+            tracing::warn!("audit_log 落盘失败（旁路，主路径不受影响）");
+        }
+    }
+
+    /// 读取最近 `limit` 条审计行（时间倒序）。供管理端点 / 诊断 tab 展示。
+    pub fn list_audit(&self, limit: u32) -> Vec<AuditRow> {
+        let limit = limit.max(1).min(1000);
+        self.store
+            .read(|conn| {
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT ts, event, device_id, source_ip, decision
+                         FROM audit_log ORDER BY ts DESC, rowid DESC LIMIT ?1",
+                    )
+                    .ok()?;
+                let rows = stmt
+                    .query_map(rusqlite::params![limit as i64], |row| {
+                        Ok(AuditRow {
+                            ts: row.get(0)?,
+                            event: row.get(1)?,
+                            device_id: row.get(2)?,
+                            source_ip: row.get(3)?,
+                            decision: row.get(4)?,
+                        })
+                    })
+                    .ok()?;
+                rows.collect::<Result<Vec<_>, _>>().ok()
+            })
+            .flatten()
+            .unwrap_or_default()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -344,8 +481,11 @@ pub struct CompletePairingBody {
 /// 成功返回 `{ device_id, device_token }`；token 仅此一次明文下发。
 pub async fn complete_pairing(
     State(state): State<HttpServerState>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<CompletePairingBody>,
 ) -> impl IntoResponse {
+    let src_ip = request_source_ip(Some(&peer), &headers);
     let Some(registry) = state.device_registry.as_ref() else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -370,11 +510,20 @@ pub async fn complete_pairing(
             .into_response();
     }
     match registry.pair(device_name) {
-        Ok((device, token)) => Json(serde_json::json!({
-            "device_id": device.device_id,
-            "device_token": token,
-        }))
-        .into_response(),
+        Ok((device, token)) => {
+            // §5.5 防滥用审计：配对成功落盘。
+            registry.record_audit(
+                crate::pairing::AuditEvent::Pairing,
+                Some(device.device_id.clone()),
+                src_ip,
+                Some("allowed".to_string()),
+            );
+            Json(serde_json::json!({
+                "device_id": device.device_id,
+                "device_token": token,
+            }))
+            .into_response()
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("配对落库失败: {e}").into_response(),
@@ -387,6 +536,8 @@ pub async fn complete_pairing(
 pub async fn list_devices(
     axum::extract::Extension(origin): axum::extract::Extension<hermix_core::Origin>,
     State(state): State<HttpServerState>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: axum::http::HeaderMap,
 ) -> impl IntoResponse {
     if !matches!(origin, hermix_core::Origin::Local) {
         return (
@@ -396,7 +547,17 @@ pub async fn list_devices(
             .into_response();
     }
     match state.device_registry.as_ref() {
-        Some(registry) => Json(registry.list()).into_response(),
+        Some(registry) => {
+            // §5.5 防滥用审计：设备列表查询（授权事件）落盘。
+            let src_ip = request_source_ip(Some(&peer), &headers);
+            registry.record_audit(
+                crate::pairing::AuditEvent::Grant,
+                None,
+                src_ip,
+                Some("allowed".to_string()),
+            );
+            Json(registry.list()).into_response()
+        }
         None => (
             StatusCode::SERVICE_UNAVAILABLE,
             "设备注册表不可用".into_response(),
@@ -410,7 +571,10 @@ pub async fn revoke_device(
     axum::extract::Extension(origin): axum::extract::Extension<hermix_core::Origin>,
     State(state): State<HttpServerState>,
     axum::extract::Path(device_id): axum::extract::Path<String>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: axum::http::HeaderMap,
 ) -> impl IntoResponse {
+    let src_ip = request_source_ip(Some(&peer), &headers);
     if !matches!(origin, hermix_core::Origin::Local) {
         return (
             StatusCode::FORBIDDEN,
@@ -420,9 +584,25 @@ pub async fn revoke_device(
     }
     match state.device_registry.as_ref() {
         Some(registry) if registry.revoke(&device_id) => {
+            // §5.5 防滥用审计：设备撤销落盘。
+            registry.record_audit(
+                crate::pairing::AuditEvent::Revoke,
+                Some(device_id.clone()),
+                src_ip,
+                Some("revoked".to_string()),
+            );
             StatusCode::NO_CONTENT.into_response()
         }
-        Some(_) => (StatusCode::NOT_FOUND, "设备不存在".into_response()).into_response(),
+        Some(registry) => {
+            // 设备不存在也落审计行（decision = "not_found"，便于排查滥用扫描）。
+            registry.record_audit(
+                crate::pairing::AuditEvent::Revoke,
+                Some(device_id.clone()),
+                src_ip,
+                Some("not_found".to_string()),
+            );
+            (StatusCode::NOT_FOUND, "设备不存在".into_response()).into_response()
+        }
         None => (
             StatusCode::SERVICE_UNAVAILABLE,
             "设备注册表不可用".into_response(),
@@ -439,6 +619,104 @@ fn hex_random(bytes: usize) -> String {
     let mut buf = vec![0u8; bytes];
     rand::thread_rng().fill_bytes(&mut buf);
     buf.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+// ---------------------------------------------------------------------------
+// §5.5 防滥用审计：落库→读库闭环 + 四事件 + source_ip 语义
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod audit_tests {
+    use super::*;
+
+    #[test]
+    fn record_audit_writes_and_list_audit_reads() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let reg = DeviceRegistry::open(&dir.path().join("devices.db")).expect("open");
+
+        reg.record_audit(AuditEvent::Pairing, Some("dev-a".into()), Some("10.0.0.1".into()), Some("allowed".into()));
+        reg.record_audit(AuditEvent::Auth, None, Some("10.0.0.2".into()), Some("denied".into()));
+        reg.record_audit(AuditEvent::Revoke, Some("dev-a".into()), Some("10.0.0.1".into()), Some("revoked".into()));
+
+        let rows = reg.list_audit(100);
+        assert_eq!(rows.len(), 3, "三条审计行");
+        // 时间倒序：最后写入的 Revoke 在首位。
+        assert_eq!(rows[0].event, "revoke");
+        assert_eq!(rows[0].device_id.as_deref(), Some("dev-a"));
+        assert_eq!(rows[0].decision.as_deref(), Some("revoked"));
+        assert_eq!(rows[0].source_ip.as_deref(), Some("10.0.0.1"));
+        // Auth 行 device_id = None（未识别设备）。
+        let auth = rows.iter().find(|r| r.event == "auth").expect("auth 行");
+        assert!(auth.device_id.is_none());
+        assert_eq!(auth.decision.as_deref(), Some("denied"));
+        // 时间戳全为正值（chrono 落盘）。
+        assert!(rows.iter().all(|r| r.ts > 0));
+    }
+
+    #[test]
+    fn list_audit_respects_limit() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let reg = DeviceRegistry::open(&dir.path().join("devices.db")).expect("open");
+        for i in 0..5 {
+            reg.record_audit(AuditEvent::Grant, None, None, Some(format!("d{i}")));
+        }
+        assert_eq!(reg.list_audit(3).len(), 3, "limit=3 → 3 条");
+        // limit=0 钳制到 1（max(1)），取回最近 1 条。
+        assert_eq!(reg.list_audit(0).len(), 1, "limit=0 钳制到 1");
+        assert_eq!(reg.list_audit(100).len(), 5, "limit 大于总量 → 全量");
+    }
+
+    #[test]
+    fn audit_events_map_to_stable_strings() {
+        assert_eq!(AuditEvent::Pairing.as_str(), "pairing");
+        assert_eq!(AuditEvent::Auth.as_str(), "auth");
+        assert_eq!(AuditEvent::Grant.as_str(), "grant");
+        assert_eq!(AuditEvent::Revoke.as_str(), "revoke");
+    }
+
+    #[test]
+    fn pair_revoke_lifecycle_emits_audit_events() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let reg = DeviceRegistry::open(&dir.path().join("devices.db")).expect("open");
+        let (dev, _token) = reg.pair("审计手机").expect("pair");
+        // 用真实 device_id（pair 返回的），撤销才命中。
+        let dev_id = dev.device_id.clone();
+        reg.record_audit(AuditEvent::Pairing, Some(dev_id.clone()), None, Some("allowed".into()));
+        assert!(reg.revoke(&dev_id), "撤销真实 device_id 应命中");
+        reg.record_audit(AuditEvent::Revoke, Some(dev_id.clone()), None, Some("revoked".into()));
+
+        let events: Vec<String> = reg.list_audit(100).iter().map(|r| r.event.clone()).collect();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0], "revoke");
+        assert_eq!(events[1], "pairing");
+    }
+
+    #[test]
+    fn request_source_ip_prefers_xff_first_hop() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::FORWARDED, // placeholder, replaced below
+            axum::http::HeaderValue::from_static("x"),
+        );
+        headers.remove(axum::http::header::FORWARDED);
+        headers.insert(
+            "x-forwarded-for",
+            axum::http::HeaderValue::from_static("  9.9.9.9 , 8.8.8.8"),
+        );
+        let peer: std::net::SocketAddr = "127.0.0.1:80".parse().unwrap();
+        let ip = request_source_ip(Some(&peer), &headers);
+        assert_eq!(ip.as_deref(), Some("9.9.9.9"), "XFF 第一跳优先");
+    }
+
+    #[test]
+    fn request_source_ip_falls_back_to_peer_when_no_xff() {
+        let headers = axum::http::HeaderMap::new();
+        let peer: std::net::SocketAddr = "192.168.1.50:54321".parse().unwrap();
+        let ip = request_source_ip(Some(&peer), &headers);
+        assert_eq!(ip.as_deref(), Some("192.168.1.50:54321"), "无 XFF → 对端");
+        // 无 XFF 无对端 → None（落 NULL）。
+        assert!(request_source_ip(None, &headers).is_none());
+    }
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {

@@ -367,6 +367,30 @@ pub async fn request_guard(
         .as_deref()
         .and_then(|t| devices.as_ref().and_then(|r| r.authenticate(t)));
 
+    // §5.5 防滥用审计：凭证认证命中落盘（含 device_id + 来源 IP + 决策）。
+    // 认证失败（token 无效/撤销）→ decision = "denied"；成功 → "allowed"。
+    // 审计是旁路观测：失败仅 tracing，不阻断主路径。
+    if let Some(reg) = devices.as_ref() {
+        let src_ip = client_key(&req);
+        if let Some(d) = &device {
+            reg.record_audit(
+                crate::pairing::AuditEvent::Auth,
+                Some(d.device_id.clone()),
+                Some(src_ip.clone()),
+                Some("allowed".to_string()),
+            );
+        } else if token.is_some() {
+            // 出示了 token 但未命中（无效/撤销）→ 审计 rejected。
+            // device_id = None（未识别设备），decision = "denied"。
+            reg.record_audit(
+                crate::pairing::AuditEvent::Auth,
+                None,
+                Some(src_ip.clone()),
+                Some("denied".to_string()),
+            );
+        }
+    }
+
     // §5.5 第 4 层请求签名（对策 T4）：已配对设备必须在 Bearer 之外附
     // 有效签名头（时间窗 + nonce 单次使用），token 泄漏 ≠ 无限使用。
     // 纯 Bearer（桌面端 api_key / 旧客户端）不受影响。
