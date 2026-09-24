@@ -25,7 +25,7 @@ pub enum Origin {
 
 /// 能力分类。粒度对齐设计文档 §5.5 权限矩阵，不按具体工具列——
 /// 具体工具→能力的映射由调用方（审批引擎 / HTTP 路由）负责。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Capability {
     /// 发消息 / 看会话。
     Chat,

@@ -33,6 +33,15 @@ use crate::tls;
 /// 配对码有效期。设计文档 §5.5 第 3 层：120 秒。
 pub const PAIRING_TTL: Duration = Duration::from_secs(120);
 
+/// 新设备默认能力位（§5.5 第 4 层细粒度授权，D5 拍板"会话级：可发消息
+/// 看会话，高危工具强制桌面确认"）。JSON 数组字符串形式，直接写进
+/// `paired_devices.scopes` 列。最小集 = 仅 `Capability::Chat`；
+/// `DangerousTool` 走 `Origin::may` 的 `NeedsLocalConfirmation`（不在
+/// 能力位里配），授权/配置/管理/工作台类在矩阵里 `Denied` 且能力位
+/// 未配，被动态拒绝。`security::request_guard` 在 `Origin::may` 静态
+/// 矩阵判定后 AND 此能力位（能力位 `[]` 等价全 `Denied`）。
+pub const DEFAULT_DEVICE_SCOPES: &str = r#"["chat"]"#;
+
 /// 设备注册表：`<hermix_home>/devices.db`（SQLite，hermix-store 托管）。
 pub struct DeviceRegistry {
     store: Store,
@@ -79,6 +88,12 @@ impl DeviceRegistry {
     }
 
     /// 注册新设备，返回明文 token（仅此刻可见，落库的是 SHA-256）。
+    ///
+    /// scopes 列写入最小能力集 `["chat"]`（§5.5 第 4 层，D5 拍板：
+    /// 远程设备默认"会话级：可发消息看会话，高危工具强制桌面确认"）
+    /// ——而非恒占位 `'[]'`。`security::request_guard` 的来源推导在
+    /// `Origin::may` 静态矩阵判定后 AND 此能力位（设备没配 `Chat`
+    /// 就 `Denied`），实现"每设备独立能力位"的细粒度授权。
     pub fn pair(&self, device_name: &str) -> Result<(PairedDevice, String), AgentError> {
         let device_id = format!("dev-{}", hex_random(8));
         let token = format!("hmxd_{}", hex_random(32));
@@ -87,7 +102,7 @@ impl DeviceRegistry {
         let device = PairedDevice {
             device_id: device_id.clone(),
             device_name: device_name.to_string(),
-            scopes: "[]".to_string(),
+            scopes: DEFAULT_DEVICE_SCOPES.to_string(),
             issued_at: now,
             last_seen_at: None,
             revoked_at: None,

@@ -26,6 +26,7 @@ use axum::http::{HeaderMap, Request, Response, StatusCode};
 use axum::middleware::Next;
 use axum::response::IntoResponse;
 use hermix_core::Origin;
+use hermix_core::origin::{Capability, Decision};
 use tokio::sync::Mutex;
 
 #[derive(Clone)]
@@ -265,6 +266,59 @@ fn derive_origin(
     }
 }
 
+/// 能力位解析（§5.5 第 4 层细粒度授权）：`paired_devices.scopes`
+/// 是 JSON 数组字符串（`["chat"]` 形式，`pairing::DEFAULT_DEVICE_SCOPES`
+/// 写的最小集；`[]` = 未配任何能力位，全拒绝）。映射到
+/// `hermix_core::origin::Capability` 枚举——解析失败的项忽略
+/// （保守侧：未知能力位不授予，矩阵仍兜底）。
+fn parse_device_scopes(scopes: &str) -> std::collections::HashSet<Capability> {
+    let mut set = std::collections::HashSet::new();
+    for token in serde_json::from_str::<Vec<String>>(scopes)
+        .into_iter()
+        .flatten()
+    {
+        let cap = match token.to_ascii_lowercase().as_str() {
+            "chat" => Capability::Chat,
+            "approvealways" => Capability::ApproveAlways,
+            "dangeroustool" => Capability::DangerousTool,
+            "configmutation" => Capability::ConfigMutation,
+            "devicemanagement" => Capability::DeviceManagement,
+            "workbenchaccess" => Capability::WorkbenchAccess,
+            _ => continue,
+        };
+        set.insert(cap);
+    }
+    set
+}
+
+/// §5.5 第 4 层细粒度授权判定：设备能力位 ∩ 静态权限矩阵。
+///
+/// 语义：矩阵（`Origin::may`）给出"该来源**最多**能做什么"；设备
+/// 能力位（`paired_devices.scopes`）给出"该设备**实际**被授予什么"。
+/// 取交集——矩阵 `Denied` 的（授权/配置/管理/工作台）即使能力位误配
+/// 也保持 `Denied`（纵深防御）；矩阵 `Allowed`/`NeedsLocalConfirmation`
+/// 的，能力位未配即降为 `Denied`。非 PairedDevice 来源（Local /
+/// Unpaired）无能力位维度，直接透传矩阵判定（Local 矩阵全 Allowed、
+/// Unpaired 矩阵全 Denied，不受能力位影响）。
+fn effective_decision_for_paired(
+    origin: &Origin,
+    cap: Capability,
+    device_scopes: Option<&crate::pairing::PairedDevice>,
+) -> Decision {
+    let matrix = origin.may(cap);
+    let Some(device) = device_scopes else {
+        return matrix;
+    };
+    if matrix == Decision::Denied {
+        return Decision::Denied;
+    }
+    if parse_device_scopes(&device.scopes).contains(&cap) {
+        matrix
+    } else {
+        Decision::Denied
+    }
+}
+
 /// Unpaired 纵深防御关口（对策 T1）：仅放行配对完成端点
 /// （信任建立本身）。/health 与 /metrics 在更早分支已返回。
 fn unpaired_gate_allows(path: &str) -> bool {
@@ -370,8 +424,21 @@ pub async fn request_guard(
             .into_response();
     }
 
+    // §5.5 第 4 层细粒度授权：把本次请求命中设备的 `paired_devices.scopes`
+    // 能力位集装进 Extension，与 `origin` 并列。下游（http 端点 / 工具层
+    // 关口）按 `origin` 取设备 id，再查此集判定"矩阵 ∩ 能力位"。
+    // Local / Unpaired 来源 = None（矩阵自身已是最宽/最严，无能力位维度）。
+    let device_scopes: Option<std::collections::HashSet<Capability>> =
+        match &device {
+            Some(d) if matches!(origin, Origin::PairedDevice { .. }) => {
+                Some(parse_device_scopes(&d.scopes))
+            }
+            _ => None,
+        };
+
     let (mut parts, body) = req.into_parts();
     parts.extensions.insert(origin);
+    parts.extensions.insert(device_scopes);
     let req = Request::from_parts(parts, body);
 
     next.run(req).await
@@ -491,5 +558,115 @@ mod tests {
         ] {
             assert!(!ip.is_loopback(), "expected non-loopback: {ip}");
         }
+    }
+
+    // ----- §5.5 第 4 层细粒度授权：设备能力位 ∩ 静态矩阵 -----
+
+    #[test]
+    fn parse_device_scopes_maps_names_to_capabilities() {
+        let set = parse_device_scopes(r#"["chat","dangeroustool"]"#);
+        assert!(set.contains(&Capability::Chat));
+        assert!(set.contains(&Capability::DangerousTool));
+        assert!(!set.contains(&Capability::ConfigMutation));
+    }
+
+    #[test]
+    fn parse_device_scopes_empty_and_unknown_tokens_yield_empty_set() {
+        // 占位 '[]' = 未配任何能力位，全拒绝（保守侧）。
+        let set = parse_device_scopes("[]");
+        assert!(set.is_empty());
+        // 未知能力位名忽略（不授予，矩阵仍兜底）。
+        let set = parse_device_scopes(r#"["superpower","chat"]"#);
+        assert_eq!(set.len(), 1);
+        assert!(set.contains(&Capability::Chat));
+    }
+
+    /// 矩阵 ∩ 能力位语义：矩阵 `Denied` 的即使能力位误配也保持
+    /// `Denied`（纵深防御）；矩阵 `Allowed`/`NeedsLocalConfirmation`
+    /// 的，能力位未配即降为 `Denied`。
+    #[test]
+    fn effective_decision_intersects_matrix_and_scopes() {
+        use crate::pairing::PairedDevice;
+        let dev = |scopes: &str| PairedDevice {
+            device_id: "dev-x".into(),
+            device_name: "x".into(),
+            scopes: scopes.into(),
+            issued_at: 0,
+            last_seen_at: None,
+            revoked_at: None,
+        };
+        let origin = Origin::PairedDevice {
+            device_id: "dev-x".into(),
+        };
+
+        // 最小集 ["chat"]：Chat 放行，DangerousTool 仍走矩阵的
+        // NeedsLocalConfirmation（矩阵给"最多能做什么"，能力位给
+        // "实际被授予什么"——DangerousTool 在最小集里未配，被降为 Denied）。
+        let chat_only = dev(r#"["chat"]"#);
+        assert_eq!(
+            effective_decision_for_paired(&origin, Capability::Chat, Some(&chat_only)),
+            Decision::Allowed,
+        );
+        assert_eq!(
+            effective_decision_for_paired(&origin, Capability::DangerousTool, Some(&chat_only)),
+            Decision::Denied,
+            "DangerousTool 未在最小集能力位中 → 降为 Denied"
+        );
+
+        // 矩阵 Denied 的（ConfigMutation）即使能力位误配也保持 Denied。
+        let mis_configured = dev(r#"["configmutation","chat"]"#);
+        assert_eq!(
+            effective_decision_for_paired(&origin, Capability::ConfigMutation, Some(&mis_configured)),
+            Decision::Denied,
+            "矩阵 Denied 的能力位误配不能提权"
+        );
+
+        // DangerousTool 在能力位中配了：矩阵给 NeedsLocalConfirmation，
+        // 能力位放行后保持矩阵判定（不强行升 Allowed）。
+        let with_dangerous = dev(r#"["chat","dangeroustool"]"#);
+        assert_eq!(
+            effective_decision_for_paired(&origin, Capability::DangerousTool, Some(&with_dangerous)),
+            Decision::NeedsLocalConfirmation,
+        );
+
+        // 占位 '[]'：全拒绝（能力位未配任何项）。
+        let empty = dev("[]");
+        assert_eq!(
+            effective_decision_for_paired(&origin, Capability::Chat, Some(&empty)),
+            Decision::Denied,
+        );
+
+        // 非设备来源（Local / Unpaired）无能力位维度，透传矩阵判定。
+        assert_eq!(
+            effective_decision_for_paired(&Origin::Local, Capability::Chat, None),
+            Decision::Allowed,
+        );
+        assert_eq!(
+            effective_decision_for_paired(&Origin::Unpaired, Capability::Chat, None),
+            Decision::Denied,
+        );
+    }
+
+    /// A 半边验收：`pair()` 写入最小能力集（非恒占位 `'[]'`），
+    /// `authenticate` 读回同一份（设备能力位的落库→读库闭环）。
+    #[test]
+    fn pair_writes_default_minimal_scopes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let registry =
+            crate::pairing::DeviceRegistry::open(&dir.path().join("devices.db"))
+                .expect("registry");
+        let (device, token) = registry.pair("能力位手机").expect("pair");
+        assert_eq!(
+            device.scopes,
+            crate::pairing::DEFAULT_DEVICE_SCOPES,
+            "pair 应写最小能力集而非恒占位"
+        );
+        // 读库闭环：authenticate 读回同一份 scopes。
+        let authed = registry.authenticate(&token).expect("token 有效");
+        assert_eq!(authed.scopes, device.scopes);
+        // 且解析后恰含 Chat 一项（最小集语义）。
+        let set = parse_device_scopes(&authed.scopes);
+        assert_eq!(set.len(), 1);
+        assert!(set.contains(&Capability::Chat));
     }
 }
