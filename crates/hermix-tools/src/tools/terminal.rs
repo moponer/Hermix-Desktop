@@ -7,7 +7,8 @@ use std::sync::Arc;
 
 use hermix_core::{
     path_security::{forbidden_win32_prefix, detect_shell_metacharacters, strip_win32_long_path},
-    tool_schema, ApprovalOutcome, CommandOutput, JsonSchema, Origin, Shell, ShellError,
+    tool_schema, ApprovalOutcome, Capability, CommandOutput, JsonSchema, Origin, Shell,
+    ShellError,
     TerminalBackend, ToolError, ToolHandler, ToolSchema, traits::RiskLevel,
 };
 
@@ -269,7 +270,7 @@ impl ToolHandler for TerminalHandler {
             .unwrap_or_default();
         // 默认 Local：非 HTTP / 无 Origin 上下文路径（tests + headless）
         // 走老路径，零回归。
-        execute_inner(self, params, workspace, &approval_ctx, &Origin::Local).await
+        execute_inner(self, params, workspace, &approval_ctx, &Origin::Local, None).await
     }
 
     fn schema(&self) -> ToolSchema {
@@ -344,6 +345,7 @@ async fn execute_inner(
     workspace: Option<std::path::PathBuf>,
     approval_ctx: &TerminalApprovalContext,
     origin: &Origin,
+    device_scopes: Option<&std::collections::HashSet<Capability>>,
 ) -> Result<String, ToolError> {
         let command = params
             .get("command")
@@ -441,7 +443,9 @@ async fn execute_inner(
         let stripped = command.strip_prefix("HERMIX_CONFIRM=1 ");
         let effective_cmd = stripped.unwrap_or(command);
 
-        let decision = this.approval.check_approval_for_origin(effective_cmd, origin);
+        let decision = this
+            .approval
+            .check_approval_for_origin_with_scopes(effective_cmd, origin, device_scopes);
         let needs_confirm = if metachar_desc.is_some() {
             // Pipe-to-shell stays prompt-worthy even with a
             // HERMIX_CONFIRM=1 marker (matches the legacy metachar gate).
@@ -627,7 +631,10 @@ impl TerminalHandler {
             .ok()
             .map(|g| g.clone())
             .unwrap_or_default();
-        execute_inner(self, params, workspace, &approval_ctx, origin).await
+        // execute_for_origin 是 HTTP dispatcher 的来源感知入口，
+        // 能力位集维度走 execute_with_context（带 ToolCallContext）。
+        // 此路径只传 origin，device_scopes = None（纯矩阵判定）。
+        execute_inner(self, params, workspace, &approval_ctx, origin, None).await
     }
 
     // The `forbidden_path_prefix` private helper used to live here;
@@ -652,11 +659,21 @@ impl ContextAware for TerminalHandler {
         params: Value,
         ctx: &ToolCallContext,
     ) -> Result<String, ToolError> {
-        // 来源由调度方在 ToolCallContext.origin 里带入（§5.5 第 5 层）：
-        // - 桌面 WS 路径（LocalAgentService）固定填 Local；
-        // - HTTP 路径由 request_guard → Extension<Origin> → handler 覆盖填入；
-        // - 测试 / 头less 走 ctx default = Local。
-        execute_inner(self, params, ctx.workspace.clone(), &ctx.approval_ctx, &ctx.origin).await
+        // 来源 + 设备能力位由调度方在 ToolCallContext 里带入（§5.5 第
+        // 4/5 层）：
+        // - 桌面 WS 路径（LocalAgentService）origin 固定 Local、
+        //   device_scopes = None（无设备维度）；
+        // - HTTP 路径由 request_guard → Extension → handler 覆盖填入；
+        // - 测试 / 头less 走 ctx default = Local + None。
+        execute_inner(
+            self,
+            params,
+            ctx.workspace.clone(),
+            &ctx.approval_ctx,
+            &ctx.origin,
+            ctx.device_scopes.as_ref(),
+        )
+        .await
     }
 }
 

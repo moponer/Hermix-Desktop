@@ -32,7 +32,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use hermix_core::{Origin, PermissionProfile, ToolError};
+use hermix_core::{Capability, Origin, PermissionProfile, ToolError};
 use serde_json::Value;
 
 use crate::approval::TerminalApprovalContext;
@@ -98,6 +98,18 @@ pub struct ToolCallContext {
     /// `execute_with_context` 里读 `ctx.origin` 走来源感知审批，
     /// 而不是接收 `&Origin` 参数——这样新增 ContextAware 工具零样板。
     pub origin: Origin,
+
+    /// 设备能力位集（§5.5 第 4 层细粒度授权，§3.3 落到工具关口消费点）。
+    /// `request_guard` 从 `paired_devices.scopes` 解析出的
+    /// `HashSet<Capability>`，HTTP 路径由 handler 从
+    /// `Extension<Option<HashSet<Capability>>>` 取出后填入。
+    /// 桌面 WS 路径（`LocalAgentService`）/ 未接入设备维度的调用方填
+    /// `None`（无设备维度，纯 `Origin` 矩阵判定，行为等同旧版）。
+    /// `terminal` 关口把它传给
+    /// [`crate::approval::ApprovalManager::check_approval_for_origin_with_scopes`]，
+    /// 让 `PairedDevice` 下未配 `DangerousTool` 的设备连 shell 都跑不了
+    /// （§3.3 D5 拍板"高危工具需桌面确认"的细粒度落地）。
+    pub device_scopes: Option<std::collections::HashSet<Capability>>,
 }
 
 impl ToolCallContext {

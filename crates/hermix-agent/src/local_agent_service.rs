@@ -1487,6 +1487,9 @@ impl AgentService for LocalAgentService {
             // （handler 从 axum Extension<Origin> 取出来覆盖）；这里不加分支，
             // 等配对 / TLS 落地后再扩。
             origin: hermix_core::Origin::Local,
+            // §5.5 第 4 层：桌面 WS 路径无设备维度，能力位集 = None。
+            // HTTP 路径由 handler 从 Extension 取出 device_scopes 覆盖填入。
+            device_scopes: None,
         });
 
         // P0 (memory isolation): give this agent its own scoped memory
@@ -1887,6 +1890,9 @@ impl AgentService for LocalAgentService {
             // （handler 从 axum Extension<Origin> 取出来覆盖）；这里不加分支，
             // 等配对 / TLS 落地后再扩。
             origin: hermix_core::Origin::Local,
+            // §5.5 第 4 层：桌面 WS 路径无设备维度，能力位集 = None。
+            // HTTP 路径由 handler 从 Extension 取出 device_scopes 覆盖填入。
+            device_scopes: None,
         });
 
         // P0 (memory isolation): give this agent its own scoped memory

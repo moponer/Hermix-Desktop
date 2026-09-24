@@ -1,8 +1,9 @@
 //! Approval matching engine (static patterns + ApprovalManager).
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::LazyLock;
 use regex::Regex;
-use hermix_core::Origin;
+use hermix_core::{Capability, Origin};
 use super::model::ApprovalDecision;
 use super::allowlist::UserAllowlist;
 use super::persist::persist_session_approvals;
@@ -458,20 +459,36 @@ impl ApprovalManager {
         ApprovalDecision::RequiresConfirmation
     }
 
-    /// 来源感知版审批检查（§5.5 第 5 层）。
-    ///
-    /// 与 [`Self::check_approval`]（等价于 `Origin::Local`）的差异：
-    /// 远程来源（PairedDevice / Unpaired）下 session 级批准与用户
-    /// allowlist **一律跳过**——远程操作不能被"总是允许"降级，
-    /// 必须桌面端人工确认（对策 T5 远程越权 / T8 提权）。
-    ///
-    /// 收紧顺序：
-    /// 1. `DENIED_PATTERNS` → `Denied`（灾难命令在任何来源都灾难）；
-    /// 2. `Unpaired` → 一律 `Denied`（纵深防御：HTTP 层漏拦也到不了执行）；
-    /// 3. `READONLY_PATTERNS` → `Approved`（远程看日志没问题）；
-    /// 4. 其余 → `RequiresConfirmation`（无论是否命中 confirm 规则、
-    ///    是否已有 session 批准）。
+    /// 来源感知版审批检查（§5.5 第 5 层）。等价于
+    /// [`Self::check_approval_for_origin_with_scopes`] 在 `device_scopes = None`
+    /// 时的行为——无设备能力位维度，纯 `Origin` 矩阵判定。保留此入口
+    /// 使 7 个现有调用方（terminal / 测试 / e2e）零改动。
     pub fn check_approval_for_origin(&self, command: &str, origin: &Origin) -> ApprovalDecision {
+        self.check_approval_for_origin_with_scopes(command, origin, None)
+    }
+
+    /// 来源 + 设备能力位感知版审批检查（§5.5 第 4/5 层，§3.3 细粒度授权
+    /// 落到工具关口消费点）。
+    ///
+    /// `device_scopes` 是 `None` 时与 [`Self::check_approval_for_origin`]
+    /// 完全一致（桌面 WS 路径 / 未接入设备维度的调用方）。
+    /// `Some(scopes)` 时，仅对 `PairedDevice` 来源额外消费
+    /// `DangerousTool` 能力位：矩阵给 `NeedsLocalConfirmation` 的 shell
+    /// 类命令，若该设备 `scopes` 未配 `DangerousTool` → 直接 `Denied`
+    /// （§3.3 D5 拍板"会话级：可发消息看会话，高危工具强制桌面确认"
+    /// 中"高危工具需桌面确认"的细粒度落地——最小集 `["chat"]` 设备连
+    /// shell 都跑不了）。能力位未配 `DangerousTool` 但命令命中
+    /// `READONLY_PATTERNS` 的仍放行（读日志是 `Chat` 级语义，不需
+    /// `DangerousTool`）。
+    ///
+    /// `Local` / `Unpaired` 来源无设备维度，`device_scopes` 被忽略
+    /// （Local 走 `check_approval`；Unpaired 一律 `Denied`）。
+    pub fn check_approval_for_origin_with_scopes(
+        &self,
+        command: &str,
+        origin: &Origin,
+        device_scopes: Option<&HashSet<Capability>>,
+    ) -> ApprovalDecision {
         if matches!(origin, Origin::Local) {
             return self.check_approval(command);
         }
@@ -489,6 +506,24 @@ impl ApprovalManager {
 
         if matches!(origin, Origin::Unpaired) {
             return ApprovalDecision::Denied;
+        }
+
+        // PairedDevice：设备能力位维度（§3.3）。
+        if matches!(origin, Origin::PairedDevice { .. }) {
+            if let Some(scopes) = device_scopes {
+                if !scopes.contains(&Capability::DangerousTool) {
+                    // 未配 DangerousTool：shell 类高危命令直接拒绝。
+                    // 读日志（READONLY_PATTERNS）放行——那是 Chat 级语义。
+                    for re in READONLY_PATTERNS.iter() {
+                        if re.is_match(command) {
+                            return ApprovalDecision::Approved;
+                        }
+                    }
+                    return ApprovalDecision::Denied;
+                }
+            }
+            // 配了 DangerousTool（或未传 scopes，回退旧行为）：
+            // 维持矩阵的 NeedsLocalConfirmation 语义 → 需桌面端确认。
         }
 
         for re in READONLY_PATTERNS.iter() {
@@ -800,5 +835,120 @@ mod origin_aware_tests {
             m.check_approval_for_origin("echo hello", &Origin::Unpaired),
             ApprovalDecision::Denied
         );
+    }
+
+    // ----- §3.3 细粒度授权：设备能力位维度（check_approval_for_origin_with_scopes）-----
+
+    /// PairedDevice 未配 DangerousTool：shell 类高危命令直接 Denied
+    /// （§3.3 D5 拍板"最小集 ["chat"] 设备连 shell 都跑不了"）。
+    #[test]
+    fn paired_device_without_dangerous_tool_cannot_run_shell() {
+        let m = ApprovalManager::new();
+        let scopes: std::collections::HashSet<Capability> =
+            std::iter::once(Capability::Chat).collect();
+        assert_eq!(
+            m.check_approval_for_origin_with_scopes(
+                "del /q test.txt",
+                &Origin::PairedDevice { device_id: "d1".into() },
+                Some(&scopes)
+            ),
+            ApprovalDecision::Denied,
+            "未配 DangerousTool 的设备连 shell 都跑不了"
+        );
+    }
+
+    /// PairedDevice 配了 DangerousTool：shell 类命令回到 NeedsLocalConfirmation
+    /// 语义（矩阵判定，需桌面端确认）——能力位"放行"了但矩阵仍要确认。
+    #[test]
+    fn paired_device_with_dangerous_tool_still_requires_confirmation() {
+        let m = ApprovalManager::new();
+        let scopes: std::collections::HashSet<Capability> =
+            [Capability::Chat, Capability::DangerousTool]
+                .into_iter()
+                .collect();
+        assert_eq!(
+            m.check_approval_for_origin_with_scopes(
+                "del /q test.txt",
+                &Origin::PairedDevice { device_id: "d1".into() },
+                Some(&scopes)
+            ),
+            ApprovalDecision::RequiresConfirmation,
+            "配了 DangerousTool 不等于自动放行，矩阵仍要桌面确认"
+        );
+    }
+
+    /// 未配 DangerousTool 但命中 READONLY_PATTERNS：只读命令仍放行
+    /// （读日志是 Chat 级语义，不需 DangerousTool 能力位）。
+    #[test]
+    fn paired_device_without_dangerous_tool_still_allows_readonly() {
+        let m = ApprovalManager::new();
+        let scopes: std::collections::HashSet<Capability> =
+            std::iter::once(Capability::Chat).collect();
+        assert_eq!(
+            m.check_approval_for_origin_with_scopes(
+                "Get-ChildItem C:\\logs",
+                &Origin::PairedDevice { device_id: "d1".into() },
+                Some(&scopes)
+            ),
+            ApprovalDecision::Approved,
+            "只读命令是 Chat 级语义，不依赖 DangerousTool 能力位"
+        );
+    }
+
+    /// 灾难命令在任何能力位配置下都 Denied（能力位不能放行 rm -rf /）。
+    #[test]
+    fn paired_device_dangerous_tool_cannot_override_catastrophic() {
+        let m = ApprovalManager::new();
+        let scopes: std::collections::HashSet<Capability> =
+            [Capability::Chat, Capability::DangerousTool]
+                .into_iter()
+                .collect();
+        assert_eq!(
+            m.check_approval_for_origin_with_scopes(
+                "rm -rf /",
+                &Origin::PairedDevice { device_id: "d1".into() },
+                Some(&scopes)
+            ),
+            ApprovalDecision::Denied,
+            "能力位不能放行灾难命令"
+        );
+    }
+
+    /// Local 来源 + Some(scopes)：能力位维度被忽略（Local 无设备维度），
+    /// 行为等同 check_approval（session 批准 / allowlist 正常生效）。
+    #[test]
+    fn local_origin_ignores_device_scopes() {
+        let m = ApprovalManager::new();
+        let scopes: std::collections::HashSet<Capability> =
+            std::iter::once(Capability::Chat).collect();
+        // Local 下 echo 隐式放行，即使传了不完整的 scopes 集也不影响。
+        assert_eq!(
+            m.check_approval_for_origin_with_scopes(
+                "echo hello",
+                &Origin::Local,
+                Some(&scopes)
+            ),
+            ApprovalDecision::Approved,
+            "Local 无设备维度，scopes 被忽略"
+        );
+    }
+
+    /// None（无设备维度）：与 check_approval_for_origin 完全一致（零回归）。
+    #[test]
+    fn none_scopes_matches_legacy_origin_behavior() {
+        let m = ApprovalManager::new();
+        let origin = Origin::PairedDevice { device_id: "d1".into() };
+        for cmd in [
+            "echo hello",
+            "Get-ChildItem C:\\logs",
+            "rm -rf /",
+            "del /q test.txt",
+        ] {
+            assert_eq!(
+                m.check_approval_for_origin_with_scopes(cmd, &origin, None),
+                m.check_approval_for_origin(cmd, &origin),
+                "cmd: {cmd}"
+            );
+        }
     }
 }
