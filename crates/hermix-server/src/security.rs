@@ -25,6 +25,7 @@ use axum::http::header::AUTHORIZATION;
 use axum::http::{HeaderMap, Request, Response, StatusCode};
 use axum::middleware::Next;
 use axum::response::IntoResponse;
+use hermix_core::Origin;
 use tokio::sync::Mutex;
 
 #[derive(Clone)]
@@ -297,6 +298,18 @@ pub async fn request_guard(
         return (StatusCode::TOO_MANY_REQUESTS, "rate limit exceeded").into_response();
     }
 
+    // §5.5 第 5 层接线：从连接属性推导 Origin 注入请求上下文。
+    // 当前简化版：loopback = Local，其他远程 = Unpaired。设备配对流程
+    // （第 3/4 层）落地后在这里加 token→device_id 校验分支返回
+    // `Origin::PairedDevice{device_id}`。
+    let origin = match client_ip(&req) {
+        Some(ip) if ip.is_loopback() => Origin::Local,
+        _ => Origin::Unpaired,
+    };
+    let (mut parts, body) = req.into_parts();
+    parts.extensions.insert(origin);
+    let req = Request::from_parts(parts, body);
+
     next.run(req).await
 }
 
@@ -339,5 +352,23 @@ mod tests {
         assert!(p.check_actor("ops").is_ok());
         assert!(p.check_actor("trainer").is_ok());
         assert!(p.check_actor("hacker").is_err());
+    }
+
+    /// §5.5 第 5 层：IP→Origin 推导。
+    /// 当前简化版（设备配对流程未建）：loopback = Local，其他远程 = Unpaired。
+    #[test]
+    fn loopback_ip_resolves_to_local_origin() {
+        let ip: IpAddr = "127.0.0.1".parse().unwrap();
+        assert!(ip.is_loopback());
+    }
+
+    #[test]
+    fn remote_ip_is_not_loopback() {
+        for ip in [
+            "10.0.0.1".parse::<IpAddr>().unwrap(),
+            "192.168.1.100".parse::<IpAddr>().unwrap(),
+        ] {
+            assert!(!ip.is_loopback(), "expected non-loopback: {ip}");
+        }
     }
 }

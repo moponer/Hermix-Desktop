@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use hermix_core::{
     path_security::{forbidden_win32_prefix, detect_shell_metacharacters, strip_win32_long_path},
-    tool_schema, ApprovalOutcome, CommandOutput, JsonSchema, Shell, ShellError, TerminalBackend,
-    ToolError, ToolHandler, ToolSchema, traits::RiskLevel,
+    tool_schema, ApprovalOutcome, CommandOutput, JsonSchema, Origin, Shell, ShellError,
+    TerminalBackend, ToolError, ToolHandler, ToolSchema, traits::RiskLevel,
 };
 
 use crate::approval::{ApprovalDecision, ApprovalManager, TerminalApprovalContext};
@@ -267,7 +267,9 @@ impl ToolHandler for TerminalHandler {
             .ok()
             .map(|g| g.clone())
             .unwrap_or_default();
-        execute_inner(self, params, workspace, &approval_ctx).await
+        // 默认 Local：非 HTTP / 无 Origin 上下文路径（tests + headless）
+        // 走老路径，零回归。
+        execute_inner(self, params, workspace, &approval_ctx, &Origin::Local).await
     }
 
     fn schema(&self) -> ToolSchema {
@@ -341,6 +343,7 @@ async fn execute_inner(
     params: Value,
     workspace: Option<std::path::PathBuf>,
     approval_ctx: &TerminalApprovalContext,
+    origin: &Origin,
 ) -> Result<String, ToolError> {
         let command = params
             .get("command")
@@ -438,7 +441,7 @@ async fn execute_inner(
         let stripped = command.strip_prefix("HERMIX_CONFIRM=1 ");
         let effective_cmd = stripped.unwrap_or(command);
 
-        let decision = this.approval.check_approval(effective_cmd);
+        let decision = this.approval.check_approval_for_origin(effective_cmd, origin);
         let needs_confirm = if metachar_desc.is_some() {
             // Pipe-to-shell stays prompt-worthy even with a
             // HERMIX_CONFIRM=1 marker (matches the legacy metachar gate).
@@ -605,6 +608,28 @@ async fn execute_inner(
 }
 
 impl TerminalHandler {
+    /// 来源感知版入口（§5.5 第 5 层）。HTTP dispatcher 从
+    /// `Extension<Origin>` 取出后调本方法；非 HTTP 路径继续走
+    /// [`ToolHandler::execute`]（=Local）。
+    pub async fn execute_for_origin(
+        &self,
+        params: Value,
+        origin: &Origin,
+    ) -> Result<String, ToolError> {
+        let workspace = self
+            .default_workspace
+            .read()
+            .ok()
+            .and_then(|g| g.as_ref().cloned());
+        let approval_ctx = self
+            .approval_ctx
+            .lock()
+            .ok()
+            .map(|g| g.clone())
+            .unwrap_or_default();
+        execute_inner(self, params, workspace, &approval_ctx, origin).await
+    }
+
     // The `forbidden_path_prefix` private helper used to live here;
     // it was extracted to `hermix_core::path_security` during the
     // Windows-first hardening pass so memory / skills /
@@ -627,7 +652,8 @@ impl ContextAware for TerminalHandler {
         params: Value,
         ctx: &ToolCallContext,
     ) -> Result<String, ToolError> {
-        execute_inner(self, params, ctx.workspace.clone(), &ctx.approval_ctx).await
+        // 同样：来源取自 ctx；context.rs 还没把它装上，先 Local 兜底。
+        execute_inner(self, params, ctx.workspace.clone(), &ctx.approval_ctx, &Origin::Local).await
     }
 }
 
@@ -1526,5 +1552,91 @@ mod tests {
         let result = handler.execute(json!({"command": "foo"})).await.unwrap();
         assert!(result.contains("不是内部或外部命令"));
         assert!(result.contains("[exit code: 1]"));
+    }
+
+    // ----- §5.5 第 5 层接线：来源感知审批 -----
+
+    /// Local 下 confirm-pattern 命中的命令按原策略走 RequiresConfirmation。
+    #[tokio::test]
+    async fn local_origin_prompts_on_confirm_pattern() {
+        let backend = Arc::new(MockBackend {
+            captured_workdir: std::sync::Arc::new(std::sync::Mutex::new(None)),
+        });
+        let handler = make_handler(backend, None);
+        // `del` 命中内置 CONFIRM_PATTERNS → Local 下必须 prompt
+        let err = handler
+            .execute_for_origin(json!({"command": "del x.txt"}), &Origin::Local)
+            .await
+            .expect_err("confirm 命中应触发 RequiresConfirmation");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("confirmation") || msg.contains("确认"),
+            "got: {msg}"
+        );
+    }
+
+    /// PairedDevice 下同一命令也必须 prompt——即使 Local 已被 session 批准过，
+    /// 远程不能继承降级（对策 T5 远程越权）。
+    #[tokio::test]
+    async fn paired_device_cannot_inherit_local_session_approval() {
+        let backend = Arc::new(MockBackend {
+            captured_workdir: std::sync::Arc::new(std::sync::Mutex::new(None)),
+        });
+        let handler = make_handler(backend, None);
+        // 先用 Local 批准 `del` 家族
+        handler.approval.approve_for_session("del x.txt");
+
+        // PairedDevice 下即使 Local 已批准过，也必须 prompt
+        let err = handler
+            .execute_for_origin(
+                json!({"command": "del x.txt"}),
+                &Origin::PairedDevice { device_id: "d1".into() },
+            )
+            .await
+            .expect_err("PairedDevice 下必须拒绝 session 降级");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("confirmation") || msg.contains("确认"),
+            "got: {msg}"
+        );
+    }
+
+    /// PairedDevice 下只读命令放行——远程看日志没问题。
+    #[tokio::test]
+    async fn paired_device_readonly_command_runs() {
+        let backend = Arc::new(MockBackend {
+            captured_workdir: std::sync::Arc::new(std::sync::Mutex::new(None)),
+        });
+        let handler = make_handler(backend, None);
+        // `Get-ComputerInfo` 在 READONLY_PATTERNS → 任何非 Unpaired 都放行
+        let result = handler
+            .execute_for_origin(
+                json!({"command": "Get-ComputerInfo"}),
+                &Origin::PairedDevice { device_id: "d1".into() },
+            )
+            .await
+            .expect("只读命令 PairedDevice 下应放行");
+        assert!(!result.is_empty());
+    }
+
+    /// Unpaired 纵深防御：灾难命令 Denied，只读也走 confirm（即被拒）。
+    #[tokio::test]
+    async fn unpaired_origin_denies_destructive_command() {
+        let backend = Arc::new(MockBackend {
+            captured_workdir: std::sync::Arc::new(std::sync::Mutex::new(None)),
+        });
+        let handler = make_handler(backend, None);
+        let err = handler
+            .execute_for_origin(
+                json!({"command": "rm -rf /"}),
+                &Origin::Unpaired,
+            )
+            .await
+            .expect_err("灾难命令在 Unpaired 下必须 Denied");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("denied") || msg.contains("deny") || msg.contains("Denied"),
+            "got: {msg}"
+        );
     }
 }
