@@ -1,8 +1,8 @@
 # 交接文档：Hermix 底座重写 + 网络安全层（给后续开发 agent）
 
 > 更新时间：2026-09-24。本文是唯一权威交接入口。动手前**必须完整读完本文 + 必读文档清单**，禁止跳读后自行发挥。
-> 当前累计 42 个 commit（15 + 本批 27），工作区除 §7 未跟踪遗留物外干净。最近 commit：`f985eade`。
-> 本批新增 commit：`87bb2b9a` / `b51a32a1` / `3cc45b72` / `f062c5ad` / `e1a75115` / `20b6eda8` / `ab7aad02` / `c208f10f` / `9d897704` / `640eeb57` / `6979313c` / `a8f4e547` / `63e3b174` / `0918f7a5` / `cead162d` / `5fab0ec2` / `6892a043` / `29392b57` / `e651c311` / `adfc8ca5` / `acf1fea1` / `e91ac42e` / `fd238361` / `fc2f425a` / `d7abee4d` / `e5f728a1` / `f985eade`。
+> 当前累计 45 个 commit（15 + 本批 30），工作区除 §7 未跟踪遗留物外干净。最近 commit：`9ff58666`。
+> 本批新增 commit：`87bb2b9a` / `b51a32a1` / `3cc45b72` / `f062c5ad` / `e1a75115` / `20b6eda8` / `ab7aad02` / `c208f10f` / `9d897704` / `640eeb57` / `6979313c` / `a8f4e547` / `63e3b174` / `0918f7a5` / `cead162d` / `5fab0ec2` / `6892a043` / `29392b57` / `e651c311` / `adfc8ca5` / `acf1fea1` / `e91ac42e` / `fd238361` / `fc2f425a` / `d7abee4d` / `e5f728a1` / `f985eade` / `bc8a6e6c` / `64d145de` / `9ff58666`。
 
 ---
 
@@ -197,9 +197,17 @@ CARGO_INCREMENTAL=0 cargo test -p <crate> --lib   # 改了哪个 crate 测哪个
 **未做**（P6 剩余 + P2 剩余 + P8 8h 全量）：
 - **P2 EntryRecord 完整对齐**：设计 `EntryRecord` 8 字段（`id`/`conversation_id`/`kind`/`model`/`data`/`head`/`edits`/`by_task_id`）本批次只对齐 `by_task_id` + `conversation_id` 两个核心归属字段；`id`（单调 Id 类型）/ `model: Option<Vec<Message>>` / `head` / `edits: Vec<ContextEdit>` 属 L2 任务运行时批次（§3.4），需 `hermix-task` 的 `TaskRecord` + `Checkpoint` 模型先落
 - **P2 消息读写切换接入 server**：`hermix-session` 当前 0 处被引用（孤岛），把 `getSessionMessages` / 消息写路径从 `local_agent_service.rs`（4364 行上帝文件）切到 Session entry 派生需跨 P2/P5/P7 批次 + 真机 100 次重连对账，不在本批次
-- **P6 剩余**：T6 暴力破解 IP 锁定 / 连接数+请求大小+空闲超时四件套（设计文档明写"随手机客户端批次补"）/ 审计日志管理端点 + DiagnosticsTab 展示（UI 批次）。~~NeedsLocalConfirmation 关口消费点接通（工具关口批次）~~ → **已落**（本批次，见 §3.3 续落段）：`check_approval_for_origin_with_scopes` 把矩阵∩能力位判定落到 `terminal.rs` 工具关口消费点（`PairedDevice` 未配 `DangerousTool` 直接 `Denied` shell；配了回 `NeedsLocalConfirmation` 语义需桌面确认）
+- **P6 剩余**：~~T6 暴力破解 IP 锁定~~ → **已落**（本批次，见 §3.5 T6 段）/ 连接数+请求大小+空闲超时四件套（设计文档明写"随手机客户端批次补"）/ 审计日志管理端点 + DiagnosticsTab 展示（UI 批次）。~~NeedsLocalConfirmation 关口消费点接通（工具关口批次）~~ → **已落**（见 §3.3 续落段）
 - **P8 8h 全量 SLO**：8h soak（内存 ≤200MB / fd 不增长 / task 数稳定 / 0 未处理 panic）headless 不可行，实机依赖，blocked。本批次落的是 60s 短探针 headless 切片（四项 SLO 测量 + 真实 session 协议循环）；8h 全量走 `--ignored` 变体（实机 nightly）。另外短探针跑 `cargo test` 期间可能触发 `hermix-cua` 的 rustc ICE（增量缓存损坏，`rm -rf target/debug/incremental` + `CARGO_INCREMENTAL=0` 可规避，属编译器 pre-existing bug 非本项目缺陷）
-- 测试基线：hermix-server 183 passed / hermix-session 15 passed / hermix-tools 697 passed（含 6 能力位集测试）/ hermix-agent lib 1050 passed + soak 2 passed / 全仓 cargo check --workspace 绿
+- 测试基线：hermix-server 188 passed（含 5 T6 锁定测试 + 6 能力位集测试）/ hermix-session 15 passed / hermix-tools 697 passed（含 6 能力位集测试）/ hermix-agent lib 1050 passed + soak 2 passed / 全仓 cargo check --workspace 绿
+
+**已落**（P6 T6 暴力破解 IP 锁定）：
+- `security.rs` 新增 `AuthFailLockout`（仿 `RateLimiter` 的 `Arc<Mutex<HashMap<String,(Vec<Instant>,Option<Instant>)>>` 模式，纯内存 headless 可验）：按 source IP 累计认证失败时间戳，窗口内达 `threshold` 即锁定 `cooldown` 期；冷却期内持续失败走**有界续期**（`until + cooldown` 但封顶 `now + 2*cooldown`，防滑动窗口导致攻击者永不解锁）；成功认证 `record_success` 清零该 IP 计数与锁定（合法用户输错后输对了不累积）
+- `HttpSecurity` 加 `auth_fail_lockout: Option<Arc<AuthFailLockout>>` 字段；`from_env` 读 `HERMIX_AUTH_FAIL_LOCKOUT`（默认启用，`=0` 关闭）+ `HERMIX_AUTH_FAIL_THRESHOLD`（默认 5）/ `HERMIX_AUTH_FAIL_WINDOW_SECS`（默认 600）/ `HERMIX_AUTH_FAIL_COOLDOWN_SECS`（默认 900）三个 env 覆盖
+- `request_guard` 三处接线：认证前 IP 锁定检查（被锁 IP 直接 429 "too many auth failures"，不评估 token，防攻击者借失败响应试探）/ 设备签名 401 分支 + api_key 401 分支各自 `record_failure` / 认证成功（设备命中 或 api_key 命中）`record_success` 清零
+- 5 个 T6 行为测试（`security.rs`）：`lockout_triggers_after_threshold_failures`（窗口内达阈值即锁）/ `lockout_is_per_ip`（IP 隔离不串扰）/ `success_resets_failure_counter`（成功清零 + 重新计数）/ `lockout_expires_after_cooldown`（冷却到期自动解锁）/ `ongoing_failures_extend_cooldown`（持续失败有界续期，防"刚好过冷却就重来"绕锁）
+- 对抗式定界（YAGNI）：不做分布式锁定（单机 `Arc<Mutex>` 足够，跨进程需落库属另一批次）/ 不做跨重启持久化锁定（重启清零，设计文档 T6 明写"时间窗冷却"进程内语义足够）/ 不锁白名单内合法 IP（`ip_allowed` 已在 `request_guard` 最前拦，T6 只针对认证失败维度，避免把 token 输错的合法用户锁死）/ 锁定粒度 = source IP 非 token（同 IP 多 token 都算，符合暴力破解语义）
+- 测试基线：hermix-server 183→188 passed（+5 T6 锁定测试）
 
 ### 3.6 手机客户端
 
