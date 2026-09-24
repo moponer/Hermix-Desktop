@@ -141,6 +141,7 @@ chrono::Utc::now().timestamp_millis()
 pub mod approval;
 pub mod coalescer;
 pub mod pairing;
+pub mod request_signature;
 pub mod tls;
 pub use approval::ApprovalRegistry;
 

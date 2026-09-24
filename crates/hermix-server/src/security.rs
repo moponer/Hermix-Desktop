@@ -35,6 +35,8 @@ pub struct HttpSecurity {
     pub rate_limit_per_minute: u32,
     /// When `Some` and non-empty, client IP must be in this set (not applied to `/health`).
     pub allowed_ips: Option<Vec<IpAddr>>,
+    /// 请求签名 nonce 缓存（§5.5 第 4 层，对策 T4）。进程内单次使用。
+    pub nonce_cache: crate::request_signature::NonceCache,
 }
 
 /// Guards policy lifecycle HTTP APIs (admin token + actor allowlist).
@@ -152,6 +154,7 @@ impl HttpSecurity {
             metrics_require_auth,
             rate_limit_per_minute,
             allowed_ips,
+            nonce_cache: crate::request_signature::NonceCache::new(),
         }
     }
 }
@@ -309,6 +312,34 @@ pub async fn request_guard(
     let device = token
         .as_deref()
         .and_then(|t| devices.as_ref().and_then(|r| r.authenticate(t)));
+
+    // §5.5 第 4 层请求签名（对策 T4）：已配对设备必须在 Bearer 之外附
+    // 有效签名头（时间窗 + nonce 单次使用），token 泄漏 ≠ 无限使用。
+    // 纯 Bearer（桌面端 api_key / 旧客户端）不受影响。
+    if device.is_some() {
+        let token_str = token.as_deref().unwrap_or_default();
+        let sig_ok = crate::request_signature::signature_header(req.headers())
+            .and_then(|h| {
+                crate::request_signature::verify_signature(
+                    h,
+                    token_str,
+                    req.method().as_str(),
+                    path,
+                    chrono::Utc::now().timestamp(),
+                    &security.nonce_cache,
+                )
+                .ok()
+            })
+            .is_some();
+        if !sig_ok {
+            hermix_telemetry::record_http_reject();
+            return (
+                StatusCode::UNAUTHORIZED,
+                "valid X-Hermix-Signature required for paired device",
+            )
+                .into_response();
+        }
+    }
 
     if let Some(key) = security.api_key.as_ref() {
         let api_key_ok = token.as_deref() == Some(key.as_ref());
