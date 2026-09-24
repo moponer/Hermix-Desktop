@@ -158,6 +158,7 @@ impl Inner {
             version: 1,
             request_id: Some(batch_id.clone()),
             trace_id: self.trace_id.clone(),
+             seq: None,
             event: StreamEvent::RequestApprovalsBatch {
                 batch_id,
                 items,

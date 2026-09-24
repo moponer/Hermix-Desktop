@@ -396,6 +396,7 @@ pub(crate) async fn handle_ws_stream_send(
                 version: 1,
                 request_id: request.request_id.clone().or_else(|| Some(trace_id.to_string())),
                 trace_id: trace_id.to_string(),
+                 seq: None,
                 event: StreamEvent::Status {
                     content: format!(
                         "{{\"event\":\"task_in_flight\",\"message\":\"此会话已有正在运行的智能体任务（自动继续中）。新消息未触发新任务；请等待当前任务完成或在 UI 中点击「停止」。\"}}"
@@ -416,6 +417,7 @@ pub(crate) async fn handle_ws_stream_send(
                 version: 1,
                 request_id: request.request_id.clone().or_else(|| Some(trace_id.to_string())),
                 trace_id: trace_id.to_string(),
+                 seq: None,
                 event: StreamEvent::Done {
                     content: String::new(),
                     finish_reason: Some("task_in_flight".to_string()),
@@ -469,6 +471,7 @@ pub(crate) async fn handle_ws_stream_send(
             version: 1,
             request_id: request.request_id.clone().or_else(|| Some(trace_id.to_string())),
             trace_id: trace_id.to_string(),
+             seq: None,
             event: StreamEvent::Done {
                 content: String::new(),
                 finish_reason: Some("deduped".to_string()),
@@ -500,6 +503,7 @@ pub(crate) async fn handle_ws_stream_send(
             version: 1,
             request_id: request.request_id.clone().or_else(|| Some(trace_id.to_string())),
             trace_id: trace_id.to_string(),
+             seq: None,
             event: StreamEvent::Done {
                 content: content.clone(),
                 finish_reason: Some("completed".to_string()),
@@ -544,6 +548,7 @@ pub(crate) async fn handle_ws_stream_send(
             version: 1,
             request_id: request.request_id.clone().or_else(|| Some(trace_id.to_string())),
             trace_id: trace_id.to_string(),
+             seq: None,
             event: StreamEvent::Done {
                 content: String::new(),
                 finish_reason: Some("deduped".to_string()),
@@ -591,6 +596,7 @@ pub(crate) async fn handle_ws_stream_send(
                 version: 1,
                 request_id: clarify_rid.clone(),
                 trace_id: clarify_trace.clone(),
+                 seq: None,
                 event: StreamEvent::ClarifyRequest {
                     request_id: env.request_id,
                     question: env.question,
@@ -672,6 +678,7 @@ pub(crate) async fn handle_ws_stream_send(
                                 version: 1,
                                 request_id: todo_rid.clone(),
                                 trace_id: todo_trace.clone(),
+                                 seq: None,
                                 event: ev,
                             };
                             let _ = todo_inner_tx.send(envelope).await;
@@ -903,6 +910,7 @@ pub(crate) async fn handle_ws_stream_send(
                         version: 1,
                         request_id: rid.clone(),
                         trace_id: trace.clone(),
+                         seq: None,
                         event: StreamEvent::PrefetchIntent {
                             intent,
                             confidence,
@@ -987,6 +995,7 @@ pub(crate) async fn handle_ws_stream_send(
                             version: 1,
                             request_id: request_id.clone(),
                             trace_id: trace_id_for_stream.clone(),
+                             seq: None,
                             event: StreamEvent::Thinking {
                                 content: redact_sensitive(&think),
                             },
@@ -1020,6 +1029,7 @@ pub(crate) async fn handle_ws_stream_send(
                         version: 1,
                         request_id: request_id.clone(),
                         trace_id: trace_id_for_stream.clone(),
+                         seq: None,
                         event: StreamEvent::Text {
                             content: redact_sensitive(&cleaned),
                         },
@@ -1044,6 +1054,7 @@ pub(crate) async fn handle_ws_stream_send(
                                 version: 1,
                                 request_id: request_id.clone(),
                                 trace_id: trace_id_for_stream.clone(),
+                                 seq: None,
                                 event: StreamEvent::ToolStart { tool_call_id, tool, content },
                             }
                         }
@@ -1070,6 +1081,7 @@ pub(crate) async fn handle_ws_stream_send(
                                 version: 1,
                                 request_id: request_id.clone(),
                                 trace_id: trace_id_for_stream.clone(),
+                                 seq: None,
                                 event: StreamEvent::ToolChunk {
                                     tool_call_id,
                                     tool,
@@ -1108,6 +1120,7 @@ pub(crate) async fn handle_ws_stream_send(
                                 version: 1,
                                 request_id: request_id.clone(),
                                 trace_id: trace_id_for_stream.clone(),
+                                 seq: None,
                                 event: StreamEvent::ToolComplete { tool_call_id, tool, content, denial_kind, is_error },
                             }
                         }
@@ -1152,6 +1165,7 @@ pub(crate) async fn handle_ws_stream_send(
                                 version: 1,
                                 request_id: request_id.clone(),
                                 trace_id: trace_id_for_stream.clone(),
+                                 seq: None,
                                 event: StreamEvent::FileChange {
                                     tool_call_id,
                                     file_path,
@@ -1183,6 +1197,7 @@ pub(crate) async fn handle_ws_stream_send(
                                 version: 1,
                                 request_id: request_id.clone(),
                                 trace_id: trace_id_for_stream.clone(),
+                                 seq: None,
                                 event: StreamEvent::Thinking {
                                     content: redact_sensitive(&content),
                                 },
@@ -1207,6 +1222,7 @@ pub(crate) async fn handle_ws_stream_send(
                                 version: 1,
                                 request_id: request_id.clone(),
                                 trace_id: trace_id_for_stream.clone(),
+                                 seq: None,
                                 event,
                             }
                         }
@@ -1227,6 +1243,7 @@ pub(crate) async fn handle_ws_stream_send(
                                 version: 1,
                                 request_id: request_id.clone(),
                                 trace_id: trace_id_for_stream.clone(),
+                                 seq: None,
                                 event: StreamEvent::ContextUsage {
                                     used_tokens: used,
                                     max_tokens: max,
@@ -1243,6 +1260,7 @@ pub(crate) async fn handle_ws_stream_send(
                                 version: 1,
                                 request_id: request_id.clone(),
                                 trace_id: trace_id_for_stream.clone(),
+                                 seq: None,
                                 event: StreamEvent::CompactionStatus { snapshot },
                             }
                         }
@@ -1263,6 +1281,7 @@ pub(crate) async fn handle_ws_stream_send(
                                 version: 1,
                                 request_id: request_id.clone(),
                                 trace_id: trace_id_for_stream.clone(),
+                                 seq: None,
                                 event: StreamEvent::UsageUpdate {
                                     prompt_tokens: prompt,
                                     completion_tokens: completion,
@@ -1282,6 +1301,7 @@ pub(crate) async fn handle_ws_stream_send(
                                 version: 1,
                                 request_id: request_id.clone(),
                                 trace_id: trace_id_for_stream.clone(),
+                                 seq: None,
                                 event: StreamEvent::Status {
                                     content: raw.to_string(),
                                 },
@@ -1318,6 +1338,7 @@ pub(crate) async fn handle_ws_stream_send(
                                 version: 1,
                                 request_id: request_id.clone(),
                                 trace_id: trace_id_for_stream.clone(),
+                                 seq: None,
                                 event: StreamEvent::MemoryUpdate {
                                     action,
                                     memory_type,
@@ -1362,6 +1383,7 @@ pub(crate) async fn handle_ws_stream_send(
                                 version: 1,
                                 request_id: request_id.clone(),
                                 trace_id: trace_id_for_stream.clone(),
+                                 seq: None,
                                 event: StreamEvent::MemoryRecall {
                                     trigger,
                                     count,
@@ -1413,6 +1435,7 @@ pub(crate) async fn handle_ws_stream_send(
                                 version: 1,
                                 request_id: request_id.clone(),
                                 trace_id: trace_id_for_stream.clone(),
+                                 seq: None,
                                 event: StreamEvent::SubAgentEvent {
                                     sub_agent_id,
                                     phase,
@@ -1630,6 +1653,7 @@ pub(crate) async fn handle_ws_stream_send(
                             version: 1,
                             request_id: request_id_owned.clone(),
                             trace_id: trace_id_owned.clone(),
+                             seq: None,
                             event: StreamEvent::Error {
                                 code,
                                 message: redact_sensitive(&message),
@@ -1652,6 +1676,7 @@ pub(crate) async fn handle_ws_stream_send(
                         version: 1,
                         request_id: request_id_owned.clone(),
                         trace_id: trace_id_owned.clone(),
+                         seq: None,
                         event: StreamEvent::Done {
                             content: done_content,
                             finish_reason: done_finish_reason.clone(),
@@ -1740,6 +1765,7 @@ pub(crate) async fn handle_ws_stream_send(
                         version: 1,
                         request_id: request_id_owned.clone(),
                         trace_id: trace_id_owned.clone(),
+                         seq: None,
                         event: StreamEvent::Error {
                             code,
                             message: redact_sensitive(&message),
@@ -1982,6 +2008,7 @@ pub(crate) async fn handle_ws_stream_send(
                     version: 1,
                     request_id: None,
                     trace_id: trace_id_heartbeat.clone(),
+                     seq: None,
                     event: StreamEvent::Heartbeat,
                 };
                 if sender
@@ -2185,6 +2212,7 @@ WsClientMessage::ApprovalBatchResponse { batch_id, decision } => {
                                         version: 1,
                                         request_id: None,
                                         trace_id: trace_id_heartbeat.clone(),
+                                         seq: None,
                                         event: StreamEvent::Pong,
                                     };
                                     let _ = sender
@@ -2235,6 +2263,7 @@ WsClientMessage::ApprovalBatchResponse { batch_id, decision } => {
                                             version: 1,
                                             request_id: None,
                                             trace_id: trace_id.to_string(),
+                                             seq: None,
                                             event: StreamEvent::Status {
                                                 content: "{\"event\":\"task_in_flight\",\"message\":\"上一条消息仍在处理中，你的新消息已排队，将在当前任务结束后自动发送。\"}".to_string(),
                                             },
@@ -2276,6 +2305,7 @@ WsClientMessage::ApprovalBatchResponse { batch_id, decision } => {
                                 version: 1,
                                 request_id: None,
                                 trace_id: trace_id.to_string(),
+                                 seq: None,
                                 event: StreamEvent::Status {
                                     content: "{\"event\":\"task_in_flight\",\"message\":\"上一条消息仍在处理中，你的新消息已排队，将在当前任务结束后自动发送。\"}".to_string(),
                                 },
@@ -2476,6 +2506,7 @@ pub(crate) async fn handle_ws_stream(
         version: 1,
         request_id: None,
         trace_id: trace_id_base.clone(),
+         seq: None,
         event: StreamEvent::Connected {
             session_id: session_id.clone(),
         },
@@ -2578,6 +2609,7 @@ pub(crate) async fn handle_ws_stream(
             version: 1,
             request_id: None,
             trace_id: trace_id_base.clone(),
+             seq: None,
             event: StreamEvent::TodoSnapshot {
                 session_id: session_id.clone(),
                 items: wire_items,
@@ -2926,6 +2958,7 @@ async fn handle_inbound_frame(
                     version: 1,
                     request_id: None,
                     trace_id: trace_id_base.to_string(),
+                     seq: None,
                     event: StreamEvent::Pong,
                 };
                 let _ = sender

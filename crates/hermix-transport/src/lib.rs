@@ -371,6 +371,12 @@ pub struct WsEnvelope {
     pub request_id: Option<String>,
     pub trace_id: String,
     pub event: StreamEvent,
+    /// L3 seq 锚（P4，设计 §3.5/§6.2）：服务端单调递增计数器。
+    /// 可选字段——老前端反序列化时忽略不报错；新前端（P7 seq 对账）
+    /// 读取此字段做重连补发锚。`None` = 帧未挂 seq（P5 订阅端点
+    /// 就绪前的过渡态，零行为变化）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seq: Option<u64>,
 }
 
 /// Default `outcome` for a `Done` event when the sender doesn't set
@@ -1021,6 +1027,7 @@ mod tests {
             version: 1,
             request_id: Some("req-1".into()),
             trace_id: "trace-1".into(),
+            seq: None,
             event: StreamEvent::Done {
                 content: "ok".into(),
                 finish_reason: None,

@@ -2225,6 +2225,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "hermix-protocol"
+version = "0.1.1"
+dependencies = [
+ "chrono",
+ "hermix-core",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "uuid",
+]
+
+[[package]]
 name = "hermix-runtime"
 version = "0.1.1"
 dependencies = [
@@ -2267,6 +2279,7 @@ dependencies = [
  "hermix-intelligence",
  "hermix-mcp",
  "hermix-plugin",
+ "hermix-protocol",
  "hermix-runtime",
  "hermix-skills",
  "hermix-store",
