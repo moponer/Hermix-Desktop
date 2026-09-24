@@ -119,8 +119,12 @@ CARGO_INCREMENTAL=0 cargo test -p <crate> --lib   # 改了哪个 crate 测哪个
 - P5 端点升级（`a8f4e547`）：订阅端点从"统一回全量"升级为 seq 域驱动双分支——已追上（since_seq >= last_seq）回空增量 + `fullSnapshot=false`；落后回全量快照 + `true`。持久 seq 水位（`lastSeq` 字段）成为客户端下次重连的权威锚（跨重启有效，取代易失的进程级 `state.seq`）
 - P5 多端 attachment 协议层（本批次）：`WsEnvelope.attachment_id` 字段（server 生成 per-connection，老前端忽略不报错）+ `HttpServerState.attachment_seq` 进程级单调计数器 + `handle_ws_stream` 连接建立时 `fetch_add` 取号挂 `Connected` 帧 + zombie 分支 attachment-aware 注释（第二端发同一条消息时第一端 live handle 走 `task_in_flight` 拒绝分支不踢线，只 zombie handle 才 abort + 接管）
 
-**未做**（P5 全量剩余）：
-- attachment 多端挂载模型**业务逻辑**：本批次只落协议层基础（attachment_id 字段 + 生成器），`active_handles` / `active_sessions` 的 key 仍 session 级（`dedup_key`，未加 attachment 维度）——多端并存靠 `SESSION_BROADCASTS` 多 receiver 扇出 + 新 attachment 走 live 拒绝分支已覆盖"不踢线"验收，但"每 attachment 独立转发器 + 列表管理"需 key 升级（跨模块改造，P5 全量验收批次）
+**未做**（P5 全量剩余，下一批次需真机环境验收）：
+- attachment 多端挂载模型**业务逻辑**：本批次只落协议层基础（attachment_id 字段 + 生成器 + 水位测试），`active_handles` / `active_sessions` 的 key 仍 session 级（`dedup_key`，未加 attachment 维度）。**对抗式定界（已收敛，不可再推翻）**：
+  - **A. key 升级 attachment 维度 = 物理崩**：agent task 是 session 级单实例（LLM 上下文/工具/Effect Sandwich 同一份），key 加 attachment = 每 attachment 各 spawn 一个 agent task = LLM 上下文分裂 + 工具双跑 + Effect 双写。"不踢线"验收已靠 live 拒绝分支 + `SESSION_BROADCASTS` 多 receiver 扇出覆盖，**无需** key 升级
+  - **B. 精确增量（messages 加 seq 列）= 无验收锚**：schema 膨胀 + flush 事务改造，headless 不可复现实机 100 次对账；全量快照已是安全保守侧（宁可多传不可漏传），YAGNI 不做
+  - **C. 旧补丁下线 = 无验证基础**：需 P5 全量验收（两端互不干扰 + 100 次重连对账）后才能拆，本批次无该验收锚
+  - **D. `session_broadcast_drop` attachment-aware = 零改动（已查证）**：调用点在 agent task 完成块，此时该 session 的 agent task 已结束、所有 forwarder 都该退出；多端扇出靠 `broadcast::channel` 单 sender 多 receiver 天然支持（**不依赖** `spawn_broadcast_forwarder`——该函数从未实现，注释提及是历史遗留措辞）。drop sender 让所有 receiver 见 `Closed` 是正确语义，**无需**改造（已在 `ws.rs` 加注释澄清，防后续 agent 误判）
 - 精确增量切出：本批"落后时回全量"是因为 `messages.id` 被 flush 的 DELETE+INSERT 重置不能当 seq 载体；需 `messages` 表带 `seq` 列（schema 膨胀，P5 全量批次）后翻 `fullSnapshot` 真正的增量语义
 - 旧补发三补丁下线：`SESSION_BROADCASTS` / `completed_keys` / `pending_grace`——需 P5 全量验收（两端挂载互不干扰 + 100 次重连对账）后专项拆，见 `640eeb57` commit 正文对抗式审查定界
 - 验收：两端同时挂载同一 Session，互不干扰；断线重连 100 次 UI 状态 == 后端快照

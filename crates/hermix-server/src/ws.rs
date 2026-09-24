@@ -55,6 +55,19 @@ fn session_broadcast_get_or_create(
 /// exit cleanly. A no-op if no sender was ever created for this
 /// session (e.g. short messages that completed before any event was
 /// published).
+///
+/// P5 多端 attachment（设计 §3.5）：此 drop 是**安全**的——调用点在
+/// agent task 的完成块（见 `handle_ws_stream_send` 的 `agent_handle`
+/// 分支），此时该 session 的 agent task 已结束、不会再产事件，所有
+/// 订阅者（无论 attachment_id 是否相同）都该退出。多端并存的扇出
+/// 靠 `broadcast::channel` 单 sender 多 receiver 天然支持（每个 WS
+/// 连接从 `session_broadcast_get_or_create` 拿 sender clone 后 spawn
+/// 的 per-connection forward task 各自持有 receiver），**不依赖**
+/// `spawn_broadcast_forwarder`（该函数从未实现，注释提及是历史遗留
+/// 措辞，多端扇出的实际机制是 broadcast channel 多 receiver）。
+/// 因此本函数无需 attachment-aware 改造：agent task 完成即所有
+/// attachment 的 forwarder 都该退出，drop sender 让所有 receiver 见
+/// `Closed` 是正确语义。
 fn session_broadcast_drop(session_id: &str) {
     if let Ok(mut g) = session_broadcasts().lock() {
         g.remove(session_id);
