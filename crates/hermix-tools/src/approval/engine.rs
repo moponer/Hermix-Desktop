@@ -2,6 +2,7 @@
 use std::path::Path;
 use std::sync::LazyLock;
 use regex::Regex;
+use hermix_core::Origin;
 use super::model::ApprovalDecision;
 use super::allowlist::UserAllowlist;
 use super::persist::persist_session_approvals;
@@ -457,6 +458,48 @@ impl ApprovalManager {
         ApprovalDecision::RequiresConfirmation
     }
 
+    /// 来源感知版审批检查（§5.5 第 5 层）。
+    ///
+    /// 与 [`Self::check_approval`]（等价于 `Origin::Local`）的差异：
+    /// 远程来源（PairedDevice / Unpaired）下 session 级批准与用户
+    /// allowlist **一律跳过**——远程操作不能被"总是允许"降级，
+    /// 必须桌面端人工确认（对策 T5 远程越权 / T8 提权）。
+    ///
+    /// 收紧顺序：
+    /// 1. `DENIED_PATTERNS` → `Denied`（灾难命令在任何来源都灾难）；
+    /// 2. `Unpaired` → 一律 `Denied`（纵深防御：HTTP 层漏拦也到不了执行）；
+    /// 3. `READONLY_PATTERNS` → `Approved`（远程看日志没问题）；
+    /// 4. 其余 → `RequiresConfirmation`（无论是否命中 confirm 规则、
+    ///    是否已有 session 批准）。
+    pub fn check_approval_for_origin(&self, command: &str, origin: &Origin) -> ApprovalDecision {
+        if matches!(origin, Origin::Local) {
+            return self.check_approval(command);
+        }
+
+        for re in DENIED_PATTERNS.iter() {
+            if re.is_match(command) {
+                return ApprovalDecision::Denied;
+            }
+        }
+        for re in &self.denied_patterns {
+            if re.is_match(command) {
+                return ApprovalDecision::Denied;
+            }
+        }
+
+        if matches!(origin, Origin::Unpaired) {
+            return ApprovalDecision::Denied;
+        }
+
+        for re in READONLY_PATTERNS.iter() {
+            if re.is_match(command) {
+                return ApprovalDecision::Approved;
+            }
+        }
+
+        ApprovalDecision::RequiresConfirmation
+    }
+
     /// Async version of check_approval (same logic, for trait compatibility).
     pub async fn check_approval_async(&self, command: &str) -> ApprovalDecision {
         self.check_approval(command)
@@ -661,5 +704,101 @@ mod fetch_run_script_tests {
             AD::RequiresConfirmation
         );
         assert_eq!(check_approval("rm -rf /"), AD::Denied);
+    }
+}
+
+#[cfg(test)]
+mod origin_aware_tests {
+    use super::*;
+    use hermix_core::Origin;
+
+    fn manager_with_session_and_allowlist() -> ApprovalManager {
+        let mut m = ApprovalManager::new();
+        m.approve_for_session("del /q test.txt"); // session 级批准 del 家族
+        m
+    }
+
+    /// Local 来源与 check_approval 完全等价：session 批准正常降级。
+    #[test]
+    fn local_origin_keeps_session_downgrade() {
+        let m = manager_with_session_and_allowlist();
+        assert_eq!(
+            m.check_approval_for_origin("del /q test.txt", &Origin::Local),
+            ApprovalDecision::Approved,
+            "session 批准在 Local 下照常生效"
+        );
+    }
+
+    /// 核心安全断言：同一命令，PairedDevice 来源下 session 批准被跳过，
+    /// 强制桌面端确认（对策 T5 远程越权）。
+    #[test]
+    fn paired_device_cannot_inherit_session_approval() {
+        let m = manager_with_session_and_allowlist();
+        assert_eq!(
+            m.check_approval_for_origin(
+                "del /q test.txt",
+                &Origin::PairedDevice { device_id: "d1".into() }
+            ),
+            ApprovalDecision::RequiresConfirmation
+        );
+    }
+
+    /// PairedDevice 下无 confirm 规则的普通命令也强制确认：
+    /// shell 整体按 DangerousTool 处理，不存在"远程隐式 allowlist"。
+    #[test]
+    fn paired_device_never_gets_implicit_allowlist() {
+        let m = ApprovalManager::new();
+        assert_eq!(
+            m.check_approval("echo hello"), // Local 下隐式放行
+            ApprovalDecision::Approved
+        );
+        assert_eq!(
+            m.check_approval_for_origin("echo hello", &Origin::PairedDevice { device_id: "d1".into() }),
+            ApprovalDecision::RequiresConfirmation
+        );
+    }
+
+    /// PairedDevice 下只读命令放行：远程看日志 / 查状态没问题。
+    #[test]
+    fn paired_device_readonly_still_approved() {
+        let m = ApprovalManager::new();
+        assert_eq!(
+            m.check_approval_for_origin(
+                "Get-ChildItem C:\\logs",
+                &Origin::PairedDevice { device_id: "d1".into() }
+            ),
+            ApprovalDecision::Approved
+        );
+    }
+
+    /// 灾难命令在任何来源都 Denied——远程的"强制确认"绝不降级 Denied。
+    #[test]
+    fn catastrophic_commands_denied_regardless_of_origin() {
+        let m = ApprovalManager::new();
+        for origin in [
+            Origin::Local,
+            Origin::PairedDevice { device_id: "d1".into() },
+            Origin::Unpaired,
+        ] {
+            assert_eq!(
+                m.check_approval_for_origin("rm -rf /", &origin),
+                ApprovalDecision::Denied,
+                "origin: {origin:?}"
+            );
+        }
+    }
+
+    /// Unpaired 纵深防御：除灾难命令外一律 Denied，只读也不放行。
+    #[test]
+    fn unpaired_is_denied_by_default() {
+        let m = ApprovalManager::new();
+        assert_eq!(
+            m.check_approval_for_origin("Get-Content log.txt", &Origin::Unpaired),
+            ApprovalDecision::Denied
+        );
+        assert_eq!(
+            m.check_approval_for_origin("echo hello", &Origin::Unpaired),
+            ApprovalDecision::Denied
+        );
     }
 }

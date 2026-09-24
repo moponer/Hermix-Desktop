@@ -24,6 +24,8 @@ pub mod runtime;
 pub mod permission_profile;
 // 内核接缝（C3）：内核只认这些 trait，业务只实现它们
 pub mod seams;
+// 来源感知权限（§5.5 第 5 层）：权限矩阵唯一权威
+pub mod origin;
 
 #[cfg(test)]
 pub mod test_generators;
@@ -77,6 +79,7 @@ pub use seams::{
     AttachmentKind, DirEntry, Envelope, ExecOutput, ExecWorld, Fs, FsError, Op, Sandbox, Shell,
     ShellError, ShellErrorKind, ToolAttachment, ToolOutput, Transport, TransportError, Verdict,
 };
+pub use origin::{Capability, Decision as OriginDecision, Origin};
 pub use seams::local::{
     FixedExecWorld, InMemoryFs, LocalExecWorld, LocalFs, LocalSandbox, LocalShell, NoopTransport,
     NullShell,
