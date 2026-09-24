@@ -971,6 +971,69 @@ pub(crate) struct ArchiveRefsResponse {
     refs: Vec<ArchiveRef>,
 }
 
+/// P4/P5 L3 订阅快照端点（设计 §3.5）：客户端重连 / 冷启动时凭
+/// `since_seq` 取回会话状态。本批（seq 域 = 进程级计数器）的语义
+/// 定界：
+/// - `since_seq` 缺省或 `0` → 全量快照（复用 `get_session_messages`
+///   的 `SessionMessagesResponse` 构造 + 附当前进程 seq 锚
+///   `serverSeq`）。
+/// - `since_seq > 0` → 快照 + `sinceSeq` 回显 + `fullSnapshot: true`
+///   标志（跨重启无法做持久增量对账——seq 域是进程级的，重启归零；
+///   增量补发要等 P5 attachment 模型把 seq 落到持久层后才安全。
+///   本批统一回全量快照，靠 `fullSnapshot` 标志让客户端区分
+///   "这是快照" 与 "这是增量"，避免客户端误把快照当增量拼接）。
+/// 响应 payload 复用现有 `SessionMessagesResponse`（不新造第二份
+/// 会话结构，零 schema 膨胀）+ 平铺两个 seq 字段。
+#[derive(serde::Deserialize)]
+pub(crate) struct SubscribeQuery {
+    #[serde(default)]
+    pub since_seq: Option<u64>,
+}
+
+/// 订阅快照响应：现有 `SessionMessagesResponse` + seq 对账锚。
+/// `fullSnapshot=true` 时客户端应丢弃本地会话状态、整体替换；
+/// 后续 P5 引入持久 seq 域后本字段才会翻 `false`（增量模式）。
+pub(crate) async fn subscribe_session_snapshot(
+    Path(session_id): Path<String>,
+    Query(q): Query<SubscribeQuery>,
+    State(state): State<HttpServerState>,
+) -> Result<Json<serde_json::Value>, HttpError> {
+    // 复用现有 loader：与 get_session_messages 同一份快照构造
+    // （含压缩归档子会话 + 审批卡片 + 上下文占用），零重复。
+    // axum 的 State 提取器可手动构造（只是 newtype wrapper）。
+    let snapshot = get_session_messages(
+        Path(session_id.clone()),
+        State(state.clone()),
+    )
+    .await?;
+    let snapshot_value = serde_json::to_value(&snapshot.0)
+        .map_err(|e| AgentError::Io(format!("serialize snapshot: {e}")))?;
+
+    let since_seq = q.since_seq.unwrap_or(0);
+    // 当前进程 seq 锚：客户端下次重连用它作 since_seq（幂等——
+    // 本批对任意 since_seq 都回全量快照，serverSeq 仅供客户端记录
+    // "我现在看到的状态对应到进程 seq 的哪个水位"）。
+    let server_seq = state.seq.load(std::sync::atomic::Ordering::SeqCst);
+
+    let mut resp = snapshot_value;
+    if let Some(obj) = resp.as_object_mut() {
+        obj.insert(
+            "serverSeq".into(),
+            serde_json::json!(server_seq),
+        );
+        obj.insert(
+            "sinceSeq".into(),
+            serde_json::json!(since_seq),
+        );
+        // 本批统一全量快照——增量模式待 P5 持久 seq 域落地。
+        obj.insert(
+            "fullSnapshot".into(),
+            serde_json::json!(true),
+        );
+    }
+    Ok(Json(resp))
+}
+
 pub(crate) async fn get_session_messages(
     Path(session_id): Path<String>,
     State(state): State<HttpServerState>,

@@ -313,6 +313,12 @@ pub fn router(state: HttpServerState) -> Router {
         )
         .route("/v1/sessions/search", get(routes::search_sessions))
         .route("/v1/sessions/{session_id}/lineage", get(routes::get_session_lineage))
+        // P4 L3 订阅快照端点（设计 §3.5）：客户端重连 / 冷启动凭
+        // since_seq 取回会话状态（本批统一回全量快照 + 进程 seq 锚）。
+        .route(
+            "/v1/sessions/{session_id}/subscribe",
+            get(routes::subscribe_session_snapshot),
+        )
         // Approval response REST fallback — when WebSocket delivery
         // fails (Tauri WebView2 can lose buffered messages on connection
         // reset), the frontend sends the approval via HTTP as a backup.

@@ -61,6 +61,13 @@ fn session_broadcast_drop(session_id: &str) {
     }
 }
 
+/// 取下一个进程级 seq（P4 L3，设计 §3.5）。在广播镜像发送点（
+/// `session_broadcast_get_or_create` 旁）与快照端点共用同一计数器
+/// ——保证重连订阅端点补发增量时与实时广播不重号。
+fn next_envelope_seq(state: &crate::state::HttpServerState) -> u64 {
+    state.seq.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+}
+
 pub(crate) async fn ws_upgrade(
     ws: WebSocketUpgrade,
     Path(session_id): Path<String>,
@@ -1900,7 +1907,7 @@ pub(crate) async fn handle_ws_stream_send(
             biased;
             ev = rx.recv() => {
                 match ev {
-                    Some(event_json) => {
+                    Some(mut event_json) => {
                         // Phase2：单次发送失败先重试，避免一次抖动就断开
                         // 转发循环。真死连接 send 会快速连续失败，重试不会
                         // 挂起；瞬时抖动重试后多半恢复，事件继续推给前端。
@@ -1956,6 +1963,16 @@ pub(crate) async fn handle_ws_stream_send(
                         // and the dropped events are re-pulled from the DB
                         // transcript. No subscriber = no-op (the broadcast
                         // channel drops the event without buffering).
+                        // P4 L3：镜像发送点统一取号（设计 §3.5）——
+                        // 每条被镜像的事件帧都分配一个进程级单调 seq，
+                        // 重连订阅端点（P5）凭 since_seq 对账补发。
+                        // 取号在发送前做（seq 是帧的字段，必须在 send 前
+                        // 嵌入 envelope；失败时 seq 也被消耗，允许间隙
+                        // ——客户端只做大小比较，不要求连续）。
+                        if event_json.seq.is_none() {
+                            let seq = next_envelope_seq(&state);
+                            event_json.seq = Some(seq);
+                        }
                         let _ = session_broadcast_get_or_create(session_id)
                             .send(event_json);
 
