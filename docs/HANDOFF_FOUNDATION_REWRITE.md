@@ -1,7 +1,8 @@
 # 交接文档：Hermix 底座重写 + 网络安全层（给后续开发 agent）
 
 > 更新时间：2026-09-24。本文是唯一权威交接入口。动手前**必须完整读完本文 + 必读文档清单**，禁止跳读后自行发挥。
-> 当前累计 15 个 commit，工作区除 untracked 外干净。最近 commit：`b23670d0`。
+> 当前累计 22 个 commit（15 + 本批 7），工作区除 §7 未跟踪遗留物外干净。最近 commit：`9d897704`。
+> 本批新增 commit：`87bb2b9a` / `b51a32a1` / `3cc45b72` / `f062c5ad` / `e1a75115` / `20b6eda8` / `ab7aad02` / `c208f10f` / `9d897704`。
 
 ---
 
@@ -34,7 +35,7 @@
 
 ---
 
-## 2. 已完成（15 个 commit，全部已验证）
+## 2. 已完成（22 个 commit，全部已验证）
 
 ### 阶段一：底座四件套 + P1 接缝化（8 个 commit）
 
@@ -62,23 +63,37 @@
 | `ff2cf281` | 第 2 层：TLS 1.3 监听器（rustls + ring provider）+ rcgen 自签证书生命周期（`<hermix_home>/tls/` 落盘复用，指纹 = SHA-256(cert DER)，`HERMIX_TLS_ADDR` 显式开启） |
 | `b23670d0` | 第 3/4 层：设备配对（PairingSessions 一次性 TTL 120s + DeviceRegistry `<hermix_home>/devices.db` token 只存 SHA-256）+ Unpaired HTTP 关口 + 4 个配对端点 |
 
+### 阶段三：设备 UI + P0 收敛 + P3 任务运行时 + P4 协议层（7 个 commit，本批）
+
+| commit | 内容 |
+|---|---|
+| `87bb2b9a` | §3.1 设备管理 tab：Settings 下二维码（qrcode 纯 JS 库，SVG 输出）+ 设备列表 + 撤销，接入 §2 四个配对端点 |
+| `b51a32a1` | P0 砍除：`dashboard/researcher.rs` / `consciousness.rs` 死端点 + stubs themes 段；确认 `hermix-gateway` / `hermix-acp` 两 crate 已删 |
+| `3cc45b72` | P0 收敛：Transport 契约合一（trait 迁 `hermix-transport`，server re-export 零改调用点）+ 摘除 hermix-cron 死接线（crate 保留给 CLI） |
+| `f062c5ad` | 安全第 4 层加固：请求签名（HMAC-SHA256 + 时间窗 5min + nonce LRU 10000），PairedDevice 请求强制签名，Unpaired/Local 不受影响 |
+| `e1a75115` | P3 Effect Sandwich 原语：`hermix-task/src/effect.rs`（ToolIntent/ToolOutcome 持久 + `scan_unfinished` 崩溃恢复判定：幂等→Replay，非幂等→NeedsReview 不自动重放） |
+| `20b6eda8` | P3 接入：`hermix-tools` registry 加 EffectSink 钩子 + 5 处调度点裹 intent/outcome 三明治 + server 装配 EffectLogSink（effects.db）+ 启动恢复扫描 |
+| `ab7aad02` | P3 收尾：EffectLogSink 幂等声明复用 `registry.risk_level()`（Safe⇒幂等，Weak 回查防引用环） |
+| `c208f10f` | P4 L3 信封 + seq 锚原语：新建 `hermix-protocol` crate（Envelope/EventKind/Route/SeqAnchor）+ `HttpServerState` 加 `Arc<AtomicU64>` seq 源（5 处构造点装配） |
+| `9d897704` | P4 剩余 + P4-P7 切片：`WsEnvelope.seq` 可选字段（34 处构造点 `None`，老前端忽略；填值待 P5 订阅端点）+ P6 来源分级接线核实（terminal 读 ctx.origin→check_approval_for_origin）+ P7 前端 tsc 绿（0 组件改动，seq 对账代码待 P5 后）+ 本文档 |
+
 ### 安全五层当前状态
 
 | 层 | 状态 |
 |---|---|
 | 1 暴露面（默认 loopback） | ✅ |
 | 2 TLS 1.3 + 指纹 | ✅（真机握手验证过） |
-| 3 配对会话 | ✅ 后端（真机全流程验证过） |
-| 4 凭证 + 注册表 | ✅ token 版（请求签名 T4 未做，device_pubkey/scopes 列已留） |
-| 5 来源感知权限 | ✅ 两条路径全通（HTTP + agent loop） |
+| 3 配对会话 | ✅ 后端（真机全流程验证过）+ ✅ 前端设备管理 tab |
+| 4 凭证 + 注册表 | ✅ token 版 + ✅ 请求签名 T4（HMAC + 时间窗 + nonce LRU）；scopes 细粒度未做（`device_pubkey`/`scopes` 列仍占位） |
+| 5 来源感知权限 | ✅ 两条路径全通（HTTP + agent loop terminal 路径） |
 
 ### 测试基线（改动后必须维持或超过）
 
 ```
 hermix-tools lib: 691 passed（terminal 31）
 hermix-agent lib: 1049 passed
-hermix-server lib: 166 passed（pairing 8 / security 8 / tls 4）
-hermix-core lib: 168+ passed
+hermix-server lib: 173 passed（pairing 8 / security 8 / tls 4）
+hermix-protocol: 3 passed
 全仓 cargo check --workspace --all-targets 绿
 ```
 
@@ -92,28 +107,29 @@ CARGO_INCREMENTAL=0 cargo test -p <crate> --lib   # 改了哪个 crate 测哪个
 
 ## 3. 未完成任务（按优先级）
 
-### 3.1 下一批（进行中被中断）：桌面端设备管理 UI + 二维码展示
+### 3.1 下一批（P5 服务端重写：attachment 多端模型）
 
-- 上一个 agent 在探索 `apps/desktop-tauri/src/components/SystemConfigPanel.tsx` 的 tab 注册结构时被中断，**未写任何代码**。
-- 需求：Settings 里加「设备管理」tab——展示二维码（含 pairing.rs 返回的 QR 负载）、已配对设备列表、撤销按钮。调用 §2 已落地的 4 个端点（`POST /api/pairing/sessions`、`GET/DELETE /api/pairing/devices`）。
-- 前端栈：React 19 + Tailwind 4 + Vite；UI 走 token（禁 slate/blue/indigo/violet/purple 色系）；组件放 `src/components/settings/`，参考 DiagnosticsTab 模式。
-- **注意**：前端目前没有 qrcode 依赖，需要选型（YAGNI 优先：能一行 SVG 生成就不引大库）。
+设计 §3.2/§7 P5：Session 与传输解耦——多端 attachment（桌面/手机/WebUI 同时挂同一 Session 互不踢线）。前置：
+- P4 已落的 `WsEnvelope.seq` 可选字段 + `HttpServerState.seq` 计数器，本批填实际 seq 值（`fetch_add(1)` 热路径）
+- `hermix-protocol` crate 的 Envelope/Route/SeqAnchor 原语，落地订阅/快照端点（`POST /api/v1/sessions/{id}/subscribe?since_seq=N` → 快照 + 增量）
+- 下线旧补发三补丁（`SESSION_BROADCASTS` / `completed_keys` / `pending_grace`）——P5 验收后才安全拆
+- 验收：两端同时挂载同一 Session，互不干扰；断线重连 100 次 UI 状态 == 后端快照
 
-### 3.2 P0 砍除与收敛（设计 §7，净减 ≥3 万行）
+### 3.2 P7 前端 seq 对账（≤300 行，0 组件改动）
 
-砍 `gateway`（27451 行）/ `acp`（2276）/ stubs 大部分 / consciousness / researcher；调度三套合一；传输两套合一。验收：`cargo check --workspace` 绿 + 测试全绿 + 净减 ≥3 万行。**全是死代码，可立刻做**。
+设计 §6.3：`useStreamChat.ts` 接纳 seq 对账 + 重连改 subscribe（+120 行）/ `useStreamParser.ts` 读可选 seq（+20 行）/ `rest.ts` +80 行。依赖 3.1 订阅端点就绪后实施。
 
-### 3.3 请求签名（T4，安全加固批）
+### 3.3 安全第 4 层 scopes 细粒度
 
-device token 泄漏 ≠ 无限使用。`paired_devices` 表已留 `device_pubkey`/`scopes` 列（当前存占位 `'[]'`），签名批次启用。防重放 + scopes 细粒度。
+`paired_devices` 表 `device_pubkey`/`scopes` 列仍存占位 `'[]'`。请求签名（T4）已启用 HMAC + nonce；scopes 细粒度授权（每设备独立能力位）未做。
 
 ### 3.4 手机客户端
 
 **D6 已拍板不在本期**，另立项目。本期交付的协议契约：QR 负载结构、4 个配对端点、TLS 指纹 TOFU，见 `pairing.rs` 与本文档。
 
-### 3.5 设计文档 §7 其余阶段（P2 会话内核后续 / P3 任务运行时 / P4 协议层 / P5 服务端重写 / P7 前端 seq 对账 / P8 soak）
+### 3.5 设计文档 §7 其余阶段（P2 会话内核后续 / P6 防滥用 + 审计 / P8 soak）
 
-按设计文档执行，每期独立可交付可回退。**冻结在 P0-P8，新增项必须替换其中一项（F11）**。
+按设计文档执行，每期独立可交付可回退。**冻结在 P0-P8，新增项必须替换其中一项（F11）**。P2/P3 已落地（变更线 + commit 协议 + Effect Sandwich + 崩溃恢复）；P0 已落地（gateway/acp 砍除 + 传输契约合一 + cron 死接线摘除）；P4 原语已落地（hermix-protocol + seq 源 + WsEnvelope.seq 可选字段），P4 订阅端点与旧补发下线并入 3.1（P5）。
 
 ---
 
