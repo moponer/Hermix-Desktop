@@ -116,8 +116,20 @@ pub async fn get_config(State(state): State<HttpServerState>) -> Json<serde_json
 /// PUT /api/config — update config from JSON.
 pub async fn update_config(
     State(state): State<HttpServerState>,
+    axum::extract::Extension(origin): axum::extract::Extension<hermix_core::Origin>,
+    axum::extract::Extension(device_scopes): axum::extract::Extension<
+        Option<std::collections::HashSet<hermix_core::origin::Capability>>,
+    >,
     Json(body): Json<ConfigUpdate>,
 ) -> Result<Json<OkResponse>, HttpError> {
+    // §5.5 第 5 层：端点级能力位关口（ConfigMutation）。PairedDevice 来源
+    // 未配该能力位 → 403（矩阵已 Denied，端点层再拦是纵深）；Local 来源放行。
+    crate::routes::check_capability_from_extensions(
+        hermix_core::origin::Capability::ConfigMutation,
+        &origin,
+        &device_scopes,
+    )
+    .map_err(|(status, message)| HttpError { status, message })?;
     let config_path = state.hermix_home.join("config.yaml");
     let yaml = serde_yaml::to_string(&body.config).map_err(|e| HttpError {
         status: axum::http::StatusCode::BAD_REQUEST,

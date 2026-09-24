@@ -432,6 +432,32 @@ fn effective_decision_for_paired(
     }
 }
 
+/// 端点级能力位判定（§5.5 第 5 层 HTTP 端点消费点）。直接吃
+/// `request_guard` 装进 Extension 的 `HashSet<Capability>`（设备能力
+/// 位集），而非 `PairedDevice` 字符串——省掉一次 `parse_device_scopes`。
+/// 语义同 [`effective_decision_for_paired`]：矩阵 `Denied` 保持
+/// `Denied`（纵深防御）；矩阵 `Allowed`/`NeedsLocalConfirmation` 的，
+/// 设备能力位未配该 Capability 即降为 `Denied`；非 PairedDevice
+/// 来源（`device_scopes = None`）直接透传矩阵判定。
+pub fn effective_decision_with_scopes(
+    origin: &Origin,
+    cap: Capability,
+    device_scopes: Option<&std::collections::HashSet<Capability>>,
+) -> Decision {
+    let matrix = origin.may(cap);
+    let Some(set) = device_scopes else {
+        return matrix;
+    };
+    if matrix == Decision::Denied {
+        return Decision::Denied;
+    }
+    if set.contains(&cap) {
+        matrix
+    } else {
+        Decision::Denied
+    }
+}
+
 /// Unpaired 纵深防御关口（对策 T1）：仅放行配对完成端点
 /// （信任建立本身）。/health 与 /metrics 在更早分支已返回。
 fn unpaired_gate_allows(path: &str) -> bool {

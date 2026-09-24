@@ -382,7 +382,7 @@ pub fn router(state: HttpServerState) -> Router {
         .route("/v1/automations/{id}/pause", post(pause_automation))
         .route("/v1/automations/{id}/resume", post(resume_automation))
         .route("/v1/automations/{id}/runs", get(list_automation_runs))
-.route("/v1/automations/{id}/trigger", post(trigger_automation_endpoint))
+        .route("/v1/automations/{id}/trigger", post(trigger_automation_endpoint))
         .nest_service("/dashboard-plugins", ServeDir::new(plugin_dir))
         .with_state(state);
 
@@ -1756,8 +1756,21 @@ async fn list_automation_runs(
 /// callback (铁律 DD: HTTP 与自动化同路径).
 async fn trigger_automation_endpoint(
     State(state): State<HttpServerState>,
+    axum::extract::Extension(origin): axum::extract::Extension<hermix_core::Origin>,
+    axum::extract::Extension(device_scopes): axum::extract::Extension<
+        Option<std::collections::HashSet<hermix_core::origin::Capability>>,
+    >,
     Path(id): Path<String>,
 ) -> axum::response::Response {
+    // §5.5 第 5 层：端点级能力位关口（DangerousTool）。T5 典型越权面：手机端
+    // 遥控桌面跑自动化。PairedDevice 来源未配该能力位 → 403；Local 来源放行。
+    if let Err(resp) = routes::check_capability_from_extensions(
+        hermix_core::origin::Capability::DangerousTool,
+        &origin,
+        &device_scopes,
+    ) {
+        return resp.into_response();
+    }
     let svc = match &state.automation_service {
         Some(s) => s.clone(),
         None => return StatusCode::SERVICE_UNAVAILABLE.into_response(),

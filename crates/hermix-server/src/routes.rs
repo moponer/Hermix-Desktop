@@ -72,6 +72,65 @@ pub(crate) async fn list_available_tools(
     Json(ToolListResponse { tools })
 }
 
+// ---------------------------------------------------------------------------
+// §5.5 第 5 层：HTTP 端点级能力位关口（Capability 消费点）
+// ---------------------------------------------------------------------------
+// 把 `request_guard` 装进 Extension 的 `origin` + `device_scopes`（设备能力
+// 位集）落到端点入口：PairedDevice 来源访问高危端点时，按"矩阵 ∩ 能力位"
+// 判定，`Denied` → 403；`Allowed`/`NeedsLocalConfirmation` → 放行（高危端点
+// 保留桌面确认语义，不在端点层拦——T5"高危工具强制桌面确认"由工具关口
+// 消费点走桌面确认流程）。Local 来源（矩阵全允许）直接放行；Unpaired 来源
+// 已由 `request_guard` 最前 403 拦（到不了这里）。
+//
+// 实现面：axum 0.8 的 `MethodRouter::route_layer` / `Router::route_layer`
+// 都不接 `FromFn`（中间件层类型面不匹配），故走 handler 内联判定——每个
+// 高危 handler 入口调 [`check_capability`] 早退，零路由结构改动。
+
+/// 端点级能力位判定（handler 内联用）。读请求上 `request_guard` 装的两个
+/// Extension，按"矩阵 ∩ 能力位"判定——`Denied` 返回 `Err((403, msg))`，
+/// 其余返回 `Ok(())` 放行。
+///
+/// - Local 来源：矩阵全 Allowed，不查能力位维度，直接 `Ok(())`。
+/// - Unpaired 来源：矩阵全 Denied（纵深防御），`Err(403)`。
+/// - PairedDevice 来源：`effective_decision_with_scopes` 判定；设备能力位
+///   未配该 Capability → `Err(403)`；配了 → 按矩阵判定（`Allowed`/
+///   `NeedsLocalConfirmation` 放行，`Denied` 拦截）。
+pub(crate) fn check_capability(
+    cap: hermix_core::origin::Capability,
+    origin: &hermix_core::Origin,
+    device_scopes: Option<&std::collections::HashSet<hermix_core::origin::Capability>>,
+) -> Result<(), (StatusCode, String)> {
+    use hermix_core::origin::Decision;
+    // Local 来源：矩阵全 Allowed，不查能力位维度，直接放行。
+    if matches!(origin, hermix_core::Origin::Local) {
+        return Ok(());
+    }
+    let decision = crate::security::effective_decision_with_scopes(origin, cap, device_scopes);
+    if decision == Decision::Denied {
+        hermix_telemetry::record_http_reject();
+        return Err((
+            StatusCode::FORBIDDEN,
+            "capability not granted for this device".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// 读 handler 请求上的两个 Extension（`request_guard` 装的）→ 能力位判定。
+/// axum `Extension<T>` 提取器解包后是 `T` 值（非 wrapper struct），故实参
+/// 直接传 `&Origin` + `&Option<HashSet<Capability>>`（handler 参数
+/// `Extension(origin)` 解包后的 `origin` 即 `Origin`）。
+///
+/// 用法：handler 入口加两个提取器参数 `Extension(origin)` +
+/// `Extension(device_scopes)`，再调本 helper 早退。
+pub(crate) fn check_capability_from_extensions(
+    cap: hermix_core::origin::Capability,
+    origin: &hermix_core::Origin,
+    device_scopes: &Option<std::collections::HashSet<hermix_core::origin::Capability>>,
+) -> Result<(), (StatusCode, String)> {
+    check_capability(cap, origin, device_scopes.as_ref())
+}
+
 #[derive(Serialize)]
 pub(crate) struct ExpertResponse {
     expert: hermix_skills::ExpertEntry,
@@ -1815,8 +1874,24 @@ pub(crate) fn query_search_with_conn(
 
 pub(crate) async fn exec_command(
     State(state): State<HttpServerState>,
+    axum::extract::Extension(origin): axum::extract::Extension<hermix_core::Origin>,
+    axum::extract::Extension(device_scopes): axum::extract::Extension<
+        Option<std::collections::HashSet<hermix_core::origin::Capability>>,
+    >,
     Json(req): Json<CommandRequest>,
 ) -> Result<Json<CommandResponse>, HttpError> {
+    // §5.5 第 5 层：端点级能力位关口（DangerousTool）。PairedDevice 来源
+    // 未配该能力位 → 403（矩阵 NeedsLocalConfirmation + 能力位交集，端点层
+    // 拦"未配能力位"，已配则保留桌面确认语义）。
+    check_capability_from_extensions(
+        hermix_core::origin::Capability::DangerousTool,
+        &origin,
+        &device_scopes,
+    )
+    .map_err(|(s, m)| HttpError {
+        status: s,
+        message: m,
+    })?;
     hermix_telemetry::record_http_request();
     let trimmed = req.command.trim();
     if trimmed.is_empty() {
@@ -1913,5 +1988,85 @@ mod tests {
             p
         }
     }
-}
 
+    // ----- §5.5 第 5 层：端点级能力位关口（check_capability）-----
+
+    use hermix_core::origin::{Capability, Origin};
+    use std::collections::HashSet;
+
+    /// Local 来源：矩阵全 Allowed，不查能力位维度，直接放行（即使未配任何能力位）。
+    #[test]
+    fn check_capability_local_origin_always_passes() {
+        let origin = Origin::Local;
+        // 即使 device_scopes = None（Local 来源没有设备维度）也放行。
+        check_capability(Capability::DangerousTool, &origin, None)
+            .expect("Local 来源应放行");
+        check_capability(Capability::ConfigMutation, &origin, None)
+            .expect("Local 来源应放行（矩阵全 Allowed）");
+    }
+
+    /// PairedDevice 来源未配能力位（None = 该设备无能力位集）→ 高危端点 403。
+    #[test]
+    fn check_capability_paired_no_scopes_denied() {
+        let origin = Origin::PairedDevice {
+            device_id: "dev1".into(),
+        };
+        // DeviceManagement 矩阵 → Denied（设备间互撤销被禁），未配能力位必 403。
+        check_capability(Capability::DeviceManagement, &origin, None)
+            .expect_err("PairedDevice 未配 DeviceManagement 应 403");
+        // ConfigMutation 矩阵 → Denied，未配能力位必 403。
+        check_capability(Capability::ConfigMutation, &origin, None)
+            .expect_err("PairedDevice 未配 ConfigMutation 应 403");
+    }
+
+    /// PairedDevice 来源配了能力位 → 高危端点放行（矩阵 NeedsLocalConfirmation
+    /// 保留，端点层不拦；矩阵 Denied 的能力位配了也拦——纵深防御）。
+    #[test]
+    fn check_capability_paired_with_scopes() {
+        let origin = Origin::PairedDevice {
+            device_id: "dev1".into(),
+        };
+        // 配了 DangerousTool → 矩阵 NeedsLocalConfirmation，端点层放行。
+        let mut scopes: HashSet<Capability> = HashSet::new();
+        scopes.insert(Capability::DangerousTool);
+        check_capability(Capability::DangerousTool, &origin, Some(&scopes))
+            .expect("配了 DangerousTool 应放行（桌面确认语义保留）");
+        // 未配 ConfigMutation（即使 DangerousTool 配了）→ 403。
+        check_capability(Capability::ConfigMutation, &origin, Some(&scopes))
+            .expect_err("未配 ConfigMutation 应 403");
+        // 配了 ConfigMutation → 矩阵 Denied 兜底，仍 403（纵深防御）。
+        let mut scopes2: HashSet<Capability> = HashSet::new();
+        scopes2.insert(Capability::ConfigMutation);
+        check_capability(Capability::ConfigMutation, &origin, Some(&scopes2))
+            .expect_err("矩阵 Denied 的能力位即使配了也 403（纵深防御）");
+    }
+
+    /// Unpaired 来源：矩阵全 Denied，任何能力位都 403（纵深防御，即使
+    /// request_guard 漏拦到不了这里也到不了执行）。
+    #[test]
+    fn check_capability_unpaired_denied() {
+        let origin = Origin::Unpaired;
+        let mut scopes: HashSet<Capability> = HashSet::new();
+        scopes.insert(Capability::DangerousTool);
+        // 即使配了能力位，Unpaired 矩阵全 Denied → 403。
+        check_capability(Capability::DangerousTool, &origin, Some(&scopes))
+            .expect_err("Unpaired 来源应 403（矩阵全 Denied）");
+    }
+
+    /// `check_capability_from_extensions` 薄封装：实参直接传 `&Origin` +
+    /// `&Option<HashSet>`（axum `Extension<T>` 提取器解包后的值）。
+    #[test]
+    fn check_capability_from_extensions_wraps_core() {
+        let origin = Origin::Local;
+        let scopes: Option<HashSet<Capability>> = None;
+        // Local + None 能力位 → 放行（与 core 判定一致）。
+        check_capability_from_extensions(Capability::Chat, &origin, &scopes)
+            .expect("Local 来源应放行");
+        let paired = Origin::PairedDevice {
+            device_id: "dev2".into(),
+        };
+        let empty: Option<HashSet<Capability>> = Some(HashSet::new());
+        check_capability_from_extensions(Capability::DangerousTool, &paired, &empty)
+            .expect_err("PairedDevice 空能力位集应 403");
+    }
+}

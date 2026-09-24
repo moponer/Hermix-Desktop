@@ -569,12 +569,24 @@ pub async fn list_devices(
 /// `DELETE /api/pairing/devices/:device_id` — 仅 Local。撤销后立即失效。
 pub async fn revoke_device(
     axum::extract::Extension(origin): axum::extract::Extension<hermix_core::Origin>,
+    axum::extract::Extension(device_scopes): axum::extract::Extension<
+        Option<std::collections::HashSet<hermix_core::origin::Capability>>,
+    >,
     State(state): State<HttpServerState>,
     axum::extract::Path(device_id): axum::extract::Path<String>,
     axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
     headers: axum::http::HeaderMap,
 ) -> impl IntoResponse {
     let src_ip = request_source_ip(Some(&peer), &headers);
+    // §5.5 第 5 层：端点级能力位关口（DeviceManagement）。PairedDevice 来源
+    // 未配该能力位 → 403（矩阵已 Denied，端点层再拦是纵深）；Local 来源放行。
+    if let Err(resp) = crate::routes::check_capability_from_extensions(
+        hermix_core::origin::Capability::DeviceManagement,
+        &origin,
+        &device_scopes,
+    ) {
+        return resp.into_response();
+    }
     if !matches!(origin, hermix_core::Origin::Local) {
         return (
             StatusCode::FORBIDDEN,
