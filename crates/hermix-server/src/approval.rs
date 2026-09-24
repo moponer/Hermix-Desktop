@@ -703,6 +703,8 @@ mod approval_registry_tests {
             automation_service: None,
             automation_engine_scheduler: None,
             custom_app_manager: None,
+            device_registry: None,
+            pairing_sessions: Arc::new(crate::pairing::PairingSessions::new()),
         }
     }
 

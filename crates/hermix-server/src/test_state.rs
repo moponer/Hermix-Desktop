@@ -109,6 +109,8 @@ pub fn empty_state() -> HttpServerState {
         automation_service: None,
         automation_engine_scheduler: None,
         custom_app_manager: None,
+        device_registry: None,
+        pairing_sessions: Arc::new(crate::pairing::PairingSessions::new()),
     }
 }
 
@@ -165,6 +167,8 @@ fn build_state_with_home(home: PathBuf) -> HttpServerState {
         automation_service: None,
         automation_engine_scheduler: None,
         custom_app_manager: None,
+        device_registry: None,
+        pairing_sessions: Arc::new(crate::pairing::PairingSessions::new()),
     }
 }
 

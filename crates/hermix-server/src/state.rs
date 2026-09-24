@@ -155,6 +155,11 @@ pub struct HttpServerState {
     /// Custom app manager — manages user-facing desktop applications.
     /// `None` when not initialized (e.g. in test fixtures or CLI mode).
     pub custom_app_manager: Option<Arc<hermix_plugin::PluginManager>>,
+    /// §5.5 第 3/4 层：已配对设备注册表（`<hermix_home>/devices.db`）。
+    /// `None` = 打不开库（测试 / 只读环境），此时远程一律 Unpaired。
+    pub device_registry: Option<Arc<crate::pairing::DeviceRegistry>>,
+    /// 一次性配对会话管理器（进程内，TTL 120s）。
+    pub pairing_sessions: Arc<crate::pairing::PairingSessions>,
 }
 
 impl HttpServerState {
@@ -544,6 +549,10 @@ impl HttpServerState {
 
         let metrics = crate::metrics::MetricsCollector::new(&hermix_home);
 
+        // §5.5 第 3/4 层：设备注册表路径（hermix_home 在字面量里被 move，
+        // 提前解析）。首个字面量未用到时会有 unused 警告——两处构造路径
+        // 共用同一绑定消除重复。
+        let devices_db_path = hermix_home.join("devices.db");
         let state = Self {
             config: Arc::new(config),
             tool_registry,
@@ -561,8 +570,7 @@ impl HttpServerState {
             automation_scheduler: None,
             user_allowlist: Arc::new(std::sync::Mutex::new(user_allowlist)),
             session_bypass: Arc::new(std::sync::Mutex::new(HashMap::new())),
-            consciousness_tracker,
-            tickloop_manager: hermix_runtime::TickLoopManager::new(
+            consciousness_tracker,            tickloop_manager: hermix_runtime::TickLoopManager::new(
                 hermix_runtime::TickLoopConfig {
                     llm_provider_url: llm_probe_url.flatten(),
                     llm_provider_name,
@@ -601,6 +609,22 @@ impl HttpServerState {
             },
             automation_engine_scheduler: None,
             custom_app_manager: Some(custom_app_manager),
+            // §5.5 第 3/4 层（build_with_hermes_home 路径）：注册表打不开 =
+            // 无配对能力（远程一律 Unpaired），降级不阻断主服务启动。
+            device_registry: {
+                match crate::pairing::DeviceRegistry::open(&devices_db_path) {
+                    Ok(r) => Some(Arc::new(r)),
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            path = %devices_db_path.display(),
+                            "devices.db 打开失败：设备配对功能不可用"
+                        );
+                        None
+                    }
+                }
+            },
+            pairing_sessions: Arc::new(crate::pairing::PairingSessions::new()),
         };
         state.register_task_tracker_tools();
 
@@ -797,6 +821,10 @@ impl HttpServerState {
 
         let metrics = crate::metrics::MetricsCollector::new(&hermix_home);
 
+        // §5.5 第 3/4 层：设备注册表路径（hermix_home 在字面量里被 move，
+        // 提前解析）。首个字面量未用到时会有 unused 警告——两处构造路径
+        // 共用同一绑定消除重复。
+        let devices_db_path = hermix_home.join("devices.db");
         let state = Self {
             config: Arc::new(config),
             tool_registry,
@@ -851,6 +879,22 @@ impl HttpServerState {
             },
             automation_engine_scheduler: None,
             custom_app_manager: Some(custom_app_manager),
+            // §5.5 第 3/4 层：设备注册表打不开 = 无配对能力（远程一律
+            // Unpaired），降级不阻断主服务启动。
+            device_registry: {
+                match crate::pairing::DeviceRegistry::open(&devices_db_path) {
+                    Ok(r) => Some(Arc::new(r)),
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            path = %devices_db_path.display(),
+                            "devices.db 打开失败：设备配对功能不可用"
+                        );
+                        None
+                    }
+                }
+            },
+            pairing_sessions: Arc::new(crate::pairing::PairingSessions::new()),
         }; // close Self { ... }
         state.register_task_tracker_tools();
         Ok(state)

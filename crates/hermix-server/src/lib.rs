@@ -40,7 +40,7 @@ use axum::http::header;
 use axum::http::{HeaderValue, Method, StatusCode};
 use axum::middleware;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, patch, post};
+use axum::routing::{delete, get, patch, post};
 use axum::{Json, Router};
 use chrono::Utc;
 use futures::FutureExt;
@@ -140,6 +140,7 @@ chrono::Utc::now().timestamp_millis()
 
 pub mod approval;
 pub mod coalescer;
+pub mod pairing;
 pub mod tls;
 pub use approval::ApprovalRegistry;
 
@@ -243,6 +244,7 @@ pub fn router(state: HttpServerState) -> Router {
     let rate = Arc::new(security::RateLimiter::new(security.rate_limit_per_minute));
     let sec_guard = security.clone();
     let rate_guard = rate.clone();
+    let device_registry = state.device_registry.clone();
     let body_limit = max_request_body_bytes();
 
     let plugin_dir = state.hermix_home.join("dashboard-plugins");
@@ -257,6 +259,18 @@ pub fn router(state: HttpServerState) -> Router {
     let mut app = Router::new()
         .route("/health", get(health))
         .route("/shutdown", get(shutdown_server))
+        // §5.5 第 3/4 层：设备配对。complete 对 Unpaired 开放（信任建立本身），
+        // 其余端点 handler 内强制 Local。
+        .route(
+            "/api/pairing/sessions",
+            post(pairing::create_pairing_session),
+        )
+        .route("/api/pairing/complete", post(pairing::complete_pairing))
+        .route("/api/pairing/devices", get(pairing::list_devices))
+        .route(
+            "/api/pairing/devices/{device_id}",
+            delete(pairing::revoke_device),
+        )
         .route("/v1/protocol/schema", get(routes::protocol_schema))
         .route("/v1/telemetry/client-event", post(routes::client_telemetry_event))
         .route("/metrics", get(routes::metrics_prometheus))
@@ -420,7 +434,8 @@ pub fn router(state: HttpServerState) -> Router {
     app.layer(middleware::from_fn(move |req, next| {
         let sec = sec_guard.clone();
         let rl = rate_guard.clone();
-        async move { security::request_guard(sec, rl, req, next).await }
+        let dr = device_registry.clone();
+        async move { security::request_guard(sec, rl, dr, req, next).await }
     }))
     .layer(tower_http::limit::RequestBodyLimitLayer::new(body_limit))
     .layer(tower_http::trace::TraceLayer::new_for_http())

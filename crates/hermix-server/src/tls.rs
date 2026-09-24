@@ -181,7 +181,8 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 /// 最佳努力局域网 IP：UDP connect 不发包，仅让内核选路由源地址。
 /// 失败（无网络 / 多网卡歧义）返回 None，证书只含 loopback SAN。
-fn best_effort_lan_ip() -> Option<IpAddr> {
+/// 配对二维码的 host 字段也复用此函数。
+pub fn best_effort_lan_ip() -> Option<IpAddr> {
     let sock = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
     // UDP connect 不发包，仅让内核选路由源地址。
     sock.connect("8.8.8.8:80").ok()?;

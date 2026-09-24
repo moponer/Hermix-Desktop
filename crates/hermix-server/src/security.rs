@@ -245,9 +245,33 @@ fn ip_allowed(security: &HttpSecurity, req: &Request<Body>) -> bool {
     allow.contains(&ip)
 }
 
+/// 来源推导（§5.5 第 5 层）。优先级：设备凭证 > loopback > 其他。
+/// 来源由服务端凭证判定，客户端无法声明（对策 T8）。
+fn derive_origin(
+    device: Option<&crate::pairing::PairedDevice>,
+    ip: Option<IpAddr>,
+) -> Origin {
+    match device {
+        Some(d) => Origin::PairedDevice {
+            device_id: d.device_id.clone(),
+        },
+        None => match ip {
+            Some(ip) if ip.is_loopback() => Origin::Local,
+            _ => Origin::Unpaired,
+        },
+    }
+}
+
+/// Unpaired 纵深防御关口（对策 T1）：仅放行配对完成端点
+/// （信任建立本身）。/health 与 /metrics 在更早分支已返回。
+fn unpaired_gate_allows(path: &str) -> bool {
+    path == "/api/pairing/complete"
+}
+
 pub async fn request_guard(
     security: Arc<HttpSecurity>,
     rate: Arc<RateLimiter>,
+    devices: Option<Arc<crate::pairing::DeviceRegistry>>,
     req: Request<Body>,
     next: Next,
 ) -> Response<Body> {
@@ -272,17 +296,23 @@ pub async fn request_guard(
         return (StatusCode::FORBIDDEN, "client IP not in allowlist").into_response();
     }
 
+    // Bearer 凭证双轨：api_key（桌面/网关既有凭证）或已配对设备 token。
+    // 命中设备 token 产出 PairedDevice 来源（§5.5 第 4 层）。
+    let header_token = req
+        .headers()
+        .get(AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer ").map(str::trim));
+    let token = header_token
+        .map(std::string::ToString::to_string)
+        .or_else(|| query_bearer_token(&req));
+    let device = token
+        .as_deref()
+        .and_then(|t| devices.as_ref().and_then(|r| r.authenticate(t)));
+
     if let Some(key) = security.api_key.as_ref() {
-        let header_token = req
-            .headers()
-            .get(AUTHORIZATION)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.strip_prefix("Bearer ").map(str::trim));
-        let token = header_token
-            .map(std::string::ToString::to_string)
-            .or_else(|| query_bearer_token(&req));
-        let ok = token.as_deref() == Some(key.as_ref());
-        if !ok {
+        let api_key_ok = token.as_deref() == Some(key.as_ref());
+        if !api_key_ok && device.is_none() {
             hermix_telemetry::record_http_reject();
             return (
                 StatusCode::UNAUTHORIZED,
@@ -298,14 +328,17 @@ pub async fn request_guard(
         return (StatusCode::TOO_MANY_REQUESTS, "rate limit exceeded").into_response();
     }
 
-    // §5.5 第 5 层接线：从连接属性推导 Origin 注入请求上下文。
-    // 当前简化版：loopback = Local，其他远程 = Unpaired。设备配对流程
-    // （第 3/4 层）落地后在这里加 token→device_id 校验分支返回
-    // `Origin::PairedDevice{device_id}`。
-    let origin = match client_ip(&req) {
-        Some(ip) if ip.is_loopback() => Origin::Local,
-        _ => Origin::Unpaired,
-    };
+    // §5.5 第 5 层：来源推导 + Unpaired 关口。
+    let origin = derive_origin(device.as_ref(), client_ip(&req));
+    if matches!(origin, Origin::Unpaired) && !unpaired_gate_allows(path) {
+        hermix_telemetry::record_http_reject();
+        return (
+            StatusCode::FORBIDDEN,
+            "unpaired origin: only /health and pairing endpoints are available",
+        )
+            .into_response();
+    }
+
     let (mut parts, body) = req.into_parts();
     parts.extensions.insert(origin);
     let req = Request::from_parts(parts, body);
@@ -324,6 +357,63 @@ mod tests {
         assert_eq!(v.len(), 2);
         assert!(v.contains(&"127.0.0.1".parse().unwrap()));
         assert!(v.contains(&"::1".parse().unwrap()));
+    }
+
+    // ----- §5.5 第 3/4 层接线：设备 token → PairedDevice 来源 -----
+
+    #[test]
+    fn device_token_yields_paired_device_origin() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let registry =
+            crate::pairing::DeviceRegistry::open(&dir.path().join("devices.db"))
+                .expect("registry");
+        let (_device, token) = registry.pair("测试手机").expect("pair");
+
+        let authed = registry.authenticate(&token).expect("token 有效");
+        let origin = derive_origin(Some(&authed), Some([192, 168, 1, 9].into()));
+        match origin {
+            Origin::PairedDevice { device_id } => {
+                assert_eq!(device_id, _device.device_id);
+            }
+            other => panic!("设备 token 应产出 PairedDevice，got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unpaired_gate_blocks_non_pairing_paths() {
+        // 远程无凭证 = Unpaired。
+        assert!(matches!(
+            derive_origin(None, Some([192, 168, 1, 50].into())),
+            Origin::Unpaired
+        ));
+        // 关口只放配对完成端点。
+        assert!(unpaired_gate_allows("/api/pairing/complete"));
+        assert!(!unpaired_gate_allows("/v1/sessions"));
+        assert!(!unpaired_gate_allows("/api/config"));
+        // 回环无凭证 = Local（桌面自身），不受关口约束。
+        assert!(matches!(
+            derive_origin(None, Some([127, 0, 0, 1].into())),
+            Origin::Local
+        ));
+    }
+
+    #[test]
+    fn revoked_device_token_falls_back_to_unpaired() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let registry =
+            crate::pairing::DeviceRegistry::open(&dir.path().join("devices.db"))
+                .expect("registry");
+        let (device, token) = registry.pair("旧手机").expect("pair");
+        assert!(registry.revoke(&device.device_id));
+
+        assert!(
+            registry.authenticate(&token).is_none(),
+            "撤销后凭证立即失效"
+        );
+        assert!(matches!(
+            derive_origin(None, Some([192, 168, 1, 50].into())),
+            Origin::Unpaired
+        ));
     }
 
     #[test]
