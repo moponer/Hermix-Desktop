@@ -1,8 +1,8 @@
 # 交接文档：Hermix 底座重写 + 网络安全层（给后续开发 agent）
 
 > 更新时间：2026-09-24。本文是唯一权威交接入口。动手前**必须完整读完本文 + 必读文档清单**，禁止跳读后自行发挥。
-> 当前累计 22 个 commit（15 + 本批 7），工作区除 §7 未跟踪遗留物外干净。最近 commit：`9d897704`。
-> 本批新增 commit：`87bb2b9a` / `b51a32a1` / `3cc45b72` / `f062c5ad` / `e1a75115` / `20b6eda8` / `ab7aad02` / `c208f10f` / `9d897704`。
+> 当前累计 23 个 commit（15 + 本批 8），工作区除 §7 未跟踪遗留物外干净。最近 commit：`640eeb57`。
+> 本批新增 commit：`87bb2b9a` / `b51a32a1` / `3cc45b72` / `f062c5ad` / `e1a75115` / `20b6eda8` / `ab7aad02` / `c208f10f` / `9d897704` / `640eeb57`。
 
 ---
 
@@ -76,6 +76,7 @@
 | `ab7aad02` | P3 收尾：EffectLogSink 幂等声明复用 `registry.risk_level()`（Safe⇒幂等，Weak 回查防引用环） |
 | `c208f10f` | P4 L3 信封 + seq 锚原语：新建 `hermix-protocol` crate（Envelope/EventKind/Route/SeqAnchor）+ `HttpServerState` 加 `Arc<AtomicU64>` seq 源（5 处构造点装配） |
 | `9d897704` | P4 剩余 + P4-P7 切片：`WsEnvelope.seq` 可选字段（34 处构造点 `None`，老前端忽略；填值待 P5 订阅端点）+ P6 来源分级接线核实（terminal 读 ctx.origin→check_approval_for_origin）+ P7 前端 tsc 绿（0 组件改动，seq 对账代码待 P5 后）+ 本文档 |
+| `640eeb57` | P5 切片：seq 填值热路径（`next_envelope_seq` helper + 广播镜像点 fetch_add 取号，每条被镜像事件帧嵌 seq）+ 订阅快照端点 `GET /v1/sessions/{id}/subscribe?since_seq=N`（复用 `get_session_messages` 快照构造 + `serverSeq`/`sinceSeq`/`fullSnapshot` 三字段；本批 seq 域 = 进程级，对任意 since_seq 统一回全量快照，增量补发待 P5 落持久 seq 域） |
 
 ### 安全五层当前状态
 
@@ -107,12 +108,11 @@ CARGO_INCREMENTAL=0 cargo test -p <crate> --lib   # 改了哪个 crate 测哪个
 
 ## 3. 未完成任务（按优先级）
 
-### 3.1 下一批（P5 服务端重写：attachment 多端模型）
+### 3.1 下一批（P5 全量：attachment 多端模型）
 
 设计 §3.2/§7 P5：Session 与传输解耦——多端 attachment（桌面/手机/WebUI 同时挂同一 Session 互不踢线）。前置：
-- P4 已落的 `WsEnvelope.seq` 可选字段 + `HttpServerState.seq` 计数器，本批填实际 seq 值（`fetch_add(1)` 热路径）
-- `hermix-protocol` crate 的 Envelope/Route/SeqAnchor 原语，落地订阅/快照端点（`POST /api/v1/sessions/{id}/subscribe?since_seq=N` → 快照 + 增量）
-- 下线旧补发三补丁（`SESSION_BROADCASTS` / `completed_keys` / `pending_grace`）——P5 验收后才安全拆
+- P5 切片（`640eeb57`）已落：seq 填值热路径（广播镜像点 fetch_add 取号）+ 订阅快照端点 `GET /v1/sessions/{id}/subscribe?since_seq=N`（本批回全量快照 + `fullSnapshot=true`，增量模式待 seq 落持久层后翻 `false`）
+- **未做**（P5 全量剩余）：attachment 多端挂载模型（同一 Session 多 attachment 互不踢线）；seq 落持久层（每 session 独立 seq 域 + 快照压缩后补发增量）；旧补发三补丁下线（`SESSION_BROADCASTS` / `completed_keys` / `pending_grace`——需 P5 全量验收后专项拆，见 `640eeb57` commit 正文对抗式审查定界）
 - 验收：两端同时挂载同一 Session，互不干扰；断线重连 100 次 UI 状态 == 后端快照
 
 ### 3.2 P7 前端 seq 对账（≤300 行，0 组件改动）
