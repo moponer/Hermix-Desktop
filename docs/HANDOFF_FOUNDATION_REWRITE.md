@@ -96,8 +96,9 @@
 ```
 hermix-tools lib: 691 passed（terminal 31）
 hermix-agent lib: 1050 passed（含 P5 水位单调性测试 test_session_seq_watermark_monotonicity）
-hermix-server lib: 173 passed（pairing 8 / security 8 / tls 4）
+hermix-server lib: 177 passed（pairing 8 / security 12（含 §3.3 scopes 细粒度 4） / tls 4）
 hermix-protocol: 3 passed
+hermix-core lib: 173 passed（§3.3 Capability 派生 Hash 零回归）
 全仓 cargo check --workspace --all-targets 绿
 ```
 
@@ -141,7 +142,17 @@ CARGO_INCREMENTAL=0 cargo test -p <crate> --lib   # 改了哪个 crate 测哪个
 
 ### 3.3 安全第 4 层 scopes 细粒度
 
-`paired_devices` 表 `device_pubkey`/`scopes` 列仍存占位 `'[]'`。请求签名（T4）已启用 HMAC + nonce；scopes 细粒度授权（每设备独立能力位）未做。
+~~`paired_devices` 表 `device_pubkey`/`scopes` 列仍存占位 `'[]'`。请求签名（T4）已启用 HMAC + nonce；scopes 细粒度授权（每设备独立能力位）未做。~~ → **已落**（本批次）：
+- `pairing.rs::pair()` 写入最小能力集 `DEFAULT_DEVICE_SCOPES = '["chat"]'`（非恒占位 `'[]'`），对齐 D5 拍板"会话级：可发消息看会话，高危工具强制桌面确认"
+- `hermix-core::origin::Capability` 派生 `Hash`（`HashSet<Capability>` 需要）
+- `security.rs` 加 `parse_device_scopes`（JSON 数组字符串 → `HashSet<Capability>`，未知能力位名忽略=保守不授予）+ `effective_decision_for_paired`（**矩阵 ∩ 能力位**：矩阵 `Denied` 的即使能力位误配也保持 `Denied` 纵深防御；矩阵 `Allowed`/`NeedsLocalConfirmation` 的，能力位未配即降 `Denied`；非设备来源透传矩阵判定）
+- `request_guard` 来源推导后把命中设备的 `device_scopes`（`Option<HashSet<Capability>>`）装进 Extension，与 `origin` 并列——下游（http 端点 / 工具层关口）按 `origin` 取设备 id 再查此集判定
+
+**未做**（§3.3 剩余）：
+- `device_pubkey` 列仍占位（签名密钥协商批次，需设备侧公钥生成 + 落库，未启动）
+- 下游 Capability 消费点接通（`http.rs` / 审批引擎 / 工具层关口按 `origin` + `device_scopes` 实际做端点/工具级判定——本批次只落 `security.rs` 的判定原语 + Extension 装配，消费点接入属各关口批次）
+- 设备管理 UI 编辑 scopes（`DevicesTab.tsx` 加能力位勾选，撤销/编辑流程）
+- 测试基线更新：hermix-server 177 passed（+4：scopes 解析 ×2 / 矩阵∩能力位 / pair 写入闭环）；hermix-core 173 passed（+Hash 派生零回归）
 
 ### 3.4 手机客户端
 
