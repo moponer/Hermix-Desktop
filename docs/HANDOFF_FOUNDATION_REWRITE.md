@@ -1,8 +1,8 @@
 # 交接文档：Hermix 底座重写 + 网络安全层（给后续开发 agent）
 
 > 更新时间：2026-09-24。本文是唯一权威交接入口。动手前**必须完整读完本文 + 必读文档清单**，禁止跳读后自行发挥。
-> 当前累计 36 个 commit（15 + 本批 21），工作区除 §7 未跟踪遗留物外干净。最近 commit：`e91ac42e`。
-> 本批新增 commit：`87bb2b9a` / `b51a32a1` / `3cc45b72` / `f062c5ad` / `e1a75115` / `20b6eda8` / `ab7aad02` / `c208f10f` / `9d897704` / `640eeb57` / `6979313c` / `a8f4e547` / `63e3b174` / `0918f7a5` / `cead162d` / `5fab0ec2` / `6892a043` / `29392b57` / `e651c311` / `adfc8ca5` / `acf1fea1` / `e91ac42e`。
+> 当前累计 38 个 commit（15 + 本批 23），工作区除 §7 未跟踪遗留物外干净。最近 commit：`fd238361`。
+> 本批新增 commit：`87bb2b9a` / `b51a32a1` / `3cc45b72` / `f062c5ad` / `e1a75115` / `20b6eda8` / `ab7aad02` / `c208f10f` / `9d897704` / `640eeb57` / `6979313c` / `a8f4e547` / `63e3b174` / `0918f7a5` / `cead162d` / `5fab0ec2` / `6892a043` / `29392b57` / `e651c311` / `adfc8ca5` / `acf1fea1` / `e91ac42e` / `fd238361`。
 
 ---
 
@@ -97,6 +97,7 @@
 hermix-tools lib: 691 passed（terminal 31）
 hermix-agent lib: 1050 passed（含 P5 水位单调性测试 test_session_seq_watermark_monotonicity）
 hermix-server lib: 183 passed（pairing 8 / security 12（含 §3.3 scopes 细粒度 4）/ 审计 6 / tls 4）
+hermix-session lib: 15 passed（P2 不变量 I1/I8 + EntryRecord 对齐 round-trip）
 hermix-protocol: 3 passed
 hermix-core lib: 173 passed（§3.3 Capability 派生 Hash 零回归）
 全仓 cargo check --workspace --all-targets 绿
@@ -156,7 +157,7 @@ CARGO_INCREMENTAL=0 cargo test -p <crate> --lib   # 改了哪个 crate 测哪个
 
 ### 3.5 设计文档 §7 其余阶段（P2 会话内核后续 / P6 防滥用 + 审计 / P8 soak）
 
-**已落**（本批次——P6 防滥用 + 审计最小切片）：
+**已落**（P6 防滥用 + 审计最小切片）：
 - `pairing.rs` 新增 `audit_log` 表（与 `paired_devices` 同库 `devices.db`，`open` 时建；`ts`/`event`/`device_id`/`source_ip`/`decision` 五列 + `idx_audit_ts` 索引）
 - `AuditEvent` 枚举（`Pairing`/`Auth`/`Grant`/`Revoke` 四类，`as_str` 落盘字符串形式）+ `AuditRow` 结构体（模块顶层，供读侧展示）
 - `DeviceRegistry::record_audit(event, device_id, source_ip, decision)` 旁路写 API（失败仅 `tracing::warn`，不阻断主路径）+ `list_audit(limit)` 读 API（时间倒序，limit 钳制 1..=1000）
@@ -168,14 +169,23 @@ CARGO_INCREMENTAL=0 cargo test -p <crate> --lib   # 改了哪个 crate 测哪个
   - `revoke_device`（撤销命中落 `Revoke`/`revoked`；未命中落 `Revoke`/`not_found` 便于排查滥用扫描）
 - 测试（+6）：`record_audit_writes_and_list_audit_reads`（落库→读库闭环 + 时间倒序 + Auth 行 device_id=None）/ `list_audit_respects_limit`（limit 钳制）/ `audit_events_map_to_stable_strings`（四事件字符串）/ `pair_revoke_lifecycle_emits_audit_events`（生命周期审计）/ `request_source_ip_prefers_xff_first_hop` / `request_source_ip_falls_back_to_peer_when_no_xff`
 
-**未做**（P6 剩余 + P2/P8）：
-- **NeedsLocalConfirmation 关口消费点接通**：`origin.rs` 定义了 `DangerousTool` 的 `NeedsLocalConfirmation` 判定（§3.3 的矩阵∩能力位也已落），但**全仓无消费者**——工具关口 / 审批引擎按 `origin` + `device_scopes` 实际拒绝/降级远程高危工具还没接（需接工具关口批次，本批次只落审计原语）
-- **T6 暴力破解 IP 锁定**：设计文档明写"随手机客户端批次补"（配对码 120s TTL + 一次性消费 + 全局 rate limiter 已够本批次；指数退避 + 5 次锁定 15min 是 YAGNI 延后项）
-- **连接数上限 / 请求大小上限 / 空闲超时**：设计 §5.5 附表四件套（每设备 4 条 / 全局 64 条 / 16MiB payload / 5min 空闲）未落——属网络层加固批次
-- **审计日志管理端点 / 诊断 tab 展示**：`list_audit` 读 API 已落，但 `GET /api/audit` 端点 + `DiagnosticsTab.tsx` 展示还没接（UI 批次）
-- **P2 会话内核后续**：`hermix-session` crate 新建（Session + 变更线 + commit 协议 + Entry 模型）是设计 §7 的大工程，非本批次
-- **P8 soak**：8h SLO（内存 ≤200MB / fd 不增长 / task 数稳定 / 0 未处理 panic）headless 不可行，实机依赖，blocked
-- 测试基线更新：hermix-server 177→183 passed（+6 审计测试）；全仓 cargo check --workspace 绿
+**已落**（P2 会话内核不变量补缺 + EntryRecord 对齐）：
+- `hermix-session` 补三条硬性不变量测试（设计 §3.3 I1/I8，八条不变量逐条有测试验收锚补齐）：
+  - **I8 poisoned**：`SessionError` 加 `Poisoned` 变体 + `Inner.poisoned` 标志 + `begin` 检查 + `commit` 失败置 poisoned（不确定存储失败 → 致命，后续 `begin` 返回 `Poisoned`，须从快照重建）。3 个测试：`failed_commit_changes_nothing_and_yields_no_release`（修正断言）/ `poison_persists_across_clones` / `successful_commits_leave_the_session_unpoisoned`
+  - **I1 并发**：`i1_concurrent_commits_do_not_interleave`（1000 并发 `begin/commit` 无交错 + seq 连续 1..=2000，`begin` 非阻塞报 `LineHeld` 由测试侧重试）
+- **P2 EntryRecord 对齐**（设计 §3.3 `EntryRecord` 8 字段 → 内核侧对齐 2 个核心字段）：
+  - `Entry` 补 `by_task_id: Option<String>`（任务归属，重连/对账拼回未完成 task）+ `conversation_id: Option<String>`（会话归属，多会话合并日志区分）
+  - `Draft::append_with_task`（填任务归属）+ `Draft::set_conversation`（批量打会话标记）构建器
+  - `sqlite_sink` schema 扩展（`session_entries` 表加 `by_task_id`/`conversation_id` 两列）+ INSERT/SELECT 同步
+  - 2 个 round-trip 测试：`task_attribution_survives_the_roundtrip` / `entries_without_attribution_default_to_none`
+- 测试基线更新：hermix-session 13→15 passed（+2 EntryRecord round-trip）；`SessionError` 新增 `Poisoned` 变体（原 `Persist` 变体在 `commit` 失败路径被 `Poisoned` 取代——I8 语义：失败即致命，不再允许调用方"重试"）
+
+**未做**（P6 剩余 + P2 剩余 + P8）：
+- **P2 EntryRecord 完整对齐**：设计 `EntryRecord` 8 字段（`id`/`conversation_id`/`kind`/`model`/`data`/`head`/`edits`/`by_task_id`）本批次只对齐 `by_task_id` + `conversation_id` 两个核心归属字段；`id`（单调 Id 类型）/ `model: Option<Vec<Message>>` / `head` / `edits: Vec<ContextEdit>` 属 L2 任务运行时批次（§3.4），需 `hermix-task` 的 `TaskRecord` + `Checkpoint` 模型先落
+- **P2 消息读写切换接入 server**：`hermix-session` 当前 0 处被引用（孤岛），把 `getSessionMessages` / 消息写路径从 `local_agent_service.rs`（4364 行上帝文件）切到 Session entry 派生需跨 P2/P5/P7 批次 + 真机 100 次重连对账，不在本批次
+- **P6 剩余**：NeedsLocalConfirmation 关口消费点接通（工具关口批次）/ T6 暴力破解 IP 锁定 / 连接数+请求大小+空闲超时四件套（设计文档明写"随手机客户端批次补"）/ 审计日志管理端点 + DiagnosticsTab 展示（UI 批次）
+- **P8 soak**：8h SLO（内存 ≤200MB / fd 不增长 / task 数稳定 / 0 未处理 panic）headless 不可行，实机依赖，blocked。`hermix-agent/tests/soak.rs` 现有 10min 合成循环探针（仅测内存 1 项，fd/task 未实现）
+- 测试基线：hermix-server 183 passed / hermix-session 15 passed / 全仓 cargo check --workspace 绿
 
 ### 3.6 手机客户端
 
