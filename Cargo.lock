@@ -1949,6 +1949,7 @@ dependencies = [
  "hermix-focus",
  "hermix-intelligence",
  "hermix-plugin",
+ "hermix-session",
  "hermix-skills",
  "hermix-store",
  "hermix-tools",

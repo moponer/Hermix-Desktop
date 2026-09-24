@@ -52,3 +52,5 @@ proptest = { workspace = true }
 tempfile = "3"
 hermix-environments = { workspace = true }
 hermix-skills = { workspace = true }
+hermix-session = { workspace = true }
+hermix-store = { workspace = true }
