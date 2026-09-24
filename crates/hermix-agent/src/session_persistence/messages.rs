@@ -1329,4 +1329,47 @@ impl SessionPersistence {
 
         Ok(n)
     }
+
+    /// P5 L3 seq 域（设计 §3.5）：查指定 session 的持久 seq 水位。
+    /// 订阅端点用此值做增量补发分界——客户端携 `since_seq` 重连，
+    /// 服务端返回 `seq > since_seq` 的已提交条目。`session_seq` 表
+    /// 是独立单调计数器，不受 `flush_messages` 的 DELETE+INSERT 影响
+    /// （后者会重置 `messages.id`，不能当 seq 用）。
+    pub fn last_seq_for(&self, session_id: &str) -> Result<u64, AgentError> {
+        self.ensure_db()?;
+        let conn = open_with_wal(&self.db_path)?;
+        let last: Option<i64> = conn
+            .query_row(
+                "SELECT last_seq FROM session_seq WHERE session_id = ?1",
+                rusqlite::params![session_id],
+                |row| row.get(0),
+            )
+            .ok()
+            .flatten();
+        Ok(last.unwrap_or(0) as u64)
+    }
+
+    /// P5 L3 seq 域：为指定 session 分配下一个持久 seq 号。
+    /// 原子 `INSERT … ON CONFLICT DO UPDATE`——每 session 一行
+    /// `last_seq`，冲突时 `last_seq = last_seq + 1`，返回新值。
+    /// 调用点：`save_session_atomic` 在每回合 flush 前取一次
+    /// （seq 是**回合级**计数器，非消息级——设计 §3.5 的对账锚
+    /// 粒度是"已提交的条目块"，一个回合的一次 flush 即一个锚）。
+    pub fn next_seq_for(&self, session_id: &str) -> Result<u64, AgentError> {
+        self.ensure_db()?;
+        let conn = open_with_wal(&self.db_path)?;
+        let next: i64 = conn
+            .query_row(
+                r#"
+                INSERT INTO session_seq (session_id, last_seq)
+                VALUES (?1, 1)
+                ON CONFLICT(session_id) DO UPDATE SET last_seq = last_seq + 1
+                RETURNING last_seq
+                "#,
+                rusqlite::params![session_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| AgentError::Io(format!("Failed to allocate session seq: {e}")))?;
+        Ok(next as u64)
+    }
 }

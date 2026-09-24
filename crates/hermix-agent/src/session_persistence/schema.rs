@@ -279,6 +279,20 @@ impl SessionPersistence {
         // "duplicate column" detection — defense in depth).
         stamp_migration(&conn, 8, "messages_unified_steps", None)?;
 
+        // P5 L3 seq 域（设计 §3.5）：每 session 独立持久 seq 计数器。
+        // 重连订阅端点（`GET /v1/sessions/{id}/subscribe?since_seq=N`）
+        // 的补发增量以此为权威源——进程级 AtomicU64（重启归零）只能做
+        // 实时广播锚，跨重启对账必须落到这里。`seq` 单调递增、允许
+        // 间隙（客户端只做大小比较）。首条 seq = 1（SQLite 无 0 号序）。
+        conn.execute_batch(
+            r#"CREATE TABLE IF NOT EXISTS session_seq (
+                session_id TEXT PRIMARY KEY,
+                last_seq   INTEGER NOT NULL DEFAULT 0
+            );"#,
+        )
+        .map_err(|e| AgentError::Io(format!("session_seq create: {e}")))?;
+        stamp_migration(&conn, 9, "session_seq_table", None)?;
+
     /// Record a migration as applied (idempotent). When `marker_sql` is
     /// `Some`, the marker SQL is also executed so future upgrades can
     /// replay the side-effect even if a previous version wrote the

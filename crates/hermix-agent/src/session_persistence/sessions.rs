@@ -404,6 +404,29 @@ impl SessionPersistence {
                 }
             }
 
+            // P5 L3 seq 域（设计 §3.5）：为本回合已提交的条目块分配
+            // 持久 seq 号。必须在事务内（与 flush_messages 同一原子
+            // 单元）——seq 是"已提交条目块"的对账锚，若落在事务外，
+            // commit 失败会留下幽灵 seq（客户端收到 seq=N 的条目但
+            // 其内容未持久化，重连补发时 N 号空洞）。每次成功 flush
+            // 分配一个 seq（回合级，非消息级）。`completed_keys` 的
+            // 旧"已完成任务短路"语义在 P5 全量批次下线，本批保留
+            // 双写以维持现行行为。
+            let _seq = conn
+                .query_row(
+                    r#"
+                    INSERT INTO session_seq (session_id, last_seq)
+                    VALUES (?1, 1)
+                    ON CONFLICT(session_id) DO UPDATE SET last_seq = last_seq + 1
+                    RETURNING last_seq
+                    "#,
+                    rusqlite::params![session_id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map_err(|e| AgentError::Io(format!(
+                    "Failed to allocate session seq: {e}"
+                )))? as u64;
+
             Ok(())
         })();
 
