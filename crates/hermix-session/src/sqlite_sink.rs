@@ -22,10 +22,12 @@ impl SqliteSink {
         store.write(|conn| {
             conn.execute_batch(
                 "CREATE TABLE IF NOT EXISTS session_entries (
-                    session_id TEXT NOT NULL,
-                    seq        INTEGER NOT NULL,
-                    kind       TEXT NOT NULL,
-                    payload    TEXT NOT NULL,
+                    session_id      TEXT NOT NULL,
+                    seq             INTEGER NOT NULL,
+                    kind            TEXT NOT NULL,
+                    payload         TEXT NOT NULL,
+                    by_task_id      TEXT,
+                    conversation_id TEXT,
                     PRIMARY KEY (session_id, seq)
                 );",
             )
@@ -53,8 +55,9 @@ impl SqliteSink {
             };
             {
                 let mut stmt = match tx.prepare(
-                    "INSERT OR REPLACE INTO session_entries (session_id, seq, kind, payload)
-                     VALUES (?1, ?2, ?3, ?4)",
+                    "INSERT OR REPLACE INTO session_entries
+                     (session_id, seq, kind, payload, by_task_id, conversation_id)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 ) {
                     Ok(s) => s,
                     Err(e) => return Err(e.to_string()),
@@ -69,6 +72,8 @@ impl SqliteSink {
                         e.seq as i64,
                         &e.kind,
                         &payload,
+                        e.by_task_id.as_deref(),
+                        e.conversation_id.as_deref()
                     ]) {
                         return Err(err.to_string());
                     }
@@ -88,24 +93,34 @@ impl SqliteSink {
         let Some(result) = self.store.read(|conn| {
             let mut stmt = conn
                 .prepare(
-                    "SELECT seq, kind, payload FROM session_entries
+                    "SELECT seq, kind, payload, by_task_id, conversation_id
+                     FROM session_entries
                      WHERE session_id = ?1 ORDER BY seq",
                 )
                 .map_err(|e| e.to_string())?;
             let rows = stmt
                 .query_map(rusqlite::params![&session_id], |row| {
-                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                    ))
                 })
                 .map_err(|e| e.to_string())?;
             let mut out = Vec::new();
             for r in rows {
-                let (seq, kind, payload) = r.map_err(|e| e.to_string())?;
+                let (seq, kind, payload, by_task_id, conversation_id) =
+                    r.map_err(|e| e.to_string())?;
                 let payload: serde_json::Value =
                     serde_json::from_str(&payload).unwrap_or(serde_json::Value::Null);
                 out.push(Entry {
                     seq: seq.max(0) as u64,
                     kind,
                     payload,
+                    by_task_id,
+                    conversation_id,
                 });
             }
             Ok(out)
@@ -176,5 +191,49 @@ mod tests {
 
         assert_eq!(sink_b.load().unwrap().len(), 0);
         assert_eq!(sink_a.load().unwrap().len(), 1);
+    }
+
+    // ------------------------------------------------------------------
+    // P2 EntryRecord 对齐：by_task_id / conversation_id 持久化 round-trip
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn task_attribution_survives_the_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let sink = SqliteSink::open(dir.path().join("s.db"), "sess-1").unwrap();
+
+        let s = Session::new();
+        let mut d = s.begin().unwrap();
+        // 用户消息无任务归属。
+        d.append("user_text", serde_json::json!({"text": "hi"}));
+        // 工具 entry 归属到 task-42（append_with_task）。
+        d.append_with_task("tool_call", serde_json::json!({"tool": "read_file"}), Some("task-42".into()));
+        d.set_conversation("conv-7");
+        d.commit(|entries| sink.write(entries)).unwrap();
+
+        let loaded = sink.load().unwrap();
+        assert_eq!(loaded.len(), 2);
+        // entry 0：无任务归属 + 有会话归属。
+        assert_eq!(loaded[0].by_task_id, None, "用户消息 by_task_id 应为 None");
+        assert_eq!(loaded[0].conversation_id.as_deref(), Some("conv-7"));
+        // entry 1：任务归属 + 会话归属。
+        assert_eq!(loaded[1].by_task_id.as_deref(), Some("task-42"));
+        assert_eq!(loaded[1].conversation_id.as_deref(), Some("conv-7"));
+    }
+
+    #[test]
+    fn entries_without_attribution_default_to_none() {
+        // 用普通 append（不填 by_task_id / conversation_id）→ load 回 None。
+        let dir = tempfile::tempdir().unwrap();
+        let sink = SqliteSink::open(dir.path().join("s.db"), "sess-1").unwrap();
+
+        let s = Session::new();
+        let mut d = s.begin().unwrap();
+        d.append("system", serde_json::json!({}));
+        d.commit(|entries| sink.write(entries)).unwrap();
+
+        let loaded = sink.load().unwrap();
+        assert_eq!(loaded[0].by_task_id, None);
+        assert_eq!(loaded[0].conversation_id, None);
     }
 }

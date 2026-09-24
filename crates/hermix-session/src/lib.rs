@@ -50,6 +50,16 @@ pub struct Entry {
     pub seq: u64,
     pub kind: String,
     pub payload: serde_json::Value,
+    /// P2 EntryRecord 对齐（设计 §3.3 `by_task_id`）：发起本条 entry 的
+    /// 任务 id。重连/对账时靠它把 entry 归属回崩溃前未完成的 task。
+    /// `None` = 无任务归属（用户消息 / 系统 entry）。
+    #[serde(default)]
+    pub by_task_id: Option<String>,
+    /// P2 EntryRecord 对齐（设计 §3.3 `conversation_id`）：所属会话。
+    /// SqliteSink 另用表外 `session_id` 列做物理隔离；此字段是 entry
+    /// 自身的逻辑归属（多会话合并日志 / 跨会话重放时区分用）。
+    #[serde(default)]
+    pub conversation_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,6 +72,10 @@ struct Inner {
     entries: Vec<Entry>,
     line: LineState,
     next_seq: u64,
+    /// I8: set to true when a commit fails at the persistence layer.
+    /// Once poisoned, `begin` refuses new drafts; the session must be
+    /// reconstructed from a known-good snapshot.
+    poisoned: bool,
 }
 
 /// A session, identified by its append-only log.
@@ -81,6 +95,14 @@ pub enum SessionError {
     LineHeld,
     #[error("persistence failed: {0}")]
     Persist(String),
+    /// I8: An uncertain storage failure has poisoned the session.
+    /// The sink's state is no longer trusted (it may have partially
+    /// written), so further commits are refused. The caller must
+    /// reconstruct the session from a known-good snapshot
+    /// (e.g. `Session::from_entries` on a reloaded log) and start
+    /// over; retrying on this instance is undefined.
+    #[error("session poisoned after an uncertain storage failure")]
+    Poisoned,
 }
 
 impl Session {
@@ -90,6 +112,7 @@ impl Session {
                 entries: Vec::new(),
                 line: LineState::Free,
                 next_seq: 1,
+                poisoned: false,
             })),
         }
     }
@@ -103,6 +126,7 @@ impl Session {
                 entries,
                 line: LineState::Free,
                 next_seq,
+                poisoned: false,
             })),
         }
     }
@@ -110,6 +134,12 @@ impl Session {
     /// Take the change line and start drafting.
     pub fn begin(&self) -> Result<Draft, SessionError> {
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        if inner.poisoned {
+            // I8: an uncertain storage failure is fatal. Refuse new
+            // drafts; the caller must reconstruct from a known-good
+            // snapshot instead of retrying.
+            return Err(SessionError::Poisoned);
+        }
         if inner.line == LineState::Held {
             return Err(SessionError::LineHeld);
         }
@@ -157,12 +187,42 @@ pub struct Draft {
 
 impl Draft {
     /// Stage an entry. Not visible to readers until commit.
+    /// 无任务归属（用户消息 / 系统 entry）。
     pub fn append(&mut self, kind: impl Into<String>, payload: serde_json::Value) {
         self.staged.push(Entry {
             seq: 0,
             kind: kind.into(),
             payload,
+            by_task_id: None,
+            conversation_id: None,
         });
+    }
+
+    /// Stage an entry with a task attribution. 工具 / LLM 产出的 entry
+    /// 用它把 entry 归属到发起它的 task（重连/对账时按 `by_task_id`
+    /// 把 entry 拼回未完成的 task）。
+    pub fn append_with_task(
+        &mut self,
+        kind: impl Into<String>,
+        payload: serde_json::Value,
+        by_task_id: Option<String>,
+    ) {
+        self.staged.push(Entry {
+            seq: 0,
+            kind: kind.into(),
+            payload,
+            by_task_id,
+            conversation_id: None,
+        });
+    }
+
+    /// 给所有已 staged 的 entry 统一打会话归属标记（多会话合并日志用）。
+    /// 须在 commit 前调用；commit 后 entry 已不可变（I5）。
+    pub fn set_conversation(&mut self, conversation_id: impl Into<String>) {
+        let cid = conversation_id.into();
+        for e in &mut self.staged {
+            e.conversation_id = Some(cid.clone());
+        }
     }
 
     /// Entries staged so far, before they are committed.
@@ -199,9 +259,15 @@ impl Draft {
         }
 
         if let Err(e) = persist(&self.staged) {
-            tracing::warn!(error = %e, "session: commit rejected by persistence sink");
+            // I8: a failed durable write is an *uncertain* storage
+            // failure — the sink may have partially persisted. The
+            // session is now poisoned: refuse further commits. The
+            // line is still released so an in-flight `Drop` is clean,
+            // but `begin` will return `Poisoned` from here on.
+            tracing::warn!(error = %e, "session poisoned by persistence failure");
+            inner.poisoned = true;
             inner.line = LineState::Free;
-            return Err(SessionError::Persist(e));
+            return Err(SessionError::Poisoned);
         }
 
         let mut committed = Vec::with_capacity(self.staged.len());
@@ -295,14 +361,46 @@ mod tests {
         d.append("assistant_text", serde_json::json!({"text": "doomed"}));
         let result = d.commit(fail);
 
-        assert!(result.is_err(), "a rejected commit must not yield a Release");
+        assert!(
+            matches!(result, Err(SessionError::Poisoned)),
+            "a rejected commit must not yield a Release, and must poison the session"
+        );
         assert_eq!(
             s.committed().len(),
             1,
             "state must be byte-identical to before the failed commit"
         );
-        // The line is released, so the caller can retry.
-        assert!(s.begin().is_ok(), "failed commit must still release the line");
+        // I8: after an uncertain storage failure the session is fatal.
+        assert!(
+            matches!(s.begin(), Err(SessionError::Poisoned)),
+            "a poisoned session must refuse further drafts"
+        );
+    }
+
+    #[test]
+    fn poison_persists_across_clones() {
+        // All clones share the same log + change line, so a poison
+        // taken on one clone is visible on every other clone.
+        let s = Session::new();
+        let s2 = s.clone();
+        let mut d = s.begin().unwrap();
+        d.append("x", serde_json::json!({}));
+        assert!(d.commit(fail).is_err());
+        assert!(matches!(s2.begin(), Err(SessionError::Poisoned)));
+    }
+
+    #[test]
+    fn successful_commits_leave_the_session_unpoisoned() {
+        // The poison flag must be set ONLY on failure; a session that
+        // commits repeatedly stays usable.
+        let s = Session::new();
+        for _ in 0..5 {
+            let mut d = s.begin().unwrap();
+            d.append("k", serde_json::json!({}));
+            d.commit(ok).unwrap();
+        }
+        assert_eq!(s.committed().len(), 5);
+        assert!(s.begin().is_ok(), "repeated success must not poison");
     }
 
     #[test]
@@ -354,5 +452,60 @@ mod tests {
         // from a successful commit — there is no API that publishes
         // staged state.
         assert_eq!(s.publish(&rel).len(), 1);
+    }
+
+    // ------------------------------------------------------------------
+    // I1: 一次 Session commit 在所有记录写入上是原子的（变更线 + 单事务）。
+    // 1000 个并发 begin/commit 批次不得交错：每批 N 条 entry 要么整批
+    // 进入日志（连续 N 个 seq），要么整批缺席。
+    // 设计 §3.3 I1 明写"并发测试：1000 并发写无交错"。
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn i1_concurrent_commits_do_not_interleave() {
+        use std::sync::Arc;
+        use std::thread;
+
+        const BATCHES: u32 = 1000;
+        const PER_BATCH: u32 = 2;
+
+        let s = Arc::new(Session::new());
+        let mut handles = Vec::with_capacity(BATCHES as usize);
+        for _b in 0..BATCHES {
+            let s = Arc::clone(&s);
+            handles.push(thread::spawn(move || {
+                // `begin` is deliberately non-blocking: it reports
+                // `LineHeld` instead of waiting. In a 1000-thread
+                // stampede the caller must retry (with a short sleep)
+                // until the line frees.
+                let mut d = loop {
+                    match s.begin() {
+                        Ok(draft) => break draft,
+                        Err(SessionError::LineHeld) => {
+                            thread::sleep(std::time::Duration::from_millis(1));
+                        }
+                        Err(e) => panic!("unexpected session error: {e}"),
+                    }
+                };
+                for _ in 0..PER_BATCH {
+                    d.append("i1", serde_json::json!({}));
+                }
+                d.commit(ok).expect("commit 必须成功")
+            }));
+        }
+        for h in handles {
+            h.join().expect("thread panic");
+        }
+
+        let log = s.committed();
+        assert_eq!(
+            log.len(),
+            (BATCHES * PER_BATCH) as usize,
+            "1000 并发批 × 2 条 → 2000 条全在"
+        );
+        // seq 严格连续 1..=2000（commit 原子，无跳号）。
+        for (i, e) in log.iter().enumerate() {
+            assert_eq!(e.seq, i as u64 + 1, "seq 必须连续无跳号");
+        }
     }
 }
