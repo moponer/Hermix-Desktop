@@ -998,37 +998,60 @@ pub(crate) async fn subscribe_session_snapshot(
     Query(q): Query<SubscribeQuery>,
     State(state): State<HttpServerState>,
 ) -> Result<Json<serde_json::Value>, HttpError> {
-    // 复用现有 loader：与 get_session_messages 同一份快照构造
-    // （含压缩归档子会话 + 审批卡片 + 上下文占用），零重复。
-    // axum 的 State 提取器可手动构造（只是 newtype wrapper）。
-    let snapshot = get_session_messages(
-        Path(session_id.clone()),
-        State(state.clone()),
-    )
-    .await?;
-    let snapshot_value = serde_json::to_value(&snapshot.0)
-        .map_err(|e| AgentError::Io(format!("serialize snapshot: {e}")))?;
-
     let since_seq = q.since_seq.unwrap_or(0);
-    // 当前进程 seq 锚：客户端下次重连用它作 since_seq（幂等——
-    // 本批对任意 since_seq 都回全量快照，serverSeq 仅供客户端记录
-    // "我现在看到的状态对应到进程 seq 的哪个水位"）。
-    let server_seq = state.seq.load(std::sync::atomic::Ordering::SeqCst);
 
-    let mut resp = snapshot_value;
+    // P5 L3 seq 域（设计 §3.5）：持久 seq 水位判断（seq 域 = 每 session
+    // 独立计数器，落在 SQLite `session_seq` 表，重启不丢——区别于进程级
+    // `state.seq` 的易失计数器）。客户端携 `since_seq` 重连：
+    // - `since_seq >= last_seq`（已追上）→ 回空增量 + `fullSnapshot=false`
+    //   （客户端本地状态 == 服务端，无需补发；客户端据此知道"没漏东西"）
+    // - `since_seq < last_seq`（落后）→ 回全量快照 + `fullSnapshot=true`
+    //   （本批无法按 seq 精确切出增量——`messages.id` 会被 flush 的
+    //   DELETE+INSERT 重置，不能作为 seq 载体；精确增量需 messages 表
+    //   带 seq 列，属 P5 全量验收批次。回退全量是安全的保守侧：宁可
+    //   多传数据，不可漏传。）
+    let persisted_last_seq = state
+        .session_persistence
+        .last_seq_for(&session_id)
+        .map_err(HttpError::from)?;
+
+    let caught_up = since_seq >= persisted_last_seq;
+    let mut resp = if caught_up {
+        // 已追上：空增量。payload 仅含 seq 对账字段，客户端据此
+        // 刷新本地水位、不替换本地会话状态。
+        serde_json::json!({
+            "sessionId": session_id,
+            "messages": [],
+        })
+    } else {
+        // 落后：全量快照（复用 get_session_messages 同一份构造）。
+        let snapshot = get_session_messages(
+            Path(session_id.clone()),
+            State(state.clone()),
+        )
+        .await?;
+        serde_json::to_value(&snapshot.0)
+            .map_err(|e| AgentError::Io(format!("serialize snapshot: {e}")))?
+    };
+
     if let Some(obj) = resp.as_object_mut() {
-        obj.insert(
-            "serverSeq".into(),
-            serde_json::json!(server_seq),
-        );
         obj.insert(
             "sinceSeq".into(),
             serde_json::json!(since_seq),
         );
-        // 本批统一全量快照——增量模式待 P5 持久 seq 域落地。
+        // 持久 seq 水位（客户端下次重连作 since_seq 的权威锚——
+        // 跨重启有效，区别于进程级 state.seq）。
+        obj.insert(
+            "lastSeq".into(),
+            serde_json::json!(persisted_last_seq),
+        );
+        // 本批精确增量未落地（messages 表无 seq 列）：落后时统一回
+        // 全量快照 + fullSnapshot=true；已追上时回空增量 + false。
+        // P5 全量把 seq 落到 messages 行后，本字段才会真正承担
+        // "增量 vs 快照"的分支语义。
         obj.insert(
             "fullSnapshot".into(),
-            serde_json::json!(true),
+            serde_json::json!(!caught_up),
         );
     }
     Ok(Json(resp))
