@@ -1,8 +1,8 @@
 # 交接文档：Hermix 底座重写 + 网络安全层（给后续开发 agent）
 
 > 更新时间：2026-09-24。本文是唯一权威交接入口。动手前**必须完整读完本文 + 必读文档清单**，禁止跳读后自行发挥。
-> 当前累计 25 个 commit（15 + 本批 10），工作区除 §7 未跟踪遗留物外干净。最近 commit：`a8f4e547`。
-> 本批新增 commit：`87bb2b9a` / `b51a32a1` / `3cc45b72` / `f062c5ad` / `e1a75115` / `20b6eda8` / `ab7aad02` / `c208f10f` / `9d897704` / `640eeb57` / `6979313c` / `a8f4e547`。
+> 当前累计 26 个 commit（15 + 本批 11），工作区除 §7 未跟踪遗留物外干净。最近 commit：`63e3b174`。
+> 本批新增 commit：`87bb2b9a` / `b51a32a1` / `3cc45b72` / `f062c5ad` / `e1a75115` / `20b6eda8` / `ab7aad02` / `c208f10f` / `9d897704` / `640eeb57` / `6979313c` / `a8f4e547` / `63e3b174`。
 
 ---
 
@@ -79,6 +79,7 @@
 | `640eeb57` | P5 切片：seq 填值热路径（`next_envelope_seq` helper + 广播镜像点 fetch_add 取号，每条被镜像事件帧嵌 seq）+ 订阅快照端点 `GET /v1/sessions/{id}/subscribe?since_seq=N`（复用 `get_session_messages` 快照构造 + `serverSeq`/`sinceSeq`/`fullSnapshot` 三字段；本批 seq 域 = 进程级，对任意 since_seq 统一回全量快照，增量补发待 P5 落持久 seq 域） |
 | `6979313c` | P5 L3 seq 持久层：`session_seq` 表（migration v9）+ `SessionPersistence::last_seq_for` / `next_seq_for` API + `save_session_atomic_inner` 事务内取号（与 flush_messages 同原子单元，避免幽灵 seq 空洞；回合级计数器，`messages.id` 被 flush 重置不能当 seq 载体） |
 | `a8f4e547` | P5 订阅端点升级：`GET /v1/sessions/{id}/subscribe?since_seq=N` 从"统一回全量"升级为 seq 域驱动双分支——已追上（since_seq >= last_seq）回空增量 + `fullSnapshot=false`；落后回全量快照 + `true`（精确增量切出待 P5 全量把 seq 落到 messages 行）。移除进程级 `state.seq` 读取（易失，不再是权威源） |
+| `63e3b174` | P7 前端 seq 对账（设计 §3.5 / §6.3，≤300 行 0 组件改动）：`rest.ts` 加 `subscribeSessionSnapshot` helper + `SubscribeSnapshot` 类型；`useStreamParser` 加 `lastLocalSeq` 水位（帧解析读可选 `data.seq`，max 语义只增不减）；`useStreamChat` 加 `onReconciled` 可选回调 + ctx 初值；`useWsConnection` catch 路径（bridge 死 / listener 注册失败）settle 前拉一次订阅快照对账（best-effort，bridge 死时 reject 被吞，settle 仍走原错误路径）。组件侧 `onReconciled` 接入属下一批次 |
 
 ### 安全五层当前状态
 
@@ -125,7 +126,13 @@ CARGO_INCREMENTAL=0 cargo test -p <crate> --lib   # 改了哪个 crate 测哪个
 
 ### 3.2 P7 前端 seq 对账（≤300 行，0 组件改动）
 
-设计 §6.3：`useStreamChat.ts` 接纳 seq 对账 + 重连改 subscribe（+120 行）/ `useStreamParser.ts` 读可选 seq（+20 行）/ `rest.ts` +80 行。依赖 3.1 订阅端点就绪后实施。端点现状（`a8f4e547`）：`since_seq >= last_seq` 时客户端收到空增量 + `fullSnapshot=false`——P7 前端据此刷新本地 seq 水位、不替换会话状态；`since_seq < last_seq` 时收到全量快照 + `fullSnapshot=true`——P7 前端据此整体替换本地会话状态。
+设计 §6.3：前端消费 P5 订阅端点的对账切片。已落（`63e3b174`，tsc 绿）：
+- `rest.ts`：`subscribeSessionSnapshot(sessionId, sinceSeq)` helper + `SubscribeSnapshot` 类型（走 stdio bridge http 通道，零新依赖）
+- `useStreamParser.ts`：`StreamChatSendContext.lastLocalSeq` 水位（帧解析读可选 `data.seq`，max 语义只增不减，跨 send 持久；控制帧 null 跳过）
+- `useStreamChat.ts`：`StreamCallbacks.onReconciled` 可选回调 + ctx 构造点 `lastLocalSeq: 0` 初值
+- `useWsConnection.ts`：catch 路径（bridge 死 / listener 注册失败）settle 前调 `subscribeSessionSnapshot(ctx.sessionId, ctx.lastLocalSeq)` 对账（best-effort：bridge 死时快照调用 reject 被吞，settle 仍走原错误路径；对账是锦上添花，settle 是必须有）。`fullSnapshot=true` → `onReconciled` 交组件整体替换本地会话状态；`false` → 仅刷新本地 seq 锚（`lastSeq`）
+
+**未做**（P7 剩余，下一批次）：组件侧（`ChatView` / `StreamChatContext`）接入 `onReconciled` 回调——消费对账结果（`fullSnapshot` 分支 + `lastSeq` 水位）刷新 UI 会话状态。本批按设计 §6.3「0 组件改动」约束只落 hooks + rest 层，组件接线属独立批次。
 
 ### 3.3 安全第 4 层 scopes 细粒度
 
