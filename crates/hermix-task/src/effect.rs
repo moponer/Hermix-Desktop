@@ -9,8 +9,6 @@
 
 use std::path::Path;
 
-use rusqlite::OptionalExtension;
-
 /// 工具意图：执行前持久化。`idempotent` 来自工具 schema 声明，
 /// 决定崩溃恢复时重放还是标记 needs_review。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]

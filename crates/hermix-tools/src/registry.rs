@@ -131,6 +131,29 @@ pub struct ToolRegistryInner {
     /// event instead of bouncing the user through text. `None` in both
     /// fields ⇒ fallback to the legacy `HERMIX_CONFIRM=1` text flow.
     pub terminal_approval_ctx: Arc<std::sync::Mutex<TerminalApprovalContext>>,
+    /// Effect Sandwich 持久化钩子（P3）。`None` ⇒ 零开销跳过。
+    pub effect_sink: Option<std::sync::Arc<dyn EffectSink>>,
+}
+
+/// Effect Sandwich 持久化钩子（P3，设计 §3.4）。
+///
+/// registry 在每次工具执行前后回调：intent 先落库 → 执行 → outcome
+/// 落库。崩溃后「有 intent 无 outcome」即恢复判定依据。`None` 时
+/// 零开销跳过（测试 / 未装配持久层的场景）。
+pub trait EffectSink: Send + Sync {
+    fn record_intent(&self, tool: &str, args_json: &str) -> String;
+    fn record_outcome(&self, intent_id: &str, status: &str, summary: &str);
+}
+
+/// 读取当前 registry 的 EffectSink（短暂拿读锁克隆 Arc 后立即释放，
+/// 避免跨 await/执行持锁）。
+fn inner_effect_sink(registry: &ToolRegistry) -> Option<std::sync::Arc<dyn EffectSink>> {
+    registry
+        .inner
+        .read()
+        .expect("registry rwlock not poisoned")
+        .effect_sink
+        .clone()
 }
 
 /// Thread-safe wrapper around `ToolRegistryInner`.
@@ -150,6 +173,7 @@ impl ToolRegistry {
                 terminal_approval_ctx: Arc::new(std::sync::Mutex::new(
                     TerminalApprovalContext::default(),
                 )),
+                effect_sink: None,
             })),
         }
     }
@@ -164,6 +188,7 @@ impl ToolRegistry {
                 terminal_approval_ctx: Arc::new(std::sync::Mutex::new(
                     TerminalApprovalContext::default(),
                 )),
+                effect_sink: None,
             })),
         }
     }
@@ -173,6 +198,15 @@ impl ToolRegistry {
     /// service writes to.
     pub fn terminal_workspace_handle(&self) -> Arc<std::sync::RwLock<Option<std::path::PathBuf>>> {
         self.inner.read().expect("registry rwlock not poisoned").terminal_workspace.clone()
+    }
+
+    /// 装配 Effect Sandwich 持久化钩子（P3）。进程启动时调用一次；
+    /// 重复调用覆盖旧 sink（重启换新 EffectLog 实例）。
+    pub fn set_effect_sink(&self, sink: std::sync::Arc<dyn EffectSink>) {
+        self.inner
+            .write()
+            .expect("registry rwlock not poisoned")
+            .effect_sink = Some(sink);
     }
 
     /// Set the per-turn default workspace for the terminal (and any other
@@ -557,10 +591,33 @@ impl ToolRegistry {
 
         let params = Self::coerce_args(&schema, params);
 
-        let result: Result<String, hermix_core::ToolError> = if let Some(ca) = context_aware {
-            run_async_in_blocking_with_context(ca.as_ref(), params, ctx)
-        } else {
-            run_async_in_blocking(handler.as_ref(), params)
+        // Effect Sandwich（P3）：intent 先落库 → 执行 → outcome 落库。
+        // 未装配 sink 时零开销跳过。持久化失败不阻断执行——三明治
+        // 断一笔只影响崩溃恢复判定精度，不能因此拒绝用户请求。
+        let (result, _intent_id) = match inner_effect_sink(self) {
+            Some(sink) => {
+                let args_json = params.to_string();
+                let intent_id = sink.record_intent(name, &args_json);
+                let r: Result<String, hermix_core::ToolError> = if let Some(ca) = context_aware {
+                    run_async_in_blocking_with_context(ca.as_ref(), params, ctx)
+                } else {
+                    run_async_in_blocking(handler.as_ref(), params)
+                };
+                let (status, summary): (&str, String) = match &r {
+                    Ok(out) => ("ok", truncate_chars(out, 500).to_string()),
+                    Err(e) => ("error", truncate_chars(&e.to_string(), 500).to_string()),
+                };
+                sink.record_outcome(&intent_id, status, &summary);
+                (r, Some(intent_id))
+            }
+            None => {
+                let r: Result<String, hermix_core::ToolError> = if let Some(ca) = context_aware {
+                    run_async_in_blocking_with_context(ca.as_ref(), params, ctx)
+                } else {
+                    run_async_in_blocking(handler.as_ref(), params)
+                };
+                (r, None)
+            }
         };
 
         match result {

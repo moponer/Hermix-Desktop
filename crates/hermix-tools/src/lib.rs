@@ -40,7 +40,7 @@ pub mod tts_streaming;
 pub mod v4a_patch;
 
 // Re-export registry types
-pub use registry::{ToolEntry, ToolEntryInfo, ToolRegistry};
+pub use registry::{EffectSink, ToolEntry, ToolEntryInfo, ToolRegistry};
 
 // Re-export cached_check helper
 pub use cached_check::{cached_check, cached_check_default, CheckFn, DEFAULT_TTL};

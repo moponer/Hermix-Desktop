@@ -10,6 +10,33 @@ use hermix_tools::ToolRegistry;
 
 use super::*;
 
+/// EffectLog → EffectSink 适配器（P3 Effect Sandwich 装配）。
+/// 单笔持久化失败吞掉降级为不记录——三明治是崩溃恢复依据，
+/// 不能阻断工具执行。
+struct EffectLogSink(hermix_task::EffectLog);
+
+impl hermix_tools::EffectSink for EffectLogSink {
+    fn record_intent(&self, tool: &str, args_json: &str) -> String {
+        let intent = hermix_task::ToolIntent {
+            id: hermix_task::effect::new_intent_id(),
+            task_id: String::new(),
+            tool: tool.to_string(),
+            args_json: args_json.to_string(),
+            // 幂等默认 false：非幂等在恢复时走 needs_review（保守侧）。
+            // 幂等声明来源（schema 标注）落定后再翻真。
+            idempotent: false,
+            created_at: chrono::Utc::now().timestamp(),
+        };
+        let id = intent.id.clone();
+        let _ = self.0.record_intent(&intent);
+        id
+    }
+
+    fn record_outcome(&self, intent_id: &str, status: &str, summary: &str) {
+        let _ = self.0.resolve_intent(intent_id, status, summary);
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClarifyBroadcast {
     pub session_id: String,
@@ -236,6 +263,42 @@ impl HttpServerState {
         }
 
         let tool_registry = Arc::new(ToolRegistry::new());
+        // Effect Sandwich 持久层（P3）：EffectLog 适配成 EffectSink，
+        // 工具执行前后落 intent/outcome。EffectLog 每次操作自开连接，
+        // 构造本身不会失败；单笔持久化失败在 sink 内部吞掉（降级为
+        // 不记录）——三明治是崩溃恢复依据，不能阻断工具执行。
+        {
+            let effects_path = hermix_config::paths::data_dir_in(&hermix_home).join("effects.db");
+            let effect_log = hermix_task::EffectLog::new(effects_path);
+            // 崩溃恢复扫描（§3.4）：上次进程可能死在工具执行中途。
+            // 幂等 → 重放语义（由下次调用自然覆盖）；非幂等 → needs_review，
+            // 只记日志（通知条目/用户裁决 UI 属后续批次），不自动重放。
+            match effect_log.scan_unfinished() {
+                Ok(actions) if !actions.is_empty() => {
+                    tracing::warn!(
+                        count = actions.len(),
+                        "startup recovery: {} unfinished tool effects from previous run \
+                         (idempotent=REPLAY eligible, non-idempotent=NEEDS_REVIEW)",
+                        actions.len()
+                    );
+                    for a in &actions {
+                        match a {
+                            hermix_task::RecoveryAction::Replay(i) => tracing::warn!(
+                                intent = %i.id, tool = %i.tool,
+                                "recovery: idempotent effect eligible for replay"
+                            ),
+                            hermix_task::RecoveryAction::NeedsReview(i) => tracing::warn!(
+                                intent = %i.id, tool = %i.tool,
+                                "recovery: non-idempotent effect needs user review"
+                            ),
+                        }
+                    }
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!("startup recovery scan failed: {e}"),
+            }
+            tool_registry.set_effect_sink(Arc::new(EffectLogSink(effect_log)));
+        }
         // Register builtin tools (file, shell, browser, etc.)
         let terminal_backend: Arc<dyn hermix_core::TerminalBackend> =
             Arc::new(hermix_environments::LocalBackend::default());
@@ -650,6 +713,17 @@ impl HttpServerState {
         agent_service: Arc<dyn hermix_core::traits::AgentService>,
     ) -> Result<Self, AgentError> {
         let tool_registry = Arc::new(ToolRegistry::new());
+        // Effect Sandwich 持久层（P3）：EffectLog 适配成 EffectSink，
+        // 工具执行前后落 intent/outcome。EffectLog 每次操作自开连接，
+        // 构造本身不会失败；单笔持久化失败在 sink 内部吞掉（降级为
+        // 不记录）——三明治是崩溃恢复依据，不能阻断工具执行。
+        {
+            let effects_path =
+                hermix_config::paths::hermix_home().join("data").join("effects.db");
+            tool_registry.set_effect_sink(Arc::new(EffectLogSink(hermix_task::EffectLog::new(
+                effects_path,
+            ))));
+        }
         // Register builtin tools (file, shell, browser, etc.)
         let terminal_backend: Arc<dyn hermix_core::TerminalBackend> =
             Arc::new(hermix_environments::LocalBackend::default());
