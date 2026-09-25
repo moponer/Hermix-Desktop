@@ -272,6 +272,9 @@ pub fn router(state: HttpServerState) -> Router {
             "/api/pairing/devices/{device_id}",
             delete(pairing::revoke_device),
         )
+        // §5.5 P6：审计日志读端点（DiagnosticsTab 数据面）。仅 Local，
+        // 与 revoke_device 同一 DeviceManagement 鉴权面。
+        .route("/api/pairing/audit", get(pairing::list_audit))
         .route("/v1/protocol/schema", get(routes::protocol_schema))
         .route("/v1/telemetry/client-event", post(routes::client_telemetry_event))
         .route("/metrics", get(routes::metrics_prometheus))

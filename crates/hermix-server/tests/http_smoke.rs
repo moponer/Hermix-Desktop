@@ -366,3 +366,157 @@ async fn task_record_endpoint_projects_state_and_updated_at() {
         "conversation_id 投影不一致"
     );
 }
+
+// ---------------------------------------------------------------------------
+// §5.5 P6：GET /api/pairing/audit — 审计日志读端点（后端半边，
+// DiagnosticsTab 展示属 UI 批次）。全部走 tempdir 装配隔离落盘。
+// ---------------------------------------------------------------------------
+
+/// 端点 200：先 `record_audit` seed 两条再 GET，返回 events 数组 + count。
+#[tokio::test]
+async fn audit_endpoint_returns_seeded_events() {
+    let _ = tracing_subscriber::fmt::try_init();
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = hermix_config::GatewayConfig::default();
+    let state = hermix_server::HttpServerState::build_with_hermes_home(
+        cfg,
+        dir.path().to_path_buf(),
+    )
+    .await
+    .unwrap();
+    let registry = state
+        .device_registry
+        .as_ref()
+        .expect("tempdir home 必能开 devices.db");
+    registry.record_audit(
+        hermix_server::pairing::AuditEvent::Pairing,
+        Some("dev-audit-1".to_string()),
+        None,
+        Some("allowed".to_string()),
+    );
+    registry.record_audit(
+        hermix_server::pairing::AuditEvent::Revoke,
+        Some("dev-audit-1".to_string()),
+        None,
+        Some("revoked".to_string()),
+    );
+    let app = hermix_server::router(state);
+
+    let res = app
+        .oneshot(local(
+            Request::builder()
+                .uri("/api/pairing/audit")
+                .body(Body::empty())
+                .unwrap(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(v["count"], 2, "seed 两条 → count=2");
+    let events = v["events"].as_array().expect("events 是数组");
+    assert!(events.iter().any(|e| e["event"] == "pairing"));
+    assert!(events.iter().any(|e| e["event"] == "revoke"));
+    assert!(
+        events.iter().all(|e| e["ts"].is_i64()),
+        "每行含 ts 权威字段"
+    );
+}
+
+/// 未带 ConnectInfo → Unpaired → T1 关口 403（审计行含 source_ip /
+/// device_id，属设备安全域敏感数据，与 revoke_device 同鉴权面）。
+#[tokio::test]
+async fn audit_endpoint_unpaired_403() {
+    let _ = tracing_subscriber::fmt::try_init();
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = hermix_config::GatewayConfig::default();
+    let state = hermix_server::HttpServerState::build_with_hermes_home(
+        cfg,
+        dir.path().to_path_buf(),
+    )
+    .await
+    .unwrap();
+    let app = hermix_server::router(state);
+
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/pairing/audit")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+}
+
+/// limit 生效：seed 5 条取 3 条（"最近 N 条"语义；时间倒序已由
+/// pairing.rs 单元测试覆盖，此处不断言顺序避免同毫秒 ts 抖动）。
+#[tokio::test]
+async fn audit_endpoint_respects_limit() {
+    let _ = tracing_subscriber::fmt::try_init();
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = hermix_config::GatewayConfig::default();
+    let state = hermix_server::HttpServerState::build_with_hermes_home(
+        cfg,
+        dir.path().to_path_buf(),
+    )
+    .await
+    .unwrap();
+    let registry = state
+        .device_registry
+        .as_ref()
+        .expect("tempdir home 必能开 devices.db");
+    for i in 0..5 {
+        registry.record_audit(
+            hermix_server::pairing::AuditEvent::Grant,
+            None,
+            None,
+            Some(format!("d{i}")),
+        );
+    }
+    let app = hermix_server::router(state);
+
+    let res = app
+        .oneshot(local(
+            Request::builder()
+                .uri("/api/pairing/audit?limit=3")
+                .body(Body::empty())
+                .unwrap(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(v["count"], 3, "limit=3 → 3 条");
+    assert_eq!(v["events"].as_array().unwrap().len(), 3);
+}
+
+/// `device_registry: None`（测试 / 只读环境）→ 503，不 panic、不碰 DB。
+#[tokio::test]
+async fn audit_endpoint_503_when_registry_missing() {
+    let _ = tracing_subscriber::fmt::try_init();
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = hermix_config::GatewayConfig::default();
+    let mut state = hermix_server::HttpServerState::build_with_hermes_home(
+        cfg,
+        dir.path().to_path_buf(),
+    )
+    .await
+    .unwrap();
+    state.device_registry = None;
+    let app = hermix_server::router(state);
+
+    let res = app
+        .oneshot(local(
+            Request::builder()
+                .uri("/api/pairing/audit")
+                .body(Body::empty())
+                .unwrap(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+}

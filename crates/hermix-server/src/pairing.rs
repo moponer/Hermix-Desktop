@@ -566,6 +566,53 @@ pub async fn list_devices(
     }
 }
 
+/// `GET /api/pairing/audit` 的 query 参数。
+#[derive(Debug, Deserialize)]
+pub struct AuditQuery {
+    /// 返回最近 N 条（缺省 100；`list_audit` 内部 `max(1).min(1000)` 钳制）。
+    pub limit: Option<u32>,
+}
+
+/// `GET /api/pairing/audit?limit=N` — 审计日志读端点（P6 后端半边，
+/// DiagnosticsTab 展示属 UI 批次）。仅 Local（矩阵 `DeviceManagement`
+/// 对 PairedDevice 全 `Denied`——配了能力位也 403 纵深兜底；Unpaired
+/// 已由 `request_guard` 403）。"最近 N 条"语义，时间倒序；
+/// `list_audit` 内部 `max(1).min(1000)` 钳制。审计为 append-only
+/// 旁路，无写/删端点。
+pub async fn list_audit(
+    axum::extract::Extension(origin): axum::extract::Extension<hermix_core::Origin>,
+    axum::extract::Extension(device_scopes): axum::extract::Extension<
+        Option<std::collections::HashSet<hermix_core::origin::Capability>>,
+    >,
+    State(state): State<HttpServerState>,
+    axum::extract::Query(params): axum::extract::Query<AuditQuery>,
+) -> impl IntoResponse {
+    // §5.5 第 5 层：端点级能力位关口（DeviceManagement），与 revoke_device
+    // 同一鉴权面——审计行含 source_ip / device_id，属设备安全域敏感数据。
+    if let Err(resp) = crate::routes::check_capability_from_extensions(
+        hermix_core::origin::Capability::DeviceManagement,
+        &origin,
+        &device_scopes,
+    ) {
+        return resp.into_response();
+    }
+    match state.device_registry.as_ref() {
+        Some(registry) => {
+            let events = registry.list_audit(params.limit.unwrap_or(100));
+            axum::Json(serde_json::json!({
+                "events": events,
+                "count": events.len(),
+            }))
+            .into_response()
+        }
+        None => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "设备注册表不可用".into_response(),
+        )
+            .into_response(),
+    }
+}
+
 /// `DELETE /api/pairing/devices/:device_id` — 仅 Local。撤销后立即失效。
 pub async fn revoke_device(
     axum::extract::Extension(origin): axum::extract::Extension<hermix_core::Origin>,
