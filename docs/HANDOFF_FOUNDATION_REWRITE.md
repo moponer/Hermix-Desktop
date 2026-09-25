@@ -1,8 +1,8 @@
 # 交接文档：Hermix 底座重写 + 网络安全层（给后续开发 agent）
 
 > 更新时间：2026-09-25。本文是唯一权威交接入口。动手前**必须完整读完本文 + 必读文档清单**，禁止跳读后自行发挥。
-> 当前累计 65 个 commit（52 + 本批 13：… `a3d9db0c` / `31498ce6` / `5674d1c0` / `6fceaf61` / `d115b591` + 本文档 commit）。工作区除 §7 未跟踪遗留物（`??` 行：WorkbenchChat.tsx / DiagnosticsTab.tsx / design-previews / 各 design.md / probe 脚本，属别的 agent，勿动）外干净。最近 commit：`d115b591`（MiniMax tolerant 解析根治）+ `6fceaf61`（TaskRecord 启动对账读路径）。
-> 本批新增 commit：`87bb2b9a` / `b51a32a1` / `3cc45b72` / `f062c5ad` / `e1a75115` / `20b6eda8` / `ab7aad02` / `c208f10f` / `9d897704` / `640eeb57` / `6979313c` / `a8f4e547` / `63e3b174` / `0918f7a5` / `cead162d` / `5fab0ec2` / `6892a043` / `29392b57` / `e651c311` / `adfc8ca5` / `acf1fea1` / `e91ac42e` / `fd238361` / `fc2f425a` / `d7abee4d` / `e5f728a1` / `f985eade` / `bc8a6e6c` / `64d145de` / `9ff58666` / `bc2f7da` / `e3955b7a` / `8f3e7a67` / `e8534365` / `45e02378` / `ae71666c` / `08307f7e` / `25aa6fff` / `db892c6d` / `00074e0b` / `231a7dd6` / `d115b591` / 本文档 commit（tolerant 解析刷新）。
+> 当前累计 66 个 commit（52 + 本批 14：… `a3d9db0c` / `31498ce6` / `5674d1c0` / `6fceaf61` / `d115b591` / `1c628052` + 本文档 commit）。工作区除 §7 未跟踪遗留物（`??` 行：WorkbenchChat.tsx / DiagnosticsTab.tsx / design-previews / 各 design.md / probe 脚本，属别的 agent，勿动）外干净。最近 commit：`1c628052`（减少审批 A+B）+ `d115b591`（MiniMax tolerant 解析根治）+ `6fceaf61`（TaskRecord 启动对账读路径）。
+> 本批新增 commit：`87bb2b9a` / `b51a32a1` / `3cc45b72` / `f062c5ad` / `e1a75115` / `20b6eda8` / `ab7aad02` / `c208f10f` / `9d897704` / `640eeb57` / `6979313c` / `a8f4e547` / `63e3b174` / `0918f7a5` / `cead162d` / `5fab0ec2` / `6892a043` / `29392b57` / `e651c311` / `adfc8ca5` / `acf1fea1` / `e91ac42e` / `fd238361` / `fc2f425a` / `d7abee4d` / `e5f728a1` / `f985eade` / `bc8a6e6c` / `64d145de` / `9ff58666` / `bc2f7da` / `e3955b7a` / `8f3e7a67` / `e8534365` / `45e02378` / `ae71666c` / `08307f7e` / `25aa6fff` / `db892c6d` / `00074e0b` / `231a7dd6` / `d115b591` / `1c628052` / 本文档 commit（减少审批 A+B 刷新）。
 
 ---
 
@@ -259,6 +259,17 @@ CARGO_INCREMENTAL=0 cargo test -p <crate> --lib   # 改了哪个 crate 测哪个
 - hermix-server 侧：`task_record_sink.rs` 适配器（`TaskRecordStore` 实现 trait，同 `task_tracker_adapter` 模式）+ `state.rs` 生产装配接线（`agent_effects_db_path` 提前算路径，与 `task_record_store` 字段指向同一 effects.db）；approval.rs 测试态保持 `None`
 - 映射语义：started 时 conversation_id 未知退化 `"unknown"`；terminal 时读既有记录保留 conversation_id；orphaned→`TaskOutcome::Orphaned`/failed→`Faulted`/aborted→`Aborted`
 - 测试：适配器 3 个（started→terminal 保留 conversation_id / failed→Faulted 带 error / orphaned→Orphaned），server lib 197 全绿；hermix-agent lib 1051 与基线一致
+
+**已落**（减少审批 A+B — 主人反馈 `1c628052`）：
+- **主人反馈**："读/写操作仍旧反复弹审批，之前设计过减少审批但没生效"。取证钉死根因：
+  - read-only 文件工具（`read_file`/`read_image`/`search_files`/`list_directory`）早已在 `resource_guard`（`local_agent_service.rs:1099-1107`）豁免路径检查；工作区根目录也早已 `grant_path(ws)`（`2028-2032`）——"读操作弹卡"实为 terminal 只读命令未命中 `READONLY_PATTERNS`（`engine.rs` 的 readonly 列表）或 terminal 非只读命令前缀未 grant
+  - **真正的"反复弹"来源**：`PermissionProfile.granted_commands` 默认**为空**（`#[serde(default)]`），terminal 的 `allows_command` 要求命中白名单前缀 + 词边界 + 无 shell 链——`git`/`cargo`/`node`/`pnpm`/`set` 等各弹一次卡，"反复弹"即此
+- **修复（A+B，最小切片）**：
+  - **A**：`local_agent_service.rs` profile_arc 构造处加 `DEFAULT_GRANTED_COMMANDS`（17 个前缀：git/cargo/node/pnpm/npm/npx/python/python3/pwsh/powershell/cmd/where/dir/type/find/grep/ls）默认 `grant_command`。危险模式由 **L0 hardline blocklist** 兜底（`decide_pre_tool_dispatch` 在 risk gate 之前先查 `check_hardline_blocklist`：`rm -rf /`、fork bomb、`curl|sh`、`dd` to block device 等永不触达 profile 门控）——前缀 grant 不降安全底线
+  - **B**：read-only 豁免语义已在 `resource_guard` 实现（1099-1107 行），本批补 3 个**钉死测试**（防回归）：① read-only 文件工具在越界路径（`c:/other`，profile 只 grant `c:/workspace`）也永不弹卡；② `write_file` 越界**必须**弹卡（反向边界——只读免卡、写越界仍卡，不能一刀切全免）；③ 前缀匹配词边界（`git` 不匹配 `gitx`）+ shell 链操作符仍被拒（`git status && rm -rf /` 仍弹卡）+ 未 grant 前缀仍弹卡
+- **YAGNI 定界**：不动 risk 门控（Caution 在 Default 模式本来就直连 Allow，`local_agent_service.rs:1295-1297`）；不动 Tirith 默认规则（只拦 terminal shell-injection/system-paths，不拦 write_file）；不动 READONLY_PATTERNS 列表（覆盖度已够，`find` 的 `-delete`/`-exec` 例外单独处理）；不做"grant 持久化到 config.yaml 跨会话复用"（C 方案，主人没拍板，留待后续批次）
+- **验证**：`cargo check --workspace --all-targets` 绿（剩余 warning 为 pre-existing `prop_max_turns`）；hermix-agent lib **1054 全绿**（1051 基线 + 3 新测试，零回归）
+- **后续批次**：主人要求参考 `deepseek-harness` 的工具层 + Windows 命令执行 + 斜杠处理设计，对照本仓库 `LocalBackend` 的 `cmd.exe /c` / `powershell.exe -Command` 路由与 `strip_win32_long_path_buf` 覆盖范围，消除"Windows 吞斜杠"隐患（研究已收口，落码待下一批次）
 
 **已落**（P6 审计日志读端点 `GET /api/pairing/audit` — `08307f7e`）：
 - pairing.rs 加 `AuditQuery`（`limit: Option<u32>`，缺省 100，复用 `list_audit` 内部 `max(1).min(1000)` 钳制）+ `list_audit` handler（registry Some → `Json{events,count}` / None → 503，镜像 `list_devices` 模式）；`AuditRow` 已 `Serialize` 直接投影
