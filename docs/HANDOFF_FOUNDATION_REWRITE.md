@@ -1,8 +1,8 @@
 # 交接文档：Hermix 底座重写 + 网络安全层（给后续开发 agent）
 
 > 更新时间：2026-09-25。本文是唯一权威交接入口。动手前**必须完整读完本文 + 必读文档清单**，禁止跳读后自行发挥。
-> 当前累计 55 个 commit（52 + 本批 3：`e8534365` / `45e02378` / 本文档 commit）。工作区除 §7 未跟踪遗留物（`??` 行：WorkbenchChat.tsx / DiagnosticsTab.tsx / design-previews / 各 design.md / probe 脚本，属别的 agent，勿动）外干净。最近 commit：`45e02378`（dashboard_smoke 集成面 pre-existing 修复）+ `e8534365`（§3.4 TaskRecord 装配 + 权威字段端点）+ `305500d9`（文档刷新）。
-> 本批新增 commit：`87bb2b9a` / `b51a32a1` / `3cc45b72` / `f062c5ad` / `e1a75115` / `20b6eda8` / `ab7aad02` / `c208f10f` / `9d897704` / `640eeb57` / `6979313c` / `a8f4e547` / `63e3b174` / `0918f7a5` / `cead162d` / `5fab0ec2` / `6892a043` / `29392b57` / `e651c311` / `adfc8ca5` / `acf1fea1` / `e91ac42e` / `fd238361` / `fc2f425a` / `d7abee4d` / `e5f728a1` / `f985eade` / `bc8a6e6c` / `64d145de` / `9ff58666` / `bc2f7da` / `e3955b7a` / `8f3e7a67` / `e8534365` / `45e02378` / 本文档 commit。
+> 当前累计 57 个 commit（52 + 本批 5：`e8534365` / `45e02378` / `ae71666c` / `08307f7e` / 本文档 commit）。工作区除 §7 未跟踪遗留物（`??` 行：WorkbenchChat.tsx / DiagnosticsTab.tsx / design-previews / 各 design.md / probe 脚本，属别的 agent，勿动）外干净。最近 commit：`08307f7e`（P6 审计日志读端点）+ `ae71666c`（Task #13 文档收尾）+ `45e02378`（dashboard_smoke pre-existing 修复）。
+> 本批新增 commit：`87bb2b9a` / `b51a32a1` / `3cc45b72` / `f062c5ad` / `e1a75115` / `20b6eda8` / `ab7aad02` / `c208f10f` / `9d897704` / `640eeb57` / `6979313c` / `a8f4e547` / `63e3b174` / `0918f7a5` / `cead162d` / `5fab0ec2` / `6892a043` / `29392b57` / `e651c311` / `adfc8ca5` / `acf1fea1` / `e91ac42e` / `fd238361` / `fc2f425a` / `d7abee4d` / `e5f728a1` / `f985eade` / `bc8a6e6c` / `64d145de` / `9ff58666` / `bc2f7da` / `e3955b7a` / `8f3e7a67` / `e8534365` / `45e02378` / `ae71666c` / `08307f7e` / 本文档 commit（P6 审计读端点刷新）。
 
 ---
 
@@ -237,9 +237,16 @@ CARGO_INCREMENTAL=0 cargo test -p <crate> --lib   # 改了哪个 crate 测哪个
 **未做**（P6 剩余 + P2 剩余 + P8 8h 全量）：
 - **P2 EntryRecord 完整对齐**：设计 `EntryRecord` 8 字段（`id`/`conversation_id`/`kind`/`model`/`data`/`head`/`edits`/`by_task_id`）本批次只对齐 `by_task_id` + `conversation_id` 两个核心归属字段；`id`（单调 Id 类型）/ `model: Option<Vec<Message>>` / `head` / `edits: Vec<ContextEdit>` 属 L2 任务运行时批次（§3.4），需 `hermix-task` 的 `TaskRecord` + `Checkpoint` 模型先落
 - **P2 消息读写切换接入 server**：`hermix-session` 当前 0 处被引用（孤岛），把 `getSessionMessages` / 消息写路径从 `local_agent_service.rs`（4364 行上帝文件）切到 Session entry 派生需跨 P2/P5/P7 批次 + 真机 100 次重连对账，不在本批次
-- **P6 剩余**：~~T6 暴力破解 IP 锁定~~ → **已落**（本批次，见 §3.5 T6 段）/ 连接数+请求大小+空闲超时四件套（设计文档明写"随手机客户端批次补"）/ 审计日志管理端点 + DiagnosticsTab 展示（UI 批次）。~~NeedsLocalConfirmation 关口消费点接通（工具关口批次）~~ → **已落**（见 §3.3 续落段）
+- **P6 剩余**：~~T6 暴力破解 IP 锁定~~ → **已落**（本批次，见 §3.5 T6 段）/ 连接数+请求大小+空闲超时四件套（设计文档明写"随手机客户端批次补"）/ ~~审计日志读端点~~ → **已落**（`08307f7e`，见下方 P6 审计读端点段）；剩 DiagnosticsTab 前端展示（UI 批次）。~~NeedsLocalConfirmation 关口消费点接通（工具关口批次）~~ → **已落**（见 §3.3 续落段）
 - **P8 8h 全量 SLO**：8h soak（内存 ≤200MB / fd 不增长 / task 数稳定 / 0 未处理 panic）headless 不可行，实机依赖，blocked。本批次落的是 60s 短探针 headless 切片（四项 SLO 测量 + 真实 session 协议循环）；8h 全量走 `--ignored` 变体（实机 nightly）。另外短探针跑 `cargo test` 期间可能触发 `hermix-cua` 的 rustc ICE（增量缓存损坏，`rm -rf target/debug/incremental` + `CARGO_INCREMENTAL=0` 可规避，属编译器 pre-existing bug 非本项目缺陷）
-- 测试基线：hermix-server 188 passed（含 5 T6 锁定测试 + 6 能力位集测试）/ hermix-session 15 passed / hermix-tools 697 passed（含 6 能力位集测试）/ hermix-agent lib 1050 passed + soak 2 passed / 全仓 cargo check --workspace 绿
+- 测试基线：hermix-server lib 193 passed（5 T6 锁定 + 6 能力位集 + 5 端点级判定测试）/ http_smoke 10 passed + 2 ignored（4 task_record + 4 audit 端点测试）/ dashboard_smoke 53 passed + 3 ignored（pre-existing theme 划掉的 ignore）/ hermix-session 15 passed / hermix-tools 697 passed（含 6 能力位集测试）/ hermix-agent lib 1050 passed + soak 2 passed / 全仓 cargo check --workspace 绿
+
+**已落**（P6 审计日志读端点 `GET /api/pairing/audit` — `08307f7e`）：
+- pairing.rs 加 `AuditQuery`（`limit: Option<u32>`，缺省 100，复用 `list_audit` 内部 `max(1).min(1000)` 钳制）+ `list_audit` handler（registry Some → `Json{events,count}` / None → 503，镜像 `list_devices` 模式）；`AuditRow` 已 `Serialize` 直接投影
+- lib.rs 路由 `/api/pairing/audit`（get）。鉴权面复用 `check_capability_from_extensions(DeviceManagement)`，与 `revoke_device` 同一面——审计行含 `source_ip`/`device_id` 属设备安全域敏感数据：PairedDevice 矩阵 Denied（配了能力位也 403 纵深兜底）/ Unpaired 由 request_guard 403 / 仅 Local 放行
+- http_smoke 4 个集成测试（复用 local() + tempdir 基建）：200（`record_audit` seed 两条 → events 数组 + count=2 + ts 权威字段）/ 403（不带 local() = Unpaired → T1 关口）/ limit=3（seed 5 取 3，"最近 N 条"语义；时间倒序由 pairing.rs 单元测试覆盖，不断言顺序避免同毫秒 ts 抖动）/ 503（`device_registry` 置 None）
+- YAGNI 定界：不做 event/device 过滤（随 DiagnosticsTab UI 批次按需加）/ 不做 offset 分页（"最近 N 条"够诊断展示）/ 不做写/删端点（审计 append-only 旁路）
+- 验证：check 绿 / lib 193 passed / http_smoke 10 passed（4 新测试全绿）/ dashboard_smoke 53 passed（路由改动零回归）
 
 **已落**（P6 T6 暴力破解 IP 锁定）：
 - `security.rs` 新增 `AuthFailLockout`（仿 `RateLimiter` 的 `Arc<Mutex<HashMap<String,(Vec<Instant>,Option<Instant>)>>` 模式，纯内存 headless 可验）：按 source IP 累计认证失败时间戳，窗口内达 `threshold` 即锁定 `cooldown` 期；冷却期内持续失败走**有界续期**（`until + cooldown` 但封顶 `now + 2*cooldown`，防滑动窗口导致攻击者永不解锁）；成功认证 `record_success` 清零该 IP 计数与锁定（合法用户输错后输对了不累积）
