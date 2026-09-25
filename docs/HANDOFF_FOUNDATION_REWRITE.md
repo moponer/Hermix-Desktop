@@ -1,7 +1,7 @@
 # 交接文档：Hermix 底座重写 + 网络安全层（给后续开发 agent）
 
 > 更新时间：2026-09-25。本文是唯一权威交接入口。动手前**必须完整读完本文 + 必读文档清单**，禁止跳读后自行发挥。
-> 当前累计 50 个 commit（47 + 本批 3），工作区除 §7 未跟踪遗留物外干净。最近 commit：`57307fe`（§3.4 TaskRecord 持久状态机）+ `b299d6d5`（§3 编号修复）+ `8f3e7a67`（上批端点级消费点文档）。
+> 当前累计 52 个 commit（50 + 本批 2），工作区除 §7 未跟踪遗留物外干净。最近 commit：`a666acb`（§3.4 联合崩溃恢复协议）+ `57307fe`（§3.4 TaskRecord 持久状态机）+ `0039df5`（文档刷新）。
 > 本批新增 commit：`87bb2b9a` / `b51a32a1` / `3cc45b72` / `f062c5ad` / `e1a75115` / `20b6eda8` / `ab7aad02` / `c208f10f` / `9d897704` / `640eeb57` / `6979313c` / `a8f4e547` / `63e3b174` / `0918f7a5` / `cead162d` / `5fab0ec2` / `6892a043` / `29392b57` / `e651c311` / `adfc8ca5` / `acf1fea1` / `e91ac42e` / `fd238361` / `fc2f425a` / `d7abee4d` / `e5f728a1` / `f985eade` / `bc8a6e6c` / `64d145de` / `9ff58666` / `bc2f7da` / `e3955b7a` / （端点级消费点文档批次，待提交）。
 
 ---
@@ -166,20 +166,23 @@ CARGO_INCREMENTAL=0 cargo test -p <crate> --lib   # 改了哪个 crate 测哪个
 （§3.5）的前置依赖：`id`（单调 Id 类型）/ `model` / `head` / `edits` 四个
 字段属本批次，需先定 TaskRecord 任务归属语义再回填 Entry。
 
-**已落**（本批次）：
+**已落**（本批次 + 联合恢复协议批次）：
 - `crates/hermix-task/src/record.rs`（新）：
-  - `Checkpoint { from_step: Option<String>, at: i64 }`——恢复上下文（Pending/Running 携带；`from_step=None` 表示整任务重跑，后续批次细化 step 语义）
+  - `Checkpoint { from_step: Option<String>, at: i64 }`——恢复上下文（Pending/Running 携带；`from_step=None` 表示整任务重跑，细粒度恢复跨 hermix-agent 批次）
   - `TaskOutcome` 五值：`Completed{result}` / `Failed{error,result}` / `Aborted{reason}` / `Orphaned{reason}` / `Faulted{error}`（设计 §3.3 原文 1:1）
   - `TaskState` 三值：`Pending{checkpoint}` / `Running{checkpoint}` / `Terminal{outcome}`，`as_str()` 落库 + `outcome()` / `checkpoint()` 投影 API
   - `TaskRecord { id, conversation_id, state, updated_at }`：`id` 与 `tasks` 表同 UUID（对齐 `EntryRecord.by_task_id` 归属），`conversation_id` 与 `hermix-session` 会话对齐
   - `TaskRecordStore`（`task_records` 表，与 `EffectLog` 同库 sessions.db WAL）：`save`（覆盖式 upsert，状态转移多次调用实现）/ `get` / `list_by_conversation` / **`scan_unfinished`（崩溃恢复扫描，只读，返回所有 `state='running'` 记录；实际状态转移由调用方 `save` 实现）**
   - 损坏 outcome_json → `Orphaned` 兜底；未知 state 字符串 → `Orphaned`
-- 5 个测试：pending→running→terminal 全生命周期 roundtrip / scan_unfinished 返回 running / list_by_conversation 过滤 / 损坏 outcome 降级 Orphaned / checkpoint JSON roundtrip
-- `lib.rs` re-export：`Checkpoint` / `TaskOutcome` / `TaskRecord` / `TaskRecordStore` / `TaskState` / `TaskRecordError`
+- **联合崩溃恢复协议（设计 §3.4 完整闭环）**：
+  - `TaskRecoveryDecision` 四值（Noop/Reopen/Replay/NeedsReview）+ 纯函数 `decide(record, effects)` 按设计判定表：Terminal/Pending 不参与；Running 空效果→Reopen 降级重跑；全幂等→Replay；含非幂等→NeedsReview
+  - `RecoveryPlan` + `recover(store, effects)` 编排入口：扫 running → 查 task 级未决效果 → decide → 状态转移（Reopen 降 Pending / NeedsReview 落 `Terminal(Orphaned)` + `resolve_intent` 封闭本任务悬空 intent，其他任务 intent 保持悬空）；effect scan 失败保守判 NeedsReview 不做自动重放
+  - `EffectLog::scan_unfinished_for_task(task_id)` task 级过滤（防跨任务误伤）
+- 11 个测试（6 判定表分支 + 5 编排行为）+ 1 个 EffectLog 隔离性测试
+- `lib.rs` re-export：`Checkpoint` / `TaskOutcome` / `TaskRecord` / `TaskRecordStore` / `TaskRecoveryDecision` / `RecoveryPlan` / `TaskState` / `TaskRecordError`
 
 **未做**（§3.4 剩余，需与 P2 消息读写切换 + P5 多端挂载联合验收）：
 - `Checkpoint.from_step` 细化到 agent loop 步骤（当前 `None` = 整任务重跑；细粒度恢复 = 跨 hermix-agent 批次）
-- `scan_unfinished` 与 `EffectLog.scan_unfinished` 的联合恢复协议：扫 running 任务 → 查其 EffectLog 未决 intent → 幂等 Replay / 非幂等 NeedsReview / 无可迁移降级 Orphaned（设计 §3.4 崩溃恢复协议完整实现；当前 TaskRecordStore 与 EffectLog 各自独立，联合判定逻辑未写）
 - TaskRecord 接入 server 装配（`HttpServerState` 加 `TaskRecordStore` 字段 + 任务 HTTP 端点读 TaskRecord 权威字段，对齐设计"UI 读权威字段不推断"）
 - `model` / `head` / `edits` 三字段（设计 `EntryRecord` 剩余字段，属 P2 消息读写切换批次，需 `hermix-session` Entry 扩展 + 上下文编辑指令类型）
 
