@@ -14,8 +14,6 @@ docker = []
 [dependencies]
 hermix-core = { workspace = true }
 hermix-config = { workspace = true }
-hermix-shell-parser = { workspace = true }
-hermix-coreutils = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
