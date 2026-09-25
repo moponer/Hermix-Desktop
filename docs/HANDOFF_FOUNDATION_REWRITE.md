@@ -1,8 +1,8 @@
 # 交接文档：Hermix 底座重写 + 网络安全层（给后续开发 agent）
 
 > 更新时间：2026-09-25。本文是唯一权威交接入口。动手前**必须完整读完本文 + 必读文档清单**，禁止跳读后自行发挥。
-> 当前累计 64 个 commit（52 + 本批 12：… `a3d9db0c` / `31498ce6` / `5674d1c0` / `6fceaf61` + 本文档 commit）。工作区除 §7 未跟踪遗留物（`??` 行：WorkbenchChat.tsx / DiagnosticsTab.tsx / design-previews / 各 design.md / probe 脚本，属别的 agent，勿动）外干净。最近 commit：`6fceaf61`（TaskRecord 启动对账读路径）+ `31498ce6`（TaskRecord 热路径生产者）。
-> 本批新增 commit：`87bb2b9a` / `b51a32a1` / `3cc45b72` / `f062c5ad` / `e1a75115` / `20b6eda8` / `ab7aad02` / `c208f10f` / `9d897704` / `640eeb57` / `6979313c` / `a8f4e547` / `63e3b174` / `0918f7a5` / `cead162d` / `5fab0ec2` / `6892a043` / `29392b57` / `e651c311` / `adfc8ca5` / `acf1fea1` / `e91ac42e` / `fd238361` / `fc2f425a` / `d7abee4d` / `e5f728a1` / `f985eade` / `bc8a6e6c` / `64d145de` / `9ff58666` / `bc2f7da` / `e3955b7a` / `8f3e7a67` / `e8534365` / `45e02378` / `ae71666c` / `08307f7e` / `25aa6fff` / `db892c6d` / `00074e0b` / `231a7dd6` / 本文档 commit（MiniMax 告警刷新）。
+> 当前累计 65 个 commit（52 + 本批 13：… `a3d9db0c` / `31498ce6` / `5674d1c0` / `6fceaf61` / `d115b591` + 本文档 commit）。工作区除 §7 未跟踪遗留物（`??` 行：WorkbenchChat.tsx / DiagnosticsTab.tsx / design-previews / 各 design.md / probe 脚本，属别的 agent，勿动）外干净。最近 commit：`d115b591`（MiniMax tolerant 解析根治）+ `6fceaf61`（TaskRecord 启动对账读路径）。
+> 本批新增 commit：`87bb2b9a` / `b51a32a1` / `3cc45b72` / `f062c5ad` / `e1a75115` / `20b6eda8` / `ab7aad02` / `c208f10f` / `9d897704` / `640eeb57` / `6979313c` / `a8f4e547` / `63e3b174` / `0918f7a5` / `cead162d` / `5fab0ec2` / `6892a043` / `29392b57` / `e651c311` / `adfc8ca5` / `acf1fea1` / `e91ac42e` / `fd238361` / `fc2f425a` / `d7abee4d` / `e5f728a1` / `f985eade` / `bc8a6e6c` / `64d145de` / `9ff58666` / `bc2f7da` / `e3955b7a` / `8f3e7a67` / `e8534365` / `45e02378` / `ae71666c` / `08307f7e` / `25aa6fff` / `db892c6d` / `00074e0b` / `231a7dd6` / `d115b591` / 本文档 commit（tolerant 解析刷新）。
 
 ---
 
@@ -278,8 +278,15 @@ CARGO_INCREMENTAL=0 cargo test -p <crate> --lib   # 改了哪个 crate 测哪个
 - **故障**：MiniMax-M3 会话"开始调用工具又中断了"。完整链路：模型以文本 XML 形态发工具调用但标记损坏到解析层无法识别（可见残骸 `]<]minimax[>`——`<minimax:tool_call>` 的 `:tool_call` 后缀缺失、括号错乱）→ sanitizer 剥掉可识别部分 → flush 阶段 `parse_tool_calls` 解析 0 个（`tool_calls_vec_len=0`）→ 残留文本被 untagged-reasoning 启发式挪进 reasoning → `has_visible=false` → `run_loop.rs:2221`（`history_includes_tool` + 无可见文本 → 立即 finalize，防 nudge 循环的权衡，行为正确）→ 模型的工具调用意图被**静默吞掉**，日志全链路 INFO 无定位线索。
 - **诊断取证**：sanitizer 剥除行为正确（完整/跨 chunk/裸标记/M3 原生 tag 格式均有测试，含 user_repro 精确串；管线只删不改写，`<`→`]` 是模型自身输出损坏）；MiniMax 工具格式指引已注入（directions 白名单含 "minimax"，`MiniMaxFamily` 路由命中）但指引不能阻止模型输出损坏标记；fallback 解析路径存在且 `raw_content` 收 pre-sanitizer 文本，但对破损标记无从恢复（无工具名无参数）。
 - **修复（最小切片）**：flush 阶段解析为 0 且 `raw_content` 含工具调用标记破损残留（含 `]minimax` 破损变体）时 `tracing::warn` 带单行摘录（`lost_tool_call_fragment_excerpt`，前后各 80 字符压平换行）——静默失败变可定位线索。
-- **YAGNI 定界**：不做破损标记的猜测性恢复（无工具名无参数，恢复=编造）；事件级流式工具调用解析状态机（pi-mono 的 `toolcall_start/delta/end` 一等事件形态，从根上消除"事后正则补救"）属插件内核批次（`PLUGIN_KERNEL_DESIGN.md` 的 Llm seam）。
+- **YAGNI 定界（当时）**：不做破损标记的猜测性恢复（无工具名无参数，恢复=编造）；事件级流式工具调用解析状态机（pi-mono 的 `toolcall_start/delta/end` 一等事件形态，从根上消除"事后正则补救"）属插件内核批次（`PLUGIN_KERNEL_DESIGN.md` 的 Llm seam）。
 - **验证**：cargo check --workspace 绿 / hermix-agent lib **1051 passed**（1050 基线 + 1 新测试 `lost_tool_call_fragment_excerpt_detects_damaged_marker`，零回归）。
+
+**已落**（tolerant 解析根治破损包裹 — 告警批的后续 `d115b591`）：
+- **前提变化**：告警批取证确认 `raw_content` 收 **pre-sanitizer 原文**——`<invoke name="X">` 块本体完好（参数、工具名都在），破损的只有外层包裹标记（丢开头 `<`、残骸 `]<]minimax[>[`）。"无工具名无参数，恢复=编造"的当时定界已不成立：invoke 块可直接提取，重建规范包裹即可恢复，**不是猜测**。
+- **修复**：`hermix-core::tool_call_parser::parse_tool_calls_tolerant`——标准解析 0 个或仅产出"裸 invoke 空参记录"（best-effort 兜底产物）时，提取完好的 `<invoke name="…">…</invoke>` 块重建 `<minimax:tool_call>…</minimax:tool_call>` 包裹后重解析。完好输入走标准路径零行为变化；无 invoke 块时原样返回标准结果（告警路径保留为最终 fallback）。`stream_collect.rs` flush fallback 在标准解析之后追加 tolerant 尝试，恢复成功打 `warn`（`recovered_count`）。
+- **方案曲折（教训）**：第一版走"包裹标记归一化 regex"（补缺失 `<`、剥括号残渣、前邻 `/` 判 close）——正则对 open/close 残渣判定不可靠（`]</` 与 `]<]` 难区分，尾部残渣类吃 `<invoke` 的 `<` 或误判 close 为 open），两版修复均未收敛；改用 invoke 块重建（`<invoke` 是标准解析器自己识别的可靠锚点，重建包裹是确定性操作）。过程调试输出已全部清除，最终代码只保留验证通过的方案。
+- **YAGNI 定界**：仍不做逐 delta 流式解析状态机——工具派发本就发生在 flush 之后，flush 时点对 raw_content 一次性恢复与事件级流式对结果零差异；事件级状态机继续归插件内核批次（Llm seam 评审后再定）。
+- **验证**：`cargo check --workspace --all-targets` 绿；hermix-core tolerant 4 测试绿（user_repro 精确串 / `]<]minimax[>[` 残骸 / 完好输入零行为变化 / 无标记不误伤）；hermix-agent lib **1051 全绿**（与基线一致，tolerant 接线未新增 agent 测试——解析逻辑全在 hermix-core，agent 侧仅调用点）。
 
 **已落**（P6 T6 暴力破解 IP 锁定）：
 - `security.rs` 新增 `AuthFailLockout`（仿 `RateLimiter` 的 `Arc<Mutex<HashMap<String,(Vec<Instant>,Option<Instant>)>>` 模式，纯内存 headless 可验）：按 source IP 累计认证失败时间戳，窗口内达 `threshold` 即锁定 `cooldown` 期；冷却期内持续失败走**有界续期**（`until + cooldown` 但封顶 `now + 2*cooldown`，防滑动窗口导致攻击者永不解锁）；成功认证 `record_success` 清零该 IP 计数与锁定（合法用户输错后输对了不累积）
