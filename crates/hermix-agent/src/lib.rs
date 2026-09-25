@@ -202,7 +202,7 @@ pub use python_alignment::{
 // Re-export sub-agent orchestrator
 pub use sub_agent_orchestrator::{
     SubAgentLineage, SubAgentOrchestrator, SubAgentOrchestratorConfig, SubAgentRequest,
-    SubAgentStatus,
+    SubAgentStatus, TaskRecordSink,
 };
 
 // Re-export local agent service

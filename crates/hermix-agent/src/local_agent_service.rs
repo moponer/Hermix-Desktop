@@ -191,6 +191,10 @@ pub struct LocalAgentService {
     /// display. `None` means no tracker (the default — production
     /// code that doesn't need the UI feature pays no cost).
     consciousness_tracker: Option<Arc<ConsciousnessTracker>>,
+    /// Optional TaskRecord producer for sub-agent lifecycle (§3.3 热路径).
+    /// Forwarded to every `SubAgentOrchestrator` this service builds;
+    /// `None` keeps orchestrators silent (tests / headless).
+    task_record_sink: Option<Arc<dyn crate::sub_agent_orchestrator::TaskRecordSink>>,
     /// (C): shared `MemoryRouter` for cross-session
     /// recall. Built once on construction (matching the same
     /// `block_in_place` pattern as `spawn_agent_loop`) and reused
@@ -436,6 +440,7 @@ impl LocalAgentService {
             provider_factory: None,
             tirith: Some(Arc::new(TirithSecurity::from_default_or_bundled())),
             consciousness_tracker: None,
+            task_record_sink: None,
             memory_router,
             active_interrupts: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         }
@@ -460,6 +465,7 @@ impl LocalAgentService {
             provider_factory: Some(provider_factory),
             tirith: Some(Arc::new(TirithSecurity::from_default_or_bundled())),
             consciousness_tracker: None,
+            task_record_sink: None,
             memory_router,
             active_interrupts: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         }
@@ -486,6 +492,17 @@ impl LocalAgentService {
     /// tracker is `None` and the agent runs with zero overhead.
     pub fn with_consciousness_tracker(mut self, tracker: Arc<ConsciousnessTracker>) -> Self {
         self.consciousness_tracker = Some(tracker);
+        self
+    }
+
+    /// Builder: attach a TaskRecord producer for sub-agent lifecycle
+    /// (§3.3 热路径). Forwarded to every orchestrator this service
+    /// builds. Best-effort — sink failures must never break delegation.
+    pub fn with_task_record_sink(
+        mut self,
+        sink: Arc<dyn crate::sub_agent_orchestrator::TaskRecordSink>,
+    ) -> Self {
+        self.task_record_sink = Some(sink);
         self
     }
 
@@ -973,11 +990,16 @@ impl LocalAgentService {
         // the WS chunk emitter so sub-agent lifecycle events stream to the
         // frontend in real time (the "子代理" panel).
         let sub_agent_hermix_home: PathBuf = hh_owned.clone().into();
-        let orch = crate::sub_agent_orchestrator::SubAgentOrchestrator::from_parent(
+        let mut orch = crate::sub_agent_orchestrator::SubAgentOrchestrator::from_parent(
             &agent,
             sub_agent_hermix_home,
             Some(on_chunk.clone()),
         );
+        // §3.3 热路径生产者：服务携带的 TaskRecord sink 透传给
+        // 每个 orchestrator（未设置 = None，orchestrator 静默）。
+        if let Some(sink) = self.task_record_sink.clone() {
+            orch = orch.with_task_record_sink(sink);
+        }
         agent = agent.with_sub_agent_orchestrator(Arc::new(orch));
 
         agent

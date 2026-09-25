@@ -597,6 +597,12 @@ impl HttpServerState {
         // (readers via REST + WebSocket broadcast).
         let consciousness_tracker = hermix_agent::ConsciousnessTracker::new();
 
+        // §3.4 L2：TaskRecord 热路径生产者接线（提前算路径，此处
+        // hermix_home 尚未被 move 进字段；648 行处的同名绑定仍供
+        // task_record_store 字段使用，两处指向同一 effects.db）。
+        let agent_effects_db_path =
+            hermix_config::paths::data_dir_in(&hermix_home).join("effects.db");
+
         // Create LocalAgentService, wiring in the shared
         // consciousness tracker so the agent loop emits ECG
         // vitals for the desktop UI.
@@ -605,6 +611,11 @@ impl HttpServerState {
             tool_registry.clone(),
             session_persistence.clone(),
         )
+        .with_task_record_sink(std::sync::Arc::new(
+            crate::task_record_sink::TaskRecordSinkImpl::new(std::sync::Arc::new(
+                hermix_task::TaskRecordStore::new(agent_effects_db_path),
+            )),
+        ))
         .with_consciousness_tracker(Arc::new(consciousness_tracker.clone()));
         // Kick off a background cold-start warmup. The user's
         // first real chat would otherwise eat the 30–60s the

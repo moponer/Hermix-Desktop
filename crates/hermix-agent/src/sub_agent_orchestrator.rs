@@ -315,6 +315,11 @@ pub struct SubAgentOrchestratorConfig {
     /// server with the per-stream WS `on_chunk` callback. When `None`, the
     /// orchestrator still runs sub-agents but does not surface live status.
     pub chunk_emitter: Option<Arc<dyn Fn(StreamChunk) + Send + Sync>>,
+    /// Optional TaskRecord producer (§3.3 热路径): persists sub-agent
+    /// lifecycle into the TaskRecordStore so crash recovery has
+    /// decision input. `None` = records are not produced (headless
+    /// builds / tests).
+    pub task_record_sink: Option<Arc<dyn TaskRecordSink>>,
 }
 
 /// In-process executor for `delegate_task` tool calls.
@@ -322,9 +327,28 @@ pub struct SubAgentOrchestrator {
     cfg: SubAgentOrchestratorConfig,
 }
 
+/// Sink for persisting sub-agent lifecycle as `TaskRecord`s
+/// (§3.3 热路径生产者). Implemented by the server over
+/// `hermix_task::TaskRecordStore` — kept as a trait so
+/// hermix-agent does not depend on hermix-task. Best-effort:
+/// implementors must never fail delegation (log, don't propagate).
+pub trait TaskRecordSink: Send + Sync {
+    /// Record the sub-agent starting (Running state).
+    fn started(&self, sub_agent_id: &str, conversation_id: Option<&str>, task: &str);
+    /// Record a terminal state (completed / failed / cancelled / timeout).
+    fn terminal(&self, sub_agent_id: &str, outcome: &str, error: Option<&str>);
+}
+
 impl SubAgentOrchestrator {
     pub fn new(cfg: SubAgentOrchestratorConfig) -> Self {
         Self { cfg }
+    }
+
+    /// Attach a TaskRecord producer (§3.3 热路径生产者). Server-side
+    /// wiring; `None` by default (tests / headless builds).
+    pub fn with_task_record_sink(mut self, sink: Arc<dyn TaskRecordSink>) -> Self {
+        self.cfg.task_record_sink = Some(sink);
+        self
     }
 
     /// Default orchestrator that mirrors the current `AgentLoop`'s wiring.
@@ -346,6 +370,7 @@ impl SubAgentOrchestrator {
                 parent_session_id: parent.config.session_id.clone(),
                 timeout: Duration::from_secs(DEFAULT_SUB_AGENT_TIMEOUT_SECS),
                 chunk_emitter,
+                task_record_sink: None,
             },
         }
     }
@@ -415,6 +440,17 @@ impl SubAgentOrchestrator {
             }
         }
         self.persist_lineage(&lineage).await;
+        // §3.3 热路径生产者：终态落 TaskRecordStore（best-effort）。
+        if let Some(sink) = self.cfg.task_record_sink.as_ref() {
+            let (outcome, error) = match &lineage.status {
+                SubAgentStatus::Completed => ("completed", None),
+                SubAgentStatus::Failed => ("failed", lineage.error.as_deref()),
+                SubAgentStatus::Cancelled => ("aborted", lineage.error.as_deref()),
+                SubAgentStatus::Timeout => ("failed", Some("sub-agent timed out")),
+                _ => ("failed", lineage.error.as_deref()),
+            };
+            sink.terminal(&lineage.sub_agent_id, outcome, error);
+        }
     }
 
     /// Emit a `sub_agent_update` chunk to the frontend (if an emitter is
@@ -490,7 +526,7 @@ impl SubAgentOrchestrator {
             // the schema description ("SYNCHRONOUS: blocks until the
             // sub-agent finishes") and eliminating the polling loop bug.
             let req_for_error = req.clone();
-            let handle = tokio::spawn(this.execute_inner(req));
+            let handle = tokio::spawn(this.clone().execute_inner(req));
             match handle.await {
                 Ok(result_str) => result_str,
                 Err(join_err) => {
@@ -498,6 +534,17 @@ impl SubAgentOrchestrator {
                         error = %join_err,
                         "sub-agent tokio task panicked or was cancelled"
                     );
+                    // §3.3 热路径生产者：panic/cancel 也会到达终态，
+                    // 否则恢复决策（recover）看不到这次派发曾经存在。
+                    if let Some(sink) = this.cfg.task_record_sink.as_ref() {
+                        // id 无从得知（inner 已 panic）——以 req 摘要记录
+                        // Orphaned 语义，恢复端按 reason 归类。
+                        sink.terminal(
+                            &format!("orphaned-{}", uuid::Uuid::new_v4()),
+                            "orphaned",
+                            Some(&format!("tokio task lost: {join_err}")),
+                        );
+                    }
                     json!({
                         "status": "failed",
                         "error": format!("Sub-agent task failed: {}", join_err),
@@ -520,6 +567,15 @@ impl SubAgentOrchestrator {
 
         // Best-effort lineage persistence — failures must never break delegation.
         self.persist_lineage(&lineage).await;
+
+        // §3.3 热路径生产者：Running 记录落 TaskRecordStore（best-effort）。
+        if let Some(sink) = self.cfg.task_record_sink.as_ref() {
+            sink.started(
+                &sub_agent_id,
+                lineage.parent_session_id.as_deref(),
+                &req.task,
+            );
+        }
 
         // Rolling log of the sub-agent's last N internal actions (tool
         // calls / thinking), newest last. Shared with the child loop's
@@ -1159,6 +1215,7 @@ mod tests {
             parent_session_id: Some("parent".into()),
             timeout: Duration::from_millis(50),
             chunk_emitter: None,
+            task_record_sink: None,
         }));
         let out = orch
             .execute(SubAgentRequest {
@@ -1200,6 +1257,7 @@ mod tests {
             parent_session_id: None,
             timeout: Duration::from_secs(2),
             chunk_emitter: None,
+            task_record_sink: None,
         }));
         let out = orch
             .execute(SubAgentRequest {
@@ -1235,6 +1293,7 @@ mod tests {
             parent_session_id: Some("root".into()),
             timeout: Duration::from_secs(1),
             chunk_emitter: None,
+            task_record_sink: None,
         });
         let child = orch.build_child_config(
             &SubAgentRequest {
