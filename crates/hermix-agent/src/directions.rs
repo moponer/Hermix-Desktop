@@ -267,22 +267,20 @@ stopping.
 Approval cards are sent AUTOMATICALLY by the server when a high-risk tool call (e.g. `terminal`) is about to execute — you do NOT trigger them. There is no tool that approves a request; calling `approval_token` or any other tool will NOT show an approval card. If you want a command to run without a popup, the user can pre-authorize it via `approval_token` (grant action), but that is separate from the interactive approval card. Never try to invoke an approval card through a tool call.";
 
 /// Environment awareness + Shell compatibility + tool fallback priority.
-/// Always-on: tells the model what OS/shell it runs on, how to call
-/// PowerShell correctly from a Git Bash layer, and that shell failures
-/// should trigger a switch to structured tools — not more shell retries.
-/// Directly addresses the "C 盘清理" failure mode where the agent
-/// repeatedly tried `powershell -File "path"` (quotes stripped by Git
-/// Bash) and never fell back to `storage_analyzer` / `storage_clean`.
+/// Always-on: tells the model what OS/shell it runs on (Windows + unified
+/// PowerShell shell layer), how to call PowerShell cmdlets correctly, and
+/// that shell failures should trigger a switch to structured tools — not
+/// more shell retries.
 const ENVIRONMENT_SHELL_GUIDANCE: &str = "\
 # Environment & Shell (Windows)
 
-You are running on **Windows**. The `terminal` tool dispatches commands through a shell layer (Git Bash on this host).
+You are running on **Windows**. The `terminal` tool runs commands through a unified PowerShell shell layer — a single routing, commands passed through as argv (no cmd.exe string joining). PowerShell cmdlets and built-in POSIX aliases (`ls`→Get-ChildItem, `cat`→Get-Content, `grep`→Select-String) all work.
 
 ## Shell compatibility facts
-- Linux-only commands (`cp`, `ls`, `grep`) may not exist or behave differently. Use Windows equivalents (`copy`, `dir`, `findstr`) or PowerShell.
-- **Quote handling**: Git Bash strips double and single quotes before passing them to PowerShell. `powershell -File \"C:\\path\\script.ps1\"` will fail — use `powershell -Command` with inline scripts, or `powershell -EncodedCommand <base64>` for complex scripts.
-- **Path format**: Git Bash may translate `/c/Users/...` to `C:/Users/...`. PowerShell expects `C:\\Users\\...` or `C:/Users/...`.
-- **Environment variables**: `$env:TEMP` in PowerShell works, but `$x.p` style variables in inline PowerShell may be interpreted by Bash. Use `-EncodedCommand` for anything with `$` signs.
+- Prefer native PowerShell cmdlets over cmd.exe one-liners: `Get-ChildItem` over `dir`, `Get-Content` over `type`, `Select-String` over `findstr`, `Get-Process` over `tasklist`. POSIX aliases work too but cmdlets are more capable.
+- **Path format**: use native backslash form (`C:\\Users\\x\\file.txt`). PowerShell also accepts forward slashes, but backslash is the native form.
+- **Quote handling**: quote paths with spaces; for inline scripts with `$` variables, use `-EncodedCommand <base64>` to avoid interpretation issues.
+- **Environment variables**: PowerShell-native `$env:TEMP`, `$env:PATH`, `$HOME` work. In bash-style `$x` form, use `powershell -EncodedCommand` for anything with `$` signs.
 
 ## Structured tools bypass shell issues
 - `storage_analyzer` (Safe, read-only) — disk usage scanning.

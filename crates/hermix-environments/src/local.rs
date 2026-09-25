@@ -9,8 +9,6 @@ use tokio::process::Command as TokioCommand;
 
 use hermix_core::console_decode::decode_console_output;
 use hermix_core::{AgentError, CommandOutput, TerminalBackend};
-use hermix_coreutils as coreutils;
-use hermix_shell_parser::{parse, ParsedKind};
 
 pub use crate::jobs::{JobRegistry, JobStatus, JobSummary, LogStream};
 
@@ -188,53 +186,7 @@ impl Default for LocalBackend {
     }
 }
 
-/// Strip a leading `cmd` / `cmd.exe` token and any run of `/c`
-/// (`/C`) switches from a Windows shell command, returning the
-/// remaining command (still borrowed from the input). The caller can
-/// then unconditionally wrap the result in `cmd.exe /c <rest>`
-/// without producing a doubled `/c` when the model already prefixed
-/// `cmd /c` — or, worse, the malformed `cmd /c/c "..."` that some
-/// LLMs emit when they mirror Git-Bash's `//c`.
-///
-/// Without this normalization, the old `starts_with("cmd /c ")`
-/// guard missed `cmd /c/c` (there is no trailing space after the
-/// second `/c`) and fell through to the default branch, which
-/// prepended *another* `/c` → `cmd.exe /c cmd /c/c "..."`. That is a
-/// malformed command: cmd.exe treats the second `/c` as "run the
-/// program named `/c`", which hangs indefinitely. See the
-/// `normalize_windows_cmd_prefix_*` regression tests below.
-fn normalize_windows_cmd_prefix(command: &str) -> &str {
-    let mut rest = command.trim_start();
-    // Drop a leading `cmd` / `cmd.exe` token (case-insensitive,
-    // whitespace-delimited so `cmdfoo` is never mistaken for cmd).
-    {
-        let lowered = rest.to_lowercase();
-        let first_token_end = lowered
-            .find(|c: char| c.is_whitespace())
-            .unwrap_or(lowered.len());
-        let first = &lowered[..first_token_end];
-        if first == "cmd" || first == "cmd.exe" {
-            rest = &rest[first_token_end..].trim_start();
-        }
-    }
-    // Drop any leading `/c` (`/C`) switches — may repeat. After
-    // stripping `cmd`, the leading `/c` is always the cmd.exe `/c`
-    // switch (a real command never starts with `/c`), so we strip it
-    // unconditionally regardless of what follows (a quoted arg, more
-    // switches, or end-of-string).
-    loop {
-        let t = rest.trim_start();
-        let lower_t = t.to_lowercase();
-        if lower_t.starts_with("/c") {
-            rest = t[2..].trim_start();
-            continue;
-        }
-        break;
-    }
-    rest
-}
-
-/// Normalise Windows path separators in a cmd-routed command string:
+/// Normalise Windows path separators in a command string:
 /// forward slashes in **path-like** tokens become backslashes.
 ///
 /// Rationale (deepseek-harness 对照): LLMs frequently emit paths in
@@ -451,62 +403,35 @@ impl TerminalBackend for LocalBackend {
         let mut cmd = {
             let trimmed = command.trim_start();
             let lower = trimmed.to_lowercase();
-            // Detect PowerShell commands and route directly to
-            // powershell.exe, bypassing cmd.exe which mangles quotes
-            // in PowerShell commands (e.g. stripping outer double
-            // quotes from `powershell -Command "Get-Process | Select Name"`).
-            if lower.starts_with("powershell ") || lower.starts_with("powershell.exe ") {
-                // Strip "powershell" or "powershell.exe" prefix (case-insensitive)
-                let after_ps = trimmed[lower.find(' ').unwrap_or(0)..].trim_start();
-                let lower_after = after_ps.to_lowercase();
-                let mut c = TokioCommand::new("powershell.exe");
-                c.arg("-NoProfile").arg("-NonInteractive");
-                if lower_after.starts_with("-command ") {
-                    let cmd_str = after_ps["-command ".len()..].trim_start();
-                    c.arg("-Command").arg(cmd_str);
-                } else if lower_after.starts_with("-encodedcommand ") {
-                    let cmd_str = after_ps["-encodedcommand ".len()..].trim_start();
-                    c.arg("-EncodedCommand").arg(cmd_str);
-                } else if lower_after.starts_with("-file ") {
-                    let cmd_str = after_ps["-file ".len()..].trim_start();
-                    c.arg("-File").arg(cmd_str);
-                } else {
-                    // No flag — wrap the entire rest in -Command
-                    c.arg("-Command").arg(after_ps);
-                }
-                c
+            // Windows 统一 shell 层：PowerShell（对齐 pi 的 Windows 模型 —
+            // 单一 shell 路由、argv 直传、不靠 cmd.exe 字符串拼接）。
+            // PowerShell 自带 `ls`/`cat`/`grep` 等 POSIX 别名（ls→Get-ChildItem，
+            // cat→Get-Content），LLM 发 POSIX 名也 work；`powershell`/`pwsh`
+            // 前缀的命令直接吃掉前缀走同一路由。cmd.exe 不再作为默认路由
+            // （无 PowerShell 的 Windows 系统不存在，powershell.exe 系统自带）。
+            let bare: &str = if lower.starts_with("powershell ") || lower.starts_with("powershell.exe ") {
+                trimmed["powershell".len()..].trim_start()
+            } else if lower.starts_with("powershell.exe ") {
+                trimmed["powershell.exe".len()..].trim_start()
             } else if lower.starts_with("pwsh ") || lower.starts_with("pwsh.exe ") {
-                let after_pws = trimmed[lower.find(' ').unwrap_or(0)..].trim_start();
-                let lower_after = after_pws.to_lowercase();
-                let mut c = TokioCommand::new("pwsh.exe");
-                c.arg("-NoProfile").arg("-NonInteractive");
-                if lower_after.starts_with("-command ") {
-                    c.arg("-Command").arg(after_pws["-command ".len()..].trim_start());
-                } else {
-                    c.arg("-Command").arg(after_pws);
-                }
-                c
+                trimmed["pwsh".len()..].trim_start()
             } else {
-                // Default + `cmd`/`cmd.exe` prefixed paths: normalize
-                // away any leading `cmd` / `cmd.exe` token and any run
-                // of `/c` switches, then wrap once with `cmd.exe /c`.
-                // Idempotent: `cmd /c "x"`, `cmd.exe /c "x"`, and the
-                // malformed `cmd /c/c "x"` all collapse to the same
-                // `cmd.exe /c "x"`. This prevents the doubled-`/c`
-                // hang (cmd.exe would block waiting for a literal
-                // program named `/c`). See `normalize_windows_cmd_prefix`.
-                //
-                // Windows 斜杠归一化（deepseek-harness 对照）：把
-                // 路径形态的 forward slash（`C:/` / `~/` / `a/b`）翻成
-                // backslash；cmd 开关（`/I` / `/b` / `/c`）与 URL
-                // scheme 不动。此层是 cmd 路由唯一的字符串拼接面，
-                // PowerShell / native dispatch 走 argv 不经过这里。
-                let normalized = normalize_windows_cmd_prefix(trimmed);
-                let normalized = normalize_windows_path_slashes(normalized);
-                let mut c = TokioCommand::new("cmd.exe");
-                c.arg("/c").arg(normalized);
-                c
-            }
+                trimmed
+            };
+
+            // 斜杠归一化（deepseek-harness 对照）：把 LLM 常发的 POSIX 形态
+            // 路径（`C:/x`、`~/y`、`a/b`）翻成 native backslash；cmd 开关
+            // （`/I`、`/b`、`/c`）与 URL `://` token 保持不动。PowerShell
+            // 两种分隔符都接受，但归一化后 LLM 输出更贴合 native 习惯，
+            // 也兼容下游走 cmd 兜底的场景。
+            let normalized = normalize_windows_path_slashes(bare);
+
+            let mut c = TokioCommand::new("powershell.exe");
+            c.arg("-NoProfile")
+                .arg("-NonInteractive")
+                .arg("-Command")
+                .arg(normalized);
+            c
         };
         // Hide the console window on Windows — without CREATE_NO_WINDOW,
         // every shell tool call (dir /b, etc.) flashes a black cmd window
@@ -537,44 +462,6 @@ impl TerminalBackend for LocalBackend {
             .map(|p| hermix_core::path_security::strip_win32_long_path_buf(&p));
         if let Some(ref dir) = effective_dir {
             cmd.current_dir(dir);
-        }
-
-        // Native dispatch fast-path (Tier1/2/4 coreutils). Skip when:
-        //   * background — background commands must keep their PID for
-        //     later tools (jobs_list, jobs_stop). Native dispatch
-        //     completes synchronously and has no PID to track.
-        //   * pty — already handled above; this branch only runs when
-        //     pty == false.
-        //   * shell-meta or unparseable input — fall through to the
-        //     existing cmd.exe / powershell paths.
-        if !background {
-            let cwd = effective_dir
-                .clone()
-                .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-            match parse(command) {
-                Ok(parsed) if parsed.kind == ParsedKind::Pure => {
-                    match coreutils::dispatch(&parsed.program, &parsed.args, &cwd) {
-                        Ok(Some(out)) => return Ok(out),
-                        Ok(None) => {
-                            // Not in our dictionary — fall through to shell.
-                        }
-                        Err(e) => {
-                            return Err(AgentError::Io(format!(
-                                "coreutils {}: {}",
-                                parsed.program, e
-                            )));
-                        }
-                    }
-                }
-                Ok(_) => {
-                    // Empty or ShellMeta — fall through to shell.
-                }
-                Err(e) => {
-                    // Unbalanced quote — let the shell produce a
-                    // diagnostic instead of swallowing it.
-                    tracing::debug!(error = %e, "coreutils parse failed; falling back to shell");
-                }
-            }
         }
 
         if background {
@@ -809,10 +696,10 @@ mod tests {
     #[tokio::test]
     async fn test_execute_command_timeout() {
         let backend = LocalBackend::new(1, 1_048_576);
-        // Use a platform-appropriate long-running command.
-        // Unix: `sleep 30`; Windows: `ping -n 31 127.0.0.1 >nul` (~30s).
+        // Platform-appropriate long-running command. PowerShell has a
+        // built-in `Start-Sleep` so no external binary is needed.
         let cmd = if cfg!(windows) {
-            "ping -n 31 127.0.0.1 >nul"
+            "Start-Sleep -Seconds 30"
         } else {
             "sleep 30"
         };
@@ -898,54 +785,6 @@ mod tests {
     fn test_detect_image_magic_not_image() {
         let header = b"Hello, world! This is a text file.";
         assert_eq!(detect_image_magic(header), None);
-    }
-
-    #[test]
-    fn normalize_windows_cmd_prefix_strips_single_cmd_c() {
-        assert_eq!(normalize_windows_cmd_prefix("cmd /c \"dir\""), "\"dir\"");
-    }
-
-    #[test]
-    fn normalize_windows_cmd_prefix_strips_cmd_exe_c() {
-        assert_eq!(
-            normalize_windows_cmd_prefix("cmd.exe /c \"tasklist\""),
-            "\"tasklist\""
-        );
-    }
-
-    #[test]
-    fn normalize_windows_cmd_prefix_collapses_double_c() {
-        // The malformed `cmd /c/c "..."` some LLMs emit must
-        // collapse to a single invocation, not a doubled `/c`.
-        assert_eq!(
-            normalize_windows_cmd_prefix("cmd /c/c \"tasklist | findstr /I hermix\""),
-            "\"tasklist | findstr /I hermix\""
-        );
-    }
-
-    #[test]
-    fn normalize_windows_cmd_prefix_passthrough_when_unprefixed() {
-        assert_eq!(
-            normalize_windows_cmd_prefix("tasklist | findstr /I hermix"),
-            "tasklist | findstr /I hermix"
-        );
-    }
-
-    #[test]
-    fn normalize_windows_cmd_prefix_drops_repeated_slashes() {
-        assert_eq!(
-            normalize_windows_cmd_prefix("cmd /c /c /c \"echo hi\""),
-            "\"echo hi\""
-        );
-    }
-
-    #[test]
-    fn normalize_windows_cmd_prefix_does_not_strip_cmdfoo() {
-        // `cmdfoo` must not be mistaken for the `cmd` token.
-        assert_eq!(
-            normalize_windows_cmd_prefix("cmdfoo /c \"x\""),
-            "cmdfoo /c \"x\""
-        );
     }
 
     // ── normalize_windows_path_slashes (deepseek-harness 对照) ──────
