@@ -1,8 +1,8 @@
 # 交接文档：Hermix 底座重写 + 网络安全层（给后续开发 agent）
 
 > 更新时间：2026-09-25。本文是唯一权威交接入口。动手前**必须完整读完本文 + 必读文档清单**，禁止跳读后自行发挥。
-> 当前累计 69 个 commit（52 + 本批 17：… `1c628052` / `2b14e53a` / `afdedf5a` / `9bdef3a8` + 本文档 commit）。工作区除 §7 未跟踪遗留物（`??` 行：WorkbenchChat.tsx / DiagnosticsTab.tsx / design-previews / 各 design.md / probe 脚本，属别的 agent，勿动）外干净。最近 commit：`9bdef3a8`（Windows shell 层统一 PowerShell 路由 + 提示词对齐，pi 模型对齐）+ `afdedf5a`（删手写 coreutils/shell-parser 字典）+ `2b14e53a`（Windows 吞斜杠隐患修复）。
-> 本批新增 commit：`87bb2b9a` / `b51a32a1` / `3cc45b72` / `f062c5ad` / `e1a75115` / `20b6eda8` / `ab7aad02` / `c208f10f` / `9d897704` / `640eeb57` / `6979313c` / `a8f4e547` / `63e3b174` / `0918f7a5` / `cead162d` / `5fab0ec2` / `6892a043` / `29392b57` / `e651c311` / `adfc8ca5` / `acf1fea1` / `e91ac42e` / `fd238361` / `fc2f425a` / `d7abee4d` / `e5f728a1` / `f985eade` / `bc8a6e6c` / `64d145de` / `9ff58666` / `bc2f7da` / `e3955b7a` / `8f3e7a67` / `e8534365` / `45e02378` / `ae71666c` / `08307f7e` / `25aa6fff` / `db892c6d` / `00074e0b` / `231a7dd6` / `d115b591` / `1c628052` / `2b14e53a` / `afdedf5a` / `9bdef3a8` / 本文档 commit（PowerShell 统一路由刷新）。
+> 当前累计 72 个 commit（52 + 本批 20：… `afdedf5a` / `9bdef3a8` / `835fa7ff` / `3071fc90` + 本文档 commit）。工作区除 §7 未跟踪遗留物（`??` 行：WorkbenchChat.tsx / DiagnosticsTab.tsx / design-previews / 各 design.md / probe 脚本，属别的 agent，勿动）外干净。最近 commit：`3071fc90`（grep 别名不实陈述修正）+ `835fa7ff`（READONLY_PATTERNS 补 PowerShell 只读 cmdlet + 路由冒烟钉死）+ `9bdef3a8`（Windows shell 层统一 PowerShell 路由 + 提示词对齐）。
+> 本批新增 commit：`87bb2b9a` / `b51a32a1` / `3cc45b72` / `f062c5ad` / `e1a75115` / `20b6eda8` / `ab7aad02` / `c208f10f` / `9d897704` / `640eeb57` / `6979313c` / `a8f4e547` / `63e3b174` / `0918f7a5` / `cead162d` / `5fab0ec2` / `6892a043` / `29392b57` / `e651c311` / `adfc8ca5` / `acf1fea1` / `e91ac42e` / `fd238361` / `fc2f425a` / `d7abee4d` / `e5f728a1` / `f985eade` / `bc8a6e6c` / `64d145de` / `9ff58666` / `bc2f7da` / `e3955b7a` / `8f3e7a67` / `e8534365` / `45e02378` / `ae71666c` / `08307f7e` / `25aa6fff` / `db892c6d` / `00074e0b` / `231a7dd6` / `d115b591` / `1c628052` / `2b14e53a` / `afdedf5a` / `9bdef3a8` / `835fa7ff` / `3071fc90` / 本文档 commit（PowerShell 路由收口刷新）。
 
 ---
 
@@ -328,6 +328,11 @@ CARGO_INCREMENTAL=0 cargo test -p <crate> --lib   # 改了哪个 crate 测哪个
   - `directions.rs` ENVIRONMENT_SHELL_GUIDANCE 段重写："Git Bash 做 shell 层"旧心智换成"统一 PowerShell shell 层"；cmdlet 优先清单；删 Git Bash 引号剥离、`/c/Users` 翻译等已不成立条目。
 - **YAGNI 定界**：不重写 hand dict 为"成熟库实现"（主人要的是"抄 pi/deepseek-harness 的模型"——pi 根本没有 hand dict，in-process 函数表；本仓库对齐 = 删 hand dict + 统一 shell 层，而非把 2000 行字典换成另一套 2000 行）；不引入 uutils/microsoft coreutils exe（主人纠正：不是塞外部 exe，是对齐执行模型）；不做 pi 的 `OutputAccumulator` 流式累积（现有 `max_output_size` 截断已够，流式输出是 UI 层关切，非命令执行模型关切）。
 - **验证**：`cargo check --workspace --all-targets` 绿；hermix-environments lib **46 全绿**（含新 timeout 测试）；hermix-tools lib **697 全绿**（零回归）；hermix-agent lib **1054 全绿**（零回归，directions 文案改动不影响既有测试）。
+- **收口批次（`835fa7ff` + `3071fc90`，主人"继续"指令）**：
+  - **READONLY_PATTERNS 缺口修复（`835fa7ff`）**：取证发现审批引擎只读豁免清单虽已含经典 POSIX 名（ls/cat/grep/findstr/dir），但缺 PowerShell 路由后高频的 8 个只读 cmdlet（Select-String/Test-Path/Get-Date/Get-Command/Get-Location/Get-Alias/Get-Member/Get-FileHash）——我推 LLM 用 Select-String 却会让它必弹审批卡。补齐 + 钉死测试 `powershell_route_readonly_cmdlets_are_allowlisted`。
+  - **真机冒烟钉死（`835fa7ff`）**：hermix-environments 加 2 个测试钉死新路由语义——`powershell_route_posix_alias_lists_directory`（ls 别名 + workdir 生效）/ `powershell_route_unknown_command_reports_nonzero_exit`（未知命令 exit≠0 且 stderr 非空）。真机探针钉死事实：ls/cat 内建别名可用；正斜杠路径 PS 自动归一；显式 exit code 原样传播。
+  - **grep 别名不实陈述修正（`3071fc90`）**：真机探针证实 PowerShell 内建 POSIX 别名只有 ls→Get-ChildItem 与 cat→Get-Content，**grep 没有内建别名**——上一批描述里"grep→Select-String all work"会让 LLM 发 grep 吃 "not recognized"。terminal.rs description + directions.rs 首段同步修正为"grep has NO built-in alias — use Select-String"。
+  - **收口验证**：workspace check 绿 / hermix-environments lib **48 全绿**（46+2）/ hermix-tools lib **698 全绿**（697+1）/ hermix-agent lib **1054 全绿**（零回归）。
 - **后续批次（划出）**：pi 的 `OutputAccumulator`（滚动 buffer + 超限落 temp file + tail 截断 + 流式 onData）——属 UI 流式输出批次，非命令执行模型；deepseek-harness 的 in-process shell program 表（VFS + 30+ JS 函数）——属 webworker 沙箱实验层，本仓库非 webworker 架构，不适用。
 
 **已落**（P6 T6 暴力破解 IP 锁定）：
