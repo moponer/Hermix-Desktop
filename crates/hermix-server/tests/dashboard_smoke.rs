@@ -23,10 +23,26 @@ async fn test_app_with_hermes_home(home: std::path::PathBuf) -> axum::Router {
     hermix_server::router(state)
 }
 
+/// oneshot 不经过真实监听器，axum 不会自动注入 `ConnectInfo`；缺了它
+/// `request_guard::client_ip` 返回 None → `derive_origin` 判 `Unpaired`
+/// → T1 关口 403（本文件全部测试因此挂红，属 T1 关口落地时的
+/// pre-existing 集成测试破损，CI gate 只跑 `--lib` 未覆盖）。注入
+/// loopback 即 `Local` 来源，恢复测试本意。
+fn local(req: Request<Body>) -> Request<Body> {
+    let mut req = req;
+    req.extensions_mut().insert(axum::extract::ConnectInfo(
+        "127.0.0.1:41000"
+            .parse::<std::net::SocketAddr>()
+            .unwrap(),
+    ));
+    req
+}
+
 /// Helper: GET request and return (status, body_json).
 async fn get_json(app: axum::Router, uri: &str) -> (StatusCode, serde_json::Value) {
     let res = app
-        .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+        .oneshot(local(
+            Request::builder().uri(uri).body(Body::empty()).unwrap()))
         .await
         .unwrap();
     let status = res.status();
@@ -43,14 +59,14 @@ async fn put_json(
 ) -> (StatusCode, serde_json::Value) {
     let bytes = serde_json::to_vec(payload).unwrap();
     let res = app
-        .oneshot(
+        .oneshot(local(
             Request::builder()
                 .method("PUT")
                 .uri(uri)
                 .header("content-type", "application/json")
                 .body(Body::from(bytes))
                 .unwrap(),
-        )
+        ))
         .await
         .unwrap();
     let status = res.status();
@@ -62,13 +78,13 @@ async fn put_json(
 /// POST with empty body, return (status, parsed JSON).
 async fn post_json(app: axum::Router, uri: &str) -> (StatusCode, serde_json::Value) {
     let res = app
-        .oneshot(
+        .oneshot(local(
             Request::builder()
                 .method("POST")
                 .uri(uri)
                 .body(Body::empty())
                 .unwrap(),
-        )
+        ))
         .await
         .unwrap();
     let status = res.status();
@@ -132,6 +148,7 @@ async fn dashboard_plugins_put_then_get_roundtrip() {
 // ── /api/dashboard/themes & theme ───────────────────────────────────
 
 #[tokio::test]
+#[ignore = "pre-existing：/api/dashboard/themes 已被 P0 死端点砍除（b51a32a1：researcher / consciousness WS / themes），测试未同步更新；恢复路由会推翻 P0 砍除决策，待主题功能重立项时一并恢复测试"]
 async fn dashboard_themes_get_returns_builtin_list() {
     let app = test_app().await;
     let (status, body) = get_json(app, "/api/dashboard/themes").await;
@@ -144,6 +161,7 @@ async fn dashboard_themes_get_returns_builtin_list() {
 }
 
 #[tokio::test]
+#[ignore = "pre-existing：/api/dashboard/theme 已被 P0 死端点砍除（b51a32a1），测试未同步更新；恢复路由会推翻 P0 砍除决策，待主题功能重立项时一并恢复测试"]
 async fn dashboard_theme_put_then_get_roundtrip() {
     let dir = tempfile::tempdir().expect("tempdir");
     let home = dir.path().to_path_buf();
@@ -169,6 +187,7 @@ async fn dashboard_theme_put_then_get_roundtrip() {
 }
 
 #[tokio::test]
+#[ignore = "pre-existing：/api/dashboard/theme 已被 P0 死端点砍除（b51a32a1），测试未同步更新；恢复路由会推翻 P0 砍除决策，待主题功能重立项时一并恢复测试"]
 async fn dashboard_theme_put_unknown_returns_400() {
     let app = test_app().await;
     let (status, body) = put_json(
@@ -380,13 +399,13 @@ async fn analytics_usage_returns_structure() {
 async fn delete_session_returns_ok() {
     let app = test_app().await;
     let res = app
-        .oneshot(
+        .oneshot(local(
             Request::builder()
                 .method("DELETE")
                 .uri("/api/sessions/nonexistent-session")
                 .body(Body::empty())
                 .unwrap(),
-        )
+        ))
         .await
         .unwrap();
     // Even for non-existent session, delete should succeed gracefully
@@ -406,14 +425,14 @@ async fn post_json_body(
 ) -> (StatusCode, serde_json::Value) {
     let bytes = serde_json::to_vec(payload).unwrap();
     let res = app
-        .oneshot(
+        .oneshot(local(
             Request::builder()
                 .method("POST")
                 .uri(uri)
                 .header("content-type", "application/json")
                 .body(Body::from(bytes))
                 .unwrap(),
-        )
+        ))
         .await
         .unwrap();
     let status = res.status();
@@ -425,13 +444,13 @@ async fn post_json_body(
 /// DELETE and return (status, parsed JSON).
 async fn delete_json(app: axum::Router, uri: &str) -> (StatusCode, serde_json::Value) {
     let res = app
-        .oneshot(
+        .oneshot(local(
             Request::builder()
                 .method("DELETE")
                 .uri(uri)
                 .body(Body::empty())
                 .unwrap(),
-        )
+        ))
         .await
         .unwrap();
     let status = res.status();
@@ -1334,13 +1353,13 @@ async fn delete_session_cascades_to_all_related_tables() {
 
     // ── The actual DELETE that used to return 500 ──
     let res = app
-        .oneshot(
+        .oneshot(local(
             Request::builder()
                 .method("DELETE")
                 .uri(format!("/v1/sessions/{sid}"))
                 .body(Body::empty())
                 .unwrap(),
-        )
+        ))
         .await
         .unwrap();
     assert_eq!(
@@ -1390,13 +1409,13 @@ async fn delete_session_returns_404_for_unknown_id() {
     let app = test_app_with_hermes_home(home).await;
 
     let res = app
-        .oneshot(
+        .oneshot(local(
             Request::builder()
                 .method("DELETE")
                 .uri("/v1/sessions/00000000-0000-0000-0000-000000000000")
                 .body(Body::empty())
                 .unwrap(),
-        )
+        ))
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
@@ -1432,13 +1451,13 @@ async fn delete_session_is_atomic_under_foreign_key_violation() {
     }
 
     let res = app
-        .oneshot(
+        .oneshot(local(
             Request::builder()
                 .method("DELETE")
                 .uri(format!("/v1/sessions/{sid}"))
                 .body(Body::empty())
                 .unwrap(),
-        )
+        ))
         .await
         .unwrap();
     // With the cascade in place this must succeed even with the
