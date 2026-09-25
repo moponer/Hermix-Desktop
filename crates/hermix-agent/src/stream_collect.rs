@@ -909,19 +909,32 @@ pub(crate) async fn collect_stream_inner(
                 "Parsed tool calls from raw XML text (MiniMax/M2.x compat)"
             );
             tool_calls = parsed;
-        } else if let Some(excerpt) = lost_tool_call_fragment_excerpt(&raw_content) {
-            // 静默失败 → 显式告警。此前该路径完全无声：模型试图以文本
-            // XML 发工具调用，标记破损到解析器无法识别（真机残骸
-            // `]<]minimax[>[`）→ sanitizer 剥掉可识别部分、解析 0 个、
-            // 残留文本再被 untagged-reasoning 启发式挪进 reasoning →
-            // finalizer 直接 finalize，用户只见"跑着就停了"，日志无定位
-            // 线索。恢复手段应在解析层（事件级流式解析状态机，插件内核
-            // 批次），此处只负责让失败可见。
-            tracing::warn!(
-                raw_len = raw_content.len(),
-                excerpt = %excerpt,
-                "tool-call XML fragments present but unparseable; tool call LOST — turn will finalize without dispatch"
-            );
+        } else {
+            // Second chance: wrapper markup corrupted but the inner
+            // `<invoke>` block intact (real-device debris
+            // `]<]minimax[>[`). Normalize the wrapper markers and retry.
+            let tolerant = hermix_core::tool_call_parser::parse_tool_calls_tolerant(&raw_content);
+            if !tolerant.is_empty() {
+                tracing::warn!(
+                    recovered_count = tolerant.len(),
+                    raw_len = raw_content.len(),
+                    "Recovered tool call(s) from corrupted wrapper markup via tolerant parse"
+                );
+                tool_calls = tolerant;
+            } else if let Some(excerpt) = lost_tool_call_fragment_excerpt(&raw_content) {
+                // 静默失败 → 显式告警。此前该路径完全无声：模型试图以文本
+                // XML 发工具调用，标记破损到解析器无法识别（真机残骸
+                // `]<]minimax[>[`）→ sanitizer 剥掉可识别部分、解析 0 个、
+                // 残留文本再被 untagged-reasoning 启发式挪进 reasoning →
+                // finalizer 直接 finalize，用户只见"跑着就停了"，日志无定位
+                // 线索。恢复手段应在解析层（事件级流式解析状态机，插件内核
+                // 批次），此处只负责让失败可见。
+                tracing::warn!(
+                    raw_len = raw_content.len(),
+                    excerpt = %excerpt,
+                    "tool-call XML fragments present but unparseable; tool call LOST — turn will finalize without dispatch"
+                );
+            }
         }
     }
 

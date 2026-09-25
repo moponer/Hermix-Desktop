@@ -433,6 +433,44 @@ pub fn parse_tool_calls(content: &str) -> Result<Vec<ToolCall>, AgentError> {
     parser.parse(content)
 }
 
+/// Tolerant second-chance parsing for models whose wrapper markup is
+/// corrupted (real-device debris: `]<]minimax[>[`, or the user_repro
+/// shape where the leading `<` of `minimax:tool_call` is lost while the
+/// inner `<invoke>` block stays intact). Normalizes the
+/// `minimax:tool_call` wrapper markers to canonical form, then re-runs
+/// the standard parser. Returns empty when nothing parses — the caller's
+/// existing "fragments present but unparseable" warning path stays as
+/// the final fallback.
+pub fn parse_tool_calls_tolerant(content: &str) -> Vec<ToolCall> {
+    let standard = parse_tool_calls(content).unwrap_or_default();
+    // 标准解析的 best-effort 兜底会对破损包裹产出"裸 invoke 空参"记录
+    // （只记 name 不记 body）——这不是可用恢复。标记疑似破损时继续
+    // 走重建路径，取参数更完整的结果。
+    let standard_usable = !standard.is_empty()
+        && standard.iter().all(|c| c.function.arguments != "{}");
+    if standard_usable && !content.contains("minimax") {
+        return standard;
+    }
+    if !content.contains("<invoke") {
+        return standard;
+    }
+    // 提取完好的 `<invoke>` 块，重建规范包裹后重解析。物理依据：
+    // 真机故障里破损的只有外层包裹标记（`]<]minimax[>[`、丢 `<`），
+    // invoke 块本体完好——直接提取，绕开包裹标记的 open/close 猜测。
+    static INVOKE_RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r#"(?is)<\s*invoke\s+name\s*=\s*"[^"]+"\s*>.*?</\s*invoke\s*>"#).unwrap()
+    });
+    let blocks: Vec<&str> = INVOKE_RE.find_iter(content).map(|m| m.as_str()).collect();
+    if blocks.is_empty() {
+        return standard;
+    }
+    let rebuilt = format!(
+        "<minimax:tool_call>{}</minimax:tool_call>",
+        blocks.concat()
+    );
+    parse_tool_calls(&rebuilt).unwrap_or_else(|_| standard)
+}
+
 /// Strip MiniMax M3 native tool-call tags from text content.
 /// Removes blocks like `<terminal><command>ls</command></terminal>`
 /// and `<read_file><path>/tmp</path></read_file>` where the outer
@@ -988,5 +1026,48 @@ Hello! Let me search for that.
             assert!(!calls.is_empty(), "known tool <{}> should be captured", tool_name);
             assert_eq!(calls[0].function.name, *tool_name);
         }
+    }
+
+    // ---- tolerant parse (corrupted wrapper markup) ----
+
+    #[test]
+    fn tolerant_recovers_missing_leading_lt_on_wrapper() {
+        // user_repro 精确串形状：外层 `minimax:tool_call` 标记丢了
+        // 开头 `<`（真机故障），`<invoke>` 块本体完好。标准解析
+        // 拿不到（block_re 依赖完好包裹），tolerant 归一化后可恢复。
+        let content = "minimax:tool_call <invoke name=\"terminal\"> <parameter name=\"command\">ls -la \"D:/data\"</parameter> </invoke> </minimax:tool_call>";
+        let calls = parse_tool_calls_tolerant(content);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].function.name, "terminal");
+        let args: serde_json::Value = serde_json::from_str(&calls[0].function.arguments).unwrap();
+        assert_eq!(args["command"], "ls -la \"D:/data\"");
+    }
+
+    #[test]
+    fn tolerant_recovers_bracket_debris_wrapper() {
+        // 真机残骸 `]<]minimax[>[` 形状：标记两侧括号残渣。
+        let content = "好的。\n]<]minimax[>[ <invoke name=\"read_file\"> <parameter name=\"path\">/tmp/x</parameter> </invoke> ]<]/minimax[>[";
+        let calls = parse_tool_calls_tolerant(content);
+        assert_eq!(calls.len(), 1, "expected recovery, calls: {calls:?}");
+        assert_eq!(calls[0].function.name, "read_file");
+        let args: serde_json::Value = serde_json::from_str(&calls[0].function.arguments).unwrap();
+        assert_eq!(args["path"], "/tmp/x");
+    }
+
+    #[test]
+    fn tolerant_wellformed_input_unchanged() {
+        // 完好输入走标准路径，结果与标准解析一致（零行为变化）。
+        let content = "<minimax:tool_call>\n<invoke name=\"terminal\">\n<parameter name=\"command\">pwd</parameter>\n</invoke>\n</minimax:tool_call>";
+        let std_calls = parse_tool_calls(content).unwrap();
+        let tol_calls = parse_tool_calls_tolerant(content);
+        assert_eq!(std_calls.len(), tol_calls.len());
+        assert_eq!(std_calls[0].function.name, tol_calls[0].function.name);
+    }
+
+    #[test]
+    fn tolerant_no_marker_returns_empty() {
+        // 无 minimax 标记 → 归一化 no-op → 空（告警路径保留）。
+        assert!(parse_tool_calls_tolerant("plain prose, no tools").is_empty());
+        assert!(parse_tool_calls_tolerant("some text with <b>html</b>").is_empty());
     }
 }
