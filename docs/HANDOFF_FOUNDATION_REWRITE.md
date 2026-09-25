@@ -1,8 +1,8 @@
 # 交接文档：Hermix 底座重写 + 网络安全层（给后续开发 agent）
 
 > 更新时间：2026-09-25。本文是唯一权威交接入口。动手前**必须完整读完本文 + 必读文档清单**，禁止跳读后自行发挥。
-> 当前累计 66 个 commit（52 + 本批 14：… `a3d9db0c` / `31498ce6` / `5674d1c0` / `6fceaf61` / `d115b591` / `1c628052` + 本文档 commit）。工作区除 §7 未跟踪遗留物（`??` 行：WorkbenchChat.tsx / DiagnosticsTab.tsx / design-previews / 各 design.md / probe 脚本，属别的 agent，勿动）外干净。最近 commit：`1c628052`（减少审批 A+B）+ `d115b591`（MiniMax tolerant 解析根治）+ `6fceaf61`（TaskRecord 启动对账读路径）。
-> 本批新增 commit：`87bb2b9a` / `b51a32a1` / `3cc45b72` / `f062c5ad` / `e1a75115` / `20b6eda8` / `ab7aad02` / `c208f10f` / `9d897704` / `640eeb57` / `6979313c` / `a8f4e547` / `63e3b174` / `0918f7a5` / `cead162d` / `5fab0ec2` / `6892a043` / `29392b57` / `e651c311` / `adfc8ca5` / `acf1fea1` / `e91ac42e` / `fd238361` / `fc2f425a` / `d7abee4d` / `e5f728a1` / `f985eade` / `bc8a6e6c` / `64d145de` / `9ff58666` / `bc2f7da` / `e3955b7a` / `8f3e7a67` / `e8534365` / `45e02378` / `ae71666c` / `08307f7e` / `25aa6fff` / `db892c6d` / `00074e0b` / `231a7dd6` / `d115b591` / `1c628052` / 本文档 commit（减少审批 A+B 刷新）。
+> 当前累计 67 个 commit（52 + 本批 15：… `a3d9db0c` / `31498ce6` / `5674d1c0` / `6fceaf61` / `d115b591` / `1c628052` / `2b14e53a` + 本文档 commit）。工作区除 §7 未跟踪遗留物（`??` 行：WorkbenchChat.tsx / DiagnosticsTab.tsx / design-previews / 各 design.md / probe 脚本，属别的 agent，勿动）外干净。最近 commit：`2b14e53a`（Windows 吞斜杠隐患修复）+ `1c628052`（减少审批 A+B）+ `d115b591`（MiniMax tolerant 解析根治）。
+> 本批新增 commit：`87bb2b9a` / `b51a32a1` / `3cc45b72` / `f062c5ad` / `e1a75115` / `20b6eda8` / `ab7aad02` / `c208f10f` / `9d897704` / `640eeb57` / `6979313c` / `a8f4e547` / `63e3b174` / `0918f7a5` / `cead162d` / `5fab0ec2` / `6892a043` / `29392b57` / `e651c311` / `adfc8ca5` / `acf1fea1` / `e91ac42e` / `fd238361` / `fc2f425a` / `d7abee4d` / `e5f728a1` / `f985eade` / `bc8a6e6c` / `64d145de` / `9ff58666` / `bc2f7da` / `e3955b7a` / `8f3e7a67` / `e8534365` / `45e02378` / `ae71666c` / `08307f7e` / `25aa6fff` / `db892c6d` / `00074e0b` / `231a7dd6` / `d115b591` / `1c628052` / `2b14e53a` / 本文档 commit（吞斜杠隐患修复刷新）。
 
 ---
 
@@ -269,7 +269,16 @@ CARGO_INCREMENTAL=0 cargo test -p <crate> --lib   # 改了哪个 crate 测哪个
   - **B**：read-only 豁免语义已在 `resource_guard` 实现（1099-1107 行），本批补 3 个**钉死测试**（防回归）：① read-only 文件工具在越界路径（`c:/other`，profile 只 grant `c:/workspace`）也永不弹卡；② `write_file` 越界**必须**弹卡（反向边界——只读免卡、写越界仍卡，不能一刀切全免）；③ 前缀匹配词边界（`git` 不匹配 `gitx`）+ shell 链操作符仍被拒（`git status && rm -rf /` 仍弹卡）+ 未 grant 前缀仍弹卡
 - **YAGNI 定界**：不动 risk 门控（Caution 在 Default 模式本来就直连 Allow，`local_agent_service.rs:1295-1297`）；不动 Tirith 默认规则（只拦 terminal shell-injection/system-paths，不拦 write_file）；不动 READONLY_PATTERNS 列表（覆盖度已够，`find` 的 `-delete`/`-exec` 例外单独处理）；不做"grant 持久化到 config.yaml 跨会话复用"（C 方案，主人没拍板，留待后续批次）
 - **验证**：`cargo check --workspace --all-targets` 绿（剩余 warning 为 pre-existing `prop_max_turns`）；hermix-agent lib **1054 全绿**（1051 基线 + 3 新测试，零回归）
-- **后续批次**：主人要求参考 `deepseek-harness` 的工具层 + Windows 命令执行 + 斜杠处理设计，对照本仓库 `LocalBackend` 的 `cmd.exe /c` / `powershell.exe -Command` 路由与 `strip_win32_long_path_buf` 覆盖范围，消除"Windows 吞斜杠"隐患（研究已收口，落码待下一批次）
+- **后续批次（本批已落）**：见下方「Windows 吞斜杠隐患修复」段（`2b14e53a`）。
+
+**已落**（Windows 吞斜杠隐患修复 — deepseek-harness 对照 `2b14e53a`）：
+- **Harness 对照研究收口（#5）**：deepseek-harness 的 Windows 命令执行关键设计取证——① `argv` 永不 shell 解析（`SubprocessSpawnSpec.argv` 直传 `CreateProcessW`，绕开 `cmd /c` 转义层，吞斜杠/引号错乱隐患从构造上不存在）；② `quoteArg` 精确对齐 `CommandLineToArgvW` 反解析语义（反斜杠只在引号前翻倍）；③ 工具描述层明示 PowerShell 方言（路径用 native `C:\...` 形态，cmdlet 优先于 cmd.exe 等价物）。本仓库对照：`LocalBackend::execute_command`（`local.rs`）的 **PowerShell 路由（`arg("-Command").arg(...)` argv 直传）与 native dispatch fast-path 已天然免疫**；唯一字符串拼接面是 **cmd.exe /c 路由**（整段命令字符串交给 cmd.exe 解析）；workdir 路径 `strip_win32_long_path_buf` 已剥 `\\?\`。
+- **修复（两层，同一安全目标）**：
+  - **运行时层**（`hermix-environments/local.rs`）：新增 `normalize_windows_path_slashes`，在 cmd 路由 `normalize_windows_cmd_prefix` 之后把路径形态的 forward slash 归一化成 backslash。判定语义：drive（`C:/`，prev 是 `:` 且 i-2 是字母）/ tilde（`~/`）/ 相对路径段（`a/b`，prev 是字母/点/反斜杠）翻 backslash；**cmd 开关**（`/I` `/b` `/c`——斜杠紧跟字母且前是空格/引号/括号）与 **URL token**（含 `://` 的整个 token，`com/x` 这类 URL 内路径不是 Windows 路径）保持不动。
+  - **提示层**（`hermix-tools/terminal.rs`）：terminal 工具的 `command` 参数 description 明示 native Windows 路径形态（backslash）+ PowerShell cmdlet 优先 + 含空格路径双引号包裹——从源头减少 LLM 按 POSIX 习惯发 forward slash。
+- **方案曲折（教训）**：`is_drive_sep` 判定首版写成"prev 是字母 + i-2 是空白/引号"——**错在 drive 斜杠 `C:/` 的 prev 是 `:`（冒号）不是字母**，probe 探针（`eprintln!` 打印每个 slash 的真实布尔中间值）一跑就暴露：`C:/` 的 drive 斜杠全 false 而段间斜杠 true。drive 的正确判定是 "prev 是 `:` 且 i-2 是字母"。URL scheme 守卫首版 `i+2==/` 太宽松误伤 `C:/x/`，改为"token 含 `://` 则整个 token 不翻"。
+- **YAGNI 定界**：不切 argv 直传 cmd 路由（大改——cmd /c 字符串是 Windows 命令的既有语义面，argv 直传会改变 quote/转义行为，需主人确认）；引号嵌套错乱（`dir "C:\a"b"`）需 cmd 引号重排器、风险高，留待后续。
+- **验证**：`cargo check --workspace --all-targets` 绿；hermix-environments lib **52 全绿**（44 基线 + 8 新斜杠测试：drive/小写 drive/tilde/相对路径/开关不动/mixed/URL scheme 保留/反斜杠幂等）；hermix-tools lib **697 全绿**（零回归，terminal schema 描述改动不影响既有测试）
 
 **已落**（P6 审计日志读端点 `GET /api/pairing/audit` — `08307f7e`）：
 - pairing.rs 加 `AuditQuery`（`limit: Option<u32>`，缺省 100，复用 `list_audit` 内部 `max(1).min(1000)` 钳制）+ `list_audit` handler（registry Some → `Json{events,count}` / None → 503，镜像 `list_devices` 模式）；`AuditRow` 已 `Serialize` 直接投影
