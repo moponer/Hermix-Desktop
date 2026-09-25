@@ -234,6 +234,118 @@ fn normalize_windows_cmd_prefix(command: &str) -> &str {
     rest
 }
 
+/// Normalise Windows path separators in a cmd-routed command string:
+/// forward slashes in **path-like** tokens become backslashes.
+///
+/// Rationale (deepseek-harness 对照): LLMs frequently emit paths in
+/// POSIX form (`C:/x/y.py`, `~/notes.txt`, `server/dist/index.js`)
+/// out of habit. cmd.exe accepts forward slashes, but downstream
+/// tools are inconsistent (`python` accepts `C:/`, `FIND` / batch
+/// labels / some CLI args do not). The harness pins everything to
+/// the native Windows form before spawning; we do the same for the
+/// cmd route (the only string-joined spawn path — PowerShell and
+/// native-dispatch routes already pass argv, so they never mangle
+/// separators).
+///
+/// Only separators in **path context** are flipped:
+/// - `Drive:\` forms (`C:/`, `c:/`)
+/// - tilde home (`~/`)
+/// - a `/` that is *not* the start of a cmd switch (`/c`, `/d`,
+///   `/I` …) and is not part of a URL scheme (`https://`)
+///
+/// A `/` immediately followed by more letters with no intervening
+/// whitespace (e.g. `findstr /I hermix`, `dir /b /s`) is a **cmd
+/// switch**, not a path separator — never flipped. A `/` between
+/// two word-like segments (`server/dist`) *is* a path separator.
+fn normalize_windows_path_slashes(command: &str) -> String {
+    let chars: Vec<char> = command.chars().collect();
+    let n = chars.len();
+    let mut out = String::with_capacity(n);
+
+    // Pre-pass: mark the start index of each whitespace-delimited
+    // token, and whether that token is a URL (contains `://` anywhere
+    // in it). URLs are never Windows paths — a token like
+    // `https://example.com/x` must NOT have its `com/x` slash
+    // flipped even though it looks identical to a relative path.
+    let mut token_url_start = std::collections::BTreeMap::new();
+    let mut i = 0;
+    while i < n {
+        while i < n && chars[i].is_whitespace() {
+            i += 1;
+        }
+        let token_start = i;
+        while i < n && !chars[i].is_whitespace() {
+            i += 1;
+        }
+        if i > token_start {
+            let token: String = chars[token_start..i].iter().collect();
+            if token.contains("://") {
+                token_url_start.insert(token_start, true);
+            }
+        }
+    }
+
+    for i in 0..n {
+        if chars[i] != '/' {
+            out.push(chars[i]);
+            continue;
+        }
+        let prev = chars.get(i - 1).copied();
+        let next = chars.get(i + 1).copied();
+
+        // Inside a URL token — never flip (a web URL in a shell
+        // command is not a Windows path).
+        let mut j = i;
+        while j > 0 && !chars[j - 1].is_whitespace() {
+            j -= 1;
+        }
+        if token_url_start.contains_key(&j) {
+            out.push('/');
+            continue;
+        }
+
+        // ── cmd switch slash: `/letter…` — NEVER flipped.
+        // `findstr /I`, `dir /b /s`, `cmd /c`.
+        let is_switch = next.map_or(false, |n| n.is_ascii_alphabetic())
+            && prev.map_or(true, |p| {
+                p.is_whitespace() || p == '"' || p == '\'' || p == '(' || p == ')'
+            });
+
+        // ── URL scheme `://` — two consecutive slashes after a
+        // scheme letter. Handled by the token-level check above;
+        // kept here as a second line of defense for a slash that
+        // falls between two word tokens (rare in practice).
+        let is_scheme = next == Some('/')
+            && prev.map_or(false, |p| p.is_ascii_alphabetic());
+
+        // ── Drive-letter sep: `X:/` where X is a drive letter (the
+        // char right before `:` and before this slash is a lone letter
+        // at a token start). `C:/x/y.py` → flip the drive slash AND
+        // every following segment slash.
+        let is_drive_sep = prev.map_or(false, |p| p == ':')
+            && chars
+                .get(i - 2)
+                .map_or(false, |p2| p2.is_ascii_alphabetic())
+            && next.is_some();
+
+        // ── Tilde home: `~/` — prev is `~`.
+        let is_tilde = prev == Some('~');
+
+        // ── Relative path sep: `a/b` where prev is a path-ish char
+        // (alphanumeric / dot / backslash) AND this is NOT a switch
+        // or scheme. `server/dist`, `a/b/c.txt`.
+        let is_path_sep = !is_switch
+            && !is_scheme
+            && prev.map_or(false, |p| {
+                p.is_ascii_alphanumeric() || p == '.' || p == '\\'
+            });
+
+        let flip = is_drive_sep || is_tilde || is_path_sep;
+        out.push(if flip { '\\' } else { '/' });
+    }
+    out
+}
+
 #[async_trait]
 impl TerminalBackend for LocalBackend {
     async fn execute_command(
@@ -383,7 +495,14 @@ impl TerminalBackend for LocalBackend {
                 // `cmd.exe /c "x"`. This prevents the doubled-`/c`
                 // hang (cmd.exe would block waiting for a literal
                 // program named `/c`). See `normalize_windows_cmd_prefix`.
+                //
+                // Windows 斜杠归一化（deepseek-harness 对照）：把
+                // 路径形态的 forward slash（`C:/` / `~/` / `a/b`）翻成
+                // backslash；cmd 开关（`/I` / `/b` / `/c`）与 URL
+                // scheme 不动。此层是 cmd 路由唯一的字符串拼接面，
+                // PowerShell / native dispatch 走 argv 不经过这里。
                 let normalized = normalize_windows_cmd_prefix(trimmed);
+                let normalized = normalize_windows_path_slashes(normalized);
                 let mut c = TokioCommand::new("cmd.exe");
                 c.arg("/c").arg(normalized);
                 c
@@ -826,6 +945,100 @@ mod tests {
         assert_eq!(
             normalize_windows_cmd_prefix("cmdfoo /c \"x\""),
             "cmdfoo /c \"x\""
+        );
+    }
+
+    // ── normalize_windows_path_slashes (deepseek-harness 对照) ──────
+    // 斜杠归一化只作用于 cmd 路由的字符串拼接面。钉死语义：
+    // 路径斜杠翻 backslash，cmd 开关斜杠不动。
+
+    #[test]
+    fn slash_norm_drive_path_flipped() {
+        assert_eq!(
+            normalize_windows_path_slashes("python C:/x/y.py"),
+            "python C:\\x\\y.py"
+        );
+        // 小写 drive 也认
+        assert_eq!(
+            normalize_windows_path_slashes("node c:/proj/dist/index.js"),
+            "node c:\\proj\\dist\\index.js"
+        );
+    }
+
+    #[test]
+    fn slash_norm_tilde_home_flipped() {
+        assert_eq!(
+            normalize_windows_path_slashes("cat ~/notes.txt"),
+            "cat ~\\notes.txt"
+        );
+    }
+
+    #[test]
+    fn slash_norm_relative_path_flipped() {
+        // 两段 word 之间的斜杠 = 路径分隔
+        assert_eq!(
+            normalize_windows_path_slashes("node server/dist/index.js"),
+            "node server\\dist\\index.js"
+        );
+        // 带 . 的路径（dist/index.js）
+        assert_eq!(
+            normalize_windows_path_slashes("echo a/b/c.txt"),
+            "echo a\\b\\c.txt"
+        );
+    }
+
+    #[test]
+    fn slash_norm_cmd_switch_not_flipped() {
+        // 开关斜杠（斜杠紧跟字母、且斜杠前是空格/行首/引号）不动
+        assert_eq!(
+            normalize_windows_path_slashes("findstr /I hermix"),
+            "findstr /I hermix"
+        );
+        assert_eq!(
+            normalize_windows_path_slashes("dir /b /s /a"),
+            "dir /b /s /a"
+        );
+        // /c 开关在 normalize_windows_cmd_prefix 之后仍保持斜杠
+        assert_eq!(
+            normalize_windows_path_slashes("cmd /c \"dir\""),
+            "cmd /c \"dir\""
+        );
+    }
+
+    #[test]
+    fn slash_norm_mixed_path_and_switch() {
+        // 同一命令里路径斜杠翻、开关斜杠留
+        assert_eq!(
+            normalize_windows_path_slashes("findstr /I text C:/logs/app.log"),
+            "findstr /I text C:\\logs\\app.log"
+        );
+    }
+
+    #[test]
+    fn slash_norm_url_scheme_preserved() {
+        // URL 的 `//`（scheme 后）不是路径分隔——前一个字符是
+        // `:`，不在 path-ish 集合里，保持不动。
+        assert_eq!(
+            normalize_windows_path_slashes("start https://example.com/x"),
+            "start https://example.com/x"
+        );
+    }
+
+    #[test]
+    fn slash_norm_pipe_and_semicolon_unaffected() {
+        // shell 元字符不是斜杠，原样保留；相邻路径斜杠照翻
+        assert_eq!(
+            normalize_windows_path_slashes("dir C:/a; dir C:/b"),
+            "dir C:\\a; dir C:\\b"
+        );
+    }
+
+    #[test]
+    fn slash_norm_idempotent_on_backslash() {
+        // 已经是 backslash 的命令不被二次改写（无 / 可翻）
+        assert_eq!(
+            normalize_windows_path_slashes("dir C:\\Users\\x"),
+            "dir C:\\Users\\x"
         );
     }
 

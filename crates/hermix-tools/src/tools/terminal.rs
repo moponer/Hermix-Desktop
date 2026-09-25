@@ -279,7 +279,11 @@ impl ToolHandler for TerminalHandler {
             "command".into(),
             json!({
                 "type": "string",
-                "description": "The command to execute"
+                "description": "The command to execute. \
+                                Windows: use native path form with backslashes (C:\\Users\\x\\file.txt, not C:/Users/x/file.txt); \
+                                PowerShell cmdlets are preferred over cmd.exe equivalents (Get-ChildItem, not dir); \
+                                quote paths containing spaces with double quotes (dir \"C:\\Program Files\\x\"). \
+                                Unix: standard shell syntax."
             }),
         );
         props.insert(
