@@ -158,6 +158,14 @@ CARGO_INCREMENTAL=0 cargo test -p <crate> --lib   # 改了哪个 crate 测哪个
 - 设备管理 UI 编辑 scopes（`DevicesTab.tsx` 加能力位勾选，撤销/编辑流程）
 - 测试基线更新：hermix-server 188→193 passed（+5 端点级能力位判定测试 `check_capability_*`）；hermix-tools 697 passed / hermix-agent 1050 passed（零回归）；全仓 cargo check --workspace 绿
 
+### 3.4 L2 任务运行时（TaskRecord + Checkpoint 模型）
+
+设计 §3.4：`hermix-task` 侧的任务级持久状态机。当前 `hermix-task` 已有
+`effect.rs`（Effect Sandwich 原语，P3 批次落地）+ `repository.rs` / `service.rs`，
+但 `TaskRecord` + `Checkpoint` 模型尚未定义——它是 P2 EntryRecord 完整对齐
+（§3.5）的前置依赖：`id`（单调 Id 类型）/ `model` / `head` / `edits` 四个
+字段属本批次，需先定 TaskRecord 任务归属语义再回填 Entry。
+
 ### 3.5 设计文档 §7 其余阶段（P2 会话内核后续 / P6 防滥用 + 审计 / P8 soak）
 
 **已落**（P6 防滥用 + 审计最小切片）：
@@ -212,10 +220,6 @@ CARGO_INCREMENTAL=0 cargo test -p <crate> --lib   # 改了哪个 crate 测哪个
 ### 3.6 手机客户端
 
 **D6 已拍板不在本期**，另立项目。本期交付的协议契约：QR 负载结构、4 个配对端点、TLS 指纹 TOFU，见 `pairing.rs` 与本文档。
-
-### 3.5 设计文档 §7 其余阶段（P2 会话内核后续 / P6 防滥用 + 审计 / P8 soak）
-
-按设计文档执行，每期独立可交付可回退。**冻结在 P0-P8，新增项必须替换其中一项（F11）**。P2/P3 已落地（变更线 + commit 协议 + Effect Sandwich + 崩溃恢复）；P0 已落地（gateway/acp 砍除 + 传输契约合一 + cron 死接线摘除）；P4 原语已落地（hermix-protocol + seq 源 + WsEnvelope.seq 可选字段），P4 订阅端点与旧补发下线并入 3.1（P5）。
 
 ---
 
