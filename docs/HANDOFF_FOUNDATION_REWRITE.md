@@ -1,8 +1,8 @@
 # 交接文档：Hermix 底座重写 + 网络安全层（给后续开发 agent）
 
 > 更新时间：2026-09-25。本文是唯一权威交接入口。动手前**必须完整读完本文 + 必读文档清单**，禁止跳读后自行发挥。
-> 当前累计 52 个 commit（50 + 本批 2），工作区除 §7 未跟踪遗留物外干净。最近 commit：`a666acb`（§3.4 联合崩溃恢复协议）+ `57307fe`（§3.4 TaskRecord 持久状态机）+ `0039df5`（文档刷新）。
-> 本批新增 commit：`87bb2b9a` / `b51a32a1` / `3cc45b72` / `f062c5ad` / `e1a75115` / `20b6eda8` / `ab7aad02` / `c208f10f` / `9d897704` / `640eeb57` / `6979313c` / `a8f4e547` / `63e3b174` / `0918f7a5` / `cead162d` / `5fab0ec2` / `6892a043` / `29392b57` / `e651c311` / `adfc8ca5` / `acf1fea1` / `e91ac42e` / `fd238361` / `fc2f425a` / `d7abee4d` / `e5f728a1` / `f985eade` / `bc8a6e6c` / `64d145de` / `9ff58666` / `bc2f7da` / `e3955b7a` / （端点级消费点文档批次，待提交）。
+> 当前累计 55 个 commit（52 + 本批 3：`e8534365` / `45e02378` / 本文档 commit）。工作区除 §7 未跟踪遗留物（`??` 行：WorkbenchChat.tsx / DiagnosticsTab.tsx / design-previews / 各 design.md / probe 脚本，属别的 agent，勿动）外干净。最近 commit：`45e02378`（dashboard_smoke 集成面 pre-existing 修复）+ `e8534365`（§3.4 TaskRecord 装配 + 权威字段端点）+ `305500d9`（文档刷新）。
+> 本批新增 commit：`87bb2b9a` / `b51a32a1` / `3cc45b72` / `f062c5ad` / `e1a75115` / `20b6eda8` / `ab7aad02` / `c208f10f` / `9d897704` / `640eeb57` / `6979313c` / `a8f4e547` / `63e3b174` / `0918f7a5` / `cead162d` / `5fab0ec2` / `6892a043` / `29392b57` / `e651c311` / `adfc8ca5` / `acf1fea1` / `e91ac42e` / `fd238361` / `fc2f425a` / `d7abee4d` / `e5f728a1` / `f985eade` / `bc8a6e6c` / `64d145de` / `9ff58666` / `bc2f7da` / `e3955b7a` / `8f3e7a67` / `e8534365` / `45e02378` / 本文档 commit。
 
 ---
 
@@ -181,9 +181,21 @@ CARGO_INCREMENTAL=0 cargo test -p <crate> --lib   # 改了哪个 crate 测哪个
 - 11 个测试（6 判定表分支 + 5 编排行为）+ 1 个 EffectLog 隔离性测试
 - `lib.rs` re-export：`Checkpoint` / `TaskOutcome` / `TaskRecord` / `TaskRecordStore` / `TaskRecoveryDecision` / `RecoveryPlan` / `TaskState` / `TaskRecordError`
 
+**已落**（§3.4 TaskRecord 装配 + GET /v1/tasks/{task_id}/record 权威字段端点 — Task #13 收尾，`e8534365` + `45e02378`）：
+- TaskRecord 接入 server 装配（前批已落磁盘代码，本批 `e8534365` 精确暂存提交）：
+  - `crates/hermix-server/src/state.rs`：`HttpServerState` 加字段 `task_record_store: Option<Arc<TaskRecordStore>>`（line ~201）；两条构造路径 `build_with_hermes_home` + `build` 均在 struct 字面量**之前**算好 `effects_db_path = hermix_config::paths::data_dir_in(&hermix_home).join("effects.db")` 再装配——这一步修复了 `hermix_home` 被 move 进 `hermix_home` 字段后、`task_record_store` 块再借用它的 `E0382` 编译错误（注意：不能在内联块里再 `data_dir_in(&hermix_home)`，会 borrow-after-move）
+  - `crates/hermix-server/src/test_state.rs`（2 处）+ `crates/hermix-server/src/approval.rs`（1 处）：测试构造路径补 `task_record_store: None,`
+  - `crates/hermix-server/src/lib.rs`：路由 `.route("/v1/tasks/{task_id}/record", get(get_task_record))`（line ~380）；handler `get_task_record` 写在 `deliver_results` 之后，模式仿 `get_task`：`State` → 取 `state.task_record_store` → `None` 返 `503 SERVICE_UNAVAILABLE` / `store.get(&task_id)` 命中返 `200 + Json(record)` / `None` 返 `404` / `Err` 返 `500 + e.to_string()`
+- **收尾清单已执行（Task #13，`e8534365` + `45e02378`）**：
+  1. http_smoke.rs 补 4 个集成测试 ✅：端点 200（先 `store.save` Running 记录再 GET）/ 404（不存在 id，先 seed 另一 id 保 `task_records` 表已建，防 fresh DB 误判 500）/ 503（**偏差说明**：清单原写"用 `test_state` 构造"，但 `test_state` 受 `test-helpers` feature 门控、默认 `cargo test` 跑不到凑不齐基线账，改用 pub 字段置 `None`，语义等同）/ 状态投影（返回 JSON 的 `state`/`updated_at`/`conversation_id` 与存入记录 serde 序列化逐字段一致——UI 读权威字段不推断）
+  2. `cargo check -p hermix-task -p hermix-server --all-targets` 双绿 ✅
+  3. `cargo test -p hermix-task -p hermix-server` 合并双绿 ✅：hermix-task **60 passed** / hermix-server lib **193 passed**（基线不变——**清单原文"64/197"算术有误**：4 个新测试在集成测试文件 `--test http_smoke`，不计数 `--lib`）/ http_smoke **6 passed + 2 ignored**（4 个新测试全绿）/ dashboard_smoke **53 passed + 3 ignored** / prop_status_schema 1 passed / **0 failed**
+  4. 精确暂存提交 ✅（4 server 文件 + http_smoke.rs，禁 `git add -A`，`§3.4` 前缀 + 测试证据）
+  5. 本段移"已落" + 头部计数 52→55 ✅
+- **集成测试基建 pre-existing 修复**（`45e02378`，独立语义独立 commit）：http_smoke + dashboard_smoke 的 oneshot 请求缺 `ConnectInfo` → `derive_origin` 判 `Unpaired` → T1 关口 403（两文件全部端点测试挂红，属 T1 关口落地时即破损、CI gate 只跑 `--lib` 从未覆盖集成测试面）——加 `local()` helper 注入 loopback（`Local` 来源）。两处存量红测标 `#[ignore]` 并注明证据：oauth 测试（`/api/providers/oauth` 路由从未存在于已跟踪 src，`git log -S` 无任何路由增删记录，随 `6b929a1a` 收编 untracked 时即红）+ 3 个 theme 测试（`/api/dashboard/theme(s)` 被 P0 死端点砍除批次 `b51a32a1` 有意砍除，恢复路由会推翻 P0 决策，待主题功能重立项时一并恢复）。
+
 **未做**（§3.4 剩余，需与 P2 消息读写切换 + P5 多端挂载联合验收）：
 - `Checkpoint.from_step` 细化到 agent loop 步骤（当前 `None` = 整任务重跑；细粒度恢复 = 跨 hermix-agent 批次）
-- TaskRecord 接入 server 装配（`HttpServerState` 加 `TaskRecordStore` 字段 + 任务 HTTP 端点读 TaskRecord 权威字段，对齐设计"UI 读权威字段不推断"）
 - `model` / `head` / `edits` 三字段（设计 `EntryRecord` 剩余字段，属 P2 消息读写切换批次，需 `hermix-session` Entry 扩展 + 上下文编辑指令类型）
 
 ### 3.5 设计文档 §7 其余阶段（P2 会话内核后续 / P6 防滥用 + 审计 / P8 soak）
