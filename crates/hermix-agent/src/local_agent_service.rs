@@ -2031,6 +2031,41 @@ impl AgentService for LocalAgentService {
                 .expect("profile_arc poisoned")
                 .grant_path(ws);
         }
+        // Default command-prefix grants (A): in-workspace build/test/
+        // explore/readonly commands run without an approval card.
+        // Dangerous patterns are still floored by the L0 hardline
+        // blocklist (checked before the risk gate in
+        // `decide_pre_tool_dispatch`) — `rm -rf /`, fork bombs,
+        // `curl|sh` etc. never reach the profile gate.
+        // `normalize_command` lowercases before matching, so a lowercase
+        // prefix covers any case form (`Git` / `git` / `GIT`).
+        const DEFAULT_GRANTED_COMMANDS: &[&str] = &[
+            "git",
+            "cargo",
+            "node",
+            "pnpm",
+            "npm",
+            "npx",
+            "python",
+            "python3",
+            "pwsh",
+            "powershell",
+            "cmd",
+            "where",
+            "dir",
+            "type",
+            "find",
+            "grep",
+            "ls",
+        ];
+        {
+            let mut profile = profile_arc_for_callback
+                .lock()
+                .expect("profile_arc poisoned");
+            for cmd in DEFAULT_GRANTED_COMMANDS {
+                profile.grant_command(cmd);
+            }
+        }
         let consciousness_tool_start = self.consciousness_tracker.clone();
         let consciousness_tool_complete = self.consciousness_tracker.clone();
         let consciousness_status = self.consciousness_tracker.clone();
@@ -4396,5 +4431,115 @@ mod override_tests {
             }
             other => panic!("expected Deny, got {:?}", other),
         }
+    }
+
+    /// B-layer 钉死：read-only 文件工具（`read_file` 等）永远豁免
+    /// `resource_guard` 的路径检查——即便目标路径在 profile 未授权范围
+    /// 内，也不应触发审批卡。回归语义：只读操作零安全代价，任何把
+    /// 这些工具提级到"弹卡"的重构都会被本测试拦下。
+    #[test]
+    fn resource_guard_exempts_readonly_file_tools_even_outside_grant() {
+        use hermix_core::ToolCall;
+        let mut profile = hermix_core::permission_profile::PermissionProfile::default();
+        profile.grant_path("c:/workspace");
+
+        for tool in ["read_file", "read_image", "search_files", "list_directory"] {
+            let tc = ToolCall {
+                id: "t1".into(),
+                function: hermix_core::FunctionCall {
+                    name: tool.to_string(),
+                    arguments: r#"{"path":"c:/other/secrets.txt"}"#.into(),
+                },
+            };
+            let params: serde_json::Value =
+                serde_json::from_str(tc.function.arguments.as_str()).unwrap();
+            assert!(
+                LocalAgentService::resource_guard(&tc, &profile, &params).is_none(),
+                "{tool} must never gate on path (read-only exemption regressed)"
+            );
+        }
+    }
+
+    /// B-layer 钉死（写工具对照）：write_file 写未授权路径必须返回
+    /// 资源描述（触发审批卡），授权路径内则豁免。"减少审批"的
+    /// 反向边界——只读免卡、写越界仍卡，不能一刀切全免。
+    #[test]
+    fn resource_guard_gates_write_tools_outside_grant() {
+        use hermix_core::ToolCall;
+        let mut profile = hermix_core::permission_profile::PermissionProfile::default();
+        profile.grant_path("c:/workspace");
+
+        let outside = ToolCall {
+            id: "t1".into(),
+            function: hermix_core::FunctionCall {
+                name: "write_file".into(),
+                arguments: r#"{"path":"c:/other/x.txt","content":"x"}"#.into(),
+            },
+        };
+        let params: serde_json::Value =
+            serde_json::from_str(outside.function.arguments.as_str()).unwrap();
+        assert!(
+            LocalAgentService::resource_guard(&outside, &profile, &params).is_some(),
+            "write_file outside grant MUST trigger approval"
+        );
+
+        let inside = ToolCall {
+            id: "t2".into(),
+            function: hermix_core::FunctionCall {
+                name: "write_file".into(),
+                arguments: r#"{"path":"c:/workspace/x.txt","content":"x"}"#.into(),
+            },
+        };
+        let params: serde_json::Value =
+            serde_json::from_str(inside.function.arguments.as_str()).unwrap();
+        assert!(
+            LocalAgentService::resource_guard(&inside, &profile, &params).is_none(),
+            "write_file inside the granted workspace root must NOT trigger approval"
+        );
+    }
+
+    /// A-layer 钉死：默认 command 前缀 grant 生效后，常见构建/测试/探索
+    /// 命令（cargo/node/pnpm/git 等）在"只 grant 这批前缀"的 profile
+    /// 下也应被 `allows_command` 放行。直接测 `PermissionProfile` 的
+    /// 前缀匹配语义（agent 侧的 `DEFAULT_GRANTED_COMMANDS` 只是调用
+    /// `grant_command` 的封装）。
+    #[test]
+    fn default_granted_command_prefixes_pass_allows_command() {
+        let mut profile = hermix_core::permission_profile::PermissionProfile::default();
+        for cmd in [
+            "git",
+            "cargo",
+            "node",
+            "pnpm",
+            "npm",
+            "npx",
+            "python",
+            "python3",
+            "pwsh",
+            "powershell",
+            "cmd",
+            "where",
+            "dir",
+            "type",
+            "find",
+            "grep",
+            "ls",
+        ] {
+            profile.grant_command(cmd);
+        }
+        // 前缀匹配 + 大小写归一（normalize_command lowercase）
+        assert!(profile.allows_command("cargo build --workspace"));
+        assert!(profile.allows_command("CARGO test -p hermix-agent"));
+        assert!(profile.allows_command("pnpm install"));
+        assert!(profile.allows_command("git status"));
+        // 词边界：`git` 不匹配 `gitx`（前缀后接字母 = 不同词）
+        assert!(!profile.allows_command("gitx init"), "prefix must match at word boundary");
+        // shell 链操作符仍被拒（`contains_shell_chain_operator`）
+        assert!(
+            !profile.allows_command("git status && rm -rf /"),
+            "granted prefix must not let the agent chain destructive actions"
+        );
+        // 未 grant 的前缀仍弹卡
+        assert!(!profile.allows_command("del /q x.txt"), "ungated command prefix must prompt");
     }
 }
