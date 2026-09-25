@@ -909,6 +909,19 @@ pub(crate) async fn collect_stream_inner(
                 "Parsed tool calls from raw XML text (MiniMax/M2.x compat)"
             );
             tool_calls = parsed;
+        } else if let Some(excerpt) = lost_tool_call_fragment_excerpt(&raw_content) {
+            // 静默失败 → 显式告警。此前该路径完全无声：模型试图以文本
+            // XML 发工具调用，标记破损到解析器无法识别（真机残骸
+            // `]<]minimax[>[`）→ sanitizer 剥掉可识别部分、解析 0 个、
+            // 残留文本再被 untagged-reasoning 启发式挪进 reasoning →
+            // finalizer 直接 finalize，用户只见"跑着就停了"，日志无定位
+            // 线索。恢复手段应在解析层（事件级流式解析状态机，插件内核
+            // 批次），此处只负责让失败可见。
+            tracing::warn!(
+                raw_len = raw_content.len(),
+                excerpt = %excerpt,
+                "tool-call XML fragments present but unparseable; tool call LOST — turn will finalize without dispatch"
+            );
         }
     }
 
@@ -967,6 +980,42 @@ pub(crate) async fn collect_stream_inner(
     }))
 }
 
+/// 检测 raw_content 中工具调用标记的破损残留——解析器无法识别、sanitizer
+/// 剥除后仍剩下的碎片（真机故障残骸 `]<]minimax[>`：`<minimax:tool_call>`
+/// 被模型自身输出损坏，`:tool_call` 后缀缺失、括号错乱）。返回单行摘录
+/// （命中点前后各 80 字符、压平换行）供告警；`None` = 无碎片（正常纯文本）。
+///
+/// 仅在 `parse_tool_calls` 解析为 0 时调用——完整可解析的调用不进这里；
+/// 大写 "MiniMax"（散文提及模型名的常见写法）不命中任何小写标记。
+fn lost_tool_call_fragment_excerpt(raw: &str) -> Option<String> {
+    const MARKERS: &[&str] = &[
+        "<minimax:tool_call",
+        "</minimax:tool_call",
+        "<invoke",
+        "</invoke",
+        "<function_calls",
+        "</function_calls",
+        // 破损变体：`]` 紧贴小写标记名（正常代码/散文几乎不可能出现
+        // `]minimax` 序列——数组下标是 `[minimax]`，泛型是 `>minimax`）。
+        "]minimax",
+    ];
+    let pos = MARKERS.iter().find_map(|m| raw.find(m))?;
+    let start = clip_to_char_boundary(raw, pos.saturating_sub(80));
+    let end = clip_to_char_boundary(raw, raw.len().min(pos + 80));
+    Some(raw[start..end].replace(['\n', '\r'], " "))
+}
+
+/// 向后调整到最近的 char boundary（`floor_char_boundary` 尚未稳定）。
+fn clip_to_char_boundary(s: &str, mut i: usize) -> usize {
+    if i >= s.len() {
+        return s.len();
+    }
+    while i > 0 && !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -977,6 +1026,18 @@ mod tests {
     use hermix_core::{AgentError, FunctionCallDelta, LlmProvider, LlmResponse, StreamDelta, ToolCallDelta};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
+
+    /// 真机故障残骸（`]<]minimax[>[`）必须被检出并给出摘录；
+    /// 正常纯文本与散文提及 MiniMax（大写）不触发。
+    #[test]
+    fn lost_tool_call_fragment_excerpt_detects_damaged_marker() {
+        let raw = "让我开始第一批：\n]<]minimax[>\n]<]minimax[>";
+        let e = lost_tool_call_fragment_excerpt(raw).expect("破损标记应被检出");
+        assert!(e.contains("]minimax"), "摘录应含命中片段: {e}");
+        assert!(!e.contains('\n'), "摘录应压平换行: {e}");
+        assert!(lost_tool_call_fragment_excerpt("普通回复，没有标记。").is_none());
+        assert!(lost_tool_call_fragment_excerpt("我是 MiniMax-M3 模型。").is_none());
+    }
 
     /// when a single
     /// LLM chunk carries BOTH a `<think>...</think>` span in
