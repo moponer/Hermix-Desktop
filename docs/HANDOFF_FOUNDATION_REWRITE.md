@@ -166,6 +166,23 @@ CARGO_INCREMENTAL=0 cargo test -p <crate> --lib   # 改了哪个 crate 测哪个
 （§3.5）的前置依赖：`id`（单调 Id 类型）/ `model` / `head` / `edits` 四个
 字段属本批次，需先定 TaskRecord 任务归属语义再回填 Entry。
 
+**已落**（本批次）：
+- `crates/hermix-task/src/record.rs`（新）：
+  - `Checkpoint { from_step: Option<String>, at: i64 }`——恢复上下文（Pending/Running 携带；`from_step=None` 表示整任务重跑，后续批次细化 step 语义）
+  - `TaskOutcome` 五值：`Completed{result}` / `Failed{error,result}` / `Aborted{reason}` / `Orphaned{reason}` / `Faulted{error}`（设计 §3.3 原文 1:1）
+  - `TaskState` 三值：`Pending{checkpoint}` / `Running{checkpoint}` / `Terminal{outcome}`，`as_str()` 落库 + `outcome()` / `checkpoint()` 投影 API
+  - `TaskRecord { id, conversation_id, state, updated_at }`：`id` 与 `tasks` 表同 UUID（对齐 `EntryRecord.by_task_id` 归属），`conversation_id` 与 `hermix-session` 会话对齐
+  - `TaskRecordStore`（`task_records` 表，与 `EffectLog` 同库 sessions.db WAL）：`save`（覆盖式 upsert，状态转移多次调用实现）/ `get` / `list_by_conversation` / **`scan_unfinished`（崩溃恢复扫描，只读，返回所有 `state='running'` 记录；实际状态转移由调用方 `save` 实现）**
+  - 损坏 outcome_json → `Orphaned` 兜底；未知 state 字符串 → `Orphaned`
+- 5 个测试：pending→running→terminal 全生命周期 roundtrip / scan_unfinished 返回 running / list_by_conversation 过滤 / 损坏 outcome 降级 Orphaned / checkpoint JSON roundtrip
+- `lib.rs` re-export：`Checkpoint` / `TaskOutcome` / `TaskRecord` / `TaskRecordStore` / `TaskState` / `TaskRecordError`
+
+**未做**（§3.4 剩余，需与 P2 消息读写切换 + P5 多端挂载联合验收）：
+- `Checkpoint.from_step` 细化到 agent loop 步骤（当前 `None` = 整任务重跑；细粒度恢复 = 跨 hermix-agent 批次）
+- `scan_unfinished` 与 `EffectLog.scan_unfinished` 的联合恢复协议：扫 running 任务 → 查其 EffectLog 未决 intent → 幂等 Replay / 非幂等 NeedsReview / 无可迁移降级 Orphaned（设计 §3.4 崩溃恢复协议完整实现；当前 TaskRecordStore 与 EffectLog 各自独立，联合判定逻辑未写）
+- TaskRecord 接入 server 装配（`HttpServerState` 加 `TaskRecordStore` 字段 + 任务 HTTP 端点读 TaskRecord 权威字段，对齐设计"UI 读权威字段不推断"）
+- `model` / `head` / `edits` 三字段（设计 `EntryRecord` 剩余字段，属 P2 消息读写切换批次，需 `hermix-session` Entry 扩展 + 上下文编辑指令类型）
+
 ### 3.5 设计文档 §7 其余阶段（P2 会话内核后续 / P6 防滥用 + 审计 / P8 soak）
 
 **已落**（P6 防滥用 + 审计最小切片）：
