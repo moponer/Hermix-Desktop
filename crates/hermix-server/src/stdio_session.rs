@@ -191,10 +191,19 @@ async fn handle_http_frame(
         // axum 的 Json extractor 校验 content-type；统一按 JSON 请求体处理。
         builder = builder.header("content-type", "application/json");
     }
-    let request = match builder.body(Body::from(body.unwrap_or_default())) {
+    let mut request = match builder.body(Body::from(body.unwrap_or_default())) {
         Ok(r) => r,
         Err(e) => return respond(400, e.to_string(), "utf8", &request_id),
     };
+    // stdio 桥是桌面端进程自身的管道（sidecar 的 stdin 只可能被本机
+    // Tauri 壳写入），没有 TCP 对端可取 ConnectInfo。注入 loopback 合成
+    // ConnectInfo：client_ip() 返回 127.0.0.1 → derive_origin 判 Local
+    // （桌面 = 本机，T1 关口语义下最可信来源，与 stdio 迁移前的 TCP
+    // loopback 行为一致）。缺这一步时 request_guard 的 T1 关口会把
+    // 桌面端自己的全部 REST 请求判 Unpaired 而 403。
+    if let Ok(peer) = "127.0.0.1:0".parse::<std::net::SocketAddr>() {
+        request.extensions_mut().insert(axum::extract::ConnectInfo(peer));
+    }
 
     match tower::ServiceExt::oneshot(app, request).await {
         Ok(resp) => {
@@ -287,5 +296,35 @@ mod envelope_tests {
         let line = r#"{"channel":"http","request_id":"","payload":"{}"}"#;
         let f = parse_inbound(line).expect("frame parses");
         assert!(f.request_id.is_none());
+    }
+
+    /// T1 回归保护：`handle_http_frame` 派发的请求必须注入合成 loopback
+    /// `ConnectInfo`。缺它时 `request_guard::client_ip` 返回 None →
+    /// `derive_origin` 判 `Unpaired` → T1 关口把桌面端自己的全部 REST
+    /// 请求 403（真机故障：桌面端除 /health 与配对端点外全被拦）。
+    /// 驱动方式：最小 router 的 handler 用 `ConnectInfo` 提取器读对端，
+    /// 注入缺失时 axum 返回 500（extension 不存在），断言必红。
+    #[tokio::test]
+    async fn http_frame_injects_loopback_connect_info() {
+        use axum::extract::ConnectInfo;
+        use std::net::SocketAddr;
+
+        let app = axum::Router::new().route(
+            "/echo-peer",
+            axum::routing::get(|ConnectInfo(peer): ConnectInfo<SocketAddr>| async move {
+                peer.to_string()
+            }),
+        );
+        let resp = handle_http_frame(
+            app,
+            r#"{"method":"GET","path":"/echo-peer"}"#,
+            Some("1"),
+        )
+        .await;
+        let envelope: serde_json::Value = serde_json::from_str(&resp).unwrap();
+        let payload: serde_json::Value =
+            serde_json::from_str(envelope["payload"].as_str().unwrap()).unwrap();
+        assert_eq!(payload["status"], 200, "ConnectInfo 已注入 → 200");
+        assert_eq!(payload["body"], "127.0.0.1:0", "对端是注入的合成 loopback");
     }
 }
