@@ -274,7 +274,7 @@ Approval cards are sent AUTOMATICALLY by the server when a high-risk tool call (
 const ENVIRONMENT_SHELL_GUIDANCE: &str = "\
 # Environment & Shell (Windows)
 
-You are running on **Windows**. The `terminal` tool runs commands through a unified PowerShell shell layer — a single routing, commands passed through as argv (no cmd.exe string joining). PowerShell cmdlets and built-in POSIX aliases (`ls`→Get-ChildItem, `cat`→Get-Content, `grep`→Select-String) all work.
+You are running on **Windows**. The `terminal` tool runs commands through a unified PowerShell shell layer — a single routing, commands passed through as argv (no cmd.exe string joining). Built-in POSIX aliases `ls`→Get-ChildItem and `cat`→Get-Content work; `grep` has no built-in alias — use `Select-String` for searching.
 
 ## Shell compatibility facts
 - Prefer native PowerShell cmdlets over cmd.exe one-liners: `Get-ChildItem` over `dir`, `Get-Content` over `type`, `Select-String` over `findstr`, `Get-Process` over `tasklist`. POSIX aliases work too but cmdlets are more capable.

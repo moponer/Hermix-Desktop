@@ -282,8 +282,9 @@ impl ToolHandler for TerminalHandler {
                 "description": "The command to execute. \
                                 Windows: the terminal tool runs commands through a PowerShell shell layer \
                                 (single unified routing, argv passed through directly — no cmd.exe string joining). \
-                                PowerShell cmdlets and built-in POSIX aliases (ls→Get-ChildItem, cat→Get-Content, \
-                                grep→Select-String) all work; prefer native cmdlets (Get-ChildItem, Get-Content, \
+                                Built-in POSIX aliases ls→Get-ChildItem and cat→Get-Content work; \
+                                grep has NO built-in alias — use Select-String for searching. \
+                                Prefer native cmdlets (Get-ChildItem, Get-Content, \
                                 Select-String, Get-Process) over cmd.exe one-liners (dir, type, findstr). \
                                 Quote paths containing spaces with double quotes (Get-ChildItem \"C:\\Program Files\\x\"). \
                                 Use native backslash path form (C:\\Users\\x\\file.txt); forward slashes are also \
