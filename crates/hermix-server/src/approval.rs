@@ -701,6 +701,7 @@ mod approval_registry_tests {
             orchestration_bus: OrchestrationEventBus::new(),
             metrics,
             task_service: None,
+            task_record_store: None,
             automation_service: None,
             automation_engine_scheduler: None,
             custom_app_manager: None,

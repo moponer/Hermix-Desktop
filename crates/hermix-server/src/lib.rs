@@ -376,6 +376,8 @@ pub fn router(state: HttpServerState) -> Router {
         .route("/v1/tasks/{task_id}/children", get(list_task_children))
 // Product delivery — register deliverable artifacts.
 .route("/v1/tasks/{task_id}/results", post(deliver_results))
+        // §3.4 L2 — 任务持久状态机权威字段（UI 读它不推断）。
+        .route("/v1/tasks/{task_id}/record", get(get_task_record))
         // Automation Engine CRUD endpoints.
         .route("/v1/automations", get(list_automations).post(create_automation))
         .route("/v1/automations/{id}", get(get_automation).delete(delete_automation))
@@ -1514,6 +1516,28 @@ async fn deliver_results(
                 "result_refs": result_refs,
             }))
             .into_response()
+        }
+    }
+}
+
+/// `GET /v1/tasks/{task_id}/record` — 读任务持久状态机权威字段。
+/// 返回 `TaskRecord`（state / checkpoint / outcome / updated_at），
+/// 供调用方在崩溃恢复前查询任务当前判定依据。
+async fn get_task_record(
+    State(state): State<HttpServerState>,
+    Path(task_id): Path<String>,
+) -> axum::response::Response {
+    let store = match &state.task_record_store {
+        Some(s) => s.clone(),
+        None => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+
+    match store.get(&task_id) {
+        Ok(Some(record)) => axum::Json(record).into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) => {
+            tracing::warn!(task_id = %task_id, error = %e, "get_task_record error");
+            (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
         }
     }
 }

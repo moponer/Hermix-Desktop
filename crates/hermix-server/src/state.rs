@@ -195,6 +195,10 @@ pub struct HttpServerState {
     /// `sessions.db` (铁律 D/WAL). `None` when the DB path can't be
     /// resolved (e.g. in test fixtures).
     pub task_service: Option<std::sync::Arc<hermix_task::TaskService>>,
+    /// TaskRecord 持久状态机（§3.4 L2）。与 `EffectLog` 同库
+    /// `effects.db`，崩溃恢复协议靠它做任务级判定。
+    /// `None` 时端点降级 503（测试 / CLI 模式）。
+    pub task_record_store: Option<std::sync::Arc<hermix_task::TaskRecordStore>>,
     /// Automation lifecycle service. Backed by
     /// [`hermix_automation::AutomationRepository`] pointing at the same
     /// `sessions.db` (铁律 D/WAL). `None` when the DB path can't be
@@ -639,6 +643,10 @@ impl HttpServerState {
         // 提前解析）。首个字面量未用到时会有 unused 警告——两处构造路径
         // 共用同一绑定消除重复。
         let devices_db_path = hermix_home.join("devices.db");
+        // §3.4 L2：TaskRecord 持久状态机与 EffectLog 同库（effects.db）。
+        // 路径在字面量前算好，避免 hermix_home 被 move 进字段后借用失效。
+        let effects_db_path =
+            hermix_config::paths::data_dir_in(&hermix_home).join("effects.db");
         let state = Self {
             config: Arc::new(config),
             tool_registry,
@@ -685,6 +693,13 @@ impl HttpServerState {
                 ));
                 let _ = repo.ensure_schema();
                 Some(std::sync::Arc::new(hermix_task::TaskService::new(repo)))
+            },
+            // §3.4 L2：TaskRecord 持久状态机与 EffectLog 同库（effects.db），
+            // 构造不会失败；单笔持久化失败在端点侧降级 500。
+            task_record_store: {
+                Some(std::sync::Arc::new(hermix_task::TaskRecordStore::new(
+                    effects_db_path,
+                )))
             },
             automation_service: {
                 let repo = std::sync::Arc::new(hermix_automation::AutomationRepository::new(
@@ -918,6 +933,10 @@ impl HttpServerState {
         // 提前解析）。首个字面量未用到时会有 unused 警告——两处构造路径
         // 共用同一绑定消除重复。
         let devices_db_path = hermix_home.join("devices.db");
+        // §3.4 L2：TaskRecord 持久状态机与 EffectLog 同库（effects.db）。
+        // 路径在字面量前算好，避免 hermix_home 被 move 进字段后借用失效。
+        let effects_db_path =
+            hermix_config::paths::data_dir_in(&hermix_home).join("effects.db");
         let state = Self {
             config: Arc::new(config),
             tool_registry,
@@ -963,6 +982,13 @@ impl HttpServerState {
                 ));
                 let _ = repo.ensure_schema();
                 Some(std::sync::Arc::new(hermix_task::TaskService::new(repo)))
+            },
+            // §3.4 L2：TaskRecord 持久状态机与 EffectLog 同库（effects.db），
+            // 构造不会失败；单笔持久化失败在端点侧降级 500。
+            task_record_store: {
+                Some(std::sync::Arc::new(hermix_task::TaskRecordStore::new(
+                    effects_db_path,
+                )))
             },
             automation_service: {
                 let repo = std::sync::Arc::new(hermix_automation::AutomationRepository::new(
