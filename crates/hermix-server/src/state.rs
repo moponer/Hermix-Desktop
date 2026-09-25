@@ -22,6 +22,44 @@ struct EffectLogSink {
     registry: std::sync::Weak<ToolRegistry>,
 }
 
+/// §3.4 L2：TaskRecord 启动对账。启动时残留 `running` = 上次进程死在
+/// sub-agent 执行中途；Checkpoint.from_step 未细化无从续跑——唯一诚实
+/// 的处置是落成 `Terminal(Faulted)`，让恢复视图不留僵尸。只读扫描 +
+/// best-effort 写入：对账失败不阻断启动。
+fn reconcile_task_records(store: &hermix_task::TaskRecordStore) {
+    let running = match store.scan_unfinished() {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!("startup TaskRecord recovery scan failed: {e}");
+            return;
+        }
+    };
+    if running.is_empty() {
+        return;
+    }
+    tracing::warn!(
+        count = running.len(),
+        "startup recovery: {} sub-agent TaskRecord(s) stuck in running \
+         from a previous run; marking Faulted (no checkpoint to resume)",
+        running.len()
+    );
+    for rec in &running {
+        let faulted = hermix_task::TaskRecord::terminal(
+            rec.id.clone(),
+            rec.conversation_id.clone(),
+            hermix_task::TaskOutcome::Faulted {
+                error: "进程重启，sub-agent 执行中断（启动对账标记）".into(),
+            },
+        );
+        if let Err(e) = store.save(&faulted) {
+            tracing::warn!(
+                error = %e, id = %rec.id,
+                "startup recovery: failed to mark TaskRecord Faulted"
+            );
+        }
+    }
+}
+
 impl hermix_tools::EffectSink for EffectLogSink {
     fn record_intent(&self, tool: &str, args_json: &str) -> String {
         // 查注册表拿 risk_level；查不到（工具未注册 / Arc 已 drop）
@@ -333,6 +371,18 @@ impl HttpServerState {
                 registry: Arc::downgrade(&tool_registry),
             }));
         }
+        // §3.4 L2：TaskRecord 启动对账。正常终态由 sub-agent 生命周期的
+        // 三个挂点落盘（task_record_sink），启动时残留 running = 上次进程
+        // 死在执行中途。Checkpoint.from_step 未细化，无从续跑——唯一诚实
+        // 的处置是落成 Terminal(Faulted)，让恢复视图不留僵尸。
+        // store 构造后供 task_record_store 字段复用（单实例，不再重复开库）。
+        let task_record_store = {
+            let store = hermix_task::TaskRecordStore::new(
+                hermix_config::paths::data_dir_in(&hermix_home).join("effects.db"),
+            );
+            reconcile_task_records(&store);
+            store
+        };
         // Register builtin tools (file, shell, browser, etc.)
         let terminal_backend: Arc<dyn hermix_core::TerminalBackend> =
             Arc::new(hermix_environments::LocalBackend::default());
@@ -654,10 +704,6 @@ impl HttpServerState {
         // 提前解析）。首个字面量未用到时会有 unused 警告——两处构造路径
         // 共用同一绑定消除重复。
         let devices_db_path = hermix_home.join("devices.db");
-        // §3.4 L2：TaskRecord 持久状态机与 EffectLog 同库（effects.db）。
-        // 路径在字面量前算好，避免 hermix_home 被 move 进字段后借用失效。
-        let effects_db_path =
-            hermix_config::paths::data_dir_in(&hermix_home).join("effects.db");
         let state = Self {
             config: Arc::new(config),
             tool_registry,
@@ -705,13 +751,10 @@ impl HttpServerState {
                 let _ = repo.ensure_schema();
                 Some(std::sync::Arc::new(hermix_task::TaskService::new(repo)))
             },
-            // §3.4 L2：TaskRecord 持久状态机与 EffectLog 同库（effects.db），
-            // 构造不会失败；单笔持久化失败在端点侧降级 500。
-            task_record_store: {
-                Some(std::sync::Arc::new(hermix_task::TaskRecordStore::new(
-                    effects_db_path,
-                )))
-            },
+            // §3.4 L2：TaskRecord 持久状态机与 EffectLog 同库（effects.db）。
+            // 单实例复用启动对账时构造的 store（见上方 TaskRecord 对账块）；
+            // 单笔持久化失败在端点侧降级 500。
+            task_record_store: Some(std::sync::Arc::new(task_record_store)),
             automation_service: {
                 let repo = std::sync::Arc::new(hermix_automation::AutomationRepository::new(
                     session_persistence.db_path().to_path_buf(),
@@ -783,6 +826,18 @@ impl HttpServerState {
                 registry: Arc::downgrade(&tool_registry),
             }));
         }
+        // §3.4 L2：TaskRecord 启动对账。正常终态由 sub-agent 生命周期的
+        // 三个挂点落盘（task_record_sink），启动时残留 running = 上次进程
+        // 死在执行中途。Checkpoint.from_step 未细化，无从续跑——唯一诚实
+        // 的处置是落成 Terminal(Faulted)，让恢复视图不留僵尸。
+        // store 构造后供 task_record_store 字段复用（单实例，不再重复开库）。
+        let task_record_store = {
+            let store = hermix_task::TaskRecordStore::new(
+                hermix_config::paths::hermix_home().join("data").join("effects.db"),
+            );
+            reconcile_task_records(&store);
+            store
+        };
         // Register builtin tools (file, shell, browser, etc.)
         let terminal_backend: Arc<dyn hermix_core::TerminalBackend> =
             Arc::new(hermix_environments::LocalBackend::default());
@@ -944,10 +999,6 @@ impl HttpServerState {
         // 提前解析）。首个字面量未用到时会有 unused 警告——两处构造路径
         // 共用同一绑定消除重复。
         let devices_db_path = hermix_home.join("devices.db");
-        // §3.4 L2：TaskRecord 持久状态机与 EffectLog 同库（effects.db）。
-        // 路径在字面量前算好，避免 hermix_home 被 move 进字段后借用失效。
-        let effects_db_path =
-            hermix_config::paths::data_dir_in(&hermix_home).join("effects.db");
         let state = Self {
             config: Arc::new(config),
             tool_registry,
@@ -994,13 +1045,10 @@ impl HttpServerState {
                 let _ = repo.ensure_schema();
                 Some(std::sync::Arc::new(hermix_task::TaskService::new(repo)))
             },
-            // §3.4 L2：TaskRecord 持久状态机与 EffectLog 同库（effects.db），
-            // 构造不会失败；单笔持久化失败在端点侧降级 500。
-            task_record_store: {
-                Some(std::sync::Arc::new(hermix_task::TaskRecordStore::new(
-                    effects_db_path,
-                )))
-            },
+            // §3.4 L2：TaskRecord 持久状态机与 EffectLog 同库（effects.db）。
+            // 单实例复用启动对账时构造的 store（见上方 TaskRecord 对账块）；
+            // 单笔持久化失败在端点侧降级 500。
+            task_record_store: Some(std::sync::Arc::new(task_record_store)),
             automation_service: {
                 let repo = std::sync::Arc::new(hermix_automation::AutomationRepository::new(
                     session_persistence.db_path().to_path_buf(),
@@ -1047,6 +1095,73 @@ impl HttpServerState {
             crate::dashboard::automation::AutomationScheduler::start(self.clone());
         self.automation_scheduler = Some(scheduler);
         self
+    }
+}
+
+#[cfg(test)]
+mod task_record_reconciliation_tests {
+    use super::reconcile_task_records;
+    use hermix_task::{TaskRecord, TaskRecordStore, TaskState};
+
+    fn store() -> (tempfile::TempDir, TaskRecordStore) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = TaskRecordStore::new(dir.path().join("effects.db"));
+        (dir, store)
+    }
+
+    #[test]
+    fn running_record_is_marked_faulted_on_startup() {
+        let (_dir, store) = store();
+        store
+            .save(&TaskRecord::new_running("subagent-1", "conv-1"))
+            .unwrap();
+
+        reconcile_task_records(&store);
+
+        let rec = store.get("subagent-1").unwrap().unwrap();
+        match rec.state {
+            TaskState::Terminal { outcome } => match outcome {
+                hermix_task::TaskOutcome::Faulted { error } => {
+                    assert!(error.contains("进程重启"))
+                }
+                other => panic!("expected Faulted, got {other:?}"),
+            },
+            other => panic!("expected Terminal, got {other:?}"),
+        }
+        // 对账后扫描恒为空：恢复视图不留僵尸。
+        assert!(store.scan_unfinished().unwrap().is_empty());
+    }
+
+    #[test]
+    fn terminal_records_are_untouched() {
+        let (_dir, store) = store();
+        store
+            .save(&TaskRecord::terminal(
+                "subagent-2",
+                "conv-1",
+                hermix_task::TaskOutcome::Completed { result: None },
+            ))
+            .unwrap();
+
+        reconcile_task_records(&store);
+
+        let rec = store.get("subagent-2").unwrap().unwrap();
+        match rec.state {
+            TaskState::Terminal { outcome } => {
+                assert!(matches!(
+                    outcome,
+                    hermix_task::TaskOutcome::Completed { .. }
+                ))
+            }
+            other => panic!("expected untouched Terminal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn empty_store_is_noop() {
+        let (_dir, store) = store();
+        reconcile_task_records(&store); // 不 panic，不写任何记录
+        assert!(store.scan_unfinished().unwrap().is_empty());
     }
 }
 
