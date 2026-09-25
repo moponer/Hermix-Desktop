@@ -1,7 +1,7 @@
 # 交接文档：Hermix 底座重写 + 网络安全层（给后续开发 agent）
 
 > 更新时间：2026-09-25。本文是唯一权威交接入口。动手前**必须完整读完本文 + 必读文档清单**，禁止跳读后自行发挥。
-> 当前累计 62 个 commit（52 + 本批 10：`e8534365` / `45e02378` / `ae71666c` / `08307f7e` / `25aa6fff` / `db892c6d` / `00074e0b` / `231a7dd6` / `acc447da` / 本文档 commit）。工作区除 §7 未跟踪遗留物（`??` 行：WorkbenchChat.tsx / DiagnosticsTab.tsx / design-previews / 各 design.md / probe 脚本，属别的 agent，勿动）外干净。最近 commit：`acc447da`（MiniMax 告警文档）+ `231a7dd6`（MiniMax 工具调用告警）+ `00074e0b`（T1 stdio 修复文档）。
+> 当前累计 63 个 commit（52 + 本批 11：`e8534365` / `45e02378` / `ae71666c` / `08307f7e` / `25aa6fff` / `db892c6d` / `00074e0b` / `231a7dd6` / `acc447da` / `a3d9db0c` / `31498ce6` + 本文档 commit）。工作区除 §7 未跟踪遗留物（`??` 行：WorkbenchChat.tsx / DiagnosticsTab.tsx / design-previews / 各 design.md / probe 脚本，属别的 agent，勿动）外干净。最近 commit：`31498ce6`（TaskRecord 热路径生产者）+ `a3d9db0c`（P2 EntryRecord 定界文档）。
 > 本批新增 commit：`87bb2b9a` / `b51a32a1` / `3cc45b72` / `f062c5ad` / `e1a75115` / `20b6eda8` / `ab7aad02` / `c208f10f` / `9d897704` / `640eeb57` / `6979313c` / `a8f4e547` / `63e3b174` / `0918f7a5` / `cead162d` / `5fab0ec2` / `6892a043` / `29392b57` / `e651c311` / `adfc8ca5` / `acf1fea1` / `e91ac42e` / `fd238361` / `fc2f425a` / `d7abee4d` / `e5f728a1` / `f985eade` / `bc8a6e6c` / `64d145de` / `9ff58666` / `bc2f7da` / `e3955b7a` / `8f3e7a67` / `e8534365` / `45e02378` / `ae71666c` / `08307f7e` / `25aa6fff` / `db892c6d` / `00074e0b` / `231a7dd6` / 本文档 commit（MiniMax 告警刷新）。
 
 ---
@@ -243,7 +243,15 @@ CARGO_INCREMENTAL=0 cargo test -p <crate> --lib   # 改了哪个 crate 测哪个
 - **P2 消息读写切换接入 server**：`hermix-session` 当前 0 处被引用（孤岛），把 `getSessionMessages` / 消息写路径从 `local_agent_service.rs`（4364 行上帝文件）切到 Session entry 派生需跨 P2/P5/P7 批次 + 真机 100 次重连对账，不在本批次
 - **P6 剩余**：~~T6 暴力破解 IP 锁定~~ → **已落**（本批次，见 §3.5 T6 段）/ 连接数+请求大小+空闲超时四件套（设计文档明写"随手机客户端批次补"）/ ~~审计日志读端点~~ → **已落**（`08307f7e`，见下方 P6 审计读端点段）；剩 DiagnosticsTab 前端展示（UI 批次）。~~NeedsLocalConfirmation 关口消费点接通（工具关口批次）~~ → **已落**（见 §3.3 续落段）
 - **P8 8h 全量 SLO**：8h soak（内存 ≤200MB / fd 不增长 / task 数稳定 / 0 未处理 panic）headless 不可行，实机依赖，blocked。本批次落的是 60s 短探针 headless 切片（四项 SLO 测量 + 真实 session 协议循环）；8h 全量走 `--ignored` 变体（实机 nightly）。另外短探针跑 `cargo test` 期间可能触发 `hermix-cua` 的 rustc ICE（增量缓存损坏，`rm -rf target/debug/incremental` + `CARGO_INCREMENTAL=0` 可规避，属编译器 pre-existing bug 非本项目缺陷）
-- 测试基线：hermix-server lib 194 passed（5 T6 锁定 + 6 能力位集 + 5 端点级判定 + 1 stdio ConnectInfo 回归测试）/ http_smoke 10 passed + 2 ignored（4 task_record + 4 audit 端点测试）/ dashboard_smoke 53 passed + 3 ignored（pre-existing theme 划掉的 ignore）/ hermix-session 15 passed / hermix-tools 697 passed（含 6 能力位集测试）/ hermix-agent lib 1051 passed（1050 + 1 工具调用告警 helper 测试）+ soak 2 passed / 全仓 cargo check --workspace 绿
+- 测试基线（TaskRecord 热路径批次后）：hermix-server lib 197 passed（194 + 3 task_record_sink 适配器测试）/ http_smoke 10 passed + 2 ignored（4 task_record + 4 audit 端点测试）/ dashboard_smoke 53 passed + 3 ignored（pre-existing theme 划掉的 ignore）/ hermix-session 15 passed / hermix-tools 697 passed（含 6 能力位集测试）/ hermix-agent lib 1051 passed（与基线一致，orchestrator 12 个定向测试含新构造字段）+ soak 2 passed / 全仓 cargo check --workspace --all-targets 绿
+
+**已落**（TaskRecord 热路径生产者 — `31498ce6`）：
+- 崩溃恢复"有壳无热路径"缺口接通：sub-agent（delegate_task）生命周期现在落 effects.db 的 TaskRecord，`scan_unfinished`/`recover` 恢复决策首次有真实输入
+- hermix-agent 侧：`TaskRecordSink` trait（started/terminal 两方法，避免 hermix-agent→hermix-task 依赖）+ `SubAgentOrchestratorConfig.task_record_sink` 字段 + `with_task_record_sink`；`LocalAgentService` 同名字段透传给每个构建的 orchestrator
+- 三处挂点（全部 best-effort，失败仅 `warn` 不阻断派发）：① `execute_inner` 开始 → `new_running`；② `persist_terminal_lineage` → Terminal（completed/failed/aborted 映射，timeout 归 failed）；③ `execute_async` join error（tokio panic/cancel）→ **Orphaned** 记录（id 无法得知，用 `orphaned-<uuid>`）——此前该分支只打日志，恢复端完全看不到派发曾存在
+- hermix-server 侧：`task_record_sink.rs` 适配器（`TaskRecordStore` 实现 trait，同 `task_tracker_adapter` 模式）+ `state.rs` 生产装配接线（`agent_effects_db_path` 提前算路径，与 `task_record_store` 字段指向同一 effects.db）；approval.rs 测试态保持 `None`
+- 映射语义：started 时 conversation_id 未知退化 `"unknown"`；terminal 时读既有记录保留 conversation_id；orphaned→`TaskOutcome::Orphaned`/failed→`Faulted`/aborted→`Aborted`
+- 测试：适配器 3 个（started→terminal 保留 conversation_id / failed→Faulted 带 error / orphaned→Orphaned），server lib 197 全绿；hermix-agent lib 1051 与基线一致
 
 **已落**（P6 审计日志读端点 `GET /api/pairing/audit` — `08307f7e`）：
 - pairing.rs 加 `AuditQuery`（`limit: Option<u32>`，缺省 100，复用 `list_audit` 内部 `max(1).min(1000)` 钳制）+ `list_audit` handler（registry Some → `Json{events,count}` / None → 503，镜像 `list_devices` 模式）；`AuditRow` 已 `Serialize` 直接投影
