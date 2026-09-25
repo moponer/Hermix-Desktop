@@ -27,7 +27,10 @@ pub mod service;
 // Re-export primary types
 pub use context::parse_at_references;
 pub use effect::{EffectLog, RecoveryAction, ToolIntent, ToolOutcome};
-pub use record::{Checkpoint, TaskOutcome, TaskRecord, TaskRecordError, TaskRecordStore, TaskState};
+pub use record::{
+    Checkpoint, RecoveryPlan, TaskOutcome, TaskRecord, TaskRecordError, TaskRecordStore,
+    TaskRecoveryDecision, TaskState,
+};
 pub use repository::{TaskRepository, TaskRepositoryError};
 pub use results::TaskResults;
 pub use service::{CreateTaskParams, TaskService, TaskServiceError};

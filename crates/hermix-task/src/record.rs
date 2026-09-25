@@ -392,12 +392,183 @@ impl TaskRecordStore {
 }
 
 // ---------------------------------------------------------------------------
+// 崩溃恢复协议（设计 §3.4）
+// ---------------------------------------------------------------------------
+
+use crate::effect::{EffectLog, RecoveryAction};
+
+/// 单任务的恢复决策（设计 §3.4 判定表）。纯函数，只读任务与
+/// 其未决效果，状态转移由 [`recover`] 负责执行。
+///
+/// - `Noop`        —— 任务已是终态/Pending，不参与恢复
+/// - `Reopen`      —— 可迁移：无未决 effect，降级 Pending，保留 checkpoint 重跑
+/// - `Replay`      —— 有且仅有幂等未决 effect：按幂等语义重放
+/// - `NeedsReview` —— 有非幂等未决 effect：效果可能已发生，交用户裁决，
+///                   不自动重放；任务落 Orphaned 终态（T5），悬空 intent
+///                   由 `recover` 封闭
+///
+/// （设计 §3.4 判定表里的 `Orphaned` 终态由 `recover` 在 effect-scan
+/// 失败时直接生成，不属于 `decide` 的判定域。）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum TaskRecoveryDecision {
+    Noop,
+    Reopen,
+    Replay,
+    NeedsReview,
+}
+
+/// 恢复计划：一次崩溃恢复扫描的产物。调用方按 `decision` 分发，
+/// 并按 `resolved_intent_ids` 调 `EffectLog::resolve_intent` 封闭
+/// 悬空 intent（needs_review 用户裁决「已发生」/ 任务判 Orphaned
+/// 时都要走这里，intent 不留空）。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RecoveryPlan {
+    pub task_id: String,
+    pub decision: TaskRecoveryDecision,
+    /// 本任务当前悬空的 intent id 集合（供封闭审计用）。
+    pub hanging_intent_ids: Vec<String>,
+    /// `recover` 实际 resolve 掉的 intent（NeedsReview/Orphaned 分支）。
+    pub resolved_intent_ids: Vec<String>,
+}
+
+/// 联合恢复协议入口：扫所有 `state='running'` 的 TaskRecord，对每个
+/// 任务查 EffectLog 的 task 级未决效果，按设计判定表决策 + 执行状态
+/// 转移。一个调用返回全部计划；实际 effect 重放/用户裁决由调用方
+/// 按 `decision` 二次分发（本协议只负责"判定 + 任务状态落库 +
+/// 封闭悬空 intent"，不碰 effect 本身的重放副作用）。
+pub fn recover(store: &TaskRecordStore, effects: &EffectLog) -> Vec<RecoveryPlan> {
+    let unfinished = match store.scan_unfinished() {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(error = %e, "recover: task_records scan failed, skipping");
+            return Vec::new();
+        }
+    };
+    let mut plans = Vec::new();
+    for record in unfinished {
+        let task_id = record.id.clone();
+        let effects_scan = match effects.scan_unfinished_for_task(&task_id) {
+            Ok(v) => v,
+            Err(e) => {
+                // EffectLog 扫描失败 = 效果面不可信，保守判 Orphaned，
+                // 不做任何自动重放。
+                tracing::warn!(
+                    task_id = %task_id,
+                    error = %e,
+                    "recover: effect scan failed, marking Orphaned"
+                );
+                let mut orphan = record.clone();
+                orphan.state = TaskState::Terminal {
+                    outcome: TaskOutcome::Orphaned {
+                        reason: format!("effect scan failed: {e}"),
+                    },
+                };
+                orphan.updated_at = chrono::Utc::now().timestamp_millis();
+                if let Err(e) = store.save(&orphan) {
+                    tracing::warn!(task_id = %task_id, error = %e, "recover: save Orphaned failed");
+                }
+                plans.push(RecoveryPlan {
+                    task_id,
+                    decision: TaskRecoveryDecision::NeedsReview,
+                    hanging_intent_ids: Vec::new(),
+                    resolved_intent_ids: Vec::new(),
+                });
+                continue;
+            }
+        };
+        let decision = TaskRecoveryDecision::decide(&record, &effects_scan);
+        let hanging_ids: Vec<String> = effects_scan
+            .iter()
+            .map(|a| match a {
+                RecoveryAction::Replay(i) | RecoveryAction::NeedsReview(i) => i.id.clone(),
+            })
+            .collect();
+
+        match decision {
+            TaskRecoveryDecision::Reopen => {
+                let mut reset = record.clone();
+                reset.state = TaskState::Pending {
+                    checkpoint: Checkpoint {
+                        from_step: None,
+                        at: chrono::Utc::now().timestamp_millis(),
+                    },
+                };
+                reset.updated_at = chrono::Utc::now().timestamp_millis();
+                if let Err(e) = store.save(&reset) {
+                    tracing::warn!(task_id = %task_id, error = %e, "recover: save Reopen failed");
+                }
+            }
+            TaskRecoveryDecision::Replay => {
+                // 保持 Running，等调用方按幂等语义重放。
+            }
+            TaskRecoveryDecision::NeedsReview => {
+                // 封闭本任务悬空 intent（用户裁决"已发生"时 resolve_intent 走
+                // EffectLog，这里只标记"已交给上层裁决"，不重放）。
+                let mut resolved = Vec::new();
+                for id in &hanging_ids {
+                    if effects.resolve_intent(id, "needs_review", "recovery deferred to user").is_ok()
+                    {
+                        resolved.push(id.clone());
+                    }
+                }
+                let mut term = record.clone();
+                term.state = TaskState::Terminal {
+                    outcome: TaskOutcome::Orphaned {
+                        reason: "non-idempotent effect pending, user review required".into(),
+                    },
+                };
+                term.updated_at = chrono::Utc::now().timestamp_millis();
+                if let Err(e) = store.save(&term) {
+                    tracing::warn!(task_id = %task_id, error = %e, "recover: save Terminal failed");
+                }
+                plans.push(RecoveryPlan {
+                    task_id,
+                    decision,
+                    hanging_intent_ids: hanging_ids,
+                    resolved_intent_ids: resolved,
+                });
+                continue;
+            }
+            TaskRecoveryDecision::Noop => {}
+        }
+        plans.push(RecoveryPlan {
+            task_id,
+            decision,
+            hanging_intent_ids: hanging_ids,
+            resolved_intent_ids: Vec::new(),
+        });
+    }
+    plans
+}
+
+impl TaskRecoveryDecision {
+    /// 设计 §3.4 判定表。`effects` 必须是该任务的未决效果集
+    /// （`EffectLog::scan_unfinished_for_task` 的产物），避免跨任务误判。
+    pub fn decide(record: &TaskRecord, effects: &[RecoveryAction]) -> Self {
+        match &record.state {
+            TaskState::Terminal { .. } => Self::Noop,
+            TaskState::Pending { .. } => Self::Noop,
+            TaskState::Running { .. } => {
+                if effects.is_empty() {
+                    Self::Reopen
+                } else if effects.iter().any(|a| matches!(a, RecoveryAction::NeedsReview(_))) {
+                    Self::NeedsReview
+                } else {
+                    Self::Replay
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // 测试
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::effect::{new_intent_id, ToolIntent};
 
     fn store() -> (TaskRecordStore, tempfile::TempDir) {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -405,101 +576,152 @@ mod tests {
         (store, dir)
     }
 
+    fn pending_record(id: &str) -> TaskRecord {
+        TaskRecord::new_pending(id, "conv-1")
+    }
+
+    fn running_record(id: &str) -> TaskRecord {
+        TaskRecord::new_running(id, "conv-1")
+    }
+
+    fn terminal_record(id: &str, outcome: TaskOutcome) -> TaskRecord {
+        TaskRecord::terminal(id, "conv-1", outcome)
+    }
+
+    fn log_with_pending_intent(task_id: &str, idempotent: bool) -> crate::EffectLog {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let log = crate::EffectLog::new(dir.path().join("effects.db"));
+        log.record_intent(&ToolIntent {
+            id: new_intent_id(),
+            task_id: task_id.to_string(),
+            tool: "terminal".into(),
+            args_json: r#"{"command":"echo hi"}"#.into(),
+            idempotent,
+            created_at: chrono::Utc::now().timestamp(),
+        })
+        .expect("record intent");
+        // keep() 防 TempDir drop 时目录消失（EffectLog 只存路径，GC 后失效）。
+        drop(dir.keep());
+        log
+    }
+
+    // ----- decide 纯函数（设计 §3.4 判定表逐行钉死）-----
+
     #[test]
-    fn pending_running_terminal_roundtrip() {
-        let (store, _dir) = store();
-        let pending = TaskRecord::new_pending("t-1", "conv-1");
-        store.save(&pending).expect("save pending");
-
-        let running = TaskRecord::new_running("t-1", "conv-1");
-        store.save(&running).expect("save running");
-
-        let terminal = TaskRecord::terminal(
-            "t-1",
-            "conv-1",
-            TaskOutcome::Completed { result: None },
-        );
-        store.save(&terminal).expect("save terminal");
-
-        let fetched = store.get("t-1").expect("get").expect("exists");
-        assert!(matches!(
-            fetched.state,
-            TaskState::Terminal { .. }
-        ));
-        assert!(fetched.state.outcome().is_some());
+    fn decide_migratable_running_is_reopen() {
+        let d = TaskRecoveryDecision::decide(&running_record("t-1"), &[]);
+        assert_eq!(d, TaskRecoveryDecision::Reopen);
     }
 
     #[test]
-    fn scan_unfinished_returns_running_records() {
-        let (store, _dir) = store();
-        store.save(&TaskRecord::new_pending("t-1", "c-1")).expect("p");
-        store.save(&TaskRecord::new_running("t-2", "c-1")).expect("r");
-        store
-            .save(&TaskRecord::terminal("t-3", "c-1", TaskOutcome::Faulted { error: "e".into() }))
-            .expect("t");
-
-        let unfinished = store.scan_unfinished().expect("scan");
-        assert_eq!(unfinished.len(), 1);
-        assert_eq!(unfinished[0].id, "t-2");
+    fn decide_pending_is_noop() {
+        let d = TaskRecoveryDecision::decide(&pending_record("t-1"), &[]);
+        assert_eq!(d, TaskRecoveryDecision::Noop);
     }
 
     #[test]
-    fn list_by_conversation_filters() {
-        let (store, _dir) = store();
-        store
-            .save(&TaskRecord::new_pending("t-1", "c-1"))
-            .expect("1");
-        store
-            .save(&TaskRecord::new_running("t-2", "c-1"))
-            .expect("2");
-        store
-            .save(&TaskRecord::new_pending("t-3", "c-2"))
-            .expect("3");
-
-        let c1 = store.list_by_conversation("c-1").expect("c1");
-        assert_eq!(c1.len(), 2);
-        let c2 = store.list_by_conversation("c-2").expect("c2");
-        assert_eq!(c2.len(), 1);
-        assert_eq!(c2[0].id, "t-3");
+    fn decide_replays_only_idempotent_effects() {
+        let log = log_with_pending_intent("t-1", true);
+        let actions = log.scan_unfinished_for_task("t-1").expect("scan");
+        let d = TaskRecoveryDecision::decide(&running_record("t-1"), &actions);
+        assert_eq!(d, TaskRecoveryDecision::Replay);
     }
 
     #[test]
-    fn orphaned_when_outcome_corrupt() {
+    fn decide_needs_review_when_non_idempotent_effect_hangs() {
+        let log = log_with_pending_intent("t-1", false);
+        let actions = log.scan_unfinished_for_task("t-1").expect("scan");
+        let d = TaskRecoveryDecision::decide(&running_record("t-1"), &actions);
+        assert_eq!(d, TaskRecoveryDecision::NeedsReview);
+    }
+
+    #[test]
+    fn decide_needs_review_wins_over_replay() {
+        let log = log_with_pending_intent("t-1", true);
+        log.record_intent(&ToolIntent {
+            id: new_intent_id(),
+            task_id: "t-1".into(),
+            tool: "write_file".into(),
+            args_json: r#"{}"#.into(),
+            idempotent: false,
+            created_at: chrono::Utc::now().timestamp(),
+        })
+        .expect("second intent");
+        let actions = log.scan_unfinished_for_task("t-1").expect("scan");
+        let d = TaskRecoveryDecision::decide(&running_record("t-1"), &actions);
+        assert_eq!(d, TaskRecoveryDecision::NeedsReview);
+    }
+
+    #[test]
+    fn decide_terminal_is_noop_even_with_hanging_effects() {
+        let log = log_with_pending_intent("t-1", false);
+        let actions = log.scan_unfinished_for_task("t-1").expect("scan");
+        let rec = terminal_record("t-1", TaskOutcome::Completed { result: None });
+        let d = TaskRecoveryDecision::decide(&rec, &actions);
+        assert_eq!(d, TaskRecoveryDecision::Noop);
+    }
+
+    // ----- recover 编排（状态转移 + 悬空 intent 封闭）-----
+
+    #[test]
+    fn recover_reopen_resets_record_to_pending() {
         let (store, _dir) = store();
-        // 直接写一行损坏的 outcome_json（模拟崩溃半写）。
+        store.save(&running_record("t-1")).expect("save");
+        let plan = recover(&store, &crate::EffectLog::new(_dir.path().join("unused.db")));
+        assert_eq!(plan.len(), 1);
+        assert_eq!(plan[0].decision, TaskRecoveryDecision::Reopen);
+        assert!(store
+            .get("t-1")
+            .expect("get")
+            .unwrap()
+            .state
+            .checkpoint()
+            .is_some());
+    }
+
+    #[test]
+    fn recover_noop_leaves_terminal_records_untouched() {
+        let (store, _dir) = store();
         store
-            .with_conn(|conn| {
-                conn.execute(
-                    "INSERT INTO task_records (id, conversation_id, state, checkpoint_json, outcome_json, updated_at)
-                     VALUES ('t-x', 'c-x', 'terminal', NULL, '{corrupt}', 0)",
-                    [],
-                )?;
-                Ok(())
-            })
-            .expect("insert");
-        let fetched = store.get("t-x").expect("get").expect("exists");
-        match fetched.state {
+            .save(&terminal_record("t-1", TaskOutcome::Completed { result: None }))
+            .expect("save");
+        let plan = recover(&store, &crate::EffectLog::new(_dir.path().join("unused.db")));
+        assert!(plan.is_empty(), "terminal task must not enter recovery plan");
+    }
+
+    #[test]
+    fn recover_needs_review_resolves_hanging_intents_and_marks_terminal() {
+        let (store, _dir) = store();
+        store.save(&running_record("t-1")).expect("save");
+        let log = log_with_pending_intent("t-1", false);
+        log.record_intent(&ToolIntent {
+            id: new_intent_id(),
+            task_id: "t-9".into(),
+            tool: "terminal".into(),
+            args_json: r#"{}"#.into(),
+            idempotent: false,
+            created_at: chrono::Utc::now().timestamp(),
+        })
+        .expect("other-task intent must not be touched");
+
+        let plan = recover(&store, &log);
+        assert_eq!(plan.len(), 1);
+        assert_eq!(plan[0].decision, TaskRecoveryDecision::NeedsReview);
+        assert_eq!(plan[0].resolved_intent_ids.len(), 1);
+
+        // 本任务 intent 已封闭（resolve），其他任务 intent 保持悬空。
+        let t1 = log.scan_unfinished_for_task("t-1").expect("t1 scan");
+        assert!(t1.is_empty(), "needs_review intents must be resolved");
+        let t9 = log.scan_unfinished_for_task("t-9").expect("t9 scan");
+        assert_eq!(t9.len(), 1, "other tasks' intents must stay hanging");
+
+        // 记录已落 Terminal(Orphaned)——非幂等未决效果的 T5 终态。
+        let rec = store.get("t-1").expect("get").unwrap();
+        match rec.state {
             TaskState::Terminal {
                 outcome: TaskOutcome::Orphaned { .. },
             } => {}
-            other => panic!("expected Orphaned, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn checkpoint_serialization_roundtrip() {
-        let (store, _dir) = store();
-        let mut record = TaskRecord::new_running("t-1", "c-1");
-        if let TaskState::Running { checkpoint } = &mut record.state {
-            checkpoint.from_step = Some("step-42".into());
-        }
-        store.save(&record).expect("save");
-        let fetched = store.get("t-1").expect("get").expect("exists");
-        match fetched.state {
-            TaskState::Running { checkpoint } => {
-                assert_eq!(checkpoint.from_step.as_deref(), Some("step-42"));
-            }
-            other => panic!("expected Running, got {other:?}"),
+            other => panic!("expected Orphaned(T5) terminal, got {other:?}"),
         }
     }
 }

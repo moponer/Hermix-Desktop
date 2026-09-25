@@ -174,6 +174,35 @@ impl EffectLog {
         })
     }
 
+    /// 按任务过滤的未决效果扫描：只返回指定 task_id 的「有 intent 无
+    /// outcome」项。崩溃恢复协议用它做任务级判定，避免把其他任务
+    /// 的未决 intent 误伤进本任务的恢复决策。
+    pub fn scan_unfinished_for_task(
+        &self,
+        task_id: &str,
+    ) -> Result<Vec<RecoveryAction>, EffectLogError> {
+        self.with_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT i.id, i.task_id, i.tool, i.args_json, i.idempotent, i.created_at
+                 FROM tool_intents i
+                 LEFT JOIN tool_outcomes o ON o.intent_id = i.id
+                 WHERE o.intent_id IS NULL AND i.task_id = ?1
+                 ORDER BY i.created_at",
+            )?;
+            let rows = stmt.query_map([task_id], Self::row_to_intent)?;
+            let mut out = Vec::new();
+            for r in rows {
+                let intent = r?;
+                out.push(if intent.idempotent {
+                    RecoveryAction::Replay(intent)
+                } else {
+                    RecoveryAction::NeedsReview(intent)
+                });
+            }
+            Ok(out)
+        })
+    }
+
     /// 恢复裁决后补录 outcome（needs_review 用户裁决「已发生」时也走这里，
     /// 让 intent 不再悬空）。intent 不存在时静默成功——恢复路径只关心
     /// 最终没有悬空 intent，幂等。
@@ -256,6 +285,37 @@ mod tests {
         log.resolve_intent(&i.id, "ok", "user confirmed effect happened")
             .expect("resolve");
         assert!(log.scan_unfinished().expect("scan").is_empty());
+    }
+
+    #[test]
+    fn scan_unfinished_for_task_isolates_by_task_id() {
+        let log = log();
+        let t1 = intent(true);
+        let t9 = {
+            let mut i = intent(false);
+            i.task_id = "task-9".into();
+            i
+        };
+        log.record_intent(&t1).expect("t1 intent");
+        log.record_intent(&t9).expect("t9 intent");
+
+        let t1_actions = log.scan_unfinished_for_task("task-1").expect("t1 scan");
+        assert_eq!(t1_actions.len(), 1);
+        assert!(matches!(
+            t1_actions[0],
+            RecoveryAction::Replay(_)
+        ));
+
+        let t9_actions = log.scan_unfinished_for_task("task-9").expect("t9 scan");
+        assert_eq!(t9_actions.len(), 1);
+        assert!(matches!(
+            t9_actions[0],
+            RecoveryAction::NeedsReview(_)
+        ));
+
+        // 未知任务无未决效果。
+        let t0_actions = log.scan_unfinished_for_task("task-0").expect("t0 scan");
+        assert!(t0_actions.is_empty());
     }
 
     #[test]
