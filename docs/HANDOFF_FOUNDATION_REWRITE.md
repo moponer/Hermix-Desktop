@@ -1,7 +1,7 @@
 # 交接文档：Hermix 底座重写 + 网络安全层（给后续开发 agent）
 
 > 更新时间：2026-09-25。本文是唯一权威交接入口。动手前**必须完整读完本文 + 必读文档清单**，禁止跳读后自行发挥。
-> 当前累计 61 个 commit（52 + 本批 9：`e8534365` / `45e02378` / `ae71666c` / `08307f7e` / `25aa6fff` / `db892c6d` / `00074e0b` / `231a7dd6` / 本文档 commit）。工作区除 §7 未跟踪遗留物（`??` 行：WorkbenchChat.tsx / DiagnosticsTab.tsx / design-previews / 各 design.md / probe 脚本，属别的 agent，勿动）外干净。最近 commit：`231a7dd6`（MiniMax 工具调用告警）+ `00074e0b`（T1 stdio 修复文档）+ `db892c6d`（T1 stdio 派发面修复）。
+> 当前累计 62 个 commit（52 + 本批 10：`e8534365` / `45e02378` / `ae71666c` / `08307f7e` / `25aa6fff` / `db892c6d` / `00074e0b` / `231a7dd6` / `acc447da` / 本文档 commit）。工作区除 §7 未跟踪遗留物（`??` 行：WorkbenchChat.tsx / DiagnosticsTab.tsx / design-previews / 各 design.md / probe 脚本，属别的 agent，勿动）外干净。最近 commit：`acc447da`（MiniMax 告警文档）+ `231a7dd6`（MiniMax 工具调用告警）+ `00074e0b`（T1 stdio 修复文档）。
 > 本批新增 commit：`87bb2b9a` / `b51a32a1` / `3cc45b72` / `f062c5ad` / `e1a75115` / `20b6eda8` / `ab7aad02` / `c208f10f` / `9d897704` / `640eeb57` / `6979313c` / `a8f4e547` / `63e3b174` / `0918f7a5` / `cead162d` / `5fab0ec2` / `6892a043` / `29392b57` / `e651c311` / `adfc8ca5` / `acf1fea1` / `e91ac42e` / `fd238361` / `fc2f425a` / `d7abee4d` / `e5f728a1` / `f985eade` / `bc8a6e6c` / `64d145de` / `9ff58666` / `bc2f7da` / `e3955b7a` / `8f3e7a67` / `e8534365` / `45e02378` / `ae71666c` / `08307f7e` / `25aa6fff` / `db892c6d` / `00074e0b` / `231a7dd6` / 本文档 commit（MiniMax 告警刷新）。
 
 ---
@@ -235,7 +235,11 @@ CARGO_INCREMENTAL=0 cargo test -p <crate> --lib   # 改了哪个 crate 测哪个
 - 测试基线：hermix-agent lib 1050 passed（零回归）/ `soak` 2 passed + 1 ignored
 
 **未做**（P6 剩余 + P2 剩余 + P8 8h 全量）：
-- **P2 EntryRecord 完整对齐**：设计 `EntryRecord` 8 字段（`id`/`conversation_id`/`kind`/`model`/`data`/`head`/`edits`/`by_task_id`）本批次只对齐 `by_task_id` + `conversation_id` 两个核心归属字段；`id`（单调 Id 类型）/ `model: Option<Vec<Message>>` / `head` / `edits: Vec<ContextEdit>` 属 L2 任务运行时批次（§3.4），需 `hermix-task` 的 `TaskRecord` + `Checkpoint` 模型先落
+- **P2 EntryRecord 剩余 4 字段（`id`/`model`/`head`/`edits`）——侦察定界（2026-09-25）：不落空列，真实阻塞点如下**（~~需 `hermix-task` 的 `TaskRecord` + `Checkpoint` 模型先落~~ → 该前置已随 `57307fe`/`a666acb` 落地，**但三个更深阻塞仍在**）：
+  - `id`：单调 `Id` 类型与 `mint_id` 分配器**全仓不存在**（hermix-store/hermix-core grep 零命中；设计把 `mint_id` 挂在 Storage trait 上，trait 未实现）。落列 = 先发明 Id 分配语义；
+  - `edits`：`ContextEdit` **全仓零 Rust 定义**（仅设计文档两处提及）。落列 = 无消费引擎时凭空发明上下文编辑指令集；
+  - `model`/`head`：唯一消费者是消息读写切换（真机 100 次重连对账门控的批次，已拍板不在 headless 落）；且 `model: Option<Vec<Message>>` 落列需给 hermix-session 引入 hermix-core 依赖（当前零依赖）——为无消费者的字段引依赖；
+  - **定界结论**：`session_entries` 是孤岛表（hermix-session 0 引用，真实部署从未创建），消息读写切换批次首建表时**直接建全量列**，比"现在落空列 + 将来迁移"更省；空列零收益（无读取方、无写入方）。
 - **P2 消息读写切换接入 server**：`hermix-session` 当前 0 处被引用（孤岛），把 `getSessionMessages` / 消息写路径从 `local_agent_service.rs`（4364 行上帝文件）切到 Session entry 派生需跨 P2/P5/P7 批次 + 真机 100 次重连对账，不在本批次
 - **P6 剩余**：~~T6 暴力破解 IP 锁定~~ → **已落**（本批次，见 §3.5 T6 段）/ 连接数+请求大小+空闲超时四件套（设计文档明写"随手机客户端批次补"）/ ~~审计日志读端点~~ → **已落**（`08307f7e`，见下方 P6 审计读端点段）；剩 DiagnosticsTab 前端展示（UI 批次）。~~NeedsLocalConfirmation 关口消费点接通（工具关口批次）~~ → **已落**（见 §3.3 续落段）
 - **P8 8h 全量 SLO**：8h soak（内存 ≤200MB / fd 不增长 / task 数稳定 / 0 未处理 panic）headless 不可行，实机依赖，blocked。本批次落的是 60s 短探针 headless 切片（四项 SLO 测量 + 真实 session 协议循环）；8h 全量走 `--ignored` 变体（实机 nightly）。另外短探针跑 `cargo test` 期间可能触发 `hermix-cua` 的 rustc ICE（增量缓存损坏，`rm -rf target/debug/incremental` + `CARGO_INCREMENTAL=0` 可规避，属编译器 pre-existing bug 非本项目缺陷）
