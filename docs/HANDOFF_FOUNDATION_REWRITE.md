@@ -1,8 +1,8 @@
 # 交接文档：Hermix 底座重写 + 网络安全层（给后续开发 agent）
 
 > 更新时间：2026-09-25。本文是唯一权威交接入口。动手前**必须完整读完本文 + 必读文档清单**，禁止跳读后自行发挥。
-> 当前累计 59 个 commit（52 + 本批 7：`e8534365` / `45e02378` / `ae71666c` / `08307f7e` / `25aa6fff` / `db892c6d` / 本文档 commit）。工作区除 §7 未跟踪遗留物（`??` 行：WorkbenchChat.tsx / DiagnosticsTab.tsx / design-previews / 各 design.md / probe 脚本，属别的 agent，勿动）外干净。最近 commit：`db892c6d`（T1 stdio 派发面修复）+ `25aa6fff`（P6 审计读端点文档）+ `08307f7e`（P6 审计日志读端点）。
-> 本批新增 commit：`87bb2b9a` / `b51a32a1` / `3cc45b72` / `f062c5ad` / `e1a75115` / `20b6eda8` / `ab7aad02` / `c208f10f` / `9d897704` / `640eeb57` / `6979313c` / `a8f4e547` / `63e3b174` / `0918f7a5` / `cead162d` / `5fab0ec2` / `6892a043` / `29392b57` / `e651c311` / `adfc8ca5` / `acf1fea1` / `e91ac42e` / `fd238361` / `fc2f425a` / `d7abee4d` / `e5f728a1` / `f985eade` / `bc8a6e6c` / `64d145de` / `9ff58666` / `bc2f7da` / `e3955b7a` / `8f3e7a67` / `e8534365` / `45e02378` / `ae71666c` / `08307f7e` / `25aa6fff` / `db892c6d` / 本文档 commit（stdio T1 修复刷新）。
+> 当前累计 61 个 commit（52 + 本批 9：`e8534365` / `45e02378` / `ae71666c` / `08307f7e` / `25aa6fff` / `db892c6d` / `00074e0b` / `231a7dd6` / 本文档 commit）。工作区除 §7 未跟踪遗留物（`??` 行：WorkbenchChat.tsx / DiagnosticsTab.tsx / design-previews / 各 design.md / probe 脚本，属别的 agent，勿动）外干净。最近 commit：`231a7dd6`（MiniMax 工具调用告警）+ `00074e0b`（T1 stdio 修复文档）+ `db892c6d`（T1 stdio 派发面修复）。
+> 本批新增 commit：`87bb2b9a` / `b51a32a1` / `3cc45b72` / `f062c5ad` / `e1a75115` / `20b6eda8` / `ab7aad02` / `c208f10f` / `9d897704` / `640eeb57` / `6979313c` / `a8f4e547` / `63e3b174` / `0918f7a5` / `cead162d` / `5fab0ec2` / `6892a043` / `29392b57` / `e651c311` / `adfc8ca5` / `acf1fea1` / `e91ac42e` / `fd238361` / `fc2f425a` / `d7abee4d` / `e5f728a1` / `f985eade` / `bc8a6e6c` / `64d145de` / `9ff58666` / `bc2f7da` / `e3955b7a` / `8f3e7a67` / `e8534365` / `45e02378` / `ae71666c` / `08307f7e` / `25aa6fff` / `db892c6d` / `00074e0b` / `231a7dd6` / 本文档 commit（MiniMax 告警刷新）。
 
 ---
 
@@ -239,7 +239,7 @@ CARGO_INCREMENTAL=0 cargo test -p <crate> --lib   # 改了哪个 crate 测哪个
 - **P2 消息读写切换接入 server**：`hermix-session` 当前 0 处被引用（孤岛），把 `getSessionMessages` / 消息写路径从 `local_agent_service.rs`（4364 行上帝文件）切到 Session entry 派生需跨 P2/P5/P7 批次 + 真机 100 次重连对账，不在本批次
 - **P6 剩余**：~~T6 暴力破解 IP 锁定~~ → **已落**（本批次，见 §3.5 T6 段）/ 连接数+请求大小+空闲超时四件套（设计文档明写"随手机客户端批次补"）/ ~~审计日志读端点~~ → **已落**（`08307f7e`，见下方 P6 审计读端点段）；剩 DiagnosticsTab 前端展示（UI 批次）。~~NeedsLocalConfirmation 关口消费点接通（工具关口批次）~~ → **已落**（见 §3.3 续落段）
 - **P8 8h 全量 SLO**：8h soak（内存 ≤200MB / fd 不增长 / task 数稳定 / 0 未处理 panic）headless 不可行，实机依赖，blocked。本批次落的是 60s 短探针 headless 切片（四项 SLO 测量 + 真实 session 协议循环）；8h 全量走 `--ignored` 变体（实机 nightly）。另外短探针跑 `cargo test` 期间可能触发 `hermix-cua` 的 rustc ICE（增量缓存损坏，`rm -rf target/debug/incremental` + `CARGO_INCREMENTAL=0` 可规避，属编译器 pre-existing bug 非本项目缺陷）
-- 测试基线：hermix-server lib 194 passed（5 T6 锁定 + 6 能力位集 + 5 端点级判定 + 1 stdio ConnectInfo 回归测试）/ http_smoke 10 passed + 2 ignored（4 task_record + 4 audit 端点测试）/ dashboard_smoke 53 passed + 3 ignored（pre-existing theme 划掉的 ignore）/ hermix-session 15 passed / hermix-tools 697 passed（含 6 能力位集测试）/ hermix-agent lib 1050 passed + soak 2 passed / 全仓 cargo check --workspace 绿
+- 测试基线：hermix-server lib 194 passed（5 T6 锁定 + 6 能力位集 + 5 端点级判定 + 1 stdio ConnectInfo 回归测试）/ http_smoke 10 passed + 2 ignored（4 task_record + 4 audit 端点测试）/ dashboard_smoke 53 passed + 3 ignored（pre-existing theme 划掉的 ignore）/ hermix-session 15 passed / hermix-tools 697 passed（含 6 能力位集测试）/ hermix-agent lib 1051 passed（1050 + 1 工具调用告警 helper 测试）+ soak 2 passed / 全仓 cargo check --workspace 绿
 
 **已落**（P6 审计日志读端点 `GET /api/pairing/audit` — `08307f7e`）：
 - pairing.rs 加 `AuditQuery`（`limit: Option<u32>`，缺省 100，复用 `list_audit` 内部 `max(1).min(1000)` 钳制）+ `list_audit` handler（registry Some → `Json{events,count}` / None → 503，镜像 `list_devices` 模式）；`AuditRow` 已 `Serialize` 直接投影
@@ -254,6 +254,13 @@ CARGO_INCREMENTAL=0 cargo test -p <crate> --lib   # 改了哪个 crate 测哪个
 - **回归保护**：`envelope_tests::http_frame_injects_loopback_connect_info`——最小 router 用 `ConnectInfo` 提取器读对端，注入缺失时提取失败 500，断言必红。
 - **验证**：lib 194 passed（193 + 1 新回归测试）/ http_smoke 10 + 2 ignored / dashboard_smoke 53 + 3 ignored（零回归）/ 端到端 stdio 证据（`hermix.exe --stdio` + stdin 喂帧，sidecar 同款路径）：`GET /api/pairing/audit`（仅 Local 端点，修复前 403）→ 200 + `{"count":0,"events":[]}`。
 - **教训（对后续 agent）**：新增任何"进入 router 的请求路径"（TCP / TLS / stdio / 未来传输）都必须确认来源推导三件套（`ConnectInfo` / 设备凭证 / 合成注入）在该路径上的行为；测试新路径时不要手动注入 Extension 掩盖装配缺失（本故障即被集成测试的手动注入掩盖）。
+
+**已落**（MiniMax 文本工具调用解析失败的显式告警 — 真机故障 `231a7dd6`）：
+- **故障**：MiniMax-M3 会话"开始调用工具又中断了"。完整链路：模型以文本 XML 形态发工具调用但标记损坏到解析层无法识别（可见残骸 `]<]minimax[>`——`<minimax:tool_call>` 的 `:tool_call` 后缀缺失、括号错乱）→ sanitizer 剥掉可识别部分 → flush 阶段 `parse_tool_calls` 解析 0 个（`tool_calls_vec_len=0`）→ 残留文本被 untagged-reasoning 启发式挪进 reasoning → `has_visible=false` → `run_loop.rs:2221`（`history_includes_tool` + 无可见文本 → 立即 finalize，防 nudge 循环的权衡，行为正确）→ 模型的工具调用意图被**静默吞掉**，日志全链路 INFO 无定位线索。
+- **诊断取证**：sanitizer 剥除行为正确（完整/跨 chunk/裸标记/M3 原生 tag 格式均有测试，含 user_repro 精确串；管线只删不改写，`<`→`]` 是模型自身输出损坏）；MiniMax 工具格式指引已注入（directions 白名单含 "minimax"，`MiniMaxFamily` 路由命中）但指引不能阻止模型输出损坏标记；fallback 解析路径存在且 `raw_content` 收 pre-sanitizer 文本，但对破损标记无从恢复（无工具名无参数）。
+- **修复（最小切片）**：flush 阶段解析为 0 且 `raw_content` 含工具调用标记破损残留（含 `]minimax` 破损变体）时 `tracing::warn` 带单行摘录（`lost_tool_call_fragment_excerpt`，前后各 80 字符压平换行）——静默失败变可定位线索。
+- **YAGNI 定界**：不做破损标记的猜测性恢复（无工具名无参数，恢复=编造）；事件级流式工具调用解析状态机（pi-mono 的 `toolcall_start/delta/end` 一等事件形态，从根上消除"事后正则补救"）属插件内核批次（`PLUGIN_KERNEL_DESIGN.md` 的 Llm seam）。
+- **验证**：cargo check --workspace 绿 / hermix-agent lib **1051 passed**（1050 基线 + 1 新测试 `lost_tool_call_fragment_excerpt_detects_damaged_marker`，零回归）。
 
 **已落**（P6 T6 暴力破解 IP 锁定）：
 - `security.rs` 新增 `AuthFailLockout`（仿 `RateLimiter` 的 `Arc<Mutex<HashMap<String,(Vec<Instant>,Option<Instant>)>>` 模式，纯内存 headless 可验）：按 source IP 累计认证失败时间戳，窗口内达 `threshold` 即锁定 `cooldown` 期；冷却期内持续失败走**有界续期**（`until + cooldown` 但封顶 `now + 2*cooldown`，防滑动窗口导致攻击者永不解锁）；成功认证 `record_success` 清零该 IP 计数与锁定（合法用户输错后输对了不累积）
