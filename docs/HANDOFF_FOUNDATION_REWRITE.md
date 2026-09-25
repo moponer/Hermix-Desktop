@@ -1,8 +1,8 @@
 # 交接文档：Hermix 底座重写 + 网络安全层（给后续开发 agent）
 
 > 更新时间：2026-09-25。本文是唯一权威交接入口。动手前**必须完整读完本文 + 必读文档清单**，禁止跳读后自行发挥。
-> 当前累计 67 个 commit（52 + 本批 15：… `a3d9db0c` / `31498ce6` / `5674d1c0` / `6fceaf61` / `d115b591` / `1c628052` / `2b14e53a` + 本文档 commit）。工作区除 §7 未跟踪遗留物（`??` 行：WorkbenchChat.tsx / DiagnosticsTab.tsx / design-previews / 各 design.md / probe 脚本，属别的 agent，勿动）外干净。最近 commit：`2b14e53a`（Windows 吞斜杠隐患修复）+ `1c628052`（减少审批 A+B）+ `d115b591`（MiniMax tolerant 解析根治）。
-> 本批新增 commit：`87bb2b9a` / `b51a32a1` / `3cc45b72` / `f062c5ad` / `e1a75115` / `20b6eda8` / `ab7aad02` / `c208f10f` / `9d897704` / `640eeb57` / `6979313c` / `a8f4e547` / `63e3b174` / `0918f7a5` / `cead162d` / `5fab0ec2` / `6892a043` / `29392b57` / `e651c311` / `adfc8ca5` / `acf1fea1` / `e91ac42e` / `fd238361` / `fc2f425a` / `d7abee4d` / `e5f728a1` / `f985eade` / `bc8a6e6c` / `64d145de` / `9ff58666` / `bc2f7da` / `e3955b7a` / `8f3e7a67` / `e8534365` / `45e02378` / `ae71666c` / `08307f7e` / `25aa6fff` / `db892c6d` / `00074e0b` / `231a7dd6` / `d115b591` / `1c628052` / `2b14e53a` / 本文档 commit（吞斜杠隐患修复刷新）。
+> 当前累计 69 个 commit（52 + 本批 17：… `1c628052` / `2b14e53a` / `afdedf5a` / `9bdef3a8` + 本文档 commit）。工作区除 §7 未跟踪遗留物（`??` 行：WorkbenchChat.tsx / DiagnosticsTab.tsx / design-previews / 各 design.md / probe 脚本，属别的 agent，勿动）外干净。最近 commit：`9bdef3a8`（Windows shell 层统一 PowerShell 路由 + 提示词对齐，pi 模型对齐）+ `afdedf5a`（删手写 coreutils/shell-parser 字典）+ `2b14e53a`（Windows 吞斜杠隐患修复）。
+> 本批新增 commit：`87bb2b9a` / `b51a32a1` / `3cc45b72` / `f062c5ad` / `e1a75115` / `20b6eda8` / `ab7aad02` / `c208f10f` / `9d897704` / `640eeb57` / `6979313c` / `a8f4e547` / `63e3b174` / `0918f7a5` / `cead162d` / `5fab0ec2` / `6892a043` / `29392b57` / `e651c311` / `adfc8ca5` / `acf1fea1` / `e91ac42e` / `fd238361` / `fc2f425a` / `d7abee4d` / `e5f728a1` / `f985eade` / `bc8a6e6c` / `64d145de` / `9ff58666` / `bc2f7da` / `e3955b7a` / `8f3e7a67` / `e8534365` / `45e02378` / `ae71666c` / `08307f7e` / `25aa6fff` / `db892c6d` / `00074e0b` / `231a7dd6` / `d115b591` / `1c628052` / `2b14e53a` / `afdedf5a` / `9bdef3a8` / 本文档 commit（PowerShell 统一路由刷新）。
 
 ---
 
@@ -307,6 +307,28 @@ CARGO_INCREMENTAL=0 cargo test -p <crate> --lib   # 改了哪个 crate 测哪个
 - **方案曲折（教训）**：第一版走"包裹标记归一化 regex"（补缺失 `<`、剥括号残渣、前邻 `/` 判 close）——正则对 open/close 残渣判定不可靠（`]</` 与 `]<]` 难区分，尾部残渣类吃 `<invoke` 的 `<` 或误判 close 为 open），两版修复均未收敛；改用 invoke 块重建（`<invoke` 是标准解析器自己识别的可靠锚点，重建包裹是确定性操作）。过程调试输出已全部清除，最终代码只保留验证通过的方案。
 - **YAGNI 定界**：仍不做逐 delta 流式解析状态机——工具派发本就发生在 flush 之后，flush 时点对 raw_content 一次性恢复与事件级流式对结果零差异；事件级状态机继续归插件内核批次（Llm seam 评审后再定）。
 - **验证**：`cargo check --workspace --all-targets` 绿；hermix-core tolerant 4 测试绿（user_repro 精确串 / `]<]minimax[>[` 残骸 / 完好输入零行为变化 / 无标记不误伤）；hermix-agent lib **1051 全绿**（与基线一致，tolerant 接线未新增 agent 测试——解析逻辑全在 hermix-core，agent 侧仅调用点）。
+
+**已落**（命令执行模型对齐（抄成熟方案） — deepseek-harness / pi agent 取证 `afdedf5a` + `9bdef3a8`）：
+- **主人指令**："我的命令使用工具调用很舒服很顺利，我们项目就不行——一定要抄人家成熟的，别总是不把我的话当回事"。两个参照源取证：
+  - **deepseek-harness**：shell program 表是 in-process 函数（`programs/{text,files,builtins,options}.ts` 里 30+ 命令都是普通 JS 函数），不 spawn OS 进程；`runShellProgram(argv)` 直接吃 argv，**不再对已分词的东西 re-quote**；管道 = 传字符串（"output is text, not streams"）。
+  - **pi agent**：纯 `spawn(shell, args, { shell:false })` argv 直传 + `OutputAccumulator`（滚动 buffer + 超限落 temp file + tail 截断）+ 进程树 kill + 流式 `onData`。Windows 用 Git Bash 或 PowerShell 做 shell 层。**没有任何手写命令实现**。
+  - 两边共同根子：**命令执行不走"字符串 join 给 OS shell"，要么 in-process 函数表，要么 argv 直传 spawn**。本仓库"不顺"的根 = `cmd.exe /c` 字符串拼接 + 手写 2000 行 coreutils 字典。
+- **删除（afdedf5a）**：
+  - `crates/hermix-coreutils`（~2000 行手写 ls/cat/grep/sed/find/... dispatch 字典，主人评"没好用过"，且 LLM 发 POSIX 名在 Windows 易吃"不是内部或外部命令"）
+  - `crates/hermix-shell-parser`（Pure/ShellMeta 分类器，仅 coreutils fast-path 一个消费者，删 dispatch 后无消费者，YAGNI 砍掉）
+  - 两者在 workspace `Cargo.toml` 的成员/依赖声明
+  - `local.rs` 的 native dispatch 块（`coreutils::dispatch` 调用 + `parse` 分类）+ `hermix_coreutils` / `hermix_shell_parser` import
+- **Windows shell 层统一 PowerShell（9bdef3a8，pi 模型对齐）**：
+  - `local.rs` Windows 分支不再路由 cmd.exe；统一 `powershell.exe -NoProfile -NonInteractive -Command <argv>`。PowerShell 自带 ls/cat/grep 等 POSIX 别名（ls→Get-ChildItem，cat→Get-Content，grep→Select-String），LLM 发 POSIX 名也 work。
+  - 吃掉 `powershell`/`pwsh` 前缀走同一路由（幂等）；`normalize_windows_cmd_prefix` 死代码 + 其 7 个回归测试删除（cmd 路由没了）。
+  - 保留 `normalize_windows_path_slashes`（斜杠归一化兜底——PowerShell 两种分隔符都接受，但 LLM 输出更贴合 native 习惯，且兼容下游走 cmd 的场景）。
+  - `test_execute_command_timeout` 的 Windows 侧命令从 `ping -n 31 127.0.0.1 >nul` 换 `Start-Sleep -Seconds 30`（PowerShell 内建，不依赖外部 binary）。
+- **提示词层对齐（9bdef3a8）**：
+  - `terminal.rs` command 参数 description 重写：明示 PowerShell 统一 shell 层 + cmdlet 优先（Get-ChildItem/Get-Content/Select-String/Get-Process）+ POSIX 别名可用 + native 反斜杠路径形态。
+  - `directions.rs` ENVIRONMENT_SHELL_GUIDANCE 段重写："Git Bash 做 shell 层"旧心智换成"统一 PowerShell shell 层"；cmdlet 优先清单；删 Git Bash 引号剥离、`/c/Users` 翻译等已不成立条目。
+- **YAGNI 定界**：不重写 hand dict 为"成熟库实现"（主人要的是"抄 pi/deepseek-harness 的模型"——pi 根本没有 hand dict，in-process 函数表；本仓库对齐 = 删 hand dict + 统一 shell 层，而非把 2000 行字典换成另一套 2000 行）；不引入 uutils/microsoft coreutils exe（主人纠正：不是塞外部 exe，是对齐执行模型）；不做 pi 的 `OutputAccumulator` 流式累积（现有 `max_output_size` 截断已够，流式输出是 UI 层关切，非命令执行模型关切）。
+- **验证**：`cargo check --workspace --all-targets` 绿；hermix-environments lib **46 全绿**（含新 timeout 测试）；hermix-tools lib **697 全绿**（零回归）；hermix-agent lib **1054 全绿**（零回归，directions 文案改动不影响既有测试）。
+- **后续批次（划出）**：pi 的 `OutputAccumulator`（滚动 buffer + 超限落 temp file + tail 截断 + 流式 onData）——属 UI 流式输出批次，非命令执行模型；deepseek-harness 的 in-process shell program 表（VFS + 30+ JS 函数）——属 webworker 沙箱实验层，本仓库非 webworker 架构，不适用。
 
 **已落**（P6 T6 暴力破解 IP 锁定）：
 - `security.rs` 新增 `AuthFailLockout`（仿 `RateLimiter` 的 `Arc<Mutex<HashMap<String,(Vec<Instant>,Option<Instant>)>>` 模式，纯内存 headless 可验）：按 source IP 累计认证失败时间戳，窗口内达 `threshold` 即锁定 `cooldown` 期；冷却期内持续失败走**有界续期**（`until + cooldown` 但封顶 `now + 2*cooldown`，防滑动窗口导致攻击者永不解锁）；成功认证 `record_success` 清零该 IP 计数与锁定（合法用户输错后输对了不累积）
