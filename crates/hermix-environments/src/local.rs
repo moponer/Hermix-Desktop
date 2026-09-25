@@ -723,6 +723,47 @@ mod tests {
         assert_eq!(output.exit_code, 42);
     }
 
+    // ── Windows 统一 PowerShell 路由冒烟（真机语义钉死） ─────────
+    // 探针结论：POSIX 别名（ls/cat）可用；未知命令 exit=1 且
+    // stderr 非空；显式 exit code 原样传播（exit 42 由上面既有
+    // 测试覆盖）。
+
+    #[tokio::test]
+    #[cfg(windows)]
+    async fn powershell_route_posix_alias_lists_directory() {
+        let dir = std::env::temp_dir().join("hermix_ps_route_alias");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.txt"), b"hello").unwrap();
+        let backend = LocalBackend::default();
+        let out = backend
+            .execute_command(
+                "ls a.txt",
+                None,
+                Some(dir.to_string_lossy().as_ref()),
+                false,
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(out.exit_code, 0);
+        assert!(out.stdout.contains("a.txt"), "stdout: {}", out.stdout);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    #[cfg(windows)]
+    async fn powershell_route_unknown_command_reports_nonzero_exit() {
+        // 诚实失败语义：未知命令 exit != 0 且 stderr 带诊断（错误
+        // 文案随系统语言变化，只断言非空）。
+        let backend = LocalBackend::default();
+        let out = backend
+            .execute_command("definitely_not_a_command_xyz_9x7", None, None, false, false)
+            .await
+            .unwrap();
+        assert_ne!(out.exit_code, 0);
+        assert!(!out.stderr.is_empty());
+    }
+
     #[tokio::test]
     async fn test_write_and_read_file() {
         let dir = std::env::temp_dir().join("hermes_test_write_read");

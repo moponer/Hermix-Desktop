@@ -191,6 +191,19 @@ static READONLY_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
         re(r"(?i)\bGet-ComputerInfo\b"),
         re(r"(?i)\bGet-Disk\b"),
         re(r"(?i)\bGet-Partition\b"),
+        // Windows shell 层统一 PowerShell 后高频出现的只读命令。
+        // Select-String 是搜索主力（grep 无内建别名，提示词层指路
+        // Select-String）；Test-Path / Get-Date / Get-Command /
+        // Get-Location / Get-Alias / Get-Member / Get-FileHash 均
+        // 只读，缺了会让探索类命令弹审批卡。
+        re(r"(?i)\bSelect-String\b"),
+        re(r"(?i)\bTest-Path\b"),
+        re(r"(?i)\bGet-Date\b"),
+        re(r"(?i)\bGet-Command\b"),
+        re(r"(?i)\bGet-Location\b"),
+        re(r"(?i)\bGet-Alias\b"),
+        re(r"(?i)\bGet-Member\b"),
+        re(r"(?i)\bGet-FileHash\b"),
         // Windows read-only commands
         re(r"(?i)\bdir\s"),
         re(r"(?i)\bwhere\s"),
@@ -875,6 +888,25 @@ mod origin_aware_tests {
             ApprovalDecision::RequiresConfirmation,
             "配了 DangerousTool 不等于自动放行，矩阵仍要桌面确认"
         );
+    }
+
+    /// Windows shell 层统一 PowerShell 后高频只读命令必须进
+    /// READONLY_PATTERNS——缺了会让探索类命令弹审批卡（审批死锁
+    /// 症状的直接来源）。
+    #[test]
+    fn powershell_route_readonly_cmdlets_are_allowlisted() {
+        for cmd in [
+            "Select-String -Pattern TODO -Path src/lib.rs",
+            "Test-Path C:/Windows",
+            "Get-Date -Format yyyy-MM-dd",
+            "Get-Command Get-ChildItem",
+            "Get-Location",
+            "Get-Alias ls",
+            "Get-Member -InputObject 'x'",
+            "Get-FileHash C:/x.bin",
+        ] {
+            assert!(is_readonly_command(cmd), "should be readonly: {cmd}");
+        }
     }
 
     /// 未配 DangerousTool 但命中 READONLY_PATTERNS：只读命令仍放行
