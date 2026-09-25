@@ -1,7 +1,7 @@
 # 交接文档：Hermix 底座重写 + 网络安全层（给后续开发 agent）
 
 > 更新时间：2026-09-25。本文是唯一权威交接入口。动手前**必须完整读完本文 + 必读文档清单**，禁止跳读后自行发挥。
-> 当前累计 63 个 commit（52 + 本批 11：`e8534365` / `45e02378` / `ae71666c` / `08307f7e` / `25aa6fff` / `db892c6d` / `00074e0b` / `231a7dd6` / `acc447da` / `a3d9db0c` / `31498ce6` + 本文档 commit）。工作区除 §7 未跟踪遗留物（`??` 行：WorkbenchChat.tsx / DiagnosticsTab.tsx / design-previews / 各 design.md / probe 脚本，属别的 agent，勿动）外干净。最近 commit：`31498ce6`（TaskRecord 热路径生产者）+ `a3d9db0c`（P2 EntryRecord 定界文档）。
+> 当前累计 64 个 commit（52 + 本批 12：… `a3d9db0c` / `31498ce6` / `5674d1c0` / `6fceaf61` + 本文档 commit）。工作区除 §7 未跟踪遗留物（`??` 行：WorkbenchChat.tsx / DiagnosticsTab.tsx / design-previews / 各 design.md / probe 脚本，属别的 agent，勿动）外干净。最近 commit：`6fceaf61`（TaskRecord 启动对账读路径）+ `31498ce6`（TaskRecord 热路径生产者）。
 > 本批新增 commit：`87bb2b9a` / `b51a32a1` / `3cc45b72` / `f062c5ad` / `e1a75115` / `20b6eda8` / `ab7aad02` / `c208f10f` / `9d897704` / `640eeb57` / `6979313c` / `a8f4e547` / `63e3b174` / `0918f7a5` / `cead162d` / `5fab0ec2` / `6892a043` / `29392b57` / `e651c311` / `adfc8ca5` / `acf1fea1` / `e91ac42e` / `fd238361` / `fc2f425a` / `d7abee4d` / `e5f728a1` / `f985eade` / `bc8a6e6c` / `64d145de` / `9ff58666` / `bc2f7da` / `e3955b7a` / `8f3e7a67` / `e8534365` / `45e02378` / `ae71666c` / `08307f7e` / `25aa6fff` / `db892c6d` / `00074e0b` / `231a7dd6` / 本文档 commit（MiniMax 告警刷新）。
 
 ---
@@ -243,7 +243,14 @@ CARGO_INCREMENTAL=0 cargo test -p <crate> --lib   # 改了哪个 crate 测哪个
 - **P2 消息读写切换接入 server**：`hermix-session` 当前 0 处被引用（孤岛），把 `getSessionMessages` / 消息写路径从 `local_agent_service.rs`（4364 行上帝文件）切到 Session entry 派生需跨 P2/P5/P7 批次 + 真机 100 次重连对账，不在本批次
 - **P6 剩余**：~~T6 暴力破解 IP 锁定~~ → **已落**（本批次，见 §3.5 T6 段）/ 连接数+请求大小+空闲超时四件套（设计文档明写"随手机客户端批次补"）/ ~~审计日志读端点~~ → **已落**（`08307f7e`，见下方 P6 审计读端点段）；剩 DiagnosticsTab 前端展示（UI 批次）。~~NeedsLocalConfirmation 关口消费点接通（工具关口批次）~~ → **已落**（见 §3.3 续落段）
 - **P8 8h 全量 SLO**：8h soak（内存 ≤200MB / fd 不增长 / task 数稳定 / 0 未处理 panic）headless 不可行，实机依赖，blocked。本批次落的是 60s 短探针 headless 切片（四项 SLO 测量 + 真实 session 协议循环）；8h 全量走 `--ignored` 变体（实机 nightly）。另外短探针跑 `cargo test` 期间可能触发 `hermix-cua` 的 rustc ICE（增量缓存损坏，`rm -rf target/debug/incremental` + `CARGO_INCREMENTAL=0` 可规避，属编译器 pre-existing bug 非本项目缺陷）
-- 测试基线（TaskRecord 热路径批次后）：hermix-server lib 197 passed（194 + 3 task_record_sink 适配器测试）/ http_smoke 10 passed + 2 ignored（4 task_record + 4 audit 端点测试）/ dashboard_smoke 53 passed + 3 ignored（pre-existing theme 划掉的 ignore）/ hermix-session 15 passed / hermix-tools 697 passed（含 6 能力位集测试）/ hermix-agent lib 1051 passed（与基线一致，orchestrator 12 个定向测试含新构造字段）+ soak 2 passed / 全仓 cargo check --workspace --all-targets 绿
+- 测试基线（TaskRecord 启动对账批次后）：hermix-server lib 200 passed（197 + 3 reconcile 测试）/ http_smoke 10 passed + 2 ignored / dashboard_smoke 53 passed + 3 ignored / hermix-session 15 passed / hermix-tools 697 passed / hermix-agent lib 1051 passed + soak 2 passed / 全仓 cargo check --workspace --all-targets 绿
+
+**已落**（TaskRecord 启动对账读路径 — `6fceaf61`）：
+- `reconcile_task_records(store)`（state.rs）：启动时 `scan_unfinished` 扫 running 残留（正常终态由 31498ce6 的三挂点落盘，残留 running = 上次进程死在执行中途），全部落成 `Terminal(Faulted{ "进程重启，sub-agent 执行中断" })`——Checkpoint.from_step 未细化无从续跑，恢复视图不留僵尸
+- best-effort 降级：扫描/写入失败仅 warn，不阻断启动（同 EffectLog 启动恢复块语义）；两条生产装配路径（`build` / `build_with_agent_service`）同接
+- `task_record_store` 字段复用对账构造的 store 单实例，消除此前 sink/store 重复开同一库
+- 测试 3 个：running→Faulted 且扫描清零 / Terminal 记录不动 / 空库 noop；server lib 200 全绿
+- YAGNI 边界：不自动重派（无 checkpoint 无从恢复）；不接通知 UI；只处理 sub-agent 域，不碰 TaskService 看板任务
 
 **已落**（TaskRecord 热路径生产者 — `31498ce6`）：
 - 崩溃恢复"有壳无热路径"缺口接通：sub-agent（delegate_task）生命周期现在落 effects.db 的 TaskRecord，`scan_unfinished`/`recover` 恢复决策首次有真实输入
