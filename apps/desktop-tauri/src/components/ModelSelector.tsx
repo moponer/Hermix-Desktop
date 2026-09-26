@@ -77,8 +77,10 @@ export function useModelSelector() {
     };
     window.addEventListener("storage", onStorage);
 
-    // reconcile: mount 时只同步 defaultModel 兜底(localStorage 缺失时),
-    // 不主动 union / 不主动覆盖后端 enabled 列表。
+    // reconcile: 统一权威规则（与 ModelTab 的 mount-fetch 对齐 ——
+    // 后端 config.yaml 的 model_selector 是持久权威，localStorage 是跨 tab
+    // 瞬态镜像；此前本文件注释自称"localStorage 单一来源"，与 ModelTab
+    // "后端权威"注释矛盾，即"双权威漂移"：同一份数据 3 处各认一个权威。
     //
     // 历史教训: 旧实现从 4 个 source（localStorage.enabled / cache /
     // backend.models / customProviders)做 union 再写回 localStorage +
@@ -87,11 +89,12 @@ export function useModelSelector() {
     // 取消勾选彻底白做。同时 saveModelList 主动覆盖后端,跟
     // toggleModel 的"用户主动 commit"语义冲突。
     //
-    // 新规则: enabled list 单一来源 = localStorage, 只在用户主动
-    // toggle / setDefault 时变化；reconcile 只在下列场景兜底:
-    //   1) localStorage 缺失 → 用 backend.enabled 起步一次（首次安装场景）
-    //   2) localStorage 的 defaultModel 空 / 后端有 → 用后端 defaultModel
-    //   3) 任何场景都不主动调 saveModelList
+    // 统一后规则: 后端可达 → 后端即权威（本地条目中后端没有的剔除，
+    // 后端空列表也是权威：全 provider 未配钥时本地残留该清）；
+    // 后端不可达（离线）→ 本地镜像兜底，不吞勾选。
+    // 本组件永不主动调 saveModelList —— 写路径统一走
+    // writeModelConfigAndNotify（ModelTab/CustomProvidersTab），
+    // 那里一次写 localStorage + 推后端，事件扇出保持所有消费方一致。
     let cancelled = false;
     const reconcile = async () => {
       try {
@@ -99,29 +102,21 @@ export function useModelSelector() {
         if (cancelled) return;
 
         let local: ModelConfigData = { enabled: [], defaultModel: "" };
-        let localMissing = false;
         try {
           const raw = storage.getItem(MODEL_CONFIG_KEY);
           if (raw) {
             const parsed = JSON.parse(raw) as ModelConfigData;
             if (parsed && Array.isArray(parsed.enabled)) local = parsed;
-          } else {
-            localMissing = true;
           }
         } catch {}
 
-        // 后端请求成功 → 其集合即权威（空列表也是权威：全部 provider
-        // 未配钥时本地残留条目同样该清）；请求失败（backend===null）→
-        // 保留本地态，离线不吞勾选。
+        // 后端可达：本地∩后端 = 权威 enabled 集合（后端空也清残留）；
+        // 后端不可达（backend === null）：本地镜像兜底，离线不吞勾选。
         const rawBackend = backend?.models ?? [];
         const backendIds = new Set(rawBackend.map((m) => `${m.provider_id}:${m.model_id}`));
-        const baseEnabled =
-          localMissing && rawBackend.length
-            ? rawBackend.map((m) => ({ providerId: m.provider_id, modelId: m.model_id }))
-            : local.enabled;
-        const enabled = backend !== null
-          ? baseEnabled.filter((e) => backendIds.has(`${e.providerId}:${e.modelId}`))
-          : baseEnabled;
+        const enabled = backend === null
+          ? local.enabled
+          : local.enabled.filter((e) => backendIds.has(`${e.providerId}:${e.modelId}`));
 
         // orphan-aware 默认模型：优先有效的本地默认，其次后端默认，最后取首项。
         const validIds = new Set(enabled.map((e) => `${e.providerId}:${e.modelId}`));
