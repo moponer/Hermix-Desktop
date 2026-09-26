@@ -9,7 +9,8 @@
 //   4) category 命中 CATEGORY_DEFAULT (媒体/文件工具/...) → 兜底 lucide 图标
 //   5) Boxes 图标 (绝对兜底)
 
-import { useState, type ComponentType, type ReactNode } from "react";
+import { useEffect, useState, type ComponentType, type ReactNode } from "react";
+import { fetchJSONBinary } from "../../api/rest";
 import {
   Music,
   Music2,
@@ -265,20 +266,53 @@ function renderLucideFallback(app: IconLike, opts: ResolveIconOpts): ReactNode {
 
 /**
  * 自定义 PNG 图标。manifest 声明了 icon_file 但文件实际不存在时,
- * /api/custom-apps/{id}/icon 会 404 —— 裸 <img> 会在卡片左上角留下一片
- * 空白（比没图标更难看）。加载失败就地降级到 lucide 兜底, 保证任何情况
- * 下都有一个可辨识的图标。
+ * /api/custom-apps/{id}/icon 会 404 —— 此时降级到 lucide 兜底, 保证任何
+ * 情况下都有一个可辨识的图标。
+ *
+ * 图标字节通过 stdio bridge 的 `fetchJSONBinary` 拉取 (enc=base64 回传),
+ * 渲染成 objectURL 喂给 <img>。生产环境 <img src> 直接填后端路径会解析
+ * 到 Tauri 内部 URL → 永远 404 → 上传的 PNG 图标全部静默失效。
+ * objectURL 在卸载 / 降级时 revoke, 防内存泄漏。
  */
 function IconImage({ app, opts }: { app: IconLike; opts: ResolveIconOpts }) {
+  const [objectUrl, setObjectUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    let url: string | null = null;
+
+    void (async () => {
+      try {
+        const blob = await fetchJSONBinary(
+          "GET",
+          `/api/custom-apps/${encodeURIComponent(app.id)}/icon`,
+        );
+        if (cancelled) {
+          URL.revokeObjectURL(url ?? "");
+          return;
+        }
+        url = URL.createObjectURL(blob);
+        setObjectUrl(url);
+      } catch {
+        if (!cancelled) setFailed(true);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [app.id, app.icon_file]);
+
   if (failed) return renderLucideFallback(app, opts);
+  if (!objectUrl) return renderLucideFallback(app, opts);
   return (
     <img
       className={opts.imgClassName}
-      src={`/api/custom-apps/${encodeURIComponent(app.id)}/icon`}
+      src={objectUrl}
       alt={app.name}
       draggable={false}
-      onError={() => setFailed(true)}
     />
   );
 }
