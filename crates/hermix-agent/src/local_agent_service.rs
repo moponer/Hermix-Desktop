@@ -1106,36 +1106,31 @@ impl LocalAgentService {
             return None;
         }
 
-        // Mutating file tools — still gate on the granted scope so a
-        // write/patch/delete outside the user-approved directory triggers
-        // an approval card.
-        const WRITE_FILE_TOOLS: &[&str] = &[
-            "write_file",
-            "patch",
-            "delete_file",
-            "disk_cleanup",
-        ];
-        if WRITE_FILE_TOOLS.contains(&name) {
-            if let Some(path) = params.get("path").and_then(|v| v.as_str()) {
-                if !profile.allows_path(path) {
-                    return Some(format!("未授权路径: {path}"));
-                }
-            }
+        // 文件内容写入（write_file / patch / move_file）不做资源门拦截。
+        // 依据主人 2026-09-26 拍板："写文件不用审批，只有删除等高危才审批"。
+        // 本机自主机上的文件内容写/改/移动是低风险操作，弹「未授权路径」卡
+        // 纯属摩擦；真正的高危删除（delete_file / disk_cleanup）仍走资源门
+        // （见下方 DESTRUCTIVE_FILE_TOOLS）。
+        //
+        // 命令执行（terminal / code_execution）不做 command-grant 资源门拦截。
+        // 依据同上：「命令执行（设置环境变量、命令编码等）不用审批」。
+        // 破坏性命令（rm/del/format/diskpart/mkfs …）由下游 DENIED/CONFIRM
+        // 审批层 + hardline blocklist 独立兜底，不依赖这里的 grant 前缀匹配。
+        // 旧实现在这里用「未授权命令」卡拦截了所有首 token 不在 grant 列表的
+        // 命令（$env: 环境变量、export、编码命令等），与主人意图直接冲突。
+        if name == "terminal" || name == "code_execution" {
             return None;
         }
-        if name == "terminal" || name == "code_execution" {
-            if let Some(cmd) = params.get("command").and_then(|v| v.as_str()) {
-                // Read-only commands (grep, find, cat, ls, dir,
-                // Get-ChildItem, etc.) never modify state — skip the
-                // permission-profile gate so search/read/list
-                // operations don't trigger approval prompts.
-                if !hermix_tools::is_readonly_command(cmd)
-                    && !profile.allows_command(cmd)
-                {
-                    return Some(format!("未授权命令: {cmd}"));
+
+        // 破坏性文件操作 — 删除类是主人明确接受「才审批」的高危项。
+        // delete_file / disk_cleanup 越出授权目录才弹资源卡。
+        const DESTRUCTIVE_FILE_TOOLS: &[&str] = &["delete_file", "disk_cleanup"];
+        if DESTRUCTIVE_FILE_TOOLS.contains(&name) {
+            if let Some(path) = params.get("path").and_then(|v| v.as_str()) {
+                if !profile.allows_path(path) {
+                    return Some(format!("未授权删除路径: {path}"));
                 }
             }
-            return None;
         }
         None
     }
@@ -4460,86 +4455,96 @@ mod override_tests {
         }
     }
 
-    /// B-layer 钉死（写工具对照）：write_file 写未授权路径必须返回
-    /// 资源描述（触发审批卡），授权路径内则豁免。"减少审批"的
-    /// 反向边界——只读免卡、写越界仍卡，不能一刀切全免。
+    /// B-layer 钉死（写工具对照）：write_file / patch 的内容写入不做资源门
+    /// 拦截（2026-09-26 主人拍板"写文件不用审批，只有删除等高危才审批"），
+    /// 即使写未授权路径也返回 None（不弹卡）；真正的删除类（delete_file /
+    /// disk_cleanup）越出授权目录仍必须返回 Some（触发审批卡）。
     #[test]
-    fn resource_guard_gates_write_tools_outside_grant() {
+    fn resource_guard_gates_destructive_file_tools_outside_grant() {
         use hermix_core::ToolCall;
         let mut profile = hermix_core::permission_profile::PermissionProfile::default();
         profile.grant_path("c:/workspace");
 
-        let outside = ToolCall {
-            id: "t1".into(),
-            function: hermix_core::FunctionCall {
-                name: "write_file".into(),
-                arguments: r#"{"path":"c:/other/x.txt","content":"x"}"#.into(),
-            },
-        };
-        let params: serde_json::Value =
-            serde_json::from_str(outside.function.arguments.as_str()).unwrap();
-        assert!(
-            LocalAgentService::resource_guard(&outside, &profile, &params).is_some(),
-            "write_file outside grant MUST trigger approval"
-        );
+        // 内容写入（write_file / patch）— 未授权路径也豁免（不弹卡）。
+        for tool in ["write_file", "patch"] {
+            let outside = ToolCall {
+                id: "t1".into(),
+                function: hermix_core::FunctionCall {
+                    name: tool.to_string(),
+                    arguments: r#"{"path":"c:/other/x.txt","content":"x"}"#.into(),
+                },
+            };
+            let params: serde_json::Value =
+                serde_json::from_str(outside.function.arguments.as_str()).unwrap();
+            assert!(
+                LocalAgentService::resource_guard(&outside, &profile, &params).is_none(),
+                "{tool} content-write outside grant must NOT trigger approval (2026-09-26 policy)"
+            );
+        }
 
-        let inside = ToolCall {
-            id: "t2".into(),
-            function: hermix_core::FunctionCall {
-                name: "write_file".into(),
-                arguments: r#"{"path":"c:/workspace/x.txt","content":"x"}"#.into(),
-            },
-        };
-        let params: serde_json::Value =
-            serde_json::from_str(inside.function.arguments.as_str()).unwrap();
-        assert!(
-            LocalAgentService::resource_guard(&inside, &profile, &params).is_none(),
-            "write_file inside the granted workspace root must NOT trigger approval"
-        );
+        // 删除类（delete_file / disk_cleanup）— 越出授权目录仍必须弹卡。
+        for tool in ["delete_file", "disk_cleanup"] {
+            let outside = ToolCall {
+                id: "t2".into(),
+                function: hermix_core::FunctionCall {
+                    name: tool.to_string(),
+                    arguments: r#"{"path":"c:/other/x.txt"}"#.into(),
+                },
+            };
+            let params: serde_json::Value =
+                serde_json::from_str(outside.function.arguments.as_str()).unwrap();
+            assert!(
+                LocalAgentService::resource_guard(&outside, &profile, &params).is_some(),
+                "{tool} outside grant MUST trigger approval (deletion is high-risk)"
+            );
+
+            let inside = ToolCall {
+                id: "t3".into(),
+                function: hermix_core::FunctionCall {
+                    name: tool.to_string(),
+                    arguments: r#"{"path":"c:/workspace/x.txt"}"#.into(),
+                },
+            };
+            let params: serde_json::Value =
+                serde_json::from_str(inside.function.arguments.as_str()).unwrap();
+            assert!(
+                LocalAgentService::resource_guard(&inside, &profile, &params).is_none(),
+                "{tool} inside the granted workspace root must NOT trigger approval"
+            );
+        }
     }
 
-    /// A-layer 钉死：默认 command 前缀 grant 生效后，常见构建/测试/探索
-    /// 命令（cargo/node/pnpm/git 等）在"只 grant 这批前缀"的 profile
-    /// 下也应被 `allows_command` 放行。直接测 `PermissionProfile` 的
-    /// 前缀匹配语义（agent 侧的 `DEFAULT_GRANTED_COMMANDS` 只是调用
-    /// `grant_command` 的封装）。
+    /// 命令执行（terminal / code_execution）不做 command-grant 资源门拦截
+    /// （2026-09-26 主人拍板"命令执行不用审批"）。即便命令首 token 不在
+    /// grant 列表（$env: 环境变量、export、编码命令等），resource_guard
+    /// 也返回 None；破坏性命令由下游 DENIED/CONFIRM 审批层独立兜底。
     #[test]
-    fn default_granted_command_prefixes_pass_allows_command() {
-        let mut profile = hermix_core::permission_profile::PermissionProfile::default();
-        for cmd in [
-            "git",
-            "cargo",
-            "node",
-            "pnpm",
-            "npm",
-            "npx",
-            "python",
-            "python3",
-            "pwsh",
-            "powershell",
-            "cmd",
-            "where",
-            "dir",
-            "type",
-            "find",
-            "grep",
-            "ls",
+    fn resource_guard_exempts_terminal_command_execution() {
+        use hermix_core::ToolCall;
+        let profile = hermix_core::permission_profile::PermissionProfile::default();
+
+        use serde_json::json;
+        // 用 json! 宏构造参数（避免手写 JSON 字符串的反斜杠/引号转义陷阱），
+        // 命令体含 env 设置（; 链）、export、编码命令、普通构建命令各一例。
+        for params in [
+            json!({"command": "$env:FOO = 'bar'; $env:PATH += ';C:/tools'"}),
+            json!({"command": "export FOO=bar && echo $FOO"}),
+            json!({"command": "powershell -enc AAAABBBB"}),
+            json!({"command": "cargo build --workspace"}),
         ] {
-            profile.grant_command(cmd);
+            let tc = ToolCall {
+                id: "t1".into(),
+                function: hermix_core::FunctionCall {
+                    name: "terminal".to_string(),
+                    arguments: params.to_string(),
+                },
+            };
+            let params: serde_json::Value =
+                serde_json::from_str(&tc.function.arguments).unwrap();
+            assert!(
+                LocalAgentService::resource_guard(&tc, &profile, &params).is_none(),
+                "terminal command execution must NOT gate on command grant (2026-09-26 policy)"
+            );
         }
-        // 前缀匹配 + 大小写归一（normalize_command lowercase）
-        assert!(profile.allows_command("cargo build --workspace"));
-        assert!(profile.allows_command("CARGO test -p hermix-agent"));
-        assert!(profile.allows_command("pnpm install"));
-        assert!(profile.allows_command("git status"));
-        // 词边界：`git` 不匹配 `gitx`（前缀后接字母 = 不同词）
-        assert!(!profile.allows_command("gitx init"), "prefix must match at word boundary");
-        // shell 链操作符仍被拒（`contains_shell_chain_operator`）
-        assert!(
-            !profile.allows_command("git status && rm -rf /"),
-            "granted prefix must not let the agent chain destructive actions"
-        );
-        // 未 grant 的前缀仍弹卡
-        assert!(!profile.allows_command("del /q x.txt"), "ungated command prefix must prompt");
     }
 }

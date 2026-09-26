@@ -148,9 +148,16 @@ static CONFIRM_PATTERNS: LazyLock<Vec<ConfirmRule>> = LazyLock::new(|| {
         // PowerShell-native destructive cmdlets — the cmd.exe
         // equivalents (taskkill / shutdown) are covered above; the
         // unified PowerShell shell layer makes these the natural
-        // emissions now.
+        // emissions now. `Stop-Process` is kept as a confirm gate
+        // (force-killing an arbitrary process tree is destructive;
+        // the user can't undo it without restarting the app).
         ConfirmRule { name: "stop-process", re: re(r"(?i)\bStop-Process\b") },
-        ConfirmRule { name: "shutdown", re: re(r"(?i)\b(shutdown|Stop-Computer|Restart-Computer)\b") },
+        // shutdown: 宽泛匹配 `\bshutdown\b` 会把文档/变量名/echo 内容里的
+        // "shutdown" 误判为高危（例：`echo "server shutdown"` 触发审批）。
+        // 收紧为 `shutdown` 后紧跟系统参数（/s /r /h /p /t）才真正指向
+        // 关机动作；`Stop-Computer` / `Restart-Computer` 保持严格（PowerShell
+        // 专用 cmdlet，不可能出现在散文里）。
+        ConfirmRule { name: "shutdown", re: re(r"(?i)\bshutdown\s+/[srpth]\b|\bStop-Computer\b|\bRestart-Computer\b") },
         ConfirmRule { name: "execution-policy-set", re: re(r"(?i)\bSet-ExecutionPolicy\b") },
         ConfirmRule { name: "wevtutil-clear", re: re(r"(?i)\bwevtutil\s+cl\b") },
         ConfirmRule { name: "vssadmin-delete", re: re(r"(?i)\bvssadmin\s+delete\s+shadows\b") },
@@ -160,11 +167,11 @@ static CONFIRM_PATTERNS: LazyLock<Vec<ConfirmRule>> = LazyLock::new(|| {
         ConfirmRule { name: "ownership-acl", re: re(r"(?i)\b(takeown|icacls)\s+") },
         ConfirmRule { name: "dism-restore", re: re(r"(?i)\bDISM\s+/Online\s+/Cleanup-Image\s+/RestoreHealth\b") },
         ConfirmRule { name: "sfc-scan", re: re(r"(?i)\bsfc\s+/scannow\b") },
-        // PowerShell encoded command (very commonly abused):
-        // powershell -enc <base64> / powershell -EncodedCommand <base64>
-        // Also `-ExecutionPolicy Bypass` because it implies the
-        // user is trying to skip a safety control.
-        ConfirmRule { name: "powershell-encoded", re: re(r"(?i)\bpowershell(\.exe)?\s+.*(-enc(odedCommand)?\s|-e\s)") },
+        // 命令编码（powershell -enc / -EncodedCommand <base64>）不再门禁。
+        // 依据主人 2026-09-26 拍板："命令执行（设置环境变量或命令编码的）
+        // 不用审批，只有删除等高危才审批"。编码只是载荷的编码形式，不是
+        // 破坏性动作；真正的高危删除/格式化/磁盘操作仍由上方 DENIED + 各
+        // 删除类 CONFIRM 规则（del/erase/rm-recursive/format/diskpart …）兜底。
         ConfirmRule { name: "execution-policy-bypass", re: re(r"(?i)\b-ExecutionPolicy\s+Bypass\b") },
     ]
 });
