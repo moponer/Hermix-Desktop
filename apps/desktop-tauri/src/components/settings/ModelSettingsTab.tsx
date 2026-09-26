@@ -680,24 +680,25 @@ export function CustomProviderSection({
       onModelsFetched(id, models);
       const probedWithWindow = resp.models.filter((m) => typeof m.context_window === "number" && (m.context_window as number) > 0);
       if (probedWithWindow.length > 0) {
-        setConfig((prev) => {
-          const current = prev.modelContexts ?? {};
-          const nextContexts: Record<string, number> = { ...current };
-          let changed = false;
-          for (const m of probedWithWindow) {
-            const key = `${id}:${m.id}`;
-            const cw = m.context_window as number;
-            if (!current[key] || current[key] === 0) {
-              nextContexts[key] = cw;
-              changed = true;
-            }
+        // 已存 provider 路径：config 闭包即当前挂载值（handler 内无其它 setConfig 竞争），
+        // 纯计算 next + 一次性 setConfig，副作用不入 updater。
+        const current = config.modelContexts ?? {};
+        const nextContexts: Record<string, number> = { ...current };
+        let changed = false;
+        for (const m of probedWithWindow) {
+          const key = `${id}:${m.id}`;
+          const cw = m.context_window as number;
+          if (!nextContexts[key] || nextContexts[key] === 0) {
+            nextContexts[key] = cw;
+            changed = true;
           }
-          if (!changed) return prev;
-          const nextCfg = { ...prev, modelContexts: nextContexts };
-          writeModelConfigAndNotify(nextCfg);
+        }
+        if (changed) {
+          const nextCfg: ModelConfigData = { ...config, modelContexts: nextContexts };
+          setConfig(nextCfg);
+          void writeModelConfigAndNotify(nextCfg);
           api.updateCustomProviderModelContexts(id, nextContexts).catch((e) => { console.warn("[CustomProviderSection] sync probed contexts failed:", e); });
-          return nextCfg;
-        });
+        }
       }
       api.getCustomProviders().then((list) => setProviders(list)).catch(() => { /* non-fatal */ });
       onRefresh();
@@ -788,33 +789,30 @@ export function CustomProviderSection({
       const probedWithWindow = resp.models.filter((m) => typeof m.context_window === "number" && (m.context_window as number) > 0);
       // 默认模型不取字典序第一个（可能是 embedding / rerank 模型）
       const pickedDefault = pickDefaultModel(models);
-      setConfig((prev) => {
-        const existing = new Set(prev.enabled.map((m) => `${m.providerId}:${m.modelId}`));
-        const newEnabled = [...prev.enabled];
-        models.forEach((modelId) => {
-          const key = `${safeId}:${modelId}`;
-          if (!existing.has(key)) newEnabled.push({ providerId: safeId, modelId });
-        });
-        const currentContexts = prev.modelContexts ?? {};
-        const nextContexts: Record<string, number> = { ...currentContexts };
-        for (const m of probedWithWindow) {
-          const key = `${safeId}:${m.id}`;
-          if (!currentContexts[key] || currentContexts[key] === 0) {
-            nextContexts[key] = m.context_window as number;
-          }
-        }
-        const next = {
-          ...prev,
-          enabled: newEnabled,
-          defaultModel: prev.defaultModel || (pickedDefault ? `${safeId}:${pickedDefault}` : prev.defaultModel),
-          modelContexts: nextContexts,
-        };
-        writeModelConfigAndNotify(next);
-        if (probedWithWindow.length > 0) {
-          api.updateCustomProviderModelContexts(safeId, nextContexts).catch((e) => { console.warn("[CustomProviderSection] sync probed contexts (new) failed:", e); });
-        }
-        return next;
+      // 新建 provider 路径：config 闭包即当前挂载值（handler 内无其它 setConfig 竞争），
+      // 直接纯计算 next 后一次性 setConfig + 落盘 + 推后端，全程无 updater、无副作用入回调。
+      const existing = new Set(config.enabled.map((m) => `${m.providerId}:${m.modelId}`));
+      const newEnabled = [...config.enabled];
+      models.forEach((modelId) => {
+        const key = `${safeId}:${modelId}`;
+        if (!existing.has(key)) newEnabled.push({ providerId: safeId, modelId });
       });
+      const nextContexts: Record<string, number> = { ...(config.modelContexts ?? {}) };
+      for (const m of probedWithWindow) {
+        const key = `${safeId}:${m.id}`;
+        if (!nextContexts[key] || nextContexts[key] === 0) nextContexts[key] = m.context_window as number;
+      }
+      const next: ModelConfigData = {
+        ...config,
+        enabled: newEnabled,
+        defaultModel: config.defaultModel || (pickedDefault ? `${safeId}:${pickedDefault}` : config.defaultModel),
+        modelContexts: nextContexts,
+      };
+      setConfig(next);
+      void writeModelConfigAndNotify(next);
+      if (probedWithWindow.length > 0) {
+        api.updateCustomProviderModelContexts(safeId, nextContexts).catch((e) => { console.warn("[CustomProviderSection] sync probed contexts (new) failed:", e); });
+      }
       api.getCustomProviders().then((list) => setProviders(list)).catch(() => { /* non-fatal */ });
       onRefresh();
       setSuccess(`成功获取 ${models.length} 个模型${probedWithWindow.length > 0 ? `, ${probedWithWindow.length} 个已自动填入探测的 context_window` : ""}`);
@@ -854,24 +852,23 @@ export function CustomProviderSection({
           setProviderModels((prev) => ({ ...prev, [targetId]: models }));
           onModelsFetched(targetId, models);
           if (editingId) {
-            setConfig((prev) => {
-              const existing = new Set(prev.enabled.map((m) => `${m.providerId}:${m.modelId}`));
-              const newEnabled = [...prev.enabled];
-              let changed = false;
-              models.forEach((modelId) => {
-                const key = `${targetId}:${modelId}`;
-                if (!existing.has(key)) {
-                  newEnabled.push({ providerId: targetId, modelId });
-                  changed = true;
-                }
-              });
-              if (changed) {
-                const next = { ...prev, enabled: newEnabled };
-                writeModelConfigAndNotify(next);
-                return next;
+            // 编辑路径：config 闭包即当前挂载值（handler 内无其它 setConfig 竞争），
+            // 纯计算 next + 一次性 setConfig，副作用不入 updater。
+            const existing = new Set(config.enabled.map((m) => `${m.providerId}:${m.modelId}`));
+            const newEnabled = [...config.enabled];
+            let changed = false;
+            models.forEach((modelId) => {
+              const key = `${targetId}:${modelId}`;
+              if (!existing.has(key)) {
+                newEnabled.push({ providerId: targetId, modelId });
+                changed = true;
               }
-              return prev;
             });
+            if (changed) {
+              const next: ModelConfigData = { ...config, enabled: newEnabled };
+              setConfig(next);
+              void writeModelConfigAndNotify(next);
+            }
           }
         }
       }
@@ -883,19 +880,17 @@ export function CustomProviderSection({
           setSuccess(editingId ? "已更新" : "已保存");
         }
       } catch { /* non-fatal */ }
-      setConfig((prev) => {
-        if (!prev.defaultModel) {
-          const models = modelInput.split(",").map((m) => m.trim()).filter(Boolean);
-          // 用户手填的模型清单也按"可对话优先"挑默认，不取字典序第一个
-          const picked = pickDefaultModel(models);
-          if (picked) {
-            const next = { ...prev, defaultModel: `${targetId}:${picked}` };
-            writeModelConfigAndNotify(next);
-            return next;
-          }
+      // 默认模型兜底：纯计算，副作用移出 updater
+      if (!config.defaultModel) {
+        const models = modelInput.split(",").map((m) => m.trim()).filter(Boolean);
+        // 用户手填的模型清单也按"可对话优先"挑默认，不取字典序第一个
+        const picked = pickDefaultModel(models);
+        if (picked) {
+          const next: ModelConfigData = { ...config, defaultModel: `${targetId}:${picked}` };
+          setConfig(next);
+          void writeModelConfigAndNotify(next);
         }
-        return prev;
-      });
+      }
       onRefresh();
       setEditingId(null); setName(""); setApiUrl(""); setApiKey(""); setModelInput("");
     } catch (e) {
