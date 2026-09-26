@@ -34,7 +34,7 @@ use windows_sys::Win32::{
     Security::{
         AddMandatoryAce, CopySid, CreateRestrictedToken, CreateWellKnownSid, DuplicateTokenEx,
         EqualSid, GetLengthSid, GetTokenInformation, InitializeAcl, SetTokenInformation, ACL,
-        ACL_REVISION, ACL_REVISION_DS, CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION,
+        ACL_REVISION_DS, CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION,
         DISABLE_MAX_PRIVILEGE, LABEL_SECURITY_INFORMATION, LUA_TOKEN, OBJECT_INHERIT_ACE,
         SecurityImpersonation, SECURITY_ATTRIBUTES, SID_AND_ATTRIBUTES, TOKEN_ADJUST_DEFAULT,
         TOKEN_ASSIGN_PRIMARY, TOKEN_DEFAULT_DACL, TOKEN_DUPLICATE, TOKEN_GROUPS,
