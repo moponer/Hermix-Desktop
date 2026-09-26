@@ -7,11 +7,7 @@ import { detectToolError } from "../components/messageParser";
 import { wireArrayToChatMessages, type WireMessage } from "../protocolAdapter";
 import type {
   ArchiveRef,
-  Automation,
-  AutomationRun,
   AutoCorrectResponse,
-  CreateAutomationRequest,
-  CreateTaskRequest,
   CustomProviderCreateRequest,
   CustomProviderFetchModelsResponse,
   CustomProviderSummary,
@@ -35,8 +31,6 @@ import type {
   SkillContent,
   SkillInfo,
   SystemStatus,
-  Task,
-  TaskStatus,
   TickLoopStatus,
   ToolDescriptor,
   ToolsetInfo,
@@ -278,125 +272,6 @@ export async function resolveContextWindows(
     body: JSON.stringify({ models }),
   });
   return res.windows ?? {};
-}
-
-// ── Orchestration Engine: Task CRUD ────────
-
-export async function createTask(
-  req: CreateTaskRequest,
-): Promise<Task> {
-  return fetchJSON<Task>("/v1/tasks", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(req),
-  });
-}
-
-export async function getTask(taskId: string): Promise<Task> {
-  return fetchJSON<Task>(`/v1/tasks/${encodeURIComponent(taskId)}`);
-}
-
-export async function listTasks(
-  status?: TaskStatus,
-): Promise<Task[]> {
-  const query = status ? `?status=${encodeURIComponent(status)}` : "";
-  return fetchJSON<Task[]>(`/v1/tasks${query}`);
-}
-
-export async function updateTaskStatus(
-  taskId: string,
-  status: TaskStatus,
-): Promise<Task> {
-  return fetchJSON<Task>(
-    `/v1/tasks/${encodeURIComponent(taskId)}/status`,
-    {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status }),
-    },
-  );
-}
-
-export async function listChildTasks(
-  parentTaskId: string,
-): Promise<Task[]> {
-  return fetchJSON<Task[]>(
-    `/v1/tasks/${encodeURIComponent(parentTaskId)}/children`,
-  );
-}
-
-// ── Product Delivery ───────────────────────
-
-export async function deliverResults(
-  taskId: string,
-  files: string[],
-  summary?: string,
-): Promise<Task> {
-  return fetchJSON<Task>(
-    `/v1/tasks/${encodeURIComponent(taskId)}/results`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ files, summary }),
-    },
-  );
-}
-
-// ── Automation Engine ───────────────
-
-export async function createAutomation(
-  req: CreateAutomationRequest,
-): Promise<Automation> {
-  return fetchJSON<Automation>("/v1/automations", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(req),
-  });
-}
-
-export async function listAutomations(): Promise<Automation[]> {
-  return fetchJSON<Automation[]>("/v1/automations");
-}
-
-export async function getAutomation(id: string): Promise<Automation> {
-  return fetchJSON<Automation>(`/v1/automations/${encodeURIComponent(id)}`);
-}
-
-export async function deleteAutomation(id: string): Promise<void> {
-  await fetchVoid(`/v1/automations/${encodeURIComponent(id)}`, {
-    method: "DELETE",
-  });
-}
-
-export async function pauseAutomation(id: string): Promise<Automation> {
-  return fetchJSON<Automation>(
-    `/v1/automations/${encodeURIComponent(id)}/pause`,
-    { method: "POST" },
-  );
-}
-
-export async function resumeAutomation(id: string): Promise<Automation> {
-  return fetchJSON<Automation>(
-    `/v1/automations/${encodeURIComponent(id)}/resume`,
-    { method: "POST" },
-  );
-}
-
-export async function listAutomationRuns(
-  id: string,
-): Promise<AutomationRun[]> {
-  return fetchJSON<AutomationRun[]>(
-    `/v1/automations/${encodeURIComponent(id)}/runs`,
-  );
-}
-
-export async function triggerAutomation(
-  id: string,
-): Promise<{ automation_id: string; status: string; message: string }> {
-  return fetchJSON(
-    `/v1/automations/${encodeURIComponent(id)}/trigger`,
-    { method: "POST" },
-  );
 }
 
 // ── Todo (task list) ─────────────────────────────────────────
