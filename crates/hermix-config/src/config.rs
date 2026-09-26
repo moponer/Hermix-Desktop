@@ -351,7 +351,8 @@ pub struct CompactionConfig {
     /// Pressure-warning ratio: emit `Context pressure N%` warnings when
     /// prompt tokens cross this fraction of the model's context window.
     /// Distinct from the LLM-compressor trigger (`threshold_percent`); this
-    /// drives the user-visible UI ladder only. Default: `0.80`.
+    /// drives the user-visible UI ladder only. Default: `0.90`（fallback 到
+    /// `CONTEXT_PRESSURE_TRIGGER_RATIO`）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pressure_threshold_percent: Option<f64>,
     /// Tokens reserved for the LLM's own response (subtracted from the
@@ -360,7 +361,8 @@ pub struct CompactionConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_reserve_tokens: Option<usize>,
     /// Compressor trigger ratio (LLM summary fires when prompt tokens
-    /// exceed `context_length * threshold_percent`). Default: `0.50`.
+    /// exceed `context_length * threshold_percent`). Default: `0.90`
+    /// (`CompressorConfig::default`).
     /// Distinct from `pressure_threshold_percent` (UI warn) — these two
     /// ratios run on independent ladders by design.
     #[serde(default, skip_serializing_if = "Option::is_none")]

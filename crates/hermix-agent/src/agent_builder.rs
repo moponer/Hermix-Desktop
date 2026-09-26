@@ -122,7 +122,7 @@ pub fn build_agent_config(
         // to `DEFAULT_FALLBACK_CONTEXT` (128k).
         llm_providers: config.llm_providers.clone(),
         // Forward compaction pressure threshold so ContextManager uses the
-        // user-configured ratio instead of the hardcoded 0.50 default.
+        // user-configured ratio instead of the hardcoded 0.90 default.
         context_pressure_ratio: config.compaction.pressure_threshold_percent,
         //forward the desktop Settings →
         // Advanced tab values into the live AgentConfig. Each field is

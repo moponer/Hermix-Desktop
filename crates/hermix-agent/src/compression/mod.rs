@@ -735,7 +735,7 @@ pub struct CompressorConfig {
     /// Distinct from `threshold_percent`: that one drives the *compressor*
     /// itself (LLM-powered summary); this one drives the user-visible
     /// `Context pressure` warning ladder (`>= 0.95` high, `>= 0.85` medium).
-    /// Defaults to `0.50`, aligned with Hermes Agent Python reference.
+    /// Defaults to `0.90`.
     /// Day 3 lift: `ContextManager::for_model_with` accepts an
     /// `output_reserve_tokens` argument, and `ContextManager::pressure_threshold_tokens`
     /// returns `(max - reserve) * pressure_threshold_percent`. The agent loop

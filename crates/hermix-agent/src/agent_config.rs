@@ -345,7 +345,7 @@ pub struct AgentConfig {
     /// Pressure ratio (0.0–1.0) at which auto-compression and context-pressure
     /// warnings fire. Forwarded from `compaction.pressure_threshold_percent` in
     /// config.yaml. `None` falls back to the hardcoded
-    /// [`crate::context::CONTEXT_PRESSURE_TRIGGER_RATIO`] (0.50).
+    /// [`crate::context::CONTEXT_PRESSURE_TRIGGER_RATIO`] (0.90).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_pressure_ratio: Option<f64>,
 
