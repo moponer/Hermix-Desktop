@@ -18,6 +18,7 @@ pub mod file_sync;
 pub mod jobs;
 pub mod local;
 pub mod local_isolation;
+pub mod sandbox;
 pub mod manager;
 
 #[cfg(feature = "ssh")]
