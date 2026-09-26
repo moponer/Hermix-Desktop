@@ -186,6 +186,29 @@ impl Default for LocalBackend {
     }
 }
 
+/// Split a leading `powershell`/`powershell.exe`/`pwsh`/`pwsh.exe`
+/// token (case-insensitive, whitespace-delimited) off a Windows shell
+/// command. Returns the concrete shell executable plus the remainder;
+/// `None` when the command does not name a PowerShell shell and the
+/// caller defaults to `powershell.exe`. The `.exe` variants are
+/// matched explicitly — slicing by the bare name would leave a
+/// `.exe` residue（真机探针钉死）.
+#[cfg(windows)]
+fn split_windows_shell_prefix(command: &str) -> Option<(&'static str, &str)> {
+    let lower = command.to_lowercase();
+    for (prefix, exe) in [
+        ("powershell.exe ", "powershell.exe"),
+        ("powershell ", "powershell.exe"),
+        ("pwsh.exe ", "pwsh.exe"),
+        ("pwsh ", "pwsh.exe"),
+    ] {
+        if lower.starts_with(prefix) {
+            return Some((exe, command[prefix.len()..].trim_start()));
+        }
+    }
+    None
+}
+
 /// Normalise Windows path separators in a command string:
 /// forward slashes in **path-like** tokens become backslashes.
 ///
@@ -402,35 +425,45 @@ impl TerminalBackend for LocalBackend {
         #[cfg(windows)]
         let mut cmd = {
             let trimmed = command.trim_start();
-            let lower = trimmed.to_lowercase();
             // Windows 统一 shell 层：PowerShell（对齐 pi 的 Windows 模型 —
             // 单一 shell 路由、argv 直传、不靠 cmd.exe 字符串拼接）。
-            // PowerShell 自带 `ls`/`cat`/`grep` 等 POSIX 别名（ls→Get-ChildItem，
-            // cat→Get-Content），LLM 发 POSIX 名也 work；`powershell`/`pwsh`
-            // 前缀的命令直接吃掉前缀走同一路由。cmd.exe 不再作为默认路由
-            // （无 PowerShell 的 Windows 系统不存在，powershell.exe 系统自带）。
-            let bare: &str = if lower.starts_with("powershell ") || lower.starts_with("powershell.exe ") {
-                trimmed["powershell".len()..].trim_start()
-            } else if lower.starts_with("powershell.exe ") {
-                trimmed["powershell.exe".len()..].trim_start()
-            } else if lower.starts_with("pwsh ") || lower.starts_with("pwsh.exe ") {
-                trimmed["pwsh".len()..].trim_start()
-            } else {
-                trimmed
+            // PowerShell 自带 `ls`/`cat` 等 POSIX 别名，LLM 发 POSIX 名
+            // 也 work。cmd.exe 不再作为默认路由（无 PowerShell 的
+            // Windows 系统不存在，powershell.exe 系统自带）。
+            //
+            // `powershell`/`pwsh` 前缀的命令吃掉前缀走同一路由
+            // （`.exe` 形态必须先判——否则按 "powershell" 长度切片
+            // 残留 `.exe`）。剥前缀后还要吃掉 LLM 按旧习惯带的旗标
+            // （`-Command X` / `-EncodedCommand b64` / `-File x.ps1`）
+            // ——真机探针钉死：旗标残留在脚本文本里会被当命令名报
+            // "无法将 -Command 项识别为 cmdlet"。
+            let (shell_exe, bare) = match split_windows_shell_prefix(trimmed) {
+                Some((exe, rest)) => (exe, rest),
+                None => ("powershell.exe", trimmed),
             };
+            let bare_lower = bare.to_lowercase();
 
-            // 斜杠归一化（deepseek-harness 对照）：把 LLM 常发的 POSIX 形态
-            // 路径（`C:/x`、`~/y`、`a/b`）翻成 native backslash；cmd 开关
-            // （`/I`、`/b`、`/c`）与 URL `://` token 保持不动。PowerShell
-            // 两种分隔符都接受，但归一化后 LLM 输出更贴合 native 习惯，
-            // 也兼容下游走 cmd 兜底的场景。
-            let normalized = normalize_windows_path_slashes(bare);
-
-            let mut c = TokioCommand::new("powershell.exe");
-            c.arg("-NoProfile")
-                .arg("-NonInteractive")
-                .arg("-Command")
-                .arg(normalized);
+            let mut c = TokioCommand::new(shell_exe);
+            c.arg("-NoProfile").arg("-NonInteractive");
+            if bare_lower.starts_with("-encodedcommand ") {
+                // base64 token 可能含 `/`，斜杠归一化会破坏编码——
+                // 作为真旗标直传，不经归一化。审批引擎 sees 原始命令
+                // 串，`powershell-encoded` CONFIRM 规则照常命中。
+                c.arg("-EncodedCommand")
+                    .arg(bare["-encodedcommand ".len()..].trim_start());
+            } else if bare_lower.starts_with("-file ") {
+                let target = bare["-file ".len()..].trim_start();
+                c.arg("-File").arg(normalize_windows_path_slashes(target));
+            } else {
+                // `-Command X` 的 X 才是脚本文本；裸命令整段进 -Command。
+                let script = if bare_lower.starts_with("-command ") {
+                    bare["-command ".len()..].trim_start()
+                } else {
+                    bare
+                };
+                let normalized = normalize_windows_path_slashes(script);
+                c.arg("-Command").arg(normalized);
+            }
             c
         };
         // Hide the console window on Windows — without CREATE_NO_WINDOW,
@@ -762,6 +795,118 @@ mod tests {
             .unwrap();
         assert_ne!(out.exit_code, 0);
         assert!(!out.stderr.is_empty());
+    }
+
+    #[tokio::test]
+    #[cfg(windows)]
+    async fn powershell_route_native_failure_propagates_nonzero_exit() {
+        // native 子进程失败必须让 LLM 看到非零 exit code——否则
+        // 构建失败会被当成成功。真机探针钉死：native 失败码经
+        // PowerShell 折叠为 1（成功仍为 0），"成败判定"语义成立；
+        // 精确失败码不保证透传（PS 级 `exit 42` 语句由上面既有
+        // 测试覆盖）。`cmd /c exit 42` 本身不产生输出，钉"失败
+        // 非零"这一条语义。
+        let backend = LocalBackend::default();
+        let out = backend
+            .execute_command("cmd /c exit 42", None, None, false, false)
+            .await
+            .unwrap();
+        assert_ne!(out.exit_code, 0, "native failure must not look like success");
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn windows_shell_prefix_split_variants() {
+        assert_eq!(
+            split_windows_shell_prefix("powershell -Command Get-Date"),
+            Some(("powershell.exe", "-Command Get-Date"))
+        );
+        // `.exe` 形态必须显式匹配——按裸名长度切片会残留 `.exe`。
+        assert_eq!(
+            split_windows_shell_prefix("PowerShell.exe Get-Date"),
+            Some(("powershell.exe", "Get-Date"))
+        );
+        assert_eq!(
+            split_windows_shell_prefix("pwsh -File x.ps1"),
+            Some(("pwsh.exe", "-File x.ps1"))
+        );
+        assert_eq!(split_windows_shell_prefix("Get-Date"), None);
+        // `powershellfoo` 不是 shell 前缀。
+        assert_eq!(split_windows_shell_prefix("powershellfoo -x"), None);
+    }
+
+    #[tokio::test]
+    #[cfg(windows)]
+    async fn powershell_route_strips_legacy_command_flag_prefix() {
+        // LLM 按旧习惯发 `powershell -Command X`：剥前缀 + 剥旗标后
+        // X 作为脚本文本执行，而不是把 "-Command" 当命令名报错
+        // （真机探针钉死的回归）。
+        let backend = LocalBackend::default();
+        let out = backend
+            .execute_command(
+                "powershell -Command Write-Output hermix_flag_ok",
+                None,
+                None,
+                false,
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(out.exit_code, 0);
+        assert!(
+            out.stdout.contains("hermix_flag_ok"),
+            "stdout: {}",
+            out.stdout
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(windows)]
+    async fn powershell_route_exe_prefix_leaves_no_residue() {
+        let backend = LocalBackend::default();
+        let out = backend
+            .execute_command(
+                "powershell.exe Write-Output hermix_exe_ok",
+                None,
+                None,
+                false,
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(out.exit_code, 0);
+        assert!(
+            out.stdout.contains("hermix_exe_ok"),
+            "stdout: {}",
+            out.stdout
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(windows)]
+    async fn powershell_route_encoded_command_runs_as_flag() {
+        // `-EncodedCommand` 是真旗标：base64 token 直传，不经斜杠
+        // 归一化（归一化会破坏编码）。审批引擎看原始命令串，
+        // `powershell-encoded` CONFIRM 规则照常命中。
+        let backend = LocalBackend::default();
+        let out = backend
+            .execute_command(
+                "powershell -EncodedCommand VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGUAcgBtAGkAeABfAGIANgA0AF8AbwBrAA==",
+                None,
+                None,
+                false,
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(out.exit_code, 0);
+        let combined = format!("{}{}", out.stdout, out.stderr);
+        assert!(
+            combined.contains("hermix_b64_ok"),
+            "stdout: {} stderr: {}",
+            out.stdout,
+            out.stderr
+        );
     }
 
     #[tokio::test]
