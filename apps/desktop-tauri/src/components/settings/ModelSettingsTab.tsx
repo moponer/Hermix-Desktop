@@ -201,75 +201,72 @@ export function ModelTab() {
 
   const setDefault = useCallback((providerId: string, modelId: string) => {
     const fid = fullId(providerId, modelId);
-    setConfig((prev) => {
-      if (prev.defaultModel === fid) return prev;
-      const newConfig: ModelConfigData = { ...prev, defaultModel: fid, modelContexts: prev.modelContexts ?? {} };
-      safeSetTimeout(async () => {
-        // `PUT /api/model/list` 已把 `config.model` 同步成 default_model（后端
-        // config.rs 保证），无需再多一次 getConfig/updateConfig 全量回写 ——
-        // 那次回写是"读磁盘→整份覆盖"，会把刚落盘的选择器列表抹掉。
-        await writeModelConfigAndNotify(newConfig);
-      }, 0);
-      return newConfig;
-    });
+    // 纯计算 + 一次性副作用（不在 updater 内）：config 闭包即当前挂载值。
+    if (config.defaultModel === fid) return;
+    const newConfig: ModelConfigData = { ...config, defaultModel: fid, modelContexts: config.modelContexts ?? {} };
+    setConfig(newConfig);
+    safeSetTimeout(async () => {
+      // `PUT /api/model/list` 已把 `config.model` 同步成 default_model（后端
+      // config.rs 保证），无需再多一次 getConfig/updateConfig 全量回写 ——
+      // 那次回写是"读磁盘→整份覆盖"，会把刚落盘的选择器列表抹掉。
+      await writeModelConfigAndNotify(newConfig);
+    }, 0);
     flashSaved(fid);
-  }, [safeSetTimeout, flashSaved]);
+  }, [config, safeSetTimeout, flashSaved]);
 
   const toggleModel = useCallback((providerId: string, modelId: string) => {
     const fid = fullId(providerId, modelId);
-    setConfig((prev) => {
-      const key = fid;
-      const exists = prev.enabled.some((m) => fullId(m.providerId, m.modelId) === key);
-      const newEnabled = exists
-        ? prev.enabled.filter((m) => fullId(m.providerId, m.modelId) !== key)
-        : [...prev.enabled, { providerId, modelId }];
-      const defaultCleared = exists && prev.defaultModel === key;
-      const newConfig: ModelConfigData = {
-        enabled: newEnabled,
-        defaultModel: defaultCleared ? "" : prev.defaultModel,
-        modelContexts: prev.modelContexts ?? {},
-        // 移除写墓碑：厂商 /v1/models 目录里必然还挂着该模型，没有墓碑的话
-        // 「获取模型」的自动合并会把它加回来；重新启用则撤掉墓碑。
-        dismissed: exists
-          ? [...new Set([...(prev.dismissed ?? []), key])]
-          : (prev.dismissed ?? []).filter((d) => d !== key),
-      };
-      safeSetTimeout(async () => {
-        // 先 await 落盘选择器列表，再回读整份 config 改 model：否则 getConfig 可能
-        // 读到未更新的 config.yaml，PUT /api/config 整份覆盖时把刚写的选择器抹掉。
-        await writeModelConfigAndNotify(newConfig);
-        if (defaultCleared) {
-          try {
-            const backendCfg = await api.getConfig();
-            backendCfg.model = "";
-            await api.updateConfig(backendCfg);
-          } catch (e) { console.warn("toggleModel backend sync failed:", e); }
-        }
-      }, 0);
-      return newConfig;
-    });
+    // 纯计算 + 一次性副作用（不在 updater 内）：config 闭包即当前挂载值。
+    const key = fid;
+    const exists = config.enabled.some((m) => fullId(m.providerId, m.modelId) === key);
+    const newEnabled = exists
+      ? config.enabled.filter((m) => fullId(m.providerId, m.modelId) !== key)
+      : [...config.enabled, { providerId, modelId }];
+    const defaultCleared = exists && config.defaultModel === key;
+    const newConfig: ModelConfigData = {
+      enabled: newEnabled,
+      defaultModel: defaultCleared ? "" : config.defaultModel,
+      modelContexts: config.modelContexts ?? {},
+      // 移除写墓碑：厂商 /v1/models 目录里必然还挂着该模型，没有墓碑的话
+      // 「获取模型」的自动合并会把它加回来；重新启用则撤掉墓碑。
+      dismissed: exists
+        ? [...new Set([...(config.dismissed ?? []), key])]
+        : (config.dismissed ?? []).filter((d) => d !== key),
+    };
+    setConfig(newConfig);
+    safeSetTimeout(async () => {
+      // 先 await 落盘选择器列表，再回读整份 config 改 model：否则 getConfig 可能
+      // 读到未更新的 config.yaml，PUT /api/config 整份覆盖时把刚写的选择器抹掉。
+      await writeModelConfigAndNotify(newConfig);
+      if (defaultCleared) {
+        try {
+          const backendCfg = await api.getConfig();
+          backendCfg.model = "";
+          await api.updateConfig(backendCfg);
+        } catch (e) { console.warn("toggleModel backend sync failed:", e); }
+      }
+    }, 0);
     flashSaved(fid);
-  }, [safeSetTimeout, flashSaved]);
+  }, [config, safeSetTimeout, flashSaved]);
 
   const setModelContext = useCallback((providerId: string, modelId: string, ctx: number | null) => {
     const fid = fullId(providerId, modelId);
-    setConfig((prev) => {
-      const nextContexts = { ...(prev.modelContexts ?? {}) };
-      if (ctx == null || ctx === 0) delete nextContexts[fid];
-      else nextContexts[fid] = ctx;
-      const next = { ...prev, modelContexts: nextContexts };
-      safeSetTimeout(async () => {
-        writeModelConfigAndNotify(next);
-        // custom provider 还要把 modelContexts 推给后端
-        if (providerId.startsWith("custom-")) {
-          try { await api.updateCustomProviderModelContexts(providerId, nextContexts); }
-          catch (e) { console.warn("setModelContext sync failed:", e); }
-        }
-      }, 0);
-      return next;
-    });
+    // 纯计算 + 一次性副作用（不在 updater 内）：config 闭包即当前挂载值。
+    const nextContexts = { ...(config.modelContexts ?? {}) };
+    if (ctx == null || ctx === 0) delete nextContexts[fid];
+    else nextContexts[fid] = ctx;
+    const next: ModelConfigData = { ...config, modelContexts: nextContexts };
+    setConfig(next);
+    safeSetTimeout(async () => {
+      writeModelConfigAndNotify(next);
+      // custom provider 还要把 modelContexts 推给后端
+      if (providerId.startsWith("custom-")) {
+        try { await api.updateCustomProviderModelContexts(providerId, nextContexts); }
+        catch (e) { console.warn("setModelContext sync failed:", e); }
+      }
+    }, 0);
     flashSaved(fid);
-  }, [safeSetTimeout, flashSaved]);
+  }, [config, safeSetTimeout, flashSaved]);
 
   /** 从供应商折叠面板触发的获取模型:可接受 (a) 用户在面板里输入的 key
    *  → 写 env + 拉取；(b) 已配置 key → 直接拉取。 */
@@ -667,6 +664,11 @@ export function CustomProviderSection({
   const safeId = name.trim()
     ? `custom-${name.trim().toLowerCase().replace(/[^a-z0-9一-龥_-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "")}`
     : "";
+  // 后端 create_custom_provider 要求 id 长度 ≥ 8（"custom-" 前缀 7 字符 + name 部分 ≥ 1，
+  // 实际 name ≥ 1 字符时 safeId ≥ 8）。但 name 仅 1 个无效字符（如纯空格后只剩 "-")
+  // 会被 replace 吃掉变空串 → safeId = "custom-"（7 字符）< 8，后端 400 拒。
+  // 前端兜底：safeId 非 "custom-" 且长度 < 8 时视为无效，提前拦下给明确提示。
+  const safeIdValid = safeId.length > 0 && safeId !== "custom-" && safeId.length >= 8;
 
   const handleFetchModelsForSavedProvider = async (id: string) => {
     setFetching(true);
@@ -762,6 +764,7 @@ export function CustomProviderSection({
 
   const handleFetchModels = async () => {
     if (!safeId) { setError("请填写提供商名称"); return; }
+    if (!safeIdValid) { setError("提供商名称太短：生成的 ID 需 ≥ 8 字符（至少 1 个有效字符）"); return; }
     if (!apiKey.trim()) { setError("请填写 API Key"); return; }
     if (!apiUrl.trim()) { setError("请填写 API URL"); return; }
 
@@ -833,6 +836,7 @@ export function CustomProviderSection({
   const handleSave = async () => {
     const targetId = editingId || safeId;
     if (!targetId) { setError("请填写提供商名称"); return; }
+    if (!editingId && !safeIdValid) { setError("提供商名称太短：生成的 ID 需 ≥ 8 字符（至少 1 个有效字符）"); return; }
     if (!editingId && !apiKey.trim()) { setError("请填写 API Key"); return; }
     setSaving(true);
     setError("");
@@ -1112,8 +1116,11 @@ export function CustomProviderSection({
 
 // ── Custom Providers Tab (独立 sub-tab,与 ModelTab 并列) ──
 //
-// 单一权威来源 = localStorage。挂载时立即从 loadModelCache() 拉一份
-// （修旧 bug：useState({}) 导致切回 tab 后模型列表空白）。
+// 单一权威来源 = 后端 config.yaml（model_selector，writeModelConfigAndNotify
+// 落盘时同步推送）。localStorage 只是跨 tab 的瞬态镜像：挂载时立即从
+// loadModelCache() 拉一份（修旧 bug：useState({}) 导致切回 tab 后模型列表
+// 空白），reconcile 以后端为准。此前注释自称"localStorage 单一权威"，与
+// ModelTab / ModelSelector 的"后端权威"矛盾（双权威漂移），现统一。
 export function CustomProvidersTab() {
   const safeSetTimeout = useSafeTimeout();
   const [config, setConfig] = useState<ModelConfigData>(loadModelConfig);
@@ -1142,42 +1149,40 @@ export function CustomProvidersTab() {
   }, []);
 
   const toggleModel = useCallback((providerId: string, modelId: string) => {
-    setConfig((prev) => {
-      const key = `${providerId}:${modelId}`;
-      const exists = prev.enabled.some((m) => `${m.providerId}:${m.modelId}` === key);
-      const newEnabled = exists
-        ? prev.enabled.filter((m) => `${m.providerId}:${m.modelId}` !== key)
-        : [...prev.enabled, { providerId, modelId }];
-      const defaultCleared = exists && prev.defaultModel === key;
-      const newConfig: ModelConfigData = { enabled: newEnabled, defaultModel: defaultCleared ? "" : prev.defaultModel, modelContexts: prev.modelContexts ?? {} };
-      safeSetTimeout(async () => {
-        writeModelConfigAndNotify(newConfig);
-        if (defaultCleared) {
-          try {
-            const backendCfg = await api.getConfig();
-            backendCfg.model = "";
-            await api.updateConfig(backendCfg);
-          } catch (e) { console.warn("CustomProvidersTab toggleModel: sync cleared default failed", e); }
-        }
-      }, 0);
-      return newConfig;
-    });
-  }, []);
-
-  const setDefault = useCallback((fullId: string) => {
-    setConfig((prev) => {
-      const newConfig = { ...prev, defaultModel: fullId };
-      safeSetTimeout(async () => {
-        writeModelConfigAndNotify(newConfig);
+    // 纯计算 + 一次性副作用（不在 updater 内）：config 闭包即当前挂载值。
+    const key = `${providerId}:${modelId}`;
+    const exists = config.enabled.some((m) => `${m.providerId}:${m.modelId}` === key);
+    const newEnabled = exists
+      ? config.enabled.filter((m) => `${m.providerId}:${m.modelId}` !== key)
+      : [...config.enabled, { providerId, modelId }];
+    const defaultCleared = exists && config.defaultModel === key;
+    const newConfig: ModelConfigData = { enabled: newEnabled, defaultModel: defaultCleared ? "" : config.defaultModel, modelContexts: config.modelContexts ?? {} };
+    setConfig(newConfig);
+    safeSetTimeout(async () => {
+      writeModelConfigAndNotify(newConfig);
+      if (defaultCleared) {
         try {
           const backendCfg = await api.getConfig();
-          backendCfg.model = fullId;
+          backendCfg.model = "";
           await api.updateConfig(backendCfg);
-        } catch (e) { console.warn("CustomProvidersTab setDefault: sync model failed", e); }
-      }, 0);
-      return newConfig;
-    });
-  }, []);
+        } catch (e) { console.warn("CustomProvidersTab toggleModel: sync cleared default failed", e); }
+      }
+    }, 0);
+  }, [config, safeSetTimeout]);
+
+  const setDefault = useCallback((fullId: string) => {
+    // 纯计算 + 一次性副作用（不在 updater 内）：config 闭包即当前挂载值。
+    const newConfig: ModelConfigData = { ...config, defaultModel: fullId };
+    setConfig(newConfig);
+    safeSetTimeout(async () => {
+      writeModelConfigAndNotify(newConfig);
+      try {
+        const backendCfg = await api.getConfig();
+        backendCfg.model = fullId;
+        await api.updateConfig(backendCfg);
+      } catch (e) { console.warn("CustomProvidersTab setDefault: sync model failed", e); }
+    }, 0);
+  }, [config, safeSetTimeout]);
 
   return (
     <div className="p-6">
