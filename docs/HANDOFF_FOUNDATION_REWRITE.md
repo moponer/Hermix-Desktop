@@ -1,7 +1,7 @@
 # 交接文档：Hermix 底座重写 + 网络安全层（给后续开发 agent）
 
 > 更新时间：2026-09-26。本文是唯一权威交接入口。动手前**必须完整读完本文 + 必读文档清单**，禁止跳读后自行发挥。
-> 当前累计 94 个 commit（52 + 本批 42：… `c4f73379`（砍 /api/migration/*）+ `2ee5dfd6`（砍 /v1/voice/synthesize）+ `25f410b4`（文档刷新 85→88）+ `181a51aa`（砍 /v1/ws + /v1/ws-stream 裸路由 + WsTransport 死代码链）+ `e8aaa1fb`（砍 4 条 ops/debug 端点）+ `d38238f0`（砍 /api/logs REST 端点）+ `162f932f`（模型/供应商配置面 setConfig 反模式清理）+ `07b42ebb`（统一 enabled 模型列表权威源）+ `098f3d3`（safeId 校验 + setConfig 反模式 + 注释统一）+ 本文档 commit）。工作区除 §7 已 gitignore 的临时产物（`.scratch/`、`design-previews/`）外干净。最近 commit：`098f3d3`（模型/供应商配置面健壮性 — safeId 校验 + setConfig 反模式 + 注释统一）。
+> 当前累计 96 个 commit（52 + 本批 44：… `c4f73379`（砍 /api/migration/*）+ `2ee5dfd6`（砍 /v1/voice/synthesize）+ `25f410b4`（文档刷新 85→88）+ `181a51aa`（砍 /v1/ws + /v1/ws-stream 裸路由 + WsTransport 死代码链）+ `e8aaa1fb`（砍 4 条 ops/debug 端点）+ `d38238f0`（砍 /api/logs REST 端点）+ `162f932f`（模型/供应商配置面 setConfig 反模式清理）+ `07b42ebb`（统一 enabled 模型列表权威源）+ `098f3d3`（safeId 校验 + setConfig 反模式 + 注释统一）+ `1845e271`（polish.rs 死引用修复）+ `9a066d6`（砍前端死函数 getSystemStatus + 孤儿类型 SystemStatus）+ 本文档 commit）。工作区除 §7 已 gitignore 的临时产物（`.scratch/`、`design-previews/`）外干净。最近 commit：`9a066d6`（砍前端死函数 getSystemStatus + 孤儿类型 SystemStatus）。
 
 **已落**（前后端端点审计 + 砍路由/死代码批次 — `d361cdfc` + `fd3bd371`）：
 - **审计**：全量交叉比对 hermix-server 路由表 vs 前端 `rest.ts` 调用面（subagent 双抓 + 定向核实）。结论：前端无调用任何后端不存在的路径（无 404 风险）；问题全在反方向——后端有多条路由前端零消费。
@@ -23,7 +23,12 @@
   - **双权威漂移已统一**（`07b42ebb`）：ModelSelector reconcile 此前"localStorage 单一来源"注释与 ModelTab"后端 config.yaml 权威"注释矛盾，同一份数据 3 处各认一个权威。统一为：**后端可达 → 本地∩后端 = 权威 enabled 集合（后端空列表也是权威，清残留）；后端不可达（离线）→ 本地镜像兜底不吞勾选**。本组件永不主动调 saveModelList，写路径统一走 writeModelConfigAndNotify（一次写 localStorage + 推后端 + 事件扇出）。
   - **safeId 长度校验已补**（`098f3d3`）：后端 `create_custom_provider` 要求 id ≥ 8 字符，前端 handleFetchModels/handleSave 只查非空，name 仅 1 个无效字符时 safeId 退化为 "custom-"（7 字符）被 400 拒且无提示。加 `safeIdValid` 守卫（非 "custom-" 且 ≥ 8）+ 两入口提前拦截，后端 400 message 经 fetchJSON 透传兜底。
   - **setConfig 反模式连带清**（`098f3d3`）：ModelTab 的 setDefault/toggleModel/setModelContext + CustomProvidersTab 的 toggleModel/setDefault 共 5 处在 updater 内 safeSetTimeout 触发副作用（严格模式双执行→双写），改基于 config 闭包纯计算 + 一次性 setConfig + 外部副作用。CustomProvidersTab 注释同步修正为"后端权威"。
-- **代码侧可闭环项清零**：模型/供应商配置面的 6 乱点中，3 处 setConfig 反模式（`162f932f` 3 处 + `098f3d3` 5 处共 8 处）、双权威漂移（`07b42ebb`）、safeId 校验缺失（`098f3d3`）全部闭环；"useContextWindows 双解析"复核证伪撤销。配置面代码侧再无待办，剩余 P5/P8/P2 需真机验收。
+- **代码侧可闭环项清零（本批收尾盘点）**：模型/供应商配置面的 6 乱点中，3 处 setConfig 反模式（`162f932f` 3 处 + `098f3d3` 5 处共 8 处）、双权威漂移（`07b42ebb`）、safeId 校验缺失（`098f3d3`）全部闭环；"useContextWindows 双解析"复核证伪撤销。配置面代码侧再无待办，剩余 P5/P8/P2 需真机验收。
+- **死代码 + 死引用 + 零消费路由盘点（`1845e271` + `9a066d6`，本批新增）**：
+  - **polish.rs 死引用**（`1845e271`）：模块文档引用不存在的 `docs/TODO.md`，删除死行。
+  - **前端死函数 + 孤儿类型**（`9a066d6`）：`getSystemStatus` 全前端零 import（`/api/status` 唯一前端消费方已死），`SystemStatus` 类型随死函数成孤儿（rest.ts import + 根 types.ts re-export 两处残留），一并清。
+  - **零前端消费路由全保留（10 条）**：`/v1/todos`/`/v1/tools`/`/v1/llm/warmup`/`/api/status`/`/api/skills`/`/api/analytics/*`/`/api/mcp/servers/reset`/`/api/automation/reset`/`/api/custom-providers`/`/v1/experts`/`/v1/tickloop`/`/v1/voice/transcribe`/`/v1/sessions/search`/`/v1/commands`/`/v1/sessions/{id}/lineage` 的 rest.ts 封装函数全部有 1+ 处前端 import（经封装间接消费），**路由不砍**。唯一前端零消费的是 `/api/status`（封装函数 `getSystemStatus` 已死），但路由本体保留——外部消费面 = stdio 探活 / curl 验收脚本，按"砍路由需全项目 grep 确认零外部引用"原则留主人定夺。
+  - **L8 重复评估**：`send_message`/`send_message_stream` 共享 ~300 行 setup 代码，提取 `prepare_and_run` helper 涉及 agent 热路径（session loading / gateway safety net / image handling / model resolution），回归面大，**不属本批"能干的干完"边界**，列为独立架构批次。
 - **审计批次清零（第三批收口后）**：`/v1/ws` + `/v1/ws-stream`（`181a51aa`，stdio bridge 替代后零消费）、ops/debug 4 端点（`e8aaa1fb`，无调用方直接砍）、`/api/logs`（`d38238f0`，前端已走 Rust 直读）全部砍除；`/v1/sessions/{id}/lineage`、`/api/cua/trace`、`/api/dashboard/plugin-inspect/{id}` 已随第一批 `d361cdfc` 砍除。原清单"需外部消费者确认"的 3 组保留疑虑全部证伪，**已无待确认项**。
 - **已修的真 bug（`cd8ef36e`）**：`/api/custom-apps/{id}/icon` 前端裸 `<img src>` 不经 stdio bridge，Tauri 生产环境永远 404（上传 PNG 图标全静默失效）。治本：IconImage 改走 `fetchJSONBinary` 拉 blob → objectURL，失败才降级 lucide；防回归测试 3 条（vitest 绿 + tsc 绿）。
 - **验证（第三批收口后最新基线）**：workspace check 全绿 / hermix-server lib **192 全绿**（基线 200 → migration -7 + voice -1）/ hermix-config lib **116 全绿** / hermix-voice lib **9 全绿** / http_smoke **5 过 2 忽略**（metrics 测试随 `e8aaa1fb` 删，剩 oauth stub 存量 ignore）/ dashboard_smoke **51 过 3 忽略**（logs 测试随 `d38238f0` 删 2 条）/ `pnpm tsc --noEmit` 全绿。
