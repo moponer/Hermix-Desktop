@@ -137,8 +137,21 @@ static CONFIRM_PATTERNS: LazyLock<Vec<ConfirmRule>> = LazyLock::new(|| {
         ConfirmRule { name: "taskkill", re: re(r"(?i)\b(taskkill|tskill)\s+") },
         ConfirmRule { name: "reg-delete", re: re(r"(?i)\breg\s+delete\s+") },
         ConfirmRule { name: "net-service", re: re(r"(?i)\bnet\s+(stop|start)\s+") },
-        ConfirmRule { name: "remove-item", re: re(r"(?i)\bRemove-Item\b.*(-Recurse|-Force)") },
+        // Bare Remove-Item also confirms — it's the PowerShell `del`
+        // equivalent, and the shell layer now routes through PowerShell
+        // (the LLM emits this form where it used to emit `del`, which
+        // has always confirmed). The `-Recurse -Force` combo stays
+        // DENIED (DENIED_PATTERNS are checked first; broadening this
+        // rule must not downgrade it — pinned in tests).
+        ConfirmRule { name: "remove-item", re: re(r"(?i)\bRemove-Item\b") },
         ConfirmRule { name: "service-cmdlet", re: re(r"(?i)\b(Stop|Restart|Set)-Service\b") },
+        // PowerShell-native destructive cmdlets — the cmd.exe
+        // equivalents (taskkill / shutdown) are covered above; the
+        // unified PowerShell shell layer makes these the natural
+        // emissions now.
+        ConfirmRule { name: "stop-process", re: re(r"(?i)\bStop-Process\b") },
+        ConfirmRule { name: "shutdown", re: re(r"(?i)\b(shutdown|Stop-Computer|Restart-Computer)\b") },
+        ConfirmRule { name: "execution-policy-set", re: re(r"(?i)\bSet-ExecutionPolicy\b") },
         ConfirmRule { name: "wevtutil-clear", re: re(r"(?i)\bwevtutil\s+cl\b") },
         ConfirmRule { name: "vssadmin-delete", re: re(r"(?i)\bvssadmin\s+delete\s+shadows\b") },
         ConfirmRule { name: "wmic-delete", re: re(r"(?i)\bwmic\s+.*\bdelete\b") },
@@ -907,6 +920,47 @@ mod origin_aware_tests {
         ] {
             assert!(is_readonly_command(cmd), "should be readonly: {cmd}");
         }
+    }
+
+    /// PowerShell 原生破坏性 cmdlet 必须弹确认——shell 层统一
+    /// PowerShell 后，LLM 在旧 cmd 等价物（del/taskkill/shutdown 均
+    /// 已覆盖）的位置发这些 PS 形态；裸 Remove-Item 是 `del` 的
+    /// 等价物，此前无规则命中、默认放行。
+    #[test]
+    fn powershell_native_destructive_cmdlets_require_confirmation() {
+        let m = ApprovalManager::new();
+        let scopes: std::collections::HashSet<Capability> =
+            [Capability::Chat, Capability::DangerousTool]
+                .into_iter()
+                .collect();
+        for cmd in [
+            "Remove-Item C:\\logs\\app.log",
+            "Stop-Process -Name notepad",
+            "Stop-Computer",
+            "Restart-Computer -Force",
+            "shutdown /r /t 0",
+            "Set-ExecutionPolicy RemoteSigned",
+        ] {
+            assert_eq!(
+                m.check_approval_for_origin_with_scopes(
+                    cmd,
+                    &Origin::PairedDevice { device_id: "d1".into() },
+                    Some(&scopes)
+                ),
+                ApprovalDecision::RequiresConfirmation,
+                "should require confirmation: {cmd}"
+            );
+        }
+        // -Recurse -Force 组合仍 Denied（DENIED 先于 CONFIRM 判定，
+        // 扩宽 remove-item 规则不得降级灾难组合）。
+        assert_eq!(
+            m.check_approval_for_origin_with_scopes(
+                "Remove-Item -Recurse -Force C:\\x",
+                &Origin::PairedDevice { device_id: "d1".into() },
+                Some(&scopes)
+            ),
+            ApprovalDecision::Denied
+        );
     }
 
     /// 未配 DangerousTool 但命中 READONLY_PATTERNS：只读命令仍放行
