@@ -416,6 +416,34 @@ impl TerminalBackend for LocalBackend {
             }
         }
 
+        #[cfg(windows)]
+        {
+            // Windows ACL 沙箱路径（对齐 deepseek-harness fail-closed 语义）：
+            // HERMIX_SANDBOX_MODE 非 danger-full-access 且有工作目录时，
+            // 命令进受限 token spawn。provision/spawn 任一步失败 = 报错，
+            // 绝不静默回退到不受限 spawn。danger-full-access 与无
+            // workdir（全局探测类命令无边界可守）走下方常规路径，安全
+            // 语义由审批层承接。
+            use crate::sandbox::SandboxMode;
+            let mode = SandboxMode::from_env();
+            if !background && mode != SandboxMode::DangerFullAccess {
+                if let Some(dir) = workdir
+                    .map(std::path::PathBuf::from)
+                    .or_else(|| self.workspace_root.clone())
+                    .map(|p| hermix_core::path_security::strip_win32_long_path_buf(&p))
+                {
+                    return execute_command_sandboxed(
+                        command,
+                        timeout_secs,
+                        &dir,
+                        mode,
+                        self.max_output_size,
+                    )
+                    .await;
+                }
+            }
+        }
+
         #[cfg(unix)]
         let mut cmd = {
             let mut c = TokioCommand::new("sh");
@@ -683,9 +711,157 @@ impl TerminalBackend for LocalBackend {
     }
 }
 
+/// Windows ACL 沙箱执行路径：受限 token spawn + 超时强杀。同步 FFI
+/// 走 `spawn_blocking`；stdout/stderr 并行读（先 wait 再读会因管道
+/// 写满死锁）。fail-closed：provision/spawn 失败直接报错。
+#[cfg(windows)]
+async fn execute_command_sandboxed(
+    command: &str,
+    timeout_secs: u64,
+    workdir: &std::path::Path,
+    mode: crate::sandbox::SandboxMode,
+    max_output_size: usize,
+) -> Result<CommandOutput, AgentError> {
+    use std::io::Read;
+
+    let ws = workdir.to_path_buf();
+    let wd = workdir.to_path_buf();
+    let command = command.to_string();
+    let blocking = tokio::task::spawn_blocking(move || -> Result<CommandOutput, AgentError> {
+        let session = crate::sandbox::SandboxSession::provision(mode, &ws)?;
+        // 统一 shell 层同款路由：整段命令进 PowerShell -Command。
+        let mut child = session.spawn(
+            "powershell.exe",
+            &[
+                "-NoProfile".to_string(),
+                "-NonInteractive".to_string(),
+                "-Command".to_string(),
+                command,
+            ],
+            &wd,
+        )?;
+        child.spawn_kill_watchdog(timeout_secs);
+        let (mut so, mut se) = child.try_clone_pipes()?;
+
+        let out_thread = std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = so.read_to_end(&mut buf);
+            buf
+        });
+        let err_thread = std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = se.read_to_end(&mut buf);
+            buf
+        });
+        let exit_code = child.wait()?;
+        let stdout = out_thread.join().unwrap_or_default();
+        let stderr = err_thread.join().unwrap_or_default();
+
+        let stdout = decode_console_output(&stdout).into_owned();
+        let stderr = decode_console_output(&stderr).into_owned();
+        Ok(CommandOutput {
+            exit_code: exit_code as i32,
+            stdout: if stdout.len() > max_output_size { stdout[..max_output_size].to_string() } else { stdout },
+            stderr: if stderr.len() > max_output_size { stderr[..max_output_size].to_string() } else { stderr },
+        })
+    });
+    match blocking.await {
+        Ok(r) => r,
+        Err(e) => Err(AgentError::Io(format!("sandbox join failed: {e}"))),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 沙箱路由测试共用锁：HERMIX_SANDBOX_MODE 是进程级 env，
+    /// 并行测试互踩会导致路由分支漂移。
+    #[cfg(windows)]
+    static SANDBOX_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[cfg(windows)]
+    fn set_sandbox_env(mode: &str) -> std::sync::MutexGuard<'static, ()> {
+        let guard = SANDBOX_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("HERMIX_SANDBOX_MODE", mode);
+        guard
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn sandbox_route_rejects_drive_root_fail_closed() {
+        let _g = set_sandbox_env("workspace-write");
+        let backend = LocalBackend::default();
+        let result = backend
+            .execute_command("echo hi", None, Some("C:\\"), false, false)
+            .await;
+        let err = result.err().expect("drive-root workdir must fail closed");
+        assert!(
+            err.to_string().contains("drive root"),
+            "unexpected error: {err}"
+        );
+        std::env::remove_var("HERMIX_SANDBOX_MODE");
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn sandbox_route_rejects_workspace_overlapping_temp() {
+        let _g = set_sandbox_env("workspace-write");
+        // workspace = 系统 temp 根：provision 的私有 temp 建在其下，
+        // overlap 检查必须拒绝（否则沙箱 temp 对"工作区"自身可写）。
+        let err = crate::sandbox::SandboxSession::provision(
+            crate::sandbox::SandboxMode::WorkspaceWrite,
+            &std::env::temp_dir(),
+        )
+        .err()
+        .expect("temp-root workspace must fail closed");
+        assert!(
+            err.to_string().contains("overlaps"),
+            "unexpected error: {err}"
+        );
+        std::env::remove_var("HERMIX_SANDBOX_MODE");
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn sandbox_route_danger_full_access_bypasses_sandbox() {
+        let _g = set_sandbox_env("danger-full-access");
+        let tmp = tempfile::tempdir().unwrap();
+        let backend = LocalBackend::default();
+        let output = backend
+            .execute_command(
+                "echo hi",
+                None,
+                Some(tmp.path().to_str().unwrap()),
+                false,
+                false,
+            )
+            .await
+            .expect("danger-full-access must take the regular path");
+        assert_eq!(output.exit_code, 0);
+        std::env::remove_var("HERMIX_SANDBOX_MODE");
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn sandbox_route_runs_command_in_restricted_session() {
+        let _g = set_sandbox_env("workspace-write");
+        let tmp = tempfile::tempdir().unwrap();
+        let backend = LocalBackend::default();
+        let output = backend
+            .execute_command(
+                "echo hi",
+                None,
+                Some(tmp.path().to_str().unwrap()),
+                false,
+                false,
+            )
+            .await
+            .expect("workspace-write sandbox must run the command end-to-end");
+        assert_eq!(output.exit_code, 0);
+        assert!(output.stdout.trim().contains("hi"));
+        std::env::remove_var("HERMIX_SANDBOX_MODE");
+    }
 
     #[tokio::test]
     async fn test_execute_command_echo() {

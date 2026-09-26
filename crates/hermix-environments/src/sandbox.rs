@@ -34,12 +34,12 @@ use windows_sys::Win32::{
     Security::{
         AddMandatoryAce, CopySid, CreateRestrictedToken, CreateWellKnownSid, DuplicateTokenEx,
         EqualSid, GetLengthSid, GetTokenInformation, InitializeAcl, SetTokenInformation, ACL,
-        ACL_REVISION, CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION, DISABLE_MAX_PRIVILEGE,
-        LABEL_SECURITY_INFORMATION, LUA_TOKEN, OBJECT_INHERIT_ACE, SecurityImpersonation,
-        SECURITY_ATTRIBUTES, SID_AND_ATTRIBUTES, TOKEN_ADJUST_DEFAULT, TOKEN_ASSIGN_PRIMARY,
-        TOKEN_DEFAULT_DACL, TOKEN_DUPLICATE, TOKEN_GROUPS, TOKEN_MANDATORY_LABEL, TOKEN_QUERY,
-        TokenDefaultDacl, TokenGroups, TokenIntegrityLevel, TokenPrimary, WinLowLabelSid,
-        WinWorldSid, WRITE_RESTRICTED,
+        ACL_REVISION, ACL_REVISION_DS, CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION,
+        DISABLE_MAX_PRIVILEGE, LABEL_SECURITY_INFORMATION, LUA_TOKEN, OBJECT_INHERIT_ACE,
+        SecurityImpersonation, SECURITY_ATTRIBUTES, SID_AND_ATTRIBUTES, TOKEN_ADJUST_DEFAULT,
+        TOKEN_ASSIGN_PRIMARY, TOKEN_DEFAULT_DACL, TOKEN_DUPLICATE, TOKEN_GROUPS,
+        TOKEN_MANDATORY_LABEL, TOKEN_QUERY, TokenDefaultDacl, TokenGroups, TokenIntegrityLevel,
+        TokenPrimary, WinLowLabelSid, WinWorldSid, WRITE_RESTRICTED,
     },
     Security::Authorization::{
         ConvertStringSidToSidW, DENY_ACCESS, EXPLICIT_ACCESS_W, GRANT_ACCESS,
@@ -257,8 +257,10 @@ fn find_logon_sid(token: HANDLE) -> Result<Vec<u8>, AgentError> {
         return Err(sandbox_err("GetTokenInformation(TokenGroups)"));
     }
     let groups = unsafe { &*(buf.as_ptr() as *const TOKEN_GROUPS) };
+    // Groups 声明为 [SID_AND_ATTRIBUTES; 1]（柔性数组惯用法），按
+    // GroupCount 索引会越界——用指针步进。
     for i in 0..groups.GroupCount as usize {
-        let entry = &groups.Groups[i];
+        let entry = unsafe { &*groups.Groups.as_ptr().add(i) };
         if entry.Attributes & SE_GROUP_LOGON_ID as u32 == SE_GROUP_LOGON_ID as u32
             && !entry.Sid.is_null()
         {
@@ -579,13 +581,14 @@ fn has_exact_entry(acl: *const ACL, ace_type: u8, inheritance: u32, mask: u32, s
 /// no-write-up），调用方 LocalFree。
 fn build_low_label_acl(low_sid: *mut c_void) -> Result<*mut ACL, AgentError> {
     let sid_len = unsafe { GetLengthSid(low_sid) } as usize;
-    // ACL 头 8 + ACE 头 4 + SID。
-    let acl_len = 8 + 4 + sid_len;
+    // ACL 头 8 + mandatory ACE（头 4 + mask 4）+ SID。缓冲区差 4 字节
+    // 即 ERROR_ALLOTTED_SPACE_EXCEEDED (1344)。
+    let acl_len = 8 + 8 + sid_len;
     let acl = unsafe { LocalAlloc(LPTR, acl_len) } as *mut ACL;
     if acl.is_null() {
         return Err(sandbox_err("LocalAlloc(label acl)"));
     }
-    if unsafe { InitializeAcl(acl, acl_len as u32, ACL_REVISION) } == 0 {
+    if unsafe { InitializeAcl(acl, acl_len as u32, ACL_REVISION_DS) } == 0 {
         let err = sandbox_err("InitializeAcl");
         unsafe { LocalFree(acl as *mut c_void) };
         return Err(err);
@@ -593,7 +596,7 @@ fn build_low_label_acl(low_sid: *mut c_void) -> Result<*mut ACL, AgentError> {
     if unsafe {
         AddMandatoryAce(
             acl,
-            ACL_REVISION,
+            ACL_REVISION_DS,
             OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE,
             SYSTEM_MANDATORY_LABEL_NO_WRITE_UP,
             low_sid,
@@ -739,6 +742,24 @@ impl SandboxChild {
     /// 超时/取消时的强杀（local.rs 的 timeout 包装调用）。
     pub fn terminate(&self) {
         unsafe { TerminateProcess(self.process, 1) };
+    }
+
+    /// 超时看门狗：`secs` 秒后强杀子进程。阻塞 wait 无法被外部取消，
+    /// 强杀是挂死命令的唯一出口（TerminateProcess 后 wait 返回非零码）。
+    pub fn spawn_kill_watchdog(&self, secs: u64) {
+        let handle = self.process;
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(secs));
+            unsafe { TerminateProcess(handle, 1) };
+        });
+    }
+
+    /// 复制 stdout/stderr 读端句柄（DuplicateHandle 语义），供并行读取
+    /// 线程使用——先 wait 再读会因管道写满死锁，必须边跑边读。
+    pub fn try_clone_pipes(&self) -> Result<(std::fs::File, std::fs::File), AgentError> {
+        let so = self.stdout.try_clone().map_err(|e| sandbox_msg(format!("clone stdout pipe: {e}")))?;
+        let se = self.stderr.try_clone().map_err(|e| sandbox_msg(format!("clone stderr pipe: {e}")))?;
+        Ok((so, se))
     }
 }
 
