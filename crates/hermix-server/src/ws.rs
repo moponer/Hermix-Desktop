@@ -1,13 +1,14 @@
-//! WebSocket upgrade handlers: stream send, event bridging.
+//! WebSocket stream infrastructure: send, event bridging (stdio 通道复用)。
+//!
+//! 裸 WebSocket 路由（`/v1/ws`、`/v1/ws-stream`）随 2026-09-26 端点审计
+//! 批次删除；本模块保留 stdio_session 复用的流转发/心跳/断连宽限基础设施。
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use axum::extract::{Path, State, WebSocketUpgrade};
 use hermix_tools::extract_trust_signature;
-
 use super::*;
-use crate::transport::{Transport, TransportSink, TransportSource, WsTransport};
+use crate::transport::{Transport, TransportSink, TransportSource};
 
 /// Per-session broadcast channel registry. Lets reconnecting WS clients
 /// observe events from an agent task that is already running but lost
@@ -79,14 +80,6 @@ fn session_broadcast_drop(session_id: &str) {
 /// ——保证重连订阅端点补发增量时与实时广播不重号。
 fn next_envelope_seq(state: &crate::state::HttpServerState) -> u64 {
     state.seq.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
-}
-
-pub(crate) async fn ws_upgrade(
-    ws: WebSocketUpgrade,
-    Path(session_id): Path<String>,
-    State(state): State<HttpServerState>,
-) -> Response {
-    ws.on_upgrade(move |socket| handle_ws(WsTransport::new(socket), state, session_id))
 }
 
 pub(crate) async fn handle_ws(
@@ -168,15 +161,6 @@ pub(crate) async fn handle_ws(
 // ---------------------------------------------------------------------------
 // Streaming WebSocket endpoint — real-time Agent events
 // ---------------------------------------------------------------------------
-
-/// WebSocket upgrade for streaming endpoint.
-pub(crate) async fn ws_stream_upgrade(
-    ws: WebSocketUpgrade,
-    Path(session_id): Path<String>,
-    State(state): State<HttpServerState>,
-) -> Response {
-    ws.on_upgrade(move |socket| handle_ws_stream(WsTransport::new(socket), state, session_id))
-}
 
 /// Compute the dedup key for `(session_id, text)`. Stable across
 /// processes for the same inputs (uses `DefaultHasher`'s SipHash).

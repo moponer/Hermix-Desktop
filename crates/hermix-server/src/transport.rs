@@ -1,92 +1,15 @@
-//! 传输层实现：WebSocket（TCP）与 stdio 管道两种具体传输。
+//! 传输层实现：stdio 管道与多路复用 channel 两种具体传输。
 //!
 //! 契约 trait（`Transport` / `TransportSink` / `TransportSource`）已下沉到
 //! `hermix-transport`（P0「传输两套合一」：类型与契约单点定义），这里
 //! re-export 保持既有调用点 `crate::transport::…` 零改动；本模块只保留
-//! 具体实现。
+//! 具体实现。裸 WebSocket 传输（`WsTransport`）随 `/v1/ws` 路由删除已
+//! 一并移除（2026-09-26 端点审计批次）。
 
 use async_trait::async_trait;
-use axum::extract::ws::{Message as WsMessage, WebSocket};
-use futures::{SinkExt, StreamExt};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines, Stdin, Stdout};
 
 pub use hermix_transport::{Transport, TransportError, TransportResult, TransportSink, TransportSource};
-
-type WsSplitSink = futures::stream::SplitSink<WebSocket, WsMessage>;
-type WsSplitStream = futures::stream::SplitStream<WebSocket>;
-
-/// WebSocket 传输。
-pub struct WsTransport {
-    socket: WebSocket,
-}
-
-impl WsTransport {
-    pub fn new(socket: WebSocket) -> Self {
-        Self { socket }
-    }
-}
-
-impl Transport for WsTransport {
-    fn split(self) -> (Box<dyn TransportSink>, Box<dyn TransportSource>) {
-        let (sender, receiver) = self.socket.split();
-        (
-            Box::new(WsSink { sender }),
-            Box::new(WsSource { receiver }),
-        )
-    }
-}
-
-struct WsSink {
-    sender: WsSplitSink,
-}
-
-#[async_trait]
-impl TransportSink for WsSink {
-    async fn send(&mut self, text: String) -> TransportResult<()> {
-        self.sender.send(WsMessage::Text(text.into())).await?;
-        Ok(())
-    }
-
-    async fn ping(&mut self) -> TransportResult<()> {
-        self.sender
-            .send(WsMessage::Ping(Default::default()))
-            .await?;
-        Ok(())
-    }
-
-    async fn close(&mut self) -> TransportResult<()> {
-        self.sender.close().await?;
-        Ok(())
-    }
-}
-
-struct WsSource {
-    receiver: WsSplitStream,
-}
-
-#[async_trait]
-impl TransportSource for WsSource {
-    async fn recv(&mut self) -> Option<String> {
-        while let Some(msg) = self.receiver.next().await {
-            match msg {
-                Ok(WsMessage::Text(text)) => return Some(String::from(text.as_str())),
-                // Close 帧与读错误在这里就地记录诊断日志后归一为 None，
-                // handler 层统一按「对端关闭」处理（三种情况无法在
-                // `Option<String>` 上区分，诊断粒度留在本层）。
-                Ok(WsMessage::Close(_)) => {
-                    tracing::debug!("ws transport: close frame received");
-                    return None;
-                }
-                Ok(_) => continue,
-                Err(e) => {
-                    tracing::warn!(error = %e, "ws transport: socket read error");
-                    return None;
-                }
-            }
-        }
-        None
-    }
-}
 
 /// stdio 管道传输：stdin 收客户端消息、stdout 推服务端事件，一帧一行 JSON。
 ///
