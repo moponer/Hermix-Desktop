@@ -1,8 +1,7 @@
 //! POST /api/polish/{chat, automation} — stateless LLM-driven text
 //! rewriting for the desktop "润色" / "改写" affordances.
 //!
-//! TODO.md §2 — `docs/TODO.md`. The web side
-//! (`apps/desktop-tauri/src/api/polish.ts`) already calls these
+//! The web side (`apps/desktop-tauri/src/api/polish.ts`) already calls these
 //! endpoints; before this commit the fetch fell through to a
 //! whitespace-only fallback because the backend returned 404.
 //!
