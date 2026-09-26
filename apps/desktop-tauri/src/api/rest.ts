@@ -30,7 +30,6 @@ import type {
   SessionSummary,
   SkillContent,
   SkillInfo,
-  SystemStatus,
   TickLoopStatus,
   ToolDescriptor,
   ToolsetInfo,
@@ -565,9 +564,6 @@ export const warmUpProvider = async (model: string): Promise<void> => {
 };
 
 // ── Dashboard API ──────────────────────────────────
-
-export const getSystemStatus = async (): Promise<SystemStatus> =>
-  fetchJSON("/api/status");
 
 export const getConfig = async (): Promise<HermesConfig> =>
   fetchJSON("/api/config");

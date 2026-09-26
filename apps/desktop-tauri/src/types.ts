@@ -621,4 +621,4 @@ export type NavPage = "chat" | "systemconfig" | "automation" | "agents" | "exper
 
 
 // Re-export from api
-export type { SessionSummary, SystemStatus, HermesConfig, SkillInfo } from "./api";
+export type { SessionSummary, HermesConfig, SkillInfo } from "./api";

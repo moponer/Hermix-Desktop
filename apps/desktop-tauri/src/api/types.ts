@@ -53,16 +53,6 @@ export interface DashboardSession {
   preview: string | null;
 }
 
-export interface SystemStatus {
-  version: string;
-  hermix_home: string;
-  config_path: string;
-  active_sessions: number;
-  gateway_running: boolean;
-  rtk_saved_chars: number;
-  rtk_saved_calls: number;
-}
-
 export interface HermesConfig {
   [key: string]: unknown;
 }
