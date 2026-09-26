@@ -16,7 +16,6 @@ pub mod persona;
 pub mod plugins_inspect;
 pub mod polish;
 pub mod skills;
-pub mod status;
 pub mod stubs;
 pub mod transcribe;
 pub mod types;
@@ -32,8 +31,6 @@ use crate::HttpServerState;
 /// All routes are prefixed with `/api/` and share the same `HttpServerState`.
 pub fn router() -> Router<HttpServerState> {
     Router::new()
-        // Status
-        .route("/api/status", get(status::get_status))
         //Sessions — T2-A : moved to /v1/sessions in lib.rs.
         // The dashboard router no longer mounts any session routes; the
         // SPA uses `/v1/sessions/*` exclusively now.

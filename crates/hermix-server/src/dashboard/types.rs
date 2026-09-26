@@ -1,40 +1,6 @@
 //! Shared request/response types for the dashboard API.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-
-// ── Status ──────────────────────────────────────────────────────────
-
-#[derive(Debug, Serialize)]
-pub struct PlatformStatus {
-    pub state: String,
-    pub updated_at: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error_code: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error_message: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct StatusResponse {
-    pub version: String,
-    pub release_date: String,
-    pub hermix_home: String,
-    pub config_path: String,
-    pub env_path: String,
-    pub config_version: u32,
-    pub latest_config_version: u32,
-    pub active_sessions: u32,
-    pub gateway_running: bool,
-    pub gateway_pid: Option<u32>,
-    pub gateway_state: Option<String>,
-    pub gateway_health_url: Option<String>,
-    pub rtk_saved_chars: u64,
-    pub rtk_saved_calls: u64,
-    pub gateway_exit_reason: Option<String>,
-    pub gateway_updated_at: Option<String>,
-    pub gateway_platforms: HashMap<String, PlatformStatus>,
-}
 
 // ── Sessions ────────────────────────────────────────────────────────
 

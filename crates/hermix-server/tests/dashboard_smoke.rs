@@ -247,24 +247,6 @@ async fn dashboard_plugin_manifests_and_rescan_use_disk_bundles() {
     assert_eq!(mf["name"].as_str().unwrap(), "demo");
 }
 
-// ── /api/status ─────────────────────────────────────────────────────
-
-#[tokio::test]
-async fn status_returns_version() {
-    let app = test_app().await;
-    let (status, body) = get_json(app, "/api/status").await;
-    assert_eq!(status, StatusCode::OK);
-    // Must contain version field matching Cargo.toml
-    let version = body["version"].as_str().unwrap();
-    assert!(!version.is_empty(), "version should not be empty");
-    // Must contain hermix_home path
-    assert!(body["hermix_home"].is_string());
-    assert!(body["config_path"].is_string());
-    assert!(body["env_path"].is_string());
-    // gateway_running should be a boolean
-    assert!(body["gateway_running"].is_boolean());
-}
-
 // ── /api/sessions ───────────────────────────────────────────────────
 
 #[tokio::test]

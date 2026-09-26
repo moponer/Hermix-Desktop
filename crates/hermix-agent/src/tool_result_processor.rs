@@ -18,7 +18,7 @@ use crate::context::ContextManager;
 use crate::terminal_filter;
 
 /// Cumulative characters saved by RTK filtering across all tool calls
-/// in this process. Exposed via `/api/status` for observability.
+/// in this process.
 static FILTER_SAVED_CHARS: LazyLock<AtomicU64> = LazyLock::new(|| AtomicU64::new(0));
 static FILTER_SAVED_CALLS: LazyLock<AtomicU64> = LazyLock::new(|| AtomicU64::new(0));
 
