@@ -179,19 +179,6 @@ pub struct CommandResponse {
     pub output: String,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct ClientTelemetryEvent {
-    pub runtime: String,
-    pub level: String,
-    pub message: String,
-    #[serde(default)]
-    pub app_version: Option<String>,
-    #[serde(default)]
-    pub trace_id: Option<String>,
-    #[serde(default)]
-    pub tags: Option<serde_json::Value>,
-}
-
 fn max_request_body_bytes() -> usize {
     const DEFAULT: usize = 2 * 1024 * 1024;
     env_compat("HERMIX_HTTP_MAX_BODY_BYTES", "HERMES_HTTP_MAX_BODY_BYTES")
@@ -275,10 +262,6 @@ pub fn router(state: HttpServerState) -> Router {
         // §5.5 P6：审计日志读端点（DiagnosticsTab 数据面）。仅 Local，
         // 与 revoke_device 同一 DeviceManagement 鉴权面。
         .route("/api/pairing/audit", get(pairing::list_audit))
-        .route("/v1/protocol/schema", get(routes::protocol_schema))
-        .route("/v1/telemetry/client-event", post(routes::client_telemetry_event))
-        .route("/metrics", get(routes::metrics_prometheus))
-        .route("/v1/metrics", get(routes::metrics_snapshot))
         .route("/v1/sessions", get(routes::list_sessions).post(routes::create_session))
         .route(
             "/v1/sessions/{session_id}",

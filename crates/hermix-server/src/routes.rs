@@ -3,7 +3,7 @@
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use axum::response::{IntoResponse, Json};
+use axum::response::Json;
 
 use serde::{Deserialize, Serialize};
 
@@ -167,66 +167,6 @@ pub(crate) async fn register_expert(
     let inserted = state.expert_registry.register_many(req.experts);
     let total = state.expert_registry.len();
     Json(RegisterExpertResponse { inserted, total })
-}
-
-pub(crate) async fn metrics_prometheus() -> impl IntoResponse {
-(
-[(
-header::CONTENT_TYPE,
-"text/plain; version=0.0.4; charset=utf-8",
-)],
-hermix_telemetry::prometheus_text(),
-)
-}
-
-/// ( / ) JSON snapshot of local metrics
-/// for dashboard display. Returns counters, latency percentiles,
-/// and buffer status.
-pub(crate) async fn metrics_snapshot(
-    State(state): State<HttpServerState>,
-) -> Json<crate::metrics::MetricsSnapshot> {
-    Json(state.metrics.snapshot())
-}
-
-
-
-pub(crate) async fn protocol_schema() -> impl IntoResponse {
-    Json(serde_json::json!({
-        "version": 1,
-        "ws_envelope": hermix_transport::ws_schema_json()
-    }))
-}
-
-pub(crate) async fn client_telemetry_event(
-    Json(event): Json<ClientTelemetryEvent>,
-) -> Result<Json<serde_json::Value>, HttpError> {
-    match event.level.as_str() {
-        "error" => tracing::error!(
-            runtime = %event.runtime,
-            message = %event.message,
-            app_version = ?event.app_version,
-            trace_id = ?event.trace_id,
-            tags = ?event.tags,
-            "client telemetry event"
-        ),
-        "warn" => tracing::warn!(
-            runtime = %event.runtime,
-            message = %event.message,
-            app_version = ?event.app_version,
-            trace_id = ?event.trace_id,
-            tags = ?event.tags,
-            "client telemetry event"
-        ),
-        _ => tracing::info!(
-            runtime = %event.runtime,
-            message = %event.message,
-            app_version = ?event.app_version,
-            trace_id = ?event.trace_id,
-            tags = ?event.tags,
-            "client telemetry event"
-        ),
-    }
-    Ok(Json(serde_json::json!({ "ok": true })))
 }
 
 /// SQL 过滤片段：默认范围（普通对话）与按工作台范围。

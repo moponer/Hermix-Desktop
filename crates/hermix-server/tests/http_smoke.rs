@@ -22,27 +22,6 @@ async fn health_ok() {
 }
 
 #[tokio::test]
-async fn metrics_prometheus_has_counters() {
-    let _ = tracing_subscriber::fmt::try_init();
-    let cfg = hermix_config::GatewayConfig::default();
-    let state = hermix_server::HttpServerState::build(cfg).await.unwrap();
-    let app = hermix_server::router(state);
-    let res = app
-        .oneshot(local(
-            Request::builder()
-                .uri("/metrics")
-                .body(Body::empty())
-                .unwrap(),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(res.status(), StatusCode::OK);
-    let body = res.into_body().collect().await.unwrap().to_bytes();
-    let s = String::from_utf8(body.to_vec()).unwrap();
-    assert!(s.contains("hermes_llm_requests_total"));
-}
-
-#[tokio::test]
 #[ignore = "pre-existing：/api/providers/oauth stub 路由从未存在于已跟踪 src（本测试随 6b929a1a 收编 untracked 时即红，git log -S 对 src 无任何路由增删记录）；待 oauth stub 批次落地后移除本 ignore"]
 async fn oauth_stub_routes_return_json_contract() {
     let _ = tracing_subscriber::fmt::try_init();
