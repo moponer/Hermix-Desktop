@@ -179,3 +179,7 @@ apps/desktop-tauri/_tmp_*
 .zcode/
 /windows_cmd_analysis.md
 .tmp-probe/
+
+# 临时工作产物（一次性脚本草稿 / 设计预览稿，保留在本地不入库）
+apps/desktop-tauri/src-tauri/.scratch/
+/design-previews/
