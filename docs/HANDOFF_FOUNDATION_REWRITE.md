@@ -1,7 +1,7 @@
 # 交接文档：Hermix 底座重写 + 网络安全层（给后续开发 agent）
 
 > 更新时间：2026-09-25。本文是唯一权威交接入口。动手前**必须完整读完本文 + 必读文档清单**，禁止跳读后自行发挥。
-> 当前累计 80 个 commit（52 + 本批 28：… `835fa7ff` / `3071fc90` / `340ec5ad` / `322a039d` / `71f79d16` + `1dd2895b` / `0d61fb90`（Windows ACL 沙箱批次）+ `192f815a` / `83619e9d` / `43c12e03`（遗留物归档批次）+ `2fec94ea`（gitignore）+ 本文档 commit）。工作区除 §7 已 gitignore 的临时产物（`.scratch/`、`design-previews/`）外干净。最近 commit：`43c12e03`（前端组件归档）+ `2fec94ea`（gitignore）+ `51c28bca`（§7 刷新）。
+> 当前累计 82 个 commit（52 + 本批 30：… `1dd2895b` / `0d61fb90`（Windows ACL 沙箱批次）+ `192f815a` / `83619e9d` / `43c12e03`（遗留物归档批次）+ `2fec94ea`（gitignore）+ `5f9f65ac`（沙箱接线）+ `b5fbe2e7`（审计 UI 对接）+ 本文档 commit）。工作区除 §7 已 gitignore 的临时产物（`.scratch/`、`design-previews/`）外干净。最近 commit：`5f9f65ac`（沙箱接进执行路径）+ `b5fbe2e7`（DiagnosticsTab 审计展示）。
 > 本批新增 commit：`87bb2b9a` / `b51a32a1` / `3cc45b72` / `f062c5ad` / `e1a75115` / `20b6eda8` / `ab7aad02` / `c208f10f` / `9d897704` / `640eeb57` / `6979313c` / `a8f4e547` / `63e3b174` / `0918f7a5` / `cead162d` / `5fab0ec2` / `6892a043` / `29392b57` / `e651c311` / `adfc8ca5` / `acf1fea1` / `e91ac42e` / `fd238361` / `fc2f425a` / `d7abee4d` / `e5f728a1` / `f985eade` / `bc8a6e6c` / `64d145de` / `9ff58666` / `bc2f7da` / `e3955b7a` / `8f3e7a67` / `e8534365` / `45e02378` / `ae71666c` / `08307f7e` / `25aa6fff` / `db892c6d` / `00074e0b` / `231a7dd6` / `d115b591` / `1c628052` / `2b14e53a` / `afdedf5a` / `9bdef3a8` / `835fa7ff` / `3071fc90` / `340ec5ad` / `322a039d` / `71f79d16` / 本文档 commit（命令执行对齐第三段收口刷新）。
 
 ---
@@ -356,6 +356,12 @@ CARGO_INCREMENTAL=0 cargo test -p <crate> --lib   # 改了哪个 crate 测哪个
 - **已知边界（与 deepseek 相同，非 bug）**：FAT/exFAT 无 ACL 不承诺；enforcement 如实为 `partial`（hard-link 别名、读不受限）；崩溃残留 temp = 惰性垃圾（文档化）。
 - **验证**：workspace check 绿；hermix-environments lib **63 全绿**（53 基线 + 10：SID 派生确定性/域分离/30-bit 值域、引号 roundtrip、overlap/root 校验、env block TMP/TEMP 覆盖）；`danger-full-access` 在 call site 绕行（provision 直接报错，语义由审批层承接）。
 - **教训**：windows-sys 0.52 的 `HANDLE` 是 `isize`（非指针，`is_null()` 不适用）；`SE_GROUP_*`/`SYSTEM_MANDATORY_LABEL_*` 在 `SystemServices` 模块；`EXPLICIT_ACCESS_W` 带下划线（非 `EXPLICIT_ACCESSW`）；`SetEntriesInAclW` 收带下划线结构体。
+
+**已落**（沙箱接线 + 审计 UI 前后对接 — `5f9f65ac` + `b5fbe2e7`）：
+- **沙箱接进执行路径（`5f9f65ac`）**：`local.rs::execute_command` Windows 分支——`HERMIX_SANDBOX_MODE` 非 `danger-full-access` 且有 workdir 时走 `SandboxSession`（`execute_command_sandboxed` 自由函数：`spawn_blocking` 包同步 FFI + stdout/stderr 管道并行读 + 超时看门狗强杀）。fail-closed：provision/spawn 失败直接报错，不回退不受限 spawn；`danger-full-access` 与无 workdir 走常规路径（审批层承接）。`SandboxChild` 补 `spawn_kill_watchdog` / `try_clone_pipes`。接线真机暴露三缺陷修复：mandatory label ACL 缓冲区差 4 字节（`ERROR_ALLOTTED_SPACE_EXCEEDED` 1344，ACL 头 8 + ACE 头 4 + mask 4 + SID）、`TOKEN_GROUPS.Groups` 柔性数组 `[T;1]` 惯用法按索引越界（改指针步进）、label ACL 用 `ACL_REVISION_DS`。
+- **接线测试 +4**（env 互斥锁 `SANDBOX_ENV_LOCK` 防并行踩）：drive root fail-closed / temp overlap fail-closed / `danger-full-access` 绕行 / 受限会话端到端（echo 进沙箱跑通）。
+- **审计 UI 前后对接（`b5fbe2e7`）**：DiagnosticsTab 新增审计事件面板——`fetchJSON` 走 stdio bridge 调 `GET /api/pairing/audit?limit=200`，时间倒序表格（时间/事件/设备/来源 IP/结果）+ 四事件中文标签；best-effort 降级（注册库未装配 503 显示"审计不可用"而非报错）。P6 审计读端点的消费端闭环。
+- **验证**：workspace check 绿 / hermix-environments lib **67 全绿**（63 + 4 接线测试）/ `pnpm tsc --noEmit` 绿。
 
 **已落**（P6 T6 暴力破解 IP 锁定）：
 - `security.rs` 新增 `AuthFailLockout`（仿 `RateLimiter` 的 `Arc<Mutex<HashMap<String,(Vec<Instant>,Option<Instant>)>>` 模式，纯内存 headless 可验）：按 source IP 累计认证失败时间戳，窗口内达 `threshold` 即锁定 `cooldown` 期；冷却期内持续失败走**有界续期**（`until + cooldown` 但封顶 `now + 2*cooldown`，防滑动窗口导致攻击者永不解锁）；成功认证 `record_success` 清零该 IP 计数与锁定（合法用户输错后输对了不累积）
