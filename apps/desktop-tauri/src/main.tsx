@@ -64,13 +64,55 @@ const HEALTH_POLL_MS = 500;
 // 状态由 BackendStatus / ConnectionIndicator 呈现，关掉遮罩不丢任何信息。
 const HARD_FALLBACK_MS = 22_000;
 
-function dismissSplash() {
-  // 先停掉 CSS 自推进动画并补满，再淡出——否则进度条停在中途就消失。
+// ── Splash 视觉状态机（方向 A：进度条 + 百分比 + 阶段列表逐项点亮） ──
+// Rust setup 按真实步骤 emit `hermix:boot-stage` 文案；前端把文案映射到 4 个
+// 固定阶段（index.html 的 sp-stages），推进 active/done 态并同步百分比。
+// 映射依据 apps/desktop-tauri/src-tauri/src/lib.rs 的 set_boot_stage 调用序列：
+//   "正在准备运行环境…"        → 阶段 0
+//   "正在解包内置技能…"        → 阶段 1
+//   "正在准备运行时组件…"      → 阶段 1（同属加载内置能力）
+//   "正在启动本地服务…"        → 阶段 2
+//   "正在等待服务就绪…"        → 阶段 2
+//   "服务已就绪…"              → 阶段 3 + dismiss
+const SPLASH_STAGES = [
+  { text: "准备运行环境", pct: 25 },
+  { text: "加载内置能力", pct: 50 },
+  { text: "启动本地服务", pct: 75 },
+  { text: "准备就绪", pct: 100 },
+];
+
+function stageIndexFromText(text: string): number {
+  if (!text) return 0;
+  if (text.includes("准备运行环境")) return 0;
+  if (text.includes("解包内置技能") || text.includes("准备运行时组件")) return 1;
+  if (text.includes("启动本地服务") || text.includes("等待服务就绪")) return 2;
+  if (text.includes("就绪")) return 3;
+  return 0; // 未知文案：保持当前阶段（不重置）
+}
+
+let currentStage = 0;
+function advanceSplashStage(text: string) {
+  const idx = stageIndexFromText(text);
+  if (idx < currentStage) return; // 只前进不后退（事件乱序保险）
+  currentStage = idx;
+  const stage = SPLASH_STAGES[idx];
   const bar = document.getElementById("sp-progress-bar");
-  if (bar) {
-    bar.classList.remove("animating");
-    bar.style.width = "100%";
-  }
+  if (bar) bar.style.width = `${stage.pct}%`;
+  const pctEl = document.getElementById("sp-progress-pct");
+  if (pctEl) pctEl.textContent = `${stage.pct}%`;
+  const textEl = document.getElementById("sp-progress-text");
+  if (textEl) textEl.textContent = stage.text;
+  // 阶段列表逐项点亮：done < idx / active === idx
+  document.querySelectorAll<HTMLElement>(".sp-stage-item").forEach((el) => {
+    const i = Number(el.dataset.i ?? -1);
+    el.classList.toggle("done", i < idx);
+    el.classList.toggle("active", i === idx);
+  });
+}
+
+function dismissSplash() {
+  // 补满进度条 + 百分比到 100%，所有阶段点亮为 done，再淡出
+  advanceSplashStage("服务已就绪，正在进入主界面");
   const splash = document.getElementById("splash");
   if (splash) {
     splash.classList.add("hide");
@@ -129,21 +171,18 @@ listen("hermix:server-ready", () => {
 
 // 启动阶段文案：Rust setup 的每个真实步骤都会 emit `hermix:boot-stage`。
 // setup 可能早于前端 listen，所以挂载后回查一次当前阶段补上丢失的事件。
-function setSplashStage(text: string) {
-  const el = document.getElementById("sp-stage-text");
-  if (el && text) el.textContent = text;
-}
-
+// 收到即推进阶段；Rust 端最后一步 emit 的文案含"就绪"——此时全阶段点亮
+// 并 dismiss（与 server-ready / pollHealth 成功三路竞走，先到先关）。
 listen<string>("hermix:boot-stage", (event) => {
-  setSplashStage(event.payload);
-  // Rust 端最后一步会 emit "服务已就绪，正在进入主界面"——收到即关。
+  advanceSplashStage(event.payload ?? "");
   if (event.payload && event.payload.includes("就绪")) {
     safeDismiss(false);
   }
 });
 
+// 挂载后回查当前阶段（setup 可能早于 listen，补上错过的事件）
 invoke<string>("boot_stage")
-  .then(setSplashStage)
+  .then((stage) => advanceSplashStage(stage ?? ""))
   .catch(() => {
     // 纯浏览器调试下没有 Tauri command，忽略即可。
   });

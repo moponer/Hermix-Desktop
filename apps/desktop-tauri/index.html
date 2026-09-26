@@ -162,48 +162,62 @@
         z-index: 1;
       }
 
-      /* ── Mascot ── */
-      .sp-logo {
+      /* ── Mascot（呼吸光晕：方向 A，圆形 halo 无限缓放 + drop-shadow） ── */
+      .sp-logo-wrap {
+        position: relative;
         width: 128px; height: 128px;
         opacity: 0;
         transform: translateY(12px) scale(0.95);
-        animation: sp-fade-up 0.6s cubic-bezier(0.16, 1, 0.3, 1) 0.05s forwards;
+        animation: sp-fade-up 0.7s cubic-bezier(0.16, 1, 0.3, 1) 0.05s forwards;
+      }
+      .sp-logo {
+        width: 100%; height: 100%;
+        display: block;
+        filter: drop-shadow(0 2px 16px rgba(0, 0, 0, 0.06));
+      }
+      .sp-logo-wrap::after {
+        content: "";
+        position: absolute; inset: 0;
+        border-radius: 50%;
+        animation: sp-breathe 4s ease-in-out infinite;
+        pointer-events: none;
       }
 
-      /* ── Title ── */
+      /* ── Title（方向 A：衬线字家族，26px 500） ── */
       .sp-title {
         margin-top: 28px;
+        font-family: "Iowan Old Style", "Charter", Georgia, "Songti SC", "STSong", serif;
         font-size: 26px;
-        font-weight: 700;
+        font-weight: 500;
+        letter-spacing: -0.01em;
         color: var(--sp-ink);
-        letter-spacing: 0.02em;
         opacity: 0;
         transform: translateY(8px);
-        animation: sp-fade-up 0.6s cubic-bezier(0.16, 1, 0.3, 1) 0.2s forwards;
+        animation: sp-fade-up 0.7s cubic-bezier(0.16, 1, 0.3, 1) 0.25s forwards;
       }
 
       /* ── Description ── */
       .sp-desc {
         margin-top: 10px;
-        font-size: 14px;
-        line-height: 1.5;
+        font-size: 13.5px;
+        line-height: 1.55;
         color: var(--sp-ink-soft);
-        max-width: 320px;
+        max-width: 340px;
         opacity: 0;
         transform: translateY(8px);
-        animation: sp-fade-up 0.6s ease 0.3s forwards;
+        animation: sp-fade-up 0.7s ease 0.35s forwards;
       }
 
-      /* ── Progress bar ── */
+      /* ── Progress（方向 A：渐变条 + mono 百分比 meta 行） ── */
       .sp-progress-wrap {
-        margin-top: 32px;
+        margin-top: 36px;
         width: 320px;
         opacity: 0;
-        animation: sp-fade-up 0.6s ease 0.4s forwards;
+        animation: sp-fade-up 0.7s ease 0.45s forwards;
       }
       .sp-progress {
         width: 100%;
-        height: 6px;
+        height: 4px;
         background: var(--sp-track);
         border-radius: 999px;
         overflow: hidden;
@@ -213,34 +227,85 @@
         width: 0%;
         background: var(--sp-accent);
         border-radius: 999px;
-        transition: width 0.35s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+        transition: width 0.45s cubic-bezier(0.25, 0.46, 0.45, 0.94);
       }
-      /* Smooth auto-advance animation: 0 → 80% over ~4s */
-      @keyframes sp-progress-auto {
-        0%   { width: 0%; }
-        15%  { width: 18%; }
-        35%  { width: 40%; }
-        60%  { width: 62%; }
-        82%  { width: 78%; }
-        100% { width: 83%; }
+      .sp-progress-meta {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-top: 10px;
+        font-family: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
+        font-size: 11px;
+        letter-spacing: 0.02em;
+        color: var(--sp-ink-soft);
       }
-      .sp-progress-bar.animating {
-        animation: sp-progress-auto 4.2s cubic-bezier(0.25, 0.46, 0.45, 0.94) 0.5s forwards;
+      .sp-progress-meta .sp-pct { color: var(--sp-ink-soft); }
+
+      /* ── 启动阶段列表（方向 A：4 项逐项点亮，dot 脉冲 active 态） ── */
+      .sp-stages {
+        margin-top: 28px;
+        width: 320px;
+        opacity: 0;
+        animation: sp-fade-up 0.7s ease 0.55s forwards;
+      }
+      .sp-stage-item {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 9px 0;
+        border-top: 1px solid var(--sp-track);
+        font-size: 12.5px;
+        color: var(--sp-ink-soft);
+        opacity: 0.55;
+        transition: color 0.5s ease, opacity 0.5s ease;
+      }
+      .sp-stage-item:last-child { border-bottom: 1px solid var(--sp-track); }
+      .sp-stage-item .sp-dot {
+        width: 6px; height: 6px;
+        border-radius: 50%;
+        background: var(--sp-track);
+        flex: 0 0 6px;
+        transition: background 0.5s ease, transform 0.5s ease;
+      }
+      .sp-stage-item .sp-label { flex: 1; text-align: left; }
+      .sp-stage-item.done { opacity: 1; color: var(--sp-ink-soft); }
+      .sp-stage-item.done .sp-dot { background: var(--sp-accent); }
+      .sp-stage-item.active { opacity: 1; color: var(--sp-ink); }
+      .sp-stage-item.active .sp-dot {
+        background: var(--sp-accent);
+        animation: sp-pulse 1.6s ease-in-out infinite;
       }
 
-      /* ── Subtitle ── */
-      .sp-sub {
-        margin-top: 14px;
-        font-size: 13px;
+      /* ── Footer（方向 A：uppercase 字距版本行） ── */
+      .sp-footer {
+        position: absolute;
+        bottom: 18px; left: 0; right: 0;
+        text-align: center;
+        font-size: 10.5px;
+        letter-spacing: 0.12em;
         color: var(--sp-ink-soft);
-        opacity: 0;
-        animation: sp-fade-up 0.6s ease 0.5s forwards;
+        text-transform: uppercase;
+        z-index: 1;
+      }
+
+      /* ── Subtitle（保留兼容：main.tsx 仍写 sp-stage-text；升级为 meta 行左侧文案） ── */
+      .sp-sub {
+        margin-top: 0;
+        font-size: 0; /* 被 progress-meta 取代，保留 DOM 节点供 main.tsx 写入但视觉归并到 meta 行 */
       }
 
       /* ── Keyframes ── */
       @keyframes sp-fade-up {
         from { opacity: 0; transform: translateY(10px); }
         to   { opacity: 1; transform: translateY(0); }
+      }
+      @keyframes sp-breathe {
+        0%, 100% { box-shadow: 0 0 0 0 transparent; }
+        50% { box-shadow: 0 0 0 14px color-mix(in srgb, var(--sp-accent) 7%, transparent); }
+      }
+      @keyframes sp-pulse {
+        0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--sp-accent) 45%, transparent); }
+        50% { box-shadow: 0 0 0 6px transparent; }
       }
 
       /* ── Reduced motion ── */
@@ -250,8 +315,11 @@
           animation-delay: 0ms !important;
           transition-duration: 0.15s !important;
         }
-        .sp-logo, .sp-title, .sp-desc,
-        .sp-progress-wrap, .sp-sub { opacity: 1 !important; transform: none !important; }
+        .sp-logo-wrap, .sp-title, .sp-desc,
+        .sp-progress-wrap, .sp-stages { opacity: 1 !important; transform: none !important; }
+        .sp-logo-wrap::after { animation: none !important; }
+        .sp-stage-item { opacity: 1 !important; }
+        .sp-stage-item.active .sp-dot { animation: none !important; }
         .sp-progress-bar { width: 60% !important; }
       }
     </style>
@@ -277,23 +345,38 @@
         </div>
 
         <div class="sp-stage">
-          <!-- Mascot -->
-          <img class="sp-logo" src="./mascot-256.png"
-               alt="" width="128" height="128" draggable="false" />
+          <!-- Mascot（方向 A：外层 wrap 承载呼吸光晕 halo，img 本身只做 drop-shadow） -->
+          <div class="sp-logo-wrap">
+            <img class="sp-logo" src="./mascot-256.png"
+                 alt="" width="128" height="128" draggable="false" />
+          </div>
 
           <div class="sp-title">环境准备中</div>
-          <div class="sp-desc">正在准备运行环境，请稍候，完成后自动进入主界面。</div>
+          <div class="sp-desc">正在为你准备本地环境，请稍候，完成后自动进入主界面。</div>
 
-          <!-- Progress bar -->
+          <!-- Progress（方向 A：meta 行 = 当前阶段文案 + 百分比；由 main.tsx 写 sp-progress-text / sp-progress-pct） -->
           <div class="sp-progress-wrap">
             <div class="sp-progress">
-              <div class="sp-progress-bar animating" id="sp-progress-bar"></div>
+              <div class="sp-progress-bar" id="sp-progress-bar"></div>
+            </div>
+            <div class="sp-progress-meta">
+              <span id="sp-progress-text">正在初始化…</span>
+              <span class="sp-pct" id="sp-progress-pct">0%</span>
             </div>
           </div>
 
-          <!-- 阶段文案由 main.tsx 按 Tauri 端 hermix:boot-stage 事件实时更新 -->
-          <div class="sp-sub" id="sp-stage-text">正在初始化…</div>
+          <!-- 启动阶段列表（方向 A：4 项逐项点亮；main.tsx 按 boot-stage 事件推进 active/done 态）
+               阶段文案与 Rust set_boot_stage 的真实序列对齐：
+               准备运行环境 → 解包技能 → 启动本地服务 → 服务就绪 -->
+          <div class="sp-stages" id="sp-stages">
+            <div class="sp-stage-item" data-i="0"><span class="sp-dot"></span><span class="sp-label">准备运行环境</span></div>
+            <div class="sp-stage-item" data-i="1"><span class="sp-dot"></span><span class="sp-label">加载内置能力</span></div>
+            <div class="sp-stage-item" data-i="2"><span class="sp-dot"></span><span class="sp-label">启动本地服务</span></div>
+            <div class="sp-stage-item" data-i="3"><span class="sp-dot"></span><span class="sp-label">准备就绪</span></div>
+          </div>
         </div>
+
+        <div class="sp-footer">Hermix Desktop</div>
       </div>
     </div>
 
