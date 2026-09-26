@@ -275,18 +275,18 @@ impl TerminalBackend for SshBackend {
     }
 }
 
-/// Simple shell quoting for local arguments (paths, etc.).
+/// POSIX shell quoting for remote command arguments (paths, etc.).
+/// Delegates to the mature `shlex` crate (same version line as
+/// hermix-agent, already in the workspace lock). The previous
+/// hand-written allowlist only triggered quoting on whitespace and
+/// quote/backslash/`$`/backtick — a path like `foo;rm -rf /` passed
+/// through raw and the remote shell ran the second command. `shlex`
+/// quotes every metacharacter. A nul byte (impossible in a real
+/// path) quotes to `''`, making the remote command fail safely.
 fn shlex_quote_local(s: &str) -> String {
-    if s.is_empty() {
-        "''".to_string()
-    } else if !s
-        .chars()
-        .any(|c| c.is_whitespace() || c == '\'' || c == '"' || c == '\\' || c == '$' || c == '`')
-    {
-        s.to_string()
-    } else {
-        format!("'{}'", s.replace('\'', "'\\''"))
-    }
+    shlex::try_quote(s)
+        .map(|c| c.into_owned())
+        .unwrap_or_else(|_| "''".to_string())
 }
 
 #[cfg(test)]
@@ -327,6 +327,20 @@ mod tests {
         assert_eq!(
             shlex_quote_local("/path/with spaces"),
             "'/path/with spaces'"
+        );
+    }
+
+    #[test]
+    fn test_shlex_quote_local_blocks_injection() {
+        // 手写 allowlist 的注入洞：`;` 不在其触发集里，原样透传后
+        // 远端 shell 会执行第二条命令。shlex 对所有元字符加引号，
+        // 且拆分回溯恰好还原单 token。
+        let q = shlex_quote_local("foo;rm -rf /");
+        assert_ne!(q, "foo;rm -rf /", "metachar must be quoted");
+        assert_eq!(
+            shlex::split(&q),
+            Some(vec!["foo;rm -rf /".to_string()]),
+            "quoted arg must round-trip to a single token"
         );
     }
 }
