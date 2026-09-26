@@ -11,7 +11,6 @@ pub mod config;
 pub mod loader;
 pub mod managed_gateway;
 pub mod merge;
-pub mod migration;
 pub mod paths;
 pub mod platform;
 mod python_platform_env;
@@ -43,10 +42,6 @@ pub use managed_gateway::{
     SelectedBackend, TokenReader, DEFAULT_TOOL_GATEWAY_DOMAIN,
 };
 pub use merge::{deep_merge, merge_configs};
-pub use migration::{
-    is_skipped, mark_skipped, clear_skipped, candidate_legacy_homes, user_home, LegacyArtifact,
-    LegacyMigrator, LegacySnapshot, MigrationReport, SkippedRecord,
-};
 pub use paths::{
     cli_config_path, config_path, cron_dir, env_compat, env_path, gateway_json_path,
     gateway_pid_path, gateway_pid_path_in, hermix_home, memory_path, sessions_db_path,

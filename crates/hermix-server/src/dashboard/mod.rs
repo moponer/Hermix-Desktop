@@ -13,7 +13,6 @@ pub mod config;
 pub mod env;
 pub mod logs;
 pub mod mcp;
-pub mod migration;
 pub mod persona;
 pub mod plugins_inspect;
 pub mod polish;
@@ -175,11 +174,6 @@ pub fn router() -> Router<HttpServerState> {
             "/api/persona/overrides",
             get(persona::get_overrides).put(persona::put_overrides),
         )
-        //Migration .
-        .route("/api/migration/probe", get(migration::probe_migration))
-        .route("/api/migration/apply", post(migration::apply_migration))
-        .route("/api/migration/skip", post(migration::skip_migration))
-        .route("/api/migration/reset", post(migration::reset_migration))
         // §2 Polish — doc rewrite endpoints used by the desktop
         // "润色" / "改写" affordances. `polish::post_polish_chat`
         // rebuilds a natural-language message, `polish::post_polish_automation`
