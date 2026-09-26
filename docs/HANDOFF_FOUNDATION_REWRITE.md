@@ -1,7 +1,15 @@
 # 交接文档：Hermix 底座重写 + 网络安全层（给后续开发 agent）
 
 > 更新时间：2026-09-25。本文是唯一权威交接入口。动手前**必须完整读完本文 + 必读文档清单**，禁止跳读后自行发挥。
-> 当前累计 82 个 commit（52 + 本批 30：… `1dd2895b` / `0d61fb90`（Windows ACL 沙箱批次）+ `192f815a` / `83619e9d` / `43c12e03`（遗留物归档批次）+ `2fec94ea`（gitignore）+ `5f9f65ac`（沙箱接线）+ `b5fbe2e7`（审计 UI 对接）+ 本文档 commit）。工作区除 §7 已 gitignore 的临时产物（`.scratch/`、`design-previews/`）外干净。最近 commit：`5f9f65ac`（沙箱接进执行路径）+ `b5fbe2e7`（DiagnosticsTab 审计展示）。
+> 当前累计 84 个 commit（52 + 本批 32：… `5f9f65ac`（沙箱接线）+ `b5fbe2e7`（审计 UI 对接）+ `6d406129`（本批次文档刷新）+ `d361cdfc`（砍 v1/tasks + v1/automations 后端路由）+ `fd3bd371`（前端死代码清理）+ 本文档 commit）。工作区除 §7 已 gitignore 的临时产物（`.scratch/`、`design-previews/`）外干净。最近 commit：`d361cdfc`（后端路由清理）+ `fd3bd371`（前端死代码清理）。
+
+**已落**（前后端端点审计 + 砍路由/死代码批次 — `d361cdfc` + `fd3bd371`）：
+- **审计**：全量交叉比对 hermix-server 路由表 vs 前端 `rest.ts` 调用面（subagent 双抓 + 定向核实）。结论：前端无调用任何后端不存在的路径（无 404 风险）；问题全在反方向——后端有多条路由前端零消费。
+- **砍后端 15 条路由（`d361cdfc`，净删 852 行）**：`/v1/tasks` 8 路由（create/list/get/patch/delete/status/children/results）+ `/v1/automations` 7 路由（create/list/get/delete/pause/resume/runs/trigger 实际 8 条含 record）。审计依据：前端 `rest.ts` 对应 15 个函数全部零 import；Python 脚本 / CLI / 其它 crate 均无引用；功能与 dashboard `/api/automation/tasks/*` 及 agent WS 流重叠。保留面：`TaskRecord`/`TaskContext` 类型层（hermix-agent sub-agent 热路径消费）+ `automation_trigger` 调度器模块（scheduler 走 `agent_service` 内部路径，非 HTTP）。同步删 `http_smoke.rs` 4 个 record 端点测试，清 `lib.rs`/`sandbox.rs` 残留 unused import。
+- **砍前端死代码（`fd3bd371`，净删 222 行）**：`rest.ts` 15 个死函数 + 孤儿类型 import；`types.ts` 11 个孤儿类型（Task 组 + Automation 组）。
+- **审计清单未砍项（需外部消费者确认后才动）**：`/v1/sessions/{id}/lineage`（仅注释提及）、`/api/cua/trace`（UI 未接）、`/api/migration/*`（应改内部调用）、`/api/dashboard/plugin-inspect/{id}`（单 id 无用）、`/v1/voice/synthesize`（TTS 无前端入口，需确认无 LLM tool 路径）、`/v1/ws` + `/v1/ws-stream`（桌面端走 stdio bridge，Web/移动端可能仍消费）、`/v1/telemetry/client-event` + `/metrics` + `/v1/protocol/schema`（ops/debug 端点，可 feature gate）、`/api/logs`（前端改走 Rust 侧直读文件，REST 端点可砍）。
+- **发现但未修的真 bug**：`/api/custom-apps/{id}/icon` 前端走裸 `<img src>` 不经 stdio bridge，Tauri 生产环境永远 404（静默降级到 lucide 兜底）——属 UI 批次，非本批范围。
+- **验证**：workspace check 全绿 / hermix-server lib **200 全绿** / http_smoke **6 过 2 忽略**（存 oauth stub ignore）/ `pnpm tsc --noEmit` 全绿。
 > 本批新增 commit：`87bb2b9a` / `b51a32a1` / `3cc45b72` / `f062c5ad` / `e1a75115` / `20b6eda8` / `ab7aad02` / `c208f10f` / `9d897704` / `640eeb57` / `6979313c` / `a8f4e547` / `63e3b174` / `0918f7a5` / `cead162d` / `5fab0ec2` / `6892a043` / `29392b57` / `e651c311` / `adfc8ca5` / `acf1fea1` / `e91ac42e` / `fd238361` / `fc2f425a` / `d7abee4d` / `e5f728a1` / `f985eade` / `bc8a6e6c` / `64d145de` / `9ff58666` / `bc2f7da` / `e3955b7a` / `8f3e7a67` / `e8534365` / `45e02378` / `ae71666c` / `08307f7e` / `25aa6fff` / `db892c6d` / `00074e0b` / `231a7dd6` / `d115b591` / `1c628052` / `2b14e53a` / `afdedf5a` / `9bdef3a8` / `835fa7ff` / `3071fc90` / `340ec5ad` / `322a039d` / `71f79d16` / 本文档 commit（命令执行对齐第三段收口刷新）。
 
 ---
