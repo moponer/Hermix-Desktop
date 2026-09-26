@@ -245,17 +245,6 @@ export async function subscribeSessionSnapshot(
   );
 }
 
-/** 各内置 provider 的权威默认模型（id → model）。首次配置时用来选中一个
- *  真正能对话的模型，而不是厂商 `/v1/models` 全量目录里字典序第一个。 */
-export async function getProviderDefaults(): Promise<Record<string, string>> {
-  const list = await getProviderMeta();
-  const out: Record<string, string> = {};
-  for (const m of list) {
-    if (m.default_model) out[m.id] = m.default_model;
-  }
-  return out;
-}
-
 /** 后端权威解析一批模型的上下文窗口（值 + 来源分层）。
  *  后端拥有 catalog（`get_model_context_length_with_source`），前端不再本地镜像
  *  `DEFAULT_CONTEXT_LENGTHS` —— 那份手抄表与后端必然漂移。 */

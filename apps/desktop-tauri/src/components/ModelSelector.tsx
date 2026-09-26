@@ -33,21 +33,8 @@ export function useModelSelector() {
         }
       }
     } catch {}
-    try {
-      const cacheRaw = storage.getItem(STORAGE_KEYS.modelCache);
-      const defRaw = storage.getItem(MODEL_CONFIG_KEY);
-      const def = defRaw ? ((JSON.parse(defRaw) as ModelConfigData).defaultModel ?? "") : "";
-      if (cacheRaw) {
-        const cache = JSON.parse(cacheRaw) as Record<string, string[]>;
-        const enabled: { providerId: string; modelId: string }[] = [];
-        for (const [pid, mids] of Object.entries(cache)) {
-          for (const mid of mids || []) enabled.push({ providerId: pid, modelId: mid });
-        }
-        if (enabled.length > 0) {
-          return { enabled, defaultModel: def };
-        }
-      }
-    } catch {}
+    // 语义（主人拍板"三刀"）：enabled 为空就是空——不再用 modelCache 全量
+    // 目录冒充可选列表。未启用模型不会出现在聊天选择器，空态提示去设置启用。
     return { enabled: [], defaultModel: "" };
   });
   const [selectedModel, setSelectedModel] = useState(() =>
@@ -182,26 +169,6 @@ export function useModelSelector() {
     return Array.from(map.values());
   }, [models, metaIds]);
 
-  const availableExtras = useMemo(() => {
-    try {
-      const raw = storage.getItem(STORAGE_KEYS.modelCache);
-      if (!raw) return [] as typeof models;
-      const cache = JSON.parse(raw) as Record<string, string[]>;
-      const enabledIds = new Set(models.map((m) => m.id));
-      const out: typeof models = [];
-      for (const [pid, mids] of Object.entries(cache)) {
-        for (const mid of mids || []) {
-          const id = `${pid}:${mid}`;
-          if (enabledIds.has(id)) continue;
-          out.push({ id, display: mid, provider: pid });
-        }
-      }
-      return out;
-    } catch {
-      return [] as typeof models;
-    }
-  }, [models]);
-
   const currentDisplay = useMemo(() => {
     if (!models || models.length === 0) {
       return "未配置，请先配置模型";
@@ -210,5 +177,5 @@ export function useModelSelector() {
     return found ? found.display : (selectedModel || "未配置，请先配置模型");
   }, [models, selectedModel]);
 
-  return { models, byProvider, availableExtras, selectedModel, setSelectedModel, currentDisplay, defaultModel };
+  return { models, byProvider, selectedModel, setSelectedModel, currentDisplay, defaultModel };
 }

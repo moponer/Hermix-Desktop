@@ -19,9 +19,7 @@ import {
   CONTEXT_WINDOW_OPTIONS,
   resolveContextWindow,
   defaultOptionLabel,
-  isChatModel,
   pickDefaultModel,
-  mergeFetchedModels,
   type ModelConfigData,
 } from "./settingsUtils";
 
@@ -60,18 +58,6 @@ async function probeProviderModels(keyEnvVar: string, baseUrl: string): Promise<
   return [];
 }
 
-/**
- * 把探测到的模型并入配置。
- *
- * 只自动启用**可对话**模型（`isChatModel`）：厂商 `/v1/models` 返回的是全量
- * 目录，含 embedding / rerank / tts / 图像模型，全量塞进「已启用模型」会让
- * 列表爆炸，还可能把非对话模型顶成默认。未自动启用的模型仍留在 modelCache，
- * 可在聊天窗口的模型选择器里手动勾选。
- *
- * 默认模型只在原本为空时补一个，优先命中后端权威清单（`defaults`）。
- */
-// 实现已抽到 settingsUtils.ts（纯函数 + 单测覆盖，此前埋在本文件里没法测）。
-
 // ── Model Tab（统一供应商面板） ────────────────────
 //
 // 单一配置面板，内置 provider 与自定义 provider 共享同一份 config state
@@ -101,8 +87,6 @@ export function ModelTab() {
   const [providerKeyInput, setProviderKeyInput] = useState<Record<string, string>>({});
   // 单行短暂绿闪用的 key（fid），700ms 后自清
   const [flashKey, setFlashKey] = useState<string | null>(null);
-  // 后端权威默认模型（provider id → model），用于首次自动选中可对话模型
-  const [providerDefaults, setProviderDefaults] = useState<Record<string, string>>({});
 
   // 写后端失败必须可见：localStorage 写了、config.yaml 没写时，UI 显示"已配置"
   // 而聊天报"未配置模型"。此前这个失败被静默吞掉。
@@ -140,11 +124,6 @@ export function ModelTab() {
       // 从缓存恢复（fetch 失败时不让 UI 全空）
       const cached = loadModelCache();
       if (Object.keys(cached).length > 0) setFetchedModels(cached);
-
-      // 后端权威的"每家该用哪个模型"清单 —— 首次自动选中优先命中它，
-      // 而不是厂商 /v1/models 全量目录里字典序第一个（那可能是 embedding）。
-      const defaults = await api.getProviderDefaults().catch(() => ({} as Record<string, string>));
-      setProviderDefaults(defaults);
 
       // 已启用列表的起点是后端持久化清单（config.yaml 的 model_selector）——
       // 它是权威，localStorage 只在后端不可达时兜底。此前反过来（localStorage
@@ -228,12 +207,17 @@ export function ModelTab() {
       ? config.enabled.filter((m) => fullId(m.providerId, m.modelId) !== key)
       : [...config.enabled, { providerId, modelId }];
     const defaultCleared = exists && config.defaultModel === key;
+    // 首次勾选即设默认（主人拍板"三刀"语义）：不再自动启用后，用户的
+    // 第一次勾选就是"我要用这个模型"，直接顶掉空默认，省一次点击。
+    const newDefault = exists
+      ? (defaultCleared ? "" : config.defaultModel)
+      : (config.defaultModel || fid);
     const newConfig: ModelConfigData = {
       enabled: newEnabled,
-      defaultModel: defaultCleared ? "" : config.defaultModel,
+      defaultModel: newDefault,
       modelContexts: config.modelContexts ?? {},
       // 移除写墓碑：厂商 /v1/models 目录里必然还挂着该模型，没有墓碑的话
-      // 「获取模型」的自动合并会把它加回来；重新启用则撤掉墓碑。
+      // 重新进入设置页时会把它当未启用项再次列出；重新启用则撤掉墓碑。
       dismissed: exists
         ? [...new Set([...(config.dismissed ?? []), key])]
         : (config.dismissed ?? []).filter((d) => d !== key),
@@ -310,26 +294,21 @@ export function ModelTab() {
       if (models.length === 0) { setError("未返回任何模型"); setLoadingProvider(null); return; }
       setFetchedModels((prev) => ({ ...prev, [p.id]: models }));
 
-      // 先 await 落盘再调 auto-correct：否则 auto-correct 会抢在前端写盘之前，
-      // 按 provider 优先级把用户刚选的默认模型改掉（UI 显示 A、实际跑 B）。
-      const next = mergeFetchedModels(config, [{ id: p.id, models }], providerDefaults);
-      setConfig(next);
-      await writeModelConfigAndNotify(next);
+      // 语义（主人拍板"三刀"）：获取模型只更新目录缓存，不自动启用任何模型。
+      // enabled/defaultModel 完全由用户勾选驱动（首次勾选即设默认），保证
+      // 聊天窗口可选的模型始终 = 用户显式启用的模型。
 
-      const chatCount = models.filter(isChatModel).length;
-      let message = chatCount < models.length
-        ? `已启用 ${chatCount} 个对话模型；另有 ${models.length - chatCount} 个非对话模型未启用，可在聊天窗口的模型选择器里手动勾选`
-        : "";
+      let message = `已获取 ${models.length} 个模型，请在「已启用模型」上方勾选要启用的（首次勾选即设为默认）`;
       try {
         const r = await api.autoCorrectConfig();
         if (r.report) message = r.message;
       } catch {}
-      if (message) setInfo(message);
+      setInfo(message);
     } catch (e) {
       setError(`获取失败: ${e instanceof Error ? e.message : String(e)}`);
     }
     setLoadingProvider(null);
-  }, [providerKeyInput, config, providerDefaults]);
+  }, [providerKeyInput]);
 
   /** CustomProviderSection 的 setDefault 是 fullId 签名，适配为 (pid, mid) → fullId。 */
   const setDefaultByFullId = useCallback((fid: string) => {
@@ -817,35 +796,22 @@ export function CustomProviderSection({
       setProviderModels((prev) => ({ ...prev, [safeId]: models }));
       onModelsFetched(safeId, models);
       const probedWithWindow = resp.models.filter((m) => typeof m.context_window === "number" && (m.context_window as number) > 0);
-      // 默认模型不取字典序第一个（可能是 embedding / rerank 模型）
-      const pickedDefault = pickDefaultModel(models);
-      // 新建 provider 路径：config 闭包即当前挂载值（handler 内无其它 setConfig 竞争），
-      // 直接纯计算 next 后一次性 setConfig + 落盘 + 推后端，全程无 updater、无副作用入回调。
-      const existing = new Set(config.enabled.map((m) => `${m.providerId}:${m.modelId}`));
-      const newEnabled = [...config.enabled];
-      models.forEach((modelId) => {
-        const key = `${safeId}:${modelId}`;
-        if (!existing.has(key)) newEnabled.push({ providerId: safeId, modelId });
-      });
+      // 语义（主人拍板"三刀"）：获取模型只更新目录缓存，不自动启用/设默认。
+      // enabled/defaultModel 完全由用户勾选驱动（首次勾选即设默认）。
       const nextContexts: Record<string, number> = { ...(config.modelContexts ?? {}) };
       for (const m of probedWithWindow) {
         const key = `${safeId}:${m.id}`;
         if (!nextContexts[key] || nextContexts[key] === 0) nextContexts[key] = m.context_window as number;
       }
-      const next: ModelConfigData = {
-        ...config,
-        enabled: newEnabled,
-        defaultModel: config.defaultModel || (pickedDefault ? `${safeId}:${pickedDefault}` : config.defaultModel),
-        modelContexts: nextContexts,
-      };
-      setConfig(next);
-      void writeModelConfigAndNotify(next);
       if (probedWithWindow.length > 0) {
+        const next: ModelConfigData = { ...config, modelContexts: nextContexts };
+        setConfig(next);
+        void writeModelConfigAndNotify(next);
         api.updateCustomProviderModelContexts(safeId, nextContexts).catch((e) => { console.warn("[CustomProviderSection] sync probed contexts (new) failed:", e); });
       }
       api.getCustomProviders().then((list) => setProviders(list)).catch(() => { /* non-fatal */ });
       onRefresh();
-      setSuccess(`成功获取 ${models.length} 个模型${probedWithWindow.length > 0 ? `, ${probedWithWindow.length} 个已自动填入探测的 context_window` : ""}`);
+      setSuccess(`成功获取 ${models.length} 个模型${probedWithWindow.length > 0 ? `, ${probedWithWindow.length} 个已自动填入探测的 context_window` : ""}，请勾选要启用的（首次勾选即设为默认）`);
       setEditingId(null); setName(""); setApiUrl(""); setApiKey(""); setModelInput("");
     } catch (e: unknown) {
       if (e instanceof Error) {

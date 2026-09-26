@@ -122,55 +122,6 @@ export function pickDefaultModel(
   return chat.length > 0 ? chat[0] : null;
 }
 
-/** `"provider:model"` 拼装 —— 与 useCurrentModel / ModelSelector 的约定一致。 */
-function fullId(providerId: string, modelId: string): string {
-  return `${providerId}:${modelId}`;
-}
-
-/**
- * 把探测到的模型并入模型配置。
- *
- * 只自动启用**可对话**模型（`isChatModel`）：厂商 `/v1/models` 返回的是全量
- * 目录，含 embedding / rerank / tts / 图像模型，全量塞进「已启用模型」会让
- * 列表爆炸，还可能把非对话模型顶成默认。未自动启用的模型仍留在 modelCache，
- * 可在聊天窗口的模型选择器里手动勾选。
- *
- * `base.dismissed` 里的条目（用户显式移除过的模型）不再自动加回——目录里
- * 必然还挂着它们，没有墓碑过滤的话每次合并都会复活刚删的模型。用户重新
- * 启用时由调用方撤掉墓碑。
- *
- * 默认模型只在原本为空时补一个，优先命中后端权威清单（`defaults`）。
- * 无变化时返回原对象（引用相等），调用方可据此跳过落盘。
- */
-export function mergeFetchedModels(
-  base: ModelConfigData,
-  probed: { id: string; models: string[] }[],
-  defaults: Record<string, string> = {},
-): ModelConfigData {
-  if (probed.length === 0) return base;
-  const seen = new Set(base.enabled.map((m) => fullId(m.providerId, m.modelId)));
-  const dismissed = new Set(base.dismissed ?? []);
-  const enabled = [...base.enabled];
-  for (const { id, models } of probed) {
-    for (const modelId of models.filter(isChatModel)) {
-      const key = fullId(id, modelId);
-      if (!seen.has(key) && !dismissed.has(key)) {
-        seen.add(key);
-        enabled.push({ providerId: id, modelId });
-      }
-    }
-  }
-  let defaultModel = base.defaultModel;
-  if (!defaultModel) {
-    for (const { id, models } of probed) {
-      const picked = pickDefaultModel(models, defaults[id]);
-      if (picked) { defaultModel = fullId(id, picked); break; }
-    }
-  }
-  if (enabled.length === base.enabled.length && defaultModel === base.defaultModel) return base;
-  return { enabled, defaultModel, modelContexts: base.modelContexts ?? {}, dismissed: base.dismissed };
-}
-
 // ── Context window resolution (后端权威解析 + 来源透明化) ─────
 //
 // 后端拥有 catalog，前端不再镜像。解析在
