@@ -105,7 +105,14 @@ never paraphrase them into vague bullets that lose the actual ask.\n\
 • PRIORITISE TASK GOALS AND PENDING TODOS: keep the '## Goal' and '## Progress → In Progress' / '## Next Steps' \
 sections COMPLETE. When you must shorten, drop greetings, redundant commentary, and duplicate tool output FIRST — \
 never sacrifice a task requirement, goal, or pending todo item to save space.\n\
-• A pending task list must never be silently truncated, merged, or reordered away.\n\n";
+• A pending task list must never be silently truncated, merged, or reordered away.\n\
+• DROP SUPERSEDED OPTIONS: if the user's most recent message rejects, revises, or supersedes \
+options / plans / alternatives that an earlier assistant turn proposed (e.g. the user abandons an \
+offer of multiple choices and redirects the work, or issues a new instruction that replaces pending \
+follow-ups), those superseded options MUST be removed from '## Next Steps' / '## In Progress' — do \
+NOT carry them forward as pending work. The user's latest instruction is the authoritative task; \
+when it conflicts with earlier proposed options or pending items, the earlier ones are obsolete and \
+must be discarded so a downstream assistant does not re-issue or execute them.\n\n";
 
         if let Some(prev) = self.previous_summary.as_ref() {
             format!(

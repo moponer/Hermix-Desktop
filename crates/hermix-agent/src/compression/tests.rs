@@ -449,6 +449,158 @@ use hermix_core::types::ContentPart;
         assert_eq!(provider.call_count(), 2);
     }
 
+    // ---------- 复现：用户纠正后，过时选项经压缩 summary 被固化为"待执行 Next Steps" ----------
+
+    /// 捕获式 provider：记录它收到的 summary prompt（`build_summary_prompt` 的
+    /// 完整输入），并按策略输出 canned summary。用于钉死"被用户推翻的选项
+    /// 是否原样进入 summary 输入"这一机制事实。
+    struct CapturingSummaryProvider {
+        canned: String,
+        captured_prompt: Mutex<Option<String>>,
+    }
+
+    impl CapturingSummaryProvider {
+        fn new(canned: impl Into<String>) -> Arc<Self> {
+            Arc::new(Self {
+                canned: canned.into(),
+                captured_prompt: Mutex::new(None),
+            })
+        }
+        fn prompt(&self) -> String {
+            self.captured_prompt.lock().unwrap().clone().unwrap_or_default()
+        }
+    }
+
+    #[async_trait]
+    impl LlmProvider for CapturingSummaryProvider {
+        async fn chat_completion(
+            &self,
+            messages: &[Message],
+            _tools: &[ToolSchema],
+            _max_tokens: Option<u32>,
+            _temperature: Option<f64>,
+            model: Option<&str>,
+            _extra_body: Option<&serde_json::Value>,
+        ) -> Result<LlmResponse, AgentError> {
+            if let Some(m) = messages.first() {
+                *self.captured_prompt.lock().unwrap() = m.content.clone();
+            }
+            Ok(LlmResponse {
+                message: Message {
+                    role: MessageRole::Assistant,
+                    content: Some(self.canned.clone()),
+                    content_parts: None,
+                    tool_calls: None,
+                    tool_call_id: None,
+                    name: None,
+                    reasoning_content: None,
+                    cache_control: None,
+                    execution_timeline: None,
+                    unified_steps: None,
+                    ephemeral: false,
+                },
+                finish_reason: Some("stop".into()),
+                model: model.unwrap_or("test").to_string(),
+                usage: Some(UsageStats {
+                    prompt_tokens: 1,
+                    completion_tokens: 1,
+                    total_tokens: 2,
+                    estimated_cost: None,
+                    cache_read_tokens: 0,
+                    cache_creation_tokens: 0,
+                    reasoning_tokens: 0,
+                }),
+            })
+        }
+        fn chat_completion_stream(
+            &self,
+            _m: &[Message],
+            _t: &[ToolSchema],
+            _x: Option<u32>,
+            _temp: Option<f64>,
+            _model: Option<&str>,
+            _eb: Option<&serde_json::Value>,
+        ) -> BoxStream<'static, Result<StreamChunk, AgentError>> {
+            Box::pin(futures::stream::empty())
+        }
+    }
+
+    /// 复现场景（用户纠正 → 压缩 → 发"继续" → LLM 复读过时选项）的
+    /// **机制证据**：被用户推翻的"阶段总结 + A/B/C/D 选项"会原样序列化
+    /// 进 summary 输入 block。这是缺陷的物理基础 —— LLM 随后按
+    /// `PRESERVE_RULES` 把这些选项固化为 `Next Steps`，后续轮经
+    /// `SUMMARY_PREFIX` 的 TASK RECOVERY 指令反复重放。
+    #[tokio::test]
+    async fn serialize_carries_stale_options_into_summary_input() {
+        let provider = CapturingSummaryProvider::new("Goal: x");
+        let aux = aux_with_provider(provider.clone());
+        let mut compressor = ContextCompressor::new(quiet_config(), aux);
+
+        // 旧轮：assistant 给出"阶段总结 + A/B/C/D 选项"（用户尚未拍板）
+        let turns = vec![
+            msg(MessageRole::User, "分析这个模块并给方案"),
+            msg(
+                MessageRole::Assistant,
+                "## 阶段总结\n当前完成 X。\n选项：A. 做 a；B. 做 b；C. 做 c；D. 做 d。请选一个。",
+            ),
+            // 用户纠偏：推翻 A/B/C/D，改走全新方向
+            msg(MessageRole::User, "别搞这些选项了，方向不对，改成 Y 方案"),
+            // 用户发"继续"（无信息量短指令）
+            msg(MessageRole::User, "继续"),
+        ];
+
+        let _summary = compressor.generate_summary(&turns).await.unwrap();
+        let prompt = provider.prompt();
+
+        // 机制事实（当前就应成立）：过时的选项文本原样进入了 summary 输入
+        assert!(prompt.contains("A. 做 a"), "选项 A 应出现在 summary 输入 block 中");
+        assert!(prompt.contains("B. 做 b"), "选项 B 应出现在 summary 输入 block 中");
+        assert!(prompt.contains("阶段总结"), "阶段总结文本应出现在 summary 输入 block 中");
+        // 用户的纠偏指令也在输入里（PRESERVE_RULES 会把它作为最近任务保住）
+        assert!(prompt.contains("改成 Y 方案"), "用户纠偏指令应出现在 summary 输入 block 中");
+    }
+
+    /// 缺陷态（**修复前红、修复后绿**）：summary 生成侧**没有**把"被用户
+    /// 明确推翻/作废的选项"从 `Next Steps` 中移除，导致过时的 A/B/C/D
+    /// 固化为"待执行任务"，后续每轮经 `SUMMARY_PREFIX` 的 TASK RECOVERY
+    /// 指令反复重放 —— 这就是"继续"后 LLM 复读过时选项的根因。
+    ///
+    /// 修复（P2：PRESERVE_RULES 增加"被用户推翻的选项必须移除"规则 +
+    /// P1：`SUMMARY_PREFIX` 加"以用户最新指令为准，丢弃被推翻项"文案）
+    /// 落地后，prompt 会显式要求 LLM 移除被推翻项，此断言由红转绿。
+    #[tokio::test]
+    async fn summary_prompt_tells_llm_to_drop_superseded_options() {
+        let provider = CapturingSummaryProvider::new("Goal: do Y");
+        let aux = aux_with_provider(provider.clone());
+        let mut compressor = ContextCompressor::new(quiet_config(), aux);
+
+        let turns = vec![
+            msg(MessageRole::User, "分析这个模块并给方案"),
+            msg(
+                MessageRole::Assistant,
+                "## 阶段总结\n当前完成 X。\n选项：A. 做 a；B. 做 b；C. 做 c；D. 做 d。请选一个。",
+            ),
+            msg(MessageRole::User, "别搞这些选项了，方向不对，改成 Y 方案"),
+            msg(MessageRole::User, "继续"),
+        ];
+
+        let _summary = compressor.generate_summary(&turns).await.unwrap();
+        let prompt = provider.prompt();
+
+        // 缺陷态：prompt 目前只强调"保留 Next Steps 完整"，没有任何指令告诉
+        // LLM "被用户推翻的选项要移除、以用户最新指令为准"。
+        let instructs_drop = prompt.to_lowercase().contains("superseded")
+            || prompt.contains("推翻")
+            || prompt.contains("作废")
+            || prompt.contains("被用户")
+            && prompt.contains("移除");
+        assert!(
+            instructs_drop,
+            "summary prompt 应显式要求 LLM 移除被用户推翻/作废的选项（当前缺陷态：\
+             PRESERVE_RULES 只强调保留，无移除指令）"
+        );
+    }
+
     #[tokio::test]
     async fn generate_summary_arms_cooldown_on_failure() {
         let aux = aux_with_provider(Arc::new(FailingProvider));

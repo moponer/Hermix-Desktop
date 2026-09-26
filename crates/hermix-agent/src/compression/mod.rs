@@ -47,6 +47,10 @@ pub const SUMMARY_PREFIX: &str =
      • Read the summary carefully — it contains your task context.\n\
      • Check 'In Progress' and 'Blocked' sections — resume from that point.\n\
      • Check 'Next Steps' — execute those unless the user provides new instructions.\n\
+     • SUPERSEDED OPTIONS ARE OBSOLETE: if a recent user message rejected, revised, or \
+     redirected away from options/plans listed in 'Next Steps' or 'In Progress', treat those \
+     items as superseded — follow the user's most recent instruction instead. Do NOT re-issue, \
+     re-echo, or execute options the user has already moved past.\n\
      • Do NOT restart completed work listed in 'Done' section.\n\
      • If the summary mentions specific files, verify their current state before acting.\n\n\
      IMPORTANT — read before responding:\n\
