@@ -87,6 +87,8 @@ export function ModelTab() {
   const [providerKeyInput, setProviderKeyInput] = useState<Record<string, string>>({});
   // 单行短暂绿闪用的 key（fid），700ms 后自清
   const [flashKey, setFlashKey] = useState<string | null>(null);
+  // 「未启用模型」分组折叠态（仿 CustomProviderSection 互斥展开的单一布尔版）
+  const [showDismissed, setShowDismissed] = useState(false);
 
   // 写后端失败必须可见：localStorage 写了、config.yaml 没写时，UI 显示"已配置"
   // 而聊天报"未配置模型"。此前这个失败被静默吞掉。
@@ -338,6 +340,23 @@ export function ModelTab() {
       });
   }, [config.enabled, config.defaultModel, config.modelContexts, customIdsWithKey, providerName]);
 
+  // 未启用模型 = 目录缓存里拿到但既未启用也未手动排除的（勾选启用入口；
+  // dismissed 墓碑是「已启用区移除」的排除信号，这里直接过滤不展示）
+  const availableRows = useMemo(() => {
+    const enabledSet = new Set(config.enabled.map((e) => fullId(e.providerId, e.modelId)));
+    const dismissedSet = new Set(config.dismissed ?? []);
+    const out: { providerId: string; modelId: string; fid: string; providerName: string; isCustom: boolean }[] = [];
+    for (const [pid, models] of Object.entries(fetchedModels)) {
+      if (pid.startsWith("custom-") && !customIdsWithKey.has(pid)) continue; // 防僵尸
+      for (const mid of models) {
+        const fid = fullId(pid, mid);
+        if (enabledSet.has(fid) || dismissedSet.has(fid)) continue;
+        out.push({ providerId: pid, modelId: mid, fid, providerName: providerName(pid), isCustom: pid.startsWith("custom-") });
+      }
+    }
+    return out.sort((a, b) => a.providerName.localeCompare(b.providerName) || a.modelId.localeCompare(b.modelId));
+  }, [fetchedModels, config.enabled, config.dismissed, customIdsWithKey, providerName, fullId]);
+
   // 上下文窗口由后端权威解析 —— 后端拥有 catalog，前端不再手抄一份。
   const enabledFids = useMemo(() => enabledRows.map((r) => r.fid), [enabledRows]);
   const contextWindows = useContextWindows(enabledFids);
@@ -437,7 +456,7 @@ export function ModelTab() {
           {enabledRows.length === 0 ? (
             <p className="text-[12px] text-text-muted italic py-3">尚未启用任何模型。展开下方「供应商」→ 获取模型 → 在「已启用模型」勾选启用。</p>
           ) : (
-            <ul className="space-y-1.5">
+            <ul className="space-y-1.5 max-h-96 overflow-y-auto pr-1">
               {enabledRows.map((row) => (
                 <EnabledModelRow
                   key={row.fid}
@@ -450,6 +469,42 @@ export function ModelTab() {
                 />
               ))}
             </ul>
+          )}
+          {/* 未启用模型折叠分组：勾选即启用（toggleModel 自动撤墓碑 + 首次设默认），与 dismissed 互斥 */}
+          {availableRows.length > 0 && (
+            <div className="mt-3 pt-3 border-t border-border-primary/50">
+              <button
+                type="button"
+                onClick={() => setShowDismissed((s) => !s)}
+                aria-expanded={showDismissed}
+                className="flex items-center gap-2 w-full text-left hover:text-accent transition-colors"
+              >
+                <ChevronRight className={`icon-sm shrink-0 text-text-muted transition-transform duration-base ${showDismissed ? "rotate-90" : ""}`} />
+                <span className="text-[12px] font-medium text-text-secondary">未启用模型</span>
+                <span className="text-[11px] text-text-faint">({availableRows.length})</span>
+              </button>
+              {showDismissed && (
+                <ul className="mt-2 space-y-1 max-h-64 overflow-y-auto pr-1">
+                  {availableRows.map((row) => (
+                    <li key={row.fid} className="flex items-center gap-2 bg-bg-card border border-border-primary rounded-lg px-3 py-2">
+                      <span className="text-[11px] text-text-muted shrink-0 max-w-24 truncate" title={row.providerName}>
+                        {row.providerName}
+                      </span>
+                      <span className="font-mono text-[12px] text-text-primary flex-1 min-w-0 truncate" title={row.modelId}>
+                        {row.modelId}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => toggleModel(row.providerId, row.modelId)}
+                        className="text-[11px] text-accent hover:underline shrink-0"
+                      >
+                        启用
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
           )}
         </section>
 
@@ -523,7 +578,7 @@ export function ModelTab() {
                   <p className="text-[11px] text-text-muted">
                     {modelCount > 0
                       ? `已获取 ${modelCount} 个模型 → 切到上方「已启用模型」勾选启用`
-                      : "填写 API Key 后点击获取，模型会缓存到本地并自动启用"}
+                      : "填写 API Key 后点击获取，模型缓存到本地（不会自动启用）→ 在上方「未启用模型」勾选启用"}
                   </p>
                 </div>
               </div>
