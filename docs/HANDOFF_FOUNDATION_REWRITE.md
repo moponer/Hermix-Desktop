@@ -1,7 +1,7 @@
 # 交接文档：Hermix 底座重写 + 网络安全层（给后续开发 agent）
 
 > 更新时间：2026-09-25。本文是唯一权威交接入口。动手前**必须完整读完本文 + 必读文档清单**，禁止跳读后自行发挥。
-> 当前累计 76 个 commit（52 + 本批 24：… `835fa7ff` / `3071fc90` / `340ec5ad` / `322a039d` / `71f79d16` + 本文档 commit）。工作区除 §7 未跟踪遗留物（`??` 行：WorkbenchChat.tsx / DiagnosticsTab.tsx / design-previews / 各 design.md / probe 脚本，属别的 agent，勿动）外干净。最近 commit：`71f79d16`（PowerShell 原生破坏性 cmdlet 补确认规则）+ `322a039d`（路由剥壳前缀后吃掉旧习惯旗标）+ `340ec5ad`（ssh.rs 引号函数换 shlex）。
+> 当前累计 78 个 commit（52 + 本批 26：… `835fa7ff` / `3071fc90` / `340ec5ad` / `322a039d` / `71f79d16` + `1dd2895b` / `0d61fb90`（Windows ACL 沙箱批次）+ 本文档 commit）。工作区除 §7 未跟踪遗留物（`??` 行：WorkbenchChat.tsx / DiagnosticsTab.tsx / design-previews / 各 design.md / probe 脚本，属别的 agent，勿动）外干净。最近 commit：`1dd2895b`（Windows ACL restricted-token 沙箱）+ `0d61fb90`（沙箱设计文档）。
 > 本批新增 commit：`87bb2b9a` / `b51a32a1` / `3cc45b72` / `f062c5ad` / `e1a75115` / `20b6eda8` / `ab7aad02` / `c208f10f` / `9d897704` / `640eeb57` / `6979313c` / `a8f4e547` / `63e3b174` / `0918f7a5` / `cead162d` / `5fab0ec2` / `6892a043` / `29392b57` / `e651c311` / `adfc8ca5` / `acf1fea1` / `e91ac42e` / `fd238361` / `fc2f425a` / `d7abee4d` / `e5f728a1` / `f985eade` / `bc8a6e6c` / `64d145de` / `9ff58666` / `bc2f7da` / `e3955b7a` / `8f3e7a67` / `e8534365` / `45e02378` / `ae71666c` / `08307f7e` / `25aa6fff` / `db892c6d` / `00074e0b` / `231a7dd6` / `d115b591` / `1c628052` / `2b14e53a` / `afdedf5a` / `9bdef3a8` / `835fa7ff` / `3071fc90` / `340ec5ad` / `322a039d` / `71f79d16` / 本文档 commit（命令执行对齐第三段收口刷新）。
 
 ---
@@ -342,6 +342,20 @@ CARGO_INCREMENTAL=0 cargo test -p <crate> --lib   # 改了哪个 crate 测哪个
   - **收口验证**：workspace check 绿 / hermix-environments lib **53 全绿**（默认 49 + ssh feature 下 +4）/ hermix-tools lib **699 全绿**（697+2）/ hermix-agent 本段未动。
   - **教训（commit 安全门）**：commit message 含 `rm -rf /` 等破坏性命令字面量会被凭证安全门拦截（连续两次 block），改用不含该字面量的描述（"含分号的注入串"）后放行——写 commit 描述描述漏洞形态时用模式描述而非完整命令字面量。
 - **后续批次（划出）**：pi 的 `OutputAccumulator`（滚动 buffer + 超限落 temp file + tail 截断 + 流式 onData）——属 UI 流式输出批次，非命令执行模型；deepseek-harness 的 in-process shell program 表（VFS + 30+ JS 函数）——属 webworker 沙箱实验层，本仓库非 webworker 架构，不适用。
+
+**已落**（Windows ACL 沙箱批次 — deepseek-harness `sandbox-windows-acl` 方案对齐，`1dd2895b` + `0d61fb90`）：
+- **主人拍板**："需要补上，尽量使用人家成熟的方式"——取证 deepseek-harness 有完整 `packages/sandbox` 组（fail-closed `SANDBOX_UNAVAILABLE`，三模式 read-only/workspace-write/danger-full-access，审批是沙箱之上的 escalation 出口）；其 Windows 方案是**裸 ACL restricted token**（非 AppContainer，决策文档已论证）。pi agent 无 OS 沙箱（纯审批模型），故参照源取 deepseek。
+- **实现（`1dd2895b`，`crates/hermix-environments/src/sandbox.rs` ~1000 行）**：
+  - 受限 token：`CreateRestrictedToken(WRITE_RESTRICTED | DISABLE_MAX_PRIVILEGE | LUA_TOKEN)`；restricting 列表 = logon SID + Everyone + 能力 SID（logon/Everyone 是 keep-alive 不变量，缺一即 0xC0000142）；token default DACL 并入 restricting SID full-access ACE（否则新建匿名管道 EPERM）；完整性降到 Low。
+  - 能力 SID：sha256 路径派生 `S-1-4-x-y`（工作区）/ `S-1-4-x-y-1`（temp，域分离防兄弟会话互写）；跨会话确定性 → standing ACE 复用。
+  - ACL 授权（精确对齐 acl.ts）：单次 `SetNamedSecurityInfoW` 落三编辑——能力 SID `GRANT_MASK` allow（OI|CI）+ world `FILE_DELETE_CHILD` deny（仅 CI，落文件会挡 FILE_ALL_ACCESS 打开）+ Low 强制标签；幂等 skip 靠 `has_exact_entry` 全等判定（防 eager 继承全树重传播）；per-API 逐个检查 fail-closed。
+  - 进程内 runner：`CreateProcessAsUserW` + 匿名管道 stdio（父端去继承位）+ NUL stdin + UTF-16 env block（TMP/TEMP 重定向私有 temp）+ `STARTF_USESHOWWINDOW|SW_HIDE` 隐藏控制台（受限创建禁用 CREATE_NO_WINDOW——STATUS_DLL_INIT_FAILED）。
+  - 生命周期：`SandboxSession::provision(mode, workspace)` 一次配置（temp 恒授——read-only 模式下 PowerShell 探针要写私有 temp 保 FullLanguage；workspace 仅 workspace-write 模式授）；Drop 收 token + 删 temp（ACE 随目录销毁，免 revoke FFI）。
+  - ABI 全部走 windows-sys 0.52 官方绑定（不自写 extern——布局错=静默栈损坏）；零新增依赖树（windows-sys 已在 lock）。
+- **设计文档（`0d61fb90`）**：`docs/SANDBOX_WINDOWS_ACL_DESIGN.md`——最小切片定界 + 对抗式审查表 + 测试钉死清单。
+- **已知边界（与 deepseek 相同，非 bug）**：FAT/exFAT 无 ACL 不承诺；enforcement 如实为 `partial`（hard-link 别名、读不受限）；崩溃残留 temp = 惰性垃圾（文档化）。
+- **验证**：workspace check 绿；hermix-environments lib **63 全绿**（53 基线 + 10：SID 派生确定性/域分离/30-bit 值域、引号 roundtrip、overlap/root 校验、env block TMP/TEMP 覆盖）；`danger-full-access` 在 call site 绕行（provision 直接报错，语义由审批层承接）。
+- **教训**：windows-sys 0.52 的 `HANDLE` 是 `isize`（非指针，`is_null()` 不适用）；`SE_GROUP_*`/`SYSTEM_MANDATORY_LABEL_*` 在 `SystemServices` 模块；`EXPLICIT_ACCESS_W` 带下划线（非 `EXPLICIT_ACCESSW`）；`SetEntriesInAclW` 收带下划线结构体。
 
 **已落**（P6 T6 暴力破解 IP 锁定）：
 - `security.rs` 新增 `AuthFailLockout`（仿 `RateLimiter` 的 `Arc<Mutex<HashMap<String,(Vec<Instant>,Option<Instant>)>>` 模式，纯内存 headless 可验）：按 source IP 累计认证失败时间戳，窗口内达 `threshold` 即锁定 `cooldown` 期；冷却期内持续失败走**有界续期**（`until + cooldown` 但封顶 `now + 2*cooldown`，防滑动窗口导致攻击者永不解锁）；成功认证 `record_success` 清零该 IP 计数与锁定（合法用户输错后输对了不累积）
