@@ -1,7 +1,7 @@
 # 交接文档：Hermix 底座重写 + 网络安全层（给后续开发 agent）
 
 > 更新时间：2026-09-26。本文是唯一权威交接入口。动手前**必须完整读完本文 + 必读文档清单**，禁止跳读后自行发挥。
-> 当前累计 91 个 commit（52 + 本批 39：… `c4f73379`（砍 /api/migration/*）+ `2ee5dfd6`（砍 /v1/voice/synthesize）+ `25f410b4`（文档刷新 85→88）+ `181a51aa`（砍 /v1/ws + /v1/ws-stream 裸路由 + WsTransport 死代码链）+ `e8aaa1fb`（砍 4 条 ops/debug 端点）+ `d38238f0`（砍 /api/logs REST 端点）+ 本文档 commit）。工作区除 §7 已 gitignore 的临时产物（`.scratch/`、`design-previews/`）外干净。最近 commit：`d38238f0`（砍 /api/logs 零消费 REST 端点，前端日志面板走 Rust 直读）。
+> 当前累计 92 个 commit（52 + 本批 40：… `c4f73379`（砍 /api/migration/*）+ `2ee5dfd6`（砍 /v1/voice/synthesize）+ `25f410b4`（文档刷新 85→88）+ `181a51aa`（砍 /v1/ws + /v1/ws-stream 裸路由 + WsTransport 死代码链）+ `e8aaa1fb`（砍 4 条 ops/debug 端点）+ `d38238f0`（砍 /api/logs REST 端点）+ `162f932f`（模型/供应商配置面 setConfig 反模式清理）+ 本文档 commit）。工作区除 §7 已 gitignore 的临时产物（`.scratch/`、`design-previews/`）外干净。最近 commit：`162f932f`（模型/供应商配置面 setConfig 回调内副作用反模式清理）。
 
 **已落**（前后端端点审计 + 砍路由/死代码批次 — `d361cdfc` + `fd3bd371`）：
 - **审计**：全量交叉比对 hermix-server 路由表 vs 前端 `rest.ts` 调用面（subagent 双抓 + 定向核实）。结论：前端无调用任何后端不存在的路径（无 404 风险）；问题全在反方向——后端有多条路由前端零消费。
@@ -15,6 +15,10 @@
   - 4 条 ops/debug 端点（`e8aaa1fb`）：`/v1/telemetry/client-event` + `/metrics` + `/v1/protocol/schema` + `/v1/metrics`（snapshot，清单漏列）。全项目 grep 零调用，便携零安装桌面端无消费场景，按 YAGNI 直接砍（非 feature gate——无调用方需保留）。删 4 handler + `lib.rs::ClientTelemetryEvent` 零消费类型 + 未用 `IntoResponse` import + `http_smoke.rs::metrics_prometheus_has_counters` 测试。保留 `crate::metrics` 引擎（`MetricsCollector` 被 `approval.rs` 消费）。
   - `/api/logs` REST 端点（`d38238f0`）：审计清单原写"前端已改直读文件"，核实发现 `rest.ts::getLogs` 仍在消费 `/api/logs`——但 `getLogs` 全前端零 import（DiagnosticsTab 实际走 `readBackendLogTail` Rust 侧直读 `hermix_home/logs/`），即 REST 端点前端唯一消费方已死。删 `dashboard/logs.rs` 整模块（93 行）+ 路由挂载 + `dashboard_smoke.rs` 2 条测试 + 前端死函数 `getLogs`。
 - **未砍清单现状**：第二批 + 第三批全部收口，**已无待确认项**——`/v1/ws`/`/v1/ws-stream`（原"Web/移动端可能消费"，判不成立已砍）、ops 端点（原"宜 feature gate"，判无调用方直接砍）、`/api/logs`（原"需确认 Web 端消费"，判前端已走 Rust 直读已砍）三组保留疑虑全部证伪。审计批次清零。
+- **模型/供应商配置面优化（`162f932f`，本批新增）**：审计 SystemConfigPanel 模型类三个 sub-tab（ModelTab / 图像 / CustomProvidersTab）+ 聊天窗口 ModelSelector + useCurrentModel 共 5 处配置面，钉出 6 个乱点后逐项定夺：
+  - **已修（3 处 setConfig 回调内副作用反模式）**：CustomProviderSection 的 `handleFetchModelsForSavedProvider` / `handleFetchModels` / `handleSave` 此前在 `setConfig` updater 回调内执行 `writeModelConfigAndNotify` + `updateCustomProviderModelContexts` 副作用。React 允许 updater 被调用多次（严格模式 / 并发渲染）→ 副作用双写。改为基于 `config` 闭包（handler 内无其它 setConfig 竞争）纯计算 next，`setConfig(next)` 后一次性执行副作用，updater 保持纯函数。
+  - **撤销误判项**：「useContextWindows 双解析」原判 ModelTab 与 CustomProviderSection 各调一次重复，复核后证伪——ModelTab 解析 enabled 模型集合、CustomProviderSection 解析全 custom 模型集合（未启用模型也显示 ctx），语义不同、各自必要，不动。
+  - **未擅动（跨文件架构决策，留主人定夺）**：(a) 双权威漂移——ModelTab 注释自称"enabled 起点是后端 config.yaml 权威、不自动合并"，CustomProvidersTab / ModelSelector 注释却自称"单一权威 = localStorage"，同一份数据 3 处各认一个权威；(b) safeId 前缀手抄——前端 L667 拼 `custom-` 前缀无"长度 ≥ 8"校验（后端 `create_custom_provider` 有该校验，短名会被 400 拒，前端无兜底提示）。
 - **审计批次清零（第三批收口后）**：`/v1/ws` + `/v1/ws-stream`（`181a51aa`，stdio bridge 替代后零消费）、ops/debug 4 端点（`e8aaa1fb`，无调用方直接砍）、`/api/logs`（`d38238f0`，前端已走 Rust 直读）全部砍除；`/v1/sessions/{id}/lineage`、`/api/cua/trace`、`/api/dashboard/plugin-inspect/{id}` 已随第一批 `d361cdfc` 砍除。原清单"需外部消费者确认"的 3 组保留疑虑全部证伪，**已无待确认项**。
 - **已修的真 bug（`cd8ef36e`）**：`/api/custom-apps/{id}/icon` 前端裸 `<img src>` 不经 stdio bridge，Tauri 生产环境永远 404（上传 PNG 图标全静默失效）。治本：IconImage 改走 `fetchJSONBinary` 拉 blob → objectURL，失败才降级 lucide；防回归测试 3 条（vitest 绿 + tsc 绿）。
 - **验证（第三批收口后最新基线）**：workspace check 全绿 / hermix-server lib **192 全绿**（基线 200 → migration -7 + voice -1）/ hermix-config lib **116 全绿** / hermix-voice lib **9 全绿** / http_smoke **5 过 2 忽略**（metrics 测试随 `e8aaa1fb` 删，剩 oauth stub 存量 ignore）/ dashboard_smoke **51 过 3 忽略**（logs 测试随 `d38238f0` 删 2 条）/ `pnpm tsc --noEmit` 全绿。
