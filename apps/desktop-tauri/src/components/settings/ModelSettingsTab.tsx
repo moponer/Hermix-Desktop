@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import { Check, AlertCircle, RefreshCw, ChevronRight, Star, Trash2, CheckCircle, Save, AlertTriangle } from "lucide-react";
 import * as api from "../../api";
 import { storage } from "../../utils/storageCompat";
-import { writeModelConfigAndNotify, syncModelConfigLocal, MODEL_CONFIG_CHANGED_EVENT, setModelPersistErrorHandler } from "../../hooks/useCurrentModel";
+import { writeModelConfigAndNotify, syncModelConfigLocal, setModelPersistErrorHandler } from "../../hooks/useCurrentModel";
 import { ProviderIcon } from "../ProviderIcon";
 import { useSafeTimeout } from "../../hooks/useSafeTimeout";
 import {
@@ -72,16 +72,21 @@ async function probeProviderModels(keyEnvVar: string, baseUrl: string): Promise<
  */
 // 实现已抽到 settingsUtils.ts（纯函数 + 单测覆盖，此前埋在本文件里没法测）。
 
-// ── Model Tab ──────────────────────────────────────
+// ── Model Tab（统一供应商面板） ────────────────────
 //
-// 选择器优先布局（三段式垂直）：
+// 单一配置面板，内置 provider 与自定义 provider 共享同一份 config state
+// （P1 合并：原 ModelTab + 独立 CustomProvidersTab sub-tab 收成一个面板，
+// 对照 pi-mono 单一实体原则——provider 不分两套 UI，按"来源"渲染差异）。
+// 四段式垂直布局：
 //   1. 默认模型 — 顶部紧凑的两级 [Provider ▾] [Model ▾] 选择器（与聊天主窗
 //      ModelSelector 同款体验）；每次操作触发"✓ 已保存"绿色 banner + 行内
 //      700ms 绿闪，保存体感明确
 //   2. 已启用模型 — 紧凑列表：每行 provider chip + model + 上下文窗口 +
 //      ⭐/默认 + ✕ 移除；这是用户操作的主界面
-//   3. 供应商 — 折叠面板，展开后填 API Key + 获取模型；首次自动 mount-fetch
-//      仍保留以保持原使用体感
+//   3. 供应商 — 内置 18 家折叠面板，展开后填 API Key + 获取模型；首次自动
+//      mount-fetch 仍保留以保持原使用体感
+//   4. 自定义提供商 — CustomProviderSection 内嵌（原独立 sub-tab），CRUD +
+//      获取模型，与内置供应商共享同一份 config state 与写路径
 
 export function ModelTab() {
   const safeSetTimeout = useSafeTimeout();
@@ -326,6 +331,12 @@ export function ModelTab() {
     setLoadingProvider(null);
   }, [providerKeyInput, config, providerDefaults]);
 
+  /** CustomProviderSection 的 setDefault 是 fullId 签名，适配为 (pid, mid) → fullId。 */
+  const setDefaultByFullId = useCallback((fid: string) => {
+    const [pid, ...rest] = fid.split(":");
+    if (pid && rest.length > 0) setDefault(pid, rest.join(":"));
+  }, [setDefault]);
+
   // ── Derived ──
   const enabledRows = useMemo(() => {
     return config.enabled
@@ -539,7 +550,23 @@ export function ModelTab() {
               </div>
             );
           })()}
-          <p className="mt-4 text-[11px] text-text-muted italic">自定义 OpenAI 兼容服务商请前往「自定义模型」标签页配置。</p>
+          <p className="mt-4 text-[11px] text-text-muted italic">自定义 OpenAI 兼容服务商在下方「自定义提供商」区配置，与内置供应商共享同一份模型启用清单。</p>
+
+          {/* ── SECTION 4: 自定义提供商（内嵌统一供应商面板，替代原独立 sub-tab） ── */}
+          <div className="mt-4 pt-4 border-t border-border-primary">
+            <h3 className="text-[13px] font-semibold text-text-primary mb-3 flex items-center gap-2">
+              自定义提供商
+            </h3>
+            <CustomProviderSection
+              customModels={fetchedModels}
+              onModelsFetched={(id, models) => setFetchedModels((prev) => ({ ...prev, [id]: models }))}
+              onRefresh={() => { /* 父级统一 state：providers 列表由 CustomProviderSection 内部 getCustomProviders 刷新，无需外部回调 */ }}
+              toggleModel={toggleModel}
+              setDefault={setDefaultByFullId}
+              config={config}
+              setConfig={setConfig}
+            />
+          </div>
         </section>
       </div>
     </div>
@@ -707,7 +734,7 @@ export function CustomProviderSection({
       const probedHint = probedWithWindow.length > 0
         ? `, ${probedWithWindow.length} 个已自动填入探测的 context_window`
         : "";
-      setSuccess(`成功获取 ${models.length} 个模型${probedHint},请在「自定义模型」区域勾选要启用的`);
+      setSuccess(`成功获取 ${models.length} 个模型${probedHint},请在「自定义提供商」区勾选要启用的`);
     } catch (e) {
       setError(`获取模型失败: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -986,12 +1013,13 @@ export function CustomProviderSection({
                                     value={ctx ?? ""}
                                     onChange={(e) => {
                                       const v = e.target.value;
-                                      setConfig((prev) => {
-                                        const next = { ...prev, modelContexts: { ...(prev.modelContexts ?? {}), [fullId]: v ? Number(v) : 0 } };
-                                        storage.setItem(MODEL_CONFIG_KEY, JSON.stringify(next));
-                                        return next;
-                                      });
-                                      api.updateCustomProviderModelContexts(p.id, { ...config.modelContexts, [fullId]: v ? Number(v) : 0 }).catch((e) => { console.warn("[SettingsView] modelContext sync failed:", e); });
+                                      const num = v ? Number(v) : 0;
+                                      // 纯计算 + 一次性副作用（不在 updater 内）：config 闭包即当前挂载值。
+                                      const nextContexts = { ...(config.modelContexts ?? {}), [fullId]: num };
+                                      const next = { ...config, modelContexts: nextContexts };
+                                      setConfig(next);
+                                      storage.setItem(MODEL_CONFIG_KEY, JSON.stringify(next));
+                                      api.updateCustomProviderModelContexts(p.id, nextContexts).catch((e) => { console.warn("[SettingsView] modelContext sync failed:", e); });
                                     }}
                                     title="上下文窗口大小；空 = 后端 catalog 兜底（通常 128K）"
                                     className="bg-bg-tertiary border border-border-secondary rounded px-1 py-0.5 text-[11px] text-text-muted outline-none"
@@ -1110,91 +1138,6 @@ export function CustomProviderSection({
         </button>
       </div>
 
-    </div>
-  );
-}
-
-// ── Custom Providers Tab (独立 sub-tab,与 ModelTab 并列) ──
-//
-// 单一权威来源 = 后端 config.yaml（model_selector，writeModelConfigAndNotify
-// 落盘时同步推送）。localStorage 只是跨 tab 的瞬态镜像：挂载时立即从
-// loadModelCache() 拉一份（修旧 bug：useState({}) 导致切回 tab 后模型列表
-// 空白），reconcile 以后端为准。此前注释自称"localStorage 单一权威"，与
-// ModelTab / ModelSelector 的"后端权威"矛盾（双权威漂移），现统一。
-export function CustomProvidersTab() {
-  const safeSetTimeout = useSafeTimeout();
-  const [config, setConfig] = useState<ModelConfigData>(loadModelConfig);
-  // BUGFIX: 旧版 useState({}) 造成切回 tab 时「暂无模型」。挂载即从缓存拉，
-  //       任何写后即可见；MODEL_CONFIG_CHANGED_EVENT 也会再刷新一次。
-  const [customModels, setCustomModels] = useState<Record<string, string[]>>(loadModelCache);
-
-  // 监听其他 tab/组件写入的 MODEL_CONFIG_CHANGED_EVENT,把本组件的
-  // config + 缓存都重新拉一遍(单一权威来源 = localStorage)。
-  useEffect(() => {
-    const refresh = () => {
-      try {
-        const raw = storage.getItem(MODEL_CONFIG_KEY);
-        if (raw) setConfig({ modelContexts: {}, ...JSON.parse(raw) });
-        setCustomModels(loadModelCache());
-      } catch {}
-    };
-    const onChanged = () => refresh();
-    window.addEventListener(MODEL_CONFIG_CHANGED_EVENT, onChanged);
-    const onStorage = (e: StorageEvent) => { if (e.key === MODEL_CONFIG_KEY) refresh(); };
-    window.addEventListener("storage", onStorage);
-    return () => {
-      window.removeEventListener(MODEL_CONFIG_CHANGED_EVENT, onChanged);
-      window.removeEventListener("storage", onStorage);
-    };
-  }, []);
-
-  const toggleModel = useCallback((providerId: string, modelId: string) => {
-    // 纯计算 + 一次性副作用（不在 updater 内）：config 闭包即当前挂载值。
-    const key = `${providerId}:${modelId}`;
-    const exists = config.enabled.some((m) => `${m.providerId}:${m.modelId}` === key);
-    const newEnabled = exists
-      ? config.enabled.filter((m) => `${m.providerId}:${m.modelId}` !== key)
-      : [...config.enabled, { providerId, modelId }];
-    const defaultCleared = exists && config.defaultModel === key;
-    const newConfig: ModelConfigData = { enabled: newEnabled, defaultModel: defaultCleared ? "" : config.defaultModel, modelContexts: config.modelContexts ?? {} };
-    setConfig(newConfig);
-    safeSetTimeout(async () => {
-      writeModelConfigAndNotify(newConfig);
-      if (defaultCleared) {
-        try {
-          const backendCfg = await api.getConfig();
-          backendCfg.model = "";
-          await api.updateConfig(backendCfg);
-        } catch (e) { console.warn("CustomProvidersTab toggleModel: sync cleared default failed", e); }
-      }
-    }, 0);
-  }, [config, safeSetTimeout]);
-
-  const setDefault = useCallback((fullId: string) => {
-    // 纯计算 + 一次性副作用（不在 updater 内）：config 闭包即当前挂载值。
-    const newConfig: ModelConfigData = { ...config, defaultModel: fullId };
-    setConfig(newConfig);
-    safeSetTimeout(async () => {
-      writeModelConfigAndNotify(newConfig);
-      try {
-        const backendCfg = await api.getConfig();
-        backendCfg.model = fullId;
-        await api.updateConfig(backendCfg);
-      } catch (e) { console.warn("CustomProvidersTab setDefault: sync model failed", e); }
-    }, 0);
-  }, [config, safeSetTimeout]);
-
-  return (
-    <div className="p-6">
-      <CustomProviderSection
-        customModels={customModels}
-        onModelsFetched={(id, models) => setCustomModels((prev) => ({ ...prev, [id]: models }))}
-        onRefresh={() => { /* no-op: CustomProvidersTab 不依赖 activeKeys */ }}
-        toggleModel={toggleModel}
-        setDefault={setDefault}
-        config={config}
-        setConfig={setConfig}
-      />
     </div>
   );
 }

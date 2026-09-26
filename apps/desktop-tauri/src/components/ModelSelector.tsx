@@ -84,7 +84,7 @@ export function useModelSelector() {
     //
     // 历史教训: 旧实现从 4 个 source（localStorage.enabled / cache /
     // backend.models / customProviders)做 union 再写回 localStorage +
-    // saveModelList → 用户在「自定义模型」区域取消勾选一个 model,
+    // saveModelList → 用户在设置面板取消勾选一个 model,
     // 下次 mount 时又从 customProviders 把它 union 回来,等于
     // 取消勾选彻底白做。同时 saveModelList 主动覆盖后端,跟
     // toggleModel 的"用户主动 commit"语义冲突。
@@ -93,7 +93,8 @@ export function useModelSelector() {
     // 后端空列表也是权威：全 provider 未配钥时本地残留该清）；
     // 后端不可达（离线）→ 本地镜像兜底，不吞勾选。
     // 本组件永不主动调 saveModelList —— 写路径统一走
-    // writeModelConfigAndNotify（ModelTab/CustomProvidersTab），
+    // writeModelConfigAndNotify（ModelTab 统一供应商面板，内置 + 自定义
+    // provider 共享同一份 config state），
     // 那里一次写 localStorage + 推后端，事件扇出保持所有消费方一致。
     let cancelled = false;
     const reconcile = async () => {
