@@ -11,7 +11,6 @@ pub mod cua;
 pub mod automation;
 pub mod config;
 pub mod env;
-pub mod logs;
 pub mod mcp;
 pub mod persona;
 pub mod plugins_inspect;
@@ -79,8 +78,6 @@ pub fn router() -> Router<HttpServerState> {
         // → localStorage 的 model_config.enabled 永远是空 → ChatView 弹窗
         // 只剩后端当前在跑的默认模型（fallback 合成的那 1 个）。
         .route("/api/env/reveal", post(env::reveal_env_var))
-        // Logs
-        .route("/api/logs", get(logs::get_logs))
         // Skills & Tools
         .route("/api/skills", get(skills::list_skills))
         .route("/api/skills/toggle", put(skills::toggle_skill))

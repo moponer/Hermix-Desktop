@@ -335,25 +335,6 @@ async fn env_vars_returns_known_keys() {
     assert!(openai["category"].is_string());
 }
 
-// ── /api/logs ───────────────────────────────────────────────────────
-
-#[tokio::test]
-async fn logs_returns_lines_array() {
-    let app = test_app().await;
-    let (status, body) = get_json(app, "/api/logs").await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(body["file"].is_string());
-    assert!(body["lines"].is_array());
-}
-
-#[tokio::test]
-async fn logs_accepts_params() {
-    let app = test_app().await;
-    let (status, body) = get_json(app, "/api/logs?file=agent&lines=10&level=ERROR").await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["file"].as_str().unwrap(), "agent");
-}
-
 // ── /api/skills ─────────────────────────────────────────────────────
 
 #[tokio::test]

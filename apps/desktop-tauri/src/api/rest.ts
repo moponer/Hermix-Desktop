@@ -878,9 +878,6 @@ export const resetMcpServersToOfficial = async (): Promise<McpServerEntry[]> => 
   }
 };
 
-export const getLogs = async (file = "agent", lines = 100): Promise<{ lines: string[] }> =>
-  fetchJSON(`/api/logs?file=${file}&lines=${lines}`);
-
 export const searchSessions = async (q: string): Promise<{ results: Array<{ session_id: string; snippet: string }> }> =>
   fetchJSON(`/v1/sessions/search?q=${encodeURIComponent(q)}`);
 
