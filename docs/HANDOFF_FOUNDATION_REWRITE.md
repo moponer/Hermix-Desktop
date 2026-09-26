@@ -405,4 +405,5 @@ CARGO_INCREMENTAL=0 cargo test -p <crate> --lib   # 改了哪个 crate 测哪个
 ## 7. 工作区遗留物（接手前处理）
 
 - `paired_smoke.json`（仓库根）：冒烟测试残留，**含一次性明文 device_token，直接删除**。
-- untracked 文件（`WorkbenchChat.tsx`、`DiagnosticsTab.tsx`、`design-previews/`、三个 docs、两个 scripts）：历史批次产物，归属其他工作线，**不要动、不要顺手提交**。
+- ~~untracked 文件（`WorkbenchChat.tsx`、`DiagnosticsTab.tsx`、三个 docs、两个 scripts）~~：**已归档入库**（主人 2026-09-26 授权"该提交的提交"；`192f815a` 脚本 / `83619e9d` 设计文档 / `43c12e03` 前端组件，组件经 tsc 验证）。
+- `.scratch/` 与 `design-previews/`：一次性脚本草稿 / splash 设计预览稿，保留本地不入库，已加 `.gitignore`。
