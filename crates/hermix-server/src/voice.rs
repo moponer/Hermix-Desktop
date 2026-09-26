@@ -1,4 +1,4 @@
-//! Voice transcribe/synthesize endpoints and TickLoop control.
+//! Voice transcribe endpoint and TickLoop control.
 
 use std::sync::Arc;
 
@@ -21,19 +21,6 @@ pub(crate) async fn voice_transcribe(
     Ok(Json(resp))
 }
 
-/// `POST /v1/voice/synthesize` — accept text + provider/voice/format
-/// and return synthesized audio bytes. Currently a structured
-/// placeholder; the actual network call to the upstream TTS provider
-/// is performed by `tts_streaming` once a `PcmSink` is wired in.
-pub(crate) async fn voice_synthesize(
-    Json(req): Json<hermix_voice::SynthesizeRequest>,
-) -> Result<Json<hermix_voice::SynthesizeResponse>, HttpError> {
-    let resp = hermix_voice::synthesize_text(&req, None)
-        .await
-        .map_err(voice_bridge_err_to_http)?;
-    Ok(Json(resp))
-}
-
 /// Convert `hermix_voice::VoiceBridgeError` to an `HttpError` with a
 /// stable 4xx/5xx mapping.
 fn voice_bridge_err_to_http(e: hermix_voice::VoiceBridgeError) -> HttpError {
@@ -42,7 +29,7 @@ fn voice_bridge_err_to_http(e: hermix_voice::VoiceBridgeError) -> HttpError {
         V::Base64(_) | V::InvalidSampleRate(_) | V::EmptyAudio | V::Internal(_) => {
             StatusCode::BAD_REQUEST
         }
-        V::EmptySynthesis | V::Tool(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        V::Tool(_) => StatusCode::INTERNAL_SERVER_ERROR,
     };
     HttpError {
         status,
@@ -67,13 +54,6 @@ mod voice_handler_tests {
         let e = hermix_voice::VoiceBridgeError::InvalidSampleRate(0);
         let h = voice_bridge_err_to_http(e);
         assert_eq!(h.status, StatusCode::BAD_REQUEST);
-    }
-
-    #[test]
-    fn empty_synthesis_maps_to_500() {
-        let e = hermix_voice::VoiceBridgeError::EmptySynthesis;
-        let h = voice_bridge_err_to_http(e);
-        assert_eq!(h.status, StatusCode::INTERNAL_SERVER_ERROR);
     }
 
     #[test]

@@ -361,14 +361,12 @@ pub fn router(state: HttpServerState) -> Router {
         .merge(dashboard::router())
         //TickLoop toggle
         .route("/v1/tickloop", get(voice::get_tickloop_status).post(voice::toggle_tickloop))
-        // L3: Voice bridge — HTTP-friendly STT/TTS endpoints.
-        // Both routes are stateless: the bridge builds a default
-        // `VoicePipeline` per request so concurrent calls don't share
-        // config state. The `voice_mode` tool (LLM-invoked) is the
-        // proper way to drive a long-lived pipeline with custom
-        // STT/TTS providers.
+        // L3: Voice bridge — HTTP-friendly STT endpoint. The route is
+        // stateless: the bridge builds a default `VoicePipeline` per
+        // request so concurrent calls don't share config state. The
+        // `voice_mode` tool (LLM-invoked) is the proper way to drive a
+        // long-lived pipeline with custom STT/TTS providers.
         .route("/v1/voice/transcribe", post(voice::voice_transcribe))
-        .route("/v1/voice/synthesize", post(voice::voice_synthesize))
         .nest_service("/dashboard-plugins", ServeDir::new(plugin_dir))
         .with_state(state);
 

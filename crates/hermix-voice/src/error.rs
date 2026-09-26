@@ -20,9 +20,6 @@ pub enum VoiceBridgeError {
     #[error("empty audio buffer (0 samples)")]
     EmptyAudio,
 
-    #[error("synthesis produced no audio for input text")]
-    EmptySynthesis,
-
     #[error("tool error: {0}")]
     Tool(#[from] hermix_core::ToolError),
 

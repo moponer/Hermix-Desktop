@@ -8,8 +8,6 @@
 //!
 //! - [`transcribe::transcribe_pcm`] takes raw f32 PCM samples (e.g. decoded from
 //!   a webm blob on the front-end) and returns the transcribed text.
-//! - [`synthesize::synthesize_text`] takes a UTF-8 string and returns synthesized
-//!   audio bytes (format depends on the active TTS provider).
 //!
 //! ## Why a separate crate?
 //!
@@ -33,7 +31,6 @@
 
 // Submodules
 mod error;
-mod synthesize;
 mod transcribe;
 
 // Re-export error types
@@ -41,9 +38,6 @@ pub use error::{VoiceBridgeError, VoiceResult};
 
 // Re-export transcribe types and functions
 pub use transcribe::{TranscribeRequest, TranscribeResponse, transcribe_pcm, transcribe_with_pipeline};
-
-// Re-export synthesize types and functions
-pub use synthesize::{SynthesizeRequest, SynthesizeResponse, synthesize_text, estimate_duration_ms, DEFAULT_TRANSCRIBE_TIMEOUT};
 
 // Re-export from hermix-tools
 pub use hermix_tools::tools::voice_mode::{
