@@ -136,7 +136,7 @@ const ApprovalAcui: AcuiComponent = ({ show, decide, outcome }) => {
     requestId: props.requestId ?? show.id,
     tool: props.tool ?? "tool",
     args: props.args,
-    riskLevel: props.riskLevel ?? "dangerous",
+    riskLevel: props.riskLevel ?? "caution",
   };
   // Prefer the server-confirmed `decision` patch over the local
   // decision-log outcome, so the user's click → WS roundtrip is

@@ -111,8 +111,12 @@ export function ApprovalRequestView({
   })();
   const intent = meta.reason || argsIntent;
 
-  // Risk chip — 后端传 riskLevel 时直接用, 没传默认 dangerous（防御性）.
-  const riskKey = (meta.riskLevel ?? "dangerous").toLowerCase();
+  // Risk chip — 后端传 riskLevel 时直接用, 没传默认 caution.
+  // 审批卡只在后端认为「需要用户拍板」时才弹, 落到卡上的一律是
+  // caution / dangerous 级; safe 级根本不会进卡(风险等级门直接放行).
+  // 默认 caution(中风险) 比 dangerous(高风险) 更贴合「能弹卡的最轻等级」,
+  // 避免 legacy 数据 / wire 缺字段时误标为高风险.
+  const riskKey = (meta.riskLevel ?? "caution").toLowerCase();
   const riskNorm: Risk =
     riskKey === "dangerous" ? "dangerous"
     : riskKey === "caution" ? "caution"

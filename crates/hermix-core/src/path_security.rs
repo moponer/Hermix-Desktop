@@ -94,20 +94,38 @@ pub fn detect_shell_metacharacters(command: &str) -> Option<&'static str> {
     // everyday command construction (e.g. `npm run build && npm test`,
     // `echo "today is $(date)"`) and confirming on every one would fire
     // on almost every real command, destroying terminal UX.
-    // The one pattern we always stop and ask about is piping a string
-    // into a shell interpreter (`... | sh`, `... | bash`, `... | cmd`,
-    // etc.) — the classic "data becomes code" injection vector. That is
-    // genuinely dangerous and worth a confirmation prompt. Catastrophic
-    // *commands* (rm -rf, mkfs, …) are still caught independently by the
-    // approval pattern list, so nothing is lost by narrowing here.
+    //
+    // Piping a STRING into a shell interpreter is only a genuine
+    // "data becomes code" vector when the source is REMOTE (a
+    // `curl`/`wget` download) — that is the classic install/poison
+    // supply-chain footgun, and it stays gated (see `fetch-run-script`
+    // in the approval engine). A LOCAL script piped into a shell
+    // interpreter (`./build.sh | sh`, `python -c "..."`, `echo "x" | cmd`,
+    // `powershell -enc <base64>`) is routine automation work, NOT an
+    // injection vector: the data is local and already known to the user.
+    // Gating those forced constant false-positive prompts on ordinary
+    // scripted work (the user's 2026-09-26 ruling: "命令执行（设置
+    // 环境变量或命令编码的）不用审批，只有删除等高危才审批").
+    // Catastrophic *commands* (rm -rf, mkfs, del /s /q …) are still
+    // caught independently by the approval pattern list, so nothing is
+    // lost by narrowing here.
+    //
+    // So: flag only when a URL (http:// or https://, or a remote
+    // fetch command `curl`/`wget`) is piped into a shell interpreter.
     let lower = command.to_lowercase();
-    if lower.contains("| sh")
+    let has_remote_source = lower.contains("http://")
+        || lower.contains("https://")
+        || lower.contains("curl ")
+        || lower.contains("wget ");
+    let pipes_to_interpreter = lower.contains("| sh")
         || lower.contains("| bash")
+        || lower.contains("| zsh")
+        || lower.contains("| fish")
         || lower.contains("| powershell")
         || lower.contains("| cmd")
-        || lower.contains("| /bin/")
-    {
-        return Some("pipe to shell interpreter");
+        || lower.contains("| /bin/");
+    if has_remote_source && pipes_to_interpreter {
+        return Some("pipe remote script to shell interpreter");
     }
     None
 }
