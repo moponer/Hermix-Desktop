@@ -1,7 +1,7 @@
 # 交接文档：Hermix 底座重写 + 网络安全层（给后续开发 agent）
 
 > 更新时间：2026-09-25。本文是唯一权威交接入口。动手前**必须完整读完本文 + 必读文档清单**，禁止跳读后自行发挥。
-> 当前累计 78 个 commit（52 + 本批 26：… `835fa7ff` / `3071fc90` / `340ec5ad` / `322a039d` / `71f79d16` + `1dd2895b` / `0d61fb90`（Windows ACL 沙箱批次）+ 本文档 commit）。工作区除 §7 未跟踪遗留物（`??` 行：WorkbenchChat.tsx / DiagnosticsTab.tsx / design-previews / 各 design.md / probe 脚本，属别的 agent，勿动）外干净。最近 commit：`1dd2895b`（Windows ACL restricted-token 沙箱）+ `0d61fb90`（沙箱设计文档）。
+> 当前累计 80 个 commit（52 + 本批 28：… `835fa7ff` / `3071fc90` / `340ec5ad` / `322a039d` / `71f79d16` + `1dd2895b` / `0d61fb90`（Windows ACL 沙箱批次）+ `192f815a` / `83619e9d` / `43c12e03`（遗留物归档批次）+ `2fec94ea`（gitignore）+ 本文档 commit）。工作区除 §7 已 gitignore 的临时产物（`.scratch/`、`design-previews/`）外干净。最近 commit：`43c12e03`（前端组件归档）+ `2fec94ea`（gitignore）+ `51c28bca`（§7 刷新）。
 > 本批新增 commit：`87bb2b9a` / `b51a32a1` / `3cc45b72` / `f062c5ad` / `e1a75115` / `20b6eda8` / `ab7aad02` / `c208f10f` / `9d897704` / `640eeb57` / `6979313c` / `a8f4e547` / `63e3b174` / `0918f7a5` / `cead162d` / `5fab0ec2` / `6892a043` / `29392b57` / `e651c311` / `adfc8ca5` / `acf1fea1` / `e91ac42e` / `fd238361` / `fc2f425a` / `d7abee4d` / `e5f728a1` / `f985eade` / `bc8a6e6c` / `64d145de` / `9ff58666` / `bc2f7da` / `e3955b7a` / `8f3e7a67` / `e8534365` / `45e02378` / `ae71666c` / `08307f7e` / `25aa6fff` / `db892c6d` / `00074e0b` / `231a7dd6` / `d115b591` / `1c628052` / `2b14e53a` / `afdedf5a` / `9bdef3a8` / `835fa7ff` / `3071fc90` / `340ec5ad` / `322a039d` / `71f79d16` / 本文档 commit（命令执行对齐第三段收口刷新）。
 
 ---
