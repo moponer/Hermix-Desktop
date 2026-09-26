@@ -1,7 +1,7 @@
 # 交接文档：Hermix 底座重写 + 网络安全层（给后续开发 agent）
 
 > 更新时间：2026-09-26。本文是唯一权威交接入口。动手前**必须完整读完本文 + 必读文档清单**，禁止跳读后自行发挥。
-> 当前累计 103 个 commit（52 + 本批 51：… `c4f73379`（砍 /api/migration/*）+ `2ee5dfd6`（砍 /v1/voice/synthesize）+ `25f410b4`（文档刷新 85→88）+ `181a51aa`（砍 /v1/ws + /v1/ws-stream 裸路由 + WsTransport 死代码链）+ `e8aaa1fb`（砍 4 条 ops/debug 端点）+ `d38238f0`（砍 /api/logs REST 端点）+ `162f932f`（模型/供应商配置面 setConfig 反模式清理）+ `07b42ebb`（统一 enabled 模型列表权威源）+ `098f3d3`（safeId 校验 + setConfig 反模式 + 注释统一）+ `1845e271`（polish.rs 死引用修复）+ `9a066d6`（砍前端死函数 getSystemStatus + 孤儿类型 SystemStatus）+ `728cb5ef`（模型配置重设计方案 docs/MODEL_CONFIG_REDESIGN.md）+ `29cf929d`（P1 统一供应商面板：合并 ModelTab + CustomProvidersTab 为单一面板）+ `a5484dcc`（模型启用语义三刀：启用清单完全由用户勾选驱动）+ `b46f660a`（砍 /api/status 探活路由：零消费，外部探活疑虑证伪）+ `32ef801d`（压缩阈值口径统一：5 处过时注释向代码真值 0.90 对齐）+ `8f6c532`（P2 信息密度批次：未启用模型折叠分组 + 已启用列表 CSS 折叠）+ `6803253`（方向 A 启动界面全量落地：2026-09-23 设计稿补实施）+ 本文档 commit）。工作区除 §7 已 gitignore 的临时产物（`.scratch/`、`design-previews/`）外干净。最近 commit：`6803253`（方向 A 启动界面全量落地：2026-09-23 设计稿补实施）。
+> 当前累计 104 个 commit（52 + 本批 52：… `c4f73379`（砍 /api/migration/*）+ `2ee5dfd6`（砍 /v1/voice/synthesize）+ `25f410b4`（文档刷新 85→88）+ `181a51aa`（砍 /v1/ws + /v1/ws-stream 裸路由 + WsTransport 死代码链）+ `e8aaa1fb`（砍 4 条 ops/debug 端点）+ `d38238f0`（砍 /api/logs REST 端点）+ `162f932f`（模型/供应商配置面 setConfig 反模式清理）+ `07b42ebb`（统一 enabled 模型列表权威源）+ `098f3d3`（safeId 校验 + setConfig 反模式 + 注释统一）+ `1845e271`（polish.rs 死引用修复）+ `9a066d6`（砍前端死函数 getSystemStatus + 孤儿类型 SystemStatus）+ `728cb5ef`（模型配置重设计方案 docs/MODEL_CONFIG_REDESIGN.md）+ `29cf929d`（P1 统一供应商面板：合并 ModelTab + CustomProvidersTab 为单一面板）+ `a5484dcc`（模型启用语义三刀：启用清单完全由用户勾选驱动）+ `b46f660a`（砍 /api/status 探活路由：零消费，外部探活疑虑证伪）+ `32ef801d`（压缩阈值口径统一：5 处过时注释向代码真值 0.90 对齐）+ `8f6c532`（P2 信息密度批次：未启用模型折叠分组 + 已启用列表 CSS 折叠）+ `6803253`（方向 A 启动界面全量落地：2026-09-23 设计稿补实施）+ `c105c4d`（审批豁免终态：resource_guard 拆除 content-write/terminal 资源门 + 删 powershell-encoded CONFIRM 规则 + 收紧 shutdown 正则，写文件与常规命令执行不再弹卡）+ 本文档 commit）。工作区除 §7 已 gitignore 的临时产物（`.scratch/`、`design-previews/`）外干净。最近 commit：`c105c4d`（审批豁免终态：写文件与常规命令执行不再弹审批卡，仅删除等高危保留资源门）。
 
 **已落**（前后端端点审计 + 砍路由/死代码批次 — `d361cdfc` + `fd3bd371`）：
 - **审计**：全量交叉比对 hermix-server 路由表 vs 前端 `rest.ts` 调用面（subagent 双抓 + 定向核实）。结论：前端无调用任何后端不存在的路径（无 404 风险）；问题全在反方向——后端有多条路由前端零消费。
@@ -326,6 +326,29 @@ CARGO_INCREMENTAL=0 cargo test -p <crate> --lib   # 改了哪个 crate 测哪个
 - **YAGNI 定界**：不动 risk 门控（Caution 在 Default 模式本来就直连 Allow，`local_agent_service.rs:1295-1297`）；不动 Tirith 默认规则（只拦 terminal shell-injection/system-paths，不拦 write_file）；不动 READONLY_PATTERNS 列表（覆盖度已够，`find` 的 `-delete`/`-exec` 例外单独处理）；不做"grant 持久化到 config.yaml 跨会话复用"（C 方案，主人没拍板，留待后续批次）
 - **验证**：`cargo check --workspace --all-targets` 绿（剩余 warning 为 pre-existing `prop_max_turns`）；hermix-agent lib **1054 全绿**（1051 基线 + 3 新测试，零回归）
 - **后续批次（本批已落）**：见下方「Windows 吞斜杠隐患修复」段（`2b14e53a`）。
+
+**已落**（审批豁免终态 — 主人 2026-09-26 拍板「写文件与常规命令执行不用审批，只有删除等高危才审批」`c105c4d`）：
+- **主人反馈**："审批还是弹，都是执行命令和写入文件的……写文件和命令执行（命令是设置环境变量或命令编码的）不用审批"。取证钉死根因（推翻此前假设）：
+  - **写文件弹卡**：来源是 `resource_guard` 的「未授权路径」资源门（非 risk gate）。`write_file`/`patch` 虽是 `Caution` 级（risk gate 本就放行），但 `resource_guard` 对**任意**文件工具做 `profile.allows_path` 检查，工作区外的写入路径（项目外文件、临时文件、配置目录等）全部弹「未授权路径」卡。P6 设计只 grant 单一 workspace 根，写盘位置一多就反复弹卡。
+  - **命令执行弹卡**：来源**不是** `check_approval` 引擎（对 env 设置/编码命令本就零拦截），而是 `resource_guard` 的「未授权命令」资源门——旧实现用 `!hermix_tools::is_readonly_command(cmd) && !profile.allows_command(cmd)` 拦截**所有首 token 不在 grant 列表**的命令。`$env:FOO=...`/`export`/`powershell -enc <b64>` 等首 token 均非 grant 列表里的可执行文件 → 一律弹「未授权命令」卡。`contains_shell_chain_operator` 的 `;`/`&&` 扫描又雪上加霜（env 设置惯用 `;` 连写）。
+  - 即：主人的体验 = 资源门（path grant + command grant）在**常规写盘 + 常规命令**上误伤，而非命令执行层的 CONFIRM/DENIED 审批规则。
+- **修复（`c105c4d`，两处拆除误伤源）**：
+  - **`resource_guard`（`local_agent_service.rs`）重写**：
+    - 内容写工具（`write_file`/`patch`/`move_file`）移出资源门——本机自主机上的内容写/改/移动是低风险，弹「未授权路径」卡纯摩擦。旧 `WRITE_FILE_TOOLS` 常量整体移除。
+    - 命令执行（`terminal`/`code_execution`）拆除 command-grant 资源门——旧「未授权命令」分支删除，命令执行直接放行。`is_readonly_command`/`contains_shell_chain_operator` 在资源门侧不再被调用（函数本体保留，仍被 `check_approval` 引擎 readonly 豁免 + 其它调用方使用，非孤儿）。
+    - **删除类保留资源门**：新增 `DESTRUCTIVE_FILE_TOOLS`（`delete_file`/`disk_cleanup`），越出授权目录仍弹「未授权删除路径」卡——这是主人明确接受「才审批」的高危项。
+  - **`CONFIRM_PATTERNS`（`engine.rs`）收紧**：
+    - 删 `powershell-encoded` 规则（`powershell -enc`/`-EncodedCommand <b64>`）——编码只是载荷形式，非破坏性动作，主人点名「命令编码的不用审批」。破坏性命令仍由 DENIED + 各删除类 CONFIRM（`del`/`erase`/`rm-recursive`/`format`/`diskpart`…）兜底，不新增破口。
+    - 保留 `execution-policy-bypass`（`-ExecutionPolicy Bypass`）——修改系统安全姿态属高危，不在主人举例的常规命令执行内。
+    - 修 `shutdown` 规则误伤：原 `\b(shutdown|Stop-Computer|Restart-Computer)\b` 会把散文词 "shutdown"（变量名/echo 内容/文档）误判为高危。收紧为 `\bshutdown\s+/[srpth]\b`（必须紧跟系统关机参数才指向关机动作）+ 保留 `Stop-Computer`/`Restart-Computer`（PowerShell 专用 cmdlet 不可能出现在散文里）。
+  - **破坏性命令仍被下游层独立兜底（关键不变量）**：拆除资源门的 command-grant 后，`rm -rf`/`del`/`format`/`diskpart`/`mkfs` 等破坏性命令仍由 `check_approval` 的 DENIED/CONFIRM 规则 + hardline blocklist 拦截，不依赖被删的 grant 前缀匹配。即「命令执行不用审批」放行的只是常规命令（env 设置/编码命令/构建/测试），破坏性命令的高危门完好。
+- **测试同步（`c105c4d`）**：
+  - `resource_guard_gates_write_tools_outside_grant` 重写为 `resource_guard_gates_destructive_file_tools_outside_grant`：write_file/patch 内容写越界断言 `None`（不弹卡）+ delete_file/disk_cleanup 越界断言 `Some`（仍弹卡）+ 授权内断言 `None`。
+  - 新增 `resource_guard_exempts_terminal_command_execution`：env 设置（`;` 链）/export/powershell -enc/普通构建命令全断言 `None`（命令执行全豁免），用 `json!` 宏构造参数避手写 JSON 反斜杠转义陷阱。
+  - 删孤儿测试 `default_granted_command_prefixes_pass_allows_command`：`resource_guard` 不再消费 `allows_command`，该测试语义已失效（`DEFAULT_GRANTED_COMMANDS` 与 `granted_commands`/`allows_command`/`grant_command` 字段仍保留在 `PermissionProfile`，供其它消费方与未来批次，YAGNI 不连带删）。
+- **YAGNI 定界**：不删 `PermissionProfile` 的 command-grant 能力（`granted_commands`/`allows_command`/`grant_command`/`DEFAULT_GRANTED_COMMANDS` 保留——`PendingGrant::apply_to` 的 command grant 路径仍调用，删除面大且无收益）；不动 risk gate（Caution 直连 Allow 的既有语义）；不动 `execution-policy-bypass` 与其它删除/系统类 CONFIRM 规则（高危门保留）。
+- **验证**：`cargo check --workspace --all-targets` 绿（仅 1 条 pre-existing `prop_max_turns` warning，与本批无关）；hermix-tools lib **699 全绿**；hermix-agent lib **1054 全绿**（含 3 个 resource_guard 测试，零回归）；前端 tsc `--noEmit` `TSC_EXIT=0`。
+- **教训（对后续 agent）**：主人的「减少审批」诉求指向的是**资源门（P6 path/command grant）在常规操作上误伤**，而非 CONFIRM/DENIED 引擎。此前假设「write_file 是 Caution 不会弹 risk 审批所以写文件不该弹卡」是错的——弹卡的来源是资源门的 path/command grant，不是 risk gate。诊断审批误伤先分清三层各自的作用面：risk gate（Caution 直连 Allow）/ resource_guard（path + command grant）/ check_approval（CONFIRM/DENIED 引擎），别在错层打补丁。
 
 **已落**（Windows 吞斜杠隐患修复 — deepseek-harness 对照 `2b14e53a`）：
 - **Harness 对照研究收口（#5）**：deepseek-harness 的 Windows 命令执行关键设计取证——① `argv` 永不 shell 解析（`SubprocessSpawnSpec.argv` 直传 `CreateProcessW`，绕开 `cmd /c` 转义层，吞斜杠/引号错乱隐患从构造上不存在）；② `quoteArg` 精确对齐 `CommandLineToArgvW` 反解析语义（反斜杠只在引号前翻倍）；③ 工具描述层明示 PowerShell 方言（路径用 native `C:\...` 形态，cmdlet 优先于 cmd.exe 等价物）。本仓库对照：`LocalBackend::execute_command`（`local.rs`）的 **PowerShell 路由（`arg("-Command").arg(...)` argv 直传）与 native dispatch fast-path 已天然免疫**；唯一字符串拼接面是 **cmd.exe /c 路由**（整段命令字符串交给 cmd.exe 解析）；workdir 路径 `strip_win32_long_path_buf` 已剥 `\\?\`。
