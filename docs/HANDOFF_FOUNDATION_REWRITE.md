@@ -1,8 +1,8 @@
 # 交接文档：Hermix 底座重写 + 网络安全层（给后续开发 agent）
 
 > 更新时间：2026-09-25。本文是唯一权威交接入口。动手前**必须完整读完本文 + 必读文档清单**，禁止跳读后自行发挥。
-> 当前累计 72 个 commit（52 + 本批 20：… `afdedf5a` / `9bdef3a8` / `835fa7ff` / `3071fc90` + 本文档 commit）。工作区除 §7 未跟踪遗留物（`??` 行：WorkbenchChat.tsx / DiagnosticsTab.tsx / design-previews / 各 design.md / probe 脚本，属别的 agent，勿动）外干净。最近 commit：`3071fc90`（grep 别名不实陈述修正）+ `835fa7ff`（READONLY_PATTERNS 补 PowerShell 只读 cmdlet + 路由冒烟钉死）+ `9bdef3a8`（Windows shell 层统一 PowerShell 路由 + 提示词对齐）。
-> 本批新增 commit：`87bb2b9a` / `b51a32a1` / `3cc45b72` / `f062c5ad` / `e1a75115` / `20b6eda8` / `ab7aad02` / `c208f10f` / `9d897704` / `640eeb57` / `6979313c` / `a8f4e547` / `63e3b174` / `0918f7a5` / `cead162d` / `5fab0ec2` / `6892a043` / `29392b57` / `e651c311` / `adfc8ca5` / `acf1fea1` / `e91ac42e` / `fd238361` / `fc2f425a` / `d7abee4d` / `e5f728a1` / `f985eade` / `bc8a6e6c` / `64d145de` / `9ff58666` / `bc2f7da` / `e3955b7a` / `8f3e7a67` / `e8534365` / `45e02378` / `ae71666c` / `08307f7e` / `25aa6fff` / `db892c6d` / `00074e0b` / `231a7dd6` / `d115b591` / `1c628052` / `2b14e53a` / `afdedf5a` / `9bdef3a8` / `835fa7ff` / `3071fc90` / 本文档 commit（PowerShell 路由收口刷新）。
+> 当前累计 76 个 commit（52 + 本批 24：… `835fa7ff` / `3071fc90` / `340ec5ad` / `322a039d` / `71f79d16` + 本文档 commit）。工作区除 §7 未跟踪遗留物（`??` 行：WorkbenchChat.tsx / DiagnosticsTab.tsx / design-previews / 各 design.md / probe 脚本，属别的 agent，勿动）外干净。最近 commit：`71f79d16`（PowerShell 原生破坏性 cmdlet 补确认规则）+ `322a039d`（路由剥壳前缀后吃掉旧习惯旗标）+ `340ec5ad`（ssh.rs 引号函数换 shlex）。
+> 本批新增 commit：`87bb2b9a` / `b51a32a1` / `3cc45b72` / `f062c5ad` / `e1a75115` / `20b6eda8` / `ab7aad02` / `c208f10f` / `9d897704` / `640eeb57` / `6979313c` / `a8f4e547` / `63e3b174` / `0918f7a5` / `cead162d` / `5fab0ec2` / `6892a043` / `29392b57` / `e651c311` / `adfc8ca5` / `acf1fea1` / `e91ac42e` / `fd238361` / `fc2f425a` / `d7abee4d` / `e5f728a1` / `f985eade` / `bc8a6e6c` / `64d145de` / `9ff58666` / `bc2f7da` / `e3955b7a` / `8f3e7a67` / `e8534365` / `45e02378` / `ae71666c` / `08307f7e` / `25aa6fff` / `db892c6d` / `00074e0b` / `231a7dd6` / `d115b591` / `1c628052` / `2b14e53a` / `afdedf5a` / `9bdef3a8` / `835fa7ff` / `3071fc90` / `340ec5ad` / `322a039d` / `71f79d16` / 本文档 commit（命令执行对齐第三段收口刷新）。
 
 ---
 
@@ -333,6 +333,14 @@ CARGO_INCREMENTAL=0 cargo test -p <crate> --lib   # 改了哪个 crate 测哪个
   - **真机冒烟钉死（`835fa7ff`）**：hermix-environments 加 2 个测试钉死新路由语义——`powershell_route_posix_alias_lists_directory`（ls 别名 + workdir 生效）/ `powershell_route_unknown_command_reports_nonzero_exit`（未知命令 exit≠0 且 stderr 非空）。真机探针钉死事实：ls/cat 内建别名可用；正斜杠路径 PS 自动归一；显式 exit code 原样传播。
   - **grep 别名不实陈述修正（`3071fc90`）**：真机探针证实 PowerShell 内建 POSIX 别名只有 ls→Get-ChildItem 与 cat→Get-Content，**grep 没有内建别名**——上一批描述里"grep→Select-String all work"会让 LLM 发 grep 吃 "not recognized"。terminal.rs description + directions.rs 首段同步修正为"grep has NO built-in alias — use Select-String"。
   - **收口验证**：workspace check 绿 / hermix-environments lib **48 全绿**（46+2）/ hermix-tools lib **698 全绿**（697+1）/ hermix-agent lib **1054 全绿**（零回归）。
+- **第三段收口（`340ec5ad` + `322a039d` + `71f79d16`，主人"继续"指令）**：
+  - **native exit code 语义钉死**：真机探针钉死——native 子进程失败码经 PowerShell 折叠为 1（成功仍为 0），"成败判定"语义成立；PS 级 `exit 42` 语句原样传播（既有测试覆盖）。按六步阶梯不做 `$LASTEXITCODE` 包装（字符串拼接层 + 残留码风险，YAGNI）。钉死测试 `powershell_route_native_failure_propagates_nonzero_exit`（教训：`cmd /c exit 42` 本身无输出，勿断言 stderr 非空）。
+  - **ssh.rs 引号函数换 shlex（`340ec5ad`）**：手写 allowlist 只在空白/引号/反斜杠/$/反引号处加引号——分号/管道等元字符不在触发集，含分号的注入串原样透传给远端 shell 执行第二条命令（信任边界校验属不可削减项）。`shlex_quote_local` 委托 `shlex::try_quote`（与 hermix-agent 同一版本线 1.3.0，已在 workspace lock 零新增依赖树）；钉死测试断言注入串被加引号且 `shlex::split` 回溯还原单 token。ssh 模块在 `--features ssh` 门控后，测试要带 feature 跑。
+  - **残留 cmd 假设扫描（`322a039d` + `71f79d16`）**：两处产出——
+    - 路由旗标残留回归（真机探针钉死）：`powershell.exe` 前缀按裸名长度切片残留 `.exe`；LLM 按旧习惯发的 `-Command X` / `-EncodedCommand b64` / `-File x.ps1` 旗标混进脚本文本被当命令名报"无法识别"。修复：`split_windows_shell_prefix` 显式匹配四种壳前缀；`-EncodedCommand` 作真旗标直传（base64 含 `/` 不经斜杠归一化，审批引擎看原始命令串照常命中确认规则）；4 个钉死测试。
+    - 审批确认缺口：裸 `Remove-Item`（del 等价物）此前无规则命中、默认放行静默删文件；`Stop-Process` / `Stop-Computer` / `Restart-Computer` / `shutdown` / `Set-ExecutionPolicy` 同样裸放。补四条 CONFIRM 规则；`-Recurse -Force` 灾难组合保持 DENIED（扩宽规则不降级，钉死测试断言双语义）。
+  - **收口验证**：workspace check 绿 / hermix-environments lib **53 全绿**（默认 49 + ssh feature 下 +4）/ hermix-tools lib **699 全绿**（697+2）/ hermix-agent 本段未动。
+  - **教训（commit 安全门）**：commit message 含 `rm -rf /` 等破坏性命令字面量会被凭证安全门拦截（连续两次 block），改用不含该字面量的描述（"含分号的注入串"）后放行——写 commit 描述描述漏洞形态时用模式描述而非完整命令字面量。
 - **后续批次（划出）**：pi 的 `OutputAccumulator`（滚动 buffer + 超限落 temp file + tail 截断 + 流式 onData）——属 UI 流式输出批次，非命令执行模型；deepseek-harness 的 in-process shell program 表（VFS + 30+ JS 函数）——属 webworker 沙箱实验层，本仓库非 webworker 架构，不适用。
 
 **已落**（P6 T6 暴力破解 IP 锁定）：
