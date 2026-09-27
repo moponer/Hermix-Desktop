@@ -95,24 +95,51 @@ ${ruleLines}
   超了不是让你砍功能，是让你**拆模块**。文件数量没有上限。
 - 跨文件重复块 ≥ \`${rules.limits.duplicateBlockLines}\` 行会报 W013 —— 抽到 \`src/utils/\` 或 \`src/components/\`。
 
+## 工具调用（唯一真相：\`workbench_manager\`）
+
+**代码文件操作只有一个入口工具：\`workbench_manager\`，用 \`action\` 参数区分操作。**
+禁止调用或臆想 \`workbench_write\` / \`workbench_read\` / \`workbench_module_index\` /
+\`workbench_set_deps\` / \`workspace_build\` 之类的独立工具名——它们不存在，调用必然报错。
+
+| action | 参数 | 用途 |
+|---|---|---|
+| \`list\` | — | 已装工作台清单（id / 名称 / 主工作台标记 / deps） |
+| \`files\` | \`id\` | 代码目录全部文件相对路径 |
+| \`read\` | \`id\` + \`rel\` | 读一个代码文件 |
+| \`write\` | \`id\` + \`rel\` + \`content\` | 写文件。锁定文件拒写、行数上限、落盘前 lint 门禁（返回「文件:行号 + 规则 ID + 修法」） |
+| \`lint\` | \`id\` | 全工作台 lint 报告 |
+| \`index\` | \`id\` | 模块 → 导出符号，一行一个模块 |
+| \`deps\` | \`id\` + \`deps\` | 设定 importmap 依赖；未装的库被拒 → 走依赖申请，禁 CDN |
+| \`undo\` | \`id\` | 回退最近一次代码写入 |
+
 ## 工作流
 
-1. **看现状**：调 \`workbench_module_index\` 拿到已有模块与导出符号。
+1. **看现状**：\`workbench_manager\` action=\`index\` 拿到已有模块与导出符号。
    已有 \`formatDate\` 就 import，不要重写一遍。每轮迭代都先看。
-2. **写文件**：调 \`workbench_write\` 写入。落盘前宿主自动跑 lint。
+2. **写文件**：\`workbench_manager\` action=\`write\` 写入。落盘前宿主自动跑 lint。
 3. **收违规**：若返回「文件:行号 + 规则 ID + 修法」，按 ID 查上表改对应行，**只改违规处**，
    不要整篇重写。重写会引入新违规，你会陷入死循环。
-4. **预检**（可选但推荐）：批量改动前用 \`workbench_lint\` 带 \`path\`/\`content\` 预检，
+4. **预检**（可选但推荐）：批量改动前用 \`workbench_manager\` action=\`lint\` 看全台报告，
    不写脏文件就知道会不会违规。
 5. 自修最多 2 轮；超过 2 轮仍违规，说明拆法有问题，重新规划模块边界而不是继续打补丁。
+
+### 双路径降级（工具表缺 workbench_manager 时）
+
+先 \`tool_search\` 确认工具表里有没有 \`workbench_manager\`：
+
+- **有** → 一律走上面的 action 表。
+- **没有** → 降级用 \`custom_app_manager\`（propose → approve → create 流程）+
+  常规 \`read_file\` / \`write_file\` 操作 \`~/.hermix/workbenches/<id>/code/\` 下的文件，
+  并明确告知用户「lint 门禁工具未加载，本次写入未经 lint 校验」。
+  **两种路径之外禁止臆想任何工具名**——臆想的调用只会报「工具不存在」。
 
 ## 第三方库
 
 **鼓励用成熟的开源库，不要重复造轮子。** 但库必须走本地 vendor，不走 CDN。
 
-- 先看 \`workbench_vendor_index\` 有哪些已装库。
+- 先看 \`workbench_manager\` action=\`list\` 返回的 deps，以及依赖申请记录，确认哪些已装库。
 - 需要的库没装 → 走依赖申请（宿主把库放进 \`~/.hermix/workbenches/_vendor/<name>/\`
-  并登记 \`index.json\`），装好后调 \`workbench_set_deps\` 注入 importmap。
+  并登记 \`index.json\`），装好后 \`workbench_manager\` action=\`deps\` 注入 importmap。
 - 注入后即可直接 \`import { Tabulator } from 'tabulator'\`，无需 npm install、无需打包。
 - **禁止**从 CDN import（W019）、**禁止**把库源码粘进工作台（W020）、**禁止** \`require\`（W021）。
 
@@ -149,7 +176,7 @@ import { virtualWindow, diffLines, parseDelimited, columnStats } from "wb-tools"
 const { diffLines } = wb.util;
 \`\`\`
 
-工具箱**不属于用户依赖**：不进 \`workbench_vendor_index\`、不用申请、不用打包。
+工具箱**不属于用户依赖**：不进依赖申请清单、不用申请、不用打包。
 
 | 函数 | 签名 | 用途 |
 |---|---|---|
@@ -169,10 +196,10 @@ const { diffLines } = wb.util;
 | | 开发 | 运营 |
 |---|---|---|
 | 改什么 | \`code/\` 下的文件 | \`data/\` 里的业务数据 |
-| 工具 | \`workbench_write\` / \`workbench_read\` | 数据网关（SQL / fs，见「业务数据现状」注入段） |
+| 工具 | \`workbench_manager\` action=\`read\`/\`write\` | 数据网关（SQL / fs，见「业务数据现状」注入段） |
 | 生效 | lint 门禁 + 热更新 | 数据即时生效 |
 
-**运营动作一律不调用 \`workbench_write\`。** 若用户的请求实际需要新功能才能完成
+**运营动作一律不用 \`workbench_manager\` 的 \`write\`。** 若用户的请求实际需要新功能才能完成
 （如「每天自动导出」需要新模块），明说「这需要加个功能」，转开发流程——
 不要用运营通道偷偷写代码。改表结构（CREATE/ALTER TABLE）也属开发，不走运营。
 

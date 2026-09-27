@@ -95,6 +95,14 @@ pub fn register_builtin_tools(
         crate::tools::custom_app_manager::register(registry, mgr);
     }
 
+    // Workbench manager — bridge to hermix-plugin::workbench (code file
+    // read/write with lint gate, module index, deps, undo). Always
+    // registered: the workbench SKILL.md (pinned into workbench sessions
+    // via AgentConfig::ephemeral_skills, MODULE_DESIGN §13 layer 3)
+    // teaches exactly these operations, so the tool table must expose
+    // them or the agent invents tool names.
+    crate::tools::workbench_manager::register(registry);
+
     tracing::info!("Registered {} built-in tools", registry.list_tools().len());
 
     // 4. Whitelist post-pass. `tools::register_all` registers every
