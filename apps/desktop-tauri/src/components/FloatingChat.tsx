@@ -7,8 +7,12 @@
 // 改成悬浮体后画布拿回 100% 宽度，对话按需出现 —— 画布与对话不再
 // 争夺同一块常驻空间。
 //
-// 位置记忆按**比例**存（x/容器宽），换分辨率或拖动窗口后球不会跑到
-// 屏幕外。尺寸按像素存（用户对窗宽是有偏好的，不该随比例漂移）。
+// 位置记忆：球按**比例**存（x/容器宽），换分辨率或拖动窗口后球不会
+// 跑到屏幕外；窗口按**视口像素**存（fixed 定位 + clientX 拖拽，坐标系
+// 一致，拖哪存哪）。尺寸按像素存（用户对窗宽有偏好，不该随比例漂移）。
+//
+// 点任意非浮窗位置自动收起（画布 iframe 内的点击对宿主不可见，收不到
+// 事件——这是 iframe 隔离的物理边界，不是缺陷；收球另有 Esc 和关闭钮）。
 //
 // 状态环读的是 stream 层的 streaming 信号。待审批态需要「当前会话有
 // 挂起的审批卡」这一事实，而它目前只存在于 ChatView 的消息派生里，
@@ -24,6 +28,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 import { MessageCircle, X } from "lucide-react";
 import { useStreamChatContext } from "../context/StreamChatContext";
 
@@ -38,7 +43,7 @@ const kOrb = (id: string) => `hermix.workbench.${id}.orbPos`;
 const kWin = (id: string) => `hermix.workbench.${id}.winBox`;
 
 interface Box {
-  /** 左上角坐标，相对容器左上角的像素值。 */
+  /** 左上角坐标，视口像素（fixed 定位基准），相对视口左上角。 */
   x: number;
   y: number;
   w: number;
@@ -125,20 +130,22 @@ export function FloatingChat({
     [hostSize],
   );
 
-  /** 首次挂载把默认窗位摆在右下角（球的上方），之后用存档值。 */
+  /** 窗口位置按**视口坐标**钳制（fixed 定位 + clientX/clientY 拖拽，
+      坐标系必须一致，混用容器像素会让拖拽整体偏移）。 */
   const winBox = useCallback(
     (b: Box): Box => {
-      const { w, h } = hostSize();
-      const width = Math.max(WIN_MIN_W, Math.min(b.w || WIN_DEFAULT_W, w - 32));
-      const height = Math.max(WIN_MIN_H, Math.min(b.h || WIN_DEFAULT_H, h - 32));
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const width = Math.max(WIN_MIN_W, Math.min(b.w || WIN_DEFAULT_W, vw - 32));
+      const height = Math.max(WIN_MIN_H, Math.min(b.h || WIN_DEFAULT_H, vh - 32));
       return {
         w: width,
         h: height,
-        x: Math.max(8, Math.min(w - width - 8, b.x || w - width - EDGE_GAP)),
-        y: Math.max(8, Math.min(h - height - 8, b.y || h - height - EDGE_GAP)),
+        x: Math.max(8, Math.min(vw - width - 8, b.x || vw - width - EDGE_GAP)),
+        y: Math.max(8, Math.min(vh - height - 8, b.y || vh - height - EDGE_GAP)),
       };
     },
-    [hostSize],
+    [],
   );
 
   // ── 拖拽：球与窗共用一套 pointer 逻辑 ─────────────────────────
@@ -233,9 +240,31 @@ export function FloatingChat({
     return () => window.removeEventListener("keydown", onKey, true);
   }, [open]);
 
-  // 首次布局后校正一次窗位（存档可能是旧分辨率下的）。
+  // 点任意非浮窗位置自动收起：画布是跨文档 iframe，里面的点击对宿主
+  // 完全不可见（iframe 事件隔离的物理边界）——宿主收到的 mousedown 只
+  // 发生在 DOM 树内的元素上，所以"DOM 内任意位置"= 真正的外面，点就收。
+  // 浮窗/球内部放行。用 mousedown 而非 click：拖拽松手补发的 click 不应
+  // 误触发收球；close 钮的 stopPropagation 使"点关闭钮"走 onClick 主动收，
+  // 与自动收殊途同归，无副作用。
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (target.closest(".wb-float, .wb-orb")) return;
+      setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown, true);
+    return () => document.removeEventListener("mousedown", onDown, true);
+  }, [open]);
+
+  // 首次布局后校正一次窗位（存档可能是旧分辨率或旧容器坐标系下的，
+  // 0 坐标归一到右下角默认位，避免闪到视口左上角）。
   useLayoutEffect(() => {
-    setBox((b) => winBox(b));
+    setBox((b) => {
+      const hasPos = b.x !== 0 || b.y !== 0;
+      const fallback: Box = { x: 0, y: 0, w: b.w || WIN_DEFAULT_W, h: b.h || WIN_DEFAULT_H };
+      return winBox(hasPos ? b : fallback);
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [manifestId]);
 
@@ -271,46 +300,49 @@ export function FloatingChat({
         </button>
       )}
 
-      {/* 浮窗 —— 展开态 */}
-      {open && (
-        <div
-          className="wb-float"
-          style={{ left: wb.x, top: wb.y, width: wb.w, height: wb.h }}
-          role="dialog"
-          aria-label={`${manifestName} 对话`}
-        >
+      {/* 浮窗 —— 展开态。portal 到 body：宿主层无"外面"概念，iframe 内点击
+          会被宿主拦截，挂到 body 后 mousedown 监听才能正确判定"点在浮窗外"。 */}
+      {open &&
+        createPortal(
           <div
-            className="wb-float__head"
-            onPointerDown={(e) => onPointerDown("win", e)}
-            onPointerMove={onPointerMove}
-            onPointerUp={onPointerUp}
-            title="拖动移动"
+            className="wb-float"
+            style={{ left: wb.x, top: wb.y, width: wb.w, height: wb.h }}
+            role="dialog"
+            aria-label={`${manifestName} 对话`}
           >
-            <span className={`wb-float__dot wb-float__dot--${phase}`} aria-hidden="true" />
-            <span className="wb-float__title">{manifestName}</span>
-            <button
-              type="button"
-              className="wb-float__close"
-              // pointerdown 冒泡到标题栏会触发 setPointerCapture，浏览器把
-              // 后续 click 重定向给捕获元素，按钮永远收不到 —— 必须拦住。
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={() => setOpen(false)}
-              title="收成球"
-              aria-label="收成球"
+            <div
+              className="wb-float__head"
+              onPointerDown={(e) => onPointerDown("win", e)}
+              onPointerMove={onPointerMove}
+              onPointerUp={onPointerUp}
+              title="拖动移动"
             >
-              <X className="icon-sm" />
-            </button>
-          </div>
-          <div className="wb-float__body">{chatNode}</div>
-          <div
-            className="wb-float__resize"
-            onPointerDown={(e) => onPointerDown("resize", e)}
-            onPointerMove={onPointerMove}
-            onPointerUp={onPointerUp}
-            aria-hidden="true"
-          />
-        </div>
-      )}
+              <span className={`wb-float__dot wb-float__dot--${phase}`} aria-hidden="true" />
+              <span className="wb-float__title">{manifestName}</span>
+              <button
+                type="button"
+                className="wb-float__close"
+                // pointerdown 冒泡到标题栏会触发 setPointerCapture，浏览器把
+                // 后续 click 重定向给捕获元素，按钮永远收不到 —— 必须拦住。
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={() => setOpen(false)}
+                title="收成球"
+                aria-label="收成球"
+              >
+                <X className="icon-sm" />
+              </button>
+            </div>
+            <div className="wb-float__body">{chatNode}</div>
+            <div
+              className="wb-float__resize"
+              onPointerDown={(e) => onPointerDown("resize", e)}
+              onPointerMove={onPointerMove}
+              onPointerUp={onPointerUp}
+              aria-hidden="true"
+            />
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }

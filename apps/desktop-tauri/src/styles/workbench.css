@@ -110,8 +110,10 @@
 @keyframes wb-orb-check { to { stroke-dashoffset: 0; } }
 
 /* ── 浮窗（展开态）──────────────────────────────────────────── */
+/* fixed：portal 挂到 body 后脱离 .wb-float-host 的 absolute 坐标系，
+   改以视口为基准，与拖拽坐标（clientX/clientY）天然对齐。 */
 .wb-float {
-  position: absolute;
+  position: fixed;
   display: flex;
   flex-direction: column;
   border-radius: var(--radius-2xl, 12px);
