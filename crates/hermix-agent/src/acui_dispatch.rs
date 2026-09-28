@@ -122,6 +122,14 @@ pub fn default_tool_router(user_always_include: &[String]) -> Arc<dyn ToolSchema
         "browser_type".to_string(),
         "browser_scroll".to_string(),
         "computer_use".to_string(),
+        // workbench_manager must be always-forwarded so workbench-bound
+        // sessions (skill pinned every turn, MODULE_DESIGN §13 layer 3)
+        // can actually call it. KeywordRouter scores it ≈ 0 on
+        // CJK-heavy queries (its name tokens never appear in Chinese
+        // requests like "给工作台加个图表"), so top-N truncation drops
+        // it — same failure shape that read_pdf / delegate_task were
+        // whitelisted for.
+        "workbench_manager".to_string(),
     ];
     // Dedupe + append user whitelist. De-dup with system-level so the
     // user-supplied names don't appear twice in `AlwaysInclude::route()`

@@ -134,7 +134,7 @@ ${ruleLines}
 
 ### 双路径降级（工具表缺 workbench_manager 时）
 
-先 \`tool_search\` 确认工具表里有没有 \`workbench_manager\`：
+先 \`list_tools\` 确认工具表里有没有 \`workbench_manager\`：
 
 - **有** → 一律走上面的 action 表。**新建工作台也用它**（action=\`create\`）。
 - **没有** → 降级用常规 \`read_file\` / \`write_file\` 直接操作

@@ -97,6 +97,11 @@ pub const HARD_ESSENTIAL_TOOLSETS: &[&str] = &[
     "security",
     "security_guidance",
     "custom_app",
+    // workbench：与 custom_app 同级的头牌产品线（宿主内运行、对话迭代）。
+    // SKILL 经 §13 层 3 每轮钉入工作台会话，工具必须可见——缺了它 agent
+    // 必然臆想工具名。显式 curated 白名单（enabled_toolsets.json）是旧
+    // 版本清单，新 toolset 永远不在里面，floor 是唯一可靠通道。
+    "workbench",
 ];
 
 /// Soft essential toolsets — re-enabled by the floor ONLY when the
@@ -128,6 +133,7 @@ pub const ESSENTIAL_TOOLSETS: &[&str] = &[
     "security",
     "security_guidance",
     "custom_app",
+    "workbench",
     // soft
     "document",
     "office",
@@ -188,6 +194,7 @@ mod tests {
                 "security",
                 "security_guidance",
                 "custom_app",
+                "workbench",
             ],
             "HARD_ESSENTIAL_TOOLSETS changed — update the floor and any UI copy."
         );
