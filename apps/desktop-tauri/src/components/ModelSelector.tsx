@@ -33,7 +33,7 @@ export function useModelSelector() {
         }
       }
     } catch {}
-    // 语义（主人拍板"三刀"）：enabled 为空就是空——不再用 modelCache 全量
+    // 语义（"三刀"）：enabled 为空就是空——不再用 modelCache 全量
     // 目录冒充可选列表。未启用模型不会出现在聊天选择器，空态提示去设置启用。
     return { enabled: [], defaultModel: "" };
   });
@@ -98,13 +98,20 @@ export function useModelSelector() {
           }
         } catch {}
 
-        // 后端可达：本地∩后端 = 权威 enabled 集合（后端空也清残留）；
+        // 后端可达：本地∩后端 = 权威 enabled 集合（后端空也清残留）。
+        // 单向求交有个死区：本地为空而后端有列表（重启后 localStorage 被
+        // WebView2 逐出，或欢迎界面挂载早于设置页回填）时，空数组 filter
+        // 仍是空——从不采纳后端列表，还把空集写回，欢迎界面就一直显示
+        // "未配置"，直到用户手动进设置页触发回填。故本地空而后端有列表
+        // 时采纳后端（与"后端即权威"同语义）。
         // 后端不可达（backend === null）：本地镜像兜底，离线不吞勾选。
         const rawBackend = backend?.models ?? [];
         const backendIds = new Set(rawBackend.map((m) => `${m.provider_id}:${m.model_id}`));
         const enabled = backend === null
           ? local.enabled
-          : local.enabled.filter((e) => backendIds.has(`${e.providerId}:${e.modelId}`));
+          : local.enabled.length === 0 && rawBackend.length > 0
+            ? rawBackend.map((m) => ({ providerId: m.provider_id, modelId: m.model_id }))
+            : local.enabled.filter((e) => backendIds.has(`${e.providerId}:${e.modelId}`));
 
         // orphan-aware 默认模型：优先有效的本地默认，其次后端默认，最后取首项。
         const validIds = new Set(enabled.map((e) => `${e.providerId}:${e.modelId}`));
