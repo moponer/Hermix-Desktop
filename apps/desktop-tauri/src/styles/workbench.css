@@ -51,115 +51,149 @@
   font-size: 13px;
 }
 
-/* 悬浮折叠钮：absolute 脱流不占布局宽度。常显半透明 —— 纯 hover 浮现
-   等于把入口藏起来，用户根本不知道它能收起；hover/聚焦才提到全显。
-   展开态骑在右栏左缘分隔线上；折叠态（wb-shell-collapsed）浮在画布
-   右缘，成为唯一的展开入口。 */
-.wb-toggle {
+/* 旧的「悬浮折叠钮」（.wb-toggle / .wb-shell-collapsed）已删除：
+   它骑在右栏分隔线上，依赖那条已经没了的固定右栏。收起/展开改由
+   .wb-orb（球）与 .wb-float（浮窗）承担。 */
+/* 旧版固定右栏（width: min(460px,38vw)）已删除：它把画布永久切掉
+   三分之一。对话改由 .wb-float-host 下的球 / 浮窗承载。 */
+.wb-float-host {
   position: absolute;
-  top: 50%;
-  z-index: 40;
-  width: 22px;
-  height: 44px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
+  inset: 0;
+  pointer-events: none;   /* 只有球和浮窗本身接收指针，画布照常交互 */
+}
+
+/* ── 在场球（收起态）──────────────────────────────────────────
+   球是这一屏唯一"会动"的东西，所以状态环用 accent（忙）/ ok（完成），
+   且完成态只闪一次对勾就回到静息 —— 常驻动画会变成背景噪音。 */
+.wb-orb {
+  position: absolute;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
   border: 1px solid var(--color-border);
-  border-radius: 999px;
   background: var(--color-bg-card);
-  color: var(--color-text-secondary);
-  cursor: pointer;
-  opacity: 0.55;
-  transform: translate(-50%, -50%);
-  transition: opacity var(--duration-fast, 120ms) ease,
-    background var(--duration-fast, 120ms) ease, color var(--duration-fast, 120ms) ease;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.1);
-}
-
-/* 展开态：骑在分隔线上。右栏实际宽度 = clamp(320px, 38vw, 460px)
-   （width: min(460px,38vw) + min-width:320px 合成的效果），钮心必须
-   用同一个表达式，窄窗口下 38vw < 320px 时才不会错位进对话栏内部。 */
-.wb-shell:not(.wb-shell-collapsed) .wb-toggle {
-  right: clamp(320px, 38vw, 460px);
-}
-
-/* 折叠态：浮在画布右缘。 */
-.wb-shell-collapsed .wb-toggle {
-  right: 0;
-  transform: translate(50%, -50%);
-}
-
-/* hover 靠近（按钮本体或其热区）浮现。热区由本体 22px 宽 + ::before
-   扩展命中区承担，不用恒占宽的独立列。 */
-.wb-toggle:hover,
-.wb-toggle:focus-visible {
-  opacity: 1;
-  background: var(--color-bg-hover);
+  box-shadow: var(--shadow-modal);
+  display: grid;
+  place-items: center;
+  cursor: grab;
+  pointer-events: auto;
+  touch-action: none;
   color: var(--color-text-primary);
+  transition: transform var(--duration-fast) ease;
 }
-
-/* 扩大命中热区：钮两侧各 8px 透明区，靠近分隔线即可触发 hover。 */
-.wb-toggle::before {
-  content: "";
+.wb-orb:active { cursor: grabbing; transform: scale(0.96); }
+.wb-orb__icon {
+  color: var(--color-accent);
+  fill: none;
+}
+.wb-orb__ring {
   position: absolute;
-  inset: -4px -8px;
+  inset: -5px;
+  border-radius: 50%;
+  border: 1.5px solid transparent;
+  pointer-events: none;
 }
+.wb-orb--busy .wb-orb__ring {
+  border-top-color: var(--color-accent);
+  border-right-color: var(--color-accent-soft-strong);
+  animation: wb-orb-spin 1.1s linear infinite;
+}
+@keyframes wb-orb-spin { to { transform: rotate(360deg); } }
+.wb-orb__check {
+  position: absolute;
+  inset: 12px;
+  color: var(--color-success);
+  stroke-dasharray: 24;
+  stroke-dashoffset: 24;
+  animation: wb-orb-check 0.32s var(--ease-out) forwards;
+}
+@keyframes wb-orb-check { to { stroke-dashoffset: 0; } }
 
-.wb-chat {
+/* ── 浮窗（展开态）──────────────────────────────────────────── */
+.wb-float {
+  position: absolute;
   display: flex;
   flex-direction: column;
-  flex-shrink: 0;
-  /* ChatView 自带欢迎页与输入框工具条，380px 装不下会顶出横向滚动条。
-     460px 是「消息气泡不换行到难看、又不抢画布」的折中；上限用 vw 挡
-     住窄屏，否则画布会被挤到只剩一条。 */
-  width: min(460px, 38vw);
-  min-width: 320px;
-  min-height: 0;
-  border-left: 1px solid var(--color-border);
-  /* 对话内容是 flex 列，必须挡住自身溢出，不然欢迎页会横向顶破容器。 */
-  overflow-x: hidden;
+  border-radius: var(--radius-2xl, 12px);
+  border: 1px solid var(--color-border);
   background: var(--color-bg-app);
+  box-shadow: var(--shadow-modal);
+  overflow: hidden;
+  pointer-events: auto;
+}
+.wb-float__head {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 8px 0 12px;
+  background: var(--color-bg-secondary);
+  border-bottom: 1px solid var(--color-border-subtle);
+  cursor: grab;
+  touch-action: none;
+}
+.wb-float__head:active { cursor: grabbing; }
+.wb-float__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-text-muted);
+  flex: 0 0 6px;
+}
+.wb-float__dot--busy { background: var(--color-accent); animation: wb-orb-blink 1.4s ease-in-out infinite; }
+.wb-float__dot--done { background: var(--color-success); }
+@keyframes wb-orb-blink { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
+.wb-float__title {
+  font-size: var(--text-meta, 12px);
+  font-weight: var(--font-weight-medium, 500);
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wb-float__close {
+  margin-left: auto;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+.wb-float__close:hover { background: var(--color-bg-hover); color: var(--color-text-primary); }
+.wb-float__body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.wb-float__resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  touch-action: none;
+  background:
+    linear-gradient(135deg, transparent 0 52%, var(--color-border) 52% 60%, transparent 60% 68%,
+    var(--color-border) 68% 76%, transparent 76% 84%, var(--color-border) 84% 92%, transparent 92%);
 }
 
-/* 工作台对话栏 chrome：chip + 消息流 + 状态条。
-   只做标识与反馈，不碰 ChatView 内部 —— 消息流逻辑仍由宿主 chatNode 提供。 */
+/* 工作台对话栏 chrome：消息流 + 状态条。
+   只做反馈，不碰 ChatView 内部 —— 消息流逻辑仍由宿主 chatNode 提供。
+   原 chip 已删：浮窗标题栏已显示工作台名，chip 只会叠出双层标题。 */
 
 .wb-chat-frame {
   display: flex;
   flex-direction: column;
   flex: 1;
   min-height: 0;
-}
-
-.wb-chat-chip {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--color-border);
-  background: var(--color-bg-secondary);
-  color: var(--color-text-primary);
-  font-size: 12px;
-  flex-shrink: 0;
-}
-
-.wb-chat-chip-name {
-  font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.wb-chat-chip-tag {
-  margin-left: auto;
-  padding: 1px 8px;
-  border-radius: 999px;
-  border: 1px solid var(--color-border);
-  background: var(--color-bg-primary);
-  color: var(--color-text-tertiary);
-  font-size: 11px;
-  white-space: nowrap;
 }
 
 .wb-chat-body {
@@ -234,7 +268,7 @@
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--color-text-primary);
-  font-size: 12.5px;
+  font-size: var(--text-meta, 12px);
   text-align: left;
   cursor: pointer;
   white-space: nowrap;
