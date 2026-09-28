@@ -15,7 +15,7 @@ export function ClarifyCard({
     // Defensive: a `role: "clarify"` message without meta is a server
     // contract violation. Show a small banner rather than a silent gap.
     return (
-      <div className="h-enter flex items-center gap-2 text-[12px] text-text-faint italic">
+      <div className="h-enter flex items-center gap-2 text-meta text-text-faint italic">
         <AlertCircle className="icon-sm" />
         <span>澄清请求数据缺失</span>
       </div>
@@ -36,7 +36,7 @@ export function ClarifyCard({
       </div>
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-1.5 mb-1 flex-wrap">
-          <span className="text-[13px] font-semibold text-text-primary">需要您确认</span>
+          <span className="text-ui font-semibold text-text-primary">需要您确认</span>
           <span className="h-tiny">· {formatRelativeTime(message.timestamp)}</span>
           {answered && <span className="pill pill-success">已答复</span>}
         </div>
@@ -44,7 +44,7 @@ export function ClarifyCard({
         <div className="msg-card msg-stack">
           <div className="msg-channel" data-channel="clarify-question">
             <div
-              className="prose max-w-none text-[13px] text-text-primary whitespace-pre-wrap"
+              className="prose max-w-none text-ui text-text-primary whitespace-pre-wrap"
               // Cap a runaway server-side question (>2k chars) inside a
               // scrollable container so it can't push the rest of the
               // timeline out of the viewport.
@@ -107,7 +107,7 @@ export function ClarifyComposer({
             }
           }}
           placeholder={hasChoices ? "或直接输入自定义回答" : "请输入您的回答"}
-          className="flex-1 px-2.5 py-1.5 rounded-md text-[13px] outline-none"
+          className="flex-1 px-2.5 py-1.5 rounded-md text-ui outline-none"
           style={{
             background: "var(--color-bg-tertiary)",
             color: "var(--color-text-primary)",
@@ -122,7 +122,7 @@ export function ClarifyComposer({
             onSubmit(text.trim());
             setText("");
           }}
-          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md text-[12px] font-medium transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md text-meta font-medium transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
           style={{
             background: "var(--color-accent)",
             color: "var(--color-accent-on-text)",

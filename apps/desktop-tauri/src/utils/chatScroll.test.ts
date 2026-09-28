@@ -7,7 +7,9 @@ import {
   shouldFollowOnStreamChunk,
   computeBottomScrollTop,
   distanceFromBottomPx,
+  isUserScrolledUp,
   scrollToBottomWithSettle,
+  AT_BOTTOM_TOLERANCE_PX,
 } from "./chatScroll";
 
 describe("shouldFollowOnStreamChunk", () => {
@@ -99,6 +101,31 @@ async function flushFrames(frames: number): Promise<void> {
     await new Promise<void>((r) => requestAnimationFrame(() => r()));
   }
 }
+
+// 回归守卫：流式输出时"自动滚动突然停住、必须手动点回到底部"。
+// 根因是程序写完 scrollTop 后内容又长高，同一 scroll 事件里 dist > 0，
+// 被旧逻辑当成用户上滚。没有用户意图就必须判 false，否则粘性守卫
+// 一旦置 true 就再也复位不了（不再有 scroll 事件）。
+describe("isUserScrolledUp", () => {
+  it("does NOT treat programmatic drift as user scroll (streaming grew after we pinned bottom)", () => {
+    expect(isUserScrolledUp(30, false)).toBe(false);
+    expect(isUserScrolledUp(5_000, false)).toBe(false);
+  });
+
+  it("treats a real wheel/touch scroll away from bottom as user scroll", () => {
+    expect(isUserScrolledUp(200, true)).toBe(true);
+  });
+
+  it("tolerates sub-threshold jitter while pinned to the bottom", () => {
+    expect(isUserScrolledUp(AT_BOTTOM_TOLERANCE_PX, true)).toBe(false);
+    expect(isUserScrolledUp(AT_BOTTOM_TOLERANCE_PX + 1, true)).toBe(true);
+  });
+
+  it("releases the sticky guard when the viewport is back at the bottom", () => {
+    expect(isUserScrolledUp(0, true)).toBe(false);
+    expect(isUserScrolledUp(-12, true)).toBe(false);
+  });
+});
 
 describe("scrollToBottomWithSettle", () => {
   it("one-shot scroll lands at bottom when scrollHeight is stable", async () => {

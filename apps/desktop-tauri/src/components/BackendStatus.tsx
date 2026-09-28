@@ -38,7 +38,7 @@ export function BackendStatus() {
   if (mode === "local") {
     if (gaveUp) {
       return (
-        <div className="flex items-center gap-1.5 px-2 py-1 rounded text-[11px] text-amber-400" title="后端多次重启失败，需要手动重启">
+        <div className="flex items-center gap-1.5 px-2 py-1 rounded text-tiny text-amber-400" title="后端多次重启失败，需要手动重启">
           <WifiOff className="icon-sm text-amber-400" />
           <span>重启失败</span>
           {restartBtn}
@@ -47,7 +47,7 @@ export function BackendStatus() {
     }
     if (restarting) {
       return (
-        <div className="flex items-center gap-1.5 px-2 py-1 rounded text-[11px] text-zinc-400" title="后端正在重启...">
+        <div className="flex items-center gap-1.5 px-2 py-1 rounded text-tiny text-zinc-400" title="后端正在重启...">
           <RefreshCw className="icon-sm animate-spin text-zinc-400" />
           <span>重启中...</span>
         </div>
@@ -58,7 +58,7 @@ export function BackendStatus() {
       // OK. Don't lie with "离线" while the user can see the spinner
       // and trust that we're doing work.
       return (
-        <div className="flex items-center gap-1.5 px-2 py-1 rounded text-[11px] text-text-muted" title="本地后端正在启动...">
+        <div className="flex items-center gap-1.5 px-2 py-1 rounded text-tiny text-text-muted" title="本地后端正在启动...">
           <Loader2 className="icon-sm animate-spin text-text-muted" />
           <span>正在连接</span>
         </div>
@@ -66,7 +66,7 @@ export function BackendStatus() {
     }
     if (state === "offline") {
       return (
-        <div className="flex items-center gap-1.5 px-2 py-1 rounded text-[11px] text-text-muted" title="本地模式 — 后端未连接">
+        <div className="flex items-center gap-1.5 px-2 py-1 rounded text-tiny text-text-muted" title="本地模式 — 后端未连接">
           <WifiOff className="icon-sm text-text-muted" />
           <span>离线</span>
           {restartBtn}
@@ -74,7 +74,7 @@ export function BackendStatus() {
       );
     }
     return (
-      <div className="flex items-center gap-1.5 px-2 py-1 rounded text-[11px] text-text-muted" title="本地模式 — 内嵌 agent 运行时">
+      <div className="flex items-center gap-1.5 px-2 py-1 rounded text-tiny text-text-muted" title="本地模式 — 内嵌 agent 运行时">
         <Cpu className="icon-sm text-success" />
         <span>本地已连接</span>
       </div>
@@ -83,7 +83,7 @@ export function BackendStatus() {
 
   return (
     <div
-      className="flex items-center gap-1.5 px-2 py-1 rounded text-[11px] text-text-muted"
+      className="flex items-center gap-1.5 px-2 py-1 rounded text-tiny text-text-muted"
       title={
         state === "online"
           ? "已连接到后端"

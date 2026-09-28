@@ -1,4 +1,4 @@
-import { Sun, Moon, Trees, Sunrise, Monitor, Check, ChevronDown } from "lucide-react";
+import { Sun, Moon, Monitor, Check, ChevronDown } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
 import { useTheme } from "../hooks/useTheme";
 import { THEMES } from "../styles/themes/registry";
@@ -6,8 +6,6 @@ import { THEMES } from "../styles/themes/registry";
 const ICONS: Record<string, React.ElementType> = {
   light: Sun,
   dark: Moon,
-  rainforest: Trees,
-  sunset: Sunrise,
 };
 const DEFAULT_ICON = Monitor;
 

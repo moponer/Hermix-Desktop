@@ -87,9 +87,9 @@ export function SessionPickerDialog({
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="搜索对话标题或消息内容…"
-            className="flex-1 bg-transparent text-[13px] text-text-primary placeholder:text-text-faint outline-none"
+            className="flex-1 bg-transparent text-ui text-text-primary placeholder:text-text-faint outline-none"
           />
-          <span className="text-[11px] text-text-faint shrink-0">
+          <span className="text-tiny text-text-faint shrink-0">
             {trimmed ? `${hits.length} 条命中` : `${sessions.length} 条`}
           </span>
           <button
@@ -124,7 +124,7 @@ export function SessionPickerDialog({
               >
                 <div className="flex items-center gap-2">
                   <MessageSquare className="icon-sm text-text-muted shrink-0" />
-                  <span className="flex-1 truncate-1 text-[13px] font-medium text-text-primary">
+                  <span className="flex-1 truncate-1 text-ui font-medium text-text-primary">
                     {session.title || "新建对话"}
                   </span>
                 </div>
@@ -135,10 +135,10 @@ export function SessionPickerDialog({
                 )}
                 <div className="flex items-center gap-1 mt-1 ml-5">
                   <Clock size={10} className="text-text-faint" />
-                  <span className="text-[11px] text-text-faint">
+                  <span className="text-tiny text-text-faint">
                     {new Date(session.updated_at).toLocaleDateString("zh-CN")}
                   </span>
-                  <span className="text-[11px] text-text-faint ml-2">
+                  <span className="text-tiny text-text-faint ml-2">
                     {session.messages.length} 条消息
                   </span>
                 </div>

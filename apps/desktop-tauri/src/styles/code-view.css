@@ -451,7 +451,12 @@
    ════════════════════════════════════════════════════════════════════ */
 .preview-fullscreen {
   position: fixed;
-  inset: 0;
+  /* 顶部留出 40px 标题栏：窗口控制（最小化/最大化/关闭）与拖动区必须
+     常驻可见 —— 全屏层从标题栏下方开始，而不是盖住整个窗口。 */
+  top: 40px;
+  left: 0;
+  right: 0;
+  bottom: 0;
   z-index: 60;
   display: flex;
   flex-direction: column;
@@ -600,6 +605,11 @@
   color: var(--color-text-primary);
   word-wrap: break-word;
 }
+/* 全屏阅读：正文铺满滚动列（两侧留呼吸 padding，不再设行宽上限 —
+   用户明确反馈 780/1200px 上限在宽屏全屏下两侧空白太多）。 */
+.preview-pane .preview-fullscreen .preview-md-body {
+  max-width: none;
+}
 /* Headings */
 .preview-pane .preview-md-body h1,
 .preview-pane .preview-md-body h2,
@@ -655,7 +665,7 @@
 /* Inline code */
 .preview-pane .preview-md-body code {
   font-family: "JetBrains Mono", "JetBrainsMono NF", ui-monospace, monospace;
-  font-size: 12.5px;
+  font-size: var(--text-meta, 12px);
   padding: 2px 6px;
   border-radius: 4px;
   background: color-mix(in srgb, var(--color-info) 10%, transparent);
@@ -829,7 +839,7 @@
   border-radius: 5px;
   background: color-mix(in srgb, var(--color-bg-tertiary) 100%, transparent);
   border: 1px solid var(--color-border-subtle);
-  font-size: 11.5px;
+  font-size: var(--text-tiny, 11px);
   line-height: 1.4;
   overflow-x: auto;
   white-space: nowrap;
@@ -925,7 +935,7 @@
   border-radius: 4px;
   cursor: pointer;
   transition: background 120ms ease;
-  font-size: 12.5px;
+  font-size: var(--text-meta, 12px);
   color: var(--color-text-primary);
 }
 .computer-list-row:hover {
@@ -962,7 +972,7 @@
   align-items: center;
   gap: 0;
   padding: 6px 8px 4px;
-  font-size: 10.5px;
+  font-size: var(--text-micro, 10px);
   font-weight: 600;
   color: var(--color-text-muted);
   letter-spacing: 0.03em;
@@ -1065,7 +1075,7 @@
   padding: 0 10px;
   border-top: 1px solid var(--color-border-subtle);
   background: color-mix(in srgb, var(--color-bg-primary) 94%, var(--color-bg-tertiary));
-  font-size: 10.5px;
+  font-size: var(--text-micro, 10px);
   color: var(--color-text-muted);
   flex-shrink: 0;
 }
@@ -1140,4 +1150,266 @@
   border-radius: 10px;
   margin: 24px;
   border: 1px dashed color-mix(in srgb, var(--color-border-subtle) 60%, transparent);
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   文件预览渲染器 — PDF / PPTX / DOCX / 图片 / 纯文本
+   面板与全屏共用同一批类名，故两个容器都列在选择器里（只写
+   `.preview-pane` 会让全屏预览丢样式——旧实现正是这样）。
+   ════════════════════════════════════════════════════════════════════ */
+
+/* 竖向容器：工具条固定，画布区吃掉剩余高度并可滚动 */
+.preview-pane .preview-pdf,
+.preview-pane .preview-pptx,
+.preview-pane .preview-docx,
+.preview-pane .preview-image,
+.preview-fullscreen .preview-pdf,
+.preview-fullscreen .preview-pptx,
+.preview-fullscreen .preview-docx,
+.preview-fullscreen .preview-image {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+/* ── 分页工具条（PDF / PPTX / 图片共用） ───────────────────── */
+.preview-pdf-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--color-border-secondary);
+}
+.preview-pdf-page {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  min-width: 72px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.preview-pdf-zoom {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  min-width: 46px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.preview-pdf-spacer {
+  flex: 1 1 auto;
+}
+
+/* ── 画布舞台 ──────────────────────────────────────────────── */
+.preview-pane .preview-pdf-stage,
+.preview-pane .preview-pptx-stage,
+.preview-fullscreen .preview-pdf-stage,
+.preview-fullscreen .preview-pptx-stage {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 16px;
+  background: var(--color-bg-code);
+}
+.preview-pdf-stage canvas,
+.preview-pptx-stage canvas {
+  display: block;
+  background: #fff;
+  border-radius: 4px;
+  box-shadow:
+    0 4px 12px rgba(0, 0, 0, 0.18),
+    0 1px 3px rgba(0, 0, 0, 0.12);
+}
+/* 渲染中给一点视觉反馈，避免大文件看起来像卡住 */
+.preview-pdf-stage[data-busy] {
+  opacity: 0.6;
+}
+
+/* ── DOCX：仿页面宽度的阅读区 ──────────────────────────────── */
+.preview-pane .preview-docx,
+.preview-fullscreen .preview-docx {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  background: var(--color-bg-primary);
+}
+.preview-docx-body {
+  max-width: 820px;
+  margin: 0 auto;
+  padding: 24px 32px 64px;
+  color: var(--color-text-primary);
+  font-size: 14px;
+  line-height: 1.7;
+}
+.preview-docx-body table {
+  border-collapse: collapse;
+}
+.preview-docx-body img {
+  max-width: 100%;
+}
+
+/* ── 图片：旋转层与缩放层分离 ──────────────────────────────── */
+.preview-pane .preview-image-stage,
+.preview-fullscreen .preview-image-stage {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+.preview-image-rotor {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.preview-pane .preview-image-img,
+.preview-fullscreen .preview-image-img {
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  display: block;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+/* ── 状态：载入 / 错误 / 纯文本 ────────────────────────────── */
+.preview-state-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 100%;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+.preview-state-error {
+  padding: 16px;
+  font-size: 12px;
+  color: var(--color-error);
+}
+.preview-state-error-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 16px;
+  font-size: 12px;
+  color: var(--color-error);
+}
+.preview-plain-text {
+  margin: 0;
+  padding: 16px;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--color-text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ── Office（老二进制格式）iframe ──────────────────────────── */
+.preview-pane .preview-office,
+.preview-fullscreen .preview-office {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.preview-office-frame {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+  border: 0;
+  display: block;
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   Markdown 预览 — 左侧标题大纲 (TOC)
+   布局契约：.preview-md-layout = 固定 TOC 列 + .preview-md-scroll 独立
+   滚动正文列。TOC 不进滚动流（不用 sticky）—— 目录钉死在左侧，
+   滚动的只有正文列。
+   ════════════════════════════════════════════════════════════════════ */
+.preview-md-layout {
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+.preview-md-toc {
+  flex: 0 0 auto;
+  width: 200px;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--color-border-subtle, var(--color-border));
+  background: color-mix(in srgb, var(--color-bg-secondary, transparent) 60%, transparent);
+  min-height: 0;
+  overflow: hidden;
+}
+.preview-md-toc-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 12px 8px;
+  font-size: var(--font-size-tiny, 11px);
+  font-weight: 600;
+  color: var(--color-text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+}
+.preview-md-toc-list {
+  overflow-y: auto;
+  min-height: 0;
+  padding-bottom: 8px;
+}
+.preview-md-toc-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 4px 8px;
+  font-size: var(--font-size-meta, 12px);
+  line-height: 1.45;
+  color: var(--color-text-secondary);
+  background: none;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.preview-md-toc-item:hover {
+  background: color-mix(in srgb, var(--color-text-faint) 12%, transparent);
+  color: var(--color-text-primary);
+}
+/* 折叠按钮：固定列（窄条），不进滚动流、不随正文跑 */
+.preview-md-toc-toggle {
+  flex: 0 0 auto;
+  align-self: flex-start;
+  margin: 8px 2px 0 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border: 1px solid var(--color-border-subtle, var(--color-border));
+  background: var(--color-bg-primary);
+  color: var(--color-text-faint);
+  cursor: pointer;
+}
+.preview-md-toc-toggle:hover {
+  color: var(--color-text-primary);
+  background: color-mix(in srgb, var(--color-text-faint) 10%, transparent);
+}
+/* 正文滚动列：唯一滚动者。host 态（无 TOC）也走同一滚动容器。 */
+.preview-md-scroll {
+  flex: 1 1 auto;
+  overflow: auto;
+  min-width: 0;
+  min-height: 0;
+  background: var(--color-bg-code);
 }

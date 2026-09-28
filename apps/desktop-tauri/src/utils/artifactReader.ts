@@ -8,6 +8,7 @@
 
 import {
   artifactPathExists,
+  convertDocumentToMarkdown,
   readArtifactFile,
   readArtifactFileBytes,
   renderOfficePreview,
@@ -153,6 +154,47 @@ export async function tryArtifactPathExists(
     }
   }
   return false;
+}
+
+export type DocumentMarkdownPayload = {
+  markdown: string;
+  fileName: string;
+  truncated: boolean;
+  resolvedPath: string;
+};
+
+// Document → Markdown via the `markitdown` sidecar. Same ancestor-retry
+// chain as the Office renderer so cross-drive workspace paths resolve.
+export async function tryConvertDocumentToMarkdown(
+  path: string,
+  workspaceRoot?: string | null,
+): Promise<DocumentMarkdownPayload | { error: string }> {
+  const tried = new Set<string | null>();
+  const queue: Array<string | null> = [workspaceRoot ?? null];
+  for (const cand of candidateRoots(path)) {
+    if (!tried.has(cand)) queue.push(cand);
+  }
+
+  let lastRaw = "";
+  for (const root of queue) {
+    if (tried.has(root)) continue;
+    tried.add(root);
+    try {
+      const res = await convertDocumentToMarkdown(path, root);
+      return {
+        markdown: res.markdown,
+        fileName: res.fileName,
+        truncated: res.truncated,
+        resolvedPath: path,
+      };
+    } catch (e) {
+      lastRaw = String(e);
+      if (!/outside the allowed artifact roots/i.test(lastRaw)) {
+        return { error: lastRaw };
+      }
+    }
+  }
+  return { error: lastRaw };
 }
 
 export type OfficePreviewResult = {

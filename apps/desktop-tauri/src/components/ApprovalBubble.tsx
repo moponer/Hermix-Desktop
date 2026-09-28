@@ -280,7 +280,7 @@ export function ApprovalCard({
   const meta = message.approval;
   if (!meta) {
     return (
-      <div className="h-enter flex items-center gap-2 text-[12px] text-text-faint italic px-2 py-1.5">
+      <div className="h-enter flex items-center gap-2 text-meta text-text-faint italic px-2 py-1.5">
         <AlertCircle className="icon-sm" />
         <span>权限请求数据缺失</span>
       </div>

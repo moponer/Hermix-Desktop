@@ -5,7 +5,7 @@
    类名 (.approval-avatar / .approval-pills / .approval-line2 /
    .approval-tool-pill / .approval-pill-pending|dangerous|caution|safe 等):
    这些类名一旦缺失, 组件裸奔, 浏览器默认样式接管, 按钮退化成 12px 灰色纯文字;
-   即便命中, 旧 .approval-btn 的 `padding: 3px 12px; font-size: 11.5px;
+   即便命中, 旧 .approval-btn 的 `padding: 3px 12px; font-size: var(--text-tiny, 11px);
    background: transparent` 也无视觉重量。
 
    做法:
@@ -62,7 +62,7 @@
 .approval-tool-pill .font-mono {
   font-family: var(--font-mono);
   font-weight: 500;
-  font-size: 10.5px;
+  font-size: var(--text-micro, 10px);
 }
 
 /* Generic pill (status indicator at right) */
@@ -119,7 +119,7 @@
   flex: 1 1 auto;
   min-width: 0;
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--text-micro, 10px);
   color: var(--color-text-secondary, #52525b);
   background: var(--color-bg-primary, #ffffff);
   border: 1px solid var(--color-border-subtle, #ececef);
@@ -157,7 +157,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 11.5px;
+  font-size: var(--text-tiny, 11px);
   line-height: 1.4;
   color: var(--color-text-muted, #777);
   max-height: 0;
@@ -250,7 +250,7 @@
   white-space: pre-wrap;
   word-break: break-word;
   overflow-wrap: anywhere;
-  font-size: 11.5px;
+  font-size: var(--text-tiny, 11px);
   line-height: 1.55;
   padding: 6px 10px;
   color: var(--color-text-secondary, #555);
@@ -425,4 +425,192 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .denial-banner { animation: none; }
+}
+
+
+/* ══════════════════════════════════════════════════════════════════
+   Approval Drawer — 输入框上方的"待决定"抽屉
+   ──────────────────────────────────────────────────────────────────
+   审批从消息流里搬到这里：它是「现在需要你做的决定」，不是历史记录。
+   已决定的历史卡片仍走上面的 .approval-card 内联渲染。
+   定位：宿主容器（Composer 的外层）加 position:relative，抽屉
+   absolute bottom:100% 贴着输入框上缘弹出。宽度跟随 composer 容器
+   （max-w-reading 档），不随消息列宽变化。
+   ══════════════════════════════════════════════════════════════════ */
+.approval-drawer {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 10px);
+  z-index: 30;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border-primary);
+  border-left: 2px solid var(--color-accent);
+  border-radius: var(--radius-lg, 8px);
+  box-shadow: var(--shadow-pop);
+  padding: 10px 12px 10px 14px;
+  animation: approval-drawer-in 200ms var(--ease-out, cubic-bezier(0.16, 1, 0.3, 1)) both;
+}
+@keyframes approval-drawer-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .approval-drawer { animation: none; }
+}
+
+.approval-drawer__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.approval-drawer__risk {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 999px;
+  font-size: var(--text-tiny, 11px);
+  font-weight: var(--font-weight-medium, 500);
+  flex: 0 0 auto;
+}
+.approval-drawer__tool {
+  font-size: var(--text-ui, 13px);
+  font-weight: var(--font-weight-medium, 500);
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.approval-drawer__count {
+  margin-left: auto;
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: var(--text-tiny, 11px);
+  color: var(--color-text-tertiary);
+}
+
+.approval-drawer__body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.approval-drawer__desc {
+  font-size: var(--text-ui, 13px);
+  line-height: var(--leading-ui, 1.5);
+  color: var(--color-text-primary);
+}
+.approval-drawer__path {
+  display: block;
+  padding: 6px 9px;
+  border-radius: var(--radius-md, 6px);
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--text-tiny, 11px);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.approval-drawer__diff-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: var(--radius-sm, 4px);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  font-size: var(--text-tiny, 11px);
+  cursor: pointer;
+}
+.approval-drawer__diff-toggle:hover { background: var(--color-bg-hover); color: var(--color-text-primary); }
+.approval-drawer__diff-pre {
+  margin: 4px 0 0;
+  padding: 8px 10px;
+  max-height: 200px;
+  overflow: auto;
+  border-radius: var(--radius-md, 6px);
+  background: var(--color-bg-inset);
+  border: 1px solid var(--color-border-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--text-meta, 12px);
+  line-height: 1.55;
+  color: var(--color-text-secondary);
+  white-space: pre;
+}
+.approval-drawer__items {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.approval-drawer__items li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  font-size: var(--text-ui, 13px);
+  color: var(--color-text-primary);
+}
+.approval-drawer__item-tool {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: var(--text-meta, 12px);
+  font-weight: var(--font-weight-medium, 500);
+}
+.approval-drawer__item-desc {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-secondary);
+}
+.approval-drawer__more { color: var(--color-text-tertiary); }
+
+.approval-drawer__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 10px;
+}
+.approval-drawer__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: var(--radius-md, 6px);
+  font-size: var(--text-ui, 13px);
+  font-weight: var(--font-weight-medium, 500);
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: background var(--duration-fast) ease, border-color var(--duration-fast) ease;
+}
+.approval-drawer__btn kbd {
+  font-family: var(--font-mono);
+  font-size: var(--text-micro, 10px);
+  opacity: 0.65;
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  padding: 0 3px;
+  line-height: 1.4;
+}
+.approval-drawer__btn--ghost {
+  background: transparent;
+  border-color: var(--color-border-secondary);
+  color: var(--color-text-secondary);
+}
+.approval-drawer__btn--ghost:hover { background: var(--color-bg-hover); color: var(--color-text-primary); }
+.approval-drawer__btn--primary {
+  background: var(--color-accent);
+  color: var(--color-accent-on-text);
+}
+.approval-drawer__btn--primary:hover { background: var(--color-accent-hover); }
+.approval-drawer__btn:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
 }

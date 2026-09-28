@@ -12,8 +12,6 @@ import type { ThemeMode } from "../../hooks/useTheme";
 
 import "./light.css";
 import "./dark.css";
-import "./rainforest.css";
-import "./sunset.css";
 
 const cssModules = import.meta.glob("./*.css", { eager: true }) as Record<string, unknown>;
 const jsonModules = import.meta.glob("./*.json", { eager: true, import: "default" }) as Record<string, unknown>;

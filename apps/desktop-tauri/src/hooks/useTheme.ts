@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import { storage, STORAGE_KEYS } from "../utils/storageCompat";
 import { THEMES, isKnownTheme, isDarkTheme } from "../styles/themes/registry";
 
-// 主题 = 任一已发现的 .css (light / dark / rainforest / 用户新增)
+// 主题 = 任一已发现的 .css（内置仅 light / dark 两套；用户仍可自建 .css 放入 themes/）
 // 数据源：themes/registry.ts 的 THEMES 数组 (auto-discover)
 // 持久化键：hermix.desktop.theme
 export type ThemeMode = string;

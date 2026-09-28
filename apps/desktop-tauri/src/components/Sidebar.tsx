@@ -880,7 +880,7 @@ function RenameDialog({
             <Pencil className="icon-lg" style={{ color: "hsl(210, 70%, 50%)" }} />
           </div>
           <div className="flex-1 min-w-0">
-            <h2 className="text-[14px] font-bold text-text-primary">{state.title}</h2>
+            <h2 className="text-body font-bold text-text-primary">{state.title}</h2>
             <input
               autoFocus
               value={value}
@@ -890,7 +890,7 @@ function RenameDialog({
                 if (e.key === "Escape") onCancel();
               }}
               placeholder="输入新名称"
-              className="mt-2 w-full px-3 py-2 rounded-lg bg-bg-tertiary text-[13px] text-text-primary placeholder:text-text-faint outline-none focus:ring-1 focus:ring-accent/30 transition"
+              className="mt-2 w-full px-3 py-2 rounded-lg bg-bg-tertiary text-ui text-text-primary placeholder:text-text-faint outline-none focus:ring-1 focus:ring-accent/30 transition"
             />
           </div>
         </div>
@@ -900,7 +900,7 @@ function RenameDialog({
             onClick={() => onConfirm(trimmed)}
             disabled={!canConfirm}
             className={clsx(
-              "flex items-center gap-1.5 px-4 py-2 rounded-lg text-[13px] font-bold",
+              "flex items-center gap-1.5 px-4 py-2 rounded-lg text-ui font-bold",
               "text-accent-on-text transition-opacity",
               canConfirm ? "hover:opacity-90" : "opacity-50 cursor-not-allowed",
             )}
@@ -912,7 +912,7 @@ function RenameDialog({
             type="button"
             onClick={onCancel}
             className={clsx(
-              "flex items-center gap-1.5 px-4 py-2 rounded-lg text-[13px] font-semibold",
+              "flex items-center gap-1.5 px-4 py-2 rounded-lg text-ui font-semibold",
               "text-text-muted hover:text-text-secondary hover:bg-bg-tertiary transition-colors",
             )}
           >
@@ -963,11 +963,11 @@ function DeleteConfirmDialog({
             <Trash2 className="icon-lg" style={{ color: "hsl(150, 60%, 45%)" }} />
           </div>
           <div className="flex-1 min-w-0">
-            <h2 className="text-[14px] font-bold text-text-primary">{state.title}</h2>
-            <p className="mt-1 text-[12px] text-text-muted whitespace-pre-wrap leading-relaxed">
+            <h2 className="text-body font-bold text-text-primary">{state.title}</h2>
+            <p className="mt-1 text-meta text-text-muted whitespace-pre-wrap leading-relaxed">
               {state.body}
             </p>
-            <p className="mt-2 text-[11px] text-text-faint">
+            <p className="mt-2 text-tiny text-text-faint">
               此操作不可恢复
             </p>
           </div>
@@ -977,7 +977,7 @@ function DeleteConfirmDialog({
             type="button"
             onClick={onCancel}
             className={clsx(
-              "flex items-center gap-1.5 px-4 py-2 rounded-lg text-[13px] font-semibold",
+              "flex items-center gap-1.5 px-4 py-2 rounded-lg text-ui font-semibold",
               "text-text-muted hover:text-text-secondary hover:bg-bg-tertiary transition-colors",
             )}
           >
@@ -987,7 +987,7 @@ function DeleteConfirmDialog({
             type="button"
             onClick={onConfirm}
             className={clsx(
-              "flex items-center gap-1.5 px-4 py-2 rounded-lg text-[13px] font-bold",
+              "flex items-center gap-1.5 px-4 py-2 rounded-lg text-ui font-bold",
               "text-white transition-opacity hover:opacity-90",
             )}
             style={{ background: "hsl(0, 70%, 50%)" }}

@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { AcuiDirective } from "../acui/types";
 import type { ApprovalRequestItem, SubAgentEventPayload } from "../types";
@@ -813,7 +813,29 @@ export function useStreamChat(activeSessionId: string | null) {
     return true;
   }, []);
 
-  return { send, streaming: streamingSessionId !== null, streamingSessionId, streamingStatus, setStreamingStatus, lastActivityAt, compactionStatus, setCompactionStatus, contextUsage, setContextUsage, usageSnapshot, setUsageSnapshot, cancel, wsSendRaw };
+  // 稳定引用的 API 对象：每次 render 都新建字面量会让 StreamChatContext 的
+  // value 变化 → 所有消费者无条件重渲染。setters 由 useState 保证稳定，
+  // send/cancel/wsSendRaw 是 useCallback 常量。
+  const api = useMemo(
+    () => ({
+      send,
+      streaming: streamingSessionId !== null,
+      streamingSessionId,
+      streamingStatus,
+      setStreamingStatus,
+      lastActivityAt,
+      compactionStatus,
+      setCompactionStatus,
+      contextUsage,
+      setContextUsage,
+      usageSnapshot,
+      setUsageSnapshot,
+      cancel,
+      wsSendRaw,
+    }),
+    [send, cancel, wsSendRaw, streamingSessionId, streamingStatus, lastActivityAt, compactionStatus, contextUsage, usageSnapshot],
+  );
+  return api;
 }
 
 export type StreamChatApi = ReturnType<typeof useStreamChat>;

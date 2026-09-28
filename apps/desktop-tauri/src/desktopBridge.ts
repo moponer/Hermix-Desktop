@@ -185,6 +185,26 @@ export async function renderOfficePreview(
   return invoke("render_office_preview", { filePath, workspaceRoot: workspaceRoot ?? null });
 }
 
+/// Convert a document (Office / PDF / HTML / EPUB / CSV …) to Markdown
+/// using the bundled `markitdown` sidecar. Used as the text-view path in
+/// the preview panel and as the fallback when `officecli` is unavailable —
+/// Markdown is searchable and copyable, unlike an embedded HTML render.
+export interface DocumentMarkdownResult {
+  markdown: string;
+  fileName: string;
+  truncated: boolean;
+}
+
+export async function convertDocumentToMarkdown(
+  filePath: string,
+  workspaceRoot?: string | null,
+): Promise<DocumentMarkdownResult> {
+  return invoke("document_to_markdown", {
+    filePath,
+    workspaceRoot: workspaceRoot ?? null,
+  });
+}
+
 /// List the contents of a directory for the "电脑" (Computer) tab.
 /// Uses the same security model as `readArtifactFile` — the path must
 /// live under an allowed artifact root (or `workspaceRoot`). This

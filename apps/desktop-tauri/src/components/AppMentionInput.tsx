@@ -6,8 +6,14 @@
 // "@app" an inline card lists the installed custom apps.
 // Picking one inserts a resolved "<trigger> <name> " token.
 // No extra deps, no contentEditable.
+//
+// 长文本处理：滚动交给外层的 scroll host，textarea 自身高度始终等于完整
+// 内容高度、永不内部滚动。原因是 textarea 一旦自己滚动，caret 的绘制位置
+// 就会跟 scrollTop 耦合，在祖先存在 CSS `zoom` 的页面上（本应用用根元素
+// zoom 做界面缩放）caret 会被画到明显偏离实际字符的位置 —— 文本看着对、
+// 光标却跑到别处。让 textarea 保持 scrollTop === 0 可以从根上消除这个偏移。
 
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Plus } from "lucide-react";
 import type { CustomAppSummary } from "../lib/customAppApi";
 import {
@@ -23,6 +29,9 @@ import {
 // 选中后插入 "@app 创建新应用 应用要求："，引导用户描述需求，
 // agent 收到后按 custom-app-development 规范走创建流程（需求梳理→方案规划→开发→验证）。
 const CREATE_NEW_APP_ID = "__create_new_app__";
+
+// 输入框可视高度上限：超过就由外层容器滚动，textarea 本身不滚。
+const COMPOSER_MAX_HEIGHT = 200;
 
 interface Props {
   value: string;
@@ -60,6 +69,7 @@ function AppMentionInputImpl({
   const [active, setActive] = useState<ActiveMentionWithTrigger | null>(null);
   const [selIdx, setSelIdx] = useState(0);
   const backdropRef = useRef<HTMLDivElement>(null);
+  const scrollHostRef = useRef<HTMLDivElement>(null);
   const pendingCaret = useRef<number | null>(null);
   const blurTimer = useRef<number | null>(null);
 
@@ -92,6 +102,22 @@ function AppMentionInputImpl({
       textareaRef.current.focus();
       textareaRef.current.setSelectionRange(pos, pos);
       pendingCaret.current = null;
+    }
+  }, [value, textareaRef]);
+
+  // textarea 撑到完整内容高度；超过上限时由外层 scroll host 滚动，
+  // 光标在末尾时把可视区跟着推到最新一行。
+  useLayoutEffect(() => {
+    const ta = textareaRef.current;
+    const host = scrollHostRef.current;
+    if (!ta) return;
+    ta.style.height = "auto";
+    ta.style.height = `${ta.scrollHeight}px`;
+    if (!host) return;
+    const atTail =
+      ta.selectionStart === value.length && ta.selectionEnd === value.length;
+    if (document.activeElement === ta && atTail) {
+      host.scrollTop = host.scrollHeight - host.clientHeight;
     }
   }, [value, textareaRef]);
 
@@ -142,12 +168,6 @@ function AppMentionInputImpl({
     onKeyDown(e);
   };
 
-  const handleScroll = () => {
-    if (backdropRef.current && textareaRef.current) {
-      backdropRef.current.scrollTop = textareaRef.current.scrollTop;
-    }
-  };
-
   const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const files = Array.from(e.clipboardData?.files ?? []);
     if (files.length > 0) {
@@ -173,61 +193,70 @@ function AppMentionInputImpl({
 
   return (
     <div className="relative">
-      {/* Highlight backdrop — mirrors the textarea's box & font metrics. */}
+      {/* 滚动容器：长文本时由它滚动，textarea 自身保持不滚动。 */}
       <div
-        ref={backdropRef}
-        aria-hidden
-        className="absolute inset-0 pointer-events-none overflow-hidden whitespace-pre-wrap break-words px-4 pt-3.5 pb-1.5"
-        style={{
-          fontSize: "var(--font-size-body)",
-          lineHeight: 1.5,
-          color: "var(--color-text-primary)",
-          boxSizing: "border-box",
-        }}
+        ref={scrollHostRef}
+        className="relative overflow-y-auto"
+        style={{ maxHeight: COMPOSER_MAX_HEIGHT }}
       >
-        {segments.map((seg, i) =>
-          seg.mention ? (
-            <span
-              key={i}
-              style={{ color: MENTION_COLOR }}
-            >
-              {seg.text}
-            </span>
-          ) : (
-            <span key={i}>{seg.text}</span>
-          ),
-        )}
-        {value.length === 0 && (
-          <span className="text-text-muted">{placeholder}</span>
-        )}
-      </div>
+        <div className="relative">
+          {/* Highlight backdrop — mirrors the textarea's box & font metrics. */}
+          <div
+            ref={backdropRef}
+            aria-hidden
+            className="absolute inset-0 pointer-events-none overflow-hidden whitespace-pre-wrap break-words px-4 pt-3.5 pb-1.5"
+            style={{
+              fontSize: "var(--font-size-body)",
+              lineHeight: 1.5,
+              color: "var(--color-text-primary)",
+              boxSizing: "border-box",
+            }}
+          >
+            {segments.map((seg, i) =>
+              seg.mention ? (
+                <span
+                  key={i}
+                  style={{ color: MENTION_COLOR }}
+                >
+                  {seg.text}
+                </span>
+              ) : (
+                <span key={i}>{seg.text}</span>
+              ),
+            )}
+            {value.length === 0 && (
+              <span className="text-text-muted">{placeholder}</span>
+            )}
+          </div>
 
-      {/* Real textarea — transparent text, visible caret. */}
-      <textarea
-        ref={textareaRef}
-        value={value}
-        onChange={handleChange}
-        onKeyDown={handleKeyDown}
-        onPaste={handlePaste}
-        onScroll={handleScroll}
-        onFocus={handleFocus}
-        onBlur={handleBlur}
-        disabled={disabled}
-        placeholder={isStreaming ? "输入消息加入队列..." : placeholder}
-        data-no-border
-        className="relative z-[1] w-full bg-transparent resize-none outline-none px-4 pt-3.5 pb-1.5 min-h-[72px]"
-        style={{
-          fontSize: "var(--font-size-body)",
-          lineHeight: 1.5,
-          border: "none",
-          borderRadius: 0,
-          boxShadow: "none",
-          background: "transparent",
-          color: "transparent",
-          caretColor: "var(--color-text-primary)",
-        }}
-        rows={3}
-      />
+          {/* Real textarea — transparent text, visible caret. */}
+          <textarea
+            ref={textareaRef}
+            value={value}
+            onChange={handleChange}
+            onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
+            onFocus={handleFocus}
+            onBlur={handleBlur}
+            disabled={disabled}
+            placeholder={isStreaming ? "输入消息加入队列..." : placeholder}
+            data-no-border
+            className="relative z-[1] w-full bg-transparent resize-none outline-none px-4 pt-3.5 pb-1.5 min-h-[72px]"
+            style={{
+              fontSize: "var(--font-size-body)",
+              lineHeight: 1.5,
+              border: "none",
+              borderRadius: 0,
+              boxShadow: "none",
+              background: "transparent",
+              color: "transparent",
+              caretColor: "var(--color-text-primary)",
+              overflow: "hidden",
+            }}
+            rows={3}
+          />
+        </div>
+      </div>
 
       {/* mention card */}
       {active && (

@@ -66,3 +66,6 @@
 @utility max-w-narrow { max-width: var(--width-narrow); }
 @utility max-w-base { max-width: var(--width-base); }
 @utility max-w-wide { max-width: var(--width-wide); }
+/* max-w-reading = 对话正文行长档（640px / 约 38 汉字）。改行宽只改这一个令牌，
+   不再在组件里写 max-w-[XXXpx] 字面值。 */
+@utility max-w-reading { max-width: var(--width-reading); }

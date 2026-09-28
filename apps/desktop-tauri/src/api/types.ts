@@ -108,6 +108,10 @@ export interface RestoredContextUsage {
 export interface SessionMessagesResult {
   messages: ChatMessage[];
   contextUsage: RestoredContextUsage | null;
+  /** 窗口化加载时：完整列表在本次窗口之前还有更早的消息（"加载更早"入口）。 */
+  hasMore: boolean;
+  /** 组装后的完整列表长度（含压缩归档子会话消息），窗口化时 ≥ messages.length。 */
+  totalMessages: number;
 }
 
 // ── Dashboard / model types ───────────────────────

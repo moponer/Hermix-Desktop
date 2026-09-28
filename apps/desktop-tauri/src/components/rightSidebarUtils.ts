@@ -107,6 +107,28 @@ export const FRONTEND_PARSE_EXTS = new Set([
   "csv", "tsv",
 ]);
 
+/**
+ * Office 格式按「能否在浏览器里直接渲染」分流。
+ * OOXML（docx / pptx）是 ZIP+XML，纯前端引擎可以解析；老二进制格式
+ * （doc / xls / ppt）结构复杂，只能交给 officecli 这类外部转换器。
+ */
+export type OfficeExtGroup = "docx" | "pptx" | "legacy" | null;
+
+const DOCX_EXTS = new Set(["docx", "docm", "dotx", "dotm"]);
+const PPTX_EXTS = new Set(["pptx", "pptm", "potx", "potm", "ppsx", "ppsm"]);
+const LEGACY_OFFICE_EXTS = new Set([
+  "doc", "xls", "ppt", "wps", "et", "dps", "rtf",
+  "odt", "ods", "odp", "ott", "ots", "otp",
+]);
+
+export function officeExtGroup(name: string): OfficeExtGroup {
+  const ext = name.split(".").pop()?.toLowerCase() ?? "";
+  if (DOCX_EXTS.has(ext)) return "docx";
+  if (PPTX_EXTS.has(ext)) return "pptx";
+  if (LEGACY_OFFICE_EXTS.has(ext)) return "legacy";
+  return null;
+}
+
 export function needsFrontendParse(name: string): boolean {
   const ext = name.split(".").pop()?.toLowerCase() ?? "";
   return FRONTEND_PARSE_EXTS.has(ext);
@@ -192,6 +214,27 @@ export const LANG_LABELS: Record<string, string> = {
   git: "Git",
   text: "Text",
 };
+
+/// 状态栏 / 头部显示的类型标签。代码语言走 LANG_LABELS，其余按扩展名。
+const EXT_TYPE_LABELS: Record<string, string> = {
+  pdf: "PDF",
+  docx: "Word", doc: "Word", odt: "Word", rtf: "RTF",
+  xlsx: "Excel", xls: "Excel", ods: "Spreadsheet",
+  csv: "CSV", tsv: "TSV",
+  pptx: "PowerPoint", ppt: "PowerPoint", odp: "Presentation",
+  png: "PNG", jpg: "JPEG", jpeg: "JPEG", gif: "GIF",
+  webp: "WebP", bmp: "BMP", ico: "Icon", svg: "SVG",
+  mp3: "Audio", wav: "Audio", mp4: "Video", mov: "Video",
+  zip: "Archive", rar: "Archive", "7z": "Archive", tar: "Archive",
+  exe: "Executable", dll: "DLL", lock: "Lockfile",
+};
+
+export function fileTypeLabel(name: string): string {
+  const lang = detectLanguage(name);
+  if (lang) return LANG_LABELS[lang] ?? lang;
+  const ext = name.split(".").pop()?.toLowerCase() ?? "";
+  return (EXT_TYPE_LABELS[ext] ?? ext.toUpperCase()) || "预览";
+}
 
 /** Format a timestamp (ms since epoch) as a short date string. */
 export function formatModifiedDate(ms: number): string {

@@ -14,7 +14,7 @@
 // - "无蓝紫" — gray/zinc family only, no slate/blue/violet.
 // - Plain click to toggle done <-> pending; no drag-reorder.
 // - Priority visual = subtle amber background tint for high-priority
-//   rows (no left bar / border — 主人禁边框线，层级靠 bg 色差).
+//   rows (no left bar / border — 不画边框线，层级靠背景色差)。
 // - Group title row above the items when set (LLM-provided label
 //   like "rename all files").
 
@@ -64,7 +64,7 @@ export interface TodoListCardProps {
 
 export function TodoListCard({ groupId, groupTitle, itemsById, onPatch, justPatchedRef }: TodoListCardProps) {
   // Derived default: 任务全部完成/失败 → 默认折叠成单行 (产品体验).
-  // 2026-08-05 主人反馈: 消息发出后旧 todo 卡片一直展开挂在消息流里占屏。
+  // 2026-08-05 调整: 消息发出后旧 todo 卡片不再展开挂在消息流里占屏。
   //   - 全部结案 (completed/failed) → 一行 "✓ N/N" 不再霸屏
   //   - 进行中 (有 pending/in_progress) → 展开看细节
   //   - 用户手展开已完成的卡片不会被自动覆盖 (useState 只取初值)

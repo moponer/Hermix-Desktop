@@ -259,36 +259,9 @@ export function ProcessTimeline({
   const awaitingApproval = steps.some(
     (s) => s.kind === "approval_request" && s.meta.decision === null,
   );
-  // Auto-scroll to a newly-arrived pending approval card. Without this,
-  // the user can be reading history (scrolled up) when an approval
-  // appears at the bottom of the stream — the card renders but stays
-  // off-screen, so the user keeps staring at "调用工具中" wondering
-  // what's stuck. We track which requestIds we've already announced
-  // so a resolved-then-re-pending dance doesn't re-trigger the scroll.
-  const approvalRefs = useRef<Map<string, HTMLDivElement>>(new Map());
-  const scrolledApprovalIdsRef = useRef<Set<string>>(new Set());
-  useEffect(() => {
-    // 收集所有 pending approval — 多 batch 同时出现时支持 FIFO 顺序滚动到首个未滚过的，
-    // 避免历史滚到中段时后续 batch 卡片被静默插入底部视野外.
-    const pendingSteps = steps.filter(
-      (s): s is Extract<typeof s, { kind: "approval_request" }> =>
-        s.kind === "approval_request" && s.meta.decision === null,
-    );
-    const nextStep = pendingSteps.find(
-      (s) => s.meta.requestId && !scrolledApprovalIdsRef.current.has(s.meta.requestId),
-    );
-    if (!nextStep || !nextStep.meta.requestId) return;
-    const nextId = nextStep.meta.requestId;
-    scrolledApprovalIdsRef.current.add(nextId);
-    // Defer one frame so React commits the new node to the DOM before
-    // we ask the browser to find it.
-    const raf = requestAnimationFrame(() => {
-      const el = approvalRefs.current.get(nextId);
-      if (!el) return;
-      el.scrollIntoView({ behavior: "smooth", block: "center" });
-    });
-    return () => cancelAnimationFrame(raf);
-  }, [steps]);
+  // 注：旧版“自动滚动到待审批卡片”的逻辑已随内联审批卡一起移除 ——
+  // 待决定审批改由 ApprovalDrawer 承载，它固定在输入框上方（视线落点），
+  // 不存在“渲染在视野外”的问题。
   const stepGroups = useMemo(
     () =>
       steps.map((s) =>
@@ -327,6 +300,20 @@ export function ProcessTimeline({
   const resolvedApprovals = steps.filter(
     (s) => s.kind === "approval_request" && s.meta.decision !== null,
   ).length;
+
+  // 工具输出的总行数。折叠态下用户看不到内容，"这一轮翻了多少东西"
+  // 是判断要不要展开的唯一线索，所以和工具数一起放在摘要行。
+  // 只数 tool_complete 的最终结果（tool_stdout 是分片，逐片数会把
+  // 行数放大数倍）；历史消息无结果体时自然为 0，不显示。
+  const totalOutputLines = steps.reduce((acc, s) => {
+    if (s.kind !== "tools") return acc;
+    for (const e of s.events) {
+      if (e.type !== "tool_complete") continue;
+      if (typeof e.content !== "string" || !e.content) continue;
+      acc += e.content.split("\n").length;
+    }
+    return acc;
+  }, 0);
 
   // Header label: only used when settled (isStreaming=false). Live
   // renders no header — the content flows inline like prose.
@@ -397,6 +384,15 @@ export function ProcessTimeline({
           <span className="reasoning-label">
             {reasoningSteps.length > 0 ? "思考" : settledLabel}
           </span>
+          {/* 折叠态的"分量提示"：有思考时主标签是"思考"，工具数/行数/耗时
+              作为次级统计挂在右侧，避免和思考文案挤成一句话。 */}
+          {reasoningSteps.length > 0 && !isStreaming && totalTools > 0 && (
+            <span className="reasoning-stat">
+              {totalTools} 个工具
+              {totalOutputLines > 0 ? ` · ${totalOutputLines} 行` : ""}
+              {durationPart ? ` · ${durationPart}` : ""}
+            </span>
+          )}
         </button>
       )}
       {/* Chronological render:
@@ -469,27 +465,11 @@ export function ProcessTimeline({
           // everything else.
           if (step.kind === "approval_request") {
             if (step.meta.decision === null) {
-              // PENDING — unconditional render. The user MUST see this
-              // to click it; the fold is irrelevant. Skipping the
-              // render under any condition is what produced the
-              // "重启就好" symptom (ref race left the timeline collapsed
-              // and `isStreaming=false` + `expanded=false` hid the card).
-              return (
-                <div
-                  key={`ps-${i}`}
-                  className="tl-approval-step"
-                  ref={(el) => {
-                    if (el) approvalRefs.current.set(step.meta.requestId, el);
-                    else approvalRefs.current.delete(step.meta.requestId);
-                  }}
-                >
-                  <ApprovalRequestView
-                    meta={step.meta}
-                    onApprove={onApproveApproval}
-                    onDeny={onDenyApproval}
-                  />
-                </div>
-              );
+              // PENDING — 不再内联渲染。待决定审批改由 ChatView 底部的
+              // ApprovalDrawer（输入框上方抽屉）承载：它是"现在需要你
+              // 做的决定"，不是流的一部分；埋在流中间（尤其折叠时）会
+              // 被用户错过。这里返回 null，抽屉负责让用户看到它。
+              return null;
             }
             // RESOLVED — collapses after a brief summary beat during
             // the live turn (avoids the ~1s blank an instant unmount
@@ -516,25 +496,10 @@ export function ProcessTimeline({
             );
           }
           if (step.kind === "approval_request_batch") {
-            // Batch — same shape as single: pending always visible,
-            // resolved follows the fold with the leaving animation.
+            // Batch — 与单个审批同策略：待决定的整批搬到 ApprovalDrawer
+            // （输入框上方抽屉），这里只在已决定后渲染历史记录。
             if (step.meta.decision === null) {
-              return (
-                <div
-                  key={`ps-${i}`}
-                  className="tl-approval-step tl-approval-step--batch"
-                  ref={(el) => {
-                    if (el) approvalRefs.current.set(step.meta.batchId, el);
-                    else approvalRefs.current.delete(step.meta.batchId);
-                  }}
-                >
-                  <ApprovalBatchView
-                    meta={step.meta}
-                    onApprove={onApproveBatchApproval}
-                    onDeny={onDenyBatchApproval}
-                  />
-                </div>
-              );
+              return null;
             }
             const turnActive = isStreaming || expanded;
             if (!turnActive) return null;

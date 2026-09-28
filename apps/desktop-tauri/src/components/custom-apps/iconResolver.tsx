@@ -111,7 +111,7 @@ export interface IconLike {
 type IconCmp = ComponentType<LucideProps>;
 
 // 类目兜底 lucide 图标 — 命中优先级最低, 保底保证显示语义合理.
-// 注: 主人 manifest 用 "audio", 也按 media 处理 (音乐/音频同类).
+// 注: 部分 manifest 用 "audio"，也按 media 处理 (音乐/音频同类)。
 const CATEGORY_DEFAULT: Record<string, IconCmp> = {
   "file-tools": FolderTree,
   "media": Music,
@@ -248,7 +248,7 @@ export interface ResolveIconOpts {
 /**
  * 最终的 lucide 形态渲染 — emoji 与 PNG 之后的兜底。
  * tile_color 存在时强制固定方块色 + 白前景, 不再让 CSS hover 覆盖
- * (主人要"背景不透明", 行为应该稳定); 不存在时回退到 CSS 默认灰底.
+ * (图标背景必须不透明，行为应该稳定); 不存在时回退到 CSS 默认灰底。
  */
 function renderLucideFallback(app: IconLike, opts: ResolveIconOpts): ReactNode {
   const { spanClassName, size = 20, strokeWidth = 1.75 } = opts;
@@ -324,7 +324,7 @@ export function resolveAppIconEl(app: IconLike, opts: ResolveIconOpts = {}): Rea
   if (app.icon_file) {
     return <IconImage app={app} opts={opts} />;
   }
-  // emoji 自身有色彩 + 字体渲染, 叠方块底会变花 (主人拍板跳过).
+  // emoji 自身有色彩 + 字体渲染，叠方块底会变花 (已定：跳过)。
   if (isEmoji(app.icon)) {
     return <span className={spanClassName}>{app.icon}</span>;
   }

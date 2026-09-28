@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { clsx } from "clsx";
 import {
   Globe, Palette, ZoomIn, BarChart3, Unplug, ChevronRight,
-  Sun, Moon, Trees, Sunrise, Monitor, Check,
+  Sun, Moon, Monitor, Check,
 } from "lucide-react";
 import { useTheme } from "../hooks/useTheme";
 import { THEMES } from "../styles/themes/registry";
@@ -11,7 +11,7 @@ import { storage } from "../utils/storageCompat";
 import { SCALE_OPTIONS, applyScale, readScale } from "../utils/uiScale";
 
 const THEME_ICONS: Record<string, React.ElementType> = {
-  light: Sun, dark: Moon, rainforest: Trees, sunset: Sunrise,
+  light: Sun, dark: Moon,
 };
 
 /** 档位标签属于 UI 层，取值本身由 utils/uiScale 定义（那里同时派发重算事件）。 */

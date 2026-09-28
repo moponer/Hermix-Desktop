@@ -11,172 +11,6 @@
    · Hover: subtle gray shift, no outlines
    ════════════════════════════════════════════════════════════════════ */
 
-/* ════════════════════════════════════════════════════════════════════
-   § 1.  APP SHELL & PANES
-   ════════════════════════════════════════════════════════════════════ */
-
-.app-shell {
-  display: flex;
-  flex-direction: column;
-  /* 用 100% 而非 100vh：界面缩放走根元素 `zoom`，它只改布局尺寸、不改视口单位，
-     100vh 仍是 100% 物理视口。放大到 1.3 时外壳占 130% 视口高，超出部分被裁
-     （底部输入框消失）；缩到 0.85 时只占 85%，底部留白。html/body 都是
-     height:100%，100% 天然跟随缩放后的可用高度。 */
-  height: 100%;
-  background: var(--color-bg-primary);
-  color: var(--color-text-primary);
-  overflow: hidden;
-}
-
-.app-body {
-  display: grid;
-  /* 三列布局，关闭任一列时彻底归零 track。
-     - 左/主/右三列下限**全取 0**：任一带像素硬下限的 track 都会抬高整行的
-       min-content 宽度。三者之和超过视口时 grid 会把整行撑出 .app-body，
-       而 .app-body 是 overflow: hidden —— 溢出不产生滚动条，直接被裁掉，
-       右侧内容凭空消失。窗口缩到 780、或界面缩放到 1.3（等效视口 = 视口 ÷ 1.3，
-       zoom 不改 innerWidth）都必然触发。
-     - 右列上限跟随 App.tsx 的 right.width（默认 640）。硬编码
-       `minmax(0px, 480px)` 会把 max 锁死在 480，right.width 设到 640 也没用。
-     - 主列的舒适宽度（580 / 480 / 400 / 360 分档）不再由 track 承担，
-       改由 App.tsx 的 computeMainMinWidth 写入 --pane-main-min，
-       供需要"内容不至于被压到不可读"的内部容器使用。
-     - 左侧栏折叠时把第一列归零 (见 [data-left-open="false"])：否则只把外层
-       div translate-x-full 移走, grid 仍占 200px, main 不扩张, 视觉上留下一条
-       空白, 看起来像 "sidebar 没真正折叠"。 */
-  --col-left:  minmax(0, var(--ab-left-w, 200px));
-  --col-right: minmax(0, var(--ab-right-w, 640px));
-  grid-template-columns:
-    var(--col-left)
-    minmax(0, 1fr)
-    var(--col-right);
-  grid-template-rows: minmax(0, 1fr);  /* minmax(0,1fr) 而非裸 1fr：裸 1fr 等价
-                        minmax(auto,1fr)，auto 下限可能取到 item 的 min-content，
-                        流式输出时整行会顶出容器高度，底部输入框被推出视口。 */
-  flex: 1;
-  /* .app-body 是 .app-shell（column flex）的 flex item。默认 min-height:auto
-     会让 grid 子项把容器撑过 flex 分配的高度，底部输入框被推出视口。 */
-  min-height: 0;
-  overflow: hidden;
-  position: relative;
-  background: var(--color-bg-secondary);
-  /* No grid-template-columns transition — causes the "squished"
-     mid-animation state visible when resizing panes. Immediate
-     snap is preferred over an ugly animated collapse.
-     Also: no grid animation mid-resize → columns snap instantly,
-     no overlapping/overlay flash. */
-}
-
-/* v25: 左列关闭 → track 归零, 主列吃满左半边空间. */
-.app-body[data-left-open="false"] {
-  --col-left: 0px;
-}
-
-/* v8: 右列关闭 → track 归零, 主列吃满右半边空间. */
-.app-body[data-right-open="false"] {
-  --col-right: 0px;
-}
-
-.pane {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  min-height: 0;     /* critical: without this, flex/grid children with
-                        overflowing content expand the parent beyond its
-                        allocated height, pushing bottom components (sidebar
-                        status bar, chat input) off-screen. */
-  overflow: hidden;
-  flex-shrink: 0;
-  width: 100%;       /* fill parent wrapper (the wrapper controls the actual width) */
-}
-.pane-left { background: var(--color-bg-secondary); }
-/* .pane-main 的 min-width 故意不再写 — grid track 已取 minmax(0,1fr)，
-   再给 item 设 min-width 会造成双重约束（历史教训: 同时给 track 和 item 设
-   min-width 在窄视口下会让 inflexible 列被压扁到只剩图标竖排）。
-   主列的「最小可读宽度」由 --pane-main-min 表达：内部内容层用 min-width:0
-   允许被压窄，超出部分走各自滚动容器，而不是把三列一起顶出容器。 */
-.chat-surface {
-  min-width: 0;
-}
-/* 主区背景 = 中性冷灰（对话流阅读区，body 背景亦跟随） —
-   .pane-main 的 background 由 components-layout.css 定义（统一用 --theme-bg-chat），
-   此处不重复声明，避免 cascade 冲突。 */
-
-.pane-resizer {
-  position: absolute;
-  top: 0;
-  width: 4px;
-  height: 100%;
-  cursor: col-resize;
-  background: transparent;
-  transition: background var(--duration-fast) ease;
-}
-.pane-resizer:hover { background: var(--color-accent-soft); }
-.pane-resizer:active { background: var(--color-accent-soft-strong); }
-.pane-resizer-right { right: 0; }
-.pane-resizer-left { left: 0; }
-
-.pane-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.5);
-  z-index: 10;
-}
-
-/* ════════════════════════════════════════════════════════════════════
-   § 2.  TITLE BAR
-   ════════════════════════════════════════════════════════════════════ */
-
-.titlebar {
-  display: flex;
-  align-items: center;
-  height: 40px;
-  background: var(--color-bg-secondary);
-  flex-shrink: 0;
-  user-select: none;
-}
-
-.titlebar-brand {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  /* 品牌区左侧 10px 边距 — 与 macOS 标题栏视觉锚点对齐 */
-  padding-left: 10px;
-  user-select: none;
-}
-.titlebar-logo {
-  /* 22px 略大于 20px：与新 SVG 圆角 + 狐狸头比例更协调 */
-  width: 22px;
-  height: 22px;
-  flex-shrink: 0;
-  pointer-events: none;
-  /* 抗锯齿：SVG 缩放时边缘更锐利 */
-  shape-rendering: geometricPrecision;
-}
-.titlebar-title {
-  font-size: var(--font-size-body);
-  font-weight: 600;
-  color: var(--color-text-secondary);
-  letter-spacing: -0.01em;
-  pointer-events: none;
-}
-
-.titlebar-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 40px;
-  height: 40px;
-  color: var(--color-text-muted);
-  background: transparent;
-  border: 0;
-  cursor: pointer;
-  transition: background var(--duration-fast) ease, color var(--duration-fast) ease;
-}
-.titlebar-btn:hover { background: var(--color-bg-hover); color: var(--color-text-secondary); }
-.titlebar-btn-danger:hover { background: var(--color-error); color: #ffffff; }
-
-/* (品牌已上移至 TitleBar,Sidebar 不再单独显示 — 避免双层标题栏) */
 
 /* ════════════════════════════════════════════════════════════════════
    § 4.  NAVIGATION
@@ -196,7 +30,7 @@
   width: 100%;
   padding: 8px 10px;
   border-radius: var(--radius-lg);
-  font-size: 13.5px;
+  font-size: var(--text-ui, 13px);
   font-weight: 500;
   color: var(--color-text-secondary);
   background: transparent;
@@ -234,9 +68,19 @@
 .section-header-toggle:hover { color: var(--color-text-muted); }
 .section-header-count {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-meta, 12px);
   color: var(--color-text-faint);
-  margin-left: 2px;
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  min-width: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-text-faint) 10%, transparent);
+  flex-shrink: 0;
 }
 
 /* ════════════════════════════════════════════════════════════════════
@@ -247,7 +91,7 @@
 /* Main row: title + time + pulse indicator */
 /* Time — right-aligned, faint
  *
- * v3 主人反馈：会话列表去掉 "几小时前 / 几天前" 时间戳。SessionItem
+ * v3 调整：会话列表去掉 "几小时前 / 几天前" 时间戳。SessionItem
  * 已不再渲染这个 span，规则保留原始样式只作为占位（其它位置如有
  * 需要可恢复使用）。 */
 /* Pulse dot — shows when model is actively streaming into this session */
@@ -261,7 +105,7 @@
 
 /* Message count meta (below title)
  *
- * v3 主人反馈：会话列表项去掉 "N 条" / "X 小时前" 的冗余 metadata，
+ * v3 调整：会话列表项去掉 "N 条" / "X 小时前" 的冗余 metadata，
  * SessionItem.tsx 已不再渲染这个 span，所以这条规则在会话列表上
  * 不再生效。但聊天室（ChatRoom）列表仍用它显示 "N 个成员"，所以
  * 保留原始样式，只是不再被会话列表触发。
@@ -271,7 +115,7 @@
  *
  * Hierarchy level 3 — children indented under their parent row.
  * 16px left margin + 2px faint accent-left border = clear depth cue.
- * v3 主人反馈：工作区下的会话列表不应该有左侧的粗分隔线。
+ * v3 调整：工作区下的会话列表不应该有左侧的粗分隔线。
  */
 
 /* ── List row (workspace / chat room header with chevron) ──
@@ -374,7 +218,7 @@
   width: 100%;
   padding: 7px 10px;
   border-radius: var(--radius-sm);
-  font-size: 12.5px;
+  font-size: var(--text-meta, 12px);
   color: var(--color-text-secondary);
   background: transparent;
   border: none;
@@ -396,7 +240,7 @@
   gap: 6px;
   padding: 6px 12px;
   border-radius: var(--radius-md);
-  font-size: 12.5px;
+  font-size: var(--text-meta, 12px);
   font-weight: 500;
   font-family: inherit;
   border: 1px solid transparent;
@@ -452,7 +296,7 @@
 .select {
   width: 100%;
   padding: 7px 10px;
-  font-size: 12.5px;
+  font-size: var(--text-meta, 12px);
   color: var(--color-text-primary);
   background: var(--color-bg-primary);
   border: 1px solid var(--color-border-secondary);
@@ -502,7 +346,7 @@
   gap: 4px;
   padding: 2px 8px;
   border-radius: var(--radius-sm);
-  font-size: 10.5px;
+  font-size: var(--text-micro, 10px);
   font-weight: 500;
   font-family: var(--font-mono);
   background: var(--color-bg-tertiary);
@@ -545,9 +389,8 @@
   border: 1px solid var(--color-border-primary);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
   overflow: visible;
-  transition:
-    backdrop-filter var(--duration-base, 160ms) ease,
-    background-color var(--duration-base, 160ms) ease;
+  /* backdrop-filter 不参与 transition（Chromium 上过渡该属性代价极高） */
+  transition: background-color var(--duration-base, 160ms) ease;
 }
 /* 浅色基线（暖纸）走 liquid glass；暗色族保持上方 .composer 实色样式 */
 :root[data-theme="light"] .composer {
@@ -660,7 +503,7 @@
 .modal-icon-info { background: var(--color-bg-tertiary);  color: var(--color-text-primary); }
 
 .modal-title-block { flex: 1; min-width: 0; }
-.modal-title { font-size: 14.5px; font-weight: 600; color: var(--color-text-primary); line-height: 1.3; }
+.modal-title { font-size: var(--text-body, 14px); font-weight: 600; color: var(--color-text-primary); line-height: 1.3; }
 .modal-subtitle { font-size: 12px; color: var(--color-text-muted); margin-top: 4px; line-height: 1.5; }
 
 .modal-close {
@@ -675,7 +518,7 @@
 }
 .modal-close:hover { color: var(--color-text-primary); background: var(--color-bg-hover); }
 
-.modal-body { padding: 0 20px 16px; font-size: 12.5px; color: var(--color-text-primary); line-height: 1.5; }
+.modal-body { padding: 0 20px 16px; font-size: var(--text-meta, 12px); color: var(--color-text-primary); line-height: 1.5; }
 .modal-form { padding: 0 20px 8px; display: flex; flex-direction: column; gap: 12px; max-height: 50vh; overflow-y: auto; }
 .modal-footer {
   display: flex;
@@ -687,14 +530,14 @@
 
 /* ── Modal form fields (used by AutomationView / PluginsView editors) ── */
 .modal-field { display: flex; flex-direction: column; gap: 3px; }
-.modal-field-label { font-size: 11.5px; font-weight: 500; color: var(--color-text-secondary); }
-.modal-field-hint { font-size: 10.5px; color: var(--color-text-faint); line-height: 1.45; margin-top: 1px; }
+.modal-field-label { font-size: var(--text-tiny, 11px); font-weight: 500; color: var(--color-text-secondary); }
+.modal-field-hint { font-size: var(--text-micro, 10px); color: var(--color-text-faint); line-height: 1.45; margin-top: 1px; }
 
 .modal-input,
 .modal-textarea {
   width: 100%;
   padding: 7px 10px;
-  font-size: 12.5px;
+  font-size: var(--text-meta, 12px);
   line-height: 1.5;
   color: var(--color-text-primary);
   background: var(--color-bg-primary);
@@ -718,7 +561,7 @@
   justify-content: center;
   gap: 5px;
   padding: 7px 16px;
-  font-size: 12.5px;
+  font-size: var(--text-meta, 12px);
   font-weight: 500;
   border-radius: var(--radius-md);
   border: 1px solid transparent;
@@ -931,7 +774,7 @@
   gap: 8px;
   padding: 4px 10px 4px 8px;
   border-radius: 999px;
-  font-size: 11.5px;
+  font-size: var(--text-tiny, 11px);
   font-weight: 500;
   color: var(--color-text-secondary);
   background: var(--color-bg-secondary);
@@ -968,7 +811,7 @@
      three dots are the only visual signal. */
 }
 .wait-for-input-label {
-  font-size: 11.5px;
+  font-size: var(--text-tiny, 11px);
   color: var(--color-text-faint);
   font-weight: 400;
   letter-spacing: 0.02em;
@@ -1189,7 +1032,7 @@
   gap: 4px;
   padding: 0;
   border-radius: 0;
-  font-size: 12.5px;
+  font-size: var(--text-meta, 12px);
   color: var(--color-link);
   background: transparent;
   border: 0;
@@ -1264,7 +1107,7 @@
 .tool-head:hover { background: var(--color-bg-secondary); }
 .tool-name {
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--text-tiny, 11px);
   font-weight: 500;
   color: var(--color-text-primary);
 }
@@ -1283,12 +1126,12 @@
    wider allowed because the row is single-line. */
 
 /* ── Tool result panel (collapsible, no header bar) ───────────────
-   v2 2026-06-18 主人反馈:
+   v2 2026-06-18 调整:
      之前 tool 折叠面板里有一个 `.tool-output-bar` 子组件, 显示
      "运行中 / 输出 / 已中断" 标签 + 绿色脉冲点 + "N 行 · K B" 统计。
      这个头部和行头的 "已执行 {result peek}" + 状态徽章完全重复,
-     而且 "○ terminal 运行中" 这个绿点子行非常刺眼, 主人要求
-     整个移除, 只要一个简洁的折叠面板。
+     而且 "○ terminal 运行中" 这个绿点子行非常刺眼，已整个移除，
+     只保留一个简洁的折叠面板。
 
    现在的设计:
      · 没有头部 — 不再有 "运行中 / 输出 / 已中断" 标签
@@ -1306,7 +1149,7 @@
      (#1c1c20 dark / #ffffff light) 深一档, 制造"内嵌代码块"层次.
      L0 bubble → L1 卡片 hairline → L2 terminal 形成可视深度, 折叠头
      默认 transparent 保持紧凑, hover 态再叠 highlight. 无蓝紫.
-     2026-08-31 主人反馈：LLM 输出区域不要背景卡片 → light 主题覆盖为 transparent
+     2026-08-31 调整：LLM 输出区域不要背景卡片 → light 主题覆盖为 transparent
      （暗色主题保留 code 区底色，维持"内嵌代码块"层次） */
   background: var(--color-bg-code);
   border: 1px solid var(--color-bg-code-border);
@@ -1318,7 +1161,7 @@
      · CJK: 浏览器会按字符回退到 Cascadia Code 没有的字符, 我们主动
             放一个 sans-serif 中文 (Microsoft YaHei) 在 cascade 末尾,
             否则 Windows 默认会回退到 SimSun (宋体, 老式衬线), 与现代
-            UI 风格冲突, 主人会感觉"老气 / 没调过".
+            UI 风格冲突，观感偏"老气 / 没调过"。
      · 末位 monospace 兜底, 确保非 Windows 环境也有等宽 fallback. */
   font-family: "Cascadia Code", "JetBrains Mono", "Sarasa Mono SC", Consolas, ui-monospace, "Microsoft YaHei", "微软雅黑", monospace;
   font-size: 12px;
@@ -1327,7 +1170,7 @@
   font-variant-ligatures: none;
   letter-spacing: 0.2px;
 }
-/* ── 2026-08-31 主人反馈：LLM 输出区域不要背景卡片 ──────
+/* ── 2026-08-31 调整：LLM 输出区域不要背景卡片 ──────
    light 主题下覆盖为 transparent + 无边框，让 prose/terminal 内容
    直接铺在主区雾绿底上；暗色主题保持原 code 区底色（内嵌代码块层次） */
 :root[data-theme="light"] .tw-msg-output {
@@ -1360,7 +1203,7 @@
 }
 .tw-msg-output-empty {
   display: block;
-  font-size: 11.5px;
+  font-size: var(--text-tiny, 11px);
   color: var(--color-text-faint);
   font-style: italic;
   font-family: var(--font-sans, system-ui);
@@ -1456,8 +1299,8 @@
 /* ── Consecutive tool calls (same agent): visually grouped ───────
    .msg-stream > * + * 给 12px (Round 15 加, 解决 user 消息无上边距),
    但 agent 连续调多个工具时这个 12px + .tw-msg margin (3+3=6) = 18px
-   让 tool cards 看起来"松散" — 主人 2026-07-06 反馈 "每个调用间隔
-   这么大". 同一 agent 内的连续 tool call 紧贴 (4px) 即可, 不同来源
+   让 tool cards 看起来"松散" — 2026-07-06 调整："每个调用间隔
+   这么大"。 同一 agent 内的连续 tool call 紧贴 (4px) 即可, 不同来源
    (user → assistant → tool) 仍走 12px. */
 .tw-msg + .tw-msg {
   margin-top: 4px;
@@ -1599,7 +1442,7 @@
   white-space: nowrap;
   color: var(--color-text-muted);
   font-family: var(--font-mono);
-  font-size: 12.5px;
+  font-size: var(--text-meta, 12px);
   min-width: 0;
   flex-shrink: 10;
 }
@@ -1614,7 +1457,7 @@
    reads as a category tag rather than competing with the
    command itself. */
 .tw-msg-verb {
-  font-size: 12.5px;
+  font-size: var(--text-meta, 12px);
   font-weight: 400;
   color: var(--color-text-secondary);
   white-space: nowrap;
@@ -1641,12 +1484,12 @@
    monospace, NOT bold).  Paths render as link-styled spans
    (--link colour, hover underline) so users see they are
    clickable.
-   2026-07-06 主人反馈: flex: 1 把命令撑满整行, 导致 | 和
+   2026-07-06 调整: flex: 1 把命令撑满整行, 导致 | 和
    peek 被推到右侧, "不是左对齐". 改 flex: 0 1 auto 让 primary
    保持自然宽度, peek 紧跟其后左对齐. primary 仍可通过
    flex-shrink + text-overflow 截断, 但优先级高于 peek (10x). */
 .tw-msg-primary {
-  font-size: 12.5px;
+  font-size: var(--text-meta, 12px);
   font-weight: 400;
   color: var(--color-text-primary);
   overflow: hidden;
@@ -1689,7 +1532,7 @@
    Tiny monospace so it aligns with the badge baseline. */
 .tw-msg-dur {
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--text-micro, 10px);
   color: var(--color-text-faint);
   letter-spacing: -0.01em;
 }
@@ -1729,7 +1572,7 @@
 }
 
 /* Status text — small icon + label, NO background, NO border, NO pill.
-   2026-06-29 主人反馈: 蓝/红色字符很难看, 改为图标 + 文字.
+   2026-06-29 调整: 蓝/红色字符很难看, 改为图标 + 文字.
      - 已完成 → ✓ + 绿色 (success, 不用 info 蓝)
      - 失败   → ⚠ + 琥珀色 (warning, 不用 error 红)
      - 运行中 → ⏵ + 转圈 + accent (品牌色, 不变)
@@ -1739,7 +1582,7 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 11.5px;
+  font-size: var(--text-tiny, 11px);
   font-weight: 400;
   line-height: 1;
   white-space: nowrap;
@@ -1749,7 +1592,7 @@
 
 /* Status pill — used in the ACUI right panel (ToolEventCard) to
    surface the run state in a small icon+text chip. 2026-06-30
-   主人反馈: 蓝/红色字符很难看, 改为图标 + 文字 chip, 颜色统一
+   调整: 蓝/红色字符很难看, 改为图标 + 文字 chip, 颜色统一
    调到 muted/success/warning (蓝/红色字符完全不渲染). 已完成 →
    Check + 绿色; 失败 → AlertTriangle + warning 琥珀; 运行中 →
    Loader2 + accent (品牌色, 不变); 已中断 → AlertTriangle +
@@ -1772,12 +1615,12 @@
   background: var(--color-accent-soft);
 }
 .tw-msg-err-badge {
-  /* 2026-06-30 主人反馈: 红色字符刺眼, 改 warning 琥珀. */
+  /* 2026-06-30 调整: 红色字符刺眼, 改 warning 琥珀. */
   color: var(--color-warning);
   background: var(--color-warning-soft);
 }
 .tw-msg-done-badge {
-  /* 2026-06-30 主人反馈: 蓝色字符难看, 改 success 绿 (中性"工具
+  /* 2026-06-30 调整: 蓝色字符难看, 改 success 绿 (中性"工具
      执行完毕", 仍不断言 success, 真正的 success/failure 状态由
      结果内容决定, e.g. exit code 1, 错误文本). */
   color: var(--color-success);
@@ -1862,7 +1705,7 @@
   border-radius: 4px;
   cursor: pointer;
   color: var(--color-error);
-  font-size: 11.5px;
+  font-size: var(--text-tiny, 11px);
   line-height: 1.4;
   border: 0;  /* v5: 无边框 */
   background: color-mix(in srgb, var(--color-error) 10%, transparent);  /* v5: 浅红底 */
@@ -1958,12 +1801,12 @@
    (thinking state, image-size hint), RightSidebar (counts, empty
    placeholders), InlineClarifyCard / InlineApprovalCard. */
 .h-tiny {
-  font-size: 11.5px;
+  font-size: var(--text-tiny, 11px);
   line-height: 1.35;
   color: var(--color-text-secondary);
 }
 .h-meta {
-  font-size: 12.5px;
+  font-size: var(--text-meta, 12px);
   line-height: 1.5;
   color: var(--color-text-secondary);
   font-weight: 400;
@@ -1976,7 +1819,7 @@
   gap: 5px;
   padding: 2px 8px 2px 6px;
   border-radius: var(--radius-full);
-  font-size: 10.5px;
+  font-size: var(--text-micro, 10px);
   font-weight: 500;
   color: var(--color-text-muted);
   background: var(--color-bg-secondary);
@@ -2280,7 +2123,7 @@
 /* ════════════════════════════════════════════════════════════════════
    § 7.  DARK THEME — 对话流兜底 (Round 13, 2026-07-06 14:25)
    ════════════════════════════════════════════════════════════════════
-   主人反馈 "深色主题下完全看不到内容"。
+   已知问题：深色主题下完全看不到内容。
    § 6 已覆盖 tw-msg / agent-activity 等
    这里补齐容易漏掉的:
      · prose 容器与子元素 (blockquote border / inline code / pre)
@@ -2406,7 +2249,7 @@
   padding: 0;
   flex-shrink: 0;
   margin-top: 1px;
-  transition: all var(--duration-fast) ease;
+  transition: border-color var(--duration-fast) ease, color var(--duration-fast) ease;
   color: var(--color-text-secondary);
 }
 .todo-row-check:hover {
@@ -2436,7 +2279,7 @@
   gap: 2px;
 }
 .todo-row-title {
-  font-size: 12.5px;
+  font-size: var(--text-meta, 12px);
   font-weight: 500;
   color: var(--color-text-primary);
   line-height: 1.4;
@@ -2446,7 +2289,7 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
-  font-size: 10.5px;
+  font-size: var(--text-micro, 10px);
   color: var(--color-text-faint);
   line-height: 1.3;
 }

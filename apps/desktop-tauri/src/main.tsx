@@ -33,8 +33,8 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
 );
 
 // 不甩活验证：每次构建时把当前 commit hash 打到 console，
-// 主人刷新 devtools 后搜 "hermix-ui build" 能立刻看到当前运行的是哪次 commit。
-// 比让主人贴日志更直接——他自己能看到。
+// 刷新 devtools 后搜 "hermix-ui build" 能立刻看到当前运行的是哪次 commit。
+// 无需让使用者贴日志，自己就能看到。
 if (import.meta.env.DEV) {
   // eslint-disable-next-line no-console
     console.info(

@@ -1,7 +1,7 @@
 {
   "id": "dark",
-  "label": "玄铁",
-  "description": "近黑曜石层叠 + 紫罗兰电光",
+  "label": "夜墨",
   "builtin": true,
-  "colorScheme": "dark"
+  "colorScheme": "dark",
+  "description": "冷调墨底（非纯黑）+ 青碧提亮 + 与亮色同构的深度语法"
 }

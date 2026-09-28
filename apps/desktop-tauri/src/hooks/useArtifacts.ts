@@ -25,8 +25,8 @@ interface UseArtifactsInput {
   activeSession: { messages: any[] } | null | undefined;
   /** Workspace root directory for resolving relative paths. */
   workspaceRoot: string | null | undefined;
-  /** Callback to open the right sidebar when a file is clicked. */
-  onOpenRightSidebar: () => void;
+  /** 点中一个文件（对话正文里的路径）→ 由外层开一个预览标签。 */
+  onOpenArtifact: (artifact: Artifact) => void;
 }
 
 interface UseArtifactsOutput {
@@ -45,7 +45,7 @@ interface UseArtifactsOutput {
 export function useArtifacts({
   activeSession,
   workspaceRoot,
-  onOpenRightSidebar,
+  onOpenArtifact,
 }: UseArtifactsInput): UseArtifactsOutput {
   // synchronous extraction from message text
   const rawArtifacts = useMemo(() => {
@@ -119,30 +119,30 @@ export function useArtifacts({
     (path: string) => {
       const existing = artifactsRef.current.find((a) => a.path === path || a.path.endsWith(path));
       if (existing) {
-        setSelectedArtifactId(existing.id);
-      } else {
-        const ext = path.split(".").pop()?.toLowerCase() ?? "";
-        const synth: Artifact = {
-          id: `path:${path}`,
-          name: path.split(/[\\/]/).pop() ?? path,
-          path,
-          kind: classifyFromExtension(ext),
-          tool: "inline",
-          timestamp: new Date().toISOString(),
-          isAbsolute: /^[A-Za-z]:[\\/]/.test(path) || path.startsWith("/"),
-        };
-        setVerifiedArtifacts((prev) => {
-          // De-dup: don't add if an artifact with the same
-          // normalized path already exists.
-          const norm = synth.path.replace(/\\/g, "/");
-          if (prev.some((a) => a.path.replace(/\\/g, "/") === norm)) return prev;
-          return [...prev, synth];
-        });
-        setSelectedArtifactId(synth.id);
+        onOpenArtifact(existing);
+        return;
       }
-      onOpenRightSidebar();
+      // 对话正文里提到、但提取器没抓到的路径：合成一个产物再交给外层预览。
+      const ext = path.split(".").pop()?.toLowerCase() ?? "";
+      const synth: Artifact = {
+        id: `path:${path}`,
+        name: path.split(/[\\/]/).pop() ?? path,
+        path,
+        kind: classifyFromExtension(ext),
+        tool: "inline",
+        timestamp: new Date().toISOString(),
+        isAbsolute: /^[A-Za-z]:[\\/]/.test(path) || path.startsWith("/"),
+      };
+      setVerifiedArtifacts((prev) => {
+        // De-dup: don't add if an artifact with the same
+        // normalized path already exists.
+        const norm = synth.path.replace(/\\/g, "/");
+        if (prev.some((a) => a.path.replace(/\\/g, "/") === norm)) return prev;
+        return [...prev, synth];
+      });
+      onOpenArtifact(synth);
     },
-    [onOpenRightSidebar],
+    [onOpenArtifact],
   );
 
   return { rawArtifacts, artifacts, selectedArtifactId, setSelectedArtifactId, handlePathClick };

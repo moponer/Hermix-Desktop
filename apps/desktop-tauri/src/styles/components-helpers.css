@@ -22,12 +22,12 @@
    (thinking state, image-size hint), RightSidebar (counts, empty
    placeholders), InlineClarifyCard / InlineApprovalCard. */
 .h-tiny {
-  font-size: 11.5px;
+  font-size: var(--text-tiny, 11px);
   line-height: 1.35;
   color: var(--color-text-secondary);
 }
 .h-meta {
-  font-size: 12.5px;
+  font-size: var(--text-meta, 12px);
   line-height: 1.5;
   color: var(--color-text-secondary);
   font-weight: 400;
@@ -40,7 +40,7 @@
   gap: 5px;
   padding: 2px 8px 2px 6px;
   border-radius: var(--radius-full);
-  font-size: 10.5px;
+  font-size: var(--text-micro, 10px);
   font-weight: 500;
   color: var(--color-text-muted);
   background: var(--color-bg-secondary);
@@ -257,11 +257,24 @@
   transform: rotate(90deg);
 }
 
+/* 轮次摘要行 —— 字体规范角色：meta(12) / medium(500) / text-secondary。
+   折叠态下这一行是用户判断"这一轮分量"的唯一线索，所以颜色比
+   元信息档（tiny/tertiary）重一档，但绝不与正文抢层级。 */
 .reasoning-label {
-  font-size: 11px;
-  font-weight: 500;
+  font-size: var(--text-meta, 12px);
+  font-weight: var(--font-weight-medium, 500);
+  color: var(--color-text-secondary);
+  letter-spacing: 0.01em;
+  line-height: var(--leading-compact, 1.4);
+}
+
+/* 摘要行里的统计量（工具数 / 行数 / 耗时）降到 tiny + tertiary，
+   与主标签拉开层次，但不另起一个视觉块。 */
+.reasoning-stat {
+  font-size: var(--text-tiny, 11px);
+  font-weight: var(--font-weight-regular, 400);
   color: var(--color-text-tertiary);
-  letter-spacing: 0.02em;
+  font-family: var(--font-mono);
 }
 
 
@@ -359,7 +372,7 @@
   50%      { opacity: 1; }
 }
 
-/* ── LLM 输出 prose 区域（暖纸·主人要求 2026-08-31） ──────
+/* ── LLM 输出 prose 区域（暖纸·2026-08-31） ──────
    主区为浅色时直接铺在主区背景上，不要白底卡片/不要 frosted glass：
    文字本身就是内容，prose 流应当与对话区背景融合，不该包在任何盒子里。 */
 :root[data-theme="light"] .tl-process-body {
@@ -401,15 +414,14 @@
 
 /* ── 5a-0b-old. Reasoning Block (legacy) — kept for back-compat ── */
 
-/* ── 5a-0b1. Reasoning Row — normal message prose ──
-   流式时 reasoning 段和正文混在一起流出，视觉上就是一段普通
-   消息文本。过程与结论的区别由外层 ProcessTimeline 的折叠头
-   表达，行内不再额外使用斜体、左轨或 chip。 */
+/* ── 5a-0b1. Reasoning Row — 思考（过程）正文 ──
+   过程不是内容：比正文小一档字号、浅两档颜色、行距略松。
+   折叠由外层 ProcessTimeline 负责，这里只管"一眼看出这是过程"。 */
 .tl-reasoning-row {
   font-style: normal;
-  color: var(--color-text-primary);
-  font-size: var(--font-size-body, 14px);
-  line-height: 1.72;
+  color: var(--color-text-thinking);
+  font-size: var(--text-ui, 13px);
+  line-height: var(--leading-reading, 1.75);
   word-break: break-word;
   overflow-wrap: anywhere;
   /* 过程最终由外层 ProcessTimeline 整体折叠，这里不做二次滚动。 */
@@ -754,7 +766,7 @@
   gap: 2px;
 }
 .todo-row-title {
-  font-size: 12.5px;
+  font-size: var(--text-meta, 12px);
   font-weight: 500;
   color: var(--color-text-primary);
   line-height: 1.4;
@@ -764,7 +776,7 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
-  font-size: 10.5px;
+  font-size: var(--text-micro, 10px);
   color: var(--color-text-faint);
   line-height: 1.3;
 }

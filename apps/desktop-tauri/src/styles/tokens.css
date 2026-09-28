@@ -110,10 +110,10 @@
   --width-narrow: 240px;
   --width-base: 420px;
   --width-wide: 720px;
-  /* reading = 对话正文行长。820px 在 14px 字号下约 50 个汉字，取
-     "行长舒适"与"两侧空白不挤压内容"的平衡点；640px 曾被反馈过窄。
+  /* reading = 对话正文行长，随视口伸缩：窄屏守住 820px（约 50 汉字），
+     宽屏/全屏按 68vw 跟到 1240px 封顶 —— 全屏下两侧空白不再夸张。
      代码块 / 表格 / 长命令行不跟随此档，各自按内容需要放宽。 */
-  --width-reading: 820px;
+  --width-reading: clamp(820px, 68vw, 1240px);
 
   /* ------------------------------------------------------------------
    * 二、色彩令牌 · LIGHT 基线「宣纸 · 青碧」
@@ -135,122 +135,119 @@
    *   久看不累，正是因为没有高对比造成的光晕。
    * ------------------------------------------------------------------ */
 
-  /* ── 面（4 级）── */
-  --color-bg-app: #f0eee7;         /* 案·最外层：窗口底、列间空隙 */
-  --color-bg-primary: #f7f5f0;     /* 纸·对话与主区底 */
-  --color-bg-secondary: #edeae2;   /* 案·侧栏 / 顶栏 / 行 hover */
-  --color-bg-tertiary: #e4e0d6;    /* 案·深一档：inset / 分隔区 */
-  --color-bg-quaternary: #d9d4c7;  /* 案·最深：active / 轨道底 */
-  --color-bg-hover: #edeae2;
-  --color-bg-active: #e0dcd0;
-  --color-bg-card: #fcfbf8;         /* 面·卡片：恒比纸亮 = 抬起 ★ */
-  --color-bg-card-hover: #f6f4ee;
+  /* ── 面（4 级）── 中性白灰：无色相偏移的经典浅色；卡片恒比纸面亮 = 抬起，
+     相邻两级明度差 ≥ 3% ── */
+  --color-bg-app: #f0f0f2;         /* 案·最外层：窗口底、列间空隙 */
+  --color-bg-primary: #f7f7f8;     /* 纸·对话与主区底 */
+  --color-bg-secondary: #ebebec;   /* 案·侧栏 / 顶栏 / 行 hover */
+  --color-bg-tertiary: #e2e2e4;    /* 案·深一档：inset / 分隔区 */
+  --color-bg-quaternary: #d5d5d8;  /* 案·最深：active / 轨道底 */
+  --color-bg-hover: #ebebec;
+  --color-bg-active: #e0e0e3;
+  --color-bg-card: #fefefe;         /* 面·卡片：恒比纸亮 = 抬起 ★ */
+  --color-bg-card-hover: #f3f3f5;
   --color-bg-elevated: #ffffff;     /* 浮·弹层 / 菜单 / 悬浮球 */
-  --color-bg-inset: #e9e5dc;
-  --color-bg-input: #fcfbf8;
-  --color-bg-base: #f7f5f0;
+  --color-bg-inset: #e7e7e9;
+  --color-bg-input: #fefefe;
+  --color-bg-base: #f7f7f8;
 
   /* Code / chat 场景面板 */
-  --color-bg-code: #f1efe8;
-  --color-bg-code-header: #edeae2;
-  --color-bg-code-border: #dcd8cb;
-  --color-chat-assistant-bg: #fcfbf8;
-  --color-chat-tool-bg: #f1efe8;
+  --color-bg-code: #f2f2f4;
+  --color-bg-code-header: #ebebec;
+  --color-bg-code-border: #dcdce0;
+  --color-chat-assistant-bg: #fefefe;
+  --color-chat-tool-bg: #f2f2f4;
   --color-chat-terminal-bg: #17181b;  /* 终端恒暗：任何主题都一样 */
 
-  /* ── 分隔线：旧版 --color-border-subtle(#f0eee6) 几乎不可见，导致
-        该有分界的地方没分界；新值提到"看得见"但仍是发丝观感 ── */
-  --color-border-subtle: #e6e2d7;
-  --color-border-primary: #d8d3c5;
-  --color-border-secondary: #c3bda9;
-  --color-border: #b6af9a;
-  --color-border-strong: #2b2a27;
+  /* ── 分隔线：中性灰轴，"看得见"但仍是发丝观感 ── */
+  --color-border-subtle: #e3e3e6;
+  --color-border-primary: #d4d4d8;
+  --color-border-secondary: #c0c0c6;
+  --color-border: #b0b0b6;
+  --color-border-strong: #2c2c2e;
 
-  /* ── 文字：四级，主文字刻意不用纯黑 ── */
-  --color-text-primary: #2b2a27;
-  --color-text-secondary: #565349;
-  --color-text-tertiary: #837e70;
-  --color-text-muted: #9a9484;
-  --color-text-faint: #ada694;
-  --color-text-on-code: #4a473f;
+  /* ── 文字：四级中性墨，主文字刻意不用纯黑 ── */
+  --color-text-primary: #1d1d1f;
+  --color-text-secondary: #48484c;
+  --color-text-tertiary: #6e6e73;
+  --color-text-muted: #86868b;
+  --color-text-faint: #aeaeb2;
+  --color-text-on-code: #3a3a3e;
   /* 思考（过程）专用：比正文浅两档 + 小一档字号。过程不是内容，
      不能和结论抢同一条视觉通道。 */
-  --color-text-thinking: #8f897c;
+  --color-text-thinking: #86868b;
 
-  /* ── 墨：青碧（青瓷绿）。品牌唯一色，绝不用作 error/success 语义。
-     选青碧而非浅绿：浅绿做按钮底时白字对比不足；青碧够深，且与
-     暖纸底是青瓷配宣纸的经典组合。hue ≈ 166°，与 success（≈135°）
-     拉开 30°+，不会撞车。 ── */
-  --color-accent: #1d8a72;
-  --color-accent-hover: #14705c;
+  /* ── 墨：品牌蓝（经典浅色主题的强调色，白字对比充足）。品牌唯一色，
+     绝不用作 error/success 语义。与 success（≈135°）拉开 100°+ ── */
+  --color-accent: #0071e3;
+  --color-accent-hover: #005bb8;
   --color-accent-on-text: #ffffff;
-  --color-accent-soft: rgba(29, 138, 114, 0.1);
-  --color-accent-soft-strong: rgba(29, 138, 114, 0.18);
+  --color-accent-soft: rgba(0, 113, 227, 0.1);
+  --color-accent-soft-strong: rgba(0, 113, 227, 0.16);
 
-  --color-link: #1d8a72;
-  --color-link-hover: #14705c;
-  --color-link-soft: #837e70;
-  --color-link-soft-hover: #be4a32;
+  --color-link: #0071e3;
+  --color-link-hover: #005bb8;
+  --color-link-soft: #6e6e73;
+  --color-link-soft-hover: #c05a48;
 
-  /* ── 语义四色：色相彼此拉开 ≥30°，且全部避开朱砂橙区 ──
-        success 松绿 / warning 芥黄 / error 绛红（偏品红，与朱砂区分）
-        / info 靛灰（真正的冷色，不再用灰冒充中性提示） */
-  --color-success: #35854a;
-  --color-success-soft: rgba(53, 133, 74, 0.11);
+  /* ── 语义四色：色相彼此拉开 ≥30°，全部避开品牌蓝区 ──
+        success 松绿 / warning 芥黄 / error 绛红（偏品红）/ info 靛灰蓝 */
+  --color-success: #37874c;
+  --color-success-soft: rgba(55, 135, 76, 0.11);
   --color-warning: #96750f;
   --color-warning-soft: rgba(150, 117, 15, 0.13);
   --color-text-warning: #7a5e0c;
-  --color-error: #a32b54;
-  --color-error-soft: rgba(163, 43, 84, 0.1);
-  --color-info: #5b6b7a;
-  --color-info-soft: rgba(91, 107, 122, 0.12);
+  --color-error: #a83b60;
+  --color-error-soft: rgba(168, 59, 96, 0.1);
+  --color-info: #4f7fa3;
+  --color-info-soft: rgba(79, 127, 163, 0.12);
 
   /* Status chips（Composer 会话状态胶囊） */
-  --color-chip-model-bg: rgba(29, 138, 114, 0.1);
-  --color-chip-model-fg: #14705c;
-  --color-chip-workspace-bg: #e5e9ee;
-  --color-chip-workspace-fg: #4a6478;
-  --color-chip-permission-bg: #f0ebd8;
+  --color-chip-model-bg: rgba(0, 113, 227, 0.1);
+  --color-chip-model-fg: #005bb8;
+  --color-chip-workspace-bg: #e3ebf2;
+  --color-chip-workspace-fg: #48677e;
+  --color-chip-permission-bg: #f2eeda;
   --color-chip-permission-fg: #7a5e0c;
 
   /* Overlay */
-  --color-overlay-scrim: rgba(43, 42, 39, 0.42);
-  --color-modal-outline: rgba(43, 42, 39, 0.06);
+  --color-overlay-scrim: rgba(28, 28, 30, 0.4);
+  --color-modal-outline: rgba(28, 28, 30, 0.06);
 
   /* Buttons */
-  --color-btn-primary-bg: #1d8a72;
+  --color-btn-primary-bg: #0071e3;
   --color-btn-primary-text: #ffffff;
-  --color-btn-primary-hover: #14705c;
+  --color-btn-primary-hover: #005bb8;
   --color-btn-secondary-bg: transparent;
-  --color-btn-secondary-text: #4a473f;
-  --color-btn-secondary-hover: #edeae2;
+  --color-btn-secondary-text: #3a3a3e;
+  --color-btn-secondary-hover: #ebebec;
   --color-btn-ghost-bg: transparent;
-  --color-btn-ghost-text: #837e70;
-  --color-btn-ghost-hover: rgba(43, 42, 39, 0.05);
+  --color-btn-ghost-text: #6e6e73;
+  --color-btn-ghost-hover: rgba(28, 28, 30, 0.05);
 
-  /* Shadows（中性暖调，不偏黄不偏黑） */
-  --shadow-card: 0 1px 2px rgba(43, 42, 39, 0.04);
-  --shadow-pop: 0 6px 20px rgba(43, 42, 39, 0.1), 0 2px 6px rgba(43, 42, 39, 0.06);
-  --shadow-modal: 0 24px 64px rgba(43, 42, 39, 0.16), 0 8px 24px rgba(43, 42, 39, 0.08);
+  /* Shadows（中性冷灰，不偏黄不偏黑） */
+  --shadow-card: 0 1px 2px rgba(28, 28, 30, 0.04);
+  --shadow-pop: 0 6px 20px rgba(28, 28, 30, 0.1), 0 2px 6px rgba(28, 28, 30, 0.06);
+  --shadow-modal: 0 24px 64px rgba(28, 28, 30, 0.16), 0 8px 24px rgba(28, 28, 30, 0.08);
 
   /* Scene surfaces — 应用骨架四大区。
      纸（对话区）最亮，案（侧栏/顶栏）低一档，列间空隙（app）最低 ——
      主区因此天然"浮起来"，不需要靠边框去分隔。 */
-  --theme-bg-app: #f0eee7;
-  --theme-bg-sidebar: #edeae2;
-  --theme-bg-titlebar: #edeae2;   /* 与侧栏同案面：取消独立色带 */
-  --theme-bg-chat: #f7f5f0;
+  --theme-bg-app: #f0f0f2;
+  --theme-bg-sidebar: #ebebec;
+  --theme-bg-titlebar: #ebebec;   /* 与侧栏同案面：取消独立色带 */
+  --theme-bg-chat: #f7f7f8;
 
   /* ── 玻璃浮层：保留极轻模糊（与纸面/案面区分），不再大面积铺 ── */
-  --glass-frosted-bg: rgba(251, 250, 247, 0.72);
+  --glass-frosted-bg: rgba(250, 250, 252, 0.72);
   --glass-frosted-blur: blur(6px) saturate(140%);
-  --glass-liquid-bg: rgba(251, 250, 247, 0.82);
+  --glass-liquid-bg: rgba(250, 250, 252, 0.82);
   --glass-liquid-blur: blur(8px) saturate(150%);
-  --glass-liquid-strong-bg: rgba(252, 251, 248, 0.9);
+  --glass-liquid-strong-bg: rgba(253, 253, 255, 0.9);
   --glass-liquid-strong-blur: blur(12px) saturate(170%);
   --glass-inset-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.75);
-  --glass-inset-shadow: inset 0 -1px 0 rgba(43, 42, 39, 0.05);
-  --glass-shadow: 0 8px 32px rgba(43, 42, 39, 0.1), 0 2px 8px rgba(43, 42, 39, 0.05);
+  --glass-inset-shadow: inset 0 -1px 0 rgba(28, 28, 30, 0.05);
+  --glass-shadow: 0 8px 32px rgba(28, 28, 30, 0.1), 0 2px 8px rgba(28, 28, 30, 0.05);
 }
 
 /* ------------------------------------------------------------------

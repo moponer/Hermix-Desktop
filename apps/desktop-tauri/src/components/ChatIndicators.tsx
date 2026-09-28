@@ -169,7 +169,7 @@ export function QueueItemRow({
 
   return (
     <li className="group flex items-start gap-1.5 rounded px-2 py-1 hover:bg-bg-tertiary/50 transition-colors">
-      <span className="shrink-0 mt-0.5 text-[11px] font-mono tabular-nums text-text-faint w-4 text-center">
+      <span className="shrink-0 mt-0.5 text-tiny font-mono tabular-nums text-text-faint w-4 text-center">
         {index + 1}
       </span>
 
@@ -189,12 +189,12 @@ export function QueueItemRow({
               }
             }}
             rows={2}
-            className="w-full text-[12px] bg-bg-primary text-text-primary border border-border-subtle rounded px-1.5 py-1 outline-none resize-none focus:border-accent"
+            className="w-full text-meta bg-bg-primary text-text-primary border border-border-subtle rounded px-1.5 py-1 outline-none resize-none focus:border-accent"
           />
           <div className="flex items-center gap-1.5 mt-1">
             <button
               onClick={commit}
-              className="text-[11px] px-1.5 py-0.5 rounded font-medium"
+              className="text-tiny px-1.5 py-0.5 rounded font-medium"
               style={{
                 background: "var(--color-accent)",
                 color: "var(--color-accent-on-text)",
@@ -204,11 +204,11 @@ export function QueueItemRow({
             </button>
             <button
               onClick={cancel}
-              className="text-[11px] text-text-muted hover:text-text-primary px-1.5 py-0.5 rounded hover:bg-bg-tertiary"
+              className="text-tiny text-text-muted hover:text-text-primary px-1.5 py-0.5 rounded hover:bg-bg-tertiary"
             >
               取消
             </button>
-            <span className="text-[11px] text-text-faint">
+            <span className="text-tiny text-text-faint">
               Enter 保存 · Shift+Enter 换行 · Esc 取消
             </span>
           </div>
@@ -220,7 +220,7 @@ export function QueueItemRow({
             onClick={() => canEdit && setEditing(true)}
             disabled={!canEdit}
             title={text}
-            className={`flex-1 min-w-0 text-left text-[12px] text-text-primary whitespace-pre-wrap break-words leading-snug ${canEdit ? "cursor-text" : "cursor-default"}`}
+            className={`flex-1 min-w-0 text-left text-meta text-text-primary whitespace-pre-wrap break-words leading-snug ${canEdit ? "cursor-text" : "cursor-default"}`}
           >
             {text.length > 80 ? text.slice(0, 80) + "…" : text}
           </button>

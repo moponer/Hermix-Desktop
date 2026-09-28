@@ -5,13 +5,13 @@ import { Sidebar } from "./components/Sidebar";
 import { SidebarRevealRow } from "./components/SidebarRevealRow";
 import { ChatView } from "./components/ChatView";
 import { ImageLightbox } from "./components/ImageLightbox";
-import { RightSidebar, type RightTab } from "./components/RightSidebar";
+import { PreviewBar, type PreviewTab } from "./components/PreviewBar";
+import { RightRail } from "./components/RightRail";
 import { TitleBar } from "./components/TitleBar";
 import { SessionPickerDialog } from "./components/SessionPickerDialog";
 import { useStreamChat } from "./hooks/useStreamChat";
 import { AppProviders } from "./app/AppProviders";
 import { renderRoutes, type RouteContext } from "./app/routes";
-import { ArtifactPreviewModal } from "./app/ArtifactPreviewModal";
 import { SystemConfigPanel, type ConfigCategory } from "./components/SystemConfigPanel";
 import { useAppBootstrap } from "./app/useAppBootstrap";
 import {
@@ -132,10 +132,10 @@ export default function App() {
 
   /** 打开系统配置弹窗。`category` 让调用方指定落点（如聊天输入框的
    *  "未配置模型"入口应直达「模型」），缺省「模型」。 */
-  const openSettings = (category: ConfigCategory = "model") => {
+  const openSettings = useCallback((category: ConfigCategory = "model") => {
     setConfigCategory(category);
     setShowConfigModal(true);
-  };
+  }, []);
   // 「自定义应用」页「创建新应用」按钮跳转时注入的预填指令（一次性消费）。
   const [pendingPrefill, setPendingPrefill] = useState<string | null>(null);
   // 视口自适应面板最小宽度 — 窗口缩小时缩小主列/左列最小宽
@@ -157,24 +157,6 @@ setPendingFileAttachment(path);
 setPage("chat");
 }, []);
 
-// Computer file explorer → preview modal: create a synthetic Artifact
-// from a file path so the existing PreviewPanel (with syntax highlighting,
-// image preview, spreadsheet rendering, etc.) can display it.
-const [computerPreviewArtifact, setComputerPreviewArtifact] = useState<Artifact | null>(null);
-const handlePreviewFileFromExplorer = useCallback((path: string, name: string) => {
-  // 用 utils/artifacts 里统一的 classify()，保证文件浏览器与 InlinePathPreview
-  // 等各处对同一文件选同一图标/预览分支（避免各写各的分类导致不一致）。
-  const kind = classifyArtifactKind(name);
-  setComputerPreviewArtifact({
-    id: `computer-preview-${Date.now()}`,
-    name,
-    path,
-    kind,
-    tool: "file_explorer",
-    timestamp: new Date().toISOString(),
-    isAbsolute: true,
-  });
-}, []);
   // 队列变更 handlers 保持 memoized，避免 ChatComposer 在主输入框每次按键时重渲染。
   // sendFromQueue 闭包依赖下方定义的 streaming / handleSendMessage，故在其后声明。
   const removeFromQueue = useCallback((idx: number) => {
@@ -291,13 +273,70 @@ const handlePreviewFileFromExplorer = useCallback((path: string, name: string) =
     try { storage.setItem(RIGHT_OPEN_KEY, String(rightOpen)); } catch {}
   }, [rightOpen]);
 
-  // 右栏当前标签，可被外部控制（点目录 chip 直接切到「电脑」）。
-  const [rightTab, setRightTab] = useState<RightTab>("products");
+  // ── 预览栏：一屏多标签，手动关闭 ────────────────────────────
+  // 点对话里的文件路径 / 文件浏览器里的文件都会在这里开一个标签；同一
+  // 路径只开一个（按绝对路径去重），重复点击只是切过去。
+  const [previewTabs, setPreviewTabs] = useState<PreviewTab[]>([]);
+  const [activePreviewId, setActivePreviewId] = useState<string | null>(null);
+
+  const openPreviewArtifact = useCallback((artifact: Artifact) => {
+    setPreviewTabs((prev) =>
+      prev.some((t) => t.artifact.path === artifact.path)
+        ? prev
+        : [...prev, { id: artifact.id, artifact }],
+    );
+    setActivePreviewId(artifact.id);
+    setRightOpen(true);
+  }, []);
+
+  const closePreviewTab = useCallback((id: string) => {
+    setPreviewTabs((prev) => {
+      const next = prev.filter((t) => t.id !== id);
+      setActivePreviewId((cur) =>
+        cur === id ? (next.length > 0 ? next[next.length - 1].id : null) : cur,
+      );
+      return next;
+    });
+  }, []);
+
+  // 文件浏览器 → 预览：合成一个产物交给预览栏（分类走统一 classify）。
+  const handlePreviewFileFromExplorer = useCallback(
+    (path: string, name: string) => {
+      openPreviewArtifact({
+        id: `file:${path}`,
+        name,
+        path,
+        kind: classifyArtifactKind(name),
+        tool: "file_explorer",
+        timestamp: new Date().toISOString(),
+        isAbsolute: true,
+      });
+    },
+    [openPreviewArtifact],
+  );
 
   // 三列临界视口 + 默认窗口宽（见上方注释块）。
   const THREE_COL_MIN_VIEWPORT = 1140;
   const DEFAULT_WINDOW_WIDTH = 1280;
   const appWindow = getCurrentWindow();
+
+  // 缩放护栏：最大化 / 还原 / 拖边是整窗重排最重的时刻，期间给根节点挂
+  // .is-resizing（CSS 关掉毛玻璃、动画、过渡），停手 120ms 后摘掉。
+  useEffect(() => {
+    const root = document.documentElement;
+    let timer = 0;
+    const onResize = () => {
+      root.classList.add("is-resizing");
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => root.classList.remove("is-resizing"), 120);
+    };
+    window.addEventListener("resize", onResize);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      window.clearTimeout(timer);
+      root.classList.remove("is-resizing");
+    };
+  }, []);
 
   // 启动引导：窗口高度适配 + 旧版 localStorage key 迁移 + dev 诊断 dump。
   // 具体副作用已抽到 ./app/useAppBootstrap，此处仅组合调用。
@@ -670,10 +709,9 @@ const handlePreviewFileFromExplorer = useCallback((path: string, name: string) =
     }
   }, [setWorkspaceRoot]);
 
-  // 点目录 chip（已选工作区时）→ 打开右栏并切到「电脑」标签，
-  // 直接把文件浏览器切到所选工作区目录，不再弹 chooser 列表。
+  // 点目录 chip（已选工作区时）→ 打开右侧预览栏（栏内左上角有文件浏览入口），
+  // 不再弹 chooser 列表。
   const openComputer = useCallback(() => {
-    setRightTab("computer");
     setRightOpen(true);
   }, []);
 
@@ -769,6 +807,11 @@ const handlePreviewFileFromExplorer = useCallback((path: string, name: string) =
   // `setSessions`, including switching to another session and back). The
   // `cancelled` flag in the cleanup function prevents a stale response from
   // a previous mount of this effect from clobbering fresher data.
+  // 「加载更早的消息」翻页状态：hasMore 按会话记录（切回已载会话不丢），
+  // loading 只作用于当前活跃会话（翻页按钮的防重入）。
+  const [historyPaging, setHistoryPaging] = useState<Record<string, { hasMore: boolean }>>({});
+  const [historyLoading, setHistoryLoading] = useState(false);
+
   useEffect(() => {
     if (!activeSessionId) return;
     // use sessionsRef to avoid re-running this effect on
@@ -794,11 +837,12 @@ const handlePreviewFileFromExplorer = useCallback((path: string, name: string) =
     if (session.messages.length > 0) return;
 
     let cancelled = false;
-    api.getSessionMessages(activeSessionId)
-      .then(({ messages, contextUsage: restoredCtx }) => {
+    api.getSessionMessages(activeSessionId, { limit: api.INITIAL_MESSAGE_WINDOW })
+      .then(({ messages, contextUsage: restoredCtx, hasMore }) => {
         if (cancelled) return;
         clearLoadError(activeSessionId);
         if (restoredCtx) setContextUsage(restoredCtx);
+        setHistoryPaging((prev) => ({ ...prev, [activeSessionId]: { hasMore } }));
         setSessions((prev) => prev.map((s) =>
           s.id === activeSessionId ? { ...s, messages } : s
         ));
@@ -811,6 +855,35 @@ const handlePreviewFileFromExplorer = useCallback((path: string, name: string) =
       });
     return () => { cancelled = true; };
   }, [activeSessionId, sessions.length, setActiveSessionId, setLoadError, clearLoadError]);
+
+  // 向后端取「已载窗口之前」的一页并前插。tail_skip = 当前在手条数：
+  // 后端跳过末尾这些条再向前取，翻页期间流式追加的新消息天然落在
+  // 跳过区间里，窗口不会重叠或漏条。后端 id 稳定，按 id 去重兜底
+  // 极端情况（翻页途中发生压缩导致组装序列位移）。
+  const loadOlderMessages = useCallback(async () => {
+    if (!activeSessionId || historyLoading) return;
+    const session = sessionsRef.current.find((s) => s.id === activeSessionId);
+    if (!session || session.messages.length === 0) return;
+    setHistoryLoading(true);
+    try {
+      const res = await api.getSessionMessages(activeSessionId, {
+        limit: api.HISTORY_PAGE_SIZE,
+        tailSkip: session.messages.length,
+      });
+      const knownIds = new Set(session.messages.map((m) => m.id));
+      const older = res.messages.filter((m) => !knownIds.has(m.id));
+      if (older.length > 0) {
+        setSessions((prev) => prev.map((s) =>
+          s.id === activeSessionId ? { ...s, messages: [...older, ...s.messages] } : s
+        ));
+      }
+      setHistoryPaging((prev) => ({ ...prev, [activeSessionId]: { hasMore: res.hasMore } }));
+    } catch (e) {
+      console.error(`[chat] loadOlderMessages(${activeSessionId}) failed:`, e);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [activeSessionId, historyLoading]);
 
   const activeSession = sessions.find((s) => s.id === activeSessionId) ?? null;
 
@@ -826,10 +899,10 @@ const handlePreviewFileFromExplorer = useCallback((path: string, name: string) =
     [sessions],
   );
 
-  const { rawArtifacts, artifacts, selectedArtifactId, setSelectedArtifactId, handlePathClick } = useArtifacts({
+  const { handlePathClick } = useArtifacts({
     activeSession,
     workspaceRoot,
-    onOpenRightSidebar: () => setRightOpen(true),
+    onOpenArtifact: openPreviewArtifact,
   });
 
   /**
@@ -964,24 +1037,22 @@ const handlePreviewFileFromExplorer = useCallback((path: string, name: string) =
   }, [selectSessionOnly, setPage]);
 
   const handleDeleteSession = useCallback(async (id: string) => {
-    // the previous implementation called `api.deleteSession`
-    // with no `try/catch`, so a 5xx from the backend (e.g. the
-    // `FOREIGN KEY constraint failed` we hit on sessions with
-    // `compression_archives` rows) would propagate as an unhandled
-    // rejection. React's unhandled-rejection handler is silent in our
-    // Electron/Tauri build, so the user saw the click "do nothing"
-    // and the session stayed in the Sidebar forever. Now: log to
-    // console + surface a dialog so the user actually knows.
+    // 乐观更新：先从 UI 移除再等 IPC 返回，否则点击后侧栏条目"卡住"到
+    // 往返结束才消失。失败回滚恢复原状态。
+    const snapshot = sessions;
+    const deleted = sessions.find((s) => s.id === id) ?? null;
+    setSessions((prev) => prev.filter((s) => s.id !== id));
+    if (activeSessionId === id) setActiveSessionId(null);
     try {
       await api.deleteSession(id);
-      setSessions((prev) => prev.filter((s) => s.id !== id));
-      if (activeSessionId === id) setActiveSessionId(null);
     } catch (err) {
+      if (deleted) setSessions(snapshot);
+      if (activeSessionId === id) setActiveSessionId(id);
       const msg = err instanceof Error ? err.message : String(err);
       console.error("[deleteSession] failed for", id, err);
       window.alert(`删除会话失败：${msg}`);
     }
-  }, [activeSessionId]);
+  }, [activeSessionId, sessions]);
 
   /**
    * Settle a pending approval card. Called by the inline card's
@@ -2968,7 +3039,7 @@ return {
     (newId: string) => {
       // 同步更新本地 sessions state — 用户切模型后, activeSession.model
       // 必须立刻反映新值, 否则下次 ChatView 重挂载读 session.model 回灌
-      // selectedModel 时, 用旧值(默认模型)覆盖用户选择 (主人反馈).
+      // selectedModel 时不得用旧值(默认模型)覆盖已选择的模型。
       if (activeSessionId) {
         setSessions((prev) =>
           prev.map((s) =>
@@ -3072,6 +3143,8 @@ return {
     try {
       const { messages, contextUsage: restoredCtx } = await api.getSessionMessages(activeSessionId);
       if (restoredCtx) setContextUsage(restoredCtx);
+      // 全量重拉后本地就是完整列表，翻页入口随之关闭。
+      setHistoryPaging((prev) => ({ ...prev, [activeSessionId]: { hasMore: false } }));
       setSessions((prev) => prev.map((s) => s.id === activeSessionId ? { ...s, messages } : s));
     } catch {}
   }, [activeSessionId]);
@@ -3085,9 +3158,51 @@ return {
     try {
       const { messages, contextUsage: restoredCtx } = await api.getSessionMessages(activeSessionId);
       if (restoredCtx) setContextUsage(restoredCtx);
+      // 全量重拉后本地就是完整列表，翻页入口随之关闭。
+      setHistoryPaging((prev) => ({ ...prev, [activeSessionId]: { hasMore: false } }));
       setSessions((prev) => prev.map((s) => s.id === activeSessionId ? { ...s, messages } : s));
     } catch {}
   }, [activeSessionId]);
+
+  // ── ChatView 的稳定回调 ──────────────────────────────────────────
+  // ChatView 挂了 React.memo：这里任何内联箭头函数/对象字面量都会在
+  // App 每次渲染时产生新引用，击穿 memo 让整棵聊天树陪着重渲染。
+  const consumePrefill = useCallback(() => setPendingPrefill(null), []);
+  const consumeFileAttachment = useCallback(() => setPendingFileAttachment(null), []);
+  const openExperts = useCallback(() => setPage("experts"), [setPage]);
+  const expandSidebar = useCallback(() => setSidebarOpen(true), []);
+  const openSearch = useCallback(() => setSearchOpen(true), []);
+  const clearQueue = useCallback(() => setMessageQueue([]), []);
+  const addToQueue = useCallback((msg: QueuedMessage) => {
+    // 同文本不重复入队(防快速按 Enter 多次),
+    // 但仍返回新数组引用让 React 触发 re-render — 否则
+    // 重复添加相同文本时 Composer 看不到 queue 长度变化。
+    setMessageQueue(prev => {
+      if (prev.some((m) => m.text === msg.text)) return [...prev];
+      return [...prev, msg];
+    });
+  }, []);
+  const handleTodoPatch = useCallback(async (id: string, patch: { status?: string; title?: string; priority?: string }) => {
+    try {
+      await api.patchTodo(id, patch);
+    } catch (e) {
+      console.error('[App] patchTodo failed', e);
+      throw e;
+    }
+  }, []);
+  const retryLoadMessages = useCallback(() => {
+    if (activeSessionId) {
+      void handleSelectSession(activeSessionId);
+    }
+  }, [activeSessionId, handleSelectSession]);
+  const activeChatHistoryPaging = useMemo(
+    () => activeSession ? {
+      hasMore: historyPaging[activeSession.id]?.hasMore ?? false,
+      loading: historyLoading,
+      onLoadMore: loadOlderMessages,
+    } : null,
+    [activeSession, historyPaging, historyLoading, loadOlderMessages],
+  );
 
   // 路由上下文：chat 页面 props 复杂，预先渲染为 chatNode 元素传入路由表，
   // 其余页面由 ./app/routes 的 renderRoutes 按 page 分发。
@@ -3106,25 +3221,19 @@ return {
   const chatViewNode = (
     <ChatView
       session={activeSession}
+      historyPaging={activeChatHistoryPaging}
       onSendMessage={handleSendMessage}
       onNewChat={handleNewChat}
       pendingPrefill={pendingPrefill}
-      onConsumePrefill={() => setPendingPrefill(null)}
+      onConsumePrefill={consumePrefill}
       // inline todo cards in the message stream.
       // App owns the groups store; ChatView renders one card per
       // group right after the originating assistant message.
       todoGroups={todoGroups}
       subAgents={subAgents}
-      onTodoPatch={async (id, patch) => {
-        try {
-          await api.patchTodo(id, patch);
-        } catch (e) {
-          console.error('[App] patchTodo failed', e);
-          throw e;
-        }
-      }}
+      onTodoPatch={handleTodoPatch}
       justPatchedTodoRef={justPatchedTodoRef}
-      onOpenExperts={() => setPage("experts")}
+      onOpenExperts={openExperts}
       onOpenSettings={openSettings}
       onOpenComputer={openComputer}
       onUndo={handleUndo}
@@ -3146,27 +3255,15 @@ return {
       acuiBus={acuiBus}
       acuiStats={acui.stats}
       messageQueue={messageQueue}
-      onAddToQueue={(msg) => {
-        // 同文本不重复入队(防快速按 Enter 多次),
-        // 但仍返回新数组引用让 React 触发 re-render — 否则
-        // 重复添加相同文本时 Composer 看不到 queue 长度变化。
-        setMessageQueue(prev => {
-          if (prev.some((m) => m.text === msg.text)) return [...prev];
-          return [...prev, msg];
-        });
-      }}
-      onClearQueue={() => setMessageQueue([])}
+      onAddToQueue={addToQueue}
+      onClearQueue={clearQueue}
       onRemoveFromQueue={removeFromQueue}
       onEditQueueItem={editQueueItem}
       onSendFromQueue={sendFromQueue}
       messageLoadError={
         activeSessionId ? messageLoadErrors.get(activeSessionId) ?? null : null
       }
-      onRetryLoad={() => {
-        if (activeSessionId) {
-          void handleSelectSession(activeSessionId);
-        }
-      }}
+      onRetryLoad={retryLoadMessages}
       streamError={streamErrorForView}
       onClearStreamError={clearStreamError}
       onRetryLastMessage={retryLastMessage}
@@ -3174,12 +3271,12 @@ return {
       rightOpen={rightOpen}
       onToggleRight={handleToggleRight}
       sidebarCollapsed={!sidebarOpen}
-      onExpandSidebar={() => setSidebarOpen(true)}
-      onOpenSearch={() => setSearchOpen(true)}
+      onExpandSidebar={expandSidebar}
+      onOpenSearch={openSearch}
       onEnterWelcome={handleEnterWelcome}
       onPathClick={handlePathClick}
       pendingFileAttachment={pendingFileAttachment}
-      onConsumeFileAttachment={() => setPendingFileAttachment(null)}
+      onConsumeFileAttachment={consumeFileAttachment}
     />
   );
   const routesCtx: RouteContext = {
@@ -3236,6 +3333,7 @@ return {
         className="app-body"
         data-left-open={sidebarOpen ? "true" : "false"}
         data-right-open={rightOpen ? "true" : "false"}
+        data-right-rail={!rightOpen ? "true" : "false"}
         style={{
           "--ab-left-w": `${left.width}px`,
           "--ab-right-w": rightOpen ? `${right.width}px` : "0px",
@@ -3309,56 +3407,40 @@ return {
         </ErrorBoundary>        {/* Right sidebar — grid column 3; 0px when closed (collapsed), full
             width when open. Grid ensures main content (column 2, 1fr) is
             never squeezed — it gets all remaining space after fixed columns. */}
-        {rightOpen && (
-          <div className="h-full flex border-l border-border-subtle overflow-hidden min-w-0 min-h-0">
-            <div
-              data-tauri-no-drag
-              onMouseDown={right.onMouseDown}
-              className="pane-resizer pane-resizer-right hidden md:block"
-            />
-            <ErrorBoundary name="右侧栏">
-            <RightSidebar
-              open={rightOpen}
-              onClose={() => setRightOpen(false)}
-              artifacts={artifacts}
-              rawCount={rawArtifacts.length}
-              selectedId={selectedArtifactId}
-              onSelectArtifact={(id) => setSelectedArtifactId(id)}
-              workspaceRoot={workspaceRoot}
-              activeTab={rightTab}
-              onTabChange={setRightTab}
-              onAddFileToChat={handleAddFileToChat}
-              onPreviewFile={handlePreviewFileFromExplorer}
-            />
-            </ErrorBoundary>
-          </div>
+        {/* Right sidebar — grid column 3. 常挂载 + display:none 隐藏：关闭只是
+            收起（列宽 0），不卸载组件树 —— 否则每次重开都全量重挂、ComputerTab
+            重新拉目录，表现为「切换/关闭卡」。 */}
+        <div
+          className="h-full flex border-l border-border-subtle overflow-hidden min-w-0 min-h-0"
+          style={rightOpen ? undefined : { display: "none" }}
+        >
+          <div
+            data-tauri-no-drag
+            onMouseDown={right.onMouseDown}
+            className="pane-resizer pane-resizer-right hidden md:block"
+          />
+          <ErrorBoundary name="预览栏">
+          <PreviewBar
+            tabs={previewTabs}
+            activeId={activePreviewId}
+            onActivate={setActivePreviewId}
+            onClose={closePreviewTab}
+            onCloseBar={() => setRightOpen(false)}
+            workspaceRoot={workspaceRoot}
+            onAddFileToChat={handleAddFileToChat}
+            onPreviewFile={handlePreviewFileFromExplorer}
+          />
+          </ErrorBoundary>
+        </div>
+        {/* 右栏折叠态：44px 竖条，作为栅格第三列的原位替代。CSS 在
+            <900px 视口下把列宽与竖条一并撤掉（那里 44px 不如留给正文）。
+            展开走 handleToggleRight —— 窄视口下它会先扩窗再开，不会抖。 */}
+        {!rightOpen && (
+          <RightRail count={previewTabs.length} onExpand={() => void handleToggleRight()} />
         )}
       </div>
 
-      {/* ─── Artifact preview modal ───
-          Full-screen modal that overlays the entire App. Completely
-          independent of the artifact sidebar — closing only via X / ESC /
-          backdrop click. */}
-      {/* Artifact preview from the "产物" tab */}
-      {selectedArtifactId && !computerPreviewArtifact && (() => {
-        const artifact = artifacts.find((a) => a.id === selectedArtifactId) ?? null;
-        if (!artifact) return null;
-        return (
-          <ArtifactPreviewModal
-            artifact={artifact}
-            workspaceRoot={workspaceRoot}
-            onClose={() => setSelectedArtifactId(null)}
-          />
-        );
-      })()}
-      {/* File preview from the "电脑" tab file explorer */}
-      {computerPreviewArtifact && (
-        <ArtifactPreviewModal
-          artifact={computerPreviewArtifact}
-          workspaceRoot={workspaceRoot}
-          onClose={() => setComputerPreviewArtifact(null)}
-        />
-      )}
+      {/* 预览统一走右侧预览栏（含 PreviewPanel 自带的全屏），不再有全屏模态。 */}
       <ToastContainer />
       <ImageLightbox />
       {showConfigModal && (

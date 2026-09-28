@@ -1,110 +1,124 @@
 /* ════════════════════════════════════════════════════════════════════
-   Dark — 「曜石 Obsidian」
+   Dark — 「夜墨 Ink Night」
    ──────────────────────────────────────────────────────────────────
-   近黑层叠 + 铁锈橙电光强调。面与面之间只靠 4–8% 明度差和发丝边框
-   分层；饱和度只属于 accent 与语义色，大面积永远是中性炭。
+   亮色「宣纸」在暗环境下的镜像：不是"把亮色反过来"，而是同一套
+   深度语法的夜间版。四个要点：
 
-   中性轴全部为纯 zinc/neutral（R=G=B）—— 任何蓝紫偏移（slate 系
-   B 通道偏高）均为违反项目禁蓝紫铁律，checker 与设计审查双重拦截。
-   hero 与 light 基线同族（铁锈橙），品牌一致。
+   1. **不用纯黑**。#0b0b0b 之上什么都读不出层，OLED 省电的收益对桌面
+      应用可忽略，代价是整屏死黑。底取 #121419（带极低饱和的冷调）。
+
+   2. **推翻"中性轴必须 R=G=B"的旧铁律**。纯中性灰是暗色"水泥感"的
+      直接来源：没有任何色温，暗底就失去通透。新的规则是
+      **允许色相，饱和度上限 4%** —— #121419 相对纯灰只多了 2 个点
+      的蓝，视觉上仍是中性，但层次立刻活起来。
+      （本条取代 dark.css 旧头部里"任何蓝紫偏移均违反铁律"的写法。）
+
+   3. **深度方向与亮色一致**：面(案) < 纸 < 面(卡) < 浮。暗色下"抬起"
+      靠轻微提亮 + 阴影，卡片不再是背景同色。
+
+   4. **青碧提亮**：#1d8a72 在暗底上发闷，提到 #35b899。
+      语义四色与青碧的色相关系与亮色保持一致（success 往黄绿挪、
+      error 走玫瑰，不与青碧同区）。
 
    本文件是暗色的唯一真相源（tokens.css 的 .dark 块已废除）。
    完整覆盖 CONTRACT 全部色彩令牌 —— 缺一项 checker 即失败。
    ════════════════════════════════════════════════════════════════════ */
 :root[data-theme="dark"]:root {
-  /* Surfaces — 明度阶梯 app < card < secondary < hover < active（纯中性） */
-  --color-bg-app: #0b0b0b;
-  --color-bg-primary: #141414;
-  --color-bg-secondary: #1c1c1c;
-  --color-bg-tertiary: #232323;
-  --color-bg-quaternary: #2c2c2c;
-  --color-bg-hover: #202020;
-  --color-bg-active: #2a2a2a;
-  --color-bg-card: #141414;
-  --color-bg-card-hover: #191919;
-  --color-bg-elevated: #1d1d1d;
-  --color-bg-inset: #101010;
-  --color-bg-input: #171717;
-  --color-bg-base: #0f0f0f;
+  /* Surfaces — 案(--desk) < 纸(--paper) < 面(--surface) < 浮(--overlay) */
+  --color-bg-app: #0f1115;          /* 案·最外层 */
+  --color-bg-primary: #121419;      /* 纸·对话与主区底 */
+  --color-bg-secondary: #1a1d23;    /* 案·侧栏 / 顶栏 / 行 hover */
+  --color-bg-tertiary: #21252c;     /* 案·深一档 */
+  --color-bg-quaternary: #2a2f37;   /* 案·最深 */
+  --color-bg-hover: #1e222a;
+  --color-bg-active: #262b33;
+  --color-bg-card: #181b21;         /* 面·卡片：比纸亮 = 抬起 */
+  --color-bg-card-hover: #1e222a;
+  --color-bg-elevated: #232833;     /* 浮·弹层 / 菜单 / 悬浮球 */
+  --color-bg-inset: #0e1014;
+  --color-bg-input: #181b21;
+  --color-bg-base: #121419;
 
   /* Code / chat */
-  --color-bg-code: #121212;
-  --color-bg-code-header: #1a1a1a;
-  --color-bg-code-border: #262626;
-  --color-chat-assistant-bg: #151515;
-  --color-chat-tool-bg: rgba(28, 28, 28, 0.6);
-  --color-chat-terminal-bg: #070707;
+  --color-bg-code: #0f1115;
+  --color-bg-code-header: #1a1d23;
+  --color-bg-code-border: #262a32;
+  --color-chat-assistant-bg: #181b21;
+  --color-chat-tool-bg: rgba(33, 37, 44, 0.62);
+  --color-chat-terminal-bg: #0b0c0f;
 
-  /* Borders */
-  --color-border-subtle: #212121;
-  --color-border-primary: #2b2b2b;
-  --color-border-secondary: #3a3a3a;
-  --color-border: #383838;
-  --color-border-strong: #f4f4f4;
+  /* Borders — 暗色的分隔靠"边框提亮"而不是加深 */
+  --color-border-subtle: #1f232a;
+  --color-border-primary: #2a2e37;
+  --color-border-secondary: #383d48;
+  --color-border: #434856;
+  --color-border-strong: #e9eaee;
 
-  /* Text — 四级层次，为 AA 对比整体提亮 */
-  --color-text-primary: #f4f4f4;
-  --color-text-secondary: #d6d6d6;
-  --color-text-tertiary: #adadad;
-  --color-text-muted: #909090;
-  --color-text-faint: #8a8a8a;
-  --color-text-on-code: #e2e2e2;
+  /* Text — 四级，主文字不用纯白（纯白在暗底上有光晕） */
+  --color-text-primary: #e9eaee;
+  --color-text-secondary: #b4b7be;
+  --color-text-tertiary: #868a93;
+  --color-text-muted: #6e727a;
+  --color-text-faint: #5c6068;
+  --color-text-on-code: #d8dae0;
+  /* 思考（过程）专用：暗底上比正文浅两档，不与结论抢注意力 */
+  --color-text-thinking: #7a7e86;
 
-  /* Accent — 铁锈橙（与 light/sunset 同族，暗底提亮一档） */
-  --color-accent: #e0620d;
-  --color-accent-hover: #f97316;
-  --color-accent-on-text: #ffffff;
-  --color-accent-soft: rgba(224, 98, 13, 0.16);
-  --color-accent-soft-strong: rgba(224, 98, 13, 0.26);
+  /* Accent — 青碧提亮 */
+  --color-accent: #35b899;
+  --color-accent-hover: #4cc9ab;
+  --color-accent-on-text: #0a1a16;
+  --color-accent-soft: rgba(53, 184, 153, 0.14);
+  --color-accent-soft-strong: rgba(53, 184, 153, 0.24);
 
-  /* Link（同族提亮版本保证小字号可读） */
-  --color-link: #fb923c;
-  --color-link-hover: #fdba74;
-  --color-link-soft: #909090;
-  --color-link-soft-hover: #fb923c;
+  /* Link */
+  --color-link: #45c3a4;
+  --color-link-hover: #6fd3b8;
+  --color-link-soft: #868a93;
+  --color-link-soft-hover: #f08a6e;
 
-  /* Semantic 四色组（dark 提亮、soft 降饱和防刺） */
-  --color-success: #3fbf75;
-  --color-success-soft: rgba(63, 191, 117, 0.14);
-  --color-error: #ef6060;
-  --color-error-soft: rgba(239, 96, 96, 0.14);
-  --color-warning: #eab23c;
-  --color-warning-soft: rgba(234, 178, 60, 0.15);
-  --color-text-warning: #eec25f;
-  --color-info: #9c9c9c;
-  --color-info-soft: rgba(156, 156, 156, 0.14);
+  /* Semantic 四色组（与亮色同色相关系） */
+  --color-success: #5cb176;
+  --color-success-soft: rgba(85, 168, 126, 0.14);
+  --color-error: #e0708f;
+  --color-error-soft: rgba(224, 112, 143, 0.14);
+  --color-warning: #c8a94e;
+  --color-warning-soft: rgba(200, 169, 78, 0.15);
+  --color-text-warning: #d8be72;
+  --color-info: #7e8b99;
+  --color-info-soft: rgba(126, 139, 153, 0.14);
 
   /* Status chips */
-  --color-chip-model-bg: rgba(224, 98, 13, 0.18);
-  --color-chip-model-fg: #f5b083;
-  --color-chip-workspace-bg: rgba(63, 191, 130, 0.14);
-  --color-chip-workspace-fg: #6fdcab;
-  --color-chip-permission-bg: rgba(234, 178, 60, 0.15);
-  --color-chip-permission-fg: #f0cd76;
+  --color-chip-model-bg: rgba(53, 184, 153, 0.16);
+  --color-chip-model-fg: #7fd8c0;
+  --color-chip-workspace-bg: rgba(122, 156, 184, 0.14);
+  --color-chip-workspace-fg: #93b7d1;
+  --color-chip-permission-bg: rgba(200, 169, 78, 0.15);
+  --color-chip-permission-fg: #dcc17a;
 
   /* Overlay */
-  --color-overlay-scrim: rgba(4, 4, 4, 0.68);
-  --color-modal-outline: rgba(244, 244, 244, 0.08);
+  --color-overlay-scrim: rgba(6, 7, 9, 0.66);
+  --color-modal-outline: rgba(233, 234, 238, 0.07);
 
   /* Buttons */
-  --color-btn-primary-bg: #e0620d;
-  --color-btn-primary-text: #ffffff;
-  --color-btn-primary-hover: #f97316;
-  --color-btn-secondary-bg: #1c1c1c;
-  --color-btn-secondary-text: #d6d6d6;
-  --color-btn-secondary-hover: #232323;
+  --color-btn-primary-bg: #35b899;
+  --color-btn-primary-text: #0a1a16;
+  --color-btn-primary-hover: #4cc9ab;
+  --color-btn-secondary-hover: #21252c;
+  --color-btn-secondary-text: #b4b7be;
+  --color-btn-secondary-bg: transparent;
   --color-btn-ghost-bg: transparent;
-  --color-btn-ghost-text: #adadad;
-  --color-btn-ghost-hover: #202020;
+  --color-btn-ghost-text: #868a93;
+  --color-btn-ghost-hover: #1e222a;
 
   /* Shadows — 暗色阴影加深才可感知 */
-  --shadow-card: none;
-  --shadow-pop: 0 6px 18px rgba(0, 0, 0, 0.45), 0 2px 6px rgba(0, 0, 0, 0.35);
-  --shadow-modal: 0 24px 64px rgba(0, 0, 0, 0.55), 0 10px 26px rgba(0, 0, 0, 0.4);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.32);
+  --shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.36);
+  --shadow-modal: 0 28px 72px rgba(0, 0, 0, 0.62), 0 10px 26px rgba(0, 0, 0, 0.44);
 
-  /* Scene surfaces — 内层比外层亮的层次原则 */
-  --theme-bg-app: #0b0b0b;
-  --theme-bg-sidebar: #141414;
-  --theme-bg-titlebar: #080808;
-  --theme-bg-chat: #111111;
+  /* Scene surfaces — 纸最亮、案低一档、外层最低（与亮色同一语法） */
+  --theme-bg-app: #0f1115;
+  --theme-bg-sidebar: #1a1d23;
+  --theme-bg-titlebar: #1a1d23;   /* 与侧栏同案面：取消独立色带 */
+  --theme-bg-chat: #121419;
 }

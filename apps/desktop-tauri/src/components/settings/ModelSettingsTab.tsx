@@ -209,7 +209,7 @@ export function ModelTab() {
       ? config.enabled.filter((m) => fullId(m.providerId, m.modelId) !== key)
       : [...config.enabled, { providerId, modelId }];
     const defaultCleared = exists && config.defaultModel === key;
-    // 首次勾选即设默认（主人拍板"三刀"语义）：不再自动启用后，用户的
+    // 首次勾选即设默认（"三刀"语义）：不再自动启用后，用户的
     // 第一次勾选就是"我要用这个模型"，直接顶掉空默认，省一次点击。
     const newDefault = exists
       ? (defaultCleared ? "" : config.defaultModel)
@@ -296,7 +296,7 @@ export function ModelTab() {
       if (models.length === 0) { setError("未返回任何模型"); setLoadingProvider(null); return; }
       setFetchedModels((prev) => ({ ...prev, [p.id]: models }));
 
-      // 语义（主人拍板"三刀"）：获取模型只更新目录缓存，不自动启用任何模型。
+      // 语义（"三刀"）：获取模型只更新目录缓存，不自动启用任何模型。
       // enabled/defaultModel 完全由用户勾选驱动（首次勾选即设默认），保证
       // 聊天窗口可选的模型始终 = 用户显式启用的模型。
 
@@ -851,7 +851,7 @@ export function CustomProviderSection({
       setProviderModels((prev) => ({ ...prev, [safeId]: models }));
       onModelsFetched(safeId, models);
       const probedWithWindow = resp.models.filter((m) => typeof m.context_window === "number" && (m.context_window as number) > 0);
-      // 语义（主人拍板"三刀"）：获取模型只更新目录缓存，不自动启用/设默认。
+      // 语义（"三刀"）：获取模型只更新目录缓存，不自动启用/设默认。
       // enabled/defaultModel 完全由用户勾选驱动（首次勾选即设默认）。
       const nextContexts: Record<string, number> = { ...(config.modelContexts ?? {}) };
       for (const m of probedWithWindow) {

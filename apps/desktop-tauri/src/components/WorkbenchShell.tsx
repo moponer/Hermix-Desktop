@@ -6,13 +6,11 @@
 // 宿主同时是**唯一的能力网关**：iframe 内的代码没有 IPC 入口，只能
 // postMessage 过来，由这里转发给 Rust 网关再把结果发回去。这样「数据和
 // 本机文件怎么被访问」始终是宿主说了算，代码层改不出花来。
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { ChevronLeft, ChevronRight } from "lucide-react";
 import { workbenchEntryUrl, workbenchGateway, type WorkbenchManifest } from "../workbench/api";
 import { WorkbenchChat } from "./WorkbenchChat";
-
-const collapseKey = (id: string) => `hermix.workbench.${id}.chatCollapsed`;
+import { FloatingChat } from "./FloatingChat";
 
 type GatewayMethod = "db.query" | "db.exec" | "fs.read" | "fs.write" | "fs.list";
 
@@ -25,9 +23,6 @@ export function WorkbenchShell({ manifest, chatNode }: WorkbenchShellProps) {
   // chatNode 包上工作台专属 chrome（chip + 改动状态条），让右栏一眼区别于主对话。
   const chat = <WorkbenchChat manifest={manifest} chatNode={chatNode} />;
   const [entryUrl, setEntryUrl] = useState<string | null>(null);
-  const [collapsed, setCollapsed] = useState(
-    () => localStorage.getItem(collapseKey(manifest.id)) === "1",
-  );
   // 画布没有构建步骤，重载就是热更新：key 变化强制重建 iframe 元素。
   const [reloadToken, setReloadToken] = useState(0);
   const frameRef = useRef<HTMLIFrameElement>(null);
@@ -116,15 +111,8 @@ export function WorkbenchShell({ manifest, chatNode }: WorkbenchShellProps) {
     return () => window.removeEventListener("message", onMessage);
   }, [manifest.id]);
 
-  const toggleChat = useCallback(() => {
-    setCollapsed((prev) => {
-      localStorage.setItem(collapseKey(manifest.id), prev ? "0" : "1");
-      return !prev;
-    });
-  }, [manifest.id]);
-
   return (
-    <div className={`wb-shell${collapsed ? " wb-shell-collapsed" : ""}`}>
+    <div className="wb-shell">
       <div className="wb-canvas">
         {entryUrl ? (
           <iframe
@@ -139,18 +127,9 @@ export function WorkbenchShell({ manifest, chatNode }: WorkbenchShellProps) {
           <div className="wb-canvas-empty">工作台入口未就绪</div>
         )}
       </div>
-      {/* 悬浮式折叠钮：平时隐形不占宽度，鼠标靠近分隔线才浮现。
-          展开态浮在右栏左缘（点它收起），折叠态浮在画布右缘（点它展开）。 */}
-      <button
-        type="button"
-        className="wb-toggle"
-        onClick={toggleChat}
-        title={collapsed ? "展开对话栏" : "收起对话栏"}
-        aria-label={collapsed ? "展开对话栏" : "收起对话栏"}
-      >
-        {collapsed ? <ChevronLeft className="icon-sm" /> : <ChevronRight className="icon-sm" />}
-      </button>
-      {!collapsed && <div className="wb-chat">{chat}</div>}
+      {/* 对话改成悬浮体：收起是一个可拖的球，展开是一扇可拖可缩的浮窗。
+          画布因此拿到 100% 宽度 —— 固定右栏曾永久切掉它三分之一。 */}
+      <FloatingChat manifestId={manifest.id} manifestName={manifest.name} chatNode={chat} />
     </div>
   );
 }

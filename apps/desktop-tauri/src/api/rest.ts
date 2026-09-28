@@ -473,9 +473,24 @@ export const getPendingApprovals = async (
   }
 };
 
-export const getSessionMessages = async (id: string): Promise<SessionMessagesResult> => {
+/** 会话打开时首屏只载最近 N 条 —— 长会话（工作台对话）全量拉取会让
+ *  wire 载荷与渲染都随历史线性膨胀；更早的历史走「加载更早」按需翻页。 */
+export const INITIAL_MESSAGE_WINDOW = 60;
+/** 「加载更早的消息」每页条数。 */
+export const HISTORY_PAGE_SIZE = 60;
+
+export const getSessionMessages = async (
+  id: string,
+  opts?: { limit?: number; tailSkip?: number },
+): Promise<SessionMessagesResult> => {
+  const params = new URLSearchParams();
+  if (opts?.limit && opts.limit > 0) params.set("limit", String(opts.limit));
+  if (opts?.tailSkip && opts.tailSkip > 0) params.set("tail_skip", String(opts.tailSkip));
+  const qs = params.toString();
   const res = await fetchJSON<{
     messages: WireMessage[];
+    has_more?: boolean;
+    total_messages?: number;
     context_usage?: {
       used_tokens: number;
       max_tokens: number;
@@ -483,7 +498,7 @@ export const getSessionMessages = async (id: string): Promise<SessionMessagesRes
       percent: number;
     } | null;
   }>(
-    `/v1/sessions/${encodeURIComponent(id)}/messages`
+    `/v1/sessions/${encodeURIComponent(id)}/messages${qs ? `?${qs}` : ""}`
   );
   const messages = wireArrayToChatMessages(res.messages, id, detectToolError);
   let contextUsage: RestoredContextUsage | null = null;
@@ -495,7 +510,12 @@ export const getSessionMessages = async (id: string): Promise<SessionMessagesRes
       percent: res.context_usage.percent,
     };
   }
-  return { messages, contextUsage };
+  return {
+    messages,
+    contextUsage,
+    hasMore: res.has_more ?? false,
+    totalMessages: res.total_messages ?? messages.length,
+  };
 };
 
 export const sendMessage = async (id: string, content: string): Promise<ChatMessage> => {

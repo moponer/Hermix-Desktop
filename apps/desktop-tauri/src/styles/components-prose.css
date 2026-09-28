@@ -190,7 +190,7 @@
   gap: 8px;
   padding: 4px 10px 4px 8px;
   border-radius: 999px;
-  font-size: 11.5px;
+  font-size: var(--text-tiny, 11px);
   font-weight: 500;
   color: var(--color-text-secondary);
   background: var(--color-bg-secondary);
@@ -227,7 +227,7 @@
      three dots are the only visual signal. */
 }
 .wait-for-input-label {
-  font-size: 11.5px;
+  font-size: var(--text-tiny, 11px);
   color: var(--color-text-faint);
   font-weight: 400;
   letter-spacing: 0.02em;
@@ -484,7 +484,7 @@
   gap: 4px;
   padding: 0;
   border-radius: 0;
-  font-size: 12.5px;
+  font-size: var(--text-meta, 12px);
   color: var(--color-link);
   background: transparent;
   border: 0;
@@ -692,14 +692,14 @@
   min-width: 0;
   overflow-wrap: anywhere;
   color: var(--color-text-primary);
-  font-size: 12.5px;
+  font-size: var(--text-meta, 12px);
   line-height: 1.55;
   letter-spacing: 0.005em;
 }
 .stream-error-card__tip {
   min-width: 0;
   color: var(--color-text-faint);
-  font-size: 11.5px;
+  font-size: var(--text-tiny, 11px);
   line-height: 1.55;
   letter-spacing: 0.015em;
   margin-top: 1px;
@@ -774,7 +774,7 @@
   border-radius: 999px;
   background: color-mix(in srgb, var(--color-warning) 12%, transparent);
   color: var(--color-text-primary);
-  font-size: 11.5px;
+  font-size: var(--text-tiny, 11px);
   font-weight: 500;
   line-height: 1.3;
   cursor: pointer;
@@ -863,7 +863,7 @@
 .tool-head:hover { background: var(--color-bg-secondary); }
 .tool-name {
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--text-tiny, 11px);
   font-weight: 500;
   color: var(--color-text-primary);
 }
@@ -932,7 +932,7 @@
 }
 .tw-msg-output-empty {
   display: block;
-  font-size: 11.5px;
+  font-size: var(--text-tiny, 11px);
   color: var(--color-text-faint);
   font-style: italic;
   font-family: var(--font-sans, system-ui);
@@ -1154,7 +1154,7 @@
   white-space: nowrap;
   color: var(--color-text-muted);
   font-family: var(--font-mono);
-  font-size: 12.5px;
+  font-size: var(--text-meta, 12px);
   min-width: 0;
   flex-shrink: 10;
 }
@@ -1169,7 +1169,7 @@
    reads as a category tag rather than competing with the
    command itself. */
 .tw-msg-verb {
-  font-size: 12.5px;
+  font-size: var(--text-meta, 12px);
   font-weight: 400;
   color: var(--color-text-secondary);
   white-space: nowrap;
@@ -1200,7 +1200,7 @@
    `|` 紧跟其后左对齐; primary 仍可按 flex-shrink + text-overflow
    截断, 但优先级高于 peek (10x)。 */
 .tw-msg-primary {
-  font-size: 12.5px;
+  font-size: var(--text-meta, 12px);
   font-weight: 400;
   color: var(--color-text-primary);
   overflow: hidden;
@@ -1271,7 +1271,7 @@
    Tiny monospace so it aligns with the badge baseline. */
 .tw-msg-dur {
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--text-micro, 10px);
   color: var(--color-text-faint);
   letter-spacing: -0.01em;
 }
@@ -1318,7 +1318,7 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 11.5px;
+  font-size: var(--text-tiny, 11px);
   font-weight: 400;
   line-height: 1;
   white-space: nowrap;
@@ -1438,7 +1438,7 @@
   border-radius: 4px;
   cursor: pointer;
   color: var(--color-error);
-  font-size: 11.5px;
+  font-size: var(--text-tiny, 11px);
   line-height: 1.4;
   border: 0;  /* 无边框 */
   background: color-mix(in srgb, var(--color-error) 10%, transparent);  /* 浅红底 */
@@ -1495,9 +1495,9 @@
   background: var(--color-bg-secondary, #f7f7f7);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
   overflow: hidden;
+  /* backdrop-filter 不参与 transition（Chromium 上过渡该属性代价极高） */
   transition:
     max-height 320ms cubic-bezier(0.4, 0, 0.2, 1),
-    backdrop-filter var(--duration-base, 160ms) ease,
     background-color var(--duration-base, 160ms) ease;
   /* 两行布局高度: padding 11+11 + 图标 22 + 命令块 head 26 + 命令 pre 28~ */
   max-height: 320px;
@@ -1530,7 +1530,7 @@
 .approval-card.is-done { opacity: 0.92; }
 
 /* ── 标题栏 (approval-head) — 卡片顶部一行"栏" ──
-   工具名 + reason 文字 (LLM 解释的意图). 主人要求"reason 行做标题栏",
+   工具名 + reason 文字 (LLM 解释的意图). 按"reason 行做标题栏"布局，
    移除右侧"等待你的决定"状态文本(状态信息由风险色 + 按钮隐性传达).
    风险时整栏染浅红/浅橙, 满足"层次" + "不分割"双诉求. */
 
@@ -1581,14 +1581,14 @@
 }
 
 .approval-summary-tool {
-  font-size: 12.5px;
+  font-size: var(--text-meta, 12px);
   font-weight: 600;
   color: var(--color-text-primary);
   flex-shrink: 0;
 }
 
 .approval-summary-desc {
-  font-size: 11.5px;
+  font-size: var(--text-tiny, 11px);
   color: var(--color-text-secondary);
   flex-shrink: 0;
 }
@@ -1847,7 +1847,7 @@
   min-width: 72px;
   padding: 0 16px;
   border-radius: 7px;
-  font-size: 12.5px;
+  font-size: var(--text-meta, 12px);
   font-weight: 600;
   line-height: 1;
   letter-spacing: 0.01em;
@@ -1921,7 +1921,7 @@
 /* ── Status note (chip) ── */
 
 /* ════════════════════════════════════════════════════════════════════
-   审批卡 — 严格两行布局 (主人: "看起来很乱" → 砍层级)
+   审批卡 — 严格两行布局 (原布局层级过多 → 砍层级)
    第 1 行: 信息 + 决策 — 工具图标/名 + 意图摘要(左对齐),
             拒绝 / 允许 按钮(最右侧)
    第 2 行: 命令块 — 标题栏"将执行"+ 复制按钮 + 命令文本
@@ -1968,7 +1968,7 @@
 }
 .apv-tool-name {
   font-family: var(--font-mono);
-  font-size: 12.5px;
+  font-size: var(--text-meta, 12px);
   font-weight: 600;
   color: var(--color-text-primary, #1a1a1a);
   flex-shrink: 0;
@@ -1980,7 +1980,7 @@
   user-select: none;
 }
 .apv-intent-text {
-  font-size: 12.5px;
+  font-size: var(--text-meta, 12px);
   line-height: 1.4;
   color: var(--color-text-secondary, #333);
   /* 长意图截断避免挤按钮; hover 看全文本 tooltip 由父容器另接 */
@@ -2004,7 +2004,7 @@
   min-width: 64px;
   padding: 0 14px;
   border-radius: var(--radius-md, 6px);
-  font-size: 12.5px;
+  font-size: var(--text-meta, 12px);
   font-weight: 600;
   line-height: 1;
   font-family: inherit;
@@ -2141,7 +2141,7 @@
   gap: 3px;
   padding: 2px 7px;
   border-radius: 999px;
-  font-size: 10.5px;
+  font-size: var(--text-micro, 10px);
   font-weight: 600;
   letter-spacing: 0.01em;
   white-space: nowrap;
@@ -2300,7 +2300,7 @@
 }
 .apv-shortcut kbd {
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--text-micro, 10px);
   padding: 1px 5px;
   border: 1px solid var(--color-border-primary, #e4e4e7);
   border-bottom-width: 2px;
@@ -2326,7 +2326,7 @@
   min-width: 72px;
   padding: 0 14px;
   border-radius: var(--radius-md, 6px);
-  font-size: 12.5px;
+  font-size: var(--text-meta, 12px);
   font-weight: 600;
   line-height: 1;
   font-family: inherit;

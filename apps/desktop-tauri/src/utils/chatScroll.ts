@@ -25,6 +25,33 @@ export function shouldFollowOnStreamChunk(
 }
 
 /**
+ * 距底部多少像素内仍算"贴底"。流式输出时内容逐帧长高，严格 `> 0`
+ * 判定会在任意一帧把程序化滚动误判成"用户滚上去了"。
+ */
+export const AT_BOTTOM_TOLERANCE_PX = 24;
+
+/**
+ * 真实滚动输入（wheel / 触摸 / 键盘 / 拖动滚动条）的有效窗口。
+ * 程序化跟随滚动不产生意图标记，因此不会被自己触发的 scroll 事件误判。
+ */
+export const USER_INTENT_WINDOW_MS = 400;
+
+/**
+ * 是否真的该把"离底"归因为用户上滚。
+ *
+ * 只有同时满足两点才成立：确实离开了底部容差范围，且窗口内有真实输入。
+ * 缺第二个条件时（程序写完 scrollTop 后内容又长高）必须判 false ——
+ * 否则粘性守卫会永久锁死自动跟随，只剩手动点"回到底部"一条出路。
+ */
+export function isUserScrolledUp(
+  distanceFromBottom: number,
+  hasRecentUserIntent: boolean,
+): boolean {
+  if (distanceFromBottom <= AT_BOTTOM_TOLERANCE_PX) return false;
+  return hasRecentUserIntent;
+}
+
+/**
  * `scrollTop` that lands the viewport at the bottom of the container's
  * content. Clamped to 0 because some browsers report a transient
  * `scrollHeight < clientHeight` during reflow.

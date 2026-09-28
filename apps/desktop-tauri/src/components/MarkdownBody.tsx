@@ -14,7 +14,7 @@
  *   - 全部 components 配置（p / li / code / input）原样保留
  */
 
-import { Children, isValidElement, memo, useMemo, useState } from "react";
+import { Children, isValidElement, memo, useCallback, useMemo, useRef, useState, useEffect } from "react";
 import { markdownToHast } from "satteri";
 import { toJsxRuntime } from "hast-util-to-jsx-runtime";
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
@@ -303,9 +303,42 @@ export interface MarkdownBodyProps {
 //   softBreaks: 由 src/lib/softBreaks.ts 在字符串层处理
 const SATTERI_FEATURES = { features: { gfm: true } } as const;
 
-export function MarkdownBody({ content, onPathClick }: MarkdownBodyProps) {
-  const handlePathClick = onPathClick ?? (() => {});
+const MARKDOWN_REPARSE_THROTTLE_MS = 120;
+
+/**
+ * Trailing-edge throttle：高频更新的 value 最多每 intervalMs 提交一次快照，
+ * 停止更新后保证最终值落地。流式 chunk 按 rAF 逐帧到达时，全量 Markdown
+ * 重解析从每帧一次降到 ~8 次/秒，尾帧定时器保证收尾内容不丢。
+ */
+function useThrottledValue<T>(value: T, intervalMs: number): T {
+  const [snapshot, setSnapshot] = useState(value);
+  const lastAtRef = useRef(0);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    const elapsed = Date.now() - lastAtRef.current;
+    if (elapsed >= intervalMs) {
+      lastAtRef.current = Date.now();
+      setSnapshot(value);
+      return;
+    }
+    timerRef.current = setTimeout(() => {
+      lastAtRef.current = Date.now();
+      setSnapshot(value);
+    }, intervalMs - elapsed);
+    return () => {
+      if (timerRef.current !== null) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+    };
+  }, [value, intervalMs]);
+  return snapshot;
+}
+
+export const MarkdownBody = memo(function MarkdownBody({ content, onPathClick }: MarkdownBodyProps) {
+  const handlePathClick = useCallback(onPathClick ?? (() => {}), [onPathClick]);
   const isDark = readIsDark();
+  const displayContent = useThrottledValue(content, MARKDOWN_REPARSE_THROTTLE_MS);
   // 1. 不平衡 fence 关闭（与 react-markdown 时一致）
   // 2. 软换行 → 硬换行（satleri 不开 remarkBreaks，等价物在 strings 层）
   // 3. satteri 解析 → hast tree
@@ -347,7 +380,7 @@ export function MarkdownBody({ content, onPathClick }: MarkdownBodyProps) {
         },
       },
     });
-  }, [content, handlePathClick, isDark]);
+  }, [displayContent, handlePathClick, isDark]);
 
   return <div className="prose max-w-none">{rendered}</div>;
-}
+});

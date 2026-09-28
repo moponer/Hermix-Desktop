@@ -4,7 +4,6 @@ import type { ChatMessage } from "../types";
 import {
   UserMessage, SystemMessage, AssistantMessage,
 } from "./TextBubble";
-import { ApprovalCard } from "./ApprovalBubble";
 import { ClarifyCard } from "./ClarifyBubble";
 import { ToolMessageCard } from "./ToolCallBubble";
 
@@ -104,18 +103,13 @@ export function MessageBubble({
   if (message.role === "system") return <SystemMessage message={message} />;
   if (message.role === "approval") {
     // 已决议的审批卡直接消失，不在消息流留痕。
-    // Pending 态才渲染 ApprovalCard。
+    // Pending 态也不再内联渲染 —— 待决定审批统一由 ChatView 底部的
+    // ApprovalDrawer（输入框上方抽屉）承载，避免同一请求出现两处
+    // 可点击的决策面。
     if (message.approval?.decision) {
       return null;
     }
-    return (
-      <ApprovalCard
-        message={message}
-        workspaceRoot={workspaceRoot}
-        onApprove={onApproveApproval}
-        onDeny={onDenyApproval}
-      />
-    );
+    return null;
   }
   if (message.role === "clarify") {
     // 已答复的询问卡直接消失，不留"已答复"占位（与审批卡一致）。
