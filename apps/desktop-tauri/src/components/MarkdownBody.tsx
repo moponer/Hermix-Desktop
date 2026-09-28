@@ -27,7 +27,9 @@ import { hardenSoftLineBreaks } from "../lib/softBreaks";
 
 /* ── Path linkification ──────────────────────────────────────── */
 
-const PATH_RE = /(?<=^|[\s\p{P}\p{Z}])(?:[A-Za-z]:)?(?:[\\/][\p{L}\p{N}_\-.\s()（）【】\[\]]+){1,}\.[\p{L}\p{N}]{1,5}(?=$|[\s\p{P}\p{Z}])/giu;
+// 字符类含 ~：Windows 8.3 短路径（ADMINI~1）必须整体命中，否则只匹配到
+// ADMINI 就断掉，整条路径识别失败。
+const PATH_RE = /(?<=^|[\s\p{P}\p{Z}])(?:[A-Za-z]:)?(?:[\\/][\p{L}\p{N}_\-~.\s()（）【】\[\]]+){1,}\.[\p{L}\p{N}]{1,5}(?=$|[\s\p{P}\p{Z}])/giu;
 const ABS_PATH_RE = /^(?:[A-Za-z]:[\\/])|(?:[\/])/;
 
 function isAbsolutePath(p: string): boolean {
@@ -80,7 +82,19 @@ export function linkifyChildren(
     if (isValidElement(child)) {
       const t = (child.type as { displayName?: string } | string);
       const name = typeof t === "string" ? t : t?.displayName ?? "";
-      if (name === "code" || name === "pre") return child;
+      if (name === "pre") return child;
+      if (name === "code") {
+        // 行内 code（无 language- 类）也要 linkify：LLM 爱把文件路径写在
+        // 反引号里（`C:\...\x.png`），跳过它 = 结果列表里的路径永远点不了。
+        // 块级代码（language-xxx）保持原样，正文代码块不该长出链接。
+        const cls = (child.props as { className?: string } | null)?.className ?? "";
+        if (cls.includes("language-")) return child;
+        const props = child.props as { children?: ReactNode };
+        if (props?.children) {
+          return { ...child, props: { ...props, children: linkifyChildren(props.children, onPathClick) } };
+        }
+        return child;
+      }
       const props = child.props as { children?: ReactNode };
       if (props?.children) {
         return { ...child, props: { ...props, children: linkifyChildren(props.children, onPathClick) } };

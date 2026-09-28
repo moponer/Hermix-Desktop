@@ -403,7 +403,14 @@ export const ChatView = memo(function ChatView({
       setWorkspaceRaw(session.workspace);
     }
     setExpert(session.expert_id ?? null);
-    setSelectedModel(resolveSessionSelectedModel(session.model, defaultModel));
+    // 只在会话真的记了模型时才覆盖当前选择。新会话 session.model 为空：
+    // 欢迎页里用户手动选的模型此刻还活在本组件 state 里，若在这里用
+    // defaultModel 重置，发送第一条消息（建会话 → 换 session 对象）的
+    // 瞬间选择就被打回后端默认 —— "选了 agens 又变回 minimax" 的根因。
+    // 空模型的会话沿用当前选择，由 overrides.model 随首条消息下发给后端。
+    if (session.model) {
+      setSelectedModel(resolveSessionSelectedModel(session.model, defaultModel));
+    }
   }, [session?.id, session?.workspace, session?.expert_id, session?.model, defaultModel, setWorkspaceRaw, setExpert, setSelectedModel]);
 
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);

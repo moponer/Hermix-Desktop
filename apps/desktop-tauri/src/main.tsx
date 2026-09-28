@@ -91,9 +91,43 @@ function stageIndexFromText(text: string): number {
 }
 
 let currentStage = 0;
+let crawlTimer: number | undefined;
+let realStageArrived = false;
+
+/** 爬行兜底：exe 侧还没有 boot-stage 广播（旧 Rust / command 缺失）时，
+ *  进度条匀速爬到 90% 停住，不再是死 0%。真实阶段一旦到达立即停爬让位。 */
+function startProgressCrawl() {
+  if (realStageArrived || crawlTimer !== undefined) return;
+  crawlTimer = window.setInterval(() => {
+    if (realStageArrived) {
+      window.clearInterval(crawlTimer);
+      crawlTimer = undefined;
+      return;
+    }
+    const pctEl = document.getElementById("sp-progress-pct");
+    const bar = document.getElementById("sp-progress-bar");
+    const textEl = document.getElementById("sp-progress-text");
+    const cur = parseInt(pctEl?.textContent ?? "0", 10) || 0;
+    if (cur >= 90) return;
+    const next = Math.min(90, cur + 1);
+    if (bar) bar.style.width = `${next}%`;
+    if (pctEl) pctEl.textContent = `${next}%`;
+    if (textEl && textEl.textContent === "正在初始化…") {
+      textEl.textContent = "正在初始化后端组件…";
+    }
+  }, 600);
+}
+
 function advanceSplashStage(text: string) {
   const idx = stageIndexFromText(text);
   if (idx < currentStage) return; // 只前进不后退（事件乱序保险）
+  if (!realStageArrived) {
+    realStageArrived = true;
+    if (crawlTimer !== undefined) {
+      window.clearInterval(crawlTimer);
+      crawlTimer = undefined;
+    }
+  }
   currentStage = idx;
   const stage = SPLASH_STAGES[idx];
   const bar = document.getElementById("sp-progress-bar");
@@ -180,11 +214,20 @@ listen<string>("hermix:boot-stage", (event) => {
   }
 });
 
-// 挂载后回查当前阶段（setup 可能早于 listen，补上错过的事件）
+// 挂载后回查当前阶段（setup 可能早于 listen，补上错过的事件）。
+// 回查失败 / 返回空（旧 exe 没有 boot_stage command）都开爬行兜底 ——
+// 修复"进度条永远 0%、启动项全灰"的死屏观感。
 invoke<string>("boot_stage")
-  .then((stage) => advanceSplashStage(stage ?? ""))
+  .then((stage) => {
+    if (stage) {
+      advanceSplashStage(stage);
+    } else {
+      startProgressCrawl();
+    }
+  })
   .catch(() => {
-    // 纯浏览器调试下没有 Tauri command，忽略即可。
+    // command 不存在（旧 exe）或纯浏览器调试：爬行兜底撑住观感。
+    startProgressCrawl();
   });
 
 // 无边框窗口没有系统标题栏：启动异常卡住时，用户得能最小化/关闭。

@@ -1170,15 +1170,16 @@
   font-variant-ligatures: none;
   letter-spacing: 0.2px;
 }
-/* ── 2026-08-31 调整：LLM 输出区域不要背景卡片 ──────
-   light 主题下覆盖为 transparent + 无边框，让 prose/terminal 内容
-   直接铺在主区雾绿底上；暗色主题保持原 code 区底色（内嵌代码块层次） */
+/* ── 2026-09-28 回退：light 主题也要终端面板底色 ──────
+   曾把 light 主题输出区覆盖成 transparent，实测展开后与对话底融为一体
+   毫无层次（用户反馈"没有背景等于没有层次"）。恢复 code 区底色 + 边框，
+   与暗色主题一致；折叠头仍保持 transparent 紧凑。 */
 :root[data-theme="light"] .tw-msg-output {
-  background: transparent;
-  border: 0;
-  padding: 9px 0;
-  border-radius: 0;
-  max-height: none;
+  background: var(--color-bg-code);
+  border: 1px solid var(--color-bg-code-border);
+  padding: 9px 30px 9px 12px;
+  border-radius: 6px;
+  max-height: 320px;
 }
 .tw-msg-output[data-empty="true"] {
   padding: 8px 12px;
