@@ -77,6 +77,14 @@ const WB_SDK_JS: &str = r#"// 宿主 SDK —— 工作台代码只能通过它�
       (listeners[d.event] || []).forEach(function (fn) { fn(d.payload); });
     }
   });
+
+  // 未开发工作台的默认底：骨架文档没有任何背景规则，iframe 画布是浏览器
+  // 默认白 —— 与宿主主题割裂。把 html 背景交还宿主：透明后父容器
+  // .wb-canvas 的 var(--color-bg-primary)（随主题）透出来。AI 之后想自定义
+  // 整页底色，给 html 加 !important 或直接设 body 即可覆盖（宿主不阻拦）。
+  // 宿主侧跨域读 contentDocument 的兜底（WorkbenchShell）在 asset 协议下
+  // 永远静默失效，这里是唯一真正生效的通道 —— SDK 跑在 iframe 自己的文档里。
+  document.documentElement.style.setProperty('background', 'transparent');
 })();
 "#;
 
@@ -993,6 +1001,11 @@ pub fn write_manifest(m: &WorkbenchManifest) -> Result<(), String> {
 }
 
 pub fn list_workbenches() -> Result<Vec<WorkbenchManifest>, String> {
+    // SDK / 工具箱随二进制更新：宿主升级后，已存在工作台引用的共享 vendor
+    // 资产也要跟上，否则新 SDK 能力（如画布底色跟随主题）永远到不了老工作台。
+    // 幂等：内容无变则跳过重写。放在 list —— 前端每次进工作台页必调，
+    // 是启动后最早的 workbench 触点（create 只在建新台时才走）。
+    ensure_vendor()?;
     let root = workbenches_dir();
     if !root.exists() {
         return Ok(Vec::new());
