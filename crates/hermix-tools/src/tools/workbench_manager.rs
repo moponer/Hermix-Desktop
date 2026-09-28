@@ -30,15 +30,16 @@ pub fn register(registry: &ToolRegistry) {
         Arc::new(|| true),
         vec![],
         true,
-        "Operate on an EXISTING workbench's code files. Actions: list (installed \
-         workbenches), files (code file paths), read (file content), write \
+        "Operate on workbenches. Actions: list (installed workbenches), create \
+         (new workbench from a display name — pre-generates the locked \
+         skeleton), files (code file paths), read (file content), write \
          (create/replace a code file — locked files rejected, line limits \
-         enforced, pre-write lint gate returns file:line + rule ID + fix), lint \
-         (full workbench lint report), index (module → exports, one line per \
-         module), deps (set importmap deps; uninstalled libs are rejected — \
-         request them, never use CDN), undo (revert last code write). Note: \
-         creating a NEW workbench goes through custom_app_manager \
-         (propose → approve → create), not this tool.",
+         enforced, pre-write lint gate returns file:line + rule ID + fix), \
+         lint (full workbench lint report), index (module → exports, one \
+         line per module), deps (set importmap deps; uninstalled libs are \
+         rejected — request them, never use CDN), undo (revert last code \
+         write). Note: custom_app_manager is a DIFFERENT product line \
+         (packaged exe apps) — never route workbench work through it.",
         "🛠️",
         None,
         RiskLevel::Caution,
@@ -75,6 +76,11 @@ impl WorkbenchManagerHandler {
                     })
                     .collect();
                 Ok(serde_json::to_string_pretty(&rows).unwrap_or_default())
+            }
+            "create" => {
+                let name = params_str(params, "name")?;
+                let m = wb::create_workbench(&name).map_err(ToolError::ExecutionFailed)?;
+                Ok(serde_json::to_string_pretty(&m).unwrap_or_default())
             }
             "files" => {
                 let id = params_str(params, "id")?;
@@ -126,7 +132,7 @@ impl WorkbenchManagerHandler {
                 }
             }
             other => Err(ToolError::InvalidParams(format!(
-                "未知 action '{other}'（可用: list/files/read/write/lint/index/deps/undo）"
+                "未知 action '{other}'（可用: list/create/files/read/write/lint/index/deps/undo）"
             ))),
         }
     }
@@ -144,7 +150,7 @@ impl ToolHandler for WorkbenchManagerHandler {
             "action".into(),
             json!({
                 "type": "string",
-                "enum": ["list", "files", "read", "write", "lint", "index", "deps", "undo"],
+                "enum": ["list", "create", "files", "read", "write", "lint", "index", "deps", "undo"],
                 "description": "Operation to perform",
             }),
         );
@@ -152,7 +158,14 @@ impl ToolHandler for WorkbenchManagerHandler {
             "id".into(),
             json!({
                 "type": "string",
-                "description": "Workbench id (from `list`)",
+                "description": "Workbench id (from `list`). Not needed for `create`.",
+            }),
+        );
+        props.insert(
+            "name".into(),
+            json!({
+                "type": "string",
+                "description": "Display name for the new workbench (create)",
             }),
         );
         props.insert(
@@ -185,7 +198,7 @@ impl ToolHandler for WorkbenchManagerHandler {
             parameters: hermix_core::JsonSchema {
                 schema_type: Some("object".into()),
                 properties: Some(props),
-                required: Some(vec!["action".into(), "id".into()]),
+                required: Some(vec!["action".into()]),
                 additional_properties: None,
             },
         }

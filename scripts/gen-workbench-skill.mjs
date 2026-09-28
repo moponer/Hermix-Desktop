@@ -95,6 +95,14 @@ ${ruleLines}
   超了不是让你砍功能，是让你**拆模块**。文件数量没有上限。
 - 跨文件重复块 ≥ \`${rules.limits.duplicateBlockLines}\` 行会报 W013 —— 抽到 \`src/utils/\` 或 \`src/components/\`。
 
+## 新建入口（只有这两条，没有第三条）
+
+- **用户侧**：客户端侧栏「工作台」页 → 空态「新建」按钮（Tauri 命令 \`workbench_create(name)\`）。
+  \`@work\` 快捷入口已删除，\`workspace_*\` 工具族从未注册过 —— 任何文档里再出现它们，
+  那份文档就是陈旧副本，不可用。
+- **LLM 侧**：**新建**走 \`custom_app_manager\`（propose → approve → create）；
+  **已有**工作台的代码迭代走下面的 \`workbench_manager\`。
+
 ## 工具调用（唯一真相：\`workbench_manager\`）
 
 **代码文件操作只有一个入口工具：\`workbench_manager\`，用 \`action\` 参数区分操作。**
@@ -104,6 +112,7 @@ ${ruleLines}
 | action | 参数 | 用途 |
 |---|---|---|
 | \`list\` | — | 已装工作台清单（id / 名称 / 主工作台标记 / deps） |
+| \`create\` | \`name\` | 新建工作台（按名称生成骨架，锁定文件宿主预生成） |
 | \`files\` | \`id\` | 代码目录全部文件相对路径 |
 | \`read\` | \`id\` + \`rel\` | 读一个代码文件 |
 | \`write\` | \`id\` + \`rel\` + \`content\` | 写文件。锁定文件拒写、行数上限、落盘前 lint 门禁（返回「文件:行号 + 规则 ID + 修法」） |
@@ -127,11 +136,14 @@ ${ruleLines}
 
 先 \`tool_search\` 确认工具表里有没有 \`workbench_manager\`：
 
-- **有** → 一律走上面的 action 表。
-- **没有** → 降级用 \`custom_app_manager\`（propose → approve → create 流程）+
-  常规 \`read_file\` / \`write_file\` 操作 \`~/.hermix/workbenches/<id>/code/\` 下的文件，
-  并明确告知用户「lint 门禁工具未加载，本次写入未经 lint 校验」。
+- **有** → 一律走上面的 action 表。**新建工作台也用它**（action=\`create\`）。
+- **没有** → 降级用常规 \`read_file\` / \`write_file\` 直接操作
+  \`~/.hermix/workbenches/<id>/code/\` 下的文件，并明确告知用户
+  「lint 门禁工具未加载，本次写入未经 lint 校验」。
   **两种路径之外禁止臆想任何工具名**——臆想的调用只会报「工具不存在」。
+  \`custom_app_manager\` 是**另一条产品线**（打包成独立 exe 的分发应用，
+  propose → approve → create 流程），与工作台无关——**不要**把工作台工作
+  路由给它。
 
 ## 第三方库
 
