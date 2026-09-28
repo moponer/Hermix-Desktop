@@ -40,7 +40,8 @@ const WIN_DEFAULT_H = 560;
 const EDGE_GAP = 16;
 
 const kOrb = (id: string) => `hermix.workbench.${id}.orbPos`;
-const kWin = (id: string) => `hermix.workbench.${id}.winBox`;
+// v2：窗口坐标从容器系换视口系后弃用旧存档，旧 key 留着不管。
+const kWin = (id: string) => `hermix.workbench.${id}.winBox.v2`;
 
 interface Box {
   /** 左上角坐标，视口像素（fixed 定位基准），相对视口左上角。 */
@@ -131,18 +132,21 @@ export function FloatingChat({
   );
 
   /** 窗口位置按**视口坐标**钳制（fixed 定位 + clientX/clientY 拖拽，
-      坐标系必须一致，混用容器像素会让拖拽整体偏移）。 */
+      坐标系必须一致，混用容器像素会让拖拽整体偏移）。
+      默认首现位：水平贴右、垂直居中；x/y 为 0 视为未定位走默认。 */
   const winBox = useCallback(
     (b: Box): Box => {
       const vw = window.innerWidth;
       const vh = window.innerHeight;
       const width = Math.max(WIN_MIN_W, Math.min(b.w || WIN_DEFAULT_W, vw - 32));
       const height = Math.max(WIN_MIN_H, Math.min(b.h || WIN_DEFAULT_H, vh - 32));
+      const defX = vw - width - EDGE_GAP;
+      const defY = Math.round((vh - height) / 2);
       return {
         w: width,
         h: height,
-        x: Math.max(8, Math.min(vw - width - 8, b.x || vw - width - EDGE_GAP)),
-        y: Math.max(8, Math.min(vh - height - 8, b.y || vh - height - EDGE_GAP)),
+        x: Math.max(8, Math.min(vw - width - 8, b.x ? b.x : defX)),
+        y: Math.max(8, Math.min(vh - height - 8, b.y ? b.y : defY)),
       };
     },
     [],
@@ -240,12 +244,14 @@ export function FloatingChat({
     return () => window.removeEventListener("keydown", onKey, true);
   }, [open]);
 
-  // 点任意非浮窗位置自动收起：画布是跨文档 iframe，里面的点击对宿主
-  // 完全不可见（iframe 事件隔离的物理边界）——宿主收到的 mousedown 只
-  // 发生在 DOM 树内的元素上，所以"DOM 内任意位置"= 真正的外面，点就收。
-  // 浮窗/球内部放行。用 mousedown 而非 click：拖拽松手补发的 click 不应
-  // 误触发收球；close 钮的 stopPropagation 使"点关闭钮"走 onClick 主动收，
-  // 与自动收殊途同归，无副作用。
+  // 点任意非浮窗位置自动收起 —— 两条通道，因为宿主只能看见半个世界：
+  // 1. 宿主 DOM：document capture mousedown，目标不在浮窗/球内 → 收。
+  // 2. 画布 iframe：跨文档事件宿主完全收不到（iframe 隔离），只能借焦点
+  //    信号 —— 点击 iframe 后宿主 window blur、activeElement 变成 iframe。
+  //    副作用：Alt-Tab 切走应用同样触发收起 —— 浮窗是 popover 语义，
+  //    失焦即收符合直觉，可接受。
+  // 用 mousedown 而非 click：拖拽松手补发的 click 不应误触发收球；
+  // close 钮的 stopPropagation 使"点关闭钮"走 onClick 主动收，殊途同归。
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
@@ -253,18 +259,21 @@ export function FloatingChat({
       if (target.closest(".wb-float, .wb-orb")) return;
       setOpen(false);
     };
+    const onBlur = () => {
+      if (document.activeElement instanceof HTMLIFrameElement) setOpen(false);
+    };
     document.addEventListener("mousedown", onDown, true);
-    return () => document.removeEventListener("mousedown", onDown, true);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      document.removeEventListener("mousedown", onDown, true);
+      window.removeEventListener("blur", onBlur);
+    };
   }, [open]);
 
-  // 首次布局后校正一次窗位（存档可能是旧分辨率或旧容器坐标系下的，
-  // 0 坐标归一到右下角默认位，避免闪到视口左上角）。
+  // 首次布局后校正一次窗位（存档可能是旧分辨率下的；0/越界坐标由
+  // winBox 归一到默认位，不会闪到视口角落）。
   useLayoutEffect(() => {
-    setBox((b) => {
-      const hasPos = b.x !== 0 || b.y !== 0;
-      const fallback: Box = { x: 0, y: 0, w: b.w || WIN_DEFAULT_W, h: b.h || WIN_DEFAULT_H };
-      return winBox(hasPos ? b : fallback);
-    });
+    setBox((b) => winBox(b));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [manifestId]);
 
