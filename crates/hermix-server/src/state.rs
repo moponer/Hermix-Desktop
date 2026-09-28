@@ -704,6 +704,10 @@ impl HttpServerState {
         // 提前解析）。首个字面量未用到时会有 unused 警告——两处构造路径
         // 共用同一绑定消除重复。
         let devices_db_path = hermix_home.join("devices.db");
+        // 审批超时：单一真相源在 hermix_config 的进程级全局，
+        // registry / 前端倒计时 / agent 兜底三处都从这里读。
+        let approval_timeout_secs = config.approval.timeout_secs;
+        hermix_config::set_approval_timeout_secs(approval_timeout_secs);
         let state = Self {
             config: Arc::new(config),
             tool_registry,
@@ -713,7 +717,9 @@ impl HttpServerState {
             boot: Arc::new(boot),
             runtime_gateway_running: None,
             agent_service,
-            approval_registry: ApprovalRegistry::new(),
+            approval_registry: ApprovalRegistry::with_timeout(std::time::Duration::from_secs(
+                approval_timeout_secs,
+            )),
             clarify_dispatcher,
             clarify_broadcast,
             expert_registry: hermix_skills::ExpertRegistry::new(),
@@ -999,6 +1005,8 @@ impl HttpServerState {
         // 提前解析）。首个字面量未用到时会有 unused 警告——两处构造路径
         // 共用同一绑定消除重复。
         let devices_db_path = hermix_home.join("devices.db");
+        let approval_timeout_secs = config.approval.timeout_secs;
+        hermix_config::set_approval_timeout_secs(approval_timeout_secs);
         let state = Self {
             config: Arc::new(config),
             tool_registry,
@@ -1008,7 +1016,9 @@ impl HttpServerState {
             boot: Arc::new(boot),
             runtime_gateway_running: None,
             agent_service,
-            approval_registry: ApprovalRegistry::new(),
+            approval_registry: ApprovalRegistry::with_timeout(std::time::Duration::from_secs(
+                approval_timeout_secs,
+            )),
             clarify_dispatcher,
             clarify_broadcast,
             expert_registry: hermix_skills::ExpertRegistry::new(),

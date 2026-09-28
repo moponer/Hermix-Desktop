@@ -497,6 +497,123 @@ pub async fn test_connection(
 }
 
 // ---------------------------------------------------------------------------
+// POST /api/providers/test — 用"还没落盘"的配置试连通
+// ---------------------------------------------------------------------------
+
+/// 测试连接的入参：只带连接所需字段，不要求先建 provider。
+///
+/// 为什么另开一个端点：`test-connection` 走 `/api/custom-providers/{id}`，
+/// 必须先落盘才能测；而添加模型弹窗里用户还没点保存，此时"填完就测"是
+/// 最自然的动作。让它先写盘再测会留下取消后的垃圾 provider。
+#[derive(Debug, Clone, Deserialize)]
+pub struct InlineTestRequest {
+    /// OpenAI 兼容端点基址，例如 `https://api.deepseek.com/v1`。
+    pub base_url: String,
+    pub api_key: String,
+    /// 可选：只验证这个模型是否在 /models 列表里。
+    pub model: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct InlineTestResponse {
+    pub ok: bool,
+    /// 错误分类：`apikey` / `network` / `quota` / `provider` / `bad_request`。
+    /// 前端按这个给中文提示，不再让用户自己对着一串 HTTP 状态码猜。
+    pub kind: Option<String>,
+    pub status: u16,
+    /// 端到端耗时（毫秒），测通时用来显示"延迟 xxx ms"。
+    pub latency_ms: u64,
+    pub error: Option<String>,
+    pub models: Option<Vec<String>>,
+    /// 传了 model 时：该模型是否在 /models 列表里。
+    pub model_found: Option<bool>,
+}
+
+fn classify(status: u16) -> &'static str {
+    match status {
+        401 | 403 => "apikey",
+        402 | 429 => "quota",
+        400 | 404 | 422 => "bad_request",
+        _ => "provider",
+    }
+}
+
+pub async fn test_inline(
+    Json(req): Json<InlineTestRequest>,
+) -> Result<Json<InlineTestResponse>, HttpError> {
+    let base = req.base_url.trim_end_matches('/').to_string();
+    if base.is_empty() || req.api_key.trim().is_empty() {
+        return Ok(Json(InlineTestResponse {
+            ok: false,
+            kind: Some("bad_request".into()),
+            status: 0,
+            latency_ms: 0,
+            error: Some("接口地址与 API Key 都不能为空".into()),
+            models: None,
+            model_found: None,
+        }));
+    }
+
+    let url = format!("{}/models", base);
+    let started = std::time::Instant::now();
+    // 10s 上限：连通性测试不是聊天请求，超时了就该立刻告诉用户，
+    // 别让弹窗上的按钮转半分钟。
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
+
+    match client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", req.api_key))
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            let status = resp.status().as_u16();
+            let ok = resp.status().is_success();
+            let latency_ms = started.elapsed().as_millis() as u64;
+            let (models, model_found) = if ok {
+                let text = resp.text().await.unwrap_or_default();
+                match serde_json::from_str::<ModelsApiResponse>(&text) {
+                    Ok(data) => {
+                        let ids: Vec<String> = data.data.iter().map(|m| m.id.clone()).collect();
+                        let found = req
+                            .model
+                            .as_deref()
+                            .map(|want| ids.iter().any(|m| m == want));
+                        (Some(ids), found)
+                    }
+                    Err(_) => (None, None),
+                }
+            } else {
+                (None, None)
+            };
+            Ok(Json(InlineTestResponse {
+                ok,
+                kind: if ok { None } else { Some(classify(status).into()) },
+                status,
+                latency_ms,
+                error: if ok { None } else { Some(format!("HTTP {}", status)) },
+                models,
+                model_found,
+            }))
+        }
+        // 连不上 / DNS / TLS 失败都属于"网络"，与鉴权失败严格区分 ——
+        // 用户的处置动作完全不同（换 Key vs 查网络）。
+        Err(e) => Ok(Json(InlineTestResponse {
+            ok: false,
+            kind: Some("network".into()),
+            status: 0,
+            latency_ms: started.elapsed().as_millis() as u64,
+            error: Some(e.to_string()),
+            models: None,
+            model_found: None,
+        })),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // PUT /api/custom-providers/{id}/model-contexts
 // ---------------------------------------------------------------------------
 

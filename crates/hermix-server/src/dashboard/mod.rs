@@ -142,6 +142,8 @@ pub fn router() -> Router<HttpServerState> {
         .route("/api/custom-providers/{id}/fetch-models", post(custom_providers::fetch_models))
         .route("/api/custom-providers/{id}/test-connection", post(custom_providers::test_connection))
         .route("/api/custom-providers/{id}/model-contexts", put(custom_providers::update_model_contexts))
+        // 未落盘配置的连通性测试（添加模型弹窗"填完就测"）
+        .route("/api/providers/test", post(custom_providers::test_inline))
         // Persona management: SOUL / system prompt / personalities / memory.
         // See `dashboard/persona.rs` for the file layout and the agent-loop
         // code that consumes these files.

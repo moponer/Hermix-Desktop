@@ -96,13 +96,15 @@ pub const HTTP_PLATFORM: &str = "http";
 /// lowered 300s → 30s after type-B recurrence
 /// showed that 5 minutes of "● ● ● 正在思考" felt permanent to
 /// Zero means **no auto-deny timeout** — the approval card stays
-/// open indefinitely until the user explicitly clicks 允许 or 拒绝.
-/// This is the user's explicit requirement : "审批不该
-/// 有超时，如果不审批默认就等待，不再继续往下". The agent loop
-/// blocks on the oneshot receiver until the user resolves it; the
-/// only other unblock paths are WS disconnect (→ `ChannelClosed`)
-/// and server-side task abort.
-pub const DEFAULT_APPROVAL_TIMEOUT: Duration = Duration::ZERO;
+/// open indefinitely until the user explicitly clicks 允许 or 拒绝
+/// (`ApprovalConfig.timeout_secs = 0` 可恢复旧行为). 默认 600s：
+/// 旧行为（ZERO，无限等待）在"人不在电脑前"场景下等于永久挂死——
+/// agent 停在 AwaitApproval，没有队列、没有恢复路径。改成有界等待
+/// 后：到期自动 deny（超时事实写入时间轴），配合远程审批（IM/移动端）
+/// 覆盖"人不在但想放行"的场景。运行时实际生效值以
+/// `hermix_config::approval_timeout_secs()` 为准（启动时从
+/// `ApprovalConfig.timeout_secs` 写入），本常量只是缺省值。
+pub const DEFAULT_APPROVAL_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// Compute the wall-clock deadline (Unix milliseconds) for a fresh
 /// approval request. Centralized so the WS envelope and the persisted
@@ -119,13 +121,11 @@ pub const DEFAULT_APPROVAL_TIMEOUT: Duration = Duration::ZERO;
 /// and matches the user's `Date.now()` on the front-end (which is
 /// also wall-clock).
 pub fn compute_approval_deadline_ms() -> Option<i64> {
-if DEFAULT_APPROVAL_TIMEOUT.is_zero() {
+let secs = hermix_config::approval_timeout_secs();
+if secs == 0 {
 return None;
 }
-Some(
-chrono::Utc::now().timestamp_millis()
-+ DEFAULT_APPROVAL_TIMEOUT.as_millis() as i64,
-)
+Some(chrono::Utc::now().timestamp_millis() + (secs as i64) * 1000)
 }
 
 // ---------------------------------------------------------------------------

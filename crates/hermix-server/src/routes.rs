@@ -1023,9 +1023,14 @@ pub(crate) async fn subscribe_session_snapshot(
             "messages": [],
         })
     } else {
-        // 落后：全量快照（复用 get_session_messages 同一份构造）。
+        // 落后：全量快照（复用 get_session_messages 同一份构造；快照语义
+        // 不带窗口参数 —— 订阅端点要的是完整对账，不是分页）。
         let snapshot = get_session_messages(
             Path(session_id.clone()),
+            Query(MessagesQuery {
+                limit: None,
+                tail_skip: None,
+            }),
             State(state.clone()),
         )
         .await?;
@@ -1056,8 +1061,41 @@ pub(crate) async fn subscribe_session_snapshot(
     Ok(Json(resp))
 }
 
+/// `GET /v1/sessions/{id}/messages` 的查询参数（窗口化加载）。
+///
+/// 长会话（工作台对话尤其如此）全量拉取会让 wire 载荷与前端渲染都随
+/// 历史线性膨胀：`limit` 取「组装后完整列表的尾部 N 条」，`tail_skip`
+/// 先跳过末尾若干条再向前取 —— 前端「加载更早的消息」翻页用
+/// （tail_skip = 已在手里的条数，天然抗翻页期间新消息追加）。
+/// 两者都缺省 = 旧行为全量快照。
+#[derive(serde::Deserialize)]
+pub(crate) struct MessagesQuery {
+    pub limit: Option<usize>,
+    pub tail_skip: Option<usize>,
+}
+
+/// 从组装后的完整消息列表里取尾部窗口。返回 `(页, has_more)`：
+/// `has_more` 表示窗口之前还有更早的消息（前端据此显示"加载更早"入口）。
+/// `limit` 为 0 视为未指定；`tail_skip` 超出列表长度时返回空页。
+pub(crate) fn window_message_page(
+    all: Vec<hermix_transport::ProtocolMessage>,
+    limit: Option<usize>,
+    tail_skip: usize,
+) -> (Vec<hermix_transport::ProtocolMessage>, bool) {
+    let total = all.len();
+    let Some(limit) = limit.filter(|l| *l > 0) else {
+        return (all, false);
+    };
+    let skip = tail_skip.min(total);
+    let end = total - skip;
+    let start = end.saturating_sub(limit);
+    let has_more = start > 0;
+    (all[start..end].to_vec(), has_more)
+}
+
 pub(crate) async fn get_session_messages(
     Path(session_id): Path<String>,
+    Query(q): Query<MessagesQuery>,
     State(state): State<HttpServerState>,
 ) -> Result<Json<SessionMessagesResponse>, HttpError> {
     // use the *timestamped* loader so each entry
@@ -1361,10 +1399,14 @@ pub(crate) async fn get_session_messages(
     all_messages.extend(main_msgs);
 
     let context_usage = state.session_persistence.get_context_usage(&session_id);
+    let total_messages = all_messages.len();
+    let (page, has_more) = window_message_page(all_messages, q.limit, q.tail_skip.unwrap_or(0));
     Ok(Json(SessionMessagesResponse {
         session_id,
-        messages: all_messages,
+        messages: page,
         context_usage,
+        has_more,
+        total_messages,
     }))
 }
 
@@ -1892,6 +1934,81 @@ pub(crate) struct WarmUpProviderRequest {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    // ----- 窗口化分页（window_message_page）-----
+
+    fn probe_msgs(n: usize) -> Vec<hermix_transport::ProtocolMessage> {
+        (0..n)
+            .map(|i| hermix_transport::ProtocolMessage {
+                id: format!("m{i}"),
+                role: hermix_transport::Role::User,
+                content: format!("msg{i}"),
+                timestamp: String::new(),
+                model: None,
+                tool_calls: None,
+                tool_name: None,
+                tool_arguments: None,
+                extra: None,
+                reasoning_content: None,
+                execution_timeline: None,
+                unified_steps: None,
+                created_at: None,
+                compressed: None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn window_without_limit_returns_full_snapshot() {
+        let (page, has_more) = window_message_page(probe_msgs(10), None, 0);
+        assert_eq!(page.len(), 10);
+        assert!(!has_more);
+    }
+
+    #[test]
+    fn window_limit_zero_is_treated_as_unspecified() {
+        let (page, has_more) = window_message_page(probe_msgs(10), Some(0), 0);
+        assert_eq!(page.len(), 10);
+        assert!(!has_more);
+    }
+
+    #[test]
+    fn window_takes_tail_and_reports_older() {
+        let (page, has_more) = window_message_page(probe_msgs(10), Some(4), 0);
+        assert_eq!(page.len(), 4);
+        // 尾部窗口：最新 4 条 m6..m9，has_more 说明前面还有更早的。
+        assert_eq!(page[0].id, "m6");
+        assert_eq!(page[3].id, "m9");
+        assert!(has_more);
+    }
+
+    #[test]
+    fn window_tail_skip_pages_older_without_overlap() {
+        // 第一页：末尾 4 条；第二页：tail_skip=4 再向前取 4 条。
+        let (p1, _) = window_message_page(probe_msgs(10), Some(4), 0);
+        let (p2, has_more2) = window_message_page(probe_msgs(10), Some(4), 4);
+        assert_eq!(p1[0].id, "m6");
+        assert_eq!(p2[0].id, "m2");
+        assert_eq!(p2[3].id, "m5");
+        assert!(has_more2);
+        // 两页无重叠。
+        let ids1: std::collections::HashSet<_> = p1.iter().map(|m| &m.id).collect();
+        assert!(p2.iter().all(|m| !ids1.contains(&m.id)));
+    }
+
+    #[test]
+    fn window_tail_skip_beyond_length_returns_empty_page() {
+        let (page, has_more) = window_message_page(probe_msgs(10), Some(4), 50);
+        assert!(page.is_empty());
+        assert!(!has_more);
+    }
+
+    #[test]
+    fn window_larger_than_list_returns_all() {
+        let (page, has_more) = window_message_page(probe_msgs(3), Some(100), 0);
+        assert_eq!(page.len(), 3);
+        assert!(!has_more);
+    }
 
     /// Regression guard: open_sessions_db_for_read must bound
     /// busy_timeout at 500ms (not 5000ms) so a concurrent DELETE

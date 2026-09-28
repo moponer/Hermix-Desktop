@@ -1209,6 +1209,33 @@ export const testCustomProviderConnection = async (
     { method: "POST" },
   );
 
+export interface InlineTestResponse {
+  ok: boolean;
+  /** apikey / quota / network / provider / bad_request — 前端按类给中文提示。 */
+  kind: string | null;
+  status: number;
+  latency_ms: number;
+  error: string | null;
+  models: string[] | null;
+  model_found: boolean | null;
+}
+
+/** 用还没落盘的配置试连通：添加模型弹窗里"填完就测"，不必先建 provider。 */
+export const testProviderInline = async (params: {
+  baseUrl: string;
+  apiKey: string;
+  model?: string;
+}): Promise<InlineTestResponse> =>
+  fetchJSON<InlineTestResponse>("/api/providers/test", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      base_url: params.baseUrl,
+      api_key: params.apiKey,
+      model: params.model ?? null,
+    }),
+  });
+
 export const updateCustomProviderModelContexts = async (
   id: string,
   modelContexts: Record<string, number>,

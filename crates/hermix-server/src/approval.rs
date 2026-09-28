@@ -32,7 +32,9 @@ impl Default for ApprovalRegistry {
 
 impl ApprovalRegistry {
     pub fn new() -> Self {
-        Self::with_timeout(DEFAULT_APPROVAL_TIMEOUT)
+        Self::with_timeout(std::time::Duration::from_secs(
+            hermix_config::approval_timeout_secs(),
+        ))
     }
 
     /// Create a registry whose pending approvals auto-resolve to
@@ -486,22 +488,29 @@ mod approval_registry_tests {
 
     #[tokio::test]
     async fn default_timeout_constant_is_zero() {
-        //changed from 30s to ZERO (no auto-deny).
-        // The user explicitly requested: "审批不该有超时，如果不审批
-        // 默认就等待，不再继续往下". The approval card stays open
-        // indefinitely until the user explicitly resolves it.
-        assert_eq!(DEFAULT_APPROVAL_TIMEOUT, std::time::Duration::ZERO);
+        // 2026-09-28: default 600s (10 min auto-deny). The old ZERO
+        // default ("审批不该有超时") turned every unattended approval
+        // into a permanent hang; it remains available via
+        // `ApprovalConfig.timeout_secs = 0`.
+        hermix_config::set_approval_timeout_secs(600);
+        assert_eq!(DEFAULT_APPROVAL_TIMEOUT, std::time::Duration::from_secs(600));
         let reg = ApprovalRegistry::new();
-        assert_eq!(reg.default_timeout(), std::time::Duration::ZERO);
+        assert_eq!(reg.default_timeout(), std::time::Duration::from_secs(600));
+        // 恢复默认，避免影响并行测试读取全局。
+        hermix_config::set_approval_timeout_secs(600);
     }
 
-    /// `compute_approval_deadline_ms` returns `None` when
-    /// `DEFAULT_APPROVAL_TIMEOUT` is zero — no deadline means
+    /// `compute_approval_deadline_ms` returns `None` when the
+    /// configured timeout is zero — no deadline means
     /// the front-end countdown pill is hidden and the card stays
     /// open until the user explicitly resolves it.
     #[test]
     fn compute_approval_deadline_is_none_when_timeout_zero() {
+        hermix_config::set_approval_timeout_secs(0);
         assert_eq!(compute_approval_deadline_ms(), None);
+        hermix_config::set_approval_timeout_secs(600);
+        assert!(compute_approval_deadline_ms().is_some());
+        hermix_config::set_approval_timeout_secs(600);
     }
 
     #[tokio::test]

@@ -14,6 +14,7 @@ import {
   Activity,
 } from "lucide-react";
 import { ModelTab } from "./settings/ModelSettingsTab";
+import { ModelListTab } from "./settings/ModelListTab";
 import { BackendTab } from "./settings/BackendSettingsTab";
 import { AdvancedTab } from "./settings/AdvancedSettingsTab";
 import { DiagnosticsTab } from "./settings/DiagnosticsTab";
@@ -33,7 +34,7 @@ interface SystemConfigPanelProps {
 export type ConfigCategory = "model" | "tools" | "backend" | "advanced" | "diagnostics" | "devices";
 type CategoryId = ConfigCategory;
 type ToolTabId = "plugins" | "skills" | "connectors" | "toolsets";
-type ModelTabId = "model" | "image";
+type ModelTabId = "model" | "provider" | "image";
 type BackendTabId = "service" | "runtimes";
 
 const CATEGORIES: { id: CategoryId; label: string; hint: string; icon: React.ElementType }[] = [
@@ -52,8 +53,11 @@ const TOOL_TABS: { id: ToolTabId; label: string; icon: React.ElementType }[] = [
   { id: "toolsets", label: "工具集", icon: Boxes },
 ];
 
+// 模型中心制（新的默认视图）在前，旧的供应商中心制面板降级到"按供应商"，
+// 等新面板稳定后再删。
 const MODEL_TABS: { id: ModelTabId; label: string; icon: React.ElementType }[] = [
-  { id: "model", label: "模型配置", icon: Cpu },
+  { id: "model", label: "模型列表", icon: Cpu },
+  { id: "provider", label: "按供应商", icon: Server },
   { id: "image", label: "图像", icon: ImageIcon },
 ];
 
@@ -187,6 +191,11 @@ export function SystemConfigPanel({ onClose, initialCategory }: SystemConfigPane
 
             <div className="flex-1 overflow-y-auto min-h-0">
               {cat === "model" && modelTab === "model" && (
+                <div className="h-full min-h-0">
+                  <ModelListTab />
+                </div>
+              )}
+              {cat === "model" && modelTab === "provider" && (
                 <div className="h-full min-h-0">
                   <ModelTab />
                 </div>
