@@ -7,11 +7,16 @@
   flex: 1;
   min-height: 0;
   min-width: 0;
+  /* 与 .pane-main 同源令牌：主区背景由 --theme-bg-chat 决定，workbench 页
+     显式铺同色，避免空态链路（wb-boot/wb-empty 均透明）任何一层漏出
+     WebView2 默认白底 —— 暗色主题下尤其刺眼。 */
+  background: var(--theme-bg-chat, var(--color-bg-primary));
 }
 
 /* 首次列表加载完成前占位，避免空态闪一下又跳走。 */
 .wb-boot {
   flex: 1;
+  background: var(--theme-bg-chat, var(--color-bg-primary));
 }
 
 .wb-shell {
@@ -312,6 +317,8 @@
   min-height: 0;
   padding: 48px;
   overflow-y: auto;
+  /* 空态画布铺主题底色（与 .pane-main 同源），不依赖祖先链透传。 */
+  background: var(--theme-bg-chat, var(--color-bg-primary));
 }
 
 .wb-empty-title {
