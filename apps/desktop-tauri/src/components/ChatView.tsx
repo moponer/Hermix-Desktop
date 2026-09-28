@@ -1,9 +1,17 @@
-import { useState, useRef, useEffect, useMemo, useCallback } from "react";
+import { useState, useRef, useEffect, useMemo, useCallback, memo } from "react";
 import { useStreamChatContext } from "../context/StreamChatContext";
 import { PanelRight, PanelLeftOpen, Search, ArrowUp, AlertTriangle } from "lucide-react";
 import { SidebarRevealRow } from "./SidebarRevealRow";
 import { resolveSessionSelectedModel } from "../utils/sessionModel";
-import type { ChatMessage, QueuedMessage, QueuedImage, SubAgentState, Session } from "../types";
+import type {
+  ApprovalBatchMessageMeta,
+  ApprovalMessageMeta,
+  ChatMessage,
+  QueuedMessage,
+  QueuedImage,
+  SubAgentState,
+  Session,
+} from "../types";
 import type { ChatOverrides, StreamPhase, TodoSnapshotItem } from "../hooks/useStreamChat";
 import type { ConfigCategory } from "./SystemConfigPanel";
 import { CompactionStatusBanner } from "./CompactionStatusBanner";
@@ -15,6 +23,7 @@ import { AcuiPanel } from "../acui/AcuiPanel";
 import { StreamErrorCard, type ErrorKind } from "./StreamErrorBanner";
 import { useModelSelector } from "./ModelSelector";
 import { Composer } from "./Composer";
+import { ApprovalDrawer, type PendingApprovals } from "./ApprovalDrawer";
 import { MessageList, type MessageListHandle, type StreamRow } from "./MessageList";
 import { useCustomApps } from "../hooks/useCustomApps";
 import {
@@ -117,6 +126,8 @@ function ModelStatusBar({
 
 interface ChatViewProps {
   session: Session | null;
+  /** 历史翻页：hasMore 时列表顶部显示「加载更早的消息」，onLoadMore 前插一页。 */
+  historyPaging?: { hasMore: boolean; loading: boolean; onLoadMore: () => void } | null;
   onSendMessage: (content: string, projectId?: string, overrides?: ChatOverrides, attachments?: { images?: QueuedImage[]; attachedFilePaths?: string[] }) => Promise<void>;
   onNewChat?: () => void;
   pendingPrefill?: string | null;
@@ -195,8 +206,9 @@ interface ChatViewProps {
   onConsumeFileAttachment?: () => void;
 }
 
-export function ChatView({
+export const ChatView = memo(function ChatView({
   session,
+  historyPaging,
   onSendMessage,
   onNewChat,
   pendingPrefill,
@@ -295,12 +307,9 @@ export function ChatView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingPrefill]);
 
-  useEffect(() => {
-    if (textareaRef.current) {
-      textareaRef.current.style.height = "auto";
-      textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 200) + "px";
-    }
-  }, [input]);
+  // 输入框高度自适应由 AppMentionInput 内部负责（textarea 撑满内容高度、
+  // 外层容器滚动），这里不要再改 height —— 父组件的 useEffect 在子组件
+  // layout effect 之后执行，会把高度覆盖回带上限的值。
 
   // ── Expert / permission / workspace / skills state ─────────────────
   const sessionId = session?.id ?? null;
@@ -520,9 +529,39 @@ export function ChatView({
   const handleReasoningFoldChange = useCallback((folded: boolean) => {
     setReasoningFolded(folded);
   }, []);
+  // 待审批清单（供输入框上方的审批抽屉使用）。
+  // 两个来源：新流程的 unified_steps（App::onApprovalRequest 推入）与
+  // 历史的 role:"approval" 独立消息；按 requestId/batchId 去重后按时间
+  // 序排列 —— 抽屉永远先显示最老的一项，agent 正阻塞在那。
+  const pendingApprovals = useMemo<PendingApprovals>(() => {
+    const singles: ApprovalMessageMeta[] = [];
+    const batches: ApprovalBatchMessageMeta[] = [];
+    const seen = new Set<string>();
+    for (const m of session?.messages ?? []) {
+      if (m.role === "approval" && m.approval && !m.approval.decision
+          && !seen.has(m.approval.requestId)) {
+        seen.add(m.approval.requestId);
+        singles.push(m.approval);
+      }
+      for (const st of m.unified_steps ?? []) {
+        if (st.kind === "approval_request" && !st.meta.decision
+            && !seen.has(st.meta.requestId)) {
+          seen.add(st.meta.requestId);
+          singles.push(st.meta);
+        } else if (st.kind === "approval_request_batch" && !st.meta.decision
+            && !seen.has(st.meta.batchId)) {
+          seen.add(st.meta.batchId);
+          batches.push(st.meta);
+        }
+      }
+    }
+    return { singles, batches };
+  }, [session?.messages]);
+  // 统一扫描（legacy role:"approval" + unified_steps 两条路径），
+  // 供 keepOpen / activeTurnMsgIds / 审批抽屉共用同一份事实。
   const hasPendingApproval = useMemo(
-    () => (session?.messages ?? []).some((m) => m.role === "approval" && !m.approval?.decision),
-    [session?.messages],
+    () => pendingApprovals.singles.length + pendingApprovals.batches.length > 0,
+    [pendingApprovals],
   );
   const activeTurnMsgIds = useMemo(() => {
     const msgs = session?.messages ?? [];
@@ -846,7 +885,14 @@ export function ChatView({
               </p>
             </>
           )}
-          <div className="w-full">
+          <div className="w-full relative">
+            <ApprovalDrawer
+              pending={pendingApprovals}
+              onApprove={(id, remember) => onApproveApproval?.(id, remember)}
+              onDeny={(id) => onDenyApproval?.(id)}
+              onApproveBatch={(id, remember) => onApproveBatchApproval?.(id, remember)}
+              onDenyBatch={(id) => onDenyBatchApproval?.(id)}
+            />
             <Composer
               variant={isWorkbenchChat ? "workbench" : "default"}
               input={input} setInput={setInput} handleKeyDown={handleKeyDown} handleSubmit={handleSubmit} customApps={customApps}
@@ -903,18 +949,23 @@ export function ChatView({
 
   return (
     <div className="chat-surface flex-1 flex flex-col overflow-hidden min-h-0">
-      <ModelStatusBar
-        title={session?.title}
-        rightOpen={rightOpen}
-        onToggleRight={onToggleRight}
-        sidebarCollapsed={sidebarCollapsed}
-        onExpandSidebar={onExpandSidebar}
-        onOpenSearch={onOpenSearch}
-      />
+      {/* 工作台对话不渲染状态条：浮窗标题栏已经顶着工作台名，这里再出一行
+          会话标题 + 产物栏图标就是双层标题，且产物栏在工作台语境下无意义。 */}
+      {!isWorkbenchChat && (
+        <ModelStatusBar
+          title={session?.title}
+          rightOpen={rightOpen}
+          onToggleRight={onToggleRight}
+          sidebarCollapsed={sidebarCollapsed}
+          onExpandSidebar={onExpandSidebar}
+          onOpenSearch={onOpenSearch}
+        />
+      )}
 
       <MessageList
         ref={messageListRef}
         session={session}
+        historyPaging={historyPaging}
         stream={stream}
         isStreaming={isStreaming}
         isAgentActiveState={isAgentActiveState}
@@ -950,7 +1001,7 @@ export function ChatView({
       />
 
       <div className="px-3 sm:px-4 pb-4 shrink-0">
-        <div className="max-w-wide lg:max-w-[800px] xl:max-w-[920px] mx-auto">
+        <div className="max-w-reading mx-auto">
           {acuiState && acuiState.cards.length > 0 && (
             <AcuiPanel
               state={acuiState}
@@ -1067,4 +1118,4 @@ export function ChatView({
       </div>
     </div>
   );
-}
+});
