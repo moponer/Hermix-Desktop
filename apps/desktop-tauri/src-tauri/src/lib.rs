@@ -3,6 +3,7 @@ pub mod commands;
 pub mod commands_custom_app;
 pub mod commands_cua;
 pub mod commands_workbench;
+pub mod markitdown;
 pub mod officecli;
 pub mod portable_env;
 pub mod sidecar;
@@ -373,7 +374,7 @@ pub fn run() {
     //   1. 磁盘缓存从无上限 → 20MB（节省 ~200MB 磁盘）
     //   2. 关闭 dev 模式捆绑的 DevTools 扩展（节省 28MB 磁盘）
     //   3. 减少 GPU 进程合成开销（运行时 -200-400MB）
-    //   4. 限制 V8 老生代 heap（避免长会话后 heap 涨到 1GB+）
+    //   4. 限制 V8 老生代 heap（1GB 上限，避免 heap 无限膨胀；太小会引发频繁 full GC）
     //
     // 注意：参数用空格分隔，多个 flag 之间也是空格。
     // 完整 Chromium flag 列表：https://peter.sh/experiments/chromium-command-line-switches/
@@ -388,7 +389,8 @@ pub fn run() {
         " --media-cache-size=2097152",
         " --disable-features=NetworkService",
         // ── 性能优化 ──
-        " --js-flags=--max-old-space-size=256",
+        // 256MB 会让长会话 V8 频繁 full GC（全 UI 卡顿的主因之一），放宽到 1GB
+        " --js-flags=--max-old-space-size=1024",
         " --no-pings",
         " --disable-background-networking",
         " --disable-component-update",
@@ -571,6 +573,7 @@ pub fn run() {
             commands::list_directory,
             commands::restart_sidecar,
             commands::render_office_preview,
+            commands::document_to_markdown,
             commands::get_runtime_info,
             boot_stage,
             // stdio bridge chokepoints — every REST call and every
@@ -586,6 +589,8 @@ pub fn run() {
             // `execute_code` / `read_pdf` 调用立即生效（无重启）。
             commands::python_detect,
             commands::set_python_override,
+            // 内置运行时探测（Node / Python / Git）：内置位 → PATH → override。
+            commands::runtime_detect,
             commands_cua::screen::cua_screenshot,
             commands_cua::screen::cua_screen_info,
             commands_cua::screen::cua_left_click,

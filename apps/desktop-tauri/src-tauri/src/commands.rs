@@ -252,8 +252,22 @@ pub struct BackendLogTail {
 
 /// Return the last `tail_lines` of the most recently modified log file.
 /// Falls back to the legacy single file `server.log` when present.
+///
+/// async + spawn_blocking：日志可能滚到几十 MB，同步整读会冻结调用方；
+/// 这里用 Seek 只读尾部，行数统计用流式计数（不整读进内存）。
 #[tauri::command]
-pub fn read_backend_log_tail(tail_lines: u64) -> Result<BackendLogTail, String> {
+pub async fn read_backend_log_tail(tail_lines: u64) -> Result<BackendLogTail, String> {
+    tokio::task::spawn_blocking(move || read_backend_log_tail_blocking(tail_lines))
+        .await
+        .map_err(|e| format!("log tail task join failed: {e}"))?
+}
+
+/// 单次回读块大小（从文件尾向前，直到凑够 wanted 行）。
+const LOG_TAIL_CHUNK: u64 = 64 * 1024;
+/// 尾部读取总量上限——wanted 很大或行超长时不至于把内存读爆。
+const LOG_TAIL_MAX_BYTES: u64 = 4 * 1024 * 1024;
+
+fn read_backend_log_tail_blocking(tail_lines: u64) -> Result<BackendLogTail, String> {
     let dir = log_dir();
     if !dir.is_dir() {
         return Err(format!(
@@ -284,15 +298,66 @@ pub fn read_backend_log_tail(tail_lines: u64) -> Result<BackendLogTail, String> 
         Some(p) => p,
         None => return Err(format!("日志目录为空：{}", dir.display())),
     };
-    let contents = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    // Cheap newline split; log files here are MB-scale at worst.
-    let all_lines: Vec<&str> = contents.split('\n').collect();
-    let total_lines = all_lines.len() as u64;
+
+    use std::io::{Read, Seek, SeekFrom, BufRead, BufReader};
     let wanted = tail_lines.max(1) as usize;
+
+    // 流式统计总行数：O(size) 但只占常数内存，在 blocking 线程不碍 UI。
+    let total_lines = {
+        let f = std::fs::File::open(&path).map_err(|e| e.to_string())?;
+        let mut reader = BufReader::with_capacity(256 * 1024, f);
+        let mut count: u64 = 0;
+        loop {
+            let consumed = {
+                let buf = reader.fill_buf().map_err(|e| e.to_string())?;
+                count += buf.iter().filter(|&&b| b == b'\n').count() as u64;
+                buf.len()
+            };
+            if consumed == 0 {
+                break;
+            }
+            reader.consume(consumed);
+        }
+        count
+    };
+
+    // 从文件尾按块回读，直到凑够 wanted 个换行或触达上限。
+    let mut f = std::fs::File::open(&path).map_err(|e| e.to_string())?;
+    let len = f.metadata().map_err(|e| e.to_string())?.len();
+    let mut chunks: Vec<Vec<u8>> = Vec::new();
+    let mut taken: u64 = 0;
+    let mut pos = len;
+    while pos > 0 && taken < LOG_TAIL_MAX_BYTES {
+        let chunk = LOG_TAIL_CHUNK.min(pos).min(LOG_TAIL_MAX_BYTES - taken);
+        pos -= chunk;
+        taken += chunk;
+        f.seek(SeekFrom::Start(pos)).map_err(|e| e.to_string())?;
+        let mut tmp = vec![0u8; chunk as usize];
+        f.read_exact(&mut tmp).map_err(|e| e.to_string())?;
+        let newlines = tmp.iter().filter(|&&b| b == b'\n').count();
+        chunks.push(tmp);
+        if newlines > wanted {
+            break;
+        }
+    }
+    let mut tail_bytes = Vec::with_capacity(taken as usize);
+    for c in chunks.iter().rev() {
+        tail_bytes.extend_from_slice(c);
+    }
+    let contents = String::from_utf8_lossy(&tail_bytes);
+    let mut all_lines: Vec<&str> = contents.split('\n').collect();
+    // 回读窗口可能从某行中间开始：若尚未覆盖整个文件，丢弃首段残行。
+    if pos > 0 {
+        if all_lines.len() > 1 {
+            all_lines.remove(0);
+        } else {
+            all_lines.clear();
+        }
+    }
     let start = all_lines.len().saturating_sub(wanted);
     let lines: Vec<String> = all_lines[start..]
         .iter()
-        .map(|s| s.to_string())
+        .map(|s| s.trim_end_matches('\r').to_string())
         .collect();
     Ok(BackendLogTail {
         path: path.to_string_lossy().into_owned(),
@@ -860,7 +925,8 @@ pub async fn render_office_preview(
         true
     };
 
-    if needs_render {
+    // 刚渲染完时复用内存里的 bytes，不再 read_to_string 重读缓存文件。
+    let fresh_html: Option<String> = if needs_render {
         let output = tokio::process::Command::new(&officecli_bin)
             .args(["view", canonical.to_str().unwrap_or(""), "html"])
             .env("OFFICECLI_NO_AUTO_RESIDENT", "1")
@@ -876,16 +942,87 @@ pub async fn render_office_preview(
 
         std::fs::write(&html_path, &output.stdout)
             .map_err(|e| format!("cannot write preview HTML: {e}"))?;
-    }
+        Some(String::from_utf8_lossy(&output.stdout).into_owned())
+    } else {
+        None
+    };
 
     let resolved = strip_unc_prefix(html_path.as_os_str());
-    let html_content = std::fs::read_to_string(&html_path)
-        .map_err(|e| format!("cannot read cached preview: {e}"))?;
+    let html_content = match fresh_html {
+        Some(content) => content,
+        None => std::fs::read_to_string(&html_path)
+            .map_err(|e| format!("cannot read cached preview: {e}"))?,
+    };
     Ok(OfficePreviewResult {
         html_path: resolved,
         html_content,
         file_name,
     })
+}
+
+/// 文档 → Markdown。给预览面板一条不依赖 `officecli` 的兜底路径：
+/// sidecar 缺失或渲染失败时不再是白屏，而且文本视图可搜索、可复制，
+/// 比内嵌 HTML 更适合快速扫读。
+const MARKITDOWN_EXTENSIONS: &[&str] = &[
+    "docx", "doc", "xlsx", "xls", "pptx", "ppt", "pdf", "html", "htm", "epub",
+    "csv", "tsv", "json", "xml", "msg", "zip", "rtf", "odt", "ods", "odp",
+];
+
+/// 前端一次渲染得动的 Markdown 上限。超过这个量级 MarkdownBody 会明显卡，
+/// 而扫读场景也用不到全文 —— 与文本预览的 2 MiB 上限同一思路。
+const MARKITDOWN_MAX_CHARS: u32 = 200_000;
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentMarkdownResult {
+    pub markdown: String,
+    pub file_name: String,
+    /// `true` 表示输出被 sidecar 截断，前端应提示"仅显示前 N 字符"。
+    pub truncated: bool,
+}
+
+#[tauri::command]
+pub async fn document_to_markdown(
+    file_path: String,
+    workspace_root: Option<String>,
+) -> Result<DocumentMarkdownResult, String> {
+    let raw = PathBuf::from(&file_path);
+    if raw.as_os_str().is_empty() {
+        return Err("empty path".to_string());
+    }
+    let anchored: PathBuf = if raw.is_absolute() {
+        raw
+    } else {
+        let base = workspace_root
+            .as_deref()
+            .map(PathBuf::from)
+            .or_else(|| dirs::home_dir())
+            .ok_or_else(|| "no workspace base for relative path".to_string())?;
+        base.join(&raw)
+    };
+    let canonical = anchored
+        .canonicalize()
+        .map_err(|e| format!("cannot resolve '{}': {e}", anchored.display()))?;
+
+    let ext = canonical
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if !MARKITDOWN_EXTENSIONS.contains(&ext.as_str()) {
+        return Err(format!("unsupported file type '.{ext}' for markdown conversion"));
+    }
+
+    let file_name = canonical
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("document")
+        .to_string();
+
+    let markdown = crate::markitdown::convert_to_markdown(&canonical, Some(MARKITDOWN_MAX_CHARS))
+        .await?;
+    let truncated = markdown.chars().count() >= MARKITDOWN_MAX_CHARS as usize;
+    Ok(DocumentMarkdownResult { markdown, file_name, truncated })
 }
 
 /// Check whether an artifact path resolves to an existing regular file.
@@ -1183,25 +1320,148 @@ pub async fn python_detect(override_path: Option<String>) -> Result<PythonProbeR
 /// error) — the caller treats that as "exists but didn't return a
 /// version", which still beats nothing.
 async fn spawn_python_version(python: &Path) -> Option<String> {
+    spawn_version(python, "--version", "Python").await
+}
+
+/// 通用 `--version` 探测：node / git / python 都是 `<exe> --version`，
+/// 只是答案里该匹配的关键字不同（"v22.11.0" / "git version 2.55" /
+/// "Python 3.13.1"）。统一走 stdout+stderr 拼接，取第一行非空输出。
+async fn spawn_version(exe: &Path, flag: &str, keyword: &str) -> Option<String> {
     use tokio::process::Command as TokioCommand;
-    let output = TokioCommand::new(python)
-        .arg("--version")
+    let output = TokioCommand::new(exe)
+        .arg(flag)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .output()
         .await
         .ok()?;
-    // `python --version` writes to stdout on Unix and stderr on
-    // Windows Python.org builds; we concatenate both and look for the
-    // first `Python X.Y.Z` token.
+    // 各运行时把版本写进 stdout 还是 stderr 没有统一约定（Windows
+    // Python.org 写 stderr，git 写 stdout），两侧都读最稳。
     let mut out = String::from_utf8_lossy(&output.stdout).into_owned();
     if !output.stderr.is_empty() {
         out.push('\n');
         out.push_str(&String::from_utf8_lossy(&output.stderr));
     }
     out.lines()
-        .find(|l| l.contains("Python"))
+        .find(|l| l.contains(keyword))
+        .or_else(|| out.lines().find(|l| !l.trim().is_empty()))
         .map(|s| s.trim().to_string())
+}
+
+// ---------------------------------------------------------------------------
+// 内置运行时探测（Settings → 运行时 tab）
+//
+// 三类运行时共用一套"候选位 + 版本探测"逻辑，差别只在三张表：
+//   · 内置位（sibling-slot）：随 exe 一起分发的目录，格式固定
+//   · PATH 候选命令名
+//   · 版本关键字
+// 内置位存在的意义：便携版不该依赖用户机器上装没装 node/python/git。
+// ---------------------------------------------------------------------------
+
+/// 单条探测结果（source 说明这个路径是"内置 / 环境变量 / PATH / 覆盖"）。
+#[derive(serde::Serialize)]
+pub struct RuntimeProbeEntry {
+    pub source: String,
+    pub path: String,
+    pub exists: bool,
+    pub version: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+pub struct RuntimeProbeResult {
+    pub entries: Vec<RuntimeProbeEntry>,
+    pub selected: Option<String>,
+}
+
+struct RuntimeSpec {
+    /// 内置位相对 exe 目录的子路径（便携分发时把运行时解压到这里）。
+    sibling: &'static [&'static str],
+    /// PATH 上要试的命令名。
+    path_candidates: &'static [&'static str],
+    /// 版本输出里的关键字（同时用于兜底取首行）。
+    version_keyword: &'static str,
+}
+
+fn runtime_spec(kind: &str) -> Option<RuntimeSpec> {
+    match kind {
+        "python" => Some(RuntimeSpec {
+            sibling: &["python/python.exe", "python/bin/python3"],
+            path_candidates: &["python", "py", "python3"],
+            version_keyword: "Python",
+        }),
+        "node" => Some(RuntimeSpec {
+            sibling: &["node/node.exe", "node/bin/node"],
+            path_candidates: &["node"],
+            version_keyword: "v",
+        }),
+        // MinGit 的 git.exe 在 cmd/ 下（mingw64 变体在 bin/ 下），两个都试。
+        "git" => Some(RuntimeSpec {
+            sibling: &["git/cmd/git.exe", "git/bin/git.exe", "git/bin/git"],
+            path_candidates: &["git"],
+            version_keyword: "git version",
+        }),
+        _ => None,
+    }
+}
+
+/// 探测一类运行时（node / python / git）的所有候选位。
+///
+/// 顺序：内置位 → PATH → 显式 override。内置位优先是刻意的：便携版里
+/// 自带的运行时必须赢过用户机器上版本不明的同名命令，否则"内置"形同虚设。
+#[tauri::command]
+pub async fn runtime_detect(
+    kind: String,
+    override_path: Option<String>,
+) -> Result<RuntimeProbeResult, String> {
+    let spec = runtime_spec(&kind).ok_or_else(|| format!("unknown runtime kind: {kind}"))?;
+    let mut entries: Vec<RuntimeProbeEntry> = Vec::new();
+
+    let push = |source: String, path: String, entries: &mut Vec<RuntimeProbeEntry>| {
+        if entries.iter().any(|e| e.path == path) {
+            return;
+        }
+        let pb = PathBuf::from(&path);
+        let exists = pb.is_file();
+        entries.push(RuntimeProbeEntry {
+            source,
+            path,
+            exists,
+            version: None, // 下面统一补版本，闭包不能 async
+        });
+    };
+
+    // 1. 内置位（sibling-slot）
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            for rel in spec.sibling {
+                push("builtin".into(), dir.join(rel).display().to_string(), &mut entries);
+            }
+        }
+    }
+    // 2. PATH
+    for cand in spec.path_candidates {
+        let resolved = which::which(cand).ok();
+        let path = resolved
+            .clone()
+            .unwrap_or_else(|| PathBuf::from(cand))
+            .display()
+            .to_string();
+        push(format!("PATH:{cand}"), path, &mut entries);
+    }
+    // 3. 显式覆盖（设置页手填）
+    if let Some(p) = override_path.as_deref().filter(|s| !s.trim().is_empty()) {
+        push("override".into(), p.to_string(), &mut entries);
+    }
+
+    // 版本探测只对真实存在的文件发起，避免为每个 PATH 未命中项 spawn 进程。
+    for e in entries.iter_mut() {
+        if e.exists {
+            e.version = spawn_version(Path::new(&e.path), "--version", spec.version_keyword).await;
+        }
+    }
+
+    let selected = entries.iter().find(|e| e.exists).map(|e| e.path.clone());
+    Ok(RuntimeProbeResult { entries, selected })
 }
 
 /// Return runtime environment info for the desktop app.

@@ -17,6 +17,7 @@ import { ModelTab } from "./settings/ModelSettingsTab";
 import { BackendTab } from "./settings/BackendSettingsTab";
 import { AdvancedTab } from "./settings/AdvancedSettingsTab";
 import { DiagnosticsTab } from "./settings/DiagnosticsTab";
+import { RuntimesTab } from "./settings/RuntimesTab";
 import { DevicesTab } from "./settings/DevicesTab";
 import { PluginsTab, SkillsTab, ConnectorsTab, ToolsetsTab } from "./config/ToolTabs";
 import { ToggleSwitch } from "./ToggleSwitch";
@@ -33,6 +34,7 @@ export type ConfigCategory = "model" | "tools" | "backend" | "advanced" | "diagn
 type CategoryId = ConfigCategory;
 type ToolTabId = "plugins" | "skills" | "connectors" | "toolsets";
 type ModelTabId = "model" | "image";
+type BackendTabId = "service" | "runtimes";
 
 const CATEGORIES: { id: CategoryId; label: string; hint: string; icon: React.ElementType }[] = [
   { id: "model", label: "模型", hint: "配置大模型与图片生成", icon: Cpu },
@@ -55,10 +57,16 @@ const MODEL_TABS: { id: ModelTabId; label: string; icon: React.ElementType }[] =
   { id: "image", label: "图像", icon: ImageIcon },
 ];
 
+const BACKEND_TABS: { id: BackendTabId; label: string; icon: React.ElementType }[] = [
+  { id: "service", label: "服务", icon: Server },
+  { id: "runtimes", label: "内置运行时", icon: Boxes },
+];
+
 export function SystemConfigPanel({ onClose, initialCategory }: SystemConfigPanelProps) {
   const [cat, setCat] = useState<CategoryId>(initialCategory ?? "model");
   const [toolTab, setToolTab] = useState<ToolTabId>("connectors");
   const [modelTab, setModelTab] = useState<ModelTabId>("model");
+  const [backendTab, setBackendTab] = useState<BackendTabId>("service");
   const [query, setQuery] = useState("");
   const panelRef = useRef<HTMLDivElement>(null);
 
@@ -130,8 +138,22 @@ export function SystemConfigPanel({ onClose, initialCategory }: SystemConfigPane
 
           {/* Right detail */}
           <div className="flex-1 min-w-0 flex flex-col bg-bg-app">
-            {(cat === "model" || cat === "tools") && (
+            {(cat === "model" || cat === "tools" || cat === "backend") && (
               <div className="flex items-center gap-1 px-4 py-2 border-b border-border-primary bg-bg-secondary shrink-0 overflow-x-auto">
+                {cat === "backend" && BACKEND_TABS.map(({ id, label, icon: Icon }) => (
+                  <button
+                    key={id}
+                    onClick={() => setBackendTab(id)}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] transition-colors whitespace-nowrap ${
+                      backendTab === id
+                        ? "bg-bg-tertiary text-text-primary font-medium"
+                        : "text-text-muted hover:text-text-secondary hover:bg-bg-hover"
+                    }`}
+                  >
+                    <Icon className="icon-md" />
+                    {label}
+                  </button>
+                ))}
                 {cat === "model" && MODEL_TABS.map(({ id, label, icon: Icon }) => (
                   <button
                     key={id}
@@ -180,7 +202,8 @@ export function SystemConfigPanel({ onClose, initialCategory }: SystemConfigPane
                   </div>
                 </div>
               )}
-              {cat === "backend" && <Padded><BackendTab /></Padded>}
+              {cat === "backend" && backendTab === "service" && <Padded><BackendTab /></Padded>}
+              {cat === "backend" && backendTab === "runtimes" && <Padded wide><RuntimesTab /></Padded>}
               {cat === "advanced" && <Padded><AdvancedTab /></Padded>}
               {cat === "devices" && <Padded wide><DevicesTab /></Padded>}
               {cat === "diagnostics" && <Padded wide><DiagnosticsTab /></Padded>}
