@@ -24,13 +24,39 @@
  * 一、结构性令牌（跨主题恒定 · @theme 层 · 主题文件禁止覆盖）
  * ------------------------------------------------------------------ */
 @theme {
-  /* Type scale */
-  --font-size-display: 22px;
+  /* ── 字号阶梯（7 档 · 唯一真相源）────────────────────────────
+     命名必须用 --text-* ：Tailwind v4 只在这个命名空间下生成
+     `text-*` 工具类。旧名 `--font-size-*` 是 v3 写法，v4 下**不生成任何
+     工具类**——这就是历史上 409 处 `text-[11px]` 任意值取代了整套档位的
+     根因（旧档位定义仍在文件尾部做别名，供 var() 引用）。
+     禁半档（11.5 / 12.5 / 13.5 …）：一屏内字号档位 ≤ 3。 */
+  --text-micro: 10px;    /* 角标、计数徽标（全局 ≤5% 出现） */
+  --text-tiny: 11px;     /* 元信息：时间、计数、路径、参数预览 */
+  --text-meta: 12px;     /* 工具名、chip、命令输出、区块标题 */
+  --text-ui: 13px;       /* 界面文本：按钮、列表项、表单标签、思考正文 */
+  --text-body: 14px;     /* 对话正文（全局唯一正文字号） */
+  --text-title: 16px;    /* 小标题：区块标题、弹窗标题 */
+  --text-display: 20px;  /* 页面标题 / 空态（一次性使用） */
+
+  /* 旧名别名 —— 仅供 var(--font-size-*) 引用，禁止新代码使用 */
+  --font-size-display: 20px;
   --font-size-h1: 16px;
   --font-size-h2: 14px;
   --font-size-body: 14px;
   --font-size-meta: 12px;
   --font-size-tiny: 11px;
+
+  /* ── 字重（4 档）────────────────────────────────────────────
+     中文在 13px 以下用 700 会糊成块，所以最高只到 600。 */
+  --font-weight-regular: 400;
+  --font-weight-medium: 500;   /* 界面强调：按钮、选中项、工具名 */
+  --font-weight-semibold: 600; /* 标题：区块 / 轮次 / 弹窗 */
+
+  /* ── 行高（4 档，按用途而非按字号）───────────────────────── */
+  --leading-reading: 1.75;  /* 长文阅读：对话正文、思考正文 */
+  --leading-ui: 1.5;        /* 界面文本：按钮、chip、列表 */
+  --leading-compact: 1.4;   /* 紧凑：工具行、元信息、表格 */
+  --leading-heading: 1.3;   /* 单行标题 */
 
   /* Font families（Tailwind4 @theme 规范命名；旧名 --font-family-primary 走尾部别名） */
   --font-sans: "Inter", "Segoe UI Variable", "Segoe UI", system-ui,
@@ -84,128 +110,147 @@
   --width-narrow: 240px;
   --width-base: 420px;
   --width-wide: 720px;
+  /* reading = 对话正文行长。820px 在 14px 字号下约 50 个汉字，取
+     "行长舒适"与"两侧空白不挤压内容"的平衡点；640px 曾被反馈过窄。
+     代码块 / 表格 / 长命令行不跟随此档，各自按内容需要放宽。 */
+  --width-reading: 820px;
 
   /* ------------------------------------------------------------------
-   * 二、色彩令牌 · LIGHT 基线取值（Graphite Rust 石墨铁锈）
-   *    暗色等其余主题在 themes/*.css 各自给出全套同 名 覆盖。
+   * 二、色彩令牌 · LIGHT 基线「宣纸 · 青碧」
+   * ------------------------------------------------------------------
+   *   与旧版「暖纸 + 陶土」的本质差别有三条：
    *
-   *    设计语言：纯中性灰阶做面（R=G=B，禁任何蓝紫偏移）；唯一饱和度
-   *    只允许出现在铁锈橙 hero 强调色与语义四色上（呼应品牌橙红）；
-   *    层次靠明度阶梯而非色相跳跃；发丝边框承担分区。
+   *   1. **面只有四级，方向是"抬起"**：案 < 纸 < 面 < 浮。
+   *      旧版卡片比背景更暗或同色（--color-bg-card 与 --color-bg-primary
+   *      同为 #faf9f5），卡片根本没"抬"起来，层次只能靠到处画边框 ——
+   *      这就是满屏盒子感的根源。新版卡片恒比纸面亮，深浅方向统一。
+   *
+   *   2. **相邻两级明度差 ≥ 3%**（旧版 1-2%，人眼读不出层）。
+   *
+   *   3. **色相只属于墨**：中性轴近乎无彩，唯一饱和的青碧只给
+   *      「主行动 / 当前选中 / 需要你决定」；语义四色彼此拉开 ≥30°
+   *      色相，且全部避开青碧所在的青绿区（success 往黄绿挪 30°+，error 走绛红）。
+   *
+   *   文字对比也刻意降一档（正文约 11.5:1 而非 21:1）：墨水屏阅读
+   *   久看不累，正是因为没有高对比造成的光晕。
    * ------------------------------------------------------------------ */
 
-  /* Surfaces — 明度阶梯（暖纸：Parchment 泛纸暖白做底，
-     Ivory 卡片与背景几乎同色（层次极微妙不跳），层间 3-6 级差 */
-  --color-bg-app: #f5f4ed;
-  --color-bg-primary: #faf9f5;
-  --color-bg-secondary: #f7f6f1;
-  --color-bg-tertiary: #efece4;
-  --color-bg-quaternary: #e2dfd5;
-  --color-bg-hover: #efece4;
-  --color-bg-active: #e6e3d8;
-  --color-bg-card: #faf9f5;
-  --color-bg-card-hover: #f4f2eb;
-  --color-bg-elevated: #faf9f5;
-  --color-bg-inset: #ebe8df;
-  --color-bg-input: #faf9f5;
-  --color-bg-base: #f8f7f2;
+  /* ── 面（4 级）── */
+  --color-bg-app: #f0eee7;         /* 案·最外层：窗口底、列间空隙 */
+  --color-bg-primary: #f7f5f0;     /* 纸·对话与主区底 */
+  --color-bg-secondary: #edeae2;   /* 案·侧栏 / 顶栏 / 行 hover */
+  --color-bg-tertiary: #e4e0d6;    /* 案·深一档：inset / 分隔区 */
+  --color-bg-quaternary: #d9d4c7;  /* 案·最深：active / 轨道底 */
+  --color-bg-hover: #edeae2;
+  --color-bg-active: #e0dcd0;
+  --color-bg-card: #fcfbf8;         /* 面·卡片：恒比纸亮 = 抬起 ★ */
+  --color-bg-card-hover: #f6f4ee;
+  --color-bg-elevated: #ffffff;     /* 浮·弹层 / 菜单 / 悬浮球 */
+  --color-bg-inset: #e9e5dc;
+  --color-bg-input: #fcfbf8;
+  --color-bg-base: #f7f5f0;
 
-  /* Code / chat 场景面板（暖米族） */
-  --color-bg-code: #efece4;
-  --color-bg-code-header: #f4f2eb;
-  --color-bg-code-border: #ddd9cd;
-  --color-chat-assistant-bg: #faf9f5;
-  --color-chat-tool-bg: #f2f0e8;
-  --color-chat-terminal-bg: #141413;
+  /* Code / chat 场景面板 */
+  --color-bg-code: #f1efe8;
+  --color-bg-code-header: #edeae2;
+  --color-bg-code-border: #dcd8cb;
+  --color-chat-assistant-bg: #fcfbf8;
+  --color-chat-tool-bg: #f1efe8;
+  --color-chat-terminal-bg: #17181b;  /* 终端恒暗：任何主题都一样 */
 
-  /* Borders — 发丝线分级（Border Cream 几乎不可见 → Border Warm） */
-  --color-border-subtle: #f0eee6;
-  --color-border-primary: #e8e6dc;
-  --color-border-secondary: #d9d6ca;
-  --color-border: #d1cdc0;
-  --color-border-strong: #3d3d3a;
+  /* ── 分隔线：旧版 --color-border-subtle(#f0eee6) 几乎不可见，导致
+        该有分界的地方没分界；新值提到"看得见"但仍是发丝观感 ── */
+  --color-border-subtle: #e6e2d7;
+  --color-border-primary: #d8d3c5;
+  --color-border-secondary: #c3bda9;
+  --color-border: #b6af9a;
+  --color-border-strong: #2b2a27;
 
-  /* Text — 四级层次（暖灰黑轴：Dark Warm / Olive Gray / Stone Gray） */
-  --color-text-primary: #3d3d3a;
-  --color-text-secondary: #5e5d59;
-  --color-text-tertiary: #78776f;
-  --color-text-muted: #87867f;
-  --color-text-faint: #a5a39a;
-  --color-text-on-code: #4d4c48;
+  /* ── 文字：四级，主文字刻意不用纯黑 ── */
+  --color-text-primary: #2b2a27;
+  --color-text-secondary: #565349;
+  --color-text-tertiary: #837e70;
+  --color-text-muted: #9a9484;
+  --color-text-faint: #ada694;
+  --color-text-on-code: #4a473f;
+  /* 思考（过程）专用：比正文浅两档 + 小一档字号。过程不是内容，
+     不能和结论抢同一条视觉通道。 */
+  --color-text-thinking: #8f897c;
 
-  /* Accent — hero 强调色（陶土棕 Terracotta，温暖不艳；唯一饱和来源） */
-  --color-accent: #c96442;
-  --color-accent-hover: #b35537;
+  /* ── 墨：青碧（青瓷绿）。品牌唯一色，绝不用作 error/success 语义。
+     选青碧而非浅绿：浅绿做按钮底时白字对比不足；青碧够深，且与
+     暖纸底是青瓷配宣纸的经典组合。hue ≈ 166°，与 success（≈135°）
+     拉开 30°+，不会撞车。 ── */
+  --color-accent: #1d8a72;
+  --color-accent-hover: #14705c;
   --color-accent-on-text: #ffffff;
-  --color-accent-soft: rgba(201, 100, 66, 0.10);
-  --color-accent-soft-strong: rgba(201, 100, 66, 0.18);
+  --color-accent-soft: rgba(29, 138, 114, 0.1);
+  --color-accent-soft-strong: rgba(29, 138, 114, 0.18);
 
-  /* Link */
-  --color-link: #c96442;
-  --color-link-hover: #b35537;
-  --color-link-soft: #87867f;
-  --color-link-soft-hover: #c96442;
+  --color-link: #1d8a72;
+  --color-link-hover: #14705c;
+  --color-link-soft: #837e70;
+  --color-link-soft-hover: #be4a32;
 
-  /* Semantic 四色组 — soft 即浅底，色相与正文语义一一对应（Claude 暖化：Error Crimson） */
-  --color-success: #2e8f5b;
-  --color-success-soft: rgba(46, 143, 91, 0.11);
-  --color-error: #b53333;
-  --color-error-soft: rgba(181, 51, 51, 0.10);
-  --color-warning: #b45309;
-  --color-warning-soft: rgba(180, 83, 9, 0.12);
-  --color-text-warning: #b45309;
-  --color-info: #78776f;
-  --color-info-soft: rgba(120, 119, 111, 0.12);
+  /* ── 语义四色：色相彼此拉开 ≥30°，且全部避开朱砂橙区 ──
+        success 松绿 / warning 芥黄 / error 绛红（偏品红，与朱砂区分）
+        / info 靛灰（真正的冷色，不再用灰冒充中性提示） */
+  --color-success: #35854a;
+  --color-success-soft: rgba(53, 133, 74, 0.11);
+  --color-warning: #96750f;
+  --color-warning-soft: rgba(150, 117, 15, 0.13);
+  --color-text-warning: #7a5e0c;
+  --color-error: #a32b54;
+  --color-error-soft: rgba(163, 43, 84, 0.1);
+  --color-info: #5b6b7a;
+  --color-info-soft: rgba(91, 107, 122, 0.12);
 
-  /* Status chips（Composer 会话状态胶囊六件套） */
-  --color-chip-model-bg: rgba(201, 100, 66, 0.11);
-  --color-chip-model-fg: #a34d2e;
-  --color-chip-workspace-bg: #e4efe6;
-  --color-chip-workspace-fg: #2e6b45;
-  --color-chip-permission-bg: #f7ecdc;
-  --color-chip-permission-fg: #8a5a08;
+  /* Status chips（Composer 会话状态胶囊） */
+  --color-chip-model-bg: rgba(29, 138, 114, 0.1);
+  --color-chip-model-fg: #14705c;
+  --color-chip-workspace-bg: #e5e9ee;
+  --color-chip-workspace-fg: #4a6478;
+  --color-chip-permission-bg: #f0ebd8;
+  --color-chip-permission-fg: #7a5e0c;
 
   /* Overlay */
-  --color-overlay-scrim: rgba(61, 61, 58, 0.45);
-  --color-modal-outline: rgba(61, 61, 58, 0.07);
+  --color-overlay-scrim: rgba(43, 42, 39, 0.42);
+  --color-modal-outline: rgba(43, 42, 39, 0.06);
 
   /* Buttons */
-  --color-btn-primary-bg: #c96442;
+  --color-btn-primary-bg: #1d8a72;
   --color-btn-primary-text: #ffffff;
-  --color-btn-primary-hover: #b35537;
+  --color-btn-primary-hover: #14705c;
   --color-btn-secondary-bg: transparent;
-  --color-btn-secondary-text: #4d4c48;
-  --color-btn-secondary-hover: #efece4;
+  --color-btn-secondary-text: #4a473f;
+  --color-btn-secondary-hover: #edeae2;
   --color-btn-ghost-bg: transparent;
-  --color-btn-ghost-text: #78776f;
-  --color-btn-ghost-hover: rgba(61, 61, 58, 0.06);
+  --color-btn-ghost-text: #837e70;
+  --color-btn-ghost-hover: rgba(43, 42, 39, 0.05);
 
-  /* Shadows（亮色克制三档 · 暖调阴影比纯黑柔和） */
-  --shadow-card: none;
-  --shadow-pop: 0 4px 12px rgba(61, 55, 45, 0.08), 0 2px 4px rgba(61, 55, 45, 0.04);
-  --shadow-modal: 0 20px 56px rgba(61, 55, 45, 0.15), 0 8px 22px rgba(61, 55, 45, 0.08);
+  /* Shadows（中性暖调，不偏黄不偏黑） */
+  --shadow-card: 0 1px 2px rgba(43, 42, 39, 0.04);
+  --shadow-pop: 0 6px 20px rgba(43, 42, 39, 0.1), 0 2px 6px rgba(43, 42, 39, 0.06);
+  --shadow-modal: 0 24px 64px rgba(43, 42, 39, 0.16), 0 8px 24px rgba(43, 42, 39, 0.08);
 
-  /* Scene surfaces — 应用骨架四大区（暖米：Parchment 底，侧栏/标题微差） */
-  --theme-bg-app: #f5f4ed;
-  --theme-bg-sidebar: #f1f0e9;
-  --theme-bg-titlebar: #e8e6dc;
-  --theme-bg-chat: #f5f4ed;
+  /* Scene surfaces — 应用骨架四大区。
+     纸（对话区）最亮，案（侧栏/顶栏）低一档，列间空隙（app）最低 ——
+     主区因此天然"浮起来"，不需要靠边框去分隔。 */
+  --theme-bg-app: #f0eee7;
+  --theme-bg-sidebar: #edeae2;
+  --theme-bg-titlebar: #edeae2;   /* 与侧栏同案面：取消独立色带 */
+  --theme-bg-chat: #f7f5f0;
 
-  /* ── Glass Surface Tokens (青墨 liquid glass · 暖米底) ────────────
-     4 档 surface：frosted(浅浮层) / liquid(深浮层) / liquid-strong(强浮层)。
-     边缘双 inset 高光（非边框，模拟光从哪里打过来），多层染底色阴影栈。
-     玻璃底色 Ivory 暖白透明，Parchment 暖米底上浮层通透有温度。
-     所有 background 半透明 + backdrop-filter 配合；不支持 blur 的环境走
-     base.css 的 @supports not (backdrop-filter) 降级。 */
-  --glass-frosted-bg: rgba(250, 249, 245, 0.60);
-  --glass-frosted-blur: blur(12px) saturate(140%);
-  --glass-liquid-bg: rgba(250, 249, 245, 0.75);
-  --glass-liquid-blur: blur(20px) saturate(180%);
-  --glass-liquid-strong-bg: rgba(250, 249, 245, 0.88);
-  --glass-liquid-strong-blur: blur(40px) saturate(200%) brightness(105%);
-  --glass-inset-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.7);
-  --glass-inset-shadow: inset 0 -1px 0 rgba(61, 55, 45, 0.06);
-  --glass-shadow: 0 8px 32px rgba(61, 55, 45, 0.10), 0 2px 8px rgba(61, 55, 45, 0.05);
+  /* ── 玻璃浮层：保留极轻模糊（与纸面/案面区分），不再大面积铺 ── */
+  --glass-frosted-bg: rgba(251, 250, 247, 0.72);
+  --glass-frosted-blur: blur(6px) saturate(140%);
+  --glass-liquid-bg: rgba(251, 250, 247, 0.82);
+  --glass-liquid-blur: blur(8px) saturate(150%);
+  --glass-liquid-strong-bg: rgba(252, 251, 248, 0.9);
+  --glass-liquid-strong-blur: blur(12px) saturate(170%);
+  --glass-inset-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.75);
+  --glass-inset-shadow: inset 0 -1px 0 rgba(43, 42, 39, 0.05);
+  --glass-shadow: 0 8px 32px rgba(43, 42, 39, 0.1), 0 2px 8px rgba(43, 42, 39, 0.05);
 }
 
 /* ------------------------------------------------------------------
