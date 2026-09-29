@@ -19,6 +19,7 @@
 //! - **Approval system**: Dangerous command pattern detection for terminal safety
 
 pub mod approval;
+pub mod backup;
 pub mod backends;
 pub mod cached_check;
 pub mod context;

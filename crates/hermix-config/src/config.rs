@@ -154,6 +154,10 @@ pub struct GatewayConfig {
     /// `hermix_core::permission_profile::PermissionProfile`.
     #[serde(default)]
     pub permission_profile: PermissionProfile,
+
+    /// 安全中心配置（自动备份等）。覆盖写前把旧版本存入备份目录。
+    #[serde(default)]
+    pub security: SecurityConfig,
 }
 
 impl Default for GatewayConfig {
@@ -188,6 +192,7 @@ impl Default for GatewayConfig {
             home_dir: None,
             model_selector: None,
             permission_profile: PermissionProfile::default(),
+            security: SecurityConfig::default(),
         }
     }
 }
@@ -763,6 +768,38 @@ pub struct ApprovalConfig {
     /// Commands matching whitelist bypass confirmation.
     #[serde(default)]
     pub whitelist_commands: Vec<String>,
+
+    /// 待审批的自动拒绝时限（秒）。到期未决定 → 自动 deny，agent 解除
+    /// 阻塞并继续（超时事实写入时间轴）。这是"人不在电脑前 agent 挂死"
+    /// 问题的结构性解法：等待从无界变成有界，且可通过 IM/移动端远程决定。
+    /// `0` = 永不超时（旧行为：无限等待用户点击）。默认 600（10 分钟）。
+    #[serde(default = "default_approval_timeout_secs")]
+    pub timeout_secs: u64,
+}
+
+/// 审批默认超时：10 分钟。足够人在工位/手机上响应，也足够短—— overnight
+/// 挂死的会话会在日出前自愈。
+pub fn default_approval_timeout_secs() -> u64 {
+    600
+}
+
+// ── 审批超时的进程级运行时值 ─────────────────────────────────────
+// 单一真相源：服务器启动时从 ApprovalConfig.timeout_secs 写入一次，
+// 三处消费方（ApprovalRegistry / deadline 计算 / tool_dispatch 兜底）
+// 都从这里读，保证兜底 ≥ 主超时、前后端倒计时一致。
+// 用全局而不是逐层传参：tool_dispatch 在 hermix-agent 深层，穿三层
+// 参数只为一个启动期常量不值得；代码库已有同类先例（stdio_bridge::global）。
+use std::sync::atomic::{AtomicU64, Ordering};
+static APPROVAL_TIMEOUT_SECS: AtomicU64 = AtomicU64::new(600);
+
+/// 写入审批超时（秒）。服务器启动时调用一次；0 = 永不超时。
+pub fn set_approval_timeout_secs(secs: u64) {
+    APPROVAL_TIMEOUT_SECS.store(secs, Ordering::Relaxed);
+}
+
+/// 当前生效的审批超时（秒）。0 = 永不超时。
+pub fn approval_timeout_secs() -> u64 {
+    APPROVAL_TIMEOUT_SECS.load(Ordering::Relaxed)
 }
 
 /// Shared shape for tool-capability routing config copied from Python's
@@ -869,6 +906,45 @@ pub struct ProxyConfig {
     /// SOCKS5 proxy URL (e.g. "socks5://proxy:1080").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub socks_proxy: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// SecurityConfig（安全中心：自动备份）
+// ---------------------------------------------------------------------------
+
+/// 安全中心配置。当前承载「自动备份」：agent 通过 `write_file` / `patch`
+/// 覆盖文件前，先把被覆盖的旧版本复制到备份目录。best-effort，失败不阻塞原写。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SecurityConfig {
+    /// 是否启用自动备份。默认开启，让安全能力「开箱即见效」。
+    #[serde(default = "default_security_auto_backup")]
+    pub auto_backup: bool,
+
+    /// 备份目录。None → `<hermix_home>/backups`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backup_dir: Option<String>,
+
+    /// 备份总占用上限（MB）。超过后按修改时间删除最旧备份（LRU）。
+    #[serde(default = "default_backup_max_mb")]
+    pub backup_max_mb: u64,
+}
+
+impl Default for SecurityConfig {
+    fn default() -> Self {
+        Self {
+            auto_backup: default_security_auto_backup(),
+            backup_dir: None,
+            backup_max_mb: default_backup_max_mb(),
+        }
+    }
+}
+
+fn default_security_auto_backup() -> bool {
+    true
+}
+
+fn default_backup_max_mb() -> u64 {
+    512
 }
 
 // ---------------------------------------------------------------------------

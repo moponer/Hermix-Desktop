@@ -16,6 +16,9 @@ async fn main() -> Result<(), AgentError> {
 
     let config = load_config(None).map_err(|e| AgentError::Config(e.to_string()))?;
 
+    // 安全中心：启动即按 config.yaml 的 security 刷新自动备份策略。
+    hermix_tools::backup::set_policy_from_config(&config.security, &hermix_config::paths::hermix_home());
+
     // --stdio：接管 stdin/stdout 跑 JSON Lines 多路复用协议（桌面端 IPC），
     // 不绑定任何 TCP 端口；默认（无 flag）保持 HTTP/WS TCP 监听。
     if stdio {

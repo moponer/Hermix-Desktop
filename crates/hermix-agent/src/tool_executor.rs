@@ -385,7 +385,11 @@ impl AgentLoop {
             // Clone the per-tool-call decision so the spawned future owns it.
             let pre_decision = pre_dispatch.get(&tool_call_id).cloned();
 
-            let per_call_timeout = std::time::Duration::from_secs(60);
+            // Per-call budget is declared per tool (see
+            // hermix_tools::dispatch::per_tool_budget) — the old flat 60s
+            // cut off legitimate foreground builds/tests and contradicted
+            // terminal's own 120s inner timeout.
+            let per_call_timeout = hermix_tools::dispatch::per_tool_budget(&tool_name);
             let sem = semaphore.clone();
             join_set.spawn(async move {
                 // Acquire a concurrency permit before executing the handler.
@@ -403,10 +407,9 @@ impl AgentLoop {
                 }
                 // A5: per-call timeout around the handler. If a tool
                 // hangs (e.g. a `terminal` command waiting for stdin
-                // that never arrives, a `web_fetch` on a wedged
+                // that never arrives, a `web_extract` on a wedged
                 // server), this returns an error envelope instead of
-                // wedging the whole batch. 60 s matches the LLM-call
-                // timeout in `call_llm_with_retry`.
+                // wedging the whole batch. Budget is per-tool declared.
                 let handler_fut = async {
                     match registry.get(&tool_name) {
                         Some(entry) => {
@@ -531,11 +534,13 @@ impl AgentLoop {
             }
         }
 
-        // A5: total batch timeout. Per-call timeout is set per-spawn
-        // above (60 s); the total here caps the whole batch at 5 min
-        // so a pathological case (every tool near-completion-but-
-        // never-returns) still terminates.
-        let total_timeout = std::time::Duration::from_secs(300);
+        // A5: total batch timeout — sum of per-tool budgets + slack,
+        // capped at 3600s (see hermix_tools::dispatch::batch_budget).
+        // The old flat 300s could kill a legitimate batch of long
+        // foreground calls before any of them finished.
+        let total_timeout = hermix_tools::dispatch::batch_budget(
+            &tool_calls.iter().map(|tc| tc.function.name.clone()).collect::<Vec<_>>(),
+        );
         let deadline = std::time::Instant::now() + total_timeout;
 
         while ordered.iter().any(Option::is_none) {

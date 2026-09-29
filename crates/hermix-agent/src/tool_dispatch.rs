@@ -228,33 +228,26 @@ pub(crate) async fn resolve_pre_dispatch(
                 // also kills any chance of writing the denial note to
                 // the context before exit).
                 //
-                //CRITICAL : DEFAULT_APPROVAL_TIMEOUT is
-                // Duration::ZERO (user requested no auto-deny). If the
-                // `request_approval` event is lost or the frontend
-                // doesn't render the card, the agent blocks HERE
-                // forever. The only unblock paths are: (1) user clicks,
-                // (2) WS disconnect → shutdown Notify fires →
-                // ChannelClosed. The INFO log above is the primary
-                // diagnostic for this stuck state.
+                // 等待的有界性由两层保证：
+                //   1. 主层：ApprovalRegistry 按 `ApprovalConfig.timeout_secs`
+                //      （默认 600s，0=永不）在到期时发 `TimedOut` 解锁 `rx`；
+                //   2. 兜底层（本 select 的 safety_net）：只防"审批事件丢失 /
+                //      前端没渲染卡片"这类 rx 永远不会resolve 的故障。
+                //      兜底 = 主超时 + 60s 余量（主层先到，兜底永远不与它
+                //      竞争）；主超时为 0（用户显式要求永不超时）时退回
+                //      24h——旧行为的语义原样保留。
+                let primary_secs = hermix_config::approval_timeout_secs();
+                let net_secs = if primary_secs == 0 {
+                    86_400
+                } else {
+                    primary_secs + 60
+                };
                 let resolved = match shutdown {
                     Some(notify) => {
                         let notified = notify.notified();
                         tokio::pin!(notified);
-                        // Safety-net timeout: 24 hours. The user-facing
-                        // approval card has NO timeout (`DEFAULT_APPROVAL_TIMEOUT`
-                        // is zero and the ApprovalRegistry never spawns a
-                        // `TimedOut` task) — the user must click to
-                        // resolve. This safety net fires ONLY when the
-                        // `request_approval` event was lost or the
-                        // frontend didn't render the card, so the user
-                        // never saw the prompt and the oneshot would
-                        // otherwise park forever. 24h is long enough
-                        // that no real session would ever hit it, but
-                        // still short enough that a stuck agent
-                        // eventually self-recovers (e.g. an overnight
-                        // abandoned session) instead of leaking tasks.
                         let safety_net = tokio::time::sleep(
-                            std::time::Duration::from_secs(86_400),
+                            std::time::Duration::from_secs(net_secs),
                         );
                         tokio::pin!(safety_net);
                         tokio::select! {
@@ -265,16 +258,38 @@ pub(crate) async fn resolve_pre_dispatch(
                                 tracing::warn!(
                                     tool = %tool_name,
                                     tool_call_id = %id,
-                                    "resolve_pre_dispatch: safety-net timeout (24h) — \
+                                    net_secs,
+                                    "resolve_pre_dispatch: safety-net timeout — \
                                      request_approval event may have been lost or \
                                      frontend didn't render the card; auto-denying \
                                      to unblock the agent",
                                 );
-                                Ok(ApprovalOutcome::TimedOut { timeout_secs: 86_400 })
+                                Ok(ApprovalOutcome::TimedOut { timeout_secs: net_secs })
                             }
                         }
                     }
-                    None => rx.await,
+                    None => {
+                        // HTTP 发送路径没有 shutdown 通道，但等待必须有界：
+                        // 与 WS 分支同一把兜底网（主超时由 registry 兜）。
+                        let safety_net = tokio::time::sleep(
+                            std::time::Duration::from_secs(net_secs),
+                        );
+                        tokio::pin!(safety_net);
+                        tokio::select! {
+                            biased;
+                            res = rx => res,
+                            _ = &mut safety_net => {
+                                tracing::warn!(
+                                    tool = %tool_name,
+                                    tool_call_id = %id,
+                                    net_secs,
+                                    "resolve_pre_dispatch: safety-net timeout (http path) — \
+                                     auto-denying to unblock the agent",
+                                );
+                                Ok(ApprovalOutcome::TimedOut { timeout_secs: net_secs })
+                            }
+                        }
+                    }
                 };
                 let outcome = match resolved {
                     Ok(ApprovalOutcome::Approved) => {

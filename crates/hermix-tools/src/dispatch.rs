@@ -81,14 +81,18 @@ impl From<DispatchedResult> for ToolResult {
 }
 
 /// Timeouts for `dispatch_tools`.
-/// Default: 60 s per call, 5 min total batch. These match the LLM
-/// timeout in `agent_loop::call_llm_with_retry` (60 s first attempt,
-/// 120 s retry) so a hanging tool never outlives its caller.
+/// These match the LLM timeout in `agent_loop::call_llm_with_retry`
+/// so a hanging tool never outlives its caller.
+///
+/// 注意：生产批执行路径（hermix-agent 的 `tool_executor`）的预算来自
+/// 下方的 [`per_tool_budget`] / [`batch_budget`]——按工具身份声明，
+/// 不再使用本结构的一刀切 60s/300s。本结构保留给
+/// `dispatch_tools` 的调用方做显式覆盖。
 #[derive(Debug, Clone, Copy)]
 pub struct DispatchTimeouts {
     /// Maximum time any single tool call may take. A timeout produces
     /// a `ToolResult::err` whose `content` is a JSON error envelope
-    /// (`{"error": "per-call timeout after Ns: ..."}`).
+    /// (`{"error": "per-call timeout after Ns": ...}`).
     pub per_call: Duration,
     /// Maximum time the whole batch may take. Even if individual
     /// timeouts don't fire, the dispatcher gives up after `total`
@@ -103,6 +107,50 @@ impl Default for DispatchTimeouts {
             total: Duration::from_secs(300),
         }
     }
+}
+
+/// 按工具身份声明的单次调用预算。
+///
+/// 这是工具超时的**单一真相源**（生产批执行路径 `tool_executor` 与
+/// `dispatch_tools` 共用）。此前 per-call 60s 硬编码与 terminal 自身的
+/// 120s 内部超时互相矛盾——外层先到，前台跑构建/测试必被掐断，是
+/// "长任务无法执行"的结构性原因之一。
+///
+/// 预算原则：外部预算 ≥ 工具自身声明的内部预算；更长的任务应改走
+/// terminal `background` + 轮询（提示词已指导），前台预算只覆盖
+/// "合理的单次同步等待"。
+pub fn per_tool_budget(tool: &str) -> Duration {
+    match tool {
+        // terminal 自身默认 120s（tools/terminal.rs），外部预算给 5 倍余量：
+        // 前台跑构建/安装是长任务的主要形态，超时提示已引导转后台。
+        "terminal" => Duration::from_secs(600),
+        // 浏览器链路：navigate + 等待 + 截图一次同步等待可达数分钟
+        // （页面慢、验证码等待），且中途失败重试成本高。
+        t if t.starts_with("browser_") => Duration::from_secs(900),
+        "computer_use" | "cua" => Duration::from_secs(900),
+        // 子 agent 编排有自己的预算（orchestrator，默认 1800s），
+        // 外部预算只做护栏，略微放行即可。
+        "delegate_task" => Duration::from_secs(1900),
+        // 文档转换（officecli/markitdown）跑外部进程，大文件转换慢
+        "office_cli" | "markitdown" | "file_converter" | "read_pdf" => Duration::from_secs(300),
+        // 图片/视频生成走外部 API，出图 1-3 分钟是常态
+        "image_generate" | "gpt_image_generate" | "video_generate" | "tts" => {
+            Duration::from_secs(600)
+        }
+        _ => Duration::from_secs(60),
+    }
+}
+
+/// 整批预算 = 各调用预算之和 + 120s 调度余量，封顶 3600s。
+/// 并行执行下真实耗时远小于和值；取和值是为了保证"所有调用都合法
+/// 跑满预算"时批也不被提前掐断（旧固定 300s 的结构性缺陷）。
+pub fn batch_budget(tool_names: &[String]) -> Duration {
+    const CAP: Duration = Duration::from_secs(3600);
+    let sum: u64 = tool_names
+        .iter()
+        .map(|t| per_tool_budget(t).as_secs())
+        .sum();
+    (Duration::from_secs(sum) + Duration::from_secs(120)).min(CAP)
 }
 
 /// Dispatch multiple tool calls in parallel through the registry.

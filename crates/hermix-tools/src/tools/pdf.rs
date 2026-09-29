@@ -444,7 +444,7 @@ impl ToolHandler for ReadPdfHandler {
             "read_pdf",
             "Extract text from a PDF file using Poppler's pdftotext. \
              **Use this tool whenever the user wants to read, search, or extract content from a PDF file** \u{2014} \
-             prefer this over running `pdftotext`, `pdf2txt`, or any PDF-parsing command via `terminal` or `process_registry`. \
+             prefer this over running `pdftotext`, `pdf2txt`, or any PDF-parsing command via `terminal`. \
              Preserves CJK characters and physical layout by default. \
              Use the `pages` parameter to limit the range; use a smaller `max_chars` for very large documents. \
              Scanned / image-based PDFs (no text layer) are recovered automatically by a 4th tier that rasterizes pages with `pdftoppm` and runs local OCR; set `ocr: true` to force the OCR report on any PDF. \

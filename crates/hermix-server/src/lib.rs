@@ -415,6 +415,8 @@ pub fn router(state: HttpServerState) -> Router {
 }
 
 pub async fn run_server(addr: SocketAddr, config: GatewayConfig) -> Result<(), AgentError> {
+    // 安全中心：按 config 的 security 刷新自动备份策略（与 main.rs 启动路径一致）。
+    hermix_tools::backup::set_policy_from_config(&config.security, &hermix_config::paths::hermix_home());
     let state = HttpServerState::build(config).await?.with_automation_scheduler();
     // §5.5 第 2 层：TLS 监听器由 HERMIX_TLS_ADDR 显式开启（可选双监听器：
     // plaintext 保持现有暴露面语义，TLS 面向远程设备）。env 读法放在这里

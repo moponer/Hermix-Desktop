@@ -89,7 +89,7 @@
   - "Continue until done or genuinely blocked" 与 hermix rule 4 等价。
   - "Non-final turn: use tools to advance, or ask for the one missing decision that blocks safe progress" — 比 hermix rule 1/2 更精确。
 
-**差异**：hermix 是唯一把 autonomous mode 做成**可配置开关**的，这符合主人"自主编排任务路径"的设计哲学。openclaw 用 sub-agent delegation 做了更激进的"主 agent 少干活"策略。hermes-agent 无此概念。
+**差异**：hermix 是唯一把 autonomous mode 做成**可配置开关**的，这符合产品方"自主编排任务路径"的设计哲学。openclaw 用 sub-agent delegation 做了更激进的"主 agent 少干活"策略。hermes-agent 无此概念。
 
 ---
 

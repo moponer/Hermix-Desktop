@@ -382,6 +382,10 @@ pub mod runtime;
 mod tests;
 #[cfg(test)]
 mod stub_provider;
+#[cfg(test)]
+mod scripted_provider;
+#[cfg(test)]
+mod replay_tests;
 
 #[derive(Debug, Clone)]
 pub(crate) struct FileChangeInfo {

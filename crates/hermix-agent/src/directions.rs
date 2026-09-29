@@ -26,7 +26,7 @@ const CONTEXT_BUDGET_GUIDANCE: &str = "`compact_tool_chain` collapses N tool_res
 const TOOL_USAGE_GUIDANCE: &str = r#"
 # Tool selection discipline
 
-Before calling a generic tool like `terminal`, `process_registry`, or `execute_code`, **scan the available tool list** for a purpose-built alternative. Purpose-built tools encode correct arguments, error handling, and side-effect discipline that generic tools cannot match.
+Before calling a generic tool like `terminal` or `execute_code`, **scan the available tool list** for a purpose-built alternative. Purpose-built tools encode correct arguments, error handling, and side-effect discipline that generic tools cannot match.
 
 ## File path handling
 When the user provides an explicit file path, call the matching tool directly with that path:
@@ -92,23 +92,23 @@ When you have two or more tool calls whose arguments do NOT depend on each other
 const TOOL_USE_ENFORCEMENT_GUIDANCE: &str = "# Tool-use enforcement\nYou MUST use your tools to take action. Do not describe what you would do without actually doing it. When you say you will perform an action, make the corresponding tool call in the same response. Every response should either (a) contain tool calls that make progress, or (b) deliver a final result.";
 
 /// Tool-selection discipline for browser automation. Without this block, the
-/// model falls back to `web_fetch` (a stateless HTTP scrape) when the browser
+/// model falls back to `web_extract` (a stateless HTTP scrape) when the browser
 /// reports "page still loading" and spirals into 5+ identical calls. The rule
-/// is: if a `browser_*` tool exists for the job, use it. `web_fetch` is only
+/// is: if a `browser_*` tool exists for the job, use it. `web_extract` is only
 /// for pages that don't require JS execution.
 const BROWSER_TOOL_SELECTION_GUIDANCE: &str = "\
 # Browser tool selection (mandatory)
 
 When the task involves a website needing interaction (login, form, click, scroll, captcha), \
-use `browser_*` tools — NOT `web_fetch`. The two are not interchangeable:\n\
-- `web_fetch` — stateless HTTP scrape. No JS, no cookies, no interaction.\n\
+use `browser_*` tools — NOT `web_extract`. The two are not interchangeable:\n\
+- `web_extract` — stateless HTTP scrape. No JS, no cookies, no interaction.\n\
 - `browser_navigate` — opens a real browser at the URL.\n\
 - `browser_snapshot` — returns accessibility tree with `[ref=eN]` handles.\n\
 - `browser_wait_for` — polls for a CSS selector up to timeout.\n\
 - `browser_vision` — sends page as PNG to vision model. Last resort.\n\
 - `browser_click` / `browser_type` — accepts CSS selector or `[ref=eN]`.\n\n\
 ## Hard rules\n\
-1. Never call `web_fetch` after a `browser_*` call. Stay in the browser.\n\
+1. Never call `web_extract` after a `browser_*` call. Stay in the browser.\n\
 2. If `navigate` returns `load_observed: false`, call `wait_for` first.\n\
 3. For captchas: `wait_for` the image, then `browser_vision` to read it.\n\
 4. For form fills: `snapshot` once → use `[ref=eN]` handles.\n\
@@ -116,9 +116,9 @@ use `browser_*` tools — NOT `web_fetch`. The two are not interchangeable:\n\
 
 /// Injected when `AgentConfig::autonomous_mode = true`.
 /// Streamlined : the original 8 rules collapsed into a single
-/// stopping-condition principle + execution bias.  The nudge loop
-/// (`re-inject keep going`) still complements this block when the model
-/// outputs plain text without tool calls.
+/// stopping-condition principle + execution bias.  The nudge is
+/// one-shot only (see empty_response_handler; the multi-round nudge
+/// loop was removed 2026-07-09).
 /// Reference: prompt-comparison-report.md § 四·十一, openclaw Execution Bias.
 const AUTONOMOUS_EXECUTION_GUIDANCE: &str = "\
 # Autonomous execution
@@ -201,19 +201,23 @@ with an empty / unfilled tool-call as a dead end: no tool executes, no text reac
 the user, and the turn is wasted. When in doubt, answer the user directly instead of\n\
 issuing a speculative tool call you cannot fill with real arguments.";
 
-const THINKING_DISCIPLINE_GUIDANCE: &str = "# Output format\n\
-Structure every reply as two parts:\n\
-1. `<think>...</think>` — internal reasoning (private, user sees it as a collapsible section).\n\
-2. Your reply, starting on the next line after `</think>`.\n\n\
-**Always close `</think>` before any visible text.** Forgetting this breaks the renderer — the user sees nothing. If you have nothing to reason about, emit `<think></think>`. Use only `<think>...</think>`, never `<thinking>`.\n\n\
-Write your visible reply in clean, structured Markdown: use `##`/`###` headings to separate topics, `-`/`1.` lists for steps and enumerations, `**bold**` for key terms, and fenced code blocks (```lang) for commands or code. Substantive answers (multi-step, comparisons, causes/conclusions, or anything beyond a one-liner) must be organized this way so the reader can scan it fast — do not dump a wall of plain prose.\n\n\
-## 报告必须分节(钉死,无法绕过)\n\
+/// 「报告必须分节」单一真相源 —— 曾在 THINKING_DISCIPLINE_GUIDANCE 与
+/// format.short 各有一份逐字拷贝（两处必须同步改），现收敛到这一处，
+/// 两个注入点在运行时拼接。
+const REPORT_SECTIONING: &str = "## 报告必须分节(钉死,无法绕过)\n\
 凡是包含多步骤操作、改动多个文件、跨工具组合、阅读/解释代码、错误排查、调研对比等**实质报告**,不论字数多少,**一律用 # / ## / ### Markdown 标题分节**,严禁堆一整段纯文本。\n\
 - **长报告(>300 字 或 >3 个步骤)** — 必须至少 1 个 ## 二级标题 + 至少 2 个 ### 三级标题分节(例如:`## 改动概览` → `## 关键文件` → `## 验证步骤`)\n\
 - **多步任务(任何超过 2 步的操作)** — 用有序列表(`1. ` `2. ` `3. `)+ ### 二级标题收尾\n\
 - **对比 / 选项 / 优缺点** — 一律表格(`| ... | ... |`)分列,不准用\"优点:... 缺点:...\"长句堆\n\
 - **极简单行回复**(< 60 字,如一次性命令确认、单个数字回答)可直接说人话,但**只要涉及\"做了什么、改了什么、解释了什么\" → 必须分节**\n\
 例外仅限:用户明确问\"一句话回我\"\"只要结论\"——否则一律分节。";
+
+const THINKING_DISCIPLINE_GUIDANCE: &str = "# Output format\n\
+Structure every reply as two parts:\n\
+1. `<think>...</think>` — internal reasoning (private, user sees it as a collapsible section).\n\
+2. Your reply, starting on the next line after `</think>`.\n\n\
+**Always close `</think>` before any visible text.** Forgetting this breaks the renderer — the user sees nothing. If you have nothing to reason about, emit `<think></think>`. Use only `<think>...</think>`, never `<thinking>`.\n\n\
+Write your visible reply in clean, structured Markdown: use `##`/`###` headings to separate topics, `-`/`1.` lists for steps and enumerations, `**bold**` for key terms, and fenced code blocks (```lang) for commands or code. Substantive answers (multi-step, comparisons, causes/conclusions, or anything beyond a one-liner) must be organized this way so the reader can scan it fast — do not dump a wall of plain prose.\n\n";
 
 /// Safety instruction: do not generate or guess URLs.
 const URL_SAFETY_GUIDANCE: &str = "\
@@ -222,7 +226,7 @@ You must NEVER generate or guess URLs, links, or web addresses. \
 If the user explicitly provided a URL in their message or a local file path, use it as-is. \
 Do not construct URLs from memory, do not guess domain names, and do not \
 suggest links to external resources unless the user directly provided them.\n\n\
-The exception: file paths and URLs returned by tools (web_search, web_fetch, \
+The exception: file paths and URLs returned by tools (web_search, web_extract, \
 browser_navigate) are verified and safe to use.";
 
 /// Inform the model that context compression may occur.
@@ -403,14 +407,10 @@ pub fn collect_directions(
         dirs.push(SystemDir::new(
             "format.short",
             DirRoute::Subsequent,
-            "## 语气与格式\n用自然语言聊,像真人对话一样有温度、有干劲,不端着。但**最终回答必须用结构化 Markdown 呈现**:凡涉及多步骤、对比、原因/结论、或任何超过三句话的实质内容,使用标题(## / ###)、有序/无序列表、加粗关键词、代码块(```lang)与表格组织层次,让重点一目了然。极简单行回复(如一次性命令确认)可直接说人话。信息密度要高,不啰嗦但绝不漏掉关键点。\n\n\
-            ## 报告必须分节(钉死,无法绕过)\n\
-            凡是包含多步骤操作、改动多个文件、跨工具组合、阅读/解释代码、错误排查等**实质报告**,不论字数多少,**一律用 # / ## / ### Markdown 标题分节**,严禁堆一整段纯文本。\n\
-            - **长报告(>300 字 或 >3 个步骤)** — 必须至少 1 个 ## 二级标题 + 至少 2 个 ### 三级标题分节(例如:`## 改动概览` → `## 关键文件` → `## 验证步骤`)\n\
-            - **多步任务(任何超过 2 步的操作)** — 用有序列表(`1. ` `2. ` `3. `)+ ### 二级标题收尾\n\
-            - **对比 / 选项 / 优缺点** — 一律表格(`| ... | ... |`)分列,不准用\"优点:... 缺点:...\"长句堆\n\
-            - **极简单行回复**(< 60 字,如一次性命令确认、单个数字回答)可直接说人话,但**只要涉及\"做了什么、改了什么、解释了什么\" → 必须分节**\n\
-            例外仅限:用户明确问\"一句话回我\"\"只要结论\"——否则一律分节。",
+            format!(
+                "## 语气与格式\n用自然语言聊,像真人对话一样有温度、有干劲,不端着。但**最终回答必须用结构化 Markdown 呈现**:凡涉及多步骤、对比、原因/结论、或任何超过三句话的实质内容,使用标题(## / ###)、有序/无序列表、加粗关键词、代码块(```lang)与表格组织层次,让重点一目了然。极简单行回复(如一次性命令确认)可直接说人话。信息密度要高,不啰嗦但绝不漏掉关键点。\n\n\
+                {REPORT_SECTIONING}"
+            ),
         ));
     }
     // Thinking discipline.
@@ -418,7 +418,7 @@ pub fn collect_directions(
         dirs.push(SystemDir::new(
             "think.full",
             DirRoute::FirstTurn,
-            THINKING_DISCIPLINE_GUIDANCE,
+            format!("{THINKING_DISCIPLINE_GUIDANCE}{REPORT_SECTIONING}"),
         ));
     } else {
         dirs.push(SystemDir::new(
@@ -777,15 +777,14 @@ pub(crate) fn build_workbench_context(workbench_id: &str) -> Result<String, Stri
     Ok(b)
 }
 
-/// 查工作台 `data/workbench.db` 的业务表现状：每表 schema + 行数 + 末 3 行
-/// 样本。大表（>500 行）不给样本只给 count —— 具体数据 agent 用网关工具
-/// 现查，不全量注入（零上下文膨胀）。库不存在/为空/查询失败都返回空串
-/// （静默降级：无业务数据的工作台不注入运营段）。
+/// 查工作台 `data/workbench.db` 的业务数据结构：每表 schema + 行数。
+/// **不含数据样本**（2026-09-28）—— agent 每写一次库都会让样本变化，
+/// 而该块位于系统提示内，直接摧毁 provider 前缀缓存（见下方注释）。
+/// 具体数据由 agent 用 db_query 网关工具现查；零上下文膨胀的设计原意不变。
+/// 库不存在/为空/查询失败都返回空串（静默降级）。
 fn build_workbench_data_summary(workbench_id: &str) -> String {
     use rusqlite::Connection;
 
-    const SAMPLE_ROWS: usize = 3;
-    const SAMPLE_ROW_LIMIT: i64 = 500;
 
     let db_path = hermix_plugin::workbench::workbench_dir(workbench_id)
         .join("data")
@@ -843,47 +842,14 @@ fn build_workbench_data_summary(workbench_id: &str) -> String {
         if !schema.is_empty() {
             b.push_str(&format!("  schema: {schema}\n"));
         }
-        if count > 0 && count <= SAMPLE_ROW_LIMIT {
-            // 末几行样本：让 LLM 知道数据长什么样、最近一条是什么。
-            b.push_str(&format!(
-                "  最近数据（SELECT * ORDER BY rowid DESC LIMIT {SAMPLE_ROWS}）:\n"
-            ));
-            if let Ok(mut stmt) =
-                conn.prepare(&format!("SELECT * FROM \"{table}\" ORDER BY rowid DESC LIMIT {SAMPLE_ROWS}"))
-            {
-                let col_names: Vec<String> = stmt
-                    .column_names()
-                    .into_iter()
-                    .map(|s| s.to_string())
-                    .collect();
-                let mut rows = match stmt.query([]) {
-                    Ok(r) => r,
-                    Err(_) => continue,
-                };
-                while let Ok(Some(row)) = rows.next() {
-                    let cells: Vec<String> = col_names
-                        .iter()
-                        .map(|c| {
-                            row.get_ref(c.as_str())
-                                .map(|v| match v {
-                                    rusqlite::types::ValueRef::Null => "NULL".into(),
-                                    rusqlite::types::ValueRef::Integer(i) => i.to_string(),
-                                    rusqlite::types::ValueRef::Real(f) => f.to_string(),
-                                    rusqlite::types::ValueRef::Text(t) => {
-                                        String::from_utf8_lossy(t).into_owned()
-                                    }
-                                    rusqlite::types::ValueRef::Blob(_) => "<blob>".into(),
-                                })
-                                .unwrap_or_else(|_| "?".into())
-                        })
-                        .collect();
-                    b.push_str(&format!("    {}\n", cells.join(" | ")));
-                }
-            }
-        } else if count > SAMPLE_ROW_LIMIT {
-            b.push_str(&format!(
-                "  (行数超 {SAMPLE_ROW_LIMIT}，样本省略 —— 需要数据时用 db_query 现查)\n"
-            ));
+        if count > 0 {
+            // 2026-09-28: 末 N 行样本从系统提示移除。此前 agent 每写一次
+            // 数据，样本就变一次 → 该块位于 WORKBENCH CONTEXT（系统提示内）
+            // → provider 自动前缀缓存从该字节起全部 miss（tools + 整段
+            // 消息历史每 turn 重付全价）。schema + 行数在会话内稳定；
+            // 具体数据按需用 db_query 网关工具现查——与"零上下文膨胀"
+            // 的设计原意一致。
+            b.push_str("  (具体数据用 db_query 现查，不在系统提示内预取)\n");
         }
     }
     b

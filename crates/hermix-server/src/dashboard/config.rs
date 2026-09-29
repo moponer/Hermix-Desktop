@@ -148,7 +148,23 @@ pub async fn update_config(
         message: format!("failed to serialize config: {e}"),
     })?;
     state.agent_service.set_config(cfg_value);
+
+    // 安全中心：配置变更后刷新自动备份策略（best-effort）。
+    if let Some(sec) = body.config.get("security") {
+        if let Ok(sec) = serde_json::from_value::<hermix_config::SecurityConfig>(sec.clone()) {
+            hermix_tools::backup::set_policy_from_config(&sec, &state.hermix_home);
+        }
+    }
+
     Ok(Json(OkResponse { ok: true }))
+}
+
+/// GET /api/backup/status — 返回自动备份目录的统计（总数/占用/最近备份）。
+pub async fn get_backup_status(
+    State(state): State<HttpServerState>,
+) -> Json<hermix_tools::backup::BackupStatus> {
+    let _ = &state;
+    Json(hermix_tools::backup::status())
 }
 /// GET /api/model/info — return current model information.
 /// Reads from the *live* agent service config (which may differ from

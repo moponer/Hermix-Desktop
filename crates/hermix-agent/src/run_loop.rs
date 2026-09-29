@@ -1,5 +1,6 @@
 use std::sync::atomic::Ordering;
 use crate::budget;
+use crate::spill;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -446,9 +447,16 @@ impl AgentLoop {
         self.notify_memory_writes(tool_calls, &results);
         self.notify_delegations(tool_calls, &results);
 
-        // Enforce budget on tool results
+        // Enforce budget on tool results. Oversized results are spilled to
+        // disk first so the model can retrieve them with read_file instead
+        // of only seeing a lossy truncation marker. Sink is built lazily:
+        // no oversized result means no filesystem work at all.
         let mut results = results;
-        budget::enforce_budget(&mut results, &self.config.budget);
+        let spill_sink = results
+            .iter()
+            .any(|r| r.content.chars().count() > spill::SPILL_INLINE_CHARS)
+            .then(spill::SpillSink::default_dir);
+        budget::enforce_budget_with_spill(&mut results, &self.config.budget, spill_sink.as_ref());
 
         // Removed verification notes injection and budget
         // pressure injection into tool results. These were polluting the
@@ -1282,7 +1290,12 @@ self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
                                 state.cost_guard.session_cost_usd,
                                 session_started_hooks_fired,
                                 persist_user_idx,
-                                false,
+                                // 可见文本自然收尾 —— 与 run_stream() 的同一分支
+                                // (line ~2126) 及"工具名全被过滤后仍收尾"分支保持
+                                // 一致。此前这里传 false，导致非流式路径（CLI /
+                                // 部分 API 路由）把每一次正常回复都上报成
+                                // `finished_naturally=false`（success=false）。
+                                true,
                                 false,
                                 None,
                             ));
@@ -1531,6 +1544,14 @@ self.notify_phase(&LoopPhase::ToolValidation, total_turns);
                     persist_user_idx,
                 ));
             }
+            // arm the turn-transition watchdog HERE — before tool
+            // execution — so the top-of-loop check on the next iteration
+            // covers the whole real stall window: tool execution incl.
+            // the approval wait (the #1 unbounded-await risk) and the
+            // pre-turn setup. Arming AFTER do_tool_turn (the old spot)
+            // left zero awaits between arm and check, making the
+            // watchdog structurally unable to fire.
+            transition_started_at = Some(Instant::now());
             let outcome = self.do_tool_turn(
                 &mut ctx,
                 &mut state,
@@ -1553,12 +1574,6 @@ self.notify_phase(&LoopPhase::ToolValidation, total_turns);
                 ToolTurnOutcome::Converge(result) => return result,
                 ToolTurnOutcome::Continue => {}
             }
-            // arm the turn-transition watchdog. Mirrors
-            // the run_stream() side. The next loop iteration's
-            // top-of-loop check will fire if we don't reach the
-            // pre-turn-setup checkpoint within
-            // `turn_transition_deadline_secs` of now.
-            transition_started_at = Some(Instant::now());
         }
     }
 
@@ -2422,6 +2437,12 @@ self.notify_phase(&LoopPhase::ToolValidation, total_turns);
                 ));
             }
 
+            // arm the turn-transition watchdog HERE — before tool
+            // execution — same rationale as the run() side: the old
+            // arm-after-execution spot had no awaits between arm and
+            // check, so the watchdog could never fire. Arming before
+            // do_tool_turn covers the approval wait + tool execution.
+            transition_started_at = Some(Instant::now());
             let outcome = self.do_tool_turn(
                 &mut ctx,
                 &mut state,
@@ -2444,11 +2465,6 @@ self.notify_phase(&LoopPhase::ToolValidation, total_turns);
                 ToolTurnOutcome::Converge(result) => return result,
                 ToolTurnOutcome::Continue => {}
             }
-            // arm the turn-transition watchdog. The next
-            // loop iteration's top-of-loop check will fire if we
-            // don't reach the pre-turn-setup checkpoint within
-            // `turn_transition_deadline_secs` of now.
-            transition_started_at = Some(Instant::now());
         }
     }
 

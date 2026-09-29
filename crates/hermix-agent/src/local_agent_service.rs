@@ -1107,7 +1107,7 @@ impl LocalAgentService {
         }
 
         // 文件内容写入（write_file / patch / move_file）不做资源门拦截。
-        // 依据主人 2026-09-26 拍板："写文件不用审批，只有删除等高危才审批"。
+        // 2026-09-26 定策："写文件不用审批，只有删除等高危才审批"。
         // 本机自主机上的文件内容写/改/移动是低风险操作，弹「未授权路径」卡
         // 纯属摩擦；真正的高危删除（delete_file / disk_cleanup）仍走资源门
         // （见下方 DESTRUCTIVE_FILE_TOOLS）。
@@ -1117,12 +1117,12 @@ impl LocalAgentService {
         // 破坏性命令（rm/del/format/diskpart/mkfs …）由下游 DENIED/CONFIRM
         // 审批层 + hardline blocklist 独立兜底，不依赖这里的 grant 前缀匹配。
         // 旧实现在这里用「未授权命令」卡拦截了所有首 token 不在 grant 列表的
-        // 命令（$env: 环境变量、export、编码命令等），与主人意图直接冲突。
+        // 命令（$env: 环境变量、export、编码命令等），与"命令执行不审批"策略直接冲突。
         if name == "terminal" || name == "code_execution" {
             return None;
         }
 
-        // 破坏性文件操作 — 删除类是主人明确接受「才审批」的高危项。
+        // 破坏性文件操作 — 删除类是明确需要审批的高危项。
         // delete_file / disk_cleanup 越出授权目录才弹资源卡。
         const DESTRUCTIVE_FILE_TOOLS: &[&str] = &["delete_file", "disk_cleanup"];
         if DESTRUCTIVE_FILE_TOOLS.contains(&name) {
@@ -1464,6 +1464,9 @@ impl AgentService for LocalAgentService {
         // (skips per-session cache lookup) and persist_session_terminal
         // (writes to an empty-string session row, polluting DB).
         agent_config.session_id = Some(session_id.to_string());
+        // 会话内恒定的"会话起始时间"，供系统提示尾部的 Conversation
+        // started 块使用（缓存稳定性：每 turn 变化会打碎 provider 前缀缓存）。
+        agent_config.session_started_at = Some(chrono::Local::now().to_rfc3339());
 
         //(session isolation): the per-session workspace,
         // approval context, session id, and message id are now carried
@@ -1872,6 +1875,9 @@ impl AgentService for LocalAgentService {
         // (skips per-session cache lookup) and persist_session_terminal
         // (writes to an empty-string session row, polluting DB).
         agent_config.session_id = Some(session_id.to_string());
+        // 会话内恒定的"会话起始时间"，供系统提示尾部的 Conversation
+        // started 块使用（缓存稳定性：每 turn 变化会打碎 provider 前缀缓存）。
+        agent_config.session_started_at = Some(chrono::Local::now().to_rfc3339());
 
         //(session isolation): the per-session workspace,
         // approval context, session id, and message id are now carried
@@ -4456,7 +4462,7 @@ mod override_tests {
     }
 
     /// B-layer 钉死（写工具对照）：write_file / patch 的内容写入不做资源门
-    /// 拦截（2026-09-26 主人拍板"写文件不用审批，只有删除等高危才审批"），
+    /// 拦截（2026-09-26 定策："写文件不用审批，只有删除等高危才审批"），
     /// 即使写未授权路径也返回 None（不弹卡）；真正的删除类（delete_file /
     /// disk_cleanup）越出授权目录仍必须返回 Some（触发审批卡）。
     #[test]
@@ -4515,7 +4521,7 @@ mod override_tests {
     }
 
     /// 命令执行（terminal / code_execution）不做 command-grant 资源门拦截
-    /// （2026-09-26 主人拍板"命令执行不用审批"）。即便命令首 token 不在
+    /// （2026-09-26 定策："命令执行不用审批"）。即便命令首 token 不在
     /// grant 列表（$env: 环境变量、export、编码命令等），resource_guard
     /// 也返回 None；破坏性命令由下游 DENIED/CONFIRM 审批层独立兜底。
     #[test]

@@ -32,6 +32,29 @@ pub fn truncate_result(content: &str, max_chars: usize) -> String {
 /// - If the aggregate size exceeds `budget.max_aggregate_chars`, results are
 /// further truncated proportionally until the total fits.
 pub fn enforce_budget(results: &mut [ToolResult], budget: &BudgetConfig) {
+    enforce_budget_with_spill(results, budget, None);
+}
+
+/// Same as [`enforce_budget`], but oversized results are written to disk
+/// first (see [`crate::spill`]) so the model gets a retrievable path
+/// instead of a lossy "truncated N characters" marker.
+///
+/// Spilling happens **before** truncation: once the content is replaced by
+/// "preview + locator" it is already under the inline ceiling, so the
+/// truncation passes below become no-ops for spilled results.
+pub fn enforce_budget_with_spill(
+    results: &mut [ToolResult],
+    budget: &BudgetConfig,
+    spill: Option<&crate::spill::SpillSink>,
+) {
+    // Step 0: spill-to-disk（可选）。未配置 sink 时行为与旧路径完全一致。
+    if let Some(sink) = spill {
+        for result in results.iter_mut() {
+            result.content =
+                sink.maybe_spill(&result.tool_call_id, &result.content, crate::spill::SPILL_INLINE_CHARS);
+        }
+    }
+
     // Step 1: Per-result truncation
     for result in results.iter_mut() {
         result.content = truncate_result(&result.content, budget.max_result_size_chars);

@@ -484,6 +484,17 @@ pub fn trajectories_dir_in(data_dir: impl AsRef<Path>) -> PathBuf {
     data_dir.as_ref().join("trajectories")
 }
 
+/// `$hermix_home/data/spill/` — 超大工具结果落盘目录。
+/// 属于运行时派生数据，放在 `data` 下以便随便携数据一起迁移。
+pub fn spill_dir() -> PathBuf {
+    data_dir().join("spill")
+}
+
+/// `<data>/spill/` for an explicitly-provided data dir.
+pub fn spill_dir_in(data_dir: impl AsRef<Path>) -> PathBuf {
+    data_dir.as_ref().join("spill")
+}
+
 /// `$hermix_home/data/cron/`
 /// Lives under [`data_dir`] so cron data is included in a portable
 /// data backup/migration.

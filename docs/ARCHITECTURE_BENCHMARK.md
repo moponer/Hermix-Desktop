@@ -202,7 +202,7 @@ hermix-gateway/src/
 | 19 | **bluebubbles** | 172 | iMessage 桥 |
 | 20 | **helpers** | 239 | 公共辅助 |
 
-**groupchat/ 10 文件**(主人问的"群聊"):
+**groupchat/ 10 文件**(需求描述的"群聊"):
 
 | 行数 | 文件 | 作用 |
 |----:|------|------|

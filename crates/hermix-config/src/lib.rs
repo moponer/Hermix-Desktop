@@ -21,10 +21,11 @@ pub mod streaming;
 
 // Re-export key types for convenience
 pub use config::{
+    approval_timeout_secs, default_approval_timeout_secs, set_approval_timeout_secs,
     AdvancedSettingsConfig, AgentLoopBehaviorConfig, ApprovalConfig, CheapModelRouteConfig,
     CompactionConfig, GatewayConfig, LlmProviderConfig, McpServerEntry, ModelSelectorConfig,
     ModelSelectorEntry, ProfileConfig,
-    ProxyConfig, SkillsSettings, SmartModelRoutingConfig, TerminalBackendType,
+    ProxyConfig, SecurityConfig, SkillsSettings, SmartModelRoutingConfig, TerminalBackendType,
     TerminalConfig, ToolCapabilityConfig, ToolsSettings,
 };
 pub use loader::{

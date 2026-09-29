@@ -1041,7 +1041,7 @@ mod tests {
     #[tokio::test]
     async fn p17_on_memory_write_persists() {
         let b = EmbeddedMemoryBackend::open_in_memory().unwrap();
-        b.on_memory_write("add", "user", "主人喜欢 Rust");
+        b.on_memory_write("add", "user", "小林喜欢 Rust");
         let hits = b
             .recognize(&MemoryQuery::recall("Rust").with_limit(10))
             .await
@@ -1121,7 +1121,7 @@ mod tests {
         let id1 = b
             .upsert_fact(
                 "user.name",
-                serde_json::json!("主人"),
+                serde_json::json!("小林"),
                 0.8,
                 &["user".into()],
                 "curation",
@@ -1130,7 +1130,7 @@ mod tests {
         let id2 = b
             .upsert_fact(
                 "user.name",
-                serde_json::json!("主人"),
+                serde_json::json!("小林"),
                 0.9,
                 &["user".into()],
                 "curation",
@@ -1140,7 +1140,7 @@ mod tests {
         assert_eq!(id1, id2, "same canonical_key should yield same id");
         // Total visible fact rows should still be 1.
         let hits = b
-            .recognize(&MemoryQuery::recall("主人").with_limit(10))
+            .recognize(&MemoryQuery::recall("小林").with_limit(10))
             .await
             .unwrap();
         assert_eq!(hits.iter().filter(|h| h.metadata.get("kind").and_then(|v| v.as_str()) == Some("fact")).count(), 1);

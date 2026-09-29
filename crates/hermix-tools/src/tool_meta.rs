@@ -303,7 +303,7 @@ pub const DEFAULT_RESIDENT_TOOLS: &[&str] = &[
     // File I/O
     "read_file",
     "write_file",
-    "patch_file",
+    "patch",
     "search_files",
     "list_files",
     "edit_file",

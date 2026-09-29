@@ -250,7 +250,6 @@ pub static CODE_PRESET: DomainPreset = DomainPreset {
         "patch",
         "search_files",
         "terminal",
-        "grep",
         "list_files",
     ],
     // 代码模式下即使是 Ask 也允许 write_file（用户可能只是
@@ -266,7 +265,7 @@ pub static RESEARCH_PRESET: DomainPreset = DomainPreset {
     mode: DomainMode::Research,
     priority_tools: &[
         "web_search",
-        "web_fetch",
+        "web_extract",
         "browser_navigate",
         "browser_snapshot",
         "read_pdf",
@@ -300,11 +299,10 @@ pub static OPERATE_PRESET: DomainPreset = DomainPreset {
     priority_tools: &[
         "list_files",
         "move_file",
-        "copy_file",
-        "delete_file",
-        "create_directory",
+        "storage_analyzer",
+        "storage_clean",
+        "markitdown",
         "terminal",
-        "process_registry",
     ],
     safe_write_override: &[],
     system_directive: OPERATE_DOMAIN_DIRECTIVE,
@@ -333,15 +331,15 @@ pub static CHAT_PRESET: DomainPreset = DomainPreset {
 pub fn tool_to_domain(tool_name: &str) -> Option<DomainMode> {
     match tool_name {
         // 代码工具
-        "read_file" | "write_file" | "patch" | "apply_patch" | "edit_file" | "grep"
-        | "search_files" | "terminal" | "list_files" => Some(DomainMode::Code),
+        "read_file" | "write_file" | "patch" | "apply_patch" | "edit_file" | "search_files"
+        | "terminal" | "list_files" => Some(DomainMode::Code),
         // 研究工具
-        "web_search" | "web_fetch" | "browser_navigate" | "browser_snapshot"
+        "web_search" | "web_extract" | "browser_navigate" | "browser_snapshot"
         | "browser_click" | "browser_type" | "browser_scroll" | "browser_vision"
         | "browser_wait_for" | "read_pdf" | "session_search" => Some(DomainMode::Research),
         // 操作工具
-        "move_file" | "copy_file" | "delete_file" | "create_directory"
-        | "process_registry" | "code_execution" => Some(DomainMode::Operate),
+        "move_file" | "storage_analyzer" | "storage_clean" | "file_converter"
+        | "code_execution" => Some(DomainMode::Operate),
         // 通用工具 — 不映射到特定域
         "memory" | "skill_manage" | "todo" | "task_create" | "task_update" | "task_list"
         | "task_get" | "compact_tool_chain" => None,
@@ -472,7 +470,7 @@ mod tests {
     fn test_operate_preset_has_file_ops() {
         let p = preset_for(DomainMode::Operate);
         assert!(p.priority_tools.contains(&"move_file"));
-        assert!(p.priority_tools.contains(&"delete_file"));
+        assert!(p.priority_tools.contains(&"storage_analyzer"));
     }
 
     #[test]
@@ -509,7 +507,7 @@ mod tests {
         assert_eq!(tool_to_domain("read_file"), Some(DomainMode::Code));
         assert_eq!(tool_to_domain("write_file"), Some(DomainMode::Code));
         assert_eq!(tool_to_domain("terminal"), Some(DomainMode::Code));
-        assert_eq!(tool_to_domain("grep"), Some(DomainMode::Code));
+        assert_eq!(tool_to_domain("search_files"), Some(DomainMode::Code));
     }
 
     #[test]
@@ -522,7 +520,7 @@ mod tests {
     #[test]
     fn test_tool_to_domain_operate_tools() {
         assert_eq!(tool_to_domain("move_file"), Some(DomainMode::Operate));
-        assert_eq!(tool_to_domain("delete_file"), Some(DomainMode::Operate));
+        assert_eq!(tool_to_domain("storage_analyzer"), Some(DomainMode::Operate));
     }
 
     #[test]

@@ -1,11 +1,11 @@
 # Hermix 稳定底座设计（参考 pi / Pico5）
 
 > ⚠️ **已被 `docs/FOUNDATION_REWRITE_DESIGN.md`（v2）取代**。
-> 主人 2026-09-24 决定改为"底座推倒重写 + 全面对齐 PI + 纳入网络安全"。
+> 2026-09-24 决定改为"底座推倒重写 + 全面对齐 PI + 纳入网络安全"。
 > 本文的**分析部分（症状归因 / 状态权威三方割裂 / 六条不变量 / 对抗式审查）在 v2 中全部继承且仍然有效**，
 > 仅"绞杀者渐进迁移"的执行路线被重写路线取代。保留此文档作对照。
 >
-> 提案状态：**待主人评审**，未动一行代码。
+> 提案状态：**待评审**，未动一行代码。
 > 参考项目：https://github.com/earendil-works/pi （`pi-agent-core` / `pi-durable` / `pi-protocol`）
 > 参考文档：`packages/durable/docs/pico-v5.md`（规范设计文档）
 > 诊断依据：本仓库代码实读 + 子 agent 全量架构探查（证据均带 `文件:行号`）
@@ -403,7 +403,7 @@ function reduce(state: UiState, event: CommittedEvent): UiState
 
 ---
 
-## 7. 需要主人拍板的决策点
+## 7. 需要拍板的决策点
 
 | # | 决策 | 选项 | 我的建议 |
 |---|---|---|---|

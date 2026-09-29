@@ -31,6 +31,7 @@ pub mod compression_ops;
 pub mod compression_pipeline;
 pub mod json_crusher;
 pub mod semantic_dedup;
+pub mod spill;
 pub mod context;
 pub mod context_files;
 pub mod context_pressure;
@@ -143,7 +144,9 @@ pub use archive::{
 pub use environment::{build_environment_block, RuntimeEnvironment};
 
 // Re-export budget enforcement
-pub use budget::{check_aggregate_budget, enforce_budget, truncate_result};
+pub use budget::{
+    check_aggregate_budget, enforce_budget, enforce_budget_with_spill, truncate_result,
+};
 
 // Re-export LLM providers
 pub use api_bridge::CodexProvider;

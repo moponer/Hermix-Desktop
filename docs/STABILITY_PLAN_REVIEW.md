@@ -8,7 +8,7 @@
 
 ## 结论速览
 
-主人把计划里大部分 P0/P1 改对了，**但 P0 止血核心——SQLite 连接池完全没引入**，且 async 热路径仍有同步 SQLite 阻塞（Bug #3 同类风险）未根治。另有 `read_file` 路径校验过软、`eprintln` 诊断遗漏未清。
+产品方把计划里大部分 P0/P1 改对了，**但 P0 止血核心——SQLite 连接池完全没引入**，且 async 热路径仍有同步 SQLite 阻塞（Bug #3 同类风险）未根治。另有 `read_file` 路径校验过软、`eprintln` 诊断遗漏未清。
 
 ---
 
@@ -26,7 +26,7 @@
 | P2-5 sandbox canary | `code_execution.rs:337-446` | canary plant/verify/remove 完整 |
 | spawn_blocking 用法 | 多处 | 闭包内均为同步 fs/sqlite，无 `.await`（合法） |
 
-**亮点**：主人实现 P1-1 时用了 `FutureExt::catch_unwind`，比计划文档 §2.3/P1-1 写的"包 `std::panic::catch_unwind`"更准确——这是计划文档自身的错误（见下）。
+**亮点**：产品方实现 P1-1 时用了 `FutureExt::catch_unwind`，比计划文档 §2.3/P1-1 写的"包 `std::panic::catch_unwind`"更准确——这是计划文档自身的错误（见下）。
 
 ---
 
@@ -63,10 +63,10 @@
 
 1. **§2.3 / P1-1 / F3 "包 `std::panic::catch_unwind`" 有 async 陷阱**
    - 错误：`std::panic::catch_unwind` 不能可靠跨 `.await` 捕获 panic（future 被 drop 时 panic 直接 propagate 到 task 边界）。
-   - 正确写法（主人已实现）：用 `FutureExt::catch_unwind` 包 async block，或 `tokio::spawn` 后 `JoinHandle::await` 捕获 `JoinError`。
+   - 正确写法（产品方已实现）：用 `FutureExt::catch_unwind` 包 async block，或 `tokio::spawn` 后 `JoinHandle::await` 捕获 `JoinError`。
    - 计划文档应修正，避免后续执行者踩坑。
 
-2. **§6 "不做性能优化" 与主人原始需求矛盾**
+2. **§6 "不做性能优化" 与产品方原始需求矛盾**
    - 原始需求明确要求"稳定性、**性能**、以及其他安全"全面审查。
    - 计划把性能整体排除（"性能优化另立计划"），8 维度风险地图里没有独立性能维度（§2.2 只顺带提了同步 I/O 阻塞，那是稳定性不是性能）。
    - 建议补一个"性能维度"（延迟/吞吐/内存增长/上下文压缩管线/序列化开销/高并发 tool 调用背压）。

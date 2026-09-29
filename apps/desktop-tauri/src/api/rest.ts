@@ -586,6 +586,22 @@ export const updateConfig = async (config: HermesConfig): Promise<boolean> => {
   return true;
 };
 
+export interface BackupStatus {
+  enabled: boolean;
+  dir: string | null;
+  total_bytes: number;
+  file_count: number;
+  last_backup: string | null;
+}
+
+export const getBackupStatus = async (): Promise<BackupStatus | null> => {
+  try {
+    return await fetchJSON<BackupStatus>("/api/backup/status");
+  } catch {
+    return null;
+  }
+};
+
 export const getModelInfo = async (): Promise<ModelInfo | null> => {
   try {
     return await fetchJSON<ModelInfo>("/api/model/info");

@@ -176,8 +176,8 @@ impl HxShellPackager {
         // 返回 bytes + is_svg 标记 (hx-shell read_self_icon 同时支持 SVG/PNG).
         let resolved_icon = resolve_app_icon(app_dir);
 
-        // 始终 vanilla：直接读 index.html 原样进 PE 资源 1000
-        let html_vec = raw_html;
+        // 始终 vanilla：读 index.html，注入共享设计 token（打包产物统一视觉基线）
+        let html_vec = inject_theme_css(&raw_html);
 
         // icon_bytes 是 (bytes, is_svg) — 塞尾部 payload 时 SVG/PNG 都行
         // (hx-shell read_self_icon 双格式解析), 直接取 bytes.
@@ -369,6 +369,71 @@ impl HxShellPackager {
             .map_err(|e| HxPackError::LaunchFailed(e.to_string()))?;
         drop(child);
         Ok(())
+    }
+}
+
+/// 共享设计 token CSS（与宿主 `apps/desktop-tauri/src/styles/tokens.css` 的
+/// 结构性令牌对齐：字号/字重/行高/间距/圆角）。打包时以 `<style>` 注入
+/// `index.html` 头部，应用未自定义前自动获得与宿主一致的视觉基线；
+/// 应用自带样式在其后解析，可正常覆盖。
+const HX_THEME_CSS: &str = r#"
+:root {
+  --hx-text-micro: 10px; --hx-text-tiny: 11px; --hx-text-meta: 12px;
+  --hx-text-ui: 13px; --hx-text-body: 14px; --hx-text-title: 16px; --hx-text-display: 20px;
+  --hx-weight-medium: 500; --hx-weight-semibold: 600;
+  --hx-space-1: 4px; --hx-space-2: 8px; --hx-space-3: 12px; --hx-space-4: 16px;
+  --hx-space-5: 24px; --hx-space-6: 32px;
+  --hx-radius-sm: 6px; --hx-radius-md: 10px; --hx-radius-lg: 14px;
+  /* 色彩走语义变量（亮色基线），应用可用 CSS 变量整体覆盖适配暗色 */
+  --hx-bg: #ffffff; --hx-bg-subtle: #f5f5f7; --hx-surface: #ffffff;
+  --hx-border: rgba(0,0,0,0.10); --hx-text: #1a1a1a; --hx-text-muted: #6b6b70;
+  --hx-accent: #3b82f6; --hx-accent-text: #ffffff;
+  --hx-danger: #ef4444; --hx-success: #22c55e; --hx-warning: #f59e0b;
+  background: var(--hx-bg); color: var(--hx-text);
+  font-size: var(--hx-text-body); line-height: 1.5;
+  font-family: "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+}
+body { margin: 0; }
+/* 基础组件类：应用可直接用 class，无需从零手写 */
+.hx-btn { display: inline-flex; align-items: center; gap: var(--hx-space-1);
+  padding: 6px 14px; border-radius: var(--hx-radius-sm); border: 1px solid var(--hx-border);
+  background: var(--hx-surface); color: var(--hx-text); font-size: var(--hx-text-ui);
+  cursor: pointer; }
+.hx-btn:hover { background: var(--hx-bg-subtle); }
+.hx-btn--primary { background: var(--hx-accent); border-color: var(--hx-accent); color: var(--hx-accent-text); }
+.hx-btn--danger { background: var(--hx-danger); border-color: var(--hx-danger); color: #fff; }
+.hx-card { background: var(--hx-surface); border: 1px solid var(--hx-border);
+  border-radius: var(--hx-radius-md); padding: var(--hx-space-4); }
+.hx-input { padding: 6px 10px; border-radius: var(--hx-radius-sm);
+  border: 1px solid var(--hx-border); background: var(--hx-surface);
+  color: var(--hx-text); font-size: var(--hx-text-ui); outline: none; }
+.hx-input:focus { border-color: var(--hx-accent); }
+.hx-titlebar { display: flex; align-items: center; height: 36px;
+  background: var(--hx-bg-subtle); user-select: none; }
+.hx-muted { color: var(--hx-text-muted); font-size: var(--hx-text-meta); }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: var(--hx-border); border-radius: 4px; }
+"#;
+
+/// 把 [`HX_THEME_CSS`] 以 `<style id="hx-theme">` 注入 HTML `<head>`。
+/// 已注入过（含 `hx-theme` 标记）则跳过，保证幂等。
+/// 无 `<head>` 的退化 HTML 追加到开头。
+fn inject_theme_css(html: &[u8]) -> Vec<u8> {
+    let text = String::from_utf8_lossy(html);
+    if text.contains("hx-theme") {
+        return html.to_vec();
+    }
+    let style = format!("<style id=\"hx-theme\">{HX_THEME_CSS}</style>");
+    if let Some(idx) = text.to_lowercase().find("</head>") {
+        let mut out = String::with_capacity(text.len() + style.len());
+        out.push_str(&text[..idx]);
+        out.push_str(&style);
+        out.push_str(&text[idx..]);
+        out.into_bytes()
+    } else {
+        let mut out = style;
+        out.push_str(&text);
+        out.into_bytes()
     }
 }
 
@@ -636,4 +701,34 @@ fn read_icon_library_svg(app_dir: &Path) -> Option<Vec<u8>> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod hx_theme_tests {
+    use super::*;
+
+    #[test]
+    fn inject_theme_into_head() {
+        let html = b"<html><head><title>t</title></head><body></body></html>";
+        let out = inject_theme_css(html);
+        let s = String::from_utf8(out).unwrap();
+        assert!(s.contains("hx-theme"), "应注入 hx-theme style");
+        assert!(s.find("hx-theme").unwrap() < s.find("</head>").unwrap(), "应在 </head> 前");
+    }
+
+    #[test]
+    fn inject_theme_idempotent() {
+        let html = b"<html><head></head></html>";
+        let once = inject_theme_css(html);
+        let twice = inject_theme_css(&once);
+        assert_eq!(once, twice, "重复注入应幂等");
+    }
+
+    #[test]
+    fn inject_theme_no_head_fallback() {
+        let html = b"<div>plain</div>";
+        let out = inject_theme_css(html);
+        let s = String::from_utf8(out).unwrap();
+        assert!(s.starts_with("<style"), "无 head 时应前置注入");
+    }
 }

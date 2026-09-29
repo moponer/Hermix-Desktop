@@ -332,6 +332,10 @@ impl ToolHandler for WriteFileHandler {
         //: advisory path traversal check — logs but does not block.
         crate::credential_guard::check_path_traversal_advisory(path);
 
+        // 安全中心：覆盖前把旧版本存进备份目录（best-effort，失败不影响写）。
+        let original = std::fs::read(path).unwrap_or_default();
+        crate::backup::try_backup(Path::new(path), &original);
+
         if let Some(fs) = &self.fs {
             fs.write(Path::new(path), content.as_bytes()).await.map_err(|e| match e {
                 FsError::Denied(p) => ToolError::from_message(format!("permission denied: {}", p.display())),

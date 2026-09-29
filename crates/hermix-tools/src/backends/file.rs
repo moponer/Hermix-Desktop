@@ -359,6 +359,9 @@ impl PatchBackend for LocalPatchBackend {
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read '{}': {}", path, e)))?;
 
+        // 安全中心：覆盖前把旧版本存进备份目录（best-effort，失败不影响写）。
+        crate::backup::try_backup(std::path::Path::new(path), content.as_bytes());
+
         if old_string.is_empty() {
             // Empty old_string means create new file or append
             let new_content = if content.is_empty() {
@@ -425,6 +428,9 @@ impl PatchBackend for LocalPatchBackend {
         let mut content = tokio::fs::read_to_string(path)
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read '{}': {}", path, e)))?;
+
+        // 安全中心：覆盖前把旧版本存进备份目录（best-effort，失败不影响写）。
+        crate::backup::try_backup(std::path::Path::new(path), content.as_bytes());
 
         let mut applied: Vec<Value> = Vec::with_capacity(edits.len());
 

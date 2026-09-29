@@ -168,7 +168,7 @@ static CONFIRM_PATTERNS: LazyLock<Vec<ConfirmRule>> = LazyLock::new(|| {
         ConfirmRule { name: "dism-restore", re: re(r"(?i)\bDISM\s+/Online\s+/Cleanup-Image\s+/RestoreHealth\b") },
         ConfirmRule { name: "sfc-scan", re: re(r"(?i)\bsfc\s+/scannow\b") },
         // 命令编码（powershell -enc / -EncodedCommand <base64>）不再门禁。
-        // 依据主人 2026-09-26 拍板："命令执行（设置环境变量或命令编码的）
+        // 2026-09-26 定策："命令执行（设置环境变量或命令编码的）
         // 不用审批，只有删除等高危才审批"。编码只是载荷的编码形式，不是
         // 破坏性动作；真正的高危删除/格式化/磁盘操作仍由上方 DENIED + 各
         // 删除类 CONFIRM 规则（del/erase/rm-recursive/format/diskpart …）兜底。

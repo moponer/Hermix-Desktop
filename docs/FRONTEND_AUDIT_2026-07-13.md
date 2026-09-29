@@ -319,7 +319,7 @@ export async function addMcpServer(spec: McpServerSpec): Promise<void> {
 
 ### P1-2 SettingsView AdvancedTab 直读 storageCompat 绕开抽象
 
-**症状**：1306 / 1319 / 1356 / 1358 行直接 `localStorage.getItem("hermix.python.override")` / `setItem` 等，绕过 `storageCompat.ts` 的 hermix/hermes 双命名空间兼容层。若主人切换 namespace，前端不会同步更新。
+**症状**：1306 / 1319 / 1356 / 1358 行直接 `localStorage.getItem("hermix.python.override")` / `setItem` 等，绕过 `storageCompat.ts` 的 hermix/hermes 双命名空间兼容层。若切换 namespace，前端不会同步更新。
 
 **根因**：
 ```ts
@@ -358,7 +358,7 @@ localStorage.getItem(PYTHON_OVERRIDE_STORAGE_KEY);
 
 ### P1-5 production 透传 17 处 console.log + 8 处 __sendDiagId
 
-**症状**：主人打开生产构建 → DevTools Console 满是 `[diag #N] stream opened` / `[diag #N] retry triggered`。这些是开发期埋点没摘。
+**症状**：打开生产构建 → DevTools Console 满是 `[diag #N] stream opened` / `[diag #N] retry triggered`。这些是开发期埋点没摘。
 
 **根因**：
 - `useStreamChat.ts:407 / 667 / 1189 / 1229` 共 8 处用 `(globalThis as any).__sendDiagId` 调服务端打点 + console.log
@@ -446,7 +446,7 @@ localStorage.getItem(PYTHON_OVERRIDE_STORAGE_KEY);
 
 ### P2-4 AutomationPanel "+"按钮在某些状态未启用
 
-**症状**：主人看完 6 个种子 automation task 想加新的 → "+"按钮 disabled，悬停 tooltip 写"功能开发中"。
+**症状**：看完 6 个种子 automation task 想加新的 → "+"按钮 disabled，悬停 tooltip 写"功能开发中"。
 
 **修复**：调 `POST /api/automation/tasks`（已注册 at `dashboard/automation.rs`）。
 
@@ -462,7 +462,7 @@ localStorage.getItem(PYTHON_OVERRIDE_STORAGE_KEY);
 
 ### P2-6 OffApiError / timeout 暴露到 UI
 
-**症状**：`useStreamChat.ts` 的 `WithRetry`（api.ts:29-51）处理 ECONNREFUSED 时把内部 stack trace 透给用户。主人看到一堆 Rust-style path 报错。
+**症状**：`useStreamChat.ts` 的 `WithRetry`（api.ts:29-51）处理 ECONNREFUSED 时把内部 stack trace 透给用户。看到一堆 Rust-style path 报错。
 
 **修复**：把错误映射成 4 类用户文案（"后端没启动" / "网络中断" / "请求超时" / "服务器内部错误"），技术细节写 console。
 
@@ -470,7 +470,7 @@ localStorage.getItem(PYTHON_OVERRIDE_STORAGE_KEY);
 
 ### P2-7 双命名空间 hermix/hermes 切换可疑
 
-**症状**：`storageCompat.ts` 把 hermes namespace 自动迁移到 hermix，但主人如果两个 key 都有数据，迁移覆盖行为不明确。
+**症状**：`storageCompat.ts` 把 hermes namespace 自动迁移到 hermix，但如果两个 key 都有数据，迁移覆盖行为不明确。
 
 **修复**：加 `STORAGE_COMPAT_DEBUG=true` 环境变量打日志；或前端加"高级设置"展示当前 namespace 和冲突提示。
 
@@ -480,7 +480,7 @@ localStorage.getItem(PYTHON_OVERRIDE_STORAGE_KEY);
 
 ### P3-1 暗色模式 token 双轨覆盖不全
 
-**症状**：`.dark` 在 `tokens.css` 重新定义变量，但 `prose` 子元素 / approval-card / code-block-wrapper / prefetch-chip / wait-for-input-dot / scrollbar 还残留蓝紫 / 浅灰。主人截图反馈"对，还有这里"。
+**症状**：`.dark` 在 `tokens.css` 重新定义变量，但 `prose` 子元素 / approval-card / code-block-wrapper / prefetch-chip / wait-for-input-dot / scrollbar 还残留蓝紫 / 浅灰。截图反馈"对，还有这里"。
 
 **修复**：grep 所有 `.dark` 引用 → 逐个加 `.dark` 选择器；建立 `tokens-dark-audit.md` checklist。
 
@@ -488,7 +488,7 @@ localStorage.getItem(PYTHON_OVERRIDE_STORAGE_KEY);
 
 ### P3-2 Element Plus 弹窗样式冲突
 
-**症状**：Dialog / Drawer / Tooltip 在主 app 偶尔看到 Element Plus 默认蓝色边框（与主人 gray/zinc 哲学冲突）。
+**症状**：Dialog / Drawer / Tooltip 在主 app 偶尔看到 Element Plus 默认蓝色边框（与 gray/zinc 哲学冲突）。
 
 **修复**：在 `tokens.css` 加 `.el-dialog` / `.el-drawer` / `.el-tooltip` 全局覆盖。
 
@@ -529,7 +529,7 @@ localStorage.getItem(PYTHON_OVERRIDE_STORAGE_KEY);
 
 ---
 
-## 修复优先级建议（主人拍板）
+## 修复优先级建议（拍板）
 
 **第一周（必修 P0）**：P0-1, P0-3, P0-7, P0-8（4 项零外部依赖，单 PR 可完成）
 **第二周**：P0-2, P0-4, P0-6, P0-9, P0-10（5 项含 invoke / fetch / 工具调用）
@@ -543,7 +543,7 @@ localStorage.getItem(PYTHON_OVERRIDE_STORAGE_KEY);
 1. ✅ `cargo check --workspace --all-targets` 通过
 2. ✅ `cargo test --workspace --lib` 全绿（含新增回归）
 3. ✅ `pnpm tsc --noEmit` 0 errors
-4. ✅ 主人截图 + 文字描述证据"现在 X 真生效了"
+4. ✅ 截图 + 文字描述证据"现在 X 真生效了"
 5. ✅ 修复根因写进 `docs/FRONTEND_FIXES_LOG.md`，含文件:行号 + commit hash
 
 ---
@@ -553,7 +553,7 @@ localStorage.getItem(PYTHON_OVERRIDE_STORAGE_KEY);
 - 排查深度：每个发现都有 `Read(file_path:line)` 验证，未靠假设
 - 子 agent 用法：mock-auditor / api-auditor 跑超 max turn 后改用 Grep + Read 人工替代
 - 后端契约验证：每个"前端调 X"都 grep `crates/hermix-server/src` 确认 endpoint 真实存在 / 不存在
-- 主人哲学遵循：无蓝紫（gray/zinc）、不渐变、不写"X 周"、绝不留 TODO 占位（铁律 M）
+- 产品哲学遵循：无蓝紫（gray/zinc）、不渐变、不写"X 周"、绝不留 TODO 占位（铁律 M）
 
 ---
 

@@ -118,7 +118,13 @@ pub struct SubAgentConfig {
     pub delegation_max_iterations: u32,
 }
 
-fn default_sub_agent_timeout_secs() -> u64 { 300 }
+fn default_sub_agent_timeout_secs() -> u64 {
+    // 300s → 1800s：子 agent 的存在意义就是"派出去干长活"。构建、
+    // 调研、批量搜索轻松超过 5 分钟；旧默认值使 delegate_task 的
+    // 长任务场景形同虚设。orchestrator 自身有协作取消（interrupt），
+    // 超时后结果会作为 SubAgentError::Timeout 返回父 loop。
+    1800
+}
 fn default_sub_agent_min_turns() -> u32 { 2 }
 fn default_sub_agent_max_turns_cap() -> u32 { 12 }
 fn default_delegation_max_iterations() -> u32 { 50 }
@@ -364,6 +370,15 @@ pub struct AgentConfig {
     /// Include session_id in system prompt timestamp block.
     #[serde(default)]
     pub pass_session_id: bool,
+
+    /// 会话起始时间（RFC3339），在 per-request config 组装时写一次。
+    /// 系统提示尾部的 "Conversation started" 块用它而非 `now()`：
+    /// 每 turn 变化的时间戳会让 provider 的自动前缀缓存（DeepSeek /
+    /// MiniMax 等）从差异字节起全部 miss——tools 块 + 整段消息历史
+    /// 每 turn 重付全价。会话内恒定 = 前缀稳定 = 缓存命中。
+    /// `None` 时回退到 `now()`（单 turn 一次性场景无差异）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_started_at: Option<String>,
 
     /// Runtime provider credentials/endpoints keyed by provider name.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
@@ -830,16 +845,21 @@ fn default_stream_first_chunk_timeout_secs() -> u64 {
     30
 }
 
-/// Default watchdog (seconds) for the gap between the end of one
-/// turn's tool-execution bookkeeping and the start of the next turn's
-/// pre-turn setup. See [`AgentConfig::turn_transition_deadline_secs`].
+/// Default watchdog (seconds) for the window spanning tool execution
+/// (including the approval wait) through the next turn's pre-turn
+/// setup. See [`AgentConfig::turn_transition_deadline_secs`].
 fn default_turn_transition_deadline_secs() -> u64 {
-    // lowered from 90s to 30s after the type-B recurrence —
-    // 90s felt like a hang to the user (UI spins the whole time), and
-    // 30s matches `stream_first_chunk_timeout_secs` so the user gets a
-    // single "30s without progress = something is wrong" mental model
-    // for both the start of a turn and the hand-off between turns.
-    30
+    // The armed window now covers tool execution INCLUDING the approval
+    // wait (run_loop arms before do_tool_turn). The deadline must exceed
+    // the largest legitimate wait inside that window: approval timeout
+    // (ApprovalConfig.timeout_secs, default 600s) + batch tool budget
+    // (sum-based, easily > 300s for multi-call batches). 1800s is the
+    // last-resort net above those bounds — hitting it means every
+    // bounded await has failed and the run is genuinely stuck. The old
+    // 30s default assumed the window was post-execution bookkeeping
+    // only and would false-positive on every legitimate long
+    // approval/tool wait.
+    1800
 }
 
 impl Default for AgentConfig {
@@ -879,6 +899,7 @@ impl Default for AgentConfig {
             platform: None,
             platform_hint_override: None,
             pass_session_id: false,
+            session_started_at: None,
             runtime_providers: HashMap::new(),
             ephemeral_system_prompt: None,
             max_cost_usd: None,
@@ -1057,13 +1078,13 @@ mod tests {
     // "0 = opt-out" contract. Both run_stream() and run() consult
     // this field at the top of every main-loop iteration; if the
     // default drifts the WS recovery latency changes silently.
-    // Default lowered 90s → 30s after type-B recurrence so the user
-    // gets one "30s without progress = something's wrong" mental
-    // model that matches `stream_first_chunk_timeout_secs`.
+    // Default raised 30s → 1800s when the armed window was widened to
+    // cover tool execution + approval wait (see
+    // default_turn_transition_deadline_secs for the bound math).
     #[test]
-    fn turn_transition_deadline_default_is_30_seconds() {
+    fn turn_transition_deadline_default_is_1800_seconds() {
         let c = AgentConfig::default();
-        assert_eq!(c.turn_transition_deadline_secs, 30);
+        assert_eq!(c.turn_transition_deadline_secs, 1800);
     }
 
     #[test]
@@ -1090,7 +1111,7 @@ mod tests {
             .unwrap()
             .remove("turn_transition_deadline_secs");
         let back: AgentConfig = serde_json::from_value(v).unwrap();
-        assert_eq!(back.turn_transition_deadline_secs, 30);
+        assert_eq!(back.turn_transition_deadline_secs, 1800);
     }
 
     /// P0 (memory isolation): `resolved_memory_dir` must yield the room

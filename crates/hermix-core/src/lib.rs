@@ -18,6 +18,8 @@ pub mod types;
 // Windows where CP936 / OEM encoding is the dominant mojibake source.
 pub mod path_security;
 pub mod console_decode;
+#[cfg(windows)]
+pub mod win_job;
 pub mod text_utils;
 pub mod plugin_abi;
 pub mod runtime;

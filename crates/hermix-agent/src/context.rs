@@ -847,6 +847,7 @@ pub enum DirRoute {
     /// Model name contains "minimax" / "m2" / "hermes" — fine-tune extras.
     MiniMaxFamily,
     /// Conversation has 5+ tool calls — multi-step task focus guidance.
+    /// (基础设施保留；当前无 guidance 使用此路由。)
     MultiStepTask,
     /// This turn actually invoked 1+ tool calls — only then should
     /// "summarize what you did" or "next step" guidance fire. Trivial
@@ -854,7 +855,7 @@ pub enum DirRoute {
     /// only, so the model is not pressured into inventing filler
     /// summaries for turns where there is nothing to summarize.
     HadAnyToolUse,
-    /// Always-on (USER_STYLE_GUIDANCE, tool failure rule).
+    /// Always-on (tool failure rule, safety, environment, git discipline).
     Always,
     /// Active workspace's `AGENTS.md` exposes a project-conventions
     /// section. **Non-generic, deployment-specific tuning** — injected
@@ -1185,11 +1186,28 @@ impl SystemPromptBuilder {
     }
 
     /// Add current date/time and optional metadata.
-    pub fn with_timestamp(mut self, model: Option<&str>, provider: Option<&str>) -> Self {
-        let now = chrono::Local::now();
+    pub fn with_timestamp(self, model: Option<&str>, provider: Option<&str>) -> Self {
+        let now = chrono::Local::now().to_rfc3339();
+        self.with_timestamp_at(model, provider, &now)
+    }
+
+    /// Same block, but with a caller-supplied (session-stable) start
+    /// timestamp. Must stay constant for the whole session: a per-turn
+    /// `now()` here invalidates the provider's automatic prefix cache
+    /// from this byte onward (tools + full message history re-billed
+    /// every turn).
+    pub fn with_timestamp_at(
+        mut self,
+        model: Option<&str>,
+        provider: Option<&str>,
+        started_at: &str,
+    ) -> Self {
+        let parsed = chrono::DateTime::parse_from_rfc3339(started_at)
+            .map(|dt| dt.with_timezone(&chrono::Local))
+            .unwrap_or_else(|_| chrono::Local::now());
         let mut line = format!(
             "Conversation started: {}",
-            now.format("%A, %B %d, %Y %I:%M %p")
+            parsed.format("%A, %B %d, %Y %I:%M %p")
         );
         if let Some(m) = model {
             line.push_str(&format!("\nModel: {m}"));

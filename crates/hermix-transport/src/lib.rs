@@ -278,6 +278,14 @@ pub struct SessionMessagesResponse {
     /// (or pre-migration DBs).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_usage: Option<hermix_core::types::ContextUsagePayload>,
+    /// 窗口化分页元数据（`GET /v1/sessions/{id}/messages?limit=N`）：
+    /// `has_more` = 完整列表在本次返回窗口之前还有更早的消息；
+    /// `total_messages` = 组装后的完整列表长度（含压缩归档子会话消息）。
+    /// 不带 limit 的全量快照两者为 `false` / `messages.len()`，旧客户端不受影响。
+    #[serde(default)]
+    pub has_more: bool,
+    #[serde(default)]
+    pub total_messages: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

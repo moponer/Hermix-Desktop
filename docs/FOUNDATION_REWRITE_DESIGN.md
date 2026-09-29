@@ -1,10 +1,10 @@
 # Hermix 底座重写方案 v2（PI 全面对齐 + 网络安全）
 
-> 提案状态：**待主人评审，未动一行代码**。
+> 提案状态：**待评审，未动一行代码**。
 > 取代：`docs/STABLE_FOUNDATION_DESIGN.md`（v1 渐进路线，其分析仍然有效，作为对照保留）
 > 参考项目：https://github.com/earendil-works/pi
 > 参考规范：`packages/durable/docs/pico-v5.md`、`packages/protocol/README.md`、`packages/server/README.md`、`packages/agent/README.md`
-> 主人决策（2026-09-24）：要砍的砍，可推倒重写；底座全部参考 PI；网络安全先做；前端不大动。
+> 产品决策（2026-09-24）：要砍的砍，可推倒重写；底座全部参考 PI；网络安全先做；前端不大动。
 
 ---
 
@@ -22,7 +22,7 @@ PI 是 TS monorepo（12 个 npm 包）。**逐行翻译是不可能的，也是�
 凡是 PI 有的机制，Hermix 必须有等价物（名字可不同，语义必须一致）。
 凡是 PI 明确列为 Non-goal 的，Hermix 也不做。
 
-如果主人要的是"逐行移植 TS 代码"，那等于用 Rust 重写一遍 TS 运行时，这在工程上是自毁——需要当场叫停。
+如果要求的是"逐行移植 TS 代码"，那等于用 Rust 重写一遍 TS 运行时，这在工程上是自毁——需要当场叫停。
 
 ### 声明 2：PI 没有网络安全，这一块它帮不上
 
@@ -37,7 +37,7 @@ PI 的网络相关原文（诚实摘录）：
 | 根 `README.md` | `Pi does not include a built-in permission system... By default, it runs with the permissions of the user and process that launched it.` |
 
 **PI 的 server 是 Unix domain socket —— 纯本地 IPC，它从未暴露过网络面，因此从不需要认证。**
-主人要的"手机端连桌面端"是 PI 完全没走过的路。所以这一块**不能抄 PI**，只能：
+产品方要的"手机端连桌面端"是 PI 完全没走过的路。所以这一块**不能抄 PI**，只能：
 
 - **抄 PI 的结构**：多展示端挂载（`attachmentId` 路由模型）——这个恰好就是多端需求的正解；
 - **自己设计安全**：TLS + 设备配对 + 凭证层次 + 来源分级（见 §5）。
@@ -56,7 +56,7 @@ Hermix 没有这个需求。抄它 = 引入一套插件沙箱 + 复制状态机�
 
 ## 1. 边界：重写 / 重构 / 砍掉 / 保留
 
-这是本方案最重要的一节。主人说"哪怕推倒重写"，但 26.5 万行全推倒不现实也不必要——**要推倒的是底座，不是业务能力**。
+这是本方案最重要的一节。要求"哪怕推倒重写"，但 26.5 万行全推倒不现实也不必要——**要推倒的是底座，不是业务能力**。
 
 ### 1.1 完全重写（底座内核，约 2.3 万行被替换）
 
@@ -98,7 +98,7 @@ Hermix 没有这个需求。抄它 = 引入一套插件沙箱 + 复制状态机�
 
 ## 2. PI 包 → Hermix 映射表
 
-主人要求"底座代码必须全部参考 PI"。逐包交代抄什么、不抄什么。
+要求"底座代码必须全部参考 PI"。逐包交代抄什么、不抄什么。
 
 | PI 包 | 职责 | Hermix 落点 | 策略 |
 |---|---|---|---|
@@ -113,7 +113,7 @@ Hermix 没有这个需求。抄它 = 引入一套插件沙箱 + 复制状态机�
 | `pi-tui` | 终端 UI 库 | — | **不适用**（Tauri GUI，无 TUI 需求） |
 | `chord` | 插件组合 / replicated state / facet bundler | — | **明确不抄**（见声明 3） |
 
-### 选型偏离说明（2 处，必须主人知情）
+### 选型偏离说明（2 处，必须知情）
 
 | PI 的做法 | 本方案 | 理由 |
 |---|---|---|
@@ -318,7 +318,7 @@ pub struct Route {
 
 ### 3.6 L4 `hermix-server`：多展示端挂载模型
 
-这是从 `pi-server` 抄来的、**恰好命中主人多端需求**的设计。PI 原文：
+这是从 `pi-server` 抄来的、**恰好命中多端需求**的设计。PI 原文：
 
 > `A Session may have multiple presentation attachments. Repeating attach from one connection is idempotent; every successful attachment has a server-generated attachmentId... Session requests carry { serverId, sessionId, attachmentId }, and the server rejects stale or mismatched routes. Losing a connection rejects its local responses but releases its attachment only after admitted service calls settle.`
 
@@ -369,7 +369,7 @@ Session 本体与任务不受影响
 
 ## 5. 网络安全层（PI 没有，全新设计）
 
-主人需求原文：**"外部网络安全也先做进去，因为后面我们要做手机端与桌面端的连接。"**
+需求原文：**"外部网络安全也先做进去，因为后面我们要做手机端与桌面端的连接。"**
 
 ### 5.1 现状：门没锁
 
@@ -545,7 +545,7 @@ pub enum Origin {
 
 ## 6. 前端零大动的兼容策略
 
-主人硬约束：**前端不要大动**。
+硬约束：**前端不要大动**。
 
 ### 6.1 冻结的契约（不许破）
 
@@ -627,7 +627,7 @@ pub enum Origin {
 
 ---
 
-## 9. 需要主人拍板的决策点
+## 9. 需要拍板的决策点
 
 | # | 决策 | 选项 | 建议 |
 |---|---|---|---|

@@ -12,9 +12,10 @@ import {
   Image as ImageIcon,
   X,
   Activity,
+  Shield,
 } from "lucide-react";
-import { ModelTab } from "./settings/ModelSettingsTab";
 import { ModelListTab } from "./settings/ModelListTab";
+import { SecurityTab } from "./settings/SecurityTab";
 import { BackendTab } from "./settings/BackendSettingsTab";
 import { AdvancedTab } from "./settings/AdvancedSettingsTab";
 import { DiagnosticsTab } from "./settings/DiagnosticsTab";
@@ -31,10 +32,10 @@ interface SystemConfigPanelProps {
   initialCategory?: ConfigCategory;
 }
 
-export type ConfigCategory = "model" | "tools" | "backend" | "advanced" | "diagnostics" | "devices";
+export type ConfigCategory = "model" | "tools" | "backend" | "advanced" | "diagnostics" | "devices" | "security";
 type CategoryId = ConfigCategory;
 type ToolTabId = "plugins" | "skills" | "connectors" | "toolsets";
-type ModelTabId = "model" | "provider" | "image";
+type ModelTabId = "model" | "image";
 type BackendTabId = "service" | "runtimes";
 
 const CATEGORIES: { id: CategoryId; label: string; hint: string; icon: React.ElementType }[] = [
@@ -44,6 +45,7 @@ const CATEGORIES: { id: CategoryId; label: string; hint: string; icon: React.Ele
   { id: "advanced", label: "高级", hint: "高级选项与实验功能", icon: SlidersHorizontal },
   { id: "devices", label: "设备管理", hint: "配对新设备与撤销权限", icon: Smartphone },
   { id: "diagnostics", label: "诊断", hint: "查看后端日志与排错", icon: Activity },
+  { id: "security", label: "安全", hint: "自动备份与数据安全", icon: Shield },
 ];
 
 const TOOL_TABS: { id: ToolTabId; label: string; icon: React.ElementType }[] = [
@@ -53,11 +55,9 @@ const TOOL_TABS: { id: ToolTabId; label: string; icon: React.ElementType }[] = [
   { id: "toolsets", label: "工具集", icon: Boxes },
 ];
 
-// 模型中心制（新的默认视图）在前，旧的供应商中心制面板降级到"按供应商"，
-// 等新面板稳定后再删。
+// 模型中心制：模型列表为默认视图，图像为二级 tab。
 const MODEL_TABS: { id: ModelTabId; label: string; icon: React.ElementType }[] = [
   { id: "model", label: "模型列表", icon: Cpu },
-  { id: "provider", label: "按供应商", icon: Server },
   { id: "image", label: "图像", icon: ImageIcon },
 ];
 
@@ -195,11 +195,6 @@ export function SystemConfigPanel({ onClose, initialCategory }: SystemConfigPane
                   <ModelListTab />
                 </div>
               )}
-              {cat === "model" && modelTab === "provider" && (
-                <div className="h-full min-h-0">
-                  <ModelTab />
-                </div>
-              )}
               {cat === "model" && modelTab === "image" && <Padded><ImageSettingsCard /></Padded>}
               {cat === "tools" && (
                 <div className="px-6 py-5 min-h-0">
@@ -216,6 +211,7 @@ export function SystemConfigPanel({ onClose, initialCategory }: SystemConfigPane
               {cat === "advanced" && <Padded><AdvancedTab /></Padded>}
               {cat === "devices" && <Padded wide><DevicesTab /></Padded>}
               {cat === "diagnostics" && <Padded wide><DiagnosticsTab /></Padded>}
+              {cat === "security" && <Padded wide><SecurityTab /></Padded>}
             </div>
           </div>
         </div>

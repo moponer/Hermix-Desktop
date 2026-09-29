@@ -218,7 +218,7 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 # Build profiles — 2026-06-24
 # ----------------------------------------------------------------------
 # 铁律: dev/test 走 line-tables-only 省内存, release 保持默认 (不优化
-# debug info, 真正发布包要 DWARF 全量方便 production debug). 主人原话
+# debug info, 真正发布包要 DWARF 全量方便 production debug). 定策原话
 # "能不用的情况下不要用" —— lld + line tables 是 dev 妥协, 不是常态.
 #
 # 触发回退:

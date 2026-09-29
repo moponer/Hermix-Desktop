@@ -45,6 +45,8 @@ pub fn router() -> Router<HttpServerState> {
         // missing. Idempotent — if `config.model` already points to a
         // configured provider the call is a no-op.
         .route("/api/config/auto-correct", post(config::auto_correct_config))
+        // 安全中心：自动备份目录统计。
+        .route("/api/backup/status", get(config::get_backup_status))
         // Model info
         .route("/api/model/info", get(config::get_model_info))
         // Model selector list (durable, backend-persisted) — fixes the

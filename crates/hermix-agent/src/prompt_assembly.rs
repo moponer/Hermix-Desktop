@@ -454,7 +454,13 @@ pub fn apply_prompt_cache_markers(config: &AgentConfig, messages: &mut [Message]
 pub fn build_dynamic_suffix(config: &AgentConfig, model_for_prompt: &str) -> String {
     let provider = effective_provider_for_prompt(config, model_for_prompt);
     let mut suffix = crate::context::SystemPromptBuilder::new();
-    suffix = suffix.with_timestamp(Some(model_for_prompt), provider.as_deref());
+    // 会话内恒定的时间戳（见 AgentConfig::session_started_at）：
+    // 每 turn 变化会让前缀缓存从系统提示尾部起全部失效。
+    let started_at = config
+        .session_started_at
+        .clone()
+        .unwrap_or_else(|| chrono::Local::now().to_rfc3339());
+    suffix = suffix.with_timestamp_at(Some(model_for_prompt), provider.as_deref(), &started_at);
 
     let mut timestamp_extras = String::new();
     if config.pass_session_id {
@@ -501,15 +507,14 @@ pub fn build_system_prompt_with_tool_errors(
         tool_call_count,
     );
 
-    // ★ directions[] — evaluated per-turn with the REAL tool_call_count so
-    // HadAnyToolUse / MultiStepTask routes fire correctly. This block
+    // ★ directions[] — evaluated per-turn because their gating inputs
+    // (user message, active tool set, model) change every turn. This block
     // lives OUTSIDE the cached stable layer (keyed on
-    // model/personality/system_prompt/workspace only) because
-    // tool_call_count changes every turn. Previously directions were
-    // baked into the stable cache with tool_call_count=0, so
-    // HadAnyToolUse never fired — summary/stopping guidance was
-    // silently skipped, leaving the LLM with no "stop after real work"
-    // constraint and producing filler + repeated tool calls.
+    // model/personality/system_prompt/workspace only). Note: the
+    // HadAnyToolUse / MultiStepTask route variants still exist in
+    // DirRoute but no guidance currently uses them — the verbose
+    // summary/stopping guidance they used to gate was removed
+    // (see directions.rs "the verbose rules ... have been removed").
     let mut directions_text = {
         use crate::context::{RouteContext, SystemPromptBuilder};
         let route_ctx = RouteContext {
@@ -590,6 +595,17 @@ pub fn build_system_prompt_with_tool_errors(
             .lock()
             .map(|s| s.snapshot())
             .unwrap_or((None, 0, None, 0));
+    // Same fingerprint contract as the primary assembly path: a
+    // per-turn-churning hash means volatile content leaked into the
+    // system prompt and the provider's prefix cache cannot cover
+    // tools + history.
+    let prompt_fingerprint = {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut h = DefaultHasher::new();
+        prompt.hash(&mut h);
+        format!("{:016x}", h.finish())
+    };
     tracing::info!(
         target: "hermix.prompt_cache",
         stable_chars = stable_text.len(),
@@ -604,6 +620,7 @@ pub fn build_system_prompt_with_tool_errors(
         cached_context_prompt_key = ?cached_context_key,
         cached_stable_chars = cached_stable_len,
         cached_context_chars = cached_context_len,
+        prompt_fingerprint = %prompt_fingerprint,
         "prompt_cache: assembled prompt (stable={stable_est}t context={context_est}t volatile={volatile_est}t → total={total_est}t)"
     );
 
@@ -649,15 +666,14 @@ pub fn build_system_prompt(
         tool_call_count,
     );
 
-    // ★ directions[] — evaluated per-turn with the REAL tool_call_count so
-    // HadAnyToolUse / MultiStepTask routes fire correctly. This block
+    // ★ directions[] — evaluated per-turn because their gating inputs
+    // (user message, active tool set, model) change every turn. This block
     // lives OUTSIDE the cached stable layer (keyed on
-    // model/personality/system_prompt/workspace only) because
-    // tool_call_count changes every turn. Previously directions were
-    // baked into the stable cache with tool_call_count=0, so
-    // HadAnyToolUse never fired — summary/stopping guidance was
-    // silently skipped, leaving the LLM with no "stop after real work"
-    // constraint and producing filler + repeated tool calls.
+    // model/personality/system_prompt/workspace only). Note: the
+    // HadAnyToolUse / MultiStepTask route variants still exist in
+    // DirRoute but no guidance currently uses them — the verbose
+    // summary/stopping guidance they used to gate was removed
+    // (see directions.rs "the verbose rules ... have been removed").
     let directions_text = {
         use crate::context::{RouteContext, SystemPromptBuilder};
         let route_ctx = RouteContext {
@@ -723,6 +739,17 @@ pub fn build_system_prompt(
             .lock()
             .map(|s| s.snapshot())
             .unwrap_or((None, 0, None, 0));
+    // Same fingerprint contract as the primary assembly path: a
+    // per-turn-churning hash means volatile content leaked into the
+    // system prompt and the provider's prefix cache cannot cover
+    // tools + history.
+    let prompt_fingerprint = {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut h = DefaultHasher::new();
+        prompt.hash(&mut h);
+        format!("{:016x}", h.finish())
+    };
     tracing::info!(
         target: "hermix.prompt_cache",
         stable_chars = stable_text.len(),
@@ -737,6 +764,7 @@ pub fn build_system_prompt(
         cached_context_prompt_key = ?cached_context_key,
         cached_stable_chars = cached_stable_len,
         cached_context_chars = cached_context_len,
+        prompt_fingerprint = %prompt_fingerprint,
         "prompt_cache: assembled prompt (stable={stable_est}t context={context_est}t volatile={volatile_est}t → total={total_est}t)"
     );
 
@@ -793,15 +821,9 @@ fn build_stable_layer(
     }
 
     // ★ directions[] moved to the per-turn dynamic layer in
-    //`build_system_prompt` . Previously directions were
-    // baked into the stable cache with tool_call_count=0, which meant
-    // HadAnyToolUse / MultiStepTask routes never fired — summary and
-    // stopping guidance were silently skipped every turn, leaving the
-    // LLM with no "stop after real work" constraint and producing
-    // filler + repeated tool calls. Evaluating directions per-turn with
-    // the real tool_call_count fixes this. The stable layer must NOT
-    // depend on per-turn state (tool_call_count) so the cache key stays
-    // stable across turns.
+    // `build_system_prompt`. The stable layer must NOT depend on
+    // per-turn state (user message, active tool set) so the cache key
+    // stays stable across turns.
 
     // ★ Inject the active tool list as a `<tools>` text block so the model
     // is *always* aware of what it can call — even if the native
@@ -910,7 +932,12 @@ fn build_stable_layer(
 3. 调用 `custom_app_manager` 的 `patch` action：传 `old_block`（直接取 issue.snippet 的精确文本）+ `new_block`，只动出错那几行做外科手术式替换。
 4. 再次 `validate` 复验，形成 `validate → patch → validate` 闭环，最多 3 轮。
 5. 3 轮仍 `ok=false` 即停止并向上汇报（说清卡在哪条 issue），不要反复重写整篇文件或把整篇源码甩给用户。
-上下文纪律：任何源码文件 >5KB 一律不整篇 read；靠 `validate` 的 snippet + `patch` by anchor 精准改；确需全局结构时调 `get` 拿 manifest/结构而非全文源码。"#,
+上下文纪律：任何源码文件 >5KB 一律不整篇 read；靠 `validate` 的 snippet + `patch` by anchor 精准改；确需全局结构时调 `get` 拿 manifest/结构而非全文源码。
+性能守则（validate 的 perf 类 issue 同样按上述闭环修复）：
+1. 禁止 innerHTML/outerHTML 全量赋值做状态更新——局部更新（textContent/createElement/key 复用 diff），初始化一次性渲染除外。
+2. 桥调用（window.hx.*）禁止出现在 for/while/map/forEach 内——循环外一次批量取回再渲染，storage 读写缓存到内存统一写回。
+3. 列表 ≥50 条必须分页/截断/虚拟滚动；数据多时避免 `.map(...).join("")` 拼整段 DOM。
+4. 不用 backdrop-filter 与全局 `* { transition }`；过渡只加在交互元素的具体属性（transform/opacity）。"#,
     );
 
     let mut rendered = builder.build().to_string();
@@ -1235,6 +1262,43 @@ pub fn resolve_initial_system_prompt(
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    /// 缓存稳定性回归（2026-09-28，对标 dsh 的 97%→11% 缓存 issue）：
+    /// 系统提示尾部的 "Conversation started" 块此前每 turn 用
+    /// `now()` 重新渲染。请求序列是 [system][tools][history]，前缀缓存
+    /// 要求逐字节一致 —— 尾部时间戳一变，tools 块与整段历史每 turn
+    /// 缓存全 miss。修复后该块由 `session_started_at`（会话内恒定）
+    /// 决定，模型/provider/session_id 相同的两次组装必须**字节一致**。
+    #[test]
+    fn dynamic_suffix_is_stable_within_a_session() {
+        let mut cfg = AgentConfig::default();
+        cfg.pass_session_id = true;
+        cfg.session_id = Some("sess-cache-1".to_string());
+        cfg.session_started_at = Some("2026-09-28T10:00:00+08:00".to_string());
+
+        let a = build_dynamic_suffix(&cfg, "deepseek-v4-pro");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let b = build_dynamic_suffix(&cfg, "deepseek-v4-pro");
+        assert_eq!(a, b, "suffix must be byte-identical across turns");
+        assert!(a.contains("Conversation started"));
+    }
+
+    /// 反向保证：不同会话的时间戳必须不同（否则模型会拿到别的会话的
+    /// 起始时间）。同时确认 model/provider 变化仍会改变该块——它们是
+    /// 合法且稳定的差异来源。
+    #[test]
+    fn dynamic_suffix_tracks_session_start_and_model() {
+        let mut cfg = AgentConfig::default();
+        cfg.session_started_at = Some("2026-09-28T10:00:00+08:00".to_string());
+        let base = build_dynamic_suffix(&cfg, "deepseek-v4-pro");
+
+        let mut other = cfg.clone();
+        other.session_started_at = Some("2026-09-28T22:30:00+08:00".to_string());
+        assert_ne!(build_dynamic_suffix(&other, "deepseek-v4-pro"), base);
+
+        let other_model = build_dynamic_suffix(&cfg, "deepseek-v4-flash");
+        assert_ne!(other_model, base);
+    }
 
     /// regression: the `prompt_cache.stable` slot used to be
     /// write-only — `build_system_prompt` would render `prefix_text` on

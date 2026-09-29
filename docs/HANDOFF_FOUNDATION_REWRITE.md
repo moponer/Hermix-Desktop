@@ -18,25 +18,25 @@
 - **模型/供应商配置面优化（`162f932f`，本批新增）**：审计 SystemConfigPanel 模型类三个 sub-tab（ModelTab / 图像 / CustomProvidersTab）+ 聊天窗口 ModelSelector + useCurrentModel 共 5 处配置面，钉出 6 个乱点后逐项定夺：
   - **已修（3 处 setConfig 回调内副作用反模式）**：CustomProviderSection 的 `handleFetchModelsForSavedProvider` / `handleFetchModels` / `handleSave` 此前在 `setConfig` updater 回调内执行 `writeModelConfigAndNotify` + `updateCustomProviderModelContexts` 副作用。React 允许 updater 被调用多次（严格模式 / 并发渲染）→ 副作用双写。改为基于 `config` 闭包（handler 内无其它 setConfig 竞争）纯计算 next，`setConfig(next)` 后一次性执行副作用，updater 保持纯函数。
   - **撤销误判项**：「useContextWindows 双解析」原判 ModelTab 与 CustomProviderSection 各调一次重复，复核后证伪——ModelTab 解析 enabled 模型集合、CustomProviderSection 解析全 custom 模型集合（未启用模型也显示 ctx），语义不同、各自必要，不动。
-  - **未擅动（跨文件架构决策，留主人定夺）**：(a) 双权威漂移——ModelTab 注释自称"enabled 起点是后端 config.yaml 权威、不自动合并"，CustomProvidersTab / ModelSelector 注释却自称"单一权威 = localStorage"，同一份数据 3 处各认一个权威；(b) safeId 前缀手抄——前端 L667 拼 `custom-` 前缀无"长度 ≥ 8"校验（后端 `create_custom_provider` 有该校验，短名会被 400 拒，前端无兜底提示）。
-- **双权威漂移 + safeId 治本修复（`07b42ebb` + `098f3d3`，本批收口）**：上条"未擅动"两项已由主人指令"能把代码侧闭环的干完"拍板实施：
+  - **未擅动（跨文件架构决策，留待定夺）**：(a) 双权威漂移——ModelTab 注释自称"enabled 起点是后端 config.yaml 权威、不自动合并"，CustomProvidersTab / ModelSelector 注释却自称"单一权威 = localStorage"，同一份数据 3 处各认一个权威；(b) safeId 前缀手抄——前端 L667 拼 `custom-` 前缀无"长度 ≥ 8"校验（后端 `create_custom_provider` 有该校验，短名会被 400 拒，前端无兜底提示）。
+- **双权威漂移 + safeId 治本修复（`07b42ebb` + `098f3d3`，本批收口）**：上条"未擅动"两项已由指令"能把代码侧闭环的干完"拍板实施：
   - **双权威漂移已统一**（`07b42ebb`）：ModelSelector reconcile 此前"localStorage 单一来源"注释与 ModelTab"后端 config.yaml 权威"注释矛盾，同一份数据 3 处各认一个权威。统一为：**后端可达 → 本地∩后端 = 权威 enabled 集合（后端空列表也是权威，清残留）；后端不可达（离线）→ 本地镜像兜底不吞勾选**。本组件永不主动调 saveModelList，写路径统一走 writeModelConfigAndNotify（一次写 localStorage + 推后端 + 事件扇出）。
   - **safeId 长度校验已补**（`098f3d3`）：后端 `create_custom_provider` 要求 id ≥ 8 字符，前端 handleFetchModels/handleSave 只查非空，name 仅 1 个无效字符时 safeId 退化为 "custom-"（7 字符）被 400 拒且无提示。加 `safeIdValid` 守卫（非 "custom-" 且 ≥ 8）+ 两入口提前拦截，后端 400 message 经 fetchJSON 透传兜底。
   - **setConfig 反模式连带清**（`098f3d3`）：ModelTab 的 setDefault/toggleModel/setModelContext + CustomProvidersTab 的 toggleModel/setDefault 共 5 处在 updater 内 safeSetTimeout 触发副作用（严格模式双执行→双写），改基于 config 闭包纯计算 + 一次性 setConfig + 外部副作用。CustomProvidersTab 注释同步修正为"后端权威"。
-- **模型配置重设计 P1 落地（`728cb5ef` 设计稿 + `29cf929d` 实施，本批收口）**：主人审定 `docs/MODEL_CONFIG_REDESIGN.md`「统一」原则（对照 pi-mono 单一实体：Provider 不分内置/自定义两套 UI）后实施 P1：
+- **模型配置重设计 P1 落地（`728cb5ef` 设计稿 + `29cf929d` 实施，本批收口）**：审定 `docs/MODEL_CONFIG_REDESIGN.md`「统一」原则（对照 pi-mono 单一实体：Provider 不分内置/自定义两套 UI）后实施 P1：
   - **删独立 `CustomProvidersTab` 组件**（`29cf929d`）：原「自定义模型」sub-tab 含第二份 config state + 纯 localStorage 监听 + 重复的 toggleModel/setDefault（与 ModelTab 行为一致但代码各写一份）。`CustomProviderSection` 内嵌进 ModelTab 的供应商区（SECTION 4），与内置 18 家供应商**共享同一份 config state 与写路径**（setDefault 经 `setDefaultByFullId` 适配签名）。SystemConfigPanel 删「自定义模型」sub-tab，`ModelTabId` 收窄为 `"model" | "image"`，清 `PenLine`/`CustomProvidersTab` 死 import。
   - **连带修 CustomProviderSection 的 onSetContext updater 反模式**：`storage.setItem` 副作用原在 `setConfig((prev) => ...)` updater 内（严格模式双执行→双写），改基于 `config` 闭包纯计算 + 一次性 setConfig + 外部写盘（与 `162f932f`/`098f3d3` 的反模式清理同规则）。
   - **净删 63 行（-109 +46）**，回归面 = 模型配置交互面（后端零改动）。P2 信息密度 / P3 默认模型自动化 / P4 真机验收 留后续批次。
-- **模型启用语义三刀（`a5484dcc`，主人拍板"启用清单完全由用户勾选驱动"）**：审计钉出旧语义三处违背"启用 = 用户选择"：① `mergeFetchedModels` 获取模型后自动启用全部可对话模型（用户没勾任何模型列表里已躺一堆）；② 聊天 ModelSelector 的 `availableExtras` 把 modelCache 里未启用模型照常列出且可选中对话；③ 空 enabled 时 modelCache 全量目录冒充 enabled 兜底，启用语义被架空。三刀全部落地：
+- **模型启用语义三刀（`a5484dcc`，拍板"启用清单完全由用户勾选驱动"）**：审计钉出旧语义三处违背"启用 = 用户选择"：① `mergeFetchedModels` 获取模型后自动启用全部可对话模型（用户没勾任何模型列表里已躺一堆）；② 聊天 ModelSelector 的 `availableExtras` 把 modelCache 里未启用模型照常列出且可选中对话；③ 空 enabled 时 modelCache 全量目录冒充 enabled 兜底，启用语义被架空。三刀全部落地：
   - **刀三**：删 `mergeFetchedModels` + 两个获取路径改为"只进目录缓存，enabled 不动"；`toggleModel` 增加首次勾选即设默认（`config.defaultModel || fid`）承接"懒人首配"路径。连带删孤儿链：`providerDefaults` state + mount 拉取、`getProviderDefaults` rest.ts 封装、settingsUtils `fullId` helper、单测 `mergeFetchedModels` describe 块（含墓碑测试，墓碑机制本身保留在 dismissed 字段与 toggleModel 写路径）。
   - **刀一**：删 ModelSelector `availableExtras`（未启用模型不再出现在聊天选择器、不可被选中对话）。
   - **刀二**：删空 enabled 时 modelCache 冒充 enabled 的初始 state 兜底（空就是空，空态提示"未配置，请先配置模型"）。
   - **语义变化**：首次配置从"填 Key → 获取 → 直接能聊"变为"填 Key → 获取 → 勾一个模型"（多 1 次点击），换启用语义 100% 由用户掌控；聊天窗口可选模型 ≡ 用户显式启用的模型，管理面单一无暗门。净删 214 行（-237 +23）。
-- **砍 /api/status 探活路由（`b46f660a`，主人拍板）**：前端唯一消费方 `getSystemStatus` 已随 `9a066d6` 砍除，`scripts/` 15 个文件 grep 零引用（原"外部 stdio 探活脚本消费"疑虑证伪）。删路由挂载 + `status.rs` 整模块（108 行）+ `types.rs` 的 `StatusResponse`/`PlatformStatus` 类型 + `tests/prop_status_schema.rs` 整文件 + `dashboard_smoke.rs::status_returns_version` 测试 + `tool_result_processor.rs` 注释死引用。净删 207 行。验证：cargo check 绿 / hermix-server lib 192 全绿。
+- **砍 /api/status 探活路由（`b46f660a`，拍板）**：前端唯一消费方 `getSystemStatus` 已随 `9a066d6` 砍除，`scripts/` 15 个文件 grep 零引用（原"外部 stdio 探活脚本消费"疑虑证伪）。删路由挂载 + `status.rs` 整模块（108 行）+ `types.rs` 的 `StatusResponse`/`PlatformStatus` 类型 + `tests/prop_status_schema.rs` 整文件 + `dashboard_smoke.rs::status_returns_version` 测试 + `tool_result_processor.rs` 注释死引用。净删 207 行。验证：cargo check 绿 / hermix-server lib 192 全绿。
 - **上下文压缩优化批次（对照 pi-mono / deepseek-harness 调研后收口）**：双 explore 调研钉出 5 项差距，逐项裁决：
   - **已落（`32ef801d`）**：P1-3 阈值口径统一——运行时单一权威 `CONTEXT_PRESSURE_TRIGGER_RATIO` / `CompressorConfig::default` = 0.90，5 处过时注释（config.rs 0.80/0.50、compression/mod.rs 0.50、agent_config.rs 0.50、agent_builder.rs 0.50）全部对齐 0.90。纯注释修正。
   - **证伪关闭**：P1-2 增量合并——本仓已实现（`summary.rs` `build_summary_prompt` 的 `previous_summary` UPDATE 分支 + `tests.rs` 迭代复用测试），无需改。P2-1 熔断可见性——`compression_ops.rs` post-snap 已带 `failure_reason` + 熔断 Open 态经 `emit_compaction_status` → WS → `CompactionStatusBanner` 全链可达，"仅 tracing::warn 静默"与代码不符。P2-2 质量劣化降级——与物理约束冲突：触发压缩时压力已 ≥85% 红线必须释放空间，prune-only 释放量不够；劣化兜底已齐（静态 fallback 是设计安全网 + `last_archived_turns` 无损落盘可回看）。
-  - **留主人裁决（P1-1 前缀缓存）**：deepseek 式"摘要调用复用主对话前缀 KV cache"前提是摘要走与主对话相同 provider/model；本仓 aux 链默认独立小快模型（跨模型无缓存收益），且摘要序列化经 redact + 截断 + 格式化非原始前缀，强行重放破坏脱敏。收益 ≈ 0，默认不做。
+  - **留待裁决（P1-1 前缀缓存）**：deepseek 式"摘要调用复用主对话前缀 KV cache"前提是摘要走与主对话相同 provider/model；本仓 aux 链默认独立小快模型（跨模型无缓存收益），且摘要序列化经 redact + 截断 + 格式化非原始前缀，强行重放破坏脱敏。收益 ≈ 0，默认不做。
   - **本仓已对齐参考项目的核心模式**：头 3 尾 20 保护、切点保护 toolCall↔toolResult 配对、结构化模板摘要、压缩结果持久化——不动。
 - **P2 信息密度批次落地（`8f6c532`，设计稿 `docs/MODEL_CONFIG_REDESIGN.md` §5 后续，本批立项）**：三刀（`a5484dcc`）后未启用模型无设置页入口（只能去聊天窗口勾选），补齐：
   - **未启用模型折叠分组**（SECTION 2 内、已启用列表下方）：数据源 = `fetchedModels` 目录缓存 − `config.enabled` − `config.dismissed` 墓碑 − 僵尸 custom provider（`custom-` 前缀且不在 `customIdsWithKey`）；单一布尔折叠态仿 CustomProviderSection 互斥展开写法；每行「启用」按钮调 `toggleModel`（自动撤墓碑 + 首次勾选设默认，三刀语义已实现，本批次不新增写路径）。
@@ -44,16 +44,16 @@
   - **三刀语义矛盾文案残留修正**：L578 内置供应商区"模型会缓存到本地并自动启用"→"缓存到本地（不会自动启用）→ 在上方「未启用模型」勾选启用"。
   - 纯前端（`ModelSettingsTab.tsx` 单文件 +57 -2），后端零改动。双绿：cargo check 绿 / tsc 直调 node `TSC_EXIT=0`（tsbuildinfo 全仓零命中无假绿）。
   - **未落项**（设计稿 P2 剩余）：虚拟滚动（当前模型量级无需，YAGNI 跳过）。
-- **方向 A 启动界面全量落地（`6803253`，主人 2026-09-23 设计稿补实施）**：诊断钉出 09-23 主人拍板"ABC 按主题"后 `cd2d0e9` 只做了 4 主题色值变量化，方向 A 样机（`design-previews/2026-09-23-splash-redesign/direction-a-claude.html`）的核心视觉元素从未进 `index.html`（主人 09-23 测时报"启动界面老旧"修的是 `html.dark` 割裂，不是结构）。本批补齐：
+- **方向 A 启动界面全量落地（`6803253`，2026-09-23 设计稿补实施）**：诊断钉出 09-23 拍板"ABC 按主题"后 `cd2d0e9` 只做了 4 主题色值变量化，方向 A 样机（`design-previews/2026-09-23-splash-redesign/direction-a-claude.html`）的核心视觉元素从未进 `index.html`（09-23 测时报"启动界面老旧"修的是 `html.dark` 割裂，不是结构）。本批补齐：
   - **index.html 视觉**：mascot 外层 wrap 承载呼吸光晕（`::after` halo 4s 无限缓放 + drop-shadow）/ 标题改衬线字家族（Iowan/Charter/Songti SC，26px 500）/ 进度条 4px + mono 百分比 meta 行 / 4 项启动阶段列表（逐项点亮，active 态 dot 脉冲）/ footer uppercase 版本行 / 删 CSS 自推进动画 `sp-progress-auto`（进度改由真实阶段驱动，不再假进度）/ reduced-motion 兜底覆盖新元素。
   - **main.tsx 状态机**：`hermix:boot-stage` 事件映射到 4 个固定阶段（推进 active/done + 进度条 + 百分比 + meta 文案），映射依据 `lib.rs` 的 `set_boot_stage` 真实序列（准备运行环境→解包内置技能→准备运行时组件→启动本地服务→等待服务就绪→服务已就绪），"解包技能"/"运行时组件" 归并到阶段 1，"启动服务"/"等待就绪" 归并到阶段 2；只前进不后退（事件乱序保险）；`dismissSplash` 补满 100% + 全阶段点亮；删旧 `setSplashStage`/`sp-stage-text` 引用。
   - 纯前端（`index.html` + `main.tsx` +178 -56），后端零改动。双绿：cargo check 绿 / tsc 直调 node `TSC_EXIT=0`（grep 确认旧引用零残留）。
   - **样机 vs 实施偏差**（诚实记录）：样机 4 阶段是 mock 文案（"检查运行环境/启动本地模型服务/加载工作台与历史/准备就绪"），实施改用 Rust 端**真实** boot-stage 序列对齐，避免"UI 说在干 X 实际在干 Y"。样机的 mascot halo 用 `rgba(201,100,66,0.06)` 硬编码暖色，实施改用 `color-mix(in srgb, var(--sp-accent) 7%, transparent)` 主题自适应（4 主题各自色相，不锁死暖米）。
-- **代码侧可闭环项清零（本批收尾盘点）**：模型/供应商配置面的 6 乱点中，3 处 setConfig 反模式（`162f932f` 3 处 + `098f3d3` 5 处共 8 处）、双权威漂移（`07b42ebb`）、safeId 校验缺失（`098f3d3`）全部闭环；"useContextWindows 双解析"复核证伪撤销；交互层两套路径痛点经 P1（`29cf929d`）统一为单一供应商面板；未启用模型入口缺口经 P2（`8f6c532`）补齐。配置面代码侧再无待办，剩余 P5/P8/P2（真机验收）需主人执行。
+- **代码侧可闭环项清零（本批收尾盘点）**：模型/供应商配置面的 6 乱点中，3 处 setConfig 反模式（`162f932f` 3 处 + `098f3d3` 5 处共 8 处）、双权威漂移（`07b42ebb`）、safeId 校验缺失（`098f3d3`）全部闭环；"useContextWindows 双解析"复核证伪撤销；交互层两套路径痛点经 P1（`29cf929d`）统一为单一供应商面板；未启用模型入口缺口经 P2（`8f6c532`）补齐。配置面代码侧再无待办，剩余 P5/P8/P2（真机验收）需执行。
 - **死代码 + 死引用 + 零消费路由盘点（`1845e271` + `9a066d6`，本批新增）**：
   - **polish.rs 死引用**（`1845e271`）：模块文档引用不存在的 `docs/TODO.md`，删除死行。
   - **前端死函数 + 孤儿类型**（`9a066d6`）：`getSystemStatus` 全前端零 import（`/api/status` 唯一前端消费方已死），`SystemStatus` 类型随死函数成孤儿（rest.ts import + 根 types.ts re-export 两处残留），一并清。
-  - **零前端消费路由全保留（10 条）**：`/v1/todos`/`/v1/tools`/`/v1/llm/warmup`/`/api/status`/`/api/skills`/`/api/analytics/*`/`/api/mcp/servers/reset`/`/api/automation/reset`/`/api/custom-providers`/`/v1/experts`/`/v1/tickloop`/`/v1/voice/transcribe`/`/v1/sessions/search`/`/v1/commands`/`/v1/sessions/{id}/lineage` 的 rest.ts 封装函数全部有 1+ 处前端 import（经封装间接消费），**路由不砍**。唯一前端零消费的是 `/api/status`（封装函数 `getSystemStatus` 已死），但路由本体保留——外部消费面 = stdio 探活 / curl 验收脚本，按"砍路由需全项目 grep 确认零外部引用"原则留主人定夺。
+  - **零前端消费路由全保留（10 条）**：`/v1/todos`/`/v1/tools`/`/v1/llm/warmup`/`/api/status`/`/api/skills`/`/api/analytics/*`/`/api/mcp/servers/reset`/`/api/automation/reset`/`/api/custom-providers`/`/v1/experts`/`/v1/tickloop`/`/v1/voice/transcribe`/`/v1/sessions/search`/`/v1/commands`/`/v1/sessions/{id}/lineage` 的 rest.ts 封装函数全部有 1+ 处前端 import（经封装间接消费），**路由不砍**。唯一前端零消费的是 `/api/status`（封装函数 `getSystemStatus` 已死），但路由本体保留——外部消费面 = stdio 探活 / curl 验收脚本，按"砍路由需全项目 grep 确认零外部引用"原则留待定夺。
   - **L8 重复评估**：`send_message`/`send_message_stream` 共享 ~300 行 setup 代码，提取 `prepare_and_run` helper 涉及 agent 热路径（session loading / gateway safety net / image handling / model resolution），回归面大，**不属本批"能干的干完"边界**，列为独立架构批次。
 - **审计批次清零（第三批收口后）**：`/v1/ws` + `/v1/ws-stream`（`181a51aa`，stdio bridge 替代后零消费）、ops/debug 4 端点（`e8aaa1fb`，无调用方直接砍）、`/api/logs`（`d38238f0`，前端已走 Rust 直读）全部砍除；`/v1/sessions/{id}/lineage`、`/api/cua/trace`、`/api/dashboard/plugin-inspect/{id}` 已随第一批 `d361cdfc` 砍除。原清单"需外部消费者确认"的 3 组保留疑虑全部证伪，**已无待确认项**。
 - **已修的真 bug（`cd8ef36e`）**：`/api/custom-apps/{id}/icon` 前端裸 `<img src>` 不经 stdio bridge，Tauri 生产环境永远 404（上传 PNG 图标全静默失效）。治本：IconImage 改走 `fetchJSONBinary` 拉 blob → objectURL，失败才降级 lucide；防回归测试 3 条（vitest 绿 + tsc 绿）。
@@ -67,7 +67,7 @@
 | 顺序 | 文档 | 作用 |
 |---|---|---|
 | 1 | `docs/FOUNDATION_REWRITE_DESIGN.md` | **总设计 v2**（权威）。§1 边界（重写/重构/砍掉/保留）、§3 底座架构、§5 网络安全层、§7 执行阶段 P0-P8、§11 Non-goals |
-| 2 | `docs/SEAMS_DESIGN.md` | C3 接缝设计（主人已拍板 S1-S5）。§2 八个接缝签名、§3 五个关键决策 |
+| 2 | `docs/SEAMS_DESIGN.md` | C3 接缝设计（已拍板 S1-S5）。§2 八个接缝签名、§3 五个关键决策 |
 | 3 | `docs/STABLE_FOUNDATION_DESIGN.md` | v1 设计（对照保留）。§1 症状→根因诊断、六条不变量仍有效 |
 | 4 | `AGENTS.md`（仓库根） | 构建/验证命令、项目约定、六步决策阶梯、核心原则 |
 | 5 | `.workbuddy/memory/2026-09-24.md` | 本轮全部批次的实施细节与踩坑记录 |
@@ -77,7 +77,7 @@
 
 ---
 
-## 1. 主人已拍板的决策（不可重新讨论）
+## 1. 已拍板的决策（不可重新讨论）
 
 | # | 决策 | 结论 |
 |---|---|---|
@@ -316,30 +316,30 @@ CARGO_INCREMENTAL=0 cargo test -p <crate> --lib   # 改了哪个 crate 测哪个
 - 映射语义：started 时 conversation_id 未知退化 `"unknown"`；terminal 时读既有记录保留 conversation_id；orphaned→`TaskOutcome::Orphaned`/failed→`Faulted`/aborted→`Aborted`
 - 测试：适配器 3 个（started→terminal 保留 conversation_id / failed→Faulted 带 error / orphaned→Orphaned），server lib 197 全绿；hermix-agent lib 1051 与基线一致
 
-**已落**（减少审批 A+B — 主人反馈 `1c628052`）：
-- **主人反馈**："读/写操作仍旧反复弹审批，之前设计过减少审批但没生效"。取证钉死根因：
+**已落**（减少审批 A+B — 反馈 `1c628052`）：
+- **反馈**："读/写操作仍旧反复弹审批，之前设计过减少审批但没生效"。取证钉死根因：
   - read-only 文件工具（`read_file`/`read_image`/`search_files`/`list_directory`）早已在 `resource_guard`（`local_agent_service.rs:1099-1107`）豁免路径检查；工作区根目录也早已 `grant_path(ws)`（`2028-2032`）——"读操作弹卡"实为 terminal 只读命令未命中 `READONLY_PATTERNS`（`engine.rs` 的 readonly 列表）或 terminal 非只读命令前缀未 grant
   - **真正的"反复弹"来源**：`PermissionProfile.granted_commands` 默认**为空**（`#[serde(default)]`），terminal 的 `allows_command` 要求命中白名单前缀 + 词边界 + 无 shell 链——`git`/`cargo`/`node`/`pnpm`/`set` 等各弹一次卡，"反复弹"即此
 - **修复（A+B，最小切片）**：
   - **A**：`local_agent_service.rs` profile_arc 构造处加 `DEFAULT_GRANTED_COMMANDS`（17 个前缀：git/cargo/node/pnpm/npm/npx/python/python3/pwsh/powershell/cmd/where/dir/type/find/grep/ls）默认 `grant_command`。危险模式由 **L0 hardline blocklist** 兜底（`decide_pre_tool_dispatch` 在 risk gate 之前先查 `check_hardline_blocklist`：`rm -rf /`、fork bomb、`curl|sh`、`dd` to block device 等永不触达 profile 门控）——前缀 grant 不降安全底线
   - **B**：read-only 豁免语义已在 `resource_guard` 实现（1099-1107 行），本批补 3 个**钉死测试**（防回归）：① read-only 文件工具在越界路径（`c:/other`，profile 只 grant `c:/workspace`）也永不弹卡；② `write_file` 越界**必须**弹卡（反向边界——只读免卡、写越界仍卡，不能一刀切全免）；③ 前缀匹配词边界（`git` 不匹配 `gitx`）+ shell 链操作符仍被拒（`git status && rm -rf /` 仍弹卡）+ 未 grant 前缀仍弹卡
-- **YAGNI 定界**：不动 risk 门控（Caution 在 Default 模式本来就直连 Allow，`local_agent_service.rs:1295-1297`）；不动 Tirith 默认规则（只拦 terminal shell-injection/system-paths，不拦 write_file）；不动 READONLY_PATTERNS 列表（覆盖度已够，`find` 的 `-delete`/`-exec` 例外单独处理）；不做"grant 持久化到 config.yaml 跨会话复用"（C 方案，主人没拍板，留待后续批次）
+- **YAGNI 定界**：不动 risk 门控（Caution 在 Default 模式本来就直连 Allow，`local_agent_service.rs:1295-1297`）；不动 Tirith 默认规则（只拦 terminal shell-injection/system-paths，不拦 write_file）；不动 READONLY_PATTERNS 列表（覆盖度已够，`find` 的 `-delete`/`-exec` 例外单独处理）；不做"grant 持久化到 config.yaml 跨会话复用"（C 方案，产品方没拍板，留待后续批次）
 - **验证**：`cargo check --workspace --all-targets` 绿（剩余 warning 为 pre-existing `prop_max_turns`）；hermix-agent lib **1054 全绿**（1051 基线 + 3 新测试，零回归）
 - **后续批次（本批已落）**：见下方「Windows 吞斜杠隐患修复」段（`2b14e53a`）。
 
-**已落**（审批豁免终态 — 主人 2026-09-26 拍板「写文件与常规命令执行不用审批，只有删除等高危才审批」`c105c4d`）：
-- **主人反馈**："审批还是弹，都是执行命令和写入文件的……写文件和命令执行（命令是设置环境变量或命令编码的）不用审批"。取证钉死根因（推翻此前假设）：
+**已落**（审批豁免终态 — 2026-09-26 拍板「写文件与常规命令执行不用审批，只有删除等高危才审批」`c105c4d`）：
+- **反馈**："审批还是弹，都是执行命令和写入文件的……写文件和命令执行（命令是设置环境变量或命令编码的）不用审批"。取证钉死根因（推翻此前假设）：
   - **写文件弹卡**：来源是 `resource_guard` 的「未授权路径」资源门（非 risk gate）。`write_file`/`patch` 虽是 `Caution` 级（risk gate 本就放行），但 `resource_guard` 对**任意**文件工具做 `profile.allows_path` 检查，工作区外的写入路径（项目外文件、临时文件、配置目录等）全部弹「未授权路径」卡。P6 设计只 grant 单一 workspace 根，写盘位置一多就反复弹卡。
   - **命令执行弹卡**：来源**不是** `check_approval` 引擎（对 env 设置/编码命令本就零拦截），而是 `resource_guard` 的「未授权命令」资源门——旧实现用 `!hermix_tools::is_readonly_command(cmd) && !profile.allows_command(cmd)` 拦截**所有首 token 不在 grant 列表**的命令。`$env:FOO=...`/`export`/`powershell -enc <b64>` 等首 token 均非 grant 列表里的可执行文件 → 一律弹「未授权命令」卡。`contains_shell_chain_operator` 的 `;`/`&&` 扫描又雪上加霜（env 设置惯用 `;` 连写）。
-  - 即：主人的体验 = 资源门（path grant + command grant）在**常规写盘 + 常规命令**上误伤，而非命令执行层的 CONFIRM/DENIED 审批规则。
+  - 即：产品方的体验 = 资源门（path grant + command grant）在**常规写盘 + 常规命令**上误伤，而非命令执行层的 CONFIRM/DENIED 审批规则。
 - **修复（`c105c4d`，两处拆除误伤源）**：
   - **`resource_guard`（`local_agent_service.rs`）重写**：
     - 内容写工具（`write_file`/`patch`/`move_file`）移出资源门——本机自主机上的内容写/改/移动是低风险，弹「未授权路径」卡纯摩擦。旧 `WRITE_FILE_TOOLS` 常量整体移除。
     - 命令执行（`terminal`/`code_execution`）拆除 command-grant 资源门——旧「未授权命令」分支删除，命令执行直接放行。`is_readonly_command`/`contains_shell_chain_operator` 在资源门侧不再被调用（函数本体保留，仍被 `check_approval` 引擎 readonly 豁免 + 其它调用方使用，非孤儿）。
-    - **删除类保留资源门**：新增 `DESTRUCTIVE_FILE_TOOLS`（`delete_file`/`disk_cleanup`），越出授权目录仍弹「未授权删除路径」卡——这是主人明确接受「才审批」的高危项。
+    - **删除类保留资源门**：新增 `DESTRUCTIVE_FILE_TOOLS`（`delete_file`/`disk_cleanup`），越出授权目录仍弹「未授权删除路径」卡——这是产品方明确接受「才审批」的高危项。
   - **`CONFIRM_PATTERNS`（`engine.rs`）收紧**：
-    - 删 `powershell-encoded` 规则（`powershell -enc`/`-EncodedCommand <b64>`）——编码只是载荷形式，非破坏性动作，主人点名「命令编码的不用审批」。破坏性命令仍由 DENIED + 各删除类 CONFIRM（`del`/`erase`/`rm-recursive`/`format`/`diskpart`…）兜底，不新增破口。
-    - 保留 `execution-policy-bypass`（`-ExecutionPolicy Bypass`）——修改系统安全姿态属高危，不在主人举例的常规命令执行内。
+    - 删 `powershell-encoded` 规则（`powershell -enc`/`-EncodedCommand <b64>`）——编码只是载荷形式，非破坏性动作，产品方点名「命令编码的不用审批」。破坏性命令仍由 DENIED + 各删除类 CONFIRM（`del`/`erase`/`rm-recursive`/`format`/`diskpart`…）兜底，不新增破口。
+    - 保留 `execution-policy-bypass`（`-ExecutionPolicy Bypass`）——修改系统安全姿态属高危，不在产品方举例的常规命令执行内。
     - 修 `shutdown` 规则误伤：原 `\b(shutdown|Stop-Computer|Restart-Computer)\b` 会把散文词 "shutdown"（变量名/echo 内容/文档）误判为高危。收紧为 `\bshutdown\s+/[srpth]\b`（必须紧跟系统关机参数才指向关机动作）+ 保留 `Stop-Computer`/`Restart-Computer`（PowerShell 专用 cmdlet 不可能出现在散文里）。
   - **破坏性命令仍被下游层独立兜底（关键不变量）**：拆除资源门的 command-grant 后，`rm -rf`/`del`/`format`/`diskpart`/`mkfs` 等破坏性命令仍由 `check_approval` 的 DENIED/CONFIRM 规则 + hardline blocklist 拦截，不依赖被删的 grant 前缀匹配。即「命令执行不用审批」放行的只是常规命令（env 设置/编码命令/构建/测试），破坏性命令的高危门完好。
 - **测试同步（`c105c4d`）**：
@@ -348,7 +348,7 @@ CARGO_INCREMENTAL=0 cargo test -p <crate> --lib   # 改了哪个 crate 测哪个
   - 删孤儿测试 `default_granted_command_prefixes_pass_allows_command`：`resource_guard` 不再消费 `allows_command`，该测试语义已失效（`DEFAULT_GRANTED_COMMANDS` 与 `granted_commands`/`allows_command`/`grant_command` 字段仍保留在 `PermissionProfile`，供其它消费方与未来批次，YAGNI 不连带删）。
 - **YAGNI 定界**：不删 `PermissionProfile` 的 command-grant 能力（`granted_commands`/`allows_command`/`grant_command`/`DEFAULT_GRANTED_COMMANDS` 保留——`PendingGrant::apply_to` 的 command grant 路径仍调用，删除面大且无收益）；不动 risk gate（Caution 直连 Allow 的既有语义）；不动 `execution-policy-bypass` 与其它删除/系统类 CONFIRM 规则（高危门保留）。
 - **验证**：`cargo check --workspace --all-targets` 绿（仅 1 条 pre-existing `prop_max_turns` warning，与本批无关）；hermix-tools lib **699 全绿**；hermix-agent lib **1054 全绿**（含 3 个 resource_guard 测试，零回归）；前端 tsc `--noEmit` `TSC_EXIT=0`。
-- **教训（对后续 agent）**：主人的「减少审批」诉求指向的是**资源门（P6 path/command grant）在常规操作上误伤**，而非 CONFIRM/DENIED 引擎。此前假设「write_file 是 Caution 不会弹 risk 审批所以写文件不该弹卡」是错的——弹卡的来源是资源门的 path/command grant，不是 risk gate。诊断审批误伤先分清三层各自的作用面：risk gate（Caution 直连 Allow）/ resource_guard（path + command grant）/ check_approval（CONFIRM/DENIED 引擎），别在错层打补丁。
+- **教训（对后续 agent）**：产品方的「减少审批」诉求指向的是**资源门（P6 path/command grant）在常规操作上误伤**，而非 CONFIRM/DENIED 引擎。此前假设「write_file 是 Caution 不会弹 risk 审批所以写文件不该弹卡」是错的——弹卡的来源是资源门的 path/command grant，不是 risk gate。诊断审批误伤先分清三层各自的作用面：risk gate（Caution 直连 Allow）/ resource_guard（path + command grant）/ check_approval（CONFIRM/DENIED 引擎），别在错层打补丁。
 
 **已落**（Windows 吞斜杠隐患修复 — deepseek-harness 对照 `2b14e53a`）：
 - **Harness 对照研究收口（#5）**：deepseek-harness 的 Windows 命令执行关键设计取证——① `argv` 永不 shell 解析（`SubprocessSpawnSpec.argv` 直传 `CreateProcessW`，绕开 `cmd /c` 转义层，吞斜杠/引号错乱隐患从构造上不存在）；② `quoteArg` 精确对齐 `CommandLineToArgvW` 反解析语义（反斜杠只在引号前翻倍）；③ 工具描述层明示 PowerShell 方言（路径用 native `C:\...` 形态，cmdlet 优先于 cmd.exe 等价物）。本仓库对照：`LocalBackend::execute_command`（`local.rs`）的 **PowerShell 路由（`arg("-Command").arg(...)` argv 直传）与 native dispatch fast-path 已天然免疫**；唯一字符串拼接面是 **cmd.exe /c 路由**（整段命令字符串交给 cmd.exe 解析）；workdir 路径 `strip_win32_long_path_buf` 已剥 `\\?\`。
@@ -356,7 +356,7 @@ CARGO_INCREMENTAL=0 cargo test -p <crate> --lib   # 改了哪个 crate 测哪个
   - **运行时层**（`hermix-environments/local.rs`）：新增 `normalize_windows_path_slashes`，在 cmd 路由 `normalize_windows_cmd_prefix` 之后把路径形态的 forward slash 归一化成 backslash。判定语义：drive（`C:/`，prev 是 `:` 且 i-2 是字母）/ tilde（`~/`）/ 相对路径段（`a/b`，prev 是字母/点/反斜杠）翻 backslash；**cmd 开关**（`/I` `/b` `/c`——斜杠紧跟字母且前是空格/引号/括号）与 **URL token**（含 `://` 的整个 token，`com/x` 这类 URL 内路径不是 Windows 路径）保持不动。
   - **提示层**（`hermix-tools/terminal.rs`）：terminal 工具的 `command` 参数 description 明示 native Windows 路径形态（backslash）+ PowerShell cmdlet 优先 + 含空格路径双引号包裹——从源头减少 LLM 按 POSIX 习惯发 forward slash。
 - **方案曲折（教训）**：`is_drive_sep` 判定首版写成"prev 是字母 + i-2 是空白/引号"——**错在 drive 斜杠 `C:/` 的 prev 是 `:`（冒号）不是字母**，probe 探针（`eprintln!` 打印每个 slash 的真实布尔中间值）一跑就暴露：`C:/` 的 drive 斜杠全 false 而段间斜杠 true。drive 的正确判定是 "prev 是 `:` 且 i-2 是字母"。URL scheme 守卫首版 `i+2==/` 太宽松误伤 `C:/x/`，改为"token 含 `://` 则整个 token 不翻"。
-- **YAGNI 定界**：不切 argv 直传 cmd 路由（大改——cmd /c 字符串是 Windows 命令的既有语义面，argv 直传会改变 quote/转义行为，需主人确认）；引号嵌套错乱（`dir "C:\a"b"`）需 cmd 引号重排器、风险高，留待后续。
+- **YAGNI 定界**：不切 argv 直传 cmd 路由（大改——cmd /c 字符串是 Windows 命令的既有语义面，argv 直传会改变 quote/转义行为，需产品方确认）；引号嵌套错乱（`dir "C:\a"b"`）需 cmd 引号重排器、风险高，留待后续。
 - **验证**：`cargo check --workspace --all-targets` 绿；hermix-environments lib **52 全绿**（44 基线 + 8 新斜杠测试：drive/小写 drive/tilde/相对路径/开关不动/mixed/URL scheme 保留/反斜杠幂等）；hermix-tools lib **697 全绿**（零回归，terminal schema 描述改动不影响既有测试）
 
 **已落**（P6 审计日志读端点 `GET /api/pairing/audit` — `08307f7e`）：
@@ -388,12 +388,12 @@ CARGO_INCREMENTAL=0 cargo test -p <crate> --lib   # 改了哪个 crate 测哪个
 - **验证**：`cargo check --workspace --all-targets` 绿；hermix-core tolerant 4 测试绿（user_repro 精确串 / `]<]minimax[>[` 残骸 / 完好输入零行为变化 / 无标记不误伤）；hermix-agent lib **1051 全绿**（与基线一致，tolerant 接线未新增 agent 测试——解析逻辑全在 hermix-core，agent 侧仅调用点）。
 
 **已落**（命令执行模型对齐（抄成熟方案） — deepseek-harness / pi agent 取证 `afdedf5a` + `9bdef3a8`）：
-- **主人指令**："我的命令使用工具调用很舒服很顺利，我们项目就不行——一定要抄人家成熟的，别总是不把我的话当回事"。两个参照源取证：
+- **指令**："我的命令使用工具调用很舒服很顺利，我们项目就不行——一定要抄人家成熟的，别总是不把我的话当回事"。两个参照源取证：
   - **deepseek-harness**：shell program 表是 in-process 函数（`programs/{text,files,builtins,options}.ts` 里 30+ 命令都是普通 JS 函数），不 spawn OS 进程；`runShellProgram(argv)` 直接吃 argv，**不再对已分词的东西 re-quote**；管道 = 传字符串（"output is text, not streams"）。
   - **pi agent**：纯 `spawn(shell, args, { shell:false })` argv 直传 + `OutputAccumulator`（滚动 buffer + 超限落 temp file + tail 截断）+ 进程树 kill + 流式 `onData`。Windows 用 Git Bash 或 PowerShell 做 shell 层。**没有任何手写命令实现**。
   - 两边共同根子：**命令执行不走"字符串 join 给 OS shell"，要么 in-process 函数表，要么 argv 直传 spawn**。本仓库"不顺"的根 = `cmd.exe /c` 字符串拼接 + 手写 2000 行 coreutils 字典。
 - **删除（afdedf5a）**：
-  - `crates/hermix-coreutils`（~2000 行手写 ls/cat/grep/sed/find/... dispatch 字典，主人评"没好用过"，且 LLM 发 POSIX 名在 Windows 易吃"不是内部或外部命令"）
+  - `crates/hermix-coreutils`（~2000 行手写 ls/cat/grep/sed/find/... dispatch 字典，产品方评"没好用过"，且 LLM 发 POSIX 名在 Windows 易吃"不是内部或外部命令"）
   - `crates/hermix-shell-parser`（Pure/ShellMeta 分类器，仅 coreutils fast-path 一个消费者，删 dispatch 后无消费者，YAGNI 砍掉）
   - 两者在 workspace `Cargo.toml` 的成员/依赖声明
   - `local.rs` 的 native dispatch 块（`coreutils::dispatch` 调用 + `parse` 分类）+ `hermix_coreutils` / `hermix_shell_parser` import
@@ -405,14 +405,14 @@ CARGO_INCREMENTAL=0 cargo test -p <crate> --lib   # 改了哪个 crate 测哪个
 - **提示词层对齐（9bdef3a8）**：
   - `terminal.rs` command 参数 description 重写：明示 PowerShell 统一 shell 层 + cmdlet 优先（Get-ChildItem/Get-Content/Select-String/Get-Process）+ POSIX 别名可用 + native 反斜杠路径形态。
   - `directions.rs` ENVIRONMENT_SHELL_GUIDANCE 段重写："Git Bash 做 shell 层"旧心智换成"统一 PowerShell shell 层"；cmdlet 优先清单；删 Git Bash 引号剥离、`/c/Users` 翻译等已不成立条目。
-- **YAGNI 定界**：不重写 hand dict 为"成熟库实现"（主人要的是"抄 pi/deepseek-harness 的模型"——pi 根本没有 hand dict，in-process 函数表；本仓库对齐 = 删 hand dict + 统一 shell 层，而非把 2000 行字典换成另一套 2000 行）；不引入 uutils/microsoft coreutils exe（主人纠正：不是塞外部 exe，是对齐执行模型）；不做 pi 的 `OutputAccumulator` 流式累积（现有 `max_output_size` 截断已够，流式输出是 UI 层关切，非命令执行模型关切）。
+- **YAGNI 定界**：不重写 hand dict 为"成熟库实现"（要求的是"抄 pi/deepseek-harness 的模型"——pi 根本没有 hand dict，in-process 函数表；本仓库对齐 = 删 hand dict + 统一 shell 层，而非把 2000 行字典换成另一套 2000 行）；不引入 uutils/microsoft coreutils exe（产品方纠正：不是塞外部 exe，是对齐执行模型）；不做 pi 的 `OutputAccumulator` 流式累积（现有 `max_output_size` 截断已够，流式输出是 UI 层关切，非命令执行模型关切）。
 - **验证**：`cargo check --workspace --all-targets` 绿；hermix-environments lib **46 全绿**（含新 timeout 测试）；hermix-tools lib **697 全绿**（零回归）；hermix-agent lib **1054 全绿**（零回归，directions 文案改动不影响既有测试）。
-- **收口批次（`835fa7ff` + `3071fc90`，主人"继续"指令）**：
+- **收口批次（`835fa7ff` + `3071fc90`，产品方"继续"指令）**：
   - **READONLY_PATTERNS 缺口修复（`835fa7ff`）**：取证发现审批引擎只读豁免清单虽已含经典 POSIX 名（ls/cat/grep/findstr/dir），但缺 PowerShell 路由后高频的 8 个只读 cmdlet（Select-String/Test-Path/Get-Date/Get-Command/Get-Location/Get-Alias/Get-Member/Get-FileHash）——我推 LLM 用 Select-String 却会让它必弹审批卡。补齐 + 钉死测试 `powershell_route_readonly_cmdlets_are_allowlisted`。
   - **真机冒烟钉死（`835fa7ff`）**：hermix-environments 加 2 个测试钉死新路由语义——`powershell_route_posix_alias_lists_directory`（ls 别名 + workdir 生效）/ `powershell_route_unknown_command_reports_nonzero_exit`（未知命令 exit≠0 且 stderr 非空）。真机探针钉死事实：ls/cat 内建别名可用；正斜杠路径 PS 自动归一；显式 exit code 原样传播。
   - **grep 别名不实陈述修正（`3071fc90`）**：真机探针证实 PowerShell 内建 POSIX 别名只有 ls→Get-ChildItem 与 cat→Get-Content，**grep 没有内建别名**——上一批描述里"grep→Select-String all work"会让 LLM 发 grep 吃 "not recognized"。terminal.rs description + directions.rs 首段同步修正为"grep has NO built-in alias — use Select-String"。
   - **收口验证**：workspace check 绿 / hermix-environments lib **48 全绿**（46+2）/ hermix-tools lib **698 全绿**（697+1）/ hermix-agent lib **1054 全绿**（零回归）。
-- **第三段收口（`340ec5ad` + `322a039d` + `71f79d16`，主人"继续"指令）**：
+- **第三段收口（`340ec5ad` + `322a039d` + `71f79d16`，产品方"继续"指令）**：
   - **native exit code 语义钉死**：真机探针钉死——native 子进程失败码经 PowerShell 折叠为 1（成功仍为 0），"成败判定"语义成立；PS 级 `exit 42` 语句原样传播（既有测试覆盖）。按六步阶梯不做 `$LASTEXITCODE` 包装（字符串拼接层 + 残留码风险，YAGNI）。钉死测试 `powershell_route_native_failure_propagates_nonzero_exit`（教训：`cmd /c exit 42` 本身无输出，勿断言 stderr 非空）。
   - **ssh.rs 引号函数换 shlex（`340ec5ad`）**：手写 allowlist 只在空白/引号/反斜杠/$/反引号处加引号——分号/管道等元字符不在触发集，含分号的注入串原样透传给远端 shell 执行第二条命令（信任边界校验属不可削减项）。`shlex_quote_local` 委托 `shlex::try_quote`（与 hermix-agent 同一版本线 1.3.0，已在 workspace lock 零新增依赖树）；钉死测试断言注入串被加引号且 `shlex::split` 回溯还原单 token。ssh 模块在 `--features ssh` 门控后，测试要带 feature 跑。
   - **残留 cmd 假设扫描（`322a039d` + `71f79d16`）**：两处产出——
@@ -423,7 +423,7 @@ CARGO_INCREMENTAL=0 cargo test -p <crate> --lib   # 改了哪个 crate 测哪个
 - **后续批次（划出）**：pi 的 `OutputAccumulator`（滚动 buffer + 超限落 temp file + tail 截断 + 流式 onData）——属 UI 流式输出批次，非命令执行模型；deepseek-harness 的 in-process shell program 表（VFS + 30+ JS 函数）——属 webworker 沙箱实验层，本仓库非 webworker 架构，不适用。
 
 **已落**（Windows ACL 沙箱批次 — deepseek-harness `sandbox-windows-acl` 方案对齐，`1dd2895b` + `0d61fb90`）：
-- **主人拍板**："需要补上，尽量使用人家成熟的方式"——取证 deepseek-harness 有完整 `packages/sandbox` 组（fail-closed `SANDBOX_UNAVAILABLE`，三模式 read-only/workspace-write/danger-full-access，审批是沙箱之上的 escalation 出口）；其 Windows 方案是**裸 ACL restricted token**（非 AppContainer，决策文档已论证）。pi agent 无 OS 沙箱（纯审批模型），故参照源取 deepseek。
+- **拍板**："需要补上，尽量使用人家成熟的方式"——取证 deepseek-harness 有完整 `packages/sandbox` 组（fail-closed `SANDBOX_UNAVAILABLE`，三模式 read-only/workspace-write/danger-full-access，审批是沙箱之上的 escalation 出口）；其 Windows 方案是**裸 ACL restricted token**（非 AppContainer，决策文档已论证）。pi agent 无 OS 沙箱（纯审批模型），故参照源取 deepseek。
 - **实现（`1dd2895b`，`crates/hermix-environments/src/sandbox.rs` ~1000 行）**：
   - 受限 token：`CreateRestrictedToken(WRITE_RESTRICTED | DISABLE_MAX_PRIVILEGE | LUA_TOKEN)`；restricting 列表 = logon SID + Everyone + 能力 SID（logon/Everyone 是 keep-alive 不变量，缺一即 0xC0000142）；token default DACL 并入 restricting SID full-access ACE（否则新建匿名管道 EPERM）；完整性降到 Low。
   - 能力 SID：sha256 路径派生 `S-1-4-x-y`（工作区）/ `S-1-4-x-y-1`（temp，域分离防兄弟会话互写）；跨会话确定性 → standing ACE 复用。
@@ -490,5 +490,5 @@ CARGO_INCREMENTAL=0 cargo test -p <crate> --lib   # 改了哪个 crate 测哪个
 ## 7. 工作区遗留物（接手前处理）
 
 - `paired_smoke.json`（仓库根）：冒烟测试残留，**含一次性明文 device_token，直接删除**。
-- ~~untracked 文件（`WorkbenchChat.tsx`、`DiagnosticsTab.tsx`、三个 docs、两个 scripts）~~：**已归档入库**（主人 2026-09-26 授权"该提交的提交"；`192f815a` 脚本 / `83619e9d` 设计文档 / `43c12e03` 前端组件，组件经 tsc 验证）。
+- ~~untracked 文件（`WorkbenchChat.tsx`、`DiagnosticsTab.tsx`、三个 docs、两个 scripts）~~：**已归档入库**（2026-09-26 授权"该提交的提交"；`192f815a` 脚本 / `83619e9d` 设计文档 / `43c12e03` 前端组件，组件经 tsc 验证）。
 - `.scratch/` 与 `design-previews/`：一次性脚本草稿 / splash 设计预览稿，保留本地不入库，已加 `.gitignore`。

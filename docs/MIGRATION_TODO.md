@@ -37,7 +37,7 @@
 
 - `crates/hermix-telemetry/src/otlp.rs` 实现 OTLP HTTP exporter
 - `tracing-subscriber = "0.3"` + features `["env-filter", "json"]` 已用（`Cargo.toml` workspace dep）
-- 默认走 stdout JSON（满足主人哲学"做好自己"，不上 OTel collector）
+- 默认走 stdout JSON（满足产品哲学"做好自己"，不上 OTel collector）
 - OTLP 通过 `cargo build --features otlp` 启用（按需）
 
 ### §3 Sidecar watchdog — ✅ 完成
@@ -78,7 +78,7 @@
 - **真要补的是** `hermix-server ↔ hermix-gateway` 跨进程 Bus，但当前两者在同一进程，**没有真实需求**
 - 1 周工作量 × 无 caller = 留半截子 = 删
 
-**何时重做**：主人明确要把 hermix-server 拆成独立进程（OS-level multi-instance）时再评估
+**何时重做**：产品方明确要把 hermix-server 拆成独立进程（OS-level multi-instance）时再评估
 
 ### ❌ §6 agent_loop 拆分（9178 → 4000 行）— 延期
 
@@ -111,7 +111,7 @@
 | `cargo check --workspace --all-targets` | ✅ 0 error |
 | `cargo test --workspace --lib` | ✅ 2224 passed / 0 failed / 2 ignored（2026-07-02） |
 | `pnpm tsc --noEmit` | ✅ 0 errors |
-| ARCHITECTURE_BENCHMARK.md → v7 | ❌ 没更新（等主人确认 v7 命名 / 是否合并到本份） |
+| ARCHITECTURE_BENCHMARK.md → v7 | ❌ 没更新（等产品方确认 v7 命名 / 是否合并到本份） |
 | CHANGELOG.md | ❌ 不存在（无 release 流程需要） |
 
 **结论**：除文档 v7 升级外，技术验证全过
@@ -122,7 +122,7 @@
 
 - 本份不是新计划，是状态同步
 - 延期 ≠ "TODO"，是"scope 评估后不做"
-- 真有需求时主人会触发；不主动开超出 scope 的活
+- 真有需求时产品方会触发；不主动开超出 scope 的活
 - 任何"今天顺手能做的 P1"做完直接划掉
 
 ---

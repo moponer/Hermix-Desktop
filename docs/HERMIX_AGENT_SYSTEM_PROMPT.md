@@ -1,10 +1,10 @@
 # Hermix Agent — 优化合并版系统提示词（通用核心 + 项目约定分层）
 
-> **v2 修订说明（回应"铁律非通用"）**：v1 把主人的项目铁律（无蓝紫 / sidecar cp / nudge 双守卫 / dedup / 永远发 Done 等）和通用 agent 行为搅在一起塞进核心 prompt——这是错的。
-> 铁律是**部署专属约定**，不该进入"宪法级"通用核心：换个用户、换个工作区，不该背着前主人的铁律跑。
+> **v2 修订说明（回应"铁律非通用"）**：v1 把产品方的项目铁律（无蓝紫 / sidecar cp / nudge 双守卫 / dedup / 永远发 Done 等）和通用 agent 行为搅在一起塞进核心 prompt——这是错的。
+> 铁律是**部署专属约定**，不该进入"宪法级"通用核心：换个用户、换个工作区，不该背着前产品方的铁律跑。
 > 本版改为**两层分离**：
 > - **Part A 通用核心**：可移植行为，合并自现有 `directions.rs` 的 route-gated guidance + WorkBuddy 行为法则中**真正通用**的部分。任何部署都一样。
-> - **Part B 项目约定层**：主人铁律在此，来自 `AGENTS.md` / `.workbuddy` memory / 工作区约定文件，**按部署注入**，不写死在核心里。
+> - **Part B 项目约定层**：产品方铁律在此，来自 `AGENTS.md` / `.workbuddy` memory / 工作区约定文件，**按部署注入**，不写死在核心里。
 > - **Part C 接线（已落地）**：`DirRoute::HasProjectConventions` 变体 + `load_project_conventions()` 加载器已写入 `context.rs` / `directions.rs` / `prompt_assembly.rs`，从 `config.workspace` 指向的 `AGENTS.md` 的 `## Conventions` / `## 项目约定` 段抽取并按工作区注入。同一二进制换工作区只换 `AGENTS.md`，核心不变。
 
 ---
@@ -12,7 +12,7 @@
 ## 设计原则（为什么这么拆）
 
 1. **核心只放可移植行为**。任何 agent（任何用户、任何工作区）都应遵守的：think 折叠、工具先选专用、失败即换、收尾无 filler、安全护栏。这些是"agent 素养"，不是"某人的偏好"。
-2. **约定是数据，不是代码/提示**。主人的铁律是长期调出来的**部署专属微调**，应存在约定文件里，由引擎按工作区加载。同一份 Hermix 二进制给不同人用，只换约定文件，不动核心。
+2. **约定是数据，不是代码/提示**。产品方的铁律是长期调出来的**部署专属微调**，应存在约定文件里，由引擎按工作区加载。同一份 Hermix 二进制给不同人用，只换约定文件，不动核心。
 3. **现有架构已支持分层**。`directions.rs` 的 `DirRoute` 就是路由门控；`MEMORY_GUIDANCE` 已声明"项目约定属于 AGENTS.md / 项目上下文，不进系统提示"。本方案在其上补一个 `ProjectConventions` 路由即可，不重写逻辑。
 4. **纯代码/CSS 的铁律不是 prompt 材料**。无蓝紫（CSS token）、sidecar cp（构建脚本）、WAL（DB）、dedup 双防护（前端）根本不属于 agent 提示词——它们留在代码/AGENTS.md，本提示词**完全不提**。
 
@@ -100,7 +100,7 @@ Markdown 用于**结构**而非强调。短技术 token（标签 / 路径 / 命�
 
 > **本层不是核心 prompt 的一部分。** 它来自 `AGENTS.md` / `.workbuddy/MEMORY.md` / 工作区约定文件，由引擎按工作区加载（见 Part C）。
 > 不同用户 / 不同部署 = 不同的 Part B 文件。Hermix 核心（Part A）对所有人都一样。
-> 下列是**当前 hermix-desktop 主人的铁律中"与 agent 行为相关"的子集**；纯代码/CSS 铁律（无蓝紫、sidecar cp、WAL、dedup）不在此列，它们属于代码/AGENTS.md，不进 agent 提示词。
+> 下列是**当前 hermix-desktop 产品方的铁律中"与 agent 行为相关"的子集**；纯代码/CSS 铁律（无蓝紫、sidecar cp、WAL、dedup）不在此列，它们属于代码/AGENTS.md，不进 agent 提示词。
 
 ## B-模板（部署方填写）
 
@@ -114,7 +114,7 @@ Markdown 用于**结构**而非强调。短技术 token（标签 / 路径 / 命�
 
 ## B-说明：哪些"铁律"进了约定层、哪些根本不进 prompt
 
-| 主人铁律 | 处置 | 理由 |
+| 产品方铁律 | 处置 | 理由 |
 |---|---|---|
 | 无蓝紫（UI token） | **不进 prompt** | 纯 CSS 设计约束，归 `tokens.css` / AGENTS.md |
 | sidecar cp（构建脚本） | **不进 prompt** | 构建/部署流程，归脚本与 AGENTS.md |
@@ -126,7 +126,7 @@ Markdown 用于**结构**而非强调。短技术 token（标签 / 路径 / 命�
 | think 折叠 emit（QQ） | **核心已覆盖**（A2 零泄漏 + 后端折叠） | 通用素养，不需约定层重复 |
 | 输出反模式厌恶清单 | **核心已覆盖**（A1.4/A1.5/A1.7/A2/A5 已编码） | 通用素养 |
 
-**关键认知**：v1 把这些全塞进核心，等于让每个 Hermix 用户都强制遵守前主人的微调——这正是"铁律非通用"要纠正的。v2 把它们还原为"数据"。
+**关键认知**：v1 把这些全塞进核心，等于让每个 Hermix 用户都强制遵守前产品方的微调——这正是"铁律非通用"要纠正的。v2 把它们还原为"数据"。
 
 ---
 
@@ -159,7 +159,7 @@ Markdown 用于**结构**而非强调。短技术 token（标签 / 路径 / 命�
 3. `directions.rs` 新增 `load_project_conventions(workspace: &str) -> Option<String>`：读 `<workspace>/AGENTS.md`，抽取标题含 `项目约定` / `project conventions` / `conventions`（不区分大小写、`#`/`##` 级）的段落到下一个同级/上级标题为止。无工作区 / 无 AGENTS.md / 无约定段 → `None`，核心 prompt 不变。
 4. `prompt_assembly.rs`：`build_system_prompt` 调用处用 `config.workspace.as_deref().and_then(load_project_conventions)` 取约定，传给 `collect_directions`。
 
-**效果**：核心（Part A）永远不变；主人的铁律只在该工作区（`<repo>` 的 `AGENTS.md` 的 `## Conventions` 段）生效；换工作区 / 换用户 → 自动不加载。纯代码/CSS 铁律（无蓝紫、sidecar cp、WAL、dedup）本就不进 prompt，留代码与 AGENTS.md。
+**效果**：核心（Part A）永远不变；产品方的铁律只在该工作区（`<repo>` 的 `AGENTS.md` 的 `## Conventions` 段）生效；换工作区 / 换用户 → 自动不加载。纯代码/CSS 铁律（无蓝紫、sidecar cp、WAL、dedup）本就不进 prompt，留代码与 AGENTS.md。
 
 ## C3 落地状态（已实施）
 
@@ -167,7 +167,7 @@ Markdown 用于**结构**而非强调。短技术 token（标签 / 路径 / 命�
 - [x] `collect_directions` 增加 `project_conventions` 参数 + 末尾注入（`directions.rs`）
 - [x] `load_project_conventions` / `extract_conventions_section` + 单测（`directions.rs`）
 - [x] `build_system_prompt` 调用点接线（`prompt_assembly.rs`）
-- [ ] 将主人铁律中「与 agent 行为相关」的子集（nudge 双守卫 / 永远发 Done / tool_call_id 稳定）正式写入 `AGENTS.md` 的 `## Conventions` 段，使其被运行时加载（Part B 模板已就绪，待回填）。
+- [ ] 将产品方铁律中「与 agent 行为相关」的子集（nudge 双守卫 / 永远发 Done / tool_call_id 稳定）正式写入 `AGENTS.md` 的 `## Conventions` 段，使其被运行时加载（Part B 模板已就绪，待回填）。
 
 > 说明：`OPERATING_CONSTITUTION_GUIDANCE`（v2 原提「唯一实质新增」）**未单列**——其 8 条通用法则已分别覆盖于现有 `PLAN_BEFORE_EXECUTE_GUIDANCE` / `TOOL_USAGE_GUIDANCE` / `STOPPING_SUMMARY_GUIDANCE` 等 route-gated 块，单列会重复且可能冲突，故不新增独立常量。
 

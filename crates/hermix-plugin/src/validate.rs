@@ -384,6 +384,12 @@ pub fn validate_custom_app(app_dir: &Path) -> ValidationReport {
     // 让 agent 开发循环在声明「开发完成」前拦截违规，实现「一次性到位」。
     check_frontend_quality(&combined_code, &mut issues);
 
+    // ── L4: 性能质量关卡 (警告为主, 全量重绘/桥调用风暴为 error) ──
+    check_perf_quality(&combined_code, &mut issues);
+
+    // ── L4b: 视觉规范关卡 (提示用共享 token, 全 warning 不阻断) ──
+    check_visual_quality(&combined_code, &mut issues);
+
     // B+ HTML 体积上限：>1MB 警告——大 HTML 拖慢 WebView 加载与交互响应
     //（"慢/点击没反应"的常见源头之一），交付前提示精简或拆分。
     if let Ok(meta) = std::fs::metadata(app_dir.join("index.html")) {
@@ -509,6 +515,175 @@ fn check_frontend_quality(code: &str, issues: &mut Vec<ValidationIssue>) {
                  改用内联 SVG 图标 (lucide 风格, stroke=currentColor)。"
             ),
         ));
+    }
+}
+
+/// L4b 视觉规范关卡 (warning 级): 引导应用使用打包注入的 hx-theme token,
+/// 而不是从零手写一堆硬编码色值 (视觉与宿主割裂的根源)。
+fn check_visual_quality(code: &str, issues: &mut Vec<ValidationIssue>) {
+    // 硬编码色值统计: #rgb/#rrggbb + rgb()/rgba()。少量正常 (如 #fff 简写),
+    // 超过 8 处说明整个配色体系都是手写的, 提示改用 --hx-* 语义变量。
+    let hex_re = regex_lite::Regex::new(r"#[0-9a-fA-F]{3}\b|#[0-9a-fA-F]{6}\b")
+        .expect("regexp valid");
+    let rgb_re = regex_lite::Regex::new(r"rgba?\(\s*\d")
+        .expect("regexp valid");
+    let count = hex_re.find_iter(code).count() + rgb_re.find_iter(code).count();
+    if count > 8 {
+        issues.push(issue(
+            "warning",
+            "visual",
+            format!(
+                "检测到 {count} 处硬编码色值 (#hex / rgb())。配色全部手写会与 Hermix 宿主视觉割裂 \
+                 (每个应用一套风格)。改法: 打包产物已自动注入 hx-theme 设计 token —— 优先用语义变量 \
+                 (var(--hx-bg) / var(--hx-text) / var(--hx-accent) / var(--hx-border) 等) 与组件类 \
+                 (.hx-btn / .hx-card / .hx-input / .hx-titlebar), 仅品牌强调色保留少量自定义色值。"
+            ),
+        ));
+    }
+}
+
+/// L4 性能质量关卡: 拦截 WebView2 下最致「卡」的生成反模式。
+///
+/// - 全量重绘 (`innerHTML =` / `outerHTML =` 在回调中) → error：几百条数据即掉帧
+/// - 循环内 `window.hx.*` 桥调用 → error：每条都是 WebView2↔Rust 往返，N 行 = N 次 IPC
+/// - `backdrop-filter` → warning：WebView2 合成热点
+/// - 全局 `* { transition` → warning：全元素过渡开销
+/// - 大列表拼接无虚拟化 → warning：`map(...).join("")` 类拼 200+ 节点
+///
+/// 误报权衡：innerHTML 检测只在「赋值」形态命中（`innerHTML =` / `.innerHTML=`,
+/// 排除 `+=` 拼接追加——追加通常单行小片段，可接受）；循环桥调用只检测
+/// `for/while/map/forEach` 块内的 `window.hx.` 调用形态。
+fn check_perf_quality(code: &str, issues: &mut Vec<ValidationIssue>) {
+    // 1) 全量重绘：`.innerHTML =`（非 +=）赋值
+    {
+        let mut hit_line: Option<(u32, String)> = None;
+        for (i, line) in code.lines().enumerate() {
+            let t = line.trim_start();
+            let is_assign = (t.contains(".innerHTML") || t.contains(".outerHTML"))
+                && (t.contains("=") && !t.contains("+=") && !t.contains("=="))
+                && !t.contains("function")
+                && !line.trim_start().starts_with("//");
+            if is_assign {
+                hit_line = Some((i as u32 + 1, t.chars().take(80).collect()));
+                break;
+            }
+        }
+        if let Some((line, snippet)) = hit_line {
+            issues.push(ValidationIssue {
+                level: "error".into(),
+                code: "frontend".into(),
+                message: format!(
+                    "检测到 innerHTML/outerHTML 全量赋值 ({line}: {snippet})。任何状态变化都重建整棵 \
+                     DOM 是 WebView2 卡顿的头号来源 (几百条数据即掉帧)。改法: ① 局部更新——只改变化的\
+                     节点 (textContent / createElement / 少量元素)；② 列表用 key 复用做增量 diff；\
+                     ③ 若确需一次性渲染, 只允许在初始化 (顶层, 非事件回调/轮询) 中执行一次。"
+                ),
+                line: Some(line),
+                col: None,
+                snippet: Some(snippet),
+            });
+        }
+    }
+
+    // 2) 循环内桥调用：for/while/map/forEach 块内的 window.hx. 调用
+    {
+        let loop_re = regex_lite::Regex::new(
+            r#"(?i)\b(for|while)\s*\(|\.(map|forEach)\s*\("#,
+        )
+        .expect("regexp valid");
+        let bridge_re = regex_lite::Regex::new(r"(window\.)?hx\.\w+\(").expect("regexp valid");
+        let mut hit: Option<(u32, String)> = None;
+        let lines: Vec<&str> = code.lines().collect();
+        for (i, line) in lines.iter().enumerate() {
+            let t = line.trim_start();
+            if t.starts_with("//") || t.starts_with("*") {
+                continue;
+            }
+            if loop_re.is_match(t) {
+                // 检查本行 + 循环头之后 8 行内是否有桥调用 (粗块探测)
+                let window_end = (i + 8).min(lines.len());
+                for (j, inner) in lines[i..window_end].iter().enumerate() {
+                    let it = inner.trim_start();
+                    if it.starts_with("//") {
+                        continue;
+                    }
+                    if bridge_re.is_match(it) {
+                        // map/forEach 回调同行命中才算强信号; for/while 允许首行是头
+                        let strong = t.contains("map(") || t.contains("forEach(") || j > 0;
+                        if strong {
+                            hit = Some((
+                                (i + j + 1) as u32,
+                                it.chars().take(80).collect(),
+                            ));
+                            break;
+                        }
+                    }
+                }
+                if hit.is_some() {
+                    break;
+                }
+            }
+        }
+        if let Some((line, snippet)) = hit {
+            issues.push(ValidationIssue {
+                level: "error".into(),
+                code: "frontend".into(),
+                message: format!(
+                    "检测到循环内 window.hx.* 桥调用 ({line}: {snippet})。每次桥调用都是 \
+                     WebView2↔Rust 往返, 100 行列表 = 100+ 次 IPC, 这是「卡」的直接原因。\
+                     改法: ① 数据先一次性批量取回 (循环外一次 hx 调用拿全量) 再渲染;\
+                     ② 多个调用合并为一次 hx.request({{calls:[...]}}) 批量;\
+                     ③ storage 读写缓存到内存, 变化时统一写回。"
+                ),
+                line: Some(line),
+                col: None,
+                snippet: Some(snippet),
+            });
+        }
+    }
+
+    // 3) backdrop-filter → warning (WebView2 合成热点)
+    if code.contains("backdrop-filter") || code.contains("-webkit-backdrop-filter") {
+        issues.push(issue(
+            "warning",
+            "perf",
+            "检测到 backdrop-filter。WebView2 上每帧都要做高斯合成, 叠加滚动/动画时明显掉帧。\
+             改法: 用不透明/半透明纯色背景 + 细边框达到近似层次感, 或限制在静态小面积元素上。",
+        ));
+    }
+
+    // 4) 全局 transition → warning
+    if regex_lite::Regex::new(r#"(?m)^\s*\*\s*\{[^}]*transition"#)
+        .expect("regexp valid")
+        .is_match(code)
+    {
+        issues.push(issue(
+            "warning",
+            "perf",
+            "检测到全局选择器 `* { transition: ... }`。所有元素所有属性都在过渡, WebView2 合成开销大。\
+             改法: transition 只加到交互元素 (按钮/卡片 hover) 的具体属性 (transform/opacity)。",
+        ));
+    }
+
+    // 5) 大列表字符串拼接无虚拟化 → warning
+    {
+        let join_re = regex_lite::Regex::new(r"\.map\s*\(\s*\(?[^)]{0,120}\)?\s*=>[^;]{0,400}\.join\s*\(")
+            .expect("regexp valid");
+        if let Some(m) = join_re.captures(code) {
+            let frag = m.get(0).map(|x| x.as_str()).unwrap_or("");
+            // 启发式: 拼接片段里出现 <li/<tr/<div 且内容含多属性, 视为大列表渲染
+            let nodey = frag.matches("<").count() >= 2;
+            let long = frag.len() > 250;
+            if nodey && long {
+                issues.push(issue(
+                    "warning",
+                    "perf",
+                    "检测到 `.map(... => `<${...}>`).join(...)` 大段列表拼接。条目多时 (200+) 会生成\
+                     数千 DOM 节点导致卡顿。改法: ① 数据 ≥50 条用分页或「加载更多」截断;\
+                     ② 长列表用虚拟滚动 (只渲染视口内条目); ③ 行结构简单化, 避免每行深嵌套。",
+                ));
+            }
+        }
     }
 }
 
@@ -1056,6 +1231,143 @@ function App() { return <div>hello</div>; }
         let r = validate_custom_app(&tmp);
         assert!(r.ok, "hx-shell 应用应无 error: {:?}", r.issues);
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn perf_innerhtml_full_reassign_is_error() {
+        let mut issues = Vec::new();
+        check_perf_quality(
+            r#"<html><body><script>
+function render() {
+  list.innerHTML = items.map(i => `<li>${i}</li>`).join("");
+}
+</script></body></html>"#,
+            &mut issues,
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.level == "error" && i.message.contains("全量赋值")),
+            "innerHTML 全量赋值应报 error: {:?}",
+            issues
+        );
+    }
+
+    #[test]
+    fn perf_innerhtml_append_ok() {
+        let mut issues = Vec::new();
+        check_perf_quality(
+            r#"<html><body><script>
+list.innerHTML += `<li>${item}</li>`;
+</script></body></html>"#,
+            &mut issues,
+        );
+        assert!(
+            !issues.iter().any(|i| i.message.contains("全量赋值")),
+            "innerHTML += 追加不应报全量重绘: {:?}",
+            issues
+        );
+    }
+
+    #[test]
+    fn perf_bridge_call_in_loop_is_error() {
+        let mut issues = Vec::new();
+        check_perf_quality(
+            r#"<html><body><script>
+for (const f of files) {
+  const c = await window.hx.readFile(f);
+}
+</script></body></html>"#,
+            &mut issues,
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.level == "error" && i.message.contains("循环内 window.hx")),
+            "循环内桥调用应报 error: {:?}",
+            issues
+        );
+    }
+
+    #[test]
+    fn perf_bridge_call_outside_loop_ok() {
+        let mut issues = Vec::new();
+        check_perf_quality(
+            r#"<html><body><script>
+const data = await window.hx.readFile("a.txt");
+items.forEach(i => console.log(i));
+</script></body></html>"#,
+            &mut issues,
+        );
+        assert!(
+            !issues.iter().any(|i| i.message.contains("循环内 window.hx")),
+            "循环外桥调用不应报: {:?}",
+            issues
+        );
+    }
+
+    #[test]
+    fn perf_backdrop_filter_and_global_transition_warn() {
+        let mut issues = Vec::new();
+        check_perf_quality(
+            r#"<html><head><style>
+.card { backdrop-filter: blur(8px); }
+* { transition: all 0.2s; }
+</style></head><body></body></html>"#,
+            &mut issues,
+        );
+        assert!(
+            issues.iter().any(|i| i.message.contains("backdrop-filter")),
+            "backdrop-filter 应 warning: {:?}",
+            issues
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.message.contains("全局选择器")),
+            "全局 transition 应 warning: {:?}",
+            issues
+        );
+        assert!(
+            issues.iter().all(|i| i.level != "error"),
+            "纯 CSS 性能项不应为 error: {:?}",
+            issues
+        );
+    }
+
+    #[test]
+    fn visual_many_hardcoded_colors_warn() {
+        let mut issues = Vec::new();
+        check_visual_quality(
+            r#"<style>
+.a { color: #1a1a1a; background: #f5f5f7; border-color: rgba(0,0,0,0.1); }
+.b { color: #3b82f6; background: #ef4444; }
+.c { color: rgb(59,130,246); background: #22c55e; border: 1px solid #f59e0b; }
+.d { color: #6b6b70; }
+</style>"#,
+            &mut issues,
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.code == "visual" && i.level == "warning" && i.message.contains("硬编码色值")),
+            ">8 处硬编码色值应 warning: {:?}",
+            issues
+        );
+    }
+
+    #[test]
+    fn visual_few_colors_ok() {
+        let mut issues = Vec::new();
+        check_visual_quality(
+            r#"<style>.a { color: var(--hx-text); background: var(--hx-bg); }</style>"#,
+            &mut issues,
+        );
+        assert!(
+            !issues.iter().any(|i| i.code == "visual"),
+            "token 用法不应报: {:?}",
+            issues
+        );
     }
 
     #[test]

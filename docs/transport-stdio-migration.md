@@ -2,7 +2,7 @@
 
 > **Status**: Phase 0 RFC — not yet implemented
 > **Author**: 狗蛋
-> **Owner**: 主人
+> **Owner**: 产品方
 > **Created**: 2026-09-03
 > **Goal**: 消灭 Hermix Desktop 对 `127.0.0.1:3000` 的 TCP 依赖，从根消除"两个 hermix 装版跑同一台机器"时的端口冲突 + 数据互覆盖。
 
@@ -10,7 +10,7 @@
 
 ## 1. 背景与动机
 
-### 1.1 主人原话（2026-09-03 14:37）
+### 1.1 原话（2026-09-03 14:37）
 
 > 突然发现一个问题，如果我同时开发两个项目，都是 dev 模式启动，那么一定会有一个报错 1420 端口占用。如果这两个项目以后安装跑在一台设备上，端口岂不是冲突了？
 
@@ -25,7 +25,7 @@
 | Tauri 主进程 | 每个 exe 独立进程 | ❌ | ❌ |
 | Tauri WebView | `tauri://localhost`（Windows = edge://） | ❌ | ❌（**不走 TCP**） |
 
-### 1.3 主人决策（2026-09-03 14:50）
+### 1.3 产品决策（2026-09-03 14:50）
 
 > 统一模式
 
@@ -285,13 +285,13 @@ main.rs 当前不解析 argv，注释说"future when the binary grows a clap par
 
 ### 6.5 dev 模式 vs prod 模式分流
 
-按主人"统一模式"，**不引入**分流。dev 模式 Tauri 主进程也 spawn hermix.exe 接管 stdio（dev 不再 `cargo run` 直接跑 server）——这跟当前 dev 模式行为有微小差别（当前 dev 直接 `cargo run -p hermix-server` 跑 TCP server，**没走 Tauri spawn**），需要确认 dev 模式是否要保持"直接 cargo run"。
+按产品方"统一模式"，**不引入**分流。dev 模式 Tauri 主进程也 spawn hermix.exe 接管 stdio（dev 不再 `cargo run` 直接跑 server）——这跟当前 dev 模式行为有微小差别（当前 dev 直接 `cargo run -p hermix-server` 跑 TCP server，**没走 Tauri spawn**），需要确认 dev 模式是否要保持"直接 cargo run"。
 
-**主人待确认**：dev 模式下
+**产品方待确认**：dev 模式下
 - (i) 仍用 `cargo run -p hermix-server`（需要 hermix-server 支持 `--stdio` flag + stdin/stdout）
 - (ii) 改用 Tauri 主进程 spawn（dev / prod 完全统一）
 
-按主人"统一模式"语义，倾向 (ii)，但需要主人确认。
+按产品方"统一模式"语义，倾向 (ii)，但需要产品方确认。
 
 ---
 
@@ -327,7 +327,7 @@ main.rs 当前不解析 argv，注释说"future when the binary grows a clap par
 ### 8.3 前端向后兼容
 
 - **删除** `API_BASE` / `WS_BASE` / `HEALTH_URL` 常量（D-5 一刀切，全栈统一）
-- 不做"渐进式迁移"——主人要"统一模式"，前端不留 ws:// fallback
+- 不做"渐进式迁移"——产品方要"统一模式"，前端不留 ws:// fallback
 
 ---
 
@@ -344,12 +344,12 @@ main.rs 当前不解析 argv，注释说"future when the binary grows a clap par
 
 ---
 
-## 10. 待主人确认决策点
+## 10. 待产品方确认决策点
 
-1. **dev 模式是否改用 Tauri spawn hermix.exe**（统一 vs 保留 `cargo run -p hermix-server`）——主人语义"统一模式"倾向改 Tauri spawn，但 dev 体验是否一致要验证
+1. **dev 模式是否改用 Tauri spawn hermix.exe**（统一 vs 保留 `cargo run -p hermix-server`）——产品方语义"统一模式"倾向改 Tauri spawn，但 dev 体验是否一致要验证
 2. **Phase 拆分粒度**：8 commit 是细粒度，是否要合并到 4-5 commit（按"协议 / Tauri 桥 / 前端 / 收紧"四大块）
 3. **是否需要保留 hermix-server TCP listen 给外部调试**（如 hermix-cli 单独命令行工具）
 
 ---
 
-**End of RFC — 待主人 review 后开 Phase 1**
+**End of RFC — 待产品方 review 后开 Phase 1**

@@ -1,6 +1,6 @@
 # 对话中的任务列表 / Todo 前后端专项排查
 
-> **排查时间**：2026-07-13 上午（主人追问）
+> **排查时间**：2026-07-13 上午（追问）
 > **范围**：对话流里 LLM 通过 `todo` 工具创建 / 更新 / 完成任务的整条链路
 > **覆盖文件**：`apps/desktop-tauri/src/{components,hooks,api}.{ts,tsx}` + `crates/hermix-server/src/lib.rs` + `crates/hermix-tools/src/{tools,backends}/todo.rs` + `crates/hermix-transport/src/lib.rs`
 > **方法**：人工逐行 Read + 全栈 Grep 验证每个契约
@@ -70,7 +70,7 @@
 
 **关联 commit**：`9c3a699` (P0-T1 foundation) → `380a5b2` → `b7f96b9` → `17c11dc`
 
-**症状**：用户让 LLM 拆解一个计划 → LLM 调 `todo.create` 多次 → 主人看到的卡片全堆在消息流顶部，不挨着产生这个计划的 assistant message。
+**症状**：用户让 LLM 拆解一个计划 → LLM 调 `todo.create` 多次 → 看到的卡片全堆在消息流顶部，不挨着产生这个计划的 assistant message。
 
 **根因 1（后端硬编码）**：
 ```rust
@@ -117,7 +117,7 @@ todoGroups?: Array<{
 ### P0-T2 TodoSnapshot 事件前端完全不处理 — ✅ 已修复 (commit 17c11dc + 4511098 + c8235e3)
 
 **症状**：
-- 主人 reload session（或打开已有 todo 的 session）→ 看不到任何已存在的 todo 卡片，直到 LLM 再调一次 `todo` 工具才会出现
+- reload session（或打开已有 todo 的 session）→ 看不到任何已存在的 todo 卡片，直到 LLM 再调一次 `todo` 工具才会出现
 - 多客户端打开同一 session，一个客户端点 checkbox → 另一个客户端看不到（todo 工具走 HTTP broadcast，其它 client 不在 WS 路径上）
 - WS 重连后（例如网络断 5 秒）→ 已存在的 todo 全部消失，要等下一次 tool call 才能恢复
 
@@ -166,7 +166,7 @@ if (evtType === "todo_item_removed") { ... }
 
 ### P0-T3 listTodos HTTP 端点 0 前端调用方 — ✅ 已 deprecated (listTodos 不动 + 文档标注为 legacy)
 
-**症状**：主人按 Ctrl+R 重载应用 → 切回历史 session → todo 卡片全空（因为不只缺 TodoSnapshot，**且没有 React 端调用 listTodos**）。
+**症状**：按 Ctrl+R 重载应用 → 切回历史 session → todo 卡片全空（因为不只缺 TodoSnapshot，**且没有 React 端调用 listTodos**）。
 
 **修复决策**：完全弃用 HTTP 兜底，listTodos 标记 `@deprecated` (api.ts 已加注释)，由 `TodoSnapshot` WS 同步接管。所有新代码走 WS 路径。
 
@@ -196,7 +196,7 @@ Grep 调用方：
 3. 如果坚持保留 HTTP 兜底，至少把 listTodos 标记 `@deprecated since YYYY-MM-DD — use WS TodoSnapshot` 并写进 useStreamChat.ts:786 块的注释
 
 **验收**：
-- 主人 reload session → TodoListCard 仍能恢复（不需要 listTodos）
+- reload session → TodoListCard 仍能恢复（不需要 listTodos）
 - 删 api.ts:323 的 listTodos（孤儿代码）或者正式标注 deprecated
 
 ---
@@ -290,7 +290,7 @@ async fn snapshot_after_mutation(&self, target_id: Option<&str>) -> Option<...> 
 **修复**：
 - 让 hermix-tools 直接定义 `TodoSnapshotItem`（在 todo.rs 模块顶部），hermix-transport 引用 hermix-tools 而不是反过来（破除层级倒置）
 - 或者用 serde convert 字段自动映射
-- 现阶段不动（不在主人当下的优先级）
+- 现阶段不动（不在当前优先级）
 
 ---
 
@@ -311,7 +311,7 @@ async fn snapshot_after_mutation(&self, target_id: Option<&str>) -> Option<...> 
 1. ✅ `cargo check --workspace --all-targets` 通过
 2. ✅ `cargo test --workspace --lib` 全绿 + 新增 todo 链路 ≥ 4 项回归
 3. ✅ `pnpm tsc --noEmit` 0 errors
-4. ✅ 主人在实机 reload 一个有 5+ todo 的 session，能看到完整卡片并锚到原 assistant message
+4. ✅ 在实机 reload 一个有 5+ todo 的 session，能看到完整卡片并锚到原 assistant message
 5. ✅ WS 断开 5 秒 reconnect 后 todo 重新出现，无 stale 数据
 
 ---
@@ -332,6 +332,6 @@ P0-T1 是真正的设计债，但实现成本最高，要三 crate 协同。前�
 
 ## 附录：未覆盖的潜在风险（建议未来复审）
 
-- `crates/hermix-tools/src/backends/todo.rs:51` 错误处理吞错：`std::fs::read_to_string(&file_path).ok().and_then(...)`。todos.json 损坏时直接以空 Vec 启动，主人可能察觉不到数据丢。
+- `crates/hermix-tools/src/backends/todo.rs:51` 错误处理吞错：`std::fs::read_to_string(&file_path).ok().and_then(...)`。todos.json 损坏时直接以空 Vec 启动，可能察觉不到数据丢。
 - hermix-server/src/lib.rs:1904 `route("/v1/todos/{todo_id}", patch(patch_todo).delete(delete_todo))` 没有 auth / scope check。HTTP 端点能直接动 todos.json。
 - todos.json 没有版本字段，未来 schema migration 时没标记点。

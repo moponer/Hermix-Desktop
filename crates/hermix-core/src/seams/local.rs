@@ -113,6 +113,11 @@ impl Shell for LocalShell {
         command.creation_flags(0x08000000);
 
         let child = command.spawn().map_err(|e| ShellError::Spawn(e.to_string()))?;
+        // 超时后 tokio 只是 drop future，子进程和它派生的孙进程照跑不误。
+        // 绑进 Job Object 才能在 deadline 到期时一次性杀掉整棵树。
+        #[cfg(windows)]
+        let job = child.id().and_then(crate::win_job::JobGuard::attach);
+
         match tokio::time::timeout(self.timeout, child.wait_with_output()).await {
             Ok(Ok(out)) => Ok(ExecOutput {
                 code: out.status.code().unwrap_or(-1),
@@ -123,12 +128,22 @@ impl Shell for LocalShell {
                 timed_out: false,
             }),
             Ok(Err(e)) => Err(ShellError::Spawn(e.to_string())),
-            Err(_) => Ok(ExecOutput {
-                code: -1,
-                stdout: String::new(),
-                stderr: String::new(),
-                timed_out: true,
-            }),
+            Err(_) => {
+                // Deadline 强杀：Job Object 一次调用杀掉整棵进程树（含 cmd
+                // 派生的孙进程）。这里拿不到 child 的所有权（`wait_with_output`
+                // 已消费），单靠 `start_kill` 又只能杀直接子进程，所以杀树
+                // 这一步必须由 job 完成 —— 这也是绑 job 的唯一理由。
+                #[cfg(windows)]
+                if let Some(job) = job.as_ref() {
+                    job.terminate();
+                }
+                Ok(ExecOutput {
+                    code: -1,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    timed_out: true,
+                })
+            }
         }
     }
 

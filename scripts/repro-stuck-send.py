@@ -158,7 +158,7 @@ class _Tail(list):
 
 def make_home():
     home = tempfile.mkdtemp(prefix="hermix-repro-")
-    # 拷主人的 provider 配置（含 minimax key），数据库全新
+    # 复制现有 provider 配置（含 minimax key），数据库全新
     shutil.copy(os.path.join(REAL_HOME, "config.yaml"), os.path.join(home, "config.yaml"))
     env_path = os.path.join(REAL_HOME, ".env")
     if os.path.exists(env_path):
@@ -209,8 +209,8 @@ def run_scenario(name, with_pressure):
                 time.sleep(1.5)
 
         if with_pressure:
-            # 预热：先打 5 轮 PUT（模拟主人配置模型期间的连续写盘+set_config），
-            # 然后保持每 1.5s 一轮直到场景结束 —— 主人卡住时正是
+            # 预热：先打 5 轮 PUT（模拟配置模型期间的连续写盘+set_config），
+            # 然后保持每 1.5s 一轮直到场景结束 —— 复现卡住时的正是
             # 「最后一轮 set_config (:43.504) 与发送同秒」。
             body = {
                 "models": [

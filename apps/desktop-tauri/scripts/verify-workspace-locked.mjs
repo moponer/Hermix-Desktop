@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // verify-workspace-locked.mjs
 //
-// 2026-06-26: 主人反馈"目录进入对话界面后就无法设置了，在进入前没有设置过"。
+// 2026-06-26: 缺陷"目录进入对话界面后就无法设置了，在进入前没有设置过"。
 // 根因：ChatView.tsx 在两个分支（欢迎态 line 1424 / 活跃 session 态 line 1759）
 //   给 `<Composer>` 传了不同的 workspaceLocked 判定：
 //     - 欢迎态：写死 `false`（无问题）
@@ -37,23 +37,23 @@ function computeWorkspaceLocked({ workspace, isWelcome, sessionHasMessages }) {
   // 欢迎态（!session || messages.length === 0）也按这个语义走：
   //   - 没设过 → unlocked → 可以从欢迎态挑目录
   //   - 设过 → locked（虽然这与"还没发过消息"的用户预期不太吻合，但与
-  //     主人原始预期"设过就不能设"一致；新对话的 sessionId 全新，workspace
+  //     "设过就不能设"的预期一致；新对话的 sessionId 全新，workspace
   //     state 默认 null，所以这条路径在新建场景下不触发）
   return Boolean(workspace);
 }
 
 const cases = [
   {
-    name: "活跃 session + 从未设过 workspace（主人报的 bug 场景）",
+    name: "活跃 session + 从未设过 workspace（已报的 bug 场景）",
     args: { workspace: null, isWelcome: false, sessionHasMessages: true },
     expect: false,
-    why: "这是主人原话 '进入对话界面后在进入前没有设置过' 的精确复刻。修后应 unlocked。",
+    why: "复刻 '进入对话界面后在进入前没有设置过' 的场景。修后应 unlocked。",
   },
   {
     name: "活跃 session + 设过 workspace（预期锁死）",
     args: { workspace: "C:/Users/me/project", isWelcome: false, sessionHasMessages: true },
     expect: true,
-    why: "这是主人原话 '除非设置过了就不能设置了' 的精确复刻。",
+    why: "复刻 '除非设置过了就不能设置了' 的场景。",
   },
   {
     name: "欢迎态 + 从未设过（新建对话）",

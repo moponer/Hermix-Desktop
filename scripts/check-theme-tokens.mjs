@@ -164,4 +164,33 @@ if (paletteHits > 0) {
   );
 }
 
+/* 字号债项：任意值 text-[Npx] 取代语义档位。
+   历史包袱约 409 处（text-[11px] 194 / text-[13px] 104 / text-[12px] 93），
+   根因是旧档位写成 v3 的 --font-size-* 命名，Tailwind v4 下不生成任何工具类，
+   于是整套档位形同虚设。档位已改名到 --text-* 命名空间（tokens.css），
+   迁移可分批做，故先 WARN_ONLY。 */
+const TYPE_RX = /\btext-\[\s*\d+(?:\.\d+)?px\s*\]/g;
+/* 品牌/资产类一次性尺寸（Logo、字体缩放刻度），见 tokens.css 几何令牌注释 */
+const TYPE_ALLOWED = new Set([
+  "text-[20px]", "text-[22px]", "text-[24px]", "text-[28px]", "text-[32px]",
+  "text-[36px]", "text-[40px]", "text-[48px]", "text-[72px]",
+]);
+let typeHits = 0;
+let typeFiles = 0;
+for (const file of walkTsx(SRC)) {
+  const hits = (read(file).match(TYPE_RX) || []).filter(
+    (h) => !TYPE_ALLOWED.has(h.replace(/\s+/g, "")),
+  );
+  if (hits.length > 0) {
+    typeHits += hits.length;
+    typeFiles += 1;
+  }
+}
+if (typeHits > 0) {
+  console.warn(
+    `[type-debt] ${typeHits} 处任意字号 text-[Npx]（分布于 ${typeFiles} 个文件，仅告警）— ` +
+      `目标：全部迁到 text-micro/tiny/meta/ui/body/title/display 七档后在脚本中改为阻断`,
+  );
+}
+
 process.exit(failures > 0 ? 1 : 0);
