@@ -237,25 +237,25 @@ const PathPreviewAcui: AcuiComponent = ({ show }) => {
     >
       {/* Line 1: path + size + modified */}
       <div className="flex items-center gap-2 min-w-0">
-        <span className="text-[12px] font-mono text-text-primary truncate flex-1" title={path}>
+        <span className="text-[length:var(--text-meta)] font-mono text-text-primary truncate flex-1" title={path}>
           {path}
         </span>
         {sizeText && (
-          <span className="shrink-0 text-[11px] text-text-faint font-mono">{sizeText}</span>
+          <span className="shrink-0 text-[length:var(--text-meta)] text-text-faint font-mono">{sizeText}</span>
         )}
         {modText && (
-          <span className="shrink-0 text-[11px] text-text-faint">{modText}</span>
+          <span className="shrink-0 text-[length:var(--text-meta)] text-text-faint">{modText}</span>
         )}
       </div>
       {/* Line 2: preview snippet */}
       {previewText && (
-        <pre className="text-[11px] font-mono text-text-muted whitespace-pre-wrap break-all leading-snug">
+        <pre className="text-[length:var(--text-meta)] font-mono text-text-muted whitespace-pre-wrap break-all leading-snug">
           {previewText}
         </pre>
       )}
       {/* Line 3: reason */}
       {props.reason && (
-        <div className="text-[11px] text-text-muted">{props.reason}</div>
+        <div className="text-[length:var(--text-meta)] text-text-muted">{props.reason}</div>
       )}
     </div>
   );
@@ -269,7 +269,7 @@ export const AcuiFallback: AcuiComponent = ({ show }) => (
   <div
     data-acui-kind={show.type}
     data-acui-fallback="true"
-    className="text-[11px] font-mono text-text-muted px-3 py-2 rounded border border-amber-500/30 bg-amber-500/5"
+    className="text-[length:var(--text-meta)] font-mono text-text-muted px-3 py-2 rounded border border-amber-500/30 bg-amber-500/5"
     title="ACUI: unknown kind, showing raw JSON"
   >
     <div className="text-amber-300/80 mb-1">unknown acui kind: {show.type}</div>

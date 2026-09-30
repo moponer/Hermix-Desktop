@@ -107,7 +107,7 @@ export function InlineExpertPanel({
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="搜索专家名称、角色、类别..."
-            className="w-full pl-8 pr-3 py-1.5 rounded-lg bg-bg-card text-[13px] text-text-primary placeholder-text-faint outline-none border border-border-subtle focus:border-accent/40 transition-colors"
+            className="w-full pl-8 pr-3 py-1.5 rounded-lg bg-bg-card text-[length:var(--text-ui)] text-text-primary placeholder-text-faint outline-none border border-border-subtle focus:border-accent/40 transition-colors"
           />
           {search && (
             <button
@@ -134,7 +134,7 @@ export function InlineExpertPanel({
         <div
           role="status"
           aria-live="polite"
-          className="mx-4 mb-1 flex items-center gap-1.5 px-2 py-1 rounded-md bg-bg-tertiary text-[11px] text-warning"
+          className="mx-4 mb-1 flex items-center gap-1.5 px-2 py-1 rounded-md bg-bg-tertiary text-[length:var(--text-meta)] text-warning"
         >
           <AlertTriangle aria-hidden="true" className="icon-sm shrink-0" />
           <span>未能连接专家服务，当前显示内置清单</span>
@@ -168,8 +168,8 @@ export function InlineExpertPanel({
       <div className="px-4 pb-3 max-h-[240px] overflow-y-auto">
         {filtered.length === 0 ? (
           <div className="flex flex-col items-center py-6 text-center text-text-muted">
-            <p className="text-[12px]">没有匹配的专家</p>
-            <p className="text-[11px] text-text-faint mt-1">试试其他搜索词或分类</p>
+            <p className="text-[length:var(--text-meta)]">没有匹配的专家</p>
+            <p className="text-[length:var(--text-meta)] text-text-faint mt-1">试试其他搜索词或分类</p>
           </div>
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2">
@@ -184,14 +184,14 @@ export function InlineExpertPanel({
                     : "bg-bg-card hover:bg-bg-hover hover:shadow-sm",
                 )}
               >
-                <div className="w-8 h-8 rounded-lg bg-bg-tertiary flex items-center justify-center text-[16px] shrink-0 group-hover:bg-accent/15 transition-colors">
+                <div className="w-8 h-8 rounded-lg bg-bg-tertiary flex items-center justify-center text-[length:var(--text-title)] shrink-0 group-hover:bg-accent/15 transition-colors">
                   {e.avatar}
                 </div>
                 <div className="min-w-0 flex-1">
-                  <div className="text-[12px] font-medium text-text-primary truncate leading-tight">
+                  <div className="text-[length:var(--text-meta)] font-medium text-text-primary truncate leading-tight">
                     {e.name}
                   </div>
-                  <div className="text-[11px] text-text-muted truncate mt-0.5">
+                  <div className="text-[length:var(--text-meta)] text-text-muted truncate mt-0.5">
                     {e.role}
                   </div>
                 </div>
@@ -209,7 +209,7 @@ export function InlineExpertPanel({
         <div className="px-4 pb-2.5">
           <button
             onClick={() => { onOpenFullCatalog(); onClose(); }}
-            className="flex items-center gap-1.5 text-[11px] text-accent hover:text-accent/80 transition-colors"
+            className="flex items-center gap-1.5 text-[length:var(--text-meta)] text-accent hover:text-accent/80 transition-colors"
 >
             全部专家
             <ArrowRight className="icon-sm" />
@@ -235,14 +235,14 @@ function CategoryTab({
     <button
       onClick={onClick}
       className={clsx(
-        "flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] whitespace-nowrap transition-colors",
+        "flex items-center gap-1 px-2.5 py-1 rounded-full text-[length:var(--text-meta)] whitespace-nowrap transition-colors",
         active
           ? "bg-accent text-accent-on-text"
           : "bg-bg-tertiary text-text-muted hover:text-text-primary",
       )}
     >
       {label}
-      <span className={clsx("text-[11px]", active ? "text-accent-on-text/70" : "text-text-faint")}>
+      <span className={clsx("text-[length:var(--text-meta)]", active ? "text-accent-on-text/70" : "text-text-faint")}>
         {count}
       </span>
     </button>

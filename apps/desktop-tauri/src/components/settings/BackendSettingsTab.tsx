@@ -60,7 +60,7 @@ export function BackendTab() {
               启用后 AI 助手保持后台活跃状态，支持持续监控与定时任务。
             </p>
             {tickLoopRunning && (
-              <span className="inline-flex items-center gap-1 mt-1 text-[11px] text-green-400">
+              <span className="inline-flex items-center gap-1 mt-1 text-[length:var(--text-meta)] text-green-400">
                 <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
                 运行中
               </span>
@@ -197,7 +197,7 @@ export function PythonRuntimePanel() {
           {probe.entries.map((e, i) => (
             <div
               key={`${e.path}-${i}`}
-              className={`flex items-center gap-2 px-2.5 py-1.5 rounded text-[11px] font-mono ${
+              className={`flex items-center gap-2 px-2.5 py-1.5 rounded text-[length:var(--text-meta)] font-mono ${
                 probe.selected === e.path
                   ? "bg-accent/10 border border-accent/30"
                   : "bg-bg-tertiary/30 border border-border-secondary/40"
@@ -242,7 +242,7 @@ export function PythonRuntimePanel() {
           </button>
         </div>
         {overrideStatus && (
-          <div className="text-[11px] text-text-muted">{overrideStatus}</div>
+          <div className="text-[length:var(--text-meta)] text-text-muted">{overrideStatus}</div>
         )}
       </div>
     </div>

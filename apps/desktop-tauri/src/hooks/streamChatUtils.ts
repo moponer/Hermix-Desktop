@@ -55,6 +55,8 @@ export function buildConnectedPayload(
   if (overrides.image) payload.image = overrides.image;
   if (overrides.imageMimeType) payload.image_mime_type = overrides.imageMimeType;
   if (overrides.images && overrides.images.length > 0) payload.images = overrides.images;
+  if (overrides.domainOverride) payload.domain_override = overrides.domainOverride;
+  if (overrides.expertToolset) payload.expert_toolset = overrides.expertToolset;
   return payload;
 }
 

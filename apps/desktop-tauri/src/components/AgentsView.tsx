@@ -142,29 +142,29 @@ export function AgentsView({
       <div className="flex items-center justify-between px-6 py-4">
         <div className="flex items-center gap-2.5">
           <Brain size={20} className="text-text-secondary" />
-          <h2 className="text-[16px] font-semibold text-text-primary">专家</h2>
-          <span className="text-[11px] text-text-faint font-mono">{agents.length}</span>
+          <h2 className="text-[length:var(--text-title)] font-semibold text-text-primary">专家</h2>
+          <span className="text-[length:var(--text-meta)] text-text-faint font-mono">{agents.length}</span>
         </div>
         <div className="flex items-center gap-1 rounded-lg bg-bg-tertiary p-0.5">
           <button
             onClick={() => switchTab("my")}
             className={clsx(
-              "px-3 py-1 rounded-md text-[13px]",
+              "px-3 py-1 rounded-md text-[length:var(--text-ui)]",
               tab === "my" ? "bg-accent-soft text-accent font-medium" : "text-text-muted hover:text-text-primary"
             )}
           >
             我的专家
-            {agents.length > 0 && <span className="ml-1 text-[11px] text-text-faint">{agents.length}</span>}
+            {agents.length > 0 && <span className="ml-1 text-[length:var(--text-meta)] text-text-faint">{agents.length}</span>}
           </button>
           <button
             onClick={() => switchTab("builtin")}
             className={clsx(
-              "px-3 py-1 rounded-md text-[13px]",
+              "px-3 py-1 rounded-md text-[length:var(--text-ui)]",
               tab === "builtin" ? "bg-accent-soft text-accent font-medium" : "text-text-muted hover:text-text-primary"
             )}
           >
             内置专家
-            <span className="ml-1 text-[11px] text-text-faint">{BUILTIN_EXPERTS.length}</span>
+            <span className="ml-1 text-[length:var(--text-meta)] text-text-faint">{BUILTIN_EXPERTS.length}</span>
           </button>
         </div>
         <div className="flex gap-2">
@@ -172,14 +172,14 @@ export function AgentsView({
             <>
               <button
                 onClick={() => { setEditingId(null); setMode("create"); }}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] font-medium"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[length:var(--text-ui)] font-medium"
                 style={{ background: "var(--color-btn-secondary-bg)", color: "var(--color-btn-secondary-text)" }}
               >
                 <Plus className="icon-md" /> 手动创建
               </button>
               <button
                 onClick={() => setMode("generate")}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] font-medium"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[length:var(--text-ui)] font-medium"
                 style={{ background: "var(--color-btn-primary-bg)", color: "var(--color-btn-primary-text)" }}
               >
                 <Sparkles className="icon-md" /> AI 生成
@@ -189,7 +189,7 @@ export function AgentsView({
           {tab === "my" && mode !== "list" && (
             <button
               onClick={() => { setMode("list"); setEditingId(null); }}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] font-medium"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[length:var(--text-ui)] font-medium"
               style={{ background: "var(--color-btn-secondary-bg)", color: "var(--color-btn-secondary-text)" }}
             >
               <ArrowLeft className="icon-md" /> 返回列表
@@ -207,19 +207,19 @@ export function AgentsView({
                 {agents.length === 0 ? (
                   <div className="flex flex-col items-center justify-center py-20 text-center">
                     <Bot size={48} className="text-text-faint mb-4" />
-                    <h3 className="text-[15px] font-medium text-text-secondary mb-2">还没有专家</h3>
-                    <p className="text-[13px] text-text-muted mb-6">手动创建或让 AI 帮你生成一个专家</p>
+                    <h3 className="text-[length:var(--text-body)] font-medium text-text-secondary mb-2">还没有专家</h3>
+                    <p className="text-[length:var(--text-ui)] text-text-muted mb-6">手动创建或让 AI 帮你生成一个专家</p>
                     <div className="flex gap-2">
                       <button
                         onClick={() => { setEditingId(null); setMode("create"); }}
-                        className="px-4 py-2 rounded-lg text-[13px] font-medium"
+                        className="px-4 py-2 rounded-lg text-[length:var(--text-ui)] font-medium"
                         style={{ background: "var(--color-btn-secondary-bg)", color: "var(--color-btn-secondary-text)" }}
                       >
                         手动创建
                       </button>
                       <button
                         onClick={() => setMode("generate")}
-                        className="px-4 py-2 rounded-lg text-[13px] font-medium"
+                        className="px-4 py-2 rounded-lg text-[length:var(--text-ui)] font-medium"
                         style={{ background: "var(--color-btn-primary-bg)", color: "var(--color-btn-primary-text)" }}
                       >
                         AI 生成
@@ -230,7 +230,7 @@ export function AgentsView({
                   <>
                     {/* Sort tabs */}
                     <div className="flex items-center justify-between mb-4">
-                      <div className="flex items-center gap-1 text-[12px]">
+                      <div className="flex items-center gap-1 text-[length:var(--text-meta)]">
                         <span className="text-text-faint">排序:</span>
                         {([["recent", "最近使用"], ["popular", "最常使用"], ["name", "按名称"]] as const).map(([k, l]) => (
                           <button
@@ -245,7 +245,7 @@ export function AgentsView({
                           </button>
                         ))}
                       </div>
-                      <p className="text-[11px] text-text-faint">{sortedAgents.length} 个专家</p>
+                      <p className="text-[length:var(--text-meta)] text-text-faint">{sortedAgents.length} 个专家</p>
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -267,7 +267,7 @@ export function AgentsView({
             {mode === "create" && (
               <div className="p-6">
                 <div className="max-w-2xl mx-auto">
-                  <h3 className="text-[15px] font-semibold text-text-primary mb-4">
+                  <h3 className="text-[length:var(--text-body)] font-semibold text-text-primary mb-4">
                     {editingAgent ? `编辑「${editingAgent.name}」` : "创建新专家"}
                   </h3>
                   <div className="rounded-xl bg-bg-card p-5">

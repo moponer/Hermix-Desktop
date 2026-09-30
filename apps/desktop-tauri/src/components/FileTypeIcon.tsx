@@ -253,7 +253,7 @@ export function FileTypeIcon({
         x="11.5"
         y={label.length > 2 ? 16.2 : 16.6}
         textAnchor="middle"
-        fontFamily="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif"
+        fontFamily="var(--font-sans)"
         fontSize={label.length > 2 ? 7.5 : 10.5}
         fontWeight="700"
         letterSpacing="0"

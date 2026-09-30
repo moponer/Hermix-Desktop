@@ -150,10 +150,10 @@ export function ModelAddDialog({ onClose, onSaved }: Props) {
                   >
                     <ProviderIcon providerId={p.id} className="icon-lg" />
                     <span className="flex-1 min-w-0">
-                      <span className="block text-[13px] text-text-primary truncate">{p.name}</span>
-                      <span className="block text-[11px] text-text-muted truncate">{p.description}</span>
+                      <span className="block text-[length:var(--text-ui)] text-text-primary truncate">{p.name}</span>
+                      <span className="block text-[length:var(--text-meta)] text-text-muted truncate">{p.description}</span>
                     </span>
-                    <span className="text-[11px] text-text-faint shrink-0">内置</span>
+                    <span className="text-[length:var(--text-meta)] text-text-faint shrink-0">内置</span>
                   </button>
                 ))}
                 <button
@@ -162,12 +162,12 @@ export function ModelAddDialog({ onClose, onSaved }: Props) {
                 >
                   <span className="w-4 h-4 shrink-0 rounded-full border border-dashed border-border-secondary" />
                   <span className="flex-1 min-w-0">
-                    <span className="block text-[13px] text-text-primary">自定义</span>
-                    <span className="block text-[11px] text-text-muted">
+                    <span className="block text-[length:var(--text-ui)] text-text-primary">自定义</span>
+                    <span className="block text-[length:var(--text-meta)] text-text-muted">
                       任何 OpenAI 兼容端点（LM Studio / Ollama / 中转）
                     </span>
                   </span>
-                  <span className="text-[11px] text-text-faint shrink-0">自定义</span>
+                  <span className="text-[length:var(--text-meta)] text-text-faint shrink-0">自定义</span>
                 </button>
               </div>
             </>
@@ -263,7 +263,7 @@ export function ModelAddDialog({ onClose, onSaved }: Props) {
 }
 
 const inputCls =
-  "mt-1 w-full px-3 py-2 rounded-lg bg-bg-tertiary text-[13px] text-text-primary border border-border-secondary outline-none focus:border-accent transition-colors";
+  "mt-1 w-full px-3 py-2 rounded-lg bg-bg-tertiary text-[length:var(--text-ui)] text-text-primary border border-border-secondary outline-none focus:border-accent transition-colors";
 const btnPrimary =
   "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs bg-accent text-white hover:opacity-90 disabled:opacity-50";
 const btnGhost =
@@ -272,9 +272,9 @@ const btnGhost =
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
     <label className="block">
-      <span className="text-[12px] text-text-secondary">{label}</span>
+      <span className="text-[length:var(--text-meta)] text-text-secondary">{label}</span>
       {children}
-      {hint && <span className="block mt-1 text-[11px] text-text-faint">{hint}</span>}
+      {hint && <span className="block mt-1 text-[length:var(--text-meta)] text-text-faint">{hint}</span>}
     </label>
   );
 }

@@ -59,7 +59,7 @@ export function AiGenerateButton({
       onClick={handleClick}
       disabled={!canGenerate}
       title={error ?? "AI 生成结构化 PROMPT"}
-      className="flex items-center gap-1 px-2 py-1 rounded text-text-muted hover:text-text-primary hover:bg-bg-tertiary disabled:opacity-30 disabled:cursor-not-allowed transition-colors text-[12px]"
+      className="flex items-center gap-1 px-2 py-1 rounded text-text-muted hover:text-text-primary hover:bg-bg-tertiary disabled:opacity-30 disabled:cursor-not-allowed transition-colors text-[length:var(--text-meta)]"
     >
       {loading ? <Loader2 className="icon-sm animate-spin" /> : <Sparkles className="icon-sm" />}
       <span>AI 生成</span>

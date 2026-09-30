@@ -121,6 +121,7 @@ export const STORAGE_KEYS = {
   agents: "hermix-agents",
   recentExperts: "hermix.desktop.recent_experts",
   permissionLevel: "hermix.desktop.permission_level",
+  domainMode: "hermix.desktop.domain_mode",
   modelConfig: "hermix.desktop.model_config",
   modelCache: "hermix.desktop.model_cache",
   workspaceRoot: "hermix.desktop.workspace_root",

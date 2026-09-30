@@ -30,6 +30,8 @@ export interface RouteContext {
   upsertSessions: (list: Session[]) => void;
   startCreateAppFlow: () => void;
   chatNode: ReactNode;
+  /** 当前激活会话 id —— 工作台浮窗历史下拉高亮当前对话线。 */
+  activeSessionId: string | null;
 }
 
 /** 按当前 page 渲染对应视图。与 App 原条件渲染链 1:1 等价。 */
@@ -54,6 +56,7 @@ export function renderRoutes(page: NavPage, ctx: RouteContext): ReactNode {
             chatNode={ctx.chatNode}
             onSelectSession={ctx.selectSessionOnly}
             onRegisterSessions={ctx.upsertSessions}
+            activeSessionId={ctx.activeSessionId}
           />
         </Suspense>
       );

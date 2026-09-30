@@ -243,7 +243,7 @@ export function CompactionStatusBanner({ status, onDismiss }: CompactionStatusBa
       ? `${status.usedText} / ${status.maxText ?? status.thresholdText} ${unit}${status.percent !== undefined ? ` (${Math.round(status.percent)}%)` : ""}`
       : null;
   return (
-    <div className={`mb-2 px-3 py-2.5 rounded-xl border text-[13px] flex items-start gap-2.5 ${copy.tone}`}>
+    <div className={`mb-2 px-3 py-2.5 rounded-xl border text-[length:var(--text-ui)] flex items-start gap-2.5 ${copy.tone}`}>
       <Icon
         className={`icon-lg ${`shrink-0 mt-0.5 ${"spinning" in copy && copy.spinning ? "animate-spin" : ""}`}`}
       />

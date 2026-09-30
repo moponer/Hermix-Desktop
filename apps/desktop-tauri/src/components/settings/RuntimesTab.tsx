@@ -87,7 +87,7 @@ export function RuntimesTab() {
       <section>
         <div className="flex items-center gap-2">
           <Boxes className="icon-md" />
-          <h3 className="text-[13px] font-semibold text-text-primary">内置运行时</h3>
+          <h3 className="text-[length:var(--text-ui)] font-semibold text-text-primary">内置运行时</h3>
         </div>
         <p className="text-xs text-text-muted mt-1 leading-relaxed">
           便携版不该依赖用户机器上装了什么。内置位优先于系统 PATH；关掉某项只是不放进可用
@@ -146,7 +146,7 @@ export function RuntimesTab() {
               </div>
 
               {hit && (
-                <div className="mt-2 truncate font-mono text-[11px] text-text-muted" title={hit.path}>
+                <div className="mt-2 truncate font-mono text-[length:var(--text-meta)] text-text-muted" title={hit.path}>
                   {hit.path}
                 </div>
               )}

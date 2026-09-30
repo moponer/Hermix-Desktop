@@ -167,7 +167,7 @@ export function ModelListTab() {
     <div className="p-6 max-w-3xl mx-auto">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h3 className="text-[13px] font-semibold text-text-primary">自定义模型</h3>
+          <h3 className="text-[length:var(--text-ui)] font-semibold text-text-primary">自定义模型</h3>
           <p className="text-xs text-text-muted mt-0.5">
             模型添加后写入 config.yaml 持久保存。内置供应商只需 API Key，自定义支持任何 OpenAI 兼容端点。
           </p>
@@ -203,12 +203,12 @@ export function ModelListTab() {
               <ProviderIcon providerId={row.providerId} className="icon-lg shrink-0" />
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-1.5">
-                  <span className="text-[13px] text-text-primary truncate">{row.modelId}</span>
+                  <span className="text-[length:var(--text-ui)] text-text-primary truncate">{row.modelId}</span>
                   {row.isDefault && (
-                    <span className="px-1.5 py-0.5 rounded text-[10px] bg-accent/15 text-accent shrink-0">默认</span>
+                    <span className="px-1.5 py-0.5 rounded text-[length:var(--text-meta)] bg-accent/15 text-accent shrink-0">默认</span>
                   )}
                 </div>
-                <div className="text-[11px] text-text-muted truncate">
+                <div className="text-[length:var(--text-meta)] text-text-muted truncate">
                   {row.providerName} · {row.isBuiltin ? "内置" : "自定义"}
                   {testNote[row.id] && <span className="ml-1">· {testNote[row.id]}</span>}
                 </div>

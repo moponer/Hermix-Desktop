@@ -272,7 +272,7 @@ function AppMentionInputImpl({
           }}
         >
           <div
-            className="px-3 py-2 text-[11px] font-medium uppercase tracking-wide"
+            className="px-3 py-2 text-[length:var(--text-meta)] font-medium uppercase tracking-wide"
             style={{ color: "var(--color-text-muted)", borderBottom: "1px solid var(--color-border-primary)" }}
           >
             {panelTitle}
@@ -293,7 +293,7 @@ function AppMentionInputImpl({
                   }}
                 >
                   <span
-                    className="flex items-center gap-1.5 text-[13px] font-medium"
+                    className="flex items-center gap-1.5 text-[length:var(--text-ui)] font-medium"
                     style={{ color: item.isCreate ? "var(--color-accent, #b8860b)" : "var(--color-text-primary)" }}
                   >
                     {item.isCreate && <Plus className="icon-md" />}
@@ -301,7 +301,7 @@ function AppMentionInputImpl({
                   </span>
                   {item.description && (
                     <span
-                      className="text-[12px] truncate"
+                      className="text-[length:var(--text-meta)] truncate"
                       style={{ color: "var(--color-text-muted)" }}
                     >
                       {item.description}

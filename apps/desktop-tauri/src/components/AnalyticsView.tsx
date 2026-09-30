@@ -448,7 +448,7 @@ function DebugPanel({
                   </div>
                   {t.error && <div className="text-red-300 mt-1 break-words">{t.error}</div>}
                   {t.sample.length > 0 && (
-                    <pre className="mt-1.5 max-h-40 overflow-auto text-[11px] text-text-faint whitespace-pre-wrap">
+                    <pre className="mt-1.5 max-h-40 overflow-auto text-[length:var(--text-meta)] text-text-faint whitespace-pre-wrap">
                       {JSON.stringify(t.sample, null, 2)}
                     </pre>
                   )}

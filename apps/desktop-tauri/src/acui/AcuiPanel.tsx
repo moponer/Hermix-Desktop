@@ -218,7 +218,7 @@ export function AcuiPanel({ state, registry, decide, className, defaultCollapsed
           <button
             type="button"
             onClick={toggleCollapsed}
-            className="flex items-center gap-1.5 text-[11px] text-text-faint hover:text-text-secondary transition-colors w-full"
+            className="flex items-center gap-1.5 text-[length:var(--text-meta)] text-text-faint hover:text-text-secondary transition-colors w-full"
             aria-expanded={!collapsed}
           >
             {collapsed ? <ChevronRight className="icon-sm" /> : <ChevronDown className="icon-sm" />}
@@ -292,7 +292,7 @@ function AwakeningSummaryBanner({ summary }: { summary: AwakeningSummary }) {
   return (
     <div
       data-acui-section="summary"
-      className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-[11px] h-enter ${
+      className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-[length:var(--text-meta)] h-enter ${
         isHealthy
           ? "bg-emerald-500/5 border border-emerald-500/20 text-emerald-200"
           : "bg-amber-500/5 border border-amber-500/20 text-amber-200"

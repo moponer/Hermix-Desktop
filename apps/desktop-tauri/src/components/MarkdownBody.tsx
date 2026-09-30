@@ -195,7 +195,7 @@ function CodeBlockImpl({ language, code, isDark = false }: { language: string; c
       }}
     >
       <div
-        className="flex items-center justify-between px-4 py-2 text-[11px] border-b"
+        className="flex items-center justify-between px-4 py-2 text-[length:var(--text-meta)] border-b"
         style={{
           background: "var(--color-bg-code-header)",
           color: "var(--color-text-muted)",
@@ -207,7 +207,7 @@ function CodeBlockImpl({ language, code, isDark = false }: { language: string; c
             {LANG_LABEL[language] ?? "Code"}
           </span>
           {shouldCollapse && (
-            <span className="text-[11px] opacity-50">{lineCount} 行</span>
+            <span className="text-[length:var(--text-meta)] opacity-50">{lineCount} 行</span>
           )}
         </div>
         <button

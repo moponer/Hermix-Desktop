@@ -101,7 +101,7 @@ export const SelfCheckStepCard: AcuiComponent = ({ show }) => {
         aria-expanded={expanded}
       >
         <div
-          className={`shrink-0 w-6 h-6 rounded-full flex items-center justify-center bg-black/30 border font-mono text-[11px] ${
+          className={`shrink-0 w-6 h-6 rounded-full flex items-center justify-center bg-black/30 border font-mono text-[length:var(--text-meta)] ${
             status === "ok"
               ? "border-emerald-500/30 text-emerald-200"
               : status === "fail"
@@ -115,19 +115,19 @@ export const SelfCheckStepCard: AcuiComponent = ({ show }) => {
         >
           {step}
         </div>
-        <div className="flex-1 min-w-0 truncate text-[12px] text-text-primary">
+        <div className="flex-1 min-w-0 truncate text-[length:var(--text-meta)] text-text-primary">
           {label || `第 ${step} 步自检`}
         </div>
-        <div className={`shrink-0 flex items-center gap-1 text-[11px] ${cls}`}>
+        <div className={`shrink-0 flex items-center gap-1 text-[length:var(--text-meta)] ${cls}`}>
           <Icon className="icon-sm" />
           <span>{statusLabel}</span>
         </div>
         {isTerminal && typeof p.durationMs === "number" && (
-          <div className="shrink-0 text-[11px] text-text-faint font-mono">
+          <div className="shrink-0 text-[length:var(--text-meta)] text-text-faint font-mono">
             {formatDuration(p.durationMs)}
           </div>
         )}
-        <div className="shrink-0 text-[11px] text-text-faint font-mono">
+        <div className="shrink-0 text-[length:var(--text-meta)] text-text-faint font-mono">
           {step}/{total}
         </div>
         {hasDetails ? (
@@ -148,7 +148,7 @@ export const SelfCheckStepCard: AcuiComponent = ({ show }) => {
           className="ml-8 pl-3 border-l border-white/[0.04] space-y-1"
         >
           {p.metrics && Object.keys(p.metrics).length > 0 && (
-            <div className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-0.5 text-[11px] font-mono">
+            <div className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-0.5 text-[length:var(--text-meta)] font-mono">
               {Object.entries(p.metrics).map(([k, v]) => (
                 <div key={k} className="contents">
                   <div className="text-text-faint">{k}</div>
@@ -158,14 +158,14 @@ export const SelfCheckStepCard: AcuiComponent = ({ show }) => {
             </div>
           )}
           {status === "fail" && typeof p.error === "string" && p.error.length > 0 && (
-            <div className="text-[11px] text-rose-200/90 font-mono whitespace-pre-wrap break-all">
+            <div className="text-[length:var(--text-meta)] text-rose-200/90 font-mono whitespace-pre-wrap break-all">
               {p.error}
             </div>
           )}
           {!p.metrics &&
             !(status === "fail" && p.error) &&
             typeof p.durationMs === "number" && (
-              <div className="text-[11px] text-text-faint font-mono">
+              <div className="text-[length:var(--text-meta)] text-text-faint font-mono">
                 耗时 {formatDuration(p.durationMs)}
               </div>
             )}

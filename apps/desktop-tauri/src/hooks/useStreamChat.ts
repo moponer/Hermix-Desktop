@@ -102,6 +102,11 @@ export interface ChatOverrides {
   model?: string;
   /** Names of skills to enable for this turn. */
   skills?: string[];
+  /** L1 域模式 pin："code" = 编码模式；不传/undefined = 自动检测（工作模式）。 */
+  domainOverride?: string;
+  /** 受聘专家携带的工具组名（registry 标签，如 "office"）。后端把组成员
+   *  并进本轮白名单——专家只能加工具，不会撤销用户已启用的集合。 */
+  expertToolset?: string;
   /** Free-form overrides for future use; backend ignores unknown keys. */
   /** 多图支持 — binary bytes 直传，不走 base64。 */
   images?: { bytes: number[]; mimeType: string; name?: string }[];
@@ -177,7 +182,7 @@ export interface StreamCallbacks {
     expiresAt?: number | null;
     reason?: string;
     sessionId: string;
-  }) => Promise<{ decision: "approved" | "denied" | "expired"; remember?: boolean }>;
+  }) => Promise<{ decision: "approved" | "denied" | "expired"; remember?: boolean; note?: string }>;
   /** Server coalesced N parallel approvals into one card. The
    *  settlement promise carries the single decision (no per-item
    *  granularity at the wire level) plus an optional
@@ -186,7 +191,7 @@ onApprovalBatchRequest?: (req: {
     batchId: string;
     items: ApprovalRequestItem[];
     sessionId: string;
-  }) => Promise<{ decision: "approved" | "denied" | "expired"; remember?: boolean }>;
+  }) => Promise<{ decision: "approved" | "denied" | "expired"; remember?: boolean; note?: string }>;
   onClarifyRequest?: (req: {
     requestId: string;
     question: string;

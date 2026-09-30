@@ -36,7 +36,7 @@ export function BuiltInExpertsTab() {
   return (
     <div className="p-6">
       <div className="max-w-7xl mx-auto">
-        <p className="text-[13px] text-text-muted mb-4">
+        <p className="text-[length:var(--text-ui)] text-text-muted mb-4">
           Hermix 内置的专家角色 — 涵盖产品、技术、金融、营销、内容创作等领域。在对话界面点击"专家"选择使用。
         </p>
         <div className="flex items-center gap-2 mb-3">
@@ -44,7 +44,7 @@ export function BuiltInExpertsTab() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="搜索专家、角色、类别..."
-            className="flex-1 px-3 py-1.5 rounded-md bg-bg-card text-[13px] text-text-primary placeholder-text-faint outline-none"
+            className="flex-1 px-3 py-1.5 rounded-md bg-bg-card text-[length:var(--text-ui)] text-text-primary placeholder-text-faint outline-none"
           />
         </div>
         <div className="flex items-center gap-1.5 mb-5 overflow-x-auto" style={{ scrollbarWidth: "none" }}>
@@ -72,7 +72,7 @@ export function BuiltInExpertsTab() {
           <div className="flex flex-col items-center justify-center py-20 text-center text-text-muted">
             <Bot size={36} className="mb-3 opacity-40" />
             <p className="text-sm">没有匹配的内置专家</p>
-            <p className="text-[11px] text-text-faint mt-1">试试其他类别或搜索词</p>
+            <p className="text-[length:var(--text-meta)] text-text-faint mt-1">试试其他类别或搜索词</p>
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
@@ -93,14 +93,14 @@ function CategoryChip({
     <button
       onClick={onClick}
       className={clsx(
-        "flex items-center gap-1 px-2.5 py-1 rounded-full text-[12px] whitespace-nowrap",
+        "flex items-center gap-1 px-2.5 py-1 rounded-full text-[length:var(--text-meta)] whitespace-nowrap",
         active
           ? "bg-accent text-accent-on-text"
           : "bg-bg-tertiary text-text-muted hover:text-text-primary",
       )}
     >
       {label}
-      <span className={clsx("text-[11px]", active ? "text-accent-on-text/80" : "text-text-faint")}>{count}</span>
+      <span className={clsx("text-[length:var(--text-meta)]", active ? "text-accent-on-text/80" : "text-text-faint")}>{count}</span>
     </button>
   );
 }
@@ -109,27 +109,27 @@ function ExpertCard({ expert }: { expert: ExpertDef }) {
   return (
     <div className="rounded-xl bg-bg-card p-3.5 transition-[color,background-color,border-color,transform,box-shadow] hover:-translate-y-0.5 hover:shadow-md">
       <div className="flex items-start gap-2.5">
-        <div className="w-9 h-9 rounded-full flex items-center justify-center text-[20px] shrink-0 bg-bg-tertiary">
+        <div className="w-9 h-9 rounded-full flex items-center justify-center text-[length:var(--text-display)] shrink-0 bg-bg-tertiary">
           {expert.avatar}
         </div>
         <div className="min-w-0 flex-1">
           <div className="mb-0.5">
-            <h3 className="text-[13px] font-semibold text-text-primary truncate leading-tight">
+            <h3 className="text-[length:var(--text-ui)] font-semibold text-text-primary truncate leading-tight">
               {expert.name}
             </h3>
-            <p className="text-[11px] text-text-muted truncate mt-0.5">
+            <p className="text-[length:var(--text-meta)] text-text-muted truncate mt-0.5">
               {expert.role}
             </p>
           </div>
-          <p className="text-[11px] text-text-secondary leading-relaxed line-clamp-2 mt-1 min-h-[2.4em]">
+          <p className="text-[length:var(--text-meta)] text-text-secondary leading-relaxed line-clamp-2 mt-1 min-h-[2.4em]">
             {expert.description}
           </p>
           <div className="flex flex-wrap gap-1 mt-2">
-            <span className="px-1.5 py-0.5 rounded text-[11px] text-text-secondary bg-bg-tertiary">
+            <span className="px-1.5 py-0.5 rounded text-[length:var(--text-meta)] text-text-secondary bg-bg-tertiary">
               {expert.category}
             </span>
             {expert.toolset && (
-              <span className="px-1.5 py-0.5 rounded text-[11px] text-text-secondary bg-bg-tertiary">
+              <span className="px-1.5 py-0.5 rounded text-[length:var(--text-meta)] text-text-secondary bg-bg-tertiary">
                 {expert.toolset}
               </span>
             )}

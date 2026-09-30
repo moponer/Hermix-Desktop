@@ -41,7 +41,7 @@ export function InlineClarifyCard({
           <div className="approval-avatar" style={{ background: "var(--color-info-soft)", color: "var(--color-info)" }}>
             <HelpCircle className="icon-sm" />
           </div>
-          <span className="text-[13px] font-semibold text-text-primary">Hermix 在问</span>
+          <span className="text-[length:var(--text-ui)] font-semibold text-text-primary">Hermix 在问</span>
           <span className="h-tiny">{"\u00b7"} 等待你的回答</span>
         </div>
 

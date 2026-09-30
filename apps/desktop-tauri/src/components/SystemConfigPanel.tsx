@@ -110,7 +110,7 @@ export function SystemConfigPanel({ onClose, initialCategory }: SystemConfigPane
         {/* Header */}
         <div className="flex items-center gap-3 px-5 py-3 border-b border-border-primary bg-bg-secondary shrink-0">
           <span className="text-sm font-semibold text-text-primary">系统配置</span>
-          <span className="text-[11px] text-text-muted">模型 · 工具 · 后端 · 高级选项</span>
+          <span className="text-[length:var(--text-meta)] text-text-muted">模型 · 工具 · 后端 · 高级选项</span>
           <button
             onClick={onClose}
             className="ml-auto h-7 w-7 rounded-md flex items-center justify-center text-text-muted hover:text-text-primary hover:bg-bg-hover transition-colors"
@@ -133,8 +133,8 @@ export function SystemConfigPanel({ onClose, initialCategory }: SystemConfigPane
               >
                 <Icon className="icon-md shrink-0 opacity-70" />
                 <span className="flex-1 min-w-0">
-                  <span className="block text-[13px] leading-tight truncate font-medium">{label}</span>
-                  <span className="block text-[11px] text-text-muted leading-tight truncate">{hint}</span>
+                  <span className="block text-[length:var(--text-ui)] leading-tight truncate font-medium">{label}</span>
+                  <span className="block text-[length:var(--text-meta)] text-text-muted leading-tight truncate">{hint}</span>
                 </span>
               </button>
             ))}
@@ -148,7 +148,7 @@ export function SystemConfigPanel({ onClose, initialCategory }: SystemConfigPane
                   <button
                     key={id}
                     onClick={() => setBackendTab(id)}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] transition-colors whitespace-nowrap ${
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[length:var(--text-ui)] transition-colors whitespace-nowrap ${
                       backendTab === id
                         ? "bg-bg-tertiary text-text-primary font-medium"
                         : "text-text-muted hover:text-text-secondary hover:bg-bg-hover"
@@ -162,7 +162,7 @@ export function SystemConfigPanel({ onClose, initialCategory }: SystemConfigPane
                   <button
                     key={id}
                     onClick={() => setModelTab(id)}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] transition-colors whitespace-nowrap ${
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[length:var(--text-ui)] transition-colors whitespace-nowrap ${
                       modelTab === id
                         ? "bg-bg-tertiary text-text-primary font-medium"
                         : "text-text-muted hover:text-text-secondary hover:bg-bg-hover"
@@ -176,7 +176,7 @@ export function SystemConfigPanel({ onClose, initialCategory }: SystemConfigPane
                   <button
                     key={id}
                     onClick={() => setToolTab(id)}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] transition-colors whitespace-nowrap ${
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[length:var(--text-ui)] transition-colors whitespace-nowrap ${
                       toolTab === id
                         ? "bg-bg-tertiary text-text-primary font-medium"
                         : "text-text-muted hover:text-text-secondary hover:bg-bg-hover"
@@ -275,20 +275,20 @@ function ImageSettingsCard() {
         <div className="flex items-center justify-between">
           <div>
             <div className="text-sm text-text-primary">启用图片生成</div>
-            <div className="text-[12px] text-text-muted mt-0.5">开启后，对话中可调用图片生成技能。</div>
+            <div className="text-[length:var(--text-meta)] text-text-muted mt-0.5">开启后，对话中可调用图片生成技能。</div>
           </div>
           <ToggleSwitch enabled={cfg.enabled} onToggle={() => update({ enabled: !cfg.enabled })} />
         </div>
 
         <div>
-          <label className="text-[12px] text-text-secondary">图片模型</label>
+          <label className="text-[length:var(--text-meta)] text-text-secondary">图片模型</label>
           <input
             value={cfg.model}
             onChange={(e) => update({ model: e.target.value })}
             placeholder="例如 agnes-image-2.0"
             className="mt-1 w-full px-3 py-2 rounded-lg bg-bg-tertiary text-sm text-text-primary border border-border-secondary outline-none focus:border-accent transition-colors"
           />
-          <p className="mt-1 text-[11px] text-text-muted">默认留空时由后端决定使用的图片模型。</p>
+          <p className="mt-1 text-[length:var(--text-meta)] text-text-muted">默认留空时由后端决定使用的图片模型。</p>
         </div>
       </div>
     </div>

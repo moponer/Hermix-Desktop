@@ -99,8 +99,8 @@ export function TestDialog({ agent, onClose }: TestDialogProps) {
             {agent.avatar}
           </div>
           <div className="min-w-0 flex-1">
-            <p className="text-[13px] font-semibold text-text-primary truncate">{agent.name}</p>
-            <p className="text-[11px] text-text-muted truncate">{agent.role}</p>
+            <p className="text-[length:var(--text-ui)] font-semibold text-text-primary truncate">{agent.name}</p>
+            <p className="text-[length:var(--text-meta)] text-text-muted truncate">{agent.role}</p>
           </div>
           <button onClick={onClose} aria-label="关闭" className="p-1.5 rounded-md text-text-muted hover:text-text-primary hover:bg-bg-hover">
             <X className="icon-md" />
@@ -112,14 +112,14 @@ export function TestDialog({ agent, onClose }: TestDialogProps) {
           {messages.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-center text-text-muted">
               <MessageSquare size={28} className="mb-2 opacity-30" />
-              <p className="text-[12px]">开始和 {agent.name} 聊几句</p>
+              <p className="text-[length:var(--text-meta)]">开始和 {agent.name} 聊几句</p>
             </div>
           ) : (
             messages.map((m, i) => (
               <div key={`msg-${m.role}-${i}`} className={clsx("flex", m.role === "user" ? "justify-end" : "justify-start")}>
                 <div
                   className={clsx(
-                    "max-w-[80%] rounded-xl px-3 py-2 text-[13px] leading-relaxed",
+                    "max-w-[80%] rounded-xl px-3 py-2 text-[length:var(--text-ui)] leading-relaxed",
                     m.role === "user"
                       ? "bg-bg-tertiary text-text-primary"
                       : "text-text-primary"
@@ -141,7 +141,7 @@ export function TestDialog({ agent, onClose }: TestDialogProps) {
             onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }}}
             placeholder={`问 ${agent.name} 任何问题...`}
             disabled={streaming}
-            className="flex-1 rounded-lg bg-bg-tertiary px-3 py-2 text-[13px] text-text-primary placeholder:text-text-faint outline-none"
+            className="flex-1 rounded-lg bg-bg-tertiary px-3 py-2 text-[length:var(--text-ui)] text-text-primary placeholder:text-text-faint outline-none"
           />
           <button
             onClick={send}

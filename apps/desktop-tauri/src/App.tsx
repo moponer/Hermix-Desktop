@@ -67,7 +67,10 @@ const LEFT_MIN = 200;
 const LEFT_MAX = 360;
 // 左列默认 280，给主列留出空间，使三列共存时主列更宽、工作区名称更舒展。
 // 已存在会话的 localStorage 宽度不自动升级（用户拖动过的尊重保留），仅默认提高。
-const LEFT_DEFAULT = 280;
+// 2026-09-30：280 → 224。对齐 cc-haha 的窄侧栏 —— 280px 下会话标题
+// 有足够空间，但整栏占比过大，扫视时"框"比"内容"更抢眼；224px 恰好
+// 容纳一行中文标题 + 右侧时间戳。
+const LEFT_DEFAULT = 224;
 // 右列默认 640，拖动范围 360-840；vw=1440 时主列 = 1440 - 200 - 640 = 800。
 // 640 足以完整显示中文长标题分类（如"节假日危险品重大危险源..."），
 // 480 会让这类标题被截断；640 也不挤压主列。
@@ -189,6 +192,13 @@ setPage("chat");
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!e.ctrlKey && !e.metaKey) return;
+      // 2026-09-30：侧栏搜索行上的 ⌘K 提示原本是假的 —— 没有任何键绑定。
+      // 补上 Ctrl/Cmd+K，提示才成立。
+      if (e.key === "k" || e.key === "K") {
+        e.preventDefault();
+        setSearchOpen(true);
+        return;
+      }
       if (e.key === "0") {
         e.preventDefault();
         applyScale(1);
@@ -385,6 +395,17 @@ setPage("chat");
   // 里的 "change in the order of Hooks" 报告）。useResizable 现在只负责
   // 自己那列的 min/max 静态边界，动态夹紧走这里的单一 effect，单向数据
   // 流，没有循环依赖。
+  // 旧默认值一次性迁移：曾经把 LEFT_DEFAULT 设为 280，那条记录只可能是
+  // 「没拖过、用默认值」，不是用户的选择 —— 直接改写成新默认。其他任何
+  // 数值都视为用户拖动过的意图，原样尊重。
+  useEffect(() => {
+    try {
+      if (storage.getItem(LEFT_KEY) === "280") {
+        storage.setItem(LEFT_KEY, String(LEFT_DEFAULT));
+      }
+    } catch { /* storage 不可用时忽略 */ }
+  }, []);
+
   const left = useResizable({
     storageKey: LEFT_KEY,
     defaultWidth: LEFT_DEFAULT,
@@ -583,7 +604,7 @@ setPage("chat");
   const approvalResolversRef = useRef<
     Map<
       string,
-      (decision: Exclude<ApprovalDecision, null>, remember?: boolean) => void
+      (decision: Exclude<ApprovalDecision, null>, remember?: boolean, note?: string) => void
     >
   >(new Map());
   // Same shape, keyed by `batch_id`. Resolves the promise returned
@@ -592,7 +613,7 @@ setPage("chat");
   const approvalBatchResolversRef = useRef<
     Map<
       string,
-      (decision: Exclude<ApprovalDecision, null>, remember?: boolean) => void
+      (decision: Exclude<ApprovalDecision, null>, remember?: boolean, note?: string) => void
     >
   >(new Map());
   // Retry timers for approval responses — cleaned up when approval is resolved
@@ -1084,6 +1105,7 @@ setPage("chat");
       requestId: string,
       decision: Exclude<ApprovalDecision, null>,
       remember?: boolean,
+      note?: string,
     ): ApprovalDecision | null => {
       // Helper: flip a single assistant message's
       // `kind: "approval_request"` step to the given decision. Used
@@ -1123,7 +1145,7 @@ setPage("chat");
 
       const resolver = approvalResolversRef.current.get(requestId);
       if (resolver) {
-        resolver(decision, remember);
+        resolver(decision, remember, note);
         approvalResolversRef.current.delete(requestId);
         // also drop the session-ownership mapping kept for the REST fallback
         pendingApprovalSessionsRef.current.delete(requestId);
@@ -1243,7 +1265,7 @@ setPage("chat");
   );
 
   const handleDenyApproval = useCallback(
-    (requestId: string) => {
+    (requestId: string, note?: string) => {
       console.info(`[APPROVAL-DENY] id=${requestId} t=${Date.now()}`);
 
       // mirror the approve-path cleanup — drop the redundant
@@ -1252,10 +1274,13 @@ setPage("chat");
       // `resolveApproval()`) handles sending `approval_response` over
       // the live `stream:<sid>` channel. The REST fallback below is
       // what actually catches silent message loss across the bridge.
-      const restPayload = {
+      const restPayload: Record<string, string> = {
         request_id: requestId,
         decision: "denied",
       };
+      // 「告诉模型接下来该怎么做」——拒绝时附带的说明进 REST 兜底载荷；
+      // 主链路（WS 帧）在 useStreamParser 里同样带上 note。
+      if (note?.trim()) restPayload.note = note.trim();
       const restSid =
         pendingApprovalSessionsRef.current.get(requestId) ?? activeSessionId;
       if (restSid) {
@@ -1287,7 +1312,7 @@ setPage("chat");
       // Resolve the promise immediately so the UI updates
       // AND triggers the main WS path (useStreamChat.ts:1175 liveWs.send
       // sends decision="denied" via the `.then(resp => ...)` chain).
-      resolveApproval(requestId, "denied");
+      resolveApproval(requestId, "denied", undefined, note?.trim() || undefined);
     },
     [activeSessionId, resolveApproval],
   );
@@ -1305,6 +1330,7 @@ setPage("chat");
       batchId: string,
       decision: Exclude<ApprovalDecision, null>,
       remember?: boolean,
+      note?: string,
     ): ApprovalDecision | null => {
       const stampBatchDecision = (
         s: Session,
@@ -1337,7 +1363,7 @@ setPage("chat");
 
       const resolver = approvalBatchResolversRef.current.get(batchId);
       if (resolver) {
-        resolver(decision, remember);
+        resolver(decision, remember, note);
         approvalBatchResolversRef.current.delete(batchId);
         pendingApprovalSessionsRef.current.delete(batchId);
         const retryTimer = approvalRetryTimersRef.current.get(batchId);
@@ -1415,9 +1441,9 @@ setPage("chat");
   );
 
   const handleDenyBatch = useCallback(
-    (batchId: string) => {
+    (batchId: string, note?: string) => {
       console.info(`[APPROVAL-BATCH-DENY] id=${batchId} t=${Date.now()}`);
-      resolveApprovalBatch(batchId, "denied");
+      resolveApprovalBatch(batchId, "denied", undefined, note?.trim() || undefined);
     },
     [resolveApprovalBatch],
   );
@@ -1795,10 +1821,10 @@ streamPhaseRef.current = null;
       approvalTimeoutTimersRef.current.set(req.requestId, timer);
     }
 
-    return new Promise<{ decision: ApprovalDecision; remember?: boolean }>((resolve) => {
+    return new Promise<{ decision: ApprovalDecision; remember?: boolean; note?: string }>((resolve) => {
       approvalResolversRef.current.set(
         req.requestId,
-        (decision, remember) => resolve({ decision, remember }),
+        (decision, remember, note) => resolve({ decision, remember, note }),
       );
       // record which session owns this request so the REST fallback hits the
       // right `/v1/sessions/<sid>/approval` endpoint
@@ -1884,10 +1910,10 @@ streamPhaseRef.current = null;
         approvalTimeoutTimersRef.current.set(req.batchId, timer);
       }
 
-      return new Promise<{ decision: ApprovalDecision; remember?: boolean }>((resolve) => {
+      return new Promise<{ decision: ApprovalDecision; remember?: boolean; note?: string }>((resolve) => {
         approvalBatchResolversRef.current.set(
           req.batchId,
-          (decision, remember) => resolve({ decision, remember }),
+          (decision, remember, note) => resolve({ decision, remember, note }),
         );
         pendingApprovalSessionsRef.current.set(req.batchId, req.sessionId);
       });
@@ -3286,6 +3312,7 @@ return {
     upsertSessions,
     startCreateAppFlow,
     chatNode: chatViewNode,
+    activeSessionId,
   };
 
   return (

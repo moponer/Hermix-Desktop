@@ -223,7 +223,7 @@ export function ComputerTab({
 
         <div className="computer-addressbar">
           {breadcrumbs.length === 0 && (
-            <span className="text-text-faint text-[11px]">选择目录…</span>
+            <span className="text-text-faint text-[length:var(--text-meta)]">选择目录…</span>
           )}
           {breadcrumbs.map((seg, i) => (
             <span key={`crumb-${seg.label || i}`} className="computer-crumb-group">

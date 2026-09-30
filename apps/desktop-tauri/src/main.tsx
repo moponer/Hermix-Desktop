@@ -10,11 +10,10 @@ import { toastWarning } from "./hooks/useToast";
 import { ToastContainer } from "./components/ToastContainer";
 import "./styles/globals.css";
 import "./styles/inline-thinking-dot.css";
-// components.css ships a project-wide `.h-enter` animation shorthand;
-// `.h-leaving` (defined in `inline-approval-card.css`) must load after
-// it so the ACUI approval card's leave animation wins for elements
-// carrying both classes.
-import "./styles/components.css";
+// 2026-09-29：`components.css` 已删除。它是 `components-*.css` 的陈旧副本，
+// 两者曾同时加载且后者胜出，288 个选择器被双定义，只有旧副本赢。独有的
+// 33 个规则已迁回对应模块文件（见各文件末尾「从 components.css 迁入」段）。
+// `.h-leaving` 仍在 `inline-approval-card.css`，它排在最后，离场动画照常生效。
 import "./styles/workbench.css";
 import "./styles/inline-approval-card.css";
 import { restoreScale } from "./utils/uiScale";
@@ -106,16 +105,13 @@ function startProgressCrawl() {
     }
     const pctEl = document.getElementById("sp-progress-pct");
     const bar = document.getElementById("sp-progress-bar");
-    const textEl = document.getElementById("sp-progress-text");
     const cur = parseInt(pctEl?.textContent ?? "0", 10) || 0;
     if (cur >= 90) return;
+    // 1% / 280ms：原 600ms 太慢，3 秒才 5%，静帧下像卡死。
     const next = Math.min(90, cur + 1);
     if (bar) bar.style.width = `${next}%`;
     if (pctEl) pctEl.textContent = `${next}%`;
-    if (textEl && textEl.textContent === "正在初始化…") {
-      textEl.textContent = "正在初始化后端组件…";
-    }
-  }, 600);
+  }, 280);
 }
 
 function advanceSplashStage(text: string) {
@@ -195,6 +191,12 @@ async function pollHealth() {
 
 // 终极兜底：先于所有探测注册，保证 splash 永不永久卡住。
 setTimeout(() => safeDismiss(false), HARD_FALLBACK_MS);
+
+// 启动即动：不等 boot_stage 回查（invoke 往返有延迟，且失败路径才开爬的
+// 旧逻辑让 splash 在空窗期死在 0%）。模块加载时立刻点亮阶段 0 + 开爬行，
+// 真实 boot-stage 事件到达后 advanceSplashStage 会自然接管并停爬。
+advanceSplashStage("正在准备运行环境…");
+startProgressCrawl();
 
 pollHealth();
 

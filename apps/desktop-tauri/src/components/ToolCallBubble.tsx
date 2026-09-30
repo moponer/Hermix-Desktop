@@ -1,6 +1,7 @@
 // Tool-call related bubbles: tool-row cards, the unified/process timeline
 // renderer, the live terminal, and the file-change / memory meta blocks.
 // Extracted from MessageBubble.tsx.
+import { buildActivitySegments, shouldSummarize } from "./chat/activitySummary";
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import {
   ChevronDown, ChevronRight, Loader2, AlertCircle, AlertTriangle,
@@ -202,18 +203,19 @@ export function ProcessTimeline({
    *  show (only when the user has folded the reasoning block). */
   onReasoningFoldChange?: (folded: boolean) => void;
 }) {
-  // Streaming → always expanded (no fold UI shown at all).
-  // Paused (keepOpen) → also expanded: the agent is awaiting approval /
-  //   a running tool and has NOT produced its final output yet, so the
-  //   thinking block must stay open (collapsing here makes it look like
-  //   the turn ended when it has not).
-  // Running tool (hasRunningTool) → expanded too: between agent-loop
-  //   turns the LLM stream settles (isStreaming=false) while the tool
-  //   is still executing — collapsing the thinking block in that window
-  //   reads as "agent stopped", which is wrong.
-  // Truly settled → default collapsed; user can click to expand.
+  // 展开判定抄 cc-haha `ActivityGroup.tsx:85`：按「这一组是不是活跃轮次
+  // 的尾巴」判，**不按「有没有工具正在执行」**判。
+  //
+  // 改之前这里把 `hasRunningTool` 也算进自动展开条件。问题在两个工具之间：
+  // 上一个工具刚 complete、下一个还没 start 的那一瞬，`isStreaming` 是 false
+  // 且 `hasRunningTool` 也是 false，折叠条会闪一下收起来再弹开。
+  //
+  // 现在的规则：
+  //   还在流（isStreaming）→ 展开，压根不显示折叠 UI
+  //   被挂起（keepOpen，等审批 / 等工具）→ 展开：这轮还没出最终结论
+  //   真的结束 → 默认折起；用户点过就以用户的为准，且这个选择会被记住
   const [userOverride, setUserOverride] = useState<boolean | null>(null);
-  const expanded = isStreaming || keepOpen || hasRunningTool ? true : (userOverride ?? false);
+  const expanded = isStreaming || keepOpen ? true : (userOverride ?? false);
 
   // Report fold state up to the parent so the bottom-of-chat
   // `<ReasoningTicker>` can mount when the user has folded this
@@ -225,11 +227,10 @@ export function ProcessTimeline({
     onReasoningFoldChange?.(!expanded);
   }, [expanded, onReasoningFoldChange]);
 
-  // When a new turn starts (live → settled → live again), drop the
-  // user's manual override so the auto-collapse default kicks in.
-  useEffect(() => {
-    if (!isStreaming) setUserOverride(null);
-  }, [isStreaming]);
+  // 2026-09-29：不再「新一轮开始就丢掉用户覆盖」。消息列用了
+  // `content-visibility: auto`，行滚出视口会被回收再挂载 —— 折叠状态放
+  // 在组件里会被无声吞掉。改为按本轮的稳定 key 存进模块级 Map
+  // （见 chat/activitySummary.ts 的 useDisclosure）。
 
   // Pre-compute tool groups per step so the "已完成 N 个工具" count
   // reflects actual tool *invocations*, not raw timeline events — a
@@ -354,6 +355,17 @@ export function ProcessTimeline({
       return parts.join(" · ");
     })();
 
+  // 2026-09-29：抄 cc-haha `activityGroupModel.ts` 的动词表。摘要要读起来
+  // 像一句话（「思考、读取了 5 个文件、执行了 2 条命令」），而不是计数器的
+  // 输出（「已完成 7 个工具」）。文件类按去重后的路径数算，不是调用次数。
+  const segments = useMemo(() => buildActivitySegments(steps), [steps]);
+  // 只有一次工具调用、且没有思考时**不生成摘要** —— 「读取了 1 个文件」压在
+  // 一个被藏起来的 read_file 行上面，信息严格少于那一行本身。
+  // cc-haha `ActivityGroup.tsx:91-103` 的 data-single-step。
+  const showSummary = shouldSummarize(steps, reasoningSteps.length);
+  const activityLabel = segments.length > 0 ? segments.join("、") : settledLabel;
+
+
   // Reasoning and tool steps are kept as siblings, never nested. They
   // share the same fold header (2026-08-18 refactor) — both collapse
   // behind one tap when the turn settles. Text steps stay outside
@@ -368,7 +380,7 @@ export function ProcessTimeline({
           perceives a single continuous narrative, not a stack
           of chips. The header toggles *reasoning* visibility only;
           tool cards below are always shown. */}
-      {!isStreaming && hasProcessContent && (
+      {!isStreaming && hasProcessContent && showSummary && (
         <button
           onClick={() => setUserOverride((v) => !v)}
           className="reasoning-header tl-process-header"
@@ -381,16 +393,14 @@ export function ProcessTimeline({
             <ChevronRight className="icon-sm reasoning-chevron" />
           )}
           <CheckCircle2 className="icon-sm tl-process-check" />
-          <span className="reasoning-label">
-            {reasoningSteps.length > 0 ? "思考" : settledLabel}
-          </span>
+          <span className="reasoning-label">{activityLabel}</span>
           {/* 折叠态的"分量提示"：有思考时主标签是"思考"，工具数/行数/耗时
               作为次级统计挂在右侧，避免和思考文案挤成一句话。 */}
-          {reasoningSteps.length > 0 && !isStreaming && totalTools > 0 && (
+          {!isStreaming && (totalOutputLines > 0 || durationPart) && (
             <span className="reasoning-stat">
-              {totalTools} 个工具
-              {totalOutputLines > 0 ? ` · ${totalOutputLines} 行` : ""}
-              {durationPart ? ` · ${durationPart}` : ""}
+              {totalOutputLines > 0 ? `${totalOutputLines} 行` : ""}
+              {totalOutputLines > 0 && durationPart ? " · " : ""}
+              {durationPart}
             </span>
           )}
         </button>

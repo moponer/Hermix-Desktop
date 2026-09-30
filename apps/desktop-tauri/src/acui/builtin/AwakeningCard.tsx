@@ -95,15 +95,15 @@ export const AwakeningCard: AcuiComponent = ({ show }) => {
         ) : (
           <Sparkles className="icon-sm text-accent shrink-0" />
         )}
-        <span className="text-[13px] font-semibold text-text-primary truncate">
+        <span className="text-[length:var(--text-ui)] font-semibold text-text-primary truncate">
           {phase}
         </span>
         {subphase && !completed && (
-          <span className="text-[11px] text-text-muted truncate max-w-[160px]" title={subphase}>
+          <span className="text-[length:var(--text-meta)] text-text-muted truncate max-w-[160px]" title={subphase}>
             · {subphase}
           </span>
         )}
-        <span className="ml-auto text-[11px] text-text-muted font-mono shrink-0">
+        <span className="ml-auto text-[length:var(--text-meta)] text-text-muted font-mono shrink-0">
           {tick}/{totalTicks}
         </span>
         {!completed && (
@@ -133,14 +133,14 @@ export const AwakeningCard: AcuiComponent = ({ show }) => {
           );
         })}
         {totalTicks > 30 && (
-          <div className="text-[11px] text-text-faint ml-1">
+          <div className="text-[length:var(--text-meta)] text-text-faint ml-1">
             +{totalTicks - 30}
           </div>
         )}
       </div>
 
       {/* Footer: status + (running: elapsed-so-far) | (completed: totals) */}
-      <div className="flex items-center gap-1.5 text-[11px]">
+      <div className="flex items-center gap-1.5 text-[length:var(--text-meta)]">
         {completed ? (
           totals ? (
             <span className="font-mono text-text-secondary">

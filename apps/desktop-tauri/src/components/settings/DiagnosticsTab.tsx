@@ -144,16 +144,16 @@ export function DiagnosticsTab() {
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <div className="flex items-center gap-2 min-w-0">
             <FileText className="icon-md text-text-muted shrink-0" />
-            <span className="text-[12px] text-text-muted font-mono truncate" title={info?.dir ?? ""}>
+            <span className="text-[length:var(--text-meta)] text-text-muted font-mono truncate" title={info?.dir ?? ""}>
               {info?.dir ?? "（尚未生成日志目录）"}
             </span>
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            <label className="text-[11px] text-text-muted">显示尾部</label>
+            <label className="text-[length:var(--text-meta)] text-text-muted">显示尾部</label>
             <select
               value={tailLines}
               onChange={(e) => setTailLines(Number(e.target.value))}
-              className="px-2 py-1 rounded-md bg-bg-tertiary text-[12px] text-text-primary border border-border-secondary"
+              className="px-2 py-1 rounded-md bg-bg-tertiary text-[length:var(--text-meta)] text-text-primary border border-border-secondary"
             >
               {TAIL_LINE_OPTIONS.map((n) => (
                 <option key={n} value={n}>
@@ -163,7 +163,7 @@ export function DiagnosticsTab() {
             </select>
             <button
               onClick={() => void refresh()}
-              className="h-7 px-2.5 rounded-md flex items-center gap-1 text-[12px] text-text-secondary hover:text-text-primary hover:bg-bg-hover border border-border-secondary"
+              className="h-7 px-2.5 rounded-md flex items-center gap-1 text-[length:var(--text-meta)] text-text-secondary hover:text-text-primary hover:bg-bg-hover border border-border-secondary"
               title="重新读取"
             >
               <RefreshCw className="icon-sm" />
@@ -171,7 +171,7 @@ export function DiagnosticsTab() {
             </button>
             <button
               onClick={onOpenDir}
-              className="h-7 px-2.5 rounded-md flex items-center gap-1 text-[12px] text-text-secondary hover:text-text-primary hover:bg-bg-hover border border-border-secondary"
+              className="h-7 px-2.5 rounded-md flex items-center gap-1 text-[length:var(--text-meta)] text-text-secondary hover:text-text-primary hover:bg-bg-hover border border-border-secondary"
               title="在文件管理器中打开日志目录"
             >
               <FolderOpen className="icon-sm" />
@@ -181,7 +181,7 @@ export function DiagnosticsTab() {
         </div>
 
         {info && info.files.length > 0 && (
-          <div className="text-[11px] text-text-muted">
+          <div className="text-[length:var(--text-meta)] text-text-muted">
             共 {info.files.length} 个文件，占用 {formatBytes(info.totalBytes)}
             {info.files[0] && (
               <>
@@ -196,7 +196,7 @@ export function DiagnosticsTab() {
       {error && (
         <div className="rounded-lg border border-border-secondary bg-bg-card p-3 flex items-start gap-2">
           <AlertTriangle className="icon-md text-text-muted mt-0.5 shrink-0" />
-          <div className="text-[12px] text-text-secondary">
+          <div className="text-[length:var(--text-meta)] text-text-secondary">
             读取日志失败：<span className="font-mono">{error}</span>
             <br />
             <span className="text-text-muted">
@@ -209,20 +209,20 @@ export function DiagnosticsTab() {
       {tail && tail.lines.length > 0 && (
         <div className="rounded-lg border border-border-primary bg-bg-card">
           <div className="flex items-center justify-between px-3 py-2 border-b border-border-primary">
-            <div className="text-[12px] text-text-secondary truncate font-mono">
+            <div className="text-[length:var(--text-meta)] text-text-secondary truncate font-mono">
               {tail.fileName}{" "}
               <span className="text-text-muted">（共 {tail.totalLines} 行，显示尾部 {tail.lines.length} 行）</span>
             </div>
             <button
               onClick={onCopyTail}
-              className="h-7 px-2.5 rounded-md flex items-center gap-1 text-[12px] text-text-secondary hover:text-text-primary hover:bg-bg-hover border border-border-secondary"
+              className="h-7 px-2.5 rounded-md flex items-center gap-1 text-[length:var(--text-meta)] text-text-secondary hover:text-text-primary hover:bg-bg-hover border border-border-secondary"
             >
               <Clipboard className="icon-sm" />
               复制
             </button>
           </div>
           <pre
-            className="p-3 text-[11px] leading-snug font-mono overflow-auto max-h-[60vh] whitespace-pre-wrap break-words text-text-secondary"
+            className="p-3 text-[length:var(--text-meta)] leading-snug font-mono overflow-auto max-h-[60vh] whitespace-pre-wrap break-words text-text-secondary"
             style={{ background: "var(--color-bg-tertiary)" }}
           >
             {tail.lines.join("\n")}
@@ -231,11 +231,11 @@ export function DiagnosticsTab() {
       )}
 
       {!loading && !error && tail && tail.lines.length === 0 && (
-        <div className="text-[12px] text-text-muted">日志文件为空。</div>
+        <div className="text-[length:var(--text-meta)] text-text-muted">日志文件为空。</div>
       )}
 
       {!loading && !error && !tail && (
-        <div className="text-[12px] text-text-muted">
+        <div className="text-[length:var(--text-meta)] text-text-muted">
           尚未发现日志文件。点击「刷新」重试，或执行一次完整对话后再查看。
         </div>
       )}
@@ -245,14 +245,14 @@ export function DiagnosticsTab() {
         <div className="flex items-center justify-between px-3 py-2 border-b border-border-primary">
           <div className="flex items-center gap-2">
             <ShieldCheck className="icon-md text-text-muted" />
-            <span className="text-[12px] text-text-secondary">安全审计事件</span>
+            <span className="text-[length:var(--text-meta)] text-text-secondary">安全审计事件</span>
             {audit && (
-              <span className="text-[11px] text-text-muted">（最近 {audit.length} 条）</span>
+              <span className="text-[length:var(--text-meta)] text-text-muted">（最近 {audit.length} 条）</span>
             )}
           </div>
           <button
             onClick={() => void refreshAudit()}
-            className="h-7 px-2.5 rounded-md flex items-center gap-1 text-[12px] text-text-secondary hover:text-text-primary hover:bg-bg-hover border border-border-secondary"
+            className="h-7 px-2.5 rounded-md flex items-center gap-1 text-[length:var(--text-meta)] text-text-secondary hover:text-text-primary hover:bg-bg-hover border border-border-secondary"
             title="重新读取审计事件"
           >
             <RefreshCw className="icon-sm" />
@@ -261,12 +261,12 @@ export function DiagnosticsTab() {
         </div>
 
         {auditError ? (
-          <div className="px-3 py-2 text-[12px] text-text-muted">
+          <div className="px-3 py-2 text-[length:var(--text-meta)] text-text-muted">
             审计不可用：{auditError}（设备注册库未装配时无审计数据）
           </div>
         ) : audit && audit.length > 0 ? (
           <div className="max-h-[40vh] overflow-auto">
-            <table className="w-full text-[11px]">
+            <table className="w-full text-[length:var(--text-meta)]">
               <thead>
                 <tr className="text-text-muted text-left">
                   <th className="px-3 py-1.5 font-normal">时间</th>
@@ -292,7 +292,7 @@ export function DiagnosticsTab() {
             </table>
           </div>
         ) : (
-          <div className="px-3 py-2 text-[12px] text-text-muted">暂无审计事件。</div>
+          <div className="px-3 py-2 text-[length:var(--text-meta)] text-text-muted">暂无审计事件。</div>
         )}
       </div>
     </div>

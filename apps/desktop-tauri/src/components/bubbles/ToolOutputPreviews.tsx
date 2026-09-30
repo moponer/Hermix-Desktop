@@ -48,7 +48,7 @@ function ScreenshotPreview({ output }: { output?: string }) {
         }
         style={{ cursor: "pointer" }}
       />
-      <div className="flex items-center justify-between gap-2 px-2 py-1 text-[11px] text-text-faint bg-bg-secondary/40 border-t border-border-primary/30">
+      <div className="flex items-center justify-between gap-2 px-2 py-1 text-[length:var(--text-meta)] text-text-faint bg-bg-secondary/40 border-t border-border-primary/30">
         <span className="font-mono">{w}×{h}{monitorLabel}</span>
         <span>{kb} KB</span>
       </div>
@@ -100,14 +100,14 @@ function WindowListPreview({ output }: { output?: string }) {
   const { matched, truncated, windows } = parsed;
   return (
     <div className="mt-1.5 rounded-md overflow-hidden border border-border-primary/40 bg-bg-secondary/20">
-      <div className="px-2 py-1 text-[11px] text-text-faint bg-bg-secondary/40 border-b border-border-primary/30 flex items-center justify-between">
+      <div className="px-2 py-1 text-[length:var(--text-meta)] text-text-faint bg-bg-secondary/40 border-b border-border-primary/30 flex items-center justify-between">
         <span>顶层窗口</span>
         <span className="font-mono">
           {matched} 个{truncated ? "（已截断）" : ""}
         </span>
       </div>
       {windows.length === 0 ? (
-        <div className="px-3 py-3 text-[12px] text-text-faint text-center italic">
+        <div className="px-3 py-3 text-[length:var(--text-meta)] text-text-faint text-center italic">
           没有匹配的窗口
         </div>
       ) : (
@@ -115,7 +115,7 @@ function WindowListPreview({ output }: { output?: string }) {
           {windows.map((w, i) => (
             <li
               key={`${w.hwnd}-${i}`}
-              className="px-2.5 py-1.5 flex items-center gap-2 text-[12px] hover:bg-bg-tertiary/40"
+              className="px-2.5 py-1.5 flex items-center gap-2 text-[length:var(--text-meta)] hover:bg-bg-tertiary/40"
               data-visible={w.is_visible ? "true" : "false"}
             >
               {/* Visibility dot */}
@@ -133,14 +133,14 @@ function WindowListPreview({ output }: { output?: string }) {
                 >
                   {w.title || <span className="italic text-text-faint">（无标题）</span>}
                 </div>
-                <div className="flex items-center gap-1.5 text-[11px] text-text-faint mt-0.5">
+                <div className="flex items-center gap-1.5 text-[length:var(--text-meta)] text-text-faint mt-0.5">
                   <span className="font-mono">{w.class_name || "—"}</span>
                   <span>·</span>
                   <span className="font-mono">pid {w.process_id}</span>
                 </div>
               </div>
               {/* HWND + rect */}
-              <div className="shrink-0 text-right font-mono text-[11px] text-text-faint leading-tight">
+              <div className="shrink-0 text-right font-mono text-[length:var(--text-meta)] text-text-faint leading-tight">
                 <div title="窗口句柄（可传给 cua_click_window）">
                   hwnd <span className="text-text-secondary">0x{w.hwnd.toString(16)}</span>
                 </div>
@@ -196,14 +196,14 @@ function WindowAtPointPreview({ output }: { output?: string }) {
   const { x, y, window: w } = parsed;
   return (
     <div className="mt-1.5 rounded-md overflow-hidden border border-border-primary/40 bg-bg-secondary/20">
-      <div className="px-2.5 py-1.5 text-[12px] flex items-center gap-2">
+      <div className="px-2.5 py-1.5 text-[length:var(--text-meta)] flex items-center gap-2">
         <span className="text-text-faint">点</span>
         <span className="font-mono text-text-secondary">({x}, {y})</span>
         <span className="text-text-faint">·</span>
         {w ? (
           <span className="truncate text-text-primary" title={w.title || w.class_name}>
             {w.title || <span className="italic text-text-faint">（无标题）</span>}
-            <span className="ml-1.5 text-text-faint font-mono text-[11px]">
+            <span className="ml-1.5 text-text-faint font-mono text-[length:var(--text-meta)]">
               {w.class_name} · pid {w.process_id}
             </span>
           </span>
@@ -269,18 +269,18 @@ function UiTreePreview({ output }: { output?: string }) {
   const { max_depth, elements, element_count } = parsed;
   return (
     <div className="mt-1.5 rounded-md overflow-hidden border border-border-primary/40 bg-bg-secondary/20">
-      <div className="px-2 py-1 text-[11px] text-text-faint bg-bg-secondary/40 border-b border-border-primary/30 flex items-center justify-between">
+      <div className="px-2 py-1 text-[length:var(--text-meta)] text-text-faint bg-bg-secondary/40 border-b border-border-primary/30 flex items-center justify-between">
         <span>UI 树（UIA control view）</span>
         <span className="font-mono">
           {element_count} 个 / depth ≤ {max_depth}
         </span>
       </div>
       {elements.length === 0 ? (
-        <div className="px-3 py-3 text-[12px] text-text-faint text-center italic">
+        <div className="px-3 py-3 text-[length:var(--text-meta)] text-text-faint text-center italic">
           空树
         </div>
       ) : (
-        <ul className="divide-y divide-border-primary/30 max-h-80 overflow-auto font-mono text-[12px]">
+        <ul className="divide-y divide-border-primary/30 max-h-80 overflow-auto font-mono text-[length:var(--text-meta)]">
           {elements.map((el) => {
             const indentPx = Math.min(el.depth, 8) * 12;
             const disabledCls = el.is_enabled ? "" : "text-text-faint italic";
@@ -301,7 +301,7 @@ function UiTreePreview({ output }: { output?: string }) {
                 style={{ paddingLeft: 8 + indentPx }}
               >
                 <div className="flex items-baseline gap-1.5 truncate">
-                  <span className="shrink-0 text-text-faint text-[11px]">
+                  <span className="shrink-0 text-text-faint text-[length:var(--text-meta)]">
                     [{el.control_type}]
                   </span>
                   <span className="truncate text-text-primary" title={el.name || "（未命名）"}>
@@ -310,7 +310,7 @@ function UiTreePreview({ output }: { output?: string }) {
                     {offscreenMarker}
                   </span>
                 </div>
-                <div className="flex items-center gap-2 mt-0.5 text-[11px] text-text-faint">
+                <div className="flex items-center gap-2 mt-0.5 text-[length:var(--text-meta)] text-text-faint">
                   {el.automation_id && (
                     <span title="automation_id">
                       id=<span className="text-text-secondary">{el.automation_id}</span>
@@ -377,14 +377,14 @@ function UiFindPreview({ output }: { output?: string }) {
   const { count, truncated, elements } = parsed;
   return (
     <div className="mt-1.5 rounded-md overflow-hidden border border-border-primary/40 bg-bg-secondary/20">
-      <div className="px-2 py-1 text-[11px] text-text-faint bg-bg-secondary/40 border-b border-border-primary/30 flex items-center justify-between">
+      <div className="px-2 py-1 text-[length:var(--text-meta)] text-text-faint bg-bg-secondary/40 border-b border-border-primary/30 flex items-center justify-between">
         <span>UIA 查找结果</span>
         <span className="font-mono">
           {count} 个{truncated ? "（已截断）" : ""}
         </span>
       </div>
       {elements.length === 0 ? (
-        <div className="px-3 py-3 text-[12px] text-text-faint text-center italic">
+        <div className="px-3 py-3 text-[length:var(--text-meta)] text-text-faint text-center italic">
           未找到匹配元素
         </div>
       ) : (
@@ -395,10 +395,10 @@ function UiFindPreview({ output }: { output?: string }) {
             return (
               <li
                 key={`${el.automation_id}-${i}-${el.rect.x}-${el.rect.y}`}
-                className={`px-2.5 py-1.5 hover:bg-bg-tertiary/40 text-[12px] ${disabledCls}`}
+                className={`px-2.5 py-1.5 hover:bg-bg-tertiary/40 text-[length:var(--text-meta)] ${disabledCls}`}
               >
                 <div className="flex items-baseline gap-1.5 truncate">
-                  <span className="shrink-0 text-text-faint font-mono text-[11px]">
+                  <span className="shrink-0 text-text-faint font-mono text-[length:var(--text-meta)]">
                     [{el.control_type}]
                   </span>
                   <span className="truncate text-text-primary" title={el.name || "（未命名）"}>
@@ -408,7 +408,7 @@ function UiFindPreview({ output }: { output?: string }) {
                     )}
                   </span>
                 </div>
-                <div className="flex items-center gap-2 mt-0.5 text-[11px] text-text-faint font-mono">
+                <div className="flex items-center gap-2 mt-0.5 text-[length:var(--text-meta)] text-text-faint font-mono">
                   {el.automation_id && <span>id={el.automation_id}</span>}
                   {el.class_name && <span>· {el.class_name}</span>}
                   {el.process_id > 0 && <span>· pid {el.process_id}</span>}
@@ -457,7 +457,7 @@ function UiClickPreview({ output }: { output?: string }) {
   const { name, clicked_at } = parsed;
   return (
     <div className="mt-1.5 rounded-md overflow-hidden border border-border-primary/40 bg-bg-secondary/20">
-      <div className="px-2.5 py-1.5 text-[12px] flex items-center gap-2">
+      <div className="px-2.5 py-1.5 text-[length:var(--text-meta)] flex items-center gap-2">
         <span className="text-text-faint">点击</span>
         <span className="text-text-primary truncate" title={name}>{name}</span>
         <span className="text-text-faint">·</span>
@@ -493,7 +493,7 @@ function UiSingleNamePreview({ output, verb }: { output?: string; verb: string }
   if (parsed === null) return null;
   return (
     <div className="mt-1.5 rounded-md overflow-hidden border border-border-primary/40 bg-bg-secondary/20">
-      <div className="px-2.5 py-1.5 text-[12px] flex items-center gap-2">
+      <div className="px-2.5 py-1.5 text-[length:var(--text-meta)] flex items-center gap-2">
         <span className="text-text-faint">{verb}</span>
         <span className="text-text-primary truncate" title={parsed}>{parsed}</span>
       </div>

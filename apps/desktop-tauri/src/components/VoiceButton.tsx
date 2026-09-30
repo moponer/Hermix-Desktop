@@ -130,7 +130,7 @@ export function VoiceButton({ onTranscribe, disabled }: VoiceButtonProps) {
       onClick={toggle}
       disabled={disabled}
       title={active ? "停止录音" : "语音输入"}
-      className={`flex items-center gap-1 px-2 py-1 rounded transition-colors text-[12px] ${
+      className={`flex items-center gap-1 px-2 py-1 rounded transition-colors text-[length:var(--text-meta)] ${
         active
           ? "bg-error text-white animate-pulse"
           : "text-text-muted hover:text-text-primary hover:bg-bg-tertiary"

@@ -114,7 +114,7 @@ export function SecurityTab() {
         <div className="flex items-center justify-between">
           <div>
             <div className="text-sm text-text-primary">启用自动备份</div>
-            <div className="text-[12px] text-text-muted mt-0.5">
+            <div className="text-[length:var(--text-meta)] text-text-muted mt-0.5">
               覆盖写前复制旧版本（best-effort，不影响正常写入）。
             </div>
           </div>
@@ -135,20 +135,20 @@ export function SecurityTab() {
         </div>
 
         <div>
-          <label className="text-[12px] text-text-secondary">备份目录（留空 = 默认）</label>
+          <label className="text-[length:var(--text-meta)] text-text-secondary">备份目录（留空 = 默认）</label>
           <input
             value={sec.backup_dir}
             onChange={(e) => update({ backup_dir: e.target.value })}
             placeholder="留空使用 <数据目录>/backups"
             className="mt-1 w-full px-3 py-2 rounded-lg border border-border-secondary bg-bg-primary text-sm text-text-primary outline-none focus:border-accent transition-colors"
           />
-          <p className="mt-1 text-[11px] text-text-muted">
+          <p className="mt-1 text-[length:var(--text-meta)] text-text-muted">
             默认位于 Hermix 数据目录下的 backups 文件夹。
           </p>
         </div>
 
         <div>
-          <label className="text-[12px] text-text-secondary">备份占用上限（MB）</label>
+          <label className="text-[length:var(--text-meta)] text-text-secondary">备份占用上限（MB）</label>
           <input
             type="number"
             min={1}
@@ -156,7 +156,7 @@ export function SecurityTab() {
             onChange={(e) => update({ backup_max_mb: Math.max(1, Number(e.target.value) || 1) })}
             className="mt-1 w-full px-3 py-2 rounded-lg border border-border-secondary bg-bg-primary text-sm text-text-primary outline-none focus:border-accent transition-colors"
           />
-          <p className="mt-1 text-[11px] text-text-muted">超过后按时间删除最旧的备份。</p>
+          <p className="mt-1 text-[length:var(--text-meta)] text-text-muted">超过后按时间删除最旧的备份。</p>
         </div>
       </div>
 
@@ -164,9 +164,9 @@ export function SecurityTab() {
       <div className="rounded-lg border border-border-primary bg-bg-card p-4 space-y-3">
         <div className="text-sm font-medium text-text-primary">备份状态</div>
         {!loaded ? (
-          <div className="text-[12px] text-text-muted">加载中…</div>
+          <div className="text-[length:var(--text-meta)] text-text-muted">加载中…</div>
         ) : (
-          <div className="space-y-2 text-[12px]">
+          <div className="space-y-2 text-[length:var(--text-meta)]">
             <Row label="状态" value={status?.enabled ? "已启用" : "未启用"} />
             <Row label="目录" value={status?.dir ?? "—"} mono />
             <Row label="备份文件数" value={String(status?.file_count ?? 0)} />
@@ -178,7 +178,7 @@ export function SecurityTab() {
             <button
               onClick={openBackupDir}
               disabled={!status?.dir}
-              className="flex items-center gap-2 px-3 py-1.5 mt-1 rounded-lg border border-border-secondary text-text-secondary text-[12px] hover:text-text-primary hover:bg-bg-hover transition-colors disabled:opacity-40"
+              className="flex items-center gap-2 px-3 py-1.5 mt-1 rounded-lg border border-border-secondary text-text-secondary text-[length:var(--text-meta)] hover:text-text-primary hover:bg-bg-hover transition-colors disabled:opacity-40"
             >
               <FolderOpen className="icon-md" /> 打开备份目录
             </button>
@@ -208,7 +208,7 @@ function Row({ label, value, mono }: { label: string; value: string; mono?: bool
   return (
     <div className="flex items-start justify-between gap-3">
       <span className="text-text-muted shrink-0">{label}</span>
-      <span className={`text-text-primary text-right break-all ${mono ? "font-mono text-[11px]" : ""}`}>
+      <span className={`text-text-primary text-right break-all ${mono ? "font-mono text-[length:var(--text-meta)]" : ""}`}>
         {value}
       </span>
     </div>

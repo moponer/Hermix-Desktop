@@ -113,7 +113,7 @@ export function UserMenuPopover({ open, onClose, anchorRef, onNavigateAnalytics,
           >
             <ZoomIn className={`icon-md ${clsx("shrink-0 opacity-70", active && "text-accent")}`} />
             <span className="flex-1">{o.label}</span>
-            <span className="text-[11px] text-text-faint">{Math.round(o.value * 100)}%</span>
+            <span className="text-[length:var(--text-meta)] text-text-faint">{Math.round(o.value * 100)}%</span>
             {active && <Check className="icon-sm shrink-0 text-accent" />}
           </button>
         );
@@ -181,7 +181,7 @@ export function UserMenuPopover({ open, onClose, anchorRef, onNavigateAnalytics,
                 <span className="flex-1 text-left truncate">{item.label}</span>
                 {item.hasSub ? (
                   <>
-                    <span className="text-[11px] text-text-faint mr-1">{!showSub ? currentLabel(item.key) : ""}</span>
+                    <span className="text-[length:var(--text-meta)] text-text-faint mr-1">{!showSub ? currentLabel(item.key) : ""}</span>
                     <ChevronRight className={`icon-md ${clsx("shrink-0 text-text-faint transition-transform duration-base", showSub && "rotate-90")}`} />
                   </>
                 ) : null}

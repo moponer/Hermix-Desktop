@@ -45,7 +45,7 @@ export function ThemeToggle({ compact = false }: { compact?: boolean }) {
             key={t.id}
             type="button"
             onClick={() => { setMode(t.id); setOpen(false); }}
-            className={`w-full flex items-center gap-2 px-2.5 py-1.5 text-left text-[13px] hover:bg-bg-hover transition-colors ${active ? "text-accent" : "text-text-primary"}`}
+            className={`w-full flex items-center gap-2 px-2.5 py-1.5 text-left text-[length:var(--text-ui)] hover:bg-bg-hover transition-colors ${active ? "text-accent" : "text-text-primary"}`}
             role="menuitem"
           >
             <Icon className="icon-md shrink-0 opacity-80" />
@@ -85,7 +85,7 @@ export function ThemeToggle({ compact = false }: { compact?: boolean }) {
         title={`主题: ${label}`}
       >
         <CurIcon className="icon-md" />
-        <span className="text-[12px]">{label}</span>
+        <span className="text-[length:var(--text-meta)]">{label}</span>
         <ChevronDown className="icon-sm opacity-60" />
       </button>
       {menu}

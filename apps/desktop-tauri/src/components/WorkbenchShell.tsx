@@ -17,9 +17,15 @@ type GatewayMethod = "db.query" | "db.exec" | "fs.read" | "fs.write" | "fs.list"
 interface WorkbenchShellProps {
   manifest: WorkbenchManifest;
   chatNode: ReactNode;
+  /** 开一条本工作台的新会话（WorkbenchView 实现）。 */
+  onNewSession: () => void;
+  /** 切到本工作台的历史会话。 */
+  onSelectSession: (id: string) => void;
+  /** 当前激活会话 id —— 历史下拉高亮。 */
+  activeSessionId: string | null;
 }
 
-export function WorkbenchShell({ manifest, chatNode }: WorkbenchShellProps) {
+export function WorkbenchShell({ manifest, chatNode, onNewSession, onSelectSession, activeSessionId }: WorkbenchShellProps) {
   // chatNode 包上工作台专属 chrome（chip + 改动状态条），让右栏一眼区别于主对话。
   const chat = <WorkbenchChat manifest={manifest} chatNode={chatNode} />;
   const [entryUrl, setEntryUrl] = useState<string | null>(null);
@@ -129,7 +135,14 @@ export function WorkbenchShell({ manifest, chatNode }: WorkbenchShellProps) {
       </div>
       {/* 对话改成悬浮体：收起是一个可拖的球，展开是一扇可拖可缩的浮窗。
           画布因此拿到 100% 宽度 —— 固定右栏曾永久切掉它三分之一。 */}
-      <FloatingChat manifestId={manifest.id} manifestName={manifest.name} chatNode={chat} />
+      <FloatingChat
+        manifestId={manifest.id}
+        manifestName={manifest.name}
+        chatNode={chat}
+        onNewSession={onNewSession}
+        onSelectSession={onSelectSession}
+        activeSessionId={activeSessionId}
+      />
     </div>
   );
 }

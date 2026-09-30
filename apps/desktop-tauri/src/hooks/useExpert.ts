@@ -80,6 +80,30 @@ export function usePermissionLevel(): [PermissionLevel, (lvl: PermissionLevel) =
   return [level, setLevel];
 }
 
+// ── useDomainMode ───────────────────────────────────────────────────
+// 工作模式 vs 编码模式（用户的两档心智模型）。`"auto"` = 不 pin，后端
+// 自动检测；`"code"` = pin 编码模式（DomainMode::Code）。后端实际支持
+// 5 个域（research/write/operate 等），这里只暴露用户要的两档。
+export type DomainModeChoice = "auto" | "code";
+
+const DOMAIN_MODE_KEY = STORAGE_KEYS.domainMode;
+
+export function useDomainMode(): [DomainModeChoice, (m: DomainModeChoice) => void] {
+  const [mode, setMode] = useState<DomainModeChoice>(() => {
+    try {
+      const raw = storage.getItem(DOMAIN_MODE_KEY);
+      if (raw === "code") return "code";
+    } catch {}
+    return "auto";
+  });
+  useEffect(() => {
+    try {
+      storage.setItem(DOMAIN_MODE_KEY, mode);
+    } catch {}
+  }, [mode]);
+  return [mode, setMode];
+}
+
 // ── useSessionExpert ────────────────────────────────────────────────
 // Bind a hired expert to a specific chat session. Returns the active
 // `ExpertDef` (built-in lookup) plus a setter.

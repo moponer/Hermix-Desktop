@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useMemo, useCallback, memo } from "react";
 import { useStreamChatContext } from "../context/StreamChatContext";
+import { IM_SOURCE_LABEL, imSourceOf } from "../utils/time";
 import { PanelRight, PanelLeftOpen, Search, ArrowUp, AlertTriangle } from "lucide-react";
 import { SidebarRevealRow } from "./SidebarRevealRow";
 import { resolveSessionSelectedModel } from "../utils/sessionModel";
@@ -32,6 +33,7 @@ import {
 } from "../lib/appMention";
 import {
   usePermissionLevel,
+  useDomainMode,
   useSessionExpert,
   useExpertCatalog,
   useRecentExperts,
@@ -48,6 +50,7 @@ import { compressImage, skipCompression, type CompressResult } from "../utils/im
 // ── ModelStatusBar — top-of-chat status strip ─────────
 function ModelStatusBar({
   title,
+  imSource,
   rightOpen,
   onToggleRight,
   sidebarCollapsed,
@@ -55,6 +58,8 @@ function ModelStatusBar({
   onOpenSearch,
 }: {
   title?: string;
+  /** IM 远程会话的来源平台（QQ / 企业微信）—— 从那边发起的对话在头部标出来。 */
+  imSource?: "qq" | "wecom" | null;
   rightOpen?: boolean;
   onToggleRight?: () => void;
   sidebarCollapsed?: boolean;
@@ -67,6 +72,7 @@ function ModelStatusBar({
   const showLeftActions = !!sidebarCollapsed && !!onExpandSidebar;
   if (!title && !showLeftActions) return null;
   const displayTitle = title && title.length > 80 ? title.slice(0, 77) + "…" : title;
+  const imLabel = imSource ? IM_SOURCE_LABEL[imSource] : null;
   const showRightToggle = !!onToggleRight;
   return (
     <div
@@ -96,6 +102,14 @@ function ModelStatusBar({
             </button>
           )}
         </>
+      )}
+      {imLabel && (
+        <span
+          className="shrink-0 inline-flex items-center gap-1 rounded-full bg-accent-soft px-2 h-[20px] text-[length:var(--text-tiny)] text-accent"
+          title={`这条对话是从${imLabel}发起并远程驱动的`}
+        >
+          {imLabel} 远程
+        </span>
       )}
       {displayTitle && (
         <span
@@ -165,9 +179,9 @@ interface ChatViewProps {
   onOpenSearch?: () => void;
   onPathClick?: (path: string) => void;
   onApproveApproval?: (requestId: string, remember?: boolean) => void;
-  onDenyApproval?: (requestId: string) => void;
+  onDenyApproval?: (requestId: string, note?: string) => void;
   onApproveBatchApproval?: (batchId: string, remember?: boolean) => void;
-  onDenyBatchApproval?: (batchId: string) => void;
+  onDenyBatchApproval?: (batchId: string, note?: string) => void;
   onAnswerClarify?: (requestId: string, answer: string) => void;
   messageLoadError?: string | null;
   onRetryLoad?: () => void;
@@ -340,6 +354,7 @@ export const ChatView = memo(function ChatView({
     };
   }, []);
   const [permissionLevel, setPermissionLevel] = usePermissionLevel();
+  const [domainMode, setDomainMode] = useDomainMode();
   const { workspace, setWorkspace: setWorkspaceRaw } = useSessionWorkspace(sessionId);
   const workspaceLocked =
     (session?.messages?.length ?? 0) > 0 || sending || isStreaming;
@@ -737,6 +752,7 @@ export const ChatView = memo(function ChatView({
     setSending(true);
     try {
       const overrides: ChatOverrides = { permissionLevel };
+      if (domainMode === "code") overrides.domainOverride = "code";
       if (selectedModel && selectedModel.includes(":") && selectedModel !== "unknown") {
         overrides.model = selectedModel;
       }
@@ -750,7 +766,9 @@ export const ChatView = memo(function ChatView({
       if (enabledToolNames.length > 0) {
         overrides.tools = enabledToolNames;
       }
-      void expert?.toolset;
+      // 专家 toolset（STABILITY_AND_REMOTE_PLAN §3.2-2）：作为独立字段传
+      // 后端，由 registry 展开成组成员并进白名单——不再丢弃。
+      if (expert?.toolset) overrides.expertToolset = expert.toolset;
       const fallbackWorkspace =
         (workspace && workspace.trim()) ||
         (session?.workspace && session.workspace.trim()) ||
@@ -853,7 +871,7 @@ export const ChatView = memo(function ChatView({
             className="w-9 h-9 rounded-full border-2 border-border-primary border-t-text-muted animate-spin"
             aria-hidden="true"
           />
-          <p className="text-[13px] text-text-muted">正在恢复对话...</p>
+          <p className="text-[length:var(--text-ui)] text-text-muted">正在恢复对话...</p>
         </div>
         </div>
       </div>
@@ -893,13 +911,6 @@ export const ChatView = memo(function ChatView({
             </>
           )}
           <div className="w-full relative">
-            <ApprovalDrawer
-              pending={pendingApprovals}
-              onApprove={(id, remember) => onApproveApproval?.(id, remember)}
-              onDeny={(id) => onDenyApproval?.(id)}
-              onApproveBatch={(id, remember) => onApproveBatchApproval?.(id, remember)}
-              onDenyBatch={(id) => onDenyBatchApproval?.(id)}
-            />
             <Composer
               variant={isWorkbenchChat ? "workbench" : "default"}
               input={input} setInput={setInput} handleKeyDown={handleKeyDown} handleSubmit={handleSubmit} customApps={customApps}
@@ -922,6 +933,7 @@ export const ChatView = memo(function ChatView({
               experts={experts} categories={categories} byCategory={byCategory}
               onPickRecent={(id) => { markRecentUsed(id); setExpertWithCutoff(id); }}
               permissionLevel={permissionLevel} setPermissionLevel={setPermissionLevel}
+              domainMode={domainMode} setDomainMode={setDomainMode}
               onOpenExperts={onOpenExperts}
               onOpenSettings={onOpenSettings}
               onOpenComputer={onOpenComputer}
@@ -961,6 +973,7 @@ export const ChatView = memo(function ChatView({
       {!isWorkbenchChat && (
         <ModelStatusBar
           title={session?.title}
+          imSource={imSourceOf(session?.id)}
           rightOpen={rightOpen}
           onToggleRight={onToggleRight}
           sidebarCollapsed={sidebarCollapsed}
@@ -1062,7 +1075,7 @@ export const ChatView = memo(function ChatView({
                 }
                 return (
                   <span
-                    className={`inline-flex items-center gap-1.5 tabular-nums text-[11px] ${textColor} cursor-default`}
+                    className={`inline-flex items-center gap-1.5 tabular-nums text-[length:var(--text-meta)] ${textColor} cursor-default`}
                     title={`${fmt(stream.contextUsage.usedTokens)} / ${fmt(stream.contextUsage.maxTokens)} tokens (${Math.round(pct)}%)${cacheInfo}`}
                   >
                     <span className={`w-1.5 h-1.5 rounded-full ${dotColor}`} />
@@ -1073,10 +1086,19 @@ export const ChatView = memo(function ChatView({
             </div>
           ) : !isStreaming && (
             <div className="mb-1.5 flex justify-end px-1">
-              <span className="text-[11px] text-text-faint">—</span>
+              <span className="text-[length:var(--text-meta)] text-text-faint">—</span>
             </div>
           )}
 
+          <div className="w-full relative">
+            <ApprovalDrawer
+              pending={pendingApprovals}
+              onApprove={(id, remember) => onApproveApproval?.(id, remember)}
+              onDeny={(id, note) => onDenyApproval?.(id, note)}
+              onApproveBatch={(id, remember) => onApproveBatchApproval?.(id, remember)}
+              onDenyBatch={(id, note) => onDenyBatchApproval?.(id, note)}
+              onFullAccess={() => setPermissionLevel("full")}
+            />
           <Composer
             variant={isWorkbenchChat ? "workbench" : "default"}
             input={input} setInput={setInput} handleKeyDown={handleKeyDown} handleSubmit={handleSubmit}
@@ -1099,6 +1121,7 @@ export const ChatView = memo(function ChatView({
             experts={experts} categories={categories} byCategory={byCategory}
             onPickRecent={(id) => { markRecentUsed(id); setExpertWithCutoff(id); }}
             permissionLevel={permissionLevel} setPermissionLevel={setPermissionLevel}
+            domainMode={domainMode} setDomainMode={setDomainMode}
             onOpenExperts={onOpenExperts}
             onOpenSettings={onOpenSettings}
             onOpenComputer={onOpenComputer}
@@ -1121,6 +1144,7 @@ export const ChatView = memo(function ChatView({
             onEditQueueItem={onEditQueueItem}
             onSendFromQueue={onSendFromQueue}
           />
+          </div>
         </div>
       </div>
     </div>

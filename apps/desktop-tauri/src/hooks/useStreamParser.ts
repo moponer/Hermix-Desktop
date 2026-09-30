@@ -584,10 +584,14 @@ export function createMessageHandler(
                     : resp.decision === "approved"
                       ? "approved"
                       : "denied";
+                // 拒绝时可附「接下来该怎么做」——服务端把 note 折进 LLM
+                // 可见的拒绝理由（DeniedWithFeedback），模型据此换方案。
+                const note = resp.note?.trim() || undefined;
                 const payload = JSON.stringify({
                   type: "approval_response",
                   request_id: requestId,
                   decision,
+                  ...(note ? { note } : {}),
                 });
                 void invoke<void>("backend_channel_send", {
                   channel: streamChannelName(ctx.sessionId),
@@ -673,10 +677,12 @@ export function createMessageHandler(
                     : resp.decision === "approved"
                       ? "approved"
                       : "denied";
+                const note = resp.note?.trim() || undefined;
                 const payload = JSON.stringify({
                   type: "approval_responses_batch",
                   batch_id: batchId,
                   decision,
+                  ...(note ? { note } : {}),
                 });
                 void invoke<void>("backend_channel_send", {
                   channel: streamChannelName(ctx.sessionId),

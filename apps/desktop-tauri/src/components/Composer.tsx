@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
-import { Send, Square, FolderOpen, ChevronDown, ChevronRight, Sparkles, ShieldCheck, Image, X, Check, AlertTriangle, Lock, Clock } from "lucide-react";
+import { Send, Square, FolderOpen, ChevronDown, ChevronRight, Sparkles, ShieldCheck, Image, X, Check, AlertTriangle, Lock, Clock, Code2 } from "lucide-react";
+import type { DomainModeChoice } from "../hooks/useExpert";
 import { usePopover } from "../hooks/usePopover";
 import { PopoverShell, PopoverBody } from "./PopoverShell";
 import { InlineExpertPanel } from "./InlineExpertPanel";
@@ -66,6 +67,9 @@ export interface ComposerProps {
   onSwitchModel?: (newId: string) => void;
   permissionLevel: PermissionLevel;
   setPermissionLevel: (lvl: PermissionLevel) => void;
+  /** 工作模式（auto=自动识别）vs 编码模式（code=pin 代码开发域）。 */
+  domainMode: DomainModeChoice;
+  setDomainMode: (m: DomainModeChoice) => void;
   placeholder: string;
   messageQueue?: QueuedMessage[];
   onAddToQueue?: (msg: QueuedMessage) => void;
@@ -118,13 +122,8 @@ export function Composer(p: ComposerProps) {
 
   return (
     <div
-      className="rounded-xl transition-colors relative"
-      style={{
-        background: "var(--color-bg-primary)",
-        border: "1px solid var(--color-border-primary)",
-        boxShadow: "var(--shadow-pop)",
-        overflow: "visible",
-      }}
+      className="composer transition-colors relative"
+      style={{ overflow: "visible" }}
       onDragEnter={(e) => {
         if (!e.dataTransfer?.types?.includes("Files")) return;
         dragCounter.current += 1;
@@ -442,6 +441,25 @@ export function Composer(p: ComposerProps) {
               </PopoverShell>
             )}
           </div>
+
+          {/* 工作 / 编码模式切换 —— 直接点按切换（两档无需弹层）。
+              code = pin 代码开发域（DomainMode::Code）；auto = 交给后端自动识别。 */}
+          <button
+            onClick={() => p.setDomainMode(p.domainMode === "code" ? "auto" : "code")}
+            className={`flex items-center shrink-0 text-ui transition-colors rounded-md ${
+              toolbarCompact ? "px-1.5 py-1" : "gap-1.5 px-2 py-1"
+            } ${
+              p.domainMode === "code"
+                ? "text-[color:var(--color-accent)] font-medium hover:bg-bg-hover"
+                : "text-text-secondary hover:bg-bg-hover hover:text-text-primary"
+            }`}
+            title="编码模式：固定代码开发域，工具优先级与领域指令随之切换；关闭则自动识别工作类型"
+          >
+            <Code2 className={`icon-sm ${p.domainMode === "code" ? "text-[color:var(--color-accent)]" : "text-text-muted"}`} />
+            <span className={toolbarCompact ? "max-w-0 overflow-hidden whitespace-nowrap" : "truncate"}>
+              {p.domainMode === "code" ? "编码模式" : "自动"}
+            </span>
+          </button>
         </div>
         </>
         )}

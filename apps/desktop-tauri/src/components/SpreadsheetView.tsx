@@ -56,7 +56,7 @@ export function SpreadsheetView({ model, fileName }: SpreadsheetViewProps) {
 
   if (sheets.length === 0) {
     return (
-      <div className="text-[12px] text-text-muted p-4 text-center">
+      <div className="text-[length:var(--text-meta)] text-text-muted p-4 text-center">
         没有可显示的工作表
       </div>
     );
@@ -116,7 +116,7 @@ export function SpreadsheetView({ model, fileName }: SpreadsheetViewProps) {
             >
               <ChevronLeft className="icon-sm" />
             </button>
-            <span className="text-[12px] font-medium px-1.5 min-w-[60px] text-center truncate text-text-primary">
+            <span className="text-[length:var(--text-meta)] font-medium px-1.5 min-w-[60px] text-center truncate text-text-primary">
               {current.name}
             </span>
             <button
@@ -138,7 +138,7 @@ export function SpreadsheetView({ model, fileName }: SpreadsheetViewProps) {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="在表格内搜索…"
-            className="flex-1 bg-transparent text-[12px] outline-none min-w-0 placeholder:text-text-faint"
+            className="flex-1 bg-transparent text-[length:var(--text-meta)] outline-none min-w-0 placeholder:text-text-faint"
           />
           {query && (
             <button
@@ -158,7 +158,7 @@ export function SpreadsheetView({ model, fileName }: SpreadsheetViewProps) {
         <button
           type="button"
           onClick={handleExport}
-          className="flex items-center gap-1 text-[11px] px-2 py-1 rounded hover:bg-bg-hover text-text-muted hover:text-text-primary"
+          className="flex items-center gap-1 text-[length:var(--text-meta)] px-2 py-1 rounded hover:bg-bg-hover text-text-muted hover:text-text-primary"
           title="导出当前工作表为 CSV"
         >
           <Download className="icon-sm" />
@@ -224,7 +224,7 @@ function SheetTable({ header, data }: SheetTableProps) {
       style={{ background: "var(--color-bg-primary)" }}
     >
       <table
-        className="text-[12px] font-sans"
+        className="text-[length:var(--text-meta)] font-sans"
         style={{
           borderCollapse: "separate",
           borderSpacing: 0,
@@ -315,7 +315,7 @@ function SheetTable({ header, data }: SheetTableProps) {
       </table>
 
       {data.length === 0 && (
-        <div className="text-[12px] text-text-muted p-6 text-center">
+        <div className="text-[length:var(--text-meta)] text-text-muted p-6 text-center">
           {header.length > 0 ? "没有匹配的数据行" : "工作表为空"}
         </div>
       )}
@@ -330,7 +330,7 @@ function DataRow({ rowIdx, row, colCount }: { rowIdx: number; row: string[]; col
       style={{ height: ROW_HEIGHT }}
     >
       <td
-        className="sticky text-center text-text-faint font-mono text-[11px] cell-border-right-subtle"
+        className="sticky text-center text-text-faint font-mono text-[length:var(--text-meta)] cell-border-right-subtle"
         style={{
           left: 0,
           position: "sticky",

@@ -1,4 +1,5 @@
-import { useLayoutEffect, useState, type ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 
 /**
  * The popovers in ChatView (expert / workspace / model / permission) all
@@ -70,20 +71,35 @@ export function PopoverShell({
   // When we have a trigger, anchor to its viewport position via
   // `position: fixed` (immune to ancestor overflow). When we don't,
   // fall back to the legacy `position: absolute` placement.
-  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const [pos, setPos] = useState<{ top: number; left: number; flip: boolean } | null>(null);
+  // 面板自身：宽度必须**实测**而不是查预设表 —— 内容（长路径 / 长模型名）
+  // 会把面板撑得比 w-44 宽，用预设值算出来的锚点会整体偏移。
+  const panelRef = useRef<HTMLDivElement | null>(null);
 
   useLayoutEffect(() => {
     if (!triggerRef?.current) return;
     const compute = () => {
       if (!triggerRef.current) return;
       const r = triggerRef.current.getBoundingClientRect();
-      const popWidth = WIDTH_PX[width];
+      const panelW = panelRef.current?.offsetWidth || WIDTH_PX[width];
+      const panelH = panelRef.current?.offsetHeight || 0;
+
       let left: number;
-      if (align === "right") left = r.right - popWidth;
-      else if (align === "center") left = r.left + r.width / 2 - popWidth / 2;
+      if (align === "right") left = r.right - panelW;
+      else if (align === "center") left = r.left + r.width / 2 - panelW / 2;
       else left = r.left;
-      const top = side === "top" ? r.top - SIDE_GAP_PX : r.bottom + SIDE_GAP_PX;
-      setPos({ top, left });
+
+      // 视口夹紧：贴左边的触发器（侧栏里的「目录」就是）+ 居中对齐 = left 为负，
+      // 面板有一半在窗口外，用户看到的就是"点了没反应"。留 8px 边距。
+      const MARGIN = 8;
+      const maxLeft = window.innerWidth - panelW - MARGIN;
+      left = Math.max(MARGIN, Math.min(left, maxLeft));
+
+      // 上下翻转：上方放不下就落到下方，两边都放不下才贴边。
+      const wantTop = side === "top" ? r.top - SIDE_GAP_PX : r.bottom + SIDE_GAP_PX;
+      const flip = side === "top" && wantTop - panelH < MARGIN && r.bottom + SIDE_GAP_PX + panelH < window.innerHeight;
+      const top = flip ? r.bottom + SIDE_GAP_PX : wantTop;
+      setPos({ top, left, flip });
     };
     compute();
     window.addEventListener("resize", compute);
@@ -101,7 +117,7 @@ export function PopoverShell({
         position: "fixed" as const,
         top: pos.top,
         left: pos.left,
-        transform: side === "top" ? "translateY(-100%)" : undefined,
+        transform: !pos.flip ? "translateY(-100%)" : undefined,
       } as React.CSSProperties)
     : undefined;
 
@@ -120,9 +136,16 @@ export function PopoverShell({
       }`
     : "";
 
-  return (
+  // 2026-09-30：portal 到 body。此前面板渲染在触发器的容器树里 —— 任何祖先
+  // 的 overflow/堆叠上下文都可能把它困住（真实症状就是"点了没反应"：面板
+  // 开了但不可见）。portal + fixed 定位对祖先完全免疫；click-outside 用的
+  // containerRef 仍挂在面板节点上，行为不变。
+  return createPortal(
     <div
-      ref={containerRef}
+      ref={(el) => {
+        panelRef.current = el;
+        containerRef.current = el;
+      }}
       role="dialog"
       aria-modal="false"
       style={anchorStyle}
@@ -130,7 +153,8 @@ export function PopoverShell({
       className={`${widthClass} shrink-0 rounded-xl bg-bg-elevated border border-border-primary shadow-pop p-1.5 overflow-hidden z-[60] ${legacyClass} ${className}`}
     >
       {children}
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -151,7 +175,7 @@ export function PopoverHeader({
 }) {
   return (
     <div className={`px-2.5 pt-1 pb-1 flex items-center justify-between ${className}`}>
-      <span className="text-[11px] font-semibold text-text-faint">
+      <span className="text-[length:var(--text-meta)] font-semibold text-text-faint">
         {children}
       </span>
       {right}

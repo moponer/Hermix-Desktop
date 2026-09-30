@@ -27,6 +27,8 @@ interface WorkbenchViewProps {
   onSelectSession: (id: string) => void;
   /** 把本工作台的会话登记给宿主，让对话栏渲染得到。 */
   onRegisterSessions: (list: Session[]) => void;
+  /** 当前激活会话 id —— 浮窗历史下拉高亮当前对话线。 */
+  activeSessionId: string | null;
 }
 
 /**
@@ -50,6 +52,7 @@ export function WorkbenchView({
   chatNode,
   onSelectSession,
   onRegisterSessions,
+  activeSessionId,
 }: WorkbenchViewProps) {
   const [items, setItems] = useState<WorkbenchManifest[]>([]);
   const [active, setActive] = useState<WorkbenchManifest | null>(null);
@@ -141,6 +144,44 @@ export function WorkbenchView({
         onRegisterSessions(verified);
         setActive({ ...manifest, session_id: sessionId });
         onSelectSession(sessionId);
+        setError(null);
+      } catch (e) {
+        setError(String(e));
+      }
+    },
+    [onSelectSession, onRegisterSessions],
+  );
+
+  /**
+   * 本工作台开一条**全新**对话线（2026-09-30）。
+   *
+   * `open` 的策略是"复用优先"（scoped 里有就接着用）—— 适合打开工作台；
+   * 但长会话上下文越滚越重，用户需要一个"清空重来、画布保留"的入口。
+   * 流程与 open 的孤儿防线一致：create → 无条件绑定 → 盖戳 → 验收，
+   * 任何一步失败都显式抛错走 catch，绝不假成功。
+   */
+  const newSession = useCallback(
+    async (manifest: WorkbenchManifest) => {
+      try {
+        const created = await createSession(manifest.name).then((r) => r.id);
+        await workbenchBindSession(manifest.id, created);
+        const patch = await updateSessionMetadata(created, {
+          workbench_id: manifest.id,
+        });
+        if (patch.rows_affected === 0) {
+          throw new Error(
+            `failed to bind session ${created} to workbench ${manifest.id} (PATCH matched 0 rows — session row missing)`,
+          );
+        }
+        const verified = await getSessions(manifest.id);
+        if (!verified.some((x) => x.id === created)) {
+          throw new Error(
+            `failed to bind session ${created} to workbench ${manifest.id} (PATCH succeeded but session not found in workbench list)`,
+          );
+        }
+        onRegisterSessions(verified);
+        setActive({ ...manifest, session_id: created });
+        onSelectSession(created);
         setError(null);
       } catch (e) {
         setError(String(e));
@@ -272,7 +313,13 @@ export function WorkbenchView({
         <NewTab onCreate={create} />
       </div>
       {error && <p className="wb-error-inline">{error}</p>}
-      <WorkbenchShell manifest={active} chatNode={chatNode} />
+      <WorkbenchShell
+        manifest={active}
+        chatNode={chatNode}
+        onNewSession={() => void newSession(active)}
+        onSelectSession={onSelectSession}
+        activeSessionId={activeSessionId}
+      />
     </div>
   );
 }

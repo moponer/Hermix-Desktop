@@ -75,7 +75,7 @@ export function AdvancedTab() {
               onChange={(e) => handleChange("min_summary_tokens", Number(e.target.value))}
               className="mt-1 w-full px-3 py-1.5 rounded-lg border border-border-secondary bg-bg-primary text-text-primary text-sm"
             />
-            <p className="text-[11px] text-text-muted mt-0.5">摘要生成的最小 token 预算</p>
+            <p className="text-[length:var(--text-meta)] text-text-muted mt-0.5">摘要生成的最小 token 预算</p>
           </div>
           <div>
             <label className="text-xs text-text-muted">最大摘要 Token 数</label>
@@ -85,7 +85,7 @@ export function AdvancedTab() {
               onChange={(e) => handleChange("summary_tokens_ceiling", Number(e.target.value))}
               className="mt-1 w-full px-3 py-1.5 rounded-lg border border-border-secondary bg-bg-primary text-text-primary text-sm"
             />
-            <p className="text-[11px] text-text-muted mt-0.5">摘要输出的 token 上限</p>
+            <p className="text-[length:var(--text-meta)] text-text-muted mt-0.5">摘要输出的 token 上限</p>
           </div>
         </div>
       </div>
@@ -102,7 +102,7 @@ export function AdvancedTab() {
               onChange={(e) => handleChange("sub_agent_timeout_secs", Number(e.target.value))}
               className="mt-1 w-full px-3 py-1.5 rounded-lg border border-border-secondary bg-bg-primary text-text-primary text-sm"
             />
-            <p className="text-[11px] text-text-muted mt-0.5">单个子 Agent 执行的超时时间</p>
+            <p className="text-[length:var(--text-meta)] text-text-muted mt-0.5">单个子 Agent 执行的超时时间</p>
           </div>
           <div>
             <label className="text-xs text-text-muted">最小轮次</label>
@@ -112,7 +112,7 @@ export function AdvancedTab() {
               onChange={(e) => handleChange("sub_agent_min_turns", Number(e.target.value))}
               className="mt-1 w-full px-3 py-1.5 rounded-lg border border-border-secondary bg-bg-primary text-text-primary text-sm"
             />
-            <p className="text-[11px] text-text-muted mt-0.5">子 Agent 最少执行轮次</p>
+            <p className="text-[length:var(--text-meta)] text-text-muted mt-0.5">子 Agent 最少执行轮次</p>
           </div>
           <div>
             <label className="text-xs text-text-muted">最大轮次上限</label>
@@ -122,7 +122,7 @@ export function AdvancedTab() {
               onChange={(e) => handleChange("sub_agent_max_turns_cap", Number(e.target.value))}
               className="mt-1 w-full px-3 py-1.5 rounded-lg border border-border-secondary bg-bg-primary text-text-primary text-sm"
             />
-            <p className="text-[11px] text-text-muted mt-0.5">子 Agent 最多执行轮次</p>
+            <p className="text-[length:var(--text-meta)] text-text-muted mt-0.5">子 Agent 最多执行轮次</p>
           </div>
           <div>
             <label className="text-xs text-text-muted">委托最大迭代</label>
@@ -132,7 +132,7 @@ export function AdvancedTab() {
               onChange={(e) => handleChange("delegation_max_iterations", Number(e.target.value))}
               className="mt-1 w-full px-3 py-1.5 rounded-lg border border-border-secondary bg-bg-primary text-text-primary text-sm"
             />
-            <p className="text-[11px] text-text-muted mt-0.5">委托任务的最大迭代次数</p>
+            <p className="text-[length:var(--text-meta)] text-text-muted mt-0.5">委托任务的最大迭代次数</p>
           </div>
         </div>
       </div>

@@ -170,7 +170,7 @@ export function CustomAppsView({ onStartCreateApp }: { onStartCreateApp?: () => 
           </h1>
           <button
             onClick={onStartCreateApp}
-            className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[13px] font-medium transition-colors hover:opacity-90"
+            className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[length:var(--text-ui)] font-medium transition-colors hover:opacity-90"
             style={{
               marginLeft: "auto",
               marginRight: 8,
@@ -277,27 +277,27 @@ export function CustomAppsView({ onStartCreateApp }: { onStartCreateApp?: () => 
             style={{ background: "var(--color-bg-elevated)", border: "1px solid var(--color-border-primary)" }}
             onClick={(e) => e.stopPropagation()}
           >
-            <h3 id="delete-confirm-title" className="text-[15px] font-semibold text-text-primary mb-2">
+            <h3 id="delete-confirm-title" className="text-[length:var(--text-body)] font-semibold text-text-primary mb-2">
               删除应用
             </h3>
-            <p className="text-[13px] text-text-secondary leading-relaxed">
+            <p className="text-[length:var(--text-ui)] text-text-secondary leading-relaxed">
               确定要删除「<span className="font-medium text-text-primary">{deleteTarget.name}</span>」吗？
             </p>
-            <p className="text-[12px] text-text-muted mt-2 leading-relaxed">
-              此操作会从 <code className="font-mono text-[11px] px-1 py-0.5 rounded">~/.hermix/custom-apps/{deleteTarget.id}/</code> 移到
-              <code className="font-mono text-[11px] px-1 py-0.5 rounded ml-1">%TEMP%/hermix-trash/{deleteTarget.id}-&lt;ts&gt;</code>。
+            <p className="text-[length:var(--text-meta)] text-text-muted mt-2 leading-relaxed">
+              此操作会从 <code className="font-mono text-[length:var(--text-meta)] px-1 py-0.5 rounded">~/.hermix/custom-apps/{deleteTarget.id}/</code> 移到
+              <code className="font-mono text-[length:var(--text-meta)] px-1 py-0.5 rounded ml-1">%TEMP%/hermix-trash/{deleteTarget.id}-&lt;ts&gt;</code>。
               <br />后悔可在回收站里恢复。
             </p>
             <div className="flex justify-end gap-2 mt-4">
               <button
                 onClick={cancelDelete}
-                className="px-3 py-1.5 rounded-md text-[13px] text-text-secondary hover:bg-bg-hover"
+                className="px-3 py-1.5 rounded-md text-[length:var(--text-ui)] text-text-secondary hover:bg-bg-hover"
               >
                 取消
               </button>
               <button
                 onClick={confirmDelete}
-                className="px-3 py-1.5 rounded-md text-[13px] text-white transition-colors"
+                className="px-3 py-1.5 rounded-md text-[length:var(--text-ui)] text-white transition-colors"
                 style={{ background: "var(--color-error, #dc2626)" }}
               >
                 移到回收站

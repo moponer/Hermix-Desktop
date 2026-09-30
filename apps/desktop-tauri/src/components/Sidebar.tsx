@@ -1,11 +1,10 @@
 import {
-  MessageSquarePlus,
   ChevronDown, ChevronRight,
   MessageSquare, Plus, FolderOpen,
   Boxes, MoreHorizontal, Loader2,
   // Popover icons
   Pencil, Pin, Archive, Trash2, FolderOpenDot, Copy, FolderMinus,
-  Settings, PanelLeftClose, Search, LayoutDashboard,
+  Settings, PanelLeftClose, Search, LayoutDashboard, FolderSearch,
   type LucideIcon,
 } from "lucide-react";
 import { clsx } from "clsx";
@@ -27,13 +26,14 @@ import { usePinnedArchived } from "../hooks/usePinnedArchived";
 import { openInExplorer, copyText } from "../desktopBridge";
 import { storage, sessionKey } from "../utils/storageCompat";
 import { applyScale } from "../utils/uiScale";
-import { formatRelativeTime } from "../utils/time";
+import { formatSidebarTime, imSourceOf, IM_SOURCE_LABEL } from "../utils/time";
 import * as api from "../api";
 import { toastSuccess, toastError, toastInfo } from "../hooks/useToast";
 import { useUserProfile } from "../hooks/useUserProfile";
 import { UserAvatar } from "./UserAvatar";
 import { EditProfileDialog } from "./EditProfileDialog";
 import { UserMenuPopover } from "./UserMenuPopover";
+import { LocalSearchDialog } from "./LocalSearchDialog";
 
 interface SidebarProps {
   page: NavPage;
@@ -59,11 +59,16 @@ interface SidebarProps {
 // "搜索"已从主导航移除：它的本质是动作而非位置，做成独立页面会让用户
 // 为了搜一次付两次页面切换的代价，还会丢掉当前视图。现改为标题栏图标
 // 触发浮层（见 SessionPickerDialog），搜完即走。
+// 「对话」页已从导航移除：新建对话按钮已承担入口职责，导航只剩真正
+// 的功能页。chat 仍是默认 page（App 侧），这里只是不再给它导航位。
 const NAV_ITEMS: { icon: React.ElementType; label: string; page: NavPage }[] = [
-  { icon: MessageSquare, label: "对话",   page: "chat" },
   { icon: Boxes,    label: "应用",    page: "customapps" },
   { icon: LayoutDashboard, label: "工作台", page: "workbench" },
 ];
+
+// 「本地文件」不是页面而是弹窗动作，但入口形态与菜单项一致——放进
+// NAV_ITEMS 渲染循环之外单独渲染在「应用」上方，保持同样的行外观。
+const LOCAL_FILE_ITEM = { icon: FolderSearch, label: "本地文件" };
 
 // 已移除：工具箱整合进系统配置面板，保留旧名称便于搜索残留引用。
 
@@ -90,6 +95,8 @@ export function Sidebar({
   const { profile, setProfile } = useUserProfile();
   const [editOpen, setEditOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  // 本地快速查找（Everything 风格）浮层。
+  const [localSearchOpen, setLocalSearchOpen] = useState(false);
   const userCardRef = useRef<HTMLDivElement>(null);
 
   // 应用版本（来自 tauri.conf.json 的 version）。纯浏览器调试下没有 Tauri
@@ -161,23 +168,12 @@ export function Sidebar({
     }
   }, [orphanPaths, addWorkspace]);
 
-  const [collapsedWs, setCollapsedWs] = useState<Set<string>>(new Set());
 
-  // Auto-destroy workspaces that have no sessions — an empty project has
-  // nothing to show, so it disappears from the list entirely. Sessions are
-  // stored independently, so this only drops the path→name mapping; the
-  // orphan-reconciliation effect re-creates the workspace if a session in
-  // that path shows up again.
-  useEffect(() => {
-    const emptyIds = workspaces
-      .filter((ws) => (sessionsByWs[ws.path] || []).length === 0)
-      .map((ws) => ws.id);
-    if (emptyIds.length === 0) return;
-    emptyIds.forEach((id) => removeWorkspace(id));
-  }, [workspaces, sessionsByWs, removeWorkspace]);
-
-  const [chatsCollapsed, setChatsCollapsed] = useState(false);
-  const [spacesCollapsed, setSpacesCollapsed] = useState(false);
+  // 注意：这里曾有"自动销毁无会话工作区"effect，已删除。它与 ChatView 的
+  // 孤儿调和 effect（addWorkspace）构成 add/remove 乒乓：欢迎态选目录时
+  // 尚无会话，刚 add 的 workspace 被立刻删掉 → Composer chip 回退显示
+  // "目录"（用户报告的 bug）；极端时序下两边互相触发还会形成渲染循环。
+  // 空项目保留在列表中无害，用户可从项目菜单手动"移除"。
 
   // 列表归集状态。"对话"分组与每个项目的会话列表各持一份，互不干扰。
   const [chatsReveal, setChatsReveal] = useState<ListReveal>("preview");
@@ -185,6 +181,18 @@ export function Sidebar({
   // "查看全部"弹窗的打开目标：null 关闭；{ wsPath: null } 表示对话分组；
   // { wsPath: string } 表示某个项目。
   const [pickerTarget, setPickerTarget] = useState<{ wsPath: string | null; title: string } | null>(null);
+
+  // Tab 面板：列表区两个 tab —— 「对话」散会话、「项目」项目分组列表。
+  const [activeTab, setActiveTab] = useState<"chats" | "projects">("chats");
+  // 项目 tab 内每个分组行的展开状态。
+  const [collapsedWs, setCollapsedWs] = useState<Set<string>>(new Set());
+  const toggleWsCollapsed = (id: string) => {
+    setCollapsedWs((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
 
   // 列表变短后（删会话、切换项目）旧的展开状态会残留，导致"明明只剩 3 条
   // 却记着已展开"。归零到折叠态即可，代价只是一次多余的重渲染。
@@ -213,13 +221,6 @@ export function Sidebar({
 
   // SystemConfig 已由 系统配置 按钮直接跳转，无需 popup 状态。
 
-  const toggleWsCollapsed = (id: string) => {
-    setCollapsedWs((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
-    });
-  };
 
   // Delete flow: in-app confirm dialog (replaces native window.confirm) +
   // collapse animation + success/error toast.
@@ -351,17 +352,6 @@ export function Sidebar({
               <PanelLeftClose className="icon-md" />
             </button>
           )}
-          {onOpenSearch && (
-            <button
-              type="button"
-              onClick={onOpenSearch}
-              className="icon-btn"
-              aria-label="搜索对话"
-              title="搜索对话"
-            >
-              <Search className="icon-md" />
-            </button>
-          )}
         </div>
       </div>
 
@@ -374,203 +364,243 @@ export function Sidebar({
           title="新建对话"
           aria-label="新建对话"
         >
-          <MessageSquarePlus className="icon-lg" />
+          <Plus className="icon-md" />
           <span>新建对话</span>
         </button>
       </nav>
 
       {/* Nav */}
       <nav className="nav" style={{ flexShrink: 0 }}>
+        {/* 本地文件：菜单行外观，点击弹窗（非页面，无 active 态） */}
+        <button
+          type="button"
+          onClick={() => setLocalSearchOpen(true)}
+          className="nav-item"
+        >
+          <LOCAL_FILE_ITEM.icon className="icon-md" />
+          <span>{LOCAL_FILE_ITEM.label}</span>
+        </button>
         {NAV_ITEMS.map(({ icon: Icon, label, page: p }) => (
           <button
             key={p}
             onClick={() => onPageChange(p)}
             className={clsx("nav-item", page === p && "nav-item-active")}
           >
-            <Icon className="icon-lg" />
+            <Icon className="icon-md" />
             <span>{label}</span>
           </button>
         )        )}
 
       </nav>
 
-      {/* Three independent scrollable sections */}
+      {/* 搜索行（cc-haha 的位置：紧跟功能导航、分组之前）。此前搜索只在
+          头部藏了个小图标 —— 命中率低，还和「折叠侧栏」挤在一起。 */}
+      {onOpenSearch && (
+        <div className="sidebar-search">
+          <button type="button" onClick={onOpenSearch} className="sidebar-search-btn">
+            <Search className="icon-sm shrink-0" />
+            <span className="sidebar-search-label">搜索对话</span>
+            <kbd className="sidebar-search-kbd">⌘K</kbd>
+          </button>
+        </div>
+      )}
+
+      {/* Tab 面板列表：两个 tab —— 对话（散会话平铺）/ 项目（文件夹分组
+          列表，点分组行展开其会话）。一次只渲染当前 tab，不再堆叠。 */}
       <div className="sidebar-sections">
-        {/* ── 对话 ── */}
-        <section className="sidebar-section">
-          <div className="sidebar-section-header">
-            <button
-              onClick={() => setChatsCollapsed((v) => !v)}
-              className="section-header-toggle"
-              aria-expanded={!chatsCollapsed}
-            >
-              {chatsCollapsed
-                ? <ChevronRight className="icon-md shrink-0" />
-                : <ChevronDown className="icon-md shrink-0" />}
-              <span>对话</span>
-              <span className="section-header-count">{ungroupedSessions.length}</span>
-            </button>
-          </div>
-          {!chatsCollapsed && (
+        <div className="sidebar-tabs" role="tablist">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === "chats"}
+            className={clsx("sidebar-tab", activeTab === "chats" && "is-active")}
+            onClick={() => setActiveTab("chats")}
+          >
+            <MessageSquare className="icon-sm" />
+            <span>对话</span>
+            <span className="sidebar-tab-count">{ungroupedSessions.length}</span>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === "projects"}
+            className={clsx("sidebar-tab", activeTab === "projects" && "is-active")}
+            onClick={() => setActiveTab("projects")}
+          >
+            <FolderOpen className="icon-sm" />
+            <span>项目</span>
+            <span className="sidebar-tab-count">{workspaces.length}</span>
+          </button>
+        </div>
+
+        {/* 当前 tab 的列表 */}
+        {activeTab === "chats" ? (
+          <div className="sidebar-section" style={{ marginBottom: 0 }}>
             <div className="sidebar-section-body">
               {ungroupedSessions.length === 0 ? (
-                <p className="sidebar-section-empty">暂无对话</p>
+                <p className="sidebar-section-empty">还没有对话</p>
               ) : (
-                sortByPinArchive(ungroupedSessions, "session")
-                  .slice(0, resolveVisibleCount(ungroupedSessions.length, chatsReveal))
-                  .map((s) => {
-                  const isRemoving = removingIds.has(s.id);
-                  const isDeleting = deletingIds.has(s.id);
-                  const disabled = isRemoving || isDeleting;
-                  const archived = isArchived(s.id, "session");
-                  return (
-                    <div
-                      key={s.id}
-                      className={clsx(
-                        "sidebar-row",
-                        s.id === activeSessionId && "is-active",
-                        s.id === streamingSessionId && "is-streaming",
-                        archived && "is-archived",
-                        isRemoving && "is-removing",
-                        isDeleting && "is-deleting"
-                      )}
-                      aria-busy={disabled}
-                    >
-                      <button
-                        onClick={() => !disabled && onSelectSession(s.id)}
-                        className="sidebar-row-main"
-                        disabled={disabled}
-                      >
-                        {s.id === streamingSessionId
-                          ? <Loader2 className="icon-md animate-spin text-accent shrink-0" />
-                          : isRemoving ? <Loader2 className="icon-md animate-spin" /> : null}
-                        <span className={clsx("truncate-1", isRemoving && "opacity-60")}>{s.title || "新建对话"}</span>
-                        <span className="sidebar-row-meta">{formatRelativeTime(s.updated_at)}</span>
-                        {isPinned(s.id, "session") && <Pin size={10} className="sidebar-row-pin" />}
-                      </button>
-                      <div className="sidebar-row-actions">
-                        <SidebarMenu label="对话操作" items={sessionMenu(s)} />
-                      </div>
-                    </div>
-                  );
-                })
+                <>
+                  {
+                    sortByPinArchive(ungroupedSessions, "session")
+                      .slice(0, resolveVisibleCount(ungroupedSessions.length, chatsReveal))
+                      .map((s) => {
+                      const isRemoving = removingIds.has(s.id);
+                      const isDeleting = deletingIds.has(s.id);
+                      const disabled = isRemoving || isDeleting;
+                      const archived = isArchived(s.id, "session");
+                      return (
+                        <div
+                          key={s.id}
+                          className={clsx(
+                            "sidebar-row",
+                            s.id === activeSessionId && "is-active",
+                            s.id === streamingSessionId && "is-streaming",
+                            archived && "is-archived",
+                            isRemoving && "is-removing",
+                            isDeleting && "is-deleting"
+                          )}
+                          aria-busy={disabled}
+                        >
+                          <button
+                            onClick={() => !disabled && onSelectSession(s.id)}
+                            className="sidebar-row-main"
+                            disabled={disabled}
+                          >
+                            {s.id === streamingSessionId
+                              ? <Loader2 className="icon-md animate-spin text-accent shrink-0" />
+                              : isRemoving ? <Loader2 className="icon-md animate-spin" /> : null}
+{imSourceOf(s.id) && (
+                              <span
+                                className="shrink-0 inline-flex items-center gap-1 rounded-full bg-accent-soft px-1.5 h-[18px] text-[length:var(--text-tiny)] text-accent"
+                                title={`来自${IM_SOURCE_LABEL[imSourceOf(s.id)!]}的远程对话`}
+                              >
+                                {IM_SOURCE_LABEL[imSourceOf(s.id)!]}
+                              </span>
+                            )}
+                            <span className={clsx("truncate-1", isRemoving && "opacity-60")}>{s.title || "新建对话"}</span>
+                            <span className="sidebar-row-meta">{formatSidebarTime(s.updated_at)}</span>
+                            {isPinned(s.id, "session") && <Pin size={10} className="sidebar-row-pin" />}
+                          </button>
+                          <div className="sidebar-row-actions">
+                            <SidebarMenu label="对话操作" items={sessionMenu(s)} />
+                          </div>
+                        </div>
+                      );
+                    })
+                  }
+                  <ListRevealButton
+                    action={resolveRevealAction(ungroupedSessions.length, chatsReveal)}
+                    label="对话"
+                    onExpand={() => setChatsReveal("expanded")}
+                    onCollapse={() => setChatsReveal("preview")}
+                    onOpenPicker={() =>
+                      setPickerTarget({ wsPath: null, title: "全部对话" })
+                    }
+                  />
+                </>
               )}
-              <ListRevealButton
-                action={resolveRevealAction(ungroupedSessions.length, chatsReveal)}
-                label="对话"
-                onExpand={() => setChatsReveal("expanded")}
-                onCollapse={() => setChatsReveal("preview")}
-                onOpenPicker={() =>
-                  setPickerTarget({ wsPath: null, title: "全部对话" })
-                }
-              />
             </div>
-          )}
-        </section>
-
-        {/* ── 项目 ── */}
-        <section className="sidebar-section">
-          <div className="sidebar-section-header">
-            <button
-              onClick={() => setSpacesCollapsed((v) => !v)}
-              className="section-header-toggle"
-              aria-expanded={!spacesCollapsed}
-            >
-              {spacesCollapsed
-                ? <ChevronRight className="icon-md shrink-0" />
-                : <ChevronDown className="icon-md shrink-0" />}
-              <span>项目</span>
-              <span className="section-header-count">{workspaces.length}</span>
-            </button>
           </div>
-          {!spacesCollapsed && (
+        ) : (
+          <div className="sidebar-section" style={{ marginBottom: 0 }}>
             <div className="sidebar-section-body">
               {workspaces.length === 0 ? (
                 <p className="sidebar-section-empty">还没有项目</p>
               ) : (
                 sortByPinArchive(workspaces, "workspace").map((ws) => {
-                const wsSessions = sessionsByWs[ws.path] || [];
-                const reveal = wsReveal[ws.id] ?? "preview";
-                const collapsed = collapsedWs.has(ws.id);
-                const wsRemoving = removingIds.has(ws.id);
-                const wsDeleting = deletingIds.has(ws.id);
-                const wsDisabled = wsRemoving || wsDeleting;
-                const wsPinned = isPinned(ws.id, "workspace");
-                return (
-                  <div key={ws.id} className={clsx("sidebar-project", wsRemoving && "is-removing", wsDeleting && "is-deleting")}>
-                    <div className="sidebar-project-row">
-                      <button onClick={() => !wsDisabled && wsSessions.length > 0 && toggleWsCollapsed(ws.id)} className="sidebar-project-toggle" disabled={wsDisabled || wsSessions.length === 0}>
-                        <FolderOpen className="icon-md list-row-icon" />
-                        {wsRemoving ? <Loader2 className="icon-md animate-spin" /> : null}
-                        <span className={clsx("sidebar-project-name", wsRemoving && "opacity-60")}>{ws.name}</span>
-                        {wsPinned && <Pin size={10} className="sidebar-row-pin" />}
-                        {collapsed
-                          ? <ChevronRight className="icon-sm list-row-chevron ml-auto" />
-                          : <ChevronDown  className="icon-sm list-row-chevron ml-auto" />}
-                      </button>
-                      <div className="sidebar-row-actions">
-                        <SidebarMenu label="项目操作" items={workspaceMenu(ws)} />
+                  const wsSessions = sessionsByWs[ws.path] || [];
+                  const reveal = wsReveal[ws.id] ?? "preview";
+                  const collapsed = collapsedWs.has(ws.id);
+                  const wsRemoving = removingIds.has(ws.id);
+                  const wsDeleting = deletingIds.has(ws.id);
+                  const wsDisabled = wsRemoving || wsDeleting;
+                  return (
+                    <div key={ws.id} className={clsx("sidebar-project", wsRemoving && "is-removing", wsDeleting && "is-deleting")}>
+                      <div className="sidebar-project-row">
+                        <button onClick={() => !wsDisabled && toggleWsCollapsed(ws.id)} className="sidebar-project-toggle" disabled={wsDisabled}>
+                          <FolderOpen className="icon-sm" />
+                          {wsRemoving ? <Loader2 className="icon-md animate-spin" /> : null}
+                          <span className={clsx("sidebar-project-name", wsRemoving && "opacity-60")}>{ws.name}</span>
+                          {isPinned(ws.id, "workspace") && <Pin size={10} className="sidebar-row-pin" />}
+                          {wsSessions.length > 0 && (
+                            <span className="sidebar-tab-count">{wsSessions.length}</span>
+                          )}
+                          {collapsed
+                            ? <ChevronRight className="icon-sm list-row-chevron ml-auto" />
+                            : <ChevronDown className="icon-sm list-row-chevron ml-auto" />}
+                        </button>
+                        <div className="sidebar-row-actions">
+                          <SidebarMenu label="项目操作" items={workspaceMenu(ws)} />
+                        </div>
                       </div>
-                    </div>
-                    {!collapsed && wsSessions.length > 0 && (
-                      <div className="sidebar-project-sessions">
-                        {sortByPinArchive(wsSessions, "session")
-                          .slice(0, resolveVisibleCount(wsSessions.length, reveal))
-                          .map((s) => {
-                          const psRemoving = removingIds.has(s.id);
-                          const psDeleting = deletingIds.has(s.id);
-                          const psDisabled = psRemoving || psDeleting;
-                          const psArchived = isArchived(s.id, "session");
-                          return (
-                            <div
-                              key={s.id}
-                              className={clsx(
-                                "sidebar-row sidebar-project-session",
-                                s.id === activeSessionId && "is-active",
-                                s.id === streamingSessionId && "is-streaming",
-                                psArchived && "is-archived",
-                                psRemoving && "is-removing",
-                                psDeleting && "is-deleting"
-                              )}
-                              aria-busy={psDisabled}
-                            >
-                              <button
-                                onClick={() => !psDisabled && onSelectSession(s.id)}
-                                className="sidebar-row-main"
-                                disabled={psDisabled}
+                      {!collapsed && wsSessions.length > 0 && (
+                        <div className="sidebar-project-sessions">
+                          {sortByPinArchive(wsSessions, "session")
+                            .slice(0, resolveVisibleCount(wsSessions.length, reveal))
+                            .map((s) => {
+                            const psRemoving = removingIds.has(s.id);
+                            const psDeleting = deletingIds.has(s.id);
+                            const psDisabled = psRemoving || psDeleting;
+                            const psArchived = isArchived(s.id, "session");
+                            return (
+                              <div
+                                key={s.id}
+                                className={clsx(
+                                  "sidebar-row sidebar-project-session",
+                                  s.id === activeSessionId && "is-active",
+                                  s.id === streamingSessionId && "is-streaming",
+                                  psArchived && "is-archived",
+                                  psRemoving && "is-removing",
+                                  psDeleting && "is-deleting"
+                                )}
+                                aria-busy={psDisabled}
                               >
-                                {s.id === streamingSessionId
-                                  ? <Loader2 className="icon-md animate-spin text-accent shrink-0" />
-                                  : psRemoving ? <Loader2 className="icon-md animate-spin" /> : null}
-                                <span className={clsx("truncate-1", psRemoving && "opacity-60")}>{s.title || "新建对话"}</span>
-                                <span className="sidebar-row-meta">{formatRelativeTime(s.updated_at)}</span>
-                                {isPinned(s.id, "session") && <Pin size={10} className="sidebar-row-pin" />}
-                              </button>
-                              <div className="sidebar-row-actions">
-                                <SidebarMenu label="对话操作" items={sessionMenu(s)} />
+                                <button
+                                  onClick={() => !psDisabled && onSelectSession(s.id)}
+                                  className="sidebar-row-main"
+                                  disabled={psDisabled}
+                                >
+                                  {s.id === streamingSessionId
+                                    ? <Loader2 className="icon-md animate-spin text-accent shrink-0" />
+                                    : psRemoving ? <Loader2 className="icon-md animate-spin" /> : null}
+{imSourceOf(s.id) && (
+                                  <span
+                                    className="shrink-0 inline-flex items-center gap-1 rounded-full bg-accent-soft px-1.5 h-[18px] text-[length:var(--text-tiny)] text-accent"
+                                    title={`来自${IM_SOURCE_LABEL[imSourceOf(s.id)!]}的远程对话`}
+                                  >
+                                    {IM_SOURCE_LABEL[imSourceOf(s.id)!]}
+                                  </span>
+                                )}
+                                  <span className={clsx("truncate-1", psRemoving && "opacity-60")}>{s.title || "新建对话"}</span>
+                                  <span className="sidebar-row-meta">{formatSidebarTime(s.updated_at)}</span>
+                                  {isPinned(s.id, "session") && <Pin size={10} className="sidebar-row-pin" />}
+                                </button>
+                                <div className="sidebar-row-actions">
+                                  <SidebarMenu label="对话操作" items={sessionMenu(s)} />
+                                </div>
                               </div>
-                            </div>
-                          );
-                        })}
-                        <ListRevealButton
-                          inset
-                          action={resolveRevealAction(wsSessions.length, reveal)}
-                          label={ws.name}
-                          onExpand={() => setWsReveal((p) => ({ ...p, [ws.id]: "expanded" }))}
-                          onCollapse={() => setWsReveal((p) => ({ ...p, [ws.id]: "preview" }))}
-                          onOpenPicker={() =>
-                            setPickerTarget({ wsPath: ws.path, title: ws.name })
-                          }
-                        />
-                      </div>
-                    )}
-                  </div>
-                );
-              }))}
+                            );
+                          })}
+                          <ListRevealButton
+                            inset
+                            action={resolveRevealAction(wsSessions.length, reveal)}
+                            label={ws.name}
+                            onExpand={() => setWsReveal((p) => ({ ...p, [ws.id]: "expanded" }))}
+                            onCollapse={() => setWsReveal((p) => ({ ...p, [ws.id]: "preview" }))}
+                            onOpenPicker={() =>
+                              setPickerTarget({ wsPath: ws.path, title: ws.name })
+                            }
+                          />
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              )}
             </div>
-          )}
-        </section>
-
+          </div>
+        )}
       </div>
 
       {/* Bottom: user card + pop menu */}
@@ -657,6 +687,7 @@ export function Sidebar({
         onSelect={onSelectSession}
         onClose={() => setPickerTarget(null)}
       />
+      <LocalSearchDialog open={localSearchOpen} onClose={() => setLocalSearchOpen(false)} />
     </aside>
   );
 }
@@ -821,7 +852,7 @@ function SidebarMenu({ label, items }: { label: string; items: MenuItemSpec[] })
         title={label}
         aria-label={label}
       >
-        <MoreHorizontal className="icon-lg" />
+        <MoreHorizontal className="icon-md" />
       </button>
       {open && pos && createPortal(
         <SidebarPopoverBody
@@ -877,7 +908,7 @@ function RenameDialog({
             className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
             style={{ background: "hsla(210, 70%, 55%, 0.12)" }}
           >
-            <Pencil className="icon-lg" style={{ color: "hsl(210, 70%, 50%)" }} />
+            <Pencil className="icon-md" style={{ color: "hsl(210, 70%, 50%)" }} />
           </div>
           <div className="flex-1 min-w-0">
             <h2 className="text-body font-bold text-text-primary">{state.title}</h2>
@@ -960,7 +991,7 @@ function DeleteConfirmDialog({
             className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
             style={{ background: "hsla(150, 60%, 50%, 0.12)" }}
           >
-            <Trash2 className="icon-lg" style={{ color: "hsl(150, 60%, 45%)" }} />
+            <Trash2 className="icon-md" style={{ color: "hsl(150, 60%, 45%)" }} />
           </div>
           <div className="flex-1 min-w-0">
             <h2 className="text-body font-bold text-text-primary">{state.title}</h2>
@@ -1000,4 +1031,3 @@ function DeleteConfirmDialog({
     document.body,
   );
 }
-

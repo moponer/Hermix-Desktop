@@ -66,9 +66,9 @@ export interface MessageListProps {
   justPatchedTodoRef?: React.MutableRefObject<Set<string>>;
   onPathClick?: (path: string) => void;
   onApproveApproval?: (requestId: string, remember?: boolean) => void;
-  onDenyApproval?: (requestId: string) => void;
+  onDenyApproval?: (requestId: string, note?: string) => void;
   onApproveBatchApproval?: (batchId: string, remember?: boolean) => void;
-  onDenyBatchApproval?: (batchId: string) => void;
+  onDenyBatchApproval?: (batchId: string, note?: string) => void;
   onReasoningFoldChange?: (folded: boolean) => void;
   onAnswerClarify?: (requestId: string, answer: string) => void;
   workspaceRoot?: string | null;
