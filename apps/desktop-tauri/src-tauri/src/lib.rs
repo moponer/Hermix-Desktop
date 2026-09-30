@@ -2,6 +2,7 @@ pub mod browser_cleanup;
 pub mod commands;
 pub mod commands_custom_app;
 pub mod commands_cua;
+pub mod commands_local_search;
 pub mod commands_workbench;
 pub mod markitdown;
 pub mod officecli;
@@ -409,6 +410,25 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .setup(|app| {
+            // ── 启动白屏修复（2026-09-30）────────────────────────────
+            // 窗口在配置里 `visible: false`：webview 首帧渲染完成之前用户
+            // 看到的是空桌面而不是白窗。这里在页面加载完成时显示窗口 ——
+            // 第一眼直接是完整启动屏（吉祥物 + 进度条），零白屏。
+            // 兜底：2.5s 后无条件 show，防止页面加载失败时窗口永不出现。
+            {
+                // 页面加载完成的 show 挂在 Builder::on_page_load（见下方）；
+                // 这里只放兜底定时器：页面加载失败时窗口也不能永远不出现。
+                if let Some(win) = app.get_webview_window("main") {
+                    let fallback = win.clone();
+                    std::thread::spawn(move || {
+                        // 4s：dev 模式 vite 冷启动可能超过 2.5s，太早 show 会把
+                        // 白屏放回来；生产（本地资源）通常 <1s 就走正常路径。
+                        std::thread::sleep(std::time::Duration::from_millis(4000));
+                        let _ = fallback.show();
+                    });
+                }
+            }
+
             // 0. WebView2 runtime probe (Windows only). Tauri 2's
             //    own WebView creation step fails with a cryptic
             //    HRESULT when the Evergreen runtime is missing —
@@ -557,6 +577,21 @@ pub fn run() {
                 browser_cleanup::kill_spawned_chrome();
             }
         })
+        // ── 启动白屏修复（2026-09-30）──────────────────────────────
+        // 窗口在配置里 `visible: false`：webview 首帧渲染前用户看到的是
+        // 空桌面而不是白窗。页面加载完成（splash 的 HTML 是内联的，此刻
+        // 必然可绘制）再显示窗口 —— 第一眼直接是完整启动屏，零白屏。
+        // Builder::on_page_load 对所有 webview 生效；show 幂等。
+        .on_page_load(|webview: &tauri::Webview, payload: &tauri::webview::PageLoadPayload| {
+            if payload.event() == tauri::webview::PageLoadEvent::Finished {
+                // Webview::window() 拿主 Window（不走 Manager trait，避免作用域问题）。
+                let window = webview.window();
+                if window.label() == "main" {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             commands::get_settings_dir,
             commands::get_data_dir,
@@ -572,6 +607,9 @@ pub fn run() {
             commands::artifact_path_exists,
             commands::list_directory,
             commands::restart_sidecar,
+            commands_local_search::local_search,
+            commands_local_search::local_search_open,
+            commands_local_search::local_search_preview,
             commands::render_office_preview,
             commands::document_to_markdown,
             commands::get_runtime_info,

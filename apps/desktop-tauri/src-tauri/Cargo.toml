@@ -2,6 +2,10 @@
 name = "hermix-desktop"
 version = "0.1.8"
 edition = "2021"
+# 本包有两个 bin：主程序 + 主进程拉起的提权索引辅助进程
+# （usn-indexer，见下方 [[bin]]）。不指定 default-run 时 `cargo run`
+# 会报"could not determine which binary to run"。
+default-run = "hermix-desktop"
 
 [workspace]
 
@@ -32,6 +36,35 @@ which = "6"
 hermix-cua = { path = "../../../crates/hermix-cua" }
 hermix-plugin = { path = "../../../crates/hermix-plugin" }
 hermix-config = { path = "../../../crates/hermix-config" }
+
+# 本地快速查找（侧栏「本地查找」）：jwalk 并行目录遍历建索引 +
+# nucleo-matcher（Helix 编辑器同款模糊匹配算法）。NTFS MFT 原始读取
+# 需要管理员权限，桌面应用不适合，因此用并行遍历方案（毫秒级即可
+# 索引常用目录；全盘首次索引在后台线程完成，不阻塞 UI）。
+jwalk = "0.9"
+nucleo-matcher = "0.3"
+
+# 索引遍历线程降为 BELOW_NORMAL 优先级：全盘扫描不抢 UI 线程。
+# windows crate 已在依赖树中（hermix-cua 同版本 0.58），仅补 Threading feature。
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Storage_FileSystem",
+  "Win32_System_IO",
+  "Win32_System_Ioctl",
+  "Win32_System_Pipes",
+  "Win32_System_Threading",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
+] }
+
+# 提权索引辅助进程（读 MFT 需要管理员权限，主程序不提权）。
+# 作为同 crate 的第二个 bin：构建产物与主程序同目录，
+# 主进程按 current_exe().parent()/usn-indexer.exe 定位拉起。
+[[bin]]
+name = "usn-indexer"
+path = "src/bin/usn_indexer.rs"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
