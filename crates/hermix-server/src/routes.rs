@@ -1459,6 +1459,8 @@ pub(crate) async fn send_message(
         image_mime_type: None,
         skills: req.skills.clone(),
         workbench_id: req.workbench_id.clone(),
+        domain_override: req.domain_override.clone(),
+        expert_toolset: req.expert_toolset.clone(),
         memory_dir: None,
         approval_requester: None,
         on_event: None,
@@ -1609,8 +1611,18 @@ pub(crate) async fn approve_via_rest(
     };
 
     let approved = choice.is_approved();
+    // 拒绝时用户可以附一句「接下来该怎么做」，原样进 LLM 可见的拒绝理由，
+    // 让模型换方案而不是原地重试同一个被拒的工具（审批面板第 5 项）。
+    let note = body
+        .get("note")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
     let outcome = if approved {
         hermix_core::ApprovalOutcome::Approved
+    } else if let Some(note) = note {
+        hermix_core::ApprovalOutcome::DeniedWithFeedback { note }
     } else {
         hermix_core::ApprovalOutcome::DeniedByUser
     };

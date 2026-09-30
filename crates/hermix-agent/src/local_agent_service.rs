@@ -19,6 +19,7 @@ use hermix_core::{AgentError, ApprovalOutcome, LlmProvider, Message, MessageRole
 use hermix_tools::{TirithAction, TirithSecurity, ToolRegistry};
 use hermix_tools::backends::memory::FileMemoryBackend;
 use hermix_tools::tools::memory::MemoryHandler;
+use hermix_intelligence::DomainMode;
 use serde_json::Value;
 
 /// Wrapper that makes `Arc<ToolRegistry>` (hermix_tools) implement the
@@ -1061,6 +1062,15 @@ impl LocalAgentService {
         if overrides.workbench_id.is_some() && !config.ephemeral_skills.iter().any(|s| s == "workbench") {
             config.ephemeral_skills.push("workbench".to_string());
         }
+        // L1 domain-mode pin: `"auto"` / empty / `None` → auto-detect;
+        // otherwise parse the wire string into `DomainMode`. Unknown values
+        // fall back to auto — never panic on a malformed frontend payload.
+        config.domain_override = overrides
+            .domain_override
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case("auto"))
+            .and_then(DomainMode::from_str);
         let allowed = overrides
             .tools
             .as_ref()
@@ -1448,8 +1458,22 @@ impl AgentService for LocalAgentService {
         if effective_overrides.permission.is_none() {
             effective_overrides.permission = Some(Self::default_permission());
         }
-        let (mut agent_config, allowed_tools) =
+        let (mut agent_config, mut allowed_tools) =
             Self::apply_overrides(agent_config, &effective_overrides);
+
+        // 专家 toolset（P1，STABILITY_AND_REMOTE_PLAN §3.2-2）：把受聘专家
+        // 声明的工具组成员并进本轮白名单。allowed 本就是过滤集——扩大它
+        // 只会多放行，不会撤销 floor 或用户已启用的任何工具（专家只能加，
+        // 不能删）。未知组名 = 空成员 = no-op。allowed 为 None（无过滤）时
+        // 本来就全量可用，无需处理。
+        if let Some(ts) = effective_overrides.expert_toolset.as_deref() {
+            let members = self.tool_registry.toolset_members(ts);
+            if !members.is_empty() {
+                allowed_tools
+                    .get_or_insert_with(std::collections::HashSet::new)
+                    .extend(members);
+            }
+        }
 
         // (fix): `apply_overrides` does not propagate the
         // session id into AgentConfig — it only sets system_prompt,
@@ -1859,8 +1883,22 @@ impl AgentService for LocalAgentService {
         if effective_overrides.permission.is_none() {
             effective_overrides.permission = Some(Self::default_permission());
         }
-        let (mut agent_config, allowed_tools) =
+        let (mut agent_config, mut allowed_tools) =
             Self::apply_overrides(agent_config, &effective_overrides);
+
+        // 专家 toolset（P1，STABILITY_AND_REMOTE_PLAN §3.2-2）：把受聘专家
+        // 声明的工具组成员并进本轮白名单。allowed 本就是过滤集——扩大它
+        // 只会多放行，不会撤销 floor 或用户已启用的任何工具（专家只能加，
+        // 不能删）。未知组名 = 空成员 = no-op。allowed 为 None（无过滤）时
+        // 本来就全量可用，无需处理。
+        if let Some(ts) = effective_overrides.expert_toolset.as_deref() {
+            let members = self.tool_registry.toolset_members(ts);
+            if !members.is_empty() {
+                allowed_tools
+                    .get_or_insert_with(std::collections::HashSet::new)
+                    .extend(members);
+            }
+        }
 
         // (fix): `apply_overrides` does not propagate the
         // session id into AgentConfig — it only sets system_prompt,
@@ -3411,6 +3449,8 @@ mod override_tests {
             pre_approval_checker: None,
             skills: None,
             workbench_id: None,
+            domain_override: None,
+            expert_toolset: None,
             memory_dir: None,
             on_prefetch_intent: None,
             shutdown: None,
@@ -3444,6 +3484,8 @@ mod override_tests {
             pre_approval_checker: None,
             skills: None,
             workbench_id: None,
+            domain_override: None,
+            expert_toolset: None,
             memory_dir: None,
             on_prefetch_intent: None,
             shutdown: None,
@@ -3453,6 +3495,33 @@ mod override_tests {
         assert!(allowed.contains("read_file"));
         assert!(allowed.contains("list_dir"));
         assert!(!allowed.contains("terminal_run"));
+    }
+
+    #[test]
+    fn apply_overrides_parses_domain_pin() {
+        use hermix_intelligence::DomainMode as DM;
+        // 显式 pin → 解析成 DomainMode
+        for (raw, want) in [
+            ("code", Some(DM::Code)),
+            ("research", Some(DM::Research)),
+            ("CODE", Some(DM::Code)), // 大小写不敏感
+        ] {
+            let overrides = AgentOverrides {
+                domain_override: Some(raw.to_string()),
+                ..Default::default()
+            };
+            let (cfg, _) = LocalAgentService::apply_overrides(AgentConfig::default(), &overrides);
+            assert_eq!(cfg.domain_override, want, "raw={raw:?}");
+        }
+        // auto / 空 / 未知 / None → 全部落回自动检测（None）
+        for raw in [None, Some("auto".into()), Some("".into()), Some("garbage".into())] {
+            let overrides = AgentOverrides {
+                domain_override: raw.clone(),
+                ..Default::default()
+            };
+            let (cfg, _) = LocalAgentService::apply_overrides(AgentConfig::default(), &overrides);
+            assert_eq!(cfg.domain_override, None, "raw={raw:?}");
+        }
     }
 
     // -----------------------------------------------------------------

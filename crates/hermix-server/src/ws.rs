@@ -115,6 +115,8 @@ pub(crate) async fn handle_ws(
             image_mime_type: None,
             skills: None,
             workbench_id: None,
+            domain_override: None,
+            expert_toolset: None,
         });
 
         // Build AgentOverrides from request
@@ -131,6 +133,8 @@ pub(crate) async fn handle_ws(
             image_mime_type: None,
             skills: request.skills.clone(),
             workbench_id: request.workbench_id.clone(),
+            domain_override: request.domain_override.clone(),
+            expert_toolset: request.expert_toolset.clone(),
             memory_dir: None,
             approval_requester: None,
             on_event: None,
@@ -731,6 +735,8 @@ pub(crate) async fn handle_ws_stream_send(
         memory_dir: None,
         skills: request.skills.clone(),
         workbench_id: request.workbench_id.clone(),
+        domain_override: request.domain_override.clone(),
+        expert_toolset: request.expert_toolset.clone(),
         approval_requester: {
             let registry = state.approval_registry.clone();
             Some(Arc::new(move |sess_id: String, req_id: String| {
@@ -2093,11 +2099,12 @@ pub(crate) async fn handle_ws_stream_send(
                     Some(text) => {
                         if let Ok(ws_msg) = serde_json::from_str::<hermix_transport::WsClientMessage>(&text) {
                             match ws_msg {
-                                WsClientMessage::ApprovalResponse { request_id, decision } => {
+                                WsClientMessage::ApprovalResponse { request_id, decision, note } => {
                                     tracing::info!(
                                         session = %session_id,
                                         request_id = %request_id,
                                         decision = %decision,
+                                        has_note = note.is_some(),
                                         "ws_stream_send: received approval_response during streaming"
                                     );
                                     let choice = hermix_transport::ApprovalChoice::from_decision_str(&decision);
@@ -2113,12 +2120,7 @@ pub(crate) async fn handle_ws_stream_send(
                                             hermix_transport::ApprovalChoice::Deny
                                         }
                                     };
-                                    let approved = choice.is_approved();
-                                    let outcome = if approved {
-                                        hermix_core::ApprovalOutcome::Approved
-                                    } else {
-                                        hermix_core::ApprovalOutcome::DeniedByUser
-                                    };
+                                    let outcome = approval_outcome_for(choice, note.as_deref());
                                     let matched = state.approval_registry.resolve(
                                         session_id,
                                         &request_id,
@@ -2186,11 +2188,12 @@ pub(crate) async fn handle_ws_stream_send(
                                         }
                                     }
                                 }
-WsClientMessage::ApprovalBatchResponse { batch_id, decision } => {
+WsClientMessage::ApprovalBatchResponse { batch_id, decision, note } => {
                                     tracing::info!(
                                         session = %session_id,
                                         batch_id = %batch_id,
                                         decision = %decision,
+                                        has_note = note.is_some(),
                                         "ws_stream_send: received approval_responses_batch during streaming"
                                     );
                                     let choice =
@@ -2204,11 +2207,7 @@ WsClientMessage::ApprovalBatchResponse { batch_id, decision } => {
                                                 );
                                                 hermix_transport::ApprovalChoice::Deny
                                             });
-                                    let outcome = if choice.is_approved() {
-                                        hermix_core::ApprovalOutcome::Approved
-                                    } else {
-                                        hermix_core::ApprovalOutcome::DeniedByUser
-                                    };
+                                    let outcome = approval_outcome_for(choice, note.as_deref());
                                     let pairs = state.approval_registry.resolve_batch(
                                         session_id,
                                         &batch_id,
@@ -2703,6 +2702,24 @@ pub(crate) async fn handle_ws_stream(
     }
 }
 
+/// Fold a 4-state `ApprovalChoice` plus the user's optional
+/// denial feedback into the registry-facing `ApprovalOutcome`.
+/// `deny` + non-empty note becomes `DeniedWithFeedback`, which the
+/// tool layer surfaces to the LLM as an actionable reason so it
+/// changes course instead of retrying the denied call.
+fn approval_outcome_for(
+    choice: hermix_transport::ApprovalChoice,
+    note: Option<&str>,
+) -> hermix_core::ApprovalOutcome {
+    if choice.is_approved() {
+        hermix_core::ApprovalOutcome::Approved
+    } else if let Some(n) = note.map(str::trim).filter(|s| !s.is_empty()) {
+        hermix_core::ApprovalOutcome::DeniedWithFeedback { note: n.to_string() }
+    } else {
+        hermix_core::ApprovalOutcome::DeniedByUser
+    }
+}
+
 /// Handle one inbound frame of a streaming session.
 ///
 /// Extracted from the session loop so a turn that consumed a mid-stream
@@ -2727,7 +2744,7 @@ async fn handle_inbound_frame(
     // Try structured WsClientMessage first (v2 protocol).
     if let Ok(ws_msg) = serde_json::from_str::<WsClientMessage>(&text) {
         match ws_msg {
-            WsClientMessage::ApprovalResponse { request_id, decision } => {
+            WsClientMessage::ApprovalResponse { request_id, decision, note } => {
                 // INFO-level receipt log. The
                 // previous `debug!` (line 5753 below) was
                 // invisible at the default log level, so
@@ -2770,11 +2787,7 @@ async fn handle_inbound_frame(
                 // resolution: any non-Deny choice approves
                 // the current call.
                 let approved = choice.is_approved();
-                let outcome = if approved {
-                    hermix_core::ApprovalOutcome::Approved
-                } else {
-                    hermix_core::ApprovalOutcome::DeniedByUser
-                };
+                let outcome = approval_outcome_for(choice, note.as_deref());
                 let matched = state.approval_registry.resolve(
                     &session_id,
                     &request_id,
@@ -2885,11 +2898,12 @@ async fn handle_inbound_frame(
                 );
                 return StreamSendOutcome::Completed;
             }
-            WsClientMessage::ApprovalBatchResponse { batch_id, decision } => {
+            WsClientMessage::ApprovalBatchResponse { batch_id, decision, note } => {
                 tracing::info!(
                     session = %session_id,
                     batch_id = %batch_id,
                     decision = %decision,
+                    has_note = note.is_some(),
                     "ws_stream: received approval_responses_batch",
                 );
                 let choice =
@@ -2903,11 +2917,7 @@ async fn handle_inbound_frame(
                             );
                             hermix_transport::ApprovalChoice::Deny
                         });
-                let outcome = if choice.is_approved() {
-                    hermix_core::ApprovalOutcome::Approved
-                } else {
-                    hermix_core::ApprovalOutcome::DeniedByUser
-                };
+                let outcome = approval_outcome_for(choice, note.as_deref());
                 let pairs = state.approval_registry.resolve_batch(
                     &session_id,
                     &batch_id,
@@ -2991,6 +3001,8 @@ async fn handle_inbound_frame(
                 image_mime_type,
                 skills,
                 workbench_id: None,
+                domain_override: None,
+                expert_toolset: None,
             };
                 // Return the inner outcome verbatim. This turn may have
                 // consumed a mid-stream user message and needs it re-driven
@@ -3053,6 +3065,8 @@ async fn handle_inbound_frame(
         image_mime_type: None,
         skills: None,
         workbench_id: None,
+        domain_override: None,
+        expert_toolset: None,
     });
     return handle_ws_stream_send(
         &mut *sender,

@@ -307,6 +307,21 @@ pub(crate) async fn resolve_pre_dispatch(
                         }
                         Ok(())
                     }
+                    Ok(ApprovalOutcome::DeniedWithFeedback { note }) => {
+                        tracing::info!(
+                            tool = %tool_name,
+                            tool_call_id = %id,
+                            note = %note,
+                            "resolve_pre_dispatch: AwaitApproval resolved — DeniedWithFeedback",
+                        );
+                        Err(ToolDenial {
+                            kind: DenialKind::UserDenied,
+                            reason: format!(
+                                "User denied the tool call and said: {note}.{}",
+                                denial_repick_hint(&tc.function.name, &tc.function.arguments),
+                            ),
+                        })
+                    }
                     Ok(ApprovalOutcome::DeniedByUser) => {
                         tracing::info!(
                             tool = %tool_name,

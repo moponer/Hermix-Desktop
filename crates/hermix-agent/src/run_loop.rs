@@ -452,6 +452,28 @@ impl AgentLoop {
         // of only seeing a lossy truncation marker. Sink is built lazily:
         // no oversized result means no filesystem work at all.
         let mut results = results;
+
+        // 空的 tool_result 会被替换成一句人类可读的说明，而不是原样送进上下文。
+        // 抄 cc-haha `toolResultStorage.ts:287-296`：提示词末尾挂一条裸空结果时，
+        // 某些模型会直接把它当成"说完了"而吐停止序列——一次工具调用白跑一轮。
+        // 只处理成功的空结果：错误结果本身就有文字。
+        {
+            let name_by_id: std::collections::HashMap<&str, &str> = tool_calls
+                .iter()
+                .map(|tc| (tc.id.as_str(), tc.function.name.as_str()))
+                .collect();
+            for r in &mut results {
+                if r.is_error || !r.content.trim().is_empty() {
+                    continue;
+                }
+                let name = name_by_id
+                    .get(r.tool_call_id.as_str())
+                    .copied()
+                    .unwrap_or("tool");
+                r.content = format!("({name} completed with no output)");
+            }
+        }
+
         let spill_sink = results
             .iter()
             .any(|r| r.content.chars().count() > spill::SPILL_INLINE_CHARS)
@@ -1345,7 +1367,18 @@ self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
                 // decide_empty_response for edge-case handling.
                 let has_visible =
                     Self::assistant_visible_text_after_think_blocks(&assistant_msg);
-                if has_visible {
+                // 自治模式豁免：可见文本 + 还没动过工具 + nudge 额度在时，
+                // 不在此 finalize —— 落到 decide_empty_response 让 nudge 推
+                // LLM 开始干活。上方 Finalize 分支的豁免落到这里，而这段
+                // MiniMax 空名过滤的 finalize 曾把它短路（nudge 测试
+                // call_count==1 的回归根因）。
+                let nudge_eligible = self.config.autonomous_mode
+                    && !tool_schemas.is_empty()
+                    && !history_includes_tool
+                    && autonomous_nudge_count == 0
+                    && (self.config.max_turns == 0
+                        || total_turns < self.config.max_turns);
+                if has_visible && !nudge_eligible {
                     tracing::info!(
                         "All tool calls had empty names after filtering (run); LLM produced visible text — finalizing"
                     );
@@ -2197,7 +2230,15 @@ self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
                 // decide_empty_response for edge-case handling.
                 let has_visible =
                     Self::assistant_visible_text_after_think_blocks(&assistant_msg);
-                if has_visible {
+                // 自治模式豁免（与 run() 同一意图、同一根因）：nudge 额度在
+                // 且还没动过工具时不 finalize，落到 decide_empty_response。
+                let nudge_eligible = self.config.autonomous_mode
+                    && !tool_schemas.is_empty()
+                    && !history_includes_tool
+                    && autonomous_nudge_count == 0
+                    && (self.config.max_turns == 0
+                        || total_turns < self.config.max_turns);
+                if has_visible && !nudge_eligible {
                     tracing::info!(
                         "All tool calls had empty names after filtering; LLM produced visible text — finalizing"
                     );

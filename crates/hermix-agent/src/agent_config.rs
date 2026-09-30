@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use hermix_core::PermissionProfile;
+use hermix_intelligence::DomainMode;
 use crate::smart_model_routing::{ApiMode, SmartModelRoutingConfig};
 
 // ---------------------------------------------------------------------------
@@ -421,6 +422,15 @@ pub struct AgentConfig {
     /// `SendMessageRequest.workbench_id`; see WORKBENCH_CHAT_REDESIGN_PLAN B.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workbench_id: Option<String>,
+
+    /// L1 domain-mode pin (`DomainMode`). `Some` forces the domain the user
+    /// picked (e.g. `Code` for "编码模式"); `None` leaves it to auto-detection
+    /// (`DomainModeDetector`). Wired from `AgentOverrides.domain_override`
+    /// (parsed from string in `apply_overrides`). The resolved mode is what
+    /// `prompt_assembly` feeds into `RouteContext.domain_mode`, gating the
+    /// per-domain `system_directive` block.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain_override: Option<DomainMode>,
 
     /// Session-level hard spend limit in USD. When reached, the loop trips
     /// the cost gate and returns early with a summary system message.
@@ -940,6 +950,7 @@ impl Default for AgentConfig {
             context_pressure_ratio: None,
             ephemeral_skills: Vec::new(),
             workbench_id: None,
+            domain_override: None,
             max_routed_tools: default_max_routed_tools(),
             active_toolsets: Vec::new(),
             autonomous_mode: default_autonomous_mode(),

@@ -31,6 +31,27 @@ use crate::agent_helpers::AgentCallbacks;
 use crate::context::{load_builtin_memory_snapshot, load_soul_md, resolve_personality, SystemPromptBuilder};
 use crate::context_files::{load_hermes_context_files, load_workspace_context};
 use crate::ContextManager;
+use hermix_intelligence::{DomainMode, DomainModeDetector};
+
+/// Resolve this turn's L1 domain mode: the user's pin wins (`Code` = 编码
+/// 模式等), otherwise run the keyword/context auto-detector. The pin goes
+/// through the detector's own `manual_override` slot (confidence 1.0,
+/// source `ManualOverride`) rather than an early return, so detection
+/// stays the single decision point. `Some(mode)` is always returned —
+/// `Chat` carries an empty directive, so gating in `collect_directions`
+/// injects nothing for it.
+///
+/// The detector is constructed per call — it only does regex keyword
+/// matching over the current message (+ workspace stat), so cross-turn
+/// state is not carried; the historical inertia / tool-history signals
+/// were removed with their unreachable accumulation machinery.
+pub fn resolve_domain_mode(config: &AgentConfig, user_message: &str) -> DomainMode {
+    let mut detector = DomainModeDetector::new();
+    detector.set_manual_override(config.domain_override);
+    detector
+        .detect(user_message, config.workspace.as_deref())
+        .mode
+}
 
 /// Decide whether the model family gets the MiniMax-style tool-format
 /// enforcement block. See `agent_loop::collect_directions` for how the
@@ -523,7 +544,7 @@ pub fn build_system_prompt_with_tool_errors(
             model_name: model_for_prompt,
             autonomous_mode: config.autonomous_mode,
             tool_call_count,
-            domain_mode: None,
+            domain_mode: Some(resolve_domain_mode(config, user_message)),
             workbench_id: config.workbench_id.as_deref(),
         };
         let project_conventions = config
@@ -682,7 +703,7 @@ pub fn build_system_prompt(
             model_name: model_for_prompt,
             autonomous_mode: config.autonomous_mode,
             tool_call_count,
-            domain_mode: None,
+            domain_mode: Some(resolve_domain_mode(config, user_message)),
             workbench_id: config.workbench_id.as_deref(),
         };
         let project_conventions = config
@@ -1196,7 +1217,7 @@ pub fn resolve_initial_system_prompt_with_tool_errors(
             model_name: &config.model,
             autonomous_mode: config.autonomous_mode,
             tool_call_count,
-            domain_mode: None,
+            domain_mode: Some(resolve_domain_mode(config, user_message)),
             workbench_id: config.workbench_id.as_deref(),
         };
         let (patched, report) = Section::audit_and_patch(&prompt, &route_ctx);

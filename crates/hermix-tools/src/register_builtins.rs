@@ -443,6 +443,24 @@ mod tests {
     }
 
     #[test]
+    fn toolset_members_expands_known_group_and_nops_unknown() {
+        // 专家 toolset 白名单并集的数据源：已知组必须返回非空成员，
+        // 未知组必须返回空（no-op，不能 panic）——受聘专家声明了
+        // 已被移除的组名时不允许炸掉整轮对话。
+        let registry = registry_with_builtins();
+        let sets = registry.list_toolsets();
+        assert!(!sets.is_empty(), "builtin registry must have toolsets");
+        for ts in &sets {
+            let members = registry.toolset_members(ts);
+            assert!(
+                !members.is_empty(),
+                "toolset `{ts}` listed by list_toolsets but has no members"
+            );
+        }
+        assert!(registry.toolset_members("no-such-toolset-group").is_empty());
+    }
+
+    #[test]
     fn every_registered_tool_has_a_nonempty_description() {
         // The catalog one-liner (`registry.catalog()`) and the WS
         // `tool_definition` event both surface the description. An

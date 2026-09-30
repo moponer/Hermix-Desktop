@@ -492,6 +492,13 @@ async fn execute_inner(
                 if !matches!(decision, ApprovalOutcome::Approved) {
                     let reason = match decision {
                         ApprovalOutcome::DeniedByUser => "denied by user",
+                        ApprovalOutcome::DeniedWithFeedback { note } => {
+                            return Err(ToolError::ExecutionFailed(format!(
+                                "Command denied by user: {note}
+{}",
+                                effective_cmd
+                            )))
+                        }
                         ApprovalOutcome::TimedOut { timeout_secs } => {
                             return Err(ToolError::ExecutionFailed(format!(
                                 "Command approval timed out after {timeout_secs}s: {}",

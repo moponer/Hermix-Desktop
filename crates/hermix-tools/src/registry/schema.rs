@@ -113,6 +113,22 @@ impl ToolRegistry {
         sets
     }
 
+    /// Names of the tools tagged with `toolset` (empty for an unknown
+    /// group). Expert hiring uses this to widen the per-turn allow-list:
+    /// an expert brings its toolbox without being able to revoke the
+    /// floor or anything the user enabled.
+    pub fn toolset_members(&self, toolset: &str) -> Vec<String> {
+        let inner = self.inner.read().expect("registry rwlock not poisoned");
+        let mut names: Vec<String> = inner
+            .tools
+            .values()
+            .filter(|e| e.toolset == toolset)
+            .map(|e| e.name.clone())
+            .collect();
+        names.sort();
+        names
+    }
+
     /// Catalog — lightweight tool directory for agent startup.
     /// Returns only enabled+available tools, ~50 bytes per entry.
     pub fn catalog(&self) -> Vec<ToolCatalogEntry> {

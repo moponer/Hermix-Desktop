@@ -292,8 +292,19 @@ impl AgentLoop {
         // the LLM context. delegate_task is already handled above by
         // the orchestrator path and is filtered out of this loop.
         for tc in tool_calls {
+            if tc.function.name == "delegate_task" {
+                continue;
+            }
+            // 两条串行判据，命中任一即不进 JoinSet：
+            //  · interactive —— 需要用户当场回答（clarify）
+            //  · 会改状态   —— 并行跑会互相踩（write_file / patch / terminal）
+            // 第二条是后加的：调度器此前从不读 `RiskLevel`，于是同一轮里
+            // 的写与读会被同时下发。判定见 agent_helpers 的文档串。
             if !crate::agent_helpers::is_interactive_tool(&tc.function.name)
-                || tc.function.name == "delegate_task"
+                && !crate::agent_helpers::is_state_mutating_tool(
+                    self.tool_registry.as_ref(),
+                    &tc.function.name,
+                )
             {
                 continue;
             }
@@ -359,6 +370,16 @@ impl AgentLoop {
             // keeps the JoinSet reserved for genuinely-independent work.
             if crate::agent_helpers::is_interactive_tool(&tc.function.name)
                 && !matches!(tc.function.name.as_str(), "delegate_task")
+            {
+                continue;
+            }
+            // 上面那圈已经串行跑完了会改状态的工具（见本轮的两条判据），
+            // 这里再排一次是为了不让它们二次进入 JoinSet。
+            if !crate::agent_helpers::is_interactive_tool(&tc.function.name)
+                && crate::agent_helpers::is_state_mutating_tool(
+                    self.tool_registry.as_ref(),
+                    &tc.function.name,
+                )
             {
                 continue;
             }

@@ -198,7 +198,7 @@ pub fn bridge_tool_registry(
         // adaption pattern already used by the tool executor bridge.
         if name == "memory" {
             if let Some(mh) = memory_handler.clone() {
-                agent_registry.register(
+                agent_registry.register_with_risk(
                     name.clone(),
                     schema,
                     Arc::new(
@@ -214,13 +214,17 @@ pub fn bridge_tool_registry(
                             })
                         },
                     ),
+                    // 拿不到就落回默认的 Caution（= 串行），失败方向安全。
+                    tools.risk_level(&name).unwrap_or_default(),
                 );
                 continue;
             }
         }
         let tools_clone = tools.clone();
         let ctx_clone = ctx.clone();
-        agent_registry.register(
+        // `name` 已经被下面的闭包 move 进去了，风险要在那之前查。
+        let risk = tools.risk_level(&name).unwrap_or_default();
+        agent_registry.register_with_risk(
             name.clone(),
             schema,
             Arc::new(
@@ -228,6 +232,10 @@ pub fn bridge_tool_registry(
                     Ok(tools_clone.dispatch_with_context(&name, params, &ctx_clone))
                 },
             ),
+            // 风险等级从源注册表带过来：调度器据此决定这个工具能否进并行
+            // JoinSet。`memory` 那条分支同样要带，否则它会永远被当成
+            // Caution 而白白串行。
+            risk,
         );
     }
     agent_registry

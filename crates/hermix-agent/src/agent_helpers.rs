@@ -41,7 +41,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::{oneshot, Notify};
 
-use hermix_core::{ApprovalOutcome, ToolCall, ToolError, ToolSchema, UsageStats};
+use hermix_core::{traits::RiskLevel, ApprovalOutcome, ToolCall, ToolError, ToolSchema, UsageStats};
 
 /// A single tool entry in the registry.
 #[derive(Clone)]
@@ -50,6 +50,11 @@ pub struct ToolEntry {
     pub schema: ToolSchema,
     /// A handler function: takes a JSON Value and returns the tool output string.
     pub handler: Arc<dyn Fn(Value) -> Result<String, ToolError> + Send + Sync>,
+    /// 风险等级，从 `hermix_tools::ToolRegistry` 桥接过来。
+    ///
+    /// 之前这个字段在桥接时被丢掉了，于是调度器无从判断某个工具会不会
+    /// 改状态。默认值是 `Caution`（见 `register`），失败方向是「宁可串行」。
+    pub risk_level: RiskLevel,
 }
 
 impl std::fmt::Debug for ToolEntry {
@@ -84,8 +89,24 @@ impl ToolRegistry {
         schema: ToolSchema,
         handler: Arc<dyn Fn(Value) -> Result<String, ToolError> + Send + Sync>,
     ) {
+        self.register_with_risk(name, schema, handler, RiskLevel::default());
+    }
+
+    /// 同 [`register`]，但显式带风险等级。桥接层用它把源注册表的信息带过来。
+    pub fn register_with_risk(
+        &mut self,
+        name: impl Into<String>,
+        schema: ToolSchema,
+        handler: Arc<dyn Fn(Value) -> Result<String, ToolError> + Send + Sync>,
+        risk_level: RiskLevel,
+    ) {
         self.tools
-            .insert(name.into(), ToolEntry { schema, handler });
+            .insert(name.into(), ToolEntry { schema, handler, risk_level });
+    }
+
+    /// 这个工具的风险等级。`None` = 没注册过这个名字。
+    pub fn risk_level(&self, name: &str) -> Option<RiskLevel> {
+        self.tools.get(name).map(|e| e.risk_level)
     }
 
     /// Look up a tool by name.
@@ -699,6 +720,29 @@ pub fn is_interactive_tool(name: &str) -> bool {
     matches!(name, "clarify" | "delegate_task")
 }
 
+/// 这个工具**会不会改状态**？决定它能否进并行 JoinSet。
+///
+/// 抄 cc-haha `src/Tool.ts` 的 `isConcurrencySafe` 那一轴。cc-haha 把
+/// 「是否只读」和「能否并发」当成两个正交谓词：前者管权限，后者管调度。
+/// hermix 已经有前者的数据模型（`RiskLevel`，注册时写死在工具表里），
+/// 但调度器从来不读它 —— 于是 `write_file` 和 `read_file` 会被同时丢进
+/// JoinSet，读到写了一半的文件。
+///
+/// 与 cc-haha 的差别（我们是刻意更保守，不是抄漏了）：cc-haha 的
+/// `isConcurrencySafe(input)` 是**逐次调用**判断的，Bash 的 `ls` 安全、
+/// `rm` 不安全。hermix 的 `RiskLevel` 是**逐工具静态**的，`terminal` 无论
+/// 跑什么都是 `Dangerous`，所以终端命令一律串行。代价是
+/// `ls` 和 `rm` 一样慢，收益是不用去解析 shell 字符串、不用维护一张
+/// 「哪些命令只读」的表 —— 而那张表必然会被某条 `find . -name '*.rs' -delete`
+/// 绕过。
+///
+/// 失败方向：只读工具被判成会改状态 = 白白串行（只是慢）；
+/// 会改状态的工具被判成只读 = 引入竞态。所以判不准时一律按「会改状态」
+/// 处理，`None`（未注册的工具名）也走这一侧。
+pub fn is_state_mutating_tool(registry: &ToolRegistry, name: &str) -> bool {
+    !matches!(registry.risk_level(name), Some(RiskLevel::Safe))
+}
+
 // ---------------------------------------------------------------------------
 //ToolErrorClass (P2.5, )
 // ---------------------------------------------------------------------------
@@ -899,5 +943,67 @@ mod tests {
         assert_eq!(ToolErrorClass::ExecutionFailed.recovery_action(), ToolRecovery::Retry);
         assert_eq!(ToolErrorClass::Timeout.recovery_action(), ToolRecovery::Retry);
         assert_eq!(ToolErrorClass::RateLimited.recovery_action(), ToolRecovery::Backoff);
+    }
+}
+
+#[cfg(test)]
+mod mutating_tool_tests {
+    use super::*;
+    use hermix_core::{JsonSchema, ToolSchema};
+
+    fn schema(name: &str) -> ToolSchema {
+        ToolSchema {
+            name: name.to_string(),
+            description: String::new(),
+            parameters: JsonSchema::new("object"),
+        }
+    }
+
+    fn reg() -> ToolRegistry {
+        ToolRegistry::new()
+    }
+
+    #[test]
+    fn safe_工具可以并行() {
+        let mut r = reg();
+        r.register_with_risk(
+            "read_file",
+            schema("read_file"),
+            Arc::new(|_| Ok(String::new())),
+            RiskLevel::Safe,
+        );
+        assert!(!is_state_mutating_tool(&r, "read_file"));
+    }
+
+    #[test]
+    fn 会改状态的工具必须串行() {
+        let mut r = reg();
+        for (name, risk) in [
+            ("write_file", RiskLevel::Caution),
+            ("patch", RiskLevel::Caution),
+            ("terminal", RiskLevel::Dangerous),
+        ] {
+            r.register_with_risk(
+                name,
+                schema(name),
+                Arc::new(|_| Ok(String::new())),
+                risk,
+            );
+            assert!(is_state_mutating_tool(&r, name), "{name} 不该进并行集");
+        }
+    }
+
+    #[test]
+    fn 未注册的工具按会改状态处理() {
+        // 失败方向：判不准时宁可串行。反过来（把写工具当只读）会引入竞态。
+        let r = reg();
+        assert!(is_state_mutating_tool(&r, "never_registered"));
+    }
+
+    #[test]
+    fn register_default_caution_is_state_mutating() {
+        let mut r = reg();
+        r.register("x", schema("x"), Arc::new(|_| Ok(String::new())));
+        assert!(is_state_mutating_tool(&r, "x"));
     }
 }

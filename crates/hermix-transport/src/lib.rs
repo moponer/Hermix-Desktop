@@ -349,6 +349,15 @@ pub struct SendMessageRequest {
     /// ordinary chats are `None` and never see either (anti-leak).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workbench_id: Option<String>,
+    /// L1 domain-mode pin: one of `code|research|write|operate|chat`, or
+    /// `None`/`"auto"` to leave it to auto-detection. The frontend carries
+    /// the user's work-vs-coding choice per request; the agent crate parses
+    /// it into `DomainMode` (the request layer can't name that type).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain_override: Option<String>,
+    /// Toolset group brought by the hired expert (see `AgentOverrides`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expert_toolset: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -959,6 +968,13 @@ pub enum WsClientMessage {
     ApprovalResponse {
         request_id: String,
         decision: String,
+        /// Optional free-text the user attached to a `deny` —
+        /// "tell the model what to do instead". The server folds
+        /// it into the denial reason the LLM sees, so it changes
+        /// strategy instead of retrying the denied tool verbatim.
+        /// Absent on approvals and on every legacy client.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
     },
     /// Response to a [`StreamEvent::RequestApprovalsBatch`]. One
     /// `decision` applies to **every** item in the batch — the
@@ -981,6 +997,10 @@ pub enum WsClientMessage {
     ApprovalBatchResponse {
         batch_id: String,
         decision: String,
+        /// Denial feedback shared by every batch member (same
+        /// semantics as [`WsClientMessage::ApprovalResponse.note`]).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
     },
     /// Response to a [`StreamEvent::ClarifyRequest`]. The free-form `answer`
     /// is what the user typed (or the choice they picked) and is fed back
@@ -1238,6 +1258,8 @@ mod tests {
             let msg = WsClientMessage::ApprovalResponse {
                 request_id: "req-1".into(),
                 decision: decision.into(),
+            
+                note: None,
             };
             let value = serde_json::to_value(&msg).expect("serialize");
             assert_eq!(value["type"], "approval_response");
@@ -1254,7 +1276,9 @@ mod tests {
         let msg = WsClientMessage::ApprovalResponse {
             request_id: "req-1".into(),
             decision: "denied".into(),
-        };
+        
+                note: None,
+            };
         let value = serde_json::to_value(&msg).expect("serialize");
         assert_eq!(value["type"], "approval_response");
         assert_eq!(value["request_id"], "req-1");

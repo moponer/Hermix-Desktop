@@ -34,6 +34,10 @@ pub enum ApprovalOutcome {
     Approved,
     /// User explicitly denied the tool call.
     DeniedByUser,
+    /// User denied **and told the agent what to do instead**（审批面板上的
+    /// 「告诉模型接下来应该怎么做…」）。note 原样进 LLM 可见的拒绝理由，
+    /// 让模型换方案而不是原地重试同一个被拒的工具。
+    DeniedWithFeedback { note: String },
     /// The approval registry's default-deny timer fired first.
     /// `timeout_secs` is the configured timeout length (seconds), so
     /// the LLM-facing denial note can phrase the failure correctly
@@ -59,6 +63,7 @@ impl ApprovalOutcome {
         match self {
             ApprovalOutcome::Approved => "approved",
             ApprovalOutcome::DeniedByUser => "denied_by_user",
+            ApprovalOutcome::DeniedWithFeedback { .. } => "denied_with_feedback",
             ApprovalOutcome::TimedOut { .. } => "timed_out",
             ApprovalOutcome::ChannelClosed => "channel_closed",
         }
@@ -71,6 +76,7 @@ impl ApprovalOutcome {
         match self {
             ApprovalOutcome::Approved => "已允许",
             ApprovalOutcome::DeniedByUser => "已拒绝",
+            ApprovalOutcome::DeniedWithFeedback { .. } => "已拒绝（附说明）",
             ApprovalOutcome::TimedOut { .. } => "确认超时",
             ApprovalOutcome::ChannelClosed => "连接已断",
         }
