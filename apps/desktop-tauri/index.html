@@ -72,18 +72,20 @@
          themes/<id>.css，--color-* 已定义，下面这套覆盖自动让位（值已对齐）。 */
       html[data-theme="light"]:root,
       :root:not([data-theme]) {
-        --sp-bg: #f5f5f7;
-        --sp-ink: #1d1d1f;
-        --sp-ink-soft: #6e6e73;
-        --sp-accent: #0071e3;
-        --sp-track: #e8e8ed;
+        --sp-bg: #ffffff;
+        --sp-ink: #242424;
+        --sp-ink-soft: #6e6e6e;
+        /* 与 tokens.css 的 --color-accent 同值：splash 与主程序不能一个
+           蓝一个砖红，主题切换的第一眼就出戏。 */
+        --sp-accent: #1e4a3c;
+        --sp-track: #f0f0f0;
       }
       html[data-theme="dark"]:root {
         --sp-bg: #0b0b0b;
         --sp-ink: #f4f4f4;
         --sp-ink-soft: #adadad;
-        --sp-accent: #e0620d;
-        --sp-track: #212121;
+        --sp-accent: #6fae94;
+        --sp-track: #2b271f;
       }
       html[data-theme="rainforest"]:root {
         --sp-bg: #0c1210;
@@ -165,7 +167,10 @@
       /* ── Mascot（呼吸光晕：方向 A，圆形 halo 无限缓放 + drop-shadow） ── */
       .sp-logo-wrap {
         position: relative;
-        width: 128px; height: 128px;
+        /* 128 + 各段间距 ≈ 400px，比小窗口还高 → flex 居中后吉祥物被裁到
+           视口外（用户只看到一屏静止文字）。压到 76px 并收紧全部间距，
+           整屏 ≈ 290px，700px 高以上的窗口都能完整看到。 */
+        width: 76px; height: 76px;
         opacity: 0;
         transform: translateY(12px) scale(0.95);
         animation: sp-fade-up 0.7s cubic-bezier(0.16, 1, 0.3, 1) 0.05s forwards;
@@ -183,12 +188,12 @@
         pointer-events: none;
       }
 
-      /* ── Title（方向 A：衬线字家族，26px 500） ── */
+      /* ── Title（去衬线：20px/600 无衬线，贴近现代聊天应用启动页） ── */
       .sp-title {
-        margin-top: 28px;
-        font-family: "Iowan Old Style", "Charter", Georgia, "Songti SC", "STSong", serif;
-        font-size: 26px;
-        font-weight: 500;
+        margin-top: 16px;
+        font-family: inherit;
+        font-size: 20px;
+        font-weight: 600;
         letter-spacing: -0.01em;
         color: var(--sp-ink);
         opacity: 0;
@@ -198,53 +203,73 @@
 
       /* ── Description ── */
       .sp-desc {
-        margin-top: 10px;
-        font-size: 13.5px;
+        margin-top: 8px;
+        font-size: 13px;
         line-height: 1.55;
         color: var(--sp-ink-soft);
-        max-width: 340px;
+        max-width: 320px;
         opacity: 0;
         transform: translateY(8px);
         animation: sp-fade-up 0.7s ease 0.35s forwards;
       }
 
-      /* ── Progress（方向 A：渐变条 + mono 百分比 meta 行） ── */
+      /* ── Progress（细条 3px，收窄到 260px，弱化存在感） ── */
       .sp-progress-wrap {
-        margin-top: 36px;
-        width: 320px;
+        margin-top: 22px;
+        width: 260px;
         opacity: 0;
         animation: sp-fade-up 0.7s ease 0.45s forwards;
       }
       .sp-progress {
+        position: relative;
         width: 100%;
-        height: 4px;
+        height: 3px;
         background: var(--sp-track);
         border-radius: 999px;
         overflow: hidden;
       }
+      /* 轨道上的移动高光：填充块早期只有几 % 宽，光在它身上跑几乎看不见。
+         高光走整条轨道，等待期任何时刻都有可见运动。 */
+      .sp-progress::after {
+        content: "";
+        position: absolute; inset: 0;
+        border-radius: 999px;
+        background: linear-gradient(90deg,
+          transparent 0%,
+          color-mix(in srgb, var(--sp-ink) 10%, transparent) 50%,
+          transparent 100%) 0 0 / 45% 100%;
+        animation: sp-track-sweep 1.8s ease-in-out infinite;
+        pointer-events: none;
+      }
       .sp-progress-bar {
         height: 100%;
         width: 0%;
-        background: var(--sp-accent);
         border-radius: 999px;
         transition: width 0.45s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+        /* 流光：等待期间的持续运动信号。原版只有 width 过渡（1%/600ms），
+           在静止画面上几乎看不出来。 */
+        background:
+          linear-gradient(90deg,
+            var(--sp-accent) 0%,
+            color-mix(in srgb, var(--sp-accent) 55%, #fff) 50%,
+            var(--sp-accent) 100%) 0 0 / 200% 100%;
+        animation: sp-sheen 1.6s linear infinite;
       }
       .sp-progress-meta {
         display: flex;
         justify-content: space-between;
         align-items: center;
-        margin-top: 10px;
-        font-family: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
+        margin-top: 8px;
         font-size: 11px;
-        letter-spacing: 0.02em;
+        letter-spacing: 0.01em;
         color: var(--sp-ink-soft);
       }
-      .sp-progress-meta .sp-pct { color: var(--sp-ink-soft); }
+      .sp-progress-meta .sp-pct { color: var(--sp-ink-soft); opacity: 0.75; font-variant-numeric: tabular-nums; }
 
-      /* ── 启动阶段列表（方向 A：4 项逐项点亮，dot 脉冲 active 态） ── */
+      /* ── 启动阶段列表（去分隔线：纯 dot + 文案，12px，行距收紧） ── */
       .sp-stages {
-        margin-top: 28px;
-        width: 320px;
+        margin-top: 18px;
+        width: 260px;
         opacity: 0;
         animation: sp-fade-up 0.7s ease 0.55s forwards;
       }
@@ -252,23 +277,21 @@
         display: flex;
         align-items: center;
         gap: 10px;
-        padding: 9px 0;
-        border-top: 1px solid var(--sp-track);
-        font-size: 12.5px;
+        padding: 4px 0;
+        font-size: 12px;
         color: var(--sp-ink-soft);
-        opacity: 0.55;
+        opacity: 0.45;
         transition: color 0.5s ease, opacity 0.5s ease;
       }
-      .sp-stage-item:last-child { border-bottom: 1px solid var(--sp-track); }
       .sp-stage-item .sp-dot {
-        width: 6px; height: 6px;
+        width: 5px; height: 5px;
         border-radius: 50%;
         background: var(--sp-track);
-        flex: 0 0 6px;
+        flex: 0 0 5px;
         transition: background 0.5s ease, transform 0.5s ease;
       }
       .sp-stage-item .sp-label { flex: 1; text-align: left; }
-      .sp-stage-item.done { opacity: 1; color: var(--sp-ink-soft); }
+      .sp-stage-item.done { opacity: 0.8; }
       .sp-stage-item.done .sp-dot { background: var(--sp-accent); }
       .sp-stage-item.active { opacity: 1; color: var(--sp-ink); }
       .sp-stage-item.active .sp-dot {
@@ -301,11 +324,20 @@
       }
       @keyframes sp-breathe {
         0%, 100% { box-shadow: 0 0 0 0 transparent; }
-        50% { box-shadow: 0 0 0 14px color-mix(in srgb, var(--sp-accent) 7%, transparent); }
+        50% { box-shadow: 0 0 0 10px color-mix(in srgb, var(--sp-accent) 9%, transparent); }
       }
       @keyframes sp-pulse {
-        0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--sp-accent) 45%, transparent); }
-        50% { box-shadow: 0 0 0 6px transparent; }
+        0%   { box-shadow: 0 0 0 0 color-mix(in srgb, var(--sp-accent) 55%, transparent); }
+        70%  { box-shadow: 0 0 0 9px transparent; }
+        100% { box-shadow: 0 0 0 0 transparent; }
+      }
+      @keyframes sp-track-sweep {
+        from { background-position: -50% 0; }
+        to   { background-position: 150% 0; }
+      }
+      @keyframes sp-sheen {
+        from { background-position: 120% 0; }
+        to   { background-position: -120% 0; }
       }
 
       /* ── Reduced motion ── */
@@ -320,7 +352,8 @@
         .sp-logo-wrap::after { animation: none !important; }
         .sp-stage-item { opacity: 1 !important; }
         .sp-stage-item.active .sp-dot { animation: none !important; }
-        .sp-progress-bar { width: 60% !important; }
+        .sp-progress-bar { width: 60% !important; animation: none !important; }
+        .sp-progress::after { animation: none !important; }
       }
     </style>
   </head>
@@ -348,7 +381,7 @@
           <!-- Mascot（方向 A：外层 wrap 承载呼吸光晕 halo，img 本身只做 drop-shadow） -->
           <div class="sp-logo-wrap">
             <img class="sp-logo" src="./mascot-256.png"
-                 alt="" width="128" height="128" draggable="false" />
+                 alt="" width="76" height="76" draggable="false" />
           </div>
 
           <div class="sp-title">环境准备中</div>
@@ -357,11 +390,11 @@
           <!-- Progress（方向 A：meta 行 = 当前阶段文案 + 百分比；由 main.tsx 写 sp-progress-text / sp-progress-pct） -->
           <div class="sp-progress-wrap">
             <div class="sp-progress">
-              <div class="sp-progress-bar" id="sp-progress-bar"></div>
+              <div class="sp-progress-bar" id="sp-progress-bar" style="width: 6%"></div>
             </div>
             <div class="sp-progress-meta">
-              <span id="sp-progress-text">正在初始化…</span>
-              <span class="sp-pct" id="sp-progress-pct">0%</span>
+              <span id="sp-progress-text">正在准备运行环境…</span>
+              <span class="sp-pct" id="sp-progress-pct">6%</span>
             </div>
           </div>
 
@@ -369,7 +402,7 @@
                阶段文案与 Rust set_boot_stage 的真实序列对齐：
                准备运行环境 → 解包技能 → 启动本地服务 → 服务就绪 -->
           <div class="sp-stages" id="sp-stages">
-            <div class="sp-stage-item" data-i="0"><span class="sp-dot"></span><span class="sp-label">准备运行环境</span></div>
+            <div class="sp-stage-item active" data-i="0"><span class="sp-dot"></span><span class="sp-label">准备运行环境</span></div>
             <div class="sp-stage-item" data-i="1"><span class="sp-dot"></span><span class="sp-label">加载内置能力</span></div>
             <div class="sp-stage-item" data-i="2"><span class="sp-dot"></span><span class="sp-label">启动本地服务</span></div>
             <div class="sp-stage-item" data-i="3"><span class="sp-dot"></span><span class="sp-label">准备就绪</span></div>

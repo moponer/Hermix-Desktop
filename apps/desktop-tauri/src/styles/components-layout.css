@@ -261,7 +261,8 @@
   font-size: var(--font-size-body);
   font-weight: 600;
   color: var(--color-text-secondary);
-  letter-spacing: -0.01em;
+  /* 2026-09-30：负字距对中文小字是负优化（字面粘连）。改 0。 */
+  letter-spacing: 0;
   pointer-events: none;
 }
 
@@ -400,7 +401,10 @@
   align-items: center;
   gap: 10px;
   width: 100%;
-  padding: 8px 10px;
+  /* 2026-09-30：8px 上下内边距让 nav 行高到 37px，会话行只有 30px ——
+     两种行在同一个侧栏里错位，这就是"乱"的直接来源。压到 6px → 30px，
+     与会话行同高，整栏落在同一条基线网格上。 */
+  padding: 6px 10px;
   border-radius: var(--radius-md);
   font-size: var(--text-ui, 13px);
   font-weight: 500;
@@ -414,7 +418,15 @@
 .nav-item:hover { background: var(--color-bg-hover); color: var(--color-text-primary); }
 .nav-item:active:not(:disabled) { transform: scale(0.98); }
 .nav-item:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
-.nav-item-active { background: var(--color-bg-active); color: var(--color-text-primary); }
+.nav-item-active {
+  /* 2026-09-30：cc-haha 的功能导航**没有激活底色**（那一层是页面级的，
+     由主区承担指示）。我们此前给激活项一整块 --color-bg-active 圆角灰，
+     和下面的选中会话行撞成两颗"按钮"。改为只加深文字 + 字重。 */
+  background: transparent;
+  color: var(--color-text-primary);
+  font-weight: 600;
+}
+.nav-item-active:hover { background: var(--color-bg-hover); }
 .nav-item svg { flex-shrink: 0; }
 
 /* ════════════════════════════════════════════════════════════════════
@@ -429,9 +441,11 @@
   align-items: center;
   gap: 6px;
   padding: 0 4px;
-  font-size: 12px;
+  /* 2026-09-29：抄 cc-haha 分区标签 —— 11px 更小的字、更宽的 tracking，
+   * 视觉上是纯标签，不会和内容行抢注意力。 */
+  font-size: var(--text-meta, 11px);
   font-weight: 600;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.08em;
   color: var(--color-text-faint);
   background: transparent;
   border: 0;
@@ -443,19 +457,18 @@
 .section-header-toggle:hover { color: var(--color-text-muted); background: var(--color-bg-hover); }
 .section-header-toggle:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
 .section-header-count {
-font-family: var(--font-mono);
-font-size: var(--text-meta, 12px);
+  /* 2026-09-30：计数胶囊（底色 + 等宽 + 18px 最小宽 + 999px 圆角）在标题
+     右侧形成一个小色块，和 cc-haha 的纯文字计数差一个量级。降为 tiny 档
+     弱化文字，保留 tabular-nums 防跳动。 */
+  font-family: var(--font-sans);
+  font-size: var(--text-tiny, 11px);
   color: var(--color-text-faint);
   margin-left: auto;
   font-variant-numeric: tabular-nums;
   line-height: 1;
-  min-width: 18px;
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  padding: 2px 6px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--color-text-faint) 10%, transparent);
+  padding: 0;
   flex-shrink: 0;
 }
 
@@ -466,7 +479,7 @@ font-size: var(--text-meta, 12px);
   min-height: 28px;
   gap: 7px;
   font-size: 13px;
-  font-weight: 650;
+  font-weight: 600;
   letter-spacing: 0.01em;
   color: var(--color-text-secondary);
 }
@@ -507,15 +520,16 @@ font-size: var(--text-meta, 12px);
 /* ── List row (workspace / chat room header with chevron) ──
  *
  * Hierarchy level 2 — parent folder / category row.
- * Slightly compact, semi-bold name with accent icon = "this is a container". */
+ * 2026-09-30：图标去强调色（此前 accent 字 + 10% 底）。cc-haha 的项目/容器
+ * 行图标是灰的 —— 侧栏靠字号与字重分层，不靠颜色分层；强调色留给主区。 */
 .list-row-chevron { color: var(--color-text-faint); flex-shrink: 0; }
 .list-row-icon {
   width: 22px;
   height: 22px;
   padding: 5px;
   border-radius: 6px;
-  color: var(--color-accent);
-  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+  color: var(--color-text-muted);
+  background: transparent;
   flex-shrink: 0;
 }
 
@@ -563,17 +577,21 @@ font-size: var(--text-meta, 12px);
 .sidebar-topnav {
   padding: 10px 12px;
 }
+/* 「新建对话」= 普通一行，和下面「定时任务 / 技能」完全同权重。
+   2026-09-30：此前先后试过实心底、淡强调底，都不对 —— cc-haha 的侧栏
+   本身几乎无彩色（强调色只花在主区 logo 上），主操作靠**位置**而不是
+   颜色来凸显：它永远是第一行。 */
 .sidebar-topnav .nav-item-primary {
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: transparent;
-  color: var(--color-text-primary);
-  font-weight: 550;
+  color: var(--color-text-secondary);
+  font-weight: 500;
   position: relative;
-  box-shadow: inset 3px 0 0 transparent;
-  transition: background var(--duration-fast) ease, color var(--duration-fast) ease, box-shadow var(--duration-fast) ease;
+  transition: background var(--duration-fast) ease, color var(--duration-fast) ease;
 }
 .sidebar-topnav .nav-item-primary:hover {
   background: var(--color-bg-hover);
+  color: var(--color-text-primary);
 }
 .sidebar-topnav .nav-item-primary:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--color-accent) 50%, transparent);
@@ -705,10 +723,76 @@ font-weight: 500;
   min-height: 0;
   display: flex;
   flex-direction: column;
+  /* 与上方 nav 组拉开 10px，让"功能区"和"内容区"分层。 */
+  margin-top: 10px;
   overflow-y: auto;
   overflow-x: hidden;
   padding: 4px 10px 0;
-  gap: 4px;
+}
+
+/* ── Sidebar tabs：对话 / 项目 用一体分段控件（segmented control）切换 ──
+ * 一个圆角容器包住两个选项，激活项用实底色块 + 阴影浮起，一眼可辨。 */
+.sidebar-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  padding: 3px;
+  padding-bottom: 6px;
+  margin-bottom: 6px;
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-tertiary);
+}
+
+.sidebar-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  flex: 1;
+  min-width: 0;
+  padding: 5px 10px;
+  border: 0;
+  border-radius: calc(var(--radius-lg) - 3px);
+  background: transparent;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--duration-fast) ease, color var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease;
+}
+.sidebar-tab:hover { color: var(--color-text-primary); }
+.sidebar-tab.is-active {
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.12);
+}
+.sidebar-tab-name {
+  max-width: 96px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sidebar-tab-count {
+  font-size: 10px;
+  line-height: 1;
+  padding: 2px 5px;
+  border-radius: 999px;
+  background: var(--color-bg-hover);
+  color: var(--color-text-faint);
+}
+.sidebar-tab.is-active .sidebar-tab-count {
+  background: var(--color-accent-soft, var(--color-bg-hover));
+  color: var(--color-accent, var(--color-text-secondary));
+}
+/* 当前项目 tab 底部的项目操作入口（⋯ 菜单） */
+.sidebar-tab-project-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px 4px;
 }
 
 .sidebar-section {
@@ -716,6 +800,9 @@ font-weight: 500;
   min-height: 0;
   display: flex;
   flex-direction: column;
+  /* 组与组之间 14px。之前完全没有间距，两个分组标题挤在一起，
+     眼睛分不出"到这里换组了"。 */
+  margin-bottom: 14px;
   overflow: hidden;
 }
 
@@ -724,7 +811,9 @@ font-weight: 500;
   align-items: center;
   justify-content: space-between;
   flex-shrink: 0;
-  padding: 6px 4px;
+  /* 上 5px（离开上一组）下 4px（贴近自己的行）—— 上大下小，
+     标题就明确"属于"下面那一段。 */
+  padding: 5px 6px 4px;
 }
 
 .sidebar-section-header .section-header-toggle {
@@ -884,15 +973,18 @@ height: 26px;
   align-items: center;
   gap: 6px;
   min-height: 30px;
-  padding: 6px 8px;
-  border-radius: var(--radius-md);
+  padding: 5px 8px;
+  /* sm(6px) 而非 md(10px)：大圆角在 30px 高的行上会读成"胶囊按钮"。 */
+  border-radius: var(--radius-sm);
   cursor: pointer;
   transition: background var(--duration-fast) ease;
   color: var(--color-text-secondary);
 }
 .sidebar-row:hover { background: var(--color-bg-hover); }
 .sidebar-row.is-active {
-  background: var(--color-bg-active);
+  /* 2026-09-30：选中会话的底色用 tertiary(#F0F0F0) 而非 active(#EBEBEB) ——
+     前者在白底上只比背景深一档，是"选中"而不是"按钮"。 */
+  background: var(--color-bg-tertiary);
   color: var(--color-text-primary);
   font-weight: 500;
 }
@@ -1150,4 +1242,124 @@ height: 26px;
   -webkit-backdrop-filter: none !important;
   animation-play-state: paused !important;
   transition: none !important;
+}
+
+
+/* ── 从 components.css 迁入（2026-09-29）────────────────────────
+   components.css 是 components-*.css 的陈旧副本，两者曾同时加载且后者
+   胜出，288 个选择器被双定义。以下是仅存在于旧副本里的规则，随该文件
+   一并删除。 */
+.user-menu-popover {
+  min-width: 220px;
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-secondary);
+  box-shadow:
+    0 4px 24px rgba(0, 0, 0, 0.12),
+    0 1px 4px rgba(0, 0, 0, 0.06);
+  overflow: hidden;
+  animation: menu-slide-up 0.15s ease-out;
+}
+
+.user-menu-main {
+  padding: 4px;
+}
+
+.user-menu-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 12px;
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  color: var(--color-text-primary);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: background var(--duration-fast) ease;
+  text-align: left;
+}
+
+.user-menu-row:hover { background: var(--color-bg-hover); }
+
+.user-menu-row.is-open { background: var(--color-bg-tertiary); }
+
+.user-menu-row.is-danger { color: var(--color-error); }
+
+.user-menu-row.is-danger:hover { background: var(--color-error-soft); }
+
+.user-menu-sub {
+  margin: 2px 0 2px 22px;
+  padding: 3px;
+  border-left: 1px solid var(--color-border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.user-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-meta, 12px);
+  color: var(--color-text-secondary);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: background var(--duration-fast) ease, color var(--duration-fast) ease;
+  text-align: left;
+}
+
+.user-menu-item:hover { background: var(--color-bg-hover); color: var(--color-text-primary); }
+
+.user-menu-item.is-active { color: var(--color-accent); }
+
+/* 用户菜单弹出动画。
+   2026-09-29 从已删除的 components.css 迁回——唯一定义在被删的副本里。 */
+@keyframes menu-slide-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   § 搜索行（cc-haha 位置：功能导航之下、分组之上）
+   一条安静的胶囊：放大镜 + 占位文案 + ⌘K 提示。整行可点，作用是唤起
+   既有搜索弹窗（onOpenSearch），不在侧栏内做输入 —— 侧栏宽度已经只有
+   224px，塞一个真输入框会把会话列表挤没。
+   ════════════════════════════════════════════════════════════════════ */
+.sidebar-search {
+  padding: 0 10px;
+  margin-top: 8px;
+  flex-shrink: 0;
+}
+.sidebar-search-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-faint);
+  font-family: inherit;
+  font-size: var(--text-ui, 13px);
+  cursor: pointer;
+  transition: background var(--duration-fast) ease, color var(--duration-fast) ease;
+}
+.sidebar-search-btn:hover {
+  background: var(--color-bg-active);
+  color: var(--color-text-secondary);
+}
+.sidebar-search-label { flex: 1; text-align: left; }
+.sidebar-search-kbd {
+  font-family: var(--font-sans);
+  font-size: var(--text-tiny, 11px);
+  color: var(--color-text-faint);
+  opacity: 0.8;
 }

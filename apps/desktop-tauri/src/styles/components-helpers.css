@@ -261,15 +261,15 @@
    折叠态下这一行是用户判断"这一轮分量"的唯一线索，所以颜色比
    元信息档（tiny/tertiary）重一档，但绝不与正文抢层级。 */
 .reasoning-label {
-  font-size: var(--text-meta, 12px);
-  font-weight: var(--font-weight-medium, 500);
-  color: var(--color-text-secondary);
-  letter-spacing: 0.01em;
-  line-height: var(--leading-compact, 1.4);
+  /* 2026-09-29：secondary → tertiary。抄 cc-haha ActivityGroup 的注释：
+     「deliberately a whisper: 12px, tertiary, no icons, commas not
+     middots」—— 任何更重的东西都会和正文抢注意力。 */
+  font-size: var(--text-meta);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-tertiary);
+  line-height: var(--leading-compact);
+  white-space: nowrap;
 }
-
-/* 摘要行里的统计量（工具数 / 行数 / 耗时）降到 tiny + tertiary，
-   与主标签拉开层次，但不另起一个视觉块。 */
 .reasoning-stat {
   font-size: var(--text-tiny, 11px);
   font-weight: var(--font-weight-regular, 400);
@@ -278,17 +278,50 @@
 }
 
 
-/* reasoning body — left accent rail + soft tint, like a margin note */
-/* 缩小 reasoning 内的 prose — 正文 14px，思考 13px */
-.tl-reasoning-row :is(li, td, th, blockquote) {
-  font-size: 13px;
-  line-height: 1.55;
+/* ── reasoning body（2026-09-30 重做）─────────────────────────────
+   用户定调：思考要「浅、内嵌、带竖线、能滚」—— 它是旁注，不是正文。
+   - 左侧 2px 竖线 = markdown 引用线的语义（内部独白是"引"来的话）
+   - 文字用 tertiary（正文是 primary），一眼分出「他在想」和「他在说」
+   - max-height + 滚动：长思考不再把整屏撑开，展开也只占一块固定高度
+   层级契约：正文 primary 14px > 思考 tertiary 13px。 */
+.tl-reasoning-row {
+  position: relative;
+  max-height: 340px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 2px 0 2px 14px;
+  border-left: 2px solid var(--color-border-primary);
+  color: var(--color-text-tertiary);
+  font-size: var(--text-ui, 13px);
+  line-height: 1.62;
 }
-.tl-reasoning-row :is(h2, h3, h4) {
-  margin-top: 0.5em;
-  margin-bottom: 0.3em;
+/* 内嵌 MarkdownBody 的 .prose 会把字色/字号拉回正文档 —— 在这里整体压回思考档 */
+.tl-reasoning-row .prose,
+.tl-reasoning-row .prose :is(p, li, td, th, blockquote, strong, em) {
+  color: var(--color-text-tertiary);
+  font-size: var(--text-ui, 13px);
+  line-height: 1.62;
+}
+.tl-reasoning-row .prose :is(h1, h2, h3, h4, h5, h6) {
+  color: var(--color-text-secondary);
   font-size: 0.95em;
+  margin-top: 0.6em;
+  margin-bottom: 0.3em;
 }
+.tl-reasoning-row .prose strong { color: var(--color-text-secondary); }
+.tl-reasoning-row .prose code {
+  font-size: 0.92em;
+  color: var(--color-text-secondary);
+}
+/* 思考里的行内代码/链接也不要跳成 accent 大字 */
+.tl-reasoning-row a { color: var(--color-text-secondary); text-decoration: underline; text-underline-offset: 2px; }
+/* 滚动条：细、贴轨，不抢注意力 */
+.tl-reasoning-row::-webkit-scrollbar { width: 6px; }
+.tl-reasoning-row::-webkit-scrollbar-thumb {
+  background: var(--color-border-primary);
+  border-radius: 999px;
+}
+.tl-reasoning-row::-webkit-scrollbar-thumb:hover { background: var(--color-border-secondary, var(--color-border-primary)); }
 
 
 /* ── 5a-0. Timeline Iterations — 轮次分组系统 ────────── */
@@ -754,6 +787,15 @@
   line-height: 1;
   font-weight: 700;
 }
+/* Pulse dot — 模型正在向本会话流式输出时显示。
+   2026-09-29 从已删除的 components.css 迁回：唯一定义在那个陈旧副本里，
+   删除时会静默丢失（orphan 检查抓不到——它只查 var() 引用）。 */
+@keyframes li-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: 0.4; transform: scale(0.8); }
+}
+
+
 .todo-row-spin {
   animation: li-pulse 1.2s ease-in-out infinite;
 }

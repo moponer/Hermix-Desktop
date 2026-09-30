@@ -38,6 +38,12 @@ text-tiny / text-meta / text-body / text-h1 / text-h2 / text-display
 
 合计 **409 处**，分布在 45 个文件。
 
+> **2026-09-29 完成记录**：用户明确要求一次性全局替换（推翻下方
+> 「按文件批量」的建议），实际扫描到 **367 处**（其间部分文件已改动）
+> 已全部归到 5 档 token（`--text-meta` / `--text-ui` / `--text-body` /
+> `--text-title` / `--text-display`），45 个文件。新增字号请直接用
+> token（Tailwind 写法 `text-[length:var(--text-*)]`），勿再写像素值。
+
 ### 1.2 CSS 里另有 60+ 处半档
 
 `12.5px` 35 处、`11.5px` 24 处、`10.5px` 15 处、`13.5px` / `14.5px` 各若干。

@@ -58,11 +58,39 @@
   --leading-compact: 1.4;   /* 紧凑：工具行、元信息、表格 */
   --leading-heading: 1.3;   /* 单行标题 */
 
-  /* Font families（Tailwind4 @theme 规范命名；旧名 --font-family-primary 走尾部别名） */
-  --font-sans: "Inter", "Segoe UI Variable", "Segoe UI", system-ui,
-    -apple-system, "PingFang SC", "Microsoft YaHei UI", sans-serif;
-  --font-mono: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo,
-    Consolas, monospace;
+  /* Font families（Tailwind4 @theme 规范命名；旧名 --font-family-primary 走尾部别名）
+   *
+   * 2026-09-29：这里曾是**三套互不相同**的字体栈 —— `--font-sans` 一套、
+   * `base.css` 的 `body` 一套、`FileTypeIcon.tsx` 的 SVG 文字第三套。中文回退链
+   * 不同会导致不同机器上中文渲染粗细不一致。现在唯一真相源在此，`body` 与
+   * SVG 均引用它。
+   *
+   * 构成抄 cc-haha `desktop/src/theme/globals.css`：
+   *   --font-body:  -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif
+   *   --font-serif: 'Noto Serif SC', 'Songti SC', Georgia, serif
+   *   --font-mono:  'JetBrains Mono', ui-monospace, monospace
+   * 注意他们**没有**在正文里用 Inter / Manrope。观感的来源不是下载字体，
+   * 而是「一套系统栈走到底 + 圆角标度 + 明度分层」。
+   *
+   * 与 cc-haha 的唯一偏差：在 `Segoe UI` 前多留了 `Segoe UI Variable`。
+   * Win11 上它是可变字重版本，观感优于传统 Segoe UI；Win10 落回 `Segoe UI`，
+   * 行为与 cc-haha 一致。
+   */
+  /* 2026-09-30：中文回退链补 思源黑体 / HarmonyOS / Noto。
+     Windows 上默认落到 Microsoft YaHei UI —— 字面偏宽偏重，和 cc-haha 截图里
+     macOS 的 PingFang SC 差一截（PingFang 更匀、更透）。这三款只要装了就在
+     YaHei 之前命中，**不打包任何字体文件**，纯回退名，零体积成本。 */
+  --font-sans: "Segoe UI Variable", "Segoe UI", -apple-system,
+    BlinkMacSystemFont, "PingFang SC", "HarmonyOS Sans SC", "Source Han Sans SC",
+    "Noto Sans SC", "Microsoft YaHei UI", system-ui, sans-serif;
+  /* 编辑性衬线：给「内容」用（长文标题、引文），不给界面外壳。 */
+  --font-serif: "Noto Serif SC", "Songti SC", Georgia, SimSun, serif;
+  /* JetBrains Mono / Noto Serif SC 均为 SIL OFL 1.1，可自由使用与再分发。
+     本机未安装时落到 ui-monospace / Georgia，版面不会塌。 */
+  --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Code",
+    "Source Code Pro", Consolas, Menlo, monospace;
+  --font-headline: var(--font-sans);
+  --font-label: var(--font-sans);
 
   /* Spacing scale */
   --space-1: 4px;
@@ -74,13 +102,16 @@
   --space-8: 32px;
 
   /* Radius scale */
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 8px;
-  --radius-xl: 10px;
-  --radius-2xl: 12px;
-  --radius-full: 999px;
-
+  /* 圆角标度，抄 cc-haha（其注释：6–7 角标 / 9–11 控件 / 12–14 内卡 /
+     16–18 卡片 / 20 输入框 / 24 弹窗 / 999 药丸）。
+     改之前是 4/6/8/10/12，且 CSS 里散落着 3px / 5px / 6px 的即兴值。 */
+  --radius-sm: 6px;     /* 角标 */
+  --radius-md: 10px;    /* 控件（按钮 / 输入） */
+  --radius-lg: 13px;    /* 内层卡片 */
+  --radius-xl: 17px;    /* 卡片 / 页面区块 */
+  --radius-2xl: 20px;   /* 输入框（composer） */
+  --radius-3xl: 24px;   /* 弹窗 */
+  --radius-full: 9999px;
   /* Motion */
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   /* Tailwind v4 的 duration 默认时长（v4 不认 --duration-* 命名空间，fast/base/slow 三档靠 globals.css 的 @utility 注册） */
@@ -135,89 +166,137 @@
    *   久看不累，正是因为没有高对比造成的光晕。
    * ------------------------------------------------------------------ */
 
-  /* ── 面（4 级）── 中性白灰：无色相偏移的经典浅色；卡片恒比纸面亮 = 抬起，
-     相邻两级明度差 ≥ 3% ── */
-  --color-bg-app: #f0f0f2;         /* 案·最外层：窗口底、列间空隙 */
-  --color-bg-primary: #f7f7f8;     /* 纸·对话与主区底 */
-  --color-bg-secondary: #ebebec;   /* 案·侧栏 / 顶栏 / 行 hover */
-  --color-bg-tertiary: #e2e2e4;    /* 案·深一档：inset / 分隔区 */
-  --color-bg-quaternary: #d5d5d8;  /* 案·最深：active / 轨道底 */
-  --color-bg-hover: #ebebec;
-  --color-bg-active: #e0e0e3;
-  --color-bg-card: #fefefe;         /* 面·卡片：恒比纸亮 = 抬起 ★ */
-  --color-bg-card-hover: #f3f3f5;
+  /* ── 面 ────────────────────────────────────────────────────────────
+   * 2026-09-29 重排，值抄 cc-haha `desktop/src/theme/globals.css` 的 white 主题。
+   *
+   * 方向性的关键差异（这才是"高级感"的来源，不是字体）：
+   *   cc-haha：页面 = 最亮（#FFFFFF），其余全部**向后退**。
+   *   改之前：页面灰（#f0f0f2）、卡片亮（#fefefe），是"卡片抬起"。
+   * 读长文时纸面应当是最亮的那一层，界面外壳退到背景里 —— 方向反了，
+   * 于是每个卡片都得靠边框撑出存在感，满屏盒子。
+   *
+   * 明度阶梯（相邻差 ≥ 3%，同色相下人眼要 ≥3% 才读得出高低）：
+   *   100% #FFFFFF  页面 / 对话区
+   *    98% #FAFAFA  卡片
+   *    97% #F7F7F7  侧栏 / 顶栏 / 输入底
+   *    94% #F0F0F0  hover / chip
+   *    93% #EBEBEB  active / 分隔线
+   * ────────────────────────────────────────────────────────────── */
+  --color-bg-app: #ffffff;         /* 案·最外层：窗口底、列间空隙 */
+  --color-bg-primary: #ffffff;     /* 纸·对话与主区底 = 最亮 */
+  --color-bg-card: #fafafa;         /* 面·卡片 */
+  --color-bg-base: #f7f7f7;
+  --color-bg-secondary: #f7f7f7;   /* 案·侧栏 / 顶栏 */
+  --color-bg-inset: #f7f7f7;
+  --color-bg-input: #fafafa;
+  --color-bg-card-hover: #f0f0f0;
+  --color-bg-tertiary: #f0f0f0;    /* 案·深一档：分隔区 / chip */
+  --color-bg-hover: #f0f0f0;
+  --color-bg-active: #ebebeb;
+  --color-bg-quaternary: #ebebeb;  /* 案·最深：轨道底 */
   --color-bg-elevated: #ffffff;     /* 浮·弹层 / 菜单 / 悬浮球 */
-  --color-bg-inset: #e7e7e9;
-  --color-bg-input: #fefefe;
-  --color-bg-base: #f7f7f8;
 
   /* Code / chat 场景面板 */
-  --color-bg-code: #f2f2f4;
-  --color-bg-code-header: #ebebec;
-  --color-bg-code-border: #dcdce0;
-  --color-chat-assistant-bg: #fefefe;
-  --color-chat-tool-bg: #f2f2f4;
+  --color-bg-code: #f8f8f8;
+  --color-bg-code-header: #f7f7f7;
+  --color-bg-code-border: #ebebeb;
+  --color-chat-assistant-bg: #ffffff;
+  --color-chat-tool-bg: #f8f8f8;
   --color-chat-terminal-bg: #17181b;  /* 终端恒暗：任何主题都一样 */
 
-  /* ── 分隔线：中性灰轴，"看得见"但仍是发丝观感 ── */
-  --color-border-subtle: #e3e3e6;
-  --color-border-primary: #d4d4d8;
-  --color-border-secondary: #c0c0c6;
-  --color-border: #b0b0b6;
-  --color-border-strong: #2c2c2e;
+  /* ── 分隔线：发丝观感，看得见但不抢戏 ── */
+  --color-border-subtle: #f0f0f0;
+  --color-border-primary: #ebebeb;
+  --color-border-secondary: #d6d6d6;  /* 控件描边（WCAG 1.4.11 3:1） */
+  --color-border: #8c8c8c;             /* 强描边 / focus 参照 */
+  --color-border-strong: #8c8c8c;
+  /* 2026-09-29：此前的 --color-border-strong 在暗色下会翻成近白（#e9eaee），
+     却被当边框色用（workbench.css / components-layout.css），语义已不成立。
+     现两套主题同值，且它现在表示"强调描边"而非"更重的分隔线"。 */
 
-  /* ── 文字：四级中性墨，主文字刻意不用纯黑 ── */
-  --color-text-primary: #1d1d1f;
-  --color-text-secondary: #48484c;
-  --color-text-tertiary: #6e6e73;
-  --color-text-muted: #86868b;
-  --color-text-faint: #aeaeb2;
+  /* ── 文字：三级墨。主文字刻意不用纯黑 ── */
+  --color-text-primary: #242424;
+  --color-text-secondary: #575757;
+  --color-text-tertiary: #6e6e6e;
+  --color-text-muted: #6e6e6e;
+  --color-text-faint: #8c8c8c;
   --color-text-on-code: #3a3a3e;
-  /* 思考（过程）专用：比正文浅两档 + 小一档字号。过程不是内容，
+  /* 思考（过程）专用：比正文浅一档 + 小一档字号。过程不是内容，
      不能和结论抢同一条视觉通道。 */
-  --color-text-thinking: #86868b;
+  --color-text-thinking: #6e6e6e;
 
-  /* ── 墨：品牌蓝（经典浅色主题的强调色，白字对比充足）。品牌唯一色，
-     绝不用作 error/success 语义。与 success（≈135°）拉开 100°+ ── */
-  --color-accent: #0071e3;
-  --color-accent-hover: #005bb8;
-  --color-accent-on-text: #ffffff;
-  --color-accent-soft: rgba(0, 113, 227, 0.1);
-  --color-accent-soft-strong: rgba(0, 113, 227, 0.16);
+  /* ── 墨：品牌陶土红（terracotta）。绝不用作 error/success 语义 ──
+   * 抄 cc-haha：强调色与 warning 原本同属橙系（色相差仅约 30°），
+   * 同一屏上"品牌强调"和"⚠ 需要注意"互相稀释；warning 已被挪到芥黄，
+   * 两者拉开到 60°+。 */
+  /* 2026-09-30：强调色换松墨绿（用户定调：不要橙、不要蓝，要「高级感」）。
+     松墨绿在暖白/纸色背景上不刺眼，长时间看不累，且与 ink 暗色主题同族。 */
+  --color-accent: #1e4a3c;
+  --color-accent-hover: #163a2f;
+  /* 实色 accent 底上的文字色。深绿底配白字对比度 ≈ 9:1，远超 AA。 */
+  --color-on-accent: #ffffff;
+  --color-accent-on-text: #eef4f1;
+  /* 不透明而非 rgba：cc-haha 的 --cc-ac-soft 就是实色。半透明叠在
+     不同底色上会算出不同的观感，token 就失去了"唯一定义"的意义。 */
+  --color-accent-soft: #e6edea;
+  --color-accent-soft-strong: #d5e2dd;
+  /* 渠道品牌色（2026-09-30）：只用于渠道徽标小圆牌，让 QQ / 企业微信
+     一眼可辨。亮色用品牌原色，暗色在 themes/dark.css 提亮一档。 */
+  --color-brand-qq: #12b7f5;
+  --color-brand-wecom: #07c160;
 
-  --color-link: #0071e3;
-  --color-link-hover: #005bb8;
-  --color-link-soft: #6e6e73;
-  --color-link-soft-hover: #c05a48;
+  --color-link: #1e4a3c;
+  --color-link-hover: #163a2f;
+  --color-link-soft: #6e6e6e;
+  --color-link-soft-hover: #2f6b58;
+  /* ── 按钮语义对 ──────────────────────────────────────────────────
+     2026-09-30：这里此前有**两套并存的按钮 token**（`-fg` 与 `-text`），
+     键名重复、CSS 后者覆盖前者 —— 结果 primary 按钮实际是苹果蓝 #0071e3，
+     改 -fg 那套完全没生效。现只保留 `-text` 一套（代码里 21 处引用它），
+     并把主按钮并入新强调色（松墨绿）。 */
+  --color-btn-primary-bg: #1e4a3c;
+  --color-btn-primary-text: #ffffff;
+  --color-btn-primary-hover: #163a2f;
+  --color-btn-secondary-bg: #fafafa;
+  --color-btn-secondary-fg: #242424;
+  --color-btn-secondary-hover: #f0f0f0;
+  --color-on-primary: #fbf6ec;   /* 陶土红实底上的文字 */
+  --color-on-error: #ffffff;     /* 错误红实底上的文字（暗色主题翻成深色） */
+  --color-inverse-surface: #242424;
+  --color-inverse-on-surface: #ffffff;
+  --color-primary-fixed-dim: #efded4;   /* 陶土红描边按钮的边框 */
+  --shadow-button-primary: 0 2px 10px rgba(36, 36, 36, 0.22);
+  --shadow-focus-ring: 0 0 0 1px rgba(150, 68, 43, 0.24);
+
 
   /* ── 语义四色：色相彼此拉开 ≥30°，全部避开品牌蓝区 ──
         success 松绿 / warning 芥黄 / error 绛红（偏品红）/ info 靛灰蓝 */
-  --color-success: #37874c;
-  --color-success-soft: rgba(55, 135, 76, 0.11);
-  --color-warning: #96750f;
-  --color-warning-soft: rgba(150, 117, 15, 0.13);
+  --color-success: #3e8153;
+  --color-success-soft: #e8f2e9;
+  /* 芥黄：与陶土红强调色拉开色相，避免「品牌」与「注意」互相稀释。 */
+  --color-warning: #a8751f;
+  --color-warning-soft: #f8f0dc;
   --color-text-warning: #7a5e0c;
-  --color-error: #a83b60;
-  --color-error-soft: rgba(168, 59, 96, 0.1);
+  --color-error: #c74436;
+  --color-error-soft: #faece8;
   --color-info: #4f7fa3;
   --color-info-soft: rgba(79, 127, 163, 0.12);
 
   /* Status chips（Composer 会话状态胶囊） */
-  --color-chip-model-bg: rgba(0, 113, 227, 0.1);
-  --color-chip-model-fg: #005bb8;
-  --color-chip-workspace-bg: #e3ebf2;
-  --color-chip-workspace-fg: #48677e;
-  --color-chip-permission-bg: #f2eeda;
-  --color-chip-permission-fg: #7a5e0c;
+  /* 2026-09-30：三个 chip 全部并进松墨绿系（此前 model 是苹果蓝、
+     permission 是土黄 —— 强调色统一后它们成了杂色）。 */
+  --color-chip-model-bg: rgba(30, 74, 60, 0.1);
+  --color-chip-model-fg: #1e4a3c;
+  --color-chip-workspace-bg: #e6edea;
+  --color-chip-workspace-fg: #1e4a3c;
+  --color-chip-permission-bg: #e6edea;
+  --color-chip-permission-fg: #1e4a3c;
 
   /* Overlay */
   --color-overlay-scrim: rgba(28, 28, 30, 0.4);
   --color-modal-outline: rgba(28, 28, 30, 0.06);
 
-  /* Buttons */
-  --color-btn-primary-bg: #0071e3;
-  --color-btn-primary-text: #ffffff;
-  --color-btn-primary-hover: #005bb8;
+  /* Buttons（primary 见上「按钮语义对」——不重复声明） */
   --color-btn-secondary-bg: transparent;
   --color-btn-secondary-text: #3a3a3e;
   --color-btn-secondary-hover: #ebebec;
@@ -228,15 +307,18 @@
   /* Shadows（中性冷灰，不偏黄不偏黑） */
   --shadow-card: 0 1px 2px rgba(28, 28, 30, 0.04);
   --shadow-pop: 0 6px 20px rgba(28, 28, 30, 0.1), 0 2px 6px rgba(28, 28, 30, 0.06);
+  /* 2026-09-29：纸面层级阴影 —— 抄 cc-haha，比 --shadow-card 更柔和，
+   * 用于输入框、卡片、预览栏等最常用浮起层。 */
+  --shadow-paper: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
   --shadow-modal: 0 24px 64px rgba(28, 28, 30, 0.16), 0 8px 24px rgba(28, 28, 30, 0.08);
 
   /* Scene surfaces — 应用骨架四大区。
      纸（对话区）最亮，案（侧栏/顶栏）低一档，列间空隙（app）最低 ——
      主区因此天然"浮起来"，不需要靠边框去分隔。 */
-  --theme-bg-app: #f0f0f2;
-  --theme-bg-sidebar: #ebebec;
-  --theme-bg-titlebar: #ebebec;   /* 与侧栏同案面：取消独立色带 */
-  --theme-bg-chat: #f7f7f8;
+  --theme-bg-app: #ffffff;
+  --theme-bg-sidebar: #f7f7f7;
+  --theme-bg-titlebar: #f7f7f7;   /* 与侧栏同案面：取消独立色带 */
+  --theme-bg-chat: #ffffff;
 
   /* ── 玻璃浮层：保留极轻模糊（与纸面/案面区分），不再大面积铺 ── */
   --glass-frosted-bg: rgba(250, 250, 252, 0.72);

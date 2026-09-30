@@ -437,40 +437,54 @@
    absolute bottom:100% 贴着输入框上缘弹出。宽度跟随 composer 容器
    （max-w-reading 档），不随消息列宽变化。
    ══════════════════════════════════════════════════════════════════ */
+/* ════════════════════════════════════════════════════════════════════
+   审批抽屉（2026-09-30 ZCode 式重做）
+   从输入框顶部弹出（bottom: 100% 锚定 + slide-up 入场）。
+   信息层级：「需要权限」标题 + 风险 chip + 工具身份 → 等待确认状态行 →
+   命令原样等宽框（信任核心）→ 5 选项（各带作用域说明）→ 反馈输入 →
+   键盘提示行。
+   视觉：纸面 + 细边 + pop 阴影 + radius-xl。
+   ════════════════════════════════════════════════════════════════════ */
 .approval-drawer {
   position: absolute;
   left: 0;
   right: 0;
   bottom: calc(100% + 10px);
   z-index: 30;
-  background: var(--color-bg-elevated);
+  background: var(--color-bg-primary);
   border: 1px solid var(--color-border-primary);
-  border-left: 2px solid var(--color-accent);
-  border-radius: var(--radius-lg, 8px);
+  border-radius: var(--radius-xl);
   box-shadow: var(--shadow-pop);
-  padding: 10px 12px 10px 14px;
-  animation: approval-drawer-in 200ms var(--ease-out, cubic-bezier(0.16, 1, 0.3, 1)) both;
+  padding: 12px 14px;
+  animation: approval-drawer-in 220ms var(--ease-out, cubic-bezier(0.16, 1, 0.3, 1)) both;
 }
 @keyframes approval-drawer-in {
-  from { opacity: 0; transform: translateY(10px); }
-  to   { opacity: 1; transform: translateY(0); }
+  from { opacity: 0; transform: translateY(12px) scale(0.985); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
 }
 @media (prefers-reduced-motion: reduce) {
   .approval-drawer { animation: none; }
 }
 
+/* ── 头：标题 + 风险 chip + 工具 + 队列计数 ── */
 .approval-drawer__head {
   display: flex;
   align-items: center;
   gap: 8px;
   margin-bottom: 8px;
 }
+.approval-drawer__title {
+  font-size: var(--text-ui, 13px);
+  font-weight: var(--font-weight-semibold, 600);
+  color: var(--color-text-primary);
+  flex: 0 0 auto;
+}
 .approval-drawer__risk {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   height: 20px;
-  padding: 0 7px;
+  padding: 0 8px;
   border-radius: 999px;
   font-size: var(--text-tiny, 11px);
   font-weight: var(--font-weight-medium, 500);
@@ -479,7 +493,7 @@
 .approval-drawer__tool {
   font-size: var(--text-ui, 13px);
   font-weight: var(--font-weight-medium, 500);
-  color: var(--color-text-primary);
+  color: var(--color-text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -487,35 +501,111 @@
 .approval-drawer__count {
   margin-left: auto;
   flex: 0 0 auto;
-  font-family: var(--font-mono);
   font-size: var(--text-tiny, 11px);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-faint);
+}
+
+/* ── 状态行：⏳ 等待确认 + 后端 reason（有才显示） ── */
+.approval-drawer__statusline {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  margin-bottom: 6px;
+}
+.approval-drawer__status {
+  flex: 0 0 auto;
+  font-size: var(--text-tiny, 11px);
+  font-weight: var(--font-weight-medium, 500);
   color: var(--color-text-tertiary);
+}
+.approval-drawer__desc {
+  font-size: var(--text-ui, 13px);
+  line-height: var(--leading-ui, 1.5);
+  color: var(--color-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .approval-drawer__body {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 7px;
   min-width: 0;
 }
-.approval-drawer__desc {
-  font-size: var(--text-ui, 13px);
-  line-height: var(--leading-ui, 1.5);
-  color: var(--color-text-primary);
-}
-.approval-drawer__path {
-  display: block;
-  padding: 6px 9px;
-  border-radius: var(--radius-md, 6px);
-  background: var(--color-bg-secondary);
+
+/* ── 命令原样框：即将执行的内容逐字展示（信任核心） ── */
+.approval-drawer__cmd {
   border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md, 6px);
+  background: var(--color-bg-inset);
+  overflow: hidden;
+}
+.approval-drawer__cmd-label {
+  display: block;
+  padding: 5px 9px 0;
+  font-size: var(--text-micro, 10px);
+  font-weight: var(--font-weight-medium, 500);
+  letter-spacing: 0.04em;
+  color: var(--color-text-faint);
+}
+.approval-drawer__cmd-text {
+  padding: 4px 9px 8px;
   font-family: var(--font-mono);
   font-size: var(--text-tiny, 11px);
-  color: var(--color-text-secondary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  line-height: 1.55;
+  color: var(--color-text-primary);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 160px;
+  overflow: auto;
 }
+
+/* 参数详情：原生 details 折叠。命令原样框已给"人话层"，
+   JSON 全文只进这个折叠块（一张卡里只出现一次）。 */
+.approval-drawer__args {
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md, 6px);
+  background: var(--color-bg-secondary);
+  overflow: hidden;
+}
+.approval-drawer__args-summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 9px;
+  font-size: var(--text-tiny, 11px);
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  user-select: none;
+}
+.approval-drawer__args-summary::-webkit-details-marker { display: none; }
+.approval-drawer__args-summary::before {
+  content: "▸";
+  font-size: 9px;
+  transition: transform var(--duration-fast) ease;
+}
+.approval-drawer__args[open] .approval-drawer__args-summary::before {
+  transform: rotate(90deg);
+}
+.approval-drawer__args-summary:hover { color: var(--color-text-secondary); }
+.approval-drawer__args-pre {
+  margin: 0;
+  padding: 8px 10px;
+  border-top: 1px solid var(--color-border-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--text-tiny, 11px);
+  line-height: 1.5;
+  color: var(--color-text-secondary);
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
 .approval-drawer__diff-toggle {
   display: inline-flex;
   align-items: center;
@@ -543,8 +633,12 @@
   color: var(--color-text-secondary);
   white-space: pre;
 }
+
+/* 批量审批：最老的前 3 项清单 */
 .approval-drawer__items {
   list-style: none;
+  margin: 0;
+  padding: 0;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -571,46 +665,112 @@
 }
 .approval-drawer__more { color: var(--color-text-tertiary); }
 
-.approval-drawer__actions {
+/* ── 选项列表：数字键 + 标签 + 作用域说明 ── */
+.approval-drawer__options {
   display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 10px;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 4px;
 }
-.approval-drawer__btn {
-  display: inline-flex;
+.approval-drawer__option {
+  display: flex;
   align-items: center;
-  gap: 6px;
-  height: 30px;
-  padding: 0 12px;
+  gap: 8px;
+  padding: 5px 8px;
+  border: 0;
   border-radius: var(--radius-md, 6px);
-  font-size: var(--text-ui, 13px);
-  font-weight: var(--font-weight-medium, 500);
+  background: transparent;
   cursor: pointer;
-  border: 1px solid transparent;
-  transition: background var(--duration-fast) ease, border-color var(--duration-fast) ease;
+  text-align: left;
+  min-width: 0;
+  transition: background var(--duration-fast) ease;
 }
-.approval-drawer__btn kbd {
+button.approval-drawer__option:hover,
+.approval-drawer__option--feedback:hover { background: var(--color-bg-hover); }
+button.approval-drawer__option:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+}
+.approval-drawer__option-key {
+  flex: 0 0 auto;
   font-family: var(--font-mono);
   font-size: var(--text-micro, 10px);
-  opacity: 0.65;
-  border: 1px solid currentColor;
-  border-radius: 3px;
-  padding: 0 3px;
   line-height: 1.4;
+  min-width: 18px;
+  text-align: center;
+  padding: 1px 3px;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 4px;
+  color: var(--color-text-tertiary);
+  background: var(--color-bg-secondary);
 }
-.approval-drawer__btn--ghost {
-  background: transparent;
-  border-color: var(--color-border-secondary);
-  color: var(--color-text-secondary);
+.approval-drawer__option-label {
+  flex: 0 0 auto;
+  font-size: var(--text-ui, 13px);
+  font-weight: var(--font-weight-medium, 500);
+  color: var(--color-text-primary);
 }
-.approval-drawer__btn--ghost:hover { background: var(--color-bg-hover); color: var(--color-text-primary); }
-.approval-drawer__btn--primary {
+.approval-drawer__option-desc {
+  min-width: 0;
+  font-size: var(--text-tiny, 11px);
+  color: var(--color-text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.approval-drawer__option--primary .approval-drawer__option-label {
+  color: var(--color-accent);
+}
+.approval-drawer__option--danger .approval-drawer__option-label {
+  color: var(--color-error, var(--color-text-secondary));
+}
+
+/* 第 5 项：反馈输入行（"告诉模型接下来怎么做"） */
+.approval-drawer__option--feedback {
+  cursor: text;
+}
+.approval-drawer__feedback-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 28px;
+  padding: 0 9px;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: var(--radius-md, 6px);
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  font-size: var(--text-ui, 13px);
+  font-family: inherit;
+}
+.approval-drawer__feedback-input::placeholder { color: var(--color-text-faint); }
+.approval-drawer__feedback-input:focus {
+  outline: none;
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 25%, transparent);
+}
+.approval-drawer__feedback-send {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: var(--radius-md, 6px);
   background: var(--color-accent);
   color: var(--color-accent-on-text);
+  cursor: pointer;
 }
-.approval-drawer__btn--primary:hover { background: var(--color-accent-hover); }
-.approval-drawer__btn:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
+.approval-drawer__feedback-send:disabled {
+  background: var(--color-bg-hover);
+  color: var(--color-text-faint);
+  cursor: default;
+}
+
+/* ── 脚：键盘导航提示 ── */
+.approval-drawer__hint {
+  margin-top: 8px;
+  padding-top: 7px;
+  border-top: 1px solid var(--color-border-subtle);
+  font-size: var(--text-micro, 10px);
+  color: var(--color-text-faint);
 }

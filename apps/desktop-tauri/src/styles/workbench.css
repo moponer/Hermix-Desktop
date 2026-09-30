@@ -70,17 +70,21 @@
   width: 48px;
   height: 48px;
   border-radius: 50%;
-  border: 1px solid var(--color-border);
-  background: var(--color-bg-card);
-  box-shadow: var(--shadow-modal);
+  /* 2026-09-30 重设计：--color-border 是强描边（#8c8c8c），48px 圆上显得
+     又重又脏；shadow-modal 在一个小球上也是杀鸡用牛刀。改纸面 + 细边 +
+     pop 级阴影 —— 安静地浮在画布上，忙碌时才由状态环吸引注意。 */
+  border: 1px solid var(--color-border-primary);
+  background: var(--color-bg-primary);
+  box-shadow: var(--shadow-pop);
   display: grid;
   place-items: center;
   cursor: grab;
   pointer-events: auto;
   touch-action: none;
   color: var(--color-text-primary);
-  transition: transform var(--duration-fast) ease;
+  transition: transform var(--duration-fast) ease, box-shadow var(--duration-fast) ease;
 }
+.wb-orb:hover { box-shadow: var(--shadow-modal); }
 .wb-orb:active { cursor: grabbing; transform: scale(0.96); }
 .wb-orb__icon {
   color: var(--color-accent);
@@ -116,10 +120,10 @@
   position: fixed;
   display: flex;
   flex-direction: column;
-  border-radius: var(--radius-2xl, 12px);
-  border: 1px solid var(--color-border);
-  background: var(--color-bg-app);
-  box-shadow: var(--shadow-modal);
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--color-border-primary);
+  background: var(--color-bg-primary);
+  box-shadow: var(--shadow-pop);
   overflow: hidden;
   pointer-events: auto;
 }
@@ -128,8 +132,8 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  height: 36px;
-  padding: 0 8px 0 12px;
+  height: 40px;
+  padding: 0 6px 0 12px;
   background: var(--color-bg-secondary);
   border-bottom: 1px solid var(--color-border-subtle);
   cursor: grab;
@@ -147,15 +151,21 @@
 .wb-float__dot--done { background: var(--color-success); }
 @keyframes wb-orb-blink { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
 .wb-float__title {
-  font-size: var(--text-meta, 12px);
+  font-size: var(--text-ui, 13px);
   font-weight: var(--font-weight-medium, 500);
   color: var(--color-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.wb-float__close {
+/* 头部动作钮（新会话 / 历史 / 收起）共用：24px 方钮，安静 hover。 */
+.wb-float__actions {
   margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.wb-float__btn {
   width: 24px;
   height: 24px;
   display: grid;
@@ -165,8 +175,62 @@
   background: transparent;
   color: var(--color-text-muted);
   cursor: pointer;
+  transition: background var(--duration-fast) ease, color var(--duration-fast) ease;
 }
-.wb-float__close:hover { background: var(--color-bg-hover); color: var(--color-text-primary); }
+.wb-float__btn:hover { background: var(--color-bg-hover); color: var(--color-text-primary); }
+.wb-float__btn.is-open { background: var(--color-bg-active); color: var(--color-text-primary); }
+/* 历史下拉：贴在头部下沿、右对齐；elevated 面 + 细边 + pop 阴影。 */
+.wb-float__menu {
+  position: absolute;
+  top: 44px;
+  right: 8px;
+  z-index: 5;
+  min-width: 200px;
+  max-width: calc(100% - 16px);
+  max-height: 240px;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--color-border-primary);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-elevated);
+  box-shadow: var(--shadow-pop);
+}
+.wb-float__menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+}
+.wb-float__menu-item:hover { background: var(--color-bg-hover); }
+.wb-float__menu-item.is-current { background: var(--color-accent-soft); }
+.wb-float__menu-item.is-current .wb-float__menu-title { color: var(--color-accent); font-weight: var(--font-weight-medium); }
+.wb-float__menu-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-ui, 13px);
+  color: var(--color-text-primary);
+}
+.wb-float__menu-time {
+  flex-shrink: 0;
+  font-size: var(--text-tiny, 11px);
+  color: var(--color-text-faint);
+}
+.wb-float__menu-empty {
+  padding: 10px 8px;
+  font-size: var(--text-ui, 13px);
+  color: var(--color-text-faint);
+  text-align: center;
+}
 .wb-float__body {
   flex: 1;
   min-height: 0;
@@ -185,6 +249,30 @@
   background:
     linear-gradient(135deg, transparent 0 52%, var(--color-border) 52% 60%, transparent 60% 68%,
     var(--color-border) 68% 76%, transparent 76% 84%, var(--color-border) 84% 92%, transparent 92%);
+}
+
+/* ── 停靠态（双击头部切换）────────────────────────────────────
+   贴视口右缘、标题栏以下全高；左侧 3px 把手拖动调宽。常驻面板：
+   不失焦收起、不随拖拽改位。 */
+.wb-float--docked {
+  border-radius: 0;
+  border-right: 0;
+  border-top: 0;
+  border-bottom: 0;
+}
+.wb-float__dockresize {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: ew-resize;
+  touch-action: none;
+  background: transparent;
+  transition: background var(--duration-fast) ease;
+}
+.wb-float--docked:hover .wb-float__dockresize {
+  background: var(--color-accent-soft);
 }
 
 /* 工作台对话栏 chrome：消息流 + 状态条。
