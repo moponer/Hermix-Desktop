@@ -12,6 +12,8 @@ pub mod automation;
 pub mod config;
 pub mod env;
 pub mod mcp;
+pub mod mcp_catalog;
+pub mod mcp_scan;
 pub mod persona;
 pub mod plugins_inspect;
 pub mod polish;
@@ -109,6 +111,12 @@ pub fn router() -> Router<HttpServerState> {
             get(mcp::list_servers).post(mcp::create_server),
         )
         .route("/api/mcp/servers/reset", post(mcp::reset_to_official))
+        // MCP 社区目录（官方 registry）+ 一键添加
+        .route("/api/mcp/catalog", get(mcp_catalog::get_catalog))
+        .route(
+            "/api/mcp/catalog/install",
+            post(mcp_catalog::install),
+        )
         .route(
             "/api/mcp/servers/{id}",
             put(mcp::update_server).delete(mcp::delete_server),

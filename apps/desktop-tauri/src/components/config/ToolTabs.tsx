@@ -23,6 +23,7 @@ import {
 import * as api from "../../api";
 import type { PluginSettings, SkillInfo, ToolsetInfo } from "../../api";
 import type { LucideIcon } from "lucide-react";
+import { McpCatalogGrid } from "./McpCatalogGrid";
 
 // Plugin toggles map to the backend's DashboardPluginSettings (5 hard slots).
 // The icon is purely cosmetic — the source of truth is the boolean on the server.
@@ -314,7 +315,7 @@ function SkillCard({ skill, catLabel, onToggle }: {
           <div className="min-w-0 flex-1 cursor-pointer" onClick={openContent}>
             <div className="flex items-center gap-2">
               <span className="text-sm text-text-primary truncate">{skill.name}</span>
-              <span className="text-[11px] uppercase tracking-wider text-text-muted border border-border-primary rounded px-1.5 py-0.5 shrink-0">
+              <span className="text-[length:var(--text-meta)] uppercase tracking-wider text-text-muted border border-border-primary rounded px-1.5 py-0.5 shrink-0">
                 {catLabel(skill.category) || "skill"}
               </span>
             </div>
@@ -607,14 +608,17 @@ export function ConnectorsTab({ query, onQuery }: { query: string; onQuery: (q: 
     <>
       <SearchBar query={query} onQuery={onQuery} />
 
+      {/* 社区目录：先逛官方 registry，再决定装不装。放在手填列表上方。 */}
+      <McpCatalogGrid onInstalled={() => { void api.getMcpServers().then(setServers); }} />
+
       <div className="flex items-center justify-between mb-3">
-        <span className="text-[12px] text-text-muted">
-          MCP (Model Context Protocol) 服务，通过 stdio 启动本地子进程或 HTTP/SSE 连接远程端点。
+        <span className="text-[length:var(--text-meta)] text-text-muted">
+          已配置的 MCP 服务：通过 stdio 启动本地子进程，或连接 HTTP 远程端点。
         </span>
         <div className="flex items-center gap-2">
           <button
             onClick={() => setShowAddForm((v) => !v)}
-            className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-accent hover:bg-bg-tertiary"
+            className="flex items-center gap-1 px-2 py-1 rounded-md text-[length:var(--text-meta)] text-accent hover:bg-bg-tertiary"
             title="添加自定义 MCP 服务"
           >
             <Plus className="icon-sm" /> 添加 MCP
@@ -626,10 +630,10 @@ export function ConnectorsTab({ query, onQuery }: { query: string; onQuery: (q: 
         <div className="rounded-xl border border-border-primary bg-bg-card p-4 mb-3 space-y-3">
           <div className="text-sm font-medium text-text-primary">添加 MCP 服务</div>
           {addError && (
-            <div className="text-[11px] text-error bg-error/10 rounded px-2 py-1">{addError}</div>
+            <div className="text-[length:var(--text-meta)] text-error bg-error/10 rounded px-2 py-1">{addError}</div>
           )}
 
-          <div className="flex gap-2 text-[11px]">
+          <div className="flex gap-2 text-[length:var(--text-meta)]">
             <button
               onClick={() => setAddMode("paste")}
               className={addMode === "paste" ? "px-2 py-1 rounded-md bg-bg-tertiary text-text-primary" : "px-2 py-1 rounded-md text-text-muted hover:text-text-primary"}
@@ -643,7 +647,7 @@ export function ConnectorsTab({ query, onQuery }: { query: string; onQuery: (q: 
           {addMode === "paste" ? (
             <>
               <div>
-                <label className="text-[11px] text-text-muted">粘贴配置（Claude Desktop / Cursor 风格 mcpServers JSON）</label>
+                <label className="text-[length:var(--text-meta)] text-text-muted">粘贴配置（Claude Desktop / Cursor 风格 mcpServers JSON）</label>
                 <textarea
                   value={pasteJson}
                   onChange={(e) => setPasteJson(e.target.value)}
@@ -651,7 +655,7 @@ export function ConnectorsTab({ query, onQuery }: { query: string; onQuery: (q: 
                   placeholder={'{"mcpServers":{"my-fs":{"command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","/tmp"]},"remote":{"url":"https://example.com/mcp"}}}'}
                   className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary border border-border-secondary resize-none font-mono"
                 />
-                <p className="mt-1 text-[11px] text-text-muted">支持 mcpServers 对象或单条 server 配置，自动识别 stdio / http。</p>
+                <p className="mt-1 text-[length:var(--text-meta)] text-text-muted">支持 mcpServers 对象或单条 server 配置，自动识别 stdio / http。</p>
               </div>
               <div className="flex items-center gap-2">
                 <button onClick={handleImportPaste} disabled={adding} className="px-3 py-1.5 rounded-lg bg-accent text-accent-on-text text-xs font-medium hover:opacity-90 disabled:opacity-50">导入</button>
@@ -662,11 +666,11 @@ export function ConnectorsTab({ query, onQuery }: { query: string; onQuery: (q: 
             <>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-[11px] text-text-muted">名称</label>
+                  <label className="text-[length:var(--text-meta)] text-text-muted">名称</label>
                   <input value={newServer.name} onChange={(e) => setNewServer((p) => ({ ...p, name: e.target.value }))} placeholder="my-mcp-server" className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary border border-border-secondary" />
                 </div>
                 <div>
-                  <label className="text-[11px] text-text-muted">传输方式</label>
+                  <label className="text-[length:var(--text-meta)] text-text-muted">传输方式</label>
                   <select value={newServer.transport} onChange={(e) => setNewServer((p) => ({ ...p, transport: e.target.value as api.McpTransport }))} className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary border border-border-secondary">
                     <option value="stdio">stdio</option>
                     <option value="http">http</option>
@@ -675,26 +679,26 @@ export function ConnectorsTab({ query, onQuery }: { query: string; onQuery: (q: 
                 {newServer.transport === "stdio" ? (
                   <>
                     <div>
-                      <label className="text-[11px] text-text-muted">Command</label>
+                      <label className="text-[length:var(--text-meta)] text-text-muted">Command</label>
                       <input value={newServer.command} onChange={(e) => setNewServer((p) => ({ ...p, command: e.target.value }))} placeholder="npx" className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary border border-border-secondary" />
                     </div>
                     <div>
-                      <label className="text-[11px] text-text-muted">Args （空格分隔）</label>
+                      <label className="text-[length:var(--text-meta)] text-text-muted">Args （空格分隔）</label>
                       <input value={newServer.args} onChange={(e) => setNewServer((p) => ({ ...p, args: e.target.value }))} placeholder="-y @modelcontextprotocol/server-filesystem /tmp" className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary border border-border-secondary" />
                     </div>
                   </>
                 ) : (
                   <div className="col-span-2">
-                    <label className="text-[11px] text-text-muted">URL</label>
+                    <label className="text-[length:var(--text-meta)] text-text-muted">URL</label>
                     <input value={newServer.url} onChange={(e) => setNewServer((p) => ({ ...p, url: e.target.value }))} placeholder="https://example.com/mcp" className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary border border-border-secondary" />
                   </div>
                 )}
                 <div className="col-span-2">
-                  <label className="text-[11px] text-text-muted">环境变量 (每行 KEY=value)</label>
+                  <label className="text-[length:var(--text-meta)] text-text-muted">环境变量 (每行 KEY=value)</label>
                   <textarea value={newServer.env} onChange={(e) => setNewServer((p) => ({ ...p, env: e.target.value }))} placeholder={"API_KEY=xxx"} rows={2} className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary border border-border-secondary resize-none" />
                 </div>
                 <div className="col-span-2">
-                  <label className="text-[11px] text-text-muted">描述 （可选）</label>
+                  <label className="text-[length:var(--text-meta)] text-text-muted">描述 （可选）</label>
                   <input value={newServer.description} onChange={(e) => setNewServer((p) => ({ ...p, description: e.target.value }))} placeholder="自定义文件系统 MCP" className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary border border-border-secondary" />
                 </div>
               </div>
@@ -769,17 +773,17 @@ function ConnectorRow({
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className="text-sm text-text-primary truncate">{server.name}</span>
-          <span className="text-[11px] uppercase tracking-wider text-text-muted bg-bg-tertiary rounded px-1.5 py-0.5">
+          <span className="text-[length:var(--text-meta)] uppercase tracking-wider text-text-muted bg-bg-tertiary rounded px-1.5 py-0.5">
             {server.transport}
           </span>
           {server.enabled && (
-            <span className="text-[11px] text-accent bg-accent-soft/40 rounded px-1.5 py-0.5">启用中</span>
+            <span className="text-[length:var(--text-meta)] text-accent bg-accent-soft/40 rounded px-1.5 py-0.5">启用中</span>
           )}
         </div>
         {server.description && (
           <p className="text-xs text-text-muted mt-0.5 line-clamp-2">{server.description}</p>
         )}
-        <p className="text-[11px] font-mono text-text-faint mt-1 truncate">
+        <p className="text-[length:var(--text-meta)] font-mono text-text-faint mt-1 truncate">
           {server.transport === "stdio"
             ? `${server.command ?? "?"} ${(server.args ?? []).join(" ")}`
             : server.url ?? "(no url)"}
@@ -1002,7 +1006,7 @@ function ToolsetCard({
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className="text-sm text-text-primary truncate">{toolset.label}</span>
-          <span className="text-[11px] uppercase tracking-wider text-text-muted border border-border-primary rounded px-1.5 py-0.5">
+          <span className="text-[length:var(--text-meta)] uppercase tracking-wider text-text-muted border border-border-primary rounded px-1.5 py-0.5">
             {toolset.tools.length} 个工具
           </span>
         </div>
@@ -1010,12 +1014,12 @@ function ToolsetCard({
         {toolset.tools.length > 0 && (
           <div className="flex flex-wrap gap-1 mt-1.5">
             {toolset.tools.slice(0, 6).map((tool) => (
-              <span key={tool} className="text-[11px] text-text-secondary bg-bg-tertiary rounded px-1.5 py-0.5">
+              <span key={tool} className="text-[length:var(--text-meta)] text-text-secondary bg-bg-tertiary rounded px-1.5 py-0.5">
                 {tool}
               </span>
             ))}
             {toolset.tools.length > 6 && (
-              <span className="text-[11px] text-text-muted">+{toolset.tools.length - 6}</span>
+              <span className="text-[length:var(--text-meta)] text-text-muted">+{toolset.tools.length - 6}</span>
             )}
           </div>
         )}
@@ -1023,7 +1027,7 @@ function ToolsetCard({
       <div className="shrink-0 mt-1.5 flex flex-col items-end gap-1">
         <ToggleSwitch enabled={enabled} onToggle={() => onToggle(toolset.name, !enabled)} disabled={saving} offLabel={`关闭 ${toolset.label} 工具集`} onLabel={`启用 ${toolset.label} 工具集`} />
         <span
-          className={`text-[11px] uppercase tracking-wider ${
+          className={`text-[length:var(--text-meta)] uppercase tracking-wider ${
             enabled ? "text-success" : "text-text-muted"
           }`}
         >
@@ -1074,7 +1078,7 @@ function Section({
     <section className="mb-6">
       <div className="flex items-baseline justify-between mb-3">
         <h2 className="text-base font-medium text-text-primary">{title}</h2>
-        {hint && <span className="text-[11px] text-text-muted">{hint}</span>}
+        {hint && <span className="text-[length:var(--text-meta)] text-text-muted">{hint}</span>}
       </div>
       {children}
     </section>
@@ -1156,7 +1160,7 @@ function PluginCard({
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className="text-sm text-text-primary truncate">{name}</span>
-          <span className="text-[11px] uppercase tracking-wider text-text-muted border border-border-primary rounded px-1.5 py-0.5 shrink-0">
+          <span className="text-[length:var(--text-meta)] uppercase tracking-wider text-text-muted border border-border-primary rounded px-1.5 py-0.5 shrink-0">
             {badge}
           </span>
         </div>
