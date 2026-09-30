@@ -1411,10 +1411,19 @@ mod tests {
     /// 扫全表把不变式钉死。
     #[test]
     fn set_primary_clears_previous_marker() {
-        let tmp = std::env::temp_dir().join(format!("hx-wb-primary-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&tmp);
-        // HERMIX_HOME 是进程级全局，测试并行跑会互相踩；这里串行化到
-        // 单测内部完成读写，别的测试不碰这个变量。
+        // HERMIX_HOME 是进程级全局：本测试设了它，同二进制的其他并行测试
+        // （toolbox 那两个会落盘）也会写进这个目录。此前用 PID 固定目录名
+        // + 开头 remove_dir_all，会把它们正在写的目录抽走 → 偶发
+        // `os error 3 系统找不到指定的路径`。改为每次运行用唯一目录，
+        // 只在本测试全部写完后清理。
+        let tmp = std::env::temp_dir().join(format!(
+            "hx-wb-primary-{}-{:?}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
         std::env::set_var("HERMIX_HOME", &tmp);
 
         let a = create_workbench("甲工作台").unwrap();
@@ -1441,6 +1450,8 @@ mod tests {
         assert!(primary_workbench(&[]).is_none());
 
         assert!(set_primary("不存在的工作台").is_err());
-        let _ = fs::remove_dir_all(&tmp);
+        // 故意不删这个目录：HERMIX_HOME 是进程级全局，同二进制的并行测试
+        // 也会往这里落盘，测试中途删目录会让它们撞上 `os error 3`。目录在
+        // %TEMP% 下，由系统回收。
     }
 }

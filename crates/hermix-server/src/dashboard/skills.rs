@@ -846,7 +846,9 @@ mod tests {
         // a tempdir is the only safe way to make the fixture
         // hermetic. (See hermix_config::paths::hermix_home().)
         let home = tempdir().unwrap();
-        std::env::set_var("HERMIX_HOME", home.path());
+        // 守卫：离开时把 HERMIX_HOME 还原。此前裸 set_var 会让这个临时目录
+        // 被删之后仍被并行测试读到（pairing 测试写 TLS 证书偶发 os error 2）。
+        let _home_guard = crate::test_env::EnvGuard::set("HERMIX_HOME", home.path());
         let reg = hermix_tools::ToolRegistry::new();
         let skill_provider: Arc<dyn SkillProvider> = Arc::new(NoopSkillProvider);
         let terminal: Arc<dyn TerminalBackend> = Arc::new(NoopBackend);

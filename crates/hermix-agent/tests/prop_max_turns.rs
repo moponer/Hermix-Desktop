@@ -187,6 +187,7 @@ proptest! {
                 "progress-summary system notice should be injected at the boundary"
             );
             Ok(())
-        });
+        })
+        .unwrap();
     }
 }

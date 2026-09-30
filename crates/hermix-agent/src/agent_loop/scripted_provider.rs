@@ -66,11 +66,9 @@ impl ScriptedTurn {
 #[derive(Debug, Clone)]
 pub struct SeenCall {
     /// 消息序列的紧凑投影：`role:content 前 80 字符`。
+    /// （原还有 `tool_names` / `message_count` 两个只写不读的字段，
+    ///  2026-09-29 随死代码清理删除。）
     pub message_digest: Vec<String>,
-    /// 本次调用可见的工具名。
-    pub tool_names: Vec<String>,
-    /// 消息总条数。
-    pub message_count: usize,
 }
 
 pub struct ScriptedProvider {
@@ -103,7 +101,7 @@ impl ScriptedProvider {
         self.calls.load(Ordering::SeqCst)
     }
 
-    fn record(&self, messages: &[Message], tools: &[ToolSchema]) {
+    fn record(&self, messages: &[Message], _tools: &[ToolSchema]) {
         let digest = messages
             .iter()
             .map(|m| {
@@ -112,11 +110,7 @@ impl ScriptedProvider {
                 format!("{:?}:{}", m.role, head)
             })
             .collect();
-        let entry = SeenCall {
-            message_digest: digest,
-            tool_names: tools.iter().map(|t| t.name.clone()).collect(),
-            message_count: messages.len(),
-        };
+        let entry = SeenCall { message_digest: digest };
         if let Ok(mut seen) = self.seen.lock() {
             seen.push(entry);
         }
@@ -220,8 +214,30 @@ impl LlmProvider for ScriptedProvider {
                     usage: None,
                 }));
             }
+            // Emit tool calls as deltas — same shape real providers use
+            // (stream_collect accumulates via ToolCallDelta.index). A turn
+            // carrying tool_calls must deliver them in stream mode too:
+            // previously every delta had `tool_calls: None`, so the loop
+            // saw a text-only response and finalized after turn 1.
+            let tc_deltas: Vec<hermix_core::ToolCallDelta> = turn
+                .tool_calls
+                .iter()
+                .enumerate()
+                .map(|(i, tc)| hermix_core::ToolCallDelta {
+                    index: i as u32,
+                    id: Some(tc.id.clone()),
+                    function: Some(hermix_core::FunctionCallDelta {
+                        name: Some(tc.function.name.clone()),
+                        arguments: Some(tc.function.arguments.clone()),
+                    }),
+                })
+                .collect();
             out.push(Ok(StreamChunk {
-                delta: None,
+                delta: Some(hermix_core::StreamDelta {
+                    content: None,
+                    tool_calls: if tc_deltas.is_empty() { None } else { Some(tc_deltas) },
+                    extra: None,
+                }),
                 finish_reason: Some(
                     if turn.tool_calls.is_empty() { "stop" } else { "tool_calls" }.to_string(),
                 ),

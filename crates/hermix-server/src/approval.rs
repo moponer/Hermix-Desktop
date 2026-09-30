@@ -7,8 +7,6 @@ use std::time::Duration;
 use hermix_core::ApprovalOutcome;
 use tokio::sync::oneshot;
 
-use super::*;
-
 #[derive(Clone)]
 pub struct ApprovalRegistry {
     inner: Arc<std::sync::Mutex<HashMap<String, HashMap<String, oneshot::Sender<ApprovalOutcome>>>>>,
@@ -253,6 +251,9 @@ mod approval_registry_tests {
     //!   isolated — resolving one must not affect another.
 
     use super::*;
+    // 父模块的 `use super::*` 已删（非测试构建下未使用），测试需要的 crate
+    // 根符号（HttpServerState / ws / record_approval_side_effect …）在此显式引入。
+    use crate::*;
 
     #[tokio::test]
     async fn request_returns_receiver_resolve_true_yields_true() {

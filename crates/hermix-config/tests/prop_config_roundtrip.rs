@@ -9,6 +9,7 @@ use proptest::prelude::*;
 use std::collections::HashMap;
 
 use hermix_config::{
+    SecurityConfig,
     AdvancedSettingsConfig, AgentLoopBehaviorConfig, ApprovalConfig, CompactionConfig,
     DailyReset, GatewayConfig, IdleReset, PlatformConfig, ProfileConfig,
     SessionConfig, SessionResetPolicy, SkillsSettings, SmartModelRoutingConfig,
@@ -130,6 +131,7 @@ fn arb_gateway_config() -> impl Strategy<Value = GatewayConfig> {
                 advanced: AdvancedSettingsConfig::default(),
                 proxy: None,
                 approval: ApprovalConfig::default(),
+                security: SecurityConfig::default(),
                 skills: SkillsSettings::default(),
                 tools_config: ToolsSettings::default(),
                 mcp_servers: Vec::new(),
