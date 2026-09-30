@@ -105,7 +105,7 @@ Key crates:
 - `hermix-server` has `test-helpers` feature for integration tests
 - PR禁区: no multi-platform distribution, no external resource sensing, no cross-platform targets
 - **Agent Loop 正常流程**: LLM 思考 → `<think>` 进折叠块；LLM 输出可见文本 → Markdown 渲染给用户；LLM 调工具 → 结果写入 ctx → 下轮 LLM 自然总结。系统提示含 `THINKING_DISCIPLINE_GUIDANCE` + `REPORT_SECTIONING`（单一真相源，think.full 与 format.short 运行时拼接）+ `TOOL_FAILURE_GUIDANCE` 等（directions.rs）。`TOOL_EXECUTION_SUMMARY_GUIDANCE` / `STOPPING_SUMMARY_GUIDANCE` 已删除（曾导致 filler 压力），勿再引用。
-- **Finalize 路径 (简化 2026-07-09)**: `process_post_response` 返回 `Finalize` 时，有可见文本 → 直接结束；无可见文本（thinking-only）→ 落入 `decide_empty_response` 处理边缘情况（Codex ack / 自治模式预工具 nudge）。**不再有多轮 nudge，不再有 PatchLastAssistant** — 信任 LLM + 系统提示自然工作，不伪造 LLM 输出。
+- **Finalize 路径 (简化 2026-07-09)**: `process_post_response` 返回 `Finalize` 时，有可见文本 → 直接结束；无可见文本（thinking-only）→ 落入 `decide_empty_response` 处理边缘情况（Codex ack / 自治模式预工具 nudge）。**不再有多轮 nudge，不再有 PatchLastAssistant** — 信任 LLM + 系统提示自然工作，不伪造 LLM 输出。**例外（2026-09-29）**：自治模式下可见文本 + 尚未用过任何工具 + nudge 额度在（`nudge_eligible`）时仍会发**一次**预工具 nudge——该豁免位于 run_loop.rs 空名过滤 finalize 处，勿删。
 - **架构改进计划**: 见 `docs/ARCHITECTURE_REFACTOR_PLAN.md` §6 — Agent Loop 核心引擎修复进度跟踪
 - **显式状态机 (AL-6)**: `LoopPhase` 枚举在 `agent_loop/types.rs` 中定义 9 个阶段，通过 `tracing::debug!` 在 `run()` / `run_stream()` 每个阶段边界发射
 - **统一工具验证 (AL-7)**: `tool_call_validator.rs` 模块集中了无效名称 + 无效 JSON 验证逻辑，返回 `ValidationOutcome` + `ApplyResult` 枚举

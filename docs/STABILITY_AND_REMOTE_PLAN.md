@@ -178,6 +178,31 @@ clarify 300s 超时、优雅关机全量落库。
 
 ## 3. 工作模式：接线，而不是重建
 
+> **2026-09-29 完成记录**：第 1 根线（DomainMode 接线）已落地——
+> `prompt_assembly::resolve_domain_mode` 在三处 `RouteContext` 构造点接入
+> 检测/覆盖，域指令与工具加权真正生效。另按用户明确要求，**加了手动
+> 「工作/编码模式」开关**（Composer chip → `SendMessageRequest.domain_override`
+> → `AgentConfig.domain_override` → 检测器 pin），推翻本节原有的「明确不做
+> 手动切换 UI」——用户偏好优先。
+>
+> **2026-09-29 追加**：第 2 根线也已落地——`ChatView` 不再丢弃
+> `expert.toolset`，经 `SendMessageRequest.expert_toolset` 传后端，
+> `send_message`/`send_message_stream` 用 `ToolRegistry::toolset_members`
+> 展开成组成员并进本轮白名单（`allowed` 是过滤集，扩大只加不禁——
+> floor 与用户已启用集合不受影响，未知组名 no-op）。
+>
+> **2026-09-29 第 3 根线：按「删假信号」处理**。ThinkingMode Quick/Deep 算完
+> 只进日志、不改任何行为，而它的组合器 `ModeComposition` 整模块从无非测试调用方
+> ——按本节自己的建议（「若近期不做，删除芯片展示避免假信号」）直接删除。连带清掉
+> 同一簇死代码：`ModeComposition`（378 行）、`DomainPreset` 的 5 个无人读字段
+> （`priority_tools` / `safe_write_override` / `convergence_signals` /
+> `max_stall_turns` / `output_style`）+ `ConvergenceSignal` 枚举、
+> `ModeGate` / `ModeGateDecision` / `is_write_tool`（`orchestrator.rs` 600→约
+> 150 行）、`DomainModeDetector` 的惯性 / 工具历史机制（检测器每 turn 新建，
+> 那些状态永远攒不起来）。
+>
+> **三根线至此全部了结**：第 1、2 根已接线，第 3 根已删除。
+
 ### 3.1 事实
 
 | 机制 | 自称 | 实况 |
