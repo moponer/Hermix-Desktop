@@ -21,12 +21,10 @@
 //!
 //! ## 集成
 //!
-//! `AgentLoop::run()` 在 Prefetch 阶段调 `ModeComposition::compose()`，
-//! 生成 `DomainDetection` + `DomainPreset`，注入到后续的：
-//! - 系统提示词构建（`DirRoute::DomainMode`）
-//! - 工具路由（`priority_tools` 加分）
-//! - 安全门控（`safe_write_override`）
-//! - 收敛检测（`max_stall_turns`）
+//! `prompt_assembly::resolve_domain_mode` 每 turn 跑一次检测（用户 pin
+//! 优先，否则 `DomainModeDetector::detect`），把 `DomainMode` 注入
+//! `RouteContext.domain_mode`，由 `DirRoute::DomainMode` 门控本文件的
+//! 域指令块。这是该模块当前唯一的生产消费路径。
 
 use serde::{Deserialize, Serialize};
 
@@ -111,60 +109,22 @@ impl std::fmt::Display for DomainMode {
 }
 
 // ---------------------------------------------------------------------------
-// ConvergenceSignal — 收敛信号
-// ---------------------------------------------------------------------------
-
-/// 该模式下"任务完成"的判定信号。
-/// 用于 `ConvergenceDetector` 的 advisory warning 逻辑：
-/// 当检测器发现 stall 时，检查是否已满足收敛信号，
-/// 如果满足则不触发 warning（任务确实完成了）。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ConvergenceSignal {
-    /// 代码模式：编译通过 + 测试通过
-    CompileAndTestPass,
-    /// 研究模式：已收集 N 个独立来源
-    SufficientSources(usize),
-    /// 写作模式：用户确认满意
-    UserSatisfied,
-    /// 操作模式：目标文件/进程状态已达成
-    TargetStateReached,
-    /// 通用：LLM 自行判断完成
-    LlmSelfDetermined,
-}
-
-// ---------------------------------------------------------------------------
 // DomainPreset — 域预设配置
 // ---------------------------------------------------------------------------
 
-/// 一个 Domain Mode 的完整预设。
-/// 在 per-turn 级别由 `ModeComposition::compose()` 生成，
-/// 注入到工具路由、系统提示词、安全门控、收敛检测。
+/// 一个 Domain Mode 的系统提示词预设 —— 当前只剩「注入哪段域指令」一件事。
+///
+/// 2026-09-29 瘦身：原字段 `priority_tools` / `safe_write_override` /
+/// `convergence_signals` / `max_stall_turns` / `output_style` 的唯一写入方是
+/// `hermix_agent::mode_composition`，而那个模块从没有非测试调用方（整簇死代码已
+/// 删除）；其消费方（工具路由加权、`ModeGate`、收敛阈值）同样从未接线。将来真要
+/// 复活某项能力时，按需加字段 + 补消费方，不提前预留。
 #[derive(Debug, Clone)]
 pub struct DomainPreset {
     /// 对应的域模式
     pub mode: DomainMode,
-
-    // —— 工具优先级 ——
-    /// 在 `ToolSchemaRouter` 中给这些工具加分（+5.0）
-    pub priority_tools: &'static [&'static str],
-    /// 在 Ask 执行模式下也允许的"安全写入工具"
-    /// （例如 Code+Ask 允许 write_file，但 Research+Ask 不允许）
-    pub safe_write_override: &'static [&'static str],
-
-    // —— 系统提示词 ——
-    /// 附加到系统提示词的 domain 指令块
+    /// 附加到系统提示词的 domain 指令块（`Chat` 为空串 —— 不注入）
     pub system_directive: &'static str,
-
-    // —— 收敛策略 ——
-    /// 该模式下"任务完成"的判定信号
-    pub convergence_signals: &'static [ConvergenceSignal],
-    /// 最大连续无进展轮数（超过后 advisory warning）
-    pub max_stall_turns: u32,
-
-    // —— 输出风格 ——
-    /// 输出风格引导文本
-    pub output_style: &'static str,
 }
 
 // ---------------------------------------------------------------------------
@@ -223,129 +183,35 @@ pub fn preset_for(mode: DomainMode) -> &'static DomainPreset {
     }
 }
 
-// 静态收敛信号常量
-static CODE_CONVERGENCE: &[ConvergenceSignal] = &[
-    ConvergenceSignal::CompileAndTestPass,
-    ConvergenceSignal::LlmSelfDetermined,
-];
-static RESEARCH_CONVERGENCE: &[ConvergenceSignal] = &[
-    ConvergenceSignal::SufficientSources(3),
-    ConvergenceSignal::LlmSelfDetermined,
-];
-static WRITE_CONVERGENCE: &[ConvergenceSignal] = &[
-    ConvergenceSignal::UserSatisfied,
-    ConvergenceSignal::LlmSelfDetermined,
-];
-static OPERATE_CONVERGENCE: &[ConvergenceSignal] = &[
-    ConvergenceSignal::TargetStateReached,
-    ConvergenceSignal::LlmSelfDetermined,
-];
-static CHAT_CONVERGENCE: &[ConvergenceSignal] = &[ConvergenceSignal::LlmSelfDetermined];
-
 pub static CODE_PRESET: DomainPreset = DomainPreset {
     mode: DomainMode::Code,
-    priority_tools: &[
-        "read_file",
-        "write_file",
-        "patch",
-        "search_files",
-        "terminal",
-        "list_files",
-    ],
-    // 代码模式下即使是 Ask 也允许 write_file（用户可能只是
-    // 想看代码后做小修改），但不允许 terminal
-    safe_write_override: &["write_file", "patch"],
     system_directive: CODE_DOMAIN_DIRECTIVE,
-    convergence_signals: CODE_CONVERGENCE,
-    max_stall_turns: 5,
-    output_style: "代码优先。用代码块展示修改，用 diff 展示变更。说明控制在 3 行以内。",
 };
 
 pub static RESEARCH_PRESET: DomainPreset = DomainPreset {
     mode: DomainMode::Research,
-    priority_tools: &[
-        "web_search",
-        "web_extract",
-        "browser_navigate",
-        "browser_snapshot",
-        "read_pdf",
-        "memory",
-        "session_search",
-    ],
-    safe_write_override: &[],
     system_directive: RESEARCH_DOMAIN_DIRECTIVE,
-    convergence_signals: RESEARCH_CONVERGENCE,
-    max_stall_turns: 7,
-    output_style: "结构化报告。用标题分区，引用来源链接，给出明确结论。",
 };
 
 pub static WRITE_PRESET: DomainPreset = DomainPreset {
     mode: DomainMode::Write,
-    priority_tools: &[
-        "write_file",
-        "read_file",
-        "read_pdf",
-        "web_search",
-    ],
-    safe_write_override: &["write_file"],
     system_directive: WRITE_DOMAIN_DIRECTIVE,
-    convergence_signals: WRITE_CONVERGENCE,
-    max_stall_turns: 4,
-    output_style: "完整文档输出。用 Markdown 结构化，注意段落层次和逻辑连贯性。",
 };
 
 pub static OPERATE_PRESET: DomainPreset = DomainPreset {
     mode: DomainMode::Operate,
-    priority_tools: &[
-        "list_files",
-        "move_file",
-        "storage_analyzer",
-        "storage_clean",
-        "markitdown",
-        "terminal",
-    ],
-    safe_write_override: &[],
     system_directive: OPERATE_DOMAIN_DIRECTIVE,
-    convergence_signals: OPERATE_CONVERGENCE,
-    max_stall_turns: 3,
-    output_style: "操作日志风格。每步操作前说明意图，操作后确认结果。",
 };
 
 pub static CHAT_PRESET: DomainPreset = DomainPreset {
     mode: DomainMode::Chat,
-    priority_tools: &["memory"],
-    safe_write_override: &[],
     system_directive: "",
-    convergence_signals: CHAT_CONVERGENCE,
-    max_stall_turns: 2,
-    output_style: "自然对话。像真人一样完整、有温度地交流:该展开时展开,该收住时收住;不堆砌格式,也不敷衍成只言片语。",
 };
+
 
 // ---------------------------------------------------------------------------
 // 工具到域的映射
 // ---------------------------------------------------------------------------
-
-/// 根据工具名推断它属于哪个工作域。
-/// 用于 L1 上下文信号：如果最近使用的工具属于某个域，
-/// 则当前输入可能也在同一个域。
-pub fn tool_to_domain(tool_name: &str) -> Option<DomainMode> {
-    match tool_name {
-        // 代码工具
-        "read_file" | "write_file" | "patch" | "apply_patch" | "edit_file" | "search_files"
-        | "terminal" | "list_files" => Some(DomainMode::Code),
-        // 研究工具
-        "web_search" | "web_extract" | "browser_navigate" | "browser_snapshot"
-        | "browser_click" | "browser_type" | "browser_scroll" | "browser_vision"
-        | "browser_wait_for" | "read_pdf" | "session_search" => Some(DomainMode::Research),
-        // 操作工具
-        "move_file" | "storage_analyzer" | "storage_clean" | "file_converter"
-        | "code_execution" => Some(DomainMode::Operate),
-        // 通用工具 — 不映射到特定域
-        "memory" | "skill_manage" | "todo" | "task_create" | "task_update" | "task_list"
-        | "task_get" | "compact_tool_chain" => None,
-        _ => None,
-    }
-}
 
 /// 判断 workspace 路径是否是代码项目。
 /// 通过检查常见代码项目标识文件来推断。
@@ -438,47 +304,11 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_code_preset_has_code_tools() {
-        let p = preset_for(DomainMode::Code);
-        assert!(p.priority_tools.contains(&"read_file"));
-        assert!(p.priority_tools.contains(&"write_file"));
-        assert!(p.priority_tools.contains(&"terminal"));
-    }
 
-    #[test]
-    fn test_code_preset_safe_write_override() {
-        let p = preset_for(DomainMode::Code);
-        assert!(p.safe_write_override.contains(&"write_file"));
-        // terminal 不在 safe_write_override 中
-        assert!(!p.safe_write_override.contains(&"terminal"));
-    }
 
-    #[test]
-    fn test_research_preset_no_write_override() {
-        let p = preset_for(DomainMode::Research);
-        assert!(p.safe_write_override.is_empty());
-    }
 
-    #[test]
-    fn test_write_preset_has_write_tools() {
-        let p = preset_for(DomainMode::Write);
-        assert!(p.priority_tools.contains(&"write_file"));
-    }
 
-    #[test]
-    fn test_operate_preset_has_file_ops() {
-        let p = preset_for(DomainMode::Operate);
-        assert!(p.priority_tools.contains(&"move_file"));
-        assert!(p.priority_tools.contains(&"storage_analyzer"));
-    }
 
-    #[test]
-    fn test_chat_preset_minimal() {
-        let p = preset_for(DomainMode::Chat);
-        assert!(p.system_directive.is_empty());
-        assert_eq!(p.max_stall_turns, 2);
-    }
 
     #[test]
     fn test_directive_non_empty_except_chat() {
@@ -492,43 +322,11 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_convergence_signals_non_empty() {
-        for mode in DomainMode::all() {
-            let p = preset_for(*mode);
-            assert!(!p.convergence_signals.is_empty(), "no convergence signals for {mode:?}");
-        }
-    }
 
-    // -- tool_to_domain --
 
-    #[test]
-    fn test_tool_to_domain_code_tools() {
-        assert_eq!(tool_to_domain("read_file"), Some(DomainMode::Code));
-        assert_eq!(tool_to_domain("write_file"), Some(DomainMode::Code));
-        assert_eq!(tool_to_domain("terminal"), Some(DomainMode::Code));
-        assert_eq!(tool_to_domain("search_files"), Some(DomainMode::Code));
-    }
 
-    #[test]
-    fn test_tool_to_domain_research_tools() {
-        assert_eq!(tool_to_domain("web_search"), Some(DomainMode::Research));
-        assert_eq!(tool_to_domain("browser_navigate"), Some(DomainMode::Research));
-        assert_eq!(tool_to_domain("read_pdf"), Some(DomainMode::Research));
-    }
 
-    #[test]
-    fn test_tool_to_domain_operate_tools() {
-        assert_eq!(tool_to_domain("move_file"), Some(DomainMode::Operate));
-        assert_eq!(tool_to_domain("storage_analyzer"), Some(DomainMode::Operate));
-    }
 
-    #[test]
-    fn test_tool_to_domain_generic_returns_none() {
-        assert_eq!(tool_to_domain("memory"), None);
-        assert_eq!(tool_to_domain("skill_manage"), None);
-        assert_eq!(tool_to_domain("unknown_tool"), None);
-    }
 
     // -- is_code_workspace --
 

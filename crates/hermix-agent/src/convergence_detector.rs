@@ -169,7 +169,9 @@ impl ConvergenceDetector {
     /// - Write: 4 (writing should produce visible text quickly)
     /// - Operate: 3 (file ops should be fast)
     /// - Chat: 2 (no tools expected)
-    /// Called once per turn from `ModeComposition::preset.max_stall_turns`.
+    /// (原注释称由 `ModeComposition::preset.max_stall_turns` 每 turn 注入——
+    ///  那个模块与该字段已随 2026-09-29 死代码清理删除；本检测器现按构造
+    ///  参数使用，调用方自行传入阈值。)
     #[allow(dead_code)]
     pub(crate) fn apply_domain_max_stall(&mut self, max_stall_turns: u32) {
         if max_stall_turns > 0 {

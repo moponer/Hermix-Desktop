@@ -19,7 +19,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, Command};
+use tokio::process::Child;
 use tokio::sync::Mutex;
 
 use hermix_core::AgentError;
@@ -163,7 +163,7 @@ impl CopilotAcpClient {
     // -- Internal methods ----------------------------------------------------
 
     async fn spawn_subprocess(&self) -> Result<AcpConnection, AgentError> {
-        let mut cmd = Command::new(&self.config.command);
+        let mut cmd = hermix_core::proc::cmd_tokio(&self.config.command);
         cmd.args(&self.config.args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

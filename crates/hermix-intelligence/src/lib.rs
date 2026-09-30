@@ -51,7 +51,7 @@ pub use thinking::{
 
 // Re-export domain mode types (L1 — Domain Mode)
 pub use domain_mode::{
-    is_code_workspace, preset_for, tool_to_domain, ConvergenceSignal, DomainMode, DomainPreset,
+    is_code_workspace, preset_for, DomainMode, DomainPreset,
     CODE_DOMAIN_DIRECTIVE, RESEARCH_DOMAIN_DIRECTIVE, WRITE_DOMAIN_DIRECTIVE,
     OPERATE_DOMAIN_DIRECTIVE,
 };

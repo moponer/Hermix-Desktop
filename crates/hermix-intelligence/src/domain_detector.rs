@@ -16,12 +16,8 @@
 //!    │         ├── 操作意图词 ("整理"/"移动"/"删除" → Operate)
 //!    │         └── 闲聊信号 ("你好"/"谢谢" → Chat)
 //!    │
-//!    ├──► [L1: 上下文信号]      ──► confidence ±0.2
-//!    │         │
-//!    │         ├── workspace 路径包含代码项目 (→ Code +0.2)
-//!    │         ├── 最近 N 轮的工具使用历史
-//!    │         ├── 最近 N 轮的 Domain Mode（惯性）
-//!    │         └── 当前激活的 toolsets
+//!    ├──► [L1: workspace 信号]  ──► confidence +0.2
+//!    │         workspace 是代码项目（存在 Cargo.toml / package.json…）
 //!    │
 //!    └──► [用户手动覆盖]        ──► confidence 1.0（最高优先级）
 //! ```
@@ -31,11 +27,11 @@
 //! `AgentLoop::run()` 在 Prefetch 阶段调 `detect()`，
 //! 结果注入到 `ModeComposition`。
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::domain_mode::{is_code_workspace, tool_to_domain, DomainMode};
+use crate::domain_mode::{is_code_workspace, DomainMode};
 
 // ---------------------------------------------------------------------------
 // 检测结果类型
@@ -51,8 +47,6 @@ pub enum DetectionSource {
     KeywordHighConfidence,
     /// L0 + L1 综合判断（中置信度 0.5-0.8）
     KeywordAndContext,
-    /// L2 LLM 分类器（预留，当前未实现）
-    LlmClassifier,
     /// 默认值（低置信度 < 0.5）
     Default,
 }
@@ -65,10 +59,6 @@ pub enum SignalType {
     FileExtension,
     /// 关键词命中
     Keyword,
-    /// 工具使用历史
-    ToolHistory,
-    /// 域模式惯性
-    ModeInertia,
     /// workspace 上下文
     WorkspaceContext,
     /// 短文本信号
@@ -115,16 +105,6 @@ impl DomainDetection {
 /// L0 / L1 检测的可调参数
 #[derive(Debug, Clone)]
 pub struct DomainDetectConfig {
-    // —— 域模式惯性 ——
-    /// 最近 N 轮同域 → 加权（默认 0.15）
-    pub inertia_weight: f32,
-    /// 惯性窗口大小（默认 3）
-    pub inertia_window: usize,
-
-    // —— 工具历史 ——
-    /// 最近使用的工具对应的域加分（默认 0.15）
-    pub tool_history_weight: f32,
-
     // —— workspace 上下文 ——
     /// workspace 是代码项目时给 Code 加分（默认 0.2）
     pub workspace_code_bonus: f32,
@@ -142,9 +122,6 @@ pub struct DomainDetectConfig {
 impl Default for DomainDetectConfig {
     fn default() -> Self {
         Self {
-            inertia_weight: 0.15,
-            inertia_window: 3,
-            tool_history_weight: 0.15,
             workspace_code_bonus: 0.2,
             llm_classifier_threshold: 0.5,
             short_text_threshold: 15,
@@ -282,11 +259,9 @@ fn char_count(s: &str) -> usize {
 #[derive(Debug, Clone)]
 pub struct DomainModeDetector {
     config: DomainDetectConfig,
-    /// 最近 N 轮的检测历史（用于惯性判断）
-    history: VecDeque<DomainMode>,
-    /// 最近 N 轮使用的工具名（用于上下文信号）
-    recent_tools: VecDeque<String>,
-    /// 用户手动覆盖（None = 自动检测）
+    /// 用户手动覆盖（None = 自动检测）。由
+    /// `prompt_assembly::resolve_domain_mode` 每 turn 用
+    /// `AgentConfig.domain_override` 设置。
     manual_override: Option<DomainMode>,
 }
 
@@ -301,8 +276,6 @@ impl DomainModeDetector {
     pub fn new() -> Self {
         Self {
             config: DomainDetectConfig::default(),
-            history: VecDeque::with_capacity(8),
-            recent_tools: VecDeque::with_capacity(8),
             manual_override: None,
         }
     }
@@ -311,8 +284,6 @@ impl DomainModeDetector {
     pub fn with_config(config: DomainDetectConfig) -> Self {
         Self {
             config,
-            history: VecDeque::with_capacity(8),
-            recent_tools: VecDeque::with_capacity(8),
             manual_override: None,
         }
     }
@@ -325,19 +296,6 @@ impl DomainModeDetector {
     /// 返回当前手动覆盖设置
     pub fn manual_override(&self) -> Option<DomainMode> {
         self.manual_override
-    }
-
-    /// 记录一轮工具使用（在工具执行后调用）
-    pub fn record_tool_use(&mut self, tool_name: &str) {
-        self.recent_tools.push_back(tool_name.to_string());
-        if self.recent_tools.len() > 8 {
-            self.recent_tools.pop_front();
-        }
-    }
-
-    /// 返回最近 N 轮的域模式历史
-    pub fn history_snapshot(&self) -> Vec<DomainMode> {
-        self.history.iter().copied().collect()
     }
 
     // -----------------------------------------------------------------------
@@ -518,31 +476,6 @@ impl DomainModeDetector {
             }
         }
 
-        // 2b. 工具使用历史
-        if let Some(last_tool) = self.recent_tools.back() {
-            if let Some(domain) = tool_to_domain(last_tool) {
-                let bonus = self.config.tool_history_weight;
-                *scores.entry(domain).or_default() += bonus;
-                signals.push(DetectionSignal {
-                    signal_type: SignalType::ToolHistory,
-                    weight: bonus,
-                    detail: format!("最近工具 {} → {:?}", last_tool, domain),
-                });
-            }
-        }
-
-        // 2c. 域模式惯性
-        if let Some(inertia) = self.calculate_inertia() {
-            *scores.entry(inertia.mode).or_default() += inertia.weight;
-            signals.push(DetectionSignal {
-                signal_type: SignalType::ModeInertia,
-                weight: inertia.weight,
-                detail: format!(
-                    "最近 {} 轮都是 {:?}",
-                    self.config.inertia_window, inertia.mode
-                ),
-            });
-        }
 
         // —— 选出 top-1 ——
         let (best_mode, best_score) = scores
@@ -577,7 +510,6 @@ impl DomainModeDetector {
             } else {
                 DomainMode::Chat
             };
-            self.record_history(mode);
             return DomainDetection {
                 mode,
                 confidence: best_score,
@@ -592,9 +524,6 @@ impl DomainModeDetector {
             DetectionSource::KeywordAndContext
         };
 
-        // —— 记录历史 ——
-        self.record_history(best_mode);
-
         DomainDetection {
             mode: best_mode,
             confidence: best_score,
@@ -603,47 +532,8 @@ impl DomainModeDetector {
         }
     }
 
-    /// 计算域模式惯性加成
-    fn calculate_inertia(&self) -> Option<InertiaResult> {
-        if self.history.is_empty() {
-            return None;
-        }
-        let window: Vec<DomainMode> = self
-            .history
-            .iter()
-            .rev()
-            .take(self.config.inertia_window)
-            .copied()
-            .collect();
-
-        if window.is_empty() {
-            return None;
-        }
-
-        // 检查窗口内是否全部同域
-        let first = window[0];
-        if window.iter().all(|m| *m == first) && window.len() >= 2 {
-            return Some(InertiaResult {
-                mode: first,
-                weight: self.config.inertia_weight,
-            });
-        }
-
-        None
-    }
-
-    fn record_history(&mut self, mode: DomainMode) {
-        self.history.push_back(mode);
-        if self.history.len() > 8 {
-            self.history.pop_front();
-        }
-    }
 }
 
-struct InertiaResult {
-    mode: DomainMode,
-    weight: f32,
-}
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -821,51 +711,11 @@ mod tests {
         assert_eq!(r.mode, DomainMode::Code);
     }
 
-    // -- 域模式惯性 --
 
-    #[test]
-    fn test_mode_inertia_after_3_same_turns() {
-        let mut d = DomainModeDetector::new();
-        // 3 轮 Code
-        d.detect("read main.rs", None);
-        d.detect("fix the bug", None);
-        d.detect("run tests", None);
-        // 第 4 轮用一个有弱 Code 信号的 query，惯性应推向 Code
-        let r = d.detect("帮我看看这个函数", None);
-        assert_eq!(r.mode, DomainMode::Code);
-        // 应该有惯性信号
-        assert!(r.signals.iter().any(|s| s.signal_type == SignalType::ModeInertia));
-    }
 
-    #[test]
-    fn test_no_inertia_when_modes_differ() {
-        let mut d = DomainModeDetector::new();
-        d.detect("read main.rs", None);  // Code
-        d.detect("搜索一下", None);       // Research
-        let r = d.detect("帮我看看", None);
-        // 没有惯性，应该不会有 ModeInertia 信号
-        assert!(!r.signals.iter().any(|s| s.signal_type == SignalType::ModeInertia));
-    }
 
-    // -- 工具历史 --
 
-    #[test]
-    fn test_tool_history_affects_detection() {
-        let mut d = DomainModeDetector::new();
-        d.record_tool_use("web_search");
-        let r = d.detect("帮我看看这个", None);
-        // web_search → Research，应该给 Research 加分
-        assert!(r.signals.iter().any(|s| s.signal_type == SignalType::ToolHistory));
-    }
 
-    #[test]
-    fn test_tool_history_code_tool() {
-        let mut d = DomainModeDetector::new();
-        d.record_tool_use("read_file");
-        let r = d.detect("帮我看看", None);
-        // read_file → Code，加上 workspace bonus，应该倾向 Code
-        assert!(r.signals.iter().any(|s| s.signal_type == SignalType::ToolHistory));
-    }
 
     // -- 检测来源分类 --
 
@@ -927,27 +777,8 @@ mod tests {
         assert!(r.signals.len() >= 2, "expected >= 2 signals, got {}", r.signals.len());
     }
 
-    // -- 历史记录 --
 
-    #[test]
-    fn test_history_snapshot() {
-        let mut d = DomainModeDetector::new();
-        d.detect("read main.rs", None);
-        d.detect("搜索一下", None);
-        let snap = d.history_snapshot();
-        assert_eq!(snap.len(), 2);
-        assert_eq!(snap[0], DomainMode::Code);
-        assert_eq!(snap[1], DomainMode::Research);
-    }
 
-    #[test]
-    fn test_history_caps_at_8() {
-        let mut d = DomainModeDetector::new();
-        for _ in 0..15 {
-            d.detect("read main.rs", None);
-        }
-        assert!(d.history_snapshot().len() <= 8);
-    }
 
     // -- 自定义配置 --
 
