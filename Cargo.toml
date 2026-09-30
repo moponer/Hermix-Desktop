@@ -154,6 +154,9 @@ regex = "1"
 async-trait = "0.1"
 uuid = { version = "1", features = ["v4", "serde"] }
 base64 = "0.22"
+# IM 通道：QQ 开放平台扫码绑定返回的 bot secret 是 AES-256-GCM 密文，
+# 解不开就只能让用户手动去控制台抄 secret。
+aes-gcm = "0.10"
 bytes = "1"
 sha2 = "0.10"
 url = "2"

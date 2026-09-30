@@ -8,6 +8,7 @@
 //! Policy HTTP routes are intentionally omitted (Hermes Python does not expose them).
 
 pub mod dashboard;
+pub mod test_env;
 mod automation_trigger;
 mod orchestration_bus;
 mod task_tracker_adapter;
@@ -139,6 +140,7 @@ Some(chrono::Utc::now().timestamp_millis() + (secs as i64) * 1000)
 /// message on the same WebSocket, which looks up and completes the channel.
 
 pub mod approval;
+pub mod channels;
 pub mod coalescer;
 pub mod pairing;
 pub mod request_signature;
@@ -247,8 +249,9 @@ pub fn router(state: HttpServerState) -> Router {
     let mut app = Router::new()
         .route("/health", get(health))
         .route("/shutdown", get(shutdown_server))
-        // §5.5 第 3/4 层：设备配对。complete 对 Unpaired 开放（信任建立本身），
-        // 其余端点 handler 内强制 Local。
+        // §5.5 第 3/4 层：设备配对。complete 与 /pair 落地页对 Unpaired 开放
+        // （信任建立本身），其余端点 handler 内强制 Local。
+        .route("/pair", get(pairing::pair_page))
         .route(
             "/api/pairing/sessions",
             post(pairing::create_pairing_session),
@@ -262,6 +265,15 @@ pub fn router(state: HttpServerState) -> Router {
         // §5.5 P6：审计日志读端点（DiagnosticsTab 数据面）。仅 Local，
         // 与 revoke_device 同一 DeviceManagement 鉴权面。
         .route("/api/pairing/audit", get(pairing::list_audit))
+        // IM 通道（QQ / 企业微信官方机器人）。全部仅 Local：铸码、扫码绑定
+        // 都是本机操作，凭据是能直接操控本机的机器人密钥。
+        .route("/api/channels/pairing-code", post(channels::create_pairing_code))
+        .route("/api/channels/status", get(channels::channel_status))
+        .route("/api/channels/bind/status", get(channels::bind_status))
+        .route("/api/channels/bind/start", post(channels::bind_start))
+        .route("/api/channels/bind/poll", get(channels::bind_poll))
+        .route("/api/channels/bind/cancel", post(channels::bind_cancel))
+        .route("/api/channels/bind/unbind", post(channels::bind_unbind))
         .route("/v1/sessions", get(routes::list_sessions).post(routes::create_session))
         .route(
             "/v1/sessions/{session_id}",
@@ -449,6 +461,14 @@ pub async fn run_server_with_tls(
     let agent_service_for_shutdown = state.agent_service.clone();
     let active_handles_for_shutdown = state.active_handles.clone();
 
+    // IM 通道（QQ / 企业微信官方机器人）。env 门控：凭据成对齐全才启。
+    // 它自己出站连 IM 网关、不占本机端口，所以和是否开远程访问无关——
+    // 这也意味着它的安全边界完全落在配对码 + allowlist 上，不在监听器上。
+    let im_runtime = channels::ImRuntime::start(state.clone());
+    // 登记进全局槽位：绑定/解绑后凭据变化可就地热重启通道，
+    // 不必让用户杀应用重开（见 channels::restart_runtime）。
+    channels::install_runtime(im_runtime.clone());
+
     // Shutdown signal: /shutdown endpoint sends `true`, graceful shutdown waits for it.
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
@@ -529,6 +549,9 @@ pub async fn run_server_with_tls(
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
         tickloop_mgr.stop().await;
+        if let Some(rt) = im_runtime.as_ref() {
+            rt.stop().await;
+        }
     };
 
     // §5.5 第 2 层：可选 TLS 监听器。plaintext 主监听器行为不变；

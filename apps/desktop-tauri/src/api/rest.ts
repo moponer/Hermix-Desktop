@@ -36,6 +36,10 @@ import type {
   ToolsetToggleResult,
   AnalyticsResponse,
   AnalyticsDebugResponse,
+  CatalogResponse,
+  CatalogInstall,
+  CatalogScanHit,
+  CatalogVerdict,
 } from "./types";
 
 // Transport switched from `fetch()` over `127.0.0.1:3000` to
@@ -147,6 +151,13 @@ export async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T>
     // Binary path — caller asked for a Blob, not JSON. We don't try
     // to infer here; `fetchJSONBinary` is the explicit choice.
     throw new Error("fetchJSON: response is binary; use fetchJSONBinary");
+  }
+  // 204 No Content / 空响应体（如 DELETE /api/pairing/devices/:id 成功时
+  // 后端返回 204 无 body）：没有可解析的内容，直接返回 undefined。
+  // 之前无条件 JSON.parse("") 抛 "Unexpected end of JSON input"，
+  // 撤销成功反被调用方当成失败弹 toast。
+  if (!reply.body || reply.body.trim() === "") {
+    return undefined as T;
   }
   try {
     return JSON.parse(reply.body) as T;
@@ -822,6 +833,70 @@ interface McpServerListResponse {
   }>;
   seeded?: boolean;
 }
+
+// ── MCP 社区目录 ──────────────────────────────────────────────
+
+/** 拉目录。`refresh=true` 跳过 24h 缓存强拉；网络失败时后端回退到上次缓存
+ *  （`fromCache` + `staleReason` 会如实告诉我们）。 */
+export const getMcpCatalog = async (refresh = false): Promise<CatalogResponse | null> => {
+  try {
+    const res = await fetchJSON<{
+      items: Array<{
+        id: string; title: string; description: string; version?: string; homepage?: string;
+        official: boolean; required_env: string[]; install: CatalogInstall;
+        title_zh?: string; description_zh?: string; category: string;
+        scan: { verdict: string; label: string; hits: CatalogScanHit[]; command_preview?: string };
+      }>;
+      fetched_at: number; from_cache: boolean; stale_reason?: string;
+    }>(`/api/mcp/catalog${refresh ? "?refresh=1" : ""}`);
+    return {
+      items: res.items.map((r) => ({
+        id: r.id,
+        title: r.title,
+        description: r.description,
+        version: r.version,
+        homepage: r.homepage,
+        official: r.official,
+        install: r.install,
+        requiredEnv: r.required_env ?? [],
+        titleZh: r.title_zh,
+        descriptionZh: r.description_zh,
+        category: r.category,
+        scan: {
+          verdict: r.scan.verdict as CatalogVerdict,
+          label: r.scan.label,
+          hits: r.scan.hits ?? [],
+          commandPreview: r.scan.command_preview,
+        },
+      })),
+      fetchedAt: res.fetched_at,
+      fromCache: res.from_cache,
+      staleReason: res.stale_reason,
+    };
+  } catch {
+    return null;
+  }
+};
+
+/** 从目录安装。只传 id + 可选 env；命令/URL 服务端从目录解析。
+ *  `acknowledge` 用于「需确认」档的二次放行（后端 428 时带 true 重发）。
+ *  返回失败原因（已中文化），由调用方展示。 */
+export const installMcpFromCatalog = async (
+  id: string,
+  env: Record<string, string>,
+  acknowledge: boolean,
+): Promise<{ ok: true; entry: McpServerEntry } | { ok: false; error: string; needAck: boolean }> => {
+  try {
+    const created = await fetchJSON<{ id: string; name: string; transport: string; command?: string; args?: string[]; url?: string; env?: Record<string, string>; enabled?: boolean; created_at?: string; description?: string }>(
+      "/api/mcp/catalog/install",
+      { method: "POST", body: JSON.stringify({ id, env, acknowledge }) },
+    );
+    return { ok: true, entry: fromBackend(created) };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { ok: false, error: msg, needAck: /需要确认后安装|428/.test(msg) };
+  }
+};
 
 export const getMcpServers = async (): Promise<McpServerEntry[]> => {
   try {

@@ -183,3 +183,7 @@ apps/desktop-tauri/_tmp_*
 # 临时工作产物（一次性脚本草稿 / 设计预览稿，保留在本地不入库）
 apps/desktop-tauri/src-tauri/.scratch/
 /design-previews/
+
+# IM channel credentials — do NOT commit (plaintext bot secret)
+im_channels.json
+hermix_home/im_channels.json

@@ -1,18 +1,15 @@
 //! §5.5 第 3/4 层：设备配对与凭证。
 //!
-//! 一次性配对会话（TTL 120s）+ 持久设备注册表（SQLite）。配对成功后
-//! 设备持有长寿命 device_token（只存哈希），后续请求以
-//! `Authorization: Bearer <device_token>` 出示，由 `security::request_guard`
-//! 校验后产出 `Origin::PairedDevice{device_id}` 进权限矩阵。
+//! 一次性配对会话（TTL 60min，QQ 式 6 位码）+ 持久设备注册表（SQLite）。
+//! 交互抄 cc-haha 的配对码模型：桌面生成 6 位码 + 二维码（扫码打开 /pair
+//! 落地页），手机在落地页提交配对；码一次性、重新生成即作废、共享错误
+//! 预算 5 次防枚举。配对成功后设备持有长寿命 device_token（只存哈希），
+//! 后续请求以 `Authorization: Bearer <device_token>` 出示，由
+//! `security::request_guard` 校验后产出 `Origin::PairedDevice{device_id}`
+//! 进权限矩阵。
 //!
-//! 本批为后端基础：手机客户端与二维码 UI 另批落地。与设计文档
-//! §5.5 第 4 层的差异（诚实记录）：
-//! - 请求签名（nonce+时间戳，对策 T4 重放）未实现——token 全程走
-//!   TLS 内，泄漏面由 TLS 承担；签名作为后续加固批次。
-//! - device_pubkey / scopes 列已建但恒空——签名与细粒度 scope 落地时启用。
-//!
-//! 防滥用（对策 T6 暴力破解）：配对码 120s TTL + 一次性消费 +
-//! 完成端点走全局 rate limiter；IP 级锁定随手机客户端批次补。
+//! 防滥用（对策 T6 暴力破解）：配对码 60min TTL + 一次性消费 + 错误预算
+//! （PAIRING_MAX_WRONG_ATTEMPTS，耗尽全部作废）+ 完成端点走全局 rate limiter。
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -24,7 +21,7 @@ use axum::response::IntoResponse;
 use axum::Json;
 use hermix_core::AgentError;
 use hermix_store::{OpenMode, Store};
-use rand::RngCore;
+use rand::{Rng, RngCore};
 use serde::{Deserialize, Serialize};
 
 use crate::state::HttpServerState;
@@ -49,8 +46,13 @@ pub fn request_source_ip(
     peer.map(|sa| sa.to_string())
 }
 
-/// 配对码有效期。设计文档 §5.5 第 3 层：120 秒。
-pub const PAIRING_TTL: Duration = Duration::from_secs(120);
+/// 配对码有效期（抄 cc-haha IM 配对码）：60 分钟、一次性、重新生成即作废。
+pub const PAIRING_TTL: Duration = Duration::from_secs(3600);
+
+/// 全局错误尝试预算：一次生成的配对码共享 N 次输错机会，用尽即全部作废
+/// （防 6 位码枚举；cc-haha 对应「同一用户 5 分钟内错 5 次限流」，
+/// 我们没有账号概念，收敛为按码代际计）。重新生成后预算清零。
+pub const PAIRING_MAX_WRONG_ATTEMPTS: u32 = 5;
 
 /// 审计事件枚举（字符串形式落盘，便于 `grep` / 跨语言消费）。
 /// 对应设计文档 §5.5 附表四类：pairing / auth / grant / revoke。
@@ -356,28 +358,51 @@ impl DeviceRegistry {
 // 配对会话（内存态，TTL + 一次性）
 // ---------------------------------------------------------------------------
 
-/// 二维码负载（设计文档 §5.5 第 3 层）。手机扫码后校验 cert_fingerprint
-/// 再用 pairing_token 完成配对。
-#[derive(Debug, Clone, Serialize)]
+/// 二维码负载（设计文档 §5.5 第 3 层；交互抄 cc-haha 配对码）。
+/// 二维码内容 = `pairing_url`（手机相机扫码直接打开 /pair 落地页）；
+/// 6 位 `pairing_code` 同时展示在桌面上，支持像 QQ 那样手动输入。
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct QrPayload {
     pub server_id: String,
     pub host: String,
     pub port: u16,
     pub cert_fingerprint: String,
-    pub pairing_token: String,
+    pub pairing_code: String,
+    pub pairing_url: String,
     pub proto_version: u32,
 }
 
 struct PairingSession {
     expires_at: Instant,
     consumed: bool,
-    payload: QrPayload,
+    /// `None` = 只有 6 位码、没有二维码负载（IM 通道用：码是打在 QQ 私聊里
+    /// 手动输进去的，本来就不需要 pairing_url 和证书指纹）。
+    payload: Option<QrPayload>,
+}
+
+/// 某个来源的失败预算。
+struct Attempt {
+    count: u32,
+    first_at: Instant,
 }
 
 /// 配对会话管理器（进程内）。一次性：完成或过期即失效。
 pub struct PairingSessions {
-    inner: Mutex<HashMap<String, PairingSession>>, // key = pairing_token
+    inner: Mutex<HashMap<String, PairingSession>>, // key = 6 位配对码
+    /// 按来源分桶的失败预算。
+    ///
+    /// 分桶而不是全局计数：6 位码只有一百万种组合，防穷举靠的是「猜 5 次
+    /// 就得重新生成」。但全局计数意味着**任何**一次错误尝试都算在所有人生
+    /// 头上——一个在 IM 里乱发消息的人就能把桌面端自己的扫码配对一起锁死。
+    /// 按来源分桶后，预算耗尽只影响那个人自己。
+    attempts: Mutex<HashMap<String, Attempt>>,
 }
+
+/// 失败预算的统计窗口。超窗自动归零，所以偶尔手滑不会永久锁死。
+const ATTEMPT_WINDOW: Duration = Duration::from_secs(600);
+
+/// 浏览器扫码配对用的桶名。`create` 生成新码时清零的就是它。
+const BUCKET_BROWSER: &str = "browser";
 
 impl Default for PairingSessions {
     fn default() -> Self {
@@ -385,11 +410,61 @@ impl Default for PairingSessions {
     }
 }
 
+/// `consume` 的结果。Locked 与 Invalid 分开返回：前端能区分
+/// 「输错太多次已锁定，请重新生成」vs「配对码无效」两种提示。
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConsumeOutcome {
+    Ok(QrPayload),
+    /// 码有效，但本来就没有二维码负载（IM 通道发的码）。
+    OkCode,
+    Invalid,
+    Locked,
+}
+
 impl PairingSessions {
     pub fn new() -> Self {
         Self {
             inner: Mutex::new(HashMap::new()),
+            attempts: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// 某个来源的预算是否已耗尽（滑动窗口内计满 `PAIRING_MAX_WRONG_ATTEMPTS`）。
+    fn attempts_exhausted(&self, bucket: &str) -> bool {
+        let mut map = self.attempts.lock().expect("pairing attempts lock");
+        let now = Instant::now();
+        let Some(a) = map.get_mut(bucket) else {
+            return false;
+        };
+        if now.duration_since(a.first_at) >= ATTEMPT_WINDOW {
+            map.remove(bucket);
+            return false;
+        }
+        a.count >= PAIRING_MAX_WRONG_ATTEMPTS
+    }
+
+    /// 记一次错误尝试，返回记完之后的累计次数。
+    fn charge_attempt(&self, bucket: &str) -> u32 {
+        let mut map = self.attempts.lock().expect("pairing attempts lock");
+        let now = Instant::now();
+        let a = map.entry(bucket.to_string()).or_insert(Attempt {
+            count: 0,
+            first_at: now,
+        });
+        if now.duration_since(a.first_at) >= ATTEMPT_WINDOW {
+            a.count = 0;
+            a.first_at = now;
+        }
+        a.count += 1;
+        a.count
+    }
+
+    /// 清空某个来源的失败预算（生成新码时调用）。
+    fn reset_attempts(&self, bucket: &str) {
+        self.attempts
+            .lock()
+            .expect("pairing attempts lock")
+            .remove(bucket);
     }
 
     /// 清掉过期会话，返回当前存活数。
@@ -398,57 +473,211 @@ impl PairingSessions {
         inner.len()
     }
 
-    /// 创建一次性配对会话。TLS 未开启时返回 Err（二维码要带证书指纹
-    /// 与 TLS 端口，没有加密面就没有配对）。
+    /// 铸一枚 6 位数字码，避开当前存活会话的碰撞。
+    fn mint_code(inner: &mut HashMap<String, PairingSession>) -> String {
+        Self::gc(inner);
+        loop {
+            let c = format!("{:06}", rand::thread_rng().gen_range(0..1_000_000u32));
+            if !inner.contains_key(&c) {
+                return c;
+            }
+        }
+    }
+
+    /// 创建一次性配对会话（QQ 式 6 位码 + 扫码 URL）。
+    /// TLS 未开启时返回 Err（配对依赖加密面）。TLS 现已默认开启，
+    /// 仅显式设置 HERMIX_TLS_DISABLE=1 的用户会遇到本错误。
     pub fn create(&self, tls_addr: Option<std::net::SocketAddr>) -> Result<QrPayload, String> {
         let tls_addr = tls_addr.ok_or_else(|| {
-            "TLS 未启用：设置 HERMIX_TLS_ADDR 后重启，再发起配对".to_string()
+            "TLS 已被关闭（检测到 HERMIX_TLS_DISABLE=1）。删除该环境变量并重启，再发起配对".to_string()
         })?;
         let material = tls::ensure_tls_material(&tls::tls_dir())
             .map_err(|e| format!("加载 TLS 证书失败: {e}"))?;
         let fingerprint = material.fingerprint_sha256;
 
-        let token = format!("hmxp_{}", hex_random(24));
+        let code = {
+            let mut inner = self.inner.lock().expect("pairing sessions lock");
+            Self::mint_code(&mut inner)
+        };
         let host = tls::best_effort_lan_ip()
             .map(|ip| ip.to_string())
             .unwrap_or_else(|| tls_addr.ip().to_string());
         let payload = QrPayload {
             server_id: format!("hermix-{}", &fingerprint[..8]),
+            // 二维码内容：手机相机扫码 → 浏览器打开 /pair 落地页（同 TLS 监听器）
+            pairing_url: format!("https://{host}:{}/pair?c={code}", tls_addr.port()),
             host,
             port: tls_addr.port(),
             cert_fingerprint: fingerprint,
-            pairing_token: token.clone(),
+            pairing_code: code.clone(),
             proto_version: 1,
         };
+        // 新码代际：扫码方自己的预算清零（重新生成 = 攻击者重新开始）
+        self.reset_attempts(BUCKET_BROWSER);
         let mut inner = self.inner.lock().expect("pairing sessions lock");
-        Self::gc(&mut inner);
         inner.insert(
-            token,
+            code,
             PairingSession {
                 expires_at: Instant::now() + PAIRING_TTL,
                 consumed: false,
-                payload: payload.clone(),
+                payload: Some(payload.clone()),
             },
         );
         Ok(payload)
     }
 
-    /// 一次性消费：命中且未过期未消费 → 返回二维码负载并标记 consumed。
-    pub fn consume(&self, pairing_token: &str) -> Option<QrPayload> {
+    /// 只铸一枚 6 位码，不带二维码负载。IM 通道用：用户在 QQ 私聊里手动
+    /// 输入这个码，没有"扫码打开网页"这一步，所以不需要 pairing_url，
+    /// 也不依赖 TLS 监听器。
+    ///
+    /// 与 H5 扫码共用 TTL、一次性语义和错误预算——一个码只能被消费一次，
+    /// 无论它是扫码进来的还是在 QQ 里输进来的。
+    pub fn create_code_only(&self) -> String {
+        let mut inner = self.inner.lock().expect("pairing sessions lock");
+        let code = Self::mint_code(&mut inner);
+        inner.insert(
+            code.clone(),
+            PairingSession {
+                expires_at: Instant::now() + PAIRING_TTL,
+                consumed: false,
+                payload: None,
+            },
+        );
+        code
+    }
+
+    /// 一次性消费（按 6 位码，计入 `BUCKET_BROWSER` 预算）。
+    pub fn consume(&self, code: &str) -> ConsumeOutcome {
+        self.consume_for(code, BUCKET_BROWSER)
+    }
+
+    /// 一次性消费，并指定这次尝试记到哪个来源的失败预算上。
+    ///
+    /// 预算耗尽 → Locked：即使码正确也拒，防穷举 6 位码。**猜错的**尝试计入
+    /// 预算；码本身有效或已用过则不计（那不是猜）。
+    pub fn consume_for(&self, code: &str, bucket: &str) -> ConsumeOutcome {
+        if self.attempts_exhausted(bucket) {
+            return ConsumeOutcome::Locked;
+        }
         let mut inner = self.inner.lock().expect("pairing sessions lock");
         Self::gc(&mut inner);
-        let session = inner.get_mut(pairing_token)?;
+        let Some(session) = inner.get_mut(code) else {
+            let n = self.charge_attempt(bucket);
+            tracing::warn!("配对码错误尝试 {n}/{PAIRING_MAX_WRONG_ATTEMPTS} (bucket={bucket})");
+            return ConsumeOutcome::Invalid;
+        };
         if session.consumed || session.expires_at <= Instant::now() {
-            return None;
+            return ConsumeOutcome::Invalid;
         }
         session.consumed = true;
-        Some(session.payload.clone())
+        match session.payload.clone() {
+            Some(payload) => ConsumeOutcome::Ok(payload),
+            None => ConsumeOutcome::OkCode,
+        }
     }
 }
 
 // ---------------------------------------------------------------------------
 // HTTP handlers（挂载在 router()；配对完成端点对 Unpaired 开放）
 // ---------------------------------------------------------------------------
+
+/// `GET /pair?c=<code>` — 手机扫码落地页（抄 cc-haha：扫码 → 浏览器打开 →
+/// 输入设备名 → 提交配对）。自包含 HTML，无外部资源（离线可用纪律）。
+/// 页面本身不含敏感信息；码校验在 POST /api/pairing/complete 时进行。
+pub async fn pair_page(
+    axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
+    let code = q.get("c").cloned().unwrap_or_default();
+    // 只接受 6 位数字码入页（防注入 + 提前纠错）。
+    let code_display = if code.len() == 6 && code.chars().all(|c| c.is_ascii_digit()) {
+        code.clone()
+    } else {
+        String::new()
+    };
+    let html = format!(
+        r#"<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Hermix 设备配对</title>
+<style>
+  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  body {{ font-family: -apple-system, "PingFang SC", "Microsoft YaHei UI", sans-serif;
+    background: #f5f5f7; color: #1d1d1f; display: flex; justify-content: center;
+    min-height: 100vh; padding: 24px 16px; }}
+  .card {{ background: #fff; border-radius: 16px; padding: 28px 24px;
+    max-width: 380px; width: 100%; height: fit-content; margin-top: 8vh;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.06); }}
+  h1 {{ font-size: 20px; margin-bottom: 6px; }}
+  .sub {{ font-size: 13px; color: #6e6e73; margin-bottom: 20px; line-height: 1.5; }}
+  label {{ display: block; font-size: 13px; color: #48484c; margin-bottom: 6px; }}
+  input {{ width: 100%; padding: 11px 12px; font-size: 16px; border: 1px solid #d4d4d8;
+    border-radius: 10px; outline: none; background: #fff; }}
+  input:focus {{ border-color: #0071e3; }}
+  .code {{ text-align: center; font-size: 28px; letter-spacing: 8px;
+    font-weight: 600; font-variant-numeric: tabular-nums; padding: 12px 0 4px; }}
+  button {{ width: 100%; margin-top: 18px; padding: 12px; font-size: 16px;
+    border: 0; border-radius: 10px; background: #0071e3; color: #fff;
+    font-weight: 500; cursor: pointer; }}
+  button:disabled {{ opacity: 0.5; }}
+  .msg {{ margin-top: 14px; font-size: 13px; text-align: center; min-height: 18px; }}
+  .msg.err {{ color: #a83b60; }}
+  .msg.ok {{ color: #37874c; }}
+  .hidden {{ display: none; }}
+</style>
+</head>
+<body>
+<div class="card">
+  <div id="form-view">
+    <h1>配对到此电脑</h1>
+    <p class="sub">确认此配对码与电脑上显示的一致。配对成功后，本设备即可在聊天中访问这台电脑上的 Hermix。</p>
+    <div class="code">{code_display}</div>
+    <label for="dev">设备名称</label>
+    <input id="dev" maxlength="64" placeholder="如：我的手机" autocomplete="off">
+    <button id="go">配对</button>
+    <div class="msg" id="msg"></div>
+  </div>
+  <div id="done-view" class="hidden">
+    <h1>配对成功</h1>
+    <p class="sub">本设备已获得对话权限。回到 Hermix 即可开始对话；高危操作仍会在电脑上弹出确认。</p>
+  </div>
+</div>
+<script>
+var CODE = {code_json};
+var btn = document.getElementById("go");
+var msg = document.getElementById("msg");
+btn.addEventListener("click", function () {{
+  var name = document.getElementById("dev").value.trim();
+  if (!name) {{ msg.textContent = "请填写设备名称"; msg.className = "msg err"; return; }}
+  btn.disabled = true; msg.textContent = "配对中…"; msg.className = "msg";
+  fetch("/api/pairing/complete", {{
+    method: "POST",
+    headers: {{ "Content-Type": "application/json" }},
+    body: JSON.stringify({{ pairing_code: CODE, device_name: name }})
+  }}).then(function (r) {{
+    if (r.status === 200) {{
+      document.getElementById("form-view").classList.add("hidden");
+      document.getElementById("done-view").classList.remove("hidden");
+      return;
+    }}
+    return r.text().then(function (t) {{
+      if (r.status === 429) msg.textContent = "错误尝试过多，请在电脑上重新生成配对码";
+      else msg.textContent = t || ("配对失败（HTTP " + r.status + "）");
+      msg.className = "msg err"; btn.disabled = false;
+    }});
+  }}).catch(function () {{
+    msg.textContent = "网络错误，请确认手机与电脑在同一网络";
+    msg.className = "msg err"; btn.disabled = false;
+  }});
+}});
+</script>
+</body>
+</html>"#,
+        code_json = serde_json::to_string(&code).unwrap_or_else(|_| "\"\"".into()),
+    );
+    (StatusCode::OK, [("content-type", "text/html; charset=utf-8")], html).into_response()
+}
 
 /// `POST /api/pairing/sessions` — 仅 Local。生成一次性配对二维码负载。
 pub async fn create_pairing_session(
@@ -473,7 +702,8 @@ pub async fn create_pairing_session(
 
 #[derive(Deserialize)]
 pub struct CompletePairingBody {
-    pub pairing_token: String,
+    /// 6 位配对码（/pair 落地页或手动输入提交）。
+    pub pairing_code: String,
     pub device_name: String,
 }
 
@@ -493,14 +723,33 @@ pub async fn complete_pairing(
         )
             .into_response();
     };
-    let Some(payload) = state.pairing_sessions.consume(&body.pairing_token) else {
-        return (
-            StatusCode::UNAUTHORIZED,
-            "配对码无效、已过期或已使用".into_response(),
-        )
-            .into_response();
-    };
-    let _ = payload; // 端点侧暂不需要负载内容（指纹校验在手机端做）
+    match state.pairing_sessions.consume(body.pairing_code.trim()) {
+        ConsumeOutcome::Locked => {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                "错误尝试次数过多，配对码已锁定。请在桌面端重新生成一枚新码。".into_response(),
+            )
+                .into_response();
+        }
+        ConsumeOutcome::Invalid => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                "配对码无效、已过期或已使用".into_response(),
+            )
+                .into_response();
+        }
+        ConsumeOutcome::Ok(_) => {} // 负载内容端点侧不需要（指纹核对在 /pair 页与桌面端之间进行）
+        // IM 通道发的码没有二维码负载，只能在 QQ 私聊里输。让浏览器端
+        // 明确拒绝而不是"顺手就换成 device token"——否则一个在聊天记录里
+        // 看到码的人能抢在本人之前把码烧掉，IM 侧再也配不上。
+        ConsumeOutcome::OkCode => {
+            return (
+                StatusCode::BAD_REQUEST,
+                "这是一枚 IM 通道配对码，请在绑定的 IM 里输入".into_response(),
+            )
+                .into_response();
+        }
+    }
     let device_name = body.device_name.trim();
     if device_name.is_empty() || device_name.len() > 64 {
         return (
@@ -805,11 +1054,14 @@ mod tests {
         let sessions = PairingSessions::new();
         let addr: std::net::SocketAddr = "0.0.0.0:8443".parse().expect("addr");
         let payload = sessions.create(Some(addr)).expect("create session");
+        assert_eq!(payload.pairing_code.len(), 6, "6 位数字码");
+        assert!(payload.pairing_code.chars().all(|c| c.is_ascii_digit()));
+        assert!(payload.pairing_url.contains("/pair?c="), "扫码 URL 指向落地页");
 
-        let first = sessions.consume(&payload.pairing_token);
-        assert!(first.is_some(), "首次消费应成功");
-        let second = sessions.consume(&payload.pairing_token);
-        assert!(second.is_none(), "一次性：二次消费必须失败");
+        let first = sessions.consume(&payload.pairing_code);
+        assert!(matches!(first, ConsumeOutcome::Ok(_)), "首次消费应成功");
+        let second = sessions.consume(&payload.pairing_code);
+        assert_eq!(second, ConsumeOutcome::Invalid, "一次性：二次消费必须失败");
     }
 
     #[test]
@@ -825,7 +1077,90 @@ mod tests {
                 s.expires_at = Instant::now() - Duration::from_secs(1);
             }
         }
-        assert!(sessions.consume(&payload.pairing_token).is_none(), "过期必须失效");
+        assert_eq!(
+            sessions.consume(&payload.pairing_code),
+            ConsumeOutcome::Invalid,
+            "过期必须失效"
+        );
+    }
+
+    #[test]
+    fn 失败预算按来源分桶() {
+        let sessions = PairingSessions::new();
+        let code = sessions.create_code_only();
+        assert_eq!(code.len(), 6);
+
+        // 一个 IM 来源把预算烧光。
+        for _ in 0..PAIRING_MAX_WRONG_ATTEMPTS {
+            assert_eq!(
+                sessions.consume_for("000000", "im:qq:attacker"),
+                ConsumeOutcome::Invalid
+            );
+        }
+        assert_eq!(
+            sessions.consume_for(&code, "im:qq:attacker"),
+            ConsumeOutcome::Locked,
+            "同一来源预算耗尽后即使码正确也拒"
+        );
+
+        // 关键断言：受害者自己的桶没被连累，浏览器扫码配对照常可用。
+        assert_eq!(
+            sessions.consume_for(&code, "im:qq:victim"),
+            ConsumeOutcome::OkCode,
+            "攻击者烧光自己的预算不该锁死别人"
+        );
+
+        // 另一枚新码也不该受影响——`create_code_only` 之前不重置全局预算，
+        // 那会让 IM 侧被浏览器扫码那边的失败次数永久锁死。
+        let code2 = sessions.create_code_only();
+        assert_eq!(sessions.consume_for(&code2, "im:qq:victim"), ConsumeOutcome::OkCode);
+    }
+
+    #[test]
+    fn 用过的码再提交按猜错计费() {
+        // gc 会把已消费的会话清掉，所以"再提交一次用过的码"与"猜了一个
+        // 不存在的码"在实现上不可区分——按猜错计费是正确的，否则可以拿一枚
+        // 已经用掉的码无限试探而不触发锁定。
+        let sessions = PairingSessions::new();
+        let code = sessions.create_code_only();
+        assert!(matches!(sessions.consume_for(&code, "b"), ConsumeOutcome::OkCode));
+        for _ in 0..PAIRING_MAX_WRONG_ATTEMPTS {
+            assert_eq!(sessions.consume_for(&code, "b"), ConsumeOutcome::Invalid);
+        }
+        let code2 = sessions.create_code_only();
+        assert_eq!(
+            sessions.consume_for(&code2, "b"),
+            ConsumeOutcome::Locked,
+            "预算耗尽后新码也拒"
+        );
+        // 换个来源不受牵连。
+        assert!(matches!(sessions.consume_for(&code2, "c"), ConsumeOutcome::OkCode));
+    }
+
+    #[test]
+    fn wrong_attempts_lockout_and_regeneration_reset() {
+        let sessions = PairingSessions::new();
+        let addr: std::net::SocketAddr = "0.0.0.0:8443".parse().expect("addr");
+
+        // 先生成一枚真码，再错 5 次 → 同一代际内预算耗尽 → 正确码也 Locked
+        //（防穷举关键断言；合法用户的恢复路径是重新生成）。
+        let payload = sessions.create(Some(addr)).expect("create session");
+        for i in 0..PAIRING_MAX_WRONG_ATTEMPTS {
+            let r = sessions.consume("000000");
+            assert_eq!(r, ConsumeOutcome::Invalid, "第 {i} 次错误应为 Invalid");
+        }
+        assert_eq!(
+            sessions.consume(&payload.pairing_code),
+            ConsumeOutcome::Locked,
+            "预算耗尽后正确码也应 Locked（同一代际内）"
+        );
+
+        // 重新生成 = 新码代际，预算清零 → 正常消费。
+        let payload2 = sessions.create(Some(addr)).expect("create session 2");
+        assert!(matches!(
+            sessions.consume(&payload2.pairing_code),
+            ConsumeOutcome::Ok(_)
+        ));
     }
 
     #[test]
@@ -843,7 +1178,8 @@ mod tests {
         assert_eq!(payload.proto_version, 1);
         assert_eq!(payload.port, 8443);
         assert!(payload.server_id.starts_with("hermix-"));
-        assert!(payload.pairing_token.starts_with("hmxp_"));
+        assert!(payload.pairing_code.chars().all(|c| c.is_ascii_digit()));
+        assert!(payload.pairing_url.starts_with("https://"), "扫码 URL 走 TLS");
     }
 
     #[test]

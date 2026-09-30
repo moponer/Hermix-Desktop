@@ -195,6 +195,50 @@ export interface McpServerEntry {
   createdAt: number;
 }
 
+// ── MCP 社区目录（backend /api/mcp/catalog）─────────────────────────
+
+export type CatalogVerdict = "pass" | "warn" | "block";
+
+export interface CatalogScanHit {
+  rule: string;
+  detail: string;
+}
+
+export interface CatalogScan {
+  verdict: CatalogVerdict;
+  label: string;
+  hits: CatalogScanHit[];
+  /** 将要执行的原始命令（仅本地包），二次确认时原样展示 */
+  commandPreview?: string;
+}
+
+export type CatalogInstall =
+  | { kind: "remote"; url: string }
+  | { kind: "npm"; package: string; version?: string }
+  | { kind: "manual"; package: string; version?: string; hint: string };
+
+export interface CatalogEntry {
+  id: string;
+  title: string;
+  description: string;
+  version?: string;
+  homepage?: string;
+  official: boolean;
+  install: CatalogInstall;
+  requiredEnv: string[];
+  titleZh?: string;
+  descriptionZh?: string;
+  category: string;
+  scan: CatalogScan;
+}
+
+export interface CatalogResponse {
+  items: CatalogEntry[];
+  fetchedAt: number;
+  fromCache: boolean;
+  staleReason?: string;
+}
+
 // ── Auto-correct model ──────────────────────────
 
 export interface AutoCorrectReport {

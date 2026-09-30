@@ -34,12 +34,21 @@ pub fn tls_dir() -> PathBuf {
     hermix_config::paths::hermix_home().join("tls")
 }
 
-/// 环境变量开关：设置即启用 TLS 监听器（如 `HERMIX_TLS_ADDR=0.0.0.0:8443`）。
-/// 与 `HERMIX_SERVER_ADDR` 同模式——env 优先级高于未来的 config.yaml，
-/// 且本期不引入 config schema 变更。
+/// TLS 监听地址（抄 cc-haha H5 的「开箱即用远程」）：
+/// - `HERMIX_TLS_ADDR` 显式设置 → 用它（如 `0.0.0.0:8443`）
+/// - 未设置 → 默认开启 `0.0.0.0:8443`（此前必须手动配环境变量才能配对，
+///   是「生成配对码失败：TLS 未启用」的唯一根源）
+/// - `HERMIX_TLS_DISABLE=1` → 显式关闭（不想要局域网暴露面的用户）
 pub fn tls_addr_from_env() -> Option<std::net::SocketAddr> {
+    if hermix_config::env_compat("HERMIX_TLS_DISABLE", "HERMES_TLS_DISABLE")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+    {
+        return None;
+    }
     hermix_config::env_compat("HERMIX_TLS_ADDR", "HERMES_TLS_ADDR")
         .and_then(|s| s.parse().ok())
+        .or_else(|| "0.0.0.0:8443".parse().ok())
 }
 
 /// 确保证书材料可用：有则加载，无则生成并落盘。

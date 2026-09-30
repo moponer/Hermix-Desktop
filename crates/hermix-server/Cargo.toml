@@ -62,7 +62,13 @@ tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["trace", "cors", "limit", "fs"] }
 libc = "0.2"
 reqwest = { version = "0.12", default-features = false, features = ["stream", "json", "rustls-tls", "multipart"] }
+# IM 通道（QQ 官方 bot 网关）需要一条出站 wss 长连接；服务端不再暴露入站 WS。
+# rustls-tls-native-roots 用编译进二进制的根证书，不拉 OpenSSL，MSVC 下无 CMake 负担
+# （与 tls.rs 强制 ring provider 避开 aws-lc 是同一个理由）。
+tokio-tungstenite = { workspace = true, features = ["rustls-tls-native-roots"] }
 base64 = { workspace = true }
+# IM 通道：QQ 开放平台扫码绑定返回的 bot secret 是 AES-256-GCM 密文。
+aes-gcm = { workspace = true }
 regex = { workspace = true }
 # `test_state.rs` lives in the lib tree (gated by `#![cfg(any(test,
 # feature = "test-helpers"))]`) and uses `tempfile::tempdir` — so it

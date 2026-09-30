@@ -458,10 +458,10 @@ pub fn effective_decision_with_scopes(
     }
 }
 
-/// Unpaired 纵深防御关口（对策 T1）：仅放行配对完成端点
-/// （信任建立本身）。/health 与 /metrics 在更早分支已返回。
+/// Unpaired 纵深防御关口（对策 T1）：仅放行配对完成端点与 /pair 扫码
+/// 落地页（信任建立本身）。/health 与 /metrics 在更早分支已返回。
 fn unpaired_gate_allows(path: &str) -> bool {
-    path == "/api/pairing/complete"
+    path == "/api/pairing/complete" || path == "/pair"
 }
 
 pub async fn request_guard(
