@@ -382,6 +382,19 @@ pub struct AgentOverrides {
     /// WORKBENCH_CHAT_REDESIGN_PLAN B / MODULE_DESIGN §13 layer 3.
     #[serde(default)]
     pub workbench_id: Option<String>,
+    /// L1 domain-mode pin (`code|research|write|operate|chat` or `"auto"`).
+    /// `None` = auto-detect. Core can't name the intelligence `DomainMode`
+    /// type (would be a dep cycle), so it rides as a string; the agent crate
+    /// parses it in `apply_overrides`.
+    #[serde(default)]
+    pub domain_override: Option<String>,
+    /// Toolset group name (registry tag, e.g. `office`) brought by the
+    /// hired expert. The agent unions its members INTO the per-turn
+    /// allow-list — an expert can add tools but never revoke the floor
+    /// or the user's enabled set (`allowed` is a filter, widening it
+    /// only grants). Unknown group = empty members = no-op.
+    #[serde(default)]
+    pub expert_toolset: Option<String>,
     /// Callback to register an approval request with the WS handler.
     /// Arguments: `(session_id, request_id)` →
     /// `oneshot::Receiver<ApprovalOutcome>`. The receiver resolves when
@@ -446,6 +459,8 @@ impl std::fmt::Debug for AgentOverrides {
             .field("image_mime_type", &self.image_mime_type)
             .field("skills", &self.skills)
             .field("workbench_id", &self.workbench_id)
+            .field("domain_override", &self.domain_override)
+            .field("expert_toolset", &self.expert_toolset)
             .field(
                 "approval_requester",
                 &self.approval_requester.as_ref().map(|_| "<callback>"),
@@ -482,6 +497,8 @@ impl PartialEq for AgentOverrides {
             && self.image_mime_type == other.image_mime_type
             && self.skills == other.skills
             && self.workbench_id == other.workbench_id
+            && self.domain_override == other.domain_override
+            && self.expert_toolset == other.expert_toolset
     }
 }
 

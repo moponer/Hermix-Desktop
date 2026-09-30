@@ -781,7 +781,7 @@ mod origin_aware_tests {
     use hermix_core::Origin;
 
     fn manager_with_session_and_allowlist() -> ApprovalManager {
-        let mut m = ApprovalManager::new();
+        let m = ApprovalManager::new();
         m.approve_for_session("del /q test.txt"); // session 级批准 del 家族
         m
     }
