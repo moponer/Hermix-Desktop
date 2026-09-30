@@ -11,7 +11,6 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use indexmap::IndexMap;
 use serde_json::{json, Value};
-use tokio::process::Command;
 
 use hermix_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema, traits::RiskLevel};
 
@@ -165,7 +164,7 @@ except Exception as e:
 "#,
             path = path
         );
-        let mut cmd = Command::new(&python);
+        let mut cmd = hermix_core::proc::cmd_tokio(&python);
         cmd.arg("-c").arg(&script);
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
         let output = cmd
@@ -229,7 +228,7 @@ except Exception as e:
     ) -> Result<String, ToolError> {
         // ── Tier 1: pdftotext (Poppler binary) ────────────────
         if let Ok(bin) = resolve_pdftotext_path() {
-            let mut cmd = Command::new(&bin);
+            let mut cmd = hermix_core::proc::cmd_tokio(&bin);
             if layout {
                 cmd.arg("-layout");
             } else {

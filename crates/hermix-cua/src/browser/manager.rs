@@ -133,11 +133,14 @@ impl ChromeManager {
         args.extend(opts.extra_flags.iter().cloned());
         args.push(initial_url.to_string());
 
-        let child = Command::new(&chrome_path)
-            .args(&args)
-            .stdin(Stdio::null())
-            // Keep stdout/stderr so we can see Chrome's output for debugging.
-            // In production, these can be redirected to a log file.
+        let mut cmd = Command::new(&chrome_path);
+        cmd.args(&args).stdin(Stdio::null());
+        // Keep stdout/stderr so we can see Chrome's output for debugging.
+        // In production, these can be redirected to a log file.
+        // GUI 程序 spawn Chrome 会弹一扇控制台黑窗（Chrome 是控制台程序
+        // 的宿主）——浏览器工具的可见输出都在前端面板里，黑窗纯噪音。
+        hermix_core::proc::hide_console(&mut cmd);
+        let child = cmd
             .spawn()
             .map_err(|e| {
                 CuaError::Cdp(format!(

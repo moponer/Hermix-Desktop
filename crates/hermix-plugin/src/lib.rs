@@ -614,7 +614,7 @@ impl PluginManager {
         // 状态文件会落到主项目源码目录，被 Tauri 文件监听捕获 → 重建
         // 主窗口 → 在途 IPC 回调失联（"Couldn't find callback id"）。
         // --app-dir 让 hx-shell 把相对路径写入解析到应用目录。
-        let child = std::process::Command::new(&exe_path)
+        let child = hermix_core::proc::cmd(&exe_path)
             .arg("--app-dir")
             .arg(&entry.dir)
             .current_dir(&entry.dir)

@@ -7,6 +7,7 @@ pub mod acui;
 pub mod agentspec;
 pub mod approval;
 pub mod errors;
+pub mod proc;
 pub mod tool_call_parser;
 pub mod tool_call_sanitizer;
 pub mod tool_schema;

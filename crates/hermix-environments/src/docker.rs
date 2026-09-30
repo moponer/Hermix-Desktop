@@ -133,7 +133,7 @@ impl TerminalBackend for DockerBackend {
         args.push("-c".to_string());
         args.push(command.to_string());
 
-        let mut cmd = TokioCommand::new("docker");
+        let mut cmd = hermix_core::proc::cmd_tokio("docker");
         cmd.args(&args);
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
@@ -208,7 +208,7 @@ impl TerminalBackend for DockerBackend {
         args.push("-c".to_string());
         args.push(sh_cmd);
 
-        let output = TokioCommand::new("docker")
+        let output = hermix_core::proc::cmd_tokio("docker")
             .args(&args)
             .output()
             .await
@@ -239,7 +239,7 @@ impl TerminalBackend for DockerBackend {
         args.push("-c".to_string());
         args.push(sh_cmd);
 
-        let mut child = TokioCommand::new("docker")
+        let mut child = hermix_core::proc::cmd_tokio("docker")
             .args(&args)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::null())
@@ -276,7 +276,7 @@ impl TerminalBackend for DockerBackend {
         args.push("sh".to_string());
         args.push("-c".to_string());
         args.push(format!("test -e '{}' && echo yes || echo no", shell_escape(path)));
-        let out = TokioCommand::new("docker")
+        let out = hermix_core::proc::cmd_tokio("docker")
             .args(&args)
             .output()
             .await

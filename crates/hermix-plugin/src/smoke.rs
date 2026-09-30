@@ -6,7 +6,7 @@
 //! (`custom_app_smoke_test`) 共用.
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -64,7 +64,7 @@ pub fn run_smoke_test(app_dir: &Path) -> SmokeReport {
         };
     }
 
-    let mut child = match Command::new(&exe_path)
+    let mut child = match hermix_core::proc::cmd(&exe_path)
         .current_dir(&dist_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

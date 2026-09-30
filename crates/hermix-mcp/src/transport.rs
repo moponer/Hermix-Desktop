@@ -124,6 +124,13 @@ impl McpTransport for StdioTransport {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        // Windows：MCP server 是**后台服务**（stdio 管道通信，用户根本不看
+        // 它的窗口）。不挡的话每次自动拉起 server 都会闪一个黑窗 ——
+        // 而且 npm 系（`npm`/`npx`/`node`）在 Windows 上只有 `.cmd` 批处理
+        // shim，Windows 借 `cmd.exe` 执行，父进程无控制台时它就自己开一扇
+        // 窗（就是启动时那个 `C:\WINDOWS\system32\cmd.exe`）。
+        #[cfg(windows)]
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
 
         // Set environment variables
         for (key, value) in &self.env {

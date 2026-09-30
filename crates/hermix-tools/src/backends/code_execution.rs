@@ -27,7 +27,6 @@ use async_trait::async_trait;
 use serde_json::json;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use tokio::process::Command as TokioCommand;
 
 use crate::tools::code_execution::CodeExecutionBackend;
 use hermix_core::console_decode::decode_console_output;
@@ -306,7 +305,7 @@ impl CodeExecutionBackend for LocalCodeExecutionBackend {
             _ => "",
         };
 
-        let mut cmd = TokioCommand::new(&interpreter);
+        let mut cmd = hermix_core::proc::cmd_tokio(&interpreter);
         if lang == "typescript" {
             // For TypeScript, write to temp file and run with ts-node.
             // Use `temp_dir()` (cross-platform).
@@ -321,7 +320,7 @@ impl CodeExecutionBackend for LocalCodeExecutionBackend {
             // shim helper（白名单 npx/npm/pnpm/yarn/bun/...），把
             // "Win 上要不要加 .cmd" 这个判断集中在一处，避免每个调用点
             // 都重复 cfg 双分支。
-            cmd = TokioCommand::new(hermix_core::runtime::resolve_binary("npx"));
+            cmd = hermix_core::proc::cmd_tokio(hermix_core::runtime::resolve_binary("npx"));
             cmd.arg("ts-node").arg(tmp.to_str().unwrap_or(""));
         } else {
             cmd.arg(flag).arg(code);

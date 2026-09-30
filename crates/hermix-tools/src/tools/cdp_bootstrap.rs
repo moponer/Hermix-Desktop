@@ -332,7 +332,7 @@ fn chrome_via_registry() -> Option<String> {
 
 #[cfg(target_os = "windows")]
 fn reg_query_string(key_path: &str, value_name: &str) -> Option<String> {
-    let output = std::process::Command::new("reg")
+    let output = hermix_core::proc::cmd("reg")
         .args(["query", key_path, "/v", value_name])
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -498,7 +498,7 @@ pub fn kill_spawned_chrome() {
         let _ = std::fs::remove_file(&pid_path);
         return;
     }
-    let result = std::process::Command::new("taskkill")
+    let result = hermix_core::proc::cmd("taskkill")
         .args(["/F", "/T", "/PID", &pid.to_string()])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -565,7 +565,7 @@ pub fn cleanup_orphan_pid() {
 
     // Check if the process is still alive by trying to query it.
     // `tasklist /FI "PID eq <pid>"` exits 0 if the process exists.
-    let is_alive = std::process::Command::new("tasklist")
+    let is_alive = hermix_core::proc::cmd("tasklist")
         .args(["/FI", &format!("PID eq {pid}"), "/NH"])
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -584,7 +584,7 @@ pub fn cleanup_orphan_pid() {
             target: "hermix.tools",
             "Found orphan browser process (PID {pid}) from previous run — killing"
         );
-        let _ = std::process::Command::new("taskkill")
+        let _ = hermix_core::proc::cmd("taskkill")
             .args(["/F", "/T", "/PID", &pid.to_string()])
             .stdout(Stdio::null())
             .stderr(Stdio::null())

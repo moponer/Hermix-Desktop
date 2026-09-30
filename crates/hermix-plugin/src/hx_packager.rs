@@ -358,7 +358,7 @@ impl HxShellPackager {
         // Phase 6 dev 模式（spec §8.7）：dev 走虚拟协议 host 磁盘 app_dir，
         // 与 prod 共用 app:// handler（hx-shell 内部 APP_DIR_FOR_DEV）。
         // 不再生成 .dev.html、不再走单 HTML 包装，与打包后行为一致。
-        let child = std::process::Command::new(&self.shell_path)
+        let child = hermix_core::proc::cmd(&self.shell_path)
             .arg("--app-dir")
             .arg(app_dir)
             .arg("--dev")
@@ -470,7 +470,7 @@ fn sign_exe_if_configured(exe_path: &Path) {
     let exe_for_thread = exe.clone();
     let (tx, rx) = std::sync::mpsc::channel::<Result<std::process::ExitStatus, String>>();
     let _sign_thread = std::thread::spawn(move || {
-        let r = std::process::Command::new(&signtool)
+        let r = hermix_core::proc::cmd(&signtool)
             .args([
                 "sign",
                 "/fd",

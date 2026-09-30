@@ -1328,13 +1328,15 @@ async fn spawn_python_version(python: &Path) -> Option<String> {
 /// "Python 3.13.1"）。统一走 stdout+stderr 拼接，取第一行非空输出。
 async fn spawn_version(exe: &Path, flag: &str, keyword: &str) -> Option<String> {
     use tokio::process::Command as TokioCommand;
-    let output = TokioCommand::new(exe)
-        .arg(flag)
+    // src-tauri 刻意不依赖 hermix-core（见文件头说明），所以标志就地加。
+    // 探测运行时版本是纯后台动作，弹控制台黑窗没有任何信息价值。
+    let mut cmd = TokioCommand::new(exe);
+    cmd.arg(flag)
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .output()
-        .await
-        .ok()?;
+        .stderr(std::process::Stdio::piped());
+    #[cfg(windows)]
+    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    let output = cmd.output().await.ok()?;
     // 各运行时把版本写进 stdout 还是 stderr 没有统一约定（Windows
     // Python.org 写 stderr，git 写 stdout），两侧都读最稳。
     let mut out = String::from_utf8_lossy(&output.stdout).into_owned();

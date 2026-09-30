@@ -312,7 +312,7 @@ async fn convert_office_to_pdf(input: &str, output: &str) -> Result<String, Tool
     let libreoffice = find_libreoffice()?;
 
     // Run LibreOffice conversion
-    let output = std::process::Command::new(&libreoffice)
+    let output = hermix_core::proc::cmd(&libreoffice)
         .args([
             "--headless",
             "--convert-to", "pdf",
@@ -348,7 +348,7 @@ fn find_libreoffice() -> Result<String, ToolError> {
     }
 
     // Try which command
-    if let Ok(output) = std::process::Command::new("which").arg("libreoffice").output() {
+    if let Ok(output) = hermix_core::proc::cmd("which").arg("libreoffice").output() {
         if output.status.success() {
             let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if !path.is_empty() {

@@ -118,7 +118,7 @@ impl TerminalBackend for SshBackend {
         }
 
         let result = tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), async {
-            let output = TokioCommand::new(resolve_binary("ssh"))
+            let output = hermix_core::proc::cmd_tokio(resolve_binary("ssh"))
                 .args(&ssh_args)
                 .output()
                 .await
@@ -175,7 +175,7 @@ impl TerminalBackend for SshBackend {
 
         let timeout_secs = self.default_timeout;
         let result = tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), async {
-            let output = TokioCommand::new(resolve_binary("ssh"))
+            let output = hermix_core::proc::cmd_tokio(resolve_binary("ssh"))
                 .args(&ssh_args)
                 .output()
                 .await
@@ -215,7 +215,7 @@ impl TerminalBackend for SshBackend {
             let mut ssh_args = self.build_ssh_args();
             ssh_args.push(mkdir_cmd);
 
-            let mkdir_output = TokioCommand::new(resolve_binary("ssh"))
+            let mkdir_output = hermix_core::proc::cmd_tokio(resolve_binary("ssh"))
                 .args(&ssh_args)
                 .output()
                 .await
@@ -243,7 +243,7 @@ impl TerminalBackend for SshBackend {
         let mut ssh_args = self.build_ssh_args();
         ssh_args.push(write_cmd);
 
-        let output = TokioCommand::new(resolve_binary("ssh"))
+        let output = hermix_core::proc::cmd_tokio(resolve_binary("ssh"))
             .args(&ssh_args)
             .output()
             .await
@@ -265,7 +265,7 @@ impl TerminalBackend for SshBackend {
         let mut ssh_args = self.build_ssh_args();
         ssh_args.push(test_cmd);
 
-        let output = TokioCommand::new(resolve_binary("ssh"))
+        let output = hermix_core::proc::cmd_tokio(resolve_binary("ssh"))
             .args(&ssh_args)
             .output()
             .await

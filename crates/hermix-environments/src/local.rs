@@ -340,7 +340,7 @@ impl TerminalBackend for LocalBackend {
             // to a real terminal (enables colors, line editing, etc.).
             #[cfg(unix)]
             {
-                let mut pty_cmd = TokioCommand::new("script");
+                let mut pty_cmd = hermix_core::proc::cmd_tokio("script");
                 pty_cmd
                     .arg("-q") // quiet mode
                     .arg("/dev/null") // discard typescript file

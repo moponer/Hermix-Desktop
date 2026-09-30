@@ -18,7 +18,7 @@
 
 use std::io::Write;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 /// 单条校验问题。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
@@ -853,7 +853,7 @@ fn run_esbuild_check(code: &str, loader: &str, sourcefile: &str) -> Option<(Stri
     if !esbuild.exists() {
         return None;
     }
-    let mut child = Command::new(&esbuild)
+    let mut child = hermix_core::proc::cmd(&esbuild)
         .arg(format!("--loader={loader}"))
         .arg("--format=esm")
         .arg(format!("--sourcefile={sourcefile}"))
