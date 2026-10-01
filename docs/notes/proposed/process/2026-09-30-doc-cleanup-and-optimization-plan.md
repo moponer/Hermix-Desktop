@@ -187,7 +187,7 @@ K 与 H 是同一件事的拆分：H 是差距分析（本文 §批次 H），K 
 3. **CSS 层 34 处 `[data-theme]` 字面覆盖块**（components-*.css，EXCEPTIONS.md 已登记）→ 能映射四色组的迁 token，不能的逐条编号留档
 完成定义：`node scripts/check-theme-tokens.mjs` 全绿 + palette-debt 收紧为硬门禁 + EXCEPTIONS.md 只剩 E1-E8 合法例外。**此步不做，L1 的强调色切换就是半吊子**（切换后 109 处组件不变色）。
 
-**L1 执行结果（2026-10-01 完成）**：`b05766e0` 分层 token + useTheme 注入、`884b4538` accent 家族移出 @theme 并由使用槽 color-mix 派生、`c1f2d30` 深色 fg/bg 校准。
+**L1 执行结果（2026-10-01 完成）**：`b05766e0` 分层 token + useTheme 注入、`884b4538` accent 家族移出 @theme 并由使用槽 color-mix 派生、`b573b0a7` 深色 fg/bg 校准。
 - 验收逐条：`check-theme-tokens.mjs` 全绿且 CONTRACT 由 106 **收缩到 101**（accent-hover/soft/soft-strong/on-text 退出契约，dark.css 同步停止声明）；`pnpm tsc --noEmit` exit 0；三态中"不注入=主题默认"已由编译探针验证。
 - 走过的弯路（两次"看起来能工作、实际零效果"，均被编译探针拦下）：① `--color-accent-choice: ;` 声明为空时 `var(x, fallback)` **不回退**而返回空串，强调色会静默消失；② 自引用 `var(--choice, var(--accent))` 与 `themes/*.css` 同特异性被后者胜出 + 循环依赖 → 整条声明 invalid。**"跟随主题"必须用 `removeProperty`（属性不存在），不能用"设为空"。**
 - 深色校准只动两个锚点（fg `#EDEDED`、bg-app/chat `#171717`）；下方灰阶**保持不动**——它们按 WCAG 对比度推导，非截图采样。核算确认 primary 15.31 / secondary 6.67 / tertiary 4.77 均达 AA-normal，faint 2.97 是装饰级（符合原约定）。
