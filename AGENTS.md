@@ -97,6 +97,15 @@ Key crates:
 - `scripts/ci-gate.sh` 增加单文件 **> 2500 行即告警**，防止上帝文件复发。
 - 拆分/重写时优先砍重复（平行复制的平台/provider/工具）与搬测试到独立文件，而非单纯切文件。
 
+## 文档制度（2026-09-30 起）
+
+- **决策记录唯一入口是 `docs/notes/`**（三态：proposed/implemented/rejected，闭集 class，格式与规则见 `docs/notes/README.md`）。影响代码库的持久决策（为什么做、放弃了什么、击败了哪些方案）写 Decision Note；机械性/局部改动豁免。
+- **方案/规划不得散落**：新规划写成 `docs/notes/proposed/{class}/yyyy-mm-dd-topic.md`，拍板后移入 implemented 同名路径；被否决的写进 rejected 留论证。**禁止再新建** `docs/XXX_PLAN.md` 式顶层文档。
+- **每篇笔记强制节**：`## Decision` / `## Alternatives considered` / `## Consequences`；simplification 类加 `## Reintroduction conditions`。`scripts/check-notes.sh` 在 CI gate 中强制。
+- **写新笔记时当场检查是否取代旧笔记**，是则同一 PR 内归档旧笔记（移入 `archived/{class}/` 并加 `Archived:` 行）。归档件冻结，不再编辑、不作为现行依据。
+- **事实单一归属**：一个事实只有一个"家"（AGENTS.md 只放每会话必读的 standing orders，1-3 行 + 链接；机制细节归笔记；操作步骤归 README/ cookbook）。在其他地方提到事实时链接过去，不复述。
+- **文档只描述现状**：历史留在提交记录与笔记里；正文不写"已实现！/ 未来将…"式的状态标注。implemented 笔记用现在时描述已交付现实。
+
 ## Gotchas
 
 - `.cargo/config.toml` hardcodes MSVC linker path — don't override

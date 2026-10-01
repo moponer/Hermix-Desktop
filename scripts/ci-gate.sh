@@ -189,6 +189,18 @@ else
 fi
 echo ""
 
+#-----------------------------------------------------------------------
+# 10. Decision Notes structure gate (HARD gate)
+#     docs/notes/ 三态决策记录的结构/格式/强制节检查（制度见 docs/notes/README.md）
+#-----------------------------------------------------------------------
+echo "=== [10/10] decision notes structure ==="
+if [ -f scripts/check-notes.sh ]; then
+  bash scripts/check-notes.sh || exit 1
+else
+  echo "  SKIP: scripts/check-notes.sh not found"
+fi
+echo ""
+
 echo "============================================"
 echo "  CI Gate complete"
 echo "============================================"
