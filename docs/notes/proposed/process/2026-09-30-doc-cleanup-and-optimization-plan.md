@@ -120,6 +120,8 @@ Status: implemented — 批次 A/B/C/D/E/G 已执行（2026-10-01）；仅批次
 **H3 无持久终端会话（不顺手的主因之一）**
 hermix terminal 每次调用都是新进程：cd、激活 venv、REPL/gdb 状态在调用间全部丢失，模型只能用 `cd x && y` 串接或反复绝对路径。dsh 有 tool-bash-persistent（持久 PTY：cwd/env/REPL 状态跨调用存活）。hermix terminal.rs 已有 `pty` 参数与 background 机制，缺的是**跨调用会话句柄**（session id + 后续 write/read 到同一 PTY）。修法：加 `persistent: true` + `session_id` 参数，会话表挂 TerminalBackend，超时回收。REPL/gdb/venv 场景一步到位。
 
+> H3 状态（2026-10-01）：执行中曾否决（判为平台限制），同日因事实错误（"Windows 无 PTY"）被推翻并独立立项：[2026-10-01-persistent-terminal-conpty](../architecture/2026-10-01-persistent-terminal-conpty.md)，待评审。
+
 **H4 命令输出截断无恢复路径**
 `format_command_output` 100K 硬截断只说"truncated at N chars"——被截断的中间内容**拿不回来**（dsh 超限输出落 spill 文件，模型用 read_file 取回全文）。hermix 其实已有 spill 机制（run_loop.rs SPILL_INLINE_CHARS），但 terminal 工具层没接。修法：截断时落 spill 文件并在提示中给出路径。
 
@@ -182,7 +184,27 @@ H1-H6 的修法统一为"抄行为不抄代码"：dsh 工具层是 MIT 协议的
 
 K 与 H 是同一件事的拆分：H 是差距分析（本文 §批次 H），K 是给执行 agent 的实现任务书——**按 H 的 H1-H6 顺序执行，行为契约以 dsh 为参照标准（见 H 方针升级节）**。K 完成定义：H1-H6 全部落地 + `cargo test -p hermix-tools` 全绿 + 新增行为契约测试（read 分页、edit 唯一性、persistent 会话存活、spill 恢复路径各至少 1 个测试）。
 
-### 批次 L：设置中心对齐 ZCode 桌面端（2026-10-01 增补，来源：6 张 ZCode 设置页截图逆向 + MiniMax Code CLI 开源仓库情报）
+### 批次 M：MCP 目录国内可用化（2026-10-01 增补，起因：用户网络直连 registry.modelcontextprotocol.io 超时，目录功能 502 不可用）
+
+背景核实（2026-10-01 实测）：官方 registry 托管境外线路，用户网络直连 HTTP 000 超时；后端逻辑正确（失败回退缓存），但该部署从未成功拉取过 → 无缓存可回退 → 502。官方 registry 开源且鼓励自建子注册中心（同 API 形状），国内无权威同形镜像；ModelScope MCP 广场国内可直连但 API 形状不同。按优先级：
+
+**M1 内置精选目录兜底（必做，解决开箱即用）**
+- 编译期打包一份 curated `catalog_fallback.json`（30-50 个常用 MCP server，中英文描述，全部预过 mcp_scan 安全扫描）
+- `/api/mcp/catalog` 改三层：新鲜缓存 → 网络拉取（成功则落缓存）→ **内置目录**（`from_cache: true` + `stale_reason: "联网不可达，显示内置精选目录"`），502 场景彻底消失
+- UI 标注数据来源徽标（在线 registry / 缓存 / 内置离线）
+
+**M2 registry 源可配置（必做，小改动）**
+- `HERMIX_MCP_REGISTRY_URL` env + 设置项，默认官方 URL；自建子注册中心（官方 ghcr Docker 镜像一条命令，同 API 形状）的用户直接填自己地址
+- install 端点仍以 server 反域名 id 为键，与源无关
+
+**M3 ModelScope MCP 广场适配器（可选，先验证再接）**
+- 国内可直连的目录站（阿里系）；API 形状与官方不同，需写转换层归一化到现有 CatalogEntry 结构
+- 前置：先手动验证其公开 API 的稳定性与字段完备度（install 所需的 command/args/env 是否可得），不稳就不接，M1+M2 已覆盖 90% 场景
+
+**M4 自建子注册中心指引（文档级，不写代码）**
+- 官方文档路径：`docker run -p 8080:8080 ghcr.io/modelcontextprotocol/registry:latest` + PostgreSQL；写进 cookbook 或 mcp_catalog.rs 文档头，供企业/重度用户路径
+
+执行顺序：M1 → M2（合一个 PR）→ M4（文档）→ M3（验证后再说）。完成定义：断网环境打开 MCP 目录页显示内置精选目录且来源徽标正确；配置自建 registry URL 后目录/一键添加全流程可用。
 
 **情报来源与边界**：截图为 ZCode（MiniMax Code 桌面端 3.1.0）的通用×2、外观深/浅×2、浏览器页 + 主工作区。桌面端**闭源**（github.com/MiniMax-AI/minimax-code 仅收 issue）；其 CLI 已开源（MIT，`@minimax-ai/code`），已克隆至本地翻找：TUI 主题系统（`packages/tui/src/tui/theme/`：contracts.ts 定义 text/muted/border/line/success/warning/error + userMessageBg/diffAddedBg/diffRemovedBg 角色；palettes 带 WCAG AA 回归测试——正文 4.5:1、非文本 3:1；自定义主题 = 数据目录 `tui/themes/*.json` 一文件一外观、name 相同即成对、热重载、未知值回退不阻断启动）。桌面端截图外的规格（精确字号/间距/开关尺寸）**拿不到源码**，以截图目测 + 上述 token 词汇推断，执行 agent 需按像素截图比对微调。
 

@@ -15,7 +15,9 @@ Status: implemented — 8 项复核已批复同意；30 commit，净减 3451 行
 
 三项工作被判定为不可实施并记录否决：H3 持久终端（Windows 无 PTY）、
 J2 resource_guard 拦截（与 5 天前定策冲突）、以及 E10/E16 两条字面值
-（真例外）。
+（真例外）。其中 H3 的否决同日被推翻——`pty: true` 报错是 hermix 未接
+ConPTY 而非 Windows 无此能力，独立立项见
+[2026-10-01-persistent-terminal-conpty](../../proposed/architecture/2026-10-01-persistent-terminal-conpty.md)。
 
 ## Alternatives considered
 
@@ -68,7 +70,7 @@ J2 resource_guard 拦截（与 5 天前定策冲突）、以及 E10/E16 两条�
 | 来源 | 批次 | 状态 |
 |---|---|---|
 | 2026-10-01 安全审计报告 | 17 条缺陷 | 13 确认 / 2 推翻 / 2 部分成立 → **全部处置** |
-| 2026-09-30 决策笔记 | A/B/C/D/E/G/I/J/K/L0/L1 | A-E/G/I/J/K/L0/L1 完成；F 不做；H3 否决；L2-L5/L3.5 未动 |
+| 2026-09-30 决策笔记 | A/B/C/D/E/G/I/J/K/L0/L1 | A-E/G/I/J/K/L0/L1 完成；F 不做；H3 否决被推翻（立项待评审）；L2-L5/L3.5 未动 |
 | 会话内追加 | 参数类型扫描、临时文件清理 | 完成 |
 
 ---
@@ -142,7 +144,7 @@ J2 resource_guard 拦截（与 5 天前定策冲突）、以及 E10/E16 两条�
 |---|---|
 | **H1** ✅ | `read_file` 的 Fs 接缝**拒绝** offset/limit，截断提示却叫模型用它——契约自相矛盾。改为接缝自行行级切片，提示给出确切续读行号 |
 | **H2** ✅ | `patch` 模糊匹配可能**静默改错位置**。改为字面精确 + 唯一性校验，模糊链仅在 `allow_fuzzy: true` 可达 |
-| **H3** ❌ 否决 | `pty: true` 在 Windows 直接报错（Unix 靠 `script` 命令，Windows 无对应物）。实现需从零引入 ConPTY 绑定 + 会话表 + 超时回收 |
+| **H3** 否决被推翻 | `pty: true` 在 Windows 直接报错是 hermix 未接 ConPTY，非"Windows 无此能力"（原否决的事实基础有误）；已独立立项：[2026-10-01-persistent-terminal-conpty](../../proposed/architecture/2026-10-01-persistent-terminal-conpty.md)，待评审 |
 | **H4** ✅ | `SpillSink` 早已写好且有测试，但**生产路径从未调用**。接入后截断内容可取回 |
 | **H5** ✅ | `search_files` 加 `context`（grep `-C`），省一轮 read_file |
 | **H6** ✅ | `read_file` 补 Model Experience 段 |
@@ -267,7 +269,7 @@ J2 resource_guard 拦截（与 5 天前定策冲突）、以及 E10/E16 两条�
 - **L3.5 / 策展调色板 / `--contrast-scale`**（选色 UI、`--color-on-accent` 注入、对比度滑杆）— 依赖 L3.1/L3.2 的 Switch/SettingsRow；`--color-on-accent` 随明度选浅/深字，自由取色无正解，等策展调色板
 - **L2/L3/L4/L5**（设置中心重构、Switch/SettingsRow、壁纸新 command、主工作区）— 未动
 - **批次 F**（事件溯源 / Windows ACL 沙箱 / PTC）— 立项笔记已写（`notes/proposed/feature/`），季度级改造，按提案单独立项再评审
-- **H3**（持久终端）— 如需，应作为独立立项先写 ConPTY 技术方案
+- **H3**（持久终端）— 立项已写：[2026-10-01-persistent-terminal-conpty](../../proposed/architecture/2026-10-01-persistent-terminal-conpty.md)，待评审；排序在 F-2 沙箱之后、F-3 PTC 之前
 
 ---
 

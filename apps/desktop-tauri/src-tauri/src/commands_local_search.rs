@@ -312,6 +312,33 @@ mod usn_helper {
         std::env::temp_dir().join("hermix-usn-index")
     }
 
+    /// 定位 usn-indexer.exe。多级 fallback：
+    /// 1. current_exe 同目录（打包布局：主程序与 helper 同目录，Cargo 同
+    ///    crate 多 bin 本就产到一起）
+    /// 2. src-tauri/target/debug —— dev 布局：tauri dev / 部分构建流把主
+    ///    程序产到别处（如 CARGO_TARGET_DIR=release/target），而 src-tauri
+    ///    自己的 target 里躺着 `cargo build -p hermix-desktop` 的产物
+    /// 3. 仓库根 target/debug —— 纯 cargo 默认布局
+    /// 生产安装目录永远是情形 1；2/3 只为开发期省一次「去别的 target 目录
+    /// 手动拷 exe」。
+    pub fn locate_helper() -> Option<PathBuf> {
+        let exe_name = "usn-indexer.exe";
+        let mut candidates: Vec<PathBuf> = Vec::with_capacity(3);
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(dir) = exe.parent() {
+                candidates.push(dir.join(exe_name));
+            }
+        }
+        // CARGO_MANIFEST_DIR = apps/desktop-tauri/src-tauri（编译期常量）。
+        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        candidates.push(manifest.join("target/debug").join(exe_name));
+        // 仓库根 = manifest 的上两级。
+        if let Some(repo) = manifest.parent().and_then(|p| p.parent()) {
+            candidates.push(repo.join("target/debug").join(exe_name));
+        }
+        candidates.into_iter().find(|p| p.exists())
+    }
+
     /// done.json 内容。
     #[derive(serde::Deserialize)]
     pub struct Done {
@@ -597,11 +624,10 @@ mod usn_helper {
     /// 完成 USN 索引：复用/拉起 helper → 轮询 done → 读流灌 arena。
     /// 任何一步失败都返回 Err，由调用方回退 jwalk。
     pub fn run(volumes: &[String]) -> Result<Rebuilt, String> {
-        let helper = std::env::current_exe()
-            .map_err(|e| format!("current_exe: {e}"))?
-            .parent()
-            .ok_or("no parent")?
-            .join("usn-indexer.exe");
+        let helper = locate_helper().ok_or(
+            "helper 不存在：current_exe 同目录、src-tauri/target/debug、\
+             仓库根 target/debug 均未找到 usn-indexer.exe",
+        )?;
         let dir = exchange_dir();
         let resident = helper.exists() && helper_resident(&dir);
         if !resident {
