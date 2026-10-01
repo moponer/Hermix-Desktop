@@ -1,6 +1,14 @@
-# as_bool() 扫描报告：模型传字符串参数导致静默失败
+# Decision Note: as_bool() 字符串参数扫描 — 模型传字符串布尔导致静默失败
 
 Status: proposed — 扫描结论已就绪，修复批次待认领
+
+## Decision
+
+`hermix-tools` 全部 23 处 `as_bool()` 调用分三类处置：**B 类（静默放行，方向不安全）优先修**，`voice_mode.enabled` 是安全问题；**A 类（静默不执行）**中会导致模型陷入重试循环的（`move_file.overwrite`）与静默退化但无报错的关键项（`disk_cleanup.dry_run`）第二批修；C 类（读 handler 输出）不动。
+
+实现方式：抽一个只接受**明确真值**的 `bool_param(params, key, default)` helper，替换上述调用点。不在 tool_call_parser 做全局类型强转。
+
+本笔记是**扫描结论**，修复批次待认领后转为 `implemented/`。
 
 ## 背景
 
@@ -75,6 +83,13 @@ pub fn bool_param(params: &Value, key: &str, default: bool) -> bool
 23 处里有 8 处是"读 handler 输出"或"Option 语义天然容忍缺失"，真正需要
 改的是 15 处。一次性全改会让 diff 难以审阅，且这些点多数不影响正确性。
 建议按 B 类 → A 类中会误导模型的分两批做，每批配测试。
+
+## Alternatives considered
+
+- **在每个调用点手写 `.and_then(as_bool).or_else(|| s.eq_ignore_ascii_case("true"))`** — 否决：23 处重复同一个宽松逻辑，改一处漏一处，且每个点的"该接受什么"没人复核。抽 helper 让规则只有一份。
+- **helper 写成宽松的 truthy-cast（非空非 "false" 即真）** — 否决：这是删除/覆盖类操作的保险栓。"yes" / "1" / 任意非空字符串都被当真，等于给了一个绕过点。helper 只接受明确真值。
+- **在 tool_call_parser 层做全局类型强制转换（字符串 "true" → 布尔）** — 否决：范围远大于本问题。参数里的字符串常常是**合法值**（比如 `mode: "trash"`），全局强转会误伤；而且解析层看不到每个参数的语义，无从判断 `"1"` 对 `dry_run` 该当真还是假。
+- **不动，只修 `storage_clean`** — 否决：`voice_mode.rs:657` 的 `unwrap_or(!previous)` 是取反而非取默认，模型说"关掉"会变成"开启"，这是安全问题不是体验问题。
 
 ## Consequences
 
