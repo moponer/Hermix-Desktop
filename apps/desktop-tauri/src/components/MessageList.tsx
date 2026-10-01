@@ -70,6 +70,8 @@ export interface MessageListProps {
   onApproveBatchApproval?: (batchId: string, remember?: boolean) => void;
   onDenyBatchApproval?: (batchId: string, note?: string) => void;
   onReasoningFoldChange?: (folded: boolean) => void;
+  /** 「重新生成」：重新发送上一条用户消息。父级不传就不渲染该按钮。 */
+  onRetryLastMessage?: () => void;
   onAnswerClarify?: (requestId: string, answer: string) => void;
   workspaceRoot?: string | null;
   sending: boolean;
@@ -402,6 +404,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
                 onApproveBatchApproval={onApproveBatchApproval}
                 onDenyBatchApproval={onDenyBatchApproval}
                 onReasoningFoldChange={onReasoningFoldChange}
+        onRetryLastMessage={onRetryLastMessage}
                 onAnswerClarify={onAnswerClarify}
                 showHeader={showHeader}
                 isStreaming={!!streamingAssistantId && msg.id === streamingAssistantId}

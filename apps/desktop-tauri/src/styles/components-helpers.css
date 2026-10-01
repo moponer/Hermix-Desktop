@@ -568,6 +568,16 @@
   white-space: nowrap;
 }
 
+/* 轮次耗时：贴在「工作完成」右边、右对齐到折叠头末端。 */
+.tl-process-elapsed {
+  margin-left: auto;
+  padding-left: 12px;
+  font-size: var(--text-meta, 12px);
+  color: var(--color-text-faint);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 /* 整轮折叠头的次级明细：耗时是主标签，动词聚合挂这里 */
 .tl-process-detail {
   font-size: var(--text-meta, 12px);
@@ -630,6 +640,64 @@
 }
 .message-copy-button:active {
   background: var(--color-bg-tertiary);
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   消息操作行（2026-10-01）
+   ════════════════════════════════════════════════════════════════════
+   复制 / 赞 / 踩 / 重新生成 / 时刻。沿用 `.message-copy-row` 的
+   hover 淡入机制 —— 不 hover 时不占注意力，但**时刻常驻**（它是这条
+   消息的身份信息，不是操作）。
+
+   纯图标按钮（赞/踩/重生成）没有文字标签，靠 `title` + `aria-label`
+   承载语义；`aria-pressed` 告诉读屏「这个现在是选中态」。 */
+.message-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 22px;
+  min-width: 22px;
+  justify-content: center;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-faint);
+  font-size: 11px;
+  line-height: 1;
+  font-family: inherit;
+  cursor: pointer;
+  transition: color var(--duration-fast) ease, background var(--duration-fast) ease;
+}
+.message-action-btn:hover,
+.message-action-btn:focus-visible {
+  color: var(--color-text-primary);
+  background: var(--color-bg-hover);
+  outline: none;
+}
+/* 纯图标按钮：hover 显形，静态时让位给文字 */
+.message-action-icon {
+  opacity: 0.45;
+}
+.message-action-row:hover .message-action-icon,
+.message-action-btn:focus-visible { opacity: 1; }
+/* 选中态：赞用 success、踩用 error —— 选中即表态，颜色跟着表态走 */
+.message-action-btn[data-active="true"] {
+  opacity: 1;
+  color: var(--color-text-secondary);
+  background: var(--color-bg-hover);
+}
+.message-action-btn[data-active="true"] svg { color: var(--color-success); }
+.message-action-btn[data-active="true"][aria-label="没帮上忙"] svg { color: var(--color-error); }
+
+/* 时刻：常驻，不需要 hover */
+.message-action-clock {
+  margin-left: 4px;
+  padding-left: 8px;
+  font-size: var(--text-tiny, 11px);
+  color: var(--color-text-faint);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 /* ── 5a-0c. Tools Block — 流式时视觉接近正文 ──

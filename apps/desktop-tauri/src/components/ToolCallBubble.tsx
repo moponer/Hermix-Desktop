@@ -70,6 +70,7 @@ export function ProcessTimeline({
   keepOpen = false,
   hasRunningTool,
   durationMs,
+  turnDurationMs,
   onPathClick,
   onApproveApproval,
   onDenyApproval,
@@ -91,6 +92,13 @@ export function ProcessTimeline({
    *  no data — reloaded history never has it, so the header just says
    *  "已完成" without a duration. Live streams always have it. */
   durationMs?: number;
+  /**
+   * 恢复态的轮次耗时，由 `execution_timeline` 里最早/最晚的真实
+   * `created_at` 推导（`deriveTurnDurationMs`）。`durationMs` 不持久化，
+   * 重载后为空；这个是它的恢复态替身。**两者都没有时折叠头不显示耗时**，
+   * 不编一个数字出来。
+   */
+  turnDurationMs?: number;
   onPathClick?: (path: string, e: React.MouseEvent) => void;
   /** Forwarded to inline `kind: "approval_request"` step rendering
    *  (`<ApprovalRequestView>`). Without these the 拒绝 / 允许
@@ -233,7 +241,11 @@ export function ProcessTimeline({
   // "已完成 5 个工具 7s"     ← tools only
   // "已完成 7s"               ← pure reasoning/text
   // "思考 3s · 5 个工具"      ← both (compact form)
-  const durationPart = formatDuration(durationMs);
+  // 2026-10-01：`durationMs` 流式时准确，但**不持久化**，重载后是
+  // undefined。恢复态改用 `turnDurationMs` —— 由 `execution_timeline`
+  // 里最早/最晚的真实 `created_at` 推出来的（见 `deriveTurnDurationMs`）。
+  // 两者都没有时才真的不显示时间，不编。
+  const durationPart = formatDuration(durationMs ?? turnDurationMs);
   const thinkSec = reasoningSteps.length > 0
     ? formatDuration(durationMs)
     : null;
@@ -337,9 +349,11 @@ export function ProcessTimeline({
               这是一次有代价的取舍：折叠态不再提示「这轮有过失败」。
               若日后需要，折中方案是恢复**中性色**的形状图标（不带计数、
               不染红），而不是恢复红字。 */}
-          <span className="reasoning-label">
-            工作完成{durationPart ? ` · 共耗时 ${durationPart}` : ""}
-          </span>
+          <span className="reasoning-label">工作完成</span>
+          {/* 耗时挂在「工作完成」**右边**并右对齐 —— 这是「这一轮」的
+              属性，跟着这一轮走，不该混进文案里变成「工作完成 · 共耗时
+              19 分 57 秒」那样一个长词组。 */}
+          {durationPart && <span className="tl-process-elapsed">{durationPart}</span>}
         </button>
       )}
       {/* Chronological render — 一轮就是一个按时间顺序平铺的过程流：
@@ -576,6 +590,7 @@ export function UnifiedTimelineRenderer({
         keepOpen={keepOpen}
         hasRunningTool={hasRunningTool}
         durationMs={durationMs}
+  turnDurationMs={turnDurationMs}
         onPathClick={onPathClick}
         onApproveApproval={onApproveApproval}
         onDenyApproval={onDenyApproval}

@@ -8,9 +8,11 @@ import { Avatar } from "./Avatar";
 import { formatRelativeTime } from "../utils/time";
 import {
   extractFileChanges, extractMemoryUpdates, extractMemoryRecalls, resolveSteps,
+  deriveTurnDurationMs,
 } from "./messageParser";
 import { UnifiedTimelineRenderer } from "./ToolCallBubble";
 import { MessageCopyAction } from "./MessageCopyAction";
+import { MessageActions } from "./MessageActions";
 import type { ChatMessage } from "../types";
 export function StopReasonChip({ reason, meta }: { reason: string; meta?: string }) {
   // Normal terminations: render nothing. The content + WaitForInputIndicator
@@ -92,6 +94,8 @@ export function AssistantMessage({
    *  `<ChatView>`, which decides whether to mount the bottom-of-chat
    *  `<ReasoningTicker>`. */
   onReasoningFoldChange?: (folded: boolean) => void;
+  /** 「重新生成」：重新发送上一条用户消息。父级不传就不渲染该按钮。 */
+  onRetryLastMessage?: () => void;
   /**
    * Whether to render the avatar + name + time + model + stop chip.
    * The copy action is rendered below the message body, even though
@@ -230,11 +234,13 @@ export function AssistantMessage({
           toolCalls={toolCalls}
           hasRunningTool={hasRunningTool}
           durationMs={message.durationMs}
+          turnDurationMs={deriveTurnDurationMs(message)}
           onApproveApproval={onApproveApproval}
           onDenyApproval={onDenyApproval}
           onApproveBatchApproval={onApproveBatchApproval}
           onDenyBatchApproval={onDenyBatchApproval}
           onReasoningFoldChange={onReasoningFoldChange}
+        onRetryLastMessage={onRetryLastMessage}
         />
 
         {/* Backend badge (outside card so it reads as meta, not part of answer) */}
@@ -244,9 +250,12 @@ export function AssistantMessage({
           </div>
         )}
 
-        <MessageCopyAction
-          content={message.content}
+        {/* 助手消息：完整操作行（复制 / 赞 / 踩 / 重新生成 / 时刻）。
+            用户消息只有「复制」——赞/踩/重生成对「我说的话」没有意义。 */}
+        <MessageActions
+          message={message}
           className="message-copy-row message-copy-row--assistant"
+          onRetry={onRetryLastMessage}
         />
       </div>
 

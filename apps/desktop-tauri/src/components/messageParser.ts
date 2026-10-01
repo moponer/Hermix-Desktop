@@ -790,6 +790,35 @@ export function mergeAdjacentReasoning(steps: TimelineStep[]): TimelineStep[] {
 }
 
 /**
+ * 从 `execution_timeline` 推导**恢复态**的轮次耗时（毫秒）。
+ *
+ * `message.durationMs` 只在流式当轮存在，**不持久化** —— 重载后是
+ * `undefined`，折叠头就退化成光秃秃的「工作完成」。这里用时间线事件
+ * 真实的 `created_at` 补上：最早事件 → 最晚事件。
+ *
+ * 覆盖不到的：整轮**没有工具调用**的纯对话（时间线为空）。那种情况
+ * 时间线上一个真实锚点都没有，返回 `undefined` —— 折叠头就不显示耗时。
+ * 宁可没有，不要一个看起来精确的假数字。
+ */
+export function deriveTurnDurationMs(message: ChatMessage): number | undefined {
+  const events = message.execution_timeline ?? [];
+  let min = Number.POSITIVE_INFINITY;
+  let max = Number.NEGATIVE_INFINITY;
+  for (const e of events) {
+    if (!e.created_at) continue;
+    const t = new Date(e.created_at).getTime();
+    if (Number.isNaN(t)) continue;
+    if (t < min) min = t;
+    if (t > max) max = t;
+  }
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return undefined;
+  const span = max - min;
+  // 单个事件（只有一次工具调用且没有 complete）跨度为 0，那不是「0 秒完成」
+  // 而是「测不出来」，别显示 0。
+  return span > 0 ? span : undefined;
+}
+
+/**
  * Attempt to split a reasoning_content blob that actually contains both
  * the model's thinking and its visible reply. This happens when MiniMax M3
  * opens a ‌​ tag but never emits the closing ‌​,

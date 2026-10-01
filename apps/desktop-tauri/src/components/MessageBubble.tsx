@@ -46,6 +46,8 @@ interface MessageBubbleProps {
   onApproveBatchApproval?: (batchId: string, remember?: boolean) => void;
   onDenyBatchApproval?: (batchId: string) => void;
   onReasoningFoldChange?: (folded: boolean) => void;
+  /** 「重新生成」：重新发送上一条用户消息。父级不传就不渲染该按钮。 */
+  onRetryLastMessage?: () => void;
   onAnswerClarify?: (requestId: string, answer: string) => void;
   /** Click handler for absolute/relative paths mentioned in tool
    *  rows and the file-change list.  Used to pop the inline file
@@ -146,6 +148,7 @@ export function MessageBubble({
       onApproveBatchApproval={onApproveBatchApproval}
       onDenyBatchApproval={onDenyBatchApproval}
       onReasoningFoldChange={onReasoningFoldChange}
+        onRetryLastMessage={onRetryLastMessage}
     />
   );
 }
