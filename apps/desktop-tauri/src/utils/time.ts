@@ -36,12 +36,12 @@ export function formatSidebarTime(iso: string | undefined | null, now: Date = ne
   }
   const diffDay = Math.floor(diffHr / 24);
   if (diffDay === 1) return "昨天";
-  if (diffDay < 7) {
-    const restHr = diffHr % 24;
-    return restHr > 0 ? `${diffDay}天${restHr}小时前` : `${diffDay}天前`;
+  if (diffDay < 30) {
+    // 2026-10-01 用户反馈：≥24h 后小时分钟没有检索价值（「2天10小时前」
+    // 的 10 小时不改变任何决策），只保留天。
+    return `${diffDay}天前`;
   }
-  if (diffDay < 30) return `${diffDay}天前`;
-  return `${ts.getMonth() + 1}月${ts.getDate()}日`;
+  return `${ts.getMonth() + 1}月${ts.getDate()}` + "日";
 }
 
 // "Xms / X.Ys / Xm Ys".
