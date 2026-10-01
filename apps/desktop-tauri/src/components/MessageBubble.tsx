@@ -94,6 +94,7 @@ export function MessageBubble({
   onApproveApproval, onDenyApproval, onAnswerClarify,
   onApproveBatchApproval, onDenyBatchApproval,
   onReasoningFoldChange,
+  onRetryLastMessage,
   onPathClick,
   showHeader = true,
   isStreaming = false,

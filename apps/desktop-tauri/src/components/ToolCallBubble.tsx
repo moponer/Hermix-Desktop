@@ -522,6 +522,7 @@ export function UnifiedTimelineRenderer({
   toolCalls,
   hasRunningTool,
   durationMs,
+  turnDurationMs,
   onApproveApproval,
   onDenyApproval,
   onApproveBatchApproval,
@@ -542,6 +543,9 @@ export function UnifiedTimelineRenderer({
   hasRunningTool: boolean;
   /** Forwarded to ProcessTimeline for the "已完成 10s" header chip. */
   durationMs?: number;
+  /** 恢复态的轮次耗时（`durationMs` 不持久化，重载后为空）。见
+   *  `ProcessTimeline` 上同名字段的说明。 */
+  turnDurationMs?: number;
   /** Forwarded to ProcessTimeline for the inline
    *  `kind: "approval_request"` step's 拒绝 / 允许 buttons. */
   onApproveApproval?: (requestId: string) => void;

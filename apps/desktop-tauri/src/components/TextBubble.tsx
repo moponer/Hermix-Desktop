@@ -72,6 +72,7 @@ export function AssistantMessage({
   onApproveBatchApproval,
   onDenyBatchApproval,
   onReasoningFoldChange,
+  onRetryLastMessage,
 }: {
   message: ChatMessage;
   workspaceRoot?: string | null;
@@ -240,7 +241,6 @@ export function AssistantMessage({
           onApproveBatchApproval={onApproveBatchApproval}
           onDenyBatchApproval={onDenyBatchApproval}
           onReasoningFoldChange={onReasoningFoldChange}
-        onRetryLastMessage={onRetryLastMessage}
         />
 
         {/* Backend badge (outside card so it reads as meta, not part of answer) */}

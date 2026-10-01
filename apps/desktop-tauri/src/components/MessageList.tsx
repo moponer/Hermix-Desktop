@@ -133,6 +133,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
     onApproveBatchApproval,
     onDenyBatchApproval,
     onReasoningFoldChange,
+    onRetryLastMessage,
     onAnswerClarify,
     workspaceRoot,
     sending,
