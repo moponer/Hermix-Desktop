@@ -289,7 +289,9 @@
   max-height: 340px;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 2px 0 2px 14px;
+  /* 2026-10-01：14px → 8px。2px 竖线 + 12px 留白时文字看着像和竖线
+     无关的两列；8px 仍留出呼吸，但竖线明确读作本段的引用线。 */
+  padding: 2px 0 2px 8px;
   border-left: 2px solid var(--color-border-primary);
   color: var(--color-text-tertiary);
   font-size: var(--text-ui, 13px);

@@ -850,69 +850,6 @@
   background: rgba(217, 119, 6, 0.10);
 }
 
-/* Reasoning ticker — single-line indicator beside the
-   bottom-of-chat status pill. Shows the LATEST captured reasoning
-   line when the user has actually folded the reasoning block
-   (initial state is unfolded → ticker dormant, 2026-08-29 user
-   feedback). Overflowing lines scroll on a fast marquee loop
-   instead of ellipsing into a static snapshot. The pill + ticker
-   share a row via the `.msg-channel` flex container in
-   `ChatIndicators.tsx`. */
-.reasoning-ticker {
-  display: inline-flex;
-  align-items: center;
-  max-width: 320px;
-  height: 22px;
-  line-height: 22px;
-  padding: 0 10px;
-  margin-left: 10px;
-  border-radius: 11px;
-  background: var(--color-bg-secondary, rgba(0, 0, 0, 0.04));
-  color: var(--color-text-secondary);
-  font-size: 12px;
-  font-style: italic;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  border: 1px solid color-mix(in srgb, var(--color-text-faint, #94a3b8) 24%, transparent);
-  vertical-align: middle;
-}
-.reasoning-ticker-line {
-  display: inline-block;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  animation: reasoning-ticker-fade 200ms ease-out;
-}
-/* Marquee variant — only applied when the line overflows (JS probe).
-   Fast loop: hold the head briefly so it's readable, sweep to the
-   tail (~4.8s for 300px+), quick return. `calc(-100% + 320px)` ends
-   with the text's right edge aligned to the pill's right edge
-   (100% = span width, 320px = pill max-width). */
-.reasoning-ticker-line.reasoning-ticker-marquee {
-  overflow: visible;
-  text-overflow: clip;
-  animation:
-    reasoning-ticker-fade 200ms ease-out,
-    reasoning-ticker-scroll 6s linear 200ms infinite;
-}
-@keyframes reasoning-ticker-fade {
-  from { opacity: 0; transform: translateY(2px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-@keyframes reasoning-ticker-scroll {
-  0%   { transform: translateX(0); }
-  8%   { transform: translateX(0); }
-  88%  { transform: translateX(calc(-100% + 320px)); }
-  96%  { transform: translateX(calc(-100% + 320px)); }
-  100% { transform: translateX(0); }
-}
-@media (prefers-reduced-motion: reduce) {
-  .reasoning-ticker-line,
-  .reasoning-ticker-line.reasoning-ticker-marquee {
-    animation: none;
-  }
-}
 
 /* Batch approval card — `kind: "approval_request_batch"` step in the
    process timeline. Renders one card with a list of sub-actions;

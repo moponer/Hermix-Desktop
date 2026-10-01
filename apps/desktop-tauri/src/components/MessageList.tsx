@@ -73,10 +73,6 @@ export interface MessageListProps {
   onAnswerClarify?: (requestId: string, answer: string) => void;
   workspaceRoot?: string | null;
   sending: boolean;
-  /** Captured reasoning lines for the bottom-of-chat ticker. */
-  reasoningLines?: string[];
-  /** Whether the latest reported fold state is "folded". */
-  reasoningFolded?: boolean;
 }
 
 // 距底部多少像素内仍算"贴底"、以及真实滚动输入的意图窗口，
@@ -138,8 +134,6 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
     onAnswerClarify,
     workspaceRoot,
     sending,
-    reasoningLines,
-    reasoningFolded,
   } = props;
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -477,8 +471,6 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
                   pendingToolsCount={pendingToolsCount}
                   visible
                   replying={isStreaming}
-                  reasoningLines={reasoningLines}
-                  reasoningFolded={reasoningFolded ?? false}
                 />
               );
             }
