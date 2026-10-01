@@ -207,6 +207,31 @@ J2 resource_guard 拦截（与 5 天前定策冲突）、以及 E10/E16 两条�
 
 ## 九、请审核 agent 重点复核
 
+### 复核项补充（2026-10-01 审核批复后追加）
+
+**① `ApprovalFallback::Allow` 全部调用点清单**
+
+审核要求"逐一标注为何是 stdio/本机路径"。核实结果：**生产代码中只有
+1 处**，其余 22 处全在 `#[cfg(test)]` 内。
+
+| 位置 | 性质 | 为何 Allow |
+|---|---|---|
+| `crates/hermix-server/src/stdio_session.rs:257` | **生产，唯一一处** | 本地 stdio 管道：驱动该 channel 的操作者已持有宿主 shell 权限，Dangerous 工具不构成权限提升。网络传输（HTTP / 裸 WS）一律传 Deny（`routes.rs`、`ws.rs`） |
+
+`local_agent_service.rs` 的 22 处 `ApprovalFallback::Allow` 全部位于
+该文件的 `#[cfg(test)] mod tests` 内（第 3865–4598 行），是单元测试
+对 `decide_pre_tool_dispatch` 的显式传参——测试无审批通道，直接
+声明 Allow 以便覆盖"无审批时 Dangerous 仍放行"这条本机语义。
+**它们不构成生产暴露面。**
+
+**② TLS-off 跳过指纹校验的日志**
+
+`pairing.rs:810` 由 `tracing::debug!` 升为 `warn!`，并在消息里点明
+后果：TLS 缺失意味着指纹校验（防同网段 MITM）整个不生效，配对信任
+引导在此部署下未经认证。原来静默，排查时完全不可见。
+
+### 原 8 项（已全部批复同意）
+
 1. **审批 fail-open 的策略选型**：HTTP/裸 WS = Deny、stdio = Allow，是否符合你的暴露面判断？非流式 HTTP 上 Dangerous 工具现返回 Deny（行为变更）。
 2. **配对指纹为必填字段**：`CompletePairingBody.cert_fingerprint` 新增必填，**已配对的老设备或外部客户端需同步补字段**，否则 400。
 3. **patch 改为字面唯一匹配**：原模糊匹配会静默改错位置，但改成严格后，模型若 `old_string` 不精确会失败（报错提示重读文件）。UX 权衡是否可接受？

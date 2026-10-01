@@ -807,7 +807,16 @@ pub async fn complete_pairing(
         }
         None => {
             // TLS 未启用（纯 HTTP 部署）时无从比对，不阻塞配对。
-            tracing::debug!("pairing: TLS material unavailable; skipping fingerprint check");
+            //
+            // 升为 warn（2026-10-01 审核复核项②）：这是一条**安全边界失效**
+            // 的记录，不是普通的调试信息——指纹校验正是为防同网段 MITM，
+            // TLS 缺失意味着该防护整个不生效。静默（debug）会让"配对为什么
+            // 没校验指纹"在排查时完全不可见。
+            tracing::warn!(
+                "pairing: TLS material unavailable — fingerprint check SKIPPED. \
+                 Pairing trust bootstrap is unauthenticated on this deployment; \
+                 enable TLS (HERMIX_TLS_ADDR) to get MITM protection."
+            );
         }
     }
 
