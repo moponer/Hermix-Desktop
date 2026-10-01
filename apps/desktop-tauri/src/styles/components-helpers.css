@@ -229,8 +229,13 @@
 .reasoning-header {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 3px 10px 3px 7px;
+  /* 2026-10-01 对齐：与 `.tl-reasoning-head` 共用同一套「前导图标槽」
+     尺寸（见下方 `.tl-process-lead` 说明）。原先这里是
+     `padding-left:7px + icon-sm(12px) + gap:5px` = 24px，
+     思考行是 `0 + 13px + 6px` = 19px —— 两行文字差 5px，
+     上下读起来是歪的。 */
+  gap: 6px;
+  padding: 3px 8px;
   background: transparent;
   border: 0;
   border-radius: var(--radius-md);
@@ -249,6 +254,19 @@
   border-radius: var(--radius-sm);
 }
 
+/* 2026-10-01 对齐：折叠头与思考行共用同一个「前导图标槽」。
+ *
+ * 实测（`align-probe.html`，浏览器量 getBoundingClientRect，不估算）：
+ *   折叠头文字左边缘 58.00 / 思考文字左边缘 59.00 → 差 1px。
+ * 差在图标尺寸：JSX 上折叠头挂 `icon-sm`（12px），思考行是 13px。
+ * 1px 差在正文尺寸下看不出来，但两行上下叠着读就是「歪的」。
+ * 所以两个前导图标都固定 14px，文字起始 x 才会真正落在同一条线上。 */
+.reasoning-header .reasoning-chevron,
+.tl-reasoning-icon {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
 .reasoning-chevron {
   transition: transform 0.2s ease;
   color: var(--color-text-faint);
@@ -491,7 +509,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 2px 0;
+  padding: 3px 8px;   /* 与 .reasoning-header 一致，两行起始 x 相同 */
   border: 0;
   background: transparent;
   font: inherit;
@@ -501,6 +519,14 @@
   border-radius: 4px;
   align-self: flex-start;
   max-width: 100%;
+}
+/* 2026-10-01 箭头垂直居中：这一行是 flex + align-items:center，但标签
+   继承了 1.75 的行高 —— 文字行盒比 12px 图标高得多，于是**图标按盒子
+   真中心、文字按行盒顶部**排，箭头就显得比「思考」低了一截。
+   把标签行高压到 1，盒子高度就和图标齐平，两者才对得齐。 */
+.tl-reasoning-label,
+.tl-reasoning-count {
+  line-height: 1;
 }
 .tl-reasoning-head:hover { color: var(--color-text-secondary); }
 .tl-reasoning-head:focus-visible {
@@ -528,7 +554,9 @@
   0%, 100% { opacity: 1; }
   50% { opacity: 0.45; }
 }
-.tl-reasoning-icon { width: 13px; height: 13px; flex: none; }
+/* 尺寸见上方「前导图标槽」—— 折叠头 12px / 思考 13px 的差异会让两行
+   文字错开 1px。 */
+.tl-reasoning-icon { flex: none; }
 .tl-reasoning-label {
   font-size: var(--text-ui, 13px);
   color: inherit;

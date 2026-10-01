@@ -673,7 +673,71 @@ export function resolveSteps(message: ChatMessage): TimelineStep[] {
     message.unified_steps && message.unified_steps.length > 0
       ? message.unified_steps
       : buildFallbackSteps(message);
-  return mergeAdjacentReasoning(raw);
+  return stampReasoningTimings(mergeAdjacentReasoning(raw));
+}
+
+/** 一个 step 里第一个/最后一个真实时间戳（只认工具事件的 `created_at`）。 */
+function stepTimeBounds(
+  step: TimelineStep,
+): { first?: string; last?: string } {
+  if (step.kind === "reasoning") {
+    return { first: step.startedAt, last: step.endedAt };
+  }
+  if (step.kind !== "tools") return {};
+  let first: string | undefined;
+  let last: string | undefined;
+  for (const e of step.events) {
+    if (!e.created_at) continue;
+    if (first === undefined) first = e.created_at;
+    last = e.created_at;
+  }
+  return { first, last };
+}
+
+/**
+ * 给恢复态的思考段补时间戳 —— 从**相邻工具事件的真实 `created_at`** 反推。
+ *
+ * 2026-10-01：用户反馈重载历史后「思考」行不显示耗时。原因是流式时
+ * `appendReasoningStep` 打的 `startedAt/endedAt` 只活在前端内存里，
+ * 服务端持久化的 `reasoning_content` 是一整段字符串，**没有分段时间**。
+ *
+ * 但 `execution_timeline` 的事件带真实 `created_at`，而思考段恰好夹在
+ * 工具调用之间 —— 于是「这段思考从上一批工具结束到下一批工具开始有多久」
+ * 是可以从真实数据算出来的，不是编的。
+ *
+ * 覆盖不到的情况（诚实地不显示，而不是显示错的）：
+ * - **第一段**思考：它的开始是本轮起点，恢复态拿不到（`duration_ms`
+ *   不持久化），所以只有 endedAt，没有耗时。
+ * - 末尾那段思考：后面没有工具调用可作结束锚点，同样无耗时。
+ *
+ * 即「有真实边界的段才显示时间」。这比统一显示 0 秒诚实，也比一律不显示
+ * 多给了一半段落的真实信息。
+ */
+function stampReasoningTimings(steps: TimelineStep[]): TimelineStep[] {
+  if (steps.length === 0) return steps;
+  const bounds = steps.map(stepTimeBounds);
+  return steps.map((step, i) => {
+    if (step.kind !== "reasoning") return step;
+    if (step.startedAt) return step; // 流式时已打戳，不覆盖
+    // 结束锚点：本段之后第一个带时间戳的 step 的起点
+    let endedAt: string | undefined;
+    for (let j = i + 1; j < steps.length; j++) {
+      if (bounds[j].first) {
+        endedAt = bounds[j].first;
+        break;
+      }
+    }
+    // 开始锚点：之前最后一个带时间戳的 step 的终点
+    let startedAt: string | undefined;
+    for (let j = i - 1; j >= 0; j--) {
+      if (bounds[j].last) {
+        startedAt = bounds[j].last;
+        break;
+      }
+    }
+    if (!endedAt || !startedAt) return step;
+    return { ...step, startedAt, endedAt };
+  });
 }
 
 /**

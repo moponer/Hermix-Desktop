@@ -105,6 +105,97 @@ describe("思考段的时间戳", () => {
   });
 });
 
+describe("恢复态：思考耗时从相邻工具事件反推", () => {
+  const iso = (s: number) => new Date(Date.parse("2026-10-01T00:00:00.000Z") + s * 1000).toISOString();
+  const toolAt = (s: number): ExecutionTimelineEvent =>
+    ({ type: "tool_start", tool: "terminal", arguments: "{}", created_at: iso(s) }) as ExecutionTimelineEvent;
+
+  it("夹在两批工具之间的思考段拿到真实耗时", () => {
+    // 真实的恢复态形状：一轮被持久化成**多个 assistant 行**时，
+    // `rebuildUnifiedSteps` 会产出多个 reasoning step 夹在工具步之间
+    // （`chatUtils.ts`）。中间那段两头都有工具事件作锚点。
+    const msg = {
+      id: "m",
+      role: "assistant",
+      content: "答完了。",
+      timestamp: iso(60),
+      unified_steps: [
+        { kind: "reasoning", content: "先看现状" },
+        { kind: "tools", events: [toolAt(10)] },
+        { kind: "reasoning", content: "再看一遍确认" },
+        { kind: "tools", events: [toolAt(25)] },
+        { kind: "text", content: "答完了。" },
+      ],
+    } as unknown as ChatMessage;
+
+    const reasonings = resolveSteps(msg).filter((s) => s.kind === "reasoning");
+    const timed = reasonings.filter((r) => r.startedAt && r.endedAt) as Array<
+      { startedAt?: string; endedAt?: string } & TimelineStep
+    >;
+    expect(timed).toHaveLength(1);
+    expect(
+      new Date(timed[0].endedAt!).getTime() - new Date(timed[0].startedAt!).getTime(),
+    ).toBe(15_000);
+  });
+
+  it("首段思考没有开始锚点 → 不显示耗时（真实限制，不是 bug）", () => {
+    // 单段思考（`reasoning_content` 是一整段字符串时就是这样）：
+    // 结束锚点有（下一批工具），开始锚点没有（需要本轮起点，而
+    // `duration_ms` 不持久化）。宁可没有，不要编一个 0 秒。
+    const msg = {
+      id: "m0",
+      role: "assistant",
+      content: "答。",
+      timestamp: iso(60),
+      unified_steps: [
+        { kind: "reasoning", content: "只有一段" },
+        { kind: "tools", events: [toolAt(10)] },
+        { kind: "text", content: "答。" },
+      ],
+    } as unknown as ChatMessage;
+    const r = resolveSteps(msg).find((s) => s.kind === "reasoning") as
+      | { startedAt?: string; endedAt?: string }
+      | undefined;
+    expect(r?.startedAt).toBeUndefined();
+  });
+
+  it("没有真实边界的段不显示耗时，而不是显示 0 秒", () => {
+    const msg = {
+      id: "m2",
+      role: "assistant",
+      content: "",
+      timestamp: iso(60),
+      reasoningContent: "只有一段思考",
+      execution_timeline: [],
+    } as unknown as ChatMessage;
+
+    const r = resolveSteps(msg).find((s) => s.kind === "reasoning") as
+      | { startedAt?: string; endedAt?: string }
+      | undefined;
+    expect(r).toBeDefined();
+    expect(r?.startedAt).toBeUndefined();
+    expect(r?.endedAt).toBeUndefined();
+  });
+
+  it("流式时已打戳的段不被恢复态逻辑覆盖", () => {
+    const msg = {
+      id: "m3",
+      role: "assistant",
+      content: "答。",
+      timestamp: iso(60),
+      unified_steps: [
+        { kind: "reasoning", content: "流式的", startedAt: iso(3), endedAt: iso(9) },
+        { kind: "tools", events: [toolAt(20)] },
+      ],
+    } as unknown as ChatMessage;
+    const r = resolveSteps(msg).find((s) => s.kind === "reasoning") as
+      | { startedAt?: string; endedAt?: string }
+      | undefined;
+    expect(r?.startedAt).toBe(iso(3));
+    expect(r?.endedAt).toBe(iso(9));
+  });
+});
+
 describe("恢复态不带编造的时长", () => {
   it("重载历史没有时间戳 → 标签退化为「思考」，不显示秒数", () => {
     // 恢复态走 buildFallbackSteps / chatUtils.rebuildUnifiedSteps，
