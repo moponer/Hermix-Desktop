@@ -1,25 +1,61 @@
-# 长任务稳定性与能力升级方案
+# Decision Note: 长任务稳定性与能力升级方案
 
-# 长任务稳定性与能力升级方案
+Status: implemented — 阶段 1-3 与阶段 5（模式三根线）已落地；阶段 4（P1-B/C/D、P2-A/B）与阶段 6-8（远程）未做
 
-> **落地状态（2026-09-28 晚）**：阶段 1 / 2 / 3 已完成。
->
-> | 项 | 落点 |
-> |---|---|
-> | 提示词事实纠错 | directions.rs（web_extract×6、process_registry 删、dead-route 注释×3）、domain_mode.rs（priority_tools/映射/测试全换真实工具名）、tool_meta.rs（patch）、pdf.rs |
-> | 「报告必须分节」单一真相源 | 新常量 `REPORT_SECTIONING`，think.full 与 format.short 运行时拼接（省一份 ~700 字拷贝） |
-> | AGENTS.md 同步 | 收敛检测硬停阈值、已删 summary guidance、nudge 一次性 |
-> | 审批超时可配置 | `ApprovalConfig.timeout_secs`（默认 600，0=永不）→ 进程级全局 `hermix_config::approval_timeout_secs()`；registry / 前端倒计时 / agent 兜底三处对齐；旧"永不超时"行为保留为显式配置 |
-> | 24h sleep hack 删除 | tool_dispatch 兜底 = 主超时+60s；HTTP 分支（原裸 await）补同一把网 |
-> | watchdog 布防修正 | arm 点从 do_tool_turn 之后移到之前（旧位置 arm→check 之间零 await，结构上不可能触发）；默认 30s→1800s（覆盖审批+工具预算之和） |
-> | 工具预算声明制 | 新 `per_tool_budget()`/`batch_budget()`（terminal 600s、browser_* 900s、delegate 1900s、文档 300s、生成类 600s；批=和+120s 封顶 3600s），tool_executor 弃用硬编码 60s/300s |
-> | 子 agent 超时 | 300s → 1800s（config 可调） |
-> | 验证 | cargo check --workspace ✓；hermix-agent 1062 / hermix-server 198 / hermix-tools 699 / hermix-intelligence 318 全过 |
->
-> 未做（按计划继续）：P1-B 流断续跑、P1-C ContextOverflow 压缩重试、P1-D 会话单飞、
-> P2 轮间落盘、阶段 5-8（模式接线 / IM 远程）。
 > 2026-09-28 · 基于 4 路并行审计（agent loop / 提示词与 skill / 工作模式路由 / IM 远程调研）
 > 原则：全部结论有 文件:行号 证据；方案做结构性修复，不做兜底补丁。
+
+## Decision
+
+**对"长任务"做结构性修复，不加兜底补丁。** 四路审计给出三个结构性上限（时间上限 / 人工依赖 / 中断不可续），阶段 1-3 逐项修掉其中可修的部分：
+
+| 已落地项 | 落点 |
+|---|---|
+| 提示词事实纠错 | directions.rs（web_extract×6、process_registry 删、dead-route 注释×3）、domain_mode.rs（priority_tools/映射/测试全换真实工具名）、tool_meta.rs（patch）、pdf.rs |
+| 「报告必须分节」单一真相源 | 新常量 `REPORT_SECTIONING`，think.full 与 format.short 运行时拼接（省一份 ~700 字拷贝） |
+| AGENTS.md 同步 | 收敛检测硬停阈值、已删 summary guidance、nudge 一次性 |
+| 审批超时可配置 | `ApprovalConfig.timeout_secs`（默认 600，0=永不）→ 进程级全局 `hermix_config::approval_timeout_secs()`；registry / 前端倒计时 / agent 兜底三处对齐；旧"永不超时"行为保留为显式配置 |
+| 24h sleep hack 删除 | tool_dispatch 兜底 = 主超时+60s；HTTP 分支（原裸 await）补同一把网 |
+| watchdog 布防修正 | arm 点从 do_tool_turn 之后移到之前（旧位置 arm→check 之间零 await，结构上不可能触发）；默认 30s→1800s（覆盖审批+工具预算之和） |
+| 工具预算声明制 | 新 `per_tool_budget()`/`batch_budget()`（terminal 600s、browser_* 900s、delegate 1900s、文档 300s、生成类 600s；批=和+120s 封顶 3600s），tool_executor 弃用硬编码 60s/300s |
+| 子 agent 超时 | 300s → 1800s（config 可调） |
+| 验证 | cargo check --workspace ✓；hermix-agent 1062 / hermix-server 198 / hermix-tools 699 / hermix-intelligence 318 全过 |
+
+**工作模式三根线全部了结**（2026-09-29）：第 1 根 DomainMode 接线（`prompt_assembly::resolve_domain_mode` 在三处 `RouteContext` 构造点接入检测/覆盖，域指令与工具加权真正生效）；第 2 根消费 `expert.toolset`（经 `SendMessageRequest.expert_toolset` 传后端，用 `ToolRegistry::toolset_members` 展开成组成员进本轮白名单，`allowed` 是过滤集，扩大只加不禁）；第 3 根**按"删假信号"处理**——ThinkingMode 芯片连同 `ModeComposition` 整模块删除。
+
+**远程路径定为三层递进，第 1 层几乎免费**：Tailscale + 现有 Dashboard 远程审批闭环 → IM 指令通道（QQ 官方 bot / Telegram Bot）→ 微信单向通知。**微信个人号协议接入明确不做。**
+
+**验证**：cargo check --workspace ✓；hermix-agent 1062 / hermix-server 198 / hermix-tools 699 / hermix-intelligence 318 全过。
+
+## Alternatives considered
+
+| 方案 | 为何否决 |
+|---|---|
+| 24h sleep hack 当审批兜底 | 会话能"活" 24 小时但仍会挂死，且掩盖"人不点就永久阻塞"的事实。改为审批超时可配置（默认 600s，到期自动 deny 并把超时事实写进时间轴），删除 hack |
+| 删掉 watchdog | 改为把 deadline 的 arm/check 挪到真正的 await 点：超时动作不是杀 loop，而是把该 await 中断为可恢复错误（走既有 graceful 路径落库） |
+| 固定 60s/300s 硬编码超时 | 改为按工具元数据声明的预算（`per_tool_budget()` / `batch_budget()`），整批超时 = 各 call 预算之和 + 全局上限；否则"派子 agent 干长活"在物理上不成立 |
+| ContextOverflow = Fatal | 定为可恢复：收到 `context_length_exceeded` → 立即执行一轮激进压缩（保留系统提示 + 最近 N 轮 + 所有未完成 todo/task 状态）→ 重试同一请求。压缩机制已有能力，缺的只是"provider 拒绝后触发"的路径（**方案已定，未实施**） |
+| 流断即终止 | 定为自动续跑：partial message 落库后自动重试本轮一次（fresh turn），次数可配置（默认 1）。理由：半截 tool_calls 剥离已做对，重试不会毒化历史（**方案已定，未实施**） |
+| 并发去重键 `(session_id, text)` | 定为 `session_id` 单飞：同会话已有活跃 run 时新消息进队列而非并行 spawn（**方案已定，未实施**） |
+| ThinkingMode Quick/Deep 落地成行为 | 算完只进日志、不改任何行为 = 假信号。按本节自己的建议"若近期不做，删除芯片展示避免假信号"直接删除芯片与组合器 |
+| **明确不做**手动模式切换 UI | 本节原话"现有专家（手动）+ 五域（自动）+ toolset 开关（手动）三层已覆盖，再加一层只会让用户搞不清谁生效"——**此判断被用户推翻**，按用户偏好优先改为加手动「工作/编码模式」开关（Composer chip → `SendMessageRequest.domain_override` → `AgentConfig.domain_override` → 检测器 pin） |
+| 微信个人号（gewechat / iPad 协议）接入 | gewechat 已死（2025 停维护）；padlocal 收费 ~200/月且有封号风险。封号风险 + 维护成本 + 合规风险三杀 |
+| 微信官方（公众号/企微）做双向遥控 | 合规但只能被动回复 / 48h 窗口，做不了双向；降级为第 3 层的单向通知 |
+| 直接跳到 IM 通道（第 2 层）起步 | Tailscale + Dashboard 改造成本最低（hermix-server 已有 HTTP/WS + 会话存储），且"人不在电脑前"的核心场景零封号风险；IM 通道排在其后 |
+| 公网暴露 + 裸 Dashboard | OpenClaw 的教训必须吸取：4.2 万实例暴露公网、skills 市场 ~15% 恶意内容。安全三件套 = **只绑 localhost/Tailnet + 发送者 allowlist + 敏感操作私聊审批** |
+| 能力路由（16 路由器 / ThinkingMode）一律接满 | §3 事实核对后判定多数是死代码或假信号，改为"接两根真线 + 删第三根假信号" |
+
+## Consequences
+
+- **放弃 24h sleep 兜底与硬编码超时**：所有超时改为声明制；超时语义从"静默重试"变成"把超时事实写进时间轴"。
+- **watchdog 的动作是"中断为可恢复错误"而非"杀 loop"**：保住落库路径，代价是 loop 需要每个 await 恢复处显式 check。
+- **ThinkingMode 芯片消失**（用户可见功能移除）：这是消除假信号的代价——原本 Quick/Deep 每 turn 自动选择但只显示一个芯片，现在既不显示也不计算。
+- **连带删除的死代码**：`ModeComposition`（378 行）、`DomainPreset` 的 5 个无人读字段（`priority_tools` / `safe_write_override` / `convergence_signals` / `max_stall_turns` / `output_style`）、`ConvergenceSignal` 枚举、`ModeGate` / `ModeGateDecision` / `is_write_tool`（`orchestrator.rs` 600→约 150 行）、`DomainModeDetector` 的惯性 / 工具历史机制（检测器每 turn 新建，那些状态永远攒不起来）。
+- **`expert.toolset` 白名单只加不禁**：`allowed` 是过滤集，专家只能**加**工具不能删保底——floor 与用户已启用集合不受影响，未知组名 no-op。代价是无法用专家收窄工具集。
+- **默认审批超时 600s 的语义变化**：到期自动 deny，旧的"永不超时"保留为显式配置（`timeout_secs = 0`）。
+- **阶段 2 是全局枢纽**：审批队列同时解开"人不在挂死"（S1）和"远程审批"（第 4 部分），watchdog 布防覆盖其余卡死路径——因此阶段 4 / 6-8 全部依赖它。
+- **未做项的现状风险仍在**：流断即终止（S5）、ContextOverflow 硬错误收场（S6）、并发去重按 `(session,text)`（S8）、崩溃丢任务（S9）、错误分类默认 Fatal（S7）都还是事实清单里的原状。
+- **每轮全屏截图的成本**使电脑操作类能力默认关闭（见 [插件内核设计](2026-09-24-plugin-kernel-design.md) §3.2.4 / N6）。
 
 ---
 
@@ -224,7 +260,7 @@ clarify 300s 超时、优雅关机全量落库。
    Write 域注入内容创作指令 + office 工具加权，Operate 域注入整理指令 + storage 加权。
    检测错了也不致命——priority_tools 只是 +5.0 加权，工具仍全在 floor 内。
 2. **消费 expert.toolset**（P1）：`ChatView.tsx:746` 不再丢弃，把 toolset 作为
-   `ChatOverrides` 字段传后端，映射到 toolset_distributions 的白名单并叠加在
+   `ToolOverrides` 字段传后端，映射到 toolset_distributions 的白名单并叠加在
    HARD floor 之上（floor 不可削减的原则不变——专家只能**加**工具，不能删保底）。
 3. **ThinkingMode 落地或降级**（P2）：Deep 模式至少要做一件事——提高
    `invalid_tool_json_max_retries` 预算与收敛检测阈值（深任务天然轮数多）；
@@ -232,6 +268,7 @@ clarify 300s 超时、优雅关机全量落库。
 
 **明确不做**：手动"模式切换"UI。现有专家（手动）+ 五域（自动）+ toolset 开关
 （手动）三层已覆盖，再加一层只会让用户搞不清谁生效。
+（**已被用户推翻**：2026-09-29 落地了手动「工作/编码模式」开关，见本节完成记录。）
 
 ### 3.3 工具缺口（写作/设计/整理任务）
 
@@ -289,16 +326,16 @@ OpenClaw 的教训必须吸取：4.2 万实例暴露公网、skills 市场 ~15% 
 
 ## 5. 实施顺序
 
-| 阶段 | 内容 | 规模 | 依赖 |
-|---|---|---|---|
-| 1 | P0 事实纠错（2.2 提示词）+ AGENTS.md 同步 | ~1 天 | 无 |
-| 2 | P0-A 审批队列/超时/持久化 + P0-B watchdog 正确布防 | ~3-4 天 | 无 |
-| 3 | P1-A 工具预算声明制 + 子 agent 超时 | ~2 天 | 无 |
-| 4 | P1-B 流断续跑 + P1-C 压缩重试 + P1-D 会话单飞 | ~3 天 | 阶段 2 |
-| 5 | 3.2 模式接线（DomainMode + expert.toolset） | ~2 天 | 无 |
-| 6 | 第 1 层远程：Dashboard 移动审批 + token 认证 | ~2 天 | 阶段 2 |
-| 7 | 第 2 层远程：QQ/TG channel 模块 | ~4-5 天 | 阶段 2+6 |
-| 8 | P2 杂项（轮间落盘、错误分类、Thinking 落地、ripgrep） | 按需 | — |
+| 阶段 | 内容 | 规模 | 依赖 | 状态 |
+|---|---|---|---|---|
+| 1 | P0 事实纠错（2.2 提示词）+ AGENTS.md 同步 | ~1 天 | 无 | ✅ 已完成 |
+| 2 | P0-A 审批队列/超时/持久化 + P0-B watchdog 正确布防 | ~3-4 天 | 无 | ✅ 已完成 |
+| 3 | P1-A 工具预算声明制 + 子 agent 超时 | ~2 天 | 无 | ✅ 已完成 |
+| 4 | P1-B 流断续跑 + P1-C 压缩重试 + P1-D 会话单飞 | ~3 天 | 阶段 2 | ⬜ 未做 |
+| 5 | 3.2 模式接线（DomainMode + expert.toolset） | ~2 天 | 无 | ✅ 已完成（+ 第 3 根线删除假信号） |
+| 6 | 第 1 层远程：Dashboard 移动审批 + token 认证 | ~2 天 | 阶段 2 | ⬜ 未做 |
+| 7 | 第 2 层远程：QQ/TG channel 模块 | ~4-5 天 | 阶段 2+6 | ⬜ 未做 |
+| 8 | P2 杂项（轮间落盘、错误分类、Thinking 落地、ripgrep） | 按需 | — | ⬜ 未做 |
 
 阶段 2 是全局枢纽：审批队列同时解开"人不在挂死"（S1）和"远程审批"（第 4 部分），
 watchdog 布防覆盖其余卡死路径。

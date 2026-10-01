@@ -1,7 +1,7 @@
 # 交接文档：Hermix 底座重写 + 网络安全层（给后续开发 agent）
 
 > 更新时间：2026-09-26。本文是唯一权威交接入口。动手前**必须完整读完本文 + 必读文档清单**，禁止跳读后自行发挥。
-> 当前累计 104 个 commit（52 + 本批 52：… `c4f73379`（砍 /api/migration/*）+ `2ee5dfd6`（砍 /v1/voice/synthesize）+ `25f410b4`（文档刷新 85→88）+ `181a51aa`（砍 /v1/ws + /v1/ws-stream 裸路由 + WsTransport 死代码链）+ `e8aaa1fb`（砍 4 条 ops/debug 端点）+ `d38238f0`（砍 /api/logs REST 端点）+ `162f932f`（模型/供应商配置面 setConfig 反模式清理）+ `07b42ebb`（统一 enabled 模型列表权威源）+ `098f3d3`（safeId 校验 + setConfig 反模式 + 注释统一）+ `1845e271`（polish.rs 死引用修复）+ `9a066d6`（砍前端死函数 getSystemStatus + 孤儿类型 SystemStatus）+ `728cb5ef`（模型配置重设计方案 docs/MODEL_CONFIG_REDESIGN.md）+ `29cf929d`（P1 统一供应商面板：合并 ModelTab + CustomProvidersTab 为单一面板）+ `a5484dcc`（模型启用语义三刀：启用清单完全由用户勾选驱动）+ `b46f660a`（砍 /api/status 探活路由：零消费，外部探活疑虑证伪）+ `32ef801d`（压缩阈值口径统一：5 处过时注释向代码真值 0.90 对齐）+ `8f6c532`（P2 信息密度批次：未启用模型折叠分组 + 已启用列表 CSS 折叠）+ `6803253`（方向 A 启动界面全量落地：2026-09-23 设计稿补实施）+ `c105c4d`（审批豁免终态：resource_guard 拆除 content-write/terminal 资源门 + 删 powershell-encoded CONFIRM 规则 + 收紧 shutdown 正则，写文件与常规命令执行不再弹卡）+ 本文档 commit）。工作区除 §7 已 gitignore 的临时产物（`.scratch/`、`design-previews/`）外干净。最近 commit：`c105c4d`（审批豁免终态：写文件与常规命令执行不再弹审批卡，仅删除等高危保留资源门）。
+> 当前累计 104 个 commit（52 + 本批 52：… `c4f73379`（砍 /api/migration/*）+ `2ee5dfd6`（砍 /v1/voice/synthesize）+ `25f410b4`（文档刷新 85→88）+ `181a51aa`（砍 /v1/ws + /v1/ws-stream 裸路由 + WsTransport 死代码链）+ `e8aaa1fb`（砍 4 条 ops/debug 端点）+ `d38238f0`（砍 /api/logs REST 端点）+ `162f932f`（模型/供应商配置面 setConfig 反模式清理）+ `07b42ebb`（统一 enabled 模型列表权威源）+ `098f3d3`（safeId 校验 + setConfig 反模式 + 注释统一）+ `1845e271`（polish.rs 死引用修复）+ `9a066d6`（砍前端死函数 getSystemStatus + 孤儿类型 SystemStatus）+ `728cb5ef`（[模型配置重设计方案](notes/implemented/feature/2026-09-26-model-config-redesign.md)）+ `29cf929d`（P1 统一供应商面板：合并 ModelTab + CustomProvidersTab 为单一面板）+ `a5484dcc`（模型启用语义三刀：启用清单完全由用户勾选驱动）+ `b46f660a`（砍 /api/status 探活路由：零消费，外部探活疑虑证伪）+ `32ef801d`（压缩阈值口径统一：5 处过时注释向代码真值 0.90 对齐）+ `8f6c532`（P2 信息密度批次：未启用模型折叠分组 + 已启用列表 CSS 折叠）+ `6803253`（方向 A 启动界面全量落地：2026-09-23 设计稿补实施）+ `c105c4d`（审批豁免终态：resource_guard 拆除 content-write/terminal 资源门 + 删 powershell-encoded CONFIRM 规则 + 收紧 shutdown 正则，写文件与常规命令执行不再弹卡）+ 本文档 commit）。工作区除 §7 已 gitignore 的临时产物（`.scratch/`、`design-previews/`）外干净。最近 commit：`c105c4d`（审批豁免终态：写文件与常规命令执行不再弹审批卡，仅删除等高危保留资源门）。
 
 **已落**（前后端端点审计 + 砍路由/死代码批次 — `d361cdfc` + `fd3bd371`）：
 - **审计**：全量交叉比对 hermix-server 路由表 vs 前端 `rest.ts` 调用面（subagent 双抓 + 定向核实）。结论：前端无调用任何后端不存在的路径（无 404 风险）；问题全在反方向——后端有多条路由前端零消费。
@@ -23,7 +23,7 @@
   - **双权威漂移已统一**（`07b42ebb`）：ModelSelector reconcile 此前"localStorage 单一来源"注释与 ModelTab"后端 config.yaml 权威"注释矛盾，同一份数据 3 处各认一个权威。统一为：**后端可达 → 本地∩后端 = 权威 enabled 集合（后端空列表也是权威，清残留）；后端不可达（离线）→ 本地镜像兜底不吞勾选**。本组件永不主动调 saveModelList，写路径统一走 writeModelConfigAndNotify（一次写 localStorage + 推后端 + 事件扇出）。
   - **safeId 长度校验已补**（`098f3d3`）：后端 `create_custom_provider` 要求 id ≥ 8 字符，前端 handleFetchModels/handleSave 只查非空，name 仅 1 个无效字符时 safeId 退化为 "custom-"（7 字符）被 400 拒且无提示。加 `safeIdValid` 守卫（非 "custom-" 且 ≥ 8）+ 两入口提前拦截，后端 400 message 经 fetchJSON 透传兜底。
   - **setConfig 反模式连带清**（`098f3d3`）：ModelTab 的 setDefault/toggleModel/setModelContext + CustomProvidersTab 的 toggleModel/setDefault 共 5 处在 updater 内 safeSetTimeout 触发副作用（严格模式双执行→双写），改基于 config 闭包纯计算 + 一次性 setConfig + 外部副作用。CustomProvidersTab 注释同步修正为"后端权威"。
-- **模型配置重设计 P1 落地（`728cb5ef` 设计稿 + `29cf929d` 实施，本批收口）**：审定 `docs/MODEL_CONFIG_REDESIGN.md`「统一」原则（对照 pi-mono 单一实体：Provider 不分内置/自定义两套 UI）后实施 P1：
+- **模型配置重设计 P1 落地（`728cb5ef` 设计稿 + `29cf929d` 实施，本批收口）**：审定 [模型配置重设计方案](notes/implemented/feature/2026-09-26-model-config-redesign.md)「统一」原则（对照 pi-mono 单一实体：Provider 不分内置/自定义两套 UI）后实施 P1：
   - **删独立 `CustomProvidersTab` 组件**（`29cf929d`）：原「自定义模型」sub-tab 含第二份 config state + 纯 localStorage 监听 + 重复的 toggleModel/setDefault（与 ModelTab 行为一致但代码各写一份）。`CustomProviderSection` 内嵌进 ModelTab 的供应商区（SECTION 4），与内置 18 家供应商**共享同一份 config state 与写路径**（setDefault 经 `setDefaultByFullId` 适配签名）。SystemConfigPanel 删「自定义模型」sub-tab，`ModelTabId` 收窄为 `"model" | "image"`，清 `PenLine`/`CustomProvidersTab` 死 import。
   - **连带修 CustomProviderSection 的 onSetContext updater 反模式**：`storage.setItem` 副作用原在 `setConfig((prev) => ...)` updater 内（严格模式双执行→双写），改基于 `config` 闭包纯计算 + 一次性 setConfig + 外部写盘（与 `162f932f`/`098f3d3` 的反模式清理同规则）。
   - **净删 63 行（-109 +46）**，回归面 = 模型配置交互面（后端零改动）。P2 信息密度 / P3 默认模型自动化 / P4 真机验收 留后续批次。
@@ -38,7 +38,7 @@
   - **证伪关闭**：P1-2 增量合并——本仓已实现（`summary.rs` `build_summary_prompt` 的 `previous_summary` UPDATE 分支 + `tests.rs` 迭代复用测试），无需改。P2-1 熔断可见性——`compression_ops.rs` post-snap 已带 `failure_reason` + 熔断 Open 态经 `emit_compaction_status` → WS → `CompactionStatusBanner` 全链可达，"仅 tracing::warn 静默"与代码不符。P2-2 质量劣化降级——与物理约束冲突：触发压缩时压力已 ≥85% 红线必须释放空间，prune-only 释放量不够；劣化兜底已齐（静态 fallback 是设计安全网 + `last_archived_turns` 无损落盘可回看）。
   - **留待裁决（P1-1 前缀缓存）**：deepseek 式"摘要调用复用主对话前缀 KV cache"前提是摘要走与主对话相同 provider/model；本仓 aux 链默认独立小快模型（跨模型无缓存收益），且摘要序列化经 redact + 截断 + 格式化非原始前缀，强行重放破坏脱敏。收益 ≈ 0，默认不做。
   - **本仓已对齐参考项目的核心模式**：头 3 尾 20 保护、切点保护 toolCall↔toolResult 配对、结构化模板摘要、压缩结果持久化——不动。
-- **P2 信息密度批次落地（`8f6c532`，设计稿 `docs/MODEL_CONFIG_REDESIGN.md` §5 后续，本批立项）**：三刀（`a5484dcc`）后未启用模型无设置页入口（只能去聊天窗口勾选），补齐：
+- **P2 信息密度批次落地（`8f6c532`，设计稿 [模型配置重设计方案](notes/implemented/feature/2026-09-26-model-config-redesign.md) §5 后续，本批立项）**：三刀（`a5484dcc`）后未启用模型无设置页入口（只能去聊天窗口勾选），补齐：
   - **未启用模型折叠分组**（SECTION 2 内、已启用列表下方）：数据源 = `fetchedModels` 目录缓存 − `config.enabled` − `config.dismissed` 墓碑 − 僵尸 custom provider（`custom-` 前缀且不在 `customIdsWithKey`）；单一布尔折叠态仿 CustomProviderSection 互斥展开写法；每行「启用」按钮调 `toggleModel`（自动撤墓碑 + 首次勾选设默认，三刀语义已实现，本批次不新增写路径）。
   - **已启用列表 CSS 折叠**：`max-h-96 overflow-y-auto` 内部滚动（仿 CustomProviderSection `max-h-64` 模式，不引库）。
   - **三刀语义矛盾文案残留修正**：L578 内置供应商区"模型会缓存到本地并自动启用"→"缓存到本地（不会自动启用）→ 在上方「未启用模型」勾选启用"。
@@ -377,7 +377,7 @@ CARGO_INCREMENTAL=0 cargo test -p <crate> --lib   # 改了哪个 crate 测哪个
 - **故障**：MiniMax-M3 会话"开始调用工具又中断了"。完整链路：模型以文本 XML 形态发工具调用但标记损坏到解析层无法识别（可见残骸 `]<]minimax[>`——`<minimax:tool_call>` 的 `:tool_call` 后缀缺失、括号错乱）→ sanitizer 剥掉可识别部分 → flush 阶段 `parse_tool_calls` 解析 0 个（`tool_calls_vec_len=0`）→ 残留文本被 untagged-reasoning 启发式挪进 reasoning → `has_visible=false` → `run_loop.rs:2221`（`history_includes_tool` + 无可见文本 → 立即 finalize，防 nudge 循环的权衡，行为正确）→ 模型的工具调用意图被**静默吞掉**，日志全链路 INFO 无定位线索。
 - **诊断取证**：sanitizer 剥除行为正确（完整/跨 chunk/裸标记/M3 原生 tag 格式均有测试，含 user_repro 精确串；管线只删不改写，`<`→`]` 是模型自身输出损坏）；MiniMax 工具格式指引已注入（directions 白名单含 "minimax"，`MiniMaxFamily` 路由命中）但指引不能阻止模型输出损坏标记；fallback 解析路径存在且 `raw_content` 收 pre-sanitizer 文本，但对破损标记无从恢复（无工具名无参数）。
 - **修复（最小切片）**：flush 阶段解析为 0 且 `raw_content` 含工具调用标记破损残留（含 `]minimax` 破损变体）时 `tracing::warn` 带单行摘录（`lost_tool_call_fragment_excerpt`，前后各 80 字符压平换行）——静默失败变可定位线索。
-- **YAGNI 定界（当时）**：不做破损标记的猜测性恢复（无工具名无参数，恢复=编造）；事件级流式工具调用解析状态机（pi-mono 的 `toolcall_start/delta/end` 一等事件形态，从根上消除"事后正则补救"）属插件内核批次（`PLUGIN_KERNEL_DESIGN.md` 的 Llm seam）。
+- **YAGNI 定界（当时）**：不做破损标记的猜测性恢复（无工具名无参数，恢复=编造）；事件级流式工具调用解析状态机（pi-mono 的 `toolcall_start/delta/end` 一等事件形态，从根上消除"事后正则补救"）属插件内核批次（[插件内核设计](notes/implemented/architecture/2026-09-24-plugin-kernel-design.md) 的 Llm seam）。
 - **验证**：cargo check --workspace 绿 / hermix-agent lib **1051 passed**（1050 基线 + 1 新测试 `lost_tool_call_fragment_excerpt_detects_damaged_marker`，零回归）。
 
 **已落**（tolerant 解析根治破损包裹 — 告警批的后续 `d115b591`）：
@@ -431,7 +431,7 @@ CARGO_INCREMENTAL=0 cargo test -p <crate> --lib   # 改了哪个 crate 测哪个
   - 进程内 runner：`CreateProcessAsUserW` + 匿名管道 stdio（父端去继承位）+ NUL stdin + UTF-16 env block（TMP/TEMP 重定向私有 temp）+ `STARTF_USESHOWWINDOW|SW_HIDE` 隐藏控制台（受限创建禁用 CREATE_NO_WINDOW——STATUS_DLL_INIT_FAILED）。
   - 生命周期：`SandboxSession::provision(mode, workspace)` 一次配置（temp 恒授——read-only 模式下 PowerShell 探针要写私有 temp 保 FullLanguage；workspace 仅 workspace-write 模式授）；Drop 收 token + 删 temp（ACE 随目录销毁，免 revoke FFI）。
   - ABI 全部走 windows-sys 0.52 官方绑定（不自写 extern——布局错=静默栈损坏）；零新增依赖树（windows-sys 已在 lock）。
-- **设计文档（`0d61fb90`）**：`docs/SANDBOX_WINDOWS_ACL_DESIGN.md`——最小切片定界 + 对抗式审查表 + 测试钉死清单。
+- **设计文档（`0d61fb90`）**：[Windows ACL 沙箱设计](notes/proposed/architecture/2026-09-26-windows-acl-sandbox.md)——最小切片定界 + 对抗式审查表 + 测试钉死清单。
 - **已知边界（与 deepseek 相同，非 bug）**：FAT/exFAT 无 ACL 不承诺；enforcement 如实为 `partial`（hard-link 别名、读不受限）；崩溃残留 temp = 惰性垃圾（文档化）。
 - **验证**：workspace check 绿；hermix-environments lib **63 全绿**（53 基线 + 10：SID 派生确定性/域分离/30-bit 值域、引号 roundtrip、overlap/root 校验、env block TMP/TEMP 覆盖）；`danger-full-access` 在 call site 绕行（provision 直接报错，语义由审批层承接）。
 - **教训**：windows-sys 0.52 的 `HANDLE` 是 `isize`（非指针，`is_null()` 不适用）；`SE_GROUP_*`/`SYSTEM_MANDATORY_LABEL_*` 在 `SystemServices` 模块；`EXPLICIT_ACCESS_W` 带下划线（非 `EXPLICIT_ACCESSW`）；`SetEntriesInAclW` 收带下划线结构体。

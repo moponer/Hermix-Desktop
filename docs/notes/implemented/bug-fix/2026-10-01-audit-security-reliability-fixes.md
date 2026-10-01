@@ -1,22 +1,10 @@
-# 修复方案 — 2026-10-01 审计响应
+# Decision Note: 2026-10-01 安全 / 健壮性审计响应
 
-> **状态：已实施（2026-10-01）。** 全部条目已落地，`cargo check --workspace
-> --all-targets` 通过。下方「实施」小节记录每条的实际改法与文件位置，
-> 与最初的「方案」描述如有出入以实施小节为准。
+Status: implemented — 全部条目已落地，`cargo check --workspace --all-targets` 通过；`#13`/`#14` 明确不改，理由随记录
 
-## 基线修正（实测 vs 报告）
+## Decision
 
-| 项 | 报告值 | 实测 | 处置 |
-|---|---|---|---|
-| Rust 行数 | ~246K | 228,461（生产 215,841 / 测试 12,620） | 以实测为准 |
-| TS 行数 | ~49K | 44,233 生产 + 1,698 测试 | 以实测为准 |
-| 合计 | ~295K | ~272.7K = 目标 2.7 倍 | 目标本身需重定，见文末 |
-| 上帝文件 | 6 | 6（精确命中） | 拆 local_agent_service.rs |
-| `unwrap()` | 2449 | 3001 | 分层治理 |
-| `#[ignore]` | 17 | 17（精确） | CI gate 加计数 |
-| TODO/FIXME | 22 | 3 | 报告高估 |
-
-## 核心设计原则：把隐式 fail-open 变显式声明
+### 核心设计原则：把隐式 fail-open 变显式声明
 
 `decide_pre_tool_dispatch` 当前在无审批通道时**静默 Allow**。该行为被 `layer4_no_approval_requester_falls_back_to_allow` 测试主动固化，注释自称 "graceful fallback"。问题不在于测试存在，而在于**调用方无法表达"我这条路径上危险工具应该被拒绝"**。
 
@@ -44,9 +32,21 @@ pub enum ApprovalFallback {
 
 `Deny` 时返回可机读 reason，让 LLM 能改写而非静默失败。
 
-## 逐项修复
+### 基线修正（实测 vs 报告）
 
-### P0
+| 项 | 报告值 | 实测 | 处置 |
+|---|---|---|---|
+| Rust 行数 | ~246K | 228,461（生产 215,841 / 测试 12,620） | 以实测为准 |
+| TS 行数 | ~49K | 44,233 生产 + 1,698 测试 | 以实测为准 |
+| 合计 | ~295K | ~272.7K = 目标 2.7 倍 | 目标本身需重定，见文末 |
+| 上帝文件 | 6 | 6（精确命中） | 拆 local_agent_service.rs |
+| `unwrap()` | 2449 | 3001 | 分层治理 |
+| `#[ignore]` | 17 | 17（精确） | CI gate 加计数 |
+| TODO/FIXME | 22 | 3 | 报告高估 |
+
+### 逐项修复方案
+
+#### P0
 
 **#1 审批 fail-open** — `local_agent_service.rs:1267,1318,2729`
 引入 `ApprovalFallback`，三处 `else { return Allow }` 改为 `else { return fallback.resolve(...) }`。
@@ -57,7 +57,7 @@ pub enum ApprovalFallback {
 现状：指纹字段在 `QrPayload:369` 存在但未进 URL；`pairing.rs:726` 注释谎称"指纹核对在 /pair 页与桌面端之间进行"，而该页无此逻辑。
 改法：把 `cert_fingerprint` 放进 `/pair?c=<code>&fp=<fingerprint>`，`pair_page` 回显指纹供用户肉眼比对，`complete_pairing` 要求客户端回传指纹并与本机 TLS 指纹比对，不符则拒发 device_token。同时修正 `:726` 的错误注释。
 
-### P1 前端
+#### P1 前端
 
 **#3 ApprovalDrawer Enter 双触发** — `ApprovalDrawer.tsx:147-159`
 `window` 级 keydown 把 Enter 劫持为 `act("once")`；焦点若在 Deny 按钮上，原生 click 触发 deny **同时** window 监听器触发 once——同一次按键既拒又允。
@@ -71,7 +71,7 @@ pub enum ApprovalFallback {
 `deps.cancelStream()` 不传 sessionId，绕过 `useStreamChat.ts:778` 归属守卫。
 改法：传 `activeSessionId`；`settle()`/`cancel()` 清槽条件统一为同一判据（消除 settle 只在 `keepSessionAlive` 为假时清、cancel 无条件清的不对称）。
 
-### P2 后端健壮性
+#### P2 后端健壮性
 
 **#6 tool_executor panic 归因** — `tool_executor.rs:621-652`
 panic 被正确捕获，但错误塞进**第一个空槽**，把 panic 消息归因到无关工具名。真实 panic 的槽留 `None`。
@@ -96,18 +96,9 @@ for 循环逐个 `rx.await`，N 张卡 N 次往返。
 **#13 CI gate** — `scripts/ci-gate.sh`
 第 7 步 2500 行告警是 advisory → 升级为阻断；新增 `#[ignore]` 计数检查。
 
-## 明确不做（附理由）
+### 实施记录（2026-10-01）
 
-- **#3 provider 429/5xx 零重试** — 报告推翻。`llm_retry.rs:159` 有真重试循环（默认 3 次 + jittered_backoff），`classify_error` 把 429 和 5xx 都路由进去。残留真问题仅：`retry-after` 只作下次请求闸门，从不作本次退避时长。**可选优化，非缺陷。**
-- **#4 sub_agent 不 abort** — 报告高估。协作式 interrupt 存在且被观测，token 燃烧限住约一次 LLM 调用。真缺陷是工具路径缺检查（已收进 P2 #7）。
-- **配对错误预算全局共享** — 有意设计且 `pairing.rs:52` 有注释说明。6 位码空间下 5 次上限是唯一暴力破解防线，改成按 IP 会降低安全性。**需产品决策，不擅自改。**
-- **10 万行目标** — 与项目现实脱节。22 crate / 30+ 工具后端 / 多 provider / MCP / CUA / 语音 / IM / TLS 配对，27 万行是合理体量。AGENTS.md 自身"10 万行"与开头"18 crates, ~200K lines"自相矛盾。**建议改为：禁止新增上帝文件 + 拆 local_agent_service.rs，而非全局行数配额。** 真正冗余是平行复制（`send_message`/`send_message_stream` 共享 ~300 行，`local_agent_service.rs:1360` TODO 自陈），不是总量。
-
----
-
-## 实施记录（2026-10-01）
-
-### P0
+#### P0
 
 **#1 审批 fail-open** — 已实施
 - `hermix-core/src/approval.rs` 新增 `ApprovalFallback { Deny(默认), Allow }`
@@ -131,7 +122,7 @@ for 循环逐个 `rx.await`，N 张卡 N 次往返。
 - TLS 未启用时跳过校验（纯 HTTP 部署无从比对）
 - 落地页 JS 提交时回传 `cert_fingerprint`，403 有专门文案
 
-### P1 前端
+#### P1 前端
 
 **#3 ApprovalDrawer Enter 双触发** — 已实施
 `ApprovalDrawer.tsx:157` Enter 分支加 `closest("button, a[href], summary, [role='button']")` 检查，
@@ -154,7 +145,7 @@ for 循环逐个 `rx.await`，N 张卡 N 次往返。
 - `App.tsx` 三处 approval REST `setTimeout`（原 1224/1287/1412）收进
   `approvalRestTimersRef`，并新增卸载清理 effect
 
-### P2 后端
+#### P2 后端
 
 **#7 rest.ts** — 已实施
 - 假取消：`Promise.race` 对 `combined` signal，让 10s 超时与调用方 `abort()`
@@ -192,18 +183,28 @@ Unix 下 `0o600`；Windows 无 POSIX 权限位，靠 profile 目录 ACL 继承�
   （直接阻断既有 6 个会让 CI 永久红，等于没有门禁。）
 - 新增 7b：`#[ignore]` 计数门禁，基线 17，超过即 FAIL。
 
-### 未实施（附理由）
+## Alternatives considered
 
-**#13 tool_dispatch 审批串行 → 并行发卡** — 不改。
-这是 UX 优化而非正确性缺陷，且审批卡的产品设计就是一次一张。
-改造需重构一个交织了 `rx` 所有权、shutdown select、安全网超时、
-`on_pre_tool_approved` 回调的 100+ 行循环，风险收益不划算。记录为已知权衡。
+### 报告主张被实测推翻的项
 
-**#14 配对错误预算全局共享** — 不改，需产品决策。
-`pairing.rs:52` 有注释说明设计原因。6 位码空间下 5 次上限是唯一的
-暴力破解防线，改成按 IP 反而降低安全性。
+- **#3 provider 429/5xx 零重试** — 报告推翻。`llm_retry.rs:159` 有真重试循环（默认 3 次 + jittered_backoff），`classify_error` 把 429 和 5xx 都路由进去。残留真问题仅：`retry-after` 只作下次请求闸门，从不作本次退避时长。**可选优化，非缺陷。**
+- **#4 sub_agent 不 abort** — 报告高估。协作式 interrupt 存在且被观测，token 燃烧限住约一次 LLM 调用。真缺陷是工具路径缺检查（已收进 P2 #7）。
 
----
+### 评估后决定不改的项
+
+- **配对错误预算全局共享** — 有意设计且 `pairing.rs:52` 有注释说明。6 位码空间下 5 次上限是唯一暴力破解防线，改成按 IP 会降低安全性。**需产品决策，不擅自改。**
+- **#13 tool_dispatch 审批串行 → 并行发卡** — 不改。这是 UX 优化而非正确性缺陷，且审批卡的产品设计就是一次一张。改造需重构一个交织了 `rx` 所有权、shutdown select、安全网超时、`on_pre_tool_approved` 回调的 100+ 行循环，风险收益不划算。记录为已知权衡。
+- **#14 配对错误预算全局共享** — 不改，需产品决策。`pairing.rs:52` 有注释说明设计原因。6 位码空间下 5 次上限是唯一的暴力破解防线，改成按 IP 反而降低安全性。
+- **10 万行目标** — 与项目现实脱节。22 crate / 30+ 工具后端 / 多 provider / MCP / CUA / 语音 / IM / TLS 配对，27 万行是合理体量。AGENTS.md 自身"10 万行"与开头"18 crates, ~200K lines"自相矛盾。**建议改为：禁止新增上帝文件 + 拆 local_agent_service.rs，而非全局行数配额。** 真正冗余是平行复制（`send_message`/`send_message_stream` 共享 ~300 行，`local_agent_service.rs:1360` TODO 自陈），不是总量。
+
+## Consequences
+
+- **非流式 HTTP 上的 Dangerous 工具行为变更**：此前静默执行，现在返回 Deny。这是 P0 #1 的目的，但依赖 HTTP 派发路径的调用方会看到行为改变。
+- **放弃"无审批通道即放行"的默认语义**：`ApprovalFallback` 是必填参数，22 处既有测试调用点全部需要补参数。好处是编译器强制表态，代价是每个新调用方都要做一次攻击面判断。
+- **CI 门禁从"直接阻断"退回"基线棘轮"**：既有的 6 个上帝文件不阻断，只有不在 `KNOWN_GOD_FILES` 名单上的超 2500 行新文件 FAIL。直接阻断会让 CI 永久红，等于没有门禁。
+- **不引入 header 透传链路**（TS→Tauri→stdio→axum 四层），改为写明"故意不转发"。
+- **放弃全局行数配额**，改为"禁止新增上帝文件 + 拆 `local_agent_service.rs`"。
+- **保留两个已知缺陷**：审批卡串行发放（#13 UX 权衡）、配对错误预算全局共享（#14 待产品决策）。
 
 ## 验证结果（2026-10-01）
 

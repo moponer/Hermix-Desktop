@@ -353,7 +353,7 @@ token 再收敛调用点）会让两件事的 diff 缠在一起。
 - **工作/编码模式开关**（用户新需求，跨 5 crate + 前端）：`SendMessageRequest.domain_override`
   → `AgentOverrides` → `AgentConfig.domain_override` → `prompt_assembly::resolve_domain_mode`
   接活原本是死代码的五域检测（L1）；Composer 工具栏新增「自动 ⇄ 编码模式」chip
-  （localStorage 持久化，`useDomainMode`）。设计对账见 `STABILITY_AND_REMOTE_PLAN.md` §3。
+  （localStorage 持久化，`useDomainMode`）。设计对账见 [长任务稳定性与能力升级方案](notes/implemented/process/2026-09-29-stability-and-remote-plan.md) §3。
 - **自治 nudge 回归修复**：`run_loop.rs` 中 MiniMax 空名过滤的可见文本 finalize
   短路了 Finalize 分支的 nudge 豁免（agent 说完一句话就停）——run/run_stream
   两处加 `nudge_eligible` 门槛；`scripted_provider.rs` 流式接口补发 ToolCallDelta
@@ -362,7 +362,7 @@ token 再收敛调用点）会让两件事的 diff 缠在一起。
 - **死代码清理**（同日第三轮）：删 `mode_composition.rs` 整模块 + `DomainPreset`
   五个无人读字段 + `ConvergenceSignal` + `ModeGate`/`is_write_tool` 一簇 +
   检测器的惯性/工具历史机制；`resolve_domain_mode` 改走 `set_manual_override`
-  （让该 API 从死变活）。详见 `STABILITY_AND_REMOTE_PLAN.md` §3 完成记录。
+  （让该 API 从死变活）。详见 [长任务稳定性与能力升级方案](notes/implemented/process/2026-09-29-stability-and-remote-plan.md) §3 完成记录。
 
 ### 遗留
 

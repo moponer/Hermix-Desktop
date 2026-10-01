@@ -1,11 +1,47 @@
-# 压缩不丢记忆：机制说明与验证
+# Decision Note: 压缩不丢记忆：子会话归档机制
+
+Status: implemented — 压缩走「子会话 + 摘要」落库，原始轮次完整保留；NoOp 不是默认引擎
 
 > 关联任务：Phase 6（E1 召回回归 / E2 持久化 / E3 手动验证 / E6 默认引擎审计）
 > 日期：2026-07-14
+> 回答的核心担忧：**"思考压缩是不是真的？用户能不能感知？会不会丢记忆？"**
+> 结论：**压缩是真实的，且不会丢记忆。**
 
-用户的核心担忧：**"思考压缩是不是真的？用户能不能感知？会不会丢记忆？"**
+## Decision
 
-结论先说：**压缩是真实的，且不会丢记忆。** 下面给机制、测试、审计、手动验证四段。
+**压缩 = 移到子会话 + 写摘要，不是删除。** 原始措辞始终可恢复。
+
+落库规则（`session_persistence.rs`）：
+
+- 每次压缩创建一个**子会话**（`parent_session_id` 指向原会话），原始会话 `messages` 表**原封不动**（UI 路由继续用原 session id）。
+- 折叠掉的轮次（`CompressionSnapshot.archived_turns`）作为**真实消息行**插入子会话的 `messages` 表（`active = 1`，保留原 role：user / assistant / tool）。
+- 折叠摘要写入 `sessions.compressed_summary` 列（最新摘要快查索引），同时子会话 `system_prompt` 也存一份供 lineage 树展示。
+- 摘要文本**不会**作为 `system` 消息行插入。
+
+**默认引擎是真 LLM 压缩器，不是 noop。** `compression_ops::auto_compress_if_over_threshold` → 真正 LLM 压缩器（`ContextCompressor`）→ `create_compression_child_session`；接收 `compressor: Option<&Arc<TokioMutex<dyn CompressionEngine + Send>>>`——有压缩器走真摘要，无压缩器（`None`）退化为 `ctx.compress()`（字符级，已标记 deprecated 的空操作兜底），**不是** `NoOpCompressionEngine`。配置层没有 `engine` 字段，没有任何 config 能把压缩静默切成 noop。
+
+**统计界面如实呈现压缩事实**（Phase 3）：「上下文压缩」卡片显示 `total_compactions` 与 `total_archived_turns`，并注明"压缩以子会话保留完整历史，不丢记忆"；缓存命中率按 `input + cache_read` 代理口径展示，不报缓存统计的供应商显示 0（含义是"未观测到缓存命中"）。
+
+## Alternatives considered
+
+| 方案 | 为何否决 |
+|---|---|
+| 压缩 = 摘要覆盖 + 删除原轮次 | 直接违背本决策的前提。改为子会话归档后原始 `messages` 表零改动，删除方案无法满足"原始措辞始终可恢复" |
+| 摘要作为 `system` 消息行插入子会话 | 会被 `ensure_db` 的 `DELETE FROM messages WHERE role='system'` 清掉。改为只写 `sessions.compressed_summary` 列 + 子会话 `system_prompt` 字段 |
+| 压缩器经 `CompressionEngineRegistry::with_defaults()` 选默认 | 事实是 agent loop 构造压缩器时直接 `ContextCompressor::new(...)`，不走 registry。registry 只注册了 `"noop"`，若让它参与默认选择正是隐患；仅保留给运维显式按名切换 |
+| `no_op_compression_engine` 静默作为默认 | 审计否决，四条证据链见下文 E6：配置层无 `engine` 字段 / agent loop 默认走真压缩器 / registry 的 noop 不参与默认选择 / noop 的语义自证清白 |
+| 无压缩器时回退 `NoOpCompressionEngine` | 回退落到已 deprecated 的字符级 `ctx.compress()`。noop 的 `should_compress` 永远返回 `false`，一旦被接入会**静默停掉压缩**，与"压缩是真的"直接冲突 |
+| dashboard 不上报压缩指标 | 被否决。`NoOpCompressionEngine::record_outcome` 把成功/失败分别计入 `compression_count` / `summary_errors`，即使 noop 被错误接入，指标也能把它暴露出来——指标是这条决策的自证机制 |
+| 缓存命中率用真实总 prompt token 口径 | 未采用。改用 `input + cache_read` 代理口径（见 Consequences） |
+
+## Consequences
+
+- **库体积换可恢复性**：归档轮次以真实消息行在子会话里再写一份，每次压缩数据量增加（user / assistant / tool 全量保留，不裁剪）。
+- **会话列表变长**：UI 路由继续用原 session id，但 lineage / 会话树里会多出 `[Compressed #N from ...]` 子会话，用户可见的会话条数增加。
+- **"保留的历史轮次 == 0 且 压缩次数 > 0"是异常判据**：说明归档写入路径异常。该错误不会静默吞掉，会返回 `AgentError::Io`，需查 `create_compression_child_session` 的 archived_turns 插入是否执行。
+- **缓存命中率是代理口径**：`input + cache_read` 之和视为"总 prompt 尝试量"。不报缓存统计的供应商（当前 MiniMax）显示 0，含义是"未观测到缓存命中"而非真实 0——如实而非伪造，但也意味着该指标对这类供应商无判别力。
+- **压缩器缺失时行为退化但不静默失效**：退化为字符级 `ctx.compress()`，不是真摘要也不是 noop；故障表现是"摘要质量差"而非"压缩停了"。
+- **两条裁剪不在本决策范围内**：压缩阈值口径统一（5 处过时注释对齐代码真值 0.90）与审批豁免属独立改动，不随本笔记迁移。
 
 ---
 

@@ -1,5 +1,7 @@
 # Transport Stdio Migration RFC
 
+Archived: 2026-10-01
+
 > **Status**: Phase 0 RFC — not yet implemented
 > **Author**: 狗蛋
 > **Owner**: 产品方

@@ -1,8 +1,72 @@
-# Hermix Desktop 可移植方案:让 Agent 数据跟着安装包走
+# Decision Note: Hermix Desktop 可移植方案
+
+Status: implemented — 产品定位铁律与 Phase 10 改造清单已定稿锁定；Phase 10 实施与 Phase 11-20 批次未在本笔记记录
 
 > **最终版时间**: 2026-06-08
-> **状态**: ✅ 定稿,等产品方开 Phase 10
 > **核心定位**: 一个产品、一个发行物、一个目标用户
+
+## Decision
+
+**定位锁死：一个产品、一个发行物、一个目标用户、一个核心场景。**
+
+```
+✅ 一个产品:Hermix Desktop(Windows 桌面 AI 助手)
+✅ 一个发行物:zip 解压即用,不安装,不写注册表,不写 C 盘
+✅ 一个目标用户:不想折腾环境、想 AI 直接能用的普通办公人
+✅ 一个核心场景:把整个安装目录拷到 U 盘 / 另一台电脑,启动后所有数据完整保留
+```
+
+**这条产品哲学比任何技术细节都重要**。一旦锁死,所有"为兼容性而做"的妥协都不需要了。
+
+由定位推出的七条工程定案：
+
+1. **HERMIX_HOME 强制重定向**：显式 `HERMIX_HOME` > `HERMIX_PORTABLE_DATA_DIR`（Tauri 主进程 fork 前 set）> `~/.hermix`（CLI 模式兜底）。零 config schema 变更，开关走环境变量。
+2. **取消 `~$HOME` 兜底**：桌面端启动时检测到 `~/.hermix` 存在 → 弹一次性"导入?"对话框，**绝不自动**复制。
+3. **sidecar 路径**：`hermix-server.exe` 与 `Hermix.exe` 同目录，Tauri 启动时 `current_exe().parent()` 直接拿。
+4. **WebView2 用户数据双保险重定向**：`WEBVIEW2_USER_DATA_FOLDER` 环境变量（微软官方变量）+ Tauri v2 `WebviewWindowBuilder.data_directory()`。
+5. **`get_settings_dir()` 改为 `get_data_dir()`**，一律走 `install_root`。
+6. **启动前确保 4 个子目录存在**（`data` / `cache` / `logs` / `webview-cache`），失败 `ok()` 不阻塞启动。
+7. **取消 installer**：`bundle.targets` 改为 `[]`，只出 raw exe + 资源目录，不出 NSIS。
+
+**目录职责**：`data/` 是**唯一**用户数据来源，删除即恢复出厂；`cache/` 可清，清掉不影响功能；`webview-cache/` 由 Tauri/WebView2 自动管理。
+
+**TICK 不取消，是"拆解后按优先级引入各组件"**：时间感知 P2、心电图可视化 P1、持续状态 P0（已被 FocusStack 覆盖）、后台调度 P1（hermix-cron 已实现）；**TICK 主循环整体**与**自适应节奏**取消。
+
+## Alternatives considered
+
+| 方案 | 为何否决 |
+|---|---|
+| 旧定位："通用 AI Agent,多平台,17 个 gateway" | 与"便携 + 本地"直接冲突。多平台意味着每个平台一套路径规则，正是可移植性的敌人 |
+| 旧定位："Tauri 桌面应用 / CLI TUI / Dashboard HTTP API 三层" | 三层 = 三套发版与配置面。收敛为单一桌面发行物 |
+| 旧定位："macOS / Linux / Windows 三端支持" | 产品方明确"暂不考虑其他环境"。直接 `#[cfg(windows)]` 锁死，Linux/macOS 编译失败提示"暂只支持 Windows" |
+| 保留 NSIS installer（决策点 1 方案 B） | 选 A（只出 zip，完全零安装）。installer 意味着 UAC、注册表、系统目录写入，全部违背定位 |
+| WebView2 缺失时自动下载静默装（决策点 2 方案 B） | 选 A（启动弹窗引导去 Microsoft 装）。自动装会触发 UAC，违背"零环境"原则 |
+| 旧 `~/.hermix` 数据完全无视 / 自动复制（决策点 3 方案 B） | 选 A：检测到就弹"导入?"对话框，**绝不动手**。自动复制 = 未经用户确认的数据搬运 |
+| perMachine 安装到系统目录 | UAC 恶心，违背便携 |
+| 自动更新 | 重新下 zip 即可；自动更新需要一个常驻更新服务和写 C 盘的安装痕迹 |
+| 云同步 / 云备份 | "便携就是自带"，不要云 |
+| 多用户（2+ 用户同一电脑） | 便携场景 1 用户 1 目录（决策点 4 选 A） |
+| CLI TUI（ratatui） | 桌面端，GUI 即可。`hermix.exe` 仅保留为无 GUI 场景的备用 CLI（决策点 5 选 A） |
+| 工具瘦身到大刀阔斧（决策点 7 方案 A：只留 15 个） | 选 B（微调，留 25 个）。大砍会砍掉写作/整理类能力 |
+| 工具路由一步到位 L1 + usearch 向量（决策点 8 方案 B，2 周） | 选 A（L0 关键词 + LRU，1 周）先行 |
+| 记忆层 1 个本地 embedded + 7 plugin 适配（决策点 9 方案 B） | 选 A（8 plugin 适配统一 trait） |
+| TICK 主循环整体保留 | 取消。GUI 用户在场，"持续存在"是多余的；但其组件能力按优先级分别引入 |
+| TICK 自适应节奏（忙时秒级 tick） | 取消。桌面端 GUI 用户在场，不需要自适应 |
+| 启动自检顺便探测外部（扫描 SSH/Git/桌面/其他 AI Agent） | 取消。启动自检是健康检查，不探测外部——两码事 |
+| 依赖 `settings_dir()`（Windows 标准位置） | 改用 `install_root` 派生的 `data/`：标准位置在 C 盘，直接违反 R3/C 盘零写入 |
+
+## Consequences
+
+- **跨平台支持被永久排除**：Linux/macOS 编译直接失败。代价是失去这些平台用户，换取"一个发行物"的确定性。
+- **WebView2 缺失率约 5%**（Win10 旧版）仍会弹窗；不自动装是刻意的，接受这 5% 的摩擦。
+- **Tauri 沙箱是否允许设 `WEBVIEW2_USER_DATA_FOLDER` 未验证**：若失效，数据会落 C 盘——对策是打包后跑一次验证 `%LOCALAPPDATA%` 是否产生新文件，失效则改用 `data_directory()` API。**这是本方案唯一未钉死的 R3 风险点**。
+- **用户手删 `data/` 即数据全失**：对策是启动时检测 `data/config.yaml` 缺失 → 弹"恢复出厂?"对话框（不做自动恢复）。
+- **路径含中文/空格**是启动失败风险：对策 = sidecar 用 `Command::new(&bin)` 直接传 PathBuf + 启动检测提示 + GBK 解码兜底（已在 `python_alignment` 有了）。
+- **`data/` 体积膨胀**（技能装多了）会让 U 盘拷不动：对策是启动时统计体积，>500MB 提醒"考虑分卷"（决策点 6 选 A）。
+- **多开（同目录多实例）会端口冲突**：对策是 `hermix-server.exe serve` 启动时检测 3000 端口，占用则自动 +1。
+- **工作量总计 ~20-26 周（约 5-6.5 个月）**，P0 7-10 周完成；P0 是所有其他项的前置。
+- **Phase 10 之后仍有大量挂账批次**（11 旧数据兼容、12 生态兼容、13 意图预取、14 意识流 UI、15 预热缓存、16 ACUI、17 本地向量、18 时间词召回、19 启动自检 + Watchdog、20 时间感知），且 `docs/PORTABLE_BUILD.md` 与 README 重写属 P0/P1 内任务，实施状态不在本笔记记录范围内。
+- **反思记录（保留原判断）**：曾把"延后"和"取消"混淆、把"产品定位"和"技术能力"混淆。**桌面端是产品定位，工具路由/记忆层/心电图是技术能力，后者对任何形态 Agent 都有价值，只是优先级不同。**
 
 ---
 
@@ -470,7 +534,7 @@ pub fn check_portable_integrity() -> Result<IntegrityReport, String> {
 ### 完整 Phase 排序(P0 → P1 → P2)
 
 | Phase | 内容 | 估时 | 优先级 |
-|------|------|------|--------|
+|------|------|--------|--------|
 | **10** | 零环境 + 可移植(7 项工程改造) | 2-3 周 | P0 |
 | **7** | 工具路由(省 92% token) | 2-3 周 | P0 |
 | **8** | 统一 MemoryLayer + FocusStack | 3-4 周 | P0 |
@@ -490,7 +554,7 @@ pub fn check_portable_integrity() -> Result<IntegrityReport, String> {
 ### 仍取消的(明确不做的)
 
 | 项 | 理由 |
-|---|------|
+|---|---|
 | **TICK 主循环整体** | GUI 已足够,不需要"持续存在" |
 | **TICK 自适应节奏** | 桌面端不需要 |
 | **扫描 SSH/Git/桌面/其他 AI Agent** | 跟启动自检是两码事,启动自检是健康检查不探测外部 |

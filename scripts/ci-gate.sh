@@ -132,24 +132,68 @@ fi
 echo ""
 
 #-----------------------------------------------------------------------
-# 7. Advisory: single-file line-count guard (soft gate)
-#    Flags god-file regressions: any .rs/.ts/.tsx source file exceeding
-#    2500 lines is a smell (review for extractable modules). Pure
-#    warning — does not fail the gate, so incremental splits aren't
-#    blocked, but surfaces drift back toward god files.
-#    See AGENTS.md "Code simplification discipline" for the 100k-line goal.
+# 7. God-file guard.
+#    Flags single .rs/.ts/.tsx source files exceeding 2500 lines.
+#
+#    Baseline ratchet, not a global quota: the repo already carries 6
+#    such files (see AGENTS.md "Code simplification discipline"), and
+#    blocking on them outright would make the gate permanently red and
+#    therefore ignored. Instead KNOWN_GOD_FILES lists the accepted
+#    baseline — a file NOT on that list crossing 2500 lines FAILS, and
+#    removing an entry from the list (by splitting the file) is the way
+#    to tighten it. New god files cannot be introduced.
 #-----------------------------------------------------------------------
-echo "=== [7/9] advisory: source files > 2500 lines ==="
+echo "=== [7/9] god-file guard (> 2500 lines) ==="
+# Accepted baseline. Remove a line only after actually splitting the file.
+KNOWN_GOD_FILES="crates/hermix-agent/src/local_agent_service.rs
+crates/hermix-agent/src/provider.rs
+crates/hermix-agent/src/run_loop.rs
+crates/hermix-agent/src/agent_loop/tests.rs
+crates/hermix-server/src/ws.rs
+apps/desktop-tauri/src/App.tsx"
 over_limit=$(find crates apps/desktop-tauri/src -type f \( -name '*.rs' -o -name '*.ts' -o -name '*.tsx' \) \
-  -exec wc -l {} + 2>/dev/null | awk '$1 > 2500 {print}' | sort -rn)
-if [ -n "$over_limit" ]; then
-  echo "  ADVISORY: the following files exceed 2500 lines (candidate god files):"
-  echo "$over_limit" | while read -r n f; do echo "    $n  $f"; done
+  -exec wc -l {} + 2>/dev/null | awk '$1 > 2500 && $2 != "total" {print $2}' | sort)
+new_gods=""
+for f in $over_limit; do
+  if ! printf '%s\n' "$KNOWN_GOD_FILES" | grep -qxF "$f"; then
+    new_gods="$new_gods $f"
+  fi
+done
+if [ -n "$new_gods" ]; then
+  echo "  FAIL: new god file(s) over 2500 lines (not on the accepted baseline):"
+  for f in $new_gods; do
+    echo "    $(wc -l < "$f")  $f"
+  done
   echo ""
-  echo "  Consider extracting leaf modules / moving #[cfg(test)] out (see code-analysis-report)."
+  echo "  Split it, or — if it replaces an existing god file — update"
+  echo "  KNOWN_GOD_FILES in scripts/ci-gate.sh in the same commit."
+  exit 1
+fi
+if [ -n "$over_limit" ]; then
+  echo "  OK: only the accepted baseline exceeds 2500 lines:"
+  for f in $over_limit; do echo "    $(wc -l < "$f")  $f"; done
 else
   echo "  (none over 2500 lines — clean)"
 fi
+echo ""
+
+#-----------------------------------------------------------------------
+# 7b. Ignored-test guard.
+#     `#[ignore]` silently removes a test from `cargo test` — the suite
+#     still reports green. This surfaces the count and fails on NEW
+#     ignores so a failing test can't be parked indefinitely.
+#-----------------------------------------------------------------------
+echo "=== [7b/9] ignored test count ==="
+IGNORED_TOTAL=$(grep -rn '#\[ignore' crates/ --include='*.rs' 2>/dev/null | wc -l | tr -d ' ')
+IGNORED_BASELINE=17
+if [ "$IGNORED_TOTAL" -gt "$IGNORED_BASELINE" ]; then
+  echo "  FAIL: $IGNORED_TOTAL ignored tests (baseline $IGNORED_BASELINE)."
+  echo "  New #[ignore] hides a test from CI. Fix the test or, if it must"
+  echo "  stay ignored, raise IGNORED_BASELINE deliberately:"
+  grep -rn '#\[ignore' crates/ --include='*.rs' 2>/dev/null | sed 's/^/    /'
+  exit 1
+fi
+echo "  OK: $IGNORED_TOTAL ignored (baseline $IGNORED_BASELINE)"
 echo ""
 
 echo "=== [8/9] pre-existing debt markers ==="

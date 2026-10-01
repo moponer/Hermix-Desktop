@@ -1,8 +1,56 @@
-# Hermix 插件内核设计 v3（参考 DeepSeek Harness + Pi）
+# Decision Note: Hermix 插件内核设计 v3
 
-> 状态：**待评审**，未动业务代码。
+Status: implemented — 内核方向已定（四件套 + AgentLoop 插件化 + 插件为一等扩展机制）；F0-F6 迁移未整体执行，边界模型切换排在 F5
+
 > 基线：Rust 侧 112,337 行（含 tests）／24 crate；前端 44.5K 行。
 > 取代 `FOUNDATION_REWRITE_DESIGN.md` 的架构部分（其网络安全章节继续有效）。
+> 参考 DeepSeek Harness + Pi。
+
+## Decision
+
+**内核只保留四件套，agent loop 也是插件，插件是唯一一等扩展机制。** 六条定下的决策：
+
+1. **四件套内核**（DeepSeek Harness 原则：没有特权内核可打补丁，全靠挂插件扩展，**注册是可 unwind 的效果**）：C1 Context（服务注册表 + 依赖注入 + 可逆效果，~800 行）/ C2 Session（append-only 事件日志，唯一真相源，~2,500 行）/ C3 Seams（trait + provider + consumer 三角色，~1,500 行）/ C4 Boot（profile/bundle 有序组合 + patch 覆盖，~600 行）。**不变量**：任何进入模型请求的内容，必须能从日志重建，runtime 有断言检查。
+2. **`AgentLoop` 作为接缝**（2026-09-24 明确要求"agent loop 也是插件，参考一切皆插件的思路。以后迭代方便"）。内核只定义一个 `AgentLoop` trait，跑一轮返回 `StepDirective`（`CallModel` / `ExecuteTools` / `Finish` / `Suspend`）而不是自己去做。三条硬约束：Loop 不能直接提交（提交权在内核，任何 Loop 都无法绕过"提交成功才发布"）/ Loop 不能碰 DB·WS·裸连接（`LoopContext` 编译期就不给）/ Loop 必须可中断可恢复（`step()` 不持跨调用可变状态，要跨轮记忆就写进 session 变更线）。
+3. **插件是唯一一等扩展机制，MCP 不是默认机制**（2026-09-24 明确"我不想用 MCP，我希望是插件形式。MCP 功能可以有，是以后需要的情况下用户自己去配置连接的。默认是没有 MCP"）。默认 profile 不编译、不启动、不注入任何 `server__tool`；MCP 降级为 `mcp-bridge` 插件（用户显式配 `mcp_servers.json` 才激活）；内核只认 `Tools` seam，不认 MCP。插件形态优先级：进程内 Rust > 外部进程 > MCP bridge。
+4. **授权模型从"逐命令审批"切到"边界内放行、越界才拦"**。L1 边界启动时划一次（profile 决定 Shell/Fs/Sandbox provider）→ L2 边界内全放行不弹卡 → L3 越界硬拒或极少数仍需人。审批卡从"每次都问"退化为"只在越界时问"，频次降一个量级。Windows 侧落四层边界：受限令牌 / Job Object / 低完整性级别-AppContainer / 可选 WSL2 后端。
+5. **主仓瘦身按 DEL / MOVE / TRIM 三档，默认按 DEL 处理**。此前"外置为插件"是含糊的——留在仓库子目录只是**不编译**，行数一分没减。
+6. **前端契约冻结**：35 出站帧 + 5 入站帧 + 全部 REST 端点 + `WsEnvelope` 形状全保，适配层在服务端边界做投影。唯一新增：cua 若外置，`ToolCallBubble.tsx:1108-1138` 的 8 个 `cua_*` 预览组件改为通用预览兜底（约 40 行）。
+
+## Alternatives considered
+
+| 方案 | 为何否决 |
+|---|---|
+| 维持"逐命令审批"（prompt-per-action） | **稳定性问题，不只是体验问题**。`AwaitApproval` 是跨连接、跨进程的持久中间态，必须实现审批落盘 → 跨连接重投 → 超时 default-deny 调度 → 幂等去重 → 前后端定时器对齐，五样全是复杂度、全是 bug 面。Pi 用一条"启动时划边界"的决策把它们全消掉了 |
+| 拿沙箱当授权边界 | Pi README 自陈：*"does not include a built-in permission system… By default, it runs with the permissions of the user and process that launched it."* 沙箱在 Pi 里是**可选外挂**（Plain Docker / Docker Sandboxes / OpenShell / Gondolin），且它自己承认洞：*"Do not use this pattern as a credential boundary."* **真正的差异是授权模型，不是沙箱** |
+| agent loop 硬编码在内核 | agent loop 是唯一持有"下一步干什么"决策权的组件。硬编码则每换一种交互范式（流式问答 / Plan-Execute / Codex 式 / 多 agent 编排）都要改内核。做成接缝后**换范式 = 换一个 provider，内核不动** |
+| 引入 Cordis（TS 运行时） | Rust 无对应物，引入 TS 运行时会自毁"零 JS 运行时"前提。决定自实现最小版 ~800 行（注册返回 `EffectGuard`，`Drop` 自动反注册） |
+| "外置为插件"含糊口径（留在仓库子目录） | 留在子目录只是**不编译**，行数一分没减。口径修正为 DEL / MOVE / TRIM 三档，且**默认按 DEL 处理，不从 DEL 降级为"移到子目录"** |
+| `hermix-cua` 判 DEL（砍到 0） | 深挖后自我推翻：它是 **Windows 原生深水区能力的唯一实现**，且质量高于同类开源方案的底层（`uia.rs` 880 行 UI Automation 语义树开源同类几乎全靠纯截图标坐标猜；`trace.rs` 结构化轨迹录制回放只有 trycua/cua 的 bench 有类似物）。**删 = 从零重写 DXGI + UIA + SendInput + OCR，成本远超 6,900 行，且不可能写得比现在更好**。改判为 **MOVE**（移出主仓到 `hermix-contrib`，代码不删，作为 `Desktop` seam 的默认 provider 插件） |
+| `hermix-focus` 判 DEL（砍到 ~500 / 0） | 第二次自我推翻：深挖发现它不是"打分器"，是**一套完整分层记忆系统**（`embedded/` 4,607 行本地向量 + CJK 中文分词、`time_aware_recall` 1,118 行、`focus_stack` 694 行等），**与 mem0 同构且在中文分词、时间感知、显著性三点更细**。删掉 = 放弃中文优化的时间感知记忆。改判为 **KEEP→TRIM**（保 `Memory` seam + 核心，TRIM 与 mem0 重复部分，约 −3,000 行） |
+| 接 mem0 / Letta / Zep / Cognee | Letta 是完整 stateful agent runtime，lock-in 高（需重建 loop 2–6 周），**与 AgentLoop 插件化直接冲突**，且每次操作都耗推理 token、可审计性低；Zep/Graphiti 600K+ footprint 且 token 效率极低。结论：不换，只补 mem0 的三条成熟实践 |
+| 换 `uiautomation` crate 替换自研 `uia.rs` | 该 crate 更通用（9K SLoC），但**我们已有更贴合的实现**，不需要替换 |
+| 沙箱网络管控改宿主机防火墙 / iptables | Windows 上"改 iptables 不现实"。改抄 codex-rs 的 `network-proxy`：**环回代理 + 域名白名单 deny 优先 + 拦截非公网 IP 直连**，不需要 root、不改宿主机防火墙，跨平台一致 |
+| 直接抄 codex-rs 的 `app-server` 传输 | 它走 **Unix domain socket**，而本项目要求走 **TLS + 配对**——这是本项目要比它更严的地方，不抄 |
+| 默认 profile 含 MCP | 用户明确不要 MCP 默认开启。降级为可选插件，未配置时该插件不存在，零成本 |
+| 内置 Python 运行时 | 插槽已预留但 `BUNDLED_PYTHON` 从没启用过。**建议默认不内置**（多数开发者机器有 Python，+30MB 换不到刚需），做成安装器可选项 |
+| 默认 profile 含浏览器能力 | 建议不含（默认只有 file/terminal/exec/delegate） |
+| 默认 profile 含电脑操作 | **默认关闭**：OSWorld SOTA 距人类仍差 ~40 个百分点，每轮全屏截图 ≈1000+ token，模型容易在能用 `terminal` 时误入高成本低成功率路径 |
+| 工具 schema 在 prompt 里静态缓存 | 外置插件失联时会出现"工具消失但 prompt 还在"。改为 schema 随注册/注销同步，**prompt 由 registry 派生，不缓存** |
+| 迁移期新旧 registry 并行 | 会造成状态分叉。改为**每阶段完成即删旧路径**，不并行 |
+
+## Consequences
+
+- **行数账目不自洽，需重核**：P1 段 16,660 与 P2 段 30,000 互相矛盾（P2 会新增 store/session/context ≈5,300 行，且 `hermix-agent` 73,259 + `hermix-tools` 52,144 之和已超过总量 112,337，说明 crate LOC 统计口径不一致）。**F0 开工时用统一口径实测重算一次**；本笔记中的数字只用于表达量级与方向，**不作为承诺**。
+- **两处自我推翻留下的账面代价**：`cua` 改判 MOVE 后主仓只减 6,900 行（而不是删光的 4,980——MOVE 口径下主仓减少值以 6,900 计），`focus` 改判 KEEP→TRIM 后小计由 −70,650 上修到 −65,950。收益是保住 Windows 原生资产与中文记忆能力，代价是瘦身目标打折。
+- **"多显示器正确"这条优势已撤回**：`capture/mod.rs:73` 注释原文 `pub monitor: usize` → *"Currently ignored — the primary monitor is always captured"*。多屏 capture **根本没实现**——这是未实现项，不是优势。
+- **每轮截图的传输成本是硬伤**：单帧 666 KB PNG / **888 KB base64**。原估"≈1000+ token"只算了模型侧，没算传输侧；手机端远程场景每轮 888 KB 上行正是 §9 传输层要 seq 对账 + 差分的理由。
+- **键鼠动作闭环未验证**："能感知"≠"能操作"。第 3 步会真的打开记事本并注入按键，干扰当前桌面，本次未跑；启用电脑操作前必须补这一步。
+- **插件可卸载是新增能力**：当前"插件注册进去就拔不出来"，`EffectGuard` 的 `Drop` 注销让它强一个量级。代价是 guard 必须在 `Drop` 断言，内核需提供 `ctx.assert_clean()` 测试钩子防效果泄漏。
+- **迁移风险集中在 F4**（agent loop 改插件、拆解 `local_agent_service.rs`），F0-F3 解决 80% 实际症状（卡住/孤儿/重复），F4 单独评估。
+- **接缝三角色完整性需要 CI 兜**：只写 provider 没写 definition 就换不了，需 CI 检查每个 seam 目录必须含 `def.rs`/`provider.rs`/`consumer.rs`；同理需 lint 规则禁止插件 crate 直接依赖 `std::fs` 的路径写（边界绕过）。
+- **仍挂账的待拍板项**（见下文 §7 D1/D2/D5/D6 与 §10 N1b/N4/N5）：本笔记不代替产品方拍板；已按建议默认值改判的项（cua MOVE、focus KEEP→TRIM、记忆保留自研、Python 默认不内置、电脑操作默认关闭、hermix-cua 与 hermix-plugin 的处置）在下文原样保留。
+- **沙箱默认 provider 的具体定界另见** [Windows ACL restricted-token 沙箱设计](../../proposed/architecture/2026-09-26-windows-acl-sandbox.md)——该笔记只定界机制与最小切片，本笔记只定 seam 位置。
 
 ---
 
@@ -298,7 +346,7 @@ pub enum StepDirective {
 - `workspace-write` 下 `.git` / `.agents` / `.codex` 三个元数据目录**额外保护**，理由是提权而非整洁：**可写的 `.git/hooks` = 可写的任意代码执行路径**
 - Windows 实现：`CreateRestrictedToken`（`DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICTED` + capability SID）降权 + **ACL/DACL** 管文件系统 + **WFP（Windows Filtering Platform）** 硬断网络
 
-→ **这三条直接落地为 Hermix 的 `Sandbox` seam 默认 provider**（§5.2 已列 Windows 四层，此处补 WFP 与元数据目录保护两项）。
+→ **这三条直接落地为 Hermix 的 `Sandbox` seam 默认 provider**（§5.2 已列 Windows 四层，此处补 WFP 与元数据目录保护两项）。沙箱最小切片的逐条定界见 [Windows ACL restricted-token 沙箱设计](../../proposed/architecture/2026-09-26-windows-acl-sandbox.md)。
 
 **② 网络管控不靠防火墙，靠环回代理**：沙箱内只放行 loopback，注入 `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` 强制走代理；代理按**域名白名单逐连接裁决（deny 优先）**，并拦截非公网 IP 直连。跨平台一致，**不需要 root / 不改宿主机防火墙**。
 
@@ -572,7 +620,7 @@ Windows 特有失败映射为**结构化错误码 + 给模型的可执行指令*
 - `crates/hermix-tools/src/approval/engine.rs` 的 `DENIED_PATTERNS` / `CONFIRM_PATTERNS` 改由 `Sandbox` seam 承接（见 §5.2），**不再靠"报错让模型重试"来兜底**
 - pi-coding-agent 的 `bash` 工具错误处理语义
 - **`codex-rs` 的三档沙箱语义**（`read-only` / `workspace-write` / `danger-full-access`）——尤其 `.git`/`.agents`/`.codex` 元数据目录保护（理由：可写 `.git/hooks` = 任意代码执行路径）
-- **`codex-rs` 的 `network-proxy` 思路**：环回代理 + 域名白名单 deny-优先 + 拦截非公网 IP 直连，**不依赖改宿主机防火墙**，Windows 上可直接落地
+- **`codex-rs` 的 `network-proxy` 思路**：环回代理 + 域名白名单 deny 优先 + 拦截非公网 IP 直连，**不依赖改宿主机防火墙**，Windows 上可直接落地
 
 ---
 
