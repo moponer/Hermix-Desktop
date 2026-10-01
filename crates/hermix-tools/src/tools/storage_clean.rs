@@ -102,6 +102,23 @@ pub struct CleanReport {
 // Safety: blacklist / safelist
 // ---------------------------------------------------------------------------
 
+/// Hermix-owned scratch root: the one place the agent is told to put
+/// throwaway files (test scripts, probe outputs, debug dumps).
+///
+/// Why this exists as a *code-defined* path rather than a prompt
+/// convention: the prompt can tell the model where to write, but only
+/// code can guarantee the prefix. `is_scratch_scoped` downgrades the
+/// tool's risk to `Caution` when every requested path resolves inside
+/// this root, which is what lets self-cleanup run without an approval
+/// round-trip. A model-chosen filename cannot get here — the root is
+/// fixed by this function, and `safety_check` still runs in full.
+pub fn scratch_root() -> PathBuf {
+    let temp = std::env::var("TEMP")
+        .or_else(|_| std::env::var("TMP"))
+        .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().to_string());
+    PathBuf::from(temp).join("hermix-scratch")
+}
+
 /// Roots we never touch, no matter what.
 fn blacklist_roots() -> Vec<PathBuf> {
     let profile = user_profile();
@@ -118,6 +135,37 @@ fn blacklist_roots() -> Vec<PathBuf> {
     // name if they resolve outside the home.
     let _ = local;
     roots
+}
+
+/// True when every requested path resolves inside [`scratch_root`].
+///
+/// Used as the tool's risk predicate: hermix's own scratch tree is by
+/// construction disposable, so cleaning it does not need a human in
+/// the loop. Anything outside — the wider `%TEMP%`, `Downloads`, the
+/// whole safelist — keeps the full `Dangerous` treatment.
+///
+/// Deliberately conservative:
+///   - the scratch root must already exist (it is created on first
+///     use by whoever writes there), so a typo'd path can't match;
+///   - comparison is on **canonicalized** paths, so `..` traversal and
+///     junction/symlink escapes don't slip through;
+///   - an empty path list is NOT scratch-scoped — an unscoped call must
+///     still be treated as dangerous.
+pub fn is_scratch_scoped(raw_paths: &[String]) -> bool {
+    if raw_paths.is_empty() {
+        return false;
+    }
+    let Ok(root) = scratch_root().canonicalize() else {
+        return false;
+    };
+    raw_paths.iter().all(|raw| {
+        PathBuf::from(raw)
+            .canonicalize()
+            .map(|c| is_within(&root, &c))
+            // An unresolvable path cannot be proven to be inside the
+            // scratch root, so it must not earn the risk downgrade.
+            .unwrap_or(false)
+    })
 }
 
 /// Roots where junk (caches, temps, installer residue) legitimately lives.
@@ -143,6 +191,11 @@ fn safelist_roots() -> Vec<PathBuf> {
         PathBuf::from(format!("{}\\uv", local)),
         PathBuf::from(format!("{}\\ms-playwright", local)),
         PathBuf::from(format!("{}\\go-build", local)),
+        // Hermix's own scratch tree — where the prompt tells the agent
+        // to put throwaway files. Listed so `safety_check` accepts it
+        // (it lives under %TEMP%, which is already safelisted, but
+        // naming it explicitly keeps the two mechanisms in sync).
+        scratch_root(),
     ];
     // De-dupe (some roots coincide on different env layouts).
     roots.sort();
@@ -311,14 +364,52 @@ impl StorageCleanHandler {
 #[async_trait]
 impl ToolHandler for StorageCleanHandler {
     async fn execute(&self, params: Value) -> Result<String, ToolError> {
-        let confirm = params
-            .get("confirm")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+        // `confirm` is a safety interlock, so it must NEVER be inferred.
+        // But `as_bool()` alone is too strict in practice: plenty of
+        // models emit `"confirm": "true"` (string) rather than a JSON
+        // boolean, and the old check silently treated that as "not
+        // confirmed" — producing "必须有 confirm: true" for a call that
+        // visibly passed it, with the user having already clicked
+        // approve. The model then retried the same broken shape.
+        //
+        // Only these forms count as confirmation:
+        //   - JSON `true`
+        //   - the exact strings "true" / "1" (trimmed, case-insensitive)
+        // Everything else — including "false", "yes", "", 1, and any
+        // absent value — is NOT confirmation. A non-boolean number is
+        // also rejected rather than truthy-cast, because silently
+        // accepting `confirm: 1` would be exactly the kind of
+        // "close enough" coercion a delete interlock must not have.
+        let confirm_raw = params.get("confirm");
+        let confirm = match confirm_raw {
+            Some(Value::Bool(b)) => *b,
+            Some(Value::String(s)) => {
+                let t = s.trim();
+                t.eq_ignore_ascii_case("true") || t == "1"
+            }
+            _ => false,
+        };
         if !confirm {
-            return Err(ToolError::InvalidParams(
-                "必须要有 confirm: true。删除/移回收站前必须显式确认（且会弹聊天审批卡片）。".into(),
-            ));
+            // Name the shape we actually saw. "必须有 confirm: true" sent
+            // the model hunting for a wrong field name when the real
+            // problem was a string-vs-boolean mismatch.
+            return Err(ToolError::InvalidParams(match confirm_raw {
+                Some(Value::String(s)) => format!(
+                    "confirm 必须是 JSON 布尔 true，不能是字符串（收到 \"{}\"）。\
+                     请输出 \"confirm\": true（不带引号）。",
+                    s
+                ),
+                Some(other) => format!(
+                    "confirm 必须是 JSON 布尔 true，收到 {} 类型。",
+                    match other {
+                        Value::Null => "null".to_string(),
+                        Value::Number(_) => "数字".to_string(),
+                        v => format!("{}", v),
+                    }
+                ),
+                None => "必须要有 confirm: true。删除/移回收站前必须显式确认（且会弹聊天审批卡片）。"
+                    .to_string(),
+            }));
         }
         let paths = params
             .get("paths")
@@ -382,7 +473,7 @@ impl ToolHandler for StorageCleanHandler {
         );
         tool_schema(
             "storage_clean",
-            "在聊天审批确认后，删除/移回收站指定的 junk 文件。仅接受位于缓存/临时/下载等安全目录的路径，拒绝系统目录。trash 走回收站（可逆），delete 直接删。",
+            "在聊天审批确认后，删除/移回收站指定的 junk 文件。仅接受位于缓存/临时/下载等安全目录的路径，拒绝系统目录。trash 走回收站（可逆），delete 直接删。\n\n【临时文件自清理】把测试脚本、探针输出、调试 dump 等一次性产物写到 %TEMP%\\hermix-scratch\\ 下（该目录由程序定义），收尾时清理它们**不需要弹审批卡**。写到 %TEMP% 其它位置或 Downloads 则仍需用户逐次确认。",
             JsonSchema::object(props, vec!["paths".into(), "confirm".into()]),
         )
     }
@@ -438,6 +529,69 @@ mod tests {
         assert!(err.is_err());
     }
 
+    // ---- confirm coercion -----------------------------------------
+    //
+    // Regression: models routinely emit `"confirm": "true"` as a
+    // string. The old `as_bool()` check rejected that, so the tool
+    // reported "必须有 confirm: true" for a call that visibly passed it
+    // — after the user had already clicked approve. The user saw two
+    // approvals and zero deletions.
+
+    #[tokio::test]
+    async fn string_true_counts_as_confirmation() {
+        // Must get PAST the confirm gate. We assert on the error *shape*:
+        // an empty path list fails with the "缺少 paths" message, not
+        // the confirm one, which proves the gate opened.
+        let handler = StorageCleanHandler::new();
+        for raw in [
+            json!({ "paths": [], "confirm": "true" }),
+            json!({ "paths": [], "confirm": "TRUE" }),
+            json!({ "paths": [], "confirm": " true " }),
+            json!({ "paths": [], "confirm": "1" }),
+        ] {
+            let err = handler.execute(raw).await.unwrap_err();
+            let msg = err.to_string();
+            assert!(
+                !msg.contains("confirm"),
+                "string form should satisfy the gate, got: {}",
+                msg
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn real_boolean_true_counts_as_confirmation() {
+        let handler = StorageCleanHandler::new();
+        let err = handler
+            .execute(json!({ "paths": [], "confirm": true }))
+            .await
+            .unwrap_err();
+        assert!(!err.to_string().contains("confirm"));
+    }
+
+    #[tokio::test]
+    async fn near_miss_values_are_still_refused() {
+        // A delete interlock must not be truthy-cast. Anything that is
+        // not an explicit "yes" is a refusal.
+        let handler = StorageCleanHandler::new();
+        for raw in [
+            json!({ "paths": [], "confirm": "false" }),
+            json!({ "paths": [], "confirm": "yes" }),
+            json!({ "paths": [], "confirm": "" }),
+            json!({ "paths": [], "confirm": 1 }),
+            json!({ "paths": [], "confirm": null }),
+            json!({ "paths": [], "confirm": "是" }),
+        ] {
+            let err = handler.execute(raw).await.unwrap_err();
+            let msg = err.to_string();
+            assert!(
+                msg.contains("confirm"),
+                "must refuse non-explicit confirmations, got: {}",
+                msg
+            );
+        }
+    }
+
     #[test]
     fn refuses_paths_outside_safelist_in_report() {
         let report = StorageCleanHandler::run_clean(
@@ -460,5 +614,129 @@ mod tests {
         // Either it was deleted (temp under safelist) or refused — both
         // are safe outcomes; we must NOT have silently touched system.
         assert!(report.deleted.len() + report.refused.len() > 0);
+    }
+
+    // ---- scratch-scope risk downgrade -------------------------------
+    //
+    // The downgrade is what lets the agent clean up after itself without
+    // an approval round-trip. These tests pin the boundary: only a path
+    // provably inside `scratch_root()` earns it, and ONE loose path in
+    // the list is enough to lose it for the whole call.
+
+    /// Create a **unique** subdirectory under the real scratch root and
+    /// drop only that subdirectory on teardown.
+    ///
+    /// Earlier this guard removed the whole `scratch_root()`, which races
+    /// every other scratch test running in parallel — one test's teardown
+    /// deletes another's files mid-assertion. Each test now owns a
+    /// private leaf, so the tests stay independent while still exercising
+    /// the real code-defined root (which is the only thing that can earn
+    /// the downgrade).
+    struct ScratchGuard(PathBuf);
+    impl ScratchGuard {
+        fn create() -> Self {
+            let root = scratch_root();
+            std::fs::create_dir_all(&root).expect("create scratch root");
+            // Test name is unique within the binary; add the thread id so
+            // even a re-run inside one process cannot collide.
+            let unique = format!(
+                "t-{:?}-{}",
+                std::thread::current().id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0)
+            );
+            let dir = root.join(unique);
+            std::fs::create_dir_all(&dir).expect("create scratch subdir");
+            Self(dir)
+        }
+        /// A file inside this test's private scratch subdir.
+        fn file(&self, name: &str) -> PathBuf {
+            self.0.join(name)
+        }
+    }
+    impl Drop for ScratchGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn scratch_root_lives_under_the_system_temp_dir() {
+        let root = scratch_root();
+        assert!(
+            root.to_string_lossy().contains("hermix-scratch"),
+            "scratch root must be code-defined and namespaced, got {:?}",
+            root
+        );
+    }
+
+    #[test]
+    fn a_real_file_in_scratch_is_scratch_scoped() {
+        let g = ScratchGuard::create();
+        let f = g.file("probe.txt");
+        std::fs::write(&f, b"x").unwrap();
+        assert!(
+            is_scratch_scoped(&[f.to_string_lossy().to_string()]),
+            "a file the agent itself dropped in the scratch tree must qualify"
+        );
+    }
+
+    #[test]
+    fn a_path_outside_scratch_is_not_scoped() {
+        // Downloads is on the safelist, so `safety_check` would allow it —
+        // but it is the USER's directory, so it must keep the approval.
+        let other = std::env::var("USERPROFILE")
+            .map(|p| PathBuf::from(p).join("Downloads").join("keep.txt"))
+            .unwrap_or_else(|_| PathBuf::from("C:/definitely/not/scratch/keep.txt"));
+        std::fs::create_dir_all(other.parent().unwrap()).ok();
+        std::fs::write(&other, b"user file").ok();
+        assert!(
+            !is_scratch_scoped(&[other.to_string_lossy().to_string()]),
+            "a user's Downloads file must never earn the scratch downgrade"
+        );
+    }
+
+    #[test]
+    fn a_mixed_list_loses_the_downgrade_entirely() {
+        // The dangerous one poisons the batch: all-or-nothing on purpose,
+        // so a call can never smuggle a real delete past the prompt by
+        // tacking a scratch file onto the front of the list.
+        let g = ScratchGuard::create();
+        let inside = g.file("ok.txt");
+        std::fs::write(&inside, b"x").unwrap();
+        let outside = std::env::var("USERPROFILE")
+            .map(|p| PathBuf::from(p).join("Downloads").join("keep.txt"))
+            .unwrap_or_else(|_| PathBuf::from("C:/definitely/not/scratch/keep.txt"));
+        std::fs::create_dir_all(outside.parent().unwrap()).ok();
+        std::fs::write(&outside, b"user file").ok();
+        assert!(!is_scratch_scoped(&[
+            inside.to_string_lossy().to_string(),
+            outside.to_string_lossy().to_string(),
+        ]));
+    }
+
+    #[test]
+    fn traversal_and_missing_paths_do_not_qualify() {
+        let _g = ScratchGuard::create();
+        // `..` out of the scratch root must not resolve to "inside".
+        let escape = scratch_root().join("..").join("..").join("evil.txt");
+        assert!(
+            !is_scratch_scoped(&[escape.to_string_lossy().to_string()]),
+            "a traversal path must not earn the downgrade"
+        );
+        // A path that cannot be canonicalized cannot be proven safe.
+        assert!(
+            !is_scratch_scoped(&["C:/nope/does/not/exist.txt".to_string()]),
+            "an unresolvable path must not earn the downgrade"
+        );
+    }
+
+    #[test]
+    fn an_empty_list_is_never_scoped() {
+        // No paths means we know nothing; treating it as scratch-scoped
+        // would silently disable the prompt for a malformed call.
+        assert!(!is_scratch_scoped(&[]));
     }
 }

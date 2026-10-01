@@ -581,11 +581,18 @@
   letter-spacing: 0;
   font-weight: 400;
 }
-.tw-msg-stat--add { color: #22c55e; }
-.tw-msg-stat--del { color: #ef4444; }
+/* L0（2026-10-01）：diff 增删统计的绿/红原为字面色（暗色 #22c55e/#ef4444，
+   亮色再覆盖成更浓的 #16a34a/#dc2626）。改走语义令牌后跟随主题与强调色；
+   亮色变体用 color-mix 保留"更浓一点"的原意。 */
+.tw-msg-stat--add { color: var(--color-success); }
+.tw-msg-stat--del { color: var(--color-error); }
 
-[data-theme="light"] .tw-msg-stat--add { color: #16a34a; }
-[data-theme="light"] .tw-msg-stat--del { color: #dc2626; }
+[data-theme="light"] .tw-msg-stat--add {
+  color: color-mix(in srgb, var(--color-success) 88%, black);
+}
+[data-theme="light"] .tw-msg-stat--del {
+  color: color-mix(in srgb, var(--color-error) 88%, black);
+}
 
 /* Chevron expand — square button, brighter on row hover so the
    affordance is discoverable but doesn't visually compete at rest. */
@@ -850,69 +857,6 @@
   background: rgba(217, 119, 6, 0.10);
 }
 
-/* Reasoning ticker — single-line indicator beside the
-   bottom-of-chat status pill. Shows the LATEST captured reasoning
-   line when the user has actually folded the reasoning block
-   (initial state is unfolded → ticker dormant, 2026-08-29 user
-   feedback). Overflowing lines scroll on a fast marquee loop
-   instead of ellipsing into a static snapshot. The pill + ticker
-   share a row via the `.msg-channel` flex container in
-   `ChatIndicators.tsx`. */
-.reasoning-ticker {
-  display: inline-flex;
-  align-items: center;
-  max-width: 320px;
-  height: 22px;
-  line-height: 22px;
-  padding: 0 10px;
-  margin-left: 10px;
-  border-radius: 11px;
-  background: var(--color-bg-secondary, rgba(0, 0, 0, 0.04));
-  color: var(--color-text-secondary);
-  font-size: 12px;
-  font-style: italic;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  border: 1px solid color-mix(in srgb, var(--color-text-faint, #94a3b8) 24%, transparent);
-  vertical-align: middle;
-}
-.reasoning-ticker-line {
-  display: inline-block;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  animation: reasoning-ticker-fade 200ms ease-out;
-}
-/* Marquee variant — only applied when the line overflows (JS probe).
-   Fast loop: hold the head briefly so it's readable, sweep to the
-   tail (~4.8s for 300px+), quick return. `calc(-100% + 320px)` ends
-   with the text's right edge aligned to the pill's right edge
-   (100% = span width, 320px = pill max-width). */
-.reasoning-ticker-line.reasoning-ticker-marquee {
-  overflow: visible;
-  text-overflow: clip;
-  animation:
-    reasoning-ticker-fade 200ms ease-out,
-    reasoning-ticker-scroll 6s linear 200ms infinite;
-}
-@keyframes reasoning-ticker-fade {
-  from { opacity: 0; transform: translateY(2px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-@keyframes reasoning-ticker-scroll {
-  0%   { transform: translateX(0); }
-  8%   { transform: translateX(0); }
-  88%  { transform: translateX(calc(-100% + 320px)); }
-  96%  { transform: translateX(calc(-100% + 320px)); }
-  100% { transform: translateX(0); }
-}
-@media (prefers-reduced-motion: reduce) {
-  .reasoning-ticker-line,
-  .reasoning-ticker-line.reasoning-ticker-marquee {
-    animation: none;
-  }
-}
 
 /* Batch approval card — `kind: "approval_request_batch"` step in the
    process timeline. Renders one card with a list of sub-actions;

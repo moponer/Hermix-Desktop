@@ -636,6 +636,46 @@ setPage("chat");
    */
   const [denialBanner, setDenialBanner] = useState<{ kind: string; tool: string } | null>(null);
   const denialBannerTimerRef = useRef<number | null>(null);
+  /**
+   * Deferred sub-agent panel clear after a turn finishes. Tracked like
+   * `denialBannerTimerRef` so a NEW turn started inside the 3s window
+   * isn't wiped by the previous turn's timer, and so the timer doesn't
+   * survive unmount.
+   */
+  const subAgentsClearTimerRef = useRef<number | null>(null);
+  /**
+   * Pending 1s REST-fallback probes for approval decisions. Tracked so
+   * unmount clears them — otherwise the callback (and its `restSid`
+   * closure) can fire a POST after the window is tearing down.
+   */
+  const approvalRestTimersRef = useRef<Set<number>>(new Set());
+  const clearSubAgentsAfter = useCallback((sessionId: string) => {
+    if (subAgentsClearTimerRef.current !== null) {
+      window.clearTimeout(subAgentsClearTimerRef.current);
+    }
+    subAgentsClearTimerRef.current = window.setTimeout(() => {
+      // Ownership check: if the user already moved on to another
+      // session, that session's state is not ours to clear.
+      if (activeSessionIdRef.current === sessionId) {
+        setSubAgents({});
+      }
+      subAgentsClearTimerRef.current = null;
+    }, 3000);
+  }, []);
+  // Unmount: drop every timer this component owns, so none of them
+  // calls setState on a torn-down window.
+  useEffect(() => {
+    const subTimer = subAgentsClearTimerRef;
+    const restTimers = approvalRestTimersRef;
+    return () => {
+      if (subTimer.current !== null) {
+        window.clearTimeout(subTimer.current);
+        subTimer.current = null;
+      }
+      restTimers.current.forEach((id) => window.clearTimeout(id));
+      restTimers.current.clear();
+    };
+  }, []);
   const showDenialBanner = useCallback((kind: string, tool: string) => {
     setDenialBanner({ kind, tool });
     if (denialBannerTimerRef.current !== null) {
@@ -1221,7 +1261,8 @@ setPage("chat");
       const restSid =
         pendingApprovalSessionsRef.current.get(requestId) ?? activeSessionId;
       if (restSid) {
-        setTimeout(async () => {
+        const t = window.setTimeout(async () => {
+          approvalRestTimersRef.current.delete(t);
           try {
             const data = await api.fetchJSON<{ matched: boolean }>(
               `/v1/sessions/${encodeURIComponent(restSid)}/approval`,
@@ -1254,6 +1295,7 @@ setPage("chat");
             console.error(`[APPROVAL-REST-FAIL] id=${requestId} error=${String(e)}`);
           }
         }, 1000);
+        approvalRestTimersRef.current.add(t);
       }
 
       // Resolve the promise immediately so the UI updates
@@ -1284,7 +1326,8 @@ setPage("chat");
       const restSid =
         pendingApprovalSessionsRef.current.get(requestId) ?? activeSessionId;
       if (restSid) {
-        setTimeout(async () => {
+        const t = window.setTimeout(async () => {
+          approvalRestTimersRef.current.delete(t);
           try {
             const data = await api.fetchJSON<{ matched: boolean }>(
               `/v1/sessions/${encodeURIComponent(restSid)}/approval`,
@@ -1307,6 +1350,7 @@ setPage("chat");
             console.error(`[APPROVAL-DENY-REST-FAIL] id=${requestId} error=${String(e)}`);
           }
         }, 1000);
+        approvalRestTimersRef.current.add(t);
       }
 
       // Resolve the promise immediately so the UI updates
@@ -1409,7 +1453,8 @@ setPage("chat");
       const restSid =
         pendingApprovalSessionsRef.current.get(batchId) ?? activeSessionId;
       if (restSid) {
-        setTimeout(async () => {
+        const t = window.setTimeout(async () => {
+          approvalRestTimersRef.current.delete(t);
           try {
             const data = await api.fetchJSON<{ matched?: boolean }>(
               `/v1/sessions/${encodeURIComponent(restSid)}/approval`,
@@ -1434,6 +1479,7 @@ setPage("chat");
             );
           }
         }, 1000);
+        approvalRestTimersRef.current.add(t);
       }
       resolveApprovalBatch(batchId, "approved", remember);
     },
@@ -2881,7 +2927,11 @@ return {
             // Without this the panel persists forever in the chat
             // — sub-agents are never removed from the state map
             // once they complete, only on session switch.
-            setTimeout(() => setSubAgents({}), 3000);
+            //
+            // Tracked + ownership-checked (see clearSubAgentsAfter): a
+            // bare setTimeout here would wipe the NEXT turn's live
+            // sub-agent panel whenever the user replies within 3s.
+            clearSubAgentsAfter(sessionId);
           },
           onConnectionLost: () => {
             // Fires the instant the WS reconnect budget is exhausted
@@ -3077,6 +3127,10 @@ return {
       }
       resetChatStateForModelSwitch({
         cancelStream,
+        // Anchor the cancel to the session the user is actually in. Without
+        // it, switching models while viewing session B killed session A's
+        // live stream and denied A's pending approvals.
+        activeSessionId,
         wsSendRaw,
         // chatStateReset was written for the legacy global streamError;
         // scope the clear to the active session so a model switch

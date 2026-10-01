@@ -1,6 +1,7 @@
 # vendor-mirror-probe.ps1
 # 实测各 vendor 下载源在「开发机」网络下的连通性 + 延迟。
-# 用于固化 custom-app-architecture-spec.md §3.6.1 / §6.7 的默认镜像源列表。
+# 用于固化 docs/notes/implemented/architecture/2026-08-22-custom-app-architecture.md 的
+# 「下载源策略」/「首日验证清单 · 默认镜像源可达性」两节的默认镜像源列表。
 # 必须在开发机(非 CI 沙箱)跑一遍，结果才有代表性。
 
 $TimeoutSec = 8

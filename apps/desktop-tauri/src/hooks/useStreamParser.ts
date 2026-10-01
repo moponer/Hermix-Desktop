@@ -563,16 +563,12 @@ export function createMessageHandler(
               // whitespace where the waiting card used to be.
               ctx.streamingSessionIdRef.current = ctx.sessionId;
               ctx.setStreamingSessionId(ctx.sessionId);
-              // Always use `wsRef.current` (the live WS); the closure-captured
-              // `ws` may have been replaced by a reconnect by the time the user
-              // clicks.
-              const liveUnlisten = ctx.wsRef.current;
-              if (!liveUnlisten) {
-                console.warn(
-                  `[approval] no active stream subscription — click for ${requestId} dropped; user must retry`,
-                );
-                return;
-              }
+              // No `wsRef.current` gate: `backend_channel_send` targets the
+              // backend channel registry, not the frontend subscription, so
+              // a null `unlisten` says nothing about whether the approval
+              // registry is still listening. Gating on it silently dropped
+              // user decisions. Send unconditionally; a real failure now
+              // surfaces instead of vanishing.
               try {
                 // Wire decisions: legacy two-state `approved`/`denied`
                 // (server maps them to Once/Deny) plus grant persistence —
@@ -730,11 +726,14 @@ export function createMessageHandler(
           ctx.callbacks
             .onClarifyRequest({ requestId, question, choices, sessionId: ctx.sessionId })
             .then((resp) => {
-              // stale-click hardening — use wsRef.current so a reconnect between
-              // `clarify_request` arrival and the user's answer doesn't silently
-              // drop the reply.
-              const liveUnlisten = ctx.wsRef.current;
-              if (!liveUnlisten) return;
+              // No `wsRef.current` guard here (unlike the approval path):
+              // `backend_channel_send` writes into the *backend* channel
+              // registry, which is independent of whether the frontend
+              // still holds a live event subscription. Gating on
+              // `wsRef.current` therefore discarded user answers whenever
+              // the stream had already settled — leaving the agent blocked
+              // on its own clarify timeout with no visible error. Send
+              // unconditionally and report a genuine send failure.
               try {
                 void invoke<void>("backend_channel_send", {
                   channel: streamChannelName(ctx.sessionId),
@@ -743,12 +742,24 @@ export function createMessageHandler(
                     request_id: requestId,
                     answer: resp.answer ?? "",
                   }),
+                }).catch((e) => {
+                  console.error(
+                    `[clarify] backend_channel_send failed for ${requestId}: ${String(e)}`,
+                  );
                 });
-              } catch {}
+              } catch (e) {
+                console.error(
+                  `[clarify] backend_channel_send threw for ${requestId}: ${String(e)}`,
+                );
+              }
             })
-            .catch(() => {
-              const liveUnlisten = ctx.wsRef.current;
-              if (!liveUnlisten) return;
+            .catch((e) => {
+              // The user dismissed/cancelled the clarify card. Still answer
+              // with an empty string so the agent's `rx` resolves and the
+              // turn unblocks instead of waiting out the clarify timeout.
+              console.warn(
+                `[clarify] no answer for ${requestId} (${String(e)}); sending empty response to unblock the agent`,
+              );
               try {
                 void invoke<void>("backend_channel_send", {
                   channel: streamChannelName(ctx.sessionId),
@@ -757,8 +768,12 @@ export function createMessageHandler(
                     request_id: requestId,
                     answer: "",
                   }),
+                }).catch(() => {
+                  /* logged above */
                 });
-              } catch {}
+              } catch {
+                /* best effort */
+              }
             });
         }
         return;

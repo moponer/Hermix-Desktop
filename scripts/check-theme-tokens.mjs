@@ -152,16 +152,53 @@ if (violations.length) {
   console.log("[bare-color] 无裸色 ✓");
 }
 
+/* ---------- Check 4: Tailwind 原生色阶类 ----------
+   L0（2026-10-01）：在用的 21 个色槽已在 tokens.css 的 @theme 内
+   重定向到语义令牌（error / warning / success / 文本灰阶），所以
+   这些类名**是合法的**——它们解析后跟随主题与强调色。
+
+   门禁现在拦的是**未登记的色阶类**：用了 tokens.css 里没有对应槽的
+   `text-red-300` / `bg-sky-500` 之类，那类会静默解析成 Tailwind
+   默认色板值，完全不跟随主题，属于新的色债。
+
+   换槽（即往 PALETTE_ALIASES 加一行）是受控的扩展点：加进去之前
+   必须在 tokens.css @theme 和每套主题 css 里都声明，否则 CONTRACT
+   检查会失败。 */
+/** 已在 tokens.css @theme 重定向到语义令牌的槽。与 tokens.css 里那
+ *  21 行一一对应——改这里就要同步改 tokens.css 和各主题 css。 */
+const PALETTE_ALIASES = [
+  "red-200", "red-300", "red-400", "red-500",
+  "rose-200", "rose-300", "rose-500",
+  "amber-200", "amber-300", "amber-400", "amber-500",
+  "yellow-400",
+  "green-400", "green-500",
+  "emerald-200", "emerald-300", "emerald-400", "emerald-500",
+  "zinc-300", "zinc-400", "zinc-500",
+];
 const PALETTE_RX =
-  /\b(text|bg|border)-(white|black|slate|zinc|neutral|stone|gray|red|orange|amber|yellow|green|emerald|teal|sky|blue|indigo|violet|purple|rose)-[0-9]{2,3}\b/g;
-let paletteHits = 0;
+  /\b(?:text|bg|border)-(white|black|slate|zinc|neutral|stone|gray|red|orange|amber|yellow|green|emerald|teal|sky|blue|indigo|violet|purple|rose)-[0-9]{2,3}\b/g;
+/** 已在 tokens.css @theme 重定向到语义令牌的槽（与 PALETTE_ALIASES 同源）。 */
+const PALETTE_ALLOWED = new Set(PALETTE_ALIASES);
+const paletteHits = [];
 for (const file of walkTsx(SRC)) {
-  paletteHits += (read(file).match(PALETTE_RX) || []).length;
+  const rel = relative(SRC, file).split(sep).join("/");
+  for (const m of read(file).matchAll(PALETTE_RX)) {
+    const slot = m[0].replace(/^(?:text|bg|border)-/, "");
+    if (PALETTE_ALLOWED.has(slot)) continue; // 合法：已重定向
+    paletteHits.push(`${rel}: ${m[0]}`);
+  }
 }
-if (paletteHits > 0) {
-  console.warn(
-    `[palette-debt] ${paletteHits} 处 Tailwind 原生色阶类（已登记债项，仅告警）— 目标：迁移到语义令牌后在脚本中置 WARN_ONLY=false`,
+if (paletteHits.length > 0) {
+  failures++;
+  console.error(
+    `[palette-debt] ${paletteHits.length} 处未登记的 Tailwind 原生色阶类（会解析为默认色板，不跟随主题）:`,
   );
+  for (const h of paletteHits) console.error(`  ${h}`);
+  console.error(
+    "  → 改用语义令牌类，或在 tokens.css @theme + 各主题 css 登记该槽后加进 PALETTE_ALIASES。",
+  );
+} else {
+  console.log("[palette-debt] 无未登记色阶类 ✓（在用槽已全部重定向到语义令牌）");
 }
 
 /* 字号债项：任意值 text-[Npx] 取代语义档位。

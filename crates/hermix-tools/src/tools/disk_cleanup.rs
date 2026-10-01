@@ -307,10 +307,11 @@ impl DiskCleanupHandler {
     }
 
     async fn clean(&self, params: &Value) -> Result<String, ToolError> {
-        let dry_run = params
-            .get("dry_run")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true);
+        // `dry_run` defaults to true, so a string-encoded `"false"`
+        // previously fell back to the SAFE value and the tool only
+        // scanned — the model asked to delete and got a listing, with
+        // no error to explain why.
+        let dry_run = crate::param_coercion::bool_param(&params, "dry_run", true);
         let explicit_paths = params
             .get("paths")
             .and_then(|v| v.as_array())

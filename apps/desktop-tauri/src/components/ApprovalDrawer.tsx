@@ -8,7 +8,9 @@
 // - **5 选项 + 一句话作用域说明**：允许这一次 / 始终允许此命令（进允许列表）/
 //   完全访问（切到 full 权限档）/ 拒绝 / 告诉模型接下来该怎么做（note 回喂
 //   模型，让它换方案而不是在同一个被拒调用上打转）。
-// - 数字键 1–5 / Esc / ⏎ 键盘导航，底部一行提示。
+// - 数字键 1–5 / Esc / ⏎ 键盘导航，底部一行提示。⏎ 只在焦点**不在**
+//   可激活元素上时才等同「允许这一次」——焦点在某个选项按钮上时交还给
+//   原生激活，否则会出现「按一次 Enter 既拒绝又批准」。
 //
 // 职责边界：
 // - 抽屉只处理**待决定**的审批；已决定的历史卡片仍由 ProcessTimeline
@@ -154,7 +156,16 @@ export function ApprovalDrawer({
       else if (k === "3" && onFullAccess) { e.preventDefault(); act("full"); }
       else if (k === "4" || k === "Escape") { e.preventDefault(); act("deny"); }
       else if (k === "5") { e.preventDefault(); feedbackRef.current?.focus(); }
-      else if (k === "Enter") { e.preventDefault(); act("once"); }
+      else if (k === "Enter") {
+        // 焦点在可激活元素（按钮/链接/摘要）上时，把 ⏎ 交还给浏览器原生
+        // 激活。原实现无条件 `act("once")`，于是焦点落在「拒绝」上按
+        // Enter 会同时触发原生 onClick(deny) 和这里的 once —— 一次按键
+        // 既拒绝又批准，agent 循环先收 deny 再收 approve。
+        const onActivatable = t?.closest("button, a[href], summary, [role='button']");
+        if (onActivatable) return;
+        e.preventDefault();
+        act("once");
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -314,7 +325,7 @@ export function ApprovalDrawer({
 
       {/* 脚：键盘导航提示 */}
       <div className="approval-drawer__hint">
-        数字键 {onFullAccess ? "1–5" : "1–2、4–5"} 选择 · Esc 拒绝 · ⏎ {allowAllVerb}
+        数字键 {onFullAccess ? "1–5" : "1–2、4–5"} 选择 · Esc 拒绝 · ⏎ {allowAllVerb}（焦点在按钮上时 ⏎ 激活该按钮）
       </div>
     </div>
   );

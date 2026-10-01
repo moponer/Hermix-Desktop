@@ -171,7 +171,10 @@ impl ToolHandler for ModelProvidersHandler {
                     .ok_or_else(|| {
                         ToolError::InvalidParams("Missing 'provider_id' parameter".into())
                     })?;
-                let enabled = params.get("enabled").and_then(|v| v.as_bool());
+                // See `cronjob`: a string-encoded boolean must not read
+                // as "no change", or enabling/disabling a provider is
+                // silently dropped.
+                let enabled = crate::param_coercion::opt_bool_param(&params, "enabled");
                 self.backend.configure_provider(provider_id, enabled).await
             }
             other => Err(ToolError::InvalidParams(format!(

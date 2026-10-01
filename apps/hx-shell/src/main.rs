@@ -67,6 +67,48 @@ const RES_HXICON: u16 = 1001; // 图标 PNG/SVG
 const RES_HXAPPMULTI: u16 = 1002; // 多文件归档 (Phase 0, spec §1) — app:// 虚拟协议用
 
 // ------------------------------------------------------------------
+// 参数读取：兼容模型输出的字符串布尔
+// ------------------------------------------------------------------
+//
+// hx-shell 的 IPC 参数由模型构造。模型经常把标量编码成字符串
+//（`{"multi": "true"}`），而 `Value::as_bool` 只认 JSON 裸布尔——
+// 于是 `openDialog` 的"多选"和 `pin` 的"置顶"会被静默忽略，表现为
+// "参数传了但没效果"。
+//
+// 这里刻意**不**引用 hermix-tools 的 param_coercion：本 crate 是
+// 独立的最小依赖壳（只依赖 serde_json），引入工具 crate 会把整个
+// 工具树拖进壳的构建。规则保持一致——只接受明确真值。
+fn bool_arg(args: &serde_json::Value, key: &str, default: bool) -> bool {
+    match args.get(key) {
+        Some(v) => match v {
+            serde_json::Value::Bool(b) => *b,
+            serde_json::Value::String(s) => {
+                let t = s.trim();
+                t.eq_ignore_ascii_case("true") || t == "1"
+            }
+            // 存在但不是明确真值 → false，不退回 default
+            _ => false,
+        },
+        None => default,
+    }
+}
+
+/// 位置参数形式的等价物（hx-shell 的窗口类命令用数组传参）。
+fn bool_positional(args: &serde_json::Value, index: usize, default: bool) -> bool {
+    match args.get(index) {
+        Some(v) => match v {
+            serde_json::Value::Bool(b) => *b,
+            serde_json::Value::String(s) => {
+                let t = s.trim();
+                t.eq_ignore_ascii_case("true") || t == "1"
+            }
+            _ => false,
+        },
+        None => default,
+    }
+}
+
+// ------------------------------------------------------------------
 // 调试日志（写 exe 同目录 hx-shell.log）
 // ------------------------------------------------------------------
 fn hx_log(msg: &str) {
@@ -745,7 +787,17 @@ fn hx_open_dialog(args: &serde_json::Value) -> serde_json::Value {
     if let Some(title) = args.get("title").and_then(|v| v.as_str()) {
         dialog = dialog.set_title(title);
     }
-    if let Some(dir) = args.get("directory").and_then(|v| v.as_str()) {
+    // `directory` was overloaded: line ~790 read it as a STRING (the
+    // starting folder) while the dispatch below read the SAME key as a
+    // BOOL (pick-a-folder mode). No single call could express both, so
+    // the folder mode was unreachable whenever a start directory was
+    // also wanted. `startDirectory` is now the string; `directory`
+    // keeps its boolean meaning for backwards compatibility.
+    if let Some(dir) = args
+        .get("startDirectory")
+        .or_else(|| args.get("directory"))
+        .and_then(|v| v.as_str())
+    {
         dialog = dialog.set_directory(dir);
     }
     if let Some(filters) = args.get("filters").and_then(|v| v.as_array()) {
@@ -761,8 +813,8 @@ fn hx_open_dialog(args: &serde_json::Value) -> serde_json::Value {
             }
         }
     }
-    let is_dir = args.get("directory").and_then(|v| v.as_bool()).unwrap_or(false);
-    let multi = args.get("multi").and_then(|v| v.as_bool()).unwrap_or(false);
+    let is_dir = bool_arg(args, "directory", false);
+    let multi = bool_arg(args, "multi", false);
     if is_dir {
         match dialog.pick_folder() {
             Some(p) => serde_json::json!({"ok": true, "data": p.to_string_lossy().to_string()}),
@@ -868,7 +920,9 @@ fn hx_win_control(
             serde_json::json!({"ok": true})
         }
         "pin" => {
-            let on = args.get(0).and_then(|v| v.as_bool()).unwrap_or(false);
+            // 字符串形式曾让 `set_always_on_top` 收到 false，表现为
+            // "传了 pin=true 但窗口没置顶"。
+            let on = bool_positional(args, 0, false);
             window.set_always_on_top(on);
             serde_json::json!({"ok": true, "data": {"pinned": on}})
         }
@@ -2141,5 +2195,88 @@ mod tests {
     fn range_empty_file_no_underflow() {
         // total=0 不得 panic；调用方以 start < total 判为 416
         assert_eq!(parse_range_header("bytes=0-", 0), Some((0, 0)));
+    }
+    // -- bool_arg / bool_positional -----------------------------------
+
+    #[test]
+    fn string_true_is_accepted() {
+        // Regression: `"multi": "true"` / `pin(["true"])` used to be
+        // read as false, so the flag was silently ignored and the
+        // command looked like it had done nothing.
+        for v in [
+            serde_json::json!(true),
+            serde_json::json!("true"),
+            serde_json::json!("TRUE"),
+            serde_json::json!(" true "),
+            serde_json::json!("1"),
+        ] {
+            let o = serde_json::json!({ "k": v });
+            assert!(bool_arg(&o, "k", false), "{:?} should be true", v);
+            let a = serde_json::json!([v]);
+            assert!(bool_positional(&a, 0, false), "{:?} should be true", v);
+        }
+    }
+
+    #[test]
+    fn non_affirmatives_stay_false_even_with_true_default() {
+        // Two invariants: no truthy cast, and a present-but-wrong-type
+        // value does NOT fall back to `default` (only an absent key
+        // does). Otherwise `{"multi": 1}` would take a `default=true`
+        // branch.
+        for v in [
+            serde_json::json!("false"),
+            serde_json::json!("yes"),
+            serde_json::json!("on"),
+            serde_json::json!(""),
+            serde_json::json!(1),
+            serde_json::json!(0),
+            serde_json::json!(null),
+        ] {
+            let o = serde_json::json!({ "k": v });
+            assert!(!bool_arg(&o, "k", true), "{:?} must be false", v);
+            let a = serde_json::json!([v]);
+            assert!(!bool_positional(&a, 0, true), "{:?} must be false", v);
+        }
+    }
+
+    #[test]
+    fn absent_key_uses_default() {
+        let o = serde_json::json!({});
+        assert!(bool_arg(&o, "k", true));
+        assert!(!bool_arg(&o, "k", false));
+        // An explicit false must beat a true default.
+        let o2 = serde_json::json!({ "k": false });
+        assert!(!bool_arg(&o2, "k", true));
+        // Positional: index out of range is "absent".
+        let a = serde_json::json!([]);
+        assert!(bool_positional(&a, 0, true));
+    }
+
+    #[test]
+    fn directory_start_and_mode_no_longer_collide() {
+        // Regression: `directory` was read BOTH as a string (starting
+        // folder) and as a bool (pick-a-folder mode), so no single call
+        // could express both and the folder mode was unreachable
+        // whenever a start directory was also wanted.
+        let args = serde_json::json!({
+            "startDirectory": "C:/work",
+            "directory": true,
+            "multi": true,
+        });
+        // The start directory is a string on its own key…
+        assert_eq!(
+            args.get("startDirectory").and_then(|v| v.as_str()),
+            Some("C:/work")
+        );
+        // …and the mode flag is a bool on `directory`, readable now.
+        assert!(bool_arg(&args, "directory", false));
+        // A legacy caller passing `directory` as a string still gets
+        // the start-directory behaviour and a falsy mode.
+        let legacy = serde_json::json!({ "directory": "C:/work" });
+        assert_eq!(
+            legacy.get("directory").and_then(|v| v.as_str()),
+            Some("C:/work")
+        );
+        assert!(!bool_arg(&legacy, "directory", false));
     }
 }

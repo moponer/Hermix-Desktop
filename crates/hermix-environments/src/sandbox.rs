@@ -1,6 +1,6 @@
 //! Windows ACL restricted-token sandbox（对齐 deepseek-harness 成熟方案）。
 //!
-//! 机制（移植自 `sandbox-windows-acl`，见 `docs/SANDBOX_WINDOWS_ACL_DESIGN.md`）：
+//! 机制（移植自 `sandbox-windows-acl`，见 `docs/notes/proposed/architecture/2026-09-26-windows-acl-sandbox.md`）：
 //! `CreateRestrictedToken` 以 `WRITE_RESTRICTED | DISABLE_MAX_PRIVILEGE |
 //! LUA_TOKEN` 派生受限 token——write 类访问做双重判定（正常 SID +
 //! restricting SID 都过才放行），read 走正常判定原样保留，零 read 授权

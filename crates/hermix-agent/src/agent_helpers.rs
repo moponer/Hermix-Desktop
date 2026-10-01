@@ -41,7 +41,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::{oneshot, Notify};
 
-use hermix_core::{traits::RiskLevel, ApprovalOutcome, ToolCall, ToolError, ToolSchema, UsageStats};
+use hermix_core::{
+    traits::RiskLevel, ApprovalOutcome, ToolCall, ToolError, ToolSchema, UsageStats,
+};
 
 /// A single tool entry in the registry.
 #[derive(Clone)]
@@ -100,8 +102,14 @@ impl ToolRegistry {
         handler: Arc<dyn Fn(Value) -> Result<String, ToolError> + Send + Sync>,
         risk_level: RiskLevel,
     ) {
-        self.tools
-            .insert(name.into(), ToolEntry { schema, handler, risk_level });
+        self.tools.insert(
+            name.into(),
+            ToolEntry {
+                schema,
+                handler,
+                risk_level,
+            },
+        );
     }
 
     /// 这个工具的风险等级。`None` = 没注册过这个名字。
@@ -379,6 +387,50 @@ pub enum ToolDispatchDecision {
     AwaitApproval(oneshot::Receiver<ApprovalOutcome>),
 }
 
+/// What to do with a Dangerous tool call when the caller wired **no**
+/// approval channel (no `approval_requester` / `on_event`).
+///
+/// Re-exported from `hermix-core` so the wire type, the server call
+/// sites, and the agent gate all name the same enum. See
+/// [`hermix_core::approval::ApprovalFallback`] for the rationale;
+/// [`resolve_approval_fallback`] below is the agent-side application
+/// of the policy.
+pub use hermix_core::approval::ApprovalFallback;
+
+/// Resolve the no-approval-channel case for `tool`, returning the
+/// decision to hand back to the dispatch loop.
+///
+/// A free function rather than an inherent impl because
+/// `ApprovalFallback` is defined in `hermix-core`, and the orphan rule
+/// forbids adding an inherent impl for a foreign type from this crate.
+pub fn resolve_approval_fallback(fallback: ApprovalFallback, tool: &str) -> ToolDispatchDecision {
+    match fallback {
+        ApprovalFallback::Allow => {
+            tracing::warn!(
+                tool = %tool,
+                "no approval channel wired; allowing Dangerous tool (caller declared Allow)"
+            );
+            ToolDispatchDecision::Allow
+        }
+        ApprovalFallback::Deny => {
+            tracing::warn!(
+                tool = %tool,
+                "no approval channel wired; denying Dangerous tool (caller declared Deny)"
+            );
+            ToolDispatchDecision::Deny {
+                reason: format!(
+                    "No approval channel is available on this transport, so `{}` \
+                     (a Dangerous tool) cannot be confirmed by the user. Use the \
+                     streaming channel for tool calls that need approval, or lower \
+                     the permission level explicitly if you intend to take \
+                     responsibility for this call.",
+                    tool
+                ),
+            }
+        }
+    }
+}
+
 /// Callbacks invoked during tool execution for progress reporting.
 #[derive(Default)]
 pub struct AgentCallbacks {
@@ -420,8 +472,7 @@ pub struct AgentCallbacks {
     /// Returning `Allow` proceeds normally, `Deny` aborts the tool call with
     /// the given reason, and `AwaitApproval` blocks on a oneshot until the
     /// upstream layer (e.g. `LocalAgentService`) resolves the request.
-    pub on_pre_tool_dispatch:
-        Option<Box<dyn Fn(&ToolCall) -> ToolDispatchDecision + Send + Sync>>,
+    pub on_pre_tool_dispatch: Option<Box<dyn Fn(&ToolCall) -> ToolDispatchDecision + Send + Sync>>,
     /// P6 direction 3 : called **after** the user approves
     /// a tool call (i.e. once the `AwaitApproval` oneshot resolves to
     /// `Approved`). Lets the caller update its in-memory permission
@@ -439,8 +490,7 @@ pub struct AgentCallbacks {
     /// model stops conflating human approval with silent auto-allow.
     /// `None` (default) means the upstream layer didn't wire the
     /// collection (headless / unit tests); the loop skips the note.
-    pub human_approved_ids:
-        Option<Arc<std::sync::Mutex<std::collections::HashSet<String>>>>,
+    pub human_approved_ids: Option<Arc<std::sync::Mutex<std::collections::HashSet<String>>>>,
     /// H3: Called when the prefetcher resolves with an intent prediction.
     /// Payload is a JSON string containing `{ intent, confidence, results }`
     /// in the same shape as `StreamEvent::PrefetchIntent`.
@@ -497,8 +547,7 @@ pub struct AgentCallbacks {
     /// Front-end `useStreamChat.ts` hook subscribes and forwards to
     /// the trace panel.
     /// No-op if no callback is wired (unit tests, batched runs).
-    pub on_section_gate:
-        Option<Arc<dyn Fn(&crate::context::SectionGateReport) + Send + Sync>>,
+    pub on_section_gate: Option<Arc<dyn Fn(&crate::context::SectionGateReport) + Send + Sync>>,
     /// Called when the agent loop enters a new phase.
     /// Payload is a JSON string: `{"phase":"llm_call","stage":"reasoning","turn":3}`.
     /// The upstream layer (e.g. `LocalAgentService`) bridges this into a
@@ -511,8 +560,7 @@ pub struct AgentCallbacks {
     /// The upstream layer uses this to transition the Task status and
     /// trigger result delivery .
     /// No-op if no callback is wired.
-    pub on_task_complete:
-        Option<Arc<dyn Fn(bool, Option<&str>) + Send + Sync>>,
+    pub on_task_complete: Option<Arc<dyn Fn(bool, Option<&str>) + Send + Sync>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -564,7 +612,10 @@ pub fn redact_body_for_log(raw: &str) -> String {
             }
             // JSON present but no recognizable error field → it is a request
             // mirror; drop it entirely.
-            return format!("[request/response body redacted, json_len={}]", trimmed.len());
+            return format!(
+                "[request/response body redacted, json_len={}]",
+                trimmed.len()
+            );
         }
     }
     // Plain text or unparsable JSON → still strip any echoed request/prompt
@@ -591,7 +642,7 @@ pub fn redact_body_for_log(raw: &str) -> String {
 /// be empty [{"value": …]").
 fn strip_prompt_mirror(s: &str) -> String {
     const MARKERS: &[&str] = &[
-        "[{\"value\"",      // Agnes/OpenAI debug request mirror
+        "[{\"value\"",     // Agnes/OpenAI debug request mirror
         "Array [Object",   // alt mirror form
         "{\"role\"",       // request mirror with quoted role
         "[Object",         // mirror object start
@@ -867,8 +918,14 @@ mod tests {
         // inside the nested error `message`.
         let body = r#"{"error":{"message":"***.RateLimitError: RateLimitError: OpenAIException - {\"error\":{\"message\":\"messages: Validation error: message content cannot be empty [{\"value\": Array [Object {role: String(\"system\"), content: String(\"You are Agnes-2.0-Flash, a language model developed by Sapiens AI. Behavior:\")}]}]"}}"}}"#;
         let out = redact_body_for_log(body);
-        assert!(!out.contains("You are Agnes"), "system prompt leaked: {out}");
-        assert!(!out.contains("language model"), "system prompt leaked: {out}");
+        assert!(
+            !out.contains("You are Agnes"),
+            "system prompt leaked: {out}"
+        );
+        assert!(
+            !out.contains("language model"),
+            "system prompt leaked: {out}"
+        );
         // Diagnostic prefix must survive.
         assert!(out.contains("Validation error: message content cannot be empty"));
         assert!(out.contains("RateLimitError"));
@@ -884,7 +941,8 @@ mod tests {
     #[test]
     fn redact_body_redacts_non_error_json() {
         // A request mirror with no error field → fully redacted.
-        let body = r#"{"messages":[{"role":"system","content":"secret system prompt"}],"model":"x"}"#;
+        let body =
+            r#"{"messages":[{"role":"system","content":"secret system prompt"}],"model":"x"}"#;
         let out = redact_body_for_log(body);
         assert!(!out.contains("secret system prompt"));
         assert!(out.contains("redacted"));
@@ -938,11 +996,26 @@ mod tests {
 
     #[test]
     fn recovery_action_matches_class() {
-        assert_eq!(ToolErrorClass::ArgumentsCorrupted.recovery_action(), ToolRecovery::Reprompt);
-        assert_eq!(ToolErrorClass::ToolNotAvailable.recovery_action(), ToolRecovery::SwapTool);
-        assert_eq!(ToolErrorClass::ExecutionFailed.recovery_action(), ToolRecovery::Retry);
-        assert_eq!(ToolErrorClass::Timeout.recovery_action(), ToolRecovery::Retry);
-        assert_eq!(ToolErrorClass::RateLimited.recovery_action(), ToolRecovery::Backoff);
+        assert_eq!(
+            ToolErrorClass::ArgumentsCorrupted.recovery_action(),
+            ToolRecovery::Reprompt
+        );
+        assert_eq!(
+            ToolErrorClass::ToolNotAvailable.recovery_action(),
+            ToolRecovery::SwapTool
+        );
+        assert_eq!(
+            ToolErrorClass::ExecutionFailed.recovery_action(),
+            ToolRecovery::Retry
+        );
+        assert_eq!(
+            ToolErrorClass::Timeout.recovery_action(),
+            ToolRecovery::Retry
+        );
+        assert_eq!(
+            ToolErrorClass::RateLimited.recovery_action(),
+            ToolRecovery::Backoff
+        );
     }
 }
 
@@ -983,12 +1056,7 @@ mod mutating_tool_tests {
             ("patch", RiskLevel::Caution),
             ("terminal", RiskLevel::Dangerous),
         ] {
-            r.register_with_risk(
-                name,
-                schema(name),
-                Arc::new(|_| Ok(String::new())),
-                risk,
-            );
+            r.register_with_risk(name, schema(name), Arc::new(|_| Ok(String::new())), risk);
             assert!(is_state_mutating_tool(&r, name), "{name} 不该进并行集");
         }
     }

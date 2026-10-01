@@ -64,14 +64,15 @@ done
 # 5) docs/ 顶层新增 .md 守卫：决策/规划必须走 docs/notes/ 三态，
 #    不得再往 docs/ 顶层丢 XXX_PLAN.md（AGENTS.md 文档制度节）。
 #    保留白名单 = 迁移表"保留"行的现行文档 + 本守卫需要的制度文件。
-#    现为 WARNING（不阻断）：批次 A 文档清理完成后，把此处 warn 改回 fail。
+#    批次 A/B 文档清理已完成（2026-10-01），此处已由 warn 升级为 fail：
+#    `docs/` 顶层现在只剩白名单里的现行文档，任何新 .md 都是制度违规。
 DOCS_DIR="$(dirname "$NOTES_DIR")"
-ALLOWED="HANDOFF_FOUNDATION_REWRITE.md|HERMIX_AGENT_SYSTEM_PROMPT.md|TYPOGRAPHY_SYSTEM.md|UI_PROPOSAL_CC_HAHA_2026-09-29.md|UI_REDESIGN_PAPER_INK_2026-09-28.md|DEEPSEEK_HARNESS_BORROWINGS.md|CHANNEL_WORKSPACE_SCOPE.md"
+ALLOWED="HANDOFF_FOUNDATION_REWRITE.md|HERMIX_AGENT_SYSTEM_PROMPT.md|TYPOGRAPHY_SYSTEM.md|UI_PROPOSAL_CC_HAHA_2026-09-29.md|UI_REDESIGN_PAPER_INK_2026-09-28.md|DEEPSEEK_HARNESS_BORROWINGS.md"
 for f in "$DOCS_DIR"/*.md; do
   [ -e "$f" ] || continue
   base=$(basename "$f")
   echo "$base" | grep -qE "^($ALLOWED)$" || \
-    warn "docs/$base — docs/ 顶层禁止新增 .md；决策/规划写入 docs/notes/{proposed,implemented}/（制度见 docs/notes/README.md）"
+    fail "docs/$base — docs/ 顶层禁止新增 .md；决策/规划写入 docs/notes/{proposed,implemented}/（制度见 docs/notes/README.md）"
 done
 
 if [ $errors -gt 0 ]; then

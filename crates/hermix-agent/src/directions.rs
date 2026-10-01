@@ -114,6 +114,38 @@ use `browser_*` tools — NOT `web_extract`. The two are not interchangeable:\n\
 4. For form fills: `snapshot` once → use `[ref=eN]` handles.\n\
 5. Same tool returning identical output 2x in a row = stuck.";
 
+/// Where files may be written. Injected into every agent's system
+/// prompt (J1 of the 2026-09-30 plan).
+///
+/// The failure this prevents is concrete: during development sessions
+/// the agent drops probe scripts, route dumps and plan drafts into the
+/// repo root or `docs/` top level, where a later session reads them as
+/// project assets. The three layers below (prompt / tool guard / CI
+/// gate) all point at these same rules — see
+/// `docs/notes/proposed/process/2026-09-30-doc-cleanup-and-optimization-plan.md`
+/// §批次 J and the AGENTS.md 文档制度节.
+const FILE_WRITE_DISCIPLINE: &str = "\
+## Where files may be written (File Write Discipline)
+
+Writing to the wrong place is a defect, not a style preference — a stray
+plan or probe file reads as project truth to the next session.
+
+1. **Source tree** — only modify files that already exist, and new source
+   files must land inside an existing module's structure. A new crate or
+   top-level directory is an architecture decision: write a decision
+   note under `docs/notes/proposed/{class}/` and stop there.
+2. **Plans, designs, analysis** → `docs/notes/proposed/{class}/yyyy-mm-dd-topic.md`
+   (classes: feature / bug-fix / simplification / architecture / process /
+   testing). Never a new `.md` in `docs/` top level, never in the repo root.
+3. **Throwaway scripts, probes, debug dumps** → do not write them to disk at
+   all. Run them with `code_execution` in memory. If a file is genuinely
+   needed, put it under `%TEMP%\\hermix-scratch\\` (see the temp-file
+   hygiene section) and say so.
+4. **Logs, intermediate output** → never in the repo root. Tool output
+   already lands in your context; a file adds nothing.
+5. **User's own files** — never delete, move, or overwrite anything you did
+   not create in this session.";
+
 /// Injected when `AgentConfig::autonomous_mode = true`.
 /// Streamlined : the original 8 rules collapsed into a single
 /// stopping-condition principle + execution bias.  The nudge is
@@ -454,6 +486,25 @@ Always close `</think>` before visible text. The think block is for reasoning, n
             "plan.short",
             DirRoute::Subsequent,
             "## Plan format\nWhen planning, keep it to one or two natural-language sentences in the reasoning flow. Don't emit a standalone Plan section or a generic checklist in the final answer.",
+        ));
+    }
+    // File-write discipline (J1). Same FirstTurn/Subsequent split as
+    // the other discipline blocks: the full rules on the opening turn
+    // (they set the frame), a compressed restatement afterwards (the
+    // rules still have to hold, but not the whole essay).
+    if user_message.is_empty() {
+        dirs.push(SystemDir::new(
+            "filewrite.full",
+            DirRoute::FirstTurn,
+            FILE_WRITE_DISCIPLINE,
+        ));
+    } else {
+        dirs.push(SystemDir::new(
+            "filewrite.short",
+            DirRoute::Subsequent,
+            "## Where files may be written\nPlans/designs → `docs/notes/proposed/{class}/`. \
+             Throwaway scripts → run in memory via `code_execution`, or `%TEMP%\\hermix-scratch\\`. \
+             Never write to the repo root or `docs/` top level. Never touch files you did not create.",
         ));
     }
     // Exploration-efficiency discipline — fixes the "recon-then-act" anti-pattern

@@ -572,12 +572,9 @@ async fn execute_inner(
             }
         }
 
-        let background = params
-            .get("background")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+        let background = crate::param_coercion::bool_param(&params, "background", false);
 
-        let pty = params.get("pty").and_then(|v| v.as_bool()).unwrap_or(false);
+        let pty = crate::param_coercion::bool_param(&params, "pty", false);
 
         match this
             .backend

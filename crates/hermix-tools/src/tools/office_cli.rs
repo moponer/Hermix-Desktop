@@ -106,7 +106,7 @@ impl ToolHandler for OfficeCliHandler {
                     args.push("--depth".to_string());
                     args.push(depth.to_string());
                 }
-                if params.get("json").and_then(|v| v.as_bool()).unwrap_or(false) {
+                if crate::param_coercion::bool_param(&params, "json", false) {
                     args.push("--json".to_string());
                 }
             }
@@ -155,10 +155,10 @@ impl ToolHandler for OfficeCliHandler {
                     args.push("--input".to_string());
                     args.push(input.to_string());
                 }
-                if params.get("force").and_then(|v| v.as_bool()).unwrap_or(false) {
+                if crate::param_coercion::bool_param(&params, "force", false) {
                     args.push("--force".to_string());
                 }
-                if params.get("json").and_then(|v| v.as_bool()).unwrap_or(false) {
+                if crate::param_coercion::bool_param(&params, "json", false) {
                     args.push("--json".to_string());
                 }
             }
@@ -182,7 +182,7 @@ impl ToolHandler for OfficeCliHandler {
             }
         }
 
-        if params.get("json").and_then(|v| v.as_bool()).unwrap_or(false)
+        if crate::param_coercion::bool_param(&params, "json", false)
             && !args.contains(&"--json".to_string())
         {
             args.push("--json".to_string());

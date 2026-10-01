@@ -505,7 +505,16 @@ impl PairingSessions {
         let payload = QrPayload {
             server_id: format!("hermix-{}", &fingerprint[..8]),
             // 二维码内容：手机相机扫码 → 浏览器打开 /pair 落地页（同 TLS 监听器）
-            pairing_url: format!("https://{host}:{}/pair?c={code}", tls_addr.port()),
+            //
+            // `fp` 携带本机 TLS 证书指纹。落地页把它回显给用户肉眼比对，
+            // 并在 `POST /api/pairing/complete` 时随配对码一起送回；服务端
+            // 与本机指纹比对，不符则拒绝签发 device_token。缺这一步时，
+            // 同网段 MITM 只要出示自己的自签证书、克隆 /pair 页，就能把
+            // 配对码换成 device_token（TOFU 锚点未被任何代码使用）。
+            pairing_url: format!(
+                "https://{host}:{}/pair?c={code}&fp={fingerprint}",
+                tls_addr.port()
+            ),
             host,
             port: tls_addr.port(),
             cert_fingerprint: fingerprint,
@@ -594,6 +603,22 @@ pub async fn pair_page(
     } else {
         String::new()
     };
+    // TLS 证书指纹（64 hex）。来自二维码里的 `?fp=`，回显给用户与桌面端
+    // 展示的值肉眼比对，并在提交时原样送回服务端做强制校验 —— 少了这个
+    // 闭环，同网段 MITM 克隆本页即可截走配对码。
+    let fp = q.get("fp").cloned().unwrap_or_default();
+    let fp_ok = fp.len() == 64 && fp.chars().all(|c| c.is_ascii_hexdigit());
+    // 分组显示：8-4-4-4-12，比一整行 64 字符更容易肉眼比对。
+    let fp_display = if fp_ok {
+        let groups: Vec<&str> = fp
+            .as_bytes()
+            .chunks(4)
+            .map(|c| std::str::from_utf8(c).unwrap_or(""))
+            .collect();
+        groups.join("-")
+    } else {
+        String::new()
+    };
     let html = format!(
         r#"<!DOCTYPE html>
 <html lang="zh-CN">
@@ -625,6 +650,12 @@ pub async fn pair_page(
   .msg.err {{ color: #a83b60; }}
   .msg.ok {{ color: #37874c; }}
   .hidden {{ display: none; }}
+  .fp {{ font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px;
+    line-height: 1.6; color: #6e6e73; background: #f5f5f7; border-radius: 8px;
+    padding: 8px 10px; margin: 14px 0 4px; word-break: break-all; text-align: center; }}
+  .fp b {{ display: block; font-weight: 500; font-size: 12px; color: #48484c;
+    margin-bottom: 4px; }}
+  .fp.bad {{ color: #a83b60; background: #fdf0f4; }}
 </style>
 </head>
 <body>
@@ -633,6 +664,7 @@ pub async fn pair_page(
     <h1>配对到此电脑</h1>
     <p class="sub">确认此配对码与电脑上显示的一致。配对成功后，本设备即可在聊天中访问这台电脑上的 Hermix。</p>
     <div class="code">{code_display}</div>
+    <div class="fp{fp_cls}"><b>证书指纹</b>{fp_display}{fp_missing_note}</div>
     <label for="dev">设备名称</label>
     <input id="dev" maxlength="64" placeholder="如：我的手机" autocomplete="off">
     <button id="go">配对</button>
@@ -645,6 +677,7 @@ pub async fn pair_page(
 </div>
 <script>
 var CODE = {code_json};
+var FP = {fp_json};
 var btn = document.getElementById("go");
 var msg = document.getElementById("msg");
 btn.addEventListener("click", function () {{
@@ -654,7 +687,8 @@ btn.addEventListener("click", function () {{
   fetch("/api/pairing/complete", {{
     method: "POST",
     headers: {{ "Content-Type": "application/json" }},
-    body: JSON.stringify({{ pairing_code: CODE, device_name: name }})
+    // FP 原样回传：服务端与本机 TLS 指纹比对，不符则拒绝签发 token。
+    body: JSON.stringify({{ pairing_code: CODE, device_name: name, cert_fingerprint: FP }})
   }}).then(function (r) {{
     if (r.status === 200) {{
       document.getElementById("form-view").classList.add("hidden");
@@ -663,6 +697,7 @@ btn.addEventListener("click", function () {{
     }}
     return r.text().then(function (t) {{
       if (r.status === 429) msg.textContent = "错误尝试过多，请在电脑上重新生成配对码";
+      else if (r.status === 403) msg.textContent = "证书指纹不匹配——可能是中间人攻击，或这不是本机桌面端";
       else msg.textContent = t || ("配对失败（HTTP " + r.status + "）");
       msg.className = "msg err"; btn.disabled = false;
     }});
@@ -675,6 +710,14 @@ btn.addEventListener("click", function () {{
 </body>
 </html>"#,
         code_json = serde_json::to_string(&code).unwrap_or_else(|_| "\"\"".into()),
+        fp_json = serde_json::to_string(&fp).unwrap_or_else(|_| "\"\"".into()),
+        fp_display = fp_display,
+        fp_cls = if fp_ok { "" } else { " bad" },
+        fp_missing_note = if fp_ok {
+            String::new()
+        } else {
+            "　<i>未能从二维码读取指纹，请勿在此页配对</i>".to_string()
+        },
     );
     (StatusCode::OK, [("content-type", "text/html; charset=utf-8")], html).into_response()
 }
@@ -705,6 +748,12 @@ pub struct CompletePairingBody {
     /// 6 位配对码（/pair 落地页或手动输入提交）。
     pub pairing_code: String,
     pub device_name: String,
+    /// 本机 TLS 证书的 SHA-256 指纹（落地页从 `?fp=` 原样回传）。
+    ///
+    /// 必填且必须与本机 TLS 指纹一致：不校验时，同网段 MITM 出示自签
+    /// 证书 + 克隆 /pair 页即可劫持配对码换取 device_token。IM 手动
+    /// 输入路径没有落地页，需由调用方补上桌面端展示的指纹。
+    pub cert_fingerprint: String,
 }
 
 /// `POST /api/pairing/complete` — Unpaired 也可访问（配对即信任建立本身）。
@@ -723,6 +772,54 @@ pub async fn complete_pairing(
         )
             .into_response();
     };
+    // 指纹核对必须在 consume 之前：指纹不符不是"码猜错了"，不该消耗
+    // 配对码的错误预算（否则一个 MITM 就能把正常用户的码锁死）。
+    //
+    // 之前这里没有任何校验，pairing.rs 的注释声称"指纹核对在 /pair 页与
+    // 桌面端之间进行"，但该页并未实现——TOFU 只存在于注释里。
+    let expected_fp = tls::ensure_tls_material(&tls::tls_dir())
+        .ok()
+        .map(|m| m.fingerprint_sha256);
+    match expected_fp.as_deref() {
+        Some(expected) => {
+            let provided = body.cert_fingerprint.trim().to_ascii_lowercase();
+            if provided.is_empty() {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    "缺少证书指纹：请确认你打开的是桌面端展示的配对二维码地址".into_response(),
+                )
+                    .into_response();
+            }
+            if !provided.eq_ignore_ascii_case(expected) {
+                tracing::warn!(
+                    src_ip = ?src_ip,
+                    "pairing rejected: TLS fingerprint mismatch (possible MITM)"
+                );
+                hermix_telemetry::record_http_reject();
+                return (
+                    StatusCode::FORBIDDEN,
+                    "证书指纹不匹配——这可能是中间人攻击，或你连接的不是本机桌面端。\
+                     请在桌面端重新生成配对码。"
+                        .into_response(),
+                )
+                    .into_response();
+            }
+        }
+        None => {
+            // TLS 未启用（纯 HTTP 部署）时无从比对，不阻塞配对。
+            //
+            // 升为 warn（2026-10-01 审核复核项②）：这是一条**安全边界失效**
+            // 的记录，不是普通的调试信息——指纹校验正是为防同网段 MITM，
+            // TLS 缺失意味着该防护整个不生效。静默（debug）会让"配对为什么
+            // 没校验指纹"在排查时完全不可见。
+            tracing::warn!(
+                "pairing: TLS material unavailable — fingerprint check SKIPPED. \
+                 Pairing trust bootstrap is unauthenticated on this deployment; \
+                 enable TLS (HERMIX_TLS_ADDR) to get MITM protection."
+            );
+        }
+    }
+
     match state.pairing_sessions.consume(body.pairing_code.trim()) {
         ConsumeOutcome::Locked => {
             return (

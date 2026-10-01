@@ -23,7 +23,7 @@
 #      can outlive the code and hijack skill routing — this gate fails on
 #      the drift instead of letting it silently mislead the agent.
 #
-# Hard gates (exit non-zero on failure): 1, 2, 3, 6, 8, 9
+# Hard gates (exit non-zero on failure): 1, 2, 3, 6, 8, 9, 10, 11
 # Soft gates (warn but continue): 4, 5, 7
 #
 # Usage (from repo root, in any terminal):
@@ -42,7 +42,7 @@ echo ""
 #-----------------------------------------------------------------------
 # 1. Compile check
 #-----------------------------------------------------------------------
-echo "=== [1/9] cargo check --workspace --all-targets ==="
+echo "=== [1/11] cargo check --workspace --all-targets ==="
 cargo check --workspace --all-targets
 echo ""
 
@@ -56,7 +56,7 @@ echo ""
 #    lint. Those require code review (see P0-4 cdp.rs / P0-5 session.rs
 #    for the patterns to avoid: nested locks, lock-held-during-long-read).
 #-----------------------------------------------------------------------
-echo "=== [2/9] clippy await_holding_lock guard ==="
+echo "=== [2/11] clippy await_holding_lock guard ==="
 if rustup component list --installed 2>/dev/null | grep -q '^clippy'; then
   cargo clippy --workspace --all-targets -- \
     -D clippy::await_holding_lock
@@ -69,14 +69,14 @@ echo ""
 #-----------------------------------------------------------------------
 # 3. Unit tests
 #-----------------------------------------------------------------------
-echo "=== [3/9] cargo test --workspace --lib ==="
+echo "=== [3/11] cargo test --workspace --lib ==="
 cargo test --workspace --lib
 echo ""
 
 #-----------------------------------------------------------------------
 # 4. Frontend type check (soft gate — pre-existing errors are common)
 #-----------------------------------------------------------------------
-echo "=== [4/9] pnpm tsc --noEmit (frontend) ==="
+echo "=== [4/11] pnpm tsc --noEmit (frontend) ==="
 if [ -d apps/desktop-tauri ]; then
   (cd apps/desktop-tauri && pnpm tsc --noEmit) || {
     echo "  WARNING: frontend tsc failed (may be pre-existing — check output above)"
@@ -93,7 +93,7 @@ echo ""
 #    to confirm it's NOT on an async path. When a sleep IS needed in
 #    async code, use tokio::time::sleep instead.
 #-----------------------------------------------------------------------
-echo "=== [5/9] advisory: std::thread::sleep in non-test src ==="
+echo "=== [5/11] advisory: std::thread::sleep in non-test src ==="
 sleep_hits=$(grep -rn 'std::thread::sleep' \
   crates/*/src/ --include='*.rs' \
   | grep -v 'mod tests' \
@@ -119,7 +119,7 @@ echo ""
 #
 #    Need: node >= 18. The script uses no external deps.
 #-----------------------------------------------------------------------
-echo "=== [6/9] theme token guard ==="
+echo "=== [6/11] theme token guard ==="
 if [ -f scripts/check-theme-tokens.mjs ]; then
   if command -v node >/dev/null 2>&1; then
     node scripts/check-theme-tokens.mjs 1>&2 || exit 1
@@ -132,27 +132,71 @@ fi
 echo ""
 
 #-----------------------------------------------------------------------
-# 7. Advisory: single-file line-count guard (soft gate)
-#    Flags god-file regressions: any .rs/.ts/.tsx source file exceeding
-#    2500 lines is a smell (review for extractable modules). Pure
-#    warning — does not fail the gate, so incremental splits aren't
-#    blocked, but surfaces drift back toward god files.
-#    See AGENTS.md "Code simplification discipline" for the 100k-line goal.
+# 7. God-file guard.
+#    Flags single .rs/.ts/.tsx source files exceeding 2500 lines.
+#
+#    Baseline ratchet, not a global quota: the repo already carries 6
+#    such files (see AGENTS.md "Code simplification discipline"), and
+#    blocking on them outright would make the gate permanently red and
+#    therefore ignored. Instead KNOWN_GOD_FILES lists the accepted
+#    baseline — a file NOT on that list crossing 2500 lines FAILS, and
+#    removing an entry from the list (by splitting the file) is the way
+#    to tighten it. New god files cannot be introduced.
 #-----------------------------------------------------------------------
-echo "=== [7/9] advisory: source files > 2500 lines ==="
+echo "=== [7/11] god-file guard (> 2500 lines) ==="
+# Accepted baseline. Remove a line only after actually splitting the file.
+KNOWN_GOD_FILES="crates/hermix-agent/src/local_agent_service.rs
+crates/hermix-agent/src/provider.rs
+crates/hermix-agent/src/run_loop.rs
+crates/hermix-agent/src/agent_loop/tests.rs
+crates/hermix-server/src/ws.rs
+apps/desktop-tauri/src/App.tsx"
 over_limit=$(find crates apps/desktop-tauri/src -type f \( -name '*.rs' -o -name '*.ts' -o -name '*.tsx' \) \
-  -exec wc -l {} + 2>/dev/null | awk '$1 > 2500 {print}' | sort -rn)
-if [ -n "$over_limit" ]; then
-  echo "  ADVISORY: the following files exceed 2500 lines (candidate god files):"
-  echo "$over_limit" | while read -r n f; do echo "    $n  $f"; done
+  -exec wc -l {} + 2>/dev/null | awk '$1 > 2500 && $2 != "total" {print $2}' | sort)
+new_gods=""
+for f in $over_limit; do
+  if ! printf '%s\n' "$KNOWN_GOD_FILES" | grep -qxF "$f"; then
+    new_gods="$new_gods $f"
+  fi
+done
+if [ -n "$new_gods" ]; then
+  echo "  FAIL: new god file(s) over 2500 lines (not on the accepted baseline):"
+  for f in $new_gods; do
+    echo "    $(wc -l < "$f")  $f"
+  done
   echo ""
-  echo "  Consider extracting leaf modules / moving #[cfg(test)] out (see code-analysis-report)."
+  echo "  Split it, or — if it replaces an existing god file — update"
+  echo "  KNOWN_GOD_FILES in scripts/ci-gate.sh in the same commit."
+  exit 1
+fi
+if [ -n "$over_limit" ]; then
+  echo "  OK: only the accepted baseline exceeds 2500 lines:"
+  for f in $over_limit; do echo "    $(wc -l < "$f")  $f"; done
 else
   echo "  (none over 2500 lines — clean)"
 fi
 echo ""
 
-echo "=== [8/9] pre-existing debt markers ==="
+#-----------------------------------------------------------------------
+# 7b. Ignored-test guard.
+#     `#[ignore]` silently removes a test from `cargo test` — the suite
+#     still reports green. This surfaces the count and fails on NEW
+#     ignores so a failing test can't be parked indefinitely.
+#-----------------------------------------------------------------------
+echo "=== [7b/11] ignored test count ==="
+IGNORED_TOTAL=$(grep -rn '#\[ignore' crates/ --include='*.rs' 2>/dev/null | wc -l | tr -d ' ')
+IGNORED_BASELINE=17
+if [ "$IGNORED_TOTAL" -gt "$IGNORED_BASELINE" ]; then
+  echo "  FAIL: $IGNORED_TOTAL ignored tests (baseline $IGNORED_BASELINE)."
+  echo "  New #[ignore] hides a test from CI. Fix the test or, if it must"
+  echo "  stay ignored, raise IGNORED_BASELINE deliberately:"
+  grep -rn '#\[ignore' crates/ --include='*.rs' 2>/dev/null | sed 's/^/    /'
+  exit 1
+fi
+echo "  OK: $IGNORED_TOTAL ignored (baseline $IGNORED_BASELINE)"
+echo ""
+
+echo "=== [8/11] pre-existing debt markers ==="
 debt_hits=$(grep -rn -E '(TODO|FIXME): pre-existing' \
   crates/ apps/desktop-tauri/src/ \
   --include='*.rs' --include='*.ts' --include='*.tsx' \
@@ -177,7 +221,7 @@ echo ""
 #    and the (narrow) exception for the generated workbench SKILL.md, which
 #    names those identifiers only to forbid them.
 #-----------------------------------------------------------------------
-echo "=== [9/9] skill freshness guard ==="
+echo "=== [9/11] skill freshness guard ==="
 if [ -f scripts/verify-skill-freshness.mjs ]; then
   if command -v node >/dev/null 2>&1; then
     node scripts/verify-skill-freshness.mjs 1>&2 || exit 1
@@ -193,11 +237,26 @@ echo ""
 # 10. Decision Notes structure gate (HARD gate)
 #     docs/notes/ 三态决策记录的结构/格式/强制节检查（制度见 docs/notes/README.md）
 #-----------------------------------------------------------------------
-echo "=== [10/10] decision notes structure ==="
+echo "=== [10/11] decision notes structure ==="
 if [ -f scripts/check-notes.sh ]; then
   bash scripts/check-notes.sh || exit 1
 else
   echo "  SKIP: scripts/check-notes.sh not found"
+fi
+echo ""
+
+#-----------------------------------------------------------------------
+# 11. Repository hygiene gate (HARD gate)
+#     仓库根散件 + 新建顶层目录。check-notes.sh 管 notes 树的结构，
+#     这一关管 agent 实际会弄脏的地方：仓库根和顶层目录列表。
+#     只看已跟踪文件 —— 未跟踪的本地临时文件是开发者的事，脏工作区
+#     不该让门禁变红。
+#-----------------------------------------------------------------------
+echo "=== [11/11] repository hygiene ==="
+if [ -f scripts/check-hygiene.sh ]; then
+  bash scripts/check-hygiene.sh || exit 1
+else
+  echo "  SKIP: scripts/check-hygiene.sh not found"
 fi
 echo ""
 

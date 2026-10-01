@@ -49,7 +49,7 @@ export function UserMessage({ message }: { message: ChatMessage }) {
                     i,
                   )
                 }
-                style={{ maxWidth: 180, maxHeight: 180, borderRadius: 8, border: "1px solid #2e2e34", objectFit: "cover", cursor: "pointer" }}
+                style={{ maxWidth: 180, maxHeight: 180, borderRadius: 8, border: "1px solid var(--color-border-secondary)", objectFit: "cover", cursor: "pointer" }}
                 loading="lazy"
               />
             ))}

@@ -524,32 +524,15 @@ export const ChatView = memo(function ChatView({
   const streamingAssistantId = streamingEntry?.id ?? null;
   const streamingMsg = streamingEntry?.msg ?? null;
 
-  // Reasoning lines extracted from the active (streaming) assistant's
-  // `unified_steps` for the bottom-of-chat `<ReasoningTicker>`. The
-  // ticker only shows when the user has folded the reasoning block
-  // (`reasoningFolded`); otherwise the same content is visible inline
-  // inside the expanded fold. Source = the live `streamingMsg` so
-  // the ticker reflects the active turn, not historical folds.
-  const reasoningLines = useMemo<string[]>(() => {
-    if (!streamingMsg) return [];
-    const steps = streamingMsg.unified_steps;
-    if (!steps) return [];
-    return steps
-      .filter((s): s is { kind: "reasoning"; content: string } =>
-        s.kind === "reasoning")
-      .map((s) => s.content);
-  }, [streamingMsg]);
-  // Fold state mirrored up from the latest `<ProcessTimeline>`.
-  // Starts `false` (2026-08-29 user feedback): during a live stream the
-  // thinking block is always expanded inline, so the ticker must stay
-  // dormant — reasoning is readable right there, a rolling duplicate is
-  // pure noise. Only a REAL `folded=true` report (user manually closed a
-  // fold) may mount the ticker. Multi-assistant sessions report from
-  // each ProcessTimeline in render order — the streaming assistant's
-  // update always wins last.
-  const [reasoningFolded, setReasoningFolded] = useState(false);
-  const handleReasoningFoldChange = useCallback((folded: boolean) => {
-    setReasoningFolded(folded);
+  // Fold state is still reported up from `<ProcessTimeline>`, but nothing
+  // consumes it any more: the bottom-of-chat reasoning ticker was removed
+  // (2026-10-01) because it duplicated the visible thinking block and
+  // rendered as a clipped half-sentence. The callback stays wired so
+  // `<ProcessTimeline>` still reports normally, and so the prop chain
+  // through MessageList / MessageBubble / ToolCallBubble / TextBubble
+  // (including MessageList's memo comparator) is left intact.
+  const handleReasoningFoldChange = useCallback((_folded: boolean) => {
+    // no-op sink — see above
   }, []);
   // 待审批清单（供输入框上方的审批抽屉使用）。
   // 两个来源：新流程的 unified_steps（App::onApprovalRequest 推入）与
@@ -1015,8 +998,6 @@ export const ChatView = memo(function ChatView({
         onAnswerClarify={onAnswerClarify}
         workspaceRoot={workspaceRoot}
         sending={sending}
-        reasoningLines={reasoningLines}
-        reasoningFolded={reasoningFolded}
         onReasoningFoldChange={handleReasoningFoldChange}
       />
 

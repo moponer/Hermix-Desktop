@@ -13,30 +13,50 @@
 | E7 | `apps/desktop-tauri/src/components/groupchat/types.test.ts` | 单元测试故意验证 hex 直传 |
 | E8 | `apps/desktop-tauri/src/components/groupchat/RoomList.tsx` | 仅亮色 list-row 阴影字面值 |
 
-| E9  | `apps/desktop-tauri/src/components/ClarifyBubble.tsx` | 临时历史遗留 —— 评审项，迁移到令牌后撤销 |
-| E10 | `apps/desktop-tauri/src/components/custom-apps/iconResolver.tsx` | 临时历史遗留 —— tile 品牌色 |
-| E11 | `apps/desktop-tauri/src/components/CustomAppsView.tsx` | 模态遮罩 rgba —— 应改用 --color-overlay-scrim |
-| E12 | `apps/desktop-tauri/src/components/EditProfileDialog.tsx` | 模态遮罩 rgba —— 同上 |
-| E13 | `apps/desktop-tauri/src/components/MessageList.tsx` | 阴影 rgba —— 应改用 --shadow-pop 变体 |
-| E14 | `apps/desktop-tauri/src/components/TextBubble.tsx` | 用户图片边框色 —— 应新增令牌 |
-| E15 | `apps/desktop-tauri/src/lib/appMention.ts` | @ 提醒色 —— 应改用 --color-link |
-| E16 | `apps/desktop-tauri/src/main.tsx` | 启动横幅 inline style —— 临时过渡色 |
+| E9  | `apps/desktop-tauri/src/components/ClarifyBubble.tsx` | ~~临时历史遗留~~ **已迁** → `--color-info` 12% 混合 |
+| E10 | `apps/desktop-tauri/src/components/custom-apps/iconResolver.tsx` | **保留**：tile 色是**用户自己配置的应用品牌色**（`app.tile_color`）+ 其上的 `#ffffff` 对比色，属品牌组合，映射到四色组会丢失用户意图 |
+| E11 | `apps/desktop-tauri/src/components/CustomAppsView.tsx` | ~~模态遮罩 rgba~~ **已迁** → `--color-overlay-scrim` |
+| E12 | `apps/desktop-tauri/src/components/EditProfileDialog.tsx` | ~~模态遮罩 rgba~~ **已迁** → `--color-overlay-scrim` 137%（原 0.55 比 scrim 的 0.4 更深，保留深浅差异） |
+| E13 | `apps/desktop-tauri/src/components/MessageList.tsx` | ~~阴影 rgba~~ **已迁** → `--shadow-pop` |
+| E14 | `apps/desktop-tauri/src/components/TextBubble.tsx` | ~~用户图片边框 ~~ **已迁** → `--color-border-secondary`（原 `#2e2e34` 是写死的深色，亮色主题下突兀） |
+| E15 | `apps/desktop-tauri/src/lib/appMention.ts` | ~~@ 提醒色~~ **已迁** → `--color-link`（原 `#3b82f6` 的注释还在解释"深蓝在暗色下会不会看不见"，交给令牌后该问题消失） |
+| E16 | `apps/desktop-tauri/src/main.tsx` | **保留**：dev-only 的 `console.info` 徽章（`import.meta.env.DEV` 门内，输出到 devtools，不进 UI），与主题体系无关 |
 
 > E9–E16 是 [check-theme-tokens.mjs](../../../../../../../../scripts/check-theme-tokens.mjs) 抓到的历史债项。
-> 评审时机：每次处理"主题体系"或"组件清理"PR 时优先消化。
+> 2026-10-01（L0）：6 条已迁（E9/E11/E12/E13/E14/E15），2 条判定为真例外保留（E10/E16）。
 
-## 已登记债项（仅告警，不阻断）
+## 已消化债项（L0，2026-10-01）
 
-### Tailwind 原生调色板类（已登记债项 → 待迁移到语义令牌）
+### Tailwind 原生调色板类 — 已清偿
 
-`scripts/check-theme-tokens.mjs` 的 `[palette-debt]` 当前为 WARN_ONLY 模式。目标状态：
-每处 `text-red-400` / `bg-emerald-500` / `border-amber-700` 等 Tailwind
-原生调色板类，最终都要替换为对应语义令牌（如 `--color-error` /
-`--color-success-soft` / `--color-warning` 等），或在 `@theme` 中以
-`--color-red-400: var(--color-error)` 形式重定向该语义槽。
+**状态：已清偿，门禁已收紧。**
 
-完成迁移后把脚本里的 `palette-debt` 输出段切换为 `process.exit(1)`
-（当前为 `console.warn` 不退出），开启强约束。
+101 处 `text-red-400` / `bg-emerald-500` / `border-amber-700` 等原生色阶类
+**一行未改**，而是在 `tokens.css` 的 `@theme` 内把**实际在用的 21 个色槽**
+重定向到语义令牌（`--color-error` / `--color-warning` / `--color-success` /
+文本灰阶）。组件里的类名照旧，解析后跟随主题与强调色。
+
+用到的 21 槽（按色相族）：
+
+| 族 | 槽 | 指向 |
+|---|---|---|
+| error | `red-200/300/400/500`、`rose-200/300/500` | `--color-error`（200/300 按 shade 降 alpha 保留浓淡层次） |
+| warning | `amber-200/300/400/500`、`yellow-400` | `--color-warning`（同上） |
+| success | `green-400/500`、`emerald-200/300/400/500` | `--color-success`（同上） |
+| neutral | `zinc-300/400/500` | `--color-text-tertiary` / `-faint` / `-secondary` |
+
+同族不同 shade 在本项目承载**真实的视觉层次**（如 AnalyticsView 的
+`red-300` 是标题、`red-200` 是次要说明），所以按 shade 映射到不同
+alpha，而不是全部塌成同一个 token。
+
+**必须放在 `@theme` 内**（已实测）：Tailwind v4 只从 `@theme` 生成工具类，
+放在别名层（`:root`）里 `.text-red-400` 规则**根本不会生成**，重定向
+会静默落空。
+
+**门禁已收紧**：`check-theme-tokens.mjs` 的 `[palette-debt]` 从 WARN 改为
+阻断，且语义变成"**未登记的色阶类才拦**"——在用的 21 槽是合法的，
+新增一个 `text-sky-500` 这类未在 `@theme` 声明的会直接让 CI 变红。
+扩展槽位需同时改三处：`tokens.css @theme`、各主题 css、`PALETTE_ALIASES`。
 
 ### components.css / components-prose.css 中残留的 `[data-theme]` 字面色覆盖块
 

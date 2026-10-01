@@ -636,10 +636,7 @@ impl ToolHandler for CuaListWindowsHandler {
             .get("title")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
-        let visible_only = params
-            .get("visible_only")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true);
+        let visible_only = crate::param_coercion::bool_param(&params, "visible_only", true);
         let max_results = params
             .get("max_results")
             .and_then(|v| v.as_u64())

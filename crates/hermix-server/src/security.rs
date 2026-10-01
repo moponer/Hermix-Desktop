@@ -328,19 +328,27 @@ fn client_key(req: &Request<Body>) -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
-fn query_bearer_token(req: &Request<Body>) -> Option<String> {
-    req.uri().query().and_then(|query| {
-        query.split('&').find_map(|pair| {
-            let mut iter = pair.splitn(2, '=');
-            let key = iter.next()?;
-            let value = iter.next().unwrap_or_default();
-            if key == "token" && !value.trim().is_empty() {
-                Some(value.to_string())
-            } else {
-                None
-            }
-        })
-    })
+/// Compare two secrets without leaking their common prefix length.
+///
+/// `str::eq` short-circuits on the first differing byte, so its wall
+/// clock correlates with how much of the `api_key` a guesser got right.
+/// Hand-rolled rather than pulling in `subtle` — the six-step ladder
+/// says standard library before new dependencies, and this is five
+/// lines. The length branch is unavoidable (it leaks length, not
+/// content) but api_key length is not a secret.
+fn ct_eq(a: Option<&str>, b: Option<&str>) -> bool {
+    let (a, b) = match (a, b) {
+        (Some(a), Some(b)) => (a.as_bytes(), b.as_bytes()),
+        _ => return false,
+    };
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
 }
 
 fn client_ip(req: &Request<Body>) -> Option<IpAddr> {
@@ -471,7 +479,22 @@ pub async fn request_guard(
     req: Request<Body>,
     next: Next,
 ) -> Response<Body> {
+    // CORS preflight carries no credentials by definition, so it cannot
+    // be authenticated — but the unconditional early return that used
+    // to sit here also skipped `ip_allowed`, the auth-fail lockout, and
+    // the rate limiter, making OPTIONS a free unauthenticated flood
+    // vector. Preflight is now rate-limited like any other request;
+    // the CORS layer itself (`http_cors_layer`) still answers it.
     if req.method() == axum::http::Method::OPTIONS {
+        if !ip_allowed(&security, &req) {
+            hermix_telemetry::record_http_reject();
+            return (StatusCode::FORBIDDEN, "client IP not in allowlist").into_response();
+        }
+        let ck = client_key(&req);
+        if !rate.allow(ck).await {
+            hermix_telemetry::record_http_reject();
+            return (StatusCode::TOO_MANY_REQUESTS, "rate limit exceeded").into_response();
+        }
         return next.run(req).await;
     }
 
@@ -507,16 +530,23 @@ pub async fn request_guard(
         }
     }
 
-    // Bearer 凭证双轨：api_key（桌面/网关既有凭证）或已配对设备 token。
-    // 命中设备 token 产出 PairedDevice 来源（§5.5 第 4 层）。
-    let header_token = req
+    // Bearer 凭证只走 Authorization 头。
+    //
+    // 历史上有第二条通道：`?token=` query 传参。它让配对设备 token 和
+    // 网关 api_key 出现在 URL 里 —— 进 TraceLayer 日志、浏览器历史、
+    // 代理 Referer。仓库内没有任何客户端在用这条通道（客户端的
+    // Authorization 头全部走裸 `fetch`），所以是纯粹的攻击面而非
+    // 兼容性负担，直接移除。
+    //
+    // 指纹：`crates/hermix-server/src/lib.rs::redact_query_credentials`
+    // 仍保留，它防御的是任意第三方在 URL 里塞 token 的情况，与本处
+    // 是否接受无关。
+    let token = req
         .headers()
         .get(AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.strip_prefix("Bearer ").map(str::trim));
-    let token = header_token
-        .map(std::string::ToString::to_string)
-        .or_else(|| query_bearer_token(&req));
+        .and_then(|s| s.strip_prefix("Bearer ").map(str::trim))
+        .map(std::string::ToString::to_string);
     let device = token
         .as_deref()
         .and_then(|t| devices.as_ref().and_then(|r| r.authenticate(t)));
@@ -578,7 +608,7 @@ pub async fn request_guard(
     }
 
     if let Some(key) = security.api_key.as_ref() {
-        let api_key_ok = token.as_deref() == Some(key.as_ref());
+        let api_key_ok = ct_eq(token.as_deref(), Some(key.as_ref()));
         if !api_key_ok && device.is_none() {
             hermix_telemetry::record_http_reject();
             // §5.5 对策 T6：认证失败计数。
@@ -596,9 +626,7 @@ pub async fn request_guard(
     // §5.5 对策 T6：认证成功（api_key 命中 / 设备 token 命中）清零该 IP
     // 的失败计数——合法用户输错一次后输对了不该继续累积锁定。
     if security.auth_fail_lockout.is_some() {
-        if device.is_some()
-            || token.as_deref() == security.api_key.as_deref().map(|k| k.as_ref())
-        {
+        if device.is_some() || ct_eq(token.as_deref(), security.api_key.as_deref()) {
             if let Some(lockout) = &security.auth_fail_lockout {
                 lockout.record_success(&ck).await;
             }

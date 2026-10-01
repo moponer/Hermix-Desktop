@@ -189,6 +189,38 @@ fn max_request_body_bytes() -> usize {
         .unwrap_or(DEFAULT)
 }
 
+/// Strip credential-looking query parameters from a URI before it is
+/// written to the request trace span.
+///
+/// The server no longer accepts a credential from the query string
+/// (`?token=` was removed — see `security::request_guard`), so this is
+/// defense in depth against a client or third-party page putting a secret
+/// in a URL. Redacts the value but keeps the key and the rest of the
+/// query, so the trace still shows *that* something was supplied.
+fn redact_query_credentials(uri: &axum::http::Uri) -> String {
+    const SECRET_KEYS: [&str; 3] = ["token", "api_key", "apikey"];
+    let Some(query) = uri.query() else {
+        return uri.to_string();
+    };
+    let redacted: Vec<String> = query
+        .split('&')
+        .map(|pair| {
+            let mut parts = pair.splitn(2, '=');
+            let key = parts.next().unwrap_or_default();
+            if parts.next().is_some_and(|_| {
+                SECRET_KEYS
+                    .iter()
+                    .any(|s| key.eq_ignore_ascii_case(s))
+            }) {
+                format!("{}=<redacted>", key)
+            } else {
+                pair.to_string()
+            }
+        })
+        .collect();
+    format!("{}?{}", uri.path(), redacted.join("&"))
+}
+
 /// CORS: comma-separated allowlist in `HERMES_HTTP_CORS_ORIGINS` (e.g. `https://app.example.com`).
 /// Empty / invalid → permissive (local dev / same-origin split defaults).
 fn http_cors_layer() -> CorsLayer {
@@ -422,7 +454,31 @@ pub fn router(state: HttpServerState) -> Router {
         async move { security::request_guard(sec, rl, dr, req, next).await }
     }))
     .layer(tower_http::limit::RequestBodyLimitLayer::new(body_limit))
-    .layer(tower_http::trace::TraceLayer::new_for_http())
+    // Defense in depth for the request trace: a client (or a third-party
+    // page hitting this origin) can still put `?token=` / `?api_key=` in a
+    // URL, and the default span records the raw query string into the log
+    // and any shipped bundle. The server no longer *accepts* a credential
+    // from the query — this only stops one from being logged.
+    //
+    // tower-http 0.6 ships only `DefaultMakeSpan` (no `MakeSpanRef`), so
+    // the redaction rides on `on_request`; the span's own `uri` field is
+    // not overridable. `include_headers(false)` keeps request headers out.
+    // (The agent-side `pii_redact` does NOT cover this — it post-processes
+    // tool results, not the server's own trace output.)
+    .layer(
+        tower_http::trace::TraceLayer::new_for_http()
+            .make_span_with(
+                tower_http::trace::DefaultMakeSpan::new()
+                    .level(tracing::Level::INFO)
+                    .include_headers(false),
+            )
+            .on_request({
+                #[allow(clippy::redundant_closure)]
+                |req: &axum::http::Request<axum::body::Body>, span: &tracing::Span| {
+                    span.record("redacted_uri", tracing::field::debug(&redact_query_credentials(req.uri())));
+                }
+            }),
+    )
     .layer(http_cors_layer())
 }
 

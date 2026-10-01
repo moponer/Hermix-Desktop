@@ -77,7 +77,28 @@ fn save_stored(map: &HashMap<String, ImCredentials>) -> Result<(), String> {
     let tmp = path.with_extension("json.tmp");
     let body = serde_json::to_string_pretty(map).map_err(|e| e.to_string())?;
     std::fs::write(&tmp, body).map_err(|e| format!("写入失败：{e}"))?;
+    // 本文件存明文 bot secret，收紧到仅属主可读写。裸 `fs::write`
+    // 走进程 umask，多用户机器上同机其他账号可能可读。写入 tmp 之后、
+    // rename 之前设置：rename 保留 inode 权限，顺序反了就白设。
+    restrict_to_owner(&tmp)?;
     std::fs::rename(&tmp, &path).map_err(|e| format!("替换失败：{e}"))
+}
+
+/// 把文件权限收紧为「仅属主」可读写。
+///
+/// Unix 下用 `0o600`。Windows（项目唯一目标平台）没有 POSIX 权限位，
+/// 真正的隔离来自用户 profile 目录的 NTFS ACL 继承；此处仅在 Unix
+/// 上生效，Windows 走 ACL 继承，属预期行为而非遗漏。
+fn restrict_to_owner(path: &std::path::Path) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+            .map_err(|e| format!("设置 {} 权限失败：{e}", path.display()))?;
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
 }
 
 /// 一个已启用平台的凭据。凭据完整才启用，半截配置当没配。

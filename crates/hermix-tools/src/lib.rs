@@ -33,6 +33,7 @@ pub mod registry;
 // needs it; until then, removing the half-fabricated scaffold prevents
 // future drift between declared interface and runtime behavior.
 
+pub mod param_coercion;
 pub mod tool_meta;
 pub mod tools;
 pub mod toolset;

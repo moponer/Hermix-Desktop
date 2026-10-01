@@ -9,7 +9,6 @@
  */
 import { useState, useRef, useEffect } from "react";
 import { Loader2, X, Pencil, Send } from "lucide-react";
-import { ReasoningTicker } from "./ReasoningTicker";
 
 /**
  * AgentActivityIndicator — single source of truth for "agent is still
@@ -29,20 +28,11 @@ export function AgentActivityIndicator({
   pendingToolsCount,
   visible,
   replying = false,
-  reasoningLines,
-  reasoningFolded = false,
 }: {
   pendingToolsCount: number;
   visible: boolean;
   /** true when the LLM is actively streaming the answer body. */
   replying?: boolean;
-  /** Captured reasoning lines from the active turn. Rendered as a
-   *  single-line rolling ticker beside the pill when present and
-   *  the user has folded the reasoning block. */
-  reasoningLines?: string[];
-  /** Whether the reasoning fold is currently closed. The ticker
-   *  only mounts when both this and `reasoningLines` are present. */
-  reasoningFolded?: boolean;
 }) {
   if (!visible) return null;
   const runningTools = pendingToolsCount > 0;
@@ -64,17 +54,15 @@ export function AgentActivityIndicator({
     label = "正在分析结果…";
     state = "thinking";
   }
-  const tickerEl =
-    reasoningFolded && reasoningLines && reasoningLines.length > 0 ? (
-      <ReasoningTicker lines={reasoningLines} />
-    ) : null;
+  // 思考滚动文本已移除（2026-10-01 用户反馈）：与上方展开的思考过程
+  // 完全重复，且宽度受限被截成半句，读起来像坏掉的 UI。折叠时的思考
+  // 内容请直接展开思考块查看。
   return (
     <div className="msg-channel agent-activity" data-state={state}>
       <div className="agent-activity-pill">
         <Loader2 className="icon-sm animate-spin text-text-accent" />
         <span>{label}</span>
       </div>
-      {tickerEl}
     </div>
   );
 }

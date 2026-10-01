@@ -772,6 +772,15 @@ async fn execute_command_sandboxed(
 }
 
 #[cfg(test)]
+// The three sandbox tests below hold `SANDBOX_ENV_LOCK` across `.await`
+// on purpose: `HERMIX_SANDBOX_MODE` is process-global, so dropping the
+// guard before the command runs would let a parallel test overwrite it
+// and make the routing assertions flap. The lint's deadlock argument (an
+// owning thread parks and can never release) does not apply — these are
+// `#[tokio::test]`s whose guard is released when the test ends. The lint
+// fires at the *call sites*, so the allow has to live on the module, not
+// on `set_sandbox_env`.
+#[allow(clippy::await_holding_lock)]
 mod tests {
     use super::*;
 
@@ -1121,12 +1130,18 @@ mod tests {
     async fn test_file_exists() {
         let backend = LocalBackend::default();
 
+        // `std::env::temp_dir()` instead of a hardcoded "/tmp" — the
+        // project is Windows-only, and "/tmp" does not exist there, so
+        // this test failed on every run in CI.
+        let tmp = std::env::temp_dir();
+        let tmp_str = tmp.to_string_lossy().to_string();
+
         // A path that should exist
-        assert!(backend.file_exists("/tmp").await.unwrap());
+        assert!(backend.file_exists(&tmp_str).await.unwrap());
 
         // A path that should not exist
         assert!(!backend
-            .file_exists("/tmp/hermes_nonexistent_test_file_xyz")
+            .file_exists(&tmp.join("hermes_nonexistent_test_file_xyz").to_string_lossy())
             .await
             .unwrap());
     }

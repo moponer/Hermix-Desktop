@@ -104,8 +104,8 @@ pub(crate) fn hydrate_session_search_args(session_id: Option<&str>, tc: &mut Too
         return;
     }
 
-    let mut args: serde_json::Value = serde_json::from_str(&tc.function.arguments)
-        .unwrap_or_else(|_| serde_json::json!({}));
+    let mut args: serde_json::Value =
+        serde_json::from_str(&tc.function.arguments).unwrap_or_else(|_| serde_json::json!({}));
     let Some(obj) = args.as_object_mut() else {
         return;
     };
@@ -139,11 +139,7 @@ pub(crate) fn denial_repick_hint(tool_name: &str, raw_args: &str) -> &'static st
             // to screenshot if the field is missing.
             let action = serde_json::from_str::<serde_json::Value>(raw_args)
                 .ok()
-                .and_then(|v| {
-                    v.get("action")
-                        .and_then(|x| x.as_str())
-                        .map(str::to_string)
-                })
+                .and_then(|v| v.get("action").and_then(|x| x.as_str()).map(str::to_string))
                 .unwrap_or_else(|| "screenshot".to_string());
             if action == "screenshot" {
                 " The user may have denied this because the question can be \
@@ -191,7 +187,15 @@ pub(crate) async fn resolve_pre_dispatch(
         return HashMap::new();
     };
     let mut decisions = HashMap::with_capacity(tool_calls.len());
-    for tc in tool_calls {
+    // Phase 1: call the hook for every tool call and hand back the
+    // future that waits on it. The hook is synchronous and emits the
+    // approval card as a side effect, so building all these futures
+    // before awaiting any of them is what makes the cards appear
+    // together. The old shape awaited each `rx` inside the loop body,
+    // so card N+1 was not rendered until card N was answered.
+    let pending: Vec<_> = tool_calls
+        .iter()
+        .map(|tc| async move {
         let id = tc.id.clone();
         let tool_name = tc.function.name.clone();
         let outcome = match hook(tc) {
@@ -246,9 +250,8 @@ pub(crate) async fn resolve_pre_dispatch(
                     Some(notify) => {
                         let notified = notify.notified();
                         tokio::pin!(notified);
-                        let safety_net = tokio::time::sleep(
-                            std::time::Duration::from_secs(net_secs),
-                        );
+                        let safety_net =
+                            tokio::time::sleep(std::time::Duration::from_secs(net_secs));
                         tokio::pin!(safety_net);
                         tokio::select! {
                             biased;
@@ -271,9 +274,8 @@ pub(crate) async fn resolve_pre_dispatch(
                     None => {
                         // HTTP 发送路径没有 shutdown 通道，但等待必须有界：
                         // 与 WS 分支同一把兜底网（主超时由 registry 兜）。
-                        let safety_net = tokio::time::sleep(
-                            std::time::Duration::from_secs(net_secs),
-                        );
+                        let safety_net =
+                            tokio::time::sleep(std::time::Duration::from_secs(net_secs));
                         tokio::pin!(safety_net);
                         tokio::select! {
                             biased;
@@ -383,8 +385,16 @@ pub(crate) async fn resolve_pre_dispatch(
                     }
                 };
                 outcome
-            },
+            }
         };
+    (id, outcome)
+        })
+        .collect();
+
+    // Phase 2: resolve them concurrently. Each arm keeps the original
+    // semantics (registry timeout raced against the soft-shutdown
+    // notify plus a safety net) — this is a scheduling change only.
+    for (id, outcome) in futures::future::join_all(pending).await {
         decisions.insert(id, outcome);
     }
     tracing::info!(
@@ -593,9 +603,7 @@ mod tests {
     fn hook_awaiting(
         outcome: ApprovalOutcome,
     ) -> Box<dyn Fn(&ToolCall) -> ToolDispatchDecision + Send + Sync> {
-        Box::new(move |_tc| {
-            ToolDispatchDecision::AwaitApproval(pre_resolved_rx(outcome.clone()))
-        })
+        Box::new(move |_tc| ToolDispatchDecision::AwaitApproval(pre_resolved_rx(outcome.clone())))
     }
 
     fn pre_resolved_rx(outcome: ApprovalOutcome) -> oneshot::Receiver<ApprovalOutcome> {
@@ -623,7 +631,9 @@ mod tests {
     async fn awaited_approval_timed_out_maps_to_timed_out() {
         let tc = tc("storage_clean", r#"{"paths":["/tmp/x"]}"#);
         let map = resolve_pre_dispatch(
-            Some(&hook_awaiting(ApprovalOutcome::TimedOut { timeout_secs: 86_400 })),
+            Some(&hook_awaiting(ApprovalOutcome::TimedOut {
+                timeout_secs: 86_400,
+            })),
             &[tc],
             None,
             None,
@@ -676,18 +686,16 @@ mod tests {
         // select! waiter). Pre-arming inside the hook keeps the
         // test deterministic across the call ordering below.
         let notify = Arc::new(Notify::new());
-        let hook: Box<dyn Fn(&ToolCall) -> ToolDispatchDecision + Send + Sync> =
-            Box::new({
-                let notify = notify.clone();
-                move |_tc| {
-                    let (tx, rx) = oneshot::channel::<ApprovalOutcome>();
-                    drop(tx);
-                    notify.notify_one();
-                    ToolDispatchDecision::AwaitApproval(rx)
-                }
-            });
-        let map =
-            resolve_pre_dispatch(Some(&hook), &[tc], Some(&notify), None).await;
+        let hook: Box<dyn Fn(&ToolCall) -> ToolDispatchDecision + Send + Sync> = Box::new({
+            let notify = notify.clone();
+            move |_tc| {
+                let (tx, rx) = oneshot::channel::<ApprovalOutcome>();
+                drop(tx);
+                notify.notify_one();
+                ToolDispatchDecision::AwaitApproval(rx)
+            }
+        });
+        let map = resolve_pre_dispatch(Some(&hook), &[tc], Some(&notify), None).await;
         let err = map.get("call-storage_clean").unwrap().as_ref().unwrap_err();
         assert_eq!(
             err.kind,
@@ -715,13 +723,8 @@ mod tests {
                 seen.lock().unwrap().push(tc.function.name.clone());
             })
         };
-        let map = resolve_pre_dispatch(
-            Some(&dispatch_hook),
-            &[tc],
-            None,
-            Some(&approved_hook),
-        )
-        .await;
+        let map =
+            resolve_pre_dispatch(Some(&dispatch_hook), &[tc], None, Some(&approved_hook)).await;
         assert!(map.get("call-read_file").unwrap().is_ok());
         assert_eq!(
             seen.lock().unwrap().as_slice(),
@@ -746,13 +749,8 @@ mod tests {
                 count.fetch_add(1, Ordering::SeqCst);
             })
         };
-        let map = resolve_pre_dispatch(
-            Some(&dispatch_hook),
-            &[tc],
-            None,
-            Some(&approved_hook),
-        )
-        .await;
+        let map =
+            resolve_pre_dispatch(Some(&dispatch_hook), &[tc], None, Some(&approved_hook)).await;
         assert!(map.get("call-read_file").unwrap().is_err());
         assert_eq!(
             count.load(Ordering::SeqCst),

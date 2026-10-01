@@ -232,10 +232,7 @@ pub fn extract_skill_config_vars(skill: &SkillInfo) -> Vec<ConfigVar> {
                     .get("default")
                     .and_then(|v| v.as_str())
                     .map(String::from);
-                let required = obj
-                    .get("required")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
+                let required = crate::param_coercion::bool_param_in_map(obj, "required", false);
                 let env_var = obj
                     .get("env_var")
                     .or_else(|| obj.get("env"))

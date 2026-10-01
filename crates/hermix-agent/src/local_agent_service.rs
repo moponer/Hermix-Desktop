@@ -44,6 +44,7 @@ impl hermix_intelligence::prefetch::SafeToolRegistry for SafeRegistryWrapper {
 
 use crate::agent_builder::{bridge_tool_registry, build_agent_config, build_provider};
 use crate::agent_loop::{AgentCallbacks, AgentConfig, AgentLoop, ToolDispatchDecision};
+use crate::agent_helpers::{resolve_approval_fallback, ApprovalFallback};
 use crate::consciousness::{
     ConsciousnessState, ConsciousnessTracker, default_amplitude,
 };
@@ -1173,10 +1174,10 @@ impl LocalAgentService {
     /// `Caution` always allows (the tool's own internal
     /// guards run); `Dangerous` requires explicit user
     /// approval in `Default` mode.
-    /// 4. **No approval infrastructure wired** — graceful
-    /// fallback to `Allow` (unit tests and headless callers
-    /// without a WS handler shouldn't be blocked from
-    /// dispatching the tool).
+    /// 4. **No approval infrastructure wired** — the caller must
+    ///    declare its [`ApprovalFallback`] for this transport.
+    ///    Network-reachable callers pass [`ApprovalFallback::Deny`]
+    ///    so a Dangerous tool can never execute unprompted; local
     #[allow(clippy::too_many_arguments)]
     fn decide_pre_tool_dispatch(
         tc: &ToolCall,
@@ -1195,6 +1196,7 @@ impl LocalAgentService {
             &Arc<dyn Fn(&str, &serde_json::Value) -> bool + Send + Sync>,
         >,
         session_id: &str,
+        approval_fallback: ApprovalFallback,
     ) -> ToolDispatchDecision {
         // L0: hardline blocklist — the floor beneath `Full`.
         // Run *before* the `Full` short-circuit: even a user who has
@@ -1266,7 +1268,7 @@ impl LocalAgentService {
                     }
                     let (Some(requester), Some(on_event_fn)) = (approval_requester, on_event)
                     else {
-                        return ToolDispatchDecision::Allow;
+                        return resolve_approval_fallback(approval_fallback, &tc.function.name);
                     };
                     let request_id = tc.id.clone();
                     let tool_name = tc.function.name.clone();
@@ -1301,6 +1303,46 @@ impl LocalAgentService {
             return ToolDispatchDecision::Allow;
         }
         // Dangerous tool in Default mode → ask the user
+        //
+        // Scratch-scope exemption: cleaning hermix's OWN throwaway tree
+        // (`%TEMP%\hermix-scratch`, defined in
+        // `hermix_tools::tools::storage_clean::scratch_root`) is not a
+        // user-facing destructive act — those files were created by the
+        // agent in this same task and are disposable by construction.
+        // Without this exemption the agent has to ask permission to tidy
+        // up after itself, and the prompt's "must clean temp files" rule
+        // becomes unusable: a user who once denies a delete teaches the
+        // model to ask forever, and the workspace fills with debris.
+        //
+        // The exemption is deliberately narrow:
+        //   - it applies only to `storage_clean`, not to `terminal`
+        //     (a shell can delete anything regardless of this check);
+        //   - `is_scratch_scoped` requires EVERY path to canonicalize
+        //     inside the scratch root, so a mixed list (one scratch file
+        //     + one Downloads item) still gets the full Dangerous
+        //     treatment;
+        //   - it downgrades the *prompt*, not the tool: `safety_check`
+        //     inside `storage_clean` still runs in full and can still
+        //     refuse any individual path.
+        if tc.function.name == "storage_clean" {
+            let paths: Vec<String> = raw_params
+                .get("paths")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            if hermix_tools::tools::storage_clean::is_scratch_scoped(&paths) {
+                tracing::info!(
+                    tool = %tc.function.name,
+                    count = paths.len(),
+                    "storage_clean scoped to hermix scratch root; skipping approval prompt"
+                );
+                return ToolDispatchDecision::Allow;
+            }
+        }
         // Pre-approval shortcut: if the user previously picked
         // "Always Allow" or "Allow for this session" for the same
         // tool/args shape, skip the WS round-trip. See the
@@ -1316,7 +1358,7 @@ impl LocalAgentService {
             }
         }
         let (Some(requester), Some(on_event_fn)) = (approval_requester, on_event) else {
-            return ToolDispatchDecision::Allow;
+            return resolve_approval_fallback(approval_fallback, &tc.function.name);
         };
         let request_id = tc.id.clone();
         let tool_name = tc.function.name.clone();
@@ -2681,6 +2723,11 @@ impl AgentService for LocalAgentService {
                 let approval_requester = effective_overrides.approval_requester.clone();
                 let on_event = effective_overrides.on_event.clone();
                 let pre_approval_checker = effective_overrides.pre_approval_checker.clone();
+                // Fail closed unless the caller explicitly declared this
+                // transport has no remote exposure for approval decisions.
+                let approval_fallback = effective_overrides
+                    .approval_fallback
+                    .unwrap_or(ApprovalFallback::Deny);
                 let sid = session_id.to_string();
                 let tirith = self.tirith.clone();
                 // P6 direction 1: declarative permission profile. Out-of-scope
@@ -2725,8 +2772,9 @@ impl AgentService for LocalAgentService {
                             }));
                             return ToolDispatchDecision::AwaitApproval(rx);
                         }
-                        // No approval infra (headless / unit tests) → Allow.
-                        return ToolDispatchDecision::Allow;
+                        // No approval infra — the caller declares which
+                        // way to fall for this transport.
+                        return resolve_approval_fallback(approval_fallback, &tc.function.name);
                     }
                     drop(guard);
                     Self::decide_pre_tool_dispatch(
@@ -2738,6 +2786,7 @@ impl AgentService for LocalAgentService {
                         on_event.as_ref(),
                         pre_approval_checker.as_ref(),
                         &sid,
+                        approval_fallback,
                     )
                 }))
             },
@@ -3447,6 +3496,7 @@ mod override_tests {
             approval_requester: None,
             on_event: None,
             pre_approval_checker: None,
+            approval_fallback: None,
             skills: None,
             workbench_id: None,
             domain_override: None,
@@ -3482,6 +3532,7 @@ mod override_tests {
             approval_requester: None,
             on_event: None,
             pre_approval_checker: None,
+            approval_fallback: None,
             skills: None,
             workbench_id: None,
             domain_override: None,
@@ -3811,6 +3862,7 @@ mod override_tests {
             Some(&event_fn),
             None,
             "sess-1",
+            ApprovalFallback::Allow,
         );
         match decision {
             ToolDispatchDecision::Deny { reason } => {
@@ -3846,6 +3898,7 @@ mod override_tests {
             Some(&event_fn),
             None,
             "sess-1",
+            ApprovalFallback::Allow,
         );
         match decision {
             ToolDispatchDecision::Deny { reason } => {
@@ -3883,6 +3936,7 @@ mod override_tests {
             Some(&event_fn),
             None,
             "sess-1",
+            ApprovalFallback::Allow,
         );
         match decision {
             ToolDispatchDecision::Deny { reason } => {
@@ -3916,6 +3970,7 @@ mod override_tests {
             Some(&event_fn),
             None,
             "sess-1",
+            ApprovalFallback::Allow,
         );
         assert!(
             matches!(decision, ToolDispatchDecision::Deny { .. }),
@@ -3944,6 +3999,7 @@ mod override_tests {
             Some(&event_fn),
             None,
             "sess-1",
+            ApprovalFallback::Allow,
         );
         assert!(matches!(decision, ToolDispatchDecision::Deny { .. }));
     }
@@ -3970,6 +4026,7 @@ mod override_tests {
             Some(&event_fn),
             None,
             "sess-1",
+            ApprovalFallback::Allow,
         );
         assert!(
             !matches!(decision, ToolDispatchDecision::Deny { .. }),
@@ -4000,6 +4057,7 @@ mod override_tests {
             Some(&event_fn),
             None,
             "sess-1",
+            ApprovalFallback::Allow,
         );
         assert!(matches!(decision, ToolDispatchDecision::Allow));
     }
@@ -4048,6 +4106,7 @@ mod override_tests {
             Some(&event_fn),
             None,
             "sess-1",
+            ApprovalFallback::Allow,
         );
         assert!(matches!(decision, ToolDispatchDecision::Allow));
         assert!(
@@ -4082,6 +4141,7 @@ mod override_tests {
             Some(&event_fn),
             None,
             "sess-1",
+            ApprovalFallback::Allow,
         );
         match decision {
             ToolDispatchDecision::Deny { reason } => {
@@ -4124,6 +4184,7 @@ mod override_tests {
             Some(&event_fn),
             None,
             "sess-1",
+            ApprovalFallback::Allow,
         );
         assert!(matches!(decision, ToolDispatchDecision::Allow));
     }
@@ -4154,6 +4215,7 @@ mod override_tests {
             Some(&event_fn),
             None,
             "sess-1",
+            ApprovalFallback::Allow,
         );
         assert!(matches!(decision, ToolDispatchDecision::AwaitApproval(_)));
         let ev = captured.lock().unwrap().clone().expect("event should fire");
@@ -4184,6 +4246,7 @@ mod override_tests {
             Some(&event_fn),
             None,
             "sess-1",
+            ApprovalFallback::Allow,
         );
         assert!(matches!(decision, ToolDispatchDecision::Allow));
         assert!(
@@ -4210,6 +4273,7 @@ mod override_tests {
             Some(&event_fn),
             None,
             "sess-1",
+            ApprovalFallback::Allow,
         );
         assert!(matches!(decision, ToolDispatchDecision::Allow));
         assert!(
@@ -4234,6 +4298,7 @@ mod override_tests {
             Some(&event_fn),
             None,
             "sess-1",
+            ApprovalFallback::Allow,
         );
         match decision {
             ToolDispatchDecision::AwaitApproval(_) => {}
@@ -4265,19 +4330,20 @@ mod override_tests {
             Some(&event_fn),
             None,
             "sess-1",
+            ApprovalFallback::Allow,
         );
         assert!(matches!(decision, ToolDispatchDecision::Allow));
         assert!(captured.lock().unwrap().is_none());
     }
 
-    // -- Layer 4: Graceful fallback --------------------------------
+    // -- Layer 4: Declared no-approval fallback --------------------
 
     #[test]
-    fn layer4_no_approval_requester_falls_back_to_allow() {
-        // Unit tests and headless callers don't wire a WS
-        // approval registry. Dangerous tools should still run
-        // through the dispatch path (the caller is responsible
-        // for routing the request however it sees fit).
+    fn layer4_no_approval_requester_respects_declared_allow() {
+        // Local stdio sessions and unit tests declare `Allow` because
+        // they have no remote attack surface for the decision. The
+        // fallback is now an explicit per-caller choice, not an
+        // implicit property of "no socket was wired".
         let registry = build_test_registry();
         let tc = tool_call("tc1", "dangerous_tool", r#"{}"#);
         let (event_fn, _captured) = capturing_on_event();
@@ -4291,12 +4357,46 @@ mod override_tests {
             Some(&event_fn),
             None,
             "sess-1",
+            ApprovalFallback::Allow,
         );
         assert!(matches!(decision, ToolDispatchDecision::Allow));
     }
 
     #[test]
-    fn layer4_no_on_event_falls_back_to_allow() {
+    fn layer4_no_approval_requester_denies_when_fallback_is_deny() {
+        // The network-reachable transports (non-streaming HTTP, raw-text
+        // WS) pass `Deny`. A Dangerous tool must never execute unprompted
+        // there, and the reason has to be machine-readable so the LLM
+        // can reformulate instead of retrying the same call.
+        let registry = build_test_registry();
+        let tc = tool_call("tc1", "dangerous_tool", r#"{}"#);
+        let (event_fn, _captured) = capturing_on_event();
+
+        let decision = LocalAgentService::decide_pre_tool_dispatch(
+            &tc,
+            PermissionLevel::Default,
+            &registry,
+            None,
+            None, // no approval_requester
+            Some(&event_fn),
+            None,
+            "sess-1",
+            ApprovalFallback::Deny,
+        );
+        match decision {
+            ToolDispatchDecision::Deny { reason } => {
+                assert!(
+                    reason.contains("dangerous_tool") && reason.contains("No approval channel"),
+                    "deny reason must name the tool and the cause; got `{}`",
+                    reason
+                );
+            }
+            other => panic!("expected Deny under ApprovalFallback::Deny, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn layer4_no_on_event_respects_declared_allow() {
         let registry = build_test_registry();
         let tc = tool_call("tc1", "dangerous_tool", r#"{}"#);
         let (req_fn, _reqs) = capturing_approval_requester();
@@ -4310,6 +4410,7 @@ mod override_tests {
             None, // no on_event
             None, // no pre_approval_checker
             "sess-1",
+            ApprovalFallback::Allow,
         );
         assert!(matches!(decision, ToolDispatchDecision::Allow));
     }
@@ -4339,6 +4440,7 @@ mod override_tests {
             Some(&event_fn),
             None,
             "sess-1",
+            ApprovalFallback::Allow,
         );
         let rx = match decision {
             ToolDispatchDecision::AwaitApproval(rx) => rx,
@@ -4370,6 +4472,7 @@ mod override_tests {
             Some(&event_fn),
             None,
             "sess-1",
+            ApprovalFallback::Allow,
         );
         let rx = match decision {
             ToolDispatchDecision::AwaitApproval(rx) => rx,
@@ -4405,6 +4508,7 @@ mod override_tests {
             Some(&event_fn),
             None,
             "sess-1",
+            ApprovalFallback::Allow,
         );
         let rx = match decision {
             ToolDispatchDecision::AwaitApproval(rx) => rx,
@@ -4453,6 +4557,7 @@ mod override_tests {
             Some(&event_fn),
             None,
             "sess-1",
+            ApprovalFallback::Allow,
         );
         assert!(
             matches!(decision, ToolDispatchDecision::Allow),
@@ -4490,6 +4595,7 @@ mod override_tests {
             Some(&event_fn),
             None,
             "sess-1",
+            ApprovalFallback::Allow,
         );
         match decision {
             ToolDispatchDecision::Deny { reason } => {

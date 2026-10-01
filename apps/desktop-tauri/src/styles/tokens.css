@@ -282,6 +282,51 @@
   --color-info: #4f7fa3;
   --color-info-soft: rgba(79, 127, 163, 0.12);
 
+  /* ── Tailwind 原生色槽 → 语义令牌重定向（L0，2026-10-01）──────────
+     101 处组件写着 `text-red-400` / `bg-emerald-500` 这类 Tailwind
+     原生色阶类，它们不跟随强调色 —— L1 的"强调色可选"对这些组件会
+     是半吊子的。这里把**实际在用的 21 个色槽**重定向到语义 token：
+     组件里的类名一行不改，自动跟随主题与强调色。
+     放在 @theme 内而非别名层是必需的 —— Tailwind v4 只从 @theme
+     生成工具类，别名层（:root）里的定义不会产生任何 .text-red-400
+     规则（已实测：工具类不生成，重定向落空）。
+
+     shade → alpha：Tailwind 数字越大越浓。同族内不同 shade 在本项目
+     承载**真实的视觉层次**（AnalyticsView 的 `red-300` 是标题、
+     `red-200` 是次要说明），全部塌成同一 token 会让层次消失，故按
+     shade 映射到不同 alpha 保留浓淡。zinc 是中性色阶，映射到文本灰阶
+     而非 alpha 混合。
+
+     只声明实际在用的槽：把整条色阶都重定向，会让将来误用一个未声明
+     的 shade 时静默解析成无关颜色。
+
+     这些槽进 CONTRACT（每套主题须声明）是有意为之——主题各自把
+     它们指向本主题的 error/success/warning，联动才正确。 */
+  --color-red-200:      color-mix(in srgb, var(--color-error) 65%, transparent);
+  --color-red-300:      color-mix(in srgb, var(--color-error) 82%, transparent);
+  --color-red-400:      var(--color-error);
+  --color-red-500:      var(--color-error);
+  --color-rose-200:     color-mix(in srgb, var(--color-error) 65%, transparent);
+  --color-rose-300:     color-mix(in srgb, var(--color-error) 82%, transparent);
+  --color-rose-500:     var(--color-error);
+
+  --color-amber-200:    color-mix(in srgb, var(--color-warning) 65%, transparent);
+  --color-amber-300:    color-mix(in srgb, var(--color-warning) 82%, transparent);
+  --color-amber-400:    var(--color-warning);
+  --color-amber-500:    var(--color-warning);
+  --color-yellow-400:   var(--color-warning);
+
+  --color-green-400:    var(--color-success);
+  --color-green-500:    var(--color-success);
+  --color-emerald-200:  color-mix(in srgb, var(--color-success) 65%, transparent);
+  --color-emerald-300:  color-mix(in srgb, var(--color-success) 82%, transparent);
+  --color-emerald-400:  var(--color-success);
+  --color-emerald-500:  var(--color-success);
+
+  --color-zinc-300:     var(--color-text-tertiary);
+  --color-zinc-400:     var(--color-text-faint);
+  --color-zinc-500:     var(--color-text-secondary);
+
   /* Status chips（Composer 会话状态胶囊） */
   /* 2026-09-30：三个 chip 全部并进松墨绿系（此前 model 是苹果蓝、
      permission 是土黄 —— 强调色统一后它们成了杂色）。 */

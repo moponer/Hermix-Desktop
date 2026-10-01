@@ -48,6 +48,30 @@ pub enum ApprovalOutcome {
     ChannelClosed,
 }
 
+/// What to do with a Dangerous tool call when the caller wired **no**
+/// approval channel (no approval requester / event sink).
+///
+/// This used to be a silent `Allow` fallback inside the pre-dispatch
+/// gate. That made every caller without a socket — including the
+/// network-reachable non-streaming HTTP route and the raw-text WS
+/// branch — run `terminal` / CUA / `storage_clean` with no user
+/// prompt. Callers now pass this explicitly so the exposure decision
+/// is reviewable at each call site instead of being an implicit
+/// property of "did you wire a socket".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalFallback {
+    /// Deny the call. The safe default: use on any path a remote peer
+    /// can reach. The caller cannot ask a human, so refusing and
+    /// handing the LLM a machine-readable reason is correct.
+    #[default]
+    Deny,
+    /// Allow the call. Only valid when the caller has no remote attack
+    /// surface for this decision to be abused through — a local
+    /// interactive stdio session, or a unit test.
+    Allow,
+}
+
 impl ApprovalOutcome {
     /// Lightweight classifier used by the agent to decide whether to
     /// force a structured denial system note into the conversation

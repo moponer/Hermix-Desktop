@@ -266,7 +266,7 @@ export function CustomAppsView({ onStartCreateApp }: { onStartCreateApp?: () => 
       {deleteTarget && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center"
-          style={{ background: "rgba(0,0,0,0.5)" }}
+          style={{ background: "var(--color-overlay-scrim)" }}
           onClick={cancelDelete}
           role="dialog"
           aria-modal="true"

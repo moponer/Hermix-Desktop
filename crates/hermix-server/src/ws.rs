@@ -82,10 +82,21 @@ fn next_envelope_seq(state: &crate::state::HttpServerState) -> u64 {
     state.seq.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
 }
 
+/// Non-streaming request-reply handler.
+///
+/// approval_fallback is passed in rather than hardcoded because this
+/// function serves transports with different exposure:
+///
+/// - stdio channel (stdio_session.rs, the only caller) is a local
+///   process pipe: the operator already has shell access on the host,
+///   so a Dangerous tool call is not a privilege escalation -> Allow.
+/// - The LAN-reachable non-streaming HTTP route lives in routes.rs
+///   and declares Deny on its own override.
 pub(crate) async fn handle_ws(
     transport: impl Transport,
     state: HttpServerState,
     session_id: String,
+    approval_fallback: hermix_core::approval::ApprovalFallback,
 ) {
     let (mut sink, mut source) = transport.split();
     let _ = sink
@@ -139,6 +150,12 @@ pub(crate) async fn handle_ws(
             approval_requester: None,
             on_event: None,
             pre_approval_checker: None,
+            // This is the local stdio pipe (see stdio_session.rs, the
+            // only caller). It has no remote attack surface for an
+            // approval decision, so Dangerous tools proceed. The
+            // LAN-reachable non-streaming path is routes.rs, which
+            // declares Deny.
+            approval_fallback: Some(approval_fallback),
             on_prefetch_intent: None,
             // type-B: see sibling `/api/sessions/.../messages`
             // initializer; no WS → no shutdown token → falls back to
@@ -909,6 +926,10 @@ pub(crate) async fn handle_ws_stream_send(
                 }
             }))
         },
+        // This path wires the approval registry above, so Dangerous tools
+        // are always routed to a real card. The fallback is only consulted
+        // if a future refactor drops the requester, so fail closed.
+        approval_fallback: Some(hermix_core::approval::ApprovalFallback::Deny),
         on_prefetch_intent: {
             let tx = tx.clone();
             let trace = trace_id.to_string();

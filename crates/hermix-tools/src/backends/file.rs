@@ -354,6 +354,7 @@ impl PatchBackend for LocalPatchBackend {
         old_string: &str,
         new_string: &str,
         replace_all: bool,
+        allow_fuzzy: bool,
     ) -> Result<String, ToolError> {
         let content = tokio::fs::read_to_string(path)
             .await
@@ -392,7 +393,54 @@ impl PatchBackend for LocalPatchBackend {
             return Ok(json!({"status": "ok", "replacements": count}).to_string());
         }
 
-        // Single replacement with fuzzy matching
+        // Single replacement.
+        //
+        // H2 correctness contract (mirrors dsh `edit`): a literal match
+        // must be UNIQUE unless the caller opted into `replace_all` or
+        // `allow_fuzzy`. The old code ran an 8-strategy fuzzy chain
+        // whenever the literal missed, so a one-character difference in
+        // whitespace/indentation could land the edit on a *different*
+        // occurrence of the same shape — silently corrupting the file
+        // with no error anywhere.
+        //
+        // Order matters: exact first, and if that is ambiguous we stop
+        // rather than guessing. Fuzzy is only reachable when the caller
+        // explicitly asked for it.
+        let literal_hits = content.matches(old_string).count();
+        if literal_hits > 1 {
+            return Err(ToolError::ExecutionFailed(format!(
+                "Found {literal_hits} occurrences of the given text in '{path}'. \
+                 The edit is ambiguous — patch would be applied to an arbitrary one. \
+                 Include more surrounding context to make it unique, or pass \
+                 replace_all: true to change all of them."
+            )));
+        }
+
+        if literal_hits == 1 {
+            let pos = content.find(old_string).expect("literal_hits == 1");
+            let new_content = format!(
+                "{}{}{}",
+                &content[..pos],
+                new_string,
+                &content[pos + old_string.len()..]
+            );
+            tokio::fs::write(path, &new_content).await.map_err(|e| {
+                ToolError::ExecutionFailed(format!("Failed to write '{}': {}", path, e))
+            })?;
+            return Ok(json!({"status": "ok", "replacements": 1, "match": "literal"}).to_string());
+        }
+
+        // No literal hit. Fuzzy fallback only on explicit opt-in.
+        if !allow_fuzzy {
+            return Err(ToolError::ExecutionFailed(format!(
+                "Could not find the given text verbatim in '{path}'. \
+                 The file was NOT modified. [don't blindly retry] \
+                 Re-read the file to get the exact current text (whitespace and \
+                 indentation must match exactly), or pass allow_fuzzy: true to \
+                 accept whitespace/indentation-tolerant matching."
+            )));
+        }
+
         match Self::fuzzy_find(&content, old_string) {
             Some((start, end)) => {
                 let mut new_content = String::with_capacity(content.len());
@@ -404,10 +452,11 @@ impl PatchBackend for LocalPatchBackend {
                     ToolError::ExecutionFailed(format!("Failed to write '{}': {}", path, e))
                 })?;
 
-                Ok(json!({"status": "ok", "replacements": 1}).to_string())
+                Ok(json!({"status": "ok", "replacements": 1, "match": "fuzzy"}).to_string())
             }
             None => Err(ToolError::ExecutionFailed(format!(
-                "Could not find a match for the specified text in '{}'",
+                "Could not find a match for the specified text in '{}' \
+                 (even with allow_fuzzy: true)",
                 path
             ))),
         }
@@ -423,6 +472,7 @@ impl PatchBackend for LocalPatchBackend {
         &self,
         path: &str,
         edits: &[(String, String, bool)],
+        allow_fuzzy: bool,
     ) -> Result<String, ToolError> {
         // Read the file once.
         let mut content = tokio::fs::read_to_string(path)
@@ -523,6 +573,7 @@ impl SearchBackend for LocalSearchBackend {
         path: &str,
         file_glob: Option<&str>,
         max_results: Option<usize>,
+        context: usize,
     ) -> Result<String, ToolError> {
         let re = Regex::new(pattern)
             .map_err(|e| ToolError::InvalidParams(format!("Invalid regex pattern: {}", e)))?;
@@ -538,7 +589,7 @@ impl SearchBackend for LocalSearchBackend {
             )));
         }
 
-        Self::search_dir_content(&re, path, file_glob, max, &mut results).await;
+        Self::search_dir_content(&re, path, file_glob, max, context, &mut results).await;
 
         Ok(json!({
             "matches": results,
@@ -578,9 +629,10 @@ impl LocalSearchBackend {
         dir: &std::path::Path,
         file_glob: Option<&str>,
         max: usize,
+        context: usize,
         results: &mut Vec<Value>,
     ) {
-        Self::search_dir_content_depth(re, dir, file_glob, max, results, 0).await;
+        Self::search_dir_content_depth(re, dir, file_glob, max, context, results, 0).await;
     }
 
     async fn search_dir_content_depth(
@@ -588,6 +640,7 @@ impl LocalSearchBackend {
         dir: &std::path::Path,
         file_glob: Option<&str>,
         max: usize,
+        context: usize,
         results: &mut Vec<Value>,
         depth: u32,
     ) {
@@ -623,6 +676,7 @@ impl LocalSearchBackend {
                     &path,
                     file_glob,
                     max,
+                    context,
                     results,
                     depth + 1,
                 ))
@@ -637,17 +691,42 @@ impl LocalSearchBackend {
 
                 // Try to read as text
                 if let Ok(content) = tokio::fs::read_to_string(&path).await {
-                    for (line_num, line) in content.lines().enumerate() {
+                    let lines: Vec<&str> = content.lines().collect();
+                    let file = path.display().to_string();
+                    let mut i = 0usize;
+                    while i < lines.len() {
                         if results.len() >= max {
                             break;
                         }
-                        if re.is_match(line) {
-                            results.push(json!({
-                                "file": path.display().to_string(),
-                                "line": line_num + 1,
-                                "content": line.chars().take(500).collect::<String>(),
-                            }));
+                        if !re.is_match(lines[i]) {
+                            i += 1;
+                            continue;
                         }
+                        // H5: emit the matched line plus up to
+                        // `context` lines either side, so the model can
+                        // judge the match without a second read_file
+                        // round-trip. Line numbers are 1-based.
+                        let start = i.saturating_sub(context);
+                        let end = (i + context + 1).min(lines.len());
+                        let mut block = String::new();
+                        for (k, l) in lines[start..end].iter().enumerate() {
+                            if k > 0 {
+                                block.push('\n');
+                            }
+                            block.push_str(&format!(
+                                "{}: {}",
+                                start + k + 1,
+                                l.chars().take(500).collect::<String>()
+                            ));
+                        }
+                        results.push(json!({
+                            "file": file,
+                            "line": i + 1,
+                            "content": block,
+                        }));
+                        // Skip past the emitted context so overlapping
+                        // blocks do not spam the result set.
+                        i = end;
                     }
                 }
             }
@@ -711,5 +790,135 @@ impl LocalSearchBackend {
         Regex::new(&format!("^{}$", re_pattern))
             .map(|re| re.is_match(name))
             .unwrap_or(false)
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_tmp(name: &str, body: &str) -> (tempfile::TempDir, String) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join(name);
+        std::fs::write(&path, body).unwrap();
+        let s = path.to_string_lossy().to_string();
+        (dir, s)
+    }
+
+    // ---- H2 behaviour contract: patch uniqueness --------------------
+    //
+    // The old code ran an 8-strategy fuzzy chain whenever the literal
+    // missed, so a one-space difference could silently rewrite a
+    // DIFFERENT occurrence of the same shape. These pin the corrected
+    // contract: literal-only by default, ambiguity is an error, and
+    // fuzzy is opt-in.
+
+    #[tokio::test]
+    async fn patch_applies_a_unique_literal_match() {
+        let (_d, path) = write_tmp("u.txt", "alpha\nbeta\ngamma\n");
+        let out = LocalPatchBackend::new()
+            .patch_file(&path, "beta", "BETA", false, false)
+            .await
+            .unwrap();
+        assert!(out.contains("\"match\":\"literal\""), "got: {out}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "alpha\nBETA\ngamma\n");
+    }
+
+    #[tokio::test]
+    async fn patch_refuses_ambiguous_literal_instead_of_guessing() {
+        // Two identical lines: patching "x" could hit either. The old
+        // code picked the first silently.
+        let (_d, path) = write_tmp("a.txt", "x\nkeep\nx\n");
+        let err = LocalPatchBackend::new()
+            .patch_file(&path, "x", "y", false, false)
+            .await
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("ambiguous") || msg.contains("occurrences"), "got: {msg}");
+        // Critically: the file must be untouched.
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "x\nkeep\nx\n",
+            "an ambiguous patch must not modify the file"
+        );
+    }
+
+    #[tokio::test]
+    async fn patch_without_literal_and_without_fuzzy_does_not_modify() {
+        // A whitespace-only difference used to be silently rescued by the
+        // fuzzy chain — possibly onto the wrong line. It must now refuse.
+        // NB: the needle must differ from the file in a way that is NOT
+        // a substring, otherwise it IS a literal hit.
+        let (_d, path) = write_tmp("w.txt", "fn main() {\n\tbody();\n}\n");
+        let original = std::fs::read_to_string(&path).unwrap();
+        let err = LocalPatchBackend::new()
+            .patch_file(&path, "  body();\n", "    body();\n", false, false)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("verbatim"), "got: {err}");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            original,
+            "a refused patch must leave the file alone"
+        );
+    }
+
+    #[tokio::test]
+    async fn patch_fuzzy_is_reachable_on_explicit_opt_in() {
+        let (_d, path) = write_tmp("f.txt", "fn main() {\n\tbody();\n}\n");
+        LocalPatchBackend::new()
+            .patch_file(&path, "  body();\n", "    body();\n", false, true)
+            .await
+            .expect("allow_fuzzy: true must reach the fuzzy chain");
+        assert!(std::fs::read_to_string(&path).unwrap().contains("    body();"));
+    }
+
+    #[tokio::test]
+    async fn patch_replace_all_still_works_without_fuzzy() {
+        let (_d, path) = write_tmp("r.txt", "x\ny\nx\n");
+        LocalPatchBackend::new()
+            .patch_file(&path, "x", "z", true, false)
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "z\ny\nz\n");
+    }
+
+    // ---- H5 behaviour contract: search context lines ----------------
+    //
+    // Before this, search_files returned only the matched line, so the
+    // model had to issue a second read_file to judge whether a hit was
+    // relevant. `context` is grep's -C.
+
+    #[tokio::test]
+    async fn search_context_includes_surrounding_lines() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("a.txt"),
+            "one\ntwo\nNEEDLE\nfour\nfive\n",
+        )
+        .unwrap();
+        let out = LocalSearchBackend::new()
+            .search_content("NEEDLE", dir.path().to_str().unwrap(), None, Some(10), 2)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let content = v["matches"][0]["content"].as_str().unwrap();
+        // context=2 around line 3 → lines 1..5, each prefixed with its
+        // 1-based line number so the model can cite it.
+        assert_eq!(content, "1: one\n2: two\n3: NEEDLE\n4: four\n5: five", "got: {content}");
+    }
+
+    #[tokio::test]
+    async fn search_context_zero_keeps_matched_line_only() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(dir.path().join("b.txt"), "alpha\nNEEDLE\nomega\n").unwrap();
+        let out = LocalSearchBackend::new()
+            .search_content("NEEDLE", dir.path().to_str().unwrap(), None, Some(10), 0)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let content = v["matches"][0]["content"].as_str().unwrap();
+        // context=0 adds no neighbours, but the line number prefix stays
+        // (it is what lets the model cite the hit precisely).
+        assert_eq!(content, "2: NEEDLE", "got: {content}");
     }
 }

@@ -928,20 +928,20 @@ fn build_stable_layer(
     builder = builder.with_block(
         r#"## 临时文件自清理 (Temp File Hygiene)
 任何由本会话创建、且非用户原始输入的文件，都视作"临时文件"——除非用户在请求里明确说"保留/不要删"，否则必须在本任务收尾时清理：
-1. 写入位置仅限以下三类（其它位置必须先问用户）：
+1. **临时文件一律写到 `%TEMP%\hermix-scratch\`（即 `<系统临时目录>\hermix-scratch\`）**，不要写到 %TEMP% 的其它散落位置。该目录由程序定义，专门用于一次性产物；清理它**不会弹审批卡**，收尾时请直接调用 `storage_clean` 删除，**不要问用户"要不要删"**——问一次就是一次多余的往返。
+2. 其它可接受位置（会弹审批卡，写之前先想清楚值不值）：
    - `target/` / `node_modules/` / `.git/` 下（构建/版本目录，会被 git/build 自动忽略）
-   - 系统临时目录（`$TMPDIR` / `std::env::temp_dir()` / `%TEMP%`）
-   - 任务沙箱根目录下的 `.scratch/` 子目录（任务结束整目录删）
-2. 不允许把临时文件写到：
+3. 不允许把临时文件写到：
    - 用户家目录根 (`~/`、`C:\Users\<user>\`)
    - 项目根目录（与用户源文件混在一起）
    - 任何 dotfile（`.bashrc` / `.zshrc` / `.profile` / `Cargo.toml` 等配置）
-3. 收尾顺序（与 Operating Principles 第 7 步"收尾总结"合并执行）：
+4. **创建临时文件时，在回复里用一句话声明**："已在 hermix-scratch 下建了 X（用途），任务结束会清理。" 这样用户看得见你在写什么、也预期它会消失。
+5. 收尾顺序（与 Operating Principles 第 7 步"收尾总结"合并执行）：
    a. 验证结论已写入 progress 段
-   b. 删除本任务产生的所有临时文件/目录
+   b. 删除本任务产生的所有临时文件/目录（scratch 目录内的直接删，无需征询）
    c. 在 daily_memory 的 conclusions 段末尾追加一句「临时文件：已清理 N 个（M 个保留）」，让用户知道清扫结果
    d. 若发现需要保留的文件（用户指定或产物类），用 `file_change` 事件或 final message 明确告知用户路径
-   反面案例：写 `/tmp/probe.py` 验证后不删、写项目根 `test_output.txt`、在 `~/` 下创建 `notes.md`。这些都是污染行为。"#,
+   反面案例：写 `/tmp/probe.py` 验证后不删、写 `%TEMP%\probe.py`（散落在 hermix-scratch 之外，收尾时要额外弹审批）、在 `~/` 下创建 `notes.md`。这些都是污染行为。"#,
     );
 
     // 自定义应用开发闭环纪律: validate+patch 外科手术式修复, 禁止整篇重写/整篇读入上下文.
