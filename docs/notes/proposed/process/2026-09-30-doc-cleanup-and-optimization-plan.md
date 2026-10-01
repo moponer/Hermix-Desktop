@@ -187,6 +187,13 @@ K 与 H 是同一件事的拆分：H 是差距分析（本文 §批次 H），K 
 3. **CSS 层 34 处 `[data-theme]` 字面覆盖块**（components-*.css，EXCEPTIONS.md 已登记）→ 能映射四色组的迁 token，不能的逐条编号留档
 完成定义：`node scripts/check-theme-tokens.mjs` 全绿 + palette-debt 收紧为硬门禁 + EXCEPTIONS.md 只剩 E1-E8 合法例外。**此步不做，L1 的强调色切换就是半吊子**（切换后 109 处组件不变色）。
 
+**L1 方针定稿（2026-10-01，审核 agent 拍板）：路线 A 分层 token，范围 = token 层 + useTheme 注入 + 深浅色校准，UI 归 L3.5**
+- **路线 A（已采纳）**：`--color-accent-base` 归主题层（dark.css/light.css 各自提供），`--color-accent` 仅在 base.css 使用层以 `var(--color-accent-base)` 供给；用户选色时 useTheme 在 **React mount 前**注入 `--color-accent`（防首帧闪色），不选色时不注入。主工作区已有半实现（tokens.css/base.css/dark.css 未提交改动），在其上完成而非重来。
+- **路线 B（否决）**：@theme 是 L0 刚建立的契约层（check-theme-tokens 从它派生 CONTRACT 85→106），把"运行时派生"混进契约层会模糊 check 1 的语义，且多一层间接无收益。
+- **accent 家族派生规则**（执行必读）：`--color-accent-hover/soft/soft-strong` 从 @theme 静态值改为 **base.css 使用层 color-mix 派生**（`color-mix(in srgb, var(--color-accent) 88%, ...)`），否则用户注入 accent 后 hover/soft 仍是主题静态值（青 accent 配绿 hover = 破相）。`--color-on-accent` 无法 color-mix 派生（需按明度选择深/浅文字），**强调色必须是策展清单**（对齐 ZCode 下拉：绿/青/蓝/紫…，不做自由取色器），每个条目预计算 on-accent，注入时写 `--color-accent` + `--color-on-accent` 两个变量，其余全靠 CSS 派生级联。
+- **范围确认**：本批 = 上述 token 重构 + useTheme 注入能力（localStorage 放值即生效，手动可验）+ 顺手做深浅色校准（#171717/#EDEDED，30 分钟，同在 token 层）。UI（设置页选色行）→ **L3.5**，依赖 L3.1/L3.2 的 Switch/SettingsRow 基础件，届时只写 localStorage 键。
+- **验收**：`check-theme-tokens.mjs` 全绿（accent-hover/soft 移出 @theme 后 CONTRACT 相应收缩，各主题 css 同步停止声明它们，防 check 1 报缺失）；手动验证三态：不注入=主题默认色、注入绿=全站联动（含 hover/soft）、注入青=同上；`pnpm tsc --noEmit` 全绿。
+
 **L1 设计 token 对齐（截图提取的确定值）**
 - 深色：前景 `#EDEDED`、背景 `#171717`、选中/强调 = 绿色（开关 on 色）、页面标题 14px semibold、节标题（模式/应用/文件…）14px、设置项标题 14px regular、描述 12px 次级灰、卡片分组圆角 ~12px、开关 on 绿 `#34C759` 系
 - 浅色：前景 `#171717`、背景 `#FFFFFF`、强调色青/绿可选（强调色下拉：绿色/青色…，即**强调色可选主题化**）
