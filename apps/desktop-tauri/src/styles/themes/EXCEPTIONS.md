@@ -25,18 +25,38 @@
 > E9–E16 是 [check-theme-tokens.mjs](../../../../../../../../scripts/check-theme-tokens.mjs) 抓到的历史债项。
 > 评审时机：每次处理"主题体系"或"组件清理"PR 时优先消化。
 
-## 已登记债项（仅告警，不阻断）
+## 已消化债项（L0，2026-10-01）
 
-### Tailwind 原生调色板类（已登记债项 → 待迁移到语义令牌）
+### Tailwind 原生调色板类 — 已清偿
 
-`scripts/check-theme-tokens.mjs` 的 `[palette-debt]` 当前为 WARN_ONLY 模式。目标状态：
-每处 `text-red-400` / `bg-emerald-500` / `border-amber-700` 等 Tailwind
-原生调色板类，最终都要替换为对应语义令牌（如 `--color-error` /
-`--color-success-soft` / `--color-warning` 等），或在 `@theme` 中以
-`--color-red-400: var(--color-error)` 形式重定向该语义槽。
+**状态：已清偿，门禁已收紧。**
 
-完成迁移后把脚本里的 `palette-debt` 输出段切换为 `process.exit(1)`
-（当前为 `console.warn` 不退出），开启强约束。
+101 处 `text-red-400` / `bg-emerald-500` / `border-amber-700` 等原生色阶类
+**一行未改**，而是在 `tokens.css` 的 `@theme` 内把**实际在用的 21 个色槽**
+重定向到语义令牌（`--color-error` / `--color-warning` / `--color-success` /
+文本灰阶）。组件里的类名照旧，解析后跟随主题与强调色。
+
+用到的 21 槽（按色相族）：
+
+| 族 | 槽 | 指向 |
+|---|---|---|
+| error | `red-200/300/400/500`、`rose-200/300/500` | `--color-error`（200/300 按 shade 降 alpha 保留浓淡层次） |
+| warning | `amber-200/300/400/500`、`yellow-400` | `--color-warning`（同上） |
+| success | `green-400/500`、`emerald-200/300/400/500` | `--color-success`（同上） |
+| neutral | `zinc-300/400/500` | `--color-text-tertiary` / `-faint` / `-secondary` |
+
+同族不同 shade 在本项目承载**真实的视觉层次**（如 AnalyticsView 的
+`red-300` 是标题、`red-200` 是次要说明），所以按 shade 映射到不同
+alpha，而不是全部塌成同一个 token。
+
+**必须放在 `@theme` 内**（已实测）：Tailwind v4 只从 `@theme` 生成工具类，
+放在别名层（`:root`）里 `.text-red-400` 规则**根本不会生成**，重定向
+会静默落空。
+
+**门禁已收紧**：`check-theme-tokens.mjs` 的 `[palette-debt]` 从 WARN 改为
+阻断，且语义变成"**未登记的色阶类才拦**"——在用的 21 槽是合法的，
+新增一个 `text-sky-500` 这类未在 `@theme` 声明的会直接让 CI 变红。
+扩展槽位需同时改三处：`tokens.css @theme`、各主题 css、`PALETTE_ALIASES`。
 
 ### components.css / components-prose.css 中残留的 `[data-theme]` 字面色覆盖块
 
