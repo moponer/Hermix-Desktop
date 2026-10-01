@@ -772,6 +772,15 @@ async fn execute_command_sandboxed(
 }
 
 #[cfg(test)]
+// The three sandbox tests below hold `SANDBOX_ENV_LOCK` across `.await`
+// on purpose: `HERMIX_SANDBOX_MODE` is process-global, so dropping the
+// guard before the command runs would let a parallel test overwrite it
+// and make the routing assertions flap. The lint's deadlock argument (an
+// owning thread parks and can never release) does not apply — these are
+// `#[tokio::test]`s whose guard is released when the test ends. The lint
+// fires at the *call sites*, so the allow has to live on the module, not
+// on `set_sandbox_env`.
+#[allow(clippy::await_holding_lock)]
 mod tests {
     use super::*;
 

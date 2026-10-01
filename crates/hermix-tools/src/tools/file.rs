@@ -79,7 +79,12 @@ pub fn register(
         Arc::new(|| true),
         vec![],
         true,
-        "Apply targeted find-and-replace edits to a file using fuzzy matching. Minor whitespace/indentation differences won't break matching.",
+        "Apply targeted find-and-replace edits to a file. The old_string must match \
+         the file EXACTLY and appear exactly once, so an edit can never land on the \
+         wrong occurrence. If the text is not found, re-read the file (whitespace and \
+         indentation must match exactly) — or set allow_fuzzy: true to accept \
+         whitespace/indentation-tolerant matching at the risk of hitting the wrong spot. \
+         For a full-file rewrite use write_file; to only inspect content use read_file.",
         "🩹",
         None,
         RiskLevel::Caution,
@@ -175,6 +180,37 @@ pub fn to_absolute_path(path: &str) -> String {
 // ReadFileHandler
 // ---------------------------------------------------------------------------
 
+/// Total number of lines in `text` (an empty string is 0 lines).
+fn count_lines(text: &str) -> u64 {
+    text.lines().count() as u64
+}
+
+/// Line-level pagination, 1-based `offset` (matching `TerminalBackend`
+/// semantics and what the schema description tells the model).
+///
+/// `offset = Some(1)` is the first line. `limit = None` means "to the
+/// end". Out-of-range offsets yield an empty string rather than an
+/// error — asking past the end of a file is a normal model move, and an
+/// error there just wastes a turn.
+fn slice_lines(text: &str, offset: Option<u64>, limit: Option<u64>) -> String {
+    let start = offset.unwrap_or(1).max(1);
+    let start_idx = (start - 1) as usize;
+    let mut out = String::new();
+    for (i, line) in text.lines().enumerate() {
+        if i < start_idx {
+            continue;
+        }
+        if let Some(n) = limit {
+            if (i - start_idx) as u64 >= n {
+                break;
+            }
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
 /// Tool for reading file contents via the terminal backend.
 pub struct ReadFileHandler {
     backend: Arc<dyn TerminalBackend>,
@@ -205,18 +241,16 @@ impl ToolHandler for ReadFileHandler {
         let offset = params.get("offset").and_then(|v| v.as_u64());
         let limit = params.get("limit").and_then(|v| v.as_u64());
 
-        // 接缝路径：只接受整文件读取；offset/limit 留给上层切片。
-        // 用户配 Fs 但又传 offset/limit 时报错——避免行为分裂。
+        // Fs seam: read the whole file, then apply line-level
+        // offset/limit ourselves.
+        //
+        // This used to REJECT offset/limit outright while the truncation
+        // hint below told the model to "Use offset/limit to read further
+        // chunks" — self-contradictory: follow the hint and the call
+        // errors. Slicing here keeps the promise honest on both paths.
         let content = if let Some(fs) = &self.fs {
-            if offset.is_some() || limit.is_some() {
-                return Err(ToolError::InvalidParams(
-                    "read_file on the Fs seam does not accept offset/limit; \
-                     the caller must slice the result."
-                        .into(),
-                ));
-            }
-            match fs.read(Path::new(path)).await {
-                Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+            let bytes = match fs.read(Path::new(path)).await {
+                Ok(bytes) => bytes,
                 Err(FsError::NotFound(p)) => {
                     return Err(ToolError::from_message(format!("file not found: {}", p.display())));
                 }
@@ -226,6 +260,11 @@ impl ToolHandler for ReadFileHandler {
                 Err(FsError::Io(e)) => {
                     return Err(ToolError::from_message(e));
                 }
+            };
+            let full = String::from_utf8_lossy(&bytes).into_owned();
+            match (offset, limit) {
+                (None, None) => full,
+                _ => slice_lines(&full, offset, limit),
             }
         } else {
             self.backend
@@ -244,18 +283,28 @@ impl ToolHandler for ReadFileHandler {
         let mut body = String::with_capacity(MAX_OUTPUT_CHARS.min(content.len()));
         let mut chars_read = 0usize;
         let mut overflow = false;
+        // While paging we know the line count, so report the next
+        // readable line instead of leaving the model to guess.
+        let mut next_offset: Option<u64> = None;
         for ch in content.chars() {
             if chars_read >= MAX_OUTPUT_CHARS {
                 overflow = true;
+                next_offset = Some(count_lines(&content));
                 break;
             }
             body.push(ch);
             chars_read += 1;
         }
         if overflow {
-            body.push_str(&format!(
-                "\n\n[truncated: file exceeds {MAX_OUTPUT_CHARS} chars, showing the first {MAX_OUTPUT_CHARS}. Use offset/limit to read further chunks]"
-            ));
+            let hint = match next_offset {
+                Some(n) => format!(
+                    "\n\n[truncated: output exceeds {MAX_OUTPUT_CHARS} chars. Continue reading with offset={n} (1-based line number)]"
+                ),
+                None => format!(
+                    "\n\n[truncated: output exceeds {MAX_OUTPUT_CHARS} chars]"
+                ),
+            };
+            body.push_str(&hint);
         }
 
         // Prefix the content with an absolute-path header so the LLM
@@ -398,13 +447,19 @@ impl ToolHandler for WriteFileHandler {
 /// Backend trait for file patching operations.
 #[async_trait]
 pub trait PatchBackend: Send + Sync {
-    /// Apply a single patch to a file using fuzzy matching.
+    /// Apply a single patch to a file.
+    ///
+    /// H2: matching is LITERAL and must be unique unless the caller
+    /// opts out. The 8-strategy fuzzy chain is only reachable via
+    /// `allow_fuzzy`, because silently landing an edit on a different
+    /// occurrence corrupts the file with no error surfacing.
     async fn patch_file(
         &self,
         path: &str,
         old_string: &str,
         new_string: &str,
         replace_all: bool,
+        allow_fuzzy: bool,
     ) -> Result<String, ToolError>;
 
     /// Apply multiple patches to the same file atomically (read once,
@@ -419,10 +474,11 @@ pub trait PatchBackend: Send + Sync {
         &self,
         path: &str,
         edits: &[(String, String, bool)],
+        allow_fuzzy: bool,
     ) -> Result<String, ToolError> {
         let mut results = Vec::new();
         for (i, (old, new, replace_all)) in edits.iter().enumerate() {
-            let r = self.patch_file(path, old, new, *replace_all).await?;
+            let r = self.patch_file(path, old, new, *replace_all, allow_fuzzy).await?;
             results.push(json!({"edit": i + 1, "result": r}));
         }
         Ok(json!({"status": "ok", "edits_applied": edits.len(), "details": results}).to_string())
@@ -459,6 +515,10 @@ impl ToolHandler for PatchHandler {
             .unwrap_or("");
 
         let replace_all = crate::param_coercion::bool_param(&params, "replace_all", false);
+        // H2: fuzzy matching is opt-in. Whitespace/indentation-tolerant
+        // matching can land the edit on a DIFFERENT occurrence of the
+        // same shape, corrupting the file silently.
+        let allow_fuzzy = crate::param_coercion::bool_param(&params, "allow_fuzzy", false);
 
         // MultiEdit path: when `edits` array is present, apply multiple
         // find-and-replace operations to the same file in one call.
@@ -504,11 +564,11 @@ impl ToolHandler for PatchHandler {
                 edits.push((old.to_string(), new.to_string(), ra));
             }
 
-            return self.backend.patch_file_multi(path, &edits).await;
+            return self.backend.patch_file_multi(path, &edits, allow_fuzzy).await;
         }
 
         self.backend
-            .patch_file(path, old_string, new_string, replace_all)
+            .patch_file(path, old_string, new_string, replace_all, allow_fuzzy)
             .await
     }
 
@@ -538,6 +598,11 @@ impl ToolHandler for PatchHandler {
         props.insert("replace_all".into(), json!({
             "type": "boolean",
             "description": "Replace all occurrences instead of requiring a unique match (default: false)",
+            "default": false
+        }));
+        props.insert("allow_fuzzy".into(), json!({
+            "type": "boolean",
+            "description": "Opt in to whitespace/indentation-tolerant matching. OFF by default: fuzzy matching can land the edit on a DIFFERENT occurrence of the same shape and corrupt the file silently. Prefer re-reading the file and matching exactly.",
             "default": false
         }));
         props.insert("edits".into(), json!({
@@ -1369,13 +1434,73 @@ mod tests {
         assert!(result.contains("hello seam"), "got: {result}");
     }
 
+    // ---- H1 behaviour contract: read_file pagination ---------------
+    //
+    // The Fs seam used to REJECT offset/limit while the truncation hint
+    // told the model "Use offset/limit to read further chunks". Following
+    // the hint guaranteed an error. These pin the corrected contract.
+
     #[tokio::test]
-    async fn read_file_seam_rejects_offset_limit() {
+    async fn read_file_seam_accepts_offset_limit() {
         let fs: Arc<dyn Fs> = Arc::new(hermix_core::InMemoryFs::default());
+        fs.write(Path::new("/x"), b"l1\nl2\nl3\nl4\nl5\n")
+            .await
+            .unwrap();
         let handler = ReadFileHandler::new(Arc::new(MockBackend), Some(fs));
-        let err = handler.execute(json!({"path": "/x", "offset": 1})).await.unwrap_err();
-        let msg = err.to_string();
-        assert!(msg.contains("does not accept offset/limit"), "got: {msg}");
+
+        let out = handler
+            .execute(json!({"path": "/x", "offset": 2, "limit": 2}))
+            .await
+            .unwrap();
+
+        assert!(out.contains("l2"), "offset=2 must start at line 2: {out}");
+        assert!(out.contains("l3"), "limit=2 must include line 3: {out}");
+        assert!(!out.contains("l1"), "earlier lines must be skipped: {out}");
+        assert!(!out.contains("l4"), "limit must stop at N lines: {out}");
+    }
+
+    #[tokio::test]
+    async fn read_file_seam_offset_past_end_is_empty_not_error() {
+        let fs: Arc<dyn Fs> = Arc::new(hermix_core::InMemoryFs::default());
+        fs.write(Path::new("/x"), b"l1\nl2\n").await.unwrap();
+        let handler = ReadFileHandler::new(Arc::new(MockBackend), Some(fs));
+        // Asking past the end is a normal model move; erroring there just
+        // burns a turn.
+        let out = handler
+            .execute(json!({"path": "/x", "offset": 99}))
+            .await
+            .unwrap();
+        assert!(!out.contains("l1"), "{out}");
+        assert!(!out.contains("l2"), "{out}");
+    }
+
+    #[test]
+    fn slice_lines_paginates_one_based() {
+        let text = "l1\nl2\nl3\nl4\nl5";
+        assert_eq!(slice_lines(text, Some(1), Some(2)), "l1\nl2\n");
+        assert_eq!(slice_lines(text, Some(3), Some(2)), "l3\nl4\n");
+        assert_eq!(slice_lines(text, Some(4), None), "l4\nl5\n");
+    }
+
+    #[test]
+    fn slice_lines_clamps_offset_zero() {
+        // offset 0 must not underflow into a huge index.
+        assert_eq!(slice_lines("l1\nl2", Some(0), Some(1)), "l1\n");
+    }
+
+    #[test]
+    fn count_lines_agrees_with_slice_extent() {
+        // The truncation hint tells the model to resume at the line
+        // after what it has seen; that number must be exact, or the
+        // resume silently skips or repeats content.
+        let text = "a\nb\nc\nd";
+        assert_eq!(count_lines(text), 4);
+        let first_two = slice_lines(text, Some(1), Some(2));
+        assert_eq!(count_lines(&first_two), 2);
+        assert_eq!(
+            slice_lines(text, Some(count_lines(&first_two) + 1), None),
+            "c\nd\n"
+        );
     }
 
     #[tokio::test]

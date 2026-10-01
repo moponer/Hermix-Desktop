@@ -623,20 +623,42 @@ mod tests {
     // provably inside `scratch_root()` earns it, and ONE loose path in
     // the list is enough to lose it for the whole call.
 
-    /// Create the real scratch root (it is code-defined, so this is the
-    /// only place tests can put files that legitimately earn the
-    /// downgrade) and drop it again on teardown.
-    struct ScratchGuard;
+    /// Create a **unique** subdirectory under the real scratch root and
+    /// drop only that subdirectory on teardown.
+    ///
+    /// Earlier this guard removed the whole `scratch_root()`, which races
+    /// every other scratch test running in parallel — one test's teardown
+    /// deletes another's files mid-assertion. Each test now owns a
+    /// private leaf, so the tests stay independent while still exercising
+    /// the real code-defined root (which is the only thing that can earn
+    /// the downgrade).
+    struct ScratchGuard(PathBuf);
     impl ScratchGuard {
         fn create() -> Self {
             let root = scratch_root();
             std::fs::create_dir_all(&root).expect("create scratch root");
-            Self
+            // Test name is unique within the binary; add the thread id so
+            // even a re-run inside one process cannot collide.
+            let unique = format!(
+                "t-{:?}-{}",
+                std::thread::current().id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0)
+            );
+            let dir = root.join(unique);
+            std::fs::create_dir_all(&dir).expect("create scratch subdir");
+            Self(dir)
+        }
+        /// A file inside this test's private scratch subdir.
+        fn file(&self, name: &str) -> PathBuf {
+            self.0.join(name)
         }
     }
     impl Drop for ScratchGuard {
         fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(scratch_root());
+            let _ = std::fs::remove_dir_all(&self.0);
         }
     }
 
@@ -652,8 +674,8 @@ mod tests {
 
     #[test]
     fn a_real_file_in_scratch_is_scratch_scoped() {
-        let _g = ScratchGuard::create();
-        let f = scratch_root().join("probe.txt");
+        let g = ScratchGuard::create();
+        let f = g.file("probe.txt");
         std::fs::write(&f, b"x").unwrap();
         assert!(
             is_scratch_scoped(&[f.to_string_lossy().to_string()]),
@@ -681,8 +703,8 @@ mod tests {
         // The dangerous one poisons the batch: all-or-nothing on purpose,
         // so a call can never smuggle a real delete past the prompt by
         // tacking a scratch file onto the front of the list.
-        let _g = ScratchGuard::create();
-        let inside = scratch_root().join("ok.txt");
+        let g = ScratchGuard::create();
+        let inside = g.file("ok.txt");
         std::fs::write(&inside, b"x").unwrap();
         let outside = std::env::var("USERPROFILE")
             .map(|p| PathBuf::from(p).join("Downloads").join("keep.txt"))
