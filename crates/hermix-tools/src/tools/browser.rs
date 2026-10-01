@@ -471,10 +471,7 @@ impl ToolHandler for BrowserSnapshotHandler {
             .and_then(|v| v.as_u64())
             .map(|n| n as u32);
         let target = params.get("target").and_then(|v| v.as_str());
-        let compact = params
-            .get("compact")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+        let compact = crate::param_coercion::bool_param(&params, "compact", false);
         if let Some(s) = self.backend.as_sessioned() {
             s.set_active_session(session_from_params(&params));
             // Auto-bootstrap Chrome on every browser tool call (not
@@ -986,10 +983,7 @@ impl ToolHandler for BrowserVisionHandler {
             .get("instruction")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidParams("Missing 'instruction' parameter".into()))?;
-        let annotate = params
-            .get("annotate")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+        let annotate = crate::param_coercion::bool_param(&params, "annotate", false);
         if let Some(s) = self.backend.as_sessioned() {
             s.set_active_session(session_from_params(&params));
             // Auto-bootstrap Chrome on every browser tool call (not

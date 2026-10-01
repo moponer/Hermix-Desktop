@@ -210,10 +210,7 @@ impl ToolHandler for WebExtractHandler {
             }
         }
 
-        let include_links = params
-            .get("include_links")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true);
+        let include_links = crate::param_coercion::bool_param(&params, "include_links", true);
 
         // Question-aware extraction: when `question` is provided,
         // delegate to `extract_with_question` so the backend can return

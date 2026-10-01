@@ -654,9 +654,15 @@ impl ToolHandler for VoiceModeHandler {
             }
             "toggle" => {
                 let previous = VOICE_MODE_ENABLED.load(Ordering::Relaxed);
-                let new_state = params
-                    .get("enabled")
-                    .and_then(|v| v.as_bool())
+                // `enabled` is a SETTER, not a flag read — when the model
+                // supplies it we must honour it literally. The old
+                // `.and_then(as_bool).unwrap_or(!previous)` inverted the
+                // intent for string-encoded booleans: `"enabled": "false"`
+                // left `as_bool()` as None, so `unwrap_or(!previous)`
+                // flipped the state. A user asking to turn voice OFF got
+                // it turned ON, with no error anywhere. Default to
+                // toggling only when the key is genuinely absent.
+                let new_state = crate::param_coercion::opt_bool_param(&params, "enabled")
                     .unwrap_or(!previous);
                 VOICE_MODE_ENABLED.store(new_state, Ordering::Relaxed);
 
@@ -811,7 +817,7 @@ impl VoiceModeHandler {
                 if let Some(voice) = params.get("tts_voice").and_then(|v| v.as_str()) {
                     cfg.tts_voice = Some(voice.to_string());
                 }
-                if let Some(auto) = params.get("auto_speak").and_then(|v| v.as_bool()) {
+                if let Some(auto) = crate::param_coercion::opt_bool_param(&params, "auto_speak") {
                     cfg.auto_speak = auto;
                 }
                 if let Some(sensitivity) = params.get("vad_sensitivity").and_then(|v| v.as_str()) {
@@ -971,6 +977,40 @@ mod tests {
         assert!(voice_mode_enabled());
 
         handler.execute(json!({"enabled": false})).await.unwrap();
+        assert!(!voice_mode_enabled());
+
+        // 6b. String-encoded `enabled` must be honoured LITERALLY.
+        //
+        // Regression: the old code did
+        //   params.get("enabled").and_then(as_bool).unwrap_or(!previous)
+        // so `"enabled": "false"` (string) read as None and the
+        // `unwrap_or` INVERTED the state — a user asking to turn voice
+        // OFF got it turned ON, with no error anywhere. `enabled` is a
+        // setter, never a "toggle unless told otherwise" flag.
+        handler.execute(json!({"enabled": "true"})).await.unwrap();
+        assert!(
+            voice_mode_enabled(),
+            "\"enabled\": \"true\" must turn voice mode ON"
+        );
+
+        handler.execute(json!({"enabled": "false"})).await.unwrap();
+        assert!(
+            !voice_mode_enabled(),
+            "\"enabled\": \"false\" must turn voice mode OFF (old code inverted this)"
+        );
+
+        // A non-affirmative string is not an instruction to toggle.
+        handler.execute(json!({"enabled": "true"})).await.unwrap();
+        handler.execute(json!({"enabled": "maybe"})).await.unwrap();
+        assert!(
+            !voice_mode_enabled(),
+            "\"maybe\" is not an affirmative; it must not toggle the state"
+        );
+
+        // Absent key still toggles (the documented toggle behaviour).
+        handler.execute(json!({})).await.unwrap();
+        assert!(voice_mode_enabled());
+        handler.execute(json!({})).await.unwrap();
         assert!(!voice_mode_enabled());
 
         // 7. Configure

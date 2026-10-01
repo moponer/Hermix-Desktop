@@ -360,10 +360,7 @@ impl ToolHandler for ReadPdfHandler {
         }
 
         // Defaults: keep layout, no page range clamp, default char cap.
-        let layout = params
-            .get("layout")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true);
+        let layout = crate::param_coercion::bool_param(&params, "layout", true);
 
         let pages = params.get("pages").and_then(|v| v.as_str()).map(str::to_owned);
         let max_chars = params

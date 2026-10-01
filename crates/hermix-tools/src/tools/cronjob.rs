@@ -117,7 +117,11 @@ impl ToolHandler for CronjobHandler {
                     .ok_or_else(|| ToolError::InvalidParams("Missing 'id' parameter".into()))?;
                 let schedule = params.get("schedule").and_then(|v| v.as_str());
                 let task = params.get("task").and_then(|v| v.as_str());
-                let enabled = params.get("enabled").and_then(|v| v.as_bool());
+                // `opt_bool_param`, not `.and_then(as_bool)`: a
+                // string-encoded `"false"` used to read as None, which
+                // this API means "leave enabled unchanged" — so the
+                // update was silently dropped.
+                let enabled = crate::param_coercion::opt_bool_param(&params, "enabled");
                 self.backend.update(id, schedule, task, enabled).await
             }
             "pause" => {

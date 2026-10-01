@@ -458,10 +458,7 @@ impl ToolHandler for PatchHandler {
             .and_then(|v| v.as_str())
             .unwrap_or("");
 
-        let replace_all = params
-            .get("replace_all")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+        let replace_all = crate::param_coercion::bool_param(&params, "replace_all", false);
 
         // MultiEdit path: when `edits` array is present, apply multiple
         // find-and-replace operations to the same file in one call.
@@ -503,10 +500,7 @@ impl ToolHandler for PatchHandler {
                     .get("new_string")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
-                let ra = entry
-                    .get("replace_all")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
+                let ra = crate::param_coercion::bool_param(&entry, "replace_all", false);
                 edits.push((old.to_string(), new.to_string(), ra));
             }
 
@@ -836,10 +830,7 @@ impl ToolHandler for ReadImageHandler {
             return Err(ToolError::InvalidParams("'path' must be non-empty".into()));
         }
 
-        let ocr = params
-            .get("ocr")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+        let ocr = crate::param_coercion::bool_param(&params, "ocr", false);
 
         if ocr {
             return Err(ToolError::ExecutionFailed(
@@ -1023,14 +1014,13 @@ impl ToolHandler for MoveFileHandler {
             .get("dst")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidParams("Missing 'dst' parameter".into()))?;
-        let copy_mode = params
-            .get("copy")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        let overwrite = params
-            .get("overwrite")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+        let copy_mode = crate::param_coercion::bool_param(&params, "copy", false);
+        // `overwrite` gates a destructive replace. The old
+        // `.and_then(as_bool).unwrap_or(false)` turned `"overwrite":
+        // "true"` into false, so the call failed with "目标已存在，请
+        // 设置 overwrite: true" — for a call that visibly set it. Same
+        // retry loop that hit `storage_clean`.
+        let overwrite = crate::param_coercion::bool_param(&params, "overwrite", false);
 
         let src_path = Path::new(src);
         let dst_path = Path::new(dst);

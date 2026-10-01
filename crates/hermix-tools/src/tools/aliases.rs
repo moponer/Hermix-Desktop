@@ -132,10 +132,7 @@ impl ToolHandler for EditFileHandler {
             .get("new_string")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        let replace_all = params
-            .get("replace_all")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+        let replace_all = crate::param_coercion::bool_param(&params, "replace_all", false);
         self.backend
             .patch_file(path, old_string, new_string, replace_all)
             .await
