@@ -1,6 +1,6 @@
 # Decision Note: 对话输出排版 — 把「过程」从内容降级为旁注
 
-Status: proposed — 2026-10-01 用户实机走查后提出；诊断已定位到具体 CSS/组件行，方案待实施
+Status: implemented — 2026-10-01 用户实机走查后提出，当日完成三层级落地 + 两处纯 bug 修复
 
 > 承接 [UI_PROPOSAL_CC_HAHA_2026-09-29](../../UI_PROPOSAL_CC_HAHA_2026-09-29.md) §2
 > （对话界面）。那篇 §1 的结论是「hermix 的对话界面结构已经基本对齐，不需要重做」
@@ -24,8 +24,8 @@ Status: proposed — 2026-10-01 用户实机走查后提出；诊断已定位到
 | **L2 过程行** | 工具 / 读文件 / 命令 / 审批 | 13px / 1.5 | `--color-text-secondary` | 无背景，**去卡片化** |
 | **L3 推理** | 思考 | 13px / 1.7 | `--color-text-thinking` | 12px 缩进 + 2px 竖线 + 独立滚动 |
 
-层级差**不靠更浅的颜色**（深色下 tertiary 已经 4.8:1，再浅就不可读了），
-**靠缩进 + 竖线 + 是否有背景**。这是本方案与现状最大的分歧点，见下面 §1.2。
+层级差**不靠更浅的颜色**（深色下 tertiary 已经 4.77:1，再浅就不可读了），
+**靠缩进 + 轨道 + 文字标签**。这是本方案与现状最大的分歧点，见下面 §1.2。
 
 ### 1.1 三处现状缺陷（实机截图 + 源码双证据）
 
@@ -73,11 +73,18 @@ Status: proposed — 2026-10-01 用户实机走查后提出；诊断已定位到
 只剩 8px 缩进在承担全部区分责任。一段 10 行的思考和一段 10 行的正文，
 用户看到的是同样的东西。
 
-结论：分层靠**缩进 + 竖线 + 背景**，颜色只做第三位的辅助。
-竖线若要保留，`--color-border-primary` 不能用 —— 至少要提到
-`--color-border-secondary`（深色 `#3f434a`，约 2.1:1）或改用 `--color-text-faint` 级别的
-可见度，但更好的做法是**给思考块一个极淡背景**，让它在未读时就是一个矩形块，
-不依赖细线。
+结论：分层靠**缩进 + 轨道 + 文字标签**，颜色只做第三位的辅助。
+
+轨道取 `--color-text-faint`（深色 `#5f636b`，**2.98:1**，是旧值 1.37:1 的两倍多）
+而不是 `--color-border-primary`；缩进从 8px 提到 12px。
+
+**「给思考块加淡背景」这条备选被实施时实测否掉了**：候选是
+`--color-chat-tool-bg`（深色 `#1d1f22`），它对聊天底色 `#161719` 只有
+**1.09:1** —— 几乎与底色同值，加了等于没加。所以真正扛住区分的是
+**文字标签行**（`思考过程 · 共 N 段`）：标签是文字，不依赖对比度，
+深色浅色、在任何显示器上都读得到。这条否掉得不亏 —— 它把方案的
+重心从「调色」推到了「加一个几何 + 一个文字标记」，后者是唯一
+在两个主题下都成立的方案。
 
 ### 1.3 L2 过程行：去卡片化
 
@@ -159,6 +166,80 @@ L2 过程行去卡片化 + 状态改图标 + 失败聚合行单独成段。
 **第 3 步（层级重构，风险最高）**
 三层级落地、轮次聚合、行内代码芯片、遥测移到会话级。
 这一步才动 `ProcessTimeline` / `TextBubble` 的渲染结构。
+
+## 执行结果（2026-10-01）
+
+三步全部落地。落地过程中最重要的发现不是排版本身，是**这个界面有
+三份并行的错误判定实现**，靠一句注释维持一致 —— 与 H2 的形状完全相同。
+
+### 两处纯 bug（先修，都可独立验证）
+
+1. **`.tl-reasoning-row` 双定义**。同文件两处定义，后写的把
+   `max-height: 340px` + 滚动改回 `none` / `visible`，2026-09-30 的
+   「长思考封顶滚动」被静默撤销。已合并为一份，恢复封顶 + 滚动。
+2. **失败被渲染成「✓已完成」**。根因比预想的更宽：`detectToolError`
+   有**三份拷贝**（`messageParser` / `ToolEventCard` / `protocolAdapter`
+   串的函数值），`ToolEventCard` 里那��的注释原文是
+   「any change here MUST be mirrored in `messageParser.detectToolError`
+   and vice versa」。三份都只认 `^(Failed|Error|ERR|Tool execution failed)`，
+   全都漏判 agent runtime 的 `Tool 'x' does not exist`。
+
+   处理方式不是扩三份正则，是**抽唯一入口** `utils/toolOutcome.ts`
+   （零依赖），三处改为 import。这与 H2 同一条教训：契约类逻辑抽到
+   唯一入口，靠注释同步的实现迟早会走散。
+
+### 意外发现：两条渲染路径本就汇到同一处
+
+用户要求「运行会话和恢复会话要一致」。查下来比预想的好：
+`protocolAdapter.wireArrayToChatMessages` **不发射独立的
+`role:"tool"` 消息**，而是把工具行并回 assistant 的 `execution_timeline`，
+恢复后同样由 `ProcessTimeline` → `groupTimeline` 渲染。也就是说
+两条路径**本来就共用同一个渲染器**，一致性由架构保证，不靠人记着。
+
+即便如此仍发现一处真实的不一致并修掉：恢复态合成的 `tool_complete`
+事件**不携带 `is_error`**（运行态一直带）。补上后两条路径拿到的是
+同一份权威事实，而不是让前端去猜文本。
+
+### 已落地
+
+| 项 | 落点 |
+|---|---|
+| 三层级 | `.tl-text-inner`(L1) / `.process-line-*`(L2) / `.tl-reasoning-*`(L3) |
+| 过程行去卡片化 + 状态图标形状 | 新 `ProcessLine.tsx` + `styles/process-line.css` |
+| 运行态/恢复态共用渲染 | `ToolGroupCard` 与 `ToolMessageCard` 都只映射成 `ProcessLineVM`，渲染委托 `<ProcessLine>` |
+| `skipped` 第四态 | `ToolGroup.status` / `ToolMessageMeta.status`，判定在 `utils/toolOutcome.ts` |
+| 折叠摘要失败/跳过单列 | `buildActivitySummary` + `.tl-process-failed` / `.tl-process-skipped` |
+| 思考标签行 | `ReasoningBlock` 新增 `思考过程 · 共 N 段` |
+| 行内代码芯片 | `.prose code` 从「透明底 + 下划线」改为 16% 混合圆角块（实测 1.55:1） |
+| 消息头去重 | `TextBubble` 移除 `已完成 N 个工具` —— 与折叠头重复且数字来源不同 |
+
+**未做**：会话级遥测条（`已执行 X · N token/s`）。`token/s` 需要
+流式速率累计，当前只有 `contextUsage` / `usageSnapshot` 的**总量**，
+没有速率信号 —— 硬做只能显示一个编出来的数字。耗时已经在折叠头
+（`reasoning-stat`）里，重复信息已清理。
+
+### 走过的弯路
+
+1. **「给思考块加淡背景」** —— 实测 `--color-chat-tool-bg` 对聊天底
+   只有 1.09:1，加了等于没加。改用文字标签行，见 §1.2。
+2. **行内代码芯片的档位** —— 先试 12%（1.09:1，与底同值，不可见），
+   提到 16%（1.55:1）才读作「块」。**背景是分组信号，不是对比度
+   载体**：文字对比度保持 primary 15.32:1 不动，动的只是底。
+3. **测试里 `tool_complete` 用了不同的 tool 名** —— 被
+   `groupTimeline` 的配对键判成断流 → error。是 helper 写错不是代码
+   错，但正好证明了「配对键不一致会被误判为中断」这条路径存在。
+
+### 自查
+
+`ProcessLine` 与 `LiveTerminal` 必须拆成独立文件：前者被
+`ToolGroupCard` / `ToolMessageCard` 用，后者原本在 `ToolCallBubble`
+内部 —— 不拆就形成循环依赖。`LiveTerminal` 的 class 名保持不变，
+所以 CSS 无需跟着改。
+
+新增 18 条测试（`utils/toolOutcome.test.ts`），其中 4 条是**四入口
+一致性**断言：同一份 `tool_complete`，`groupTimeline`（运行态）/
+`groupEvents`（ACUI）/ `expandTimelineToMessages`（恢复态）/
+`protocolAdapter` 投影必须给出同一个状态桶。
 
 ## Alternatives considered
 
