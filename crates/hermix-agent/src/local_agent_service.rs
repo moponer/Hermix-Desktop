@@ -1303,6 +1303,46 @@ impl LocalAgentService {
             return ToolDispatchDecision::Allow;
         }
         // Dangerous tool in Default mode → ask the user
+        //
+        // Scratch-scope exemption: cleaning hermix's OWN throwaway tree
+        // (`%TEMP%\hermix-scratch`, defined in
+        // `hermix_tools::tools::storage_clean::scratch_root`) is not a
+        // user-facing destructive act — those files were created by the
+        // agent in this same task and are disposable by construction.
+        // Without this exemption the agent has to ask permission to tidy
+        // up after itself, and the prompt's "must clean temp files" rule
+        // becomes unusable: a user who once denies a delete teaches the
+        // model to ask forever, and the workspace fills with debris.
+        //
+        // The exemption is deliberately narrow:
+        //   - it applies only to `storage_clean`, not to `terminal`
+        //     (a shell can delete anything regardless of this check);
+        //   - `is_scratch_scoped` requires EVERY path to canonicalize
+        //     inside the scratch root, so a mixed list (one scratch file
+        //     + one Downloads item) still gets the full Dangerous
+        //     treatment;
+        //   - it downgrades the *prompt*, not the tool: `safety_check`
+        //     inside `storage_clean` still runs in full and can still
+        //     refuse any individual path.
+        if tc.function.name == "storage_clean" {
+            let paths: Vec<String> = raw_params
+                .get("paths")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            if hermix_tools::tools::storage_clean::is_scratch_scoped(&paths) {
+                tracing::info!(
+                    tool = %tc.function.name,
+                    count = paths.len(),
+                    "storage_clean scoped to hermix scratch root; skipping approval prompt"
+                );
+                return ToolDispatchDecision::Allow;
+            }
+        }
         // Pre-approval shortcut: if the user previously picked
         // "Always Allow" or "Allow for this session" for the same
         // tool/args shape, skip the WS round-trip. See the
