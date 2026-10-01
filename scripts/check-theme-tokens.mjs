@@ -22,12 +22,18 @@ const read = (p) => readFileSync(p, "utf8");
 /* ---------- Check 1: 每主题契约完整性 ---------- */
 // 契约从 tokens.css @theme 块派生；别名层（:root 非 @theme 的 var(--x)→
 // 别名映射）不在主题 css 内重复声明，导出自兼容块即可。
+//
+// L1（2026-10-01）强调色分层：`--color-accent-base` 是主题层（@theme 的
+// 亮色值 + dark.css 覆写），裸 `--color-accent` 是**使用层**——由 base.css
+// 的单条 `:root` 规则供给，用户选色时再由 useTheme 的行内样式压过。
+// 使用层不进契约：主题对它没有决定权。
 const ALIAS_NAMES = new Set([
   "--color-error-bg",
   "--color-warning-bg",
   "--color-error-text",
   "--color-text-success",
   "--font-family-primary",
+  "--color-accent",
 ]);
 const tokensCss = read(join(STYLES, "tokens.css"));
 const themeBlock = tokensCss.match(/@theme\s*\{([\s\S]*)\n\}/)?.[1] ?? "";

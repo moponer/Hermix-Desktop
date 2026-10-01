@@ -73,7 +73,7 @@
 
   /* Accent — 青碧提亮 */
   /* 2026-09-30：与亮色同色相提亮（暗底上原色太沉会糊）。 */
-  --color-accent: #6fae94;
+  --color-accent-base: #6fae94;
   --color-accent-hover: #86c0a8;
   /* 2026-09-29：ink 主题实色 accent 按钮上的文字色。 */
   --color-on-accent: #ffffff;

@@ -114,6 +114,8 @@ export const storage = {
 // or component that needs them.
 export const STORAGE_KEYS = {
   theme: "hermix.desktop.theme",
+  /** L1（2026-10-01）：用户自选强调色（CSS 十六进制）。空/缺 = 跟随主题。 */
+  accentColor: "hermix.desktop.accent_color",
   sidebarWidth: "hermix.desktop.sidebar.width",
   rightWidth: "hermix.desktop.right.width",
   rightOpen: "hermix.desktop.right.open",

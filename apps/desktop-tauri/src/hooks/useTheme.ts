@@ -32,13 +32,64 @@ function readStored(): ThemeMode {
   return "light";
 }
 
+/* ── 强调色（L1）────────────────────────────────────────────────
+   `--color-accent` 的供给链（见 tokens.css / base.css / dark.css 的注释）：
+
+     base.css  :root          --color-accent: var(--color-accent-base)   ← 默认
+     dark.css  :root[data-…]   --color-accent-base: <暗色值>              ← 主题层
+     这里                          root.style.setProperty(…)                 ← 用户层
+
+   关键：**移除属性**（`removeProperty`）而不是设成空串。CSS 的
+   `var(x, fallback)` 只在 x 未被声明时才用 fallback；一旦声明为空，
+   var() 返回空字符串，base.css 的供给规则会被架空成"没有颜色"。
+   "跟随主题"必须是"该属性不存在"，不能是"该属性为空"。 */
+
+// 只接受 `#rgb` / `#rrggbb` / `#rrggbbaa`。任何其它形状一律当作
+// 无选择——把未经校验的字符串塞进 setProperty 就能注入任意 CSS。
+const HEX_RE = /^#(?:[0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+
+function normalizeAccent(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const v = raw.trim();
+  return HEX_RE.test(v) ? v.toLowerCase() : null;
+}
+
+function applyAccent(color: string | null) {
+  if (typeof document === "undefined") return;
+  const root = document.documentElement;
+  if (color) {
+    root.style.setProperty("--color-accent", color);
+  } else {
+    root.style.removeProperty("--color-accent");
+  }
+}
+
+function readStoredAccent(): string | null {
+  try {
+    return normalizeAccent(storage.getItem(STORAGE_KEYS.accentColor));
+  } catch {
+    return null;
+  }
+}
+
 export function useTheme() {
   const [mode, setModeState] = useState<ThemeMode>(() => readStored());
+  const [accent, setAccentState] = useState<string | null>(() =>
+    readStoredAccent(),
+  );
 
   useEffect(() => {
     applyTheme(mode);
     try { storage.setItem(STORAGE_KEYS.theme, mode); } catch {}
   }, [mode]);
+
+  useEffect(() => {
+    applyAccent(accent);
+    try {
+      if (accent) storage.setItem(STORAGE_KEYS.accentColor, accent);
+      else storage.removeItem(STORAGE_KEYS.accentColor);
+    } catch {}
+  }, [accent]);
 
   const setMode = useCallback((next: ThemeMode) => setModeState(next), []);
   const cycle = useCallback(() => {
@@ -47,5 +98,9 @@ export function useTheme() {
       return THEMES[(idx + 1) % THEMES.length]?.id ?? "light";
     });
   }, []);
-  return { mode, setMode, cycle };
+  /** `null` 回到"跟随主题"。非 hex 形状会被 normalizeAccent 忽略。 */
+  const setAccent = useCallback((next: string | null) => {
+    setAccentState(normalizeAccent(next));
+  }, []);
+  return { mode, setMode, cycle, accent, setAccent };
 }

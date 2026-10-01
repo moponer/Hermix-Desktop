@@ -297,3 +297,19 @@ button:disabled,
 [aria-disabled="true"] {
   cursor: not-allowed;
 }
+
+/* ── L1（2026-10-01）：强调色使用层的唯一供给点 ─────────────────────
+   主题层（tokens.css @theme 的亮色值 / themes/dark.css 的暗色值）提供
+   accent 的 base 槽；这里把它接到使用槽 `--color-accent`。
+
+   刻意**不**写成"使用槽回落到自身"的 var() 链——那会让本规则与
+   themes/*.css 形成循环依赖，实测整个声明 invalid（详见
+   docs/notes/implemented/process/2026-10-01-audit-and-batches-report.md）。
+   本条规则在 :root 上定义一次，主题覆写的是 base 槽而不是使用槽，
+   所以两者不冲突。
+
+   用户选色时 useTheme 在 documentElement.style 上设 `--color-accent`，
+   行内样式优先级高于本条规则，无需额外选择器。 */
+:root {
+  --color-accent: var(--color-accent-base);
+}

@@ -231,7 +231,14 @@
    * 两者拉开到 60°+。 */
   /* 2026-09-30：强调色换松墨绿（用户定调：不要橙、不要蓝，要「高级感」）。
      松墨绿在暖白/纸色背景上不刺眼，长时间看不累，且与 ink 暗色主题同族。 */
-  --color-accent: #1e4a3c;
+  /* L1（2026-10-01）：强调色分两层。
+     `-base` 是**主题层**，由 @theme（亮色有效值）与 themes/dark.css（暗色
+     覆写）各自提供；`--color-accent` 是**使用层**，由 base.css 的
+     `:root { --color-accent: var(--color-accent-base) }` 供给，不在本文件
+     声明——这样用户经 useTheme 注入 `--color-accent` 时能直接压过它，
+     而不需要在 tokens.css 里写自引用 var()（自引用会形成循环依赖，
+     实测整个声明 invalid，见 2026-10-01-audit-and-batches-report）。 */
+  --color-accent-base: #1e4a3c;
   --color-accent-hover: #163a2f;
   /* 实色 accent 底上的文字色。深绿底配白字对比度 ≈ 9:1，远超 AA。 */
   --color-on-accent: #ffffff;
