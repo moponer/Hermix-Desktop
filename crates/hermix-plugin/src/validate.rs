@@ -1530,6 +1530,7 @@ X [ERROR] Expected \")\" but found \";\"
     // 仅在仓库内置 esbuild.exe 存在时校验行号; 否则退回手写兜底 (仍有 js 问题)。
     #[test]
     fn validate_reports_precise_js_location_via_esbuild() {
+        let _env_guard = crate::hermix_home_guard();
         let repo_esbuild = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../apps/desktop-tauri/src-tauri/resources/loader/esbuild.exe");
         let has_esbuild = repo_esbuild.exists();
@@ -1540,7 +1541,11 @@ X [ERROR] Expected \")\" but found \";\"
         if has_esbuild {
             std::fs::copy(&repo_esbuild, tmp.join("loader").join("esbuild.exe")).unwrap();
         }
-        // 指向临时 HERMIX_HOME, 让 resolve_loader_file 找到 esbuild
+        // 指向临时 HERMIX_HOME, 让 resolve_loader_file 找到 esbuild。
+        // 必须与 `workbench::set_primary_clears_previous_marker` 共用
+        // crate 级锁 —— 否则两个测试并行改同一个进程级环境变量，本测试
+        // 会读到自己没设的那个 home，esbuild 找不到、`issue.line` 变
+        // None，表现为偶发失败（2026-10-01 门禁实际抓到）。
         std::env::set_var("HERMIX_HOME", &tmp);
 
         let app = tmp.join("app");

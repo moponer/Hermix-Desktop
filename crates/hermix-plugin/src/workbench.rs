@@ -1421,13 +1421,14 @@ mod tests {
     /// does nothing about the shared env var. Serialize against a
     /// process-wide lock for the whole test, and restore the previous
     /// value on the way out so we do not leak into later tests.
-    static HERMIX_HOME_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
+    ///
+    /// 2026-10-01：锁原先是本函数内的 `static`，与 `validate.rs` 里的
+    /// 另一把**不是同一把** —— 两者互不排斥，于是 validate 的 esbuild
+    /// 测试会偶发拿不到本测试设的 home。现已提到 crate 级
+    /// `crate::hermix_home_guard()`。
     #[test]
     fn set_primary_clears_previous_marker() {
-        let _env_guard = HERMIX_HOME_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let saved = std::env::var("HERMIX_HOME").ok();
-
+        let _env_guard = crate::hermix_home_guard();
         let tmp = std::env::temp_dir().join(format!(
             "hx-wb-primary-{}-{:?}",
             std::process::id(),
@@ -1462,15 +1463,8 @@ mod tests {
         assert!(primary_workbench(&[]).is_none());
 
         assert!(set_primary("不存在的工作台").is_err());
-
-        // Restore whatever the developer / an earlier test had, so we
-        // don't leak our temp dir into tests that run after this one.
-        // Deliberately not deleting the directory: %TEMP% is reclaimed
-        // by the OS, and removing it mid-run would race anything still
-        // writing there.
-        match saved {
-            Some(v) => std::env::set_var("HERMIX_HOME", v),
-            None => std::env::remove_var("HERMIX_HOME"),
-        }
+        // 环境变量由 `_env_guard` 的 Drop 还原（crate::hermix_home_guard）。
+        // 刻意不删目录：%TEMP% 由 OS 回收，运行中删除会与还在往里写的
+        // 其它测试相撞。
     }
 }

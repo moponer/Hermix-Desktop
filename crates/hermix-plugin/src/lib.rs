@@ -38,6 +38,46 @@ pub const WB_TOOLS_TS: &str = include_str!("workbench_tools.rs");
 
 pub mod workbench_gateway;
 pub use workbench_gateway::{db_exec, db_query, fs_list, fs_read, fs_write};
+
+/// 进程级环境变量的**测试互斥锁**。
+///
+/// `HERMIX_HOME` 是进程全局的，而 `cargo test` 在同一个测试二进制里
+/// 用并行线程跑测试。任何改写它的测试都会让**别的**测试在
+/// `set_var` 与它自己的读操作之间看到别人的值。
+///
+/// 2026-10-01 之前 `workbench.rs` 的那个测试用的是**函数内** static，
+/// `validate.rs` 又各自为政 —— 两把不同的锁互不排斥，于是
+/// `validate_reports_precise_js_location_via_esbuild` 偶发拿不到
+/// 临时 home 里的 esbuild，`issue.line` 变 `None` 而失败。
+/// 锁必须是 crate 级唯一的一份，调用方还要负责还原原值。
+#[cfg(test)]
+pub(crate) static HERMIX_HOME_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// 取得 `HERMIX_HOME` 测试锁并在退出时还原环境变量。
+///
+/// 用法：`let _g = hermix_home_guard();`
+#[cfg(test)]
+pub(crate) fn hermix_home_guard() -> HermixHomeGuard {
+    let lock = HERMIX_HOME_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let saved = std::env::var("HERMIX_HOME").ok();
+    HermixHomeGuard { _lock: lock, saved }
+}
+
+#[cfg(test)]
+pub(crate) struct HermixHomeGuard {
+    _lock: std::sync::MutexGuard<'static, ()>,
+    saved: Option<String>,
+}
+
+#[cfg(test)]
+impl Drop for HermixHomeGuard {
+    fn drop(&mut self) {
+        match self.saved.take() {
+            Some(v) => std::env::set_var("HERMIX_HOME", v),
+            None => std::env::remove_var("HERMIX_HOME"),
+        }
+    }
+}
 pub use workbench::{
     create_workbench, delete_workbench, format_module_index, format_violations, lint_workbench,
     list_code_files, list_workbenches, module_index, read_code_file, read_manifest, set_deps,
