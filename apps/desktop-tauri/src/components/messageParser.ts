@@ -1,5 +1,6 @@
 import type { ChatMessage, ExecutionTimelineEvent, TimelineStep } from "../types";
 import { classifyToolOutcome, detectToolError } from "../utils/toolOutcome";
+import { extractLineStats } from "../utils/lineStats";
 
 // 结局判定的实现已搬进 `utils/toolOutcome.ts`（零依赖），这里是转发，
 // 保持既有 import 路径可用。运行态 / 恢复态 / ACUI 三条路径现在共用
@@ -145,6 +146,13 @@ export interface FileChangeEntry {
   changeType: "created" | "modified" | "deleted" | "renamed";
   summary?: string;
   timestamp: string;
+  /**
+   * 按工具入参估算的增删行数（见 `utils/lineStats.extractLineStats`）。
+   * 匹配不到写操作、或工具不产出行数时是 `undefined` —— 组件据此
+   * **不显示**这一列，而不是显示 0。宁可没有，不要一个假的 0。
+   */
+  added?: number;
+  removed?: number;
 }
 
 export interface ToolGroup {
@@ -333,7 +341,50 @@ export function extractFileChanges(events?: ExecutionTimelineEvent[]): FileChang
       timestamp: ev.created_at,
     });
   }
-  return out;
+  // 增删行数：把同一条时间线里**写到同一个文件**的那些写工具调用的行数
+  // 加起来。`file_change` 事件本身不带计数（后端只发 path / change_type /
+  // file_summary），所以必须回看真实的 `tool_start` 入参 —— 那是数字的
+  // 唯一来源。
+  //
+  // 路径比对分两档（否则会误配）：
+  //   - 入参**带目录分隔符** → 允许「事件路径以入参结尾」的后缀匹配，因为
+  //     入参常是相对路径（`src/App.tsx`）而事件里是绝对路径
+  //     （`F:\...\src\App.tsx`）。方向是单向的，所以 `a.tsx` 不会命中
+  //     `a.tsx.bak`。
+  //   - 入参**只有裸文件名** → 只接受全等。裸名没有目录信息，而一轮里完全
+  //     可能动过两个不同目录下的 `App.tsx`；放行后缀匹配会把两个文件的行数
+  //     加到同一条记录上。宁可这个文件不显示计数，也不显示一个错的。
+  const statsFor = (absPath: string): { added?: number; removed?: number } => {
+    const target = absPath.replace(/\\/g, "/").toLowerCase();
+    let added = 0;
+    let removed = 0;
+    let hit = false;
+    for (const e of events) {
+      if (e.type !== "tool_start" || !e.arguments) continue;
+      let args: { file_path?: string; path?: string };
+      try {
+        args = JSON.parse(e.arguments);
+      } catch {
+        continue;
+      }
+      const p = args.file_path ?? args.path;
+      if (typeof p !== "string" || !p) continue;
+      const raw = p.replace(/\\/g, "/");
+      const cand = raw.toLowerCase();
+      const hasDir = raw.includes("/");
+      const matches = hasDir
+        ? cand === target || target.endsWith(`/${cand}`)
+        : cand === target;
+      if (!matches) continue;
+      const s = extractLineStats(e.tool, e.arguments);
+      if (s.added == null && s.removed == null) continue;
+      added += s.added ?? 0;
+      removed += s.removed ?? 0;
+      hit = true;
+    }
+    return hit ? { added, removed } : {};
+  };
+  return out.map((c) => ({ ...c, ...statsFor(c.path) }));
 }
 
 /** A single memory mutation surfaced inline in the conversation. */

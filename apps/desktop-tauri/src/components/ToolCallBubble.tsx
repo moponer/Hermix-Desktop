@@ -5,7 +5,7 @@ import { buildActivitySummary } from "./chat/activitySummary";
 import React, { useState, useEffect, useMemo } from "react";
 import {
   ChevronDown, ChevronRight, Loader2,
-  FileText, FilePlus, ArrowRight, Edit3, Trash2, Brain,
+  FilePlus, Edit3, Trash2, Brain,
   Database, Wrench,
 } from "lucide-react";
 import { MarkdownBody } from "./MarkdownBody";
@@ -20,6 +20,7 @@ import { parseMemoryResult } from "../utils/memoryToolResult";
 import { formatDuration } from "./bubbleUtils";
 import { ThinkingDots, ReasoningBlock } from "./ThinkingBubble";
 import { ProcessLine, type ProcessLineVM, type ProcessStatus } from "./ProcessLine";
+import { FileChangeSummary } from "./FileChangeSummary";
 
 /**
  * 运行态的一行过程。只负责把 `ToolGroup` 映射成 `ProcessLineVM`，
@@ -631,7 +632,7 @@ export function UnifiedTimelineRenderer({
           common flow). Only when the turn produced text. */}
       {hasAnyTextStep && fileChanges.length > 0 && (
         <div className="tl-text-inner tl-text-inner--meta">
-          <FileChangeBlock changes={fileChanges} onPathClick={onPathClick} />
+          <FileChangeSummary changes={fileChanges} onPathClick={onPathClick} />
         </div>
       )}
       {hasAnyTextStep && memoryUpdates.length > 0 && (
@@ -672,64 +673,6 @@ export function UnifiedTimelineRenderer({
         <div className="tl-iteration">
           <ThinkingDots label="等待回复" />
         </div>
-      )}
-    </div>
-  );
-}
-export function FileChangeBlock({
-  changes,
-  onPathClick,
-}: {
-  changes: FileChangeEntry[];
-  onPathClick?: (path: string, e: React.MouseEvent) => void;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const VISIBLE = 4;
-  const visible = expanded ? changes : changes.slice(0, VISIBLE);
-  const hidden = Math.max(0, changes.length - VISIBLE);
-  return (
-    <div className="file-change-block footer-block">
-      <div className="file-change-header">
-        <FileText className="icon-sm shrink-0" />
-        <span>文件变更</span>
-        <span className="file-change-count">（{changes.length}个）</span>
-      </div>
-      <ul className="file-change-list">
-        {visible.map((c, i) => {
-          const filename = c.path.split(/[\\/]/).pop() ?? c.path;
-          return (
-            <li key={`${c.path}-${i}`}>
-              <button
-                type="button"
-                className="file-change-link"
-                title={c.path}
-                onClick={(e) => onPathClick?.(c.path, e)}
-              >
-                {filename}
-              </button>
-            </li>
-          );
-        })}
-      </ul>
-      {!expanded && hidden > 0 && (
-        <button
-          type="button"
-          className="file-pill-toggle"
-          onClick={() => setExpanded(true)}
->
-          查看全部变更
-          <ArrowRight className="icon-sm" />
-        </button>
-      )}
-      {expanded && hidden > 0 && (
-        <button
-          type="button"
-          className="file-pill-toggle"
-          onClick={() => setExpanded(false)}
-        >
-          收起
-          <ChevronDown className="icon-sm rotate-180" />
-        </button>
       )}
     </div>
   );

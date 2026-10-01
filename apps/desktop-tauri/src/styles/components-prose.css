@@ -340,71 +340,163 @@
   margin-right: 0;
   box-sizing: border-box;
 }
-/* File-change block lives inside .tl-text-inner--meta (avatar offset is
-   already applied via .msg-bubble-assistant gap:10px). The generic
-   .footer-block margin-left:32px was designed for standalone footer
-   blocks and double-offsets the card, leaving it visibly indented on
-   the right. Flush to the message body edge and stretch to full width
-   so the right padding mirrors the left. */
-.file-change-block.footer-block {
-  margin-left: 0;
-  width: 100%;
-  max-width: 100%;
-}
+/* `.file-change-block.footer-block` 那条覆盖规则已随 2026-10-02 的
+   FileChangeSummary 一起删掉 —— 汇总条不再挂 `.footer-block`，它渲染在
+   `.tl-text-inner--meta` 里，宽度由那一层给，avatar 偏移已经到位，
+   再叠一次 32px 会双重缩进。 */
 @media (min-width: 1024px) {
   .footer-block { max-width: 768px; }
 }
 @media (min-width: 1280px) {
   .footer-block { max-width: 888px; }
 }
-.file-change-block {
-  padding: 6px 10px;
+/* ════════════════════════════════════════════════════════════════════
+   本轮文件变更汇总条（.fcx，2026-10-02）
+   ════════════════════════════════════════════════════════════════════
+   取代原来的 `.file-change-*` 那套（「文件变更（N个）」+ 文件名列表）。
+   视觉取向见 `FileChangeSummary.tsx` 的文件头：这里不复述，只记三条**为什么**：
+
+   1. 无描边。`border: 1px solid …` + `background: bg-secondary` 的卡片外壳
+      本身就在说「这是一个独立的内容块」，而文件变更清单是这一轮的**过程
+      摘要**，和正文同层。改用 `--color-bg-tertiary`（最轻的一档着色）
+      铺底 + 2px 左侧轨，轨默认透明、hover / 展开时才显形。
+   2. 计数用等宽 chip，颜色沿用过程行那对 success / error。整个界面的
+      「+N −M」是同一套符号（`.process-line-stat--add/del` 同源）。
+   3. 左侧轨用 accent 色：它标的是「这一轮动过东西」这个事实，不是错误。
+      错误色留给过程行里真正失败的那些。 */
+
+.fcx {
+  position: relative;
   border-radius: var(--radius-md);
-  background: var(--color-bg-secondary);
-  border: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-tertiary);
+  padding: 2px 4px;
+  overflow: hidden;
 }
-.file-change-header {
+.fcx::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 2px;
+  background: var(--color-accent);
+  opacity: 0;
+  transition: opacity var(--duration-fast) ease;
+}
+.fcx:hover::before,
+.fcx:focus-within::before,
+.fcx[data-open="true"]::before { opacity: 0.55; }
+
+.fcx-head {
   display: flex;
   align-items: center;
-  gap: 5px;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--color-text-secondary);
-  margin-bottom: 4px;
-}
-.file-change-count {
-  color: var(--color-text-faint);
-  font-size: 11px;
-  margin-left: 1px;
-  font-weight: 400;
-}
-.file-change-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 2px 14px;
-}
-.file-change-list li {
-  margin: 0;
-  padding: 0;
-}
-.file-change-link {
-  background: none;
+  gap: 10px;
+  width: 100%;
+  padding: 4px 6px;
   border: 0;
-  padding: 1px 0;
-  font-size: 12px;
-  color: var(--color-link-soft);
+  background: transparent;
+  font: inherit;
+  color: var(--color-text-secondary);
+  text-align: left;
   cursor: pointer;
-  text-decoration: none;
+  border-radius: var(--radius-sm);
+  min-width: 0;
+}
+.fcx-head:hover { color: var(--color-text-primary); }
+.fcx-head:focus-visible {
+  outline: 2px solid var(--color-border);
+  outline-offset: 1px;
+}
+.fcx-head-text {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  font-size: var(--text-meta, 12px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fcx-toggle {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex: none;
+  font-size: var(--text-meta, 12px);
+  color: var(--color-text-tertiary);
+}
+.fcx-head:hover .fcx-toggle { color: var(--color-accent); }
+/* 展开时箭头朝上：标准 disclosure 语义，不靠文案说明 */
+.fcx-chev { transition: transform var(--duration-fast) ease; }
+.fcx[data-open="true"] .fcx-chev { transform: rotate(180deg); }
+
+/* ── 增删行数 chip ── */
+.fcx-stats {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  flex: none;
+}
+.fcx-stat {
   font-family: var(--font-mono);
-  transition: color var(--duration-fast) ease;
+  font-size: var(--text-tiny, 11px);
+  font-variant-numeric: tabular-nums;
 }
-.file-change-link:hover {
-  text-decoration: underline;
-  color: var(--color-link-soft-hover);
+.fcx-stat--add { color: var(--color-success); }
+.fcx-stat--del { color: var(--color-text-faint); }
+
+/* ── 展开后的文件清单 ── */
+.fcx-list {
+  list-style: none;
+  margin: 0 0 2px;
+  padding: 0 0 0 2px;
+  display: flex;
+  flex-direction: column;
+  /* 与 .tl-tools-list 同一条起排线：清单是逐行的过程内容，不是卡片 */
+  gap: 1px;
 }
+.fcx-list li { margin: 0; padding: 0; }
+.fcx-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 3px 6px;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  min-width: 0;
+}
+.fcx-row:hover { background: color-mix(in srgb, var(--color-text-primary) 5%, transparent); }
+.fcx-row:focus-visible {
+  outline: 2px solid var(--color-border);
+  outline-offset: -1px;
+}
+.fcx-kind {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  color: var(--color-text-tertiary);
+}
+.fcx-kind[data-kind="created"] { color: var(--color-success); }
+.fcx-kind[data-kind="deleted"] { color: var(--color-error); }
+.fcx-path {
+  min-width: 0;
+  flex: 1 1 auto;
+  font-family: var(--font-mono);
+  font-size: var(--text-meta, 12px);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* 目录过长由 JS 按段数截断（见 FileChangeSummary.splitPath），
+     这里的 ellipsis 只是最后一道兜底。刻意不用 direction:rtl 截断 ——
+     路径里混 `\` `:` 数字时那招的渲染结果不稳定。 */
+}
+.fcx-dir { color: var(--color-text-faint); }
+.fcx-name { color: var(--color-text-primary); }
 
 
 /* ── Inline path link (assistant prose) ──────────────────────

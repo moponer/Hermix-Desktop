@@ -4,6 +4,7 @@
 // render; they depend only on React hooks + DOM, no MessageBubble internals.
 import { useMemo } from "react";
 import { openImageViewer } from "../imageViewer";
+import { extractLineStats } from "../../utils/lineStats";
 
 function ScreenshotPreview({ output }: { output?: string }) {
   const parsed = useMemo(() => {
@@ -523,30 +524,11 @@ function extractFirstPath(blob: string): string | null {
 
 /**
  * Git-style diff stats from a tool's JSON args.
- *
- * - write_file: additions = new file content line count
- * - patch / edit_file: additions = new_string lines, deletions = old_string lines
- * - everything else: empty stats
+ * 2026-10-02 实现搬到 `src/utils/lineStats.ts`（**零依赖**纯函数模块）——
+ * `messageParser` 也要用它给文件变更汇总行数，那是纯解析层，不该为了一个
+ * 纯函数去 import 组件文件，更不该拖进 `bubbleUtils` 的整棵 lucide 映射。
+ * 这里保留 re-export，`ProcessLine` 的 import 不用动。
  */
-function extractLineStats(tool: string, argsJson?: string): { added?: number; removed?: number } {
-  if (!argsJson) return {};
-  let args: Record<string, unknown>;
-  try {
-    args = JSON.parse(argsJson);
-  } catch {
-    return {};
-  }
-  const t = tool.toLowerCase();
-  if (t.includes("write_file") && typeof args.content === "string") {
-    return { added: args.content.split("\n").length };
-  }
-  if ((t.includes("patch") || t.includes("edit_file")) && typeof args.new_string === "string") {
-    const added = args.new_string.split("\n").length;
-    const removed = typeof args.old_string === "string" ? args.old_string.split("\n").length : 0;
-    return { added, removed };
-  }
-  return {};
-}
 
 
 export {
