@@ -239,14 +239,12 @@
      而不需要在 tokens.css 里写自引用 var()（自引用会形成循环依赖，
      实测整个声明 invalid，见 2026-10-01-audit-and-batches-report）。 */
   --color-accent-base: #1e4a3c;
-  --color-accent-hover: #163a2f;
-  /* 实色 accent 底上的文字色。深绿底配白字对比度 ≈ 9:1，远超 AA。 */
-  --color-on-accent: #ffffff;
-  --color-accent-on-text: #eef4f1;
-  /* 不透明而非 rgba：cc-haha 的 --cc-ac-soft 就是实色。半透明叠在
-     不同底色上会算出不同的观感，token 就失去了"唯一定义"的意义。 */
-  --color-accent-soft: #e6edea;
-  --color-accent-soft-strong: #d5e2dd;
+  /* accent 的派生档位（hover / soft / soft-strong / on-text）**不在此声明**，
+     它们改由 base.css 从使用槽 --color-accent 用 color-mix 派生。
+     理由：留在 @theme 静态值时，用户注入一个绿 accent，hover 仍是主题
+     自带的绿 —— 绿配绿，hover 形同失效（2026-10-01 审核 agent 指出）。
+     --color-on-accent 同样移出：它无法用 color-mix 推导（需按明度选
+     浅/深文字），留待 L3.5 的策展调色板与 accent 一起注入。 */
   /* 渠道品牌色（2026-09-30）：只用于渠道徽标小圆牌，让 QQ / 企业微信
      一眼可辨。亮色用品牌原色，暗色在 themes/dark.css 提亮一档。 */
   --color-brand-qq: #12b7f5;

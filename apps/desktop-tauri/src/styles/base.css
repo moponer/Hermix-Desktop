@@ -298,9 +298,15 @@ button:disabled,
   cursor: not-allowed;
 }
 
-/* ── L1（2026-10-01）：强调色使用层的唯一供给点 ─────────────────────
-   主题层（tokens.css @theme 的亮色值 / themes/dark.css 的暗色值）提供
-   accent 的 base 槽；这里把它接到使用槽 `--color-accent`。
+/* ── L1（2026-10-01）：强调色使用层 + 派生家族 ──────────────────────
+   主题层（tokens.css @theme 的亮色值 / themes/dark.css 的暗色值）只提供
+   `--color-accent-base`；这里把它接到使用槽 `--color-accent`，并从
+   使用槽派生 hover / soft / soft-strong / on-text。
+
+   为什么派生档必须跟着**使用槽**而不是 @theme 静态值：用户注入一个绿
+   accent 后，若 hover 仍是主题自带的绿，就是绿配绿，hover 形同失效
+   （2026-10-01 审核 agent 指出）。派生链是 CSS 级的，用户改
+   --color-accent 一处，家族整体联动。
 
    刻意**不**写成"使用槽回落到自身"的 var() 链——那会让本规则与
    themes/*.css 形成循环依赖，实测整个声明 invalid（详见
@@ -309,7 +315,25 @@ button:disabled,
    所以两者不冲突。
 
    用户选色时 useTheme 在 documentElement.style 上设 `--color-accent`，
-   行内样式优先级高于本条规则，无需额外选择器。 */
+   行内样式优先级高于本条规则，无需额外选择器。
+
+   `--color-on-accent`（压在 accent 实色块上的文字色）**无法用 color-mix
+   推导**——它必须随 accent 明度在浅/深文字间切换。自由取色时没有正确
+   答案，故保持静态（白），等 L3.5 的策展调色板把 on-accent 与 accent
+   一起注入。 */
 :root {
   --color-accent: var(--color-accent-base);
+
+  /* hover：同色相加深。88% 而非更暗的比例，是为了让「绿 accent + 绿
+     hover」不至于糊成一片，同时保持明显的可交互反馈。 */
+  --color-accent-hover: color-mix(in srgb, var(--color-accent) 88%, black);
+  --color-accent-on-text: color-mix(in srgb, var(--color-accent) 16%, transparent);
+
+  /* soft 档：accent 极淡的底。混白而非降低 alpha——半透明叠在不同底色
+     上会算出不同观感，token 就失去「唯一定义」的意义。 */
+  --color-accent-soft: color-mix(in srgb, var(--color-accent) 10%, white);
+  --color-accent-soft-strong: color-mix(in srgb, var(--color-accent) 18%, white);
+
+  /* 压在 accent 实色上的文字。自由取色下无正解，L3.5 由调色板注入。 */
+  --color-on-accent: #ffffff;
 }
