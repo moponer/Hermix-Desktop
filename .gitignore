@@ -187,3 +187,6 @@ apps/desktop-tauri/src-tauri/.scratch/
 # IM channel credentials — do NOT commit (plaintext bot secret)
 im_channels.json
 hermix_home/im_channels.json
+
+# git worktree 检出目录（本地开发态，不入库）
+.worktrees/

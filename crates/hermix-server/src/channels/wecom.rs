@@ -432,17 +432,29 @@ pub async fn run_gateway(
     events: mpsc::Sender<Inbound>,
     mut shutdown: watch::Receiver<bool>,
     mut commands: mpsc::UnboundedReceiver<String>,
+    connected: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    last_error: std::sync::Arc<std::sync::Mutex<Option<String>>>,
 ) {
     let mut attempt = 0usize;
     loop {
         if *shutdown.borrow() {
             return;
         }
-        let result = connect_and_pump(&port, &events, &mut shutdown, &mut commands).await;
+        let result = connect_and_pump(&port, &events, &mut shutdown, &mut commands, connected.clone()).await;
+        // 出 pumps 即断线，统一复位——与 QQ 侧同一套状态语义。
+        connected.store(false, std::sync::atomic::Ordering::Relaxed);
         match result {
-            Ok(()) => attempt = 0,
+            Ok(()) => {
+                if let Ok(mut g) = last_error.lock() {
+                    *g = None;
+                }
+                attempt = 0;
+            }
             Err(e) => {
                 tracing::warn!(error = %e, "企业微信网关中断，准备重连");
+                if let Ok(mut g) = last_error.lock() {
+                    *g = Some(e);
+                }
                 attempt = (attempt + 1).min(RECONNECT_DELAYS_MS.len() - 1);
             }
         }
@@ -462,6 +474,7 @@ async fn connect_and_pump(
     events: &mpsc::Sender<Inbound>,
     shutdown: &mut watch::Receiver<bool>,
     commands: &mut mpsc::UnboundedReceiver<String>,
+    connected: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<(), String> {
     let (mut ws, _) = tokio_tungstenite::connect_async(WS_URL)
         .await
@@ -521,6 +534,7 @@ async fn connect_and_pump(
                 if !authed {
                     if frame.cmd.is_none() && frame.errcode == Some(0) {
                         authed = true;
+                        connected.store(true, std::sync::atomic::Ordering::Relaxed);
                         tracing::info!("企业微信智能机器人已认证");
                         continue;
                     }

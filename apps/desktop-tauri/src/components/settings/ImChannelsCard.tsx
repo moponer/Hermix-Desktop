@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  Clock3,
   MessageSquare,
   QrCode,
   RefreshCw,
@@ -26,6 +27,8 @@ interface ChannelStatusItem {
   platform: string;
   bound: boolean;
   connected: boolean;
+  /** 最近一次网关故障原文（后端 channels/status 的 detail，连上后为 null）。 */
+  detail?: string | null;
 }
 
 interface BindStartResult {
@@ -59,6 +62,8 @@ const PLATFORMS: {
   hint: string;
   bindHint: string;
   sandboxNote: string;
+  /** 「网关未连接」错误面板里的排查建议（detail 原文之上的一句话）。 */
+  failHint: string;
 }[] = [
   {
     id: "qq",
@@ -72,6 +77,7 @@ const PLATFORMS: {
        其他人私聊它收不到 —— 表现为「绑定了但机器人不回消息」的头号原因。 */
     sandboxNote:
       "刚建好的机器人默认处于沙箱环境：只有你在 QQ 开放平台把它加进「沙箱白名单」的那个 QQ 号才能私聊它并收到回复。要给别人用需发布到正式环境。",
+    failHint: "查 AppSecret 是否填错、机器人是否在开放平台被停用，以及本机能否出网到 QQ 网关。",
   },
   {
     id: "wecom",
@@ -82,6 +88,7 @@ const PLATFORMS: {
     hint: "企业微信智能机器人 · 只处理单聊 · 气泡原地刷新",
     bindHint: "用企业微信扫码，创建并授权智能机器人，botid 与 secret 自动写入。",
     sandboxNote: "",
+    failHint: "查 botid / secret 是否填错、智能机器人是否被停用，以及本机出网是否正常。",
   },
 ];
 
@@ -115,10 +122,17 @@ export function ImChannelsCard() {
   const [statusError, setStatusError] = useState<string | null>(null);
   /** 网关是否真连上了。凭据在 ≠ 通道活着 —— 「机器人不回消息」多半卡在这里。 */
   const [live, setLive] = useState<Record<string, boolean>>({});
+  /** 各平台最近一次网关故障原文（有 = 后端最近报过错，面板逐字展示）。 */
+  const [liveDetail, setLiveDetail] = useState<Record<string, string>>({});
+  /** live 数据是否真的来自服务端（否则不亮「网关未连接」，免得误报）。 */
+  const [liveLoaded, setLiveLoaded] = useState(false);
   /** 正在扫码的平台 → 二维码。同一时刻只有一个平台在绑定。 */
   const [binding, setBinding] = useState<{ platform: string; url: string; svg: string } | null>(null);
   const [bindingNote, setBindingNote] = useState<string | null>(null);
   const [pairCode, setPairCode] = useState<PairingCodeResult | null>(null);
+  /** 配对码生成时刻 —— 倒计时进度条的锚点（同 ZCode 的 bind-code 面板）。 */
+  const [pairCodeAt, setPairCodeAt] = useState(0);
+  const [nowTs, setNowTs] = useState(() => Date.now());
   const [busy, setBusy] = useState(false);
   const pollTimer = useRef<number | null>(null);
   const sessionKey = useRef<string | null>(null);
@@ -129,12 +143,23 @@ export function ImChannelsCard() {
       setStatus(res.platforms);
       setStatusError(null);
       fetchJSON<{ platforms: ChannelStatusItem[] }>("/api/channels/status")
-        .then((st) =>
+        .then((st) => {
           setLive(
             Object.fromEntries(st.platforms.map((p) => [p.platform, p.connected])),
-          ),
-        )
-        .catch(() => setLive({}));
+          );
+          setLiveDetail(
+            Object.fromEntries(
+              st.platforms
+                .filter((p) => p.detail)
+                .map((p) => [p.platform, p.detail as string]),
+            ),
+          );
+          setLiveLoaded(true);
+        })
+        .catch(() => {
+          setLive({});
+          setLiveLoaded(false);
+        });
     } catch (e) {
       setStatusError(e instanceof Error ? e.message : String(e));
       setStatus(null);
@@ -255,11 +280,19 @@ export function ImChannelsCard() {
         method: "POST",
         body: JSON.stringify({ platform }),
       });
+      setPairCodeAt(Date.now());
       setPairCode(res);
     } catch (e) {
       toastError(`生成配对码失败：${e instanceof Error ? e.message : String(e)}`);
     }
   }, []);
+
+  // 配对码在屏上时每 500ms 走一次时钟 —— 倒计时条 + 「已过期」态都靠它。
+  useEffect(() => {
+    if (!pairCode) return;
+    const t = window.setInterval(() => setNowTs(Date.now()), 500);
+    return () => window.clearInterval(t);
+  }, [pairCode]);
 
   const copyCode = useCallback(async () => {
     if (!pairCode) return;
@@ -272,6 +305,12 @@ export function ImChannelsCard() {
   }, [pairCode]);
 
   const anyBound = status?.some((s) => s.bound) ?? false;
+
+  // 配对码倒计时（同 ZCode bind-code 面板：三段变色进度条 + 过期态）。
+  const pairTotalMs = pairCode ? pairCode.ttl_secs * 1000 : 0;
+  const pairRemainingMs = pairCode ? Math.max(0, pairCodeAt + pairTotalMs - nowTs) : 0;
+  const pairExpired = pairCode !== null && pairTotalMs > 0 && pairRemainingMs <= 0;
+  const pairProgress = pairTotalMs > 0 ? pairRemainingMs / pairTotalMs : 0;
 
   return (
     <div className="space-y-6">
@@ -406,6 +445,21 @@ export function ImChannelsCard() {
                   </div>
                 </div>
 
+                {bound && liveLoaded && !live[p.id] && (
+                  <div className="flex items-start gap-2 rounded-lg border border-border-secondary bg-bg-card-hover px-3 py-2">
+                    <AlertTriangle className="icon-sm mt-0.5 shrink-0 text-warning" />
+                    <div className="min-w-0">
+                      <div className="text-[length:var(--text-meta)] font-medium text-text-primary">网关连接失败</div>
+                      {liveDetail[p.id] ? (
+                        <div className="mt-0.5 break-all font-mono text-[length:var(--text-meta)] text-text-secondary">
+                          {liveDetail[p.id]}
+                        </div>
+                      ) : null}
+                      <div className="mt-1 text-[length:var(--text-meta)] text-text-muted">{p.failHint}</div>
+                    </div>
+                  </div>
+                )}
+
                 {isBinding && (
                   <div className="flex flex-wrap items-start gap-4 pt-3 border-t border-border-secondary">
                     <div
@@ -480,11 +534,20 @@ export function ImChannelsCard() {
                 </span>
                 <button
                   onClick={() => void copyCode()}
-                  className="h-7 w-7 rounded-md grid place-items-center text-text-secondary hover:text-text-primary hover:bg-bg-card border border-border-secondary"
-                  title="复制配对码"
+                  disabled={pairExpired}
+                  className="h-7 w-7 rounded-md grid place-items-center text-text-secondary hover:text-text-primary hover:bg-bg-card border border-border-secondary disabled:opacity-40 disabled:cursor-default"
+                  title={pairExpired ? "码已过期，需重新生成" : "复制配对码"}
                 >
                   <Copy className="icon-sm" />
                 </button>
+                {pairExpired && (
+                  <button
+                    onClick={() => void makePairCode(pairCode.platform)}
+                    className="h-7 px-2.5 rounded-md text-[length:var(--text-meta)] text-accent hover:bg-bg-card border border-border-secondary"
+                  >
+                    重新生成
+                  </button>
+                )}
                 <button
                   onClick={() => setPairCode(null)}
                   className="h-7 px-2.5 rounded-md text-[length:var(--text-meta)] text-text-secondary hover:text-text-primary hover:bg-bg-card border border-border-secondary"
@@ -492,8 +555,31 @@ export function ImChannelsCard() {
                   收起
                 </button>
               </div>
-              <div className="mt-1 text-[length:var(--text-meta)] text-text-muted">
-                {pairCode.ttl_secs / 60} 分钟内有效、只能用一次。重新生成后旧码立即作废。连续输错 5 次只锁定该账号，不影响其它人。
+              <div className="mt-1 flex items-center gap-1.5 text-[length:var(--text-meta)] text-text-muted">
+                <Clock3 className="icon-sm shrink-0" />
+                {pairExpired
+                  ? "码已过期，点「重新生成」再发一次"
+                  : `${Math.ceil(pairRemainingMs / 1000)} 秒内有效、只能用一次；重新生成后旧码立即作废。连续输错 5 次只锁定该账号，不影响其它人。`}
+              </div>
+              <div className="mt-2 h-1 overflow-hidden rounded-full bg-bg-hover">
+                <div
+                  className={
+                    "h-full " +
+                    (pairExpired
+                      ? "bg-border-secondary"
+                      : pairProgress <= 0.1
+                        ? "bg-error"
+                        : pairRemainingMs <= 10_000
+                          ? "bg-warning"
+                          : "bg-accent")
+                  }
+                  style={{
+                    width: "100%",
+                    transformOrigin: "left",
+                    transform: `scaleX(${pairProgress})`,
+                    transition: "transform 300ms linear",
+                  }}
+                />
               </div>
             </div>
           </div>

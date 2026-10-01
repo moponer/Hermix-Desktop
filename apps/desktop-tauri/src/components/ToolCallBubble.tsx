@@ -278,7 +278,9 @@ export function ProcessTimeline({
     [steps, isStreaming],
   );
 
-  if (steps.length === 0) return null;
+  // 早退必须放在**所有** hooks 之后（下面还有 segments useMemo）——
+  // 夹在两个 useMemo 之间时，steps 从空变非空会让钩子数量从 3 变 4，
+  // React 报 "Rendered more hooks than during the previous render"。
 
   // Whether this turn has any reasoning/tool/approval-process scaffolding.
   // Pure-text turns render with no fold header (text flows as plain
@@ -364,6 +366,8 @@ export function ProcessTimeline({
   // cc-haha `ActivityGroup.tsx:91-103` 的 data-single-step。
   const showSummary = shouldSummarize(steps, reasoningSteps.length);
   const activityLabel = segments.length > 0 ? segments.join("、") : settledLabel;
+
+  if (steps.length === 0) return null;
 
 
   // Reasoning and tool steps are kept as siblings, never nested. They
@@ -866,11 +870,31 @@ export function ToolMessageCard({
   onPathClick?: (path: string, e: React.MouseEvent) => void;
 }) {
   const meta = message.tool;
+  // 钩子必须先于任何早退：流式 tool 消息在 meta 落位前后钩子数量不变，
+  // 否则 "Rendered more hooks than during the previous render"。
+  const [open, setOpen] = useState(false);
+  const resultPeek = useMemo(() => {
+    if (!meta) return null;
+    const mem = meta.tool === "memory" ? parseMemoryResult(meta.output) : null;
+    if (mem) return null;
+    if (meta.status === "error") {
+      return meta.errorReason
+        ?? summarizeError(meta.output)
+        ?? (meta.output ? toolResultPeek(meta.output, meta.args) : null)
+        ?? "执行出错";
+    }
+    if (!meta.output || meta.output.trim().length === 0) return null;
+    if (meta.status === "running" && !meta.completedAt) return null;
+    return toolResultPeek(meta.output, meta.args);
+  }, [meta?.tool, meta?.output, meta?.args, meta?.status, meta?.completedAt, meta?.errorReason]);
+  const archiveChip = useMemo(
+    () => (meta ? memoryArchiveChip(meta.tool, meta.output) : null),
+    [meta?.tool, meta?.output],
+  );
   if (!meta) return null;
   const Icon = toolIcon(meta.tool);
   const isRunning = meta.status === "running";
   const isError = meta.status === "error";
-  const [open, setOpen] = useState(false);
   const hasOutput = meta.output != null && meta.output.length > 0;
   // Memory tool: lift the structured JSON result so the row reads
   // `<动作> <记忆文件路径> <状态>` and the path is clickable to a
@@ -928,28 +952,7 @@ export function ToolMessageCard({
   // Result peek — a one-line human-readable summary of what the
   // tool produced (or why it failed). Extracted from the output
   // in priority order: error message → success summary → first line.
-  const resultPeek = useMemo(() => {
-    // Memory tool: the status badge already states the outcome
-    // ("未查到对应内容" / "成功" / …); keep the row to a single line
-    // and let the expandable body carry the full message.
-    if (memResult) return null;
-    if (isError) {
-      return meta.errorReason
-        ?? summarizeError(meta.output)
-        ?? (meta.output ? toolResultPeek(meta.output, meta.args) : null)
-        ?? "执行出错";
-    }
-    if (!meta.output || meta.output.trim().length === 0) return null;
-    // For running tools, don't show a result peek (it's not done yet)
-    if (isRunning && !meta.completedAt) return null;
-    return toolResultPeek(meta.output, meta.args);
-  }, [meta.output, meta.args, meta.status, meta.completedAt, meta.errorReason, isError, isRunning]);
 
-  // Archive chip for memory operations that triggered auto-archive.
-  const archiveChip = useMemo(
-    () => memoryArchiveChip(meta.tool, meta.output),
-    [meta.tool, meta.output],
-  );
 
   return (
     <div className="tw-msg h-enter chat-tool-call chat-tool-call--tool">

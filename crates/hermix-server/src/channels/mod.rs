@@ -146,6 +146,9 @@ pub struct ImRuntime {
     /// 平台 → 网关是否已连上（凭据在 ≠ 通道活着）。"机器人不回消息"时
     /// 用户唯一需要看的就是这两个字的差别，所以单独暴露成状态接口。
     connected: HashMap<&'static str, Arc<AtomicBool>>,
+    /// 平台 → 最近一次网关故障的原文（连上后清空）。状态接口把它随
+    /// `connected` 一起给出，前端错误面板不用再猜"为什么没连上"。
+    last_error: HashMap<&'static str, Arc<std::sync::Mutex<Option<String>>>>,
 }
 
 impl ImRuntime {
@@ -162,6 +165,8 @@ impl ImRuntime {
         // 收据留到 ChannelRuntime 建好之后再挂分发器——分发器需要 runtime。
         let mut inbound: Vec<(&'static str, mpsc::Receiver<Inbound>)> = Vec::new();
         let mut connected: HashMap<&'static str, Arc<AtomicBool>> = HashMap::new();
+        let mut last_error: HashMap<&'static str, Arc<std::sync::Mutex<Option<String>>>> =
+            HashMap::new();
 
         for c in creds {
             let (tx, rx) = mpsc::channel(64);
@@ -170,9 +175,11 @@ impl ImRuntime {
                     let api = Arc::new(QqApi::new(c.primary.clone(), c.secondary.clone()));
                     ports.push(Arc::new(qq::QqPort::new(api.clone())));
                     let flag = Arc::new(AtomicBool::new(false));
+                    let err = Arc::new(std::sync::Mutex::new(None));
                     connected.insert("qq", flag.clone());
+                    last_error.insert("qq", err.clone());
                     handles.push(tokio::spawn(qq::run_gateway(
-                        api, tx, shutdown_rx.clone(), flag,
+                        api, tx, shutdown_rx.clone(), flag, err,
                     )));
                 }
                 "wecom" => {
@@ -183,11 +190,17 @@ impl ImRuntime {
                     port.attach_sender(cmd_tx);
                     let gw = Arc::new(port);
                     ports.push(gw.clone());
+                    let flag = Arc::new(AtomicBool::new(false));
+                    let err = Arc::new(std::sync::Mutex::new(None));
+                    connected.insert("wecom", flag.clone());
+                    last_error.insert("wecom", err.clone());
                     handles.push(tokio::spawn(wecom::run_gateway(
                         gw,
                         tx,
                         shutdown_rx.clone(),
                         cmd_rx,
+                        flag,
+                        err,
                     )));
                 }
                 other => {
@@ -219,6 +232,7 @@ impl ImRuntime {
             shutdown,
             handles: tokio::sync::Mutex::new(handles),
             connected,
+            last_error,
         }))
     }
 
@@ -227,6 +241,16 @@ impl ImRuntime {
         self.connected
             .iter()
             .map(|(k, v)| (*k, v.load(std::sync::atomic::Ordering::Relaxed)))
+            .collect()
+    }
+
+    /// 各平台最近一次网关故障原文（`None` = 从未报错或已恢复）。
+    pub fn last_errors(&self) -> HashMap<&'static str, Option<String>> {
+        self.last_error
+            .iter()
+            .map(|(k, v)| {
+                (*k, v.lock().unwrap_or_else(|p| p.into_inner()).clone())
+            })
             .collect()
     }
 
@@ -475,6 +499,10 @@ pub struct ChannelStatusItem {
     /// 网关是否已连上。`bound && !connected` = 凭据在但通道没活（网络 /
     /// 沙箱 / 凭据过期），这是"机器人不回消息"最常见的一档。
     pub connected: bool,
+    /// 最近一次网关故障原文（连上后清空）。前端错误面板逐字展示，
+    /// 用户不用猜"为什么没连上"。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 /// `GET /api/channels/status` — 凭据 + 网关连接状态合并视图（仅本机）。
@@ -485,9 +513,12 @@ pub(crate) async fn channel_status(
         return r;
     }
     let stored = load_stored();
-    let live = match runtime_slot().lock() {
-        Ok(g) => g.as_ref().map(|rt| rt.connection_status()).unwrap_or_default(),
-        Err(_) => Default::default(),
+    let (live, errors) = match runtime_slot().lock() {
+        Ok(g) => match g.as_ref() {
+            Some(rt) => (rt.connection_status(), rt.last_errors()),
+            None => (Default::default(), Default::default()),
+        },
+        Err(_) => (Default::default(), Default::default()),
     };
     let items: Vec<ChannelStatusItem> = ["qq", "wecom"]
         .into_iter()
@@ -495,6 +526,7 @@ pub(crate) async fn channel_status(
             platform: p.to_string(),
             bound: stored.contains_key(p),
             connected: live.get(p).copied().unwrap_or(false),
+            detail: errors.get(p).and_then(|s| s.clone()),
         })
         .collect();
     Json(serde_json::json!({ "platforms": items })).into_response()

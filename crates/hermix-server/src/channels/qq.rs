@@ -575,6 +575,7 @@ pub async fn run_gateway(
     events: mpsc::Sender<Inbound>,
     mut shutdown: watch::Receiver<bool>,
     connected: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    last_error: std::sync::Arc<std::sync::Mutex<Option<String>>>,
 ) {
     let mut resume = ResumeState::default();
     let mut attempt = 0usize;
@@ -588,11 +589,18 @@ pub async fn run_gateway(
         connected.store(false, std::sync::atomic::Ordering::Relaxed);
         match result {
             Ok(()) => {
-                // 正常断开：立刻重连。
+                // 正常断开：立刻重连。故障记录也一并清掉——上一条是旧的。
+                if let Ok(mut g) = last_error.lock() {
+                    *g = None;
+                }
                 attempt = 0;
             }
             Err(e) => {
                 tracing::warn!(error = %e, "QQ 网关连接中断，准备重连");
+                // 原文进状态接口，前端错误面板逐字给用户看。
+                if let Ok(mut g) = last_error.lock() {
+                    *g = Some(e);
+                }
                 attempt = (attempt + 1).min(RECONNECT_DELAYS_MS.len() - 1);
             }
         }
