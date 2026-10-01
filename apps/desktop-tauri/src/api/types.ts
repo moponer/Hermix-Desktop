@@ -239,6 +239,34 @@ export interface CatalogResponse {
   staleReason?: string;
 }
 
+// ── MCP 目录数据源（批次 M2）─────────────────────
+
+export interface CatalogSourceInfo {
+  id: "official" | "builtin-offline" | "self-hosted" | "modelscope";
+  name: string;
+  description: string;
+  /** 实验源默认隐藏，show_experimental 打开才在下拉出现。 */
+  experimental: boolean;
+}
+
+export interface CatalogSourcesResponse {
+  current: string;
+  /** env 覆盖生效中（UI 显示锁定提示并禁用切换）。 */
+  envOverride: boolean;
+  customUrl?: string;
+  showExperimental: boolean;
+  sources: CatalogSourceInfo[];
+}
+
+export interface CatalogProbeResult {
+  ok: boolean;
+  source: string;
+  url: string;
+  latencyMs: number;
+  shapeOk: boolean;
+  error?: string;
+}
+
 // ── Auto-correct model ──────────────────────────
 
 export interface AutoCorrectReport {

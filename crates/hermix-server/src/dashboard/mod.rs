@@ -113,6 +113,12 @@ pub fn router() -> Router<HttpServerState> {
         .route("/api/mcp/servers/reset", post(mcp::reset_to_official))
         // MCP 社区目录（官方 registry）+ 一键添加
         .route("/api/mcp/catalog", get(mcp_catalog::get_catalog))
+        // 批次 M2：多源手动切换（源清单/切换/连通性探测）
+        .route(
+            "/api/mcp/catalog/sources",
+            get(mcp_catalog::get_sources).put(mcp_catalog::set_source),
+        )
+        .route("/api/mcp/catalog/probe", get(mcp_catalog::probe))
         .route(
             "/api/mcp/catalog/install",
             post(mcp_catalog::install),

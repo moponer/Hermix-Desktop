@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import * as api from "../../api/rest";
 import type { CatalogEntry } from "../../api/types";
+import { CatalogSourceBar } from "./CatalogSourceBar";
 import { toastError, toastSuccess } from "../../hooks/useToast";
 
 const CATEGORY_ICON: Record<string, React.ReactNode> = {
@@ -52,6 +53,9 @@ export function McpCatalogGrid({ onInstalled }: { onInstalled: () => void }) {
   };
 
   useEffect(() => { load(false); }, []);
+
+  // 换源后必须重拉目录：缓存键没有按源隔离，旧源数据会误导用户。
+  const reloadAfterSourceChange = () => load(true);
 
   const installedIds = useMemo(() => new Set<string>(), []);
   void installedIds; // 已安装判定交给父组件（它有列表），这里只管目录
@@ -119,6 +123,7 @@ export function McpCatalogGrid({ onInstalled }: { onInstalled: () => void }) {
 
   return (
     <div className="space-y-3">
+      <CatalogSourceBar onChanged={reloadAfterSourceChange} />
       <div className="flex items-center gap-2 flex-wrap">
         <span className="text-[length:var(--text-ui)] font-semibold text-text-primary">社区目录</span>
         <span className="text-[length:var(--text-tiny)] text-text-faint">{visible.length} 个</span>

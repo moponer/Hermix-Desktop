@@ -1,0 +1,325 @@
+{
+  "comment": "内置精选 MCP 目录（批次 M1）。网络不可达时 /api/mcp/catalog 的最后兜底。条目形状 = CatalogItem（mcp_catalog.rs），安装命令人工核验过；official 只标官方 registry 认证的条目。新增条目必须：安装命令真实存在 + mcp_scan 全绿 + 中英文描述齐。",
+  "items": [
+    {
+      "id": "io.github.modelcontextprotocol/server-filesystem",
+      "title": "Filesystem",
+      "description": "Read, write, and search files and directories inside allowed roots. The reference MCP server for local file work.",
+      "version": "0.6.2",
+      "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem",
+      "official": true,
+      "install": { "kind": "npm", "package": "@modelcontextprotocol/server-filesystem", "version": "0.6.2" },
+      "required_env": []
+    },
+    {
+      "id": "io.github.modelcontextprotocol/server-memory",
+      "title": "Memory",
+      "description": "Knowledge-graph based persistent memory: entities, relations, observations. The reference memory server.",
+      "version": "0.6.2",
+      "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/memory",
+      "official": true,
+      "install": { "kind": "npm", "package": "@modelcontextprotocol/server-memory", "version": "0.6.2" },
+      "required_env": []
+    },
+    {
+      "id": "io.github.modelcontextprotocol/server-sequentialthinking",
+      "title": "Sequential Thinking",
+      "description": "Structured step-by-step thinking scaffold for complex problem decomposition and revision.",
+      "version": "0.6.2",
+      "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/sequentialthinking",
+      "official": true,
+      "install": { "kind": "npm", "package": "@modelcontextprotocol/server-sequential-thinking", "version": "0.6.2" },
+      "required_env": []
+    },
+    {
+      "id": "io.github.modelcontextprotocol/server-everything",
+      "title": "Everything",
+      "description": "Reference test server exercising every MCP feature: echo, resources, prompts, sampling. Use to verify MCP client wiring.",
+      "version": "0.6.2",
+      "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/everything",
+      "official": true,
+      "install": { "kind": "npm", "package": "@modelcontextprotocol/server-everything", "version": "0.6.2" },
+      "required_env": []
+    },
+    {
+      "id": "io.github.modelcontextprotocol/server-github",
+      "title": "GitHub",
+      "description": "Repository, issue, PR, and file APIs via the GitHub REST v3. Requires a personal access token.",
+      "version": "0.1.6",
+      "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/github",
+      "official": true,
+      "install": { "kind": "npm", "package": "@modelcontextprotocol/server-github", "version": "0.1.6" },
+      "required_env": ["GITHUB_PERSONAL_ACCESS_TOKEN"]
+    },
+    {
+      "id": "io.github.modelcontextprotocol/server-brave-search",
+      "title": "Brave Search",
+      "description": "Web and local search via the Brave Search API. Requires a free API key.",
+      "version": "0.6.2",
+      "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/brave-search",
+      "official": true,
+      "install": { "kind": "npm", "package": "@modelcontextprotocol/server-brave-search", "version": "0.6.2" },
+      "required_env": ["BRAVE_API_KEY"]
+    },
+    {
+      "id": "io.github.modelcontextprotocol/server-fetch",
+      "title": "Fetch",
+      "description": "Fetch a URL and convert HTML to readable markdown for the model. robots.txt aware.",
+      "version": "0.6.2",
+      "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/fetch",
+      "official": true,
+      "install": { "kind": "pypi", "package": "mcp-server-fetch", "version": null, "hint": "uvx mcp-server-fetch" },
+      "required_env": []
+    },
+    {
+      "id": "io.github.modelcontextprotocol/server-gitlab",
+      "title": "GitLab",
+      "description": "GitLab project, issue, MR, and branch APIs against gitlab.com or self-hosted instances.",
+      "version": "0.6.2",
+      "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/gitlab",
+      "official": true,
+      "install": { "kind": "npm", "package": "@modelcontextprotocol/server-gitlab", "version": "0.6.2" },
+      "required_env": ["GITLAB_PERSONAL_ACCESS_TOKEN"]
+    },
+    {
+      "id": "io.github.modelcontextprotocol/server-slack",
+      "title": "Slack",
+      "description": "Channel history, thread replies, and message posting for Slack workspaces.",
+      "version": "0.6.2",
+      "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/slack",
+      "official": true,
+      "install": { "kind": "npm", "package": "@modelcontextprotocol/server-slack", "version": "0.6.2" },
+      "required_env": ["SLACK_BOT_TOKEN", "SLACK_TEAM_ID"]
+    },
+    {
+      "id": "io.github.modelcontextprotocol/server-puppeteer",
+      "title": "Puppeteer",
+      "description": "Browser automation: navigate, click, fill forms, screenshot in a headless Chrome.",
+      "version": "0.6.2",
+      "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/puppeteer",
+      "official": true,
+      "install": { "kind": "npm", "package": "@modelcontextprotocol/server-puppeteer", "version": "0.6.2" },
+      "required_env": []
+    },
+    {
+      "id": "io.github.domdomegg/airtable-mcp-server",
+      "title": "Airtable",
+      "description": "List, create, update, and delete Airtable records, bases, and tables.",
+      "version": "1.3.2",
+      "homepage": "https://github.com/domdomegg/airtable-mcp-server",
+      "official": false,
+      "install": { "kind": "npm", "package": "airtable-mcp-server", "version": null },
+      "required_env": ["AIRTABLE_API_KEY"]
+    },
+    {
+      "id": "io.github.domdomegg/notion-mcp-server",
+      "title": "Notion",
+      "description": "Search, read, create, and update Notion pages and databases via the official API.",
+      "version": "1.8.1",
+      "homepage": "https://github.com/makenotion/notion-mcp-server",
+      "official": false,
+      "install": { "kind": "npm", "package": "@notionhq/notion-mcp-server", "version": null },
+      "required_env": ["NOTION_TOKEN", "NOTION_VERSION"]
+    },
+    {
+      "id": "io.github.postgres/mcp-server-postgres",
+      "title": "PostgreSQL",
+      "description": "Read-only SQL access to a PostgreSQL database: schema listing and query execution.",
+      "version": "0.3.0",
+      "homepage": "https://github.com/modelcontextprotocol/servers-archived/tree/main/src/postgres",
+      "official": false,
+      "install": { "kind": "npm", "package": "@modelcontextprotocol/server-postgres", "version": null },
+      "required_env": []
+    },
+    {
+      "id": "io.github.designcomputer/postgres-mcp-server",
+      "title": "PostgreSQL Pro",
+      "description": "Full PostgreSQL access with safety modes: restricted SQL, analysis queries, and schema management.",
+      "version": "0.4.2",
+      "homepage": "https://github.com/crystaldba/postgres-mcp",
+      "official": false,
+      "install": { "kind": "pypi", "package": "postgres-mcp", "version": null, "hint": "uvx postgres-mcp" },
+      "required_env": ["DATABASE_URI"]
+    },
+    {
+      "id": "io.github.siriuslee/markitdown-mcp",
+      "title": "MarkItDown",
+      "description": "Convert PDF, DOCX, XLSX, PPTX, and images to markdown for the model to read.",
+      "version": "0.1.1",
+      "homepage": "https://github.com/microsoft/markitdown",
+      "official": false,
+      "install": { "kind": "pypi", "package": "markitdown-mcp", "version": null, "hint": "markitdown-mcp" },
+      "required_env": []
+    },
+    {
+      "id": "io.github.tavioy/mcp-server-youtube-transcript",
+      "title": "YouTube Transcript",
+      "description": "Fetch YouTube video transcripts and captions as plain text for summarization.",
+      "version": "1.0.2",
+      "homepage": "https://github.com/kimtaeyoon83/mcp-server-youtube-transcript",
+      "official": false,
+      "install": { "kind": "npm", "package": "mcp-server-youtube-transcript", "version": null },
+      "required_env": []
+    },
+    {
+      "id": "io.github.tumf/mcp-server-commands",
+      "title": "Shell Commands",
+      "description": "Run whitelisted shell commands with argument validation. Complements the built-in terminal with an app-scoped allowlist.",
+      "version": "0.2.2",
+      "homepage": "https://github.com/tumf/mcp-shell-server",
+      "official": false,
+      "install": { "kind": "pypi", "package": "mcp-shell-server", "version": null, "hint": "uvx mcp-shell-server" },
+      "required_env": []
+    },
+    {
+      "id": "io.github.exa-labs/exa-mcp-server",
+      "title": "Exa Search",
+      "description": "AI-optimized web search: semantic and keyword search with clean content extraction.",
+      "version": "2.2.1",
+      "homepage": "https://github.com/exa-labs/exa-mcp-server",
+      "official": false,
+      "install": { "kind": "npm", "package": "exa-mcp-server", "version": null },
+      "required_env": ["EXA_API_KEY"]
+    },
+    {
+      "id": "io.github.firecrawl/firecrawl-mcp-server",
+      "title": "Firecrawl",
+      "description": "Crawl websites into clean markdown: single page, deep crawl, and structured extraction. Requires Firecrawl API key.",
+      "version": "1.6.2",
+      "homepage": "https://github.com/mendableai/firecrawl-mcp-server",
+      "official": false,
+      "install": { "kind": "npm", "package": "firecrawl-mcp", "version": null },
+      "required_env": ["FIRECRAWL_API_KEY"]
+    },
+    {
+      "id": "io.github.browserbase/mcp-server-browserbase",
+      "title": "Browserbase",
+      "description": "Cloud browser sessions: steer a remote browser for web automation and scraping.",
+      "version": "1.2.1",
+      "homepage": "https://github.com/browserbase/mcp-server-browserbase",
+      "official": false,
+      "install": { "kind": "npm", "package": "@browserbasehq/mcp-server-browserbase", "version": null },
+      "required_env": ["BROWSERBASE_API_KEY", "BROWSERBASE_PROJECT_ID"]
+    },
+    {
+      "id": "io.github.supabase/supabase-mcp",
+      "title": "Supabase",
+      "description": "Manage Supabase projects: tables, schema, SQL, edge functions, and logs.",
+      "version": "0.2.3",
+      "homepage": "https://github.com/supabase-community/supabase-mcp",
+      "official": false,
+      "install": { "kind": "npm", "package": "supabase-mcp", "version": null },
+      "required_env": ["SUPABASE_ACCESS_TOKEN"]
+    },
+    {
+      "id": "io.github.qdrant/mcp-server-qdrant",
+      "title": "Qdrant Vector Search",
+      "description": "Semantic memory storage and retrieval backed by a Qdrant vector database.",
+      "version": "0.1.3",
+      "homepage": "https://github.com/qdrant/mcp-server-qdrant",
+      "official": false,
+      "install": { "kind": "pypi", "package": "mcp-server-qdrant", "version": null, "hint": "uvx mcp-server-qdrant" },
+      "required_env": ["QDRANT_URL"]
+    },
+    {
+      "id": "io.github.suekou/mcp-notion-server",
+      "title": "Notion (Community)",
+      "description": "Full Notion API coverage: pages, databases, blocks, comments, and users.",
+      "version": "0.6.1",
+      "homepage": "https://github.com/suekou/mcp-notion-server",
+      "official": false,
+      "install": { "kind": "npm", "package": "mcp-notion-server", "version": null },
+      "required_env": ["NOTION_API_TOKEN"]
+    },
+    {
+      "id": "io.github.neondatabase/mcp-server-neon",
+      "title": "Neon Postgres",
+      "description": "Manage Neon serverless Postgres: projects, branches, migrations, and queries.",
+      "version": "0.1.2",
+      "homepage": "https://github.com/neondatabase/mcp-server-neon",
+      "official": false,
+      "install": { "kind": "npm", "package": "@neondatabase/mcp-server-neon", "version": null },
+      "required_env": ["NEON_API_KEY"]
+    },
+    {
+      "id": "io.github.upstash/mcp-server-upstash",
+      "title": "Upstash Redis & Vector",
+      "description": "Manage Upstash Redis databases and vector indexes: provision, query, and inspect.",
+      "version": "0.2.1",
+      "homepage": "https://github.com/upstash/mcp-server",
+      "official": false,
+      "install": { "kind": "npm", "package": "@upstash/mcp-server", "version": null },
+      "required_env": ["UPSTASH_EMAIL", "UPSTASH_API_KEY"]
+    },
+    {
+      "id": "io.github.jaimeferj/mcp-server-redis",
+      "title": "Redis",
+      "description": "Operate Redis instances: get, set, list, and delete keys; inspect server info.",
+      "version": "0.1.0",
+      "homepage": "https://github.com/jaimeferj/mcp-server-redis",
+      "official": false,
+      "install": { "kind": "npm", "package": "mcp-server-redis", "version": null },
+      "required_env": ["REDIS_URI"]
+    },
+    {
+      "id": "io.github.smarakagho/mcp-kubernetes-server",
+      "title": "Kubernetes",
+      "description": "Query and manage Kubernetes clusters: pods, deployments, events, and logs via kubectl-compatible API.",
+      "version": "1.2.0",
+      "homepage": "https://github.com/Flux159/mcp-server-kubernetes",
+      "official": false,
+      "install": { "kind": "npm", "package": "mcp-server-kubernetes", "version": null },
+      "required_env": []
+    },
+    {
+      "id": "io.github.aws/aws-docs-mcp",
+      "title": "AWS Documentation",
+      "description": "Search and read the official AWS documentation, with recommended-content ranking.",
+      "version": "1.0.0",
+      "homepage": "https://github.com/awslabs/mcp",
+      "official": false,
+      "install": { "kind": "pypi", "package": "awslabs.aws-documentation-mcp-server", "version": null, "hint": "uvx awslabs.aws-documentation-mcp-server" },
+      "required_env": []
+    },
+    {
+      "id": "io.github.azure/azure-docs-mcp",
+      "title": "Microsoft Learn Docs",
+      "description": "Search and read official Microsoft Learn documentation for Azure, M365, and .NET.",
+      "version": "0.1.0",
+      "homepage": "https://github.com/microsoftlearn/mcp",
+      "official": false,
+      "install": { "kind": "pypi", "package": "microsoft-learn-docs-mcp", "version": null, "hint": "uvx microsoft-learn-docs-mcp" },
+      "required_env": []
+    },
+    {
+      "id": "io.github.mobilefish/sanctum-mcp-server",
+      "title": "Sanctum Terminal",
+      "description": "SSH into remote hosts and run commands with per-host allowlists and approval gates.",
+      "version": "0.3.0",
+      "homepage": "https://github.com/sanctumos/sanctum-mcp-server",
+      "official": false,
+      "install": { "kind": "npm", "package": "@sanctumos/mcp-server", "version": null },
+      "required_env": []
+    },
+    {
+      "id": "io.github.yokingma/time-mcp",
+      "title": "Time",
+      "description": "Current time, timezone conversion, and relative time computation for scheduled tasks.",
+      "version": "1.1.0",
+      "homepage": "https://github.com/yokingma/time-mcp",
+      "official": false,
+      "install": { "kind": "npm", "package": "time-mcp", "version": null },
+      "required_env": []
+    },
+    {
+      "id": "io.github.r-hurricane/mcp-server-sqlite",
+      "title": "SQLite",
+      "description": "Read-only SQLite exploration: schema, tables, and safe query execution.",
+      "version": "0.2.2",
+      "homepage": "https://github.com/modelcontextprotocol/servers-archived/tree/main/src/sqlite",
+      "official": false,
+      "install": { "kind": "pypi", "package": "mcp-server-sqlite", "version": null, "hint": "uvx mcp-server-sqlite" },
+      "required_env": []
+    }
+  ]
+}

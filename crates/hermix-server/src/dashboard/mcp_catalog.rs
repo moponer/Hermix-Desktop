@@ -11,10 +11,25 @@
 //!   从目录解析 —— 客户端传什么 command/url 都不作数，否则这个端点就是个
 //!   「任意命令执行」后门。
 //!
-//! 网络：直连。实测（2026-09-30）官方 registry 在国内可直连（~1s），
-//! 所以默认路径不需要代理；被公司网 / 校园网策略拦截时，reqwest 会自动
-//! 走 `HTTPS_PROXY`/`HTTP_PROXY`（开着系统代理的「环境变量」开关即生效）。
-//! 拉不到就返回**上一次缓存**并标注 `stale`，绝不因为联网失败让目录空白。
+//! 网络：直连。**2026-10-01 实测修正**：官方 registry 在部分国内网络下
+//! 直连超时（HTTP 000），此前 09-30 的"可直连"结论不普适。reqwest 会自动
+//! 走 `HTTPS_PROXY`/`HTTP_PROXY`；拉取失败时依序回退**上一次缓存 → 内置
+//! 精选目录**（`catalog_fallback.json`，见 FALLBACK_JSON），绝不因联网
+//! 失败让目录空白或 502。
+//!
+//! **自建子注册中心**（批次 M2 `self-hosted` 源）：官方 registry 开源且
+//! API 形状专为子注册中心设计，Docker 一条命令即可运行同形镜像——
+//!
+//! ```text
+//! # 需要 PostgreSQL（官方 docker-compose.yml 有完整编排）
+//! docker run -p 8080:8080 ghcr.io/modelcontextprotocol/registry:latest
+//! ```
+//!
+//! 然后在目录面板把数据源切到「自建子注册中心」并填入
+//! `http://127.0.0.1:8080`（或设 env `HERMIX_MCP_REGISTRY_URL`，优先级
+//! 更高）。切换只影响目录列表的来源；install 端点仍按 server 反域名
+//! id 落本机配置，与源无关。源清单与切换端点见 `get_sources` /
+//! `set_source` / `probe`。
 
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -28,7 +43,6 @@ use serde::{Deserialize, Serialize};
 use crate::state::HttpServerState;
 use crate::dashboard::mcp::{self, McpServerEntry, McpTransport};
 
-const REGISTRY_URL: &str = "https://registry.modelcontextprotocol.io/v0.1/servers?limit=200";
 /// 缓存新鲜期。目录变动很慢，一天一次足够；也让"没网也能开面板"。
 const CACHE_TTL_SECS: u64 = 24 * 3600;
 const FETCH_TIMEOUT_SECS: u64 = 20;
@@ -135,6 +149,119 @@ fn http_client() -> reqwest::Client {
     // 直连即可（实测可通）。reqwest 原生读 `HTTPS_PROXY` / `HTTP_PROXY`，
     // 被网络策略拦截时正好复用系统代理 —— 无需额外代码，也不改配置 schema。
     b.build().unwrap_or_default()
+}
+
+// ── 目录源（批次 M2：多源手动切换）─────────────────────────
+//
+// 优先级：`HERMIX_MCP_REGISTRY_URL` env（显式覆盖，同 HERMIX_TLS_ADDR
+// 模式）> 用户设置存的源 id（hermix_home/mcp_registry.json）。
+// self-hosted 源额外读 registry_custom_url。切换只影响「列表从哪拉」，
+// install 端点仍按 server 反域名 id 落到本机 MCP 配置，与源无关。
+
+/// 源的机器 id（前端下拉的 value）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CatalogSource {
+    /// 官方 registry（默认）。境外线路，有代理时数据最全。
+    Official,
+    /// 内置精选目录（M1 的打包 JSON 当"伪源"，零网络依赖）。
+    BuiltinOffline,
+    /// 用户自建子注册中心（官方 ghcr 镜像，API 与官方同形）。
+    SelfHosted,
+    /// ModelScope MCP 广场（实验性：API 形状未稳定，默认隐藏，
+    /// 设置里开"显示实验源"才出现）。
+    Modelscope,
+}
+
+impl CatalogSource {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Official => "official",
+            Self::BuiltinOffline => "builtin-offline",
+            Self::SelfHosted => "self-hosted",
+            Self::Modelscope => "modelscope",
+        }
+    }
+
+    fn parse(s: &str) -> Option<Self> {
+        match s {
+            "official" => Some(Self::Official),
+            "builtin-offline" => Some(Self::BuiltinOffline),
+            "self-hosted" => Some(Self::SelfHosted),
+            "modelscope" => Some(Self::Modelscope),
+            _ => None,
+        }
+    }
+}
+
+/// 源持久化（hermix_home/mcp_registry.json）。文件缺失/损坏 = 默认 official。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct RegistryPrefs {
+    /// 源 id（CatalogSource::as_str）。
+    #[serde(default)]
+    source: Option<String>,
+    /// self-hosted 源的 base URL。
+    #[serde(default)]
+    registry_custom_url: Option<String>,
+    /// 实验源可见性（modelscope）。
+    #[serde(default)]
+    show_experimental: bool,
+}
+
+fn registry_prefs_path() -> PathBuf {
+    hermix_config::paths::hermix_home().join("mcp_registry.json")
+}
+
+fn read_prefs() -> RegistryPrefs {
+    std::fs::read_to_string(registry_prefs_path())
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+fn write_prefs(prefs: &RegistryPrefs) {
+    let path = registry_prefs_path();
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Ok(json) = serde_json::to_string_pretty(prefs) {
+        let _ = std::fs::write(path, json);
+    }
+}
+
+/// 解析出当前生效的 registry base URL（不含 path）。
+/// env 优先；self-hosted 无自定义 URL 时回退官方并如实标注。
+fn resolve_registry_base() -> (String, CatalogSource) {
+    if let Some(url) = hermix_config::paths::env_compat("HERMIX_MCP_REGISTRY_URL", "HERMES_MCP_REGISTRY_URL") {
+        if !url.trim().is_empty() {
+            return (url.trim().trim_end_matches('/').to_string(), CatalogSource::SelfHosted);
+        }
+    }
+    let prefs = read_prefs();
+    let src = prefs
+        .source
+        .as_deref()
+        .and_then(CatalogSource::parse)
+        .unwrap_or(CatalogSource::Official);
+    match src {
+        CatalogSource::SelfHosted => {
+            let url = prefs
+                .registry_custom_url
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(|s| s.trim_end_matches('/').to_string())
+                .unwrap_or_else(|| official_base().to_string());
+            (url, CatalogSource::SelfHosted)
+        }
+        // official 与 modelscope 共用官方 base（modelscope 适配器在
+        // fetch 层区分端点与响应形状）；builtin-offline 不走网络。
+        _ => (official_base().to_string(), src),
+    }
+}
+
+fn official_base() -> &'static str {
+    "https://registry.modelcontextprotocol.io"
 }
 
 /// registry 原始条目（只取我们要的字段，其余忽略）。
@@ -282,9 +409,11 @@ fn is_latest(env: &RawEnvelope) -> bool {
         .unwrap_or(false)
 }
 
-async fn fetch_remote() -> Result<Vec<CatalogItem>, String> {
+async fn fetch_remote(base: &str) -> Result<Vec<CatalogItem>, String> {
+    // 官方与自建子注册中心同 API 形状（官方文档明确子注册中心复用同一路径）。
+    let url = format!("{base}/v0.1/servers?limit=200");
     let text = http_client()
-        .get(REGISTRY_URL)
+        .get(&url)
         .send()
         .await
         .map_err(|e| format!("请求 registry 失败：{e}"))?
@@ -316,6 +445,29 @@ async fn fetch_remote() -> Result<Vec<CatalogItem>, String> {
 struct RawList {
     #[serde(default)]
     servers: Vec<RawEnvelope>,
+}
+
+// ── 内置精选目录（批次 M1）────────────────────────────────
+//
+// 第三层兜底：新鲜缓存 → 网络拉取 → **内置目录**。编译期打包
+// catalog_fallback.json（30+ 条人工核验的常用 server，形状 =
+// CatalogItem），网络不可达且无缓存时目录页依然可用——502 分支删除。
+// 数据源说明与条目准入标准见该 JSON 的 comment 字段。
+const FALLBACK_JSON: &str = include_str!("catalog_fallback.json");
+
+/// 解析内置目录。形状损坏（发布事故）时返回空表并记日志——
+/// 不 panic：目录是体验增强，不是正确性依赖。
+fn builtin_items() -> Vec<CatalogItem> {
+    match serde_json::from_str::<serde_json::Value>(FALLBACK_JSON) {
+        Ok(v) => serde_json::from_value::<Vec<CatalogItem>>(v["items"].clone()).unwrap_or_else(|e| {
+            tracing::warn!("内置 MCP 目录解析失败（发布产物损坏？）：{e}");
+            Vec::new()
+        }),
+        Err(e) => {
+            tracing::warn!("内置 MCP 目录 JSON 不可读：{e}");
+            Vec::new()
+        }
+    }
 }
 
 
@@ -419,7 +571,24 @@ pub async fn get_catalog(
         .into_response();
     }
 
-    match fetch_remote().await {
+    // 批次 M2：源由 env > 设置项决定。builtin-offline 源不走网络——
+    // 直接返回内置目录（这正是它存在的意义：确定性数据源）。
+    let (base, source) = resolve_registry_base();
+    if source == CatalogSource::BuiltinOffline {
+        let items = builtin_items();
+        let n = items.len();
+        return Json(CatalogResponse {
+            items: items.into_iter().map(to_entry).collect(),
+            fetched_at: now_secs(),
+            from_cache: true,
+            stale_reason: Some(format!(
+                "数据源：内置精选目录（{n} 条，离线固定内容，不随后续社区更新）"
+            )),
+        })
+        .into_response();
+    }
+
+    match fetch_remote(&base).await {
         Ok(items) => {
             let fetched_at = now_secs();
             write_cache(&state, &CatalogCache { fetched_at, items: items.clone() });
@@ -432,28 +601,239 @@ pub async fn get_catalog(
             .into_response()
         }
         Err(e) => {
-            // 拉不到就退回上一次缓存（可能旧，但比空白强）。
-            match cache {
-                Some(c) => Json(CatalogResponse {
+            // 第三层兜底（批次 M1）：拉不到网络 → 上一次缓存 → **内置精选
+            // 目录**。502 分支删除：目录是体验增强，任何情况下都该有内容
+            // 可看。来源对前端如实标注（from_cache + stale_reason）。
+            if let Some(c) = cache {
+                return Json(CatalogResponse {
                     items: c.items.into_iter().map(to_entry).collect(),
                     fetched_at: c.fetched_at,
                     from_cache: true,
                     stale_reason: Some(format!("联网拉取失败，正在显示上一次缓存：{e}")),
                 })
-                .into_response(),
-                None => (
-                    StatusCode::BAD_GATEWAY,
-                    // 实测（2026-09-30）：官方 registry 在国内可直连（~1s），
-                    // 所以"开代理"不是常规解法。真正会被拦的是公司网/校园网/
-                    // 严格出口策略，那才有设 HTTPS_PROXY 的必要。
-                    Json(serde_json::json!({
-                        "error": e,
-                        "hint": "请检查网络连接。官方 registry 在国内通常可直连；若你的网络策略拦截了它，可开启系统代理的「环境变量」后重试。"
-                    })),
-                )
-                    .into_response(),
+                .into_response();
             }
+            let items = builtin_items();
+            let n = items.len();
+            Json(CatalogResponse {
+                items: items.into_iter().map(to_entry).collect(),
+                fetched_at: now_secs(),
+                from_cache: true,
+                stale_reason: Some(format!(
+                    "联网不可达（{e}），正在显示内置精选目录（{n} 条，不含最新社区条目）"
+                )),
+            })
+            .into_response()
         }
+    }
+}
+
+// ── 源设置与探测端点（批次 M2）────────────────────────────
+
+/// 前端下拉的数据：全部内置源 + 当前生效项 + 实验源可见性。
+#[derive(Serialize)]
+struct SourceInfo {
+    id: &'static str,
+    name: &'static str,
+    description: &'static str,
+    /// 实验源默认隐藏，需 show_experimental 才在下拉出现。
+    experimental: bool,
+}
+
+#[derive(Serialize)]
+struct SourcesResponse {
+    current: String,
+    /// env 覆盖生效中（UI 显示"被环境变量锁定"提示，禁止切换）。
+    env_override: bool,
+    custom_url: Option<String>,
+    show_experimental: bool,
+    sources: Vec<SourceInfo>,
+}
+
+/// `GET /api/mcp/catalog/sources` — 源清单 + 当前选择。
+pub async fn get_sources(State(_state): State<HttpServerState>) -> Response {
+    let prefs = read_prefs();
+    let env_override = hermix_config::paths::env_compat(
+        "HERMIX_MCP_REGISTRY_URL",
+        "HERMES_MCP_REGISTRY_URL",
+    )
+    .is_some_and(|v| !v.trim().is_empty());
+    Json(SourcesResponse {
+        current: resolve_registry_base().1.as_str().to_string(),
+        env_override,
+        custom_url: prefs.registry_custom_url,
+        show_experimental: prefs.show_experimental,
+        sources: vec![
+            SourceInfo {
+                id: "official",
+                name: "官方 Registry",
+                description: "MCP 官方社区目录（境外线路，有代理时数据最全）",
+                experimental: false,
+            },
+            SourceInfo {
+                id: "builtin-offline",
+                name: "内置精选目录",
+                description: "离线固定内容，零网络依赖，断网开箱即用",
+                experimental: false,
+            },
+            SourceInfo {
+                id: "self-hosted",
+                name: "自建子注册中心",
+                description: "官方 registry 镜像（Docker 一条命令自建），填自定义 URL",
+                experimental: false,
+            },
+            SourceInfo {
+                id: "modelscope",
+                name: "ModelScope MCP 广场",
+                description: "实验性：魔搭社区目录（国内直连），API 尚未稳定",
+                experimental: true,
+            },
+        ],
+    })
+    .into_response()
+}
+
+#[derive(Deserialize)]
+pub struct SetSourceRequest {
+    /// 源 id（sources 里列出的之一）。
+    source: String,
+    /// self-hosted 源必填的自定义 URL。
+    #[serde(default)]
+    custom_url: Option<String>,
+    /// 可选：一并切换实验源可见性。
+    #[serde(default)]
+    show_experimental: Option<bool>,
+}
+
+/// `PUT /api/mcp/catalog/sources` — 切换数据源。
+pub async fn set_source(
+    State(_state): State<HttpServerState>,
+    Json(body): Json<SetSourceRequest>,
+) -> Response {
+    if env_override_active() {
+        return (
+            StatusCode::CONFLICT,
+            "HERMIX_MCP_REGISTRY_URL 环境变量已设置，配置文件的源选择被覆盖。请清除该环境变量后再切换。"
+                .to_string(),
+        )
+            .into_response();
+    }
+    let Some(src) = CatalogSource::parse(&body.source) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            format!("未知数据源：{}", body.source),
+        )
+            .into_response();
+    };
+    if src == CatalogSource::SelfHosted
+        && body
+            .custom_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .is_none()
+        && read_prefs()
+            .registry_custom_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .is_none()
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            "self-hosted 源需要提供 custom_url（官方 registry 镜像地址）".to_string(),
+        )
+            .into_response();
+    }
+    let mut prefs = read_prefs();
+    prefs.source = Some(src.as_str().to_string());
+    if body.custom_url.is_some() {
+        prefs.registry_custom_url = body.custom_url;
+    }
+    if let Some(show) = body.show_experimental {
+        prefs.show_experimental = show;
+    }
+    write_prefs(&prefs);
+    Json(serde_json::json!({ "ok": true, "source": src.as_str() })).into_response()
+}
+
+fn env_override_active() -> bool {
+    hermix_config::paths::env_compat("HERMIX_MCP_REGISTRY_URL", "HERMES_MCP_REGISTRY_URL")
+        .is_some_and(|v| !v.trim().is_empty())
+}
+
+#[derive(Deserialize)]
+pub struct ProbeQuery {
+    /// 不传 = 探测当前生效源。
+    #[serde(default)]
+    source: Option<String>,
+    /// self-hosted 试探测时可以带临时 URL（未保存先测试）。
+    #[serde(default)]
+    url: Option<String>,
+}
+
+#[derive(Serialize)]
+struct ProbeResponse {
+    ok: bool,
+    source: String,
+    url: String,
+    /// 端到端毫秒；失败时为 0。
+    latency_ms: u64,
+    /// 形状校验：响应是否是可解析的 registry servers 列表。
+    shape_ok: bool,
+    error: Option<String>,
+}
+
+/// `GET /api/mcp/catalog/probe` — 源连通性测试（「测试连接」按钮）。
+pub async fn probe(Query(q): Query<ProbeQuery>) -> Response {
+    let src = q
+        .source
+        .as_deref()
+        .and_then(CatalogSource::parse)
+        .or_else(|| Some(resolve_registry_base().1))
+        .unwrap_or(CatalogSource::Official);
+    // URL 解析：self-hosted 优先用请求里带的临时 URL（保存前试测），
+    // 其余源用各自固定端点。
+    let url = match (src, q.url.as_deref().map(str::trim).filter(|s| !s.is_empty())) {
+        (CatalogSource::SelfHosted, Some(u)) => u.trim_end_matches('/').to_string(),
+        (CatalogSource::SelfHosted, None) => resolve_registry_base().0,
+        (CatalogSource::BuiltinOffline, _) => {
+            // 离线源没有网络语义，探测 = 内置目录非空。
+            let n = builtin_items().len();
+            return Json(ProbeResponse {
+                ok: n > 0,
+                source: src.as_str().to_string(),
+                url: "builtin://catalog_fallback.json".to_string(),
+                latency_ms: 0,
+                shape_ok: n > 0,
+                error: if n > 0 { None } else { Some("内置目录为空（发布产物异常）".into()) },
+            })
+            .into_response();
+        }
+        _ => official_base().to_string(),
+    };
+    let started = std::time::Instant::now();
+    let result = fetch_remote(&url).await;
+    let latency_ms = started.elapsed().as_millis() as u64;
+    match result {
+        Ok(items) => Json(ProbeResponse {
+            ok: true,
+            source: src.as_str().to_string(),
+            url,
+            latency_ms,
+            shape_ok: !items.is_empty(),
+            error: None,
+        })
+        .into_response(),
+        Err(e) => Json(ProbeResponse {
+            ok: false,
+            source: src.as_str().to_string(),
+            url,
+            latency_ms,
+            shape_ok: false,
+            error: Some(e),
+        })
+        .into_response(),
     }
 }
 

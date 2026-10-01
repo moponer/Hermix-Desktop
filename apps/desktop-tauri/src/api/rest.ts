@@ -40,6 +40,9 @@ import type {
   CatalogInstall,
   CatalogScanHit,
   CatalogVerdict,
+  CatalogSourceInfo,
+  CatalogSourcesResponse,
+  CatalogProbeResult,
 } from "./types";
 
 // Transport switched from `fetch()` over `127.0.0.1:3000` to
@@ -913,6 +916,68 @@ export const getMcpCatalog = async (refresh = false): Promise<CatalogResponse | 
       fromCache: res.from_cache,
       staleReason: res.stale_reason,
     };
+  } catch {
+    return null;
+  }
+};
+
+/** 目录数据源清单 + 当前选择（批次 M2）。 */
+export const getMcpCatalogSources = async (): Promise<CatalogSourcesResponse | null> => {
+  try {
+    const res = await fetchJSON<{
+      current: string;
+      env_override: boolean;
+      custom_url?: string;
+      show_experimental: boolean;
+      sources: Array<{ id: string; name: string; description: string; experimental: boolean }>;
+    }>("/api/mcp/catalog/sources");
+    return {
+      current: res.current,
+      envOverride: res.env_override,
+      customUrl: res.custom_url,
+      showExperimental: res.show_experimental,
+      sources: res.sources.map((s) => ({
+        id: s.id as CatalogSourceInfo["id"],
+        name: s.name,
+        description: s.description,
+        experimental: s.experimental,
+      })),
+    };
+  } catch {
+    return null;
+  }
+};
+
+/** 切换数据源。self-hosted 必须带 customUrl。 */
+export const setMcpCatalogSource = async (
+  source: string,
+  opts?: { customUrl?: string; showExperimental?: boolean },
+): Promise<{ ok: boolean; source: string } | null> => {
+  try {
+    return await fetchJSON<{ ok: boolean; source: string }>("/api/mcp/catalog/sources", {
+      method: "PUT",
+      body: JSON.stringify({
+        source,
+        custom_url: opts?.customUrl,
+        show_experimental: opts?.showExperimental,
+      }),
+    });
+  } catch {
+    return null;
+  }
+};
+
+/** 源连通性测试（「测试连接」按钮）。self-hosted 可带未保存的临时 URL。 */
+export const probeMcpCatalogSource = async (
+  source?: string,
+  url?: string,
+): Promise<CatalogProbeResult | null> => {
+  try {
+    const params = new URLSearchParams();
+    if (source) params.set("source", source);
+    if (url) params.set("url", url);
+    const qs = params.toString();
+    return await fetchJSON<CatalogProbeResult>(`/api/mcp/catalog/probe${qs ? `?${qs}` : ""}`);
   } catch {
     return null;
   }
