@@ -224,10 +224,31 @@ for (const file of walkTsx(SRC)) {
   }
 }
 if (typeHits > 0) {
-  console.warn(
-    `[type-debt] ${typeHits} 处任意字号 text-[Npx]（分布于 ${typeFiles} 个文件，仅告警）— ` +
-      `目标：全部迁到 text-micro/tiny/meta/ui/body/title/display 七档后在脚本中改为阻断`,
+  // 2026-10-01：13 处债已清零（LocalSearchDialog 11 / SessionPickerDialog 2，
+  // 全部落在既有七档内：11/11.5→tiny、12/12.5→meta、13→ui），门禁由告警
+  // 改为阻断。任意值字号会让整套档位形同虚设——档位存在却不许用，
+  // 等于没有档位。
+  failures++;
+  console.error(
+    `[type-debt] ${typeHits} 处任意字号 text-[Npx]（分布于 ${typeFiles} 个文件）:`,
   );
+  for (const f of walkTsx(SRC)) {
+    const hits = (read(f).match(TYPE_RX) || []).filter(
+      (h) => !TYPE_ALLOWED.has(h.replace(/\s+/g, "")),
+    );
+    if (hits.length > 0) {
+      console.error(
+        `  ${relative(SRC, f).split(sep).join("/")}: ${[...new Set(hits)].join(" ")}`,
+      );
+    }
+  }
+  console.error(
+    "  → 改用七档之一：text-micro(10) / tiny(11) / meta(12) / ui(13) / " +
+      "body(14) / title(16) / display(20)。半档（12.5px）就近取档——" +
+      "一屏内字号档位 ≤ 3 是 tokens.css 的约定。",
+  );
+} else {
+  console.log("[type-debt] 无任意字号 ✓（全部使用七档语义档位）");
 }
 
 process.exit(failures > 0 ? 1 : 0);

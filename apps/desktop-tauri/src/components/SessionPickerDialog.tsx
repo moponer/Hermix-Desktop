@@ -105,7 +105,7 @@ export function SessionPickerDialog({
         {/* 列表 */}
         <div className="overflow-y-auto p-1.5">
           {rows.length === 0 ? (
-            <p className="text-[12.5px] text-text-muted text-center py-10">
+            <p className="text-meta text-text-muted text-center py-10">
               {trimmed ? "没有找到匹配的对话" : "暂无对话"}
             </p>
           ) : (
@@ -129,7 +129,7 @@ export function SessionPickerDialog({
                   </span>
                 </div>
                 {snippet && (
-                  <p className="text-[11.5px] text-text-muted line-clamp-2 mt-0.5 ml-5">
+                  <p className="text-tiny text-text-muted line-clamp-2 mt-0.5 ml-5">
                     {snippet}
                   </p>
                 )}

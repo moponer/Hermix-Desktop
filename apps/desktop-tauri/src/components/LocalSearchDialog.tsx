@@ -98,7 +98,7 @@ function PreviewPane({ hit }: { hit: LocalSearchHit | null }) {
     return (
       <div className="flex flex-col items-center justify-center gap-2 py-16 text-text-faint">
         <Eye className="icon-md" />
-        <p className="text-[12px]">选中左侧结果进行预览</p>
+        <p className="text-meta">选中左侧结果进行预览</p>
       </div>
     );
   }
@@ -107,7 +107,7 @@ function PreviewPane({ hit }: { hit: LocalSearchHit | null }) {
     <div className="flex flex-col min-h-0 h-full">
       {/* 预览头：文件名 + 打开按钮 */}
       <div className="flex items-center gap-2 px-3 py-2 border-b border-border-subtle shrink-0">
-        <span className="flex-1 truncate-1 text-[12.5px] font-medium text-text-primary" title={hit.path}>
+        <span className="flex-1 truncate-1 text-meta font-medium text-text-primary" title={hit.path}>
           {hit.name}
         </span>
         <button
@@ -128,7 +128,7 @@ function PreviewPane({ hit }: { hit: LocalSearchHit | null }) {
         ) : !preview || hit.is_dir ? (
           <div className="flex flex-col items-center justify-center gap-2 py-16 text-text-faint">
             {hit.is_dir ? <Folder className="icon-md" /> : <File className="icon-md" />}
-            <p className="text-[12px]">{hit.is_dir ? "文件夹 · 双击打开" : "无预览"}</p>
+            <p className="text-meta">{hit.is_dir ? "文件夹 · 双击打开" : "无预览"}</p>
           </div>
         ) : preview.kind === "image" ? (
           <div className="flex items-center justify-center p-4">
@@ -140,7 +140,7 @@ function PreviewPane({ hit }: { hit: LocalSearchHit | null }) {
           </div>
         ) : preview.kind === "text" ? (
           <div className="p-3">
-            <pre className="whitespace-pre-wrap break-all text-[11.5px] leading-relaxed text-text-secondary font-mono">
+            <pre className="whitespace-pre-wrap break-all text-tiny leading-relaxed text-text-secondary font-mono">
               {preview.text}
             </pre>
             {preview.truncated && (
@@ -152,13 +152,13 @@ function PreviewPane({ hit }: { hit: LocalSearchHit | null }) {
         ) : (
           <div className="flex flex-col items-center justify-center gap-2 py-16 text-text-faint px-6 text-center">
             {preview.kind === "none" && <FileText className="icon-md" />}
-            <p className="text-[12px]">
+            <p className="text-meta">
               {preview.kind === "none" ? preview.reason : "无预览"}
             </p>
             {preview.kind === "none" && (
               <button
                 type="button"
-                className="mt-1 px-3 py-1 rounded-md text-[12px] border border-border-subtle text-text-secondary hover:bg-bg-tertiary transition-colors"
+                className="mt-1 px-3 py-1 rounded-md text-meta border border-border-subtle text-text-secondary hover:bg-bg-tertiary transition-colors"
                 onClick={() => invoke("local_search_open", { path: hit.path }).catch(() => {})}
               >
                 打开文件
@@ -285,7 +285,7 @@ export function LocalSearchDialog({ open, onClose }: { open: boolean; onClose: (
               type="button"
               onClick={() => setExt((v) => (v === p.ext ? null : p.ext))}
               className={clsx(
-                "px-2 py-0.5 rounded-md text-[11px] border transition-colors",
+                "px-2 py-0.5 rounded-md text-tiny border transition-colors",
                 ext === p.ext
                   ? "bg-accent-soft border-accent text-accent font-medium"
                   : "border-border-subtle text-text-muted hover:bg-bg-tertiary",
@@ -298,7 +298,7 @@ export function LocalSearchDialog({ open, onClose }: { open: boolean; onClose: (
             type="button"
             onClick={() => setDirsOnly((v) => !v)}
             className={clsx(
-              "px-2 py-0.5 rounded-md text-[11px] border transition-colors ml-auto",
+              "px-2 py-0.5 rounded-md text-tiny border transition-colors ml-auto",
               dirsOnly
                 ? "bg-accent-soft border-accent text-accent font-medium"
                 : "border-border-subtle text-text-muted hover:bg-bg-tertiary",
@@ -335,7 +335,7 @@ export function LocalSearchDialog({ open, onClose }: { open: boolean; onClose: (
             )}
           >
             {hits.length === 0 ? (
-              <p className="text-[12.5px] text-text-muted text-center py-10">
+              <p className="text-meta text-text-muted text-center py-10">
                 {loading
                   ? "搜索中…"
                   : building && hits.length === 0
@@ -367,7 +367,7 @@ export function LocalSearchDialog({ open, onClose }: { open: boolean; onClose: (
                     )}
                     <span
                       className={clsx(
-                        "flex-1 truncate-1 text-[13px]",
+                        "flex-1 truncate-1 text-ui",
                         selected?.path === h.path
                           ? "text-accent font-semibold"
                           : "text-text-primary font-medium",
@@ -389,7 +389,7 @@ export function LocalSearchDialog({ open, onClose }: { open: boolean; onClose: (
                   </div>
                   <p
                     className={clsx(
-                      "text-[11px] truncate-1 mt-0.5 ml-5",
+                      "text-tiny truncate-1 mt-0.5 ml-5",
                       selected?.path === h.path ? "text-accent/70" : "text-text-faint",
                     )}
                   >
