@@ -258,6 +258,76 @@ export function closeOpenReasoning(steps: TimelineStep[]): TimelineStep[] {
   return [...steps.slice(0, -1), { ...last, endedAt: new Date().toISOString() }];
 }
 
+/**
+ * 末尾的 text step 是不是**流开头**的无标签推理前缀？
+ *
+ * 2026-10-01 修一个内容丢失 bug：LLM「先说一段正文 → 又继续思考」时，
+ * 那段正文被吞掉了。`App.tsx` 的 `onReasoningChunk` 有一段回溯补救
+ * （把已发出的 Text 分片改判成 reasoning），条件原本是「只要末尾有
+ * text step 就转」。它本是为后端 `looks_like_untagged_reasoning` 准备的
+ * —— 模型不打 `<think>` 标签时，流**开头**几段被误发成 Text，判定后
+ * 要改回来。
+ *
+ * 但它在**每个** reasoning 分片到达时都跑一遍，于是「已经说出口的正文」
+ * 也被当成前缀 spliced 掉：正文短暂显示一下就消失，最终渲染里也没有它。
+ *
+ * 无标签推理的语义决定了它**只能出现在流的开头** —— 后端判定的是
+ * 「还没有任何 think 阶段时最前面那几段」。所以判据是**当前所有 step
+ * 都还是 text**：一旦出现过 reasoning 或 tools step，末尾的 text 一定是
+ * 真的输出，不能动。
+ *
+ * 抽成独立函数是因为它同时被 `App.tsx`（生产）和测试用到 ——
+ * 守卫只写一份，测试才钉得住它。
+ */
+export function isUntaggedReasoningPrefix(steps: TimelineStep[]): boolean {
+  return steps.every((s) => s.kind === "text");
+}
+
+/**
+ * 推理分片到达时的状态转移：正文回溯转换 + 追加推理。
+ *
+ * 抽出来是为了可测 —— 它原先是 `App.tsx` 里一个 40 行的内联 `setState`
+ * 回调，无法在不启动整个 App 的前提下验证。
+ *
+ * @param steps 当前 unified_steps
+ * @param content `message.content`（可见正文）
+ * @param reasoningContent `message.reasoningContent`
+ * @param piece 本次到达的推理分片
+ */
+export function applyReasoningChunk(
+  steps: TimelineStep[] | undefined,
+  content: string,
+  reasoningContent: string | undefined,
+  piece: string,
+): { steps: TimelineStep[]; content: string; reasoningContent: string } {
+  let next = steps ? [...steps] : [];
+  let contentFix = content;
+  let reasoningFix = reasoningContent ?? "";
+
+  const converted: string[] = [];
+  if (isUntaggedReasoningPrefix(next)) {
+    for (let i = next.length - 1; i >= 0; i--) {
+      if (next[i].kind !== "text") break;
+      converted.unshift((next[i] as { content: string }).content);
+      next.splice(i, 1);
+    }
+  }
+  if (converted.length > 0) {
+    // `appendChunk` 把每个分片同时写进 `message.content` 和一个 text
+    // step，所以两者本该同字符串 —— 但 sanitizer 裁剪、工具步交错都会让
+    // 它们分叉，用 `endsWith` 抠后缀会静默失败，导致同一段文字同时
+    // 被当成正文和推理渲染两遍。转换后剩下的 step 全在手上，直接 join
+    // 是精确的，不需要任何字符串匹配。
+    contentFix = next.reduce(
+      (acc, s) => (s.kind === "text" ? acc + (s as { content: string }).content : acc),
+      "",
+    );
+    reasoningFix = converted.join("") + reasoningFix;
+  }
+  next = appendReasoningStep(next, piece);
+  return { steps: next, content: contentFix, reasoningContent: reasoningFix + piece };
+}
+
 /** Append text to the last text step, or push a new one. */
 export function appendTextStep(steps: TimelineStep[] | undefined, content: string): TimelineStep[] {
   const arr = closeOpenReasoning(steps ? [...steps] : []);

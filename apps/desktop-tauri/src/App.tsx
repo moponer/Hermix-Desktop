@@ -20,9 +20,9 @@ import {
   classifyStreamErrorKind,
   normalizeStreamErrorKind,
   type StreamErrorKind,
-  appendReasoningStep,
   appendTextStep,
   appendToolStep,
+  applyReasoningChunk,
   updateToolStepStdout,
 } from "./app/streamEvents";
 import type { StreamPhase, TodoSnapshotItem } from "./hooks/useStreamChat";
@@ -2433,52 +2433,22 @@ return {
                   // ProcessTimeline instead of showing as body text.
                   // Also move the text from `content` to
                   // `reasoningContent` so the persisted state matches.
-                  let steps = m.unified_steps ? [...m.unified_steps] : [];
-                  let contentFix = m.content;
-                  let reasoningFix = m.reasoningContent ?? "";
-                  // Walk backwards: convert trailing text steps to
-                  // reasoning. Stop at the first non-text step (tools,
-                  // existing reasoning) — those are real phase
-                  // boundaries.
-                  const convertedTexts: string[] = [];
-                  for (let i = steps.length - 1; i >= 0; i--) {
-                    if (steps[i].kind !== "text") break;
-                    const textContent = (steps[i] as { content: string }).content;
-                    convertedTexts.unshift(textContent);
-                    // Remove this text step — it'll be re-added as
-                    // reasoning via appendReasoningStep below.
-                    steps.splice(i, 1);
-                  }
-                  if (convertedTexts.length > 0) {
-                    // Rebuild the visible body from the text steps that
-                    // REMAIN after the conversion instead of stripping a
-                    // suffix off `content`.
-                    //
-                    // `appendChunk` writes every chunk to BOTH
-                    // `message.content` and a `text` step, so the two are
-                    // always the same string — but suffix (`endsWith`)
-                    // matching silently failed whenever they diverged
-                    // (sanitizer trims, interleaved tool steps), leaving
-                    // the same text rendered as BOTH body and reasoning.
-                    // At this point the converted steps have already been
-                    // spliced out, so joining what's left is exact and
-                    // needs no string matching at all.
-                    contentFix = steps.reduce(
-                      (acc, s) =>
-                        s.kind === "text"
-                          ? acc + (s as { content: string }).content
-                          : acc,
-                      "",
-                    );
-                    reasoningFix = convertedTexts.join("") + reasoningFix;
-                  }
-                  // Now append the new reasoning piece.
-                  steps = appendReasoningStep(steps, piece);
+                  // 判定与状态转移都在 `streamEvents::applyReasoningChunk` 里
+                  // —— 见那里的注释：2026-10-01 之前这段逻辑是这里的一个
+                  // 内联 40 行副本，条件是「只要末尾有 text step 就转」，于
+                  // 是模型「先说正文 → 又继续思考」时，那段正文被当成无标签
+                  // 推理前缀吞掉（内容丢失）。抽出去是为了能测。
+                  const next = applyReasoningChunk(
+                    m.unified_steps,
+                    m.content,
+                    m.reasoningContent,
+                    piece,
+                  );
                   return {
                     ...m,
-                    content: contentFix,
-                    reasoningContent: reasoningFix + piece,
-                    unified_steps: steps,
+                    content: next.content,
+                    reasoningContent: next.reasoningContent,
+                    unified_steps: next.steps,
                   };
                 }),
                 updated_at: new Date().toISOString(),
