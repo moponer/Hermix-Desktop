@@ -280,6 +280,16 @@ export function ProcessTimeline({
   // 有失败/跳过时折叠头整行染 error 色，且计数单列在末尾 —— 绝不被
   // 「读取了 4 个文件」这类成功动词淹没。
   const hasBadOutcome = summary.failed > 0 || summary.skipped > 0;
+  // 折叠掉的明细走 hover title —— 这些是「想知道才看」的信息，
+  // 常驻在折叠头上只会把它挤成一行密文。
+  const foldTitle = [
+    reasoningSteps.length > 0 && `思考 ${reasoningSteps.length} 段`,
+    activityLabel,
+    totalOutputLines > 0 && `${totalOutputLines} 行输出`,
+    "点击展开/收起",
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
   if (steps.length === 0) return null;
 
@@ -303,7 +313,7 @@ export function ProcessTimeline({
           className="reasoning-header tl-process-header"
           data-has-failure={summary.failed > 0 ? "true" : undefined}
           aria-expanded={expanded}
-          title="过程（点击展开/收起）"
+          title={foldTitle}
         >
           {expanded ? (
             <ChevronDown className="icon-sm reasoning-chevron reasoning-chevron-open" />
@@ -317,17 +327,16 @@ export function ProcessTimeline({
           ) : (
             <CheckCircle2 className="icon-sm tl-process-check" aria-hidden="true" />
           )}
-          {/* 主标签是**耗时**（用户最关心「这轮花了多久」），
-              动词聚合降级为右侧次级统计。 */}
+          {/* 2026-10-01：这一行只回答两件事 —— **这轮花了多久**、
+              **有没有出问题**。
+              原先这里还塞着「思考 N 段 · 动词聚合 · N 行」，一行挤了六种
+              信息且每轮换组合，会话级的统计搬到消息列顶部的
+              `SessionTelemetry`（已执行 X · N token/s）。动词聚合留着，
+              但折叠时以 hover title 给出，不占视觉空间。 */}
           <span className="reasoning-label">
             {durationPart ? `已工作 ${durationPart}` : "已工作完成"}
           </span>
-          <span className="tl-process-detail">
-            {reasoningSteps.length > 0 && `思考 ${reasoningSteps.length} 段`}
-            {reasoningSteps.length > 0 && activityLabel && " · "}
-            {activityLabel}
-          </span>
-          {/* 失败 / 跳过：单独成段，不混进动词聚合。失败用 error 色，
+          {/* 失败 / 跳过：单独成段，不混进其它信息。失败用 error 色，
               跳过用中性灰 —— 「没发生」不是错误。 */}
           {summary.failed > 0 && (
             <span className="tl-process-failed">
@@ -339,15 +348,6 @@ export function ProcessTimeline({
             <span className="tl-process-skipped">
               <CircleSlash className="icon-sm" aria-hidden="true" />
               {summary.skipped} 个跳过
-            </span>
-          )}
-          {/* 折叠态的"分量提示"：有思考时主标签是"思考"，工具数/行数/耗时
-              作为次级统计挂在右侧，避免和思考文案挤成一句话。 */}
-          {!isStreaming && (totalOutputLines > 0 || durationPart) && (
-            <span className="reasoning-stat">
-              {totalOutputLines > 0 ? `${totalOutputLines} 行` : ""}
-              {totalOutputLines > 0 && durationPart ? " · " : ""}
-              {durationPart}
             </span>
           )}
         </button>
@@ -388,7 +388,6 @@ export function ProcessTimeline({
               <ReasoningBlock
                 key={`ps-${i}`}
                 content={step.content}
-                total={reasoningSteps.length}
                 active={isStreaming && isTail}
                 startedAt={step.startedAt}
                 endedAt={step.endedAt}

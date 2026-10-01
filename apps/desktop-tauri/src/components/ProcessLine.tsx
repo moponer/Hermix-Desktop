@@ -189,15 +189,10 @@ export function ProcessLine({
           )}
         </span>
       </button>
-      {/* 错误/跳过的原因独立成行：不能只靠 title tooltip，
-          那是鼠标用户专属的通道。 */}
-      {(isError || isSkipped) && vm.statusNote && (
-        <div className="process-line-note" onClick={() => setOpen(true)}>
-          {isSkipped ? <CircleSlash aria-hidden="true" /> : <AlertCircle aria-hidden="true" />}
-          <span className="process-line-note-text">{vm.statusNote}</span>
-          {hasOutput && <ChevronRight className="process-line-chev" aria-hidden="true" />}
-        </div>
-      )}
+      {/* 2026-10-01：原来失败/跳过的原因会在下面**再开一行**重复一遍。
+          删掉 —— 原因已经在上面那一行的 primary 槽里了（错误时 primary
+          优先取 summarizeError），而完整输出点 chevron 就能展开。
+          两行说同一件事，纯噪音。 */}
       {open && hasOutput && (
         <div className="process-line-body">
           <LiveTerminal content={vm.output ?? ""} running={isRunning} />

@@ -42,14 +42,11 @@ function spanMs(startedAt?: string, endedAt?: string): number | undefined {
  */
 export function ReasoningBlock({
   content,
-  total = 1,
   active = false,
   startedAt,
   endedAt,
 }: {
   content: string;
-  /** 本轮共几段思考 —— >1 时标签补一个段数。 */
-  total?: number;
   /** 本段是否正在流式生成。 */
   active?: boolean;
   startedAt?: string;
@@ -74,11 +71,9 @@ export function ReasoningBlock({
   const expanded = pinned ?? active;
 
   const elapsed = spanMs(startedAt, endedAt);
-  const label = active
-    ? "思考中…"
-    : elapsed != null
-      ? `思考 · 持续了 ${formatDuration(elapsed)}`
-      : "思考";
+  // 主标签只说「这是什么」；时长挂在右侧。标签里再带一次秒数会和
+  // 右侧重复，且收起的行会变得比展开的还长。
+  const label = active ? "思考中…" : "思考";
 
   if (!clean) return null;
 
@@ -94,7 +89,12 @@ export function ReasoningBlock({
         {expanded ? <ChevronDown className="tl-reasoning-chev" /> : <ChevronRight className="tl-reasoning-chev" />}
         <Brain className="tl-reasoning-icon" aria-hidden="true" />
         <span className="tl-reasoning-label">{label}</span>
-        {!active && total > 1 && <span className="tl-reasoning-count">共 {total} 段</span>}
+        {/* 右侧是**秒数**，不是段数 —— 段数是整轮的属性，同一轮里每段
+            都重复「共 5 段」既冗余又答错了问题（用户要看的是「这段想了
+            多久」）。段数归折叠头。 */}
+        {!active && elapsed != null && (
+          <span className="tl-reasoning-count">{formatDuration(elapsed)}</span>
+        )}
       </button>
       {expanded && (
         <div className="tl-reasoning-row">

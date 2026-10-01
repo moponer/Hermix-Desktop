@@ -135,11 +135,12 @@
 .process-line[data-state="error"]   .process-line-state { color: var(--color-error); }
 .process-line[data-state="skipped"] .process-line-state { color: var(--color-text-faint); }
 
-/* 失败 / 跳过：文字本身用 error 色，图标用同一色 —— 一眼扫到。
-   「跳过」刻意用中性灰：不是错误，是「没发生」。 */
-.process-line[data-state="error"] .process-line-verb,
+/* 失败 / 跳过：**只染错误信息那部分**（primary 槽），动词保持正常色。
+   2026-10-01 用户修正：原先整行染红，包括「执行命令」这个类型词 ——
+   但「执行命令」本身没有出错，出错的是它跑的东西。整行红会让一屏里
+   每一条失败的工具都变成红块，反而看不出哪几条是真问题。
+   「跳过」用中性灰：没发生不是错误。 */
 .process-line[data-state="error"] .process-line-primary { color: var(--color-error); }
-.process-line[data-state="skipped"] .process-line-verb,
 .process-line[data-state="skipped"] .process-line-primary { color: var(--color-text-tertiary); }
 
 /* 展开箭头只在 hover / focus 时显形 —— 静态时右侧只留状态图标 */
@@ -154,34 +155,40 @@
 .process-line-row:focus-visible .process-line-chev,
 .process-line[data-open="true"] .process-line-chev { opacity: 1; }
 
-/* 失败 / 跳过的原因独立成行。不能只靠 `title` tooltip —— 那是
-   鼠标用户专属的通道，触屏和键盘用户拿不到。 */
-.process-line-note {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  padding: 2px 0 2px 21px;   /* 21px = 图标 13 + gap 8，对齐上面那行的文字 */
-  font-size: 12px;
-  color: var(--color-error);
-  cursor: pointer;
-  min-width: 0;
-}
-.process-line[data-state="skipped"] .process-line-note { color: var(--color-text-tertiary); }
-.process-line-note > svg {
-  width: 11px;
-  height: 11px;
-  flex: none;
-  position: relative;
-  top: 1px;
-}
-.process-line-note-text {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
+/* 失败 / 跳过的原因**就在上面那一行的 primary 槽里**，不另开一行。
+   （2026-10-01 删除：原因在下面重复一遍是纯噪音，而完整内容点 chevron
+   展开即可。） */
 
 .process-line-body {
   padding: 4px 0 4px 21px;
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   会话级遥测条（2026-10-01）
+   ════════════════════════════════════════════════════════════════════
+   消息列顶部一行，双列：左「已执行 1 小时 8 分 28 秒」/ 右「166 token/s」。
+   它替代了原先塞在每轮折叠头里的会话级统计 —— 折叠头一行挤六种信息、
+   每轮换组合，读不动。折叠头现在只回答两件事：花了多久、有没有问题。
+
+   刻意做得很轻：颜色用 faint、字号 11px、只有一条 1px 分隔线。
+   遥测是「想知道才看」的东西，不该和正文抢注意力。 */
+.session-telemetry {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  max-width: var(--width-reading, 1240px);
+  margin: 0 auto;
+  padding: 0 0 6px;
+  border-bottom: 1px solid var(--color-border-subtle);
+  font-size: var(--text-tiny, 11px);
+  color: var(--color-text-faint);
+  font-family: var(--font-family-primary);
+}
+.session-telemetry-elapsed { white-space: nowrap; }
+.session-telemetry-right { min-width: 0; }
+.session-telemetry-rate {
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
 }

@@ -85,7 +85,10 @@
   font-size: 0.9em;
   color: var(--color-text-primary);
   font-family: var(--font-mono);
-  font-weight: 500;
+  /* 不加粗：2026-10-01 用户修正。芯片已经有底色 + 边框，再叠一层粗体
+     就是两个重音互相抢 —— 底色负责「这是代码」，字重没有余量可加。
+     之前是 500（medium），在深色底上视觉上接近 bold。 */
+  font-weight: 400;
   border: 1px solid var(--color-border-subtle);
   text-decoration: none;
   text-underline-offset: 2px;
