@@ -62,7 +62,11 @@
   --color-border-strong: #5f636b;
 
   /* Text — 四级，主文字不用纯白（纯白在暗底上有光晕） */
-  --color-text-primary: #e8e9eb;
+  /* 2026-10-01 L1 校准：fg / bg 对齐 ZCode 设置页截图取值
+     （fg #EDEDED、bg #171717）。仅锚点两值微调；下方灰阶是按 WCAG
+     对比度推导的，不是从截图逐级采样——截图只给了 fg/bg 两点。
+     sidebar / titlebar 是 chrome 底色，不随内容区一起动。 */
+  --color-text-primary: #ededed;
   --color-text-secondary: #9a9ea6;
   --color-text-tertiary: #7f848c;
   --color-text-muted: #7f848c;
@@ -166,8 +170,8 @@
   --shadow-modal: 0 28px 72px rgba(0, 0, 0, 0.62), 0 10px 26px rgba(0, 0, 0, 0.44);
 
   /* Scene surfaces — 纸最亮、案低一档、外层最低（与亮色同一语法） */
-  --theme-bg-app: #161719;
+  --theme-bg-app: #171717;
   --theme-bg-sidebar: #101113;
   --theme-bg-titlebar: #101113;   /* 与侧栏同案面：取消独立色带 */
-  --theme-bg-chat: #161719;
+  --theme-bg-chat: #171717;
 }
