@@ -508,7 +508,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
                 background: "var(--color-bg-elevated)",
                 color: "var(--color-text-primary)",
                 border: "1px solid var(--color-border-subtle)",
-                boxShadow: "0 4px 14px rgba(0,0,0,0.25)",
+                boxShadow: "var(--shadow-pop)",
               }}
               title="滚动到底部"
               aria-label="滚动到底部"

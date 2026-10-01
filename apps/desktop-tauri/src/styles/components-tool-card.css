@@ -581,11 +581,18 @@
   letter-spacing: 0;
   font-weight: 400;
 }
-.tw-msg-stat--add { color: #22c55e; }
-.tw-msg-stat--del { color: #ef4444; }
+/* L0（2026-10-01）：diff 增删统计的绿/红原为字面色（暗色 #22c55e/#ef4444，
+   亮色再覆盖成更浓的 #16a34a/#dc2626）。改走语义令牌后跟随主题与强调色；
+   亮色变体用 color-mix 保留"更浓一点"的原意。 */
+.tw-msg-stat--add { color: var(--color-success); }
+.tw-msg-stat--del { color: var(--color-error); }
 
-[data-theme="light"] .tw-msg-stat--add { color: #16a34a; }
-[data-theme="light"] .tw-msg-stat--del { color: #dc2626; }
+[data-theme="light"] .tw-msg-stat--add {
+  color: color-mix(in srgb, var(--color-success) 88%, black);
+}
+[data-theme="light"] .tw-msg-stat--del {
+  color: color-mix(in srgb, var(--color-error) 88%, black);
+}
 
 /* Chevron expand — square button, brighter on row hover so the
    affordance is discoverable but doesn't visually compete at rest. */

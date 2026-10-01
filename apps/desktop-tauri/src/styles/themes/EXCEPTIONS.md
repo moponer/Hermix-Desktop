@@ -13,17 +13,17 @@
 | E7 | `apps/desktop-tauri/src/components/groupchat/types.test.ts` | 单元测试故意验证 hex 直传 |
 | E8 | `apps/desktop-tauri/src/components/groupchat/RoomList.tsx` | 仅亮色 list-row 阴影字面值 |
 
-| E9  | `apps/desktop-tauri/src/components/ClarifyBubble.tsx` | 临时历史遗留 —— 评审项，迁移到令牌后撤销 |
-| E10 | `apps/desktop-tauri/src/components/custom-apps/iconResolver.tsx` | 临时历史遗留 —— tile 品牌色 |
-| E11 | `apps/desktop-tauri/src/components/CustomAppsView.tsx` | 模态遮罩 rgba —— 应改用 --color-overlay-scrim |
-| E12 | `apps/desktop-tauri/src/components/EditProfileDialog.tsx` | 模态遮罩 rgba —— 同上 |
-| E13 | `apps/desktop-tauri/src/components/MessageList.tsx` | 阴影 rgba —— 应改用 --shadow-pop 变体 |
-| E14 | `apps/desktop-tauri/src/components/TextBubble.tsx` | 用户图片边框色 —— 应新增令牌 |
-| E15 | `apps/desktop-tauri/src/lib/appMention.ts` | @ 提醒色 —— 应改用 --color-link |
-| E16 | `apps/desktop-tauri/src/main.tsx` | 启动横幅 inline style —— 临时过渡色 |
+| E9  | `apps/desktop-tauri/src/components/ClarifyBubble.tsx` | ~~临时历史遗留~~ **已迁** → `--color-info` 12% 混合 |
+| E10 | `apps/desktop-tauri/src/components/custom-apps/iconResolver.tsx` | **保留**：tile 色是**用户自己配置的应用品牌色**（`app.tile_color`）+ 其上的 `#ffffff` 对比色，属品牌组合，映射到四色组会丢失用户意图 |
+| E11 | `apps/desktop-tauri/src/components/CustomAppsView.tsx` | ~~模态遮罩 rgba~~ **已迁** → `--color-overlay-scrim` |
+| E12 | `apps/desktop-tauri/src/components/EditProfileDialog.tsx` | ~~模态遮罩 rgba~~ **已迁** → `--color-overlay-scrim` 137%（原 0.55 比 scrim 的 0.4 更深，保留深浅差异） |
+| E13 | `apps/desktop-tauri/src/components/MessageList.tsx` | ~~阴影 rgba~~ **已迁** → `--shadow-pop` |
+| E14 | `apps/desktop-tauri/src/components/TextBubble.tsx` | ~~用户图片边框 ~~ **已迁** → `--color-border-secondary`（原 `#2e2e34` 是写死的深色，亮色主题下突兀） |
+| E15 | `apps/desktop-tauri/src/lib/appMention.ts` | ~~@ 提醒色~~ **已迁** → `--color-link`（原 `#3b82f6` 的注释还在解释"深蓝在暗色下会不会看不见"，交给令牌后该问题消失） |
+| E16 | `apps/desktop-tauri/src/main.tsx` | **保留**：dev-only 的 `console.info` 徽章（`import.meta.env.DEV` 门内，输出到 devtools，不进 UI），与主题体系无关 |
 
 > E9–E16 是 [check-theme-tokens.mjs](../../../../../../../../scripts/check-theme-tokens.mjs) 抓到的历史债项。
-> 评审时机：每次处理"主题体系"或"组件清理"PR 时优先消化。
+> 2026-10-01（L0）：6 条已迁（E9/E11/E12/E13/E14/E15），2 条判定为真例外保留（E10/E16）。
 
 ## 已消化债项（L0，2026-10-01）
 

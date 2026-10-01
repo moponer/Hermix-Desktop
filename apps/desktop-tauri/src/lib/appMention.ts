@@ -8,10 +8,11 @@
 /** 自定义应用触发词。 */
 export const MENTION_TRIGGER_APP = "@app";
 
-// Dark-blue (still legible on both light and dark themes — a true navy would
-// be invisible on the dark composer background). Swap for a deeper navy if the
-// app is ever forced to a light-only theme.
-export const MENTION_COLOR = "#3b82f6";
+// Mention 高亮色。走 `--color-link` 语义令牌，于是暗色下自动换成
+// 主题自己的 link 值、且跟随强调色（L0 前是写死的 #3b82f6，注释里
+// 还得专门解释"深蓝在暗色下会不会看不见"——交给令牌就没这问题）。
+// 保留导出名以免改动调用方。
+export const MENTION_COLOR = "var(--color-link)";
 
 export interface ActiveMention {
   /** index of the '@' in the trigger */

@@ -79,7 +79,7 @@ export function EditProfileDialog({ current, onSave, onClose }: EditProfileDialo
         position: "fixed",
         inset: 0,
         zIndex: 50,
-        background: "rgba(0,0,0,0.55)",
+        background: "color-mix(in srgb, var(--color-overlay-scrim) 137%, transparent)",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
