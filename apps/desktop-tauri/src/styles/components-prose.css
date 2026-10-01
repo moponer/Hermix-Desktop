@@ -71,25 +71,33 @@
    链接，眼睛抓不到标识符。改成浅色圆角块：正文里一眼定位
    `patch_file_multi`、`file.rs` 这类词，是**提高**信息密度而不是降噪。
 
-   16% 混合是实测选的档位：深色聊天底(#161719)上得到约 1.55:1 的
-   抬升，足以让块读作「块」；12% 只有 1.09:1，与底色几乎同值，等于
-   没加。文字色保持 primary(15.32:1) 不变 —— 芯片改变的是**分组**，
-   不该牺牲文字本身的对比度。
+   16% 混合（`color-mix(text-primary 16%)`）是上一版实测选的档位，
+   但用户实机反馈**太深、抢焦点**：一屏里五六块芯片时，16% 的底
+   连同 1px 边框形成的深色团块比正文还重，把「这是代码」读成
+   「这里有更重要的东西」。
+
+   2026-10-01 定稿：直接用既有的 `--color-bg-tertiary`（令牌注释原文
+   就是「最轻的着色 / chip」），不再手搓混合百分比。取参考界面的实际
+   像素值校准：参考截图里芯片底 = `#F5F5F5`、页面底 = `#FFFFFF`，
+   本令牌浅色主题 = `#F0F0F0`（差 5/255，肉眼不可分），深色主题 =
+   `#24262a`（对 `#161719` 抬升 14 级，与浅色同量级）。
+   边框同时删掉：`--color-border-subtle` 在深色底约 1.1:1，量不出来
+   却给每个芯片画了一圈硬边 —— 一屏六块芯片就是六个方框。
 
    刻意只对标识符/路径/行号生效：普通中文词不会被 markdown 成 code，
    所以不存在「一段中文被切成 5 个芯片」的情况。 */
 .prose code {
-  background: color-mix(in srgb, var(--color-text-primary) 16%, transparent);
+  background: var(--color-bg-tertiary);
   padding: 1px 5px;
   border-radius: 4px;
   font-size: 0.9em;
   color: var(--color-text-primary);
   font-family: var(--font-mono);
-  /* 不加粗：2026-10-01 用户修正。芯片已经有底色 + 边框，再叠一层粗体
+  /* 不加粗：2026-10-01 用户修正。芯片已经有底色，再叠一层粗体
      就是两个重音互相抢 —— 底色负责「这是代码」，字重没有余量可加。
      之前是 500（medium），在深色底上视觉上接近 bold。 */
   font-weight: 400;
-  border: 1px solid var(--color-border-subtle);
+  border: 0;
   text-decoration: none;
   text-underline-offset: 2px;
   white-space: break-spaces;
@@ -259,7 +267,9 @@
      three dots are the only visual signal. */
 }
 .wait-for-input-label {
-  font-size: var(--text-tiny, 11px);
+  /* 2026-10-01 用户反馈：与操作条一起从 tiny(11px) 提到 meta(12px)——
+     同一条提示行上的元素要一个视觉档位。italic 保留（轻量提示语义）。 */
+  font-size: var(--text-meta, 12px);
   color: var(--color-text-faint);
   font-weight: 400;
   letter-spacing: 0.02em;

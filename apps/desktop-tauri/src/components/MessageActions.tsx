@@ -100,7 +100,7 @@ export function MessageActions({
         title="复制消息"
         aria-label="复制消息"
       >
-        {copied ? <Check className="icon-sm" /> : <Copy className="icon-sm" />}
+        {copied ? <Check className="icon-md" /> : <Copy className="icon-md" />}
         <span>{copied ? "已复制" : "复制"}</span>
       </button>
 
@@ -114,7 +114,7 @@ export function MessageActions({
         aria-label="有帮助"
         aria-pressed={vote === "up"}
       >
-        <ThumbsUp className="icon-sm" />
+        <ThumbsUp className="icon-md" />
       </button>
       <button
         type="button"
@@ -125,7 +125,7 @@ export function MessageActions({
         aria-label="没帮上忙"
         aria-pressed={vote === "down"}
       >
-        <ThumbsDown className="icon-sm" />
+        <ThumbsDown className="icon-md" />
       </button>
 
       {onRetry && (
@@ -136,7 +136,7 @@ export function MessageActions({
           title="重新生成"
           aria-label="重新生成"
         >
-          <RefreshCw className="icon-sm" />
+          <RefreshCw className="icon-md" />
         </button>
       )}
 
