@@ -297,7 +297,11 @@
   position: relative;
   margin: 6px 0 4px 18px;      /* 让开折叠头的箭头+图标宽度，缩进 18px */
   padding: 2px 0 2px 12px;
-  border-left: 2px solid var(--color-text-faint);  /* 2.98:1，是旧值的两倍 */
+  /* 2026-10-01：2px `--color-text-faint`（2.98:1）→ 1px `--color-secondary`
+     级别的更淡值。竖线是**配角**：它只负责说「这是一段旁注」，而标签行
+     已经在说同一件事。两处都在喊同一句话，竖线一粗就变成主角，
+     把真正要读的思考正文压了下去。 */
+  border-left: 1px solid var(--color-border-secondary);
   color: var(--color-text-thinking);
   font-size: var(--text-ui, 13px);
   line-height: var(--leading-reading, 1.75);
@@ -408,30 +412,14 @@
 }
 
 
-.tl-process-check {
-  color: var(--color-text-success, #5a9a6e);
-}
-/* 折叠头有失败时：图标换成告警形状，整个头染 error 色。
-   一个绿色对勾摆在「读取了 4 个文件」前面、而那一轮里其实有一次
-   失败，是误导 —— 折叠态是用户默认看到的那一面，它必须诚实。 */
-.tl-process-header[data-has-failure="true"] { color: var(--color-error); }
-.tl-process-header[data-has-failure="true"] .tl-process-check { color: var(--color-error); }
+/* 2026-10-01 第二轮：折叠头不再显示失败/跳过计数，也不再有
+   `data-has-failure` 染色 —— 用户实机反馈「头部不要显示红色错误和
+   跳过啥的」。失败信息在展开后的过程行里（错误文本本身是 error 色），
+   并保留在折叠头的 hover title 里（`foldTitle`）。
 
-/* 失败 / 跳过计数单列在动词聚合之后。失败用 error 色；跳过用中性灰
-   —— 「没发生」不是错误，用红色会把真失败淹掉。 */
-.tl-process-failed,
-.tl-process-skipped {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: var(--text-meta, 12px);
-  white-space: nowrap;
-  flex: none;
-}
-.tl-process-failed { color: var(--color-error); }
-.tl-process-skipped { color: var(--color-text-tertiary); }
-.tl-process-failed .icon-sm,
-.tl-process-skipped .icon-sm { width: 11px; height: 11px; }
+   相关规则一并删除：留着没人会触发的选择器，下一个人会以为这条策略
+   还活着。 */
+
 
 /* P4-3: warning-tinted icon when any tool in the turn errored */
 
@@ -519,7 +507,20 @@
   outline: 2px solid var(--color-border);
   outline-offset: 1px;
 }
-.tl-reasoning-chev { width: 12px; height: 12px; flex: none; }
+/* 2026-10-01：箭头在**行尾**且无焦点时隐藏。
+   收起态常驻箭头不携带任何信息（它每次长得一样），却把「行首」那一列
+   占掉 —— 而缩进层级正是靠左边缘对齐来读的，箭头一占位，思考行和
+   下面的正文就对不齐了。hover / focus 才显形。 */
+.tl-reasoning-chev {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  margin-left: auto;
+  opacity: 0;
+  transition: opacity var(--duration-fast) ease;
+}
+.tl-reasoning-head:hover .tl-reasoning-chev,
+.tl-reasoning-head:focus-visible .tl-reasoning-chev { opacity: 1; }
 /* 正在想：accent 色 + 轻微呼吸，让「正在生成」在余光里也成立 */
 .tl-reasoning-wrap[data-active="true"] .tl-reasoning-head { color: var(--color-accent); }
 .tl-reasoning-wrap[data-active="true"] .tl-reasoning-icon { animation: tl-reasoning-pulse 1.6s ease-in-out infinite; }

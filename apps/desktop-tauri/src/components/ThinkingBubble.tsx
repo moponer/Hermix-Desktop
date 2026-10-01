@@ -86,7 +86,6 @@ export function ReasoningBlock({
         aria-expanded={expanded}
         aria-label={label}
       >
-        {expanded ? <ChevronDown className="tl-reasoning-chev" /> : <ChevronRight className="tl-reasoning-chev" />}
         <Brain className="tl-reasoning-icon" aria-hidden="true" />
         <span className="tl-reasoning-label">{label}</span>
         {/* 右侧是**秒数**，不是段数 —— 段数是整轮的属性，同一轮里每段
@@ -94,6 +93,15 @@ export function ReasoningBlock({
             多久」）。段数归折叠头。 */}
         {!active && elapsed != null && (
           <span className="tl-reasoning-count">{formatDuration(elapsed)}</span>
+        )}
+        {/* 2026-10-01：折叠箭头移到**行尾**，且无焦点时不显示。
+            放行首会占掉「缩进起点」那一列，让思考行和它下面的正文左边缘
+            对不齐（缩进层级是靠对齐读的）。收起态常驻一个箭头也是噪音 ——
+            它每次都一样，不携带信息，hover/focus 才显形。 */}
+        {expanded ? (
+          <ChevronDown className="tl-reasoning-chev" />
+        ) : (
+          <ChevronRight className="tl-reasoning-chev" />
         )}
       </button>
       {expanded && (

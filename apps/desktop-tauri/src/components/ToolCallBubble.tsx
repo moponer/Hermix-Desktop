@@ -4,8 +4,7 @@
 import { buildActivitySummary } from "./chat/activitySummary";
 import React, { useState, useEffect, useMemo } from "react";
 import {
-  ChevronDown, ChevronRight, Loader2, CheckCircle2, AlertTriangle,
-  AlertCircle, CircleSlash,
+  ChevronDown, ChevronRight, Loader2,
   FileText, FilePlus, ArrowRight, Edit3, Trash2, Brain,
   Database, Wrench,
 } from "lucide-react";
@@ -279,12 +278,20 @@ export function ProcessTimeline({
   const activityLabel = summary.segments.length > 0 ? summary.segments.join("、") : settledLabel;
   // 有失败/跳过时折叠头整行染 error 色，且计数单列在末尾 —— 绝不被
   // 「读取了 4 个文件」这类成功动词淹没。
-  const hasBadOutcome = summary.failed > 0 || summary.skipped > 0;
+  // 2026-10-01 第二轮撤销：折叠头改回安静（只说「工作完成 · 共耗时」），
+  // 失败计数移到 hover title。见 `foldTitle` 与下方 JSX 注释。
   // 折叠掉的明细走 hover title —— 这些是「想知道才看」的信息，
   // 常驻在折叠头上只会把它挤成一行密文。
+  //
+  // 失败 / 跳过**在这里也要说**。折叠头已经不显示它们了（见下方 JSX
+  // 注释），如果连 tooltip 也不说，「执行了 6 条命令」就在替 2 次失败
+  // 背书 —— 一句会在用户真正需要时误导他的谎。折中：折叠头安静，
+  // tooltip 诚实。
   const foldTitle = [
     reasoningSteps.length > 0 && `思考 ${reasoningSteps.length} 段`,
     activityLabel,
+    summary.failed > 0 && `${summary.failed} 个失败`,
+    summary.skipped > 0 && `${summary.skipped} 个跳过`,
     totalOutputLines > 0 && `${totalOutputLines} 行输出`,
     "点击展开/收起",
   ]
@@ -320,36 +327,19 @@ export function ProcessTimeline({
           ) : (
             <ChevronRight className="icon-sm reasoning-chevron" />
           )}
-          {/* 全部成功才打勾；有失败时换成告警形状 —— 一个对勾摆在
-              「读取了 4 个文件」前面、而那一行里其实有一次失败，是误导。 */}
-          {hasBadOutcome ? (
-            <AlertTriangle className="icon-sm tl-process-check" aria-hidden="true" />
-          ) : (
-            <CheckCircle2 className="icon-sm tl-process-check" aria-hidden="true" />
-          )}
-          {/* 2026-10-01：这一行只回答两件事 —— **这轮花了多久**、
-              **有没有出问题**。
-              原先这里还塞着「思考 N 段 · 动词聚合 · N 行」，一行挤了六种
-              信息且每轮换组合，会话级的统计搬到消息列顶部的
-              `SessionTelemetry`（已执行 X · N token/s）。动词聚合留着，
-              但折叠时以 hover title 给出，不占视觉空间。 */}
+          {/* 2026-10-01 第二轮：这一行**只说两件事 —— 工作完成 + 共耗时。
+              原先还会挂「N 个失败 / N 个跳过」并把失败时的图标换成红色
+              告警。撤掉的理由：折叠头是每轮都出现的高频元素，一旦某一轮
+              有失败，它就变成一整条红字，于是**每一轮看上去都像出了问题**，
+              真正需要注意的那一轮反而淹没在里面。失败在展开后的过程行里
+              一眼可见（错误信息本身就是 error 色），那才是它该待的地方。
+
+              这是一次有代价的取舍：折叠态不再提示「这轮有过失败」。
+              若日后需要，折中方案是恢复**中性色**的形状图标（不带计数、
+              不染红），而不是恢复红字。 */}
           <span className="reasoning-label">
-            {durationPart ? `已工作 ${durationPart}` : "已工作完成"}
+            工作完成{durationPart ? ` · 共耗时 ${durationPart}` : ""}
           </span>
-          {/* 失败 / 跳过：单独成段，不混进其它信息。失败用 error 色，
-              跳过用中性灰 —— 「没发生」不是错误。 */}
-          {summary.failed > 0 && (
-            <span className="tl-process-failed">
-              <AlertCircle className="icon-sm" aria-hidden="true" />
-              {summary.failed} 个失败
-            </span>
-          )}
-          {summary.skipped > 0 && (
-            <span className="tl-process-skipped">
-              <CircleSlash className="icon-sm" aria-hidden="true" />
-              {summary.skipped} 个跳过
-            </span>
-          )}
         </button>
       )}
       {/* Chronological render — 一轮就是一个按时间顺序平铺的过程流：
