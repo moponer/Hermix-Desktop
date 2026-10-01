@@ -131,13 +131,12 @@ export function buildActivitySegments(steps: TimelineStep[]): string[] {
   return buildActivitySummary(steps).segments;
 }
 
-/** 这一串步骤是否只有一次工具调用、且没有思考 —— 该情况下不生成摘要。 */
-export function shouldSummarize(steps: TimelineStep[], reasoningCount: number): boolean {
-  if (reasoningCount > 0) return true;
-  const toolSteps = steps.filter((s) => s.kind === "tools");
-  const total = toolSteps.reduce((acc, s) => acc + s.events.filter((e) => e.type === "tool_start").length, 0);
-  return total !== 1;
-}
+/**
+ * 2026-10-01：`shouldSummarize`（单次工具调用不生成摘要）随折叠头重写
+ * 一起成了死代码 —— 新折叠头的主标签是**耗时**而不是动词聚合，
+ * 「已工作 3s · 读取了 1 个文件」比什么都不显示更有用。按 YAGNI 删除。
+ * 需要时直接从 `buildActivitySummary` 取字段。
+ */
 
 /**
  * 模块级开合记忆。

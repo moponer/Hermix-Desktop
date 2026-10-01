@@ -1,7 +1,7 @@
 // Tool-call related bubbles: tool-row cards, the unified/process timeline
 // renderer, the live terminal, and the file-change / memory meta blocks.
 // Extracted from MessageBubble.tsx.
-import { buildActivitySummary, shouldSummarize } from "./chat/activitySummary";
+import { buildActivitySummary } from "./chat/activitySummary";
 import React, { useState, useEffect, useMemo } from "react";
 import {
   ChevronDown, ChevronRight, Loader2, CheckCircle2, AlertTriangle,
@@ -108,19 +108,24 @@ export function ProcessTimeline({
    *  show (only when the user has folded the reasoning block). */
   onReasoningFoldChange?: (folded: boolean) => void;
 }) {
-  // 展开判定抄 cc-haha `ActivityGroup.tsx:85`：按「这一组是不是活跃轮次
-  // 的尾巴」判，**不按「有没有工具正在执行」**判。
+  // 2026-09-29 的展开判定：按「这一组是不是活跃轮次的尾巴」判，
+  // **不按「有没有工具正在执行」**判。
   //
   // 改之前这里把 `hasRunningTool` 也算进自动展开条件。问题在两个工具之间：
   // 上一个工具刚 complete、下一个还没 start 的那一瞬，`isStreaming` 是 false
   // 且 `hasRunningTool` 也是 false，折叠条会闪一下收起来再弹开。
   //
-  // 现在的规则：
-  //   还在流（isStreaming）→ 展开，压根不显示折叠 UI
-  //   被挂起（keepOpen，等审批 / 等工具）→ 展开：这轮还没出最终结论
-  //   真的结束 → 默认折起；用户点过就以用户的为准，且这个选择会被记住
+  // 2026-10-01 重定：折叠的粒度是「整轮」，展开粒度是「每段」。
+  //
+  //   还在流（isStreaming）→ **不渲染总折叠头**，过程按真实顺序平铺；
+  //     每段思考各自是折叠项，正在想的那段展开、刚结束的那段自动收起。
+  //   真的结束 → 整轮折成顶部一行（`已工作 N 分 M 秒`），下面只剩正文。
+  //
+  // 此前这里 `expanded = isStreaming || keepOpen ? true : …`，导致运行中
+  // 思考永远展开且不可收 —— 正是用户截图里「多段思考糊成一片」的成因。
   const [userOverride, setUserOverride] = useState<boolean | null>(null);
-  const expanded = isStreaming || keepOpen ? true : (userOverride ?? false);
+  const settled = !(isStreaming || keepOpen);
+  const expanded = settled ? (userOverride ?? false) : true;
 
   // Report fold state up to the parent so the bottom-of-chat
   // `<ReasoningTicker>` can mount when the user has folded this
@@ -268,10 +273,9 @@ export function ProcessTimeline({
   // 2026-10-01：改用 buildActivitySummary —— 它把失败 / 跳过**单独统计**。
   // 旧版把失败混进「已完成 5 个工具」，读起来就是全部成功。
   const summary = useMemo(() => buildActivitySummary(steps), [steps]);
-  // 只有一次工具调用、且没有思考时**不生成摘要** —— 「读取了 1 个文件」压在
-  // 一个被藏起来的 read_file 行上面，信息严格少于那一行本身。
-  // cc-haha `ActivityGroup.tsx:91-103` 的 data-single-step。
-  const showSummary = shouldSummarize(steps, reasoningSteps.length);
+  // 旧版的 `shouldSummarize`（单次工具调用不生成摘要）随折叠头重写一起
+  // 删掉了：折叠头的主标签现在是**耗时**而不是动词聚合，「已工作 3s ·
+  // 读取了 1 个文件」比什么都不显示更有用，而且那一行本来就要能点开。
   const activityLabel = summary.segments.length > 0 ? summary.segments.join("、") : settledLabel;
   // 有失败/跳过时折叠头整行染 error 色，且计数单列在末尾 —— 绝不被
   // 「读取了 4 个文件」这类成功动词淹没。
@@ -289,18 +293,17 @@ export function ProcessTimeline({
 
   return (
     <div className="tl-process-timeline">
-      {/* Reasoning fold header — only visible once the turn has settled.
-          During streaming the content flows inline so the user
-          perceives a single continuous narrative, not a stack
-          of chips. The header toggles *reasoning* visibility only;
-          tool cards below are always shown. */}
-      {!isStreaming && hasProcessContent && showSummary && (
+      {/* 整轮折叠头 —— **只在轮次结束后出现**。
+          运行中不渲染它：那时的界面是「每段思考各自折叠 + 工具行平铺」
+          的实时视图，加一个总折叠头会让人误以为整轮已经结束。
+          结束后多段思考 + 全部执行过程收成这一行，下面只剩正文。 */}
+      {settled && hasProcessContent && (
         <button
           onClick={() => setUserOverride((v) => !v)}
           className="reasoning-header tl-process-header"
           data-has-failure={summary.failed > 0 ? "true" : undefined}
           aria-expanded={expanded}
-          title={reasoningSteps.length > 0 ? "思考过程（点击展开/收起）" : settledLabel}
+          title="过程（点击展开/收起）"
         >
           {expanded ? (
             <ChevronDown className="icon-sm reasoning-chevron reasoning-chevron-open" />
@@ -314,7 +317,16 @@ export function ProcessTimeline({
           ) : (
             <CheckCircle2 className="icon-sm tl-process-check" aria-hidden="true" />
           )}
-          <span className="reasoning-label">{activityLabel}</span>
+          {/* 主标签是**耗时**（用户最关心「这轮花了多久」），
+              动词聚合降级为右侧次级统计。 */}
+          <span className="reasoning-label">
+            {durationPart ? `已工作 ${durationPart}` : "已工作完成"}
+          </span>
+          <span className="tl-process-detail">
+            {reasoningSteps.length > 0 && `思考 ${reasoningSteps.length} 段`}
+            {reasoningSteps.length > 0 && activityLabel && " · "}
+            {activityLabel}
+          </span>
           {/* 失败 / 跳过：单独成段，不混进动词聚合。失败用 error 色，
               跳过用中性灰 —— 「没发生」不是错误。 */}
           {summary.failed > 0 && (
@@ -340,17 +352,11 @@ export function ProcessTimeline({
           )}
         </button>
       )}
-      {/* Chronological render:
-          - text steps always stay inline at their true position
-            (the LLM's narrative, with surrounding markdown etc.)
-          - tool steps always render inline too — one
-            ToolGroupCard per call — so the user can follow the
-            agent's actions in chronological order, interleaved
-            with the text it emitted before/after each tool call.
-            They are NOT part of the reasoning fold.
-          - reasoning stays collapsed by default (settled+closed)
-            and only expands live / on user toggle, because LLM
-            thinking can be long. */}
+      {/* Chronological render — 一轮就是一个按时间顺序平铺的过程流：
+            - text step 永远在自己的时间位置上（这是给用户看的正文）
+            - tools step 平铺成过程行；运行中一直可见，结束后随整轮收进折叠头
+            - reasoning step 各自是独立折叠项：正在想的那段展开，刚结束的收起
+          折叠的唯一总开关是上面的 `tl-process-header`，只在轮次结束后出现。 */}
       <div className="tl-process-body">
         {steps.map((step, i) => {
           if (step.kind === "text") {
@@ -372,25 +378,28 @@ export function ProcessTimeline({
           // blocks would otherwise dominate the message body. Tool
           // calls render regardless of fold state (see below).
           if (step.kind === "reasoning") {
-            if (!expanded && !isStreaming) return null;
+            // 轮次结束且总折叠头收起 → 整轮过程都不渲染。
+            // 运行中永远渲染（那时没有总折叠头）；每段自己管自己的开合。
+            if (settled && !expanded) return null;
+            // 「正在想」= 本段是最后一个 step（轮次尾巴）且仍在流。
+            // 下一段思考或工具一追加，active 就变 false → 自动收起。
+            const isTail = i === steps.length - 1;
             return (
               <ReasoningBlock
                 key={`ps-${i}`}
                 content={step.content}
                 total={reasoningSteps.length}
+                active={isStreaming && isTail}
+                startedAt={step.startedAt}
+                endedAt={step.endedAt}
               />
             );
           }
           if (step.kind === "tools" && stepGroups[i]) {
             const groups = stepGroups[i]!;
             if (groups.length === 0) return null;
-            // Process timeline (2026-08-18 refactor): tools are
-            // siblings of reasoning under the same fold header —
-            // matches Claude Code's single fold for "thinking +
-            // acting", so the final reply stays scannable while the
-            // internal process (every `ToolGroupCard` + every
-            // `ReasoningBlock`) collapses behind one tap.
-            if (!expanded && !isStreaming) return null;
+            // 运行中平铺可见（用户要看着 agent 干活）；结束后随整轮收进折叠头。
+            if (settled && !expanded) return null;
             return (
               <div key={`ps-${i}`} className="tl-tool-step">
                 <ToolTimelineSection

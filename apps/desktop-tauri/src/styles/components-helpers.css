@@ -295,7 +295,7 @@
      备选方案被实测否掉了，改用缩进 + 标签。 */
 .tl-reasoning-row {
   position: relative;
-  margin: 8px 0 10px;
+  margin: 6px 0 4px 18px;      /* 让开折叠头的箭头+图标宽度，缩进 18px */
   padding: 2px 0 2px 12px;
   border-left: 2px solid var(--color-text-faint);  /* 2.98:1，是旧值的两倍 */
   color: var(--color-text-thinking);
@@ -308,20 +308,6 @@
   overflow-y: auto;
   overscroll-behavior: contain;
 }
-/* 思考是旁注，不是正文 —— 缩进 12px 让它读作被引的一段 */
-.tl-reasoning-label {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  font-size: var(--text-tiny, 11px);
-  color: var(--color-text-faint);
-  margin-bottom: 5px;
-  position: sticky;
-  top: 0;
-  background: var(--color-chat-assistant-bg);
-  z-index: 1;
-}
-.tl-reasoning-label svg { width: 11px; height: 11px; flex: none; }
 /* 内嵌 MarkdownBody 的 .prose 会把字色/字号拉回正文档 —— 在这里整体压回思考档 */
 .tl-reasoning-row .prose,
 .tl-reasoning-row .prose :is(p, li, td, th, blockquote, strong, em) {
@@ -503,12 +489,66 @@
   padding: 4px 0;
 }
 
-/* 思考块的外壳：只负责把标签行和正文行包成一个整体，
-   几何标记（缩进 / 轨道）在 `.tl-reasoning-row` 上。 */
+/* 思考块的外壳：折叠头 + 可选正文。
+   2026-10-01：思考变成**每段一个**独立折叠项 —— 正在想的那段展开，
+   刚结束的那段自动收起。所以外壳既要能当折叠头容器，也要在收起时
+   只剩一行。 */
 .tl-reasoning-wrap {
   display: flex;
   flex-direction: column;
+  margin: 6px 0;
 }
+
+.tl-reasoning-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  text-align: left;
+  border-radius: 4px;
+  align-self: flex-start;
+  max-width: 100%;
+}
+.tl-reasoning-head:hover { color: var(--color-text-secondary); }
+.tl-reasoning-head:focus-visible {
+  outline: 2px solid var(--color-border);
+  outline-offset: 1px;
+}
+.tl-reasoning-chev { width: 12px; height: 12px; flex: none; }
+/* 正在想：accent 色 + 轻微呼吸，让「正在生成」在余光里也成立 */
+.tl-reasoning-wrap[data-active="true"] .tl-reasoning-head { color: var(--color-accent); }
+.tl-reasoning-wrap[data-active="true"] .tl-reasoning-icon { animation: tl-reasoning-pulse 1.6s ease-in-out infinite; }
+@keyframes tl-reasoning-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+.tl-reasoning-icon { width: 13px; height: 13px; flex: none; }
+.tl-reasoning-label {
+  font-size: var(--text-ui, 13px);
+  color: inherit;
+  white-space: nowrap;
+}
+.tl-reasoning-count {
+  font-size: var(--text-tiny, 11px);
+  color: var(--color-text-faint);
+  white-space: nowrap;
+}
+
+/* 整轮折叠头的次级明细：耗时是主标签，动词聚合挂这里 */
+.tl-process-detail {
+  font-size: var(--text-meta, 12px);
+  color: var(--color-text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
 
 /* ── 5a-0b-old. Reasoning Block (legacy) — kept for back-compat ── */
 

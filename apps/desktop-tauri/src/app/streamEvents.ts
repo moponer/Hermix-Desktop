@@ -221,16 +221,18 @@ export function normalizeStreamErrorKind(
  */
 export function appendReasoningStep(steps: TimelineStep[] | undefined, content: string): TimelineStep[] {
   const arr = steps ? [...steps] : [];
+  const now = new Date().toISOString();
   const last = arr[arr.length - 1];
   if (last && last.kind === "reasoning") {
-    arr[arr.length - 1] = { kind: "reasoning", content: last.content + content };
+    arr[arr.length - 1] = { ...last, content: last.content + content };
     return arr;
   }
   // Scan backwards past "text" steps to find the last "reasoning" step.
   // This prevents interleaved text events from splitting the reasoning.
   for (let i = arr.length - 1; i >= 0; i--) {
     if (arr[i].kind === "reasoning") {
-      arr[i] = { kind: "reasoning", content: (arr[i] as { content: string }).content + content };
+      const prev = arr[i] as { content: string; startedAt?: string };
+      arr[i] = { kind: "reasoning", content: prev.content + content, startedAt: prev.startedAt };
       return arr;
     }
     // Non-text step (e.g. "tools") marks a real phase boundary — stop.
@@ -238,13 +240,27 @@ export function appendReasoningStep(steps: TimelineStep[] | undefined, content: 
       break;
     }
   }
-  arr.push({ kind: "reasoning", content });
+  // 新的一段思考 —— 打上 startedAt，标签「思考 · 持续了 N 秒」从这里起算。
+  arr.push({ kind: "reasoning", content, startedAt: now });
   return arr;
+}
+
+/**
+ * 闭合最后一段还在进行的思考。
+ *
+ * 一段思考的「结束」不是一个事件，而是**下一段非 reasoning 的 step
+ * 追加的那一刻**。所以每个会打断思考的追加器都要先调它，否则那段
+ * 思考的 `endedAt` 永远是 undefined，标签会一直显示「思考中」。
+ */
+export function closeOpenReasoning(steps: TimelineStep[]): TimelineStep[] {
+  const last = steps[steps.length - 1];
+  if (!last || last.kind !== "reasoning" || last.endedAt) return steps;
+  return [...steps.slice(0, -1), { ...last, endedAt: new Date().toISOString() }];
 }
 
 /** Append text to the last text step, or push a new one. */
 export function appendTextStep(steps: TimelineStep[] | undefined, content: string): TimelineStep[] {
-  const arr = steps ? [...steps] : [];
+  const arr = closeOpenReasoning(steps ? [...steps] : []);
   const last = arr[arr.length - 1];
   if (last && last.kind === "text") {
     arr[arr.length - 1] = { kind: "text", content: last.content + content };
@@ -256,7 +272,7 @@ export function appendTextStep(steps: TimelineStep[] | undefined, content: strin
 
 /** Append a tool event to the last tools step, or push a new one. */
 export function appendToolStep(steps: TimelineStep[] | undefined, event: ExecutionTimelineEvent): TimelineStep[] {
-  const arr = steps ? [...steps] : [];
+  const arr = closeOpenReasoning(steps ? [...steps] : []);
   const last = arr[arr.length - 1];
   if (last && last.kind === "tools") {
     arr[arr.length - 1] = { kind: "tools", events: [...last.events, event] };

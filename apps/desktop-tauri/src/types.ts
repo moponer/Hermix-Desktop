@@ -452,7 +452,22 @@ export interface SubAgentEventPayload {
  * / `content` fields.
  */
 export type TimelineStep =
-  | { kind: "reasoning"; content: string }
+  | {
+      kind: "reasoning";
+      content: string;
+      /**
+       * 这段思考的起止时刻（ISO）。2026-10-01 新增：每段思考在界面上
+       * 是一个**独立**的折叠项，标签要显示「思考 · 持续了 N 秒」，所以
+       * 需要知道单段耗时而不是整轮耗时。流式期间 `endedAt` 缺省表示
+       * 「还在想」；下一段非 reasoning 的 step 追加时由
+       * `closeOpenReasoning` 补上。
+       *
+       * 恢复态（重载历史）没有这两个字段 —— 那里只显示静态标签，
+       * 不编造时长。
+       */
+      startedAt?: string;
+      endedAt?: string;
+    }
   | { kind: "tools"; events: ExecutionTimelineEvent[] }
   | { kind: "text"; content: string }
   /**

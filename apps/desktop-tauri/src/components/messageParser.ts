@@ -692,9 +692,23 @@ export function mergeAdjacentReasoning(steps: TimelineStep[]): TimelineStep[] {
   if (steps.length < 2) return steps;
   const out: TimelineStep[] = [];
   let buf: string | null = null;
+  // 合并相邻思考时保住时间跨度：取最早的开始、最晚的结束。否则
+  // 「思考 · 持续了 N 秒」会算成 0 秒（只拿到后一段的 endedAt）。
+  let bufStart: string | undefined;
+  let bufEnd: string | undefined;
+  const flush = () => {
+    if (buf !== null) {
+      out.push({ kind: "reasoning", content: buf, startedAt: bufStart, endedAt: bufEnd });
+      buf = null;
+      bufStart = undefined;
+      bufEnd = undefined;
+    }
+  };
   for (const step of steps) {
     if (step.kind === "reasoning") {
       buf = buf === null ? step.content : buf + "\n\n" + step.content;
+      if (bufStart === undefined) bufStart = step.startedAt;
+      if (step.endedAt) bufEnd = step.endedAt;
       continue;
     }
     if (step.kind === "text" && isThinkBlockResidue(step.content)) {
@@ -704,15 +718,10 @@ export function mergeAdjacentReasoning(steps: TimelineStep[]): TimelineStep[] {
       // blocks with short markdown headings between them.
       continue;
     }
-    if (buf !== null) {
-      out.push({ kind: "reasoning", content: buf });
-      buf = null;
-    }
+    flush();
     out.push(step);
   }
-  if (buf !== null) {
-    out.push({ kind: "reasoning", content: buf });
-  }
+  flush();
   return out;
 }
 

@@ -138,6 +138,9 @@ export function ProcessLine({
     <div
       className="process-line"
       data-state={stateKey === "awaiting" ? "awaiting" : vm.status}
+      /* 展开态也要露出箭头 —— 否则用户点了展开、行也长高了，
+         但唯一的「收回去」线索消失了。 */
+      data-open={open ? "true" : "false"}
     >
       <button
         type="button"
