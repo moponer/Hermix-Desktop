@@ -1,4 +1,10 @@
 import type { ChatMessage, ExecutionTimelineEvent, TimelineStep } from "../types";
+import { classifyToolOutcome, detectToolError } from "../utils/toolOutcome";
+
+// 结局判定的实现已搬进 `utils/toolOutcome.ts`（零依赖），这里是转发，
+// 保持既有 import 路径可用。运行态 / 恢复态 / ACUI 三条路径现在共用
+// 同一份实现，不再各抄一遍靠注释同步。
+export { classifyToolOutcome, detectToolError };
 
 export interface ParsedTask {
   done: boolean;
@@ -145,7 +151,12 @@ export interface ToolGroup {
   key: string;
   tool: string;
   kind: "tool" | "status";
-  status: "running" | "done" | "error";
+  /**
+   * 四态而非三态。`skipped` = 工具**没有真正跑**（审批超时、用户拒绝）——
+   * 既不是成功也不是失败。2026-10-01 之前这类被塞进 `done`，UI 打「✓已完成」，
+   * 等于对一件没发生的事宣布成功。判定见 `utils/toolOutcome.ts`。
+   */
+  status: "running" | "done" | "error" | "skipped";
   events: ExecutionTimelineEvent[];
   startedAt?: string;
   endedAt?: string;
@@ -257,14 +268,12 @@ export function groupTimeline(
       grp.events.push(ev);
     }
     if (ev.type === "tool_complete") {
-      // Decide between "done" and "error" from the close-event
-      // payload. Without this, every tool that exited non-zero
-      // would render as a green "成功" pill on reload — masking
-      // the fact that the command actually failed.
-      const errReason = detectToolError(ev.content, ev.is_error);
-      grp.status = errReason ? "error" : "done";
+      // 结局判定是运行态 / 恢复态 / ACUI 三条路径的唯一入口
+      // （`utils/toolOutcome.ts`）。`kind === null` 才是「完成」。
+      const outcome = classifyToolOutcome(ev.content, ev.is_error);
+      grp.status = outcome.kind ?? "done";
       grp.endedAt = ev.created_at;
-      if (errReason) grp.statusNote = errReason;
+      if (outcome.reason) grp.statusNote = outcome.reason;
       if (grp.startedAt) {
         grp.durationMs = Math.max(0, new Date(grp.endedAt).getTime() - new Date(grp.startedAt).getTime());
       }
@@ -294,73 +303,7 @@ export function groupTimeline(
   return groups;
 }
 
-/**
- * Inspect a `tool_complete` payload (or a final stdout chunk from a
- * tool that never emitted a complete event) and decide whether the
- * invocation ended in error. Returns a short human-readable reason
- * when an error is detected, or `null` when the call looks healthy.
- *
- * `isError` is the server's authoritative `ToolResult::is_error` flag.
- * Pass it whenever it is available: `false` short-circuits to `null`
- * (the server knows the call succeeded, so no text inspection happens),
- * `true` means "this failed — extract the reason", and `undefined`
- * means the row predates the flag and we still fall back to inspecting
- * the payload.
- *
- * Payload shapes we extract a reason from, in priority order:
- *   1. JSON wrapper with `exit_code !== 0` and either `error` or
- *      `stderr` non-empty   — terminal / shell / execute_command
- *   2. JSON wrapper with top-level `error` field
- *      — generic tool errors propagated by the agent runtime
- *   3. Plain-text payloads that begin with `Failed` / `Error` /
- *      `Tool execution failed` / `ERR`   — legacy fallback only
- *
- * Why we duplicate this in two places: `tool_complete.content` is
- * the canonical payload but `groupTimeline` needs to decide on the
- * raw `content` string (possibly empty for tools that error before
- * writing any output), while `expandTimelineToMessages` wants to
- * derive the same answer for the *expanded* per-call message. The
- * two share the exact same logic via this helper.
- */
-export function detectToolError(content?: string, isError?: boolean): string | null {
-  if (!content) return null;
-  const trimmed = content.trim();
-  if (!trimmed) return null;
-  // Authoritative: the server now sends `ToolResult::is_error` alongside
-  // every `tool_complete`. When the flag is present it wins outright, so a
-  // perfectly normal output that happens to begin with "Error" is no longer
-  // mis-reported as a failure.
-  if (isError === false) return null;
-  // Only reached when the server says the call failed (`true`) or when the
-  // row predates the flag (`undefined`, legacy persisted sessions).
-  if (/^(Failed|Error|ERR|Tool execution failed)/i.test(trimmed)) {
-    return trimmed.length > 120 ? trimmed.slice(0, 117) + "…" : trimmed;
-  }
-  if (!trimmed.startsWith("{")) return null;
-  try {
-    const parsed = JSON.parse(trimmed);
-    if (typeof parsed.error === "string" && parsed.error.trim().length > 0) {
-      const e = parsed.error;
-      return e.length > 120 ? e.slice(0, 117) + "…" : e;
-    }
-    if (
-      typeof parsed.exit_code === "number" &&
-      parsed.exit_code !== 0 &&
-      typeof parsed.stderr === "string" &&
-      parsed.stderr.trim().length > 0
-    ) {
-      const e = parsed.stderr;
-      return e.length > 120 ? e.slice(0, 117) + "…" : e;
-    }
-    if (typeof parsed.exit_code === "number" && parsed.exit_code !== 0) {
-      return `exit code ${parsed.exit_code}`;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
+// 实现见 `utils/toolOutcome.ts`（已在上方 import 并转发）。
 /**
  * Expand a list of server-returned messages so that every assistant
  * message whose `execution_timeline` contains tool events gets
@@ -589,22 +532,26 @@ export function expandTimelineToMessages(messages: ChatMessage[]): ChatMessage[]
           args: startEv?.arguments,
           // `g.status` already encodes the truth: "running" while
           // a tool_call_id is still open, "error" if the close
-          // event carried an error payload (see `groupTimeline`
-          // comments above), "done" otherwise. Previously this
-          // line collapsed everything-but-running to "done", which
-          // is why reloads painted a green "运行中" badge on
-          // tools that had clearly errored (terminal exit ≠ 0).
+          // event carried an error payload, "skipped" if the tool
+          // never actually ran (approval timeout / user denial) —
+          // see `groupTimeline` and `utils/toolOutcome.ts`.
+          // Previously this line collapsed everything-but-running
+          // to "done", which is why reloads painted a green
+          // "运行中" badge on tools that had clearly errored
+          // (terminal exit ≠ 0) and "已完成" on ones that never
+          // ran at all.
           status: g.status,
           // Stash a one-line reason on the meta so the renderer
-          // can show "已中断" / "失败" instead of the generic
-          // "执行中" pill. The renderer reads this via
+          // can show "已中断" / "失败" / "已跳过" instead of the
+          // generic "执行中" pill. The renderer reads this via
           // `meta.errorReason`; older versions of the renderer
           // will simply ignore the field.
-          errorReason: g.statusNote?.startsWith("执行已中断")
-            ? g.statusNote
-            : g.status === "error"
-              ? g.statusNote ?? "执行失败"
-              : undefined,
+          errorReason:
+            g.statusNote?.startsWith("执行已中断")
+              ? g.statusNote
+              : g.status === "error" || g.status === "skipped"
+                ? (g.statusNote ?? (g.status === "skipped" ? "未执行" : "执行失败"))
+                : undefined,
           output: stdout,
           startedAt: g.startedAt ?? msg.timestamp,
           completedAt: g.endedAt,

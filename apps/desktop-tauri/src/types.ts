@@ -109,8 +109,15 @@ export interface ToolMessageMeta {
   tool: string;
   /** Raw arguments JSON string from the tool call. */
   args?: string;
-  /** Live state — flows running → done (or error). */
-  status: "running" | "done" | "error";
+  /**
+   * Live state — flows running → done (or error).
+   *
+   * 四态：`skipped` = 工具**没有真正跑**（审批超时 / 用户拒绝），
+   * 既不是成功也不是失败。2026-10-01 之前这类被并进 `done`，UI 打
+   * 「✓已完成」—— 对一件没发生的事宣布成功。判定见
+   * `utils/toolOutcome.ts`，运行态与恢复态共用同一入口。
+   */
+  status: "running" | "done" | "error" | "skipped";
   /** Accumulated stdout/stderr. Streamed live in 4KB chunks. */
   output?: string;
   /** ISO timestamp when the tool invocation started. */

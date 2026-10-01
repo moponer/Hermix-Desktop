@@ -1,12 +1,13 @@
 // Tool-call related bubbles: tool-row cards, the unified/process timeline
 // renderer, the live terminal, and the file-change / memory meta blocks.
 // Extracted from MessageBubble.tsx.
-import { buildActivitySegments, shouldSummarize } from "./chat/activitySummary";
-import React, { useState, useEffect, useMemo, useRef } from "react";
+import { buildActivitySummary, shouldSummarize } from "./chat/activitySummary";
+import React, { useState, useEffect, useMemo } from "react";
 import {
-  ChevronDown, ChevronRight, Loader2, AlertCircle, AlertTriangle,
-  CheckCircle2, Check, Copy, CheckCheck, FileText, FilePlus,
-  ArrowRight, Edit3, Trash2, Brain, Database, Wrench, SearchX,
+  ChevronDown, ChevronRight, Loader2, CheckCircle2, AlertTriangle,
+  AlertCircle, CircleSlash,
+  FileText, FilePlus, ArrowRight, Edit3, Trash2, Brain,
+  Database, Wrench,
 } from "lucide-react";
 import { MarkdownBody } from "./MarkdownBody";
 import type { ChatMessage, TimelineStep } from "../types";
@@ -16,17 +17,16 @@ import {
   parseContent, groupTimeline,
   type FileChangeEntry, type MemoryUpdateEntry, type MemoryRecallEntry,
 } from "./messageParser";
-import {
-  ScreenshotPreview, WindowListPreview, WindowAtPointPreview, UiTreePreview,
-  UiFindPreview, UiClickPreview, UiSingleNamePreview,
-  isPathArg, extractFirstPath, extractLineStats,
-} from "./bubbles/ToolOutputPreviews";
-import { parseMemoryResult, memoryActionLabel, memoryStatusColor } from "../utils/memoryToolResult";
-import {
-  formatDuration, toolIcon, toolVerb, toolPrimaryArg, toolResultPeek,
-  toolKind, summarizeError, memoryArchiveChip, unwrapToolOutput,
-} from "./bubbleUtils";
+import { parseMemoryResult } from "../utils/memoryToolResult";
+import { formatDuration } from "./bubbleUtils";
 import { ThinkingDots, ReasoningBlock } from "./ThinkingBubble";
+import { ProcessLine, type ProcessLineVM, type ProcessStatus } from "./ProcessLine";
+
+/**
+ * 运行态的一行过程。只负责把 `ToolGroup` 映射成 `ProcessLineVM`，
+ * 渲染委托给 `<ProcessLine>` —— 与恢复态的 `ToolMessageCard` 共用
+ * 同一份 JSX。两条路径的差异到此为止。
+ */
 export function ToolGroupCard({
   group,
   onPathClick,
@@ -40,14 +40,10 @@ export function ToolGroupCard({
    *  not stuck mid-execution. */
   awaitingApproval?: boolean;
 }) {
-  const isRunning = group.status === "running";
-  const isError = group.status === "error";
-  const [open, setOpen] = useState(false);
-
-  // Memoize so large stdout outputs aren't re-joined every render —
-  // a tool with 500 chunks would otherwise concatenate 500 strings on
-  // each parent re-render for an identical result.
-  const { startEv, output, hasOutput } = useMemo(() => {
+  const vm = useMemo(() => {
+    // Memoize so large stdout outputs aren't re-joined every render —
+    // a tool with 500 chunks would otherwise concatenate 500 strings on
+    // each parent re-render for an identical result.
     const startEv = group.events.find((e) => e.type === "tool_start");
     const completeEv = group.events.find((e) => e.type === "tool_complete");
     const stdout = group.events
@@ -55,111 +51,20 @@ export function ToolGroupCard({
       .map((e) => e.content ?? "")
       .join("");
     const output = completeEv?.content ?? stdout ?? "";
-    return { startEv, output, hasOutput: output.length > 0 };
-  }, [group.events]);
+    return {
+      tool: group.tool,
+      args: startEv?.arguments,
+      output,
+      status: group.status as ProcessStatus,
+      statusNote: group.statusNote,
+      awaitingApproval,
+      memoryResult: parseMemoryResult(output),
+    };
+  }, [group.events, group.tool, group.status, group.statusNote, awaitingApproval]);
 
-  const toolName = group.tool;
-  const args = startEv?.arguments;
-  const Icon = toolIcon(toolName);
-  const verb = toolVerb(toolName, args);
-  const primary = isError
-    ? (group.statusNote ?? summarizeError(output) ?? toolPrimaryArg(toolName, args, output))
-    : toolPrimaryArg(toolName, args, output);
-  const stats = extractLineStats(toolName, args);
-  const isPathLike = isPathArg(toolName, args, output);
-  const primaryPath = isPathLike ? (output || args) : null;
-
-  const resultPeek = useMemo(() => {
-    if (isError) {
-      return group.statusNote
-        ?? summarizeError(output)
-        ?? (output ? toolResultPeek(output, args) : null)
-        ?? "执行出错";
-    }
-    if (!output || output.trim().length === 0) return null;
-    if (isRunning && !group.endedAt) return null;
-    return toolResultPeek(output, args);
-  }, [output, args, group.status, group.endedAt, group.statusNote, isError, isRunning]);
-
-  const handlePrimaryClick = (e: React.MouseEvent) => {
-    if (isPathLike && primaryPath && onPathClick) {
-      const path = extractFirstPath(primaryPath);
-      if (path) {
-        e.stopPropagation();
-        onPathClick(path, e);
-        return;
-      }
-    }
-    if (hasOutput) setOpen((v) => !v);
-  };
-
-  return (
-    <div className="tw-msg h-enter chat-tool-call chat-tool-call--tool">
-      <button
-        type="button"
-        onClick={hasOutput ? () => setOpen((v) => !v) : undefined}
-        className="tw-msg-row"
-        data-tool-kind={toolKind(toolName)}
-        data-state={isError ? "err" : isRunning ? "run" : "ok"}
-      >
-        <span className="tw-msg-icon-tile">
-          <Icon className="icon-sm tw-msg-icon-svg" />
-        </span>
-        <span className="tw-msg-verb">{verb}</span>
-        {primary && (
-          <span
-            className={isPathLike ? "tw-msg-primary tw-msg-primary--link" : "tw-msg-primary"}
-            title={isPathLike ? `点击打开 ${primary}` : primary}
-            onClick={isPathLike ? handlePrimaryClick : undefined}
-          >
-            {primary}
-          </span>
-        )}
-        {resultPeek && !isError && (
-          <span className="tw-msg-result-peek">{resultPeek}</span>
-        )}
-        <span className="tw-msg-right chat-status-inline">
-          {(stats.added != null || stats.removed != null) && (
-            <span className="tw-msg-stats">
-              {stats.added != null && stats.added > 0 && (
-                <span className="tw-msg-stat tw-msg-stat--add">+{stats.added}</span>
-              )}
-              {stats.removed != null && stats.removed > 0 && (
-                <span className="tw-msg-stat tw-msg-stat--del">−{stats.removed}</span>
-              )}
-            </span>
-          )}
-          <span className={`tw-msg-state tw-msg-state--${isError ? "err" : isRunning ? "run" : "done"}`}>
-            {awaitingApproval && isRunning ? (
-              <><AlertCircle className="icon-sm shrink-0" />等待审批</>
-            ) : isRunning ? (
-              <><Loader2 className="icon-sm animate-spin shrink-0" />运行中</>
-            ) : isError ? (
-              <><AlertCircle className="icon-sm shrink-0" />失败</>
-            ) : (
-              <><Check className="icon-sm shrink-0" />已完成</>
-            )}
-          </span>
-          {hasOutput && (
-            <span className="tw-msg-chev">{open ? <ChevronDown className="icon-sm" /> : <ChevronRight className="icon-sm" />}</span>
-          )}
-        </span>
-      </button>
-      {isError && resultPeek && primary !== resultPeek && (
-        <div className="tw-msg-err-hint" onClick={() => setOpen(true)} title="点击展开完整输出">
-          <AlertCircle size={10} className="shrink-0" />
-          <span className="truncate">{resultPeek}</span>
-          <ChevronRight className="icon-sm shrink-0 tw-msg-chev-err" />
-        </div>
-      )}
-      {open && hasOutput && !isError && (
-        <div className="tw-msg-body">
-          <LiveTerminal content={output} running={isRunning && !group.endedAt} />
-        </div>
-      )}
-    </div>
-  );
+  return <ProcessLine vm={vm} onPathClick={onPathClick} />;
 }
+
 export function ProcessTimeline({
   steps,
   isStreaming,
@@ -360,12 +265,17 @@ export function ProcessTimeline({
   // 2026-09-29：抄 cc-haha `activityGroupModel.ts` 的动词表。摘要要读起来
   // 像一句话（「思考、读取了 5 个文件、执行了 2 条命令」），而不是计数器的
   // 输出（「已完成 7 个工具」）。文件类按去重后的路径数算，不是调用次数。
-  const segments = useMemo(() => buildActivitySegments(steps), [steps]);
+  // 2026-10-01：改用 buildActivitySummary —— 它把失败 / 跳过**单独统计**。
+  // 旧版把失败混进「已完成 5 个工具」，读起来就是全部成功。
+  const summary = useMemo(() => buildActivitySummary(steps), [steps]);
   // 只有一次工具调用、且没有思考时**不生成摘要** —— 「读取了 1 个文件」压在
   // 一个被藏起来的 read_file 行上面，信息严格少于那一行本身。
   // cc-haha `ActivityGroup.tsx:91-103` 的 data-single-step。
   const showSummary = shouldSummarize(steps, reasoningSteps.length);
-  const activityLabel = segments.length > 0 ? segments.join("、") : settledLabel;
+  const activityLabel = summary.segments.length > 0 ? summary.segments.join("、") : settledLabel;
+  // 有失败/跳过时折叠头整行染 error 色，且计数单列在末尾 —— 绝不被
+  // 「读取了 4 个文件」这类成功动词淹没。
+  const hasBadOutcome = summary.failed > 0 || summary.skipped > 0;
 
   if (steps.length === 0) return null;
 
@@ -388,6 +298,7 @@ export function ProcessTimeline({
         <button
           onClick={() => setUserOverride((v) => !v)}
           className="reasoning-header tl-process-header"
+          data-has-failure={summary.failed > 0 ? "true" : undefined}
           aria-expanded={expanded}
           title={reasoningSteps.length > 0 ? "思考过程（点击展开/收起）" : settledLabel}
         >
@@ -396,8 +307,28 @@ export function ProcessTimeline({
           ) : (
             <ChevronRight className="icon-sm reasoning-chevron" />
           )}
-          <CheckCircle2 className="icon-sm tl-process-check" />
+          {/* 全部成功才打勾；有失败时换成告警形状 —— 一个对勾摆在
+              「读取了 4 个文件」前面、而那一行里其实有一次失败，是误导。 */}
+          {hasBadOutcome ? (
+            <AlertTriangle className="icon-sm tl-process-check" aria-hidden="true" />
+          ) : (
+            <CheckCircle2 className="icon-sm tl-process-check" aria-hidden="true" />
+          )}
           <span className="reasoning-label">{activityLabel}</span>
+          {/* 失败 / 跳过：单独成段，不混进动词聚合。失败用 error 色，
+              跳过用中性灰 —— 「没发生」不是错误。 */}
+          {summary.failed > 0 && (
+            <span className="tl-process-failed">
+              <AlertCircle className="icon-sm" aria-hidden="true" />
+              {summary.failed} 个失败
+            </span>
+          )}
+          {summary.skipped > 0 && (
+            <span className="tl-process-skipped">
+              <CircleSlash className="icon-sm" aria-hidden="true" />
+              {summary.skipped} 个跳过
+            </span>
+          )}
           {/* 折叠态的"分量提示"：有思考时主标签是"思考"，工具数/行数/耗时
               作为次级统计挂在右侧，避免和思考文案挤成一句话。 */}
           {!isStreaming && (totalOutputLines > 0 || durationPart) && (
@@ -442,7 +373,13 @@ export function ProcessTimeline({
           // calls render regardless of fold state (see below).
           if (step.kind === "reasoning") {
             if (!expanded && !isStreaming) return null;
-            return <ReasoningBlock key={`ps-${i}`} content={step.content} />;
+            return (
+              <ReasoningBlock
+                key={`ps-${i}`}
+                content={step.content}
+                total={reasoningSteps.length}
+              />
+            );
           }
           if (step.kind === "tools" && stepGroups[i]) {
             const groups = stepGroups[i]!;
@@ -860,6 +797,11 @@ export function MemoryRecallBlock({ recalls }: { recalls: MemoryRecallEntry[] })
     </div>
   );
 }
+/**
+ * 恢复态的一行过程（DB 的 `role:"tool"` 行）。同样只负责映射数据形状，
+ * 渲染委托给 `<ProcessLine>` —— 与运行态的 `ToolGroupCard` 共用同一份
+ * JSX。两条路径的差异到此为止。
+ */
 export function ToolMessageCard({
   message,
   workspaceRoot: _workspaceRoot,
@@ -870,329 +812,18 @@ export function ToolMessageCard({
   onPathClick?: (path: string, e: React.MouseEvent) => void;
 }) {
   const meta = message.tool;
-  // 钩子必须先于任何早退：流式 tool 消息在 meta 落位前后钩子数量不变，
-  // 否则 "Rendered more hooks than during the previous render"。
-  const [open, setOpen] = useState(false);
-  const resultPeek = useMemo(() => {
-    if (!meta) return null;
-    const mem = meta.tool === "memory" ? parseMemoryResult(meta.output) : null;
-    if (mem) return null;
-    if (meta.status === "error") {
-      return meta.errorReason
-        ?? summarizeError(meta.output)
-        ?? (meta.output ? toolResultPeek(meta.output, meta.args) : null)
-        ?? "执行出错";
-    }
-    if (!meta.output || meta.output.trim().length === 0) return null;
-    if (meta.status === "running" && !meta.completedAt) return null;
-    return toolResultPeek(meta.output, meta.args);
-  }, [meta?.tool, meta?.output, meta?.args, meta?.status, meta?.completedAt, meta?.errorReason]);
-  const archiveChip = useMemo(
-    () => (meta ? memoryArchiveChip(meta.tool, meta.output) : null),
-    [meta?.tool, meta?.output],
-  );
   if (!meta) return null;
-  const Icon = toolIcon(meta.tool);
-  const isRunning = meta.status === "running";
-  const isError = meta.status === "error";
-  const hasOutput = meta.output != null && meta.output.length > 0;
-  // Memory tool: lift the structured JSON result so the row reads
-  // `<动作> <记忆文件路径> <状态>` and the path is clickable to a
-  // preview. no-match / ambiguous are soft outcomes ("未查到对应内容"
-  // / "匹配到多条"), never a red "失败" badge.
-  const memResult =
-    meta.tool === "memory" ? parseMemoryResult(meta.output) : null;
-  // Two-piece label: `<verb> <object>` (e.g. "读取 PDF D:\data\发票汇总.xls").
-  // - `verb` comes from `toolVerb` (registered Chinese verb, or the
-  // literal English name for unknown tools).
-  // - `object` is `argsHint` — the most meaningful string we
-  // can lift from the tool's args (path / url / command / query).
-  // If `argsHint` is empty (e.g. a no-arg tool), we just show
-  // the verb alone so the row doesn't read "读取文件 (空)".
-  const verb = memResult
-    ? memoryActionLabel(memResult.action)
-    : toolVerb(meta.tool, meta.args);
-  // The row keeps two distinct slots — verb (left) and primary (middle,
-  // optional) — so they never merge into a duplicated string like
-  // "调用工具 D:\path D:\path". The primary slot shows the most meaningful
-  // arg / stdout (path, URL, command, query) or, on error, a one-line
-  // summary instead of raw JSON.
-  const primary = memResult
-    ? memResult.path
-    : isError
-      ? (summarizeError(meta.output) ?? toolPrimaryArg(meta.tool, meta.args, meta.output))
-      : toolPrimaryArg(meta.tool, meta.args, meta.output);
-  const stats = extractLineStats(meta.tool, meta.args);
-  // Path-shaped primary arg is clickable.  We only auto-recognise
-  // the standard file ops; everything else (e.g. python scripts,
-  // arbitrary text) is left as plain text to avoid spurious "open
-  // file" affordances.
-  const isPathLike = memResult ? true : isPathArg(meta.tool, meta.args, meta.output);
-  const primaryPath = memResult
-    ? memResult.path
-    : isPathLike ? (meta.output || meta.args) : null;
-  const handlePrimaryClick = (e: React.MouseEvent) => {
-    // Memory tool: the path is always a real file — open it directly.
-    if (memResult?.path && onPathClick) {
-      e.stopPropagation();
-      onPathClick(memResult.path, e);
-      return;
-    }
-    if (isPathLike && primaryPath && onPathClick) {
-      const path = extractFirstPath(primaryPath);
-      if (path) {
-        e.stopPropagation();
-        onPathClick(path, e);
-        return;
-      }
-    }
-    if (hasOutput) setOpen((v) => !v);
+  const vm: ProcessLineVM = {
+    tool: meta.tool,
+    args: meta.args,
+    output: meta.output,
+    status: (meta.status ?? "done") as ProcessStatus,
+    statusNote: meta.errorReason,
+    memoryResult: parseMemoryResult(meta.output),
   };
-
-  // Result peek — a one-line human-readable summary of what the
-  // tool produced (or why it failed). Extracted from the output
-  // in priority order: error message → success summary → first line.
-
-
-  return (
-    <div className="tw-msg h-enter chat-tool-call chat-tool-call--tool">
-      <button
-        type="button"
-        onClick={hasOutput ? () => setOpen((v) => !v) : undefined}
-        className="tw-msg-row"
-        data-tool-kind={toolKind(meta.tool)}
-        data-state={isError ? "err" : isRunning ? "run" : "ok"}
-      >
-        <span className="tw-msg-icon-tile">
-          <Icon className="icon-sm tw-msg-icon-svg" />
-        </span>
-
-        {/* Verb (e.g. "执行命令") — right next to the icon tile */}
-        <span className="tw-msg-verb">{verb}</span>
-        {primary && (
-          <span
-            className={isPathLike ? "tw-msg-primary tw-msg-primary--link" : "tw-msg-primary"}
-            title={isPathLike ? `点击打开 ${primary}` : primary}
-            onClick={isPathLike ? handlePrimaryClick : undefined}
-          >
-            {primary}
-          </span>
-        )}
-
-        {/* Result peek — compact one-line summary between primary
-            arg and the right-side status group. Only shown for
-            completed tools with a meaningful result.
-            Format:   | tail 不是内部或外部命令 (error - red)
-                      | 已写入 823 bytes (success - muted)
-                      | 找到 12 个结果 (search - muted) */}
-        {resultPeek && !isError && (
-          <span className="tw-msg-result-peek">{resultPeek}</span>
-        )}
-        {archiveChip && (
-          <span className="tw-msg-chip tw-msg-archive-chip" title="记忆已自动归档旧条目">
-            {archiveChip}
-          </span>
-        )}
-
-        {/* Right side: line stats + status indicator, kept inline at the
-            message tail (not space-between) so it isn't pulled apart. */}
-        <span className="tw-msg-right chat-status-inline">
-          {(stats.added != null || stats.removed != null) && (
-            <span className="tw-msg-stats">
-              {stats.added != null && stats.added > 0 && (
-                <span className="tw-msg-stat tw-msg-stat--add">+{stats.added}</span>
-              )}
-              {stats.removed != null && stats.removed > 0 && (
-                <span className="tw-msg-stat tw-msg-stat--del">−{stats.removed}</span>
-              )}
-            </span>
-          )}
-          {/* Status uses small icons + text in muted / success / warning
-              tones — never raw blue/red characters: 已完成 → Check;
-              失败 / 已中断 → AlertTriangle; 运行中 → Loader. */}
-          {(() => {
-            // Memory tool: render the structured status as the badge
-            // — "未查到对应内容" / "匹配到多条" / "成功" / "失败".
-            // no-match / ambiguous are soft (muted / amber), never red.
-            const memBadge = (st: string) => {
-              switch (st) {
-                case "success":
-                  return <><Check className="icon-sm shrink-0" /> 成功</>;
-                case "not_found":
-                  return <><SearchX className="icon-sm shrink-0" /> 未查到对应内容</>;
-                case "ambiguous":
-                  return <><AlertTriangle className="icon-sm shrink-0" /> 匹配到多条</>;
-                case "error":
-                  return <><AlertCircle className="icon-sm shrink-0" /> 失败</>;
-                default:
-                  return <><Check className="icon-sm shrink-0" /> 成功</>;
-              }
-            };
-            if (memResult && !isRunning) {
-              return (
-                <span className={`tw-msg-state ${memoryStatusColor(memResult.status)}`}>
-                  {memBadge(memResult.status)}
-                </span>
-              );
-            }
-            return (
-              <span className={`tw-msg-state tw-msg-state--${isError ? "err" : isRunning ? "run" : "done"}`}>
-                {isRunning ? (
-                  <>
-                    <Loader2 className="icon-sm animate-spin shrink-0" />
-                    运行中
-                  </>
-                ) : isError ? (
-                  <>
-                    <AlertCircle className="icon-sm shrink-0" />
-                    失败
-                  </>
-                ) : (
-                  <>
-                    <Check className="icon-sm shrink-0" />
-                    已完成
-                  </>
-                )}
-              </span>
-            );
-          })()}
-          {hasOutput && (
-            <span className="tw-msg-chev">{open ? <ChevronDown className="icon-sm" /> : <ChevronRight className="icon-sm" />}</span>
-          )}
-        </span>
-      </button>
-
-      {/* Error snippet — shown only when the primary text doesn't
-          already contain the error summary. This prevents duplicate
-          red text (primary shows "Binary file detected..." and the
-          err-hint below shows the same string). */}
-      {isError && resultPeek && primary !== resultPeek && (
-        <div
-          className="tw-msg-err-hint"
-          onClick={() => setOpen(true)}
-          title="点击展开完整输出"
-        >
-          <AlertCircle size={10} className="shrink-0" />
-          <span className="truncate">{resultPeek}</span>
-          <ChevronRight className="icon-sm shrink-0 tw-msg-chev-err" />
-        </div>
-      )}
-
-      {/* Expandable output body — suppressed for error tools.
-          The error snippet above (tw-msg-err-hint) already shows
-          what went wrong; expanding to the full red body just
-          repeats the same content.
-
-          For `cua_screenshot`, the image preview is rendered
-          INLINE (always visible, no expand needed) — the user
-          almost always wants to *see* the screenshot, not read
-          the raw base64 payload. A second collapsible block
-          under the image lets them peek at the JSON metadata if
-          they care about coordinates / file size. */}
-      {!isError && meta.tool === "cua_screenshot" && (
-        <ScreenshotPreview output={meta.output} />
-      )}
-      {!isError && meta.tool === "cua_list_windows" && (
-        <WindowListPreview output={meta.output} />
-      )}
-      {!isError && meta.tool === "cua_window_at_point" && (
-        <WindowAtPointPreview output={meta.output} />
-      )}
-      {!isError && meta.tool === "cua_ui_tree" && (
-        <UiTreePreview output={meta.output} />
-      )}
-      {!isError && meta.tool === "cua_ui_find" && (
-        <UiFindPreview output={meta.output} />
-      )}
-      {!isError && meta.tool === "cua_ui_click" && (
-        <UiClickPreview output={meta.output} />
-      )}
-      {!isError && meta.tool === "cua_ui_focus" && (
-        <UiSingleNamePreview output={meta.output} verb="聚焦" />
-      )}
-      {!isError && meta.tool === "cua_ui_invoke" && (
-        <UiSingleNamePreview output={meta.output} verb="触发" />
-      )}
-      {hasOutput && open && !isError && meta.tool !== "cua_screenshot" && meta.tool !== "cua_list_windows" && meta.tool !== "cua_window_at_point" && meta.tool !== "cua_ui_tree" && meta.tool !== "cua_ui_find" && meta.tool !== "cua_ui_click" && meta.tool !== "cua_ui_focus" && meta.tool !== "cua_ui_invoke" && (
-        <div className="tw-msg-body">
-          <LiveTerminal
-            content={meta.output!}
-            running={isRunning && !meta.completedAt}
-          />
-        </div>
-      )}
-    </div>
-  );
+  return <ProcessLine vm={vm} onPathClick={onPathClick} />;
 }
-export function LiveTerminal({ content, running }: { content: string; running: boolean }) {
-  // Unwrap JSON result wrappers so the user sees clean terminal output.
-  const displayContent = useMemo(() => unwrapToolOutput(content), [content]);
-  // Copy-to-clipboard state. ~1.4s "已复制" flash so the affordance
-  // gives clear feedback without nagging the user with a toast.
-  const [copied, setCopied] = useState(false);
-  const copyTimerRef = useRef<number | null>(null);
-
-  // Cancel any pending "copied" reset on unmount so we don't fire
-  // setState on a dead component.
-  useEffect(() => () => {
-    if (copyTimerRef.current) window.clearTimeout(copyTimerRef.current);
-  }, []);
-
-  const handleCopy = async () => {
-    const text = displayContent || (running ? "" : "（无输出）");
-    if (!text) return;
-    try {
-      if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(text);
-      } else {
-        // Tauri webview fallback (e.g. http context without the
-        // modern clipboard API): hidden textarea + execCommand.
-        const ta = document.createElement("textarea");
-        ta.value = text;
-        ta.style.position = "fixed";
-        ta.style.left = "-9999px";
-        document.body.appendChild(ta);
-        ta.select();
-        document.execCommand("copy");
-        document.body.removeChild(ta);
-      }
-      setCopied(true);
-      if (copyTimerRef.current) window.clearTimeout(copyTimerRef.current);
-      copyTimerRef.current = window.setTimeout(() => setCopied(false), 1400);
-    } catch {
-      // Silent failure — the user can still select the text manually.
-    }
-  };
-
-  const hasContent = displayContent.length > 0;
-
-  return (
-    <div
-      className="tw-msg-output"
-      data-running={running ? "true" : "false"}
-      data-empty={hasContent ? "false" : "true"}
-    >
-      <button
-        type="button"
-        className="tw-msg-output-copy"
-        onClick={(e) => { e.stopPropagation(); handleCopy(); }}
-        data-copied={copied ? "true" : "false"}
-        title={copied ? "已复制" : "复制输出"}
-        aria-label={copied ? "已复制" : "复制输出"}
-      >
-        {copied ? <CheckCheck size={10} /> : <Copy size={10} />}
-      </button>
-      {hasContent ? (
-        <pre className="tw-msg-output-text">{displayContent}</pre>
-      ) : (
-        <span className="tw-msg-output-empty">
-          {running ? "等待输出…" : "（无输出）"}
-        </span>
-      )}
-    </div>
-  );
-}
-export function StatusPill({ status }: { status: "running" | "done" | "error" | undefined }) {
+export function StatusPill({ status }: { status: "running" | "done" | "error" | "skipped" | undefined }) {
   // Defense-in-depth: any undefined/garbage status is treated as a
   // completed tool call. The historical bug was that wire-loaded
   // `tool_calls` arrived without a `status` field (Rust's `ToolCall`
@@ -1200,15 +831,20 @@ export function StatusPill({ status }: { status: "running" | "done" | "error" | 
   // to "运行中". Even with the projection in `api.ts#getSessionMessages`,
   // some legacy code paths still pass `tc.status` straight through —
   // this guard makes the whole component fail-safe.
-  const safe: "running" | "done" | "error" =
-    status === "running" || status === "done" || status === "error"
+  const safe: "running" | "done" | "error" | "skipped" =
+    status === "running" || status === "done" || status === "error" || status === "skipped"
       ? status
       : "done";
   const cls =
     safe === "done" ? "pill pill-success" :
     safe === "error" ? "pill pill-error" :
+    safe === "skipped" ? "pill pill-muted" :
     "pill pill-warning";
-  const label = safe === "done" ? "完成" : safe === "error" ? "失败" : "运行中";
+  const label =
+    safe === "done" ? "完成" :
+    safe === "error" ? "失败" :
+    safe === "skipped" ? "已跳过" :
+    "运行中";
   return (
     <span className={cls}>
       {safe === "running" && <Loader2 size={9} className="animate-spin" />}

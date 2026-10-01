@@ -11,6 +11,7 @@
 
 import type { ChatMessage, ToolMessageMeta, ApprovalMessageMeta, ApprovalDecision } from "./types";
 import { parseMemoryResult } from "./utils/memoryToolResult";
+import { classifyToolOutcome } from "./utils/toolOutcome";
 
 // The shape the server actually returns. Snake_case; optional id /
 // timestamp; raw `extra` for approvals and `tool_name` for tools.
@@ -101,23 +102,34 @@ function projectToolCalls(
 /**
  * Build the typed `tool` meta for a `role: "tool"` row.
  *
- * `errorReason` extraction reuses `detectToolError`, now gated on the
- * server's authoritative `is_error` flag so the reload path and the
- * live-stream path agree on which tool outputs count as errors
- * (otherwise a `shell exit 1` row would render as "completed" on
- * reload but red on a fresh stream — see v5 in `getSessionMessages`).
+ * Outcome classification is injected as `detectToolError` so the reload
+ * path and the live-stream path agree on which tool outputs count as
+ * failed / skipped — otherwise a `shell exit 1` row would render as
+ * "completed" on reload but red on a fresh stream (see v5 in
+ * `getSessionMessages`).
+ *
+ * `detectToolError` itself is `utils/toolOutcome.ts`'s
+ * `classifyToolOutcome`; it is threaded as a value only to keep this
+ * module free of a hard import cycle. The implementation is shared, not
+ * duplicated — the pre-2026-10-01 arrangement had three copies kept in
+ * sync by a comment, and all three mis-classified the agent runtime's
+ * "Tool 'x' does not exist" as success.
  */
 function buildToolMeta(
   wire: WireMessage,
   detectToolError: (content: string, isError?: boolean) => string | null,
 ): ToolMessageMeta {
   const startedAt = wire.timestamp ?? new Date().toISOString();
+  // The injected helper only returns a reason, not the error/skipped
+  // distinction. Re-derive the kind with the same module so a persisted
+  // approval-timeout row does not come back as a plain failure on reload.
+  const kind = classifyToolOutcome(wire.content, wire.is_error).kind;
   const base: ToolMessageMeta = {
     tool: wire.tool_name ?? "tool",
     args: wire.tool_arguments,
-    status: "done",
+    status: kind ?? "done",
     output: wire.content,
-    errorReason: detectToolError(wire.content, wire.is_error) ?? undefined,
+    errorReason: kind ? (detectToolError(wire.content, wire.is_error) ?? undefined) : undefined,
     startedAt,
     completedAt: startedAt,
   };
@@ -482,6 +494,12 @@ function projectOne(
               type: "tool_complete",
               tool_call_id: toolCallId,
               content: wire.content ?? "",
+              // 2026-10-01：把 server 的 `is_error` 一起搬过来。运行态的
+              // `tool_complete` 一直带这个标志，恢复态合成的这条此前不带 ——
+              // 于是恢复后的判定只能靠猜文本，而猜文本正是把
+              // 「Tool 'x' does not exist」误报成成功的那个薄弱环节。
+              // 补上后，两条路径拿到的是同一份权威事实。
+              is_error: wire.is_error,
               created_at: ts,
             });
             out[lastAssistantIdx] = {

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import type { TimelineStep } from "../../types";
+import { groupTimeline } from "../messageParser";
 
 /**
  * 折叠组的摘要措辞与开合记忆。抄 cc-haha
@@ -44,35 +45,65 @@ function argPath(args: string | undefined): string | undefined {
   }
 }
 
-type Bucket = { count: number; paths: Set<string> };
-
 /**
  * 从一串步骤里生成摘要片段。按**首次出现顺序**排列，不排序 —— 摘要要读起来
  * 像一句话，顺序本身就是叙事。
  */
-export function buildActivitySegments(steps: TimelineStep[]): string[] {
-  const buckets = new Map<string, Bucket>();
-  const order: string[] = [];
+export interface ActivitySummary {
+  /** 成功动作的动词聚合，按首次出现顺序。 */
+  segments: string[];
+  /** 本轮思考段数。 */
+  reasoning: number;
+  /** 失败的工具调用数 —— **必须单独成段**，不能混进 segments。 */
+  failed: number;
+  /** 未执行的工具调用数（审批超时 / 用户拒绝）。 */
+  skipped: number;
+}
 
+/**
+ * 折叠态那一行的内容。
+ *
+ * 失败与跳过**不混进 `segments`**：一行「已完成 5 个工具」里藏着一个
+ * 失败，读起来就是全部成功。参照界面（minicode）只聚合成功、不暴露
+ * 失败 —— 直接抄会让失败静默消失，这是本实现与它刻意不同的地方。
+ */
+export function buildActivitySummary(steps: TimelineStep[]): ActivitySummary {
+  const buckets = new Map<string, { count: number; paths: Set<string>; failed: number; skipped: number }>();
+  const order: string[] = [];
+  let failed = 0;
+  let skipped = 0;
+
+  // 终态判定与渲染共用同一入口，避免「摘要说成功、图标说失败」。
+  // `streamComplete: false` = 不把断流的组提升为 error —— 折叠头在
+  // 轮次结束前不该预告一个还没定论的结果。
   for (const step of steps) {
     if (step.kind !== "tools") continue;
-    for (const ev of step.events) {
-      if (ev.type !== "tool_start" || !ev.tool) continue;
-      if (!buckets.has(ev.tool)) {
-        buckets.set(ev.tool, { count: 0, paths: new Set() });
-        order.push(ev.tool);
+    for (const g of groupTimeline(step.events, { streamComplete: false })) {
+      if (g.kind !== "tool") continue;
+      if (!buckets.has(g.tool)) {
+        buckets.set(g.tool, { count: 0, paths: new Set(), failed: 0, skipped: 0 });
+        order.push(g.tool);
       }
-      const b = buckets.get(ev.tool)!;
+      const b = buckets.get(g.tool)!;
+      // 仍在跑的不计数 —— 折叠头在轮次结束前不该预告结果
+      if (g.status === "running") continue;
       b.count += 1;
-      const p = argPath(ev.arguments);
+      const p = argPath(g.events.find((e) => e.type === "tool_start")?.arguments);
       if (p) b.paths.add(p);
+      if (g.status === "error") {
+        b.failed += 1;
+        failed += 1;
+      } else if (g.status === "skipped") {
+        b.skipped += 1;
+        skipped += 1;
+      }
     }
   }
-  if (order.length === 0) return [];
 
   const parts: string[] = [];
   for (const tool of order) {
     const b = buckets.get(tool)!;
+    if (b.count === 0) continue;
     const verb = TOOL_VERBS[tool];
     if (!verb) {
       parts.push(`${tool}${b.count > 1 ? ` (${b.count})` : ""}`);
@@ -82,7 +113,22 @@ export function buildActivitySegments(steps: TimelineStep[]): string[] {
     const n = verb.unit === "file" && b.paths.size > 0 ? b.paths.size : b.count;
     parts.push(n === 1 ? verb.one : verb.many(n));
   }
-  return parts;
+
+  return {
+    segments: parts,
+    reasoning: steps.filter((s) => s.kind === "reasoning").length,
+    failed,
+    skipped,
+  };
+}
+
+/**
+ * 旧签名：只要动词片段。保留给不需要失败计数的调用点。
+ * 新代码用 `buildActivitySummary` —— 少了 failed/skipped 的摘要在
+ * 有失败时会撒谎。
+ */
+export function buildActivitySegments(steps: TimelineStep[]): string[] {
+  return buildActivitySummary(steps).segments;
 }
 
 /** 这一串步骤是否只有一次工具调用、且没有思考 —— 该情况下不生成摘要。 */

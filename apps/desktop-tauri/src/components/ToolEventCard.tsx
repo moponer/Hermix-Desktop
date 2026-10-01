@@ -34,7 +34,12 @@ interface ToolEventCardProps {
 interface ToolGroup {
   key: string;
   tool: string;
-  status: "running" | "done" | "error";
+  /**
+   * 四态。`skipped` = 工具**没有真正跑**（审批超时 / 用户拒绝）——
+   * 2026-10-01 之前被并进 `done`，UI 打「✓已完成」。
+   * 判定入口与 `messageParser` 共用 `utils/toolOutcome.ts`。
+   */
+  status: "running" | "done" | "error" | "skipped";
   events: ExecutionTimelineEvent[];
   startedAt?: string;
   endedAt?: string;
@@ -45,52 +50,14 @@ interface ToolGroup {
   statusNote?: string;
 }
 
-/**
- * Inspect a `tool_complete` payload and decide whether the
- * invocation ended in error. Mirrors the helper of the same name
- * in `messageParser.ts` — duplicated here so the ACUI timeline
- * renderer stays zero-dep on `messageParser` (which pulls in
- * MarkdownBody, etc. via the inline renderer chain). Kept
- * structurally identical: any change here MUST be mirrored in
- * `messageParser.detectToolError` and vice versa.
- *
- * `isError` is the server's `ToolResult::is_error` flag and wins
- * outright when present: `false` means the call succeeded, so no text
- * inspection happens and normal output that merely starts with "Error"
- * is never mis-reported as a failure.
- */
-function detectToolError(content?: string, isError?: boolean): string | null {
-  if (!content) return null;
-  if (isError === false) return null;
-  const trimmed = content.trim();
-  if (!trimmed) return null;
-  if (/^(Failed|Error|ERR|Tool execution failed)/i.test(trimmed)) {
-    return trimmed.length > 120 ? trimmed.slice(0, 117) + "…" : trimmed;
-  }
-  if (!trimmed.startsWith("{")) return null;
-  try {
-    const parsed = JSON.parse(trimmed);
-    if (typeof parsed.error === "string" && parsed.error.trim().length > 0) {
-      const e = parsed.error;
-      return e.length > 120 ? e.slice(0, 117) + "…" : e;
-    }
-    if (
-      typeof parsed.exit_code === "number" &&
-      parsed.exit_code !== 0 &&
-      typeof parsed.stderr === "string" &&
-      parsed.stderr.trim().length > 0
-    ) {
-      const e = parsed.stderr;
-      return e.length > 120 ? e.slice(0, 117) + "…" : e;
-    }
-    if (typeof parsed.exit_code === "number" && parsed.exit_code !== 0) {
-      return `exit code ${parsed.exit_code}`;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
+// 结局判定（error / skipped / done）来自 `utils/toolOutcome.ts` —— 零依赖，
+// 本文件与 `messageParser.ts`、`protocolAdapter.ts` 共用同一实现。
+// 2026-10-01 前这里曾各抄一份 `detectToolError`，靠注释「any change here
+// MUST be mirrored」维持一致；实测三份都漏判了 agent runtime 的
+// `Tool 'x' does not exist`，把失败渲染成「✓已完成」。抄两份注释维持的
+// 不是契约，是约定 —— 现在改成唯一入口。
+import { classifyToolOutcome } from "../utils/toolOutcome";
+
 
 /**
  * Heuristic completion check for browser tools whose results are
@@ -224,10 +191,12 @@ export function groupEvents(
     grp.events.push(ev);
     if (ev.type === "tool_start" && !grp.args) grp.args = ev.arguments;
     if (ev.type === "tool_complete") {
-      const errReason = detectToolError(ev.content, ev.is_error);
-      grp.status = errReason ? "error" : "done";
+      // 结局判定与 `messageParser.groupTimeline` 同一个入口，
+      // ACUI 时间线与消息列因此对同一次调用给出同样的状态。
+      const outcome = classifyToolOutcome(ev.content, ev.is_error);
+      grp.status = outcome.kind ?? "done";
       grp.endedAt = ev.created_at;
-      if (errReason && !grp.statusNote) grp.statusNote = errReason;
+      if (outcome.reason && !grp.statusNote) grp.statusNote = outcome.reason;
       active.delete(tool);
       continue;
     }

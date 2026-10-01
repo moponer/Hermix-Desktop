@@ -176,6 +176,10 @@
 .pill-success { color: var(--color-success); }
 .pill-error { color: var(--color-error); }
 .pill-warning { color: var(--color-warning); }
+/* 「跳过」专用中性色：工具因审批超时 / 用户拒绝而**没有真正跑**。
+   它不是错误也不是成功 —— 涂成红色会让真失败被淹掉，涂成绿色等于
+   宣布它完成了。用 tertiary：既不指控也不庆祝。 */
+.pill-muted { color: var(--color-text-tertiary); }
 
 /* ════════════════════════════════════════════════════════════════════
    § 13.  COMPOSER (chat input area)

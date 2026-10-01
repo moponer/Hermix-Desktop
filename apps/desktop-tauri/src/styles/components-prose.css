@@ -66,19 +66,41 @@
 .prose th,
 .prose td { padding: 0.4em 0.6em; border: 1px solid var(--color-border-secondary); }
 .prose th { background: var(--color-bg-secondary); font-weight: 600; color: var(--color-text-primary); }
+/* 行内代码芯片（2026-10-01）。
+   此前是「透明底 + 一条下划线」—— 下划线在长段落里既不像代码也不像
+   链接，眼睛抓不到标识符。改成浅色圆角块：正文里一眼定位
+   `patch_file_multi`、`file.rs` 这类词，是**提高**信息密度而不是降噪。
+
+   16% 混合是实测选的档位：深色聊天底(#161719)上得到约 1.55:1 的
+   抬升，足以让块读作「块」；12% 只有 1.09:1，与底色几乎同值，等于
+   没加。文字色保持 primary(15.32:1) 不变 —— 芯片改变的是**分组**，
+   不该牺牲文字本身的对比度。
+
+   刻意只对标识符/路径/行号生效：普通中文词不会被 markdown 成 code，
+   所以不存在「一段中文被切成 5 个芯片」的情况。 */
 .prose code {
-  background: transparent;
-  padding: 0 2px;
-  border-radius: 0;
-  font-size: 0.95em;
+  background: color-mix(in srgb, var(--color-text-primary) 16%, transparent);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 0.9em;
   color: var(--color-text-primary);
   font-family: var(--font-mono);
   font-weight: 500;
-  border: none;
-  text-decoration: underline 1px var(--color-border-subtle);
+  border: 1px solid var(--color-border-subtle);
+  text-decoration: none;
   text-underline-offset: 2px;
   white-space: break-spaces;
   vertical-align: baseline;
+}
+/* 代码块内部的 code 不再套芯片 —— 外面已经是整块代码区了，
+   再加一层底色会变成「块中块」，层次反而乱。 */
+.prose pre code {
+  background: transparent;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  font-size: inherit;
+  white-space: pre;
 }
 .prose pre {
   /* CodeBlock 组件: outer wrapper 用 --color-bg-code 给代码区清晰独立

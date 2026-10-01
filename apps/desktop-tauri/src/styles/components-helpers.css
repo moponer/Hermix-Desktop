@@ -278,31 +278,56 @@
 }
 
 
-/* ── reasoning body（2026-09-30 重做）─────────────────────────────
-   用户定调：思考要「浅、内嵌、带竖线、能滚」—— 它是旁注，不是正文。
-   - 左侧 2px 竖线 = markdown 引用线的语义（内部独白是"引"来的话）
-   - 文字用 tertiary（正文是 primary），一眼分出「他在想」和「他在说」
-   - max-height + 滚动：长思考不再把整屏撑开，展开也只占一块固定高度
-   层级契约：正文 primary 14px > 思考 tertiary 13px。 */
+/* ── reasoning body（2026-10-01 合并双定义 + 三层级 L3）────────────
+   **本类此前在同一文件里被定义了两次**：上面这版写了
+   `max-height:340px` + 滚动，5a-0b1 那版又把 max-height 改回
+   `none`、overflow 改回 `visible`。后者位置靠后 → 胜出 → 2026-09-30
+   「长思考不再把整屏撑开」的意图被静默撤销。现在只有这一份定义。
+
+   层级契约（L3 推理）：
+   - 层级**不靠更浅的颜色**。深色下正文 primary 是 15.32:1、思考
+     tertiary 是 4.77:1，都过 AA —— 色阶本来就不缺。
+   - 也不靠一根细竖线。旧轨道的 `--color-border-primary` 对聊天底色
+     只有 **1.37:1**，比它标记的思考正文还弱 3.5 倍，视觉上等于没有。
+   - 真正扛得住的是三个几何标记：**12px 缩进 + 标签行 + 可见轨道**。
+     顺带实测：`--color-chat-tool-bg`(#1d1f22) 对聊天底(#161719) 只有
+     1.09:1，所以「给思考块加淡背景」在深色下同样不可行 —— 这条
+     备选方案被实测否掉了，改用缩进 + 标签。 */
 .tl-reasoning-row {
   position: relative;
+  margin: 8px 0 10px;
+  padding: 2px 0 2px 12px;
+  border-left: 2px solid var(--color-text-faint);  /* 2.98:1，是旧值的两倍 */
+  color: var(--color-text-thinking);
+  font-size: var(--text-ui, 13px);
+  line-height: var(--leading-reading, 1.75);
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  /* 长思考不再把整屏撑开，展开只占一块固定高度，内部滚动 */
   max-height: 340px;
   overflow-y: auto;
   overscroll-behavior: contain;
-  /* 2026-10-01：14px → 8px。2px 竖线 + 12px 留白时文字看着像和竖线
-     无关的两列；8px 仍留出呼吸，但竖线明确读作本段的引用线。 */
-  padding: 2px 0 2px 8px;
-  border-left: 2px solid var(--color-border-primary);
-  color: var(--color-text-tertiary);
-  font-size: var(--text-ui, 13px);
-  line-height: 1.62;
 }
+/* 思考是旁注，不是正文 —— 缩进 12px 让它读作被引的一段 */
+.tl-reasoning-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--text-tiny, 11px);
+  color: var(--color-text-faint);
+  margin-bottom: 5px;
+  position: sticky;
+  top: 0;
+  background: var(--color-chat-assistant-bg);
+  z-index: 1;
+}
+.tl-reasoning-label svg { width: 11px; height: 11px; flex: none; }
 /* 内嵌 MarkdownBody 的 .prose 会把字色/字号拉回正文档 —— 在这里整体压回思考档 */
 .tl-reasoning-row .prose,
 .tl-reasoning-row .prose :is(p, li, td, th, blockquote, strong, em) {
-  color: var(--color-text-tertiary);
+  color: var(--color-text-thinking);
   font-size: var(--text-ui, 13px);
-  line-height: 1.62;
+  line-height: var(--leading-reading, 1.75);
 }
 .tl-reasoning-row .prose :is(h1, h2, h3, h4, h5, h6) {
   color: var(--color-text-secondary);
@@ -315,15 +340,21 @@
   font-size: 0.92em;
   color: var(--color-text-secondary);
 }
+.tl-reasoning-row :is(p, li, td, th, blockquote) {
+  font-size: inherit;
+  line-height: inherit;
+}
+.tl-reasoning-row pre { font-size: 12px; }
+.tl-reasoning-row .prose :is(em, blockquote) { font-style: normal; }
 /* 思考里的行内代码/链接也不要跳成 accent 大字 */
 .tl-reasoning-row a { color: var(--color-text-secondary); text-decoration: underline; text-underline-offset: 2px; }
 /* 滚动条：细、贴轨，不抢注意力 */
 .tl-reasoning-row::-webkit-scrollbar { width: 6px; }
 .tl-reasoning-row::-webkit-scrollbar-thumb {
-  background: var(--color-border-primary);
+  background: var(--color-border-secondary);
   border-radius: 999px;
 }
-.tl-reasoning-row::-webkit-scrollbar-thumb:hover { background: var(--color-border-secondary, var(--color-border-primary)); }
+.tl-reasoning-row::-webkit-scrollbar-thumb:hover { background: var(--color-text-faint); }
 
 
 /* ── 5a-0. Timeline Iterations — 轮次分组系统 ────────── */
@@ -394,6 +425,28 @@
 .tl-process-check {
   color: var(--color-text-success, #5a9a6e);
 }
+/* 折叠头有失败时：图标换成告警形状，整个头染 error 色。
+   一个绿色对勾摆在「读取了 4 个文件」前面、而那一轮里其实有一次
+   失败，是误导 —— 折叠态是用户默认看到的那一面，它必须诚实。 */
+.tl-process-header[data-has-failure="true"] { color: var(--color-error); }
+.tl-process-header[data-has-failure="true"] .tl-process-check { color: var(--color-error); }
+
+/* 失败 / 跳过计数单列在动词聚合之后。失败用 error 色；跳过用中性灰
+   —— 「没发生」不是错误，用红色会把真失败淹掉。 */
+.tl-process-failed,
+.tl-process-skipped {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--text-meta, 12px);
+  white-space: nowrap;
+  flex: none;
+}
+.tl-process-failed { color: var(--color-error); }
+.tl-process-skipped { color: var(--color-text-tertiary); }
+.tl-process-failed .icon-sm,
+.tl-process-skipped .icon-sm { width: 11px; height: 11px; }
+
 /* P4-3: warning-tinted icon when any tool in the turn errored */
 
 
@@ -439,44 +492,31 @@
   /* 折叠内容是 process 步骤的有序流 */
 }
 
-/* 工具执行区块:始终可见,与思考折叠块视觉分离。
-   浅色/深色主题都走 theme token,不硬编码蓝紫。 */
+/* 工具执行区块（L2 过程行容器）。
+   2026-10-01：gap 由 4px 收到 2px。过程行是旁注，彼此之间只差
+   2px；与正文（L1）之间由 `.tl-iteration` 的 6px 隔开。层级靠
+   「行间距的落差」表达，不靠给每行加边框。 */
 .tl-tool-step {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
+  padding: 4px 0;
+}
+
+/* 思考块的外壳：只负责把标签行和正文行包成一个整体，
+   几何标记（缩进 / 轨道）在 `.tl-reasoning-row` 上。 */
+.tl-reasoning-wrap {
+  display: flex;
+  flex-direction: column;
 }
 
 /* ── 5a-0b-old. Reasoning Block (legacy) — kept for back-compat ── */
 
-/* ── 5a-0b1. Reasoning Row — 思考（过程）正文 ──
-   过程不是内容：比正文小一档字号、浅两档颜色、行距略松。
-   折叠由外层 ProcessTimeline 负责，这里只管"一眼看出这是过程"。 */
-.tl-reasoning-row {
-  font-style: normal;
-  color: var(--color-text-thinking);
-  font-size: var(--text-ui, 13px);
-  line-height: var(--leading-reading, 1.75);
-  word-break: break-word;
-  overflow-wrap: anywhere;
-  /* 过程最终由外层 ProcessTimeline 整体折叠，这里不做二次滚动。 */
-  max-height: none;
-  overflow: visible;
-  padding: 0;
-}
-
-.tl-reasoning-row :is(p, li, td, th, blockquote) {
-  font-size: inherit;
-  line-height: inherit;
-}
-
-
-.tl-reasoning-row pre {
-  font-size: 12px;
-}
-.tl-reasoning-row .prose :is(em, blockquote) {
-  font-style: normal;
-}
+/* `.tl-reasoning-row` 的唯一定义见本文件上方「reasoning body」节。
+   2026-10-01 之前这里还有第二份定义，把上一份的 max-height / overflow
+   写回 none / visible，导致「长思考封顶滚动」的设计意图静默失效。
+   教训与 H2 同源：同一个类的两份定义，位置靠后的赢 —— 契约必须只有
+   一处，分散定义等于没有契约。 */
 
 /* Copy affordance — always reserves one quiet line below the message,
    but only reveals the label on hover/focus. This keeps the action tied

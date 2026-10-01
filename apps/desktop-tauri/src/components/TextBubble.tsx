@@ -9,7 +9,6 @@ import { formatRelativeTime } from "../utils/time";
 import {
   extractFileChanges, extractMemoryUpdates, extractMemoryRecalls, resolveSteps,
 } from "./messageParser";
-import { formatDuration } from "./bubbleUtils";
 import { UnifiedTimelineRenderer } from "./ToolCallBubble";
 import { MessageCopyAction } from "./MessageCopyAction";
 import type { ChatMessage } from "../types";
@@ -152,15 +151,15 @@ export function AssistantMessage({
   );
   const steps = useMemo(() => resolveSteps(message), [message]);
   const toolCalls = message.tool_calls ?? [];
-  /** 工具执行统计：合并进消息头的统一 meta 行（与时间戳同排），
-      不再单独占一行。折叠头的完整文案降级为 hover title。 */
-  const toolSummary = (() => {
-    if (!toolCalls.length) return null;
-    const done = toolCalls.filter((tc) => tc.status !== "running").length;
-    const n = done || toolCalls.length;
-    const d = formatDuration(message.durationMs);
-    return d ? `已完成 ${n} 个工具 ${d}` : `已完成 ${n} 个工具`;
-  })();
+  /** 工具执行统计**不再**并进消息头。
+   *
+   * 2026-10-01：消息头原本是 `23 小时前 · 已完成 5 个工具`，其中
+   * 「已完成 5 个工具」与折叠头（`ProcessTimeline` 的
+   * `tl-process-header`）说的是同一件事，同一轮的话术会在屏幕上
+   * 出现两遍；更糟的是两遍的数字来源不同（这里数 `tool_calls`，
+   * 折叠头数 timeline 分组），一旦对不上用户只会以为是 bug。
+   * 折叠头已经有了「行数 / 耗时 / 失败 / 跳过」的完整表述，头部
+   * 只保留时间与模型 —— 两个无关的语义不该挤在一行。 */
   /** True when there's at least one tool still in "running" state.
    *  Prefer the cross-message signal from ChatView (`hasRunningToolProp`)
    *  when provided: it sees the streamingAssistantId + pendingToolsCount
@@ -186,7 +185,8 @@ export function AssistantMessage({
         <Avatar role="assistant" size={22} className="shrink-0 mt-0.5" />
       )}
       <div className={showHeader ? "flex-1 min-w-0" : "pl-[30px]"}>
-        {/* Header: time · model · stop chip. Copy belongs below the
+        {/* Header: time · model · stop chip. 工具统计不在这里 —— 见
+            上面 toolSummary 的注释，它归折叠头。Copy belongs below the
             assistant message, not in this metadata line, so the action
             remains spatially attached to the content it copies. */}
         {showHeader && (
@@ -194,8 +194,6 @@ export function AssistantMessage({
             <span className="h-tiny tabular-nums">{formatRelativeTime(message.timestamp)}</span>
             {message.model && <span className="h-tiny opacity-60">·</span>}
             {message.model && <span className="h-tiny">{message.model}</span>}
-            {toolSummary && <span className="h-tiny opacity-60">·</span>}
-            {toolSummary && <span className="h-tiny">{toolSummary}</span>}
             {message.stopReason && <StopReasonChip reason={message.stopReason} meta={message.stopReasonMeta} />}
             {message.compressed && (
               <span
