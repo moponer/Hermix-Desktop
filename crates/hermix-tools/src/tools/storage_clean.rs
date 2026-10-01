@@ -364,14 +364,52 @@ impl StorageCleanHandler {
 #[async_trait]
 impl ToolHandler for StorageCleanHandler {
     async fn execute(&self, params: Value) -> Result<String, ToolError> {
-        let confirm = params
-            .get("confirm")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+        // `confirm` is a safety interlock, so it must NEVER be inferred.
+        // But `as_bool()` alone is too strict in practice: plenty of
+        // models emit `"confirm": "true"` (string) rather than a JSON
+        // boolean, and the old check silently treated that as "not
+        // confirmed" — producing "必须有 confirm: true" for a call that
+        // visibly passed it, with the user having already clicked
+        // approve. The model then retried the same broken shape.
+        //
+        // Only these forms count as confirmation:
+        //   - JSON `true`
+        //   - the exact strings "true" / "1" (trimmed, case-insensitive)
+        // Everything else — including "false", "yes", "", 1, and any
+        // absent value — is NOT confirmation. A non-boolean number is
+        // also rejected rather than truthy-cast, because silently
+        // accepting `confirm: 1` would be exactly the kind of
+        // "close enough" coercion a delete interlock must not have.
+        let confirm_raw = params.get("confirm");
+        let confirm = match confirm_raw {
+            Some(Value::Bool(b)) => *b,
+            Some(Value::String(s)) => {
+                let t = s.trim();
+                t.eq_ignore_ascii_case("true") || t == "1"
+            }
+            _ => false,
+        };
         if !confirm {
-            return Err(ToolError::InvalidParams(
-                "必须要有 confirm: true。删除/移回收站前必须显式确认（且会弹聊天审批卡片）。".into(),
-            ));
+            // Name the shape we actually saw. "必须有 confirm: true" sent
+            // the model hunting for a wrong field name when the real
+            // problem was a string-vs-boolean mismatch.
+            return Err(ToolError::InvalidParams(match confirm_raw {
+                Some(Value::String(s)) => format!(
+                    "confirm 必须是 JSON 布尔 true，不能是字符串（收到 \"{}\"）。\
+                     请输出 \"confirm\": true（不带引号）。",
+                    s
+                ),
+                Some(other) => format!(
+                    "confirm 必须是 JSON 布尔 true，收到 {} 类型。",
+                    match other {
+                        Value::Null => "null".to_string(),
+                        Value::Number(_) => "数字".to_string(),
+                        v => format!("{}", v),
+                    }
+                ),
+                None => "必须要有 confirm: true。删除/移回收站前必须显式确认（且会弹聊天审批卡片）。"
+                    .to_string(),
+            }));
         }
         let paths = params
             .get("paths")
@@ -489,6 +527,69 @@ mod tests {
             .await;
         // No confirm -> InvalidParams, not a crash.
         assert!(err.is_err());
+    }
+
+    // ---- confirm coercion -----------------------------------------
+    //
+    // Regression: models routinely emit `"confirm": "true"` as a
+    // string. The old `as_bool()` check rejected that, so the tool
+    // reported "必须有 confirm: true" for a call that visibly passed it
+    // — after the user had already clicked approve. The user saw two
+    // approvals and zero deletions.
+
+    #[tokio::test]
+    async fn string_true_counts_as_confirmation() {
+        // Must get PAST the confirm gate. We assert on the error *shape*:
+        // an empty path list fails with the "缺少 paths" message, not
+        // the confirm one, which proves the gate opened.
+        let handler = StorageCleanHandler::new();
+        for raw in [
+            json!({ "paths": [], "confirm": "true" }),
+            json!({ "paths": [], "confirm": "TRUE" }),
+            json!({ "paths": [], "confirm": " true " }),
+            json!({ "paths": [], "confirm": "1" }),
+        ] {
+            let err = handler.execute(raw).await.unwrap_err();
+            let msg = err.to_string();
+            assert!(
+                !msg.contains("confirm"),
+                "string form should satisfy the gate, got: {}",
+                msg
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn real_boolean_true_counts_as_confirmation() {
+        let handler = StorageCleanHandler::new();
+        let err = handler
+            .execute(json!({ "paths": [], "confirm": true }))
+            .await
+            .unwrap_err();
+        assert!(!err.to_string().contains("confirm"));
+    }
+
+    #[tokio::test]
+    async fn near_miss_values_are_still_refused() {
+        // A delete interlock must not be truthy-cast. Anything that is
+        // not an explicit "yes" is a refusal.
+        let handler = StorageCleanHandler::new();
+        for raw in [
+            json!({ "paths": [], "confirm": "false" }),
+            json!({ "paths": [], "confirm": "yes" }),
+            json!({ "paths": [], "confirm": "" }),
+            json!({ "paths": [], "confirm": 1 }),
+            json!({ "paths": [], "confirm": null }),
+            json!({ "paths": [], "confirm": "是" }),
+        ] {
+            let err = handler.execute(raw).await.unwrap_err();
+            let msg = err.to_string();
+            assert!(
+                msg.contains("confirm"),
+                "must refuse non-explicit confirmations, got: {}",
+                msg
+            );
+        }
     }
 
     #[test]
