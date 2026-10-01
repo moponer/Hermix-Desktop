@@ -15,6 +15,7 @@ use std::sync::LazyLock;
 use hermix_core::{types::ContentPart, Message, ToolCall, ToolResult};
 
 use crate::context::ContextManager;
+use crate::spill::SPILL_INLINE_CHARS;
 use crate::terminal_filter;
 
 /// Cumulative characters saved by RTK filtering across all tool calls
@@ -426,6 +427,19 @@ pub fn push_tool_result(
         strip_image_base64(&filtered)
     } else {
         filtered
+    };
+
+    // H4: an oversized result is not simply truncated away — the full
+    // text is written to the spill dir and the model is handed a
+    // retrievable path. Before this, `terminal` capped output at 100K
+    // chars with a "truncated at N" note and NO way to read the rest:
+    // the missing middle was unrecoverable. `SpillSink` already existed
+    // and was tested, but nothing in the production path called it.
+    let final_content = if final_content.chars().count() > SPILL_INLINE_CHARS {
+        crate::spill::SpillSink::default_dir()
+            .maybe_spill(tool_call_id, &final_content, SPILL_INLINE_CHARS)
+    } else {
+        final_content
     };
 
     ctx.add_message(Message::tool_result(tool_call_id, &final_content, tool_name));

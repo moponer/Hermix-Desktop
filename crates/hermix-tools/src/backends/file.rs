@@ -573,6 +573,7 @@ impl SearchBackend for LocalSearchBackend {
         path: &str,
         file_glob: Option<&str>,
         max_results: Option<usize>,
+        context: usize,
     ) -> Result<String, ToolError> {
         let re = Regex::new(pattern)
             .map_err(|e| ToolError::InvalidParams(format!("Invalid regex pattern: {}", e)))?;
@@ -588,7 +589,7 @@ impl SearchBackend for LocalSearchBackend {
             )));
         }
 
-        Self::search_dir_content(&re, path, file_glob, max, &mut results).await;
+        Self::search_dir_content(&re, path, file_glob, max, context, &mut results).await;
 
         Ok(json!({
             "matches": results,
@@ -628,9 +629,10 @@ impl LocalSearchBackend {
         dir: &std::path::Path,
         file_glob: Option<&str>,
         max: usize,
+        context: usize,
         results: &mut Vec<Value>,
     ) {
-        Self::search_dir_content_depth(re, dir, file_glob, max, results, 0).await;
+        Self::search_dir_content_depth(re, dir, file_glob, max, context, results, 0).await;
     }
 
     async fn search_dir_content_depth(
@@ -638,6 +640,7 @@ impl LocalSearchBackend {
         dir: &std::path::Path,
         file_glob: Option<&str>,
         max: usize,
+        context: usize,
         results: &mut Vec<Value>,
         depth: u32,
     ) {
@@ -673,6 +676,7 @@ impl LocalSearchBackend {
                     &path,
                     file_glob,
                     max,
+                    context,
                     results,
                     depth + 1,
                 ))
@@ -687,17 +691,42 @@ impl LocalSearchBackend {
 
                 // Try to read as text
                 if let Ok(content) = tokio::fs::read_to_string(&path).await {
-                    for (line_num, line) in content.lines().enumerate() {
+                    let lines: Vec<&str> = content.lines().collect();
+                    let file = path.display().to_string();
+                    let mut i = 0usize;
+                    while i < lines.len() {
                         if results.len() >= max {
                             break;
                         }
-                        if re.is_match(line) {
-                            results.push(json!({
-                                "file": path.display().to_string(),
-                                "line": line_num + 1,
-                                "content": line.chars().take(500).collect::<String>(),
-                            }));
+                        if !re.is_match(lines[i]) {
+                            i += 1;
+                            continue;
                         }
+                        // H5: emit the matched line plus up to
+                        // `context` lines either side, so the model can
+                        // judge the match without a second read_file
+                        // round-trip. Line numbers are 1-based.
+                        let start = i.saturating_sub(context);
+                        let end = (i + context + 1).min(lines.len());
+                        let mut block = String::new();
+                        for (k, l) in lines[start..end].iter().enumerate() {
+                            if k > 0 {
+                                block.push('\n');
+                            }
+                            block.push_str(&format!(
+                                "{}: {}",
+                                start + k + 1,
+                                l.chars().take(500).collect::<String>()
+                            ));
+                        }
+                        results.push(json!({
+                            "file": file,
+                            "line": i + 1,
+                            "content": block,
+                        }));
+                        // Skip past the emitted context so overlapping
+                        // blocks do not spam the result set.
+                        i = end;
                     }
                 }
             }
@@ -851,5 +880,45 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "z\ny\nz\n");
+    }
+
+    // ---- H5 behaviour contract: search context lines ----------------
+    //
+    // Before this, search_files returned only the matched line, so the
+    // model had to issue a second read_file to judge whether a hit was
+    // relevant. `context` is grep's -C.
+
+    #[tokio::test]
+    async fn search_context_includes_surrounding_lines() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("a.txt"),
+            "one\ntwo\nNEEDLE\nfour\nfive\n",
+        )
+        .unwrap();
+        let out = LocalSearchBackend::new()
+            .search_content("NEEDLE", dir.path().to_str().unwrap(), None, Some(10), 2)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let content = v["matches"][0]["content"].as_str().unwrap();
+        // context=2 around line 3 → lines 1..5, each prefixed with its
+        // 1-based line number so the model can cite it.
+        assert_eq!(content, "1: one\n2: two\n3: NEEDLE\n4: four\n5: five", "got: {content}");
+    }
+
+    #[tokio::test]
+    async fn search_context_zero_keeps_matched_line_only() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(dir.path().join("b.txt"), "alpha\nNEEDLE\nomega\n").unwrap();
+        let out = LocalSearchBackend::new()
+            .search_content("NEEDLE", dir.path().to_str().unwrap(), None, Some(10), 0)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let content = v["matches"][0]["content"].as_str().unwrap();
+        // context=0 adds no neighbours, but the line number prefix stays
+        // (it is what lets the model cite the hit precisely).
+        assert_eq!(content, "2: NEEDLE", "got: {content}");
     }
 }

@@ -50,7 +50,8 @@ pub fn register(
         Arc::new(|| true),
         vec![],
         true,
-        "Read file contents with optional offset and line limit. Returns the file content as a string with line numbers.",
+        "Read file contents with optional offset and line limit (both 1-based). \
+         Use search_files to locate text; use write_file/patch to edit.",
         "📖",
         None,
         RiskLevel::Safe,
@@ -340,7 +341,18 @@ impl ToolHandler for ReadFileHandler {
 
         tool_schema(
             "read_file",
-            "Read file contents with optional offset and line limit. Returns the file content as a string with line numbers.",
+            "Read file contents with optional offset and line limit (both 1-based line numbers). \
+             Returns the content as a string.\n\n\
+             ## When to reach for this tool\n\
+             - Inspecting a file before editing it — `patch` requires the old text to match \
+               EXACTLY, so read the region you intend to change first.\n\
+             - Paging through a large file: pass `offset` to resume where a previous chunk \
+               ended. If the output was truncated, the note tells you the exact line to \
+               continue from.\n\n\
+             ## When NOT to use it\n\
+             - Locating text → use `search_files` (regex / glob) instead of reading whole \
+               files to find a string.\n\
+             - Rewriting a file → use `write_file`; for a partial edit use `patch`.",
             JsonSchema::object(props, vec!["path".into()]),
         )
     }
@@ -635,12 +647,17 @@ impl ToolHandler for PatchHandler {
 #[async_trait]
 pub trait SearchBackend: Send + Sync {
     /// Search file contents by regex pattern.
+    ///
+    /// `context` is the number of lines to include either side of each
+    /// match (H5) — grep's `-C`. Zero keeps the previous
+    /// match-only output.
     async fn search_content(
         &self,
         pattern: &str,
         path: &str,
         file_glob: Option<&str>,
         max_results: Option<usize>,
+        context: usize,
     ) -> Result<String, ToolError>;
 
     /// Search files by name (glob pattern).
@@ -680,10 +697,19 @@ impl ToolHandler for SearchFilesHandler {
             .and_then(|v| v.as_u64())
             .map(|n| n as usize);
 
+        // H5: `-C` style context lines around each match. Clamped so a
+        // model asking for a huge context can't pull the whole tree into
+        // one tool result.
+        let context = params
+            .get("context")
+            .and_then(|v| v.as_u64())
+            .map(|n| (n as usize).min(20))
+            .unwrap_or(0);
+
         match target {
             "content" => {
                 self.backend
-                    .search_content(pattern, path, file_glob, max_results)
+                    .search_content(pattern, path, file_glob, max_results, context)
                     .await
             }
             "files" => self.backend.search_files(pattern, path).await,
@@ -728,6 +754,16 @@ impl ToolHandler for SearchFilesHandler {
             json!({
                 "type": "integer",
                 "description": "Maximum number of results to return"
+            }),
+        );
+        props.insert(
+            "context".into(),
+            json!({
+                "type": "integer",
+                "description": "Lines of context to include before and after each match (grep's -C). Set this so you can judge a match without a second read_file call. Default 0 (matched lines only), max 20.",
+                "default": 0,
+                "minimum": 0,
+                "maximum": 20
             }),
         );
 
