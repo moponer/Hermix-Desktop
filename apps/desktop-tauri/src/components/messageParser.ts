@@ -376,6 +376,10 @@ export function extractFileChanges(events?: ExecutionTimelineEvent[]): FileChang
         ? cand === target || target.endsWith(`/${cand}`)
         : cand === target;
       if (!matches) continue;
+      // `tool_start` 的 `tool` 在事件类型里是可选的（`string | undefined`）。
+      // 没有工具名就无从判断是不是写工具，也拿不到行数 —— 跳过，
+      // 而不是传 `""` 让下游去猜（`extractLineStats` 的第一个参数是 `string`）。
+      if (typeof e.tool !== "string") continue;
       const s = extractLineStats(e.tool, e.arguments);
       if (s.added == null && s.removed == null) continue;
       added += s.added ?? 0;
