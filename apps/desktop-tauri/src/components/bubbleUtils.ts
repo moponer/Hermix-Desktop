@@ -6,13 +6,33 @@ import {
   FolderOpen, Globe, Database, Bot, Brain, HelpCircle, GitBranch, Hammer, FileText,
 } from "lucide-react";
 import { describeShellCommand } from "../lib/commandDescribe";
+/**
+ * 毫秒 → `29s` / `4m 12s` / `3h 18m` / `2d 4h`。
+ *
+ * 2026-10-01 用户修正：这个函数原先**只进位到分钟**，于是 8719 分钟被
+ * 渲染成「8719m 55s」—— 一眼看过去像是个正常数字，实际是个 bug 的
+ * 产物。耗时是「轮次」尺度的量（自治任务几小时很常见），不进位到小时
+ * 就等于不给量级。粒度与参考界面的「3 时 18 分」对齐。
+ */
 export function formatDuration(ms: number | undefined): string {
   if (ms === undefined || !Number.isFinite(ms) || ms <= 0) return "";
   const totalSec = Math.round(ms / 1000);
   if (totalSec < 60) return `${totalSec}s`;
-  const m = Math.floor(totalSec / 60);
-  const s = totalSec % 60;
-  return s === 0 ? `${m}m` : `${m}m ${s}s`;
+  if (totalSec < 3600) {
+    const m = Math.floor(totalSec / 60);
+    const s = totalSec % 60;
+    return s === 0 ? `${m}m` : `${m}m ${s}s`;
+  }
+  if (totalSec < 86400) {
+    const h = Math.floor(totalSec / 3600);
+    const m = Math.floor((totalSec % 3600) / 60);
+    // 秒在小时档是噪声（"3h 18m 7s" 读起来比 "3h 18m" 难读），
+    // 只有整小时才省掉分钟位。
+    return m === 0 ? `${h}h` : `${h}h ${m}m`;
+  }
+  const d = Math.floor(totalSec / 86400);
+  const h = Math.floor((totalSec % 86400) / 3600);
+  return h === 0 ? `${d}d` : `${d}d ${h}h`;
 }
 interface ToolCategory {
   keywords: string[];

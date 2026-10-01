@@ -29,10 +29,13 @@ import { ProcessLine, type ProcessLineVM, type ProcessStatus } from "./ProcessLi
 export function ToolGroupCard({
   group,
   onPathClick,
+  workspaceRoot,
   awaitingApproval = false,
 }: {
   group: import("./messageParser").ToolGroup;
   onPathClick?: (path: string, e: React.MouseEvent) => void;
+  /** 工作区根目录：只用于把「查看目录 .」这种记号展开成真实目录。 */
+  workspaceRoot?: string | null;
   /** True when a sibling `kind: "approval_request"` step is still
    *  pending the user's decision. Tool status flips from "运行中"
    *  to "等待审批" so the user knows the agent is blocked on them,
@@ -58,8 +61,9 @@ export function ToolGroupCard({
       statusNote: group.statusNote,
       awaitingApproval,
       memoryResult: parseMemoryResult(output),
+      workspaceRoot,
     };
-  }, [group.events, group.tool, group.status, group.statusNote, awaitingApproval]);
+  }, [group.events, group.tool, group.status, group.statusNote, awaitingApproval, workspaceRoot]);
 
   return <ProcessLine vm={vm} onPathClick={onPathClick} />;
 }
@@ -72,6 +76,7 @@ export function ProcessTimeline({
   durationMs,
   turnDurationMs,
   onPathClick,
+  workspaceRoot,
   onApproveApproval,
   onDenyApproval,
   onApproveBatchApproval,
@@ -100,6 +105,8 @@ export function ProcessTimeline({
    */
   turnDurationMs?: number;
   onPathClick?: (path: string, e: React.MouseEvent) => void;
+  /** 工作区根目录，透传到 `ToolTimelineSection` → `ProcessLine`。 */
+  workspaceRoot?: string | null;
   /** Forwarded to inline `kind: "approval_request"` step rendering
    *  (`<ApprovalRequestView>`). Without these the 拒绝 / 允许
    *  buttons are dead. */
@@ -334,26 +341,27 @@ export function ProcessTimeline({
           aria-expanded={expanded}
           title={foldTitle}
         >
-          {expanded ? (
-            <ChevronDown className="icon-sm reasoning-chevron reasoning-chevron-open" />
-          ) : (
-            <ChevronRight className="icon-sm reasoning-chevron" />
-          )}
-          {/* 2026-10-01 第二轮：这一行**只说两件事 —— 工作完成 + 共耗时。
-              原先还会挂「N 个失败 / N 个跳过」并把失败时的图标换成红色
-              告警。撤掉的理由：折叠头是每轮都出现的高频元素，一旦某一轮
-              有失败，它就变成一整条红字，于是**每一轮看上去都像出了问题**，
-              真正需要注意的那一轮反而淹没在里面。失败在展开后的过程行里
-              一眼可见（错误信息本身就是 error 色），那才是它该待的地方。
-
-              这是一次有代价的取舍：折叠态不再提示「这轮有过失败」。
-              若日后需要，折中方案是恢复**中性色**的形状图标（不带计数、
-              不染红），而不是恢复红字。 */}
+          {/* 2026-10-01 用户修正：箭头从**行首**搬到**行尾**。放行首会
+              占掉「缩进起点」那一列，「工作完成」因此比它下面的正文右移
+              26px —— 缩进层级是靠左边缘读的，歪了就读不出层级。现在
+              标签落在 x=0，和思考行、正文三者对齐。
+              （顺带修掉一个潜在 bug：原先展开态挂的
+              `reasoning-chevron-open` 会把 ChevronDown 再转 90°，
+              展开时箭头其实指向侧面。图标本身已经区分了朝向，不该再转。） */}
           <span className="reasoning-label">工作完成</span>
           {/* 耗时挂在「工作完成」**右边**并右对齐 —— 这是「这一轮」的
               属性，跟着这一轮走，不该混进文案里变成「工作完成 · 共耗时
-              19 分 57 秒」那样一个长词组。 */}
+              19 分 57 秒」那样一个长词组。
+              数值 = 整轮执行时间：流式当轮用 `durationMs`（发送 →
+              Done，含总结正文输出完毕）；重载历史用 `turnDurationMs`
+              （`deriveTurnDurationMs`，终点锚到消息落库时刻）。绝不用
+              「多少时间前」那种相对时间 —— 那是消息的年龄，不是耗时。 */}
           {durationPart && <span className="tl-process-elapsed">{durationPart}</span>}
+          {expanded ? (
+            <ChevronDown className="icon-sm reasoning-chevron" />
+          ) : (
+            <ChevronRight className="icon-sm reasoning-chevron" />
+          )}
         </button>
       )}
       {/* Chronological render — 一轮就是一个按时间顺序平铺的过程流：
@@ -408,6 +416,7 @@ export function ProcessTimeline({
                 <ToolTimelineSection
                   groups={groups}
                   onPathClick={onPathClick}
+                  workspaceRoot={workspaceRoot}
                   awaitingApproval={awaitingApproval}
                 />
               </div>
@@ -490,11 +499,14 @@ export function ToolTimelineSection({
   groups,
   isStreaming: _isStreaming,
   onPathClick,
+  workspaceRoot,
   awaitingApproval = false,
 }: {
   groups: import("./messageParser").ToolGroup[];
   isStreaming?: boolean;
   onPathClick?: (path: string, e: React.MouseEvent) => void;
+  /** 透传给每张 `ToolGroupCard`。见 `ToolGroupCard.workspaceRoot`。 */
+  workspaceRoot?: string | null;
   /** Forwarded to each `ToolGroupCard`. See ToolGroupCard for the
    *  full rationale (replace "运行中" with "等待审批" so the user
    *  knows the agent is blocked on their decision, not stuck). */
@@ -505,7 +517,13 @@ export function ToolTimelineSection({
     <div className="tl-tools tl-tools--flat">
       <div className="tl-tools-list">
         {groups.map((g) => (
-          <ToolGroupCard key={g.key} group={g} onPathClick={onPathClick} awaitingApproval={awaitingApproval} />
+          <ToolGroupCard
+            key={g.key}
+            group={g}
+            onPathClick={onPathClick}
+            workspaceRoot={workspaceRoot}
+            awaitingApproval={awaitingApproval}
+          />
         ))}
       </div>
     </div>
@@ -516,6 +534,7 @@ export function UnifiedTimelineRenderer({
   isStreaming,
   keepOpen = false,
   onPathClick,
+  workspaceRoot,
   fileChanges,
   memoryUpdates,
   memoryRecalls,
@@ -536,6 +555,8 @@ export function UnifiedTimelineRenderer({
    *  tool) but the text stream has settled. */
   keepOpen?: boolean;
   onPathClick?: (path: string, e: React.MouseEvent) => void;
+  /** 工作区根目录，一路透传到 `ProcessLine`，用来展开 `path: "."`。 */
+  workspaceRoot?: string | null;
   fileChanges: FileChangeEntry[];
   memoryUpdates: MemoryUpdateEntry[];
   memoryRecalls: MemoryRecallEntry[];
@@ -596,6 +617,7 @@ export function UnifiedTimelineRenderer({
         durationMs={durationMs}
   turnDurationMs={turnDurationMs}
         onPathClick={onPathClick}
+        workspaceRoot={workspaceRoot}
         onApproveApproval={onApproveApproval}
         onDenyApproval={onDenyApproval}
         onApproveBatchApproval={onApproveBatchApproval}
@@ -821,7 +843,7 @@ export function MemoryRecallBlock({ recalls }: { recalls: MemoryRecallEntry[] })
  */
 export function ToolMessageCard({
   message,
-  workspaceRoot: _workspaceRoot,
+  workspaceRoot,
   onPathClick,
 }: {
   message: ChatMessage;
@@ -837,6 +859,9 @@ export function ToolMessageCard({
     status: (meta.status ?? "done") as ProcessStatus,
     statusNote: meta.errorReason,
     memoryResult: parseMemoryResult(meta.output),
+    // 2026-10-02：这个 prop 之前是 `_workspaceRoot`（传进来丢掉）。
+    // 恢复态的 `查看目录 .` 同样要能展开成真实目录。
+    workspaceRoot,
   };
   return <ProcessLine vm={vm} onPathClick={onPathClick} />;
 }

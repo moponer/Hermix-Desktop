@@ -47,7 +47,12 @@
   --font-size-tiny: 11px;
 
   /* ── 字重（4 档）────────────────────────────────────────────
-     中文在 13px 以下用 700 会糊成块，所以最高只到 600。 */
+     中文在 13px 以下用 700 会糊成块，所以最高只到 600。
+     2026-10-02：这一档是**请求值**。雅黑只有 300/400/700 三档，所以 500
+     和 600 都会命中真 700（跳档，但不糊）；`body` 上有
+     `font-synthesis: none`（见 base.css）兜底，万一命中只有 Regular 的
+     字体，加粗会安静地留在 400 而不是被涂抹。读到这个值却看不到加粗，
+     先查命中的字体有几个字重，别急着加 700。 */
   --font-weight-regular: 400;
   --font-weight-medium: 500;   /* 界面强调：按钮、选中项、工具名 */
   --font-weight-semibold: 600; /* 标题：区块 / 轮次 / 弹窗 */
@@ -78,8 +83,24 @@
    */
   /* 2026-09-30：中文回退链补 思源黑体 / HarmonyOS / Noto。
      Windows 上默认落到 Microsoft YaHei UI —— 字面偏宽偏重，和 cc-haha 截图里
-     macOS 的 PingFang SC 差一截（PingFang 更匀、更透）。这三款只要装了就在
-     YaHei 之前命中，**不打包任何字体文件**，纯回退名，零体积成本。 */
+     macOS 的 PingFang SC 差一截（PingFang 更匀、更透）。这几款只要装了就在
+     YaHei 之前命中，**不打包任何字体文件**，纯回退名，零体积成本。
+
+     2026-10-02 一次**失败**的尝试（已撤销，留档别再试）：本机装过
+     Alibaba PuHuiTi 2.0（`C:\Windows\Fonts\Alibaba.ttf`），400 档确实更轻
+     更透，于是把它插进这条链试了一轮。问题是它 `usWeightClass = 400`、
+     全机**只有 Regular 一个字重文件** —— `font-weight: 600` 拿不到真字重就
+     合成，横向涂抹把汉字笔画糊成块。18px 同字号墨量实测：
+
+         雅黑 Bold（真字重）  1877
+         普惠体 合成粗体       2463   ← 比真粗体还重 31%
+
+     用户实机验收不通过（标题和 **重点** 全部失去强调），已撤掉。
+
+     **教训**：往这条链里加字体之前，先查它有几个字重（读 OS/2 表的
+     `usWeightClass`，并看字体目录里有没有同名的 Bold/Medium 文件）。
+     只有 Regular 的字体会让全 app 的 500/600 变成假粗体，而中文正文里
+     500/600 到处都是 —— 正文看着更通透，代价是全文的层级标记全废。 */
   --font-sans: "Segoe UI Variable", "Segoe UI", -apple-system,
     BlinkMacSystemFont, "PingFang SC", "HarmonyOS Sans SC", "Source Han Sans SC",
     "Noto Sans SC", "Microsoft YaHei UI", system-ui, sans-serif;

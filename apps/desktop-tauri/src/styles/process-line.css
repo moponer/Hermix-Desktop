@@ -135,13 +135,17 @@
 .process-line[data-state="error"]   .process-line-state { color: var(--color-error); }
 .process-line[data-state="skipped"] .process-line-state { color: var(--color-text-faint); }
 
-/* 失败 / 跳过：**只染错误信息那部分**（primary 槽），动词保持正常色。
+/* 失败 / 跳过：**只染失败原因那部分**（peek 槽），动词和对象保持正常色。
    2026-10-01 用户修正：原先整行染红，包括「执行命令」这个类型词 ——
    但「执行命令」本身没有出错，出错的是它跑的东西。整行红会让一屏里
    每一条失败的工具都变成红块，反而看不出哪几条是真问题。
-   「跳过」用中性灰：没发生不是错误。 */
-.process-line[data-state="error"] .process-line-primary { color: var(--color-error); }
-.process-line[data-state="skipped"] .process-line-primary { color: var(--color-text-tertiary); }
+   「跳过」用中性灰：没发生不是错误。
+   2026-10-02 用户实机反馈后调整：primary 槽改回**始终显示 acted-on 的
+   对象**（路径 / 命令），原因挪到 peek 槽 —— 一行里两件事各占一格，
+   用户既知道读的是哪个目录，也知道失败的是哪一步。染红跟着原因走：
+   对象没出错，不该替它背红。 */
+.process-line[data-state="error"] .process-line-peek--error { color: var(--color-error); }
+.process-line[data-state="skipped"] .process-line-peek { color: var(--color-text-tertiary); }
 
 /* 展开箭头只在 hover / focus 时显形 —— 静态时右侧只留状态图标 */
 .process-line-chev {

@@ -86,6 +86,10 @@ export function ReasoningBlock({
         aria-expanded={expanded}
         aria-label={label}
       >
+        {/* 图标在**行首**（2026-10-01 用户修正）：上一轮把它撤到行尾是错
+            的 —— 图标是这一行的**身份标记**（ⓘ 思考），放行尾就变成了
+            一个和折叠箭头抢位置的装饰件。行首那一列本来就是图标槽，
+            左对齐说的是「这一行贴着正文列起排」，不是「文字顶到 x=0」。 */}
         <Brain className="tl-reasoning-icon" aria-hidden="true" />
         <span className="tl-reasoning-label">{label}</span>
         {/* 右侧是**秒数**，不是段数 —— 段数是整轮的属性，同一轮里每段
@@ -94,9 +98,7 @@ export function ReasoningBlock({
         {!active && elapsed != null && (
           <span className="tl-reasoning-count">{formatDuration(elapsed)}</span>
         )}
-        {/* 2026-10-01：折叠箭头移到**行尾**，且无焦点时不显示。
-            放行首会占掉「缩进起点」那一列，让思考行和它下面的正文左边缘
-            对不齐（缩进层级是靠对齐读的）。收起态常驻一个箭头也是噪音 ——
+        {/* 折叠箭头：行尾、且无焦点时不显示。收起态常驻一个箭头是噪音 ——
             它每次都一样，不携带信息，hover/focus 才显形。 */}
         {expanded ? (
           <ChevronDown className="tl-reasoning-chev" />

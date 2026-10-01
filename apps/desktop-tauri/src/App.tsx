@@ -23,6 +23,7 @@ import {
   appendTextStep,
   appendToolStep,
   applyReasoningChunk,
+  closeOpenReasoning,
   updateToolStepStdout,
 } from "./app/streamEvents";
 import type { StreamPhase, TodoSnapshotItem } from "./hooks/useStreamChat";
@@ -2754,12 +2755,38 @@ return {
             }
             // 持久化最终 assistant 消息的 unified_steps（前端构建的内联时间线）。
             // reload 时 resolveSteps 会优先用它在真实顺序渲染，工具不再被归到末尾。
+            //
+            // 2026-10-02：落库前先 `closeOpenReasoning`。一段思考的「结束」是
+            // 下一段非 reasoning 的 step 追加的那一刻（见 `closeOpenReasoning`
+            // 注释），但 Done 这条路上不经过 `appendTextStep` / `appendToolStep`，
+            // 于是**轮次最后一段思考的 `endedAt` 一直是 undefined**，并被这样
+            // 写进 `unified_steps`。reload 后 `ReasoningBlock.spanMs` 拿不到
+            // endedAt → 「思考」行右边不显示耗时（用户实机反馈）。
+            //
+            // 实测（sessions.db 抽样）：近 40 条带 unified_steps 的消息里，
+            // 含 reasoning 的 30 条中只有 2 条的段是「起止俱全」的。
+            // Done 是这一轮唯一的收尾时刻，在这里补 endedAt 是准确的。
             if (assistantIdAtDone) {
               const finalMsg = sessionsRef.current
                 .find((s) => s.id === sessionId)
                 ?.messages.find((m) => m.id === assistantIdAtDone);
               if (finalMsg?.unified_steps && finalMsg.unified_steps.length > 0) {
-                void api.saveUnifiedSteps(sessionId, finalMsg.unified_steps);
+                const closed = closeOpenReasoning(finalMsg.unified_steps);
+                void api.saveUnifiedSteps(sessionId, closed);
+                // 内存里也同步，否则本轮折叠头展开时「思考」行仍按「进行中」
+                // 渲染（active 靠 endedAt 判定），和落库后的表现不一致。
+                if (closed !== finalMsg.unified_steps) {
+                  setSessions((prev) => prev.map((s) =>
+                    s.id !== sessionId ? s : {
+                      ...s,
+                      messages: s.messages.map((m) =>
+                        m.id === assistantIdAtDone
+                          ? { ...m, unified_steps: closed }
+                          : m,
+                      ),
+                    },
+                  ));
+                }
               }
             }
             // Removed the 500ms re-fetch that replaced the

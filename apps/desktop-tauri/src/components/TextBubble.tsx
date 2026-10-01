@@ -5,7 +5,6 @@ import React, { useMemo } from "react";
 import { AlertCircle } from "lucide-react";
 import { openImageViewer } from "./imageViewer";
 import { Avatar } from "./Avatar";
-import { formatRelativeTime } from "../utils/time";
 import {
   extractFileChanges, extractMemoryUpdates, extractMemoryRecalls, resolveSteps,
   deriveTurnDurationMs,
@@ -66,7 +65,7 @@ export function UserMessage({ message }: { message: ChatMessage }) {
   );
 }
 export function AssistantMessage({
-  message, workspaceRoot: _workspaceRoot, showHeader = true, onPathClick, isStreaming, keepOpen = false, hasRunningTool: hasRunningToolProp, expertCutoffAt: _expertCutoffAt,
+  message, workspaceRoot, showHeader = true, onPathClick, isStreaming, keepOpen = false, hasRunningTool: hasRunningToolProp, expertCutoffAt: _expertCutoffAt,
   onApproveApproval,
   onDenyApproval,
   onApproveBatchApproval,
@@ -190,14 +189,17 @@ export function AssistantMessage({
         <Avatar role="assistant" size={22} className="shrink-0 mt-0.5" />
       )}
       <div className={showHeader ? "flex-1 min-w-0" : "pl-[30px]"}>
-        {/* Header: time · model · stop chip. 工具统计不在这里 —— 见
-            上面 toolSummary 的注释，它归折叠头。Copy belongs below the
-            assistant message, not in this metadata line, so the action
-            remains spatially attached to the content it copies. */}
-        {showHeader && (
+        {/* Header: model · stop chip · 已压缩。**时间不在这里** ——
+            2026-10-01 用户修正：头像右边那个「刚刚 / N 分钟前」是消息的
+            **年龄**，不是这一轮的**耗时**，两个数字贴在一起只会互相
+            误导（一个在涨、一个不变，读的人分不清哪个是哪个）。轮次耗时
+            在折叠头「工作完成」右边，会话状态在消息列顶部。
+            整行按需渲染：只剩时间的时候这行是空的，留一行空白比什么都不
+            留更糟。Copy belongs below the assistant message, not in this
+            metadata line, so the action remains spatially attached to the
+            content it copies. */}
+        {showHeader && (message.model || message.stopReason || message.compressed) && (
           <div className="flex items-center gap-2 mb-1.5 text-text-faint">
-            <span className="h-tiny tabular-nums">{formatRelativeTime(message.timestamp)}</span>
-            {message.model && <span className="h-tiny opacity-60">·</span>}
             {message.model && <span className="h-tiny">{message.model}</span>}
             {message.stopReason && <StopReasonChip reason={message.stopReason} meta={message.stopReasonMeta} />}
             {message.compressed && (
@@ -226,6 +228,7 @@ export function AssistantMessage({
             the actual chronological flow. */}
         <UnifiedTimelineRenderer
           steps={steps}
+          workspaceRoot={workspaceRoot}
           isStreaming={isStreaming}
           keepOpen={keepOpen}
           onPathClick={onPathClick}

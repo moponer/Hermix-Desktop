@@ -14,6 +14,22 @@ body {
   font-family: var(--font-sans);
   font-size: var(--font-size-body);
   line-height: 1.5;
+  /* 2026-10-02：禁用**合成**粗体 / 斜体。
+   *
+   * 触发这条规则的是一次已撤销的字体尝试（留档见 `tokens.css --font-sans`
+   * 处的留档）：本机的 Alibaba PuHuiTi 2.0 55 只有 Regular 一个字重，
+   * 600 只能合成 —— 横向涂抹把汉字笔画糊成块，18px 实测墨量 2463，
+   * 比雅黑**真粗体**（1877）还重 31%。
+   *
+   * 字体换回微软雅黑后，中文 600 会命中 `msyhbd`（真 700），这条规则对
+   * **粗体不再有任何影响**。保留它是为了另外两件事：
+   *   1) 汉字不合成斜体 —— 汉字斜排是排版忌讳；`.prose em` 本来就用
+   *      secondary 颜色区分，不靠倾斜。
+   *   2) 以后谁再往字体链里加一个单字重字体，这里是兜底：宁可少一层
+   *      强调，也不要一个糊掉的字面。
+   *
+   * 撤销只需删掉这一行。 */
+  font-synthesis: none;
   font-feature-settings: "cv11", "ss01";
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;

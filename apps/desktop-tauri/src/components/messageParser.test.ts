@@ -4,9 +4,10 @@ import {
   extractMemoryRecalls,
   groupTimeline,
   parseContent,
+  deriveTurnDurationMs,
 } from "./messageParser";
 import { groupEvents } from "./ToolEventCard";
-import type { ExecutionTimelineEvent } from "../types";
+import type { ChatMessage, ExecutionTimelineEvent } from "../types";
 
 function memEvent(over: Partial<ExecutionTimelineEvent>): ExecutionTimelineEvent {
   return {
@@ -292,5 +293,60 @@ describe("groupEvents stranded-pass (FIX, mirrors groupTimeline)", () => {
     const events = [toolEvent({ type: "tool_start", tool: "delegate_task" })];
     const groups = groupEvents(events, { streamComplete: false });
     expect(groups[0].status).toBe("running");
+  });
+});
+
+/**
+ * 恢复态轮次耗时的回归测试。
+ *
+ * 2026-10-01 真实事故：`messages.created_at` 在某个会话里被整批重写成同一个
+ * 值（会话恢复 / 迁移 / 压缩），于是拿它当「本轮收尾时刻」的上一版实现把一个
+ * **4.0 秒**的轮次算成了 **523195 秒 = 6 天**，折叠头显示「工作完成 8719m 55s」。
+ * 这里钉住那条判据：只有紧贴最晚事件（≤ 10 分钟）的 created_at 才算数。
+ */
+describe("deriveTurnDurationMs", () => {
+  const ev = (created_at: string) =>
+    ({ type: "tool_start", tool: "read_file", created_at }) as ExecutionTimelineEvent;
+  const msg = (
+    id: string,
+    timestamp: string,
+    execution_timeline?: ExecutionTimelineEvent[],
+  ): ChatMessage => ({ id, role: "assistant", content: "", timestamp, execution_timeline });
+
+  it("没有时间线就不给数字（纯对话轮测不出来，宁可没有）", () => {
+    expect(deriveTurnDurationMs(msg("m1", "2026-10-01T00:00:00.000Z"))).toBeUndefined();
+  });
+
+  it("用最早事件 → 最晚事件作为跨度", () => {
+    // 落库时刻 10s 落在 10 分钟窗口内 → 采纳为收尾时刻。
+    expect(
+      deriveTurnDurationMs(
+        msg("m2", "2026-10-01T00:00:20.000Z", [
+          ev("2026-10-01T00:00:00.000Z"),
+          ev("2026-10-01T00:00:10.000Z"),
+        ]),
+      ),
+    ).toBe(20_000);
+  });
+
+  it("事故回归：created_at 落后 6 天时必须丢弃它，而不是显示 6 天", () => {
+    // 会话级批量重写：同会话三十几条消息共用这一个时间戳。
+    // 真实跨度 4.427s；上一版会返回 523195000ms（= 6 天 → 「8719m 55s」）。
+    expect(
+      deriveTurnDurationMs(
+        msg("m3", "2026-10-01T06:10:20.596Z", [
+          ev("2026-09-25T04:50:26.004Z"),
+          ev("2026-09-25T04:50:30.431Z"),
+        ]),
+      ),
+    ).toBe(4_427);
+  });
+
+  it("单事件（跨度 0）是「测不出来」，不是「0 秒完成」", () => {
+    expect(
+      deriveTurnDurationMs(
+        msg("m4", "2026-09-25T04:50:26.000Z", [ev("2026-09-25T04:50:26.004Z")]),
+      ),
+    ).toBeUndefined();
   });
 });

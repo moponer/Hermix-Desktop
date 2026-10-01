@@ -34,6 +34,18 @@ import type { MemoryToolResult } from "../utils/memoryToolResult";
 export type ProcessStatus = "running" | "done" | "error" | "skipped";
 
 /**
+ * 「当前目录」的相对记号。目录类工具（`list_files` / `list_directory` /
+ * `glob` …）在没指定路径时一律传 `path: "."` —— 对工具是对的位置，
+ * 对读行的人是零信息量。命中这组记号且拿得到工作区根目录时，primary 槽
+ * 改显示根目录本身。
+ *
+ * 刻意**不**把「所有相对路径」都展开成绝对路径：那会让
+ * `apps/desktop-tauri/src` 变成一长串盘符路径，既挤爆 `max-width: 46%`
+ * 的省略号，又和参考界面的相对写法不一致。相对但有信息量的照旧原样显示。
+ */
+const CWD_MARKERS = new Set([".", "./", "..", "../", "", "\\\\"]);
+
+/**
  * 一行过程所需的全部信息，由调用方从自己的数据形状映射而来。
  * 两条路径的唯一差异就止步于构造这个对象。
  */
@@ -49,6 +61,11 @@ export interface ProcessLineVM {
   awaitingApproval?: boolean;
   /** memory 工具的结构化结果，优先于通用 primary 提取。 */
   memoryResult?: MemoryToolResult | null;
+  /**
+   * 工作区根目录。只用来展开「当前目录」记号（见 `CWD_MARKERS`）——
+   * 目录类工具最爱传 `path: "."`，那是个指针不是路径。
+   */
+  workspaceRoot?: string | null;
 }
 
 /* ── 状态 → 图标形状 ──────────────────────────────────────────
@@ -86,36 +103,59 @@ export function ProcessLine({
   // 调用方可以直接传解析结果；没传就自己兜一层，省得两条路径各写一遍。
   const mem = vm.memoryResult ?? parseMemoryResult(vm.output);
 
-  // 结果摘要：错误/跳过优先显示原因，其余显示结果首行。
+  // 结果摘要：成功/运行中显示结果首行；失败/跳过显示**原因**。
+  // 2026-10-02 用户实机反馈：失败的 `查看目录` 整行只有一个「.」，
+  // 原因一个字都没有 —— 原因链上有两处会**同时**返回 null：
+  //   1. `summarizeError` 遇到 `{"result": "..."}` 这种不是错误形状的
+  //      wrapper 时主动返回 null（它不肯把 result 当错误）；
+  //   2. `toolResultPeek` 剥完 wrapper 后若首行仍是 JSON，也返回 null。
+  // 两条都 null 时这一行就哑了。取用顺序：`statusNote`（判定时已经算好的
+  // 结构化原因）→ `summarizeError`（剥 JSON 错误体）→ `toolResultPeek`
+  // （剥普通 wrapper）。宁可给一行短的，也不能给一行没有原因的错误。
+  const reason = useMemo(() => {
+    if (!isError && !isSkipped) return null;
+    return (
+      vm.statusNote ??
+      summarizeError(vm.output) ??
+      toolResultPeek(vm.output, vm.args)
+    );
+  }, [vm.output, vm.args, vm.statusNote, isError, isSkipped]);
+
   const peek = useMemo(() => {
-    if (vm.status === "error") {
-      return (
-        vm.statusNote ??
-        summarizeError(vm.output) ??
-        (vm.output ? toolResultPeek(vm.output, vm.args) : null) ??
-        "执行出错"
-      );
-    }
-    if (isSkipped) {
-      return vm.statusNote ?? "工具未执行";
-    }
+    if (isError || isSkipped) return reason;
     if (!vm.output || vm.output.trim().length === 0) return null;
     if (isRunning) return null;
     return toolResultPeek(vm.output, vm.args);
-  }, [vm.output, vm.args, vm.status, vm.statusNote, isSkipped, isRunning]);
+  }, [vm.output, vm.args, isError, isSkipped, reason, isRunning]);
 
   const Icon = toolIcon(vm.tool);
   // memory 工具的动词来自结构化结果（编辑记忆 / 新增记忆 …）
   const verb = mem ? memoryActionLabel(mem.action) : toolVerb(vm.tool, vm.args);
-  // 错误/跳过的 primary 槽直接给原因，正文槽留给结果摘要
-  const primary = mem
-    ? mem.path
-    : isError || isSkipped
-      ? (summarizeError(vm.output) ?? toolPrimaryArg(vm.tool, vm.args, vm.output))
-      : toolPrimaryArg(vm.tool, vm.args, vm.output);
-  const stats = extractLineStats(vm.tool, vm.args);
+
+  // primary 槽 = ** acted on 的是什么**，不再被失败原因占用。
+  // 2026-10-02：原来错误时 primary 优先取 `summarizeError`，把「对什么
+  // 动手」挤掉了 —— 一行失败的工具调用就变成了「查看目录 <错误原因>」，
+  // 用户既不知道读的是哪个目录，也不知道失败的是哪一步。两件事各占一槽：
+  // primary 给对象，peek 给结果/原因。
+  const rawPrimary = mem ? mem.path : toolPrimaryArg(vm.tool, vm.args, vm.output);
   const isPathLike = mem ? true : isPathArg(vm.tool, vm.args, vm.output);
-  const clickablePath = mem ? mem.path : isPathLike ? (vm.output || vm.args) : null;
+  // `.` / `./` / `..` 是「当前目录」的相对记号：它对读行的人**零信息量**
+  // ——「查看目录 .」不告诉任何人这是哪个目录。目录类工具恰恰最爱这么传。
+  // 判据是「这个记号指向哪里」而不是「它是不是相对路径」：相对但有信息量
+  // 的 `apps/desktop-tauri/src` 原样显示（和参考界面一致），只有纯记号才
+  // 用工作区根目录顶替。
+  const isCwdMarker =
+    isPathLike && !mem && CWD_MARKERS.has((rawPrimary ?? "").trim());
+  const primary =
+    isCwdMarker && vm.workspaceRoot ? vm.workspaceRoot : rawPrimary;
+  const stats = extractLineStats(vm.tool, vm.args);
+  const clickablePath = mem
+    ? mem.path
+    : isCwdMarker && vm.workspaceRoot
+      ? vm.workspaceRoot
+      : isPathLike
+        ? (vm.output || vm.args)
+        : null;
   const hasOutput = vm.output != null && vm.output.length > 0;
 
   const handlePrimaryClick = (e: ReactMouseEvent) => {
@@ -160,8 +200,16 @@ export function ProcessLine({
             {primary}
           </span>
         )}
-        {peek && !isError && (
-          <span className="process-line-peek">{peek}</span>
+        {peek && (
+          <span
+            className={
+              isError
+                ? "process-line-peek process-line-peek--error"
+                : "process-line-peek"
+            }
+          >
+            {peek}
+          </span>
         )}
         <span className="process-line-right">
           {(stats.added != null || stats.removed != null) && (
@@ -190,9 +238,8 @@ export function ProcessLine({
         </span>
       </button>
       {/* 2026-10-01：原来失败/跳过的原因会在下面**再开一行**重复一遍。
-          删掉 —— 原因已经在上面那一行的 primary 槽里了（错误时 primary
-          优先取 summarizeError），而完整输出点 chevron 就能展开。
-          两行说同一件事，纯噪音。 */}
+          删掉 —— 原因已经在上面那一行的 peek 槽里了（错误时 peek 装的是
+          reason），而完整输出点 chevron 就能展开。两行说同一件事，纯噪音。 */}
       {open && hasOutput && (
         <div className="process-line-body">
           <LiveTerminal content={vm.output ?? ""} running={isRunning} />

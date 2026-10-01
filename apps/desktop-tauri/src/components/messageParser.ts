@@ -790,15 +790,50 @@ export function mergeAdjacentReasoning(steps: TimelineStep[]): TimelineStep[] {
 }
 
 /**
+ * `messages.created_at` 与「最晚工具事件」之间可接受的最大间隔，用来判断
+ * 这一列还能不能当「本轮收尾时刻」用（见 `deriveTurnDurationMs` 的注释）。
+ * 10 分钟的来源：正文再长，13 token/s 也要在十几分钟内吐完；差出「天」级
+ * 的间隔只可能是整批重写。
+ */
+const SAME_TURN_TAIL_MS = 10 * 60 * 1000;
+
+/**
  * 从 `execution_timeline` 推导**恢复态**的轮次耗时（毫秒）。
  *
  * `message.durationMs` 只在流式当轮存在，**不持久化** —— 重载后是
  * `undefined`，折叠头就退化成光秃秃的「工作完成」。这里用时间线事件
- * 真实的 `created_at` 补上：最早事件 → 最晚事件。
+ * 真实的 `created_at` 补上：最早事件 → 终点。
  *
- * 覆盖不到的：整轮**没有工具调用**的纯对话（时间线为空）。那种情况
- * 时间线上一个真实锚点都没有，返回 `undefined` —— 折叠头就不显示耗时。
- * 宁可没有，不要一个看起来精确的假数字。
+ * **终点怎么取（2026-10-01 一次误改的教训）**
+ *
+ * 理想终点是「总结正文输出完毕」的那一刻。时间线上最后一个事件是最后
+ * 一次 `tool_complete`，它发生在正文吐字**之前**，所以纯事件跨度必然
+ * 少算一截（正文越长差得越多）。于是上一版改用
+ * `max(最晚事件, message.timestamp)` —— 实测**这是错的**，而且错得很响：
+ *
+ *   库里那条 id=151360 的助手消息，工具事件跨度 4.0s，
+ *   `messages.created_at` 却是 6 天之后的 2026-10-01T06:10:20Z，
+ *   于是折叠头显示「工作完成 8719m 55s」。
+ *
+ * 根因：`messages.created_at` **没有「这条消息写于何时」的契约**。实测
+ * 同一会话里 id 151359~151387 三十几条消息的 `created_at` 完全相同
+ * （2026-10-01T06:10:20.596001600Z），而它们的事件分布在 09-25 ~ 10-01
+ * —— 那一列在某次会话级批量写入（恢复 / 迁移 / 压缩）时被整批重写成
+ * 同一个值。拿它当终点，等于把「会话最后一次被碰的时间」当成「这一轮
+ * 结束的时间」。
+ *
+ * 所以：**只有当 `message.timestamp` 紧贴最晚事件时**（≤ 10 分钟，即它
+ * 确实可能就是这一轮的收尾时刻）才采纳它，否则一律回落到最晚事件。
+ * 10 分钟的判据来自物理约束：正文再长，13 token/s 也要在十几分钟内
+ * 吐完；差出「天」的单位只可能是整批重写。
+ *
+ * 起点仍用最早的工具事件：本轮第一次 LLM 思考发生在它之前，但服务端
+ * 没有持久化思考段的时间戳（见 `backfillReasoningTimestamps`），拿不到
+ * 就不要编。
+ *
+ * 覆盖不到的：整轮**没有工具调用**的纯对话（时间线上一个真实锚点都没有）。
+ * 那种情况返回 `undefined` —— 折叠头就不显示耗时。宁可没有，不要一个
+ * 看起来精确的假数字。
  */
 export function deriveTurnDurationMs(message: ChatMessage): number | undefined {
   const events = message.execution_timeline ?? [];
@@ -812,6 +847,13 @@ export function deriveTurnDurationMs(message: ChatMessage): number | undefined {
     if (t > max) max = t;
   }
   if (!Number.isFinite(min) || !Number.isFinite(max)) return undefined;
+  // 收尾时刻候选：`message.timestamp`（= SQLite 的 `created_at`，
+  // 见 `protocolAdapter.toMessage`）。仅在它落在最晚事件之后
+  // `SAME_TURN_TAIL_MS` 之内时采纳 —— 见上方注释里 id=151360 的教训。
+  if (message.timestamp) {
+    const t = new Date(message.timestamp).getTime();
+    if (!Number.isNaN(t) && t > max && t - max <= SAME_TURN_TAIL_MS) max = t;
+  }
   const span = max - min;
   // 单个事件（只有一次工具调用且没有 complete）跨度为 0，那不是「0 秒完成」
   // 而是「测不出来」，别显示 0。

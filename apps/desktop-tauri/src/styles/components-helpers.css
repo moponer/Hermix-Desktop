@@ -261,9 +261,21 @@
  * 注意与思考行的分工：**折叠箭头在行尾（它是可点击 affordance），
  * 思考图标在行首（它是这一行的身份标记）**。两者不互换 —— 上一版把
  * Brain 图标也撤到行尾，图标就和箭头抢位置，身份标记变成了装饰件。
- * 尺寸统一 13px，避免两行的行内图标大小不一。 */
-.reasoning-header .reasoning-chevron,
-.tl-reasoning-chev,
+ *
+ * 尺寸走图标 3 档（globals.css: icon-sm=12 / icon-md=14 / icon-lg=16），
+ * 不再自造 13px 这种哪一档都不是的值。整轮折叠头是这一层**最大的可点
+ * 控件**（它收起的是整轮的思考 + 全部工具），用 icon-lg；思考行是段级
+ * 控件，icon-md；身份图标不参与这套分级，维持 13px。 */
+.reasoning-header .reasoning-chevron {
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+.tl-reasoning-chev {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
 .tl-reasoning-icon {
   width: 13px;
   height: 13px;
