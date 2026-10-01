@@ -193,9 +193,16 @@ K 与 H 是同一件事的拆分：H 是差距分析（本文 §批次 H），K 
 - `/api/mcp/catalog` 改三层：新鲜缓存 → 网络拉取（成功则落缓存）→ **内置目录**（`from_cache: true` + `stale_reason: "联网不可达，显示内置精选目录"`），502 场景彻底消失
 - UI 标注数据来源徽标（在线 registry / 缓存 / 内置离线）
 
-**M2 registry 源可配置（必做，小改动）**
-- `HERMIX_MCP_REGISTRY_URL` env + 设置项，默认官方 URL；自建子注册中心（官方 ghcr Docker 镜像一条命令，同 API 形状）的用户直接填自己地址
-- install 端点仍以 server 反域名 id 为键，与源无关
+**M2 registry 源可配置 + 多源手动切换（必做，本批核心）**
+- **内置源清单**（`mcp_catalog.rs` 静态数组，每项含 id/名称/URL/说明/默认标志）：
+  1. `official` — 官方 registry（默认；境外线路，有代理时最佳数据源）
+  2. `builtin-offline` — 内置精选目录（M1 的打包 JSON 作为"伪源"，零网络）
+  3. `self-hosted` — 用户自建子注册中心（设置里填 URL；官方 ghcr 镜像一条命令，API 同形）
+  4. `modelscope` — ModelScope MCP 广场（**实验性**，默认隐藏，设置里"显示实验源"开关打开才出现；API 形状不同需适配层，2026-10-01 实测主站可直连 0.6s 但公开 API 端点未稳定）
+- **切换机制**：`HERMIX_MCP_REGISTRY_URL` env（优先）> 设置项存储的源 id（`registry_source`，持久化到 hermix_home 配置）；`self-hosted` 选中时额外读 `registry_custom_url`
+- **UI**（并入 L3 设置中心，L3 落地前先挂在现有 ToolTabs/MCP 页）：源下拉（显示名称+连通性徽标：绿=上次探测通/灰=未知/红=不通）+ self-hosted URL 输入行 + 「测试连接」按钮（后端加 `/api/mcp/catalog/probe?source=` 探测端点，返回延迟与形状校验结果）
+- **归一化契约**：所有源统一输出现有 `CatalogEntry` 结构；`modelscope` 适配器做字段映射，映射不了的字段置空并如实标注（install 所需 command/args/env 缺失时该条目"仅浏览不可安装"）
+- **install 端点不变**：仍以 server 反域名 id 为键；`modelscope` 源条目 id 前缀 `modelscope:` 防跨源冲突
 
 **M3 ModelScope MCP 广场适配器（可选，先验证再接）**
 - 国内可直连的目录站（阿里系）；API 形状与官方不同，需写转换层归一化到现有 CatalogEntry 结构
