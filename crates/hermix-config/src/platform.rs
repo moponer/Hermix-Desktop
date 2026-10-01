@@ -75,8 +75,32 @@ impl PlatformConfig {
     /// overlay are left unchanged. The `extra` map is merged recursively.
     pub fn merge_with_json(&mut self, overlay: &serde_json::Value) {
         if let serde_json::Value::Object(map) = overlay {
+            // Booleans accept the string forms a model (or a hand-edited
+            // config) can produce: `as_bool()` only reads a JSON boolean,
+            // so `"enabled": "true"` used to leave the channel silently
+            // DISABLED — the setting looked present in the file but had
+            // no effect. Same "explicit affirmative only" rule as
+            // `hermix_tools::param_coercion`; duplicated rather than
+            // imported because `hermix-config` sits below `hermix-tools`
+            // in the dependency chain.
+            fn flag(v: Option<&serde_json::Value>) -> Option<bool> {
+                match v? {
+                    serde_json::Value::Bool(b) => Some(*b),
+                    serde_json::Value::String(s) => {
+                        let t = s.trim();
+                        if t.eq_ignore_ascii_case("true") || t == "1" {
+                            Some(true)
+                        } else if t.eq_ignore_ascii_case("false") || t == "0" {
+                            Some(false)
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                }
+            }
             // Standard fields
-            if let Some(v) = map.get("enabled").and_then(|v| v.as_bool()) {
+            if let Some(v) = flag(map.get("enabled")) {
                 self.enabled = v;
             }
             if let Some(v) = map.get("token").and_then(|v| v.as_str()) {
@@ -85,7 +109,7 @@ impl PlatformConfig {
             if let Some(v) = map.get("webhook_url").and_then(|v| v.as_str()) {
                 self.webhook_url = Some(v.to_string());
             }
-            if let Some(v) = map.get("require_mention").and_then(|v| v.as_bool()) {
+            if let Some(v) = flag(map.get("require_mention")) {
                 self.require_mention = Some(v);
             }
             if let Some(v) = map.get("unauthorized_dm_behavior").and_then(|v| v.as_str()) {
@@ -95,7 +119,7 @@ impl PlatformConfig {
                     self.unauthorized_dm_behavior = behavior;
                 }
             }
-            if let Some(v) = map.get("group_sessions_per_user").and_then(|v| v.as_bool()) {
+            if let Some(v) = flag(map.get("group_sessions_per_user")) {
                 self.group_sessions_per_user = v;
             }
             if let Some(v) = map.get("home_channel").and_then(|v| v.as_str()) {
@@ -212,5 +236,64 @@ mod tests {
             pc.extra.get("custom_field").unwrap().as_str().unwrap(),
             "value"
         );
+    }
+
+    #[test]
+    fn merge_accepts_string_booleans() {
+        // Regression: `"enabled": "true"` used to be read as absent, so
+        // the channel stayed DISABLED while the config file visibly
+        // said it was enabled. Same class as the `storage_clean.confirm`
+        // loop, but with the opposite failure direction: the setting
+        // silently never took effect.
+        for (raw, want) in [
+            (serde_json::json!("true"), true),
+            (serde_json::json!("TRUE"), true),
+            (serde_json::json!(" true "), true),
+            (serde_json::json!("1"), true),
+            (serde_json::json!("false"), false),
+            (serde_json::json!("0"), false),
+        ] {
+            // Start from the opposite of what we expect, so a merge that
+            // silently did nothing would fail the assertion.
+            let mut pc = PlatformConfig {
+                enabled: !want,
+                require_mention: Some(!want),
+                group_sessions_per_user: !want,
+                ..Default::default()
+            };
+            pc.merge_with_json(&serde_json::json!({
+                "enabled": raw,
+                "require_mention": raw,
+                "group_sessions_per_user": raw,
+            }));
+            assert_eq!(pc.enabled, want, "enabled from {:?}", raw);
+            assert_eq!(
+                pc.require_mention,
+                Some(want),
+                "require_mention from {:?}",
+                raw
+            );
+            assert_eq!(
+                pc.group_sessions_per_user, want,
+                "group_sessions_per_user from {:?}",
+                raw
+            );
+        }
+    }
+
+    #[test]
+    fn merge_ignores_unparseable_booleans() {
+        // Present but meaningless must NOT flip the flag — the channel
+        // has to keep whatever it had, not silently enable or disable.
+        let mut pc = PlatformConfig {
+            enabled: false,
+            ..Default::default()
+        };
+        pc.merge_with_json(&serde_json::json!({
+            "enabled": "yes",
+            "require_mention": 1,
+        }));
+        assert!(!pc.enabled, "\"yes\" is not an affirmative");
+        assert_eq!(pc.require_mention, None, "1 is not a boolean");
     }
 }
