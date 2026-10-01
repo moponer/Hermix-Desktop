@@ -28,6 +28,79 @@ impl LocalPatchBackend {
         Self
     }
 
+    /// Apply ONE non-`replace_all` edit to `content` in memory, enforcing
+    /// the H2 correctness contract (mirrors dsh `edit`): a literal match
+    /// must be UNIQUE unless the caller opted into `replace_all` or
+    /// `allow_fuzzy`. The old code ran an 8-strategy fuzzy chain whenever
+    /// the literal missed, so a one-character difference in
+    /// whitespace/indentation could land the edit on a *different*
+    /// occurrence of the same shape — silently corrupting the file with
+    /// no error anywhere.
+    ///
+    /// Order matters: exact first, and if that is ambiguous we stop rather
+    /// than guessing. Fuzzy is only reachable on explicit opt-in.
+    ///
+    /// Returns the new content plus how it matched ("literal" | "fuzzy") so
+    /// callers can report it truthfully. Shared by `patch_file` and
+    /// `patch_file_multi` — the multi path used to call `fuzzy_find`
+    /// directly, which silently bypassed both checks, so a batched edit
+    /// could land on the wrong occurrence. One helper, no drift.
+    fn apply_single_edit(
+        content: &str,
+        path: &str,
+        old_string: &str,
+        new_string: &str,
+        allow_fuzzy: bool,
+    ) -> Result<(String, &'static str), ToolError> {
+        let literal_hits = content.matches(old_string).count();
+        if literal_hits > 1 {
+            return Err(ToolError::ExecutionFailed(format!(
+                "Found {literal_hits} occurrences of the given text in '{path}'. \
+                 The edit is ambiguous — patch would be applied to an arbitrary one. \
+                 Include more surrounding context to make it unique, or pass \
+                 replace_all: true to change all of them."
+            )));
+        }
+
+        if literal_hits == 1 {
+            let pos = content.find(old_string).expect("literal_hits == 1");
+            return Ok((
+                format!(
+                    "{}{}{}",
+                    &content[..pos],
+                    new_string,
+                    &content[pos + old_string.len()..]
+                ),
+                "literal",
+            ));
+        }
+
+        // No literal hit. Fuzzy fallback only on explicit opt-in.
+        if !allow_fuzzy {
+            return Err(ToolError::ExecutionFailed(format!(
+                "Could not find the given text verbatim in '{path}'. \
+                 The file was NOT modified. [don't blindly retry] \
+                 Re-read the file to get the exact current text (whitespace and \
+                 indentation must match exactly), or pass allow_fuzzy: true to \
+                 accept whitespace/indentation-tolerant matching."
+            )));
+        }
+
+        match Self::fuzzy_find(content, old_string) {
+            Some((start, end)) => {
+                let mut new_content = String::with_capacity(content.len());
+                new_content.push_str(&content[..start]);
+                new_content.push_str(new_string);
+                new_content.push_str(&content[end..]);
+                Ok((new_content, "fuzzy"))
+            }
+            None => Err(ToolError::ExecutionFailed(format!(
+                "Could not find a match for the specified text in '{path}' \
+                 (even with allow_fuzzy: true)"
+            ))),
+        }
+    }
+
     /// Find the best fuzzy match for `needle` in `haystack`.
     /// Returns (start_index, end_index) of the best match, or None.
     fn fuzzy_find(haystack: &str, needle: &str) -> Option<(usize, usize)> {
@@ -393,73 +466,15 @@ impl PatchBackend for LocalPatchBackend {
             return Ok(json!({"status": "ok", "replacements": count}).to_string());
         }
 
-        // Single replacement.
-        //
-        // H2 correctness contract (mirrors dsh `edit`): a literal match
-        // must be UNIQUE unless the caller opted into `replace_all` or
-        // `allow_fuzzy`. The old code ran an 8-strategy fuzzy chain
-        // whenever the literal missed, so a one-character difference in
-        // whitespace/indentation could land the edit on a *different*
-        // occurrence of the same shape — silently corrupting the file
-        // with no error anywhere.
-        //
-        // Order matters: exact first, and if that is ambiguous we stop
-        // rather than guessing. Fuzzy is only reachable when the caller
-        // explicitly asked for it.
-        let literal_hits = content.matches(old_string).count();
-        if literal_hits > 1 {
-            return Err(ToolError::ExecutionFailed(format!(
-                "Found {literal_hits} occurrences of the given text in '{path}'. \
-                 The edit is ambiguous — patch would be applied to an arbitrary one. \
-                 Include more surrounding context to make it unique, or pass \
-                 replace_all: true to change all of them."
-            )));
-        }
+        // Single replacement. Contract lives in `apply_single_edit`.
+        let (new_content, matched) =
+            Self::apply_single_edit(&content, path, old_string, new_string, allow_fuzzy)?;
 
-        if literal_hits == 1 {
-            let pos = content.find(old_string).expect("literal_hits == 1");
-            let new_content = format!(
-                "{}{}{}",
-                &content[..pos],
-                new_string,
-                &content[pos + old_string.len()..]
-            );
-            tokio::fs::write(path, &new_content).await.map_err(|e| {
-                ToolError::ExecutionFailed(format!("Failed to write '{}': {}", path, e))
-            })?;
-            return Ok(json!({"status": "ok", "replacements": 1, "match": "literal"}).to_string());
-        }
+        tokio::fs::write(path, &new_content)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to write '{}': {}", path, e)))?;
 
-        // No literal hit. Fuzzy fallback only on explicit opt-in.
-        if !allow_fuzzy {
-            return Err(ToolError::ExecutionFailed(format!(
-                "Could not find the given text verbatim in '{path}'. \
-                 The file was NOT modified. [don't blindly retry] \
-                 Re-read the file to get the exact current text (whitespace and \
-                 indentation must match exactly), or pass allow_fuzzy: true to \
-                 accept whitespace/indentation-tolerant matching."
-            )));
-        }
-
-        match Self::fuzzy_find(&content, old_string) {
-            Some((start, end)) => {
-                let mut new_content = String::with_capacity(content.len());
-                new_content.push_str(&content[..start]);
-                new_content.push_str(new_string);
-                new_content.push_str(&content[end..]);
-
-                tokio::fs::write(path, &new_content).await.map_err(|e| {
-                    ToolError::ExecutionFailed(format!("Failed to write '{}': {}", path, e))
-                })?;
-
-                Ok(json!({"status": "ok", "replacements": 1, "match": "fuzzy"}).to_string())
-            }
-            None => Err(ToolError::ExecutionFailed(format!(
-                "Could not find a match for the specified text in '{}' \
-                 (even with allow_fuzzy: true)",
-                path
-            ))),
-        }
+        Ok(json!({"status": "ok", "replacements": 1, "match": matched}).to_string())
     }
 
     /// Multi-edit implementation: read the file once, apply all edits
@@ -512,23 +527,24 @@ impl PatchBackend for LocalPatchBackend {
                 content = content.replace(old_string.as_str(), new_string.as_str());
                 applied.push(json!({"edit": i + 1, "replacements": count}));
             } else {
-                match Self::fuzzy_find(&content, old_string) {
-                    Some((start, end)) => {
-                        let mut new_content = String::with_capacity(content.len());
-                        new_content.push_str(&content[..start]);
-                        new_content.push_str(new_string.as_str());
-                        new_content.push_str(&content[end..]);
-                        content = new_content;
-                        applied.push(json!({"edit": i + 1, "replacements": 1}));
-                    }
-                    None => {
-                        return Err(ToolError::ExecutionFailed(format!(
-                            "Edit {}: could not find a match for the specified text in '{}'",
-                            i + 1,
-                            path
-                        )));
-                    }
-                }
+                // H2: identical contract to the single-edit path — a
+                // literal match that is ambiguous, or absent with fuzzy
+                // not explicitly opted into, must REFUSE. This branch
+                // used to call `fuzzy_find` directly, silently bypassing
+                // both checks: a multi-edit call could land an edit on the
+                // wrong occurrence, which is exactly what H2 exists to
+                // prevent. Routed through the shared helper so the two
+                // paths cannot drift apart again.
+                let (updated, matched) = Self::apply_single_edit(
+                    &content,
+                    path,
+                    old_string,
+                    new_string,
+                    allow_fuzzy,
+                )
+                .map_err(|e| ToolError::ExecutionFailed(format!("Edit {}: {}", i + 1, e)))?;
+                content = updated;
+                applied.push(json!({"edit": i + 1, "replacements": 1, "match": matched}));
             }
         }
 
@@ -880,6 +896,109 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "z\ny\nz\n");
+    }
+
+    // ---- H2 behaviour contract: multi-edit path parity ---------------
+    //
+    // `patch_file_multi` used to call `fuzzy_find` directly, so a batched
+    // `edits` array skipped BOTH H2 guards: no uniqueness check and no
+    // `allow_fuzzy` opt-in. A one-space difference inside a batch could
+    // therefore land an edit on a different occurrence — the exact
+    // silent corruption H2 exists to prevent. These pin the parity.
+
+    #[tokio::test]
+    async fn multi_refuses_ambiguous_literal_instead_of_guessing() {
+        let (_d, path) = write_tmp("m.txt", "x\nkeep\nx\n");
+        let err = LocalPatchBackend::new()
+            .patch_file_multi(&path, &[("x".into(), "y".into(), false)], false)
+            .await
+            .unwrap_err();
+        let msg = err.to_string();
+        // The error must name WHICH edit failed, or the model cannot tell
+        // which of N entries to fix.
+        assert!(msg.contains("Edit 1"), "must be edit-indexed, got: {msg}");
+        assert!(msg.contains("ambiguous") || msg.contains("occurrences"), "got: {msg}");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "x\nkeep\nx\n",
+            "an ambiguous multi-edit must not modify the file"
+        );
+    }
+
+    #[tokio::test]
+    async fn multi_without_literal_and_without_fuzzy_does_not_modify() {
+        let (_d, path) = write_tmp("mw.txt", "fn main() {\n\tbody();\n}\n");
+        let err = LocalPatchBackend::new()
+            .patch_file_multi(&path, &[("  body();\n".into(), "    body();\n".into(), false)], false)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("verbatim"), "got: {err}");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "fn main() {\n\tbody();\n}\n",
+            "a refused multi-edit must leave the file alone"
+        );
+    }
+
+    #[tokio::test]
+    async fn multi_fuzzy_is_reachable_on_explicit_opt_in_and_reported() {
+        let (_d, path) = write_tmp("mf.txt", "fn main() {\n\tbody();\n}\n");
+        let out = LocalPatchBackend::new()
+            .patch_file_multi(
+                &path,
+                &[("  body();\n".into(), "    body();\n".into(), false)],
+                true,
+            )
+            .await
+            .expect("allow_fuzzy: true must reach the fuzzy chain");
+        assert!(
+            out.contains("\"match\":\"fuzzy\""),
+            "a fuzzy-applied edit must not report itself as literal, got: {out}"
+        );
+        assert!(std::fs::read_to_string(&path).unwrap().contains("    body();"));
+    }
+
+    #[tokio::test]
+    async fn multi_applies_unique_edits_sequentially() {
+        let (_d, path) = write_tmp("ms.txt", "one\ntwo\nthree\n");
+        let out = LocalPatchBackend::new()
+            .patch_file_multi(
+                &path,
+                &[
+                    ("two".into(), "TWO".into(), false),
+                    ("three".into(), "THREE".into(), false),
+                ],
+                false,
+            )
+            .await
+            .unwrap();
+        assert!(out.contains("\"edits_applied\":2"), "got: {out}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "one\nTWO\nTHREE\n");
+    }
+
+    #[tokio::test]
+    async fn multi_is_atomic_a_failing_late_edit_discards_earlier_ones() {
+        // Edit 1 is valid, edit 2 is not. The contract is all-or-nothing:
+        // the in-memory buffer is discarded, so the file must still hold
+        // the ORIGINAL text — never a half-applied batch.
+        let (_d, path) = write_tmp("ma.txt", "alpha\nbeta\n");
+        let err = LocalPatchBackend::new()
+            .patch_file_multi(
+                &path,
+                &[
+                    ("alpha".into(), "ALPHA".into(), false),
+                    ("nonexistent".into(), "X".into(), false),
+                ],
+                false,
+            )
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("Edit 2"), "got: {err}");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "alpha\nbeta\n",
+            "a failed batch must not leave a partially applied file"
+        );
     }
 
     // ---- H5 behaviour contract: search context lines ----------------
