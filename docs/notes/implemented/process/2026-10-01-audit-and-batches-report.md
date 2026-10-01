@@ -1,9 +1,9 @@
 # Decision Note: 任务报告书 — 2026-10-01 审计响应与批次执行
 
-Status: implemented — 待审批 agent 复核；17 commit，净减 4580 行，CI gate 11/11
+Status: implemented — 8 项复核已批复同意；29 commit，净减 3498 行，CI gate 11/11
 
-> 分支 `feat/auto-20261001-c09d7e4f`，基线 `f469b2ae`。
-> 净变更 **128 文件 / +5400 / -9980（净减 4580 行）**。
+> 基线 `f469b2ae`（worktree 分支已并入 main）。
+> 净变更 **149 文件 / +6616 / -10114（净减 3498 行）**。
 
 ## Decision
 
@@ -36,19 +36,30 @@ J2 resource_guard 拦截（与 5 天前定策冲突）、以及 E10/E16 两条�
   CI 全绿"，而实际有 101 处 / 15 个文件，漏掉的 5 个文件 35 处会让门禁
   收紧当天就把主干变红。按全清执行。
 - **在 `resource_guard` 实现 J2** —— 否决，理由见第九节第 7 点。
+- **给 `patch_file_multi` 补一段独立的唯一性校验（而非抽共享 helper）**
+  —— 否决。见第十一节：单条与多条是同一个契约的两条路径，补条件判断只
+  会留下下一个人漏改的第二个分支；抽 `apply_single_edit` 后 `fuzzy_find`
+  全仓只有一个调用点，走散在结构上不可能。
+- **L1 强调色用单一 `--color-accent`（不分层）** —— 否决。主题层需要
+  "跟随主题"的默认值、使用层需要用户覆盖，同一变量无法同时表达；且
+  自引用 `var(--color-accent-choice, var(--color-accent))` 与
+  `themes/*.css` 同特异性被后者胜出并触发循环依赖。改为
+  `--color-accent-base`（主题层）→ `--color-accent`（使用层）→
+  `useTheme` 行内注入。
 
 ## Consequences
 
 - **获得**：安全边界显式化（审批策略成为编译器强制的表态而非隐式
-  fail-open）、工具契约与生产验证过的 dsh 对齐、109 处色债清零使 L1 的
-  强调色切换有实际效果、仓库卫生有 CI 兜底、决策有据可查。
+  fail-open）、工具契约与生产验证过的 dsh 对齐、109 处色债清零 + L1 强调色
+  落地使主题强调色可实际切换、仓库卫生有 CI 兜底、决策有据可查。
 - **放弃**：非流式 HTTP 上 Dangerous 工具改为拒绝（行为变更）；patch
   改为严格字面匹配（模型 `old_string` 不精确时会失败并被要求重读文件）；
   持久终端在 Windows 上仍不可用。
 - **代价**：`CompletePairingBody` 新增必填字段，外部调用方需同步；
   21 个色槽进 CONTRACT，每套主题须声明（这是正确的——主题各自指向本
   主题四色组）；CI gate 从 10 步增至 11 步。
-- **风险**：见第九节八条待复核项，其中 1/2/4 涉及行为变更与安全边界。
+- **风险**：第九节 8 项待复核项已全部批复同意；批准过程中又发现并修掉
+  一处 H2 半成品（多编辑路径绕过唯一性校验，见第十一节）。
 
 ---
 
@@ -57,7 +68,7 @@ J2 resource_guard 拦截（与 5 天前定策冲突）、以及 E10/E16 两条�
 | 来源 | 批次 | 状态 |
 |---|---|---|
 | 2026-10-01 安全审计报告 | 17 条缺陷 | 13 确认 / 2 推翻 / 2 部分成立 → **全部处置** |
-| 2026-09-30 决策笔记 | A/B/C/D/E/G/I/J/K/L0 | A-E/G/I/J/K 完成；F 不做；H3/L0-H3 否决；L1+ 未做 |
+| 2026-09-30 决策笔记 | A/B/C/D/E/G/I/J/K/L0/L1 | A-E/G/I/J/K/L0/L1 完成；F 不做；H3 否决；L2-L5/L3.5 未动 |
 | 会话内追加 | 参数类型扫描、临时文件清理 | 完成 |
 
 ---
@@ -174,19 +185,26 @@ J2 resource_guard 拦截（与 5 天前定策冲突）、以及 E10/E16 两条�
 
 ## 七、验证证据
 
+`189aab83`（H2 multi 修复）之后复跑 `scripts/ci-gate.sh`，**11/11 步全过、EXIT=0**。
+下表为该次实跑数据：
+
 | 检查 | 结果 |
 |---|---|
-| `cargo check --workspace --all-targets` | 通过，零错误 |
-| `cargo test -p hermix-agent --lib` | **1043 passed** |
-| `cargo test -p hermix-core --lib` | **181 passed** |
-| `cargo test -p hermix-tools --lib` | **725 passed** |
-| `hermix-server` / `hermix-config` / `hx-shell` | 262 / 118 / 9 passed |
+| `cargo check --workspace --all-targets` | 通过，零错误零警告 |
+| `cargo test --workspace --lib` | **全绿**（下表分 crate） |
+| `hermix-agent` | **1043 passed** |
+| `hermix-core` | **181 passed** |
+| `hermix-tools` | **732 passed** / 0 failed / 3 ignored |
+| `hermix-server` | **262 passed** |
+| `hermix-config` | **118 passed** |
+| `hx-shell` | **9 passed** |
 | `pnpm tsc --noEmit` | **exit 0** |
 | `vitest run`（chatStateReset） | 9 passed（含 2 个新增回归） |
-| `check-theme-tokens.mjs` | contract **106/106**、无孤儿、无裸色、无未登记色阶 |
-| `bash scripts/ci-gate.sh` | **11/11 步全过** |
+| `check-theme-tokens.mjs` | contract **101/101**、无孤儿、无裸色、无未登记色阶、无任意字号 |
+| `check-notes.sh` / `check-hygiene.sh` | notes: OK / hygiene: OK |
+| `bash scripts/ci-gate.sh` | **11/11 步全过，EXIT=0** |
 
-新增回归测试 30+：审批 Allow/Deny 双向、scratch 降级边界（含混合列表/穿越/空列表）、read 分页、patch 唯一性、search 上下文、参数真值判定、voice_mode 反转、hx-shell 参数键、config 布尔、文件写入纪律、仓库卫生门禁（违规+合规双样本）。
+新增回归测试 40+：审批 Allow/Deny 双向、scratch 降级边界（含混合列表/穿越/空列表）、read 分页、patch 唯一性**（单条 5 条 + 多编辑 5 条）**、search 上下文、参数真值判定、voice_mode 反转、hx-shell 参数键、config 布尔、文件写入纪律、仓库卫生门禁（违规+合规双样本）。
 
 ---
 
@@ -202,6 +220,7 @@ J2 resource_guard 拦截（与 5 天前定策冲突）、以及 E10/E16 两条�
 | **自查** | `git ls-files ':/*'` 并非"顶层"（`*` 不绑斜杠） | 门禁自身 bug，改为显式 `grep -v '/'` |
 | **自查** | 门禁第一版检查的扩展名全被 gitignore 覆盖 | 聚焦可跟踪类型 |
 | **误判修正** | 上一轮说 Rust 测试"失败" | 实为 290 秒超时，非失败；改用 3600 秒上限 |
+| **自查** | H2 只改了单条路径，多编辑路径整条绕过 | 编译器 `unused variable: allow_fuzzy` 暴露；抽 `apply_single_edit` 共享 helper 消除双实现（第十一节） |
 
 ---
 
@@ -245,8 +264,30 @@ J2 resource_guard 拦截（与 5 天前定策冲突）、以及 E10/E16 两条�
 
 ## 十、剩余工作
 
-- **L1**（强调色可选 `--color-accent-choice`、深浅色 token 校准、对比度滑杆）— L0 已铺路
+- **L3.5 / 策展调色板 / `--contrast-scale`**（选色 UI、`--color-on-accent` 注入、对比度滑杆）— 依赖 L3.1/L3.2 的 Switch/SettingsRow；`--color-on-accent` 随明度选浅/深字，自由取色无正解，等策展调色板
 - **L2/L3/L4/L5**（设置中心重构、Switch/SettingsRow、壁纸新 command、主工作区）— 未动
-- **批次 F**（事件溯源 / Windows ACL 沙箱 / PTC）— 按原提案单独立项
+- **批次 F**（事件溯源 / Windows ACL 沙箱 / PTC）— 立项笔记已写（`notes/proposed/feature/`），季度级改造，按提案单独立项再评审
 - **H3**（持久终端）— 如需，应作为独立立项先写 ConPTY 技术方案
-- `type-debt` 13 处 `text-[Npx]` — 任务书未列入，顺带发现
+
+---
+
+## 十一、后续追加：patch 多编辑路径绕过 H2（`189aab83`）
+
+审核批复 8 项后继续自查，发现 H2 **只改了一半**。
+
+`patch_file_multi`（模型用 `edits` 数组批量改文件，推荐用法）直接调
+`fuzzy_find`，**既无字面唯一性校验也无 `allow_fuzzy` 判断**——H2 要消
+除的"静默改错位置"在批量场景下原封不动，且覆盖面比单条路径更大。
+
+暴露方式是编译器警告：`allow_fuzzy` 早已从 `tools/file.rs` 传到后端
+签名，后端**从未使用该参数**。"参数已加但未接线"的半成品，读代码发现
+不了，旧测试也发现不了——因为旧测试只打单条路径。
+
+修法不是给 multi 补一段校验，而是把契约抽成 `apply_single_edit` 共享
+helper；`fuzzy_find` 现在全仓只有这一个调用点，两条路径**结构上无法
+走散**。新增 5 条回归测试全部钉 multi 侧（含 all-or-nothing：失败时
+不落半截文件）。
+
+教训已写入 `notes/proposed/process/2026-09-30-doc-cleanup-and-optimization-plan.md`
+的 H2 段落：契约类修复必须抽到唯一入口，补条件判断只会留下下一个人
+漏改的第二个分支。

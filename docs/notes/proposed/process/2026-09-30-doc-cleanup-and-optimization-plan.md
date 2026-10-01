@@ -105,6 +105,12 @@ Status: implemented — 批次 A/B/C/D/E/G 已执行（2026-10-01）；仅批次
 
 背景：用户实测反馈"命令执行、文件编辑、读、查找不顺手"。对比 dsh 的 tool-fs / tool-bash(-persistent) / tool-fs-search / tool-str-replace-editor 后，差距按影响排序：
 
+**H2 执行结果 + 一次漏改（2026-10-01）**：单条路径已按契约改完（字面唯一性 + `allow_fuzzy` opt-in + `match: literal|fuzzy` 如实回报）。但**多编辑路径（`edits` 数组）原封不动绕过了全部三样**——它直接调 `fuzzy_find`，既无唯一性校验也无 opt-in 判断，而"模型用 `edits` 批量改文件"恰恰是推荐用法，覆盖面比单条更广。
+
+- 漏改的暴露方式值得记：`patch_file_multi` 早就把 `allow_fuzzy` 一路传到了后端签名（`tools/file.rs` 层完好），但后端**从未使用该参数**，编译器 `unused variable` 警告是唯一的线索。这类"参数已加但未接线"的半成品，靠读代码发现不了，靠测试更发现不了——旧测试全部只打单条路径。
+- 修法不是补一段 multi 分支的校验，而是把契约抽成 `apply_single_edit` 共享 helper 让两条路径共用；`fuzzy_find` 现在全仓只有这一个调用点，**结构上无法再走散**。教训：契约类修复要抽到唯一入口，补条件判断只会留下下一个人漏改的第二个分支。
+- 回归测试钉 multi 侧而非单条侧：歧义拒绝 / 无 fuzzy 拒绝 / fuzzy opt-in 可达且**如实标记 `match`** / 顺序应用 / 失败时全批丢弃（all-or-nothing，不得落半截文件）。
+
 **H1 read_file 自相矛盾（bug 级，先修）**
 `file.rs:220-226`：Fs 接缝路径**拒绝 offset/limit 参数**，但字符截断的提示文案却叫模型"Use offset/limit to read further chunks"——接缝装配时模型照提示翻页必报错。且 Fs 路径一次读整文件，仅靠 300K 字符硬截断兜底，无行号、无分页脚注。修法：Fs 路径支持行级 offset/limit（读入后切片），截断提示与实际能力一致；输出加行号前缀（对齐 dsh `read`，模型引用行号更准）。
 
