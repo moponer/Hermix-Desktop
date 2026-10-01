@@ -45,7 +45,11 @@ function makeDeps(opts?: {
   }
 
   return {
-    cancelStream: vi.fn(),
+    // `activeSessionId` gates the cancel: with none set, the function
+    // skips `cancelStream` entirely (there is no live stream of ours to
+    // stop). Tests that assert cancel behaviour must set it.
+    activeSessionId: "sess-active",
+    cancelStream: vi.fn(() => true),
     wsSendRaw: vi.fn(() => wsOpen),
     clearStreamError: vi.fn(),
     setStreamPhase: vi.fn(),
@@ -72,7 +76,10 @@ describe("resetChatStateForModelSwitch", () => {
   it("calls cancelStream FIRST (before any other reset)", () => {
     const callOrder: string[] = [];
     const deps = makeDeps();
-    deps.cancelStream = vi.fn(() => callOrder.push("cancel"));
+    deps.cancelStream = vi.fn(() => {
+      callOrder.push("cancel");
+      return true;
+    });
     (deps.clearStreamError as ReturnType<typeof vi.fn>).mockImplementation(() =>
       callOrder.push("clearStreamError"),
     );
@@ -81,6 +88,30 @@ describe("resetChatStateForModelSwitch", () => {
 
     expect(callOrder[0]).toBe("cancel");
     expect(deps.cancelStream).toHaveBeenCalledTimes(1);
+  });
+
+  it("anchors cancel to the active session so another session's stream survives", () => {
+    // Regression: cancelStream used to be called with no argument, which
+    // skips the ownership guard in useStreamChat.cancel — switching models
+    // while viewing session B killed session A's live stream and denied A's
+    // pending approvals.
+    const deps = makeDeps();
+    resetChatStateForModelSwitch(deps);
+
+    expect(deps.cancelStream).toHaveBeenCalledWith("sess-active");
+  });
+
+  it("skips cancel entirely when there is no active session", () => {
+    const deps = makeDeps();
+    deps.activeSessionId = null;
+    resetChatStateForModelSwitch(deps);
+
+    // Passing `null` through would be read as `undefined` by cancel and
+    // skip the guard — the exact bug above. No session => nothing of ours
+    // is streaming, so the call is dropped instead.
+    expect(deps.cancelStream).not.toHaveBeenCalled();
+    // The rest of the reset still runs.
+    expect(deps.clearStreamError).toHaveBeenCalledTimes(1);
   });
 
   it("clears all React state setters with empty/null sentinel", () => {

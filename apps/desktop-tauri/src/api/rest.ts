@@ -64,9 +64,15 @@ import type {
 import { invoke } from "@tauri-apps/api/core";
 
 /** Per-request timeout. The stdio bridge has its own 120s oneshot
- *  timeout; we add a 10s client-side `AbortSignal` so a hung request
- *  can be cancelled from the React side without waiting for the
- *  bridge to give up. */
+ *  timeout; we add a client-side deadline so a hung request surfaces
+ *  in 10s instead of 120s.
+ *
+ *  NOTE: `backend_http_request` takes no cancellation token (see
+ *  `src-tauri/src/stdio_bridge.rs`), so we cannot actually interrupt
+ *  an in-flight bridge round-trip. The deadline below rejects the
+ *  *caller* at 10s via `Promise.race`; the Rust-side request may still
+ *  complete in the background. A caller's `AbortSignal` likewise
+ *  releases the caller early but cannot stop the bridge. */
 const REQUEST_TIMEOUT_MS = 10_000;
 
 /** HTTP-style envelope returned by `backend_http_request`. The
@@ -108,14 +114,37 @@ export async function apiInvoke(
   // Tauri forwards the optional 3rd arg as `body` to the Rust
   // command — when null we still pass it so the Rust signature
   // (which expects `Option<String>`) is happy.
-  const raw = await invoke<string>("backend_http_request", {
-    method,
-    path,
-    body: payload,
+  //
+  // `Promise.race` against the combined signal is what makes the
+  // deadline real. The previous code awaited `invoke` and only then
+  // checked `combined.aborted`, so a hung request still blocked for
+  // the full bridge timeout and a caller's `abort()` had no effect
+  // until the response landed.
+  const abortPromise = new Promise<never>((_resolve, reject) => {
+    if (combined.aborted) {
+      reject(new DOMException("request aborted", "AbortError"));
+      return;
+    }
+    const onAbort = () =>
+      reject(
+        new DOMException(
+          combined.reason?.name === "TimeoutError"
+            ? `request timed out after ${REQUEST_TIMEOUT_MS}ms`
+            : "request aborted",
+          combined.reason?.name === "TimeoutError" ? "TimeoutError" : "AbortError",
+        ),
+      );
+    combined.addEventListener("abort", onAbort, { once: true });
   });
-  if (combined.aborted) {
-    throw new DOMException("request aborted", "AbortError");
-  }
+
+  const raw = await Promise.race([
+    invoke<string>("backend_http_request", {
+      method,
+      path,
+      body: payload,
+    }),
+    abortPromise,
+  ]);
 
   // Server reply is the bridge envelope; parse eagerly so callers
   // can branch on `status` before decoding the body.
@@ -133,6 +162,17 @@ export async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T>
       : typeof init.body === "string"
         ? init.body
         : JSON.stringify(init.body);
+  // `init.headers` is deliberately NOT forwarded. The bridge command
+  // (`backend_http_request` -> stdio `http` frame -> axum) has no
+  // header channel at all, and the server force-injects
+  // `content-type: application/json` for any request with a body
+  // (stdio_session.rs:190). Every call site passes only Content-Type,
+  // so forwarding it would be a no-op that reads as if it worked.
+  //
+  // If you ever need a real header (Authorization, Accept, …), it must
+  // go through raw `fetch()` — see `api/polish.ts` — because silently
+  // dropping it here is exactly the failure mode this note exists to
+  // prevent.
   const reply = await apiInvoke(method, path, body, init?.signal ?? undefined);
   if (reply.status < 200 || reply.status >= 300) {
     const message = reply.enc === "utf8"

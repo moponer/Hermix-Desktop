@@ -246,7 +246,17 @@ fn spawn_connection_handler(
             }
             _ => {
                 // 主通道：简单 request-reply 语义，session_id 用 channel 原名。
-                crate::ws::handle_ws(transport, state, channel.clone()).await;
+                crate::ws::handle_ws(
+                    transport,
+                    state,
+                    channel.clone(),
+                    // Local stdio pipe: the operator driving this channel
+                    // already has host shell access, so a Dangerous tool
+                    // is not a privilege escalation. Network transports
+                    // pass Deny instead.
+                    hermix_core::approval::ApprovalFallback::Allow,
+                )
+                .await;
             }
         }
         registry.lock().await.remove(&channel_for_log);

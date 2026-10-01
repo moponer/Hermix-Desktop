@@ -809,7 +809,17 @@ impl SubAgentOrchestrator {
             child_agent.run(initial, None).await
         });
 
-        let result = match timeout(self.cfg.timeout, join).await {
+        // Pin the JoinHandle so the timeout arm can abort it. The
+        // cooperative `interrupt` alone is not enough: `check_interrupt()`
+        // is only observed at the LLM-call boundary (`llm_retry.rs:160`),
+        // never inside tool execution. So a child that is mid-`write_file`
+        // / `terminal` when the deadline fires would finish that tool and
+        // land its writes *after* this function already returned
+        // `Timeout` and the parent moved on — an orphaned task nobody
+        // observes. `abort()` drops the future at its next await, which
+        // stops the remaining tool calls from running.
+        let mut join = Box::pin(join);
+        let result = match timeout(self.cfg.timeout, join.as_mut()).await {
             Ok(Ok(Ok(result))) if result.interrupted => Err(SubAgentError::Cancelled),
             Ok(Ok(Ok(result))) => Ok(result),
             Ok(Ok(Err(AgentError::Interrupted { .. }))) => Err(SubAgentError::Cancelled),
@@ -819,9 +829,19 @@ impl SubAgentOrchestrator {
                 join_err
             )))),
             Err(_) => {
-                // Cooperative cancel on timeout — next `check_interrupt()`
-                // boundary in the child unwinds.
+                // Cooperative cancel for the in-flight LLM call, then a
+                // hard abort so no further tool executes.
                 child_interrupt.interrupt(Some("timeout".to_string()));
+                // `timeout` consumed the future via `&mut`, so the inner
+                // `JoinHandle` is still owned here and can be aborted.
+                // The task may already be finished; `abort` is a no-op then.
+                join.abort();
+                tracing::warn!(
+                    task = %req.task.chars().take(80).collect::<String>(),
+                    child_depth = req.child_depth,
+                    timeout_secs = ?self.cfg.timeout,
+                    "sub-agent timed out; aborted to prevent further tool side effects"
+                );
                 Err(SubAgentError::Timeout)
             }
         };

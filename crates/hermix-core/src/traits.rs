@@ -427,6 +427,18 @@ pub struct AgentOverrides {
     #[serde(skip)]
     pub pre_approval_checker:
         Option<Arc<dyn Fn(&str, &serde_json::Value) -> bool + Send + Sync>>,
+    /// What to do with a Dangerous tool when this request wired no
+    /// approval channel. Defaults to `Deny` (fail closed) — callers
+    /// that genuinely have no remote attack surface for the decision
+    /// (local stdio session, unit test) must opt in to `Allow`
+    /// explicitly rather than relying on an implicit fallback.
+    ///
+    /// This is `#[serde(skip)]` with a `Default` of `Deny` on purpose:
+    /// any existing or future caller that forgets to set it gets the
+    /// safe behavior, and `Option<ApprovalFallback>` on the wire
+    /// resolves `None` → `Deny` as well.
+    #[serde(skip)]
+    pub approval_fallback: Option<crate::approval::ApprovalFallback>,
     /// H3: Called when prefetcher resolves with an intent prediction.
     /// Payload is a JSON string: `{ intent, confidence, results }`.
     #[serde(skip)]

@@ -34,8 +34,8 @@ use std::sync::Arc;
 
 use hermix_core::{ToolCall, ToolErrorRecord, ToolResult};
 use serde_json::Value;
-use tokio::task::JoinSet;
 use tokio::sync::Semaphore;
+use tokio::task::JoinSet;
 
 use crate::agent_loop::AgentLoop;
 
@@ -67,25 +67,54 @@ impl AgentLoop {
         parent_budget_remaining_usd: Option<f64>,
         tool_errors: &mut Vec<ToolErrorRecord>,
     ) -> Vec<ToolResult> {
-        // Enforce max_tool_calls_per_turn limit
-        if self.config.max_tool_calls_per_turn > 0 && tool_calls.len() > self.config.max_tool_calls_per_turn as usize {
-            let excess = tool_calls.len() - self.config.max_tool_calls_per_turn as usize;
-            tracing::warn!(
-                "Tool call limit exceeded: {} calls > {} limit. {} tools will be skipped.",
-                tool_calls.len(),
-                self.config.max_tool_calls_per_turn,
-                excess
-            );
-            // Return error results for excess tool calls
-            let mut results: Vec<ToolResult> = Vec::new();
-            for tc in tool_calls.iter().skip(self.config.max_tool_calls_per_turn as usize) {
-                results.push(ToolResult::err(
-                    &tc.id,
-                    format!("Tool call limit reached ({}/{}). This tool call was skipped.",
-                        self.config.max_tool_calls_per_turn, tool_calls.len())
-                ));
-            }
+        // Enforce max_tool_calls_per_turn limit.
+        //
+        // Split out of the async body into a non-async helper because
+        // re-entering an `async fn` recursively needs boxing (E0733).
+        if let Some(limit) = self.limit_capped_slice(tool_calls) {
+            let (run_these, skipped_envelopes) = split_at_limit(tool_calls, limit);
+            let mut results = self
+                .execute_bounded(run_these, turn, parent_budget_remaining_usd, tool_errors)
+                .await;
+            results.extend(skipped_envelopes);
             return results;
+        }
+        self.execute_bounded(tool_calls, turn, parent_budget_remaining_usd, tool_errors)
+            .await
+    }
+
+    /// `Some(limit)` when the batch exceeds `max_tool_calls_per_turn`,
+    /// `None` when it fits and should run whole.
+    fn limit_capped_slice(&self, tool_calls: &[ToolCall]) -> Option<usize> {
+        let max = self.config.max_tool_calls_per_turn;
+        if max > 0 && tool_calls.len() > max as usize {
+            Some(max as usize)
+        } else {
+            None
+        }
+    }
+
+    /// Split into (calls that run, envelopes for the ones that must not).
+    ///
+    /// Every call gets an answer: the first `limit` execute, the excess
+    /// get a "not started" envelope. The old code returned envelopes for
+    /// the excess ONLY, leaving the first `limit` calls with no result
+    /// while the assistant message still listed all of them — a dangling
+    /// `tool_calls` that providers reject ("tool call result does not
+    /// follow tool call"; Anthropic has no repair pass).
+    ///
+    /// A free function, not a method: the returned slice borrows from
+    /// `tool_calls` and must not be tied to `&self`'s lifetime.
+    ///
+    async fn execute_bounded(
+        &self,
+        tool_calls: &[ToolCall],
+        turn: u32,
+        parent_budget_remaining_usd: Option<f64>,
+        tool_errors: &mut Vec<ToolErrorRecord>,
+    ) -> Vec<ToolResult> {
+        if tool_calls.is_empty() {
+            return Vec::new();
         }
 
         let span = tracing::Span::current();
@@ -106,6 +135,12 @@ impl AgentLoop {
         let pre_dispatch = self.resolve_pre_dispatch(tool_calls).await;
 
         let mut join_set = JoinSet::new();
+        // Maps a spawned task's id back to the tool_call_id it is
+        // executing. Without it, a JoinError (panic / cancellation)
+        // could only be attributed to "the first empty slot", which
+        // mislabels the tool in `tool_errors` and leaves the real
+        // call's slot to be filled by a synthetic timeout error.
+        let mut task_index: HashMap<tokio::task::Id, String> = HashMap::new();
         let max_delegate_depth = self.resolve_max_delegate_depth();
         let current_delegate_depth = self.delegate_depth;
         let orchestrator = self.sub_agent_orchestrator.clone();
@@ -175,9 +210,7 @@ impl AgentLoop {
                         .filter(|s| !s.is_empty())
                         .map(str::to_string)
                         .collect();
-                    if let Some(bad) =
-                        crate::sub_agent_safety::contains_blocked_tool(&names)
-                    {
+                    if let Some(bad) = crate::sub_agent_safety::contains_blocked_tool(&names) {
                         orchestrated.push(ToolResult::err(
                             &tc.id,
                             crate::sub_agent_safety::block_reason(&bad),
@@ -237,15 +270,9 @@ impl AgentLoop {
                         .get("role")
                         .and_then(|v| v.as_str())
                         .and_then(|s| match s {
-                            "explore" => Some(
-                                crate::sub_agent_orchestrator::SubAgentRole::Explore,
-                            ),
-                            "plan" => Some(
-                                crate::sub_agent_orchestrator::SubAgentRole::Plan,
-                            ),
-                            "general" => Some(
-                                crate::sub_agent_orchestrator::SubAgentRole::General,
-                            ),
+                            "explore" => Some(crate::sub_agent_orchestrator::SubAgentRole::Explore),
+                            "plan" => Some(crate::sub_agent_orchestrator::SubAgentRole::Plan),
+                            "general" => Some(crate::sub_agent_orchestrator::SubAgentRole::General),
                             _ => None,
                         })
                         .unwrap_or_default(),
@@ -412,7 +439,10 @@ impl AgentLoop {
             // terminal's own 120s inner timeout.
             let per_call_timeout = hermix_tools::dispatch::per_tool_budget(&tool_name);
             let sem = semaphore.clone();
-            join_set.spawn(async move {
+            // Keep an owned copy for the task index below — the original
+            // is moved into the spawned future.
+            let index_call_id = tool_call_id.clone();
+            let spawned = join_set.spawn(async move {
                 // Acquire a concurrency permit before executing the handler.
                 // This blocks (await) until a slot is free, throttling
                 // the batch to MAX_CONCURRENT_TOOLS simultaneous calls.
@@ -505,6 +535,10 @@ impl AgentLoop {
                     ),
                 }
             });
+            // task_id → tool_call_id, so a panicking task is attributed
+            // to the call that actually panicked instead of to whichever
+            // slot happened to be empty first.
+            task_index.insert(spawned.id(), index_call_id);
         }
 
         // Collect results in INPUT order. tool_calls.iter().enumerate()
@@ -560,15 +594,80 @@ impl AgentLoop {
         // The old flat 300s could kill a legitimate batch of long
         // foreground calls before any of them finished.
         let total_timeout = hermix_tools::dispatch::batch_budget(
-            &tool_calls.iter().map(|tc| tc.function.name.clone()).collect::<Vec<_>>(),
+            &tool_calls
+                .iter()
+                .map(|tc| tc.function.name.clone())
+                .collect::<Vec<_>>(),
         );
         let deadline = std::time::Instant::now() + total_timeout;
 
         while ordered.iter().any(Option::is_none) {
             let remaining = deadline.saturating_duration_since(std::time::Instant::now());
             if remaining.is_zero() {
-                // Batch-wide timeout: fill every still-pending slot
-                // with a synthetic error envelope.
+                // Batch-wide timeout. Before giving up on the in-flight
+                // tasks, give them a short bounded grace period and drain
+                // whatever lands — dropping the `JoinSet` here would abort
+                // them mid-await, and an already-dispatched write (a
+                // `tokio::fs` op on the blocking pool, a `terminal`
+                // command that has already started) completes anyway.
+                // Draining lets those land in THIS turn's results instead
+                // of being silently orphaned with no observer.
+                const DRAIN_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
+                let grace_deadline = std::time::Instant::now() + DRAIN_GRACE;
+                let mut drained = 0usize;
+                while std::time::Instant::now() < grace_deadline {
+                    let left = grace_deadline.saturating_duration_since(std::time::Instant::now());
+                    match tokio::time::timeout(left, join_set.join_next()).await {
+                        Ok(Some(Ok(res))) => {
+                            drained += 1;
+                            if let Some(&idx) = index_by_id.get(res.tool_call_id.as_str()) {
+                                if ordered[idx].is_none() {
+                                    if res.is_error {
+                                        if let Some(tc) =
+                                            tool_calls.iter().find(|tc| tc.id == res.tool_call_id)
+                                        {
+                                            tool_errors.push(ToolErrorRecord {
+                                                tool_name: tc.function.name.clone(),
+                                                error: res.content.clone(),
+                                                turn,
+                                            });
+                                        }
+                                    }
+                                    ordered[idx] = Some(res);
+                                }
+                            }
+                        }
+                        // A panicked/cancelled task during the drain: record
+                        // it against its real slot and move on.
+                        Ok(Some(Err(join_err))) => {
+                            let dead = join_err.id();
+                            if let Some(call_id) = task_index.remove(&dead) {
+                                if let Some(&idx) = index_by_id.get(call_id.as_str()) {
+                                    if ordered[idx].is_none() {
+                                        let tc = &tool_calls[idx];
+                                        ordered[idx] = Some(ToolResult::err(
+                                            &tc.id,
+                                            format!("Task join error during drain: {join_err}"),
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                        // Drained fully, or grace expired.
+                        Ok(None) | Err(_) => break,
+                    }
+                }
+                if drained > 0 {
+                    tracing::warn!(
+                        drained,
+                        grace_secs = DRAIN_GRACE.as_secs(),
+                        "batch timeout: drained in-flight tool results before synthesizing errors"
+                    );
+                }
+                // Fill every still-pending slot with a synthetic error
+                // envelope. Anything still `None` here genuinely never
+                // produced a result, so the message must warn the model
+                // that the tool may have had side effects.
                 for (idx, slot) in ordered.iter_mut().enumerate() {
                     if slot.is_none() {
                         let tc = &tool_calls[idx];
@@ -576,8 +675,8 @@ impl AgentLoop {
                             &tc.id,
                             format!(
                                 "batch-wide timeout after {}s: tool '{}' did not return in time. \
-                                 [请勿重试] 整批工具执行超时, 重复发起大概率仍会超时, 请改用其他方式 \
-                                 或告知用户该操作暂不可用。",
+                                 [请勿盲目重试] 该工具可能已部分执行（副作用可能已发生），\
+                                 重试前请先确认其影响；建议改用其他方式或告知用户该操作暂不可用。",
                                 total_timeout.as_secs(),
                                 tc.function.name,
                             ),
@@ -619,36 +718,40 @@ impl AgentLoop {
                     }
                 }
                 Ok(Some(Err(join_err))) => {
-                    // We don't track the task_id → tool_call_id
-                    // mapping here (the JoinSet path doesn't need it
-                    // for the normal case), so we can't pinpoint
-                    // which call panicked. Place the error in the
-                    // first empty slot and log the dead task id.
-                    // If no empty slot exists (everything else
-                    // already returned), the outer loop will exit on
-                    // its own and the missing_slot fallback will
-                    // catch the gap.
+                    // Attribute the failure to the call that actually
+                    // panicked. The previous fallback ("first empty
+                    // slot") mislabeled `tool_errors.tool_name` and left
+                    // the real slot to be filled later by a synthetic
+                    // batch-timeout error, hiding the true culprit.
                     let dead_id = join_err.id();
-                    if let Some((idx, slot)) = ordered
-                        .iter_mut()
-                        .enumerate()
-                        .find(|(_, s)| s.is_none())
-                    {
-                        let tc = &tool_calls[idx];
-                        tool_errors.push(ToolErrorRecord {
-                            tool_name: tc.function.name.clone(),
-                            error: format!("Task join error: {join_err}"),
-                            turn,
-                        });
-                        *slot = Some(ToolResult::err(
-                            &tc.id,
-                            format!("Task join error (id={dead_id}): {join_err}"),
-                        ));
-                    } else {
+                    let Some(dead_call_id) = task_index.remove(&dead_id) else {
                         tracing::error!(
-                            "execute_tool_calls: JoinSet join error with no empty slot: {join_err}"
+                            "execute_tool_calls: JoinSet join error with unknown task id: {join_err}"
                         );
-                    }
+                        continue;
+                    };
+                    let Some(&idx) = index_by_id.get(dead_call_id.as_str()) else {
+                        tracing::error!(
+                            call_id = %dead_call_id,
+                            "execute_tool_calls: panicked task has no matching tool_call"
+                        );
+                        continue;
+                    };
+                    let tc = &tool_calls[idx];
+                    tracing::error!(
+                        tool = %tc.function.name,
+                        call_id = %tc.id,
+                        "execute_tool_calls: tool task panicked or was cancelled"
+                    );
+                    tool_errors.push(ToolErrorRecord {
+                        tool_name: tc.function.name.clone(),
+                        error: format!("Task join error: {join_err}"),
+                        turn,
+                    });
+                    ordered[idx] = Some(ToolResult::err(
+                        &tc.id,
+                        format!("Task join error: {join_err}"),
+                    ));
                 }
                 Ok(None) => break, // JoinSet drained before we filled every slot
                 Err(_elapsed) => continue, // outer loop will catch zero remaining
@@ -671,15 +774,33 @@ impl AgentLoop {
 
         ordered
             .into_iter()
-            .map(|slot| {
+            .enumerate()
+            .map(|(idx, slot)| {
                 slot.unwrap_or_else(|| {
                     // Final safety net: every slot should be filled by
-                    // the loops above, but if not (e.g. an inner panic
-                    // and a rerouted fallback), synthesise an error
-                    // rather than panic the agent.
+                    // the loops above, but if not (e.g. the JoinSet
+                    // draining early via `Ok(None) => break`), synthesise
+                    // an error rather than panic the agent.
+                    //
+                    // The id MUST be this slot's own `tool_calls[idx].id`.
+                    // The previous hardcoded `"missing"` produced a tool
+                    // message that pairs with nothing, which is exactly the
+                    // dangling-tool_call state the provider rejects
+                    // ("tool call result does not follow tool call") — the
+                    // "safety net" was itself the bug.
+                    let call_id = tool_calls
+                        .get(idx)
+                        .map(|tc| tc.id.as_str())
+                        .unwrap_or("missing");
+                    tracing::error!(
+                        tool_call_id = %call_id,
+                        "execute_tool_calls: slot left unfilled; synthesising error result"
+                    );
                     ToolResult::err(
-                        "missing",
-                        "execute_tool_calls: no result produced for this slot (internal error)".to_string(),
+                        call_id,
+                        "execute_tool_calls: this tool call produced no result (internal error). \
+                         [请勿盲目重试] 它可能已部分执行（副作用可能已发生）。"
+                            .to_string(),
                     )
                 })
             })
@@ -703,6 +824,44 @@ impl AgentLoop {
     }
 }
 
+/// Split a batch into (calls that run, envelopes for the ones that must
+/// not).
+///
+/// Every call gets an answer: the first `limit` execute, the excess get a
+/// "not started" envelope. The old code returned envelopes for the excess
+/// ONLY, leaving the first `limit` calls with no result while the
+/// assistant message still listed all of them — a dangling `tool_calls`
+/// that providers reject ("tool call result does not follow tool call";
+/// `AnthropicProvider` has no repair pass for it).
+///
+/// A free function rather than a method so the returned slice borrows
+/// from `tool_calls` instead of from `&self`.
+fn split_at_limit(tool_calls: &[ToolCall], limit: usize) -> (&[ToolCall], Vec<ToolResult>) {
+    tracing::warn!(
+        calls = tool_calls.len(),
+        limit,
+        skipped = tool_calls.len() - limit,
+        "Tool call limit exceeded; running the first {} and answering the rest as not-started",
+        limit
+    );
+    let skipped: Vec<ToolResult> = tool_calls
+        .iter()
+        .skip(limit)
+        .map(|tc| {
+            ToolResult::err(
+                &tc.id,
+                format!(
+                    "Tool call limit reached ({}/{}). This tool call was not started. \
+                     [请勿盲目重试] 它没有执行过；若确需执行，请减少同一轮的工具调用数量。",
+                    limit,
+                    tool_calls.len()
+                ),
+            )
+        })
+        .collect();
+    (&tool_calls[..limit], skipped)
+}
+
 /// Detect whether a tool call mutates a memory store whose change must be
 /// reflected in the next system-prompt rebuild.
 /// The `memory` tool rewrites `memories/MEMORY.md` / `memories/USER.md` on
@@ -724,4 +883,60 @@ fn is_memory_store_mutation(tc: &ToolCall) -> bool {
         args.get("action").and_then(|a| a.as_str()),
         Some("add") | Some("replace") | Some("remove")
     )
+}
+
+#[cfg(test)]
+mod split_limit_tests {
+    use super::*;
+    use hermix_core::FunctionCall;
+
+    fn calls(n: usize) -> Vec<ToolCall> {
+        (0..n)
+            .map(|i| ToolCall {
+                id: format!("call-{i}"),
+                function: FunctionCall {
+                    name: "terminal".to_string(),
+                    arguments: "{}".to_string(),
+                },
+            })
+            .collect()
+    }
+
+    #[test]
+    fn every_call_gets_an_answer() {
+        // Regression: the old code returned envelopes only for the
+        // skipped calls, so the first `limit` calls had no result while
+        // the assistant message still listed all of them — a dangling
+        // tool_calls that AnthropicProvider (no repair pass) rejects.
+        let batch = calls(5);
+        let (run, skipped) = split_at_limit(&batch, 2);
+        assert_eq!(run.len(), 2, "the first `limit` calls run");
+        assert_eq!(skipped.len(), 3, "the excess get an envelope");
+        let answered: Vec<&str> = run
+            .iter()
+            .map(|tc| tc.id.as_str())
+            .chain(skipped.iter().map(|r| r.tool_call_id.as_str()))
+            .collect();
+        assert_eq!(answered.len(), 5);
+        for tc in &batch {
+            assert!(
+                answered.contains(&tc.id.as_str()),
+                "call {} got no result at all",
+                tc.id
+            );
+        }
+    }
+
+    #[test]
+    fn skipped_envelopes_carry_their_own_call_ids() {
+        let batch = calls(3);
+        let (_, skipped) = split_at_limit(&batch, 1);
+        assert_eq!(skipped[0].tool_call_id, "call-1");
+        assert_eq!(skipped[1].tool_call_id, "call-2");
+        assert!(
+            skipped[0].content.contains("not started"),
+            "the model must be told the call never ran, got: {}",
+            skipped[0].content
+        );
+    }
 }

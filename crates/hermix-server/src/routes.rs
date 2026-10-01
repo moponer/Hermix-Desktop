@@ -1465,6 +1465,9 @@ pub(crate) async fn send_message(
         approval_requester: None,
         on_event: None,
         pre_approval_checker: None,
+        // LAN-reachable transport with no way to render an approval
+        // card (no WS socket) -> a Dangerous tool must not run silently.
+        approval_fallback: Some(hermix_core::approval::ApprovalFallback::Deny),
         on_prefetch_intent: None,
         // type-B: non-streaming HTTP path doesn't own a WS
         // socket, so there is no soft-shutdown signal to wake any

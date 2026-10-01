@@ -209,8 +209,33 @@ fn write_atomic(path: &Path, contents: &str) -> Result<(), AgentError> {
     let tmp = path.with_extension("tmp");
     std::fs::write(&tmp, contents)
         .map_err(|e| AgentError::Io(format!("write {}: {e}", tmp.display())))?;
+    // `key.pem` 是 TLS 私钥。裸 `fs::write` 走进程 umask，多用户机器上
+    // 同机其他账号可能可读。必须在 rename 之前设置 —— rename 保留
+    // inode 权限，顺序反了等于没设。公钥 / 指纹等非机密文件走
+    // `write_atomic_public`，不收紧。
+    if is_secret_material(path) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))
+                .map_err(|e| {
+                    AgentError::Io(format!("chmod {}: {e}", tmp.display()))
+                })?;
+        }
+    }
     std::fs::rename(&tmp, path)
         .map_err(|e| AgentError::Io(format!("rename {}: {e}", path.display())))
+}
+
+/// 是否为含私钥的文件。
+fn is_secret_material(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("pem"))
+        && path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .is_some_and(|s| s.to_ascii_lowercase().contains("key"))
 }
 
 #[cfg(test)]

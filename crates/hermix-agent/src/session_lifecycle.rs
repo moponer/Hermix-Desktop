@@ -31,9 +31,9 @@ use hermix_focus::{FocusStack, MemoryRouter, SessionFrame};
 use crate::agent_config::AgentConfig;
 use crate::agent_helpers::AgentCallbacks;
 use crate::agent_loop::PostLlmAction;
+use crate::agent_loop::RouteState;
 use crate::compression::CompressionMetrics;
 use crate::context::ContextManager;
-use crate::agent_loop::RouteState;
 use crate::cost_guard::CostGuard;
 use crate::message_cache::MessageCache;
 use crate::message_helpers::{
@@ -79,6 +79,84 @@ pub fn should_emit_session_reset_hook(messages: &[Message]) -> bool {
         .unwrap_or(false)
 }
 
+/// Append a synthetic `tool` result for every `tool_call` that never
+/// received one.
+///
+/// Why this has to happen: most providers reject a request whose history
+/// contains an assistant message with `tool_calls` but no following
+/// `tool` message for each call ("tool call result does not follow tool
+/// call", 400). `GenericProvider` papers over this at request time with
+/// `strip_unanswered_tool_calls`, but `AnthropicProvider` has no such
+/// repair pass — an unanswered `tool_use` block is a live failure there.
+/// The same dangling state also reaches SQLite through
+/// `AgentResult.messages`, so a reloaded session would 400 forever.
+///
+/// Runs here rather than mutating `ctx` because this is the last point
+/// where the final message vector is materialised; every termination
+/// path in `run()` / `run_stream()` funnels through
+/// `AgentLoop::finalize_agent_result` -> this function, so no path can
+/// slip past.
+///
+/// The synthetic text tells the model the call may have had side
+/// effects, so it does not blindly retry a `write_file` that in fact
+/// completed.
+fn backfill_unanswered_tool_results(messages: &mut Vec<Message>) -> usize {
+    use std::collections::HashSet;
+
+    // Collect ids already answered anywhere in the history. A `tool`
+    // message is the only thing that counts as an answer; a later
+    // assistant turn does not "consume" an earlier pending call.
+    let answered: HashSet<&str> = messages
+        .iter()
+        .filter(|m| m.role == MessageRole::Tool)
+        .filter_map(|m| m.tool_call_id.as_deref())
+        .collect();
+
+    let mut insertions: Vec<(usize, Message)> = Vec::new();
+    for (idx, msg) in messages.iter().enumerate() {
+        let Some(tool_calls) = msg.tool_calls.as_ref() else {
+            continue;
+        };
+        if tool_calls.is_empty() {
+            continue;
+        }
+        for tc in tool_calls {
+            if answered.contains(tc.id.as_str()) {
+                continue;
+            }
+            insertions.push((
+                idx,
+                Message::tool_result(
+                    &tc.id,
+                    format!(
+                        "This tool call produced no result — the turn ended before it \
+                         completed. [Do not blindly retry] It may have partially executed, \
+                         so side effects may already have happened. Verify the current \
+                         state before re-running `{}`.",
+                        tc.function.name
+                    ),
+                    Some(tc.function.name.clone()),
+                ),
+            ));
+        }
+    }
+
+    if insertions.is_empty() {
+        return 0;
+    }
+    let count = insertions.len();
+    // Insert in reverse index order so earlier insertions don't shift the
+    // positions of later ones. Each synthetic result goes immediately
+    // after its assistant message, which is what
+    // `enforce_strict_tool_pairing` requires — appending at the tail
+    // would be dropped as an orphan by the provider sanitiser.
+    insertions.sort_by(|a, b| b.0.cmp(&a.0));
+    for (idx, msg) in insertions {
+        messages.insert(idx + 1, msg);
+    }
+    count
+}
+
 /// Build the [`Message`] vector for return / persistence (applies the
 /// `persist_user_message` override when supplied).
 pub fn messages_for_persisted_result(
@@ -87,10 +165,17 @@ pub fn messages_for_persisted_result(
     persist_user_idx: Option<usize>,
 ) -> Vec<Message> {
     let mut msgs = ctx.get_messages().to_vec();
-    if let (Some(idx), Some(override_text)) = (
-        persist_user_idx,
-        config.persist_user_message.as_deref(),
-    ) {
+    let backfilled = backfill_unanswered_tool_results(&mut msgs);
+    if backfilled > 0 {
+        tracing::warn!(
+            backfilled,
+            "backfilled unanswered tool calls before persisting; the turn ended \
+             with tool_calls that never received a result"
+        );
+    }
+    if let (Some(idx), Some(override_text)) =
+        (persist_user_idx, config.persist_user_message.as_deref())
+    {
         if let Some(msg) = msgs.get_mut(idx) {
             if msg.role == MessageRole::User {
                 msg.content = Some(override_text.to_string());
@@ -181,19 +266,19 @@ pub fn prepare_assistant_turn(
         );
     }
 
-if assistant_msg
-.tool_calls
-.as_ref()
-.is_some_and(|v| !v.is_empty())
-&& crate::message_helpers::assistant_visible_text_after_think_blocks(&assistant_msg)
-{
-message_cache.store_content_with_tools(
-assistant_msg
-.content
-.as_deref()
-.map(|s| s.trim().to_string())
-.filter(|s| !s.is_empty()),
-);
+    if assistant_msg
+        .tool_calls
+        .as_ref()
+        .is_some_and(|v| !v.is_empty())
+        && crate::message_helpers::assistant_visible_text_after_think_blocks(&assistant_msg)
+    {
+        message_cache.store_content_with_tools(
+            assistant_msg
+                .content
+                .as_deref()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
+        );
     }
     (history_includes_tool, assistant_msg, tool_calls)
 }
@@ -220,18 +305,18 @@ pub fn apply_fallback_outcome(
             ctx.add_message(Message::user(&msg));
             true
         }
-EmptyResponseAction::ContinueWithSystemNudge(msg) => {
-tracing::debug!(
-nudge_count = autonomous_nudge_count,
-total_turns,
-"autonomous_mode{}: nudging LLM back into action",
-if stream_mode { "" } else { " [non-stream]" }
-);
-ctx.add_message(Message::system(&msg));
-true
-}
-EmptyResponseAction::Finalize => false,
-}
+        EmptyResponseAction::ContinueWithSystemNudge(msg) => {
+            tracing::debug!(
+                nudge_count = autonomous_nudge_count,
+                total_turns,
+                "autonomous_mode{}: nudging LLM back into action",
+                if stream_mode { "" } else { " [non-stream]" }
+            );
+            ctx.add_message(Message::system(&msg));
+            true
+        }
+        EmptyResponseAction::Finalize => false,
+    }
 }
 
 /// .3a : the post-LLM logic that was duplicated
@@ -399,20 +484,20 @@ where
     if !tool_calls_present {
         // No tool calls — agent is done. Save the last assistant
         // content for ack-continuation tracking.
-if response
-.message
-.content
-.as_deref()
-.is_some_and(|s| !s.is_empty())
-{
-message_cache.store_content_with_tools(
-response
-.message
-.content
-.as_deref()
-.map(|s| s.trim().to_string())
-.filter(|s| !s.is_empty()),
-);
+        if response
+            .message
+            .content
+            .as_deref()
+            .is_some_and(|s| !s.is_empty())
+        {
+            message_cache.store_content_with_tools(
+                response
+                    .message
+                    .content
+                    .as_deref()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty()),
+            );
         }
         return Ok(crate::agent_loop::PostResponseAction::Finalize);
     }
@@ -479,7 +564,13 @@ pub fn finalize_agent_result(
             }),
         );
     }
-    crate::memory_prefetch::memory_on_session_end(config, memory_router, focus_stack, messages, memory_callbacks);
+    crate::memory_prefetch::memory_on_session_end(
+        config,
+        memory_router,
+        focus_stack,
+        messages,
+        memory_callbacks,
+    );
     let _ = crate::hook_dispatch::invoke_hook(
         plugin_manager,
         crate::plugins::HookType::OnSessionFinalize,
@@ -579,8 +670,7 @@ pub(crate) fn classify_post_llm_response(
         return PostLlmAction::Break(r);
     }
     // Truly empty (no reasoning, no visible text, no tools): retry.
-    if *inner_empty < config.empty_content_max_retries
-    {
+    if *inner_empty < config.empty_content_max_retries {
         *inner_empty += 1;
         tracing::warn!(
             "empty assistant response — retrying ({}/{})",
@@ -636,8 +726,7 @@ pub async fn handle_max_iterations(
             // error). Degrade to the configured default model once — the
             // summary should run on the user's chosen model first; the
             // default is only a fallback when that model is broken.
-            let fallback = (config.model.as_str() != active_model)
-                .then(|| config.model.as_str());
+            let fallback = (config.model.as_str() != active_model).then(|| config.model.as_str());
             if let Some(fb) = fallback {
                 match llm_provider
                     .chat_completion(
@@ -666,5 +755,103 @@ pub async fn handle_max_iterations(
             );
             Ok(None)
         }
+    }
+}
+
+#[cfg(test)]
+mod backfill_tests {
+    use super::*;
+    use hermix_core::{MessageRole, ToolCall};
+
+    fn assistant_with_calls(ids: &[&str]) -> Message {
+        let mut m = Message::assistant("working");
+        m.tool_calls = Some(
+            ids.iter()
+                .map(|id| ToolCall {
+                    id: (*id).to_string(),
+                    function: hermix_core::FunctionCall {
+                        name: "terminal".to_string(),
+                        arguments: "{}".to_string(),
+                    },
+                })
+                .collect(),
+        );
+        m
+    }
+
+    #[test]
+    fn backfills_a_call_that_never_got_a_result() {
+        let mut msgs = vec![
+            Message::user("do it"),
+            assistant_with_calls(&["call-1"]),
+            // turn ended here — no tool result
+        ];
+        let n = backfill_unanswered_tool_results(&mut msgs);
+        assert_eq!(n, 1, "one dangling call should be backfilled");
+        let last = msgs.last().expect("backfilled message");
+        assert_eq!(last.role, MessageRole::Tool);
+        assert_eq!(last.tool_call_id.as_deref(), Some("call-1"));
+    }
+
+    #[test]
+    fn leaves_answered_calls_untouched() {
+        let mut msgs = vec![
+            Message::user("do it"),
+            assistant_with_calls(&["call-1"]),
+            Message::tool_result("call-1", "done", Some("terminal")),
+        ];
+        let n = backfill_unanswered_tool_results(&mut msgs);
+        assert_eq!(n, 0, "an answered call must not be duplicated");
+        assert_eq!(msgs.len(), 3);
+    }
+
+    #[test]
+    fn backfills_only_the_dangling_call_in_a_mixed_batch() {
+        let mut msgs = vec![
+            Message::user("do it"),
+            assistant_with_calls(&["call-1", "call-2", "call-3"]),
+            Message::tool_result("call-2", "done", Some("terminal")),
+        ];
+        let n = backfill_unanswered_tool_results(&mut msgs);
+        assert_eq!(n, 2, "call-1 and call-3 are unanswered");
+        let ids: Vec<&str> = msgs
+            .iter()
+            .filter(|m| m.role == MessageRole::Tool)
+            .filter_map(|m| m.tool_call_id.as_deref())
+            .collect();
+        assert!(ids.contains(&"call-1"));
+        assert!(ids.contains(&"call-2"));
+        assert!(ids.contains(&"call-3"));
+    }
+
+    #[test]
+    fn synthetic_result_is_adjacent_to_its_assistant_message() {
+        // `enforce_strict_tool_pairing` drops tool messages whose pairing
+        // was broken by an intervening non-tool message, so adjacency is
+        // a hard requirement, not a nicety.
+        let mut msgs = vec![
+            Message::user("first"),
+            assistant_with_calls(&["call-1"]),
+            Message::user("intervening user turn"),
+            assistant_with_calls(&["call-2"]),
+        ];
+        backfill_unanswered_tool_results(&mut msgs);
+        for (i, m) in msgs.iter().enumerate() {
+            if m.role == MessageRole::Tool {
+                let prev = msgs[i - 1].role;
+                assert_eq!(
+                    prev,
+                    MessageRole::Assistant,
+                    "tool result at {i} must directly follow its assistant message"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn no_op_on_a_clean_history() {
+        let mut msgs = vec![Message::user("hi"), Message::assistant("hello")];
+        assert_eq!(backfill_unanswered_tool_results(&mut msgs), 0);
+        assert_eq!(msgs.len(), 2);
     }
 }

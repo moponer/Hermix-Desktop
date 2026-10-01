@@ -31,8 +31,21 @@ export interface RefLike<T> {
  * 大多数字段 App.tsx 已经持有；这里集中声明，供 ChatView 在切换处调。
  */
 export interface ChatStateResetDeps {
-  /** useStreamChat.cancel —— 取消进行中流，会关 WS + 触发 onCancel 链路。 */
-  cancelStream: () => void;
+  /**
+   * useStreamChat.cancel —— 取消进行中流，会关 WS + 触发 onCancel 链路。
+   *
+   * 传 `activeSessionId` 是必需的：不传时 `cancel` 会跳过归属守卫
+   * （useStreamChat.ts:778），于是**在会话 B 里切模型会连带杀掉会话 A
+   * 正在跑的流**，并把 A 的待审批全部 deny 掉。A 的流与用户在 B 里的操作
+   * 毫无关系，不该被牵连。
+   */
+  cancelStream: (sessionId?: string) => boolean;
+  /**
+   * 用户当前所在会话 —— cancel 的归属锚点，见上。
+   * `null` 表示当前没有活跃会话（例如刚清空列表），此时不做归属
+   * 限制，与旧行为一致。
+   */
+  activeSessionId?: string | null;
   /** WS 原始 send，用于把 in-flight 审批以 denied 主动拒绝。 */
   wsSendRaw: WsSendRaw;
   /** React state setters / 清除函数。 */
@@ -83,8 +96,16 @@ export interface ChatStateResetDeps {
  * - 后端 `sessions.model` —— 由 setSelectedModelAndPersist 同步 PATCH。
  */
 export function resetChatStateForModelSwitch(deps: ChatStateResetDeps): void {
-  // 1) cancel 进行中的流。
-  deps.cancelStream();
+  // 1) cancel 进行中的流 —— 只针对用户当前所在会话。
+  //
+  // `undefined` means "no guard" to `useStreamChat.cancel`, but `null`
+  // means "no active session". Passing `null` straight through would be
+  // read as `undefined` there and skip the ownership check, which is the
+  // bug this call site is fixing. Normalize: no active session → no live
+  // stream of ours to cancel, so skip the call entirely.
+  if (deps.activeSessionId) {
+    deps.cancelStream(deps.activeSessionId);
+  }
 
   // 2) 清 UI / 派生 state。
   deps.clearStreamError();
