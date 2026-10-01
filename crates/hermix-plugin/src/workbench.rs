@@ -1409,13 +1409,25 @@ mod tests {
     /// 主台标记是「全局至多一个」的互斥约束 —— 增量维护迟早会留下多个
     /// true，那时工作台页面只能靠排序猜该显示谁。set_primary 必须一次
     /// 扫全表把不变式钉死。
+    /// `HERMIX_HOME` is process-global and `cargo test` runs tests in this
+    /// binary on parallel threads. Any other test that sets it (or a
+    /// user-level `HERMIX_HOME` inherited from the developer's shell)
+    /// can change the value *between* this test's `set_var` and its
+    /// `create_workbench`, so the manifests land in one directory and
+    /// `list_workbenches` scans another — hence the intermittent
+    /// `workbench not found: workbench-<id>`.
+    ///
+    /// A unique directory name only fixes directory-name collisions; it
+    /// does nothing about the shared env var. Serialize against a
+    /// process-wide lock for the whole test, and restore the previous
+    /// value on the way out so we do not leak into later tests.
+    static HERMIX_HOME_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn set_primary_clears_previous_marker() {
-        // HERMIX_HOME 是进程级全局：本测试设了它，同二进制的其他并行测试
-        // （toolbox 那两个会落盘）也会写进这个目录。此前用 PID 固定目录名
-        // + 开头 remove_dir_all，会把它们正在写的目录抽走 → 偶发
-        // `os error 3 系统找不到指定的路径`。改为每次运行用唯一目录，
-        // 只在本测试全部写完后清理。
+        let _env_guard = HERMIX_HOME_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved = std::env::var("HERMIX_HOME").ok();
+
         let tmp = std::env::temp_dir().join(format!(
             "hx-wb-primary-{}-{:?}",
             std::process::id(),
@@ -1450,8 +1462,15 @@ mod tests {
         assert!(primary_workbench(&[]).is_none());
 
         assert!(set_primary("不存在的工作台").is_err());
-        // 故意不删这个目录：HERMIX_HOME 是进程级全局，同二进制的并行测试
-        // 也会往这里落盘，测试中途删目录会让它们撞上 `os error 3`。目录在
-        // %TEMP% 下，由系统回收。
+
+        // Restore whatever the developer / an earlier test had, so we
+        // don't leak our temp dir into tests that run after this one.
+        // Deliberately not deleting the directory: %TEMP% is reclaimed
+        // by the OS, and removing it mid-run would race anything still
+        // writing there.
+        match saved {
+            Some(v) => std::env::set_var("HERMIX_HOME", v),
+            None => std::env::remove_var("HERMIX_HOME"),
+        }
     }
 }
