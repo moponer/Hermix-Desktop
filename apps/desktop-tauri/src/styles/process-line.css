@@ -163,32 +163,3 @@
   padding: 4px 0 4px 21px;
 }
 
-/* ════════════════════════════════════════════════════════════════════
-   会话级遥测条（2026-10-01）
-   ════════════════════════════════════════════════════════════════════
-   消息列顶部一行，双列：左「已执行 1 小时 8 分 28 秒」/ 右「166 token/s」。
-   它替代了原先塞在每轮折叠头里的会话级统计 —— 折叠头一行挤六种信息、
-   每轮换组合，读不动。折叠头现在只回答两件事：花了多久、有没有问题。
-
-   刻意做得很轻：颜色用 faint、字号 11px、只有一条 1px 分隔线。
-   遥测是「想知道才看」的东西，不该和正文抢注意力。 */
-.session-telemetry {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  max-width: var(--width-reading, 1240px);
-  margin: 0 auto;
-  padding: 0 0 6px;
-  border-bottom: 1px solid var(--color-border-subtle);
-  font-size: var(--text-tiny, 11px);
-  color: var(--color-text-faint);
-  font-family: var(--font-family-primary);
-}
-.session-telemetry-elapsed { white-space: nowrap; }
-.session-telemetry-right { min-width: 0; }
-.session-telemetry-rate {
-  white-space: nowrap;
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
-}

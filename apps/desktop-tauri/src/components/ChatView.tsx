@@ -16,7 +16,6 @@ import type {
 import type { ChatOverrides, StreamPhase, TodoSnapshotItem } from "../hooks/useStreamChat";
 import type { ConfigCategory } from "./SystemConfigPanel";
 import { CompactionStatusBanner } from "./CompactionStatusBanner";
-import { SessionTelemetry, useTurnStart } from "./SessionTelemetry";
 import { mergeConsecutiveAssistantMessages, isRowRenderable, shouldShowAssistantHeader, mergeLegacyToolMessages } from "./chatUtils";
 import type { PendingImage } from "./chatUtils";
 import type { AcuiState } from "../acui/types";
@@ -272,8 +271,6 @@ export const ChatView = memo(function ChatView({
 }: ChatViewProps) {
   const stream = useStreamChatContext();
   const isStreaming = stream.streamingSessionId === session?.id;
-  // 本轮起点 —— 遥测条的 token/s 需要真实分母。
-  const turnStartedAt = useTurnStart(isStreaming);
   // 工作台会话（workbench_id 已盖戳）→ 右栏差异化文案：欢迎页、placeholder
   // 都说"这台工作台"的事，而不是复读主对话的通用问候（方案 A）。
   const isWorkbenchChat = !!session?.workbench_id;
@@ -968,12 +965,10 @@ export const ChatView = memo(function ChatView({
         />
       )}
 
-      <SessionTelemetry
-        sessionStartedAt={session?.created_at}
-        isStreaming={isStreaming}
-        completionTokens={stream.usageSnapshot?.completionTokens}
-        turnStartedAt={turnStartedAt}
-      />
+      {/* 外层 padding 抄消息列滚动容器的 `px-3 sm:px-4`，内层再套
+          `max-w-reading mx-auto` —— 这样状态行和 `.msg-stream-list`
+          落在同一个盒子里，左边缘与正文一致（直接铺在 `.chat-surface`
+          上时它是居中窄条，和正文差一截）。 */}
 
       <MessageList
         ref={messageListRef}
