@@ -1,9 +1,9 @@
 # Decision Note: 任务报告书 — 2026-10-01 审计响应与批次执行
 
-Status: implemented — 8 项复核已批复同意；29 commit，净减 3498 行，CI gate 11/11
+Status: implemented — 8 项复核已批复同意；30 commit，净减 3451 行，CI gate 11/11
 
 > 基线 `f469b2ae`（worktree 分支已并入 main）。
-> 净变更 **149 文件 / +6616 / -10114（净减 3498 行）**。
+> 净变更 **149 文件 / +6663 / -10114（净减 3451 行）**。
 
 ## Decision
 
