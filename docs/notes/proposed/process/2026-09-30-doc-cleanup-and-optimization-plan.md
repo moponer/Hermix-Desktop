@@ -1,6 +1,6 @@
 # Decision Note: 文档清理与新决策记录制度全面落地 + 代码优化路线图
 
-Status: proposed — 待评审后分批执行；执行主体可以是其他 agent 会话
+Status: implemented — 批次 A/B/C/D/E/G 已执行（2026-10-01）；仅批次 F 保留待立项
 
 ## Decision
 
@@ -168,3 +168,44 @@ Status: proposed — 待评审后分批执行；执行主体可以是其他 agen
 | 根 README.md / AGENTS.md | 有效 | 保留原位 |
 
 汇总：删除 22、归档 19、迁 notes 12、保留 6（+根 3）。
+---
+
+## 执行结果（2026-10-01）
+
+三个 commit，全部验证通过（`cargo check --workspace --all-targets` 零错误、
+hermix-agent 1043 / hermix-core 181 / hermix-server 262 测试全绿、`tsc` exit 0）。
+
+| commit | 内容 |
+|---|---|
+| `a796dca6` | 批次 A：删 16 篇杂件、归档 22 篇过期（净减 5368 行） |
+| `a613c993` | 批次 B：11 篇迁入 notes 三态 + 门禁由 warn 升级为 fail |
+| `1a5251fd` | 批次 C/D/E/G 的代码项 + 审批 fail-open 显式化 |
+
+### 执行中发现并纠正的迁移表错误
+
+1. **`CHANNEL_WORKSPACE_SCOPE.md` 在 git 历史中从不存在**。迁移表与门禁
+   白名单都列了它，实际查无此文件。已从白名单剔除。
+2. **两篇群聊文档改判 `rejected` 而非 `implemented`**。`80fab6be`（09-21）
+   已删除整个群聊模块（前后端源码零残留），而迁移表写于 09-30，晚于删除
+   9 天，"现行依据"判断已失效。已父级复核确认。
+3. **`FILE_PREVIEW_REFACTOR` 改判 `implemented` 而非 `proposed`**。
+   `components/preview/` 下 10 个文件按提案结构落地，PreviewPanel 736→315 行。
+4. **`transport-stdio-migration` 归档而非删除**。文档自述"Phase 0 RFC 未实施"，
+   但 stdio 已是活跃传输（`stdio_session.rs` + `stdio_bridge.rs`）——文档没跟上代码。
+5. **实际归档 17 篇而非 19 篇**。逐项核验后，迁移表"归档"行只有 17 项存在。
+
+### 批次 G 结论：无可执行项
+
+- **G1（死 crate）**：23 个 crate 逐一核查依赖边，**无孤儿**。
+- **G2（死脚本）**：`verify-stability-suite.py` 与 `verify-workbench-ui.cjs`
+  零引用，但两者都是**一次性验收工具**（稳定性 P0-7 验收清单、UI 状态注入
+  测试），按设计不通过 CI 调用。删除会丢失验收依据，故保留。
+
+### 明确未做
+
+- **D.1（LLM 429/5xx 重试）**：基于错误前提。`llm_retry.rs:159` 已有重试循环
+  （默认 3 次 + `jittered_backoff`），`classify_error` 把 429 与 5xx 都路由进去。
+- **E.3（配对错误预算按来源分桶）**：经评估**否决**。6 位码空间下 5 次上限是
+  唯一的暴力破解防线，改成按 IP 反而降低安全性。
+- **批次 F**（事件溯源 / Windows ACL 沙箱 / PTC）：季度级架构改造，
+  按原提案保留"单独立项再评审"。
