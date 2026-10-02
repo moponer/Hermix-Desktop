@@ -3409,7 +3409,12 @@ return {
         className="app-body"
         data-left-open={sidebarVisible ? "true" : "false"}
         data-right-open={rightOpen ? "true" : "false"}
-        data-right-rail={!rightOpen ? "true" : "false"}
+        // 折叠态留 44px 竖条（components-layout.css §右列"折叠"态）：那是 chat
+        // 场景的设计——常驻角标提醒"有 N 个产物没看"。设置页没有产物可提醒，
+        // 留一条纯装饰窄条就是纯占地方，所以这里额外判一次 page。
+        // 只改 rail 不改 right-open：rightOpen 是真实状态（产物面板开没开），
+        // 不该被页面导航篡改，返回对话时还能恢复原样。
+        data-right-rail={!rightOpen && page !== "systemconfig" ? "true" : "false"}
         style={{
           "--ab-left-w": `${left.width}px`,
           "--ab-right-w": rightOpen ? `${right.width}px` : "0px",
@@ -3510,8 +3515,10 @@ return {
         </div>
         {/* 右栏折叠态：44px 竖条，作为栅格第三列的原位替代。CSS 在
             <900px 视口下把列宽与竖条一并撤掉（那里 44px 不如留给正文）。
-            展开走 handleToggleRight —— 窄视口下它会先扩窗再开，不会抖。 */}
-        {!rightOpen && (
+            展开走 handleToggleRight —— 窄视口下它会先扩窗再开，不会抖。
+            设置页不渲染：竖条的存在意义是"提醒有产物没看"，设置页没有产物，
+            留着是纯装饰；且它会把整幅宽度切掉一截，反而不像整页设置。 */}
+        {!rightOpen && page !== "systemconfig" && (
           <RightRail count={previewTabs.length} onExpand={() => void handleToggleRight()} />
         )}
       </div>

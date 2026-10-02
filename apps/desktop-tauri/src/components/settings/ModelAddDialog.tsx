@@ -22,18 +22,45 @@ type Choice =
   | { kind: "builtin"; def: ProviderDef }
   | { kind: "custom" };
 
+/** 编辑目标：打开弹窗时预填当前这条模型，保存走"更新"而非"新建"。 */
+export interface EditingTarget {
+  providerId: string;
+  modelId: string;
+  isCustom: boolean;
+  /** 自定义项的展示名（自定义 id 由展示名派生，回填时保持一致）。 */
+  displayName?: string;
+  /** 自定义项的端点基址。内置项留空——用 PROVIDERS 里的官方地址。 */
+  baseUrl?: string;
+}
+
 interface Props {
   onClose: () => void;
   /** 保存完成：内置走 env var + 启用模型，自定义走 createCustomProvider。 */
   onSaved: () => void;
+  /** 非空 = 编辑模式：预填该模型，标题与保存语义都变。 */
+  editing?: EditingTarget;
 }
 
-export function ModelAddDialog({ onClose, onSaved }: Props) {
-  const [choice, setChoice] = useState<Choice | null>(null);
+export function ModelAddDialog({ onClose, onSaved, editing }: Props) {
+  const editChoice: Choice | null = !editing
+    ? null
+    : editing.isCustom
+      ? { kind: "custom" }
+      : {
+          kind: "builtin",
+          def: PROVIDERS.find((p) => p.id === editing.providerId) ?? PROVIDERS[0],
+        };
+  const [choice, setChoice] = useState<Choice | null>(editChoice);
   const [apiKey, setApiKey] = useState("");
-  const [baseUrl, setBaseUrl] = useState("");
-  const [modelId, setModelId] = useState("");
-  const [displayName, setDisplayName] = useState("");
+  // 编辑时预填端点：自定义用存下来的；内置用该厂商的官方地址（用户仍可改，
+  // 代理/中转场景要能覆盖）。
+  const [baseUrl, setBaseUrl] = useState(() => {
+    if (!editing) return "";
+    if (editing.baseUrl) return editing.baseUrl;
+    return editChoice && editChoice.kind === "builtin" ? editChoice.def.baseUrl : "";
+  });
+  const [modelId, setModelId] = useState(editing?.modelId ?? "");
+  const [displayName, setDisplayName] = useState(editing?.displayName ?? "");
   const [caps, setCaps] = useState({ tools: true, images: false, thinking: false });
   const [testing, setTesting] = useState(false);
   const [test, setTest] = useState<api.InlineTestResponse | null>(null);
@@ -47,8 +74,11 @@ export function ModelAddDialog({ onClose, onSaved }: Props) {
   );
 
   const testNow = useCallback(async () => {
-    if (!effectiveBaseUrl.trim() || !apiKey.trim()) {
-      setError("接口地址与 API Key 都不能为空");
+    // 内置项不要求本地填 Key——密钥在后端 env 里，由服务端按 providerId 取。
+    // 端点地址仍然必填（它是测试目标，且允许用户改成代理地址）。
+    const needsKey = choice?.kind !== "builtin";
+    if (!effectiveBaseUrl.trim() || (needsKey && !apiKey.trim())) {
+      setError(needsKey ? "接口地址与 API Key 都不能为空" : "接口地址不能为空");
       return;
     }
     setTesting(true);
@@ -58,6 +88,7 @@ export function ModelAddDialog({ onClose, onSaved }: Props) {
         baseUrl: effectiveBaseUrl.trim(),
         apiKey: apiKey.trim(),
         model: modelId.trim() || undefined,
+        providerId: choice?.kind === "builtin" ? choice.def.id : undefined,
       });
       setTest(r);
     } catch (e) {
@@ -65,7 +96,7 @@ export function ModelAddDialog({ onClose, onSaved }: Props) {
     } finally {
       setTesting(false);
     }
-  }, [effectiveBaseUrl, apiKey, modelId]);
+  }, [effectiveBaseUrl, apiKey, modelId, choice]);
 
   const save = useCallback(async () => {
     if (!choice) return;
@@ -75,12 +106,34 @@ export function ModelAddDialog({ onClose, onSaved }: Props) {
       if (choice.kind === "builtin") {
         // 内置供应商的凭据是环境变量（MINIMAX_API_KEY 这类），与后端
         // agent_builder 的读取方式保持一致，不另造存储。
-        await api.setEnvVar(choice.def.keyEnvVar, apiKey.trim());
+        // 编辑态允许不填 Key：空值保持原样，不把已配好的 Key 洗掉。
+        if (apiKey.trim()) {
+          await api.setEnvVar(choice.def.keyEnvVar, apiKey.trim());
+        }
+        // 模型名已预填时确保它在启用清单里（编辑内置模型 = 保住它可用）。
+        if (modelId.trim()) {
+          const cur = await api.getModelList();
+          const id = `${choice.def.id}:${modelId.trim()}`;
+          const existing = (cur?.models ?? []).map((m) => ({
+            provider_id: m.provider_id,
+            model_id: m.model_id,
+          }));
+          if (!existing.some((m) => `${m.provider_id}:${m.model_id}` === id)) {
+            await api.saveModelList(
+              [...existing, { provider_id: choice.def.id, model_id: modelId.trim() }],
+              null,
+            );
+          }
+        }
       } else {
-        const safeId = `custom-${(displayName.trim() || "provider")
-          .toLowerCase()
-          .replace(/[^a-z0-9]+/g, "-")
-          .replace(/^-|-$/g, "")}`;
+        // 自定义：POST /api/custom-providers 是 upsert（entry().or_insert 后
+        // 覆盖字段），编辑时沿用原 id 就完成更新，不必先删再建。
+        const safeId =
+          editing?.providerId ??
+          `custom-${(displayName.trim() || "provider")
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, "-")
+            .replace(/^-|-$/g, "")}`;
         await api.createCustomProvider({
           id: safeId,
           display_name: displayName.trim() || safeId,
@@ -96,7 +149,7 @@ export function ModelAddDialog({ onClose, onSaved }: Props) {
     } finally {
       setSaving(false);
     }
-  }, [choice, apiKey, displayName, effectiveBaseUrl, modelId, onSaved, onClose]);
+  }, [choice, apiKey, displayName, effectiveBaseUrl, modelId, editing, onSaved, onClose]);
 
   return createPortal(
     <div
@@ -124,7 +177,11 @@ export function ModelAddDialog({ onClose, onSaved }: Props) {
             </button>
           )}
           <span className="text-sm font-semibold text-text-primary">
-            {choice ? `添加 ${choice.kind === "builtin" ? choice.def.name : "自定义"} 模型` : "添加模型"}
+            {editing
+              ? `编辑 ${choice && choice.kind === "builtin" ? choice.def.name : "自定义"} 模型`
+              : choice
+                ? `添加 ${choice.kind === "builtin" ? choice.def.name : "自定义"} 模型`
+                : "添加模型"}
           </span>
           <button
             onClick={onClose}

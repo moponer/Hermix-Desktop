@@ -15,7 +15,9 @@ import { Plus, Star, Trash2, Pencil, Zap, Loader2 } from "lucide-react";
 import * as api from "../../api";
 import { storage, STORAGE_KEYS } from "../../utils/storageCompat";
 import { ProviderIcon } from "../ProviderIcon";
-import { ModelAddDialog } from "./ModelAddDialog";
+import { ModelAddDialog, type EditingTarget } from "./ModelAddDialog";
+import { PROVIDERS } from "./settingsUtils";
+import type { CustomProviderSummary } from "../../api";
 
 interface ModelRow {
   id: string; // `${providerId}:${modelId}`
@@ -28,6 +30,19 @@ interface ModelRow {
 
 const MODEL_CONFIG_KEY = STORAGE_KEYS.modelConfig;
 
+/** inline 测试的 `kind` → 中文。后端已做四分类，这里只做展示层翻译，
+ *  不让用户对着一串 HTTP 状态码猜。 */
+function inlineErrorText(r: api.InlineTestResponse): string {
+  if (r.error) return r.error;
+  switch (r.kind) {
+    case "apikey": return "API Key 无效或未配置";
+    case "quota": return "额度不足或触发限流";
+    case "network": return "网络不可达";
+    case "bad_request": return "端点地址有误";
+    default: return `服务端返回 ${r.status}`;
+  }
+}
+
 export function ModelListTab() {
   const [rows, setRows] = useState<ModelRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -35,6 +50,9 @@ export function ModelListTab() {
   const [addOpen, setAddOpen] = useState(false);
   const [testingId, setTestingId] = useState<string | null>(null);
   const [testNote, setTestNote] = useState<Record<string, string>>({});
+  /** 非空 = 弹窗处于编辑态，预填这一条。null = 新增。 */
+  const [editing, setEditing] = useState<EditingTarget | null>(null);
+  const [customs, setCustoms] = useState<CustomProviderSummary[]>([]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -46,6 +64,7 @@ export function ModelListTab() {
         api.getProviderMeta().catch(() => []),
       ]);
       const customIds = new Set(customs.map((c) => c.id));
+      setCustoms(customs);
       const metaNames = new Map(meta.map((m) => [m.id, m.id]));
       const def = list?.default_model ?? "";
       const built: ModelRow[] = (list?.models ?? []).map((m) => ({
@@ -132,23 +151,34 @@ export function ModelListTab() {
     }
   }, [rows, load]);
 
-  /** 行内测试：内置供应商没有保存的 base_url，只能用已存的 env key 走
-   *  provider 级端点；自定义直接用它的 base_url。 */
+  /** 行内测试。两条路径，因为凭据存放位置不同：
+   *  · 内置项：Key 只在后端 env 里，前端读不到 → 把 providerId 交给
+   *    inline 端点，由服务端按 `env_var_name_for_provider` 取。Key 不过网。
+   *  · 自定义项：Key 在 config.yaml → 走 provider 级 test-connection，
+   *    由服务端自己读配置。 */
   const testRow = useCallback(async (row: ModelRow) => {
     setTestingId(row.id);
+    setTestNote((n) => ({ ...n, [row.id]: "" }));
     try {
-      const customs = await api.getCustomProviders().catch(() => []);
-      const custom = customs.find((c) => c.id === row.providerId);
-      if (custom) {
+      const builtin = PROVIDERS.find((p) => p.id === row.providerId);
+      if (builtin) {
+        const r = await api.testProviderInline({
+          baseUrl: builtin.baseUrl,
+          apiKey: "",
+          model: row.modelId,
+          providerId: builtin.id,
+        });
+        setTestNote((n) => ({
+          ...n,
+          [row.id]: r.ok
+            ? `连接正常 · ${r.latency_ms} ms${r.model_found === false ? " · 该模型不在端点 /models 列表中" : ""}`
+            : `失败：${inlineErrorText(r)}`,
+        }));
+      } else {
         const r = await api.testCustomProviderConnection(row.providerId);
         setTestNote((n) => ({
           ...n,
-          [row.id]: r.ok ? "连接成功" : `失败：${r.error ?? "未知原因"}`,
-        }));
-      } else {
-        setTestNote((n) => ({
-          ...n,
-          [row.id]: "内置供应商：请在此行的编辑里用新 Key 测试连接",
+          [row.id]: r.ok ? "连接正常" : `失败：${r.error ?? "未知原因"}`,
         }));
       }
     } catch (e) {
@@ -167,12 +197,14 @@ export function ModelListTab() {
     <div className="p-6 max-w-3xl mx-auto">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h3 className="text-[length:var(--text-ui)] font-semibold text-text-primary">自定义模型</h3>
+          <h3 className="text-[length:var(--text-ui)] font-semibold text-text-primary">
+            模型配置
+          </h3>
           <p className="text-xs text-text-muted mt-0.5">
-            模型添加后写入 config.yaml 持久保存。内置供应商只需 API Key，自定义支持任何 OpenAI 兼容端点。
+            统一管理内置与自定义模型。内置供应商只需填 API Key；自定义支持任何 OpenAI 兼容端点。
           </p>
         </div>
-        <button onClick={() => setAddOpen(true)} className={primaryBtn}>
+        <button onClick={() => { setEditing(null); setAddOpen(true); }} className={primaryBtn}>
           <Plus className="icon-sm" />
           添加模型
         </button>
@@ -218,7 +250,15 @@ export function ModelListTab() {
                 <IconBtn title="设为默认" onClick={() => void setDefault(row.id)}>
                   <Star className={`icon-sm ${row.isDefault ? "fill-current text-accent" : ""}`} />
                 </IconBtn>
-                <IconBtn title="编辑" onClick={() => setAddOpen(true)}>
+                <IconBtn title="编辑" onClick={() => { setEditing({
+                  providerId: row.providerId,
+                  modelId: row.modelId,
+                  isCustom: !row.isBuiltin,
+                  displayName: row.isBuiltin ? undefined : row.providerName,
+                  baseUrl: row.isBuiltin
+                    ? undefined
+                    : customs.find((c) => c.id === row.providerId)?.base_url,
+                }); setAddOpen(true); }}>
                   <Pencil className="icon-sm" />
                 </IconBtn>
                 <IconBtn title="测试连接" onClick={() => void testRow(row)}>
@@ -233,7 +273,13 @@ export function ModelListTab() {
         )}
       </div>
 
-      {addOpen && <ModelAddDialog onClose={() => setAddOpen(false)} onSaved={() => void load()} />}
+      {addOpen && (
+        <ModelAddDialog
+          editing={editing ?? undefined}
+          onClose={() => { setAddOpen(false); setEditing(null); }}
+          onSaved={() => void load()}
+        />
+      )}
     </div>
   );
 }
