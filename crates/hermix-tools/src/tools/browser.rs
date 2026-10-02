@@ -102,6 +102,325 @@ pub fn register(registry: &ToolRegistry, backend: Arc<dyn BrowserBackend>) {
         RiskLevel::Safe,
         Arc::new(BrowserPressHandler::new(backend.clone())),
     );
+    register_with(
+        "browser_ptc",
+        "⚡",
+        // 单次投递多步程序：步骤里含 js 步骤时整体 Dangerous（见
+        // execute 时逐步骤的风险判定——注册档取上限，运行时再收紧）
+        RiskLevel::Dangerous,
+        Arc::new(BrowserPtcHandler::new(backend.clone())),
+    );
+}
+
+// ---------------------------------------------------------------------------
+// BrowserPtcHandler（批次 N1：单次投递多步浏览器程序）
+// ---------------------------------------------------------------------------
+
+/// PTC 步骤。`browser_ptc` 的一次调用 = 一个步骤数组，顺序执行、
+/// 单次往返——把「调两个命令、看结果、再调两个命令」的 N-1 次 LLM
+/// 在环折叠成 1 次（对标 ego-browser 的 heredoc 投递模型，以结构化
+/// 步骤替代 JS heredoc：无 Node 依赖、每步骤风险可判定、可审计）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case")]
+pub enum PtcStep {
+    /// 导航（等待 load 事件）。
+    Navigate { url: String },
+    /// 语义快照（可过滤），结果可存入变量供后续步骤引用。
+    Snapshot {
+        #[serde(default)]
+        target: Option<String>,
+        #[serde(default)]
+        compact: bool,
+        /// 存入变量名；后续步骤以 `$name` 引用快照文本。
+        #[serde(default)]
+        store: Option<String>,
+    },
+    /// 点击（支持 `[ref=eN]` 快照句柄或 CSS 选择器）。
+    Click { target: String },
+    /// 输入（target 同上；text 为要键入的内容）。
+    Fill { target: String, text: String },
+    /// 按键。
+    Press { key: String },
+    /// 等待选择器出现。
+    WaitFor { selector: String, timeout_ms: u64 },
+    /// 页内 JS 求值（Dangerous 步骤；结果可 store）。
+    Js {
+        expression: String,
+        #[serde(default)]
+        store: Option<String>,
+    },
+    /// 把变量值（或字面量）追加到最终输出。
+    Emit { value: String },
+}
+
+/// PTC 程序执行结果：每步骤一行摘要 + 变量表 + emit 的最终输出。
+#[derive(Debug, Serialize)]
+struct PtcOutcome {
+    steps: Vec<PtcStepLog>,
+    vars: std::collections::BTreeMap<String, String>,
+    output: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct PtcStepLog {
+    index: usize,
+    op: String,
+    /// ok / error / stored:<var>
+    status: String,
+    detail: Option<String>,
+}
+
+/// 步骤参数里的 `$var` 引用替换（快照文本可能很大，只做整体值替换）。
+fn resolve_refs(value: &str, vars: &std::collections::BTreeMap<String, String>) -> String {
+    if let Some(name) = value.strip_prefix('$') {
+        vars.get(name).cloned().unwrap_or_else(|| value.to_string())
+    } else {
+        value.to_string()
+    }
+}
+
+pub struct BrowserPtcHandler {
+    backend: std::sync::Arc<dyn BrowserBackend>,
+    /// 单程序步骤上限（防灌水；对齐 MultiEdit 的 50 上限惯例）。
+    max_steps: usize,
+}
+
+impl BrowserPtcHandler {
+    pub fn new(backend: std::sync::Arc<dyn BrowserBackend>) -> Self {
+        Self {
+            backend,
+            max_steps: 50,
+        }
+    }
+
+    async fn execute_step(
+        &self,
+        backend: &std::sync::Arc<dyn BrowserBackend>,
+        step: &PtcStep,
+        vars: &mut std::collections::BTreeMap<String, String>,
+        output: &mut Vec<String>,
+    ) -> Result<String, String> {
+        match step {
+            PtcStep::Navigate { url } => backend
+                .navigate_with_wait(url, std::time::Duration::from_secs(30))
+                .await
+                .map(|_| format!("navigated: {url}"))
+                .map_err(|e| e.to_string()),
+            PtcStep::Snapshot {
+                target,
+                compact,
+                store,
+            } => {
+                let snap = backend
+                    .snapshot_with_options(None, target.as_deref(), *compact)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                if let Some(name) = store {
+                    vars.insert(name.clone(), snap.clone());
+                }
+                Ok(format!("snapshot: {} chars", snap.len()))
+            }
+            PtcStep::Click { target } => backend
+                .click(&resolve_refs(target, vars))
+                .await
+                .map(|_| format!("clicked: {target}"))
+                .map_err(|e| e.to_string()),
+            PtcStep::Fill { target, text } => backend
+                .r#type(&resolve_refs(target, vars), &resolve_refs(text, vars))
+                .await
+                .map(|_| format!("filled: {target}"))
+                .map_err(|e| e.to_string()),
+            PtcStep::Press { key } => backend
+                .press(key)
+                .await
+                .map(|_| format!("pressed: {key}"))
+                .map_err(|e| e.to_string()),
+            PtcStep::WaitFor {
+                selector,
+                timeout_ms,
+            } => backend
+                .wait_for(selector, *timeout_ms, None, None, None)
+                .await
+                .map(|r| format!("wait_for: {r}"))
+                .map_err(|e| e.to_string()),
+            PtcStep::Js {
+                expression,
+                store,
+            } => {
+                let expr = resolve_refs(expression, vars);
+                let result = backend
+                    .evaluate_js(&expr)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                if let Some(name) = store {
+                    // evaluate_js 返回的是 {status,type,value} 信封——存变量时
+                    // 剥壳只存 value，后续 $name 引用拿到的就是干净的页面值，
+                    // 不带信封噪音（快照类 store 不经过这里，不受影响）。
+                    let stored = serde_json::from_str::<Value>(&result)
+                        .ok()
+                        .filter(|v| v.get("value").is_some())
+                        .and_then(|v| v.get("value").cloned())
+                        .map(|v| match v {
+                            Value::String(s) => s,
+                            other => other.to_string(),
+                        })
+                        .unwrap_or_else(|| result.clone());
+                    vars.insert(name.clone(), stored);
+                }
+                Ok(result)
+            }
+            PtcStep::Emit { value } => {
+                let resolved = resolve_refs(value, vars);
+                output.push(resolved);
+                Ok("emitted".into())
+            }
+        }
+    }
+}
+
+#[async_trait]
+impl ToolHandler for BrowserPtcHandler {
+    async fn execute(&self, params: Value) -> Result<String, ToolError> {
+        // 入参兼容两种形状：{steps:[...]} 直接数组，或 {program:{steps:[...]}}。
+        let steps_value = params
+            .get("steps")
+            .or_else(|| params.get("program").and_then(|p| p.get("steps")))
+            .cloned()
+            .ok_or_else(|| {
+                ToolError::ExecutionFailed(
+                    "缺少 steps 数组：browser_ptc 接收 {\"steps\":[{\"op\":\"navigate\",...}]}".into(),
+                )
+            })?;
+        let steps: Vec<PtcStep> = serde_json::from_value(steps_value)
+            .map_err(|e| ToolError::ExecutionFailed(format!("steps 解析失败：{e}")))?;
+        if steps.is_empty() {
+            return Err(ToolError::ExecutionFailed("steps 为空".into()));
+        }
+        if steps.len() > self.max_steps {
+            return Err(ToolError::ExecutionFailed(format!(
+                "steps 数量 {} 超过上限 {}（防灌水；拆多次投递）",
+                steps.len(),
+                self.max_steps
+            )));
+        }
+
+        // 会话路由 + 自动 bootstrap（对齐其他 browser_* 工具的行为）。
+        if let Some(s) = self.backend.as_sessioned() {
+            s.set_active_session(session_from_params(&params));
+            s.ensure_browser_running().await;
+        }
+
+        let mut vars = std::collections::BTreeMap::new();
+        let mut output: Vec<String> = Vec::new();
+        let mut logs: Vec<PtcStepLog> = Vec::with_capacity(steps.len());
+
+        // 逐步骤执行：首错即停（fail-fast）——后续步骤的语义依赖前序
+        // 状态（导航→快照→点击），静默跳过会让程序带病继续。错误里
+        // 带已完成的步骤日志，方便模型定位是哪一步坏了。
+        for (i, step) in steps.iter().enumerate() {
+            let op = match step {
+                PtcStep::Navigate { .. } => "navigate",
+                PtcStep::Snapshot { .. } => "snapshot",
+                PtcStep::Click { .. } => "click",
+                PtcStep::Fill { .. } => "fill",
+                PtcStep::Press { .. } => "press",
+                PtcStep::WaitFor { .. } => "wait_for",
+                PtcStep::Js { .. } => "js",
+                PtcStep::Emit { .. } => "emit",
+            };
+            match self.execute_step(&self.backend, step, &mut vars, &mut output).await {
+                Ok(detail) => logs.push(PtcStepLog {
+                    index: i,
+                    op: op.into(),
+                    status: "ok".into(),
+                    detail: Some(detail),
+                }),
+                Err(e) => {
+                    logs.push(PtcStepLog {
+                        index: i,
+                        op: op.into(),
+                        status: "error".into(),
+                        detail: Some(e.clone()),
+                    });
+                    let body = json!({
+                        "error": format!("步骤 {i}（{op}）失败：{e}"),
+                        "steps_completed": logs,
+                        "hint": "don't blindly retry — the browser state is mid-program; \
+                                 fix the failing step or re-plan from the snapshot",
+                    });
+                    return Ok(body.to_string());
+                }
+            }
+        }
+
+        let outcome = PtcOutcome {
+            steps: logs,
+            vars: vars
+                .into_iter()
+                .map(|(k, v)| {
+                    // 变量表里存的是快照/求值全文——返回时截断防灌水，
+                    // 完整内容已在 emit 输出或按需再次 snapshot。
+                    let mut v = v;
+                    if v.len() > 20_000 {
+                        // truncate 收的是**字节**下标，遇非字符边界会 panic。快照
+                        // 文本含 CJK/emoji 时 20000 极可能落在汉字中间，所以先把
+                        // 边界回退到最近的合法 char 再截——宁可少截几个字节，
+                        // 也不能让一次截断把整个工具调用炸掉。
+                        let mut cut = 20_000;
+                        while cut > 0 && !v.is_char_boundary(cut) {
+                            cut -= 1;
+                        }
+                        v.truncate(cut);
+                        v.push_str("…[truncated]");
+                    }
+                    (k, v)
+                })
+                .collect(),
+            output,
+        };
+        Ok(json!({
+            "status": "ok",
+            "steps": outcome.steps,
+            "vars": outcome.vars,
+            "output": outcome.output,
+        })
+        .to_string())
+    }
+
+    fn schema(&self) -> ToolSchema {
+        let mut props = IndexMap::new();
+        props.insert(
+            "steps".into(),
+            json!({
+                "type": "array",
+                "description": "Ordered browser operations, executed in one round trip. \
+                                Ops: navigate{url} / snapshot{target?,compact?,store?} / \
+                                click{target:'[ref=eN]'|css} / fill{target,text} / \
+                                press{key} / wait_for{selector,timeout_ms} / \
+                                js{expression,store?} / emit{value}. \
+                                Values may reference stored results via '$name'.",
+                "items": { "type": "object" }
+            }),
+        );
+        props.insert(
+            "session".into(),
+            json!({
+                "type": "string",
+                "description": "Session id for per-session backend isolation (same as browser_navigate)."
+            }),
+        );
+        tool_schema(
+            "browser_ptc",
+            "Run a MULTI-STEP browser program in ONE tool call: navigate, snapshot, click, \
+             fill, wait, evaluate page JS, and emit results — without returning to the model \
+             between steps. Use this instead of chaining browser_navigate/click/snapshot \
+             whenever the next action doesn't depend on inspecting intermediate results in \
+             prose. Store large snapshots/JS results into variables and `emit` only the \
+             distilled outcome to keep context small. Fails fast on the first bad step and \
+             returns the completed-step log. Max 50 steps.",
+            JsonSchema::object(props, vec!["steps".into()]),
+        )
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -280,6 +599,16 @@ pub trait BrowserBackend: Send + Sync {
     async fn get_images(&self, selector: Option<&str>) -> Result<String, ToolError>;
     async fn vision(&self, instruction: &str) -> Result<String, ToolError>;
     async fn console(&self, action: &str) -> Result<String, ToolError>;
+    /// 页内 JS 求值（批次 N1：`browser_ptc` 的 `js` 步骤逃生舱）。
+    /// 语义 = CDP `Runtime.evaluate`（returnByValue）。默认不支持；
+    /// CDP 后端覆盖实现。归 Dangerous 风险档（可读页面任意数据、
+    /// 触发任意页内行为），与 terminal 写命令同级。
+    async fn evaluate_js(&self, expression: &str) -> Result<String, ToolError> {
+        let _ = expression;
+        Err(ToolError::ExecutionFailed(
+            "evaluate_js not implemented for this backend".into(),
+        ))
+    }
     /// visually highlight an element on the page. Default impl
     /// is a no-op (used by cloud / CamoFox backends that don't support
     /// DOM mutation); the CDP backend overrides with a CSS-pulse.
@@ -1271,6 +1600,14 @@ mod tests {
         async fn console(&self, action: &str) -> Result<String, ToolError> {
             Ok(format!("Console: {}", action))
         }
+        async fn evaluate_js(&self, expression: &str) -> Result<String, ToolError> {
+            if expression.contains("boom") {
+                return Err(ToolError::ExecutionFailed(
+                    "js evaluation threw: page-side boom".into(),
+                ));
+            }
+            Ok(json!({"status": "ok", "type": "number", "value": 2}).to_string())
+        }
     }
 
     fn backend() -> std::sync::Arc<dyn BrowserBackend> {
@@ -1299,6 +1636,84 @@ mod tests {
         let handler = BrowserSnapshotHandler::new(backend());
         let result = handler.execute(json!({})).await.unwrap();
         assert!(result.contains("snapshot"));
+    }
+
+    #[tokio::test]
+    async fn test_browser_ptc_program() {
+        let handler = BrowserPtcHandler::new(backend());
+        let result = handler
+            .execute(json!({
+                "steps": [
+                    {"op": "navigate", "url": "https://example.com"},
+                    {"op": "snapshot", "store": "snap"},
+                    {"op": "click", "target": "[ref=e12]"},
+                    {"op": "fill", "target": "#q", "text": "$snap"},
+                    {"op": "js", "expression": "1+1", "store": "answer"},
+                    {"op": "emit", "value": "$answer"}
+                ]
+            }))
+            .await
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["status"], "ok");
+        // 6 步全 ok
+        let steps = parsed["steps"].as_array().unwrap();
+        assert_eq!(steps.len(), 6);
+        assert!(steps.iter().all(|s| s["status"] == "ok"));
+        // 变量替换链路：fill 用了 $snap，emit 解析 $answer（js 信封剥壳后
+        // 只留 value，数字 2 序列化为字符串 "2"）。$var 引用是整体值替换
+        // （非子串插值——快照文本大，插值没意义）
+        assert_eq!(parsed["vars"]["snap"], "Page snapshot");
+        assert_eq!(parsed["vars"]["answer"], "2");
+        assert_eq!(parsed["output"][0], "2");
+    }
+
+    #[tokio::test]
+    async fn test_browser_ptc_fail_fast() {
+        let handler = BrowserPtcHandler::new(backend());
+        let result = handler
+            .execute(json!({
+                "steps": [
+                    {"op": "navigate", "url": "https://example.com"},
+                    {"op": "js", "expression": "throw boom"},
+                    {"op": "click", "target": "#never_reached"}
+                ]
+            }))
+            .await
+            .unwrap();
+        // fail-fast：js 步骤报错后整体以 error 结构返回（不是 Err），且
+        // 第三步绝不执行。
+        let parsed: Value = serde_json::from_str(&result).unwrap();
+        assert!(parsed["error"].as_str().unwrap().contains("步骤 1"));
+        let done = parsed["steps_completed"].as_array().unwrap();
+        assert_eq!(done.len(), 2);
+        assert_eq!(done[0]["status"], "ok");
+        assert_eq!(done[1]["status"], "error");
+    }
+
+    #[tokio::test]
+    async fn test_browser_ptc_step_limit_and_missing_steps() {
+        let handler = BrowserPtcHandler::new(backend());
+        // 缺 steps → 明确报错
+        let missing = handler.execute(json!({})).await.unwrap_err().to_string();
+        assert!(missing.contains("steps"));
+        // 超上限 → 拒绝执行
+        let flood: Vec<Value> = (0..51)
+            .map(|i| json!({"op": "emit", "value": i.to_string()}))
+            .collect();
+        let over = handler
+            .execute(json!({"steps": flood}))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(over.contains("上限"));
+        // 空数组 → 拒绝执行
+        let empty = handler
+            .execute(json!({"steps": []}))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(empty.contains("steps 为空"));
     }
 
     // -- SSRF pre-check -------------------------------------------------

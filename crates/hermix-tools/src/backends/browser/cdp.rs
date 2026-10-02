@@ -492,6 +492,47 @@ impl BrowserBackend for CdpBrowserBackend {
         .to_string())
     }
 
+    /// 页内 JS 求值（批次 N1：`browser_ptc` 的 `js` 步骤逃生舱）。
+    /// CDP `Runtime.evaluate`（returnByValue + awaitPromise，Promise 结果
+    /// 自动等 resolve）。抛异常时带回 exceptionDetails 的异常文本，让
+    /// 模型直接看到页面侧报错而不是裸的 "evaluate failed"。
+    async fn evaluate_js(&self, expression: &str) -> Result<String, ToolError> {
+        let result = self
+            .cdp_command(
+                "Runtime.evaluate",
+                json!({
+                    "expression": expression,
+                    "returnByValue": true,
+                    "awaitPromise": true,
+                }),
+            )
+            .await?;
+        if let Some(exc) = result.get("exceptionDetails") {
+            let text = exc
+                .get("exception")
+                .and_then(|e| e.get("description"))
+                .and_then(|d| d.as_str())
+                .or_else(|| exc.get("text").and_then(|t| t.as_str()))
+                .unwrap_or("unknown page-side exception");
+            return Err(ToolError::ExecutionFailed(format!(
+                "js evaluation threw: {text}"
+            )));
+        }
+        let value = result.get("result").cloned().unwrap_or(json!(null));
+        // 没有序列化 value（undefined / 远程对象）时退到 description，
+        // 别让模型对着 null 猜页面返回了什么。
+        let serialized = value
+            .get("value")
+            .cloned()
+            .unwrap_or_else(|| value.get("description").cloned().unwrap_or(json!(null)));
+        Ok(json!({
+            "status": "ok",
+            "type": value.get("type").cloned().unwrap_or(json!("unknown")),
+            "value": serialized,
+        })
+        .to_string())
+    }
+
     async fn snapshot(&self) -> Result<String, ToolError> {
         self.snapshot_with_options(None, None, false).await
     }

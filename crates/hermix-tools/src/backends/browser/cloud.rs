@@ -385,6 +385,46 @@ impl BrowserBackend for AutoBrowserBackend {
         }
     }
 
+    async fn navigate_with_wait(
+        &self,
+        url: &str,
+        wait_for_load: std::time::Duration,
+    ) -> Result<String, ToolError> {
+        match &self.inner {
+            ResolvedBrowserBackend::Local(b) => b.navigate_with_wait(url, wait_for_load).await,
+            ResolvedBrowserBackend::CamoFox(b) => b.navigate_with_wait(url, wait_for_load).await,
+            ResolvedBrowserBackend::Cloud(b) => {
+                let (backend, provider, transport) = b.ensure_backend().await?;
+                Ok(annotate_result(
+                    backend.navigate_with_wait(url, wait_for_load).await?,
+                    provider,
+                    transport,
+                ))
+            }
+            ResolvedBrowserBackend::Unsupported(msg) => {
+                Err(ToolError::ExecutionFailed(msg.clone()))
+            }
+        }
+    }
+
+    async fn evaluate_js(&self, expression: &str) -> Result<String, ToolError> {
+        match &self.inner {
+            ResolvedBrowserBackend::Local(b) => b.evaluate_js(expression).await,
+            ResolvedBrowserBackend::CamoFox(b) => b.evaluate_js(expression).await,
+            ResolvedBrowserBackend::Cloud(b) => {
+                let (backend, provider, transport) = b.ensure_backend().await?;
+                Ok(annotate_result(
+                    backend.evaluate_js(expression).await?,
+                    provider,
+                    transport,
+                ))
+            }
+            ResolvedBrowserBackend::Unsupported(msg) => {
+                Err(ToolError::ExecutionFailed(msg.clone()))
+            }
+        }
+    }
+
     async fn snapshot(&self) -> Result<String, ToolError> {
         match &self.inner {
             ResolvedBrowserBackend::Local(b) => b.snapshot().await,

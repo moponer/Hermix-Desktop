@@ -173,6 +173,13 @@ impl BrowserBackend for SessionedBrowserBackend {
             .await
     }
 
+    async fn evaluate_js(&self, expression: &str) -> Result<String, ToolError> {
+        self.registry
+            .backend_for(&self.current_session())
+            .evaluate_js(expression)
+            .await
+    }
+
     fn as_sessioned(&self) -> Option<&crate::backends::browser::SessionedBrowserBackend> {
         Some(self)
     }
