@@ -18,6 +18,8 @@ pub mod file_sync;
 pub mod jobs;
 pub mod local;
 pub mod local_isolation;
+pub mod pty_filter;
+pub mod pty_session;
 pub mod sandbox;
 pub mod manager;
 
@@ -33,6 +35,7 @@ pub mod training;
 pub use file_sync::FileSync;
 pub use hermix_core::TerminalBackend;
 pub use local::LocalBackend;
+pub use pty_session::PtySessionRegistry;
 pub use local_isolation::{HostedAgentPool, LocalIsolationBackend};
 pub use manager::BackendManager;
 pub use training::benchmarks::swe_bench::SweBenchEnv;
