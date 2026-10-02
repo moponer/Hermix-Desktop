@@ -563,8 +563,14 @@
   align-items: center;
   gap: 10px;
   padding: 8px 10px;
-  border-radius: var(--radius-lg);
-  background: var(--color-bg-tertiary);
+  /* 2026-10-02：去掉独立胶囊底色（此前 bg-tertiary + radius-lg），改由
+     Sidebar.tsx 的包裹层画一条 border-top 承担分隔。
+     这块与上方会话列表是**同一个连续表面**——底色差一档，视觉上就成了
+     "侧栏到此为止，下面另有一块"，可它其实还是侧栏的一部分。线只说"边界
+     在哪"，填充色才有"这是什么"的暗示。
+     transparent 而非写 sidebar 色，是为了让 --theme-bg-sidebar 换肤时
+     自动跟随，不必同步改两处。 */
+  background: transparent;
   /* 不再 position: sticky — user-card 是 .pane-left 的直接子代,跟 .sidebar-sections
      (flex: 1 撑满中间) 平级,文档流里永远在 aside 底部。之前的 sticky bottom: 0
      在 zoom 改变 aside 可视边界时会被 overflow: hidden 切掉,视觉上消失。 */

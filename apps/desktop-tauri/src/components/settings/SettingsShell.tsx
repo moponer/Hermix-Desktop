@@ -1,10 +1,6 @@
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
-  useCallback, useEffect, useMemo, useRef, useState,
-  type ReactNode,
-} from "react";
-import { createPortal } from "react-dom";
-import {
-  ArrowLeft, Search, X, Cpu, Boxes, Server, Smartphone, SlidersHorizontal,
+  ArrowLeft, Search, Cpu, Boxes, Server, Smartphone, SlidersHorizontal,
   Plug, Sparkles, Network, Image as ImageIcon, Activity, Shield,
   Archive, Palette,
 } from "lucide-react";
@@ -27,7 +23,14 @@ import { AppearanceTab } from "./AppearanceTab";
 import { ArchiveTab } from "./ArchiveTab";
 
 /**
- * 设置外壳：左导航（分组 + 搜索）+ 右内容区。
+ * 设置页：左导航（分组 + 搜索）+ 右内容区。
+ *
+ * **是整页，不是浮层**。此前沿用旧 `SystemConfigPanel` 的
+ * `createPortal` + `role="dialog"` + 遮罩形态，内容换了外壳没换——结果
+ * 用户看到"还是一个弹窗套新内容"，与 ZCode 那种整页设置的心智不符：
+ * 浮层意味着"临时看一眼、关掉就消失"，而设置是需要停留和反复对照的
+ * 地方。整页后它与「应用 / 工作台」同级，走 `NavPage="systemconfig"`
+ * 路由，`setPage` 切走时还会顺带关掉右侧产物栏（那是 chat 专属 UI）。
  *
  * 为什么从平铺分类改成分组：7 个平铺项在 780px 高的面板里要靠图标 +
  * 两行文字才能区分"工具"和"插件/技能/连接器/工具集"这四件同源的事。
@@ -112,18 +115,19 @@ export function resolvePage(id?: string): SettingsPage {
 }
 
 export interface SettingsShellProps {
-  onClose: () => void;
+  /** 返回上一个页面（回对话）。整页形态下没有"关闭"，只有"离开"。 */
+  onBack: () => void;
   initialPage?: string;
 }
 
-export function SettingsShell({ onClose, initialPage }: SettingsShellProps) {
+export function SettingsShell({ onBack, initialPage }: SettingsShellProps) {
   const [page, setPage] = useState<SettingsPage>(() => resolvePage(initialPage));
   const [query, setQuery] = useState("");
   const [toolQuery, setToolQuery] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
 
-  // ESC 关闭 / cmd+K 聚焦搜索。搜索框抢走焦点后 ESC 要先清空再关闭，
-  // 否则用户按 ESC 只想退出搜索却被直接踢出设置。
+  // cmd+K 聚焦搜索；ESC 先清空搜索、再返回上一页。搜索框抢走焦点后 ESC
+  // 若直接返回，用户"只想退出搜索"却会被踢出设置页 —— 所以分两级。
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
@@ -134,17 +138,12 @@ export function SettingsShell({ onClose, initialPage }: SettingsShellProps) {
       }
       if (e.key === "Escape") {
         if (query) { setQuery(""); return; }
-        onClose();
+        onBack();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose, query]);
-
-  useEffect(() => {
-    document.body.style.overflow = "hidden";
-    return () => { document.body.style.overflow = ""; };
-  }, []);
+  }, [onBack, query]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -169,39 +168,23 @@ export function SettingsShell({ onClose, initialPage }: SettingsShellProps) {
     setQuery("");
   }, []);
 
-  return createPortal(
-    <div
-      className="fixed inset-0 z-[100] flex items-center justify-center"
-      style={{ background: "var(--color-overlay-scrim)" }}
-      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
-    >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label="设置"
-        className="flex flex-col overflow-hidden rounded-xl border border-[var(--color-border-primary)] shadow-[var(--shadow-modal)]"
-        style={{ width: "min(96vw, 1100px)", height: "min(90vh, 780px)", background: "var(--color-bg-app)" }}
-      >
-        {/* Header：左「返回应用」，右关闭 */}
+  return (
+    <div className="flex h-full min-h-0 flex-col bg-[var(--color-bg-app)]">
+        {/* Header：左「返回」，右当前分组说明 */}
         <div className="flex shrink-0 items-center gap-3 border-b border-[var(--color-border-primary)] bg-[var(--color-bg-secondary)] px-4 py-2.5">
           <button
-            onClick={onClose}
+            onClick={onBack}
             className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[length:var(--text-ui)] text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]"
           >
             <ArrowLeft className="icon-sm" />
-            返回应用
+            返回
           </button>
+          <span className="text-[length:var(--text-ui)] font-medium text-[var(--color-text-primary)]">
+            设置
+          </span>
           <span className="ml-auto text-[length:var(--text-meta)] text-[var(--color-text-muted)]">
             {current.hint}
           </span>
-          <button
-            onClick={onClose}
-            className="flex h-7 w-7 items-center justify-center rounded-md text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]"
-            title="关闭 (Esc)"
-            aria-label="关闭设置"
-          >
-            <X className="icon-md" />
-          </button>
         </div>
 
         <div className="flex min-h-0 flex-1 overflow-hidden">
@@ -259,9 +242,7 @@ export function SettingsShell({ onClose, initialPage }: SettingsShellProps) {
             <PageBody page={page} toolQuery={toolQuery} onToolQuery={setToolQuery} />
           </div>
         </div>
-      </div>
-    </div>,
-    document.body,
+    </div>
   );
 }
 

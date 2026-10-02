@@ -3,6 +3,7 @@
 // 的映射集中为一张路由表，App 主区只需调用 renderRoutes 即可。
 import { lazy, Suspense, type ReactNode } from "react";
 import type { NavPage, Session } from "../types";
+import { SystemConfigPanel } from "../components/SystemConfigPanel";
 
 // 重视图（ECharts / 大表单 / 全量列表）懒加载：首次进入才求值模块并挂载，
 // 且切走即卸载，不占常驻内存。chat 页面是首屏主路径，保持静态导入。
@@ -32,6 +33,10 @@ export interface RouteContext {
   chatNode: ReactNode;
   /** 当前激活会话 id —— 工作台浮窗历史下拉高亮当前对话线。 */
   activeSessionId: string | null;
+  /** 设置页「返回」的目标页（回对话）。设置是整页，没有"关闭"只有"离开"。 */
+  settingsBack: () => void;
+  /** 设置页落点分类，由 openSettings 的入参决定。 */
+  settingsCategory?: string;
 }
 
 /** 按当前 page 渲染对应视图。与 App 原条件渲染链 1:1 等价。 */
@@ -49,6 +54,13 @@ export function renderRoutes(page: NavPage, ctx: RouteContext): ReactNode {
       return <Suspense fallback={<RouteLoading />}><AnalyticsView /></Suspense>;
     case "customapps":
       return <Suspense fallback={<RouteLoading />}><CustomAppsView onStartCreateApp={ctx.startCreateAppFlow} /></Suspense>;
+    case "systemconfig":
+      return (
+        <SystemConfigPanel
+          initialCategory={ctx.settingsCategory as never}
+          onBack={ctx.settingsBack}
+        />
+      );
     case "workbench":
       return (
         <Suspense fallback={<RouteLoading />}>
