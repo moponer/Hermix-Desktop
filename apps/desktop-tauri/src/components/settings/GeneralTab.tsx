@@ -1,0 +1,217 @@
+import { useEffect, useState } from "react";
+import { Code2, Briefcase, FolderOpen, Copy, Check } from "lucide-react";
+
+import { useDomainMode } from "../../hooks/useExpert";
+import { useSendKey } from "../../hooks/useSendKey";
+import { getDataDir, openDataDir, copyText } from "../../desktopBridge";
+import { SettingsGroup, SettingsRow, SegmentedControl } from "../ui";
+import { cx } from "../../lib/cx";
+import { toastError } from "../../hooks/useToast";
+
+/**
+ * 通用页：工作模式 + 快捷键 + 数据目录。
+ *
+ * 刻意不列"桌面通知 / 开机自启动 / 显示在菜单栏"三行——它们都要新增
+ * Tauri 插件（notification / autostart / tray），当前依赖树里没有，离线
+ * 也拉不到。摆一行点不动的开关比不摆更糟：用户会以为功能坏了。
+ */
+export function GeneralTab() {
+  return (
+    <div className="space-y-7">
+      <header>
+        <h2 className="text-[length:var(--text-body)] font-medium text-[var(--color-text-primary)]">
+          通用
+        </h2>
+        <p className="mt-1 text-[length:var(--text-meta)] text-[var(--color-text-muted)]">
+          工作模式、输入快捷键与数据位置。
+        </p>
+      </header>
+
+      <ModeCards />
+      <SendKeyRow />
+      <DataDirGroup />
+    </div>
+  );
+}
+
+/* ── L3.3 模式选择卡 ──────────────────────────────────────────────
+   两张卡对应用户的两档心智模型（写代码 / 办公）。存的是 auto | code，
+   与后端 `AgentOverrides.domain_override` 的取值域一致——设置页写进去的
+   值就是每轮发消息时带上的那个值，中间不经过第二份映射。 */
+function ModeCards() {
+  const [mode, setMode] = useDomainMode();
+
+  return (
+    <section className="space-y-2">
+      <h3 className="px-1 text-[length:var(--text-ui)] font-medium text-[var(--color-text-primary)]">
+        工作模式
+      </h3>
+      <div className="grid grid-cols-2 gap-3">
+        <ModeCard
+          label="编程开发"
+          desc="注入代码纪律，grep / 搜索类工具加权。"
+          icon={Code2}
+          active={mode === "code"}
+          onClick={() => setMode("code")}
+        />
+        <ModeCard
+          label="日常办公"
+          desc="由后端按每轮对话内容自动判断，不固定加权。"
+          icon={Briefcase}
+          active={mode === "auto"}
+          onClick={() => setMode("auto")}
+        />
+      </div>
+    </section>
+  );
+}
+
+function ModeCard({
+  label, desc, icon: Icon, active, onClick,
+}: {
+  label: string;
+  desc: string;
+  icon: typeof Code2;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      aria-pressed={active}
+      className={cx(
+        "flex flex-col items-start gap-1.5 rounded-[var(--radius-lg)] border-2 p-4 text-left transition-colors",
+        active
+          ? "border-[var(--color-accent)] bg-[var(--color-accent-on-text)]"
+          : "border-[var(--color-border-secondary)] hover:border-[var(--color-border-primary)]",
+      )}
+    >
+      <div className="flex w-full items-center justify-between">
+        <Icon
+          className={cx(
+            "icon-lg",
+            active ? "text-[var(--color-accent)]" : "text-[var(--color-text-muted)]",
+          )}
+        />
+        {/* 单选环：比纯描边更明确"这组里只能选一个"，也便于色觉障碍用户
+            靠形状而非颜色判断选中态。 */}
+        <span
+          aria-hidden
+          className={cx(
+            "flex h-4 w-4 items-center justify-center rounded-full border-2",
+            active
+              ? "border-[var(--color-accent)] bg-[var(--color-accent)]"
+              : "border-[var(--color-border-primary)]",
+          )}
+        >
+          {active && <Check className="icon-sm text-[var(--color-on-accent)]" />}
+        </span>
+      </div>
+      <div className="text-[length:var(--text-ui)] font-medium text-[var(--color-text-primary)]">
+        {label}
+      </div>
+      <div className="text-[length:var(--text-meta)] leading-relaxed text-[var(--color-text-muted)]">
+        {desc}
+      </div>
+    </button>
+  );
+}
+
+/* ── L3.8 发送快捷键 ──────────────────────────────────────────────
+   Composer 的 keydown 走 ChatView.handleKeyDown（原本写死 Enter 发送）。
+   两边共用 useSendKey：设置页写、输入框读，经 localStorage + 自定义事件
+   同步，不会出现"设置页显示已改、输入框还是旧行为"的分裂。 */
+function SendKeyRow() {
+  const [value, setValue] = useSendKey();
+
+  return (
+    <SettingsGroup title="输入">
+      <SettingsRow
+        title="发送快捷键"
+        description={
+          value === "enter"
+            ? "Enter 发送，Shift + Enter 换行。"
+            : "Ctrl + Enter 发送，Enter 换行。"
+        }
+        control={
+          <SegmentedControl
+            label="发送快捷键"
+            value={value}
+            onChange={setValue}
+            options={[
+              { value: "enter", label: "Enter" },
+              { value: "ctrl_enter", label: "Ctrl + Enter" },
+            ]}
+          />
+        }
+      />
+    </SettingsGroup>
+  );
+}
+
+/* ── L3.7 数据目录 ────────────────────────────────────────────────
+   路径来自 tauri `get_data_dir`，与「打开」按钮走同一命令，所以不会出现
+   "显示一处、打开另一处"。只读展示：改数据目录要动便携模式的环境变量，
+   做成一个能点的按钮反而会让人以为改了就能搬走。 */
+function DataDirGroup() {
+  const [dir, setDir] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    getDataDir()
+      .then((d) => { if (!cancelled) setDir(d); })
+      .catch(() => { if (!cancelled) setDir(null); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const copy = async () => {
+    if (!dir) return;
+    const ok = await copyText(dir);
+    if (ok) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } else {
+      toastError("复制失败");
+    }
+  };
+
+  return (
+    <SettingsGroup
+      title="数据"
+      description="配置、会话、日志与备份都落在这里。"
+    >
+      <SettingsRow
+        title="数据目录"
+        description={
+          dir ? (
+            <span className="break-all font-mono">{dir}</span>
+          ) : (
+            <span>读取中…</span>
+          )
+        }
+        control={
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={copy}
+              disabled={!dir}
+              className="flex h-7 items-center gap-1.5 rounded-lg border border-[var(--color-border-secondary)] px-2 text-[length:var(--text-meta)] text-[var(--color-text-secondary)] transition-colors hover:border-[var(--color-border-primary)] hover:text-[var(--color-text-primary)] disabled:opacity-40"
+            >
+              {copied ? <Check className="icon-sm" /> : <Copy className="icon-sm" />}
+              {copied ? "已复制" : "复制"}
+            </button>
+            <button
+              onClick={() => {
+                openDataDir().catch(() => toastError("打开目录失败"));
+              }}
+              disabled={!dir}
+              className="flex h-7 items-center gap-1.5 rounded-lg border border-[var(--color-border-secondary)] px-2 text-[length:var(--text-meta)] text-[var(--color-text-secondary)] transition-colors hover:border-[var(--color-border-primary)] hover:text-[var(--color-text-primary)] disabled:opacity-40"
+            >
+              <FolderOpen className="icon-sm" /> 打开
+            </button>
+          </div>
+        }
+      />
+    </SettingsGroup>
+  );
+}

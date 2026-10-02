@@ -1,0 +1,371 @@
+import {
+  useCallback, useEffect, useMemo, useRef, useState,
+  type ReactNode,
+} from "react";
+import { createPortal } from "react-dom";
+import {
+  ArrowLeft, Search, X, Cpu, Boxes, Server, Smartphone, SlidersHorizontal,
+  Plug, Sparkles, Network, Image as ImageIcon, Activity, Shield,
+  Archive, Palette,
+} from "lucide-react";
+
+import { cx } from "../../lib/cx";
+import { storage, STORAGE_KEYS } from "../../utils/storageCompat";
+import { Input, Switch, SettingsGroup, SettingsRow } from "../ui";
+import {
+  PluginsTab, SkillsTab, ConnectorsTab, ToolsetsTab,
+} from "../config/ToolTabs";
+import { ModelListTab } from "./ModelListTab";
+import { SecurityTab } from "./SecurityTab";
+import { BackendTab } from "./BackendSettingsTab";
+import { AdvancedTab } from "./AdvancedSettingsTab";
+import { DiagnosticsTab } from "./DiagnosticsTab";
+import { RuntimesTab } from "./RuntimesTab";
+import { DevicesTab } from "./DevicesTab";
+import { GeneralTab } from "./GeneralTab";
+import { AppearanceTab } from "./AppearanceTab";
+import { ArchiveTab } from "./ArchiveTab";
+
+/**
+ * 设置外壳：左导航（分组 + 搜索）+ 右内容区。
+ *
+ * 为什么从平铺分类改成分组：7 个平铺项在 780px 高的面板里要靠图标 +
+ * 两行文字才能区分"工具"和"插件/技能/连接器/工具集"这四件同源的事。
+ * 分组后"插件组四项"和"偏好组两项"的关系一眼可见，导航项也从 7 变 15
+ * 但认知负担反而降——因为组名承担了归类信息。
+ *
+ * 四个工具子 tab 提升为一级导航项（原先藏在"工具"下面的横条里），
+ * 与 ZCode 的"插件组直接列插件/技能/MCP/Agents"一致：它们本来就是四件
+ * 独立的配置，不该挤在一条 200px 宽的横条里互相挤掉标签。
+ */
+export type SettingsPage =
+  | "general" | "appearance" | "model" | "image"
+  | "plugins" | "skills" | "connectors" | "toolsets"
+  | "backend" | "runtimes" | "devices" | "security" | "archive"
+  | "diagnostics" | "advanced";
+
+interface PageDef {
+  id: SettingsPage;
+  label: string;
+  hint: string;
+  icon: React.ElementType;
+  /** 搜索命中用；不写就只能靠标题字面匹配。 */
+  keywords?: string;
+}
+
+interface GroupDef {
+  label: string;
+  items: PageDef[];
+}
+
+const GROUPS: GroupDef[] = [
+  {
+    label: "偏好",
+    items: [
+      { id: "general", label: "通用", hint: "工作模式与系统行为", icon: SlidersHorizontal, keywords: "mode domain 编程 办公 通知 自启 索引" },
+      { id: "appearance", label: "外观", hint: "主题、强调色与对比度", icon: Palette, keywords: "theme 主题 深色 浅色 跟随系统 强调色 accent 对比度" },
+      { id: "model", label: "模型", hint: "大模型配置与连接测试", icon: Cpu, keywords: "model llm provider api key 供应商" },
+      { id: "image", label: "图像", hint: "图片生成偏好", icon: ImageIcon, keywords: "image 图像 生成" },
+    ],
+  },
+  {
+    label: "插件",
+    items: [
+      { id: "plugins", label: "插件", hint: "内置插件开关", icon: Plug, keywords: "plugin 插件" },
+      { id: "skills", label: "技能", hint: "技能库与启停", icon: Sparkles, keywords: "skill 技能" },
+      { id: "connectors", label: "连接器", hint: "MCP server 接入", icon: Network, keywords: "mcp connector 连接器 服务器" },
+      { id: "toolsets", label: "工具集", hint: "工具白名单", icon: Boxes, keywords: "toolset 工具 工具集" },
+    ],
+  },
+  {
+    label: "管理",
+    items: [
+      { id: "backend", label: "后端服务", hint: "本地服务与健康状态", icon: Server, keywords: "backend server 服务 端口 健康" },
+      { id: "runtimes", label: "内置运行时", hint: "Node / Python / Git", icon: Boxes, keywords: "runtime node python git 运行时" },
+      { id: "devices", label: "设备管理", hint: "配对与撤销权限", icon: Smartphone, keywords: "device 设备 配对 权限" },
+      { id: "security", label: "安全", hint: "自动备份与数据安全", icon: Shield, keywords: "security 安全 备份 backup" },
+      { id: "archive", label: "已归档", hint: "归档的会话与项目", icon: Archive, keywords: "archive 归档 已归档" },
+    ],
+  },
+  {
+    label: "诊断",
+    items: [
+      { id: "diagnostics", label: "诊断", hint: "日志、审计与网络出口", icon: Activity, keywords: "diagnostics 日志 log 审计 出网" },
+      { id: "advanced", label: "高级", hint: "实验功能与原始配置", icon: SlidersHorizontal, keywords: "advanced 高级 实验 config yaml" },
+    ],
+  },
+];
+
+const ALL_PAGES = GROUPS.flatMap((g) => g.items);
+
+/** 旧 `ConfigCategory` 的 id → 新页。保留是为了不打断既有调用点。 */
+const LEGACY_ALIAS: Record<string, SettingsPage> = {
+  tools: "connectors",
+  diagnostics: "diagnostics",
+};
+
+export function resolvePage(id?: string): SettingsPage {
+  if (!id) return "general";
+  const hit = ALL_PAGES.find((p) => p.id === id);
+  if (hit) return hit.id;
+  return LEGACY_ALIAS[id] ?? "general";
+}
+
+export interface SettingsShellProps {
+  onClose: () => void;
+  initialPage?: string;
+}
+
+export function SettingsShell({ onClose, initialPage }: SettingsShellProps) {
+  const [page, setPage] = useState<SettingsPage>(() => resolvePage(initialPage));
+  const [query, setQuery] = useState("");
+  const [toolQuery, setToolQuery] = useState("");
+  const searchRef = useRef<HTMLInputElement>(null);
+
+  // ESC 关闭 / cmd+K 聚焦搜索。搜索框抢走焦点后 ESC 要先清空再关闭，
+  // 否则用户按 ESC 只想退出搜索却被直接踢出设置。
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        searchRef.current?.focus();
+        searchRef.current?.select();
+        return;
+      }
+      if (e.key === "Escape") {
+        if (query) { setQuery(""); return; }
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose, query]);
+
+  useEffect(() => {
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = ""; };
+  }, []);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return GROUPS;
+    const terms = q.split(/\s+/);
+    return GROUPS.map((g) => ({
+      ...g,
+      items: g.items.filter((p) => {
+        const hay = `${p.label} ${p.hint} ${p.keywords ?? ""}`.toLowerCase();
+        return terms.every((t) => hay.includes(t));
+      }),
+    })).filter((g) => g.items.length > 0);
+  }, [query]);
+
+  const current = useMemo(
+    () => ALL_PAGES.find((p) => p.id === page) ?? ALL_PAGES[0],
+    [page],
+  );
+
+  const go = useCallback((id: SettingsPage) => {
+    setPage(id);
+    setQuery("");
+  }, []);
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center"
+      style={{ background: "var(--color-overlay-scrim)" }}
+      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="设置"
+        className="flex flex-col overflow-hidden rounded-xl border border-[var(--color-border-primary)] shadow-[var(--shadow-modal)]"
+        style={{ width: "min(96vw, 1100px)", height: "min(90vh, 780px)", background: "var(--color-bg-app)" }}
+      >
+        {/* Header：左「返回应用」，右关闭 */}
+        <div className="flex shrink-0 items-center gap-3 border-b border-[var(--color-border-primary)] bg-[var(--color-bg-secondary)] px-4 py-2.5">
+          <button
+            onClick={onClose}
+            className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[length:var(--text-ui)] text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]"
+          >
+            <ArrowLeft className="icon-sm" />
+            返回应用
+          </button>
+          <span className="ml-auto text-[length:var(--text-meta)] text-[var(--color-text-muted)]">
+            {current.hint}
+          </span>
+          <button
+            onClick={onClose}
+            className="flex h-7 w-7 items-center justify-center rounded-md text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]"
+            title="关闭 (Esc)"
+            aria-label="关闭设置"
+          >
+            <X className="icon-md" />
+          </button>
+        </div>
+
+        <div className="flex min-h-0 flex-1 overflow-hidden">
+          {/* 左导航 */}
+          <nav className="flex w-[232px] shrink-0 flex-col border-r border-[var(--color-border-primary)] bg-[var(--color-bg-secondary)]">
+            <div className="px-3 pb-2 pt-3">
+              <div className="relative">
+                <Search className="icon-sm pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)]" />
+                <input
+                  ref={searchRef}
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="搜索设置…"
+                  aria-label="搜索设置"
+                  className="w-full rounded-lg border border-[var(--color-border-secondary)] bg-[var(--color-bg-app)] py-1.5 pl-8 pr-2 text-[length:var(--text-ui)] text-[var(--color-text-primary)] outline-none transition-colors placeholder:text-[var(--color-text-muted)] focus:border-[var(--color-accent)]"
+                />
+              </div>
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
+              {filtered.length === 0 ? (
+                <div className="px-3 py-6 text-center text-[length:var(--text-meta)] text-[var(--color-text-muted)]">
+                  没有匹配「{query}」的设置项
+                </div>
+              ) : (
+                filtered.map((g) => (
+                  <div key={g.label} className="mb-3">
+                    <div className="px-2.5 pb-1 pt-2 text-[length:var(--text-tiny,11px)] font-medium uppercase tracking-wide text-[var(--color-text-faint)]">
+                      {g.label}
+                    </div>
+                    {g.items.map(({ id, label, icon: Icon }) => (
+                      <button
+                        key={id}
+                        onClick={() => go(id)}
+                        aria-current={page === id ? "page" : undefined}
+                        className={cx(
+                          "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left transition-colors",
+                          page === id
+                            ? "bg-[var(--color-bg-active)] text-[var(--color-accent)]"
+                            : "text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]",
+                        )}
+                      >
+                        <Icon className="icon-sm shrink-0 opacity-70" />
+                        <span className="min-w-0 flex-1 truncate text-[length:var(--text-ui)]">{label}</span>
+                      </button>
+                    ))}
+                  </div>
+                ))
+              )}
+            </div>
+          </nav>
+
+          {/* 右内容 */}
+          <div className="min-w-0 flex-1 overflow-y-auto">
+            <PageBody page={page} toolQuery={toolQuery} onToolQuery={setToolQuery} />
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+function PageBody({
+  page, toolQuery, onToolQuery,
+}: {
+  page: SettingsPage;
+  toolQuery: string;
+  onToolQuery: (q: string) => void;
+}) {
+  switch (page) {
+    case "general": return <Section><GeneralTab /></Section>;
+    case "appearance": return <Section><AppearanceTab /></Section>;
+    case "model": return <ModelListTab />;
+    case "image": return <Section><ImageSettingsCard /></Section>;
+    case "plugins": return <ToolSection><PluginsTab query={toolQuery} onQuery={onToolQuery} /></ToolSection>;
+    case "skills": return <ToolSection><SkillsTab query={toolQuery} onQuery={onToolQuery} /></ToolSection>;
+    case "connectors": return <ToolSection><ConnectorsTab query={toolQuery} onQuery={onToolQuery} /></ToolSection>;
+    case "toolsets": return <ToolSection><ToolsetsTab query={toolQuery} onQuery={onToolQuery} /></ToolSection>;
+    case "backend": return <Section><BackendTab /></Section>;
+    case "runtimes": return <Section wide><RuntimesTab /></Section>;
+    case "devices": return <Section wide><DevicesTab /></Section>;
+    case "security": return <Section wide><SecurityTab /></Section>;
+    case "archive": return <Section><ArchiveTab /></Section>;
+    case "diagnostics": return <Section wide><DiagnosticsTab /></Section>;
+    case "advanced": return <Section><AdvancedTab /></Section>;
+  }
+}
+
+function Section({ children, wide }: { children: ReactNode; wide?: boolean }) {
+  return (
+    <div className="px-6 py-5">
+      <div className={cx("mx-auto", wide ? "max-w-5xl" : "max-w-2xl")}>{children}</div>
+    </div>
+  );
+}
+
+function ToolSection({ children }: { children: ReactNode }) {
+  return (
+    <div className="px-6 py-5">
+      <div className="mx-auto max-w-4xl">{children}</div>
+    </div>
+  );
+}
+
+// ── 图像：本地图片生成偏好（前端持久化） ──────────────────────────
+
+interface ImageConfig {
+  enabled: boolean;
+  model: string;
+}
+
+function loadImageConfig(): ImageConfig {
+  try {
+    const raw = storage.getItem(STORAGE_KEYS.imageConfig);
+    if (raw) return { enabled: false, model: "", ...(JSON.parse(raw) as Partial<ImageConfig>) };
+  } catch { /* ignore */ }
+  return { enabled: false, model: "" };
+}
+
+function ImageSettingsCard() {
+  const [cfg, setCfg] = useState<ImageConfig>(loadImageConfig);
+
+  const update = (next: Partial<ImageConfig>) => {
+    setCfg((prev) => {
+      const merged = { ...prev, ...next };
+      storage.setItem(STORAGE_KEYS.imageConfig, JSON.stringify(merged));
+      return merged;
+    });
+  };
+
+  return (
+    <div className="space-y-6">
+      <header>
+        <h2 className="text-[length:var(--text-body)] font-medium text-[var(--color-text-primary)]">图像</h2>
+        <p className="mt-1 text-[length:var(--text-meta)] text-[var(--color-text-muted)]">
+          配置图片生成能力。当前为本地偏好设置，待图片生成功能接入后自动生效。
+        </p>
+      </header>
+
+      <SettingsGroup>
+        <SettingsRow
+          title="启用图片生成"
+          description="开启后，对话中可调用图片生成技能。"
+          control={
+            <Switch
+              checked={cfg.enabled}
+              onChange={(v) => update({ enabled: v })}
+              label="启用图片生成"
+            />
+          }
+        />
+        <SettingsRow
+          title="图片模型"
+          description="留空时由后端决定使用哪个图片模型。"
+        >
+          <Input
+            value={cfg.model}
+            onChange={(e) => update({ model: e.target.value })}
+            placeholder="例如 agnes-image-2.0"
+            className="mt-2"
+          />
+        </SettingsRow>
+      </SettingsGroup>
+    </div>
+  );
+}

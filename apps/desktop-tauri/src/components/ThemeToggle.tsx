@@ -1,6 +1,6 @@
 import { Sun, Moon, Monitor, Check, ChevronDown } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
-import { useTheme } from "../hooks/useTheme";
+import { useTheme, SYSTEM_THEME } from "../hooks/useTheme";
 import { THEMES } from "../styles/themes/registry";
 
 const ICONS: Record<string, React.ElementType> = {
@@ -8,10 +8,15 @@ const ICONS: Record<string, React.ElementType> = {
   dark: Moon,
 };
 const DEFAULT_ICON = Monitor;
+/** 跟随系统时触发器用 Monitor 图标（其字面义就是"跟着系统走"）。 */
+const SYSTEM_ICON = Monitor;
 
 export function ThemeToggle({ compact = false }: { compact?: boolean }) {
-  const { mode, setMode } = useTheme();
-  const CurIcon = ICONS[mode] ?? DEFAULT_ICON;
+  const { mode, resolved, setMode } = useTheme();
+  const followSystem = mode === SYSTEM_THEME;
+  // 显式选主题时按 mode 取图标；跟随系统时按系统实际解析出的深浅取，
+  // 这样图标反映的是屏幕上真实的样子，而不是"设置里存的是什么"。
+  const CurIcon = followSystem ? SYSTEM_ICON : (ICONS[mode] ?? DEFAULT_ICON);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -29,7 +34,9 @@ export function ThemeToggle({ compact = false }: { compact?: boolean }) {
     };
   }, [open]);
 
-  const label = THEMES.find((t) => t.id === mode)?.label ?? mode;
+  const label = followSystem
+    ? `跟随系统（${THEMES.find((t) => t.id === resolved)?.label ?? resolved}）`
+    : THEMES.find((t) => t.id === mode)?.label ?? mode;
 
   // 下拉菜单：compact 与非 compact 共用同一份内容，只是触发器外观不同。
   const menu = open && (
@@ -54,6 +61,17 @@ export function ThemeToggle({ compact = false }: { compact?: boolean }) {
           </button>
         );
       })}
+      <div className="my-1 border-t border-border-primary" />
+      <button
+        type="button"
+        onClick={() => { setMode(SYSTEM_THEME); setOpen(false); }}
+        className={`w-full flex items-center gap-2 px-2.5 py-1.5 text-left text-[length:var(--text-ui)] hover:bg-bg-hover transition-colors ${followSystem ? "text-accent" : "text-text-primary"}`}
+        role="menuitem"
+      >
+        <Monitor className="icon-md shrink-0 opacity-80" />
+        <span className="grow truncate">跟随系统</span>
+        {followSystem && <Check className="icon-sm shrink-0" />}
+      </button>
     </div>
   );
 

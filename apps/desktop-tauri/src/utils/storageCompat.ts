@@ -124,6 +124,10 @@ export const STORAGE_KEYS = {
   recentExperts: "hermix.desktop.recent_experts",
   permissionLevel: "hermix.desktop.permission_level",
   domainMode: "hermix.desktop.domain_mode",
+  /** L3.8：发送快捷键。`enter` = Enter 发送 / Shift+Enter 换行；`ctrl_enter` 反之。 */
+  sendKey: "hermix.desktop.send_key",
+  /** L3.4：明暗三选的第三态「跟随系统」。缺 = 不跟随（即用户显式选了某主题）。 */
+  followSystemTheme: "hermix.desktop.follow_system_theme",
   modelConfig: "hermix.desktop.model_config",
   modelCache: "hermix.desktop.model_cache",
   workspaceRoot: "hermix.desktop.workspace_root",

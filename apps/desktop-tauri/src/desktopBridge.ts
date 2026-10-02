@@ -32,6 +32,15 @@ export async function openDataDir(): Promise<void> {
   await invoke("open_external_url", { url: path });
 }
 
+/**
+ * 数据目录路径本身（供设置页"数据目录"行展示）。
+ * 走同一个 `get_data_dir` 命令，因此与 `openDataDir` 打开的必然是同一处，
+ * 不会出现在"显示 A 路径 / 打开 B 路径"的错位。
+ */
+export async function getDataDir(): Promise<string> {
+  return invoke<string>("get_data_dir");
+}
+
 export async function openExternalUrl(url: string): Promise<void> {
   try {
     await invoke("open_external_url", { url });

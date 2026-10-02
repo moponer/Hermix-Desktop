@@ -41,6 +41,7 @@ import {
   useSessionSkills,
 } from "../hooks/useExpert";
 import { useExpertCutoff } from "../hooks/useExpertCutoff";
+import { useSendKey } from "../hooks/useSendKey";
 import { useWorkspaces } from "../hooks/useWorkspaces";
 import { pickDirectory } from "../desktopBridge";
 import { getAvailableTools, updateSessionMetadata, warmUpProvider, type ToolDescriptor } from "../api";
@@ -355,6 +356,7 @@ export const ChatView = memo(function ChatView({
   }, []);
   const [permissionLevel, setPermissionLevel] = usePermissionLevel();
   const [domainMode, setDomainMode] = useDomainMode();
+  const [sendKey] = useSendKey();
   const { workspace, setWorkspace: setWorkspaceRaw } = useSessionWorkspace(sessionId);
   const workspaceLocked =
     (session?.messages?.length ?? 0) > 0 || sending || isStreaming;
@@ -776,7 +778,11 @@ export const ChatView = memo(function ChatView({
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
+    // L3.8：发送键可配（设置 › 通用 › 发送快捷键）。两种模式都保留
+    // Shift+Enter 换行——那是多行输入的通用习惯，不该被模式抢走。
+    const ctrlEnter = sendKey === "ctrl_enter";
+    const isSend = e.key === "Enter" && !e.shiftKey && (ctrlEnter ? e.ctrlKey || e.metaKey : true);
+    if (isSend) {
       e.preventDefault();
       handleSubmit();
     }
