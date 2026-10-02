@@ -9,7 +9,7 @@ use tokio::sync::Notify;
 use crate::errors::{AgentError, GatewayError, ToolError};
 use crate::seams::ToolOutput;
 use crate::tool_schema::ToolSchema;
-use crate::types::{CommandOutput, LlmResponse, Message, Skill, SkillMeta, StreamChunk};
+use crate::types::{CommandOutput, LlmResponse, Message, PtySessionInfo, PtySessionOutput, Skill, SkillMeta, StreamChunk};
 use crate::ApprovalOutcome;
 
 // ---------------------------------------------------------------------------
@@ -172,6 +172,65 @@ pub trait TerminalBackend: Send + Sync {
 
     /// Check whether a file exists at the given path.
     async fn file_exists(&self, path: &str) -> Result<bool, AgentError>;
+
+    // -----------------------------------------------------------------
+    // Persistent terminal sessions (ConPTY on Windows). Optional
+    // capability: default implementations return "not supported" so
+    // backends without session support (docker, ssh, …) need no change.
+    // -----------------------------------------------------------------
+
+    /// Spawn a persistent shell session and wait until it is ready to
+    /// accept commands. Returns the `session_id` used by the other
+    /// session methods.
+    async fn pty_create_session(&self, workdir: Option<&str>) -> Result<String, AgentError> {
+        let _ = workdir;
+        Err(AgentError::Io(
+            "persistent terminal sessions are not supported by this backend".to_string(),
+        ))
+    }
+
+    /// Submit input to a session and read the newly produced output.
+    /// `submit` appends a newline (`false` sends raw fragments such as
+    /// REPL continuation lines). `read_budget_ms` caps how long the
+    /// call waits for the command to settle; completion detection is
+    /// heuristic (prompt marker + output silence + child-process check).
+    async fn pty_send_session(
+        &self,
+        session_id: &str,
+        input: &str,
+        submit: bool,
+        read_budget_ms: Option<u64>,
+    ) -> Result<PtySessionOutput, AgentError> {
+        let _ = (session_id, input, submit, read_budget_ms);
+        Err(AgentError::Io(
+            "persistent terminal sessions are not supported by this backend".to_string(),
+        ))
+    }
+
+    /// Read pending output from a session without submitting input.
+    async fn pty_read_session(
+        &self,
+        session_id: &str,
+        read_budget_ms: Option<u64>,
+    ) -> Result<PtySessionOutput, AgentError> {
+        let _ = (session_id, read_budget_ms);
+        Err(AgentError::Io(
+            "persistent terminal sessions are not supported by this backend".to_string(),
+        ))
+    }
+
+    /// List all live sessions tracked by this backend.
+    async fn pty_list_sessions(&self) -> Vec<PtySessionInfo> {
+        Vec::new()
+    }
+
+    /// Kill and forget a session. Unknown ids are a no-op error.
+    async fn pty_close_session(&self, session_id: &str) -> Result<(), AgentError> {
+        let _ = session_id;
+        Err(AgentError::Io(
+            "persistent terminal sessions are not supported by this backend".to_string(),
+        ))
+    }
 }
 
 // ---------------------------------------------------------------------------

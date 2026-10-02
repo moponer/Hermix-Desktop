@@ -8,9 +8,10 @@ use async_trait::async_trait;
 use tokio::process::Command as TokioCommand;
 
 use hermix_core::console_decode::decode_console_output;
-use hermix_core::{AgentError, CommandOutput, TerminalBackend};
+use hermix_core::{AgentError, CommandOutput, PtySessionInfo, PtySessionOutput, TerminalBackend};
 
 pub use crate::jobs::{JobRegistry, JobStatus, JobSummary, LogStream};
+pub use crate::pty_session::PtySessionRegistry;
 
 // `decode_console_output` is re-exported by `hermix-core::console_decode`
 // since the Windows-first hardening pass. The local
@@ -107,6 +108,10 @@ pub struct LocalBackend {
     /// `jobs_start` etc. require this; the legacy
     /// `background_processes` PID list keeps working without it.
     pub jobs: Option<Arc<JobRegistry>>,
+    /// 持久终端会话表（ConPTY，H3）。挂在本 backend 上，经
+    /// `TerminalBackend` 的 `pty_*` 会话方法暴露；一次性 `pty: true`
+    /// 执行也复用它的 ConPTY 通道。
+    pub pty_sessions: Arc<PtySessionRegistry>,
 }
 
 impl LocalBackend {
@@ -118,6 +123,7 @@ impl LocalBackend {
             background_processes: Arc::new(Mutex::new(Vec::new())),
             workspace_root: None,
             jobs: None,
+            pty_sessions: Arc::new(PtySessionRegistry::new()),
         }
     }
 
@@ -321,6 +327,55 @@ fn normalize_windows_path_slashes(command: &str) -> String {
     out
 }
 
+/// Windows 统一 shell 路由：PowerShell（对齐 pi 的 Windows 模型 —
+/// 单一 shell 路由、argv 直传、不靠 cmd.exe 字符串拼接）。
+/// PowerShell 自带 `ls`/`cat` 等 POSIX 别名，LLM 发 POSIX 名
+/// 也 work。cmd.exe 不再作为默认路由（无 PowerShell 的
+/// Windows 系统不存在，powershell.exe 系统自带）。
+///
+/// `powershell`/`pwsh` 前缀的命令吃掉前缀走同一路由
+/// （`.exe` 形态必须先判——否则按 "powershell" 长度切片
+/// 残留 `.exe`）。剥前缀后还要吃掉 LLM 按旧习惯带的旗标
+/// （`-Command X` / `-EncodedCommand b64` / `-File x.ps1`）
+/// ——真机探针钉死：旗标残留在脚本文本里会被当命令名报
+/// "无法将 -Command 项识别为 cmdlet"。
+///
+/// 契约唯一入口：常规 spawn 路径与 `pty: true` ConPTY 一次性路径
+/// 共用（两条路径不得各自实现一份，否则必然走散——H2 教训）。
+#[cfg(windows)]
+pub(crate) fn windows_shell_route(command: &str) -> (&'static str, Vec<String>) {
+    let trimmed = command.trim_start();
+    let (exe, bare) = match split_windows_shell_prefix(trimmed) {
+        Some((exe, rest)) => (exe, rest),
+        None => ("powershell.exe", trimmed),
+    };
+    let bare_lower = bare.to_lowercase();
+
+    let mut args: Vec<String> = vec!["-NoProfile".to_string(), "-NonInteractive".to_string()];
+    if bare_lower.starts_with("-encodedcommand ") {
+        // base64 token 可能含 `/`，斜杠归一化会破坏编码——
+        // 作为真旗标直传，不经归一化。审批引擎 sees 原始命令
+        // 串，`powershell-encoded` CONFIRM 规则照常命中。
+        args.push("-EncodedCommand".to_string());
+        args.push(bare["-encodedcommand ".len()..].trim_start().to_string());
+    } else if bare_lower.starts_with("-file ") {
+        args.push("-File".to_string());
+        args.push(normalize_windows_path_slashes(
+            bare["-file ".len()..].trim_start(),
+        ));
+    } else {
+        // `-Command X` 的 X 才是脚本文本；裸命令整段进 -Command。
+        let script = if bare_lower.starts_with("-command ") {
+            bare["-command ".len()..].trim_start()
+        } else {
+            bare
+        };
+        args.push("-Command".to_string());
+        args.push(normalize_windows_path_slashes(script));
+    }
+    (exe, args)
+}
+
 #[async_trait]
 impl TerminalBackend for LocalBackend {
     async fn execute_command(
@@ -396,24 +451,25 @@ impl TerminalBackend for LocalBackend {
 
             #[cfg(not(unix))]
             {
-                // Windows: PTY is not implemented. Surface this as
-                // a hard `AgentError::Io` so the caller (the LLM,
-                // via `TerminalHandler`) gets a clear "this is not
-                // supported on Windows" message in its next turn,
-                // rather than silently re-running through plain
-                // pipes and producing subtly different output
-                // (no color codes, no line-editing, etc.).
-                // The dispatch path then continues with the
-                // non-PTY branch below.
-                return Err(AgentError::Io(
-                    "PTY mode is not supported on Windows. \
-                     Re-run the command with `pty: false` to use \
-                     standard pipe-based execution. (Windows \
-                     pseudo-console support via ConPTY is a future \
-                     enhancement.)"
-                        .to_string(),
-                ));
-            }
+                // Windows: ConPTY 一次性执行（H3 持久终端立项后落地）。
+                // 真机探针钉死 ConPTY 可用性与握手/编码/噪音特性，见
+                // `pty_session.rs` 头注释与 `tests/pty_conpty_probe.rs`。
+                // ConPTY 缺失（Win10 1809 前）时 openpty 报错返回给模型。
+                // 注意：此路径不走下方 ACL 沙箱（与 background 相同的
+                // 既有豁免面），安全语义由审批层承接。
+                let effective_dir = workdir
+                    .map(std::path::PathBuf::from)
+                    .or_else(|| self.workspace_root.clone())
+                    .map(|p| hermix_core::path_security::strip_win32_long_path_buf(&p));
+                return self
+                    .pty_sessions
+                    .execute_oneshot(
+                        command,
+                        timeout_secs,
+                        effective_dir.as_deref(),
+                        self.max_output_size,
+                    )
+                    .await;            }
         }
 
         #[cfg(windows)]
@@ -453,44 +509,10 @@ impl TerminalBackend for LocalBackend {
         #[cfg(windows)]
         let mut cmd = {
             let trimmed = command.trim_start();
-            // Windows 统一 shell 层：PowerShell（对齐 pi 的 Windows 模型 —
-            // 单一 shell 路由、argv 直传、不靠 cmd.exe 字符串拼接）。
-            // PowerShell 自带 `ls`/`cat` 等 POSIX 别名，LLM 发 POSIX 名
-            // 也 work。cmd.exe 不再作为默认路由（无 PowerShell 的
-            // Windows 系统不存在，powershell.exe 系统自带）。
-            //
-            // `powershell`/`pwsh` 前缀的命令吃掉前缀走同一路由
-            // （`.exe` 形态必须先判——否则按 "powershell" 长度切片
-            // 残留 `.exe`）。剥前缀后还要吃掉 LLM 按旧习惯带的旗标
-            // （`-Command X` / `-EncodedCommand b64` / `-File x.ps1`）
-            // ——真机探针钉死：旗标残留在脚本文本里会被当命令名报
-            // "无法将 -Command 项识别为 cmdlet"。
-            let (shell_exe, bare) = match split_windows_shell_prefix(trimmed) {
-                Some((exe, rest)) => (exe, rest),
-                None => ("powershell.exe", trimmed),
-            };
-            let bare_lower = bare.to_lowercase();
-
+            let (shell_exe, args) = windows_shell_route(trimmed);
             let mut c = TokioCommand::new(shell_exe);
-            c.arg("-NoProfile").arg("-NonInteractive");
-            if bare_lower.starts_with("-encodedcommand ") {
-                // base64 token 可能含 `/`，斜杠归一化会破坏编码——
-                // 作为真旗标直传，不经归一化。审批引擎 sees 原始命令
-                // 串，`powershell-encoded` CONFIRM 规则照常命中。
-                c.arg("-EncodedCommand")
-                    .arg(bare["-encodedcommand ".len()..].trim_start());
-            } else if bare_lower.starts_with("-file ") {
-                let target = bare["-file ".len()..].trim_start();
-                c.arg("-File").arg(normalize_windows_path_slashes(target));
-            } else {
-                // `-Command X` 的 X 才是脚本文本；裸命令整段进 -Command。
-                let script = if bare_lower.starts_with("-command ") {
-                    bare["-command ".len()..].trim_start()
-                } else {
-                    bare
-                };
-                let normalized = normalize_windows_path_slashes(script);
-                c.arg("-Command").arg(normalized);
+            for a in &args {
+                c.arg(a);
             }
             c
         };
@@ -708,6 +730,42 @@ impl TerminalBackend for LocalBackend {
                 path, e
             ))),
         }
+    }
+
+    // -----------------------------------------------------------------
+    // 持久终端会话（ConPTY，H3）。委托给 pty_sessions 注册表。
+    // -----------------------------------------------------------------
+
+    async fn pty_create_session(&self, workdir: Option<&str>) -> Result<String, AgentError> {
+        self.pty_sessions.create_session(workdir).await
+    }
+
+    async fn pty_send_session(
+        &self,
+        session_id: &str,
+        input: &str,
+        submit: bool,
+        read_budget_ms: Option<u64>,
+    ) -> Result<PtySessionOutput, AgentError> {
+        self.pty_sessions
+            .send_session(session_id, input, submit, read_budget_ms)
+            .await
+    }
+
+    async fn pty_read_session(
+        &self,
+        session_id: &str,
+        read_budget_ms: Option<u64>,
+    ) -> Result<PtySessionOutput, AgentError> {
+        self.pty_sessions.read_session(session_id, read_budget_ms).await
+    }
+
+    async fn pty_list_sessions(&self) -> Vec<PtySessionInfo> {
+        self.pty_sessions.list_sessions()
+    }
+
+    async fn pty_close_session(&self, session_id: &str) -> Result<(), AgentError> {
+        self.pty_sessions.close_session(session_id).await
     }
 }
 

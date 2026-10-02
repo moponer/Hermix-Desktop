@@ -3,7 +3,7 @@
 Status: rejected — 2026-10-01 核实后否决，理由记录在案
 Archived: 2026-10-01
 
-> 取代者：[2026-10-01-persistent-terminal-conpty](../../proposed/architecture/2026-10-01-persistent-terminal-conpty.md) —— 本文"能力前提不存在 / 平台限制"的结论有事实错误：Windows 自 Win10 1809 起内置 ConPTY，`portable-pty` 已封装为生产级 Rust 现成件。本文的其余论证（审批链、测试覆盖、诚实失败语义）已由取代者吸收。
+> 取代者：[2026-10-01-persistent-terminal-conpty](../../implemented/architecture/2026-10-01-persistent-terminal-conpty.md) —— 本文"能力前提不存在 / 平台限制"的结论有事实错误：Windows 自 Win10 1809 起内置 ConPTY，`portable-pty` 已封装为生产级 Rust 现成件。本文的其余论证（审批链、测试覆盖、诚实失败语义）已由取代者吸收。
 
 ## Decision
 

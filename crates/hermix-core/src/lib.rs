@@ -39,9 +39,10 @@ pub use errors::{AgentError, ConfigError, GatewayError, ToolError};
 // Re-export all core types
 pub use types::{
     AgentResult, BudgetConfig, BudgetConfigError, CacheControl, CacheType, CommandOutput,
-    FunctionCall, FunctionCallDelta, LlmResponse, Message, MessageRole, ReasoningContent,
-    ReasoningFormat, Skill, SkillMeta, StreamChunk, StreamDelta, ToolCall, ToolCallDelta,
-    ToolErrorRecord, ToolResult, UsageStats, BUDGET_CONFIG_MAX_CHARS,
+    FunctionCall, FunctionCallDelta, LlmResponse, Message, MessageRole, PtySessionInfo,
+    PtySessionOutput, ReasoningContent, ReasoningFormat, Skill, SkillMeta, StreamChunk,
+    StreamDelta, ToolCall, ToolCallDelta, ToolErrorRecord, ToolResult, UsageStats,
+    BUDGET_CONFIG_MAX_CHARS,
 };
 
 //Re-export Orchestration Engine types
