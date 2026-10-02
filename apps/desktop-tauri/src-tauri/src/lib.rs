@@ -1,4 +1,5 @@
 pub mod browser_cleanup;
+pub mod cdp_probe;
 pub mod commands;
 pub mod commands_custom_app;
 pub mod commands_cua;
@@ -410,6 +411,39 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .setup(|app| {
+            // ── N0 CDP 探针门控（批次 N 技术验证）──────────────────
+            // HERMIX_CDP_PROBE=1 启动时，等主 webview 就绪后自动跑
+            // Runtime.evaluate / DOMSnapshot / Accessibility 三个 CDP
+            // 方法，结果打 stderr（带 [CDP-PROBE] 前缀），然后照常启动。
+            // 无 GUI 交互即可拿到真机证据；不加该 env 时零开销。
+            if std::env::var("HERMIX_CDP_PROBE").as_deref() == Ok("1") {
+                let handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    // 等主窗口 + webview 就绪（首帧渲染后 CDP 才有页面可测）。
+                    std::thread::sleep(std::time::Duration::from_secs(6));
+                    // WebviewWindow 实现 AsRef<Webview>（webview_window.rs:1446），
+                    // as_ref 转换后与 probe_via_tauri 的参数类型精确匹配。
+                    let Some(webview_window) = handle.get_webview_window("main") else {
+                        eprintln!("[CDP-PROBE] FAIL: 主窗口未就绪");
+                        return;
+                    };
+                    let webview = webview_window.as_ref();
+                    match cdp_probe::probe_via_tauri(
+                        webview,
+                        std::time::Duration::from_secs(60),
+                    ) {
+                        Ok(results) => {
+                            eprintln!("[CDP-PROBE] === N0 真机探针结果 ===");
+                            for (name, summary) in results {
+                                eprintln!("[CDP-PROBE] {name}: {summary}");
+                            }
+                            eprintln!("[CDP-PROBE] === 完 ===");
+                        }
+                        Err(e) => eprintln!("[CDP-PROBE] FAIL: {e}"),
+                    }
+                });
+            }
+
             // ── 启动白屏修复（2026-09-30）────────────────────────────
             // 窗口在配置里 `visible: false`：webview 首帧渲染完成之前用户
             // 看到的是空桌面而不是白窗。这里在页面加载完成时显示窗口 ——
@@ -610,6 +644,7 @@ pub fn run() {
             commands_local_search::local_search,
             commands_local_search::local_search_open,
             commands_local_search::local_search_preview,
+            cdp_probe::cdp_n0_probe,
             commands::render_office_preview,
             commands::document_to_markdown,
             commands::get_runtime_info,

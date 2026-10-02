@@ -11,6 +11,10 @@ default-run = "hermix-desktop"
 
 [dependencies]
 tauri = { version = "2", features = [ "protocol-asset" ] }
+# N0 探针（cdp_probe.rs）：进程内 CDP。与 tauri 的传递依赖同版本（0.38），
+# 显式声明以便直接 import；windows-core 0.61 是 webview2-com 0.38 的配套版本。
+webview2-com = "0.38"
+windows-core = "0.61"
 tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
