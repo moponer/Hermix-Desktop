@@ -348,7 +348,11 @@ mod usn_helper {
         pub error: Option<String>,
     }
 
-    /// snapshot/updates 共用的原始记录行。
+    /// snapshot 行的原始记录。
+    ///
+    /// `op` 字段已删除：更新流走的是独立的 `UpdLine`（见下），本结构只
+    /// 解析 snapshot，而 helper 写 snapshot 时本就不带 op。留着它只会让
+    /// "snapshot/updates 共用" 这句注释继续骗人。
     #[derive(serde::Deserialize)]
     pub struct RawLine {
         #[serde(default)]
@@ -360,9 +364,6 @@ mod usn_helper {
         pub is_dir: bool,
         #[serde(default)]
         pub ts: i64,
-        /// updates.jsonl 的操作类型（snapshot 行没有该字段）。
-        #[serde(default)]
-        pub op: Option<String>,
     }
 
     /// ShellExecuteW("runas") 拉起提权 helper。失败 = UAC 被拒/启动失败。
@@ -421,61 +422,6 @@ mod usn_helper {
     /// 一个 arena 索引 + frn 映射。snapshot 灌入与 updates 重放共用。
     pub struct Rebuilt {
         pub index: Index,
-    }
-
-    /// 向 index 注册一条记录（arena 追加 + frn 映射）。updates 重放共用。
-    fn add_entry(
-        index: &mut Index,
-        dir_ids: &mut HashMap<String, u32>,
-        frn: u64,
-        parent: u64,
-        name: &str,
-        is_dir: bool,
-        ts: i64,
-    ) {
-        // 父目录路径：frn_dirs 查得到直接用；查不到（父未进索引/根）挂空。
-        let dir_id = match frn_dirs_get(index, parent) {
-            Some(id) => id,
-            None => {
-                // parent=0 或未知父：放根占位（路径不准但条目不丢）。
-                match dir_ids.get("") {
-                    Some(&id) => id,
-                    None => {
-                        let id = index.dirs.len() as u32;
-                        index.dirs.push(String::new());
-                        dir_ids.insert(String::new(), id);
-                        id
-                    }
-                }
-            }
-        };
-        let name_off = index.names.len() as u32;
-        index.names.push_str(name);
-        let name_len = (index.names.len() as u64 - name_off as u64).min(u16::MAX as u64) as u16;
-        index.entries.push(Entry {
-            name_off,
-            name_len,
-            dir: dir_id,
-            size: 0, // 展示层对命中 ≤200 条按需 stat 补齐
-            mtime: ts,
-            is_dir,
-            frn,
-        });
-        if frn != 0 {
-            let eid = (index.entries.len() - 1) as u32;
-            index.frn_map.insert(frn, eid);
-            if is_dir {
-                // 目录的完整路径此刻还拼不出（依赖 frn_dirs 逐层），先记
-                // parent 关系；路径重建在 snapshot 灌完后统一一趟。
-                index.frn_dirs.insert(frn, eid);
-            }
-        }
-    }
-
-    fn frn_dirs_get(index: &Index, frn: u64) -> Option<u32> {
-        // frn_dirs: frn → entries 下标；条目的 dir 即其"完整路径 id"。
-        // 但 snapshot 阶段目录路径未拼好——重放阶段才有效。
-        index.frn_dirs.get(&frn).copied()
     }
 
     /// updates.jsonl 增量行（helper 侧协议见 usn_indexer.rs 头注释）。
