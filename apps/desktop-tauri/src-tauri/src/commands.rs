@@ -68,7 +68,11 @@ fn env_compat(new_name: &str, old_name: &str) -> Option<String> {
 /// 2. `$HERMIX_HOME` (explicit override)
 /// 3. Dev-mode: `hermix-data/` at workspace root
 /// 4. Last-ditch: `<install_root>/data`
-fn resolve_data_dir() -> PathBuf {
+///
+/// `pub(crate)` 是因为 `system_settings`（壁纸落盘）必须用**同一条**解析
+/// 链——复制一份就会在便携模式 / HERMIX_HOME 覆盖下走到不同分支，
+/// 出现"设置页显示的数据目录"与"壁纸实际落盘位置"不一致。
+pub(crate) fn resolve_data_dir() -> PathBuf {
     if let Some(p) = portable_env::portable_data_dir() {
         return p;
     }

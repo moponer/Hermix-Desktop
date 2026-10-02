@@ -1,3 +1,4 @@
+import { ToolCardIcon, toneForCategory } from "./ToolCardIcon";
 import { ToggleSwitch } from "../ToggleSwitch";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
@@ -306,11 +307,12 @@ function SkillCard({ skill, catLabel, onToggle }: {
     <>
       <div className="rounded-xl overflow-hidden">
         <div className="flex items-center gap-3 px-3 py-2.5">
-          <button onClick={openContent}
-            className="w-9 h-9 rounded-lg bg-bg-tertiary flex items-center justify-center text-text-secondary shrink-0 hover:bg-bg-surface transition-colors"
+          <button onClick={openContent} className="shrink-0 rounded-[var(--radius-md)]"
             title="查看技能内容"
             aria-label="查看技能内容">
-            <Wand2 className="icon-md" />
+            <ToolCardIcon tone={toneForCategory(catLabel(skill.category))} interactive>
+              <Wand2 className="icon-md" />
+            </ToolCardIcon>
           </button>
           <div className="min-w-0 flex-1 cursor-pointer" onClick={openContent}>
             <div className="flex items-center gap-2">
@@ -767,9 +769,9 @@ function ConnectorRow({
   const Icon = pickIconByName(server.name);
   return (
     <div className="h-enter flex items-start gap-3 px-3 py-2.5 rounded-xl bg-bg-card/70 hover:bg-bg-card">
-      <div className="w-9 h-9 rounded-lg bg-bg-tertiary flex items-center justify-center text-text-secondary shrink-0">
+      <ToolCardIcon tone="info">
         <Icon className="icon-lg" />
-      </div>
+      </ToolCardIcon>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className="text-sm text-text-primary truncate">{server.name}</span>
@@ -1000,9 +1002,9 @@ function ToolsetCard({
   const Icon = pickIconByName(toolset.name);
   return (
     <div className="group flex items-start gap-3 px-3 py-2.5 rounded-xl bg-bg-card/80 hover:bg-bg-card">
-      <div className="w-9 h-9 rounded-lg bg-bg-tertiary flex items-center justify-center text-text-secondary shrink-0">
+      <ToolCardIcon tone="accent">
         <Icon className="icon-lg" />
-      </div>
+      </ToolCardIcon>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className="text-sm text-text-primary truncate">{toolset.label}</span>
@@ -1154,9 +1156,9 @@ function PluginCard({
 }) {
   return (
     <div className={`h-enter group flex items-center gap-3 px-3 py-2.5 rounded-xl ${noBorder ? "" : "border"} ${highlight ? "border-accent/40 bg-accent-soft/20" : (noBorder ? "bg-bg-card/40 hover:bg-bg-card/70" : "border-border-primary bg-bg-card/80 hover:bg-bg-card hover:border-border-secondary")}`}>
-      <div className="w-9 h-9 rounded-lg bg-bg-tertiary flex items-center justify-center text-text-secondary shrink-0">
+      <ToolCardIcon tone={toneForCategory(badge)}>
         {icon}
-      </div>
+      </ToolCardIcon>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className="text-sm text-text-primary truncate">{name}</span>

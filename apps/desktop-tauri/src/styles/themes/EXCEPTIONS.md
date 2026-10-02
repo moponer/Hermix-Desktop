@@ -21,9 +21,12 @@
 | E14 | `apps/desktop-tauri/src/components/TextBubble.tsx` | ~~用户图片边框 ~~ **已迁** → `--color-border-secondary`（原 `#2e2e34` 是写死的深色，亮色主题下突兀） |
 | E15 | `apps/desktop-tauri/src/lib/appMention.ts` | ~~@ 提醒色~~ **已迁** → `--color-link`（原 `#3b82f6` 的注释还在解释"深蓝在暗色下会不会看不见"，交给令牌后该问题消失） |
 | E16 | `apps/desktop-tauri/src/main.tsx` | **保留**：dev-only 的 `console.info` 徽章（`import.meta.env.DEV` 门内，输出到 devtools，不进 UI），与主题体系无关 |
+| E17 | `apps/desktop-tauri/src/styles/themes/accentPalette.ts` | **保留**：用户可选强调色的**策展清单本体**。这些 hex 是"可选值的数据"，不是"某个主题该用哪支颜色"——token 表达不了"用户还没选"，`--color-accent` 由用户在设置页注入，清单只负责枚举候选 + 预置 on-accent。与 E5（供应商品牌 logo 同理）同类。**重新引入条件**：若改为自由取色器（`<input type="color">`），本文件即成死数据，届时应删除并让 on-accent 改走运行时亮度计算。 |
+| E18 | `apps/desktop-tauri/src/components/settings/AppearanceTab.tsx` | **保留**：明暗三选卡的缩略图**示意图**。`themes/*.css` 按 `:root[data-theme]` 作用域提供 token，无法把"另一套主题"的取值摘出来内联渲染，故用固定明/暗色画出结构示意。它表达的是"亮底还是暗底"，不是像素级预览——真要像素级预览得给每套主题加一个可脱离作用域的采样通道，属另一件事。 |
 
 > E9–E16 是 [check-theme-tokens.mjs](../../../../../../../../scripts/check-theme-tokens.mjs) 抓到的历史债项。
 > 2026-10-01（L0）：6 条已迁（E9/E11/E12/E13/E14/E15），2 条判定为真例外保留（E10/E16）。
+> E17/E18 为 L3.5 强调色调色板与 L3.4 明暗三选卡新增，均为"数据/示意"而非"主题取值"。
 
 ## 已消化债项（L0，2026-10-01）
 

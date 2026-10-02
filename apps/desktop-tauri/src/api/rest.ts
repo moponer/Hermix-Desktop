@@ -1416,11 +1416,18 @@ export interface InlineTestResponse {
   model_found: boolean | null;
 }
 
-/** 用还没落盘的配置试连通：添加模型弹窗里"填完就测"，不必先建 provider。 */
+/** 用还没落盘的配置试连通：添加模型弹窗里"填完就测"，不必先建 provider。
+ *
+ *  `providerId` 用于**内置供应商**：它们的密钥只存在于后端环境变量，前端
+ *  读不到。给了它，后端改由 `env_var_name_for_provider` 取密钥，`apiKey`
+ *  被忽略——密钥自始至终不过网。base_url 仍由前端传（前端自带映射表，且它
+ *  不是机密）。 */
 export const testProviderInline = async (params: {
   baseUrl: string;
   apiKey: string;
   model?: string;
+  /** 内置 provider id；给了就由后端从 env 取密钥。 */
+  providerId?: string;
 }): Promise<InlineTestResponse> =>
   fetchJSON<InlineTestResponse>("/api/providers/test", {
     method: "POST",
@@ -1429,6 +1436,7 @@ export const testProviderInline = async (params: {
       base_url: params.baseUrl,
       api_key: params.apiKey,
       model: params.model ?? null,
+      provider_id: params.providerId ?? null,
     }),
   });
 

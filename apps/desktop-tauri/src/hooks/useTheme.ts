@@ -1,14 +1,35 @@
 import { useEffect, useState, useCallback } from "react";
 import { storage, STORAGE_KEYS } from "../utils/storageCompat";
 import { THEMES, isKnownTheme, isDarkTheme } from "../styles/themes/registry";
+import { onAccentFor } from "../styles/themes/accentPalette";
 
 // 主题 = 任一已发现的 .css（内置仅 light / dark 两套；用户仍可自建 .css 放入 themes/）
 // 数据源：themes/registry.ts 的 THEMES 数组 (auto-discover)
 // 持久化键：hermix.desktop.theme
 export type ThemeMode = string;
 
+/** 跟随系统的哨兵值。不是主题 id，只表示"由 prefers-color-scheme 决定"。 */
+export const SYSTEM_THEME = "system";
+
 /** 主题切换后派发；非 React 集成点（ECharts 等三方实例）监听它重建。 */
 export const THEME_CHANGED_EVENT = "hermix:theme-changed";
+
+function systemPrefersDark(): boolean {
+  if (typeof window === "undefined" || !window.matchMedia) return false;
+  return window.matchMedia("(prefers-color-scheme: dark)").matches;
+}
+
+/**
+ * 把用户选择解析成真正要写进 `data-theme` 的具体主题 id。
+ *
+ * "跟随系统"必须在这里塌缩成 light/dark 之一，而不是把 `system` 写进
+ * `data-theme`——registry 里没有这个主题，写进去等于所有语义 token 全部
+ * 取不到值（`data-theme` 是主题唯一来源，见 applyTheme 注释）。
+ */
+export function resolveTheme(mode: ThemeMode): string {
+  if (mode !== SYSTEM_THEME) return mode;
+  return systemPrefersDark() ? "dark" : "light";
+}
 
 function applyTheme(id: string) {
   if (typeof document === "undefined") return;
@@ -27,6 +48,7 @@ function applyTheme(id: string) {
 function readStored(): ThemeMode {
   try {
     const v = storage.getItem(STORAGE_KEYS.theme);
+    if (v === SYSTEM_THEME) return SYSTEM_THEME;
     if (v && isKnownTheme(v)) return v;
   } catch {}
   return "light";
@@ -59,8 +81,13 @@ function applyAccent(color: string | null) {
   const root = document.documentElement;
   if (color) {
     root.style.setProperty("--color-accent", color);
+    // on-accent 必须与 accent 一起注入：它无法由 color-mix 推导（见
+    // accentPalette.ts 的说明）。两个变量成对设、成对移除，否则"跟随主题"
+    // 态会残留一个孤儿 on 值。
+    root.style.setProperty("--color-on-accent", onAccentFor(color));
   } else {
     root.style.removeProperty("--color-accent");
+    root.style.removeProperty("--color-on-accent");
   }
 }
 
@@ -77,10 +104,25 @@ export function useTheme() {
   const [accent, setAccentState] = useState<string | null>(() =>
     readStoredAccent(),
   );
+  /** 实际生效的主题 id：mode 非 system 时等于 mode。 */
+  const [resolved, setResolved] = useState<ThemeMode>(() => resolveTheme(readStored()));
 
   useEffect(() => {
-    applyTheme(mode);
+    const apply = () => {
+      const id = resolveTheme(mode);
+      setResolved(id);
+      applyTheme(id);
+    };
+    apply();
     try { storage.setItem(STORAGE_KEYS.theme, mode); } catch {}
+    if (mode !== SYSTEM_THEME || typeof window === "undefined" || !window.matchMedia) {
+      return;
+    }
+    // 跟随系统态下要挂在 OS 偏好变化上；显式选主题时不挂——用户既然
+    // 指定了 light/dark，系统再改也不该把界面拽走。
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    mq.addEventListener("change", apply);
+    return () => mq.removeEventListener("change", apply);
   }, [mode]);
 
   useEffect(() => {
@@ -94,7 +136,8 @@ export function useTheme() {
   const setMode = useCallback((next: ThemeMode) => setModeState(next), []);
   const cycle = useCallback(() => {
     setModeState((cur) => {
-      const idx = THEMES.findIndex((t) => t.id === cur);
+      const resolvedCur = resolveTheme(cur);
+      const idx = THEMES.findIndex((t) => t.id === resolvedCur);
       return THEMES[(idx + 1) % THEMES.length]?.id ?? "light";
     });
   }, []);
@@ -102,5 +145,5 @@ export function useTheme() {
   const setAccent = useCallback((next: string | null) => {
     setAccentState(normalizeAccent(next));
   }, []);
-  return { mode, setMode, cycle, accent, setAccent };
+  return { mode, resolved, setMode, cycle, accent, setAccent };
 }

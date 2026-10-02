@@ -101,6 +101,12 @@ export function usePinnedArchived() {
     [state],
   );
 
+  /** 归档集合的 id 快照（只读）。设置页的「已归档」列表要靠它反查标题。 */
+  const archivedIds = useCallback(
+    (scope: PinnedArchivedScope): string[] => Array.from(state.archived[scope]),
+    [state],
+  );
+
   // ── 变更 ─────────────────────────────────────────────────────────
   const togglePin = useCallback((id: string, scope: PinnedArchivedScope): void => {
     setState((prev) => {
@@ -155,8 +161,8 @@ export function usePinnedArchived() {
     });
   }, []);
 
-  return useCallback(() => ({ isPinned, isArchived, togglePin, toggleArchive, forget }), [
-    isPinned, isArchived, togglePin, toggleArchive, forget,
+  return useCallback(() => ({ isPinned, isArchived, archivedIds, togglePin, toggleArchive, forget }), [
+    isPinned, isArchived, archivedIds, togglePin, toggleArchive, forget,
   ])();
 }
 

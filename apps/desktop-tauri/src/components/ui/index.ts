@@ -14,4 +14,11 @@ export {
 } from "./Input";
 export { Modal, ConfirmDialog, type ModalProps, type ConfirmDialogProps } from "./Modal";
 export { SegmentedControl, type SegmentedControlProps } from "./SegmentedControl";
+export {
+  SettingsGroup,
+  SettingsRow,
+  type SettingsGroupProps,
+  type SettingsRowProps,
+} from "./SettingsRow";
 export { Spinner } from "./Spinner";
+export { Switch, type SwitchProps, type SwitchSize } from "./Switch";

@@ -194,6 +194,27 @@
 .chat-surface {
   background-color: var(--theme-bg-chat, var(--color-bg-primary));
 }
+
+/* ── 壁纸（L3.6）─────────────────────────────────────────────────
+   挂在 .chat-surface 而不是 .app-shell：侧边栏、顶栏、对话面板、弹窗
+   全是各自的不透明实色，壁纸铺在最底只会在接缝里露出几像素——看得见
+   但等于没挂。聊天滚动区是应用里最大的一块整面，且本来就该允许个性化，
+   壁纸铺在这里是唯一"真能看见"的位置。
+
+   蒙版用 color-mix 而不是半透明黑：黑蒙版在浅色主题下会把壁纸压成灰
+   脏色，用**当前主题自己的底色**去压，才能在明暗两套主题下都保持
+   壁纸的原有观感、同时把正文对比度托回 AA。 */
+[data-wallpaper="on"] .chat-surface {
+  background-image:
+    linear-gradient(
+      color-mix(in srgb, var(--theme-bg-chat, var(--color-bg-primary)) 86%, transparent),
+      color-mix(in srgb, var(--theme-bg-chat, var(--color-bg-primary)) 86%, transparent)
+    ),
+    var(--wallpaper-image);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}
 .pane-main {
   flex: 1;
   border-top-left-radius: 12px;
@@ -542,8 +563,14 @@
   align-items: center;
   gap: 10px;
   padding: 8px 10px;
-  border-radius: var(--radius-lg);
-  background: var(--color-bg-tertiary);
+  /* 2026-10-02：去掉独立胶囊底色（此前 bg-tertiary + radius-lg），改由
+     Sidebar.tsx 的包裹层画一条 border-top 承担分隔。
+     这块与上方会话列表是**同一个连续表面**——底色差一档，视觉上就成了
+     "侧栏到此为止，下面另有一块"，可它其实还是侧栏的一部分。线只说"边界
+     在哪"，填充色才有"这是什么"的暗示。
+     transparent 而非写 sidebar 色，是为了让 --theme-bg-sidebar 换肤时
+     自动跟随，不必同步改两处。 */
+  background: transparent;
   /* 不再 position: sticky — user-card 是 .pane-left 的直接子代,跟 .sidebar-sections
      (flex: 1 撑满中间) 平级,文档流里永远在 aside 底部。之前的 sticky bottom: 0
      在 zoom 改变 aside 可视边界时会被 overflow: hidden 切掉,视觉上消失。 */

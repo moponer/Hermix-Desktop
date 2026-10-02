@@ -12,7 +12,14 @@ import { SessionPickerDialog } from "./components/SessionPickerDialog";
 import { useStreamChat } from "./hooks/useStreamChat";
 import { AppProviders } from "./app/AppProviders";
 import { renderRoutes, type RouteContext } from "./app/routes";
-import { SystemConfigPanel, type ConfigCategory } from "./components/SystemConfigPanel";
+import { type ConfigCategory } from "./components/SystemConfigPanel";
+import { useWallpaper } from "./hooks/useWallpaper";
+
+/** 壁纸宿主：无渲染输出，只为在应用启动时把壁纸状态装进 documentElement。 */
+function WallpaperHost() {
+  useWallpaper();
+  return null;
+}
 import { useAppBootstrap } from "./app/useAppBootstrap";
 import {
   readDraftWorkspace,
@@ -128,18 +135,10 @@ function computeLeftMin(vw: number): number {
 
 export default function App() {
   const [page, setPageRaw] = useState<NavPage>("chat");
-  // 系统配置弹窗（非路由跳转）
-  const [showConfigModal, setShowConfigModal] = useState(false);
-  // 弹窗打开时落在哪个分类。默认「模型」：配置入口绝大多数是"没配模型/想换
-  // 模型"，此前硬编码落在「工具」→ 用户点了"配置模型"却看到插件页。
+  // 设置落点分类。默认「模型」：配置入口绝大多数是"没配模型/想换模型"，
+  // 此前硬编码落在「工具」→ 用户点了"配置模型"却看到插件页。
   const [configCategory, setConfigCategory] = useState<ConfigCategory>("model");
 
-  /** 打开系统配置弹窗。`category` 让调用方指定落点（如聊天输入框的
-   *  "未配置模型"入口应直达「模型」），缺省「模型」。 */
-  const openSettings = useCallback((category: ConfigCategory = "model") => {
-    setConfigCategory(category);
-    setShowConfigModal(true);
-  }, []);
   // 「自定义应用」页「创建新应用」按钮跳转时注入的预填指令（一次性消费）。
   const [pendingPrefill, setPendingPrefill] = useState<string | null>(null);
   // 视口自适应面板最小宽度 — 窗口缩小时缩小主列/左列最小宽
@@ -151,6 +150,22 @@ export default function App() {
     setPageRaw(p);
     if (p !== "chat") setRightOpen(false);
   }, []);
+
+  /** 打开设置页。`category` 让调用方指定落点（如聊天输入框的
+   *  "未配置模型"入口应直达「模型」），缺省「模型」。
+   *
+   *  必须走 `setPage` 包装而不是 `setPageRaw`：包装里那条
+   *  `if (p !== "chat") setRightOpen(false)` 才是"切非对话页收右栏"的唯一
+   *  真相源。直接调 setPageRaw 会绕过它，右侧预览竖条就会留在设置页上。 */
+  const openSettings = useCallback((category: ConfigCategory = "model") => {
+    setConfigCategory(category);
+    setPage("systemconfig");
+  }, [setPage]);
+
+  // 设置页是专注视图：侧栏让位，把整幅宽度交给设置内容，点「返回」才回主界面。
+  // 刻意**不改 sidebarOpen** —— 那是用户的全局布局偏好，若在这里把它置 false，
+  // 从设置返回后侧栏就永久收起了，得用户自己去拉回来。只做派生，见下方
+  // sidebarVisible。
 const [sessions, setSessions] = useState<Session[]>([]);
 const [messageQueue, setMessageQueue] = useState<QueuedMessage[]>([]);
 // 右栏"加入对话"右键菜单触发外部文件附件。
@@ -273,6 +288,10 @@ setPage("chat");
   }, [activeSessionId]);
 
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  // 设置页是专注视图：侧栏让位，把整幅宽度交给设置内容，点「返回」才回主界面。
+  // 刻意**不改 sidebarOpen** —— 那是用户的全局布局偏好，若在这里把它置 false，
+  // 从设置返回后侧栏就永久收起了，得用户自己去拉回来。这里只做派生。
+  const sidebarVisible = sidebarOpen && page !== "systemconfig";
 
   // 全局搜索浮层。从主导航摘掉"搜索"页后由标题栏图标触发。
   const [searchOpen, setSearchOpen] = useState(false);
@@ -3364,10 +3383,16 @@ return {
     startCreateAppFlow,
     chatNode: chatViewNode,
     activeSessionId,
+    settingsBack: () => setPage("chat"),
+    settingsCategory: configCategory,
   };
 
   return (
     <AppProviders value={streamChatApi}>
+    {/* L3.6 壁纸：应用根挂一次即可（模块级共享 store，设置页再挂也是
+        同一份状态）。只负责把 CSS 变量与 data 属性写进 documentElement，
+        真正消费在 components-layout.css 的 [data-wallpaper="on"]。 */}
+    <WallpaperHost />
     <div className="app-shell">
       <TitleBar />
       <SessionPickerDialog
@@ -3409,9 +3434,14 @@ return {
       })()}
       <div
         className="app-body"
-        data-left-open={sidebarOpen ? "true" : "false"}
+        data-left-open={sidebarVisible ? "true" : "false"}
         data-right-open={rightOpen ? "true" : "false"}
-        data-right-rail={!rightOpen ? "true" : "false"}
+        // 折叠态留 44px 竖条（components-layout.css §右列"折叠"态）：那是 chat
+        // 场景的设计——常驻角标提醒"有 N 个产物没看"。设置页没有产物可提醒，
+        // 留一条纯装饰窄条就是纯占地方，所以这里额外判一次 page。
+        // 只改 rail 不改 right-open：rightOpen 是真实状态（产物面板开没开），
+        // 不该被页面导航篡改，返回对话时还能恢复原样。
+        data-right-rail={!rightOpen && page !== "systemconfig" ? "true" : "false"}
         style={{
           "--ab-left-w": `${left.width}px`,
           "--ab-right-w": rightOpen ? `${right.width}px` : "0px",
@@ -3419,11 +3449,11 @@ return {
           "--left-min": `${leftMin}px`,
         } as React.CSSProperties}
       >
-        {sidebarOpen && <div className="pane-overlay md:hidden" onClick={() => setSidebarOpen(false)} />}
+        {sidebarVisible && <div className="pane-overlay md:hidden" onClick={() => setSidebarOpen(false)} />}
 
         {/* Left sidebar — grid column 1 controls width; wrapper handles mobile slide */}
         <div
-          className={`${sidebarOpen ? "translate-x-0" : "-translate-x-full"} transition-transform duration-slow absolute md:relative z-20 h-full min-h-0 overflow-hidden`}
+          className={`${sidebarVisible ? "translate-x-0" : "-translate-x-full"} transition-transform duration-slow absolute md:relative z-20 h-full min-h-0 overflow-hidden`}
         >
           <ErrorBoundary name="侧边栏">
           <Sidebar
@@ -3469,7 +3499,7 @@ return {
                 不与「专家」「自动化」等页头重叠。
               main 因此改为 flex column：路由内容包在弹性容器里占剩余高度，
               动作行出现时页面整体下移，不会把内容顶出可视区。 */}
-          {!sidebarOpen && page !== "chat" && (
+          {!sidebarVisible && page !== "chat" && page !== "systemconfig" && (
             <SidebarRevealRow
               onExpand={() => setSidebarOpen(true)}
               onOpenSearch={() => setSearchOpen(true)}
@@ -3512,8 +3542,10 @@ return {
         </div>
         {/* 右栏折叠态：44px 竖条，作为栅格第三列的原位替代。CSS 在
             <900px 视口下把列宽与竖条一并撤掉（那里 44px 不如留给正文）。
-            展开走 handleToggleRight —— 窄视口下它会先扩窗再开，不会抖。 */}
-        {!rightOpen && (
+            展开走 handleToggleRight —— 窄视口下它会先扩窗再开，不会抖。
+            设置页不渲染：竖条的存在意义是"提醒有产物没看"，设置页没有产物，
+            留着是纯装饰；且它会把整幅宽度切掉一截，反而不像整页设置。 */}
+        {!rightOpen && page !== "systemconfig" && (
           <RightRail count={previewTabs.length} onExpand={() => void handleToggleRight()} />
         )}
       </div>
@@ -3521,9 +3553,6 @@ return {
       {/* 预览统一走右侧预览栏（含 PreviewPanel 自带的全屏），不再有全屏模态。 */}
       <ToastContainer />
       <ImageLightbox />
-      {showConfigModal && (
-        <SystemConfigPanel initialCategory={configCategory} onClose={() => setShowConfigModal(false)} />
-      )}
     </div>
     </AppProviders>
   );

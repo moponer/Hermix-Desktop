@@ -32,6 +32,15 @@ export async function openDataDir(): Promise<void> {
   await invoke("open_external_url", { url: path });
 }
 
+/**
+ * 数据目录路径本身（供设置页"数据目录"行展示）。
+ * 走同一个 `get_data_dir` 命令，因此与 `openDataDir` 打开的必然是同一处，
+ * 不会出现在"显示 A 路径 / 打开 B 路径"的错位。
+ */
+export async function getDataDir(): Promise<string> {
+  return invoke<string>("get_data_dir");
+}
+
 export async function openExternalUrl(url: string): Promise<void> {
   try {
     await invoke("open_external_url", { url });
@@ -264,6 +273,49 @@ export async function readBackendLogTail(tailLines: number): Promise<BackendLogT
 
 export async function openLogDirectory(): Promise<string> {
   return invoke("open_log_directory");
+}
+
+// ── 系统级设置（L4 通知 / 自启 / 托盘，L3.6 壁纸）────────────────────
+// 全部对应 system_settings.rs 里的 #[tauri::command]。失败一律 reject，
+// 前端必须把错误如实弹出来：这些能力"看起来开了但没生效"最难排查。
+
+export function getAutostart(): Promise<boolean> {
+  return invoke("get_autostart");
+}
+
+export function setAutostart(enabled: boolean): Promise<void> {
+  return invoke("set_autostart", { enabled });
+}
+
+export function sendNotification(title: string, body: string): Promise<void> {
+  return invoke("send_notification", { title, body });
+}
+
+export function getTrayEnabled(): Promise<boolean> {
+  return invoke("get_tray_enabled");
+}
+
+export function syncTray(enabled: boolean): Promise<void> {
+  return invoke("sync_tray", { enabled });
+}
+
+export interface WallpaperInfo {
+  /** 数据目录内的文件名（固定 `wallpaper`），不是原始路径。 */
+  file: string;
+  /** 用户当初挑的原图路径，仅供展示。 */
+  source: string;
+}
+
+export function getWallpaper(): Promise<WallpaperInfo | null> {
+  return invoke("get_wallpaper");
+}
+
+export function setWallpaper(sourcePath: string): Promise<WallpaperInfo> {
+  return invoke("set_wallpaper", { sourcePath });
+}
+
+export function clearWallpaper(): Promise<void> {
+  return invoke("clear_wallpaper");
 }
 
 // Aliases for SettingsView compatibility

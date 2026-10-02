@@ -509,7 +509,18 @@ pub async fn test_connection(
 pub struct InlineTestRequest {
     /// OpenAI 兼容端点基址，例如 `https://api.deepseek.com/v1`。
     pub base_url: String,
+    #[serde(default)]
     pub api_key: String,
+    /// 内置 provider id（如 `deepseek`）。**给了它就改由服务端从环境变量
+    /// 取密钥**，`api_key` 忽略。
+    ///
+    /// 为什么需要这条：内置供应商的凭据只存在于后端进程的环境变量里，
+    /// 前端永远读不到。此前模型页的「测试连接」对内置项只能提示"请去编辑
+    /// 里用新 Key 测"——等于没测。base_url 不是机密（前端自带映射表），
+    /// 密钥则绝不过网：这条分支让"测内置模型"真正可用，同时不把 key 暴露
+    /// 给前端。映射唯一真理源是 `hermix_config::env_var_name_for_provider`。
+    #[serde(default)]
+    pub provider_id: Option<String>,
     /// 可选：只验证这个模型是否在 /models 列表里。
     pub model: Option<String>,
 }
@@ -542,7 +553,31 @@ pub async fn test_inline(
     Json(req): Json<InlineTestRequest>,
 ) -> Result<Json<InlineTestResponse>, HttpError> {
     let base = req.base_url.trim_end_matches('/').to_string();
-    if base.is_empty() || req.api_key.trim().is_empty() {
+
+    // 密钥解析：给了 provider_id 就走环境变量（内置供应商路径），
+    // 否则用请求里带的（自定义 provider 路径，添加弹窗里用户刚敲的）。
+    let api_key: String = match req.provider_id.as_deref() {
+        Some(pid) if !pid.trim().is_empty() => {
+            match hermix_config::provider_api_key_from_env(pid) {
+                Some(k) if !k.trim().is_empty() => k,
+                _ => {
+                    let var = hermix_config::env_var_name_for_provider(pid);
+                    return Ok(Json(InlineTestResponse {
+                        ok: false,
+                        kind: Some("apikey".into()),
+                        status: 0,
+                        latency_ms: 0,
+                        error: Some(format!("未配置 {var}，无法测试该内置模型")),
+                        models: None,
+                        model_found: None,
+                    }));
+                }
+            }
+        }
+        _ => req.api_key.clone(),
+    };
+
+    if base.is_empty() || api_key.trim().is_empty() {
         return Ok(Json(InlineTestResponse {
             ok: false,
             kind: Some("bad_request".into()),
@@ -565,7 +600,7 @@ pub async fn test_inline(
 
     match client
         .get(&url)
-        .header("Authorization", format!("Bearer {}", req.api_key))
+        .header("Authorization", format!("Bearer {}", api_key))
         .send()
         .await
     {

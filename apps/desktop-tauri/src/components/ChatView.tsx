@@ -41,6 +41,8 @@ import {
   useSessionSkills,
 } from "../hooks/useExpert";
 import { useExpertCutoff } from "../hooks/useExpertCutoff";
+import { useSendKey } from "../hooks/useSendKey";
+import { useDesktopNotify } from "../hooks/useDesktopNotify";
 import { useWorkspaces } from "../hooks/useWorkspaces";
 import { pickDirectory } from "../desktopBridge";
 import { getAvailableTools, updateSessionMetadata, warmUpProvider, type ToolDescriptor } from "../api";
@@ -289,15 +291,20 @@ export const ChatView = memo(function ChatView({
   const [isAgentActiveState, setIsAgentActiveState] = useState(false);
   const [postStreamActivity, setPostStreamActivity] = useState(false);
   const prevStreamingRef = useRef(isStreaming);
+  const { notify } = useDesktopNotify();
   useEffect(() => {
     const wasStreaming = prevStreamingRef.current;
     prevStreamingRef.current = isStreaming;
     if (wasStreaming && !isStreaming) {
       setPostStreamActivity(true);
+      // L4：回复结束通知。notify 内部自己判"开关开 + 窗口无焦点"，
+      // 所以这里无条件调——把条件写在钩子里，设置页和 ChatView 不会
+      // 各判一套而出现"开关显示开、实际不弹"或反之。
+      notify("Hermix Desktop", "回复已完成。");
     } else if (isStreaming) {
       setPostStreamActivity(false);
     }
-  }, [isStreaming]);
+  }, [isStreaming, notify]);
 
   useEffect(() => {
     if (!postStreamActivity) return;
@@ -355,6 +362,7 @@ export const ChatView = memo(function ChatView({
   }, []);
   const [permissionLevel, setPermissionLevel] = usePermissionLevel();
   const [domainMode, setDomainMode] = useDomainMode();
+  const [sendKey] = useSendKey();
   const { workspace, setWorkspace: setWorkspaceRaw } = useSessionWorkspace(sessionId);
   const workspaceLocked =
     (session?.messages?.length ?? 0) > 0 || sending || isStreaming;
@@ -776,7 +784,11 @@ export const ChatView = memo(function ChatView({
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
+    // L3.8：发送键可配（设置 › 通用 › 发送快捷键）。两种模式都保留
+    // Shift+Enter 换行——那是多行输入的通用习惯，不该被模式抢走。
+    const ctrlEnter = sendKey === "ctrl_enter";
+    const isSend = e.key === "Enter" && !e.shiftKey && (ctrlEnter ? e.ctrlKey || e.metaKey : true);
+    if (isSend) {
       e.preventDefault();
       handleSubmit();
     }

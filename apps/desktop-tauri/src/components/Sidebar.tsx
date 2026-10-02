@@ -603,8 +603,15 @@ export function Sidebar({
         )}
       </div>
 
-      {/* Bottom: user card + pop menu */}
-      <div className="px-3 pb-3 pt-2" style={{ flexShrink: 0 }}>
+      {/* Bottom: user card + pop menu
+          2026-10-02：分隔线画在这个**包裹层**而不是 .user-card 上——包裹层有
+          px-3，线若挂在 card 上会被内缩 12px 变成一小段，像没画全。挂在包裹
+          层则横贯整个侧栏宽度，与上方会话区真正断开。背景保持 transparent，
+          跟上方共用 --theme-bg-sidebar，不做独立胶囊色。 */}
+      <div
+        className="px-3 pb-3 pt-2 border-t border-[color:var(--color-border-subtle)]"
+        style={{ flexShrink: 0 }}
+      >
         <div
           ref={userCardRef}
           className="user-card"
