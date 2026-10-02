@@ -183,6 +183,10 @@ pub struct BrowserPtcHandler {
     backend: std::sync::Arc<dyn BrowserBackend>,
     /// 单程序步骤上限（防灌水；对齐 MultiEdit 的 50 上限惯例）。
     max_steps: usize,
+    /// 单程序总时长预算。`wait_for` 的 timeout_ms 是模型可控参数（可能被
+    /// 设成极大值），没有外层的程序级预算时，一个卡住的等待会把整个工具
+    /// 调用无限期占住——步骤上限挡不住时间维度的挂起。
+    total_budget: std::time::Duration,
 }
 
 impl BrowserPtcHandler {
@@ -190,6 +194,20 @@ impl BrowserPtcHandler {
         Self {
             backend,
             max_steps: 50,
+            total_budget: std::time::Duration::from_secs(120),
+        }
+    }
+
+    /// 测试用：注入更短预算以验证「预算耗尽返回部分结果」路径。
+    #[cfg(test)]
+    fn with_budget(
+        backend: std::sync::Arc<dyn BrowserBackend>,
+        total_budget: std::time::Duration,
+    ) -> Self {
+        Self {
+            backend,
+            max_steps: 50,
+            total_budget,
         }
     }
 
@@ -317,6 +335,9 @@ impl ToolHandler for BrowserPtcHandler {
         // 逐步骤执行：首错即停（fail-fast）——后续步骤的语义依赖前序
         // 状态（导航→快照→点击），静默跳过会让程序带病继续。错误里
         // 带已完成的步骤日志，方便模型定位是哪一步坏了。
+        // 时间维度：整个程序一个 deadline，每步用「剩余预算」做 timeout，
+        // 挂起的步骤被取消而不是永久占用调用。
+        let deadline = std::time::Instant::now() + self.total_budget;
         for (i, step) in steps.iter().enumerate() {
             let op = match step {
                 PtcStep::Navigate { .. } => "navigate",
@@ -328,14 +349,20 @@ impl ToolHandler for BrowserPtcHandler {
                 PtcStep::Js { .. } => "js",
                 PtcStep::Emit { .. } => "emit",
             };
-            match self.execute_step(&self.backend, step, &mut vars, &mut output).await {
-                Ok(detail) => logs.push(PtcStepLog {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            let step_result = tokio::time::timeout(
+                remaining,
+                self.execute_step(&self.backend, step, &mut vars, &mut output),
+            )
+            .await;
+            match step_result {
+                Ok(Ok(detail)) => logs.push(PtcStepLog {
                     index: i,
                     op: op.into(),
                     status: "ok".into(),
                     detail: Some(detail),
                 }),
-                Err(e) => {
+                Ok(Err(e)) => {
                     logs.push(PtcStepLog {
                         index: i,
                         op: op.into(),
@@ -347,6 +374,19 @@ impl ToolHandler for BrowserPtcHandler {
                         "steps_completed": logs,
                         "hint": "don't blindly retry — the browser state is mid-program; \
                                  fix the failing step or re-plan from the snapshot",
+                    });
+                    return Ok(body.to_string());
+                }
+                // 预算耗尽：回传已完成的部分，别让模型对着空结果猜页面状态。
+                Err(_) => {
+                    let body = json!({
+                        "error": format!(
+                            "步骤 {i}（{op}）超出总时长预算 {}s",
+                            self.total_budget.as_secs()
+                        ),
+                        "steps_completed": logs,
+                        "hint": "PTC 总预算耗尽——通常是某步 wait_for/js 卡住或页面无响应。\
+                                 拆短步骤、收紧 wait_for 的 timeout_ms，或先 snapshot 看页面是否还在加载。",
                     });
                     return Ok(body.to_string());
                 }
@@ -1606,6 +1646,10 @@ mod tests {
                     "js evaluation threw: page-side boom".into(),
                 ));
             }
+            // 用于验证程序级时长预算：卡住的步骤（远超测试用的 50ms 预算）
+            if expression.contains("slow") {
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            }
             Ok(json!({"status": "ok", "type": "number", "value": 2}).to_string())
         }
     }
@@ -1666,6 +1710,29 @@ mod tests {
         assert_eq!(parsed["vars"]["snap"], "Page snapshot");
         assert_eq!(parsed["vars"]["answer"], "2");
         assert_eq!(parsed["output"][0], "2");
+    }
+
+    #[tokio::test]
+    async fn test_browser_ptc_budget_exhausted() {
+        // 预算 50ms，第二步 js 卡住 5s → 预算耗尽应返回已完成的部分结果，
+        // 而不是等满 5s 或让调用永久挂起。
+        let handler = BrowserPtcHandler::with_budget(backend(), std::time::Duration::from_millis(50));
+        let result = handler
+            .execute(json!({
+                "steps": [
+                    {"op": "navigate", "url": "https://example.com"},
+                    {"op": "js", "expression": "slow"},
+                    {"op": "click", "target": "#never_reached"}
+                ]
+            }))
+            .await
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&result).unwrap();
+        assert!(parsed["error"].as_str().unwrap().contains("预算"));
+        // 卡住的那步不计入已完成；后续步骤不再执行
+        let done = parsed["steps_completed"].as_array().unwrap();
+        assert_eq!(done.len(), 1);
+        assert_eq!(done[0]["op"], "navigate");
     }
 
     #[tokio::test]
