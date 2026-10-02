@@ -9,7 +9,7 @@ import {
   getAutostart, setAutostart, getTrayEnabled, syncTray,
 } from "../../desktopBridge";
 import { SettingsGroup, SettingsRow, SegmentedControl, Switch } from "../ui";
-import { cx } from "../../lib/cx";
+import { ChoiceCard } from "./ChoiceCard";
 import { toastError } from "../../hooks/useToast";
 
 /**
@@ -52,74 +52,25 @@ function ModeCards() {
       <h3 className="px-1 text-[length:var(--text-ui)] font-medium text-[var(--color-text-primary)]">
         工作模式
       </h3>
-      <div className="grid grid-cols-2 gap-3">
-        <ModeCard
+      <div className="grid grid-cols-2 gap-3" role="radiogroup" aria-label="工作模式">
+        <ChoiceCard
           label="编程开发"
-          desc="注入代码纪律，grep / 搜索类工具加权。"
-          icon={Code2}
-          active={mode === "code"}
-          onClick={() => setMode("code")}
+          description="注入代码纪律，grep / 搜索类工具加权。"
+          icon={<Code2 className="icon-lg" />}
+          tone="info"
+          selected={mode === "code"}
+          onSelect={() => setMode("code")}
         />
-        <ModeCard
+        <ChoiceCard
           label="日常办公"
-          desc="由后端按每轮对话内容自动判断，不固定加权。"
-          icon={Briefcase}
-          active={mode === "auto"}
-          onClick={() => setMode("auto")}
+          description="由后端按每轮对话内容自动判断，不固定加权。"
+          icon={<Briefcase className="icon-lg" />}
+          tone="success"
+          selected={mode === "auto"}
+          onSelect={() => setMode("auto")}
         />
       </div>
     </section>
-  );
-}
-
-function ModeCard({
-  label, desc, icon: Icon, active, onClick,
-}: {
-  label: string;
-  desc: string;
-  icon: typeof Code2;
-  active: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      aria-pressed={active}
-      className={cx(
-        "flex flex-col items-start gap-1.5 rounded-[var(--radius-lg)] border-2 p-4 text-left transition-colors",
-        active
-          ? "border-[var(--color-accent)] bg-[var(--color-accent-on-text)]"
-          : "border-[var(--color-border-secondary)] hover:border-[var(--color-border-primary)]",
-      )}
-    >
-      <div className="flex w-full items-center justify-between">
-        <Icon
-          className={cx(
-            "icon-lg",
-            active ? "text-[var(--color-accent)]" : "text-[var(--color-text-muted)]",
-          )}
-        />
-        {/* 单选环：比纯描边更明确"这组里只能选一个"，也便于色觉障碍用户
-            靠形状而非颜色判断选中态。 */}
-        <span
-          aria-hidden
-          className={cx(
-            "flex h-4 w-4 items-center justify-center rounded-full border-2",
-            active
-              ? "border-[var(--color-accent)] bg-[var(--color-accent)]"
-              : "border-[var(--color-border-primary)]",
-          )}
-        >
-          {active && <Check className="icon-sm text-[var(--color-on-accent)]" />}
-        </span>
-      </div>
-      <div className="text-[length:var(--text-ui)] font-medium text-[var(--color-text-primary)]">
-        {label}
-      </div>
-      <div className="text-[length:var(--text-meta)] leading-relaxed text-[var(--color-text-muted)]">
-        {desc}
-      </div>
-    </button>
   );
 }
 

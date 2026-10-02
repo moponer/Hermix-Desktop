@@ -144,6 +144,12 @@ export default function App() {
     setConfigCategory(category);
     setPageRaw("systemconfig");
   }, []);
+
+  // 设置页是专注视图：侧栏让位，把整幅宽度交给设置内容，点「返回」才回主界面。
+  // 刻意**不改 sidebarOpen** —— 那是用户的全局布局偏好，若在这里把它置 false，
+  // 从设置返回后侧栏就永久收起了，得用户自己去拉回来。只做派生，见下方
+  // sidebarVisible。
+
   // 「自定义应用」页「创建新应用」按钮跳转时注入的预填指令（一次性消费）。
   const [pendingPrefill, setPendingPrefill] = useState<string | null>(null);
   // 视口自适应面板最小宽度 — 窗口缩小时缩小主列/左列最小宽
@@ -277,6 +283,10 @@ setPage("chat");
   }, [activeSessionId]);
 
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  // 设置页是专注视图：侧栏让位，把整幅宽度交给设置内容，点「返回」才回主界面。
+  // 刻意**不改 sidebarOpen** —— 那是用户的全局布局偏好，若在这里把它置 false，
+  // 从设置返回后侧栏就永久收起了，得用户自己去拉回来。这里只做派生。
+  const sidebarVisible = sidebarOpen && page !== "systemconfig";
 
   // 全局搜索浮层。从主导航摘掉"搜索"页后由标题栏图标触发。
   const [searchOpen, setSearchOpen] = useState(false);
@@ -3393,7 +3403,7 @@ return {
       })()}
       <div
         className="app-body"
-        data-left-open={sidebarOpen ? "true" : "false"}
+        data-left-open={sidebarVisible ? "true" : "false"}
         data-right-open={rightOpen ? "true" : "false"}
         data-right-rail={!rightOpen ? "true" : "false"}
         style={{
@@ -3403,11 +3413,11 @@ return {
           "--left-min": `${leftMin}px`,
         } as React.CSSProperties}
       >
-        {sidebarOpen && <div className="pane-overlay md:hidden" onClick={() => setSidebarOpen(false)} />}
+        {sidebarVisible && <div className="pane-overlay md:hidden" onClick={() => setSidebarOpen(false)} />}
 
         {/* Left sidebar — grid column 1 controls width; wrapper handles mobile slide */}
         <div
-          className={`${sidebarOpen ? "translate-x-0" : "-translate-x-full"} transition-transform duration-slow absolute md:relative z-20 h-full min-h-0 overflow-hidden`}
+          className={`${sidebarVisible ? "translate-x-0" : "-translate-x-full"} transition-transform duration-slow absolute md:relative z-20 h-full min-h-0 overflow-hidden`}
         >
           <ErrorBoundary name="侧边栏">
           <Sidebar
@@ -3453,7 +3463,7 @@ return {
                 不与「专家」「自动化」等页头重叠。
               main 因此改为 flex column：路由内容包在弹性容器里占剩余高度，
               动作行出现时页面整体下移，不会把内容顶出可视区。 */}
-          {!sidebarOpen && page !== "chat" && (
+          {!sidebarVisible && page !== "chat" && page !== "systemconfig" && (
             <SidebarRevealRow
               onExpand={() => setSidebarOpen(true)}
               onOpenSearch={() => setSearchOpen(true)}

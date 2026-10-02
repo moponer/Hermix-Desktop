@@ -1,11 +1,12 @@
 import { useState } from "react";
-import { Check, RotateCcw, Sun, Moon, Monitor, ImagePlus, Trash2, Loader2 } from "lucide-react";
+import { RotateCcw, Sun, Moon, Monitor, ImagePlus, Trash2, Loader2, Check } from "lucide-react";
 
 import { useTheme, SYSTEM_THEME } from "../../hooks/useTheme";
 import { useWallpaper } from "../../hooks/useWallpaper";
 import { THEMES } from "../../styles/themes/registry";
 import { ACCENT_PALETTE, accentLabel } from "../../styles/themes/accentPalette";
 import { SettingsGroup, SettingsRow, Switch } from "../ui";
+import { ChoiceCard } from "./ChoiceCard";
 import { cx } from "../../lib/cx";
 import { ThemeToggle } from "../ThemeToggle";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -38,28 +39,31 @@ export function AppearanceTab() {
         <h3 className="px-1 text-[length:var(--text-ui)] font-medium text-[var(--color-text-primary)]">
           明暗模式
         </h3>
-        <div className="grid grid-cols-3 gap-3">
-          <ModeCard
+        <div className="grid grid-cols-3 gap-3" role="radiogroup" aria-label="明暗模式">
+          <ChoiceCard
             label="浅色"
-            icon={Sun}
-            active={mode === "light"}
-            preview="light"
-            onClick={() => setMode("light")}
+            description="白底深字。白天与明亮环境下对比更舒适。"
+            icon={<Sun className="icon-lg" />}
+            tone="warning"
+            selected={mode === "light"}
+            onSelect={() => setMode("light")}
           />
-          <ModeCard
+          <ChoiceCard
             label="深色"
-            icon={Moon}
-            active={mode === "dark"}
-            preview="dark"
-            onClick={() => setMode("dark")}
+            description="深底亮字。夜间与长时间阅读时更省眼。"
+            icon={<Moon className="icon-lg" />}
+            tone="info"
+            selected={mode === "dark"}
+            onSelect={() => setMode("dark")}
           />
-          <ModeCard
+          <ChoiceCard
             label="跟随系统"
-            icon={Monitor}
-            active={mode === SYSTEM_THEME}
-            preview={resolved === "dark" ? "dark" : "light"}
-            hint={`当前：${THEMES.find((t) => t.id === resolved)?.label ?? resolved}`}
-            onClick={() => setMode(SYSTEM_THEME)}
+            description="自动跟随操作系统的深浅色设置，切换时实时跟随。"
+            icon={<Monitor className="icon-lg" />}
+            tone="success"
+            selected={mode === SYSTEM_THEME}
+            onSelect={() => setMode(SYSTEM_THEME)}
+            meta={`当前：${THEMES.find((t) => t.id === resolved)?.label ?? resolved}`}
           />
         </div>
       </section>
@@ -225,57 +229,5 @@ function WallpaperGroup() {
         </div>
       </SettingsRow>
     </SettingsGroup>
-  );
-}
-
-/* ── 三选卡 ───────────────────────────────────────────────────────
-   缩略图是"示意图"而非真实渲染：themes/*.css 按 :root[data-theme] 作用域
-   提供 token，没法把另一套主题的内联样式摘出来当预览。这里用固定的
-   明/暗配色画出结构示意，只表达"亮底还是暗底"，不谎称是像素级预览。 */
-function ModeCard({
-  label, icon: Icon, active, preview, hint, onClick,
-}: {
-  label: string;
-  icon: typeof Sun;
-  active: boolean;
-  preview: "light" | "dark";
-  hint?: string;
-  onClick: () => void;
-}) {
-  const dark = preview === "dark";
-  return (
-    <button
-      onClick={onClick}
-      aria-pressed={active}
-      className={cx(
-        "group flex flex-col items-center gap-2 rounded-[var(--radius-lg)] border-2 p-3 transition-colors",
-        active
-          ? "border-[var(--color-accent)] bg-[var(--color-accent-on-text)]"
-          : "border-[var(--color-border-secondary)] hover:border-[var(--color-border-primary)]",
-      )}
-    >
-      <div
-        aria-hidden
-        className="flex h-14 w-full flex-col justify-between rounded-[var(--radius-md)] p-2"
-        style={{ background: dark ? "#171717" : "#ffffff", border: "1px solid var(--color-border-primary)" }}
-      >
-        <div className="flex gap-1">
-          <div className="h-1.5 w-1.5 rounded-full" style={{ background: dark ? "#ededed" : "#242424" }} />
-          <div className="h-1.5 w-1.5 rounded-full" style={{ background: dark ? "#5f636b" : "#c8c8c8" }} />
-        </div>
-        <div className="space-y-1">
-          <div className="h-1.5 w-4/5 rounded-full" style={{ background: dark ? "#9a9ea6" : "#575757" }} />
-          <div className="h-1.5 w-3/5 rounded-full" style={{ background: dark ? "#5f636b" : "#8c8c8c" }} />
-        </div>
-      </div>
-      <div className="flex items-center gap-1.5">
-        <Icon className="icon-sm text-[var(--color-text-secondary)]" />
-        <span className="text-[length:var(--text-ui)] text-[var(--color-text-primary)]">{label}</span>
-        {active && <Check className="icon-sm text-[var(--color-accent)]" />}
-      </div>
-      {hint && (
-        <span className="text-[length:var(--text-meta)] text-[var(--color-text-muted)]">{hint}</span>
-      )}
-    </button>
   );
 }
