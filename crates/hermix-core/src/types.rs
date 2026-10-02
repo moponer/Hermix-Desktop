@@ -1052,6 +1052,41 @@ pub struct CommandOutput {
     pub stderr: String,
 }
 
+// ---------------------------------------------------------------------------
+// PtySession* (persistent terminal sessions, referenced by TerminalBackend)
+// ---------------------------------------------------------------------------
+
+/// Snapshot of one persistent terminal session.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PtySessionInfo {
+    pub session_id: String,
+    /// Shell program hosting the session (e.g. "powershell.exe").
+    pub shell: String,
+    pub workdir: Option<String>,
+    /// Unix millis.
+    pub created_at_ms: u64,
+    /// Unix millis of the last output byte seen on the session.
+    pub last_activity_ms: u64,
+    /// False once the shell process has exited (or the session was closed).
+    pub alive: bool,
+}
+
+/// Output read from a persistent terminal session after a send/read call.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PtySessionOutput {
+    pub session_id: String,
+    /// Newly accumulated output since the previous read on this session,
+    /// with escape-sequence noise stripped (see the pty_filter module in
+    /// hermix-environments) and synthesized prompt markers removed.
+    pub text: String,
+    /// True when the read budget expired while the shell was still
+    /// processing — `text` is a partial view and a follow-up read will
+    /// return the rest.
+    pub busy: bool,
+    /// False once the shell process has exited.
+    pub alive: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

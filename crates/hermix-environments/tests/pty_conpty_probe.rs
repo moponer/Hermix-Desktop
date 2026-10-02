@@ -1,24 +1,29 @@
-//! 真机探针：portable-pty 0.9 + Windows ConPTY + PowerShell 的实际行为。
+//! 真机探针：portable-pty 0.9 + Windows ConPTY + PowerShell 的行为契约。
 //!
-//! 钉死四件事，为 pty_session.rs 的实现提供事实依据：
-//! 1. ConPTY 输出流的文本编码（UTF-8 直出还是 OEM/GBK）
-//! 2. PowerShell 在 ConPTY 下会合成哪些 OSC/CSI 噪音（标题、光标、SGR）
-//! 3. `-NoExit -Command "function prompt {...}"` 能否作为 prompt-marker 就绪信号
-//! 4. 输入回显（echo）与 `\r\n` 行尾的实际形态
+//! 钉死 `pty_session.rs` / `pty_filter.rs` 实现所依赖的四条事实，改动
+//! 这些模块前先重跑本测试。探索期的二分案例（cmd vs PowerShell、
+//! PSReadLine 噪音量化）已删除，只保留有断言的终版：
 //!
-//! 维持为常规测试（Windows-only 仓库）：断言最基本的事实，
-//! eprintln 保留原始字节供人读。
+//! 1. 会话形态 `-NoLogo -NoProfile -NonInteractive -NoExit -Command
+//!    "function prompt { '<marker>> ' }"` 下，marker 提示符在无输入时
+//!    **自渲染**（= `create_session` 的就绪信号），且每条命令结束后
+//!    **重现**（= 逐命令就绪信号）。
+//! 2. ConPTY 输出流恒为 UTF-8（CJK 完好）——过滤层据此只处理 UTF-8
+//!    跨块续接。
+//! 3. DSR 光标位置请求（`ESC[6n`）必须由输入管道回复 `ESC[1;1R`，
+//!    否则 conhost 永不渲染（cmd 与 PowerShell 均静默卡死）。生产实现
+//!    在 `pty_session::spawn_reader` 里自动应答，本探针同样内建。
+//! 4. 关闭顺序 kill → 等退出 → 排干 → drop master；直接 drop 活着的
+//!    pseudoconsole 会挂死（ClosePseudoConsole 阻塞）。
 
 use std::io::{Read, Write};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 
-fn spawn_session() -> (
-    portable_pty::PtyPair,
-    Box<dyn portable_pty::Child + Send + Sync>,
-    Box<dyn Read + Send>,
-    Box<dyn Write + Send>,
-) {
+#[test]
+fn probe_session_shell_contract() {
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
@@ -27,80 +32,89 @@ fn spawn_session() -> (
             pixel_width: 0,
             pixel_height: 0,
         })
-        .expect("openpty failed — ConPTY unavailable?");
+        .expect("openpty failed — ConPTY unavailable (needs Windows 10 1809+)");
     let mut cmd = CommandBuilder::new("powershell.exe");
-    cmd.args(["-NoLogo", "-NoProfile", "-NoExit", "-Command"]);
-    cmd.arg("function prompt { 'HERMIXPTY-PROBE> ' }");
-    let child = pair.slave.spawn_command(cmd).expect("spawn powershell failed");
-    let reader = pair.master.try_clone_reader().expect("clone reader failed");
-    let mut writer = pair.master.take_writer().expect("take writer failed");
-    (pair, child, reader, writer)
-}
+    cmd.args([
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-NoExit",
+        "-Command",
+        "function prompt { 'HERMIXPTY-PROBE> ' }",
+    ]);
+    let mut child = pair.slave.spawn_command(cmd).expect("spawn powershell");
+    let mut reader = pair.master.try_clone_reader().expect("clone reader");
+    let writer = Arc::new(Mutex::new(pair.master.take_writer().expect("take writer")));
 
-#[test]
-fn probe_conpty_powershell_behavior() {
-    let (_pair, mut child, mut reader, mut writer) = spawn_session();
-
-    // Reader thread: collect everything until killed.
-    let handle = std::thread::spawn(move || {
-        let mut all = Vec::new();
+    // 读线程：收集字节 + 自动应答 DSR（生产实现的同款握手）。
+    let collected: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink = collected.clone();
+    let reply_sink = writer.clone();
+    std::thread::spawn(move || {
         let mut buf = [0u8; 4096];
         loop {
             match reader.read(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => all.extend_from_slice(&buf[..n]),
-                Err(_) => break,
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    if let Ok(mut w) = reply_sink.lock() {
+                        if buf[..n].windows(4).any(|w4| w4 == b"\x1b[6n") {
+                            let _ = w.write_all(b"\x1b[1;1R");
+                            let _ = w.flush();
+                        }
+                    }
+                    sink.lock().unwrap().extend_from_slice(&buf[..n]);
+                }
             }
         }
-        all
     });
 
-    // Give PowerShell a moment to boot, then run two commands:
-    // one ASCII, one with Chinese to pin down the encoding.
-    std::thread::sleep(std::time::Duration::from_millis(2500));
-    writer
-        .write_all(b"$x = 21 + 21; Write-Output \"answer=$x\"\r\n")
-        .expect("write ascii cmd failed");
-    std::thread::sleep(std::time::Duration::from_millis(800));
-    writer
-        .write_all("Write-Output \"中文输出测试\"\r\n".as_bytes())
-        .expect("write cjk cmd failed");
-    std::thread::sleep(std::time::Duration::from_millis(2000));
-
-    let mut killer = child.clone_killer();
-    let _ = killer.kill();
-
-    let raw = handle.join().expect("reader thread panicked");
-    let lossy = String::from_utf8_lossy(&raw);
-    let valid_utf8 = std::str::from_utf8(&raw).is_ok();
-
-    eprintln!("=== total bytes: {} (valid utf8: {}) ===", raw.len(), valid_utf8);
-    eprintln!("=== lossy text ===\n{}", lossy);
-    eprintln!("=== escape bytes (non-printable, hex) ===");
-    let escapes: Vec<String> = raw
-        .iter()
-        .filter(|b| **b < 0x20 || **b == 0x1b)
-        .map(|b| format!("{:02x}", b))
-        .collect();
-    eprintln!("{}", escapes.join(" "));
-
-    // Assertions on facts we rely on in pty_session.rs:
-    assert!(
-        lossy.contains("answer=42"),
-        "ASCII command output missing from ConPTY stream"
-    );
-    if valid_utf8 {
-        assert!(
-            lossy.contains("中文输出测试"),
-            "UTF-8 CJK output missing — ConPTY re-encoded it?"
-        );
-    } else {
-        // ConPTY emitted non-UTF-8 (OEM/GBK) — the session layer must
-        // route ground-run bytes through decode_console_output.
-        eprintln!("NOTE: ConPTY output is NOT valid UTF-8 — GBK fallback required");
+    // 事实 1：marker 自渲染（冷启在 AV 重载机器上可能数秒）。
+    let mut marker_at = None;
+    for i in 0..10 {
+        std::thread::sleep(Duration::from_millis(2000));
+        let text = String::from_utf8_lossy(&collected.lock().unwrap()).to_string();
+        if text.contains("HERMIXPTY-PROBE") {
+            marker_at = Some(i * 2);
+            break;
+        }
     }
     assert!(
-        lossy.contains("HERMIXPTY-PROBE"),
-        "prompt marker never rendered — -NoExit -Command prompt override failed"
+        marker_at.is_some(),
+        "marker prompt never self-rendered within 20s — the session \
+         readiness signal this design depends on is gone"
     );
+
+    // 事实 2 + 1（重现）：发一条含 CJK 的命令。
+    writer
+        .lock()
+        .unwrap()
+        .write_all("Write-Output \"中文输出测试\"\r\n".as_bytes())
+        .expect("write cjk command");
+    std::thread::sleep(Duration::from_millis(4000));
+
+    let raw = collected.lock().unwrap().clone();
+    let text = String::from_utf8_lossy(&raw).to_string();
+    let valid_utf8 = std::str::from_utf8(&raw).is_ok();
+    eprintln!("=== valid utf8: {valid_utf8} ===\n=== raw ===\n{text}");
+
+    assert!(
+        valid_utf8 && text.contains("中文输出测试"),
+        "ConPTY output must be UTF-8 with CJK intact"
+    );
+    assert!(
+        text.matches("HERMIXPTY-PROBE").count() >= 2,
+        "marker must re-render after each command (per-command readiness)"
+    );
+
+    // 事实 4：kill → 等退出 → 排干 → drop master。
+    let mut killer = child.clone_killer();
+    let _ = killer.kill();
+    for _ in 0..40 {
+        if child.try_wait().ok().flatten().is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    drop(pair);
 }

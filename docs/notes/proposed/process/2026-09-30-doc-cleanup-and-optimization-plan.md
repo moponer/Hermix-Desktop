@@ -120,7 +120,7 @@ Status: implemented — 批次 A/B/C/D/E/G 已执行（2026-10-01）；仅批次
 **H3 无持久终端会话（不顺手的主因之一）**
 hermix terminal 每次调用都是新进程：cd、激活 venv、REPL/gdb 状态在调用间全部丢失，模型只能用 `cd x && y` 串接或反复绝对路径。dsh 有 tool-bash-persistent（持久 PTY：cwd/env/REPL 状态跨调用存活）。hermix terminal.rs 已有 `pty` 参数与 background 机制，缺的是**跨调用会话句柄**（session id + 后续 write/read 到同一 PTY）。修法：加 `persistent: true` + `session_id` 参数，会话表挂 TerminalBackend，超时回收。REPL/gdb/venv 场景一步到位。
 
-> H3 状态（2026-10-01）：执行中曾否决（判为平台限制），同日因事实错误（"Windows 无 PTY"）被推翻并独立立项：[2026-10-01-persistent-terminal-conpty](../architecture/2026-10-01-persistent-terminal-conpty.md)，待评审。
+> H3 状态（2026-10-02）：执行中曾否决（判为平台限制），2026-10-01 因事实错误（"Windows 无 PTY"）被推翻并独立立项，2026-10-02 交付（implemented）：[2026-10-01-persistent-terminal-conpty](../architecture/2026-10-01-persistent-terminal-conpty.md)。
 
 **H4 命令输出截断无恢复路径**
 `format_command_output` 100K 硬截断只说"truncated at N chars"——被截断的中间内容**拿不回来**（dsh 超限输出落 spill 文件，模型用 read_file 取回全文）。hermix 其实已有 spill 机制（run_loop.rs SPILL_INLINE_CHARS），但 terminal 工具层没接。修法：截断时落 spill 文件并在提示中给出路径。
@@ -227,6 +227,7 @@ K 与 H 是同一件事的拆分：H 是差距分析（本文 §批次 H），K 
 - 走过的弯路（两次"看起来能工作、实际零效果"，均被编译探针拦下）：① `--color-accent-choice: ;` 声明为空时 `var(x, fallback)` **不回退**而返回空串，强调色会静默消失；② 自引用 `var(--choice, var(--accent))` 与 `themes/*.css` 同特异性被后者胜出 + 循环依赖 → 整条声明 invalid。**"跟随主题"必须用 `removeProperty`（属性不存在），不能用"设为空"。**
 - 深色校准只动两个锚点（fg `#EDEDED`、bg-app/chat `#171717`）；下方灰阶**保持不动**——它们按 WCAG 对比度推导，非截图采样。核算确认 primary 15.31 / secondary 6.67 / tertiary 4.77 均达 AA-normal，faint 2.97 是装饰级（符合原约定）。
 - **未做**：L3.5 选色 UI（依赖 L3.1/L3.2）、策展调色板与 `--color-on-accent` 注入（自由取色无正解）、`--contrast-scale` 对比度滑杆（需 UI 承载）。
+- **`--color-on-accent` 定案（2026-10-02）**：该 token 随强调色**明度自动选浅/深文字**（`color-mix` 派生出不来，只能程序性求值）。**自由取色没有正解**——任意色相上硬做必然在某些色相糊掉（亮黄配深字、深紫配浅字之间的过渡带无普适阈值）。因此不先做自由取色器：`--color-on-accent` **与策展调色板一起交付**，每个策展条目预计算 on-accent，注入时与 `--color-accent` 成对写入。其余依赖前置 UI 组件的项（L2-L5、L3.5 选色 UI、`--contrast-scale` 滑杆）同样顺延。
 
 **L1 方针定稿（2026-10-01，审核 agent 拍板）：路线 A 分层 token，范围 = token 层 + useTheme 注入 + 深浅色校准，UI 归 L3.5**
 - **路线 A（已采纳）**：`--color-accent-base` 归主题层（dark.css/light.css 各自提供），`--color-accent` 仅在 base.css 使用层以 `var(--color-accent-base)` 供给；用户选色时 useTheme 在 **React mount 前**注入 `--color-accent`（防首帧闪色），不选色时不注入。主工作区已有半实现（tokens.css/base.css/dark.css 未提交改动），在其上完成而非重来。

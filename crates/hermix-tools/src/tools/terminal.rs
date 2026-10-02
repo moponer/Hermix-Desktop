@@ -8,7 +8,7 @@ use std::sync::Arc;
 use hermix_core::{
     path_security::{forbidden_win32_prefix, detect_shell_metacharacters, strip_win32_long_path},
     tool_schema, ApprovalOutcome, Capability, CommandOutput, JsonSchema, Origin, Shell,
-    ShellError,
+    ShellError, PtySessionOutput,
     TerminalBackend, ToolError, ToolHandler, ToolSchema, traits::RiskLevel,
 };
 
@@ -327,8 +327,31 @@ impl ToolHandler for TerminalHandler {
             "pty".into(),
             json!({
                 "type": "boolean",
-                "description": "Run command in PTY mode for interactive programs (default: false)",
+                "description": "Run this ONE command in a pseudoconsole (interactive programs see a real terminal; colors/pagers work). Windows: ConPTY-backed. Default false. For state that must SURVIVE across calls (cd, venv, REPL), use persistent instead.",
                 "default": false
+            }),
+        );
+        props.insert(
+            "persistent".into(),
+            json!({
+                "type": "boolean",
+                "description": "Create a PERSISTENT PowerShell session whose state survives across calls (cd, activated venv, REPL, gdb). The response footer carries the session id; pass it as session_id in follow-up terminal calls to continue the same session. Readiness/completion detection is heuristic. Default false.",
+                "default": false
+            }),
+        );
+        props.insert(
+            "session_id".into(),
+            json!({
+                "type": "string",
+                "description": "Continue an existing persistent session (id from a previous persistent call's footer). The command is submitted to that session's shell and only newly produced output is returned. Use command=\"\" + submit=false to poll for pending output without submitting anything."
+            }),
+        );
+        props.insert(
+            "submit".into(),
+            json!({
+                "type": "boolean",
+                "description": "Persistent sessions only: append Enter to the input (default true). Set false to send raw fragments WITHOUT pressing Enter (REPL continuation lines, multi-line paste) — finish with a final submit=true call.",
+                "default": true
             }),
         );
 
@@ -339,7 +362,10 @@ impl ToolHandler for TerminalHandler {
              ## When to reach for this tool\n\
              `terminal` is the right tool whenever the user wants to **see, list, count, search, or inspect** something on the system: directory listings (`dir` / `ls`), file contents (`type` / `cat` / `head`), running processes (`tasklist` / `ps`), system info, or any one-off shell pipeline. \
              It is also the right tool for **doing** things on the system: running a build, installing a package, invoking a CLI the user names. \
-             Prefer this over `computer_use.screenshot` whenever a shell command can answer the question — `screenshot` is a 50× bigger payload for 1/50th the precision, and shell output is searchable, copy-pasteable, and diffable.",
+             Prefer this over `computer_use.screenshot` whenever a shell command can answer the question — `screenshot` is a 50× bigger payload for 1/50th the precision, and shell output is searchable, copy-pasteable, and diffable.\n\
+             \n\
+             ## Persistent sessions (REPL / venv / cd across calls)\n\
+             One-off calls forget all state — `cd x && cmd` chaining and re-sourcing venv on every call is the smell. When a workflow needs state to survive (interactive `python`/`node` REPL, an activated venv, gdb, repeated commands in one directory), pass `persistent: true` once and then `session_id` on every follow-up. Full-screen TUI programs (vim/htop) are NOT supported in sessions — their redraw output is unreadable.",
             JsonSchema::object(props, vec!["command".into()]),
         )
     }
@@ -576,6 +602,45 @@ async fn execute_inner(
 
         let pty = crate::param_coercion::bool_param(&params, "pty", false);
 
+        // -------------------------------------------------------------------
+        // 持久终端会话分支（H3）。审批门已在上方按同一段契约跑过——
+        // 每条 send 的命令文本照过 CONFIRM/DENY，不存在第二条审批路径。
+        // -------------------------------------------------------------------
+        let session_id_param = params
+            .get("session_id")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        let persistent = crate::param_coercion::bool_param(&params, "persistent", false);
+        if session_id_param.is_some() || persistent {
+            let submit = crate::param_coercion::bool_param(&params, "submit", true);
+            if background {
+                return Err(ToolError::InvalidParams(
+                    "'background' is not supported with persistent terminal sessions; \
+                     long-running work belongs inside the session itself"
+                        .into(),
+                ));
+            }
+            if pty {
+                return Err(ToolError::InvalidParams(
+                    "'pty' (one-shot pseudoconsole) and persistent sessions are \
+                     mutually exclusive — drop 'pty' and use persistent/session_id"
+                        .into(),
+                ));
+            }
+            return execute_session_call(
+                this,
+                session_id_param,
+                persistent,
+                command,
+                submit,
+                timeout,
+                workdir,
+            )
+            .await;
+        }
+
         match this
             .backend
             .execute_command(command, timeout, workdir.as_deref(), background, pty)
@@ -747,6 +812,91 @@ fn detect_binary_file_reference(command: &str) -> Option<String> {
          document type recognition), use delegate_task to spawn a \
          sub-agent that calls read_image or read_pdf.]".to_string()
     )
+}
+
+/// 持久会话调用：续用（session_id）或新建（persistent）。新建时把
+/// workdir 交给 backend（ConPTY cwd），首条命令照常提交。
+async fn execute_session_call(
+    this: &TerminalHandler,
+    session_id: Option<String>,
+    persistent: bool,
+    command: &str,
+    submit: bool,
+    timeout: Option<u64>,
+    workdir: Option<String>,
+) -> Result<String, ToolError> {
+    let just_created = session_id.is_none();
+    let output = match session_id {
+        Some(sid) => {
+            // 空 command + submit=false = 纯读取（轮询 pending 输出）。
+            if command.is_empty() && !submit {
+                this.backend
+                    .pty_read_session(&sid, timeout)
+                    .await
+                    .map_err(|e| ToolError::from_message(e.to_string()))?
+            } else {
+                this.backend
+                    .pty_send_session(&sid, command, submit, timeout)
+                    .await
+                    .map_err(|e| ToolError::from_message(e.to_string()))?
+            }
+        }
+        None => {
+            let sid = this
+                .backend
+                .pty_create_session(workdir.as_deref())
+                .await
+                .map_err(|e| ToolError::from_message(e.to_string()))?;
+            // 空 command + submit=false：仅完成创建（会话已就绪才返回）。
+            if command.is_empty() && !submit {
+                this.backend
+                    .pty_read_session(&sid, timeout)
+                    .await
+                    .map_err(|e| ToolError::from_message(e.to_string()))?
+            } else {
+                this.backend
+                    .pty_send_session(&sid, command, submit, timeout)
+                    .await
+                    .map_err(|e| ToolError::from_message(e.to_string()))?
+            }
+        }
+    };
+    Ok(format_session_output(&output, just_created && persistent))
+}
+
+/// 会话输出格式化：正文 + 会话状态页脚（id / busy 轮询指引 / 退出提示）。
+fn format_session_output(output: &PtySessionOutput, just_created: bool) -> String {
+    const MAX_OUTPUT_CHARS: usize = 100_000;
+    let mut result = output.text.clone();
+    if result.chars().count() > MAX_OUTPUT_CHARS {
+        let truncated: String = result.chars().take(MAX_OUTPUT_CHARS).collect();
+        result = format!(
+            "{}\n\n[... output truncated at {} chars, {} total ...]",
+            truncated,
+            MAX_OUTPUT_CHARS,
+            result.chars().count()
+        );
+    }
+
+    let mut footer = if just_created {
+        format!("\n[persistent session created: id={}]", output.session_id)
+    } else {
+        format!("\n[session: {}]", output.session_id)
+    };
+    if output.busy {
+        footer.push_str(&format!(
+            " | still producing output — poll with session_id=\"{}\", command=\"\", submit=false",
+            output.session_id
+        ));
+    }
+    if !output.alive {
+        footer.push_str(" | session has exited — create a new one with persistent: true");
+    }
+    if result.trim().is_empty() {
+        result.push_str("no new output");
+    }
+    result.push_str(&footer);
+    result
 }
 
 /// Format command output for display.
@@ -1740,5 +1890,183 @@ mod tests {
             .await
             .expect("Local ctx 下只读命令应放行");
         assert!(!result.is_empty());
+    }
+
+    // -------------------------------------------------------------------
+    // 持久终端会话（H3）：参数路由 / 页脚格式化 / 冲突校验。
+    // 真实 ConPTY 行为在 hermix-environments 的集成测试里验证
+    // （hermix-tools 不依赖 hermix-environments，依赖方向不允许 E2E）。
+    // -------------------------------------------------------------------
+
+    /// 记录会话调用的 mock backend。
+    struct MockSessionBackend {
+        calls: std::sync::Arc<std::sync::Mutex<Vec<(String, String, bool)>>>,
+    }
+    #[async_trait]
+    impl TerminalBackend for MockSessionBackend {
+        async fn execute_command(
+            &self,
+            _cmd: &str,
+            _timeout: Option<u64>,
+            _workdir: Option<&str>,
+            _bg: bool,
+            _pty: bool,
+        ) -> Result<CommandOutput, AgentError> {
+            unreachable!("session mode must not reach execute_command")
+        }
+        async fn read_file(
+            &self,
+            _: &str,
+            _: Option<u64>,
+            _: Option<u64>,
+        ) -> Result<String, AgentError> {
+            Ok(String::new())
+        }
+        async fn write_file(&self, _: &str, _: &str) -> Result<(), AgentError> {
+            Ok(())
+        }
+        async fn file_exists(&self, _: &str) -> Result<bool, AgentError> {
+            Ok(true)
+        }
+        async fn pty_create_session(
+            &self,
+            _workdir: Option<&str>,
+        ) -> Result<String, AgentError> {
+            Ok("pty-7".to_string())
+        }
+        async fn pty_send_session(
+            &self,
+            session_id: &str,
+            input: &str,
+            submit: bool,
+            _budget: Option<u64>,
+        ) -> Result<PtySessionOutput, AgentError> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((session_id.to_string(), input.to_string(), submit));
+            Ok(PtySessionOutput {
+                session_id: session_id.to_string(),
+                text: format!("ran: {input}"),
+                busy: false,
+                alive: true,
+            })
+        }
+        async fn pty_read_session(
+            &self,
+            session_id: &str,
+            _budget: Option<u64>,
+        ) -> Result<PtySessionOutput, AgentError> {
+            Ok(PtySessionOutput {
+                session_id: session_id.to_string(),
+                text: String::new(),
+                busy: false,
+                alive: true,
+            })
+        }
+    }
+
+    fn make_session_handler(
+    ) -> (
+        TerminalHandler,
+        std::sync::Arc<std::sync::Mutex<Vec<(String, String, bool)>>>,
+    ) {
+        let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let backend = std::sync::Arc::new(MockSessionBackend { calls: calls.clone() });
+        let handler = TerminalHandler::new(
+            backend,
+            std::sync::Arc::new(std::sync::RwLock::new(None)),
+            std::sync::Arc::new(std::sync::Mutex::new(
+                TerminalApprovalContext::default(),
+            )),
+        );
+        (handler, calls)
+    }
+
+    #[tokio::test]
+    async fn test_persistent_create_returns_session_id_footer() {
+        let (handler, _calls) = make_session_handler();
+        let result = handler
+            .execute(json!({"command": "echo hi", "persistent": true}))
+            .await
+            .expect("create should succeed");
+        assert!(result.contains("ran: echo hi"));
+        assert!(result.contains("[persistent session created: id=pty-7]"));
+    }
+
+    #[tokio::test]
+    async fn test_session_id_continues_and_records_submit() {
+        let (handler, calls) = make_session_handler();
+        let result = handler
+            .execute(json!({"command": "again", "session_id": "pty-7", "submit": false}))
+            .await
+            .expect("continue should succeed");
+        assert!(result.contains("[session: pty-7]"));
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "pty-7");
+        assert_eq!(calls[0].1, "again");
+        assert!(!calls[0].2, "submit=false must reach the backend");
+    }
+
+    #[tokio::test]
+    async fn test_session_poll_with_empty_command_reads_without_submit() {
+        let (handler, calls) = make_session_handler();
+        let result = handler
+            .execute(json!({"command": "", "session_id": "pty-7", "submit": false}))
+            .await
+            .expect("poll should succeed");
+        assert!(result.contains("no new output"), "got: {result}");
+        assert!(result.contains("[session: pty-7]"));
+        assert!(calls.lock().unwrap().is_empty(), "poll must not write input");
+    }
+
+    #[tokio::test]
+    async fn test_session_conflicts_rejected() {
+        let (handler, _calls) = make_session_handler();
+        let err = handler
+            .execute(json!({"command": "x", "persistent": true, "background": true}))
+            .await
+            .expect_err("background + persistent must be rejected");
+        assert!(err.to_string().contains("background"));
+
+        let err = handler
+            .execute(json!({"command": "x", "session_id": "pty-7", "pty": true}))
+            .await
+            .expect_err("pty + session_id must be rejected");
+        assert!(err.to_string().contains("mutually exclusive"));
+    }
+
+    #[tokio::test]
+    async fn test_session_footer_busy_and_exited_hints() {
+        // busy=true → 轮询指引；alive=false → 退出提示。（直接测格式化函数）
+        let out = PtySessionOutput {
+            session_id: "pty-9".to_string(),
+            text: "partial".to_string(),
+            busy: true,
+            alive: false,
+        };
+        let s = format_session_output(&out, false);
+        assert!(s.contains("still producing output"));
+        assert!(s.contains("session has exited"));
+        assert!(s.contains("[session: pty-9]"));
+    }
+
+    #[tokio::test]
+    async fn test_session_unsupported_backend_error_propagates() {
+        // MockBackend（无会话能力，走 trait 默认实现）→ 明确报错而非 panic。
+        let (backend, _cap) = make_mock();
+        let handler = TerminalHandler::new(
+            backend,
+            std::sync::Arc::new(std::sync::RwLock::new(None)),
+            std::sync::Arc::new(std::sync::Mutex::new(
+                TerminalApprovalContext::default(),
+            )),
+        );
+        let err = handler
+            .execute(json!({"command": "x", "persistent": true}))
+            .await
+            .expect_err("default trait impl must error");
+        assert!(err.to_string().contains("not supported"));
     }
 }
