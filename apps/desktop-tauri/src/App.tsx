@@ -138,18 +138,6 @@ export default function App() {
   // 此前硬编码落在「工具」→ 用户点了"配置模型"却看到插件页。
   const [configCategory, setConfigCategory] = useState<ConfigCategory>("model");
 
-  /** 打开设置页。`category` 让调用方指定落点（如聊天输入框的
-   *  "未配置模型"入口应直达「模型」），缺省「模型」。 */
-  const openSettings = useCallback((category: ConfigCategory = "model") => {
-    setConfigCategory(category);
-    setPageRaw("systemconfig");
-  }, []);
-
-  // 设置页是专注视图：侧栏让位，把整幅宽度交给设置内容，点「返回」才回主界面。
-  // 刻意**不改 sidebarOpen** —— 那是用户的全局布局偏好，若在这里把它置 false，
-  // 从设置返回后侧栏就永久收起了，得用户自己去拉回来。只做派生，见下方
-  // sidebarVisible。
-
   // 「自定义应用」页「创建新应用」按钮跳转时注入的预填指令（一次性消费）。
   const [pendingPrefill, setPendingPrefill] = useState<string | null>(null);
   // 视口自适应面板最小宽度 — 窗口缩小时缩小主列/左列最小宽
@@ -161,6 +149,22 @@ export default function App() {
     setPageRaw(p);
     if (p !== "chat") setRightOpen(false);
   }, []);
+
+  /** 打开设置页。`category` 让调用方指定落点（如聊天输入框的
+   *  "未配置模型"入口应直达「模型」），缺省「模型」。
+   *
+   *  必须走 `setPage` 包装而不是 `setPageRaw`：包装里那条
+   *  `if (p !== "chat") setRightOpen(false)` 才是"切非对话页收右栏"的唯一
+   *  真相源。直接调 setPageRaw 会绕过它，右侧预览竖条就会留在设置页上。 */
+  const openSettings = useCallback((category: ConfigCategory = "model") => {
+    setConfigCategory(category);
+    setPage("systemconfig");
+  }, [setPage]);
+
+  // 设置页是专注视图：侧栏让位，把整幅宽度交给设置内容，点「返回」才回主界面。
+  // 刻意**不改 sidebarOpen** —— 那是用户的全局布局偏好，若在这里把它置 false，
+  // 从设置返回后侧栏就永久收起了，得用户自己去拉回来。只做派生，见下方
+  // sidebarVisible。
 const [sessions, setSessions] = useState<Session[]>([]);
 const [messageQueue, setMessageQueue] = useState<QueuedMessage[]>([]);
 // 右栏"加入对话"右键菜单触发外部文件附件。
