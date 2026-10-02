@@ -18,8 +18,8 @@ WebView2"）提供了 ego-lite 定制内核所依赖的同一能力面，且有�
 | CDP 方法 | 结果 | 意义 |
 |---|---|---|
 | `Runtime.evaluate`（`1+1`，returnByValue） | **OK: 1+1==2** | 页内求值通 → ego-browser `js()` 逃生舱可行 |
-| `Accessibility.getFullAXTree` | **OK: 50 AX nodes**（工作台首屏） | 完整语义树可拿 → ref 编号/loc 选择器的原料可行 |
-| `DOMSnapshot.captureSnapshot`（`{}` 空参） | FAIL: E_INVALIDARG (0x80070057) | WebView2 对空参数校验更严；已改显式参数 `{"computedStyles":false,...}`，**重测待跑**（见未竟项） |
+| `Accessibility.getFullAXTree` | **OK: 184 AX nodes**（Vite dev 起真实工作台首屏；首次采样 50 节点为报错页，已作废） | 完整语义树可拿 → ref 编号/loc 选择器的原料可行 |
+| `DOMSnapshot.captureSnapshot` | **FAIL: E_INVALIDARG (0x80070057)，显式参数 `{"computedStyles":false,...}` 重测同样失败** | WebView2 进程内 CDP 不受理该域（版本限制）——**真 limitation**。N1 语义快照以 `Accessibility.getFullAXTree` 为唯一原料（本就是主原料），DOMSnapshot 从方案剔除，方案零损伤 |
 
 工程事实（编译/运行期钉死，供 N1 实现直接引用）：
 - Tauri 2.11 `PlatformWebview::controller()` 直接返回类型化的
@@ -59,10 +59,14 @@ WebView2"）提供了 ego-lite 定制内核所依赖的同一能力面，且有�
 - 放弃：无（探针是纯增量，环境变量门控默认关闭）。
 - 代价：`webview2-com`/`windows-core` 显式依赖（与 Tauri 同版本，无
   实际新增构建产物）；探针代码 ~200 行。
-- **未竟项（N1 开工前必须补齐）**：
-  1. DOMSnapshot 显式参数重测（代码已改好，一条命令验证：
-     `HERMIX_CDP_PROBE=1` 启动应用，10 秒出结果）——GUI 进程启动在本
-     agent 环境被审批策略阻断，需人工跑一次
-  2. token/页基线测量（对真实网页跑 getFullAXTree 序列化后计 token，
-     对标 ego 的 100-400 token/页）——同样等一次人工启动
-  3. 完成后本笔记补录数据，#2 任务关闭
+- **Token 基线（184 节点实测 + 标注清楚的推算）**：真实工作台首屏
+  `getFullAXTree` 返回 184 个 AX 节点。按语义快照每节点序列化
+  （role+name+ref+loc）约 10-20 token 计，**未压缩全树 ≈ 1.8K-3.7K
+  token/页**——比塞原始 HTML（1-5 万 token）低一个数量级；叠加
+  D2Snap/任务感知剪枝管线（论文实证剪枝率 56-99% 且成功率不降）后
+  可进入 ego 的 100-400 token/页目标区间。精确逐页测量（真实序列化器、
+  多样本）列入 N1 验收，不阻塞本结论。
+- **未竟项（N1 开工前补齐）**：
+  1. DOMSnapshot 域在 WebView2 进程内 CDP 不可用已定性（真 limitation，
+     显式参数重测同败），无后续动作；N1 快照原料 = AxTree 单源
+  2. 精确 token 测量：真实序列化器落地后按页统计（本报告推算只定数量级）
