@@ -9,6 +9,7 @@ pub mod officecli;
 pub mod portable_env;
 pub mod sidecar;
 pub mod stdio_bridge;
+pub mod system_settings;
 pub mod webview2_probe;
 
 use sidecar::{HermixSidecar, WatchdogConfig};
@@ -409,6 +410,13 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        // L4 系统能力：桌面通知 + 开机自启。托盘不引插件（用 tauri 的
+        // `tray-icon` feature，见 Cargo.toml）。
+        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .setup(|app| {
             // ── 启动白屏修复（2026-09-30）────────────────────────────
             // 窗口在配置里 `visible: false`：webview 首帧渲染完成之前用户
@@ -593,6 +601,14 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            system_settings::get_autostart,
+            system_settings::set_autostart,
+            system_settings::send_notification,
+            system_settings::get_tray_enabled,
+            system_settings::sync_tray,
+            system_settings::get_wallpaper,
+            system_settings::set_wallpaper,
+            system_settings::clear_wallpaper,
             commands::get_settings_dir,
             commands::get_data_dir,
             commands::pick_directory,

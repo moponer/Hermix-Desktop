@@ -1,19 +1,24 @@
-import { useEffect, useState } from "react";
-import { Code2, Briefcase, FolderOpen, Copy, Check } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { Code2, Briefcase, FolderOpen, Copy, Check, BellRing } from "lucide-react";
 
 import { useDomainMode } from "../../hooks/useExpert";
 import { useSendKey } from "../../hooks/useSendKey";
-import { getDataDir, openDataDir, copyText } from "../../desktopBridge";
-import { SettingsGroup, SettingsRow, SegmentedControl } from "../ui";
+import { useDesktopNotify } from "../../hooks/useDesktopNotify";
+import {
+  getDataDir, openDataDir, copyText,
+  getAutostart, setAutostart, getTrayEnabled, syncTray,
+} from "../../desktopBridge";
+import { SettingsGroup, SettingsRow, SegmentedControl, Switch } from "../ui";
 import { cx } from "../../lib/cx";
 import { toastError } from "../../hooks/useToast";
 
 /**
- * 通用页：工作模式 + 快捷键 + 数据目录。
+ * 通用页：工作模式 + 快捷键 + 系统能力 + 数据位置。
  *
- * 刻意不列"桌面通知 / 开机自启动 / 显示在菜单栏"三行——它们都要新增
- * Tauri 插件（notification / autostart / tray），当前依赖树里没有，离线
- * 也拉不到。摆一行点不动的开关比不摆更糟：用户会以为功能坏了。
+ * 「系统」组的三个开关是本机副作用（写注册表 / 建托盘图标 / 发系统通知），
+ * 不是数据操作，所以**回读一律走后端**，不落 localStorage：localStorage 里
+ * 存一份"我认为开了"只会和真实系统状态漂移（用户去任务管理器禁用开机
+ * 启动后，设置页还显示"已开启"）。每次进设置页重新读，切换成功再重读确认。
  */
 export function GeneralTab() {
   return (
@@ -23,12 +28,13 @@ export function GeneralTab() {
           通用
         </h2>
         <p className="mt-1 text-[length:var(--text-meta)] text-[var(--color-text-muted)]">
-          工作模式、输入快捷键与数据位置。
+          工作模式、输入快捷键、系统能力与数据位置。
         </p>
       </header>
 
       <ModeCards />
       <SendKeyRow />
+      <SystemGroup />
       <DataDirGroup />
     </div>
   );
@@ -143,6 +149,107 @@ function SendKeyRow() {
               { value: "ctrl_enter", label: "Ctrl + Enter" },
             ]}
           />
+        }
+      />
+    </SettingsGroup>
+  );
+}
+
+/* ── L4 系统能力 ──────────────────────────────────────────────────
+   三个开关都读真实系统状态。切换时先乐观更新再回读确认：回读失败要把
+   状态**弹回去**，不能停在乐观值——那正是「显示已开启但实际没生效」这类
+   幽灵 bug 的成因。 */
+function SystemGroup() {
+  const [autostart, setAutostartOn] = useState<boolean | null>(null);
+  const [tray, setTrayOn] = useState<boolean | null>(null);
+  const [busy, setBusy] = useState<"autostart" | "tray" | null>(null);
+  const { enabled: notifyOn, setEnabled: setNotifyOn, notify } = useDesktopNotify();
+
+  const refresh = useCallback(() => {
+    getAutostart().then(setAutostartOn).catch(() => setAutostartOn(null));
+    getTrayEnabled().then(setTrayOn).catch(() => setTrayOn(null));
+  }, []);
+
+  useEffect(() => { refresh(); }, [refresh]);
+
+  const toggleAutostart = async (next: boolean) => {
+    setBusy("autostart");
+    setAutostartOn(next);
+    try {
+      await setAutostart(next);
+      refresh();
+    } catch (e) {
+      setAutostartOn(!next);
+      toastError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const toggleTray = async (next: boolean) => {
+    setBusy("tray");
+    setTrayOn(next);
+    try {
+      await syncTray(next);
+      refresh();
+    } catch (e) {
+      setTrayOn(!next);
+      toastError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <SettingsGroup
+      title="系统"
+      description="这三项会改动本机状态，改动立即生效，无需重启。"
+    >
+      <SettingsRow
+        title="开机自启动"
+        description={
+          autostart === null
+            ? "读取系统状态中…"
+            : "登录 Windows 后自动启动 Hermix。"
+        }
+        control={
+          <Switch
+            checked={autostart === true}
+            onChange={(v) => void toggleAutostart(v)}
+            disabled={autostart === null || busy === "autostart"}
+            label="开机自启动"
+          />
+        }
+      />
+      <SettingsRow
+        title="显示在菜单栏"
+        description="在系统托盘常驻图标，左键单击唤起主窗口，右键菜单可退出。"
+        control={
+          <Switch
+            checked={tray === true}
+            onChange={(v) => void toggleTray(v)}
+            disabled={tray === null || busy === "tray"}
+            label="显示在菜单栏（系统托盘）"
+          />
+        }
+      />
+      <SettingsRow
+        title="回复完成时通知"
+        description="一轮回复结束、且窗口当前没有焦点时弹系统通知。"
+        control={
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => notify("Hermix Desktop", "这是一条测试通知。", true)}
+              className="flex h-7 items-center gap-1.5 rounded-lg border border-[var(--color-border-secondary)] px-2 text-[length:var(--text-meta)] text-[var(--color-text-secondary)] transition-colors hover:border-[var(--color-border-primary)] hover:text-[var(--color-text-primary)]"
+            >
+              <BellRing className="icon-sm" /> 测试
+            </button>
+            <Switch
+              checked={notifyOn}
+              onChange={setNotifyOn}
+              label="回复完成时发送桌面通知"
+            />
+          </div>
         }
       />
     </SettingsGroup>

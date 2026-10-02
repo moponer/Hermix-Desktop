@@ -42,6 +42,7 @@ import {
 } from "../hooks/useExpert";
 import { useExpertCutoff } from "../hooks/useExpertCutoff";
 import { useSendKey } from "../hooks/useSendKey";
+import { useDesktopNotify } from "../hooks/useDesktopNotify";
 import { useWorkspaces } from "../hooks/useWorkspaces";
 import { pickDirectory } from "../desktopBridge";
 import { getAvailableTools, updateSessionMetadata, warmUpProvider, type ToolDescriptor } from "../api";
@@ -290,15 +291,20 @@ export const ChatView = memo(function ChatView({
   const [isAgentActiveState, setIsAgentActiveState] = useState(false);
   const [postStreamActivity, setPostStreamActivity] = useState(false);
   const prevStreamingRef = useRef(isStreaming);
+  const { notify } = useDesktopNotify();
   useEffect(() => {
     const wasStreaming = prevStreamingRef.current;
     prevStreamingRef.current = isStreaming;
     if (wasStreaming && !isStreaming) {
       setPostStreamActivity(true);
+      // L4：回复结束通知。notify 内部自己判"开关开 + 窗口无焦点"，
+      // 所以这里无条件调——把条件写在钩子里，设置页和 ChatView 不会
+      // 各判一套而出现"开关显示开、实际不弹"或反之。
+      notify("Hermix Desktop", "回复已完成。");
     } else if (isStreaming) {
       setPostStreamActivity(false);
     }
-  }, [isStreaming]);
+  }, [isStreaming, notify]);
 
   useEffect(() => {
     if (!postStreamActivity) return;

@@ -194,6 +194,27 @@
 .chat-surface {
   background-color: var(--theme-bg-chat, var(--color-bg-primary));
 }
+
+/* ── 壁纸（L3.6）─────────────────────────────────────────────────
+   挂在 .chat-surface 而不是 .app-shell：侧边栏、顶栏、对话面板、弹窗
+   全是各自的不透明实色，壁纸铺在最底只会在接缝里露出几像素——看得见
+   但等于没挂。聊天滚动区是应用里最大的一块整面，且本来就该允许个性化，
+   壁纸铺在这里是唯一"真能看见"的位置。
+
+   蒙版用 color-mix 而不是半透明黑：黑蒙版在浅色主题下会把壁纸压成灰
+   脏色，用**当前主题自己的底色**去压，才能在明暗两套主题下都保持
+   壁纸的原有观感、同时把正文对比度托回 AA。 */
+[data-wallpaper="on"] .chat-surface {
+  background-image:
+    linear-gradient(
+      color-mix(in srgb, var(--theme-bg-chat, var(--color-bg-primary)) 86%, transparent),
+      color-mix(in srgb, var(--theme-bg-chat, var(--color-bg-primary)) 86%, transparent)
+    ),
+    var(--wallpaper-image);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}
 .pane-main {
   flex: 1;
   border-top-left-radius: 12px;

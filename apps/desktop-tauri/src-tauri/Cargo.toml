@@ -10,10 +10,17 @@ default-run = "hermix-desktop"
 [workspace]
 
 [dependencies]
-tauri = { version = "2", features = [ "protocol-asset" ] }
+# `tray-icon`：托盘（显示在菜单栏）用 Tauri 内置 feature，不引第三方插件。
+tauri = { version = "2", features = [ "protocol-asset", "tray-icon" ] }
 tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
+# 设置页「通用」的两项系统级能力（2026-10-02）：
+# · notification → 桌面通知
+# · autostart   → 开机自启动（Windows 走注册表 Run 键）
+# 两者都是官方插件，能力此前缺失是因为没人加依赖，不是后端不支持。
+tauri-plugin-notification = "2"
+tauri-plugin-autostart = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }

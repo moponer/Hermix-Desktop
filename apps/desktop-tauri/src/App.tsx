@@ -13,6 +13,13 @@ import { useStreamChat } from "./hooks/useStreamChat";
 import { AppProviders } from "./app/AppProviders";
 import { renderRoutes, type RouteContext } from "./app/routes";
 import { SystemConfigPanel, type ConfigCategory } from "./components/SystemConfigPanel";
+import { useWallpaper } from "./hooks/useWallpaper";
+
+/** 壁纸宿主：无渲染输出，只为在应用启动时把壁纸状态装进 documentElement。 */
+function WallpaperHost() {
+  useWallpaper();
+  return null;
+}
 import { useAppBootstrap } from "./app/useAppBootstrap";
 import {
   readDraftWorkspace,
@@ -3341,6 +3348,10 @@ return {
 
   return (
     <AppProviders value={streamChatApi}>
+    {/* L3.6 壁纸：应用根挂一次即可（模块级共享 store，设置页再挂也是
+        同一份状态）。只负责把 CSS 变量与 data 属性写进 documentElement，
+        真正消费在 components-layout.css 的 [data-wallpaper="on"]。 */}
+    <WallpaperHost />
     <div className="app-shell">
       <TitleBar />
       <SessionPickerDialog

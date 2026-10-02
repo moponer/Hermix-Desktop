@@ -324,6 +324,15 @@ button:disabled,
 :root {
   --color-accent: var(--color-accent-base);
 
+  /* 壁纸（L3.6）：**运行时注入**，由 `useWallpaper` 在 documentElement 的
+     行内样式上设 `url("asset://…")`。这里给 `none` 默认值，一是让
+     check-theme-tokens 的 orphan 检查（引用了却没定义）能过，二是让
+     "没设壁纸"是一条自解释的规则而不是"变量不存在"。
+
+     切勿改成空串或留白：空值会让 `var(--wallpaper-image)` 解析成空，
+     background-image 整条声明失效——和 L1 里 accent 踩过的那个坑同源。 */
+  --wallpaper-image: none;
+
   /* hover：同色相加深。88% 而非更暗的比例，是为了让「绿 accent + 绿
      hover」不至于糊成一片，同时保持明显的可交互反馈。 */
   --color-accent-hover: color-mix(in srgb, var(--color-accent) 88%, black);

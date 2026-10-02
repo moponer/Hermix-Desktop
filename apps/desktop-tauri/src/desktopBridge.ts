@@ -275,6 +275,49 @@ export async function openLogDirectory(): Promise<string> {
   return invoke("open_log_directory");
 }
 
+// ── 系统级设置（L4 通知 / 自启 / 托盘，L3.6 壁纸）────────────────────
+// 全部对应 system_settings.rs 里的 #[tauri::command]。失败一律 reject，
+// 前端必须把错误如实弹出来：这些能力"看起来开了但没生效"最难排查。
+
+export function getAutostart(): Promise<boolean> {
+  return invoke("get_autostart");
+}
+
+export function setAutostart(enabled: boolean): Promise<void> {
+  return invoke("set_autostart", { enabled });
+}
+
+export function sendNotification(title: string, body: string): Promise<void> {
+  return invoke("send_notification", { title, body });
+}
+
+export function getTrayEnabled(): Promise<boolean> {
+  return invoke("get_tray_enabled");
+}
+
+export function syncTray(enabled: boolean): Promise<void> {
+  return invoke("sync_tray", { enabled });
+}
+
+export interface WallpaperInfo {
+  /** 数据目录内的文件名（固定 `wallpaper`），不是原始路径。 */
+  file: string;
+  /** 用户当初挑的原图路径，仅供展示。 */
+  source: string;
+}
+
+export function getWallpaper(): Promise<WallpaperInfo | null> {
+  return invoke("get_wallpaper");
+}
+
+export function setWallpaper(sourcePath: string): Promise<WallpaperInfo> {
+  return invoke("set_wallpaper", { sourcePath });
+}
+
+export function clearWallpaper(): Promise<void> {
+  return invoke("clear_wallpaper");
+}
+
 // Aliases for SettingsView compatibility
 // `openSettingsDirectory` is the legacy name used by SettingsView.
 // It's a deprecated alias for `openDataDir`; callers should migrate
