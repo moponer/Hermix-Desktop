@@ -200,8 +200,22 @@ struct CachedToken {
 #[derive(Debug, Deserialize)]
 struct TokenResponse {
     access_token: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_expires_in")]
     expires_in: Option<u64>,
+}
+
+/// QQ 的 `expires_in` 时而是数字、时而是字符串（实测返回 `"6580"`），
+/// 写死 `Option<u64>` 会在字符串形态下整个 token 响应解析失败。
+fn de_expires_in<'de, D>(d: D) -> Result<Option<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v: Option<Value> = Option::deserialize(d)?;
+    Ok(match v {
+        Some(Value::Number(n)) => n.as_u64(),
+        Some(Value::String(s)) => s.trim().parse().ok(),
+        _ => None,
+    })
 }
 
 /// QQ 开放平台 REST 面（发消息、取网关地址、取令牌）。
@@ -267,7 +281,9 @@ impl QqApi {
         let resp = self
             .http
             .get(&url)
-            .bearer_auth(&token)
+            // QQ 开放平台的鉴权头是 `QQBot <token>`，不是标准 Bearer——
+            // 用 bearer_auth 会 401「请求头Authorization参数格式错误」。
+            .header("Authorization", format!("QQBot {token}"))
             .send()
             .await
             .map_err(|e| format!("GET {path} 网络错误: {e}"))?;
@@ -318,7 +334,7 @@ impl QqApi {
         let resp = self
             .http
             .post(url)
-            .bearer_auth(token)
+            .header("Authorization", format!("QQBot {token}"))
             .json(body)
             .send()
             .await
@@ -718,7 +734,13 @@ async fn connect_and_pump(
                             resume.session_id = None;
                             resume.last_seq = None;
                         }
-                        return Ok(());
+                        // 走 Err 而不是 Ok：让 run_gateway 把原因记进
+                        // last_error，前端错误面板才能显示真实原因，
+                        // 否则「网关连接失败」没有任何 detail，误导排查方向。
+                        return Err(
+                            "网关拒收会话（INVALID_SESSION）：token 无效或 intents 未在开放平台勾选"
+                                .into(),
+                        );
                     }
                     OP_HEARTBEAT => {
                         let hb = json!({ "op": OP_HEARTBEAT, "d": resume.last_seq });

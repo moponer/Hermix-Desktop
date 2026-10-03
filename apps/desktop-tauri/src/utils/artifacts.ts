@@ -80,6 +80,25 @@ function basename(p: string): string {
   return p.split(/[\\/]/).pop() ?? p;
 }
 
+/**
+ * 路径归一化 —— 「同一个文件」的**唯一**判定口径。
+ *
+ * 为什么需要：同一个文件在对话里会以多种写法出现 ——
+ * `F:\a\b.md`（LLM 原样输出）、`F:/a/b.md`（正文里的链接）、
+ * `\\?\F:\a\b.md`（Win32 长路径前缀）。它们指向同一个文件，字符串
+ * 比较却全部不相等。历史上 `App.tsx` 用严格相等、`useArtifacts` 用
+ * `endsWith`，两套口径各判各的：正文点 `F:/a/b.md` 时 `endsWith`
+ * 匹配不上已提取的 `F:\a\b.md`，于是合成一个 `path:` 产物，而 App
+ * 侧严格相等同样匹配不上 —— 同一文件开出两个预览标签。
+ *
+ * 只用于**比较**（去重 / 找邻居），不用于显示或 IO：展示仍用用户
+ * 看到的原始路径，读文件仍走原始路径 + workspaceRoot 锚定。
+ * Windows 路径大小写不敏感，故统一小写；顺带剥掉 `\\?\` 前缀。
+ */
+export function canonicalPath(p: string): string {
+  return p.replace(/^\\\\\?\\/, "").replace(/\\/g, "/").toLowerCase();
+}
+
 // Writer tools (LLM intends to materialize a new file on disk). We
 // watch their arguments for file paths so the right-sidebar artifact
 // list shows the file the moment the LLM commits to writing it, not

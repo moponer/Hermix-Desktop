@@ -24,12 +24,45 @@ import { useSafeTimeout } from "../hooks/useSafeTimeout";
 import { highlightToReact, readIsDark } from "../lib/codeHighlight";
 import { autoCloseUnbalancedFences } from "../lib/markdownFence";
 import { hardenSoftLineBreaks } from "../lib/softBreaks";
+import { FileTypeIcon } from "./FileTypeIcon";
+
+/**
+ * 行内代码的语言猜测 —— CommonMark 的 `` `foo` `` 不带语言标记，
+ * 但 refractor 必须知道语言才能上色。没有语言就退回纯文本（不猜错
+ * 比猜错好：把 shell 当 Rust 高亮出来的颜色是误导）。
+ *
+ * 判据按"特征最强"排序，每条都要求整串匹配 —— 行内代码通常只有
+ * 一个 token 或一个短表达式，不是完整语句。
+ */
+function guessInlineLang(code: string): string | null {
+  const s = code.trim();
+  if (!s) return null;
+  // 标识符 / 成员访问 / 调用：canonicalPath()、SideTab、foo.bar.baz()
+  if (/^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*\s*\(\s*\)$/.test(s)) return "javascript";
+  if (/^[A-Z][\w$]*(?:\.[A-Z][\w$]*)*$/.test(s)) return "typescript";
+  if (/^[a-z_$][\w$]*(?:\.[a-z_$][\w$]*)+$/.test(s)) return "javascript";
+  // 路径 / URL —— 交给链接化处理，不高亮（否则斜杠会被当除号上色）
+  if (/[\\/]/.test(s) || /^https?:/.test(s)) return null;
+  // 字面量：字符串 / 数字 / 布尔
+  if (/^(['"]).*\1$/.test(s) || /^-?\d[\d_.]*$/.test(s)) return "javascript";
+  if (/^(true|false|null|undefined|NaN)$/.test(s)) return "javascript";
+  // CSS 变量 --x / @x / 尺寸单位
+  if (/^--[\w-]+$/.test(s) || /^@[\w-]+$/.test(s) || /^[\d.]+(px|rem|em|vh|vw|%)$/.test(s)) {
+    return "css";
+  }
+  return null;
+}
 
 /* ── Path linkification ──────────────────────────────────────── */
 
 // 字符类含 ~：Windows 8.3 短路径（ADMINI~1）必须整体命中，否则只匹配到
 // ADMINI 就断掉，整条路径识别失败。
-const PATH_RE = /(?<=^|[\s\p{P}\p{Z}])(?:[A-Za-z]:)?(?:[\\/][\p{L}\p{N}_\-~.\s()（）【】\[\]]+){1,}\.[\p{L}\p{N}]{1,5}(?=$|[\s\p{P}\p{Z}])/giu;
+//
+// 两个分支：带目录分隔符的路径，以及**裸文件名**（`add.py`、`App.tsx`）。
+// 后者是 LLM 正文里最常见的写法 —— 需求文档里写"改 App.tsx 的登录逻辑"
+// 不带任何目录，原正则要求至少一个 `[\\/]`，这类 token 全部漏掉，
+// 结果就是文件图标和可点击预览都没了。
+const PATH_RE = /(?<=^|[\s\p{P}\p{Z}])(?:[A-Za-z]:)?(?:[\\/][\p{L}\p{N}_\-~.\s()（）【】\[\]]+){1,}\.[\p{L}\p{N}]{1,5}(?=$|[\s\p{P}\p{Z}])|(?<=^|[\s\p{P}\p{Z}])[\p{L}\p{N}_\-~]+\.[\p{L}\p{N}]{1,5}(?=$|[\s\p{P}\p{Z}])/giu;
 const ABS_PATH_RE = /^(?:[A-Za-z]:[\\/])|(?:[\/])/;
 
 function isAbsolutePath(p: string): boolean {
@@ -43,6 +76,15 @@ interface PathLinkProps {
 
 function PathLink({ path, onClick }: PathLinkProps) {
   const abs = isAbsolutePath(path);
+  // 只给**带扩展名**的路径配图标：目录路径（`crates/hermix-agent`）没有
+  // 文件类型，FileTypeIcon 会退化成灰色 "?" 问号，反而是噪声。
+  const name = path.split(/[\\/]/).pop() ?? path;
+  const showIcon = /\.[\p{L}\p{N}]{1,5}$/u.test(name);
+  // 裸文件名（`App.tsx`）没有目录上下文，不按"相对路径"处理 ——
+  // 染成警告琥珀色是在说"这个路径可能解析不到"，但它本来就是正文里
+  // 的中性引用（"改 App.tsx 的登录逻辑"），不是一条待解析的路径。
+  const bare = !/[\\/]/.test(path);
+  const tone = abs ? "abs" : bare ? "bare" : "rel";
   return (
     <button
       type="button"
@@ -50,9 +92,10 @@ function PathLink({ path, onClick }: PathLinkProps) {
         e.stopPropagation();
         onClick(path, e);
       }}
-      title={abs ? `打开 ${path}` : `相对路径：将以工作区根为基准解析 ${path}`}
-      className={`md-path-link ${abs ? "md-path-link--abs" : "md-path-link--rel"}`}
+      title={abs ? `打开 ${path}` : bare ? name : `相对路径：将以工作区根为基准解析 ${path}`}
+      className={`md-path-link md-path-link--${tone}`}
     >
+      {showIcon && <FileTypeIcon name={name} size={13} className="md-path-link__icon" />}
       <span className="truncate">{path}</span>
     </button>
   );
@@ -386,7 +429,15 @@ export const MarkdownBody = memo(function MarkdownBody({ content, onPathClick }:
           if (lang) {
             return <CodeBlock language={lang} code={codeString} isDark={isDark} />;
           }
-          return <code {...props}>{children}</code>;
+          // 行内 code：药丸底色 + 复用 refractor 上色（与代码块同一套
+          // 引擎与配色，两者不会漂移）。`prop` 是 CommonMark 里的行内代码
+          // —— 带反引号的 `canonicalPath()` / `SideTab` 属于这一类。
+          const isProp = (props as { prop?: string } | undefined)?.prop === "true";
+          return (
+            <code {...props} className="md-inline-code">
+              {isProp ? highlightToReact(codeString, guessInlineLang(codeString), isDark) : children}
+            </code>
+          );
         },
         input({ type, ...props }: { type?: string }) {
           if (type === "checkbox") return null;

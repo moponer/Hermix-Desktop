@@ -500,13 +500,17 @@
 
 
 /* ── Inline path link (assistant prose) ──────────────────────
-   Flat link style — no chip background, no border, no icon. Renders
-   as plain prose text that becomes a link on hover (underline).
+   Flat link style — no chip background, no border. Renders
+   as plain prose text that becomes a link on hover (underline),
+   with a small file-type icon in front so the reader can tell
+   a .ts from a .png without reading the extension.
    Mirrors the colour of the rest of the assistant reply's
    hyperlinks (the "查看全部制品 →" link blue) so paths read as
    part of the prose, not as a UI widget. */
 .md-path-link {
-  display: inline-block;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -529,6 +533,27 @@
 }
 .md-path-link:hover {
   color: var(--color-link-hover);
+}
+/* 裸文件名（`App.tsx`）：中性引用，不带路径语义。用正文色而不是链接蓝
+   —— 它出现在"改 App.tsx 的登录逻辑"这种句子里，是话题而不是跳转，
+   染成链接色会让整句话都在喊"点我"。图标仍然带类型色。 */
+.md-path-link--bare {
+  color: var(--color-text-primary);
+  font-family: var(--font-mono);
+  font-size: 0.94em;
+}
+.md-path-link--bare:hover {
+  color: var(--color-text-primary);
+  text-decoration-color: var(--color-accent);
+}
+/* 文件类型图标：略微下压让它视觉居中于小写 x-height，而不是浮在
+   文字上方。inline-flex + baseline 已经把整块文字对齐好了，图标
+   只需要一点点 top 补偿 SVG 自身的下沿留白。 */
+.md-path-link__icon {
+  flex-shrink: 0;
+  position: relative;
+  top: 2px;
+  border-radius: 2px;
 }
 /* Relative paths keep the warning amber so the user can tell at a
    glance "this won't resolve unless I'm in the right workspace". */

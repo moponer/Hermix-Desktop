@@ -12,10 +12,12 @@ default-run = "hermix-desktop"
 [dependencies]
 # `tray-icon`：托盘（显示在菜单栏）用 Tauri 内置 feature，不引第三方插件。
 tauri = { version = "2", features = [ "protocol-asset", "tray-icon" ] }
-# N0 探针（cdp_probe.rs）：进程内 CDP。与 tauri 的传递依赖同版本（0.38），
-# 显式声明以便直接 import；windows-core 0.61 是 webview2-com 0.38 的配套版本。
-webview2-com = "0.38"
-windows-core = "0.61"
+# N0 探针（cdp_probe.rs）：进程内 CDP。**必须与 tauri 的传递依赖同 minor**——
+# tauri 2.12.1 拉的是 webview2-com 0.39（配 windows-core 0.62）；写死 0.38 会
+# 出现「同名 crate 两个版本」，ICoreWebView2 类型互不兼容，编译期 E0308。
+# tauri 升 minor 后用这条自查：`cargo tree -i webview2-com`（应只有一条路径）。
+webview2-com = "0.39"
+windows-core = "0.62"
 tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"

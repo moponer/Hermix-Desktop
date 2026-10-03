@@ -98,22 +98,16 @@
   --col-right: 0px;
 }
 
-/* 右列"折叠"态（区别于关闭）：用户主动收起产物栏时，右侧留一条 44px
-   竖条而不是完全消失 —— 常驻可见的角标让"有 N 个产物没看"这件事不会
-   被忘掉，且点一下原路展开、宽度沿用上次的 --ab-right-w（无需额外记忆）。
-   视口 < 900px 时不保留竖条：那点宽度在窄窗里比产物提示更值钱。 */
-.app-body[data-right-open="false"][data-right-rail="true"] {
-  --col-right: 44px;
-}
+/* 侧栏开关：绝对定位到 .app-body（宽度恒等于窗口）的右上角。
+   关键在于它**不属于任何 grid 列** —— 第三列从 44px 长到 640px 时，
+   这个按钮一像素不动，用户看到的是"面板从它下方长出来"而非"图标被
+   拽走"。原来的 44px 竖条随之撤掉：开关已常驻，竖条是白占 3.4% 窗口宽。
+   z-index 高于右栏内容：展开时它仍需可点（收起右栏）。 */
 .right-rail {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 10px;
-  padding-top: 10px;
-  background: var(--color-bg-secondary);
-  border-left: 1px solid var(--color-border-subtle);
-  overflow: hidden;
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 20;
 }
 .right-rail__btn {
   position: relative;
@@ -130,6 +124,13 @@
 }
 .right-rail__btn:hover {
   background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+/* 展开态：常驻浅色圆角块，让用户扫一眼就知道侧栏是开着的
+   （对齐参考项目里那个带底色的开关）。这是纯背景色变化，
+   按钮本身不位移。 */
+.right-rail__btn.is-active {
+  background: var(--color-bg-tertiary);
   color: var(--color-text-primary);
 }
 .right-rail__btn:focus-visible {
@@ -151,20 +152,10 @@
   line-height: 15px;
   text-align: center;
 }
-.right-rail__label {
-  writing-mode: vertical-rl;
-  font-size: var(--text-tiny, 11px);
-  color: var(--color-text-muted);
-  letter-spacing: 0.16em;
-  user-select: none;
-}
 
-/* 窄视口撤掉竖条：必须放在基础规则之后 —— 同权重规则后者胜，
-   放在前面会被 .right-rail 的 display:flex 覆盖掉。 */
+/* 窄视口撤掉开关：那点宽度在窄窗里比侧栏提示更值钱，
+   且此时右栏本来就装不下（< 1140 会自动关）。 */
 @media (max-width: 899px) {
-  .app-body[data-right-open="false"][data-right-rail="true"] {
-    --col-right: 0px;
-  }
   .right-rail {
     display: none;
   }
@@ -1175,7 +1166,9 @@ height: 26px;
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 4px 6px;
+  /* 右侧留 38px 给绝对定位的侧栏开关（.right-rail，top/right 各 8px）。
+     不留的话展开态开关会压在标签条末端的关闭按钮上，两者都点不准。 */
+  padding: 4px 38px 4px 6px;
   border-bottom: 1px solid var(--color-border-subtle);
   background: var(--color-bg-secondary);
   min-height: 32px;
@@ -1257,6 +1250,227 @@ height: 26px;
   text-align: center;
 }
 .preview-bar__hint { color: var(--color-text-faint); max-width: 220px; line-height: 1.5; }
+
+/* 空态 = 能力清单（卡片式入口），不是一句"暂无内容"。
+   可点的卡是真入口；.is-hint 是明确标注"尚未接线"的占位，
+   disabled + 降透明度，避免看起来能点却无响应。 */
+.preview-bar__empty-title {
+  font-size: var(--text-title, 16px);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+.preview-bar__cards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  width: 100%;
+  max-width: 300px;
+  margin-top: 6px;
+}
+.preview-bar__card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 14px 8px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-secondary);
+  color: var(--color-text-primary);
+  font-size: var(--text-ui, 13px);
+  cursor: pointer;
+  transition: background var(--duration-fast) ease, border-color var(--duration-fast) ease;
+}
+.preview-bar__card:hover:not(:disabled) {
+  background: var(--color-bg-hover);
+  border-color: var(--color-border);
+}
+.preview-bar__card-sub {
+  font-size: var(--text-tiny, 11px);
+  color: var(--color-text-faint);
+  text-align: center;
+  line-height: 1.4;
+}
+.preview-bar__card.is-hint { opacity: 0.5; cursor: not-allowed; }
+
+/* ── 审查 / 辅助对话 两个聚合视图 ────────────────────────────
+   与文件预览共用右栏的纵向布局：头部一行摘要（.cs-spacer 推开右段），
+   下面是可滚动列表。配色沿用项目状态 token，不引入蓝紫色。 */
+.review-list,
+.subagent-list {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+}
+.review-list__head,
+.subagent-list__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-secondary);
+  font-size: var(--text-tiny, 11px);
+  color: var(--color-text-muted);
+}
+.subagent-list__running { color: var(--color-accent); }
+
+.review-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  border-bottom: 1px solid var(--color-border-subtle);
+  background: transparent;
+  color: var(--color-text-primary);
+  font-size: var(--text-meta, 12px);
+  text-align: left;
+  cursor: pointer;
+}
+.review-row:hover { background: var(--color-bg-hover); }
+.review-row__name { flex: 1; min-width: 0; }
+.review-row__hits {
+  flex-shrink: 0;
+  font-size: var(--text-micro, 10px);
+  color: var(--color-text-faint);
+}
+.review-row__tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-micro, 10px);
+  font-weight: var(--font-weight-semibold, 600);
+}
+.review-row__tag.is-created { background: var(--color-success-soft); color: var(--color-success); }
+.review-row__tag.is-modified { background: var(--color-accent-soft-strong); color: var(--color-accent); }
+.review-row__tag.is-deleted { background: var(--color-error-soft); color: var(--color-error); }
+.review-row__tag.is-renamed { background: var(--color-bg-tertiary); color: var(--color-text-muted); }
+
+.review-empty,
+.subagent-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex: 1;
+  padding: 24px 16px;
+  text-align: center;
+  color: var(--color-text-faint);
+}
+.review-empty__title,
+.subagent-empty__title {
+  font-size: var(--text-ui, 13px);
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+.review-empty__hint,
+.subagent-empty__hint {
+  max-width: 240px;
+  font-size: var(--text-tiny, 11px);
+  line-height: 1.6;
+  color: var(--color-text-faint);
+}
+
+/* 子代理卡片用 <details>：默认折叠（大多数子代理已结束，不需要占屏），
+   失败项强制展开（fail-open 原则：出错时最该被看见）。 */
+.subagent-card {
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.subagent-card__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  cursor: pointer;
+  list-style: none;
+}
+.subagent-card__head::-webkit-details-marker { display: none; }
+.subagent-card__head:hover { background: var(--color-bg-hover); }
+.subagent-card__task {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--text-meta, 12px);
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.subagent-card__chevron {
+  flex-shrink: 0;
+  color: var(--color-text-faint);
+  transition: transform var(--duration-fast) ease;
+}
+.subagent-card[open] .subagent-card__chevron { transform: rotate(90deg); }
+.subagent-card__phase {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-micro, 10px);
+  font-weight: var(--font-weight-semibold, 600);
+}
+.subagent-card__phase.is-spawned,
+.subagent-card__phase.is-started {
+  background: var(--color-accent-soft-strong);
+  color: var(--color-accent);
+}
+.subagent-card__phase.is-done { background: var(--color-success-soft); color: var(--color-success); }
+.subagent-card__phase.is-failed { background: var(--color-error-soft); color: var(--color-error); }
+.subagent-card__meta {
+  display: flex;
+  gap: 10px;
+  padding: 0 10px 6px;
+  font-size: var(--text-tiny, 11px);
+  color: var(--color-text-muted);
+}
+.subagent-card__error {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  margin: 0 10px 6px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--color-error-soft);
+  color: var(--color-error);
+  font-size: var(--text-tiny, 11px);
+  line-height: 1.5;
+}
+.subagent-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0 10px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.subagent-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: var(--text-tiny, 11px);
+  color: var(--color-text-muted);
+  line-height: 1.5;
+}
+.subagent-step__idx {
+  flex-shrink: 0;
+  min-width: 15px;
+  text-align: right;
+  color: var(--color-text-faint);
+  font-variant-numeric: tabular-nums;
+}
+.subagent-step__text { min-width: 0; overflow-wrap: anywhere; }
 
 /* ── 窗口缩放/最大化/还原期间的性能护栏 ───────────────────────
    最大化与还原是「整窗重排 + 重绘」最重的时刻：backdrop-filter 每帧要

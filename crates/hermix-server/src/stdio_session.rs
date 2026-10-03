@@ -73,6 +73,12 @@ pub async fn run_stdio_server(state: HttpServerState) -> Result<(), hermix_core:
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
     let app = crate::router(state.clone()).layer(axum::Extension(shutdown_tx));
 
+    // IM 通道（QQ / 企业微信）。HTTP 模式在 run_server 里起，stdio（桌面端
+    // IPC）此前漏了——重启应用后通道不自动拉起，状态接口永远返回
+    // connected=false 且无故障原文。凭据成对齐全才启（ImRuntime::start 自己判断）。
+    let im_runtime = crate::channels::ImRuntime::start(state.clone());
+    crate::channels::install_runtime(im_runtime.clone());
+
     // 虚拟连接注册表：channel → 该连接的入站队列发送端。
     let connections: Arc<
         tokio::sync::Mutex<HashMap<String, mpsc::Sender<String>>>,
@@ -143,6 +149,9 @@ pub async fn run_stdio_server(state: HttpServerState) -> Result<(), hermix_core:
     }
 
     tracing::info!("stdio: stdin closed, exiting");
+    if let Some(rt) = im_runtime.as_ref() {
+        rt.stop().await;
+    }
     Ok(())
 }
 

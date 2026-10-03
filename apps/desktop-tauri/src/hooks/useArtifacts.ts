@@ -3,7 +3,7 @@
 // Outputs: verified artifact list + selected artifact + path-click handler
 
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
-import { extractArtifacts, type Artifact, type ArtifactKind } from "../utils/artifacts";
+import { extractArtifacts, canonicalPath, type Artifact, type ArtifactKind } from "../utils/artifacts";
 import { tryArtifactPathExists } from "../utils/artifactReader";
 
 function classifyFromExtension(ext: string): ArtifactKind {
@@ -83,9 +83,9 @@ export function useArtifacts({
       // preview modal to flash open then immediately close.
       // We keep any artifact whose path is NOT in rawArtifacts
       // (i.e. it was injected, not extracted from messages).
-      const rawPaths = new Set(raw.map((a) => a.path.replace(/\\/g, "/")));
+      const rawPaths = new Set(raw.map((a) => canonicalPath(a.path)));
       setVerifiedArtifacts((prev) => {
-        const synthetics = prev.filter((a) => !rawPaths.has(a.path.replace(/\\/g, "/")));
+        const synthetics = prev.filter((a) => !rawPaths.has(canonicalPath(a.path)));
         return [...next, ...synthetics];
       });
       if (typeof window !== "undefined" && window.localStorage?.getItem("hermixDebugArtifacts") === "1") {
@@ -117,7 +117,13 @@ export function useArtifacts({
   /** Programmatic file open from inside a markdown body. */
   const handlePathClick = useCallback(
     (path: string) => {
-      const existing = artifactsRef.current.find((a) => a.path === path || a.path.endsWith(path));
+      // 匹配口径与 App 侧开 tab 完全一致（canonicalPath）：同一文件写成
+      // `F:\a\b.md` 或 `F:/a/b.md` 必须命中同一条，否则会合成一个多余
+      // 产物，进而在侧栏开出两个重复标签。
+      const target = canonicalPath(path);
+      const existing = artifactsRef.current.find(
+        (a) => canonicalPath(a.path) === target || a.path.endsWith(path),
+      );
       if (existing) {
         onOpenArtifact(existing);
         return;
@@ -135,9 +141,8 @@ export function useArtifacts({
       };
       setVerifiedArtifacts((prev) => {
         // De-dup: don't add if an artifact with the same
-        // normalized path already exists.
-        const norm = synth.path.replace(/\\/g, "/");
-        if (prev.some((a) => a.path.replace(/\\/g, "/") === norm)) return prev;
+        // canonical path already exists.
+        if (prev.some((a) => canonicalPath(a.path) === target)) return prev;
         return [...prev, synth];
       });
       onOpenArtifact(synth);

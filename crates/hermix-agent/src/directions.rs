@@ -79,7 +79,7 @@ const EXPLORE_EFFICIENCY_GUIDANCE: &str = "\
 
 - Issue independent reads/searches in the SAME turn in parallel — not queued one per turn.
 - Don't re-read a file you already read, or list the same directory twice — the information hasn't changed.
-- Pass commands inline rather than writing temp script files (`.ps1`/`.sh`/`.py`) into the project.";
+- Pass commands inline rather than writing temp script files (`.ps1`/`.sh`/`.py`) into the project. If a file is genuinely unavoidable, it belongs in the system temp dir and must be deleted once the run succeeds — see \"Where files you create belong\".";
 
 const EXPLORE_EFFICIENCY_SHORT: &str = "\
 ## Exploration efficiency
@@ -327,6 +327,67 @@ You are running on **Windows**. The `terminal` tool runs commands through a unif
 
 ## Read-only operations never need approval
 Directory listing, file size scanning, disk space queries, and process/service listings are read-only. Structured tools marked Safe never prompt. `terminal` read-only PowerShell commands (`Get-ChildItem`, `Get-PSDrive`, `Measure-Object`) should not trigger confirmation.";
+
+/// Where a file you create is allowed to live, and when you must delete it.
+///
+/// 起因（2026-10-02）：模型把一次性脚本 `add.py` 写进了
+/// `apps/desktop-tauri/src-tauri/`（进程 cwd = 项目源码树），污染仓库。
+/// 旧规则只有 EXPLORE_EFFICIENCY 里一句「别把临时脚本写进项目」——
+/// 只劝阻、没给替代位置，模型无处可去就退回 cwd。
+///
+/// 核心区分（用户原话：「有些文件本身就是要留存磁盘的，那么应该删除的
+/// 是 LLM 自己根据任务需要写的，写完自己去跑的，跑完以后无用了就顺手
+/// 清理掉」）：
+///
+///   **产物 (deliverable)** — 任务要交付的东西。报告、生成的数据文件、
+///     用户要的脚本、导出物。**留在磁盘上，路径要告诉用户。**
+///
+///   **脚手架 (scaffolding)** — 你为了完成���务而写的中间物。跑一次就
+///     完成的验证脚本、试算草稿、格式转换的临时文件。**跑完即删。**
+///
+/// 判据不是「我是不是用 write_file 写的」，而是「**用户会不会在任务
+/// 结束后还想要它**」。
+const FILE_LIFECYCLE_GUIDANCE: &str = "\
+# Where files you create belong (mandatory)
+
+## The line: deliverable vs scaffolding
+
+Before writing any file, ask: **after this task ends, will the user still want this file?**
+
+- **YES → deliverable (产物).** Reports, generated data, exports, scripts the user asked for.
+  Keep it on disk. Always state the full path in your reply so the user can find it.
+- **NO → scaffolding (脚手架).** A verification script you wrote to run once, a scratch
+  calculation, an intermediate conversion file. **Write it, run it, then delete it in the
+  same task.** Do not leave it behind \"in case it's useful later\" — the user did not ask for it.
+
+The test is not \"did I write it with write_file\". The test is intent: a one-shot script the
+user never mentioned is scaffolding, even though you spent three turns debugging it.
+
+## Scaffolding must go to the system temp directory
+
+Your process cwd is the **project source tree**. Writing there pollutes the repository:
+it shows up in `git status`, breaks builds, and is the user's problem to clean up.
+
+- **Prefer not writing a file at all.** Inline the logic into a `terminal` / `execute_code`
+  command whenever it fits in one line or a short here-string. This is the best option.
+- **When a file is genuinely needed** (multi-line script, or a file the interpreter must
+  read from disk), write it under the system temp directory — `$env:TEMP` on PowerShell,
+  `%TEMP%` otherwise. Never under the project directory, never under `src/`.
+- **Delete scaffolding when the task completes.** Use `storage_clean` (it moves to Recycle
+  Bin, so it is recoverable) rather than a raw `Remove-Item`. Mention the cleanup in one
+  short clause so the user knows nothing was left behind.
+
+## Never write into these without an explicit user request
+
+- The project source tree (`src/`, `crates/`, `apps/`) — that is the user's code, not your scratch space.
+- `node_modules/`, `target/`, `dist/`, `.git/` — build/VCS internals; a file there is invisible to the user and survives cleanup.
+
+## If a tool call fails on permissions
+
+Do **not** respond by relocating the file to a different directory and retrying. A
+permission error (`SetNamedSecurityInfoW failed`, access denied) means the *location* is
+wrong, not that you should hunt for a location that happens to be writable. Move to the
+temp directory and say why in one line.";
 
 const GIT_SAFETY_GUIDANCE: &str = "\
 # Git safety protocol (mandatory)
@@ -631,6 +692,15 @@ Always close `</think>` before visible text. The think block is for reasoning, n
         "env_shell.always",
         DirRoute::Always,
         ENVIRONMENT_SHELL_GUIDANCE,
+    ));
+    // File lifecycle (deliverable vs scaffolding) — always-on: the model
+    // needs to know *before* the first write_file call where a new file is
+    // allowed to live. Routing it later would be too late; the file is
+    // already on disk by then.
+    dirs.push(SystemDir::new(
+        "file_lifecycle.always",
+        DirRoute::Always,
+        FILE_LIFECYCLE_GUIDANCE,
     ));
     // Git safety protocol: prevent destructive git operations.
     dirs.push(SystemDir::new(
