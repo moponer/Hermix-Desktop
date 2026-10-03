@@ -707,7 +707,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d045de693cb712d0b22c6a64be5b953f67b3ce00ab5ad3dd5d8b441886ab8e1a"
 dependencies = [
  "quote",
- "syn 2.0.117",
+ "syn 3.0.6",
 ]
 
 [[package]]
@@ -1788,7 +1788,7 @@ dependencies = [
  "webview2-com",
  "which",
  "windows 0.58.0",
- "windows-core 0.61.2",
+ "windows-core 0.62.2",
 ]
 
 [[package]]
