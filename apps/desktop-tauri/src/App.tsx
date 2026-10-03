@@ -5,7 +5,7 @@ import { Sidebar } from "./components/Sidebar";
 import { SidebarRevealRow } from "./components/SidebarRevealRow";
 import { ChatView } from "./components/ChatView";
 import { ImageLightbox } from "./components/ImageLightbox";
-import { PreviewBar, type PreviewTab } from "./components/PreviewBar";
+import { PreviewBar, BROWSER_TAB_ID, REVIEW_TAB_ID, SUBAGENT_TAB_ID, type SideTab } from "./components/PreviewBar";
 import { RightRail } from "./components/RightRail";
 import { TitleBar } from "./components/TitleBar";
 import { SessionPickerDialog } from "./components/SessionPickerDialog";
@@ -36,7 +36,7 @@ import { ToastContainer } from "./components/ToastContainer";
 import { toastError, toastInfo } from "./hooks/useToast";
 import { useAcuiState, type AcuiDecisionBus } from "./acui";
 import type { Artifact } from "./utils/artifacts";
-import { classifyArtifactKind } from "./utils/artifacts";
+import { canonicalPath, classifyArtifactKind } from "./utils/artifacts";
 import * as api from "./api";
 import { registerBuiltinsToBackend } from "./data/builtinExperts";
 import type {
@@ -283,33 +283,71 @@ setPage("chat");
     try { storage.setItem(RIGHT_OPEN_KEY, String(rightOpen)); } catch {}
   }, [rightOpen]);
 
-  // ── 预览栏：一屏多标签，手动关闭 ────────────────────────────
+  // ── 侧栏：一屏多标签，手动关闭 ──────────────────────────────
   // 点对话里的文件路径 / 文件浏览器里的文件都会在这里开一个标签；同一
-  // 路径只开一个（按绝对路径去重），重复点击只是切过去。
-  const [previewTabs, setPreviewTabs] = useState<PreviewTab[]>([]);
+  // 文件只开一个（按 canonicalPath 去重，不是字符串相等 —— `F:\a\b.md`
+  // 与 `F:/a/b.md` 是同一个文件），重复点击只是切过去。
+  // 「浏览工作区」是一个单例标签，与文件标签并存 —— 不再是互斥的模式开关。
+  const [previewTabs, setPreviewTabs] = useState<SideTab[]>([]);
   const [activePreviewId, setActivePreviewId] = useState<string | null>(null);
 
   const openPreviewArtifact = useCallback((artifact: Artifact) => {
+    const id = `file:${canonicalPath(artifact.path)}`;
     setPreviewTabs((prev) =>
-      prev.some((t) => t.artifact.path === artifact.path)
-        ? prev
-        : [...prev, { id: artifact.id, artifact }],
+      prev.some((t) => t.id === id) ? prev : [...prev, { id, type: "file", artifact }],
     );
-    setActivePreviewId(artifact.id);
+    setActivePreviewId(id);
     setRightOpen(true);
   }, []);
 
+  const openBrowserTab = useCallback(() => {
+    setPreviewTabs((prev) =>
+      prev.some((t) => t.id === BROWSER_TAB_ID)
+        ? prev
+        : [...prev, { id: BROWSER_TAB_ID, type: "browser" }],
+    );
+    setActivePreviewId(BROWSER_TAB_ID);
+    setRightOpen(true);
+  }, []);
+
+  // 审查 / 辅助对话同构：单例标签 + 幂等切换。两个都只有一份聚合视图，
+  // 不需要像文件那样按路径多开。
+  const openSingletonTab = useCallback((id: string, type: "review" | "subagent") => {
+    setPreviewTabs((prev) =>
+      prev.some((t) => t.id === id) ? prev : [...prev, { id, type } as SideTab],
+    );
+    setActivePreviewId(id);
+    setRightOpen(true);
+  }, []);
+
+  const openReviewTab = useCallback(
+    () => openSingletonTab(REVIEW_TAB_ID, "review"),
+    [openSingletonTab],
+  );
+  const openSubagentTab = useCallback(
+    () => openSingletonTab(SUBAGENT_TAB_ID, "subagent"),
+    [openSingletonTab],
+  );
+
   const closePreviewTab = useCallback((id: string) => {
     setPreviewTabs((prev) => {
+      const idx = prev.findIndex((t) => t.id === id);
+      if (idx === -1) return prev;
       const next = prev.filter((t) => t.id !== id);
-      setActivePreviewId((cur) =>
-        cur === id ? (next.length > 0 ? next[next.length - 1].id : null) : cur,
-      );
+      setActivePreviewId((cur) => {
+        if (cur !== id) return cur;
+        // 落点取邻居：优先右侧（VS Code 行为），右侧没有再退到左侧。
+        // 原来这里直接跳 `next[next.length - 1]`（列表最末），关中间一个
+        // 标签会让焦点飞到另一头，用户得重新扫一遍标签条才找得到自己在哪。
+        return next[idx]?.id ?? next[idx - 1]?.id ?? null;
+      });
       return next;
     });
   }, []);
 
   // 文件浏览器 → 预览：合成一个产物交给预览栏（分类走统一 classify）。
+  // 这里的 id 只是满足 Artifact 必填字段 —— 标签身份由 openPreviewArtifact
+  // 从 canonicalPath 重新算出，不用它。
   const handlePreviewFileFromExplorer = useCallback(
     (path: string, name: string) => {
       openPreviewArtifact({
@@ -3360,7 +3398,6 @@ return {
         className="app-body"
         data-left-open={sidebarOpen ? "true" : "false"}
         data-right-open={rightOpen ? "true" : "false"}
-        data-right-rail={!rightOpen ? "true" : "false"}
         style={{
           "--ab-left-w": `${left.width}px`,
           "--ab-right-w": rightOpen ? `${right.width}px` : "0px",
@@ -3452,19 +3489,25 @@ return {
             activeId={activePreviewId}
             onActivate={setActivePreviewId}
             onClose={closePreviewTab}
-            onCloseBar={() => setRightOpen(false)}
+            onOpenBrowser={openBrowserTab}
+            onOpenReview={openReviewTab}
+            onOpenSubagent={openSubagentTab}
+            messages={activeSession?.messages}
+            subAgents={subAgents}
             workspaceRoot={workspaceRoot}
             onAddFileToChat={handleAddFileToChat}
             onPreviewFile={handlePreviewFileFromExplorer}
           />
           </ErrorBoundary>
         </div>
-        {/* 右栏折叠态：44px 竖条，作为栅格第三列的原位替代。CSS 在
-            <900px 视口下把列宽与竖条一并撤掉（那里 44px 不如留给正文）。
-            展开走 handleToggleRight —— 窄视口下它会先扩窗再开，不会抖。 */}
-        {!rightOpen && (
-          <RightRail count={previewTabs.length} onExpand={() => void handleToggleRight()} />
-        )}
+        {/* 侧栏开关：常驻渲染（不再随 rightOpen 挂载/卸载）—— 条件渲染
+            会让按钮在展开瞬间被卸载重建，位置看似"跳"了一下。移出栅格后
+            它锚在 .app-body 右上角，栅格伸缩与它无关。 */}
+        <RightRail
+          count={previewTabs.length}
+          open={rightOpen}
+          onToggle={() => void handleToggleRight()}
+        />
       </div>
 
       {/* 预览统一走右侧预览栏（含 PreviewPanel 自带的全屏），不再有全屏模态。 */}
