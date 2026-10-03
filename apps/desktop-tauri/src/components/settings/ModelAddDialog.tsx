@@ -31,6 +31,13 @@ export interface EditingTarget {
   displayName?: string;
   /** 自定义项的端点基址。内置项留空——用 PROVIDERS 里的官方地址。 */
   baseUrl?: string;
+  /** 该供应商是否已配置密钥。**只传布尔量，绝不回填密钥本身**——
+   *  内置在服务端 env、自定义在 config.yaml，都不该流到前端。
+   *
+   *  它不只是给界面看的：编辑一条已配好密钥的条目时密码框本来就是空的，
+   *  没有这个标记就分不清「没配（该填）」和「已配（留空即不改）」，用户
+   *  每次改无关字段都得重输一遍 Key——而重输本身还有打错的风险。 */
+  hasKey?: boolean;
 }
 
 interface Props {
@@ -61,6 +68,10 @@ export function ModelAddDialog({ onClose, onSaved, editing }: Props) {
   });
   const [modelId, setModelId] = useState(editing?.modelId ?? "");
   const [displayName, setDisplayName] = useState(editing?.displayName ?? "");
+  // 密钥**永不回填**，只带一个"是否已配"的布尔量，用来把密码框的
+  // placeholder / 提示语改成「已配置」还是「未配置」，让"留空 = 不改"
+  // 这条语义对用户可见。
+  const editingHasKey = editing?.hasKey ?? false;
   const [caps, setCaps] = useState({ tools: true, images: false, thinking: false });
   const [testing, setTesting] = useState(false);
   const [test, setTest] = useState<api.InlineTestResponse | null>(null);
@@ -74,21 +85,45 @@ export function ModelAddDialog({ onClose, onSaved, editing }: Props) {
   );
 
   const testNow = useCallback(async () => {
-    // 内置项不要求本地填 Key——密钥在后端 env 里，由服务端按 providerId 取。
-    // 端点地址仍然必填（它是测试目标，且允许用户改成代理地址）。
-    const needsKey = choice?.kind !== "builtin";
-    if (!effectiveBaseUrl.trim() || (needsKey && !apiKey.trim())) {
-      setError(needsKey ? "接口地址与 API Key 都不能为空" : "接口地址不能为空");
+    // 三条路径，因为三类的密钥**存放位置不同**，前端能不能拿到也不同：
+    //  · 内置：Key 只在服务端 env → inline 端点带 providerId，由服务端取。
+    //  · 自定义且已配：Key 在 config.yaml → 走 provider 级 test-connection，
+    //    服务端自己读配置。**这一条是"留空=不改"的正解**：此前这里因为
+    //    密码框是空的就直接报「要输入 API Key」，可密钥明明已经存好了，
+    //    用户只想改模型名却被迫重输一遍。
+    //  · 自定义新建：还没落盘 → 必须现场填，走 inline。
+    const isBuiltin = choice?.kind === "builtin";
+    const savedCustom = !isBuiltin && editing?.isCustom === true && editingHasKey;
+    if (!savedCustom && !effectiveBaseUrl.trim()) {
+      setError("接口地址不能为空");
+      return;
+    }
+    if (!isBuiltin && !savedCustom && !apiKey.trim()) {
+      setError("接口地址与 API Key 都不能为空");
       return;
     }
     setTesting(true);
     setError(null);
     try {
+      if (savedCustom) {
+        const r = await api.testCustomProviderConnection(editing!.providerId);
+        // 归一化成 InlineTestResponse，复用同一块结果展示，不必写第二套 UI。
+        setTest({
+          ok: r.ok,
+          kind: r.ok ? null : "provider",
+          status: r.status,
+          latency_ms: 0,
+          error: r.error,
+          models: r.models?.map((m) => m.id) ?? null,
+          model_found: null,
+        });
+        return;
+      }
       const r = await api.testProviderInline({
         baseUrl: effectiveBaseUrl.trim(),
         apiKey: apiKey.trim(),
         model: modelId.trim() || undefined,
-        providerId: choice?.kind === "builtin" ? choice.def.id : undefined,
+        providerId: isBuiltin ? choice.def.id : undefined,
       });
       setTest(r);
     } catch (e) {
@@ -255,12 +290,23 @@ export function ModelAddDialog({ onClose, onSaved, editing }: Props) {
                 />
               </Field>
 
-              <Field label="API Key">
+              <Field
+                label="API Key"
+                hint={
+                  editingHasKey
+                    ? `已配置。留空则保持当前密钥不变——改端点或模型名不必重输。${
+                        editChoice && editChoice.kind === "builtin"
+                          ? `（保存在 ${editChoice.def.keyEnvVar}）`
+                          : ""
+                      }`
+                    : "尚未配置。留空表示不设置；该供应商在配好密钥前不会出现在模型列表里。"
+                }
+              >
                 <input
                   type="password"
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
-                  placeholder="sk-..."
+                  placeholder={editingHasKey ? "留空保持不变" : "sk-..."}
                   className={inputCls}
                 />
               </Field>

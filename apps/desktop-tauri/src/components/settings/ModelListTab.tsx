@@ -258,6 +258,10 @@ export function ModelListTab() {
                   baseUrl: row.isBuiltin
                     ? undefined
                     : customs.find((c) => c.id === row.providerId)?.base_url,
+                  // èªå®ä¹é¡¹åç«¯ç´æ¥ç» has_keyï¼åç½®é¡¹æ²¡è¿ä¸ªå­æ®µï¼ä½è½åºç°å¨è¿å¼ åè¡¨éæ¬èº«å°±è¯´æå¯é¥å·²éââæå¡ç«¯ /api/model/list æ provider_has_key è¿æ»¤è¿ï¼æ¿å®å½çç¸æ¯è¾åå ä¸ä¸ªç«¯ç¹äº¤ç»æå¡ç«¯æ¥åã
+                  hasKey: row.isBuiltin
+                    ? true
+                    : Boolean(customs.find((c) => c.id === row.providerId)?.has_key),
                 }); setAddOpen(true); }}>
                   <Pencil className="icon-sm" />
                 </IconBtn>
