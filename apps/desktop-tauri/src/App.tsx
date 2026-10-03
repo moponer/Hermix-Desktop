@@ -6,7 +6,6 @@ import { SidebarRevealRow } from "./components/SidebarRevealRow";
 import { ChatView } from "./components/ChatView";
 import { ImageLightbox } from "./components/ImageLightbox";
 import { PreviewBar, BROWSER_TAB_ID, REVIEW_TAB_ID, SUBAGENT_TAB_ID, type SideTab } from "./components/PreviewBar";
-import { RightRail } from "./components/RightRail";
 import { TitleBar } from "./components/TitleBar";
 import { SessionPickerDialog } from "./components/SessionPickerDialog";
 import { useStreamChat } from "./hooks/useStreamChat";
@@ -3576,18 +3575,14 @@ return {
           />
           </ErrorBoundary>
         </div>
-        {/* 侧栏开关：常驻渲染（不再随 rightOpen 挂载/卸载）—— 条件渲染
-            会让按钮在展开瞬间被卸载重建，位置看似"跳"了一下。移出栅格后
-            它锚在 .app-body 右上角，栅格伸缩与它无关。
-            设置页不渲染：那里没有侧栏可开关，开关是纯装饰，且会切掉
-            一截可视宽度。 */}
-        {page !== "systemconfig" && (
-          <RightRail
-            count={previewTabs.length}
-            open={rightOpen}
-            onToggle={() => void handleToggleRight()}
-          />
-        )}
+        {/* 2026-10-03：整条移除右栏切换开关（原 .right-rail 常驻按钮 +
+            此前更早的 44px 折叠竖条）。展开预览栏的入口已有三处：
+            · ChatView 标题行的 PanelRight 按钮（onToggleRight 无条件
+              传入，showRightToggle 恒为 true —— 不依赖 displayTitle，
+              新建会话尚未生成标题时那个按钮也在）；
+            · 点对话正文里的路径 / 产物 → setRightOpen(true)；
+            · 目录 chip → openComputer。
+            再加常驻按钮是第四个重复入口，且它压在右栏内容之上。 */}
       </div>
 
       {/* 预览统一走右侧预览栏（含 PreviewPanel 自带的全屏），不再有全屏模态。 */}

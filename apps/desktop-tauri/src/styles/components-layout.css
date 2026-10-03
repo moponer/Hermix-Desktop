@@ -98,69 +98,6 @@
   --col-right: 0px;
 }
 
-/* 侧栏开关：绝对定位到 .app-body（宽度恒等于窗口）的右上角。
-   关键在于它**不属于任何 grid 列** —— 第三列从 44px 长到 640px 时，
-   这个按钮一像素不动，用户看到的是"面板从它下方长出来"而非"图标被
-   拽走"。原来的 44px 竖条随之撤掉：开关已常驻，竖条是白占 3.4% 窗口宽。
-   z-index 高于右栏内容：展开时它仍需可点（收起右栏）。 */
-.right-rail {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  z-index: 20;
-}
-.right-rail__btn {
-  position: relative;
-  width: 30px;
-  height: 30px;
-  display: grid;
-  place-items: center;
-  border: 0;
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--color-text-secondary);
-  cursor: pointer;
-  transition: background var(--duration-fast) ease, color var(--duration-fast) ease;
-}
-.right-rail__btn:hover {
-  background: var(--color-bg-hover);
-  color: var(--color-text-primary);
-}
-/* 展开态：常驻浅色圆角块，让用户扫一眼就知道侧栏是开着的
-   （对齐参考项目里那个带底色的开关）。这是纯背景色变化，
-   按钮本身不位移。 */
-.right-rail__btn.is-active {
-  background: var(--color-bg-tertiary);
-  color: var(--color-text-primary);
-}
-.right-rail__btn:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
-}
-.right-rail__badge {
-  position: absolute;
-  top: -4px;
-  right: -6px;
-  min-width: 15px;
-  height: 15px;
-  padding: 0 4px;
-  border-radius: 8px;
-  background: var(--color-accent);
-  color: var(--color-accent-on-text);
-  font-size: var(--text-micro, 10px);
-  font-weight: var(--font-weight-semibold, 600);
-  line-height: 15px;
-  text-align: center;
-}
-
-/* 窄视口撤掉开关：那点宽度在窄窗里比侧栏提示更值钱，
-   且此时右栏本来就装不下（< 1140 会自动关）。 */
-@media (max-width: 899px) {
-  .right-rail {
-    display: none;
-  }
-}
-
 .pane {
   display: flex;
   flex-direction: column;
@@ -1166,9 +1103,7 @@ height: 26px;
   display: flex;
   align-items: center;
   gap: 4px;
-  /* 右侧留 38px 给绝对定位的侧栏开关（.right-rail，top/right 各 8px）。
-     不留的话展开态开关会压在标签条末端的关闭按钮上，两者都点不准。 */
-  padding: 4px 38px 4px 6px;
+  padding: 4px 6px;
   border-bottom: 1px solid var(--color-border-subtle);
   background: var(--color-bg-secondary);
   min-height: 32px;
