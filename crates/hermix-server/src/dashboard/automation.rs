@@ -83,6 +83,10 @@ pub struct AutomationTask {
     /// "default" | "full"
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permission_level: Option<String>,
+    /// 任务级技能名（前端编辑器勾选）。执行时经 `AgentOverrides::skills`
+    /// 以 ephemeral 技能注入——内容强制进提示词，不受全局技能启停影响。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skills: Option<Vec<String>>,
     /// Optional category for grouping in the UI, e.g. "工作" / "学习".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub category: Option<String>,
@@ -554,6 +558,13 @@ fn spawn_run(state: HttpServerState, task: AutomationTask) {
                 "full" => Some(hermix_core::traits::PermissionLevel::Full),
                 _ => Some(hermix_core::traits::PermissionLevel::Default),
             };
+        }
+        if let Some(skills) = task.skills.clone() {
+            if !skills.is_empty() {
+                // 任务级技能（编辑器勾选）：走 ephemeral skills 通道，
+                // 这些技能的内容强制注入提示词，不等同于全局启停。
+                overrides.skills = Some(skills);
+            }
         }
         if let Some(ref eid) = expert_id {
             // Resolve expert definition from the registry and apply its
