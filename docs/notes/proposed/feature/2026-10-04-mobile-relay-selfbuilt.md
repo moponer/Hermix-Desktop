@@ -90,12 +90,11 @@ Status: proposed — P1 地基六个 PR 已落地并过 CI Gate；手机端与 r
    - `/queue interrupt`：先摘队首（否则中断完它还会被排一次）→ 中断 → **先发状态再开跑**（`run_turn` 自己会发三态回执，顺序反了会让人以为没生效）。
    - `running` 从 `HashSet` 改成 `HashMap<key, 当前消息正文>`：不另加并行 map（两份状态会漂），编译器把所有使用点找齐，共 4 处。`/tasks` 因此能报出「在跑什么」而不是干巴巴一句「运行中」。
    - `first_line` 取**第一条非空行**（用户消息常以换行开头，`lines().next()` 会返回空串）。
-   - 网关启动尾 `check_last_turn_outcome(platform, user)`：异常态发「上次任务中断于 {时间}，发「继续」可恢复」。
-     **判据（已 spike 查实，本文早先写的「用 `hermix_task` / `TaskRecordSink` 的轮次记录」是错的，已撤回）**：`TaskRecordSink` 只在 `SubAgentOrchestrator` 里被调用（`sub_agent_orchestrator.rs:572` 记 running、`:444` 记终态），记的是 `delegate_task` 派发出去的 **sub-agent**；**主对话轮次根本不写 TaskRecord**。虽然 `TaskRecordStore::list_by_conversation`（`record.rs:277`）存在且按时间倒序，但拿它判「上次对话中断」会双向出错：没用过 `delegate_task` 的会话查出来是空的（漏报），用过的会把子任务记录误当对话轮次（误报）。
-     因此判据退回 `session_persistence` 的 messages：**该会话最后一条 user 消息之后没有 assistant 消息** → 判定上一轮未跑完。之所以只能这样，是因为 `run_turn` **只把主轮次的开始落库、结束不落库**（`local_agent_service.rs:1651` 持久化 user 消息，轮末才写 assistant）。已知误报源：进程在首次落盘前重启，与真中断同形。误报代价低——只是多一句提示，Resume 由用户手动触发，不造成数据重复执行。
-     **要根治**：给主对话轮次补一条终态记录（复用 `TaskRecordStore`、主轮次用独立 id 前缀）。影响面不限于 IM，应单独一篇笔记，不塞进 PR-7。
+   - **`/tasks` 附带「上一轮没跑完」提示**（`Command::Resume` 提供 `/继续` 恢复）：判据读 `task_record_store.list_by_conversation(sid)` + `task_record_sink::last_turn_unfinished`（`turn-` 前缀 + 非终态）。**不做启动时主动推送**——启动时用户多半不在，只会收到一条无人认领的消息；且枚举「所有配对过的 IM 身份」要另写一遍。
+     **判据为什么曾是错的**（本文早先写的「用 `hermix_task` / `TaskRecordSink` 的轮次记录」已撤回）：`TaskRecordSink` 只在 `SubAgentOrchestrator` 里被调用（`sub_agent_orchestrator.rs:572` 记 running、`:444` 记终态），记的是 `delegate_task` 派发出去的 **sub-agent**；**主对话轮次当时根本不写 TaskRecord**。虽然 `TaskRecordStore::list_by_conversation`（`record.rs:277`）存在且按时间倒序，但拿它判「上次对话中断」会双向出错：没用过 `delegate_task` 的会话查出来是空的（漏报），用过的会把子任务记录误当对话轮次（误报）。现已由 PR-7 补上主轮次记录，判据从此可靠。
+   - `/继续` 走带上下文续跑（§后端设计 4）。
    - `HELP_TEXT` 编号菜单化；裸数字仅在 `pending == 0` 且空闲时映射菜单（见上）。`HELP_TEXT` 现有文案「/stop 中断本机正在跑的任务（会波及本机所有会话）」（`:114`）必须同步改。
-4. **Resume 不做盲重放**。从 DB 取上一条 user 消息原样重发，会让上一轮已完成的副作用执行两次。改为带上下文续跑：重发时附「上次中断于 {时间点}，以下动作可能已部分完成：{已完成工具清单}」，或仅在确认无工具副作用记录时才允许原样重发。
+4. **Resume 不做盲重放**。从 DB 取上一条 user 消息原样重发，会让上一轮已完成的副作用执行两次。改为带上下文续跑：重发时附「上一轮在执行过程中中断了（未跑完）。下面是当时的任务，请**先检查现状**再决定怎么做，不要假定任何操作都没做过」+ 原文。`dedup_key` 必须重新生成，否则会被去重表当成重投丢掉。
 5. P1 对抗审查（已析）：①队列与聊天锁死锁（排水在 guard drop 后，锁外取锁内跑）②队列积压（cap + summarize）③超长 steer（`steer::normalize_accepted_steer_text` 已有闸，超长截断）④心跳 task 泄漏（双保险退出 + 降频不发静默）⑤trait 加方法破坏实现方（默认实现）⑥中断误报（只认 redirect 标记）⑦数字菜单与审批撞车（`pending == 0`）⑧**待补**：`interrupt_session` 与 `run_turn` 收尾清理 `active_interrupts`（`local_agent_service.rs:1649/2860`）之间的竞态；双设备同时 Stop 同一 sid 的幂等性。
 
 ### 对接层：hermix-server 面向手机 / Clawket 协议的接口
@@ -235,12 +234,14 @@ Status: proposed — P1 地基六个 PR 已落地并过 CI Gate；手机端与 r
 - `/queue steer` 用独立变体 `Command::Steer(String)` 而非 `QueueMode::Steer`：steer **不排队**，它改的是当下这一轮。
 - 测了**按会话隔离**：给 A 的指令不得进 B 的轮次——"你只管这个文件"被另一个会话的 agent 当指令执行是数据泄漏，不是 bug。
 
-**PR-7 主轮次终态记录 + Resume 带上下文续跑**（2026-10-04 定：**先补终态记录**，不用启发式）
+**PR-7 主轮次终态记录 + Resume 带上下文续跑** ✅ 已落地（2026-10-04 定：**先补终态记录**，不用启发式）
 
-- **为什么不先用启发式**：主对话轮次只把开始落库、结束不落库，所以「最后一条 user 之后没有 assistant」这种判据永远带一个已知误报源（首次落盘前重启与真中断同形）。既然要动，就一次动到根因。
-- **做法**：给主对话轮次也写一条 `TaskRecord`（复用 `hermix_task` 的 `TaskRecordStore`，主轮次用**独立 id 前缀**与 sub-agent 记录区分）。写入点与 `active_interrupts` 同生命周期：轮开始记 `running`，轮末记终态（成功 / 失败 / 中断三态都记，中断即 `graceful_interrupt_result` 那条）。
-- 判据随之变成 `list_by_conversation(sid)` 取最近一条 + `is_terminal()`，无歧义、无误报。
-- **Resume 不做盲重放**：重发时附「上次中断于 {时间点}，以下动作可能已部分完成：{已完成工具清单}」；仅在确认无工具副作用记录时才允许原样重发。
+- **为什么不先用启发式**：主对话轮次只把开始落库、结束不落库，所以「最后一条 user 之后没有 assistant」永远带一个已知误报源（首次落盘前重启与真中断同形）。既然要动就动到根因。
+- **复用既有 sink，不新建表 / 新 trait**：`TaskRecordSink` 已在生产接线（`state.rs:664`），`started` 本就带 `conversation_id`。主轮次用 `turn-{sid}-{nanos}` 前缀与 sub-agent 记录区隔；前缀是**跨 crate 契约**，放 `hermix_core::traits::TURN_ID_PREFIX`（hermix-agent 造 id、hermix-server 过滤 id）——`hermix-agent` 不能依赖 `hermix_task`，读取侧因此落在 hermix-server。
+- 三态映射：成功 → `Completed`、用户叫停 → `Aborted`、失败 → `Faulted`。**终态必须在 `let result = result?` 之前落**，否则 Err 提前 return，失败 / 中断的轮次永远停在 `Running`，会被误判成「进程崩了」——正好把 PR-7 存在的意义抹掉。
+- 判据 `task_record_sink::last_turn_unfinished`：`TURN_ID_PREFIX` + **非终态**（用 `TaskState::outcome().is_none()`，不是 `is_terminal`——那方法挂在 `TaskOutcome` 上且恒为 true）。用户按 `/stop` 落的是 `Terminal(Aborted)`，所以**主动叫停不算未跑完**，否则会一直被提示「接着来」。
+- **提示挂 `/tasks`，不做启动时主动推送**（与本文早先写的「网关启动尾 `check_last_turn_outcome` 逐个 platform/user 发提示」不同）：启动时用户多半不在，只会收到一条无人认领的消息；且枚举「所有配对过的 IM 身份」要另写一遍。用户主动问「现在什么情况」时才给，正是最容易忽略中断的时刻。
+- **Resume 不做盲重放**：`/继续` 取回上一条 user 原文后加「请**先检查现状**再决定怎么做，不要假定任何操作都没做过」，原样重发会让上一轮已完成的副作用执行两次。`dedup_key` 必须重新生成，否则会被去重表当成重投丢掉。
 
 **每 PR 门禁**：`cargo check --workspace --all-targets` → `cargo test -p hermix-agent -p hermix-server --lib` → `./scripts/ci-gate.sh`；不引入 `TODO: pre-existing` / `FIXME: pre-existing`；不碰交叉编译禁区。
 

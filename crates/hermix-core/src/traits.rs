@@ -688,12 +688,37 @@ pub(crate) fn is_zero_u32(n: &u32) -> bool {
     *n == 0
 }
 
+/// 主对话轮次 `TaskRecord` 的 id 前缀。
+///
+/// **跨 crate 契约**：hermix-agent 用它造 id（写记录），hermix-server 用它
+/// 过滤 id（读终态）。`task_records` 表里混着 `delegate_task` 的 sub-agent
+/// 记录，只按 `conversation_id` 过滤会把它们一起捞出来，所以必须靠这个
+/// 前缀区分「对话轮次」与「子任务」。
+pub const TURN_ID_PREFIX: &str = "turn-";
+
+/// 判据本体：这一轮是被**用户**停掉的吗？
+///
+/// `AgentReply`（流式路径）与 `AgentResult`（同步路径）字段同构，判据必须
+/// 只有一份，所以放在自由函数里、由两者各自包装。故意收得窄：单看
+/// `interrupted` 会把致命工具参数耗尽、后端 5xx 也算进去（见字段注释），
+/// 那等于让用户背一个 5xx 的锅。必须配对 `finish_reason` 这个文档化的
+/// 判别字段：用户停 = `interrupted` + `"interrupted"`；后端失败 = `"error"`。
+pub fn is_user_interrupted(interrupted: bool, finish_reason: Option<&str>) -> bool {
+    interrupted && finish_reason == Some("interrupted")
+}
+
+impl AgentReply {
+    /// 见 [`is_user_interrupted`]。
+    pub fn was_user_interrupted(&self) -> bool {
+        is_user_interrupted(self.interrupted, self.finish_reason.as_deref())
+    }
+}
+
 /// serde helper: skip serializing `interrupted` when it is `false`.
 #[allow(dead_code)]
 pub(crate) fn is_false(b: &bool) -> bool {
     !*b
 }
-
 // ---------------------------------------------------------------------------
 // AgentService
 // ---------------------------------------------------------------------------

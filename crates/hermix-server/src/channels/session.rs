@@ -192,6 +192,8 @@ enum Command {
     /// `1` 允许一次 / `2` 本会话内永久允许 / `3` 拒绝。
     Permission(usize),
     Queue(QueueMode),
+    /// `/继续`：把上一轮没跑完的任务接着跑。
+    Resume,
     /// 往**正在跑**的这一轮注入一条指引。轮次不中止，指引落进下一个 tool
     /// result，用户可以在不丢掉已完成工作的前提下纠偏。之所以单独一个变体
     /// 而不是 `Queue` 的一个模式：steer 不排队，它改的是**当下**这一轮。
@@ -214,6 +216,7 @@ fn parse_command(text: &str, pending: usize) -> Option<Command> {
         "/clear" | "清空" => return Some(Command::Clear),
         "/stop" | "停止" => return Some(Command::Stop),
         "/tasks" | "/任务" => return Some(Command::Tasks),
+        "/resume" | "/继续" => return Some(Command::Resume),
         "/queue" | "/队列" => return Some(Command::Queue(QueueMode::Report)),
         _ => {}
     }
@@ -260,6 +263,7 @@ const HELP_TEXT: &str = "\
 /status    查看当前会话与运行状态
 /tasks     列出运行中与排队的任务
 /queue     查看排队情况
+/继续      上一轮没跑完时，接着把它跑完
 /queue steer <正文>  往正在跑的这一轮注入指引（轮次不中止）
 /queue interrupt  中断当前轮次，队首立刻作为新一轮跑
 /clear     清空当前会话上下文
@@ -707,23 +711,26 @@ impl ChannelRuntime {
                 None => (text, Vec::new(), 0),
             }
         };
-        let mut out = String::new();
+        let mut lines: Vec<String> = Vec::new();
         let mut n = 0usize;
         if let Some(text) = running {
             n += 1;
-            out.push_str(&format!("#{n} 运行中：{}\n", first_line(&text)));
+            lines.push(format!("#{n} 运行中：{}", first_line(&text)));
         }
         for text in &items {
             n += 1;
-            out.push_str(&format!("#{n} 排队：{}\n", first_line(text)));
+            lines.push(format!("#{n} 排队：{}", first_line(text)));
         }
         if dropped > 0 {
-            out.push_str(&format!("（另有 {dropped} 条因队列已满被丢弃）"));
+            lines.push(format!("（另有 {dropped} 条因队列已满被丢弃）"));
         }
-        if out.is_empty() {
+        if let Some(note) = self.unfinished_turn_note(&session_id(platform, user)) {
+            lines.push(note);
+        }
+        if lines.is_empty() {
             "当前没有任务。".to_string()
         } else {
-            out.trim_end().to_string()
+            lines.join("\n")
         }
     }
 
@@ -755,6 +762,22 @@ impl ChannelRuntime {
             .get(key)
             .map(|q| q.items.len())
             .unwrap_or(0)
+    }
+
+    /// 上一轮对话没跑完时，返回一条「未跑完」提示；跑完 / 叫停 / 没记录
+    /// 都返回 `None`（判据见 `crate::task_record_sink::last_turn_unfinished`）。
+    ///
+    /// **不做启动时主动推送**：那时用户多半不在，收到的只是一条无人认领的
+    /// 消息；而要枚举「所有配对过的 IM 身份」还得另写一遍。挂在 `/tasks`
+    /// 上——用户主动问「现在什么情况」时才给，顺带就是最容易忽略的时刻。
+    fn unfinished_turn_note(&self, sid: &str) -> Option<String> {
+        let store = self.state.task_record_store.as_ref()?;
+        let records = store.list_by_conversation(sid).ok()?;
+        let rec = crate::task_record_sink::last_turn_unfinished(&records)?;
+        let at = chrono::DateTime::from_timestamp_millis(rec.updated_at)
+            .map(|t| t.with_timezone(&chrono::Local).format("%m-%d %H:%M").to_string())
+            .unwrap_or_else(|| "时间未知".to_string());
+        Some(format!("⏸ 上一轮没跑完（{at} 停在中途），发 /继续 接着来。"))
     }
 
     /// 需要先拿到聊天锁的命令（会等当前轮跑完）。
@@ -815,6 +838,57 @@ impl ChannelRuntime {
                     true => format!("已注入指引：{guidance}"),
                     false => "这条没能注入（没有在跑的轮次，或内容为空）。".to_string(),
                 }
+            }
+            Command::Resume => {
+                // 续跑**不做盲重发**：原样重发上一条 user 消息，会让上一轮
+                // 已经完成的副作用再执行一次（改过的文件、跑过的命令）。
+                // 所以取回原文后加一段中断说明，让 agent 自己判断该从哪接。
+                let messages = match self.state.agent_service().get_session_messages(&sid).await {
+                    Ok(m) => m,
+                    Err(e) => {
+                        let _ = port
+                            .send_text(
+                                user,
+                                &format!("读不出上一轮内容（{e}），请把要做的事重说一遍。"),
+                                anchor,
+                            )
+                            .await;
+                        return true;
+                    }
+                };
+                let prev = messages
+                    .iter()
+                    .rev()
+                    .find_map(|m| match m.role {
+                        hermix_core::MessageRole::User => m.content.as_deref().map(str::trim),
+                        _ => None,
+                    })
+                    .filter(|t| !t.is_empty())
+                    .map(str::to_string);
+                let Some(prev) = prev else {
+                    let _ = port
+                        .send_text(user, "找不到上一条你的指令，没法续跑。", anchor)
+                        .await;
+                    return true;
+                };
+                // dedup_key 必须重新生成：沿用原文的键会被去重表当成重投丢掉。
+                let nonce = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0);
+                let resumed = Inbound {
+                    user: user.to_string(),
+                    display_name: String::new(),
+                    text: format!(
+                        "上一轮在执行过程中中断了（未跑完）。下面是当时的任务，请**先检查现状**再决定怎么做，\
+                         不要假定任何操作都没做过：\n\n{prev}"
+                    ),
+                    dedup_key: format!("resume-{sid}-{nonce}"),
+                    anchor: anchor.to_string(),
+                };
+                // 走正常轮次路径：心跳、三态回执、审批都复用同一条。
+                self.run_turn(port, platform, &resumed).await;
+                return true;
             }
             Command::Menu(action) => {
                 match action {
@@ -1497,6 +1571,20 @@ mod tests {
         assert_eq!(parse_command("/queue 不存在", 0), None);
         assert_eq!(parse_command("/tasks", 0), Some(Command::Tasks));
         assert_eq!(parse_command("/任务", 0), Some(Command::Tasks));
+    }
+
+    #[test]
+    fn 继续命令能解析且不与审批撞车() {
+        assert_eq!(parse_command("/继续", 0), Some(Command::Resume));
+        assert_eq!(parse_command("/resume", 0), Some(Command::Resume));
+        // 有待批时 /继续 仍然有效——恢复和审批是两件事
+        assert_eq!(parse_command("/继续", 1), Some(Command::Resume));
+        assert_eq!(parse_command("继续跑", 0), None, "不带斜杠的当普通文本");
+    }
+
+    #[test]
+    fn 帮助里列了继续() {
+        assert!(HELP_TEXT.contains("/继续"));
     }
 
     #[test]

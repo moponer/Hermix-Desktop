@@ -503,12 +503,11 @@ pub(crate) fn os_env_var(provider: &str) -> &'static str {
 
 /// 这轮是被**用户**停掉的吗（IM `/stop`、WS 断连）？
 ///
-/// 故意收得窄。`AgentReply::interrupted` 单独用太粗：致命工具参数耗尽、
-/// 后端 5xx 也置位（见该字段自己的注释），报成「已按 /stop 中断」等于让用户
-/// 背一个 5xx 的锅。配对 `finish_reason`（`AgentReply` 文档化的判别字段）才
-/// 分得开两者：用户停 = `interrupted` + `"interrupted"`；后端失败 = `"error"`。
+/// 判据在 `hermix_core::traits::AgentReply::was_user_interrupted`——本仓库
+/// 有两处消费它（这里的三态回执、hermix-agent 的轮次终态记录），判据必须
+/// 只有一份，所以这里只做转发。
 pub(crate) fn was_interrupted(reply: &hermix_core::traits::AgentReply) -> bool {
-    reply.interrupted && reply.finish_reason.as_deref() == Some("interrupted")
+    reply.was_user_interrupted()
 }
 
 /// 按**字符**截到 `max_chars`，超长补省略号。

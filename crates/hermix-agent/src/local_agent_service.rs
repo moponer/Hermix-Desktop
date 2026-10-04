@@ -266,6 +266,46 @@ pub struct LocalAgentService {
 /// ("signal exactly the one named turn, and only while it's still there")
 /// are unit-testable without standing up a whole service. A poisoned lock
 /// and "no such session" both report "nothing to interrupt".
+/// 轮次终态。**不收结果类型**：同步路径 `run` 返 `AgentResult`、流式路径
+/// `run_stream` 返 `AgentReply`，两者字段同构但类型不同——终态只需要三态，
+/// 所以在调用点折算一次，这里只管三态。
+#[derive(Debug, Clone, PartialEq)]
+enum TurnOutcome {
+    Completed,
+    Interrupted,
+    Failed(String),
+}
+
+impl TurnOutcome {
+    fn from_parts(user_interrupted: bool, last_error: Option<&str>) -> Self {
+        if user_interrupted {
+            Self::Interrupted
+        } else if let Some(e) = last_error {
+            Self::Failed(e.to_string())
+        } else {
+            Self::Completed
+        }
+    }
+
+    /// 两条执行路径（`run` / `run_stream`）都返 `AgentResult`；`AgentReply`
+    /// 是 `send_message_stream` 在末尾从 `AgentResult` 转出来的，所以这里
+    /// 根本见不到它。
+    ///
+    /// `Err` 也要折算——调用点随后就 `result?` 提前 return 了，终态必须在
+    /// 解包之前落，否则失败 / 中断的轮次永远停在 `Running`，会被误判成
+    /// 「进程崩了没跑完」。
+    fn of_result(r: &Result<hermix_core::types::AgentResult, hermix_core::AgentError>) -> Self {
+        match r {
+            Ok(res) => Self::from_parts(
+                hermix_core::traits::is_user_interrupted(res.interrupted, res.finish_reason.as_deref()),
+                res.last_error.as_deref(),
+            ),
+            Err(hermix_core::AgentError::Interrupted { .. }) => Self::Interrupted,
+            Err(e) => Self::Failed(e.to_string()),
+        }
+    }
+}
+
 fn signal_interrupt(
     registry: &std::sync::Mutex<std::collections::HashMap<String, crate::interrupt::InterruptController>>,
     sid: &str,
@@ -526,6 +566,42 @@ impl LocalAgentService {
         let mut steers = self.steer_buffers.lock().unwrap_or_else(|e| e.into_inner());
         interrupts.remove(sid);
         steers.remove(sid);
+    }
+
+    /// 开一条**主对话轮次**的 `TaskRecord`，返回记录 id（无 sink 时 `None`）。
+    ///
+    /// 此前 `task_records` 表只被 sub-agent（`delegate_task`）写，所以
+    /// "上一轮对话跑完没有" 只能靠「最后一条 user 消息之后有没有 assistant」
+    /// 这种带误报源的启发式判。主轮次也落一条之后，`check_last_turn_outcome`
+    /// 就能直接读终态。id 用 `turn-` 前缀与 sub-agent 记录区分。
+    fn begin_turn_record(&self, sid: &str, task: &str) -> Option<String> {
+        let sink = self.task_record_sink.as_ref()?;
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let id = format!(
+            "{}{sid}-{nanos}",
+            hermix_core::traits::TURN_ID_PREFIX
+        );
+        sink.started(&id, Some(sid), task);
+        Some(id)
+    }
+
+    /// 收掉 `begin_turn_record` 开的那条记录。三态都落，映射到
+    /// `TaskOutcome`：成功 → Completed，用户叫停 → Aborted，失败 → Faulted。
+    ///
+    /// 进程崩溃 / future 被 drop 时**不会**走到这里，记录停在 `Running`——
+    /// 这正是「非终态 = 上一轮没跑完」这条判据要的信号。
+    fn end_turn_record(&self, turn: Option<&str>, outcome: TurnOutcome) {
+        let (Some(id), Some(sink)) = (turn, self.task_record_sink.as_ref()) else {
+            return;
+        };
+        match outcome {
+            TurnOutcome::Completed => sink.terminal(id, "completed", None),
+            TurnOutcome::Interrupted => sink.terminal(id, "aborted", Some("用户叫停")),
+            TurnOutcome::Failed(e) => sink.terminal(id, "failed", Some(&e)),
+        }
     }
 
     /// Interrupt all active agent tasks so they gracefully stop and
@@ -1850,12 +1926,17 @@ impl AgentService for LocalAgentService {
             // `delegate_task` works.
             Arc::new(|_chunk: StreamChunk| {}),
         );
+        // 主轮次也落一条 TaskRecord（与 active 句柄同一生命周期），
+        // 这样「上一轮跑完没有」可以读终态而不是猜。task 描述用固定值：
+        // `TaskRecordSinkImpl::started` 本来就把它当 `_task` 忽略。
+        let turn = self.begin_turn_record(session_id, "主对话轮次");
         // Register the agent's InterruptController + steer buffer (same as
         // the stream path) so `/stop` and `/queue steer` can reach this turn.
         self.register_active(session_id, &agent);
         let result = agent.run(messages.clone(), None).await;
         // Always remove the registered handles.
         self.unregister_active(session_id);
+        self.end_turn_record(turn.as_deref(), TurnOutcome::of_result(&result));
         let result = result?;
 
         // Update messages with agent response, then collapse any
@@ -3128,6 +3209,10 @@ impl AgentService for LocalAgentService {
         // gracefully stop + persist its partial output instead of being
         // dropped mid-stream when the process exits, and so `/queue steer`
         // can inject guidance into this turn.
+        // 主轮次也落一条 TaskRecord（与 active 句柄同一生命周期），这样
+        // 「上一轮跑完没有」可以读终态而不是猜。task 描述用固定值：
+        // `TaskRecordSinkImpl::started` 本来就把它当 `_task` 忽略。
+        let turn = self.begin_turn_record(session_id, "主对话轮次");
         self.register_active(session_id, &agent);
         // (WS-disconnect autonomous-continuation): the `shutdown`
         // Notify is still wired into the agent's `AgentOverrides` so
@@ -3150,6 +3235,7 @@ impl AgentService for LocalAgentService {
         // Always remove the registered handles — whether the run succeeded or
         // failed, the agent is no longer active.
         self.unregister_active(session_id);
+        self.end_turn_record(turn.as_deref(), TurnOutcome::of_result(&result));
         let result = result?;
 
         // Update messages with agent response, then collapse any
