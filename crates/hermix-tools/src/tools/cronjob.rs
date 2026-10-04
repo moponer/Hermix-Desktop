@@ -10,10 +10,26 @@ use crate::ToolRegistry;
 use std::sync::Arc;
 
 /// Register this tool with the registry (P1.2 per-tool migration).
+/// Register this tool with the registry (P1.2 per-tool migration).
+///
+/// 默认挂 Signal 占位后端——它只会返回一段没人消费的请求 JSON。宿主有
+/// 真实调度面时（hermix-server 的 dashboard 自动化存储）应改用
+/// [`register_with_backend`] 覆盖注册，否则对话里创建的定时任务只是
+/// 空头支票。
 pub fn register(registry: &ToolRegistry) {
-    let handler = Arc::new(CronjobHandler::new(Arc::new(
-        crate::backends::cronjob::SignalCronjobBackend::new(),
-    )));
+    register_with_backend(
+        registry,
+        Arc::new(crate::backends::cronjob::SignalCronjobBackend::new()),
+    );
+}
+
+/// 用指定后端注册 cronjob 工具。
+///
+/// `override_existing = true`：宿主在 `register_all` 之后用真实后端覆盖
+/// Signal 占位实现是预期路径（插件用 false 注册，覆盖不了内置工具——
+/// "插件不能遮蔽内置"的保证不受影响）。
+pub fn register_with_backend(registry: &ToolRegistry, backend: Arc<dyn CronjobBackend>) {
+    let handler = Arc::new(CronjobHandler::new(backend));
     let schema = handler.schema();
     registry.register_with_risk(
         "cronjob",
@@ -27,7 +43,7 @@ pub fn register(registry: &ToolRegistry) {
         "⏰",
         None,
         RiskLevel::Safe,
-        false,
+        true,
     );
 }
 

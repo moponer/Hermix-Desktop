@@ -1104,6 +1104,15 @@ impl HttpServerState {
         let scheduler =
             crate::dashboard::automation::AutomationScheduler::start(self.clone());
         self.automation_scheduler = Some(scheduler);
+        // cronjob 工具换上真实后端：Signal 占位实现只返回没人消费的请求
+        // JSON。面板调度器已随本调用启动，对话里创建的定时任务由此真正
+        // 落到自动化任务表并进入 30s 调度。
+        hermix_tools::tools::cronjob::register_with_backend(
+            &self.tool_registry,
+            Arc::new(
+                crate::dashboard::automation::DashboardCronjobBackend::new(self.clone()),
+            ),
+        );
         self
     }
 }

@@ -34,6 +34,9 @@ use tokio::sync::{Mutex as AsyncMutex, RwLock};
 
 use crate::HttpServerState;
 
+use async_trait::async_trait;
+use hermix_tools::tools::cronjob::CronjobBackend;
+
 // ── Storage path ────────────────────────────────────────
 
 fn automation_state_path(state: &HttpServerState) -> PathBuf {
@@ -729,4 +732,140 @@ async fn tick_once(
     }
     save_state(state, &snapshot).await.map_err(|e| e.to_string())?;
     Ok(())
+}
+
+// ── cronjob 工具的真实后端 ───────────────────────────────
+//
+// `SignalCronjobBackend` 只返回一段没人消费的请求 JSON——对话里"创建
+// 定时任务"此前是空头支票。这里用本模块的存储 + 调度面实现
+// CronjobBackend，装配时（with_automation_scheduler）覆盖注册，对话里
+// 创建的任务真正落到自动化任务表并进入 30s 调度。toolset 参数暂不
+// 映射：AutomationTask 没有工具集维度。
+
+use hermix_core::ToolError;
+
+pub struct DashboardCronjobBackend {
+    state: HttpServerState,
+}
+
+impl DashboardCronjobBackend {
+    pub fn new(state: HttpServerState) -> Self {
+        Self { state }
+    }
+
+    fn find_task(&self, id: &str) -> Result<AutomationTask, ToolError> {
+        let snapshot = list_tasks(State(self.state.clone()));
+        snapshot
+            .0
+            .tasks
+            .into_iter()
+            .find(|t| t.id == id)
+            .ok_or_else(|| ToolError::NotFound(format!("没有 id 为 '{id}' 的定时任务")))
+    }
+}
+
+#[async_trait]
+impl CronjobBackend for DashboardCronjobBackend {
+    async fn create(
+        &self,
+        name: &str,
+        schedule: &str,
+        task: &str,
+        _toolset: Option<&str>,
+    ) -> Result<String, ToolError> {
+        let saved = create_task(
+            State(self.state.clone()),
+            Json(AutomationTask {
+                id: String::new(),
+                name: name.to_string(),
+                description: None,
+                prompt: task.to_string(),
+                schedule: schedule.to_string(),
+                enabled: true,
+                schedule_label: None,
+                model: None,
+                expert_id: None,
+                workspace_path: None,
+                permission_level: None,
+                skills: None,
+                category: None,
+                icon: Some("⏰".to_string()),
+                last_run_at: None,
+                last_status: None,
+                last_error: None,
+                next_run_at: None,
+                run_count: 0,
+                history: Vec::new(),
+                created_at: String::new(),
+                updated_at: String::new(),
+            }),
+        )
+        .await
+        .map_err(|(_, e)| ToolError::ExecutionFailed(e))?;
+        Ok(format!(
+            "已创建定时任务「{}」（schedule: {}），到点会自动运行。",
+            saved.name, saved.schedule
+        ))
+    }
+
+    async fn list(&self) -> Result<String, ToolError> {
+        let snapshot = list_tasks(State(self.state.clone()));
+        serde_json::to_string(&snapshot.0.tasks)
+            .map_err(|e| ToolError::ExecutionFailed(e.to_string()))
+    }
+
+    async fn update(
+        &self,
+        id: &str,
+        schedule: Option<&str>,
+        task: Option<&str>,
+        enabled: Option<bool>,
+    ) -> Result<String, ToolError> {
+        let mut t = self.find_task(id)?;
+        if let Some(s) = schedule {
+            t.schedule = s.to_string();
+        }
+        if let Some(p) = task {
+            t.prompt = p.to_string();
+        }
+        if let Some(e) = enabled {
+            t.enabled = e;
+        }
+        update_task(State(self.state.clone()), AxumPath(id.to_string()), Json(t))
+            .await
+            .map_err(|(_, e)| ToolError::ExecutionFailed(e))?;
+        Ok(format!("已更新定时任务 {id}"))
+    }
+
+    async fn pause(&self, id: &str) -> Result<String, ToolError> {
+        let mut t = self.find_task(id)?;
+        t.enabled = false;
+        update_task(State(self.state.clone()), AxumPath(id.to_string()), Json(t))
+            .await
+            .map_err(|(_, e)| ToolError::ExecutionFailed(e))?;
+        Ok(format!("定时任务 {id} 已暂停"))
+    }
+
+    async fn resume(&self, id: &str) -> Result<String, ToolError> {
+        let mut t = self.find_task(id)?;
+        t.enabled = true;
+        update_task(State(self.state.clone()), AxumPath(id.to_string()), Json(t))
+            .await
+            .map_err(|(_, e)| ToolError::ExecutionFailed(e))?;
+        Ok(format!("定时任务 {id} 已恢复"))
+    }
+
+    async fn remove(&self, id: &str) -> Result<String, ToolError> {
+        delete_task(State(self.state.clone()), AxumPath(id.to_string()))
+            .await
+            .map_err(|(_, e)| ToolError::ExecutionFailed(e))?;
+        Ok(format!("已删除定时任务 {id}"))
+    }
+
+    async fn run(&self, id: &str) -> Result<String, ToolError> {
+        trigger_task(State(self.state.clone()), AxumPath(id.to_string()))
+            .await
+            .map_err(|(_, e)| ToolError::ExecutionFailed(e))?;
+        Ok(format!("已触发定时任务 {id} 立即运行"))
+    }
 }
