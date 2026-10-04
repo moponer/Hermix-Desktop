@@ -71,20 +71,33 @@ impl CdpBrowserBackend {
     }
 
     /// Resolve a `[ref=eN]` token or a raw CSS selector into a real selector
-    /// that CDP can act on. Returns the input unchanged when it does not
-    /// match the ref pattern.
-    pub fn resolve_selector(&self, selector: &str) -> String {
+    /// that CDP can act on.
+    ///
+    /// Returns `Err` when a `[ref=…]` token has no corresponding entry in the
+    /// current snapshot — the most common cause is that the page navigated
+    /// after the snapshot was taken, making the old handles stale. The error
+    /// carries a hint for the LLM to re-snapshot rather than retry with the
+    /// same stale token.
+    ///
+    /// Raw CSS selectors (those that do not start with `[ref=`) are returned
+    /// unchanged — the LLM may legitimately want to use a CSS selector without
+    /// a snapshot token.
+    pub fn resolve_selector(&self, selector: &str) -> Result<String, ToolError> {
         let trimmed = selector.trim();
         if let Some(rest) = trimmed.strip_prefix("[ref=") {
             if let Some(ref_id) = rest.strip_suffix(']') {
                 if let Ok(map) = self.last_snapshot_refs.lock() {
                     if let Some(sel) = map.get(ref_id) {
-                        return sel.clone();
+                        return Ok(sel.clone());
                     }
                 }
             }
+            // `[ref=…]` with no match: fail loud, not silent.
+            return Err(ToolError::ExecutionFailed(format!(
+                "引用句柄 `{selector}` 不存在（页面可能已导航，请重新 browser_snapshot）"
+            )));
         }
-        trimmed.to_string()
+        Ok(trimmed.to_string())
     }
 
     /// Create from environment variable `CHROME_CDP_URL` or default localhost.
@@ -393,6 +406,12 @@ impl BrowserBackend for CdpBrowserBackend {
                 wait_for_load,
             )
             .await?;
+        // 修 3b：导航成功即作废旧快照的全部 `[ref=eN]` 句柄——跨页面的
+        // 句柄本来就无意义，保留只会让模型拿旧句柄点到新页面上语义
+        // 无关的元素。清空后旧句柄在 resolve_selector 得到明确报错。
+        if let Ok(mut map) = self.last_snapshot_refs.lock() {
+            map.clear();
+        }
         let load_observed = event.is_some();
         let mut payload = json!({
             "status": "navigated",
@@ -622,7 +641,7 @@ impl BrowserBackend for CdpBrowserBackend {
     }
 
     async fn click(&self, selector: &str) -> Result<String, ToolError> {
-        let resolved = self.resolve_selector(selector);
+        let resolved = self.resolve_selector(selector)?;
         // Pre-flight: detect missing / covered / disabled elements BEFORE
         // dispatching a click. This is the pre-flight element check that the
         // screenshot showed was missing — the LLM was firing
@@ -701,7 +720,7 @@ impl BrowserBackend for CdpBrowserBackend {
     }
 
     async fn r#type(&self, selector: &str, text: &str) -> Result<String, ToolError> {
-        let resolved = self.resolve_selector(selector);
+        let resolved = self.resolve_selector(selector)?;
         // Same pre-flight as click: surface not_found / disabled / invisible
         // BEFORE the LLM proceeds to fill the next field.
         let preflight = self
@@ -845,7 +864,7 @@ impl BrowserBackend for CdpBrowserBackend {
 
     async fn highlight(&self, selector: &str) -> Result<String, ToolError> {
         // Resolve `[ref=eN]` tokens against the last snapshot's ref map.
-        let resolved = self.resolve_selector(selector);
+        let resolved = self.resolve_selector(selector)?;
         let json = serde_json::to_string(&resolved).unwrap_or_else(|_| "\"\"".into());
         let js = format!(
             r#"(function(){{
@@ -1261,6 +1280,43 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let target = rt.block_on(backend.resolve_target()).unwrap();
         assert_eq!(target, "wss://browser-use.dev/devtools/browser/abc");
+    }
+
+    /// 修 3c：`[ref=eN]` 查不到必须明确报错，不再静默降级成 CSS
+    /// 选择器——降级会让陈旧句柄在新页面上匹配到语义无关的元素。
+    #[test]
+    fn resolve_selector_rejects_unknown_ref_token() {
+        let backend = CdpBrowserBackend::new("http://localhost:9222".into());
+        if let Ok(mut map) = backend.last_snapshot_refs.lock() {
+            map.insert("e1".into(), "[role=\"button\"]:has-text('Login')".into());
+        }
+        // 存在的句柄 → 解析为快照时的 CSS selector
+        let ok = backend.resolve_selector("[ref=e1]").unwrap();
+        assert_eq!(ok, "[role=\"button\"]:has-text('Login')");
+        // 不存在的句柄 → 明确报错（旧实现原样返回、当 CSS 用）
+        let err = backend.resolve_selector("[ref=e999]").unwrap_err();
+        assert!(err.to_string().contains("browser_snapshot"), "{err}");
+        // 纯 CSS 选择器不受影响，原样通过
+        assert_eq!(
+            backend.resolve_selector("#submit").unwrap(),
+            "#submit"
+        );
+    }
+
+    /// 修 3b：导航后旧句柄必须失效。清空动作在 `navigate_with_wait`
+    /// 内部（需真实 CDP 才能走到），这里直接钉清空后的语义：
+    /// 空 map 里查任何 `[ref=…]` 都是明确报错。
+    #[test]
+    fn resolve_selector_after_ref_map_cleared_fails_loud() {
+        let backend = CdpBrowserBackend::new("http://localhost:9222".into());
+        if let Ok(mut map) = backend.last_snapshot_refs.lock() {
+            map.insert("e1".into(), "[role=\"button\"]".into());
+        }
+        // 模拟 navigate_with_wait 成功后的清空分支（同一段代码语义）
+        if let Ok(mut map) = backend.last_snapshot_refs.lock() {
+            map.clear();
+        }
+        assert!(backend.resolve_selector("[ref=e1]").is_err());
     }
 }
 
