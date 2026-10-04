@@ -509,7 +509,13 @@
    part of the prose, not as a UI widget. */
 .md-path-link {
   display: inline-flex;
-  align-items: baseline;
+  /* 不能用 baseline 对齐：两个子项都拿不出真基线——SVG 图标没有文本
+     基线（按规范取底边距），路径 span 带truncate（overflow:hidden），
+     同样按规范退化为盒底当基线。于是"基线"实际是 span 的盒底（≈文字
+     基线下方 3~5px），vertical-align:baseline 把整枚 chip 顶高那么多，
+     图标和路径一起浮在行上。几何居中（center + vertical-align:middle）
+     不依赖字体度量，在任意字号 / UI 缩放下都稳。 */
+  align-items: center;
   gap: 3px;
   max-width: 100%;
   overflow: hidden;
@@ -528,7 +534,7 @@
   text-decoration: underline;
   text-underline-offset: 2px;
   text-decoration-thickness: 1px;
-  vertical-align: baseline;
+  vertical-align: middle;
   transition: color var(--duration-fast) ease;
 }
 .md-path-link:hover {
@@ -546,13 +552,11 @@
   color: var(--color-text-primary);
   text-decoration-color: var(--color-accent);
 }
-/* 文件类型图标：略微下压让它视觉居中于小写 x-height，而不是浮在
-   文字上方。inline-flex + baseline 已经把整块文字对齐好了，图标
-   只需要一点点 top 补偿 SVG 自身的下沿留白。 */
+/* 文件类型图标：由父级 align-items:center 几何居中，不再需要
+   position:relative + top 的像素级手补——那套补偿只在一个字号/缩放
+   组合下成立，其余全漂。 */
 .md-path-link__icon {
   flex-shrink: 0;
-  position: relative;
-  top: 2px;
   border-radius: 2px;
 }
 /* Relative paths keep the warning amber so the user can tell at a
