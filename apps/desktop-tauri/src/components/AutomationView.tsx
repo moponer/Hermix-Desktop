@@ -422,7 +422,10 @@ function TaskCard({
             {task.schedule_label && <span>· {task.schedule_label}</span>}
           </div>
           <div className="flex items-center gap-2 mt-1 text-[length:var(--text-ui)] text-text-muted">
-            <span>累计 {task.run_count} 次</span>
+            <span>
+              累计 {task.run_count} 次
+              {task.max_runs ? ` / 上限 ${task.max_runs}` : ""}
+            </span>
             {task.last_run_at && (
               <span>
                 · 上次{" "}
@@ -661,6 +664,27 @@ function TaskEditor({
                 <option value="full">full（自动批准）</option>
               </select>
             </Field>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <Field
+              label="运行次数上限"
+              hint="（可选）累计跑满 N 次后自动停用；留空 = 无限循环"
+            >
+              <input
+                type="number"
+                min={1}
+                value={draft.max_runs ?? ""}
+                onChange={(e) =>
+                  update(
+                    "max_runs",
+                    e.target.value.trim() === "" ? undefined : Math.max(1, Number(e.target.value)),
+                  )
+                }
+                className="modal-input"
+                placeholder="无限"
+              />
+            </Field>
+            <div />
           </div>
           {/* skills multi-select for cron-job execution */}
           {availableSkills.length > 0 && (

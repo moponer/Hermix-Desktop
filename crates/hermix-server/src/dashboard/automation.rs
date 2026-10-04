@@ -90,6 +90,10 @@ pub struct AutomationTask {
     /// 以 ephemeral 技能注入——内容强制进提示词，不受全局技能启停影响。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skills: Option<Vec<String>>,
+    /// 有限次任务：累计运行 run_count 次数跑满后自动停用。None = 无限循环
+    /// （对齐 ZCode 的 recurring / maxRuns 语义）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_runs: Option<u32>,
     /// Optional category for grouping in the UI, e.g. "工作" / "学习".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub category: Option<String>,
@@ -420,6 +424,18 @@ pub async fn create_task(
         ));
     }
     let mut s = load_state(&state);
+    // 创建上限（对齐 ZCode 的 AUTOMATION_CREATE_LIMIT = 20，所有生命周期
+    // 状态都计入）：定时任务是长驻数据，无上限会让任务表和调度 tick
+    // 无限膨胀。
+    const AUTOMATION_CREATE_LIMIT: usize = 20;
+    if s.tasks.len() >= AUTOMATION_CREATE_LIMIT {
+        return Err((
+            StatusCode::CONFLICT,
+            format!(
+                "定时任务数量已达上限（{AUTOMATION_CREATE_LIMIT} 条，含内置示例）。请先删除不需要的任务再创建。"
+            ),
+        ));
+    }
     if body.id.is_empty() {
         body.id = format!("task-{}", chrono::Utc::now().timestamp_millis());
     } else if s.tasks.iter().any(|t| t.id == body.id) {
@@ -616,6 +632,14 @@ fn spawn_run(state: HttpServerState, task: AutomationTask) {
             slot.last_status = Some(status.clone());
             slot.last_error = error;
             slot.run_count = slot.run_count.saturating_add(1);
+            // 有限次任务：跑满 max_runs 自动停用（调度 tick 跳过停用任务，
+            // 停用即终止；重新启用会继续消耗剩余额度）。必须在
+            // ensure_next_run 之前判——停用后不再计算下次触发时间。
+            if let Some(max) = slot.max_runs {
+                if slot.run_count >= max {
+                    slot.enabled = false;
+                }
+            }
             slot.history.push(record);
             let overflow = slot.history.len().saturating_sub(MAX_HISTORY);
             if overflow > 0 {

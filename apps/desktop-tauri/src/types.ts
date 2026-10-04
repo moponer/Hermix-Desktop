@@ -618,6 +618,8 @@ export interface AutomationTask {
   updated_at: string;
   /** skills attached to this cron job — maps to CronJob.skills. */
   skills?: string[];
+  /** 有限次任务：累计跑满 N 次自动停用；缺省 = 无限循环。 */
+  max_runs?: number;
 }
 
 export interface AppConfig {
