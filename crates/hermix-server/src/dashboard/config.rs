@@ -113,6 +113,45 @@ pub async fn get_config(State(state): State<HttpServerState>) -> Json<serde_json
         .unwrap_or_default();
     Json(config)
 }
+/// Read the on-disk `config.yaml` as a JSON object.
+///
+/// A missing / unparseable file degrades to `{}` — same spirit as
+/// `load_config` ("a broken file is a fresh config"), so a damaged file
+/// must not turn one save into a hard 500.
+fn read_config_json(path: &std::path::Path) -> serde_json::Value {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|s| serde_yaml::from_str::<serde_yaml::Value>(&s).ok())
+        .and_then(|v| serde_json::to_value(v).ok())
+        .filter(serde_json::Value::is_object)
+        .unwrap_or_else(|| serde_json::json!({}))
+}
+
+/// Merge the fields a request actually carried into the existing config.
+///
+/// This exists because the handler used to serialise `body.config`
+/// **verbatim** over `config.yaml`. The desktop's `AdvancedSettingsTab`
+/// only ever sends `{compaction, advanced}` — so saving an unrelated
+/// setting silently deleted `model`, `llm_providers`, `model_selector`
+/// and `custom_providers` outright. Everything downstream that reads
+/// those (notably `GET /api/model/list`) then reported "no models
+/// configured" while chat kept working off the surviving `model` field.
+///
+/// Semantics are JSON Merge Patch: a key present in the patch wins, a
+/// `null` removes it, and absent keys are left alone.
+fn merge_config_patch(existing: &mut serde_json::Value, patch: &serde_json::Value) {
+    let (Some(dst), Some(src)) = (existing.as_object_mut(), patch.as_object()) else {
+        return;
+    };
+    for (key, value) in src {
+        if value.is_null() {
+            dst.remove(key);
+        } else {
+            dst.insert(key.clone(), value.clone());
+        }
+    }
+}
+
 /// PUT /api/config — update config from JSON.
 pub async fn update_config(
     State(state): State<HttpServerState>,
@@ -131,7 +170,12 @@ pub async fn update_config(
     )
     .map_err(|(status, message)| HttpError { status, message })?;
     let config_path = state.hermix_home.join("config.yaml");
-    let yaml = serde_yaml::to_string(&body.config).map_err(|e| HttpError {
+    // Merge into the on-disk config rather than overwriting it — see
+    // `merge_config_patch` for the data loss this replaces.
+    let mut merged = read_config_json(&config_path);
+    merge_config_patch(&mut merged, &body.config);
+
+    let yaml = serde_yaml::to_string(&merged).map_err(|e| HttpError {
         status: axum::http::StatusCode::BAD_REQUEST,
         message: format!("invalid config: {}", e),
     })?;
@@ -142,15 +186,14 @@ pub async fn update_config(
         message: format!("failed to write config: {}", e),
     })?;
     // Push to the live agent service so the next chat uses the
-    // updated config immediately.
-    let cfg_value = serde_json::to_value(&body.config).map_err(|e| HttpError {
-        status: axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-        message: format!("failed to serialize config: {e}"),
-    })?;
-    state.agent_service.set_config(cfg_value);
+    // updated config immediately. This must be the *merged* config:
+    // pushing `body.config` would leave the same truncated shape in
+    // memory even with disk intact, and `current_config_value()` is what
+    // `GET /api/config` and `GET /api/model/list` read first.
+    state.agent_service.set_config(merged.clone());
 
     // 安全中心：配置变更后刷新自动备份策略（best-effort）。
-    if let Some(sec) = body.config.get("security") {
+    if let Some(sec) = merged.get("security") {
         if let Ok(sec) = serde_json::from_value::<hermix_config::SecurityConfig>(sec.clone()) {
             hermix_tools::backup::set_policy_from_config(&sec, &state.hermix_home);
         }
@@ -319,12 +362,16 @@ pub async fn get_model_list(State(state): State<HttpServerState>) -> Json<ModelL
         .current_config_value()
         .and_then(|v| serde_json::from_value(v).ok())
         .unwrap_or_else(|| state.config.as_ref().clone());
+    Json(build_model_list(&cfg))
+}
 
+/// 清单构建（`get_model_list` 的纯逻辑，独立出来可测）。
+fn build_model_list(cfg: &hermix_config::GatewayConfig) -> ModelListResponse {
     // 仅保留后端确实已配置的条目，避免下拉展示 provider 改名/删除后残留
     // 的孤儿模型（orphan）。判定必须复用 hermix_config::provider_has_key
     // （config api_key 或环境变量任一命中）——此前只查 config 字段的半份
     // 副本会把纯 env 配钥的内置 provider 全部误杀出下拉。
-    let is_configured = |pid: &str| hermix_config::provider_has_key(&cfg, pid);
+    let is_configured = |pid: &str| hermix_config::provider_has_key(cfg, pid);
 
     if let Some(sel) = &cfg.model_selector {
         if !sel.enabled.is_empty() || sel.default_model.is_some() {
@@ -334,19 +381,23 @@ pub async fn get_model_list(State(state): State<HttpServerState>) -> Json<ModelL
                 .filter(|e| is_configured(&e.provider_id))
                 .cloned()
                 .collect();
-            let default_model = sel
-                .default_model
-                .as_ref()
-                .filter(|d| {
-                    d.split_once(':')
-                        .map(|(p, _)| models.iter().any(|m| m.provider_id == p))
-                        .unwrap_or(false)
-                })
-                .cloned();
-            return Json(ModelListResponse {
-                models,
-                default_model,
-            });
+            // 全部条目都是孤儿（provider 改名/删钥）时不在这里返回：
+            // 落到下面的兜底，别把"实际在跑"的模型藏成"未配置"。
+            if !models.is_empty() {
+                let default_model = sel
+                    .default_model
+                    .as_ref()
+                    .filter(|d| {
+                        d.split_once(':')
+                            .map(|(p, _)| models.iter().any(|m| m.provider_id == p))
+                            .unwrap_or(false)
+                    })
+                    .cloned();
+                return ModelListResponse {
+                    models,
+                    default_model,
+                };
+            }
         }
     }
 
@@ -370,10 +421,23 @@ pub async fn get_model_list(State(state): State<HttpServerState>) -> Json<ModelL
             .first()
             .map(|m| format!("{}:{}", m.provider_id, m.model_id)),
     };
-    Json(ModelListResponse {
+    // 顶层 `model` 兜底（2026-10-04 实测）：`model_selector` 从未写过、
+    // provider 条目又没填 `model` 字段时，对话一直按顶层 `model` 跑 ——
+    // 把它合成进清单，否则开关器显示"未配置"而聊天正常工作。
+    if models.is_empty() {
+        if let Some(d) = &default_model {
+            if let Some((pid, mid)) = d.split_once(':') {
+                models.push(hermix_config::ModelSelectorEntry {
+                    provider_id: pid.to_string(),
+                    model_id: mid.to_string(),
+                });
+            }
+        }
+    }
+    ModelListResponse {
         models,
         default_model,
-    })
+    }
 }
 
 /// PUT /api/model/list — persist the full enabled-model list.
@@ -472,5 +536,130 @@ mod provider_meta_tests {
             items.iter().all(|v| v["default_model"] != "default"),
             "placeholder leaked into api response"
         );
+    }
+}
+
+#[cfg(test)]
+mod model_list_tests {
+    use super::build_model_list;
+    use hermix_config::{GatewayConfig, LlmProviderConfig};
+
+    /// 2026-10-04 实测案例：`model_selector` 从未写过（None）、provider
+    /// 条目没填 `model` 字段，只有顶层 `model` + 配好的 api_key —— 对话按
+    /// 顶层 `model` 跑，清单却返回空，输入框芯片显示"未配置，请先配置模型"。
+    #[test]
+    fn legacy_top_level_model_becomes_selector_entry() {
+        let mut cfg = GatewayConfig::default();
+        cfg.model = Some("minimax:MiniMax-M3".to_string());
+        cfg.llm_providers.insert(
+            "minimax".to_string(),
+            LlmProviderConfig {
+                api_key: Some("sk-test".to_string()),
+                ..Default::default()
+            },
+        );
+
+        let resp = build_model_list(&cfg);
+        assert_eq!(resp.models.len(), 1, "顶层 model 应合成出唯一条目");
+        assert_eq!(resp.models[0].provider_id, "minimax");
+        assert_eq!(resp.models[0].model_id, "MiniMax-M3");
+        assert_eq!(resp.default_model.as_deref(), Some("minimax:MiniMax-M3"));
+    }
+
+    /// 反向：顶层 model 指向未配钥 provider（用非内置 id，避免测试机
+    /// 环境变量干扰）时不得合成，清单如实为空。
+    #[test]
+    fn legacy_model_without_key_stays_empty() {
+        let mut cfg = GatewayConfig::default();
+        cfg.model = Some("ghost:Model-X".to_string());
+        let resp = build_model_list(&cfg);
+        assert!(resp.models.is_empty());
+        assert!(resp.default_model.is_none());
+    }
+}
+
+#[cfg(test)]
+mod config_patch_tests {
+    use super::{merge_config_patch, read_config_json};
+
+    /// Regression: saving an unrelated settings section must not delete the
+    /// model configuration. Reproduces the 2026-10-03 incident where
+    /// `AdvancedSettingsTab` PUT `{compaction, advanced}` and the handler
+    /// wrote the body verbatim, wiping `model` / `llm_providers` /
+    /// `model_selector` / `custom_providers` — the model settings page then
+    /// reported "还没有配置任何模型".
+    #[test]
+    fn partial_patch_preserves_model_config() {
+        let mut existing = serde_json::json!({
+            "model": "minimax:MiniMax-M3",
+            "llm_providers": { "minimax": { "api_key": "sk-live" } },
+            "model_selector": {
+                "enabled": [{ "provider_id": "minimax", "model_id": "MiniMax-M3" }],
+                "default_model": "minimax:MiniMax-M3"
+            },
+            "custom_providers": [{ "id": "custom-agnes" }]
+        });
+
+        merge_config_patch(
+            &mut existing,
+            &serde_json::json!({
+                "compaction": { "min_summary_tokens": 2000 },
+                "advanced": { "sub_agent_max_turns_cap": 12 }
+            }),
+        );
+
+        assert_eq!(existing["compaction"]["min_summary_tokens"], 2000);
+        assert_eq!(existing["advanced"]["sub_agent_max_turns_cap"], 12);
+        // The whole point: untouched top-level sections survive.
+        assert_eq!(existing["model"], "minimax:MiniMax-M3");
+        assert_eq!(existing["llm_providers"]["minimax"]["api_key"], "sk-live");
+        assert_eq!(existing["model_selector"]["default_model"], "minimax:MiniMax-M3");
+        assert_eq!(existing["model_selector"]["enabled"][0]["model_id"], "MiniMax-M3");
+        assert_eq!(existing["custom_providers"][0]["id"], "custom-agnes");
+    }
+
+    /// A key present in the patch overwrites; an explicit `null` deletes.
+    /// This is JSON Merge Patch semantics — "absent means untouched" is the
+    /// property that makes partial saves safe.
+    #[test]
+    fn patch_overwrites_and_null_deletes() {
+        let mut existing = serde_json::json!({
+            "max_turns": 30,
+            "model": "deepseek:deepseek-flash",
+            "permission_profile": { "paths": ["/tmp"] }
+        });
+
+        merge_config_patch(
+            &mut existing,
+            &serde_json::json!({ "max_turns": 15, "model": null }),
+        );
+
+        assert_eq!(existing["max_turns"], 15);
+        assert!(
+            existing.get("model").is_none(),
+            "null in patch must delete the key, got {}",
+            existing["model"]
+        );
+        // An empty object is a real value, not a delete signal.
+        assert!(existing["permission_profile"].is_object());
+    }
+
+    /// A missing or corrupt config.yaml degrades to `{}` instead of failing
+    /// the request, matching `load_config`'s "broken file == fresh config".
+    #[test]
+    fn read_config_json_tolerates_missing_and_corrupt_files() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing = dir.path().join("nope.yaml");
+        assert_eq!(read_config_json(&missing), serde_json::json!({}));
+
+        let corrupt = dir.path().join("corrupt.yaml");
+        std::fs::write(&corrupt, "{{{ not yaml at all").expect("write");
+        assert_eq!(read_config_json(&corrupt), serde_json::json!({}));
+
+        let good = dir.path().join("config.yaml");
+        std::fs::write(&good, "model: minimax:MiniMax-M3\nmax_turns: 30\n").expect("write");
+        let loaded = read_config_json(&good);
+        assert_eq!(loaded["model"], "minimax:MiniMax-M3");
+        assert_eq!(loaded["max_turns"], 30);
     }
 }
