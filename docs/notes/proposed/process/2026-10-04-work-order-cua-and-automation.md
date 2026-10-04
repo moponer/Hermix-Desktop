@@ -8,13 +8,13 @@ Status: implemented — 2026-10-04 五项全部按序执行完毕。第 1/2 项�
 |---|---|---|---|
 | 1 | 自动化保活联动 | ✅ 已实施 | `75f5f058` — `count_active_runs` + `/api/automation/active-count` + 前端 10s 轮询 |
 | 2 | 浏览器/CU 授权面审计 | ✅ 已实施 | `9fbf236` — `proposed/feature/2026-10-04-cua-authorization-audit.md` |
-| 3 | CU 注入防护方案 | ✅ 方案已写 | `7c8e75f` — `proposed/architecture/2026-10-04-cua-injection-hardening.md` |
+| 3 | CU 注入防护方案 | ✅ 已实施 | `7c8e75f` 写方案 → `4c3d1c50`（ptc 步骤接 SsrfGuard + about:blank 放行）+ `e756572a`（selector 转义完备）+ `60b18c58`（ref 查不到即拒绝）+ `bf8160bf`（审批卡渲染 steps）— `proposed/architecture/2026-10-04-cua-injection-hardening.md` 已转 implemented |
 | 4 | 自动化调度幂等 | ✅ 方案已写并裁决 | `c3c8fc1` + `c643ac7` 写方案 → `486d1da` 裁决采纳 [调度模型升级](2026-10-04-automation-schedule-model-upgrade.md)（runId 契约 + 派发状态机，更完备且覆盖时钟跳变）；幂等篇已归档、7 项实施要点已移植 |
 | 5 | 会话锚定投递 | ✅ 方案已写（重写） | `347e1da` — `proposed/feature/2026-10-04-automation-session-anchored-delivery.md` |
 
 ### 执行中推翻的三处判断
 
-**其一：`auto_id` 注入链不存在。** 本篇第 54 行与第 67 行都写了「`cua_ui_click` 收模型给的 `auto_id`，无签发校验」。核实：`cua_ui_click` 的 schema 只有 `name`；`cua_ui_find` 确实收 `automation_id`，但只做 `find_all` 查询，**不发任何输入**。CU 侧不存在可被利用的注入写入面。真实缺口在浏览器侧（`javascript:` URL 无 scheme 校验、selector 反斜杠未转义、PTC 审批卡不显示脚本），详见注入面方案。
+**其一：`auto_id` 注入链不存在。** 本篇第 54 行与第 67 行都写了「`cua_ui_click` 收模型给的 `auto_id`，无签发校验」。核实：`cua_ui_click` 的 schema 只有 `name`；`cua_ui_find` 确实收 `automation_id`，但只做 `find_all` 查询，**不发任何输入**。CU 侧不存在可被利用的注入写入面。真实缺口在浏览器侧，详见注入面方案。**补充（实施时发现）**：注入面方案初稿的「`javascript:` URL 无 scheme 校验」也是误判——`SsrfGuard` 一直接着且有测试钉着；真正的旁路是 `browser_ptc` 的 Navigate 步骤绕过 guard，已修（`4c3d1c50`）。
 
 **其二：不存在"两套风险词汇"。** 本篇第 49-51 行说浏览器与 CU「两套词汇、两套审批路径」。核实：`cua.rs:40` 的 `CoreRisk` 是 `hermix_core::RiskLevel` 的别名，两侧用同一套 `Safe/Caution/Dangerous`。真问题是**同一套词汇被一刀切标成 `Dangerous`**，与"两套"无关。
 
