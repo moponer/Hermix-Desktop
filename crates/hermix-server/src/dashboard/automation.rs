@@ -860,19 +860,24 @@ impl CronjobBackend for DashboardCronjobBackend {
                 history: Vec::new(),
                 created_at: String::new(),
                 updated_at: String::new(),
-                // 对话内创建 → 锚定到来源会话（调度侧消费随调度模型升级落地）。
                 anchor_session_id: anchor_session_id.map(str::to_string),
             }),
         )
         .await
         .map_err(|(_, e)| ToolError::ExecutionFailed(e))?;
-        // 文案不承诺「结果回到本对话」——anchor_session_id 目前只是记录
-        // 下来，调度侧的分流分支随调度模型升级才落地。在那之前对模型说
-        // 会回投，是让它向用户转述一个尚不存在的行为。
-        Ok(format!(
-            "已创建定时任务「{}」（schedule: {}），到点会自动运行。",
-            saved.name, saved.schedule
-        ))
+        // 只有真的带锚点时才承诺回投。无锚点（UI 侧创建、非对话来源）
+        // 走 `automation:{id}:{run_id}` 回退会话，结果落在独立会话里，
+        // 说"会回到本对话"就是让模型转述一个不存在的行为。
+        match anchor_session_id.filter(|s| !s.is_empty()) {
+            Some(_) => Ok(format!(
+                "已创建定时任务「{}」（schedule: {}），到点会自动运行，运行结果会回到本对话。",
+                saved.name, saved.schedule
+            )),
+            None => Ok(format!(
+                "已创建定时任务「{}」（schedule: {}），到点会自动运行。",
+                saved.name, saved.schedule
+            )),
+        }
     }
 
     async fn list(&self) -> Result<String, ToolError> {

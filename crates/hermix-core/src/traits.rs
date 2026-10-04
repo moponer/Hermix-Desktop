@@ -589,6 +589,12 @@ pub struct AgentReply {
     /// - `"length"` — the response was cut off by the provider's token cap
     /// (a truncation, not a normal completion)
     /// - `"interrupted"` — the user cancelled the stream
+    /// - `"error"` — the loop stopped on an LLM or transport failure. The
+    /// turn did **not** succeed; pair with `last_error` for the cause and
+    /// with `total_turns` to learn whether anything ran before it stopped.
+    /// This is a normal `Ok` result, not an `Err`: the transcript is still
+    /// persisted so the user can see what was attempted. Do not treat
+    /// `Ok(..)` alone as success — check this field.
     /// - `None` — the agent did not surface a reason (e.g. an error path)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finish_reason: Option<String>,
@@ -606,6 +612,28 @@ pub struct AgentReply {
     /// alive instead of tearing down the socket.
     #[serde(default, skip_serializing_if = "is_false")]
     pub interrupted: bool,
+    /// How many LLM round-trips the agent attempted this turn.
+    ///
+    /// `AgentLoop` bumps the counter *before* each LLM call, so the value
+    /// answers "how far did we get": `1` means the very first call failed
+    /// and **no tool ever ran**, `>= 2` means at least one successful
+    /// response came back, which may have driven tool calls.
+    ///
+    /// This is the only signal that separates "the request never landed"
+    /// from "the agent worked and then failed" — `AgentLoop::run()` returns
+    /// `Ok` for both (an LLM failure is converted to a graceful interrupt
+    /// so the transcript gets persisted), and `last_error` carries the
+    /// error text with no indication of how far the loop had progressed.
+    /// Callers that may **retry** the turn need that distinction: replaying
+    /// a turn that already ran tools would repeat their side effects.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub total_turns: u32,
+}
+
+/// serde helper: skip serializing a zero counter.
+#[allow(dead_code)]
+pub(crate) fn is_zero_u32(n: &u32) -> bool {
+    *n == 0
 }
 
 /// serde helper: skip serializing `interrupted` when it is `false`.

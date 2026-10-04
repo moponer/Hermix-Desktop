@@ -1802,9 +1802,19 @@ impl AgentService for LocalAgentService {
         Ok(AgentReply {
             text: reply_text,
             message_count: messages.len(),
-            finish_reason: None,
-            last_error: None,
-            interrupted: false,
+            // Mirror the streaming path: these carry the agent loop's actual
+            // outcome. Hardcoding `None/None/false` here threw away the
+            // error the loop went to real trouble to preserve —
+            // `AgentLoop::run()` converts an LLM/transport failure into
+            // `Ok(graceful_interrupt_result_errored(..))` with
+            // `finish_reason = "error"` precisely so the transcript survives;
+            // dropping it made a dead provider indistinguishable from a
+            // clean run, so automation history read "success" for every
+            // tick while the agent had produced nothing.
+            finish_reason: result.finish_reason.clone(),
+            last_error: result.last_error.clone(),
+            interrupted: result.interrupted,
+            total_turns: result.total_turns,
         })
     }
 
@@ -3038,6 +3048,7 @@ impl AgentService for LocalAgentService {
             finish_reason: result.finish_reason.clone(),
             last_error: result.last_error.clone(),
             interrupted: result.interrupted,
+            total_turns: result.total_turns,
         })
     }
 

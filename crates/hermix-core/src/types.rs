@@ -926,6 +926,10 @@ impl TaskStatus {
             (Pending, Planning)
                 | (Pending, InProgress)
                 | (Pending, Completed)
+                // A caller may create a task and fail it in the same breath
+                // (automations do: create, then immediately run the agent)
+                // without ever passing through an execution state.
+                | (Pending, Failed)
                 | (Pending, Archived)
                 | (Planning, InProgress)
                 | (Planning, Completed)
@@ -1284,15 +1288,23 @@ mod tests {
         assert!(TaskStatus::Archived
             .validate_transition(TaskStatus::InProgress)
             .is_err());
-        // Pending → Completed is now LEGAL (P0 automation
-        // flow: automation creates a Pending task, fires a NoopAgent
-        // which returns Ok immediately, the trigger marks the task
-        // Completed without ever going through InProgress). The
-        // test now pins Pending → Failed as still illegal (no work
-        // was attempted, can't fail without trying).
+        // Pending → Completed is LEGAL: an automation creates a Pending
+        // task, fires the agent, and marks the task Completed without
+        // ever going through InProgress.
+        assert!(TaskStatus::Pending
+            .validate_transition(TaskStatus::Completed)
+            .is_ok());
+        // Pending → Failed is legal for the same reason. The old comment
+        // here argued "no work was attempted, can't fail without trying" —
+        // but the attempt does happen, it just isn't routed through
+        // InProgress: `create_automation_task` returns a Pending task and
+        // the agent run starts immediately. With the transition rejected,
+        // `TaskService::fail` errored, the caller logged a warning and
+        // moved on, and a failed automation's task sat in Pending forever
+        // with nothing in the UI to say so.
         assert!(TaskStatus::Pending
             .validate_transition(TaskStatus::Failed)
-            .is_err());
+            .is_ok());
     }
 
     #[test]

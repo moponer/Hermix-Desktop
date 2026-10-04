@@ -1056,9 +1056,18 @@ setPage("chat");
    * 就等于把工作台的对话摆到普通对话旁边 —— 点进去得到一段脱离了
    * 工作台上下文的历史，两个空间就此串味。所以列表出口一律过滤，
    * `activeSession` 仍查全量，保证工作台的对话栏渲染得到。
+   *
+   * 自动化会话同理：调度侧给无锚点的自动化建独立会话
+   * （`automation:{id}:{run_id}`，一次 run 一个），它们承载的是定时
+   * 任务的执行记录，不是用户和 agent 的对话。混进主列表等于每次触发
+   * 都往侧栏塞一条噪声；且 run_id 每次都不同，列表会被这类条目淹没。
+   * 运行历史在自动化面板里看，不在这里。
+   *
+   * 有锚点的自动化跑在来源对话上（`anchor_session_id`），落在正常会话
+   * 列表里是应该的——那本来就是用户的对话。
    */
   const chatSessions = useMemo(
-    () => sessions.filter((s) => !s.workbench_id),
+    () => sessions.filter((s) => !s.workbench_id && !s.id.startsWith('automation:')),
     [sessions],
   );
 

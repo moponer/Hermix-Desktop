@@ -11,7 +11,8 @@ use std::path::{Path, PathBuf};
 use rusqlite::OptionalExtension;
 
 use crate::{
-    Automation, AutomationRun, AutomationRuntimeState, AutomationStatus, ScheduleType,
+    Automation, AutomationRun, AutomationRuntimeState, AutomationStatus, RunStatus, RunTrigger,
+    ScheduleType,
 };
 
 // ---------------------------------------------------------------------------
@@ -31,6 +32,17 @@ pub enum AutomationRepositoryError {
 // ---------------------------------------------------------------------------
 // Connection helper (mirrors TaskRepository::open_with_wal)
 // ---------------------------------------------------------------------------
+
+/// Whether `s` is a bare SQL identifier: ASCII letters, digits and
+/// underscores, not starting with a digit.
+///
+/// Used by [`AutomationRepository::ensure_column`]'s debug assertion.
+fn is_sql_identifier(s: &str) -> bool {
+    !s.is_empty()
+        && !s.starts_with(|c: char| c.is_ascii_digit())
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
 
 fn open_with_wal(path: &Path) -> Result<rusqlite::Connection, AutomationRepositoryError> {
     let conn = rusqlite::Connection::open(path)
@@ -114,8 +126,22 @@ impl AutomationRepository {
             &conn,
             "automations",
             "anchor_session_id",
-            "ALTER TABLE automations ADD COLUMN anchor_session_id TEXT",
+            "TEXT",
         )?;
+        // run 表的状态机列。同样只对老库补。
+        for (col, ty) in [
+            ("scheduled_at", "INTEGER"),
+            ("trigger", "TEXT"),
+            ("claimed_at", "INTEGER"),
+            ("dispatched_at", "INTEGER"),
+            ("attempts", "INTEGER"),
+            ("retry_at", "INTEGER"),
+        ] {
+            Self::ensure_column(&conn, "automation_runs", col, ty)?;
+        }
+        // 在途查重要按 (automation_id, status) 走；`list_runs` 的
+        // automation_id 前缀索引已覆盖前者的一半，状态在行数少时收益
+        // 有限，故不额外建复合索引。
         Ok(())
     }
 
@@ -128,7 +154,7 @@ impl AutomationRepository {
         conn: &rusqlite::Connection,
         table: &str,
         column: &str,
-        alter_sql: &str,
+        ty: &str,
     ) -> Result<(), AutomationRepositoryError> {
         let exists: Option<i64> = conn
             .query_row(
@@ -140,7 +166,17 @@ impl AutomationRepository {
         if exists.is_some() {
             return Ok(());
         }
-        conn.execute_batch(alter_sql)?;
+        // `table` / `column` / `ty` 只能是调用点处的字面量——SQL 的
+        // 标识符与类型名不支持绑定参数，sqlite 的 `format!` 只能作用于
+        // 值。这个签名把「必须字面量」这件事写进了类型，而把拼串
+        // 责任留在唯一的实现里，调用点无法各自拼错。
+        debug_assert!(
+            is_sql_identifier(table) && is_sql_identifier(column) && is_sql_identifier(ty),
+            "ensure_column 的标识符必须是字面量：{table}.{column} {ty}"
+        );
+        conn.execute_batch(&format!(
+            "ALTER TABLE {table} ADD COLUMN {column} {ty}"
+        ))?;
         Ok(())
     }
 
@@ -312,19 +348,113 @@ impl AutomationRepository {
         let conn = open_with_wal(&self.db_path)?;
         conn.execute(
             "INSERT INTO automation_runs (id, automation_id, started_at, finished_at,
-                status, task_id, error_text)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                status, task_id, error_text, scheduled_at, trigger, claimed_at,
+                dispatched_at, attempts, retry_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             rusqlite::params![
                 run.id,
                 run.automation_id,
                 run.started_at,
                 run.finished_at,
-                run.status,
+                run.status.as_str(),
                 run.task_id,
                 run.error_text,
+                run.scheduled_at,
+                run.trigger.as_deref(),
+                run.claimed_at,
+                run.dispatched_at,
+                run.attempts,
+                run.retry_at,
             ],
         )?;
         Ok(())
+    }
+
+    /// Whether a run with this id already exists.
+    ///
+    /// The first half of the runId contract's dedup. A `true` here means
+    /// this `(automation, trigger, scheduled_at)` triple was already
+    /// claimed — clock jump, restart, or a second tick inside one
+    /// interval — and must not fire again.
+    pub fn run_exists(&self, run_id: &str) -> Result<bool, AutomationRepositoryError> {
+        let conn = open_with_wal(&self.db_path)?;
+        let n: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM automation_runs WHERE id = ?1",
+            [run_id],
+            |row| row.get(0),
+        )?;
+        Ok(n > 0)
+    }
+
+    /// Number of runs for this automation still holding the single-flight slot.
+    ///
+    /// Must stay in lockstep with [`RunStatus::is_in_flight`] — see that
+    /// method's note on why the two callers agreeing is load-bearing.
+    pub fn count_in_flight(&self, automation_id: &str) -> Result<u64, AutomationRepositoryError> {
+        let conn = open_with_wal(&self.db_path)?;
+        let n: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM automation_runs
+             WHERE automation_id = ?1
+               AND status IN ('claimed', 'dispatched')
+               AND finished_at IS NULL",
+            [automation_id],
+            |row| row.get(0),
+        )?;
+        Ok(n.max(0) as u64)
+    }
+
+    /// Consecutive `failed_to_dispatch` runs for this automation,
+    /// counting back from the newest terminal run.
+    ///
+    /// The backoff exponent. Stops at the first run that either dispatched
+    /// successfully or reached a non-dispatch terminal state — a success
+    /// in between means the streak is broken, and retrying forever across
+    /// a recovered outage would be wrong.
+    pub fn consecutive_dispatch_failures(&self, automation_id: &str) -> Result<i64, AutomationRepositoryError> {
+        let conn = open_with_wal(&self.db_path)?;
+        let mut stmt = conn.prepare(
+            "SELECT status FROM automation_runs
+             WHERE automation_id = ?1 AND finished_at IS NOT NULL
+             ORDER BY started_at DESC LIMIT 20",
+        )?;
+        let rows = stmt.query_map([automation_id], |row| row.get::<_, String>(0))?;
+        let mut streak = 0i64;
+        for row in rows {
+            let status = row?;
+            match RunStatus::parse(&status) {
+                Some(RunStatus::FailedToDispatch) => streak += 1,
+                // Pre-state-machine rows: a dispatch-layer failure used to
+                // be recorded as plain `failed`, indistinguishable from an
+                // agent failure. Count it — over-retrying one legacy run
+                // beats silently dropping it.
+                None => streak += 1,
+                _ => break,
+            }
+        }
+        Ok(streak)
+    }
+
+    /// Reap runs left in flight by a previous process.
+    ///
+    /// The runId contract prevents duplicates but **cannot** reclaim rows
+    /// whose owning process died between claim and dispatch. Without this
+    /// sweep such a row is permanent, and — because `count_active_runs`
+    /// reads the same predicate — the machine would never be allowed to
+    /// sleep again, with nothing in the UI to explain why.
+    ///
+    /// Returns the number of rows reaped.
+    pub fn reap_abandoned_runs(&self) -> Result<usize, AutomationRepositoryError> {
+        let conn = open_with_wal(&self.db_path)?;
+        let now = chrono::Utc::now().timestamp_millis();
+        let affected = conn.execute(
+            "UPDATE automation_runs
+             SET status = 'abandoned',
+                 finished_at = ?1,
+                 error_text = 'process restarted while in flight'
+             WHERE status IN ('claimed', 'dispatched') AND finished_at IS NULL",
+            [now],
+        )?;
+        Ok(affected)
     }
 
     /// Update a run record (e.g. set finished_at + status).
@@ -332,16 +462,59 @@ impl AutomationRepository {
         &self,
         run_id: &str,
         finished_at: i64,
-        status: &str,
+        status: RunStatus,
         task_id: Option<&str>,
         error_text: Option<&str>,
     ) -> Result<(), AutomationRepositoryError> {
         let conn = open_with_wal(&self.db_path)?;
         let affected = conn.execute(
             "UPDATE automation_runs
-             SET finished_at = ?2, status = ?3, task_id = ?4, error_text = ?5
+             SET finished_at = ?2, status = ?3, task_id = ?4, error_text = ?5, retry_at = NULL
              WHERE id = ?1",
-            rusqlite::params![run_id, finished_at, status, task_id, error_text],
+            rusqlite::params![run_id, finished_at, status.as_str(), task_id, error_text],
+        )?;
+        if affected == 0 {
+            return Err(AutomationRepositoryError::NotFound(run_id.to_string()));
+        }
+        Ok(())
+    }
+
+    /// Mark a run as handed to the agent, stamping `dispatched_at`.
+    pub fn mark_run_dispatched(&self, run_id: &str) -> Result<(), AutomationRepositoryError> {
+        let conn = open_with_wal(&self.db_path)?;
+        let now = chrono::Utc::now().timestamp_millis();
+        let affected = conn.execute(
+            "UPDATE automation_runs
+             SET status = 'dispatched', dispatched_at = ?2
+             WHERE id = ?1 AND status = 'claimed'",
+            rusqlite::params![run_id, now],
+        )?;
+        if affected == 0 {
+            return Err(AutomationRepositoryError::NotFound(run_id.to_string()));
+        }
+        Ok(())
+    }
+
+    /// Schedule a retry for a transiently-failed dispatch.
+    ///
+    /// Leaves the row non-terminal (`retry_at` set, `finished_at` NULL)
+    /// only if the caller wants the same run retried; here we close the
+    /// attempt and record when the next one may start, keeping the
+    /// previous run's row as history.
+    pub fn schedule_dispatch_retry(
+        &self,
+        run_id: &str,
+        retry_at: i64,
+        attempts: i64,
+        error_text: &str,
+    ) -> Result<(), AutomationRepositoryError> {
+        let conn = open_with_wal(&self.db_path)?;
+        let affected = conn.execute(
+            "UPDATE automation_runs
+             SET status = 'failed_to_dispatch', finished_at = ?2,
+                 attempts = ?3, retry_at = ?4, error_text = ?5
+             WHERE id = ?1",
+            rusqlite::params![run_id, chrono::Utc::now().timestamp_millis(), attempts, retry_at, error_text],
         )?;
         if affected == 0 {
             return Err(AutomationRepositoryError::NotFound(run_id.to_string()));
@@ -357,7 +530,8 @@ impl AutomationRepository {
     ) -> Result<Vec<AutomationRun>, AutomationRepositoryError> {
         let conn = open_with_wal(&self.db_path)?;
         let mut stmt = conn.prepare(
-            "SELECT id, automation_id, started_at, finished_at, status, task_id, error_text
+            "SELECT id, automation_id, started_at, finished_at, status, task_id, error_text,
+                    scheduled_at, trigger, claimed_at, dispatched_at, attempts, retry_at
              FROM automation_runs WHERE automation_id = ?1
              ORDER BY started_at DESC
              LIMIT ?2",
@@ -373,18 +547,23 @@ impl AutomationRepository {
         Ok(runs)
     }
 
-    /// Count runs currently in flight (started but not finished).
+    /// Count runs currently in flight across all automations.
     ///
-    /// "In flight" is derived, not a stored flag: a run row is created with
-    /// `status = "running"` and `finished_at = NULL`, and `update_run` fills
-    /// `finished_at` on completion. Counting on `finished_at IS NULL` alone
-    /// would also match rows written by a future migration that forgot the
-    /// status, so both halves of the invariant are checked.
+    /// Drives the desktop "keep the machine awake while work is running"
+    /// signal: a background automation has no streaming session, so the
+    /// front-end cannot infer activity from its own session state.
+    ///
+    /// "In flight" is derived, not a stored flag: the row is written at
+    /// claim time with a `claimed`/`dispatched` status and
+    /// `finished_at = NULL`, and every terminal transition fills
+    /// `finished_at`. Counting on `finished_at IS NULL` alone would also
+    /// match rows written by a future migration that forgot the status,
+    /// so both halves of the invariant are checked.
     pub fn count_active_runs(&self) -> Result<u64, AutomationRepositoryError> {
         let conn = open_with_wal(&self.db_path)?;
         let n = conn.query_row(
             "SELECT COUNT(*) FROM automation_runs
-             WHERE status = 'running' AND finished_at IS NULL",
+             WHERE status IN ('claimed', 'dispatched') AND finished_at IS NULL",
             [],
             |row| row.get::<_, i64>(0),
         )?;
@@ -441,14 +620,35 @@ fn row_to_runtime_state(row: &rusqlite::Row) -> rusqlite::Result<AutomationRunti
 }
 
 fn row_to_run(row: &rusqlite::Row) -> rusqlite::Result<AutomationRun> {
+    let status_str: String = row.get(4)?;
+    let trigger_str: Option<String> = row.get(8)?;
     Ok(AutomationRun {
         id: row.get(0)?,
         automation_id: row.get(1)?,
         started_at: row.get(2)?,
         finished_at: row.get(3)?,
-        status: row.get(4)?,
+        // An unrecognised status is data corruption, not a legacy label —
+        // `parse` already maps the two legacy spellings. Surfacing it as
+        // SQL `InvalidColumnType` beats inventing a status that would then
+        // drive retry/skip decisions.
+        status: RunStatus::parse(&status_str).ok_or_else(|| {
+            rusqlite::Error::InvalidColumnType(
+                4,
+                "automation_runs.status".to_string(),
+                rusqlite::types::Type::Text,
+            )
+        })?,
         task_id: row.get(5)?,
         error_text: row.get(6)?,
+        scheduled_at: row.get(7)?,
+        trigger: trigger_str
+            .as_deref()
+            .and_then(RunTrigger::parse)
+            .map(|t| t.as_str().to_string()),
+        claimed_at: row.get(9)?,
+        dispatched_at: row.get(10)?,
+        attempts: row.get(11)?,
+        retry_at: row.get(12)?,
     })
 }
 
@@ -472,6 +672,36 @@ mod tests {
             rrule: Some("0 8 * * *".into()),
             ..Default::default()
         })
+    }
+
+
+    /// 构造一条 run 记录，状态机字段取合理的默认值。
+    /// 测试里手写 13 个字段既啰嗦又容易在加列时漏改，集中在这里。
+    fn make_run(automation_id: &str, status: RunStatus) -> AutomationRun {
+        let now = chrono::Utc::now().timestamp_millis();
+        AutomationRun {
+            id: uuid::Uuid::new_v4().to_string(),
+            automation_id: automation_id.to_string(),
+            started_at: now,
+            finished_at: Some(now),
+            status,
+            task_id: None,
+            error_text: None,
+            scheduled_at: None,
+            trigger: Some("scheduled".to_string()),
+            claimed_at: Some(now),
+            dispatched_at: None,
+            attempts: Some(1),
+            retry_at: None,
+        }
+    }
+
+    /// 构造一条在途（未收尾）的 run。
+    fn make_in_flight_run(automation_id: &str, status: RunStatus) -> AutomationRun {
+        AutomationRun {
+            finished_at: None,
+            ..make_run(automation_id, status)
+        }
     }
 
     #[test]
@@ -531,16 +761,8 @@ mod tests {
         repo.create(&auto).unwrap();
 
         // Create a run record
-        let run = AutomationRun {
-            id: uuid::Uuid::new_v4().to_string(),
-            automation_id: auto.id.clone(),
-            started_at: chrono::Utc::now().timestamp_millis(),
-            finished_at: None,
-            status: "running".to_string(),
-            task_id: None,
-            error_text: None,
-        };
-        repo.create_run(&run).unwrap();
+        repo.create_run(&make_in_flight_run(&auto.id, RunStatus::Dispatched))
+            .unwrap();
 
         // Delete should cascade
         repo.delete(&auto.id).unwrap();
@@ -578,33 +800,19 @@ mod tests {
         let auto = make_automation("Test");
         repo.create(&auto).unwrap();
 
-        let run1 = AutomationRun {
-            id: uuid::Uuid::new_v4().to_string(),
-            automation_id: auto.id.clone(),
-            started_at: chrono::Utc::now().timestamp_millis(),
-            finished_at: None,
-            status: "running".to_string(),
-            task_id: None,
-            error_text: None,
-        };
-        repo.create_run(&run1).unwrap();
+        repo.create_run(&make_in_flight_run(&auto.id, RunStatus::Dispatched))
+            .unwrap();
 
-        let run2 = AutomationRun {
-            id: uuid::Uuid::new_v4().to_string(),
-            automation_id: auto.id.clone(),
-            started_at: chrono::Utc::now().timestamp_millis() + 1000,
-            finished_at: Some(chrono::Utc::now().timestamp_millis() + 2000),
-            status: "success".to_string(),
-            task_id: Some("task-123".to_string()),
-            error_text: None,
-        };
-        repo.create_run(&run2).unwrap();
+        let mut done = make_run(&auto.id, RunStatus::Succeeded);
+        done.task_id = Some("task-123".to_string());
+        done.started_at += 1000;
+        repo.create_run(&done).unwrap();
 
         let runs = repo.list_runs(&auto.id, 100).unwrap();
         assert_eq!(runs.len(), 2);
         // Most recent first
-        assert_eq!(runs[0].status, "success");
-        assert_eq!(runs[1].status, "running");
+        assert_eq!(runs[0].status, RunStatus::Succeeded);
+        assert_eq!(runs[1].status, RunStatus::Dispatched);
     }
 
     #[test]
@@ -613,23 +821,21 @@ mod tests {
         let auto = make_automation("Test");
         repo.create(&auto).unwrap();
 
-        let run = AutomationRun {
-            id: uuid::Uuid::new_v4().to_string(),
-            automation_id: auto.id.clone(),
-            started_at: chrono::Utc::now().timestamp_millis(),
-            finished_at: None,
-            status: "running".to_string(),
-            task_id: None,
-            error_text: None,
-        };
+        let run = make_in_flight_run(&auto.id, RunStatus::Claimed);
         repo.create_run(&run).unwrap();
 
         let finished_at = chrono::Utc::now().timestamp_millis();
-        repo.update_run(&run.id, finished_at, "success", Some("task-456"), None)
-            .unwrap();
+        repo.update_run(
+            &run.id,
+            finished_at,
+            RunStatus::Succeeded,
+            Some("task-456"),
+            None,
+        )
+        .unwrap();
 
         let runs = repo.list_runs(&auto.id, 100).unwrap();
-        assert_eq!(runs[0].status, "success");
+        assert_eq!(runs[0].status, RunStatus::Succeeded);
         assert_eq!(runs[0].task_id.as_deref(), Some("task-456"));
         assert_eq!(runs[0].finished_at, Some(finished_at));
     }
@@ -641,39 +847,29 @@ mod tests {
         repo.create(&auto).unwrap();
         assert_eq!(repo.count_active_runs().unwrap(), 0);
 
-        let running = AutomationRun {
-            id: uuid::Uuid::new_v4().to_string(),
-            automation_id: auto.id.clone(),
-            started_at: chrono::Utc::now().timestamp_millis(),
-            finished_at: None,
-            status: "running".to_string(),
-            task_id: None,
-            error_text: None,
-        };
+        let running = make_in_flight_run(&auto.id, RunStatus::Dispatched);
         repo.create_run(&running).unwrap();
         assert_eq!(repo.count_active_runs().unwrap(), 1);
 
         // A second concurrent run must not be shadowed by the first.
-        let also_running = AutomationRun {
-            id: uuid::Uuid::new_v4().to_string(),
-            automation_id: auto.id.clone(),
-            started_at: chrono::Utc::now().timestamp_millis(),
-            finished_at: None,
-            status: "running".to_string(),
-            task_id: None,
-            error_text: None,
-        };
+        let also_running = make_in_flight_run(&auto.id, RunStatus::Claimed);
         repo.create_run(&also_running).unwrap();
         assert_eq!(repo.count_active_runs().unwrap(), 2);
 
         let finished_at = chrono::Utc::now().timestamp_millis();
-        repo.update_run(&running.id, finished_at, "success", None, None)
+        repo.update_run(&running.id, finished_at, RunStatus::Succeeded, None, None)
             .unwrap();
         assert_eq!(repo.count_active_runs().unwrap(), 1);
 
         // A failed run is still finished — it must not keep the machine awake.
-        repo.update_run(&also_running.id, finished_at, "failed", None, Some("boom"))
-            .unwrap();
+        repo.update_run(
+            &also_running.id,
+            finished_at,
+            RunStatus::Failed,
+            None,
+            Some("boom"),
+        )
+        .unwrap();
         assert_eq!(repo.count_active_runs().unwrap(), 0);
     }
 
@@ -685,15 +881,8 @@ mod tests {
         let (repo, _tmp) = repo();
         let auto = make_automation("Partial");
         repo.create(&auto).unwrap();
-        let odd = AutomationRun {
-            id: uuid::Uuid::new_v4().to_string(),
-            automation_id: auto.id.clone(),
-            started_at: chrono::Utc::now().timestamp_millis(),
-            finished_at: Some(chrono::Utc::now().timestamp_millis()),
-            status: "pending".to_string(),
-            task_id: None,
-            error_text: None,
-        };
+        // `claimed` 但已 finished：两个条件只满足一半，不该计入在途。
+        let odd = make_run(&auto.id, RunStatus::Claimed);
         repo.create_run(&odd).unwrap();
         assert_eq!(repo.count_active_runs().unwrap(), 0);
     }
@@ -763,5 +952,220 @@ mod tests {
         // 幂等：第二次 ensure 不许报 duplicate column。
         repo.ensure_schema().unwrap();
         assert!(repo.get("old-1").is_ok());
+    }
+
+    // --- run 状态机 ---------------------------------------------
+
+    /// run 表的 6 个新列也必须能被补上，且旧行读得出。
+    #[test]
+    fn test_ensure_schema_migrates_legacy_run_table() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("legacy_runs.db");
+        {
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            // 旧版 run 表：7 列，无状态机列；status 用旧的字面量。
+            conn.execute_batch(
+                "CREATE TABLE automations (
+                    id TEXT PRIMARY KEY, name TEXT NOT NULL, prompt TEXT NOT NULL,
+                    schedule_type TEXT NOT NULL, rrule TEXT, scheduled_at INTEGER,
+                    status TEXT NOT NULL, valid_from INTEGER, valid_until INTEGER,
+                    cwds TEXT, connector_ids_json TEXT, expert_id TEXT, model_id TEXT,
+                    created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+                );
+                CREATE TABLE automation_runs (
+                    id TEXT PRIMARY KEY,
+                    automation_id TEXT NOT NULL,
+                    started_at INTEGER NOT NULL,
+                    finished_at INTEGER,
+                    status TEXT NOT NULL,
+                    task_id TEXT,
+                    error_text TEXT
+                );",
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO automations (id, name, prompt, schedule_type, status, created_at, updated_at)
+                 VALUES ('a1', 'A', 'p', 'recurring', 'active', 1, 2)",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO automation_runs (id, automation_id, started_at, finished_at, status)
+                 VALUES ('r1', 'a1', 10, 20, 'success')",
+                [],
+            )
+            .unwrap();
+        }
+
+        let repo = AutomationRepository::new(path);
+        repo.ensure_schema().unwrap();
+
+        // 旧 `success` 状态映射到 Succeeded，不该因改名读不出来。
+        let runs = repo.list_runs("a1", 10).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].status, RunStatus::Succeeded);
+        assert_eq!(runs[0].scheduled_at, None, "新列应为 NULL");
+        assert_eq!(runs[0].attempts, None);
+    }
+
+    /// 收割：进程重启留下的在途行必须变成 abandoned。
+    ///
+    /// 这条测试的存在理由是保活信号——`count_active_runs` 读的是同一
+    /// 组状态，孤儿行若不被收割，它会永久非零，机器永远不休眠。
+    #[test]
+    fn test_reap_abandoned_runs_closes_in_flight_rows() {
+        let (repo, _tmp) = repo();
+        let auto = make_automation("Nightly");
+        repo.create(&auto).unwrap();
+
+        repo.create_run(&make_in_flight_run(&auto.id, RunStatus::Claimed))
+            .unwrap();
+        repo.create_run(&make_in_flight_run(&auto.id, RunStatus::Dispatched))
+            .unwrap();
+        assert_eq!(repo.count_active_runs().unwrap(), 2);
+
+        let reaped = repo.reap_abandoned_runs().unwrap();
+        assert_eq!(reaped, 2);
+
+        // 收割后不再占用单飞槽，保活信号也归零。
+        assert_eq!(repo.count_active_runs().unwrap(), 0);
+        assert_eq!(repo.count_in_flight(&auto.id).unwrap(), 0);
+        let runs = repo.list_runs(&auto.id, 10).unwrap();
+        assert!(runs.iter().all(|r| r.status == RunStatus::Abandoned));
+        assert!(runs.iter().all(|r| r.finished_at.is_some()));
+    }
+
+    /// 收割不该碰到已收尾的行。
+    #[test]
+    fn test_reap_abandoned_runs_leaves_terminal_rows_alone() {
+        let (repo, _tmp) = repo();
+        let auto = make_automation("Nightly");
+        repo.create(&auto).unwrap();
+        let done = make_run(&auto.id, RunStatus::Succeeded);
+        repo.create_run(&done).unwrap();
+
+        assert_eq!(repo.reap_abandoned_runs().unwrap(), 0);
+        let runs = repo.list_runs(&auto.id, 10).unwrap();
+        assert_eq!(runs[0].status, RunStatus::Succeeded);
+    }
+
+    /// 同一 slot 的 runId 只能存在一条——去重的前半段。
+    #[test]
+    fn test_run_exists_detects_duplicate_slot() {
+        let (repo, _tmp) = repo();
+        let auto = make_automation("Nightly");
+        repo.create(&auto).unwrap();
+
+        let run_id = crate::compose_run_id(&auto.id, crate::RunTrigger::Scheduled, Some(1_700_000_000_000));
+        assert!(!repo.run_exists(&run_id).unwrap());
+        repo.create_run(&AutomationRun {
+            id: run_id.clone(),
+            ..make_in_flight_run(&auto.id, RunStatus::Claimed)
+        })
+        .unwrap();
+        assert!(repo.run_exists(&run_id).unwrap());
+    }
+
+    /// 连续派发失败计数：遇到一次成功就断链。
+    #[test]
+    fn test_consecutive_dispatch_failures_stops_at_success() {
+        let (repo, _tmp) = repo();
+        let auto = make_automation("Flaky");
+        repo.create(&auto).unwrap();
+
+        // 按时间升序插入：两次派发失败 → 一次成功 → 一次派发失败。
+        let mut base = 1_000_000i64;
+        let mut add = |status: RunStatus, repo: &AutomationRepository| {
+            let mut r = make_run(&auto.id, status);
+            r.started_at = base;
+            base += 1000;
+            repo.create_run(&r).unwrap();
+        };
+        add(RunStatus::FailedToDispatch, &repo);
+        add(RunStatus::FailedToDispatch, &repo);
+        add(RunStatus::Succeeded, &repo);
+        add(RunStatus::FailedToDispatch, &repo);
+
+        // 最新那条是 FailedToDispatch，往回遇到 Succeeded 就停。
+        assert_eq!(repo.consecutive_dispatch_failures(&auto.id).unwrap(), 1);
+    }
+
+    /// 退避间隔随尝试次数指数增长，且有上限。
+    #[test]
+    fn test_backoff_is_exponential_and_capped() {
+        use crate::{backoff_delay_ms, MAX_DISPATCH_ATTEMPTS};
+        let d1 = backoff_delay_ms(1);
+        let d2 = backoff_delay_ms(2);
+        let d3 = backoff_delay_ms(3);
+        assert!(d2 > d1, "第 2 次必须比第 1 次久");
+        assert!(d3 > d2, "第 3 次必须比第 2 次久");
+        // 封顶后不再增长。
+        assert_eq!(backoff_delay_ms(30), backoff_delay_ms(20));
+        // 极大 attempt 不能溢出成负数。
+        assert!(backoff_delay_ms(i64::MAX) > 0);
+        assert!(MAX_DISPATCH_ATTEMPTS >= 1);
+    }
+
+    /// 错误分类：能自己好的归 transient，要改配置才好的归 permanent。
+    #[test]
+    fn test_classify_dispatch_failure() {
+        use crate::{classify_dispatch_failure, FailureClass};
+        use hermix_core::AgentError;
+        let transient = [
+            AgentError::LlmApi("503 overloaded".into()),
+            AgentError::Gateway("502".into()),
+            AgentError::Timeout("no response".into()),
+            AgentError::RateLimited { retry_after_secs: Some(30) },
+            AgentError::Io("connection reset".into()),
+        ];
+        for e in transient {
+            assert_eq!(
+                classify_dispatch_failure(&e),
+                FailureClass::Transient,
+                "{e:?} 应判为 transient"
+            );
+        }
+        let permanent = [
+            AgentError::Config("missing provider".into()),
+            AgentError::AuthFailed("bad api key".into()),
+            AgentError::InvalidToolCall("no such tool".into()),
+        ];
+        for e in permanent {
+            assert_eq!(
+                classify_dispatch_failure(&e),
+                FailureClass::Permanent,
+                "{e:?} 应判为 permanent"
+            );
+        }
+    }
+
+    /// is_in_flight 与 SQL 谓词必须一致——两处调用点（单飞 + 保活）
+    /// 靠它对齐。
+    #[test]
+    fn test_in_flight_predicate_matches_count_query() {
+        let (repo, _tmp) = repo();
+        let auto = make_automation("Nightly");
+        repo.create(&auto).unwrap();
+
+        for status in [
+            RunStatus::Claimed,
+            RunStatus::Dispatched,
+            RunStatus::Succeeded,
+            RunStatus::Failed,
+            RunStatus::FailedToDispatch,
+            RunStatus::Skipped,
+            RunStatus::Abandoned,
+        ] {
+            let fresh = make_automation(&format!("A-{status:?}"));
+            repo.create(&fresh).unwrap();
+            repo.create_run(&make_in_flight_run(&fresh.id, status))
+                .unwrap();
+            let from_enum = status.is_in_flight() as u64;
+            let from_sql = repo.count_in_flight(&fresh.id).unwrap();
+            assert_eq!(
+                from_enum, from_sql,
+                "{status:?}: 枚举判据与 SQL 谓词不一致"
+            );
+        }
     }
 }

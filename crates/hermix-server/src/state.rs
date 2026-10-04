@@ -791,12 +791,22 @@ impl HttpServerState {
 
         // : Start the automation scheduler with the unified
         // dispatch path. The trigger callback calls `agent_service.send_message()`,
-        // which internally uses `ToolRegistry::dispatch_async()` — the same
-        // path as HTTP chat requests (铁律 DD).
+        // whose tool calls go through `ToolRegistry::dispatch_with_context()` —
+        // the same path as HTTP chat requests (铁律 DD).
         if let (Some(auto_svc), Some(task_svc)) = (
             &state.automation_service,
             &state.task_service,
         ) {
+            // 收割上一次进程留下的在途 run。必须发生在 scheduler 启动
+            // 之前：那几行既占着单飞槽（挡住本该触发的那次），又让
+            // `count_active_runs` 恒为非零——保活信号会把机器永久按在
+            // 唤醒状态，而 UI 上看不出任何原因。
+            if let Err(e) = auto_svc.reap_abandoned_runs() {
+                tracing::warn!(
+                    error = %e,
+                    "automation: failed to reap abandoned runs at startup"
+                );
+            }
             let handle = automation_trigger::start_automation_scheduler(
                 auto_svc.clone(),
                 state.agent_service(),

@@ -208,10 +208,21 @@ impl TaskService {
     }
 
     /// Convenience: mark a task as failed.
+    ///
+    /// `Pending` is accepted because a caller can fail a task it created
+    /// moments ago without ever driving it through `Planning` /
+    /// `InProgress` — automations are the case in point: one creates a
+    /// task and immediately runs the agent in the same call, so the task
+    /// is still `Pending` when the run comes back failed. Without this,
+    /// `fail` rejected it, the caller logged a warning and moved on, and
+    /// the task sat in `Pending` forever with nothing in the UI to say the
+    /// run had failed.
     pub fn fail(&self, id: &str) -> Result<Task, TaskServiceError> {
         let task = self.get(id)?;
-        // Can fail from planning or in_progress
-        if !matches!(task.status, TaskStatus::Planning | TaskStatus::InProgress) {
+        if !matches!(
+            task.status,
+            TaskStatus::Pending | TaskStatus::Planning | TaskStatus::InProgress
+        ) {
             return Err(TaskServiceError::InvalidTransition(format!(
                 "Cannot fail from {:?}",
                 task.status
@@ -338,8 +349,16 @@ mod tests {
         assert_eq!(failed.status, TaskStatus::Failed);
     }
 
+    /// `Pending` 可以直接 fail——创建后立刻失败的场景是真实存在的。
+    ///
+    /// 本测试原先断言相反（"pending task 不能 fail"），那条规则在自动化
+    /// 路径上产生了静默失败：自动化建 Task 后立即跑 agent，run 失败时
+    /// Task 还是 `Pending`，`fail` 被拒、调用方只 `warn!` 一下，Task 就永久
+    /// 停在 `Pending`——UI 上看不出这次运行失败了。改为允许，并让
+    /// `validate_transition` 同步认可 `Pending → Failed`，避免
+    /// `fail()` 与 `transition()` 两套判定分叉。
     #[test]
-    fn test_cannot_fail_pending_task() {
+    fn test_can_fail_pending_task() {
         let (svc, _tmp) = service();
         let task = svc
             .create(CreateTaskParams {
@@ -348,6 +367,22 @@ mod tests {
                 ..Default::default()
             })
             .unwrap();
+        let failed = svc.fail(&task.id).unwrap();
+        assert_eq!(failed.status, TaskStatus::Failed);
+    }
+
+    /// 终态不可再回退到 Failed。
+    #[test]
+    fn test_cannot_fail_finished_task() {
+        let (svc, _tmp) = service();
+        let task = svc
+            .create(CreateTaskParams {
+                title: "Task".into(),
+                mode: TaskMode::Craft,
+                ..Default::default()
+            })
+            .unwrap();
+        svc.complete(&task.id).unwrap();
         let err = svc.fail(&task.id).unwrap_err();
         assert!(matches!(err, TaskServiceError::InvalidTransition(_)));
     }
