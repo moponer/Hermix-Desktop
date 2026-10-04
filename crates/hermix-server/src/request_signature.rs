@@ -48,14 +48,50 @@ impl NonceCache {
 }
 
 /// 计算签名（客户端与服务端共用同一实现，避免格式漂移）。
+///
+/// **真 HMAC-SHA256**，不是 `SHA256(key ‖ msg)` 那种手搓构造。
+/// 两者在这里的差别不是洁癖：后者是**长度扩展攻击**的标准靶子——攻击者拿到
+/// 一组 (签名, 消息) 后能算出「同一密钥下、消息以任意尾巴扩展」的合法签名，
+/// 而域分隔标签（`"|hermix-req-sig|"`）挡不住，因为攻击者已知前缀长度。
+/// HMAC 的双重 ipad/opad 结构才是为此设计的。
+///
+/// 手写而不是引 `hmac` crate：`sha2` 已是依赖，HMAC 构造本身是良定义的常数行
+/// 代码；App 侧用 WebCrypto 的 `subtle.sign`，两边由
+/// `cross_language_signature_vector` 交叉验证——两个独立实现对同一固定向量
+/// 算出同一个值，比任何一方单独 round-trip 都有说服力。
 pub fn compute_signature(device_token: &str, method: &str, path: &str, t: i64, nonce: &str) -> String {
     use sha2::{Digest, Sha256};
+
+    const BLOCK: usize = 64; // SHA-256 的块大小
+    let key = device_token.as_bytes();
+    // 密钥短于一块就补零，等于或长于一块先哈希到 64 字节（这里保留分支，
+    // 因为 device token 格式可能变长，而客户端也会照做）。
+    let mut k0 = [0u8; BLOCK];
+    if key.len() > BLOCK {
+        let h = Sha256::digest(key);
+        k0[..32].copy_from_slice(&h);
+    } else {
+        k0[..key.len()].copy_from_slice(key);
+    }
+
     let message = format!("{method}\n{path}\n{t}\n{nonce}");
-    let mut mac = Sha256::new();
-    mac.update(device_token.as_bytes());
-    mac.update(b"|hermix-req-sig|");
-    mac.update(message.as_bytes());
-    mac.finalize().iter().map(|b| format!("{b:02x}")).collect()
+
+    let mut ipad = [0x36u8; BLOCK];
+    let mut opad = [0x5cu8; BLOCK];
+    for i in 0..BLOCK {
+        ipad[i] ^= k0[i];
+        opad[i] ^= k0[i];
+    }
+
+    let mut inner = Sha256::new();
+    inner.update(ipad);
+    inner.update(message.as_bytes());
+    let inner = inner.finalize();
+
+    let mut outer = Sha256::new();
+    outer.update(opad);
+    outer.update(inner);
+    outer.finalize().iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// 解析并校验签名头。返回 Ok(()) 表示通过；
@@ -131,6 +167,22 @@ mod tests {
         let nonces = NonceCache::new();
         let now = chrono::Utc::now().timestamp();
         assert!(verify_signature(&valid_header(now), TOKEN, METHOD, PATH, now, &nonces).is_ok());
+    }
+
+    /// **跨语言契约向量**。Hermix M（uni-app / TS）必须算出**同一个 hex**——
+    /// 这个测试是那条契约的权威定义，不是我对另一端实现的猜测。
+    ///
+    /// 为什么要固定向量而不是只做 round-trip：round-trip 只证明"自己算的能被
+    /// 自己验"，两边算法一起错也照样绿。而 App 端的实现在另一个工具链里
+    /// （H5 目标虽可在 CI 构建，但这段算法不在那条路径上），唯一能钉住线格式
+    /// 的就是这个常量。改这里等于改协议，必须同步改 App 侧。
+    #[test]
+    fn cross_language_signature_vector() {
+        assert_eq!(
+            compute_signature("hmxd_test_token", "GET", "/v1/ws-stream/s1", 1_700_000_000, "abc123"),
+            "521925f25e9194ded7ecc29a57879549d48ee8ceb752b390bf6a8f4e5b9a734f",
+            "App 侧 computeSignature 必须与此逐字一致"
+        );
     }
 
     #[test]

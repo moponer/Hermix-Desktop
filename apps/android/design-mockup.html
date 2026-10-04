@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hermix M — 界面</title>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* 配色直接取自桌面端暗色主题 apps/desktop-tauri/src/styles/themes/dark.css
+   —— 不新造一套。抬升顺序 #101113 < #161719(页) < #1d1f22(卡) < #24262a < #2e3136(线) */
+:root{
+  --base:#101113;        /* bg-base · 图纸底 */
+  --paper:#161719;       /* bg-primary · 页/对话底 */
+  --card:#1d1f22;        /* bg-card */
+  --raised:#24262a;      /* bg-elevated / hover */
+  --line:#2e3136;        /* bg-active / border-primary */
+  --edge:#3f434a;        /* border-secondary · 控件描边 */
+  --fg:#ededed;          /* text-primary */
+  --fg2:#9a9ea6;         /* text-secondary */
+  --fg3:#7f848c;         /* text-tertiary / muted */
+  --fg4:#5f636b;         /* text-faint / border */
+  --accent:#6fae94;      /* accent-base · 青碧提亮 */
+  --on-accent:#14201b;   /* btn-primary-text */
+  --accent-hi:#86c0a8;   /* btn-primary-hover */
+  --ok:#84b383;          /* success */
+  --warn:#d3a34c;        /* warning */
+  --warn-bg:#332916;     /* warning-soft */
+  --err:#e06b52;         /* error */
+  --err-bg:#20262b;      /* error-soft */
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{
+  background:var(--base);color:var(--fg);
+  font-family:'Outfit',sans-serif;-webkit-font-smoothing:antialiased;
+  padding:40px 28px 60px;
+}
+.wrap{max-width:1240px;margin:0 auto}
+
+.frames{display:grid;grid-template-columns:repeat(5,1fr);gap:14px}
+@media(max-width:1300px){.frames{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:900px){.frames{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:620px){.frames{grid-template-columns:1fr}}
+.frame{display:flex;flex-direction:column;gap:10px}
+.fhead{display:flex;align-items:baseline;gap:8px;padding-left:2px}
+.fhead b{font-size:13px;font-weight:600;color:var(--fg)}
+.fhead span{font-size:10.5px;color:var(--fg4);font-family:'JetBrains Mono',monospace}
+
+.bezel{background:var(--paper);border:1px solid var(--line);border-radius:26px;padding:7px}
+.screen{background:var(--paper);border-radius:20px;overflow:hidden;height:586px;display:flex;flex-direction:column}
+
+.statusbar{display:flex;justify-content:space-between;align-items:center;padding:8px 15px 4px;font-size:10px;color:var(--fg3);font-family:'JetBrains Mono',monospace;flex:none}
+.appbar{display:flex;align-items:center;gap:8px;padding:8px 13px 10px;background:var(--base);border-bottom:1px solid var(--line);flex:none}
+.appbar h4{font-size:13px;font-weight:600;color:var(--fg);flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.appbar svg{color:var(--fg3);flex:none}
+.body{flex:1;padding:12px 13px;display:flex;flex-direction:column;gap:10px;overflow:hidden}
+.body.mid{justify-content:center;padding:18px 15px}
+
+.t-hero{font-size:17px;font-weight:600;color:var(--fg);text-align:center}
+.t-sub{font-size:11px;color:var(--fg2);text-align:center;line-height:1.5;margin-top:5px}
+
+.panel{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:11px}
+.bub{max-width:84%;padding:8px 11px;border-radius:15px;font-size:12px;line-height:1.55}
+.bub.u{align-self:flex-end;background:var(--raised);color:var(--fg);border-bottom-right-radius:5px}
+.bub.a{align-self:flex-start;background:var(--card);color:var(--fg);border:1px solid var(--line);border-bottom-left-radius:5px}
+
+.trace{display:flex;align-items:center;gap:6px;padding:6px 10px;background:var(--card);border:1px solid var(--line);border-radius:10px;font-size:10.5px;color:var(--fg2);font-family:'JetBrains Mono',monospace;align-self:flex-start;max-width:100%}
+.dot{width:6px;height:6px;border-radius:50%;flex:none}
+.dot.run{background:var(--warn);animation:p 1.5s ease-in-out infinite}
+.dot.done{background:var(--ok)}
+@keyframes p{0%,100%{opacity:.3}50%{opacity:1}}
+
+.notice{display:flex;gap:7px;align-items:flex-start;padding:7px 9px;border-radius:9px;font-size:10.5px;line-height:1.5}
+.notice.warn{background:var(--warn-bg);color:var(--warn);border:1px solid rgba(211,163,76,.25)}
+.notice.info{background:var(--card);color:var(--fg2);border:1px solid var(--line)}
+.notice.err{background:var(--err-bg);color:var(--err);border:1px solid rgba(224,107,82,.25)}
+.notice svg{flex:none;margin-top:1px}
+
+.code6{display:flex;gap:6px;justify-content:center;margin:13px 0 2px}
+.code6 i{width:34px;height:42px;border:1px solid var(--edge);border-radius:9px;display:flex;align-items:center;justify-content:center;font-style:normal;font-size:17px;font-weight:600;color:var(--fg);font-family:'JetBrains Mono',monospace}
+.code6 i.f{border-color:var(--accent);background:var(--raised)}
+
+.btn{height:42px;border-radius:21px;display:flex;align-items:center;justify-content:center;gap:7px;font-size:12.5px;font-weight:600}
+.btn.pri{background:var(--accent);color:var(--on-accent)}
+.btn.sec{background:transparent;color:var(--fg);border:1px solid var(--edge)}
+.btn.sm{height:36px;font-size:11.5px}
+
+.composer{flex:none;border-top:1px solid var(--line);padding:8px 11px 12px;display:flex;flex-direction:column;gap:6px;background:var(--paper)}
+.composer .field{height:38px;border-radius:19px;background:var(--card);border:1px solid var(--edge);display:flex;align-items:center;padding:0 6px 0 13px;font-size:12px;color:var(--fg4)}
+.composer .send{width:30px;height:30px;border-radius:15px;background:var(--accent);color:var(--on-accent);display:flex;align-items:center;justify-content:center;flex:none}
+.composer .voice{margin-left:auto;height:30px;padding:0 10px;border-radius:15px;background:var(--raised);color:var(--fg2);display:flex;align-items:center;gap:5px;flex:none}
+.composer .voice em{font-style:normal;font-size:9.5px;white-space:nowrap}
+.hint{font-size:10px;color:var(--fg2);display:flex;align-items:center;gap:5px}
+
+/* 通话屏 */
+.state{display:flex;align-items:center;gap:6px;justify-content:center;font-size:10.5px;color:var(--fg2);font-family:'JetBrains Mono',monospace;padding-top:4px}
+.wave{display:flex;align-items:center;justify-content:center;gap:3px;height:40px}
+.wave i{width:3px;background:var(--accent);border-radius:2px;opacity:.8}
+.tr-line{font-size:10.5px;line-height:1.55;color:var(--fg2);font-family:'JetBrains Mono',monospace}
+.tr-line span{margin-right:6px}
+.callrow{display:flex;gap:8px;justify-content:space-between;padding-top:2px}
+.cbtn{flex:1;height:48px;border-radius:24px;background:var(--card);border:1px solid var(--line);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;color:var(--fg2)}
+.cbtn em{font-style:normal;font-size:9px}
+.cbtn.end{background:var(--err-bg);border-color:rgba(224,107,82,.3);color:var(--err)}
+
+.appr{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:11px;display:flex;flex-direction:column;gap:8px}
+.appr.gone{opacity:.55}
+.appr .top{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:600;color:var(--fg)}
+.appr .tool{font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--accent)}
+.args{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--fg2);background:var(--base);border:1px solid var(--line);border-radius:8px;padding:7px 9px;line-height:1.6}
+.keys{display:flex;gap:6px}
+.keys .btn{flex:1}
+.keys .btn.deny{background:transparent;border:1px solid var(--edge);color:var(--fg2)}
+.count{display:flex;align-items:center;gap:6px;font-size:10px;color:var(--warn);font-family:'JetBrains Mono',monospace}
+.bar{height:3px;background:var(--raised);border-radius:2px;overflow:hidden;flex:1}
+.bar i{display:block;height:100%;background:var(--warn)}
+.cap{font-size:9.5px;color:var(--fg4);display:flex;align-items:center;gap:5px;line-height:1.4}
+
+.task{display:flex;align-items:center;gap:9px;padding:10px 11px;background:var(--card);border:1px solid var(--line);border-radius:11px}
+.task .idx{font-family:'JetBrains Mono',monospace;font-size:9.5px;color:var(--fg4);flex:none;width:18px}
+.task .txt{flex:1;min-width:0}
+.task .txt b{display:block;font-size:11.5px;font-weight:500;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.task .txt span{font-size:9.5px;color:var(--fg2);font-family:'JetBrains Mono',monospace}
+.spin{width:11px;height:11px;border:1.5px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:sp .8s linear infinite;flex:none}
+@keyframes sp{to{transform:rotate(360deg)}}
+.stop{width:24px;height:24px;border-radius:12px;background:var(--err-bg);color:var(--err);display:flex;align-items:center;justify-content:center;flex:none}
+.badge{font-family:'JetBrains Mono',monospace;font-size:9px;padding:2px 5px;border-radius:4px;background:var(--warn-bg);color:var(--warn);flex:none}
+
+.spec{margin-top:9px;display:flex;flex-direction:column;gap:4px;padding-left:2px}
+.spec div{display:flex;gap:8px;font-size:11px;line-height:1.5;color:var(--fg2)}
+.spec b{font-family:'JetBrains Mono',monospace;font-size:9.5px;color:var(--fg4);font-weight:500;flex:none;width:74px;padding-top:1px}
+.spec .no{color:var(--err)}
+.spec .yes{color:var(--accent)}
+
+hr{border:0;border-top:1px solid var(--line);margin:40px 0}
+h3{font-size:12px;font-weight:500;color:var(--fg4);margin-bottom:14px;font-family:'JetBrains Mono',monospace}
+
+.sw-row{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line)}
+.sw .chip{height:42px}
+.sw .mt{padding:8px 9px;background:var(--base)}
+.sw .mt b{display:block;font-size:10px;font-family:'JetBrains Mono',monospace;color:var(--fg2);font-weight:500}
+.sw .mt span{font-size:9.5px;color:var(--fg4)}
+@media(max-width:760px){.sw-row{grid-template-columns:repeat(2,1fr)}}
+
+.omit{display:flex;flex-direction:column}
+.omit div{display:grid;grid-template-columns:200px 1fr;gap:18px;padding:11px 0;border-top:1px solid var(--line);align-items:baseline}
+.omit b{font-size:12px;font-weight:500;color:var(--err)}
+.omit p{font-size:12px;line-height:1.6;color:var(--fg2)}
+.omit code{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--fg3)}
+@media(max-width:760px){.omit div{grid-template-columns:1fr;gap:4px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div class="frames">
+
+  <!-- ① 配对 -->
+  <div class="frame">
+    <div class="fhead"><b>配对</b><span>ui/pairing</span></div>
+    <div class="bezel"><div class="screen">
+      <div class="statusbar"><span>9:41</span><span style="display:flex;gap:4px;align-items:center">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12.55a11 11 0 0 1 14.08 0M1.42 9a16 16 0 0 1 21.16 0M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg>
+        <svg width="13" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="17" height="10" rx="2"/><line x1="22" y1="11" x2="22" y2="13"/></svg>
+      </span></div>
+      <div class="body mid">
+        <div style="display:flex;flex-direction:column;align-items:center;gap:12px;width:100%">
+          <div style="width:48px;height:48px;border-radius:14px;background:var(--accent);display:flex;align-items:center;justify-content:center">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--on-accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+          </div>
+          <div>
+            <div class="t-hero">连接你的助手</div>
+            <div class="t-sub">先核对中转身份，再输码</div>
+          </div>
+          <div class="panel" style="width:100%;display:flex;flex-direction:column;gap:6px">
+            <div style="display:flex;align-items:center;gap:7px">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+              <span style="font-size:10.5px;color:var(--fg2);flex:1">relay.example.com</span>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--ok)" stroke-width="2.4"><path d="M20 6 9 17l-5-5"/></svg>
+            </div>
+            <div style="font-family:'JetBrains Mono';font-size:9px;color:var(--fg4);line-height:1.5;word-break:break-all">SHA-256 3f9c…a71e · LE · 89 天</div>
+          </div>
+          <div class="code6"><i>4</i><i>7</i><i>1</i><i class="f">9</i><i></i><i></i></div>
+          <div class="notice warn" style="width:100%">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            <div><b style="font-weight:600">时钟快 1 分 42 秒</b><br>签名含时间戳，超 ±300s 全拒</div>
+          </div>
+          <div class="btn pri" style="width:100%">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M3 12h18"/></svg>
+            扫码
+          </div>
+          <div style="display:flex;align-items:center;gap:5px;font-size:10px;color:var(--fg4)">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="6 9 6 4 20 4 20 18 15 18"/></svg>
+            relay 地址
+          </div>
+        </div>
+      </div>
+    </div></div>
+    <div class="spec">
+      <div><b>顺序</b><span>指纹核对<b style="color:var(--fg3);font-family:'Outfit';font-size:11px">在输码之前</b>——信任建立必须先于输入凭据</span></div>
+      <div><b>时钟</b><span>配对完成当场报偏差，不等"连不上"再让人猜</span></div>
+      <div><b>手输地址</b><span class="no">不能作为首次信任的来源</span></div>
+    </div>
+  </div>
+
+  <!-- ② 对话 -->
+  <div class="frame">
+    <div class="fhead"><b>对话</b><span>ui/chat</span></div>
+    <div class="bezel"><div class="screen">
+      <div class="statusbar"><span>9:41</span><span style="display:flex;gap:4px;align-items:center">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12.55a11 11 0 0 1 14.08 0M1.42 9a16 16 0 0 1 21.16 0M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg>
+        <svg width="13" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="17" height="10" rx="2"/><line x1="22" y1="11" x2="22" y2="13"/></svg>
+      </span></div>
+      <div class="appbar">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m15 18-6-6 6-6"/></svg>
+        <h4>重构那批工具</h4>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+      </div>
+      <div class="body">
+        <div class="bub u">把 tools 那一层的 dispatch 拆出来，先给我看结构</div>
+        <div class="trace">
+          <span class="dot done"></span>read_file
+          <span style="color:var(--line)">·</span>
+          <span class="dot done"></span>grep
+          <span style="color:var(--line)">·</span>
+          <span class="dot run"></span>bash
+          <span style="margin-left:auto;color:var(--fg4)">cargo check</span>
+        </div>
+        <div class="bub a">入口在 tool_dispatch.rs，但它把「选工具」和「执行工具」耦在一起了。拆的时候有两个坑：</div>
+        <div class="notice info">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          <div>还在想 · 已跑 4 分 12 秒<br>下一条心跳 60s 后</div>
+        </div>
+      </div>
+      <div class="composer">
+        <div class="hint">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="var(--warn)" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          运行中 · 你发的话会排队
+        </div>
+        <div class="field">说点什么…
+          <span class="voice" id="mic">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v3"/></svg>
+            <em>长按说话</em>
+          </span>
+          <span class="send"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg></span>
+        </div>
+      </div>
+    </div></div>
+    <div class="spec">
+      <div><b>轨迹行</b><span>正文又开始流时撤掉已完成的工具，还有在跑的保留</span></div>
+      <div><b>长按说话</b><span class="yes">松开发送，不做"说完自动发"</span></div>
+      <div><b>回显</b><span>识别结果立刻变成用户气泡，错了能长按改</span></div>
+    </div>
+  </div>
+
+  <!-- ⑤ 语音对话 -->
+  <div class="frame">
+    <div class="fhead"><b>语音对话</b><span>ui/call</span></div>
+    <div class="bezel"><div class="screen">
+      <div class="statusbar"><span>9:41</span><span style="display:flex;gap:4px;align-items:center">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12.55a11 11 0 0 1 14.08 0M1.42 9a16 16 0 0 1 21.16 0M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg>
+        <svg width="13" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="17" height="10" rx="2"/><line x1="22" y1="11" x2="22" y2="13"/></svg>
+      </span></div>
+      <div class="appbar">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m15 18-6-6 6-6"/></svg>
+        <h4>通话中 · 04:12</h4>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+      </div>
+      <div class="body">
+        <div class="state"><span class="dot run"></span>它正在说</div>
+        <div class="wave" aria-hidden="true">
+          <i style="height:8px"></i><i style="height:16px"></i><i style="height:26px"></i><i style="height:34px"></i><i style="height:20px"></i><i style="height:11px"></i><i style="height:30px"></i><i style="height:22px"></i><i style="height:9px"></i><i style="height:17px"></i><i style="height:28px"></i><i style="height:13px"></i><i style="height:24px"></i><i style="height:33px"></i><i style="height:19px"></i><i style="height:10px"></i><i style="height:27px"></i><i style="height:21px"></i>
+        </div>
+        <div class="panel" style="padding:9px 10px">
+          <div class="tr-line"><span style="color:var(--fg4);flex:none">它</span>read_file 那批里有个路径写错了…</div>
+        </div>
+        <div style="flex:1"></div>
+        <div class="notice warn">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+          <div><b style="font-weight:600">要做删除操作，请看一眼屏幕</b><br>通话中所有审批都需要视觉确认</div>
+        </div>
+        <div class="callrow">
+          <div class="cbtn"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v3"/></svg><em>静音</em></div>
+          <div class="cbtn end"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 10.5a15 15 0 0 1 18 0"/><path d="M6.5 14a10 10 0 0 1 11 0"/><circle cx="12" cy="18" r="1.4" fill="currentColor"/></svg><em>挂断</em></div>
+          <div class="cbtn"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg><em>转写</em></div>
+        </div>
+      </div>
+    </div></div>
+    <div class="spec">
+      <div><b>三态</b><span>你在说 / 它在说 / 沉默——一眼看出轮到谁</span></div>
+      <div><b>审批</b><span class="no">通话中一律视觉确认，语音只播报状态</span></div>
+      <div><b>掉线</b><span>断掉的轮次显式标成中断，可发 /继续 接着来</span></div>
+    </div>
+  </div>
+
+  <!-- ③ 审批 -->
+  <div class="frame">
+    <div class="fhead"><b>审批</b><span>ui/approval</span></div>
+    <div class="bezel"><div class="screen">
+      <div class="statusbar"><span>9:41</span><span style="display:flex;gap:4px;align-items:center">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12.55a11 11 0 0 1 14.08 0M1.42 9a16 16 0 0 1 21.16 0M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg>
+        <svg width="13" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="17" height="10" rx="2"/><line x1="22" y1="11" x2="22" y2="13"/></svg>
+      </span></div>
+      <div class="appbar">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m15 18-6-6 6-6"/></svg>
+        <h4>待决定</h4>
+      </div>
+      <div class="body">
+        <div class="appr">
+          <div class="top">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--warn)" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+            需要权限确认
+            <span style="margin-left:auto;font-family:'JetBrains Mono';font-size:9px;color:var(--fg4)">r-7f2a</span>
+          </div>
+          <div class="tool">terminal · rm -rf target/debug</div>
+          <div class="args">{ "command": "rm -rf target/debug",<br>&nbsp; "cwd": "F:\\spiker\\hermix-desktop" }</div>
+          <div class="count">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            347s 后自动拒绝
+            <span class="bar"><i style="width:42%"></i></span>
+          </div>
+          <div class="keys">
+            <div class="btn pri sm">允许一次</div>
+            <div class="btn deny sm">拒绝</div>
+          </div>
+          <div class="cap">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+            永久放行需在桌面端确认
+          </div>
+        </div>
+        <div class="appr gone">
+          <div class="top" style="color:var(--fg2)">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--fg4)" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+            已超时自动拒绝
+            <span style="margin-left:auto;font-family:'JetBrains Mono';font-size:9px;color:var(--fg4)">r-3b91</span>
+          </div>
+          <div class="tool" style="color:var(--fg2)">write_file · src/lib.rs</div>
+          <div class="args">{ "path": "src/lib.rs",<br>&nbsp; "bytes": 4821 }</div>
+          <div class="notice err">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            600 秒内没点，已拒绝。这次没执行任何操作。
+          </div>
+        </div>
+      </div>
+    </div></div>
+    <div class="spec">
+      <div><b>两键</b><span class="no">没有"永久允许"——能力位矩阵对它无条件 Denied</span></div>
+      <div><b>那行灰字</b><span>服务端下发的 can_persist:false，不许静默少一个按钮</span></div>
+      <div><b>过期态</b><span>常态而非异常，必须写清"没执行任何操作"</span></div>
+    </div>
+  </div>
+
+  <!-- ④ 任务 -->
+  <div class="frame">
+    <div class="fhead"><b>任务</b><span>ui/tasks</span></div>
+    <div class="bezel"><div class="screen">
+      <div class="statusbar"><span>9:41</span><span style="display:flex;gap:4px;align-items:center">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12.55a11 11 0 0 1 14.08 0M1.42 9a16 16 0 0 1 21.16 0M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg>
+        <svg width="13" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="17" height="10" rx="2"/><line x1="22" y1="11" x2="22" y2="13"/></svg>
+      </span></div>
+      <div class="appbar">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m15 18-6-6 6-6"/></svg>
+        <h4>任务</h4>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg>
+      </div>
+      <div class="body">
+        <div class="task">
+          <span class="idx">#1</span>
+          <span class="spin"></span>
+          <div class="txt"><b>把 tools 那一层的 dispatch 拆出来…</b><span>运行中 · 4 分 12 秒</span></div>
+          <span class="stop"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg></span>
+        </div>
+        <div class="task">
+          <span class="idx">#2</span>
+          <span class="badge">第 1 位</span>
+          <div class="txt"><b>顺便把 README 的安装步骤补上</b><span>排队 · 刚发</span></div>
+        </div>
+        <div class="task">
+          <span class="idx">#3</span>
+          <span class="badge">第 2 位</span>
+          <div class="txt"><b>跑一遍全量测试</b><span>排队</span></div>
+        </div>
+        <div class="notice warn">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+          <div><b style="font-weight:600">上一轮没跑完</b><br>10-04 23:12 停在中途。发 /继续 接着来——会先核对现状，不盲目重做</div>
+        </div>
+        <div style="flex:1"></div>
+        <div style="text-align:center;font-size:10px;color:var(--fg4);padding:6px 0 2px">只显示这台电脑的会话</div>
+      </div>
+    </div></div>
+    <div class="spec">
+      <div><b>位次</b><span>每个排队项都标"第 N 位"——不标就无法区分排队与丢失</span></div>
+      <div><b>隔离</b><span>只回本设备的 sid，A 手机列不出 B 的会话名与首行</span></div>
+      <div><b>主动推送</b><span class="no">没有。中断提示挂在这一屏，不弹窗</span></div>
+    </div>
+  </div>
+
+</div>
+
+<hr>
+
+<h3>色板 · 取自 desktop-tauri 暗色主题，不新造</h3>
+<div class="sw-row">
+  <div class="sw"><div class="chip" style="background:#161719"></div><div class="mt"><b>bg-primary</b><span>页 / 对话底</span></div></div>
+  <div class="sw"><div class="chip" style="background:#1d1f22"></div><div class="mt"><b>bg-card</b><span>卡片 / 输入</span></div></div>
+  <div class="sw"><div class="chip" style="background:#24262a"></div><div class="mt"><b>bg-elevated</b><span>用户气泡</span></div></div>
+  <div class="sw"><div class="chip" style="background:#2e3136"></div><div class="mt"><b>border-primary</b><span>描边 / 分隔</span></div></div>
+  <div class="sw"><div class="chip" style="background:#6fae94"></div><div class="mt"><b>accent</b><span>主按钮 · 发送键</span></div></div>
+  <div class="sw"><div class="chip" style="background:#84b383"></div><div class="mt"><b>success</b><span>完成 / 已完成工具</span></div></div>
+  <div class="sw"><div class="chip" style="background:#d3a34c"></div><div class="mt"><b>warning</b><span>在跑 / 倒计时</span></div></div>
+  <div class="sw"><div class="chip" style="background:#e06b52"></div><div class="mt"><b>error</b><span>拒绝 / 超时</span></div></div>
+</div>
+<p style="font-size:11.5px;color:var(--fg3);line-height:1.7;margin-top:14px;max-width:80ch">
+  抬升顺序沿用主题文件里的那一行：<span style="font-family:'JetBrains Mono';font-size:11px">#101113 &lt; #161719(页) &lt; #1d1f22(卡) &lt; #24262a &lt; #2e3136(线)</span>。
+  主题注释里那句「纯灰在暗底上是水泥灰，带 4% 以内的色相偏移才有通透感」是这套看着不脏的原因——
+  所以正文不用纯白（<span style="font-family:'JetBrains Mono';font-size:11px">#ededed</span>），主强调色是青碧提亮而不是亮绿。
+</p>
+
+<hr>
+
+<h3>刻意不做的</h3>
+<div class="omit">
+  <div><b>没有"永久允许"按钮</b><p><code>PairedDevice</code> 对 <code>ApproveAlways</code> 无条件 Denied，scopes 写了也不救。做出来只会"点了静默失败"。持久放行走桌面。</p></div>
+  <div><b>没有主动推送</b><p>完成回执只给跑过 60s 的长任务；中断提示挂在屏 ④。启动时不主动发——那时用户多半不在，只会收到无人认领的消息。</p></div>
+  <div><b>没有数字快捷菜单</b><p>审批回复就是 1/2/3，菜单若也用 1-4 就得靠 pending 计数切换语义。用字母，任何时候都能用，不需要闸门。</p></div>
+  <div><b>/继续 不盲目重发</b><p>取回原文后加一句"请先检查现状，不要假定任何操作都没做过"。原样重发会让上一轮已完成的副作用跑两遍。</p></div>
+  <div><b>轨迹行不用 emoji 图标</b><p>聊天界面里 emoji 图标跟着系统字体走形状，跨设备不一致。全部内联 SVG。</p></div>
+</div>
+
+</div>
+</body>
+</html>

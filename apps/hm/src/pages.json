@@ -1,0 +1,45 @@
+{
+  "pages": [
+    {
+      "path": "pages/pairing/index",
+      "style": {
+        "navigationStyle": "custom",
+        "navigationBarTitleText": "配对"
+      }
+    },
+    {
+      "path": "pages/chat/index",
+      "style": {
+        "navigationStyle": "custom",
+        "navigationBarTitleText": "对话"
+      }
+    },
+    {
+      "path": "pages/call/index",
+      "style": {
+        "navigationStyle": "custom",
+        "navigationBarTitleText": "通话"
+      }
+    },
+    {
+      "path": "pages/approval/index",
+      "style": {
+        "navigationStyle": "custom",
+        "navigationBarTitleText": "审批"
+      }
+    },
+    {
+      "path": "pages/tasks/index",
+      "style": {
+        "navigationStyle": "custom",
+        "navigationBarTitleText": "任务"
+      }
+    }
+  ],
+  "globalStyle": {
+    "navigationStyle": "custom",
+    "backgroundColor": "#161719",
+    "backgroundColorTop": "#101113",
+    "backgroundColorBottom": "#161719"
+  }
+}

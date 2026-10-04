@@ -1,0 +1,32 @@
+/* 设计令牌 —— 逐值取自 desktop-tauri 的暗色主题
+ * （apps/desktop-tauri/src/styles/themes/dark.css）。**不新造一套色**：
+ * 两个端同源，用户看过去是一家人而不是两个产品。
+ *
+ * 抬升顺序沿用主题文件那一行：
+ *   #101113 < #161719(页) < #1d1f22(卡) < #24262a < #2e3136(线)
+ * 主题注释点明了原因：「纯灰在暗底上是水泥灰，带 4% 以内的色相偏移才有
+ * 通透感」——所以这套不是纯中性灰，主文字也不用纯白。
+ */
+$base: #101113; // bg-base
+$paper: #161719; // bg-primary · 页 / 对话底
+$card: #1d1f22; // bg-card
+$raised: #24262a; // bg-elevated
+$line: #2e3136; // border-primary
+$edge: #3f434a; // border-secondary · 控件描边
+
+$fg: #ededed; // text-primary
+$fg2: #9a9ea6; // text-secondary
+$fg3: #7f848c; // text-tertiary
+$fg4: #5f636b; // text-faint
+
+$accent: #6fae94; // accent-base · 青碧提亮
+$on-accent: #14201b; // btn-primary-text
+$ok: #84b383; // success
+$warn: #d3a34c; // warning
+$warn-bg: #332916; // warning-soft
+$err: #e06b52; // error
+$err-bg: #20262b; // error-soft
+
+/* 形状：气泡 15、卡片 12、按钮全圆角。亮/暗跟随系统（这里给暗色）。 */
+$r-bubble: 15px;
+$r-card: 12px;
