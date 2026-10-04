@@ -180,7 +180,7 @@ export function SettingsShell({ onBack, initialPage }: SettingsShellProps) {
             className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[length:var(--text-ui)] text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]"
           >
             <ArrowLeft className="icon-sm" />
-            返回
+            返回工作区
           </button>
           <span className="text-[length:var(--text-ui)] font-medium text-[var(--color-text-primary)]">
             设置
