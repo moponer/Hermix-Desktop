@@ -20,7 +20,6 @@
 //!                     {"op":"del","frn":..}
 //!   done.json:        {"ok":bool,"indexed":N,"snapshot":"snapshot-...jsonl","error":...}
 
-use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -35,9 +34,9 @@ use windows::Win32::Storage::FileSystem::{
 };
 use windows::Win32::System::IO::DeviceIoControl;
 use windows::Win32::System::Ioctl::{
-    FSCTL_ENUM_USN_DATA, FSCTL_READ_USN_JOURNAL, MFT_ENUM_DATA_V0, READ_USN_JOURNAL_DATA_V0,
-    USN_JOURNAL_DATA_V0, USN_RECORD_V2, USN_REASON_FILE_CREATE, USN_REASON_FILE_DELETE,
-    USN_REASON_RENAME_NEW_NAME, USN_REASON_RENAME_OLD_NAME,
+    FSCTL_ENUM_USN_DATA, FSCTL_READ_USN_JOURNAL, MFT_ENUM_DATA_V0, USN_JOURNAL_DATA_V0,
+    USN_RECORD_V2, USN_REASON_FILE_CREATE, USN_REASON_FILE_DELETE, USN_REASON_RENAME_NEW_NAME,
+    USN_REASON_RENAME_OLD_NAME,
 };
 
 /// NTFS 前 16 个 FRN 是元文件（$MFT/$Volume/根目录等），不进索引。
@@ -87,7 +86,6 @@ const FSCTL_GET_USN_JOURNAL: u32 = 0x0009_00F4;
 
 /// 一个卷的监听状态。
 struct WatchState {
-    volume: String,
     handle: HANDLE,
     journal_id: u64,
     next_usn: i64,
@@ -172,7 +170,6 @@ fn open_watch(volume: &str) -> Option<WatchState> {
         }
     }
     Some(WatchState {
-        volume: volume.to_string(),
         handle: h,
         journal_id: jd.UsnJournalID,
         next_usn: jd.NextUsn,
@@ -282,8 +279,6 @@ fn poll_usn(st: &mut WatchState, out: &mut Vec<String>) -> bool {
 
 /// 枚举一个 NTFS 卷的 MFT，把原始记录写入 out。返回记录数。
 fn index_volume(volume: &str, out: &mut BufWriter<File>) -> Result<usize, String> {
-    use windows::Win32::System::Ioctl::FSCTL_ENUM_USN_DATA;
-
     let h = open_volume(volume).map_err(|e| format!("open {volume}: {e}"))?;
     let med = MFT_ENUM_DATA_V0 {
         StartFileReferenceNumber: 0,
