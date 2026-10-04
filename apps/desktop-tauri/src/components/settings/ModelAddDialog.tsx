@@ -15,7 +15,7 @@ import { useCallback, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { X, ChevronLeft, Loader2, CheckCircle2, AlertCircle } from "lucide-react";
 import * as api from "../../api";
-import { PROVIDERS, type ProviderDef } from "./settingsUtils";
+import { PROVIDERS, catalogMismatchNote, type ProviderDef } from "./settingsUtils";
 import { ProviderIcon } from "../ProviderIcon";
 
 type Choice =
@@ -415,11 +415,11 @@ function TestResult({ r }: { r: api.InlineTestResponse }) {
         {r.model_found === false && (
           /* 「模型名」指的是**厂商 /v1/models 那份目录**，不是本应用的模型清单
              —— 原措辞「但列表里没找到这个模型名」指代不清，读起来像在说
-             「你配的这个模型不存在」。这里点명来源，并说清它不影响使用：
-             不少厂商的 /v1/models 只列了一部分模型，预览版常常不在其中，
-             而实际调用仍能成功。 */
+             「你配的这个模型不存在」。这里点明来源，并把后端拿回来的目录原样
+             摊开：用户据此能自己分辨「名字写错了」还是「端点不对」，而这正是
+             拿平台侧模型 id 去问厂商 API 时最常见的两种情况。 */
           <span className="text-text-faint">
-            （厂商 /v1/models 目录里没列这个模型名，不影响使用）
+            {catalogMismatchNote(r.models)}
           </span>
         )}
       </span>

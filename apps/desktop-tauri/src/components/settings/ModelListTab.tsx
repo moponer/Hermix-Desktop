@@ -16,7 +16,7 @@ import * as api from "../../api";
 import { storage, STORAGE_KEYS } from "../../utils/storageCompat";
 import { ProviderIcon } from "../ProviderIcon";
 import { ModelAddDialog, type EditingTarget } from "./ModelAddDialog";
-import { PROVIDERS } from "./settingsUtils";
+import { PROVIDERS, catalogMismatchNote } from "./settingsUtils";
 import type { CustomProviderSummary } from "../../api";
 
 interface ModelRow {
@@ -42,6 +42,8 @@ function inlineErrorText(r: api.InlineTestResponse): string {
     default: return `服务端返回 ${r.status}`;
   }
 }
+
+/** `model_found === false` 时的说明，文案与共用实现见 settingsUtils。 */
 
 export function ModelListTab() {
   const [rows, setRows] = useState<ModelRow[]>([]);
@@ -171,7 +173,7 @@ export function ModelListTab() {
         setTestNote((n) => ({
           ...n,
           [row.id]: r.ok
-            ? `连接正常 · ${r.latency_ms} ms${r.model_found === false ? " · 厂商 /v1/models 目录未列此模型（不影响使用）" : ""}`
+            ? `连接正常 · ${r.latency_ms} ms${r.model_found === false ? catalogMismatchNote(r.models) : ""}`
             : `失败：${inlineErrorText(r)}`,
         }));
       } else {

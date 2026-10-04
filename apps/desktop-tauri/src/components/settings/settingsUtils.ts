@@ -255,3 +255,22 @@ export interface PythonProbeResult {
   entries: PythonProbeEntry[];
   selected: string | null;
 }
+
+/** `model_found === false` 时的说明文案（列表行与添加/编辑弹窗共用）。
+ *
+ *  放在这里而不是任一组件里：ModelListTab 依赖 ModelAddDialog，反向再从
+ *  ModelListTab 取东西会形成循环导入。
+ *
+ *  只说「不在列表里」用户没法自查 —— 他会怀疑是检测坏了，而真相往往是
+ *  「厂商目录里根本没有这个名字」（拿平台侧的模型 id 去问厂商 API 很常见，
+ *  比如把 MCode 里的 `minimax/MiniMax-M3.1-Flash-Preview` 填进 hermix 的
+ *  MiniMax 供应商）。后端本来就把 /models 返回的原始 id 带回来了，直接摊开
+ *  给他看，一眼就能分辨是名字不对还是端点不对。厂商目录通常只有几条到十几条，
+ *  摊开不占地方。 */
+export function catalogMismatchNote(models: string[] | null | undefined): string {
+  const got = models ?? [];
+  if (got.length === 0) return " · 厂商 /v1/models 目录未列此模型（不影响使用）";
+  const shown = got.slice(0, 6).join("、");
+  const more = got.length > 6 ? ` 等 ${got.length} 个` : "";
+  return ` · 厂商 /v1/models 目录未列此模型，实际返回：${shown}${more}`;
+}
