@@ -89,14 +89,24 @@
 }
 
 /* 左列关闭 → track 归零, 主列吃满左半边空间. */
-.app-body[data-left-open="false"] {
+.app-shell[data-left-open="false"] {
   --col-left: 0px;
 }
 
 /* 右列关闭 → track 归零, 主列吃满右半边空间. */
-.app-body[data-right-open="false"] {
+.app-shell[data-right-open="false"] {
   --col-right: 0px;
 }
+
+/* --col-left / --col-right 的定义挂在 .app-body 上（见 §1）。标题栏要用同一组
+   值做三栏对齐，而 CSS 变量不往上继承 —— 所以这里显式从 .app-body 复制一份给
+   .titlebar 读。两侧必须同步改，否则标题栏分栏会与下方列错位。 */
+.titlebar {
+  --col-left: minmax(0, var(--ab-left-w, 200px));
+  --col-right: minmax(0, var(--ab-right-w, 640px));
+}
+.app-shell[data-left-open="false"] .titlebar { --col-left: 0px; }
+.app-shell[data-right-open="false"] .titlebar { --col-right: 0px; }
 
 .pane {
   display: flex;
@@ -143,10 +153,18 @@
   background-position: center;
   background-repeat: no-repeat;
 }
+/* 中栏 = 一张「纸」卡片：白底 + 四角圆角，浮在 .app-body 的案面（灰）上。
+   此前只有上两角圆角 + 与右栏共用一条 1px 分隔线，两栏读起来像「一张表格被
+   切开」，而不是两块可以各自滚动的内容。现在底边也留出 8px 案面，右栏同理
+   从左侧留 8px —— 中栏与右栏之间因此是「两张并排的卡片」而非一条线。
+
+   为什么顶部不内缩：标题栏就在 .app-body 正上方，内容贴住标题栏下沿才连成
+   一条完整的水平带（参考界面也是这样）；卡片感由侧边与底边的案面 + 圆角给出。 */
 .pane-main {
   flex: 1;
-  border-top-left-radius: 12px;
-  border-top-right-radius: 12px;
+  border-radius: 12px;
+  margin-bottom: 8px;
+  overflow: hidden;
 }
 
 .pane-resizer {
@@ -178,7 +196,22 @@
   background: var(--theme-bg-titlebar, var(--color-bg-secondary));
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
-  display: flex;
+  /* 三栏网格，与下方 .app-body 的三列共用同一组列宽变量 —— 标题栏里每一栏的
+     边界都对齐到正下方那一列的边界，而不是「左一点 / 右一点」。这是与参考
+     界面的核心差异：那边标题栏横跨整窗并按列分栏，我们此前是「品牌 + 弹性
+     空白 + 窗口按钮」，中栏没有任何东西，视觉上三栏根本不存在。
+
+     两端的 max() 是下限保护：
+     - 左：侧栏折叠时 --col-left 归零，但品牌不能跟着消失，保底 104px（logo+
+       文字约 96，留 8px 余量）。
+     - 右：右栏收起时 --col-right 归零，但三颗窗口按钮共 120px 必须有地方放。
+     窗口按钮因此在两种状态下都停在窗口最右侧（基准相同），变化的只有中栏
+     标题的可用宽度 —— 这正是期望的行为。 */
+  display: grid;
+  grid-template-columns:
+    max(var(--col-left), 104px)
+    minmax(0, 1fr)
+    max(var(--col-right), 120px);
   align-items: center;
   height: 40px;
   position: relative;
@@ -189,6 +222,29 @@
   /* 不设 overflow:hidden — 让 titlebar 内下拉（如 ThemeToggle）能向下溢出显示 */
 }
 
+.titlebar-zone {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  height: 100%;
+}
+.titlebar-zone--left { gap: 7px; padding-left: 10px; }
+.titlebar-zone--center { gap: 6px; padding: 0 12px; }
+.titlebar-zone--right { justify-content: flex-end; }
+
+/* 中栏标题：单行省略。不用 JS 硬截断 —— 省略号由 CSS 按**实际可用宽度**
+   决定，标题栏宽度会随三栏开关变化，硬编码 80 字在窄栏下会提前吃掉省略。 */
+.titlebar-doc {
+  font-size: var(--text-ui);
+  font-weight: 600;
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.titlebar-doc-icon { color: var(--color-text-muted); flex-shrink: 0; }
+
 .titlebar-brand {
   display: flex;
   align-items: center;
@@ -197,6 +253,7 @@
   padding-left: 10px;
   user-select: none;
 }
+.titlebar-brand .titlebar-title { pointer-events: none; }
 .titlebar-logo {
   /* 22px 略大于 20px：与新 SVG 圆角 + 狐狸头比例更协调 */
   width: 22px;

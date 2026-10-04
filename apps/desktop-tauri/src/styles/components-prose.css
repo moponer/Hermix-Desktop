@@ -363,71 +363,62 @@
    2. 计数用等宽 chip，颜色沿用过程行那对 success / error。整个界面的
       「+N −M」是同一套符号（`.process-line-stat--add/del` 同源）。
    3. 左侧轨用 accent 色：它标的是「这一轮动过东西」这个事实，不是错误。
-      错误色留给过程行里真正失败的那些。 */
+      错误色留给过程行里真正失败的那些。
+
+   ⚠ 2026-10-04 推翻第 1 条（见 .fcx 上方的重做说明）：无描边 + 灰 slab 实际
+      渲染出来是一坨灰块，与正文呼吸感脱节。改为描边 + 纸面底。第 2、3 条
+      （等宽 +N −M 计数、类型语义）保留。 */
 
 .fcx {
   position: relative;
   border-radius: var(--radius-md);
-  background: var(--color-bg-tertiary);
-  padding: 2px 4px;
+  /* 描边 + 纸面底：文件变更清单是这一轮的**独立结论**（区别于过程正文），
+     值得一圈 1px 细边。这与 .modal / 预览卡是同一套语言。原先「描边就在
+     宣告这是内容」的反对理由在这里不成立 —— 它就是内容。 */
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border-primary);
   overflow: hidden;
 }
-.fcx::before {
-  content: "";
-  position: absolute;
-  inset: 0 auto 0 0;
-  width: 2px;
-  background: var(--color-accent);
-  opacity: 0;
-  transition: opacity var(--duration-fast) ease;
-}
-.fcx:hover::before,
-.fcx:focus-within::before,
-.fcx[data-open="true"]::before { opacity: 0.55; }
+.fcx[data-open="true"] { border-color: var(--color-border-secondary); }
 
 .fcx-head {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   width: 100%;
-  padding: 4px 6px;
+  padding: 7px 10px;
   border: 0;
   background: transparent;
   font: inherit;
-  color: var(--color-text-secondary);
+  color: var(--color-text-primary);
   text-align: left;
   cursor: pointer;
-  border-radius: var(--radius-sm);
+  border-radius: 0;
   min-width: 0;
+  transition: background var(--duration-fast) ease;
 }
-.fcx-head:hover { color: var(--color-text-primary); }
+.fcx-head:hover { background: var(--color-bg-tertiary); }
 .fcx-head:focus-visible {
   outline: 2px solid var(--color-border);
-  outline-offset: 1px;
+  outline-offset: -2px;
 }
 .fcx-head-text {
   display: flex;
   align-items: baseline;
   gap: 8px;
+  flex: 1 1 auto;
   min-width: 0;
-  font-size: var(--text-meta, 12px);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.fcx-toggle {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  flex: none;
-  font-size: var(--text-meta, 12px);
-  color: var(--color-text-tertiary);
-}
-.fcx-head:hover .fcx-toggle { color: var(--color-accent); }
-/* 展开时箭头朝上：标准 disclosure 语义，不靠文案说明 */
-.fcx-chev { transition: transform var(--duration-fast) ease; }
-.fcx[data-open="true"] .fcx-chev { transform: rotate(180deg); }
+/* 「N 个文件已更改」—— 主语先行。用户扫这一行要的第一件事是有几个文件被动过，
+   不是新增/修改/删除各几个；类型分布降级到展开后每行的图标上。 */
+.fcx-title { font-size: var(--text-ui); font-weight: 600; }
+/* disclosure 交给左端 chevron 承担，右端只留统计数。原先右端是「查看文件 ›」
+   文字 + 箭头：既要读文字又要看出能点，信息重复。 */
+.fcx-chev { color: var(--color-text-muted); flex: none; transition: transform var(--duration-fast) ease; }
+.fcx[data-open="true"] .fcx-chev { transform: rotate(90deg); }
 
 /* ── 增删行数 chip ── */
 .fcx-stats {
@@ -447,33 +438,36 @@
 /* ── 展开后的文件清单 ── */
 .fcx-list {
   list-style: none;
-  margin: 0 0 2px;
-  padding: 0 0 0 2px;
+  margin: 0;
+  padding: 0;
   display: flex;
   flex-direction: column;
-  /* 与 .tl-tools-list 同一条起排线：清单是逐行的过程内容，不是卡片 */
-  gap: 1px;
+  /* 清单与标题行之间一条发丝线：让「标题 / 明细」两层结构在视觉上分开，
+     取代原先靠 1px 间隙硬凑的排布。 */
+  border-top: 1px solid var(--color-border-subtle);
 }
 .fcx-list li { margin: 0; padding: 0; }
+.fcx-list li + li { border-top: 1px solid var(--color-border-subtle); }
 .fcx-row {
   display: flex;
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 3px 6px;
+  padding: 6px 10px;
   border: 0;
   background: transparent;
   font: inherit;
   color: inherit;
   text-align: left;
   cursor: pointer;
-  border-radius: var(--radius-sm);
+  border-radius: 0;
   min-width: 0;
+  transition: background var(--duration-fast) ease;
 }
-.fcx-row:hover { background: color-mix(in srgb, var(--color-text-primary) 5%, transparent); }
+.fcx-row:hover { background: var(--color-bg-tertiary); }
 .fcx-row:focus-visible {
   outline: 2px solid var(--color-border);
-  outline-offset: -1px;
+  outline-offset: -2px;
 }
 .fcx-kind {
   display: inline-flex;
@@ -483,20 +477,31 @@
 }
 .fcx-kind[data-kind="created"] { color: var(--color-success); }
 .fcx-kind[data-kind="deleted"] { color: var(--color-error); }
-.fcx-path {
+/* 行内：文件名（主）+ 目录（次）+ 统计。文件名用正文字体而非等宽 —— 它是这行
+   的主语，等宽会把它读成「一段路径」；目录才用等宽小字，两者拉开层次。 */
+.fcx-name {
+  flex: 0 1 auto;
   min-width: 0;
-  flex: 1 1 auto;
-  font-family: var(--font-mono);
-  font-size: var(--text-meta, 12px);
+  color: var(--color-text-primary);
+  font-size: var(--text-ui);
+  font-weight: 500;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  /* 目录过长由 JS 按段数截断（见 FileChangeSummary.splitPath），
-     这里的 ellipsis 只是最后一道兜底。刻意不用 direction:rtl 截断 ——
-     路径里混 `\` `:` 数字时那招的渲染结果不稳定。 */
 }
-.fcx-dir { color: var(--color-text-faint); }
-.fcx-name { color: var(--color-text-primary); }
+.fcx-dir {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--color-text-faint);
+  font-family: var(--font-mono);
+  font-size: var(--text-tiny, 11px);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* 目录过长由 JS 按段数截断（见 FileChangeSummary.splitPath），这里的 ellipsis
+     只是最后一道兜底。刻意不用 direction:rtl 截断 —— 路径里混 `\` `:` 数字
+     时那招的渲染结果不稳定。 */
+}
 
 
 /* ── Inline path link (assistant prose) ──────────────────────

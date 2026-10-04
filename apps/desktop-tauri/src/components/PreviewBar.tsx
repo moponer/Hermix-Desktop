@@ -116,7 +116,9 @@ export function PreviewBar({
 
   return (
     <aside
-      className="flex h-full flex-col flex-1 overflow-hidden"
+      /* 卡片化：外层 div 已留出左侧 8px 案面缝与底部 8px，这里给面板自己
+         圆角 + 溢出裁剪，两栏因此读作并列的两张卡而不是一条线切开的两半。 */
+      className="flex h-full flex-col flex-1 overflow-hidden rounded-xl"
       style={{ background: "var(--color-bg-primary)" }}
     >
       <div className="preview-bar__strip" role="tablist" aria-label="侧栏标签">

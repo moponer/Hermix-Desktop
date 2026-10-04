@@ -1,28 +1,29 @@
-// 本轮文件变更汇总条 —— 轮次尾部的「这一轮动了哪些文件」。
+// 本轮文件变更汇总卡 —— 轮次尾部的「这一轮动了哪些文件」。
 //
 // 2026-10-02 升级自原来的 `FileChangeBlock`（一个「文件变更（N个）」+ 文件名
 // 列表的静态块）。原版的问题：没有增删行数、不能一眼看出改了什么类型的
 // 改动、路径一长就被截断看不出是哪个文件。
 //
-// 视觉刻意不照抄参考界面。参考那张卡是「圆角描边卡片 + 灰色方块图标 +
-// 文件类型图标 + 纯文字链接」，我们这套的取向不同：
+// 2026-10-04 再改。对照参考界面后调整了两处**信息层级**（样式在
+// components-prose.css 的 .fcx 段）：
 //
-//  1. **无描边卡片**。项目 2026-10-01 起就在拆「卡片外壳」——边框本身就在
-//     宣告「这是内容」。这里用 `--color-bg-tertiary` 铺底 + hover 时才出现
-//     的 2px 左侧强调轨，和过程行（`.process-line`）同一套语言。
-//  2. **图标说的是「发生了什么」而不是「这是什么类型的文件」**。参考界面
-//     那个蓝色 React/TS 图标在 `.css` / `.md` 上就是错的（后缀已经写在路径
-//     里了），而「新增 / 修改 / 删除 / 重命名」是用户真正要一眼扫到的信息。
-//  3. **计数用等宽小 chip**，颜色沿用过程行已有的 success / error 两档，
-//     整个界面的「+N −M」是同一套符号。
-//  4. **折叠是标准 disclosure**（旋转的 chevron + 文案），不是裸文字链接 ——
-//     点之前能看出这是个可展开的东西。
+//  1. **标题主语换成「N 个文件已更改」**。此前标题是「新增 1 · 修改 2」这类
+//     类型分布 —— 扫这一行时用户最先要的是「几个文件被动过」，类型分布是
+//     展开后逐行才需要的细节。原先放在标题行是信息排错了位置。
+//  2. **行内顺序换成「文件名 → 目录」**。文件名才是扫列表时真正要找的东西，
+//     此前目录排在前面，长路径会把文件名挤出视野。
+//
+// 两处都保留的既有决定：
+//  - 图标说的是「发生了什么」（新增/修改/删除/重命名）而不是「什么类型的
+//    文件」—— 后缀已经写在路径里了。
+//  - 增删行数用等宽数字，沿用过程行的 success / 灰两档。
+//  - 折叠是标准 disclosure（左端旋转 chevron），不靠文字说明能不能点。
 //
 // ⚠ 增删行数的诚实性：来自 `utils/lineStats`，按工具**入参**估算，不是对
 // 磁盘的真 diff（patch 替换多次时真实删除是 N 倍，估算值偏小）。tooltip 里
 // 写明了这一点。匹配不到写工具时**不显示这一列**，不显示假的 0。
 import { useMemo, useState, type MouseEvent as ReactMouseEvent } from "react";
-import { ChevronDown, FilePlus2, FilePen, FileX2, FileDiff } from "lucide-react";
+import { ChevronRight, FilePlus2, FilePen, FileX2, FileDiff } from "lucide-react";
 import type { FileChangeEntry } from "./messageParser";
 
 /** 变更类型 → 图标 + 文案。图标说的是「发生了什么」。 */
@@ -87,17 +88,6 @@ export function FileChangeSummary({
   if (changes.length === 0) return null;
 
   const n = changes.length;
-  // 按类型分别列，**跳过 0 项**：原先写成「新增 x · 删除 y · 修改 n-x-y」
-  // 会把「重命名」悄悄算进「修改」—— 用户扫这一行就是为了知道动了什么，
-  // 口径含糊等于没说清。现在四项各归各的，为 0 就不出现。
-  const byKind = (k: FileChangeEntry["changeType"]) =>
-    changes.filter((c) => c.changeType === k).length;
-  const terms: string[] = [];
-  if (byKind("created")) terms.push(`新增 ${byKind("created")}`);
-  if (byKind("modified")) terms.push(`修改 ${byKind("modified")}`);
-  if (byKind("deleted")) terms.push(`删除 ${byKind("deleted")}`);
-  if (byKind("renamed")) terms.push(`重命名 ${byKind("renamed")}`);
-  const headline = terms.length > 0 ? terms.join(" · ") : `本轮改了 ${n} 个文件`;
 
   return (
     <div className={`fcx ${className ?? ""}`} data-open={open ? "true" : "false"}>
@@ -108,18 +98,15 @@ export function FileChangeSummary({
         aria-expanded={open}
         title={open ? "收起文件清单" : "展开本轮改动的文件清单"}
       >
+        <ChevronRight className="icon-sm fcx-chev" aria-hidden="true" />
         <span className="fcx-head-text">
-          {headline}
+          <span className="fcx-title">{n} 个文件已更改</span>
           {total.known && (
             <span className="fcx-stats" title={STATS_TITLE}>
               {total.added > 0 && <span className="fcx-stat fcx-stat--add">+{total.added}</span>}
               {total.removed > 0 && <span className="fcx-stat fcx-stat--del">−{total.removed}</span>}
             </span>
           )}
-        </span>
-        <span className="fcx-toggle">
-          {open ? "收起文件" : "查看文件"}
-          <ChevronDown className="icon-sm fcx-chev" />
         </span>
       </button>
 
@@ -134,17 +121,16 @@ export function FileChangeSummary({
                 <button
                   type="button"
                   className="fcx-row"
-                  title={c.path}
+                  title={`${label}：${c.path}`}
                   onClick={(e) => onPathClick?.(c.path, e)}
                 >
                   <span className="fcx-kind" data-kind={c.changeType} title={label}>
                     <KindIcon className="icon-sm" aria-hidden="true" />
                     <span className="sr-only">{label}</span>
                   </span>
-                  <span className="fcx-path">
-                    {dir && <span className="fcx-dir">{dir}</span>}
-                    <span className="fcx-name">{name}</span>
-                  </span>
+                  {/* 文件名在前：扫列表时找的是文件名，长目录不该把它顶出视野 */}
+                  <span className="fcx-name">{name}</span>
+                  {dir && <span className="fcx-dir">{dir}</span>}
                   {hasStats && (
                     <span className="fcx-stats" title={STATS_TITLE}>
                       {c.added != null && c.added > 0 && (

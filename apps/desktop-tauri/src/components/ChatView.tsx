@@ -50,9 +50,15 @@ import { getAvailableTools, updateSessionMetadata, warmUpProvider, type ToolDesc
 import { storage, STORAGE_KEYS } from "../utils/storageCompat";
 import { compressImage, skipCompression, type CompressResult } from "../utils/imageCompressor";
 
-// ── ModelStatusBar — top-of-chat status strip ─────────
+// ── ModelStatusBar — 聊天列头部的动作行 ─────────────────────
+//
+// 2026-10-04：会话标题**上提到标题栏中栏**（标题栏已改成与三列对齐的网格：
+// 左栏品牌 / 中栏标题 / 右栏窗口按钮）。本行此前也渲染标题，等于同一句话说
+// 两遍；现在单一出口在标题栏，本行只剩动作按钮与 IM 远程徽标。
+//
+// 渲染条件随之上调为「有任一动作才渲染」：侧栏展开、右栏也开着、又没有 IM
+// 徽标时整行消失，聊天区直接顶到标题栏下沿，把这 40px 让给内容。
 function ModelStatusBar({
-  title,
   imSource,
   rightOpen,
   onToggleRight,
@@ -60,7 +66,6 @@ function ModelStatusBar({
   onExpandSidebar,
   onOpenSearch,
 }: {
-  title?: string;
   /** IM 远程会话的来源平台（QQ / 企业微信）—— 从那边发起的对话在头部标出来。 */
   imSource?: "qq" | "wecom" | null;
   rightOpen?: boolean;
@@ -72,12 +77,10 @@ function ModelStatusBar({
   // 通道状态（机器人名 + 网关连接）。hook 必须在下方提前 return 之前调用。
   const channels = useChannelsStatus();
   const imChannel = imSource ? channels?.find((c) => c.platform === imSource) : undefined;
-  // 侧栏折叠时，展开 + 搜索按钮直接嵌在本行标题左侧（用户拍板：与对话标题
-  // 同一行，不另起浮层）。折叠但会话尚无标题（title 未生成）时也必须渲染
-  // 本行 —— 否则展开入口随侧栏一起消失，用户再也打不开侧栏。
+  // 侧栏折叠时，展开 + 搜索按钮嵌在本行左侧（用户拍板：与对话标题同一行，
+  // 不另起浮层）。折叠但本行无任何可显示内容时也必须渲染 —— 否则展开入口
+  // 随侧栏一起消失，用户再也打不开侧栏。
   const showLeftActions = !!sidebarCollapsed && !!onExpandSidebar;
-  if (!title && !showLeftActions) return null;
-  const displayTitle = title && title.length > 80 ? title.slice(0, 77) + "…" : title;
   const imLabel = imSource
     ? `${IM_SOURCE_LABEL[imSource]}${imChannel?.name ? ` · ${imChannel.name}` : ""}`
     : null;
@@ -87,6 +90,7 @@ function ModelStatusBar({
       : `通道未连接${imChannel.detail ? `：${imChannel.detail}` : ""}`
     : "这条对话是从 IM 发起并远程驱动的";
   const showRightToggle = !!onToggleRight && !rightOpen;
+  if (!showLeftActions && !imLabel && !showRightToggle) return null;
   // h-10：与 .sidebar-head、右栏标签条同高（三段头部是一条 40px 水平带，
   // 各列不再各飞各的基线）。
   return (
@@ -129,22 +133,10 @@ function ModelStatusBar({
           {imLabel} 远程
         </span>
       )}
-      {displayTitle && (
-        <span
-          className="truncate flex-1 min-w-0"
-          style={{
-            fontSize: "14px",
-            fontWeight: 600,
-            letterSpacing: "-0.005em",
-          }}
-        >
-          {displayTitle}
-        </span>
-      )}
       {showRightToggle && (
         <button
           onClick={onToggleRight}
-          className={`titlebar-btn${displayTitle ? "" : " ml-auto"}`}
+          className="titlebar-btn ml-auto"
           title={rightOpen ? "关闭产物栏" : "打开产物栏"}
           aria-label="切换产物栏"
           data-right-open={rightOpen ? "true" : "false"}
@@ -980,10 +972,10 @@ export const ChatView = memo(function ChatView({
   return (
     <div className="chat-surface flex-1 flex flex-col overflow-hidden min-h-0">
       {/* 工作台对话不渲染状态条：浮窗标题栏已经顶着工作台名，这里再出一行
-          会话标题 + 产物栏图标就是双层标题，且产物栏在工作台语境下无意义。 */}
+          产物栏图标就是重复动作，且产物栏在工作台语境下无意义。
+          会话标题本身在 2026-10-04 已上提到主窗口标题栏中栏。 */}
       {!isWorkbenchChat && (
         <ModelStatusBar
-          title={session?.title}
           imSource={imSourceOf(session?.id)}
           rightOpen={rightOpen}
           onToggleRight={onToggleRight}

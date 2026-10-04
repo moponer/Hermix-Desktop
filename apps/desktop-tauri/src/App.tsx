@@ -3447,8 +3447,21 @@ return {
         同一份状态）。只负责把 CSS 变量与 data 属性写进 documentElement，
         真正消费在 components-layout.css 的 [data-wallpaper="on"]。 */}
     <WallpaperHost />
-    <div className="app-shell">
-      <TitleBar />
+    <div
+      className="app-shell"
+      /* 三栏布局的列宽变量与开合状态挂在**壳**上而不是 .app-body：标题栏要
+         用同一组值做三栏对齐（见 components-layout.css 的 .titlebar 段），
+         而 CSS 变量不往上继承，只能让两者从共同的父级各自取一份。 */
+      data-left-open={sidebarVisible ? "true" : "false"}
+      data-right-open={rightOpen ? "true" : "false"}
+      style={{
+        "--ab-left-w": `${left.width}px`,
+        "--ab-right-w": rightOpen ? `${right.width}px` : "0px",
+        "--pane-main-min": `${mainMinWidth}px`,
+        "--left-min": `${leftMin}px`,
+      } as React.CSSProperties}
+    >
+      <TitleBar title={page === "chat" ? activeSession?.title : undefined} />
       <SessionPickerDialog
         open={searchOpen}
         sessions={chatSessions}
@@ -3488,14 +3501,6 @@ return {
       })()}
       <div
         className="app-body"
-        data-left-open={sidebarVisible ? "true" : "false"}
-        data-right-open={rightOpen ? "true" : "false"}
-        style={{
-          "--ab-left-w": `${left.width}px`,
-          "--ab-right-w": rightOpen ? `${right.width}px` : "0px",
-          "--pane-main-min": `${mainMinWidth}px`,
-          "--left-min": `${leftMin}px`,
-        } as React.CSSProperties}
       >
         {sidebarVisible && <div className="pane-overlay md:hidden" onClick={() => setSidebarOpen(false)} />}
 
@@ -3565,9 +3570,12 @@ return {
             never squeezed — it gets all remaining space after fixed columns. */}
         {/* Right sidebar — grid column 3. 常挂载 + display:none 隐藏：关闭只是
             收起（列宽 0），不卸载组件树 —— 否则每次重开都全量重挂、ComputerTab
-            重新拉目录，表现为「切换/关闭卡」。 */}
+            重新拉目录，表现为「切换/关闭卡」。
+            左侧 8px 内缩是「案」面露出来的缝：主列与本列因此读作两张并排卡片，
+            而非一条 1px 线切开的两半（见 components-layout.css 的 .pane-main
+            注释）。顶部不内缩 —— 标签条要紧贴标题栏下沿，连成一条水平带。 */}
         <div
-          className="h-full flex border-l border-border-subtle overflow-hidden min-w-0 min-h-0"
+          className="h-full flex overflow-hidden min-w-0 min-h-0 pl-2 pb-2"
           style={rightOpen ? undefined : { display: "none" }}
         >
           <div
