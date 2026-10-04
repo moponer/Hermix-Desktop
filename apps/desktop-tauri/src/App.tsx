@@ -67,6 +67,9 @@ import { applyScale, readScale, UI_SCALE_EVENT } from "./utils/uiScale";
 
 const LEFT_KEY = STORAGE_KEYS.sidebarWidth;
 
+/** 后台 run 活动计数轮询间隔。保活信号丢一次无害，取值偏保守。 */
+const KEEP_AWAKE_POLL_MS = 10_000;
+
 const RIGHT_KEY = STORAGE_KEYS.rightWidth;
 const RIGHT_OPEN_KEY = STORAGE_KEYS.rightOpen;
 const ACTIVE_SESSION_KEY = STORAGE_KEYS.activeSession;
@@ -552,20 +555,46 @@ setPage("chat");
   const isStreamingActiveSession =
     streamingSessionId !== null && streamingSessionId === activeSessionId;
 
-  // 「运行会话时保持电脑唤醒」（自动化页开关 × 会话流式状态）：两处输入
-  // 任一变化都重算；开关关闭也发一次 off，状态不会卡在唤醒上。
+  // 「Hermix 有任务在跑时保持电脑唤醒」（自动化页开关 × 两路活动信号）。
+  //
+  // 两路信号都要计入，且**不能互相顶掉**：
+  //   - 会话流式：用户正在对话里等结果；
+  //   - 后台 run：定时任务到点在跑，此刻没有任何 UI 会话在流式。
+  // 早期实现只看 streamingSessionId，于是笔记本合盖/休眠会让到点任务
+  // 错过执行窗口——而定时任务恰恰是最需要保活的场景（无人盯着）。
+  //
+  // 合并而非择一：流式结束但后台任务仍在跑时必须继续保持唤醒，因此
+  // 条件是逻辑或，释放条件是两个信号同时为假。
+  const [activeRuns, setActiveRuns] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    // 立即取一次，随后按固定间隔轮询。轮询而非 WS 推送：后端
+    // AutomationTriggered 事件当前没有前端消费者，且保活信号丢一次
+    // 无害（下次 tick 自愈），不值得为它新建一条 WS 消息类型。
+    const tick = async () => {
+      const n = await api.getActiveAutomationRuns();
+      if (!cancelled) setActiveRuns(n);
+    };
+    void tick();
+    const timer = window.setInterval(() => void tick(), KEEP_AWAKE_POLL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
+
   useEffect(() => {
     const apply = () => {
       let enabled = false;
       try {
         enabled = storage.getItem(STORAGE_KEYS.keepAwake) === "true";
       } catch {}
-      setKeepAwake(enabled && streamingSessionId !== null);
-    };
+      setKeepAwake(enabled && (streamingSessionId !== null || activeRuns > 0));    };
     apply();
     window.addEventListener(KEEP_AWAKE_CHANGED_EVENT, apply);
     return () => window.removeEventListener(KEEP_AWAKE_CHANGED_EVENT, apply);
-  }, [streamingSessionId]);
+  }, [streamingSessionId, activeRuns]);
 
   /**
    * Most recent stream error, scoped to the active session.  Set when

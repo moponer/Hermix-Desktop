@@ -336,6 +336,24 @@ impl AutomationRepository {
         }
         Ok(runs)
     }
+
+    /// Count runs currently in flight (started but not finished).
+    ///
+    /// "In flight" is derived, not a stored flag: a run row is created with
+    /// `status = "running"` and `finished_at = NULL`, and `update_run` fills
+    /// `finished_at` on completion. Counting on `finished_at IS NULL` alone
+    /// would also match rows written by a future migration that forgot the
+    /// status, so both halves of the invariant are checked.
+    pub fn count_active_runs(&self) -> Result<u64, AutomationRepositoryError> {
+        let conn = open_with_wal(&self.db_path)?;
+        let n = conn.query_row(
+            "SELECT COUNT(*) FROM automation_runs
+             WHERE status = 'running' AND finished_at IS NULL",
+            [],
+            |row| row.get::<_, i64>(0),
+        )?;
+        Ok(n.max(0) as u64)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -577,5 +595,69 @@ mod tests {
         assert_eq!(runs[0].status, "success");
         assert_eq!(runs[0].task_id.as_deref(), Some("task-456"));
         assert_eq!(runs[0].finished_at, Some(finished_at));
+    }
+
+    #[test]
+    fn test_count_active_runs_tracks_in_flight_only() {
+        let (repo, _tmp) = repo();
+        let auto = make_automation("Nightly");
+        repo.create(&auto).unwrap();
+        assert_eq!(repo.count_active_runs().unwrap(), 0);
+
+        let running = AutomationRun {
+            id: uuid::Uuid::new_v4().to_string(),
+            automation_id: auto.id.clone(),
+            started_at: chrono::Utc::now().timestamp_millis(),
+            finished_at: None,
+            status: "running".to_string(),
+            task_id: None,
+            error_text: None,
+        };
+        repo.create_run(&running).unwrap();
+        assert_eq!(repo.count_active_runs().unwrap(), 1);
+
+        // A second concurrent run must not be shadowed by the first.
+        let also_running = AutomationRun {
+            id: uuid::Uuid::new_v4().to_string(),
+            automation_id: auto.id.clone(),
+            started_at: chrono::Utc::now().timestamp_millis(),
+            finished_at: None,
+            status: "running".to_string(),
+            task_id: None,
+            error_text: None,
+        };
+        repo.create_run(&also_running).unwrap();
+        assert_eq!(repo.count_active_runs().unwrap(), 2);
+
+        let finished_at = chrono::Utc::now().timestamp_millis();
+        repo.update_run(&running.id, finished_at, "success", None, None)
+            .unwrap();
+        assert_eq!(repo.count_active_runs().unwrap(), 1);
+
+        // A failed run is still finished — it must not keep the machine awake.
+        repo.update_run(&also_running.id, finished_at, "failed", None, Some("boom"))
+            .unwrap();
+        assert_eq!(repo.count_active_runs().unwrap(), 0);
+    }
+
+    #[test]
+    fn test_count_active_runs_ignores_finished_at_without_running_status() {
+        // Guards the "both halves of the invariant" rule: a row that has a
+        // finished_at but was never marked running (partial write, future
+        // migration) must not be counted as active work.
+        let (repo, _tmp) = repo();
+        let auto = make_automation("Partial");
+        repo.create(&auto).unwrap();
+        let odd = AutomationRun {
+            id: uuid::Uuid::new_v4().to_string(),
+            automation_id: auto.id.clone(),
+            started_at: chrono::Utc::now().timestamp_millis(),
+            finished_at: Some(chrono::Utc::now().timestamp_millis()),
+            status: "pending".to_string(),
+            task_id: None,
+            error_text: None,
+        };
+        repo.create_run(&odd).unwrap();
+        assert_eq!(repo.count_active_runs().unwrap(), 0);
     }
 }

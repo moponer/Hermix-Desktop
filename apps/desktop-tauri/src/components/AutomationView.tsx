@@ -297,22 +297,24 @@ export function AutomationView({ openChat }: { openChat: () => void }) {
         )}
       </div>
 
-      {/* 运行会话时保持电脑唤醒（对齐 ZCode 同名开关）：开启后，任一会话
-          处于流式运行即阻止系统睡眠。生效逻辑在 App 层（全局挂载），
-          这里只负责开关与持久化。 */}
+      {/* Hermix 有任务在跑时保持电脑唤醒（对齐 ZCode 的 keep-awake 语义）：
+          开启后，会话正在流式**或**后台定时任务正在执行，均阻止系统睡眠。
+          后台任务这一路尤其重要——到点执行时没有任何 UI 会话在流式，
+          只看流式会让笔记本合盖错过执行窗口。
+          生效逻辑在 App 层（全局挂载），这里只负责开关与持久化。 */}
       {tab === "auto" && (
         <>
       <div className="flex items-center justify-between rounded-xl border border-border-primary bg-bg-card px-4 py-3 mb-5">
         <div className="flex items-center gap-2 text-[length:var(--text-ui)] text-text-secondary">
           <Info className="icon-md text-text-muted shrink-0" />
-          <span>Hermix 运行会话时保持电脑唤醒。</span>
+          <span>Hermix 有任务在跑时保持电脑唤醒（对话进行中或定时任务执行中）。</span>
         </div>
         <input
           type="checkbox"
           checked={keepAwake}
           onChange={(e) => toggleKeepAwake(e.target.checked)}
           className="rounded border-border-primary"
-          aria-label="运行会话时保持电脑唤醒"
+          aria-label="Hermix 有任务在跑时保持电脑唤醒"
         />
       </div>
 

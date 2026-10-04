@@ -138,6 +138,12 @@ pub fn router() -> Router<HttpServerState> {
             "/api/automation/tasks/{id}/trigger",
             post(automation::trigger_task),
         )
+        // 活跃 run 计数：桌面保活信号。后台任务没有 UI 正在看的会话，
+        // 活动状态只能从 run 表读。
+        .route(
+            "/api/automation/active-count",
+            get(automation::active_count),
+        )
         .route("/api/automation/reset", post(automation::reset_to_official))
         // Workflows: 对话里跑通后由 `workflow` 工具保存的再跑流程。
         // 运行走 agent_service.send_message()（铁律 DD），会话 id =

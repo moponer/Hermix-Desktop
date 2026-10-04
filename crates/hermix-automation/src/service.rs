@@ -130,6 +130,15 @@ impl AutomationService {
         self.repo.list_runs(id, limit).map_err(Into::into)
     }
 
+    /// Number of automation runs currently in flight.
+    ///
+    /// Drives the desktop "keep the machine awake while work is running"
+    /// signal: a background automation has no streaming session, so the
+    /// front-end cannot infer activity from its own session state.
+    pub fn count_active_runs(&self) -> Result<u64, AutomationServiceError> {
+        self.repo.count_active_runs().map_err(Into::into)
+    }
+
     /// Record the start of a run. Returns the run ID.
     pub fn record_run_start(&self, automation_id: &str) -> Result<String, AutomationServiceError> {
         let run_id = uuid::Uuid::new_v4().to_string();

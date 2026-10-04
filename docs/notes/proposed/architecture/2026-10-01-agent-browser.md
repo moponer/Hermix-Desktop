@@ -1,6 +1,6 @@
 # Decision Note: 智能体浏览器（批次 N 立项，2026-10-01 二稿）—— 核心 = 浏览器能力的 PTC 化
 
-Status: proposed — 2026-10-04 评审：N2（Space + 登录态）可立项，不依赖 PTC。N1 随 PTC 一并冻结，N3 待 N2 跑通后再看。裁决见 [批次评审](../process/2026-10-04-proposed-batch-review.md)。
+Status: proposed — 2026-10-04 事实更正：**N1 已实施**（`5438a20e` browser_ptc + `1a07df29` 120s 预算 + 4 测试），实现路线是**声明式步骤数组**（`PtcStep` serde 枚举）而非本篇设想的 JS heredoc——无 Node 依赖、每步风险可静态判定。下方 N1 章节保留原文，事实以代码为准。N2（Space + 登录态）仍可立项。开工清单见 [开工清单](../process/2026-10-04-work-order-cua-and-automation.md)。
 
 ## 背景
 

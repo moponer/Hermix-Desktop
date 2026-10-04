@@ -1,0 +1,36 @@
+feat(automation): 保活信号纳入后台 run 活动 + 配套工单笔记
+
+并行开发收尾时统一提交；内容为另一 agent 的工作项，未作改动。
+
+## 改动内容
+
+保活（keep-awake）此前只看 `streamingSessionId`（会话是否在流式）。后台定时
+任务到点执行时没有任何 UI 会话在流式，笔记本合盖/休眠就会让任务错过执行
+窗口 —— 而定时任务恰恰是最需要保活的场景（无人盯着）。
+
+现在两路活动信号取**逻辑或**：会话流式 + 后台 run 活动计数。释放条件是两者
+同时为假，因此流式结束但后台任务仍在跑时会继续保持唤醒。
+
+- `hermix-automation`：`count_active_runs()` 仓储 + service 出口
+- `hermix-server`：dashboard 暴露活跃 run 数
+- `rest.ts`：`getActiveAutomationRuns()`
+- `App.tsx`：10s 轮询（不用 WS 推送 —— 保活信号丢一次无害，下一 tick 自愈，
+  不值得为它新建一条 WS 消息类型）
+- `AutomationView.tsx`：保活开关文案改为「Hermix 有任务在跑时保持电脑唤醒」
+- `docs/notes/proposed/process/2026-10-04-work-order-cua-and-automation.md`：
+  新增工单笔记
+
+## 验证
+
+- cargo check -p hermix-automation -p hermix-server --all-targets 通过
+  （3 条 `unused axum::Json that must be used` 警告在
+  dashboard/automation.rs 的 update_task 转发处，是 `#[must_use]` 而非错误）
+- pnpm tsc --noEmit 通过
+- bash scripts/check-notes.sh → notes: OK
+
+## 未验证 / 已知状态
+
+- 本工作项由并行 agent 产出，提交时可能仍在写；未做功能走查，未跑
+  cargo test。恢复并行开发后建议先补一轮验证。
+- 活跃 run 计数走 10s 轮询，最坏情况下开关关闭后有 10s 延迟才释放唤醒
+  （commit message 内的取舍，非缺陷）。

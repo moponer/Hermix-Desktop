@@ -395,6 +395,29 @@ fn ensure_next_run(task: &mut AutomationTask) {
 }
 // ── HTTP handlers ──────────────────────────────────────
 
+/// GET /api/automation/active-count — how many automation runs are in flight.
+///
+/// The desktop keeps the machine awake while "Hermix is working". A chat
+/// session can see its own streaming state, but a background automation has
+/// no session the UI is watching, so activity has to be read from the run
+/// table. Kept as its own endpoint (rather than a field on `list_tasks`)
+/// because the poller must stay cheap: the keep-awake tick runs on a timer
+/// and only needs one integer.
+pub async fn active_count(State(state): State<HttpServerState>) -> Json<ActiveRunCount> {
+    let active = state
+        .automation_service
+        .as_ref()
+        .and_then(|svc| svc.count_active_runs().ok())
+        .unwrap_or(0);
+    Json(ActiveRunCount { active })
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Default)]
+pub struct ActiveRunCount {
+    /// Runs currently executing (`status = 'running'` and unfinished).
+    pub active: u64,
+}
+
 /// GET /api/automation/tasks — list all tasks. Recomputes `next_run_at`
 /// for enabled tasks on every read so the UI always shows a live value
 /// without having to re-create the task.

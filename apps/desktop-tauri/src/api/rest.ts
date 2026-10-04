@@ -1099,6 +1099,23 @@ export const getAutomationTasks = async (): Promise<AutomationTask[]> => {
   }
 };
 
+/**
+ * Number of automation runs currently in flight.
+ *
+ * Feeds the keep-awake signal: a background automation runs with no session
+ * the UI is watching, so its activity is invisible from the front-end's own
+ * streaming state. Returns 0 when the backend is unreachable — the caller
+ * treats that as "nothing running" rather than blocking on it.
+ */
+export const getActiveAutomationRuns = async (): Promise<number> => {
+  try {
+    const res = await fetchJSON<{ active: number }>("/api/automation/active-count");
+    return res.active ?? 0;
+  } catch {
+    return 0;
+  }
+};
+
 export const createAutomationTask = async (
   draft: Omit<AutomationTask, "id" | "run_count" | "history" | "created_at" | "updated_at" | "last_run_at" | "last_status" | "last_error" | "next_run_at">,
 ): Promise<AutomationTask | null> => {
