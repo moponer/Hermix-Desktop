@@ -610,9 +610,6 @@ export function ConnectorsTab({ query, onQuery }: { query: string; onQuery: (q: 
     <>
       <SearchBar query={query} onQuery={onQuery} />
 
-      {/* 社区目录：先逛官方 registry，再决定装不装。放在手填列表上方。 */}
-      <McpCatalogGrid onInstalled={() => { void api.getMcpServers().then(setServers); }} />
-
       <div className="flex items-center justify-between mb-3">
         <span className="text-[length:var(--text-meta)] text-text-muted">
           已配置的 MCP 服务：通过 stdio 启动本地子进程，或连接 HTTP 远程端点。
@@ -741,9 +738,13 @@ export function ConnectorsTab({ query, onQuery }: { query: string; onQuery: (q: 
         </div>
       )}
 
-      <p className="text-xs text-text-muted pb-6 mt-4">
+      <p className="text-xs text-text-muted mt-4 pb-5">
         配置需要 {`npx`} / {`uvx`} 等运行时可用。密钥请填入 env 字段。
       </p>
+
+      {/* 社区目录：先逛官方 registry，再决定装不装。放在已配置列表之后——
+          自己的 server 是主角，逛目录是第二幕。 */}
+      <McpCatalogGrid onInstalled={() => { void api.getMcpServers().then(setServers); }} />
     </>
   );
 }

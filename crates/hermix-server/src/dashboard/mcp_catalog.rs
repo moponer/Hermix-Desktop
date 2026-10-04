@@ -552,10 +552,27 @@ const ZH: &[ZhEntry] = &[
 ];
 
 fn zh_for(item: &CatalogItem) -> Option<&'static ZhEntry> {
-    let id = item.id.to_lowercase();
+    // 按「词」匹配：id 取最后一段 slug，与标题一起按非字母数字切词；长
+    // 关键词优先；命中 = 词相等，或（关键词 ≥4 字符时）词以其开头。
+    // 此前是「整条 id 包含关键词」——"io.github." 天然包含 "git"，所有
+    // GitHub 托管的 server 全被翻成了 Git 的名字与描述；"digital" 里的
+    // "git" 同理误伤。
+    let slug = item.id.rsplit('/').next().unwrap_or(&item.id);
+    let slug_l = slug.to_lowercase();
     let title = item.title.to_lowercase();
-    ZH.iter()
-        .find(|z| id.contains(z.match_key) || title.contains(z.match_key))
+    let tokens: Vec<&str> = slug_l
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .chain(title.split(|c: char| !c.is_ascii_alphanumeric()))
+        .filter(|t| !t.is_empty())
+        .collect();
+    let mut keys: Vec<&ZhEntry> = ZH.iter().collect();
+    keys.sort_by_key(|z| std::cmp::Reverse(z.match_key.len()));
+    keys.into_iter()
+        .find(|z| {
+            tokens.iter().any(|t| {
+                *t == z.match_key || (z.match_key.len() >= 4 && t.starts_with(z.match_key))
+            })
+        })
 }
 
 /// 组装成前端消费的条目：中文 + 扫描结论。
@@ -1080,5 +1097,44 @@ mod tests {
         // 条目 kind 漂移会让整表反序列化失败（曾发生：8 条 kind:"pypi"，
         // 枚举只有 remote/npm/manual）→ 断网兜底目录变 0 条。
         assert!(builtin_items().len() >= 30, "内置精选目录解析失败或为空");
+    }
+
+    fn zh_item(id: &str, title: &str) -> CatalogItem {
+        CatalogItem {
+            id: id.into(),
+            title: title.into(),
+            description: "d".into(),
+            version: None,
+            homepage: None,
+            official: false,
+            install: CatalogInstall::Remote { url: "https://x".into() },
+            required_env: vec![],
+        }
+    }
+
+    #[test]
+    fn github_scope不会把一切翻成git() {
+        // "io.github." 天然包含 "git"——整条 id 子串匹配曾把所有 GitHub
+        // 托管的 server 全翻成 Git 的名字与描述。
+        let it = zh_item("io.github.modelcontextprotocol/server-memory", "Memory");
+        assert_eq!(zh_for(&it).map(|z| z.title), Some("记忆"));
+    }
+
+    #[test]
+    fn slug_git_仍然命中() {
+        let it = zh_item("io.github.modelcontextprotocol/server-git", "Git");
+        assert_eq!(zh_for(&it).map(|z| z.title), Some("Git"));
+    }
+
+    #[test]
+    fn github_键优先于git前缀() {
+        let it = zh_item("io.github.github-mcp-server", "GitHub MCP");
+        assert_eq!(zh_for(&it).map(|z| z.title), Some("GitHub"));
+    }
+
+    #[test]
+    fn digital里的git不再误伤() {
+        let it = zh_item("io.github.digitalocean/mcp", "DigitalOcean");
+        assert_eq!(zh_for(&it), None);
     }
 }

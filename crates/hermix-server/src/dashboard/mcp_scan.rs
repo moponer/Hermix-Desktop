@@ -111,8 +111,12 @@ fn typosquat_hits(item: &CatalogItem) -> Vec<ScanHit> {
         }
         CatalogInstall::Remote { .. } => return Vec::new(),
     };
+    // 只比包名最后一段（scope 之后的主体）：此前拿整串滑窗，npm scope
+    // "@modelcontextprotocol" 里的 "contextp" 与 "context7" 距离恰为 1，
+    // 把每个官方包都误判成了仿冒。
+    let base = subject.rsplit('/').next().unwrap_or(&subject);
     let norm = |s: &str| -> String { s.chars().filter(|c| c.is_alphanumeric()).collect() };
-    let subject_n = norm(&subject);
+    let subject_n = norm(base);
     let mut out = Vec::new();
     for k in KNOWN {
         let k_n = norm(k);
@@ -120,9 +124,10 @@ fn typosquat_hits(item: &CatalogItem) -> Vec<ScanHit> {
             continue;
         }
         // 滑窗比对：包名常带后缀（`filesystme-mcp` 整串距离是 4，但里面
-        // 藏着几乎一样的 `filesystem`）。只要主体里存在一个与知名包名
-        // 编辑距离 ≤1 的等长片段，就判为疑似仿冒。
-        if min_window_distance(&subject_n, &k_n) <= 1 {
+        // 藏着差一个字符的 `filesystem`）。命中条件 = 存在一个与知名包名
+        // 编辑距离**恰为 1** 的等长片段。距离 0 是完整包含（server-memory
+        // ⊃ memory、notion-mcp-server ⊃ notion），那是正常命名习惯，不拦。
+        if min_window_distance(&subject_n, &k_n) == 1 {
             out.push(ScanHit {
                 rule: "typosquat_package",
                 detail: format!("包名「{subject}」与知名包「{k}」高度相似，警惕仿冒。"),
@@ -398,6 +403,17 @@ mod tests {
     fn min_window_finds_embedded_typosquat() {
         assert_eq!(min_window_distance("filesystmemcp", "filesystem"), 1);
         assert_eq!(min_window_distance("readfile", "filesystem"), 9);
+    }
+
+    #[test]
+    fn official_package_containing_known_name_is_not_typosquat() {
+        // 完整包含知名名（server-memory ⊃ memory）与 scope 内的巧合窗口
+        // （"@modelcontextprotocol" ⊃ "contextp" ≈ context7）都是正常命名
+        // 或误伤——此前官方包全被拦成"已拒绝"。
+        let r = scan(&npm("@modelcontextprotocol/server-memory", Some("1.0.0"), true, "a tool"));
+        assert!(!r.hits.iter().any(|h| h.rule == "typosquat_package"));
+        let r = scan(&npm("@notionhq/notion-mcp-server", Some("1.0.0"), true, "a tool"));
+        assert!(!r.hits.iter().any(|h| h.rule == "typosquat_package"));
     }
 
     #[test]
