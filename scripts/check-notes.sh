@@ -52,10 +52,12 @@ for f in "$NOTES_DIR"/{proposed,implemented,rejected}/*/*.md; do
   fi
 done
 
-# 3) archived 件必须带 Archived: 行（在 Status 行之后 5 行内）
+# 3) archived 件必须带 Archived: 行（纯日期独占一行，原因写在下一行）
+#    `$f` 已含 notes/ 前缀，不要再拼 "archived/" —— 会输出
+#    "archived/archived/architecture/…" 这种看似路径错误的假象。
 for f in "$NOTES_DIR"/archived/*/*.md; do
   grep -q '^Archived: [0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}$' "$f" \
-    || fail "archived/${f##*/notes/} — 缺 'Archived: YYYY-MM-DD' 行"
+    || fail "${f##*/notes/} — 缺 'Archived: YYYY-MM-DD' 行（须独占一行）"
 done
 
 # 4) 禁止生成式索引

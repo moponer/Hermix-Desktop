@@ -9,7 +9,7 @@ Status: implemented — 2026-10-04 五项全部按序执行完毕。第 1/2 项�
 | 1 | 自动化保活联动 | ✅ 已实施 | `75f5f058` — `count_active_runs` + `/api/automation/active-count` + 前端 10s 轮询 |
 | 2 | 浏览器/CU 授权面审计 | ✅ 已实施 | `9fbf236` — `proposed/feature/2026-10-04-cua-authorization-audit.md` |
 | 3 | CU 注入防护方案 | ✅ 方案已写 | `7c8e75f` — `proposed/architecture/2026-10-04-cua-injection-hardening.md` |
-| 4 | 自动化调度幂等 | ✅ 方案已写 | `c3c8fc1` + `c643ac7` — `proposed/architecture/2026-10-04-automation-schedule-idempotency.md` |
+| 4 | 自动化调度幂等 | ✅ 方案已写 | `c3c8fc1` + `c643ac7` + `10a95c8` — 最终方案为 [调度模型升级](2026-10-04-automation-schedule-model-upgrade.md)（runId 契约 + 派发状态机，本篇更完备）；幂等那篇已归档、要点已移植 |
 | 5 | 会话锚定投递 | ✅ 方案已写（重写） | `347e1da` — `proposed/feature/2026-10-04-automation-session-anchored-delivery.md` |
 
 ### 执行中推翻的三处判断
@@ -118,4 +118,5 @@ Status: implemented — 2026-10-04 五项全部按序执行完毕。第 1/2 项�
 - **放弃**：本轮不动 CU 进程边界；token 成本不追。
 - **风险（已发生）**：本篇的执行前提错了三处（`auto_id` 注入链、两套词汇、观察类一刀切），全部靠执行时的逐行核实才发现。**若当初直接按本篇开工，第 2 项会做成一次"统一两套词汇"的重构——而实际上根本不存在两套词汇。** 这正是本篇第 2 项"先审计不改"的判断救了场。
 - **遗留**：注入面方案里 `browser_navigate` 的 `javascript:` URL 在 `Safe` 档下可静默执行，**这是本批发现的最严重问题，尚未修**。修 1（URL scheme 白名单）应优先于其余三项。
-- **遗留**：调度幂等方案与 [调度模型升级](2026-10-04-automation-schedule-model-upgrade.md) 第 2 条是同一件事的两种设计，**尚未裁决采纳哪个**。已记入两篇的 `Reintroduction conditions`。
+- **遗留（已裁决）**：调度幂等方案与 [调度模型升级](2026-10-04-automation-schedule-model-upgrade.md) 第 2 条曾是同一件事的两种设计，**已裁决采纳后者**（runId 契约 + 派发状态机更完备，且覆盖时钟跳变）。幂等那篇的独有实施要点已移植进调度模型升级的「实施要点」节，幂等笔记已归档。
+- **落地时的新增约束**：采纳方案 2 后，**保活联动的 `count_active_runs` 查询需与 run 状态机同 PR 更新**（`75f5f058` 查的是 `status='running'`，新状态机为 `claimed/dispatched/abandoned`），否则中间态改名期间会漏判。这一条两篇笔记都已记录。
