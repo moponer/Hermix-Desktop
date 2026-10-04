@@ -1,0 +1,11 @@
+# 依赖（由 package-lock.json 复现，不入库）
+node_modules/
+
+# 运行时数据库：凭据哈希与审计都在这里。**绝不能入库**——入库等于把凭据库
+# 和审计记录公开出去。
+relay.db
+relay.db-wal
+relay.db-shm
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
