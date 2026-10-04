@@ -163,6 +163,42 @@ impl ToolRegistry {
         out
     }
 
+    /// Stamp the active session into `params["_session_id"]`.
+    ///
+    /// Why: `ToolHandler::execute` only receives `params: Value`, and the
+    /// LLM provider never puts a session id in the params. Tools that must
+    /// know their originating conversation (e.g. `cronjob` stamping the
+    /// automation's anchor session) had no way to learn it — `cua.rs`'s
+    /// `extract_session_id` was dead code because nothing ever injected
+    /// this key.
+    ///
+    /// Semantics:
+    /// - Underscore prefix: never in any tool's JSON schema, so it can
+    ///   never collide with a model-generated argument and never reaches
+    ///   the model on the way back.
+    /// - Does **not** overwrite an existing `_session_id`: internal
+    ///   callers (tests, nested dispatch) may have set a more specific
+    ///   value than the ambient session.
+    /// - Empty `session_id` (headless/test dispatch) injects nothing —
+    ///   an empty string would read as "there is a session named \"\"".
+    /// - Non-object params (bare string/number commands) pass through
+    ///   untouched.
+    /// - Caller must invoke this **after** [`Self::coerce_args`] so the
+    ///   injected key is not subject to schema coercion.
+    pub fn inject_session_id(params: Value, session_id: &str) -> Value {
+        if session_id.is_empty() {
+            return params;
+        }
+        match params {
+            Value::Object(mut map) => {
+                map.entry("_session_id".to_string())
+                    .or_insert_with(|| Value::String(session_id.to_string()));
+                Value::Object(map)
+            }
+            other => other,
+        }
+    }
+
     fn coerce_object(properties: &IndexMap<String, Value>, value: &mut Value) {
         // Only coerce inside an object; other top-level types (string
         // command, number, etc.) are tool-defined and we trust them.

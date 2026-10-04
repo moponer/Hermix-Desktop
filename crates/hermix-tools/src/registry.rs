@@ -590,6 +590,14 @@ impl ToolRegistry {
         drop(inner);
 
         let params = Self::coerce_args(&schema, params);
+        // 会话锚定的地基：把当前 session 注入 `_session_id`，让没有
+        // `ContextAware` impl 的工具（如 `cronjob` 要给自动化打
+        // anchor_session_id）也能读到来源对话。下划线前缀不出现在
+        // schema 里——模型不会生成 `_` 开头的键。
+        //
+        // 注入放在 `coerce_args` **之后**：注入键不该被 schema 强制/
+        // 类型转换处理。只在 params 是 object 时注入，非 object 原样返回。
+        let params = Self::inject_session_id(params, &ctx.session_id);
 
         // Effect Sandwich（P3）：intent 先落库 → 执行 → outcome 落库。
         // 未装配 sink 时零开销跳过。持久化失败不阻断执行——三明治
@@ -793,7 +801,7 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use hermix_core::{tool_schema, JsonSchema, ToolError, ToolSchema};
-    use serde_json::Value;
+    use serde_json::{json, Value};
 
     struct EchoHandler;
 
@@ -1176,6 +1184,150 @@ mod tests {
         let params = serde_json::json!({"x": "42"});
         let coerced = ToolRegistry::coerce_args(&schema, params.clone());
         assert_eq!(coerced, params);
+    }
+
+    // --- inject_session_id -----------------------------------------
+
+    /// 端到端钉住接线：`dispatch_with_context` 是 agent loop 唯一的工具
+    /// 派发路径，注入必须真的发生在那里。纯函数测试抓不到"调用点被删"
+    /// 这种回归——所以这个测试走完整 dispatch，断言 handler **收到**了
+    /// `_session_id`，而不是断言某个自由函数返回了什么。
+    ///
+    /// 变异验证：注释掉 `dispatch_with_context` 里的 inject 调用 → 本测试红。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dispatch_with_context_injects_session_id_into_handler() {
+        let registry = ToolRegistry::new();
+        let handler = Arc::new(EchoHandler);
+        registry.register(
+            "echo",
+            "test",
+            handler.schema(),
+            handler,
+            Arc::new(|| true),
+            vec![],
+            false,
+            "Echo tool",
+            "🔊",
+            None,
+        );
+
+        let ctx = ToolCallContext {
+            session_id: "sess-e2e".to_string(),
+            ..Default::default()
+        };
+        let out = registry.dispatch_with_context("echo", json!({"a": 1}), &ctx);
+        // `tool_result` 会包一层 JSON 字符串，直接在原始输出里找键值对，
+        // 不去猜外层包装形状。
+        assert!(
+            out.contains("\"_session_id\":\"sess-e2e\""),
+            "handler 必须收到注入的 `_session_id`，实际输出: {out}"
+        );
+    }
+
+    /// 对照：走 `dispatch`（无 ctx 的旧路径）不该注入——那里根本没有
+    /// session 概念，凭空造一个才是错的。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dispatch_without_context_does_not_inject_session_id() {
+        let registry = ToolRegistry::new();
+        let handler = Arc::new(EchoHandler);
+        registry.register(
+            "echo",
+            "test",
+            handler.schema(),
+            handler,
+            Arc::new(|| true),
+            vec![],
+            false,
+            "Echo tool",
+            "🔊",
+            None,
+        );
+        let out = registry.dispatch("echo", json!({"a": 1}));
+        assert!(
+            !out.contains("_session_id"),
+            "无 ctx 的 dispatch 不得凭空注入 session，实际输出: {out}"
+        );
+    }
+
+    /// Object params get the ambient session under the `_`-prefixed key.
+    #[test]
+    fn inject_session_id_stamps_object_params() {
+        let out = ToolRegistry::inject_session_id(serde_json::json!({"a": 1}), "sess-1");
+        assert_eq!(out["_session_id"], serde_json::json!("sess-1"));
+        // 原有键不能被动。
+        assert_eq!(out["a"], serde_json::json!(1));
+    }
+
+    /// Empty session means "headless / test dispatch" — injecting `""`
+    /// would read downstream as a session literally named "".
+    #[test]
+    fn inject_session_id_skips_empty_session() {
+        let params = serde_json::json!({"a": 1});
+        let out = ToolRegistry::inject_session_id(params.clone(), "");
+        assert_eq!(out, params);
+        assert!(out.get("_session_id").is_none());
+    }
+
+    /// A more specific pre-set value wins: nested dispatch and tests may
+    /// know a more precise session than the ambient one.
+    #[test]
+    fn inject_session_id_does_not_overwrite_existing() {
+        let out = ToolRegistry::inject_session_id(
+            serde_json::json!({"_session_id": "inner"}),
+            "outer",
+        );
+        assert_eq!(out["_session_id"], serde_json::json!("inner"));
+    }
+
+    /// Non-object params (bare string commands, arrays) pass through
+    /// untouched — there is no key to attach to.
+    #[test]
+    fn inject_session_id_passes_through_non_object() {
+        for params in [
+            serde_json::json!("ls -la"),
+            serde_json::json!(42),
+            serde_json::json!([1, 2, 3]),
+            serde_json::Value::Null,
+        ] {
+            let out = ToolRegistry::inject_session_id(params.clone(), "sess-1");
+            assert_eq!(out, params, "非 object 参数必须原样返回");
+        }
+    }
+
+    /// 注入必须发生在 `coerce_args` **之后**：若某个 schema 恰好声明了
+    /// 同名键且类型不是 string，coerce 会顺手把注入值强转掉。session id
+    /// 全程按字符串处理——这里用纯数字 id 做对照，因为只有可被解析成数字
+    /// 的字符串才让反序破坏可见。
+    #[test]
+    fn inject_session_id_runs_after_coercion() {
+        use indexmap::IndexMap;
+        let mut props = IndexMap::new();
+        // 假想的敌意 schema：声明了同名键且类型不是 string。
+        props.insert("_session_id".to_string(), serde_json::json!({"type": "integer"}));
+        let schema = ToolSchema::new("t", "d", JsonSchema::object(props, vec![]));
+
+        // 生产顺序：LLM 参数里没有该键 → coerce 无事可做 → 注入字符串。
+        let out = ToolRegistry::inject_session_id(
+            ToolRegistry::coerce_args(&schema, serde_json::json!({"a": 1})),
+            "12345",
+        );
+        assert_eq!(
+            out["_session_id"],
+            serde_json::json!("12345"),
+            "注入在 coerce 之后，值必须是原样字符串"
+        );
+
+        // 反序对照：先注入再 coerce，值会被 coerce 破坏成 number。
+        // 这正是顺序约束的必要性——此断言记录事实，不是期望行为。
+        let reversed = ToolRegistry::coerce_args(
+            &schema,
+            ToolRegistry::inject_session_id(serde_json::json!({"a": 1}), "12345"),
+        );
+        assert_eq!(
+            reversed["_session_id"],
+            serde_json::json!(12345),
+            "反序会被 coerce 破坏——记录这一事实以说明顺序约束的必要性"
+        );
     }
 
     /// dispatch() auto-coerces args before the handler sees them.

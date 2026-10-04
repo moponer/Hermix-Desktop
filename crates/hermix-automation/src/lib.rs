@@ -99,6 +99,16 @@ pub struct Automation {
     /// Model override (e.g. "openai:gpt-4o").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model_id: Option<String>,
+    /// Conversation this automation was created in. `Some(session_id)`
+    /// when it came from a `cronjob` tool call inside a chat (the
+    /// registry stamps `_session_id` into tool params — see
+    /// `ToolRegistry::inject_session_id`); `None` when created from
+    /// the settings UI. The scheduler uses it to route results back
+    /// into that conversation instead of a private `automation:{id}`
+    /// session. **Not consumed yet** — the routing branch lands with
+    /// the schedule-model upgrade; this column is the data half.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub anchor_session_id: Option<String>,
     /// Creation timestamp (Unix milliseconds).
     pub created_at: i64,
     /// Last update timestamp (Unix milliseconds).
@@ -156,6 +166,8 @@ pub struct CreateAutomationParams {
     pub connector_ids_json: Option<String>,
     pub expert_id: Option<String>,
     pub model_id: Option<String>,
+    /// Conversation to anchor results to (see [`Automation::anchor_session_id`]).
+    pub anchor_session_id: Option<String>,
 }
 
 impl Default for CreateAutomationParams {
@@ -172,6 +184,7 @@ impl Default for CreateAutomationParams {
             connector_ids_json: None,
             expert_id: None,
             model_id: None,
+            anchor_session_id: None,
         }
     }
 }
@@ -194,6 +207,7 @@ impl Automation {
             connector_ids_json: params.connector_ids_json,
             expert_id: params.expert_id,
             model_id: params.model_id,
+            anchor_session_id: params.anchor_session_id,
             created_at: now,
             updated_at: now,
         }

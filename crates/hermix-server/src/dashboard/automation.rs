@@ -114,6 +114,15 @@ pub struct AutomationTask {
     pub created_at: String,
     #[serde(default)]
     pub updated_at: String,
+    /// Conversation this job was created in. Set when the `cronjob`
+    /// tool ran inside a chat (the registry stamps `_session_id` into
+    /// tool params); `None` for jobs created from this UI. The
+    /// scheduler routes results back to the anchored conversation
+    /// instead of a private `automation:{id}` session. Stored in the
+    /// automation row; the routing branch lands with the schedule
+    /// model upgrade.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor_session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -290,6 +299,8 @@ fn seed_default() -> AutomationState {
         history: vec![],
         created_at: now.clone(),
         updated_at: now.clone(),
+        // 内置示例不属于任何对话，无锚点。
+        anchor_session_id: None,
     };
     AutomationState {
         seeded: true,
@@ -821,6 +832,7 @@ impl CronjobBackend for DashboardCronjobBackend {
         schedule: &str,
         task: &str,
         _toolset: Option<&str>,
+        anchor_session_id: Option<&str>,
     ) -> Result<String, ToolError> {
         let saved = create_task(
             State(self.state.clone()),
@@ -848,10 +860,15 @@ impl CronjobBackend for DashboardCronjobBackend {
                 history: Vec::new(),
                 created_at: String::new(),
                 updated_at: String::new(),
+                // 对话内创建 → 锚定到来源会话（调度侧消费随调度模型升级落地）。
+                anchor_session_id: anchor_session_id.map(str::to_string),
             }),
         )
         .await
         .map_err(|(_, e)| ToolError::ExecutionFailed(e))?;
+        // 文案不承诺「结果回到本对话」——anchor_session_id 目前只是记录
+        // 下来，调度侧的分流分支随调度模型升级才落地。在那之前对模型说
+        // 会回投，是让它向用户转述一个尚不存在的行为。
         Ok(format!(
             "已创建定时任务「{}」（schedule: {}），到点会自动运行。",
             saved.name, saved.schedule

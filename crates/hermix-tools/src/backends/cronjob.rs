@@ -33,6 +33,7 @@ impl CronjobBackend for SignalCronjobBackend {
         schedule: &str,
         task: &str,
         toolset: Option<&str>,
+        anchor_session_id: Option<&str>,
     ) -> Result<String, ToolError> {
         Ok(json!({
             "type": "cronjob_request",
@@ -41,6 +42,7 @@ impl CronjobBackend for SignalCronjobBackend {
             "schedule": schedule,
             "task": task,
             "toolset": toolset,
+            "anchor_session_id": anchor_session_id,
         })
         .to_string())
     }

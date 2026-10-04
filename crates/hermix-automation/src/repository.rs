@@ -81,6 +81,7 @@ impl AutomationRepository {
                 connector_ids_json TEXT,
                 expert_id     TEXT,
                 model_id      TEXT,
+                anchor_session_id TEXT,
                 created_at    INTEGER NOT NULL,
                 updated_at    INTEGER NOT NULL
             );
@@ -106,6 +107,40 @@ impl AutomationRepository {
             );
             CREATE INDEX IF NOT EXISTS idx_automation_runs_automation ON automation_runs(automation_id);"#,
         )?;
+        // 列迁移：`CREATE TABLE IF NOT EXISTS` 对**已存在**的库不补列，
+        // 老用户磁盘上的 automations 表没有 anchor_session_id。查
+        // table_info 后按需 ALTER，避免 "duplicate column" 报错。
+        Self::ensure_column(
+            &conn,
+            "automations",
+            "anchor_session_id",
+            "ALTER TABLE automations ADD COLUMN anchor_session_id TEXT",
+        )?;
+        Ok(())
+    }
+
+    /// `ALTER TABLE … ADD COLUMN` 的幂等包装：列已存在则跳过。
+    ///
+    /// 用 `pragma_table_info` 表值函数而非 `PRAGMA table_info(…)` 拼串：
+    /// 表名与列名都走绑定参数，不存在标识符插值。`table`/`column` 目前
+    /// 只有字面量调用点，但迁移脚本是复制粘贴的高发地，别给后人留坑。
+    fn ensure_column(
+        conn: &rusqlite::Connection,
+        table: &str,
+        column: &str,
+        alter_sql: &str,
+    ) -> Result<(), AutomationRepositoryError> {
+        let exists: Option<i64> = conn
+            .query_row(
+                "SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2",
+                rusqlite::params![table, column],
+                |row| row.get(0),
+            )
+            .ok();
+        if exists.is_some() {
+            return Ok(());
+        }
+        conn.execute_batch(alter_sql)?;
         Ok(())
     }
 
@@ -117,8 +152,8 @@ impl AutomationRepository {
         conn.execute(
             "INSERT INTO automations (id, name, prompt, schedule_type, rrule, scheduled_at,
                 status, valid_from, valid_until, cwds, connector_ids_json, expert_id, model_id,
-                created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                anchor_session_id, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             rusqlite::params![
                 auto.id,
                 auto.name,
@@ -133,6 +168,7 @@ impl AutomationRepository {
                 auto.connector_ids_json,
                 auto.expert_id,
                 auto.model_id,
+                auto.anchor_session_id,
                 auto.created_at,
                 auto.updated_at,
             ],
@@ -154,7 +190,7 @@ impl AutomationRepository {
             .query_row(
                 "SELECT id, name, prompt, schedule_type, rrule, scheduled_at,
                         status, valid_from, valid_until, cwds, connector_ids_json,
-                        expert_id, model_id, created_at, updated_at
+                        expert_id, model_id, anchor_session_id, created_at, updated_at
                  FROM automations WHERE id = ?1",
                 [id],
                 row_to_automation,
@@ -175,7 +211,7 @@ impl AutomationRepository {
             let mut stmt = conn.prepare(
                 "SELECT id, name, prompt, schedule_type, rrule, scheduled_at,
                         status, valid_from, valid_until, cwds, connector_ids_json,
-                        expert_id, model_id, created_at, updated_at
+                        expert_id, model_id, anchor_session_id, created_at, updated_at
                  FROM automations WHERE status = ?1
                  ORDER BY created_at DESC",
             )?;
@@ -187,7 +223,7 @@ impl AutomationRepository {
             let mut stmt = conn.prepare(
                 "SELECT id, name, prompt, schedule_type, rrule, scheduled_at,
                         status, valid_from, valid_until, cwds, connector_ids_json,
-                        expert_id, model_id, created_at, updated_at
+                        expert_id, model_id, anchor_session_id, created_at, updated_at
                  FROM automations
                  ORDER BY created_at DESC",
             )?;
@@ -389,8 +425,9 @@ fn row_to_automation(row: &rusqlite::Row) -> rusqlite::Result<Automation> {
         connector_ids_json: row.get(10)?,
         expert_id: row.get(11)?,
         model_id: row.get(12)?,
-        created_at: row.get(13)?,
-        updated_at: row.get(14)?,
+        anchor_session_id: row.get(13)?,
+        created_at: row.get(14)?,
+        updated_at: row.get(15)?,
     })
 }
 
@@ -659,5 +696,72 @@ mod tests {
         };
         repo.create_run(&odd).unwrap();
         assert_eq!(repo.count_active_runs().unwrap(), 0);
+    }
+
+    // --- anchor_session_id round-trip ---------------------------
+
+    #[test]
+    fn test_anchor_session_id_round_trips() {
+        let (repo, _tmp) = repo();
+        let mut auto = make_automation("Anchored");
+        auto.anchor_session_id = Some("sess-42".into());
+        repo.create(&auto).unwrap();
+
+        let fetched = repo.get(&auto.id).unwrap();
+        assert_eq!(fetched.anchor_session_id.as_deref(), Some("sess-42"));
+        // list 走另一条 SELECT，索引错位只会在其中一条上暴露。
+        let listed = repo.list(None).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].anchor_session_id.as_deref(), Some("sess-42"));
+        assert_eq!(listed[0].created_at, auto.created_at, "列序错位会污染 created_at");
+    }
+
+    #[test]
+    fn test_anchor_session_id_defaults_to_none() {
+        let (repo, _tmp) = repo();
+        let auto = make_automation("Unanchored");
+        assert!(auto.anchor_session_id.is_none());
+        repo.create(&auto).unwrap();
+        assert!(repo.get(&auto.id).unwrap().anchor_session_id.is_none());
+    }
+
+    /// 老库升级：`CREATE TABLE IF NOT EXISTS` 不给已存在的表补列，必须
+    /// 靠 `ensure_column` 的 ALTER。构造一个缺列的旧 schema 再 ensure。
+    #[test]
+    fn test_ensure_schema_migrates_legacy_table_without_anchor_column() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("legacy.db");
+        {
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            // 旧版表结构：14 列，无 anchor_session_id。
+            conn.execute_batch(
+                "CREATE TABLE automations (
+                    id TEXT PRIMARY KEY, name TEXT NOT NULL, prompt TEXT NOT NULL,
+                    schedule_type TEXT NOT NULL, rrule TEXT, scheduled_at INTEGER,
+                    status TEXT NOT NULL, valid_from INTEGER, valid_until INTEGER,
+                    cwds TEXT, connector_ids_json TEXT, expert_id TEXT, model_id TEXT,
+                    created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+                );",
+            )
+            .unwrap();
+            // 塞一条旧数据，迁移后必须仍可读出。
+            conn.execute(
+                "INSERT INTO automations (id, name, prompt, schedule_type, status, created_at, updated_at)
+                 VALUES ('old-1', 'Old', 'p', 'recurring', 'active', 1, 2)",
+                [],
+            )
+            .unwrap();
+        }
+
+        let repo = AutomationRepository::new(path);
+        repo.ensure_schema().unwrap();
+
+        let old = repo.get("old-1").unwrap();
+        assert_eq!(old.name, "Old");
+        assert!(old.anchor_session_id.is_none(), "旧行迁移后无锚点");
+
+        // 幂等：第二次 ensure 不许报 duplicate column。
+        repo.ensure_schema().unwrap();
+        assert!(repo.get("old-1").is_ok());
     }
 }
