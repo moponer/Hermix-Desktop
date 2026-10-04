@@ -1,6 +1,6 @@
 # Decision Note: CU / 浏览器 注入面防护方案
 
-Status: proposed — 2026-10-04 逐条核实注入路径后的方案设计。**只写方案，未改任何代码。** 核实推翻了上一轮差距分析的核心论断：CU 侧不存在注入写入面（`cua_ui_*` 只收 `name`），真实缺口在浏览器侧——`browser_navigate` 无 scheme 校验（`javascript:` 在 `Safe` 档下静默执行）、`ax_node_selector` 反斜杠未转义、`browser_ptc` 审批卡不显示脚本内容。四项修法按安全优先排序。
+Status: implemented — 2026-10-04 同日落地（四项修法全部实施）。**本篇初稿有一处误判已修正**：事实 4 声称 `browser_navigate` 的 url「零过滤直达 Page.navigate」——**不成立**。`BrowserNavigateHandler` 默认构造（`browser.rs` 注册点用 `new()`）就带 `SsrfGuard`，其 scheme gate 只放行 http/https（`ssrf.rs`），`javascript:`/`file:`/`data:` 在 handler 层已被拒，且有测试钉着（`test_browser_navigate_blocks_file_scheme` 等）。这是「只看 cdp.rs 底层没追 handler 入口」的反向误判——与上一轮 `cua_ui_click` 误判（有防护没看见/没防护看见了）同族。**真实的修 1 缺口是两条**：① `browser_ptc` 的 Navigate 步骤直连 backend 绕过 SsrfGuard（审批挡不住已批准程序内的 `javascript:` URL）；② `about:blank` 无 host 被 guard 的 "URL has no host" 误杀（自动化合法起点）。
 
 ## 核实过程：差距 B 的表述需要更正
 
@@ -87,7 +87,15 @@ fn ax_node_selector(role: &str, name: &str) -> String {
 
 注册档是 `Dangerous`（`browser.rs:110`），运行时逐步骤判定。**这符合设计预期**——用户审批一次，就授权了整段程序。
 
-### 事实 4：`browser_navigate` 的 URL 无 scheme 校验（已核实）
+### 事实 4：`browser_navigate` 的 URL 无 scheme 校验（**已核实为误判，见下方更正**）
+
+> **更正（实施时发现）**：这一节的前提不成立。`BrowserNavigateHandler` 默认构造（`browser.rs` 注册点用 `new()`）就带 `SsrfGuard`（`browser.rs:775` 附近的前置校验），其 scheme gate **只放行 http/https**（`ssrf.rs:104`），`javascript:` / `file:` / `data:` 在 handler 层已被拒，且早有测试钉着（`test_browser_navigate_blocks_file_scheme` / `test_browser_navigate_blocks_cloud_metadata`）。「零过滤」的判断来自**只看了 cdp.rs 底层的 `Page.navigate`，没追 handler 入口**——与上一轮 `cua_ui_click` 误判同族，方向相反。初稿写本节时没有跑过一条真实的 `javascript:` 导航来复现，这是方法论教训：**"已核实"三个字要配得上，至少得有一条能跑通/跑失败的证据链**。
+>
+> 修 1 的真实缺口变成两条（实施时发现）：
+> 1. **`browser_ptc` 的 Navigate 步骤直连 backend，绕过 SsrfGuard**——审批挡不住已批准程序内的 `javascript:` URL，且审批卡当时不显示步骤（事实 5），用户无从发现自己批了什么。
+> 2. `about:blank` 无 host，被 guard 的 "URL has no host" 拒绝——它是浏览器自动化的合法起点，属于误杀。
+
+以下为初稿原文（保留以记录误判现场）：
 
 `cdp.rs:388-391`：
 
@@ -122,7 +130,13 @@ let (result, event) = self.cdp_command_with_event(
 
 ### 修 1（安全，最高优先）：`browser_navigate` 加 URL scheme 白名单
 
-**问题**：`url` 无过滤直达 `Page.navigate`，工具档是 `Safe`（默认不弹审批）。
+**实施（2026-10-04，commit `4c3d1c50`）**：与方案的差异——没有新建白名单，因为 `SsrfGuard` 的 scheme gate 已经是那个白名单。实际落地：
+- 抽 `check_navigable_url()` 共享函数（`tools/browser.rs`）：精确放行 `about:blank`（大小写不敏感），其余过 `SsrfGuard`。
+- `browser_navigate` 的 guard 分支换用该函数（保留 `disabled()` 测试旁路语义）。
+- **`browser_ptc` 的 `PtcStep::Navigate` 步骤接同一道闸**——真旁路封死，新增 2 测试（js 拒 + about:blank 放行）+ navigate handler 侧 2 条新测试（`javascript:` 拒 / `about:blank` 放行）。
+- `file://` 提 Caution 档的建议**未做**：`file:` 已被 guard 拒绝（`ForbiddenScheme`），本地 HTML 预览用例若真出现，届时再按"放行 + Caution 档"立项，不为当前不存在的用例先加档位。
+
+**问题（初稿判断，已被上方更正取代）**：`url` 无过滤直达 `Page.navigate`，工具档是 `Safe`（默认不弹审批）。
 
 **方案**：在 `BrowserNavigateHandler::execute` 入口拒绝非白名单 scheme。最小白名单：`http`、`https`、`about`（`about:blank` 是浏览器自动化必需）。
 
@@ -133,6 +147,8 @@ let (result, event) = self.cdp_command_with_event(
 **改动量**：handler 入口一个 `match` + 单测。
 
 ### 修 2（安全）：selector 构造改为转义完备
+
+**实施（2026-10-04，commit `e756572a`）**：`ax_node_selector` 重写为 `escape_css_quoted` 辅助函数——先中和控制字符（`\r\n`→空格、`\0`→U+FFFD，裸换行会让 CSS 字符串字面量语法错误），再转 `\`、再转引号（`role` 用 `"`，`name` 用 `'`）。5 条单测含变异测试（旧实现对 `a\'b` 会产出可逃逸的 selector，新实现断言精确输出）。方案原文：
 
 **问题**：`ax_node_selector` 只转义单引号，页面可借反斜杠逃逸（`a11y.rs:10-17`）。
 
@@ -153,6 +169,12 @@ let (result, event) = self.cdp_command_with_event(
 
 ### 修 3（权限）：`[ref=eN]` 加签发校验，查不到即拒绝
 
+**实施（2026-10-04，commit `60b18c58`）**：按方案取 b+c，**未做随机盐 a**（六步阶梯第 1 条：不为尚未发生的攻击建机制）：
+- `resolve_selector` 签名 `String → Result<String, ToolError>`：`[ref=…]` 形态查不到返回明确错误（文案带「页面可能已导航，请重新 browser_snapshot」），纯 CSS 选择器原样通过。
+- `navigate_with_wait` 成功后清空 `last_snapshot_refs`（修 3b）。
+- 三调用点（click/type/highlight）`?` 传播；已核实 `resolve_selector` 全仓仅 `CdpBrowserBackend` 一处实现，无其他调用方。
+- 2 条新单测：未知句柄拒绝（含「请重新 snapshot」文案断言）+ 清空后旧句柄必报错。
+
 **问题**：计数器可预测 + 不过期 + 查不到降级成 CSS。
 
 **方案（三件事，缺一件都不完整）**：
@@ -170,6 +192,13 @@ c) **`[ref=...]` 形态查不到时直接报错，不再降级**。降级成 CSS
 **已核实**：`resolve_selector` 全仓**只有 `CdpBrowserBackend` 一处实现**（`cdp.rs:76`）。`CamoFoxBrowserBackend`（`:1175`）与 `AutoBrowserBackend` 内部都包着 Cdp 实例，`SessionedBrowserBackend` 走 trait 转发。**修 3 只需改一处**，不必担心遗漏。
 
 ### 修 4（权限）：审批卡显示 `browser_ptc` 的完整步骤
+
+**实施（2026-10-04，本次提交）**：按方案做在前端 fallback——`ApprovalBatchBubble.tsx` 加形状驱动的 `extractSteps`（任何 args 带 `steps` 数组的工具都渲染，非 browser_ptc 特例）：
+- 逐项渲染：序号 + op 中文标签（navigate→导航…js→执行 JS）+ 关键参数摘要。
+- **`js.expression` / `fill.text` 是用户批准的载荷本体——全文展示不截断**；>120 字符用 `<details open>`（默认展开）+ 字符数标注，短载荷直接 `pre`。
+- `js` 步骤的 op 标签用 `--color-error` 警示色（全卡风险最高的载荷）。
+- 样式加在 `components-tool-card.css` §19（apv- 类族所在文件；全部 token 经 tokens.css 核实真实存在，`--color-danger` 不存在已改用 `--color-error`）。
+- `tsc --noEmit` 全绿。
 
 **问题**（事实 5）：用户批准时看不到脚本。
 
@@ -201,9 +230,9 @@ c) **`[ref=...]` 形态查不到时直接报错，不再降级**。降级成 CSS
 
 - **获得**：页面无法通过 accessible name 里的反斜杠偏移出预期外的 selector（修 2）；`javascript:` / `data:` URL 在入口被拒（修 1）；跨页面陈旧句柄不再静默生效（修 3b）；模型请求不存在的句柄时拿到明确错误（修 3c）；用户批准 PTC 前能看到完整脚本（修 4）。
 - **代价**：`[ref=...]` 查不到时从「静默降级为 CSS」变成「明确失败」，模型偶尔会因此多走一轮——**刻意如此**，失败看得见优于看不见。`file://` 会多一次审批弹窗。
-- **风险**：修 2 改完 `ax_node_selector` 输出格式变化（多反斜杠转义），若有测试或快照固化旧格式需一并更新。修 1 改完 `browser_navigate` 对非白名单 scheme 直接失败——**若现有用法依赖了 `file://` 之外的 scheme（如 `chrome://`、扩展页），会被误杀**，实施时需先查调用方。
+- **风险（已排除的部分）**：初稿担心「修 1 改完非白名单 scheme 被误杀——若现有用法依赖 `chrome://` 等会被误杀」。实施核实：guard 本来就在拒这些 scheme，本次只是把同一道闸补到 ptc 步骤层，**行为面零扩大**，唯一新增放行是 `about:blank`（此前被误杀，现在可用）。
 - **范围**：修 1 / 修 4 跨 `hermix-tools`（后端 handler）与 `apps/desktop-tauri`（前端组件），**不再是一个纯后端批次**。修 2 / 修 3 只动 `hermix-tools`。
-- **方法论**：本篇推翻了上一轮差距分析的核心论断（差距 B「CU 侧 ref 无签发校验」），因为差距分析只读了 `cua.rs` 的 schema，**没追到 `cdp.rs` / `a11y.rs`**。而真正的两个缺口（`javascript:` URL、审批卡不显示脚本）差距分析完全没看见。**注入面审计必须追到字符串拼接与审批展示这两层**——schema 层看不出转义缺陷，也看不出审批卡少显示了什么。
+- **方法论**：本篇推翻了上一轮差距分析的核心论断（差距 B「CU 侧 ref 无签发校验」），因为差距分析只读了 `cua.rs` 的 schema，**没追到 `cdp.rs` / `a11y.rs`**。而真正的两个缺口（`javascript:` URL、审批卡不显示脚本）差距分析完全没看见。**注入面审计必须追到字符串拼接与审批展示这两层**——schema 层看不出转义缺陷，也看不出审批卡少显示了什么。**实施时再次自我推翻**：事实 4 的「零过滤」同样是没追 handler 入口的产物——审计要追到底层（schema→handler→被调函数→字符串拼接），初稿只追了半程。
 
 ## Reintroduction conditions
 
