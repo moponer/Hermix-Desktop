@@ -97,14 +97,17 @@ pub fn upsert_workflow(
     let mut items = load_unlocked();
     let now = now_ms();
 
-    let existing = id
-        .map(|i| items.iter_mut().find(|e| e.id == i))
-        .flatten()
-        .or_else(|| {
-            items
-                .iter_mut()
-                .find(|e| e.name == name && e.workspace == workspace)
-        });
+    // 先用不可变扫描定位下标，再取**唯一一次**可变借用。
+    // 原写法 `id.map(..iter_mut..).flatten().or_else(..iter_mut..)` 会把第一个
+    // `&mut` 一直活到 or_else 处，构成 E0499（重复可变借用）。
+    // 语义保持不变：给了 id 就只按 id 匹配，没给才回落到「同名 + 同作用域」。
+    let idx = match id {
+        Some(i) => items.iter().position(|e| e.id == i),
+        None => items
+            .iter()
+            .position(|e| e.name == name && e.workspace.as_deref() == workspace),
+    };
+    let existing = idx.map(|i| &mut items[i]);
 
     let entry = match existing {
         Some(e) => {
