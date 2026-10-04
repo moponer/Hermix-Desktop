@@ -931,8 +931,10 @@ fn search_blocking(query: String, ext: Option<String>, dirs_only: bool) -> Local
     let idx = &cell.index;
 
     let mut hits: Vec<LocalSearchHit> = Vec::new();
-    // 大小写折叠 scratch：整个搜索过程复用一份缓冲。
+    // 大小写折叠 scratch：整个搜索过程复用一份缓冲。dir_scratch 单独一份，
+    // 因为路径查询的目录片段要在整轮循环里保持折叠态（见 substring 分支）。
     let mut scratch = String::with_capacity(1024);
+    let mut dir_scratch = String::with_capacity(256);
 
     if ql.is_empty() {
         // 空查询：最近修改优先，select_nth 部分排序。
@@ -968,7 +970,17 @@ fn search_blocking(query: String, ext: Option<String>, dirs_only: bool) -> Local
             });
         }
     } else if ql.contains('\\') || ql.contains('.') {
-        // 路径/扩展名习惯：完整路径大小写不敏感子串（零分配折叠）。
+        // 路径/扩展名习惯：大小写不敏感子串（零分配折叠）。
+        //
+        // 带反斜杠的查询按**路径**语义拆：最后一个 `\` 之前是目录片段，
+        // 之后是文件名片段。此前这里只分别匹配 name 和 dir，跨分隔符的
+        // 查询（`sub\beta`）两边都不含反斜杠，永远匹配不上 —— 搜索框
+        // placeholder 承诺的「支持文件名/路径」实际只支持到单段。
+        // 拆成两段各自折叠，不拼接完整路径，逐条仍然零分配。
+        let (dir_q, name_q) = match ql.rsplit_once('\\') {
+            Some((d, n)) if !n.is_empty() => (Some(fold_into(&mut dir_scratch, d)), n),
+            _ => (None, ql.as_str()),
+        };
         for (i, e) in idx.entries.iter().enumerate() {
             if dirs_only && !e.is_dir {
                 continue;
@@ -982,10 +994,20 @@ fn search_blocking(query: String, ext: Option<String>, dirs_only: bool) -> Local
                     continue;
                 }
             }
-            // 先折叠文件名（短、命中率高），未中再折叠目录。
             let name_l = fold_into(&mut scratch, name);
-            let matched = name_l.contains(&ql)
-                || fold_into(&mut scratch, &idx.dirs[e.dir as usize]).contains(&ql);
+            let matched = match dir_q {
+                // 目录片段必须落在目录末尾（`sub` 只匹配 ...\sub，不匹配
+                // ...\subdir），文件名片段落在文件名里。
+                Some(dq) => {
+                    name_l.contains(name_q)
+                        && fold_into(&mut scratch, &idx.dirs[e.dir as usize]).ends_with(dq)
+                }
+                None => {
+                    // 先看文件名（短、命中率高），未中再看目录。
+                    name_l.contains(name_q)
+                        || fold_into(&mut scratch, &idx.dirs[e.dir as usize]).contains(name_q)
+                }
+            };
             if matched {
                 let e = &idx.entries[i];
                 hits.push(LocalSearchHit {
@@ -1196,8 +1218,12 @@ mod tests {
         std::fs::write(tmp.join("sub").join("beta_photo.png"), b"yy").unwrap();
 
         let idx = walk_root(&tmp);
-        // 1 个子目录 + 2 个文件（目录本身也进索引）。
-        assert_eq!(idx.len(), 3);
+        // 4 条 = 遍历根本身（jwalk 会 yield depth 0）+ sub 目录 + 2 个文件。
+        // 根进索引是有意的：盘根（`C:\`）也是用户能打开的真实目录，滤掉它
+        // 只会让 helper 路线与 jwalk 路线的可见集合进一步不一致。
+        assert_eq!(idx.len(), 4);
+        // 根条目的完整路径必须落在 tmp 下（interning 未串位）。
+        assert!(idx.entries.iter().any(|e| idx.name(e) == "sub"));
 
         // 注入全局索引，直接测 search_blocking。
         *index_cell().lock().unwrap() = FileIndex {
@@ -1224,10 +1250,11 @@ mod tests {
         assert_eq!(r.hits[0].name, "beta_photo.png");
         assert_eq!(r.hits[0].size, Some(2));
 
-        // dirs_only。
+        // dirs_only：sub 目录 + 遍历根本身，共 2 条。
         let r = search_blocking(String::new(), None, true);
-        assert_eq!(r.hits.len(), 1);
-        assert!(r.hits[0].is_dir);
+        assert_eq!(r.hits.len(), 2);
+        assert!(r.hits.iter().all(|h| h.is_dir));
+        assert!(r.hits.iter().any(|h| h.name == "sub"));
 
         // 完整路径可用（目录 interning 未串位）。
         let r = search_blocking("alphareport".into(), None, false);

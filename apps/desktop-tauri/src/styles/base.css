@@ -344,15 +344,10 @@ button:disabled,
      background-image 整条声明失效——和 L1 里 accent 踩过的那个坑同源。 */
   --wallpaper-image: none;
 
-  /* hover：同色相加深。88% 而非更暗的比例，是为了让「绿 accent + 绿
-     hover」不至于糊成一片，同时保持明显的可交互反馈。 */
-  --color-accent-hover: color-mix(in srgb, var(--color-accent) 88%, black);
-  --color-accent-on-text: color-mix(in srgb, var(--color-accent) 16%, transparent);
-
-  /* soft 档：accent 极淡的底。混白而非降低 alpha——半透明叠在不同底色
-     上会算出不同观感，token 就失去「唯一定义」的意义。 */
-  --color-accent-soft: color-mix(in srgb, var(--color-accent) 10%, white);
-  --color-accent-soft-strong: color-mix(in srgb, var(--color-accent) 18%, white);
+  /* accent 的派生档（hover / on-text / soft / soft-strong）已于 2026-10-04
+     移入 tokens.css 的 @theme：它们是 --color-accent 的 color-mix 派生，
+     留在别名层时 Tailwind v4 不生成对应工具类。别名层只剩本体以外真正
+     与主题无关的两条。 */
 
   /* 压在 accent 实色上的文字。自由取色下无正解，L3.5 由调色板注入。 */
   --color-on-accent: #ffffff;

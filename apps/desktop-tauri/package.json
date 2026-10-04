@@ -19,6 +19,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@bruits/satteri-wasm32-wasi": "0.10.5",
     "@lobehub/icons": "^5.10.0",
     "@panzoom/panzoom": "^4.6.2",
     "@tanstack/react-table": "^8.21.3",

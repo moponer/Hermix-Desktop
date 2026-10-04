@@ -31,12 +31,22 @@ const read = (p) => readFileSync(p, "utf8");
 // 现已合并：`--color-accent` 回到 @theme 内的主题层，themes/dark.css 覆写
 // 同一个键。因此它**必须**进契约——若有人日后从 dark.css 里删掉这行，
 // 门禁要能立刻报出来，而不是让暗色主题静默回落成亮色的松墨绿。
+//
+// accent 的四档派生（hover / on-text / soft / soft-strong）2026-10-04 一并
+// 移入 @theme，好让 Tailwind 生成对应的工具类；但它们是对 --color-accent 的
+// color-mix **派生**，主题对它们没有决定权（该混白还是混黑由派生式本身决定，
+// 不是主题选出来的），因此同 --color-accent 合并前的处境一样，列入别名清单
+// 不进契约。放 @theme 只是为了让工具类生成，与是否进契约无关。
 const ALIAS_NAMES = new Set([
   "--color-error-bg",
   "--color-warning-bg",
   "--color-error-text",
   "--color-text-success",
   "--font-family-primary",
+  "--color-accent-hover",
+  "--color-accent-on-text",
+  "--color-accent-soft",
+  "--color-accent-soft-strong",
 ]);
 const tokensCss = read(join(STYLES, "tokens.css"));
 const themeBlock = tokensCss.match(/@theme\s*\{([\s\S]*)\n\}/)?.[1] ?? "";

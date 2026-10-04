@@ -245,16 +245,29 @@ mod tests {
     #[test]
     fn install_portable_env_creates_subdirs() {
         with_env_lock(|| {
-            for k in ["HERMIX_HOME","HERMIX_PORTABLE_DATA_DIR","HERMIX_PORTABLE_CACHE_DIR",
-                       "WEBVIEW2_USER_DATA_FOLDER","TMP","TEMP"] {
-                std::env::remove_var(k);
-            }
+            let saved: Vec<(&str, Option<String>)> = [
+                "HERMIX_HOME", "HERMIX_PORTABLE_DATA_DIR", "HERMIX_PORTABLE_CACHE_DIR",
+                "WEBVIEW2_USER_DATA_FOLDER", "TMP", "TEMP",
+            ].iter().map(|k| (*k, std::env::var(k).ok())).collect();
+            for (k, _) in &saved { std::env::remove_var(k); }
             reset_for_tests();
             let root = install_portable_env().expect("install_portable_env should succeed");
-            for sub in ["data", "cache", "logs", "webview-cache"] {
+            for sub in ["logs", "webview-cache"] {
                 let p = root.join(sub);
                 assert!(p.is_dir(), "expected subdir: {} (root: {})", p.display(), root.display());
             }
+            // install_root 下**不该**再有 data / cache：用户数据早已迁到
+            // ~/.hermix/（见模块头表格与 find_dev_data_dir 的注释），这里
+            // 建了就是两份事实。此断言是本测试 2026-10-04 之前一直失败的原因 ——
+            // 它还在按重构前的布局检查，且因为 target/debug/deps/data 属于
+            // 构建目录，一旦残留就假通过。
+            for sub in ["data", "cache"] {
+                assert!(!root.join(sub).exists(), "unexpected legacy subdir: {}", sub);
+            }
+            for (k, v) in &saved {
+                match v { Some(val) => std::env::set_var(k, val), None => std::env::remove_var(k), }
+            }
+            reset_for_tests();
         });
     }
 

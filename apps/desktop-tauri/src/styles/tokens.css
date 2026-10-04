@@ -275,12 +275,29 @@
      注：注释里也别把已删掉的间接引用写成 `var(--…)` 的完整形式——Check 2 的
      孤儿扫描不跳过注释，会把它当成活跃引用。 */
   --color-accent: #1e4a3c;
-  /* accent 的派生档位（hover / soft / soft-strong / on-text）**不在此声明**，
-     它们改由 base.css 从使用槽 --color-accent 用 color-mix 派生。
-     理由：留在 @theme 静态值时，用户注入一个绿 accent，hover 仍是主题
-     自带的绿 —— 绿配绿，hover 形同失效（2026-10-01 审核 agent 指出）。
-     --color-on-accent 同样移出：它无法用 color-mix 推导（需按明度选
-     浅/深文字），留待 L3.5 的策展调色板与 accent 一起注入。 */
+
+  /* accent 的派生档位：hover / on-text / soft / soft-strong。
+     2026-10-04 起与本体同处 @theme。此前它们在 base.css 的别名层
+     （:root），Tailwind v4 只从 @theme 生成工具类，于是
+     bg-accent-soft / bg-accent-soft-strong / hover:bg-accent-hover /
+     text-accent-on-text 四类工具类不生成任何规则 —— 与 7413e1fc 修掉的
+     117 处本体失效同源，只是当时没人统计派生档。
+
+     为什么放回 @theme 不会让「用户注入绿 accent、hover 仍是主题绿」
+     那个坑复发（2026-10-01 审核提出的反对理由）：那针对的是**静态字面量**。
+     这里写的是 color-mix 表达式，在使用点才求值，基准仍是运行时的
+     --color-accent，useTheme 注入的强调色照样流进每一档派生。取值与
+     搬移前逐字节相同，对已有 20 余处 raw var() 消费方零视觉变化，
+     变的只是这四类工具类从「不生成」变成「生成」。
+
+     --color-on-accent 不在此列：它是字面量而非派生，且自由取色下无法用
+     color-mix 推导（需按明度选浅/深文字），留待 L3.5 调色板注入。 */
+  --color-accent-hover: color-mix(in srgb, var(--color-accent) 88%, black);
+  --color-accent-on-text: color-mix(in srgb, var(--color-accent) 16%, transparent);
+  /* soft 档：accent 极淡的底。混白而非降低 alpha——半透明叠在不同底色
+     上会算出不同观感，token 就失去「唯一定义」的意义。 */
+  --color-accent-soft: color-mix(in srgb, var(--color-accent) 10%, white);
+  --color-accent-soft-strong: color-mix(in srgb, var(--color-accent) 18%, white);
   /* 渠道品牌色（2026-09-30）：只用于渠道徽标小圆牌，让 QQ / 企业微信
      一眼可辨。亮色用品牌原色，暗色在 themes/dark.css 提亮一档。 */
   --color-brand-qq: #12b7f5;
