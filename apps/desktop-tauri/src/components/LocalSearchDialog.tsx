@@ -18,6 +18,11 @@ import { invoke } from "@tauri-apps/api/core";
  * 深浅区分（focus-within 换 bg-bg-active）。这是按用户要求做的显式取舍 ——
  * 焦点提示从描边改成了底色，代价是没有 outline 兜底。
  *
+ * 选中行用中性底（bg-bg-active）而非实底强调色：暗色主题下 accent 是浅绿
+ * （#6fae94），实底压文字需要动态的 on-accent，当前 token 做不到，会撞
+ * WCAG 对比度。激活的筛选 chip 走描边 + accent 文字，既有品牌色又不需要
+ * 压文字。
+ *
  * 预览栏 = Explorer 的详细信息窗格，选中行才展开。
  *
  * 索引状态与查询结果是两条独立的通道：查询走 local_search（带匹配），
@@ -419,7 +424,7 @@ export function LocalSearchDialog({ open, onClose }: { open: boolean; onClose: (
                 className={clsx(
                   "px-2 py-0.5 rounded-md text-tiny transition-colors",
                   ext === p.ext
-                    ? "bg-bg-active text-text-primary font-medium"
+                    ? "border border-accent text-accent font-medium"
                     : "text-text-muted hover:bg-bg-tertiary",
                 )}
               >
@@ -432,7 +437,7 @@ export function LocalSearchDialog({ open, onClose }: { open: boolean; onClose: (
               className={clsx(
                 "px-2 py-0.5 rounded-md text-tiny transition-colors ml-auto",
                 dirsOnly
-                  ? "bg-bg-active text-text-primary font-medium"
+                  ? "border border-accent text-accent font-medium"
                   : "text-text-muted hover:bg-bg-tertiary",
               )}
             >
