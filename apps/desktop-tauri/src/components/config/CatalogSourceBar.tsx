@@ -1,8 +1,7 @@
-// MCP 目录数据源选择条（批次 M2）。
+// MCP 目录数据源选择条。
 //
-// 四源：official / builtin-offline / self-hosted / modelscope（实验性，
-// show_experimental 打开才显示）。切换只影响「目录从哪拉」；已配置的
-// server 不受影响。env 覆盖生效时整条锁定（HERMIX_MCP_REGISTRY_URL）。
+// 三源：official / builtin-offline / self-hosted。切换只影响「目录从哪拉」；
+// 已配置的 server 不受影响。env 覆盖生效时整条锁定（HERMIX_MCP_REGISTRY_URL）。
 import { useEffect, useState } from "react";
 import { ChevronDown, Loader2, PlugZap, Server, CircleDot } from "lucide-react";
 import * as api from "../../api/rest";
@@ -24,22 +23,17 @@ export function CatalogSourceBar({ onChanged }: { onChanged: () => void }) {
   const [probe, setProbe] = useState<CatalogProbeResult | null>(null);
   const [probing, setProbing] = useState(false);
   const [customUrl, setCustomUrl] = useState("");
-  const [showExperimental, setShowExperimental] = useState(false);
 
   const load = () => {
     api.getMcpCatalogSources().then((res) => {
       if (!res) return;
       setSources(res);
-      setShowExperimental(res.showExperimental);
       setCustomUrl(res.customUrl ?? "");
     });
   };
   useEffect(load, []);
 
   const current = sources?.sources.find((s) => s.id === sources.current);
-  const visibleSources = (sources?.sources ?? []).filter(
-    (s) => !s.experimental || showExperimental,
-  );
 
   const doSwitch = async (s: CatalogSourceInfo) => {
     if (switching || s.id === sources?.current) return;
@@ -47,7 +41,6 @@ export function CatalogSourceBar({ onChanged }: { onChanged: () => void }) {
     try {
       const res = await api.setMcpCatalogSource(s.id, {
         customUrl: s.id === "self-hosted" ? customUrl.trim() || undefined : undefined,
-        showExperimental,
       });
       if (!res?.ok) {
         toastError("切换数据源失败");
@@ -102,7 +95,7 @@ export function CatalogSourceBar({ onChanged }: { onChanged: () => void }) {
           </button>
           {open && (
             <div className="absolute z-30 mt-1 w-72 rounded-lg border border-border-primary bg-bg-elevated shadow-pop p-1.5">
-              {visibleSources.map((s) => (
+              {sources.sources.map((s) => (
                 <button
                   key={s.id}
                   onClick={() => void doSwitch(s)}
@@ -118,9 +111,6 @@ export function CatalogSourceBar({ onChanged }: { onChanged: () => void }) {
                       </span>
                       {s.id === sources.current && (
                         <span className="text-[length:var(--text-tiny)] text-accent">当前</span>
-                      )}
-                      {s.experimental && (
-                        <span className="text-[length:var(--text-tiny)] text-warning">实验</span>
                       )}
                     </div>
                     <p className="text-[length:var(--text-tiny)] text-text-muted leading-snug">
@@ -139,19 +129,6 @@ export function CatalogSourceBar({ onChanged }: { onChanged: () => void }) {
                   {switching === s.id && <Loader2 className="icon-sm animate-spin mt-1" />}
                 </button>
               ))}
-              <label className="flex items-center gap-2 px-2.5 py-1.5 text-[length:var(--text-tiny)] text-text-muted cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={showExperimental}
-                  onChange={(e) => {
-                    setShowExperimental(e.target.checked);
-                    void api.setMcpCatalogSource(sources.current, {
-                      showExperimental: e.target.checked,
-                    });
-                  }}
-                />
-                显示实验性数据源
-              </label>
             </div>
           )}
         </div>

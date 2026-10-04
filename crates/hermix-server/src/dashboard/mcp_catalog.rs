@@ -168,9 +168,6 @@ pub enum CatalogSource {
     BuiltinOffline,
     /// 用户自建子注册中心（官方 ghcr 镜像，API 与官方同形）。
     SelfHosted,
-    /// ModelScope MCP 广场（实验性：API 形状未稳定，默认隐藏，
-    /// 设置里开"显示实验源"才出现）。
-    Modelscope,
 }
 
 impl CatalogSource {
@@ -179,7 +176,6 @@ impl CatalogSource {
             Self::Official => "official",
             Self::BuiltinOffline => "builtin-offline",
             Self::SelfHosted => "self-hosted",
-            Self::Modelscope => "modelscope",
         }
     }
 
@@ -188,7 +184,6 @@ impl CatalogSource {
             "official" => Some(Self::Official),
             "builtin-offline" => Some(Self::BuiltinOffline),
             "self-hosted" => Some(Self::SelfHosted),
-            "modelscope" => Some(Self::Modelscope),
             _ => None,
         }
     }
@@ -203,9 +198,6 @@ struct RegistryPrefs {
     /// self-hosted 源的 base URL。
     #[serde(default)]
     registry_custom_url: Option<String>,
-    /// 实验源可见性（modelscope）。
-    #[serde(default)]
-    show_experimental: bool,
 }
 
 fn registry_prefs_path() -> PathBuf {
@@ -254,8 +246,7 @@ fn resolve_registry_base() -> (String, CatalogSource) {
                 .unwrap_or_else(|| official_base().to_string());
             (url, CatalogSource::SelfHosted)
         }
-        // official 与 modelscope 共用官方 base（modelscope 适配器在
-        // fetch 层区分端点与响应形状）；builtin-offline 不走网络。
+        // builtin-offline 不走网络（get_catalog 提前返回），base 仅占位。
         _ => (official_base().to_string(), src),
     }
 }
@@ -409,24 +400,51 @@ fn is_latest(env: &RawEnvelope) -> bool {
         .unwrap_or(false)
 }
 
-async fn fetch_remote(base: &str) -> Result<Vec<CatalogItem>, String> {
-    // 官方与自建子注册中心同 API 形状（官方文档明确子注册中心复用同一路径）。
-    let url = format!("{base}/v0.1/servers?limit=200");
-    let text = http_client()
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| format!("请求 registry 失败：{e}"))?
-        .error_for_status()
-        .map_err(|e| format!("registry 返回错误：{e}"))?
-        .text()
-        .await
-        .map_err(|e| format!("读取 registry 响应失败：{e}"))?;
-    let raw: RawList = serde_json::from_str(&text).map_err(|e| format!("解析 registry 响应失败：{e}"))?;
+/// 单页条数。官方 registry 校验 `limit <= 100`，再大一律 422 ——
+/// 此前写死 limit=200，目录因此永远拉不到（2026-10-04 修）。
+const PAGE_LIMIT: u32 = 100;
+/// 一次拉取最多翻几页（游标分页）。registry 按 id 字母序返回，这里只取
+/// 字母表头部的一段；精选高频条目由内置目录合并补齐（见 get_catalog）。
+const CATALOG_PAGES: usize = 5;
 
-    // 同一 id 有多个版本：优先 isLatest，其次后出现者。
+async fn fetch_remote(base: &str, max_pages: usize) -> Result<Vec<CatalogItem>, String> {
+    // 官方与自建子注册中心同 API 形状（官方文档明确子注册中心复用同一路径）。
+    // `version=latest` 让服务端每个 id 只回最新版，否则同一 server 的多个
+    // 版本占掉近半数名额（实测 100 条只剩 54 个唯一 id）。
+    let client = http_client();
+    let mut cursor: Option<String> = None;
+    let mut envs: Vec<RawEnvelope> = Vec::new();
+    for _ in 0..max_pages {
+        let mut url = format!("{base}/v0.1/servers?limit={PAGE_LIMIT}&version=latest");
+        if let Some(c) = &cursor {
+            // cursor 形如 `name:version`（字母数字 + : /），query 里无需转义。
+            url.push_str("&cursor=");
+            url.push_str(c);
+        }
+        let text = client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("请求 registry 失败：{e}"))?
+            .error_for_status()
+            .map_err(|e| format!("registry 返回错误：{e}"))?
+            .text()
+            .await
+            .map_err(|e| format!("读取 registry 响应失败：{e}"))?;
+        let page: RawList =
+            serde_json::from_str(&text).map_err(|e| format!("解析 registry 响应失败：{e}"))?;
+        let got = page.servers.len();
+        envs.extend(page.servers);
+        cursor = page.metadata.next_cursor.filter(|c| !c.is_empty() && got > 0);
+        if cursor.is_none() {
+            break;
+        }
+    }
+
+    // 自建镜像可能不支持 version=latest，同一 id 仍可能有多个版本：
+    // 优先 isLatest，其次后出现者。
     let mut picked: Vec<(bool, CatalogItem)> = Vec::new();
-    for env in raw.servers {
+    for env in envs {
         let Some(item) = normalize(&env) else { continue };
         let latest = is_latest(&env);
         match picked.iter_mut().find(|(_, i)| i.id == item.id) {
@@ -445,13 +463,24 @@ async fn fetch_remote(base: &str) -> Result<Vec<CatalogItem>, String> {
 struct RawList {
     #[serde(default)]
     servers: Vec<RawEnvelope>,
+    #[serde(default)]
+    metadata: RawPageMeta,
+}
+
+#[derive(Deserialize, Default)]
+struct RawPageMeta {
+    #[serde(default, rename = "nextCursor")]
+    next_cursor: Option<String>,
 }
 
 // ── 内置精选目录（批次 M1）────────────────────────────────
 //
-// 第三层兜底：新鲜缓存 → 网络拉取 → **内置目录**。编译期打包
-// catalog_fallback.json（30+ 条人工核验的常用 server，形状 =
-// CatalogItem），网络不可达且无缓存时目录页依然可用——502 分支删除。
+// 编译期打包 catalog_fallback.json（30+ 条人工核验的常用 server，形状 =
+// CatalogItem），承担两个角色：
+// 1. 官方源联网成功时垫底合并（registry 按 id 字母序返回，只拉前几页
+//    永远看不到 filesystem / git 这类高频条目）；
+// 2. 兜底：新鲜缓存 → 网络拉取失败 → **内置目录**，目录页任何情况下
+//    都有内容可看——502 分支删除。
 // 数据源说明与条目准入标准见该 JSON 的 comment 字段。
 const FALLBACK_JSON: &str = include_str!("catalog_fallback.json");
 
@@ -588,12 +617,23 @@ pub async fn get_catalog(
         .into_response();
     }
 
-    match fetch_remote(&base).await {
-        Ok(items) => {
+    match fetch_remote(&base, CATALOG_PAGES).await {
+        Ok(fetched) => {
             let fetched_at = now_secs();
-            write_cache(&state, &CatalogCache { fetched_at, items: items.clone() });
+            // 官方源：精选目录垫底 + 在线去重合并（角色见 FALLBACK_JSON
+            // 注释）。精选条目 id 命中时不被在线版覆盖——它们的安装命令
+            // 是人工核验过的固定版本。自建源尊重镜像内容，不合并。
+            let mut merged: Vec<CatalogItem> = if source == CatalogSource::Official {
+                builtin_items()
+            } else {
+                Vec::new()
+            };
+            let curated: std::collections::HashSet<String> =
+                merged.iter().map(|i| i.id.clone()).collect();
+            merged.extend(fetched.into_iter().filter(|i| !curated.contains(&i.id)));
+            write_cache(&state, &CatalogCache { fetched_at, items: merged.clone() });
             Json(CatalogResponse {
-                items: items.into_iter().map(to_entry).collect(),
+                items: merged.into_iter().map(to_entry).collect(),
                 fetched_at,
                 from_cache: false,
                 stale_reason: None,
@@ -630,14 +670,12 @@ pub async fn get_catalog(
 
 // ── 源设置与探测端点（批次 M2）────────────────────────────
 
-/// 前端下拉的数据：全部内置源 + 当前生效项 + 实验源可见性。
+/// 前端下拉的数据：全部内置源 + 当前生效项。
 #[derive(Serialize)]
 struct SourceInfo {
     id: &'static str,
     name: &'static str,
     description: &'static str,
-    /// 实验源默认隐藏，需 show_experimental 才在下拉出现。
-    experimental: bool,
 }
 
 #[derive(Serialize)]
@@ -646,7 +684,6 @@ struct SourcesResponse {
     /// env 覆盖生效中（UI 显示"被环境变量锁定"提示，禁止切换）。
     env_override: bool,
     custom_url: Option<String>,
-    show_experimental: bool,
     sources: Vec<SourceInfo>,
 }
 
@@ -662,31 +699,21 @@ pub async fn get_sources(State(_state): State<HttpServerState>) -> Response {
         current: resolve_registry_base().1.as_str().to_string(),
         env_override,
         custom_url: prefs.registry_custom_url,
-        show_experimental: prefs.show_experimental,
         sources: vec![
             SourceInfo {
                 id: "official",
                 name: "官方 Registry",
                 description: "MCP 官方社区目录（境外线路，有代理时数据最全）",
-                experimental: false,
             },
             SourceInfo {
                 id: "builtin-offline",
                 name: "内置精选目录",
                 description: "离线固定内容，零网络依赖，断网开箱即用",
-                experimental: false,
             },
             SourceInfo {
                 id: "self-hosted",
                 name: "自建子注册中心",
                 description: "官方 registry 镜像（Docker 一条命令自建），填自定义 URL",
-                experimental: false,
-            },
-            SourceInfo {
-                id: "modelscope",
-                name: "ModelScope MCP 广场",
-                description: "实验性：魔搭社区目录（国内直连），API 尚未稳定",
-                experimental: true,
             },
         ],
     })
@@ -700,9 +727,6 @@ pub struct SetSourceRequest {
     /// self-hosted 源必填的自定义 URL。
     #[serde(default)]
     custom_url: Option<String>,
-    /// 可选：一并切换实验源可见性。
-    #[serde(default)]
-    show_experimental: Option<bool>,
 }
 
 /// `PUT /api/mcp/catalog/sources` — 切换数据源。
@@ -749,9 +773,6 @@ pub async fn set_source(
     prefs.source = Some(src.as_str().to_string());
     if body.custom_url.is_some() {
         prefs.registry_custom_url = body.custom_url;
-    }
-    if let Some(show) = body.show_experimental {
-        prefs.show_experimental = show;
     }
     write_prefs(&prefs);
     Json(serde_json::json!({ "ok": true, "source": src.as_str() })).into_response()
@@ -813,7 +834,8 @@ pub async fn probe(Query(q): Query<ProbeQuery>) -> Response {
         _ => official_base().to_string(),
     };
     let started = std::time::Instant::now();
-    let result = fetch_remote(&url).await;
+    // 探测只拉一页：连通性测试不必付翻页的时间。
+    let result = fetch_remote(&url, 1).await;
     let latency_ms = started.elapsed().as_millis() as u64;
     match result {
         Ok(items) => Json(ProbeResponse {
@@ -1051,5 +1073,12 @@ mod tests {
         let it = normalize(&e).expect("normalize");
         assert!(it.required_env.contains(&"API_KEY".to_string()));
         assert!(it.required_env.contains(&"TOKEN".to_string()));
+    }
+
+    #[test]
+    fn builtin_fallback_parses_nonempty() {
+        // 条目 kind 漂移会让整表反序列化失败（曾发生：8 条 kind:"pypi"，
+        // 枚举只有 remote/npm/manual）→ 断网兜底目录变 0 条。
+        assert!(builtin_items().len() >= 30, "内置精选目录解析失败或为空");
     }
 }

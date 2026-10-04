@@ -928,19 +928,16 @@ export const getMcpCatalogSources = async (): Promise<CatalogSourcesResponse | n
       current: string;
       env_override: boolean;
       custom_url?: string;
-      show_experimental: boolean;
-      sources: Array<{ id: string; name: string; description: string; experimental: boolean }>;
+      sources: Array<{ id: string; name: string; description: string }>;
     }>("/api/mcp/catalog/sources");
     return {
       current: res.current,
       envOverride: res.env_override,
       customUrl: res.custom_url,
-      showExperimental: res.show_experimental,
       sources: res.sources.map((s) => ({
         id: s.id as CatalogSourceInfo["id"],
         name: s.name,
         description: s.description,
-        experimental: s.experimental,
       })),
     };
   } catch {
@@ -951,7 +948,7 @@ export const getMcpCatalogSources = async (): Promise<CatalogSourcesResponse | n
 /** 切换数据源。self-hosted 必须带 customUrl。 */
 export const setMcpCatalogSource = async (
   source: string,
-  opts?: { customUrl?: string; showExperimental?: boolean },
+  opts?: { customUrl?: string },
 ): Promise<{ ok: boolean; source: string } | null> => {
   try {
     return await fetchJSON<{ ok: boolean; source: string }>("/api/mcp/catalog/sources", {
@@ -959,7 +956,6 @@ export const setMcpCatalogSource = async (
       body: JSON.stringify({
         source,
         custom_url: opts?.customUrl,
-        show_experimental: opts?.showExperimental,
       }),
     });
   } catch {

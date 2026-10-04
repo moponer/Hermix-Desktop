@@ -8,7 +8,11 @@
       "version": "0.6.2",
       "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem",
       "official": true,
-      "install": { "kind": "npm", "package": "@modelcontextprotocol/server-filesystem", "version": "0.6.2" },
+      "install": {
+        "kind": "npm",
+        "package": "@modelcontextprotocol/server-filesystem",
+        "version": "0.6.2"
+      },
       "required_env": []
     },
     {
@@ -18,7 +22,11 @@
       "version": "0.6.2",
       "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/memory",
       "official": true,
-      "install": { "kind": "npm", "package": "@modelcontextprotocol/server-memory", "version": "0.6.2" },
+      "install": {
+        "kind": "npm",
+        "package": "@modelcontextprotocol/server-memory",
+        "version": "0.6.2"
+      },
       "required_env": []
     },
     {
@@ -28,7 +36,11 @@
       "version": "0.6.2",
       "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/sequentialthinking",
       "official": true,
-      "install": { "kind": "npm", "package": "@modelcontextprotocol/server-sequential-thinking", "version": "0.6.2" },
+      "install": {
+        "kind": "npm",
+        "package": "@modelcontextprotocol/server-sequential-thinking",
+        "version": "0.6.2"
+      },
       "required_env": []
     },
     {
@@ -38,7 +50,11 @@
       "version": "0.6.2",
       "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/everything",
       "official": true,
-      "install": { "kind": "npm", "package": "@modelcontextprotocol/server-everything", "version": "0.6.2" },
+      "install": {
+        "kind": "npm",
+        "package": "@modelcontextprotocol/server-everything",
+        "version": "0.6.2"
+      },
       "required_env": []
     },
     {
@@ -48,8 +64,14 @@
       "version": "0.1.6",
       "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/github",
       "official": true,
-      "install": { "kind": "npm", "package": "@modelcontextprotocol/server-github", "version": "0.1.6" },
-      "required_env": ["GITHUB_PERSONAL_ACCESS_TOKEN"]
+      "install": {
+        "kind": "npm",
+        "package": "@modelcontextprotocol/server-github",
+        "version": "0.1.6"
+      },
+      "required_env": [
+        "GITHUB_PERSONAL_ACCESS_TOKEN"
+      ]
     },
     {
       "id": "io.github.modelcontextprotocol/server-brave-search",
@@ -58,8 +80,14 @@
       "version": "0.6.2",
       "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/brave-search",
       "official": true,
-      "install": { "kind": "npm", "package": "@modelcontextprotocol/server-brave-search", "version": "0.6.2" },
-      "required_env": ["BRAVE_API_KEY"]
+      "install": {
+        "kind": "npm",
+        "package": "@modelcontextprotocol/server-brave-search",
+        "version": "0.6.2"
+      },
+      "required_env": [
+        "BRAVE_API_KEY"
+      ]
     },
     {
       "id": "io.github.modelcontextprotocol/server-fetch",
@@ -68,7 +96,12 @@
       "version": "0.6.2",
       "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/fetch",
       "official": true,
-      "install": { "kind": "pypi", "package": "mcp-server-fetch", "version": null, "hint": "uvx mcp-server-fetch" },
+      "install": {
+        "kind": "manual",
+        "package": "mcp-server-fetch",
+        "version": null,
+        "hint": "pypi 包：Hermix 不自动执行未知包管理器，请确认后在「手动添加」里填好 uvx 命令。"
+      },
       "required_env": []
     },
     {
@@ -78,8 +111,14 @@
       "version": "0.6.2",
       "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/gitlab",
       "official": true,
-      "install": { "kind": "npm", "package": "@modelcontextprotocol/server-gitlab", "version": "0.6.2" },
-      "required_env": ["GITLAB_PERSONAL_ACCESS_TOKEN"]
+      "install": {
+        "kind": "npm",
+        "package": "@modelcontextprotocol/server-gitlab",
+        "version": "0.6.2"
+      },
+      "required_env": [
+        "GITLAB_PERSONAL_ACCESS_TOKEN"
+      ]
     },
     {
       "id": "io.github.modelcontextprotocol/server-slack",
@@ -88,8 +127,15 @@
       "version": "0.6.2",
       "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/slack",
       "official": true,
-      "install": { "kind": "npm", "package": "@modelcontextprotocol/server-slack", "version": "0.6.2" },
-      "required_env": ["SLACK_BOT_TOKEN", "SLACK_TEAM_ID"]
+      "install": {
+        "kind": "npm",
+        "package": "@modelcontextprotocol/server-slack",
+        "version": "0.6.2"
+      },
+      "required_env": [
+        "SLACK_BOT_TOKEN",
+        "SLACK_TEAM_ID"
+      ]
     },
     {
       "id": "io.github.modelcontextprotocol/server-puppeteer",
@@ -98,7 +144,11 @@
       "version": "0.6.2",
       "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/puppeteer",
       "official": true,
-      "install": { "kind": "npm", "package": "@modelcontextprotocol/server-puppeteer", "version": "0.6.2" },
+      "install": {
+        "kind": "npm",
+        "package": "@modelcontextprotocol/server-puppeteer",
+        "version": "0.6.2"
+      },
       "required_env": []
     },
     {
@@ -108,8 +158,14 @@
       "version": "1.3.2",
       "homepage": "https://github.com/domdomegg/airtable-mcp-server",
       "official": false,
-      "install": { "kind": "npm", "package": "airtable-mcp-server", "version": null },
-      "required_env": ["AIRTABLE_API_KEY"]
+      "install": {
+        "kind": "npm",
+        "package": "airtable-mcp-server",
+        "version": null
+      },
+      "required_env": [
+        "AIRTABLE_API_KEY"
+      ]
     },
     {
       "id": "io.github.domdomegg/notion-mcp-server",
@@ -118,8 +174,15 @@
       "version": "1.8.1",
       "homepage": "https://github.com/makenotion/notion-mcp-server",
       "official": false,
-      "install": { "kind": "npm", "package": "@notionhq/notion-mcp-server", "version": null },
-      "required_env": ["NOTION_TOKEN", "NOTION_VERSION"]
+      "install": {
+        "kind": "npm",
+        "package": "@notionhq/notion-mcp-server",
+        "version": null
+      },
+      "required_env": [
+        "NOTION_TOKEN",
+        "NOTION_VERSION"
+      ]
     },
     {
       "id": "io.github.postgres/mcp-server-postgres",
@@ -128,7 +191,11 @@
       "version": "0.3.0",
       "homepage": "https://github.com/modelcontextprotocol/servers-archived/tree/main/src/postgres",
       "official": false,
-      "install": { "kind": "npm", "package": "@modelcontextprotocol/server-postgres", "version": null },
+      "install": {
+        "kind": "npm",
+        "package": "@modelcontextprotocol/server-postgres",
+        "version": null
+      },
       "required_env": []
     },
     {
@@ -138,8 +205,15 @@
       "version": "0.4.2",
       "homepage": "https://github.com/crystaldba/postgres-mcp",
       "official": false,
-      "install": { "kind": "pypi", "package": "postgres-mcp", "version": null, "hint": "uvx postgres-mcp" },
-      "required_env": ["DATABASE_URI"]
+      "install": {
+        "kind": "manual",
+        "package": "postgres-mcp",
+        "version": null,
+        "hint": "pypi 包：Hermix 不自动执行未知包管理器，请确认后在「手动添加」里填好 uvx 命令。"
+      },
+      "required_env": [
+        "DATABASE_URI"
+      ]
     },
     {
       "id": "io.github.siriuslee/markitdown-mcp",
@@ -148,7 +222,12 @@
       "version": "0.1.1",
       "homepage": "https://github.com/microsoft/markitdown",
       "official": false,
-      "install": { "kind": "pypi", "package": "markitdown-mcp", "version": null, "hint": "markitdown-mcp" },
+      "install": {
+        "kind": "manual",
+        "package": "markitdown-mcp",
+        "version": null,
+        "hint": "pypi 包：Hermix 不自动执行未知包管理器，请确认后在「手动添加」里填好 uvx 命令。"
+      },
       "required_env": []
     },
     {
@@ -158,7 +237,11 @@
       "version": "1.0.2",
       "homepage": "https://github.com/kimtaeyoon83/mcp-server-youtube-transcript",
       "official": false,
-      "install": { "kind": "npm", "package": "mcp-server-youtube-transcript", "version": null },
+      "install": {
+        "kind": "npm",
+        "package": "mcp-server-youtube-transcript",
+        "version": null
+      },
       "required_env": []
     },
     {
@@ -168,7 +251,12 @@
       "version": "0.2.2",
       "homepage": "https://github.com/tumf/mcp-shell-server",
       "official": false,
-      "install": { "kind": "pypi", "package": "mcp-shell-server", "version": null, "hint": "uvx mcp-shell-server" },
+      "install": {
+        "kind": "manual",
+        "package": "mcp-shell-server",
+        "version": null,
+        "hint": "pypi 包：Hermix 不自动执行未知包管理器，请确认后在「手动添加」里填好 uvx 命令。"
+      },
       "required_env": []
     },
     {
@@ -178,8 +266,14 @@
       "version": "2.2.1",
       "homepage": "https://github.com/exa-labs/exa-mcp-server",
       "official": false,
-      "install": { "kind": "npm", "package": "exa-mcp-server", "version": null },
-      "required_env": ["EXA_API_KEY"]
+      "install": {
+        "kind": "npm",
+        "package": "exa-mcp-server",
+        "version": null
+      },
+      "required_env": [
+        "EXA_API_KEY"
+      ]
     },
     {
       "id": "io.github.firecrawl/firecrawl-mcp-server",
@@ -188,8 +282,14 @@
       "version": "1.6.2",
       "homepage": "https://github.com/mendableai/firecrawl-mcp-server",
       "official": false,
-      "install": { "kind": "npm", "package": "firecrawl-mcp", "version": null },
-      "required_env": ["FIRECRAWL_API_KEY"]
+      "install": {
+        "kind": "npm",
+        "package": "firecrawl-mcp",
+        "version": null
+      },
+      "required_env": [
+        "FIRECRAWL_API_KEY"
+      ]
     },
     {
       "id": "io.github.browserbase/mcp-server-browserbase",
@@ -198,8 +298,15 @@
       "version": "1.2.1",
       "homepage": "https://github.com/browserbase/mcp-server-browserbase",
       "official": false,
-      "install": { "kind": "npm", "package": "@browserbasehq/mcp-server-browserbase", "version": null },
-      "required_env": ["BROWSERBASE_API_KEY", "BROWSERBASE_PROJECT_ID"]
+      "install": {
+        "kind": "npm",
+        "package": "@browserbasehq/mcp-server-browserbase",
+        "version": null
+      },
+      "required_env": [
+        "BROWSERBASE_API_KEY",
+        "BROWSERBASE_PROJECT_ID"
+      ]
     },
     {
       "id": "io.github.supabase/supabase-mcp",
@@ -208,8 +315,14 @@
       "version": "0.2.3",
       "homepage": "https://github.com/supabase-community/supabase-mcp",
       "official": false,
-      "install": { "kind": "npm", "package": "supabase-mcp", "version": null },
-      "required_env": ["SUPABASE_ACCESS_TOKEN"]
+      "install": {
+        "kind": "npm",
+        "package": "supabase-mcp",
+        "version": null
+      },
+      "required_env": [
+        "SUPABASE_ACCESS_TOKEN"
+      ]
     },
     {
       "id": "io.github.qdrant/mcp-server-qdrant",
@@ -218,8 +331,15 @@
       "version": "0.1.3",
       "homepage": "https://github.com/qdrant/mcp-server-qdrant",
       "official": false,
-      "install": { "kind": "pypi", "package": "mcp-server-qdrant", "version": null, "hint": "uvx mcp-server-qdrant" },
-      "required_env": ["QDRANT_URL"]
+      "install": {
+        "kind": "manual",
+        "package": "mcp-server-qdrant",
+        "version": null,
+        "hint": "pypi 包：Hermix 不自动执行未知包管理器，请确认后在「手动添加」里填好 uvx 命令。"
+      },
+      "required_env": [
+        "QDRANT_URL"
+      ]
     },
     {
       "id": "io.github.suekou/mcp-notion-server",
@@ -228,8 +348,14 @@
       "version": "0.6.1",
       "homepage": "https://github.com/suekou/mcp-notion-server",
       "official": false,
-      "install": { "kind": "npm", "package": "mcp-notion-server", "version": null },
-      "required_env": ["NOTION_API_TOKEN"]
+      "install": {
+        "kind": "npm",
+        "package": "mcp-notion-server",
+        "version": null
+      },
+      "required_env": [
+        "NOTION_API_TOKEN"
+      ]
     },
     {
       "id": "io.github.neondatabase/mcp-server-neon",
@@ -238,8 +364,14 @@
       "version": "0.1.2",
       "homepage": "https://github.com/neondatabase/mcp-server-neon",
       "official": false,
-      "install": { "kind": "npm", "package": "@neondatabase/mcp-server-neon", "version": null },
-      "required_env": ["NEON_API_KEY"]
+      "install": {
+        "kind": "npm",
+        "package": "@neondatabase/mcp-server-neon",
+        "version": null
+      },
+      "required_env": [
+        "NEON_API_KEY"
+      ]
     },
     {
       "id": "io.github.upstash/mcp-server-upstash",
@@ -248,8 +380,15 @@
       "version": "0.2.1",
       "homepage": "https://github.com/upstash/mcp-server",
       "official": false,
-      "install": { "kind": "npm", "package": "@upstash/mcp-server", "version": null },
-      "required_env": ["UPSTASH_EMAIL", "UPSTASH_API_KEY"]
+      "install": {
+        "kind": "npm",
+        "package": "@upstash/mcp-server",
+        "version": null
+      },
+      "required_env": [
+        "UPSTASH_EMAIL",
+        "UPSTASH_API_KEY"
+      ]
     },
     {
       "id": "io.github.jaimeferj/mcp-server-redis",
@@ -258,8 +397,14 @@
       "version": "0.1.0",
       "homepage": "https://github.com/jaimeferj/mcp-server-redis",
       "official": false,
-      "install": { "kind": "npm", "package": "mcp-server-redis", "version": null },
-      "required_env": ["REDIS_URI"]
+      "install": {
+        "kind": "npm",
+        "package": "mcp-server-redis",
+        "version": null
+      },
+      "required_env": [
+        "REDIS_URI"
+      ]
     },
     {
       "id": "io.github.smarakagho/mcp-kubernetes-server",
@@ -268,7 +413,11 @@
       "version": "1.2.0",
       "homepage": "https://github.com/Flux159/mcp-server-kubernetes",
       "official": false,
-      "install": { "kind": "npm", "package": "mcp-server-kubernetes", "version": null },
+      "install": {
+        "kind": "npm",
+        "package": "mcp-server-kubernetes",
+        "version": null
+      },
       "required_env": []
     },
     {
@@ -278,7 +427,12 @@
       "version": "1.0.0",
       "homepage": "https://github.com/awslabs/mcp",
       "official": false,
-      "install": { "kind": "pypi", "package": "awslabs.aws-documentation-mcp-server", "version": null, "hint": "uvx awslabs.aws-documentation-mcp-server" },
+      "install": {
+        "kind": "manual",
+        "package": "awslabs.aws-documentation-mcp-server",
+        "version": null,
+        "hint": "pypi 包：Hermix 不自动执行未知包管理器，请确认后在「手动添加」里填好 uvx 命令。"
+      },
       "required_env": []
     },
     {
@@ -288,7 +442,12 @@
       "version": "0.1.0",
       "homepage": "https://github.com/microsoftlearn/mcp",
       "official": false,
-      "install": { "kind": "pypi", "package": "microsoft-learn-docs-mcp", "version": null, "hint": "uvx microsoft-learn-docs-mcp" },
+      "install": {
+        "kind": "manual",
+        "package": "microsoft-learn-docs-mcp",
+        "version": null,
+        "hint": "pypi 包：Hermix 不自动执行未知包管理器，请确认后在「手动添加」里填好 uvx 命令。"
+      },
       "required_env": []
     },
     {
@@ -298,7 +457,11 @@
       "version": "0.3.0",
       "homepage": "https://github.com/sanctumos/sanctum-mcp-server",
       "official": false,
-      "install": { "kind": "npm", "package": "@sanctumos/mcp-server", "version": null },
+      "install": {
+        "kind": "npm",
+        "package": "@sanctumos/mcp-server",
+        "version": null
+      },
       "required_env": []
     },
     {
@@ -308,7 +471,11 @@
       "version": "1.1.0",
       "homepage": "https://github.com/yokingma/time-mcp",
       "official": false,
-      "install": { "kind": "npm", "package": "time-mcp", "version": null },
+      "install": {
+        "kind": "npm",
+        "package": "time-mcp",
+        "version": null
+      },
       "required_env": []
     },
     {
@@ -318,7 +485,12 @@
       "version": "0.2.2",
       "homepage": "https://github.com/modelcontextprotocol/servers-archived/tree/main/src/sqlite",
       "official": false,
-      "install": { "kind": "pypi", "package": "mcp-server-sqlite", "version": null, "hint": "uvx mcp-server-sqlite" },
+      "install": {
+        "kind": "manual",
+        "package": "mcp-server-sqlite",
+        "version": null,
+        "hint": "pypi 包：Hermix 不自动执行未知包管理器，请确认后在「手动添加」里填好 uvx 命令。"
+      },
       "required_env": []
     }
   ]
