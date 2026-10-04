@@ -46,7 +46,12 @@ fn first_line(text: &str) -> String {
     crate::util::truncate_chars(head, 40)
 }
 
-fn session_id(platform: &str, user: &str) -> String {
+/// 会话 id 的**唯一**格式定义：`im:{platform}:{user}`。
+///
+/// `pub(crate)` 是因为手机端的归属闸门要拼同一条 id（`im:device:{device_id}`），
+/// 那边**必须调这个函数**而不是自己拼字符串——手拼过一次，漏了 `im:` 前缀，
+/// 结果归属闸门永远匹配不上，手机对自己的会话也 403。
+pub(crate) fn session_id(platform: &str, user: &str) -> String {
     format!("im:{platform}:{user}")
 }
 
@@ -105,6 +110,13 @@ const HEARTBEAT_MAX_BEATS: u32 = 60;
 /// 一起交给下一轮，不静默丢。20 条够一个人把想说的话说完，又不至于让队列
 /// 长到跑一整夜。
 const QUEUE_CAP: usize = 20;
+
+/// 手机端在通道里的 platform 名。待拍板 1 定了 App 以合成 `ImPort` 身份进来，
+/// 于是设备会话 id 恒为 `im:device:{device_id}`。
+///
+/// 「设备」当平台看待的代价（`IM_SOURCE_LABEL`、侧栏标签、审批数字闸门都要
+/// 认识它）在笔记 §待拍板 1 里列了；这个常量是那份代价的锚点。
+pub(crate) const DEVICE_PLATFORM: &str = "device";
 
 /// 心跳的节奏。生产走 `Default`（模块常量），测试传毫秒级值。
 #[derive(Clone, Copy)]
@@ -485,10 +497,48 @@ impl ChannelRuntime {
                 }
             };
             let Some((msg, port)) = next else {
+                self.publish_session_views();
                 return;
             };
             self.run_turn(&port, platform, &msg).await;
         }
+    }
+
+    /// 全量重建并发布会话视图，供手机端 `GET /v1/tasks` 读。
+    ///
+    /// 每次状态变化后调用（入队 / 出队 / 开跑 / 收工）。IM 规模下重建成本
+    /// 可忽略，而增量维护意味着每次变更都要记得同步——漏一处就是陈旧数据，
+    /// 比慢更糟。
+    pub fn publish_session_views(&self) {
+        let running: HashMap<String, String> = self
+            .running
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        let mut views: Vec<crate::state::ChannelSessionView> = Vec::new();
+        for (key, text) in &running {
+            views.push(crate::state::ChannelSessionView {
+                key: key.clone(),
+                state: "running",
+                first_line: first_line(text),
+                position: None,
+            });
+        }
+        let queues = self.queues.lock().unwrap_or_else(|e| e.into_inner());
+        for (key, q) in queues.iter() {
+            for (i, (msg, _)) in q.items.iter().enumerate() {
+                views.push(crate::state::ChannelSessionView {
+                    key: key.clone(),
+                    state: "queued",
+                    first_line: first_line(&msg.text),
+                    position: Some(i + 1),
+                });
+            }
+        }
+        drop(queues);
+        crate::mobile::publish_channel_sessions(&self.state, views);
     }
 
     // ---------------- 授权 ----------------
@@ -1100,6 +1150,7 @@ impl ChannelRuntime {
             let mut running = self.running.lock().unwrap_or_else(|e| e.into_inner());
             running.insert(Self::key(platform, &msg.user), msg.text.clone());
         }
+        self.publish_session_views();
         let result = self
             .state
             .agent_service()
@@ -1109,6 +1160,7 @@ impl ChannelRuntime {
             let mut running = self.running.lock().unwrap_or_else(|e| e.into_inner());
             running.remove(&Self::key(platform, &msg.user));
         }
+        self.publish_session_views();
         // `overrides`（连同 on_chunk 里的 tx）已随 send_message_stream 一起被
         // 消费掉，这里 future 一返回 tx 就析构，pump 的 recv 拿到 None，自行
         // 收尾。只需等它把最后一帧发完。

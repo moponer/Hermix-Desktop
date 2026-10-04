@@ -100,21 +100,43 @@ Status: proposed — P1 地基已独立成篇并落地（见 [IM 远程任务生
 
 ### 对接层：hermix-server 面向手机 / Clawket 协议的接口
 
-6. `hermix-server/src/ws.rs` — 握手加 Bearer 分支。`ws.rs` 现无任何 `Authorization` / `Origin` 处理，这是新增面。**必须复用既有鉴权组件，不得在 ws.rs 内重新实现**：`security::derive_origin`（设备凭证优先于 loopback，`security.rs:375-386`）、`effective_decision_with_scopes`（`:450`）、`unpaired_gate_allows`（`:471`）、`RateLimiter`。手写一套会让 WS 面绕过未配对闸门、IP allowlist 与限流。
-   - `Authorization: Bearer hmxd_*` → `DeviceRegistry::authenticate()`（`pairing.rs:198`）→ `derive_origin` → 记 `AuditEvent::Auth`（`pairing.rs:63`）。
-   - 未命中 401；连续失败计失败预算（复用 pairing 分桶思路）+ 延迟响应。
-7. 新增 2 个 handler。**路径前缀对齐既有审批族 `/v1/`**（`POST /v1/sessions/{id}/approval`、`GET /v1/sessions/{id}/approvals/pending`，`routes.rs:1547/1586`）——App 是 `/v1` 客户端，不引入第二套前缀。授权一律走能力位交集，不手写 `require_local` OR 设备鉴权的二元判断（`require_local` 是 Origin 判定而非源 IP 判定，见 `channels/mod.rs:406`）。
-   - `POST /v1/sessions/{sid}/interrupt`：`Local` 或 `PairedDevice` + `Chat` scope **且 sid 归属本设备** → `agent_service().interrupt_session(sid)` → `{interrupted: bool}`。
-   - `GET /v1/tasks`：读 running + queues → `[{sid, state, first_line, queued_at}]`。**授权与归属过滤不可省**：`first_line` 是用户 prompt 正文，且不按 `origin.device_id()` 过滤即跨设备泄露（本篇 §多端隔离 可见性层）。配对设备三态单测（本地 / 配对设备 / 未认证）+ 一条「A 设备查不到 B 设备 sid」断言。
-8. 出站 relay 连接器（新文件 `hermix-server/src/relay_client.rs`）：
-   - 启动时若配置 relay 地址，主动 WSS 连 relay，携设备注册帧（token 哈希 + 能力位）；断线指数退避重连。
-   - 帧协议单一真相源 = `relay_proto.rs`（含 `proto_version: u32`），App 启动校验版本。**relay 侧不重复定义帧格式**（见 §后端设计 10）。
-9. 协议映射适配层（新文件 `hermix-server/src/mobile_protocol.rs`）：Clawket 式事件名 ↔ hermix envelope 的映射**单向收口**在此文件，禁止散落；审批三态（deny / once / session）语义在此对齐。**「session 永久」在 channel 侧对齐，不映射到 HTTP 能力矩阵**（见 §多端隔离 能力位的硬边界）。
+6. **重新引入一个 axum WebSocket 端点，带 Bearer 设备鉴权**（本文早先写的「`ws.rs` 握手加 Bearer 分支」**前提不成立，已改**）
+   - **已查实的事实**：`/v1/ws` 与 `/v1/ws-stream` 的 **axum upgrade handler 在 `181a51aa`（2026-09-26 端点审计）里被砍了**——理由是「桌面端全量迁 stdio bridge（`api/ws.ts` → `listenStreamChannel`），前端零裸 `new WebSocket`，本项目没有 Web bundle / 移动端 crate」。所以今天**没有握手代码可以加分支**。
+   - **但核心流协议还在**：`crate::ws::handle_ws_stream(transport, state, session_id)`（`ws.rs:2563`）是 `pub(crate)` 且**吃 `Transport` trait**（`hermix-transport`），`stdio_session.rs:254` 正在用它喂 stdio 通道。因此重新引入 WS 面 = 新写一个 axum upgrade handler + 一个 over-WebSocket 的 `Transport` 实现，**流式协议本体零改动**。
+   - **必须写下的张力**：该端点当初因「没有移动端消费方」被砍，如今因「有了移动端」加回来。**这不是回退，是当初判断的前提变了。** 不写清楚的话，下一个人看到被砍的端点复活会当成回退而再删一次。
+   - **鉴权复用既有组件，不重写**：`derive_origin`（设备凭证优先于 loopback，`security.rs:375-386`）、`effective_decision_with_scopes`（`:450`）、`unpaired_gate_allows`（`:471`）、`AuthFailLockout` 失败预算。`derive_origin` / `unpaired_gate_allows` 目前是**私有 `fn`**，复用需先放开为 `pub(crate)`。手写一套会让 WS 面绕过未配对闸门、IP allowlist 与限流。
+   - `Authorization: Bearer hmxd_*` → `DeviceRegistry::authenticate()`（`pairing.rs:198`）→ `derive_origin` → 记 `AuditEvent::Auth`（`pairing.rs:63`）。未命中 401 + 失败预算 + 延迟响应。
+   - **已配对设备光有 Bearer 不够，还必须附请求签名**（T4 对策，`security.rs:582-599`，**本文早先完全没提**）。格式见 `request_signature.rs:6-10`：
+     ```text
+     X-Hermix-Signature: t=<unix_sec>,n=<hex nonce>,s=<hex hmac>
+     sig = HMAC_SHA256(device_token, METHOD + "\n" + path + "\n" + t + "\n" + nonce)
+     ```
+     含义是「token 泄漏 ≠ 无限使用」：时间窗 + nonce 单次使用。**对手机端的三条连带要求**：
+     1. App 侧必须实现 HMAC-SHA256 签名（`javax.crypto.Mac` 的 `HmacSHA256` 即可，不引新依赖），每个请求（含 WS 握手）现算签名；
+     2. App 的**时钟必须准**——时间窗是签名的一部分，设备时间偏差过大会全部 401，而这类失败对用户表现为「配对成功但连不上」，极难自查。配对流程应给出时钟偏差提示。
+     3. **relay 必须对 method + path + 两个 header 全部原样透传**：签名覆盖 `METHOD\npath`，relay 一旦重写路径或方法，签名即失效。所以 relay 是**字节级透明管道**（路由只看 token 哈希），不是「重组请求」的中转——这与 §后端设计 12 的「内层 payload 整体透传」是同一条约束在 header 上的延伸。
+   - WS 是长连接，签名只在**握手时**校验一次，因此 nonce 只需每连接一个新值，不需要在连接内周期性重签。
+   - **认证判定只在 hermix 侧，relay 只路由不校验**：relay 存 token 哈希并据此把帧路由到对应电脑，**但不解释 token 真伪**——判定权在 `DeviceRegistry::authenticate`。这条分工是信任模型的骨架：relay 被攻破，攻击者能改路由但拿不到设备身份。relay 转发 `Authorization` 头时它属于**外层信封**（不是内层 payload），因为客户端 header 不可静默丢弃——桌面端 stdio bridge 就有这个问题（`apps/desktop-tauri/src/api/rest.ts:175-177` 明确警告「header 会被静默丢弃，Authorization 必须走 raw fetch」），手机端跨网络没有这条退路。
+7. 新增 2 个 handler。**路径前缀对齐既有审批族 `/v1/`**（`POST /v1/sessions/{id}/approval`、`GET /v1/sessions/{id}/approvals/pending`，`routes.rs:1547/1586`）——App 是 `/v1` 客户端，不引入第二套前缀。授权一律走 `check_capability_from_extensions`（内含能力位交集），不手写 `require_local` OR 设备鉴权的二元判断（`require_local` 是 Origin 判定而非源 IP 判定，见 `channels/mod.rs:406`）。
+   - `POST /v1/sessions/{sid}/interrupt`：`Chat` scope + **sid 归属本设备** → `agent_service().interrupt_session(sid)` → `{interrupted: bool}`。
+   - `GET /v1/tasks`：读 `state.channel_sessions` 快照 → 配对设备**只看到自己那一条**。
+   - **归属过滤是不可省的，不是加固项**：连接层（relay 按 token 哈希路由）保证「A 的帧到不了 B 的电脑」，但接口若不判归属，A 依然能列出 B 的会话名与**首行 prompt 正文**——隔离就在 API 层漏了。判定即「sid 是否等于本设备的会话 id」，本地来源不设限（桌面端调试）。
+   - **任务数据由通道侧发布，state 只存不算**：`running` / `queues` 的真相在 `ChannelRuntime`，它全量重建 `Vec<ChannelSessionView>` 写进 `state.channel_sessions`（`mobile::publish_channel_sessions`）。反过来让 HTTP 层去问通道，等于让 `state` 依赖 `channels`——那条依赖是反的。全量重建而非增量维护：IM 规模下成本可忽略，而增量维护漏一处就是陈旧数据，比慢更糟。
+   - `ChannelSessionView` 只带「够画任务列表」的字段：`first_line` 取正文首行截 40 字，**不携带完整会话内容**。
+   - 配对设备三态单测（本地 / 配对设备 / 未认证）+ 一条「A 设备查不到 B 设备 sid」断言。
+8. 出站 relay 连接器（`relay_client.rs`）：
+   - 配置为空 = **不启用**（`RelayConfig::enabled()` 把空白地址当「没开」而不是「配错」）。便携零安装产品的默认形态是「没开远程」，不是「开了但连不上」。
+   - 重连指数退避，**上限必需**（默认 2s → 60s）：无上限的退避会退到几十分钟，于是「relay 恢复后自动接上」这个最朴素的用户预期就不成立。`attempt.min(16)` 防 shift 溢出。
+   - 连上即重置重试计数，否则下次断线从高位退避起。
+   - 退避逻辑抽成 `connect_and_serve` 单独可测——退避错在现场极难复现。
+9. 协议映射适配层（`mobile_protocol.rs`）：Clawket 式事件名 ↔ hermix envelope 的映射**单向收口在此文件，禁止散落**。两条硬规则：
+   - **不可映射的类型返回 `None`、不产出半成品帧**：给 App 一个它不认识的 `type`，UI 会静默忽略，现场表现是「消息丢了」而不是「类型不认识」。未知内部字段也不外泄。
+   - **审批在 App 侧只暴露 deny / once**：`Origin::PairedDevice` 对 `ApproveAlways` 无条件 `Denied`，`session`（永久）态**刻意留在枚举里但 `as_wire()` 返回 `None`**，让缺口显式可见；并且 `approval_request_to_mobile` 带 `can_persist: false`——手机屏幕小、按钮少一个用户未必察觉，但下次审批照样弹会让人以为是自己点错了。
 
 ### relay（apps/relay/，新建，Node + Express + WS + SQLite）
 
 10. 模块清单：`src/auth.js`（用户注册 / 登录，token 哈希存储）、`src/devices.js`（设备登记 / 撤销）、`src/pairing.js`（配对码中转，6 位码语义与 `hermix-server/src/pairing.rs` 对齐）、`src/router.js`（token → 电脑 WS 映射与帧转发，**唯一含转发逻辑的文件**）、`src/audit.js`（审计行，对齐 `pairing.rs` 的 `AuditRow` 字段）、`src/proto.js`（**仅外层信封 + 版本号**，见下）。
-11. 硬约束：不存明文 token；**不解析内层帧内容**；不执行任何业务；每连接记审计（连接 / 配对 / 路由 / 断开）。
+11. 硬约束：不存明文 token；**不解析内层帧内容**；**method / path / `Authorization` / `X-Hermix-Signature` 四个字段一律原样透传**（签名覆盖 `METHOD\npath`，relay 重写任一项都会让签名失效）；**不校验 token 真伪**（判定权在 hermix 的 `DeviceRegistry`，见 §后端设计 6）；每连接记审计（连接 / 配对 / 路由 / 断开）。
 12. **外层信封足够**：既然 relay 不解析帧内容，它只需要 `{type: hello|pair|route|ack, token_hash, proto_version, payload}` 五类外层记录，内层 payload 整体透传。据此 `proto.js` 收窄为外层信封定义，**帧格式只有 `relay_proto.rs` 一处真相源**，不再有第二份手写定义。`proto_version` 仍保留作双端漂移的运行时兜底。
 
 ## 前端设计（安卓 App，组件 / 布局 / 色系）
@@ -123,7 +145,8 @@ Status: proposed — P1 地基已独立成篇并落地（见 [IM 远程任务生
 
 - Kotlin + Jetpack Compose + Material 3；MVVM；Room（离线缓存）；OkHttp（WS + REST）；minSdk 26（无 GMS 依赖）。
 - 新目录 `apps/android/`，**不进 workspace 编译链**（不触碰 Rust 交叉编译禁区）。
-- token 存 EncryptedSharedPreferences（Keystore）。
+- token 存 EncryptedSharedPreferences（Keystore）。**并据此现算请求签名**：每个请求（含 WS 握手）带 `X-Hermix-Signature`（`request_signature.rs:6-10`），`HMAC_SHA256(token, METHOD\npath\nt\nnonce)`。token 丢了不等于能无限用——这是服务端 T4 对策，绕不过去。
+- **配对完成后必须报一次时钟偏差**：签名含 unix 时间戳，设备时间不准会全部 401，而用户看到的现象是「配对成功了但连不上」，属于最难自查的一类故障。
 - **信任建立不许由手输地址完成**（原「首连记录证书 sha256 的 TOFU」不足）：配对码 / 二维码内绑定 relay 身份（host + 证书 sha256），App 显式展示 host 与指纹并要求用户确认；手输 relay 地址只允许用于**二次连接**，且必须与已确认指纹一致，否则断开。TOFU 单独用的物理问题是：首次连接的信任对象由用户输入决定，输错地址或扫码环节被换址即等于交出设备 token。
 
 ### 四屏（范围锁死，超出砍进 backlog）
@@ -131,6 +154,8 @@ Status: proposed — P1 地基已独立成篇并落地（见 [IM 远程任务生
 **屏 1 配对（`ui/pairing/PairingScreen.kt`）**
 - 垂直居中列：logo（56dp）→ 标题「连接你的助手」（headlineSmall）→ 说明（bodyMedium, text-muted）→ 6 位码输入（4 个单字符 OutlinedTextField 横排，间距 8dp）或「扫码」（FilledTonalButton，48dp 全宽）→ 底部「relay 地址」折叠项（ExposedDropdownMenuBox）。
 - **配对确认页必须显示 relay host + 证书指纹**（见上）。
+- **配对完成后必须报一次时钟偏差**：请求签名含 unix 时间戳，容许窗口只有 ±300s（`request_signature.rs:20`），设备时间不准会**全部 401**。而用户看到的现象是「配对成功了但连不上」——最难自查的一类故障。屏 1 在配对成功后立刻显示一个时钟偏移警告。
+- **relay 地址从哪来**：地址本身是配置项（用户自填或从配对二维码解出），但**「用户怎么获得一个 relay 实例」是 §待拍板 3 的未决项**。本篇只保证：换地址是改配置，不动代码。
 - 深链 `hermix://pair?code=…` 预填码；状态机：输入 → 本地格式校验 → 提交 → 成功跳主屏 / 失败在页内 error 行（不 toast）。
 
 **屏 2 对话（`ui/chat/ChatScreen.kt` + `ChatViewModel`）**
@@ -141,8 +166,9 @@ Status: proposed — P1 地基已独立成篇并落地（见 [IM 远程任务生
 - **PC 重启 / 任务中断要显式呈现**：消费 P1 的「上次任务中断于 {时间}，发「继续」可恢复」回执，给「继续」按钮（走 §后端设计 4 的带上下文续跑，不做原样重发）。
 
 **屏 3 审批（`ui/approval/ApprovalCard.kt`）**
-- 消息流内嵌卡片（`SecondaryContainer` 底，1dp `OutlineVariant` 描边）：工具名（titleMedium）+ 参数折叠（Json 摘要，超 3 行截断 + 展开）+ 三键横排 FilledTonalButton。
-- **三键是否成立取决于 §待拍板 1 的结论**：走 channel 侧则「允许一次 / 永久允许 / 拒绝」与 IM 1/2/3 同源同义；走 REST 则「永久允许」**必然被拒**（能力位硬边界），必须砍成两键。不得先做三键再发现点不动。
+- 消息流内嵌卡片（`SecondaryContainer` 底，1dp `OutlineVariant` 描边）：工具名（titleMedium）+ 参数折叠（Json 摘要，超 3 行截断 + 展开）+ **两键**横排 FilledTonalButton：允许一次 / 拒绝。
+  - **只有两键，不是三键**（2026-10-04 拍板）：`Origin::PairedDevice` 对 `ApproveAlways` 是**无条件 Denied**，`effective_decision_for_paired` 对矩阵 Denied 不做挽救（`security.rs:429-440`），设备 scopes 里写 `approvealways` 也不生效。所以「永久允许」**在技术上不可能**经手机端授予，持久放行走桌面。
+  - 服务端会显式下发 `can_persist: false`（`mobile_protocol::approval_request_to_mobile`）——手机屏幕小、按钮少一个用户未必察觉，但下次审批照样弹会让人以为是自己点错了。App **必须**把这个标志渲染出来，而不是静默少一个按钮。
 - **必须渲染自动拒绝倒计时**：审批超时默认 600s、到期自动 deny，字段已随帧下发（`hermix-transport/src/lib.rs:521-527`；真相源 `hermix-config/src/config.rs:782-783`）。`2026-09-30-im-channel-workspace-scope.md:95` 写的 300s 是过期数字，本篇以 600s 为准并建议同 PR 修正该篇。
 - **必须处理 `expired` / `skipped`**：600s 自动 deny + relay 往返使「点下去时已过期」成为常态而非边缘情况（`apps/desktop-tauri/src/types.ts:8-14` 已定义这两种结果；`routes.rs:1640` 记着批量审批 + 零超时导致 agent 永久阻塞的真实事故）。已决定的卡片置灰 + 徽标；过期的显示「已超时自动拒绝」而非静默无响应。
 - 数据流：WS `$events` 审批瀑布帧 → ViewModel → 卡片；点击 → 复用 `POST /v1/sessions/{id}/approval` → 卡片更新。
@@ -252,6 +278,9 @@ Status: proposed — P1 地基已独立成篇并落地（见 [IM 远程任务生
 
 ## Alternatives considered
 
+- **手机端改用 SSE + REST 上行**（axum 内置 `axum::response::sse`，不引新依赖）：否决。`handle_ws_stream` 吃的是**双向** envelope 协议，SSE 只能单向，等于为了接手机重写一整套流式协议。`since_seq` 增量机制虽已存在（`HANDOFF_FOUNDATION_REWRITE.md:178` 记载订阅端点已升级为 seq 域驱动双分支），但它只覆盖「订阅」，不覆盖「上行发消息」。重写的代价大于新写一个 `Transport` 实现。
+- **纯 REST 轮询**：否决。工具轨迹与增量文本的体验不可接受，且 P1 的 `ImStream` 语义无法映射到一次性响应。
+- **不再引入 WS 面、改用现有 stdio 通道**：否决。stdio 是进程内管道，手机端跨网络够不着。
 - **fork Clawket 改造**（曾为首选）：全开源、双端已上架、多后端协议包现成。弃因：引入 Expo/RN 全新栈的维护面；relay 是 Cloudflare Worker 第三方托管；fork 上游合并成本随其活跃迭代（267 commits / 345★）持续存在。
 - **fork dshmobile**：安卓端**闭源**（仅签名 APK），插件 / 协议 / relay 开源但手机端不可改。直接排除——这也是放弃「改开源 App」路线的关键证据。
 - **Tailscale 直连（零部署）**：曾推荐为默认。弃因：用户拍板不做直连优先。**但「唯一通道」是否排除降级路径仍未决**（§待拍板 4）——拒绝直连优先 ≠ 必须没有直连降级。
@@ -272,6 +301,8 @@ What we give up:
 - **一期会话内容明文经过 relay**：已写进信任模型，但它是**代价而非细节**——relay 被攻破即会话内容泄露（token 哈希与路由元数据不构成内容保护）。
 - **`/stop` 是对已上线 QQ / 企微用户的可见行为变更**（已随 P1 落地，详见 implemented 篇）：从「波及本机所有会话」改为「只中断发起者会话」。这是修正既有隐患（`session.rs:365-369` 记录了「一个闲着的 IM 用户发 /stop 能掐掉本机正在跑的会话」），但属用户可感知行为，须在 release note 说明。
 - **两套新供应链**：一个提案引入 npm（relay）与 Gradle（App）两套构建与锁文件，而仓库源码基线已 ≈14 万行、长期目标 10 万行（AGENTS.md）。缓解手段是范围锁死 + PR 切分 + CI 门禁，不是「以后再说」。
+- **`/v1/ws-stream` 复活这件事本身有维护风险**：该端点 2026-09-26 因「无移动端消费方」被砍，现在因有了移动端而加回。**凡是「当初因为某前提被砍、如今因前提变化加回」的端点，都要在代码注释里写明那次删除的 commit 与当时的前提**，否则端点审计批次会把它当回退处理。
+- **手机端把 hermix 的 WS 面重新暴露到网络上**：桌面端此前刻意收敛掉裸 WS（全部走 stdio bridge），本篇把一个真正监听端口的 WS 端点放回来。这条安全面是新增的，必须由设备 Bearer 鉴权 + 失败预算 + 限流三重把住，且**只服务 `v1` 协议面**，不重新引入当初一并砍掉的 `/v1/ws`（request-reply 那个）。
 - **测试矩阵扩大**：四端（PC / relay / App / IM）组合行为；以冒烟脚本 + 四屏范围锁死 + App 单元测试控制。
 
 ## 待拍板

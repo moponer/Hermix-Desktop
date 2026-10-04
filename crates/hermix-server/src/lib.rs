@@ -15,6 +15,12 @@ mod task_tracker_adapter;
 mod task_record_sink;
 mod security;
 mod crash_dump;
+mod mobile;
+mod mobile_protocol;
+mod mobile_ws;
+mod relay_client;
+mod relay_proto;
+mod ws_transport;
 mod metrics;
 #[cfg(any(test, feature = "test-helpers"))]
 pub mod test_state;
@@ -281,6 +287,28 @@ pub fn router(state: HttpServerState) -> Router {
     let mut app = Router::new()
         .route("/health", get(health))
         .route("/shutdown", get(shutdown_server))
+        // 手机端（Hermix M）经自建 relay 从公网接入的流式面。
+        //
+        // **这个端点曾经被删**（`181a51aa`，2026-09-26 端点审计）：当时的
+        // 理由是「桌面端全量迁 stdio bridge、前端零裸 `new WebSocket`、本项目
+        // 没有移动端 crate」。桌面端那半确实迁完了，但「没有移动端」这个前提
+        // 现在不成立了——手机端跨网络，stdio 管道够不着。看到它复活**不要当成
+        // 回退删掉**：流式协议本体（`ws::handle_ws_stream`）从未改动，本次只补
+        // upgrade handler 与 over-WebSocket 的 `Transport` 包装。
+        //
+        // 鉴权走 `security::authenticate_device_request`：Bearer + **请求签名**
+        // 双要素，与 HTTP 面同一份判定。
+        .route(
+            "/v1/ws-stream/{session_id}",
+            get(mobile_ws::ws_stream_upgrade),
+        )
+        // 手机端控制面。中断与任务列表都只按「本设备可见的 sid」返回，
+        // 否则 A 手机能列出 B 手机的会话名与首行。
+        .route(
+            "/v1/sessions/{session_id}/interrupt",
+            post(mobile::interrupt_session),
+        )
+        .route("/v1/tasks", get(mobile::list_tasks))
         // §5.5 第 3/4 层：设备配对。complete 与 /pair 落地页对 Unpaired 开放
         // （信任建立本身），其余端点 handler 内强制 Local。
         .route("/pair", get(pairing::pair_page))

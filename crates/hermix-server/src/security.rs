@@ -276,7 +276,11 @@ fn ip_allowed(security: &HttpSecurity, req: &Request<Body>) -> bool {
 
 /// 来源推导（§5.5 第 5 层）。优先级：设备凭证 > loopback > 其他。
 /// 来源由服务端凭证判定，客户端无法声明（对策 T8）。
-fn derive_origin(
+///
+/// `pub(crate)` 是为了让**非 HTTP 面**也能用同一份来源判定——目前只有
+/// `/v1/ws-stream` 的 upgrade handler（手机端经 relay 接入）。它自己重写一套
+/// 就会绕过本模块的未配对闸门、IP allowlist 与能力位交集。
+pub(crate) fn derive_origin(
     device: Option<&crate::pairing::PairedDevice>,
     ip: Option<IpAddr>,
 ) -> Origin {
@@ -348,6 +352,94 @@ pub fn effective_decision_with_scopes(
         matrix
     } else {
         Decision::Denied
+    }
+}
+
+/// 设备鉴权的**非 HTTP 面**入口：给 WS upgrade handler 用。
+///
+/// 存在的理由是「同一份判定只能有一处」。`request_guard` 是 HTTP 面的实现；
+/// 手机端经 relay 从公网打 `/v1/ws-stream`，走不到 `request_guard`，若在
+/// handler 里自己解析 Bearer、自己验签名，就等于有第二套判定——绕过未配对
+/// 闸门、能力位交集与失败预算是迟早的事。
+///
+/// 判定链与 HTTP 面完全一致：
+/// 1. `Authorization: Bearer <token>` → `DeviceRegistry::authenticate`；
+/// 2. **已配对设备必须另附请求签名**（T4 对策，见 `request_signature.rs:6-10`）——
+///    `HMAC_SHA256(token, METHOD\npath\nt\nnonce)`，时间窗 + nonce 单次使用，
+///    所以「token 泄漏 ≠ 无限使用」；
+/// 3. 记 `AuditEvent::Auth`（命中 allowed / 出示但未命中 denied）。
+///
+/// 返回 `Ok(device)` 时调用方应继续用 [`derive_origin`] + 能力位交集做
+/// 授权；本函数只回答「你是谁」。
+pub(crate) fn authenticate_device_request(
+    headers: &axum::http::HeaderMap,
+    method: &str,
+    path: &str,
+    devices: Option<&std::sync::Arc<crate::pairing::DeviceRegistry>>,
+    nonce_cache: &crate::request_signature::NonceCache,
+) -> Result<crate::pairing::PairedDevice, DeviceAuthError> {
+    let token = headers
+        .get(AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer ").map(str::trim))
+        .filter(|s| !s.is_empty());
+    let Some(token) = token else {
+        return Err(DeviceAuthError::NoToken);
+    };
+    let device = devices
+        .and_then(|r| r.authenticate(token))
+        .ok_or(DeviceAuthError::InvalidToken)?;
+    // 签名与 token 一一对应：没有有效签名就当没配对处理，而不是放行。
+    let sig_ok = crate::request_signature::signature_header(headers)
+        .and_then(|h| {
+            crate::request_signature::verify_signature(
+                h,
+                token,
+                method,
+                path,
+                chrono::Utc::now().timestamp(),
+                nonce_cache,
+            )
+            .ok()
+        })
+        .is_some();
+    if !sig_ok {
+        return Err(DeviceAuthError::BadSignature);
+    }
+    if let Some(reg) = devices {
+        reg.record_audit(
+            crate::pairing::AuditEvent::Auth,
+            Some(device.device_id.clone()),
+            None,
+            Some("allowed".to_string()),
+        );
+    }
+    Ok(device)
+}
+
+/// 设备鉴权失败原因。**故意不细分 token 格式错误与签名错误给客户端看**——
+/// 攻击者据此区分「token 存在但签名错」与「token 不存在」，是免费的 oracle。
+/// 对外统一 401，日志里才记具体原因。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DeviceAuthError {
+    /// 没有 `Authorization: Bearer`（或为空）。
+    NoToken,
+    /// token 无效 / 已撤销。
+    InvalidToken,
+    /// 配对设备缺有效请求签名。
+    BadSignature,
+}
+
+impl DeviceAuthError {
+    /// 对外响应体。统一 401 + 不含原因的短句。
+    pub(crate) fn as_response(self) -> axum::response::Response {
+        use axum::response::IntoResponse;
+        let detail = match self {
+            Self::NoToken | Self::InvalidToken => "missing or invalid device token",
+            Self::BadSignature => "missing or invalid request signature",
+        };
+        tracing::debug!(error = ?self, "device auth rejected on non-HTTP face");
+        (axum::http::StatusCode::UNAUTHORIZED, detail).into_response()
     }
 }
 
@@ -586,9 +678,118 @@ mod tests {
         }
     }
 
+    /// 设备鉴权辅助（WS 等非 HTTP 面用）。四种路径都要覆盖：这条是手机端
+    /// 唯一能进 `/v1/ws-stream` 的门。
     #[test]
-    fn unpaired_gate_blocks_non_pairing_paths() {
-        // 远程无凭证 = Unpaired。
+    fn 非http面设备鉴权四路径() {
+        use axum::http::header::AUTHORIZATION;
+        use axum::http::{HeaderMap, HeaderValue};
+        use std::sync::Arc;
+
+        fn setup() -> (tempfile::TempDir, Arc<crate::pairing::DeviceRegistry>, String) {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let reg = Arc::new(
+                crate::pairing::DeviceRegistry::open(&dir.path().join("devices.db"))
+                    .expect("registry"),
+            );
+            let (_d, token) = reg.pair("测试手机").expect("pair");
+            (dir, reg, token)
+        }
+
+        fn bearer(token: &str) -> HeaderMap {
+            let mut h = HeaderMap::new();
+            h.insert(
+                AUTHORIZATION,
+                HeaderValue::from_str(&format!("Bearer {token}")).expect("hdr"),
+            );
+            h
+        }
+
+        fn signed(token: &str, method: &str, path: &str, nonce: &str) -> HeaderMap {
+            let t = chrono::Utc::now().timestamp();
+            let sig = crate::request_signature::compute_signature(token, method, path, t, nonce);
+            let mut h = bearer(token);
+            h.insert(
+                "x-hermix-signature",
+                HeaderValue::from_str(&format!("t={t},n={nonce},s={sig}")).expect("hdr"),
+            );
+            h
+        }
+
+        const PATH: &str = "/v1/ws-stream/s1";
+
+        // 正路：Bearer + 有效签名 → 拿到设备
+        {
+            let (_d, reg, token) = setup();
+            let cache = crate::request_signature::NonceCache::new();
+            let h = signed(&token, "GET", PATH, "n1");
+            let dev = authenticate_device_request(&h, "GET", PATH, Some(&reg), &cache)
+                .expect("应通过");
+            assert_eq!(dev.device_id, reg.authenticate(&token).unwrap().device_id);
+        }
+
+        // 无 Authorization
+        {
+            let (_d, reg, _t) = setup();
+            let cache = crate::request_signature::NonceCache::new();
+            let h = HeaderMap::new();
+            assert_eq!(
+                authenticate_device_request(&h, "GET", PATH, Some(&reg), &cache).unwrap_err(),
+                DeviceAuthError::NoToken
+            );
+        }
+
+        // token 无效
+        {
+            let (_d, reg, _t) = setup();
+            let cache = crate::request_signature::NonceCache::new();
+            let h = bearer("hmxd_bogus");
+            assert_eq!(
+                authenticate_device_request(&h, "GET", PATH, Some(&reg), &cache).unwrap_err(),
+                DeviceAuthError::InvalidToken
+            );
+        }
+
+        // token 对但**没签名** —— 这是手机端最容易漏的一条：Bearer 本身
+        // 不构成授权（§5.5 T4）。
+        {
+            let (_d, reg, token) = setup();
+            let cache = crate::request_signature::NonceCache::new();
+            let h = bearer(&token);
+            assert_eq!(
+                authenticate_device_request(&h, "GET", PATH, Some(&reg), &cache).unwrap_err(),
+                DeviceAuthError::BadSignature
+            );
+        }
+
+        // nonce 重放：同一份签名头再发一次必须被拒（token 泄漏≠无限使用）
+        {
+            let (_d, reg, token) = setup();
+            let cache = crate::request_signature::NonceCache::new();
+            let h = signed(&token, "GET", PATH, "replay-me");
+            assert!(authenticate_device_request(&h, "GET", PATH, Some(&reg), &cache).is_ok());
+            assert_eq!(
+                authenticate_device_request(&h, "GET", PATH, Some(&reg), &cache).unwrap_err(),
+                DeviceAuthError::BadSignature,
+                "重放必须失败"
+            );
+        }
+
+        // 签名覆盖 method + path：换一个 path 就不该通过（relay 一旦重写
+        // 路径，手机端的签名就全废——这是 relay 必须字节级透传的根因）。
+        {
+            let (_d, reg, token) = setup();
+            let cache = crate::request_signature::NonceCache::new();
+            let h = signed(&token, "GET", PATH, "n2");
+            assert_eq!(
+                authenticate_device_request(&h, "GET", "/v1/other", Some(&reg), &cache).unwrap_err(),
+                DeviceAuthError::BadSignature
+            );
+        }
+    }
+
+    #[test]
+    fn unpaired_gate_blocks_non_pairing_paths() {        // 远程无凭证 = Unpaired。
         assert!(matches!(
             derive_origin(None, Some([192, 168, 1, 50].into())),
             Origin::Unpaired

@@ -113,6 +113,8 @@ pub fn empty_state() -> HttpServerState {
         custom_app_manager: None,
         device_registry: None,
         pairing_sessions: Arc::new(crate::pairing::PairingSessions::new()),
+        nonce_cache: crate::request_signature::NonceCache::new(),
+        channel_sessions: Arc::new(std::sync::Mutex::new(Vec::new())),
     }
 }
 
@@ -173,6 +175,8 @@ fn build_state_with_home(home: PathBuf) -> HttpServerState {
         custom_app_manager: None,
         device_registry: None,
         pairing_sessions: Arc::new(crate::pairing::PairingSessions::new()),
+        nonce_cache: crate::request_signature::NonceCache::new(),
+        channel_sessions: Arc::new(std::sync::Mutex::new(Vec::new())),
     }
 }
 

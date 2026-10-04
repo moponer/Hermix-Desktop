@@ -125,6 +125,23 @@ pub struct ClarifyBroadcast {
     pub choices: Vec<String>,
 }
 
+/// 一个 IM / 设备会话的对外可见状态。
+///
+/// 字段刻意只到「够手机端画任务列表」为止：`first_line` 会被原样送到手机上，
+/// 所以它只取正文首行（`session.rs::first_line` 截 40 字），**不携带完整
+/// 会话内容**。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ChannelSessionView {
+    /// `{platform}:{user}`，与 `ChannelRuntime::key` 同形。
+    pub key: String,
+    /// `running` | `queued`。
+    pub state: &'static str,
+    /// 正文首行（截断）。
+    pub first_line: String,
+    /// 排队位次（1-based）；`running` 为 None。
+    pub position: Option<usize>,
+}
+
 #[derive(Clone)]
 pub struct HttpServerState {
     pub config: Arc<GatewayConfig>,
@@ -269,6 +286,12 @@ pub struct HttpServerState {
     /// `effects.db`，崩溃恢复协议靠它做任务级判定。
     /// `None` 时端点降级 503（测试 / CLI 模式）。
     pub task_record_store: Option<std::sync::Arc<hermix_task::TaskRecordStore>>,
+    /// IM 通道的会话视图快照，手机端 `GET /v1/tasks` 的唯一数据源。
+    ///
+    /// **state 只存不算**：`running` / `queues` 的真相在 `ChannelRuntime` 里，
+    /// 由它全量重建后写进来（`crate::mobile::publish_channel_sessions`）。
+    /// 反过来让 HTTP 层去问通道，等于让 state 依赖 channels——那条依赖是反的。
+    pub channel_sessions: std::sync::Arc<std::sync::Mutex<Vec<ChannelSessionView>>>,
     /// Automation lifecycle service. Backed by
     /// [`hermix_automation::AutomationRepository`] pointing at the same
     /// `sessions.db` (铁律 D/WAL). `None` when the DB path can't be
@@ -285,6 +308,14 @@ pub struct HttpServerState {
     /// §5.5 第 3/4 层：已配对设备注册表（`<hermix_home>/devices.db`）。
     /// `None` = 打不开库（测试 / 只读环境），此时远程一律 Unpaired。
     pub device_registry: Option<Arc<crate::pairing::DeviceRegistry>>,
+    /// 请求签名 nonce 缓存，**与 HTTP 面的 `HttpSecurity::nonce_cache` 是两个
+    /// 实例**。
+    ///
+    /// 刻意不共享：共享要改 `HttpSecurity::new` 的构造签名并牵动中间件装配，
+    /// 而分开是安全的——签名覆盖 `method\npath`，跨面重放必然因路径不匹配而
+    /// HMAC 失配（`/v1/ws-stream/{sid}` 没有任何 HTTP 路由与之同路径），能真正
+    /// 重放的只有同一个面，而那由该面自己的缓存兜住。TS 绕过要靠改这里。
+    pub nonce_cache: crate::request_signature::NonceCache,
     /// 一次性配对会话管理器（进程内，TTL 120s）。
     pub pairing_sessions: Arc<crate::pairing::PairingSessions>,
 }
@@ -793,6 +824,7 @@ impl HttpServerState {
             // 单实例复用启动对账时构造的 store（见上方 TaskRecord 对账块）；
             // 单笔持久化失败在端点侧降级 500。
             task_record_store: Some(std::sync::Arc::new(task_record_store)),
+            channel_sessions: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             automation_service: {
                 let repo = std::sync::Arc::new(hermix_automation::AutomationRepository::new(
                     session_persistence.db_path().to_path_buf(),
@@ -818,6 +850,7 @@ impl HttpServerState {
                 }
             },
             pairing_sessions: Arc::new(crate::pairing::PairingSessions::new()),
+            nonce_cache: crate::request_signature::NonceCache::new(),
         };
         state.register_task_tracker_tools();
 
@@ -1109,6 +1142,7 @@ impl HttpServerState {
             // 单实例复用启动对账时构造的 store（见上方 TaskRecord 对账块）；
             // 单笔持久化失败在端点侧降级 500。
             task_record_store: Some(std::sync::Arc::new(task_record_store)),
+            channel_sessions: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             automation_service: {
                 let repo = std::sync::Arc::new(hermix_automation::AutomationRepository::new(
                     session_persistence.db_path().to_path_buf(),
@@ -1134,6 +1168,7 @@ impl HttpServerState {
                 }
             },
             pairing_sessions: Arc::new(crate::pairing::PairingSessions::new()),
+            nonce_cache: crate::request_signature::NonceCache::new(),
         }; // close Self { ... }
         state.register_task_tracker_tools();
         Ok(state)
