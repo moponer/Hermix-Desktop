@@ -276,6 +276,8 @@ fn seed_default() -> AutomationState {
         schedule_label: Some(schedule_label.into()),
         model: None,
         expert_id: None,
+        skills: None,
+        max_runs: None,
         workspace_path: None,
         permission_level: None,
         category: Some(category.into()),
@@ -778,9 +780,9 @@ impl DashboardCronjobBackend {
     }
 
     fn find_task(&self, id: &str) -> Result<AutomationTask, ToolError> {
-        let snapshot = list_tasks(State(self.state.clone()));
-        snapshot
-            .0
+        // 走同步的 `load_state` 而非 `list_tasks`：后者是 async handler，
+        // 在同步 fn 里调用拿到的是 Future，`.0` 取不到字段（E0609）。
+        load_state(&self.state)
             .tasks
             .into_iter()
             .find(|t| t.id == id)
@@ -812,6 +814,7 @@ impl CronjobBackend for DashboardCronjobBackend {
                 workspace_path: None,
                 permission_level: None,
                 skills: None,
+                max_runs: None,
                 category: None,
                 icon: Some("⏰".to_string()),
                 last_run_at: None,
@@ -833,8 +836,8 @@ impl CronjobBackend for DashboardCronjobBackend {
     }
 
     async fn list(&self) -> Result<String, ToolError> {
-        let snapshot = list_tasks(State(self.state.clone()));
-        serde_json::to_string(&snapshot.0.tasks)
+        // 同 find_task：list_tasks 是 async handler，直接取 `.0` 拿到的是 Future。
+        serde_json::to_string(&load_state(&self.state).tasks)
             .map_err(|e| ToolError::ExecutionFailed(e.to_string()))
     }
 
