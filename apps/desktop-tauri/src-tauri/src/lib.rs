@@ -622,6 +622,12 @@ pub fn run() {
                 // without this hook the browser outlives us and squats on
                 // `127.0.0.1:9222` across restarts.
                 browser_cleanup::kill_spawned_chrome();
+                // 同理：本地索引的提权 helper（usn-indexer.exe）是常驻进程，
+                // 退出前一直锁着自己的镜像文件 —— 不发信号的话，「关掉应用就重装」
+                // 会被 NSIS 的「无法打开要写入的文件」挡住。非提权的主进程杀不掉
+                // 它（OpenProcess ACCESS_DENIED），只能走文件信号；崩溃/强杀则由
+                // helper 侧 60s 心跳陈旧规则兜底。
+                commands_local_search::shutdown_background_index();
             }
         })
         // ── 启动白屏修复（2026-09-30）──────────────────────────────

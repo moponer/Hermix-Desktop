@@ -9,10 +9,11 @@
 //! ReturnOnlyOnClose=1 只取已关闭记录），把增删事件追加到
 //! `updates.jsonl`。主进程 tail 该文件实时更新内存索引。
 //!
-//! 生命周期：主进程心跳（main.alive）消失 >60s → 自杀；主进程重启
-//! 通过 helper.pid + helper.alive 复用本进程（UAC 只弹一次）。
-//! 主进程写 resnap.request → 重新全量枚举（新 snapshot 文件、清空
-//! updates），用于目录改名后的全量校正。
+//! 生命周期：主进程心跳（main.alive）**陈旧** >60s → 自杀；主进程正常退出前
+//! 写 shutdown.request → 立即自杀（不等 60s，这样「关掉就重装」不会被自己
+//! 锁住的镜像文件挡住）。主进程重启通过 helper.pid + helper.alive 复用本进程
+//! （UAC 只弹一次）。主进程写 resnap.request → 重新全量枚举（新 snapshot 文件、
+//! 清空 updates），用于目录改名后的全量校正。
 //!
 //! 协议（JSONL）：
 //!   snapshot-*.jsonl: {"frn":u64,"parent":u64,"name":"...","is_dir":bool,"ts":i64}
@@ -367,6 +368,32 @@ fn index_volume(volume: &str, out: &mut BufWriter<File>) -> Result<usize, String
 
 // ── Phase 2 + 生命周期：常驻监听 ─────────────────────────────────────
 
+/// 心跳新鲜度窗口。主进程每 5s touch 一次 main.alive，15s 窗��容得下两次丢失
+/// （磁盘忙 / 调度抖动），又远小于 60s 的自杀阈值。
+const HEARTBEAT_WINDOW: Duration = Duration::from_secs(15);
+
+/// main.alive 是否算「主进程还活着」。
+///
+/// 判的是**最后修改时间**而非「文件是否存在」。主进程只写不删，正常退出后
+/// main.alive 作为残留文件一直躺在交换目录里；早先这里按 `exists()` 判，结果
+/// 是 IDLE 永远归零 —— helper 从此不自杀，一个提权进程长期锁着安装目录下的
+/// 镜像文件，用户「关掉应用就重装」时 NSIS 报「无法打开要写入的文件」。
+///
+/// 纯函数（时间由调用方传入）是为了能单测「文件还在、但内容很旧」这个关键
+/// 状态 —— 那正是旧实现唯一漏掉的情形。
+fn alive_fresh(
+    modified: Option<std::time::SystemTime>,
+    now: std::time::SystemTime,
+    window: Duration,
+) -> bool {
+    match modified {
+        // 时钟回拨（modified 在 now 之后）时 duration_since 报错，这里按
+        // 「不新鲜」处理：宁可 60s 后自杀一次，也不要在主进程活着时永不退出。
+        Some(t) => now.duration_since(t).map(|d| d < window).unwrap_or(false),
+        None => false,
+    }
+}
+
 fn main() {
     let (dir, volumes) = parse_args();
     let pid_path = dir.join("helper.pid");
@@ -374,6 +401,7 @@ fn main() {
     let main_alive = dir.join("main.alive");
     let updates_path = dir.join("updates.jsonl");
     let resnap_path = dir.join("resnap.request");
+    let shutdown_path = dir.join("shutdown.request");
 
     // 已有存活 helper（主进程重启复用，免二次 UAC）：退出让位。
     if pid_path.exists() && alive_path.exists()
@@ -437,7 +465,8 @@ fn main() {
     // 各卷 watch 状态；不支持的卷（FAT32）静默跳过。
     let mut watches: Vec<WatchState> = volumes.iter().filter_map(|v| open_watch(v)).collect();
 
-    // 常驻循环：心跳检查（60s 无 main.alive → 自杀）、resnap 重枚举、USN 轮询。
+    // 常驻循环：心跳检查（main.alive 陈旧 60s → 自杀）、正常退出信号、resnap
+    // 重枚举、USN 轮询。
     thread_local! {
         static IDLE: std::cell::Cell<u32> = std::cell::Cell::new(0);
     }
@@ -447,8 +476,23 @@ fn main() {
         std::thread::sleep(Duration::from_millis(1000));
         touch(&alive_path);
 
-        // 心跳：main.alive 消失超 60s → 主进程已死，自杀。
-        if main_alive.exists() {
+        // 主进程正常退出前会写 shutdown.request：**不等心跳超时，立刻退出**。
+        // 这一条是为「关掉应用就重装 / 升级」准备的——helper 是提权进程，一直
+        // 锁着自己的镜像文件，NSIS 覆写 usn-indexer.exe 会报
+        // 「无法打开要写入的文件」。
+        if shutdown_path.exists() {
+            let _ = std::fs::remove_file(&shutdown_path);
+            let _ = std::fs::remove_file(&pid_path);
+            exit(0);
+        }
+
+        // 心跳：main.alive 陈旧超 60s → 主进程已死，自杀。
+        let fresh = alive_fresh(
+            main_alive.metadata().ok().and_then(|m| m.modified().ok()),
+            std::time::SystemTime::now(),
+            HEARTBEAT_WINDOW,
+        );
+        if fresh {
             IDLE.with(|c| c.set(0));
         } else {
             let idle = IDLE.with(|c| c.get()) + 1;
@@ -512,5 +556,40 @@ fn main() {
             let _ = updates.flush();
             last_flush = Instant::now();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, SystemTime};
+
+    /// 心跳判定必须看**新鲜度**。这一组用例钉住 2026-10-04 修的那个 bug：
+    /// 旧实现只判文件是否存在，主进程退出后 main.alive 残留 → helper 永不自杀。
+    #[test]
+    fn alive_fresh_checks_staleness_not_existence() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let w = HEARTBEAT_WINDOW;
+
+        // 刚 touch 过 → 活着
+        assert!(alive_fresh(Some(now), now, w));
+        // 3s 前 touch（正常心跳间隔 5s 内）→ 活着
+        assert!(alive_fresh(Some(now - Duration::from_secs(3)), now, w));
+        // 20s 前 touch：**文件还在**，但主进程早没了 → 必须判死。
+        // 这条在旧实现下会返回「活着」，是 bug 的核心。
+        assert!(!alive_fresh(Some(now - Duration::from_secs(20)), now, w));
+        // 文件根本不存在 → 死
+        assert!(!alive_fresh(None, now, w));
+        // 时钟回拨（modified > now）→ 保守判死，不因一次时间跳变永久存活
+        assert!(!alive_fresh(Some(now + Duration::from_secs(5)), now, w));
+    }
+
+    /// 60s 自杀阈值本身没被改动过：这里锁住「陈旧满 60s 一定判死」，
+    /// 避免有人调小 HEARTBEAT_WINDOW 时把自杀线也一起放松。
+    #[test]
+    fn heartbeat_window_stays_well_below_the_60s_kill_threshold() {
+        assert!(HEARTBEAT_WINDOW < Duration::from_secs(60));
+        // 且必须容得下主进程的 5s 心跳间隔。
+        assert!(HEARTBEAT_WINDOW > Duration::from_secs(5) * 2);
     }
 }

@@ -422,7 +422,7 @@ mod usn_helper {
             .unwrap_or(false)
     }
 
-    /// 主进程心跳线程：每 5s touch main.alive（helper 60s 见不到就自杀）。
+    /// 主进程心跳线程：每 5s touch main.alive（helper 见不到新鲜心跳就自杀）。
     pub fn spawn_heartbeat() {
         let dir = exchange_dir();
         std::thread::spawn(move || {
@@ -432,6 +432,19 @@ mod usn_helper {
                 std::thread::sleep(Duration::from_secs(5));
             }
         });
+    }
+
+    /// 主进程**正常退出**时调用：让 helper 立刻退出，不等 60s 心跳超时。
+    ///
+    /// 为什么必须有这条：helper 是提权进程，退出前一直锁着自己的镜像文件。
+    /// 用户「关掉应用就重装 / 升级」时 NSIS 要覆写 usn-indexer.exe，会直接报
+    /// 「无法打开要写入的文件」。主进程非提权，**不能**用 TerminateProcess
+    /// 去杀它（OpenProcess 会 ACCESS_DENIED），所以只能走文件信号。
+    ///
+    /// 崩溃 / 强杀走不到这里，由 helper 侧 60s 心跳陈旧规则兜底。
+    pub fn request_helper_shutdown() {
+        let _ = std::fs::create_dir_all(exchange_dir());
+        let _ = std::fs::write(exchange_dir().join("shutdown.request"), b"1");
     }
 
     /// 一个 arena 索引 + frn 映射。snapshot 灌入与 updates 重放共用。
@@ -599,6 +612,9 @@ mod usn_helper {
             // 清理上一代交接文件（helper 自己也会清 done，双保险）。
             let _ = std::fs::remove_file(dir.join("done.json"));
             let _ = std::fs::remove_file(dir.join("resnap.request"));
+            // 上一轮主进程退出时写的退出信号必须先清掉，否则刚拉起的 helper
+            // 会在第一个轮询 tick（1s 内）读到它并立刻自杀。
+            let _ = std::fs::remove_file(dir.join("shutdown.request"));
             spawn_elevated(&helper, &dir, volumes)?;
         }
         spawn_heartbeat();
@@ -908,6 +924,16 @@ pub fn start_background_index() {
     }
     eprintln!("[local_search] background index scan starting");
     ensure_index(false);
+}
+
+/// 主进程退出时调用：让常驻的提权 helper 立刻退出（见
+/// [`usn_helper::request_helper_shutdown`] 的「为什么必须有这条」）。
+///
+/// 非 Windows / helper 从未拉起时是空操作。必须在窗口 Destroyed 时调 —— 那是
+/// 主进程生命周期里最后一个还能执行代码的点。
+pub fn shutdown_background_index() {
+    #[cfg(windows)]
+    usn_helper::request_helper_shutdown();
 }
 
 /// 纯同步搜索执行体（spawn_blocking 上跑）。锁内完成匹配与打分，
