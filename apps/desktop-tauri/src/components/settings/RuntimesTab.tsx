@@ -12,7 +12,7 @@
 //   见 docs/RUNTIME_BUNDLING.md 的选型与实测体积。
 
 import { useCallback, useEffect, useState } from "react";
-import { Boxes, FileCode2, GitBranch, RefreshCw } from "lucide-react";
+import { FileCode2, GitBranch, RefreshCw } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 
 type RuntimeKind = "node" | "python" | "git";
@@ -83,18 +83,7 @@ export function RuntimesTab() {
   }, [probe]);
 
   return (
-    <div className="p-6 space-y-6 max-w-2xl">
-      <section>
-        <div className="flex items-center gap-2">
-          <Boxes className="icon-md" />
-          <h3 className="text-[length:var(--text-ui)] font-semibold text-text-primary">内置运行时</h3>
-        </div>
-        <p className="text-xs text-text-muted mt-1 leading-relaxed">
-          便携版不该依赖用户机器上装了什么。内置位优先于系统 PATH；关掉某项只是不放进可用
-          运行时，不会卸载文件。
-        </p>
-      </section>
-
+    <div className="space-y-6 max-w-2xl">
       {error && (
         <div className="px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/30 text-xs text-red-400">
           {error}

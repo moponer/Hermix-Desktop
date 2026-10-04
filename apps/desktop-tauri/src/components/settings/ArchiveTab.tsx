@@ -59,15 +59,6 @@ export function ArchiveTab() {
 
   return (
     <div className="space-y-6">
-      <header>
-        <h2 className="text-[length:var(--text-body)] font-medium text-[var(--color-text-primary)]">
-          已归档
-        </h2>
-        <p className="mt-1 text-[length:var(--text-meta)] text-[var(--color-text-muted)]">
-          归档只是把会话从侧边栏收起来，数据仍在本机。取消归档即可回到列表。
-        </p>
-      </header>
-
       {rows.length === 0 ? (
         <div className="rounded-[var(--radius-lg)] border border-[var(--color-border-primary)] bg-[var(--color-bg-card)] px-4 py-10 text-center text-[length:var(--text-ui)] text-[var(--color-text-muted)]">
           还没有归档的会话。在侧边栏会话上右键即可归档。

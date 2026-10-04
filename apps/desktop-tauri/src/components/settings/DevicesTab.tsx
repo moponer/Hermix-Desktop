@@ -118,11 +118,7 @@ export function DevicesTab() {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-base font-medium text-text-primary">设备与远程接入</h2>
-        <p className="text-sm text-text-muted mt-1">
-          两条互相独立的通道，按需选择：高危工具一律在桌面端强制确认。
-        </p>
-        <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <div className="rounded-lg border border-border-primary bg-bg-card p-3">
             <div className="flex items-center gap-2">
               <span className="inline-grid place-items-center h-5 w-5 rounded-full bg-accent-soft text-accent text-[length:var(--text-tiny)] font-semibold">1</span>

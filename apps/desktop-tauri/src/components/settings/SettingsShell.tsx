@@ -50,6 +50,7 @@ export type SettingsPage =
 interface PageDef {
   id: SettingsPage;
   label: string;
+  /** 侧栏搜索命中用；同时作为内容区页头的说明文案。 */
   hint: string;
   icon: React.ElementType;
   /** 搜索命中用；不写就只能靠标题字面匹配。 */
@@ -65,10 +66,10 @@ const GROUPS: GroupDef[] = [
   {
     label: "偏好",
     items: [
-      { id: "general", label: "通用", hint: "工作模式与系统行为", icon: SlidersHorizontal, keywords: "mode domain 编程 办公 通知 自启 索引" },
-      { id: "appearance", label: "外观", hint: "主题、强调色与对比度", icon: Palette, keywords: "theme 主题 深色 浅色 跟随系统 强调色 accent 对比度" },
-      { id: "model", label: "模型", hint: "大模型配置与连接测试", icon: Cpu, keywords: "model llm provider api key 供应商" },
-      { id: "image", label: "图像", hint: "图片生成偏好", icon: ImageIcon, keywords: "image 图像 生成" },
+      { id: "general", label: "通用", hint: "工作模式、输入快捷键、系统能力与数据位置", icon: SlidersHorizontal, keywords: "mode domain 编程 办公 通知 自启 索引" },
+      { id: "appearance", label: "外观", hint: "主题、强调色与壁纸，立即生效并持久保存", icon: Palette, keywords: "theme 主题 深色 浅色 跟随系统 强调色 accent 对比度" },
+      { id: "model", label: "模型", hint: "统一管理内置与自定义模型；内置供应商只需填 API Key", icon: Cpu, keywords: "model llm provider api key 供应商" },
+      { id: "image", label: "图像", hint: "配置图片生成能力；当前为本地偏好，图片生成接入后自动生效", icon: ImageIcon, keywords: "image 图像 生成" },
     ],
   },
   {
@@ -76,7 +77,7 @@ const GROUPS: GroupDef[] = [
     items: [
       { id: "plugins", label: "插件", hint: "内置插件开关", icon: Plug, keywords: "plugin 插件" },
       { id: "skills", label: "技能", hint: "技能库与启停", icon: Sparkles, keywords: "skill 技能" },
-      { id: "connectors", label: "连接器", hint: "MCP server 接入", icon: Network, keywords: "mcp connector 连接器 服务器" },
+      { id: "connectors", label: "连接器", hint: "MCP server 接入与社区目录", icon: Network, keywords: "mcp connector 连接器 服务器" },
       { id: "toolsets", label: "工具集", hint: "工具白名单", icon: Boxes, keywords: "toolset 工具 工具集" },
     ],
   },
@@ -84,17 +85,17 @@ const GROUPS: GroupDef[] = [
     label: "管理",
     items: [
       { id: "backend", label: "后端服务", hint: "本地服务与健康状态", icon: Server, keywords: "backend server 服务 端口 健康" },
-      { id: "runtimes", label: "内置运行时", hint: "Node / Python / Git", icon: Boxes, keywords: "runtime node python git 运行时" },
-      { id: "devices", label: "设备管理", hint: "配对与撤销权限", icon: Smartphone, keywords: "device 设备 配对 权限" },
-      { id: "security", label: "安全", hint: "自动备份与数据安全", icon: Shield, keywords: "security 安全 备份 backup" },
-      { id: "archive", label: "已归档", hint: "归档的会话与项目", icon: Archive, keywords: "archive 归档 已归档" },
+      { id: "runtimes", label: "内置运行时", hint: "Node / Python / Git 便携内置，优先于系统 PATH", icon: Boxes, keywords: "runtime node python git 运行时" },
+      { id: "devices", label: "设备管理", hint: "IM 机器人与桌面配对两条通道；高危工具一律在桌面端强制确认", icon: Smartphone, keywords: "device 设备 配对 权限" },
+      { id: "security", label: "安全", hint: "覆盖写入前先备份旧版本，误改可回滚", icon: Shield, keywords: "security 安全 备份 backup" },
+      { id: "archive", label: "已归档", hint: "归档只是从侧栏收起，数据仍在本机，取消归档即可恢复", icon: Archive, keywords: "archive 归档 已归档" },
     ],
   },
   {
     label: "诊断",
     items: [
-      { id: "diagnostics", label: "诊断", hint: "日志、审计与网络出口", icon: Activity, keywords: "diagnostics 日志 log 审计 出网" },
-      { id: "advanced", label: "高级", hint: "实验功能与原始配置", icon: SlidersHorizontal, keywords: "advanced 高级 实验 config yaml" },
+      { id: "diagnostics", label: "诊断", hint: "日志、审计与网络出口；后端日志写入 hermix_home/logs/", icon: Activity, keywords: "diagnostics 日志 log 审计 出网" },
+      { id: "advanced", label: "高级", hint: "压缩、子 Agent 等内部参数；修改后需重启生效", icon: SlidersHorizontal, keywords: "advanced 高级 实验 config yaml" },
     ],
   },
 ];
@@ -170,7 +171,9 @@ export function SettingsShell({ onBack, initialPage }: SettingsShellProps) {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-[var(--color-bg-app)]">
-        {/* Header：左「返回」，右当前分组说明 */}
+        {/* Header：整页设置的退出条，只承担「返回」。页面身份（页名 + 说明）
+            在内容区页头 —— 原先挂右上角的 hint 离侧栏选中项和内容都最远，
+            读不出归属。 */}
         <div className="flex shrink-0 items-center gap-3 border-b border-[var(--color-border-primary)] bg-[var(--color-bg-secondary)] px-4 py-2.5">
           <button
             onClick={onBack}
@@ -181,9 +184,6 @@ export function SettingsShell({ onBack, initialPage }: SettingsShellProps) {
           </button>
           <span className="text-[length:var(--text-ui)] font-medium text-[var(--color-text-primary)]">
             设置
-          </span>
-          <span className="ml-auto text-[length:var(--text-meta)] text-[var(--color-text-muted)]">
-            {current.hint}
           </span>
         </div>
 
@@ -239,36 +239,47 @@ export function SettingsShell({ onBack, initialPage }: SettingsShellProps) {
 
           {/* 右内容 */}
           <div className="min-w-0 flex-1 overflow-y-auto">
-            <PageBody page={page} toolQuery={toolQuery} onToolQuery={setToolQuery} />
+            <PageBody def={current} toolQuery={toolQuery} onToolQuery={setToolQuery} />
           </div>
         </div>
     </div>
   );
 }
 
+/** 内容区页头：页名 + 一句说明。每个 tab 的自带页级标题已并入这里
+ *  （原描述文案迁入 PageDef.hint，侧栏搜索与页头共用一份）。 */
+function PageHeading({ def }: { def: PageDef }) {
+  return (
+    <header className="mb-5">
+      <h2 className="text-[length:var(--text-body)] font-medium text-[var(--color-text-primary)]">{def.label}</h2>
+      <p className="mt-1 text-[length:var(--text-meta)] text-[var(--color-text-muted)]">{def.hint}</p>
+    </header>
+  );
+}
+
 function PageBody({
-  page, toolQuery, onToolQuery,
+  def, toolQuery, onToolQuery,
 }: {
-  page: SettingsPage;
+  def: PageDef;
   toolQuery: string;
   onToolQuery: (q: string) => void;
 }) {
-  switch (page) {
-    case "general": return <Section><GeneralTab /></Section>;
-    case "appearance": return <Section><AppearanceTab /></Section>;
+  switch (def.id) {
+    case "general": return <Section><PageHeading def={def} /><GeneralTab /></Section>;
+    case "appearance": return <Section><PageHeading def={def} /><AppearanceTab /></Section>;
     case "model": return <ModelListTab />;
-    case "image": return <Section><ImageSettingsCard /></Section>;
-    case "plugins": return <ToolSection><PluginsTab query={toolQuery} onQuery={onToolQuery} /></ToolSection>;
-    case "skills": return <ToolSection><SkillsTab query={toolQuery} onQuery={onToolQuery} /></ToolSection>;
-    case "connectors": return <ToolSection><ConnectorsTab query={toolQuery} onQuery={onToolQuery} /></ToolSection>;
-    case "toolsets": return <ToolSection><ToolsetsTab query={toolQuery} onQuery={onToolQuery} /></ToolSection>;
-    case "backend": return <Section><BackendTab /></Section>;
-    case "runtimes": return <Section wide><RuntimesTab /></Section>;
-    case "devices": return <Section wide><DevicesTab /></Section>;
-    case "security": return <Section wide><SecurityTab /></Section>;
-    case "archive": return <Section><ArchiveTab /></Section>;
-    case "diagnostics": return <Section wide><DiagnosticsTab /></Section>;
-    case "advanced": return <Section><AdvancedTab /></Section>;
+    case "image": return <Section><PageHeading def={def} /><ImageSettingsCard /></Section>;
+    case "plugins": return <ToolSection><PageHeading def={def} /><PluginsTab query={toolQuery} onQuery={onToolQuery} /></ToolSection>;
+    case "skills": return <ToolSection><PageHeading def={def} /><SkillsTab query={toolQuery} onQuery={onToolQuery} /></ToolSection>;
+    case "connectors": return <ToolSection><PageHeading def={def} /><ConnectorsTab query={toolQuery} onQuery={onToolQuery} /></ToolSection>;
+    case "toolsets": return <ToolSection><PageHeading def={def} /><ToolsetsTab query={toolQuery} onQuery={onToolQuery} /></ToolSection>;
+    case "backend": return <Section><PageHeading def={def} /><BackendTab /></Section>;
+    case "runtimes": return <Section wide><PageHeading def={def} /><RuntimesTab /></Section>;
+    case "devices": return <Section wide><PageHeading def={def} /><DevicesTab /></Section>;
+    case "security": return <Section wide><PageHeading def={def} /><SecurityTab /></Section>;
+    case "archive": return <Section><PageHeading def={def} /><ArchiveTab /></Section>;
+    case "diagnostics": return <Section wide><PageHeading def={def} /><DiagnosticsTab /></Section>;
+    case "advanced": return <Section><PageHeading def={def} /><AdvancedTab /></Section>;
   }
 }
 
@@ -316,13 +327,6 @@ function ImageSettingsCard() {
 
   return (
     <div className="space-y-6">
-      <header>
-        <h2 className="text-[length:var(--text-body)] font-medium text-[var(--color-text-primary)]">图像</h2>
-        <p className="mt-1 text-[length:var(--text-meta)] text-[var(--color-text-muted)]">
-          配置图片生成能力。当前为本地偏好设置，待图片生成功能接入后自动生效。
-        </p>
-      </header>
-
       <SettingsGroup>
         <SettingsRow
           title="启用图片生成"

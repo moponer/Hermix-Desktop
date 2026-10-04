@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Shield, FolderOpen, Check, Save } from "lucide-react";
+import { FolderOpen, Check, Save } from "lucide-react";
 import * as api from "../../api";
 import { openInExplorer } from "../../desktopBridge";
 import { toastError } from "../../hooks/useToast";
@@ -100,15 +100,6 @@ export function SecurityTab() {
 
   return (
     <div className="space-y-5">
-      <div>
-        <h2 className="text-base font-medium text-text-primary flex items-center gap-2">
-          <Shield className="icon-md" /> 安全中心
-        </h2>
-        <p className="text-xs text-text-muted mt-1">
-          agent 通过写文件 / 补丁覆盖你的文件前，先把旧版本存进备份目录。误改可回滚。
-        </p>
-      </div>
-
       {/* 自动备份开关 */}
       <div className="rounded-lg border border-border-primary bg-bg-card p-4 space-y-4">
         <div className="flex items-center justify-between">

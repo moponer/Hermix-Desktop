@@ -25,15 +25,6 @@ export function AppearanceTab() {
 
   return (
     <div className="space-y-7">
-      <header>
-        <h2 className="text-[length:var(--text-body)] font-medium text-[var(--color-text-primary)]">
-          外观
-        </h2>
-        <p className="mt-1 text-[length:var(--text-meta)] text-[var(--color-text-muted)]">
-          主题、强调色与壁纸立即生效并持久保存。
-        </p>
-      </header>
-
       {/* 明暗模式 */}
       <section className="space-y-2">
         <h3 className="px-1 text-[length:var(--text-ui)] font-medium text-[var(--color-text-primary)]">

@@ -23,15 +23,6 @@ import { toastError } from "../../hooks/useToast";
 export function GeneralTab() {
   return (
     <div className="space-y-7">
-      <header>
-        <h2 className="text-[length:var(--text-body)] font-medium text-[var(--color-text-primary)]">
-          通用
-        </h2>
-        <p className="mt-1 text-[length:var(--text-meta)] text-[var(--color-text-muted)]">
-          工作模式、输入快捷键、系统能力与数据位置。
-        </p>
-      </header>
-
       <ModeCards />
       <SendKeyRow />
       <SystemGroup />

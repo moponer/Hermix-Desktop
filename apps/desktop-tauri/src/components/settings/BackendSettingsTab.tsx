@@ -34,11 +34,7 @@ export function BackendTab() {
   }, [tickLoopRunning]);
 
   return (
-    <div className="p-6 space-y-6 max-w-2xl">
-      <div>
-        <h2 className="text-lg font-semibold text-text-primary">后端设置</h2>
-        <p className="text-xs text-text-muted mt-1">hermix server 连接状态。</p>
-      </div>
+    <div className="space-y-6">
       <div className="rounded-xl border border-border-primary bg-bg-card p-4">
         <div className="text-sm font-medium text-text-primary mb-2">后端状态</div>
         <div className="flex items-center gap-2">

@@ -131,14 +131,6 @@ export function DiagnosticsTab() {
 
   return (
     <div className="space-y-4">
-      <div>
-        <h2 className="text-base font-medium text-text-primary">诊断与日志</h2>
-        <p className="text-sm text-text-muted mt-1">
-          装版应用的后端日志默认写入 <code className="font-mono">hermix_home/logs/</code>，
-          日志是后端排错的第一现场。流卡死时这里能看到比聊天 UI 更多的细节。
-        </p>
-      </div>
-
       {/* Path + actions */}
       <div className="rounded-lg border border-border-primary bg-bg-card p-4 space-y-3">
         <div className="flex items-center justify-between gap-3 flex-wrap">

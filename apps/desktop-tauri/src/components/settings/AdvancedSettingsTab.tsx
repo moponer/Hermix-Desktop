@@ -34,7 +34,14 @@ export function AdvancedTab() {
     // boot order hasn't materialised yet (e.g. cold start before
     // the agent service is wired up).
     try {
+      // Must send the FULL config: `updateConfig` only carries the
+      // fields we hand it, so a partial body would drop `model`,
+      // `llm_providers` and `model_selector` from config.yaml. That
+      // exact bug wiped the user's model settings on 2026-10-03.
+      // Mirrors SecurityTab's read-modify-write.
+      const current = await api.getConfig();
       await api.updateConfig({
+        ...current,
         compaction: {
           min_summary_tokens: config.min_summary_tokens,
           summary_tokens_ceiling: config.summary_tokens_ceiling,
@@ -45,7 +52,7 @@ export function AdvancedTab() {
           sub_agent_max_turns_cap: config.sub_agent_max_turns_cap,
           delegation_max_iterations: config.delegation_max_iterations,
         },
-      } as unknown as api.HermesConfig);
+      });
       storage.setItem(STORAGE_KEYS.advancedConfig, JSON.stringify(config));
       setSaved(true);
       safeSetTimeout(() => setSaved(false), 2000);
@@ -57,12 +64,7 @@ export function AdvancedTab() {
   };
 
   return (
-    <div className="p-6 space-y-6 max-w-2xl">
-      <div>
-        <h2 className="text-lg font-semibold text-text-primary">高级设置</h2>
-        <p className="text-xs text-text-muted mt-1">调整压缩、子 Agent 等内部参数。修改后需要重启生效。</p>
-      </div>
-
+    <div className="space-y-6">
       {/* Compression Settings */}
       <div className="rounded-xl border border-border-primary bg-bg-card p-4">
         <div className="text-sm font-medium text-text-primary mb-3">压缩设置</div>
