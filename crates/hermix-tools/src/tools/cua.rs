@@ -21,13 +21,24 @@
 //!
 //! ## Risk classification
 //!
-//! All five tools are registered as `RiskLevel::Dangerous` in
-//! `register_builtins`. The dispatch gate in
-//! `local_agent_service::decide_pre_tool_dispatch` fires the user
-//! approval card for every call under `PermissionLevel::Default`.
-//! The safety guard in `hermix-cua` adds an *additional* refusal
-//! layer for blacklisted key chords (Ctrl+Alt+Del, Win+L, …) that
-//! must never reach the OS regardless of approval state.
+//! Two independent vocabularies meet here, and they answer
+//! different questions:
+//!
+//! * [`CoreRisk`] (`Safe` / `Caution` / `Dangerous`) is attached at
+//!   registration and is the *only* input to
+//!   `decide_pre_tool_dispatch`, which prompts the user at
+//!   `Dangerous` under `PermissionLevel::Default`.
+//! * [`RiskLevel`] (`Low` / `Medium` / `High`) is the per-invocation
+//!   tier handed to [`SafetyGuard::check`]. `Medium`/`High` are
+//!   rate-limited through a shared sliding window; `Low` is exempt.
+//!
+//! They do not have to agree. `cua_screenshot` is `Caution` at the
+//! registration layer (it reads the user's screen) but `Low` at the
+//! invocation layer (it changes nothing).
+//!
+//! Every tool that reaches the OS input pipeline or mutates window /
+//! UIA state must pass a `Medium`-or-higher `check` *before* the
+//! side effect, not after.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -78,16 +89,26 @@ pub fn register(registry: &ToolRegistry) {
         );
     };
 
-    register_one("cua_screenshot", "📸", CoreRisk::Dangerous, Arc::new(CuaScreenshotHandler::new()));
-    register_one("cua_screen_info", "🖥️", CoreRisk::Dangerous, Arc::new(CuaScreenInfoHandler::new()));
+    // Risk tiers. `Dangerous` = mutates the machine (click / type /
+    // key / invoke / focus) and is the only tier that fires the
+    // approval card in `PermissionLevel::Default`.
+    // `Caution` = read-only, but it reads *the user's screen and
+    // window titles*, which can surface credentials or private
+    // document names in the transcript. Keeping these one tier
+    // below `Safe` records that without making the agent prompt for
+    // a permission slip on every `cua_screenshot`.
+    // `Safe` = no observable side effect at all (currently only
+    // `cua_move_cursor`).
+    register_one("cua_screenshot", "📸", CoreRisk::Caution, Arc::new(CuaScreenshotHandler::new()));
+    register_one("cua_screen_info", "🖥️", CoreRisk::Caution, Arc::new(CuaScreenInfoHandler::new()));
+    register_one("cua_list_windows", "🪟", CoreRisk::Caution, Arc::new(CuaListWindowsHandler::new()));
+    register_one("cua_window_at_point", "🎯", CoreRisk::Caution, Arc::new(CuaWindowAtPointHandler::new()));
+    register_one("cua_ui_tree", "🌳", CoreRisk::Caution, Arc::new(CuaUiTreeHandler::new()));
+    register_one("cua_ui_find", "🔎", CoreRisk::Caution, Arc::new(CuaUiFindHandler::new()));
     register_one("cua_left_click", "🖱️", CoreRisk::Dangerous, Arc::new(CuaLeftClickHandler::new()));
     register_one("cua_type_text", "⌨️", CoreRisk::Dangerous, Arc::new(CuaTypeTextHandler::new()));
     register_one("cua_press_key", "🔘", CoreRisk::Dangerous, Arc::new(CuaPressKeyHandler::new()));
-    register_one("cua_list_windows", "🪟", CoreRisk::Dangerous, Arc::new(CuaListWindowsHandler::new()));
-    register_one("cua_window_at_point", "🎯", CoreRisk::Dangerous, Arc::new(CuaWindowAtPointHandler::new()));
     register_one("cua_click_window", "👆", CoreRisk::Dangerous, Arc::new(CuaClickWindowHandler::new()));
-    register_one("cua_ui_tree", "🌳", CoreRisk::Dangerous, Arc::new(CuaUiTreeHandler::new()));
-    register_one("cua_ui_find", "🔎", CoreRisk::Dangerous, Arc::new(CuaUiFindHandler::new()));
     register_one("cua_ui_click", "👆", CoreRisk::Dangerous, Arc::new(CuaUiClickHandler::new()));
     register_one("cua_ui_focus", "🎯", CoreRisk::Dangerous, Arc::new(CuaUiFocusHandler::new()));
     register_one("cua_ui_invoke", "⚙️", CoreRisk::Dangerous, Arc::new(CuaUiInvokeHandler::new()));
@@ -905,6 +926,11 @@ impl ToolHandler for CuaClickWindowHandler {
         let trace = &*TRACE;
         let session = session_id.clone();
         let result: Result<(i32, i32), ToolError> = run_blocking(move || {
+            // Charge the limiter up front: steps (a) and (b) already
+            // mutate window state (restore + `SetForegroundWindow`),
+            // so gating only at `action::click` would let the window
+            // churn before any rate limit applies.
+            safety.check(None, RiskLevel::Medium)?;
             // (a) Find the window to learn its rect.
             let win = hermix_cua::element::window_from_hwnd(hwnd_isize).ok_or_else(|| {
                 hermix_cua::CuaError::NotFound(format!("window hwnd={hwnd_isize:#x} is not valid"))
@@ -1266,6 +1292,13 @@ impl ToolHandler for CuaUiClickHandler {
         let session = session_id.clone();
         let closure_name = name.clone();
         let result: Result<(i32, i32), ToolError> = run_blocking(move || {
+            // Charge the rate limiter *before* the UIA lookup, not
+            // only inside `action::click` below: the name lookup
+            // walks the automation tree via COM and costs far more
+            // than the click itself, so gating it after the walk
+            // would let a loop spend unbounded time in the UIA
+            // provider.
+            safety.check(None, RiskLevel::Medium)?;
             // Step 1 — init UIA on this thread (COM apartment).
             // SAFETY: COM apartment initialised by `UiaAutomation::new()`
             // on this blocking thread.
@@ -1357,8 +1390,15 @@ impl ToolHandler for CuaUiFocusHandler {
         let session_id = extract_session_id(&params);
 
         let started = std::time::Instant::now();
+        let safety = &*SAFETY;
         let closure_name = name.clone();
         run_blocking(move || {
+            // `SetFocus` + the name lookup both cross the COM boundary.
+            // The UIA tree walk alone can cost 50–500 ms, so an
+            // unbounded loop here starves the agent loop and floods
+            // the UIA provider. `Medium` puts it under the same
+            // sliding-window ceiling as `type_text`.
+            safety.check(None, RiskLevel::Medium)?;
             // SAFETY: COM apartment initialised on this blocking thread.
             let uia = unsafe { hermix_cua::uia::UiaAutomation::new()? };
             // SAFETY: same thread, same COM apartment.
@@ -1432,8 +1472,17 @@ impl ToolHandler for CuaUiInvokeHandler {
         let session_id = extract_session_id(&params);
 
         let started = std::time::Instant::now();
+        let safety = &*SAFETY;
         let closure_name = name.clone();
         run_blocking(move || {
+            // `InvokePattern.Invoke` is the UIA equivalent of
+            // pressing the control's default button — the element
+            // name is LLM-supplied and never checked against what
+            // is actually on screen, so this is gated at `High`
+            // (the same tier as `press_key`) rather than `Medium`.
+            // Without this, a loop over `cua_ui_invoke` is an
+            // unbounded confirm-button machine.
+            safety.check(None, RiskLevel::High)?;
             // SAFETY: COM apartment initialised on this blocking thread.
             let uia = unsafe { hermix_cua::uia::UiaAutomation::new()? };
             // SAFETY: same thread, same COM apartment.
@@ -1898,6 +1947,79 @@ mod tests {
         let h = CuaClickWindowHandler::new();
         assert!(rt.block_on(h.execute(json!({"hwnd": 0}))).is_err());
         assert!(rt.block_on(h.execute(json!({"hwnd": -1}))).is_err());
+    }
+
+    /// Registration tier decides whether the user gets an approval
+    /// card, so it is a security-relevant value, not a label. Pin the
+    /// full map: read-only tools must stay below the prompt threshold,
+    /// anything that mutates the machine must stay at `Dangerous`.
+    #[test]
+    fn registration_tiers_match_side_effects() {
+        let registry = ToolRegistry::new();
+        register(&registry);
+
+        // Read-only, but they read the user's screen and window
+        // titles — one tier below `Safe` on purpose.
+        for read_only in [
+            "cua_screenshot",
+            "cua_screen_info",
+            "cua_list_windows",
+            "cua_window_at_point",
+            "cua_ui_tree",
+            "cua_ui_find",
+        ] {
+            assert_eq!(
+                registry.risk_level(read_only),
+                Some(CoreRisk::Caution),
+                "{read_only} reads the screen but must not prompt"
+            );
+        }
+
+        // Mutates the machine — these are the only ones that may
+        // prompt, and dropping any of them to `Caution` would let a
+        // write run unapproved under `PermissionLevel::Default`.
+        for mutating in [
+            "cua_left_click",
+            "cua_type_text",
+            "cua_press_key",
+            "cua_scroll",
+            "cua_double_click",
+            "cua_click_window",
+            "cua_ui_click",
+            "cua_ui_focus",
+            "cua_ui_invoke",
+        ] {
+            assert_eq!(
+                registry.risk_level(mutating),
+                Some(CoreRisk::Dangerous),
+                "{mutating} mutates the machine and must stay Dangerous"
+            );
+        }
+
+        assert_eq!(registry.risk_level("cua_move_cursor"), Some(CoreRisk::Safe));
+    }
+
+    /// `SafetyGuard::check` only enforces the sliding window for
+    /// `Medium`/`High` (`safety.rs::check` matches on exactly those
+    /// two). A mutating tool that checks at `Low` therefore gets no
+    /// rate limiting at all — the "read-only" tier is not a safe
+    /// default for anything that reaches the OS.
+    #[test]
+    fn low_risk_is_not_rate_limited() {
+        // This is the property the handler tiers depend on: if a
+        // future refactor makes `Low` rate-limited too, the tier
+        // choices above become over-cautious but still safe. If it
+        // ever goes the other way and `Low` starts bypassing the
+        // window for mutating tools, this test is the canary.
+        let guard = SafetyGuard::new();
+        for _ in 0..200 {
+            guard
+                .check(None, RiskLevel::Low)
+                .expect("low risk must never be refused");
+        }
+        guard
+            .check(None, RiskLevel::Medium)
+            .expect("low-risk traffic must not consume the window");
     }
 
     #[test]
