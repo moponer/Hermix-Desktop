@@ -170,6 +170,8 @@ pub struct ImRuntime {
     /// 平台 → 最近一次网关故障的原文（连上后清空）。状态接口把它随
     /// `connected` 一起给出，前端错误面板不用再猜"为什么没连上"。
     last_error: HashMap<&'static str, Arc<std::sync::Mutex<Option<String>>>>,
+    /// 平台 → 机器人名称（网关 READY 时上报；桌面端远程助手标题栏用）。
+    bot_names: HashMap<&'static str, Arc<std::sync::Mutex<Option<String>>>>,
 }
 
 impl ImRuntime {
@@ -188,6 +190,8 @@ impl ImRuntime {
         let mut connected: HashMap<&'static str, Arc<AtomicBool>> = HashMap::new();
         let mut last_error: HashMap<&'static str, Arc<std::sync::Mutex<Option<String>>>> =
             HashMap::new();
+        let mut bot_names: HashMap<&'static str, Arc<std::sync::Mutex<Option<String>>>> =
+            HashMap::new();
 
         for c in creds {
             let (tx, rx) = mpsc::channel(64);
@@ -197,10 +201,12 @@ impl ImRuntime {
                     ports.push(Arc::new(qq::QqPort::new(api.clone())));
                     let flag = Arc::new(AtomicBool::new(false));
                     let err = Arc::new(std::sync::Mutex::new(None));
+                    let name = Arc::new(std::sync::Mutex::new(None));
                     connected.insert("qq", flag.clone());
                     last_error.insert("qq", err.clone());
+                    bot_names.insert("qq", name.clone());
                     handles.push(tokio::spawn(qq::run_gateway(
-                        api, tx, shutdown_rx.clone(), flag, err,
+                        api, tx, shutdown_rx.clone(), flag, err, name,
                     )));
                 }
                 "wecom" => {
@@ -254,6 +260,7 @@ impl ImRuntime {
             handles: tokio::sync::Mutex::new(handles),
             connected,
             last_error,
+            bot_names,
         }))
     }
 
@@ -272,6 +279,14 @@ impl ImRuntime {
             .map(|(k, v)| {
                 (*k, v.lock().unwrap_or_else(|p| p.into_inner()).clone())
             })
+            .collect()
+    }
+
+    /// 各平台机器人名称（网关 READY 时上报，未就绪为 `None`）。
+    pub fn bot_names(&self) -> HashMap<&'static str, Option<String>> {
+        self.bot_names
+            .iter()
+            .map(|(k, v)| (*k, v.lock().unwrap_or_else(|p| p.into_inner()).clone()))
             .collect()
     }
 
@@ -524,6 +539,9 @@ pub struct ChannelStatusItem {
     /// 用户不用猜"为什么没连上"。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    /// 机器人名称（网关 READY 时上报；未就绪/未运行为空）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 /// `GET /api/channels/status` — 凭据 + 网关连接状态合并视图（仅本机）。
@@ -534,12 +552,16 @@ pub(crate) async fn channel_status(
         return r;
     }
     let stored = load_stored();
-    let (live, errors) = match runtime_slot().lock() {
+    let (live, errors, names) = match runtime_slot().lock() {
         Ok(g) => match g.as_ref() {
-            Some(rt) => (rt.connection_status(), rt.last_errors()),
-            None => (Default::default(), Default::default()),
+            Some(rt) => (rt.connection_status(), rt.last_errors(), rt.bot_names()),
+            None => (Default::default(), Default::default(), Default::default()),
         },
-        Err(_) => (Default::default(), Default::default()),
+        Err(_) => (
+            Default::default(),
+            Default::default(),
+            Default::default(),
+        ),
     };
     let items: Vec<ChannelStatusItem> = ["qq", "wecom"]
         .into_iter()
@@ -548,6 +570,7 @@ pub(crate) async fn channel_status(
             bound: stored.contains_key(p),
             connected: live.get(p).copied().unwrap_or(false),
             detail: errors.get(p).and_then(|s| s.clone()),
+            name: names.get(p).cloned().flatten(),
         })
         .collect();
     Json(serde_json::json!({ "platforms": items })).into_response()

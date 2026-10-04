@@ -411,7 +411,30 @@ impl ImStream for WecomStream {
     }
 
     async fn set_header(&mut self, header: &str) {
+        if self.header == header {
+            return;
+        }
         self.header = header.to_string();
+        if self.closed {
+            return;
+        }
+        // 同 QQ：工具执行期间没有正文 delta，进度行必须主动刷帧才有
+        // "还活着"信号，否则企微端整段工具期毫无动静。
+        let due = self
+            .last_flush
+            .map(|t| t.elapsed() >= Duration::from_millis(STREAM_THROTTLE_MS))
+            .unwrap_or(true);
+        if !due {
+            return;
+        }
+        let snapshot = self.plain();
+        // 这里失败不降级：进度行丢了不打紧，下一次正文 flush 自会重试
+        // 并按既有路径处理连续失败。
+        if let Err(e) = self.push_frame(&snapshot, false).await {
+            tracing::warn!(error = %e, "企业微信进度行刷新失败");
+        } else {
+            self.last_flush = Some(std::time::Instant::now());
+        }
     }
 
     async fn finish(&mut self) {

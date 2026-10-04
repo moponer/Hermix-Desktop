@@ -561,13 +561,21 @@ impl ChannelRuntime {
         let pump = tokio::spawn(async move {
             let mut tools = ToolTrace::default();
             let mut header_shown = String::new();
+            // 正文只发最后一轮：`tool_start` 一到就清缓冲。最后一次工具调用
+            // **之前**的可见文本全是中间叙述（计划、工具名自白、失败现场），
+            // 桌面端有工具面板兜着看得懂，IM 气泡里就是一坨源码。工具执行期
+            // 的"还活着"由进度行负责（QQ/企微的 set_header 都会刷帧）。
+            let mut final_text = String::new();
             while let Some(msg) = rx.recv().await {
                 match msg {
                     StreamMsg::Text(delta) => {
                         tools.clear_when_idle();
-                        stream.append(&delta).await;
+                        final_text.push_str(&delta);
                     }
                     StreamMsg::Tool(name, done) => {
+                        if !done {
+                            final_text.clear();
+                        }
                         tools.push(Some(&name), done);
                         let next = tools.render();
                         // 轨迹没变就不重发，省掉一整轮 HTTP。
@@ -577,6 +585,9 @@ impl ChannelRuntime {
                         }
                     }
                 }
+            }
+            if !final_text.is_empty() {
+                stream.append(&final_text).await;
             }
             stream.finish().await;
         });

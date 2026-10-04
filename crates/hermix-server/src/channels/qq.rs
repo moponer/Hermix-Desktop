@@ -440,6 +440,9 @@ pub struct QqStream {
     accumulated: String,
     /// 已经显示出去的长度。`finish` 时只补这段尾巴，不重发整轮。
     shown: usize,
+    /// 最近一次成功发出的完整快照（进度行 + 正文）。生成中是否要再发一帧
+    /// 由它与当前快照的比较决定——进度行现在也会触发刷新，纯比较防重发。
+    sent: String,
     msg_seq: u32,
     index: u32,
     stream_msg_id: Option<String>,
@@ -457,6 +460,7 @@ impl QqStream {
             header: String::new(),
             accumulated: String::new(),
             shown: 0,
+            sent: String::new(),
             msg_seq: next_msg_seq(),
             index: 0,
             stream_msg_id: None,
@@ -483,10 +487,7 @@ impl QqStream {
         }
     }
     async fn flush(&mut self, done: bool) {
-        if self.degraded {
-            return;
-        }
-        if !done && self.accumulated.chars().count() == self.shown {
+        if !self.frame_worthy(done) {
             return;
         }
         let snapshot = self.rendered();
@@ -511,6 +512,7 @@ impl QqStream {
                     self.stream_msg_id = id;
                 }
                 self.shown = snapshot.chars().count();
+                self.sent = snapshot;
                 self.last_flush = Some(Instant::now());
             }
             Err(e) => {
@@ -520,6 +522,11 @@ impl QqStream {
                 self.degraded = true;
             }
         }
+    }
+
+    /// 是否值得发一帧：定稿必发；生成中只有「进度行 + 正文」快照变化才发。
+    fn frame_worthy(&self, done: bool) -> bool {
+        !self.degraded && (done || self.rendered() != self.sent)
     }
 
     /// 收尾。流式正常就定稿；降级或失败就把气泡没显示过的那段补发。
@@ -561,7 +568,20 @@ impl ImStream for QqStream {
     }
 
     async fn set_header(&mut self, header: &str) {
+        if self.header == header {
+            return;
+        }
         self.header = header.to_string();
+        // 工具执行期间没有正文 delta，进度行是 IM 端唯一的"还活着"信号，
+        // 必须主动刷帧。此前 header 只存不发：整段工具期 QQ 收不到任何帧，
+        // 平台等超时就渲染「小助手开小差了」兜底文案，真回复迟到才补上。
+        let due = self
+            .last_flush
+            .map(|t| t.elapsed() >= Duration::from_millis(STREAM_THROTTLE_MS))
+            .unwrap_or(true);
+        if due {
+            self.flush(false).await;
+        }
     }
 
     async fn finish(&mut self) {
@@ -592,6 +612,7 @@ pub async fn run_gateway(
     mut shutdown: watch::Receiver<bool>,
     connected: std::sync::Arc<std::sync::atomic::AtomicBool>,
     last_error: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+    bot_name: std::sync::Arc<std::sync::Mutex<Option<String>>>,
 ) {
     let mut resume = ResumeState::default();
     let mut attempt = 0usize;
@@ -599,7 +620,15 @@ pub async fn run_gateway(
         if *shutdown.borrow() {
             return;
         }
-        let result = connect_and_pump(&api, &events, &mut shutdown, &mut resume, connected.clone()).await;
+        let result = connect_and_pump(
+            &api,
+            &events,
+            &mut shutdown,
+            &mut resume,
+            connected.clone(),
+            bot_name.clone(),
+        )
+        .await;
         // 出 pumps 即断线（正常断开 / 报错 / 对端关闭都走这里），统一复位。
         // 状态接口用它回答"凭据在但网关没连上"这类不可见故障。
         connected.store(false, std::sync::atomic::Ordering::Relaxed);
@@ -637,6 +666,7 @@ async fn connect_and_pump(
     shutdown: &mut watch::Receiver<bool>,
     resume: &mut ResumeState,
     connected: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    bot_name: std::sync::Arc<std::sync::Mutex<Option<String>>>,
 ) -> Result<(), String> {
     let url = api.gateway_url().await?;
     let access = api.access_token().await?;
@@ -716,6 +746,20 @@ async fn connect_and_pump(
                                 .get("session_id")
                                 .and_then(Value::as_str)
                                 .map(str::to_string);
+                            // 机器人名称进状态接口，桌面端标题栏据此显示
+                            // 「QQ · 小成子」而不是一串 openid。
+                            if let Some(name) = frame
+                                .d
+                                .get("user")
+                                .and_then(|u| u.get("username"))
+                                .and_then(Value::as_str)
+                                .map(str::trim)
+                                .filter(|s| !s.is_empty())
+                            {
+                                if let Ok(mut g) = bot_name.lock() {
+                                    *g = Some(name.to_string());
+                                }
+                            }
                             tracing::info!(session_id = ?resume.session_id, "QQ 网关就绪");
                         } else if t == EVENT_C2C_MESSAGE_CREATE {
                             if let Some(inbound) = parse_inbound(&frame.d) {
@@ -854,5 +898,32 @@ mod tests {
         for _ in 0..100 {
             assert!(next_msg_seq() < 65_536);
         }
+    }
+
+    #[test]
+    fn 进度行变化才值得发帧() {
+        let mut s = QqStream::new(
+            std::sync::Arc::new(QqApi::new("app", "sec")),
+            "openid",
+            "msg-1",
+        );
+        assert!(!s.frame_worthy(false), "空内容空进度行不发帧");
+        s.header = "🛠️ ⚙️ terminal".into();
+        assert!(s.frame_worthy(false), "进度行变化该发帧（工具期的存活信号）");
+        s.sent = s.rendered();
+        assert!(!s.frame_worthy(false), "快照未变不重发");
+        assert!(s.frame_worthy(true), "定稿必发");
+    }
+
+    #[test]
+    fn 降级后不再发流式帧() {
+        let mut s = QqStream::new(
+            std::sync::Arc::new(QqApi::new("app", "sec")),
+            "openid",
+            "msg-1",
+        );
+        s.degraded = true;
+        assert!(!s.frame_worthy(false));
+        assert!(!s.frame_worthy(true));
     }
 }
