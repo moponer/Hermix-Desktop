@@ -755,6 +755,30 @@ pub trait AgentService: Send + Sync {
     /// that don't track active tasks.
     fn interrupt_all(&self) {}
 
+    /// Interrupt **one** session's in-flight turn, identified by its
+    /// session id, leaving every other running turn alone. Returns
+    /// `true` when a live turn was found and signalled, `false` when
+    /// nothing was running for that id.
+    ///
+    /// This is what remote channels need (`/stop` from IM, the mobile
+    /// client's task screen): `interrupt_all` is a *shutdown* primitive,
+    /// so using it there would let one user stop another user's work.
+    /// Default is `false` for services that don't track turns per session.
+    fn interrupt_session(&self, _sid: &str) -> bool {
+        false
+    }
+
+    /// Inject mid-run user guidance into **one** session's in-flight turn
+    /// (IM `/queue steer`). Returns `false` when no such turn is running
+    /// or the text is empty.
+    ///
+    /// This is a different lever from `interrupt_session`: the turn keeps
+    /// going and the guidance lands in the next tool result, so the user
+    /// can correct course without losing the work done so far.
+    fn steer_session(&self, _sid: &str, _text: &str) -> bool {
+        false
+    }
+
     /// Fire-and-forget cold-start warmup for a specific model (e.g. when
     /// the UI switches the active model away from the configured default).
     /// Primes the provider's HTTP keep-alive pool so the first chat on

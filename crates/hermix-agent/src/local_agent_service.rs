@@ -254,6 +254,46 @@ pub struct LocalAgentService {
     /// returns `graceful_interrupt_result` and `local_agent_service`
     /// persists the partial output before the process exits.
     active_interrupts: Arc<std::sync::Mutex<std::collections::HashMap<String, crate::interrupt::InterruptController>>>,
+    /// `<session_id>` → 该轮 agent 的 steer 缓冲句柄。与 `active_interrupts`
+    /// 生命周期完全一致（都是"这一轮还在跑"期间有效），所以两处一起登记、
+    /// 一起注销——分开放必然漂移出一半。
+    steer_buffers: Arc<std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<std::sync::Mutex<Option<String>>>>>>,
+}
+
+/// Take `sid`'s controller out of the interrupt registry and signal it.
+///
+/// Split out of the `LocalAgentService` methods so the registry semantics
+/// ("signal exactly the one named turn, and only while it's still there")
+/// are unit-testable without standing up a whole service. A poisoned lock
+/// and "no such session" both report "nothing to interrupt".
+fn signal_interrupt(
+    registry: &std::sync::Mutex<std::collections::HashMap<String, crate::interrupt::InterruptController>>,
+    sid: &str,
+) -> bool {
+    let taken = match registry.lock() {
+        Ok(mut guard) => guard.remove(sid),
+        Err(_) => None,
+    };
+    match taken {
+        Some(ctrl) => {
+            ctrl.interrupt(None);
+            true
+        }
+        None => false,
+    }
+}
+
+/// 取出该会话这一轮的 steer 缓冲句柄；不在跑就没有。
+///
+/// 抽成自由函数是为了能直接单测"命中的是不是指定那个会话"——`AgentLoop`
+/// 本身构造不出来，而这块注册表就是普通的 `HashMap`。
+fn take_steer_buffer(
+    registry: &std::sync::Mutex<
+        std::collections::HashMap<String, std::sync::Arc<std::sync::Mutex<Option<String>>>>,
+    >,
+    sid: &str,
+) -> Option<std::sync::Arc<std::sync::Mutex<Option<String>>>> {
+    registry.lock().ok()?.get(sid).cloned()
 }
 
 pub type ProviderFactory = Arc<dyn Fn(&GatewayConfig, &str) -> Arc<dyn LlmProvider> + Send + Sync>;
@@ -438,6 +478,56 @@ impl LocalAgentService {
         None
     }
 
+    /// Interrupt **one** session's in-flight turn, leaving every other
+    /// running turn alone. Returns `true` when a live turn was found and
+    /// signalled, `false` when nothing was running for that id.
+    ///
+    /// The controller leaves the registry as it gets signalled: that turn
+    /// is on its way out, and keeping it would let a second `/stop` claim a
+    /// hit against a turn that already stopped.
+    pub fn interrupt_session(&self, sid: &str) -> bool {
+        let hit = signal_interrupt(&self.active_interrupts, sid);
+        if hit {
+            // 中断之后不该还能 steer：缓冲留着只会让文本悄悄消失——用户以为
+            // 改进了这轮，其实它永远不会落地。
+            self.steer_buffers
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(sid);
+        }
+        hit
+    }
+
+    /// 往该会话**正在跑**的这一轮里注入一条指引（`/queue steer`）。
+    ///
+    /// 与 `interrupt_session` 是两种不同的手法：轮次不中止，指引会落进
+    /// 下一个 tool result，用户可以在不丢掉已完成工作的前提下纠偏。
+    /// 返回 `false` = 没有在跑的轮次，或文本是空的。
+    pub fn steer_session(&self, sid: &str, text: &str) -> bool {
+        match take_steer_buffer(&self.steer_buffers, sid) {
+            Some(buf) => crate::steer::steer(&buf, text),
+            None => false,
+        }
+    }
+
+    /// 登记一轮的「可被外部按会话操作」的两个句柄。中断控制器（关机 / `/stop`
+    /// 要）和 steer 缓冲（`/queue steer` 要）生命周期完全一致，合并到一处，
+    /// 免得两份注册表各自漂移出一半。
+    fn register_active(&self, sid: &str, agent: &AgentLoop) {
+        let mut interrupts = self.active_interrupts.lock().unwrap_or_else(|e| e.into_inner());
+        let mut steers = self.steer_buffers.lock().unwrap_or_else(|e| e.into_inner());
+        interrupts.insert(sid.to_string(), agent.interrupt.clone());
+        steers.insert(sid.to_string(), agent.steer_buffer());
+    }
+
+    /// `register_active` 的反面。轮次结束**无论成功失败**都要调。
+    fn unregister_active(&self, sid: &str) {
+        let mut interrupts = self.active_interrupts.lock().unwrap_or_else(|e| e.into_inner());
+        let mut steers = self.steer_buffers.lock().unwrap_or_else(|e| e.into_inner());
+        interrupts.remove(sid);
+        steers.remove(sid);
+    }
+
     /// Interrupt all active agent tasks so they gracefully stop and
     /// persist their partial output. Called by the server's shutdown
     /// path before the process exits. Each registered `InterruptController`
@@ -445,21 +535,20 @@ impl LocalAgentService {
     /// `tokio::select!` / `take_interrupt_graceful()` check to fire,
     /// returning `graceful_interrupt_result` — and the caller
     /// (`send_message_stream`) then persists the ctx messages to the DB.
+    ///
+    /// This one stays "all" on purpose: shutdown means stop everything,
+    /// whoever started it. Per-session stops go through `interrupt_session`.
     fn interrupt_all(&self) {
-        let count = {
-            let guard = match self.active_interrupts.lock() {
-                Ok(g) => g,
-                Err(_) => return,
-            };
-            let n = guard.len();
-            for (_sid, ctrl) in guard.iter() {
-                ctrl.interrupt(None);
-            }
-            n
+        let sids: Vec<String> = match self.active_interrupts.lock() {
+            Ok(guard) => guard.keys().cloned().collect(),
+            Err(_) => return,
         };
-        if count > 0 {
+        for sid in &sids {
+            self.interrupt_session(sid);
+        }
+        if !sids.is_empty() {
             tracing::info!(
-                active_sessions = count,
+                active_sessions = sids.len(),
                 "interrupt_all: signalled all active agent tasks to gracefully stop for persistence"
             );
         }
@@ -486,6 +575,7 @@ impl LocalAgentService {
             task_record_sink: None,
             memory_router,
             active_interrupts: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            steer_buffers: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         }
     }
 
@@ -511,6 +601,7 @@ impl LocalAgentService {
             task_record_sink: None,
             memory_router,
             active_interrupts: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            steer_buffers: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         }
     }
 
@@ -1441,6 +1532,20 @@ impl AgentService for LocalAgentService {
         LocalAgentService::interrupt_all(self);
     }
 
+    /// Delegate to the inherent `interrupt_session` so a remote channel
+    /// can stop one session's turn through `Arc<dyn AgentService>`
+    /// without touching anyone else's.
+    fn interrupt_session(&self, sid: &str) -> bool {
+        LocalAgentService::interrupt_session(self, sid)
+    }
+
+    /// Delegate to the inherent `steer_session` so a remote channel can
+    /// inject mid-run guidance into one session's turn through
+    /// `Arc<dyn AgentService>`.
+    fn steer_session(&self, sid: &str, text: &str) -> bool {
+        LocalAgentService::steer_session(self, sid, text)
+    }
+
     /// Delegate to the inherent `spawn_warmup` so the server can warm a
     /// specific provider through `Arc<dyn AgentService>` when the UI
     /// switches the active model.
@@ -1745,21 +1850,12 @@ impl AgentService for LocalAgentService {
             // `delegate_task` works.
             Arc::new(|_chunk: StreamChunk| {}),
         );
-        // Register the agent's InterruptController (same as the stream path).
-        {
-            let sid = session_id.to_string();
-            let ctrl = agent.interrupt.clone();
-            if let Ok(mut guard) = self.active_interrupts.lock() {
-                guard.insert(sid, ctrl);
-            }
-        }
+        // Register the agent's InterruptController + steer buffer (same as
+        // the stream path) so `/stop` and `/queue steer` can reach this turn.
+        self.register_active(session_id, &agent);
         let result = agent.run(messages.clone(), None).await;
-        // Always remove the interrupt controller.
-        {
-            if let Ok(mut guard) = self.active_interrupts.lock() {
-                guard.remove(session_id);
-            }
-        }
+        // Always remove the registered handles.
+        self.unregister_active(session_id);
         let result = result?;
 
         // Update messages with agent response, then collapse any
@@ -3027,17 +3123,12 @@ impl AgentService for LocalAgentService {
                 on_chunk_for_orchestrator,
             )
             .with_callbacks(callbacks);
-        // Register the agent's InterruptController so the server's
-        // shutdown path can call `interrupt_all()` and let the agent
-        // gracefully stop + persist its partial output instead of
-        // being dropped mid-stream when the process exits.
-        {
-            let sid = session_id.to_string();
-            let ctrl = agent.interrupt.clone();
-            if let Ok(mut guard) = self.active_interrupts.lock() {
-                guard.insert(sid, ctrl);
-            }
-        }
+        // Register the agent's InterruptController + steer buffer so the
+        // server's shutdown path can call `interrupt_all()` and let the agent
+        // gracefully stop + persist its partial output instead of being
+        // dropped mid-stream when the process exits, and so `/queue steer`
+        // can inject guidance into this turn.
+        self.register_active(session_id, &agent);
         // (WS-disconnect autonomous-continuation): the `shutdown`
         // Notify is still wired into the agent's `AgentOverrides` so
         // that `tool_dispatch` can race *pending approval waits*
@@ -3056,13 +3147,9 @@ impl AgentService for LocalAgentService {
         let result = agent
             .run_stream(messages.clone(), None, Some(boxed_on_chunk))
             .await;
-        // Always remove the interrupt controller — whether the run
-        // succeeded or failed, the agent is no longer active.
-        {
-            if let Ok(mut guard) = self.active_interrupts.lock() {
-                guard.remove(session_id);
-            }
-        }
+        // Always remove the registered handles — whether the run succeeded or
+        // failed, the agent is no longer active.
+        self.unregister_active(session_id);
         let result = result?;
 
         // Update messages with agent response, then collapse any
@@ -3455,6 +3542,64 @@ mod override_tests {
     use super::*;
     use hermix_config::GatewayConfig;
     use hermix_core::traits::PermissionLevel;
+
+    /// `interrupt_session` must hit exactly the named turn — that's the
+    /// whole property `/stop` now depends on instead of `interrupt_all`.
+    /// Pinning it here also pins "a second stop on the same session
+    /// misses", which is what keeps the IM reply honest.
+    #[test]
+    fn interrupt_session_hits_only_the_named_session() {
+        use crate::interrupt::InterruptController;
+        let registry = std::sync::Mutex::new(std::collections::HashMap::new());
+        let a = InterruptController::new();
+        let b = InterruptController::new();
+        {
+            let mut g = registry.lock().unwrap();
+            g.insert("im:qq:alice".to_string(), a.clone());
+            g.insert("im:qq:bob".to_string(), b.clone());
+        }
+
+        assert!(signal_interrupt(&registry, "im:qq:alice"), "应命中目标会话");
+        assert!(a.is_interrupted(), "目标会话应被中断");
+        assert!(!b.is_interrupted(), "另一个会话不得被波及");
+        assert!(
+            !signal_interrupt(&registry, "im:qq:alice"),
+            "同一会话第二次 stop 不应再命中"
+        );
+        assert!(!signal_interrupt(&registry, "im:qq:nobody"));
+        assert!(signal_interrupt(&registry, "im:qq:bob"));
+    }
+
+    /// steer 注册表必须按会话隔离：给 A 的指引不能进 B 的轮次，否则
+    /// "你只管这个文件"会被另一个会话的 agent 当成指令执行。
+    #[test]
+    fn steer_缓冲按会话隔离且认不出错会话() {
+        let map = std::sync::Mutex::new(std::collections::HashMap::new());
+        let a = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let b = std::sync::Arc::new(std::sync::Mutex::new(None));
+        {
+            let mut g = map.lock().unwrap();
+            g.insert("sid-a".to_string(), a.clone());
+            g.insert("sid-b".to_string(), b.clone());
+        }
+
+        let buf = take_steer_buffer(&map, "sid-a").expect("A 在跑");
+        assert!(crate::steer::steer(&buf, "只改 README"), "应接受非空指引");
+        assert_eq!(
+            a.lock().unwrap().as_deref(),
+            Some("只改 README"),
+            "A 的缓冲应收到指引"
+        );
+        assert!(
+            b.lock().unwrap().is_none(),
+            "B 的缓冲不得被写入——跨会话串指令是不可接受的数据泄漏"
+        );
+
+        assert!(take_steer_buffer(&map, "sid-none").is_none(), "不存在的会话");
+        // 空文本：steer 自己会拒，但句柄仍取得到（调用方据此判「有在跑」）
+        let buf = take_steer_buffer(&map, "sid-b").expect("B 在跑");
+        assert!(!crate::steer::steer(&buf, "   "), "空白指引应被拒");
+    }
 
     /// regression coverage for the "UI model switch does
     /// nothing" bug. The fix extracted `compute_effective_model` from

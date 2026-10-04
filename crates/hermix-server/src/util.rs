@@ -497,3 +497,94 @@ pub(crate) fn os_env_var(provider: &str) -> &'static str {
     }
 }
 
+// ---------------------------------------------------------------------------
+// 轮次收尾回执
+// ---------------------------------------------------------------------------
+
+/// 这轮是被**用户**停掉的吗（IM `/stop`、WS 断连）？
+///
+/// 故意收得窄。`AgentReply::interrupted` 单独用太粗：致命工具参数耗尽、
+/// 后端 5xx 也置位（见该字段自己的注释），报成「已按 /stop 中断」等于让用户
+/// 背一个 5xx 的锅。配对 `finish_reason`（`AgentReply` 文档化的判别字段）才
+/// 分得开两者：用户停 = `interrupted` + `"interrupted"`；后端失败 = `"error"`。
+pub(crate) fn was_interrupted(reply: &hermix_core::traits::AgentReply) -> bool {
+    reply.interrupted && reply.finish_reason.as_deref() == Some("interrupted")
+}
+
+/// 按**字符**截到 `max_chars`，超长补省略号。
+///
+/// 不按字节：中文一字 3 字节，`&s[..n]` 会切在多字节中间 panic 或切出乱码。
+pub(crate) fn truncate_chars(text: &str, max_chars: usize) -> String {
+    let total = text.chars().count();
+    if total <= max_chars {
+        return text.to_string();
+    }
+    let head: String = text.chars().take(max_chars).collect();
+    format!("{head}…")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hermix_core::traits::AgentReply;
+
+    fn reply() -> AgentReply {
+        AgentReply {
+            text: "好了".to_string(),
+            message_count: 2,
+            finish_reason: Some("stop".to_string()),
+            last_error: None,
+            interrupted: false,
+        }
+    }
+
+    #[test]
+    fn 正常完成不算中断() {
+        assert!(!was_interrupted(&reply()), "自然结束不得报成用户中断");
+    }
+
+    #[test]
+    fn 用户停掉算中断() {
+        let r = AgentReply {
+            interrupted: true,
+            finish_reason: Some("interrupted".to_string()),
+            ..reply()
+        };
+        assert!(was_interrupted(&r));
+    }
+
+    #[test]
+    fn 后端失败不算用户中断() {
+        // 致命失败也走 graceful 落盘，`interrupted` 同样为 true，
+        // 但 finish_reason 是 "error"——这正是不能只看 bool 的原因。
+        let r = AgentReply {
+            interrupted: true,
+            finish_reason: Some("error".to_string()),
+            last_error: Some("500 internal".to_string()),
+            ..reply()
+        };
+        assert!(
+            !was_interrupted(&r),
+            "后端失败不得报成「已按 /stop 中断」"
+        );
+    }
+
+    #[test]
+    fn 截断轮次不算中断() {
+        let r = AgentReply {
+            finish_reason: Some("length".to_string()),
+            ..reply()
+        };
+        assert!(!was_interrupted(&r), "被 token 上限砍断不算用户中断");
+    }
+
+    #[test]
+    fn 截断按字符不切坏中文() {
+        assert_eq!(truncate_chars("中文结尾", 200), "中文结尾");
+        assert_eq!(truncate_chars("中文结尾", 2), "中文…");
+        // 边界：正好等于上限时不加省略号
+        assert_eq!(truncate_chars("中文", 2), "中文");
+        assert_eq!(truncate_chars("", 5), "");
+    }
+}
+

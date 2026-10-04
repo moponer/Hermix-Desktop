@@ -8,7 +8,7 @@
 //! 确定性地推导（`im:{platform}:{user}`），也不需要映射文件——重启后接着
 //! 同一条会话。
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -31,6 +31,19 @@ const DEDUP_TTL: Duration = Duration::from_secs(600);
 /// 自动获得审计日志、`chat` scope，以及桌面端「设备」页里的撤销按钮。
 fn device_name(platform: &str, user: &str) -> String {
     format!("{platform}:{user}")
+}
+
+/// 取第一条非空行（按字符截断），用于列表里一眼认出这条是哪件事。
+///
+/// 跳过开头的空行：用户消息常带一个换行，`lines().next()` 那种写法会
+/// 返回空串，列表里就是一排没有内容的行。
+fn first_line(text: &str) -> String {
+    let head = text
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("");
+    crate::util::truncate_chars(head, 40)
 }
 
 fn session_id(platform: &str, user: &str) -> String {
@@ -72,7 +85,105 @@ impl Dedup {
 // 命令
 // ---------------------------------------------------------------------------
 
+/// 跑够这么久才算「长任务」。两处用同一个阈值：收尾 ✅ 回执的门槛，
+/// 以及 PR-3 心跳的第一次跳动。短于此的一轮用户全程盯着屏幕，不需要回执。
+const LONG_TURN: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// 心跳前 N 次用 `LONG_TURN` 间隔，之后转 `HEARTBEAT_SLOW`。
+const HEARTBEAT_FAST_BEATS: u32 = 30;
+
+/// 心跳降频后的间隔。降频是为了不给长任务刷屏，但**不许静默**——
+/// 用户看到的最后一条心跳可能比真实进度落后很多。
+const HEARTBEAT_SLOW: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// 心跳 task 的绝对上限。这是**泄漏兜底**，不是产品决策：正常路径由
+/// `run_turn` 里的 `abort()` 收尾，这里只防「`run_turn` 的 future 被 drop」
+/// 那种情况下 task 变成野生的情形。
+const HEARTBEAT_MAX_BEATS: u32 = 60;
+
+/// 单个会话的排队上限。超了挤掉最旧的，并把被挤掉的记进 `SessionQueue::dropped`
+/// 一起交给下一轮，不静默丢。20 条够一个人把想说的话说完，又不至于让队列
+/// 长到跑一整夜。
+const QUEUE_CAP: usize = 20;
+
+/// 心跳的节奏。生产走 `Default`（模块常量），测试传毫秒级值。
+#[derive(Clone, Copy)]
+struct Heartbeat {
+    fast: std::time::Duration,
+    slow: std::time::Duration,
+    fast_beats: u32,
+    max_beats: u32,
+}
+
+impl Default for Heartbeat {
+    fn default() -> Self {
+        Self {
+            fast: LONG_TURN,
+            slow: HEARTBEAT_SLOW,
+            fast_beats: HEARTBEAT_FAST_BEATS,
+            max_beats: HEARTBEAT_MAX_BEATS,
+        }
+    }
+}
+
+/// 起一个长任务心跳 task：定期告诉用户"这一轮还活着，并且在忙什么"。
+///
+/// 退出条件三条，正常路径只用到第一条：
+/// 1. `run_turn` 在 `send_message_stream` 返回后 `abort()`；
+/// 2. 累计 `max_beats` 次后自行收工（泄漏兜底）；
+/// 3. 从快到慢切换的那一刻**明确告知**一次，不静默拉长间隔。
+///
+/// 轨迹为空说明模型还在想、还没调工具——这时发一句"还在想"比发空的
+/// `⏳ 🛠️` 诚实。
+fn spawn_heartbeat(
+    tools: std::sync::Arc<std::sync::Mutex<ToolTrace>>,
+    port: Arc<dyn ImPort>,
+    user: String,
+    anchor: String,
+    hb: Heartbeat,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        for beat in 0..hb.max_beats {
+            let fast = beat < hb.fast_beats;
+            tokio::time::sleep(if fast { hb.fast } else { hb.slow }).await;
+            if beat == hb.fast_beats {
+                let _ = port
+                    .send_text(&user, "⏳ 任务仍在运行，心跳已降频。", &anchor)
+                    .await;
+            }
+            let line = tools.lock().unwrap_or_else(|e| e.into_inner()).render();
+            let text = if line.is_empty() {
+                "⏳ 还在想…".to_string()
+            } else {
+                format!("⏳ {line}")
+            };
+            let _ = port.send_text(&user, &text, &anchor).await;
+        }
+    })
+}
+
+/// `/queue` 的处理方式。
 #[derive(Debug, Clone, Copy, PartialEq)]
+enum QueueMode {
+    /// 报告当前排队情况（也是 `/queue` 无参时的默认）。
+    Report,
+    /// 中断在跑的那轮，把队首立刻当新一轮跑。
+    Interrupt,
+}
+
+/// 单字母快捷菜单。**刻意不用 1-4**：审批的回复就是 1/2/3，两套语义靠
+/// pending 计数切换正是 cc-haha 那条闸门要防的事。字母和数字不撞车，
+/// 于是菜单任何时候都能用，不需要额外闸门。
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum MenuAction {
+    Status,
+    Tasks,
+    Stop,
+    Clear,
+}
+
+// 不派生 `Copy`：`Steer` 带着指引正文，不是 Copy 类型。
+#[derive(Debug, Clone, PartialEq)]
 enum Command {
     Help,
     Status,
@@ -80,12 +191,21 @@ enum Command {
     Stop,
     /// `1` 允许一次 / `2` 本会话内永久允许 / `3` 拒绝。
     Permission(usize),
+    Queue(QueueMode),
+    /// 往**正在跑**的这一轮注入一条指引。轮次不中止，指引落进下一个 tool
+    /// result，用户可以在不丢掉已完成工作的前提下纠偏。之所以单独一个变体
+    /// 而不是 `Queue` 的一个模式：steer 不排队，它改的是**当下**这一轮。
+    Steer(String),
+    Tasks,
+    Menu(MenuAction),
 }
 
 /// 解析一条入站文本是不是命令。
 ///
-/// 裸数字只有在**恰好有一个**待批请求时才当成审批回复——否则它和「选第
-/// 1 个」这类语义会撞车。这条闸门是从 cc-haha 抄的（`permission.ts`）。
+/// 裸数字只有在**恰好有一个**待批请求时才当成审批回复；`pending > 1` 时
+/// 数字一律**不是**命令（`2026-09-30` 那篇笔记定的：多个待批时要求指名，
+/// 免得「3」被误读成别的意思）。这条闸门是从 cc-haha 抄的
+/// （`permission.ts`）。
 fn parse_command(text: &str, pending: usize) -> Option<Command> {
     let t = text.trim();
     match t.to_ascii_lowercase().as_str() {
@@ -93,7 +213,27 @@ fn parse_command(text: &str, pending: usize) -> Option<Command> {
         "/status" | "状态" => return Some(Command::Status),
         "/clear" | "清空" => return Some(Command::Clear),
         "/stop" | "停止" => return Some(Command::Stop),
+        "/tasks" | "/任务" => return Some(Command::Tasks),
+        "/queue" | "/队列" => return Some(Command::Queue(QueueMode::Report)),
         _ => {}
+    }
+    if let Some(arg) = t
+        .strip_prefix("/queue steer ")
+        .or_else(|| t.strip_prefix("/queue　steer　"))
+        .map(str::trim)
+    {
+        // 允许 `/queue steer` 后直接跟正文；空指针交给上层拒绝。
+        return Some(Command::Steer(arg.to_string()));
+    }
+    if let Some(arg) = t
+        .strip_prefix("/queue ")
+        .or_else(|| t.strip_prefix("/queue　"))
+        .map(str::trim)
+    {
+        return match arg.to_ascii_lowercase().as_str() {
+            "interrupt" | "中断" => Some(Command::Queue(QueueMode::Interrupt)),
+            _ => None,
+        };
     }
     if pending == 1 {
         match t {
@@ -103,6 +243,14 @@ fn parse_command(text: &str, pending: usize) -> Option<Command> {
             _ => {}
         }
     }
+    // 菜单走字母：与审批数字不同形，因此不需要 pending 闸门。
+    match t {
+        "a" | "/a" => return Some(Command::Menu(MenuAction::Status)),
+        "b" | "/b" => return Some(Command::Menu(MenuAction::Tasks)),
+        "c" | "/c" => return Some(Command::Menu(MenuAction::Stop)),
+        "d" | "/d" => return Some(Command::Menu(MenuAction::Clear)),
+        _ => {}
+    }
     None
 }
 
@@ -110,11 +258,19 @@ const HELP_TEXT: &str = "\
 可用命令：
 /help      列出本帮助
 /status    查看当前会话与运行状态
+/tasks     列出运行中与排队的任务
+/queue     查看排队情况
+/queue steer <正文>  往正在跑的这一轮注入指引（轮次不中止）
+/queue interrupt  中断当前轮次，队首立刻作为新一轮跑
 /clear     清空当前会话上下文
-/stop      中断本机正在跑的任务（会波及本机所有会话）
+/stop      中断本会话正在运行的任务
+
+快捷键（直接回一个字母）：
+a 查状态    b 列任务    c 中断当前    d 清空上下文
 
 Agent 要写文件或执行高风险命令时，会在这里发一条审批提示。
-届时直接回复 1 允许一次、2 本会话内永久允许、3 拒绝。";
+届时直接回复 1 允许一次、2 本会话内永久允许、3 拒绝。
+多个待批时数字不生效，请指明是哪一条。";
 
 
 /// pump task 收到的东西。`on_chunk` 是同步的，正文和工具事件都要从这里
@@ -181,6 +337,49 @@ struct PendingApproval {
     arguments: Value,
 }
 
+/// 一个会话的待跑队列。
+///
+/// 队列条目自己就是「这个会话正忙」的标记：`run_turn` 结束会把自己从
+/// `running` 摘掉，所以排水期间新到的消息如果只看 `running` 就会**插到
+/// 已排队的消息前面**。让 `queues` 里的 key 一直留到排空为止，既堵住这个
+/// 乱序，也让排水期间到达的消息正确地续在队尾。
+#[derive(Default)]
+struct SessionQueue {
+    items: VecDeque<(Inbound, Arc<dyn ImPort>)>,
+    /// 队列满时被挤掉的那些。**不静默丢**：排水时并进下一轮的正文，
+    /// agent 和用户都看得见有东西没跑。
+    dropped: Vec<String>,
+}
+
+impl SessionQueue {
+    /// 入队，返回 1-based 位次。超过 `cap` 时挤掉最旧的一条并记进
+    /// `dropped`——用户的意图是「我还有话说」，不是「必须按顺序全保」。
+    fn push(&mut self, msg: Inbound, port: Arc<dyn ImPort>, cap: usize) -> usize {
+        while self.items.len() >= cap {
+            if let Some((old, _)) = self.items.pop_front() {
+                let head: String = old.text.chars().take(60).collect();
+                self.dropped.push(head);
+            } else {
+                break;
+            }
+        }
+        self.items.push_back((msg, port));
+        self.items.len()
+    }
+
+    /// 取队首。若此前有被挤掉的条目，把摘要并进这一条的正文开头。
+    fn pop(&mut self) -> Option<(Inbound, Arc<dyn ImPort>)> {
+        let (mut msg, port) = self.items.pop_front()?;
+        if !self.dropped.is_empty() {
+            let summary = self.dropped.join(" / ");
+            let n = self.dropped.len();
+            self.dropped.clear();
+            msg.text = format!("（此前 {n} 条因队列已满被丢弃：{summary}）\n{}", msg.text);
+        }
+        Some((msg, port))
+    }
+}
+
 // ---------------------------------------------------------------------------
 // 运行时
 // ---------------------------------------------------------------------------
@@ -197,7 +396,14 @@ pub struct ChannelRuntime {
     /// 待批审批：`平台:user -> 队列`。包一层 Arc 是因为 `on_event` 是
     /// `'static` 闭包，只能持所有权，不能借用 `&self`。
     pending: Arc<Mutex<HashMap<String, Vec<PendingApproval>>>>,
-    running: Mutex<HashSet<String>>,
+    /// 在跑的轮次：`<平台>:<user>` → 这一轮的消息正文。存正文而不只是
+    /// 一个标记，是为了让 `/tasks` 能报出"在跑什么"，而不是干巴巴一句
+    /// 「运行中」。
+    running: Mutex<HashMap<String, String>>,
+    /// 每个 `<平台>:<user>` 一条待跑队列。轮次跑着的时候进来的消息进这里，
+    /// 不去挤聊天锁——挤锁的后果是消息排在锁上看不见位置，用户以为没收到，
+    /// 而且轮后整批重跑。
+    queues: Mutex<HashMap<String, SessionQueue>>,
     dedup: Dedup,
 }
 
@@ -219,7 +425,8 @@ impl ChannelRuntime {
                 .collect(),
             chat_locks: Mutex::new(HashMap::new()),
             pending: Arc::new(Mutex::new(HashMap::new())),
-            running: Mutex::new(HashSet::new()),
+            running: Mutex::new(HashMap::new()),
+            queues: Mutex::new(HashMap::new()),
             dedup: Dedup::new(),
         })
     }
@@ -231,6 +438,53 @@ impl ChannelRuntime {
 
     fn key(platform: &str, user: &str) -> String {
         format!("{platform}:{user}")
+    }
+
+    /// 这个会话是不是正忙着（在跑轮次，或还有排队的）。
+    fn is_busy(&self, key: &str) -> bool {
+        self.running
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains_key(key)
+            || self
+                .queues
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .contains_key(key)
+    }
+
+    /// 入队，返回 1-based 位次。
+    fn enqueue(&self, key: &str, msg: Inbound, port: &Arc<dyn ImPort>) -> usize {
+        let mut queues = self.queues.lock().unwrap_or_else(|e| e.into_inner());
+        queues
+            .entry(key.to_string())
+            .or_default()
+            .push(msg, port.clone(), QUEUE_CAP)
+    }
+
+    /// 排空队列。聊天锁由 `handle_message` 全程持有（同会话必须串行），
+    /// 但 `queues` 这把 std Mutex **绝不能跨 await**——所以锁内只取队首。
+    ///
+    /// 排空后把 key 从 map 摘掉：摘之前 `is_busy` 一直为真，所以排水期间
+    /// 到达的消息会正确地续在队尾，而不是插队。
+    async fn drain_queue(&self, platform: &'static str, user: &str) {
+        let key = Self::key(platform, user);
+        loop {
+            let next = {
+                let mut queues = self.queues.lock().unwrap_or_else(|e| e.into_inner());
+                match queues.get_mut(&key).and_then(|q| q.pop()) {
+                    Some(item) => Some(item),
+                    None => {
+                        queues.remove(&key);
+                        None
+                    }
+                }
+            };
+            let Some((msg, port)) = next else {
+                return;
+            };
+            self.run_turn(&port, platform, &msg).await;
+        }
     }
 
     // ---------------- 授权 ----------------
@@ -290,7 +544,21 @@ impl ChannelRuntime {
             }
         }
 
+        // 轮次在跑（或上一轮还在排水）→ 入队，不去挤聊天锁。位次要回执出去，
+        // 否则用户无法区分「排队了」和「没收到」。
         let key = Self::key(platform, &user);
+        if self.is_busy(&key) {
+            let pos = self.enqueue(&key, msg.clone(), &port);
+            let _ = port
+                .send_text(
+                    &user,
+                    &format!("📥 已排队（第 {pos} 位）。"),
+                    &anchor,
+                )
+                .await;
+            return;
+        }
+
         let lock = {
             let mut locks = self.chat_locks.lock().unwrap_or_else(|e| e.into_inner());
             locks
@@ -309,6 +577,9 @@ impl ChannelRuntime {
             }
         }
         self.run_turn(&port, platform, &msg).await;
+        // 本轮跑完，把排队的接着跑完再放走这把锁。放在 `run_turn` 之后而不是
+        // 之前，是为了让下一轮的心跳 / 回执 / 审批都走同一条路径。
+        self.drain_queue(platform, &user).await;
     }
 
     /// 处理未授权者的配对尝试。未配对的人发什么都当配对码试一次——这正是
@@ -362,39 +633,138 @@ impl ChannelRuntime {
     ) -> bool {
         match cmd {
             Command::Stop => {
-                // 只在**这个人自己**确实有轮子在跑时才动手：否则一个闲着
-                // 的 IM 用户发一条 /stop 就能掐掉桌面端正在跑的会话。
-                // 注意 AgentService 只提供 `interrupt_all()`，没有按会话
-                // 中断的接口，所以真要中断时波及的是本机所有在跑的轮次
-                // （它们会各自把已产生的部分落盘，不会丢数据）。
-                let busy = self
-                    .running
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .contains(&Self::key(platform, user));
-                if busy {
-                    self.state.agent_service().interrupt_all();
-                    let _ = port
-                        .send_text(user, "已请求中断本机正在运行的任务。", anchor)
-                        .await;
+                // 只中断**这个人自己**的轮次。之前这里只能 `interrupt_all()`，
+                // 波及本机所有在跑的轮次——一个闲着的 IM 用户发一条 /stop
+                // 就能掐掉桌面端正在跑的会话（本文件旧注释记录的隐患）。
+                //
+                // 命中与否直接用返回值判定，不再先查 `running`：先查后动的
+                // 两步之间轮次可能刚好结束，会把「中断成功」误报成「没有在跑」。
+                let hit = self
+                    .state
+                    .agent_service()
+                    .interrupt_session(&session_id(platform, user));
+                let reply = if hit {
+                    "已中断本会话正在运行的任务。"
                 } else {
-                    let _ = port.send_text(user, "当前没有在运行的任务。", anchor).await;
-                }
+                    "当前没有在运行的任务。"
+                };
+                let _ = port.send_text(user, reply, anchor).await;
                 true
             }
             Command::Permission(_) => {
                 self.resolve_permission(port, platform, user, anchor, cmd).await;
                 true
             }
+            // 菜单里的「中断」必须走**不需要聊天锁**的那条路：轮次在跑时锁
+            // 正被持有，等锁就等于排到自己那条队列后面，中断命令本身失效。
+            Command::Menu(MenuAction::Stop) => {
+                let hit = self
+                    .state
+                    .agent_service()
+                    .interrupt_session(&session_id(platform, user));
+                let reply = if hit {
+                    "已中断本会话正在运行的任务。"
+                } else {
+                    "当前没有在运行的任务。"
+                };
+                let _ = port.send_text(user, reply, anchor).await;
+                true
+            }
             _ => false,
         }
     }
 
+    /// `/status` 与菜单 `a` 的共用渲染。
+    fn render_status(&self, platform: &str, user: &str) -> String {
+        let key = Self::key(platform, user);
+        let running = self
+            .running
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains_key(&key);
+        format!(
+            "平台：{platform}\n会话：{}\n状态：{}\n排队：{} 条",
+            session_id(platform, user),
+            if running { "运行中" } else { "空闲" },
+            self.queue_len(&key),
+        )
+    }
+
+    /// `/tasks`：运行中 + 排队，逐条给首行。
+    fn render_tasks(&self, platform: &str, user: &str) -> String {
+        let key = Self::key(platform, user);
+        let (running, items, dropped) = {
+            let running = self.running.lock().unwrap_or_else(|e| e.into_inner());
+            let text = running.get(&key).cloned();
+            drop(running);
+            let queues = self.queues.lock().unwrap_or_else(|e| e.into_inner());
+            match queues.get(&key) {
+                Some(q) => (
+                    text,
+                    q.items.iter().map(|(m, _)| m.text.clone()).collect::<Vec<_>>(),
+                    q.dropped.len(),
+                ),
+                None => (text, Vec::new(), 0),
+            }
+        };
+        let mut out = String::new();
+        let mut n = 0usize;
+        if let Some(text) = running {
+            n += 1;
+            out.push_str(&format!("#{n} 运行中：{}\n", first_line(&text)));
+        }
+        for text in &items {
+            n += 1;
+            out.push_str(&format!("#{n} 排队：{}\n", first_line(text)));
+        }
+        if dropped > 0 {
+            out.push_str(&format!("（另有 {dropped} 条因队列已满被丢弃）"));
+        }
+        if out.is_empty() {
+            "当前没有任务。".to_string()
+        } else {
+            out.trim_end().to_string()
+        }
+    }
+
+    /// `/queue`：只讲排队，不列运行中。
+    fn render_queue(&self, platform: &str, user: &str) -> String {
+        let key = Self::key(platform, user);
+        let (items, dropped) = {
+            let queues = self.queues.lock().unwrap_or_else(|e| e.into_inner());
+            match queues.get(&key) {
+                Some(q) => (q.items.len(), q.dropped.len()),
+                None => (0, 0),
+            }
+        };
+        let mut out = if items == 0 {
+            "队列为空。".to_string()
+        } else {
+            format!("队列里有 {items} 条。发 /queue interrupt 可中断当前轮次并立刻跑队首。")
+        };
+        if dropped > 0 {
+            out.push_str(&format!("（另有 {dropped} 条因队列已满被丢弃）"));
+        }
+        out
+    }
+
+    fn queue_len(&self, key: &str) -> usize {
+        self.queues
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(key)
+            .map(|q| q.items.len())
+            .unwrap_or(0)
+    }
+
     /// 需要先拿到聊天锁的命令（会等当前轮跑完）。
+    ///
+    /// `platform` 是 `&'static str`：`/queue interrupt` 要在这里直接开跑
+    /// 一轮，而 `run_turn` 收的就是 `&'static str`（端口表 key 的类型）。
     async fn try_handle_locked(
         &self,
         port: &Arc<dyn ImPort>,
-        platform: &str,
+        platform: &'static str,
         user: &str,
         anchor: &str,
         cmd: Command,
@@ -402,21 +772,62 @@ impl ChannelRuntime {
         let sid = session_id(platform, user);
         let text = match cmd {
             Command::Help => HELP_TEXT.to_string(),
-            Command::Status => {
-                let busy = self
-                    .running
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .contains(&Self::key(platform, user));
-                format!(
-                    "平台：{platform}\n会话：{sid}\n状态：{}",
-                    if busy { "运行中" } else { "空闲" }
-                )
-            }
+            Command::Status => self.render_status(platform, user),
             Command::Clear => {
                 match self.state.agent_service().reset_session(&sid).await {
                     Ok(()) => "已清空上下文。".to_string(),
                     Err(e) => format!("清空失败：{e}"),
+                }
+            }
+            Command::Tasks => self.render_tasks(platform, user),
+            Command::Queue(QueueMode::Report) => self.render_queue(platform, user),
+            Command::Queue(QueueMode::Interrupt) => {
+                // 先把队首摘出来，否则中断完它还会被排一次。
+                let popped = {
+                    let mut queues = self.queues.lock().unwrap_or_else(|e| e.into_inner());
+                    queues
+                        .get_mut(&Self::key(platform, user))
+                        .and_then(|q| q.pop())
+                };
+                let hit = self.state.agent_service().interrupt_session(&sid);
+                let status = match (&popped, hit) {
+                    (Some(_), true) => "已中断当前轮次，你这条作为新一轮开始。",
+                    (Some(_), false) => "当前没有在跑的任务，你这条作为新一轮开始。",
+                    (None, true) => "已中断当前轮次。",
+                    (None, false) => "当前没有在运行的任务。",
+                };
+                // 先把状态说清楚再开跑：`run_turn` 自己会发三态回执。
+                let _ = port.send_text(user, status, anchor).await;
+                if let Some((msg, msg_port)) = popped {
+                    self.run_turn(&msg_port, platform, &msg).await;
+                }
+                return true;
+            }
+            Command::Steer(guidance) => {
+                // steer 不排新轮，而是改进正在跑的那一轮，所以**不进队列**。
+                if !self.is_busy(&Self::key(platform, user)) {
+                    let _ = port
+                        .send_text(user, "当前没有在运行的任务，无需纠偏。", anchor)
+                        .await;
+                    return true;
+                }
+                match self.state.agent_service().steer_session(&sid, &guidance) {
+                    true => format!("已注入指引：{guidance}"),
+                    false => "这条没能注入（没有在跑的轮次，或内容为空）。".to_string(),
+                }
+            }
+            Command::Menu(action) => {
+                match action {
+                    MenuAction::Status => self.render_status(platform, user),
+                    MenuAction::Tasks => self.render_tasks(platform, user),
+                    MenuAction::Clear => {
+                        match self.state.agent_service().reset_session(&sid).await {
+                            Ok(()) => "已清空上下文。".to_string(),
+                            Err(e) => format!("清空失败：{e}"),
+                        }
+                    }
+                    // Stop 在 `try_handle_immediate` 就处理掉了，走不到这里。
+                    MenuAction::Stop => "当前没有在运行的任务。".to_string(),
                 }
             }
             _ => return false,
@@ -501,6 +912,7 @@ impl ChannelRuntime {
     // ---------------- 跑一轮 ----------------
 
     async fn run_turn(&self, port: &Arc<dyn ImPort>, platform: &'static str, msg: &Inbound) {
+        let started = std::time::Instant::now();
         let sid = session_id(platform, &msg.user);
         let mut stream = port.start_stream(&msg.user, &msg.anchor);
         let (tx, mut rx) = mpsc::unbounded_channel::<StreamMsg>();
@@ -558,40 +970,61 @@ impl ChannelRuntime {
             let _ = tx.send(StreamMsg::Text(crate::util::redact_sensitive(&cleaned)));
         });
 
-        let pump = tokio::spawn(async move {
-            let mut tools = ToolTrace::default();
-            let mut header_shown = String::new();
-            // 正文全程直通流式（打字机效果）。新工具开跑时 clear_text 把已
-            // 流出的中间叙述（计划、工具名自白、失败现场）清掉——气泡回到
-            // 只剩进度行，最终回答随后重新长出来，收尾气泡是干净的。
-            // 工具执行期没有正文 delta，"还活着"由进度行刷帧负责。
-            while let Some(msg) = rx.recv().await {
-                match msg {
-                    StreamMsg::Text(delta) => {
-                        tools.clear_when_idle();
-                        stream.append(&delta).await;
-                    }
-                    StreamMsg::Tool(name, done) => {
-                        if !done {
-                            stream.clear_text().await;
+        // `ToolTrace` 提到 pump 外面：心跳 task 要读它，才知道"这一轮到底
+        // 在忙什么"，而不是只发一句"还在跑"。锁的粒度是「改完立刻放」——
+        // 绝不能把 guard 跨 `.await` 持有（既非 Send，也会把 await 点锁死）。
+        let tools = std::sync::Arc::new(std::sync::Mutex::new(ToolTrace::default()));
+        let pump = tokio::spawn({
+            let tools = tools.clone();
+            async move {
+                let mut header_shown = String::new();
+                // 正文全程直通流式（打字机效果）。新工具开跑时 clear_text 把已
+                // 流出的中间叙述（计划、工具名自白、失败现场）清掉——气泡回到
+                // 只剩进度行，最终回答随后重新长出来，收尾气泡是干净的。
+                // 工具执行期没有正文 delta，"还活着"由进度行刷帧负责。
+                while let Some(msg) = rx.recv().await {
+                    match msg {
+                        StreamMsg::Text(delta) => {
+                            tools.lock().unwrap_or_else(|e| e.into_inner()).clear_when_idle();
+                            stream.append(&delta).await;
                         }
-                        tools.push(Some(&name), done);
-                        let next = tools.render();
-                        // 轨迹没变就不重发，省掉一整轮 HTTP。
-                        if next != header_shown {
-                            header_shown = next;
-                            stream.set_header(&header_shown).await;
+                        StreamMsg::Tool(name, done) => {
+                            if !done {
+                                stream.clear_text().await;
+                            }
+                            let next = {
+                                let mut t = tools.lock().unwrap_or_else(|e| e.into_inner());
+                                t.push(Some(&name), done);
+                                t.render()
+                            };
+                            // 轨迹没变就不重发，省掉一整轮 HTTP。
+                            if next != header_shown {
+                                header_shown = next;
+                                stream.set_header(&header_shown).await;
+                            }
                         }
                     }
                 }
+                stream.finish().await;
             }
-            stream.finish().await;
         });
+
+        // 心跳：长任务在 IM 里唯一的"还活着"信号。pump 只在有正文或工具事件
+        // 时才发消息，所以「模型在想 / 工具在跑但迟迟没输出」整段静默得由外部
+        // 补。生命周期就是本轮——`send_message_stream` 一返回就 abort，所以
+        // 不必再去查 `running`（那是多余的一层，反而要求跨 task 共享它）。
+        let heartbeat = spawn_heartbeat(
+            tools.clone(),
+            port.clone(),
+            msg.user.clone(),
+            msg.anchor.clone(),
+            Heartbeat::default(),
+        );
 
         let overrides = self.build_overrides(port, platform, &msg.user, &sid);
         {
             let mut running = self.running.lock().unwrap_or_else(|e| e.into_inner());
-            running.insert(Self::key(platform, &msg.user));
+            running.insert(Self::key(platform, &msg.user), msg.text.clone());
         }
         let result = self
             .state
@@ -606,16 +1039,56 @@ impl ChannelRuntime {
         // 消费掉，这里 future 一返回 tx 就析构，pump 的 recv 拿到 None，自行
         // 收尾。只需等它把最后一帧发完。
         pump.await.ok();
+        // 本轮结束，心跳没有存在理由了。必须 abort：task 里的 sleep 会一直
+        // 醒着，不收就是每轮漏一个野 task。
+        heartbeat.abort();
 
-        if let Err(e) = result {
-            let (user_msg, _) = crate::util::user_facing_agent_error(&e.to_string());
-            let _ = port
-                .send_text(
-                    &msg.user,
-                    &format!("出错了：{user_msg}"),
-                    &msg.anchor,
-                )
-                .await;
+        // 三态回执。IM 用户发完消息就可能走开，只靠流式卡片，回来时
+        // 面对的是"不知道跑完没有"——这正是要补的洞。
+        match result {
+            Ok(res) if crate::util::was_interrupted(&res) => {
+                let _ = port
+                    .send_text(
+                        &msg.user,
+                        "⏹ 已按 /stop 中断，部分结果已保存。",
+                        &msg.anchor,
+                    )
+                    .await;
+            }
+            // ✅ 回执只给跑得够久的轮次。用户盯着屏幕看着答案滚完，再补一条
+            // "完成"是纯噪音；而长任务正是"人已走开、回来要知道结果"的那类。
+            // 阈值与 PR-3 的心跳同源，都是 60s。短轮次静默收尾。
+            Ok(res) if started.elapsed() >= LONG_TURN => {
+                let tail = crate::util::truncate_chars(res.text.trim(), 200);
+                let text = if tail.is_empty() {
+                    "✅ 完成。".to_string()
+                } else {
+                    format!("✅ 完成：{tail}")
+                };
+                let _ = port.send_text(&msg.user, &text, &msg.anchor).await;
+            }
+            Ok(_) => {}
+            Err(hermix_core::AgentError::Interrupted { .. }) => {
+                // 旧路径：中断以 Err 回来。别报成"出错了"——用户是自己
+                // 叫停的，告诉他系统坏了是在误导。
+                let _ = port
+                    .send_text(
+                        &msg.user,
+                        "⏹ 已按 /stop 中断，部分结果已保存。",
+                        &msg.anchor,
+                    )
+                    .await;
+            }
+            Err(e) => {
+                let (user_msg, _) = crate::util::user_facing_agent_error(&e.to_string());
+                let _ = port
+                    .send_text(
+                        &msg.user,
+                        &format!("❌ 出错了：{user_msg}"),
+                        &msg.anchor,
+                    )
+                    .await;
+            }
         }
     }
 
@@ -730,6 +1203,242 @@ fn format_approval_prompt(tool: &str, arguments: &Value, request_id: &str) -> St
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::channels::port::ImStream;
+
+    /// 测试替身：把 `send_text` 的内容按序记下来，供心跳断言。
+    struct RecordingPort {
+        sent: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl ImPort for RecordingPort {
+        fn platform(&self) -> &'static str {
+            "test"
+        }
+        async fn send_text(&self, _user: &str, content: &str, _anchor: &str) -> Result<(), String> {
+            self.sent
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(content.to_string());
+            Ok(())
+        }
+        fn start_stream(&self, _user: &str, _anchor: &str) -> Box<dyn ImStream> {
+            Box::new(NoopStream)
+        }
+    }
+
+    struct NoopStream;
+
+    #[async_trait::async_trait]
+    impl ImStream for NoopStream {
+        async fn append(&mut self, _delta: &str) {}
+        async fn set_header(&mut self, _header: &str) {}
+        async fn finish(&mut self) {}
+    }
+
+    /// 毫秒级节奏，供心跳测试用。
+    fn fast_hb() -> Heartbeat {
+        Heartbeat {
+            fast: std::time::Duration::from_millis(10),
+            slow: std::time::Duration::from_millis(10),
+            fast_beats: 2,
+            max_beats: 1000,
+        }
+    }
+
+    fn inbound(text: &str) -> Inbound {
+        Inbound {
+            user: "u".to_string(),
+            display_name: "测试".to_string(),
+            text: text.to_string(),
+            dedup_key: format!("k-{text}"),
+            anchor: "a".to_string(),
+        }
+    }
+
+    fn dummy_port() -> std::sync::Arc<RecordingPort> {
+        std::sync::Arc::new(RecordingPort {
+            sent: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+        })
+    }
+
+    #[test]
+    fn 队列是先进先出() {
+        let mut q = SessionQueue::default();
+        let port = dummy_port();
+        assert_eq!(q.push(inbound("一"), port.clone(), 20), 1);
+        assert_eq!(q.push(inbound("二"), port.clone(), 20), 2);
+        assert_eq!(q.push(inbound("三"), port.clone(), 20), 3);
+        assert_eq!(q.pop().unwrap().0.text, "一");
+        assert_eq!(q.pop().unwrap().0.text, "二");
+        assert_eq!(q.pop().unwrap().0.text, "三");
+        assert!(q.pop().is_none(), "排空后不该再吐东西");
+    }
+
+    #[test]
+    fn 满队列挤掉最旧并把摘要并进下一轮() {
+        let mut q = SessionQueue::default();
+        let port = dummy_port();
+        for t in ["一", "二", "三"] {
+            q.push(inbound(t), port.clone(), 3);
+        }
+        // 满了，挤掉「一」
+        assert_eq!(q.push(inbound("四"), port.clone(), 3), 3);
+        let first = q.pop().unwrap().0.text;
+        assert!(
+            first.starts_with("（此前 1 条因队列已满被丢弃：一）"),
+            "被丢的那条必须出现在下一轮正文里，实际：{first}"
+        );
+        assert!(first.contains("二"), "摘要后面接的是真正的队首");
+    }
+
+    #[test]
+    fn 丢弃摘要只并一次() {
+        let mut q = SessionQueue::default();
+        let port = dummy_port();
+        for t in ["a", "b", "c"] {
+            q.push(inbound(t), port.clone(), 3);
+        }
+        q.push(inbound("d"), port.clone(), 3);
+        q.push(inbound("e"), port.clone(), 3);
+        let first = q.pop().unwrap().0.text;
+        assert!(first.contains("a"));
+        let second = q.pop().unwrap().0.text;
+        assert!(
+            !second.contains("被丢弃"),
+            "摘要不该粘到每一条上，实际：{second}"
+        );
+    }
+
+    #[test]
+    fn 上限为零时不失控() {
+        let mut q = SessionQueue::default();
+        let port = dummy_port();
+        // cap=0 的病态情形不该 panic 或无限循环
+        let _ = q.push(inbound("x"), port.clone(), 0);
+        assert!(q.items.is_empty() || q.items.len() == 1);
+    }
+
+    #[test]
+    fn 挤掉时按字符截断长文本() {
+        let mut q = SessionQueue::default();
+        let port = dummy_port();
+        let long = "长".repeat(200);
+        q.push(inbound(&long), port.clone(), 1);
+        q.push(inbound("后"), port.clone(), 1);
+        let first = q.pop().unwrap().0.text;
+        assert!(first.contains(&"长".repeat(60)), "只取前 60 字");
+        assert!(!first.contains(&"长".repeat(61)), "不该整段塞进去");
+    }
+
+    #[tokio::test]
+    async fn 心跳持续发且abort后彻底停() {
+        let sent = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let port = std::sync::Arc::new(RecordingPort {
+            sent: sent.clone(),
+        });
+        let tools = std::sync::Arc::new(std::sync::Mutex::new(ToolTrace::default()));
+        let hb = spawn_heartbeat(
+            tools,
+            port,
+            "u".to_string(),
+            "a".to_string(),
+            fast_hb(),
+        );
+
+        tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+        let running = sent.lock().unwrap_or_else(|e| e.into_inner()).len();
+        assert!(running >= 3, "长任务应持续收到心跳，实际 {running} 条");
+        assert!(
+            sent.lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .iter()
+                .all(|m| m.starts_with('⏳')),
+            "心跳文案统一前缀"
+        );
+
+        hb.abort();
+        // 等一个心跳周期，确认 abort 真的生效（否则这里会继续涨）。
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let after = sent.lock().unwrap_or_else(|e| e.into_inner()).len();
+        assert_eq!(after, running, "abort 后不得再发心跳");
+    }
+
+    #[tokio::test]
+    async fn 心跳带出工具轨迹_没有工具时说还在想() {
+        let sent = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let port = std::sync::Arc::new(RecordingPort {
+            sent: sent.clone(),
+        });
+        let tools = std::sync::Arc::new(std::sync::Mutex::new(ToolTrace::default()));
+        let hb = spawn_heartbeat(
+            tools.clone(),
+            port,
+            "u".to_string(),
+            "a".to_string(),
+            fast_hb(),
+        );
+
+        tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+        assert!(
+            sent.lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .iter()
+                .any(|m| m.contains("还在想")),
+            "没有工具轨迹时要说「还在想」，不能发空的进度行"
+        );
+
+        tools
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(Some("read_file"), false);
+        sent.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+        assert!(
+            sent.lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .iter()
+                .any(|m| m.contains("read_file")),
+            "心跳应带出当前在跑的工具名"
+        );
+        hb.abort();
+    }
+
+    #[tokio::test]
+    async fn 心跳降频会明说而不是静默() {
+        let sent = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let port = std::sync::Arc::new(RecordingPort {
+            sent: sent.clone(),
+        });
+        let hb = spawn_heartbeat(
+            std::sync::Arc::new(std::sync::Mutex::new(ToolTrace::default())),
+            port,
+            "u".to_string(),
+            "a".to_string(),
+            Heartbeat {
+                fast: std::time::Duration::from_millis(5),
+                slow: std::time::Duration::from_millis(5),
+                fast_beats: 1,
+                max_beats: 6,
+            },
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+        let got = sent
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .any(|m| m.contains("降频"));
+        assert!(got, "间隔拉长必须告知用户，否则最后一条心跳会误导");
+        // 6 次上限后自行收工：这是泄漏兜底
+        let total = sent.lock().unwrap_or_else(|e| e.into_inner()).len();
+        tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+        assert_eq!(
+            sent.lock().unwrap_or_else(|e| e.into_inner()).len(),
+            total,
+            "达到 max_beats 后须自行收工"
+        );
+        hb.abort();
+    }
 
     #[test]
     fn 中文命令别名可用() {
@@ -751,6 +1460,72 @@ mod tests {
         assert_eq!(parse_command("1", 1), Some(Command::Permission(1)));
         assert_eq!(parse_command("2", 1), Some(Command::Permission(2)));
         assert_eq!(parse_command("拒绝", 1), Some(Command::Permission(3)));
+    }
+
+    #[test]
+    fn 多个待批时裸数字不是命令() {
+        // 回归红线：`pending > 1` 时用户打「3」是想拒绝某一条，不是选菜单。
+        // 数字与审批 1/2/3 同形，这里必须原样落回普通文本。
+        for t in ["1", "2", "3"] {
+            assert_eq!(parse_command(t, 3), None, "pending=3 时 {t} 不得是命令");
+        }
+        assert_eq!(parse_command("3", 0), None, "无待批时裸数字是普通文本");
+    }
+
+    #[test]
+    fn 菜单走字母_不跟审批数字撞车() {
+        assert_eq!(parse_command("a", 0), Some(Command::Menu(MenuAction::Status)));
+        assert_eq!(parse_command("b", 3), Some(Command::Menu(MenuAction::Tasks)));
+        assert_eq!(parse_command("c", 1), Some(Command::Menu(MenuAction::Stop)));
+        assert_eq!(parse_command("d", 0), Some(Command::Menu(MenuAction::Clear)));
+        assert_eq!(parse_command("e", 0), None);
+    }
+
+    #[test]
+    fn 队列与任务命令() {
+        assert_eq!(parse_command("/queue", 0), Some(Command::Queue(QueueMode::Report)));
+        assert_eq!(parse_command("/队列", 0), Some(Command::Queue(QueueMode::Report)));
+        assert_eq!(
+            parse_command("/queue interrupt", 0),
+            Some(Command::Queue(QueueMode::Interrupt))
+        );
+        assert_eq!(
+            parse_command("/queue  中断", 0),
+            Some(Command::Queue(QueueMode::Interrupt))
+        );
+        // 未知模式不吃掉它，当普通文本
+        assert_eq!(parse_command("/queue 不存在", 0), None);
+        assert_eq!(parse_command("/tasks", 0), Some(Command::Tasks));
+        assert_eq!(parse_command("/任务", 0), Some(Command::Tasks));
+    }
+
+    #[test]
+    fn steer_带出指引正文() {
+        assert_eq!(
+            parse_command("/queue steer 只改 README", 0),
+            Some(Command::Steer("只改 README".to_string()))
+        );
+        assert_eq!(
+            parse_command("/queue steer 别动 package.json", 1),
+            Some(Command::Steer("别动 package.json".to_string())),
+            "有待批时 steer 也要能用——纠偏和审批是两件事"
+        );
+        // 裸 `/queue steer` 没有正文，交给上层拒绝，不静默当普通文本
+        assert_eq!(parse_command("/queue steer", 0), None);
+    }
+
+    #[test]
+    fn 帮助里列了新增命令() {
+        for expected in ["/tasks", "/queue", "interrupt", "快捷键"] {
+            assert!(HELP_TEXT.contains(expected), "帮助缺 {expected}");
+        }
+    }
+
+    #[test]
+    fn 首行按字符截断() {
+        assert_eq!(first_line("第一行\n第二行"), "第一行");
+        assert_eq!(first_line(&"长".repeat(60)), format!("{}…", "长".repeat(40)));
+        assert_eq!(first_line("   \n  x"), "x", "首行空白时往后找");
     }
 
     #[test]

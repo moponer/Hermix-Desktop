@@ -670,6 +670,17 @@ always_include: vec![
         crate::steer::steer(&self.pending_steer, text)
     }
 
+    /// 交出 steer 缓冲的句柄，让**外部**（`LocalAgentService` 的按会话
+    /// `/queue steer`）能往这一轮里塞指引。
+    ///
+    /// `pending_steer` 是本模块私有字段，外部拿不到；与其把整个
+    /// `AgentLoop` 存进 service（那要求 `AgentLoop: Send + Sync`，并把整个
+    /// 引擎的生命周期挂到服务上），不如只交出这一块缓冲——它本来就是
+    /// `Arc`，agent 侧 drain 的和外部写的是同一块。
+    pub fn steer_buffer(&self) -> std::sync::Arc<std::sync::Mutex<Option<String>>> {
+        self.pending_steer.clone()
+    }
+
     /// Clear any queued `/steer` guidance without applying it.
     pub fn clear_pending_steer(&self) {
         crate::steer::clear_pending_steer(&self.pending_steer)
