@@ -1103,10 +1103,11 @@ height: 26px;
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 4px 6px;
+  padding: 0 8px;
   border-bottom: 1px solid var(--color-border-subtle);
   background: var(--color-bg-secondary);
-  min-height: 32px;
+  /* 40px：与 .sidebar-head、ChatView 标题行同高，三段头部接成一条水平带。 */
+  height: 40px;
 }
 .preview-bar__icon {
   width: 24px;

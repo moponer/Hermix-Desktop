@@ -86,10 +86,12 @@ function ModelStatusBar({
       ? "通道已连接，可直接在 IM 里继续对话"
       : `通道未连接${imChannel.detail ? `：${imChannel.detail}` : ""}`
     : "这条对话是从 IM 发起并远程驱动的";
-  const showRightToggle = !!onToggleRight;
+  const showRightToggle = !!onToggleRight && !rightOpen;
+  // h-10：与 .sidebar-head、右栏标签条同高（三段头部是一条 40px 水平带，
+  // 各列不再各飞各的基线）。
   return (
     <div
-      className="px-4 sm:px-6 pt-3 pb-2 flex items-center gap-2 rounded-t-xl shrink-0"
+      className="h-10 shrink-0 flex items-center gap-2 px-4 sm:px-6 rounded-t-xl"
       style={{ color: "var(--color-text-primary)" }}
     >
       {showLeftActions && (

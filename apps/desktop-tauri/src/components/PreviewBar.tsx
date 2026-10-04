@@ -17,7 +17,7 @@
 // —— 与参考项目同构。**只列真的会开的**：终端（无 PTY）、审查（后端
 // file_change 不带 diff 正文）现在都做不出来，列出来就是点击无响应。
 
-import { X, FolderOpen, FileText, MessageSquare, ClipboardCheck } from "lucide-react";
+import { X, FolderOpen, FileText, MessageSquare, ClipboardCheck, PanelRightClose } from "lucide-react";
 import { clsx } from "clsx";
 import type { ReactNode } from "react";
 import type { Artifact } from "../utils/artifacts";
@@ -90,6 +90,7 @@ export function PreviewBar({
   workspaceRoot,
   onAddFileToChat,
   onPreviewFile,
+  onCollapse,
 }: {
   tabs: SideTab[];
   activeId: string | null;
@@ -108,6 +109,8 @@ export function PreviewBar({
   workspaceRoot?: string | null;
   onAddFileToChat?: (path: string) => void;
   onPreviewFile: (path: string, name: string) => void;
+  /** 收起右栏。开着的面板自己带折叠按钮（与左栏对称），收起后展开入口回到 ChatView 标题行。 */
+  onCollapse?: () => void;
 }) {
   const active = tabs.find((t) => t.id === activeId) ?? null;
 
@@ -159,11 +162,22 @@ export function PreviewBar({
           })}
         </div>
 
-        {/* 2026-10-03：右端不放"收起侧栏"的 X，标签条里也不放。此前
-            先后试过两版——折叠态 44px 竖条（占 3.4% 窗口宽）、绝对定位
-            的常驻开关（.right-rail，锚窗口右上角）——都撤了：
-            收起职责由 ChatView 标题行的 PanelRight 按钮承担，它
-            onToggleRight 无条件传入，不依赖会话标题是否已生成。 */}
+        {/* 2026-10-04：收起按钮回到标签条右端（与左栏对称的归属——开着的
+            面板自己带折叠按钮，收起后展开入口在 ChatView 标题行）。历史：
+            先后试过折叠态 44px 竖条、绝对定位常驻开关（.right-rail），
+            2026-10-03 曾全部撤掉、职责归标题行，但标题行按钮在面板开着时
+            仍然占位，两处都在反而没有归属，按用户拍板回退。 */}
+        {onCollapse && (
+          <button
+            type="button"
+            className="preview-bar__icon ml-auto"
+            onClick={onCollapse}
+            title="收起侧栏"
+            aria-label="收起侧栏"
+          >
+            <PanelRightClose className="icon-md" />
+          </button>
+        )}
       </div>
 
       {active?.type === "browser" ? (

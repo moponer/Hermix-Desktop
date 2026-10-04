@@ -3572,17 +3572,17 @@ return {
             workspaceRoot={workspaceRoot}
             onAddFileToChat={handleAddFileToChat}
             onPreviewFile={handlePreviewFileFromExplorer}
+            onCollapse={() => setRightOpen(false)}
           />
           </ErrorBoundary>
         </div>
-        {/* 2026-10-03：整条移除右栏切换开关（原 .right-rail 常驻按钮 +
-            此前更早的 44px 折叠竖条）。展开预览栏的入口已有三处：
-            · ChatView 标题行的 PanelRight 按钮（onToggleRight 无条件
-              传入，showRightToggle 恒为 true —— 不依赖 displayTitle，
-              新建会话尚未生成标题时那个按钮也在）；
+        {/* 右栏收起/展开入口的归属（2026-10-04 与左栏对称）：
+            · 面板开着 → 收起按钮在右栏自己的标签条右端（PreviewBar onCollapse）；
+            · 面板收起 → ChatView 标题行的 PanelRight 按钮（showRightToggle
+              仅在收起态渲染，不依赖 displayTitle，新建会话没标题时也在）；
             · 点对话正文里的路径 / 产物 → setRightOpen(true)；
             · 目录 chip → openComputer。
-            再加常驻按钮是第四个重复入口，且它压在右栏内容之上。 */}
+            2026-10-03 曾把收起职责整个挪进标题行，两处并存没有归属，已回退。 */}
       </div>
 
       {/* 预览统一走右侧预览栏（含 PreviewPanel 自带的全屏），不再有全屏模态。 */}
