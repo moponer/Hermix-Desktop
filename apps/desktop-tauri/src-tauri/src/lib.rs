@@ -472,6 +472,10 @@ pub fn run() {
                 }
             }
 
+            // 本机文件索引：启动即在后台建，不等用户开查找面板（全程
+            // 非阻塞，UAC 弹窗与失败策略见 commands_local_search）。
+            commands_local_search::start_background_index();
+
             // 0. WebView2 runtime probe (Windows only). Tauri 2's
             //    own WebView creation step fails with a cryptic
             //    HRESULT when the Evergreen runtime is missing —
@@ -660,6 +664,7 @@ pub fn run() {
             commands::list_directory,
             commands::restart_sidecar,
             commands_local_search::local_search,
+            commands_local_search::local_search_status,
             commands_local_search::local_search_open,
             commands_local_search::local_search_preview,
             cdp_probe::cdp_n0_probe,

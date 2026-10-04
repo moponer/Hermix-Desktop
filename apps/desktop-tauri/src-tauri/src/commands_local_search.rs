@@ -27,7 +27,7 @@
 //! 最终 ≤200 条。
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -140,6 +140,11 @@ static INDEX: OnceLock<Mutex<FileIndex>> = OnceLock::new();
 static INDEX_GEN: AtomicU64 = AtomicU64::new(0);
 /// 重建期间的进度计数（已发现的文件数）。
 static PROGRESS: AtomicU64 = AtomicU64::new(0);
+/// 提权 helper 本进程内是否已判定不可用（UAC 被拒 / exe 缺失 / 非 NTFS）。
+/// 失败一次后不再重试：重试 = 再弹一次 UAC，对用户是骚扰、对磁盘是空转。
+static HELPER_FAILED: AtomicBool = AtomicBool::new(false);
+/// 启动自动扫描是否已发起过（只发一次，失败也不再自动重试）。
+static AUTO_SCANNED: AtomicBool = AtomicBool::new(false);
 
 fn index_cell() -> &'static Mutex<FileIndex> {
     INDEX.get_or_init(|| Mutex::new(FileIndex::empty()))
@@ -260,8 +265,9 @@ fn walk_root(root: &Path) -> Index {
 }
 
 /// 全量重建：优先走提权 helper 的 MFT/USN 枚举（秒级，Everything 路线），
-/// helper 不可用（未授权/非管理员拒绝/非 NTFS）时回退 jwalk 目录遍历。
-fn rebuild_index(gen: u64) {
+/// helper 不可用（未授权/非管理员拒绝/非 NTFS）时按 `allow_jwalk` 决定是否
+/// 回退 jwalk 目录遍历（分钟级）。
+fn rebuild_index(gen: u64, allow_jwalk_fallback: bool) {
     let mut merged = match usn_index_via_helper() {
         Ok(idx) => {
             // helper 路线可用：启动增量重放线程（幂等，仅首访实际创建）。
@@ -270,7 +276,16 @@ fn rebuild_index(gen: u64) {
             idx
         }
         Err(e) => {
-            eprintln!("[local_search] USN helper unavailable, fallback to jwalk: {e}");
+            eprintln!("[local_search] USN helper unavailable: {e}");
+            if !allow_jwalk_fallback {
+                // 自动路径：就此打住，索引留空。启动时用户没发起过任何请求，
+                // 一次全盘 jwalk 要霸占磁盘几分钟 —— 自动工作只做「便宜或不做」。
+                // 真正需要结果时（打开查找面板）走 local_search，仍有 jwalk 兜底。
+                if let Ok(mut cell) = index_cell().lock() {
+                    cell.building = false;
+                }
+                return;
+            }
             fallback_jwalk_index()
         }
     };
@@ -799,9 +814,13 @@ mod usn_helper {
     }
 }
 
-/// 走提权 helper 建索引。非 Windows / helper 失败时返回 Err。
+/// 走提权 helper 建索引。非 Windows / helper 失败时返回 Err，并把失败
+/// 记进 `HELPER_FAILED` —— 之后本进程内不再重试（免得反复弹 UAC）。
 #[cfg(windows)]
 fn usn_index_via_helper() -> Result<Index, String> {
+    if HELPER_FAILED.load(Ordering::Acquire) {
+        return Err("helper 本进程内已失败，不再重试".into());
+    }
     let volumes: Vec<String> = search_roots()
         .into_iter()
         .map(|p| {
@@ -814,7 +833,12 @@ fn usn_index_via_helper() -> Result<Index, String> {
     if volumes.is_empty() {
         return Err("未发现 NTFS 卷".into());
     }
-    usn_helper::run(&volumes).map(|r| r.index)
+    usn_helper::run(&volumes)
+        .map(|r| r.index)
+        .map_err(|e| {
+            HELPER_FAILED.store(true, Ordering::Release);
+            e
+        })
 }
 
 #[cfg(not(windows))]
@@ -848,7 +872,8 @@ fn fallback_jwalk_index() -> Index {
 }
 
 /// 确保索引可用：未建或过期时在后台触发重建，立即返回。
-fn ensure_index() {
+/// `allow_jwalk_fallback` = false 时只用提权 helper（见 [`rebuild_index`]）。
+fn ensure_index(allow_jwalk_fallback: bool) {
     let mut cell = match index_cell().lock() {
         Ok(c) => c,
         Err(_) => return,
@@ -863,12 +888,26 @@ fn ensure_index() {
     // catch_unwind：walker panic 也必须复位 building，否则索引永远
     // 卡在"重建中"，之后所有查询返回空。
     std::thread::spawn(move || {
-        if std::panic::catch_unwind(|| rebuild_index(gen)).is_err() {
+        if std::panic::catch_unwind(|| rebuild_index(gen, allow_jwalk_fallback)).is_err() {
             if let Ok(mut cell) = index_cell().lock() {
                 cell.building = false;
             }
         }
     });
+}
+
+/// 应用启动时调用：**自动**在后台把本机文件索引建好，用户第一次打开
+/// 查找面板就已经能搜（此前要等面板里敲一下字才触发，白等好几分钟）。
+///
+/// 只走提权 helper（MFT/USN，秒级）。helper 不可用时索引留空而不回退
+/// jwalk —— 自动的全盘遍历会在用户毫无请求时霸占磁盘；那次代价留给
+/// 用户显式打开面板的路径去付（见 [`local_search`]）。全程不阻塞启动。
+pub fn start_background_index() {
+    if AUTO_SCANNED.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    eprintln!("[local_search] background index scan starting");
+    ensure_index(false);
 }
 
 /// 纯同步搜索执行体（spawn_blocking 上跑）。锁内完成匹配与打分，
@@ -1004,6 +1043,34 @@ fn search_blocking(query: String, ext: Option<String>, dirs_only: bool) -> Local
     LocalSearchResponse { hits, indexed, building }
 }
 
+/// 索引状态（前端轮询用）：只读两个计数器，**不做任何匹配**。
+///
+/// 索引动辄百万级条目，重跑一次模糊匹配是几百毫秒的 CPU，而扫描进度条
+/// 每 500ms 就要刷一次 —— 进度刷新必须走这条廉价通道，否则「数字不变」
+/// 会被换成「界面卡顿」。
+#[derive(Debug, Serialize)]
+pub struct IndexStatus {
+    /// 重建中 = 已发现的文件数；已建成 = 索引条目数。
+    pub indexed: usize,
+    pub building: bool,
+}
+
+#[command]
+pub fn local_search_status() -> IndexStatus {
+    let Ok(cell) = index_cell().lock() else {
+        return IndexStatus { indexed: 0, building: false };
+    };
+    let building = cell.building;
+    IndexStatus {
+        indexed: if building {
+            PROGRESS.load(Ordering::Relaxed) as usize
+        } else {
+            cell.index.len()
+        },
+        building,
+    }
+}
+
 /// 快速搜索：`query` 为空时返回最近修改的前 N 个文件；否则按模糊/
 /// 子串匹配打分取前 N。
 #[command]
@@ -1012,7 +1079,8 @@ pub async fn local_search(
     ext: Option<String>,
     dirs_only: Option<bool>,
 ) -> Result<LocalSearchResponse, String> {
-    ensure_index();
+    // 用户显式发起的查询：helper 不行也允许 jwalk 全盘兜底。
+    ensure_index(true);
     tokio::task::spawn_blocking(move || search_blocking(query, ext, dirs_only.unwrap_or(false)))
         .await
         .map_err(|e| format!("搜索线程失败: {e}"))
