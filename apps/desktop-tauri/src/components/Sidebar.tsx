@@ -1,7 +1,7 @@
 import {
   ChevronDown, ChevronRight,
   MessageSquare, Plus, FolderOpen,
-  Boxes, MoreHorizontal, Loader2,
+  Boxes, MoreHorizontal, Loader2, Bot,
   // Popover icons
   Pencil, Pin, Archive, Trash2, FolderOpenDot, Copy, FolderMinus,
   Settings, PanelLeftClose, Search, LayoutDashboard, FolderSearch,
@@ -34,6 +34,7 @@ import { UserAvatar } from "./UserAvatar";
 import { EditProfileDialog } from "./EditProfileDialog";
 import { UserMenuPopover } from "./UserMenuPopover";
 import { LocalSearchDialog } from "./LocalSearchDialog";
+import { useChannelsStatus } from "../hooks/useChannelsStatus";
 
 interface SidebarProps {
   page: NavPage;
@@ -95,6 +96,8 @@ export function Sidebar({
   const { profile, setProfile } = useUserProfile();
   const [editOpen, setEditOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  // IM 通道状态（机器人名 + 网关连接），远程助手分组的行内状态点用。
+  const channels = useChannelsStatus();
   // 本地快速查找（Everything 风格）浮层。
   const [localSearchOpen, setLocalSearchOpen] = useState(false);
   const userCardRef = useRef<HTMLDivElement>(null);
@@ -131,13 +134,21 @@ export function Sidebar({
   //
   // 工作台会话不进入主侧栏：它只在「工作台」页面内的子侧栏渲染，
   // 主对话列表按归属过滤掉。memory: 侧栏/搜索框收 chatSessions（过滤 workbench_id）。
-  const { sessionsByWs, ungrouped: ungroupedSessions, orphanPaths } = useMemo(() => {
+  const { sessionsByWs, ungrouped: ungroupedSessions, orphanPaths, remote: remoteSessions } = useMemo(() => {
     const byWs: Record<string, Session[]> = {};
     const rest: Session[] = [];
+    const imRemote: Session[] = [];
     const orphans = new Set<string>();
     for (const s of sessions) {
       // 工作台归属：会话绑了 workbench_id 就只在该工作台内可见。
       if (s.workbench_id) continue;
+      // IM 远程会话不进对话/项目列表：它们有专属的「远程助手」分组。
+      // 混在普通列表里既看不出通道死活，入口也不显性（见
+      // docs/notes/implemented/feature/2026-10-04-im-remote-assistant-sidebar.md）。
+      if (imSourceOf(s.id)) {
+        imRemote.push(s);
+        continue;
+      }
       let wsPath: string | null = s.workspace ?? null;
       if (!wsPath) {
         try { wsPath = storage.getItem(sessionKey(s.id, "workspace")); } catch {}
@@ -153,7 +164,7 @@ export function Sidebar({
         rest.push(s);
       }
     }
-    return { sessionsByWs: byWs, ungrouped: rest, orphanPaths: orphans };
+    return { sessionsByWs: byWs, ungrouped: rest, orphanPaths: orphans, remote: imRemote };
   }, [sessions, workspaces]);
 
   // Auto-add orphan workspace paths that sessions reference but aren't in
@@ -402,6 +413,76 @@ export function Sidebar({
             <span className="sidebar-search-label">搜索对话</span>
             <kbd className="sidebar-search-kbd">⌘K</kbd>
           </button>
+        </div>
+      )}
+
+      {/* 远程助手：IM 通道的固定会话（`im:{platform}:{user}`）。它们不会像
+          普通对话那样增长，混在对话列表里既看不出通道死活、入口也不显性
+          ——单独成组，行内直接给通道连接状态与机器人名。 */}
+      {remoteSessions.length > 0 && (
+        <div className="sidebar-section" style={{ flexShrink: 0, marginBottom: 0 }}>
+          <div className="flex items-center gap-1.5 px-3 pb-1 pt-2">
+            <Bot className="icon-sm shrink-0 text-text-faint" />
+            <span className="text-[length:var(--text-tiny,11px)] font-medium uppercase tracking-wide text-text-faint">
+              远程助手
+            </span>
+            {onOpenSettings && (
+              <button
+                type="button"
+                onClick={onOpenSettings}
+                className="icon-btn ml-auto"
+                title="通道管理（设置）"
+                aria-label="通道管理"
+              >
+                <Settings className="icon-sm" />
+              </button>
+            )}
+          </div>
+          <div className="px-2 pb-2">
+            {remoteSessions.map((s) => {
+              const src = imSourceOf(s.id)!;
+              const st = channels?.find((c) => c.platform === src);
+              const label = st?.name
+                ? `${IM_SOURCE_LABEL[src]} · ${st.name}`
+                : IM_SOURCE_LABEL[src];
+              return (
+                <div
+                  key={s.id}
+                  className={clsx(
+                    "sidebar-row",
+                    s.id === activeSessionId && "is-active",
+                    s.id === streamingSessionId && "is-streaming",
+                  )}
+                >
+                  <button
+                    onClick={() => onSelectSession(s.id)}
+                    className="sidebar-row-main"
+                    title={label}
+                  >
+                    {s.id === streamingSessionId ? (
+                      <Loader2 className="icon-md animate-spin text-accent shrink-0" />
+                    ) : (
+                      <span
+                        className={clsx(
+                          "h-2 w-2 rounded-full shrink-0",
+                          st?.connected ? "bg-green-400" : "bg-red-400",
+                        )}
+                        title={
+                          st
+                            ? st.connected
+                              ? "通道已连接"
+                              : `通道未连接${st.detail ? `：${st.detail}` : ""}`
+                            : "通道状态未知"
+                        }
+                      />
+                    )}
+                    <span className="truncate-1">{label}</span>
+                    <span className="sidebar-row-meta">{formatSidebarTime(s.updated_at)}</span>
+                  </button>
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 

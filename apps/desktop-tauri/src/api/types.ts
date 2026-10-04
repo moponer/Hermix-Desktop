@@ -264,6 +264,19 @@ export interface CatalogProbeResult {
   error?: string;
 }
 
+// ── IM 通道状态（/api/channels/status）──────────────────────
+
+export interface ChannelStatusItem {
+  platform: string;
+  bound: boolean;
+  /** 网关是否已连上。bound && !connected = 凭据在但通道没活。 */
+  connected: boolean;
+  /** 最近一次网关故障原文（连上后清空）。 */
+  detail?: string;
+  /** 机器人名称（QQ 网关 READY 事件上报）。 */
+  name?: string;
+}
+
 // ── Auto-correct model ──────────────────────────
 
 export interface AutoCorrectReport {

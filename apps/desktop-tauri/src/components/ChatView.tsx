@@ -23,6 +23,7 @@ import type { AcuiDecisionBus } from "../acui/AcuiRegistry";
 import { AcuiPanel } from "../acui/AcuiPanel";
 import { StreamErrorCard, type ErrorKind } from "./StreamErrorBanner";
 import { useModelSelector } from "./ModelSelector";
+import { useChannelsStatus } from "../hooks/useChannelsStatus";
 import { Composer } from "./Composer";
 import { ApprovalDrawer, type PendingApprovals } from "./ApprovalDrawer";
 import { MessageList, type MessageListHandle, type StreamRow } from "./MessageList";
@@ -68,13 +69,23 @@ function ModelStatusBar({
   onExpandSidebar?: () => void;
   onOpenSearch?: () => void;
 }) {
+  // 通道状态（机器人名 + 网关连接）。hook 必须在下方提前 return 之前调用。
+  const channels = useChannelsStatus();
+  const imChannel = imSource ? channels?.find((c) => c.platform === imSource) : undefined;
   // 侧栏折叠时，展开 + 搜索按钮直接嵌在本行标题左侧（用户拍板：与对话标题
   // 同一行，不另起浮层）。折叠但会话尚无标题（title 未生成）时也必须渲染
   // 本行 —— 否则展开入口随侧栏一起消失，用户再也打不开侧栏。
   const showLeftActions = !!sidebarCollapsed && !!onExpandSidebar;
   if (!title && !showLeftActions) return null;
   const displayTitle = title && title.length > 80 ? title.slice(0, 77) + "…" : title;
-  const imLabel = imSource ? IM_SOURCE_LABEL[imSource] : null;
+  const imLabel = imSource
+    ? `${IM_SOURCE_LABEL[imSource]}${imChannel?.name ? ` · ${imChannel.name}` : ""}`
+    : null;
+  const imTitle = imChannel
+    ? imChannel.connected
+      ? "通道已连接，可直接在 IM 里继续对话"
+      : `通道未连接${imChannel.detail ? `：${imChannel.detail}` : ""}`
+    : "这条对话是从 IM 发起并远程驱动的";
   const showRightToggle = !!onToggleRight;
   return (
     <div
@@ -107,9 +118,12 @@ function ModelStatusBar({
       )}
       {imLabel && (
         <span
-          className="shrink-0 inline-flex items-center gap-1 rounded-full bg-accent-soft px-2 h-[20px] text-[length:var(--text-tiny)] text-accent"
-          title={`这条对话是从${imLabel}发起并远程驱动的`}
+          className="shrink-0 inline-flex items-center gap-1.5 rounded-full bg-accent-soft px-2 h-[20px] text-[length:var(--text-tiny)] text-accent"
+          title={imTitle}
         >
+          <span
+            className={`h-1.5 w-1.5 rounded-full ${imChannel?.connected ? "bg-green-400" : "bg-red-400"}`}
+          />
           {imLabel} 远程
         </span>
       )}

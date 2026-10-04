@@ -43,6 +43,7 @@ import type {
   CatalogSourceInfo,
   CatalogSourcesResponse,
   CatalogProbeResult,
+  ChannelStatusItem,
 } from "./types";
 
 // Transport switched from `fetch()` over `127.0.0.1:3000` to
@@ -974,6 +975,15 @@ export const probeMcpCatalogSource = async (
     if (url) params.set("url", url);
     const qs = params.toString();
     return await fetchJSON<CatalogProbeResult>(`/api/mcp/catalog/probe${qs ? `?${qs}` : ""}`);
+  } catch {
+    return null;
+  }
+};
+
+/** IM 通道状态：凭据绑定 + 网关连接 + 机器人名（仅本机端点）。 */
+export const getChannelStatus = async (): Promise<{ platforms: ChannelStatusItem[] } | null> => {
+  try {
+    return await fetchJSON<{ platforms: ChannelStatusItem[] }>("/api/channels/status");
   } catch {
     return null;
   }
