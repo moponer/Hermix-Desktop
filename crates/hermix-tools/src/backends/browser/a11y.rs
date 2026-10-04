@@ -7,12 +7,43 @@ use serde_json::Value;
 
 /// Pick a stable CSS selector for an AX node, used as the
 /// resolver target for `[ref=eN]` tokens.
+///
+/// `role` and `name` both come from the page (CDP AX tree), so a hostile
+/// page fully controls them. Escaping rules per string context:
+/// - `role` sits inside a **double-quoted** attribute value: escape `\`
+///   first, then `"`.
+/// - `name` sits inside a **single-quoted** `:has-text('…')` argument:
+///   escape `\` first, then `'`. Order matters — escaping `'` produces
+///   new backslashes that must not be re-escaped.
+/// Raw newlines would make the selector a syntax error in CSS string
+/// literals; they are neutralized to spaces (the accessible-name match
+/// stays best-effort rather than failing to parse at all).
 fn ax_node_selector(role: &str, name: &str) -> String {
+    fn escape_css_quoted(s: &str, quote: char) -> String {
+        let neutralized: String = s
+            .chars()
+            .map(|c| match c {
+                '\n' | '\r' => ' ',
+                '\0' => '\u{FFFD}',
+                other => other,
+            })
+            .collect();
+        let mut out = String::with_capacity(neutralized.len());
+        for c in neutralized.chars() {
+            if c == '\\' || c == quote {
+                out.push('\\');
+            }
+            out.push(c);
+        }
+        out
+    }
+    let role_esc = escape_css_quoted(role, '"');
     if name.is_empty() {
-        format!("[role=\"{}\"]", role)
+        format!("[role=\"{role_esc}\"]")
     } else {
         // Playwright-style: prefer accessible name match.
-        format!("[role=\"{}\"]:has-text('{}')", role, name.replace('\'', "\\'"))
+        let name_esc = escape_css_quoted(name, '\'');
+        format!("[role=\"{role_esc}\"]:has-text('{name_esc}')")
     }
 }
 
@@ -323,6 +354,53 @@ pub(crate) fn diff_a11y_yaml(old: &str, new: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 旧实现只转义 `'` 不转义 `\`：name 含 `\` 时会吞掉转义反斜杠，
+    /// 让 `:has-text('...')` 的字符串提前闭合（页面可通过 accessible
+    /// name 注入额外 selector）。修后必须满足：输出里的 `'` 全部
+    /// 带奇数个前导反斜杠（即被正确转义），字符串只在收尾闭合。
+    #[test]
+    fn ax_node_selector_escapes_backslash_before_quote() {
+        // 页面可控 name：字面量 a、\、'、b
+        let sel = ax_node_selector("button", "a\\'b");
+        assert_eq!(
+            sel,
+            "[role=\"button\"]:has-text('a\\\\\\'b')",
+            "backslash must be doubled before escaping the quote: {sel}"
+        );
+    }
+
+    /// 反斜杠本身要翻倍，否则后续的 `'` 转义会被页面控制的 `\` 吞掉。
+    #[test]
+    fn ax_node_selector_doubles_lone_backslash() {
+        let sel = ax_node_selector("button", "a\\b");
+        assert_eq!(
+            sel,
+            "[role=\"button\"]:has-text('a\\\\b')",
+            "lone backslash must be doubled: {sel}"
+        );
+    }
+
+    /// role 也来自页面，进双引号 context，`"` 必须转义。
+    #[test]
+    fn ax_node_selector_escapes_role_double_quote() {
+        let sel = ax_node_selector("but\"ton", "");
+        assert_eq!(sel, "[role=\"but\\\"ton\"]", "role must be escaped: {sel}");
+    }
+
+    /// 裸换行会让 CSS 字符串字面量语法错误——中和为空格而不是失败。
+    #[test]
+    fn ax_node_selector_neutralizes_control_chars() {
+        let sel = ax_node_selector("button", "li\r\nne");
+        assert_eq!(sel, "[role=\"button\"]:has-text('li  ne')", "{sel}");
+    }
+
+    /// 普通名字不受影响——不破坏既有 selector 形状。
+    #[test]
+    fn ax_node_selector_plain_name_unchanged() {
+        let sel = ax_node_selector("textbox", "Username");
+        assert_eq!(sel, "[role=\"textbox\"]:has-text('Username')");
+    }
 
     #[test]
     fn ax_tree_yaml_assigns_refs_for_interactive_nodes() {
