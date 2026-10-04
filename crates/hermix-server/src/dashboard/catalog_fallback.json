@@ -1,62 +1,6 @@
 {
-  "comment": "内置精选 MCP 目录（批次 M1）。网络不可达时 /api/mcp/catalog 的最后兜底。条目形状 = CatalogItem（mcp_catalog.rs），安装命令人工核验过；official 只标官方 registry 认证的条目。新增条目必须：安装命令真实存在 + mcp_scan 全绿 + 中英文描述齐。",
+  "comment": "MCP 目录唯一数据源（2026-10-04 起取消远程拉取：官方 registry 与自建子注册中心两个源已删除，目录纯本地、由发版更新）。准入标准新增前两条硬约束：\n  1. 不得与内建工具重复 —— 内建已有 file/memory/web_extract/markitdown/read_pdf/terminal/browser+cua 等 34 个 toolset；重复项只会给 LLM 增加同义工具与 token 成本（旧版因此砍掉 filesystem/memory/fetch/markitdown/puppeteer/sequentialthinking/commands 共 11 条）。\n  2. 同一能力只留一个 —— 旧版有两个 notion、两个 postgres（且权限模型相反）、以及一个 reference test server，均已剔除。\n  3. 安装命令真实存在 + mcp_scan 全绿 + 中英文描述齐。\n注意：MCP 是外部服务的接入层，绝大多数条目需要用户提供自己的凭据，「内置」只能内置目录与二进制，内置不了开箱可用——因此不做 auto-seed。",
   "items": [
-    {
-      "id": "io.github.modelcontextprotocol/server-filesystem",
-      "title": "Filesystem",
-      "description": "Read, write, and search files and directories inside allowed roots. The reference MCP server for local file work.",
-      "version": "0.6.2",
-      "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem",
-      "official": true,
-      "install": {
-        "kind": "npm",
-        "package": "@modelcontextprotocol/server-filesystem",
-        "version": "0.6.2"
-      },
-      "required_env": []
-    },
-    {
-      "id": "io.github.modelcontextprotocol/server-memory",
-      "title": "Memory",
-      "description": "Knowledge-graph based persistent memory: entities, relations, observations. The reference memory server.",
-      "version": "0.6.2",
-      "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/memory",
-      "official": true,
-      "install": {
-        "kind": "npm",
-        "package": "@modelcontextprotocol/server-memory",
-        "version": "0.6.2"
-      },
-      "required_env": []
-    },
-    {
-      "id": "io.github.modelcontextprotocol/server-sequentialthinking",
-      "title": "Sequential Thinking",
-      "description": "Structured step-by-step thinking scaffold for complex problem decomposition and revision.",
-      "version": "0.6.2",
-      "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/sequentialthinking",
-      "official": true,
-      "install": {
-        "kind": "npm",
-        "package": "@modelcontextprotocol/server-sequential-thinking",
-        "version": "0.6.2"
-      },
-      "required_env": []
-    },
-    {
-      "id": "io.github.modelcontextprotocol/server-everything",
-      "title": "Everything",
-      "description": "Reference test server exercising every MCP feature: echo, resources, prompts, sampling. Use to verify MCP client wiring.",
-      "version": "0.6.2",
-      "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/everything",
-      "official": true,
-      "install": {
-        "kind": "npm",
-        "package": "@modelcontextprotocol/server-everything",
-        "version": "0.6.2"
-      },
-      "required_env": []
-    },
     {
       "id": "io.github.modelcontextprotocol/server-github",
       "title": "GitHub",
@@ -90,21 +34,6 @@
       ]
     },
     {
-      "id": "io.github.modelcontextprotocol/server-fetch",
-      "title": "Fetch",
-      "description": "Fetch a URL and convert HTML to readable markdown for the model. robots.txt aware.",
-      "version": "0.6.2",
-      "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/fetch",
-      "official": true,
-      "install": {
-        "kind": "manual",
-        "package": "mcp-server-fetch",
-        "version": null,
-        "hint": "pypi 包：Hermix 不自动执行未知包管理器，请确认后在「手动添加」里填好 uvx 命令。"
-      },
-      "required_env": []
-    },
-    {
       "id": "io.github.modelcontextprotocol/server-gitlab",
       "title": "GitLab",
       "description": "GitLab project, issue, MR, and branch APIs against gitlab.com or self-hosted instances.",
@@ -136,20 +65,6 @@
         "SLACK_BOT_TOKEN",
         "SLACK_TEAM_ID"
       ]
-    },
-    {
-      "id": "io.github.modelcontextprotocol/server-puppeteer",
-      "title": "Puppeteer",
-      "description": "Browser automation: navigate, click, fill forms, screenshot in a headless Chrome.",
-      "version": "0.6.2",
-      "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/puppeteer",
-      "official": true,
-      "install": {
-        "kind": "npm",
-        "package": "@modelcontextprotocol/server-puppeteer",
-        "version": "0.6.2"
-      },
-      "required_env": []
     },
     {
       "id": "io.github.domdomegg/airtable-mcp-server",
@@ -199,38 +114,6 @@
       "required_env": []
     },
     {
-      "id": "io.github.designcomputer/postgres-mcp-server",
-      "title": "PostgreSQL Pro",
-      "description": "Full PostgreSQL access with safety modes: restricted SQL, analysis queries, and schema management.",
-      "version": "0.4.2",
-      "homepage": "https://github.com/crystaldba/postgres-mcp",
-      "official": false,
-      "install": {
-        "kind": "manual",
-        "package": "postgres-mcp",
-        "version": null,
-        "hint": "pypi 包：Hermix 不自动执行未知包管理器，请确认后在「手动添加」里填好 uvx 命令。"
-      },
-      "required_env": [
-        "DATABASE_URI"
-      ]
-    },
-    {
-      "id": "io.github.siriuslee/markitdown-mcp",
-      "title": "MarkItDown",
-      "description": "Convert PDF, DOCX, XLSX, PPTX, and images to markdown for the model to read.",
-      "version": "0.1.1",
-      "homepage": "https://github.com/microsoft/markitdown",
-      "official": false,
-      "install": {
-        "kind": "manual",
-        "package": "markitdown-mcp",
-        "version": null,
-        "hint": "pypi 包：Hermix 不自动执行未知包管理器，请确认后在「手动添加」里填好 uvx 命令。"
-      },
-      "required_env": []
-    },
-    {
       "id": "io.github.tavioy/mcp-server-youtube-transcript",
       "title": "YouTube Transcript",
       "description": "Fetch YouTube video transcripts and captions as plain text for summarization.",
@@ -241,21 +124,6 @@
         "kind": "npm",
         "package": "mcp-server-youtube-transcript",
         "version": null
-      },
-      "required_env": []
-    },
-    {
-      "id": "io.github.tumf/mcp-server-commands",
-      "title": "Shell Commands",
-      "description": "Run whitelisted shell commands with argument validation. Complements the built-in terminal with an app-scoped allowlist.",
-      "version": "0.2.2",
-      "homepage": "https://github.com/tumf/mcp-shell-server",
-      "official": false,
-      "install": {
-        "kind": "manual",
-        "package": "mcp-shell-server",
-        "version": null,
-        "hint": "pypi 包：Hermix 不自动执行未知包管理器，请确认后在「手动添加」里填好 uvx 命令。"
       },
       "required_env": []
     },
@@ -292,23 +160,6 @@
       ]
     },
     {
-      "id": "io.github.browserbase/mcp-server-browserbase",
-      "title": "Browserbase",
-      "description": "Cloud browser sessions: steer a remote browser for web automation and scraping.",
-      "version": "1.2.1",
-      "homepage": "https://github.com/browserbase/mcp-server-browserbase",
-      "official": false,
-      "install": {
-        "kind": "npm",
-        "package": "@browserbasehq/mcp-server-browserbase",
-        "version": null
-      },
-      "required_env": [
-        "BROWSERBASE_API_KEY",
-        "BROWSERBASE_PROJECT_ID"
-      ]
-    },
-    {
       "id": "io.github.supabase/supabase-mcp",
       "title": "Supabase",
       "description": "Manage Supabase projects: tables, schema, SQL, edge functions, and logs.",
@@ -339,22 +190,6 @@
       },
       "required_env": [
         "QDRANT_URL"
-      ]
-    },
-    {
-      "id": "io.github.suekou/mcp-notion-server",
-      "title": "Notion (Community)",
-      "description": "Full Notion API coverage: pages, databases, blocks, comments, and users.",
-      "version": "0.6.1",
-      "homepage": "https://github.com/suekou/mcp-notion-server",
-      "official": false,
-      "install": {
-        "kind": "npm",
-        "package": "mcp-notion-server",
-        "version": null
-      },
-      "required_env": [
-        "NOTION_API_TOKEN"
       ]
     },
     {

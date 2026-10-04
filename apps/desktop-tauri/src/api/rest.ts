@@ -40,9 +40,6 @@ import type {
   CatalogInstall,
   CatalogScanHit,
   CatalogVerdict,
-  CatalogSourceInfo,
-  CatalogSourcesResponse,
-  CatalogProbeResult,
   ChannelStatusItem,
   WorkflowEntry,
 } from "./types";
@@ -882,9 +879,9 @@ interface McpServerListResponse {
 
 // ── MCP 社区目录 ──────────────────────────────────────────────
 
-/** 拉目录。`refresh=true` 跳过 24h 缓存强拉；网络失败时后端回退到上次缓存
- *  （`fromCache` + `staleReason` 会如实告诉我们）。 */
-export const getMcpCatalog = async (refresh = false): Promise<CatalogResponse | null> => {
+/** 拉内置目录。无参数、无缓存、无网络——后端返回的是编译期打包的常量，
+ *  因此 `refresh` 已随 `?refresh=1` 与 24h TTL 一并删除。 */
+export const getMcpCatalog = async (): Promise<CatalogResponse | null> => {
   try {
     const res = await fetchJSON<{
       items: Array<{
@@ -893,8 +890,7 @@ export const getMcpCatalog = async (refresh = false): Promise<CatalogResponse | 
         title_zh?: string; description_zh?: string; category: string;
         scan: { verdict: string; label: string; hits: CatalogScanHit[]; command_preview?: string };
       }>;
-      fetched_at: number; from_cache: boolean; stale_reason?: string;
-    }>(`/api/mcp/catalog${refresh ? "?refresh=1" : ""}`);
+    }>("/api/mcp/catalog");
     return {
       items: res.items.map((r) => ({
         id: r.id,
@@ -915,68 +911,7 @@ export const getMcpCatalog = async (refresh = false): Promise<CatalogResponse | 
           commandPreview: r.scan.command_preview,
         },
       })),
-      fetchedAt: res.fetched_at,
-      fromCache: res.from_cache,
-      staleReason: res.stale_reason,
     };
-  } catch {
-    return null;
-  }
-};
-
-/** 目录数据源清单 + 当前选择（批次 M2）。 */
-export const getMcpCatalogSources = async (): Promise<CatalogSourcesResponse | null> => {
-  try {
-    const res = await fetchJSON<{
-      current: string;
-      env_override: boolean;
-      custom_url?: string;
-      sources: Array<{ id: string; name: string; description: string }>;
-    }>("/api/mcp/catalog/sources");
-    return {
-      current: res.current,
-      envOverride: res.env_override,
-      customUrl: res.custom_url,
-      sources: res.sources.map((s) => ({
-        id: s.id as CatalogSourceInfo["id"],
-        name: s.name,
-        description: s.description,
-      })),
-    };
-  } catch {
-    return null;
-  }
-};
-
-/** 切换数据源。self-hosted 必须带 customUrl。 */
-export const setMcpCatalogSource = async (
-  source: string,
-  opts?: { customUrl?: string },
-): Promise<{ ok: boolean; source: string } | null> => {
-  try {
-    return await fetchJSON<{ ok: boolean; source: string }>("/api/mcp/catalog/sources", {
-      method: "PUT",
-      body: JSON.stringify({
-        source,
-        custom_url: opts?.customUrl,
-      }),
-    });
-  } catch {
-    return null;
-  }
-};
-
-/** 源连通性测试（「测试连接」按钮）。self-hosted 可带未保存的临时 URL。 */
-export const probeMcpCatalogSource = async (
-  source?: string,
-  url?: string,
-): Promise<CatalogProbeResult | null> => {
-  try {
-    const params = new URLSearchParams();
-    if (source) params.set("source", source);
-    if (url) params.set("url", url);
-    const qs = params.toString();
-    return await fetchJSON<CatalogProbeResult>(`/api/mcp/catalog/probe${qs ? `?${qs}` : ""}`);
   } catch {
     return null;
   }

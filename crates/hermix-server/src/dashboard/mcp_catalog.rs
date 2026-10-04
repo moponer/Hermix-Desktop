@@ -1,51 +1,48 @@
-//! MCP 社区目录：拉取官方 registry → 归一化 → 缓存 → 浏览 / 一键添加。
+//! MCP 目录：内置精选清单 → 浏览 / 一键添加。**纯本地，零网络**。
 //!
-//! 数据源是 MCP 官方 registry（`registry.modelcontextprotocol.io`），即社区
-//! 自己发布的清单。**信任边界**：目录里的东西是第三方写的，所以
+//! # 2026-10-04：取消远程拉取
 //!
+//! 此前有三个数据源：官方 registry（`registry.modelcontextprotocol.io`）、
+//! 用户自建子注册中心（官方 ghcr 镜像，API 同形）、以及打包在二进制里的内置
+//! 精选目录。三个源连同磁盘缓存（`mcp_catalog.json` + 24h TTL）、游标分页
+//! （`limit=100` × 5 页）、`mcp_registry.json` 源偏好、probe 端点**一并删除**。
+//!
+//! 决策依据：
+//! - 官方源自己的描述是「**境外线路**，有代理时数据最全」——对国内用户是硬伤，
+//!   而它在失败路径上并不比内置目录更可靠（实测 2026-10-01 直连超时）。
+//! - 内置目录本就是设计上的确定性数据源，只是被放在了"兜底层"。
+//! - 代价（明确接受）：目录从 ~500 条收窄到 21 条；新增条目或升版本必须跟
+//!   应用发版走。这是纯本地方案的固有成本，不是缺陷。
+//!
+//! # 信任边界
+//!
+//! 目录里的东西是第三方写的，所以：
 //! - 远端（HTTP）服务器：添加只写一条 URL 配置，**不执行任何代码** ——
-//!   目录里绝大多数是这类，风险面仅是"连到谁的服务器"。
+//!   风险面仅是"连到谁的服务器"。
 //! - 本地包（npm 等）：添加会变成 `npx <pkg>@<ver>`，即**在用户机器上执行
 //!   第三方代码**。这类条目在前端明确标注，命令原样展示，不隐藏。
 //! - `POST /api/mcp/catalog/install` 只接受目录 `id`，命令/URL 一律由服务端
 //!   从目录解析 —— 客户端传什么 command/url 都不作数，否则这个端点就是个
 //!   「任意命令执行」后门。
 //!
-//! 网络：直连。**2026-10-01 实测修正**：官方 registry 在部分国内网络下
-//! 直连超时（HTTP 000），此前 09-30 的"可直连"结论不普适。reqwest 会自动
-//! 走 `HTTPS_PROXY`/`HTTP_PROXY`；拉取失败时依序回退**上一次缓存 → 内置
-//! 精选目录**（`catalog_fallback.json`，见 FALLBACK_JSON），绝不因联网
-//! 失败让目录空白或 502。
+//! # 关于「内置」
 //!
-//! **自建子注册中心**（批次 M2 `self-hosted` 源）：官方 registry 开源且
-//! API 形状专为子注册中心设计，Docker 一条命令即可运行同形镜像——
-//!
-//! ```text
-//! # 需要 PostgreSQL（官方 docker-compose.yml 有完整编排）
-//! docker run -p 8080:8080 ghcr.io/modelcontextprotocol/registry:latest
-//! ```
-//!
-//! 然后在目录面板把数据源切到「自建子注册中心」并填入
-//! `http://127.0.0.1:8080`（或设 env `HERMIX_MCP_REGISTRY_URL`，优先级
-//! 更高）。切换只影响目录列表的来源；install 端点仍按 server 反域名
-//! id 落本机配置，与源无关。源清单与切换端点见 `get_sources` /
-//! `set_source` / `probe`。
+//! 内置的是**目录与安装定义**，不是「开箱可用」。MCP 是外部服务的接入层，
+//! 21 条里 13 条需要用户填自己的凭据（token / API key / DATABASE_URI），
+//! 而零凭据的那几条恰恰要么已被内建工具覆盖、要么需要本就有集群/主机。
+//! 因此**不做 auto-seed**——没有真正"零凭据 + 不重复"的候选，硬凑只会把
+//! 重复项塞进默认上下文。
 
-use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
-
-use axum::extract::{Query, State};
+// 2026-10-04 取消远程拉取后，这些 import 随取数层一并失效：
+//   PathBuf/SystemTime/UNIX_EPOCH ← 磁盘缓存路径与 now_secs
+//   Query/IntoResponse/Response    ← ?refresh=1 查询参数与 .into_response() 链
+use axum::extract::State;
 use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::{Deserialize, Serialize};
 
 use crate::state::HttpServerState;
 use crate::dashboard::mcp::{self, McpServerEntry, McpTransport};
-
-/// 缓存新鲜期。目录变动很慢，一天一次足够；也让"没网也能开面板"。
-const CACHE_TTL_SECS: u64 = 24 * 3600;
-const FETCH_TIMEOUT_SECS: u64 = 20;
 
 // ── 对外形状（前端消费的契约）──────────────────────────────
 
@@ -97,391 +94,17 @@ pub struct CatalogEntry {
 #[derive(Debug, Clone, Serialize)]
 pub struct CatalogResponse {
     pub items: Vec<CatalogEntry>,
-    pub fetched_at: u64,
-    /// 这次返回的是磁盘缓存（没网 / 拉取失败）。
-    pub from_cache: bool,
-    /// 拉取失败时的原因（`from_cache` 为 true 时也有，好让 UI 说明数据可能旧了）。
-    pub stale_reason: Option<String>,
 }
 
-// ── 缓存 ─────────────────────────────────────────────────
-
-fn cache_path(state: &HttpServerState) -> PathBuf {
-    state.hermix_home.join("mcp_catalog.json")
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct CatalogCache {
-    fetched_at: u64,
-    items: Vec<CatalogItem>,
-}
-
-fn now_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
-}
-
-fn read_cache(state: &HttpServerState) -> Option<CatalogCache> {
-    let raw = std::fs::read_to_string(cache_path(state)).ok()?;
-    serde_json::from_str(&raw).ok()
-}
-
-fn write_cache(state: &HttpServerState, cache: &CatalogCache) {
-    let path = cache_path(state);
-    if let Some(parent) = path.parent() {
-        if std::fs::create_dir_all(parent).is_err() {
-            return;
-        }
-    }
-    if let Ok(json) = serde_json::to_string_pretty(cache) {
-        let _ = std::fs::write(path, json);
-    }
-}
-
-// ── 拉取 + 归一化 ────────────────────────────────────────
-
-fn http_client() -> reqwest::Client {
-    let b = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(FETCH_TIMEOUT_SECS))
-        .user_agent("hermix-desktop/mcp-catalog");
-    // 直连即可（实测可通）。reqwest 原生读 `HTTPS_PROXY` / `HTTP_PROXY`，
-    // 被网络策略拦截时正好复用系统代理 —— 无需额外代码，也不改配置 schema。
-    b.build().unwrap_or_default()
-}
-
-// ── 目录源（批次 M2：多源手动切换）─────────────────────────
+// ── 内置精选目录（批次 M1，2026-10-04 起为唯一数据源）──────────
 //
-// 优先级：`HERMIX_MCP_REGISTRY_URL` env（显式覆盖，同 HERMIX_TLS_ADDR
-// 模式）> 用户设置存的源 id（hermix_home/mcp_registry.json）。
-// self-hosted 源额外读 registry_custom_url。切换只影响「列表从哪拉」，
-// install 端点仍按 server 反域名 id 落到本机 MCP 配置，与源无关。
-
-/// 源的机器 id（前端下拉的 value）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum CatalogSource {
-    /// 官方 registry（默认）。境外线路，有代理时数据最全。
-    Official,
-    /// 内置精选目录（M1 的打包 JSON 当"伪源"，零网络依赖）。
-    BuiltinOffline,
-    /// 用户自建子注册中心（官方 ghcr 镜像，API 与官方同形）。
-    SelfHosted,
-}
-
-impl CatalogSource {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Official => "official",
-            Self::BuiltinOffline => "builtin-offline",
-            Self::SelfHosted => "self-hosted",
-        }
-    }
-
-    fn parse(s: &str) -> Option<Self> {
-        match s {
-            "official" => Some(Self::Official),
-            "builtin-offline" => Some(Self::BuiltinOffline),
-            "self-hosted" => Some(Self::SelfHosted),
-            _ => None,
-        }
-    }
-}
-
-/// 源持久化（hermix_home/mcp_registry.json）。文件缺失/损坏 = 默认 official。
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-struct RegistryPrefs {
-    /// 源 id（CatalogSource::as_str）。
-    #[serde(default)]
-    source: Option<String>,
-    /// self-hosted 源的 base URL。
-    #[serde(default)]
-    registry_custom_url: Option<String>,
-}
-
-fn registry_prefs_path() -> PathBuf {
-    hermix_config::paths::hermix_home().join("mcp_registry.json")
-}
-
-fn read_prefs() -> RegistryPrefs {
-    std::fs::read_to_string(registry_prefs_path())
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
-}
-
-fn write_prefs(prefs: &RegistryPrefs) {
-    let path = registry_prefs_path();
-    if let Some(dir) = path.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    if let Ok(json) = serde_json::to_string_pretty(prefs) {
-        let _ = std::fs::write(path, json);
-    }
-}
-
-/// 解析出当前生效的 registry base URL（不含 path）。
-/// env 优先；self-hosted 无自定义 URL 时回退官方并如实标注。
-fn resolve_registry_base() -> (String, CatalogSource) {
-    if let Some(url) = hermix_config::paths::env_compat("HERMIX_MCP_REGISTRY_URL", "HERMES_MCP_REGISTRY_URL") {
-        if !url.trim().is_empty() {
-            return (url.trim().trim_end_matches('/').to_string(), CatalogSource::SelfHosted);
-        }
-    }
-    let prefs = read_prefs();
-    let src = prefs
-        .source
-        .as_deref()
-        .and_then(CatalogSource::parse)
-        .unwrap_or(CatalogSource::Official);
-    match src {
-        CatalogSource::SelfHosted => {
-            let url = prefs
-                .registry_custom_url
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(|s| s.trim_end_matches('/').to_string())
-                .unwrap_or_else(|| official_base().to_string());
-            (url, CatalogSource::SelfHosted)
-        }
-        // builtin-offline 不走网络（get_catalog 提前返回），base 仅占位。
-        _ => (official_base().to_string(), src),
-    }
-}
-
-fn official_base() -> &'static str {
-    "https://registry.modelcontextprotocol.io"
-}
-
-/// registry 原始条目（只取我们要的字段，其余忽略）。
-#[derive(Deserialize)]
-struct RawEnvelope {
-    #[serde(default)]
-    server: RawServer,
-    #[serde(default)]
-    _meta: std::collections::HashMap<String, serde_json::Value>,
-}
-
-#[derive(Deserialize, Default)]
-struct RawServer {
-    #[serde(default)]
-    name: String,
-    #[serde(default)]
-    title: Option<String>,
-    #[serde(default)]
-    description: Option<String>,
-    #[serde(default)]
-    version: Option<String>,
-    #[serde(default)]
-    homepage: Option<String>,
-    #[serde(default)]
-    remotes: Vec<RawRemote>,
-    #[serde(default)]
-    packages: Vec<RawPackage>,
-}
-
-#[derive(Deserialize)]
-struct RawRemote {
-    #[serde(default)]
-    url: String,
-}
-
-#[derive(Deserialize)]
-struct RawPackage {
-    #[serde(rename = "registryType", default)]
-    registry_type: String,
-    #[serde(default)]
-    identifier: String,
-    #[serde(default)]
-    version: Option<String>,
-    #[serde(default, rename = "environmentVariables")]
-    env_vars: Vec<RawEnvVar>,
-}
-
-#[derive(Deserialize)]
-struct RawEnvVar {
-    #[serde(default)]
-    name: String,
-    #[serde(default, rename = "isRequired")]
-    is_required: bool,
-}
-
-fn env_placeholders(raw: &str) -> Vec<String> {
-    // registry 的 env 声明常写成 `${TOKEN}` / `${env:TOKEN}`，占位符名就是
-    // 用户必须自己填的 key。这里两种写法都认。
-    let mut out = Vec::new();
-    let mut rest = raw;
-    while let Some(i) = rest.find("${") {
-        rest = &rest[i + 2..];
-        let Some(end) = rest.find('}') else { break };
-        let inner = &rest[..end];
-        let key = inner.rsplit(':').next().unwrap_or(inner).trim();
-        if !key.is_empty() && !out.iter().any(|k: &String| k == key) {
-            out.push(key.to_string());
-        }
-        rest = &rest[end + 1..];
-    }
-    out
-}
-
-fn normalize(env: &RawEnvelope) -> Option<CatalogItem> {
-    let s = &env.server;
-    if s.name.trim().is_empty() {
-        return None;
-    }
-    let description = s.description.clone().unwrap_or_default();
-    if description.trim().is_empty() {
-        return None;
-    }
-    // 远端优先：不执行代码，永远比本地包安全。
-    let install = if let Some(r) = s.remotes.iter().find(|r| !r.url.trim().is_empty()) {
-        CatalogInstall::Remote { url: r.url.clone() }
-    } else if let Some(p) = s.packages.iter().find(|p| !p.identifier.trim().is_empty()) {
-        match p.registry_type.as_str() {
-            "npm" => CatalogInstall::Npm {
-                package: p.identifier.clone(),
-                version: p.version.clone(),
-            },
-            other => CatalogInstall::Manual {
-                package: p.identifier.clone(),
-                version: p.version.clone(),
-                hint: format!(
-                    "{other} 包：Hermix 不自动执行未知包管理器，请确认后在「手动添加」里填好命令。"
-                ),
-            },
-        }
-    } else {
-        return None; // 既无 remote 也无 package：装了也用不了
-    };
-
-    let mut required_env: Vec<String> = Vec::new();
-    for venv in s.packages.iter().flat_map(|p| p.env_vars.iter()) {
-        if venv.is_required && !venv.name.is_empty() && !required_env.contains(&venv.name) {
-            required_env.push(venv.name.clone());
-        }
-    }
-    // 兜底：描述里出现 ${XXX} 也算要用户填。
-    for key in env_placeholders(&description) {
-        if !required_env.contains(&key) {
-            required_env.push(key);
-        }
-    }
-
-    let official = env
-        ._meta
-        .get("io.modelcontextprotocol.registry/official")
-        .and_then(|v| v.get("status"))
-        .and_then(|v| v.as_str())
-        == Some("active");
-
-    Some(CatalogItem {
-        id: s.name.clone(),
-        title: s
-            .title
-            .clone()
-            .filter(|t| !t.trim().is_empty())
-            .unwrap_or_else(|| s.name.clone()),
-        description,
-        version: s.version.clone(),
-        homepage: s.homepage.clone(),
-        official,
-        install,
-        required_env,
-    })
-}
-
-fn is_latest(env: &RawEnvelope) -> bool {
-    env._meta
-        .get("io.modelcontextprotocol.registry/official")
-        .and_then(|v| v.get("isLatest"))
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false)
-}
-
-/// 单页条数。官方 registry 校验 `limit <= 100`，再大一律 422 ——
-/// 此前写死 limit=200，目录因此永远拉不到（2026-10-04 修）。
-const PAGE_LIMIT: u32 = 100;
-/// 一次拉取最多翻几页（游标分页）。registry 按 id 字母序返回，这里只取
-/// 字母表头部的一段；精选高频条目由内置目录合并补齐（见 get_catalog）。
-const CATALOG_PAGES: usize = 5;
-
-async fn fetch_remote(base: &str, max_pages: usize) -> Result<Vec<CatalogItem>, String> {
-    // 官方与自建子注册中心同 API 形状（官方文档明确子注册中心复用同一路径）。
-    // `version=latest` 让服务端每个 id 只回最新版，否则同一 server 的多个
-    // 版本占掉近半数名额（实测 100 条只剩 54 个唯一 id）。
-    let client = http_client();
-    let mut cursor: Option<String> = None;
-    let mut envs: Vec<RawEnvelope> = Vec::new();
-    for _ in 0..max_pages {
-        let mut url = format!("{base}/v0.1/servers?limit={PAGE_LIMIT}&version=latest");
-        if let Some(c) = &cursor {
-            // cursor 形如 `name:version`（字母数字 + : /），query 里无需转义。
-            url.push_str("&cursor=");
-            url.push_str(c);
-        }
-        let text = client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| format!("请求 registry 失败：{e}"))?
-            .error_for_status()
-            .map_err(|e| format!("registry 返回错误：{e}"))?
-            .text()
-            .await
-            .map_err(|e| format!("读取 registry 响应失败：{e}"))?;
-        let page: RawList =
-            serde_json::from_str(&text).map_err(|e| format!("解析 registry 响应失败：{e}"))?;
-        let got = page.servers.len();
-        envs.extend(page.servers);
-        cursor = page.metadata.next_cursor.filter(|c| !c.is_empty() && got > 0);
-        if cursor.is_none() {
-            break;
-        }
-    }
-
-    // 自建镜像可能不支持 version=latest，同一 id 仍可能有多个版本：
-    // 优先 isLatest，其次后出现者。
-    let mut picked: Vec<(bool, CatalogItem)> = Vec::new();
-    for env in envs {
-        let Some(item) = normalize(&env) else { continue };
-        let latest = is_latest(&env);
-        match picked.iter_mut().find(|(_, i)| i.id == item.id) {
-            Some(slot) => {
-                if latest && !slot.0 {
-                    *slot = (true, item);
-                }
-            }
-            None => picked.push((latest, item)),
-        }
-    }
-    Ok(picked.into_iter().map(|(_, i)| i).collect())
-}
-
-#[derive(Deserialize)]
-struct RawList {
-    #[serde(default)]
-    servers: Vec<RawEnvelope>,
-    #[serde(default)]
-    metadata: RawPageMeta,
-}
-
-#[derive(Deserialize, Default)]
-struct RawPageMeta {
-    #[serde(default, rename = "nextCursor")]
-    next_cursor: Option<String>,
-}
-
-// ── 内置精选目录（批次 M1）────────────────────────────────
+// 编译期打包 catalog_fallback.json（21 条人工核验的常用 server，形状 =
+// CatalogItem）。此前它是三层取数链的**兜底层**（磁盘缓存 → 联网拉取 →
+// 内置），取消远程拉取后它就是目录本身：任何网络状况下都返回同一份内容，
+// 目录因此从一个「会随网络变化的列表」变成确定性函数。
 //
-// 编译期打包 catalog_fallback.json（30+ 条人工核验的常用 server，形状 =
-// CatalogItem），承担两个角色：
-// 1. 官方源联网成功时垫底合并（registry 按 id 字母序返回，只拉前几页
-//    永远看不到 filesystem / git 这类高频条目）；
-// 2. 兜底：新鲜缓存 → 网络拉取失败 → **内置目录**，目录页任何情况下
-//    都有内容可看——502 分支删除。
-// 数据源说明与条目准入标准见该 JSON 的 comment 字段。
+// 数据源说明与条目准入标准见该 JSON 的 comment 字段——其中「不得与内建工具
+// 重复」和「同一能力只留一个」两条硬约束是 2026-10-04 收窄 32→21 时新增的。
 const FALLBACK_JSON: &str = include_str!("catalog_fallback.json");
 
 /// 解析内置目录。形状损坏（发布事故）时返回空表并记日志——
@@ -590,290 +213,15 @@ fn to_entry(item: CatalogItem) -> CatalogEntry {
 
 // ── 端点 ─────────────────────────────────────────────────
 
-#[derive(Deserialize, Default)]
-pub struct CatalogQuery {
-    /// `?refresh=1` 跳过缓存强制重拉。
-    #[serde(default)]
-    refresh: bool,
-}
-
-/// `GET /api/mcp/catalog` — 社区目录（缓存优先，24h 过期）。
-pub async fn get_catalog(
-    State(state): State<HttpServerState>,
-    Query(q): Query<CatalogQuery>,
-) -> Response {
-    let cache = read_cache(&state);
-    let fresh = cache
-        .as_ref()
-        .is_some_and(|c| now_secs().saturating_sub(c.fetched_at) < CACHE_TTL_SECS);
-    if !q.refresh && fresh {
-        let c = cache.unwrap();
-        return Json(CatalogResponse {
-            items: c.items.into_iter().map(to_entry).collect(),
-            fetched_at: c.fetched_at,
-            from_cache: true,
-            stale_reason: None,
-        })
-        .into_response();
-    }
-
-    // 批次 M2：源由 env > 设置项决定。builtin-offline 源不走网络——
-    // 直接返回内置目录（这正是它存在的意义：确定性数据源）。
-    let (base, source) = resolve_registry_base();
-    if source == CatalogSource::BuiltinOffline {
-        let items = builtin_items();
-        let n = items.len();
-        return Json(CatalogResponse {
-            items: items.into_iter().map(to_entry).collect(),
-            fetched_at: now_secs(),
-            from_cache: true,
-            stale_reason: Some(format!(
-                "数据源：内置精选目录（{n} 条，离线固定内容，不随后续社区更新）"
-            )),
-        })
-        .into_response();
-    }
-
-    match fetch_remote(&base, CATALOG_PAGES).await {
-        Ok(fetched) => {
-            let fetched_at = now_secs();
-            // 官方源：精选目录垫底 + 在线去重合并（角色见 FALLBACK_JSON
-            // 注释）。精选条目 id 命中时不被在线版覆盖——它们的安装命令
-            // 是人工核验过的固定版本。自建源尊重镜像内容，不合并。
-            let mut merged: Vec<CatalogItem> = if source == CatalogSource::Official {
-                builtin_items()
-            } else {
-                Vec::new()
-            };
-            let curated: std::collections::HashSet<String> =
-                merged.iter().map(|i| i.id.clone()).collect();
-            merged.extend(fetched.into_iter().filter(|i| !curated.contains(&i.id)));
-            write_cache(&state, &CatalogCache { fetched_at, items: merged.clone() });
-            Json(CatalogResponse {
-                items: merged.into_iter().map(to_entry).collect(),
-                fetched_at,
-                from_cache: false,
-                stale_reason: None,
-            })
-            .into_response()
-        }
-        Err(e) => {
-            // 第三层兜底（批次 M1）：拉不到网络 → 上一次缓存 → **内置精选
-            // 目录**。502 分支删除：目录是体验增强，任何情况下都该有内容
-            // 可看。来源对前端如实标注（from_cache + stale_reason）。
-            if let Some(c) = cache {
-                return Json(CatalogResponse {
-                    items: c.items.into_iter().map(to_entry).collect(),
-                    fetched_at: c.fetched_at,
-                    from_cache: true,
-                    stale_reason: Some(format!("联网拉取失败，正在显示上一次缓存：{e}")),
-                })
-                .into_response();
-            }
-            let items = builtin_items();
-            let n = items.len();
-            Json(CatalogResponse {
-                items: items.into_iter().map(to_entry).collect(),
-                fetched_at: now_secs(),
-                from_cache: true,
-                stale_reason: Some(format!(
-                    "联网不可达（{e}），正在显示内置精选目录（{n} 条，不含最新社区条目）"
-                )),
-            })
-            .into_response()
-        }
-    }
-}
-
-// ── 源设置与探测端点（批次 M2）────────────────────────────
-
-/// 前端下拉的数据：全部内置源 + 当前生效项。
-#[derive(Serialize)]
-struct SourceInfo {
-    id: &'static str,
-    name: &'static str,
-    description: &'static str,
-}
-
-#[derive(Serialize)]
-struct SourcesResponse {
-    current: String,
-    /// env 覆盖生效中（UI 显示"被环境变量锁定"提示，禁止切换）。
-    env_override: bool,
-    custom_url: Option<String>,
-    sources: Vec<SourceInfo>,
-}
-
-/// `GET /api/mcp/catalog/sources` — 源清单 + 当前选择。
-pub async fn get_sources(State(_state): State<HttpServerState>) -> Response {
-    let prefs = read_prefs();
-    let env_override = hermix_config::paths::env_compat(
-        "HERMIX_MCP_REGISTRY_URL",
-        "HERMES_MCP_REGISTRY_URL",
-    )
-    .is_some_and(|v| !v.trim().is_empty());
-    Json(SourcesResponse {
-        current: resolve_registry_base().1.as_str().to_string(),
-        env_override,
-        custom_url: prefs.registry_custom_url,
-        sources: vec![
-            SourceInfo {
-                id: "official",
-                name: "官方 Registry",
-                description: "MCP 官方社区目录（境外线路，有代理时数据最全）",
-            },
-            SourceInfo {
-                id: "builtin-offline",
-                name: "内置精选目录",
-                description: "离线固定内容，零网络依赖，断网开箱即用",
-            },
-            SourceInfo {
-                id: "self-hosted",
-                name: "自建子注册中心",
-                description: "官方 registry 镜像（Docker 一条命令自建），填自定义 URL",
-            },
-        ],
+/// `GET /api/mcp/catalog` — 内置精选目录。
+///
+/// 无参数、无缓存、无网络：目录是编译期打包的常量，返回的是一个确定性结果。
+/// 此前带 `?refresh=1` 与 24h TTL 缓存，是三层取数链的遗留；缓存唯一的作用
+/// 是掩盖「联网时看到 A、断网时看到 B」——取消远程拉取后该问题不存在。
+pub async fn get_catalog(State(_state): State<HttpServerState>) -> Json<CatalogResponse> {
+    Json(CatalogResponse {
+        items: builtin_items().into_iter().map(to_entry).collect(),
     })
-    .into_response()
-}
-
-#[derive(Deserialize)]
-pub struct SetSourceRequest {
-    /// 源 id（sources 里列出的之一）。
-    source: String,
-    /// self-hosted 源必填的自定义 URL。
-    #[serde(default)]
-    custom_url: Option<String>,
-}
-
-/// `PUT /api/mcp/catalog/sources` — 切换数据源。
-pub async fn set_source(
-    State(_state): State<HttpServerState>,
-    Json(body): Json<SetSourceRequest>,
-) -> Response {
-    if env_override_active() {
-        return (
-            StatusCode::CONFLICT,
-            "HERMIX_MCP_REGISTRY_URL 环境变量已设置，配置文件的源选择被覆盖。请清除该环境变量后再切换。"
-                .to_string(),
-        )
-            .into_response();
-    }
-    let Some(src) = CatalogSource::parse(&body.source) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            format!("未知数据源：{}", body.source),
-        )
-            .into_response();
-    };
-    if src == CatalogSource::SelfHosted
-        && body
-            .custom_url
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .is_none()
-        && read_prefs()
-            .registry_custom_url
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .is_none()
-    {
-        return (
-            StatusCode::BAD_REQUEST,
-            "self-hosted 源需要提供 custom_url（官方 registry 镜像地址）".to_string(),
-        )
-            .into_response();
-    }
-    let mut prefs = read_prefs();
-    prefs.source = Some(src.as_str().to_string());
-    if body.custom_url.is_some() {
-        prefs.registry_custom_url = body.custom_url;
-    }
-    write_prefs(&prefs);
-    Json(serde_json::json!({ "ok": true, "source": src.as_str() })).into_response()
-}
-
-fn env_override_active() -> bool {
-    hermix_config::paths::env_compat("HERMIX_MCP_REGISTRY_URL", "HERMES_MCP_REGISTRY_URL")
-        .is_some_and(|v| !v.trim().is_empty())
-}
-
-#[derive(Deserialize)]
-pub struct ProbeQuery {
-    /// 不传 = 探测当前生效源。
-    #[serde(default)]
-    source: Option<String>,
-    /// self-hosted 试探测时可以带临时 URL（未保存先测试）。
-    #[serde(default)]
-    url: Option<String>,
-}
-
-#[derive(Serialize)]
-struct ProbeResponse {
-    ok: bool,
-    source: String,
-    url: String,
-    /// 端到端毫秒；失败时为 0。
-    latency_ms: u64,
-    /// 形状校验：响应是否是可解析的 registry servers 列表。
-    shape_ok: bool,
-    error: Option<String>,
-}
-
-/// `GET /api/mcp/catalog/probe` — 源连通性测试（「测试连接」按钮）。
-pub async fn probe(Query(q): Query<ProbeQuery>) -> Response {
-    let src = q
-        .source
-        .as_deref()
-        .and_then(CatalogSource::parse)
-        .or_else(|| Some(resolve_registry_base().1))
-        .unwrap_or(CatalogSource::Official);
-    // URL 解析：self-hosted 优先用请求里带的临时 URL（保存前试测），
-    // 其余源用各自固定端点。
-    let url = match (src, q.url.as_deref().map(str::trim).filter(|s| !s.is_empty())) {
-        (CatalogSource::SelfHosted, Some(u)) => u.trim_end_matches('/').to_string(),
-        (CatalogSource::SelfHosted, None) => resolve_registry_base().0,
-        (CatalogSource::BuiltinOffline, _) => {
-            // 离线源没有网络语义，探测 = 内置目录非空。
-            let n = builtin_items().len();
-            return Json(ProbeResponse {
-                ok: n > 0,
-                source: src.as_str().to_string(),
-                url: "builtin://catalog_fallback.json".to_string(),
-                latency_ms: 0,
-                shape_ok: n > 0,
-                error: if n > 0 { None } else { Some("内置目录为空（发布产物异常）".into()) },
-            })
-            .into_response();
-        }
-        _ => official_base().to_string(),
-    };
-    let started = std::time::Instant::now();
-    // 探测只拉一页：连通性测试不必付翻页的时间。
-    let result = fetch_remote(&url, 1).await;
-    let latency_ms = started.elapsed().as_millis() as u64;
-    match result {
-        Ok(items) => Json(ProbeResponse {
-            ok: true,
-            source: src.as_str().to_string(),
-            url,
-            latency_ms,
-            shape_ok: !items.is_empty(),
-            error: None,
-        })
-        .into_response(),
-        Err(e) => Json(ProbeResponse {
-            ok: false,
-            source: src.as_str().to_string(),
-            url,
-            latency_ms,
-            shape_ok: false,
-            error: Some(e),
-        })
-        .into_response(),
-    }
 }
 
 #[derive(Deserialize)]
@@ -900,10 +248,11 @@ pub async fn install(
     State(state): State<HttpServerState>,
     Json(req): Json<InstallRequest>,
 ) -> Result<Json<McpServerEntry>, (StatusCode, String)> {
-    let cache = read_cache(&state)
-        .ok_or_else(|| (StatusCode::PRECONDITION_FAILED, "目录尚未加载，请先打开一次目录".to_string()))?;
-    let item = cache
-        .items
+    // 直读内置目录。此前读的是磁盘缓存（`mcp_catalog.json`），于是"必须先
+    // 打开过一次目录页"才装得上——而 `builtin-offline` 源恰恰不写缓存，
+    // 在该源下点安装必然 412。取消远程拉取后没有缓存可读，这个死结自动解开。
+    let items = builtin_items();
+    let item = items
         .iter()
         .find(|i| i.id == req.id)
         .ok_or_else(|| (StatusCode::NOT_FOUND, format!("目录里没有 '{}'", req.id)))?;
@@ -1000,103 +349,96 @@ pub async fn install(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
 
-    fn env_with(desc: &str) -> RawEnvelope {
-        RawEnvelope {
-            server: RawServer {
-                name: "acme/demo".into(),
-                title: Some("Demo".into()),
-                description: Some(desc.into()),
-                version: Some("1.2.3".into()),
-                homepage: None,
-                remotes: vec![],
-                packages: vec![],
-            },
-            _meta: Default::default(),
-        }
-    }
-
+    /// 目录形状一旦漂移，整表反序列化就会失败（曾发生：8 条 `kind:"pypi"`，
+    /// 而枚举只有 remote/npm/manual）→ 目录静默变 0 条，用户看到空面板而
+    /// 没有任何错误提示。取消远程拉取后这份 JSON 是**唯一**数据源，这条更关键。
     #[test]
-    fn remote_entry_normalizes_to_remote_install() {
-        let mut e = env_with("demo server");
-        e.server.remotes.push(RawRemote { url: "https://x.example/mcp".into() });
-        let it = normalize(&e).expect("should normalize");
-        assert!(it.official == false);
-        match it.install {
-            CatalogInstall::Remote { url } => assert_eq!(url, "https://x.example/mcp"),
-            other => panic!("expected remote, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn npm_entry_normalizes_to_npm_install_with_version() {
-        let mut e = env_with("demo server");
-        e.server.packages.push(RawPackage {
-            registry_type: "npm".into(),
-            identifier: "demo-mcp".into(),
-            version: Some("1.2.3".into()),
-            env_vars: vec![],
-        });
-        let it = normalize(&e).expect("should normalize");
-        assert!(matches!(it.install, CatalogInstall::Npm { .. }));
-        assert_eq!(it.version.as_deref(), Some("1.2.3"));
-    }
-
-    #[test]
-    fn unknown_package_manager_becomes_manual_not_auto_exec() {
-        let mut e = env_with("demo server");
-        e.server.packages.push(RawPackage {
-            registry_type: "pypi".into(),
-            identifier: "demo".into(),
-            version: None,
-            env_vars: vec![],
-        });
-        let it = normalize(&e).expect("should normalize");
+    fn builtin_catalog_parses_nonempty() {
         assert!(
-            matches!(it.install, CatalogInstall::Manual { .. }),
-            "pypi must not auto-exec"
+            builtin_items().len() >= 15,
+            "内置目录解析失败或过少：{}",
+            builtin_items().len()
         );
     }
 
+    /// id 重复会让 install 端点永远命中第一条，用户再也装不上第二个。
     #[test]
-    fn entry_without_transport_and_package_is_dropped() {
-        let e = env_with("x");
-        assert!(normalize(&e).is_none(), "既无 remote 也无 package 的条目不可用");
+    fn builtin_catalog_has_no_duplicate_ids() {
+        let mut seen = HashSet::new();
+        for it in builtin_items() {
+            assert!(seen.insert(it.id.clone()), "目录内 id 重复: {}", it.id);
+        }
     }
 
+    /// **本次收窄的核心不变式**：目录不得收进与内建工具重复的条目。
+    ///
+    /// 内建已有 file(9 工具) / memory / web_extract / markitdown / read_pdf /
+    /// terminal / browser(8)+cua(16) 等 34 个 toolset。重复的 MCP server 只会
+    /// 给 LLM 增加同义工具、拉高 token 成本、并在选工具时制造歧义——2026-10-04
+    /// 据此从 32 条砍到 21 条。这条测试把该决策钉死，防止以后"看着眼熟又加回来"。
     #[test]
-    fn missing_description_is_dropped() {
-        let mut e = env_with("demo server");
-        e.server.description = Some("   ".into());
-        e.server.remotes.push(RawRemote { url: "https://x".into() });
-        assert!(normalize(&e).is_none());
+    fn builtin_catalog_does_not_duplicate_builtin_tools() {
+        // slug 关键字 → 已被内建能力覆盖的 server 片段
+        const BUILTIN_COVERED: &[&str] = &[
+            "filesystem", // ↔ file toolset
+            "memory",     // ↔ memory + daily_memory
+            "sequential", // ↔ 内建思考/压缩
+            "fetch",      // ↔ web_extract
+            "markitdown", // ↔ 内建 markitdown
+            "commands",   // ↔ terminal
+            "puppeteer",  // ↔ browser + cua
+            "browserbase",// ↔ browser + cua
+            "everything", // reference test server，不该进正式目录
+        ];
+        for it in builtin_items() {
+            let slug = it.id.rsplit('/').next().unwrap_or("").to_lowercase();
+            for covered in BUILTIN_COVERED {
+                assert!(
+                    !slug.contains(covered),
+                    "目录收进了与内建工具重复的条目: {}（命中 \"{covered}\"）",
+                    it.id
+                );
+            }
+        }
     }
 
+    /// 同一能力只留一个。旧版有两个 notion、两个 postgres（且权限模型相反：
+    /// 一个 read-only、一个 full access + DATABASE_URI）。
     #[test]
-    fn official_meta_marks_item() {
-        let mut e = env_with("demo server");
-        e.server.remotes.push(RawRemote { url: "https://x".into() });
-        e._meta.insert(
-            "io.modelcontextprotocol.registry/official".into(),
-            serde_json::json!({ "status": "active" }),
-        );
-        assert!(normalize(&e).expect("normalize").official);
+    fn builtin_catalog_has_no_same_capability_duplicates() {
+        let items = builtin_items();
+        let count = |needle: &str| {
+            items
+                .iter()
+                .filter(|i| i.id.to_lowercase().contains(needle))
+                .count()
+        };
+        for cap in ["notion", "postgres", "sqlite", "redis", "qdrant"] {
+            assert_eq!(count(cap), 1, "「{cap}」类应只保留 1 条，实际 {}", count(cap));
+        }
     }
 
+    /// 声明了 env 的条目必须给出非空变量名——空串会让前端渲染出一个没有
+    /// label 的输入框，用户无从填写。
     #[test]
-    fn required_env_placeholder_is_extracted() {
-        let mut e = env_with("需要 ${API_KEY} 和 ${env:TOKEN}");
-        e.server.remotes.push(RawRemote { url: "https://x".into() });
-        let it = normalize(&e).expect("normalize");
-        assert!(it.required_env.contains(&"API_KEY".to_string()));
-        assert!(it.required_env.contains(&"TOKEN".to_string()));
+    fn required_env_names_are_nonempty() {
+        for it in builtin_items() {
+            for k in &it.required_env {
+                assert!(!k.trim().is_empty(), "{} 声明了空的 env 名", it.id);
+            }
+        }
     }
 
+    /// 每条都要有中文描述路径可走：内置目录不再有"在线英文兜底"，
+    /// 前端展示直接依赖 title_zh / description_zh。
     #[test]
-    fn builtin_fallback_parses_nonempty() {
-        // 条目 kind 漂移会让整表反序列化失败（曾发生：8 条 kind:"pypi"，
-        // 枚举只有 remote/npm/manual）→ 断网兜底目录变 0 条。
-        assert!(builtin_items().len() >= 30, "内置精选目录解析失败或为空");
+    fn builtin_items_have_description() {
+        for it in builtin_items() {
+            assert!(!it.description.trim().is_empty(), "{} 缺描述", it.id);
+            assert!(!it.title.trim().is_empty(), "{} 缺标题", it.id);
+        }
     }
 
     fn zh_item(id: &str, title: &str) -> CatalogItem {
@@ -1113,11 +455,11 @@ mod tests {
     }
 
     #[test]
-    fn github_scope不会把一切翻成git() {
+    fn github_scope_不会把一切翻成git() {
         // "io.github." 天然包含 "git"——整条 id 子串匹配曾把所有 GitHub
         // 托管的 server 全翻成 Git 的名字与描述。
-        let it = zh_item("io.github.modelcontextprotocol/server-memory", "Memory");
-        assert_eq!(zh_for(&it).map(|z| z.title), Some("记忆"));
+        let it = zh_item("io.github.modelcontextprotocol/server-github", "GitHub");
+        assert_eq!(zh_for(&it).map(|z| z.title), Some("GitHub"));
     }
 
     #[test]
@@ -1135,6 +477,8 @@ mod tests {
     #[test]
     fn digital里的git不再误伤() {
         let it = zh_item("io.github.digitalocean/mcp", "DigitalOcean");
-        assert_eq!(zh_for(&it), None);
+        // 用 is_none() 而非 assert_eq!(.., None)：ZhEntry 只 derive 了
+        // Clone/Copy，没有 Debug/PartialEq，assert_eq! 编译不过。
+        assert!(zh_for(&it).is_none());
     }
 }

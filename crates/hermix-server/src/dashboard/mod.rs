@@ -112,14 +112,11 @@ pub fn router() -> Router<HttpServerState> {
             get(mcp::list_servers).post(mcp::create_server),
         )
         .route("/api/mcp/servers/reset", post(mcp::reset_to_official))
-        // MCP 社区目录（官方 registry）+ 一键添加
+        // MCP 内置目录（一键添加）。2026-10-04 取消远程拉取：原先的
+        // /api/mcp/catalog/sources（源清单 + 切换）与 /probe（连通性探测）
+        // 随「官方 registry / 自建子注册中心」两个源一并删除——目录现在是
+        // 编译期打包的常量，没有"源"可切，也就没有可探测的网络端点。
         .route("/api/mcp/catalog", get(mcp_catalog::get_catalog))
-        // 批次 M2：多源手动切换（源清单/切换/连通性探测）
-        .route(
-            "/api/mcp/catalog/sources",
-            get(mcp_catalog::get_sources).put(mcp_catalog::set_source),
-        )
-        .route("/api/mcp/catalog/probe", get(mcp_catalog::probe))
         .route(
             "/api/mcp/catalog/install",
             post(mcp_catalog::install),

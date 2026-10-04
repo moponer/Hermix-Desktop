@@ -2,9 +2,14 @@
 //!
 //! The desktop front-end's "连接器" tab reads / writes MCP server entries
 //! through these routes. Storage is a single JSON file at
-//! `$HERMIX_HOME/mcp_servers.json`; on first start we seed 5 official
-//! servers matching the front-end's hardcoded fallback (so the UI is
-//! populated without manual setup).
+//! `$HERMIX_HOME/mcp_servers.json`.
+//!
+//! 2026-10-04：`seed_default()` 返回**空列表**（`servers: vec![]`），
+//! 本文件此前"首次启动播种 5 个官方 server"的说法已不成立——前端那份
+//! `OFFICIAL_MCP_SEEDS` 兜底早被移除，后端这里也早已改成空播种，注释却
+//! 一直停留在旧设计。与"内置目录"是两回事：目录（`mcp_catalog.rs`）是
+//! 打包进去的**候选清单**，这里播种的是**已配置列表**，后者一律由用户在
+//! 目录里点安装产生。
 //!
 //! This module only persists the *configuration* — it does not yet spawn
 //! the actual MCP processes. The hermes-mcp crate handles transport; once
@@ -134,9 +139,12 @@ fn now_iso() -> String {
     format!("1970-01-01T00:00:{:02}Z", (secs % 60))
 }
 
-/// The 5 official MCP seeds. Mirrors the front-end's OFFICIAL_MCP_SEEDS list
-/// (filesystem / fetch / git / github / brave-search) so the persistence
-/// surface is identical regardless of which side writes first.
+/// 首次启动 / 文件缺失 / 损坏时的兜底状态：**空列表**。
+///
+/// 旧实现在这里播种 5 个官方 server（filesystem / fetch / git / github /
+/// brave-search），前端 `OFFICIAL_MCP_SEEDS` 也有一份同构兜底；两者都已移除，
+/// 现在已配置列表完全由用户在「内置目录」里点安装产生。注意这与"内置目录"
+/// 不是一回事：目录是打包进去的候选清单，这里是用户实际启用的清单。
 fn seed_default() -> McpServersState {
     McpServersState {
         seeded: true,

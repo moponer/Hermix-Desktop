@@ -742,7 +742,7 @@ export function ConnectorsTab({ query, onQuery }: { query: string; onQuery: (q: 
         配置需要 {`npx`} / {`uvx`} 等运行时可用。密钥请填入 env 字段。
       </p>
 
-      {/* 社区目录：先逛官方 registry，再决定装不装。放在已配置列表之后——
+      {/* 内置目录：先逛清单，再决定装不装。放在已配置列表之后——
           自己的 server 是主角，逛目录是第二幕。 */}
       <McpCatalogGrid onInstalled={() => { void api.getMcpServers().then(setServers); }} />
     </>

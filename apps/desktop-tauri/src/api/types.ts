@@ -234,35 +234,11 @@ export interface CatalogEntry {
 
 export interface CatalogResponse {
   items: CatalogEntry[];
-  fetchedAt: number;
-  fromCache: boolean;
-  staleReason?: string;
 }
 
-// ── MCP 目录数据源 ─────────────────────────────────
-
-export interface CatalogSourceInfo {
-  id: "official" | "builtin-offline" | "self-hosted";
-  name: string;
-  description: string;
-}
-
-export interface CatalogSourcesResponse {
-  current: string;
-  /** env 覆盖生效中（UI 显示锁定提示并禁用切换）。 */
-  envOverride: boolean;
-  customUrl?: string;
-  sources: CatalogSourceInfo[];
-}
-
-export interface CatalogProbeResult {
-  ok: boolean;
-  source: string;
-  url: string;
-  latencyMs: number;
-  shapeOk: boolean;
-  error?: string;
-}
+// 2026-10-04：取消远程拉取后，目录是编译期打包的常量——没有"源"可切，
+// 也就没有 CatalogSourceInfo / CatalogSourcesResponse / CatalogProbeResult。
+// 连同 /api/mcp/catalog/sources 与 /probe 端点一并从后端删除。
 
 // ── IM 通道状态（/api/channels/status）──────────────────────
 
