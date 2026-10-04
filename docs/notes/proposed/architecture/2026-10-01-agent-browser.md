@@ -1,6 +1,6 @@
 # Decision Note: 智能体浏览器（批次 N 立项，2026-10-01 二稿）—— 核心 = 浏览器能力的 PTC 化
 
-Status: proposed — 取代同日一稿（一稿把「共用登录态」当核心，搞错了重点）
+Status: proposed — 2026-10-04 评审：N2（Space + 登录态）可立项，不依赖 PTC。N1 随 PTC 一并冻结，N3 待 N2 跑通后再看。裁决见 [批次评审](../process/2026-10-04-proposed-batch-review.md)。
 
 ## 背景
 

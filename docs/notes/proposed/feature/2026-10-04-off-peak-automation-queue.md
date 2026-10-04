@@ -1,6 +1,6 @@
 # Decision Note: 闲时任务队列（off-peak）与保活联动
 
-Status: proposed — 对齐 ZCode 的 off-peak 任务形态：有预算约束的任务在低峰期排队执行；"保持电脑唤醒"从当前"会话流式时"扩展为"有任务在跑时"，与队列活跃计数联动。
+Status: proposed — 2026-10-04 评审：保活联动部分已单独立项（见 [批次评审](../process/2026-10-04-proposed-batch-review.md) 排序第 2）；闲时队列推迟到调度模型升级落地之后——有幂等 run 记录才谈得上排队。
 
 ## 背景事实（读源码所得）
 

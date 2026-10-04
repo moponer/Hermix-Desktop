@@ -1,6 +1,6 @@
 # Decision Note: Windows ACL 沙箱（批次 F-2 立项）
 
-Status: proposed — 待评审；切片落地，先读通道后写通道
+Status: proposed — 2026-10-04 评审：技术判定与机制全部同意，但须与 [IM 渠道工作区范围](../feature/2026-09-30-im-channel-workspace-scope.md) 合批为「统一工作区策略根」——两者都要在工具派发层做路径检查，单独做 ACL 会造出第三套并行判断。ACL 沙箱作为该策略根的第二个后端。裁决见 [批次评审](../process/2026-10-04-proposed-batch-review.md)。
 
 ## Decision
 

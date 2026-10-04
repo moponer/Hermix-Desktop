@@ -1,6 +1,8 @@
 # Decision Note: 事件溯源会话改造（批次 F-1 立项）
 
-Status: proposed — 待评审；分四步渐进，每步独立可交付
+Status: rejected — 2026-10-04 评审：三条收益已被 hermix 现有机制摘走（`compression_summary_history` append-only / `archive-index.jsonl` 可查 / `backfill_unanswered_tool_results` 补合成），唯一真收益「fork 任意 seq」当前无需求。裁决见 [批次评审](../../proposed/process/2026-10-04-proposed-batch-review.md)。若将来真有 fork 需求，**重写而非复活**——届时压缩与 archive 的现状会被新设计重新解释一遍。
+
+> 以下为 2026-10-01 一稿原文，按制度冻结保留（rejected 件不再编辑，仅作论证依据）。
 
 ## Decision
 

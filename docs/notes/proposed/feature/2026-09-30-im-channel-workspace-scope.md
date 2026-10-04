@@ -1,6 +1,6 @@
 # Decision Note: IM 渠道的工作区访问范围（三层范围 + 审批回路）
 
-Status: proposed — 设计稿已写定，L1/L2/L3 三层均未实现
+Status: proposed — 2026-10-04 评审：Phase A 全复用现有机制、零新 UI，是三篇架构提案里最便宜的一个；须与 [Windows ACL 沙箱](../architecture/2026-10-01-windows-acl-sandbox.md) 合批为「统一工作区策略根」。Phase C（语音）继续推迟。裁决见 [批次评审](../process/2026-10-04-proposed-batch-review.md)。
 
 > 2026-10-01 从 `docs/CHANNEL_WORKSPACE_SCOPE.md` 迁入。迁移表原标
 > "implemented/feature" 有误——本文的 L1/L2/L3 全是待做项，现状是

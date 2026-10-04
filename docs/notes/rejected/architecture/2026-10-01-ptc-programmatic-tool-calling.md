@@ -1,6 +1,10 @@
 # Decision Note: PTC —— 模型写代码组合工具调用（批次 F-3 立项）
 
-Status: proposed — 待评审；依赖 F-1 事件溯源先落地第 1-2 步
+Status: rejected — 2026-10-04 评审：与「动态工作流引擎」「智能体浏览器 N1」构成循环依赖（三篇互引为前置），且三者实质是同一个执行器。ZCode 侧该能力 216 文件 / 13,817 行且官方默认关闭。裁决见 [批次评审](../process/2026-10-04-proposed-batch-review.md)。重启条件：agent-browser 立项时单独重开本篇。
+>
+> 注：本篇 Alternatives 断言"PTC 是 Dynamic Workflows 的子集"——该断言已按 ZCode 源码证伪，两者执行器同构。
+
+> 以下为 2026-10-01 一稿原文，按制度冻结保留。
 
 ## Decision
 

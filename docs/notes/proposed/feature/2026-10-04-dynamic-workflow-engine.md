@@ -1,6 +1,6 @@
 # Decision Note: 动态工作流引擎（脚本运行时）
 
-Status: proposed — 已定方向：工作流 = 可执行脚本 + 沙箱运行时。本篇给出运行时选型、脚本语言、沙箱权限模型与里程碑；待评审后开工 M1。
+Status: proposed — 2026-10-04 评审：boa 选型同意，但 M1-M5 范围严重低估。ZCode 侧实测 216 文件 / 13,817 行，且官方默认关闭（`server.ts:255` `dynamicWorkflowEnabled: false`）。重写要求见 [批次评审](../process/2026-10-04-proposed-batch-review.md)。
 
 ## 背景事实（读源码所得）
 

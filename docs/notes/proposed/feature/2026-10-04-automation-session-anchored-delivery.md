@@ -1,6 +1,6 @@
 # Decision Note: 会话锚定投递（自动化任务结果回投原对话）
 
-Status: proposed — 对齐 ZCode `ZCodeAutomation.targetTaskId` 语义：会话里创建的定时/周期任务，到点结果投递回**创建它的那条对话**，而不是永远落进独立的 `automation:{id}` 会话。
+Status: proposed — 2026-10-04 评审：语义对齐 ZCode 无异议，但护栏（注入次数上限、累计 token 阈值）依赖 run 记录与注入计数，必须排在 [调度模型升级](2026-10-04-automation-schedule-model-upgrade.md) 之后；中间不插别的。裁决见 [批次评审](../process/2026-10-04-proposed-batch-review.md)。
 
 ## 背景事实（读源码所得）
 
