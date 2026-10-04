@@ -74,6 +74,71 @@ function extractPath(args: unknown): string | null {
   return null;
 }
 
+// ---------------------------------------------------------------------------
+// Multi-step programs (browser_ptc etc.) — per-step breakdown.
+// Shape-driven, not name-driven: any tool whose args carry a `steps`
+// array gets this rendering. The point of an approval is that the user
+// can SEE what they are approving — a `js` step's expression must be
+// shown in full (a truncated script is an unread script).
+// ---------------------------------------------------------------------------
+
+function extractSteps(args: unknown): Array<Record<string, unknown>> | null {
+  if (!args || typeof args !== "object" || Array.isArray(args)) return null;
+  const raw = (args as Record<string, unknown>).steps;
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  return raw.filter(
+    (s): s is Record<string, unknown> =>
+      !!s && typeof s === "object" && !Array.isArray(s),
+  );
+}
+
+const STEP_OP_LABEL: Record<string, string> = {
+  navigate: "导航",
+  snapshot: "快照",
+  click: "点击",
+  fill: "输入",
+  press: "按键",
+  wait_for: "等待",
+  js: "执行 JS",
+  emit: "输出",
+};
+
+/** Per-op arg summary. `js.expression` and `fill.text` carry the actual
+ *  payload the user is approving — they render in full, never truncated. */
+function stepDetail(step: Record<string, unknown>): string | null {
+  const op = typeof step.op === "string" ? step.op : "";
+  switch (op) {
+    case "navigate":
+      return typeof step.url === "string" ? step.url : null;
+    case "click":
+      return typeof step.target === "string" ? step.target : null;
+    case "fill": {
+      const parts = [step.target, step.text].filter(
+        (v): v is string => typeof v === "string",
+      );
+      return parts.length ? parts.join("  ←  ") : null;
+    }
+    case "press":
+      return typeof step.key === "string" ? step.key : null;
+    case "wait_for":
+      return typeof step.selector === "string" ? step.selector : null;
+    case "js":
+      return typeof step.expression === "string" ? step.expression : null;
+    case "emit":
+      return typeof step.value === "string" ? step.value : null;
+    case "snapshot":
+      return typeof step.target === "string" ? step.target : "整页";
+    default:
+      return null;
+  }
+}
+
+/** Steps whose detail is payload-like (script / typed text) get a
+ *  full-width pre block; short one-liners render inline. */
+const STEP_PAYLOAD_OPS = new Set(["js", "fill", "emit"]);
+/** Inline rendering threshold — beyond this, fold but keep expanded. */
+const INLINE_DETAIL_LIMIT = 120;
+
 export function ApprovalBatchView({
   meta,
   onApprove,
@@ -173,6 +238,45 @@ export function ApprovalBatchView({
               <span className="apv-file-stats">当前目录 · 可回滚</span>
             </div>
           )}
+
+          {/* ③½ Steps block — 多步程序（browser_ptc 等）逐步骤展开。
+              批准前必须能看到将要执行的每一步；js/fill 的载荷全文
+              展示不截断，超长折叠但默认展开。 */}
+          {meta.items.map((it, bi) => {
+            const steps = extractSteps(it.args);
+            if (!steps) return null;
+            return (
+              <div key={bi} className="apv-steps-block">
+                {steps.map((s, si) => {
+                  const op = typeof s.op === "string" ? s.op : "";
+                  const detail = stepDetail(s);
+                  const payloadOp = STEP_PAYLOAD_OPS.has(op);
+                  const long = detail != null && detail.length > INLINE_DETAIL_LIMIT;
+                  return (
+                    <div key={si} className="apv-step-item">
+                      <span className="apv-step-index">{si + 1}</span>
+                      <span className={`apv-step-op${op === "js" ? " is-js" : ""}`}>
+                        {STEP_OP_LABEL[op] ?? (op || "未知步骤")}
+                      </span>
+                      {detail != null &&
+                        (long ? (
+                          <details open className="apv-step-detail">
+                            <summary>{detail.length} 字符 · 全文</summary>
+                            <pre className="apv-cmd-pre">{detail}</pre>
+                          </details>
+                        ) : payloadOp ? (
+                          <pre className="apv-cmd-pre apv-step-payload-pre">{detail}</pre>
+                        ) : (
+                          <span className="apv-step-arg" title={detail}>
+                            {detail}
+                          </span>
+                        ))}
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })}
 
           {/* ④ Diff toggle + collapsible panel */}
           <button

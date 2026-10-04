@@ -1426,6 +1426,80 @@
   .apv-diff-content { animation: none; }
 }
 
+/* ③½ Steps block — 多步程序（browser_ptc 等）逐步骤展开。
+   批准卡的可读性底线：用户批准前必须看到每一步要干什么。 */
+.apv-steps-block {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 9px 11px;
+  border: 1px solid var(--color-border-subtle, #ececec);
+  border-radius: var(--radius-md, 6px);
+  background: var(--color-bg-primary, #ffffff);
+}
+.apv-step-item {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+}
+.apv-step-index {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1;
+  padding: 3px 5px;
+  border-radius: 4px;
+  background: var(--color-bg-secondary, #f4f4f5);
+  color: var(--color-text-faint, #a1a1aa);
+}
+.apv-step-op {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-secondary, #52525b);
+}
+/* js 步骤是整个审批里风险最高的载荷，标签用警示色提醒 */
+.apv-step-op.is-js {
+  color: var(--color-error, #c74436);
+}
+.apv-step-arg {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--color-text-primary, #0f0f12);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+/* 短载荷（js 表达式 / 输入文本）不套折叠壳，直接 pre 全文 */
+.apv-step-payload-pre {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: var(--color-bg-secondary, #f4f4f5);
+}
+/* 超长载荷：折叠但默认展开（open），summary 只标字符数 */
+.apv-step-detail {
+  flex: 1;
+  min-width: 0;
+}
+.apv-step-detail > summary {
+  font-size: 11px;
+  color: var(--color-text-faint, #a1a1aa);
+  cursor: pointer;
+  user-select: none;
+  margin-bottom: 4px;
+}
+.apv-step-detail .apv-cmd-pre {
+  padding: 6px 9px;
+  border-radius: 4px;
+  background: var(--color-bg-secondary, #f4f4f5);
+  max-height: 220px;
+  overflow: auto;
+}
+
 /* ⑤ Actions */
 .apv-actions {
   display: flex;
