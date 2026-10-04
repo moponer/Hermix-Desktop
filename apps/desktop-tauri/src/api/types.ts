@@ -277,6 +277,22 @@ export interface ChannelStatusItem {
   name?: string;
 }
 
+// ── 工作流（/api/workflows）─────────────────────────────────
+
+export interface WorkflowEntry {
+  id: string;
+  name: string;
+  description?: string;
+  /** null/undefined = 全局（对所有项目可见）；否则为绑定的项目目录。 */
+  workspace?: string | null;
+  prompt: string;
+  created_at: number;
+  updated_at: number;
+  /** "running" | "ok" | "failed" */
+  last_status?: string;
+  last_run_at?: number;
+}
+
 // ── Auto-correct model ──────────────────────────
 
 export interface AutoCorrectReport {

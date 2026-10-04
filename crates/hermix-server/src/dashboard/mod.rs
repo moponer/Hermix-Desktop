@@ -11,6 +11,7 @@ pub mod cua;
 pub mod automation;
 pub mod config;
 pub mod env;
+pub mod workflows;
 pub mod mcp;
 pub mod mcp_catalog;
 pub mod mcp_scan;
@@ -141,6 +142,17 @@ pub fn router() -> Router<HttpServerState> {
             post(automation::trigger_task),
         )
         .route("/api/automation/reset", post(automation::reset_to_official))
+        // Workflows: 对话里跑通后由 `workflow` 工具保存的再跑流程。
+        // 运行走 agent_service.send_message()（铁律 DD），会话 id =
+        // workflow:{id}，历史在对话列表可见。
+        .route(
+            "/api/workflows",
+            get(workflows::list_workflows).post(workflows::upsert_workflow),
+        )
+        .route(
+            "/api/workflows/{id}",
+            delete(workflows::remove_workflow).post(workflows::run_workflow),
+        )
         // Plugin inspection: which official-manifest plugins are wired
         // into the in-process ToolRegistry. Drives the "已挂接 N 工具"
         // badges in the desktop PluginsView.

@@ -37,6 +37,8 @@ export interface RouteContext {
   settingsBack: () => void;
   /** 设置页落点分类，由 openSettings 的入参决定。 */
   settingsCategory?: string;
+  /** 工作流页「通过对话创建」：切回对话页，由用户与 agent 设计流程。 */
+  openChat: () => void;
 }
 
 /** 按当前 page 渲染对应视图。与 App 原条件渲染链 1:1 等价。 */
@@ -45,7 +47,7 @@ export function renderRoutes(page: NavPage, ctx: RouteContext): ReactNode {
     case "chat":
       return ctx.chatNode;
     case "automation":
-      return <Suspense fallback={<RouteLoading />}><AutomationView /></Suspense>;
+      return <Suspense fallback={<RouteLoading />}><AutomationView openChat={ctx.openChat} /></Suspense>;
     case "agents":
       return <Suspense fallback={<RouteLoading />}><AgentsView /></Suspense>;
     case "experts":

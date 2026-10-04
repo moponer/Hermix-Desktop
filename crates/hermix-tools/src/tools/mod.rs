@@ -66,6 +66,7 @@ pub mod workbench_manager;
 pub mod video_gen;
 pub mod voice_mode;
 pub mod web;
+pub mod workflow;
 
     use std::sync::Arc;
 
@@ -110,6 +111,7 @@ pub fn register_all(
     security_guidance::register(registry);
     platforms::register(registry);
     cronjob::register(registry);
+    workflow::register(registry);
     todo::register(registry, todo_event_tx);
     task_manager::register(registry);
     approval_tokens::register(registry);

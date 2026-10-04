@@ -3438,6 +3438,7 @@ return {
     activeSessionId,
     settingsBack: () => setPage("chat"),
     settingsCategory: configCategory,
+    openChat: () => setPage("chat"),
   };
 
   return (

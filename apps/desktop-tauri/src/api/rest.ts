@@ -44,7 +44,9 @@ import type {
   CatalogSourcesResponse,
   CatalogProbeResult,
   ChannelStatusItem,
+  WorkflowEntry,
 } from "./types";
+export type { WorkflowEntry };
 
 // Transport switched from `fetch()` over `127.0.0.1:3000` to
 // `invoke<string>("backend_http_request")` over the Tauri stdio
@@ -986,6 +988,60 @@ export const getChannelStatus = async (): Promise<{ platforms: ChannelStatusItem
     return await fetchJSON<{ platforms: ChannelStatusItem[] }>("/api/channels/status");
   } catch {
     return null;
+  }
+};
+
+// ── 工作流（对话内保存的再跑流程）────────────────────────────
+
+export const getWorkflows = async (): Promise<WorkflowEntry[] | null> => {
+  try {
+    const res = await fetchJSON<{ items: WorkflowEntry[] }>("/api/workflows");
+    return res.items;
+  } catch {
+    return null;
+  }
+};
+
+export const saveWorkflow = async (wf: {
+  id?: string;
+  name: string;
+  description?: string;
+  workspace?: string | null;
+  prompt: string;
+}): Promise<WorkflowEntry | null> => {
+  try {
+    const res = await fetchJSON<{ ok: boolean; workflow: WorkflowEntry }>("/api/workflows", {
+      method: "POST",
+      body: JSON.stringify(wf),
+    });
+    return res?.workflow ?? null;
+  } catch {
+    return null;
+  }
+};
+
+export const removeWorkflow = async (id: string): Promise<boolean> => {
+  try {
+    await fetchJSON(`/api/workflows/${encodeURIComponent(id)}`, { method: "DELETE" });
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+/** 再跑一次。params 替换 prompt 里的 {{参数}} 占位符。 */
+export const runWorkflow = async (
+  id: string,
+  params: Record<string, string> = {},
+): Promise<boolean> => {
+  try {
+    await fetchJSON(`/api/workflows/${encodeURIComponent(id)}/run`, {
+      method: "POST",
+      body: JSON.stringify({ params }),
+    });
+    return true;
+  } catch {
+    return false;
   }
 };
 

@@ -75,6 +75,10 @@ pub use tools::browser::{
 pub use tools::clarify::{ClarifyBackend, ClarifyHandler};
 pub use tools::code_execution::{CodeExecutionBackend, ExecuteCodeHandler};
 pub use tools::cronjob::{CronjobBackend, CronjobHandler};
+pub use tools::workflow::{
+    get_workflow, list_workflows, remove_workflow, update_run_status, upsert_workflow,
+    WorkflowEntry,
+};
 pub use tools::cua::{
     CuaLeftClickHandler, CuaPressKeyHandler, CuaScreenInfoHandler,
     CuaScreenshotHandler, CuaTypeTextHandler, CuaUiClickHandler, CuaUiTreeHandler,

@@ -15,6 +15,8 @@ import type { AutomationTask } from "../types";
 import { AiGenerateButton } from "./AiGenerateButton";
 import { storage, STORAGE_KEYS } from "../utils/storageCompat";
 import { setKeepAwake, KEEP_AWAKE_CHANGED_EVENT } from "../desktopBridge";
+import { useWorkspaces } from "../hooks/useWorkspaces";
+import { toastInfo, toastError } from "../hooks/useToast";
 
 /** A small set of cron presets the editor offers as quick-pick chips.
  *  Each entry: [label, cronExpression, humanDescription]. */
@@ -103,7 +105,8 @@ function templateToTask(t: TaskTemplate): AutomationTask {
   };
 }
 
-export function AutomationView() {
+export function AutomationView({ openChat }: { openChat: () => void }) {
+  const [tab, setTab] = useState<"auto" | "flow">("auto");
   const [tasks, setTasks] = useState<AutomationTask[]>([]);
   const [editing, setEditing] = useState<AutomationTask | null>(null);
   const [creating, setCreating] = useState<AutomationTask | null>(null);
@@ -217,27 +220,49 @@ export function AutomationView() {
   return (
     <div className="flex-1 overflow-y-auto px-8 py-6 min-h-0">
       <div className="max-w-4xl mx-auto">
-        {/* Header */}
-        <div className="flex items-start justify-between mb-6 gap-4">
-          <div>
-            <h1 className="text-2xl font-semibold text-text-primary">自动化</h1>
-            <p className="text-sm text-text-muted mt-1">
-              通过设置定期聊天，实现工作自动化。后端每 30 秒检查一次，
-              到点自动用当前会话的 agent 跑 prompt。
-            </p>
-            {error && (
-              <p className="text-[length:var(--text-ui)] text-error mt-2 flex items-start gap-1.5"><AlertTriangle className="icon-md shrink-0 mt-0.5" /><span>{error}</span></p>
-            )}
-          </div>
-          <div className="flex items-center gap-2 shrink-0">
-            <button
-              onClick={() => setCreating(blankDraft())}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-accent text-bg-primary text-[length:var(--text-ui)] font-medium hover:bg-accent-hover"
->
-              <Plus className="icon-md" /> 新建自动化
-            </button>
-          </div>
+        {/* Header：双 tab（自动化 | 工作流），对齐 ZCode 的页面结构 */}
+        <div className="flex items-center gap-5 mb-5">
+          <button
+            type="button"
+            onClick={() => setTab("auto")}
+            className={`text-2xl font-semibold transition-colors ${
+              tab === "auto" ? "text-text-primary" : "text-text-faint hover:text-text-secondary"
+            }`}
+          >
+            自动化
+          </button>
+          <button
+            type="button"
+            onClick={() => setTab("flow")}
+            className={`text-2xl font-semibold transition-colors ${
+              tab === "flow" ? "text-text-primary" : "text-text-faint hover:text-text-secondary"
+            }`}
+          >
+            工作流
+          </button>
         </div>
+        {tab === "auto" ? (
+          <>
+            <div className="flex items-start justify-between mb-6 gap-4">
+              <p className="text-sm text-text-muted mt-1">
+                通过设置定期聊天，实现工作自动化。后端每 30 秒检查一次，
+                到点自动用当前会话的 agent 跑 prompt。
+              </p>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  onClick={() => setCreating(blankDraft())}
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-accent text-bg-primary text-[length:var(--text-ui)] font-medium hover:bg-accent-hover"
+                >
+                  <Plus className="icon-md" /> 新建自动化
+                </button>
+              </div>
+            </div>
+            {error && (
+              <p className="text-[length:var(--text-ui)] text-error -mt-4 mb-4 flex items-start gap-1.5">
+                <AlertTriangle className="icon-md shrink-0 mt-0.5" />
+                <span>{error}</span>
+              </p>
+            )}
 
         {loading && tasks.length === 0 ? (
           <p className="text-[length:var(--text-ui)] text-text-faint py-8 text-center">加载中…</p>
@@ -266,11 +291,17 @@ export function AutomationView() {
             </div>
           ))
         )}
+        </>
+        ) : (
+          <WorkflowPanel openChat={openChat} />
+        )}
       </div>
 
       {/* 运行会话时保持电脑唤醒（对齐 ZCode 同名开关）：开启后，任一会话
           处于流式运行即阻止系统睡眠。生效逻辑在 App 层（全局挂载），
           这里只负责开关与持久化。 */}
+      {tab === "auto" && (
+        <>
       <div className="flex items-center justify-between rounded-xl border border-border-primary bg-bg-card px-4 py-3 mb-5">
         <div className="flex items-center gap-2 text-[length:var(--text-ui)] text-text-secondary">
           <Info className="icon-md text-text-muted shrink-0" />
@@ -307,6 +338,8 @@ export function AutomationView() {
           </button>
         ))}
       </div>
+        </>
+      )}
 
       {/* Editor modal */}
       {(editing || creating) && (
@@ -704,6 +737,247 @@ function Field({
       </div>
       {children}
       {hint && <p className="modal-field-hint">{hint}</p>}
+    </div>
+  );
+}
+
+// ── 工作流 tab：对话里保存的再跑流程 ─────────────────────────
+
+function WorkflowPanel({ openChat }: { openChat: () => void }) {
+  const { workspaces } = useWorkspaces();
+  const [items, setItems] = useState<api.WorkflowEntry[] | null>(null);
+  const [runningId, setRunningId] = useState<string | null>(null);
+  const [paramFor, setParamFor] = useState<api.WorkflowEntry | null>(null);
+
+  const load = useCallback(async () => {
+    const list = await api.getWorkflows();
+    setItems(list ?? []);
+  }, []);
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const doRun = async (wf: api.WorkflowEntry, params: Record<string, string>) => {
+    setRunningId(wf.id);
+    const ok = await api.runWorkflow(wf.id, params);
+    setRunningId(null);
+    setParamFor(null);
+    if (ok) {
+      toastInfo("已开始运行，跑完的会话在对话列表里。");
+      void load();
+      openChat();
+    } else {
+      toastError("运行失败");
+    }
+  };
+
+  const onRun = (wf: api.WorkflowEntry) => {
+    // prompt 里有 {{参数}} 占位符 → 先弹窗填参；没有就直接跑。
+    const tokens = [
+      ...new Set([...wf.prompt.matchAll(/\{\{\s*([^}]+?)\s*\}\}/g)].map((m) => m[1])),
+    ];
+    if (tokens.length === 0) void doRun(wf, {});
+    else setParamFor(wf);
+  };
+
+  const wsName = (path: string) => workspaces.find((w) => w.path === path)?.name ?? path;
+  const global = (items ?? []).filter((w) => !w.workspace);
+  const byWs = new Map<string, api.WorkflowEntry[]>();
+  for (const w of items ?? []) {
+    if (!w.workspace) continue;
+    const list = byWs.get(w.workspace) ?? [];
+    list.push(w);
+    byWs.set(w.workspace, list);
+  }
+
+  return (
+    <div>
+      <p className="text-sm text-text-muted mb-6">
+        保存在本机的工作流：在对话里让 agent 设计流程，跑通之后让它用
+        workflow 工具保存到这里，填好参数就能再跑一次。
+      </p>
+
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-2">
+          <h2 className="text-[length:var(--text-ui)] font-medium text-text-primary">全局</h2>
+          <span className="text-[length:var(--text-tiny)] text-text-faint">对所有项目可见</span>
+        </div>
+        <button
+          onClick={openChat}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent text-bg-primary text-[length:var(--text-ui)] font-medium hover:bg-accent-hover"
+        >
+          <Plus className="icon-sm" /> 通过对话创建
+        </button>
+      </div>
+      {!items ? (
+        <p className="text-[length:var(--text-ui)] text-text-faint py-6 text-center">加载中…</p>
+      ) : global.length === 0 ? (
+        <p className="rounded-xl border border-border-primary bg-bg-card px-4 py-6 text-center text-[length:var(--text-ui)] text-text-muted">
+          还没有全局工作流。适合放不依赖某个项目的流程，例如深度调研。
+        </p>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 mb-6">
+          {global.map((w) => (
+            <WorkflowCard
+              key={w.id}
+              wf={w}
+              runningId={runningId}
+              onRun={() => onRun(w)}
+              onDelete={async () => {
+                if (await api.removeWorkflow(w.id)) void load();
+              }}
+            />
+          ))}
+        </div>
+      )}
+
+      {[...byWs.entries()].map(([path, list]) => (
+        <div key={path} className="mb-6">
+          <h2 className="text-[length:var(--text-ui)] font-medium text-text-primary mb-2">
+            {wsName(path)}
+          </h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+            {list.map((w) => (
+              <WorkflowCard
+                key={w.id}
+                wf={w}
+                runningId={runningId}
+                onRun={() => onRun(w)}
+                onDelete={async () => {
+                  if (await api.removeWorkflow(w.id)) void load();
+                }}
+              />
+            ))}
+          </div>
+        </div>
+      ))}
+
+      {paramFor && (
+        <ParamDialog
+          wf={paramFor}
+          onCancel={() => setParamFor(null)}
+          onRun={(params) => void doRun(paramFor, params)}
+        />
+      )}
+    </div>
+  );
+}
+
+function WorkflowCard({
+  wf,
+  runningId,
+  onRun,
+  onDelete,
+}: {
+  wf: api.WorkflowEntry;
+  runningId: string | null;
+  onRun: () => void;
+  onDelete: () => void;
+}) {
+  const running = runningId === wf.id || wf.last_status === "running";
+  return (
+    <div className="flex flex-col gap-2 p-3.5 rounded-xl bg-bg-card">
+      <div className="flex items-start gap-2.5">
+        <span className="text-base shrink-0 mt-0.5 leading-none">🔁</span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5">
+            <p className="text-[length:var(--text-ui)] font-semibold text-text-primary truncate">
+              {wf.name}
+            </p>
+            {running && (
+              <span className="text-[length:var(--text-ui)] text-info animate-pulse">运行中</span>
+            )}
+            {wf.last_status === "failed" && (
+              <span className="text-[length:var(--text-ui)] text-error">上次失败</span>
+            )}
+          </div>
+          {wf.description && (
+            <p className="text-[length:var(--text-ui)] text-text-muted leading-relaxed mt-0.5 line-clamp-2">
+              {wf.description}
+            </p>
+          )}
+          {wf.last_run_at && (
+            <p className="mt-1 text-[length:var(--text-ui)] text-text-muted">
+              上次{" "}
+              {new Date(wf.last_run_at).toLocaleString("zh-CN", {
+                month: "numeric",
+                day: "numeric",
+                hour: "2-digit",
+                minute: "2-digit",
+              })}
+            </p>
+          )}
+        </div>
+      </div>
+      <div className="flex items-center gap-1.5 mt-1">
+        <button
+          onClick={onRun}
+          disabled={running}
+          className="flex items-center gap-1 px-2 py-1 text-[length:var(--text-ui)] text-text-secondary hover:text-text-primary hover:bg-bg-hover rounded disabled:opacity-40"
+          title="再跑一次"
+        >
+          <Play size={10} /> 再跑一次
+        </button>
+        <div className="flex-1" />
+        <button
+          onClick={onDelete}
+          className="px-2 py-1 rounded text-text-faint hover:text-error hover:bg-bg-hover"
+          aria-label="删除"
+          title="删除"
+        >
+          <Trash2 size={10} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ParamDialog({
+  wf,
+  onCancel,
+  onRun,
+}: {
+  wf: api.WorkflowEntry;
+  onCancel: () => void;
+  onRun: (params: Record<string, string>) => void;
+}) {
+  const tokens = [
+    ...new Set([...wf.prompt.matchAll(/\{\{\s*([^}]+?)\s*\}\}/g)].map((m) => m[1])),
+  ];
+  const [values, setValues] = useState<Record<string, string>>({});
+  return (
+    <div className="modal-backdrop" onClick={onCancel}>
+      <div className="modal-card flex flex-col max-h-[90vh]" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <div className="modal-title-block">
+            <h3 className="modal-title">填参数 · {wf.name}</h3>
+          </div>
+          <button onClick={onCancel} className="modal-close" aria-label="关闭">
+            <X className="icon-lg" />
+          </button>
+        </div>
+        <div className="modal-form">
+          {tokens.map((t) => (
+            <div key={t} className="modal-field">
+              <label className="modal-field-label">{t}</label>
+              <input
+                value={values[t] ?? ""}
+                onChange={(e) => setValues((p) => ({ ...p, [t]: e.target.value }))}
+                className="modal-input"
+                placeholder={`填写 ${t}`}
+              />
+            </div>
+          ))}
+        </div>
+        <div className="modal-footer">
+          <button onClick={onCancel} className="modal-btn modal-btn-secondary">
+            取消
+          </button>
+          <button onClick={() => onRun(values)} className="modal-btn modal-btn-primary">
+            开始运行
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
