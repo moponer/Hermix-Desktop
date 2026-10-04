@@ -11,8 +11,10 @@
  * 文字对比度 ≥ 4.5:1（WCAG AA normal）。**不收录浅色**——浅色 accent 会
  * 需要深字，与本项目"纸墨"底色的观感冲突，且要维护两套 on 规则。
  *
- * 末项 `null` = 跟随主题默认（移除注入），对应 base.css 的
- * `--color-accent: var(--color-accent-base)` 供给。
+ * 末项 `null` = 跟随主题默认（移除注入），此时 `--color-accent` 落回
+ * tokens.css @theme 的亮色字面量 / themes/dark.css 的暗色字面量
+ * （2026-10-04 合并主题层与使用层，此前是经 base.css 桥接
+ * `--color-accent-base`）。
  */
 export interface AccentChoice {
   /** 展示名（中文） */

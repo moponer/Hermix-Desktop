@@ -252,14 +252,29 @@
    * 两者拉开到 60°+。 */
   /* 2026-09-30：强调色换松墨绿（用户定调：不要橙、不要蓝，要「高级感」）。
      松墨绿在暖白/纸色背景上不刺眼，长时间看不累，且与 ink 暗色主题同族。 */
-  /* L1（2026-10-01）：强调色分两层。
-     `-base` 是**主题层**，由 @theme（亮色有效值）与 themes/dark.css（暗色
-     覆写）各自提供；`--color-accent` 是**使用层**，由 base.css 的
-     `:root { --color-accent: var(--color-accent-base) }` 供给，不在本文件
-     声明——这样用户经 useTheme 注入 `--color-accent` 时能直接压过它，
-     而不需要在 tokens.css 里写自引用 var()（自引用会形成循环依赖，
-     实测整个声明 invalid，见 2026-10-01-audit-and-batches-report）。 */
-  --color-accent-base: #1e4a3c;
+  /* 2026-10-04（L1 修正）：强调色**必须声明在 @theme 内**且用**字面量**。
+     此前它被拆成「@theme 的 `--color-accent-base`」+「base.css 里一条把它
+     接到 `--color-accent` 的接桥声明」两层。拆分的初衷是让 useTheme 的行内
+     注入能压过主题值，但代价被低估了：
+
+     **Tailwind v4 只为注册在 @theme 颜色命名空间里的键生成 bg / text /
+     border 三类工具类**。裸 `--color-accent` 只是普通 :root 自定义属性，对扫描器
+     不可见 → `bg-accent` / `text-accent` / `border-accent` **一条都不生成**。
+     实测构建产物中 0 处，而源码有 117 处调用（bg 44 / text 59 / border 14），
+     全部静默失效：主按钮退化成白底白字（隐形），强调色文字回落成继承色。
+
+     现在 @theme 直接持有字面量 `--color-accent`：工具类正常生成，主题层
+     （本文件亮色 / themes/dark.css 暗色）改写同一个键，用户层 useTheme 的
+     行内样式优先级仍然最高——三层语义与原先逐层一致，只是少了一跳桥接。
+
+     刻意**不**写成「`--color-accent` 间接引用 `--color-accent-base`」的形式：
+     @theme 发出的 `:root` 与别名层同源，var() 间接会形成循环依赖导致整条
+     声明 invalid（见 2026-10-01-audit-and-batches-report）。字面量彻底绕开该
+     问题。
+
+     注：注释里也别把已删掉的间接引用写成 `var(--…)` 的完整形式——Check 2 的
+     孤儿扫描不跳过注释，会把它当成活跃引用。 */
+  --color-accent: #1e4a3c;
   /* accent 的派生档位（hover / soft / soft-strong / on-text）**不在此声明**，
      它们改由 base.css 从使用槽 --color-accent 用 color-mix 派生。
      理由：留在 @theme 静态值时，用户注入一个绿 accent，hover 仍是主题

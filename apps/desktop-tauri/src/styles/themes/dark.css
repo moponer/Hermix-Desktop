@@ -77,7 +77,10 @@
 
   /* Accent — 青碧提亮 */
   /* 2026-09-30：与亮色同色相提亮（暗底上原色太沉会糊）。 */
-  --color-accent-base: #6fae94;
+  /* 2026-10-04：改写 `--color-accent` 本身（原先覆写 `--color-accent-base`
+     再经 base.css 桥接）。见 tokens.css 同名注释：accent 必须在 @theme 内注册，
+     否则 Tailwind 不生成 bg-accent / text-accent / border-accent。 */
+  --color-accent: #6fae94;
   /* 2026-09-29：ink 主题实色 accent 按钮上的文字色。 */
 
   /* Link */

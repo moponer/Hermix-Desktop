@@ -57,9 +57,15 @@ function readStored(): ThemeMode {
 /* ── 强调色（L1）────────────────────────────────────────────────
    `--color-accent` 的供给链（见 tokens.css / base.css / dark.css 的注释）：
 
-     base.css  :root          --color-accent: var(--color-accent-base)   ← 默认
-     dark.css  :root[data-…]   --color-accent-base: <暗色值>              ← 主题层
+     tokens.css @theme          --color-accent: <亮色字面量>              ← 主题层（默认）
+     dark.css  :root[data-…]    --color-accent: <暗色字面量>              ← 主题层（暗色）
      这里                          root.style.setProperty(…)                 ← 用户层
+
+   2026-10-04：原链路多一跳——tokens.css 只给 `--color-accent-base`，由
+   base.css 的一条接桥声明转交给 `--color-accent`。该拆分使
+   `--color-accent` 落在 @theme 之外，Tailwind v4 因此不生成
+   bg-accent / text-accent / border-accent，117 处调用静默失效。已合并为
+   两层，行内注入的优先级不受影响（行内 > :root[data-theme] > :root）。
 
    关键：**移除属性**（`removeProperty`）而不是设成空串。CSS 的
    `var(x, fallback)` 只在 x 未被声明时才用 fallback；一旦声明为空，

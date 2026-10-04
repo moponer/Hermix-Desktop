@@ -23,17 +23,20 @@ const read = (p) => readFileSync(p, "utf8");
 // 契约从 tokens.css @theme 块派生；别名层（:root 非 @theme 的 var(--x)→
 // 别名映射）不在主题 css 内重复声明，导出自兼容块即可。
 //
-// L1（2026-10-01）强调色分层：`--color-accent-base` 是主题层（@theme 的
-// 亮色值 + dark.css 覆写），裸 `--color-accent` 是**使用层**——由 base.css
-// 的单条 `:root` 规则供给，用户选色时再由 useTheme 的行内样式压过。
-// 使用层不进契约：主题对它没有决定权。
+// 2026-10-04：`--color-accent` 曾因「主题层 / 使用层」拆分而被列在此处
+// （别名层），因此**不进契约**。它当时只由 base.css 的一条接桥声明供给，
+// 主题对它确实没有决定权。但代价是 Tailwind v4 不生成任何 `*-accent`
+// 工具类（accent 不在 @theme 颜色命名空间内），117 处调用静默失效。
+//
+// 现已合并：`--color-accent` 回到 @theme 内的主题层，themes/dark.css 覆写
+// 同一个键。因此它**必须**进契约——若有人日后从 dark.css 里删掉这行，
+// 门禁要能立刻报出来，而不是让暗色主题静默回落成亮色的松墨绿。
 const ALIAS_NAMES = new Set([
   "--color-error-bg",
   "--color-warning-bg",
   "--color-error-text",
   "--color-text-success",
   "--font-family-primary",
-  "--color-accent",
 ]);
 const tokensCss = read(join(STYLES, "tokens.css"));
 const themeBlock = tokensCss.match(/@theme\s*\{([\s\S]*)\n\}/)?.[1] ?? "";

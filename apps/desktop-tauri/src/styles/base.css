@@ -314,32 +314,27 @@ button:disabled,
   cursor: not-allowed;
 }
 
-/* ── L1（2026-10-01）：强调色使用层 + 派生家族 ──────────────────────
-   主题层（tokens.css @theme 的亮色值 / themes/dark.css 的暗色值）只提供
-   `--color-accent-base`；这里把它接到使用槽 `--color-accent`，并从
-   使用槽派生 hover / soft / soft-strong / on-text。
+/* ── L1（2026-10-01 建立 / 2026-10-04 修正）：强调色派生家族 ──────────
+   主题层与使用层已合并——`--color-accent` 由 tokens.css 的 @theme（亮色
+   字面量）与 themes/dark.css（暗色覆写）直接供给。本文件只负责从它派生
+   hover / soft / soft-strong / on-text。原先这里还有一条把使用槽指向
+   `--color-accent-base` 的接桥声明，2026-10-04 删除：桥接使
+   `--color-accent` 停留在 @theme 之外，Tailwind v4 因此不生成任何
+   `*-accent` 工具类，117 处调用静默失效（详见 tokens.css 同名注释）。
 
-   为什么派生档必须跟着**使用槽**而不是 @theme 静态值：用户注入一个绿
-   accent 后，若 hover 仍是主题自带的绿，就是绿配绿，hover 形同失效
-   （2026-10-01 审核 agent 指出）。派生链是 CSS 级的，用户改
+   为什么派生档必须跟着 `--color-accent` 而不是留一份 @theme 静态值：用户
+   注入一个绿 accent 后，若 hover 仍是主题自带的绿，就是绿配绿，hover 形同
+   失效（2026-10-01 审核 agent 指出）。派生链是 CSS 级的，用户改
    --color-accent 一处，家族整体联动。
 
-   刻意**不**写成"使用槽回落到自身"的 var() 链——那会让本规则与
-   themes/*.css 形成循环依赖，实测整个声明 invalid（详见
-   docs/notes/implemented/process/2026-10-01-audit-and-batches-report.md）。
-   本条规则在 :root 上定义一次，主题覆写的是 base 槽而不是使用槽，
-   所以两者不冲突。
-
    用户选色时 useTheme 在 documentElement.style 上设 `--color-accent`，
-   行内样式优先级高于本条规则，无需额外选择器。
+   行内样式优先级高于本文件的 :root 规则与 themes/*.css，无需额外选择器。
 
    `--color-on-accent`（压在 accent 实色块上的文字色）**无法用 color-mix
    推导**——它必须随 accent 明度在浅/深文字间切换。自由取色时没有正确
    答案，故保持静态（白），等 L3.5 的策展调色板把 on-accent 与 accent
    一起注入。 */
 :root {
-  --color-accent: var(--color-accent-base);
-
   /* 壁纸（L3.6）：**运行时注入**，由 `useWallpaper` 在 documentElement 的
      行内样式上设 `url("asset://…")`。这里给 `none` 默认值，一是让
      check-theme-tokens 的 orphan 检查（引用了却没定义）能过，二是让
