@@ -561,20 +561,19 @@ impl ChannelRuntime {
         let pump = tokio::spawn(async move {
             let mut tools = ToolTrace::default();
             let mut header_shown = String::new();
-            // 正文只发最后一轮：`tool_start` 一到就清缓冲。最后一次工具调用
-            // **之前**的可见文本全是中间叙述（计划、工具名自白、失败现场），
-            // 桌面端有工具面板兜着看得懂，IM 气泡里就是一坨源码。工具执行期
-            // 的"还活着"由进度行负责（QQ/企微的 set_header 都会刷帧）。
-            let mut final_text = String::new();
+            // 正文全程直通流式（打字机效果）。新工具开跑时 clear_text 把已
+            // 流出的中间叙述（计划、工具名自白、失败现场）清掉——气泡回到
+            // 只剩进度行，最终回答随后重新长出来，收尾气泡是干净的。
+            // 工具执行期没有正文 delta，"还活着"由进度行刷帧负责。
             while let Some(msg) = rx.recv().await {
                 match msg {
                     StreamMsg::Text(delta) => {
                         tools.clear_when_idle();
-                        final_text.push_str(&delta);
+                        stream.append(&delta).await;
                     }
                     StreamMsg::Tool(name, done) => {
                         if !done {
-                            final_text.clear();
+                            stream.clear_text().await;
                         }
                         tools.push(Some(&name), done);
                         let next = tools.render();
@@ -585,9 +584,6 @@ impl ChannelRuntime {
                         }
                     }
                 }
-            }
-            if !final_text.is_empty() {
-                stream.append(&final_text).await;
             }
             stream.finish().await;
         });

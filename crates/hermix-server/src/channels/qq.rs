@@ -529,6 +529,29 @@ impl QqStream {
         !self.degraded && (done || self.rendered() != self.sent)
     }
 
+    /// 工具开跑：把已流出的叙述清掉，气泡回到只剩进度行。
+    ///
+    /// 快照口径（shown/sent）先收到"清屏后"的状态再刷帧：就算这一帧失败
+    /// 转降级，收尾补发的 tail 也从清屏后的内容算起——已发出去的叙述不会
+    /// 被重发，最终回答也不会因为 shown 停在旧长度而被 skip 丢掉。
+    fn clear_text_bookkeeping(&mut self) {
+        self.accumulated.clear();
+        let snapshot = self.rendered();
+        self.shown = snapshot.chars().count();
+    }
+
+    async fn clear_text(&mut self) {
+        if self.accumulated.is_empty() {
+            return;
+        }
+        self.clear_text_bookkeeping();
+        // header 为空时不发空内容帧：紧跟的 set_header 刷帧（≤600ms 节流）
+        // 会把旧叙述顶掉；有 header 就立刻刷，清屏即见。
+        if !self.header.is_empty() {
+            self.flush(false).await;
+        }
+    }
+
     /// 收尾。流式正常就定稿；降级或失败就把气泡没显示过的那段补发。
     /// 进度行 + 正文。`input_mode=replace` 每帧发全文，所以这里拼一次就够。
     fn rendered(&self) -> String {
@@ -925,5 +948,29 @@ mod tests {
         s.degraded = true;
         assert!(!s.frame_worthy(false));
         assert!(!s.frame_worthy(true));
+    }
+
+    #[test]
+    fn 清屏把快照口径收回当前内容() {
+        let mut s = QqStream::new(
+            std::sync::Arc::new(QqApi::new("app", "sec")),
+            "openid",
+            "msg-1",
+        );
+        s.header = "🛠️ ⚙️ terminal".into();
+        s.accumulated = "中间叙述。".into();
+        s.sent = "旧的长快照".into();
+        s.shown = 10;
+        s.clear_text_bookkeeping();
+        assert!(s.accumulated.is_empty());
+        assert_eq!(
+            s.shown,
+            s.rendered().chars().count(),
+            "降级补发的 tail 从清屏后起算"
+        );
+        assert!(
+            s.frame_worthy(false),
+            "清屏后快照与 sent 不同，该发一帧顶掉旧叙述"
+        );
     }
 }

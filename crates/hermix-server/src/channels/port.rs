@@ -46,6 +46,9 @@ pub trait ImPort: Send + Sync {
 #[async_trait]
 pub trait ImStream: Send {
     async fn append(&mut self, delta: &str);
+    /// 清掉已流出的正文，只留进度行。新工具开跑时调用：上一段可见文本
+    /// 是中间叙述，不该在 IM 气泡里留到收尾。默认空实现（无流式的平台）。
+    async fn clear_text(&mut self) {}
     /// 替换整行进度文字。空串表示清掉。
     async fn set_header(&mut self, header: &str);
     async fn finish(&mut self);

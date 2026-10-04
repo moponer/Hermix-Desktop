@@ -390,6 +390,23 @@ impl WecomStream {
         }
     }
 
+    /// 工具开跑：清掉已流出的叙述（同 `QqStream::clear_text`）。
+    async fn clear_text(&mut self) {
+        if self.shown.is_empty() {
+            return;
+        }
+        self.shown = String::new();
+        if self.closed {
+            return;
+        }
+        let snapshot = self.plain();
+        if let Err(e) = self.push_frame(&snapshot, false).await {
+            tracing::warn!(error = %e, "企业微信清屏帧失败");
+        } else {
+            self.last_flush = Some(std::time::Instant::now());
+        }
+    }
+
     async fn complete(&mut self) {
         if !self.closed {
             let snapshot = self.plain();
