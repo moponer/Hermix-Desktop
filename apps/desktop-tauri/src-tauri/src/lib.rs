@@ -5,6 +5,7 @@ pub mod commands_custom_app;
 pub mod commands_cua;
 pub mod commands_local_search;
 pub mod commands_workbench;
+pub mod keep_awake;
 pub mod markitdown;
 pub mod officecli;
 pub mod portable_env;
@@ -643,6 +644,7 @@ pub fn run() {
             system_settings::get_wallpaper,
             system_settings::set_wallpaper,
             system_settings::clear_wallpaper,
+            keep_awake::set_keep_awake,
             commands::get_settings_dir,
             commands::get_data_dir,
             commands::pick_directory,

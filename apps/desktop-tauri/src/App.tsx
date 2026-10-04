@@ -62,6 +62,7 @@ import type {
 // tools are now tracked in the assistant's execution_timeline, not expanded
 // into separate role:tool messages.
 import { storage, STORAGE_KEYS, sessionKey } from "./utils/storageCompat";
+import { setKeepAwake, KEEP_AWAKE_CHANGED_EVENT } from "./desktopBridge";
 import { applyScale, readScale, UI_SCALE_EVENT } from "./utils/uiScale";
 
 const LEFT_KEY = STORAGE_KEYS.sidebarWidth;
@@ -550,6 +551,21 @@ setPage("chat");
   // session's view (the new session isn't actually streaming).
   const isStreamingActiveSession =
     streamingSessionId !== null && streamingSessionId === activeSessionId;
+
+  // 「运行会话时保持电脑唤醒」（自动化页开关 × 会话流式状态）：两处输入
+  // 任一变化都重算；开关关闭也发一次 off，状态不会卡在唤醒上。
+  useEffect(() => {
+    const apply = () => {
+      let enabled = false;
+      try {
+        enabled = storage.getItem(STORAGE_KEYS.keepAwake) === "true";
+      } catch {}
+      setKeepAwake(enabled && streamingSessionId !== null);
+    };
+    apply();
+    window.addEventListener(KEEP_AWAKE_CHANGED_EVENT, apply);
+    return () => window.removeEventListener(KEEP_AWAKE_CHANGED_EVENT, apply);
+  }, [streamingSessionId]);
 
   /**
    * Most recent stream error, scoped to the active session.  Set when

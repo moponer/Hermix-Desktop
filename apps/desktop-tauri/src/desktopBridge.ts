@@ -14,6 +14,17 @@ export async function getRuntimeInfo(): Promise<{ runtime: string; platform: str
   return invoke("get_runtime_info");
 }
 
+/** 「运行会话时保持电脑唤醒」开关变化事件。开关在自动化页写入，
+ *  App 层监听它并联动会话流式状态调用 set_keep_awake。 */
+export const KEEP_AWAKE_CHANGED_EVENT = "hermix:keep-awake-changed";
+
+/** 调用 Tauri 命令设置系统保活状态；失败静默（尽力而为的 OS 能力）。 */
+export function setKeepAwake(on: boolean): void {
+  invoke("set_keep_awake", { on }).catch((e) => {
+    console.warn("[keep-awake] set_keep_awake failed:", e);
+  });
+}
+
 /**
  * Open the user's data directory in the system file explorer.
  *

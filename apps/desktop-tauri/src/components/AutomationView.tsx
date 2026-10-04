@@ -8,10 +8,13 @@ import {
   Pencil,
 
   AlertTriangle,
+  Info,
 } from "lucide-react";
 import * as api from "../api";
 import type { AutomationTask } from "../types";
 import { AiGenerateButton } from "./AiGenerateButton";
+import { storage, STORAGE_KEYS } from "../utils/storageCompat";
+import { setKeepAwake, KEEP_AWAKE_CHANGED_EVENT } from "../desktopBridge";
 
 /** A small set of cron presets the editor offers as quick-pick chips.
  *  Each entry: [label, cronExpression, humanDescription]. */
@@ -26,12 +29,101 @@ const CRON_PRESETS: Array<[string, string, string]> = [
   ["每月 1 日 10:00", "0 10 1 * *", "Monthly report"],
 ];
 
+/** 定时任务模板（对齐 ZCode 工作流页）：一键预填编辑器，存档前可再改。 */
+interface TaskTemplate {
+  icon: string;
+  name: string;
+  description: string;
+  schedule: string;
+  scheduleLabel: string;
+  prompt: string;
+}
+
+const TEMPLATES: TaskTemplate[] = [
+  {
+    icon: "📣",
+    name: "晨会动态",
+    description:
+      "汇总上一个工作日以来的提交、模块变化、CI 状态和待跟进事项，最终生成不超过 6 条的晨会口述摘要。只读分析，不做任何修改。",
+    schedule: "0 9 * * 1-5",
+    scheduleLabel: "每工作日 09:00",
+    prompt: `汇总自上一个工作日以来的仓库动态，输出一份不超过 6 条的晨会口述摘要。
+要求：
+1) 覆盖：git 提交、模块/文件变化、CI 运行状态、待跟进事项；
+2) 只读分析：不修改任何文件、不执行任何写入操作；
+3) 每条一句话，按重要性排序，末尾标出今天最需要关注的一件事。`,
+  },
+  {
+    icon: "⚠️",
+    name: "风险扫描",
+    description:
+      "检查最近 24 小时的代码变更，识别运行错误、数据丢失、权限绕过、资源泄漏及跨端兼容等高置信风险，并附代码位置。",
+    schedule: "0 10 * * *",
+    scheduleLabel: "每天 10:00",
+    prompt: `检查最近 24 小时的代码变更，识别高置信风险并逐条报告：
+1) 运行错误、数据丢失、权限绕过、资源泄漏、跨端兼容问题；
+2) 每条附代码位置（文件:行号）与一句风险说明；
+3) 只读分析：不修改文件；没有发现风险就明确说"未发现高置信风险"。`,
+  },
+  {
+    icon: "📋",
+    name: "发布简报",
+    description:
+      "整理本周合并的 PR 和 commit，按功能、修复、体验及工程改进分类，同时生成团队版和面向用户的精简发布说明。",
+    schedule: "0 16 * * 5",
+    scheduleLabel: "每周五 16:00",
+    prompt: `整理本周合并的 PR 和 commit，输出发布简报：
+1) 按功能、修复、体验、工程改进四类分组；
+2) 生成两版：团队版（细节完整）与用户版（精简、面向使用者）；
+3) 引用具体 PR / commit 标题作为依据，不编造条目。`,
+  },
+  {
+    icon: "📑",
+    name: "文档同步检查",
+    description:
+      "对照最近 7 天的代码、配置、接口与文档变更，识别已改变公开行为但文档尚未同步的高置信差异，并附文件路径。",
+    schedule: "0 15 * * 3",
+    scheduleLabel: "每周三 15:00",
+    prompt: `对照最近 7 天的代码、配置与接口变更，找出已改变公开行为但文档尚未同步的高置信差异：
+1) 逐条列出：变更的文件路径、对应的过时文档位置、建议的更新要点；
+2) 只读分析：不修改文件；
+3) 没有差异就明确说"文档与代码当前一致"。`,
+  },
+];
+
+function templateToTask(t: TaskTemplate): AutomationTask {
+  return {
+    ...blankDraft(),
+    name: t.name,
+    description: t.description,
+    icon: t.icon,
+    schedule: t.schedule,
+    schedule_label: t.scheduleLabel,
+    prompt: t.prompt,
+  };
+}
+
 export function AutomationView() {
   const [tasks, setTasks] = useState<AutomationTask[]>([]);
   const [editing, setEditing] = useState<AutomationTask | null>(null);
-  const [creating, setCreating] = useState(false);
+  const [creating, setCreating] = useState<AutomationTask | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // 「运行会话时保持电脑唤醒」开关。写档 + 广播事件；App 层监听事件并
+  // 联动会话流式状态调用 set_keep_awake（本组件只在自动化页挂载，
+  // 生效逻辑不能住在这里）。
+  const [keepAwake, setKeepAwakeState] = useState(
+    () => storage.getItem(STORAGE_KEYS.keepAwake) === "true",
+  );
+
+  const toggleKeepAwake = (on: boolean) => {
+    setKeepAwakeState(on);
+    try {
+      storage.setItem(STORAGE_KEYS.keepAwake, String(on));
+    } catch {}
+    setKeepAwake(on);
+    window.dispatchEvent(new Event(KEEP_AWAKE_CHANGED_EVENT));
+  };
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -58,7 +150,7 @@ export function AutomationView() {
       if (saved) {
         await refresh();
         setEditing(null);
-        setCreating(false);
+        setCreating(null);
       } else {
         setError("保存失败，请检查 schedule 表达式或后端日志");
       }
@@ -139,7 +231,7 @@ export function AutomationView() {
           </div>
           <div className="flex items-center gap-2 shrink-0">
             <button
-              onClick={() => setCreating(true)}
+              onClick={() => setCreating(blankDraft())}
               className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-accent text-bg-primary text-[length:var(--text-ui)] font-medium hover:bg-accent-hover"
 >
               <Plus className="icon-md" /> 新建自动化
@@ -176,16 +268,56 @@ export function AutomationView() {
         )}
       </div>
 
+      {/* 运行会话时保持电脑唤醒（对齐 ZCode 同名开关）：开启后，任一会话
+          处于流式运行即阻止系统睡眠。生效逻辑在 App 层（全局挂载），
+          这里只负责开关与持久化。 */}
+      <div className="flex items-center justify-between rounded-xl border border-border-primary bg-bg-card px-4 py-3 mb-5">
+        <div className="flex items-center gap-2 text-[length:var(--text-ui)] text-text-secondary">
+          <Info className="icon-md text-text-muted shrink-0" />
+          <span>Hermix 运行会话时保持电脑唤醒。</span>
+        </div>
+        <input
+          type="checkbox"
+          checked={keepAwake}
+          onChange={(e) => toggleKeepAwake(e.target.checked)}
+          className="rounded border-border-primary"
+          aria-label="运行会话时保持电脑唤醒"
+        />
+      </div>
+
+      {/* 定时任务模板：一键预填编辑器，保存前可自由改。 */}
+      <p className="text-[length:var(--text-ui)] text-text-muted mb-2">定时任务模板</p>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 mb-6">
+        {TEMPLATES.map((t) => (
+          <button
+            key={t.name}
+            onClick={() => setCreating(templateToTask(t))}
+            className="text-left rounded-xl border border-border-primary bg-bg-card p-3.5 hover:bg-bg-hover transition-colors"
+          >
+            <div className="flex items-center gap-2">
+              <span className="text-base shrink-0">{t.icon}</span>
+              <span className="text-[length:var(--text-ui)] font-semibold text-text-primary">
+                {t.name}
+              </span>
+            </div>
+            <p className="mt-1 text-[length:var(--text-ui)] text-text-muted leading-snug line-clamp-2">
+              {t.description}
+            </p>
+            <p className="mt-1.5 text-[length:var(--text-ui)] text-text-faint">{t.scheduleLabel}</p>
+          </button>
+        ))}
+      </div>
+
       {/* Editor modal */}
       {(editing || creating) && (
         <TaskEditor
-          initial={editing ?? blankDraft()}
-          isCreate={creating}
+          initial={editing ?? creating ?? blankDraft()}
+          isCreate={creating !== null}
           onCancel={() => {
             setEditing(null);
-            setCreating(false);
+            setCreating(null);
           }}
-          onSave={(t) => void onSave(t, creating)}
+          onSave={(t) => void onSave(t, creating !== null)}
         />
       )}
     </div>

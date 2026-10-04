@@ -130,6 +130,8 @@ export const STORAGE_KEYS = {
   followSystemTheme: "hermix.desktop.follow_system_theme",
   /** L4：回复完成时弹桌面通知。"1" = 开；缺 = 关（默认不发）。 */
   notifyOnComplete: "hermix.desktop.notify_on_complete",
+  /** 运行会话时保持电脑唤醒。"true" = 开；缺 = 关。自动化页的开关写入。 */
+  keepAwake: "hermix.desktop.keep_awake",
   modelConfig: "hermix.desktop.model_config",
   modelCache: "hermix.desktop.model_cache",
   workspaceRoot: "hermix.desktop.workspace_root",
