@@ -10,7 +10,7 @@ Status: implemented — 2026-10-04 五项全部按序执行完毕。第 1/2 项�
 | 2 | 浏览器/CU 授权面审计 | ✅ 已实施 | `9fbf236` — `proposed/feature/2026-10-04-cua-authorization-audit.md` |
 | 3 | CU 注入防护方案 | ✅ 已实施 | `7c8e75f` 写方案 → `4c3d1c50`（ptc 步骤接 SsrfGuard + about:blank 放行）+ `e756572a`（selector 转义完备）+ `60b18c58`（ref 查不到即拒绝）+ `bf8160bf`（审批卡渲染 steps）— `proposed/architecture/2026-10-04-cua-injection-hardening.md` 已转 implemented |
 | 4 | 自动化调度幂等 | ✅ 方案已写并裁决 | `c3c8fc1` + `c643ac7` 写方案 → `486d1da` 裁决采纳 [调度模型升级](2026-10-04-automation-schedule-model-upgrade.md)（runId 契约 + 派发状态机，更完备且覆盖时钟跳变）；幂等篇已归档、7 项实施要点已移植 |
-| 5 | 会话锚定投递 | ✅ 方案已写（重写） | `347e1da` — `proposed/feature/2026-10-04-automation-session-anchored-delivery.md` |
+| 5 | 会话锚定投递 | 🔄 地基已实施 | `347e1da` 写方案 → 修 1（`_session_id` 注入）+ 修 2（`anchor_session_id` 字段）已落代码；修 3/4/5 待调度模型升级 — `proposed/feature/2026-10-04-automation-session-anchored-delivery.md` |
 
 ### 执行中推翻的三处判断
 
@@ -101,7 +101,7 @@ Status: implemented — 2026-10-04 五项全部按序执行完毕。第 1/2 项�
 | 2 | 浏览器/CU 授权面审计 | 1 天 | ✅ 审计 + 实施（`9fbf236`） | 无 |
 | 3 | CU 注入防护方案 | 1 天（只写方案） | ✅ 方案（`7c8e75f`），**范围比预估大**：真缺口在浏览器侧共 3 项，跨前后端 | 无 |
 | 4 | 自动化调度幂等 | 2-3 天 | ✅ 方案（`c3c8fc1`+`c643ac7`），**实施需重跑 4 次退避的真实网络失败** | 无 |
-| 5 | 会话锚定投递 | 前端为主 | ✅ 方案重写（`347e1da`），**前置比预估多一层**：`cronjob` 工具读不到 session，需先建注入机制 | 依赖 4 |
+| 5 | 会话锚定投递 | 前端为主 | 🔄 地基已实施（修 1+2），**前置比预估多一层**：`cronjob` 工具读不到 session，需先建注入机制——注入点最终定在 `dispatch_with_context` 而非原方案的 `dispatch_async` | 修 3/4/5 依赖 4 |
 
 第 1 项与第 2 项可并行——一个动 `App.tsx` + 事件，一个只读审计 `browser.rs`/`cua.rs`。
 
@@ -114,9 +114,10 @@ Status: implemented — 2026-10-04 五项全部按序执行完毕。第 1/2 项�
 
 ## Consequences
 
-- **获得**：保活联动已落代码并提交；授权面已修正（观察类不再无谓弹卡、UIA 动作路径按副作用分档接入限速）；三份方案笔记（注入面 / 调度幂等 / 会话锚定）可直接进入实施。
+- **获得**：保活联动已落代码并提交；授权面已修正（观察类不再无谓弹卡、UIA 动作路径按副作用分档接入限速）；注入面四项修法已全部实施；会话锚定的数据地基（`_session_id` 注入 + `anchor_session_id` 字段）已落地，回投分流待调度模型升级。
 - **放弃**：本轮不动 CU 进程边界；token 成本不追。
+- **顺带修掉**：`cua.rs` 的 `extract_session_id` 长期是死代码（全仓无注入点，恒返回空串）。注入点建成后，18 处 `TraceEvent` 开始携带真实 session id——此前 CUA 审计日志的"按会话分组"字段一直是空的。
 - **风险（已发生）**：本篇的执行前提错了三处（`auto_id` 注入链、两套词汇、观察类一刀切），全部靠执行时的逐行核实才发现。**若当初直接按本篇开工，第 2 项会做成一次"统一两套词汇"的重构——而实际上根本不存在两套词汇。** 这正是本篇第 2 项"先审计不改"的判断救了场。
-- **遗留**：注入面方案里 `browser_navigate` 的 `javascript:` URL 在 `Safe` 档下可静默执行，**这是本批发现的最严重问题，尚未修**。修 1（URL scheme 白名单）应优先于其余三项。
+- **遗留（已修）**：~~注入面方案里 `browser_navigate` 的 `javascript:` URL 在 `Safe` 档下可静默执行~~ — **该判断本身是误判**：`browser_navigate` 一直接着 `SsrfGuard`。真实旁路是 `browser_ptc` 的 Navigate 步骤绕过 guard，已修（`4c3d1c50`）。本批四项注入面修法全部已实施。
 - **遗留（已裁决）**：调度幂等方案与 [调度模型升级](2026-10-04-automation-schedule-model-upgrade.md) 第 2 条曾是同一件事的两种设计，**已裁决采纳后者**（runId 契约 + 派发状态机更完备，且覆盖时钟跳变）。幂等那篇的独有实施要点已移植进调度模型升级的「实施要点」节，幂等笔记已归档。
 - **落地时的新增约束**：采纳方案 2 后，**保活联动的 `count_active_runs` 查询需与 run 状态机同 PR 更新**（`75f5f058` 查的是 `status='running'`，新状态机为 `claimed/dispatched/abandoned`），否则中间态改名期间会漏判。这一条两篇笔记都已记录。

@@ -1,6 +1,6 @@
 # Decision Note: 会话锚定投递（自动化结果回投原对话）
 
-Status: proposed — 2026-10-04 逐层核实 cronjob 工具 → 宿主后端 → Automation 表 → 调度器全链路后的重写。**只写方案，未改任何代码。** 核实推翻了原提案的两处前提：hermix 用的不是 ZCode 的 `targetTaskId` 而是 `session_id`；且提案设想的"对话内创建"链路需要先补两个断点才成立。裁决见 [批次评审](../process/2026-10-04-proposed-batch-review.md)。
+Status: proposed — 2026-10-04 逐层核实 cronjob 工具 → 宿主后端 → Automation 表 → 调度器全链路后的重写。**修 1（`_session_id` 注入）与修 2（`anchor_session_id` 字段）已实施**（见下方"实施进度"）；修 3/4/5 仍待 [调度模型升级](2026-10-04-automation-schedule-model-upgrade.md) 落地。核实推翻了原提案的两处前提：hermix 用的不是 ZCode 的 `targetTaskId` 而是 `session_id`；且提案设想的"对话内创建"链路需要先补两个断点才成立。裁决见 [批次评审](../process/2026-10-04-proposed-batch-review.md)。
 
 ## 核实结论
 
@@ -50,6 +50,8 @@ fn extract_session_id(params: &Value) -> String {
 
 要实现锚定，必须**新建**参数注入机制。这是原提案完全没考虑的成本。
 
+> **已解决（修 1）**：注入点已建于 `ToolRegistry::dispatch_with_context`。本节保留作为"为什么需要这个机制"的依据——注入前的状态确实是死代码。**注意注入点不是本节暗示的 `dispatch_async`**：那两条路径（`dispatch` / `dispatch_async`）没有 `ToolCallContext`，凭空造 session 是错的。详见"实施进度"。
+
 ### 事实 4（断点 2）：`AutomationTriggered` 事件没有前端消费者
 
 `orchestration_bus.rs:117` 把它转成 `StreamEvent::AutomationTriggered`（`hermix-transport/src/lib.rs:789`），但前端唯一提及是 `App.tsx:573` 的一句注释：
@@ -58,13 +60,45 @@ fn extract_session_id(params: &Value) -> String {
 
 **即：结果回投没有任何现成通道。** 要做锚定投递，需要同时做前端消费。
 
+## 实施进度
+
+### 已完成：修 1（`_session_id` 注入）+ 修 2（`anchor_session_id` 字段）
+
+这两个是纯数据地基，**零行为变化**——锚点被记录但调度侧不消费，回投路径与今天完全一致。
+
+| 层 | 位置 | 改动 |
+|---|---|---|
+| 注入 | `registry.rs:600` | `dispatch_with_context` 在 `coerce_args` 之后调 `inject_session_id` |
+| 注入实现 | `registry/validation.rs` | 空 session 不注入 / 非 object 原样返回 / 不覆盖已有值 |
+| 工具读值 | `tools/cronjob.rs` | `create` 读 `_session_id`，空串过滤为无锚点 |
+| trait | `tools/cronjob.rs` + `backends/cronjob.rs` | `CronjobBackend::create` 增 `anchor_session_id` 参数 |
+| 领域模型 | `hermix-automation/src/lib.rs` | `Automation` / `CreateAutomationParams` 增字段 |
+| 存储 | `hermix-automation/src/repository.rs` | 建表加列 + `ensure_column` 幂等 ALTER + INSERT/SELECT/row 映射 |
+| 宿主 | `hermix-server/src/dashboard/automation.rs` | `AutomationTask` 增字段，`DashboardCronjobBackend` 透传 |
+
+**注入点与原方案的偏差**：`dispatch_async` → `dispatch_with_context`。原因见"修 1"小节。
+
+**顺序约束**（有测试钉住）：注入必须在 `coerce_args` **之后**。反序时若某 schema 恰好声明了同名键，`coerce_args` 会把注入的会话 id 强转成声明类型。
+
+**顺带生效**：`cua.rs` 的 `extract_session_id` 不再是死代码——18 处 `TraceEvent` 现在带真实 session id（此前恒为空串），按会话分组审计日志有了意义。
+
+**文案未承诺回投**：`DashboardCronjobBackend::create` 的返回文案**没有**写"结果会回到本对话"。锚定分支（修 3）尚未落地，此时这么写等于让模型向用户转述一个不存在的行为。
+
+**风险核查**：注入的 `_session_id` 会进入所有工具的 params。已 grep 确认无工具把 params 整体回显进结果或落库（`custom_app_manager` / `vendor` 是反序列化成结构体；`url_safety` 的 `params_json` 拼接只出现在测试代码里，生产路径只做 allow/block 判定）。
+
+### 未完成：修 3 / 修 4 / 修 5
+
+修 3（运行期分流）依赖调度模型升级的回退路径稳定（`session_id` 要带 `run_id` 后缀）；修 4+5 同批，见"实施顺序"。
+
 ## Decision
 
 ### 修 1：`_session_id` 注入机制（前置，其余全部依赖它）
 
 **问题**：见事实 3。
 
-**方案**：在 `ToolRegistry::dispatch_async` 的入口（agent loop 派发工具调用的地方），把当前 session_id 注入到 params 的 `_session_id` 键。
+**方案**：在 agent loop 派发工具调用的地方（`ToolRegistry::dispatch_with_context`），把当前 session_id 注入到 params 的 `_session_id` 键。
+
+**为什么是这个函数（实施时修正）**：`registry.rs` 里有三处 `coerce_args` 调用点，分属三条派发路径——`dispatch`（同步）、`dispatch_async`、`dispatch_with_context`。只有 `dispatch_with_context` 持有 `ToolCallContext`；`bridge_tool_registry`（`agent_builder.rs:232`）把 ctx 捕获进闭包后走的就是它。**前两条路径没有 session 概念**，注入等于凭空编造。`session_stamper.rs` 的文档曾声称 `agent_loop.execute_tool_calls` 会调 `set_active_session_for_tool`，实际调用方只有 `routes.rs` 的 `patch_todo` / `delete_todo`——文档漂移，不能作为注入点依据。
 
 **为什么用下划线前缀**：不与 LLM 生成的实际参数冲突——模型不生成 `_` 开头的键（各 provider 的 schema 校验惯例）。CU 已经这么用了，**沿用同一约定而非另立**。
 
