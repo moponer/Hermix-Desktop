@@ -82,13 +82,28 @@ fn extract_session_id(params: &Value) -> String {
 
 **顺带生效**：`cua.rs` 的 `extract_session_id` 不再是死代码——18 处 `TraceEvent` 现在带真实 session id（此前恒为空串），按会话分组审计日志有了意义。
 
-**文案未承诺回投**：`DashboardCronjobBackend::create` 的返回文案**没有**写"结果会回到本对话"。锚定分支（修 3）尚未落地，此时这么写等于让模型向用户转述一个不存在的行为。
+**文案按锚点分支**：`DashboardCronjobBackend::create` 早期版本**没有**写"结果会回到本对话"——当时锚定分支（修 3）未落地，这么写等于让模型向用户转述一个不存在的行为。修 3 落地后改为按锚点分流：有锚点才承诺回投，无锚点（UI 侧创建）不说。**承诺必须与实现同步**，这是那条文案唯一的约束。
 
 **风险核查**：注入的 `_session_id` 会进入所有工具的 params。已 grep 确认无工具把 params 整体回显进结果或落库（`custom_app_manager` / `vendor` 是反序列化成结构体；`url_safety` 的 `params_json` 拼接只出现在测试代码里，生产路径只做 allow/block 判定）。
 
-### 未完成：修 3 / 修 4 / 修 5
+### 修 3：运行期分流 ✅ 已落地
 
-修 3（运行期分流）依赖调度模型升级的回退路径稳定（`session_id` 要带 `run_id` 后缀）；修 4+5 同批，见"实施顺序"。
+`automation_trigger.rs::execute_automation_run` 的 session 选取改为：
+
+```rust
+let session_id = auto
+    .anchor_session_id
+    .as_deref()
+    .filter(|s| !s.is_empty())
+    .map(str::to_string)
+    .unwrap_or_else(|| format!("automation:{}:{}", auto.id, run_id));
+```
+
+回退路径带 `run_id` 是必要的：多次 run 共用一段不断增长的历史会互相污染，且无法从 session 反查是哪次 run。两个分支各有测试钉住（`test_unanchored_session_id_includes_run_id` / `test_anchored_automation_uses_anchor_session`）。
+
+### 未完成：修 4 / 修 5
+
+修 4（消息一等表示）与修 5（注入次数护栏）同批，见"实施顺序"。
 
 ## Decision
 

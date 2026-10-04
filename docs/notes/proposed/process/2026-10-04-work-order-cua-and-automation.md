@@ -9,8 +9,8 @@ Status: implemented — 2026-10-04 五项全部按序执行完毕。第 1/2 项�
 | 1 | 自动化保活联动 | ✅ 已实施 | `75f5f058` — `count_active_runs` + `/api/automation/active-count` + 前端 10s 轮询 |
 | 2 | 浏览器/CU 授权面审计 | ✅ 已实施 | `9fbf236` — `proposed/feature/2026-10-04-cua-authorization-audit.md` |
 | 3 | CU 注入防护方案 | ✅ 已实施 | `7c8e75f` 写方案 → `4c3d1c50`（ptc 步骤接 SsrfGuard + about:blank 放行）+ `e756572a`（selector 转义完备）+ `60b18c58`（ref 查不到即拒绝）+ `bf8160bf`（审批卡渲染 steps）— `proposed/architecture/2026-10-04-cua-injection-hardening.md` 已转 implemented |
-| 4 | 自动化调度幂等 | ✅ 方案已写并裁决 | `c3c8fc1` + `c643ac7` 写方案 → `486d1da` 裁决采纳 [调度模型升级](2026-10-04-automation-schedule-model-upgrade.md)（runId 契约 + 派发状态机，更完备且覆盖时钟跳变）；幂等篇已归档、7 项实施要点已移植 |
-| 5 | 会话锚定投递 | 🔄 地基已实施 | `347e1da` 写方案 → 修 1（`_session_id` 注入）+ 修 2（`anchor_session_id` 字段）已落代码；修 3/4/5 待调度模型升级 — `proposed/feature/2026-10-04-automation-session-anchored-delivery.md` |
+| 4 | 自动化调度幂等 | ✅ 已实施 | `c3c8fc1` + `c643ac7` 写方案 → `486d1da` 裁决采纳 [调度模型升级](2026-10-04-automation-schedule-model-upgrade.md)（runId 契约 + 派发状态机，更完备且覆盖时钟跳变）；幂等篇已归档、7 项实施要点已移植。**实施要点 1-6 全部落地**（同步 claim / 启动收割 / 单飞查重 / 退避 / 手动共用 claim / session_id 带 run_id）；顺带修掉 sync 路径把执行失败记成成功的缺陷 |
+| 5 | 会话锚定投递 | 🔄 地基已实施 | `347e1da` 写方案 → 修 1（`_session_id` 注入）+ 修 2（`anchor_session_id` 字段）已落代码；**修 3（运行期分流）已随调度模型升级一并落地**（有锚点用来源对话，否则 `automation:{id}:{run_id}`）；修 4（消息一等表示）+ 修 5（注入次数护栏）待做 — `proposed/feature/2026-10-04-automation-session-anchored-delivery.md` |
 
 ### 执行中推翻的三处判断
 
@@ -28,7 +28,7 @@ Status: implemented — 2026-10-04 五项全部按序执行完毕。第 1/2 项�
 |---|---|---|
 | `as_bool` 待修，今天开干 | **10-01 已修完** | `1776c454` 新增 `param_coercion.rs`，15 处替换完成。残留的 `as_bool()` 调用只是注释与测试断言 |
 | 浏览器"逐调用、token 吃亏" | **`browser_ptc` 已落地** | `5438a20e` N1 单次投递多步程序 + `1a07df29` 120s 预算 |
-| 调度模型升级待做 | **确实没做** | `repository.rs` 无 `claimed_at/dispatched_at/retry_at/attempts/outcome`，只有 `run_id` 传给 `finish_run` |
+| 调度模型升级待做 | **确实没做**（本轮已做） | 核实时的证据：`repository.rs` 无 `claimed_at/dispatched_at/retry_at/attempts/outcome`，只有 `run_id` 传给 `finish_run` |
 | 保活只绑流式 | **确认缺口** | `App.tsx:563` `setKeepAwake(enabled && streamingSessionId !== null)` |
 
 ### 一处必须先讲的架构事实

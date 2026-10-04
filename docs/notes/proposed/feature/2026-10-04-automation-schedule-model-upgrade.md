@@ -1,6 +1,6 @@
 # Decision Note: 自动化调度模型升级（结构化 scheduleRule + 派发重试状态机）
 
-Status: proposed — 对齐 ZCode 调度权威与派发韧性两处：cron 字符串降为展示格式、编辑权威改为结构化 scheduleRule（含 endAt）；run 派发引入状态机与 transient/permanent 分类退避重试。2026-10-04 采纳为调度幂等的最终方案（**取代**已归档的 `../../archived/architecture/2026-10-04-automation-schedule-idempotency.md`，其五项实施要点已移植入本篇下节）。
+Status: implemented — 对齐 ZCode 调度权威与派发韧性两处：cron 字符串降为展示格式、编辑权威改为结构化 scheduleRule（含 endAt）；run 派发引入状态机与 transient/permanent 分类退避重试。2026-10-04 采纳为调度幂等的最终方案（**取代**已归档的 `../../archived/architecture/2026-10-04-automation-schedule-idempotency.md`，其五项实施要点已移植入本篇下节）。**实施要点 1-6 与 Decision 2/3 已全部落地**；**Decision 1（结构化 scheduleRule 表单）未做**，是独立的 UI 工作量。实施中修正了本篇 4 处与实际代码不符的前提，并发现两处既有缺陷（执行层失败被记成成功、手动触发 runId 恒定），见「实施时的方案偏差更正」与「实施过程中发现的更大问题」。
 
 ## 背景事实（读源码所得）
 
@@ -98,6 +98,127 @@ ScheduleType::Recurring => match state.next_run_at {
 
 （锚定投递方案落地后，回退路径的 session_id 才会退居次要——主路径会走用户自己的 session。届时过滤需求也随之消失。见 [会话锚定投递](2026-10-04-automation-session-anchored-delivery.md)。）
 
+## 实施时的方案偏差更正（2026-10-04）
+
+本篇的 Decision 与 Consequences 是**照 ZCode 的类型定义 + 对旧代码的推测**写的。逐条核实后有 4 处前提在 hermix 不成立，处置如下。**保留原文并在此更正**，因为原文的偏差本身就是"照抄别处方案时该查什么"的记录。
+
+### 偏差 1：失败分类不能复用 `classifyStreamErrorKind`（Consequences 末条作废）
+
+原文写「复用 `hermix-core` 已有的 `classifyStreamErrorKind`」。实际它在 **`app/streamEvents.ts`（前端 TypeScript）**，只吃字符串，Rust crate 无法访问。
+
+改为按 `AgentError` 的**判别式枚举**匹配——判别式枚举本就是分类器，比字符串匹配更强。
+
+**但更关键的是：核实后发现 `AgentLoop::run()` 全文零个 `return Err`。** LLM/传输失败被转成 `Ok(graceful_interrupt_result_errored(..))`（`run_loop.rs` 中注释 "treating as graceful interrupt for persistence"），因为返回 `Err` 会让 `local_agent_service` 的 `?` 跳过收尾持久化、session 重载为空。
+
+推论有两条：
+
+1. **`send_message` 返回 `Err` 时，agent 一定还没跑过任何工具**（工具执行在首轮 LLM 成功返回之后）。这意味着只按错误变体分类就足够——**退避重试天然是安全的**。
+2. **但这条不变量是脆弱的，且没有任何测试锁定**。任何人把那个 `Ok(..)` 改成 `Err(..)`（这是个诱人的"修复"），不变量立刻破裂，自动化就会开始重试带副作用的 run。
+
+**第 2 条推论直接推翻了原方案的分类前提**：真正需要区分的不是"错误变体"，而是"**失败发生在第几轮之后**"。`last_error` 只有错误文本，没有轮次信息。详见下方「实施过程中发现的更大问题」。
+
+### 偏差 2：`TriggerFn` 改签名不是"公开 API 破坏性变更"
+
+原文 Consequences 写「`hermix-automation` 是可发布 crate，需保留默认适配方法」。实际 `TriggerFn` 在同 crate 内**只有一个调用方**（`hermix-server/src/automation_trigger.rs`），且该 crate 未独立发布。直接改签名，无需适配层。
+
+### 偏差 3：`max_runs` 不在 `hermix_automation::Automation` 上
+
+原文 Reintroduction conditions 称「hermix 的 `max_runs` 已于 `fa131ed7` 落地」。实际该字段**只在 dashboard 的 `AutomationTask` 上**，调度器读的 `hermix_automation::Automation` 没有这一列——**两套模型字段不通用**。
+
+处置：`try_begin_run` 不做 `max_runs` 检查，保留 `valid_until` 检查（`skipped` 的两个来源少了一个）。真要加上限，得先给 `automations` 表加列。
+
+### 偏差 4：`count_active_runs` 的状态名确实会漏（此条原文正确，已按此实施）
+
+原文指出改名期间该查询会漏。核实属实：`AutomationRun.status` 原是 `String` 而非枚举，全仓无 `RunStatus`。已把状态枚举化并**在同一批**更新查询为 `status IN ('claimed','dispatched') AND finished_at IS NULL`。
+
+## 实施过程中发现的更大问题：执行层失败被记成"成功"
+
+上面偏差 1 的第 2 条推论落地时，暴露了一个比本方案全部内容都严重的缺陷。
+
+### 症状
+
+provider 挂掉数小时，期间每次自动化触发都被记为 `Succeeded`，UI 上一片绿。
+
+### 两层抹除
+
+1. `AgentLoop::run()` 把 LLM 失败表达成 `Ok` + `finish_reason = "error"`（保住 transcript）。
+2. **`local_agent_service.rs` 的 sync 路径把这三个字段全部硬编码丢弃**：
+
+```rust
+Ok(AgentReply {
+    text: reply_text,
+    message_count: messages.len(),
+    finish_reason: None,      // ← 抹掉 "error"
+    last_error: None,         // ← 抹掉原始错误
+    interrupted: false,       // ← 抹掉中断标记
+})
+```
+
+紧邻的 stream 路径（`send_message_stream` 收尾处）三个字段**全是透传**。同步路径这三行是历史遗留，自动化走的正是同步路径。
+
+### 连带影响：原方案的重试机制无法实现
+
+原方案第 3 条要求"派发失败按 transient 退避重试"。但如果按偏差 1 的原计划（只判错误变体），实施时会发现：
+
+- `send_message` 的 `Err` 只有三个出口（`resolve_effective_model` / `resolve_provider` / `agent.run()`），前两个都是 `Config`（permanent）；
+- `LlmApi` / `Gateway` / `RateLimited` / `Timeout` **在自动化路径上永不可达**——它们全在 `call_llm_with_retry` 内部，被抹成 `Ok` 了。
+
+**即：只按错误变体分类，`failed_to_dispatch` 永远不会被记录，`MAX_DISPATCH_ATTEMPTS` 和 `backoff_delay_ms` 全是死代码。** 表面"实现完成"，实际一行都不会执行。
+
+### 解法：用轮次数替代错误变体作为判据
+
+`AgentLoop` 在**每次 LLM 调用之前**自增 `state.total_turns`（`run_loop.rs`，`state.total_turns += 1`）。该值已写入 `AgentResult`，只是没透出到 `AgentReply`。补一个字段即可：
+
+- `total_turns == 1` → 首轮调用就失败 → **没有任何工具执行过** → 可安全重试
+- `total_turns >= 2` → 至少有一个响应回来过 → 工具可能已执行 → **绝不重试**
+
+据此新增 `hermix_automation::dispatch_outcome`，输入 `AgentReply` 输出 `Succeeded` / `Failed{retryable}` / `DispatchFailed{retryable}`。瞬时性只能从 `last_error` 文本判（`is_transient_error_text`），**刻意保守**：宁判永久（漏一次重试）也不判瞬时（重放带副作用的 run）。
+
+**这是个应该早点想到的判据**：整个方案纠结"错误变体够不够细"，而真正的信息（跑了几轮）一直在手边，只是没被暴露出来。
+
+## 实施进度
+
+| 实施要点 | 状态 | 落点 |
+|---|---|---|
+| 1 同步 claim | ✅ | `scheduler.rs::tick_once_at` 同步 `try_begin_run` 后才 `trigger`；`record_run_start` 删除 |
+| 2 启动收割 | ✅ | `reap_abandoned_runs`，`state.rs` 在 scheduler 启动**之前**调用 |
+| 3 单飞状态查重 | ✅ | `try_begin_run` 内 `count_in_flight`，有测试逐状态对比枚举判据与 SQL |
+| 4 退避不动 `last_run_at` | ✅ | `defer_for_retry`；`should_fire` 抽成纯函数 `is_due` 以便钉边界 |
+| 5 手动触发共用 claim | ✅ | `trigger_automation_manually` 走同一个 `try_begin_run` |
+| 6 回退 session_id 带 run_id | ✅ | `automation:{id}:{run_id}`；有锚点时用 `anchor_session_id`；**前端会话列表同步过滤 `automation:` 前缀**（`App.tsx` 的 `chatSessions`，与既有的 `!s.workbench_id` 同一模式：列表出口过滤、按 id 查全量） |
+| Decision 1 结构化 scheduleRule | ❌ 未做 | 独立 UI 工作量，本批明确不做 |
+| Decision 2 状态机 | ✅ | `RunStatus` 七态 + 旧字面量兼容（`running`→`Dispatched`、`success`→`Succeeded`） |
+| Decision 3 退避重试 | ✅ | `MAX_DISPATCH_ATTEMPTS=3`、`backoff_delay_ms`（30s 起指数、10min 封顶） |
+
+### 实施中额外修掉的既有缺陷
+
+- **执行层失败被记成"成功"**（见上节，最高优先级）。
+- **手动触发的 runId 是恒定值**：`compose_run_id` 对 `scheduled_at = None` 返回 `{automation}:manual`，**不含任何区分信息**。`run_exists` 去重因此对手动触发完全失效——同一天第二次点"立即运行"被当作重复槽位静默丢弃，点了按钮什么都没发生也没有报错。
+  手动触发**没有槽位可折叠**：每次点击都是独立意图。改为 `None` 时也带墙钟时间戳，单飞（而非去重键）才是那条路径的防线。
+  *这个 bug 是被新写的 reap 测试顺带暴露的*——它断言"收割后能再手动触发"却失败，而失败原因不是收割，是去重键。
+- **自动化 Task 永远停在 `Pending`**：`execute_automation_run` 建 Task 后立即跑 agent，run 失败时 Task 仍是 `Pending`；而 `TaskService::fail` 只接受 `Planning | InProgress` → 迁移被拒 → 调用方只 `warn!` → 错误被吞、UI 上 Task 永远"未完成"，看不出这次运行失败了。
+  改为接受 `Pending`，并同步放开 `validate_transition` 的 `Pending → Failed`（否则 `fail()` 与 `transition()` 两套判定分叉）。
+  *原代码就有此问题*（`result.is_ok() ? complete : fail`），只是没人写过"run 失败时 Task 状态是什么"的测试。
+  顺带说明：`Pending → Completed` 一直在迁移表里，所以成功路径从没暴露过这个问题。
+- **`should_fire` 抽成纯函数 `is_due` + 注入时钟 `tick_once_at`**。原测试用"设未来几十毫秒 + sleep"验证退避是否到期，实测**每次仓储调用都 `open_with_wal`（新连接 + PRAGMA），几十毫秒的窗口在慢盘上会被写操作整个吃掉**——测的是机器快慢，不是退避逻辑。注入时钟后零 sleep。
+- **`AgentReply` 新增 `total_turns`**。
+- **`skipped` 不占单飞槽**：否则一次被拒的 claim 会连带挡住下一次正常触发。
+- **退避分支跳过 `update_after_run`**：它会重算 `next_run_at` 覆盖刚设的退避时刻，还会把 `last_run_at` 推前（`is_due` 读作"这槽已跑过"）→ 重试永不触发。
+- **`skipped` 不是失败**：UI 不应标红。
+
+### 关键不变量（有测试钉住，勿改）
+
+1. **`Err(AgentError)` ⇒ 零副作用**。依赖 `run_loop.rs` 那个 `Ok(..)`。若有人改成 `Err(..)`，须同时改 `dispatch_outcome` 的判据。
+2. **`defer_for_retry` 不动 `last_run_at`**。动了重试永不触发（表现为"永远不重试"，无报错）。
+3. **`is_in_flight()` 与 SQL 谓词一致**。单飞检查与保活信号共用同一谓词，不一致会让机器永不休眠而 UI 查不出原因。
+4. **调度触发才用槽位去重**。手动触发的 runId 必须每次唯一——`{automation}:manual` 是恒定值，会让第二次点击静默失效。
+
+### 三条踩过的测试陷阱（写自动化测试时适用）
+
+1. **别用"未来几十毫秒 + sleep"验证时间窗口到期**。每次仓储调用都开连接 + PRAGMA，窗口会被写操作吃掉。注入时钟（`tick_once_at`）+ 判据抽成纯函数（`is_due`）。
+2. **别靠数据库摆位造对照组**。曾试着用 `defer_for_retry` + `update_after_run` 的调用顺序造"last_run_at 被改动"，失败——`update_after_run` 内部会重算 `next_run_at`，顺序颠倒就失效。判据逻辑抽成纯函数后对照组直接喂数字。
+3. **"新写的测试失败"要先分清是实现错还是断言错**。本轮两次失败：一次是实现错（Task 迁移规则），一次是断言错（`count_active_runs` 我没查、run_id 去重是另一个原因）。**先追根因再改代码**——把 reap 测试直接改松就会掩盖真 bug。
+
 ## Alternatives considered
 
 - **继续只用 cron 字符串** — 否决：cron 无法自然表达"每月第 3 个周二""工作日跳过节假日"，且中文"每工作日 9 点"要用户手算 5 段。
@@ -128,6 +249,6 @@ ScheduleType::Recurring => match state.next_run_at {
 
 - **部分唯一索引**（`UNIQUE(automation_id) WHERE status IN ('claimed','dispatched')`）：本方案落地、存量脏数据清理完毕后，把单飞保证从应用层查重下沉到数据库层，届时可移除 `try_begin_run` 里的 SELECT。
 - **独立调度进程**：若自动化执行被拆到独立进程（`hermix-server` → 独立 worker），进程内保证失效，索引与 claim 协议必须重做。
-- **`maxRuns` 语义**：ZCode 有 `recurring/maxRuns`（有限次），hermix 的 `max_runs` 已于 `fa131ed7` 落地但语义是否与 run 表的 `skipped` 终态对齐，**需实施时核实**。
+- **`maxRuns` 语义**：ZCode 有 `recurring/maxRuns`（有限次）。**hermix 的 `hermix_automation::Automation` 上没有这一列**——`max_runs` 只存在于 dashboard 的 `AutomationTask` 上，两套模型字段不通用（见偏差 3）。若要支持，先给 `automations` 表加列，并明确它与 `skipped` 终态的关系。
 - **重试策略可配置**：若不同自动化的失败容忍度差异大（有的能重试 10 次、有的必须一次过），把退避参数从常量提到 `automations` 表的列。当前不做——六步阶梯第 1 条。
 - **时钟跳变的显式处理**：runId 契约（`automationId + trigger + scheduledAt`）理论上能覆盖时钟回跳，但具体行为（回跳后应补跑还是跳过）需产品定。**当前方案未展开这一条。**
