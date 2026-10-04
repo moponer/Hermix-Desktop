@@ -171,7 +171,7 @@ export function ModelListTab() {
         setTestNote((n) => ({
           ...n,
           [row.id]: r.ok
-            ? `连接正常 · ${r.latency_ms} ms${r.model_found === false ? " · 该模型不在端点 /models 列表中" : ""}`
+            ? `连接正常 · ${r.latency_ms} ms${r.model_found === false ? " · 厂商 /v1/models 目录未列此模型（不影响使用）" : ""}`
             : `失败：${inlineErrorText(r)}`,
         }));
       } else {

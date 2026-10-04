@@ -145,20 +145,35 @@ export function ModelAddDialog({ onClose, onSaved, editing }: Props) {
         if (apiKey.trim()) {
           await api.setEnvVar(choice.def.keyEnvVar, apiKey.trim());
         }
-        // 模型名已预填时确保它在启用清单里（编辑内置模型 = 保住它可用）。
-        if (modelId.trim()) {
+        // 改名 = 把清单里的旧条目**换成**新条目，不是再加一条。
+        //
+        // 此前的实现只做「不在就追加」：改完名清单里会同时挂着新旧两条，
+        // 而 `onSaved → load()` 拉回来的又是权威清单，用户看到的是"名字没
+        // 变、旁边多了一个"这种最难自查的现象。
+        //
+        // 默认模型必须原样带回。`saveModelList(models, null)` 里的 null 到了
+        // 后端是 `default_model: None`（update_model_list 直接写进 config.yaml），
+        // 也就是「改个模型名顺手把默认模型清了」—— 而默认模型此刻可能正是
+        // 被改名的这一条，那就得把它迁到新 id 上。
+        const newId = modelId.trim();
+        if (newId) {
           const cur = await api.getModelList();
-          const id = `${choice.def.id}:${modelId.trim()}`;
-          const existing = (cur?.models ?? []).map((m) => ({
+          const isNew = (m: { provider_id: string; model_id: string }) =>
+            `${m.provider_id}:${m.model_id}` === `${choice.def.id}:${newId}`;
+          const oldModel = editing?.modelId;
+          const oldId = oldModel ? `${choice.def.id}:${oldModel}` : null;
+          let enabled = (cur?.models ?? []).map((m) => ({
             provider_id: m.provider_id,
             model_id: m.model_id,
           }));
-          if (!existing.some((m) => `${m.provider_id}:${m.model_id}` === id)) {
-            await api.saveModelList(
-              [...existing, { provider_id: choice.def.id, model_id: modelId.trim() }],
-              null,
-            );
+          if (oldId && oldModel !== newId) {
+            enabled = enabled.filter((m) => `${m.provider_id}:${m.model_id}` !== oldId);
           }
+          if (!enabled.some(isNew)) {
+            enabled.push({ provider_id: choice.def.id, model_id: newId });
+          }
+          const def = cur?.default_model ?? null;
+          await api.saveModelList(enabled, def && def === oldId ? `${choice.def.id}:${newId}` : def);
         }
       } else {
         // 自定义：POST /api/custom-providers 是 upsert（entry().or_insert 后
@@ -185,7 +200,6 @@ export function ModelAddDialog({ onClose, onSaved, editing }: Props) {
       setSaving(false);
     }
   }, [choice, apiKey, displayName, effectiveBaseUrl, modelId, editing, onSaved, onClose]);
-
   return createPortal(
     <div
       className="fixed inset-0 z-[110] flex items-center justify-center"
@@ -395,10 +409,19 @@ function Cap({ label, checked, onChange }: { label: string; checked: boolean; on
 function TestResult({ r }: { r: api.InlineTestResponse }) {
   if (r.ok) {
     return (
-      <span className="flex items-center gap-1.5 text-xs text-green-500">
-        <CheckCircle2 className="icon-sm" />
+      <span className="flex flex-wrap items-center gap-1.5 text-xs text-text-secondary">
+        <CheckCircle2 className="icon-sm shrink-0 text-green-500" />
         连接成功{r.latency_ms > 0 ? ` · ${r.latency_ms}ms` : ""}
-        {r.model_found === false && " · 但列表里没找到这个模型名"}
+        {r.model_found === false && (
+          /* 「模型名」指的是**厂商 /v1/models 那份目录**，不是本应用的模型清单
+             —— 原措辞「但列表里没找到这个模型名」指代不清，读起来像在说
+             「你配的这个模型不存在」。这里点명来源，并说清它不影响使用：
+             不少厂商的 /v1/models 只列了一部分模型，预览版常常不在其中，
+             而实际调用仍能成功。 */
+          <span className="text-text-faint">
+            （厂商 /v1/models 目录里没列这个模型名，不影响使用）
+          </span>
+        )}
       </span>
     );
   }
