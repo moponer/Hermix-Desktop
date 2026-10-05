@@ -24,7 +24,43 @@ pub struct CuaBrowserBackend {
 
 impl CuaBrowserBackend {
     /// Launch a new isolated Chrome instance.
-    pub fn launch() -> std::result::Result<Self, ToolError> {
+    pub async fn launch() -> std::result::Result<Self, ToolError> {
+        spawn_blocking(Self::launch_blocking)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("spawn_blocking: {e}")))?
+    }
+
+    /// Connect to an already-running Chrome.
+    pub async fn attach(ws_url: &str) -> std::result::Result<Self, ToolError> {
+        let url = ws_url.to_string();
+        spawn_blocking(move || Self::attach_blocking(&url))
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("spawn_blocking: {e}")))?
+    }
+
+    /// Ensure a browser is running (lazy bootstrap).
+    /// If no Chrome is running on the default CDP port (9222),
+    /// spawns one.
+    pub async fn ensure_running() -> std::result::Result<Self, ToolError> {
+        spawn_blocking(Self::ensure_running_blocking)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("spawn_blocking: {e}")))?
+    }
+
+    // ── Blocking bodies ────────────────────────────────────────────
+    //
+    // `BrowserHandle::launch` / `::attach` reach `CdpClient::connect`,
+    // which builds a fresh tokio runtime and calls `block_on` on it
+    // (`hermix-cua/src/browser/cdp.rs:78,84`). Invoking that from a
+    // thread already driving a runtime panics with "Cannot start a
+    // runtime from within a runtime" — the crash recorded in the
+    // 2026-10-05 toolchain report. These three constructors were the
+    // only entries in this impl that skipped `spawn_blocking`; every
+    // `BrowserBackend` method below already used it. Moving the boundary
+    // up to the constructors means no caller can get this wrong by
+    // forgetting to wrap, which is exactly how the bug survived review.
+
+    fn launch_blocking() -> std::result::Result<Self, ToolError> {
         let handle = BrowserHandle::launch(LaunchOptions::default())
             .map_err(|e| ToolError::ExecutionFailed(format!("launch Chrome: {}", e)))?;
         let target_id = handle.new_tab("about:blank")
@@ -37,8 +73,7 @@ impl CuaBrowserBackend {
         })
     }
 
-    /// Connect to an already-running Chrome.
-    pub fn attach(ws_url: &str) -> std::result::Result<Self, ToolError> {
+    fn attach_blocking(ws_url: &str) -> std::result::Result<Self, ToolError> {
         let handle = BrowserHandle::attach(ws_url)
             .map_err(|e| ToolError::ExecutionFailed(format!("attach to Chrome: {}", e)))?;
         // Try to find an existing tab, or create one.
@@ -61,15 +96,11 @@ impl CuaBrowserBackend {
         })
     }
 
-    /// Ensure a browser is running (lazy bootstrap).
-    /// If no Chrome is running on the default CDP port (9222),
-    /// spawns one.
-    /// This is a **sync** function (blocks on Chrome startup).
-    pub fn ensure_running() -> std::result::Result<Self, ToolError> {
+    fn ensure_running_blocking() -> std::result::Result<Self, ToolError> {
         // Try to attach first.
-        match Self::attach(&format!("ws://127.0.0.1:9222/devtools/browser")) {
+        match Self::attach_blocking("ws://127.0.0.1:9222/devtools/browser") {
             Ok(backend) => Ok(backend),
-            Err(_) => Self::launch(),
+            Err(_) => Self::launch_blocking(),
         }
     }
 }

@@ -93,7 +93,12 @@ zero-context-overhead 模型：主上下文**永不**包含图片 base64，剥�
   红线（2500 行）仍有余量，但方向类 block 的边际收益递减，后续新增前应先度量。
 - **报告本身不可作为修复清单。** 12 条中仅约一半的根因指向正确代码位置。
   任何无源码访问环境产出的缺陷报告都应先验证再实施。
-- **报告提到的 BUG-01（嵌套 runtime panic）未修。** 机制真实但触发器错误：
-  `cua_screenshot` 走 `spawn_blocking` + `capture::screenshot`，不碰 CDP；
-  唯一未包 `spawn_blocking` 的三个调用点（`cua_backend.rs:28/42/68`）无调用者，
-  是死代码中的潜伏陷阱而非已观测崩溃。属独立议题。
+- **报告提到的 BUG-01（嵌套 runtime panic）已按审计后的定位修。** 报告的触发器
+  是错的：`cua_screenshot` 走 `spawn_blocking` + `capture::screenshot`，不碰 CDP。
+  真正会炸的是 `CuaBrowserBackend` 的三个构造函数——它们是该 impl 里唯一没走
+  `spawn_blocking` 的入口，而 `BrowserHandle::launch/attach` 底层要
+  `Runtime::new().block_on()`。已全部改成 `async fn`，同步体下沉为
+  `*_blocking` 私有函数。**该 backend 跨 crate 零调用者**，是孤立的第四套
+  浏览器实现（真正在用的是 `backends::browser::SessionedBrowserBackend`），
+  本可整块删除，但它是 `pub mod`，删除属破坏性 API 变更，未获授权，故只改
+  不删。
