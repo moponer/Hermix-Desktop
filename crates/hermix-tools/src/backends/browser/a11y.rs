@@ -236,7 +236,6 @@ pub(crate) fn compact_a11y_yaml(yaml: &str) -> String {
                 let parent_indent = count_indent(lines[j]);
                 if parent_indent < indent {
                     keep[j] = true;
-                    indent_check(indent, parent_indent);
                 }
             }
         }
@@ -253,9 +252,6 @@ pub(crate) fn compact_a11y_yaml(yaml: &str) -> String {
 fn count_indent(line: &str) -> usize {
     line.chars().take_while(|c| *c == ' ').count()
 }
-
-#[allow(dead_code)]
-fn indent_check(_child: usize, _parent: usize) {}
 
 /// Build a JS expression that returns `{matched: bool, count, first}` after
 /// AND-combining the selector, optional state predicate, optional url_glob,

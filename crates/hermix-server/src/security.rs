@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 use axum::body::Body;
 use axum::extract::ConnectInfo;
 use axum::http::header::AUTHORIZATION;
-use axum::http::{HeaderMap, Request, Response, StatusCode};
+use axum::http::{Request, Response, StatusCode};
 use axum::middleware::Next;
 use axum::response::IntoResponse;
 use hermix_core::Origin;
@@ -126,102 +126,6 @@ impl AuthFailLockout {
     }
 }
 
-/// Guards policy lifecycle HTTP APIs (admin token + actor allowlist).
-#[derive(Clone, Default)]
-pub struct PolicyGuardConfig {
-    /// When set, mutating routes require `X-Hermes-Policy-Admin` matching this value.
-    pub admin_key: Option<Arc<str>>,
-    /// When true and `admin_key` is missing, policy mutations return 503.
-    pub require_admin: bool,
-    /// When non-empty, JSON `actor` must be one of these (trimmed, exact match).
-    pub allowed_actors: Vec<String>,
-    /// When true, `GET /v1/policy/export` requires a valid `X-Hermes-Policy-Admin` header.
-    pub export_require_admin: bool,
-}
-
-impl PolicyGuardConfig {
-    pub fn from_env() -> Self {
-        let admin_key = env_compat("HERMIX_POLICY_ADMIN_TOKEN", "HERMES_POLICY_ADMIN_TOKEN")
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .or_else(|| {
-                env_compat("HERMIX_HTTP_POLICY_ADMIN_KEY", "HERMES_HTTP_POLICY_ADMIN_KEY")
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-            })
-            .map(|s| Arc::from(s.into_boxed_str()));
-        let require_admin = env_compat("HERMIX_HTTP_POLICY_REQUIRE_ADMIN", "HERMES_HTTP_POLICY_REQUIRE_ADMIN")
-            .as_deref()
-            == Some("1");
-        let export_require_admin = env_compat("HERMIX_HTTP_POLICY_EXPORT_REQUIRE_ADMIN", "HERMES_HTTP_POLICY_EXPORT_REQUIRE_ADMIN")
-            .as_deref()
-            == Some("1");
-        let allowed_actors: Vec<String> = env_compat("HERMIX_HTTP_POLICY_ALLOWED_ACTORS", "HERMES_HTTP_POLICY_ALLOWED_ACTORS")
-            .map(|s| {
-                s.split(',')
-                    .map(|t| t.trim().to_string())
-                    .filter(|t| !t.is_empty())
-                    .collect()
-            })
-            .unwrap_or_default();
-        Self {
-            admin_key,
-            require_admin,
-            allowed_actors,
-            export_require_admin,
-        }
-    }
-
-    /// Validate `actor` for policy mutation bodies.
-    pub fn check_actor(&self, actor: &str) -> Result<(), &'static str> {
-        let actor = actor.trim();
-        if actor.is_empty() {
-            return Err("actor must be non-empty");
-        }
-        if !self.allowed_actors.is_empty() && !self.allowed_actors.iter().any(|a| a == actor) {
-            return Err("actor not in HERMES_HTTP_POLICY_ALLOWED_ACTORS");
-        }
-        Ok(())
-    }
-
-    /// Require admin header for mutating policy routes.
-    pub fn check_mutation_admin(&self, headers: &HeaderMap) -> Result<(), &'static str> {
-        if self.require_admin && self.admin_key.is_none() {
-            return Err("HERMES_HTTP_POLICY_REQUIRE_ADMIN is set but HERMES_POLICY_ADMIN_TOKEN (or HERMES_HTTP_POLICY_ADMIN_KEY) is empty");
-        }
-        if let Some(ref key) = self.admin_key {
-            let got = header_policy_admin(headers);
-            if got != Some(key.as_ref()) {
-                return Err("missing or invalid X-Hermes-Policy-Admin");
-            }
-        }
-        Ok(())
-    }
-
-    /// Optional admin for read-only export.
-    pub fn check_export_admin(&self, headers: &HeaderMap) -> Result<(), &'static str> {
-        if !self.export_require_admin {
-            return Ok(());
-        }
-        let Some(ref key) = self.admin_key else {
-            return Err("HERMES_HTTP_POLICY_EXPORT_REQUIRE_ADMIN is set but HERMES_POLICY_ADMIN_TOKEN (or HERMES_HTTP_POLICY_ADMIN_KEY) is empty");
-        };
-        let got = header_policy_admin(headers);
-        if got != Some(key.as_ref()) {
-            return Err("missing or invalid X-Hermes-Policy-Admin");
-        }
-        Ok(())
-    }
-}
-
-fn header_policy_admin(headers: &HeaderMap) -> Option<&str> {
-    const NAME: &str = "x-hermes-policy-admin";
-    headers
-        .get(NAME)
-        .and_then(|v| v.to_str().ok())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-}
 
 impl HttpSecurity {
     pub fn from_env() -> Self {
@@ -421,29 +325,10 @@ fn parse_device_scopes(scopes: &str) -> std::collections::HashSet<Capability> {
 /// 的，能力位未配即降为 `Denied`。非 PairedDevice 来源（Local /
 /// Unpaired）无能力位维度，直接透传矩阵判定（Local 矩阵全 Allowed、
 /// Unpaired 矩阵全 Denied，不受能力位影响）。
-fn effective_decision_for_paired(
-    origin: &Origin,
-    cap: Capability,
-    device_scopes: Option<&crate::pairing::PairedDevice>,
-) -> Decision {
-    let matrix = origin.may(cap);
-    let Some(device) = device_scopes else {
-        return matrix;
-    };
-    if matrix == Decision::Denied {
-        return Decision::Denied;
-    }
-    if parse_device_scopes(&device.scopes).contains(&cap) {
-        matrix
-    } else {
-        Decision::Denied
-    }
-}
-
 /// 端点级能力位判定（§5.5 第 5 层 HTTP 端点消费点）。直接吃
 /// `request_guard` 装进 Extension 的 `HashSet<Capability>`（设备能力
 /// 位集），而非 `PairedDevice` 字符串——省掉一次 `parse_device_scopes`。
-/// 语义同 [`effective_decision_for_paired`]：矩阵 `Denied` 保持
+/// 语义同上：矩阵 `Denied` 保持
 /// `Denied`（纵深防御）；矩阵 `Allowed`/`NeedsLocalConfirmation` 的，
 /// 设备能力位未配该 Capability 即降为 `Denied`；非 PairedDevice
 /// 来源（`device_scopes = None`）直接透传矩阵判定。
@@ -672,7 +557,6 @@ pub async fn request_guard(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::http::HeaderValue;
 
     #[test]
     fn parse_allowed_ips_trims() {
@@ -739,34 +623,6 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn policy_guard_admin_header() {
-        let mut p = PolicyGuardConfig::default();
-        p.admin_key = Some(Arc::from("secret-token"));
-        let mut ok = HeaderMap::new();
-        ok.insert(
-            axum::http::HeaderName::from_static("x-hermes-policy-admin"),
-            HeaderValue::from_static("secret-token"),
-        );
-        assert!(p.check_mutation_admin(&ok).is_ok());
-
-        let bad = HeaderMap::new();
-        assert!(p.check_mutation_admin(&bad).is_err());
-    }
-
-    #[test]
-    fn policy_guard_actor_allowlist() {
-        let p = PolicyGuardConfig {
-            admin_key: None,
-            require_admin: false,
-            allowed_actors: vec!["ops".to_string(), "trainer".to_string()],
-            export_require_admin: false,
-        };
-        assert!(p.check_actor("ops").is_ok());
-        assert!(p.check_actor("trainer").is_ok());
-        assert!(p.check_actor("hacker").is_err());
-    }
-
     /// §5.5 第 5 层：IP→Origin 推导。
     /// 当前简化版（设备配对流程未建）：loopback = Local，其他远程 = Unpaired。
     #[test]
@@ -811,15 +667,6 @@ mod tests {
     /// 的，能力位未配即降为 `Denied`。
     #[test]
     fn effective_decision_intersects_matrix_and_scopes() {
-        use crate::pairing::PairedDevice;
-        let dev = |scopes: &str| PairedDevice {
-            device_id: "dev-x".into(),
-            device_name: "x".into(),
-            scopes: scopes.into(),
-            issued_at: 0,
-            last_seen_at: None,
-            revoked_at: None,
-        };
         let origin = Origin::PairedDevice {
             device_id: "dev-x".into(),
         };
@@ -827,47 +674,47 @@ mod tests {
         // 最小集 ["chat"]：Chat 放行，DangerousTool 仍走矩阵的
         // NeedsLocalConfirmation（矩阵给"最多能做什么"，能力位给
         // "实际被授予什么"——DangerousTool 在最小集里未配，被降为 Denied）。
-        let chat_only = dev(r#"["chat"]"#);
+        let chat_only = parse_device_scopes(r#"["chat"]"#);
         assert_eq!(
-            effective_decision_for_paired(&origin, Capability::Chat, Some(&chat_only)),
+            effective_decision_with_scopes(&origin, Capability::Chat, Some(&chat_only)),
             Decision::Allowed,
         );
         assert_eq!(
-            effective_decision_for_paired(&origin, Capability::DangerousTool, Some(&chat_only)),
+            effective_decision_with_scopes(&origin, Capability::DangerousTool, Some(&chat_only)),
             Decision::Denied,
             "DangerousTool 未在最小集能力位中 → 降为 Denied"
         );
 
         // 矩阵 Denied 的（ConfigMutation）即使能力位误配也保持 Denied。
-        let mis_configured = dev(r#"["configmutation","chat"]"#);
+        let mis_configured = parse_device_scopes(r#"["configmutation","chat"]"#);
         assert_eq!(
-            effective_decision_for_paired(&origin, Capability::ConfigMutation, Some(&mis_configured)),
+            effective_decision_with_scopes(&origin, Capability::ConfigMutation, Some(&mis_configured)),
             Decision::Denied,
             "矩阵 Denied 的能力位误配不能提权"
         );
 
         // DangerousTool 在能力位中配了：矩阵给 NeedsLocalConfirmation，
         // 能力位放行后保持矩阵判定（不强行升 Allowed）。
-        let with_dangerous = dev(r#"["chat","dangeroustool"]"#);
+        let with_dangerous = parse_device_scopes(r#"["chat","dangeroustool"]"#);
         assert_eq!(
-            effective_decision_for_paired(&origin, Capability::DangerousTool, Some(&with_dangerous)),
+            effective_decision_with_scopes(&origin, Capability::DangerousTool, Some(&with_dangerous)),
             Decision::NeedsLocalConfirmation,
         );
 
         // 占位 '[]'：全拒绝（能力位未配任何项）。
-        let empty = dev("[]");
+        let empty = parse_device_scopes("[]");
         assert_eq!(
-            effective_decision_for_paired(&origin, Capability::Chat, Some(&empty)),
+            effective_decision_with_scopes(&origin, Capability::Chat, Some(&empty)),
             Decision::Denied,
         );
 
         // 非设备来源（Local / Unpaired）无能力位维度，透传矩阵判定。
         assert_eq!(
-            effective_decision_for_paired(&Origin::Local, Capability::Chat, None),
+            effective_decision_with_scopes(&Origin::Local, Capability::Chat, None),
             Decision::Allowed,
         );
         assert_eq!(
-            effective_decision_for_paired(&Origin::Unpaired, Capability::Chat, None),
+            effective_decision_with_scopes(&Origin::Unpaired, Capability::Chat, None),
             Decision::Denied,
         );
     }

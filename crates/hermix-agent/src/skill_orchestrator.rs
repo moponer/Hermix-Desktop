@@ -442,38 +442,6 @@ impl SkillOrchestrator {
             }
     }
 
-    /// Recursively scan a directory for SKILL.md files.
-    /// NOTE: superseded by `scan_directory_with_health` / `scan_directory_inner`
-    /// but retained as a simpler fallback for future use.
-    #[allow(dead_code)]
-    fn scan_directory(&mut self, dir: &Path, seen_names: &mut std::collections::HashSet<String>) {
-        let entries = match std::fs::read_dir(dir) {
-            Ok(e) => e,
-            Err(_) => return,
-        };
-
-        for entry in entries.flatten() {
-            let path = entry.path();
-
-            // Skip hidden directories
-            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                if name.starts_with('.') {
-                    continue;
-                }
-            }
-
-            if path.is_dir() {
-                // Check for SKILL.md in this directory
-                let skill_md = path.join("SKILL.md");
-                if skill_md.exists() {
-                    self.register_skill(&skill_md, seen_names);
-                }
-                // Also recurse into subdirectories
-                self.scan_directory(&path, seen_names);
-            }
-        }
-    }
-
     /// Register a single SKILL.md file.
     fn register_skill(
         &mut self,

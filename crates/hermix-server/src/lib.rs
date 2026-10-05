@@ -20,7 +20,6 @@ mod metrics;
 pub mod test_state;
 
 pub use security::parse_allowed_ips;
-pub use security::PolicyGuardConfig;
 
 //Re-export orchestration event bus types
 pub use orchestration_bus::{

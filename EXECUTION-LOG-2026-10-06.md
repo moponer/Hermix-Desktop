@@ -58,6 +58,17 @@
 - **验证**：hermix-config check 0 错误 0 警告；config 118 + pyyaml 12 全绿；workspace --all-targets 0 错误。
 - **提交**：`refactor(audit-batch2-7)`。
 
+### Step 4（02:40）— A 线批次 3（Rust 第一组）完成 ✅
+- convergence_detector：`apply_domain_max_stall` / `reset()` 两死方法删除，连同锻炼它们的 3 个测试（test_reset / test_apply_domain_max_stall×2 / test_domain_adjusted_threshold_takes_effect）。
+- skill_orchestrator：`scan_directory`（被 scan_directory_with_health 取代的旧递归版）删除。
+- a11y：`indent_check` 空函数删除 **连同其活调用点**（调用空函数本身也是死重量——审计漏了调用点，已补删）。
+- vendor：`_typecheck_ensure_hermix_plugin_uses_path` 占位删除。
+- security：`PolicyGuardConfig` 整组（struct+impl+from_env+check_*，生产零引用）+ `header_policy_admin` helper + lib.rs 再导出删除；`effective_decision_for_paired`（pub 版 `effective_decision_with_scopes` 的私有孪生）删除，**其测试改打 pub 版**——能力位∩矩阵语义的唯一覆盖由此保留（Local/Unpaired 两断言修正为各自 Origin，测试曾因此红过一次已修）。
+- 顺手修：local_agent_service 重复 `#[test]` 属性（此前插入测试时的笔误）、pairing `code` 未使用警告（块尾改回 payload）。
+- **验证**：server 290 全绿、tools 769 全绿、零警告。
+- **提交**：`refactor(audit-batch3-rust1)`。
+
 ### 下一步
-- Step 4 = 批次 3 死代码清除（拆 Rust / 前端两个 PR）；
-- 批次 2-5（审批 family → signature 级）与 2-6（traversal 硬拒，需场景枚举）排在批次 3 之后。
+- Step 5 = 批次 3 Rust 第二组：DirRoute::MultiStepTask/HadAnyToolUse 死路由 + terminal ProcessHandler/ProcessBackend；
+- Step 6 = 批次 3 前端 PR（24 死导出）；
+- Step 7 = 批次 2-5（审批 family → signature 级）。

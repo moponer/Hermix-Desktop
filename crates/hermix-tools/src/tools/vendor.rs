@@ -414,6 +414,3 @@ fn walk(base: &Path, dir: &Path, out: &mut Vec<String>) -> std::io::Result<()> {
     }
     Ok(())
 }
-
-#[allow(dead_code)]
-fn _typecheck_ensure_hermix_plugin_uses_path(_p: &Path) {}

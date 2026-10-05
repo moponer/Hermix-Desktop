@@ -502,7 +502,7 @@ impl PairingSessions {
         // 的会话覆盖前一个，前一个用户的配对会话被静默顶掉（TOCTOU，
         // 体检批次 1-3）。best_effort_lan_ip 留在锁内属有意为之：配对是
         // 人工节奏的操作，网卡枚举的亚毫秒争用可忽略。
-        let (code, payload) = {
+        let payload = {
             let mut inner = self.inner.lock().expect("pairing sessions lock");
             let code = Self::mint_code(&mut inner);
             let host = tls::best_effort_lan_ip()
@@ -538,7 +538,7 @@ impl PairingSessions {
                     payload: Some(payload.clone()),
                 },
             );
-            (code, payload)
+            payload
         };
         Ok(payload)
     }

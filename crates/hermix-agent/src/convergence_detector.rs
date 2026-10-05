@@ -167,17 +167,6 @@ impl ConvergenceDetector {
     /// - Code: 5 (compile-test cycle is short)
     /// - Research: 7 (multi-source gathering takes longer)
     /// - Write: 4 (writing should produce visible text quickly)
-    /// - Operate: 3 (file ops should be fast)
-    /// - Chat: 2 (no tools expected)
-    /// (原注释称由 `ModeComposition::preset.max_stall_turns` 每 turn 注入——
-    ///  那个模块与该字段已随 2026-09-29 死代码清理删除；本检测器现按构造
-    ///  参数使用，调用方自行传入阈值。)
-    #[allow(dead_code)]
-    pub(crate) fn apply_domain_max_stall(&mut self, max_stall_turns: u32) {
-        if max_stall_turns > 0 {
-            self.config.max_no_progress_turns = max_stall_turns;
-        }
-    }
 
     /// Record a completed turn and check for convergence.
     /// Parameters:
@@ -336,19 +325,6 @@ impl ConvergenceDetector {
         }
 
         ConvergenceSignal::Continue
-    }
-
-    /// Reset all counters (e.g., when a new user message arrives).
-    #[allow(dead_code)]
-    pub(crate) fn reset(&mut self) {
-        self.no_progress_count = 0;
-        self.error_loop_count = 0;
-        self.per_tool_error_counts.clear();
-        self.per_tool_warned.clear();
-        self.similar_content_count = 0;
-        self.last_visible_text.clear();
-        self.no_progress_warned = false;
-        self.similar_content_warned = false;
     }
 }
 
@@ -596,21 +572,6 @@ mod tests {
     }
 
     #[test]
-    fn test_reset() {
-        let mut d = ConvergenceDetector::with_config(ConvergenceConfig {
-            max_no_progress_turns: 3,
-            ..Default::default()
-        });
-
-        d.check(false, 1, 0, "", &[], &[]);
-        d.reset();
-        d.check(false, 1, 0, "", &[], &[]);
-        assert_eq!(
-            d.check(false, 1, 0, "", &[], &[]),
-            ConvergenceSignal::Continue
-        );
-    }
-
     #[test]
     fn test_visible_text_resets_no_progress_counter() {
         let mut d = ConvergenceDetector::with_config(ConvergenceConfig {
@@ -655,41 +616,4 @@ mod tests {
         assert!(matches!(signal, ConvergenceSignal::Warn { .. }));
     }
 
-    // ── Domain Mode integration tests ──────────────────────────────
-
-    #[test]
-    fn test_apply_domain_max_stall_adjusts_threshold() {
-        let mut d = ConvergenceDetector::new();
-        // Default is 15
-        assert_eq!(d.config.max_no_progress_turns, 15);
-        // Apply Code domain (max_stall_turns = 5)
-        d.apply_domain_max_stall(5);
-        assert_eq!(d.config.max_no_progress_turns, 5);
-    }
-
-    #[test]
-    fn test_apply_domain_max_stall_zero_is_noop() {
-        let mut d = ConvergenceDetector::new();
-        d.apply_domain_max_stall(0);
-        assert_eq!(d.config.max_no_progress_turns, 15); // unchanged
-    }
-
-    #[test]
-    fn test_domain_adjusted_threshold_takes_effect() {
-        let mut d = ConvergenceDetector::new();
-        // Apply Operate domain (max_stall_turns = 3)
-        d.apply_domain_max_stall(3);
-
-        // 3 no-progress turns should now trigger a warning
-        assert_eq!(d.check(false, 1, 0, "", &[], &[]), ConvergenceSignal::Continue);
-        assert_eq!(d.check(false, 1, 0, "", &[], &[]), ConvergenceSignal::Continue);
-        let signal = d.check(false, 1, 0, "", &[], &[]);
-        assert!(matches!(
-            signal,
-            ConvergenceSignal::Warn {
-                reason: ConvergenceReason::NoProgressWithTools,
-                ..
-            }
-        ));
-    }
 }

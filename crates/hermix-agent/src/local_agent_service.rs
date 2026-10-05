@@ -3463,7 +3463,6 @@ mod override_tests {
     /// a full WebSocket roundtrip. These tests pin every branch so
     /// a future refactor can't silently re-introduce the bug.
     #[test]
-    #[test]
     fn attached_files_note_appended_only_when_paths_present() {
         assert_eq!(with_attached_files_note("总结", None), "总结");
         assert_eq!(with_attached_files_note("总结", Some(&[])), "总结");
