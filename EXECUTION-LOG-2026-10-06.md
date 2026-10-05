@@ -36,5 +36,20 @@
 - **验证**：`cargo check --workspace --all-targets` 0 错误；server 292 / tools 769 全绿。
 - **提交**：见 git log `fix(audit-batch1)`。
 
+### Step 2（01:30）— A 线批次 4 完成 ✅（注释/文档同步 + 择要整洁）
+- SYSTEM_PROMPT.md：已删常量（TOOL_EXECUTION_SUMMARY / STOPPING_SUMMARY）改述为 REPLY_TERMINATION_GUIDANCE 承接（4 处）；A8 行删 `TASK_FOCUS_*` 引用（已核实 directions.rs 无此常量）。
+- AGENTS.md AL-8 行：补双阈值说明（15/5 advisory WARN → 25/10 hard stop），引用改 95-121。
+- local_agent_service.rs :55 区：reasoning-only 注释改"立即 break 交外层 decide_empty_response"（对齐 session_lifecycle.rs:639 现状）。其余 3 处同文案已随其他提交消失，无需改。
+- pairing.rs PairedDevice.scopes 注释："恒 []" → 实际签发 DEFAULT_DEVICE_SCOPES=["chat"]（对齐 :158/:171）。
+- routes.rs：exec_command 两行占位注释删除。
+- agent_loop/mod.rs：RetryReasoning 所有权描述段删除（枚举保留）。
+- App.tsx：墓碑注释（62-64）删；594 粘连 `};` 拆行；三处 liveWs 失真引用改"live session channel"表述。
+- ws.rs：:75 毒锁改 into_inner fail-open；dedup 两条 info→debug（生产零输出）。
+- channels/mod.rs：install_runtime 同毒锁 fail-open。
+- memory.rs：async fn 内 5 处 std::fs → tokio::fs（675/722/749/763/809，全在 try_auto_archive 内）。
+- **跳过**（已干净/不存在）：ws.rs:12 乱码注释（现文案正常）；pairing "指纹在 /pair 页核对"旧注释（grep 无）。
+- **验证**：cargo check 0 错误；tools memory 24 / server 292 全绿；tsc 干净。
+- **提交**：`chore(audit-batch4)`。
+
 ### 下一步
-- Step 2 = 批次 4 注释/文档同步；Step 3 = 批次 2-7 config 死字段删除。
+- Step 3 = 批次 2-7 config 死字段删除（tools/tools_config + roundtrip 测试，免 alias 已验证）。

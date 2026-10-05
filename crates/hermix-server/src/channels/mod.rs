@@ -328,9 +328,8 @@ fn runtime_slot() -> &'static Mutex<Option<Arc<ImRuntime>>> {
 
 /// 启动期登记当前运行时（关机路径仍读局部变量，这里只是给后续重启留个起点）。
 pub fn install_runtime(rt: Option<Arc<ImRuntime>>) {
-    if let Ok(mut g) = runtime_slot().lock() {
-        *g = rt;
-    }
+    let mut g = runtime_slot().lock().unwrap_or_else(|e| e.into_inner());
+    *g = rt;
 }
 
 /// 凭据变化后热重启 IM 通道。旧运行时停干净再起新的。

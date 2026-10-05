@@ -672,7 +672,7 @@ impl FileMemoryBackend {
         let path = self.path_for(target)?;
         self.ensure_within_dir(&path)?;
 
-        let content = std::fs::read_to_string(&path).unwrap_or_default();
+        let content = tokio::fs::read_to_string(&path).await.unwrap_or_default();
         let entries = Self::parse_entries(&content);
 
         let delimiter_cost = ENTRY_DELIMITER.chars().count();
@@ -719,7 +719,7 @@ impl FileMemoryBackend {
         // exceeds ARCHIVE_LIMIT. Use atomic_write on the
         // rotated file too so a crash mid-rotation doesn't
         // lose the prior month's data.
-        if let Ok(existing) = std::fs::read_to_string(&archive_path) {
+        if let Ok(existing) = tokio::fs::read_to_string(&archive_path).await {
             if existing.chars().count() > ARCHIVE_LIMIT {
                 let now = chrono::Local::now();
                 let month_dir = dir.join("archive");
@@ -746,7 +746,7 @@ impl FileMemoryBackend {
                 // archive.md will just be bigger than the
                 // soft limit, which is preferable to dropping
                 // data.
-                if std::fs::rename(&archive_path, &month_file).is_ok() {
+                if tokio::fs::rename(&archive_path, &month_file).await.is_ok() {
                     tracing::info!(
                         archive = %month_file.display(),
                         prev_chars = existing.chars().count(),
@@ -760,7 +760,7 @@ impl FileMemoryBackend {
         // so a crash mid-write doesn't truncate the entire
         // archive history. The drift check sees the
         // post-rotate baseline (empty if we just rotated).
-        let existing_archive = std::fs::read_to_string(&archive_path).unwrap_or_default();
+        let existing_archive = tokio::fs::read_to_string(&archive_path).await.unwrap_or_default();
         let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
         let batch = to_archive.join(ENTRY_DELIMITER);
         let new_archive = if existing_archive.is_empty() {
@@ -806,7 +806,7 @@ impl FileMemoryBackend {
         // stale because we just wrote archive.md in the
         // meantime. Drift check against the freshest bytes
         // we can see.
-        let current_bytes = std::fs::read(&path).unwrap_or_default();
+        let current_bytes = tokio::fs::read(&path).await.unwrap_or_default();
         self.atomic_write(&path, &new_memory, &current_bytes).await?;
 
         Ok(Some((archive_path, archived_count)))

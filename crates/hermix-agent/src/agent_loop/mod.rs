@@ -401,11 +401,6 @@ pub(crate) struct FileChangeInfo {
 /// exhausted. Extracted here so the two retry loops can keep their
 /// own transport (sync vs stream-first) and call sites can `match`
 /// on the resulting action.
-/// The helper takes `r` by value because the caller is going to
-/// hand ownership of the response to either a downstream consumer
-/// (`Break(r)`) or the context (the reasoning-retry branch already
-/// pushed `r.message` onto `ctx` before returning `RetryReasoning`,
-/// so `r` itself is dropped on the caller side).
 /// `pub(crate)` so the `mod tests` block below can `match` on the
 /// variants; an impl-block-local enum would be private to the
 /// `AgentLoop` impl and unreachable from tests.

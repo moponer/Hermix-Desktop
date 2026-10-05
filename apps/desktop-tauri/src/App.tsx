@@ -59,9 +59,6 @@ import type {
   ApprovalBatchMessageMeta,
   TimelineStep,
 } from "./types";
-// expandTimelineToMessages and detectToolError imports removed —
-// tools are now tracked in the assistant's execution_timeline, not expanded
-// into separate role:tool messages.
 import { storage, STORAGE_KEYS, sessionKey } from "./utils/storageCompat";
 import { sendNotification, setKeepAwake, KEEP_AWAKE_CHANGED_EVENT } from "./desktopBridge";
 import { applyScale, readScale, UI_SCALE_EVENT } from "./utils/uiScale";
@@ -591,7 +588,8 @@ setPage("chat");
       try {
         enabled = storage.getItem(STORAGE_KEYS.keepAwake) === "true";
       } catch {}
-      setKeepAwake(enabled && (streamingSessionId !== null || activeRuns > 0));    };
+      setKeepAwake(enabled && (streamingSessionId !== null || activeRuns > 0));
+    };
     apply();
     window.addEventListener(KEEP_AWAKE_CHANGED_EVENT, apply);
     return () => window.removeEventListener(KEEP_AWAKE_CHANGED_EVENT, apply);
@@ -1401,18 +1399,17 @@ setPage("chat");
 
       // removed the App.tsx `wsSendRaw(payload)` step that used
       // to live here. It was REDUNDANT with the main WS path in
-      // `useStreamChat.ts:1175 liveWs.send(payload)`, which fires when the
-      // `resolveApproval()` Promise below settles and which already guards
-      // against stale WS references (only sends if `wsRef.current` is
-      // OPEN). Sending the same payload from BOTH paths meant server-side
+      // the stream layer re-sends `approval_response` over the live
+      // session channel, which fires when the
+      // `resolveApproval()` Promise below settles. Sending the same payload from BOTH paths meant server-side
       // `ApprovalRegistry::resolve()` got called twice — first call
       // returned `matched=true` (the real success), second call returned
       // `matched=false` (idempotent miss) and surfaced as a confusing
       // red `[APPROVAL-REST] matched=false` in the console, which users
       // read as "the approval failed".
       // We now keep only:
-      // 1. resolveApproval() → triggers the main WS path (liveWs.send
-      // with proper wsRef OPEN guard)
+      // 1. resolveApproval() → triggers the main channel path
+      // (approval_response over the live session channel)
       // 2. REST fallback 1s later → guarantees delivery even if the WS
       // silently dropped the message (the original "double insurance"
       // design intent). ApprovalRegistry::resolve() is idempotent so
@@ -1531,8 +1528,8 @@ setPage("chat");
       }
 
       // Resolve the promise immediately so the UI updates
-      // AND triggers the main WS path (useStreamChat.ts:1175 liveWs.send
-      // sends decision="denied" via the `.then(resp => ...)` chain).
+      // AND triggers the main channel path (the stream layer sends
+      // decision="denied" via the `.then(resp => ...)` chain).
       resolveApproval(requestId, "denied", undefined, note?.trim() || undefined);
     },
     [activeSessionId, resolveApproval],

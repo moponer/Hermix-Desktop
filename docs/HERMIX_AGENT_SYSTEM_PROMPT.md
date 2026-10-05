@@ -137,18 +137,18 @@ Markdown 用于**结构**而非强调。短技术 token（标签 / 路径 / 命�
 | Part A 节 | 现有常量 | DirRoute |
 |---|---|---|
 | A0 | （身份段，可并入 `format.full` 首轮或新增 `identity`） | FirstTurn |
-| A1 | 八条通用法则**未单列常量**（已分散覆盖于现有 `PLAN_BEFORE_EXECUTE_GUIDANCE` / `TOOL_USAGE_GUIDANCE` / `STOPPING_SUMMARY_GUIDANCE` 等块，避免重复 bloating） | Always |
+| A1 | 八条通用法则**未单列常量**（已分散覆盖于现有 `PLAN_BEFORE_EXECUTE_GUIDANCE` / `TOOL_USAGE_GUIDANCE` / `REPLY_TERMINATION_GUIDANCE` 等块，避免重复 bloating） | Always |
 | A2 | `THINKING_DISCIPLINE_GUIDANCE` | FirstTurn / Subsequent |
 | A3 | `TOOL_USAGE_GUIDANCE` + `TOOL_USE_ENFORCEMENT_GUIDANCE` + `TOOL_FAILURE_GUIDANCE` + `BROWSER_TOOL_SELECTION_GUIDANCE` | FirstTurn / Subsequent / Always / HasBrowser |
 | A4 | `PLAN_BEFORE_EXECUTE_GUIDANCE` | FirstTurn / Subsequent |
-| A5 | `TOOL_EXECUTION_SUMMARY_GUIDANCE` + `STOPPING_SUMMARY_GUIDANCE` + `REPLY_TERMINATION_GUIDANCE` | HadAnyToolUse / Always |
+| A5 | `REPLY_TERMINATION_GUIDANCE`（已删除的 `TOOL_EXECUTION_SUMMARY_GUIDANCE` / `STOPPING_SUMMARY_GUIDANCE` 由其承接） | HadAnyToolUse / Always |
 | A6 | `SAFETY_GUIDANCE` + `URL_SAFETY_GUIDANCE` + `GIT_SAFETY_GUIDANCE` | Always / HasGit |
 | A7 | `FORMATTING_DISCIPLINE_GUIDANCE` | FirstTurn / Subsequent |
-| A8 | `TASK_FOCUS_*` + `TODO_GUIDANCE` + `SKILLS_GUIDANCE` + `SKILL_USAGE_GUIDANCE` + `MEMORY_GUIDANCE` + `SESSION_SEARCH_GUIDANCE` + `CONTEXT_BUDGET_GUIDANCE` + `USER_STYLE_GUIDANCE` | 各 HasXxx / MultiStepTask / Always |
+| A8 | `TODO_GUIDANCE` + `SKILLS_GUIDANCE` + `SKILL_USAGE_GUIDANCE` + `MEMORY_GUIDANCE` + `SESSION_SEARCH_GUIDANCE` + `CONTEXT_BUDGET_GUIDANCE` + `USER_STYLE_GUIDANCE` | 各 HasXxx / MultiStepTask / Always |
 | A9 | `OPENAI_*` / `GOOGLE_*` / `MINIMAX_*` | ToolEnforce / 各 Family |
 | **Part B 约定** | `project.conventions`（内容由 `load_project_conventions` 从 `AGENTS.md` 的 `## Conventions`/`## 项目约定` 段抽取） | HasProjectConventions |
 
-**说明**：`OPERATING_CONSTITUTION_GUIDANCE` 在落地时**未单列**为独立常量——A1 的 8 条通用法则已分别覆盖于现有 `PLAN_BEFORE_EXECUTE_GUIDANCE` / `TOOL_USAGE_GUIDANCE` / `STOPPING_SUMMARY_GUIDANCE` / `REPLY_TERMINATION_GUIDANCE` 等 route-gated 块，单列会重复且可能冲突。真正**新增的代码**只有 `HasProjectConventions` 路由 + `load_project_conventions` 加载器（见 C2）。
+**说明**：`OPERATING_CONSTITUTION_GUIDANCE` 在落地时**未单列**为独立常量——A1 的 8 条通用法则已分别覆盖于现有 `PLAN_BEFORE_EXECUTE_GUIDANCE` / `TOOL_USAGE_GUIDANCE` / `REPLY_TERMINATION_GUIDANCE` 等 route-gated 块，单列会重复且可能冲突。真正**新增的代码**只有 `HasProjectConventions` 路由 + `load_project_conventions` 加载器（见 C2）。
 
 ## C2 Part B 注入方式（已落地）
 
@@ -169,6 +169,6 @@ Markdown 用于**结构**而非强调。短技术 token（标签 / 路径 / 命�
 - [x] `build_system_prompt` 调用点接线（`prompt_assembly.rs`）
 - [ ] 将产品方铁律中「与 agent 行为相关」的子集（nudge 双守卫 / 永远发 Done / tool_call_id 稳定）正式写入 `AGENTS.md` 的 `## Conventions` 段，使其被运行时加载（Part B 模板已就绪，待回填）。
 
-> 说明：`OPERATING_CONSTITUTION_GUIDANCE`（v2 原提「唯一实质新增」）**未单列**——其 8 条通用法则已分别覆盖于现有 `PLAN_BEFORE_EXECUTE_GUIDANCE` / `TOOL_USAGE_GUIDANCE` / `STOPPING_SUMMARY_GUIDANCE` 等 route-gated 块，单列会重复且可能冲突，故不新增独立常量。
+> 说明：`OPERATING_CONSTITUTION_GUIDANCE`（v2 原提「唯一实质新增」）**未单列**——其 8 条通用法则已分别覆盖于现有 `PLAN_BEFORE_EXECUTE_GUIDANCE` / `TOOL_USAGE_GUIDANCE` / `REPLY_TERMINATION_GUIDANCE` 等 route-gated 块，单列会重复且可能冲突，故不新增独立常量。
 
 > 本文件**不复制任何隐藏指令**，是面向 Hermix agent 的独立原创 prompt。v2 相比 v1 的核心修正：**铁律外置为数据，核心只留通用素养**。

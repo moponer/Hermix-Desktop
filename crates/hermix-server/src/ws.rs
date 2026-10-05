@@ -70,9 +70,8 @@ fn session_broadcast_get_or_create(
 /// attachment 的 forwarder 都该退出，drop sender 让所有 receiver 见
 /// `Closed` 是正确语义。
 fn session_broadcast_drop(session_id: &str) {
-    if let Ok(mut g) = session_broadcasts().lock() {
-        g.remove(session_id);
-    }
+    let mut g = session_broadcasts().lock().unwrap_or_else(|e| e.into_inner());
+    g.remove(session_id);
 }
 
 /// 取下一个进程级 seq（P4 L3，设计 §3.5）。在广播镜像发送点（
@@ -298,14 +297,14 @@ pub(crate) fn check_recent_send(state: &HttpServerState, session_id: &str, text:
         Err(_) => None,
     };
     if duplicate.is_some() {
-        tracing::info!(
+        tracing::debug!(
             session = %session_id,
             elapsed_secs = duplicate.unwrap_or(0),
             "dedup_check: DUPLICATE found"
         );
         return duplicate;
     }
-    tracing::info!(
+    tracing::debug!(
         session = %session_id,
         key = %key,
         "dedup_check: FRESH — inserted into map"

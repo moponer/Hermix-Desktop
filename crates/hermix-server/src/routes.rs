@@ -1966,8 +1966,6 @@ pub(crate) async fn exec_command(
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "default".to_string());
 
-    // For now, we'll just send the command as a regular message
-    // In a real implementation, we'd need to handle slash commands specially
     let overrides = exec_command_overrides();
     let reply = state
         .agent_service

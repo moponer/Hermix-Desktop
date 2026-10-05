@@ -110,7 +110,8 @@ pub struct DeviceRegistry {
 pub struct PairedDevice {
     pub device_id: String,
     pub device_name: String,
-    /// JSON 数组字符串。当前恒 `[]`（默认矩阵在 Origin::may 里）。
+    /// JSON 数组字符串。签发时写入最小能力集 `["chat"]`
+    /// （`DEFAULT_DEVICE_SCOPES`，默认矩阵在 Origin::may 里）。
     pub scopes: String,
     pub issued_at: i64,
     pub last_seen_at: Option<i64>,

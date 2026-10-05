@@ -56,7 +56,9 @@ use crate::session_persistence::SessionPersistence;
 /// assistant entries per user turn — one per LLM call within the
 /// turn.  If the first LLM response is judged "reasoning-only"
 /// (e.g. MiniMax M2.7 emits a body of pure `<think>...</think>` with
-/// no visible content) the loop retries; if the first call crashes
+/// no visible content) the loop breaks immediately and hands the turn to
+/// the outer `decide_empty_response` (aligned with session_lifecycle.rs);
+/// if the first call crashes
 /// mid-stream, an empty placeholder may be appended and the actual
 /// reply lands in a *second* assistant entry.  Persisting both rows
 /// makes the desktop client render N stacked bubbles for a single
