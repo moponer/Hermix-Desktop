@@ -117,13 +117,13 @@ echo ""
 #     syntax error must not be able to reach a phone. The mobile-relay
 #     decision note explicitly refuses "shipped on local build only".
 #-----------------------------------------------------------------------
-echo "=== [4b/11] hermix-m: protocol tests + H5 build ==="
+echo "=== [4b/11] hermix-m: typecheck + protocol tests + H5 build ==="
 if [ -d apps/hm ]; then
   if [ ! -d apps/hm/node_modules ]; then
     echo "  FAIL: apps/hm/node_modules missing — run 'npm install' in apps/hm"
     exit 1
   fi
-  (cd apps/hm && npm test && npm run build:h5)
+  (cd apps/hm && npm run typecheck && npm test && npm run build:h5)
 else
   echo "  SKIP: apps/hm not found"
 fi
