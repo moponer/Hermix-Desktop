@@ -726,6 +726,11 @@ setPage("chat");
   // this the card stays "等待你的决定" forever even though the
   // backend already auto-denied at 30s and the agent moved on.
   const approvalTimeoutTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  // 「静默审批」自救定时器：审批事件可能因 WebView 渲染冻结、传输中途
+  // 断链或投影目标落空而永远没变成卡片，agent 却在服务端干等到 600s
+  // 超时。到期仍未决 → REST 直查服务端注册表兜底（注册表与会话/连接
+  // 解耦，任意存活连接都能查、都能解）。
+  const approvalRescueTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   /**
    * 记录每个待审批请求归属的 sessionId（与 agent 循环压入请求的顺序一致，
    * JS Map 保证插入顺序）。REST 兜底 approve/deny 时用来定位正确的
@@ -1890,7 +1895,8 @@ streamPhaseRef.current = null;
       //（默认 600s 后自动拒绝）。窗口失焦时抽屉/内联卡用户全看不到，
       // 感知就是「模型卡死了」——只有系统通知能把这次等待变成一次
       // 可点击的提醒。前台时不打扰（抽屉本来就可视）。
-      if (!document.hasFocus()) {
+      // 仅首次到达时通知（自救重投影会再次进入本函数，不能反复弹）。
+      if (!approvalResolversRef.current.has(req.requestId) && !document.hasFocus()) {
         sendNotification(
           "Hermix 等待你的审批",
           `${req.tool}${req.reason ? `：${req.reason}` : ""}（未响应将在 10 分钟后自动拒绝）`,
@@ -1997,6 +2003,29 @@ streamPhaseRef.current = null;
       }, delay);
       approvalTimeoutTimersRef.current.set(req.requestId, timer);
     }
+
+    // 静默丢失自救：15s 后仍未决 → 直查服务端待审批注册表。
+    // 还挂着 → 走本函数重新投影（幂等：step 写入按 requestId 去重、
+    // resolver 重注册、通知被上面的首次到达守卫跳过），并在重投影中
+    // 重新武装下一轮 —— 15s 一次的重试能穿越 UI 冻结期，直到用户点击
+    // 或服务端超时自动拒绝为止。不在了 → 本地标记过期，卡片不再悬挂。
+    // 桥/服务端整个不可达时 fetch 会 reject —— 尽力而为，静默放弃。
+    const rescueTimer = setTimeout(() => {
+      approvalRescueTimersRef.current.delete(req.requestId);
+      if (!approvalResolversRef.current.has(req.requestId)) return;
+      void api
+        .getPendingApprovals(req.sessionId)
+        .then((pending) => {
+          if (!approvalResolversRef.current.has(req.requestId)) return;
+          if (pending.some((it) => it.request_id === req.requestId)) {
+            void onApprovalRequest(req);
+          } else {
+            resolveApproval(req.requestId, "expired");
+          }
+        })
+        .catch(() => {});
+    }, 15_000);
+    approvalRescueTimersRef.current.set(req.requestId, rescueTimer);
 
     return new Promise<{ decision: ApprovalDecision; remember?: boolean; note?: string }>((resolve) => {
       approvalResolversRef.current.set(
