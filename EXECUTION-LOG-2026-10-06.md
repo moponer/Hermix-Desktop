@@ -86,6 +86,14 @@
 - **验证**：tsc 零错误；vitest 230 全绿。
 - **提交**：`refactor(audit-batch3-frontend)`。
 
+### Step 7（05:10）— 启动界面重设计 + 动态进度修复 ✅（用户追加需求，提交 4df577cc）
+
+**根因（进度"死"的真凶）**：`#splash` 原在 `#root` 内部，`createRoot(#root).render()` 挂载 React 的瞬间清空容器全部子节点——splash DOM 被 React 首帧抹掉，main.tsx 整套状态机（boot-stage 事件/爬行/阶段点亮）从此空转。用户看到的始终是 index.html 静态 HTML（恒 6%、阶段 0）。
+
+- index.html：splash 移出 #root 成 body 直接子节点；视觉重做（mascot 112px 悬浮+光晕、双色品牌字标、accent 顶光洗底、6px 流光进度、20px 大号百分比、勾/脉冲点/空心点三态阶段列表）。
+- main.tsx：百分比 rAF 平滑补间；爬行 +2%/320ms。
+- 验证：静态预览 + 浏览器截图核对（浅色 45% 推进态布局配色确认）；tsc 干净；vitest 237 全绿。
+
 ## 会话收尾快照（次日对接看这里）
 
 **A 线已完成**：批次 1（`1aa398bd`）、批次 4（`f3912c4d`）、批次 2-7（`579e2930`）、批次 3 Rust 两组（`be441f5a` / `800a0980`）、批次 3 前端（`4f1f3fbe`）。净效果：审计方案除 2-4 / 2-5 / 2-6 外全部落地，净删约 800 行。
@@ -103,4 +111,4 @@
 
 **用户侧手动待办（自用 relay dogfood）**：证书指纹 env + relayctl 签发两条 token（命令见 Step 0 背景快照）。
 
-**验证基线**：`cargo check --workspace --all-targets` 0 错误；server 292 / tools 769 / agent 1052 / config 130 / vitest 230 全绿；check-notes OK。（`ci-gate.sh` 全量未跑——clippy 锁守卫建议对接后跑一次。）
+**验证基线**：`cargo check --workspace --all-targets` 0 错误；server 292 / tools 769 / agent 1052 / config 130 全绿；前端 tsc 干净 + vitest 237 全绿（26 文件）；check-notes OK。（`ci-gate.sh` 全量未跑——clippy 锁守卫建议对接后跑一次。）
