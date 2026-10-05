@@ -53,6 +53,7 @@ import type {
   ApprovalDecision,
   QueuedMessage,
   QueuedImage,
+  QueuedFile,
   ChatMessageImage,
   ApprovalMessageMeta,
   ApprovalBatchMessageMeta,
@@ -1666,7 +1667,7 @@ setPage("chat");
     content: string,
     _projectId?: string,
     overrides?: import("./hooks/useStreamChat").ChatOverrides,
-    attachments?: { images?: QueuedImage[]; attachedFilePaths?: string[] },
+    attachments?: { images?: QueuedImage[]; attachedFilePaths?: string[]; attachedFiles?: QueuedFile[] },
   ) => {
     let sessionId = activeSessionId;
     if (sessionId && !sessions.some((s) => s.id === sessionId)) { sessionId = null; setActiveSessionId(null); }
@@ -1819,6 +1820,15 @@ streamPhaseRef.current = null;
     }
     if (attachments?.attachedFilePaths?.length) {
       finalOverrides.attachedFilePaths = attachments.attachedFilePaths;
+    }
+    if (attachments?.attachedFiles?.length) {
+      finalOverrides.attachedFiles = await Promise.all(
+        attachments.attachedFiles.map(async (f) => ({
+          name: f.name,
+          mimeType: f.mimeType,
+          bytes: Array.from(new Uint8Array(await f.file.arrayBuffer())),
+        })),
+      );
     }
 
     // Real-time stream: append each chunk to the *currently active*
@@ -2128,6 +2138,59 @@ streamPhaseRef.current = null;
       });
     };
 
+    // ── tool_stdout 批处理 ─────────────────────────────────────
+    // 每个 stdout chunk 原本各跑一次全量 setSessions（map 所有
+    // session→message→unified_steps）。大输出以帧级速率涌回时，
+    // setState 队列把 JS 主线程打满——WebView 内容区失去响应但系统
+    // 资源正常（"调用工具就卡死"的前端半边根因）。改为：chunk 先落
+    // 进闭包局部 Map，requestAnimationFrame 合并后一次 setSessions
+    // 应用全部增量（同帧 N 次 → 1 次）。闭包变量随 send 天然隔离；
+    // done/error 强制 flush，尾批 chunk 不滞留。
+    const pendingToolChunks = new Map<string, string>();
+    let toolChunkFlushScheduled = false;
+    const flushPendingToolChunks = () => {
+      toolChunkFlushScheduled = false;
+      if (pendingToolChunks.size === 0) return;
+      const pending = new Map(pendingToolChunks);
+      pendingToolChunks.clear();
+      const target = currentAssistantIdRef.current;
+      if (!target) return;
+      setSessions((prev) => prev.map((s) => {
+        if (s.id !== sessionId) return s;
+        return {
+          ...s,
+          messages: s.messages.map((m) => {
+            if (m.id !== target || !m.execution_timeline) return m;
+            let timeline = m.execution_timeline;
+            let steps = m.unified_steps;
+            for (const [chunkToolCallId, chunkContent] of pending) {
+              const t = [...timeline];
+              let found = false;
+              for (let i = t.length - 1; i >= 0; i--) {
+                if (t[i].type === "tool_stdout" && t[i].tool_call_id === chunkToolCallId) {
+                  t[i] = { ...t[i], content: (t[i].content ?? "") + chunkContent };
+                  found = true;
+                  break;
+                }
+              }
+              if (!found) {
+                t.push({
+                  type: "tool_stdout",
+                  tool_call_id: chunkToolCallId,
+                  content: chunkContent,
+                  created_at: new Date().toISOString(),
+                });
+              }
+              timeline = t;
+              steps = updateToolStepStdout(steps, chunkToolCallId, chunkContent);
+            }
+            return { ...m, execution_timeline: timeline, unified_steps: steps };
+          }),
+          updated_at: new Date().toISOString(),
+        };
+      }));
+    };
+
     try {
       await sendStream(
         sessionId!,
@@ -2144,6 +2207,9 @@ streamPhaseRef.current = null;
           },
           onChunk: appendChunk,
           onError: (err, detail, code) => {
+            // 强制 flush 尾批 tool_stdout —— error 后不再有 rAF 机会，
+            // 不 flush 会把最后一批 stdout 滞留在 pending Map 里丢掉。
+            flushPendingToolChunks();
             // The error frame arrives immediately (no API key,
             // config error, etc.) — React may batch the
             // setStreamingSessionId(sessionId)+null into one render
@@ -2264,46 +2330,20 @@ streamPhaseRef.current = null;
             }));
           },
           onToolChunk: ({ toolCallId, content }) => {
-            // Append stdout to the assistant's
-            // execution_timeline. We accumulate into a single
-            // `tool_stdout` event per tool_call_id for efficiency.
+            // stdout chunk 不再逐个 setSessions —— 入队等 rAF 合并
+            // flush（见 pendingToolChunks 批处理说明）。
             if (!content) return;
             const target = currentAssistantIdRef.current;
             if (!target) return;
 
-            setSessions((prev) => prev.map((s) => {
-              if (s.id !== sessionId) return s;
-              return {
-                ...s,
-                messages: s.messages.map((m) => {
-                  if (m.id !== target || !m.execution_timeline) return m;
-                  const timeline = [...m.execution_timeline];
-                  // Find the existing tool_stdout event for this tool_call_id
-                  let found = false;
-                  for (let i = timeline.length - 1; i >= 0; i--) {
-                    if (timeline[i].type === "tool_stdout" && timeline[i].tool_call_id === toolCallId) {
-                      timeline[i] = { ...timeline[i], content: (timeline[i].content ?? "") + content };
-                      found = true;
-                      break;
-                    }
-                  }
-                  if (!found) {
-                    timeline.push({
-                      type: "tool_stdout",
-                      tool_call_id: toolCallId,
-                      content,
-                      created_at: new Date().toISOString(),
-                    });
-                  }
-                  return {
-                    ...m,
-                    execution_timeline: timeline,
-                    unified_steps: updateToolStepStdout(m.unified_steps, toolCallId, content),
-                  };
-                }),
-                updated_at: new Date().toISOString(),
-              };
-            }));
+            pendingToolChunks.set(
+              toolCallId,
+              (pendingToolChunks.get(toolCallId) ?? "") + content,
+            );
+            if (!toolChunkFlushScheduled) {
+              toolChunkFlushScheduled = true;
+              requestAnimationFrame(flushPendingToolChunks);
+            }
           },
           onToolComplete: ({ toolCallId, tool, content, denialKind, isError }) => {
             // 工具调用被拒绝时（用户拒绝 / 超时 / 连接中断）弹顶部横幅，
@@ -2762,6 +2802,9 @@ return {
             setPrefetchIntent(info);
           },
           onDone: (text, stopReason, durationMs) => {
+            // 强制 flush 尾批 tool_stdout —— 之后 rAF 可能不再跑
+            // （后台/最小化），不 flush 会丢最后一批 stdout 分片。
+            flushPendingToolChunks();
             setPrefetchIntent(null);
             setStreamPhase(null);
             // `task_in_flight` settle: the backend saw this retry land on a
@@ -3172,8 +3215,8 @@ return {
           item.text,
           undefined,
           undefined,
-          item.images || item.attachedFilePaths
-            ? { images: item.images, attachedFilePaths: item.attachedFilePaths }
+          item.images || item.attachedFilePaths || item.attachedFiles
+            ? { images: item.images, attachedFilePaths: item.attachedFilePaths, attachedFiles: item.attachedFiles }
             : undefined,
         );
       } catch {
@@ -3289,8 +3332,8 @@ return {
     if (!streaming && messageQueue.length > 0) {
       const next = messageQueue[0];
       setMessageQueue(prev => prev.slice(1));
-      const queuedAttachments = next.images || next.attachedFilePaths
-        ? { images: next.images, attachedFilePaths: next.attachedFilePaths }
+      const queuedAttachments = next.images || next.attachedFilePaths || next.attachedFiles
+        ? { images: next.images, attachedFilePaths: next.attachedFilePaths, attachedFiles: next.attachedFiles }
         : undefined;
       // drain 必须传当前 selectedModel 作为 overrides.model，否则后端按
       // config.yaml 默认模型请求。activeSession.model 由
