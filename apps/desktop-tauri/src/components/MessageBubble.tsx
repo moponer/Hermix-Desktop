@@ -6,6 +6,7 @@ import {
 } from "./TextBubble";
 import { ClarifyCard } from "./ClarifyBubble";
 import { ToolMessageCard } from "./ToolCallBubble";
+import { AutomationBubble } from "./AutomationBubble";
 
 // Re-export so `import { ThoughtStreamCard } from "./MessageBubble"` keeps
 // working.
@@ -134,6 +135,12 @@ export function MessageBubble({
         onPathClick={onPathClick}
       />
     );
+  }
+  // Must sit above the assistant fallback: this role is neither, and
+  // falling through would render a scheduler result as if the model
+  // had said it.
+  if (message.role === "automation") {
+    return <AutomationBubble message={message} />;
   }
   return (
     <AssistantMessage

@@ -1198,6 +1198,16 @@ pub(crate) async fn get_session_messages(
                                 MessageRole::Assistant => hermix_transport::Role::Assistant,
                                 MessageRole::System => hermix_transport::Role::System,
                                 MessageRole::Tool => hermix_transport::Role::Tool,
+                                // Archived sub-sessions are already
+                                // written with `role='automation'`
+                                // (see the archive write path), so the
+                                // export has to carry the role through
+                                // rather than fold it into `User` —
+                                // a browsable archive that shows the
+                                // model saying things it never said is
+                                // exactly the confusion this role
+                                // exists to prevent.
+                                MessageRole::Automation => hermix_transport::Role::Automation,
                             },
                             content: m.content.unwrap_or_default(),
                             timestamp,
@@ -1205,7 +1215,11 @@ pub(crate) async fn get_session_messages(
                             tool_calls,
                             tool_name,
                             tool_arguments,
-                            extra: None,
+                            extra: m
+                                .automation_meta
+                                .as_ref()
+                                .map(serde_json::to_value)
+                                .and_then(Result::ok),
                             reasoning_content: m.reasoning_content.clone(),
                             execution_timeline,
                             unified_steps: m.unified_steps.clone(),
@@ -1290,6 +1304,12 @@ pub(crate) async fn get_session_messages(
                 // if the timestamp query somehow missed this row
                 // (shouldn't happen — same filter on both sides).
                 let timestamp = ts.clone().unwrap_or_else(|| now.clone());
+                // Automation provenance rides in `extra`, mirroring the
+                // approval branch below. The client's
+                // `wireToChatMessage` whitelist drops any row whose role
+                // it doesn't recognise, so getting this wrong does not
+                // degrade gracefully — it deletes the result.
+                let extra = m.automation_meta.as_ref().map(serde_json::to_value).and_then(Result::ok);
                 ProtocolMessage {
                     id,
                     role: match m.role {
@@ -1297,6 +1317,12 @@ pub(crate) async fn get_session_messages(
                         MessageRole::Assistant => hermix_transport::Role::Assistant,
                         MessageRole::System => hermix_transport::Role::System,
                         MessageRole::Tool => hermix_transport::Role::Tool,
+                        // Kept distinct from `User` on the wire so the
+                        // client renders it as a scheduled result. The
+                        // server already filtered this role out of the
+                        // LLM payload, so nothing downstream can mistake
+                        // it for something the user said.
+                        MessageRole::Automation => hermix_transport::Role::Automation,
                     },
                     // (Bug B): persist already runs through
                     // `ToolCallSanitizer` in `stream_collect` and the
@@ -1322,7 +1348,7 @@ pub(crate) async fn get_session_messages(
                     tool_calls,
                     tool_name,
                     tool_arguments,
-                    extra: None,
+                    extra,
                     reasoning_content: m.reasoning_content.clone(),
                     execution_timeline,
                     unified_steps: m.unified_steps.clone(),
@@ -1383,6 +1409,12 @@ pub(crate) async fn get_session_messages(
             hermix_transport::Role::System => "system",
             hermix_transport::Role::Tool => "tool",
             hermix_transport::Role::Approval => "approval",
+            // Own signature, not folded into "user". This match exists to
+            // drop a child's copy of a turn the parent also has; giving an
+            // automation result the user's signature would let a
+            // scheduled result silently delete a message the user typed
+            // (or the reverse) whenever their contents coincided.
+            hermix_transport::Role::Automation => "automation",
         }
     };
     let main_sigs: std::collections::HashSet<String> = main_msgs
@@ -1475,6 +1507,11 @@ pub(crate) async fn send_message(
         // `rx.await` (which here has no race because this path
         // doesn't abort a task).
         shutdown: None,
+        // This endpoint is interactive chat by definition — a human is
+        // on the other end. Only the automation scheduler sets
+        // `external_delivery`, and it calls `send_message` in-process,
+        // never through HTTP.
+        external_delivery: None,
     };
 
     // Call agent service

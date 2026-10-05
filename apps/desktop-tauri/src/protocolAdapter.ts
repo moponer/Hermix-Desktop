@@ -9,7 +9,7 @@
 // sees them, so a leaked directive shows up as a missing substitution in
 // the builder rather than a chat row full of `<system-reminder>…</system-reminder>`.
 
-import type { ChatMessage, ToolMessageMeta, ApprovalMessageMeta, ApprovalDecision } from "./types";
+import type { ChatMessage, ToolMessageMeta, ApprovalMessageMeta, ApprovalDecision, AutomationMessageMeta } from "./types";
 import { parseMemoryResult } from "./utils/memoryToolResult";
 import { classifyToolOutcome } from "./utils/toolOutcome";
 
@@ -59,6 +59,19 @@ export type WireMessage = {
      *  approvals (write_file / edit_file). Absent for non-file tools
      *  and for sessions persisted before the diff feature shipped. */
     diff?: string | null;
+    /** `role === "automation"`: the scheduler's display name, used as
+     *  the card's group header. */
+    automation_name?: string;
+    /** `role === "automation"`: the originating `automation_runs.id`. */
+    run_id?: string;
+    /** `role === "automation"`: the prompt the scheduler executed —
+     *  distinct from the result body, so a run that produced nothing
+     *  still explains itself. */
+    prompt?: string;
+    /** `role === "automation"`: why this result could not land in its
+     *  anchor conversation. Present exactly when it fell back to a
+     *  standalone session. */
+    fallback_reason?: string;
   };
   /** Extensibility index — backend may send extra fields. */
   [k: string]: unknown;
@@ -201,6 +214,32 @@ function buildApprovalMeta(wire: WireMessage): ApprovalMessageMeta {
 }
 
 /**
+ * Project an `automation` row's `extra` blob into `AutomationMessageMeta`.
+ *
+ * Every field degrades to a visible-but-honest default rather than
+ * dropping out: an automation row whose metadata is unreadable must
+ * still render its body, or the user sees a result with no indication of
+ * where it came from. `automationName` falls back to a literal rather
+ * than `""` for the same reason — the group header is what tells the
+ * user this wasn't something they typed.
+ */
+function buildAutomationMeta(wire: WireMessage): AutomationMessageMeta {
+  const ex = wire.extra ?? {};
+  return {
+    automationName:
+      typeof ex.automation_name === "string" && ex.automation_name
+        ? ex.automation_name
+        : "定时任务",
+    runId: typeof ex.run_id === "string" ? ex.run_id : undefined,
+    prompt: typeof ex.prompt === "string" ? ex.prompt : undefined,
+    fallbackReason:
+      typeof ex.fallback_reason === "string" && ex.fallback_reason
+        ? ex.fallback_reason
+        : undefined,
+  };
+}
+
+/**
  * Filter the rows the chat UI cares about. Drops server-side `system`
  * rows to avoid leaking the full reconstructed prompt (~23K chars of
  * AGENTS.md + skills) and drops `clarify` rows that may have been
@@ -223,7 +262,8 @@ export function wireToChatMessage(
     wire.role !== "user" &&
     wire.role !== "assistant" &&
     wire.role !== "approval" &&
-    wire.role !== "tool"
+    wire.role !== "tool" &&
+    wire.role !== "automation"
   ) {
     return null;
   }
@@ -260,6 +300,19 @@ export function wireToChatMessage(
       content: "",
       timestamp,
       approval: buildApprovalMeta(wire),
+    };
+  }
+  // automation rows: an automation run delivered its result into this
+  // conversation. The server persisted it under `MessageRole::Automation`
+  // specifically so it is stored and rendered but **excluded from the
+  // LLM payload** — the model never sees it as something the user said.
+  if (wire.role === "automation") {
+    return {
+      id,
+      role: "automation",
+      content: wire.content,
+      timestamp,
+      automation: buildAutomationMeta(wire),
     };
   }
   // user / assistant: forward every field the server persists so a

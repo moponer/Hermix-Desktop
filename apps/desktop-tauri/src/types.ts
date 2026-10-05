@@ -171,6 +171,35 @@ export interface ToolMessageMeta {
   memoryStatus?: "success" | "not_found" | "ambiguous" | "error";
 }
 
+/**
+ * Metadata for a message injected by a scheduled automation
+ * (`role === "automation"`). Server-side this is
+ * `hermix_core::MessageRole::Automation` plus the `extra` JSON blob the
+ * automation trigger writes; the front-end only renders it.
+ */
+export interface AutomationMessageMeta {
+  /** The automation's display name, used as the card's group header. */
+  automationName: string;
+  /** `automation_runs.id` for this run — lets a card link to run history. */
+  runId?: string;
+  /**
+   * The prompt the scheduler sent, i.e. what the run was actually asked
+   * to do. Distinct from the result `body` so a failing or empty run
+   * still explains itself.
+   */
+  prompt?: string;
+  /**
+   * Why this result did **not** land in the conversation it was anchored
+   * to, and instead fell back to a standalone `automation:*` session:
+   * the guardrail cap was reached, the run failed too many times in a
+   * row, or the anchor session no longer exists.
+   *
+   * Silence here is the failure mode this field exists to prevent — a
+   * silent fallback shows the user a missing result with no explanation.
+   */
+  fallbackReason?: string;
+}
+
 // ---------------------------------------------------------------------------
 // ChatMessage — canonical in-memory chat-row type.
 // Before the front-end had three near-identical types describing the
@@ -184,7 +213,7 @@ export interface ToolMessageMeta {
 // ---------------------------------------------------------------------------
 export interface ChatMessage {
   id: string;
-  role: "user" | "assistant" | "system" | "approval" | "clarify" | "tool";
+  role: "user" | "assistant" | "system" | "approval" | "clarify" | "tool" | "automation";
   content: string;
   timestamp: string;
   model?: string;
@@ -209,6 +238,14 @@ export interface ChatMessage {
   /// Populated when `role === "tool"`. Drives the inline tool-execution
   /// card that sits between assistant messages in the conversation flow.
   tool?: ToolMessageMeta;
+  /**
+   * Populated when `role === "automation"`. An automation run delivered
+   * its result into this conversation — the server stored it with
+   * `MessageRole::Automation` so it renders here but is filtered out of
+   * the LLM payload, meaning the model never sees it as something the
+   * user said.
+   */
+  automation?: AutomationMessageMeta;
   /**
    * The model's raw reasoning (thinking monologue) for this turn,
    * stripped from the user-visible `content` by `ThinkBlockParser`.
