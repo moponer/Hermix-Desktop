@@ -14,12 +14,12 @@
 
 | # | 任务 | 状态 |
 |---|---|---|
-| 1 | A 线批次 1：exec_command 显式 Deny + browser 会话键 + pairing TOCTOU（各带测试） | 进行中 |
-| 2 | A 线批次 4：注释/文档同步（逐条见方案 §批次 4） | 待做 |
-| 3 | A 线批次 2-7：config 死字段删除（tools/tools_config + roundtrip 测试，免 alias 已验证） | 待做 |
-| 4 | A 线批次 3：死代码清除（拆 Rust / 前端两个 PR） | 待做 |
-| 5 | A 线批次 2-5：审批 family → signature 级（terminal.rs approve_for_session） | 待做（中风险，排 4 之后） |
-| 6 | A 线批次 2-6：traversal 硬拒——**先枚举合法穿越场景再动** | 设计后定 |
+| 1 | A 线批次 1：exec_command 显式 Deny + browser 会话键 + pairing TOCTOU（各带测试） | ✅ 1aa398bd |
+| 2 | A 线批次 4：注释/文档同步 | ✅ f3912c4d |
+| 3 | A 线批次 2-7：config 死字段删除 | ✅ 579e2930 |
+| 4 | A 线批次 3：死代码清除（Rust 两组 + 前端） | ✅ be441f5a / 800a0980 / 4f1f3fbe |
+| 5 | A 线批次 2-5：审批 family → signature 级（实施草图见收尾快照） | 待做 |
+| 6 | A 线批次 2-6：traversal 硬拒——先枚举合法穿越场景 | 设计后定 |
 | 7 | A 线批次 2-4：审批一次性 token（独立卡） | 未排 |
 | 8 | B 线：发笔记路径给功能分支会话（用户动作） | 用户侧 |
 
@@ -86,5 +86,21 @@
 - **验证**：tsc 零错误；vitest 230 全绿。
 - **提交**：`refactor(audit-batch3-frontend)`。
 
-### 下一步
-- Step 7 = 批次 2-5（审批 family → signature 级，terminal.rs approve_for_session / engine.rs:455）。
+## 会话收尾快照（次日对接看这里）
+
+**A 线已完成**：批次 1（`1aa398bd`）、批次 4（`f3912c4d`）、批次 2-7（`579e2930`）、批次 3 Rust 两组（`be441f5a` / `800a0980`）、批次 3 前端（`4f1f3fbe`）。净效果：审计方案除 2-4 / 2-5 / 2-6 外全部落地，净删约 800 行。
+
+**剩余三件事（按优先级）**：
+
+1. **批次 2-5（审批 family → signature 级）——实施草图已备好**：
+   - 现状：`approve_for_session(effective_cmd)` 在 terminal.rs:222（HERMIX_CONFIRM 路径）与 :549（WS 审批路径）各一次；family 归类逻辑在 `approval/engine.rs:55-60`（批准一条命令 = 记住整个 rule family）。
+   - 改法（拍板 A）：engine 的会话记忆键从 rule family 换成**完整 effective_cmd 精确匹配**（参数哈希一致才放行）；`engine.rs:55-60` 的 family 语义注释同步改写；terminal.rs:1622/1689 两个测试更新（family 内不同参数现在应再次弹审批）。
+   - 注意：批次 1 已落的 schema gate 会让缺参调用提前被拒，与本条无冲突。
+2. **批次 2-6（traversal 硬拒）**：动手前先枚举 terminal.rs:586 / memory.rs:272 判定语义 + 合法穿越场景（junction、子目录 `..`）。
+3. **批次 2-4（审批一次性 token）**：独立卡，registry 签发 → TerminalApprovalContext 传递 → terminal 校验，替代 HERMIX_CONFIRM=1 前缀（terminal.rs:557-564 的 fallback 教学文案同删）。
+
+**B 线（手机端产品化）**：规格与拍板齐备（`docs/notes/proposed/feature/2026-10-06-relay-hosted-multi-tenant.md`，三项拍板已结）——把路径发给功能分支会话即可开工；E2EE 是托管上线门槛、实现顺序第一位。
+
+**用户侧手动待办（自用 relay dogfood）**：证书指纹 env + relayctl 签发两条 token（命令见 Step 0 背景快照）。
+
+**验证基线**：`cargo check --workspace --all-targets` 0 错误；server 292 / tools 769 / agent 1052 / config 130 / vitest 230 全绿；check-notes OK。（`ci-gate.sh` 全量未跑——clippy 锁守卫建议对接后跑一次。）
