@@ -252,11 +252,25 @@ impl UiaAutomation {
     /// # Safety
     /// `hwnd` must be a valid window handle on the current desktop.
     pub unsafe fn element_from_handle(&self, hwnd: isize) -> CuaResult<UiElement> {
-        let raw = self
-            .inner
-            .ElementFromHandle(HWND(hwnd as *mut std::ffi::c_void))
-            .map_err(|e| CuaError::Uia(format!("ElementFromHandle: {e}")))?;
+        let raw = self.raw_element_from_handle(hwnd)?;
         collect_properties(&raw, 0, 0)
+    }
+
+    /// Raw `IUIAutomationElement` for a window handle — the un-flattened
+    /// form, for callers that need to keep walking (tree scope) rather
+    /// than read properties once. This and `get_control_view_tree_from`
+    /// exist because `cua_ui_tree` had no way to scope to a window: it
+    /// always walked from the desktop root, so one window's worth of
+    /// elements came back mixed with the taskbar and every other window.
+    /// # Safety
+    /// `hwnd` must be a valid window handle on the current desktop.
+    pub unsafe fn raw_element_from_handle(
+        &self,
+        hwnd: isize,
+    ) -> CuaResult<IUIAutomationElement> {
+        self.inner
+            .ElementFromHandle(HWND(hwnd as *mut std::ffi::c_void))
+            .map_err(|e| CuaError::Uia(format!("ElementFromHandle: {e}")))
     }
 
     /// Element at screen coordinates `(x, y)`.
@@ -295,7 +309,19 @@ impl UiaAutomation {
         let com_cond = build_condition(&self.inner, condition)?;
         let found = parent
             .FindFirst(TreeScope_Descendants, &com_cond)
-            .map_err(|e| CuaError::Uia(format!("FindFirst: {e}")))?;
+            // A null out-pointer comes back as `windows_core::Error::empty()`,
+            // whose code is `HRESULT(0)`. `Display` then runs
+            // `FormatMessageW(0)` and prints "操作成功完成。 (0x00000000)" — a
+            // *success* rendered as an error. This is UIA's "nothing matched"
+            // signal, so route it to NotFound and leave the null check below
+            // as the belt-and-braces path for runtimes that do return null.
+            .map_err(|e| {
+                if e.code().is_ok() {
+                    CuaError::NotFound("uia: no element matched".into())
+                } else {
+                    CuaError::Uia(format!("FindFirst: {e}"))
+                }
+            })?;
         // IUIAutomationElement has null inner pointer when nothing matches
         if found.as_raw().is_null() {
             return Ok(None);
@@ -361,7 +387,14 @@ impl UiaAutomation {
         let com_cond = build_condition(&self.inner, condition)?;
         let found = root
             .FindFirst(TreeScope_Descendants, &com_cond)
-            .map_err(|e| CuaError::Uia(format!("FindFirst: {e}")))?;
+            // Same `Error::empty()` = HRESULT(0) trap as `find_first_from`.
+            .map_err(|e| {
+                if e.code().is_ok() {
+                    CuaError::NotFound("uia: no element matched".into())
+                } else {
+                    CuaError::Uia(format!("FindFirst: {e}"))
+                }
+            })?;
         if found.as_raw().is_null() {
             return Ok(None);
         }
@@ -377,6 +410,24 @@ impl UiaAutomation {
     /// # Safety
     /// Must be called on a COM-initialised thread.
     pub unsafe fn get_control_view_tree(&self, max_depth: u32) -> CuaResult<Vec<UiElement>> {
+        let root = self
+            .inner
+            .GetRootElement()
+            .map_err(|e| CuaError::Uia(format!("GetRootElement: {e}")))?;
+        self.get_control_view_tree_from(&root, max_depth)
+    }
+
+    /// Same walk, rooted at an arbitrary element. Callers that know which
+    /// window they mean should use this instead of the desktop-root
+    /// variant — the desktop root makes every window in the session look
+    /// like part of the answer.
+    /// # Safety
+    /// Must be called on a COM-initialised thread.
+    pub unsafe fn get_control_view_tree_from(
+        &self,
+        root: &IUIAutomationElement,
+        max_depth: u32,
+    ) -> CuaResult<Vec<UiElement>> {
         let true_cond = self
             .inner
             .CreateTrueCondition()
@@ -386,14 +437,9 @@ impl UiaAutomation {
             .CreateTreeWalker(&true_cond)
             .map_err(|e| CuaError::Uia(format!("CreateTreeWalker: {e}")))?;
 
-        let root = self
-            .inner
-            .GetRootElement()
-            .map_err(|e| CuaError::Uia(format!("GetRootElement: {e}")))?;
-
         let mut out = Vec::new();
         let mut index_counter = 0usize;
-        walk_node(&walker, &root, 0, max_depth, &mut out, &mut index_counter)?;
+        walk_node(&walker, root, 0, max_depth, &mut out, &mut index_counter)?;
         Ok(out)
     }
 }

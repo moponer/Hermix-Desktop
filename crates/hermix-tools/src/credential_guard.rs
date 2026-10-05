@@ -103,12 +103,20 @@ static SECRET_PATTERNS: LazyLock<Vec<(&'static str, Regex)>> = LazyLock::new(|| 
             re(r"\beyJ[A-Za-z0-9-_]+\.eyJ[A-Za-z0-9-_]+\.[A-Za-z0-9-_]+\b"),
         ),
         (
+            // Value must not START with `$`. `$env:API_PASSWORD`, `${pw}` and
+            // `$body.password` are references, not secrets — but the old
+            // `\S+` matched them, so a PowerShell hashtable carrying a
+            // `password` key was refused outright and the agent had no way
+            // to tell which line tripped it. `[^$\s]` keeps the guard on
+            // written-down literals (`password = hunter2` still blocks) while
+            // letting interpolations through. No lookahead: the `regex` crate
+            // does not support it.
             "Password assignment",
-            re(r"(?i)(?:password|passwd|pwd)\s*[:=]\s*\S+"),
+            re(r"(?i)(?:password|passwd|pwd)\s*[:=]\s*[^$\s]\S*"),
         ),
         (
             "Generic secret assignment",
-            re(r"(?i)(?:secret|token|api_key|apikey|access_key)\s*[:=]\s*\S{8,}"),
+            re(r"(?i)(?:secret|token|api_key|apikey|access_key)\s*[:=]\s*[^$\s]\S{7,}"),
         ),
     ]
 });
@@ -452,6 +460,12 @@ mod tests {
         assert!(detect_secrets("AKIAIOSFODNN7EXAMPLE").is_some());
         assert!(detect_secrets("Hello, world!").is_none());
         assert!(detect_secrets("fn main() { println!(\"hello\"); }").is_none());
+        // Interpolations are references, not written-down secrets. These
+        // used to trip the guard and block the whole write, which is how a
+        // bug report quoting `password = …` ended up unable to land.
+        assert!(detect_secrets("$pw = $env:CSSO_PASS").is_none());
+        assert!(detect_secrets("password = $env:CSSO_PASS").is_none());
+        assert!(detect_secrets("api_key = ${API_KEY}").is_none());
     }
 
     #[test]

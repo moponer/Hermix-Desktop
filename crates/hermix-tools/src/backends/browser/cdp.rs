@@ -673,7 +673,14 @@ impl BrowserBackend for CdpBrowserBackend {
             .and_then(|r| r.get("value"))
             .and_then(|v| v.as_str())
             .unwrap_or("{}");
-        let pre: Value = serde_json::from_str(pre_value).unwrap_or_else(|_| json!({"ok": true}));
+        // A thrown expression (invalid selector ⇒ SyntaxError) leaves
+        // `result.value` absent, so `pre_value` is "{}" and the old
+        // `unwrap_or_else(|_| json!({"ok": true}))` fallback declared the
+        // preflight passed. Fail closed: an unparseable preflight is a
+        // failure, not a pass.
+        let pre: Value = serde_json::from_str(pre_value).unwrap_or_else(|_| {
+            json!({"ok": false, "reason": "preflight_evaluate_failed"})
+        });
         if pre.get("ok").and_then(|v| v.as_bool()) == Some(false) {
             let reason = pre.get("reason").and_then(|v| v.as_str()).unwrap_or("");
             let mut payload = json!({
@@ -698,13 +705,40 @@ impl BrowserBackend for CdpBrowserBackend {
             return Ok(payload.to_string());
         }
 
+        // Same two bugs as `r#type`, and the report blamed `type` alone:
+        // `click` resolves through the same map, so a bad `[ref=eN]`
+        // broke here too. No top-level declaration, but the status was
+        // still hardcoded.
         let js = format!(
-            "document.querySelector('{}')?.click(); 'clicked'",
-            resolved.replace('\'', "\\'")
+            "(function(){{ var el = document.querySelector({sel}); \
+             if(!el) return 'not found'; el.click(); return 'clicked'; }})()",
+            sel = serde_json::to_string(&resolved).unwrap_or_else(|_| "\"\"".into()),
         );
         let result = self
-            .cdp_command("Runtime.evaluate", json!({"expression": js}))
+            .cdp_command(
+                "Runtime.evaluate",
+                json!({ "expression": js, "returnByValue": true }),
+            )
             .await?;
+        let evaluated = result
+            .get("result")
+            .and_then(|r| r.get("value"))
+            .and_then(|v| v.as_str());
+        if evaluated != Some("clicked") {
+            let mut payload = json!({
+                "status": "click_failed",
+                "selector": resolved,
+                "original": selector,
+                "reason": if evaluated.is_some() { "not_found" } else { "evaluate_failed" },
+                "cdp": result,
+            });
+            payload["hint"] = json!(
+                "The page-side expression did not return 'clicked'. If the selector came from a \
+                 [ref=eN] handle, re-run browser_snapshot — handles go stale after every DOM \
+                 change. Otherwise verify the selector against the page yourself."
+            );
+            return Ok(payload.to_string());
+        }
         // Auto re-snapshot: ref tokens would otherwise go stale on the next
         // click. The price is one extra CDP round-trip per interaction, but
         // it saves the LLM from a "ref not found" failure round.
@@ -745,7 +779,14 @@ impl BrowserBackend for CdpBrowserBackend {
             .and_then(|r| r.get("value"))
             .and_then(|v| v.as_str())
             .unwrap_or("{}");
-        let pre: Value = serde_json::from_str(pre_value).unwrap_or_else(|_| json!({"ok": true}));
+        // A thrown expression (invalid selector ⇒ SyntaxError) leaves
+        // `result.value` absent, so `pre_value` is "{}" and the old
+        // `unwrap_or_else(|_| json!({"ok": true}))` fallback declared the
+        // preflight passed. Fail closed: an unparseable preflight is a
+        // failure, not a pass.
+        let pre: Value = serde_json::from_str(pre_value).unwrap_or_else(|_| {
+            json!({"ok": false, "reason": "preflight_evaluate_failed"})
+        });
         if pre.get("ok").and_then(|v| v.as_bool()) == Some(false) {
             let reason = pre.get("reason").and_then(|v| v.as_str()).unwrap_or("");
             let mut payload = json!({
@@ -763,14 +804,55 @@ impl BrowserBackend for CdpBrowserBackend {
             return Ok(payload.to_string());
         }
 
+        // IIFE + `var`, and JSON-encoded operands.
+        //
+        // The old body was a bare top-level `let el = …`. A top-level
+        // `let` creates a persistent global-lexical binding in the page
+        // realm, so the *second* `browser_type` on any document threw
+        // "Identifier 'el' has already been declared" while the first
+        // looked fine. (The preflight above was never the culprit — it
+        // already used an IIFE with `var`.)
+        //
+        // Operands go through `serde_json::to_string` rather than
+        // `replace('\'', …)`: a value containing a quote used to produce
+        // syntactically broken — and injectable — JS.
         let js = format!(
-            "let el = document.querySelector('{}'); if(el) {{ el.value = '{}'; el.dispatchEvent(new Event('input')); 'typed' }} else {{ 'not found' }}",
-            resolved.replace('\'', "\\'"),
-            text.replace('\'', "\\'")
+            "(function(){{ var el = document.querySelector({sel}); \
+             if(!el) return 'not found'; \
+             el.value = {txt}; el.dispatchEvent(new Event('input')); \
+             return 'typed'; }})()",
+            sel = serde_json::to_string(&resolved).unwrap_or_else(|_| "\"\"".into()),
+            txt = serde_json::to_string(text).unwrap_or_else(|_| "\"\"".into()),
         );
         let result = self
-            .cdp_command("Runtime.evaluate", json!({"expression": js}))
+            .cdp_command(
+                "Runtime.evaluate",
+                json!({ "expression": js, "returnByValue": true }),
+            )
             .await?;
+        // Report what actually happened. This used to be a hardcoded
+        // `status: "typed"` that never looked at `result`, so a thrown
+        // SyntaxError (invalid ref selector) was reported to the model as
+        // a success and it moved on believing the field was filled.
+        let evaluated = result
+            .get("result")
+            .and_then(|r| r.get("value"))
+            .and_then(|v| v.as_str());
+        if evaluated != Some("typed") {
+            let mut payload = json!({
+                "status": "type_failed",
+                "selector": resolved,
+                "original": selector,
+                "reason": if evaluated.is_some() { "not_found" } else { "evaluate_failed" },
+                "cdp": result,
+            });
+            payload["hint"] = json!(
+                "The page-side expression did not return 'typed'. If the selector came from a \
+                 [ref=eN] handle, re-run browser_snapshot to get a fresh handle — the text may \
+                 have moved. Otherwise verify the element is an input/textarea that accepts text."
+            );
+            return Ok(payload.to_string());
+        }
         // Re-snapshot so the LLM sees the post-input DOM (some apps render
         // autocomplete suggestions, validation messages, etc. on input).
         // We use `compact = true` here because the LLM typically only needs

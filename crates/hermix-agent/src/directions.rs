@@ -72,7 +72,9 @@ The Tirith pre-check engine **blocks** tool calls whose arguments match any of t
 const PLAN_BEFORE_EXECUTE_GUIDANCE: &str = "\
 # Planning format
 
-When you plan, keep it to one or two natural-language sentences in the reasoning flow: state the concrete outcome, the next step, and what will confirm success. Do not emit a standalone `Plan` section or a generic numbered checklist in the final answer. Make the first relevant tool call in the same turn as the plan. If a tool fails, briefly state the new route before trying a different one.";
+When you plan, keep it to one or two natural-language sentences in the reasoning flow: state the concrete outcome, the next step, and what will confirm success. Do not emit a standalone `Plan` section or a generic numbered checklist in the final answer.
+
+**Announcing a step is not doing it.** The moment you name a next action, that action belongs in a tool call *in this same turn*. Ending the turn on a plan — '接下来我会…', '1. … 2. … 3. …', 'Let me…' — is the most common way this loop stalls: the user gets a plan and has to type \"继续\". If a tool fails, state the new route in one clause, then call it.";
 
 const EXPLORE_EFFICIENCY_GUIDANCE: &str = "\
 # Exploration efficiency
@@ -473,6 +475,27 @@ const REPLY_TERMINATION_GUIDANCE: &str = "\
 When your reply is done, emit EOS immediately. \
 No filler closers ('Done!', '等你说话', '(waiting)', etc.).";
 
+/// Always-on: how to read a user reply that is a bare label.
+///
+/// Observed failure (real session, 2026-10-05): the model offered
+/// A / B / C, the user typed `B` meaning \"write up the bug report\", and
+/// the model announced \"你回的是 B\" — then cleaned up temp files instead.
+/// The deliverable was never produced. Two errors stacked: the letter was
+/// mapped to the wrong option, and the mapping was announced *before*
+/// acting, so the user had no chance to correct it. Near the end of a long
+/// task \"wrap up\" is by far the strongest contextual prior, and a
+/// one-character reply does not out-vote it on its own.
+const USER_LABEL_REPLY_GUIDANCE: &str = "\
+# Reading a short reply
+
+The user's next message is often a single token — `A`/`B`/`C`, `1`/`2`/`3`, `是`/`否`, `继续`, `M`, `?` — referring to the options **you** listed one message earlier.
+
+- Restate the full option you matched in your FIRST sentence, before any tool call: \"我理解为：〈完整选项〉。\" Announcing the mapping and then doing something else is two mistakes, not one.
+- Never pair a decision with cleanup. If the work is unfinished, 收尾 / 清理 / 归档 is not a valid reading of a short reply.
+- Make every option self-describing — state its consequence — because the user will reply with the label alone. A bare `A / B / C` is unusable.
+- If nothing matches uniquely, ask one direct question. Do not guess.
+- If you already have the evidence to decide, decide. Do not hand back a call you could have made.";
+
 // ---------------------------------------------------------------------------
 // collect_directions
 // ---------------------------------------------------------------------------
@@ -677,6 +700,15 @@ Always close `</think>` before visible text. The think block is for reasoning, n
         "reply_termination.always",
         DirRoute::Always,
         REPLY_TERMINATION_GUIDANCE,
+    ));
+    // Bare-label replies ("B" / "继续" / "?") — always-on. Without this the
+    // model has no rule for a one-character user message and falls back to
+    // contextual pattern matching, which at the tail of a long task means
+    // "wrap up" wins over the letter.
+    dirs.push(SystemDir::new(
+        "user_label_reply.always",
+        DirRoute::Always,
+        USER_LABEL_REPLY_GUIDANCE,
     ));
     // Tool failure discipline: prevent blind retry spam.
     dirs.push(SystemDir::new(

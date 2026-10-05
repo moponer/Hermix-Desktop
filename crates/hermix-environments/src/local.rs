@@ -260,7 +260,17 @@ fn normalize_windows_path_slashes(command: &str) -> String {
         }
         if i > token_start {
             let token: String = chars[token_start..i].iter().collect();
-            if token.contains("://") {
+            // A literal URL (`https://…`) is obviously not a path. So is any
+            // token containing a PowerShell interpolation (`"$base/"`): the
+            // value is only known at runtime, long after this rewrite runs,
+            // so the token *looks* like a relative path but resolves to
+            // whatever the variable holds. Without this, `$base='https://x'`
+            // followed by `Invoke-WebRequest -Uri "$base/"` shipped
+            // `https://x\` and 400'd. The previous comment claimed the
+            // PowerShell route "never mangles separators" — that was true of
+            // argv passing but not of this normalization step, which runs on
+            // the whole script.
+            if token.contains("://") || token.contains('$') {
                 token_url_start.insert(token_start, true);
             }
         }

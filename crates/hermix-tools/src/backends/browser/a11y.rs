@@ -8,16 +8,24 @@ use serde_json::Value;
 /// Pick a stable CSS selector for an AX node, used as the
 /// resolver target for `[ref=eN]` tokens.
 ///
+/// The emitted string must survive `document.querySelector`, because that
+/// is what every ref-consuming action goes through. The previous
+/// `:has-text('...')` was Playwright-engine syntax and therefore always
+/// threw a `SyntaxError` there — verified in a real browser, not inferred:
+///   `document.querySelectorAll('[role="b"]:has-text("x")')`
+///   -> SyntaxError: '[role="b"]:has-text("x")' is not a valid selector
+/// Because callers reported a hardcoded `"typed"` / `"clicked"` success
+/// regardless, that surfaced as a successful action on an element that was
+/// never touched. CSS has no text matcher, so we match on the attributes
+/// that actually carry an accessible name. An element whose name comes
+/// only from its text content no longer matches — the correct failure
+/// mode: a visible error the model can re-snapshot out of, rather than a
+/// silent hit on the wrong node.
+///
 /// `role` and `name` both come from the page (CDP AX tree), so a hostile
-/// page fully controls them. Escaping rules per string context:
-/// - `role` sits inside a **double-quoted** attribute value: escape `\`
-///   first, then `"`.
-/// - `name` sits inside a **single-quoted** `:has-text('…')` argument:
-///   escape `\` first, then `'`. Order matters — escaping `'` produces
-///   new backslashes that must not be re-escaped.
-/// Raw newlines would make the selector a syntax error in CSS string
-/// literals; they are neutralized to spaces (the accessible-name match
-/// stays best-effort rather than failing to parse at all).
+/// page fully controls them; both go through `escape_css_quoted` below
+/// before landing inside a double-quoted attribute value. Raw newlines
+/// would make the selector a syntax error; they are neutralized to spaces.
 fn ax_node_selector(role: &str, name: &str) -> String {
     fn escape_css_quoted(s: &str, quote: char) -> String {
         let neutralized: String = s
@@ -39,12 +47,16 @@ fn ax_node_selector(role: &str, name: &str) -> String {
     }
     let role_esc = escape_css_quoted(role, '"');
     if name.is_empty() {
-        format!("[role=\"{role_esc}\"]")
-    } else {
-        // Playwright-style: prefer accessible name match.
-        let name_esc = escape_css_quoted(name, '\'');
-        format!("[role=\"{role_esc}\"]:has-text('{name_esc}')")
+        return format!("[role=\"{role_esc}\"]");
     }
+    // Double-quoted attribute value on both sides, so both operands share
+    // the same quote context.
+    let name_esc = escape_css_quoted(name, '"');
+    ["aria-label", "placeholder", "name", "title", "alt"]
+        .iter()
+        .map(|attr| format!("[role=\"{role_esc}\"][{attr}=\"{name_esc}\"]"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn ax_role_is_interactive(role: &str) -> bool {
@@ -429,13 +441,27 @@ mod tests {
         let (yaml, refs) = ax_tree_to_a11y_yaml(&tree, None, None);
         assert!(yaml.contains("[ref=e1]"), "missing e1: {yaml}");
         assert!(yaml.contains("[ref=e2]"), "missing e2: {yaml}");
+        // The ref map must hold selectors that `document.querySelector`
+        // accepts — no Playwright-only `:has-text()`.
         assert_eq!(
             refs.get("e1").map(|s| s.as_str()),
-            Some("[role=\"button\"]:has-text('Login')")
+            Some(
+                "[role=\"button\"][aria-label=\"Login\"], [role=\"button\"][placeholder=\"Login\"], \
+                 [role=\"button\"][name=\"Login\"], [role=\"button\"][title=\"Login\"], \
+                 [role=\"button\"][alt=\"Login\"]"
+            )
         );
         assert_eq!(
             refs.get("e2").map(|s| s.as_str()),
-            Some("[role=\"textbox\"]:has-text('Username')")
+            Some(
+                "[role=\"textbox\"][aria-label=\"Username\"], [role=\"textbox\"][placeholder=\"Username\"], \
+                 [role=\"textbox\"][name=\"Username\"], [role=\"textbox\"][title=\"Username\"], \
+                 [role=\"textbox\"][alt=\"Username\"]"
+            )
+        );
+        assert!(
+            !yaml.contains(":has-text"),
+            "ref map leaked Playwright-only syntax back into the YAML"
         );
         assert!(yaml.contains("button \"Login\""));
     }

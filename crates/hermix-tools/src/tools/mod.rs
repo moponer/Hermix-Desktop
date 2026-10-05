@@ -215,5 +215,10 @@ pub fn register_all(
     // P1.3: browser tools (10 handlers backed by the sessioned
     // backend so per-session CDP state stays isolated).
     browser::register(registry, browser_backend);
+    // Deferred-tool bridge (tool_search / tool_describe / tool_call).
+    // Was never called from here, so the handlers existed but stayed
+    // unreachable — see `tools::tool_search::register` for the full
+    // three-layer chain that made this invisible to the model.
+    tool_search::register(registry);
     // jira::register(registry); // Untracked, broken - removed until fixed
 }

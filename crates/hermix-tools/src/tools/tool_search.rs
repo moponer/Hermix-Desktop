@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
-use hermix_core::{JsonSchema, ToolError, ToolHandler, ToolSchema};
+use hermix_core::{
+    JsonSchema, ToolError, ToolHandler, ToolSchema,
+    traits::RiskLevel,
+};
 use indexmap::IndexMap;
 use serde_json::Value;
 
@@ -463,9 +466,158 @@ impl ToolHandler for ToolCallHandler {
     }
 }
 
+// ── Bridge registration ─────────────────────────────────────────
+
+/// Register the three bridge tools into `registry`.
+///
+/// Until this existed the handlers were fully written and never wired:
+/// `tools::register_all` never called into this module, so none of
+/// `tool_search` / `tool_describe` / `tool_call` ever reached
+/// `get_definitions()`. Three independent layers then made the failure
+/// invisible from the model's side:
+///
+///  1. `bridge_tool_registry` (hermix-agent) only bridges what
+///     `get_definitions()` returns, so the agent's registry stayed empty
+///     of bridge names.
+///  2. `run_loop` validates every claimed tool call with
+///     `tool_registry.get(name).is_some()` → false → `tool_call_validator`
+///     rejects with `Tool 'tool_call' does not exist`.
+///  3. `directions.rs` still advertises the bridge, so the model saw the
+///     tools in its system prompt and kept calling them into the wall.
+///
+/// Net effect: the whole deferred-tool path was dead — `ToolCallHandler`
+/// below was unreachable code, and the model burned tokens retrying.
+///
+/// `ToolRegistry` is a cheap handle over `Arc<RwLock<ToolRegistryInner>>`,
+/// so `registry.clone()` + `Arc::new(..)` shares the *same* registry
+/// rather than snapshotting it — which matters because `tool_call`
+/// dispatches back into it.
+pub fn register(registry: &ToolRegistry) {
+    let shared = Arc::new(registry.clone());
+    let entries: [(&str, Arc<dyn ToolHandler>, RiskLevel, &str, &str); 3] = [
+        (
+            "tool_search",
+            Arc::new(ToolSearchHandler::new(shared.clone())),
+            RiskLevel::Safe,
+            "\u{1F50D}",
+            "Find deferred tools by keyword. Returns name + one-line description for each match.",
+        ),
+        (
+            "tool_describe",
+            Arc::new(ToolDescribeHandler::new(shared.clone())),
+            RiskLevel::Safe,
+            "\u{1F4D6}",
+            "Get the full parameter schema for a deferred tool, so tool_call receives correct arguments.",
+        ),
+        (
+            "tool_call",
+            Arc::new(ToolCallHandler::new(shared.clone())),
+            // Not Safe: this one can dispatch ANY deferred tool, including
+            // Dangerous ones. Caution keeps it out of parallel batches and
+            // leaves per-tool approval decisions to the dispatched handler.
+            RiskLevel::Caution,
+            "\u{1F17F}",
+            "Invoke a deferred tool by name. `arguments` MUST match that tool's schema exactly — run tool_describe first if unsure.",
+        ),
+    ];
+    for (name, handler, risk, emoji, description) in entries {
+        let schema = handler.schema();
+        registry.register_with_risk(
+            name,
+            name,
+            schema,
+            handler,
+            Arc::new(|| true),
+            vec![],
+            true,
+            description,
+            emoji,
+            None,
+            risk,
+            true,
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Regression guard for the dead deferred-tool path.
+    ///
+    /// `register_all` never called into this module, so the three bridge
+    /// tools never entered `get_definitions()`. hermix-agent's
+    /// `bridge_tool_registry` bridges only that list, and `run_loop` gates
+    /// every claimed tool call on `tool_registry.get(name).is_some()` — so
+    /// `tool_call` was rejected with "does not exist" and
+    /// `ToolCallHandler` was unreachable, while `directions.rs` kept
+    /// advertising the bridge.
+    ///
+    /// The pre-existing `tool_call_dispatches_to_real_tool` test could not
+    /// catch this: it drives the handler directly, bypassing registration.
+    #[test]
+    fn register_exposes_all_three_bridge_tools() {
+        let reg = crate::ToolRegistry::new();
+        register(&reg);
+        let names: Vec<String> = reg.get_definitions().into_iter().map(|s| s.name).collect();
+        for want in ["tool_search", "tool_describe", "tool_call"] {
+            assert!(names.contains(&want.to_string()), "missing from registry: {want}");
+        }
+    }
+
+    /// The shared handle must alias the caller's live registry, not a
+    /// snapshot — `tool_call` dispatches back into it, so a copied registry
+    /// would reject every deferred target as "not found".
+    #[tokio::test]
+    async fn registered_tool_call_dispatches_into_the_same_registry() {
+        let reg = crate::ToolRegistry::new();
+
+        struct Ping;
+        #[async_trait::async_trait]
+        impl ToolHandler for Ping {
+            fn schema(&self) -> ToolSchema {
+                ToolSchema::new(
+                    "bridge_ping_probe",
+                    "probe target",
+                    JsonSchema::object(IndexMap::new(), vec![]),
+                )
+            }
+            async fn execute(&self, _p: Value) -> Result<String, ToolError> {
+                Ok("pong".into())
+            }
+        }
+        reg.register_with_risk(
+            "bridge_ping_probe",
+            "bridge_ping_probe",
+            Ping.schema(),
+            Arc::new(Ping),
+            Arc::new(|| true),
+            vec![],
+            true,
+            "probe target",
+            "p",
+            None,
+            RiskLevel::Safe,
+            true,
+        );
+        register(&reg);
+
+        // Goes through the registry's own `tool_call` entry point, exactly
+        // as the agent loop would after `bridge_tool_registry` copies it.
+        // The registry surfaces handler failures as an `{"error":…}` body
+        // rather than an Err, so assert on the payload, not on `?`.
+        let out = reg
+            .dispatch_async(
+                "tool_call",
+                serde_json::json!({ "name": "bridge_ping_probe", "arguments": {} }),
+            )
+            .await;
+        assert!(
+            !out.contains("\"error\""),
+            "tool_call failed to reach the live registry: {out}"
+        );
+        assert!(out.contains("pong"), "expected the probe's result, got: {out}");
+    }
 
     #[test]
     fn classify_separates_core_from_deferred() {

@@ -110,6 +110,60 @@ pub fn register(registry: &ToolRegistry, backend: Arc<dyn BrowserBackend>) {
         RiskLevel::Dangerous,
         Arc::new(BrowserPtcHandler::new(backend.clone())),
     );
+
+    // ── 下面 7 个 handler 同样早就写完了（含 schema + 自描述的
+    // description），但一直没有 register_with，于是永远进不了
+    // registry.get_definitions() —— LLM 看不见，agent 调不到。
+    // 其中 browser_wait_for 还被 directions.rs:107 主动宣传过，
+    // browser_vision / browser_init_script 在自己的 schema 和
+    // cdp.rs:407 的提示里也自我介绍过：模型被反复告知一个调不通的
+    // 工具存在，然后花 token 反复试。这就是「看得见、点不动」。
+    register_with(
+        "browser_wait_for",
+        "⏳",
+        RiskLevel::Safe,
+        Arc::new(BrowserWaitForHandler::new(backend.clone())),
+    );
+    register_with(
+        "browser_diff",
+        "🔀",
+        RiskLevel::Safe,
+        Arc::new(BrowserDiffHandler::new(backend.clone())),
+    );
+    register_with(
+        "browser_get_images",
+        "🖼️",
+        RiskLevel::Safe,
+        Arc::new(BrowserGetImagesHandler::new(backend.clone())),
+    );
+    register_with(
+        "browser_console",
+        "🪟",
+        RiskLevel::Safe,
+        Arc::new(BrowserConsoleHandler::new(backend.clone())),
+    );
+    register_with(
+        "browser_highlight",
+        "🔦",
+        RiskLevel::Safe,
+        Arc::new(BrowserHighlightHandler::new(backend.clone())),
+    );
+    register_with(
+        // Caution: 截图出网做视觉分析 —— 有网络与 token 开销，且
+        // 不能与其他工具并行。
+        "browser_vision",
+        "👁️",
+        RiskLevel::Caution,
+        Arc::new(BrowserVisionHandler::new(backend.clone())),
+    );
+    register_with(
+        // Caution: 注入的 init script 对**后续每次导航**都生效，是持久
+        // 的页面级 JS 改动，不能当 Safe 的只读操作对待。
+        "browser_init_script",
+        "🧷",
+        RiskLevel::Caution,
+        Arc::new(BrowserInitScriptHandler::new(backend.clone())),
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1638,6 +1692,47 @@ impl ToolHandler for BrowserInitScriptHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Regression guard for the "written but never wired" class of bug.
+    ///
+    /// Seven handlers (browser_wait_for / diff / get_images / console /
+    /// highlight / vision / init_script) were fully implemented with schemas
+    /// and self-advertising descriptions, but `register()` never called
+    /// `register_with` for them. `bridge_tool_registry` in hermix-agent
+    /// bridges only `get_definitions()`, so they were invisible to the LLM
+    /// while `directions.rs` still told the model they existed — the model
+    /// spent tokens calling a tool that could never resolve.
+    ///
+    /// This asserts against `get_definitions()` specifically (not
+    /// `list_tools`) because that is the exact accessor the agent bridge
+    /// uses; a tool present in the registry but absent from definitions
+    /// would reproduce the same failure.
+    #[test]
+    fn register_exposes_every_browser_handler() {
+        let reg = crate::ToolRegistry::new();
+        register(&reg, Arc::new(MockBrowserBackend));
+        let names: Vec<String> = reg.get_definitions().into_iter().map(|s| s.name).collect();
+        for want in [
+            "browser_navigate",
+            "browser_snapshot",
+            "browser_click",
+            "browser_type",
+            "browser_scroll",
+            "browser_back",
+            "browser_press",
+            "browser_ptc",
+            // the seven that used to be orphans:
+            "browser_wait_for",
+            "browser_diff",
+            "browser_get_images",
+            "browser_console",
+            "browser_highlight",
+            "browser_vision",
+            "browser_init_script",
+        ] {
+            assert!(names.contains(&want.to_string()), "missing from registry: {want}");
+        }
+    }
 
     struct MockBrowserBackend;
     #[async_trait]

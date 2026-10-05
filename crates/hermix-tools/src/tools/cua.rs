@@ -1068,6 +1068,17 @@ impl ToolHandler for CuaUiTreeHandler {
             .get("max_depth")
             .and_then(|v| v.as_u64())
             .unwrap_or(3) as u32;
+        // Was silently dropped: the schema never declared `hwnd`, so the
+        // dispatcher ignored it and every call walked from the desktop
+        // root — returning the taskbar and every other window alongside
+        // the one the caller asked about.
+        let hwnd = params
+            .get("hwnd")
+            .and_then(|v| v.as_i64())
+            // Windows handles are pointer-sized; on the 64-bit target this
+            // is a lossless width match, same convention as the other
+            // hwnd-taking handlers in this file.
+            .map(|h| h as isize);
         let session_id = extract_session_id(&params);
 
         let started = std::time::Instant::now();
@@ -1075,8 +1086,16 @@ impl ToolHandler for CuaUiTreeHandler {
         // SAFETY: `uia` was constructed via `UiaAutomation::new()` which
             // initialises COM on this blocking thread.
             let tree = unsafe {
-                uia.get_control_view_tree(max_depth)
-                    .map_err(|e| ToolError::ExecutionFailed(format!("UIA tree walk: {e}")))?
+                match hwnd {
+                    Some(h) => {
+                        let root = uia
+                            .raw_element_from_handle(h)
+                            .map_err(|e| ToolError::ExecutionFailed(format!("ElementFromHandle({h}): {e}")))?;
+                        uia.get_control_view_tree_from(&root, max_depth)
+                    }
+                    None => uia.get_control_view_tree(max_depth),
+                }
+                .map_err(|e| ToolError::ExecutionFailed(format!("UIA tree walk: {e}")))?
             };
             Ok::<_, ToolError>(tree)
         })?;
@@ -1108,6 +1127,13 @@ impl ToolHandler for CuaUiTreeHandler {
             json!({
                 "type": "integer",
                 "description": "Maximum tree depth to walk. 0 = root only, 1 = root + immediate children, etc. Default: 3."
+            }),
+        );
+        props.insert(
+            "hwnd".into(),
+            json!({
+                "type": "integer",
+                "description": "Scope the walk to one window. Pass the handle from cua_list_windows. Omit to walk the whole desktop (returns the taskbar and every other window too — usually not what you want)."
             }),
         );
         tool_schema(
