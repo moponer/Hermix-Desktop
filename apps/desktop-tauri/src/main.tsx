@@ -93,6 +93,30 @@ let currentStage = 0;
 let crawlTimer: number | undefined;
 let realStageArrived = false;
 
+// 百分比平滑补间：状态机写入目标值，rAF 逐帧逼近——数字滚动而非跳变，
+// 配合进度条 width 过渡同时运动，观感上"活"。
+let pctTarget = 0;
+let pctShown = 0;
+let pctRaf = 0;
+function tweenPct(target: number) {
+  pctTarget = target;
+  if (pctRaf) return;
+  const step = () => {
+    pctShown += (pctTarget - pctShown) * 0.16;
+    if (Math.abs(pctTarget - pctShown) < 0.4) {
+      pctShown = pctTarget;
+    } else {
+      pctRaf = requestAnimationFrame(step);
+    }
+    const bar = document.getElementById("sp-progress-bar");
+    if (bar) bar.style.width = `${pctShown}%`;
+    const el = document.getElementById("sp-progress-pct");
+    if (el) el.textContent = String(Math.round(pctShown));
+    if (pctTarget === pctShown) pctRaf = 0;
+  };
+  pctRaf = requestAnimationFrame(step);
+}
+
 /** 爬行兜底：exe 侧还没有 boot-stage 广播（旧 Rust / command 缺失）时，
  *  进度条匀速爬到 90% 停住，不再是死 0%。真实阶段一旦到达立即停爬让位。 */
 function startProgressCrawl() {
@@ -103,15 +127,10 @@ function startProgressCrawl() {
       crawlTimer = undefined;
       return;
     }
-    const pctEl = document.getElementById("sp-progress-pct");
-    const bar = document.getElementById("sp-progress-bar");
-    const cur = parseInt(pctEl?.textContent ?? "0", 10) || 0;
-    if (cur >= 90) return;
-    // 1% / 280ms：原 600ms 太慢，3 秒才 5%，静帧下像卡死。
-    const next = Math.min(90, cur + 1);
-    if (bar) bar.style.width = `${next}%`;
-    if (pctEl) pctEl.textContent = `${next}%`;
-  }, 280);
+    if (pctShown >= 90) return;
+    // +2% / 320ms：前段爬快些（ease-out 观感），90% 停住等真实事件。
+    tweenPct(Math.min(90, pctShown + 2));
+  }, 320);
 }
 
 function advanceSplashStage(text: string) {
@@ -126,10 +145,7 @@ function advanceSplashStage(text: string) {
   }
   currentStage = idx;
   const stage = SPLASH_STAGES[idx];
-  const bar = document.getElementById("sp-progress-bar");
-  if (bar) bar.style.width = `${stage.pct}%`;
-  const pctEl = document.getElementById("sp-progress-pct");
-  if (pctEl) pctEl.textContent = `${stage.pct}%`;
+  tweenPct(stage.pct);
   const textEl = document.getElementById("sp-progress-text");
   if (textEl) textEl.textContent = stage.text;
   // 阶段列表逐项点亮：done < idx / active === idx

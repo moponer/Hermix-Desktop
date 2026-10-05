@@ -55,51 +55,31 @@
       })();
     </script>
     <style>
-      /* ── Splash tokens · 4 主题 ── */
-      /* 单一 splash 变量映射：跟主题 token 同名，避免 splash 与主程序两套。
-         主程序 themes/<id>.css 加载后会重新覆盖这些变量；splash 在 React 挂载
-         前显示，靠这里兜底。 */
+      /* ── Splash tokens：与主程序主题 token 同名映射（4 主题） ──
+         React 挂载前 themes/*.css 未加载，这里按 data-theme 直接给值；
+         主程序挂载后同 token 名自然让位。 */
       :root {
-        --sp-bg: var(--color-bg-app, #f5f4ed);
-        --sp-ink: var(--color-text-primary, #3d3d3a);
-        --sp-ink-soft: var(--color-text-tertiary, #78776f);
-        --sp-accent: var(--color-accent, #c96442);
-        --sp-track: var(--color-border-subtle, #f0eee6);
+        --sp-bg: var(--color-bg-app, #0b0b0b);
+        --sp-ink: var(--color-text-primary, #f4f4f4);
+        --sp-ink-soft: var(--color-text-tertiary, #adadad);
+        --sp-accent: var(--color-accent, #6fae94);
+        --sp-track: var(--color-border-subtle, #2b271f);
       }
-
-      /* 暗色兜底：当 :root 上的 --color-* 未定义时（Vite 还没加载 themes/*.css），
-         按 data-theme 直接给值。主程序挂载后 useTheme 会按 data-theme 命中
-         themes/<id>.css，--color-* 已定义，下面这套覆盖自动让位（值已对齐）。 */
-      html[data-theme="light"]:root,
-      :root:not([data-theme]) {
-        --sp-bg: #ffffff;
-        --sp-ink: #242424;
-        --sp-ink-soft: #6e6e6e;
-        /* 与 tokens.css 的 --color-accent 同值：splash 与主程序不能一个
-           蓝一个砖红，主题切换的第一眼就出戏。 */
-        --sp-accent: #1e4a3c;
-        --sp-track: #f0f0f0;
+      html[data-theme="light"]:root, :root:not([data-theme]) {
+        --sp-bg: #ffffff; --sp-ink: #242424; --sp-ink-soft: #6e6e6e;
+        --sp-accent: #1e4a3c; --sp-track: #ececea;
       }
       html[data-theme="dark"]:root {
-        --sp-bg: #0b0b0b;
-        --sp-ink: #f4f4f4;
-        --sp-ink-soft: #adadad;
-        --sp-accent: #6fae94;
-        --sp-track: #2b271f;
+        --sp-bg: #0b0b0b; --sp-ink: #f4f4f4; --sp-ink-soft: #9d9d97;
+        --sp-accent: #6fae94; --sp-track: #26221c;
       }
       html[data-theme="rainforest"]:root {
-        --sp-bg: #0c1210;
-        --sp-ink: #e8f1e9;
-        --sp-ink-soft: #85a08b;
-        --sp-accent: #2dd4bf;
-        --sp-track: #1c2822;
+        --sp-bg: #0c1210; --sp-ink: #e8f1e9; --sp-ink-soft: #85a08b;
+        --sp-accent: #2dd4bf; --sp-track: #1c2822;
       }
       html[data-theme="sunset"]:root {
-        --sp-bg: #1d1915;
-        --sp-ink: #e8e0d2;
-        --sp-ink-soft: #7d7260;
-        --sp-accent: #e0701c;
-        --sp-track: #332c23;
+        --sp-bg: #1d1915; --sp-ink: #e8e0d2; --sp-ink-soft: #7d7260;
+        --sp-accent: #e0701c; --sp-track: #332c23;
       }
 
       html, body, #root { height: 100%; margin: 0; }
@@ -110,211 +90,159 @@
         -webkit-font-smoothing: antialiased;
       }
 
-      /* ── Splash root ── */
+      /* ── Splash root：accent 顶光洗底 + 居中列 ── */
       #splash {
         position: fixed; inset: 0;
         display: flex; align-items: center; justify-content: center;
-        background: var(--sp-bg);
+        background:
+          radial-gradient(900px 420px at 50% -12%,
+            color-mix(in srgb, var(--sp-accent) 10%, transparent), transparent 70%),
+          var(--sp-bg);
         z-index: 9999;
-        transition: opacity 0.4s ease, transform 0.4s ease;
+        transition: opacity 0.35s ease, transform 0.35s ease;
         overflow: hidden;
       }
       #splash.hide {
         opacity: 0;
-        transform: scale(1.01);
+        transform: scale(0.995);
         pointer-events: none;
       }
 
-      /* ── Titlebar (drag region only) ── */
+      /* ── Titlebar drag region ── */
       .sp-titlebar {
-        position: absolute;
-        top: 0; left: 0; right: 0;
-        height: 40px;
-        -webkit-app-region: drag;
-        z-index: 10;
+        position: absolute; top: 0; left: 0; right: 0; height: 40px;
+        -webkit-app-region: drag; z-index: 10;
       }
 
-      /* ── Window controls: 无边框窗口, 启动卡住时给用户退路 ── */
+      /* ── Window controls：无边框窗口，启动异常时给用户退路 ── */
       .sp-win-controls {
-        position: absolute;
-        top: 0; right: 0;
-        height: 40px;
-        display: flex;
-        z-index: 20;
-        -webkit-app-region: no-drag;
+        position: absolute; top: 0; right: 0; height: 40px;
+        display: flex; z-index: 20; -webkit-app-region: no-drag;
       }
       .sp-win-btn {
-        width: 46px; height: 40px;
-        border: 0; padding: 0;
-        background: transparent;
-        color: var(--sp-ink-soft);
+        width: 46px; height: 40px; border: 0; padding: 0;
+        background: transparent; color: var(--sp-ink-soft);
         display: flex; align-items: center; justify-content: center;
-        cursor: pointer;
-        transition: background 0.15s ease, color 0.15s ease;
+        cursor: pointer; transition: background 0.15s ease, color 0.15s ease;
       }
-      .sp-win-btn:hover { background: rgba(128, 128, 128, 0.16); }
+      .sp-win-btn:hover { background: color-mix(in srgb, var(--sp-ink) 12%, transparent); }
       .sp-win-btn.sp-close:hover { background: #c42b1c; color: #fff; }
 
-      /* ── Stage ── */
+      /* ── Stage 列布局 ── */
       .sp-stage {
-        position: relative;
-        display: flex; flex-direction: column;
-        align-items: center;
-        text-align: center;
-        z-index: 1;
+        position: relative; z-index: 1;
+        display: flex; flex-direction: column; align-items: center;
+        text-align: center; width: 320px;
       }
 
-      /* ── Mascot（呼吸光晕：方向 A，圆形 halo 无限缓放 + drop-shadow） ── */
+      /* ── Mascot：112px 悬浮 + 呼吸光晕 ── */
       .sp-logo-wrap {
         position: relative;
-        /* 128 + 各段间距 ≈ 400px，比小窗口还高 → flex 居中后吉祥物被裁到
-           视口外（用户只看到一屏静止文字）。压到 76px 并收紧全部间距，
-           整屏 ≈ 290px，700px 高以上的窗口都能完整看到。 */
-        width: 76px; height: 76px;
-        opacity: 0;
-        transform: translateY(12px) scale(0.95);
+        width: 112px; height: 112px;
+        opacity: 0; transform: translateY(14px) scale(0.96);
         animation: sp-fade-up 0.7s cubic-bezier(0.16, 1, 0.3, 1) 0.05s forwards;
       }
       .sp-logo {
-        width: 100%; height: 100%;
-        display: block;
-        filter: drop-shadow(0 2px 16px rgba(0, 0, 0, 0.06));
+        width: 100%; height: 100%; display: block;
+        filter: drop-shadow(0 6px 24px color-mix(in srgb, var(--sp-accent) 22%, transparent));
+        animation: sp-float 5.5s ease-in-out infinite 0.8s;
       }
       .sp-logo-wrap::after {
-        content: "";
-        position: absolute; inset: 0;
-        border-radius: 50%;
-        animation: sp-breathe 4s ease-in-out infinite;
-        pointer-events: none;
+        content: ""; position: absolute; inset: -6px; border-radius: 50%;
+        animation: sp-breathe 4.2s ease-in-out infinite; pointer-events: none;
       }
 
-      /* ── Title（去衬线：20px/600 无衬线，贴近现代聊天应用启动页） ── */
+      /* ── 品牌 + 副标 ── */
       .sp-title {
-        margin-top: 16px;
-        font-family: inherit;
-        font-size: 20px;
-        font-weight: 600;
-        letter-spacing: -0.01em;
-        color: var(--sp-ink);
-        opacity: 0;
-        transform: translateY(8px);
-        animation: sp-fade-up 0.7s cubic-bezier(0.16, 1, 0.3, 1) 0.25s forwards;
-      }
-
-      /* ── Description ── */
-      .sp-desc {
-        margin-top: 8px;
-        font-size: 13px;
-        line-height: 1.55;
-        color: var(--sp-ink-soft);
-        max-width: 320px;
-        opacity: 0;
-        transform: translateY(8px);
-        animation: sp-fade-up 0.7s ease 0.35s forwards;
-      }
-
-      /* ── Progress（细条 3px，收窄到 260px，弱化存在感） ── */
-      .sp-progress-wrap {
         margin-top: 22px;
-        width: 260px;
+        font-size: 26px; font-weight: 700; letter-spacing: -0.02em;
+        color: var(--sp-ink);
+        opacity: 0; transform: translateY(8px);
+        animation: sp-fade-up 0.7s cubic-bezier(0.16, 1, 0.3, 1) 0.22s forwards;
+      }
+      .sp-title .sp-title-dim { color: var(--sp-ink-soft); font-weight: 500; }
+      .sp-desc {
+        margin-top: 8px; font-size: 13px; line-height: 1.55;
+        color: var(--sp-ink-soft); max-width: 320px;
+        opacity: 0; transform: translateY(8px);
+        animation: sp-fade-up 0.7s ease 0.32s forwards;
+      }
+
+      /* ── 进度：6px 轨道 + 流光 + 大号百分比 ── */
+      .sp-progress-wrap {
+        margin-top: 34px; width: 320px;
         opacity: 0;
-        animation: sp-fade-up 0.7s ease 0.45s forwards;
+        animation: sp-fade-up 0.7s ease 0.42s forwards;
       }
-      .sp-progress {
-        position: relative;
-        width: 100%;
-        height: 3px;
-        background: var(--sp-track);
-        border-radius: 999px;
-        overflow: hidden;
-      }
-      /* 轨道上的移动高光：填充块早期只有几 % 宽，光在它身上跑几乎看不见。
-         高光走整条轨道，等待期任何时刻都有可见运动。 */
-      .sp-progress::after {
-        content: "";
-        position: absolute; inset: 0;
-        border-radius: 999px;
-        background: linear-gradient(90deg,
-          transparent 0%,
-          color-mix(in srgb, var(--sp-ink) 10%, transparent) 50%,
-          transparent 100%) 0 0 / 45% 100%;
-        animation: sp-track-sweep 1.8s ease-in-out infinite;
-        pointer-events: none;
+      .sp-progress-track {
+        position: relative; width: 100%; height: 6px;
+        background: var(--sp-track); border-radius: 999px; overflow: hidden;
       }
       .sp-progress-bar {
-        height: 100%;
-        width: 0%;
-        border-radius: 999px;
-        transition: width 0.45s cubic-bezier(0.25, 0.46, 0.45, 0.94);
-        /* 流光：等待期间的持续运动信号。原版只有 width 过渡（1%/600ms），
-           在静止画面上几乎看不出来。 */
-        background:
-          linear-gradient(90deg,
-            var(--sp-accent) 0%,
-            color-mix(in srgb, var(--sp-accent) 55%, #fff) 50%,
-            var(--sp-accent) 100%) 0 0 / 200% 100%;
+        height: 100%; width: 0%; border-radius: 999px;
+        background: linear-gradient(90deg,
+          var(--sp-accent) 0%,
+          color-mix(in srgb, var(--sp-accent) 60%, #fff) 50%,
+          var(--sp-accent) 100%) 0 0 / 200% 100%;
         animation: sp-sheen 1.6s linear infinite;
+        box-shadow: 0 0 12px color-mix(in srgb, var(--sp-accent) 45%, transparent);
+        transition: width 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94);
       }
       .sp-progress-meta {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-top: 8px;
-        font-size: 11px;
-        letter-spacing: 0.01em;
-        color: var(--sp-ink-soft);
+        display: flex; justify-content: space-between; align-items: baseline;
+        margin-top: 10px;
       }
-      .sp-progress-meta .sp-pct { color: var(--sp-ink-soft); opacity: 0.75; font-variant-numeric: tabular-nums; }
+      #sp-progress-text {
+        font-size: 12px; color: var(--sp-ink-soft); letter-spacing: 0.01em;
+      }
+      .sp-pct {
+        font-size: 20px; font-weight: 700; color: var(--sp-ink);
+        font-variant-numeric: tabular-nums; line-height: 1;
+      }
+      .sp-pct .sp-pct-sign { font-size: 12px; font-weight: 600; color: var(--sp-ink-soft); margin-left: 1px; }
 
-      /* ── 启动阶段列表（去分隔线：纯 dot + 文案，12px，行距收紧） ── */
+      /* ── 阶段列表：done=勾 / active=脉冲点 / pending=空心点 ── */
       .sp-stages {
-        margin-top: 18px;
-        width: 260px;
+        margin-top: 26px; width: 320px; text-align: left;
         opacity: 0;
-        animation: sp-fade-up 0.7s ease 0.55s forwards;
+        animation: sp-fade-up 0.7s ease 0.52s forwards;
       }
       .sp-stage-item {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        padding: 4px 0;
-        font-size: 12px;
-        color: var(--sp-ink-soft);
-        opacity: 0.45;
-        transition: color 0.5s ease, opacity 0.5s ease;
+        display: flex; align-items: center; gap: 12px;
+        padding: 6px 0; font-size: 12.5px; color: var(--sp-ink-soft);
+        opacity: 0.45; transition: color 0.45s ease, opacity 0.45s ease;
       }
-      .sp-stage-item .sp-dot {
-        width: 5px; height: 5px;
-        border-radius: 50%;
-        background: var(--sp-track);
-        flex: 0 0 5px;
-        transition: background 0.5s ease, transform 0.5s ease;
+      .sp-stage-item .sp-ico {
+        flex: 0 0 16px; width: 16px; height: 16px;
+        border: 1.5px solid var(--sp-track); border-radius: 50%;
+        position: relative; transition: border-color 0.4s ease, background 0.4s ease;
       }
       .sp-stage-item .sp-label { flex: 1; text-align: left; }
-      .sp-stage-item.done { opacity: 0.8; }
-      .sp-stage-item.done .sp-dot { background: var(--sp-accent); }
-      .sp-stage-item.active { opacity: 1; color: var(--sp-ink); }
-      .sp-stage-item.active .sp-dot {
-        background: var(--sp-accent);
-        animation: sp-pulse 1.6s ease-in-out infinite;
+      .sp-stage-item.done { opacity: 0.75; }
+      .sp-stage-item.done .sp-ico {
+        border-color: var(--sp-accent); background: color-mix(in srgb, var(--sp-accent) 16%, transparent);
+      }
+      .sp-stage-item.done .sp-ico::after {
+        content: ""; position: absolute; left: 4.5px; top: 2.5px;
+        width: 4px; height: 7px;
+        border: solid var(--sp-accent); border-width: 0 1.8px 1.8px 0;
+        transform: rotate(45deg);
+      }
+      .sp-stage-item.active { opacity: 1; color: var(--sp-ink); font-weight: 500; }
+      .sp-stage-item.active .sp-ico {
+        border-color: var(--sp-accent);
+        animation: sp-ring 1.6s ease-in-out infinite;
+      }
+      .sp-stage-item.active .sp-ico::before {
+        content: ""; position: absolute; inset: 3.5px;
+        border-radius: 50%; background: var(--sp-accent);
       }
 
-      /* ── Footer（方向 A：uppercase 字距版本行） ── */
+      /* ── Footer ── */
       .sp-footer {
-        position: absolute;
-        bottom: 18px; left: 0; right: 0;
-        text-align: center;
-        font-size: 10.5px;
-        letter-spacing: 0.12em;
-        color: var(--sp-ink-soft);
-        text-transform: uppercase;
-        z-index: 1;
-      }
-
-      /* ── Subtitle（保留兼容：main.tsx 仍写 sp-stage-text；升级为 meta 行左侧文案） ── */
-      .sp-sub {
-        margin-top: 0;
-        font-size: 0; /* 被 progress-meta 取代，保留 DOM 节点供 main.tsx 写入但视觉归并到 meta 行 */
+        position: absolute; bottom: 18px; left: 0; right: 0;
+        text-align: center; font-size: 10.5px; letter-spacing: 0.14em;
+        color: var(--sp-ink-soft); text-transform: uppercase; z-index: 1;
       }
 
       /* ── Keyframes ── */
@@ -322,18 +250,18 @@
         from { opacity: 0; transform: translateY(10px); }
         to   { opacity: 1; transform: translateY(0); }
       }
+      @keyframes sp-float {
+        0%, 100% { transform: translateY(0); }
+        50%      { transform: translateY(-5px); }
+      }
       @keyframes sp-breathe {
         0%, 100% { box-shadow: 0 0 0 0 transparent; }
-        50% { box-shadow: 0 0 0 10px color-mix(in srgb, var(--sp-accent) 9%, transparent); }
+        50%      { box-shadow: 0 0 0 14px color-mix(in srgb, var(--sp-accent) 8%, transparent); }
       }
-      @keyframes sp-pulse {
-        0%   { box-shadow: 0 0 0 0 color-mix(in srgb, var(--sp-accent) 55%, transparent); }
-        70%  { box-shadow: 0 0 0 9px transparent; }
+      @keyframes sp-ring {
+        0%   { box-shadow: 0 0 0 0 color-mix(in srgb, var(--sp-accent) 45%, transparent); }
+        70%  { box-shadow: 0 0 0 7px transparent; }
         100% { box-shadow: 0 0 0 0 transparent; }
-      }
-      @keyframes sp-track-sweep {
-        from { background-position: -50% 0; }
-        to   { background-position: 150% 0; }
       }
       @keyframes sp-sheen {
         from { background-position: 120% 0; }
@@ -347,70 +275,63 @@
           animation-delay: 0ms !important;
           transition-duration: 0.15s !important;
         }
-        .sp-logo-wrap, .sp-title, .sp-desc,
-        .sp-progress-wrap, .sp-stages { opacity: 1 !important; transform: none !important; }
-        .sp-logo-wrap::after { animation: none !important; }
-        .sp-stage-item { opacity: 1 !important; }
-        .sp-stage-item.active .sp-dot { animation: none !important; }
+        .sp-logo-wrap, .sp-title, .sp-desc, .sp-progress-wrap, .sp-stages {
+          opacity: 1 !important; transform: none !important;
+        }
+        .sp-logo { animation: none !important; }
         .sp-progress-bar { width: 60% !important; animation: none !important; }
-        .sp-progress::after { animation: none !important; }
       }
     </style>
   </head>
   <body>
-    <div id="root">
-      <div id="splash" role="status" aria-label="Hermix Desktop 正在启动">
-        <!-- Drag region for titlebar -->
-        <div class="sp-titlebar" aria-hidden="true"></div>
+    <!-- React 挂载点。splash 必须是 body 的直接子节点而非 #root 内部——
+         createRoot(#root).render() 会清空容器内所有现有子节点，
+         splash 放在里面活不过 React 首帧（进度状态机因此全部空转）。 -->
+    <div id="root"></div>
 
-        <!-- 无边框窗口没有系统标题栏, 启动异常时靠这两个按钮退出 -->
-        <div class="sp-win-controls">
-          <button class="sp-win-btn" id="sp-minimize" type="button" title="最小化" aria-label="最小化">
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
-              <path d="M2 6h8" />
-            </svg>
-          </button>
-          <button class="sp-win-btn sp-close" id="sp-close" type="button" title="关闭" aria-label="关闭">
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
-              <path d="M2.5 2.5l7 7M9.5 2.5l-7 7" />
-            </svg>
-          </button>
-        </div>
+    <div id="splash" role="status" aria-label="Hermix Desktop 正在启动">
+      <div class="sp-titlebar" aria-hidden="true"></div>
 
-        <div class="sp-stage">
-          <!-- Mascot（方向 A：外层 wrap 承载呼吸光晕 halo，img 本身只做 drop-shadow） -->
-          <div class="sp-logo-wrap">
-            <img class="sp-logo" src="./mascot-256.png"
-                 alt="" width="76" height="76" draggable="false" />
-          </div>
-
-          <div class="sp-title">环境准备中</div>
-          <div class="sp-desc">正在为你准备本地环境，请稍候，完成后自动进入主界面。</div>
-
-          <!-- Progress（方向 A：meta 行 = 当前阶段文案 + 百分比；由 main.tsx 写 sp-progress-text / sp-progress-pct） -->
-          <div class="sp-progress-wrap">
-            <div class="sp-progress">
-              <div class="sp-progress-bar" id="sp-progress-bar" style="width: 6%"></div>
-            </div>
-            <div class="sp-progress-meta">
-              <span id="sp-progress-text">正在准备运行环境…</span>
-              <span class="sp-pct" id="sp-progress-pct">6%</span>
-            </div>
-          </div>
-
-          <!-- 启动阶段列表（方向 A：4 项逐项点亮；main.tsx 按 boot-stage 事件推进 active/done 态）
-               阶段文案与 Rust set_boot_stage 的真实序列对齐：
-               准备运行环境 → 解包技能 → 启动本地服务 → 服务就绪 -->
-          <div class="sp-stages" id="sp-stages">
-            <div class="sp-stage-item active" data-i="0"><span class="sp-dot"></span><span class="sp-label">准备运行环境</span></div>
-            <div class="sp-stage-item" data-i="1"><span class="sp-dot"></span><span class="sp-label">加载内置能力</span></div>
-            <div class="sp-stage-item" data-i="2"><span class="sp-dot"></span><span class="sp-label">启动本地服务</span></div>
-            <div class="sp-stage-item" data-i="3"><span class="sp-dot"></span><span class="sp-label">准备就绪</span></div>
-          </div>
-        </div>
-
-        <div class="sp-footer">Hermix Desktop</div>
+      <div class="sp-win-controls">
+        <button class="sp-win-btn" id="sp-minimize" type="button" title="最小化" aria-label="最小化">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
+            <path d="M2 6h8" />
+          </svg>
+        </button>
+        <button class="sp-win-btn sp-close" id="sp-close" type="button" title="关闭" aria-label="关闭">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
+            <path d="M2.5 2.5l7 7M9.5 2.5l-7 7" />
+          </svg>
+        </button>
       </div>
+
+      <div class="sp-stage">
+        <div class="sp-logo-wrap">
+          <img class="sp-logo" src="./mascot-256.png" alt="" width="112" height="112" draggable="false" />
+        </div>
+
+        <div class="sp-title">Hermix <span class="sp-title-dim">Desktop</span></div>
+        <div class="sp-desc">正在为你准备本地环境，完成后自动进入主界面。</div>
+
+        <div class="sp-progress-wrap">
+          <div class="sp-progress-track">
+            <div class="sp-progress-bar" id="sp-progress-bar"></div>
+          </div>
+          <div class="sp-progress-meta">
+            <span id="sp-progress-text">正在准备运行环境</span>
+            <span class="sp-pct"><span id="sp-progress-pct">0</span><span class="sp-pct-sign">%</span></span>
+          </div>
+        </div>
+
+        <div class="sp-stages" id="sp-stages">
+          <div class="sp-stage-item active" data-i="0"><span class="sp-ico"></span><span class="sp-label">准备运行环境</span></div>
+          <div class="sp-stage-item" data-i="1"><span class="sp-ico"></span><span class="sp-label">加载内置能力</span></div>
+          <div class="sp-stage-item" data-i="2"><span class="sp-ico"></span><span class="sp-label">启动本地服务</span></div>
+          <div class="sp-stage-item" data-i="3"><span class="sp-ico"></span><span class="sp-label">准备就绪</span></div>
+        </div>
+      </div>
+
+      <div class="sp-footer">Hermix Desktop · Local-first AI</div>
     </div>
 
     <!-- 启动状态由 /src/main.tsx 驱动: 走 stdio bridge 探活, 并按
