@@ -63,7 +63,7 @@ import type {
 // tools are now tracked in the assistant's execution_timeline, not expanded
 // into separate role:tool messages.
 import { storage, STORAGE_KEYS, sessionKey } from "./utils/storageCompat";
-import { setKeepAwake, KEEP_AWAKE_CHANGED_EVENT } from "./desktopBridge";
+import { sendNotification, setKeepAwake, KEEP_AWAKE_CHANGED_EVENT } from "./desktopBridge";
 import { applyScale, readScale, UI_SCALE_EVENT } from "./utils/uiScale";
 
 const LEFT_KEY = STORAGE_KEYS.sidebarWidth;
@@ -1886,6 +1886,16 @@ streamPhaseRef.current = null;
       reason?: string;
       sessionId: string;
     }): Promise<{ decision: ApprovalDecision; remember?: boolean }> => {
+      // 审批等待是整条链路里唯一「agent 完全停住、零流量」的静默窗口
+      //（默认 600s 后自动拒绝）。窗口失焦时抽屉/内联卡用户全看不到，
+      // 感知就是「模型卡死了」——只有系统通知能把这次等待变成一次
+      // 可点击的提醒。前台时不打扰（抽屉本来就可视）。
+      if (!document.hasFocus()) {
+        sendNotification(
+          "Hermix 等待你的审批",
+          `${req.tool}${req.reason ? `：${req.reason}` : ""}（未响应将在 10 分钟后自动拒绝）`,
+        ).catch(() => {});
+      }
       // The approval card belongs to the *current* assistant turn —
       // the agent is blocked waiting for the user, not starting a new
       // turn. We deliberately do NOT create a new assistant placeholder
