@@ -28,10 +28,11 @@
 //! # 关于「内置」
 //!
 //! 内置的是**目录与安装定义**，不是「开箱可用」。MCP 是外部服务的接入层，
-//! 21 条里 13 条需要用户填自己的凭据（token / API key / DATABASE_URI），
-//! 而零凭据的那几条恰恰要么已被内建工具覆盖、要么需要本就有集群/主机。
-//! 因此**不做 auto-seed**——没有真正"零凭据 + 不重复"的候选，硬凑只会把
-//! 重复项塞进默认上下文。
+//! 24 条里 13 条需要用户填自己的凭据（token / API key / DATABASE_URI）——
+//! 且这 13 条几乎全是境外服务，国内直连不可用。
+//! 2026-10-05 补了 3 条国内零凭据条目（必应中文搜索 / 中国天气 / 国际化
+//! 工作流），把「国内可用且开箱可用」的空位填上；**仍不做 auto-seed** ——
+//! 是否默认装是另一件事，用户没要求过，凭空塞进默认上下文只会占 token。
 
 // 2026-10-04 取消远程拉取后，这些 import 随取数层一并失效：
 //   PathBuf/SystemTime/UNIX_EPOCH ← 磁盘缓存路径与 now_secs
@@ -98,7 +99,7 @@ pub struct CatalogResponse {
 
 // ── 内置精选目录（批次 M1，2026-10-04 起为唯一数据源）──────────
 //
-// 编译期打包 catalog_fallback.json（21 条人工核验的常用 server，形状 =
+// 编译期打包 catalog_fallback.json（24 条人工核验的常用 server，形状 =
 // CatalogItem）。此前它是三层取数链的**兜底层**（磁盘缓存 → 联网拉取 →
 // 内置），取消远程拉取后它就是目录本身：任何网络状况下都返回同一份内容，
 // 目录因此从一个「会随网络变化的列表」变成确定性函数。
@@ -148,6 +149,12 @@ const ZH: &[ZhEntry] = &[
     ZhEntry { match_key: "tavily", title: "Tavily 搜索", desc: "面向 AI 的搜索接口，返回精简结果。", category: "检索" },
     ZhEntry { match_key: "perplexity", title: "Perplexity 搜索", desc: "带引用的问答式检索。", category: "检索" },
     ZhEntry { match_key: "exa", title: "Exa 搜索", desc: "语义化网页搜索与内容检索。", category: "检索" },
+    // 2026-10-05 国内零凭据批次。match_key 取 slug 的首段分词：bing /
+    // weather / i18n 均 ≥4 字符走前缀匹配，已核对不会与既有键抢命中
+    // （三个 slug 分词后无更长的既有键能前缀命中）。
+    ZhEntry { match_key: "bing", title: "必应中文搜索", desc: "抓取必应中文结果并提取网页正文，免 API key，国内直连可用。", category: "检索" },
+    ZhEntry { match_key: "weather", title: "中国天气网", desc: "查询任意中文城市的实时天气与 5 天预报，含湿度与 AQI，免 API key。", category: "检索" },
+    ZhEntry { match_key: "i18n", title: "国际化工作流", desc: "提取硬编码文案、生成 i18n key、检查翻译文件缺失与死 key，纯本地免 key。", category: "开发" },
     ZhEntry { match_key: "context7", title: "Context7 文档", desc: "按需拉取第三方库的最新版文档。", category: "开发" },
     ZhEntry { match_key: "memory", title: "记忆", desc: "跨会话保存与召回事实与偏好。", category: "通用" },
     ZhEntry { match_key: "sequential", title: "结构化思考", desc: "把复杂任务拆成可检查的推理步骤。", category: "通用" },
