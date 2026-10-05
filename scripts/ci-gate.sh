@@ -8,7 +8,9 @@
 #   2. No std::sync / parking_lot lock guards held across `.await`
 #      (clippy::await_holding_lock — catches guaranteed deadlocks)
 #   3. Unit tests pass (cargo test --workspace --lib)
+#   3b. Relay service tests (apps/relay, node --test)
 #   4. Frontend types check (pnpm tsc --noEmit)
+#   4b. Hermix M protocol tests + H5 build (apps/hm)
 #   5. Advisory report: std::thread::sleep in non-test src (potential
 #      async-runtime blocking — each hit needs human review)
 #   6. Theme token static guard: no hardcoded #hex / rgb() in .tsx/.ts
@@ -23,7 +25,7 @@
 #      can outlive the code and hijack skill routing — this gate fails on
 #      the drift instead of letting it silently mislead the agent.
 #
-# Hard gates (exit non-zero on failure): 1, 2, 3, 6, 8, 9, 10, 11
+# Hard gates (exit non-zero on failure): 1, 2, 3, 3b, 4b, 6, 8, 9, 10, 11
 # Soft gates (warn but continue): 4, 5, 7
 #
 # Usage (from repo root, in any terminal):
@@ -74,6 +76,26 @@ cargo test --workspace --lib
 echo ""
 
 #-----------------------------------------------------------------------
+# 3b. Relay service tests
+#     apps/relay is a Node service in this repo, not an external
+#     dependency — it carries the phone-side auth, frame routing and
+#     SQLite audit log, so its tests belong in the same gate as the Rust
+#     they serve. Hard gate: a routing bug here strands every paired
+#     device silently.
+#-----------------------------------------------------------------------
+echo "=== [3b/11] relay tests (node --test) ==="
+if [ -d apps/relay ]; then
+  if [ ! -d apps/relay/node_modules ]; then
+    echo "  FAIL: apps/relay/node_modules missing — run 'npm install' in apps/relay"
+    exit 1
+  fi
+  (cd apps/relay && npm test)
+else
+  echo "  SKIP: apps/relay not found"
+fi
+echo ""
+
+#-----------------------------------------------------------------------
 # 4. Frontend type check (soft gate — pre-existing errors are common)
 #-----------------------------------------------------------------------
 echo "=== [4/11] pnpm tsc --noEmit (frontend) ==="
@@ -83,6 +105,27 @@ if [ -d apps/desktop-tauri ]; then
   }
 else
   echo "  SKIP: apps/desktop-tauri not found"
+fi
+echo ""
+
+#-----------------------------------------------------------------------
+# 4b. Hermix M (apps/hm) — protocol tests + H5 build
+#     The companion app signs every request and frames every relay
+#     message; both were built black-box against a spec. `build:h5` is
+#     the only automated compile we can run here (no JDK / Android SDK
+#     on this machine), so it is a hard gate on its own — a template
+#     syntax error must not be able to reach a phone. The mobile-relay
+#     decision note explicitly refuses "shipped on local build only".
+#-----------------------------------------------------------------------
+echo "=== [4b/11] hermix-m: protocol tests + H5 build ==="
+if [ -d apps/hm ]; then
+  if [ ! -d apps/hm/node_modules ]; then
+    echo "  FAIL: apps/hm/node_modules missing — run 'npm install' in apps/hm"
+    exit 1
+  fi
+  (cd apps/hm && npm test && npm run build:h5)
+else
+  echo "  SKIP: apps/hm not found"
 fi
 echo ""
 
