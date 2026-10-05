@@ -5,6 +5,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { extractArtifacts, canonicalPath, type Artifact, type ArtifactKind } from "../utils/artifacts";
 import { tryArtifactPathExists } from "../utils/artifactReader";
+import { toastError } from "./useToast";
 
 function classifyFromExtension(ext: string): ArtifactKind {
   const CODE_EXTS = new Set(["ts", "tsx", "js", "jsx", "mjs", "rs", "py", "go", "java", "kt", "c", "cpp", "cxx", "h", "hpp", "rb", "php", "sh", "bash", "css", "html", "vue", "sql", "json", "yaml", "yml", "toml", "xml", "md", "txt", "log", "ini"]);
@@ -116,7 +117,7 @@ export function useArtifacts({
 
   /** Programmatic file open from inside a markdown body. */
   const handlePathClick = useCallback(
-    (path: string) => {
+    async (path: string) => {
       // 匹配口径与 App 侧开 tab 完全一致（canonicalPath）：同一文件写成
       // `F:\a\b.md` 或 `F:/a/b.md` 必须命中同一条，否则会合成一个多余
       // 产物，进而在侧栏开出两个重复标签。
@@ -125,10 +126,21 @@ export function useArtifacts({
         (a) => canonicalPath(a.path) === target || a.path.endsWith(path),
       );
       if (existing) {
+        // verifiedArtifacts 里的每一条都过了盘上存在性检查，直接开。
         onOpenArtifact(existing);
         return;
       }
-      // 对话正文里提到、但提取器没抓到的路径：合成一个产物再交给外层预览。
+      // 正文里提到、但提取器没抓到的路径：先探一次盘再合成产物。
+      // 原来是无条件合成 + 直接开预览，文件已经删掉时点开就是一个打不开
+      // 的空白标签，看上去像"点了没反应" —— 明确报错比假装能开省事。
+      if (!(await tryArtifactPathExists(path, workspaceRoot))) {
+        toastError(
+          /[\\/]/.test(path)
+            ? `文件不存在或不在工作区内：${path}`
+            : `只有文件名、没有目录，定位不到：${path}`,
+        );
+        return;
+      }
       const ext = path.split(".").pop()?.toLowerCase() ?? "";
       const synth: Artifact = {
         id: `path:${path}`,
@@ -147,7 +159,7 @@ export function useArtifacts({
       });
       onOpenArtifact(synth);
     },
-    [onOpenArtifact],
+    [onOpenArtifact, workspaceRoot],
   );
 
   return { rawArtifacts, artifacts, selectedArtifactId, setSelectedArtifactId, handlePathClick };

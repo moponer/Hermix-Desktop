@@ -514,13 +514,20 @@
    part of the prose, not as a UI widget. */
 .md-path-link {
   display: inline-flex;
-  /* 不能用 baseline 对齐：两个子项都拿不出真基线——SVG 图标没有文本
-     基线（按规范取底边距），路径 span 带truncate（overflow:hidden），
-     同样按规范退化为盒底当基线。于是"基线"实际是 span 的盒底（≈文字
-     基线下方 3~5px），vertical-align:baseline 把整枚 chip 顶高那么多，
-     图标和路径一起浮在行上。几何居中（center + vertical-align:middle）
-     不依赖字体度量，在任意字号 / UI 缩放下都稳。 */
-  align-items: center;
+  /* 必须用 baseline，不能改成几何居中（center）——这不是审美问题，是会
+     真的错位，而且被反证过两次。
+
+     按钮是 inline-flex，它的基线取自第一个 flex 项（图标）的 border box
+     下沿。只有 align-items:baseline 能让这个下沿与文字基线重合，整枚 chip
+     才坐在正文基线上。改 center 后按钮整体下沉约 1.75px：图标看着"居中"了，
+     整块链接却脱离了正文基线。用零高 inline-block 探针量过（探针在按钮
+     **外面**的正文里）：center 下图标底在基线下 1.75px，baseline 下是 0。
+
+     另有一条流传过的错误推理，这里钉死：span 即便带 truncate
+     (overflow:hidden)，作为 flex item 被 blockify 后内部仍是普通行盒，
+     基线取自真文本基线；overflow 只裁剪溢出，不改变基线来源。
+     曾经据此改成 center，两次都错。 */
+  align-items: baseline;
   gap: 3px;
   max-width: 100%;
   overflow: hidden;
@@ -557,9 +564,20 @@
   color: var(--color-text-primary);
   text-decoration-color: var(--color-accent);
 }
-/* 文件类型图标：由父级 align-items:center 几何居中，不再需要
-   position:relative + top 的像素级手补——那套补偿只在一个字号/缩放
-   组合下成立，其余全漂。 */
+/* 文件类型图标。图标尺寸（MarkdownBody 里 size={11}）才是对齐的关键，
+   这里不要加任何位移补偿。
+
+   实测（14px 正文 / line-height 1.75，探针量的是按钮**外面**正文基线）：
+     13px + top:2px  → 顶 -11.0 底 +2.0  光学偏差 +0.6px，但下沿压进下伸部
+                       2px，正好压在 `db1.py` 那个 y 的尾巴上
+     12px            → 顶 -12.0 底  0.0  光学偏差 -0.9px（高过 cap 顶 1.8px）
+     11px            → 顶 -11.0 底  0.0  光学偏差 -0.4px，且不碰下伸部 ← 采用
+   11px 正好等于 cap 高度，是这个字号下唯一不越界的尺寸。
+
+   align-items 必须留在 baseline：按钮是 inline-flex，它的基线取自第一个
+   flex 项（图标）的 border box 下沿；只有 baseline 对齐才能让这个下沿和
+   文字基线重合。改成 center 会把整个链接往下推约 1.75px —— 图标看着
+   "居中了"，整块链接却脱离了正文基线。 */
 .md-path-link__icon {
   flex-shrink: 0;
   border-radius: 2px;
