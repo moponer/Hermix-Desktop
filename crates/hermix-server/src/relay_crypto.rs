@@ -327,29 +327,6 @@ mod tests {
     }
 
 
-    /// 一次性向量生成器。跑 `cargo test -p hermix-server --lib relay_crypto --
-    /// dump --ignored --nocapture` 打印 JSON，人工粘进两侧的 conformance 测试。
-    /// 保留在仓库里是为了下次改协议时能重新出一组基线，不是常规测试。
-    #[test]
-    #[ignore]
-    fn dump() {
-        use base64::Engine;
-        let pc = Identity::from_seed(&[2u8; 32]);
-        let ctx = FrameContext {
-            frame_id: b"frame-0001",
-            header: br#"{"v":2,"type":"route"}"#,
-            direction: Direction::DeviceToNode,
-        };
-        let sealed = seal_body("把 C 盘清一下".as_bytes(), &pc.secret.public_key(), &ctx);
-        let b64 = base64::engine::general_purpose::STANDARD;
-        println!("PC_PUB={}", b64.encode(pc.public_key()));
-        println!("EPH={}", b64.encode(sealed.ephemeral_public));
-        println!("NONCE={}", b64.encode(sealed.nonce));
-        println!("CT={}", b64.encode(&sealed.ciphertext));
-        println!("FRAME_ID={}", b64.encode(ctx.frame_id));
-        println!("HEADER={}", b64.encode(ctx.header));
-        println!("PLAIN={}", b64.encode("把 C 盘清一下".as_bytes()));
-    }
     #[test]
     fn public_key_is_65_byte_uncompressed_spki() {
         let id = Identity::from_seed(&[17u8; 32]);
@@ -360,7 +337,10 @@ mod tests {
     // ── 跨端一致性 ────────────────────────────────────────────────
     //
     // 下面这组常量由 `apps/hm/dump-vector.ts` 生成（App 用 WebCrypto 跑一遍
-    // 真实路径后打印），`PC_PUB` 则来自上面 `dump()` 打印的 Rust 侧公钥。
+    // 真实路径后打印），`PC_PUB` 则是 `Identity::from_seed(&[2u8; 32]).public_key()`
+    // 的输出，由 `conformance_fixture_is_self_consistent` 守着。
+    // 改协议要重新出基线时：先跑 App 侧 dump 换掉 APP_* 三个常量，
+    // Rust 侧这三个不用动（由 seed 推出）。
     //
     // **为什么需要它**：WebCrypto 不能导入 ECDH 私钥，所以「拿固定向量让 App
     // 解密」这条路根本不存在。能验的只有让 App 暴露两个公开量——它算出的
