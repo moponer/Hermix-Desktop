@@ -26,7 +26,7 @@ pub use config::{
     CompactionConfig, GatewayConfig, LlmProviderConfig, McpServerEntry, ModelSelectorConfig,
     ModelSelectorEntry, ProfileConfig,
     ProxyConfig, SecurityConfig, SkillsSettings, SmartModelRoutingConfig, TerminalBackendType,
-    TerminalConfig, ToolCapabilityConfig, ToolsSettings,
+    TerminalConfig, ToolCapabilityConfig,
 };
 pub use loader::{
     apply_user_config_patch, auto_correct_model, default_model_for_provider,

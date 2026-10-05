@@ -307,8 +307,10 @@ toolsets:
             panic!();
         };
         normalize_config_yaml_root(m);
-        let cfg: crate::config::GatewayConfig = serde_yaml::from_value(root).unwrap();
-        assert_eq!(cfg.tools, vec!["hermes-cli", "web"]);
+        // 解析必须成功：旧配置里的 `tools:` 键被 serde 静默忽略（该字段
+        // 已于 2026-10-06 从 GatewayConfig 删除，见 audit-remediation-plan
+        // 批次 2-7）。
+        let _parsed: crate::config::GatewayConfig = serde_yaml::from_value(root).unwrap();
     }
 
     #[test]

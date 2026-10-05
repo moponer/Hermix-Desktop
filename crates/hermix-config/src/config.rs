@@ -33,9 +33,6 @@ pub struct GatewayConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system_prompt: Option<String>,
 
-    /// List of enabled tool names. Defaults to all core tools.
-    #[serde(default = "default_tools")]
-    pub tools: Vec<String>,
 
     /// Budget limits for tool output.
     #[serde(default)]
@@ -105,9 +102,6 @@ pub struct GatewayConfig {
     #[serde(default)]
     pub skills: SkillsSettings,
 
-    /// Tools enable/disable and per-tool configuration.
-    #[serde(default)]
-    pub tools_config: ToolsSettings,
 
     /// MCP server connection configuration.
     #[serde(default)]
@@ -167,7 +161,6 @@ impl Default for GatewayConfig {
             personality: None,
             max_turns: default_max_turns(),
             system_prompt: None,
-            tools: default_tools(),
             budget: BudgetConfig::default(),
             platforms: HashMap::new(),
             session: SessionConfig::default(),
@@ -184,7 +177,6 @@ impl Default for GatewayConfig {
             proxy: None,
             approval: ApprovalConfig::default(),
             skills: SkillsSettings::default(),
-            tools_config: ToolsSettings::default(),
             mcp_servers: Vec::new(),
             profile: ProfileConfig::default(),
             agent: AgentLoopBehaviorConfig::default(),
@@ -462,33 +454,6 @@ impl Default for CompactionConfig {
 fn default_max_turns() -> u32 {
     30
 }
-
-fn default_tools() -> Vec<String> {
-    // Whitelist of core tool names enabled by default when the user
-    // hasn't customised `tools:` in their config.yaml. These names
-    // MUST match the keys `hermix_tools::register_builtins` actually
-    // registers — earlier versions shipped a Python-era list
-    // (`bash` / `read` / `write` / `edit` / `glob` / `grep` /
-    // `web_fetch`) that did not correspond to any registered Rust
-    // tool, so a fresh install with this default whitelist ended up
-    // with ZERO core tools visible to the LLM after the
-    // `enabled_toolsets.json` reconcile pass.
-    // The names below are the canonical tool IDs defined in
-    // `register_builtins.rs`. Empty vector means "no whitelist" —
-    // every registered tool is eligible. We deliberately ship a
-    // minimal default rather than the full toolset; the user can
-    // extend it from the Settings UI or by editing config.yaml.
-    vec![
-        "terminal".into(),
-        "read_file".into(),
-        "write_file".into(),
-        "patch".into(),
-        "search_files".into(),
-        "web_search".into(),
-        "web_fetch".into(),
-    ]
-}
-
 // ---------------------------------------------------------------------------
 // LlmProviderConfig
 // ---------------------------------------------------------------------------
@@ -862,17 +827,6 @@ fn default_skills_auto_extraction() -> bool {
     true
 }
 
-/// Tools configuration.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-pub struct ToolsSettings {
-    #[serde(default)]
-    pub enabled: Vec<String>,
-    #[serde(default)]
-    pub disabled: Vec<String>,
-    #[serde(default)]
-    pub per_tool: HashMap<String, serde_json::Value>,
-}
-
 /// MCP server entry.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct McpServerEntry {
@@ -959,7 +913,6 @@ mod tests {
     fn gateway_config_default() {
         let cfg = GatewayConfig::default();
         assert_eq!(cfg.max_turns, 30);
-        assert!(!cfg.tools.is_empty());
         assert!(cfg.model.is_none());
         assert!(cfg.proxy.is_none());
         // autonomous_mode defaults to true: product philosophy is "try
@@ -1004,7 +957,6 @@ max_turns: 30
         let json = serde_json::to_string(&cfg).unwrap();
         let back: GatewayConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(back.max_turns, cfg.max_turns);
-        assert_eq!(back.tools, cfg.tools);
     }
 
     #[test]

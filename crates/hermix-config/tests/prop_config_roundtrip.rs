@@ -13,7 +13,7 @@ use hermix_config::{
     AdvancedSettingsConfig, AgentLoopBehaviorConfig, ApprovalConfig, CompactionConfig,
     DailyReset, GatewayConfig, IdleReset, PlatformConfig, ProfileConfig,
     SessionConfig, SessionResetPolicy, SkillsSettings, SmartModelRoutingConfig,
-    StreamingConfig, TerminalConfig, ToolCapabilityConfig, ToolsSettings,
+    StreamingConfig, TerminalConfig, ToolCapabilityConfig,
     UnauthorizedDmBehavior,
 };
 use hermix_core::{BudgetConfig, PermissionProfile};
@@ -115,7 +115,6 @@ fn arb_gateway_config() -> impl Strategy<Value = GatewayConfig> {
                 personality,
                 max_turns,
                 system_prompt: None,
-                tools: vec!["bash".into(), "read".into()],
                 budget: BudgetConfig::default(),
                 platforms: HashMap::new(),
                 session,
@@ -133,7 +132,6 @@ fn arb_gateway_config() -> impl Strategy<Value = GatewayConfig> {
                 approval: ApprovalConfig::default(),
                 security: SecurityConfig::default(),
                 skills: SkillsSettings::default(),
-                tools_config: ToolsSettings::default(),
                 mcp_servers: Vec::new(),
                 profile: ProfileConfig::default(),
                 agent: AgentLoopBehaviorConfig::default(),

@@ -51,5 +51,13 @@
 - **验证**：cargo check 0 错误；tools memory 24 / server 292 全绿；tsc 干净。
 - **提交**：`chore(audit-batch4)`。
 
+### Step 3（01:50）— A 线批次 2-7 完成 ✅（config 死字段删除，拍板 A）
+- 删除 `GatewayConfig.tools`（+ `default_tools()`）与 `GatewayConfig.tools_config`（+ `ToolsSettings` 结构体）——全仓零消费点（评审已验证）。
+- 同步修复引用：config.rs 两处测试断言、lib.rs 再导出、python_yaml_compat.rs:311 断言（改为"解析成功 + 未知键被忽略"断言）、prop_config_roundtrip.rs（import + 两处字段）。
+- **免 alias 已验证**：hermix-config 无 `deny_unknown_fields`，旧 config.yaml 的这两个键被 serde 静默忽略——Consequences 预案的 alias 过渡不需要。
+- **验证**：hermix-config check 0 错误 0 警告；config 118 + pyyaml 12 全绿；workspace --all-targets 0 错误。
+- **提交**：`refactor(audit-batch2-7)`。
+
 ### 下一步
-- Step 3 = 批次 2-7 config 死字段删除（tools/tools_config + roundtrip 测试，免 alias 已验证）。
+- Step 4 = 批次 3 死代码清除（拆 Rust / 前端两个 PR）；
+- 批次 2-5（审批 family → signature 级）与 2-6（traversal 硬拒，需场景枚举）排在批次 3 之后。
