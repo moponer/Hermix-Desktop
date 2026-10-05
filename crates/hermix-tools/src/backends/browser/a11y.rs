@@ -363,28 +363,36 @@ pub(crate) fn diff_a11y_yaml(old: &str, new: &str) -> String {
 mod tests {
     use super::*;
 
-    /// 旧实现只转义 `'` 不转义 `\`：name 含 `\` 时会吞掉转义反斜杠，
-    /// 让 `:has-text('...')` 的字符串提前闭合（页面可通过 accessible
-    /// name 注入额外 selector）。修后必须满足：输出里的 `'` 全部
-    /// 带奇数个前导反斜杠（即被正确转义），字符串只在收尾闭合。
+    /// 页面可控的 name 会落进**双引号**属性值，因此 `\` 必须翻倍、`"`
+    /// 必须转义，否则属性字符串提前闭合，页面可通过 accessible name 注入
+    /// 额外 selector。旧实现的单引号 `:has-text('…')` 上下文随选择器形态
+    /// 一并移除，防护点从"单引号上下文"变成"双引号属性上下文"。
     #[test]
     fn ax_node_selector_escapes_backslash_before_quote() {
-        // 页面可控 name：字面量 a、\、'、b
-        let sel = ax_node_selector("button", "a\\'b");
+        // 页面可控 name：字面量 a、\、"、b
+        let sel = ax_node_selector("button", "a\\\"b");
         assert_eq!(
             sel,
-            "[role=\"button\"]:has-text('a\\\\\\'b')",
+            "[role=\"button\"][aria-label=\"a\\\\\\\"b\"], \
+             [role=\"button\"][placeholder=\"a\\\\\\\"b\"], \
+             [role=\"button\"][name=\"a\\\\\\\"b\"], \
+             [role=\"button\"][title=\"a\\\\\\\"b\"], \
+             [role=\"button\"][alt=\"a\\\\\\\"b\"]",
             "backslash must be doubled before escaping the quote: {sel}"
         );
     }
 
-    /// 反斜杠本身要翻倍，否则后续的 `'` 转义会被页面控制的 `\` 吞掉。
+    /// 反斜杠本身要翻倍，否则后续的引号转义会被页面控制的 `\` 吞掉。
     #[test]
     fn ax_node_selector_doubles_lone_backslash() {
         let sel = ax_node_selector("button", "a\\b");
         assert_eq!(
             sel,
-            "[role=\"button\"]:has-text('a\\\\b')",
+            "[role=\"button\"][aria-label=\"a\\\\b\"], \
+             [role=\"button\"][placeholder=\"a\\\\b\"], \
+             [role=\"button\"][name=\"a\\\\b\"], \
+             [role=\"button\"][title=\"a\\\\b\"], \
+             [role=\"button\"][alt=\"a\\\\b\"]",
             "lone backslash must be doubled: {sel}"
         );
     }
@@ -400,14 +408,29 @@ mod tests {
     #[test]
     fn ax_node_selector_neutralizes_control_chars() {
         let sel = ax_node_selector("button", "li\r\nne");
-        assert_eq!(sel, "[role=\"button\"]:has-text('li  ne')", "{sel}");
+        assert_eq!(
+            sel,
+            "[role=\"button\"][aria-label=\"li  ne\"], \
+             [role=\"button\"][placeholder=\"li  ne\"], \
+             [role=\"button\"][name=\"li  ne\"], \
+             [role=\"button\"][title=\"li  ne\"], \
+             [role=\"button\"][alt=\"li  ne\"]",
+            "{sel}"
+        );
     }
 
-    /// 普通名字不受影响——不破坏既有 selector 形状。
+    /// 普通名字不受影响——每个候选属性都出现一次。
     #[test]
     fn ax_node_selector_plain_name_unchanged() {
         let sel = ax_node_selector("textbox", "Username");
-        assert_eq!(sel, "[role=\"textbox\"]:has-text('Username')");
+        assert_eq!(
+            sel,
+            "[role=\"textbox\"][aria-label=\"Username\"], \
+             [role=\"textbox\"][placeholder=\"Username\"], \
+             [role=\"textbox\"][name=\"Username\"], \
+             [role=\"textbox\"][title=\"Username\"], \
+             [role=\"textbox\"][alt=\"Username\"]"
+        );
     }
 
     #[test]
