@@ -13,6 +13,21 @@ pub enum MessageRole {
     User,
     Assistant,
     Tool,
+    /// A result injected by an external scheduler (an automation run
+    /// delivering into this conversation), not something anyone typed.
+    ///
+    /// It is **stored and rendered but never sent to the model**:
+    /// `SessionPersistence::load_session` filters this role out of the
+    /// LLM payload the same way it filters `approval` and `system` rows.
+    /// Persisting it as `user` instead would be a lie the model later
+    /// acts on — it would see a question the user never asked and try
+    /// to continue answering it.
+    ///
+    /// The distinction that matters at every `match` on this enum: does
+    /// this message belong in the prompt? `Automation` says no, and any
+    /// provider serializer that has to handle it must drop it rather
+    /// than invent a role for it.
+    Automation,
 }
 
 // ---------------------------------------------------------------------------
@@ -140,6 +155,38 @@ pub struct ImageUrl {
 // Message
 // ---------------------------------------------------------------------------
 
+/// Where an [`MessageRole::Automation`] message came from.
+///
+/// Mirrors `hermix_transport::Role::Automation` on the wire and the
+/// frontend's `AutomationMessageMeta`. Kept as a distinct type rather
+/// than reusing `hermix_core::traits::ExternalDelivery` so the persisted
+/// shape can gain fields (or lose the ones that only make sense during
+/// dispatch) without a storage migration — `ExternalDelivery` is
+/// constructed fresh on every dispatch, this one is read back months
+/// later.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct AutomationMeta {
+    /// The scheduler's display name — the card header the user reads.
+    pub automation_name: String,
+    /// The originating `automation_runs.id`, for support/debugging.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    /// The instruction the scheduler executed. Shown collapsed: without
+    /// it the user sees a result and has no way to tell what asked for
+    /// it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+    /// Why this result landed in this conversation instead of its
+    /// configured one (injection cap reached, too many consecutive
+    /// failures, anchor session gone).
+    ///
+    /// A fallback that is not explained reads as "the result vanished",
+    /// which is the exact failure the guardrails were added to prevent
+    /// — so this travels with the message rather than being logged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_reason: Option<String>,
+}
+
 /// A single message in a conversation.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct Message {
@@ -195,6 +242,23 @@ pub struct Message {
     /// in the frontend.
     #[serde(default, skip)]
     pub ephemeral: bool,
+    /// Provenance for a [`MessageRole::Automation`] message — which
+    /// scheduled run produced it, and (when it could not reach its
+    /// anchor conversation) why it landed here instead.
+    ///
+    /// This has to ride on the message rather than be re-derived at
+    /// read time: `flush_messages` re-inserts every row from the
+    /// in-memory vector, so anything not carried here is gone after the
+    /// user's next turn. Re-deriving from `automation_runs` at serve
+    /// time isn't possible either — that table lives in a different
+    /// store than the session timeline, and a session can accumulate
+    /// results from many runs.
+    ///
+    /// `None` for every other role, and for automation rows written
+    /// before this field existed (the UI degrades to an unnamed task
+    /// header rather than dropping the result).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub automation_meta: Option<AutomationMeta>,
 }
 
 /// One entry in an assistant message's execution timeline.
@@ -259,6 +323,7 @@ impl Message {
             execution_timeline: None,
             unified_steps: None,
             ephemeral: false,
+            automation_meta: None,
         }
     }
 
@@ -276,6 +341,21 @@ impl Message {
             execution_timeline: None,
             unified_steps: None,
             ephemeral: false,
+            automation_meta: None,
+        }
+    }
+
+    /// Create a message injected by an external scheduler.
+    ///
+    /// Structurally identical to [`Message::user`] apart from the role,
+    /// and that one difference is the whole point: this message is
+    /// persisted and rendered but excluded from the LLM payload by
+    /// `SessionPersistence::load_session`.
+    pub fn automation(content: impl Into<String>) -> Self {
+        Self {
+            role: MessageRole::Automation,
+            content: Some(content.into()),
+            ..Default::default()
         }
     }
 
@@ -293,6 +373,7 @@ impl Message {
             execution_timeline: None,
             unified_steps: None,
             ephemeral: false,
+            automation_meta: None,
         }
     }
 
@@ -310,6 +391,7 @@ impl Message {
             execution_timeline: None,
             unified_steps: None,
             ephemeral: false,
+            automation_meta: None,
         }
     }
 
@@ -340,6 +422,7 @@ impl Message {
             execution_timeline: None,
             unified_steps: None,
             ephemeral: false,
+            automation_meta: None,
         }
     }
 
@@ -363,6 +446,7 @@ impl Message {
             execution_timeline: None,
             unified_steps: None,
             ephemeral: false,
+            automation_meta: None,
         }
     }
 
@@ -387,6 +471,7 @@ impl Message {
             execution_timeline: None,
             unified_steps: None,
             ephemeral: false,
+            automation_meta: None,
         }
     }
 }

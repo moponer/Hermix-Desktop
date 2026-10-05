@@ -43,6 +43,7 @@ fn user_msg(content: &str) -> Message {
         execution_timeline: None,
         unified_steps: None,
         ephemeral: false,
+        automation_meta: None,
     }
 }
 

@@ -1458,6 +1458,13 @@ impl AnthropicProvider {
                         "content": content_blocks,
                     }));
                 }
+                // Never sent to the provider. `load_session` already
+                // filters these out, so reaching here means some caller
+                // built a payload by hand — and the only safe reading
+                // of an automation result is "the model must not see
+                // this". Mapping it onto `user` would invent a turn the
+                // user never took; dropping it is the conservative arm.
+                MessageRole::Automation => {}
             }
         }
 
@@ -1563,6 +1570,7 @@ impl AnthropicProvider {
             execution_timeline: None,
             unified_steps: None,
             ephemeral: false,
+            automation_meta: None,
         };
 
         Ok(LlmResponse {
@@ -2382,6 +2390,7 @@ fn parse_openai_response(json: &Value) -> Result<LlmResponse, AgentError> {
         execution_timeline: None,
         unified_steps: None,
         ephemeral: false,
+        automation_meta: None,
     };
 
     let finish_reason = choice
@@ -2599,6 +2608,7 @@ mod tests {
                 execution_timeline: None,
                 unified_steps: None,
                 ephemeral: false,
+                automation_meta: None,
             },
             Message::tool_result("tc_1", "file contents here", Some("read_file")),
         ];
@@ -2768,6 +2778,7 @@ mod tests {
             execution_timeline: None,
             unified_steps: None,
             ephemeral: false,
+            automation_meta: None,
         }
     }
 
@@ -2784,6 +2795,7 @@ mod tests {
             execution_timeline: None,
             unified_steps: None,
             ephemeral: false,
+            automation_meta: None,
         }
     }
 
@@ -2800,6 +2812,7 @@ mod tests {
             execution_timeline: None,
             unified_steps: None,
             ephemeral: false,
+            automation_meta: None,
         }
     }
 
@@ -2915,6 +2928,7 @@ mod tests {
             execution_timeline: None,
             unified_steps: None,
             ephemeral: false,
+            automation_meta: None,
         };
         empty_assistant.tool_calls = None;
         let messages = vec![
@@ -3015,6 +3029,7 @@ mod tests {
             execution_timeline: None,
             unified_steps: None,
             ephemeral: false,
+            automation_meta: None,
         }
     }
 

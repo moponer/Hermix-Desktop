@@ -82,6 +82,14 @@ pub enum Role {
     /// when constructing conversation context (see
     /// `SessionPersistence::load_session`).
     Approval,
+    /// UI-only: a result an automation run delivered into this
+    /// conversation. Never sent to the LLM — the server filters these
+    /// out when constructing conversation context (see
+    /// `SessionPersistence::load_session`), exactly as it does for
+    /// `Approval`. Carries a distinct role rather than masquerading as
+    /// `User` so the client can label its provenance: nobody in the
+    /// conversation said this.
+    Automation,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -97,7 +105,7 @@ pub struct ProtocolMessage {
     /// to rebuild the inline tool cards (with the original tool
     /// name + arguments) on session reload. Populated for
     /// `role == "assistant"` only; `None` for user / system /
-    /// tool / approval rows.
+    /// tool / approval / automation rows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<crate::ToolCall>>,
     /// Tool name on `role == "tool"` rows — mirrors
@@ -117,6 +125,14 @@ pub struct ProtocolMessage {
     /// Free-form JSON for non-message rows (e.g. approval cards carry
     /// `request_id` / `tool` / `args` / `risk` / `decision` / `decided_at`).
     /// Always `None` for user / assistant / system / tool messages.
+    ///
+    /// Automation rows use it too, to carry the provenance the
+    /// conversation itself can't: `automation_name` / `run_id` /
+    /// `prompt` / `fallback_reason`. That last one matters most — a run
+    /// that couldn't reach its anchor session gets redirected to a
+    /// standalone one, and without this the user opens the anchor and
+    /// sees nothing with no explanation. `content` alone can't say it,
+    /// because the content is identical in both cases.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extra: Option<serde_json::Value>,
     /// The model's raw reasoning (thinking monologue) for this turn,
@@ -126,7 +142,7 @@ pub struct ProtocolMessage {
     /// on session reload — without it the user sees the reply but
     /// not the thinking that produced it.
     /// Populated for `role == "assistant"` only; `None` for all
-    /// other roles (user, system, tool, approval).
+    /// other roles (user, system, tool, approval, automation).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_content: Option<String>,
     /// Execution timeline (tool_start / tool_stdout / tool_complete

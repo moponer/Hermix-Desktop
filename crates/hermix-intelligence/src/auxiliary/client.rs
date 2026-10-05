@@ -451,6 +451,7 @@ mod tests {
                         execution_timeline: None,
                         unified_steps: None,
                         ephemeral: false,
+                        automation_meta: None,
                     },
                     finish_reason: Some("stop".into()),
                     model: model.unwrap_or("test").to_string(),
@@ -494,6 +495,7 @@ mod tests {
             execution_timeline: None,
             unified_steps: None,
             ephemeral: false,
+            automation_meta: None,
         }
     }
 
@@ -871,6 +873,7 @@ mod tests {
                         execution_timeline: None,
                         unified_steps: None,
                         ephemeral: false,
+                        automation_meta: None,
                     },
                     finish_reason: Some("stop".into()),
                     model: model.unwrap_or("test").to_string(),

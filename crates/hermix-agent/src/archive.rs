@@ -116,6 +116,7 @@ fn render_message_md(idx: usize, node_id: &str, m: &Message) -> String {
         MessageRole::User => "user",
         MessageRole::Assistant => "assistant",
         MessageRole::Tool => "tool",
+        MessageRole::Automation => "automation",
     };
     let body = m.content.as_deref().unwrap_or("");
     let mut out = String::with_capacity(body.len() + 96);

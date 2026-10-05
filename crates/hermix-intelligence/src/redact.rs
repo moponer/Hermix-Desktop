@@ -194,6 +194,7 @@ impl Redactor {
             execution_timeline: None,
             unified_steps: None,
             ephemeral: message.ephemeral,
+            automation_meta: None,
         }
     }
 

@@ -15,7 +15,7 @@ use hermix_core::traits::{AgentOverrides, AgentReply, AgentService, PermissionLe
 // the trait, not on the concrete `MemoryRouter` struct.
 use hermix_focus::MemoryLayer;
 use hermix_core::types::ExecutionTimelineEvent;
-use hermix_core::{AgentError, ApprovalOutcome, LlmProvider, Message, MessageRole, PendingGrant, PermissionProfile, StreamChunk, StreamDelta, ToolCall};
+use hermix_core::{AgentError, ApprovalOutcome, AutomationMeta, LlmProvider, Message, MessageRole, PendingGrant, PermissionProfile, StreamChunk, StreamDelta, ToolCall};
 use hermix_tools::{TirithAction, TirithSecurity, ToolRegistry};
 use hermix_tools::backends::memory::FileMemoryBackend;
 use hermix_tools::tools::memory::MemoryHandler;
@@ -1427,6 +1427,11 @@ impl AgentService for LocalAgentService {
             .load_session(session_id)
             .unwrap_or_default();
 
+        // How much of `messages` is pre-existing conversation, captured
+        // before this turn appends anything. Used below to scope the
+        // `Automation` relabelling to exactly the rows this turn adds.
+        let history_len = messages.len();
+
         // O3.2: Gateway pre-compression safety net. Detect sessions that
         // have grown beyond 85% of a typical context window (200K tokens)
         // between agent runs. Compress by truncating old messages to prevent
@@ -1473,6 +1478,32 @@ impl AgentService for LocalAgentService {
             messages.push(Message::user_with_images(text, &images));
         } else {
             messages.push(Message::user(text));
+        }
+
+        // An externally-triggered turn (an automation run) must not leave
+        // a fabricated "user asked this" line behind. Both the prompt we
+        // just pushed and the reply the loop will produce are relabelled
+        // `Automation` for storage, so the early-save (crash protection)
+        // and the final save agree, and `load_session` keeps handing the
+        // model only turns a person actually took part in.
+        //
+        // The prompt's role is restored to `User` again before
+        // `agent.run` (see below) and relabelled once more before the
+        // post-run persist. What travels with it across that window is
+        // `automation_meta` — the marker both relabels key off, so a
+        // historical user message can never be caught by them.
+        //
+        // Only the non-streaming path carries this — automations dispatch
+        // through `send_message`, never `send_message_stream`.
+        let automation_meta = overrides.external_delivery.as_ref().map(|d| AutomationMeta {
+            automation_name: d.source_label.clone(),
+            run_id: d.run_id.clone(),
+            prompt: Some(text.to_string()),
+            fallback_reason: d.fallback_reason.clone(),
+        });
+        if let (Some(meta), Some(last)) = (automation_meta.as_ref(), messages.last_mut()) {
+            last.role = MessageRole::Automation;
+            last.automation_meta = Some(meta.clone());
         }
 
         // Determine effective model and personality.
@@ -1631,6 +1662,24 @@ impl AgentService for LocalAgentService {
             );
         }
 
+        // Hand the loop a real `User` turn again for the duration of the
+        // run. `agent_loop` keys several decisions off that role — most
+        // visibly `task_hint` (`prepare_run_context`), which feeds the
+        // system prompt and the empty-response retry; with the prompt
+        // left as `Automation` it would resolve to empty and the run
+        // would lose the automation's instruction from its own context.
+        //
+        // `automation_meta` stays attached: it rides along to the
+        // post-run relabel below and is what gets persisted. Only the
+        // role is temporarily restored.
+        if let Some(meta) = automation_meta.as_ref() {
+            if let Some(last) = messages.last_mut() {
+                if last.role == MessageRole::Automation && last.automation_meta.as_ref() == Some(meta) {
+                    last.role = MessageRole::User;
+                }
+            }
+        }
+
         // Create and run agent
         let agent = self.spawn_agent_loop(
             session_id,
@@ -1670,6 +1719,30 @@ impl AgentService for LocalAgentService {
         // borrow checker doesn't see a partial-move of `result`.
         let snapshot = build_compression_snapshot(&result);
         messages = merge_consecutive_assistant_messages(result.messages);
+
+        // Relabel both halves of an externally-triggered turn for
+        // storage, undoing the temporary role restore above. Scoped to
+        // rows this turn added — everything before `history_len` came
+        // from `load_session` and is real conversation. Without this the
+        // reply would persist as a genuine assistant message, leaving a
+        // dangling half-turn the next `load_session` hands the model as
+        // something it apparently said unprompted.
+        if let Some(meta) = automation_meta.as_ref() {
+            // The prompt sits at `history_len`: it was pushed before the
+            // run and restored to `User` for the loop's benefit, so it
+            // needs an explicit relabel back.
+            if let Some(prompt_msg) = messages.get_mut(history_len) {
+                if prompt_msg.automation_meta.as_ref() == Some(meta) {
+                    prompt_msg.role = MessageRole::Automation;
+                }
+            }
+            for msg in messages.iter_mut().skip(history_len) {
+                if msg.role == MessageRole::Assistant {
+                    msg.role = MessageRole::Automation;
+                    msg.automation_meta = Some(meta.clone());
+                }
+            }
+        }
 
         // Persist updated session (with compressed summary + raw archive for cross-session continuity).
         // Log on failure (do NOT silently swallow: a DB write failure means the
@@ -3514,6 +3587,7 @@ mod override_tests {
             expert_toolset: None,
             memory_dir: None,
             on_prefetch_intent: None,
+            external_delivery: None,
             shutdown: None,
         };
         let (cfg, allowed) = LocalAgentService::apply_overrides(base, &overrides);
@@ -3550,6 +3624,7 @@ mod override_tests {
             expert_toolset: None,
             memory_dir: None,
             on_prefetch_intent: None,
+            external_delivery: None,
             shutdown: None,
         };
         let (_cfg, allowed) = LocalAgentService::apply_overrides(base, &overrides);

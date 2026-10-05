@@ -378,6 +378,30 @@ pub struct AgentImage {
     pub mime_type: String,
 }
 
+/// Where an externally-triggered turn came from, so the delivery can be
+/// labelled and audited after the fact.
+///
+/// Carried on [`AgentOverrides::external_delivery`]. `hermix-core` stays
+/// free of any `hermix-automation` dependency, so the automation id
+/// rides as a plain string rather than a typed reference.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExternalDelivery {
+    /// Human-readable source label, shown as the message group header
+    /// (e.g. an automation's name). Never shown to the model.
+    pub source_label: String,
+    /// The originating run's id, for linking a delivered message back to
+    /// its `automation_runs` row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    /// Why this result could not land in its anchor conversation and fell
+    /// back to a standalone session (guardrail cap hit, too many
+    /// consecutive failures, anchor session gone).
+    ///
+    /// A fallback that is not explained reads as "the result vanished".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_reason: Option<String>,
+}
+
 /// Optional overrides for a single agent request.
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct AgentOverrides {
@@ -454,6 +478,25 @@ pub struct AgentOverrides {
     /// only grants). Unknown group = empty members = no-op.
     #[serde(default)]
     pub expert_toolset: Option<String>,
+    /// Set when this turn was initiated by an external scheduler (an
+    /// automation run) rather than by the user typing.
+    ///
+    /// It flips how this turn's two messages are **persisted**: the
+    /// prompt and the reply are both stored under
+    /// [`MessageRole::Automation`] instead of `user` / `assistant`.
+    /// Without it an automation run leaves a fabricated "user asked
+    /// this" line in the conversation, and the model — seeing it on the
+    /// next turn — tries to continue answering a question nobody asked.
+    ///
+    /// It does not change what the agent *sees this turn*: the prompt
+    /// still arrives as a real user turn, because the run has to be able
+    /// to do its job. The filter only applies to what survives to the
+    /// next turn.
+    ///
+    /// `None` for every interactive chat, so this stays a pure opt-in
+    /// and ordinary conversations are unaffected.
+    #[serde(default)]
+    pub external_delivery: Option<ExternalDelivery>,
     /// Callback to register an approval request with the WS handler.
     /// Arguments: `(session_id, request_id)` →
     /// `oneshot::Receiver<ApprovalOutcome>`. The receiver resolves when

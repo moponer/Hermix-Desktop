@@ -147,6 +147,11 @@ pub(crate) async fn handle_ws(
             domain_override: request.domain_override.clone(),
             expert_toolset: request.expert_toolset.clone(),
             memory_dir: None,
+            // An interactive chat turn is by definition user-initiated;
+            // only the automation scheduler sets this. Keeping it
+            // `None` here is what makes ordinary turns persist as a
+            // real `user` message.
+            external_delivery: None,
             approval_requester: None,
             on_event: None,
             pre_approval_checker: None,
@@ -972,6 +977,10 @@ pub(crate) async fn handle_ws_stream_send(
         // `tool_dispatch::resolve_pre_dispatch` and the `Notify` arm
         // of the inner `tokio::select!`).
         shutdown: Some(shutdown_notify.clone()),
+        // A WS turn is a human typing. `external_delivery` is set only by
+        // the automation scheduler, which calls `send_message`
+        // in-process rather than over the socket.
+        external_delivery: None,
     };
 
     let tx_clone = tx.clone();

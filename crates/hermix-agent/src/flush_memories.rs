@@ -90,6 +90,7 @@ pub fn build_flush_sentinel() -> Message {
         execution_timeline: None,
         unified_steps: None,
         ephemeral: true,
+        automation_meta: None,
     }
 }
 
@@ -146,6 +147,7 @@ mod tests {
             execution_timeline: None,
             unified_steps: None,
             ephemeral: false,
+            automation_meta: None,
         }
     }
 
@@ -162,6 +164,7 @@ mod tests {
             execution_timeline: None,
             unified_steps: None,
             ephemeral: false,
+            automation_meta: None,
         }
     }
 
@@ -178,6 +181,7 @@ mod tests {
             execution_timeline: None,
             unified_steps: None,
             ephemeral: false,
+            automation_meta: None,
         }
     }
 

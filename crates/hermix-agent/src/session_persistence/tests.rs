@@ -442,10 +442,11 @@
                 reasoning_content: None,
                 cache_control: None,
                 execution_timeline: None,
-                unified_steps: None,
-                ephemeral: false,
-            },
-            Message {
+                    unified_steps: None,
+                    ephemeral: false,
+                    automation_meta: None,
+                },
+                Message {
                 role: hermix_core::MessageRole::Assistant,
                 content: None,
                 content_parts: None,
@@ -457,6 +458,7 @@
                 execution_timeline: None,
                 unified_steps: None,
                 ephemeral: false,
+                automation_meta: None,
             },
         ];
         sp.persist_session("sess-tools", &messages, Some("gpt-4o"), None, None, None, None, None, None)
@@ -533,6 +535,7 @@
                 execution_timeline: None,
                 unified_steps: None,
                 ephemeral: false,
+                automation_meta: None,
             },
         ];
         sp.persist_session("sess-sort", &messages, Some("gpt-4o"), None, None, None, None, None, None)
@@ -864,9 +867,281 @@
         assert_eq!(entries.len(), 3);
     }
 
+    /// 自动化结果是**落库但不入 prompt**——这套设计的全部意义。
+    ///
+    /// 若这个过滤失效，用户下一轮发言时模型会读到一条它自己没说过、
+    /// 用户也没说过的话，并试图接着回答一个从未被提出的问题。
     #[test]
-    fn test_resolve_approval_updates_decision() {
+    fn test_load_session_filters_out_automation_rows() {
         let tmp = tempfile::tempdir().unwrap();
+        let sp = SessionPersistence::new(tmp.path());
+
+        sp.persist_session(
+            "auto-sess",
+            &[
+                Message::user("hi"),
+                Message::assistant("hello"),
+                Message::automation("定时任务结果：今天 3 单"),
+            ],
+            None, None, None, None, None, None, None,
+        )
+        .unwrap();
+
+        let llm_msgs = sp.load_session("auto-sess").unwrap();
+        assert_eq!(
+            llm_msgs.len(),
+            2,
+            "automation 行必须被挡在 LLM 上下文之外"
+        );
+        assert!(
+            llm_msgs.iter().all(|m| m.role != MessageRole::Automation),
+            "load_session 不得返回任何 automation 行"
+        );
+
+        // UI 侧必须看得见——否则用户根本不知道结果投到了哪。
+        let entries = sp.load_session_with_approvals("auto-sess").unwrap();
+        assert_eq!(entries.len(), 3, "UI 时间线必须包含 automation 行");
+        assert!(
+            entries.iter().any(|e| matches!(
+                e,
+                SessionEntry::Message(m) if m.role == MessageRole::Automation
+            )),
+            "automation 行应带 Automation role 回到前端"
+        );
+    }
+
+    /// 用户发下一条消息（触发又一次全量 flush）不得抹掉自动化结果。
+    ///
+    /// `flush_messages` 是 DELETE + INSERT，而 `load_session` 从不返回
+    /// automation 行——两者叠加就是"下一句话把定时任务结果删了"。
+    /// 这是那个交互的回归防护。
+    #[test]
+    fn test_automation_rows_survive_the_next_turns_flush() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sp = SessionPersistence::new(tmp.path());
+
+        sp.persist_session(
+            "keep-sess",
+            &[
+                Message::user("hi"),
+                Message::automation("第一次定时任务结果"),
+            ],
+            None, None, None, None, None, None, None,
+        )
+        .unwrap();
+
+        // 下一轮：load 回来（不含 automation）+ 新消息 → 再 flush。
+        let mut next = sp.load_session("keep-sess").unwrap();
+        assert_eq!(next.len(), 1, "automation 行不该进 LLM payload");
+        next.push(Message::user("继续"));
+        next.push(Message::assistant("好"));
+        sp.persist_session(
+            "keep-sess",
+            &next,
+            None, None, None, None, None, None, None,
+        )
+        .unwrap();
+
+        let entries = sp.load_session_with_approvals("keep-sess").unwrap();
+        assert!(
+            entries.iter().any(|e| matches!(
+                e,
+                SessionEntry::Message(m) if m.content.as_deref() == Some("第一次定时任务结果")
+            )),
+            "下一轮 flush 把 automation 行删了——用户会看到定时任务结果凭空消失"
+        );
+    }
+
+    /// 元数据必须真的穿过一次 flush 活下来。
+    ///
+    /// 只断言"行还在"是不够的：`flush_messages` 是 DELETE + 全量
+    /// INSERT，任何没写进 INSERT 语句的字段都会在这一步消失。UI 侧
+    /// `fallback_reason` 缺失 = 静默回退 = 用户以为结果丢了。
+    #[test]
+    fn test_automation_meta_survives_a_flush_round_trip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sp = SessionPersistence::new(tmp.path());
+
+        let meta = hermix_core::AutomationMeta {
+            automation_name: "每日巡检".to_string(),
+            run_id: Some("run-42".to_string()),
+            prompt: Some("检查磁盘占用".to_string()),
+            fallback_reason: Some("注入次数已达上限".to_string()),
+        };
+        let mut msg = Message::automation("巡检结果：正常");
+        msg.automation_meta = Some(meta.clone());
+
+        sp.persist_session("meta-sess", &[Message::user("hi"), msg], None, None, None, None, None, None, None)
+            .unwrap();
+
+        let found = sp
+            .load_session_with_approvals("meta-sess")
+            .unwrap()
+            .into_iter()
+            .find_map(|e| match e {
+                SessionEntry::Message(m) if m.role == MessageRole::Automation => Some(m),
+                _ => None,
+            })
+            .expect("automation 行不见了");
+        assert_eq!(
+            found.automation_meta.as_ref(),
+            Some(&meta),
+            "元数据在 flush 后丢了——UI 会退化成无名任务卡，且回退原因不再显示"
+        );
+
+        // 再走一轮 flush：确认不是"第一次侥幸写进去了"。
+        let mut next = sp.load_session("meta-sess").unwrap();
+        next.push(Message::user("继续"));
+        sp.persist_session("meta-sess", &next, None, None, None, None, None, None, None)
+            .unwrap();
+        let after = sp
+            .load_session_with_approvals("meta-sess")
+            .unwrap()
+            .into_iter()
+            .filter_map(|e| match e {
+                SessionEntry::Message(m) if m.role == MessageRole::Automation => Some(m.automation_meta),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            after,
+            vec![Some(meta)],
+            "第二轮 flush 后元数据变了：automation 行不进 load_session，所以它不会被重写——\
+             如果这里失败，说明 DELETE 的排除条件被改回去了"
+        );
+    }
+
+    /// 有 automation 行时，`unified_steps` 不能错位或丢失。
+    ///
+    /// 守的是「capture 序列与 carry 序列的 automation 对齐」这条不变式：
+    /// 捕获查询跳过 automation 行，写入循环也就不给它 carry 槽位。
+    /// 两边只要有一处没排除，同一位置就会拿到别人的 blob。
+    ///
+    /// 注意这个测试**不是**靠 carry 机制生效的——真实派发路径上
+    /// `use_carry` 几乎恒为 false，`unified_steps` 是靠 `load_session`
+    /// 回填的内存值写回去的（把那个 fallback 去掉，本测试即变红）。
+    /// 所以它守的是对齐不变式，不是 carry 的正确性。
+    ///
+    /// 另一个要点：`messages` 必须**直接构造**并包含 automation 行，
+    /// 也就是 `send_message` 实际传给 `flush_messages` 的形状。用
+    /// `load_session` 组装会把 automation 行按设计过滤掉，缺陷被掩盖。
+    #[test]
+    fn test_unified_steps_stay_aligned_when_flushing_a_vector_with_automation_rows() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sp = SessionPersistence::new(tmp.path());
+
+        let with_steps = |content: &str| {
+            let mut m = Message::assistant(content);
+            m.unified_steps = Some(vec![serde_json::json!({"kind": "text", "text": content})]);
+            m
+        };
+
+        // 第一轮：先落库，让 `unified_steps` 存在于 DB。
+        let round1 = vec![
+            Message::user("提问"),
+            with_steps("第一条"),
+            Message::automation("定时任务插入"),
+            with_steps("第二条"),
+        ];
+        sp.persist_session("carry-sess", &round1, None, None, None, None, None, None, None)
+            .unwrap();
+
+        // 第二轮：完整历史 + 新消息，automation 行仍在向量里（这正是
+        // `send_message` 的形状——它从 `load_session` 拿历史、把本轮的
+        // prompt / reply 也标成 Automation 后整体 flush）。
+        let round2 = vec![
+            Message::user("提问"),
+            with_steps("第一条"),
+            Message::automation("定时任务插入"),
+            with_steps("第二条"),
+            Message::user("追问"),
+            with_steps("第三条"),
+        ];
+        sp.persist_session("carry-sess", &round2, None, None, None, None, None, None, None)
+            .unwrap();
+
+        let entries = sp.load_session_with_approvals("carry-sess").unwrap();
+        let steps: Vec<(&str, Option<&Vec<serde_json::Value>>)> = entries
+            .iter()
+            .filter_map(|e| match e {
+                SessionEntry::Message(m) if m.role == MessageRole::Assistant => {
+                    Some((m.content.as_deref().unwrap_or(""), m.unified_steps.as_ref()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(steps.len(), 3);
+        for (content, unified) in steps {
+            let unified = unified.unwrap_or_else(|| {
+                panic!("助手消息 {content:?} 的 unified_steps 丢了——automation 行挤进了 carry 序列")
+            });
+            let first = unified[0]["text"].as_str().unwrap_or_default();
+            assert_eq!(
+                first, content,
+                "unified_steps 错位到了别的消息上：期望 {content:?}，实际 {first:?}"
+            );
+        }
+    }
+
+    /// 表里留存的 automation 行不能影响后续消息的 `unified_steps` 位置。
+    ///
+    /// 与上一个测试的区别在组装方式：这里走 `load_session`（automation
+    /// 行按设计被过滤），验的是「表里那条 automation 行不会让下一轮
+    /// 搬运时把 blob 错位到别的消息上」。上一个直接构造向量，验的是
+    /// 向量里带 automation 行时的一致性。两条路径的失效方式不同。
+    #[test]
+    fn test_unified_steps_carry_stays_aligned_with_automation_rows_present() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sp = SessionPersistence::new(tmp.path());
+
+        let with_steps = |content: &str| {
+            let mut m = Message::assistant(content);
+            m.unified_steps = Some(vec![serde_json::json!({"kind": "text", "text": content})]);
+            m
+        };
+
+        sp.persist_session(
+            "align-sess",
+            &[with_steps("第一条"), Message::automation("定时任务插入"), with_steps("第二条")],
+            None, None, None, None, None, None, None,
+        )
+        .unwrap();
+
+        let mut next = sp.load_session("align-sess").unwrap();
+        next.push(Message::user("追问"));
+        next.push(with_steps("第三条"));
+        sp.persist_session(
+            "align-sess",
+            &next,
+            None, None, None, None, None, None, None,
+        )
+        .unwrap();
+
+        let entries = sp.load_session_with_approvals("align-sess").unwrap();
+        let steps: Vec<(&str, Option<&Vec<serde_json::Value>>)> = entries
+            .iter()
+            .filter_map(|e| match e {
+                SessionEntry::Message(m) if m.role == MessageRole::Assistant => {
+                    Some((m.content.as_deref().unwrap_or(""), m.unified_steps.as_ref()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(steps.len(), 3);
+        for (content, unified) in steps {
+            let unified = unified.unwrap_or_else(|| {
+                panic!("助手消息 {content:?} 的 unified_steps 丢了——automation 行把序号挤偏了")
+            });
+            let first = unified[0]["text"].as_str().unwrap_or_default();
+            assert_eq!(
+                first, content,
+                "unified_steps 错位到了别的消息上：期望 {content:?}，实际 {first:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_resolve_approval_updates_decision() {        let tmp = tempfile::tempdir().unwrap();
         let sp = SessionPersistence::new(tmp.path());
         sp.persist_session(
             "s3",

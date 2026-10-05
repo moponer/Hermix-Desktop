@@ -561,6 +561,7 @@ mod tests {
             execution_timeline: None,
             unified_steps: None,
             ephemeral: false,
+            automation_meta: None,
         }];
         strip_budget_warnings_from_messages(&mut messages);
         let parsed: serde_json::Value =

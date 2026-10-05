@@ -139,6 +139,11 @@ impl CodexProvider {
                         "output": msg.content.as_deref().unwrap_or("")
                     }));
                 }
+                // The Responses API has no role for "a scheduler wrote
+                // this". Forwarding it as `user` would hand the model a
+                // question the user never asked, so it is dropped here
+                // exactly as it is in the Anthropic serializer.
+                MessageRole::Automation => {}
             }
         }
         input
@@ -240,6 +245,7 @@ impl CodexProvider {
             execution_timeline: None,
             unified_steps: None,
             ephemeral: false,
+            automation_meta: None,
         };
 
         Ok(LlmResponse {
@@ -520,6 +526,7 @@ mod tests {
                 execution_timeline: None,
                 unified_steps: None,
                 ephemeral: false,
+                automation_meta: None,
             },
             Message::tool_result("call_1", "file contents", Some("read_file")),
         ];

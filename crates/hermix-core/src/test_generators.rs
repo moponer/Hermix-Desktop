@@ -101,6 +101,7 @@ pub fn arb_message() -> impl Strategy<Value = Message> {
                     execution_timeline: None,
                     unified_steps: None,
                     ephemeral: false,
+                    automation_meta: None,
                 }
             },
         )

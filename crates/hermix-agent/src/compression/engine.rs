@@ -86,6 +86,7 @@ impl ContextCompressor {
                                 execution_timeline: None,
                                 unified_steps: None,
                                 ephemeral: false,
+                                automation_meta: None,
                             });
                         }
                     }
@@ -577,6 +578,7 @@ impl ContextCompressor {
                 execution_timeline: None,
                 unified_steps: None,
                 ephemeral: false,
+                automation_meta: None,
             });
         }
 

@@ -23,6 +23,7 @@ fn system(text: impl Into<String>) -> Message {
         execution_timeline: None,
         unified_steps: None,
         ephemeral: false,
+        automation_meta: None,
     }
 }
 
@@ -39,6 +40,7 @@ fn user(text: impl Into<String>) -> Message {
         execution_timeline: None,
         unified_steps: None,
         ephemeral: false,
+        automation_meta: None,
     }
 }
 

@@ -97,6 +97,7 @@ use hermix_core::types::ContentPart;
             execution_timeline: None,
             unified_steps: None,
             ephemeral: false,
+            automation_meta: None,
         }
     }
 
@@ -113,6 +114,7 @@ use hermix_core::types::ContentPart;
             execution_timeline: None,
             unified_steps: None,
             ephemeral: false,
+            automation_meta: None,
         }
     }
 
@@ -135,6 +137,7 @@ use hermix_core::types::ContentPart;
             execution_timeline: None,
             unified_steps: None,
             ephemeral: false,
+            automation_meta: None,
         }
     }
 
@@ -181,6 +184,7 @@ use hermix_core::types::ContentPart;
                     execution_timeline: None,
                     unified_steps: None,
                     ephemeral: false,
+                    automation_meta: None,
                 },
                 finish_reason: Some("stop".into()),
                 model: model.unwrap_or("test").to_string(),
@@ -498,6 +502,7 @@ use hermix_core::types::ContentPart;
                     execution_timeline: None,
                     unified_steps: None,
                     ephemeral: false,
+                    automation_meta: None,
                 },
                 finish_reason: Some("stop".into()),
                 model: model.unwrap_or("test").to_string(),

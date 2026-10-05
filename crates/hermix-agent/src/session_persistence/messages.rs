@@ -2,7 +2,7 @@
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
-use hermix_core::{AgentError, Message, MessageRole};
+use hermix_core::{AgentError, AutomationMeta, Message, MessageRole};
 
 use super::*;
 
@@ -40,8 +40,21 @@ impl SessionPersistence {
         // reorder).
         let carry_unified_steps: Vec<Option<String>> = conn
             .prepare(
+                // `role != 'automation'` keeps this capture aligned with
+                // the rows the flush re-inserts *into the carry
+                // sequence* — the loop below writes automation rows but
+                // does not give them a carry slot. Counting them here
+                // would offset every later ordinal by the number of
+                // automation results in the session.
+                //
+                // This is an alignment fix, not a rescue: in practice
+                // `use_carry` is false on the dispatch path (see the
+                // note on `persistable_count`), so the values below are
+                // usually unused. It matters for callers that flush a
+                // freshly built vector instead of a loaded one.
                 "SELECT unified_steps FROM messages \
-                 WHERE session_id = ?1 AND active = 1 AND role != 'system' \
+                 WHERE session_id = ?1 AND active = 1 \
+                   AND role != 'system' AND role != 'automation' \
                  ORDER BY id ASC",
             )
             .and_then(|mut stmt| {
@@ -54,22 +67,53 @@ impl SessionPersistence {
             .unwrap_or_default();
         // Count how many rows this flush will actually (re)insert so we
         // can compare against `carry_unified_steps.len()` below.
+        //
+        // `automation` is excluded to match the capture query above, so
+        // the two sequences stay comparable: an automation row is
+        // written but carries no `unified_steps` slot, and counting it
+        // here while the capture skips it would make the lengths differ
+        // by exactly the number of automation rows.
+        //
+        // Measured caveat: on the real dispatch path this equality is
+        // almost never true — the caller passes the whole in-memory
+        // history plus the new turn, while the capture only sees what
+        // the previous flush wrote, so `captured < persistable_count`
+        // and `use_carry` is false. Nothing breaks, because `load_session`
+        // returns `unified_steps` on every message and the fallback
+        // below re-writes the in-memory value; `carried` only matters
+        // when a caller flushes a vector it did not just load. Keeping
+        // the two sides consistent is still the right invariant — it is
+        // what makes `use_carry` meaningful if that path ever changes.
         let persistable_count = messages
             .iter()
-            .filter(|m| !m.ephemeral && !matches!(m.role, MessageRole::System))
+            .filter(|m| {
+                !m.ephemeral
+                    && !matches!(
+                        m.role,
+                        MessageRole::System | MessageRole::Automation
+                    )
+            })
             .count();
         let use_carry = carry_unified_steps.len() == persistable_count;
 
+        // `automation` rows are excluded from the DELETE because
+        // `load_session` never returns them: they are stored and
+        // rendered, but not part of the LLM payload. A blanket
+        // `DELETE ... WHERE session_id = ?1` would therefore silently
+        // erase every automation result the moment the user sent their
+        // next message — the one turn that must not destroy them.
+        // `approval` rows already survive for the same reason: they are
+        // written by a separate INSERT and never round-tripped here.
         conn.execute(
-            "DELETE FROM messages WHERE session_id = ?1",
+            "DELETE FROM messages WHERE session_id = ?1 AND role != 'automation'",
             rusqlite::params![session_id],
         )
         .map_err(|e| AgentError::Io(format!("Failed to clear old messages: {e}")))?;
 
         let mut stmt = conn
             .prepare(
-                "INSERT INTO messages (session_id, role, content, tool_call_id, tool_calls, name, created_at, execution_timeline, reasoning_content, unified_steps)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                "INSERT INTO messages (session_id, role, content, tool_call_id, tool_calls, name, created_at, execution_timeline, reasoning_content, unified_steps, extra)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             )
             .map_err(|e| AgentError::Io(format!("Failed to prepare insert: {e}")))?;
 
@@ -90,6 +134,12 @@ impl SessionPersistence {
                 MessageRole::User => "user",
                 MessageRole::Assistant => "assistant",
                 MessageRole::Tool => "tool",
+                // Persisted on purpose. `load_session` filters this role
+                // back out of the LLM payload, which is exactly the
+                // "stored and rendered but never sent to the model"
+                // behaviour we need — the same split `approval` rows
+                // already have.
+                MessageRole::Automation => "automation",
             };
 
             let tool_calls_json = msg
@@ -104,14 +154,22 @@ impl SessionPersistence {
             // Re-flush safety: prefer the `unified_steps` we captured
             // from the DB before the DELETE above so a client-persisted
             // timeline survives the next turn's flush. Fall back to
-            // whatever the in-memory message carries (normally `None`
-            // for backend-built messages).
-            let carried = if use_carry {
+            // whatever the in-memory message carries — which is the path
+            // that actually runs today, since `load_session` restores
+            // the column and `use_carry` rarely holds (see the note on
+            // `persistable_count`).
+            //
+            // Automation rows don't consume a carry slot: the capture
+            // query above skips them, so advancing `carry_idx` for one
+            // would shift every later row's blob onto the wrong message.
+            let carried = if use_carry && !matches!(msg.role, MessageRole::Automation) {
                 carry_unified_steps.get(carry_idx).cloned().flatten()
             } else {
                 None
             };
-            carry_idx += 1;
+            if !matches!(msg.role, MessageRole::Automation) {
+                carry_idx += 1;
+            }
             let unified_steps_json = carried.or_else(|| {
                 msg.unified_steps
                     .as_ref()
@@ -126,6 +184,17 @@ impl SessionPersistence {
                 .as_deref()
                 .map(crate::pii_redact::redact_tool_calls_json);
 
+            // Automation provenance rides in `extra` — the same column
+            // approval cards use, and for the same reason: it is UI-only
+            // data that no LLM payload should ever carry. Serialization
+            // failure degrades to `NULL` rather than failing the flush:
+            // the result text is the part that must not be lost, and a
+            // nameless task header is still a truthful one.
+            let extra_json = msg
+                .automation_meta
+                .as_ref()
+                .and_then(|m| serde_json::to_string(m).ok());
+
             stmt.execute(rusqlite::params![
                 session_id,
                 role,
@@ -137,6 +206,7 @@ impl SessionPersistence {
                 timeline_json.as_deref(),
                 msg.reasoning_content.as_deref(),
                 unified_steps_json.as_deref(),
+                extra_json.as_deref(),
             ])
             .map_err(|e| AgentError::Io(format!("Failed to insert message: {e}")))?;
             inserted += 1;
@@ -217,6 +287,9 @@ impl SessionPersistence {
                 MessageRole::User => "👤 User",
                 MessageRole::Assistant => "🤖 Assistant",
                 MessageRole::Tool => "🔨 Tool",
+                // Distinct emoji from User: the whole point of the role
+                // is that nobody in the conversation said this.
+                MessageRole::Automation => "⏰ 定时任务",
             };
 
             content.push_str(&format!("### {role_label}\n\n"));
@@ -369,10 +442,16 @@ impl SessionPersistence {
                 // prompt (AGENTS.md + skills, ~23k chars) out of the
                 // returned timeline — it's rebuilt per-turn by
                 // `agent_loop`, never re-shown to the user.
+                // role != 'automation' is the same exclusion for a
+                // different reason: an automation result IS worth
+                // showing, but nobody in the conversation said it, so
+                // letting the model read it back as context would have
+                // it act on a turn that never happened.
                 "SELECT role, content, tool_call_id, tool_calls, name, execution_timeline, reasoning_content, unified_steps
                  FROM messages
                  WHERE session_id = ?1 AND active = 1
                    AND role != 'approval' AND role != 'system'
+                   AND role != 'automation'
                  ORDER BY id ASC",
             )
             .map_err(|e| AgentError::Io(format!("Failed to prepare query: {e}")))?;
@@ -412,6 +491,11 @@ impl SessionPersistence {
                     execution_timeline,
                     unified_steps,
                     ephemeral: false,
+                    // Nothing to restore: this is the LLM-side read and
+                    // automation rows never reach it (filtered by the
+                    // WHERE clause above). `load_session_with_approvals`
+                    // is the read that carries provenance.
+                    automation_meta: None,
                 })
             })
             .map_err(|e| AgentError::Io(format!("Failed to query messages: {e}")))?
@@ -874,6 +958,7 @@ impl SessionPersistence {
                         "user" => MessageRole::User,
                         "assistant" => MessageRole::Assistant,
                         "tool" => MessageRole::Tool,
+                        "automation" => MessageRole::Automation,
                         // Unknown role — skip rather than crash. Future
                         // schema additions shouldn't take down old
                         // clients.
@@ -881,6 +966,13 @@ impl SessionPersistence {
                     };
                     let execution_timeline = timeline_json.and_then(|json| serde_json::from_str(&json).ok());
                     let unified_steps = unified_steps_json.and_then(|json| serde_json::from_str(&json).ok());
+                    // Automation provenance. A missing or corrupt blob
+                    // yields `None`, and the UI then renders an unnamed
+                    // task header — which is still honest, whereas
+                    // failing the row would drop the result entirely.
+                    let automation_meta = extra_json
+                        .as_deref()
+                        .and_then(|s| serde_json::from_str::<AutomationMeta>(s).ok());
                     Ok(SessionEntry::Message(Message {
                         role,
                         content,
@@ -893,6 +985,7 @@ impl SessionPersistence {
                         execution_timeline,
                         unified_steps,
                         ephemeral: false,
+                        automation_meta,
                     }))
                 }
             })
@@ -1107,6 +1200,11 @@ impl SessionPersistence {
                 MessageRole::User => "user",
                 MessageRole::Assistant => "assistant",
                 MessageRole::Tool => "tool",
+                // Excluded from the LLM payload everywhere else, so it
+                // must not sneak back in through the archive's child
+                // session either — that child is a browsable summary of
+                // what the model actually saw.
+                MessageRole::Automation => "automation",
             };
             conn.execute(
                 "INSERT INTO messages (session_id, role, content, created_at, active)
@@ -1163,8 +1261,15 @@ impl SessionPersistence {
         // Walk the messages backwards, group by turns.
         let mut stmt = conn
             .prepare(
+                // `role != 'automation'`: an automation result is not a
+                // conversational turn, so it must neither be counted as
+                // one ("undo 1 turn" would swallow the user's last real
+                // message and leave a scheduler result behind) nor be
+                // deleted by the undo — the user never asked for it to
+                // go away.
                 "SELECT id, role FROM messages
-                 WHERE session_id = ?1 AND active = 1 AND role != 'approval'
+                 WHERE session_id = ?1 AND active = 1
+                   AND role != 'approval' AND role != 'automation'
                  ORDER BY id DESC",
             )
             .map_err(|e| AgentError::Io(format!("Failed to prepare query: {e}")))?;

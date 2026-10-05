@@ -138,6 +138,11 @@ impl TitleGenerator {
                     hermix_core::types::MessageRole::User => "User",
                     hermix_core::types::MessageRole::Assistant => "Assistant",
                     hermix_core::types::MessageRole::Tool => "Tool",
+                    // Labelled rather than skipped: the title prompt reads
+                    // whatever slice it is handed, and an automation result
+                    // that silently vanished would make the generated
+                    // title depend on an invisible filter.
+                    hermix_core::types::MessageRole::Automation => "Automation",
                 };
                 let truncated_content = if content.len() > self.max_message_chars {
                     &content[..self.max_message_chars]

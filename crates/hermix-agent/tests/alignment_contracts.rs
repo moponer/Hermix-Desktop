@@ -63,6 +63,7 @@ fn strip_budget_tool_message_matches_python_fixture() {
         execution_timeline: None,
         unified_steps: None,
         ephemeral: false,
+        automation_meta: None,
     }];
     python_alignment::strip_budget_warnings_from_messages(&mut messages);
     let v: serde_json::Value = serde_json::from_str(messages[0].content.as_ref().unwrap()).unwrap();

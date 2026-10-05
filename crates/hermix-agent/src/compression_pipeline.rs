@@ -55,6 +55,12 @@ impl PerRolePolicy {
             MessageRole::User => PerRolePolicy::DedupThenSummary,
             MessageRole::Assistant => PerRolePolicy::Summary,
             MessageRole::Tool => PerRolePolicy::DedupPruneThenSummary,
+            // Summarising it would spend tokens preserving text the model
+            // is never shown. In practice these never reach the
+            // compressor (`load_session` filters them out); the arm
+            // exists so a hand-built payload degrades to a cheap drop
+            // rather than paying for a summary nobody reads.
+            MessageRole::Automation => PerRolePolicy::DedupPruneThenSummary,
         }
     }
 }
@@ -120,6 +126,7 @@ fn role_label(role: MessageRole) -> &'static str {
         MessageRole::User => "user",
         MessageRole::Assistant => "assistant",
         MessageRole::Tool => "tool",
+        MessageRole::Automation => "automation",
     }
 }
 
@@ -356,6 +363,10 @@ impl TokenScorer {
             MessageRole::Tool => 0.7,
             MessageRole::User => 0.5,
             MessageRole::Assistant => 0.4,
+            // Lowest: if an automation result ever reaches the ranking
+            // it is the first thing worth dropping, since the model
+            // does not read it.
+            MessageRole::Automation => 0.0,
         };
         // frequency: same tool_call_id used N times → bump up to 0.5.
         let frequency = if tcid_refs >= 2 {
@@ -740,6 +751,7 @@ mod tests {
             execution_timeline: None,
             unified_steps: None,
             ephemeral: false,
+            automation_meta: None,
         }
     }
 
@@ -756,6 +768,7 @@ mod tests {
             execution_timeline: None,
             unified_steps: None,
             ephemeral: false,
+            automation_meta: None,
         }
     }
 
@@ -772,6 +785,7 @@ mod tests {
             execution_timeline: None,
             unified_steps: None,
             ephemeral: false,
+            automation_meta: None,
         }
     }
 
@@ -788,6 +802,7 @@ mod tests {
             execution_timeline: None,
             unified_steps: None,
             ephemeral: false,
+            automation_meta: None,
         }
     }
 
