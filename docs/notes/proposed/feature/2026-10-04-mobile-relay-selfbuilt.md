@@ -126,11 +126,15 @@ Status: proposed — P1 地基已独立成篇并落地（见 [IM 远程任务生
    - **任务数据由通道侧发布，state 只存不算**：`running` / `queues` 的真相在 `ChannelRuntime`，它全量重建 `Vec<ChannelSessionView>` 写进 `state.channel_sessions`（`mobile::publish_channel_sessions`）。反过来让 HTTP 层去问通道，等于让 `state` 依赖 `channels`——那条依赖是反的。全量重建而非增量维护：IM 规模下成本可忽略，而增量维护漏一处就是陈旧数据，比慢更糟。
    - `ChannelSessionView` 只带「够画任务列表」的字段：`first_line` 取正文首行截 40 字，**不携带完整会话内容**。
    - 配对设备三态单测（本地 / 配对设备 / 未认证）+ 一条「A 设备查不到 B 设备 sid」断言。
-8. 出站 relay 连接器（`relay_client.rs`）：
+8. 出站 relay 连接器（`relay_client.rs` / `relay_transport.rs`）：
    - 配置为空 = **不启用**（`RelayConfig::enabled()` 把空白地址当「没开」而不是「配错」）。便携零安装产品的默认形态是「没开远程」，不是「开了但连不上」。
-   - 重连指数退避，**上限必需**（默认 2s → 60s）：无上限的退避会退到几十分钟，于是「relay 恢复后自动接上」这个最朴素的用户预期就不成立。`attempt.min(16)` 防 shift 溢出。
-   - 连上即重置重试计数，否则下次断线从高位退避起。
+   - 重连指数退避，**上限必需**（默认 2s → 60s）：无上限的退避会退到几十分钟，于是「relay 恢复后自动接上」这个最朴素的用户预期就不成立。`attempt.min(16)` 防 shift 溢出。连上即重置重试计数。
    - 退避逻辑抽成 `connect_and_serve` 单独可测——退避错在现场极难复现。
+   - **本轮补上的漏洞：HTTP 风格的鉴权过不了 relay。** App 不直接向 hermix 发 HTTP 请求，它发 WS 帧（`手机 → relay → hermix`），于是 `Authorization` 与 `X-Hermix-Signature` **两个请求头没有落脚的地方**。而签名覆盖 `METHOD\npath`，`path` 里又含 session id。
+     解法三步：
+     1. `Envelope` 增 `auth: FrameAuth { bearer, signature }` —— 凭据进帧，**relay 不解释只透传**（与它「不校验 token 真伪」「字节级透明」两条硬约束一致），判定权在 hermix 的 PC 侧。
+     2. `Envelope` 增 `session_id: Option<String>` 作为**一等字段**：一条 relay 连接是「一台电脑」，电脑上可能同时跑几条会话，relay 只按 token 哈希选到这台电脑就不管了，所以 PC 必须按 `session_id` 拆包。**不能靠解析 payload 得到**——relay 不拆包，而 payload 是 hermix 的 envelope。
+     3. PC 侧**先验签、再分路**。顺序不能反：反过来的话攻击者改个 `session_id` 就能把帧送进别人的会话，而它恰好是重建签名路径要用的字段。先验签正是为了让签名与 `session_id` 绑定。已由 `mobile_ws::tests::会话甲的签名不能冒用会话乙` 钉住。
 9. 协议映射适配层（`mobile_protocol.rs`）：Clawket 式事件名 ↔ hermix envelope 的映射**单向收口在此文件，禁止散落**。两条硬规则：
    - **不可映射的类型返回 `None`、不产出半成品帧**：给 App 一个它不认识的 `type`，UI 会静默忽略，现场表现是「消息丢了」而不是「类型不认识」。未知内部字段也不外泄。
    - **审批在 App 侧只暴露 deny / once**：`Origin::PairedDevice` 对 `ApproveAlways` 无条件 `Denied`，`session`（永久）态**刻意留在枚举里但 `as_wire()` 返回 `None`**，让缺口显式可见；并且 `approval_request_to_mobile` 带 `can_persist: false`——手机屏幕小、按钮少一个用户未必察觉，但下次审批照样弹会让人以为是自己点错了。

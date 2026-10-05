@@ -25,11 +25,18 @@ fn own_session_id(origin: &hermix_core::Origin) -> Option<String> {
 }
 
 /// sid 归属闸门：Local 全放行；配对设备只能碰自己那一条。
-fn require_own_session(origin: &hermix_core::Origin, sid: &str) -> Result<(), Response> {
+///
+/// `pub(crate)` 因为 relay 帧的鉴权也要用同一把闸（`mobile_ws::verify_frame_auth`
+/// 在验完签名后必须再判归属——**签名有效不代表这条会话属于该设备**）。
+pub(crate) fn session_visible_to(origin: &hermix_core::Origin, sid: &str) -> bool {
     let Some(own) = own_session_id(origin) else {
-        return Ok(()); // Local：桌面端调试任意会话
+        return true; // Local：桌面端调试任意会话
     };
-    if sid == own {
+    sid == own
+}
+
+fn require_own_session(origin: &hermix_core::Origin, sid: &str) -> Result<(), Response> {
+    if session_visible_to(origin, sid) {
         Ok(())
     } else {
         Err((

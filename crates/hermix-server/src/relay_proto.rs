@@ -32,18 +32,48 @@ pub enum FrameTag {
     Close,
 }
 
+/// 帧里携带的 hermix 侧凭据。
+///
+/// **为什么需要它**：App 不直接向 hermix 发 HTTP 请求，它发 WS 帧
+/// （`手机 → relay → hermix`）。于是 `Authorization` / `X-Hermix-Signature`
+/// 这两个头**没有落脚的地方**——relay 那一跳不是 HTTP，请求头过不去。
+/// 所以把凭据放进帧里，由 **hermix 在 PC 侧**验（见
+/// `mobile_ws::verify_frame_auth`）。
+///
+/// relay **不解释**这个字段：它只透传，与"不校验 token 真伪""字节级透明"
+/// 两条硬约束一致。判定权始终在 hermix。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FrameAuth {
+    /// `hmxd_*` 设备 token（明文，hermix 侧验）。
+    pub bearer: String,
+    /// `X-Hermix-Signature` 的完整值。
+    pub signature: String,
+}
+
 /// 外层信封。字段刻意少——多一个字段就多一处两端可能漂移的地方。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Envelope {
     pub proto_version: u32,
     pub tag: FrameTag,
-    /// 设备 token 的**哈希**（不是明文 token）。relay 用它做路由键。
-    /// 解析权在 hermix（`DeviceRegistry::authenticate`），relay 不验真伪。
+    /// 设备 token 的**哈希**（relay 路由用的 `hrel_*`，不是明文）。
+    /// relay 据此选路，**不解释真伪**。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_hash: Option<String>,
-    /// 目标电脑的稳定标识（relay 侧按它选路）。
+    /// 目标电脑的稳定标识。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub node_id: Option<String>,
+    /// 目标会话（`im:device:{device_id}`）。
+    ///
+    /// 一条 relay 连接上跑着**多条**会话，PC 侧靠它分开——relay 不拆包，
+    /// 所以这个键必须在信封上，不能靠解析 payload 得到。
+    /// 它同时是鉴权的一部分：hermix 侧用它重建逻辑路径
+    /// `/v1/ws-stream/{sid}` 再验签名，于是**签名被绑死在会话上**，
+    /// A 会话的签名无法拿去冒用 B。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// hermix 侧凭据（见 [`FrameAuth`]）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth: Option<FrameAuth>,
     /// 内层帧原文，relay 整体透传。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub payload: Option<String>,
@@ -56,12 +86,26 @@ impl Envelope {
             tag,
             token_hash: None,
             node_id: None,
+            session_id: None,
+            auth: None,
             payload: None,
         }
     }
 
     pub fn route(payload: String) -> Self {
         Self {
+            payload: Some(payload),
+            ..Self::new(FrameTag::Route)
+        }
+    }
+
+    /// PC 侧回给手机的一帧：带上 `session_id` 让手机也能分路。
+    ///
+    /// **不带 `auth`**：出站方向不需要凭据，手机信任的是这条 node 连接本身
+    /// （relay 已按 `hrel_*` 把连接绑到这台电脑），凭据只在入站方向校验。
+    pub fn route_for(session_id: &str, payload: String) -> Self {
+        Self {
+            session_id: Some(session_id.to_string()),
             payload: Some(payload),
             ..Self::new(FrameTag::Route)
         }

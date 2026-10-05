@@ -11,6 +11,7 @@
 //! **不配置 relay 时整个模块不启动**，桌面端行为零变化——便携零安装产品的
 //! 默认形态是「没开远程」，不是「开了但连不上」。
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -173,10 +174,13 @@ pub fn hello_frame(cfg: &RelayConfig) -> Envelope {
     }
 }
 
-/// 校验对端（relay 或 App）发来的信封。
+/// 解析一帧，判断它是不是**调用方需要处理**的帧。
 ///
 /// 版本不符一律拒绝，**不降级**：错位的帧会一路透传到 agent，表现为「能连上
 /// 但消息莫名消失」，比直接失败难查一个量级。
+///
+/// `Close` **要放行**：那是手机挂断某条会话的信号，被当成"不是业务帧"丢掉，
+/// 挂断就永远不会到达 PC，会话会一直挂着。
 pub fn accept_inbound(raw: &str) -> Option<InboundFrame> {
     let envelope: Envelope = serde_json::from_str(raw).ok()?;
     if !envelope.version_ok() {
@@ -188,10 +192,172 @@ pub fn accept_inbound(raw: &str) -> Option<InboundFrame> {
         return None;
     }
     match envelope.tag {
-        FrameTag::Route => Some(InboundFrame { envelope }),
-        // Close 走正常收尾；Hello / Ack 是链路自身的握手帧，不是业务数据。
-        FrameTag::Close | FrameTag::Hello | FrameTag::Ack => None,
+        // 业务帧与挂断帧都要交给调用方
+        FrameTag::Route | FrameTag::Close => Some(InboundFrame { envelope }),
+        // Hello / Ack 是链路自身的握手帧，不是业务数据。
+        FrameTag::Hello | FrameTag::Ack => None,
     }
+}
+
+/// 建立到 relay 的出站 WS，并跑起收/发两个方向。
+///
+/// 一条连接 = 一台电脑。手机上可能同时开着几条会话，进来��帧按
+/// `session_id` 拆给各自的 `handle_ws_stream`（见 `relay_transport`）。
+///
+/// **鉴权在拆包之前**（`verify_frame_auth`），顺序反了就等于允许改
+/// `session_id` 冒用别人的会话。
+///
+/// `token` 是 **relay 凭据**（`hrel_*`），不是 hermix 设备 token——这一跳只
+/// 过了 relay，hermix 侧的凭据在帧里（`FrameAuth`）。
+pub async fn serve_relay_socket(
+    cfg: RelayConfig,
+    token: String,
+    state: Arc<crate::state::HttpServerState>,
+) -> std::io::Result<()> {
+    use futures::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    use tokio_tungstenite::tungstenite::Message;
+
+    let url = relay_ws_url(&cfg.url);
+    // relay 凭据必须随**握手请求**发出去（`Authorization: Bearer hrel_*`），
+    // 否则 relay 直接 401 这条连接。只在帧里带是不够的——relay 认的是
+    // 连接，不是帧。
+    let mut req = url
+        .as_str()
+        .into_client_request()
+        .map_err(std::io::Error::other)?;
+    let auth = format!("Bearer {token}");
+    req.headers_mut().insert(
+        "authorization",
+        auth.parse().map_err(std::io::Error::other)?,
+    );
+    // connect_async 返回 (WebSocketStream, http::Response) —— 顺序别搞反，
+    // 搞反了会把 Response 当成流去 .next()。
+    let (ws, resp) = tokio_tungstenite::connect_async(req)
+        .await
+        .map_err(std::io::Error::other)?;
+    tracing::info!(
+        relay = %cfg.url,
+        node = %cfg.node_id,
+        status = %resp.status(),
+        "已连上 relay"
+    );
+
+    // 一条 socket 要同时推流与收流（handler 在推的同时必须能读到手机的
+    // out-of-band 消息），所以拆两半而不是一把锁串行。
+    let (mut out_sink, mut in_stream) = ws.split();
+
+    // 登记帧：告诉 relay 自己是哪台电脑 + 线路版本
+    if let Ok(text) = serde_json::to_string(&hello_frame(&cfg)) {
+        out_sink.send(Message::Text(text.into())).await.ok();
+    }
+
+    // 出站方向：各会话的 Transport 把帧塞进来，统一发到 relay
+    let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<Envelope>(256);
+    tokio::spawn(async move {
+        while let Some(env) = out_rx.recv().await {
+            match serde_json::to_string(&env) {
+                Ok(text) => {
+                    if out_sink.send(Message::Text(text.into())).await.is_err() {
+                        break;
+                    }
+                }
+                Err(e) => tracing::warn!(error = %e, "relay 出站帧序列化失败"),
+            }
+        }
+    });
+
+    let mut mux = crate::relay_transport::SessionMux::new();
+    let mut sessions: HashMap<String, tokio::task::JoinHandle<()>> = HashMap::new();
+
+    while let Some(msg) = in_stream.next().await {
+        let Ok(msg) = msg else { break };
+        let text = match msg {
+            Message::Text(t) => t.to_string(),
+            Message::Binary(b) => String::from_utf8_lossy(&b).to_string(),
+            Message::Close(_) => break,
+            // Ping/Pong 由 tungstenite 自动应答，不进业务流
+            _ => continue,
+        };
+        let Some(frame) = accept_inbound(&text) else {
+            continue;
+        };
+        let env = frame.envelope;
+        let Some(sid) = env.session_id.clone() else {
+            tracing::warn!("relay 帧缺 session_id，已丢弃");
+            continue;
+        };
+
+        // 鉴权先于拆包 —— 顺序是安全属性，不是风格。
+        if let Err(why) = crate::mobile_ws::verify_frame_auth(&state, &env) {
+            tracing::warn!(session = %sid, reason = %why, "relay 帧鉴权失败");
+            continue;
+        }
+
+        match env.tag {
+            FrameTag::Close => {
+                tracing::info!(session = %sid, "对端挂断该会话");
+                mux.remove(&sid);
+                if let Some(h) = sessions.remove(&sid) {
+                    h.abort();
+                }
+            }
+            FrameTag::Route => {
+                if let Some(payload) = env.payload.clone() {
+                    let sink = mux.sink_for(&sid);
+                    // 队列满：报错而不是静默丢（静默丢会让两边都以为发出去了）
+                    if let Err(e) = sink.try_send(payload) {
+                        tracing::warn!(session = %sid, error = %e, "会话入队失败");
+                    }
+                }
+                // 首帧时起这个会话的 handle_ws_stream。transport 与上面的
+                // sink 共用 mux 里那条通道——各自建一条的话消息永远到不了。
+                if !sessions.contains_key(&sid) {
+                    let transport = mux.transport_for(&sid, out_tx.clone());
+                    let st = state.clone();
+                    let sid_for_task = sid.clone();
+                    sessions.insert(
+                        sid.clone(),
+                        tokio::spawn(async move {
+                            crate::ws::handle_ws_stream(
+                                transport,
+                                (*st).clone(),
+                                sid_for_task,
+                            )
+                            .await;
+                        }),
+                    );
+                }
+            }
+            FrameTag::Hello | FrameTag::Ack => {}
+        }
+    }
+
+    // 连接断了：所有会话的 task 一并收掉，否则它们会永远等一个没了的 socket。
+    for (_, h) in sessions.drain() {
+        h.abort();
+    }
+    tracing::info!("relay 连接结束");
+    Ok(())
+}
+
+/// 拼出 relay 的 WS 地址。只认 `ws` / `wss`；`https://` 自动换成 `wss://`，
+/// 否则用户按习惯填 https 会直接握手失败，而现象是"填了地址连不上"。
+fn relay_ws_url(base: &str) -> String {
+    let b = base.trim().trim_end_matches('/');
+    if b.starts_with("wss://") {
+        return format!("{b}/relay/node");
+    }
+    if b.starts_with("ws://") {
+        return format!("{b}/relay/node");
+    }
+    if b.starts_with("https://") {
+        return format!("wss://{}/relay/node", &b["https://".len()..]);
+    }
+    if b.starts_with("http://") {
+        return format!("ws://{}/relay/node", &b["http://".len()..]);
+    }
+    format!("wss://{b}/relay/node")
 }
 
 #[cfg(test)]
@@ -266,19 +432,55 @@ mod tests {
     }
 
     #[test]
-    fn 只收_route_帧() {
+    fn 只收业务帧与挂断帧() {
         let ok = serde_json::to_string(&Envelope::route("{}".into())).unwrap();
-        assert!(accept_inbound(&ok).is_some());
+        let got = accept_inbound(&ok).expect("route 帧应被接收");
+        assert_eq!(got.envelope.tag, FrameTag::Route);
 
         let hello = serde_json::to_string(&hello_frame(&cfg())).unwrap();
         assert!(
             accept_inbound(&hello).is_none(),
             "握手帧不是业务数据，不该进处理路径"
         );
+        let ack = serde_json::to_string(&Envelope::new(FrameTag::Ack)).unwrap();
+        assert!(accept_inbound(&ack).is_none());
+
+        // 挂断必须放行：被当成"非业务帧"丢掉的话，手机挂断永远到不了 PC
+        let close = serde_json::to_string(&Envelope {
+            session_id: Some("s1".into()),
+            ..Envelope::new(FrameTag::Close)
+        })
+        .unwrap();
+        let got = accept_inbound(&close).expect("挂断帧应被接收");
+        assert_eq!(got.envelope.tag, FrameTag::Close);
+        assert_eq!(got.envelope.session_id.as_deref(), Some("s1"));
 
         let bad = r#"{"proto_version":999,"tag":"route"}"#;
         assert!(accept_inbound(bad).is_none(), "版本不符必须拒绝");
         assert!(accept_inbound("not json").is_none());
+    }
+
+    #[test]
+    fn relay地址拼接受输入写法影响() {
+        // 用户按习惯填 https，直接当 ws 用会握手失败，而现象是"填了连不上"
+        assert_eq!(
+            relay_ws_url("https://relay.example.com"),
+            "wss://relay.example.com/relay/node"
+        );
+        assert_eq!(
+            relay_ws_url("https://relay.example.com/"),
+            "wss://relay.example.com/relay/node"
+        );
+        assert_eq!(
+            relay_ws_url("wss://relay.example.com"),
+            "wss://relay.example.com/relay/node"
+        );
+        assert_eq!(
+            relay_ws_url("http://127.0.0.1:8787"),
+            "ws://127.0.0.1:8787/relay/node"
+        );
+        // 裸 host 补 wss（外网默认走 TLS，不给"明文上公网"留口子）
+        assert_eq!(relay_ws_url("relay.example.com"), "wss://relay.example.com/relay/node");
     }
 
     #[test]
