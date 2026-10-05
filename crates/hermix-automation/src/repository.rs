@@ -136,6 +136,11 @@ impl AutomationRepository {
             ("dispatched_at", "INTEGER"),
             ("attempts", "INTEGER"),
             ("retry_at", "INTEGER"),
+            // 本次结果投到了哪个会话。护栏（注入次数上限）按
+            // (automation_id, delivered_to_session_id) 计数——没有这列
+            // 就只能数"总运行次数"，而一个已经回退到独立会话的自动化
+            // 会把额度白白吃掉。
+            ("delivered_to_session_id", "TEXT"),
         ] {
             Self::ensure_column(&conn, "automation_runs", col, ty)?;
         }
@@ -349,8 +354,8 @@ impl AutomationRepository {
         conn.execute(
             "INSERT INTO automation_runs (id, automation_id, started_at, finished_at,
                 status, task_id, error_text, scheduled_at, trigger, claimed_at,
-                dispatched_at, attempts, retry_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                dispatched_at, attempts, retry_at, delivered_to_session_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             rusqlite::params![
                 run.id,
                 run.automation_id,
@@ -365,9 +370,51 @@ impl AutomationRepository {
                 run.dispatched_at,
                 run.attempts,
                 run.retry_at,
+                run.delivered_to_session_id,
             ],
         )?;
         Ok(())
+    }
+
+    /// Record which conversation this run's result was delivered to.
+    ///
+    /// Written *after* dispatch, because the target is decided by the
+    /// delivery guardrail at run time — a run that fell back to a
+    /// standalone session must not be counted against the anchor's
+    /// injection budget.
+    pub fn mark_run_delivered(
+        &self,
+        run_id: &str,
+        session_id: &str,
+    ) -> Result<(), AutomationRepositoryError> {
+        let conn = open_with_wal(&self.db_path)?;
+        conn.execute(
+            "UPDATE automation_runs SET delivered_to_session_id = ?2 WHERE id = ?1",
+            rusqlite::params![run_id, session_id],
+        )?;
+        Ok(())
+    }
+
+    /// How many runs this automation has already delivered into
+    /// `session_id`.
+    ///
+    /// The delivery guardrail's counter. Scoped to one session on
+    /// purpose: once a run falls back to its own `automation:*` session
+    /// it stops touching the user's conversation, and counting it would
+    /// exhaust an allowance it never consumed.
+    pub fn count_deliveries_into(
+        &self,
+        automation_id: &str,
+        session_id: &str,
+    ) -> Result<u64, AutomationRepositoryError> {
+        let conn = open_with_wal(&self.db_path)?;
+        let n: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM automation_runs
+             WHERE automation_id = ?1 AND delivered_to_session_id = ?2",
+            rusqlite::params![automation_id, session_id],
+            |row| row.get(0),
+        )?;
+        Ok(n.max(0) as u64)
     }
 
     /// Whether a run with this id already exists.
@@ -429,6 +476,39 @@ impl AutomationRepository {
                 // beats silently dropping it.
                 None => streak += 1,
                 _ => break,
+            }
+        }
+        Ok(streak)
+    }
+
+    /// Terminal runs since the last success — the delivery guardrail's
+    /// second input.
+    ///
+    /// Broader than [`consecutive_dispatch_failures`] on purpose: that
+    /// one only counts `failed_to_dispatch` because it feeds the backoff
+    /// exponent, where a run that actually executed tools must not be
+    /// replayed. The guardrail asks a different question — "is this
+    /// automation producing results worth injecting?" — and a run that
+    /// ran the agent and still failed is exactly as worthless there.
+    pub fn consecutive_terminal_failures(&self, automation_id: &str) -> Result<i64, AutomationRepositoryError> {
+        let conn = open_with_wal(&self.db_path)?;
+        let mut stmt = conn.prepare(
+            "SELECT status FROM automation_runs
+             WHERE automation_id = ?1 AND finished_at IS NOT NULL
+             ORDER BY started_at DESC LIMIT 20",
+        )?;
+        let rows = stmt.query_map([automation_id], |row| row.get::<_, String>(0))?;
+        let mut streak = 0i64;
+        for row in rows {
+            let status = row?;
+            match RunStatus::parse(&status) {
+                // `skipped` is not a failure — the run was claimed and
+                // then deliberately not executed (cap reached, window
+                // closed), which says nothing about whether the
+                // automation works.
+                Some(RunStatus::Succeeded) | Some(RunStatus::Skipped) => break,
+                Some(RunStatus::Abandoned) => break,
+                _ => streak += 1,
             }
         }
         Ok(streak)
@@ -531,7 +611,8 @@ impl AutomationRepository {
         let conn = open_with_wal(&self.db_path)?;
         let mut stmt = conn.prepare(
             "SELECT id, automation_id, started_at, finished_at, status, task_id, error_text,
-                    scheduled_at, trigger, claimed_at, dispatched_at, attempts, retry_at
+                    scheduled_at, trigger, claimed_at, dispatched_at, attempts, retry_at,
+                    delivered_to_session_id
              FROM automation_runs WHERE automation_id = ?1
              ORDER BY started_at DESC
              LIMIT ?2",
@@ -649,6 +730,7 @@ fn row_to_run(row: &rusqlite::Row) -> rusqlite::Result<AutomationRun> {
         dispatched_at: row.get(10)?,
         attempts: row.get(11)?,
         retry_at: row.get(12)?,
+        delivered_to_session_id: row.get(13)?,
     })
 }
 
@@ -676,7 +758,7 @@ mod tests {
 
 
     /// 构造一条 run 记录，状态机字段取合理的默认值。
-    /// 测试里手写 13 个字段既啰嗦又容易在加列时漏改，集中在这里。
+    /// 测试里手写 14 个字段既啰嗦又容易在加列时漏改，集中在这里。
     fn make_run(automation_id: &str, status: RunStatus) -> AutomationRun {
         let now = chrono::Utc::now().timestamp_millis();
         AutomationRun {
@@ -693,6 +775,7 @@ mod tests {
             dispatched_at: None,
             attempts: Some(1),
             retry_at: None,
+            delivered_to_session_id: None,
         }
     }
 

@@ -40,13 +40,65 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use hermix_automation::{
-    classify_dispatch_failure, dispatch_outcome, Automation, AutomationScheduler, AutomationService,
-    DispatchOutcome, FailureClass, RunStatus, RunTrigger, TriggerFn,
+    classify_dispatch_failure, decide_delivery_target, dispatch_outcome, Automation,
+    AutomationScheduler, AutomationService, DeliveryGuardInput, DeliveryTarget, DispatchOutcome,
+    FailureClass, RunStatus, RunTrigger, TriggerFn,
 };
-use hermix_core::traits::{AgentOverrides, AgentService};
+use hermix_core::traits::{AgentOverrides, AgentService, ExternalDelivery};
 use hermix_core::TaskContext;
 
 use crate::orchestration_bus::{OrchestrationEvent, OrchestrationEventBus};
+
+/// Answers "does this conversation still exist?".
+///
+/// A trait rather than a direct call into the session store so this
+/// module keeps no dependency on the persistence crate's internals, and
+/// so the guardrail can be tested without a real database. Production
+/// wires it to `SessionPersistence::get_session_title`.
+pub trait SessionProbe: Send + Sync {
+    fn session_exists(&self, session_id: &str) -> bool;
+}
+
+/// Resolve where a run's result should be delivered, gathering the
+/// guardrail's inputs from the run table plus one existence check.
+fn decide_delivery(
+    auto: &Automation,
+    run_id: &str,
+    svc: &AutomationService,
+    probe: Option<&dyn SessionProbe>,
+) -> DeliveryTarget {
+    let fallback_session_id = format!("automation:{}:{}", auto.id, run_id);
+
+    // Without a probe (tests, or a host that does not expose the session
+    // store) the anchor is taken on faith. That matches the behaviour
+    // from before the guardrail existed, and is the safe direction: it
+    // only means the existence check is skipped, not inverted.
+    let anchor_exists = match auto.anchor_session_id.as_deref().filter(|s| !s.is_empty()) {
+        Some(anchor) => probe.map(|p| p.session_exists(anchor)).unwrap_or(true),
+        None => false,
+    };
+
+    let prior_injections = auto
+        .anchor_session_id
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .and_then(|anchor| svc.count_deliveries_into(&auto.id, anchor).ok())
+        .unwrap_or(0);
+    let consecutive_failures = svc
+        .consecutive_terminal_failures(&auto.id)
+        .unwrap_or(0)
+        .max(0) as u64;
+
+    decide_delivery_target(&DeliveryGuardInput {
+        anchor_session_id: auto.anchor_session_id.clone(),
+        prior_injections,
+        consecutive_failures,
+        anchor_exists,
+        fallback_session_id,
+        max_injections: None,
+        max_consecutive_failures: None,
+    })
+}
 
 /// Handle to the running automation scheduler. Dropping this does NOT
 /// stop the scheduler — call `shutdown()` explicitly.
@@ -75,12 +127,14 @@ pub fn start_automation_scheduler(
     agent_service: Arc<dyn AgentService>,
     orchestration_bus: OrchestrationEventBus,
     task_service: Option<Arc<hermix_task::TaskService>>,
+    session_probe: Option<Arc<dyn SessionProbe>>,
 ) -> AutomationSchedulerHandle {
     let trigger = build_trigger_callback(
         automation_service.clone(),
         agent_service,
         orchestration_bus,
         task_service,
+        session_probe,
     );
 
     let scheduler = AutomationScheduler::start(
@@ -101,15 +155,26 @@ fn build_trigger_callback(
     agent_service: Arc<dyn AgentService>,
     orchestration_bus: OrchestrationEventBus,
     task_service: Option<Arc<hermix_task::TaskService>>,
+    session_probe: Option<Arc<dyn SessionProbe>>,
 ) -> TriggerFn {
     Arc::new(move |auto: Automation, run_id: String| {
         let svc = automation_service.clone();
         let agent = agent_service.clone();
         let bus = orchestration_bus.clone();
         let tasks = task_service.clone();
+        let probe = session_probe.clone();
 
         tokio::spawn(async move {
-            execute_automation_run(&auto, &run_id, &svc, &agent, &bus, tasks.as_deref()).await;
+            execute_automation_run(
+                &auto,
+                &run_id,
+                &svc,
+                &agent,
+                &bus,
+                tasks.as_deref(),
+                probe.as_deref(),
+            )
+            .await;
         });
     })
 }
@@ -126,6 +191,7 @@ async fn execute_automation_run(
     agent: &Arc<dyn AgentService>,
     bus: &OrchestrationEventBus,
     task_service: Option<&hermix_task::TaskService>,
+    session_probe: Option<&dyn SessionProbe>,
 ) {
     tracing::info!(
         automation_id = %auto.id,
@@ -172,18 +238,38 @@ async fn execute_automation_run(
 
     // 4. Build agent overrides from automation config
     //
-    //    The fallback session id carries the run id so successive runs of
-    //    the same automation do not share one growing history — and so a
-    //    run's context can be traced back to its row. Runs anchored to a
-    //    real conversation use that instead (see the session-anchored
-    //    delivery note); this path remains for UI-created automations.
-    let session_id = auto
-        .anchor_session_id
-        .as_deref()
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| format!("automation:{}:{}", auto.id, run_id));
+    //    Delivery is decided before dispatch, not after: the guardrail
+    //    reads the anchor's injection count and the run's failure streak,
+    //    and `send_message` UPSERTs the sessions row — dispatching into a
+    //    deleted anchor would resurrect it as a title-less orphan rather
+    //    than falling back.
+    let target = decide_delivery(&auto, run_id, svc, session_probe.as_deref());
+
+    if !target.is_anchored() {
+        tracing::info!(
+            automation_id = %auto.id,
+            run_id = %run_id,
+            "automation result falling back to a standalone session"
+        );
+    }
+
+    let session_id = target.session_id().to_string();
     let mut overrides = AgentOverrides::default();
+
+    // Marks this turn as externally triggered, which is what makes
+    // `LocalAgentService` store the prompt and the reply under
+    // `MessageRole::Automation` instead of `user` / `assistant`. Without
+    // it the run leaves a fabricated "the user asked this" line in the
+    // conversation and the model, seeing it next turn, tries to carry on
+    // answering a question nobody asked.
+    overrides.external_delivery = Some(ExternalDelivery {
+        source_label: auto.name.clone(),
+        run_id: Some(run_id.to_string()),
+        fallback_reason: match &target {
+            DeliveryTarget::Anchor(_) => None,
+            DeliveryTarget::Standalone { reason, .. } => Some(reason.clone()),
+        },
+    });
 
     if let Some(ref model) = auto.model_id {
         if !model.is_empty() {
@@ -268,6 +354,23 @@ async fn execute_automation_run(
         task_id.as_deref(),
         error_text.as_deref(),
     );
+
+    // 6a. Book the delivery against the guardrail's counter.
+    //
+    //     Only anchored runs are recorded: a run that fell back to its
+    //     own session never touched the user's conversation, so counting
+    //     it would spend an allowance it did not use. Recorded after the
+    //     run finished, because a failed run is not an injection.
+    if target.is_anchored() {
+        if let Err(e) = svc.mark_run_delivered(run_id, &session_id) {
+            tracing::warn!(
+                automation_id = %auto.id,
+                run_id = %run_id,
+                error = %e,
+                "automation: failed to record delivery target"
+            );
+        }
+    }
 
     // 6b. Retry only what provably never reached a tool.
     //
@@ -386,6 +489,7 @@ pub async fn trigger_automation_manually(
     agent: &Arc<dyn AgentService>,
     bus: &OrchestrationEventBus,
     task_service: Option<&hermix_task::TaskService>,
+    session_probe: Option<&dyn SessionProbe>,
 ) -> Result<String, String> {
     let auto = svc
         .get(automation_id)
@@ -408,7 +512,7 @@ pub async fn trigger_automation_manually(
     );
 
     // Execute via the same path as scheduled triggers
-    execute_automation_run(&auto, &run_id, svc, agent, bus, task_service).await;
+    execute_automation_run(&auto, &run_id, svc, agent, bus, task_service, session_probe).await;
 
     Ok(auto.id)
 }
@@ -450,6 +554,10 @@ mod tests {
         sessions: Arc<Mutex<Vec<String>>>,
         /// 逐次调用返回的 reply；用尽后重复最后一个。
         replies: std::sync::Mutex<Vec<hermix_core::traits::AgentReply>>,
+        /// 每次调用收到的 `AgentOverrides`，顺序与 `sessions` 对齐。
+        /// `external_delivery` 的接线只能在这里验——它是"这轮不是人
+        /// 在打字"的唯一标记，且不落到任何 DB 列上。
+        overrides: Arc<Mutex<Vec<AgentOverrides>>>,
     }
 
     impl ScriptedAgent {
@@ -464,6 +572,7 @@ mod tests {
             Self {
                 sessions,
                 replies: std::sync::Mutex::new(replies),
+                overrides: Arc::new(Mutex::new(Vec::new())),
             }
         }
     }
@@ -498,9 +607,10 @@ mod tests {
             &self,
             session_id: &str,
             _text: &str,
-            _overrides: AgentOverrides,
+            overrides: AgentOverrides,
         ) -> Result<hermix_core::traits::AgentReply, AgentError> {
             self.sessions.lock().unwrap().push(session_id.to_string());
+            self.overrides.lock().unwrap().push(overrides);
             let mut q = self.replies.lock().unwrap();
             if q.len() > 1 {
                 Ok(q.remove(0))
@@ -618,7 +728,7 @@ mod tests {
             .unwrap();
 
         let run_id = claim(&svc, &auto.id);
-        execute_automation_run(&auto, &run_id, &svc, &agent, &bus, None).await;
+        execute_automation_run(&auto, &run_id, &svc, &agent, &bus, None, None).await;
 
         // Verify a run was recorded
         let runs = svc.list_runs(&auto.id, 10).unwrap();
@@ -648,7 +758,7 @@ mod tests {
             })
             .unwrap();
 
-        let trigger = build_trigger_callback(svc.clone(), agent, bus, None);
+        let trigger = build_trigger_callback(svc.clone(), agent, bus, None, None);
         // 调度器在调用 trigger 之前就已同步 claim；这里复现同一顺序。
         let run_id = claim(&svc, &auto.id);
         trigger(auto.clone(), run_id);
@@ -678,7 +788,7 @@ mod tests {
             })
             .unwrap();
 
-        let result = trigger_automation_manually(&auto.id, &svc, &agent, &bus, None).await;
+        let result = trigger_automation_manually(&auto.id, &svc, &agent, &bus, None, None).await;
         assert!(result.is_ok());
 
         let runs = svc.list_runs(&auto.id, 10).unwrap();
@@ -709,7 +819,7 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        let err = trigger_automation_manually(&auto.id, &svc, &agent, &bus, None)
+        let err = trigger_automation_manually(&auto.id, &svc, &agent, &bus, None, None)
             .await
             .expect_err("在途 run 期间手动触发必须被拒");
         assert!(
@@ -746,7 +856,7 @@ mod tests {
             "收割后不得还有在途行，否则保活信号会把机器永久按在唤醒状态"
         );
 
-        let result = trigger_automation_manually(&auto.id, &svc, &agent, &bus, None).await;
+        let result = trigger_automation_manually(&auto.id, &svc, &agent, &bus, None, None).await;
         assert!(result.is_ok(), "收割后应能正常触发: {result:?}");
     }
 
@@ -774,7 +884,7 @@ mod tests {
                 .try_begin_run(&auto.id, RunTrigger::Scheduled, Some(slot * 1000))
                 .unwrap()
                 .unwrap();
-            execute_automation_run(&auto, &run_id, &svc, &agent, &bus, None).await;
+            execute_automation_run(&auto, &run_id, &svc, &agent, &bus, None, None).await;
         }
 
         let seen = sessions.lock().unwrap();
@@ -809,7 +919,7 @@ mod tests {
             .unwrap();
 
         let run_id = claim(&svc, &auto.id);
-        execute_automation_run(&auto, &run_id, &svc, &agent, &bus, None).await;
+        execute_automation_run(&auto, &run_id, &svc, &agent, &bus, None, None).await;
 
         let runs = svc.list_runs(&auto.id, 10).unwrap();
         assert_eq!(
@@ -862,7 +972,7 @@ mod tests {
             .unwrap();
 
         let run_id = claim(&svc, &auto.id);
-        execute_automation_run(&auto, &run_id, &svc, &agent, &bus, None).await;
+        execute_automation_run(&auto, &run_id, &svc, &agent, &bus, None, None).await;
 
         let runs = svc.list_runs(&auto.id, 10).unwrap();
         assert_eq!(
@@ -910,7 +1020,7 @@ mod tests {
             .unwrap();
 
         let run_id = claim(&svc, &auto.id);
-        execute_automation_run(&auto, &run_id, &svc, &agent, &bus, Some(&task_svc)).await;
+        execute_automation_run(&auto, &run_id, &svc, &agent, &bus, Some(&task_svc), None).await;
 
         let runs = svc.list_runs(&auto.id, 10).unwrap();
         assert_ne!(
@@ -952,7 +1062,7 @@ mod tests {
         assert_eq!(auto.anchor_session_id.as_deref(), Some("sess-xyz"));
 
         let run_id = claim(&svc, &auto.id);
-        execute_automation_run(&auto, &run_id, &svc, &agent, &bus, None).await;
+        execute_automation_run(&auto, &run_id, &svc, &agent, &bus, None, None).await;
 
         assert_eq!(
             seen.lock().unwrap().as_slice(),
@@ -961,13 +1071,129 @@ mod tests {
         );
     }
 
+    /// 锚点存在时：投锚点 + `external_delivery` 正确设置 + 回填
+    /// `delivered_to_session_id`。
+    ///
+    /// 这三件事串起来才是"结果出现在用户对话里"的完整闭环：
+    /// session 选错 → 结果去了别处；overrides 漏设 → 落库成 user/
+    /// assistant 假轮次；回填漏掉 → 注入护栏按 0 计数，永不触发。
+    #[tokio::test]
+    async fn test_anchored_run_sets_external_delivery_and_books_delivery() {
+        let (svc, _tmp) = test_automation_service();
+        let bus = OrchestrationEventBus::new();
+        let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+        // 持具体类型以便读回记录的 overrides；`Arc<ScriptedAgent>` 向上
+        // 转型成 `Arc<dyn AgentService>` 指向同一实例。
+        let scripted = Arc::new(ScriptedAgent::always_ok(seen.clone()));
+        let agent: Arc<dyn AgentService> = scripted.clone();
+
+        struct Exists;
+        impl SessionProbe for Exists {
+            fn session_exists(&self, _session_id: &str) -> bool {
+                true
+            }
+        }
+
+        let auto = svc
+            .create(hermix_automation::CreateAutomationParams {
+                name: "每日巡检".into(),
+                prompt: "检查磁盘".into(),
+                schedule_type: hermix_automation::ScheduleType::Once,
+                scheduled_at: Some("2026-01-01T00:00:00Z".into()),
+                anchor_session_id: Some("anchor-1".into()),
+                ..Default::default()
+            })
+            .unwrap();
+
+        let run_id = claim(&svc, &auto.id);
+        execute_automation_run(&auto, &run_id, &svc, &agent, &bus, None, Some(&Exists)).await;
+
+        assert_eq!(seen.lock().unwrap().as_slice(), ["anchor-1".to_string()]);
+
+        let ov = scripted.overrides.lock().unwrap();
+        let delivery = ov[0]
+            .external_delivery
+            .as_ref()
+            .expect("外部投递轮次必须带 external_delivery，否则落库成假 user/assistant 轮次");
+        assert_eq!(delivery.source_label, "每日巡检");
+        assert_eq!(delivery.run_id.as_deref(), Some(run_id.as_str()));
+        assert!(
+            delivery.fallback_reason.is_none(),
+            "投进锚点不是回退，不能带原因"
+        );
+
+        let runs = svc.list_runs(&auto.id, 10).unwrap();
+        assert_eq!(
+            runs[0].delivered_to_session_id.as_deref(),
+            Some("anchor-1"),
+            "锚定投递必须回填——不回填护栏的注入计数恒为 0，永不触发"
+        );
+        assert_eq!(svc.count_deliveries_into(&auto.id, "anchor-1").unwrap(), 1);
+    }
+
+    /// 锚点已删时：投独立会话 + 带 fallback_reason + **不**回填计数。
+    ///
+    /// 反向验证上一条：回退路径三件事必须同时成立。特别是不回填——
+    /// 结果根本没进那个会话，记了它会让护栏白吃额度。
+    #[tokio::test]
+    async fn test_fallback_run_targets_standalone_and_explains_why() {
+        let (svc, _tmp) = test_automation_service();
+        let bus = OrchestrationEventBus::new();
+        let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+        let scripted = Arc::new(ScriptedAgent::always_ok(seen.clone()));
+        let agent: Arc<dyn AgentService> = scripted.clone();
+
+        struct Gone;
+        impl SessionProbe for Gone {
+            fn session_exists(&self, _session_id: &str) -> bool {
+                false
+            }
+        }
+
+        let auto = svc
+            .create(hermix_automation::CreateAutomationParams {
+                name: "每日巡检".into(),
+                prompt: "检查磁盘".into(),
+                schedule_type: hermix_automation::ScheduleType::Once,
+                scheduled_at: Some("2026-01-01T00:00:00Z".into()),
+                anchor_session_id: Some("deleted-anchor".into()),
+                ..Default::default()
+            })
+            .unwrap();
+
+        let run_id = claim(&svc, &auto.id);
+        execute_automation_run(&auto, &run_id, &svc, &agent, &bus, None, Some(&Gone)).await;
+
+        let target = format!("automation:{}:{}", auto.id, run_id);
+        assert_eq!(seen.lock().unwrap().as_slice(), [target.clone()]);
+
+        let ov = scripted.overrides.lock().unwrap();
+        let delivery = ov[0].external_delivery.as_ref().unwrap();
+        assert_eq!(delivery.source_label, "每日巡检");
+        let reason = delivery
+            .fallback_reason
+            .as_deref()
+            .expect("回退必须带原因——没有解释的回退在用户眼里等于结果消失");
+        assert!(
+            !reason.is_empty(),
+            "回退原因不能是空串，那是把问题从后端搬到前端"
+        );
+
+        let runs = svc.list_runs(&auto.id, 10).unwrap();
+        assert_eq!(
+            runs[0].delivered_to_session_id, None,
+            "回退没碰用户对话，不能记注入计数"
+        );
+        assert_eq!(svc.count_deliveries_into(&auto.id, "deleted-anchor").unwrap(), 0);
+    }
+
     #[tokio::test]
     async fn test_scheduler_handle_shutdown() {
         let (svc, _tmp) = test_automation_service();
         let bus = OrchestrationEventBus::new();
         let agent: Arc<dyn AgentService> = Arc::new(NoopAgent);
 
-        let handle = start_automation_scheduler(svc, agent, bus, None);
+        let handle = start_automation_scheduler(svc, agent, bus, None, None);
 
         // Shutdown should not panic
         handle.shutdown();
@@ -997,7 +1223,7 @@ mod tests {
             .unwrap();
 
         let run_id = claim(&svc, &auto.id);
-        execute_automation_run(&auto, &run_id, &svc, &agent, &bus, Some(&task_svc)).await;
+        execute_automation_run(&auto, &run_id, &svc, &agent, &bus, Some(&task_svc), None).await;
 
         // Verify a task was created and completed
         let tasks = task_svc.list(None).unwrap();

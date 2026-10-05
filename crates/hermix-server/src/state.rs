@@ -10,6 +10,38 @@ use hermix_tools::ToolRegistry;
 
 use super::*;
 
+/// 自动化锚定投递的会话存在性探针。
+///
+/// 存在的理由是一个具体的失败模式：`LocalAgentService::send_message`
+/// 对 sessions 表做 UPSERT，所以把自动化结果投进一个已被用户删除的
+/// 对话**不会报错**——它会把那个 id 复活成一条 `title`/`workspace`
+/// 全为 NULL 的孤儿行，出现在侧栏里，且用户无法解释它从哪来。
+///
+/// 判定为「不存在」时走回退路径（独立 `automation:*` 会话）并带上
+/// 可见原因，而不是静默复活。
+struct SessionExistenceProbe {
+    persistence: std::sync::Arc<hermix_agent::session_persistence::SessionPersistence>,
+}
+
+impl automation_trigger::SessionProbe for SessionExistenceProbe {
+    fn session_exists(&self, session_id: &str) -> bool {
+        match self.persistence.get_session_title(session_id) {
+            Ok(Some(_)) => true,
+            Ok(None) => false,
+            Err(e) => {
+                // 查不动 ≠ 不存在。此时回退是唯一安全的方向：真去
+                // dispatch 的最坏结果就是上面那个孤儿会话。
+                tracing::warn!(
+                    session_id = %session_id,
+                    error = %e,
+                    "automation: session existence check failed; treating as gone"
+                );
+                false
+            }
+        }
+    }
+}
+
 /// EffectLog → EffectSink 适配器（P3 Effect Sandwich 装配）。
 /// 单笔持久化失败吞掉降级为不记录——三明治是崩溃恢复依据，
 /// 不能阻断工具执行。
@@ -807,11 +839,19 @@ impl HttpServerState {
                     "automation: failed to reap abandoned runs at startup"
                 );
             }
+            // 锚定投递的存在性探针。必须真接上：`send_message` 会 UPSERT
+            // sessions 行，把结果投进一个已被删除的对话不会"失败"，只会把
+            // 那个 id 复活成一条无标题孤儿会话，出现在侧栏里且无从解释。
+            let session_probe: Arc<dyn automation_trigger::SessionProbe> =
+                Arc::new(SessionExistenceProbe {
+                    persistence: session_persistence.clone(),
+                });
             let handle = automation_trigger::start_automation_scheduler(
                 auto_svc.clone(),
                 state.agent_service(),
                 state.orchestration_bus.clone(),
                 Some(task_svc.clone()),
+                Some(session_probe),
             );
             // SAFETY: we're mutating a field of the returned state before
             // handing it to the caller. This is safe because no other code

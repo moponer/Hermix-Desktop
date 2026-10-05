@@ -249,6 +249,137 @@ fn is_transient_error_text(text: &str) -> bool {
     TRANSIENT.iter().any(|k| t.contains(k))
 }
 
+// ---------------------------------------------------------------------------
+// Delivery guardrail
+// ---------------------------------------------------------------------------
+
+/// Default cap on how many results one automation may inject into one
+/// conversation.
+///
+/// **This number is a placeholder, not a measured value.** The honest
+/// inputs — how much a day's conversation actually weighs, and at what
+/// point injected results start costing the user more than they give —
+/// are not observable yet, so any constant here is a guess. It is set
+/// high enough to be inert for a weekly report and low enough to bound
+/// the damage from a daily one over a year. Revisit once real usage
+/// data exists; see the note's `Reintroduction conditions`.
+pub const DEFAULT_MAX_INJECTIONS_PER_SESSION: u64 = 50;
+
+/// How many consecutive failed runs stop injection into the anchor
+/// conversation.
+///
+/// Separate from the count cap because the failure mode differs: a
+/// misbehaving task does not merely add bulk, it adds *wrong* turns the
+/// model would otherwise have to reason around. Three is enough to
+/// distinguish "one bad run" from "this task is broken".
+pub const MAX_CONSECUTIVE_FAILURES_BEFORE_STOP: u64 = 3;
+
+/// Where this run's result should go.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeliveryTarget {
+    /// Inject into the user's conversation, labelled as an automation
+    /// result (`MessageRole::Automation`).
+    Anchor(String),
+    /// Run in an isolated `automation:{id}:{run_id}` session instead.
+    ///
+    /// Carries a human-readable reason because a fallback the user
+    /// cannot see the cause of is indistinguishable from the result
+    /// having vanished.
+    Standalone { session_id: String, reason: String },
+}
+
+impl DeliveryTarget {
+    /// The session the run should execute against.
+    pub fn session_id(&self) -> &str {
+        match self {
+            Self::Anchor(s) => s,
+            Self::Standalone { session_id, .. } => session_id,
+        }
+    }
+
+    /// Whether this delivery reaches the user's conversation.
+    pub fn is_anchored(&self) -> bool {
+        matches!(self, Self::Anchor(_))
+    }
+}
+
+/// Inputs the guardrail decides from.
+///
+/// Pulled out as a plain struct so the decision can be unit-tested by
+/// feeding numbers, rather than by arranging a database in a state that
+/// is awkward to reach and easy to arrange wrongly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeliveryGuardInput {
+    /// The configured anchor, if any.
+    pub anchor_session_id: Option<String>,
+    /// Runs already delivered into that anchor by this automation.
+    pub prior_injections: u64,
+    /// Consecutive terminal runs that did not succeed.
+    pub consecutive_failures: u64,
+    /// Whether the anchor conversation still exists.
+    pub anchor_exists: bool,
+    /// The run-scoped fallback session id.
+    pub fallback_session_id: String,
+    /// Injection cap. `None` uses [`DEFAULT_MAX_INJECTIONS_PER_SESSION`].
+    pub max_injections: Option<u64>,
+    /// Consecutive-failure cap. `None` uses
+    /// [`MAX_CONSECUTIVE_FAILURES_BEFORE_STOP`].
+    pub max_consecutive_failures: Option<u64>,
+}
+
+/// Decide where a run's result is delivered.
+///
+/// Order matters and is not arbitrary: the cheap "is there even an
+/// anchor" question is asked first, then the existence check, then the
+/// two caps. Each early return corresponds to a reason the user needs to
+/// be told.
+///
+/// Note what this function does *not* do: it never returns
+/// `Anchor` for a session that does not exist. `send_message` UPSERTs
+/// the sessions row, so dispatching into a deleted anchor would
+/// resurrect it as a title-less orphan that shows up in the sidebar with
+/// no explanation.
+pub fn decide_delivery_target(input: &DeliveryGuardInput) -> DeliveryTarget {
+    let standalone = |reason: String| DeliveryTarget::Standalone {
+        session_id: input.fallback_session_id.clone(),
+        reason,
+    };
+
+    let Some(anchor) = input
+        .anchor_session_id
+        .as_deref()
+        .filter(|s| !s.is_empty())
+    else {
+        return standalone("该任务没有绑定对话".into());
+    };
+
+    if !input.anchor_exists {
+        return standalone("绑定的对话已被删除，结果转入独立会话".into());
+    }
+
+    let max_failures = input
+        .max_consecutive_failures
+        .unwrap_or(MAX_CONSECUTIVE_FAILURES_BEFORE_STOP);
+    if input.consecutive_failures >= max_failures {
+        return standalone(format!(
+            "连续 {} 次运行失败，已暂停回投到对话",
+            input.consecutive_failures
+        ));
+    }
+
+    let max_injections = input
+        .max_injections
+        .unwrap_or(DEFAULT_MAX_INJECTIONS_PER_SESSION);
+    if input.prior_injections >= max_injections {
+        return standalone(format!(
+            "已达到回投上限（{} 次），结果转入独立会话",
+            max_injections
+        ));
+    }
+
+    DeliveryTarget::Anchor(anchor.to_string())
+}
+
 impl std::fmt::Display for ScheduleType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -489,6 +620,14 @@ pub struct AutomationRun {
     /// `None` once the run reached a terminal state.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub retry_at: Option<i64>,
+    /// The conversation this run's result was actually delivered into.
+    ///
+    /// `None` until the run is dispatched, and also `None` for a run that
+    /// fell back to its own `automation:*` session. This is what the
+    /// delivery guardrail counts against — see
+    /// [`AutomationRepository::count_deliveries_into`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delivered_to_session_id: Option<String>,
 }
 
 /// Parameters for creating a new automation.
@@ -705,5 +844,128 @@ mod tests {
     fn test_automation_status_display() {
         assert_eq!(AutomationStatus::Active.to_string(), "ACTIVE");
         assert_eq!(AutomationStatus::Paused.to_string(), "PAUSED");
+    }
+
+    // -----------------------------------------------------------------------
+    // Delivery guardrail
+    // -----------------------------------------------------------------------
+
+    /// 一个"一切正常、可以回投"的输入，各测试只改自己关心的那个字段。
+    fn healthy_guard(anchor: &str) -> DeliveryGuardInput {
+        DeliveryGuardInput {
+            anchor_session_id: Some(anchor.to_string()),
+            prior_injections: 0,
+            consecutive_failures: 0,
+            anchor_exists: true,
+            fallback_session_id: "automation:auto-1:run-9".into(),
+            max_injections: None,
+            max_consecutive_failures: None,
+        }
+    }
+
+    /// 基线：健康 + 有锚点 → 注入到用户对话，且不给出任何回退理由。
+    ///
+    /// 钉住"正常路径不带 fallback_reason"——理由字段只在真的回退时出现，
+    /// 无条件填充会让每张卡片都挂着一句废话。
+    #[test]
+    fn test_guard_allows_healthy_anchored_delivery() {
+        let target = decide_delivery_target(&healthy_guard("sess-1"));
+        assert_eq!(
+            target,
+            DeliveryTarget::Anchor("sess-1".into()),
+            "一切正常时必须锚定回原对话"
+        );
+        assert!(target.is_anchored());
+    }
+
+    /// 锚点会话已被删除 → 回退，且**必须带可见原因**。
+    ///
+    /// 静默回退是这份设计里最贵的失败模式：用户只看到"结果没出现"。
+    #[test]
+    fn test_guard_falls_back_when_anchor_is_gone() {
+        let mut input = healthy_guard("sess-1");
+        input.anchor_exists = false;
+        let target = decide_delivery_target(&input);
+        match target {
+            DeliveryTarget::Standalone { session_id, reason } => {
+                assert_eq!(session_id, "automation:auto-1:run-9");
+                assert!(
+                    !reason.is_empty(),
+                    "回退必须给出原因，否则用户看到的是'结果消失了'"
+                );
+            }
+            other => panic!("锚点已删除却仍判定为锚定投递：{other:?}"),
+        }
+    }
+
+    /// 注入次数达上限 → 回退。这条是"一年 365 条撑爆对话"的那道闸。
+    #[test]
+    fn test_guard_falls_back_at_injection_cap() {
+        let mut input = healthy_guard("sess-1");
+        input.prior_injections = DEFAULT_MAX_INJECTIONS_PER_SESSION;
+        let target = decide_delivery_target(&input);
+        assert!(
+            !target.is_anchored(),
+            "恰好等于上限就该停投（>= 而非 >），否则第 N+1 条才会拦"
+        );
+    }
+
+    /// 差一条就到上限时**仍然投递**——不能提前一格就把用户踢出去。
+    #[test]
+    fn test_guard_delivers_one_below_the_cap() {
+        let mut input = healthy_guard("sess-1");
+        input.prior_injections = DEFAULT_MAX_INJECTIONS_PER_SESSION - 1;
+        assert!(
+            decide_delivery_target(&input).is_anchored(),
+            "上限之内必须照常投递"
+        );
+    }
+
+    /// 连续失败达上限 → 停投回退。
+    ///
+    /// 与注入次数是**不同**的问题：一个每天报错的任务，注入次数可能
+    /// 还没到上限，但已经在往用户主对话里灌错误信息。
+    #[test]
+    fn test_guard_falls_back_on_failure_streak() {
+        let mut input = healthy_guard("sess-1");
+        input.consecutive_failures = MAX_CONSECUTIVE_FAILURES_BEFORE_STOP;
+        assert!(
+            !decide_delivery_target(&input).is_anchored(),
+            "连续失败达上限必须停投"
+        );
+    }
+
+    /// 无锚点（UI 侧创建的自动化）→ 走独立会话，行为与护栏落地前一致。
+    #[test]
+    fn test_guard_handles_unanchored_automation() {
+        let mut input = healthy_guard("sess-1");
+        input.anchor_session_id = None;
+        assert!(!decide_delivery_target(&input).is_anchored());
+    }
+
+    /// 空串锚点等同无锚点——不能把 `""` 当成一个真实 session id 去查。
+    #[test]
+    fn test_guard_treats_empty_anchor_as_unanchored() {
+        let mut input = healthy_guard("sess-1");
+        input.anchor_session_id = Some(String::new());
+        assert!(!decide_delivery_target(&input).is_anchored());
+    }
+
+    /// 失败护栏优先于次数护栏：先说"连续失败"，因为那是当下更紧急的
+    /// 事实，次数只是背景噪音。
+    #[test]
+    fn test_failure_streak_takes_precedence_over_count() {
+        let mut input = healthy_guard("sess-1");
+        input.prior_injections = DEFAULT_MAX_INJECTIONS_PER_SESSION;
+        input.consecutive_failures = MAX_CONSECUTIVE_FAILURES_BEFORE_STOP;
+        match decide_delivery_target(&input) {
+            DeliveryTarget::Standalone { reason, .. } => {
+                assert!(
+                    reason.contains("失败"),
+                    "两个上限同时命中时应报连续失败，实际：{reason}"
+                );
+            }
+            other => panic!("应回退而非锚定：{other:?}"),
+        }
     }
 }

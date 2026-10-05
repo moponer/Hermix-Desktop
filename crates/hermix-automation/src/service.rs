@@ -162,6 +162,39 @@ impl AutomationService {
         self.repo.count_active_runs().map_err(Into::into)
     }
 
+    /// How many results this automation has already injected into
+    /// `session_id`. The delivery guardrail's counter.
+    pub fn count_deliveries_into(
+        &self,
+        automation_id: &str,
+        session_id: &str,
+    ) -> Result<u64, AutomationServiceError> {
+        self.repo
+            .count_deliveries_into(automation_id, session_id)
+            .map_err(Into::into)
+    }
+
+    /// Record which conversation a run's result was delivered into.
+    pub fn mark_run_delivered(
+        &self,
+        run_id: &str,
+        session_id: &str,
+    ) -> Result<(), AutomationServiceError> {
+        self.repo.mark_run_delivered(run_id, session_id).map_err(Into::into)
+    }
+
+    /// Terminal failures since the last success, counting both
+    /// dispatch-layer and agent-layer failures. The delivery guardrail's
+    /// second input.
+    pub fn consecutive_terminal_failures(
+        &self,
+        automation_id: &str,
+    ) -> Result<i64, AutomationServiceError> {
+        self.repo
+            .consecutive_terminal_failures(automation_id)
+            .map_err(Into::into)
+    }
+
     /// Reap runs abandoned by a previous process. Call once at startup.
     ///
     /// Without this, a crash between claim and dispatch leaves a permanent
@@ -245,6 +278,9 @@ impl AutomationService {
             dispatched_at: None,
             attempts: Some(1),
             retry_at: None,
+            // Filled in by `mark_run_delivered` once the run finishes
+            // and the guardrail has settled which conversation it used.
+            delivered_to_session_id: None,
         };
         self.repo.create_run(&run)?;
         Ok(Some(run_id))
@@ -278,6 +314,10 @@ impl AutomationService {
             dispatched_at: None,
             attempts: Some(0),
             retry_at: None,
+            // A declined claim never dispatched, so nothing was
+            // delivered — recording a session would charge the
+            // guardrail's budget for a run that produced no output.
+            delivered_to_session_id: None,
         })?;
         tracing::debug!(
             automation_id = %auto.id,
