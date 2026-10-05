@@ -1,10 +1,6 @@
----
-status: implemented
-class: process
-date: 2026-10-05
----
+# Decision Note: 工具配置面板去描边 + 图标统一主色
 
-# 工具配置面板去描边 + 图标统一主色
+Status: implemented — ToolTabs 四页卡片去描边、图标统一主色 token，技能分类筛选与统计带、工具集清单展开已落地。
 
 ## Decision
 
