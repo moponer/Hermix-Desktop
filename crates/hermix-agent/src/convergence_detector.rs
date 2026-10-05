@@ -572,7 +572,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn test_visible_text_resets_no_progress_counter() {
         let mut d = ConvergenceDetector::with_config(ConvergenceConfig {
             max_no_progress_turns: 3,

@@ -4597,7 +4597,7 @@ mod override_tests {
         // schema must be rejected BEFORE the approval raise — otherwise the
         // user approves a call that then fails validation and the agent
         // burns a 600s window on nothing.
-        let mut registry = ToolRegistry::new();
+        let registry = ToolRegistry::new();
         registry.register_with_risk(
             "dangerous_strict",
             "test",

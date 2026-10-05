@@ -846,15 +846,6 @@ pub enum DirRoute {
     OpenAiFamily,
     /// Model name contains "minimax" / "m2" / "hermes" — fine-tune extras.
     MiniMaxFamily,
-    /// Conversation has 5+ tool calls — multi-step task focus guidance.
-    /// (基础设施保留；当前无 guidance 使用此路由。)
-    MultiStepTask,
-    /// This turn actually invoked 1+ tool calls — only then should
-    /// "summarize what you did" or "next step" guidance fire. Trivial
-    /// conversational turns (no tool use) get the default guidance
-    /// only, so the model is not pressured into inventing filler
-    /// summaries for turns where there is nothing to summarize.
-    HadAnyToolUse,
     /// Always-on (tool failure rule, safety, environment, git discipline).
     Always,
     /// Active workspace's `AGENTS.md` exposes a project-conventions
@@ -1001,14 +992,6 @@ impl DirRoute {
             DirRoute::HasTaskTracker => {
                 if has("task_create") { (true, None) }
                 else { (false, Some("task_create tool not active".into())) }
-            }
-            DirRoute::MultiStepTask => {
-                if ctx.tool_call_count >= 5 { (true, None) }
-                else { (false, Some(format!("tool_call_count {} < 5", ctx.tool_call_count))) }
-            }
-            DirRoute::HadAnyToolUse => {
-                if ctx.tool_call_count >= 1 { (true, None) }
-                else { (false, Some(format!("no tool calls this turn (count={})", ctx.tool_call_count))) }
             }
             DirRoute::Always => (true, None),
             DirRoute::HasProjectConventions => (true, None),
@@ -1777,41 +1760,6 @@ let ctx = RouteContext {
         assert!(patched.contains(Section::ToolEnforce.marker()));
     }
 
-    /// ( — ): `DirRoute::HadAnyToolUse` only fires
-    /// when the turn actually invoked 1+ tool calls. Trivial conversational
-    /// turns (count == 0) must NOT receive this guidance, otherwise the
-    /// model invents filler summaries and the "(等待中) ×N" pattern
-    /// observed on M2.7 / Hermes fine-tunes.
-    #[test]
-    fn had_any_tool_use_fires_only_when_count_positive() {
-        let tool_names: std::collections::HashSet<&str> = std::collections::HashSet::new();
-        // Trivial turn → must NOT fire.
-        let trivial = RouteContext {
-            user_message: "你好",
-            tool_names: &tool_names,
-            model_name: "minimax:MiniMax-M2.7",
-            autonomous_mode: false,
-            tool_call_count: 0,
-            domain_mode: None,
-            workbench_id: None,
-        };
-        assert_eq!(
-            DirRoute::HadAnyToolUse.matches(&trivial),
-            (false, Some("no tool calls this turn (count=0)".to_string()))
-        );
-        // After a single tool call → must fire.
-        let with_one_tool = RouteContext {
-            tool_call_count: 1,
-            ..trivial
-        };
-        assert_eq!(DirRoute::HadAnyToolUse.matches(&with_one_tool), (true, None));
-        // Multi-tool turn → still fires (no upper bound).
-        let many_tools = RouteContext {
-            tool_call_count: 10,
-            ..trivial
-        };
-        assert_eq!(DirRoute::HadAnyToolUse.matches(&many_tools), (true, None));
-    }
 
     /// C3 marker protocol : each `Section` has a stable
     /// human-readable `label()` distinct from its detection

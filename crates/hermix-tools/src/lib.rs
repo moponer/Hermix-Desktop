@@ -100,7 +100,7 @@ pub use tools::session_stamper::SessionStamper;
 pub use tools::skill_commands;
 pub use tools::skill_utils;
 pub use tools::skills::{SkillManageHandler, SkillViewHandler, SkillsListHandler};
-pub use tools::terminal::{ProcessBackend, ProcessHandler, TerminalHandler};
+pub use tools::terminal::TerminalHandler;
 pub use tools::todo::{TodoBackend, TodoHandler};
 pub use tools::tool_search::{
     assemble_tool_schemas, classify_tools, classify_tools_with_meta, is_bridge, AssemblyResult,

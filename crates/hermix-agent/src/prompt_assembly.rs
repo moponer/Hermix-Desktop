@@ -532,10 +532,10 @@ pub fn build_system_prompt_with_tool_errors(
     // (user message, active tool set, model) change every turn. This block
     // lives OUTSIDE the cached stable layer (keyed on
     // model/personality/system_prompt/workspace only). Note: the
-    // HadAnyToolUse / MultiStepTask route variants still exist in
-    // DirRoute but no guidance currently uses them — the verbose
-    // summary/stopping guidance they used to gate was removed
-    // (see directions.rs "the verbose rules ... have been removed").
+    // the verbose summary/stopping guidance routes (HadAnyToolUse /
+    // MultiStepTask) were removed from DirRoute along with the guidance
+    // they gated (see directions.rs "the verbose rules ... have been
+    // removed").
     let mut directions_text = {
         use crate::context::{RouteContext, SystemPromptBuilder};
         let route_ctx = RouteContext {
@@ -691,10 +691,10 @@ pub fn build_system_prompt(
     // (user message, active tool set, model) change every turn. This block
     // lives OUTSIDE the cached stable layer (keyed on
     // model/personality/system_prompt/workspace only). Note: the
-    // HadAnyToolUse / MultiStepTask route variants still exist in
-    // DirRoute but no guidance currently uses them — the verbose
-    // summary/stopping guidance they used to gate was removed
-    // (see directions.rs "the verbose rules ... have been removed").
+    // the verbose summary/stopping guidance routes (HadAnyToolUse /
+    // MultiStepTask) were removed from DirRoute along with the guidance
+    // they gated (see directions.rs "the verbose rules ... have been
+    // removed").
     let directions_text = {
         use crate::context::{RouteContext, SystemPromptBuilder};
         let route_ctx = RouteContext {

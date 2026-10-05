@@ -68,7 +68,14 @@
 - **验证**：server 290 全绿、tools 769 全绿、零警告。
 - **提交**：`refactor(audit-batch3-rust1)`。
 
+### Step 5（03:20）— A 线批次 3（Rust 第二组）完成 ✅
+- context.rs：`DirRoute::MultiStepTask` / `HadAnyToolUse` 两死路由删除（变体定义 + match 臂 + 唯一测试；`tool_call_count` 字段保留——构造侧仍注入，无警告）。
+- prompt_assembly.rs：两处"HadAnyToolUse / MultiStepTask route variants still exist"注释同步改述。
+- terminal.rs：`ProcessBackend` trait + `ProcessHandler` 整组删除（935-1081 区），lib.rs 导出同删——文件从 2073 行降到 1923 行。
+- 顺手修两处警告：convergence 重复 `#[test]`、local_agent_service 测试多余 `mut`。
+- **验证**：agent 1052 / tools 769 全绿；workspace check 0 错误 0 警告。
+- **提交**：`refactor(audit-batch3-rust2)`。
+
 ### 下一步
-- Step 5 = 批次 3 Rust 第二组：DirRoute::MultiStepTask/HadAnyToolUse 死路由 + terminal ProcessHandler/ProcessBackend；
-- Step 6 = 批次 3 前端 PR（24 死导出）；
-- Step 7 = 批次 2-5（审批 family → signature 级）。
+- Step 6 = 批次 3 前端 PR（rest.ts 24 死导出 + 支撑类型 + isCircuitTripped 熔断死分支）；
+- Step 7 = 批次 2-5（审批 family → signature 级，中风险最后做）。
