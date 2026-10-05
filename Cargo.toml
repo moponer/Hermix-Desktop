@@ -159,6 +159,12 @@ base64 = "0.22"
 aes-gcm = "0.10"
 bytes = "1"
 sha2 = "0.10"
+# relay 帧 E2EE：P-256 ECDH 派生 content key + HKDF-SHA256 展开。
+# 选 P-256 而非 X25519 是因为 App 侧只有 WebCrypto（无 Curve25519），
+# P-256 是 subtle.deriveBits 的原生曲线，两端不必自研或引 JS 密码学库。
+# 与上面的 sha2 / aes-gcm 同属 RustCrypto 同代。
+p256 = { version = "0.13", features = ["ecdh"] }
+hkdf = "0.12"
 url = "2"
 directories = "6"
 minijinja = "2"

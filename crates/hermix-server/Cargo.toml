@@ -69,6 +69,9 @@ tokio-tungstenite = { workspace = true, features = ["rustls-tls-native-roots"] }
 base64 = { workspace = true }
 # IM 通道：QQ 开放平台扫码绑定返回的 bot secret 是 AES-256-GCM 密文。
 aes-gcm = { workspace = true }
+# relay 帧 E2EE —— 与 App 侧 apps/hm/src/core/crypto.ts 逐字节对齐。
+p256 = { workspace = true }
+hkdf = { workspace = true }
 regex = { workspace = true }
 # `test_state.rs` lives in the lib tree (gated by `#![cfg(any(test,
 # feature = "test-helpers"))]`) and uses `tempfile::tempdir` — so it
