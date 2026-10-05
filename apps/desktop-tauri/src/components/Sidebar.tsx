@@ -1020,7 +1020,7 @@ function RenameDialog({
             disabled={!canConfirm}
             className={clsx(
               "flex items-center gap-1.5 px-4 py-2 rounded-lg text-ui font-bold",
-              "text-accent-on-text transition-opacity",
+              "text-on-accent transition-opacity",
               canConfirm ? "hover:opacity-90" : "opacity-50 cursor-not-allowed",
             )}
             style={{ background: "var(--color-accent)" }}

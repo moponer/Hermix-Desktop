@@ -231,7 +231,7 @@ export function PythonRuntimePanel() {
           <button
             onClick={handleSaveOverride}
             disabled={overrideSaving}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs bg-accent hover:bg-accent-hover text-accent-on-text disabled:opacity-40 shrink-0"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs bg-accent hover:bg-accent-hover text-on-accent disabled:opacity-40 shrink-0"
           >
             <Save className="icon-sm" />
             {overrideSaving ? "保存中" : "保存"}

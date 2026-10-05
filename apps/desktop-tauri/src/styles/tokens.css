@@ -276,6 +276,19 @@
      孤儿扫描不跳过注释，会把它当成活跃引用。 */
   --color-accent: #1e4a3c;
 
+  /* 压在 accent 实色块上的文字色。
+     与下面 --color-accent-on-text 是**两件事，名字却只差词序**：
+       on-accent     = 文字坐在 accent 实色底上 → 必须是浅色/深色（高对比）
+       accent-on-text= accent 自身 16% 的淡色   → 适合次级文字、描边、淡底
+     2026-10-05：此前本 token 只在 base.css 的 :root 里定义，Tailwind v4
+     不从别名层生成工具类，于是 `text-on-accent` 是个**不存在的类**；同时
+     10 处 accent 实色按钮（ToolTabs 的导入/确认添加、SecurityTab、
+     AdvancedSettingsTab、Sidebar 确认键等）误用了 `text-accent-on-text`
+     ——accent 底 + 16% 淡 accent 字，文字与底色几乎同色，肉眼等于隐形。
+     放进 @theme 才能生成 `text-on-accent`；暗色主题的值在 themes/dark.css
+     覆写（accent 提亮后白字对比度不足）。 */
+  --color-on-accent: #ffffff;
+
   /* accent 的派生档位：hover / on-text / soft / soft-strong。
      2026-10-04 起与本体同处 @theme。此前它们在 base.css 的别名层
      （:root），Tailwind v4 只从 @theme 生成工具类，于是
@@ -290,8 +303,8 @@
      搬移前逐字节相同，对已有 20 余处 raw var() 消费方零视觉变化，
      变的只是这四类工具类从「不生成」变成「生成」。
 
-     --color-on-accent 不在此列：它是字面量而非派生，且自由取色下无法用
-     color-mix 推导（需按明度选浅/深文字），留待 L3.5 调色板注入。 */
+     --color-on-accent 已于 2026-10-05 并入本块（见上方字面量声明）：它是
+     字面量而非 color-mix 派生，值随主题在 themes/dark.css 覆写。 */
   --color-accent-hover: color-mix(in srgb, var(--color-accent) 88%, black);
   --color-accent-on-text: color-mix(in srgb, var(--color-accent) 16%, transparent);
   /* soft 档：accent 极淡的底。混白而非降低 alpha——半透明叠在不同底色

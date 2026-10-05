@@ -95,12 +95,12 @@ function CategoryChip({
       className={clsx(
         "flex items-center gap-1 px-2.5 py-1 rounded-full text-[length:var(--text-meta)] whitespace-nowrap",
         active
-          ? "bg-accent text-accent-on-text"
+          ? "bg-accent text-on-accent"
           : "bg-bg-tertiary text-text-muted hover:text-text-primary",
       )}
     >
       {label}
-      <span className={clsx("text-[length:var(--text-meta)]", active ? "text-accent-on-text/80" : "text-text-faint")}>{count}</span>
+      <span className={clsx("text-[length:var(--text-meta)]", active ? "text-on-accent/80" : "text-text-faint")}>{count}</span>
     </button>
   );
 }
