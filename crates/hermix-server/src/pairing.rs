@@ -495,43 +495,50 @@ impl PairingSessions {
             .map_err(|e| format!("加载 TLS 证书失败: {e}"))?;
         let fingerprint = material.fingerprint_sha256;
 
-        let code = {
+        // mint + insert 必须在同一临界区（对齐 create_code_only 的持锁
+        // 模式）：两段锁之间，另一个并发 create() 会铸出同一个 6 位码
+        // ——双方做碰撞检查时彼此都还没 insert，互相看不见；后 insert
+        // 的会话覆盖前一个，前一个用户的配对会话被静默顶掉（TOCTOU，
+        // 体检批次 1-3）。best_effort_lan_ip 留在锁内属有意为之：配对是
+        // 人工节奏的操作，网卡枚举的亚毫秒争用可忽略。
+        let (code, payload) = {
             let mut inner = self.inner.lock().expect("pairing sessions lock");
-            Self::mint_code(&mut inner)
+            let code = Self::mint_code(&mut inner);
+            let host = tls::best_effort_lan_ip()
+                .map(|ip| ip.to_string())
+                .unwrap_or_else(|| tls_addr.ip().to_string());
+            let payload = QrPayload {
+                server_id: format!("hermix-{}", &fingerprint[..8]),
+                // 二维码内容：手机相机扫码 → 浏览器打开 /pair 落地页（同 TLS 监听器）
+                //
+                // `fp` 携带本机 TLS 证书指纹。落地页把它回显给用户肉眼比对，
+                // 并在 `POST /api/pairing/complete` 时随配对码一起送回；服务端
+                // 与本机指纹比对，不符则拒绝签发 device_token。缺这一步时，
+                // 同网段 MITM 只要出示自己的自签证书、克隆 /pair 页，就能把
+                // 配对码换成 device_token（TOFU 锚点未被任何代码使用）。
+                pairing_url: format!(
+                    "https://{host}:{}/pair?c={code}&fp={fingerprint}",
+                    tls_addr.port()
+                ),
+                host,
+                port: tls_addr.port(),
+                cert_fingerprint: fingerprint,
+                pairing_code: code.clone(),
+                proto_version: 1,
+            };
+            // 新码代际：扫码方自己的预算清零（重新生成 = 攻击者重新开始）。
+            // attempts 锁与 inner 互不相干，锁内调用无死锁。
+            self.reset_attempts(BUCKET_BROWSER);
+            inner.insert(
+                code.clone(),
+                PairingSession {
+                    expires_at: Instant::now() + PAIRING_TTL,
+                    consumed: false,
+                    payload: Some(payload.clone()),
+                },
+            );
+            (code, payload)
         };
-        let host = tls::best_effort_lan_ip()
-            .map(|ip| ip.to_string())
-            .unwrap_or_else(|| tls_addr.ip().to_string());
-        let payload = QrPayload {
-            server_id: format!("hermix-{}", &fingerprint[..8]),
-            // 二维码内容：手机相机扫码 → 浏览器打开 /pair 落地页（同 TLS 监听器）
-            //
-            // `fp` 携带本机 TLS 证书指纹。落地页把它回显给用户肉眼比对，
-            // 并在 `POST /api/pairing/complete` 时随配对码一起送回；服务端
-            // 与本机指纹比对，不符则拒绝签发 device_token。缺这一步时，
-            // 同网段 MITM 只要出示自己的自签证书、克隆 /pair 页，就能把
-            // 配对码换成 device_token（TOFU 锚点未被任何代码使用）。
-            pairing_url: format!(
-                "https://{host}:{}/pair?c={code}&fp={fingerprint}",
-                tls_addr.port()
-            ),
-            host,
-            port: tls_addr.port(),
-            cert_fingerprint: fingerprint,
-            pairing_code: code.clone(),
-            proto_version: 1,
-        };
-        // 新码代际：扫码方自己的预算清零（重新生成 = 攻击者重新开始）
-        self.reset_attempts(BUCKET_BROWSER);
-        let mut inner = self.inner.lock().expect("pairing sessions lock");
-        inner.insert(
-            code,
-            PairingSession {
-                expires_at: Instant::now() + PAIRING_TTL,
-                consumed: false,
-                payload: Some(payload.clone()),
-            },
-        );
         Ok(payload)
     }
 
@@ -1159,6 +1166,40 @@ mod tests {
         assert!(matches!(first, ConsumeOutcome::Ok(_)), "首次消费应成功");
         let second = sessions.consume(&payload.pairing_code);
         assert_eq!(second, ConsumeOutcome::Invalid, "一次性：二次消费必须失败");
+    }
+
+    #[test]
+    fn concurrent_create_never_yields_duplicate_codes() {
+        // TOCTOU 回归网（批次 1-3）：mint 与 insert 已收敛到同一临界区，
+        // 并发 create 的码空间不碰撞。注：1M 码空间下不修此洞时本测试
+        // 的单次捕获概率不高——结构保证（单临界区）才是主防线，本测试
+        // 防的是将来有人把 insert 再挪出锁外的回归。
+        use std::sync::Arc;
+        let sessions = Arc::new(PairingSessions::new());
+        let addr: std::net::SocketAddr = "0.0.0.0:8443".parse().expect("addr");
+        let mut handles = Vec::new();
+        for _ in 0..4 {
+            let s = Arc::clone(&sessions);
+            handles.push(std::thread::spawn(move || {
+                (0..25)
+                    .filter_map(|_| s.create(Some(addr)).ok())
+                    .map(|p| p.pairing_code)
+                    .collect::<Vec<_>>()
+            }));
+        }
+        let mut codes = Vec::new();
+        for h in handles {
+            codes.extend(h.join().expect("create thread"));
+        }
+        assert_eq!(codes.len(), 100, "全部 create 应成功");
+        let mut sorted = codes.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(
+            sorted.len(),
+            codes.len(),
+            "并发 create 不得产生重复 6 位码（mint+insert 必须同临界区）"
+        );
     }
 
     #[test]

@@ -693,9 +693,15 @@ pub trait BrowserBackend: Send + Sync {
 /// to `"default"` when absent. Centralising this here means every
 /// browser tool gets the same routing key with no per-handler copy.
 fn session_from_params(params: &Value) -> &str {
+    // 注入键优先：registry 分发时会把发起会话的 hermix session id 盖到
+    // `_session_id`（validation.rs `inject_session_id`），浏览器上下文因此
+    // 按会话隔离，不会跨会话串台（此前只读 `session`，注入永远落空——
+    // 体检批次 1-2）。显式 `session` 保留为 LLM 覆盖入口，仅在注入缺失
+    // （直连 / 测试分发）时生效。
     params
-        .get("session")
+        .get("_session_id")
         .and_then(|v| v.as_str())
+        .or_else(|| params.get("session").and_then(|v| v.as_str()))
         .unwrap_or("default")
 }
 
@@ -1917,5 +1923,29 @@ mod tests {
             .await
             .unwrap();
         assert!(result.contains("10.0.0.1"));
+    }
+}
+
+
+#[cfg(test)]
+mod session_routing_tests {
+    use super::*;
+
+    #[test]
+    fn injected_session_key_wins_over_explicit() {
+        let params = serde_json::json!({"session": "llm-chosen", "_session_id": "im:device:d1"});
+        assert_eq!(session_from_params(&params), "im:device:d1");
+    }
+
+    #[test]
+    fn explicit_session_used_when_injection_absent() {
+        let params = serde_json::json!({"session": "llm-chosen"});
+        assert_eq!(session_from_params(&params), "llm-chosen");
+    }
+
+    #[test]
+    fn defaults_to_default_session() {
+        assert_eq!(session_from_params(&serde_json::json!({})), "default");
+        assert_eq!(session_from_params(&serde_json::json!({"_session_id": 42})), "default");
     }
 }

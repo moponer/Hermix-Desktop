@@ -1914,6 +1914,17 @@ pub(crate) fn query_search_with_conn(
     Ok(results)
 }
 
+/// `/v1/commands` 的 overrides：LAN 可达、无审批卡片渲染面（无 WS
+/// socket）—— Dangerous 工具必须在此显式 Deny，不依赖 ambient 默认
+/// （与 `send_message` 的同条规则对齐，兑现 ws.rs 与本文件头注释宣称的
+/// 架构）。
+fn exec_command_overrides() -> hermix_core::traits::AgentOverrides {
+    hermix_core::traits::AgentOverrides {
+        approval_fallback: Some(hermix_core::approval::ApprovalFallback::Deny),
+        ..hermix_core::traits::AgentOverrides::default()
+    }
+}
+
 pub(crate) async fn exec_command(
     State(state): State<HttpServerState>,
     axum::extract::Extension(origin): axum::extract::Extension<hermix_core::Origin>,
@@ -1957,7 +1968,7 @@ pub(crate) async fn exec_command(
 
     // For now, we'll just send the command as a regular message
     // In a real implementation, we'd need to handle slash commands specially
-    let overrides = hermix_core::traits::AgentOverrides::default();
+    let overrides = exec_command_overrides();
     let reply = state
         .agent_service
         .send_message(&session_id, &cmd, overrides)
@@ -1994,6 +2005,21 @@ pub(crate) struct WarmUpProviderRequest {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    // ----- /v1/commands 审批兜底（批次 1-1）-----
+
+    #[test]
+    fn exec_command_overrides_explicitly_denies_dangerous_without_channel() {
+        // LAN 可达的 REST 路径没有 WS socket 渲染审批卡。兜底必须是
+        // 显式 Deny 而非 ambient 默认——即使 agent 侧的 unwrap_or 默认
+        // 将来变化，这里也不允许 Dangerous 工具静默执行。
+        let overrides = exec_command_overrides();
+        assert_eq!(
+            overrides.approval_fallback,
+            Some(hermix_core::approval::ApprovalFallback::Deny)
+        );
+        assert!(overrides.approval_requester.is_none());
+    }
 
     // ----- 窗口化分页（window_message_page）-----
 
