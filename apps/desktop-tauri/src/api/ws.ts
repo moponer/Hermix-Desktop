@@ -68,14 +68,3 @@ export async function sendToStreamChannel(
   await invoke<void>("backend_channel_send", { channel, payload: text });
 }
 
-/** Legacy wrapper kept for the existing `sendMessageStream` call
- *  sites — the user-facing stream REST POST that the bridge replies
- *  to with the first WS chunk on the `stream:<sid>` channel. */
-export const sendMessageStream = (id: string, content: string) =>
-  // Re-export from `./rest` so callers that do
-  // `import { sendMessageStream } from "../api"` keep working
-  // without a parallel import path.
-  // The actual implementation is the same as `sendMessage` — it
-  // POSTs to `/v1/sessions/:id/messages` and the server opens the
-  // `stream:<id>` channel for the reply frames.
-  import("./rest").then(({ sendMessage }) => sendMessage(id, content));

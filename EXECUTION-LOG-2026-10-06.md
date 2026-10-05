@@ -76,6 +76,15 @@
 - **验证**：agent 1052 / tools 769 全绿；workspace check 0 错误 0 警告。
 - **提交**：`refactor(audit-batch3-rust2)`。
 
+### Step 6（04:00）— A 线批次 3（前端 PR）完成 ✅
+- rest.ts：24 个死导出删除（persona 12 + 插件/MCP/会话/自定义 provider 等 12）+ isCircuitTripped 永假 stub。
+- api/types.ts：DashboardSession / PersonaTextFile / PersonalitySummary / PersonaOverrides 四接口删除。
+- api/ws.ts：sendMessageStream legacy 包装删除。
+- context/StreamChatContext.tsx：StreamChatProvider 陷阱导出删除（App 直接用 StreamChatContext.Provider）。
+- 调用方死分支清除：useBackendConnection（熔断早退）、useCustomApps（2 处）、CustomAppsView（2 处）+ import 清理。
+- **波折记录**：块切割器误吞 6 个模块级声明（_toolsCache / TOOLS_CACHE_TTL_MS / isoToMs / fromBackend / McpServerListResponse / MCP_SERVERS_KEY+OFFICIAL_MCP_SEEDS+load+save+toBackend）——已从 HEAD 原样恢复；persona helper 区（getTextFile/putTextFile）与孤儿节标题清理；类型导入修剪 8 项。
+- **验证**：tsc 零错误；vitest 230 全绿。
+- **提交**：`refactor(audit-batch3-frontend)`。
+
 ### 下一步
-- Step 6 = 批次 3 前端 PR（rest.ts 24 死导出 + 支撑类型 + isCircuitTripped 熔断死分支）；
-- Step 7 = 批次 2-5（审批 family → signature 级，中风险最后做）。
+- Step 7 = 批次 2-5（审批 family → signature 级，terminal.rs approve_for_session / engine.rs:455）。

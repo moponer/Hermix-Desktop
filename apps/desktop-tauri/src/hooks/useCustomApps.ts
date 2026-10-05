@@ -18,7 +18,6 @@
 import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { listCustomApps, type CustomAppSummary } from "../lib/customAppApi";
-import { isCircuitTripped } from "../api";
 
 const BASE_INTERVAL_MS = 5_000;
 const MAX_INTERVAL_MS = 30_000;
@@ -52,10 +51,6 @@ export function useCustomApps() {
       if (cancelled) return;
       // 熔断窗口内不发请求（底层会直接抛 TypeError），但**不计失败**，
       // 退避一轮后再试 —— 熔断是 15s 冷却，不是永久判死。
-      if (isCircuitTripped()) {
-        scheduleNext();
-        return;
-      }
       try {
         const list = await listCustomApps();
         if (cancelled) return;

@@ -12,23 +12,10 @@
 //   lastActivityAt / compactionStatus / contextUsage / usageSnapshot /
 //   streamingSessionId / cancel），不再依赖父组件一层层透传。
 
-import { createContext, useContext, type ReactNode } from "react";
-import { useStreamChat, type StreamChatApi } from "../hooks/useStreamChat";
+import { createContext, useContext } from "react";
+import type { StreamChatApi } from "../hooks/useStreamChat";
 
 export const StreamChatContext = createContext<StreamChatApi | null>(null);
-
-export function StreamChatProvider({
-  activeSessionId,
-  children,
-}: {
-  activeSessionId: string | null;
-  children: ReactNode;
-}) {
-  // 单一、伴随 App 生命周期的 WebSocket 拥有者。挂在视图切换之上，
-  // 所以切换页面只是暂停渲染，连接与在途流不丢。
-  const api = useStreamChat(activeSessionId);
-  return <StreamChatContext.Provider value={api}>{children}</StreamChatContext.Provider>;
-}
 
 export function useStreamChatContext(): StreamChatApi {
   const ctx = useContext(StreamChatContext);

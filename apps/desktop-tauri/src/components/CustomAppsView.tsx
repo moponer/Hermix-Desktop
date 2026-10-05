@@ -13,7 +13,6 @@ import {
 import { AppCard } from "./custom-apps/AppCard";
 import { AppDetailModal } from "./custom-apps/AppDetailModal";
 import { useSafeTimeout } from "../hooks/useSafeTimeout";
-import { isCircuitTripped } from "../api";
 
 /** Auto-refresh interval (ms) — keeps the list in sync when apps are
  *  created/updated/deleted via the LLM tool while this page is open. */
@@ -36,12 +35,6 @@ export function CustomAppsView({ onStartCreateApp }: { onStartCreateApp?: () => 
   const consecutiveFailuresRef = useRef(0);
 
   const loadApps = useCallback(async (showSpinner = true) => {
-    // Skip when the circuit breaker is tripped — the backend is unreachable
-    // and polling would only waste resources.
-    if (isCircuitTripped()) {
-      if (showSpinner) setLoading(false);
-      return;
-    }
     if (showSpinner) setLoading(true);
     setError(null);
     try {
@@ -67,7 +60,6 @@ export function CustomAppsView({ onStartCreateApp }: { onStartCreateApp?: () => 
     // MAX_CONSECUTIVE_FAILURES to avoid hammering a down backend.
     const id = setInterval(() => {
       if (consecutiveFailuresRef.current >= MAX_CONSECUTIVE_FAILURES) return;
-      if (isCircuitTripped()) return;
       loadApps(false);
     }, AUTO_REFRESH_INTERVAL_MS);
     return () => {

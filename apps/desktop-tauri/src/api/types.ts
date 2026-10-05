@@ -37,22 +37,6 @@ export interface SessionSummary {
   workbench_id?: string | null;
 }
 
-export interface DashboardSession {
-  id: string;
-  source: string;
-  model: string;
-  title: string;
-  started_at: number;
-  ended_at: number | null;
-  last_active: number;
-  is_active: boolean;
-  message_count: number;
-  tool_call_count: number;
-  input_tokens: number;
-  output_tokens: number;
-  preview: string | null;
-}
-
 export interface HermesConfig {
   [key: string]: unknown;
 }
@@ -410,28 +394,6 @@ export interface RemoteExpert {
 }
 
 // ── Persona management ─────────────────────────────────────
-
-export interface PersonaTextFile {
-  /** Absolute path on disk (or `<builtin:name>` for built-in personas). */
-  path: string;
-  /** File contents. `null` when the file does not yet exist. */
-  content: string | null;
-  /** Last-modified epoch millis. `null` if the file does not exist. */
-  updated_at: number | null;
-}
-
-export interface PersonalitySummary {
-  name: string;
-  summary: string | null;
-  size: number;
-  updated_at: number | null;
-  is_builtin: boolean;
-}
-
-export interface PersonaOverrides {
-  system_prompt: string;
-  preferences: Record<string, unknown> | null;
-}
 
 // ── Custom LLM providers ──────────────────────────
 

@@ -33,10 +33,6 @@ export function useBackendConnection() {
   restartingRef.current = restarting;
 
   const check = useCallback(async () => {
-    if (api.isCircuitTripped()) {
-      setState("offline");
-      return;
-    }
     try {
       const config = await api.getConfig();
       setMode(String(config.mode ?? "local"));

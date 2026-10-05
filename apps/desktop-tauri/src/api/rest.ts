@@ -6,23 +6,15 @@ import { storage, STORAGE_KEYS } from "../utils/storageCompat";
 import { detectToolError } from "../components/messageParser";
 import { wireArrayToChatMessages, type WireMessage } from "../protocolAdapter";
 import type {
-  ArchiveRef,
   AutoCorrectResponse,
   CustomProviderCreateRequest,
-  CustomProviderFetchModelsResponse,
   CustomProviderSummary,
   CustomProviderTestConnectionResponse,
   HermesConfig,
   McpServerEntry,
   McpTransport,
-  ModelInfo,
   ModelListEntry,
   ModelListResponse,
-  PersonaOverrides,
-  PersonaTextFile,
-  PersonalitySummary,
-  PluginInspect,
-  PluginManifest,
   PluginSettings,
   RemoteExpert,
   RestoredContextUsage,
@@ -249,11 +241,8 @@ async function fetchVoid(path: string, init?: RequestInit): Promise<void> {
  *  not as connection-pool starvation), so the circuit is permanently
  *  closed. Components that polled this to gate UI can keep polling
  *  and just always see `false`. */
-export function isCircuitTripped(): boolean {
-  return false;
-}
 
-/** 内置 provider 元数据（id + 配钥环境变量名 + 权威默认模型）——分组/提示/自动选型的唯一真理源。 */
+
 export interface ProviderMeta {
   id: string;
   env_var: string;
@@ -434,20 +423,6 @@ export const restoreSession = async (
   } catch (e) {
     console.error("restoreSession failed", e);
     return null;
-  }
-};
-
-export const getSessionArchiveRefs = async (
-  id: string,
-): Promise<ArchiveRef[]> => {
-  try {
-    const res = await fetchJSON<{ refs: ArchiveRef[] }>(
-      `/v1/sessions/${encodeURIComponent(id)}/archive-refs`,
-    );
-    return res.refs ?? [];
-  } catch (e) {
-    console.error("getSessionArchiveRefs failed", e);
-    return [];
   }
 };
 
@@ -656,14 +631,6 @@ export const getBackupStatus = async (): Promise<BackupStatus | null> => {
   }
 };
 
-export const getModelInfo = async (): Promise<ModelInfo | null> => {
-  try {
-    return await fetchJSON<ModelInfo>("/api/model/info");
-  } catch {
-    return null;
-  }
-};
-
 export const getModelList = async (): Promise<ModelListResponse | null> => {
   try {
     return await fetchJSON<ModelListResponse>("/api/model/list");
@@ -719,168 +686,6 @@ export const updateEnabledToolsets = async (
     body: JSON.stringify({ enabled }),
   });
 
-export const getPluginManifests = async (): Promise<PluginManifest[]> => {
-  try {
-    return await fetchJSON<PluginManifest[]>("/api/dashboard/plugin-manifests");
-  } catch {
-    return [];
-  }
-};
-
-export const inspectAllPlugins = async (): Promise<Record<string, PluginInspect>> => {
-  try {
-    return await fetchJSON<Record<string, PluginInspect>>(
-      "/api/dashboard/plugin-inspect",
-    );
-  } catch {
-    return {};
-  }
-};
-
-export const rescanPlugins = async (): Promise<number> => {
-  try {
-    const res = await fetchJSON<{ ok: boolean; count: number }>(
-      "/api/dashboard/plugins/rescan",
-      { method: "POST" },
-    );
-    return res.count ?? 0;
-  } catch {
-    return 0;
-  }
-};
-
-// ── MCP connectors (McpServerEntry) ─────────────────────────
-
-const MCP_SERVERS_KEY = STORAGE_KEYS.mcpServers;
-const OFFICIAL_MCP_SEEDS: McpServerEntry[] = [
-  {
-    id: "official-filesystem",
-    name: "Filesystem（官方示例）",
-    description: "读取/写入本地文件系统的 MCP 服务（stdio 启动）",
-    transport: "stdio",
-    command: "npx",
-    args: ["-y", "@modelcontextprotocol/server-filesystem", "~"],
-    enabled: false,
-    createdAt: 0,
-  },
-  {
-    id: "official-fetch",
-    name: "Fetch（官方示例）",
-    description: "通过 HTTP 抓取网页并把 HTML/Markdown 返回给模型",
-    transport: "stdio",
-    command: "npx",
-    args: ["-y", "@modelcontextprotocol/server-fetch"],
-    enabled: false,
-    createdAt: 0,
-  },
-  {
-    id: "official-git",
-    name: "Git（官方示例）",
-    description: "封装常用 git 命令(read_git_status/diff/log/commit 等)",
-    transport: "stdio",
-    command: "uvx",
-    args: ["mcp-server-git", "--repository", "."],
-    enabled: false,
-    createdAt: 0,
-  },
-  {
-    id: "official-github",
-    name: "GitHub（官方示例）",
-    description: "查询 issue / PR / 仓库元数据（需要在环境变量注入 GITHUB_TOKEN）",
-    transport: "stdio",
-    command: "npx",
-    args: ["-y", "@modelcontextprotocol/server-github"],
-    env: { GITHUB_TOKEN: "" },
-    enabled: false,
-    createdAt: 0,
-  },
-  {
-    id: "official-brave-search",
-    name: "Brave Search（官方示例）",
-    description: "通过 Brave 搜索 API 返回结果(需要 BRAVE_API_KEY)",
-    transport: "stdio",
-    command: "npx",
-    args: ["-y", "@modelcontextprotocol/server-brave-search"],
-    env: { BRAVE_API_KEY: "" },
-    enabled: false,
-    createdAt: 0,
-  },
-];
-
-// ── MCP server CRUD (backend-first, localStorage fallback) ─────────
-
-function loadMcpServersCache(): McpServerEntry[] {
-  try {
-    const raw = storage.getItem(MCP_SERVERS_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw) as McpServerEntry[];
-      if (Array.isArray(parsed)) return parsed;
-    }
-  } catch {}
-  return OFFICIAL_MCP_SEEDS.map((s) => ({ ...s, createdAt: Date.now() }));
-}
-function saveMcpServersCache(list: McpServerEntry[]) {
-  try {
-    storage.setItem(MCP_SERVERS_KEY, JSON.stringify(list));
-  } catch {
-    // localStorage disabled / quota — non-fatal, the backend still has truth
-  }
-}
-
-function isoToMs(iso: string | undefined): number {
-  if (!iso) return 0;
-  const t = Date.parse(iso);
-  return Number.isFinite(t) ? t : 0;
-}
-
-function fromBackend(entry: { id: string; name: string; transport: string; command?: string; args?: string[]; url?: string; env?: Record<string, string>; enabled?: boolean; created_at?: string; description?: string }): McpServerEntry {
-  return {
-    id: entry.id,
-    name: entry.name,
-    transport: (entry.transport === "http" ? "http" : "stdio") as McpTransport,
-    command: entry.command,
-    args: entry.args,
-    url: entry.url,
-    env: entry.env,
-    enabled: entry.enabled ?? true,
-    createdAt: isoToMs(entry.created_at),
-    description: entry.description,
-  };
-}
-
-function toBackend(entry: Omit<McpServerEntry, "id" | "createdAt">) {
-  return {
-    name: entry.name,
-    transport: entry.transport,
-    command: entry.command,
-    args: entry.args,
-    url: entry.url,
-    env: entry.env,
-    enabled: entry.enabled,
-    description: (entry as McpServerEntry).description,
-  };
-}
-
-interface McpServerListResponse {
-  servers: Array<{
-    id: string;
-    name: string;
-    transport: string;
-    command?: string;
-    args?: string[];
-    url?: string;
-    env?: Record<string, string>;
-    enabled?: boolean;
-    created_at?: string;
-    description?: string;
-  }>;
-  seeded?: boolean;
-}
-
-// ── MCP 社区目录 ──────────────────────────────────────────────
-
-/** 拉内置目录。无参数、无缓存、无网络——后端返回的是编译期打包的常量，
- *  因此 `refresh` 已随 `?refresh=1` 与 24h TTL 一并删除。 */
 export const getMcpCatalog = async (): Promise<CatalogResponse | null> => {
   try {
     const res = await fetchJSON<{
@@ -983,6 +788,57 @@ export const runWorkflow = async (
 /** 从目录安装。只传 id + 可选 env；命令/URL 服务端从目录解析。
  *  `acknowledge` 用于「需确认」档的二次放行（后端 428 时带 true 重发）。
  *  返回失败原因（已中文化），由调用方展示。 */
+function isoToMs(iso: string | undefined): number {
+  if (!iso) return 0;
+  const t = Date.parse(iso);
+  return Number.isFinite(t) ? t : 0;
+}
+
+function fromBackend(entry: { id: string; name: string; transport: string; command?: string; args?: string[]; url?: string; env?: Record<string, string>; enabled?: boolean; created_at?: string; description?: string }): McpServerEntry {
+  return {
+    id: entry.id,
+    name: entry.name,
+    transport: (entry.transport === "http" ? "http" : "stdio") as McpTransport,
+    command: entry.command,
+    args: entry.args,
+    url: entry.url,
+    env: entry.env,
+    enabled: entry.enabled ?? true,
+    createdAt: isoToMs(entry.created_at),
+    description: entry.description,
+  };
+}
+
+function toBackend(entry: Omit<McpServerEntry, "id" | "createdAt">) {
+  return {
+    name: entry.name,
+    transport: entry.transport,
+    command: entry.command,
+    args: entry.args,
+    url: entry.url,
+    env: entry.env,
+    enabled: entry.enabled,
+    description: (entry as McpServerEntry).description,
+  };
+}
+
+interface McpServerListResponse {
+  servers: Array<{
+    id: string;
+    name: string;
+    transport: string;
+    command?: string;
+    args?: string[];
+    url?: string;
+    env?: Record<string, string>;
+    enabled?: boolean;
+    created_at?: string;
+    description?: string;
+  }>;
+  seeded?: boolean;
+}
+
+
 export const installMcpFromCatalog = async (
   id: string,
   env: Record<string, string>,
@@ -1000,6 +856,81 @@ export const installMcpFromCatalog = async (
   }
 };
 
+const MCP_SERVERS_KEY = STORAGE_KEYS.mcpServers;
+const OFFICIAL_MCP_SEEDS: McpServerEntry[] = [
+  {
+    id: "official-filesystem",
+    name: "Filesystem（官方示例）",
+    description: "读取/写入本地文件系统的 MCP 服务（stdio 启动）",
+    transport: "stdio",
+    command: "npx",
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "~"],
+    enabled: false,
+    createdAt: 0,
+  },
+  {
+    id: "official-fetch",
+    name: "Fetch（官方示例）",
+    description: "通过 HTTP 抓取网页并把 HTML/Markdown 返回给模型",
+    transport: "stdio",
+    command: "npx",
+    args: ["-y", "@modelcontextprotocol/server-fetch"],
+    enabled: false,
+    createdAt: 0,
+  },
+  {
+    id: "official-git",
+    name: "Git（官方示例）",
+    description: "封装常用 git 命令(read_git_status/diff/log/commit 等)",
+    transport: "stdio",
+    command: "uvx",
+    args: ["mcp-server-git", "--repository", "."],
+    enabled: false,
+    createdAt: 0,
+  },
+  {
+    id: "official-github",
+    name: "GitHub（官方示例）",
+    description: "查询 issue / PR / 仓库元数据（需要在环境变量注入 GITHUB_TOKEN）",
+    transport: "stdio",
+    command: "npx",
+    args: ["-y", "@modelcontextprotocol/server-github"],
+    env: { GITHUB_TOKEN: "" },
+    enabled: false,
+    createdAt: 0,
+  },
+  {
+    id: "official-brave-search",
+    name: "Brave Search（官方示例）",
+    description: "通过 Brave 搜索 API 返回结果(需要 BRAVE_API_KEY)",
+    transport: "stdio",
+    command: "npx",
+    args: ["-y", "@modelcontextprotocol/server-brave-search"],
+    env: { BRAVE_API_KEY: "" },
+    enabled: false,
+    createdAt: 0,
+  },
+];
+
+// ── MCP server CRUD (backend-first, localStorage fallback) ─────────
+
+function loadMcpServersCache(): McpServerEntry[] {
+  try {
+    const raw = storage.getItem(MCP_SERVERS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as McpServerEntry[];
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch {}
+  return OFFICIAL_MCP_SEEDS.map((s) => ({ ...s, createdAt: Date.now() }));
+}
+function saveMcpServersCache(list: McpServerEntry[]) {
+  try {
+    storage.setItem(MCP_SERVERS_KEY, JSON.stringify(list));
+  } catch {
+    // localStorage disabled / quota — non-fatal, the backend still has truth
+  }
+}
 export const getMcpServers = async (): Promise<McpServerEntry[]> => {
   try {
     const res = await fetchJSON<McpServerListResponse>("/api/mcp/servers");
@@ -1061,25 +992,7 @@ export const deleteMcpServer = async (id: string): Promise<boolean> => {
     return next.length !== list.length;
   }
 };
-export const resetMcpServersToOfficial = async (): Promise<McpServerEntry[]> => {
-  try {
-    const res = await fetchJSON<McpServerListResponse>("/api/mcp/servers/reset", {
-      method: "POST",
-    });
-    const list = res.servers.map(fromBackend);
-    saveMcpServersCache(list);
-    return list;
-  } catch {
-    const fresh = OFFICIAL_MCP_SEEDS.map((s) => ({ ...s, createdAt: Date.now() }));
-    saveMcpServersCache(fresh);
-    return fresh;
-  }
-};
 
-export const searchSessions = async (q: string): Promise<{ results: Array<{ session_id: string; snippet: string }> }> =>
-  fetchJSON(`/v1/sessions/search?q=${encodeURIComponent(q)}`);
-
-/** list skills from the dashboard for cron-job skill assignment. */
 export const getSkillsList = async (): Promise<Array<{ name: string; description: string; category: string }>> => {
   try {
     return await fetchJSON<Array<{ name: string; description: string; category: string }>>("/api/skills");
@@ -1169,18 +1082,6 @@ export const triggerAutomationTask = async (id: string): Promise<boolean> => {
   }
 };
 
-export const resetAutomationTasks = async (): Promise<AutomationTask[]> => {
-  try {
-    const res = await fetchJSON<{ tasks: AutomationTask[] }>(
-      "/api/automation/reset",
-      { method: "POST" },
-    );
-    return res.tasks ?? [];
-  } catch {
-    return [];
-  }
-};
-
 export const getPluginSettings = async (): Promise<PluginSettings> => {
   try {
     const payload = await fetchJSON<{ plugins?: PluginSettings }>("/api/dashboard/plugins");
@@ -1213,15 +1114,6 @@ export const setEnvVar = async (key: string, value: string): Promise<boolean> =>
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ key, value }),
-  });
-  return true;
-};
-
-export const deleteEnvVar = async (key: string): Promise<boolean> => {
-  await fetchJSON("/api/env", {
-    method: "DELETE",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ key }),
   });
   return true;
 };
@@ -1266,122 +1158,6 @@ export const registerExperts = async (
   });
 };
 
-// ── Persona management (settings → 画像) ─────────────────────────
-
-async function getTextFile(path: string): Promise<PersonaTextFile | null> {
-  try {
-    return await fetchJSON<PersonaTextFile>(path);
-  } catch (e) {
-    console.error(`[persona] GET ${path} failed`, e);
-    return null;
-  }
-}
-
-async function putTextFile(
-  path: string,
-  content: string,
-): Promise<PersonaTextFile | null> {
-  try {
-    return await fetchJSON<PersonaTextFile>(path, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content }),
-    });
-  } catch (e) {
-    console.error(`[persona] PUT ${path} failed`, e);
-    return null;
-  }
-}
-
-// ── Soul ────────────────────────────────────────────────────────
-
-export const getSoul = (): Promise<PersonaTextFile | null> =>
-  getTextFile("/api/persona/soul");
-
-export const putSoul = (content: string): Promise<PersonaTextFile | null> =>
-  putTextFile("/api/persona/soul", content);
-
-// ── Memory (agent notes) ───────────────────────────────────────
-
-export const getMemory = (): Promise<PersonaTextFile | null> =>
-  getTextFile("/api/persona/memory");
-
-export const putMemory = (content: string): Promise<PersonaTextFile | null> =>
-  putTextFile("/api/persona/memory", content);
-
-// ── User profile ───────────────────────────────────────────────
-
-export const getUserProfile = (): Promise<PersonaTextFile | null> =>
-  getTextFile("/api/persona/user");
-
-export const putUserProfile = (content: string): Promise<PersonaTextFile | null> =>
-  putTextFile("/api/persona/user", content);
-
-// ── Personalities (named) ──────────────────────────────────────
-
-export const listPersonalities = async (): Promise<PersonalitySummary[]> => {
-  try {
-    return await fetchJSON<PersonalitySummary[]>("/api/persona/personalities");
-  } catch (e) {
-    console.error("[persona] list personalities failed", e);
-    return [];
-  }
-};
-
-export const getPersonality = async (
-  name: string,
-): Promise<PersonaTextFile | null> => {
-  const safe = encodeURIComponent(name.trim().toLowerCase());
-  return getTextFile(`/api/persona/personalities/${safe}`);
-};
-
-export const putPersonality = async (
-  name: string,
-  content: string,
-): Promise<PersonaTextFile | null> => {
-  const safe = encodeURIComponent(name.trim().toLowerCase());
-  return putTextFile(`/api/persona/personalities/${safe}`, content);
-};
-
-export const deletePersonality = async (name: string): Promise<boolean> => {
-  const safe = encodeURIComponent(name.trim().toLowerCase());
-  try {
-    await fetchVoid(`/api/persona/personalities/${safe}`, { method: "DELETE" });
-    return true;
-  } catch (e) {
-    console.error(`[persona] DELETE ${safe} failed`, e);
-    return false;
-  }
-};
-
-// ── Persona overrides (system_prompt + preferences) ────────────
-
-export const getPersonaOverrides = async (): Promise<PersonaOverrides> => {
-  try {
-    return await fetchJSON<PersonaOverrides>("/api/persona/overrides");
-  } catch (e) {
-    console.error("[persona] get overrides failed", e);
-    return { system_prompt: "", preferences: null };
-  }
-};
-
-export const putPersonaOverrides = async (
-  overrides: PersonaOverrides,
-): Promise<PersonaOverrides | null> => {
-  try {
-    return await fetchJSON<PersonaOverrides>("/api/persona/overrides", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(overrides),
-    });
-  } catch (e) {
-    console.error("[persona] put overrides failed", e);
-    return null;
-  }
-};
-
-// ── Custom LLM providers ──────────────────────────
-
 export const getCustomProviders = async (): Promise<CustomProviderSummary[]> =>
   fetchJSON<CustomProviderSummary[]>("/api/custom-providers");
 
@@ -1395,21 +1171,6 @@ export const createCustomProvider = async (
   });
   return true;
 };
-
-export const deleteCustomProvider = async (id: string): Promise<boolean> => {
-  await fetchVoid(`/api/custom-providers/${encodeURIComponent(id)}`, {
-    method: "DELETE",
-  });
-  return true;
-};
-
-export const fetchCustomProviderModels = async (
-  id: string,
-): Promise<CustomProviderFetchModelsResponse> =>
-  fetchJSON<CustomProviderFetchModelsResponse>(
-    `/api/custom-providers/${encodeURIComponent(id)}/fetch-models`,
-    { method: "POST" },
-  );
 
 export const testCustomProviderConnection = async (
   id: string,
@@ -1453,19 +1214,6 @@ export const testProviderInline = async (params: {
       provider_id: params.providerId ?? null,
     }),
   });
-
-export const updateCustomProviderModelContexts = async (
-  id: string,
-  modelContexts: Record<string, number>,
-): Promise<boolean> => {
-  await fetchJSON(`/api/custom-providers/${encodeURIComponent(id)}/model-contexts`, {
-    method: "PUT",
-    body: JSON.stringify({ model_contexts: modelContexts }),
-  });
-  return true;
-};
-
-// ── TickLoop ───────────────────────────────────────
 
 export const getTickLoopStatus = async (): Promise<TickLoopStatus> =>
   fetchJSON<TickLoopStatus>("/v1/tickloop");
