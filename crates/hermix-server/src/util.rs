@@ -534,6 +534,9 @@ mod tests {
             finish_reason: Some("stop".to_string()),
             last_error: None,
             interrupted: false,
+            // `was_interrupted` 不看这个字段；给一个正常的单轮值，让
+            // 本辅助函数对"跑了几轮"的其他断言也不会读到 0。
+            total_turns: 1,
         }
     }
 
