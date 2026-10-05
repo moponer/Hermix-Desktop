@@ -903,7 +903,7 @@ impl CronjobBackend for DashboardCronjobBackend {
         if let Some(e) = enabled {
             t.enabled = e;
         }
-        update_task(State(self.state.clone()), AxumPath(id.to_string()), Json(t))
+        let _ = update_task(State(self.state.clone()), AxumPath(id.to_string()), Json(t))
             .await
             .map_err(|(_, e)| ToolError::ExecutionFailed(e))?;
         Ok(format!("已更新定时任务 {id}"))
@@ -912,7 +912,7 @@ impl CronjobBackend for DashboardCronjobBackend {
     async fn pause(&self, id: &str) -> Result<String, ToolError> {
         let mut t = self.find_task(id)?;
         t.enabled = false;
-        update_task(State(self.state.clone()), AxumPath(id.to_string()), Json(t))
+        let _ = update_task(State(self.state.clone()), AxumPath(id.to_string()), Json(t))
             .await
             .map_err(|(_, e)| ToolError::ExecutionFailed(e))?;
         Ok(format!("定时任务 {id} 已暂停"))
@@ -921,7 +921,7 @@ impl CronjobBackend for DashboardCronjobBackend {
     async fn resume(&self, id: &str) -> Result<String, ToolError> {
         let mut t = self.find_task(id)?;
         t.enabled = true;
-        update_task(State(self.state.clone()), AxumPath(id.to_string()), Json(t))
+        let _ = update_task(State(self.state.clone()), AxumPath(id.to_string()), Json(t))
             .await
             .map_err(|(_, e)| ToolError::ExecutionFailed(e))?;
         Ok(format!("定时任务 {id} 已恢复"))
