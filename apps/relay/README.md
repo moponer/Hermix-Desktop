@@ -61,6 +61,29 @@ relay.example.com {
 sudo systemctl reload caddy
 ```
 
+### 1b. 导出证书指纹（给手机屏 1 核对用）
+
+```bash
+# Caddy 签的证书在 /var/lib/caddy/... 或用 certbot 的话在 /etc/letsencrypt
+# 取线上证书的 sha256（DER，openssl 出的十六进制）
+echo | openssl s_client -servername relay.example.com -connect relay.example.com:443 2>/dev/null \
+  | openssl x509 -outform DER \
+  | openssl dgst -sha256 -hex | sed 's/^.*= //'
+```
+
+把结果写进 systemd 的环境变量，relay 会在 `/health` 的
+`x-hermix-cert-sha256` 头里回它：
+
+```ini
+[Service]
+Environment=HERMIX_RELAY_CERT_SHA256=<上面那串 hex>
+```
+
+> ⚠️ **这还不是公钥固定**。它只是 relay **自报**的指纹：relay 被整个换掉，
+> 指纹会跟着换，客户端照样通过。真正的 pinning 要客户端预置可信指纹
+> （配对时交换）或走原生 TLS 校验。`hermix-m` 的屏 1 在拿不到这个头时会
+> 明确显示「无法核对指纹」，而不是显示一个假的「已核对」。
+
 Caddy 会自动申请并续期证书。装完后 `curl https://relay.example.com/health` 应当返回
 `{"ok":true,...}`。
 

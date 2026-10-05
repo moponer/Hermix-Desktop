@@ -105,8 +105,24 @@ struct RelaySink {
 #[async_trait::async_trait]
 impl TransportSink for RelaySink {
     async fn send(&mut self, text: String) -> TransportResult<()> {
+        // **relay 边界上做事件名映射**：handler 说的是 hermix 的
+        // `ProtocolMessage`（stdio 那头的老协议），手机说的是 App 侧事件名。
+        // 转换只在这一处发生，两种协议各说各的，改一边不影响另一边。
+        //
+        // 映射不出来的帧（例如桌面端专属的内部事件）直接**不转发**——给 App
+        // 一个它不认识的 type，UI 会静默忽略，现场表现是「消息莫名消失」。
+        let Some(mut mapped) = crate::mobile_protocol::to_mobile_frame(&parse_json(&text)?)
+        else {
+            tracing::debug!("该帧不面向 App，未转发");
+            return Ok(());
+        };
+        // 审批请求要显式带上"永久放行不可用"，否则 App 只能静默少一个按钮
+        if mapped.get("type").and_then(|t| t.as_str()) == Some("approval.request") {
+            crate::mobile_protocol::set_can_persist_false(&mut mapped);
+        }
+        let payload = serde_json::to_string(&mapped).map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
         self.outbound_tx
-            .send(Envelope::route_for(&self.session_id, text))
+            .send(Envelope::route_for(&self.session_id, payload))
             .await
             .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
         Ok(())
@@ -149,6 +165,11 @@ impl TransportSource for RelaySource {
 #[derive(Default)]
 pub struct SessionMux {
     entries: HashMap<String, Inbound>,
+}
+
+/// 解析 handler 发来的 JSON 文本帧。
+fn parse_json(text: &str) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
+    serde_json::from_str(text).map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })
 }
 
 /// 会话表里的一路：发送端给 `dispatch` 用，接收端包 `Arc` 以便克隆。
@@ -292,6 +313,7 @@ pub type SharedRelayTransport = Arc<dyn Transport + Send + Sync>;
 mod tests {
     use super::*;
     use crate::relay_proto::{FrameAuth, PROTO_VERSION};
+    use serde_json::json;
 
     fn env(sid: &str, payload: &str) -> Envelope {
         Envelope {
@@ -361,14 +383,27 @@ mod tests {
         // send/close 在 TransportSink 上，先拆出 sink —— 直接对 RelayTransport
         // 调 send 是编译不过的（它只实现 Transport）。
         let (mut sink, _src) = transport.split();
-        sink.send("给手机的正文".into()).await.unwrap();
+        sink.send(r#"{"type":"done"}"#.into()).await.unwrap();
 
         let got = rx.recv().await.expect("应有出站帧");
         assert_eq!(got.tag, FrameTag::Route);
         assert_eq!(got.session_id.as_deref(), Some("sid-a"));
-        assert_eq!(got.payload.as_deref(), Some("给手机的正文"));
         assert_eq!(got.auth, None, "出站方向不需要凭据");
         assert_eq!(got.proto_version, PROTO_VERSION);
+        let payload: serde_json::Value =
+            serde_json::from_str(got.payload.as_deref().unwrap()).unwrap();
+        assert_eq!(payload["type"], "turn.done", "payload 是应用侧事件，不是 hermix 那套");
+    }
+
+    #[tokio::test]
+    async fn 非法json出站帧被拒而不是原样发出() {
+        let (tx, mut rx) = mpsc::channel(8);
+        let (transport, _inbound) = new_relay_transport("sid-a", tx);
+        let (mut sink, _src) = transport.split();
+        // handler 只会发 JSON；非 JSON 说明有 bug，宁可断这一条也别把
+        // 垃圾透传给 App（它会静默忽略，且现场毫无线索）
+        assert!(sink.send("这不是 JSON".into()).await.is_err());
+        assert!(rx.try_recv().is_err(), "坏帧不得发出");
     }
 
     #[tokio::test]
@@ -380,5 +415,65 @@ mod tests {
         let got = rx.recv().await.expect("应有 close 帧");
         assert_eq!(got.tag, FrameTag::Close);
         assert_eq!(got.session_id.as_deref(), Some("sid-a"));
+    }
+
+    /// **relay 边界就是两种协议的交界处**：handler 说 `ProtocolMessage`，
+    /// 手机说 App 事件名。这条测试守着转换确实发生——没转换的话 App 收到的是
+    /// 桌面端那套 type，UI 静默忽略，症状是"消息莫名消失"且毫无报错。
+    #[tokio::test]
+    async fn 出站帧已转成应用侧事件名() {
+        let (tx, mut rx) = mpsc::channel(8);
+        let (transport, _inbound) = new_relay_transport("sid-a", tx);
+        let (mut sink, _src) = transport.split();
+        sink.send(r#"{"type":"tool_call","session_id":"sid-a","tool":"read_file"}"#.into())
+            .await
+            .unwrap();
+
+        let got = rx.recv().await.expect("应有出站帧");
+        let payload: serde_json::Value =
+            serde_json::from_str(got.payload.as_deref().unwrap()).expect("payload 是 JSON");
+        assert_eq!(payload["type"], "tool.start", "必须是 App 侧事件名");
+        assert_eq!(payload["tool"], "read_file");
+    }
+
+    #[tokio::test]
+    async fn 不可映射的帧不转发_而不是原样丢给应用() {
+        let (tx, mut rx) = mpsc::channel(8);
+        let (transport, _inbound) = new_relay_transport("sid-a", tx);
+        let (mut sink, _src) = transport.split();
+        // 桌面端专属的内部事件，手机不需要
+        sink.send(r#"{"type":"internal_zombie"}"#.into()).await.unwrap();
+        assert!(
+            rx.try_recv().is_err(),
+            "给 App 一个它不认识的 type 会导致静默忽略，必须在边界上拦掉"
+        );
+
+        // 但可映射的要照发
+        sink.send(r#"{"type":"done"}"#.into()).await.unwrap();
+        let got = rx.recv().await.expect("可映射的帧应被转发");
+        let payload: serde_json::Value =
+            serde_json::from_str(got.payload.as_deref().unwrap()).unwrap();
+        assert_eq!(payload["type"], "turn.done");
+    }
+
+    #[tokio::test]
+    async fn 审批帧带can_persist_false() {
+        let (tx, mut rx) = mpsc::channel(8);
+        let (transport, _inbound) = new_relay_transport("sid-a", tx);
+        let (mut sink, _src) = transport.split();
+        sink.send(
+            r#"{"type":"request_approval","request_id":"r1","tool":"terminal"}"#.into(),
+        )
+        .await
+        .unwrap();
+        let got = rx.recv().await.expect("审批帧应转发");
+        let payload: serde_json::Value =
+            serde_json::from_str(got.payload.as_deref().unwrap()).unwrap();
+        assert_eq!(payload["type"], "approval.request");
+        assert_eq!(
+            payload["can_persist"],
+            json!(false),
+            "必须显式告诉 App 永久放行不可用，否则它只能静默少一个按钮"
+        );
     }
 }

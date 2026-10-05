@@ -36,12 +36,24 @@ function createRelay({ dbPath }) {
   app.disable('x-powered-by');
 
   app.get('/health', (_req, res) => {
+    // 屏 1 展示的证书指纹。**必须是真证书的 sha256**，自己编一个常量就是
+    // 自证——relay 被换掉指纹照旧，客户端无从察觉。
+    //
+    // 这里的值由部署时从 TLS 层导出、经 HERMIX_RELAY_CERT_SHA256 注入；**没有
+    // 配就不给这个头**，让 App 明确显示「无法核对指纹」，而不是显示一个假的
+    // 「已核对」。
+    //
+    // ⚠️ 必须先 setHeader 再 json —— json() 之后就发出去了，补都补不上。
+    const fp = process.env.HERMIX_RELAY_CERT_SHA256
+    if (fp && /^[0-9a-f]{64}$/i.test(fp)) {
+      res.setHeader('x-hermix-cert-sha256', fp.toLowerCase())
+    }
     res.json({
       ok: true,
       proto_version: PROTO_VERSION,
       ...router.snapshot(),
       audit_failures: audit.failureCount(),
-    });
+    })
   });
 
   const server = http.createServer(app);

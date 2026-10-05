@@ -100,8 +100,14 @@ pub fn to_mobile_frame(frame: &Value) -> Option<Value> {
 /// 按钮少一个用户未必察觉，但下次审批照样弹会让人以为是自己点错了。
 pub fn approval_request_to_mobile(frame: &Value) -> Option<Value> {
     let mut out = to_mobile_frame(frame)?;
-    out["can_persist"] = json!(false);
+    set_can_persist_false(&mut out);
     Some(out)
+}
+
+/// 就地打上「永久放行不可用」标记。映射与打标分开，是为了让
+/// `relay_transport` 在**已映射**的帧上补这个标志时不必再走一遍映射。
+pub fn set_can_persist_false(frame: &mut Value) {
+    frame["can_persist"] = json!(false);
 }
 
 #[cfg(test)]

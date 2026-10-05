@@ -135,9 +135,10 @@ Status: proposed — P1 地基已独立成篇并落地（见 [IM 远程任务生
      1. `Envelope` 增 `auth: FrameAuth { bearer, signature }` —— 凭据进帧，**relay 不解释只透传**（与它「不校验 token 真伪」「字节级透明」两条硬约束一致），判定权在 hermix 的 PC 侧。
      2. `Envelope` 增 `session_id: Option<String>` 作为**一等字段**：一条 relay 连接是「一台电脑」，电脑上可能同时跑几条会话，relay 只按 token 哈希选到这台电脑就不管了，所以 PC 必须按 `session_id` 拆包。**不能靠解析 payload 得到**——relay 不拆包，而 payload 是 hermix 的 envelope。
      3. PC 侧**先验签、再分路**。顺序不能反：反过来的话攻击者改个 `session_id` 就能把帧送进别人的会话，而它恰好是重建签名路径要用的字段。先验签正是为了让签名与 `session_id` 绑定。已由 `mobile_ws::tests::会话甲的签名不能冒用会话乙` 钉住。
-9. 协议映射适配层（`mobile_protocol.rs`）：Clawket 式事件名 ↔ hermix envelope 的映射**单向收口在此文件，禁止散落**。两条硬规则：
-   - **不可映射的类型返回 `None`、不产出半成品帧**：给 App 一个它不认识的 `type`，UI 会静默忽略，现场表现是「消息丢了」而不是「类型不认识」。未知内部字段也不外泄。
-   - **审批在 App 侧只暴露 deny / once**：`Origin::PairedDevice` 对 `ApproveAlways` 无条件 `Denied`，`session`（永久）态**刻意留在枚举里但 `as_wire()` 返回 `None`**，让缺口显式可见；并且 `approval_request_to_mobile` 带 `can_persist: false`——手机屏幕小、按钮少一个用户未必察觉，但下次审批照样弹会让人以为是自己点错了。
+9. 协议映射适配层（`mobile_protocol.rs`）：Clawket 式事件名 ↔ hermix envelope 的映射**单向收口**在此文件，禁止散落。**转换发生在 relay 边界上**（`relay_transport::RelaySink::send`），不在 handler 内部——handler 说 `ProtocolMessage`（stdio 通道的老协议），手机说 App 事件名，两边各说各的，转折点只有一个。两条硬规则：
+   - **不可映射的帧直接不转发**（桌面端专属的内部事件）：给 App 一个它不认识的 `type`，UI 会静默忽略，现场表现是「消息莫名消失」且毫无报错。未知内部字段也不外泄。
+   - **审批在 App 侧只暴露 deny / once**：`Origin::PairedDevice` 对 `ApproveAlways` 无条件 `Denied`，`session`（永久）态**刻意留在枚举里但 `as_wire()` 返回 `None`**，让缺口显式可见；并且下发 `can_persist: false`——手机屏幕小、按钮少一个用户未必察觉，但下次审批照样弹会让人以为是自己点错了。
+   - **两侧各有测试钉住协议归属**：Rust 测「出站帧已转成应用侧事件名 / 不可映射的帧不转发」，App 测「`done` / `error` / `tool_call` / `request_approval` 这套映射前的 type 一律 unrecognized」。这条守卫是必要的——本轮就出现过映射函数写好却**从未被调用**的情况，App 会静默忽略所有帧。
 
 ### relay（apps/relay/，新建，Node + Express + WS + SQLite）
 

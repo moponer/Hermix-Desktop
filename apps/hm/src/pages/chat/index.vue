@@ -9,8 +9,9 @@
  * 没有视觉确认时是单向的，长按-松发给了一个人工的确认动作。识别结果回显
  * 成用户气泡（错了能改），命中高危动词再弹一次发前确认。
  */
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { isRiskyInstruction } from '../../core/voice'
+import { dispatch, reduce, initialChatState, type ChatState } from '../../core/frames'
 import type { AsrProvider } from '../../core/voice'
 
 interface Bubble {
@@ -30,14 +31,32 @@ const messages = ref<Bubble[]>([
 ])
 
 const draft = ref('')
-const running = ref(false)
 const recording = ref(false)
 const partial = ref('')
 /** 高危指令：识别完不直接发，先问一次 */
 const pendingRisky = ref<{ text: string } | null>(null)
 
+/** 流式状态。reducer 是纯函数（见 core/frames），所以界面状态只有一条改法。 */
+const chat = ref<ChatState>(initialChatState())
+
+/** 流式中的 assistant 气泡。 */
+const streaming = computed(() =>
+  chat.value.streamingId ? { id: chat.value.streamingId, text: chat.value.streamingText } : null,
+)
+
+/** 收一帧 —— **唯一**的入站入口。UI 状态只能从这里变。 */
+function onFrame(raw: string) {
+  const prev = chat.value.streamingId
+  const next = reduce(chat.value, dispatch(raw))
+  chat.value = next
+  // 一轮落定：把流式气泡转成正式气泡
+  if (prev && next.streamingId && next.turnActive === false) {
+    messages.value.push({ id: prev, role: 'assistant', text: next.streamingText })
+    chat.value = { ...next, streamingId: null, streamingText: '' }
+  }
+}
+
 let asr: AsrProvider | null = null
-let chunks: ArrayBuffer[] = []
 
 function attachProvider(p: AsrProvider | null): void {
   asr = p
@@ -51,7 +70,6 @@ async function onLongPressStart() {
   }
   recording.value = true
   partial.value = ''
-  chunks = []
   asr.onPartial((t) => {
     partial.value = t
   })
@@ -61,7 +79,7 @@ async function onLongPressStart() {
 async function onLongPressEnd() {
   if (!asr || !recording.value) return
   recording.value = false
-  // 录音块由平台 recorder 推入 chunks（接入点见下）
+  // 录音块由平台 recorder 逐块推给 asr.push —— 接入点见文件末 TODO
   const result = await asr.stop()
   const text = (result.final ?? '').trim()
   partial.value = ''
@@ -94,11 +112,11 @@ function sendText(t: string) {
   if (!messages.value.some((m) => m.role === 'user' && m.text === text && m.viaVoice)) {
     messages.value.push({ id: String(Date.now()), role: 'user', text })
   }
-  running.value = true
-  // TODO(接流式 WS): 订阅 relayClient.onFrame，把增量帧按
-  // assistant.message / tool.start / tool.end / turn.done 分派；
-  // turn.done 收尾 + 三态回执（长任务才发完成，见 P1 的 60s 门槛）
-  // TODO(接麦克风): longpress 之间用 uni.getRecorderManager() 推 PCM 到 chunks
+  // TODO(接 relayClient): send(JSON.stringify({ type: 'user.message', content: text }))
+  //   turnActive / 工具轨迹 / 三态回执都从回来的帧里推（见 onFrame），
+  //   **不在这里自己置 true** —— 那样"发出去"和"服务端开始跑"就分不开了。
+  // TODO(接麦克风): longpress 期间用 uni.getRecorderManager() 逐块调
+  //   asr.push(pcm)
 }
 </script>
 
@@ -122,8 +140,23 @@ function sendText(t: string) {
         <text class="dim">{{ partial || '听着呢…' }}</text>
       </view>
 
-      <view v-if="running" class="notice">
+      <!-- 流式中的助手气泡：单独一个壳，收尾时转成正式气泡 -->
+      <view v-if="streaming" class="bub assistant">
+        <view v-if="chat.runningTools.length || chat.doneTools.length" class="trace">
+          <text v-for="d in chat.doneTools" :key="d" class="t-done">● {{ d }}</text>
+          <text v-for="r in chat.runningTools" :key="r" class="t-run">● {{ r }}</text>
+        </view>
+        <text class="txt">{{ streaming.text }}</text>
+      </view>
+
+      <view v-if="chat.busy" class="notice warn">
+        <text>上一轮还在跑 · 你发的话会排队</text>
+      </view>
+      <view v-else-if="chat.turnActive" class="notice">
         <text>还在想 · 下一条心跳 60s 后</text>
+      </view>
+      <view v-if="chat.lastError" class="notice err">
+        <text>{{ chat.lastError }}</text>
       </view>
     </scroll-view>
 
@@ -140,7 +173,7 @@ function sendText(t: string) {
     </view>
 
     <view class="composer">
-      <text v-if="running" class="hint">运行中 · 你发的话会排队</text>
+      <text v-if="chat.turnActive" class="hint">运行中 · 你发的话会排队</text>
       <view class="field">
         <input v-model="draft" class="inp" placeholder="说点什么…" confirm-type="send" @confirm="send" />
         <view class="mic" :class="{ on: recording }" @longpress="onLongPressStart" @touchend="onLongPressEnd">
