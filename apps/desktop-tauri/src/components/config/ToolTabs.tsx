@@ -1,4 +1,4 @@
-import { ToolCardIcon, toneForCategory } from "./ToolCardIcon";
+import { ToolCardIcon } from "./ToolCardIcon";
 import { ToggleSwitch } from "../ToggleSwitch";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
@@ -95,6 +95,15 @@ export function PluginsTab({ query, onQuery }: { query: string; onQuery: (q: str
     <>
       <SearchBar query={query} onQuery={onQuery} />
 
+      {!loading && BUILTIN_PLUGINS.length > 0 && (
+        <SummaryBar
+          total={BUILTIN_PLUGINS.length}
+          enabled={BUILTIN_PLUGINS.filter((p) => settings[p.key]).length}
+          enabledLabel="已启用"
+          totalLabel="个插件"
+        />
+      )}
+
       <Section title="内置工具" hint="由后端持久化保存于 dashboard_plugins.json">
         <Grid empty={!loading && filteredBuiltins.length === 0} emptyText="没有匹配的内置工具。">
           {filteredBuiltins.map((plugin) => {
@@ -138,6 +147,8 @@ export function SkillsTab({ query, onQuery }: { query: string; onQuery: (q: stri
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  /** 分类 chip 筛选。null = 全部。搜索框管关键词，这个管分组。 */
+  const [catFilter, setCatFilter] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -157,9 +168,19 @@ export function SkillsTab({ query, onQuery }: { query: string; onQuery: (q: stri
   }, [refresh]);
 
   const q = query.trim().toLowerCase();
-  const filtered = q
-    ? skills.filter((s) => `${s.name} ${s.description} ${s.category}`.toLowerCase().includes(q))
+  // 关键词与分类 chip 是两个独立维度：先按词筛，再按分类筛。
+  // chip 上的计数取**分类筛之前**的结果，否则选中一个分类后其它 chip 全部归零。
+  const byQuery = q
+    ? skills.filter((s) =>
+        // 带上 display_name：界面显示的是中文名，用户按看到的字搜才搜得到
+        `${s.name} ${s.display_name ?? ""} ${s.description} ${s.category}`
+          .toLowerCase()
+          .includes(q),
+      )
     : skills;
+  const filtered = catFilter
+    ? byQuery.filter((s) => (s.category || "uncategorized") === catFilter)
+    : byQuery;
 
   // Group filtered skills by category
   const grouped = useMemo(() => {
@@ -172,15 +193,28 @@ export function SkillsTab({ query, onQuery }: { query: string; onQuery: (q: stri
     return map;
   }, [filtered]);
 
+  const catLabel = useCallback((key: string) => CATEGORY_LABELS[key] || key, []);
+
+  // chip 计数基于 byQuery（未按分类筛），否则选中任一分类后其余 chip 全部归零，
+  // 用户会以为其它分类没有技能。
+  const countsByCat = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const s of byQuery) {
+      const k = s.category || "uncategorized";
+      m[k] = (m[k] ?? 0) + 1;
+    }
+    return m;
+  }, [byQuery]);
+
+  // 分组顺序取自 countsByCat（未按分类筛）—— 否则选中一个分类后，
+  // chip 行会只剩一个 chip，用户就没法切换到别的分类了。
   const categoryOrder = useMemo(() => {
     const priority = ["software-development", "devops", "productivity", "finance", "lifestyle"];
-    const keys = Object.keys(grouped);
+    const keys = Object.keys(countsByCat);
     return priority.filter((k) => keys.includes(k)).concat(
       keys.filter((k) => !priority.includes(k)).sort(),
     );
-  }, [grouped]);
-
-  const catLabel = useCallback((key: string) => CATEGORY_LABELS[key] || key, []);
+  }, [countsByCat]);
 
   const enabledCount = useMemo(() => skills.filter((s) => s.enabled).length, [skills]);
 
@@ -200,14 +234,50 @@ export function SkillsTab({ query, onQuery }: { query: string; onQuery: (q: stri
         </button>
       </div>
 
-      {!loading && skills.length > 0 && (
-        <div className="mb-3 px-3 py-1.5 text-xs text-text-muted bg-bg-card rounded-lg border border-border-primary">
-          共 {skills.length} 个技能，{enabledCount} 个启用
+      {/* 分类 chip：搜索框只能筛关键词，分组再多时仍需一键跨组跳。
+          无描边药丸——未选中=浅灰实心，选中=主色实心。 */}
+      {!loading && categoryOrder.length > 1 && (
+        <div className="flex items-center gap-1.5 flex-wrap mb-3">
+          <button
+            onClick={() => setCatFilter(null)}
+            aria-pressed={catFilter === null}
+            className={`h-6 px-2 rounded-full text-[length:var(--text-tiny)] font-semibold transition-colors ${
+              catFilter === null
+                ? "text-[var(--color-btn-primary-text)]"
+                : "bg-bg-tertiary text-text-muted hover:text-text-primary"
+            }`}
+            style={catFilter === null ? { background: "var(--color-btn-primary-bg)" } : undefined}
+          >
+            全部 <span className="ml-0.5 tabular-nums opacity-65">{byQuery.length}</span>
+          </button>
+          {categoryOrder.map((c) => (
+            <button
+              key={c}
+              onClick={() => setCatFilter(catFilter === c ? null : c)}
+              aria-pressed={catFilter === c}
+              className={`h-6 px-2 rounded-full text-[length:var(--text-tiny)] font-semibold transition-colors ${
+                catFilter === c
+                  ? "text-[var(--color-btn-primary-text)]"
+                  : "bg-bg-tertiary text-text-muted hover:text-text-primary"
+              }`}
+              style={catFilter === c ? { background: "var(--color-btn-primary-bg)" } : undefined}
+            >
+              {catLabel(c)} <span className="ml-0.5 tabular-nums opacity-65">{countsByCat[c] ?? 0}</span>
+            </button>
+          ))}
         </div>
       )}
 
+      {!loading && skills.length > 0 && (
+        <SummaryBar
+          total={skills.length}
+          enabled={enabledCount}
+          enabledLabel="已启用"
+          totalLabel="个技能"
+        />      )}
+
       {error && (
-        <div className="mb-4 px-3 py-2 rounded-lg bg-bg-card border border-border-primary text-xs text-error">
+        <div className="mb-4 px-3 py-2 rounded-lg bg-bg-card text-xs text-error">
           {error}
         </div>
       )}
@@ -225,13 +295,26 @@ export function SkillsTab({ query, onQuery }: { query: string; onQuery: (q: stri
         />
       ) : (
         categoryOrder.map((cat) => (
-          <div key={cat} className="mb-4">
-            <h4 className="text-xs font-medium text-text-muted uppercase tracking-wider mb-2 px-1">
-              {catLabel(cat)}
-              <span className="ml-1.5 text-text-dimmed font-normal normal-case">
-                ({grouped[cat].length})
+          <div key={cat} className="mb-5">
+            <div className="flex items-center gap-2 mb-2 px-1">
+              <span
+                className="w-[3px] h-[15px] rounded-[2px]"
+                style={{ background: "var(--color-btn-primary-bg)" }}
+                aria-hidden
+              />
+              <h4 className="text-[length:var(--text-ui)] font-semibold text-text-primary">
+                {catLabel(cat)}
+              </h4>
+              <span
+                className="text-[length:var(--text-tiny)] font-semibold rounded-full px-1.5 py-0.5"
+                style={{
+                  background: "var(--color-btn-primary-bg)",
+                  color: "var(--color-btn-primary-text)",
+                }}
+              >
+                {grouped[cat].length}
               </span>
-            </h4>
+            </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
               {grouped[cat].map((s) => (
                 <SkillCard key={s.name} skill={s} catLabel={catLabel} onToggle={(name) => {
@@ -305,26 +388,30 @@ function SkillCard({ skill, catLabel, onToggle }: {
 
   return (
     <>
-      <div className="rounded-xl overflow-hidden">
+      <div className="rounded-xl bg-bg-card hover:bg-bg-card-hover transition-colors">
         <div className="flex items-center gap-3 px-3 py-2.5">
           <button onClick={openContent} className="shrink-0 rounded-[var(--radius-md)]"
             title="查看技能内容"
             aria-label="查看技能内容">
-            <ToolCardIcon tone={toneForCategory(catLabel(skill.category))} interactive>
+            <ToolCardIcon interactive>
               <Wand2 className="icon-md" />
             </ToolCardIcon>
           </button>
           <div className="min-w-0 flex-1 cursor-pointer" onClick={openContent}>
             <div className="flex items-center gap-2">
-              <span className="text-sm text-text-primary truncate">{skill.name}</span>
-              <span className="text-[length:var(--text-meta)] uppercase tracking-wider text-text-muted border border-border-primary rounded px-1.5 py-0.5 shrink-0">
+              <span className="text-sm text-text-primary truncate">
+                {skill.display_name || skill.name}
+              </span>
+              <span className="text-[length:var(--text-meta)] uppercase tracking-wider text-text-muted bg-bg-tertiary rounded px-1.5 py-0.5 shrink-0">
                 {catLabel(skill.category) || "skill"}
               </span>
             </div>
-            <p className="text-xs text-text-muted mt-0.5 truncate">{skill.description || "（无描述）"}</p>
+            <p className="text-xs text-text-muted mt-0.5 line-clamp-2 group-hover:line-clamp-none">
+              {skill.description || "（无描述）"}
+            </p>
           </div>
           <ArrowUpRight className="icon-sm text-text-faint shrink-0" />
-          <ToggleSwitch enabled={skill.enabled} onToggle={requestToggle} disabled={toggling} offLabel="禁用" onLabel="启用" className="shrink-0" />
+          <ToggleSwitch enabled={skill.enabled} onToggle={requestToggle} disabled={toggling} offLabel={`停用 ${skill.name}`} onLabel={`启用 ${skill.name}`} className="shrink-0" />
         </div>
       </div>
 
@@ -606,9 +693,20 @@ export function ConnectorsTab({ query, onQuery }: { query: string; onQuery: (q: 
       )
     : servers;
 
+  const enabledCount = useMemo(() => servers.filter((s) => s.enabled).length, [servers]);
+
   return (
     <>
       <SearchBar query={query} onQuery={onQuery} />
+
+      {!loading && servers.length > 0 && (
+        <SummaryBar
+          total={servers.length}
+          enabled={enabledCount}
+          enabledLabel="已启用"
+          totalLabel="个服务"
+        />
+      )}
 
       <div className="flex items-center justify-between mb-3">
         <span className="text-[length:var(--text-meta)] text-text-muted">
@@ -626,7 +724,7 @@ export function ConnectorsTab({ query, onQuery }: { query: string; onQuery: (q: 
       </div>
 
       {showAddForm && (
-        <div className="rounded-xl border border-border-primary bg-bg-card p-4 mb-3 space-y-3">
+        <div className="rounded-xl bg-bg-card p-4 mb-3 space-y-3">
           <div className="text-sm font-medium text-text-primary">添加 MCP 服务</div>
           {addError && (
             <div className="text-[length:var(--text-meta)] text-error bg-error/10 rounded px-2 py-1">{addError}</div>
@@ -652,12 +750,12 @@ export function ConnectorsTab({ query, onQuery }: { query: string; onQuery: (q: 
                   onChange={(e) => setPasteJson(e.target.value)}
                   rows={7}
                   placeholder={'{"mcpServers":{"my-fs":{"command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","/tmp"]},"remote":{"url":"https://example.com/mcp"}}}'}
-                  className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary border border-border-secondary resize-none font-mono"
+                  className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary resize-none font-mono"
                 />
                 <p className="mt-1 text-[length:var(--text-meta)] text-text-muted">支持 mcpServers 对象或单条 server 配置，自动识别 stdio / http。</p>
               </div>
               <div className="flex items-center gap-2">
-                <button onClick={handleImportPaste} disabled={adding} className="px-3 py-1.5 rounded-lg bg-accent text-accent-on-text text-xs font-medium hover:opacity-90 disabled:opacity-50">导入</button>
+                <button onClick={handleImportPaste} disabled={adding} className="px-3 py-1.5 rounded-lg bg-accent text-on-accent text-xs font-medium hover:opacity-90 disabled:opacity-50">导入</button>
                 <button onClick={() => { setShowAddForm(false); setAddError(null); }} className="px-3 py-1.5 rounded-lg text-xs text-text-muted hover:text-text-primary hover:bg-bg-tertiary">取消</button>
               </div>
             </>
@@ -666,11 +764,11 @@ export function ConnectorsTab({ query, onQuery }: { query: string; onQuery: (q: 
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-[length:var(--text-meta)] text-text-muted">名称</label>
-                  <input value={newServer.name} onChange={(e) => setNewServer((p) => ({ ...p, name: e.target.value }))} placeholder="my-mcp-server" className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary border border-border-secondary" />
+                  <input value={newServer.name} onChange={(e) => setNewServer((p) => ({ ...p, name: e.target.value }))} placeholder="my-mcp-server" className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary" />
                 </div>
                 <div>
                   <label className="text-[length:var(--text-meta)] text-text-muted">传输方式</label>
-                  <select value={newServer.transport} onChange={(e) => setNewServer((p) => ({ ...p, transport: e.target.value as api.McpTransport }))} className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary border border-border-secondary">
+                  <select value={newServer.transport} onChange={(e) => setNewServer((p) => ({ ...p, transport: e.target.value as api.McpTransport }))} className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary">
                     <option value="stdio">stdio</option>
                     <option value="http">http</option>
                   </select>
@@ -679,30 +777,30 @@ export function ConnectorsTab({ query, onQuery }: { query: string; onQuery: (q: 
                   <>
                     <div>
                       <label className="text-[length:var(--text-meta)] text-text-muted">Command</label>
-                      <input value={newServer.command} onChange={(e) => setNewServer((p) => ({ ...p, command: e.target.value }))} placeholder="npx" className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary border border-border-secondary" />
+                      <input value={newServer.command} onChange={(e) => setNewServer((p) => ({ ...p, command: e.target.value }))} placeholder="npx" className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary" />
                     </div>
                     <div>
                       <label className="text-[length:var(--text-meta)] text-text-muted">Args （空格分隔）</label>
-                      <input value={newServer.args} onChange={(e) => setNewServer((p) => ({ ...p, args: e.target.value }))} placeholder="-y @modelcontextprotocol/server-filesystem /tmp" className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary border border-border-secondary" />
+                      <input value={newServer.args} onChange={(e) => setNewServer((p) => ({ ...p, args: e.target.value }))} placeholder="-y @modelcontextprotocol/server-filesystem /tmp" className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary" />
                     </div>
                   </>
                 ) : (
                   <div className="col-span-2">
                     <label className="text-[length:var(--text-meta)] text-text-muted">URL</label>
-                    <input value={newServer.url} onChange={(e) => setNewServer((p) => ({ ...p, url: e.target.value }))} placeholder="https://example.com/mcp" className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary border border-border-secondary" />
+                    <input value={newServer.url} onChange={(e) => setNewServer((p) => ({ ...p, url: e.target.value }))} placeholder="https://example.com/mcp" className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary" />
                   </div>
                 )}
                 <div className="col-span-2">
                   <label className="text-[length:var(--text-meta)] text-text-muted">环境变量 (每行 KEY=value)</label>
-                  <textarea value={newServer.env} onChange={(e) => setNewServer((p) => ({ ...p, env: e.target.value }))} placeholder={"API_KEY=xxx"} rows={2} className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary border border-border-secondary resize-none" />
+                  <textarea value={newServer.env} onChange={(e) => setNewServer((p) => ({ ...p, env: e.target.value }))} placeholder={"API_KEY=xxx"} rows={2} className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary resize-none" />
                 </div>
                 <div className="col-span-2">
                   <label className="text-[length:var(--text-meta)] text-text-muted">描述 （可选）</label>
-                  <input value={newServer.description} onChange={(e) => setNewServer((p) => ({ ...p, description: e.target.value }))} placeholder="自定义文件系统 MCP" className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary border border-border-secondary" />
+                  <input value={newServer.description} onChange={(e) => setNewServer((p) => ({ ...p, description: e.target.value }))} placeholder="自定义文件系统 MCP" className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary" />
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                <button onClick={handleAdd} disabled={adding} className="px-3 py-1.5 rounded-lg bg-accent text-accent-on-text text-xs font-medium hover:opacity-90 disabled:opacity-50">
+                <button onClick={handleAdd} disabled={adding} className="px-3 py-1.5 rounded-lg bg-accent text-on-accent text-xs font-medium hover:opacity-90 disabled:opacity-50">
                   {adding ? "添加中..." : "确认添加"}
                 </button>
                 <button onClick={() => { setShowAddForm(false); setAddError(null); }} className="px-3 py-1.5 rounded-lg text-xs text-text-muted hover:text-text-primary hover:bg-bg-tertiary">
@@ -769,8 +867,8 @@ function ConnectorRow({
 }) {
   const Icon = pickIconByName(server.name);
   return (
-    <div className="h-enter flex items-start gap-3 px-3 py-2.5 rounded-xl bg-bg-card/70 hover:bg-bg-card">
-      <ToolCardIcon tone="info">
+    <div className="h-enter group flex items-start gap-3 px-3 py-2.5 rounded-xl bg-bg-card hover:bg-bg-card-hover transition-colors">
+      <ToolCardIcon>
         <Icon className="icon-lg" />
       </ToolCardIcon>
       <div className="min-w-0 flex-1">
@@ -784,7 +882,9 @@ function ConnectorRow({
           )}
         </div>
         {server.description && (
-          <p className="text-xs text-text-muted mt-0.5 line-clamp-2">{server.description}</p>
+          <p className="text-xs text-text-muted mt-0.5 line-clamp-2 group-hover:line-clamp-none">
+            {server.description}
+          </p>
         )}
         <p className="text-[length:var(--text-meta)] font-mono text-text-faint mt-1 truncate">
           {server.transport === "stdio"
@@ -928,9 +1028,20 @@ export function ToolsetsTab({ query, onQuery }: { query: string; onQuery: (q: st
       )
     : toolsets;
 
+  const enabledCount = useMemo(() => toolsets.filter((t) => t.enabled).length, [toolsets]);
+
   return (
     <>
       <SearchBar query={query} onQuery={onQuery} />
+
+      {!loading && toolsets.length > 0 && (
+        <SummaryBar
+          total={toolsets.length}
+          enabled={enabledCount}
+          enabledLabel="已启用"
+          totalLabel="个工具集"
+        />
+      )}
 
       {error && (
         <div className="mb-4 px-3 py-2 rounded-lg bg-bg-card text-xs text-error flex items-start justify-between gap-2">
@@ -1001,42 +1112,65 @@ function ToolsetCard({
   onToggle: (name: string, next: boolean) => void;
 }) {
   const Icon = pickIconByName(toolset.name);
+  // 工具清单默认只露 4 个：8 个工具的工具集一屏塞满会把网格撑得很乱。
+  // 「全部工具」展开是原型里确认过的交互，卡片自带这个能力，不需要另外加工具。
+  const [expanded, setExpanded] = useState(false);
+  const tools = toolset.tools;
+  const shown = expanded ? tools : tools.slice(0, 4);
+  const hidden = tools.length - shown.length;
   return (
-    <div className="group flex items-start gap-3 px-3 py-2.5 rounded-xl bg-bg-card/80 hover:bg-bg-card">
-      <ToolCardIcon tone="accent">
-        <Icon className="icon-lg" />
-      </ToolCardIcon>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <span className="text-sm text-text-primary truncate">{toolset.label}</span>
-          <span className="text-[length:var(--text-meta)] uppercase tracking-wider text-text-muted border border-border-primary rounded px-1.5 py-0.5">
-            {toolset.tools.length} 个工具
-          </span>
-        </div>
-        <p className="text-xs text-text-muted mt-0.5 line-clamp-2">{toolset.description || "（无描述）"}</p>
-        {toolset.tools.length > 0 && (
-          <div className="flex flex-wrap gap-1 mt-1.5">
-            {toolset.tools.slice(0, 6).map((tool) => (
-              <span key={tool} className="text-[length:var(--text-meta)] text-text-secondary bg-bg-tertiary rounded px-1.5 py-0.5">
-                {tool}
-              </span>
-            ))}
-            {toolset.tools.length > 6 && (
-              <span className="text-[length:var(--text-meta)] text-text-muted">+{toolset.tools.length - 6}</span>
-            )}
+    <div className="group flex flex-col gap-2.5 px-3 py-3 rounded-xl bg-bg-card hover:bg-bg-card-hover transition-colors">
+      <div className="flex items-start gap-3">
+        <ToolCardIcon>
+          <Icon className="icon-lg" />
+        </ToolCardIcon>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-text-primary truncate">{toolset.label}</span>
+            <span className="text-[length:var(--text-meta)] uppercase tracking-wider text-text-muted bg-bg-tertiary rounded px-1.5 py-0.5 shrink-0">
+              {tools.length} 个工具
+            </span>
           </div>
-        )}
+          <p className="text-xs text-text-muted mt-0.5 line-clamp-2 group-hover:line-clamp-none">
+            {toolset.description || "（无描述）"}
+          </p>
+        </div>
+        <ToggleSwitch
+          enabled={enabled}
+          onToggle={() => onToggle(toolset.name, !enabled)}
+          disabled={saving}
+          offLabel={`关闭 ${toolset.label} 工具集`}
+          onLabel={`启用 ${toolset.label} 工具集`}
+          className="shrink-0 mt-0.5"
+        />
       </div>
-      <div className="shrink-0 mt-1.5 flex flex-col items-end gap-1">
-        <ToggleSwitch enabled={enabled} onToggle={() => onToggle(toolset.name, !enabled)} disabled={saving} offLabel={`关闭 ${toolset.label} 工具集`} onLabel={`启用 ${toolset.label} 工具集`} />
-        <span
-          className={`text-[length:var(--text-meta)] uppercase tracking-wider ${
-            enabled ? "text-success" : "text-text-muted"
-          }`}
+
+      {tools.length > 0 && (
+        <div className="flex flex-wrap gap-1 pl-12">
+          {shown.map((tool) => (
+            <span
+              key={tool}
+              className="font-mono text-[length:var(--text-tiny)] text-text-secondary bg-bg-tertiary rounded px-1.5 py-0.5"
+            >
+              {tool}
+            </span>
+          ))}
+          {hidden > 0 && !expanded && (
+            <span className="text-[length:var(--text-tiny)] text-text-muted self-center">+{hidden}</span>
+          )}
+        </div>
+      )}
+
+      {tools.length > 4 && (
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          className="self-start pl-12 text-[length:var(--text-tiny)] font-medium text-text-muted hover:text-text-primary"
+          aria-expanded={expanded}
         >
-          {saving ? "保存中…" : enabled ? "已启用" : "已停用"}
-        </span>
-      </div>
+          {expanded ? "收起" : "全部工具"}
+        </button>
+      )}
     </div>
   );
 }
@@ -1060,10 +1194,60 @@ export function SearchBar({
           value={query}
           onChange={(e) => onQuery(e.target.value)}
           placeholder="搜索名称、描述或类别"
-          className="w-full h-9 bg-bg-card border border-border-primary rounded-lg pl-9 pr-3 text-sm text-text-primary placeholder-text-muted outline-none"
+          className="w-full h-9 bg-bg-tertiary border-0 rounded-lg pl-9 pr-3 text-sm text-text-primary placeholder-text-muted outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
         />
       </div>
       {right}
+    </div>
+  );
+}
+
+/**
+ * 「共 N 个 · M 启用」统计带。
+ *
+ * 原先是一个 `border + bg-bg-card` 的方块，视觉上跟输入框同形，读起来像
+ * 一个禁用的输入框而不是一句统计。改成：数字大、标签小、右侧一条进度计量。
+ * 无描边（靠 bg-bg-card 浮出）。
+ */
+function SummaryBar({
+  total,
+  enabled,
+  totalLabel,
+  enabledLabel,
+}: {
+  total: number;
+  enabled: number;
+  totalLabel: string;
+  enabledLabel: string;
+}) {
+  const pct = total > 0 ? Math.round((enabled / total) * 100) : 0;
+  return (
+    <div className="mb-3 flex items-center gap-5 px-4 py-3 rounded-[14px] bg-bg-card">
+      <div className="flex flex-col shrink-0">
+        <span className="text-xl font-bold leading-none tracking-tight text-text-primary">{total}</span>
+        <span className="text-[length:var(--text-tiny)] text-text-muted mt-0.5">{totalLabel}</span>
+      </div>
+      <div className="flex flex-col shrink-0">
+        <span
+          className="text-xl font-bold leading-none tracking-tight"
+          style={{ color: "var(--color-success)" }}
+        >
+          {enabled}
+        </span>
+        <span className="text-[length:var(--text-tiny)] text-text-muted mt-0.5">{enabledLabel}</span>
+      </div>
+      <div className="flex-1 min-w-20">
+        <div className="flex justify-between text-[length:var(--text-tiny)] text-text-muted mb-1.5">
+          <span>启用占比</span>
+          <span className="tabular-nums">{pct}%</span>
+        </div>
+        <div className="h-1.5 rounded-full bg-bg-tertiary overflow-hidden">
+          <div
+            className="h-full rounded-full transition-[width] duration-300"
+            style={{ width: `${pct}%`, background: "var(--color-btn-primary-bg)" }}
+          />
+        </div>
+      </div>
     </div>
   );
 }
@@ -1122,7 +1306,7 @@ function SkeletonGrid({ count }: { count: number }) {
       {Array.from({ length: count }).map((_, i) => (
         <div
           key={i}
-          className="h-[68px] rounded-xl border border-border-primary bg-bg-card/40 animate-pulse"
+          className="h-[68px] rounded-xl bg-bg-card/40 animate-pulse"
         />
       ))}
     </div>
@@ -1155,22 +1339,34 @@ function PluginCard({
   rightIcon?: React.ReactNode;
   onToggle: () => void;
 }) {
+  // 无描边：卡片靠 bg-bg-card 浮出（浅色主题下 bg-app 才是白的，卡片比底暗一档，
+  // 夜墨则是 #1d1f22 压在 #171717 上）。描边在这种底色上只会画出一排灰线。
+  // 状态不再叠「已启用/已停用」文字——开关本身已是状态，重复只会更吵；
+  // 完整说明留在 ToggleSwitch 的 title/aria-label 里。
   return (
-    <div className={`h-enter group flex items-center gap-3 px-3 py-2.5 rounded-xl ${noBorder ? "" : "border"} ${highlight ? "border-accent/40 bg-accent-soft/20" : (noBorder ? "bg-bg-card/40 hover:bg-bg-card/70" : "border-border-primary bg-bg-card/80 hover:bg-bg-card hover:border-border-secondary")}`}>
-      <ToolCardIcon tone={toneForCategory(badge)}>
+    <div
+      className={`h-enter group flex items-center gap-3 px-3 py-2.5 rounded-xl transition-colors ${
+        highlight
+          ? "bg-accent-soft/20"
+          : noBorder
+            ? "bg-bg-card/40 hover:bg-bg-card/70"
+            : "bg-bg-card hover:bg-bg-card-hover"
+      }`}
+    >
+      <ToolCardIcon>
         {icon}
       </ToolCardIcon>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className="text-sm text-text-primary truncate">{name}</span>
-          <span className="text-[length:var(--text-meta)] uppercase tracking-wider text-text-muted border border-border-primary rounded px-1.5 py-0.5 shrink-0">
+          <span className="text-[length:var(--text-meta)] uppercase tracking-wider text-text-muted bg-bg-tertiary rounded px-1.5 py-0.5 shrink-0">
             {badge}
           </span>
         </div>
-        <p className="text-xs text-text-muted mt-0.5 truncate">{description}</p>
+        <p className="text-xs text-text-muted mt-0.5 line-clamp-2 group-hover:line-clamp-none">{description}</p>
       </div>
       {rightIcon && <span className="shrink-0 text-text-faint">{rightIcon}</span>}
-      <ToggleSwitch enabled={enabled} onToggle={onToggle} disabled={saving || disabled} offLabel="禁用" onLabel="启用" className="shrink-0" />
+      <ToggleSwitch enabled={enabled} onToggle={onToggle} disabled={saving || disabled} offLabel={`停用 ${name}`} onLabel={`启用 ${name}`} className="shrink-0" />
     </div>
   );
 }

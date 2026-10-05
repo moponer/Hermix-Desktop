@@ -49,6 +49,10 @@ struct SkillFrontmatter {
     category: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     description: Option<String>,
+    /// 中文展示名。`name` 是稳定标识（目录名、启停键、跨技能引用），
+    /// 不可为了本地化改动；界面显示用这个。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    display_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     version: Option<String>,
 }
@@ -135,6 +139,9 @@ impl SkillStore for FileSkillStore {
             name: skill.name.clone(),
             category: skill.category.clone(),
             description: skill.description.clone(),
+            // 保存时必须原样带回：漏掉会让任何一次 save 把 SKILL.md 里已有的
+            // display_name 抹掉（读取时拿得到、写回时丢掉 = 中文名逐渐消失）。
+            display_name: skill.display_name.clone(),
             version: Some(crate::version::compute_version(&skill.content)),
         };
 
@@ -168,6 +175,7 @@ impl SkillStore for FileSkillStore {
                     content,
                     category: fm.category,
                     description: fm.description,
+                    display_name: fm.display_name,
                 }));
             }
         }
@@ -365,6 +373,7 @@ impl FileSkillStore {
                                     name: fm.name,
                                     category,
                                     description: fm.description,
+                                    display_name: fm.display_name,
                                 });
                             }
                             Err(e) => {
@@ -536,6 +545,7 @@ mod tests {
             name: "my-skill".to_string(),
             category: Some("general".to_string()),
             description: Some("A test skill".to_string()),
+            display_name: None,
             version: Some("0.1.0".to_string()),
         };
         let content = "# My Skill\nDo the thing.";
@@ -558,6 +568,7 @@ mod tests {
             content: "# Greet\nSay hello.".to_string(),
             category: Some("social".to_string()),
             description: Some("Greets people".to_string()),
+            display_name: None,
         };
 
         store.save(&skill).await.unwrap();
@@ -578,12 +589,14 @@ mod tests {
             content: "Content A".to_string(),
             category: Some("cat1".to_string()),
             description: None,
+            display_name: None,
         };
         let skill_b = Skill {
             name: "skill-b".to_string(),
             content: "Content B".to_string(),
             category: None,
             description: None,
+            display_name: None,
         };
 
         store.save(&skill_a).await.unwrap();
@@ -603,6 +616,7 @@ mod tests {
             content: "Temporary".to_string(),
             category: None,
             description: None,
+            display_name: None,
         };
 
         store.save(&skill).await.unwrap();

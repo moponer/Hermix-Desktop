@@ -2,7 +2,7 @@
 name: "frontend-architecture"
 display_name: "前端架构"
 category: "software-development"
-description: "Use when designing frontend architecture, choosing frameworks (React/Vue/Angular), planning rendering strategies (CSR/SSR/SSG), or optimizing frontend performance."
+description: "用于设计前端架构、选择框架（React / Vue / Angular）、规划渲染策略（CSR / SSR / SSG），或优化前端性能。"
 version: "0.1.0"
 author: "Hermes Desktop"
 source: "builtin"

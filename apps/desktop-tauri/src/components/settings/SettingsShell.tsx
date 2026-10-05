@@ -174,7 +174,7 @@ export function SettingsShell({ onBack, initialPage }: SettingsShellProps) {
         {/* Header：整页设置的退出条，只承担「返回」。页面身份（页名 + 说明）
             在内容区页头 —— 原先挂右上角的 hint 离侧栏选中项和内容都最远，
             读不出归属。 */}
-        <div className="flex shrink-0 items-center gap-3 border-b border-[var(--color-border-primary)] bg-[var(--color-bg-secondary)] px-4 py-2.5">
+        <div className="flex shrink-0 items-center gap-3 bg-[var(--color-bg-secondary)] px-4 py-2.5">
           <button
             onClick={onBack}
             className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[length:var(--text-ui)] text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]"
@@ -189,7 +189,9 @@ export function SettingsShell({ onBack, initialPage }: SettingsShellProps) {
 
         <div className="flex min-h-0 flex-1 overflow-hidden">
           {/* 左导航 */}
-          <nav className="flex w-[232px] shrink-0 flex-col border-r border-[var(--color-border-primary)] bg-[var(--color-bg-secondary)]">
+          {/* 无右边线：侧栏与内容区靠 bg-bg-secondary / bg-bg-app 的底色差分界。
+              加一条竖线等于在已经分明的两块之间再画一刀。 */}
+          <nav className="flex w-[232px] shrink-0 flex-col bg-[var(--color-bg-secondary)]">
             <div className="px-3 pb-2 pt-3">
               <div className="relative">
                 <Search className="icon-sm pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)]" />
@@ -199,7 +201,7 @@ export function SettingsShell({ onBack, initialPage }: SettingsShellProps) {
                   onChange={(e) => setQuery(e.target.value)}
                   placeholder="搜索设置…"
                   aria-label="搜索设置"
-                  className="w-full rounded-lg border border-[var(--color-border-secondary)] bg-[var(--color-bg-app)] py-1.5 pl-8 pr-2 text-[length:var(--text-ui)] text-[var(--color-text-primary)] outline-none transition-colors placeholder:text-[var(--color-text-muted)] focus:border-[var(--color-accent)]"
+                  className="w-full rounded-lg bg-[var(--color-bg-tertiary)] py-1.5 pl-8 pr-2 text-[length:var(--text-ui)] text-[var(--color-text-primary)] outline-none transition-colors placeholder:text-[var(--color-text-muted)] focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
                 />
               </div>
             </div>

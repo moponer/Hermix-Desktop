@@ -177,6 +177,9 @@ pub struct CronJobCreate {
 #[derive(Debug, Serialize)]
 pub struct SkillInfo {
     pub name: String,
+    /// 技能的中文展示名（来自 frontmatter `display_name`）。
+    /// 缺失时前端回落到 `name`。
+    pub display_name: Option<String>,
     pub description: String,
     pub category: String,
     pub enabled: bool,

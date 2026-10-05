@@ -2,7 +2,7 @@
 name: "tdd-practice"
 display_name: "测试驱动开发"
 category: "software-development"
-description: "Use when implementing test-driven development (TDD) workflow — writing tests before code, enforcing the RED-GREEN-REFACTOR cycle, or improving test coverage of existing code."
+description: "用于实施测试驱动开发（TDD）工作流 —— 先写测试再写代码、强制 RED-GREEN-REFACTOR 循环，或提升既有代码的测试覆盖率。"
 version: "0.1.0"
 author: "Hermes Desktop"
 source: "builtin"

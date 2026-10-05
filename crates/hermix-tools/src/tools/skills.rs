@@ -774,6 +774,7 @@ mod tests {
                 content: content.into(),
                 category: category.map(String::from),
                 description: None,
+                display_name: None,
             })
         }
         async fn get_skill(&self, name: &str) -> Result<Option<Skill>, AgentError> {
@@ -783,6 +784,7 @@ mod tests {
                     content: "existing content".into(),
                     category: Some("auto-generated".into()),
                     description: None,
+                    display_name: None,
                 }))
             } else {
                 Ok(None)
@@ -793,6 +795,7 @@ mod tests {
                 name: "test".into(),
                 category: None,
                 description: None,
+                display_name: None,
             }])
         }
         async fn update_skill(&self, name: &str, content: &str) -> Result<Skill, AgentError> {
@@ -806,6 +809,7 @@ mod tests {
                 content: content.into(),
                 category: None,
                 description: None,
+                display_name: None,
             })
         }
         async fn delete_skill(&self, _name: &str) -> Result<(), AgentError> {

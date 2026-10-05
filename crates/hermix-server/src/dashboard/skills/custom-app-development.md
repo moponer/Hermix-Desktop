@@ -1,5 +1,6 @@
 ---
 name: custom-app-development
+display_name: "自定义应用开发"
 version: 16
 description: >
   自定义应用开发助手。当用户要求创建/开发一个桌面应用、桌面工具、独立程序、窗口应用、软件、小软件，

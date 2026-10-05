@@ -1,5 +1,6 @@
 ---
 name: code-craftsmanship
+display_name: "代码精炼"
 version: 1
 description: >
   代码精炼标准。Hermix 与 WorkBuddy 全项目通用。

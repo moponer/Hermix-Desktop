@@ -128,7 +128,7 @@ export function McpCatalogGrid({ onInstalled }: { onInstalled: () => void }) {
   }
   if (failed || !items) {
     return (
-      <div className="rounded-lg border border-border-primary bg-bg-card p-4 text-[length:var(--text-meta)] text-text-secondary">
+      <div className="rounded-lg bg-bg-card p-4 text-[length:var(--text-meta)] text-text-secondary">
         读取内置目录失败。
         <div className="mt-1 text-text-muted">
           目录是打包在应用内的常量，不依赖网络；取不到通常是后端未就绪。
@@ -136,7 +136,7 @@ export function McpCatalogGrid({ onInstalled }: { onInstalled: () => void }) {
         </div>
         <button
           onClick={load}
-          className="mt-2 h-7 px-2.5 rounded-md border border-border-secondary hover:bg-bg-hover"
+          className="mt-2 h-7 px-2.5 rounded-md bg-bg-tertiary hover:bg-bg-hover"
         >
           重试
         </button>
@@ -153,7 +153,7 @@ export function McpCatalogGrid({ onInstalled }: { onInstalled: () => void }) {
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="搜索名称或描述"
-          className="ml-auto h-7 px-2.5 rounded-md border border-border-secondary bg-bg-card text-[length:var(--text-meta)] outline-none focus:border-border-strong w-44"
+          className="ml-auto h-7 px-2.5 rounded-md bg-bg-tertiary text-[length:var(--text-meta)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] w-44"
         />
       </div>
 
@@ -161,11 +161,13 @@ export function McpCatalogGrid({ onInstalled }: { onInstalled: () => void }) {
         <div className="flex items-center gap-1.5 flex-wrap">
           <button
             onClick={() => setCategory(null)}
-            className={`h-6 px-2 rounded-full text-[length:var(--text-tiny)] border ${
+            aria-pressed={category === null}
+            className={`h-6 px-2 rounded-full text-[length:var(--text-tiny)] font-semibold transition-colors ${
               category === null
-                ? "border-border-strong text-text-primary"
-                : "border-border-secondary text-text-muted hover:text-text-secondary"
+                ? "text-[var(--color-btn-primary-text)]"
+                : "bg-bg-tertiary text-text-muted hover:text-text-primary"
             }`}
+            style={category === null ? { background: "var(--color-btn-primary-bg)" } : undefined}
           >
             全部
           </button>
@@ -173,11 +175,13 @@ export function McpCatalogGrid({ onInstalled }: { onInstalled: () => void }) {
             <button
               key={c}
               onClick={() => setCategory(category === c ? null : c)}
-              className={`h-6 px-2 rounded-full text-[length:var(--text-tiny)] border ${
+              aria-pressed={category === c}
+              className={`h-6 px-2 rounded-full text-[length:var(--text-tiny)] font-semibold transition-colors ${
                 category === c
-                  ? "border-border-strong text-text-primary"
-                  : "border-border-secondary text-text-muted hover:text-text-secondary"
+                  ? "text-[var(--color-btn-primary-text)]"
+                  : "bg-bg-tertiary text-text-muted hover:text-text-primary"
               }`}
+              style={category === c ? { background: "var(--color-btn-primary-bg)" } : undefined}
             >
               {c}
             </button>
@@ -193,12 +197,20 @@ export function McpCatalogGrid({ onInstalled }: { onInstalled: () => void }) {
           return (
             <div
               key={item.id}
-              className={`rounded-lg border p-3 ${
-                blocked ? "border-border-primary bg-bg-tertiary/40" : "border-border-primary bg-bg-card"
+              className={`rounded-lg p-3 ${
+                blocked ? "bg-bg-tertiary/40" : "bg-bg-card"
               }`}
             >
               <div className="flex items-start gap-2.5">
-                <span className="mt-0.5 shrink-0 text-text-muted">
+                {/* 图标块走主按钮色（与插件/技能/工具集四页一致），不再用灰色线性图标。 */}
+                <span
+                  className="mt-0.5 shrink-0 flex h-8 w-8 items-center justify-center rounded-[var(--radius-md)]"
+                  style={{
+                    background: "var(--color-btn-primary-bg)",
+                    color: "var(--color-btn-primary-text)",
+                    boxShadow: "var(--shadow-button-primary)",
+                  }}
+                >
                   {CATEGORY_ICON[item.category] ?? CATEGORY_ICON["其它"]}
                 </span>
                 <div className="min-w-0 flex-1">
@@ -252,7 +264,7 @@ export function McpCatalogGrid({ onInstalled }: { onInstalled: () => void }) {
                   onClick={() => startInstall(item)}
                   disabled={blocked || busyId === item.id}
                   title={blocked ? "未通过安全扫描，无法安装" : "添加到已配置"}
-                  className="ml-auto h-7 px-2.5 rounded-md text-[length:var(--text-meta)] border border-border-secondary text-text-secondary hover:text-text-primary hover:bg-bg-hover disabled:opacity-40 disabled:cursor-not-allowed"
+                  className="ml-auto h-7 px-2.5 rounded-md text-[length:var(--text-meta)] bg-bg-tertiary text-text-secondary hover:text-text-primary hover:bg-bg-hover disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   {busyId === item.id ? "安装中…" : blocked ? "已拒绝" : "安装"}
                 </button>
@@ -271,7 +283,7 @@ export function McpCatalogGrid({ onInstalled }: { onInstalled: () => void }) {
           onClick={() => setEnvTarget(null)}
         >
           <div
-            className="w-full max-w-md rounded-xl border border-border-primary bg-bg-elevated p-4 shadow-pop"
+            className="w-full max-w-md rounded-xl bg-bg-elevated p-4 shadow-pop"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center gap-2">
@@ -292,7 +304,7 @@ export function McpCatalogGrid({ onInstalled }: { onInstalled: () => void }) {
                     value={envDraft[k] ?? ""}
                     onChange={(e) => setEnvDraft((d) => ({ ...d, [k]: e.target.value }))}
                     placeholder="粘贴你的密钥"
-                    className="mt-0.5 w-full h-8 px-2.5 rounded-md border border-border-secondary bg-bg-card text-[length:var(--text-meta)] outline-none focus:border-border-strong font-mono"
+                    className="mt-0.5 w-full h-8 px-2.5 rounded-md bg-bg-tertiary text-[length:var(--text-meta)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] font-mono"
                   />
                 </label>
               ))}
@@ -300,7 +312,7 @@ export function McpCatalogGrid({ onInstalled }: { onInstalled: () => void }) {
             <div className="mt-3 flex items-center gap-2 justify-end">
               <button
                 onClick={() => setEnvTarget(null)}
-                className="h-7 px-2.5 rounded-md text-[length:var(--text-meta)] border border-border-secondary text-text-secondary hover:bg-bg-hover"
+                className="h-7 px-2.5 rounded-md text-[length:var(--text-meta)] bg-bg-tertiary text-text-secondary hover:bg-bg-hover"
               >
                 取消
               </button>
@@ -326,7 +338,7 @@ export function McpCatalogGrid({ onInstalled }: { onInstalled: () => void }) {
           onClick={() => setConfirming(null)}
         >
           <div
-            className="w-full max-w-md rounded-xl border border-border-primary bg-bg-elevated p-4 shadow-pop"
+            className="w-full max-w-md rounded-xl bg-bg-elevated p-4 shadow-pop"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center gap-2">
@@ -339,7 +351,7 @@ export function McpCatalogGrid({ onInstalled }: { onInstalled: () => void }) {
               「{confirming.titleZh ?? confirming.title}」需要确认后才能安装。
             </p>
             {confirming.scan.commandPreview && (
-              <pre className="mt-2 px-2.5 py-2 rounded-md bg-bg-tertiary border border-border-subtle text-[length:var(--text-tiny)] font-mono text-text-secondary whitespace-pre-wrap break-all">
+              <pre className="mt-2 px-2.5 py-2 rounded-md bg-bg-tertiary text-[length:var(--text-tiny)] font-mono text-text-secondary whitespace-pre-wrap break-all">
                 {confirming.scan.commandPreview}
               </pre>
             )}
@@ -353,7 +365,7 @@ export function McpCatalogGrid({ onInstalled }: { onInstalled: () => void }) {
             <div className="mt-3 flex items-center gap-2 justify-end">
               <button
                 onClick={() => setConfirming(null)}
-                className="h-7 px-2.5 rounded-md text-[length:var(--text-meta)] border border-border-secondary text-text-secondary hover:bg-bg-hover"
+                className="h-7 px-2.5 rounded-md text-[length:var(--text-meta)] bg-bg-tertiary text-text-secondary hover:bg-bg-hover"
               >
                 取消
               </button>

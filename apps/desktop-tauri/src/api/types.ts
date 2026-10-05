@@ -59,6 +59,8 @@ export interface HermesConfig {
 
 export interface SkillInfo {
   name: string;
+  /** 中文展示名（frontmatter `display_name`）。缺失时界面回落到 `name`。 */
+  display_name?: string | null;
   description: string;
   category: string;
   enabled: boolean;

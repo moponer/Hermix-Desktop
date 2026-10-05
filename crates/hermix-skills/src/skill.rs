@@ -211,6 +211,7 @@ impl SkillProvider for SkillManager {
             content: content.to_string(),
             category: category.map(String::from),
             description: None,
+            display_name: None,
         };
         self.guard.validate_skill(&skill)?;
 

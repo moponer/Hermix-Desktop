@@ -1118,6 +1118,17 @@ pub struct SkillMeta {
     pub name: String,
     pub category: Option<String>,
     pub description: Option<String>,
+    /// Frontmatter `display_name`：技能的中文展示名。
+    ///
+    /// 与 `name` 分开的原因：`name` 是稳定标识（目录名、启用/禁用的键、
+    /// 跨技能引用都靠它），不能为了本地化而改动；`display_name` 只影响
+    /// 界面显示。缺失时界面回落到 `name`。
+    ///
+    /// 此前这个字段只在前端 `api/types.ts` 里声明、后端从不读取，
+    /// 于是即使 SKILL.md 写了 `display_name: "前端架构"`，
+    /// `/api/skills` 永远返回 null，界面显示的还是英文 name。
+    #[serde(default)]
+    pub display_name: Option<String>,
 }
 
 /// A skill definition.
@@ -1127,6 +1138,9 @@ pub struct Skill {
     pub content: String,
     pub category: Option<String>,
     pub description: Option<String>,
+    /// 中文展示名。`name` 是稳定标识，界面显示用这个。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
 }
 
 // ---------------------------------------------------------------------------

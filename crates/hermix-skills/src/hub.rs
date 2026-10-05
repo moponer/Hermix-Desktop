@@ -405,6 +405,7 @@ mod tests {
             content: "hello".to_string(),
             category: None,
             description: None,
+            display_name: None,
         };
         // A valid 64-char hex string should pass.
         let sig = "a".repeat(64);
@@ -418,6 +419,7 @@ mod tests {
             content: "hello".to_string(),
             category: None,
             description: None,
+            display_name: None,
         };
         let sig = "tooshort";
         assert!(verify_skill_signature(&skill, sig).is_err());
@@ -430,6 +432,7 @@ mod tests {
             content: "hello".to_string(),
             category: None,
             description: None,
+            display_name: None,
         };
         // 64 chars but contains non-hex.
         let sig = "g".repeat(64);

@@ -268,6 +268,7 @@ mod tests {
             content: content.to_string(),
             category: None,
             description: None,
+            display_name: None,
         }
     }
 
