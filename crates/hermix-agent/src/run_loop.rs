@@ -2242,6 +2242,14 @@ self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
                     tracing::info!(
                         "All tool calls had empty names after filtering; LLM produced visible text — finalizing"
                     );
+                    // 失败必须看得见：模型想调的工具因 name 缺失被丢弃
+                    // （MiniMax-M3 流式 delta 缺陷），本轮"说了要干活但
+                    // 没干"就静默收场会让用户以为卡死。emit 一条可见
+                    // 状态，前端据此在消息尾部提示，而不是无声结束。
+                    self.emit_status(
+                        "lifecycle",
+                        "工具调用未能解析（模型未返回工具名），本轮已按普通回复结束；可重发继续",
+                    );
                     self.persist_session_terminal(
                         &ctx,
                         session_id,

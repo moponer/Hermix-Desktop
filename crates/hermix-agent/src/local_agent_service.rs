@@ -70,6 +70,31 @@ use crate::session_persistence::SessionPersistence;
 /// It's the backend counterpart of the desktop's
 /// `mergeConsecutiveAssistantMessages` — both layers apply the same
 /// rule so a stale server view still renders cleanly on reload.
+/// Strip transient system nudges injected by `decide_empty_response`
+/// (autonomous pre-tool push / EmptyStop retry / post-tool summarize)
+/// before persisting. These are one-shot loop-steering instructions,
+/// not conversation content: persisted, they (a) cut
+/// `merge_consecutive_assistant_messages` mid-run so two LLM outputs
+/// of one turn reload as two separate assistant bubbles, and (b)
+/// pollute every later turn's LLM context with a stale "you have not
+/// yet started working" instruction. Recognition lives in
+/// `empty_response_handler::is_transient_nudge_text` — same file
+/// defines the texts, so prefix and message stay in sync. Must run
+/// BEFORE the merge so adjacent assistant entries can rejoin.
+fn strip_transient_nudges(messages: Vec<Message>) -> Vec<Message> {
+    use crate::empty_response_handler::is_transient_nudge_text;
+    messages
+        .into_iter()
+        .filter(|m| {
+            !(m.role == MessageRole::System
+                && m.content
+                    .as_deref()
+                    .map(is_transient_nudge_text)
+                    .unwrap_or(false))
+        })
+        .collect()
+}
+
 fn merge_consecutive_assistant_messages(messages: Vec<Message>) -> Vec<Message> {
     use MessageRole::Assistant;
 
@@ -159,6 +184,20 @@ fn merge_consecutive_assistant_messages(messages: Vec<Message>) -> Vec<Message> 
         flush_run(run, &mut out);
     }
     out
+}
+
+/// `AgentOverrides.attached_file_paths` → user-message suffix. The note
+/// rides on the persisted user message, so history shows what was attached
+/// even after reload; the model reads the files with `read_file` / `read_pdf`
+/// (the system prompt's context-bloat rules govern big docs).
+fn with_attached_files_note<'a>(text: &'a str, paths: Option<&'a [String]>) -> std::borrow::Cow<'a, str> {
+    match paths {
+        Some(paths) if !paths.is_empty() => std::borrow::Cow::Owned(format!(
+            "{text}\n\n[Attached files: {} — read them with read_file / read_pdf]",
+            paths.join(", ")
+        )),
+        _ => std::borrow::Cow::Borrowed(text),
+    }
 }
 
 /// Local in-process agent service.
@@ -1474,10 +1513,11 @@ impl AgentService for LocalAgentService {
         } else {
             vec![]
         };
+        let text = with_attached_files_note(text, overrides.attached_file_paths.as_deref());
         if !images.is_empty() {
-            messages.push(Message::user_with_images(text, &images));
+            messages.push(Message::user_with_images(&text, &images));
         } else {
-            messages.push(Message::user(text));
+            messages.push(Message::user(text.as_ref()));
         }
 
         // An externally-triggered turn (an automation run) must not leave
@@ -1718,7 +1758,7 @@ impl AgentService for LocalAgentService {
         // `merge_consecutive_assistant_messages` move so the
         // borrow checker doesn't see a partial-move of `result`.
         let snapshot = build_compression_snapshot(&result);
-        messages = merge_consecutive_assistant_messages(result.messages);
+        messages = merge_consecutive_assistant_messages(strip_transient_nudges(result.messages));
 
         // Relabel both halves of an externally-triggered turn for
         // storage, undoing the temporary role restore above. Scoped to
@@ -1940,10 +1980,11 @@ impl AgentService for LocalAgentService {
         } else {
             vec![]
         };
+        let text = with_attached_files_note(text, overrides.attached_file_paths.as_deref());
         if !images.is_empty() {
-            messages.push(Message::user_with_images(text, &images));
+            messages.push(Message::user_with_images(&text, &images));
         } else {
-            messages.push(Message::user(text));
+            messages.push(Message::user(text.as_ref()));
         }
 
         // early persist — save the user message BEFORE
@@ -2545,7 +2586,14 @@ impl AgentService for LocalAgentService {
                 if tool_name == "code_execution" {
                     // fall through to tool_complete below
                 } else if !output.is_empty() {
-                    const STDOUT_CHUNK_SIZE: usize = 2000;
+                    // 16KB/帧：2000 字符粒度曾把 5MB 输出切成 2500+ 帧，
+                    // 每帧 spawn 一个转发 task 并全链路过桥/emit/前端
+                    // setState——事件洪峰直接打爆 rx 背压链（rx 转发循环
+                    // 卡在 stdout 管道 → tx 满 → 后续 text 全被 try_send
+                    // 丢弃 → 前端收不到关键事件显示"中断"），前端 JS 主
+                    // 线程也被 setState 风暴打满（窗口无响应）。16KB 把
+                    // 事件量降 8 倍且单帧仍在 JSON 舒适区。
+                    const STDOUT_CHUNK_SIZE: usize = 16 * 1024;
                     let chars: Vec<char> = output.chars().collect();
                     let total_chunks = chars.len().div_ceil(STDOUT_CHUNK_SIZE).max(1);
                     for (idx, chunk) in chars.chunks(STDOUT_CHUNK_SIZE).enumerate() {
@@ -2594,12 +2642,39 @@ impl AgentService for LocalAgentService {
                 // from "运行中" to "已完成" (or "失败" if the
                 // payload carries an error). Without this entry on
                 // disk the entire timeline reloads as running.
+                //
+                // content 只留 2KB 预览：前端对 tool_complete.content
+                // 的唯一消费是 classifyToolOutcome（clip 120 字符）；
+                // 全量输出已由 tool_stdout 分片投递（卡片"查看输出"读
+                // stdout）。全量内嵌曾让 5MB 输出变成单帧 5MB JSON 过
+                // 桥 + 前端整体 parse，单帧即可冻住 WebView。
+                let output_preview = {
+                    const TOOL_COMPLETE_PREVIEW: usize = 2048;
+                    fn truncate_chars(s: &str, max: usize) -> &str {
+                        if s.len() <= max {
+                            return s;
+                        }
+                        let mut end = max;
+                        while end > 0 && !s.is_char_boundary(end) {
+                            end -= 1;
+                        }
+                        &s[..end]
+                    }
+                    let t = truncate_chars(output, TOOL_COMPLETE_PREVIEW);
+                    if t.len() < output.len() {
+                        let mut s = t.to_string();
+                        s.push_str(&format!("\n…（完整输出已按 stdout 分片投递，共 {} 字符）", output.chars().count()));
+                        s
+                    } else {
+                        output.to_string()
+                    }
+                };
                 {
                     let mut buf = timeline_buffer.lock().unwrap();
                     buf.push(ExecutionTimelineEvent {
                         event_type: "tool_complete".to_string(),
                         tool: Some(tool_name.to_string()),
-                        content: Some(output.to_string()),
+                        content: Some(output_preview.clone()),
                         arguments: None,
                         chunk_index: None,
                         chunk_total: None,
@@ -2619,7 +2694,7 @@ impl AgentService for LocalAgentService {
                             "event": "tool_complete",
                             "tool_call_id": tool_call_id,
                             "tool": tool_name,
-                            "content": output,
+                            "content": output_preview,
                             "denial_kind": if denial_kind.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(denial_kind.to_string()) },
                             "is_error": is_error,
                         })),
@@ -2981,7 +3056,7 @@ impl AgentService for LocalAgentService {
         // partial move of `result.messages` so the borrow checker
         // doesn't see a dangling borrow.
         let snapshot = build_compression_snapshot(&result);
-        messages = merge_consecutive_assistant_messages(result.messages);
+        messages = merge_consecutive_assistant_messages(strip_transient_nudges(result.messages));
 
         // Return the LLM's raw content as-is. If content is empty but
         // reasoning_content exists (MiniMax puts its response in reasoning),
@@ -3369,6 +3444,21 @@ mod override_tests {
     /// a full WebSocket roundtrip. These tests pin every branch so
     /// a future refactor can't silently re-introduce the bug.
     #[test]
+    #[test]
+    fn attached_files_note_appended_only_when_paths_present() {
+        assert_eq!(with_attached_files_note("总结", None), "总结");
+        assert_eq!(with_attached_files_note("总结", Some(&[])), "总结");
+        let p = r"C:\data\attachments\1-0-report.pdf".to_string();
+        assert_eq!(
+            with_attached_files_note("总结", Some(&[p.clone()])),
+            format!(
+                "总结\n\n[Attached files: {} — read them with read_file / read_pdf]",
+                p
+            ),
+        );
+    }
+
+    #[test]
     fn compute_effective_model_uses_overrides_over_config() {
         // The bug: user picks "minimax:MiniMax-M2" in the UI but
         // config.yaml defaults to "anthropic:claude". If the
@@ -3589,6 +3679,7 @@ mod override_tests {
             on_prefetch_intent: None,
             external_delivery: None,
             shutdown: None,
+            attached_file_paths: None,
         };
         let (cfg, allowed) = LocalAgentService::apply_overrides(base, &overrides);
         assert_eq!(
@@ -3626,6 +3717,7 @@ mod override_tests {
             on_prefetch_intent: None,
             external_delivery: None,
             shutdown: None,
+            attached_file_paths: None,
         };
         let (_cfg, allowed) = LocalAgentService::apply_overrides(base, &overrides);
         let allowed = allowed.expect("allowed set should be Some");

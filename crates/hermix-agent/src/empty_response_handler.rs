@@ -51,6 +51,38 @@ use hermix_core::Message;
 /// Hard cap on Codex-style ack continuations.
 pub const CODEX_MAX_ACK_CONTINUATIONS: u32 = 2;
 
+// ---------------------------------------------------------------------------
+// Transient nudge texts — these injected `Message::system` control messages
+// are one-shot loop-steering instructions, NOT conversation content. They
+// must never reach the persisted transcript: a persisted nudge (a) cuts
+// `merge_consecutive_assistant_messages` mid-run so two LLM outputs of one
+// run reload as two separate assistant bubbles ("自己重复回答"), and (b)
+// pollutes every later turn's LLM context with a stale "you have not yet
+// started working" instruction. `is_transient_nudge_text` is the single
+// recognition point; `local_agent_service` strips them before persisting.
+// ---------------------------------------------------------------------------
+pub const AUTONOMOUS_NUDGE_VISIBLE_PREFIX: &str =
+    "You produced a text reply but have not yet started working on the task.";
+pub const AUTONOMOUS_NUDGE_SILENT_PREFIX: &str =
+    "You have not yet completed the user's task.";
+pub const EMPTY_STOP_NUDGE_PREFIX: &str =
+    "Your previous response was empty. Please provide a response or call a tool to work on the task.";
+pub const POST_TOOL_SUMMARIZE_NUDGE_PREFIX: &str =
+    "你刚才调用了工具但本轮没有输出任何文字。";
+
+/// Recognize the system-role control messages injected by
+/// `decide_empty_response`'s nudge branches. Matched by exact prefix —
+/// the texts are defined right here, so prefix and message stay in sync.
+pub fn is_transient_nudge_text(text: &str) -> bool {
+    const PREFIXES: &[&str] = &[
+        AUTONOMOUS_NUDGE_VISIBLE_PREFIX,
+        AUTONOMOUS_NUDGE_SILENT_PREFIX,
+        EMPTY_STOP_NUDGE_PREFIX,
+        POST_TOOL_SUMMARIZE_NUDGE_PREFIX,
+    ];
+    PREFIXES.iter().any(|p| text.starts_with(p))
+}
+
 /// Max retries for an `EmptyStop` (empty response, no tool history).
 /// One retry covers transient API glitches; a second empty response
 /// means the LLM genuinely has nothing to say.
@@ -231,22 +263,27 @@ pub fn decide_empty_response(input: EmptyResponseInput<'_>) -> EmptyResponseOutp
         };
         let nudge = if has_visible {
             format!(
-                "You produced a text reply but have not yet started working on the task. \
+                "{} \
                  Tools are available and more turns remain ({}). \
-                 Do NOT stop here — use tools to actually accomplish the task. \
-                 If you need information, use a tool to obtain it. \
-                 If you need to read or write files, execute commands, or search, \
-                 call the appropriate tool now. Resume immediately with a tool call.",
-                turns_info
+                 If the user's message contains an actual task, do NOT stop here — \
+                 use tools to accomplish it (read/write files, execute commands, search). \
+                 If the user was only greeting or chatting and there is genuinely no task \
+                 to work on, simply give your normal conversational reply and stop — \
+                 do NOT invent work and do NOT say the request was already answered. \
+                 Resume now with either a tool call or a final reply.",
+                AUTONOMOUS_NUDGE_VISIBLE_PREFIX, turns_info
             )
         } else {
             format!(
-                "You have not yet completed the user's task. \
+                "{} \
                  Tools are available and more turns remain ({}). \
-                 Do NOT stop here — continue working. \
-                 If you need information, use a tool to obtain it rather than asking the user. \
-                 Resume immediately with the next tool call.",
-                turns_info
+                 If the user's message contains an actual task, do NOT stop here — \
+                 continue working with tools (obtain information with tools rather than \
+                 asking the user). \
+                 If there is genuinely no task to work on, give your normal conversational \
+                 reply and stop. \
+                 Resume now with either a tool call or a final reply.",
+                AUTONOMOUS_NUDGE_SILENT_PREFIX, turns_info
             )
         };
         tracing::info!(
@@ -286,7 +323,7 @@ pub fn decide_empty_response(input: EmptyResponseInput<'_>) -> EmptyResponseOutp
         );
         return EmptyResponseOutput {
             action: EmptyResponseAction::ContinueWithSystemNudge(
-                "Your previous response was empty. Please provide a response or call a tool to work on the task.".to_string(),
+                EMPTY_STOP_NUDGE_PREFIX.to_string(),
             ),
             new_codex_ack_continuations: input.codex_ack_continuations,
             new_autonomous_nudge_count: input.autonomous_nudge_count,
@@ -316,7 +353,10 @@ pub fn decide_empty_response(input: EmptyResponseInput<'_>) -> EmptyResponseOutp
         );
         return EmptyResponseOutput {
             action: EmptyResponseAction::ContinueWithSystemNudge(
-                "你刚才调用了工具但本轮没有输出任何文字。请给用户一个总结性的回复（内容、详略、语气由你决定）。不要只调用工具而不说话。".to_string(),
+                format!(
+                    "{}请给用户一个总结性的回复（内容、详略、语气由你决定）。不要只调用工具而不说话。",
+                    POST_TOOL_SUMMARIZE_NUDGE_PREFIX
+                ),
             ),
             new_codex_ack_continuations: input.codex_ack_continuations,
             new_autonomous_nudge_count: input.autonomous_nudge_count,
@@ -421,6 +461,34 @@ mod tests {
             WorkState::classify(false, false),
             WorkState::EmptyStop
         );
+    }
+
+    // ===== transient nudge recognition tests =====
+
+    /// 持久化 strip 依赖前缀识别。四段 nudge 文本与常量必须互认：
+    /// 文本改了没同步前缀 → nudge 落库 → merge 被切断 → 重复气泡回归。
+    #[test]
+    fn is_transient_nudge_text_recognizes_all_four_nudges() {
+        assert!(is_transient_nudge_text(
+            "You produced a text reply but have not yet started working on the task. \
+             Tools are available and more turns remain (1 of 30)."
+        ));
+        assert!(is_transient_nudge_text(
+            "You have not yet completed the user's task. \
+             Tools are available and more turns remain (1 of 30)."
+        ));
+        assert!(is_transient_nudge_text(EMPTY_STOP_NUDGE_PREFIX));
+        assert!(is_transient_nudge_text(
+            "你刚才调用了工具但本轮没有输出任何文字。请给用户一个总结性的回复（内容、详略、语气由你决定）。不要只调用工具而不说话。"
+        ));
+    }
+
+    #[test]
+    fn is_transient_nudge_text_rejects_real_conversation() {
+        // 用户/模型的正常对话内容绝不能被 strip 掉。
+        assert!(!is_transient_nudge_text("你好！我是 Hermix，有什么可以帮你的？"));
+        assert!(!is_transient_nudge_text("上一条已经问过了 —— 还没收到你的需求。"));
+        assert!(!is_transient_nudge_text(""));
     }
 
     // ===== Finalize tests (trust model) =====
