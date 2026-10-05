@@ -1,6 +1,6 @@
 # Decision Note: 会话锚定投递（自动化结果回投原对话）
 
-Status: proposed — 2026-10-04 逐层核实 cronjob 工具 → 宿主后端 → Automation 表 → 调度器全链路后的重写。**修 1（`_session_id` 注入）与修 2（`anchor_session_id` 字段）已实施**（见下方"实施进度"）；修 3/4/5 仍待 [调度模型升级](2026-10-04-automation-schedule-model-upgrade.md) 落地。核实推翻了原提案的两处前提：hermix 用的不是 ZCode 的 `targetTaskId` 而是 `session_id`；且提案设想的"对话内创建"链路需要先补两个断点才成立。裁决见 [批次评审](../process/2026-10-04-proposed-batch-review.md)。
+Status: implemented — 2026-10-04 逐层核实 cronjob 工具 → 宿主后端 → Automation 表 → 调度器全链路后的重写；修 1–5 已全部落地（修 4/修 5 于 2026-10-05，方案与实际代码的三处偏差见"实施进度"）。核实推翻了原提案的两处前提：hermix 用的不是 ZCode 的 `targetTaskId` 而是 `session_id`；且提案设想的"对话内创建"链路需要先补两个断点才成立。裁决见 [批次评审](../process/2026-10-04-proposed-batch-review.md)。
 
 ## 核实结论
 
@@ -101,9 +101,29 @@ let session_id = auto
 
 回退路径带 `run_id` 是必要的：多次 run 共用一段不断增长的历史会互相污染，且无法从 session 反查是哪次 run。两个分支各有测试钉住（`test_unanchored_session_id_includes_run_id` / `test_anchored_automation_uses_anchor_session`）。
 
-### 未完成：修 4 / 修 5
+### 修 4：消息一等表示 + 修 5：注入次数护栏 ✅ 已落地（2026-10-05）
 
-修 4（消息一等表示）与修 5（注入次数护栏）同批，见"实施顺序"。
+**方案与本篇 Decision 的三处偏差**（勘察推翻了方案原文，实施按实际代码重设计）：
+
+1. **不走 `StreamEvent`，走 DB 通道**。方案写"`StreamEvent` 加一个消息类型"，但勘察发现 `ws.rs` 里没有任何 `orchestration_bus.subscribe()` 调用——`AutomationTriggered` 是死事件，加 `StreamEvent` 变体解决不了投送。且结果本来就要落库（前端经 `GET /v1/sessions/{id}/messages` 读取），最小闭环是 DB 而非 WS 推送。
+2. **不止是加卡片，是修一个既有的上下文污染 bug**。实施前的现状是把 `auto.prompt` 以 `role=user` 落库、回复以 `role=assistant` 落库（`local_agent_service.rs`）——下一轮模型会看到用户说过它自己没说过的话。`MessageRole::Automation` 的三态语义（落库 + 前端可见 + `load_session` 过滤）是"落库但不进 prompt"的第三种能力：`role=system` 有前两种但缺第三种（它压根不落库）。
+3. **不是硬编码回退二选一，是护栏纯函数**。`decide_delivery_target`（`hermix-automation/src/lib.rs`）收 8 字段输入（锚点 / 注入数 / 连续失败 / 锚点存在性 / 回退 id / 两个可配上限），产出 `DeliveryTarget::Anchor | Standalone { reason }`。判定顺序有意为之：无锚点（最便宜）→ 存在性 → 连续失败（当下更紧急）→ 注入次数（背景噪音）。
+
+**落库要点**（比方案原文多出的部分，全部有测试钉住）：
+
+- `Message.automation_meta: Option<AutomationMeta>`——元数据必须穿过 `flush_messages` 的 DELETE+全量 INSERT 活下来，任何没写进 INSERT 语句的字段会在用户下一轮消失。`extra` 列复用 approval 的先例。
+- **`flush_messages` 的 DELETE 必须排除 automation**（`AND role != 'automation'`）：automation 行不在 `load_session` 返回值里，全量 DELETE 会在用户发下一句话时抹掉所有定时任务结果。
+- **`persistable_count` / `carry_idx` 同步排除 automation**：carry 捕获 SQL 排除了 automation，计数不同步排除会让两边长度永久不等。（实测注记：真实派发路径上 `use_carry` 本来就几乎恒为 false——调用方传的是"全量内存历史 + 本轮新增"，而捕获只看到上次 flush 写的行；`unified_steps` 实际靠 `load_session` 回填的内存值存活。排除 automation 守的是对齐不变式，不是修一个丢数据 bug。）
+- **`run()` 期间 prompt 的 role 暂时还原为 `User`**：`agent_loop::prepare_run_context` 的 `task_hint` 取"最后一条 User 消息"进系统提示与空响应重试——不还原的话自动化跑起来会丢掉任务提示。post-run 再改回 Automation 落库，两次 relabel 都以 `automation_meta` 挂载点为锚，历史真消息不可能被误改。
+- **前端 `wireToChatMessage` 白名单必须认 `automation`**：这是静默丢弃点，不改这行 automation 行直接消失。
+- **`routes.rs` 的压缩归档去重签名 `role_sig` 必须给 automation 独立签名**：折叠成 `user` 的话，一条定时任务结果和一条真用户消息内容撞车时会互相误删。
+- **会话存在性真判**（`SessionProbe` trait + `state.rs::SessionExistenceProbe`）：`send_message` 对 sessions 表 UPSERT，投进已删除的锚点不会报错——会把那个 id 复活成 title/workspace 全 NULL 的孤儿行。
+- **投递计数只记 `is_anchored()` 的 run**（6a 步 `mark_run_delivered`）：回退到独立会话的 run 没碰用户对话，记它会白吃额度。计数按 `(automation_id, delivered_to_session_id)` 而非总运行次数。
+- **`consecutive_terminal_failures` ≠ `consecutive_dispatch_failures`**：前者喂护栏（所有终态失败——跑完 agent 仍失败同样不值得注入用户对话），后者喂退避（只数 dispatch 失败，跑过工具的绝不重放）。`skipped` / `abandoned` 打断 streak。
+
+**N 的默认值**：`DEFAULT_MAX_INJECTIONS_PER_SESSION = 50`——诚实标注这是占位符不是测量值（周报无感、日报一年有界），`Reintroduction conditions` 仍要求观察后校准。连续失败上限 `= 3`。
+
+**测试**：护栏纯函数 8 例（健康投递 / 锚点已删带原因 / 次数达上限 / 上限内差一条仍投 / 连续失败停投 / 无锚点 / 空串锚点 / 失败优先于次数）+ 持久化 5 例（role 过滤 / 行存活 / 元数据往返 / 两种组装方式的 carry 对齐）+ server 端到端 2 例（anchored 三件套 + fallback 三件套，变异验证过）。
 
 ## Decision
 
