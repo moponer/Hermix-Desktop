@@ -478,6 +478,13 @@ pub struct AgentOverrides {
     /// only grants). Unknown group = empty members = no-op.
     #[serde(default)]
     pub expert_toolset: Option<String>,
+    /// Absolute paths of the non-image documents the user attached this
+    /// turn. The server persists `SendMessageRequest.attached_files`
+    /// bytes under `<hermix_home>/attachments/` before the turn starts;
+    /// the agent loop appends a short note listing them to the user
+    /// message so the LLM reads them with `read_file` / `read_pdf`.
+    #[serde(default)]
+    pub attached_file_paths: Option<Vec<String>>,
     /// Set when this turn was initiated by an external scheduler (an
     /// automation run) rather than by the user typing.
     ///
@@ -575,6 +582,7 @@ impl std::fmt::Debug for AgentOverrides {
             .field("workbench_id", &self.workbench_id)
             .field("domain_override", &self.domain_override)
             .field("expert_toolset", &self.expert_toolset)
+            .field("attached_file_paths", &self.attached_file_paths)
             .field(
                 "approval_requester",
                 &self.approval_requester.as_ref().map(|_| "<callback>"),
@@ -613,6 +621,7 @@ impl PartialEq for AgentOverrides {
             && self.workbench_id == other.workbench_id
             && self.domain_override == other.domain_override
             && self.expert_toolset == other.expert_toolset
+            && self.attached_file_paths == other.attached_file_paths
     }
 }
 

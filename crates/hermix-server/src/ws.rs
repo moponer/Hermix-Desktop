@@ -128,8 +128,17 @@ pub(crate) async fn handle_ws(
             workbench_id: None,
             domain_override: None,
             expert_toolset: None,
+            attached_files: None,
+            attached_file_paths: None,
         });
 
+        // Non-image documents: bytes → disk, so the agent gets real paths.
+        let mut attached_paths = crate::attachments::persist_attached_files(
+            request.attached_files.as_deref().unwrap_or(&[]),
+        );
+        if let Some(direct) = &request.attached_file_paths {
+            attached_paths.extend(direct.iter().cloned());
+        }
         // Build AgentOverrides from request
         let overrides = hermix_core::traits::AgentOverrides {
             model: request.model.clone(),
@@ -146,6 +155,8 @@ pub(crate) async fn handle_ws(
             workbench_id: request.workbench_id.clone(),
             domain_override: request.domain_override.clone(),
             expert_toolset: request.expert_toolset.clone(),
+            attached_file_paths: (!attached_paths.is_empty())
+                .then_some(attached_paths),
             memory_dir: None,
             // An interactive chat turn is by definition user-initiated;
             // only the automation scheduler sets this. Keeping it
@@ -742,6 +753,13 @@ pub(crate) async fn handle_ws_stream_send(
         });
     }
 
+    // Non-image documents: bytes → disk, so the agent gets real paths.
+    let mut attached_paths = crate::attachments::persist_attached_files(
+        request.attached_files.as_deref().unwrap_or(&[]),
+    );
+    if let Some(direct) = &request.attached_file_paths {
+        attached_paths.extend(direct.iter().cloned());
+    }
     // Build AgentOverrides from request
     let overrides = hermix_core::traits::AgentOverrides {
         model: request.model.clone(),
@@ -759,6 +777,8 @@ pub(crate) async fn handle_ws_stream_send(
         workbench_id: request.workbench_id.clone(),
         domain_override: request.domain_override.clone(),
         expert_toolset: request.expert_toolset.clone(),
+        attached_file_paths: (!attached_paths.is_empty())
+            .then_some(attached_paths),
         approval_requester: {
             let registry = state.approval_registry.clone();
             Some(Arc::new(move |sess_id: String, req_id: String| {
@@ -3033,6 +3053,8 @@ async fn handle_inbound_frame(
                 workbench_id: None,
                 domain_override: None,
                 expert_toolset: None,
+                attached_files: None,
+                attached_file_paths: None,
             };
                 // Return the inner outcome verbatim. This turn may have
                 // consumed a mid-stream user message and needs it re-driven
@@ -3097,6 +3119,8 @@ async fn handle_inbound_frame(
         workbench_id: None,
         domain_override: None,
         expert_toolset: None,
+        attached_files: None,
+        attached_file_paths: None,
     });
     return handle_ws_stream_send(
         &mut *sender,

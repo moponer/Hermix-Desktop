@@ -112,7 +112,12 @@ export interface ChatOverrides {
   images?: { bytes: number[]; mimeType: string; name?: string }[];
   image?: string;  // legacy single-image base64 (backward compat)
   imageMimeType?: string;  // mime type for legacy single image
-  /** 非图片本地文件路径（拖放/粘贴时获取），后端直接用 read_file/read_pdf 读取 */
+  /** 非图片附件（拖放/粘贴/选择器）。WebView2 拿不到 File 的磁盘路径，
+   *  所以字节直传（镜像 images 通道）；服务端落盘 <hermix_home>/attachments/
+   *  后把真实路径交给 agent（read_file / read_pdf 读取）。 */
+  attachedFiles?: { name: string; mimeType?: string; bytes: number[] }[];
+  /** 客户端已持有真实磁盘路径的附件（工作台文件树"加入对话"），
+   *  直传路径、无需落盘。 */
   attachedFilePaths?: string[];
   /** Extensibility index — backend ignores unknown keys. */
   [key: string]: unknown;

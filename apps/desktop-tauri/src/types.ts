@@ -340,10 +340,22 @@ export interface QueuedImage {
   name: string;
 }
 
+/** A non-image document held pending attach (drag-drop / paste / picker).
+ *  The `File` handle lives in state; bytes are read only at send time
+ *  (mirrors how images convert to `bytes: number[]` in App.tsx). */
+export interface QueuedFile {
+  file: File;
+  name: string;
+  mimeType: string;
+  sizeBytes: number;
+}
+
 /** An item held in `messageQueue` between turns. */
 export interface QueuedMessage {
   text: string;
   images?: QueuedImage[];
+  attachedFiles?: QueuedFile[];
+  /** 真实磁盘路径附件（工作台文件树"加入对话"），与 attachedFiles 并存。 */
   attachedFilePaths?: string[];
 }
 

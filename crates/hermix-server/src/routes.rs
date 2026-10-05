@@ -1477,6 +1477,13 @@ pub(crate) async fn send_message(
     hermix_telemetry::record_http_request();
     let trace_id = hermix_transport::new_trace_id();
 
+    // Non-image documents: bytes → disk, so the agent gets real paths.
+    let mut attached_paths =
+        crate::attachments::persist_attached_files(req.attached_files.as_deref().unwrap_or(&[]));
+    if let Some(direct) = &req.attached_file_paths {
+        attached_paths.extend(direct.iter().cloned());
+    }
+
     // Build AgentOverrides from request
     let overrides = hermix_core::traits::AgentOverrides {
         model: req.model.clone(),
@@ -1493,6 +1500,7 @@ pub(crate) async fn send_message(
         workbench_id: req.workbench_id.clone(),
         domain_override: req.domain_override.clone(),
         expert_toolset: req.expert_toolset.clone(),
+        attached_file_paths: (!attached_paths.is_empty()).then_some(attached_paths),
         memory_dir: None,
         approval_requester: None,
         on_event: None,

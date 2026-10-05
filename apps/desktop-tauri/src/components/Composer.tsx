@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
-import { Send, Square, FolderOpen, ChevronDown, ChevronRight, Sparkles, ShieldCheck, Image, X, Check, AlertTriangle, Lock, Clock, Code2 } from "lucide-react";
+import { Send, Square, FolderOpen, ChevronDown, ChevronRight, Sparkles, ShieldCheck, Image, X, Check, AlertTriangle, Lock, Clock, Code2, FileText } from "lucide-react";
 import type { DomainModeChoice } from "../hooks/useExpert";
 import { usePopover } from "../hooks/usePopover";
 import { PopoverShell, PopoverBody } from "./PopoverShell";
@@ -15,7 +15,7 @@ import { formatBytes } from "../utils/imageCompressor";
 import { PERMISSION_LEVELS, type PermissionLevel } from "../hooks/useExpert";
 import type { Workspace } from "../hooks/useWorkspaces";
 import type { ExpertDef } from "../data/builtinExperts";
-import type { QueuedMessage, Session } from "../types";
+import type { QueuedMessage, QueuedFile, Session } from "../types";
 import type { CustomAppSummary } from "../lib/customAppApi";
 import type { PendingImage } from "./chatUtils";
 
@@ -52,6 +52,8 @@ export interface ComposerProps {
   onRestore?: () => void;
   onFilesAttach?: (files: File[]) => void;
   pendingImages?: PendingImage[];
+  pendingDocs?: QueuedFile[];
+  onRemoveDoc?: (index: number) => void;
   isProcessingFiles?: boolean;
   onRemoveImage?: (index: number) => void;
   keepOriginalImage?: boolean;
@@ -118,7 +120,8 @@ export function Composer(p: ComposerProps) {
     return turns || undefined;
   }, [p.session?.messages]);
 
-  const hasAttachments = (p.pendingImages?.length ?? 0) > 0;
+  const hasAttachments =
+    (p.pendingImages?.length ?? 0) > 0 || (p.pendingDocs?.length ?? 0) > 0;
 
   return (
     <div
@@ -207,6 +210,41 @@ export function Composer(p: ComposerProps) {
               />
               <span>保持原画质</span>
             </label>
+          </div>
+        </div>
+      )}
+
+      {p.pendingDocs && p.pendingDocs.length > 0 && (
+        <div className="px-3 pt-3 pb-1">
+          <div className="flex items-center gap-2 overflow-x-auto">
+            {p.pendingDocs.map((doc, idx) => (
+              <div
+                key={`${doc.name}-${idx}`}
+                className="relative flex items-center gap-2 max-w-[220px] h-14 px-2 rounded-lg overflow-hidden shrink-0"
+                style={{ background: "var(--color-bg-tertiary)", border: "1px solid var(--color-border-subtle)" }}
+                title={doc.name}
+              >
+                <FileText size={18} className="shrink-0 text-text-muted" />
+                <div className="flex-1 min-w-0">
+                  <div className="text-meta text-text-primary truncate leading-tight">{doc.name}</div>
+                  <div className="text-tiny text-text-faint">{formatBytes(doc.sizeBytes)}</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => p.onRemoveDoc?.(idx)}
+                  className="absolute top-0.5 right-0.5 p-0.5 rounded-md bg-bg-elevated/90 text-text-muted hover:text-error transition-colors"
+                  title="移除附件"
+                >
+                  <X size={10} />
+                </button>
+              </div>
+            ))}
+          </div>
+          <div className="flex items-center gap-2 mt-1.5">
+            <span className="h-tiny text-text-muted flex items-center gap-1">
+              <FileText size={10} />
+              已附加 {p.pendingDocs.length} 个文档
+            </span>
           </div>
         </div>
       )}

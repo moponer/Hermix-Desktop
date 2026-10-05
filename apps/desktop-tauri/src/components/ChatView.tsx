@@ -10,6 +10,7 @@ import type {
   ChatMessage,
   QueuedMessage,
   QueuedImage,
+  QueuedFile,
   SubAgentState,
   Session,
 } from "../types";
@@ -23,6 +24,7 @@ import type { AcuiDecisionBus } from "../acui/AcuiRegistry";
 import { AcuiPanel } from "../acui/AcuiPanel";
 import { StreamErrorCard, type ErrorKind } from "./StreamErrorBanner";
 import { useModelSelector } from "./ModelSelector";
+import { toastError } from "../hooks/useToast";
 import { useChannelsStatus } from "../hooks/useChannelsStatus";
 import { Composer } from "./Composer";
 import { ApprovalDrawer, type PendingApprovals } from "./ApprovalDrawer";
@@ -148,11 +150,16 @@ function ModelStatusBar({
   );
 }
 
+// 单个非图片附件的硬上限。字节以 JSON number[] 走本地 WS（镜像 images
+// 通道），30MB 是内存尖峰与本地传输时延的折中。
+const MAX_DOC_MB = 30;
+const MAX_DOC_BYTES = MAX_DOC_MB * 1024 * 1024;
+
 interface ChatViewProps {
   session: Session | null;
   /** 历史翻页：hasMore 时列表顶部显示「加载更早的消息」，onLoadMore 前插一页。 */
   historyPaging?: { hasMore: boolean; loading: boolean; onLoadMore: () => void } | null;
-  onSendMessage: (content: string, projectId?: string, overrides?: ChatOverrides, attachments?: { images?: QueuedImage[]; attachedFilePaths?: string[] }) => Promise<void>;
+  onSendMessage: (content: string, projectId?: string, overrides?: ChatOverrides, attachments?: { images?: QueuedImage[]; attachedFilePaths?: string[]; attachedFiles?: QueuedFile[] }) => Promise<void>;
   onNewChat?: () => void;
   pendingPrefill?: string | null;
   onConsumePrefill?: () => void;
@@ -445,7 +452,10 @@ export const ChatView = memo(function ChatView({
   }, [session?.id, session?.workspace, session?.expert_id, session?.model, defaultModel, setWorkspaceRaw, setExpert, setSelectedModel]);
 
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
+  // 真实磁盘路径附件（工作台文件树右键"加入对话"）——与 pendingDocs
+  // （File 句柄，发送时才读字节）分属两条通道。
   const [filePaths, setFilePaths] = useState<string[]>([]);
+  const [pendingDocs, setPendingDocs] = useState<QueuedFile[]>([]);
   const [isProcessingFiles, setIsProcessingFiles] = useState(false);
 
   useEffect(() => {
@@ -494,15 +504,23 @@ export const ChatView = memo(function ChatView({
         }
 
         if (nonImages.length > 0) {
-          const paths: string[] = [];
-          for (const f of nonImages) {
-            const filePath = (f as File & { path?: string }).path;
-            if (filePath && typeof filePath === "string") {
-              paths.push(filePath);
-            }
+          // WebView2（以及一切浏览器）的 File 对象没有磁盘路径——文档必须
+          // 以字节走 wire（镜像 images 通道），服务端落盘后 agent 才能
+          // read_file / read_pdf。File 句柄留到发送时才读，状态里零拷贝。
+          const oversize = nonImages.filter((f) => f.size > MAX_DOC_BYTES);
+          if (oversize.length > 0) {
+            toastError(`文件过大（单个附件上限 ${MAX_DOC_MB}MB）：${oversize.map((f) => f.name).join("、")}`);
           }
-          if (paths.length > 0) {
-            setFilePaths((prev) => [...prev, ...paths]);
+          const docs: QueuedFile[] = nonImages
+            .filter((f) => f.size <= MAX_DOC_BYTES)
+            .map((f) => ({
+              file: f,
+              name: f.name,
+              mimeType: f.type || "application/octet-stream",
+              sizeBytes: f.size,
+            }));
+          if (docs.length > 0) {
+            setPendingDocs((prev) => [...prev, ...docs]);
           }
         }
       } finally {
@@ -511,6 +529,10 @@ export const ChatView = memo(function ChatView({
     },
     [keepOriginalImage],
   );
+
+  const removePendingDoc = useCallback((index: number) => {
+    setPendingDocs((prev) => prev.filter((_, i) => i !== index));
+  }, []);
 
   const removePendingImage = useCallback((index: number) => {
     setPendingImages((prev) => {
@@ -718,7 +740,7 @@ export const ChatView = memo(function ChatView({
     const trimmed = input.trim();
     // @app → 目标自定义应用头。
     let finalText = buildMentionPrefix(trimmed, customApps, MENTION_TRIGGER_APP, "自定义应用", "app_id");
-    if (!trimmed && pendingImages.length === 0 && filePaths.length === 0) return;
+    if (!trimmed && pendingImages.length === 0 && filePaths.length === 0 && pendingDocs.length === 0) return;
     if (isProcessingFiles) return;
     const attachedImages: QueuedImage[] = pendingImages.map((img) => ({
       file: img.file,
@@ -727,11 +749,14 @@ export const ChatView = memo(function ChatView({
       name: img.name,
     }));
     const attachedPaths: string[] = filePaths.length > 0 ? [...filePaths] : [];
-    const attachments: { images?: QueuedImage[]; attachedFilePaths?: string[] } | undefined =
-      attachedImages.length > 0 || attachedPaths.length > 0
+    const attachments:
+      | { images?: QueuedImage[]; attachedFilePaths?: string[]; attachedFiles?: QueuedFile[] }
+      | undefined =
+      attachedImages.length > 0 || attachedPaths.length > 0 || pendingDocs.length > 0
         ? {
             images: attachedImages.length > 0 ? attachedImages : undefined,
             attachedFilePaths: attachedPaths.length > 0 ? attachedPaths : undefined,
+            attachedFiles: pendingDocs.length > 0 ? [...pendingDocs] : undefined,
           }
         : undefined;
     setForceScrollSeq((s) => s + 1);
@@ -740,11 +765,13 @@ export const ChatView = memo(function ChatView({
     setInput("");
     clearPendingImages();
     setFilePaths([]);
+    setPendingDocs([]);
     if (isStreaming || sending) {
       onAddToQueue?.({
         text: finalText,
         images: attachedImages.length > 0 ? attachedImages : undefined,
         attachedFilePaths: attachedPaths.length > 0 ? attachedPaths : undefined,
+        attachedFiles: pendingDocs.length > 0 ? [...pendingDocs] : undefined,
       });
       return;
     }
@@ -945,6 +972,8 @@ export const ChatView = memo(function ChatView({
               onStop={stream.cancel}
               activeComposerSessionId={session?.id}
               pendingImages={pendingImages}
+              pendingDocs={pendingDocs}
+              onRemoveDoc={removePendingDoc}
               isProcessingFiles={isProcessingFiles}
               onRemoveImage={removePendingImage}
               onFilesAttach={handleFilesAttach}
@@ -1136,6 +1165,8 @@ export const ChatView = memo(function ChatView({
             onStop={stream.cancel}
             activeComposerSessionId={session?.id}
             pendingImages={pendingImages}
+            pendingDocs={pendingDocs}
+            onRemoveDoc={removePendingDoc}
             isProcessingFiles={isProcessingFiles}
             onRemoveImage={removePendingImage}
             onFilesAttach={handleFilesAttach}

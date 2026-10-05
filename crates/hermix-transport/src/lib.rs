@@ -374,6 +374,21 @@ pub struct SendMessageRequest {
     /// Toolset group brought by the hired expert (see `AgentOverrides`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expert_toolset: Option<String>,
+    /// Non-image documents attached to this turn (drag-drop / paste /
+    /// file picker). Raw bytes ride the wire like `images` — WebView2
+    /// (and browsers generally) never expose a filesystem path on the
+    /// JS `File` object, so a path-based protocol can't work. The server
+    /// persists each file under `<hermix_home>/attachments/` and passes
+    /// the resolved paths to the agent via
+    /// `AgentOverrides.attached_file_paths`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attached_files: Option<Vec<FileAttachment>>,
+    /// Client-supplied absolute paths, for attachments that never went
+    /// through a JS `File` object (the in-app file browser's "add to
+    /// chat" action). Needs no persistence — merged with the persisted
+    /// `attached_files` paths into `AgentOverrides.attached_file_paths`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attached_file_paths: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -395,6 +410,19 @@ pub struct ImageAttachment {
     pub mime_type: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+}
+
+/// One non-image document attached to a chat turn. Wire shape mirrors
+/// `ImageAttachment` (camelCase items, raw `bytes`). `name` is display
+/// and extension-detection only — the server generates its own on-disk
+/// name, so a hostile client name can never traverse paths.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FileAttachment {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
+    pub bytes: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1061,6 +1089,33 @@ pub fn new_trace_id() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn attached_files_wire_shape_round_trips() {
+        // Frontend sends camelCase item fields (mirrors ImageAttachment);
+        // the top-level key stays snake_case like every SendMessageRequest
+        // extension field.
+        let wire = serde_json::json!({
+            "text": "总结这份文档",
+            "attached_files": [
+                { "name": "report.pdf", "mimeType": "application/pdf", "bytes": [1, 2, 3] }
+            ],
+            "attached_file_paths": [r"C:\data\notes.md"]
+        });
+        let req: SendMessageRequest = serde_json::from_value(wire).expect("deserialize");
+        let files = req.attached_files.clone().expect("attached_files");
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].name, "report.pdf");
+        assert_eq!(files[0].mime_type.as_deref(), Some("application/pdf"));
+        assert_eq!(files[0].bytes, vec![1, 2, 3]);
+        assert_eq!(
+            req.attached_file_paths.as_deref(),
+            Some(&[r"C:\data\notes.md".to_string()][..])
+        );
+        let back = serde_json::to_value(&req).expect("reserialize");
+        assert_eq!(back["attached_files"][0]["mimeType"], "application/pdf");
+        assert_eq!(back["attached_file_paths"][0], r"C:\data\notes.md");
+    }
 
     #[test]
     fn stream_event_serialization_uses_tagged_union() {

@@ -140,6 +140,7 @@ Some(chrono::Utc::now().timestamp_millis() + (secs as i64) * 1000)
 /// message on the same WebSocket, which looks up and completes the channel.
 
 pub mod approval;
+pub mod attachments;
 pub mod channels;
 pub mod coalescer;
 pub mod pairing;
