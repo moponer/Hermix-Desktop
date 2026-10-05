@@ -1305,6 +1305,12 @@ impl LocalAgentService {
                             return ToolDispatchDecision::Allow;
                         }
                     }
+// Schema-required gate: never raise an approval for a call that would
+                    // die in the handler's param validation (see
+                    // `tool_dispatch::schema_required_violation`).
+                    if let Some(err) = crate::tool_dispatch::schema_required_violation(tool_registry, tc) {
+                        return ToolDispatchDecision::Deny { reason: err };
+                    }
                     let (Some(requester), Some(on_event_fn)) = (approval_requester, on_event)
                     else {
                         return resolve_approval_fallback(approval_fallback, &tc.function.name);
@@ -1396,6 +1402,12 @@ impl LocalAgentService {
                 return ToolDispatchDecision::Allow;
             }
         }
+// Schema-required gate: never raise an approval for a call that would
+        // die in the handler's param validation (see
+        // `tool_dispatch::schema_required_violation`).
+        if let Some(err) = crate::tool_dispatch::schema_required_violation(tool_registry, tc) {
+                        return ToolDispatchDecision::Deny { reason: err };
+                    }
         let (Some(requester), Some(on_event_fn)) = (approval_requester, on_event) else {
             return resolve_approval_fallback(approval_fallback, &tc.function.name);
         };
@@ -2912,6 +2924,11 @@ impl AgentService for LocalAgentService {
                         .expect("profile_arc poisoned");
                     if let Some(resource) = Self::resource_guard(tc, &guard, &raw_params) {
                         drop(guard);
+                        // Schema-required gate before the approval raise —
+                        // same rationale as `decide_pre_tool_dispatch`.
+                        if let Some(err) = crate::tool_dispatch::schema_required_violation(registry.as_ref(), tc) {
+                            return ToolDispatchDecision::Deny { reason: err };
+                        }
                         if let (Some(req), Some(on_ev)) =
                             (approval_requester.as_ref(), on_event.as_ref())
                         {
@@ -4571,6 +4588,81 @@ mod override_tests {
             }
             other => panic!("expected Deny under ApprovalFallback::Deny, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn dangerous_call_missing_required_param_denied_without_approval() {
+        // The storage_clean `confirm` incident: a call doomed by its own
+        // schema must be rejected BEFORE the approval raise — otherwise the
+        // user approves a call that then fails validation and the agent
+        // burns a 600s window on nothing.
+        let mut registry = ToolRegistry::new();
+        registry.register_with_risk(
+            "dangerous_strict",
+            "test",
+            tool_schema(
+                "dangerous_strict",
+                "test",
+                JsonSchema {
+                    schema_type: Some("object".to_string()),
+                    properties: None,
+                    required: Some(vec!["confirm".to_string()]),
+                    additional_properties: None,
+                },
+            ),
+            Arc::new(StubHandler),
+            Arc::new(|| true),
+            vec![],
+            true,
+            "dangerous strict stub",
+            "[!]",
+            None,
+            RiskLevel::Dangerous,
+            false,
+        );
+        let tc = tool_call("tc1", "dangerous_strict", r#"{"paths":[1]}"#);
+        let (req_fn, _reqs) = capturing_approval_requester();
+        let (event_fn, captured) = capturing_on_event();
+
+        let decision = LocalAgentService::decide_pre_tool_dispatch(
+            &tc,
+            PermissionLevel::Default,
+            &registry,
+            None,
+            Some(&req_fn),
+            Some(&event_fn),
+            None,
+            "sess-1",
+            ApprovalFallback::Allow,
+        );
+        match decision {
+            ToolDispatchDecision::Deny { reason } => {
+                assert!(reason.contains("confirm"), "reason names the field: {reason}");
+            }
+            other => panic!("expected Deny before approval, got {other:?}"),
+        }
+        assert!(
+            captured.lock().unwrap().is_none(),
+            "no request_approval event may be raised for a schema-invalid call"
+        );
+
+        // Complete args pass the gate and reach the normal approval raise.
+        let ok_tc = tool_call("tc2", "dangerous_strict", r#"{"confirm": true}"#);
+        let (req_fn, reqs) = capturing_approval_requester();
+        let (event_fn, _captured) = capturing_on_event();
+        let decision = LocalAgentService::decide_pre_tool_dispatch(
+            &ok_tc,
+            PermissionLevel::Default,
+            &registry,
+            None,
+            Some(&req_fn),
+            Some(&event_fn),
+            None,
+            "sess-1",
+            ApprovalFallback::Allow,
+        );
+        assert!(matches!(decision, ToolDispatchDecision::AwaitApproval(_)));
+        assert!(reqs.lock().unwrap().len() == 1, "approval raised exactly once");
     }
 
     #[test]

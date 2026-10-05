@@ -42,6 +42,43 @@ use crate::agent_helpers::{ToolDispatchDecision, ToolRegistry};
 
 /// Remove duplicate tool calls that share the same `function.name`
 /// and `function.arguments`. Order-stable: first occurrence wins.
+/// Schema-`required` pre-check, run immediately before an approval raise.
+/// Never ask the user to approve a call that is guaranteed to die in the
+/// handler's own param validation (the storage_clean `confirm` incident:
+/// approval granted, then "必须要有 confirm: true" — a wasted 600s window
+/// on a call that could be rejected for free). Field PRESENCE only — type
+/// coercion lives in the registry (`registry::validation::coerce_args`)
+/// and value judgment stays with the handler.
+pub(crate) fn schema_required_violation(
+    registry: &hermix_tools::ToolRegistry,
+    tc: &ToolCall,
+) -> Option<String> {
+    let schema = registry.get_tool_schema(&tc.function.name)?;
+    let required = schema.parameters.required.as_ref()?;
+    if required.is_empty() {
+        return None;
+    }
+    let params: serde_json::Value =
+        serde_json::from_str(&tc.function.arguments).unwrap_or(serde_json::Value::Null);
+    let obj = params.as_object()?;
+    let missing: Vec<&str> = required
+        .iter()
+        .map(|s| s.as_str())
+        .filter(|f| !obj.contains_key(*f))
+        .collect();
+    if missing.is_empty() {
+        return None;
+    }
+    let listed = missing
+        .iter()
+        .map(|f| format!("\"{f}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(format!(
+        "Invalid tool parameters: 缺少必需参数 {listed}。         请补全后重新调用 {}（补全前不会触发审批）。", tc.function.name
+    ))
+}
+
 pub(crate) fn deduplicate_tool_calls(calls: &[ToolCall]) -> Vec<ToolCall> {
     let mut seen = HashSet::new();
     let mut deduped = Vec::new();
@@ -510,9 +547,100 @@ pub(crate) fn cap_delegates(max_concurrent_delegates: u32, tool_calls: &mut Vec<
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use tokio::sync::{oneshot, Notify};
 
-    use hermix_core::{ApprovalOutcome, FunctionCall, ToolCall};
+    use hermix_core::{ApprovalOutcome, FunctionCall, JsonSchema, ToolCall};
+
+    struct OkHandler;
+
+    #[async_trait::async_trait]
+    impl hermix_tools::ToolHandler for OkHandler {
+        fn schema(&self) -> hermix_core::ToolSchema {
+            hermix_core::tool_schema("ok", "test", JsonSchema::new("object"))
+        }
+
+        async fn execute(
+            &self,
+            _params: serde_json::Value,
+        ) -> Result<String, hermix_core::ToolError> {
+            Ok("ok".to_string())
+        }
+    }
+
+    fn strict_required_registry() -> hermix_tools::ToolRegistry {
+        let r = hermix_tools::ToolRegistry::new();
+        r.register_with_risk(
+            "strict_tool",
+            "test",
+            hermix_core::tool_schema(
+                "strict_tool",
+                "test",
+                JsonSchema {
+                    schema_type: Some("object".to_string()),
+                    properties: None,
+                    required: Some(vec!["confirm".to_string()]),
+                    additional_properties: None,
+                },
+            ),
+            Arc::new(OkHandler),
+            Arc::new(|| true),
+            vec![],
+            true,
+            "strict stub",
+            "🔒",
+            None,
+            hermix_core::RiskLevel::Dangerous,
+            false,
+        );
+        r
+    }
+
+    fn lax_registry() -> hermix_tools::ToolRegistry {
+        let r = hermix_tools::ToolRegistry::new();
+        r.register_with_risk(
+            "lax_tool",
+            "test",
+            hermix_core::tool_schema("lax_tool", "test", JsonSchema::new("object")),
+            Arc::new(OkHandler),
+            Arc::new(|| true),
+            vec![],
+            true,
+            "lax stub",
+            "🟢",
+            None,
+            hermix_core::RiskLevel::Safe,
+            false,
+        );
+        r
+    }
+
+    #[test]
+    fn schema_required_violation_flags_missing_required_field() {
+        let reg = strict_required_registry();
+        let err = schema_required_violation(&reg, &tc("strict_tool", r#"{"paths":[1]}"#))
+            .expect("missing confirm must be flagged before any approval is raised");
+        assert!(err.contains("confirm"), "error must name the field: {err}");
+    }
+
+    #[test]
+    fn schema_required_violation_passes_complete_args() {
+        let reg = strict_required_registry();
+        assert!(schema_required_violation(&reg, &tc("strict_tool", r#"{"confirm": true}"#)).is_none());
+    }
+
+    #[test]
+    fn schema_required_violation_ignores_tools_without_required_list() {
+        let reg = lax_registry();
+        assert!(schema_required_violation(&reg, &tc("lax_tool", r#"{}"#)).is_none());
+    }
+
+    #[test]
+    fn schema_required_violation_ignores_unknown_tools() {
+        let reg = strict_required_registry();
+        assert!(schema_required_violation(&reg, &tc("not_registered", r#"{}"#)).is_none());
+    }
 
     use crate::agent_helpers::ToolDispatchDecision;
 
