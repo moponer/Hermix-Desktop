@@ -206,12 +206,34 @@ pub fn bridge_tool_registry(
                             // `Fn` closures may be invoked many times, so we
                             // clone the `Arc` on each call rather than moving
                             // the captured one. The handler is async; the
-                            // agent loop calls this synchronously, so we
-                            // block_on the current tokio handle.
+                            // agent loop calls this synchronously from the
+                            // orchestrated (state-mutating) segment of
+                            // `execute_tool_calls`, which runs on a
+                            // multi-thread runtime *worker*. A bare
+                            // `Handle::block_on` there hits
+                            // `context::enter_runtime` while the thread is
+                            // still marked entered and panics with
+                            // "Cannot start a runtime from within a runtime"
+                            // — killing the whole run, not just this tool.
+                            // `block_in_place` converts the worker into a
+                            // blocking thread first (same bridge
+                            // `ToolRegistry::run_async_in_blocking` uses);
+                            // on flavors without a blocking pool we fall
+                            // back to the bare call.
                             let mh = mh.clone();
-                            TokioHandle::current().block_on(async move {
-                                mh.execute(params).await
-                            })
+                            let handle = TokioHandle::try_current().map_err(|_| {
+                                hermix_core::ToolError::ExecutionFailed(
+                                    "memory handler invoked outside a tokio runtime".into(),
+                                )
+                            })?;
+                            match handle.runtime_flavor() {
+                                tokio::runtime::RuntimeFlavor::MultiThread => {
+                                    tokio::task::block_in_place(|| {
+                                        handle.block_on(async move { mh.execute(params).await })
+                                    })
+                                }
+                                _ => handle.block_on(async move { mh.execute(params).await }),
+                            }
                         },
                     ),
                     // 拿不到就落回默认的 Caution（= 串行），失败方向安全。
@@ -671,5 +693,73 @@ mod build_provider_tests {
         // server); the existence of the build success is the
         // assertion.
         let _ = p;
+    }
+}
+
+#[cfg(test)]
+mod memory_bridge_tests {
+    use super::*;
+    use hermix_core::RiskLevel;
+    use hermix_tools::backends::memory::FileMemoryBackend;
+    use serde_json::json;
+    use tempfile::TempDir;
+
+    /// 回归（2026-10-05 "internal error (panic): Cannot start a runtime
+    /// from within a runtime"）：`memory` 的桥接闭包原来用裸
+    /// `Handle::block_on`。agent loop 的 orchestrated 串行段
+    /// （`is_state_mutating_tool` = risk != Safe，memory 是 Caution）
+    /// 在 multi-thread runtime 的 worker 上同步调它 —— 线程仍标记
+    /// entered，`context::enter_runtime` 直接 panic，整个 run 被拖死
+    /// （表现为当时同 run 的 `cua_screenshot` 等工具全部报 panic 错）。
+    ///
+    /// 本测试把桥接闭包放进 multi-thread runtime 的 worker 上下文里
+    /// 同步调用 —— 修复前的裸 `block_on` 在这里必 panic。
+    #[test]
+    fn memory_bridge_closure_works_on_runtime_worker() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let tmp = TempDir::new().unwrap();
+
+        // 最小源注册表：只注册 memory（Caution，与生产一致），后端落
+        // 临时目录，不碰真实 ~/.hermix。
+        let tools = ToolRegistry::new();
+        let h = Arc::new(MemoryHandler::new(Arc::new(
+            FileMemoryBackend::with_dir(tmp.path().to_path_buf()),
+        )));
+        tools.register_with_risk(
+            "memory",
+            "memory",
+            h.schema(),
+            h.clone(),
+            Arc::new(|| true),
+            vec![],
+            false,
+            "memory tool",
+            "🧠",
+            None,
+            RiskLevel::Caution,
+            false,
+        );
+
+        let ctx = Arc::new(ToolCallContext::for_session("test-session"));
+        let agent_registry = bridge_tool_registry(&tools, None, ctx, Some(h));
+
+        let handler = Arc::clone(&agent_registry.get("memory").unwrap().handler);
+
+        // worker 上下文：`rt.block_on` 的 future 在 multi-thread runtime
+        // 的 worker 上 poll，闭包在其 poll 栈内同步执行 —— 等价于
+        // `execute_tool_calls` orchestrated 段的真实调用线程。
+        let out = rt.block_on(async move {
+            (handler)(json!({
+                "action": "add",
+                "target": "memory",
+                "content": "regression: worker-thread bridge must not panic"
+            }))
+        });
+
+        assert!(
+            out.is_ok(),
+            "memory bridge closure panicked or errored on the worker thread: {:?}",
+            out.err()
+        );
     }
 }

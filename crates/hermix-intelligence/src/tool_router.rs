@@ -387,18 +387,29 @@ impl VectorRouter {
             // panics if called outside a Tokio runtime; that's a
             // programming error — the router is meant to be
             // constructed from inside `agent_loop.run()` which is
-            // async.
+            // async. The bare call would *also* panic when `route()`
+            // runs on a multi-thread runtime worker ("Cannot start a
+            // runtime from within a runtime"), so the worker case is
+            // bridged through `block_in_place` first — the same
+            // pattern `ToolRegistry::run_async_in_blocking` uses.
             let handle = tokio::runtime::Handle::try_current()
                 .expect("VectorRouter::from_provider must be called from within a Tokio runtime");
-            // Errors collapse to a zero-vector. We log + return zero so
-            // a single failed embed doesn't take the whole router
-            // down — the tool just won't match (cosine 0).
-            match handle.block_on(p.embed(text)) {
-                Ok(v) => v,
-                Err(e) => {
-                    tracing::warn!("vector router: embed failed: {e}");
-                    vec![0.0; dim]
+            let embed = |handle: &tokio::runtime::Handle| {
+                // Errors collapse to a zero-vector. We log + return zero so
+                // a single failed embed doesn't take the whole router
+                // down — the tool just won't match (cosine 0).
+                match handle.block_on(p.embed(text)) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        tracing::warn!("vector router: embed failed: {e}");
+                        vec![0.0; dim]
+                    }
                 }
+            };
+            if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread {
+                tokio::task::block_in_place(|| embed(&handle))
+            } else {
+                embed(&handle)
             }
         });
         Self {
