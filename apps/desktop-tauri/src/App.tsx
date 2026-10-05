@@ -1321,14 +1321,74 @@ setPage("chat");
         setSessions((prev) => prev.map((s) => stampDecision(s, decision, remember)));
         return decision;
       }
-      // Stale click — the resolver is already gone. The
-      // backend has already auto-denied via the 5-minute
-      // timeout. Do NOT flip the card to `approved` /
-      // `denied`; mark it `expired` so the user can see
-      // their click did not register, and can re-prompt.
-      // Skip the downgrade if the card already has a real
-      // decision from a previous live click.
-      setSessions((prev) => prev.map((s) => stampDecision(s, "expired")));
+      // Stale click — the resolver is already gone. Two very different
+      // situations hide here: (a) the backend really did auto-deny
+      // (timeout / stream-end mass-deny) — mark `expired` so the user
+      // sees their click did not register; (b) the page reloaded while
+      // the approval is STILL live in the server registry (persisted
+      // row renders again, resolvers died with the old page) — the
+      // click is perfectly actionable, and the old behavior (stamp
+      // `expired`, skip REST because pendingApprovalSessionsRef died
+      // with the page) made the user watch a live approval "expire"
+      // while the agent sat blocked on it. So: locate the card's meta
+      // in local state; if its server deadline hasn't passed, resolve
+      // via REST against the OWNING session (not activeSessionId —
+      // the user may have switched tabs) and stamp the real decision.
+      type CardMeta = { sessionId: string; expiresAt: number | null; decided: boolean };
+      let card: CardMeta | null = null;
+      for (const sess of sessionsRef.current) {
+        for (const m of sess.messages) {
+          if (m.role === "approval" && m.approval?.requestId === requestId) {
+            card = { sessionId: sess.id, expiresAt: m.approval.expiresAt ?? null, decided: !!m.approval.decision };
+            break;
+          }
+          for (const st of m.unified_steps ?? []) {
+            if ((st.kind === "approval_request" && st.meta.requestId === requestId)
+              || (st.kind === "approval_request_batch" && (st.meta as unknown as { batchId?: string }).batchId === requestId)) {
+              const batch = st.kind === "approval_request_batch";
+              card = {
+                sessionId: sess.id,
+                // batch cards carry no server deadline — treat as live
+                expiresAt: batch ? null : st.meta.expiresAt ?? null,
+                decided: !!st.meta.decision,
+              };
+              break;
+            }
+          }
+          if (card) break;
+        }
+        if (card) break;
+      }
+      const live = card
+        && !card.decided
+        && (!card.expiresAt || Date.now() < card.expiresAt);
+      if (!live || !card) {
+        setSessions((prev) => prev.map((s) => stampDecision(s, "expired")));
+        return null;
+      }
+      const owningSid = card.sessionId;
+      const restPayload: Record<string, string> = { request_id: requestId, decision };
+      if (remember) restPayload.decision = "always";
+      if (note?.trim()) restPayload.note = note.trim();
+      void api
+        .fetchJSON<{ matched: boolean }>(
+          `/v1/sessions/${encodeURIComponent(owningSid)}/approval`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(restPayload),
+          },
+        )
+        .then((data) => {
+          // matched=true  → this click actually delivered; the waiting
+          //                 agent resumes. Stamp the real decision.
+          // matched=false → the entry was resolved between render and
+          //                 click (timeout lost the race) — expired.
+          setSessions((prev) => prev.map((s) => stampDecision(s, data.matched ? decision : "expired", remember)));
+        })
+        .catch(() => {
+          setSessions((prev) => prev.map((s) => stampDecision(s, "expired")));
+        });
       return null;
     },
     [],

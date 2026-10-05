@@ -429,6 +429,13 @@ pub(crate) async fn handle_ws_stream_send(
                 text_len = request.text.len(),
                 "reconnect-while-running: declining retry — agent task is still in flight (autonomous continuation)"
             );
+            // A live re-send proves a client is attached to this session
+            // again — the grace timer scheduled when the old socket died
+            // is obsolete. Left armed it fires `notify_one()` into the
+            // still-running turn and auto-denies an approval wait the
+            // task_in_flight hydrate is about to re-show (the zombie
+            // takeover branch below aborts it for the same reason).
+            ws_grace::abort_pending_grace(&state.pending_grace, &active_key);
             // Send a structured Status describing the situation. The
             // front-end surfaces this as a non-blocking banner (no
             // red error UI). Wording avoids LLM-generated copy —

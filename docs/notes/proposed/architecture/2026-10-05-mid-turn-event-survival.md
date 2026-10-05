@@ -1,6 +1,6 @@
 # Decision Note: 进行中回合的事件在连接断开后存活（重挂载）
 
-Status: proposed — 结构性缺口已实锤定位（2026-10-05 审批卡静默事故复盘），方案待评审。
+Status: proposed — ①②（事件通道重挂载）待专项实施；③④ 已以评审后修订形态落地（见下）。
 
 ## Decision
 
@@ -9,7 +9,9 @@ Status: proposed — 结构性缺口已实锤定位（2026-10-05 审批卡静默
 1. **事件镜像移出 forward loop**：`ws.rs` 中 per-turn `mpsc` 的消费端目前独占于发起连接的 forward 循环——连接死即 `rx` drop，后续 `tx.send` 全部静默失败（coalescer 只留 debug 日志）。改为由独立 drain task 持有 `rx` 并写入 `session_broadcast`（seq 戳 `next_envelope_seq` 已存在），回合事件从此与连接生死解耦。
 2. **实现订阅侧**：`session_broadcast` 注册表现在是只写的——`spawn_broadcast_forwarder` 明确注释"该函数从未实现"（ws.rs:67）。新连接 `Connected` 后按 `since_seq` 订阅并泵送活尾巴（含 `RequestApprovalsBatch`）。
 3. **新连接时推未决审批**：连接建立（或 `task_in_flight` 应答）时服务端主动推 `approval_registry.list_pending(session_id)`——注册表进程级、任意连接可解（ws.rs:2841 已支持），卡片无需依赖前端重发才补投。
-4. **修 live-decline 分支的宽限竞态**：`task_in_flight` 分支（ws.rs:426-475）不取消旧连接死亡时排的 90s 宽限定时器（zombie 分支在 :501 有 `abort_pending_grace`）——用户 90s 内重连重发，审批仍被陈旧定时器自动拒绝。
+4. **修 live-decline 分支的宽限竞态**：`task_in_flight` 分支不取消旧连接死亡时排的 90s 宽限定时器（zombie 分支有 `abort_pending_grace`）——用户 90s 内重连重发，审批仍被陈旧定时器自动拒绝。**已落地**：live-decline 分支入口处 `abort_pending_grace`（旧 socket 的宽限因存活重连而过时）。
+
+**评审后已随 ④ 一并落地的第 ③ 步修订形态**：`resolveApproval` 的 stale-click 分支原无条件把卡标 `expired`——重载后点击注册表中仍存活的审批会被误标且 REST 兜底查不到会话。现改为：在本地会话状态中定位卡片元数据，deadline 未过 → 按卡片**归属会话**（非 activeSessionId）走 REST 决决并盖真实决定；deadline 已过或 REST 失败才标 expired。
 
 前端已有的自救（本次已落地）作为第 0 步兜底保留：审批 15s 未决 REST 直查注册表重投影（App.tsx `approvalRescueTimersRef`），失焦系统通知（f7a3a677）。
 
