@@ -244,11 +244,23 @@ pub(crate) fn ax_tree_to_a11y_yaml(
                 }
             }
         }
-        for s in state_bits {
+        // A node with no accessible name, no state, and not interactive carries
+        // zero information — it is `none` / `generic` / `paragraph` filler that
+        // the AX tree uses purely for structure. Emitting it costs an indented
+        // line and nothing else. Measured on four live pages (2026-10-07),
+        // those filler lines were 30-50% of all snapshot characters: 50% on
+        // github.com/login, 41% on a news homepage, 30% on a wiki article.
+        //
+        // The subtree is still walked — a nameless node frequently has named
+        // descendants, and dropping it would orphan them. Only the line goes.
+        let is_filler = name.is_empty() && !interactive && state_bits.is_empty();
+        for s in &state_bits {
             line.push_str(&format!(" {s}"));
         }
-        out.push_str(&line);
-        out.push('\n');
+        if !is_filler {
+            out.push_str(&line);
+            out.push('\n');
+        }
 
         if let Some(kids) = children.get(&node_id) {
             for k in kids {
@@ -287,6 +299,29 @@ pub(crate) fn compact_a11y_yaml(yaml: &str) -> String {
             }
         }
     }
+
+    // Compaction must never cost more than it saves. A page whose interactive
+    // elements are few keeps almost nothing under the ref-only rule: measured
+    // on example.com, 3533 characters of page text collapsed to 86 — every
+    // one of seven languages' body text gone, leaving a single link line. The
+    // model is then told about a page it cannot read, which is strictly worse
+    // than paying full price for the text.
+    //
+    // Below this threshold the compression has nothing to offer anyway, so
+    // pass the original through unchanged. 25% is deliberately generous: it
+    // only fires where the output has already lost three quarters of its
+    // content, which is exactly the case where "smaller" stops being the goal.
+    const MIN_KEPT_RATIO: f64 = 0.25;
+    let kept_chars: usize = lines
+        .iter()
+        .zip(keep.iter())
+        .filter_map(|(l, &k)| if k { Some(l.len()) } else { None })
+        .sum();
+    let total_chars: usize = lines.iter().map(|l| l.len()).sum();
+    if total_chars == 0 || kept_chars * 4 < total_chars {
+        return yaml.to_string();
+    }
+
     lines
         .iter()
         .zip(keep.iter())
@@ -575,15 +610,19 @@ mod tests {
     fn ax_tree_yaml_respects_depth_limit() {
         // Three-level nested tree, walked root-first.
         let tree = serde_json::json!([
-            {"nodeId": "1", "role": {"value": "generic"}, "name": {"value": ""}, "childIds": ["2"]},
-            {"nodeId": "2", "role": {"value": "generic"}, "name": {"value": ""}, "childIds": ["3"]},
+            {"nodeId": "1", "role": {"value": "generic"}, "name": {"value": "App"}, "childIds": ["2"]},
+            {"nodeId": "2", "role": {"value": "generic"}, "name": {"value": "Panel"}, "childIds": ["3"]},
             {"nodeId": "3", "role": {"value": "button"}, "name": {"value": "Submit"}, "childIds": []}
         ]);
         let (yaml, _) = ax_tree_to_a11y_yaml(&tree, Some(0), None);
-        // depth=0 means we only render the root. `generic` is a non-interactive
-        // role, so it has no [ref=] token; the root line is just `"- generic"`.
-        assert!(yaml.contains("- generic"));
-        assert!(!yaml.contains("Submit"));
+        // depth=0 means only the root renders. The root carries a name so it
+        // is not structural filler — that is what makes it observable at all.
+        assert!(yaml.contains("App"), "root must render:\n{yaml}");
+        assert!(!yaml.contains("Submit"), "depth limit ignored:\n{yaml}");
+        // One level deeper: the middle node joins, the leaf still does not.
+        let (yaml1, _) = ax_tree_to_a11y_yaml(&tree, Some(1), None);
+        assert!(yaml1.contains("Panel"), "depth=1 must include level 1:\n{yaml1}");
+        assert!(!yaml1.contains("Submit"), "depth=1 must exclude level 2:\n{yaml1}");
     }
 
     /// `compact_a11y_yaml` should drop non-interactive ancestors
@@ -740,5 +779,214 @@ mod tests {
         assert!(js.contains("__hermix_hl_pulse"));
         assert!(js.contains("scrollIntoView"));
         assert!(js.contains("outline='3px solid #ff0066'"));
+    }
+
+    /// Measure real snapshot token cost against a live CDP target.
+    ///
+    /// `2026-10-01-agent-browser.md` claims ego-lite's semantic snapshot runs at
+    /// 100-400 token/page, and quotes this module's own push as "~50% reduction".
+    /// Both numbers were estimated, never measured — the N0 probe lists "精确 token
+    /// 测量" as an outstanding item that never got closed, so the whole ego
+    /// premise has been resting on arithmetic.
+    ///
+    /// Token counting approximates: ~4 chars/token is the standard English-text
+    /// rule of thumb, and CJK runs closer to ~1.5. A snapshot is mostly ASCII
+    /// structure plus short CJK labels, so the 4-char figure is the generous end.
+    /// Deliberately not a real tokenizer — `tiktoken-rs` would be a new
+    /// dev-dependency for a one-off measurement, and the decision it informs
+    /// ("is the 100-400 target reachable at all") is a ~2x question, not a
+    /// ~10% one.
+    ///
+    /// Ignored by default: needs a browser on `--remote-debugging-port=9222`.
+    /// Run explicitly:
+    ///   cargo test -p hermix-tools --lib snapshot_token_cost -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore = "needs a live CDP target on 127.0.0.1:9222"]
+    async fn snapshot_token_cost_on_real_pages() {
+        let urls = [
+            ("example.com (minimal)", "https://example.com/"),
+            ("wikipedia (article)", "https://en.wikipedia.org/wiki/Browser_automation"),
+            ("github (dense form)", "https://github.com/login"),
+            ("news site (article)", "https://www.bbc.com/news"),
+        ];
+        use crate::tools::browser::BrowserBackend as _;
+        let backend = crate::backends::browser::cdp::CdpBrowserBackend::from_env();
+        println!(
+            "\n{:<26} {:>7} {:>7} {:>7} {:>7} {:>7}",
+            "page", "nodes", "raw ch", "compact", "raw~tok", "cmp~tok"
+        );
+        for (label, url) in urls {
+            backend
+                .navigate_with_wait(url, std::time::Duration::from_secs(15))
+                .await
+                .ok();
+            tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
+            let ax = backend
+                .cdp_command("Accessibility.getFullAXTree", serde_json::json!({}))
+                .await
+                .expect("getFullAXTree");
+            let nodes = ax.get("nodes").cloned().unwrap_or_else(|| serde_json::json!([]));
+            let n_nodes = nodes.as_array().map(|a| a.len()).unwrap_or(0);
+            let (yaml, _refs) = ax_tree_to_a11y_yaml(&nodes, None, None);
+            let compact = compact_a11y_yaml(&yaml);
+            let tok = |s: &str| s.chars().count() as f64 / 4.0;
+            println!(
+                "{:<26} {:>7} {:>7} {:>7} {:>7.0} {:>7.0}",
+                label,
+                n_nodes,
+                yaml.len(),
+                compact.len(),
+                tok(&yaml),
+                tok(&compact)
+            );
+            if std::env::var("HERMIX_DUMP_SNAPSHOT").is_ok() {
+                println!("---- raw yaml ----\n{yaml}");
+            }
+        }
+    }
+
+    /// A read-only page must survive compaction with its text intact.
+    ///
+    /// The ref-only rule keeps a line and its ancestor path, so a page with
+    /// almost nothing interactive keeps almost nothing. Measured on
+    /// example.com: 3533 characters of body text (seven languages) collapsed to
+    /// 86, leaving a single link line — the model was shown a page it could not
+    /// read. Smaller output, less page: strictly worse than not compacting.
+    #[test]
+    fn compact_preserves_text_when_page_is_almost_read_only() {
+        // Shaped like a real AX tree: one link, lots of prose under it.
+        let yaml = "\
+- RootWebArea \"Example Domain\"
+  - link \"Learn more\" [ref=e1]
+    - StaticText \"该域名仅用于文档示例，无需获得许可。这并非一项服务，请勿将其用于测试和监控目的。\"
+    - StaticText \"This domain is for use in documentation examples without needing permission.\"
+    - StaticText \"Este dominio está destinado al uso en ejemplos de documentación sin necesidad de permiso.\"
+    - StaticText \"Diese Domain ist zur Verwendung in Dokumentationsbeispielen bestimmt.\"
+    - StaticText \"Ce domaine est réservé à des exemples de documentation, sans autorisation préalable.\"
+    - StaticText \"Questo dominio è destinato all'uso in esempi di documentazione.\"
+    - StaticText \"Этот домен предназначен для использования в примерах документации.\"
+";
+        let out = compact_a11y_yaml(yaml);
+        assert!(
+            out.contains("该域名仅用于文档示例"),
+            "compaction dropped the page's own text:/n{out}"
+        );
+        assert!(
+            out.contains("documentación"),
+            "compaction dropped one of the sibling translations:/n{out}"
+        );
+        assert!(out.contains("[ref=e1]"), "the one ref must survive:/n{out}");
+    }
+
+    /// The floor must not disable compaction where compaction actually pays.
+    ///
+    /// A self-fulfilling test here would be one that only checks "text survives"
+    /// — shorting the floor to always-fallback passes it. This asserts the other
+    /// direction: a ref-dense page still gets compressed.
+    #[test]
+    fn compact_still_compresses_when_refs_dominate() {
+        let mut yaml = String::from("- RootWebArea \"Admin console\"\n");
+        for i in 0..40 {
+            yaml.push_str(&format!(
+                "  - textbox \"Field {i}\" [ref=e{i}]\n    - StaticText \"placeholder {i}\"\n"
+            ));
+        }
+        let out = compact_a11y_yaml(&yaml);
+        assert!(
+            out.len() * 2 < yaml.len(),
+            "ref-dense page must still compress, got {} from {}",
+            out.len(),
+            yaml.len()
+        );
+        assert!(out.contains("[ref=e39]"), "refs must all survive");
+    }
+
+    /// Nameless, stateless, non-interactive nodes are the AX tree's structural
+    /// filler — `none` / `generic` / `paragraph`. Measured at 30-50% of all
+    /// snapshot characters across four live pages.
+    ///
+    /// A node that HAS a name, or is interactive, or carries state must keep its
+    /// line; dropping those would hide content, not just structure.
+    #[test]
+    fn ax_tree_omits_text_free_filler_lines() {
+        let tree = serde_json::json!([
+            {
+                "nodeId": "1",
+                "role": {"value": "RootWebArea"},
+                "name": {"value": "Login"},
+                "backendDOMNodeId": 1,
+                "childIds": ["2", "3", "4"]
+            },
+            // nameless + non-interactive + stateless → filler
+            {"nodeId": "2", "role": {"value": "none"}, "name": {"value": ""}, "childIds": []},
+            // nameless + non-interactive but STATELESS-looking textbox is
+            // interactive → must keep its line and mint a ref
+            {
+                "nodeId": "3",
+                "role": {"value": "textbox"},
+                "name": {"value": "Username"},
+                "backendDOMNodeId": 300,
+                "childIds": []
+            },
+            // nameless + non-interactive, but has a descendant with a name:
+            // the LINE goes, the subtree must still be walked
+            {
+                "nodeId": "4",
+                "role": {"value": "paragraph"},
+                "name": {"value": ""},
+                "childIds": ["5"]
+            },
+            {
+                "nodeId": "5",
+                "role": {"value": "button"},
+                "name": {"value": "Submit"},
+                "backendDOMNodeId": 500,
+                "childIds": []
+            }
+        ]);
+        let (yaml, refs) = ax_tree_to_a11y_yaml(&tree, None, None);
+        assert!(
+            !yaml.contains("- none"),
+            "text-free filler node should be omitted:/n{yaml}"
+        );
+        assert!(
+            yaml.contains("Username"),
+            "named node must survive:/n{yaml}"
+        );
+        // The named descendant under a filler parent proves the subtree is
+        // still walked — if the walker stopped, "Submit" would be missing.
+        assert!(
+            yaml.contains("Submit"),
+            "a filler parent must not orphan its named descendants:/n{yaml}"
+        );
+        assert_eq!(refs.len(), 2, "both interactive nodes must get refs");
+    }
+
+    /// A disabled control keeps its state marker, which means it is NOT filler
+    /// even though it has no name — state is information.
+    #[test]
+    fn ax_tree_keeps_unnamed_but_stateful_nodes() {
+        let tree = serde_json::json!([
+            {
+                "nodeId": "1",
+                "role": {"value": "RootWebArea"},
+                "name": {"value": ""},
+                "backendDOMNodeId": 1,
+                "childIds": ["2"]
+            },
+            {
+                "nodeId": "2",
+                "role": {"value": "checkbox"},
+                "name": {"value": ""},
+                "backendDOMNodeId": 2,
+                "properties": [{"name": "checked", "value": {"value": true}}],
+                "childIds": []
+            }
+        ]);
+        let (yaml, _) = ax_tree_to_a11y_yaml(&tree, None, None);
+        assert!(
+            yaml.contains("[checked]"),
+            "stateful unnamed node must not be treated as filler:/n{yaml}"
+        );
     }
 }

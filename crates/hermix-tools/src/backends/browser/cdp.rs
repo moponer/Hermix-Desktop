@@ -197,7 +197,7 @@ impl CdpBrowserBackend {
     }
 
     /// Send a CDP command via HTTP/WebSocket discovery shim.
-    async fn cdp_command(&self, method: &str, params: Value) -> Result<Value, ToolError> {
+    pub(crate) async fn cdp_command(&self, method: &str, params: Value) -> Result<Value, ToolError> {
         let target = self.resolve_target().await?;
         let connect_result = tokio::time::timeout(
             std::time::Duration::from_secs(5),
