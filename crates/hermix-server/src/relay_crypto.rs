@@ -314,6 +314,93 @@ pub fn open_envelope(
     String::from_utf8(plain).map_err(|e| CryptoError::BadEphemeral(format!("inner frame utf8: {e}")))
 }
 
+// ── 配对期密钥交换（TLS 式） ─────────────────────────────────────
+
+/// 手机在配对后发来的密钥交换帧的 `type`。
+///
+/// **为什么公钥交换本身也要加密**：手机的静态公钥只有一条传输路径——
+/// 经 relay。而 relay 手上有手机公钥就能解开 PC 发给手机的全部帧，等于
+/// E2EE 形同虚设。解法与 TLS 交换证书同构：用二维码里已有的 `pk_pc` 作为
+/// 信任锚，把 `[设备信息, pk_ph]` 整体封一层再发。relay 看得到信封但解不开
+/// （没有 `sk_pc`），于是学不到 `pk_ph`。
+pub const KEY_EXCHANGE_TYPE: &str = "key.exchange";
+
+/// 明文密钥交换载荷。**这个结构本身是明文 JSON**——机密性来自外层 seal，
+/// 不来自字段本身。
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct KeyExchangePayload {
+    /// `key.exchange`
+    #[serde(rename = "type")]
+    pub kind: String,
+    /// 手机自己的静态公钥，65 字节未压缩 SPKI，base64。
+    pub pk: String,
+    /// 配对码的 device_id，PC 侧据此写 `peers.json`。
+    pub device_id: String,
+}
+
+/// 造一帧密钥交换密文：手机侧用 `pc_public` 封，`device_id` + `pk_phone` 在里。
+pub fn build_key_exchange_envelope(
+    env: &mut Envelope,
+    pc_public: &PublicKey,
+    device_id: &str,
+    pk_phone: &[u8; 65],
+    frame_id: &[u8],
+) -> Result<(), CryptoError> {
+    use base64::Engine;
+    let payload = KeyExchangePayload {
+        kind: KEY_EXCHANGE_TYPE.to_string(),
+        pk: base64::engine::general_purpose::STANDARD.encode(pk_phone),
+        device_id: device_id.to_string(),
+    };
+    let plain = serde_json::to_string(&payload)
+        .map_err(|e| CryptoError::BadEphemeral(format!("key.exchange json: {e}")))?;
+    // 手机 → PC，方向是 d2n。
+    let ctx = FrameContext {
+        frame_id,
+        header: &env.aad(),
+        direction: Direction::DeviceToNode,
+    };
+    let sealed = seal_body(plain.as_bytes(), pc_public, &ctx);
+    let b64 = base64::engine::general_purpose::STANDARD;
+    env.payload = Some(
+        serde_json::to_string(&SealedFrame {
+            ct: b64.encode(&sealed.ciphertext),
+            nonce: b64.encode(sealed.nonce),
+            ep: b64.encode(sealed.ephemeral_public),
+            eid: b64.encode(frame_id),
+        })
+        .map_err(|e| CryptoError::BadEphemeral(e.to_string()))?,
+    );
+    Ok(())
+}
+
+/// 判断一段**已解密的**内层帧是不是密钥交换。
+pub fn is_key_exchange(plain: &str) -> bool {
+    serde_json::from_str::<KeyExchangePayload>(plain)
+        .map(|p| p.kind == KEY_EXCHANGE_TYPE)
+        .unwrap_or(false)
+}
+
+/// 解析密钥交换载荷里的手机公钥。
+pub fn parse_key_exchange(plain: &str) -> Result<(String, [u8; 65]), CryptoError> {
+    use base64::Engine;
+    let p: KeyExchangePayload = serde_json::from_str(plain)
+        .map_err(|e| CryptoError::BadEphemeral(format!("key.exchange parse: {e}")))?;
+    if p.kind != KEY_EXCHANGE_TYPE {
+        return Err(CryptoError::BadEphemeral("not a key.exchange frame".into()));
+    }
+    let raw = base64::engine::general_purpose::STANDARD
+        .decode(p.pk.as_bytes())
+        .map_err(|e| CryptoError::BadEphemeral(format!("pk base64: {e}")))?;
+    let pk: [u8; 65] = raw
+        .try_into()
+        .map_err(|_| CryptoError::BadEphemeral("pk is not 65 bytes".into()))?;
+    // 必须是合法的 P-256 点，否则后面每次 seal 都会失败。
+    PublicKey::from_sec1_bytes(&pk)
+        .map_err(|e| CryptoError::BadEphemeral(format!("pk is not a valid P-256 point: {e}")))?;
+    Ok((p.device_id, pk))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -515,6 +602,80 @@ mod tests {
         assert_eq!(back.session_id.as_deref(), Some("s1"));
         assert!(is_sealed_payload(back.payload.as_deref().unwrap()));
     }
+    /// 密钥交换往返：手机用 pk_pc 封，PC 用 sk_pc 开。
+    #[test]
+    fn key_exchange_roundtrip() {
+        let pc = Identity::from_seed(&[30u8; 32]);
+        let phone = Identity::from_seed(&[31u8; 32]);
+        let mut env = Envelope::new(FrameTag::Route);
+        env.session_id = Some("im:device:dev-1".into());
+        build_key_exchange_envelope(&mut env, &pc.secret.public_key(), "dev-1", &phone.public_key(), b"kx-1")
+            .expect("build key exchange");
+        // PC 侧用自己的私钥开（发送方是手机）。
+        let plain = open_envelope(&env, &pc.secret, Direction::DeviceToNode).expect("open");
+        assert!(is_key_exchange(&plain));
+        let (device_id, pk) = parse_key_exchange(&plain).expect("parse");
+        assert_eq!(device_id, "dev-1");
+        assert_eq!(pk, phone.public_key());
+    }
+
+    /// **核心边界**：relay 看得到密钥交换的信封，但没 sk_pc 就解不开——于是
+    /// 学不到 pk_ph。这条守住了，PC→手机的帧才安全。
+    #[test]
+    fn relay_cannot_read_the_key_exchange() {
+        let pc = Identity::from_seed(&[32u8; 32]);
+        let phone = Identity::from_seed(&[33u8; 32]);
+        let mut env = Envelope::new(FrameTag::Route);
+        env.session_id = Some("im:device:dev-2".into());
+        build_key_exchange_envelope(&mut env, &pc.secret.public_key(), "dev-2", &phone.public_key(), b"kx-2")
+            .expect("build");
+        let payload = env.payload.as_deref().unwrap();
+        assert!(is_sealed_payload(payload));
+        assert!(!payload.contains("dev-2"), "设备 id 不该泄漏到密文外");
+        // 拿到手机公钥（明文交换老方案的漏洞）但没 pk_pc 的一方，解不开。
+        let impostor = Identity::from_seed(&[34u8; 32]);
+        assert!(
+            open_envelope(&env, &impostor.secret, Direction::DeviceToNode).is_err(),
+            "没有 pk_pc 对应私钥的一方必须解不开"
+        );
+    }
+
+    /// PC→手机方向的机密性**完全**依赖 pk_ph 没经明文传输。测试把这条边界
+    /// 写死，提醒后来者别把密钥交换改回明文。
+    #[test]
+    fn phone_direction_needs_the_real_phone_key() {
+        let phone = Identity::from_seed(&[36u8; 32]);
+        let attacker = Identity::from_seed(&[37u8; 32]);
+        let mut env = Envelope::new(FrameTag::Route);
+        env.session_id = Some("s".into());
+        seal_envelope(&mut env, "机密", &phone.secret.public_key(), b"f").expect("seal");
+        // 持有手机私钥的一方能解。
+        assert!(open_envelope(&env, &phone.secret, Direction::NodeToDevice).is_ok());
+        // 没有 sk_ph 的攻击者解不开。
+        assert!(open_envelope(&env, &attacker.secret, Direction::NodeToDevice).is_err());
+    }
+
+    /// 非 P-256 的 65 字节垃圾不能被当公钥存下来。
+    #[test]
+    fn key_exchange_rejects_invalid_point() {
+        let pc = Identity::from_seed(&[38u8; 32]);
+        let mut env = Envelope::new(FrameTag::Route);
+        env.session_id = Some("s".into());
+        build_key_exchange_envelope(&mut env, &pc.secret.public_key(), "d", &[0u8; 65], b"k")
+            .expect("build");
+        let plain = open_envelope(&env, &pc.secret, Direction::DeviceToNode).expect("open");
+        assert!(parse_key_exchange(&plain).is_err(), "全零不是合法的 P-256 点");
+    }
+
+    /// 密钥交换帧不能被普通业务帧冒充。
+    #[test]
+    fn key_exchange_detection_is_strict() {
+        assert!(!is_key_exchange(r#"{"type":"chat","text":"hi"}"#));
+        assert!(!is_key_exchange("not json"));
+        assert!(!is_key_exchange(r#"{"kind":"chat"}"#));
+    }
+
+    #[test]
     fn public_key_is_65_byte_uncompressed_spki() {
         let id = Identity::from_seed(&[17u8; 32]);
         assert_eq!(id.public_key().len(), 65);

@@ -138,6 +138,87 @@ fn identity_path() -> std::path::PathBuf {
     hermix_config::paths::hermix_home().join(IDENTITY_FILE)
 }
 
+// ── 对端公钥库 ────────────────────────────────────────────────────
+
+/// 已配对设备的静态公钥，按 device_id 索引。
+///
+/// 存在 `~/.hermix/peers.json` 而不是 `devices.db`：后者是 SQLite 且正被
+/// 审计线改动，JSON 简单、gitignore 友好、也不跟并行开发抢同一张表。
+#[derive(Serialize, Deserialize, Default)]
+struct StoredPeers {
+    #[serde(default)]
+    peers: std::collections::BTreeMap<String, String>,
+}
+
+/// 对端公钥的读写。
+pub struct PeerStore {
+    path: std::path::PathBuf,
+}
+
+impl PeerStore {
+    pub fn at_default() -> Self {
+        Self {
+            path: hermix_config::paths::hermix_home().join("peers.json"),
+        }
+    }
+
+    /// 测试用：指定路径。
+    pub fn at(path: std::path::PathBuf) -> Self {
+        Self { path }
+    }
+
+    pub fn get(&self, device_id: &str) -> Result<Option<[u8; 65]>, IdentityError> {
+        let Ok(raw) = std::fs::read_to_string(&self.path) else {
+            return Ok(None);
+        };
+        let stored: StoredPeers =
+            serde_json::from_str(&raw).map_err(|e| IdentityError::Corrupt(e.to_string()))?;
+        match stored.peers.get(device_id) {
+            None => Ok(None),
+            Some(encoded) => {
+                let raw = b64()
+                    .decode(encoded.as_bytes())
+                    .map_err(|e| IdentityError::Corrupt(format!("peer key base64: {e}")))?;
+                raw.try_into()
+                    .map(Some)
+                    .map_err(|_| IdentityError::Corrupt("peer key 不是 65 字节".into()))
+            }
+        }
+    }
+
+    /// 写入 / 覆盖一个对端公钥。
+    pub fn put(&self, device_id: &str, public_key: &[u8; 65]) -> Result<(), IdentityError> {
+        let mut stored: StoredPeers = match std::fs::read_to_string(&self.path) {
+            Ok(raw) => serde_json::from_str(&raw)
+                .map_err(|e| IdentityError::Corrupt(e.to_string()))?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => StoredPeers::default(),
+            Err(e) => return Err(IdentityError::Io(e.to_string())),
+        };
+        stored
+            .peers
+            .insert(device_id.to_string(), b64().encode(public_key));
+        if let Some(parent) = self.path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| IdentityError::Io(e.to_string()))?;
+        }
+        let body = serde_json::to_string_pretty(&stored).map_err(|e| IdentityError::Io(e.to_string()))?;
+        std::fs::write(&self.path, body).map_err(|e| IdentityError::Io(e.to_string()))
+    }
+
+    /// 换绑 / 解绑：旧手机凭据立即失效，它的公钥也必须一起消失。
+    pub fn remove(&self, device_id: &str) -> Result<(), IdentityError> {
+        let Ok(raw) = std::fs::read_to_string(&self.path) else {
+            return Ok(());
+        };
+        let mut stored: StoredPeers =
+            serde_json::from_str(&raw).map_err(|e| IdentityError::Corrupt(e.to_string()))?;
+        if stored.peers.remove(device_id).is_none() {
+            return Ok(());
+        }
+        let body = serde_json::to_string_pretty(&stored).map_err(|e| IdentityError::Io(e.to_string()))?;
+        std::fs::write(&self.path, body).map_err(|e| IdentityError::Io(e.to_string()))
+    }
+}
+
 // ── DPAPI ────────────────────────────────────────────────────────
 
 #[cfg(windows)]
