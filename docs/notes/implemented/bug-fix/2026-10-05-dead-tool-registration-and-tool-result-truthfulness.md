@@ -80,6 +80,15 @@ zero-context-overhead 模型：主上下文**永不**包含图片 base64，剥�
 即 AGENTS.md 的「零上下文膨胀」铁律。剥离逻辑不动。真缺陷在 nudge 靠 LLM 自觉，
 属另一议题。
 
+> **2026-10-06 更正（部分推翻）**：本篇的判断只覆盖了主上下文，漏了子 agent 也走
+> 同一条 `do_post_tool_iteration`。子 agent 调 `read_image` 同样被剥离，且同样收到
+> 「必须用 delegate_task」的 nudge——而 `delegate_task` 被
+> `BLOCKED_TOOLS_FOR_SUBAGENT` 从子 agent 的 registry 里删除，指令无法执行。
+> 报告说的"死锁"是真的，只是根因不在剥离本身，而在剥离与 nudge 没有区分主/子上下文。
+> 见 [2026-10-06 那篇](2026-10-06-stale-sidecar-invalidation-and-bridge-vision-defects.md)。
+> 另：本篇「否决一」把"无条件合并"与"缺失时兜底"混为一谈，真实的平铺形态因此漏修，
+> 同样在 2026-10-06 那篇里补上。
+
 ## Consequences
 
 - **ref 选择精度下降。** CSS 没有文本匹配器，名字只来自文本内容的元素不再被
