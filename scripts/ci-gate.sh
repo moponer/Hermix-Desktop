@@ -44,7 +44,7 @@ echo ""
 #-----------------------------------------------------------------------
 # 1. Compile check
 #-----------------------------------------------------------------------
-echo "=== [1/11] cargo check --workspace --all-targets ==="
+echo "=== [1/12] cargo check --workspace --all-targets ==="
 cargo check --workspace --all-targets
 echo ""
 
@@ -58,7 +58,7 @@ echo ""
 #    lint. Those require code review (see P0-4 cdp.rs / P0-5 session.rs
 #    for the patterns to avoid: nested locks, lock-held-during-long-read).
 #-----------------------------------------------------------------------
-echo "=== [2/11] clippy await_holding_lock guard ==="
+echo "=== [2/12] clippy await_holding_lock guard ==="
 if rustup component list --installed 2>/dev/null | grep -q '^clippy'; then
   cargo clippy --workspace --all-targets -- \
     -D clippy::await_holding_lock
@@ -71,7 +71,7 @@ echo ""
 #-----------------------------------------------------------------------
 # 3. Unit tests
 #-----------------------------------------------------------------------
-echo "=== [3/11] cargo test --workspace --lib ==="
+echo "=== [3/12] cargo test --workspace --lib ==="
 cargo test --workspace --lib
 echo ""
 
@@ -83,7 +83,7 @@ echo ""
 #     they serve. Hard gate: a routing bug here strands every paired
 #     device silently.
 #-----------------------------------------------------------------------
-echo "=== [3b/11] relay tests (node --test) ==="
+echo "=== [3b/12] relay tests (node --test) ==="
 if [ -d apps/relay ]; then
   if [ ! -d apps/relay/node_modules ]; then
     echo "  FAIL: apps/relay/node_modules missing — run 'npm install' in apps/relay"
@@ -98,11 +98,20 @@ echo ""
 #-----------------------------------------------------------------------
 # 4. Frontend type check (soft gate — pre-existing errors are common)
 #-----------------------------------------------------------------------
-echo "=== [4/11] pnpm tsc --noEmit (frontend) ==="
+echo "=== [4/12] tsc --noEmit (frontend) ==="
 if [ -d apps/desktop-tauri ]; then
-  (cd apps/desktop-tauri && pnpm tsc --noEmit) || {
+  # 直接调 tsc 二进制，**不要**用 `pnpm tsc --noEmit`：后者不执行类型检查，
+  # 只跑 pnpm 自己的 install 流程就返回 0（~0.8s、输出 "Already up to date"）。
+  # 这道关卡用错命令时永远不会红——一道不会失败的门禁比没有门禁更糟，
+  # 因为它给出虚假的安全感。`node_modules` 缺失时明确 SKIP，不静默通过。
+  TSC=apps/desktop-tauri/node_modules/.bin/tsc
+  if [ ! -x "$TSC" ]; then
+    echo "  SKIP: $TSC not found (run 'pnpm install' in apps/desktop-tauri)"
+  elif (cd apps/desktop-tauri && ./node_modules/.bin/tsc --noEmit); then
+    echo "  OK: frontend type check clean"
+  else
     echo "  WARNING: frontend tsc failed (may be pre-existing — check output above)"
-  }
+  fi
 else
   echo "  SKIP: apps/desktop-tauri not found"
 fi
@@ -117,7 +126,7 @@ echo ""
 #     syntax error must not be able to reach a phone. The mobile-relay
 #     decision note explicitly refuses "shipped on local build only".
 #-----------------------------------------------------------------------
-echo "=== [4b/11] hermix-m: typecheck + protocol tests + H5 build ==="
+echo "=== [4b/12] hermix-m: typecheck + protocol tests + H5 build ==="
 if [ -d apps/hm ]; then
   if [ ! -d apps/hm/node_modules ]; then
     echo "  FAIL: apps/hm/node_modules missing — run 'npm install' in apps/hm"
@@ -136,7 +145,7 @@ echo ""
 #    to confirm it's NOT on an async path. When a sleep IS needed in
 #    async code, use tokio::time::sleep instead.
 #-----------------------------------------------------------------------
-echo "=== [5/11] advisory: std::thread::sleep in non-test src ==="
+echo "=== [5/12] advisory: std::thread::sleep in non-test src ==="
 sleep_hits=$(grep -rn 'std::thread::sleep' \
   crates/*/src/ --include='*.rs' \
   | grep -v 'mod tests' \
@@ -162,7 +171,7 @@ echo ""
 #
 #    Need: node >= 18. The script uses no external deps.
 #-----------------------------------------------------------------------
-echo "=== [6/11] theme token guard ==="
+echo "=== [6/12] theme token guard ==="
 if [ -f scripts/check-theme-tokens.mjs ]; then
   if command -v node >/dev/null 2>&1; then
     node scripts/check-theme-tokens.mjs 1>&2 || exit 1
@@ -186,7 +195,7 @@ echo ""
 #    removing an entry from the list (by splitting the file) is the way
 #    to tighten it. New god files cannot be introduced.
 #-----------------------------------------------------------------------
-echo "=== [7/11] god-file guard (> 2500 lines) ==="
+echo "=== [7/12] god-file guard (> 2500 lines) ==="
 # Accepted baseline. Remove a line only after actually splitting the file.
 KNOWN_GOD_FILES="crates/hermix-agent/src/local_agent_service.rs
 crates/hermix-agent/src/provider.rs
@@ -226,7 +235,7 @@ echo ""
 #     still reports green. This surfaces the count and fails on NEW
 #     ignores so a failing test can't be parked indefinitely.
 #-----------------------------------------------------------------------
-echo "=== [7b/11] ignored test count ==="
+echo "=== [7b/12] ignored test count ==="
 IGNORED_TOTAL=$(grep -rn '#\[ignore' crates/ --include='*.rs' 2>/dev/null | wc -l | tr -d ' ')
 IGNORED_BASELINE=17
 if [ "$IGNORED_TOTAL" -gt "$IGNORED_BASELINE" ]; then
@@ -239,7 +248,7 @@ fi
 echo "  OK: $IGNORED_TOTAL ignored (baseline $IGNORED_BASELINE)"
 echo ""
 
-echo "=== [8/11] pre-existing debt markers ==="
+echo "=== [8/12] pre-existing debt markers ==="
 debt_hits=$(grep -rn -E '(TODO|FIXME): pre-existing' \
   crates/ apps/desktop-tauri/src/ \
   --include='*.rs' --include='*.ts' --include='*.tsx' \
@@ -264,7 +273,7 @@ echo ""
 #    and the (narrow) exception for the generated workbench SKILL.md, which
 #    names those identifiers only to forbid them.
 #-----------------------------------------------------------------------
-echo "=== [9/11] skill freshness guard ==="
+echo "=== [9/12] skill freshness guard ==="
 if [ -f scripts/verify-skill-freshness.mjs ]; then
   if command -v node >/dev/null 2>&1; then
     node scripts/verify-skill-freshness.mjs 1>&2 || exit 1

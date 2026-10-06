@@ -24,8 +24,12 @@ Quick commands:
 cargo test --workspace --lib          # ~1,834 tests
 cargo test -p hermix-agent --lib      # single crate
 cargo check --workspace --all-targets # compile check
-cd apps/desktop-tauri && pnpm tsc --noEmit  # frontend types
+cd apps/desktop-tauri && ./node_modules/.bin/tsc --noEmit  # frontend types (~25s)
 ```
+
+`tsc` 必须直接调二进制。`pnpm tsc --noEmit` 不会真正执行类型检查——它只跑 pnpm
+自己的 install 流程就返回（~0.8s、输出 `Already up to date`、exit 0），是一个
+看起来全绿的假信号。
 
 Build artifacts default to repo-internal `target/` dirs (gitignored). `CARGO_TARGET_DIR` env var overrides the location if a unified path is needed (e.g. CI packaging).
 
@@ -48,7 +52,7 @@ Key crates:
 ## Conventions
 
 - **Windows MSVC only** — no cross-compilation to macOS/Linux
-- **PR template required** — must include test evidence (`cargo check`, `cargo test`, `pnpm tsc`), pre-existing cleanup status, and `ci-gate.sh` passing
+- **PR template required** — must include test evidence (`cargo check`, `cargo test`, `tsc --noEmit` via `node_modules/.bin`), pre-existing cleanup status, and `ci-gate.sh` passing
 - **Pre-existing bug markers** — scan for `TODO: pre-existing` / `FIXME: pre-existing` in CI gate; don't introduce them
 - **fastembed is optional** — `hermix-intelligence` has `fastembed` feature for local embeddings; `cdn.pyke.io` is geo-blocked in some regions, so default build doesn't require it
 - **Parity fixtures** — `hermix-parity-tests/fixtures/` has golden JSON; `pending/` is excluded from test runs
