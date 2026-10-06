@@ -33,6 +33,8 @@ use p256::elliptic_curve::sec1::ToEncodedPoint;
 use p256::{PublicKey, SecretKey};
 use sha2::Sha256;
 
+use crate::relay_proto::{Envelope, FrameTag, SealedFrame};
+
 /// 本模块的错误。刻意不套用 `mobile::MobileError` —— 帧加密是线路层的事，
 /// 耦合到 IM 模块会让两边互相拖。调用方（`relay_transport`）自己决定怎么映射。
 #[derive(Debug)]
@@ -206,6 +208,112 @@ pub fn open_body(
         .map_err(|_| CryptoError::AuthFailed)
 }
 
+/// 把一帧的明文内层帧封进 `env.payload`。
+///
+/// AAD 取 `env` 上的路由字段（`Envelope::aad()`），所以**必须先把 Envelope
+/// 的路由字段填好再调用**——`payload` 不参与 AAD，用空串占位即可。
+///
+/// # peer 与 `open_envelope` 的 `own` 必须同源
+///
+/// `peer` 是**接收方**的静态公钥。谁拿 `own` 去解，ECDH 就必须对齐到同一个
+/// 身份：`ECDH(eph_priv, peer_pub)` 与 `ECDH(peer_priv, eph_pub)` 导出同一个
+/// shared secret。**写混成"seal 面向 A、却拿 B 的私钥解"永远解不开**，而且失败
+/// 表现是 `AuthFailed`，看不出是配对错了还是密文被改——这个坑本模块已经踩过
+/// 两次，所以在这里写死。
+///
+/// `frame_id` 两端必须一致（它进 HKDF salt），由调用方保证——实践中取随机
+/// 16 字节，对方从 `eid` 字段拿到。
+pub fn seal_envelope(
+    env: &mut Envelope,
+    inner_plaintext: &str,
+    peer: &PublicKey,
+    frame_id: &[u8],
+) -> Result<(), CryptoError> {
+    use base64::Engine;
+    let ctx = FrameContext {
+        frame_id,
+        header: &env.aad(),
+        direction: Direction::NodeToDevice,
+    };
+    let sealed = seal_body(inner_plaintext.as_bytes(), peer, &ctx);
+    let b64 = base64::engine::general_purpose::STANDARD;
+    env.payload = Some(
+        serde_json::to_string(&SealedFrame {
+            ct: b64.encode(&sealed.ciphertext),
+            nonce: b64.encode(sealed.nonce),
+            ep: b64.encode(sealed.ephemeral_public),
+            eid: b64.encode(frame_id),
+        })
+        .map_err(|e| CryptoError::BadEphemeral(e.to_string()))?,
+    );
+    Ok(())
+}
+
+/// `payload` 是否是**形状正确**的密封信封（四个字段齐全且非空）。
+///
+/// 与 `apps/relay/src/proto.js::isSealed` 同一口径——relay 靠它判"这帧
+/// 受不受保护"，hermix 侧用它判"收到的帧是不是被封装过"。两端判定必须
+/// 一致，否则要么 relay 拒掉合法密文，要么 hermix 去解明文。
+pub fn is_sealed_payload(payload: &str) -> bool {
+    let Ok(frame) = serde_json::from_str::<SealedFrame>(payload) else {
+        return false;
+    };
+    !frame.ct.is_empty()
+        && !frame.nonce.is_empty()
+        && !frame.ep.is_empty()
+        && !frame.eid.is_empty()
+}
+
+/// 拆开 `env.payload`，还原明文内层帧。
+///
+/// `own` 必须是**发送方**的静态私钥——与 seal 时的 `peer` 同源。`frame_id`
+/// 从密文信封的 `eid` 取，不另找来源。
+///
+/// `direction` 是**发送方向**。PC 侧解手机来的帧恒为 [`Direction::DeviceToNode`]；
+/// 测试里要模拟"手机解开 PC 封的帧"就得传 [`Direction::NodeToDevice`]。方向进
+/// HKDF info，所以传错必然解不开——这正是防串向的机制本身。
+pub fn open_envelope(
+    env: &Envelope,
+    own: &SecretKey,
+    direction: Direction,
+) -> Result<String, CryptoError> {
+    use base64::Engine;
+    let raw = env
+        .payload
+        .as_deref()
+        .ok_or_else(|| CryptoError::AuthFailed)?;
+    let frame: SealedFrame =
+        serde_json::from_str(raw).map_err(|e| CryptoError::BadEphemeral(e.to_string()))?;
+    let b64 = base64::engine::general_purpose::STANDARD;
+    let decode = |s: &str| -> Result<Vec<u8>, CryptoError> {
+        b64.decode(s)
+            .map_err(|e| CryptoError::BadEphemeral(format!("base64: {e}")))
+    };
+    let nonce_b = decode(&frame.nonce)?;
+    if nonce_b.len() != NONCE_LEN {
+        return Err(CryptoError::BadEphemeral(format!(
+            "nonce is {} bytes, expected {NONCE_LEN}",
+            nonce_b.len()
+        )));
+    }
+    let sealed = SealedBody {
+        nonce: nonce_b
+            .try_into()
+            .map_err(|_| CryptoError::BadEphemeral("nonce length".into()))?,
+        ciphertext: decode(&frame.ct)?,
+        ephemeral_public: decode(&frame.ep)?
+            .try_into()
+            .map_err(|_| CryptoError::BadEphemeral("ephemeral must be 65 bytes".into()))?,
+    };
+    let ctx = FrameContext {
+        frame_id: &decode(&frame.eid)?,
+        header: &env.aad(),
+        direction,
+    };
+    let plain = open_body(&sealed, own, &ctx)?;
+    String::from_utf8(plain).map_err(|e| CryptoError::BadEphemeral(format!("inner frame utf8: {e}")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -217,7 +325,6 @@ mod tests {
     /// 否则被测代码无条件失败会让它们全部假通过。
     #[test]
     fn d2n_roundtrip() {
-        let phone = Identity::from_seed(&[1u8; 32]);
         let pc = Identity::from_seed(&[2u8; 32]);
         let ctx = FrameContext {
             frame_id: b"frame-0001",
@@ -231,7 +338,6 @@ mod tests {
 
     #[test]
     fn n2d_roundtrip() {
-        let pc = Identity::from_seed(&[3u8; 32]);
         let phone = Identity::from_seed(&[4u8; 32]);
         let ctx = FrameContext {
             frame_id: b"frame-0002",
@@ -245,7 +351,6 @@ mod tests {
 
     #[test]
     fn header_tamper_fails_aad() {
-        let phone = Identity::from_seed(&[5u8; 32]);
         let pc = Identity::from_seed(&[6u8; 32]);
         let ctx = FrameContext {
             frame_id: b"f4",
@@ -262,7 +367,6 @@ mod tests {
 
     #[test]
     fn frame_id_change_fails() {
-        let phone = Identity::from_seed(&[7u8; 32]);
         let pc = Identity::from_seed(&[8u8; 32]);
         let ctx = FrameContext {
             frame_id: b"frame-A",
@@ -279,7 +383,6 @@ mod tests {
 
     #[test]
     fn direction_flip_fails() {
-        let phone = Identity::from_seed(&[9u8; 32]);
         let pc = Identity::from_seed(&[10u8; 32]);
         let ctx = FrameContext {
             frame_id: b"f6",
@@ -296,7 +399,6 @@ mod tests {
 
     #[test]
     fn ciphertext_tamper_fails() {
-        let phone = Identity::from_seed(&[11u8; 32]);
         let pc = Identity::from_seed(&[12u8; 32]);
         let ctx = FrameContext {
             frame_id: b"f7",
@@ -312,7 +414,6 @@ mod tests {
     #[test]
     fn wrong_receiver_fails() {
         // 用 A 的公钥密封，却拿 B 的私钥解 —— shared secret 不同。
-        let phone = Identity::from_seed(&[13u8; 32]);
         let pc = Identity::from_seed(&[14u8; 32]);
         let impostor = Identity::from_seed(&[15u8; 32]);
         let ctx = FrameContext {
@@ -339,7 +440,81 @@ mod tests {
     }
 
 
+    /// 端到端：PC 把明文内层帧封进 Envelope，**手机侧**（这里用 PC 的私钥
+    /// 扮演对端）解回原文。这是**基线**——下面两条性质都建立在它之上。
+    ///
+    /// 注意方向：PC seal 走 `NodeToDevice`，所以解它的也必须是
+    /// `NodeToDevice`。PC 自己解手机来的帧才是 `DeviceToNode`。
     #[test]
+    fn envelope_seal_open_roundtrip() {
+        let pc = Identity::from_seed(&[20u8; 32]);
+
+        let mut env = Envelope::new(FrameTag::Route);
+        env.session_id = Some("im:device:dev-aaa".into());
+        let inner = r#"{"type":"assistant_message","content":"hi"}"#;
+        seal_envelope(&mut env, inner, &pc.secret.public_key(), b"frame-x").expect("seal");
+
+        let payload = env.payload.as_deref().expect("payload must be set");
+        assert!(is_sealed_payload(payload), "payload 必须是密封信封形状");
+        assert!(!payload.contains("assistant_message"), "明文不得留在信封里");
+
+        let back = open_envelope(&env, &pc.secret, Direction::NodeToDevice).expect("open");
+        assert_eq!(back, inner);
+    }
+
+    /// 方向隔离：PC 用 `DeviceToNode` 去解自己 `NodeToDevice` 封的帧必须失败。
+    /// 方向进 HKDF info，串向就解不开——这是机制本身，不是配置疏忽。
+    #[test]
+    fn envelope_direction_mismatch_fails() {
+        let pc = Identity::from_seed(&[26u8; 32]);
+        let mut env = Envelope::new(FrameTag::Route);
+        env.session_id = Some("s1".into());
+        seal_envelope(&mut env, "secret", &pc.secret.public_key(), b"f1").expect("seal");
+        assert!(
+            open_envelope(&env, &pc.secret, Direction::DeviceToNode).is_err(),
+            "方向反了必须解不开"
+        );
+    }
+
+    /// AAD 绑路由字段 → 密文搬到别的 session_id 解不开。
+    #[test]
+    fn ciphertext_cannot_be_moved_to_another_session() {
+        let pc = Identity::from_seed(&[22u8; 32]);
+
+        let mut env = Envelope::new(FrameTag::Route);
+        env.session_id = Some("im:device:dev-aaa".into());
+        seal_envelope(&mut env, "secret", &pc.secret.public_key(), b"f1").expect("seal");
+
+        // 攻击者把同一段密文搬到 B 会话
+        let mut moved = env.clone();
+        moved.session_id = Some("im:device:dev-bbb".into());
+        assert!(
+            open_envelope(&moved, &pc.secret, Direction::DeviceToNode).is_err(),
+            "密文必须不能跨会话搬运"
+        );
+    }
+
+    /// 明文 payload（未封装）直接拒——relay 侧也会拒，这里是 hermix 侧的第二道。
+    #[test]
+    fn plaintext_envelope_is_rejected() {
+        let pc = Identity::from_seed(&[24u8; 32]);
+        let mut env = Envelope::new(FrameTag::Route);
+        env.payload = Some(r#"{"type":"chat","text":"hi"}"#.into());
+        assert!(open_envelope(&env, &pc.secret, Direction::DeviceToNode).is_err());
+    }
+
+    /// seal_envelope 后 envelope 自身仍是合法 JSON 序列化的。
+    #[test]
+    fn sealed_envelope_serializes() {
+        let phone = Identity::from_seed(&[25u8; 32]);
+        let mut env = Envelope::new(FrameTag::Route);
+        env.session_id = Some("s1".into());
+        seal_envelope(&mut env, "x", &phone.secret.public_key(), b"f").expect("seal");
+        let s = serde_json::to_string(&env).expect("serialize");
+        let back: Envelope = serde_json::from_str(&s).expect("deserialize");
+        assert_eq!(back.session_id.as_deref(), Some("s1"));
+        assert!(is_sealed_payload(back.payload.as_deref().unwrap()));
+    }
     fn public_key_is_65_byte_uncompressed_spki() {
         let id = Identity::from_seed(&[17u8; 32]);
         assert_eq!(id.public_key().len(), 65);
