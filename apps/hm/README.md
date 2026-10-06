@@ -57,3 +57,34 @@ Keystore（`EncryptedSharedPreferences` 是原生能力）。token 明文泄漏 
 **流式 ASR / TTS 尚未接线。** 各页 `TODO(...)` 标了接入点。按已定方向：
 ASR 与 TTS 都在**手机端**直连云端（用户自带 API key），音频与文本都不过 relay，
 relay 架构一行不改。
+
+## 打包（APK）——现状与路径（2026-10-06 核实）
+
+**`npm run build:app`（uni CLI）当前编不过**，失败在依赖层、与本项目代码无关：
+
+```
+"isInSSRComponentSetup" is not exported by "vue/dist/vue.runtime.esm-bundler.js"
+（来自 @dcloudio/uni-app@3.0.0-4060620250520001）
+```
+
+这版 dcloud 依赖是**预览版 alpha**，它期望的 `isInSSRComponentSetup` 只存在于
+vue 的 alpha 渠道构建；已实测发布的 vue 3.4.21 / 3.5.13 / 3.5.22 的 runtime
+构建**都没有**这个导出。`npm test`（tsx，不走 bundler）与 `build:h5`
+**都通过**——所以这个坑一直没被撞到。已回退任何实验性版本 pin。
+
+**因此 APK 走 HBuilderX**（它自带配平好的 uni-app + vue 工具链，且 AppID
+必须走 DCloud 账号）：
+
+1. DCloud 开发者中心注册应用，取 **AppID**；
+2. HBuilderX「打开目录」选本目录；
+3. `manifest.json` 填 AppID + 包名（建议 `com.hermix.desktop.m`）；
+4. 发行 → 原生 App-云打包 → Android → 公测证书 → 下载 APK。
+
+若 HBuilderX 也报同一导出错误：把 `@dcloudio/*` 从 alpha（`40606…`）降到
+**稳定版**（正式发布的 `3.0.0-4020920240930001` 一线），版本四件套
+（uni-app / uni-h5 / uni-components / vite-plugin-uni）**必须同号**，然后
+`rm -rf node_modules package-lock.json && npm i` 重装。
+
+打包出的 APK 装真机后第一件事：扫码配对 + 收第一帧加密消息——这是
+`crypto.subtle` 可用性（app-plus runtime）的唯一验证点，风险已记录在
+relay E2EE 决策笔记的 Consequences 一节。
