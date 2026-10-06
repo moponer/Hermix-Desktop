@@ -15,7 +15,7 @@
  */
 
 /** 与 `relay_proto::PROTO_VERSION` 必须相同。 */
-export const PROTO_VERSION = 1
+export const PROTO_VERSION = 2
 
 export type FrameTag = 'hello' | 'route' | 'ack' | 'close'
 
@@ -34,7 +34,26 @@ export interface Envelope {
   nodeId?: string
   sessionId?: string
   auth?: FrameAuth
+  /** 密封信封的 JSON（见 `SealedFrame`）。v2 起不再是明文内层帧。 */
   payload?: string
+}
+
+/**
+ * 密封信封 —— `payload` 里的实际内容，四个字段全部对 relay 明文可见。
+ *
+ * 字段名必须与 `crates/hermix-server/src/relay_proto.rs::SealedFrame`、
+ * `apps/relay/src/proto.js::isSealed` 三处同名同拼写，否则 relay 认不出
+ * 受保护的帧，会把合法密文当明文拒掉。
+ */
+export interface SealedFrame {
+  /** base64：内层帧 AES-256-GCM 密文（含 tag）。 */
+  ct: string
+  /** base64：12 字节 nonce。 */
+  nonce: string
+  /** base64：65 字节未压缩 P-256 ephemeral 公钥。 */
+  ep: string
+  /** base64：帧号，进 HKDF salt，防跨帧重放。 */
+  eid: string
 }
 
 /** snake_case → camelCase：Rust 侧字段是 snake_case，JS 侧按 camelCase 用。 */

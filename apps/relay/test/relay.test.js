@@ -19,10 +19,26 @@ const { WebSocket } = require('ws');
 const { createRelay } = require('../src/server');
 const { openRegistry, hashToken, bearerFromHeaders } = require('../src/auth');
 const { Router } = require('../src/router');
-const { parseEnvelope, buildEnvelope, PROTO_VERSION, TAG } = require('../src/proto');
+const { parseEnvelope, buildEnvelope, isSealed, PROTO_VERSION, TAG } = require('../src/proto');
 
 function tmpDb() {
   return path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'relay-test-')), 'relay.db');
+}
+
+/**
+ * 造一个**形状正确**的密封信封。
+ *
+ * relay 不解密也不需要解密——它只判定"这一帧是不是受保护的"，所以
+ * 这里塞什么密文内容都无所谓。真正的密码学一致性由
+ * `crates/hermix-server/src/relay_crypto.rs` 的跨端 conformance 测试守。
+ */
+function sealedPayload(body = 'hello') {
+  return JSON.stringify({
+    ct: Buffer.from(body, 'utf8').toString('base64'),
+    nonce: Buffer.alloc(12, 7).toString('base64'),
+    ep: Buffer.alloc(65, 4).toString('base64'),
+    eid: Buffer.from('frame-1', 'utf8').toString('base64'),
+  });
 }
 
 // ---------------------------------------------------------------- proto.js
@@ -35,10 +51,17 @@ test('proto: 版本不符被单独标出（不降级）', () => {
 });
 
 test('proto: 脏数据不算版本问题', () => {
-  for (const raw of ['not json', '{}', '{"proto_version":1,"tag":"teleport"}']) {
+  // 版本号写成当前的 PROTO_VERSION：`1` 在 v2 下恰好就是"版本漂移"，
+  // 那属于另一条断言（第 50 行），不能拿来测"脏数据"。
+  for (const raw of [
+    'not json',
+    '{}',
+    `{"proto_version":${PROTO_VERSION},"tag":"teleport"}`,
+    `{"proto_version":${PROTO_VERSION},"tag":"route"}`,
+  ]) {
     const r = parseEnvelope(raw);
     assert.strictEqual(r.ok, false);
-    assert.strictEqual(r.versionMismatch, false);
+    assert.strictEqual(r.versionMismatch, false, '脏数据不该被误报成版本漂移: ' + raw);
   }
 });
 
@@ -49,11 +72,40 @@ test('proto: 可选字段缺省时不出现在 JSON 里', () => {
   assert.ok(!s.includes('payload'));
 });
 
-test('proto: payload 往返逐字节不变', () => {
-  const raw = '{"a":"换行\\n引号 \\" emoji 🛠️"}';
+test('proto: 密封 payload 往返逐字节不变', () => {
+  const raw = sealedPayload('{"a":"换行\n引号 \" emoji 🛠️"}');
   const env = { proto_version: PROTO_VERSION, tag: 'route', payload: raw };
   const back = parseEnvelope(JSON.stringify(env));
   assert.strictEqual(back.envelope.payload, raw);
+});
+
+test('proto: 明文 route 帧被拒（v2 起 E2EE 是硬要求）', () => {
+  // 不静默降级 —— 静默放行等于 E2EE 被无声关闭。
+  const env = { proto_version: PROTO_VERSION, tag: 'route', payload: '{"type":"chat","text":"hi"}' };
+  const r = parseEnvelope(JSON.stringify(env));
+  assert.strictEqual(r.ok, false);
+  assert.match(r.reason, /plaintext/);
+  assert.strictEqual(r.versionMismatch, false, '是格式问题，不是版本问题');
+});
+
+test('proto: 非 route 帧不要求密文', () => {
+  // ack / close / hello 由 relay 自己在明文侧构造，不走密封信封。
+  for (const tag of [TAG.ACK, TAG.CLOSE]) {
+    const r = parseEnvelope(JSON.stringify({ proto_version: PROTO_VERSION, tag }));
+    assert.strictEqual(r.ok, true, tag + ' 不该被要求密文');
+  }
+});
+
+test('isSealed: 字段不全一律判为明文（不做部分接受）', () => {
+  assert.strictEqual(isSealed(sealedPayload()), true);
+  for (const missing of ['ct', 'nonce', 'ep', 'eid']) {
+    const o = JSON.parse(sealedPayload());
+    delete o[missing];
+    assert.strictEqual(isSealed(JSON.stringify(o)), false, '缺 ' + missing + ' 仍被判为密封');
+  }
+  assert.strictEqual(isSealed(''), false);
+  assert.strictEqual(isSealed('not json'), false);
+  assert.strictEqual(isSealed(null), false);
 });
 
 // ---------------------------------------------------------------- auth.js
@@ -116,9 +168,10 @@ test('router: 手机 → 电脑，按 node 隔离', () => {
   r.attachNode('pc-A', nodeA);
   r.attachPhone('pc-A', 'hash-phone-1', fakeConn());
 
-  r.phoneToNode('pc-A', 'hash-phone-1', { tag: 'route', payload: 'hello' });
+  const payload = sealedPayload('hello');
+  r.phoneToNode('pc-A', 'hash-phone-1', { tag: 'route', payload });
   assert.strictEqual(nodeA.sent.length, 1);
-  assert.strictEqual(nodeA.sent[0].payload, 'hello', 'payload 不得被改写');
+  assert.strictEqual(nodeA.sent[0].payload, payload, 'payload 不得被改写');
 });
 
 test('router: 没有电脑在线时如实报告，不静默丢弃', () => {
@@ -134,7 +187,7 @@ test('router: 电脑 → 多台手机全部投递（不负载均衡）', () => {
   const p2 = fakeConn();
   r.attachPhone('pc-C', 'h1', p1);
   r.attachPhone('pc-C', 'h2', p2);
-  assert.strictEqual(r.nodeToPhones('pc-C', { tag: 'route', payload: 'x' }), 2);
+  assert.strictEqual(r.nodeToPhones('pc-C', { tag: 'route', payload: sealedPayload('x') }), 2);
   assert.strictEqual(p1.sent.length, 1);
   assert.strictEqual(p2.sent.length, 1, '审批卡不能只出现在"某台"手机上');
 });
@@ -148,7 +201,7 @@ test('router: 不同 node 的手机互不可见', () => {
   const phoneA = fakeConn();
   r.attachPhone('pc-A', 'hash-a', phoneA);
   // pc-B 的帧只到 pc-B
-  r.nodeToPhones('pc-B', { tag: 'route', payload: 'only-B' });
+  r.nodeToPhones('pc-B', { tag: 'route', payload: sealedPayload('only-B') });
   assert.strictEqual(phoneA.sent.length, 0, 'A 手机不得收到 B 的消息');
   assert.strictEqual(nodeB.sent.length, 0);
 });
@@ -188,7 +241,7 @@ test('端到端: 手机 ↔ 电脑 经 relay 往返一帧', async () => {
   // 两端先各收一个 ACK
   await new Promise((r) => setTimeout(r, 60));
 
-  const payload = '{"type":"user_message","content":"手机 → 电脑"}';
+  const payload = sealedPayload('{"type":"user_message","content":"手机 → 电脑"}');
   phone.send(JSON.stringify({ proto_version: PROTO_VERSION, tag: 'route', payload }));
 
   const got = await new Promise((resolve) => {
@@ -200,7 +253,7 @@ test('端到端: 手机 ↔ 电脑 经 relay 往返一帧', async () => {
   assert.strictEqual(got.tag, 'route');
 
   // 反向
-  const back = '{"type":"assistant_message","content":"电脑 → 手机"}';
+  const back = sealedPayload(JSON.stringify({ type: 'assistant_message', content: '电脑 → 手机' }));
   node.send(JSON.stringify({ proto_version: PROTO_VERSION, tag: 'route', payload: back }));
   const gotBack = await new Promise((resolve) => {
     phone.once('message', (data) => resolve(JSON.parse(data.toString('utf8'))));

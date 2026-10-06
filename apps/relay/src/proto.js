@@ -15,7 +15,7 @@
  */
 
 /** 与 `relay_proto.rs` 的 `PROTO_VERSION` 必须相同。 */
-const PROTO_VERSION = 1;
+const PROTO_VERSION = 2;
 
 /** 与 `relay_proto.rs` 的 `FrameTag` 必须同名同拼写（小写）。 */
 const TAG = Object.freeze({
@@ -66,7 +66,38 @@ function parseEnvelope(raw) {
   if (!TAGS.has(envelope.tag)) {
     return { ok: false, reason: `unknown tag ${envelope.tag}`, versionMismatch: false };
   }
+  // v2：ROUTE 的 payload 必须是密封信封。明文帧一律拒——**不能静默放行**，
+  // 静默降级等于 E2EE 被无声关闭，而且失败形态会退化成「消息莫名消失」。
+  if (envelope.tag === TAG.ROUTE && !isSealed(envelope.payload)) {
+    return { ok: false, reason: 'plaintext route frame rejected (E2EE required)', versionMismatch: false };
+  }
   return { ok: true, envelope };
+}
+
+/**
+ * payload 是否是密封信封（`ct` / `nonce` / `ep` / `eid` 四个字段齐全）。
+ *
+ * relay 读不懂密文也**不需要**读懂——它只判定"这一帧是不是受保护的"。
+ * 字段不全一律当明文拒，不做部分接受。
+ *
+ * ⚠️ 字段名必须与 `crates/hermix-server/src/relay_proto.rs::SealedFrame`
+ *    和 `apps/hm/src/core/envelope.ts` 三处同名同拼写。
+ */
+function isSealed(payload) {
+  if (typeof payload !== 'string' || payload.length === 0) return false;
+  let inner;
+  try {
+    inner = JSON.parse(payload);
+  } catch {
+    return false;
+  }
+  if (typeof inner !== 'object' || inner === null) return false;
+  return (
+    typeof inner.ct === 'string' &&
+    typeof inner.nonce === 'string' &&
+    typeof inner.ep === 'string' &&
+    typeof inner.eid === 'string'
+  );
 }
 
 /**
@@ -88,4 +119,4 @@ function buildEnvelope(tag, fields = {}) {
   return JSON.stringify(envelope);
 }
 
-module.exports = { PROTO_VERSION, TAG, TAGS, parseEnvelope, buildEnvelope };
+module.exports = { PROTO_VERSION, TAG, TAGS, parseEnvelope, buildEnvelope, isSealed };

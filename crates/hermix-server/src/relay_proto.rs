@@ -17,7 +17,10 @@
 use serde::{Deserialize, Serialize};
 
 /// 线路格式版本。**改动任何 tag 或字段都 +1**，并同步 relay 侧 `proto.js`。
-pub const PROTO_VERSION: u32 = 1;
+///
+/// v2 起 `payload` 装的是密封信封（[`SealedFrame`]）而非明文内层帧；收到
+/// 没有 `ct` 的 payload 即旧版明文帧，显式拒绝。
+pub const PROTO_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -75,8 +78,49 @@ pub struct Envelope {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth: Option<FrameAuth>,
     /// 内层帧原文，relay 整体透传。
+    ///
+    /// **自 `PROTO_VERSION = 2` 起，这里装的是密封信封**（[`SealedFrame`] 的
+    /// JSON），不是明文内层帧。密文信封里没有 `ct` 字段的就是旧版明文帧，
+    /// **必须显式拒绝**——静默降级等于 E2EE 被无声关闭。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub payload: Option<String>,
+}
+
+/// 密封信封：`payload` 里的实际内容。**全部字段都对 relay 明文可见**，
+/// relay 看得见但读不懂——它只需要知道"这是一条 route"。
+///
+/// `ct` 是内层帧的 AES-256-GCM 密文（含 16 字节 tag），`nonce` / `ep` / `eid`
+/// 是解密必需项：nonce 与 ephemeral 公钥随每帧变，`eid`（帧号）进 HKDF salt。
+///
+/// AAD 取 [`Envelope`] 上的路由字段（`proto_version` / `tag` / `session_id` /
+/// `node_id`）的规范化序列化——这些 relay 本来就看得见、也正需要它们来路由。
+/// 改动其中任何一个都会解密失败，因此**密文无法跨会话搬运**。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SealedFrame {
+    /// base64：内层帧密文（含 GCM tag）。
+    pub ct: String,
+    /// base64：12 字节 AES-GCM nonce。
+    pub nonce: String,
+    /// base64：65 字节未压缩 P-256 ephemeral 公钥。
+    pub ep: String,
+    /// base64：帧号，进 HKDF salt。防跨帧重放。
+    pub eid: String,
+}
+
+impl Envelope {
+    /// 解密前的规范化 AAD。只取 relay 看得见**且需要**的路由字段——
+    /// 把它们绑进 AEAD，密文就不能被搬到别的会话上重放。
+    pub fn aad(&self) -> Vec<u8> {
+        // 固定字段序，避免两端 serde 顺序不一致导致 AAD 不同。
+        format!(
+            "v={};tag={:?};sid={};nid={}",
+            self.proto_version,
+            self.tag,
+            self.session_id.as_deref().unwrap_or(""),
+            self.node_id.as_deref().unwrap_or("")
+        )
+        .into_bytes()
+    }
 }
 
 impl Envelope {
