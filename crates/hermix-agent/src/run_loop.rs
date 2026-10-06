@@ -517,7 +517,15 @@ impl AgentLoop {
         // NEVER contains image base64, period. Even a single image
         // costs 2,000–8,000 tokens that are paid on every subsequent
         // turn — that's always wasteful.
+        //
+        // A `delegate_task` child is exempt, and takes the opposite path:
+        // it is already the isolation boundary this rule exists to create,
+        // so its `read_image` result is re-injected as a real multimodal
+        // content block. The nudge below is skipped there because it points
+        // at `delegate_task`, which `BLOCKED_TOOLS_FOR_SUBAGENT` removes from
+        // the child's registry — following it would be impossible.
         let mut read_image_paths: Vec<String> = Vec::new();
+        let mut child_images: Vec<(String, String)> = Vec::new();
         for result in &results {
             if result.is_error {
                 continue;
@@ -526,6 +534,14 @@ impl AgentLoop {
                 continue;
             };
             if tc.function.name != "read_image" {
+                continue;
+            }
+            if self.config.is_sub_agent {
+                if let Some(payload) =
+                    crate::tool_result_processor::extract_image_payload(&result.content)
+                {
+                    child_images.push(payload);
+                }
                 continue;
             }
             let Ok(parsed) = serde_json::from_str::<Value>(&result.content) else {
@@ -632,6 +648,31 @@ impl AgentLoop {
                 tool_calls,
                 &result,
             );
+        }
+        // Sub-agent vision: the tool result text is metadata only; the pixels
+        // go in as `content_parts`, the shape every provider's vision path
+        // expects (`provider.rs` rewrites `content_parts` → `content`).
+        //
+        // Emitted AFTER the whole writeback loop above, never inside it — a
+        // `user` message wedged between an assistant's `tool_calls` and its
+        // `tool` results breaks the strict pairing that
+        // `provider.rs::enforce_strict_tool_pairing` exists to protect
+        // (MiniMax-M3 answers HTTP 400 `(2013) tool call result does not
+        // follow tool call`).
+        if !child_images.is_empty() {
+            let n = child_images.len();
+            tracing::info!(
+                images = n,
+                "read_image in sub-agent context — injecting multimodal content blocks"
+            );
+            let refs: Vec<(&str, &str)> = child_images
+                .iter()
+                .map(|(m, b)| (m.as_str(), b.as_str()))
+                .collect();
+            ctx.add_message(Message::user_with_images(
+                &format!("[已加载 {n} 张图片，以下为图像内容 —— 请直接查看并分析，不要再次调用 read_image]"),
+                &refs,
+            ));
         }
         self.post_tool_apply_pending_steer(ctx);
         // Removed execute_code turn-counter deduction hack.

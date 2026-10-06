@@ -230,6 +230,18 @@ pub struct AgentConfig {
     #[serde(default)]
     pub quiet_mode: bool,
 
+    /// This agent is a `delegate_task` child, not a top-level session.
+    ///
+    /// The zero-context-overhead image model (AGENTS.md) strips `read_image`
+    /// base64 in the **main** context and tells the model to delegate instead.
+    /// A child is already the isolation boundary that rule exists to create —
+    /// its context is destroyed when it returns — so stripping there buys
+    /// nothing and costs the whole capability: the child sees a placeholder,
+    /// is told to call `delegate_task`, and `delegate_task` is stripped from
+    /// its registry by `BLOCKED_TOOLS_FOR_SUBAGENT`. That is a closed loop.
+    #[serde(default)]
+    pub is_sub_agent: bool,
+
     /// Temperature for LLM sampling.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f64>,
@@ -888,6 +900,7 @@ impl Default for AgentConfig {
             extra_body: None,
             stream: false,
             quiet_mode: false,
+            is_sub_agent: false,
             temperature: None,
             max_tokens: None,
             max_concurrent_delegates: default_max_concurrent_delegates(),

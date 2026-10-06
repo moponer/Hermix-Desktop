@@ -55,11 +55,19 @@ pub fn assemble_tool_schemas_with_meta(
     all: Vec<ToolSchema>,
     meta: &ToolMetaRegistry,
 ) -> AssemblyResult {
-    // Strip any existing bridge tools (idempotent re-entry)
-    let incoming: Vec<ToolSchema> = all
-        .into_iter()
-        .filter(|s| !is_bridge(&s.name))
-        .collect();
+    // Split out pre-existing bridge tools rather than dropping them. Under
+    // the threshold they must be handed back untouched; above it they are
+    // replaced by the canonical trio (which carries the real count).
+    // Mirrors the same fix in `assemble_tool_schemas`.
+    let mut existing_bridges: Vec<ToolSchema> = Vec::new();
+    let mut incoming: Vec<ToolSchema> = Vec::new();
+    for s in all {
+        if is_bridge(&s.name) {
+            existing_bridges.push(s);
+        } else {
+            incoming.push(s);
+        }
+    }
 
     // Classify using metadata registry
     let (visible, deferred) = if meta.len() > 0 {
@@ -82,8 +90,10 @@ pub fn assemble_tool_schemas_with_meta(
     };
 
     if deferred.len() < DEFERRED_THRESHOLD {
+        let mut tool_schemas = incoming;
+        tool_schemas.extend(existing_bridges);
         return AssemblyResult {
-            tool_schemas: incoming,
+            tool_schemas,
             activated: false,
             deferred_count: 0,
         };
@@ -185,6 +195,36 @@ mod tests {
 
     fn dummy_schema(name: &str) -> ToolSchema {
         ToolSchema::new(name, "test", JsonSchema::new("object"))
+    }
+
+    /// Regression guard for the meta-path twin of the bridge-visibility bug
+    /// fixed in `assemble_tool_schemas`: pre-existing bridge tools were
+    /// filtered out and only restored on the activated branch, so a
+    /// below-threshold registry shipped no bridge at all while
+    /// `directions.rs` kept advertising it.
+    #[test]
+    fn test_assemble_with_meta_keeps_bridges_below_threshold() {
+        let meta = ToolMetaRegistry::new();
+        meta.register(crate::tool_meta::ToolMeta::resident("read_file", "R", "file"));
+        let mut schemas = vec![
+            dummy_schema("read_file"),
+            dummy_schema("tool_search"),
+            dummy_schema("tool_describe"),
+            dummy_schema("tool_call"),
+        ];
+        for i in 0..3 {
+            schemas.push(dummy_schema(&format!("plugin_{i}")));
+        }
+
+        let result = assemble_tool_schemas_with_meta(schemas, &meta);
+        assert!(!result.activated, "3 deferred is below the threshold");
+        let names: Vec<&str> = result.tool_schemas.iter().map(|s| s.name.as_str()).collect();
+        for want in ["tool_search", "tool_describe", "tool_call"] {
+            assert!(
+                names.contains(&want),
+                "bridge '{want}' vanished below threshold (meta path)"
+            );
+        }
     }
 
     #[test]

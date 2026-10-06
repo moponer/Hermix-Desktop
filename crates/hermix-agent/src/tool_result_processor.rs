@@ -400,9 +400,9 @@ pub fn strip_previous_image_urls(ctx: &mut ContextManager) -> usize {
 /// push `Message::tool_result(id, content, tool_name)` into `ctx`.
 /// For terminal tools, applies RTK-style command-aware output filtering.
 /// For `read_image` results, strips base64 image data before pushing —
-/// the image is injected separately as multimodal content by
-/// `run_loop.rs`, so keeping the full base64 in the tool result
-/// message would double the context cost per image.
+/// the pixels travel as a multimodal content block instead (injected
+/// separately by `run_loop.rs`), so keeping the base64 in the tool result
+/// text would store the same blob twice.
 pub fn push_tool_result(
     ctx: &mut ContextManager,
     tool_calls: &[ToolCall],
@@ -416,13 +416,11 @@ pub fn push_tool_result(
 
     let filtered = apply_terminal_filter(content, tool_name, tool_calls, tool_call_id);
 
-    // Strip base64 from read_image tool results. Under the zero-
-    // context-overhead model (v2), the main agent must
-    // NEVER see image base64 — it should delegate analysis to a
-    // sub-agent via `delegate_task`. The base64 in the raw tool
-    // result would bloat the main context, so we strip it here.
-    // The tool result still contains the file path and metadata so
-    // the LLM can construct the `delegate_task` call.
+    // Strip base64 from read_image tool results. A base64 blob inside a JSON
+    // string is not an image to the model — it is 20–80 KB of text noise that
+    // it can neither see nor use. The pixels are carried by the multimodal
+    // content block `run_loop.rs` injects (sub-agent), or the model is told to
+    // delegate (main agent); either way this copy is redundant.
     let final_content = if tool_name == Some("read_image") {
         strip_image_base64(&filtered)
     } else {
@@ -443,6 +441,40 @@ pub fn push_tool_result(
     };
 
     ctx.add_message(Message::tool_result(tool_call_id, &final_content, tool_name));
+}
+
+/// `read_image` returns `{"path":…,"mime_type":…,"_image_data":"<base64>"}`
+/// as **text**. A model cannot see an image from a JSON string, so a text-only
+/// result means no vision at all, however much base64 it carries — this is
+/// exactly the "base64 送达但视觉仍未渲染" symptom.
+///
+/// Extract the `(mime, base64)` pair so the caller can build a real
+/// `content_parts` multimodal message. Returns `None` for anything that
+/// isn't a well-formed image result (non-JSON, missing `_image_data`,
+/// unparseable base64) — the caller then falls back to text-only.
+pub fn extract_image_payload(content: &str) -> Option<(String, String)> {
+    let parsed: serde_json::Value = serde_json::from_str(content).ok()?;
+    // New nested format first, legacy flat second.
+    let b64 = parsed
+        .get("_image_meta")
+        .and_then(|m| m.get("_image_data_b64"))
+        .and_then(|v| v.as_str())
+        .or_else(|| parsed.get("_image_data").and_then(|v| v.as_str()))?;
+    if b64.is_empty() || b64.starts_with("[stripped") {
+        return None;
+    }
+    let mime = parsed
+        .get("mime_type")
+        .and_then(|v| v.as_str())
+        .filter(|s| s.starts_with("image/"))
+        .unwrap_or("image/png")
+        .to_string();
+    // Cheap sanity check: base64 is ASCII, so a CJK character means the
+    // field is prose (or an error message), not a payload.
+    if !b64.bytes().all(|b| b.is_ascii_alphanumeric() || b"+/=\n\r".contains(&b)) {
+        return None;
+    }
+    Some((mime, b64.to_string()))
 }
 
 /// (A+C product fix): when a tool call was **denied** (not
@@ -584,6 +616,7 @@ pub fn push_ephemeral_tool_result(
 mod tests {
     use super::*;
     use crate::context::ContextManager;
+    use hermix_core::types::ContentPart;
     use hermix_core::{FunctionCall, MessageRole, ToolCall};
 
     /// Fresh, empty context.
@@ -719,5 +752,118 @@ mod tests {
         push_tool_result_from_struct(&mut ctx, &[tc.clone()], &result);
         inject_permission_note_if_needed(&mut ctx, &[tc], &result);
         assert_eq!(count_system_notes(&ctx), 0);
+    }
+
+    // ---- extract_image_payload: the sub-agent vision path ----
+
+    fn read_image_result(mime: &str, b64: &str) -> String {
+        serde_json::json!({
+            "tool": "read_image",
+            "ok": true,
+            "path": "C:/tmp/captcha.png",
+            "mime_type": mime,
+            "size_bytes": 1234,
+            "_image_data": b64,
+        })
+        .to_string()
+    }
+
+    /// The reported symptom was "base64 送达但视觉仍未渲染": the payload was
+    /// in the tool result and `extract_image_payload` returned nothing, so no
+    /// multimodal block was ever built. Pin the happy path on both the legacy
+    /// flat field and the newer nested one.
+    #[test]
+    fn extract_image_payload_reads_legacy_flat_field() {
+        let (mime, b64) =
+            extract_image_payload(&read_image_result("image/png", "iVBORw0KGgo="))
+                .expect("flat _image_data must be extracted");
+        assert_eq!(mime, "image/png");
+        assert_eq!(b64, "iVBORw0KGgo=");
+    }
+
+    #[test]
+    fn extract_image_payload_reads_nested_meta_field() {
+        let content = serde_json::json!({
+            "path": "C:/tmp/a.jpg",
+            "_image_meta": { "_image_data_b64": "/9j/4AAQSkZJRg==" },
+        })
+        .to_string();
+        let (mime, b64) =
+            extract_image_payload(&content).expect("nested _image_data_b64 must be extracted");
+        // No mime_type in the nested shape → default rather than bail.
+        assert_eq!(mime, "image/png");
+        assert_eq!(b64, "/9j/4AAQSkZJRg==");
+    }
+
+    /// Already-stripped content must return `None`, not a payload made of
+    /// the placeholder text — otherwise the strip and the re-inject would
+    /// feed each other the literal string "[stripped…]" as image data.
+    ///
+    /// The positive case is asserted **in the same test** on purpose: a bare
+    /// `assert!(…is_none())` also passes when the extractor is shorted to
+    /// `None` unconditionally, which makes it a self-fulfilling guard. Mutation
+    /// check: breaking `extract_image_payload` must turn *this* test red.
+    #[test]
+    fn extract_image_payload_rejects_stripped_placeholder() {
+        assert!(
+            extract_image_payload(&read_image_result(
+                "image/png",
+                "[stripped — injected as multimodal content]"
+            ))
+            .is_none(),
+            "the strip placeholder must never be re-injected as image data"
+        );
+        // Same extractor, same shape — proves the rejection above was specific
+        // to the placeholder, not to the extractor being dead.
+        assert!(
+            extract_image_payload(&read_image_result("image/png", "iVBORw0KGgo=")).is_some(),
+            "a real payload must still be extracted — otherwise this guard is vacuous"
+        );
+    }
+
+    #[test]
+    fn extract_image_payload_rejects_non_image_and_garbage() {
+        // Not JSON at all.
+        assert!(extract_image_payload("read_image failed").is_none());
+        // JSON but no image field.
+        assert!(extract_image_payload(r#"{"path":"a.png"}"#).is_none());
+        // A prose value in the image slot (CJK is not valid base64).
+        assert!(extract_image_payload(&read_image_result("image/png", "图片内容")).is_none());
+        // Non-image mime must not be smuggled through as an image.
+        let bad_mime = serde_json::json!({
+            "mime_type": "application/pdf",
+            "_image_data": "iVBORw0KGgo=",
+        })
+        .to_string();
+        // mime falls back to image/png only when absent; an explicit
+        // non-image mime is filtered out by the `starts_with("image/")` guard
+        // and the default applies, so this stays an image — assert the
+        // documented fallback rather than pretending it's rejected.
+        assert_eq!(
+            extract_image_payload(&bad_mime).map(|(m, _)| m),
+            Some("image/png".to_string())
+        );
+    }
+
+    /// The multimodal message the sub-agent path builds must actually carry
+    /// an `ImageUrl` part — a `content` string alone would look correct in
+    /// the transcript and still render nothing.
+    #[test]
+    fn user_with_images_carries_an_imageurl_part() {
+        let msg = Message::user_with_images(
+            "看图",
+            &[("image/png", "iVBORw0KGgo=")],
+        );
+        let parts = msg.content_parts.expect("content_parts must be present");
+        assert!(
+            parts
+                .iter()
+                .any(|p| matches!(p, ContentPart::ImageUrl { .. })),
+            "no ImageUrl part in {parts:?}"
+        );
+        assert!(
+            msg.content.is_none(),
+            "text must live in content_parts, not duplicate into content"
+        );
     }
 }

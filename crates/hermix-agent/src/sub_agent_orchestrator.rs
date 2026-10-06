@@ -883,6 +883,10 @@ impl SubAgentOrchestrator {
         child.memory_nudge_interval = 0;
         child.skill_creation_nudge_interval = 0;
         child.quiet_mode = true;
+        // The image base64 strip + delegate_task nudge in
+        // `run_loop::do_post_tool_iteration` is scoped to the main context.
+        // A child is the isolation boundary already, so it keeps its images.
+        child.is_sub_agent = true;
         // Children should not re-spawn grandchildren beyond the contract;
         // depth checks inside AgentLoop::execute_tool_calls still apply.
         child.skip_memory = true;

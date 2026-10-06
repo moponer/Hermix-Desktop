@@ -103,21 +103,38 @@ pub struct AssemblyResult {
 /// If deferred tools exceed threshold, replace them with 3 bridge tools.
 /// Otherwise pass through all tools unchanged.
 pub fn assemble_tool_schemas(all: Vec<ToolSchema>) -> AssemblyResult {
-    // Strip any existing bridge tools (idempotent re-entry)
-    let incoming: Vec<ToolSchema> = all
-        .into_iter()
-        .filter(|s| !is_bridge(&s.name))
-        .collect();
+    // Split out any pre-existing bridge tools (idempotent re-entry) instead
+    // of dropping them. The old shape filtered them out of `incoming` and
+    // only re-added them on the activated branch, so a registry with fewer
+    // than `DEFERRED_THRESHOLD` deferred tools lost `tool_search` /
+    // `tool_describe` / `tool_call` from the schema list entirely — while
+    // `directions.rs` went on advertising them. The model was told the
+    // bridge existed, could not see it, and burned turns rediscovering it.
+    // ("同一会话内先成功后 does not exist" — the first turn crossed the
+    // threshold, the next did not.)
+    let mut existing_bridges: Vec<ToolSchema> = Vec::new();
+    let mut incoming: Vec<ToolSchema> = Vec::new();
+    for s in all {
+        if is_bridge(&s.name) {
+            existing_bridges.push(s);
+        } else {
+            incoming.push(s);
+        }
+    }
     let (visible, deferred) = classify_tools(&incoming);
     if deferred.len() < DEFERRED_THRESHOLD {
+        let mut tool_schemas = incoming;
+        tool_schemas.extend(existing_bridges);
         return AssemblyResult {
-            tool_schemas: incoming,
+            tool_schemas,
             activated: false,
             deferred_count: 0,
         };
     }
     let mut result: Vec<ToolSchema> = visible.into_iter().cloned().collect();
     let count = deferred.len();
+    // Activated: emit the canonical bridge trio (carrying the real deferred
+    // count), not whatever happened to be in the incoming list.
     result.extend(bridge_tool_schemas(count));
     AssemblyResult {
         tool_schemas: result,
@@ -390,6 +407,51 @@ impl ToolHandler for ToolDescribeHandler {
 
 // ── ToolCallHandler ─────────────────────────────────────────────────
 
+/// Pull the target tool's arguments out of a `tool_call` params object.
+///
+/// The declared shape is `{"name": "...", "arguments": {...}}`, and that is
+/// what `coerce_args` produces when the model complies. But models —
+/// especially the ones that just ran `tool_describe` and saw the target
+/// tool's schema inline — frequently flatten the call instead:
+/// `{"name": "cua_type_text", "text": "cssso"}`, with the target's fields
+/// sitting next to `name` at the top level. The old code took
+/// `params["arguments"]` unconditionally and substituted `{}` when the key
+/// was missing, so the target tool ran with an empty parameter object and
+/// reported `missing 'text'` / `必须要有 confirm: true` — an error that
+/// points at the target tool's schema when the actual fault is two levels
+/// up in the bridge call.
+///
+/// The fallback only fires when `arguments` is absent or not an object, so
+/// a compliant call is untouched: no `name` / `arguments` key ever leaks
+/// into the target's parameters.
+fn extract_arguments(params: &Value) -> Value {
+    match params.get("arguments") {
+        Some(Value::Object(m)) => Value::Object(m.clone()),
+        // A JSON-encoded string is what several providers emit for
+        // `arguments`; `coerce_args` normally fixes this upstream, but the
+        // bridge is also reachable through `dispatch_bridge_tool`, which
+        // bypasses coercion.
+        Some(Value::String(s)) => serde_json::from_str::<Value>(s)
+            .ok()
+            .filter(|v| v.is_object())
+            .unwrap_or_else(|| flatten_into_arguments(params)),
+        _ => flatten_into_arguments(params),
+    }
+}
+
+/// Collect every top-level key except `name` as the target's arguments.
+fn flatten_into_arguments(params: &Value) -> Value {
+    match params.as_object() {
+        Some(m) => Value::Object(
+            m.iter()
+                .filter(|(k, _)| k.as_str() != "name")
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+        ),
+        None => serde_json::json!({}),
+    }
+}
+
 pub struct ToolCallHandler {
     registry: Arc<ToolRegistry>,
 }
@@ -440,10 +502,7 @@ impl ToolHandler for ToolCallHandler {
             return Err(ToolError::InvalidParams("name is required".into()));
         }
 
-        let arguments = params
-            .get("arguments")
-            .cloned()
-            .unwrap_or(serde_json::json!({}));
+        let arguments = extract_arguments(&params);
 
         if is_core(name) {
             return Err(ToolError::InvalidParams(format!(
@@ -619,6 +678,136 @@ mod tests {
         assert!(out.contains("pong"), "expected the probe's result, got: {out}");
     }
 
+    /// Regression guard for the flattened-call shape.
+    ///
+    /// A real session produced four consecutive failures — `missing 'text'`,
+    /// two × `缺少 steps 数组`, `必须要有 confirm: true` — all of them the
+    /// target tool's own param validation, all of them reached *after* the
+    /// user clicked 允许 on the approval card. The bridge read
+    /// `params["arguments"]` unconditionally, so when the model put the
+    /// target's fields next to `name` instead of nesting them, the target
+    /// ran with `{}` and blamed its own schema.
+    ///
+    /// The probe target below echoes the params it received, so this fails
+    /// if the argument object is empty, still nested, or carrying the
+    /// bridge's own `name` key.
+    #[tokio::test]
+    async fn tool_call_accepts_flattened_arguments() {
+        let reg = crate::ToolRegistry::new();
+
+        struct Echo;
+        #[async_trait::async_trait]
+        impl ToolHandler for Echo {
+            fn schema(&self) -> ToolSchema {
+                ToolSchema::new(
+                    "bridge_echo_probe",
+                    "echo target",
+                    JsonSchema::object(IndexMap::new(), vec!["text".into()]),
+                )
+            }
+            async fn execute(&self, p: Value) -> Result<String, ToolError> {
+                match p.get("text").and_then(|v| v.as_str()) {
+                    Some(t) => Ok(format!("echo:{t}")),
+                    // Report the shape actually seen — a bare "missing text"
+                    // is what made the original report point at the wrong file.
+                    None => Ok(format!("no_text:keys={:?}", p.as_object().map(|m|
+                        m.keys().cloned().collect::<Vec<_>>()))),
+                }
+            }
+        }
+        reg.register_with_risk(
+            "bridge_echo_probe",
+            "bridge_echo_probe",
+            Echo.schema(),
+            Arc::new(Echo),
+            Arc::new(|| true),
+            vec![],
+            true,
+            "echo target",
+            "e",
+            None,
+            RiskLevel::Safe,
+            true,
+        );
+        register(&reg);
+
+        // Flattened: `text` sits next to `name`, no `arguments` wrapper.
+        let flat = reg
+            .dispatch_async(
+                "tool_call",
+                serde_json::json!({ "name": "bridge_echo_probe", "text": "cssso" }),
+            )
+            .await;
+        assert!(flat.contains("echo:cssso"), "flattened call lost its args: {flat}");
+
+        // The compliant shape must keep working and must NOT gain a stray
+        // `name` key from the fallback path.
+        let nested = reg
+            .dispatch_async(
+                "tool_call",
+                serde_json::json!({ "name": "bridge_echo_probe", "arguments": { "text": "ok" } }),
+            )
+            .await;
+        assert!(nested.contains("echo:ok"), "nested call regressed: {nested}");
+        assert!(
+            !nested.contains("no_text"),
+            "nested call must not fall through to the flatten path: {nested}"
+        );
+    }
+
+    /// A JSON-encoded `arguments` string must be unwrapped, not handed to
+    /// the target as a string. `coerce_args` handles this on the registry
+    /// dispatch path, but `dispatch_bridge_tool` (dispatch.rs) constructs the
+    /// handler directly and skips coercion.
+    #[tokio::test]
+    async fn tool_call_unwraps_stringified_arguments() {
+        let reg = crate::ToolRegistry::new();
+        struct Echo;
+        #[async_trait::async_trait]
+        impl ToolHandler for Echo {
+            fn schema(&self) -> ToolSchema {
+                ToolSchema::new(
+                    "bridge_str_echo",
+                    "echo target",
+                    JsonSchema::object(IndexMap::new(), vec!["text".into()]),
+                )
+            }
+            async fn execute(&self, p: Value) -> Result<String, ToolError> {
+                Ok(format!(
+                    "got:{}",
+                    p.get("text").and_then(|v| v.as_str()).unwrap_or("<none>")
+                ))
+            }
+        }
+        reg.register_with_risk(
+            "bridge_str_echo",
+            "bridge_str_echo",
+            Echo.schema(),
+            Arc::new(Echo),
+            Arc::new(|| true),
+            vec![],
+            true,
+            "echo target",
+            "e",
+            None,
+            RiskLevel::Safe,
+            true,
+        );
+        register(&reg);
+
+        // Bypass the registry's coercion by driving the handler the way
+        // `dispatch_bridge_tool` does.
+        let handler = ToolCallHandler::new(Arc::new(reg));
+        let out = handler
+            .execute(serde_json::json!({
+                "name": "bridge_str_echo",
+                "arguments": "{\"text\":\"from-string\"}",
+            }))
+            .await
+            .expect("handler must not error");
+        assert!(out.contains("got:from-string"), "stringified args not parsed: {out}");
+    }
+
     #[test]
     fn classify_separates_core_from_deferred() {
         let schemas = vec![
@@ -704,6 +893,46 @@ mod tests {
         assert_eq!(bridge_count, 3);
     }
 
+    /// Regression guard for the intermittent "tool_search / tool_describe
+    /// does not exist" report.
+    ///
+    /// The old `assemble_tool_schemas` filtered bridge tools out of the
+    /// incoming list and only re-added them on the *activated* branch. A
+    /// registry under `DEFERRED_THRESHOLD` therefore shipped a schema list
+    /// with no bridge at all — while `directions.rs` still advertised the
+    /// bridge. Turn 1 crossed the threshold (bridge visible, call succeeds),
+    /// turn 2 didn't (bridge gone, `tool_call_validator` rejects it). That
+    /// is the "先成功后 does not exist" shape exactly.
+    #[test]
+    fn assembly_keeps_bridges_below_threshold() {
+        let mut schemas = vec![
+            ToolSchema::new("read_file", "Read", JsonSchema::new("object")),
+            ToolSchema::new("tool_search", "Bridge", JsonSchema::new("object")),
+            ToolSchema::new("tool_describe", "Bridge", JsonSchema::new("object")),
+            ToolSchema::new("tool_call", "Bridge", JsonSchema::new("object")),
+        ];
+        // 3 deferred — below DEFERRED_THRESHOLD (25).
+        for i in 0..3 {
+            schemas.push(ToolSchema::new(
+                format!("deferred_{i}"),
+                format!("Deferred {i}"),
+                JsonSchema::new("object"),
+            ));
+        }
+        let result = assemble_tool_schemas(schemas);
+        assert!(!result.activated, "below threshold must not activate");
+        let names: Vec<&str> = result.tool_schemas.iter().map(|s| s.name.as_str()).collect();
+        for want in BRIDGE_TOOL_NAMES {
+            assert!(
+                names.contains(want),
+                "bridge '{want}' vanished below threshold — directions.rs still advertises it"
+            );
+        }
+    }
+
+    /// Same contract for the meta-driven variant, which had the identical
+    /// filter-and-drop shape — asserted in `deferred_loader.rs`, where that
+    /// function lives.
     #[tokio::test]
     async fn tool_search_returns_matching_results() {
         let registry = Arc::new(ToolRegistry::new());
