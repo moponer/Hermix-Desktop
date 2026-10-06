@@ -18,11 +18,21 @@
  */
 
 const http = require('node:http');
+const fs = require('node:fs');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const express = require('express');
 const { WebSocketServer } = require('ws');
 
 const { PROTO_VERSION, TAG, buildEnvelope, parseEnvelope } = require('./proto');
+
+function hashFileSync(p) {
+  try {
+    return crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex');
+  } catch {
+    return null;
+  }
+}
 const { openRegistry, bearerFromHeaders } = require('./auth');
 const { openAudit } = require('./audit');
 const { Router } = require('./router');
@@ -54,6 +64,69 @@ function createRelay({ dbPath }) {
       ...router.snapshot(),
       audit_failures: audit.failureCount(),
     })
+  });
+
+  // ── 安装页 / APK 下载（静态，不碰 relay 协议面） ──────────────
+  // APK 由运维放到 <relay 根>/public/hermix.apk；没放就如实说"未上传"，
+  // 不给假按钮。文件指纹按 mtime 缓存——每次请求重算 SHA-256 会把 CPU
+  // 打满，而安装包一天也传不了几次。
+  const publicDir = path.join(__dirname, '..', 'public');
+  const apkPath = path.join(publicDir, 'hermix.apk');
+  let apkCache = { mtimeMs: 0, sha256: null };
+
+  function apkInfoSync() {
+    let st;
+    try {
+      st = fs.statSync(apkPath);
+    } catch {
+      return { available: false, version: null, size: 0, sha256: null, updatedAt: null };
+    }
+    if (apkCache.mtimeMs !== st.mtimeMs) {
+      apkCache = { mtimeMs: st.mtimeMs, sha256: hashFileSync(apkPath) };
+    }
+    const version = (() => {
+      try {
+        const html = fs.readFileSync(path.join(publicDir, 'index.html'), 'utf8');
+        const m = html.match(/HERMIX_M_VERSION\s*=\s*["']([^"']+)["']/) || html.match(/版本[：:]?\s*v?([0-9][^<\s]*)/);
+        return m ? m[1] : null;
+      } catch {
+        return null;
+      }
+    })();
+    return {
+      available: true,
+      version,
+      size: st.size,
+      sha256: apkCache.sha256,
+      updatedAt: new Date(st.mtimeMs).toISOString(),
+    };
+  }
+
+  app.get('/', (_req, res) => {
+    res.sendFile(path.join(publicDir, 'index.html'));
+  });
+
+  app.get('/static-mascot.png', (_req, res) => {
+    res.sendFile(path.join(publicDir, 'static-mascot.png'));
+  });
+
+  app.get('/api/app-info', (_req, res) => {
+    res.json(apkInfoSync());
+  });
+
+  app.get('/download/hermix.apk', (_req, res) => {
+    let st;
+    try {
+      st = fs.statSync(apkPath);
+    } catch {
+      return res.status(404).type('text/plain; charset=utf-8')
+        .send('安装包尚未上传（运维需把 APK 放到 relay 目录的 public/hermix.apk 后重启项目）');
+    }
+    res.setHeader('Content-Type', 'application/vnd.android.package-archive');
+    res.setHeader('Content-Length', st.size);
+    res.setHeader('Content-Disposition', 'attachment; filename="hermix.apk"');
+    res.setHeader('X-Checksum-Sha256', apkInfoSync().sha256 || '');
+    fs.createReadStream(apkPath).pipe(res);
   });
 
   const server = http.createServer(app);

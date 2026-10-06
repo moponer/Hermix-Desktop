@@ -9,3 +9,5 @@ relay.db-shm
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm
+# 真实 APK 由运维上传到部署机，不入库
+public/hermix.apk

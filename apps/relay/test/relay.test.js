@@ -16,6 +16,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { WebSocket } = require('ws');
 
+const http = require('node:http');
 const { createRelay } = require('../src/server');
 const { openRegistry, hashToken, bearerFromHeaders } = require('../src/auth');
 const { Router } = require('../src/router');
@@ -301,4 +302,72 @@ test('端到端: 角色不匹配被拒（手机不能占电脑的槽）', async 
   });
   assert.strictEqual(status, 403);
   relay.close();
+});
+
+// ------------------------------------------------------- 安装页 / APK 下载
+
+function get(url) {
+  return new Promise((resolve, reject) => {
+    http.get(url, (res) => {
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () =>
+        resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks).toString('utf8'), raw: res }),
+      );
+    }).on('error', reject);
+  });
+}
+
+async function getJson(url) {
+  const r = await get(url);
+  return { ...r, body: JSON.parse(r.body) };
+}
+
+test('安装页: / 出页面，/api/app-info 如实报"未上传"', async () => {
+  const relay = createRelay({ dbPath: tmpDb() });
+  await new Promise((r) => relay.listen(0, r));
+  const { port } = relay.server.address();
+  try {
+    const page = await get(`http://127.0.0.1:${port}/`);
+    assert.strictEqual(page.status, 200);
+    assert.ok(page.body.includes('Hermix M'), '页面应含产品名');
+    assert.ok(page.body.includes('/download/hermix.apk'), '页面应给出下载入口');
+
+    const info = await getJson(`http://127.0.0.1:${port}/api/app-info`);
+    assert.strictEqual(info.status, 200);
+    assert.strictEqual(info.body.available, false, '没有 APK 时必须说没有，不能给假按钮');
+
+    const dl = await get(`http://127.0.0.1:${port}/download/hermix.apk`);
+    assert.strictEqual(dl.status, 404, '没有 APK 时下载应 404');
+  } finally {
+    relay.close();
+  }
+});
+
+test('安装页: 放了 APK 就能下，且带内容类型与指纹头', async () => {
+  const fs2 = require('node:fs');
+  const path2 = require('node:path');
+  const publicDir = path2.join(__dirname, '..', 'public');
+  const apk = path2.join(publicDir, 'hermix.apk');
+  fs2.mkdirSync(publicDir, { recursive: true });
+  const payload = Buffer.from('fake-apk-bytes');
+  fs2.writeFileSync(apk, payload);
+  const relay = createRelay({ dbPath: tmpDb() });
+  await new Promise((r) => relay.listen(0, r));
+  const { port } = relay.server.address();
+  try {
+    const info = await getJson(`http://127.0.0.1:${port}/api/app-info`);
+    assert.strictEqual(info.body.available, true);
+    assert.strictEqual(info.body.size, payload.length);
+    const { createHash } = require('node:crypto');
+    assert.strictEqual(info.body.sha256, createHash('sha256').update(payload).digest('hex'));
+
+    const dl = await get(`http://127.0.0.1:${port}/download/hermix.apk`);
+    assert.strictEqual(dl.status, 200);
+    assert.strictEqual(dl.raw.headers['content-type'], 'application/vnd.android.package-archive');
+    assert.ok(dl.raw.headers['x-checksum-sha256'], '应带校验头供客户端核对');
+  } finally {
+    relay.close();
+    fs2.rmSync(apk, { force: true });
+  }
 });

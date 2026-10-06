@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="color-scheme" content="dark light" />
+<title>Hermix M · 安装</title>
+<style>
+  :root { --bg:#0b0b0b; --card:#151513; --line:#2b271f; --fg:#f4f4f4; --fg2:#a8a49a;
+         --accent:#6fae94; --warn:#e0a33a; }
+  @media (prefers-color-scheme: light) {
+    :root { --bg:#fbfaf6; --card:#ffffff; --line:#e8e5dc; --fg:#24241f; --fg2:#6b6a63; --accent:#1e4a3c; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); min-height:100vh;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei UI",sans-serif;
+    -webkit-font-smoothing:antialiased; }
+  .wrap { max-width:520px; margin:0 auto; padding:40px 20px 56px; }
+  header { display:flex; align-items:center; gap:14px; margin-bottom:8px; }
+  .logo { width:56px; height:56px; border-radius:16px; }
+  h1 { font-size:22px; margin:0; letter-spacing:-0.01em; }
+  .sub { color:var(--fg2); font-size:13px; margin:6px 0 28px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:20px; margin-bottom:16px; }
+  .qr { display:block; margin:0 auto 14px; width:220px; height:220px; image-rendering:pixelated; }
+  .btn { display:block; text-align:center; padding:14px 18px; border-radius:12px;
+    background:var(--accent); color:#fff; text-decoration:none; font-weight:600; font-size:15px; }
+  .btn[aria-disabled="true"] { opacity:.45; pointer-events:none; }
+  .meta { margin-top:14px; font-size:12px; color:var(--fg2); line-height:1.9; word-break:break-all; }
+  .meta code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11px; }
+  ol { margin:0; padding-left:20px; font-size:13.5px; line-height:2; color:var(--fg); }
+  ol li { margin-bottom:2px; }
+  .kv { display:flex; justify-content:space-between; gap:12px; font-size:13px;
+        padding:7px 0; border-bottom:1px dashed var(--line); }
+  .kv:last-child { border-bottom:none; }
+  .kv span:first-child { color:var(--fg2); flex:0 0 auto; }
+  .kv span:last-child { min-width:0; text-align:right; word-break:break-all; }
+  .tag { display:inline-block; font-size:11px; padding:2px 8px; border-radius:999px;
+         border:1px solid var(--line); color:var(--fg2); }
+  footer { margin-top:26px; font-size:11.5px; color:var(--fg2); text-align:center; letter-spacing:.08em; }
+  .warn { color:var(--warn); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <img class="logo" src="/static-mascot.png" alt="Hermix" />
+    <div>
+      <h1>Hermix M</h1>
+      <div class="sub">hermix 的手机伴侣端 · 远程指挥你的桌面助手</div>
+    </div>
+  </header>
+
+  <div class="card">
+    <img class="qr" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAXIAAAFyAQAAAADAX2ykAAADMklEQVR4nO1cbYrjMAx9cgz9mcAcoEdJb7BHGvZIe4P6KD3AQPyzkKBFstOms5AmsLvYRO9HaOzHIHhI0Yc9xNiD4HbRAeOvw73Z/w7jr8Mdjx8p4yILoZtoXvMg6oB535dp/y64A/IbVgAQaSGCnkcw8wj0A4Be94dS7d8DdzC+1ycBzQjEDoQWYESf1hjxI22g//U/7HHG/4f8htHfTkwX8ekrJtL4/Pf+/nu4DZwljL/Ff2dMhNCBOJxHUK+pdfxAyfY742/Qlx/vHH4MEprlQxw7MNoRQCuEWKL9zvhv+VNKjzU+0+fNS1bViKIN0yV6IOh+V6r9e+AOxvfZORXqoe0Ijc8M3IlD1yy8uzz7nfHf1r8+V7iX9i5OPEklrJVSk5RdVMcl2r8L7oD+O4rXfnkO1DD0gXhi0jW0Uva2X14yrbE8+53x18E8dzDmVy2NpFIa5FU29HOsTY5rafY746+DpU31fGQtk8gQ4WXj0cQyfSvjI6sqjwyRthV3bkeoyPnRmr718ZH7yiqeCtouIzX066xOLDHb9K11vnDTDFnrX6LkzuEs0ko5nKB5WIn274E7YP58p7kInjzCmUGIH5JEk0waZF0GDzpJKs5+Z/x1cMIzSKs7S+p8lUitSXRes/hcHx9ZN5FWVX1OffGSaeWcujT7nfG36MvPIjg58Zxf9XMnOm+UZr8z/tb6iLWrkX31JVxflWn6Vsj3aUwUZCTYDzrr1f6kHucgET4TuUz7nfE3xWfObarcxnhWva0kWSkFs+9vxd/fZu4wa5n7SJgF9v2tl4/cpkq58rhMsnhuRz83TN9q9cVyiJQEHfIQKatv/cmK+xuKeWq00BxzpLb6t+r5wsN/U8H70rrCY830rbI+GvUn6YHJcJZ2dPSjHMLyep+BEfXOirfzG3XfX4AWwZP0Mob0ixG7dGeFw6VE+53xd5xvF8hdlDw66vQYdP6Vuh+l2e+Mv4PfMEKX2x0yKUxZs143s/lvxXxWQWUSzFcdB8eTzn+JPvlOyyF/mfZvhzvy/YWYZZxPQjdyXPbEepKDf9r9hQr5ZP+fYRVuffsPGH8d7s3+dxgfq/gNxqMyq17Ots8AAAAASUVORK5CYII=" alt="扫码下载 APK" />
+    <a class="btn" id="dl" href="/download/hermix.apk" aria-disabled="true">下载中…</a>
+    <div class="meta" id="meta">正在查询安装包…</div>
+  </div>
+
+  <div class="card">
+    <div class="kv"><span>版本</span><span id="ver">—</span></div>
+    <div class="kv"><span>大小</span><span id="size">—</span></div>
+    <div class="kv"><span>更新时间</span><span id="upd">—</span></div>
+    <div class="kv"><span>SHA-256</span><span id="sha">—</span></div>
+    <div class="kv"><span>relay</span><span><code>https://hermix.cssso.com</code></span></div>
+  </div>
+
+  <div class="card">
+    <ol>
+      <li>用手机浏览器打开本页，或直接扫上方二维码。</li>
+      <li>下载 <b>hermix.apk</b>；首次安装需在系统设置里允许<b>「安装未知来源应用」</b>。</li>
+      <li>打开 App，在配对屏把中转地址填成 <code>https://hermix.cssso.com</code>（必须 https）。</li>
+      <li>核对屏 1 显示的证书指纹与服务器一致后，输入桌面端二维码里的 6 位配对码。</li>
+    </ol>
+  </div>
+
+  <footer>HERMIX M · 本地优先的 AI 助手</footer>
+</div>
+<script>
+  // 服务端 /api/app-info 抓这一行显示版本号（升版改这里）
+  const HERMIX_M_VERSION = '0.1.0';
+  const $ = (id) => document.getElementById(id);
+  const fmtSize = (b) => b >= 1048576 ? (b/1048576).toFixed(1) + ' MB' : b >= 1024 ? Math.round(b/1024) + ' KB' : b + ' B';
+  fetch('/api/app-info', { cache: 'no-store' })
+    .then((r) => r.json())
+    .then((info) => {
+      if (!info.available) {
+        $('dl').textContent = '安装包尚未上传';
+        $('dl').setAttribute('aria-disabled', 'true');
+        $('meta').innerHTML = '<span class="warn">运维还没把 APK 传到服务器（放到 relay 目录的 public/hermix.apk 后重启项目即可）。</span>';
+        return;
+      }
+      $('dl').removeAttribute('aria-disabled');
+      $('ver').textContent = info.version || '—';
+      $('size').textContent = fmtSize(info.size);
+      $('upd').textContent = info.updatedAt ? new Date(info.updatedAt).toLocaleString() : '—';
+      $('sha').innerHTML = '<code>' + (info.sha256 || '—') + '</code>';
+    })
+    .catch(() => {
+      $('dl').textContent = '下载暂不可用';
+      $('dl').setAttribute('aria-disabled', 'true');
+      $('meta').textContent = '查询安装包信息失败，稍后重试。';
+    });
+</script>
+</body>
+</html>
