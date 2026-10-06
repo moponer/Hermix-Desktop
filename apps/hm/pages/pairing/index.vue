@@ -93,9 +93,9 @@ async function submit() {
 
 <template>
   <view class="screen">
-    <view class="logo">
-      <text class="bolt">⚡</text>
-    </view>
+    <!-- 吉祥物与桌面端同一个（static/mascot.png = apps/desktop-tauri/public/mascot-256.png）：
+         配对屏是用户第一眼，两端同一个形象才像"同一个产品"。 -->
+    <image class="logo" src="/static/mascot.png" mode="aspectFit" />
 
     <text class="hero">连接你的助手</text>
     <text class="sub">先核对中转身份，再输码</text>
@@ -149,16 +149,10 @@ async function submit() {
   box-sizing: border-box;
 }
 .logo {
-  width: 96rpx;
-  height: 96rpx;
-  border-radius: 28rpx;
-  background: $accent;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  width: 132rpx;
+  height: 132rpx;
   margin-bottom: 26rpx;
 }
-.bolt { font-size: 48rpx; }
 .hero { font-size: 34rpx; font-weight: 600; color: $fg; }
 .sub { font-size: 22rpx; color: $fg2; margin: 10rpx 0 40rpx; }
 
