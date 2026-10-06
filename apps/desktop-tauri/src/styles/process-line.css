@@ -28,7 +28,11 @@
 
 .process-line-row {
   display: flex;
-  align-items: baseline;
+  /* 垂直居中而非 baseline：右侧状态图标容器（inline-flex 内含 block svg）
+     没有文字基线，浏览器按底边充当基线，与左侧按基线手调的图标对不齐；
+     各状态字形（✓ / ⟳ / !）内边距不同还会放大偏差。整行居中对齐后
+     左右图标都落在同一中轴上。 */
+  align-items: center;
   gap: 8px;
   width: 100%;
   padding: 3px 0;
@@ -57,7 +61,7 @@
   height: 13px;
   flex: none;
   position: relative;
-  top: 2px;                    /* 图标按基线对齐，不跟 13px 字号顶对齐 */
+  top: 0;                      /* 行已垂直居中，图标无需再按基线手调 */
   color: var(--color-text-tertiary);
 }
 
