@@ -58,33 +58,45 @@ Keystore（`EncryptedSharedPreferences` 是原生能力）。token 明文泄漏 
 ASR 与 TTS 都在**手机端**直连云端（用户自带 API key），音频与文本都不过 relay，
 relay 架构一行不改。
 
-## 打包（APK）——现状与路径（2026-10-06 核实）
+## 打包（APK）——现状与路径（2026-10-06 实测矩阵）
 
-**`npm run build:app`（uni CLI）当前编不过**，失败在依赖层、与本项目代码无关：
+**`npm run build:app` 在纯 npm 工具链下无解**，且已排除"版本线配平"这一解释：
+
+| dcloud 版本 | vue 版本 | `build:app` | `build:h5` / `npm test` |
+|---|---|---|---|
+| 3.0.0-4060620250520001（当前 pin，预览线） | 3.4.21 / 3.5.22 | ✗ | ✓ |
+| 3.0.0-4080720251210001（最新正式线） | 3.4.21 | ✗ | ✓ |
+| 3.0.0-4040520250106001 / 3.0.0-4030320241128001 | 3.4.21 | ✗ | — |
+
+失败信息恒为：
 
 ```
 "isInSSRComponentSetup" is not exported by "vue/dist/vue.runtime.esm-bundler.js"
-（来自 @dcloudio/uni-app@3.0.0-4060620250520001）
+（来自 @dcloudio/uni-app/dist/uni-app.es.js）
 ```
 
-这版 dcloud 依赖是**预览版 alpha**，它期望的 `isInSSRComponentSetup` 只存在于
-vue 的 alpha 渠道构建；已实测发布的 vue 3.4.21 / 3.5.13 / 3.5.22 的 runtime
-构建**都没有**这个导出。`npm test`（tsx，不走 bundler）与 `build:h5`
-**都通过**——所以这个坑一直没被撞到。已回退任何实验性版本 pin。
+已逐版本核实：**已发布的任何 vue（3.4.21 / 3.5.13 / 3.5.22）的全部 dist
+构建都不导出 `isInSSRComponentSetup`**，而每一版已发布的 `@dcloudio/uni-app`
+都 import 它。**结论：app 目标必须经 HBuilderX 的运行时**（它自带配平好的
+uni-app + vue 工具链），npm 侧无论怎么配版本都编不出来。H5 与 `npm test`
+（tsx，不走 bundler）都正常——所以逻辑层有真门禁，缺的只是原生打包链路。
 
-**因此 APK 走 HBuilderX**（它自带配平好的 uni-app + vue 工具链，且 AppID
-必须走 DCloud 账号）：
+**HBuilderX 里的两个坑**：
 
-1. DCloud 开发者中心注册应用，取 **AppID**；
-2. HBuilderX「打开目录」选本目录；
-3. `manifest.json` 填 AppID + 包名（建议 `com.hermix.desktop.m`）；
-4. 发行 → 原生 App-云打包 → Android → 公测证书 → 下载 APK。
+1. **直接「打开目录」选 `apps/hm` 会报"请确认您的项目模板是否支持vue3：
+   根目录缺少 index.html"**——误导性报错。本项目是 **CLI 布局**
+   （`manifest.json` / `pages.json` 在 `src/`，`index.html` + `vite.config.ts`
+   在根），HBuilderX 按根目录 `manifest.json` 判定项目类型，认不出就退回
+   普通 web 分支。**真机调试的正确姿势是命令行**：`npm run dev:app`
+   （uni CLI 会唤起 HBuilderX 并在其运行时里跑）。
+2. **APK 云打包需要 AppID**：uni-app 原生 App 必须先在 DCloud 开发者中心
+   注册应用取 AppID，填进 `src/manifest.json` 的 `appid`（当前值
+   `__UNI__0B255CA` 是既有占位/他人注册，**打包前换成你自己的**），
+   然后在 HBuilderX 内完成发行 → 原生 App-云打包 → Android。
+   若 CLI 无法产出 `dist/build/app`，则需要把工程转成 HBuilderX 布局
+   （`manifest.json` / `pages.json` / `App.vue` / `main.js` 移到根目录）
+   ——属于工程形态变更，动手前先与该项目的当前负责人对齐。
 
-若 HBuilderX 也报同一导出错误：把 `@dcloudio/*` 从 alpha（`40606…`）降到
-**稳定版**（正式发布的 `3.0.0-4020920240930001` 一线），版本四件套
-（uni-app / uni-h5 / uni-components / vite-plugin-uni）**必须同号**，然后
-`rm -rf node_modules package-lock.json && npm i` 重装。
-
-打包出的 APK 装真机后第一件事：扫码配对 + 收第一帧加密消息——这是
-`crypto.subtle` 可用性（app-plus runtime）的唯一验证点，风险已记录在
-relay E2EE 决策笔记的 Consequences 一节。
+**装上 APK 后第一件事**：扫码配对 + 收第一帧加密消息——这是
+`crypto.subtle` 在 app-plus runtime 可用性的唯一验证点（风险已记录在
+relay E2EE 决策笔记的 Consequences 一节）。
