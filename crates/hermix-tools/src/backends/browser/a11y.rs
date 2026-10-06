@@ -79,7 +79,23 @@ fn ax_role_is_interactive(role: &str) -> bool {
 }
 
 /// Convert CDP `Accessibility.getFullAXTree` `nodes` array into a compact
-/// YAML tree plus a `ref → CSS selector` map for interactive nodes.
+/// What a `[ref=eN]` handle resolves to.
+///
+/// `backend_node_id` is the CDP-internal identity of the DOM node behind the
+/// AX node, and it is the only identifier that survives everything CSS cannot
+/// express — most importantly a label that is an *association*
+/// (`<label for="u">用户名</label>`) rather than an attribute. A node without
+/// one cannot be addressed, and is omitted from the map so the failure is loud
+/// instead of silently landing on a different element.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct RefTarget {
+    pub backend_node_id: u64,
+    /// Kept for error messages and for the `target=` filter; never used to
+    /// locate the element.
+    pub guessed_selector: String,
+}
+
+/// YAML tree plus a `ref → RefTarget` map for interactive nodes.
 /// `depth` limits how many nesting levels are emitted (root = 0).
 /// `target` optionally filters by a CSS selector substring (matched against
 /// the node's own selector or any descendant's); pass `None` to keep everything.
@@ -87,7 +103,7 @@ pub(crate) fn ax_tree_to_a11y_yaml(
     nodes: &Value,
     depth: Option<u32>,
     target: Option<&str>,
-) -> (String, std::collections::HashMap<String, String>) {
+) -> (String, std::collections::HashMap<String, RefTarget>) {
     use std::collections::{HashMap, VecDeque};
 
     let arr = match nodes.as_array() {
@@ -134,7 +150,7 @@ pub(crate) fn ax_tree_to_a11y_yaml(
 
     let max_depth = depth.unwrap_or(8);
     let mut out = String::new();
-    let mut refs: HashMap<String, String> = HashMap::new();
+    let mut refs: HashMap<String, RefTarget> = HashMap::new();
     let mut ref_counter: u32 = 0;
 
     let mut queue: VecDeque<(String, u32)> = VecDeque::new();
@@ -160,6 +176,9 @@ pub(crate) fn ax_tree_to_a11y_yaml(
             .unwrap_or("");
 
         let interactive = ax_role_is_interactive(role);
+        // Filter matching uses the node's own text, not a guessed selector —
+        // the selector here is only for `target` matching and is a heuristic
+        // by design. The ref map below is what actions resolve against.
         let selector = ax_node_selector(role, name);
         if let Some(t) = target {
             if !selector.contains(t) && !name.contains(t) {
@@ -183,10 +202,26 @@ pub(crate) fn ax_tree_to_a11y_yaml(
             line.push_str(&format!(" \"{name}\""));
         }
         if interactive {
-            ref_counter += 1;
-            let ref_id = format!("e{ref_counter}");
-            line.push_str(&format!(" [ref={ref_id}]"));
-            refs.insert(ref_id, selector);
+            // Only mint a ref we can actually resolve. An AX node without a
+            // `backendDOMNodeId` (rare, but happens for some synthesized
+            // nodes) is still described in the YAML so the model can see it,
+            // it just isn't clickable — and the line says so, instead of
+            // handing out a `[ref=eN]` that dead-ends at resolve time.
+            match node.get("backendDOMNodeId").and_then(|v| v.as_u64()) {
+                Some(backend_node_id) => {
+                    ref_counter += 1;
+                    let ref_id = format!("e{ref_counter}");
+                    line.push_str(&format!(" [ref={ref_id}]"));
+                    refs.insert(
+                        ref_id,
+                        RefTarget {
+                            backend_node_id,
+                            guessed_selector: selector,
+                        },
+                    );
+                }
+                None => line.push_str(" [not clickable: no backend node id]"),
+            }
         }
         // Surface states (disabled, checked, expanded) when present.
         let mut state_bits: Vec<&str> = Vec::new();
@@ -440,6 +475,11 @@ mod tests {
         // (post fix) uses the node's own childIds to build
         // the parent → children map, so node 1's childIds = [2, 3]
         // gives us two walked children.
+        //
+        // `backendDOMNodeId` is the load-bearing field: it is what makes a ref
+        // addressable. The accessible name below is deliberately one that no
+        // CSS attribute selector can express (`<label for>` association), which
+        // is precisely the case the old selector-guessing approach lost.
         let tree = serde_json::json!([
             {
                 "nodeId": "1",
@@ -449,6 +489,7 @@ mod tests {
             },
             {
                 "nodeId": "2",
+                "backendDOMNodeId": 100,
                 "role": {"value": "button"},
                 "name": {"value": "Login"},
                 "properties": [{"name": "disabled", "value": {"value": false}}],
@@ -456,6 +497,7 @@ mod tests {
             },
             {
                 "nodeId": "3",
+                "backendDOMNodeId": 200,
                 "role": {"value": "textbox"},
                 "name": {"value": "Username"},
                 "childIds": []
@@ -464,29 +506,69 @@ mod tests {
         let (yaml, refs) = ax_tree_to_a11y_yaml(&tree, None, None);
         assert!(yaml.contains("[ref=e1]"), "missing e1: {yaml}");
         assert!(yaml.contains("[ref=e2]"), "missing e2: {yaml}");
-        // The ref map must hold selectors that `document.querySelector`
-        // accepts — no Playwright-only `:has-text()`.
-        assert_eq!(
-            refs.get("e1").map(|s| s.as_str()),
-            Some(
-                "[role=\"button\"][aria-label=\"Login\"], [role=\"button\"][placeholder=\"Login\"], \
-                 [role=\"button\"][name=\"Login\"], [role=\"button\"][title=\"Login\"], \
-                 [role=\"button\"][alt=\"Login\"]"
-            )
-        );
-        assert_eq!(
-            refs.get("e2").map(|s| s.as_str()),
-            Some(
-                "[role=\"textbox\"][aria-label=\"Username\"], [role=\"textbox\"][placeholder=\"Username\"], \
-                 [role=\"textbox\"][name=\"Username\"], [role=\"textbox\"][title=\"Username\"], \
-                 [role=\"textbox\"][alt=\"Username\"]"
-            )
-        );
+        // The ref map carries the CDP node identity. That is the whole fix:
+        // resolution no longer depends on guessing a CSS selector from the
+        // accessible name, so a label expressed as an association resolves
+        // just as well as an attribute.
+        assert_eq!(refs.get("e1").map(|r| r.backend_node_id), Some(100));
+        assert_eq!(refs.get("e2").map(|r| r.backend_node_id), Some(200));
+        // The guess is retained only for diagnostics and the `target=` filter.
+        assert!(refs
+            .get("e1")
+            .is_some_and(|r| r.guessed_selector.contains("[role=\"button\"]")));
         assert!(
             !yaml.contains(":has-text"),
             "ref map leaked Playwright-only syntax back into the YAML"
         );
         assert!(yaml.contains("button \"Login\""));
+    }
+
+    /// An interactive AX node with no `backendDOMNodeId` cannot be addressed by
+    /// anything, so it must not be handed a `[ref=eN]` — the model would carry
+    /// a token that dead-ends at resolve time. It still appears in the tree
+    /// (the model should know it's there) with an explicit note, and it must
+    /// NOT consume a ref number, or every later ref on the page would shift.
+    #[test]
+    fn ax_tree_refuses_to_mint_unaddressable_refs() {
+        let tree = serde_json::json!([
+            {
+                "nodeId": "1", "role": {"value": "generic"},
+                "name": {"value": ""}, "childIds": ["2", "3"]
+            },
+            {
+                // No backendDOMNodeId — synthesized node.
+                "nodeId": "2", "role": {"value": "button"},
+                "name": {"value": "Ghost"}, "childIds": []
+            },
+            {
+                "nodeId": "3", "backendDOMNodeId": 300,
+                "role": {"value": "textbox"},
+                "name": {"value": "User"}, "childIds": []
+            }
+        ]);
+        let (yaml, refs) = ax_tree_to_a11y_yaml(&tree, None, None);
+        // The Ghost button is described but carries no ref. Asserting on the
+        // whole line rather than `!yaml.contains("[ref=e1]")` — the textbox
+        // legitimately owns e1, so a document-wide substring check would
+        // pass for the wrong reason.
+        let ghost_line = yaml
+            .lines()
+            .find(|l| l.contains("Ghost"))
+            .expect("ghost line must still be described");
+        assert!(
+            !ghost_line.contains("[ref="),
+            "unaddressable node got a ref: {ghost_line}"
+        );
+        assert!(
+            ghost_line.contains("not clickable"),
+            "the gap must be visible to the model: {ghost_line}"
+        );
+        // The addressable node still gets a ref, and it is e1 — not e2. A ref
+        // that skipped a number would silently break every handle the model
+        // collected from the rest of this snapshot.
+        assert!(yaml.contains("[ref=e1]"), "addressable node lost its ref: {yaml}");
+        assert_eq!(refs.len(), 1, "exactly one addressable node: {yaml}");
+        assert_eq!(refs.get("e1").map(|r| r.backend_node_id), Some(300));
     }
 
     #[test]

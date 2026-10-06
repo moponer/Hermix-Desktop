@@ -9,11 +9,18 @@ use reqwest::Client;
 use serde_json::{json, Value};
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
+
+/// Concrete socket type `connect_async` hands back. Aliased so the session
+/// helpers below don't have to name four generic parameters.
+type CdpSocket = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 
 use crate::tools::browser::BrowserBackend;
 use hermix_core::ToolError;
 
-use super::a11y::{ax_tree_to_a11y_yaml, build_wait_for_js, compact_a11y_yaml, diff_a11y_yaml};
+use super::a11y::{
+    ax_tree_to_a11y_yaml, build_wait_for_js, compact_a11y_yaml, diff_a11y_yaml, RefTarget,
+};
 use super::cloud::annotate_result;
 
 /// Browser backend using Chrome DevTools Protocol.
@@ -24,9 +31,11 @@ pub struct CdpBrowserBackend {
     /// or a concrete websocket endpoint (`wss://.../devtools/browser/...`).
     endpoint: String,
     client: Client,
-    /// Last snapshot ref → CSS selector mapping. Lets the LLM pass
-    /// `[ref=eN]` from the snapshot YAML instead of writing raw selectors.
-    last_snapshot_refs: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, String>>>,
+    /// Last snapshot ref → CDP node identity. Lets the LLM pass `[ref=eN]`
+    /// from the snapshot YAML instead of writing raw selectors, and resolves
+    /// to the exact node the accessibility tree described — no CSS guessing,
+    /// so labels expressed as `<label for>` associations resolve correctly.
+    last_snapshot_refs: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, RefTarget>>>,
     /// init scripts registered via `Page.addScriptToEvaluateOnNewDocument`.
     /// Each entry is the script's `scriptId` (from CDP) so we can remove
     /// it later via `Page.removeScriptToEvaluateOnNewDocument`. The
@@ -39,6 +48,19 @@ pub struct CdpBrowserBackend {
 pub struct CamoFoxBrowserBackend {
     inner: CdpBrowserBackend,
     profile: String,
+}
+
+/// What a target resolves to once classified.
+///
+/// `Node` is a CDP-internal node identity taken from the accessibility tree and
+/// must be used with `call_on_node`. `Css` is a model-authored selector and goes
+/// down the `document.querySelector` path — still fully supported, because
+/// models legitimately write their own selectors, and a snapshot ref is a
+/// convenience rather than the only way in.
+#[derive(Debug)]
+pub(crate) enum Resolved {
+    Node(u64),
+    Css(String),
 }
 
 impl CamoFoxBrowserBackend {
@@ -82,22 +104,47 @@ impl CdpBrowserBackend {
     /// Raw CSS selectors (those that do not start with `[ref=`) are returned
     /// unchanged — the LLM may legitimately want to use a CSS selector without
     /// a snapshot token.
-    pub fn resolve_selector(&self, selector: &str) -> Result<String, ToolError> {
+    /// Is this a `[ref=eN]` token rather than a CSS selector?
+    pub(crate) fn is_ref_token(selector: &str) -> Option<&str> {
         let trimmed = selector.trim();
-        if let Some(rest) = trimmed.strip_prefix("[ref=") {
-            if let Some(ref_id) = rest.strip_suffix(']') {
-                if let Ok(map) = self.last_snapshot_refs.lock() {
-                    if let Some(sel) = map.get(ref_id) {
-                        return Ok(sel.clone());
-                    }
-                }
-            }
-            // `[ref=…]` with no match: fail loud, not silent.
+        let rest = trimmed.strip_prefix("[ref=")?;
+        rest.strip_suffix(']')
+    }
+
+    /// Classify a model-supplied target into a node handle or a CSS selector.
+    ///
+    /// A `[ref=…]` token with no entry in the current snapshot is an error, not
+    /// a CSS selector: the usual cause is that the page navigated after the
+    /// snapshot, so the handle is stale, and falling through would either
+    /// syntax-error or — far worse — match an unrelated element.
+    pub(crate) fn resolve_selector(&self, selector: &str) -> Result<Resolved, ToolError> {
+        let trimmed = selector.trim();
+        if let Some(ref_id) = Self::is_ref_token(trimmed) {
+            let found = self
+                .last_snapshot_refs
+                .lock()
+                .ok()
+                .and_then(|map| map.get(ref_id).map(|t| t.backend_node_id));
+            return match found {
+                Some(id) => Ok(Resolved::Node(id)),
+                None => Err(ToolError::ExecutionFailed(format!(
+                    "引用句柄 `[ref={ref_id}]` 不存在（页面可能已导航，请重新 browser_snapshot）"
+                ))),
+            };
+        }
+        // A near-miss that *intended* to be a handle (`[ref=e1` with the
+        // bracket dropped) must not reach `querySelector`. `[ref=e1` is a
+        // legal attribute selector, so it would silently match whatever
+        // element happens to carry a `ref="e1"` attribute — the model would
+        // be told it clicked one thing while the code touched another. Fail
+        // with the correction instead.
+        if trimmed.starts_with("[ref=") {
             return Err(ToolError::ExecutionFailed(format!(
-                "引用句柄 `{selector}` 不存在（页面可能已导航，请重新 browser_snapshot）"
+                "`{trimmed}` 是残缺的引用句柄，格式应为 `[ref=eN]`。\
+                 请重新 browser_snapshot 取新的句柄，或直接传 CSS 选择器。"
             )));
         }
-        Ok(trimmed.to_string())
+        Ok(Resolved::Css(trimmed.to_string()))
     }
 
     /// Create from environment variable `CHROME_CDP_URL` or default localhost.
@@ -243,6 +290,217 @@ impl CdpBrowserBackend {
         Err(ToolError::ExecutionFailed(format!(
             "No CDP response received for {method} within timeout"
         )))
+    }
+
+    /// One request/response round trip on an **already-open** CDP socket.
+    /// Interleaved events and replies belonging to other ids are skipped.
+    async fn ws_roundtrip(
+        ws: &mut CdpSocket,
+        method: &str,
+        params: Value,
+    ) -> Result<Value, ToolError> {
+        static NEXT_CDP_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let id = NEXT_CDP_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        ws.send(WsMessage::Text(
+            json!({ "id": id, "method": method, "params": params }).to_string(),
+        ))
+        .await
+        .map_err(|e| {
+            ToolError::ExecutionFailed(format!("Failed to send CDP command {method}: {e}"))
+        })?;
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            if std::time::Instant::now() >= deadline {
+                return Err(ToolError::ExecutionFailed(format!(
+                    "No CDP response received for {method} within timeout"
+                )));
+            }
+            let frame = tokio::time::timeout(std::time::Duration::from_secs(5), ws.next())
+                .await
+                .map_err(|_| {
+                    ToolError::ExecutionFailed(format!("CDP read timed out for {method}"))
+                })?;
+            let frame = match frame {
+                Some(Ok(f)) => f,
+                Some(Err(e)) => {
+                    return Err(ToolError::ExecutionFailed(format!(
+                        "CDP stream read failed for {method}: {e}"
+                    )))
+                }
+                None => {
+                    return Err(ToolError::ExecutionFailed(format!(
+                        "CDP connection closed before response for {method}"
+                    )))
+                }
+            };
+            let text = match frame {
+                WsMessage::Text(t) => t,
+                WsMessage::Binary(bytes) => String::from_utf8(bytes).map_err(|e| {
+                    ToolError::ExecutionFailed(format!("CDP binary frame decode failed: {e}"))
+                })?,
+                WsMessage::Ping(_) | WsMessage::Pong(_) | WsMessage::Frame(_) => continue,
+                WsMessage::Close(_) => {
+                    return Err(ToolError::ExecutionFailed(format!(
+                        "CDP connection closed before response for {method}"
+                    )))
+                }
+            };
+            let parsed: Value = serde_json::from_str(&text).map_err(|e| {
+                ToolError::ExecutionFailed(format!("Failed to parse CDP response JSON: {e}"))
+            })?;
+            if parsed.get("id").and_then(|v| v.as_u64()) != Some(id) {
+                continue; // an event, or a reply we already consumed
+            }
+            if let Some(err) = parsed.get("error") {
+                return Err(ToolError::ExecutionFailed(format!(
+                    "CDP command {method} failed: {err}"
+                )));
+            }
+            return Ok(parsed.get("result").cloned().unwrap_or(parsed));
+        }
+    }
+
+    /// Run `body` against the element identified by `backend_node_id`, on a
+    /// session that stays open across both the resolve and the call.
+    ///
+    /// `body` is a JS function body taking the element as `el` and returning
+    /// a JSON-serializable value. It is always this file's own literal JS —
+    /// nothing derived from the model is ever concatenated into it, so there
+    /// is no injection surface here (unlike the selector path, where the
+    /// selector does come from the model and must stay JSON-encoded).
+    ///
+    /// Returns the `result.value` of the call, or `Value::Null` when the
+    /// function returned nothing.
+    ///
+    /// The two commands share one socket on purpose: `DOM.resolveNode` returns
+    /// a `RemoteObjectId`, which is **scoped to the session that minted it**,
+    /// so a resolve-then-use pair cannot go through [`Self::cdp_command`] — it
+    /// opens a fresh WebSocket per call and the handle would be dead on
+    /// arrival. That per-session lifetime is the entire reason `[ref=eN]` used
+    /// to be emulated with a CSS selector guessed from a node's accessible
+    /// name, and why that guess missed every input labelled by a
+    /// `<label for>` association rather than an attribute — i.e. most login
+    /// forms. Tearing the socket down at the end also releases the handle,
+    /// so there is nothing to clean up and no way for it to outlive its use.
+    async fn call_on_node(&self, backend_node_id: u64, body: &str) -> Result<Value, ToolError> {
+        let target = self.resolve_target().await?;
+        let (mut ws, _) = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            connect_async(&target),
+        )
+        .await
+        .map_err(|_| ToolError::ExecutionFailed("CDP websocket connection timed out".into()))?
+        .map_err(|e| {
+            ToolError::ExecutionFailed(format!(
+                "Failed to connect to CDP websocket {target}: {e}"
+            ))
+        })?;
+
+        let out = async {
+            let resolved = Self::ws_roundtrip(
+                &mut ws,
+                "DOM.resolveNode",
+                json!({ "backendNodeId": backend_node_id }),
+            )
+            .await?;
+            let object_id = resolved
+                .get("object")
+                .and_then(|o| o.get("objectId"))
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| {
+                    ToolError::ExecutionFailed(format!(
+                        "DOM.resolveNode returned no objectId for backendNodeId \
+                         {backend_node_id} — the node is gone (page navigated or \
+                         re-rendered). Re-run browser_snapshot for a fresh [ref=…]."
+                    ))
+                })?
+                .to_string();
+
+            let called = Self::ws_roundtrip(
+                &mut ws,
+                "Runtime.callFunctionOn",
+                json!({
+                    "objectId": object_id,
+                    "functionDeclaration": body,
+                    "returnByValue": true,
+                    "awaitPromise": true,
+                }),
+            )
+            .await?;
+
+            // A thrown JS body surfaces here, not in the id-matching path.
+            if let Some(details) = called.get("exceptionDetails") {
+                return Err(ToolError::ExecutionFailed(format!(
+                    "page-side function threw: {details}"
+                )));
+            }
+            Ok(called
+                .get("result")
+                .and_then(|r| r.get("value"))
+                .cloned()
+                .unwrap_or(Value::Null))
+        }
+        .await;
+
+        let _ = ws.close(None).await;
+        out
+    }
+
+    /// Preflight on a CDP-resolved node. Returns `(reason, cover)`; both
+    /// `None` means the element passed.
+    async fn preflight_via_node(
+        &self,
+        backend_node_id: u64,
+        body: &str,
+    ) -> Result<(Option<String>, Option<String>), ToolError> {
+        let v = self.call_on_node(backend_node_id, body).await?;
+        Ok(Self::read_preflight(&v))
+    }
+
+    /// Preflight on a model-authored CSS selector.
+    async fn preflight_via_css(
+        &self,
+        js: &str,
+    ) -> Result<(Option<String>, Option<String>), ToolError> {
+        let result = self
+            .cdp_command(
+                "Runtime.evaluate",
+                json!({ "expression": js, "returnByValue": true }),
+            )
+            .await?;
+        let raw = result
+            .get("result")
+            .and_then(|r| r.get("value"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("{}");
+        // A thrown expression (invalid selector ⇒ SyntaxError) leaves
+        // `result.value` absent, so `raw` is "{}" and the old
+        // `unwrap_or_else(|_| json!({"ok": true}))` fallback declared the
+        // preflight passed. Fail closed: an unparseable preflight is a
+        // failure, not a pass.
+        let pre: Value = serde_json::from_str(raw).unwrap_or_else(|_| {
+            json!({"ok": false, "reason": "preflight_evaluate_failed"})
+        });
+        Ok(Self::read_preflight(&pre))
+    }
+
+    /// `None` on `ok: true` or a missing `ok` — the caller only acts on an
+    /// explicit `false`, matching the original fail-closed semantics.
+    fn read_preflight(pre: &Value) -> (Option<String>, Option<String>) {
+        if pre.get("ok").and_then(|v| v.as_bool()) != Some(false) {
+            return (None, None);
+        }
+        let reason = pre
+            .get("reason")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let cover = pre
+            .get("cover")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        (Some(reason), cover)
     }
 
     /// Send a CDP command and optionally wait for a follow-up event on the
@@ -641,62 +899,57 @@ impl BrowserBackend for CdpBrowserBackend {
     }
 
     async fn click(&self, selector: &str) -> Result<String, ToolError> {
-        let resolved = self.resolve_selector(selector)?;
-        // Pre-flight: detect missing / covered / disabled elements BEFORE
-        // dispatching a click. This is the pre-flight element check that the
-        // screenshot showed was missing — the LLM was firing
-        // a click into the void, getting `clicked` back, and then
-        // wondering why nothing happened.
-        let preflight = self
-            .cdp_command(
-                "Runtime.evaluate",
-                json!({
-                    "expression": format!(
-                        "(function(){{ var el = document.querySelector({}); \
-                         if(!el) return JSON.stringify({{ok:false, reason:'not_found'}}); \
-                         if(el.disabled) return JSON.stringify({{ok:false, reason:'disabled'}}); \
-                         var r = el.getBoundingClientRect(); \
-                         if(r.width===0||r.height===0) return JSON.stringify({{ok:false, reason:'invisible'}}); \
-                         var x = r.left + r.width/2, y = r.top + r.height/2; \
-                         var top = document.elementFromPoint(x,y); \
-                         if(top && top!==el && !el.contains(top)) \
-                           return JSON.stringify({{ok:false, reason:'covered_by', cover: top.outerHTML.slice(0,160), tag: top.tagName}}); \
-                         return JSON.stringify({{ok:true}}); }})()",
-                        serde_json::to_string(&resolved).unwrap_or_else(|_| "\"\"".into())
-                    ),
-                    "returnByValue": true,
-                }),
-            )
-            .await?;
-        let pre_value = preflight
-            .get("result")
-            .and_then(|r| r.get("value"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("{}");
-        // A thrown expression (invalid selector ⇒ SyntaxError) leaves
-        // `result.value` absent, so `pre_value` is "{}" and the old
-        // `unwrap_or_else(|_| json!({"ok": true}))` fallback declared the
-        // preflight passed. Fail closed: an unparseable preflight is a
-        // failure, not a pass.
-        let pre: Value = serde_json::from_str(pre_value).unwrap_or_else(|_| {
-            json!({"ok": false, "reason": "preflight_evaluate_failed"})
-        });
-        if pre.get("ok").and_then(|v| v.as_bool()) == Some(false) {
-            let reason = pre.get("reason").and_then(|v| v.as_str()).unwrap_or("");
+        // Preflight reasons, shared by both resolution paths so a ref click and
+        // a CSS click fail identically — otherwise a bug in one path would
+        // look like a page difference.
+        //
+        // `PREFLIGHT_BODY` / the CSS variant take the element as `el`. On the
+        // node path the element comes from a CDP-resolved handle; on the CSS
+        // path it comes from `querySelector`. Everything after that is the
+        // same check: missing / disabled / zero-size / covered.
+        const PREFLIGHT_AFTER_EL: &str = r#"
+            if (el.disabled) return {ok:false, reason:'disabled'};
+            var r = el.getBoundingClientRect();
+            if (r.width===0 || r.height===0) return {ok:false, reason:'invisible'};
+            var x = r.left + r.width/2, y = r.top + r.height/2;
+            var top = document.elementFromPoint(x,y);
+            if (top && top!==el && !el.contains(top))
+              return {ok:false, reason:'covered_by', cover: top.outerHTML.slice(0,160), tag: top.tagName};
+            return {ok:true};"#;
+
+        let (pre_reason, pre_cover) = match self.resolve_selector(selector)? {
+            Resolved::Node(id) => {
+                let body = format!(
+                    "function(){{ if (!el) return {{ok:false, reason:'not_found'}}; \
+                     {PREFLIGHT_AFTER_EL} }}"
+                );
+                self.preflight_via_node(id, &body).await?
+            }
+            Resolved::Css(ref sel) => {
+                let js = format!(
+                    "(function(){{ var el = document.querySelector({sel}); \
+                     if(!el) return JSON.stringify({{ok:false, reason:'not_found'}}); \
+                     return JSON.stringify((function(){{{PREFLIGHT_AFTER_EL}}})()); }})()",
+                    sel = serde_json::to_string(sel).unwrap_or_else(|_| "\"\"".into()),
+                );
+                self.preflight_via_css(&js).await?
+            }
+        };
+
+        if let Some(reason) = pre_reason {
             let mut payload = json!({
                 "status": "click_failed",
-                "selector": resolved,
                 "original": selector,
                 "reason": reason,
             });
-            if let Some(cover) = pre.get("cover").and_then(|v| v.as_str()) {
+            if let Some(cover) = pre_cover {
                 payload["covered_by"] = json!(cover);
             }
             // Structured next-step hint so the LLM does not blindly retry
             // the same click. The agent_loop's tool error recovery logic
             // will surface this directly to the model.
-            payload["hint"] = json!(match reason {
-                "not_found" => "The selector matched no element. Re-snapshot (browser_snapshot) to get fresh [ref=eN] handles, then retry with a new selector.",
+            payload["hint"] = json!(match reason.as_str() {
+                "not_found" => "The target no longer exists. Re-snapshot (browser_snapshot) to get fresh [ref=eN] handles, then retry.",
                 "disabled" => "The element is disabled (disabled attribute or aria-disabled=true). Wait for the page to enable it, or interact with a different control.",
                 "invisible" => "The element has zero size (display:none, hidden, or off-viewport). Try scrolling to it first, or use a different selector.",
                 "covered_by" => "Another element is on top of this one (a modal, sticky header, or overlay). Dismiss or close the overlay before clicking, or use evaluate to call .click() directly while bypassing hit-testing.",
@@ -705,35 +958,41 @@ impl BrowserBackend for CdpBrowserBackend {
             return Ok(payload.to_string());
         }
 
-        // Same two bugs as `r#type`, and the report blamed `type` alone:
-        // `click` resolves through the same map, so a bad `[ref=eN]`
-        // broke here too. No top-level declaration, but the status was
-        // still hardcoded.
-        let js = format!(
-            "(function(){{ var el = document.querySelector({sel}); \
-             if(!el) return 'not found'; el.click(); return 'clicked'; }})()",
-            sel = serde_json::to_string(&resolved).unwrap_or_else(|_| "\"\"".into()),
-        );
-        let result = self
-            .cdp_command(
-                "Runtime.evaluate",
-                json!({ "expression": js, "returnByValue": true }),
-            )
-            .await?;
-        let evaluated = result
-            .get("result")
-            .and_then(|r| r.get("value"))
-            .and_then(|v| v.as_str());
-        if evaluated != Some("clicked") {
+        // Dispatch. On the node path the click runs against the exact element
+        // the accessibility tree described — no selector round-trip, so nothing
+        // can re-resolve to a different node between check and dispatch.
+        let dispatched = match self.resolve_selector(selector)? {
+            Resolved::Node(id) => self
+                .call_on_node(id, "function(){ el.click(); return 'clicked'; }")
+                .await?
+                .as_str()
+                .map(|s| s.to_string()),
+            Resolved::Css(ref sel) => {
+                let js = format!(
+                    "(function(){{ var el = document.querySelector({sel}); \
+                     if(!el) return 'not found'; el.click(); return 'clicked'; }})()",
+                    sel = serde_json::to_string(sel).unwrap_or_else(|_| "\"\"".into()),
+                );
+                self.cdp_command(
+                    "Runtime.evaluate",
+                    json!({ "expression": js, "returnByValue": true }),
+                )
+                .await?
+                .get("result")
+                .and_then(|r| r.get("value"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+            }
+        };
+
+        if dispatched.as_deref() != Some("clicked") {
             let mut payload = json!({
                 "status": "click_failed",
-                "selector": resolved,
                 "original": selector,
-                "reason": if evaluated.is_some() { "not_found" } else { "evaluate_failed" },
-                "cdp": result,
+                "reason": if dispatched.is_some() { "not_found" } else { "evaluate_failed" },
             });
             payload["hint"] = json!(
-                "The page-side expression did not return 'clicked'. If the selector came from a \
+                "The page-side expression did not return 'clicked'. If the target came from a \
                  [ref=eN] handle, re-run browser_snapshot — handles go stale after every DOM \
                  change. Otherwise verify the selector against the page yourself."
             );
@@ -745,58 +1004,48 @@ impl BrowserBackend for CdpBrowserBackend {
         let fresh_snapshot = self.snapshot_with_options(None, None, true).await.ok();
         Ok(json!({
             "status": "clicked",
-            "selector": resolved,
             "original": selector,
-            "cdp": result,
             "snapshot": fresh_snapshot,
         })
         .to_string())
     }
 
     async fn r#type(&self, selector: &str, text: &str) -> Result<String, ToolError> {
-        let resolved = self.resolve_selector(selector)?;
-        // Same pre-flight as click: surface not_found / disabled / invisible
-        // BEFORE the LLM proceeds to fill the next field.
-        let preflight = self
-            .cdp_command(
-                "Runtime.evaluate",
-                json!({
-                    "expression": format!(
-                        "(function(){{ var el = document.querySelector({}); \
-                         if(!el) return JSON.stringify({{ok:false, reason:'not_found'}}); \
-                         if(el.disabled || el.readOnly) return JSON.stringify({{ok:false, reason:'readonly'}}); \
-                         if(el.tagName==='INPUT' && (el.type==='hidden')) \
-                           return JSON.stringify({{ok:false, reason:'hidden_input'}}); \
-                         return JSON.stringify({{ok:true}}); }})()",
-                        serde_json::to_string(&resolved).unwrap_or_else(|_| "\"\"".into())
-                    ),
-                    "returnByValue": true,
-                }),
-            )
-            .await?;
-        let pre_value = preflight
-            .get("result")
-            .and_then(|r| r.get("value"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("{}");
-        // A thrown expression (invalid selector ⇒ SyntaxError) leaves
-        // `result.value` absent, so `pre_value` is "{}" and the old
-        // `unwrap_or_else(|_| json!({"ok": true}))` fallback declared the
-        // preflight passed. Fail closed: an unparseable preflight is a
-        // failure, not a pass.
-        let pre: Value = serde_json::from_str(pre_value).unwrap_or_else(|_| {
-            json!({"ok": false, "reason": "preflight_evaluate_failed"})
-        });
-        if pre.get("ok").and_then(|v| v.as_bool()) == Some(false) {
-            let reason = pre.get("reason").and_then(|v| v.as_str()).unwrap_or("");
+        // Same element checks as `click`, with the type-specific additions
+        // (readonly / hidden input) — and the same two resolution paths, so
+        // a ref and a CSS target are held to identical standards.
+        const PREFLIGHT_AFTER_EL: &str = r#"
+            if (el.disabled || el.readOnly) return {ok:false, reason:'readonly'};
+            if (el.tagName==='INPUT' && el.type==='hidden') return {ok:false, reason:'hidden_input'};
+            return {ok:true};"#;
+
+        let (pre_reason, _) = match self.resolve_selector(selector)? {
+            Resolved::Node(id) => {
+                let body = format!(
+                    "function(){{ if (!el) return {{ok:false, reason:'not_found'}}; \
+                     {PREFLIGHT_AFTER_EL} }}"
+                );
+                self.preflight_via_node(id, &body).await?
+            }
+            Resolved::Css(ref sel) => {
+                let js = format!(
+                    "(function(){{ var el = document.querySelector({sel}); \
+                     if(!el) return JSON.stringify({{ok:false, reason:'not_found'}}); \
+                     return JSON.stringify((function(){{{PREFLIGHT_AFTER_EL}}})()); }})()",
+                    sel = serde_json::to_string(sel).unwrap_or_else(|_| "\"\"".into()),
+                );
+                self.preflight_via_css(&js).await?
+            }
+        };
+
+        if let Some(reason) = pre_reason {
             let mut payload = json!({
                 "status": "type_failed",
-                "selector": resolved,
                 "original": selector,
                 "reason": reason,
             });
-            payload["hint"] = json!(match reason {
-                "not_found" => "The selector matched no element. Re-snapshot (browser_snapshot) to get fresh [ref=eN] handles, then retry with a new selector.",
+            payload["hint"] = json!(match reason.as_str() {
+                "not_found" => "The target no longer exists. Re-snapshot (browser_snapshot) to get fresh [ref=eN] handles, then retry.",
                 "readonly" => "The element is read-only. Find a similar field that accepts input, or remove the readonly attribute via evaluate.",
                 "hidden_input" => "The matched input is type=hidden. Re-snapshot and look for a visible textbox or textarea with the same name.",
                 _ => "Type could not be dispatched. Re-snapshot and try again.",
@@ -804,50 +1053,57 @@ impl BrowserBackend for CdpBrowserBackend {
             return Ok(payload.to_string());
         }
 
-        // IIFE + `var`, and JSON-encoded operands.
-        //
-        // The old body was a bare top-level `let el = …`. A top-level
-        // `let` creates a persistent global-lexical binding in the page
-        // realm, so the *second* `browser_type` on any document threw
-        // "Identifier 'el' has already been declared" while the first
-        // looked fine. (The preflight above was never the culprit — it
-        // already used an IIFE with `var`.)
-        //
-        // Operands go through `serde_json::to_string` rather than
-        // `replace('\'', …)`: a value containing a quote used to produce
-        // syntactically broken — and injectable — JS.
-        let js = format!(
-            "(function(){{ var el = document.querySelector({sel}); \
-             if(!el) return 'not found'; \
-             el.value = {txt}; el.dispatchEvent(new Event('input')); \
-             return 'typed'; }})()",
-            sel = serde_json::to_string(&resolved).unwrap_or_else(|_| "\"\"".into()),
-            txt = serde_json::to_string(text).unwrap_or_else(|_| "\"\"".into()),
-        );
-        let result = self
-            .cdp_command(
-                "Runtime.evaluate",
-                json!({ "expression": js, "returnByValue": true }),
-            )
-            .await?;
+        // Dispatch. The text goes through `serde_json::to_string`, never string
+        // concatenation with quote-replacement: a value containing a quote
+        // would otherwise produce syntactically broken — and injectable — JS.
+        let txt = serde_json::to_string(text).unwrap_or_else(|_| "\"\"".into());
+        let dispatched = match self.resolve_selector(selector)? {
+            Resolved::Node(id) => {
+                // `el` is the CDP-resolved handle, so this cannot land on a
+                // different element than the preflight just checked.
+                let body = format!(
+                    "function(){{ el.value = {txt}; \
+                     el.dispatchEvent(new Event('input', {{bubbles:true}})); \
+                     return 'typed'; }}"
+                );
+                self.call_on_node(id, &body)
+                    .await?
+                    .as_str()
+                    .map(|s| s.to_string())
+            }
+            Resolved::Css(ref sel) => {
+                let js = format!(
+                    "(function(){{ var el = document.querySelector({sel}); \
+                     if(!el) return 'not found'; \
+                     el.value = {txt}; \
+                     el.dispatchEvent(new Event('input', {{bubbles:true}})); \
+                     return 'typed'; }})()",
+                    sel = serde_json::to_string(sel).unwrap_or_else(|_| "\"\"".into()),
+                );
+                self.cdp_command(
+                    "Runtime.evaluate",
+                    json!({ "expression": js, "returnByValue": true }),
+                )
+                .await?
+                .get("result")
+                .and_then(|r| r.get("value"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+            }
+        };
+
         // Report what actually happened. This used to be a hardcoded
-        // `status: "typed"` that never looked at `result`, so a thrown
-        // SyntaxError (invalid ref selector) was reported to the model as
-        // a success and it moved on believing the field was filled.
-        let evaluated = result
-            .get("result")
-            .and_then(|r| r.get("value"))
-            .and_then(|v| v.as_str());
-        if evaluated != Some("typed") {
+        // `status: "typed"` that never looked at the result, so a failure was
+        // reported to the model as a success and it moved on believing the
+        // field was filled.
+        if dispatched.as_deref() != Some("typed") {
             let mut payload = json!({
                 "status": "type_failed",
-                "selector": resolved,
                 "original": selector,
-                "reason": if evaluated.is_some() { "not_found" } else { "evaluate_failed" },
-                "cdp": result,
+                "reason": if dispatched.is_some() { "not_found" } else { "evaluate_failed" },
             });
             payload["hint"] = json!(
-                "The page-side expression did not return 'typed'. If the selector came from a \
+                "The page-side expression did not return 'typed'. If the target came from a \
                  [ref=eN] handle, re-run browser_snapshot to get a fresh handle — the text may \
                  have moved. Otherwise verify the element is an input/textarea that accepts text."
             );
@@ -860,10 +1116,8 @@ impl BrowserBackend for CdpBrowserBackend {
         let fresh_snapshot = self.snapshot_with_options(None, None, true).await.ok();
         Ok(json!({
             "status": "typed",
-            "selector": resolved,
             "original": selector,
             "text": text,
-            "cdp": result,
             "snapshot": fresh_snapshot,
         })
         .to_string())
@@ -945,48 +1199,75 @@ impl BrowserBackend for CdpBrowserBackend {
     }
 
     async fn highlight(&self, selector: &str) -> Result<String, ToolError> {
-        // Resolve `[ref=eN]` tokens against the last snapshot's ref map.
-        let resolved = self.resolve_selector(selector)?;
-        let json = serde_json::to_string(&resolved).unwrap_or_else(|_| "\"\"".into());
-        let js = format!(
-            r#"(function(){{
-                var __hl_old = document.querySelectorAll('.__hermix_hl_pulse');
-                for (var i=0;i<__hl_old.length;i++) __hl_old[i].remove();
-                var el = document.querySelector({json});
-                if(!el) return JSON.stringify({{ok:false, reason:'not_found'}});
-                el.scrollIntoView({{block:'center'}});
-                el.style.outline='3px solid #ff0066';
-                el.style.outlineOffset='2px';
-                el.classList.add('__hermix_hl_pulse');
-                return JSON.stringify({{ok:true, selector:{json}}});
-            }})()"#
-        );
-        let result = self
-            .cdp_command(
-                "Runtime.evaluate",
-                json!({"expression": js, "returnByValue": true}),
-            )
-            .await?;
-        let value = result
-            .get("result")
-            .and_then(|r| r.get("value"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("{}");
-        let parsed: Value = serde_json::from_str(value).unwrap_or_else(|_| json!({}));
-        if parsed.get("ok").and_then(|v| v.as_bool()) != Some(true) {
-            let reason = parsed.get("reason").and_then(|v| v.as_str()).unwrap_or("");
+        // Resolve `[ref=eN]` tokens against the last snapshot's ref map. The
+        // pulse-class cleanup has to run page-wide either way, so it stays a
+        // `Runtime.evaluate`; only the "which element" part differs per path.
+        let PREP = "document.querySelectorAll('.__hermix_hl_pulse')\
+                   .forEach(function(n){n.remove();});";
+        let (ok, reason) = match self.resolve_selector(selector)? {
+            Resolved::Node(id) => {
+                let body = format!(
+                    "function(){{ {PREP} \
+                     if(!el) return {{ok:false, reason:'not_found'}}; \
+                     el.scrollIntoView({{block:'center'}}); \
+                     el.style.outline='3px solid #ff0066'; \
+                     el.style.outlineOffset='2px'; \
+                     el.classList.add('__hermix_hl_pulse'); \
+                     return {{ok:true}}; }}"
+                );
+                let v = self.call_on_node(id, &body).await?;
+                (
+                    v.get("ok").and_then(|b| b.as_bool()).unwrap_or(false),
+                    v.get("reason").and_then(|r| r.as_str()).map(|s| s.to_string()),
+                )
+            }
+            Resolved::Css(ref sel) => {
+                let js = format!(
+                    r#"(function(){{
+                        {PREP}
+                        var el = document.querySelector({json});
+                        if(!el) return JSON.stringify({{ok:false, reason:'not_found'}});
+                        el.scrollIntoView({{block:'center'}});
+                        el.style.outline='3px solid #ff0066';
+                        el.style.outlineOffset='2px';
+                        el.classList.add('__hermix_hl_pulse');
+                        return JSON.stringify({{ok:true}});
+                    }})()"#,
+                    json = serde_json::to_string(sel).unwrap_or_else(|_| "\"\"".into()),
+                );
+                let result = self
+                    .cdp_command(
+                        "Runtime.evaluate",
+                        json!({"expression": js, "returnByValue": true }),
+                    )
+                    .await?;
+                let value = result
+                    .get("result")
+                    .and_then(|r| r.get("value"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("{}");
+                let parsed: Value = serde_json::from_str(value).unwrap_or_else(|_| json!({}));
+                (
+                    parsed.get("ok").and_then(|b| b.as_bool()).unwrap_or(false),
+                    parsed
+                        .get("reason")
+                        .and_then(|r| r.as_str())
+                        .map(|s| s.to_string()),
+                )
+            }
+        };
+
+        if !ok {
             return Ok(json!({
                 "status": "highlight_failed",
-                "selector": resolved,
                 "original": selector,
-                "reason": reason,
+                "reason": reason.unwrap_or_else(|| "not_found".into()),
                 "hint": "Re-snapshot (browser_snapshot) to get fresh [ref=eN] handles, then retry with a new selector."
             })
             .to_string());
         }
         Ok(json!({
             "status": "highlighted",
-            "selector": resolved,
             "original": selector,
         })
         .to_string())
@@ -1370,19 +1651,28 @@ mod tests {
     fn resolve_selector_rejects_unknown_ref_token() {
         let backend = CdpBrowserBackend::new("http://localhost:9222".into());
         if let Ok(mut map) = backend.last_snapshot_refs.lock() {
-            map.insert("e1".into(), "[role=\"button\"]:has-text('Login')".into());
+            map.insert(
+                "e1".into(),
+                RefTarget {
+                    backend_node_id: 42,
+                    guessed_selector: "[role=\"button\"]".into(),
+                },
+            );
         }
-        // 存在的句柄 → 解析为快照时的 CSS selector
-        let ok = backend.resolve_selector("[ref=e1]").unwrap();
-        assert_eq!(ok, "[role=\"button\"]:has-text('Login')");
+        // A known handle resolves to the CDP node identity, NOT to a guessed
+        // selector — that inversion is the whole point of the change.
+        match backend.resolve_selector("[ref=e1]").unwrap() {
+            Resolved::Node(id) => assert_eq!(id, 42),
+            Resolved::Css(s) => panic!("a live ref must not degrade to CSS: {s}"),
+        }
         // 不存在的句柄 → 明确报错（旧实现原样返回、当 CSS 用）
         let err = backend.resolve_selector("[ref=e999]").unwrap_err();
         assert!(err.to_string().contains("browser_snapshot"), "{err}");
         // 纯 CSS 选择器不受影响，原样通过
-        assert_eq!(
-            backend.resolve_selector("#submit").unwrap(),
-            "#submit"
-        );
+        match backend.resolve_selector("#submit").unwrap() {
+            Resolved::Css(s) => assert_eq!(s, "#submit"),
+            Resolved::Node(_) => panic!("a CSS selector must not become a node handle"),
+        }
     }
 
     /// 修 3b：导航后旧句柄必须失效。清空动作在 `navigate_with_wait`
@@ -1392,13 +1682,85 @@ mod tests {
     fn resolve_selector_after_ref_map_cleared_fails_loud() {
         let backend = CdpBrowserBackend::new("http://localhost:9222".into());
         if let Ok(mut map) = backend.last_snapshot_refs.lock() {
-            map.insert("e1".into(), "[role=\"button\"]".into());
+            map.insert(
+                "e1".into(),
+                RefTarget {
+                    backend_node_id: 7,
+                    guessed_selector: "[role=\"button\"]".into(),
+                },
+            );
         }
         // 模拟 navigate_with_wait 成功后的清空分支（同一段代码语义）
         if let Ok(mut map) = backend.last_snapshot_refs.lock() {
             map.clear();
         }
         assert!(backend.resolve_selector("[ref=e1]").is_err());
+    }
+
+    /// A near-miss handle that is *itself valid CSS* must be rejected rather
+    /// than forwarded. `[ref=e1` is a legal attribute selector, so passing it
+    /// to `querySelector` would silently match whatever element carries
+    /// `ref="e1"` — the model would be told it acted on one element while the
+    /// code touched another. That is the failure this guards.
+    ///
+    /// Note what is deliberately NOT in this list: `ref=e1]` (no leading
+    /// bracket). That is *invalid* CSS, so `querySelector` raises a
+    /// SyntaxError and matches nothing — a loud, harmless outcome. It is not
+    /// the same hazard, and rejecting it would mean guessing at intent from
+    /// string shape.
+    #[test]
+    fn malformed_ref_tokens_never_degrade_to_css() {
+        let backend = CdpBrowserBackend::new("http://localhost:9222".into());
+        for bad in ["[ref=e1", "[ref=", "[ref=]"] {
+            match backend.resolve_selector(bad) {
+                Err(_) => {} // rejected — correct
+                Ok(Resolved::Css(_)) => panic!("{bad} was accepted as a CSS selector"),
+                Ok(Resolved::Node(_)) => panic!("{bad} resolved to a node"),
+            }
+        }
+        // The error must name the right shape, otherwise the model retries the
+        // same malformed string.
+        let err = backend.resolve_selector("[ref=e1").unwrap_err().to_string();
+        assert!(err.contains("[ref=eN]"), "error must show the shape: {err}");
+    }
+
+    #[test]
+    fn is_ref_token_recognises_only_wellformed_tokens() {
+        assert_eq!(CdpBrowserBackend::is_ref_token("[ref=e12]"), Some("e12"));
+        assert_eq!(CdpBrowserBackend::is_ref_token("  [ref=e3]  "), Some("e3"));
+        assert_eq!(CdpBrowserBackend::is_ref_token("[ref=e1"), None);
+        assert_eq!(CdpBrowserBackend::is_ref_token("#submit"), None);
+        // A CSS attribute selector that merely looks similar must stay CSS.
+        assert_eq!(
+            CdpBrowserBackend::is_ref_token("[data-ref=e1]"),
+            None
+        );
+    }
+
+    /// The preflight verdict parser is shared by both resolution paths, so a
+    /// regression there would silently change click semantics on refs only.
+    #[test]
+    fn read_preflight_fails_closed() {
+        // Explicit ok → no failure.
+        assert_eq!(
+            CdpBrowserBackend::read_preflight(&json!({"ok": true})),
+            (None, None)
+        );
+        // Explicit false → reason carried through, cover when present.
+        assert_eq!(
+            CdpBrowserBackend::read_preflight(
+                &json!({"ok": false, "reason": "covered_by", "cover": "<div id=x>"})
+            ),
+            (Some("covered_by".to_string()), Some("<div id=x>".to_string()))
+        );
+        // Unparseable → treated as a failure by the CSS path (which substitutes
+        // ok:false before calling in), and an absent `ok` must not be read as
+        // a pass.
+        assert_eq!(
+            CdpBrowserBackend::read_preflight(&json!({})),
+            (None, None),
+            "an absent ok is not an explicit pass"
+        );
     }
 }
 
