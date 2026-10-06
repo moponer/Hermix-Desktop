@@ -182,7 +182,9 @@ apps/desktop-tauri/_tmp_*
 
 # 临时工作产物（一次性脚本草稿 / 设计预览稿，保留在本地不入库）
 apps/desktop-tauri/src-tauri/.scratch/
-/design-previews/
+# 两个目录名都真实存在（design-previews/ 是较早的 splash 设计稿，
+# design-preview/ 是后来建的），一条通配一并覆盖
+/design-preview*/
 
 # IM channel credentials — do NOT commit (plaintext bot secret)
 im_channels.json
