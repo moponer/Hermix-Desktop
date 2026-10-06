@@ -790,12 +790,14 @@
 
 /* ── Tool event cards (tw-msg) ── */
 /* 工具调用展开后跟正文一样, 没有层次感.
-   解法: 输出区用 --color-bg-code (独立背景) + 左 border (rail),
+   解法: 输出区用 --color-bg-code (独立背景) + 1px 全边框,
    形成"代码/终端面板"感, 跟 chat 气泡/思考区明显分层. 主题色自动适配
-   (每个主题都有专属 --color-bg-code + --color-border-subtle). */
+   (每个主题都有专属 --color-bg-code + --color-border-subtle).
+   （2026-10-06：原来的单侧 3px rail 属于 impeccable side-tab 反模式
+   —— AI 生成 UI 的典型标志；全边框同样给出面板分层。） */
 .tw-msg-output {
   background: var(--color-bg-code);
-  border-left: 3px solid var(--color-border-subtle);
+  border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-sm);
   padding: 8px 10px;
   margin-top: 6px;

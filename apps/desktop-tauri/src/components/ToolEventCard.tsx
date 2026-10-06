@@ -741,9 +741,10 @@ function ToolRow({ group }: { group: ToolGroup }) {
       {/* (): thin progress strip that fills left-to-right
           while the tool is running. `progressFraction` returns null
           once the tool ends, so the strip disappears rather than
-          lingering at 100%. Width is set via inline style because
+          lingering at 100%. Scale is set via inline transform because
           the value is computed at runtime from `Date.now()` and
-          CSS variables can't reach it cleanly. */}
+          CSS variables can't reach it cleanly. (scaleX 而非 width：
+          宽度动画每帧触发布局，scaleX 走合成器通道。) */}
       {progress !== null && (
         <div
           className="tw-msg-progress"
@@ -754,7 +755,7 @@ function ToolRow({ group }: { group: ToolGroup }) {
         >
           <div
             className="tw-msg-progress-fill"
-            style={{ width: `${Math.round(progress * 100)}%` }}
+            style={{ transform: `scaleX(${Math.max(0, Math.min(1, progress))})` }}
           />
         </div>
       )}

@@ -1,3 +1,4 @@
+// impeccable-disable broken-image: 本文件 img 字样均出现在注释里；运行时图片 src 恒为已解析的 objectURL（见 IconImage 的降级链），不存在空图标签。
 // Custom-app icon 共享解析器 — 列表卡片 (AppCard) 与详情页 (AppDetailModal)
 // 共用同一套查找链路，避免两处走不一致的逻辑出现"卡片显示音符、详情页显示
 // 'music' 文字"这种割裂。

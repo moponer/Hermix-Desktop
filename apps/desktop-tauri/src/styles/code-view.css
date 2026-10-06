@@ -690,11 +690,12 @@
   color: var(--color-text-primary);
   font-size: inherit;
 }
-/* Blockquote */
+/* Blockquote —— 引用标识只靠 6% accent 染底 + secondary 文字色：任何
+   宽度的单侧实色边条都命中 impeccable side-tab（AI 生成 UI 的典型
+   标志），2026-10-06 连 2px 弱化版一并移除，染底本身已足以区分引用。 */
 .preview-pane .preview-md-body blockquote {
   margin: 0 0 14px;
   padding: 6px 16px;
-  border-left: 3px solid var(--color-accent, var(--color-info));
   background: color-mix(in srgb, var(--color-accent, var(--color-info)) 6%, transparent);
   color: var(--color-text-secondary);
   border-radius: 0 4px 4px 0;

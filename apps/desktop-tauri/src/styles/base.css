@@ -194,17 +194,9 @@ select:focus-visible {
   border-color: var(--color-border-secondary);
   box-shadow: var(--shadow-modal);
 }
-/* 左侧 3px 色条承担变体标识。比图标底光环安静得多，也不抢文字；
-   色条与图标同色，语义重复但不冗余 —— 扫视时靠色条，细读时靠图标。 */
-.toast::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 3px;
-  background: var(--toast-accent);
-}
+/* 变体标识由图标色（--toast-accent）+ 柔和底块（--toast-wash）+ 底部
+   进度条共同承担，不再用左侧 3px 色条 —— 一侧粗彩条是 AI 生成 UI 的
+   最典型标志（impeccable side-tab），且三处同色语义已足够扫视识别。 */
 .toast--error   { --toast-accent: var(--color-error);   --toast-wash: var(--color-error-soft); }
 .toast--warning { --toast-accent: var(--color-warning); --toast-wash: var(--color-warning-soft); }
 .toast--info    { --toast-accent: var(--color-info);    --toast-wash: var(--color-info-soft); }

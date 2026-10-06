@@ -1067,36 +1067,26 @@ height: 26px;
   font-style: italic;
 }
 
-/* Delete animation: user confirmed → collapse height + fade out,
-   then dispatch real delete. The item stays in DOM during the 320ms
-   transition so the user sees a smooth exit instead of a hard jump. */
+/* Delete animation: user confirmed → fade + slide out, then dispatch
+   real delete. 2026-10-06 impeccable layout-transition：原先伴随
+   max-height/padding/margin 塌缩动画，每帧触发布局重排；改为纯
+   opacity + transform（合成器通道）。高度回缩由卸载时一次完成 ——
+   元素此刻已完全透明，视觉上不存在跳变。TSX 的
+   removing→deleting→delete 定时序列不受影响。 */
 .sidebar-row.is-removing,
 .sidebar-project.is-removing,
 .sidebar-project-session.is-removing {
-  opacity: 0.55;
+  opacity: 0;
   pointer-events: none;
-  transition: opacity 220ms ease, transform 280ms ease, max-height 280ms ease, padding 280ms ease, margin 280ms ease;
-  animation: sidebar-item-shrink 320ms ease forwards;
+  transform: translateX(-8px);
+  transition: opacity 240ms ease, transform 240ms ease;
 }
 .sidebar-row.is-deleting,
 .sidebar-project.is-deleting,
 .sidebar-project-session.is-deleting {
   opacity: 0;
-  max-height: 0;
-  min-height: 0;
-  padding-top: 0;
-  padding-bottom: 0;
-  margin-top: 0;
-  margin-bottom: 0;
-  overflow: hidden;
   pointer-events: none;
-  transform: translateX(-6px);
-  transition: opacity 180ms ease, max-height 220ms ease, padding 220ms ease, transform 220ms ease;
-}
-@keyframes sidebar-item-shrink {
-  0% { opacity: 1; transform: translateX(0); max-height: 64px; }
-  40% { opacity: 0.55; }
-  100% { opacity: 0; transform: translateX(-8px); max-height: 0; padding-top: 0; padding-bottom: 0; margin-top: 0; margin-bottom: 0; }
+  transition: opacity 120ms ease;
 }
 
 /* ── New chat room inline form in sidebar ── */

@@ -1,3 +1,4 @@
+// impeccable-disable broken-image: 断言与注释里的 img 字样是文档和 querySelector 选择器，不是渲染出的空图。
 // iconResolver 防回归测试：钉死「icon_file 分支走 stdio bridge 拉 blob」的
 // 语义，防止有人改回裸 <img src="/api/custom-apps/..."> 的老写法
 // （生产环境 <img src> 解析到 Tauri 内部 URL → 永远 404 → 上传的 PNG

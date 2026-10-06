@@ -368,7 +368,6 @@
   padding: 10px 14px;
   border-radius: 10px;
   border: 1px solid color-mix(in srgb, var(--color-error, #dc2626) 45%, transparent);
-  border-left: 3px solid var(--color-error, #dc2626);
   background: color-mix(in srgb, var(--color-error, #dc2626) 10%, var(--color-bg-elevated, #ffffff));
   color: var(--color-text-primary, #0f0f12);
   font-size: 13px;
