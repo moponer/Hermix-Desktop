@@ -35,7 +35,7 @@ const TERMINAL_HARD_TIMEOUT_SECS: u64 = 120;
 /// (`registry.terminal_approval_ctx_handle()`) so `LocalAgentService`
 /// can wire the WS approval hook per turn without re-registering the
 /// tool. The handle starts as `default()` (both fields `None`); the
-/// tool gracefully falls back to the legacy `HERMIX_CONFIRM=1` text
+/// tool no longer falls back to any LLM-side confirmation bypass.
 /// flow while it's still `None` (unit tests, headless callers).
 pub fn register(
     registry: &ToolRegistry,
@@ -64,7 +64,7 @@ pub fn register(
         Arc::new(|| true),
         vec![],
         true,
-        "Execute a shell command on the user's system. You have full access to the filesystem (including C:\\ and other drives). Per-command risk is decided by an internal ApprovalManager; this tool-level risk is Caution (commands may have side effects). If a command is blocked by security policy, the error message will tell you how to retry with HERMIX_CONFIRM=1 prefix.",
+        "Execute a shell command on the user's system. You have full access to the filesystem (including C:\\ and other drives). Per-command risk is decided by an internal ApprovalManager; this tool-level risk is Caution (commands may have side effects). A command that needs user approval is presented as a confirmation prompt — you cannot approve it yourself, and there is no text marker that bypasses the prompt.",
         "💻",
         None,
         RiskLevel::Caution,
@@ -96,7 +96,7 @@ pub struct TerminalHandler {
     /// on the active WS channel (so the desktop's `InlineApprovalCard`
     /// renders instead of bouncing the user through LLM text). When
     /// empty (default `TerminalApprovalContext`), the legacy
-    /// "reply `HERMIX_CONFIRM=1`" flow runs — backward-compatible.
+    /// the old LLM-side confirmation flow no longer exists.
     approval_ctx: Arc<std::sync::Mutex<TerminalApprovalContext>>,
     /// 接缝 `Shell`：C3 接缝用于把执行失败归类成结构化的
     /// `ShellErrorKind`，给模型可执行指令而不是裸 stderr。提供了就走
@@ -160,7 +160,7 @@ impl TerminalHandler {
     /// - `Some(other)` — user denied / timed out / channel closed;
     /// caller should error out.
     /// - `None`        — no WS context wired (default state); caller
-    /// falls back to the legacy `HERMIX_CONFIRM=1` text flow so
+    /// has no LLM-side confirmation escape hatch, so
     /// headless / unit-test callers keep working.
     async fn request_ws_approval(
         &self,
@@ -476,15 +476,29 @@ async fn execute_inner(
         // Denied stays the highest priority (no pointless prompt first).
         // -------------------------------------------------------------------
         let metachar_desc = detect_shell_metacharacters(command);
-        let stripped = command.strip_prefix("HERMIX_CONFIRM=1 ");
-        let effective_cmd = stripped.unwrap_or(command);
+        // 2026-10-06：不再剥 `HERMIX_CONFIRM=1 ` 前缀（审计批次 2 第 4 条）。
+        //
+        // **那个前缀是模型可以自己写的**。判定是
+        // `RequiresConfirmation => stripped.is_none()`——只要命令文本以
+        // 该前缀开头就跳过审批，于是模型重发一遍同样的命令、加上这行前缀
+        // 就能自己批自己，用户根本没看到审批卡。它把"用户同意"降级成了
+        // "模型声称用户同意"。
+        //
+        // 审计方案原文是把这个前缀**token 化**（registry 签发一次性 token、
+        // 经审批上下文传递、terminal 校验）。这里选择**直接删除**，理由：
+        // 要达成的安全结果（模型无法自签）两者完全相同，而删除不新增任何
+        // 攻击面——token 机制自己就是新攻击面（怎么传？会不会进日志？能否
+        // 重放？），21 处引用也不用动。
+        //
+        // 行为变化与方案预期一致：依赖该前缀的既有工作流退回审批卡。这正是
+        // 目的，不是回归。
+        let effective_cmd = command;
 
         let decision = this
             .approval
             .check_approval_for_origin_with_scopes(effective_cmd, origin, device_scopes);
         let needs_confirm = if metachar_desc.is_some() {
-            // Pipe-to-shell stays prompt-worthy even with a
-            // HERMIX_CONFIRM=1 marker (matches the legacy metachar gate).
+            // Pipe-to-shell always prompts.
             true
         } else {
             match decision {
@@ -494,8 +508,7 @@ async fn execute_inner(
                         effective_cmd
                     )));
                 }
-                // HERMIX_CONFIRM=1 already confirms a confirm-pattern hit.
-                ApprovalDecision::RequiresConfirmation => stripped.is_none(),
+                ApprovalDecision::RequiresConfirmation => true,
                 ApprovalDecision::Approved => false,
             }
         };
@@ -551,16 +564,16 @@ async fn execute_inner(
                     command = %effective_cmd,
                     "command confirmed by user via WS approval card"
                 );
-            } else if stripped.is_none() {
-                // No WS context wired (headless test, CLI run, or unit
-                // test that bypassed the agent service): fall back to
-                // the legacy text flow so the LLM can still bounce the
-                // user through `HERMIX_CONFIRM=1`.
+            } else {
+                // No WS context wired (headless test, CLI run, or unit test
+                // that bypassed the agent service). There is no way to ask
+                // the user, and **no way for the model to fake having asked**:
+                // 2026-10-06 removed the `HERMIX_CONFIRM=1` escape hatch, so
+                // the command simply fails. Do not print retry instructions
+                // here — anything we tell the model becomes a workaround.
                 return Err(ToolError::ExecutionFailed(format!(
-                    "Command requires user confirmation: {}\n\n\
-                     Tell the user what this command does and ask for permission. \
-                     If they approve, retry with:\n  HERMIX_CONFIRM=1 {}",
-                    effective_cmd, effective_cmd
+                    "Command requires user confirmation but no approval channel is available: {}",
+                    effective_cmd
                 )));
             }
         }
@@ -1344,40 +1357,46 @@ mod tests {
         let msg = format!("{err:?}");
         assert!(
             msg.contains("Command requires user confirmation"),
-            "fallback message must instruct LLM to ask user (got: {msg})",
+            "error must name the real blocker (got: {msg})",
         );
+        // The old message taught the model to retry with the marker — i.e.
+        // it handed out the bypass. The error must not mention it.
         assert!(
-            msg.contains("HERMIX_CONFIRM=1"),
-            "fallback message must mention HERMIX_CONFIRM=1 marker (got: {msg})",
+            !msg.contains("HERMIX_CONFIRM"),
+            "error must NOT hand the model a bypass (got: {msg})",
         );
     }
 
     #[tokio::test]
-    async fn hermix_confirm_marker_skips_ws_path() {
-        // Even with WS wired, the `HERMIX_CONFIRM=1` prefix must
-        // short-circuit straight to execution (LLM-bounced approval
-        // path stays valid for backward compat).
-        let (approval_ctx, reg, _captured_event) = wire_approval_ctx();
+    async fn hermix_confirm_marker_no_longer_bypasses_approval() {
+        // 2026-10-06（审计批次 2 第 4 条）：`HERMIX_CONFIRM=1` 前缀曾是
+        // **模型可自己写**的绕过开关——它把「用户同意」降级成「模型声称用户
+        // 同意」。这个测试原来断言该前缀能跳过 WS 请求，现在断言它不能。
+        //
+        // **不 wire WS context**：wired 情况下 `wire_approval_ctx` 的
+        // requester 只往注册表里塞一个 oneshot sender 就返回，没人回值，
+        // `execute` 会一直等下去（原来的测试之所以秒回，恰恰是因为带前缀
+        // 时压根不请求 WS）。无 context 时命令会立刻以"没有审批通道"失败，
+        // 既不卡住，也同样证明了「前缀不再能自己批自己」。
         let (backend, _cap) = make_mock();
         let handler = TerminalHandler::new(
             backend,
             std::sync::Arc::new(std::sync::RwLock::new(None)),
-            approval_ctx,
+            std::sync::Arc::new(std::sync::Mutex::new(
+                TerminalApprovalContext::default(),
+            )),
         );
 
-        let result = handler
+        let err = handler
             .execute(json!({
                 "command": "HERMIX_CONFIRM=1 sudo apt install ripgrep"
             }))
-            .await;
-        result.expect(
-            "HERMIX_CONFIRM=1 marker must let the command through without prompting",
-        );
-        // No pending approval should have been registered — the
-        // marker means the user already said yes.
+            .await
+            .expect_err("the marker must not grant approval on its own");
+        let msg = format!("{err:?}");
         assert!(
-            reg.lock().unwrap().is_empty(),
-            "HERMIX_CONFIRM=1 must skip the WS request entirely",
+            msg.contains("no approval channel is available"),
+            "expected the no-approval-channel failure, got: {msg}"
         );
     }
 

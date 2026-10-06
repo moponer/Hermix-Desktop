@@ -17,7 +17,7 @@ pub enum ApprovalDecision {
 /// Per-request hook the `terminal` tool uses to surface a
 /// `RequiresConfirmation` decision as a `request_approval` event on the
 /// same WS channel the agent streams on, instead of bouncing the
-/// "please reply `HERMIX_CONFIRM=1`" text through the LLM.
+/// the LLM-faked-confirmation text flow. Removed 2026-10-06: the model could
 /// Set by `LocalAgentService::send_message` on every turn (the closure
 /// captures the active WS `ApprovalRegistry` + `on_event`), and read by
 /// `TerminalHandler::execute` when `ApprovalManager::check_approval`
@@ -58,7 +58,7 @@ pub struct TerminalApprovalContext {
 impl TerminalApprovalContext {
     /// True when all three fields are populated — only then will the
     /// tool emit the WS event; otherwise the legacy "tell the user to
-    /// reply `HERMIX_CONFIRM=1`" path runs.
+    /// write that prefix itself, so it granted itself approval.
     pub fn is_wired(&self) -> bool {
         !self.session_id.is_empty() && self.requester.is_some() && self.on_event.is_some()
     }

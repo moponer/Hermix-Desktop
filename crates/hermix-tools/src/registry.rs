@@ -129,7 +129,7 @@ pub struct ToolRegistryInner {
     /// `ApprovalRegistry` + `on_event`) on every turn so the terminal
     /// tool's `RequiresConfirmation` branch can emit a `request_approval`
     /// event instead of bouncing the user through text. `None` in both
-    /// fields ⇒ fallback to the legacy `HERMIX_CONFIRM=1` text flow.
+    /// fields ⇒ the command simply fails; there is no LLM-side bypass.
     pub terminal_approval_ctx: Arc<std::sync::Mutex<TerminalApprovalContext>>,
     /// Effect Sandwich 持久化钩子（P3）。`None` ⇒ 零开销跳过。
     pub effect_sink: Option<std::sync::Arc<dyn EffectSink>>,
