@@ -87,8 +87,12 @@ uni-app + vue 工具链），npm 侧无论怎么配版本都编不出来。H5 �
    根目录缺少 index.html"**——误导性报错。本项目是 **CLI 布局**
    （`manifest.json` / `pages.json` 在 `src/`，`index.html` + `vite.config.ts`
    在根），HBuilderX 按根目录 `manifest.json` 判定项目类型，认不出就退回
-   普通 web 分支。**真机调试的正确姿势是命令行**：`npm run dev:app`
-   （uni CLI 会唤起 HBuilderX 并在其运行时里跑）。
+   普通 web 分支。
+2. **CLI 跑不通 app 目标**（2026-10-06 实测）：`npm run dev:app` 与
+   `npm run build:app` **在 bundling 阶段就失败**，报同一
+   `isInSSRComponentSetup` 缺失——**根本没走到唤起 HBuilderX 那一步**。
+   （本节早前版本写"真机调试用 `npm run dev:app`"是错的，已按实测更正。）
+   结论不变：app 目标只能由 **HBuilderX 自身的工具链**编译。
 2. **APK 云打包需要 AppID**：uni-app 原生 App 必须先在 DCloud 开发者中心
    注册应用取 AppID，填进 `src/manifest.json` 的 `appid`（当前值
    `__UNI__0B255CA` 是既有占位/他人注册，**打包前换成你自己的**），
