@@ -490,9 +490,11 @@ fn apply_toggle_with_floor(
 // compile time. On first start we materialise them into the user's skills
 // directory (`~/.hermix/skills/<category>/<name>/SKILL.md`) so the front-end
 // "扩展 → 技能" tab has a populated list right away.
-// This is **idempotent** — we never overwrite a SKILL.md the user has
-// already customised. To restore a builtin skill, the user must delete its
-// directory first.
+// Seeding is upgrade-aware (see `seed_one`): a stock (never-edited) copy
+// is refreshed in place when the bundled content changes, while a
+// user-edited SKILL.md is preserved and the new builtin is staged as
+// `SKILL.md.new` next to it. The per-directory `.seed-meta.json` sidecar
+// carries the hash that distinguishes the two cases.
 
 /// `(category, name, raw .md content)` — the .md files include YAML
 /// frontmatter that we use as the source of truth for category/name, so the
@@ -596,32 +598,167 @@ const BUILTIN_SKILLS: &[(&str, &str, &str)] = &[
         "custom-app-development",
         include_str!("skills/custom-app-development.md"),
     ),
+    // impeccable-design: 界面/平面/PPT 设计规范 + `npx impeccable detect`
+    // 反模式检测收尾。description 带自动激活触发词（界面设计/配色/排版/
+    // 做 PPT 等），命中设计类请求时由 skill_orchestrator 自动注入。
+    (
+        "design",
+        "impeccable-design",
+        include_str!("skills/impeccable-design.md"),
+    ),
 ];
 
+/// Sidecar next to a seeded `SKILL.md`, recording the SHA-256 of the
+/// content we last wrote there. It is the upgrade-detection anchor: on a
+/// later start the on-disk file is re-hashed and compared against this
+/// hash — a match means the user never edited the skill, so a newer
+/// builtin version can overwrite it; a mismatch means user content and
+/// the stock file must be preserved.
+#[derive(Serialize, Deserialize)]
+struct SeedMeta {
+    hash: String,
+}
+
+/// What `seed_one` did for one builtin skill.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SeedOutcome {
+    /// No `SKILL.md` existed — builtin content written (first install).
+    Fresh,
+    /// On-disk copy still matched the last-seeded hash (user never edited
+    /// it) — refreshed in place with the current builtin content.
+    Updated,
+    /// On-disk copy is byte-identical to the builtin — nothing to do
+    /// beyond making sure the meta sidecar records the hash (this is also
+    /// how pre-sidecar installs are adopted).
+    AlreadyCurrent,
+    /// On-disk copy diverged from the last-seeded hash (or predates the
+    /// sidecar and differs from the builtin) — treated as user content:
+    /// `SKILL.md` preserved, builtin staged as `SKILL.md.new` alongside.
+    PreservedUserEdit,
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(bytes);
+    digest.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn seed_meta_path(dir: &Path) -> PathBuf {
+    dir.join(".seed-meta.json")
+}
+
+/// Hash recorded by the last successful seed of this directory, if any.
+fn read_seed_hash(dir: &Path) -> Option<String> {
+    let raw = std::fs::read_to_string(seed_meta_path(dir)).ok()?;
+    let meta: SeedMeta = serde_json::from_str(&raw).ok()?;
+    Some(meta.hash)
+}
+
+fn write_seed_meta(dir: &Path, hash: &str) -> std::io::Result<()> {
+    let json = serde_json::to_string(&SeedMeta {
+        hash: hash.to_string(),
+    })
+    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    std::fs::write(seed_meta_path(dir), json)
+}
+
+/// Seed one builtin skill into `skills_dir/<category>/<name>/SKILL.md`
+/// with upgrade detection. See [`SeedOutcome`] for the four possible
+/// results; only [`SeedOutcome::Fresh`] and [`SeedOutcome::Updated`]
+/// write `SKILL.md`.
+///
+/// Why a hash sidecar instead of "never touch existing files": the old
+/// rule froze builtin skills at whatever content shipped with the first
+/// install the user ran — bug fixes and improvements to the bundled .md
+/// never reached existing machines. The sidecar distinguishes "stock
+/// copy from an older version" (safe to upgrade) from "user-authored
+/// content" (never clobbered).
+pub fn seed_one(
+    skills_dir: &Path,
+    category: &str,
+    name: &str,
+    content: &str,
+) -> std::io::Result<SeedOutcome> {
+    let dir = skills_dir.join(category).join(name);
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join("SKILL.md");
+    let builtin_hash = sha256_hex(content.as_bytes());
+
+    let on_disk = std::fs::read_to_string(&path).ok();
+    let outcome = match (&on_disk, read_seed_hash(&dir)) {
+        // Fresh install (or the file was deleted): write the builtin.
+        (None, _) => {
+            std::fs::write(&path, content)?;
+            write_seed_meta(&dir, &builtin_hash)?;
+            SeedOutcome::Fresh
+        }
+        // Verified stock copy (disk hash == last-seeded hash): the user
+        // has not edited it, so a changed builtin upgrades in place.
+        (Some(disk), Some(seeded)) if sha256_hex(disk.as_bytes()) == seeded => {
+            if *disk == content {
+                SeedOutcome::AlreadyCurrent
+            } else {
+                std::fs::write(&path, content)?;
+                write_seed_meta(&dir, &builtin_hash)?;
+                SeedOutcome::Updated
+            }
+        }
+        // Everything else is user content we must not clobber — unless it
+        // happens to be byte-identical to the builtin (legacy install
+        // from before the sidecar existed, never edited), which we adopt
+        // by recording its hash so future upgrades can overwrite.
+        (Some(disk), _) => {
+            if *disk == content {
+                write_seed_meta(&dir, &builtin_hash)?;
+                SeedOutcome::AlreadyCurrent
+            } else {
+                let staged = dir.join("SKILL.md.new");
+                if std::fs::read_to_string(&staged).ok().as_deref() != Some(content) {
+                    std::fs::write(&staged, content)?;
+                }
+                SeedOutcome::PreservedUserEdit
+            }
+        }
+    };
+
+    match outcome {
+        SeedOutcome::Fresh => {
+            tracing::info!("seeded builtin skill: {} ({})", name, category);
+        }
+        SeedOutcome::Updated => {
+            tracing::info!(
+                "updated builtin skill: {} ({}) — previous copy was unmodified",
+                name,
+                category
+            );
+        }
+        SeedOutcome::PreservedUserEdit => {
+            tracing::info!(
+                "preserved user-edited skill: {} ({}); new builtin staged as SKILL.md.new",
+                name,
+                category
+            );
+        }
+        SeedOutcome::AlreadyCurrent => {}
+    }
+    Ok(outcome)
+}
+
 /// Materialise the bundled builtin skills into `skills_dir`. Returns the
-/// number of files actually written (i.e. fresh installs on first run).
-/// Idempotent: a SKILL.md that already exists is left alone so user edits
-/// survive. To re-seed a specific skill, the user must delete its
-/// `<category>/<name>/SKILL.md` file first.
+/// number of `SKILL.md` files written or refreshed (fresh installs plus
+/// stock copies upgraded to a newer builtin version). User-edited skills
+/// are never clobbered — see [`seed_one`].
 pub fn seed_builtin_skills(skills_dir: &Path) -> std::io::Result<usize> {
     std::fs::create_dir_all(skills_dir)?;
 
     let mut written = 0;
     for (category, name, content) in BUILTIN_SKILLS {
-        let dir: PathBuf = skills_dir.join(category).join(name);
-        let path = dir.join("SKILL.md");
-        if path.exists() {
-            continue; // user already customised / previously seeded
+        if matches!(
+            seed_one(skills_dir, category, name, content)?,
+            SeedOutcome::Fresh | SeedOutcome::Updated
+        ) {
+            written += 1;
         }
-        std::fs::create_dir_all(&dir)?;
-        std::fs::write(&path, content)?;
-        written += 1;
-        tracing::info!(
-            "seeded builtin skill: {} ({}/{})",
-            name,
-            category,
-            name
-        );
     }
     Ok(written)
 }

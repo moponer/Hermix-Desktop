@@ -920,16 +920,16 @@ fn seed_builtin_skills_writes_all_builtins_to_fresh_dir() {
     let written = hermix_server::dashboard::skills::seed_builtin_skills(&skills_dir)
         .expect("seed should succeed on a fresh dir");
 
-    // 18 builtin skills across 8 categories
-    assert_eq!(written, 18);
+    // 19 builtin skills across 9 categories
+    assert_eq!(written, 19);
 
-    // All 18 should now exist on disk under <category>/<name>/SKILL.md
+    // All 19 should now exist on disk under <category>/<name>/SKILL.md
     let entries: Vec<_> = walkdir::WalkDir::new(&skills_dir)
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| e.file_name() == "SKILL.md")
         .collect();
-    assert_eq!(entries.len(), 18);
+    assert_eq!(entries.len(), 19);
 
     // Spot-check: the writing-assistant skill lands in productivity/
     let writing = skills_dir.join("productivity").join("writing-assistant").join("SKILL.md");
@@ -945,7 +945,7 @@ fn seed_builtin_skills_is_idempotent() {
 
     let first = hermix_server::dashboard::skills::seed_builtin_skills(&skills_dir)
         .expect("first seed should succeed");
-    assert_eq!(first, 18);
+    assert_eq!(first, 19);
 
     // Mutate one file to prove the second call doesn't clobber it.
     let target = skills_dir.join("productivity").join("writing-assistant").join("SKILL.md");
@@ -957,6 +957,106 @@ fn seed_builtin_skills_is_idempotent() {
 
     let content = std::fs::read_to_string(&target).unwrap();
     assert_eq!(content, "USER CUSTOM CONTENT", "user edits must be preserved");
+}
+
+// ── seed_one upgrade semantics ──────────────────────────────────────
+// The hash sidecar (.seed-meta.json) distinguishes a stock copy (safe to
+// upgrade in place when the bundled builtin changes) from user content
+// (preserved; the new builtin is staged as SKILL.md.new). These tests pin
+// the four SeedOutcome branches plus the legacy-install adoption path.
+
+use hermix_server::dashboard::skills::{seed_one, SeedOutcome};
+
+const CAT: &str = "design";
+const NAME: &str = "probe-skill";
+const V1: &str = "---\nname: probe-skill\n---\nversion one body\n";
+const V2: &str = "---\nname: probe-skill\n---\nversion two body\n";
+
+fn probe_dir(skills_dir: &std::path::Path) -> std::path::PathBuf {
+    skills_dir.join(CAT).join(NAME)
+}
+
+#[test]
+fn seed_one_upgrades_stock_copy_when_builtin_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    let skills = dir.path().to_path_buf();
+
+    assert_eq!(seed_one(&skills, CAT, NAME, V1).unwrap(), SeedOutcome::Fresh);
+    // Same content again → AlreadyCurrent, no rewrite.
+    assert_eq!(seed_one(&skills, CAT, NAME, V1).unwrap(), SeedOutcome::AlreadyCurrent);
+    // Bundled content changes in a release → stock copy refreshes in place.
+    assert_eq!(seed_one(&skills, CAT, NAME, V2).unwrap(), SeedOutcome::Updated);
+    let upgraded = std::fs::read_to_string(probe_dir(&skills).join("SKILL.md")).unwrap();
+    assert_eq!(upgraded, V2, "unmodified stock copy must follow the builtin");
+    // No stray staged file on the clean-upgrade path.
+    assert!(!probe_dir(&skills).join("SKILL.md.new").exists());
+}
+
+#[test]
+fn seed_one_preserves_user_edit_and_stages_new() {
+    let dir = tempfile::tempdir().unwrap();
+    let skills = dir.path().to_path_buf();
+
+    seed_one(&skills, CAT, NAME, V1).unwrap();
+    let path = probe_dir(&skills).join("SKILL.md");
+    std::fs::write(&path, "USER CUSTOM CONTENT").unwrap();
+
+    assert_eq!(seed_one(&skills, CAT, NAME, V2).unwrap(), SeedOutcome::PreservedUserEdit);
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "USER CUSTOM CONTENT",
+        "user edits must never be clobbered"
+    );
+    assert_eq!(
+        std::fs::read_to_string(probe_dir(&skills).join("SKILL.md.new")).unwrap(),
+        V2,
+        "new builtin must be staged next to the user copy"
+    );
+    // Re-seeding with the same staged content must not rewrite the file
+    // (idempotent PreservedUserEdit).
+    let staged = probe_dir(&skills).join("SKILL.md.new");
+    let mtime = std::fs::metadata(&staged).unwrap().modified().unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    assert_eq!(seed_one(&skills, CAT, NAME, V2).unwrap(), SeedOutcome::PreservedUserEdit);
+    assert_eq!(std::fs::metadata(&staged).unwrap().modified().unwrap(), mtime);
+}
+
+#[test]
+fn seed_one_adopts_legacy_install_without_sidecar() {
+    let dir = tempfile::tempdir().unwrap();
+    let skills = dir.path().to_path_buf();
+
+    // Pre-sidecar install: SKILL.md exists with exactly the builtin
+    // content but no .seed-meta.json (older app version wrote it).
+    let probe = probe_dir(&skills);
+    std::fs::create_dir_all(&probe).unwrap();
+    std::fs::write(probe.join("SKILL.md"), V1).unwrap();
+
+    assert_eq!(seed_one(&skills, CAT, NAME, V1).unwrap(), SeedOutcome::AlreadyCurrent);
+    // Adoption records the hash — a future changed builtin can now upgrade.
+    assert_eq!(seed_one(&skills, CAT, NAME, V2).unwrap(), SeedOutcome::Updated);
+
+    // Legacy install that was hand-edited (differs from builtin, no
+    // sidecar) must be treated as user content, not upgraded over.
+    let dir2 = tempfile::tempdir().unwrap();
+    let skills2 = dir2.path().to_path_buf();
+    let probe2 = probe_dir(&skills2);
+    std::fs::create_dir_all(&probe2).unwrap();
+    std::fs::write(probe2.join("SKILL.md"), "hand written").unwrap();
+    assert_eq!(seed_one(&skills2, CAT, NAME, V1).unwrap(), SeedOutcome::PreservedUserEdit);
+    assert_eq!(std::fs::read_to_string(probe2.join("SKILL.md")).unwrap(), "hand written");
+}
+
+#[test]
+fn seed_one_fresh_after_delete_restores_builtin() {
+    let dir = tempfile::tempdir().unwrap();
+    let skills = dir.path().to_path_buf();
+
+    seed_one(&skills, CAT, NAME, V1).unwrap();
+    std::fs::remove_file(probe_dir(&skills).join("SKILL.md")).unwrap();
+    // Deleting the directory remains the documented "restore builtin" path.
+    assert_eq!(seed_one(&skills, CAT, NAME, V2).unwrap(), SeedOutcome::Fresh);
+    assert_eq!(std::fs::read_to_string(probe_dir(&skills).join("SKILL.md")).unwrap(), V2);
 }
 
 #[tokio::test]
@@ -979,7 +1079,7 @@ async fn list_skills_endpoint_returns_seeded_skills() {
     let (status, body) = get_json(app, "/api/skills").await;
     assert_eq!(status, StatusCode::OK);
     let arr = body.as_array().expect("response should be an array");
-    assert_eq!(arr.len(), 18, "all 18 seeded skills should be visible via /api/skills");
+    assert_eq!(arr.len(), 19, "all 19 seeded skills should be visible via /api/skills");
 
     // Spot-check: writing-assistant is in the response
     let names: Vec<&str> = arr.iter().map(|s| s["name"].as_str().unwrap_or("")).collect();
