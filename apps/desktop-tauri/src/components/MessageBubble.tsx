@@ -157,6 +157,10 @@ export function MessageBubble({
       onDenyBatchApproval={onDenyBatchApproval}
       onReasoningFoldChange={onReasoningFoldChange}
         onRetryLastMessage={onRetryLastMessage}
+      // AssistantMessage 也要拿到 onPathClick：漏传会让恢复态（重载后的
+      // 历史消息）正文里的路径链接点击变成 no-op —— 流式当轮走
+      // StreamingBubble 那条链是好的，重载后走这条链，点击侧栏不开预览。
+      onPathClick={onPathClick}
     />
   );
 }
