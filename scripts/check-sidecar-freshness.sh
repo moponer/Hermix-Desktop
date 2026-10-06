@@ -37,8 +37,11 @@ if [ ! -f "$SIDECAR" ]; then
   exit 0
 fi
 
-# First tracked-ish Rust source newer than the sidecar, if any.
-stale=$(find crates apps/desktop-tauri/src-tauri/src-tauri apps/desktop-tauri/src \
+# What decides the sidecar's contents: the Rust workspace. Deliberately NOT
+# `apps/desktop-tauri/src` — frontend .ts/.tsx changes do not go into the
+# sidecar (they go into the Tauri bundle), so counting them here would raise a
+# false STALE on every UI-only commit and train people to ignore the gate.
+stale=$(find crates apps/desktop-tauri/src-tauri/src \
          -name '*.rs' -newer "$SIDECAR" -print -quit 2>/dev/null | head -1)
 
 if [ -z "$stale" ]; then
