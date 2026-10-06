@@ -1,7 +1,12 @@
 # 依赖与构建产物（由 package-lock.json 复现，不入库）
 node_modules/
 dist/
-unpackage/
+# H5/app 构建产物；但 unpackage/res/icons 是 manifest.json 依赖的 App 图标，
+# 曾经因为整目录忽略而丢失（换机器/换 worktree 就编不出图标）——只忽略它。
+unpackage/*
+!unpackage/res/
+unpackage/res/*
+!unpackage/res/icons/
 
 # 本地开发态的临时产物
 .DS_Store
