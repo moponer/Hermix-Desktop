@@ -1,6 +1,29 @@
 # Decision Note: 智能体浏览器（批次 N 立项，2026-10-01 二稿）—— 核心 = 浏览器能力的 PTC 化
 
-Status: proposed — 2026-10-04 事实更正：**N1 已实施**（`5438a20e` browser_ptc + `1a07df29` 120s 预算 + 4 测试），实现路线是**声明式步骤数组**（`PtcStep` serde 枚举）而非本篇设想的 JS heredoc——无 Node 依赖、每步风险可静态判定。下方 N1 章节保留原文，事实以代码为准。N2（Space + 登录态）仍可立项。开工清单见 [开工清单](../process/2026-10-04-work-order-cua-and-automation.md)。
+Status: implemented — N0 + N1 已交付；N2（Space + 登录态）另立本篇 [N2 立项笔记](../feature/2026-10-07-browser-space-and-login-state.md)。N1 走**声明式步骤数组**（`PtcStep` serde 枚举，`5438a20e` + `1a07df29` 120s 预算 + 4 测试）而非本篇设想的 JS heredoc——无 Node 依赖、每步风险可静态判定。开工清单见 [开工清单](../process/2026-10-04-work-order-cua-and-automation.md)。
+
+**2026-10-07 实测更正**：本篇把「语义 snapshot 100-400 token/页」列为核心指标，
+但它从第一天起就是**推算**——N0 探针自列「精确 token 测量」为遗留项（见
+[webview2-cdp-probe](../implemented/architecture/2026-10-01-webview2-cdp-probe.md)），
+一直没做，于是整条路线的卖点悬空。本次用 Edge CDP 在四个真实页面实测，结论：
+
+| 页面 | compact 后 | ego 目标 100-400 |
+|---|---|---|
+| github.com/login | 105 token | ✅ |
+| wikipedia 文章 | 114 token | ✅ |
+| 新闻首页 | 212 token | ✅ |
+| example.com（只读页） | 656 token | ❌ 1.6× |
+
+**目标基本达成**——交互密集页全部落进带内，比本篇推算的「未压缩 1.8K-3.7K」好得多
+（实测未压缩仅 165-656）。唯一超标的是纯只读页面，且那里的正确解不是继续压，
+而是保底不压：测量同时暴露 compact 会在交互元素稀少的页面上把正文清空
+（example.com 3533 字符 → 86，七种语言正文全丢），已修（`bc8f4e41`）。
+
+测量同时发现 30-50% 的 snapshot 字符是无信息 filler 行（`- none` / `- paragraph`
+这类既无 name、无状态、非交互的结构占位），已在同一提交省去。**先省掉噪音再谈
+压缩比**，否则分母本身是虚的。
+
+原文「1.8K-3.7K token/页」一句连同其数字一并以此处实测取代。
 
 ## 背景
 
@@ -45,13 +68,11 @@ click/type/snapshot + 风险分级）、fail-closed 网络边界、Windows 原�
 - 审批语义：heredoc 里**每次真实动作**（click/type/navigate）仍过既有
   审批链——PTC 不是免审批通行证；纯观察类（snapshot/js 读）走 Safe 通道
 
-**N2 Space + 登录态（一稿的 attach 内容降级为 N2）**
-- Space = 隔离的浏览器工作区（独立模式下 = 独立 profile 进程；attach 模式
-  下 = 专属 tab 组）；`useOrCreateTaskSpace('name')` 语义对齐 ego-browser
-- attach 用户日常浏览器（`--remote-debugging-port` 一次性引导 UI）：登录态
-  自然继承，agent 只动专属 tab，绝不碰用户已开的 tab
-- 端口只绑 127.0.0.1（本机安全敏感面，文档明示）；Chrome/Edge 双探测，
-  行为差异进真机探针测试（对齐 pty_conpty_probe 方法）
+**N2 Space + 登录态（一稿的 attach 内容降级为 N2）** —— 10-04 评审保留为唯一可立项
+一档（不依赖已拒的 PTC 执行器）。攻击面边界与现状账见
+[N2 立项笔记](../feature/2026-10-07-browser-space-and-login-state.md)：
+最关键的一条是 hermix 的浏览器自动化今天仍**每次需要人工过一遍bootstrap 拉起**，
+而 CDP 端口只绑 127.0.0.1、本机敏感面不得放宽。
 
 **N3 独立分发（抽离路径）**
 - 新 crate `hermix-browser`：CDP 底座 + 工具后端 + PTC 执行器提升为独立
