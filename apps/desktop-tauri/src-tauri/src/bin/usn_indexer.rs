@@ -78,8 +78,11 @@ fn now_unix() -> u64 {
         .unwrap_or(0)
 }
 
+/// 心跳点：必须**真写内容**。仅"以写权限打开后关闭、不写字节"在 NTFS 上
+/// 不会更新 LastWriteTime —— 主进程的驻留检测（helper_resident）与让位检查
+/// 都按 mtime 判新鲜度，mtime 冻结 = 每次启动都重复弹 UAC + 双 helper 并发。
 fn touch(path: &Path) {
-    let _ = OpenOptions::new().create(true).write(true).open(path);
+    let _ = std::fs::write(path, now_unix().to_string());
 }
 
 // windows 0.58 缺 FSCTL_GET_USN_JOURNAL 常量（winioctl.h 的稳定 ABI 值）。

@@ -3,7 +3,7 @@ import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import { clsx } from "clsx";
 import {
-  Search, X, Loader2, Folder, File, FolderOpen, Eye, ExternalLink, FileText,
+  Search, X, Loader2, Folder, File, FolderOpen, Eye, ExternalLink, FileText, AlertTriangle,
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 
@@ -49,6 +49,8 @@ interface LocalSearchResponse {
 interface IndexStatus {
   indexed: number;
   building: boolean;
+  /** 提权 helper 最近一次尝试的结果：unauthorized/failed 时出提示条。 */
+  helper_state?: "ok" | "unauthorized" | "failed";
 }
 
 type PreviewPayload =
@@ -276,7 +278,12 @@ export function LocalSearchDialog({ open, onClose }: { open: boolean; onClose: (
         .then((r) => {
           if (cancelled) return;
           setResp(r);
-          setStatus({ indexed: r.indexed, building: r.building });
+          // 查询响应不带 helper_state，保留轮询通道拿到的最新值。
+          setStatus((s) => ({
+            indexed: r.indexed,
+            building: r.building,
+            helper_state: s?.helper_state ?? "ok",
+          }));
         })
         .catch(() => {
           if (!cancelled) setResp({ hits: [], indexed: 0, building: false });
@@ -290,6 +297,15 @@ export function LocalSearchDialog({ open, onClose }: { open: boolean; onClose: (
       window.clearTimeout(t);
     };
   }, [open, trimmed, ext, dirsOnly, reloadTick]);
+
+  // 打开面板时先拉一次索引状态：helper 失败/未授权时 building=false，
+  // 不主动拉的话提示条永远拿不到 helper_state。
+  useEffect(() => {
+    if (!open) return;
+    invoke<IndexStatus>("local_search_status")
+      .then((s) => setStatus(s))
+      .catch(() => {});
+  }, [open]);
 
   // 扫描进度轮询：仅在 building 期间跑，每 500ms 拉一次轻量状态。
   // 之前只在 query/筛选变化时查一次，扫描在后台跑完 UI 都不会再动一下，
@@ -313,6 +329,13 @@ export function LocalSearchDialog({ open, onClose }: { open: boolean; onClose: (
   const hits = resp?.hits ?? [];
   const indexed = status?.indexed ?? 0;
   const building = status?.building ?? false;
+  const helperState = status?.helper_state ?? "ok";
+
+  /** 用户点"重新授权/重试"：后端清失败标记并重走提权路线。 */
+  const reauthorize = () => {
+    invoke("local_search_reauthorize").catch(() => {});
+    setStatus((s) => ({ indexed: s?.indexed ?? 0, building: true, helper_state: "ok" }));
+  };
 
   const openHit = (h: LocalSearchHit) => {
     invoke("local_search_open", { path: h.path }).catch(() => {});
@@ -343,11 +366,15 @@ export function LocalSearchDialog({ open, onClose }: { open: boolean; onClose: (
 
   const emptyText = loading
     ? "搜索中…"
-    : building && hits.length === 0
-      ? "正在后台扫描本机文件（首次需授权读取 MFT 索引）…"
-      : trimmed
-        ? "没有匹配的项目"
-        : "输入关键词开始查找";
+    : helperState === "unauthorized"
+      ? "索引需要一次管理员授权才能建立（秒级，非全盘扫描）"
+      : helperState === "failed"
+        ? "索引构建失败：未找到可用的索引助手或非 NTFS 卷"
+        : building && hits.length === 0
+          ? "正在后台扫描本机文件（首次需授权读取 MFT 索引）…"
+          : trimmed
+            ? "没有匹配的项目"
+            : "输入关键词开始查找";
 
   return createPortal(
     <div className="fixed inset-0 z-[200] flex items-start justify-center p-4 pt-[7vh]">
@@ -444,6 +471,33 @@ export function LocalSearchDialog({ open, onClose }: { open: boolean; onClose: (
               仅文件夹
             </button>
           </div>
+          {/* helper 授权/失败提示条：索引建不起来时给原因 + 出口，不再静默空列表 */}
+          {(helperState === "unauthorized" || helperState === "failed") && !building && (
+            <div className="flex items-center gap-2 px-3 pb-2">
+              <div
+                className={clsx(
+                  "flex-1 flex items-center gap-2 h-8 px-3 rounded-md text-tiny",
+                  helperState === "unauthorized"
+                    ? "bg-warning-soft text-warning"
+                    : "bg-error-soft text-error",
+                )}
+              >
+                <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                <span className="truncate-1">
+                  {helperState === "unauthorized"
+                    ? "索引需要一次管理员授权（读取 MFT 索引，秒级完成）"
+                    : "索引助手启动失败"}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={reauthorize}
+                className="shrink-0 px-3 h-8 rounded-md text-tiny font-medium bg-accent text-white hover:opacity-90 transition-opacity"
+              >
+                {helperState === "unauthorized" ? "重新授权" : "重试"}
+              </button>
+            </div>
+          )}
         </div>
 
         {/* ③④ 列表 + 预览 */}

@@ -39,6 +39,32 @@ use tauri::command;
 /// 旧索引回答（宁旧不卡）。
 const INDEX_TTL: Duration = Duration::from_secs(600);
 
+/// updates.jsonl 增量流的截断阈值（64 MB）。tail 重放消费后超过即截断
+/// 归零——helper 按 append 语义写，截断后从新 EOF 追加。此前只在 helper
+/// 重启时清一次，无人消费时实测膨胀到 189 MB。
+const UPDATES_TRUNCATE_THRESHOLD: u64 = 64 * 1024 * 1024;
+
+/// 提权 helper 的状态，暴露给前端做"需要授权/失败重试"提示。
+///
+/// 分类依据是 `usn_index_via_helper` 的错误文案（ShellExecuteW 的 UAC
+/// 拒绝/超时不可编程探测，只能按文案归类），文案变更需同步这里。
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HelperState {
+    /// helper 可用或从未尝试过（无提示）。
+    Ok,
+    /// UAC 被拒绝或超时——用户主动授权后即可秒级建索引。
+    Unauthorized,
+    /// helper 缺失/非 NTFS/其他失败。
+    Failed,
+}
+
+impl Default for HelperState {
+    fn default() -> Self {
+        Self::Ok
+    }
+}
+
 /// 单次返回上限。
 const MAX_RESULTS: usize = 200;
 
@@ -84,6 +110,17 @@ struct Entry {
     frn: u64,
 }
 
+/// 索引来源。决定 TTL 语义：jwalk 全量没有增量保鲜，受 `INDEX_TTL` 约束；
+/// USN 路径有 tail 重放持续保鲜，不做周期性全量重建——每次重建都意味着
+/// 再弹一次 UAC，正是把用户推向「拒绝授权」的元凶（见笔记
+/// 2026-10-05-local-index-uac-chain）。
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+enum IndexSource {
+    #[default]
+    Jwalk,
+    Usn,
+}
+
 #[derive(Debug, Default)]
 struct Index {
     /// 所有文件名拼接的 arena。
@@ -95,6 +132,8 @@ struct Index {
     frn_map: std::collections::HashMap<u64, u32>,
     /// 目录 frn → 自身完整路径的 dirs 下标（重放 add 时定位父目录）。
     frn_dirs: std::collections::HashMap<u64, u32>,
+    /// 索引来源（决定 TTL 语义，见 [`IndexSource`]）。
+    source: IndexSource,
 }
 
 impl Index {
@@ -123,6 +162,8 @@ struct FileIndex {
     /// 建成时间。None = 从未建成。
     built_at: Option<Instant>,
     building: bool,
+    /// 最近一次 helper 尝试的结果（前端"需要授权/重试"提示的数据源）。
+    helper_state: HelperState,
 }
 
 impl FileIndex {
@@ -131,6 +172,7 @@ impl FileIndex {
             index: Index::default(),
             built_at: None,
             building: false,
+            helper_state: HelperState::Ok,
         }
     }
 }
@@ -151,16 +193,36 @@ fn index_cell() -> &'static Mutex<FileIndex> {
 }
 
 /// 要索引的根目录：本机所有固定盘的根（从 'C' 起，跳过 A:/B: 软盘
-/// 遗留）。可移动盘/网络盘不索引（慢且无意义）。
+/// 遗留）。只收 `DRIVE_FIXED`——可移动盘/网络盘慢且无意义，失效映射盘
+/// （subst 残留、断连的网络映射）会让 helper 枚举报 0x80070002 噪音。
 fn search_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
     for letter in 'C'..='Z' {
         let root = PathBuf::from(format!("{letter}:\\"));
-        if root.is_dir() {
+        if root.is_dir() && is_fixed_drive(&root) {
             roots.push(root);
         }
     }
     roots
+}
+
+#[cfg(windows)]
+fn is_fixed_drive(root: &Path) -> bool {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::core::PCWSTR;
+    // windows 0.58 的常量分布：GetDriveTypeW 在 Storage::FileSystem，
+    // DRIVE_* 常量在 System::WindowsProgramming（Cargo.toml 已开对应 feature）。
+    use windows::Win32::Storage::FileSystem::GetDriveTypeW;
+    use windows::Win32::System::WindowsProgramming::DRIVE_FIXED;
+    let mut wide: Vec<u16> = root.as_os_str().encode_wide().collect();
+    wide.push(0);
+    // SAFETY: wide 以 NUL 结尾；GetDriveTypeW 无副作用。
+    unsafe { GetDriveTypeW(PCWSTR(wide.as_ptr())) == DRIVE_FIXED }
+}
+
+#[cfg(not(windows))]
+fn is_fixed_drive(_root: &Path) -> bool {
+    true
 }
 
 /// 大小写折叠进可复用缓冲，返回折叠后的 &str。逐条零分配的关键。
@@ -269,10 +331,11 @@ fn walk_root(root: &Path) -> Index {
 /// 回退 jwalk 目录遍历（分钟级）。
 fn rebuild_index(gen: u64, allow_jwalk_fallback: bool) {
     let mut merged = match usn_index_via_helper() {
-        Ok(idx) => {
+        Ok(mut idx) => {
             // helper 路线可用：启动增量重放线程（幂等，仅首访实际创建）。
             #[cfg(windows)]
             usn_helper::spawn_tail_replay();
+            idx.source = IndexSource::Usn;
             idx
         }
         Err(e) => {
@@ -471,7 +534,15 @@ mod usn_helper {
     /// tail updates.jsonl 重放线程：把 helper 的增删事件物理应用到内存
     /// 索引（frn 定位条目）。文件从尾部读，读完后轮询新行；从偏移 0 起
     /// 只在首次（复用驻留 helper 时补齐错过的增量）。
+    ///
+    /// OnceLock 守卫：真正"仅首访创建"。此前每次 helper 成功重建都会
+    /// spawn 一个新线程——TTL 曾每 10 分钟触发一次重建，线程数随之增长，
+    /// 且每个新线程从 offset 0 重读整个增量文件。
     pub fn spawn_tail_replay() {
+        static TAIL_SPAWNED: OnceLock<()> = OnceLock::new();
+        if TAIL_SPAWNED.set(()).is_err() {
+            return;
+        }
         let dir = exchange_dir();
         std::thread::spawn(move || {
             let updates = dir.join("updates.jsonl");
@@ -513,6 +584,21 @@ mod usn_helper {
                     }
                 }
                 offset = consumed;
+                // 增量流治理：消费后文件超阈值即截断归零。helper 的 append
+                // 句柄（FILE_APPEND_DATA）每次写都落在当时 EOF，截断后从
+                // 新 EOF 追加，offset 同步归零即可。极端时序下可能丢一批
+                // 刚写入的增量——resnap 全量校正兜底（见笔记 Consequences）。
+                // 此前无治理：文件只在 helper 重启时清一次，实测膨胀到 189MB。
+                if consumed > UPDATES_TRUNCATE_THRESHOLD {
+                    if std::fs::File::options()
+                        .write(true)
+                        .truncate(true)
+                        .open(&updates)
+                        .is_ok()
+                    {
+                        offset = 0;
+                    }
+                }
             }
         });
     }
@@ -830,8 +916,43 @@ mod usn_helper {
     }
 }
 
+/// UAC 拒绝/超时的错误文案片段。ShellExecuteW("runas") 的用户拒绝在
+/// Win32 层不可编程区分，只能按我们自己的错误文案归类；文案变更时
+/// 同步这里（见 `spawn_elevated` 的 "UAC 被拒绝或 helper 启动失败"）。
+const UAC_DENIED_MARKERS: &[&str] = &["UAC"];
+
+/// 把 helper 失败归类为前端可呈现的状态。默认 Failed；错误文案含
+/// UAC 标记的视为用户未授权。
+fn classify_helper_error(e: &str) -> HelperState {
+    let upper = e.to_ascii_uppercase();
+    if UAC_DENIED_MARKERS.iter().any(|m| upper.contains(m)) {
+        HelperState::Unauthorized
+    } else {
+        HelperState::Failed
+    }
+}
+
+/// 记录一次 helper 失败：置标志 + 落状态。自动路径据此当轮放弃重试
+/// （重试 = 再弹一次 UAC，对用户是骚扰、对磁盘是空转）。
+fn record_helper_failure(e: String) -> String {
+    HELPER_FAILED.store(true, Ordering::Release);
+    if let Ok(mut cell) = index_cell().lock() {
+        cell.helper_state = classify_helper_error(&e);
+    }
+    e
+}
+
+/// 用户显式点"重新授权/重试"：清失败标记 + 状态复位，允许再弹一次 UAC。
+fn reset_helper_failure() {
+    HELPER_FAILED.store(false, Ordering::Release);
+    if let Ok(mut cell) = index_cell().lock() {
+        cell.helper_state = HelperState::Ok;
+    }
+}
+
 /// 走提权 helper 建索引。非 Windows / helper 失败时返回 Err，并把失败
-/// 记进 `HELPER_FAILED` —— 之后本进程内不再重试（免得反复弹 UAC）。
+/// 记进 `HELPER_FAILED` —— 之后自动路径不再重试；用户可在查找面板点
+/// 「重新授权」显式重试（见 `reset_helper_failure`）。
 #[cfg(windows)]
 fn usn_index_via_helper() -> Result<Index, String> {
     if HELPER_FAILED.load(Ordering::Acquire) {
@@ -847,14 +968,11 @@ fn usn_index_via_helper() -> Result<Index, String> {
         })
         .collect();
     if volumes.is_empty() {
-        return Err("未发现 NTFS 卷".into());
+        return Err(record_helper_failure("未发现 NTFS 卷".into()));
     }
     usn_helper::run(&volumes)
         .map(|r| r.index)
-        .map_err(|e| {
-            HELPER_FAILED.store(true, Ordering::Release);
-            e
-        })
+        .map_err(record_helper_failure)
 }
 
 #[cfg(not(windows))]
@@ -889,12 +1007,20 @@ fn fallback_jwalk_index() -> Index {
 
 /// 确保索引可用：未建或过期时在后台触发重建，立即返回。
 /// `allow_jwalk_fallback` = false 时只用提权 helper（见 [`rebuild_index`]）。
-fn ensure_index(allow_jwalk_fallback: bool) {
+/// `force` = true 时无视 TTL 与既有索引（"重新授权"按钮用：不管当前
+/// 有没有 jwalk 旧索引，都按用户意愿再走一次提权路线）。
+fn ensure_index(allow_jwalk_fallback: bool, force: bool) {
     let mut cell = match index_cell().lock() {
         Ok(c) => c,
         Err(_) => return,
     };
-    if cell.building || cell.built_at.map_or(false, |t| t.elapsed() < INDEX_TTL) {
+    if cell.building
+        || (!force
+            // TTL 只约束 jwalk 全量索引：USN 路径有 tail 重放持续保鲜，
+            // 周期性全量重建 = 周期性再弹 UAC（用户拒绝授权的元凶）。
+            && cell.index.source == IndexSource::Jwalk
+            && cell.built_at.map_or(false, |t| t.elapsed() < INDEX_TTL))
+    {
         return;
     }
     cell.building = true;
@@ -923,7 +1049,7 @@ pub fn start_background_index() {
         return;
     }
     eprintln!("[local_search] background index scan starting");
-    ensure_index(false);
+    ensure_index(false, false);
 }
 
 /// 主进程退出时调用：让常驻的提权 helper 立刻退出（见
@@ -1101,12 +1227,14 @@ pub struct IndexStatus {
     /// 重建中 = 已发现的文件数；已建成 = 索引条目数。
     pub indexed: usize,
     pub building: bool,
+    /// 最近一次提权 helper 尝试的结果（unauthorized/failed 时前端出提示条）。
+    pub helper_state: HelperState,
 }
 
 #[command]
 pub fn local_search_status() -> IndexStatus {
     let Ok(cell) = index_cell().lock() else {
-        return IndexStatus { indexed: 0, building: false };
+        return IndexStatus { indexed: 0, building: false, helper_state: HelperState::Ok };
     };
     let building = cell.building;
     IndexStatus {
@@ -1116,7 +1244,20 @@ pub fn local_search_status() -> IndexStatus {
             cell.index.len()
         },
         building,
+        helper_state: cell.helper_state,
     }
+}
+
+/// 用户点"重新授权/重试"：复位 helper 失败标记，再走一次提权路线。
+///
+/// 与 `ensure_index(false)` 的区别只有"允许再次弹 UAC"——自动路径失败后
+/// 本进程不再主动重试（免骚扰），重试权交给用户显式点击。
+#[command]
+pub fn local_search_reauthorize() {
+    reset_helper_failure();
+    // 直接 force 重建：不走 start_background_index（那里的 AUTO_SCANNED
+    // 守卫会让第二次调用变成空操作）。
+    ensure_index(false, true);
 }
 
 /// 快速搜索：`query` 为空时返回最近修改的前 N 个文件；否则按模糊/
@@ -1128,7 +1269,7 @@ pub async fn local_search(
     dirs_only: Option<bool>,
 ) -> Result<LocalSearchResponse, String> {
     // 用户显式发起的查询：helper 不行也允许 jwalk 全盘兜底。
-    ensure_index(true);
+    ensure_index(true, false);
     tokio::task::spawn_blocking(move || search_blocking(query, ext, dirs_only.unwrap_or(false)))
         .await
         .map_err(|e| format!("搜索线程失败: {e}"))
@@ -1256,6 +1397,7 @@ mod tests {
             index: idx,
             built_at: Some(Instant::now()),
             building: false,
+            helper_state: HelperState::Ok,
         };
 
         // 模糊路径：少打一个字母也能命中。

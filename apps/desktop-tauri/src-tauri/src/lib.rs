@@ -671,6 +671,7 @@ pub fn run() {
             commands::restart_sidecar,
             commands_local_search::local_search,
             commands_local_search::local_search_status,
+            commands_local_search::local_search_reauthorize,
             commands_local_search::local_search_open,
             commands_local_search::local_search_preview,
             cdp_probe::cdp_n0_probe,

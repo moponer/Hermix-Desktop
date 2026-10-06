@@ -1,6 +1,6 @@
 [package]
 name = "hermix-desktop"
-version = "0.1.8"
+version = "0.1.9"
 edition = "2021"
 # 本包有两个 bin：主程序 + 主进程拉起的提权索引辅助进程
 # （usn-indexer，见下方 [[bin]]）。不指定 default-run 时 `cargo run`
@@ -69,6 +69,7 @@ windows = { version = "0.58", features = [
   "Win32_System_Pipes",
   "Win32_System_Power",
   "Win32_System_Threading",
+  "Win32_System_WindowsProgramming",
   "Win32_UI_Shell",
   "Win32_UI_WindowsAndMessaging",
 ] }
