@@ -11,6 +11,21 @@ fn re(pattern: &'static str) -> Regex {
     Regex::new(pattern).expect("static regex pattern must compile")
 }
 
+/// 会话级审批记忆的 key —— **命令签名**，不是 rule family。
+///
+/// 审计整改计划 2026-10-05 §批次 2 第 5 条（选项 A）。此前 key 是
+/// `match_confirm_rule` 返回的家族名，于是「批准一次 `taskkill /IM foo.exe`」
+/// 会顺带放行同家族的 `taskkill /IM bar.exe /F`——参数不同、影响面差很远，
+/// 却因为同属一个家族而免了二次确认。
+///
+/// 规范化只做**空白折叠 + trim**：不碰大小写、不重排参数、不做引号处理。
+/// 更激进的规范化会制造「看起来等价、语义不同」的合并，那比 family 泛化
+/// 更危险。命令长度有限，直接存原文没有碰撞风险，而且落盘的
+/// `session_approvals.json` 里人能看懂自己批过什么。
+fn command_signature(command: &str) -> String {
+    command.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 // ---------------------------------------------------------------------------
 // ApprovalDecision
 // ---------------------------------------------------------------------------
@@ -461,19 +476,24 @@ impl ApprovalManager {
         //    (b) UX noise — `taskkill /F ...` and `taskkill /IM ...`
         //    got different prefix keys and re-prompted each other
         //    even though they are the same family.
-        let Some(rule_key) = self.match_confirm_rule(command) else {
+        // 守卫而非记忆键：命中与否决定要不要走后面的检查（不命中 = 隐式
+// 放行）。会话记忆的 key 是下面的 `command_signature(command)`。
+        if self.match_confirm_rule(command).is_none() {
             // No confirm rule matched → implicit allowlist.
             return ApprovalDecision::Approved;
-        };
+        }
 
-        // 3. Session-level approval — if this RULE FAMILY was approved
-        //    earlier in the session, skip re-prompting. Runs AFTER the
-        //    confirm-rule lookup so the key is the family, not the
-        //    shell prefix; the deny/readonly checks above still take
-        //    precedence. A poisoned mutex is treated as "no session
-        //    approval" — better to re-prompt than to crash a turn.
+        // 3. Session-level approval — if **this exact command** was
+        //    approved earlier in the session, skip re-prompting. The key
+        //    is `command_signature(command)`, NOT the confirm-rule
+        //    family: approving `taskkill /IM foo.exe` must not wave
+        //    through `taskkill /IM bar.exe /F` just because both match
+        //    the same rule (audit batch 2 item 5, option A). The
+        //    deny/readonly checks above still take precedence. A poisoned
+        //    mutex is treated as "no session approval" — better to
+        //    re-prompt than to crash a turn.
         if let Ok(set) = self.session_approved.lock() {
-            if set.contains(&rule_key) {
+            if set.contains(&command_signature(command)) {
                 return ApprovalDecision::Approved;
             }
         }
@@ -584,15 +604,14 @@ impl ApprovalManager {
     /// WS-approval path can persist the per-session approval without
     /// requiring `&mut self` on the handler. Backed by `Mutex` internally.
     pub fn approve_for_session(&self, command: &str) {
-        // Key by the matched confirm-rule family (not the raw command
-        // prefix). If the command matches no confirm rule (e.g. it was
-        // approved through the metachar gate but isn't a known
-        // dangerous family), we deliberately record nothing:
-        // re-prompting is safer than granting blanket immunity.
-        if let Some(rule_key) = self.match_confirm_rule(command) {
-            if let Ok(mut set) = self.session_approved.lock() {
-                set.insert(rule_key);
-            }
+        // Key by the exact command signature, not the rule family
+        // (see `command_signature`). If the command matches no confirm
+        // rule at all (e.g. it was approved through the metachar gate but
+        // isn't a known dangerous family) we still record it: the gate
+        // decided it needed approval, and the user said yes. Re-prompting
+        // the identical command is pure friction, not safety.
+        if let Ok(mut set) = self.session_approved.lock() {
+            set.insert(command_signature(command));
         }
     }
 
@@ -613,18 +632,14 @@ impl ApprovalManager {
         // touching disk so a slow IO doesn't block readers of the
         // same HashSet (the WS-approval path may be racing the
         // normal request flow).
-        // Key by the matched confirm-rule family (see
-        // `approve_for_session`). No matching rule → nothing to
-        // record; skip the disk write entirely.
-        let Some(rule_key) = self.match_confirm_rule(command) else {
-            return Ok(());
-        };
+        // Key by the exact command signature (see `approve_for_session`).
+        let signature = command_signature(command);
         let snapshot: std::collections::HashSet<String> = {
             let mut set = self
                 .session_approved
                 .lock()
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
-            set.insert(rule_key);
+            set.insert(signature);
             set.clone()
         };
         if let Some(path) = persist_path {
@@ -656,12 +671,9 @@ impl ApprovalManager {
     /// Check if a command's rule family was previously approved in
     /// this session.
     pub fn is_approved_in_session(&self, command: &str) -> bool {
-        let Some(rule_key) = self.match_confirm_rule(command) else {
-            return false;
-        };
         self.session_approved
             .lock()
-            .map(|s| s.contains(&rule_key))
+            .map(|s| s.contains(&command_signature(command)))
             .unwrap_or(false)
     }
 

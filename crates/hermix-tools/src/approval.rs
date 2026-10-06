@@ -844,9 +844,11 @@ mod tests {
 
         let loaded = load_session_approvals(&path);
         assert_eq!(loaded.len(), 2);
-        // Keys are the confirm-rule FAMILIES, not raw command prefixes.
-        assert!(loaded.contains("systemctl-service"));
-        assert!(loaded.contains("package-manager"));
+        // Keys are the exact command signatures, so the file reads as
+        // "these specific commands were approved" rather than "these
+        // command families are blanket-approved".
+        assert!(loaded.contains("systemctl restart nginx"));
+        assert!(loaded.contains("apt install foo"));
 
         // Fresh manager sees the same session approvals.
         let m2 = ApprovalManager::new();
@@ -943,20 +945,36 @@ mod tests {
         );
     }
 
-    /// Session approval is keyed by the confirm-rule FAMILY: approving
-    /// `taskkill /F /IM cargo.exe` covers other `taskkill /F`
-    /// invocations with different arguments, but NEVER a different
-    /// family that happens to share the same shell prefix
+    /// Session approval is keyed by the **exact command signature**
+    /// (audit batch 2 item 5, option A): approving
+    /// `taskkill /F /IM cargo.exe` does NOT cover a different
+    /// `taskkill /F /IM rustc.exe` — different arguments, potentially
+    /// different blast radius. It covers the *same* command again (modulo
+    /// whitespace), and never a different family sharing a shell prefix
     /// (`cmd /c "del ..."`).
     #[test]
-    fn session_approval_is_keyed_by_rule_family() {
+    fn session_approval_is_keyed_by_exact_command() {
         let m = ApprovalManager::new();
         m.approve_for_session("cmd /c \"taskkill /F /IM cargo.exe\"");
-        // Same family, different args → Approved (no re-prompt).
+        // Identical command → Approved (no re-prompt). This is the whole
+        // point of session-level approval.
+        assert_eq!(
+            m.check_approval("cmd /c \"taskkill /F /IM cargo.exe\""),
+            ApprovalDecision::Approved,
+            "the same command should be covered"
+        );
+        // Whitespace-only differences fold to the same signature.
+        assert_eq!(
+            m.check_approval("cmd  /c  \"taskkill /F /IM cargo.exe\""),
+            ApprovalDecision::Approved,
+            "whitespace differences fold into the same signature"
+        );
+        // Same family, DIFFERENT args → must re-prompt. This is the
+        // behavior change: family-level memory was the over-grant.
         assert_eq!(
             m.check_approval("cmd /c \"taskkill /F /IM rustc.exe\""),
-            ApprovalDecision::Approved,
-            "same rule family (taskkill-force) should be covered"
+            ApprovalDecision::RequiresConfirmation,
+            "same family with different args must NOT inherit the approval"
         );
         // Different family under the SAME shell prefix → must NOT be
         // covered (this was the old prefix-key security hole).
