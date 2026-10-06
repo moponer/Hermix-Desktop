@@ -15,14 +15,19 @@ Status: proposed — 承接 [批次 N 立项](../architecture/2026-10-01-agent-b
 
 ## 为什么现在做
 
-**登录态是当前最实际的缺口。** 今天的浏览器自动化每次都要人工过一遍
-`cdp_bootstrap` 拉起浏览器，而 bootstrap 起的是**干净 profile**——用户每次都在
-重新登录。这是「浏览器能力实际为零」在日常使用里的具体形态：不是某个功能坏了，
-是每次都要人肉重复一套机械动作。
+**登录态是当前最实际的缺口。** 今天的浏览器自动化由 `cdp_bootstrap` 拉起浏览器。
+实测（2026-10-07，`env_browser_cua.rs::t20/t21`）修正了这里原先的说法：
 
-Space 解决的是它的后半段：任务之间不该互相污染。今天一次自动化任务留下的 tab、
-cookie、页面状态全部留到下一次；`useOrCreateTaskSpace` 让「这次任务的浏览器世界」
-与「上一次」隔离。
+- bootstrap 起的**不是临时 profile**，而是 Hermix 专有的持久 profile
+  `~/.hermix/runtime/browser-profile`（命令行显式 `--user-data-dir=`）。
+- 该 profile 里的 cookie **跨浏览器进程重启保留**：设置 → 优雅关闭 → 重新拉起 →
+  再次访问同一站点仍然带上 cookie（t20 端到端验过）。
+- 因此「每次都要重新登录」不成立；**真正的缺口是首次**：它不继承用户日常 Edge 的
+  登录态，所以每个站点第一次仍要人工过一遍登录。
+
+所以 Space 要解决的从「重登」收缩为「首次登录 + 任务之间互相污染」。后者是真的：
+今天一次自动化任务留下的 tab、cookie、页面状态全部带到下一次，
+`useOrCreateTaskSpace` 让「这次任务的浏览器世界」与「上一次」隔离。
 
 ## Alternatives considered
 

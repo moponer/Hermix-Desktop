@@ -417,12 +417,19 @@ impl CdpBrowserBackend {
                 })?
                 .to_string();
 
+            // `Runtime.callFunctionOn` binds the receiver to `this`; it does
+            // NOT create a local named `el`. Every body in this module is
+            // written against `el`, so bind it explicitly: hand the same
+            // object back as an argument and forward it, which also puts `el`
+            // in scope for the inner closure.
+            let declaration = format!("function(el){{ return ({body}).call(el); }}");
             let called = Self::ws_roundtrip(
                 &mut ws,
                 "Runtime.callFunctionOn",
                 json!({
                     "objectId": object_id,
-                    "functionDeclaration": body,
+                    "functionDeclaration": declaration,
+                    "arguments": [{ "objectId": object_id }],
                     "returnByValue": true,
                     "awaitPromise": true,
                 }),

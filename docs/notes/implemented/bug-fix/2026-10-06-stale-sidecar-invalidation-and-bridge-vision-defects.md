@@ -90,6 +90,17 @@ accessible name 来自 `<label>` 的输入框必然匹配不到）。但它要�
 > **教训**：「需要结构性改动」和「不该现在做」之间没有等号。当时真正该做的是
 > 估工作量（半小时）而不是给它贴"独立立项"的标签——那是我给自己找的台阶，
 > 和报告里那个"说计划不动手"的行为缺陷是同一个毛病。
+>
+> **2026-10-07 更正（真机验收后的自我打脸）**：上面那句「改完 GUI 表单自动化才
+> 真正可用」是没验就写下的。`call_on_node` 当时只把 `objectId` 交给
+> `Runtime.callFunctionOn`，而全部 body 都写成 `function(){ el.value = ... }`——
+> CDP 只把节点绑到 `this`，不会凭空产生形参 `el`，于是每一次 ref 动作都在页面侧
+> 抛 `ReferenceError: el is not defined`，`browser_type` / `browser_click` 的
+> node 分支连同它们的 preflight 一起失效。真修法是给 `callFunctionOn` 补上
+> `arguments` 并包一层 `function(el){ return (body).call(el); }`。
+> **教训套娃**：那一轮的验收标准是「编译绿 + 单测绿 + 读代码」，缺的恰恰是端到端。
+> 凡「这下终于可用了」的结论都必须附真实浏览器 / 真实 UIA 的跑动证据——现在这个
+> 证据在 `crates/hermix-tools/tests/env_browser_cua.rs`（需 `HERMIX_REAL_ENV=1`）。
 
 **否决五：拆 BUG-12 的审批护栏。** `Remove-Item -Recurse -Force` 被拒是
 `DENIED_PATTERNS` 里钉住的硬护栏，`storage_clean` 是指定替代路径，scratch 范围
