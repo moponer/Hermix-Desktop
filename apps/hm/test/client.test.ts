@@ -3,8 +3,8 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { computeSignature, newNonce, signatureHeader } from '../src/core/signature'
-import { encodeEnvelope, parseEnvelope, PROTO_VERSION } from '../src/core/envelope'
+import { computeSignature, newNonce, signatureHeader } from '../core/signature'
+import { encodeEnvelope, parseEnvelope, PROTO_VERSION } from '../core/envelope'
 
 const TOKEN = 'hmxd_test_token'
 const SID = 'im:device:dev-aaa'

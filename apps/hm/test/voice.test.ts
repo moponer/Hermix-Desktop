@@ -4,7 +4,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { isRiskyInstruction, riskOf, NullAsr, NullTts, TurnTracker, type VoiceTurn } from '../src/core/voice'
+import { isRiskyInstruction, riskOf, NullAsr, NullTts, TurnTracker, type VoiceTurn } from '../core/voice'
 
 // --------------------------------------------------------------- 高危动词
 

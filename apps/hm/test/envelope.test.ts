@@ -7,7 +7,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { parseEnvelope, encodeEnvelope, helloFrame, PROTO_VERSION, type Envelope } from '../src/core/envelope'
+import { parseEnvelope, encodeEnvelope, helloFrame, PROTO_VERSION, type Envelope } from '../core/envelope'
 
 const V = {
   token: 'hmxd_test_token',

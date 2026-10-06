@@ -6,7 +6,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { dispatch, reduce, initialChatState, type ChatState } from '../src/core/frames'
+import { dispatch, reduce, initialChatState, type ChatState } from '../core/frames'
 
 function feed(state: ChatState, ...frames: string[]): ChatState {
   return frames.reduce((s, raw) => reduce(s, dispatch(raw)), state)

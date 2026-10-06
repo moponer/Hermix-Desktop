@@ -1,3 +1,8 @@
+// 工程已转为 **HBuilderX 布局**（manifest/pages/App/main 在根目录），
+// 而 uni 的 vite 插件默认把输入目录当 `src`。指到项目根，让
+// `npm run build:h5` 这条 CLI 门禁在转换后依然可用。
+process.env.UNI_INPUT_DIR ||= '.';
+
 import { defineConfig } from 'vite'
 import uni from '@dcloudio/vite-plugin-uni'
 

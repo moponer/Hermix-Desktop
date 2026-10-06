@@ -15,7 +15,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { generateIdentity, importPublicKey, sealBody, openBody } from '../src/core/crypto'
+import { generateIdentity, importPublicKey, sealBody, openBody } from '../core/crypto'
 
 const enc = new TextEncoder()
 const dec = new TextDecoder()

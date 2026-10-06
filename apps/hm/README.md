@@ -58,49 +58,40 @@ Keystore（`EncryptedSharedPreferences` 是原生能力）。token 明文泄漏 
 ASR 与 TTS 都在**手机端**直连云端（用户自带 API key），音频与文本都不过 relay，
 relay 架构一行不改。
 
-## 打包（APK）——现状与路径（2026-10-06 实测矩阵）
+## 工程布局（2026-10-06 转 HBuilderX 布局）
 
-**`npm run build:app` 在纯 npm 工具链下无解**，且已排除"版本线配平"这一解释：
+骨架全部在**项目根**：`manifest.json` / `pages.json` / `App.vue` / `main.js` /
+`uni.scss` / `pages/` / `core/`。这是 HBuilderX 认得的经典 uni-app 结构——
+之前的 CLI 布局（骨架在 `src/`）会让 HBuilderX「打开目录」时按普通 web 项目
+处理并报"根目录缺少 index.html"。转换后 HBuilderX 直接打开本目录即可。
 
-| dcloud 版本 | vue 版本 | `build:app` | `build:h5` / `npm test` |
-|---|---|---|---|
-| 3.0.0-4060620250520001（当前 pin，预览线） | 3.4.21 / 3.5.22 | ✗ | ✓ |
-| 3.0.0-4080720251210001（最新正式线） | 3.4.21 | ✗ | ✓ |
-| 3.0.0-4040520250106001 / 3.0.0-4030320241128001 | 3.4.21 | ✗ | — |
+CLI 侧两条门禁仍然有效：
 
-失败信息恒为：
+- `npm test`（42 项，tsx 直接跑 `core/*.ts`，不依赖布局）；
+- `npm run build:h5` —— 通过 `cross-env UNI_INPUT_DIR=.` 指向根布局 +
+  `index.html` 入口改指 `/main.js`。
 
-```
-"isInSSRComponentSetup" is not exported by "vue/dist/vue.runtime.esm-bundler.js"
-（来自 @dcloudio/uni-app/dist/uni-app.es.js）
-```
+## 打包（APK）
 
-已逐版本核实：**已发布的任何 vue（3.4.21 / 3.5.13 / 3.5.22）的全部 dist
-构建都不导出 `isInSSRComponentSetup`**，而每一版已发布的 `@dcloudio/uni-app`
-都 import 它。**结论：app 目标必须经 HBuilderX 的运行时**（它自带配平好的
-uni-app + vue 工具链），npm 侧无论怎么配版本都编不出来。H5 与 `npm test`
-（tsx，不走 bundler）都正常——所以逻辑层有真门禁，缺的只是原生打包链路。
+**app 目标只能由 HBuilderX 编译**。npm 工具链下 `dev:app` / `build:app`
+在 bundling 阶段即失败（恒为 `"isInSSRComponentSetup" is not exported by
+vue`，已实测 dcloud 4 个版本线 × vue 3.4.21/3.5.22 全部如此）——已发布的
+任何 vue 都不带该导出，而每版 `@dcloudio/uni-app` 都 import 它。因此脚本里
+不再保留 `dev:app` / `build:app`，避免给出跑不通的入口。
 
-**HBuilderX 里的两个坑**：
-
-1. **直接「打开目录」选 `apps/hm` 会报"请确认您的项目模板是否支持vue3：
-   根目录缺少 index.html"**——误导性报错。本项目是 **CLI 布局**
-   （`manifest.json` / `pages.json` 在 `src/`，`index.html` + `vite.config.ts`
-   在根），HBuilderX 按根目录 `manifest.json` 判定项目类型，认不出就退回
-   普通 web 分支。
-2. **CLI 跑不通 app 目标**（2026-10-06 实测）：`npm run dev:app` 与
-   `npm run build:app` **在 bundling 阶段就失败**，报同一
-   `isInSSRComponentSetup` 缺失——**根本没走到唤起 HBuilderX 那一步**。
-   （本节早前版本写"真机调试用 `npm run dev:app`"是错的，已按实测更正。）
-   结论不变：app 目标只能由 **HBuilderX 自身的工具链**编译。
-2. **APK 云打包需要 AppID**：uni-app 原生 App 必须先在 DCloud 开发者中心
-   注册应用取 AppID，填进 `src/manifest.json` 的 `appid`（当前值
-   `__UNI__0B255CA` 是既有占位/他人注册，**打包前换成你自己的**），
-   然后在 HBuilderX 内完成发行 → 原生 App-云打包 → Android。
-   若 CLI 无法产出 `dist/build/app`，则需要把工程转成 HBuilderX 布局
-   （`manifest.json` / `pages.json` / `App.vue` / `main.js` 移到根目录）
-   ——属于工程形态变更，动手前先与该项目的当前负责人对齐。
+1. **AppID**：`manifest.json` 的 `appid` 当前是 `__UNI__0B255CA`（占位），
+   **打包前换成你自己在 [DCloud 开发者中心](https://dev.dcloud.net.cn/)
+   注册应用拿到的 AppID**（云打包必须绑定账号）。
+2. HBuilderX「文件 → 打开目录」选**本目录**（`apps/hm`）——现在会被正确
+   识别为 uni-app 项目。
+3. 「运行 → 运行到手机或模拟器」做真机调试；首次运行需装 DCloud 的
+   **自定义运行基座**。
+4. 「发行 → 原生 App-云打包」→ Android → 证书先用**公测证书**（省去自备
+   keystore）→ 下载 APK。
 
 **装上 APK 后第一件事**：扫码配对 + 收第一帧加密消息——这是
-`crypto.subtle` 在 app-plus runtime 可用性的唯一验证点（风险已记录在
+`crypto.subtle` 在 app-plus runtime 可用性的唯一验证点（风险记录在
 relay E2EE 决策笔记的 Consequences 一节）。
+
+> 附：把源码转成 HBuilderX 布局后，`src/unpackage`（H5 构建产物）已随
+> 布局删除，H5 输出统一在 `dist/`。
