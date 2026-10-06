@@ -329,6 +329,60 @@ pub struct SessionMux {
     /// `Arc`——手机在任何会话发来的 `key.exchange`，学到的公钥都立刻对
     /// 所有出站可见。`None` = 未启用（单测路径），帧按明文走。
     e2ee: Option<Arc<E2eeCtx>>,
+    /// 入站帧号去重（见 [`ReplayGuard`]）。
+    replay: ReplayGuard,
+}
+
+/// 从密封信封里取 16 字节帧号（非密封帧 → None）。
+fn frame_id_of(env: &Envelope) -> Option<[u8; 16]> {
+    use base64::Engine;
+    let payload = env.payload.as_deref()?;
+    let frame: crate::relay_proto::SealedFrame = serde_json::from_str(payload).ok()?;
+    base64::engine::general_purpose::STANDARD
+        .decode(frame.eid)
+        .ok()?
+        .try_into()
+        .ok()
+}
+
+/// 入站帧重放去重。
+///
+/// **为什么需要**：`eid` 每帧随机、只进 HKDF salt——它保证每帧密钥唯一，
+/// 但**密文原样重放照样能正常解密**（nonce/eph/AAD 全部一致）。托管形态的
+/// 威胁模型里 relay 运营方是潜在攻击者：把捕获的旧"执行命令"帧重投一遍，
+/// 桌面端会当作新指令再执行。签名的 ±300s 新鲜度把窗口限住，但窗口内
+/// 仍可重放——这一层就是补那段窗口。
+///
+/// 按 node 分桶，600s TTL（覆盖签名窗口）+ 每桶 256 上限双限内存；
+/// **只在解密成功后登记**，攻击者无法用垃圾 eid 投毒桶。
+#[derive(Default)]
+pub struct ReplayGuard {
+    buckets: HashMap<String, std::collections::VecDeque<(std::time::Instant, [u8; 16])>>,
+}
+
+impl ReplayGuard {
+    const WINDOW: std::time::Duration = std::time::Duration::from_secs(600);
+    const MAX_PER_NODE: usize = 256;
+
+    /// 窗口内出现过 → true（重放，调用方应丢弃）。
+    pub fn is_replay(&mut self, node: &str, eid: [u8; 16]) -> bool {
+        let now = std::time::Instant::now();
+        let q = self.buckets.entry(node.to_string()).or_default();
+        while let Some((ts, _)) = q.front() {
+            if now.duration_since(*ts) > Self::WINDOW {
+                q.pop_front();
+            } else {
+                break;
+            }
+        }
+        if q.iter().any(|(_, e)| *e == eid) {
+            return true;
+        }
+        if q.len() < Self::MAX_PER_NODE {
+            q.push_back((now, eid));
+        }
+        false
+    }
 }
 
 /// 解析 handler 发来的 JSON 文本帧。
@@ -359,6 +413,7 @@ impl SessionMux {
         Ok(Self {
             entries: HashMap::new(),
             e2ee: Some(Arc::new(E2eeCtx::load()?)),
+            replay: ReplayGuard::default(),
         })
     }
 
@@ -449,7 +504,18 @@ impl SessionMux {
         let plain = match &self.e2ee {
             None => payload.to_string(),
             Some(ctx) => match ctx.open_inbound(env) {
-                Ok(p) => p,
+                Ok(p) => {
+                    // 解密成功后查重：同 eid 的密文原样重投能正常解密，
+                    // 不去重就是一次静默的指令重放（ReplayGuard 文档）。
+                    if let Some(eid) = frame_id_of(env) {
+                        let node = env.node_id.as_deref().unwrap_or("");
+                        if self.replay.is_replay(node, eid) {
+                            tracing::warn!(session = %sid, node = %node, "eid 重放帧，已丢弃");
+                            return false;
+                        }
+                    }
+                    p
+                }
                 Err(e) => {
                     // 解不开 = AAD/salt/方向/密钥有一个对不上。**不投**——
                     // 投给上层等于让它处理一段自己没验证过的字节。
@@ -583,6 +649,7 @@ mod tests {
         let mut mux = SessionMux {
             entries: HashMap::new(),
             e2ee: Some(ctx),
+            replay: ReplayGuard::default(),
         };
         let plain = Envelope {
             session_id: Some("im:device:dev-1".into()),
@@ -600,6 +667,7 @@ mod tests {
         let mut mux = SessionMux {
             entries: HashMap::new(),
             e2ee: Some(pc.clone()),
+            replay: ReplayGuard::default(),
         };
 
         // 手机用 PC 公钥封密钥交换。
@@ -625,6 +693,96 @@ mod tests {
         // 学到之后出站立刻可用。
         let mut out = Envelope::route_for("im:device:dev-9", String::new());
         assert!(pc.seal_outbound(&mut out, "hi", "dev-9").is_ok());
+    }
+
+    // ── 入站重放去重（ReplayGuard） ───────────────────────────────
+
+    /// 用手机身份封一帧"投给 PC"的入站帧。方向必须显式给 DeviceToNode
+    /// ——`seal_envelope` 写死 NodeToDevice（PC 出站专用），所以这里走
+    /// 低层 `seal_body` + 手工组装信封，与生产入站方向一致。
+    fn sealed_inbound(
+        ctx: &E2eeCtx,
+        sid: &str,
+        node_id: &str,
+        plain: &str,
+        eid: &[u8; 16],
+    ) -> Envelope {
+        use base64::Engine;
+        let mut env = Envelope::route_for(sid, String::new());
+        env.node_id = Some(node_id.to_string());
+        let fctx = crate::relay_crypto::FrameContext {
+            frame_id: eid,
+            header: &env.aad(),
+            direction: Direction::DeviceToNode,
+        };
+        let sealed = crate::relay_crypto::seal_body(plain.as_bytes(), &ctx.own.public_key(), &fctx);
+        let b64 = base64::engine::general_purpose::STANDARD;
+        env.payload = Some(
+            serde_json::json!({
+                "ct": b64.encode(&sealed.ciphertext),
+                "nonce": b64.encode(sealed.nonce),
+                "ep": b64.encode(sealed.ephemeral_public),
+                "eid": b64.encode(eid),
+            })
+            .to_string(),
+        );
+        env
+    }
+
+    /// 同一密文原样重投：第一次投出，第二次被去重丢弃。
+    /// eid 只进 HKDF salt——不去重的话这两次都会正常解密。
+    #[test]
+    fn replayed_sealed_frame_is_dropped_on_second_delivery() {
+        let ctx = e2ee_for_tests(1);
+        let phone = p256::SecretKey::from_slice(&[2u8; 32]).unwrap();
+        let mut mux = SessionMux {
+            entries: HashMap::new(),
+            e2ee: Some(ctx.clone()),
+            replay: ReplayGuard::default(),
+        };
+        let _ = &phone; // 方向由封帧方显式声明，私钥不参与构造
+        let env = sealed_inbound(
+            &ctx,
+            "im:device:dev-1",
+            "dev-1",
+            r#"{"type":"chat","text":"rm -rf"}"#,
+            &[7u8; 16],
+        );
+        assert!(mux.dispatch(&env), "首次投递应成功");
+        assert!(!mux.dispatch(&env), "同一 eid 重放必须被丢弃");
+    }
+
+    /// 不同帧号的两帧都应正常通过（去重不能误伤）。
+    #[test]
+    fn distinct_frames_both_delivered() {
+        let ctx = e2ee_for_tests(1);
+        let phone = p256::SecretKey::from_slice(&[2u8; 32]).unwrap();
+        let mut mux = SessionMux {
+            entries: HashMap::new(),
+            e2ee: Some(ctx.clone()),
+            replay: ReplayGuard::default(),
+        };
+        let _ = &phone;
+        let a = sealed_inbound(&ctx, "s", "dev-1", r#"{"n":1}"#, &[1u8; 16]);
+        let b = sealed_inbound(&ctx, "s", "dev-1", r#"{"n":2}"#, &[2u8; 16]);
+        assert!(mux.dispatch(&a));
+        assert!(mux.dispatch(&b));
+    }
+
+    /// 桶行为：重复命中、不同帧号不命中、容量上限后停止登记（不无界增长）。
+    #[test]
+    fn replay_guard_dedups_within_window_and_caps_memory() {
+        let mut g = ReplayGuard::default();
+        assert!(!g.is_replay("dev-1", [1u8; 16]), "首次不是重放");
+        assert!(g.is_replay("dev-1", [1u8; 16]), "同帧号再次出现是重放");
+        assert!(!g.is_replay("dev-1", [2u8; 16]), "不同帧号不是重放");
+        assert!(!g.is_replay("dev-2", [1u8; 16]), "分桶隔离：别的 node 独立");
+        // 灌满上限后不再登记新帧号，但历史帧号仍能识别为重放。
+        for i in 0..(ReplayGuard::MAX_PER_NODE as u16 + 10) {
+            let _ = g.is_replay("dev-3", [i as u8; 16]);
+        }
+        assert!(g.is_replay("dev-3", [0u8; 16]), "桶内早期帧号仍识别为重放");
+        assert_eq!(g.buckets.get("dev-3").map(|q| q.len()), Some(ReplayGuard::MAX_PER_NODE));
     }
 
     /// 未启用 E2EE 时保持原行为（单测走的明文路径不被这次改动打断）。
