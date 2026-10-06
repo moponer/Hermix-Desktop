@@ -52,8 +52,8 @@
 
   <div class="card">
     <img class="qr" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAXIAAAFyAQAAAADAX2ykAAADMklEQVR4nO1cbYrjMAx9cgz9mcAcoEdJb7BHGvZIe4P6KD3AQPyzkKBFstOms5AmsLvYRO9HaOzHIHhI0Yc9xNiD4HbRAeOvw73Z/w7jr8Mdjx8p4yILoZtoXvMg6oB535dp/y64A/IbVgAQaSGCnkcw8wj0A4Be94dS7d8DdzC+1ycBzQjEDoQWYESf1hjxI22g//U/7HHG/4f8htHfTkwX8ekrJtL4/Pf+/nu4DZwljL/Ff2dMhNCBOJxHUK+pdfxAyfY742/Qlx/vHH4MEprlQxw7MNoRQCuEWKL9zvhv+VNKjzU+0+fNS1bViKIN0yV6IOh+V6r9e+AOxvfZORXqoe0Ijc8M3IlD1yy8uzz7nfHf1r8+V7iX9i5OPEklrJVSk5RdVMcl2r8L7oD+O4rXfnkO1DD0gXhi0jW0Uva2X14yrbE8+53x18E8dzDmVy2NpFIa5FU29HOsTY5rafY746+DpU31fGQtk8gQ4WXj0cQyfSvjI6sqjwyRthV3bkeoyPnRmr718ZH7yiqeCtouIzX066xOLDHb9K11vnDTDFnrX6LkzuEs0ko5nKB5WIn274E7YP58p7kInjzCmUGIH5JEk0waZF0GDzpJKs5+Z/x1cMIzSKs7S+p8lUitSXRes/hcHx9ZN5FWVX1OffGSaeWcujT7nfG36MvPIjg58Zxf9XMnOm+UZr8z/tb6iLWrkX31JVxflWn6Vsj3aUwUZCTYDzrr1f6kHucgET4TuUz7nfE3xWfObarcxnhWva0kWSkFs+9vxd/fZu4wa5n7SJgF9v2tl4/cpkq58rhMsnhuRz83TN9q9cVyiJQEHfIQKatv/cmK+xuKeWq00BxzpLb6t+r5wsN/U8H70rrCY830rbI+GvUn6YHJcJZ2dPSjHMLyep+BEfXOirfzG3XfX4AWwZP0Mob0ixG7dGeFw6VE+53xd5xvF8hdlDw66vQYdP6Vuh+l2e+Mv4PfMEKX2x0yKUxZs143s/lvxXxWQWUSzFcdB8eTzn+JPvlOyyF/mfZvhzvy/YWYZZxPQjdyXPbEepKDf9r9hQr5ZP+fYRVuffsPGH8d7s3+dxgfq/gNxqMyq17Ots8AAAAASUVORK5CYII=" alt="扫码下载 APK" />
-    <a class="btn" id="dl" href="/download/hermix.apk" aria-disabled="true">下载中…</a>
-    <div class="meta" id="meta">正在查询安装包…</div>
+    <a class="btn" id="dl" href="/download/hermix.apk" aria-disabled="true">下载 APK</a>
+    <div class="meta" id="meta">正在查询安装包信息…（8 秒无响应即提示失败）</div>
   </div>
 
   <div class="card">
@@ -68,7 +68,7 @@
     <ol>
       <li>用手机浏览器打开本页，或直接扫上方二维码。</li>
       <li>下载 <b>hermix.apk</b>；首次安装需在系统设置里允许<b>「安装未知来源应用」</b>。</li>
-      <li>打开 App，在配对屏把中转地址填成 <code>https://hermix.cssso.com</code>（必须 https）。</li>
+      <li>打开 App：配对屏的中转地址<b>已预填好</b>，确认无误即可（要换自建中转再改，必须 https）。</li>
       <li>核对屏 1 显示的证书指纹与服务器一致后，输入桌面端二维码里的 6 位配对码。</li>
     </ol>
   </div>
@@ -80,8 +80,14 @@
   const HERMIX_M_VERSION = '0.1.0';
   const $ = (id) => document.getElementById(id);
   const fmtSize = (b) => b >= 1048576 ? (b/1048576).toFixed(1) + ' MB' : b >= 1024 ? Math.round(b/1024) + ' KB' : b + ' B';
-  fetch('/api/app-info', { cache: 'no-store' })
-    .then((r) => r.json())
+  const fail = (why) => {
+    $('dl').textContent = '下载暂不可用';
+    $('dl').setAttribute('aria-disabled', 'true');
+    $('meta').innerHTML = '<span class="warn">' + why + '</span> 刷新页面可重试。';
+  };
+  const timeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('查询超时')), ms))]);
+  timeout(fetch('/api/app-info', { cache: 'no-store' }), 8000)
+    .then((r) => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
     .then((info) => {
       if (!info.available) {
         $('dl').textContent = '安装包尚未上传';
@@ -95,11 +101,7 @@
       $('upd').textContent = info.updatedAt ? new Date(info.updatedAt).toLocaleString() : '—';
       $('sha').innerHTML = '<code>' + (info.sha256 || '—') + '</code>';
     })
-    .catch(() => {
-      $('dl').textContent = '下载暂不可用';
-      $('dl').setAttribute('aria-disabled', 'true');
-      $('meta').textContent = '查询安装包信息失败，稍后重试。';
-    });
+    .catch((e) => fail('查询安装包信息失败：' + (e && e.message ? e.message : e)));
 </script>
 </body>
 </html>

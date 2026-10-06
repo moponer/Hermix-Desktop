@@ -17,7 +17,8 @@ import { checkClockSkew, SKEW_WARN_SECS, setRelayBaseUrl, relayBaseUrl } from '.
 import { verifyConformance } from '../../core/signature'
 import { completePairing, fingerprintOf } from '../../core/pairing'
 
-const relayUrl = ref(relayBaseUrl() ?? 'https://relay.example.com')
+// 默认预填运营方托管 relay（安装页同款地址）；自建中转的用户可在屏 1 改。
+const relayUrl = ref(relayBaseUrl() ?? 'https://hermix.cssso.com')
 const code = ref<string[]>(['', '', '', '', '', ''])
 const fingerprint = ref('')
 const fingerprintOk = ref(false)
