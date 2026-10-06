@@ -67,6 +67,12 @@ pub struct Identity {
     secret: SecretKey,
 }
 
+impl Identity {
+    pub fn from_secret(secret: SecretKey) -> Self {
+        Self { secret }
+    }
+}
+
 /// 密封后随帧下发的密文材料。`ephemeral_public` 走明文帧头。
 #[derive(Clone)]
 pub struct SealedBody {
@@ -123,6 +129,12 @@ impl Identity {
             .as_bytes()
             .try_into()
             .expect("uncompressed P-256 point is always 65 bytes")
+    }
+
+    /// 私钥标量的 32 字节。**只给持久化层用**（`relay_identity` 拿去 DPAPI
+    /// 保护）——任何密码学操作都该走 `seal_body` / `open_body`。
+    pub fn secret_bytes(&self) -> [u8; 32] {
+        self.secret.to_bytes().into()
     }
 }
 

@@ -20,6 +20,7 @@ mod mobile_protocol;
 mod mobile_ws;
 mod relay_client;
 mod relay_crypto;
+mod relay_identity;
 mod relay_proto;
 mod relay_transport;
 mod ws_transport;
