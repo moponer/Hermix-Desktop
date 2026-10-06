@@ -103,7 +103,9 @@ pub struct SealedFrame {
     pub nonce: String,
     /// base64：65 字节未压缩 P-256 ephemeral 公钥。
     pub ep: String,
-    /// base64：帧号，进 HKDF salt。防跨帧重放。
+    /// base64：帧号，进 HKDF salt（保证每帧密钥唯一）。
+    /// **salt 本身不防重放**——密文原样重投仍能解密；去重由接收侧
+    /// `relay_transport::ReplayGuard`（按 node 桶 + TTL）负责。
     pub eid: String,
 }
 

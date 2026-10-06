@@ -94,6 +94,14 @@
 - main.tsx：百分比 rAF 平滑补间；爬行 +2%/320ms。
 - 验证：静态预览 + 浏览器截图核对（浅色 45% 推进态布局配色确认）；tsc 干净；vitest 237 全绿。
 
+### Step 8（06:00）— E2EE 审查发现项修复：入站帧重放去重 ✅（用户追加，提交 f56c3c55）
+
+**审查结论**（读 relay_crypto/identity/transport + 跑测试）：E2EE 整体扎实——选型修正有实测依据、每帧 ephemeral 前向保密、AAD 绑 v/tag/sid/nid、密钥交换防 MITM（node_pub 二维码出带 + device_pub 密封回传）、DPAPI 失败即报错、明文帧 relay 硬拒。relay 19/19（本机先失败只是 apps/relay 未装依赖，npm install 后全过）、server 386 全绿。
+
+**发现（中等）**：`eid` 每帧随机但只进 HKDF salt——密文原样重放能正常解密（nonce/eph/AAD 全一致）。恶意 relay（托管形态威胁模型内）可重投旧"执行命令"帧，桌面端再执行一遍。签名 ±300s 新鲜度把窗口限住，窗口内仍可重放。
+
+**修复**：`SessionMux` 增 `ReplayGuard`（按 node 分桶、600s TTL、每桶 256 上限，仅解密成功后登记防投毒），挂 `dispatch` 收口；eid 字段注释同步更正。测试 +3。
+
 ## 会话收尾快照（次日对接看这里）
 
 **A 线已完成**：批次 1（`1aa398bd`）、批次 4（`f3912c4d`）、批次 2-7（`579e2930`）、批次 3 Rust 两组（`be441f5a` / `800a0980`）、批次 3 前端（`4f1f3fbe`）。净效果：审计方案除 2-4 / 2-5 / 2-6 外全部落地，净删约 800 行。
