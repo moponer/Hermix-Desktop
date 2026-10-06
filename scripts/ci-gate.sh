@@ -26,7 +26,7 @@
 #      the drift instead of letting it silently mislead the agent.
 #
 # Hard gates (exit non-zero on failure): 1, 2, 3, 3b, 4b, 6, 8, 9, 10, 11
-# Soft gates (warn but continue): 4, 5, 7
+# Soft gates (warn but continue): 4, 5, 7, 12
 #
 # Usage (from repo root, in any terminal):
 #   ./scripts/ci-gate.sh
@@ -280,7 +280,7 @@ echo ""
 # 10. Decision Notes structure gate (HARD gate)
 #     docs/notes/ 三态决策记录的结构/格式/强制节检查（制度见 docs/notes/README.md）
 #-----------------------------------------------------------------------
-echo "=== [10/11] decision notes structure ==="
+echo "=== [10/12] decision notes structure ==="
 if [ -f scripts/check-notes.sh ]; then
   bash scripts/check-notes.sh || exit 1
 else
@@ -295,11 +295,25 @@ echo ""
 #     只看已跟踪文件 —— 未跟踪的本地临时文件是开发者的事，脏工作区
 #     不该让门禁变红。
 #-----------------------------------------------------------------------
-echo "=== [11/11] repository hygiene ==="
+echo "=== [11/12] repository hygiene ==="
 if [ -f scripts/check-hygiene.sh ]; then
   bash scripts/check-hygiene.sh || exit 1
 else
   echo "  SKIP: scripts/check-hygiene.sh not found"
+fi
+echo ""
+
+#-----------------------------------------------------------------------
+# 12. Sidecar freshness gate (SOFT gate — warn, never block)
+#     打包用的 sidecar 二进制可能比源码旧 —— cargo tauri build 不会自动
+#     刷新它。2026-10-06 的 v2.0 缺陷报告就是这么把 5 个已修 bug 报成
+#     "仍未修复"：复测跑的二进制比修复提交早 4 小时。这一关只提醒。
+#-----------------------------------------------------------------------
+echo "=== [12/12] sidecar freshness (soft) ==="
+if [ -f scripts/check-sidecar-freshness.sh ]; then
+  bash scripts/check-sidecar-freshness.sh || echo "  WARN: sidecar is stale — a retest through the packaged app would measure old code"
+else
+  echo "  SKIP: scripts/check-sidecar-freshness.sh not found"
 fi
 echo ""
 
