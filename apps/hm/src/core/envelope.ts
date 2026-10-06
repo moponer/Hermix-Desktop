@@ -105,7 +105,31 @@ export function parseEnvelope(raw: string): { ok: true; envelope: Envelope } | {
   if (!['hello', 'route', 'ack', 'close'].includes(wire.tag)) {
     return { ok: false, reason: `unknown tag ${wire.tag}`, versionMismatch: false }
   }
+  // v2：ROUTE 的 payload 必须是密封信封。明文帧一律拒——静默放行等于
+  // E2EE 被无声关闭，且失败形态会退化成「消息莫名消失」。
+  // 判定口径必须与 `apps/relay/src/proto.js::isSealed` 一致。
+  if (wire.tag === 'route' && !isSealed(wire.payload)) {
+    return { ok: false, reason: 'plaintext route frame rejected (E2EE required)', versionMismatch: false }
+  }
   return { ok: true, envelope: toEnvelope(wire) }
+}
+
+/** payload 是否是密封信封（四个字段齐全）。与 relay 的 `isSealed` 同口径。 */
+export function isSealed(payload: unknown): boolean {
+  if (typeof payload !== 'string' || payload.length === 0) return false
+  let inner: any
+  try {
+    inner = JSON.parse(payload)
+  } catch {
+    return false
+  }
+  if (typeof inner !== 'object' || inner === null) return false
+  return (
+    typeof inner.ct === 'string' &&
+    typeof inner.nonce === 'string' &&
+    typeof inner.ep === 'string' &&
+    typeof inner.eid === 'string'
+  )
 }
 
 export function encodeEnvelope(e: Envelope): string {

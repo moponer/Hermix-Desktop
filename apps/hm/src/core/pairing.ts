@@ -13,11 +13,22 @@
  * 本文件先把接口留出来，**不假装已经安全**。
  */
 import { computeSignature, signatureHeader, newNonce } from './signature'
+import { generateIdentity, type Identity } from './crypto'
 
 const KEY_DEVICE_TOKEN = 'hermix.deviceToken'
 const KEY_RELAY_TOKEN = 'hermix.relayToken'
 const KEY_ASR_KEY = 'hermix.asr.apiKey'
 const KEY_TTS_KEY = 'hermix.tts.apiKey'
+/**
+ * E2EE 静态公钥（base64 / 65B 未压缩 P-256）。
+ *
+ * **私钥永不落盘**：它只活在 WebCrypto 的 CryptoKey 里，进程内使用。落盘的
+ * 只有公钥——公钥本来就是公开的，落盘是为了重启后不用重新配对。
+ *
+ * ⚠️ 与文件头同一个隐患：这里是 `uni.setStorageSync`（明文）。但暴露的只是
+ * 公钥，泄漏不构成风险（保密性来自 PC 侧的私钥）。
+ */
+const KEY_E2EE_PUBLIC = 'hermix.e2ee.publicKey'
 
 function get(k: string): string {
   try {
@@ -68,6 +79,39 @@ export async function completePairing(opts: { relayUrl: string; code: string }):
   const data = (await res.json()) as { device_id?: string; device_token?: string }
   if (!data.device_token) throw new Error('配对响应里没有 device_token')
   set(KEY_DEVICE_TOKEN, data.device_token)
+}
+
+// ── E2EE 身份 ────────────────────────────────────────────────────
+
+/**
+ * 生成本机的 E2EE 身份。
+ *
+ * **私钥永不落盘，而且无法持久化**——WebCrypto 的 CryptoKey 不可导出，
+ * 所以手机每次冷启动都是一把新私钥。这不是缺陷，是更安全的形态：设备上
+ * 根本没有可被偷的私钥。
+ *
+ * 代价是 PC 侧存的旧公钥会失效，**每次冷启动必须重发一次 `key.exchange`**
+ * 让 PC 覆盖（`E2eeCtx::learn_peer` 是 upsert）。少这一步的症状是
+ * PC 发出的帧手机解不开。
+ *
+ * 落盘的只有公钥——它本来就是扫码要传的东西，泄漏不构成风险。
+ */
+export async function generateOwnIdentity(): Promise<Identity> {
+  const id = await generateIdentity()
+  set(KEY_E2EE_PUBLIC, bytesToB64(id.publicKey))
+  return id
+}
+
+/** 本机公钥（base64），供配对时随码带给 PC。 */
+export async function ownPublicKeyB64(): Promise<string> {
+  const id = await generateOwnIdentity()
+  return bytesToB64(id.publicKey)
+}
+
+function bytesToB64(bytes: Uint8Array): string {
+  let s = ''
+  for (const b of bytes) s += String.fromCharCode(b)
+  return btoa(s)
 }
 
 export { computeSignature, signatureHeader, newNonce }

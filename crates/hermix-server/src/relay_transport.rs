@@ -58,7 +58,8 @@ pub struct E2eeCtx {
     own: SecretKey,
     /// device_id → 对方静态公钥。`key.exchange` 之前没有。
     peers: std::sync::Mutex<HashMap<String, PublicKey>>,
-    store: PeerStore,
+    /// `None` = 只在内存里记，不落盘。单测用——测试不该往工作区写文件。
+    store: Option<PeerStore>,
 }
 
 impl E2eeCtx {
@@ -75,7 +76,7 @@ impl E2eeCtx {
         Ok(Self {
             own,
             peers: std::sync::Mutex::new(peers),
-            store,
+            store: Some(store),
         })
     }
 
@@ -102,7 +103,8 @@ impl E2eeCtx {
         if let Ok(mut g) = self.peers.lock() {
             g.insert(device_id.to_string(), *pk);
         }
-        if let Err(e) = self.store.put(device_id, &raw) {
+        let Some(store) = &self.store else { return };
+        if let Err(e) = store.put(device_id, &raw) {
             tracing::warn!(device_id, error = %e, "设备公钥落盘失败（本次会话仍可用）");
         }
     }
@@ -537,7 +539,7 @@ mod tests {
         Arc::new(E2eeCtx {
             own: p256::SecretKey::from_slice(&[own_seed; 32]).unwrap(),
             peers: std::sync::Mutex::new(HashMap::new()),
-            store: PeerStore::at(std::path::PathBuf::from("unused-in-tests")),
+            store: None,
         })
     }
 

@@ -44,11 +44,33 @@ test('带 auth 的帧往返后 auth 完整（hermix 在 PC 侧靠它验）', asy
     tag: 'route',
     sessionId: SID,
     auth: { bearer: TOKEN, signature: sig },
-    payload: '{"type":"user_message"}',
+    // v2 起 payload 必须是密封信封，否则 parseEnvelope 直接拒——这正是
+    // 「明文帧不许静默通过」的验证点之一。
+    payload: JSON.stringify({
+      ct: Buffer.from('{"type":"user_message"}', 'utf8').toString('base64'),
+      nonce: Buffer.alloc(12, 7).toString('base64'),
+      ep: Buffer.alloc(65, 4).toString('base64'),
+      eid: Buffer.from('frame-1', 'utf8').toString('base64'),
+    }),
   })
   const back = parseEnvelope(wire)
   assert.ok(back.ok)
   assert.equal(back.envelope.sessionId, SID)
   assert.equal(back.envelope.auth?.bearer, TOKEN)
   assert.equal(back.envelope.auth?.signature, sig)
+})
+
+test('明文 route 帧被拒（v2 起 E2EE 是硬要求）', () => {
+  const wire = encodeEnvelope({
+    protoVersion: PROTO_VERSION,
+    tag: 'route',
+    sessionId: SID,
+    payload: '{"type":"user_message"}',
+  })
+  const back = parseEnvelope(wire)
+  assert.equal(back.ok, false)
+  if (!back.ok) {
+    assert.match(back.reason, /plaintext/)
+    assert.equal(back.versionMismatch, false, '是格式问题不是版本问题')
+  }
 })

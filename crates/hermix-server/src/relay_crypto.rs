@@ -33,7 +33,9 @@ use p256::elliptic_curve::sec1::ToEncodedPoint;
 use p256::{PublicKey, SecretKey};
 use sha2::Sha256;
 
-use crate::relay_proto::{Envelope, FrameTag, SealedFrame};
+use crate::relay_proto::{Envelope, SealedFrame};
+#[cfg(test)]
+use crate::relay_proto::FrameTag;
 
 /// 本模块的错误。刻意不套用 `mobile::MobileError` —— 帧加密是线路层的事，
 /// 耦合到 IM 模块会让两边互相拖。调用方（`relay_transport`）自己决定怎么映射。

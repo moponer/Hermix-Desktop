@@ -56,6 +56,31 @@ export interface SealedBody {
   ciphertext: Uint8Array;
 }
 
+/** 密钥交换载荷的 `type`。必须与 `relay_crypto.rs::KEY_EXCHANGE_TYPE` 同字。 */
+export const KEY_EXCHANGE_TYPE = 'key.exchange';
+
+/** 配对后发给 PC 的密钥交换帧的**明文**内容。机密性来自外层 seal。 */
+export interface KeyExchangePayload {
+  type: typeof KEY_EXCHANGE_TYPE;
+  /** 本机静态公钥，base64。 */
+  pk: string;
+  device_id: string;
+}
+
+/** 密封信封 —— 线路上 `payload` 的实际形状。 */
+export interface SealedEnvelope {
+  ct: string;
+  nonce: string;
+  ep: string;
+  eid: string;
+}
+
+function b64(bytes: Uint8Array): string {
+  let s = '';
+  for (const b of bytes) s += String.fromCharCode(b);
+  return btoa(s);
+}
+
 function subtle(): SubtleCrypto {
   const c = globalThis.crypto;
   if (!c?.subtle) {
@@ -153,4 +178,46 @@ export async function openBody(
       sealed.ciphertext as BufferSource,
     ),
   );
+}
+
+/**
+ * 手机侧构造密钥交换帧：用**PC 的公钥**把 `[device_id, pk_ph]` 封一层。
+ *
+ * 这是 E2EE 的信任建立点：手机扫码已经拿到 `pk_pc`（二维码里带的），
+ * 用它封自己的公钥，relay 就学不到 `pk_ph`——否则 relay 拿着 `pk_ph`
+ * 能解开 PC 发给手机的**全部**帧。手法与 TLS 交换证书同构。
+ *
+ * 每次冷启动都要重发一次：WebCrypto 私钥不可导出，重启后是新的
+ * `pk_ph`，PC 侧 `learn_peer` 是 upsert，覆盖旧的即可。
+ */
+export async function buildKeyExchangeEnvelope(opts: {
+  pcPublic: CryptoKey;
+  deviceId: string;
+  ownPublic: Uint8Array;
+  frameId: Uint8Array;
+  header: Uint8Array;
+}): Promise<{ payload: SealedEnvelope; ephemeralPublic: string }> {
+  const plain = new TextEncoder().encode(
+    JSON.stringify({
+      type: KEY_EXCHANGE_TYPE,
+      pk: b64(opts.ownPublic),
+      device_id: opts.deviceId,
+    } satisfies KeyExchangePayload),
+  );
+  // 手机 → PC，方向 d2n。
+  const { sealed, ephemeralPublic } = await sealBody(plain, {
+    receiverPublic: opts.pcPublic,
+    frameId: opts.frameId,
+    header: opts.header,
+    direction: 'd2n',
+  });
+  return {
+    payload: {
+      ct: b64(sealed.ciphertext),
+      nonce: b64(sealed.nonce),
+      ep: b64(ephemeralPublic),
+      eid: b64(opts.frameId),
+    },
+    ephemeralPublic: b64(ephemeralPublic),
+  };
 }

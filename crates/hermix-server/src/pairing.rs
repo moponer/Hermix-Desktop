@@ -371,6 +371,12 @@ pub struct QrPayload {
     pub pairing_code: String,
     pub pairing_url: String,
     pub proto_version: u32,
+    /// 本机 E2EE 静态公钥，base64 的 65 字节未压缩 P-256。
+    ///
+    /// **这是 E2EE 的信任锚**：手机扫码拿到它之后，才有办法把自己的公钥
+    /// 安全地送回 PC（用本公钥封一层，relay 看不到内容）。少了它 PC 只能
+    /// 发明文帧，而 relay 侧会直接拒。
+    pub node_public_key: String,
 }
 
 struct PairingSession {
@@ -489,6 +495,18 @@ impl PairingSessions {
     /// TLS 未开启时返回 Err（配对依赖加密面）。TLS 现已默认开启，
     /// 仅显式设置 HERMIX_TLS_DISABLE=1 的用户会遇到本错误。
     pub fn create(&self, tls_addr: Option<std::net::SocketAddr>) -> Result<QrPayload, String> {
+        // E2EE 信任锚。**必须在进临界区之前取**——DPAPI 解密是系统调用，
+        // 放锁里会放大 `inner` 的持有时间。`create()` 的 mint+insert 临界区
+        // 刚被审计线（A 线批次 1）为修 TOCTOU 收窄过，别把慢操作塞回去。
+        //
+        // DPAPI 失败直接报错：出不了码就别出码，绝不退回"没有 E2EE 的配对"
+        // ——那等于让用户以为链路是加密的。
+        let node_public_key = {
+            use base64::Engine;
+            let id = crate::relay_identity::load_or_create()
+                .map_err(|e| format!("准备 E2EE 身份失败: {e}"))?;
+            base64::engine::general_purpose::STANDARD.encode(id.public_key())
+        };
         let tls_addr = tls_addr.ok_or_else(|| {
             "TLS 已被关闭（检测到 HERMIX_TLS_DISABLE=1）。删除该环境变量并重启，再发起配对".to_string()
         })?;
@@ -525,7 +543,11 @@ impl PairingSessions {
                 port: tls_addr.port(),
                 cert_fingerprint: fingerprint,
                 pairing_code: code.clone(),
-                proto_version: 1,
+                // 曾经硬编码 `1`，改 relay 的 PROTO_VERSION 时不会跟着动 ——
+                // 结果二维码告诉手机旧版本，手机按旧协议连上来被 relay 拒。
+                // 一律取常量。
+                proto_version: crate::relay_proto::PROTO_VERSION,
+                node_public_key,
             };
             // 新码代际：扫码方自己的预算清零（重新生成 = 攻击者重新开始）。
             // attempts 锁与 inner 互不相干，锁内调用无死锁。
@@ -1314,7 +1336,16 @@ mod tests {
         let addr: std::net::SocketAddr = "0.0.0.0:8443".parse().expect("addr");
         let payload = sessions.create(Some(addr)).expect("create");
         assert!(payload.cert_fingerprint.len() == 64, "指纹 64 hex");
-        assert_eq!(payload.proto_version, 1);
+        // 曾经断言 `== 1`：协议升到 v2 时这个测试会红，但它红的方式是
+        // "实现的版本号是 2、测试期望 1"——容易被误读成"实现错了"。
+        // 断言应当钉"二维码说的版本 == 线路常量"，版本升级时无需改这里。
+        assert_eq!(payload.proto_version, crate::relay_proto::PROTO_VERSION);
+        // E2EE 信任锚：手机扫码拿到它才能把自己的公钥安全送回。
+        assert_eq!(
+            payload.node_public_key.len(),
+            88,
+            "base64 的 65 字节 P-256 公钥应是 88 字符"
+        );
         assert_eq!(payload.port, 8443);
         assert!(payload.server_id.starts_with("hermix-"));
         assert!(payload.pairing_code.chars().all(|c| c.is_ascii_digit()));
