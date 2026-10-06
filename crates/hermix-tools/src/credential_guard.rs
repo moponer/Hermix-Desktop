@@ -209,34 +209,29 @@ impl Default for CredentialGuard {
 }
 
 // ---------------------------------------------------------------------------
-//Path traversal advisory ( / )
+// Path traversal (`..`) — 2026-10-06 起不再 advisory
 // ---------------------------------------------------------------------------
-
-/// Advisory check for path traversal patterns (`..` sequences).
-///
-/// This is advisory, NOT blocking. Hermix Desktop intentionally
-/// allows full filesystem access (including `C:\` and other drives) —
-/// the terminal tool's description explicitly says so. The primary
-/// defenses are:
-/// 1. `CredentialGuard` blocks credential files (`.env`, `credentials.json`, etc.)
-/// 2. Terminal tool's pre-flight gate blocks `\\?\` and similar pathological prefixes
-/// 3. Approval system requires user consent for Caution-risk commands
-///
-/// This function adds a defense-in-depth advisory: it logs a warning
-/// when a path contains `..` segments that could escape the current
-/// directory. The warning is visible in logs for post-mortem analysis
-/// but does NOT block the operation.
-pub fn check_path_traversal_advisory(path: &str) {
-    // Detect `..` as a path component (not inside a filename like `file..txt`)
-    let normalized = path.replace('\\', "/");
-    let components: Vec<&str> = normalized.split('/').collect();
-    if components.iter().any(|c| *c == "..") {
-        tracing::debug!(
-            path = %path,
-            "path contains '..' traversal segment — advisory only (tool intentionally allows cross-directory access)"
-        );
-    }
-}
+//
+// 此前这里有个 `check_path_traversal_advisory`：只打 debug 日志、不拦，理由
+// 是「Hermix Desktop 有意允许完整文件系统访问」。**该理由与 terminal 的实际
+// 行为矛盾**——terminal 的 workdir 校验用
+// `hermix_core::path_security::has_traversal_component`，是硬拒；memory 同理。
+// 同一个 `..` 在三个工具里三种待遇，而 file 是唯一能绕开的那条。
+//
+// 审计整改计划（2026-10-05 §批次 2 第 6 条）的改法是「file 读/写路径从
+// advisory 升级为硬拒，复用 terminal / memory 同一判定」。已按此执行：判定
+// 仍只有一份实现（`hermix_core::path_security::has_traversal_component`），
+// file 侧的错误包装在 `tools::file::check_traversal_component`。
+//
+// 因此 advisory 函数**整体删除**——留着它就是「三套口径里的旧那套」，下一个
+// 人会以为还能靠它兜底。
+//
+// 代价已知：裸判 `ParentDir` 不先归一化，所以 `a\..\b` 这种能归一化掉的
+// 合法写法也会被拒。模型生成的路径基本不带 `..`，实际触发面小。
+//
+// 保留的防御不变：凭据文件由 `CredentialGuard` 拦，病态前缀由下面的
+// `check_path_prefix` 拦。
+// ---------------------------------------------------------------------------
 
 /// Hard block for pathological path prefixes (`\\?\`, `\\.\`) — these are a
 /// known bypass vector and are never legitimate for the file tools (the

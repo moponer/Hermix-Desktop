@@ -5,7 +5,6 @@ use base64::engine::general_purpose;
 use base64::Engine;
 use indexmap::IndexMap;
 use serde_json::{json, Value};
-
 use hermix_core::{
     tool_schema, traits::RiskLevel, AttachmentKind, Fs, FsError, JsonSchema, TerminalBackend,
     ToolError, ToolHandler, ToolOutput, ToolSchema,
@@ -16,6 +15,26 @@ use std::sync::Arc;
 
 use crate::credential_guard::CredentialGuard;
 use crate::ToolRegistry;
+
+/// `..` 穿越硬拒 —— 与 `terminal` 的 workdir 校验、`memory` 的路径判定同源。
+///
+/// 抽成函数而不是在两处内联，是为了让"三套口径统一"真的只有一份实现：判定仍在
+/// `hermix_core::path_security::has_traversal_component`（terminal / memory
+/// 用的也是它），这里只负责把 false 变 Ok、true 变一条可读的错误。
+///
+/// 代价要知道：`has_traversal_component` 是裸判 `ParentDir` 组件、不先归一化，
+/// 所以 `a\..\b` 这种**能归一化掉**的合法写法也会被拒。模型生成的路径基本都带
+/// 目录而非 `..`，实际触发面小；被拒时改写成归一化后的绝对路径即可。
+fn check_traversal_component(path: &str) -> Result<(), ToolError> {
+    if hermix_core::path_security::has_traversal_component(path) {
+        return Err(ToolError::InvalidParams(format!(
+            "Path '{}' contains a '..' traversal segment. \
+             Write the normalized absolute path instead.",
+            path
+        )));
+    }
+    Ok(())
+}
 
 // ---------------------------------------------------------------------------
 // Registration (P1.3 migration: file tools move out of register_builtins.rs)
@@ -236,8 +255,11 @@ impl ToolHandler for ReadFileHandler {
             .ok_or_else(|| ToolError::InvalidParams("Missing 'path' parameter".into()))?;
 
         CredentialGuard::new().check_read_access(Path::new(path))?;
-        //: advisory path traversal check — logs but does not block.
-        crate::credential_guard::check_path_traversal_advisory(path);
+        // 与 terminal / memory 同一口径硬拒 `..`，不再只打 debug 日志。
+        // 此前是 advisory，理由是"file 工具有意允许跨目录访问"——但那与
+        // terminal 的硬拒直接矛盾：同一个 `..`，三个工具三种待遇，而 file
+        // 是唯一能绕开的那条。详见 `check_traversal_component` 的代价说明。
+        check_traversal_component(path)?;
 
         let offset = params.get("offset").and_then(|v| v.as_u64());
         let limit = params.get("limit").and_then(|v| v.as_u64());
@@ -390,8 +412,8 @@ impl ToolHandler for WriteFileHandler {
             .ok_or_else(|| ToolError::InvalidParams("Missing 'content' parameter".into()))?;
 
         CredentialGuard::new().check_write_access(Path::new(path), content)?;
-        //: advisory path traversal check — logs but does not block.
-        crate::credential_guard::check_path_traversal_advisory(path);
+        // 同 read：与 terminal / memory 同一口径硬拒。
+        check_traversal_component(path)?;
 
         // 安全中心：覆盖前把旧版本存进备份目录（best-effort，失败不影响写）。
         let original = std::fs::read(path).unwrap_or_default();
@@ -1250,6 +1272,37 @@ impl ToolHandler for MoveFileHandler {
 mod tests {
     use super::*;
     use hermix_core::{AgentError, CommandOutput};
+
+    // ── 批次 2-6：traversal 硬拒 ─────────────────────────────────
+
+    #[test]
+    fn traversal_segment_is_rejected() {
+        // 三套口径统一后，file 与 terminal / memory 对 `..` 同等对待。
+        for p in [
+            "../etc/passwd",
+            "C:\\Users\\x\\..\\..\\Windows\\system32",
+            "a/../../b.txt",
+        ] {
+            let err = check_traversal_component(p).unwrap_err();
+            assert!(
+                matches!(err, ToolError::InvalidParams(ref m) if m.contains("traversal")),
+                "{p} 应被拒，实际: {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn ordinary_paths_still_pass() {
+        // 收紧不能误伤：带目录、扩展名、连字符/点的普通路径照常放行。
+        for p in [
+            "C:\\Users\\x\\Documents\\a.txt",
+            "src/main.rs",
+            "file..txt",
+            "C:/Users/x/Documents/报告 2026.md",
+        ] {
+            assert!(check_traversal_component(p).is_ok(), "{p} 不该被拒");
+        }
+    }
 
     #[test]
     fn read_image_returns_base64_for_png() {
