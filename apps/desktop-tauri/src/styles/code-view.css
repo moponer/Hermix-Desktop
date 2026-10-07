@@ -520,8 +520,14 @@
 }
 
 /* Office iframe must fill its flex parent — block + height:100% defeats
-   the inline-baseline gap that would otherwise leave a 4px strip. */
-.preview-fullscreen-scroll > div,
+   the inline-baseline gap that would otherwise leave a 4px strip.
+   2026-10-07：全屏侧原本是无守卫的 `> div`，把 markdown 的
+   .preview-md-layout（TOC 列 + 正文列的 flex 行）强改成 flex 列——
+   目录列缩在左上，正文列被挤出 overflow:hidden 容器，表现为
+   "全屏后左侧目录在、右侧全空"。加 :has(> iframe) 守卫后与面板侧
+   对称：只劫持真正的 iframe 包装层；PDF/PPTX/DOCX/图片有自己的
+   .preview-fullscreen .preview-* 规则，不依赖此条。 */
+.preview-fullscreen-scroll > div:has(> iframe),
 .preview-pane-inner > div:has(> iframe) {
   display: flex;
   flex-direction: column;
