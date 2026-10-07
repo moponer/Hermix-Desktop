@@ -9,7 +9,7 @@ import {
   extractFileChanges, extractMemoryUpdates, extractMemoryRecalls, resolveSteps,
   deriveTurnDurationMs,
 } from "./messageParser";
-import { UnifiedTimelineRenderer } from "./ToolCallBubble";
+import { UnifiedTimelineRenderer, MemoryConsolidationCard } from "./ToolCallBubble";
 import { MessageCopyAction } from "./MessageCopyAction";
 import { MessageActions } from "./MessageActions";
 import type { ChatMessage } from "../types";
@@ -245,6 +245,10 @@ export function AssistantMessage({
           onDenyBatchApproval={onDenyBatchApproval}
           onReasoningFoldChange={onReasoningFoldChange}
         />
+
+        {/* 记忆沉淀卡：本轮 agent 写入了什么记忆（事实 / 总结 /
+            每日沉淀 / 晋升长期记忆），独立于折叠时间线常驻可见。 */}
+        {memoryUpdates.length > 0 && <MemoryConsolidationCard updates={memoryUpdates} />}
 
         {/* Backend badge (outside card so it reads as meta, not part of answer) */}
         {message.execution_backend && (

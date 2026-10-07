@@ -25,7 +25,7 @@ pub struct DailyMemoryStore {
     conn: Mutex<Connection>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct DailyMemoryEntry {
     pub date: String,
     pub goals: String,
@@ -37,8 +37,15 @@ pub struct DailyMemoryEntry {
 impl DailyMemoryStore {
     // Open (creating if needed) the daily-memory DB under the Hermix home.
     pub fn open() -> Result<Self, ToolError> {
-        let home = hermix_home();
-        let path = home.join("daily_memory.db");
+        Self::open_at(hermix_home().join("daily_memory.db"))
+    }
+
+    // Open at an explicit path — the testable seam; `open` delegates
+    // with the resolved hermix home.
+    pub fn open_at(path: std::path::PathBuf) -> Result<Self, ToolError> {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
         let conn = Connection::open(&path).map_err(|e| {
             ToolError::ExecutionFailed(format!("daily_memory: open {} failed: {e}", path.display()))
         })?;
@@ -129,6 +136,38 @@ impl DailyMemoryStore {
             },
         )
         .map_err(|e| ToolError::ExecutionFailed(format!("daily_memory get: {e}")))
+    }
+
+    // List the most recent day entries, newest first. `limit == 0`
+    // returns an empty vec (same contract as the memory-ui listings).
+    pub fn list_days(&self, limit: u32) -> Result<Vec<DailyMemoryEntry>, ToolError> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| ToolError::ExecutionFailed("daily_memory: connection lock poisoned".into()))?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT date, goals, progress, conclusions, updated_at
+                 FROM daily_memory ORDER BY date DESC LIMIT ?1",
+            )
+            .map_err(|e| ToolError::ExecutionFailed(format!("daily_memory list: {e}")))?;
+        let rows = stmt
+            .query_map(params![limit as i64], |r| {
+                Ok(DailyMemoryEntry {
+                    date: r.get(0)?,
+                    goals: r.get(1)?,
+                    progress: r.get(2)?,
+                    conclusions: r.get(3)?,
+                    updated_at: r.get(4)?,
+                })
+            })
+            .map_err(|e| ToolError::ExecutionFailed(format!("daily_memory list: {e}")))?;
+        Ok(rows
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|e| ToolError::ExecutionFailed(format!("daily_memory list: {e}")))?)
     }
 }
 

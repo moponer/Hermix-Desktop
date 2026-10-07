@@ -84,6 +84,12 @@ pub fn default_tool_router(user_always_include: &[String]) -> Arc<dyn ToolSchema
         "write_file".to_string(),
         "terminal".to_string(),
         "memory".to_string(),
+        // daily_memory must always be visible like `memory`: the
+        // operating-principles block mandates goal/progress/conclusion
+        // notes, but the router can score it ≈ 0 on CJK queries and
+        // truncate it out of the schema set, after which the day's
+        // daily-memory row stays an empty skeleton.
+        "daily_memory".to_string(),
         // read_pdf and list_files must be always-forwarded so the
         // LLM does not fall back to "guess the path via terminal"
         // when the user supplies an explicit file path (e.g.

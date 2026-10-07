@@ -394,7 +394,9 @@ export function extractFileChanges(events?: ExecutionTimelineEvent[]): FileChang
 /** A single memory mutation surfaced inline in the conversation. */
 export interface MemoryUpdateEntry {
   action: "write" | "update" | "delete" | "summarize" | "cleanup" | "snapshot";
-  memoryType: "fact" | "style" | "summary" | "tool" | "snapshot";
+  /** `daily` / `promotion` / `reflection` are session-end
+   *  consolidation kinds emitted by memory_on_session_end. */
+  memoryType: "fact" | "style" | "summary" | "tool" | "snapshot" | "daily" | "promotion" | "reflection";
   key: string;
   summary: string;
   count?: number;

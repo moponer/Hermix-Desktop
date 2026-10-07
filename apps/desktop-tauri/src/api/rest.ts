@@ -1224,3 +1224,156 @@ export const toggleTickLoop = async (enabled: boolean): Promise<TickLoopStatus> 
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ enabled }),
   });
+
+// ── Memory management API（记忆管理设置页）────────────
+
+export interface MemoryGraphNode {
+  id: string;
+  /** fact | turn | memory_tool | session | delegation | compression_backfill | focus | reflection | daily | md */
+  kind: string;
+  label: string;
+  preview: string;
+  salience: number;
+  created_at: string;
+  session_id?: string;
+  pinned: boolean;
+}
+
+export interface MemoryGraphEdge {
+  source: string;
+  target: string;
+  relation: string;
+}
+
+export interface MemoryOverview {
+  frames: number;
+  facts: number;
+  reflections: number;
+  daily_days: number;
+  md_entries: number;
+  db_bytes: number;
+  per_day: Array<[string, number]>;
+}
+
+export interface MemoryGraphResponse {
+  nodes: MemoryGraphNode[];
+  edges: MemoryGraphEdge[];
+  stats: MemoryOverview;
+  truncated: boolean;
+}
+
+export interface MemoryItemResponse {
+  id: string;
+  kind: string;
+  content: string;
+  created_at: string;
+  salience: number;
+  session_id?: string;
+  file?: string;
+}
+
+export interface DailyMemoryDay {
+  date: string;
+  goals: string;
+  progress: string;
+  conclusions: string;
+  updated_at: number;
+}
+
+export const getMemoryGraph = async (maxNodes = 400): Promise<MemoryGraphResponse> =>
+  fetchJSON(`/api/memory/graph?max_nodes=${maxNodes}`);
+
+export const getMemoryItem = async (kind: string, id: string): Promise<MemoryItemResponse> =>
+  fetchJSON(`/api/memory/item?kind=${encodeURIComponent(kind)}&id=${encodeURIComponent(id)}`);
+
+export const deleteMemoryItem = async (kind: string, id: string): Promise<boolean> => {
+  await fetchJSON(`/api/memory/item?kind=${encodeURIComponent(kind)}&id=${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+  return true;
+};
+
+export const searchMemory = async (q: string, limit = 30): Promise<{ results: MemoryGraphNode[] }> =>
+  fetchJSON(`/api/memory/search?q=${encodeURIComponent(q)}&limit=${limit}`);
+
+export const getMemoryOverview = async (): Promise<MemoryOverview> =>
+  fetchJSON("/api/memory/overview");
+
+export const pinMemory = async (id: string, pinned: boolean): Promise<void> => {
+  await fetchJSON("/api/memory/pin", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id, pinned }),
+  });
+};
+
+export const getDailyMemoryList = async (limit = 60): Promise<DailyMemoryDay[]> =>
+  fetchJSON(`/api/memory/daily?limit=${limit}`);
+
+// ── Persona API（角色提示词 / SOUL / 全局记忆文本）────────────
+
+export interface PersonalitySummary {
+  name: string;
+  summary: string | null;
+  size: number;
+  updated_at: number | null;
+  is_builtin: boolean;
+}
+
+export interface PersonaTextFile {
+  path: string;
+  content: string | null;
+  updated_at: number | null;
+}
+
+export const listPersonalities = async (): Promise<PersonalitySummary[]> =>
+  fetchJSON("/api/persona/personalities");
+
+export const getPersonality = async (name: string): Promise<PersonaTextFile> =>
+  fetchJSON(`/api/persona/personalities/${encodeURIComponent(name)}`);
+
+export const savePersonality = async (name: string, content: string): Promise<PersonaTextFile> => {
+  await fetchJSON(`/api/persona/personalities/${encodeURIComponent(name)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content }),
+  });
+  return fetchJSON(`/api/persona/personalities/${encodeURIComponent(name)}`);
+};
+
+export const removePersonality = async (name: string): Promise<void> => {
+  await fetchJSON(`/api/persona/personalities/${encodeURIComponent(name)}`, { method: "DELETE" });
+};
+
+export const getPersonaSoul = async (): Promise<PersonaTextFile> =>
+  fetchJSON("/api/persona/soul");
+
+export const savePersonaSoul = async (content: string): Promise<void> => {
+  await fetchJSON("/api/persona/soul", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content }),
+  });
+};
+
+export const getPersonaMemory = async (): Promise<PersonaTextFile> =>
+  fetchJSON("/api/persona/memory");
+
+export const savePersonaMemory = async (content: string): Promise<void> => {
+  await fetchJSON("/api/persona/memory", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content }),
+  });
+};
+
+export const getPersonaUser = async (): Promise<PersonaTextFile> =>
+  fetchJSON("/api/persona/user");
+
+export const savePersonaUser = async (content: string): Promise<void> => {
+  await fetchJSON("/api/persona/user", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content }),
+  });
+};

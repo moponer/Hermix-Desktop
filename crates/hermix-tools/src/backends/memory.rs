@@ -425,7 +425,10 @@ impl FileMemoryBackend {
         write_result
     }
 
-    fn parse_entries(content: &str) -> Vec<String> {
+    /// Split a MEMORY.md/USER.md body into entry texts. Public so
+    /// the session-end promotion step (`memory_prefetch`) can parse
+    /// the same entries it wrote — one parser, one entry format.
+    pub fn parse_entries(content: &str) -> Vec<String> {
         if content.trim().is_empty() {
             return Vec::new();
         }

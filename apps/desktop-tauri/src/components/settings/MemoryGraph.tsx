@@ -1,0 +1,214 @@
+// components/settings/MemoryGraph.tsx
+//
+// 记忆图谱（"大脑宇宙"）：把 memory.db 的 facts/frames/reflections、
+// 每日记忆天节点和 MEMORY.md/USER.md 条目节点画成一张力导向图。
+// echarts 6 已是既有依赖（首次实际使用），不引新包。
+//
+// 主题适配规则（check:tokens 强制）：源码里不出现 hex/rgb 字面量，
+// 所有颜色在运行时从 CSS 变量解析；主题切换监听 THEME_CHANGED_EVENT
+// 重建配色。分类色相由 accent 派生（HSL 旋转），深浅主题各自调亮度。
+
+import { useCallback, useEffect, useMemo, useRef } from "react";
+import * as echarts from "echarts/core";
+import { GraphChart, type GraphSeriesOption } from "echarts/charts";
+import { TooltipComponent } from "echarts/components";
+import { CanvasRenderer } from "echarts/renderers";
+import type { EChartsCoreOption } from "echarts/core";
+import { isDarkTheme } from "../../styles/themes/registry";
+import { THEME_CHANGED_EVENT, useTheme } from "../../hooks/useTheme";
+import type { MemoryGraphNode } from "../../api";
+import { EmptyState, Spinner } from "../ui";
+import { Brain } from "lucide-react";
+
+echarts.use([GraphChart, TooltipComponent, CanvasRenderer]);
+
+/** 图上展示的节点类别（kind → 中文名）。 */
+export const KIND_LABELS: Record<string, string> = {
+  fact: "事实",
+  turn: "对话",
+  memory_tool: "记忆工具",
+  session: "会话总结",
+  delegation: "子任务",
+  compression_backfill: "压缩回填",
+  focus: "焦点",
+  reflection: "反思",
+  daily: "每日记忆",
+  md: "文本条目",
+};
+
+/** 把任意 CSS 颜色值解析成 rgb 三元组（借浏览器归一化，避免硬编码格式）。 */
+function parseColorToRgb(value: string): [number, number, number] | null {
+  const el = document.createElement("span");
+  el.style.color = value;
+  document.body.appendChild(el);
+  const normalized = getComputedStyle(el).color;
+  el.remove();
+  const m = normalized.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+}
+
+function rgbToHsl([r, g, b]: [number, number, number]): [number, number, number] {
+  const rf = r / 255, gf = g / 255, bf = b / 255;
+  const max = Math.max(rf, gf, bf), min = Math.min(rf, gf, bf);
+  const l = (max + min) / 2;
+  if (max === min) return [0, 0, l];
+  const d = max - min;
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+  let h = 0;
+  if (max === rf) h = ((gf - bf) / d + (gf < bf ? 6 : 0)) / 6;
+  else if (max === gf) h = ((bf - rf) / d + 2) / 6;
+  else h = ((rf - gf) / d + 4) / 6;
+  return [h * 360, s, l];
+}
+
+const cssVar = (name: string, fallback = ""): string =>
+  getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
+
+/** 类别调色板：accent 色相起步，每类旋转 34°。深色主题提亮、浅色压暗。 */
+function categoryPalette(count: number, dark: boolean): string[] {
+  const accent = parseColorToRgb(cssVar("--color-accent", "steelblue")) ?? [70, 130, 180];
+  const [h, s] = rgbToHsl(accent);
+  const l = dark ? 0.66 : 0.44;
+  const sat = Math.max(0.42, Math.min(0.8, s));
+  return Array.from({ length: count }, (_, i) =>
+    `hsl(${Math.round((h + i * 34) % 360)}, ${Math.round(sat * 100)}%, ${Math.round(l * 100)}%)`,
+  );
+}
+
+export interface MemoryGraphProps {
+  nodes: MemoryGraphNode[];
+  edges: Array<{ source: string; target: string; relation: string }>;
+  loading: boolean;
+  onSelectNode: (node: MemoryGraphNode) => void;
+}
+
+export function MemoryGraph({ nodes, edges, loading, onSelectNode }: MemoryGraphProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const chartRef = useRef<echarts.ECharts | null>(null);
+  const { resolved } = useTheme();
+  const dark = isDarkTheme(resolved);
+  const selectRef = useRef(onSelectNode);
+  selectRef.current = onSelectNode;
+
+  const kinds = useMemo(() => {
+    const seen: string[] = [];
+    for (const n of nodes) if (!seen.includes(n.kind)) seen.push(n.kind);
+    return seen;
+  }, [nodes]);
+
+  const option = useMemo<EChartsCoreOption>(() => {
+    const palette = categoryPalette(Math.max(kinds.length, 1), dark);
+    const labelColor = cssVar("--color-text-secondary");
+    const edgeColor = cssVar("--color-border-primary");
+    const data = nodes.map((n) => {
+      const color = palette[kinds.indexOf(n.kind) % palette.length];
+      return {
+        id: n.id,
+        name: n.label,
+        kind: n.kind,
+        salience: n.salience,
+        pinned: n.pinned,
+        category: kinds.indexOf(n.kind),
+        symbolSize: 12 + n.salience * 30 + (n.pinned ? 6 : 0),
+        itemStyle: {
+          color,
+          borderColor: n.pinned ? labelColor : "transparent",
+          borderWidth: n.pinned ? 1.5 : 0,
+          shadowBlur: dark ? 10 : 0,
+          shadowColor: dark ? color : "transparent",
+        },
+      };
+    });
+    const series: GraphSeriesOption = {
+      type: "graph",
+      layout: "force",
+      roam: true,
+      draggable: true,
+      data,
+      links: edges.map((e) => ({ source: e.source, target: e.target })),
+      categories: kinds.map((k) => ({ name: KIND_LABELS[k] ?? k })),
+      force: { repulsion: 130, edgeLength: [36, 140], gravity: 0.09, layoutAnimation: true },
+      scaleLimit: { min: 0.4, max: 4 },
+      emphasis: { focus: "adjacency", label: { show: true, color: labelColor, fontSize: 11 } },
+      label: { show: false, position: "right", color: labelColor, fontSize: 11 },
+      lineStyle: { color: edgeColor, opacity: 0.6, curveness: 0.1 },
+    };
+    return {
+      backgroundColor: "transparent",
+      tooltip: {
+        confine: true,
+        backgroundColor: cssVar("--color-bg-card"),
+        borderColor: cssVar("--color-border-primary"),
+        textStyle: { color: cssVar("--color-text-primary"), fontSize: 12 },
+        formatter: (p: { dataType?: string; data?: { name?: string; kind?: string; salience?: number } }) => {
+          if (p.dataType !== "node" || !p.data) return "";
+          const kindLabel = KIND_LABELS[p.data.kind ?? ""] ?? p.data.kind ?? "";
+          return `<b>${escapeHtml(p.data.name ?? "")}</b><br/>${escapeHtml(kindLabel)} · 权重 ${(p.data.salience ?? 0).toFixed(2)}`;
+        },
+      },
+      series: [series],
+    };
+  }, [nodes, edges, kinds, dark]);
+
+  const rebuild = useCallback(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    if (!chartRef.current) {
+      chartRef.current = echarts.init(el);
+      chartRef.current.on("click", (params) => {
+        const p = params as { dataType?: string; data?: { id?: string } };
+        if (p.dataType !== "node" || !p.data?.id) return;
+        const hit = nodes.find((n) => n.id === p.data?.id);
+        if (hit) selectRef.current(hit);
+      });
+    }
+    chartRef.current.setOption(option, true);
+  }, [option, nodes]);
+
+  // 主题切换（含系统跟随态变化）后按新配色重建。
+  useEffect(() => {
+    rebuild();
+    const onTheme = () => rebuild();
+    window.addEventListener(THEME_CHANGED_EVENT, onTheme);
+    return () => window.removeEventListener(THEME_CHANGED_EVENT, onTheme);
+  }, [rebuild]);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => chartRef.current?.resize());
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  useEffect(() => () => {
+    chartRef.current?.dispose();
+    chartRef.current = null;
+  }, []);
+
+  if (loading && nodes.length === 0) {
+    return (
+      <div className="flex items-center justify-center h-[420px]">
+        <Spinner />
+      </div>
+    );
+  }
+  if (nodes.length === 0) {
+    return (
+      <div className="h-[420px] flex items-center justify-center">
+        <EmptyState
+          icon={<Brain className="size-7" />}
+          title="还没有可展示的记忆"
+          description="对话中提取的事实、会话总结与文本记忆会出现在这里。"
+        />
+      </div>
+    );
+  }
+  return <div ref={containerRef} className="h-[420px] w-full" data-testid="memory-graph-canvas" />;
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, (c) => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] ?? c
+  ));
+}

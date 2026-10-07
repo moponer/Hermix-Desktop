@@ -2420,6 +2420,7 @@ dependencies = [
  "hermix-core",
  "hermix-cua",
  "hermix-environments",
+ "hermix-focus",
  "hermix-intelligence",
  "hermix-mcp",
  "hermix-plugin",

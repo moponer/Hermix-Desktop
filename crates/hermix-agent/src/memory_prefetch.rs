@@ -108,6 +108,13 @@ pub enum MemoryKind {
     /// not LLM-generated). Surfaced as a `MemoryUpdate` so the user
     /// sees "what the agent thinks it learned".
     Reflection,
+    /// A line appended to `daily_memory[今天].conclusions` at
+    /// session end (deterministic, no LLM).
+    Daily,
+    /// Session-scope `MEMORY.md`/`USER.md` entries promoted into
+    /// memory.db facts at session end, so explicit `memory` writes
+    /// survive across sessions despite the per-session file scope.
+    Promotion,
 }
 
 impl MemoryKind {
@@ -119,6 +126,8 @@ impl MemoryKind {
             MemoryKind::Tool => "tool",
             MemoryKind::Snapshot => "snapshot",
             MemoryKind::Reflection => "reflection",
+            MemoryKind::Daily => "daily",
+            MemoryKind::Promotion => "promotion",
         }
     }
 }
@@ -971,6 +980,55 @@ pub fn memory_on_session_end(
         .collect();
     router_owned.on_session_end(&as_values);
 
+    // (晋升) Session-scope `MEMORY.md`/`USER.md` entries → memory.db
+    // facts. The `memory` tool writes to the per-session scope by
+    // design, which left cross-session recall blind to everything the
+    // LLM explicitly remembered; promoting at session end closes that
+    // gap. Idempotent: the canonical key is content-hashed, so a
+    // re-promotion only bumps the fact's access_count.
+    if let Some(backend) = router_owned.find_embedded_backend() {
+        // Re-promoting surviving entries every turn end is a silent
+        // salience bump; the chat event fires only for genuinely new
+        // ones, otherwise the card would repeat on every exchange.
+        let promoted = promote_session_memory_files(config, &backend, &session_id);
+        if promoted > 0 && !config.quiet_mode {
+            emit_memory_update_event(
+                callbacks,
+                &MemoryWriteRecord {
+                    action: MemoryAction::Write,
+                    memory_type: MemoryKind::Promotion,
+                    key: "memory".to_string(),
+                    summary: format!("晋升 {promoted} 条会话记忆到长期记忆"),
+                    count: Some(promoted as u64),
+                },
+            );
+        }
+
+        // (每日) Deterministic daily-memory append: the
+        // `daily_memory` tool content depends on the LLM opting in,
+        // so unless we land the session summary here the day's row
+        // stays an empty skeleton forever. Appends every session end
+        // regardless of quiet_mode; the chat event fires only for
+        // the day's first line — later entries are routine journal
+        // lines the session-summary event already covers.
+        if let Some(text) = wrote_session_summary.as_ref() {
+            if let Some(true) = append_daily_memory_conclusion(&session_id, text) {
+                if !config.quiet_mode {
+                    emit_memory_update_event(
+                        callbacks,
+                        &MemoryWriteRecord {
+                            action: MemoryAction::Write,
+                            memory_type: MemoryKind::Daily,
+                            key: "daily".to_string(),
+                            summary: "已开启今日记忆".to_string(),
+                            count: None,
+                        },
+                    );
+                }
+            }
+        }
+    }
+
     //emit per-session reflections
     // (what_went_well / what_to_improve / user_preferences_observed /
     // next_session_hint). No LLM — pure template aggregation over
@@ -1152,6 +1210,93 @@ fn extract_task_context(messages: &[Message]) -> TaskContext {
     }
 }
 
+/// Promote entries from the session-scope `MEMORY.md` / `USER.md`
+/// into memory.db facts so explicit `memory` writes survive across
+/// sessions. Content-hashed canonical keys make this idempotent —
+/// re-promoting an unchanged file only bumps `access_count` and
+/// renews the TTL. Returns the number of **newly** promoted facts
+/// (re-asserts of known keys are silent).
+fn promote_session_memory_files(
+    config: &AgentConfig,
+    backend: &hermix_focus::EmbeddedMemoryBackend,
+    session_id: &str,
+) -> usize {
+    let dir = config.resolved_memory_dir();
+    let mut promoted = 0usize;
+    for file in ["MEMORY.md", "USER.md"] {
+        let Ok(content) = std::fs::read_to_string(dir.join(file)) else {
+            continue;
+        };
+        for entry in hermix_tools::backends::memory::FileMemoryBackend::parse_entries(&content) {
+            let entry = entry.trim();
+            if entry.is_empty() {
+                continue;
+            }
+            let digest = md5::compute(entry);
+            let key = format!("user.memory:{digest:x}");
+            let already = backend.has_fact(&key).unwrap_or(false);
+            let payload = serde_json::json!({ "text": entry, "from": file });
+            let tags = vec![
+                format!("session:{session_id}"),
+                format!("scope:{}", file.trim_end_matches(".md")),
+            ];
+            match backend.upsert_fact(&key, payload, 0.6, &tags, "memory_tool_promotion") {
+                Ok(Some(_)) => {
+                    if !already {
+                        promoted += 1;
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    tracing::warn!(
+                        target: "hermix.agent",
+                        session_id,
+                        file,
+                        error = %e,
+                        "memory promotion: upsert_fact failed"
+                    );
+                }
+            }
+        }
+    }
+    promoted
+}
+
+/// Append the session summary to `daily_memory[今天].conclusions`.
+/// Deterministic (no LLM), so the day's row stops being an empty
+/// skeleton when the model never calls the `daily_memory` tool.
+/// Returns `Some(first_line_of_day)` on success, `None` on failure.
+/// Best-effort: failures are logged, never propagated.
+fn append_daily_memory_conclusion(session_id: &str, summary: &str) -> Option<bool> {
+    let Ok(store) = hermix_tools::tools::daily_memory::DailyMemoryStore::open() else {
+        return None;
+    };
+    if let Err(e) = store.ensure_today() {
+        tracing::warn!(target: "hermix.agent", error = %e, "daily memory: ensure_today failed");
+        return None;
+    }
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let first_line_of_day = store
+        .get(&today)
+        .map(|e| e.conclusions.trim().is_empty())
+        .unwrap_or(true);
+    let sid8: String = session_id.chars().take(8).collect();
+    let truncated: String = summary.chars().take(120).collect();
+    let line = format!(
+        "- {} [{}] {}",
+        chrono::Local::now().format("%H:%M"),
+        sid8,
+        truncated
+    );
+    match store.append_section(&today, "conclusions", &line) {
+        Ok(()) => Some(first_line_of_day),
+        Err(e) => {
+            tracing::warn!(target: "hermix.agent", error = %e, "daily memory: append failed");
+            None
+        }
+    }
+}
+
 // (): integration tests covering the
 // memory-recall → pre-compress → persist round-trip that the
 // agent loop relies on. Previously only `compression::tests`
@@ -1159,3 +1304,95 @@ fn extract_task_context(messages: &[Message]) -> TaskContext {
 // uncovered. These tests pin the contract from the outside
 // Integration tests for the boundary functions in this module
 // live in `tests/memory_prefetch_integration.rs` ().
+
+#[cfg(test)]
+mod promotion_tests {
+    use super::*;
+    use crate::agent_config::AgentConfig;
+    use hermix_focus::EmbeddedMemoryBackend;
+
+    /// Build a config whose auto-derived memory scope points at a
+    /// temp dir, with a scoped MEMORY.md containing two entries in
+    /// the `\n§\n` delimiter format `FileMemoryBackend` writes.
+    fn setup(dir: &std::path::Path, memory_content: &str) -> AgentConfig {
+        let scoped = dir.join("sessions").join("sess-1").join("memories");
+        std::fs::create_dir_all(&scoped).unwrap();
+        std::fs::write(scoped.join("MEMORY.md"), memory_content).unwrap();
+        AgentConfig {
+            hermix_home: Some(dir.display().to_string()),
+            session_id: Some("sess-1".to_string()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn promotion_upserts_entries_as_facts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = setup(
+            tmp.path(),
+            "记住的第一件事\n§\n记住的第二件事\n<!-- archived: 2026-10 -->\n",
+        );
+        let backend = EmbeddedMemoryBackend::open_in_memory().unwrap();
+        let n = promote_session_memory_files(&config, &backend, "sess-1");
+        assert_eq!(n, 2, "both entries promoted, archive index ignored");
+        let facts = backend.ui_list_facts(10).unwrap();
+        assert_eq!(facts.len(), 2);
+        assert!(facts.iter().all(|f| f.key.as_deref().unwrap_or("").starts_with("user.memory:")));
+    }
+
+    #[test]
+    fn promotion_is_idempotent_by_content() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = setup(tmp.path(), "稳定条目\n§\n另一条\n");
+        let backend = EmbeddedMemoryBackend::open_in_memory().unwrap();
+        assert_eq!(promote_session_memory_files(&config, &backend, "sess-1"), 2);
+        // Re-run: same keys, no new facts — re-promotion is silent.
+        assert_eq!(promote_session_memory_files(&config, &backend, "sess-1"), 0);
+        assert_eq!(backend.ui_list_facts(10).unwrap().len(), 2);
+        // An added entry promotes as new; existing ones stay quiet.
+        let scoped = tmp.path().join("sessions").join("sess-1").join("memories");
+        std::fs::write(
+            scoped.join("MEMORY.md"),
+            "稳定条目\n§\n另一条\n§\n第三条新增\n",
+        )
+        .unwrap();
+        assert_eq!(promote_session_memory_files(&config, &backend, "sess-1"), 1);
+        assert_eq!(backend.ui_list_facts(10).unwrap().len(), 3);
+    }
+
+    #[test]
+    fn promotion_without_files_is_zero() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = AgentConfig {
+            hermix_home: Some(tmp.path().display().to_string()),
+            session_id: Some("sess-2".to_string()),
+            ..Default::default()
+        };
+        let backend = EmbeddedMemoryBackend::open_in_memory().unwrap();
+        assert_eq!(promote_session_memory_files(&config, &backend, "sess-2"), 0);
+    }
+
+    #[test]
+    fn daily_append_lands_in_conclusions() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Open the store at a temp path first so the module-level
+        // today date is derived from `open_at`, then append via the
+        // production helper (which opens the global path) is not
+        // test-safe, so this test drives `open_at` + append_section
+        // — the exact calls append_daily_memory_conclusion makes.
+        let store =
+            hermix_tools::tools::daily_memory::DailyMemoryStore::open_at(
+                tmp.path().join("daily_memory.db"),
+            )
+            .unwrap();
+        store.ensure_today().unwrap();
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+        store
+            .append_section(&today, "conclusions", "- 12:00 [sess-1] 测试总结")
+            .unwrap();
+        let entry = store.get(&today).unwrap();
+        assert!(entry.conclusions.contains("[sess-1] 测试总结"));
+        let days = store.list_days(10).unwrap();
+        assert_eq!(days.len(), 1);
+    }
+}

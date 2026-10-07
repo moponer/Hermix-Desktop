@@ -854,3 +854,52 @@ export function ToolCallsFallback({ calls }: { calls: NonNullable<ChatMessage["t
   );
 }
 
+
+/**
+ * 对话流中的「记忆沉淀」卡片：把本轮的 memory_update 事件
+ * （事实写入 / 会话总结 / 每日沉淀 / 晋升长期记忆 / 反思）以独立
+ * 条状卡渲染在助手消息正文之下 —— 不再要求用户展开执行时间线才能
+ * 看见 agent 记住了什么。默认折叠为一行，点击展开明细。
+ * 数据源与时间线内的 MemoryUpdateBlock 同一份（execution_timeline），
+ * 随消息持久化，刷新后仍在。
+ */
+export function MemoryConsolidationCard({ updates }: { updates: MemoryUpdateEntry[] }) {
+  const [expanded, setExpanded] = useState(false);
+  if (updates.length === 0) return null;
+  const total = updates.reduce((n, u) => n + (typeof u.count === "number" && u.count > 0 ? u.count : 1), 0);
+  return (
+    <div className="mt-1.5 rounded-lg border border-[var(--color-border-primary)] bg-[var(--color-bg-card)]">
+      <button
+        onClick={() => setExpanded((v) => !v)}
+        className="flex w-full items-center gap-2 rounded-lg px-3 py-1.5 text-left text-[length:var(--text-meta)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]"
+        aria-expanded={expanded}
+      >
+        <Brain className="size-3.5 shrink-0 text-[var(--color-accent)]" />
+        <span className="font-medium text-[var(--color-text-primary)]">记忆沉淀</span>
+        <span>· {total} 条已写入记忆库</span>
+        {expanded ? <ChevronDown className="icon-sm ml-auto shrink-0" /> : <ChevronRight className="icon-sm ml-auto shrink-0" />}
+      </button>
+      {expanded && (
+        <ul className="space-y-1 border-t border-[var(--color-border-primary)] px-3 py-2">
+          {updates.map((u, i) => (
+            <li key={`${u.action}-${u.key}-${i}`} className="flex items-start gap-2 text-[length:var(--text-meta)]">
+              <span className="shrink-0 text-[var(--color-text-muted)]">{MEMORY_KIND_LABEL[u.memoryType] ?? u.memoryType}</span>
+              <span className="text-[var(--color-text-secondary)]" title={u.summary}>{u.summary}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+const MEMORY_KIND_LABEL: Record<string, string> = {
+  fact: "事实",
+  style: "偏好",
+  summary: "总结",
+  tool: "记忆工具",
+  snapshot: "快照",
+  reflection: "反思",
+  daily: "每日",
+  promotion: "晋升",
+};

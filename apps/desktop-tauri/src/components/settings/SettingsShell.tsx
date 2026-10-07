@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import {
   ArrowLeft, Search, Cpu, Boxes, Server, Smartphone, SlidersHorizontal,
   Plug, Sparkles, Network, Image as ImageIcon, Activity, Shield,
-  Archive, Palette,
+  Archive, Palette, Brain,
 } from "lucide-react";
 
 import { cx } from "../../lib/cx";
@@ -12,6 +12,7 @@ import {
   PluginsTab, SkillsTab, ConnectorsTab, ToolsetsTab,
 } from "../config/ToolTabs";
 import { ModelListTab } from "./ModelListTab";
+import { MemoryTab } from "./MemoryTab";
 import { SecurityTab } from "./SecurityTab";
 import { BackendTab } from "./BackendSettingsTab";
 import { AdvancedTab } from "./AdvancedSettingsTab";
@@ -45,7 +46,7 @@ export type SettingsPage =
   | "general" | "appearance" | "model" | "image"
   | "plugins" | "skills" | "connectors" | "toolsets"
   | "backend" | "runtimes" | "devices" | "security" | "archive"
-  | "diagnostics" | "advanced";
+  | "memory" | "diagnostics" | "advanced";
 
 interface PageDef {
   id: SettingsPage;
@@ -89,6 +90,7 @@ const GROUPS: GroupDef[] = [
       { id: "devices", label: "设备管理", hint: "IM 机器人与桌面配对两条通道；高危工具一律在桌面端强制确认", icon: Smartphone, keywords: "device 设备 配对 权限" },
       { id: "security", label: "安全", hint: "覆盖写入前先备份旧版本，误改可回滚", icon: Shield, keywords: "security 安全 备份 backup" },
       { id: "archive", label: "已归档", hint: "归档只是从侧栏收起，数据仍在本机，取消归档即可恢复", icon: Archive, keywords: "archive 归档 已归档" },
+      { id: "memory", label: "记忆管理", hint: "记忆图谱、角色提示词、全局记忆文本与每日记忆的查看与编辑", icon: Brain, keywords: "memory 记忆 图谱 记忆库 persona 角色 soul 长期记忆 每日记忆 遗忘" },
     ],
   },
   {
@@ -280,6 +282,7 @@ function PageBody({
     case "devices": return <Section wide><PageHeading def={def} /><DevicesTab /></Section>;
     case "security": return <Section wide><PageHeading def={def} /><SecurityTab /></Section>;
     case "archive": return <Section><PageHeading def={def} /><ArchiveTab /></Section>;
+    case "memory": return <Section wide><PageHeading def={def} /><MemoryTab /></Section>;
     case "diagnostics": return <Section wide><PageHeading def={def} /><DiagnosticsTab /></Section>;
     case "advanced": return <Section><PageHeading def={def} /><AdvancedTab /></Section>;
   }

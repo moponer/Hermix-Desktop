@@ -15,6 +15,7 @@ pub mod workflows;
 pub mod mcp;
 pub mod mcp_catalog;
 pub mod mcp_scan;
+pub mod memory_inspect;
 pub mod persona;
 pub mod plugins_inspect;
 pub mod polish;
@@ -201,6 +202,24 @@ pub fn router() -> Router<HttpServerState> {
             "/api/persona/overrides",
             get(persona::get_overrides).put(persona::put_overrides),
         )
+        // Memory management ("记忆管理" settings page): graph view +
+        // item detail / soft-delete / pin over memory.db, daily
+        // memory and profile md entries. See `memory_inspect.rs`.
+        .route(
+            "/api/memory/graph",
+            get(memory_inspect::get_memory_graph),
+        )
+        .route(
+            "/api/memory/item",
+            get(memory_inspect::get_memory_item).delete(memory_inspect::delete_memory_item),
+        )
+        .route("/api/memory/search", get(memory_inspect::search_memory))
+        .route("/api/memory/daily", get(memory_inspect::get_daily_memory))
+        .route(
+            "/api/memory/overview",
+            get(memory_inspect::get_memory_overview),
+        )
+        .route("/api/memory/pin", post(memory_inspect::pin_memory))
         // §2 Polish — doc rewrite endpoints used by the desktop
         // "润色" / "改写" affordances. `polish::post_polish_chat`
         // rebuilds a natural-language message, `polish::post_polish_automation`

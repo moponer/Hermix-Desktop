@@ -24,6 +24,7 @@ hermix-store = { workspace = true }
 hermix-transport = { workspace = true }
 hermix-protocol = { workspace = true }
 hermix-agent = { workspace = true }
+hermix-focus = { workspace = true }
 hermix-tools = { workspace = true }
 hermix-context = { workspace = true }
 hermix-plugin = { workspace = true }

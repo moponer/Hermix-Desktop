@@ -53,6 +53,7 @@ pub mod retrieve;
 pub mod score;
 pub mod model;
 pub mod cjk;
+pub mod ui;
 
 pub use model::*;
 pub(crate) use model::TurnRecord;
@@ -108,6 +109,12 @@ pub fn fact_ttl_for_key(canonical_key: &str) -> Option<u32> {
     const DAY: u32 = 24 * 3600;
     if canonical_key.starts_with("user.name:") || canonical_key.starts_with("user.identity:") {
         None // permanent
+    } else if canonical_key.starts_with("user.memory:") {
+        // Promoted `memory`-tool entries (session md → facts at
+        // session end). Long TTL: re-promotion while the entry
+        // stays in the session md renews it; entries archived out
+        // of the md fade instead of living forever.
+        Some(180 * DAY)
     } else if canonical_key.starts_with("user.style:") || canonical_key.starts_with("user.note:") {
         Some(30 * DAY)
     } else if canonical_key.starts_with("user.avoid:") || canonical_key.starts_with("user.dislike:") {

@@ -1,0 +1,86 @@
+// components/settings/DailyMemoryPanel.tsx
+//
+// 每日记忆（daily_memory.db）：逐日展示 goals / progress / conclusions。
+// 会话结束时会自动把会话总结追加进当天的 conclusions（确定性写入，
+// 不依赖 LLM 主动调工具），所以即使模型从不调 daily_memory，这里
+// 也不是空壳。
+
+import { useEffect, useState } from "react";
+import * as api from "../../api";
+
+export function DailyMemoryPanel() {
+  const [days, setDays] = useState<api.DailyMemoryDay[]>([]);
+  const [active, setActive] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    api
+      .getDailyMemoryList(60)
+      .then((list) => {
+        if (!alive) return;
+        setDays(list);
+        if (list.length > 0) setActive(list[0].date);
+      })
+      .catch((e) => alive && setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => alive && setLoading(false));
+    return () => { alive = false; };
+  }, []);
+
+  if (loading) {
+    return <p className="py-10 text-center text-[length:var(--text-meta)] text-[var(--color-text-muted)]">加载中…</p>;
+  }
+  if (error) {
+    return (
+      <p className="rounded-lg border border-[var(--color-border-primary)] bg-[var(--color-bg-card)] px-4 py-3 text-[length:var(--text-meta)] text-[var(--color-text-secondary)]">
+        每日记忆不可用（{error}）。
+      </p>
+    );
+  }
+  if (days.length === 0) {
+    return (
+      <p className="py-10 text-center text-[length:var(--text-meta)] text-[var(--color-text-muted)]">
+        还没有每日记忆 — 第一次对话结束后会自动出现当天条目。
+      </p>
+    );
+  }
+  const current = days.find((d) => d.date === active) ?? days[0];
+
+  return (
+    <div className="grid grid-cols-1 gap-3 md:grid-cols-[180px_1fr]">
+      <div className="max-h-[420px] space-y-0.5 overflow-y-auto rounded-lg border border-[var(--color-border-primary)] bg-[var(--color-bg-card)] p-1.5">
+        {days.map((d) => (
+          <button
+            key={d.date}
+            onClick={() => setActive(d.date)}
+            className={`flex w-full items-center justify-between rounded-md px-2.5 py-1.5 text-left text-[length:var(--text-meta)] ${
+              current.date === d.date
+                ? "bg-[var(--color-bg-active)] text-[var(--color-accent)]"
+                : "text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)]"
+            }`}
+          >
+            <span className="font-medium">{d.date}</span>
+            {d.conclusions.trim() && <span className="size-1.5 rounded-full bg-[var(--color-accent)]" />}
+          </button>
+        ))}
+      </div>
+      <div className="space-y-3 rounded-lg border border-[var(--color-border-primary)] bg-[var(--color-bg-card)] p-3">
+        <Section title="目标（goals）" body={current.goals} />
+        <Section title="进展（progress）" body={current.progress} />
+        <Section title="结论（conclusions）" body={current.conclusions} />
+      </div>
+    </div>
+  );
+}
+
+function Section({ title, body }: { title: string; body: string }) {
+  return (
+    <div>
+      <h4 className="text-[length:var(--text-meta)] font-medium text-[var(--color-text-secondary)]">{title}</h4>
+      <pre className="mt-1 whitespace-pre-wrap rounded-md bg-[var(--color-bg-tertiary)] p-3 text-[length:var(--text-meta)] leading-relaxed text-[var(--color-text-primary)]">
+        {body.trim() || "（空）"}
+      </pre>
+    </div>
+  );
+}
