@@ -34,7 +34,18 @@ function sh(cmd, args, opts = {}) {
     console.error(`[${mode}] failed to spawn ${cmd}:`, r.error);
     process.exit(1);
   }
-  if (r.status !== 0) process.exit(r.status ?? 1);
+  if (r.status !== 0) {
+    // 2026-10-07：原来这里静默 process.exit —— 子进程若自己没打印错误
+    // （或被 shell 吞掉），表现为"命令无输出就断、后续步骤全没跑"，
+    // 用户无从知道断在哪、为什么。失败必须可见。
+    console.error(
+      `[${mode}] ✗ ${cmd} ${args.join(" ")} 失败（退出码 ${r.status}${r.signal ? `，信号 ${r.signal}` : ""}），构建中止。`,
+    );
+    console.error(
+      `[${mode}]   上一条命令输出通常包含真实原因（若为空，单独重跑该命令验证）。`,
+    );
+    process.exit(r.status ?? 1);
+  }
 }
 
 // 非致命：失败不中断主流程（与原始 `|| echo skipped` 语义一致）。
