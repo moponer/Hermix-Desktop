@@ -187,6 +187,15 @@ static PROGRESS: AtomicU64 = AtomicU64::new(0);
 static HELPER_FAILED: AtomicBool = AtomicBool::new(false);
 /// 启动自动扫描是否已发起过（只发一次，失败也不再自动重试）。
 static AUTO_SCANNED: AtomicBool = AtomicBool::new(false);
+/// 主窗口 HWND（isize 原值）。setup 时由 lib.rs 记入，spawn_elevated 把
+/// UAC 弹窗挂到它上面 —— null owner 会让 UAC 落在后台，用户看不到授权
+/// 请求，正是"首次运行需要授权，实际没弹"的直接原因之一。
+static MAIN_HWND: OnceLock<isize> = OnceLock::new();
+
+/// lib.rs setup 在主窗口创建后调用，记录 HWND 供 UAC 前台化使用。
+pub fn set_main_hwnd(hwnd: isize) {
+    let _ = MAIN_HWND.set(hwnd);
+}
 
 fn index_cell() -> &'static Mutex<FileIndex> {
     INDEX.get_or_init(|| Mutex::new(FileIndex::empty()))
@@ -390,18 +399,14 @@ mod usn_helper {
         std::env::temp_dir().join("hermix-usn-index")
     }
 
-    /// 定位 usn-indexer.exe。多级 fallback：
-    /// 1. current_exe 同目录（打包布局：主程序与 helper 同目录，Cargo 同
-    ///    crate 多 bin 本就产到一起）
-    /// 2. src-tauri/target/debug —— dev 布局：tauri dev / 部分构建流把主
-    ///    程序产到别处（如 CARGO_TARGET_DIR=release/target），而 src-tauri
-    ///    自己的 target 里躺着 `cargo build -p hermix-desktop` 的产物
-    /// 3. 仓库根 target/debug —— 纯 cargo 默认布局
-    /// 生产安装目录永远是情形 1；2/3 只为开发期省一次「去别的 target 目录
-    /// 手动拷 exe」。
+    /// 定位 usn-indexer.exe。候选覆盖三种 target 布局，**按 mtime 取最新**
+    /// 而非"第一个存在"：CARGO_TARGET_DIR 改道（release/target）后，
+    /// src-tauri/target/debug 里会残留一份 9-30 的旧 helper（含 touch/心跳
+    /// 旧 bug），first-exists 会永远选中它 —— 现场 updates.jsonl 膨胀
+    /// 315MB 的元凶之一。开发期候选多无妨，生产永远落在情形 1。
     pub fn locate_helper() -> Option<PathBuf> {
         let exe_name = "usn-indexer.exe";
-        let mut candidates: Vec<PathBuf> = Vec::with_capacity(3);
+        let mut candidates: Vec<PathBuf> = Vec::with_capacity(5);
         if let Ok(exe) = std::env::current_exe() {
             if let Some(dir) = exe.parent() {
                 candidates.push(dir.join(exe_name));
@@ -409,12 +414,23 @@ mod usn_helper {
         }
         // CARGO_MANIFEST_DIR = apps/desktop-tauri/src-tauri（编译期常量）。
         let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        candidates.push(manifest.join("target/debug").join(exe_name));
-        // 仓库根 = manifest 的上两级。
+        // workspace 的 .cargo/config.toml 把 target-dir 指到 <repo>/release/target。
         if let Some(repo) = manifest.parent().and_then(|p| p.parent()) {
-            candidates.push(repo.join("target/debug").join(exe_name));
+            candidates.push(repo.join("release/target/debug").join(exe_name));
+            candidates.push(repo.join("release/target/release").join(exe_name));
         }
-        candidates.into_iter().find(|p| p.exists())
+        candidates.push(manifest.join("target/debug").join(exe_name));
+        candidates.push(manifest.join("target/release").join(exe_name));
+        candidates.push(manifest.parent().and_then(|p| p.parent()).map_or_else(
+            || manifest.join("target/debug").join(exe_name),
+            |repo| repo.join("target/debug").join(exe_name),
+        ));
+        candidates
+            .into_iter()
+            .filter(|p| p.exists())
+            .max_by_key(|p| {
+                p.metadata().ok().and_then(|m| m.modified().ok())
+            })
     }
 
     /// done.json 内容。
@@ -445,11 +461,26 @@ mod usn_helper {
     }
 
     /// ShellExecuteW("runas") 拉起提权 helper。失败 = UAC 被拒/启动失败。
+    ///
+    /// 两个 2026-10-07 现场修复：
+    /// 1. **HWND 必须给前台主窗口**。传 null 时 UAC 弹窗可能落在后台/被
+    ///    其他窗口遮挡，用户完全看不到授权请求 ——「说好首次要授权，实际
+    ///    从没弹出来」。主窗口此刻已 show（setup 兜底 4s），拿它的 HWND。
+    /// 2. **返回值判定不能用 is_invalid()**。ShellExecuteW 失败返回
+    ///    SE_ERR_*（值 ≤32 的正数），只有灾难性失败才返回"假句柄"；
+    ///    is_invalid() 只能抓后者，UAC 被拒（SE_ERR_ACCESSDENIED）会被
+    ///    当成成功，主进程傻等 done.json 300s 超时后才判失败。
     fn spawn_elevated(helper: &Path, out_dir: &Path, volumes: &[String]) -> Result<(), String> {
         use windows::core::PCWSTR;
         use windows::Win32::Foundation::HWND;
         use windows::Win32::UI::Shell::ShellExecuteW;
         use windows::Win32::UI::WindowsAndMessaging::SW_HIDE;
+
+        // 前台主窗口：UAC 弹窗挂在它上面，用户必然看得到。拿不到
+        // （极端时序）退回 null —— 至少 SE_ERR 判定仍能兜住失败。
+        // 注意 SW_HIDE 保持不变：它作用于被启动的 helper 控制台窗口，
+        // 与 UAC 对话框的可见性无关（那由 owner HWND 决定）。
+        let owner: HWND = webview_window_hwnd().unwrap_or_default();
 
         let to_wide = |s: &str| -> Vec<u16> { s.encode_utf16().chain(std::iter::once(0)).collect() };
         let op = to_wide("runas");
@@ -461,7 +492,7 @@ mod usn_helper {
         ));
         let h = unsafe {
             ShellExecuteW(
-                HWND::default(),
+                owner,
                 PCWSTR(op.as_ptr()),
                 PCWSTR(file.as_ptr()),
                 PCWSTR(params.as_ptr()),
@@ -469,10 +500,36 @@ mod usn_helper {
                 SW_HIDE,
             )
         };
+        // HRESULT 式包装：低位 16 位是 SE_ERR 码。≤32 且非 0 = 失败。
+        let code = h.0 as usize;
+        if code > 0 && code <= 32 {
+            let what = match code {
+                2 => "文件未找到",
+                3 => "路径未找到",
+                5 => "访问被拒绝（UAC 被拒绝或被策略禁止）",
+                26 => "共享冲突",
+                27 => "关联不完整",
+                28 => "DDE 超时",
+                29 => "DDE 失败",
+                30 => "DDE 忙",
+                31 => "无关联程序",
+                32 => "DLL 未找到",
+                _ => "启动失败",
+            };
+            return Err(format!("UAC/启动失败（SE_ERR {code}：{what}）"));
+        }
         if h.is_invalid() {
             return Err("UAC 被拒绝或 helper 启动失败".into());
         }
         Ok(())
+    }
+
+    /// 主窗口的 HWND（用于把 UAC 弹窗挂到前台）。lib.rs setup 在窗口创建
+    /// 后经 [`set_main_hwnd`] 记入；拿不到时 None（退回 null owner）。
+    fn webview_window_hwnd() -> Option<windows::Win32::Foundation::HWND> {
+        MAIN_HWND
+            .get()
+            .map(|h| windows::Win32::Foundation::HWND(*h as *mut _))
     }
 
     /// helper 是否已驻留（alive 文件 60s 内新鲜）→ 主进程重启免二次 UAC。
@@ -695,12 +752,29 @@ mod usn_helper {
                 return Err(format!("helper 不存在: {}", helper.display()));
             }
             std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir: {e}"))?;
+            // 退位握手：若 pid 文件还在（上一代 helper，可能是含旧心跳 bug
+            // 的"幽灵"——判存在性不判新鲜度，永不自杀，updates.jsonl 实测
+            // 膨胀到 315MB），先请它退出并等 pid 消失，再清理信号文件。
+            // 顺序不能反：先清 shutdown.request 再拉新没问题，但若不清退
+            // 幽灵，新旧两个提权进程会并发写 updates.jsonl。
+            if dir.join("helper.pid").exists() {
+                let _ = std::fs::write(dir.join("shutdown.request"), b"1");
+                let retire_deadline = Instant::now() + Duration::from_secs(8);
+                while Instant::now() < retire_deadline && dir.join("helper.pid").exists() {
+                    std::thread::sleep(Duration::from_millis(250));
+                }
+            }
             // 清理上一代交接文件（helper 自己也会清 done，双保险）。
             let _ = std::fs::remove_file(dir.join("done.json"));
             let _ = std::fs::remove_file(dir.join("resnap.request"));
             // 上一轮主进程退出时写的退出信号必须先清掉，否则刚拉起的 helper
             // 会在第一个轮询 tick（1s 内）读到它并立刻自杀。
             let _ = std::fs::remove_file(dir.join("shutdown.request"));
+            // 幽灵残留的身份文件也一并清掉：pid 没退（8s 超时）时新 helper
+            // 的让位检查会读到陈旧 alive/pid——按 mtime 判定本就不让位，
+            // 这里清掉是兜底陈旧语义。
+            let _ = std::fs::remove_file(dir.join("helper.pid"));
+            let _ = std::fs::remove_file(dir.join("helper.alive"));
             spawn_elevated(&helper, &dir, volumes)?;
         }
         spawn_heartbeat();
