@@ -64,6 +64,17 @@ fi
 stale=$(find crates apps/desktop-tauri/src-tauri/src \
          -name '*.rs' -newer "$SIDECAR" -print -quit 2>/dev/null | head -1)
 
+# usn-indexer is also built from THIS repo (same staleness logic as hermix).
+# 2026-10-07: it was missing from externalBin entirely, so the installer
+# shipped without the helper and the local index silently never started.
+# Presence is enforced by Check 3 (externalBin enumeration); staleness here.
+USN_SIDECAR="$BIN_DIR/usn-indexer-x86_64-pc-windows-msvc.exe"
+if [ -z "$stale" ] && [ -f "$USN_SIDECAR" ]; then
+  stale=$(find crates apps/desktop-tauri/src-tauri/src \
+           -name '*.rs' -newer "$USN_SIDECAR" -print -quit 2>/dev/null | head -1)
+  SIDECAR="$USN_SIDECAR"
+fi
+
 if [ -n "$stale" ]; then
   echo "  STALE: source changes postdate the packaged sidecar"
   echo "         sidecar : $SIDECAR"

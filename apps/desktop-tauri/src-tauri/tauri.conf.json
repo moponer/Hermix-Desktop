@@ -52,7 +52,8 @@
     "externalBin": [
       "binaries/hermix",
       "binaries/officecli",
-      "binaries/markitdown"
+      "binaries/markitdown",
+      "binaries/usn-indexer"
     ],
     "publisher": "Hermix",
     "shortDescription": "Hermix Desktop portable AI agent (Windows)",
