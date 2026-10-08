@@ -126,11 +126,13 @@ const TRIGGERS: &[Trigger] = &[
     Trigger { pattern: "我用",        base_kind: "user.tool",        min_chars: 1, lang: Lang::Zh, negated_kind: None, enforce_clause_boundary: true },
     Trigger { pattern: "我在用",      base_kind: "user.tool",        min_chars: 1, lang: Lang::Zh, negated_kind: None, enforce_clause_boundary: true },
     Trigger { pattern: "我使用",      base_kind: "user.tool",        min_chars: 1, lang: Lang::Zh, negated_kind: None, enforce_clause_boundary: true },
-    Trigger { pattern: "不用",        base_kind: "user.avoid",       min_chars: 1, lang: Lang::Zh, negated_kind: None, enforce_clause_boundary: false },
+    // avoid 类 min_chars=2：「别管」「别提了」这类单字宾语（"管"）不是
+    // 可执行的偏好，存下来只是碎片噪音。
+    Trigger { pattern: "不用",        base_kind: "user.avoid",       min_chars: 2, lang: Lang::Zh, negated_kind: None, enforce_clause_boundary: false },
     Trigger { pattern: "记住",        base_kind: "user.note",        min_chars: 2, lang: Lang::Zh, negated_kind: None, enforce_clause_boundary: true },
     Trigger { pattern: "请记住",      base_kind: "user.note",        min_chars: 2, lang: Lang::Zh, negated_kind: None, enforce_clause_boundary: true },
-    Trigger { pattern: "不要",        base_kind: "user.avoid",       min_chars: 1, lang: Lang::Zh, negated_kind: None, enforce_clause_boundary: false },
-    Trigger { pattern: "别",          base_kind: "user.avoid",       min_chars: 1, lang: Lang::Zh, negated_kind: None, enforce_clause_boundary: false },
+    Trigger { pattern: "不要",        base_kind: "user.avoid",       min_chars: 2, lang: Lang::Zh, negated_kind: None, enforce_clause_boundary: false },
+    Trigger { pattern: "别",          base_kind: "user.avoid",       min_chars: 2, lang: Lang::Zh, negated_kind: None, enforce_clause_boundary: false },
     Trigger { pattern: "我是",        base_kind: "user.identity",    min_chars: 2, lang: Lang::Zh, negated_kind: None, enforce_clause_boundary: true },
     // 英文 — 否定词（not/never/don't/do not）独立于动词，所以用单字
     // "like"/"love"/"use" trigger + 前置 negation detection 就能覆盖
@@ -386,6 +388,22 @@ pub fn extract_facts_from_turn(
             if content.chars().all(|c| !c.is_alphanumeric()) {
                 continue;
             }
+            // 碎片守卫：内容以闭括号/闭引号开头，说明触发词命中在括号
+            // 内部（如「不要动台账（档案）、笔记…」窗口吞进「）、笔记」），
+            // 截断语义已破——宁漏勿错。
+            if matches!(
+                content.chars().next(),
+                Some('）') | Some('」') | Some('』') | Some('》') | Some(']') | Some('}')
+            ) {
+                continue;
+            }
+            // 助手名守卫：agent 自己的名字不该被记成 user.name
+            //（此前出现过 user.name:Hermix 的错误事实）。
+            if trigger.base_kind == "user.name"
+                && matches!(content.to_lowercase().as_str(), "hermix" | "hermes")
+            {
+                continue;
+            }
             let key = (kind.to_string(), content.to_string());
             if !seen.insert(key) {
                 continue;
@@ -461,6 +479,41 @@ mod tests {
     fn no_trigger_returns_no_facts() {
         let facts = extract_facts_from_turn("今天天气不错", "s1", 1);
         assert!(facts.is_empty());
+    }
+
+    /// 碎片守卫：触发词命中在括号内部且紧跟闭括号时，内容窗口会吞进
+    /// 「）、笔记」这类以闭括号开头的碎片——必须整条丢弃（真实事故：
+    /// 存量库里出现过 `user.avoid:）、笔记（个人的记录）…`）。
+    #[test]
+    fn fragment_starting_with_closing_bracket_is_dropped() {
+        let facts =
+            extract_facts_from_turn("台账（不要）、笔记（个人的记录）、平台系统", "s1", 1);
+        assert!(
+            facts.is_empty(),
+            "bracket-fragment must be dropped, got {facts:?}"
+        );
+    }
+
+    /// 助手名守卫：agent 自己的名字不该被记成 user.name（真实事故：
+    /// 存量库里出现过 `user.name:Hermix`）。
+    #[test]
+    fn agent_name_is_not_recorded_as_user_name() {
+        let facts = extract_facts_from_turn("我叫 Hermix", "s1", 1);
+        assert!(
+            !facts.iter().any(|f| f.kind() == "user.name"),
+            "agent name must not become user.name, got {facts:?}"
+        );
+    }
+
+    /// avoid 类单字宾语碎片：「别管」→ content「管」只有 1 字，低于
+    /// min_chars=2，丢弃（真实事故：存量库里出现过 `user.avoid:管`）。
+    #[test]
+    fn single_char_avoid_object_is_dropped() {
+        let facts = extract_facts_from_turn("别管这个了，先跑测试", "s1", 1);
+        assert!(
+            !facts.iter().any(|f| f.payload["content"] == "管"),
+            "single-char avoid content must be dropped, got {facts:?}"
+        );
     }
 
     #[test]
