@@ -64,6 +64,13 @@ function rgbToHsl([r, g, b]: [number, number, number]): [number, number, number]
 const cssVar = (name: string, fallback = ""): string =>
   getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
 
+/** 压成单行缩略文本：换行折叠为空格，超长截断加省略号。 */
+function shortText(s: string | undefined, max: number): string {
+  const t = (s ?? "").replace(/\s+/g, " ").trim();
+  if (!t) return "";
+  return t.length > max ? `${t.slice(0, max)}…` : t;
+}
+
 /** 类别调色板：accent 色相起步，每类旋转 34°。深色主题提亮、浅色压暗。 */
 function categoryPalette(count: number, dark: boolean): string[] {
   const accent = parseColorToRgb(cssVar("--color-accent", "steelblue")) ?? [70, 130, 180];
@@ -108,6 +115,7 @@ export function MemoryGraph({ nodes, edges, loading, onSelectNode }: MemoryGraph
         kind: n.kind,
         salience: n.salience,
         pinned: n.pinned,
+        preview: n.preview,
         category: kinds.indexOf(n.kind),
         symbolSize: 12 + n.salience * 30 + (n.pinned ? 6 : 0),
         itemStyle: {
@@ -127,10 +135,32 @@ export function MemoryGraph({ nodes, edges, loading, onSelectNode }: MemoryGraph
       data,
       links: edges.map((e) => ({ source: e.source, target: e.target })),
       categories: kinds.map((k) => ({ name: KIND_LABELS[k] ?? k })),
-      force: { repulsion: 130, edgeLength: [36, 140], gravity: 0.09, layoutAnimation: true },
+      force: { repulsion: 150, edgeLength: [44, 150], gravity: 0.09, layoutAnimation: true },
       scaleLimit: { min: 0.4, max: 4 },
-      emphasis: { focus: "adjacency", label: { show: true, color: labelColor, fontSize: 11 } },
-      label: { show: false, position: "right", color: labelColor, fontSize: 11 },
+      // 节点下方常驻内容缩略：记忆库不是「一屏圆点」，肉眼要能扫读。
+      // 悬停邻接时换长缩略（60 字）放大阅读。
+      label: {
+        show: true,
+        position: "bottom",
+        color: labelColor,
+        fontSize: 10,
+        formatter: (p: unknown) => {
+          const d = (p as { data?: { preview?: string; name?: string } }).data;
+          return shortText(d?.preview, 24) || shortText(d?.name, 24);
+        },
+      },
+      emphasis: {
+        focus: "adjacency",
+        label: {
+          show: true,
+          color: cssVar("--color-text-primary"),
+          fontSize: 11,
+          formatter: (p: unknown) => {
+            const d = (p as { data?: { preview?: string; name?: string } }).data;
+            return shortText(d?.preview, 60) || shortText(d?.name, 60);
+          },
+        },
+      },
       lineStyle: { color: edgeColor, opacity: 0.6, curveness: 0.1 },
     };
     return {
@@ -140,10 +170,17 @@ export function MemoryGraph({ nodes, edges, loading, onSelectNode }: MemoryGraph
         backgroundColor: cssVar("--color-bg-card"),
         borderColor: cssVar("--color-border-primary"),
         textStyle: { color: cssVar("--color-text-primary"), fontSize: 12 },
-        formatter: (p: { dataType?: string; data?: { name?: string; kind?: string; salience?: number } }) => {
+        formatter: (p: {
+          dataType?: string;
+          data?: { name?: string; kind?: string; salience?: number; preview?: string };
+        }) => {
           if (p.dataType !== "node" || !p.data) return "";
           const kindLabel = KIND_LABELS[p.data.kind ?? ""] ?? p.data.kind ?? "";
-          return `<b>${escapeHtml(p.data.name ?? "")}</b><br/>${escapeHtml(kindLabel)} · 权重 ${(p.data.salience ?? 0).toFixed(2)}`;
+          const body = (p.data.preview ?? "").replace(/\s+/g, " ").trim();
+          const bodyHtml = body
+            ? `<br/><span style="opacity:.75">${escapeHtml(shortText(body, 200))}</span>`
+            : "";
+          return `<b>${escapeHtml(p.data.name ?? "")}</b><br/>${escapeHtml(kindLabel)} · 权重 ${(p.data.salience ?? 0).toFixed(2)}${bodyHtml}`;
         },
       },
       series: [series],
