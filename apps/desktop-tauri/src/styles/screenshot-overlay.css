@@ -151,8 +151,9 @@
 .se-canvas {
   display: block;
   cursor: crosshair;
-  /* 宽高由组件内联精确指定（JS 等比适配窗内空间），禁 max-*/object-fit：
-     letterbox 会破坏 getBoundingClientRect 坐标映射。 */
+  /* 宽高由组件内联精确指定（JS 等比适配窗内空间）。
+     禁用 max-width 或 object-fit 之类的 letterbox 兜底——
+     盒子与内容不同形时 getBoundingClientRect 坐标映射全错。 */
 }
 .se-canvas.tool-text {
   cursor: text;
