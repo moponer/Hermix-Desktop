@@ -282,7 +282,20 @@ fn poll_usn(st: &mut WatchState, out: &mut Vec<String>) -> bool {
 // ── Phase 1：全量枚举（原始记录流，不做路径重建） ─────────────────────
 
 /// 枚举一个 NTFS 卷的 MFT，把原始记录写入 out。返回记录数。
-fn index_volume(volume: &str, out: &mut BufWriter<File>) -> Result<usize, String> {
+///
+/// `limit` = 该卷的截止时刻（None = 不限）。**逐卷限额是必须的**：本机实测
+/// F: 卷的 `DeviceIoControl(FSCTL_ENUM_USN_DATA)` 会**不返回**（外置/休眠/
+/// 链路异常的卷），一个坏卷就能把整次全量枚举永久卡死 —— helper 再也不会写
+/// done.json，主进程只能等到超时，而其余 5 个能正常扫完的卷（合计 131 万条）
+/// 的成果全部作废。超限时把已写出的部分 flush 后返回 Err，由调用方记为该卷
+/// 失败并继续下一个卷。
+fn index_volume(
+    volume: &str,
+    out: &mut BufWriter<File>,
+    limit: Option<Instant>,
+    written: &std::sync::atomic::AtomicUsize,
+) -> Result<usize, String> {
+    let start = Instant::now();
     let h = open_volume(volume).map_err(|e| format!("open {volume}: {e}"))?;
     let med = MFT_ENUM_DATA_V0 {
         StartFileReferenceNumber: 0,
@@ -307,6 +320,24 @@ fn index_volume(volume: &str, out: &mut BufWriter<File>) -> Result<usize, String
     .map_err(|e| format!("enum start {volume}: {e}"))?;
 
     loop {
+        // 逐卷预算在**每次 DeviceIoControl 之后**检查。卡死的成因就是某一次
+        // DeviceIoControl 不返回（外置/网络/休眠中的卷），而卡死前的批次已经
+        // 正常落盘（本机 F: 60 秒只写出 1MB ≈ 1.1 万条即停），所以把检查点
+        // 放在批次边界上足以中止：不会丢已写出的部分，只丢卡住那一卷的后半截。
+        if let Some(limit) = limit {
+            if Instant::now() >= limit {
+                let _ = out.flush();
+                unsafe {
+                    let _ = CloseHandle(h);
+                }
+                return Err(format!(
+                    "{volume}: 枚举超过 {}s 未完成（MFT 读取卡死），已跳过该卷",
+                    limit
+                        .saturating_duration_since(start)
+                        .as_secs()
+                ));
+            }
+        }
         if returned < 8 {
             break;
         }
@@ -339,6 +370,9 @@ fn index_volume(volume: &str, out: &mut BufWriter<File>) -> Result<usize, String
                     count += 1;
                 }
             }
+            // 已落盘的条数实时共享给看门狗：卡死时它据此上报"已收录多少"，
+            // 而不是把成果丢掉。
+            written.store(count, std::sync::atomic::Ordering::Release);
             off += rec_len;
         }
         let mut med2 = MFT_ENUM_DATA_V0 {
@@ -375,11 +409,18 @@ fn index_volume(volume: &str, out: &mut BufWriter<File>) -> Result<usize, String
 /// （磁盘忙 / 调度抖动），又远小于 60s 的自杀阈值。
 const HEARTBEAT_WINDOW: Duration = Duration::from_secs(15);
 
-/// 全量枚举的预算。超时即判定某个卷的 MFT 读取卡死，写 ok:false 退出。
+/// 全量枚举的整体预算。超时即判定某个卷的 MFT 读取卡死，写 ok:false 退出。
 ///
 /// 取值依据：本机一次成功枚举（192 万条 / 约 170MB snapshot）在分钟量级；
 /// 240s 留足余量，又不会让卡死的 helper 无限期占着一个提权进程。
 const ENUM_BUDGET: Duration = Duration::from_secs(240);
+
+/// **逐卷**枚举预算。整体预算只防"整体挂住"，这个防"一个坏卷拖死全部"。
+///
+/// 本机实测（2026-10-08）：C/D/E/G/H 五个卷合计 131 万条、约 90 秒跑完；
+/// 而 F: 卷的 DeviceIoControl 不返回 —— 60 秒只写出约 1 MB 就再也不动。
+/// 逐卷限额让 F: 被跳过、C..H 的成果照常入库，索引从"完全没有"变成"少一个卷"。
+const PER_VOLUME_BUDGET: Duration = Duration::from_secs(60);
 
 /// 写交接信号 done.json。`error` 为 None 时写 JSON null —— 成功就是成功，
 /// 不能带一句编出来的失败文案（排查时极具误导性）。
@@ -422,6 +463,126 @@ fn alive_fresh(
     }
 }
 
+/// 全量枚举（含看门狗）。初扫与 resnap 共用。
+///
+/// 为什么要看门狗，以及为什么它必须能**取走已写出的成果**：
+///
+/// `index_volume` 走 DeviceIoControl 读 MFT。本机实测 F: 卷的那一次调用
+/// **永不返回**（外置 / 休眠 / 链路异常的卷），整个 helper 就此卡死：进程
+/// 1 线程 / 6MB / 8 秒 0.03s CPU，helper.alive 从此停更，再也不会写
+/// done.json —— 主进程只能等到超时，界面报「索引构建失败」。
+///
+/// 卡死**发生在单次调用内部**，所以循环里的期限检查（每批次一次）永远跑不到。
+/// 早先按「批次边界检查」实现过一版，实测证明无效：snapshot 明明已写到
+/// 165.7MB（约 184 万条），到点后却只能报 ok:false / indexed:0，把成果全丢。
+///
+/// 所以：写入器与计数都用 Arc 共享给看门狗。到点时看门狗自己 lock 住写入器
+/// flush（卡死线程正阻塞在 DeviceIoControl 上、不持写锁，所以必然拿得到），
+/// 然后**按成功上报这部分索引**再退出。索引从「完全没有」变成「少一个卷」——
+/// 这正是要的降级：能搜到 C/D/E/G/H 的 131 万条，远好过一条都搜不到。
+fn enumerate_with_watchdog(
+    dir: &Path,
+    volumes: &[String],
+    snap_name: &str,
+) -> (bool, usize, Option<String>) {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    let snap_path = dir.join(snap_name);
+    let writer: Arc<Mutex<Option<BufWriter<File>>>> = Arc::new(Mutex::new(None));
+    let written: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
+    let finished = Arc::new(AtomicBool::new(false));
+    {
+        let wd_dir = dir.to_path_buf();
+        let wd_snap = snap_name.to_string();
+        let wd_writer = writer.clone();
+        let wd_written = written.clone();
+        let wd_finished = finished.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(ENUM_BUDGET);
+            if wd_finished.load(Ordering::Acquire) {
+                return;
+            }
+            let mut n = 0usize;
+            if let Ok(mut slot) = wd_writer.lock() {
+                if let Some(w) = slot.as_mut() {
+                    let _ = w.flush();
+                    n = wd_written.load(Ordering::Acquire);
+                }
+            }
+            let _ = std::fs::remove_file(wd_dir.join("helper.pid"));
+            if n > 0 {
+                write_done(
+                    &wd_dir,
+                    &wd_snap,
+                    true,
+                    n,
+                    Some(format!(
+                        "超过 {}s 未完成：某个卷的 MFT 读取卡死，该卷已跳过（已收录 {n} 项）",
+                        ENUM_BUDGET.as_secs()
+                    )),
+                );
+            } else {
+                write_done(
+                    &wd_dir,
+                    &wd_snap,
+                    false,
+                    0,
+                    Some(format!(
+                        "全量枚举超过 {}s 未完成且无可用成果（某个卷的 MFT 读取卡死）",
+                        ENUM_BUDGET.as_secs()
+                    )),
+                );
+            }
+            std::process::exit(4);
+        });
+    }
+
+    let result = match OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&snap_path)
+    {
+        Ok(f) => {
+            *writer.lock().unwrap() = Some(BufWriter::with_capacity(1 << 20, f));
+            let mut total = 0usize;
+            let mut errs: Vec<String> = Vec::new();
+            for v in volumes {
+                // 逐卷预算：抓「慢但在推进」的卷（实测正常卷 3-40s，60s 留余量）。
+                // 抓不到「卡在单次调用内」的那种 —— 由看门狗兜底。
+                let limit = Instant::now() + PER_VOLUME_BUDGET;
+                let r = {
+                    let mut guard = writer.lock().unwrap();
+                    match guard.as_mut() {
+                        Some(w) => index_volume(v, w, Some(limit), &written),
+                        None => Err("writer missing".into()),
+                    }
+                };
+                match r {
+                    Ok(c) => total += c,
+                    Err(e) => errs.push(e),
+                }
+            }
+            let flush_err = writer
+                .lock()
+                .unwrap()
+                .as_mut()
+                .and_then(|w| w.flush().err().map(|e| e.to_string()));
+            errs.extend(flush_err);
+            // **成功时 err 必须是 null**。此前这里用
+            // `unwrap_or_else(|| "no volumes")` 兜底，于是每一次成功扫描都写出
+            // `"ok":true, "error":"no volumes"` —— 一句凭空捏造的失败文案，
+            // 排查时极具误导性（本机就因此被误判过一次）。"没有卷"是另一个
+            // 条件（volumes 为空），不该复用错误字段。
+            let ok = total > 0 && errs.len() < volumes.len();
+            (ok, total, errs.first().cloned())
+        }
+        Err(e) => (false, 0, Some(format!("create snapshot: {e}"))),
+    };
+    finished.store(true, Ordering::Release);
+    result
+}
+
 fn main() {
     let (dir, volumes) = parse_args();
     let pid_path = dir.join("helper.pid");
@@ -445,62 +606,9 @@ fn main() {
     let _ = std::fs::write(&pid_path, std::process::id().to_string());
     touch(&alive_path);
 
-    // 全量枚举 → snapshot-<ts>.jsonl + done.json。
-    //
-    // 看门狗：`index_volume` 走的是 DeviceIoControl 读 MFT，某个卷卡住 /
-    // 掉线 / 被独占时，调用会**无限期阻塞**（实测：进程 1 线程 / 6MB /
-    // 8 秒 0.03s CPU，helper.alive 从此不再更新）。卡住的直接后果是它再也
-    // 不会写 done.json，主进程只能等到超时，且这个提权进程会永远留在系统里
-    // 占着资源。所以枚举必须在预算内结束：超时就写一份 ok:false 的 done.json
-    // 再退 —— 主进程立刻拿到**真实原因**，而不是一个"超时"的黑箱。
-    static ENUM_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-    {
-        let done_dir = dir.clone();
-        let done_snap = snap_name.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(ENUM_BUDGET);
-            if ENUM_DONE.load(std::sync::atomic::Ordering::Acquire) {
-                return;
-            }
-            write_done(
-                &done_dir,
-                &done_snap,
-                false,
-                0,
-                Some(format!(
-                    "全量枚举超过 {}s 未完成（某个卷的 MFT 读取卡死）",
-                    ENUM_BUDGET.as_secs()
-                )),
-            );
-            let _ = std::fs::remove_file(done_dir.join("helper.pid"));
-            std::process::exit(4);
-        });
-    }
-
-    let (ok, n, err) = match OpenOptions::new().write(true).create_new(true).open(&snap_path) {
-        Ok(f) => {
-            let mut out = BufWriter::with_capacity(1 << 20, f);
-            let mut total = 0usize;
-            let mut errs: Vec<String> = Vec::new();
-            for v in &volumes {
-                match index_volume(v, &mut out) {
-                    Ok(c) => total += c,
-                    Err(e) => errs.push(format!("{v}: {e}")),
-                }
-            }
-            let flush_err = out.flush().err().map(|e| e.to_string());
-            errs.extend(flush_err);
-            let ok = total > 0 && errs.len() < volumes.len();
-            // **成功时 err 必须是 null**。此前这里用
-            // `unwrap_or_else(|| "no volumes")` 兜底，于是每一次成功扫描都写出
-            // `"ok":true, "error":"no volumes"` —— 一句凭空捏造的失败文案，
-            // 排查时极具误导性（本机就因此被误判过一次）。"没有卷"是另一个
-            // 条件（volumes 为空），应该单独判，不该复用错误字段。
-            (ok, total, errs.first().cloned())
-        }
-        Err(e) => (false, 0, Some(format!("create snapshot: {e}"))),
-    };
-    ENUM_DONE.store(true, std::sync::atomic::Ordering::Release);
+    // 初扫与 resnap 走同一个带看门狗的枚举器 —— 两条路径面对同一批卷、
+    // 同一个卡死风险（本机 F:）。
+    let (ok, n, err) = enumerate_with_watchdog(&dir, &volumes, &snap_name);
     write_done(&dir, &snap_name, ok, n, err);
     if !ok {
         let _ = std::fs::remove_file(&pid_path);
@@ -562,26 +670,12 @@ fn main() {
         }
         if resnap_pending {
             // 重新全量：新 snapshot + done.json（主进程重建后清 updates）。
+            // 与初扫共用 enumerate_with_watchdog —— resnap 面对的是同一批卷、
+            // 同一个卡死风险，单独走一条没保护的路径等于把同一个 bug 留着。
             resnap_pending = false;
             let snap2 = format!("snapshot-{}.jsonl", now_unix());
-            if let Ok(f) = OpenOptions::new().write(true).create_new(true).open(dir.join(&snap2)) {
-                let mut out = BufWriter::with_capacity(1 << 20, f);
-                let mut total = 0usize;
-                for v in &volumes {
-                    if let Ok(c) = index_volume(v, &mut out) {
-                        total += c;
-                    }
-                }
-                let _ = out.flush();
-                let _ = std::fs::write(
-                    dir.join("done.json"),
-                    format!(
-                        r#"{{"ok":true,"indexed":{},"snapshot":{},"error":null}}"#,
-                        total,
-                        serde_json::to_string(&snap2).unwrap()
-                    ),
-                );
-            }
+            let (ok2, n2, err2) = enumerate_with_watchdog(&dir, &volumes, &snap2);
+            write_done(&dir, &snap2, ok2, n2, err2);
             // 日志可能已滚过失效点，重建 watch（NextUsn 取当前）。
             watches = volumes.iter().filter_map(|v| open_watch(v)).collect();
         }
