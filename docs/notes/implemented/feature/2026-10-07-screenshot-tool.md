@@ -30,9 +30,10 @@ Status: implemented — 2026-10-07 拍板并开工；M1/M2/M3 已交付（M4 打
      │       GetAncestor 取顶层窗）→ 回传 rect（屏幕坐标）→ 覆盖窗画高亮框
      │     - 模式切换：Tab / 悬浮工具条（矩形□ 窗口⛶ 确认✓ 取消✕）
      ├─ ④ 确认：覆盖窗把选区 rect 发回 Rust
-     └─ ⑤ Rust 裁剪缓存的原始位图（DPI 精确换算，物理像素）→
-          a) PNG 编码 → 剪贴板直写（windows-rs：OpenClipboard/
-             SetClipboardData CF_DIB + 注册格式 "PNG"，双格式最大化兼容）
+     └─ ⑤ 编辑器（2026-10-08 起）：裁出图进编辑画布（框选/画笔/文本/
+          涂抹/裁剪/撤销 + 色板），完成才提交——
+          a) 前端 canvas 导出 PNG → screenshot_commit_edited →
+             解码 RGBA → 剪贴板直写（CF_DIB + PNG 双格式）
           b) 关闭全部覆盖窗，焦点还给原前台窗口
           c) 主窗口 toast「已复制到剪贴板」（唯一可见反馈，不打断）
 ```
@@ -109,7 +110,7 @@ windows-rs 直写（不引入 tauri-plugin-clipboard-manager——它不支持�
 - **scap/windows-capture crate**（WGC/Graphics Capture API）：性能优于 GDI 且能抓 HDR，但 API 面大、Windows 10 1903+ 才可用，且本项目截图是"交互后裁剪"场景——GDI 一次性抓帧足够，性能瓶颈在交互不在抓屏。保持 xcap（内部即 GDI），WGC 留作性能证据不足时的升级路径。
 - **复用现有浏览器 `navigator.mediaDevices.getDisplayMedia`**：Web API 有授权弹窗、无窗口 HWND 几何、无系统热键，体验达不到契约。否。
 - **集成外部截图进程（Snipaste CLI/ShareX）**：便携版要求零外部依赖，且违背"有轮子用轮子"的边界——轮子指库，不是把用户机器上可选软件当依赖。否。
-- **编辑标注（画笔/马赛克/文字）**：用户未要求，且 UI 面积大（Flameshot 的一半代码在这）；剪贴板直出场景标注需求弱。不做，需要时另立笔记。
+- ~~**编辑标注（画笔/马赛克/文字）**：用户未要求，YAGNI~~ —— **2026-10-08 用户明确要求，已实现**（ScreenshotEditor.tsx：框选/画笔/文本/涂抹/裁剪/撤销 + 色板，选区后进编辑器、完成才复制）。仍不做：滚动截图、延时截图、录屏。
 
 ## Consequences
 
