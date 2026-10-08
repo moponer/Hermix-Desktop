@@ -1012,6 +1012,121 @@ impl EmbeddedMemoryBackend {
         Ok(n)
     }
 
+    /// (生命周期): soft-hide stale low-value frames so memory.db
+    /// doesn't become an append-only chat log. The three chat-narrative
+    /// sources decay — `turn`（原始对话对）、`focus`（每消息会话总结，
+    /// 与 turn 帧同内容类）、`session`（会话尾注）；`memory_tool` /
+    /// `delegation` rows are the actual memory and keep their own
+    /// retention paths. Pinned frames never decay (UI 置顶 = 用户显式
+    /// 要求保留).
+    ///
+    /// `turn_max_age_days` / `session_max_age_days` are the retention
+    /// windows. Long-term memory lives in `facts`（自带 TTL）、
+    /// MEMORY.md / USER.md、daily memory — hide here only removes the
+    /// row from recall and the UI graph (reversible via `show_frame`).
+    pub fn decay_stale_frames(
+        &self,
+        turn_max_age_days: i64,
+        session_max_age_days: i64,
+    ) -> Result<usize> {
+        let conn = self.conn.lock();
+        let now = Utc::now().to_rfc3339();
+        let turn_cutoff = (Utc::now() - chrono::Duration::days(turn_max_age_days)).to_rfc3339();
+        let session_cutoff =
+            (Utc::now() - chrono::Duration::days(session_max_age_days)).to_rfc3339();
+        let n = conn.execute(
+            "UPDATE frames SET visibility = 0, hidden_at = ?1
+             WHERE visibility = 1
+               AND pin_count = 0
+               AND (
+                 (source IN ('turn', 'focus') AND created_at < ?2)
+                 OR (source = 'session' AND created_at < ?3)
+               )",
+            params![now, turn_cutoff, session_cutoff],
+        )?;
+        if n > 0 {
+            tracing::info!(
+                target: "hermix.focus",
+                hidden = n,
+                turn_max_age_days,
+                session_max_age_days,
+                "decay_stale_frames: soft-hid stale turn/session frames"
+            );
+        }
+        Ok(n)
+    }
+
+    /// (latest-wins): after a fresh user-style detection upserts its
+    /// row, hide every OTHER visible `user.style:%` fact so recall and
+    /// `most_frequent_user_style` only ever see the latest inferred
+    /// style. 此前每种风格各占一行，4 条互相矛盾的探测并存。
+    /// Hidden rows keep their access_count history (oscillation is
+    /// still auditable on disk).
+    pub fn soft_hide_other_user_styles(&self, current_key: &str) -> Result<usize> {
+        let conn = self.conn.lock();
+        let now = Utc::now().to_rfc3339();
+        let n = conn.execute(
+            "UPDATE facts SET visibility = 0, hidden_at = ?1
+             WHERE visibility = 1
+               AND canonical_key LIKE 'user.style:%'
+               AND canonical_key != ?2",
+            params![now, current_key],
+        )?;
+        if n > 0 {
+            tracing::info!(
+                target: "hermix.focus",
+                hidden = n,
+                current = current_key,
+                "soft_hide_other_user_styles: hid stale style facts"
+            );
+        }
+        Ok(n)
+    }
+
+    /// Whether a `session`-source frame for `session_id` was already
+    /// persisted within the last `within_hours` hours. Used by
+    /// `on_session_end` to dedup against the focus-conclusion path
+    /// (and against repeated session-end calls) — the module doc
+    /// promised this check; this is its implementation.
+    pub fn has_recent_session_frame(&self, session_id: &str, within_hours: i64) -> Result<bool> {
+        let conn = self.conn.lock();
+        let cutoff =
+            (Utc::now() - chrono::Duration::hours(within_hours)).to_rfc3339();
+        let pattern = format!("%session:{session_id}%");
+        let n: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM frames
+             WHERE visibility = 1
+               AND source = 'session'
+               AND tags LIKE ?1
+               AND created_at >= ?2",
+            params![pattern, cutoff],
+            |r| r.get(0),
+        )?;
+        Ok(n > 0)
+    }
+
+    /// Whether a `turn` frame with this exact user text was already
+    /// persisted within the last `within_minutes` minutes. Used by
+    /// the session-summary path to detect that `memory_sync` just
+    /// stored the same pair — `finalize_agent_result` fires per user
+    /// message, so the per-message "session summary" is otherwise a
+    /// verbatim duplicate of the turn frame (存量 867 条 focus 帧的来源).
+    pub fn has_recent_turn_frame(&self, user_text: &str, within_minutes: i64) -> Result<bool> {
+        let conn = self.conn.lock();
+        let cutoff =
+            (Utc::now() - chrono::Duration::minutes(within_minutes)).to_rfc3339();
+        let n: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM frames
+             WHERE visibility = 1
+               AND source = 'turn'
+               AND json_extract(payload, '$.user') = ?1
+               AND created_at >= ?2",
+            params![user_text, cutoff],
+            |r| r.get(0),
+        )?;
+        Ok(n > 0)
+    }
+
     /// (BaiLongma compression backfill): when a `Cleared`
     /// focus frame is popped, the focus stack pushes a
     /// `FocusConclusion` onto the drain queue. The agent loop calls

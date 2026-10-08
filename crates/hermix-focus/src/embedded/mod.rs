@@ -256,6 +256,22 @@ impl MemoryLayer for EmbeddedMemoryBackend {
             .lock()
             .clone()
             .unwrap_or_else(|| "unknown-session".to_string());
+        // Dedup: the conclusion path (`memory_on_session_end`) persists
+        // the same last-turn pair as a focus frame, and repeated
+        // session-end calls would otherwise stack duplicate notes —
+        // the module doc always claimed a freshness check here; the
+        // check was never implemented. Skip when a session-source
+        // frame for this session already exists within the last hour.
+        // Query failure degrades to "no recent frame" (write anyway):
+        // a rare duplicate is cheaper than a silent memory gap.
+        if matches!(self.has_recent_session_frame(&session_id, 1), Ok(true)) {
+            tracing::debug!(
+                target: "hermix.focus",
+                session_id,
+                "on_session_end: recent session frame exists; skipping duplicate"
+            );
+            return;
+        }
         let note = build_session_note(messages, &session_id);
         if note.trim().is_empty() {
             return;
@@ -1091,6 +1107,120 @@ mod tests {
             .await
             .unwrap();
         assert!(!hits.is_empty(), "session_end should produce a recallable frame");
+    }
+
+    /// `on_session_end` dedup: repeated calls within the freshness
+    /// window (same session) must not stack duplicate session frames —
+    /// `finalize_agent_result` fires per user message, so this is the
+    /// common case, not the exception.
+    #[tokio::test]
+    async fn p17_on_session_end_dedups_repeated_calls() {
+        let b = EmbeddedMemoryBackend::open_in_memory().unwrap();
+        let msgs = vec![
+            serde_json::json!({"role": "user", "content": "讨论 Rust 性能优化"}),
+            serde_json::json!({"role": "assistant", "content": "建议使用 jemalloc"}),
+        ];
+        b.on_session_end(&msgs);
+        b.on_session_end(&msgs);
+        b.on_session_end(&msgs);
+        assert_eq!(
+            b.count_visible_frames().unwrap(),
+            1,
+            "repeated on_session_end calls must dedup to a single session frame"
+        );
+    }
+
+    /// `has_recent_turn_frame` matches the exact user text only.
+    #[tokio::test]
+    async fn p17_has_recent_turn_frame_matches_exact_user_text() {
+        let b = EmbeddedMemoryBackend::open_in_memory().unwrap();
+        b.record_turn("帮我修登录", "好", "s1", 1);
+        assert!(b.has_recent_turn_frame("帮我修登录", 10).unwrap());
+        assert!(!b.has_recent_turn_frame("别的文本", 10).unwrap());
+    }
+
+    /// `decay_stale_frames`: soft-hides stale unpinned turn/session
+    /// frames; keeps pinned rows, focus conclusions and fresh frames.
+    #[tokio::test]
+    async fn p17_decay_stale_frames_respects_pin_and_source() {
+        let b = EmbeddedMemoryBackend::open_in_memory().unwrap();
+        b.record_turn("旧对话", "旧回复", "s1", 1);
+        b.record_turn("置顶旧对话", "留着", "s1", 2);
+        b.record_turn("新对话", "新回复", "s1", 3);
+        let old = (chrono::Utc::now() - chrono::Duration::days(30)).to_rfc3339();
+        {
+            let conn = b.conn.lock();
+            conn.execute(
+                "UPDATE frames SET created_at = ?1 WHERE json_extract(payload,'$.user') = '旧对话'",
+                rusqlite::params![old],
+            )
+            .unwrap();
+            conn.execute(
+                "UPDATE frames SET created_at = ?1, pin_count = 1 WHERE json_extract(payload,'$.user') = '置顶旧对话'",
+                rusqlite::params![old],
+            )
+            .unwrap();
+        }
+        // focus 旧「会话总结」与 turn 同内容类，同窗口衰减
+        let focus_frame = FocusFrame::new(serde_json::json!({"text": "旧结论"})).with_salience(0.5);
+        b.upsert_frame_with_source(&focus_frame, "focus").unwrap();
+        {
+            let conn = b.conn.lock();
+            conn.execute(
+                "UPDATE frames SET created_at = ?1 WHERE source = 'focus'",
+                rusqlite::params![old],
+            )
+            .unwrap();
+        }
+        let recent_focus = FocusFrame::new(serde_json::json!({"text": "新结论"})).with_salience(0.5);
+        b.upsert_frame_with_source(&recent_focus, "focus").unwrap();
+
+        let hidden = b.decay_stale_frames(14, 30).unwrap();
+        assert_eq!(
+            hidden, 2,
+            "stale unpinned turn frame and stale focus summary decay; pinned survives"
+        );
+        // 置顶帧和新 focus 帧仍然可见
+        assert!(b.has_recent_turn_frame("置顶旧对话", 60 * 24 * 365).unwrap());
+        let conn = b.conn.lock();
+        let focus_visible: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM frames WHERE source = 'focus' AND visibility = 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(focus_visible, 1, "only the recent focus frame survives");
+    }
+
+    /// `soft_hide_other_user_styles`: latest-wins — only the current
+    /// style row stays visible, and `most_frequent_user_style` follows.
+    #[tokio::test]
+    async fn p17_user_style_latest_wins() {
+        let b = EmbeddedMemoryBackend::open_in_memory().unwrap();
+        b.upsert_fact(
+            "user.style:direct",
+            serde_json::json!({"style": "direct"}),
+            0.5,
+            &[],
+            "user_style_detector",
+        )
+        .unwrap();
+        b.upsert_fact(
+            "user.style:technical",
+            serde_json::json!({"style": "technical"}),
+            0.5,
+            &[],
+            "user_style_detector",
+        )
+        .unwrap();
+        let n = b.soft_hide_other_user_styles("user.style:technical").unwrap();
+        assert_eq!(n, 1, "only the sibling style row is hidden");
+        assert_eq!(
+            b.most_frequent_user_style().unwrap().as_deref(),
+            Some("technical"),
+            "visible style must be the latest detection"
+        );
     }
 
     /// `soft_hide_frame` makes a frame invisible to recall but keeps
