@@ -191,7 +191,8 @@ pub struct PersonalitySummary {
     pub size: u64,
     /// Last-modified epoch millis.
     pub updated_at: Option<i64>,
-    /// `true` if this is a built-in persona (`coder` / `writer` / `analyst`).
+    /// `true` if this is a built-in persona (see
+    /// `hermix_agent::context::BUILTIN_PERSONALITIES`).
     /// Built-ins live in code, not in the user's `personalities/` directory.
     pub is_builtin: bool,
 }
@@ -202,11 +203,7 @@ pub async fn list_personalities(
     let mut out: Vec<PersonalitySummary> = Vec::new();
 
     // 1) Built-in personas — single source of truth in `hermix_agent::context`; surfaced as read-only.
-    for (name, body) in [
-        ("coder", hermix_agent::context::BUILTIN_PERSONALITY_CODER),
-        ("writer", hermix_agent::context::BUILTIN_PERSONALITY_WRITER),
-        ("analyst", hermix_agent::context::BUILTIN_PERSONALITY_ANALYST),
-    ] {
+    for (name, body) in hermix_agent::context::BUILTIN_PERSONALITIES {
         out.push(PersonalitySummary {
             name: name.to_string(),
             summary: body.lines().find(|l| !l.trim().is_empty()).map(|s| s.trim().to_string()),
@@ -353,12 +350,10 @@ fn is_safe_slug(s: &str) -> bool {
 // 系统提示完全一致,不再有双份常量漂移。
 
 fn builtin_personality_body(slug: &str) -> Option<&'static str> {
-    match slug {
-        "coder" => Some(hermix_agent::context::BUILTIN_PERSONALITY_CODER),
-        "writer" => Some(hermix_agent::context::BUILTIN_PERSONALITY_WRITER),
-        "analyst" => Some(hermix_agent::context::BUILTIN_PERSONALITY_ANALYST),
-        _ => None,
-    }
+    hermix_agent::context::BUILTIN_PERSONALITIES
+        .iter()
+        .find(|(name, _)| *name == slug)
+        .map(|(_, body)| *body)
 }
 
 // ── PERSONA OVERRIDES (system_prompt + preferences) ──────────────
