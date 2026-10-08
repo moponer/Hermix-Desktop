@@ -44,6 +44,15 @@ const INDEX_TTL: Duration = Duration::from_secs(600);
 /// 重启时清一次，无人消费时实测膨胀到 189 MB。
 const UPDATES_TRUNCATE_THRESHOLD: u64 = 64 * 1024 * 1024;
 
+/// 驻留 helper 重新全量枚举的等待上限（秒）。
+///
+/// 必须是**一次真实枚举的量级**，不是"心跳应答"的量级：helper 收到
+/// resnap.request 后要把整盘 MFT 重新走一遍并写出约 170MB 的 snapshot。
+/// 本机实测 192 万条记录，冷路径的等待上限给的是 300s，而复用路径此前
+/// 只有 25s —— 复用必超时。这条把两条路径拉到同一量级（240s，留出余量
+/// 给主进程随后把 snapshot 读进 arena，同时仍小于 300s 全局截止线）。
+const RESNAP_TIMEOUT_SECS: u64 = 240;
+
 /// 提权 helper 的状态，暴露给前端做"需要授权/失败重试"提示。
 ///
 /// 分类依据是 `usn_index_via_helper` 的错误文案（ShellExecuteW 的 UAC
@@ -812,11 +821,22 @@ mod usn_helper {
                 if Instant::now() > deadline {
                     return Err("helper 超时（300s）".into());
                 }
-                // 驻留 helper 25s 内未响应 resnap（旧版本 helper 不认识
-                // 该协议）→ 放弃，回退 jwalk。
+                // 驻留 helper 重新全量枚举的等待上限。
+                //
+                // 此前是 25s —— 比一次真实枚举短一个数量级：实测本机 192 万条
+                // 记录要写出约 170MB snapshot，冷路径给的却是 300s。于是每次
+                // 复用常驻 helper，主进程都在 25s 判定"未响应 resnap"直接放弃。
+                // 自动路径不回退 jwalk，于是索引永远是空的、也不报错 —— 这正是
+                // "本地文件扫描一直建不起索引"的根因之一（另一个是 helper 本身
+                // 可能卡死，见 usn_indexer.rs 的枚举看门狗）。
+                //
+                // 取 240s：给枚举留足时间，仍小于整体 300s 截止线，让全局
+                // deadline 继续兜底。
                 if let Some(dl) = resnap_deadline {
                     if Instant::now() > dl {
-                        return Err("驻留 helper 未响应重枚举请求".into());
+                        return Err(format!(
+                            "驻留 helper 未在 {RESNAP_TIMEOUT_SECS}s 内完成重枚举"
+                        ));
                     }
                 }
                 if done_fresh(&dir) {
@@ -830,16 +850,19 @@ mod usn_helper {
                                 _ => {
                                     // done 新鲜但 snapshot 缺失：等枚举写盘
                                     if resnap_deadline.is_none() && resident {
-                                        resnap_deadline =
-                                            Some(Instant::now() + Duration::from_secs(25));
+                                        resnap_deadline = Some(
+                                            Instant::now()
+                                                + Duration::from_secs(RESNAP_TIMEOUT_SECS),
+                                        );
                                     }
                                 }
                             }
                         }
                     }
                 } else if resident && resnap_deadline.is_none() {
-                    // done 一直不新鲜：可能旧 helper 不支持 resnap。
-                    resnap_deadline = Some(Instant::now() + Duration::from_secs(25));
+                    // done 一直不新鲜：让驻留 helper 重新全量枚举。
+                    resnap_deadline =
+                        Some(Instant::now() + Duration::from_secs(RESNAP_TIMEOUT_SECS));
                     let _ = std::fs::write(dir.join("resnap.request"), b"1");
                 }
                 if let Some(snap) = snap_probe(&dir) {
@@ -1509,5 +1532,22 @@ mod tests {
         assert!(hit.path.contains(&tmp.to_string_lossy().to_string()));
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// resnap 等待上限必须容得下**一次真实全量枚举**。
+    ///
+    /// 本条锁的是 2026-10-08 定位到的根因：复用驻留 helper 的路径只等 25s，
+    /// 而一次枚举（本机 192 万条 / 约 170MB snapshot）远不止 25s，于是复用
+    /// 必超时、自动路径又不回退，索引永远建不起来。上限一旦被改回分钟以下，
+    /// 这里立刻红。
+    #[test]
+    fn resnap_timeout_accommodates_a_real_full_enumeration() {
+        // 全局截止线 300s；resnap 必须留在它之内，才能让全局 deadline 兜底。
+        assert!(RESNAP_TIMEOUT_SECS < 300, "resnap 上限须小于全局 300s 截止线");
+        // 又必须远大于心跳量级 —— 25s 正是把复用路径判死的那个数。
+        assert!(
+            RESNAP_TIMEOUT_SECS >= 120,
+            "resnap 上限过小：一次全量枚举远超这个量级"
+        );
     }
 }

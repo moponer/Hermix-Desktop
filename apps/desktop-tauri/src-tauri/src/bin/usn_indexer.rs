@@ -371,9 +371,34 @@ fn index_volume(volume: &str, out: &mut BufWriter<File>) -> Result<usize, String
 
 // ── Phase 2 + 生命周期：常驻监听 ─────────────────────────────────────
 
-/// 心跳新鲜度窗口。主进程每 5s touch 一次 main.alive，15s 窗��容得下两次丢失
+/// 心跳新鲜度窗口。主进程每 5s touch 一次 main.alive，15s 窗口容得下两次丢失
 /// （磁盘忙 / 调度抖动），又远小于 60s 的自杀阈值。
 const HEARTBEAT_WINDOW: Duration = Duration::from_secs(15);
+
+/// 全量枚举的预算。超时即判定某个卷的 MFT 读取卡死，写 ok:false 退出。
+///
+/// 取值依据：本机一次成功枚举（192 万条 / 约 170MB snapshot）在分钟量级；
+/// 240s 留足余量，又不会让卡死的 helper 无限期占着一个提权进程。
+const ENUM_BUDGET: Duration = Duration::from_secs(240);
+
+/// 写交接信号 done.json。`error` 为 None 时写 JSON null —— 成功就是成功，
+/// 不能带一句编出来的失败文案（排查时极具误导性）。
+fn write_done(dir: &Path, snapshot: &str, ok: bool, indexed: usize, error: Option<String>) {
+    let err_json = match &error {
+        Some(e) => serde_json::to_string(e).unwrap(),
+        None => "null".to_string(),
+    };
+    let _ = std::fs::write(
+        dir.join("done.json"),
+        format!(
+            r#"{{"ok":{},"indexed":{},"snapshot":{},"error":{}}}"#,
+            ok,
+            indexed,
+            serde_json::to_string(snapshot).unwrap(),
+            err_json
+        ),
+    );
+}
 
 /// main.alive 是否算「主进程还活着」。
 ///
@@ -405,6 +430,8 @@ fn main() {
     let updates_path = dir.join("updates.jsonl");
     let resnap_path = dir.join("resnap.request");
     let shutdown_path = dir.join("shutdown.request");
+    let snap_name = format!("snapshot-{}.jsonl", now_unix());
+    let snap_path = dir.join(&snap_name);
 
     // 已有存活 helper（主进程重启复用，免二次 UAC）：退出让位。
     if pid_path.exists() && alive_path.exists()
@@ -419,8 +446,37 @@ fn main() {
     touch(&alive_path);
 
     // 全量枚举 → snapshot-<ts>.jsonl + done.json。
-    let snap_name = format!("snapshot-{}.jsonl", now_unix());
-    let snap_path = dir.join(&snap_name);
+    //
+    // 看门狗：`index_volume` 走的是 DeviceIoControl 读 MFT，某个卷卡住 /
+    // 掉线 / 被独占时，调用会**无限期阻塞**（实测：进程 1 线程 / 6MB /
+    // 8 秒 0.03s CPU，helper.alive 从此不再更新）。卡住的直接后果是它再也
+    // 不会写 done.json，主进程只能等到超时，且这个提权进程会永远留在系统里
+    // 占着资源。所以枚举必须在预算内结束：超时就写一份 ok:false 的 done.json
+    // 再退 —— 主进程立刻拿到**真实原因**，而不是一个"超时"的黑箱。
+    static ENUM_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    {
+        let done_dir = dir.clone();
+        let done_snap = snap_name.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(ENUM_BUDGET);
+            if ENUM_DONE.load(std::sync::atomic::Ordering::Acquire) {
+                return;
+            }
+            write_done(
+                &done_dir,
+                &done_snap,
+                false,
+                0,
+                Some(format!(
+                    "全量枚举超过 {}s 未完成（某个卷的 MFT 读取卡死）",
+                    ENUM_BUDGET.as_secs()
+                )),
+            );
+            let _ = std::fs::remove_file(done_dir.join("helper.pid"));
+            std::process::exit(4);
+        });
+    }
+
     let (ok, n, err) = match OpenOptions::new().write(true).create_new(true).open(&snap_path) {
         Ok(f) => {
             let mut out = BufWriter::with_capacity(1 << 20, f);
@@ -435,24 +491,17 @@ fn main() {
             let flush_err = out.flush().err().map(|e| e.to_string());
             errs.extend(flush_err);
             let ok = total > 0 && errs.len() < volumes.len();
-            (
-                ok,
-                total,
-                errs.first().cloned().unwrap_or_else(|| "no volumes".into()),
-            )
+            // **成功时 err 必须是 null**。此前这里用
+            // `unwrap_or_else(|| "no volumes")` 兜底，于是每一次成功扫描都写出
+            // `"ok":true, "error":"no volumes"` —— 一句凭空捏造的失败文案，
+            // 排查时极具误导性（本机就因此被误判过一次）。"没有卷"是另一个
+            // 条件（volumes 为空），应该单独判，不该复用错误字段。
+            (ok, total, errs.first().cloned())
         }
-        Err(e) => (false, 0, format!("create snapshot: {e}")),
+        Err(e) => (false, 0, Some(format!("create snapshot: {e}"))),
     };
-    let _ = std::fs::write(
-        dir.join("done.json"),
-        format!(
-            r#"{{"ok":{},"indexed":{},"snapshot":{},"error":{}}}"#,
-            ok,
-            n,
-            serde_json::to_string(&snap_name).unwrap(),
-            serde_json::to_string(&err).unwrap()
-        ),
-    );
+    ENUM_DONE.store(true, std::sync::atomic::Ordering::Release);
+    write_done(&dir, &snap_name, ok, n, err);
     if !ok {
         let _ = std::fs::remove_file(&pid_path);
         exit(3);
