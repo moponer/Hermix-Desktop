@@ -25,6 +25,10 @@ vi.mock("../../api", () => ({
   savePersonaMemory: vi.fn(),
   getPersonaUser: vi.fn(),
   savePersonaUser: vi.fn(),
+  // PersonasPanel 的默认人设切换用；mock 缺了它会在 loadList 的
+  // Promise.all 里同步抛 TypeError，整个角色视图渲染失败。
+  getConfig: vi.fn(),
+  updateConfig: vi.fn(),
 }));
 
 // MemoryGraph 桩件：echarts 依赖 canvas，jsdom 里跑不起来。
@@ -78,6 +82,7 @@ beforeEach(() => {
   vi.mocked(api.getPersonality).mockResolvedValue({ path: "<builtin:coder>", content: "# coder prompt", updated_at: null });
   vi.mocked(api.getPersonaMemory).mockResolvedValue({ path: "MEMORY.md", content: "- 已知内容", updated_at: 1 });
   vi.mocked(api.getPersonaUser).mockResolvedValue({ path: "USER.md", content: "称呼：张三", updated_at: 1 });
+  vi.mocked(api.getConfig).mockResolvedValue({ personality: null });
 });
 
 describe("MemoryTab", () => {
@@ -97,7 +102,7 @@ describe("MemoryTab", () => {
     const textarea = await screen.findByRole("textbox");
     expect(textarea).toHaveValue("# coder prompt");
     expect(textarea).toHaveAttribute("readonly");
-    expect(await screen.findAllByText("coder").then((els) => els.length)).toBeGreaterThan(0);
+    expect(await screen.findAllByText("工程师").then((els) => els.length)).toBeGreaterThan(0);
     expect(api.getPersonality).toHaveBeenCalledWith("coder");
   });
 

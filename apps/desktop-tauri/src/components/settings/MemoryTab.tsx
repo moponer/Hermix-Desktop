@@ -51,7 +51,12 @@ function GraphView() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
-  const [hiddenKinds, setHiddenKinds] = useState<Set<string>>(new Set());
+  // 对话流水（turn 原始对话 / session 会话尾注 / focus 每轮结论）默认隐藏：
+  // 这三类占库内节点 94%+ 且多为问候语级碎片，默认展示会把真正的记忆
+  // （memory_tool/fact/reflection/daily/md）淹没。筛选条随时可开。
+  const [hiddenKinds, setHiddenKinds] = useState<Set<string>>(
+    () => new Set(["turn", "session", "focus"]),
+  );
   const [selected, setSelected] = useState<api.MemoryGraphNode | null>(null);
   const [item, setItem] = useState<api.MemoryItemResponse | null>(null);
   const [itemLoading, setItemLoading] = useState(false);
