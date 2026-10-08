@@ -439,12 +439,19 @@ fn extract_arguments(params: &Value) -> Value {
     }
 }
 
-/// Collect every top-level key except `name` as the target's arguments.
+/// Collect every top-level key except the bridge's own (`name` and
+/// `arguments`) as the target's arguments.
+///
+/// Excluding `arguments` matters on the fallback path: when the model sends
+/// a JSON *string* that fails to parse, the old filter kept the raw
+/// `arguments` key and handed a string to a tool that expects an object
+/// there — one more shape the target had to defend against. The two bridge
+/// keys are never valid target parameters, so both are dropped here.
 fn flatten_into_arguments(params: &Value) -> Value {
     match params.as_object() {
         Some(m) => Value::Object(
             m.iter()
-                .filter(|(k, _)| k.as_str() != "name")
+                .filter(|(k, _)| k.as_str() != "name" && k.as_str() != "arguments")
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect(),
         ),
@@ -601,6 +608,49 @@ pub fn register(registry: &ToolRegistry) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `tool_call` 的参数包装：合规形态（对象）必须原样透传。
+    #[test]
+    fn extract_arguments_passes_object_through() {
+        let params = serde_json::json!({"name": "cua_type_text", "arguments": {"text": "cssso"}});
+        assert_eq!(extract_arguments(&params), serde_json::json!({"text": "cssso"}));
+    }
+
+    /// 模型跑完 `tool_describe` 后常把目标字段平铺在顶层，这是报告里
+    /// "缺少必需参数 text" 的成因：老代码无条件读 `arguments`，缺失就
+    /// 填 `{}`，目标工具拿着空参数对象报错。
+    #[test]
+    fn extract_arguments_flattens_when_arguments_absent() {
+        let params = serde_json::json!({"name": "cua_type_text", "text": "cssso"});
+        assert_eq!(extract_arguments(&params), serde_json::json!({"text": "cssso"}));
+    }
+
+    /// 有些 provider 把 `arguments` 编成 JSON 字符串（`dispatch_bridge_tool`
+    /// 绕过 `coerce_args`），要能还原。
+    #[test]
+    fn extract_arguments_parses_json_string() {
+        let params =
+            serde_json::json!({"name": "cua_left_click", "arguments": "{\"x\": 960, \"y\": 540}"});
+        assert_eq!(extract_arguments(&params), serde_json::json!({"x": 960, "y": 540}));
+    }
+
+    /// 兜底不能把 `name` 漏进目标参数，也不能把 `arguments` 之外的杂音
+    /// 混进去。
+    #[test]
+    fn extract_arguments_never_leaks_the_bridge_keys() {
+        let params = serde_json::json!({"name": "t", "arguments": {"a": 1}});
+        let got = extract_arguments(&params);
+        let obj = got.as_object().expect("arguments must stay an object");
+        assert!(!obj.contains_key("name"));
+        assert!(!obj.contains_key("arguments"));
+    }
+
+    /// 非对象 / 坏字符串的兜底：宁可拿到平铺的顶层键，也不要 `{}`。
+    #[test]
+    fn extract_arguments_falls_back_to_flatten_for_garbage() {
+        let params = serde_json::json!({"name": "t", "arguments": "not json", "text": "x"});
+        assert_eq!(extract_arguments(&params), serde_json::json!({"text": "x"}));
+    }
 
     /// Regression guard for the dead deferred-tool path.
     ///
