@@ -501,8 +501,9 @@ pub fn run() {
                 }
             }
 
-            // 截图全局热键（默认 Alt+Q）：setup 里注册，失败仅打日志——
-            // 热键被占用不该阻塞整个应用启动。可配置化在 M3（笔记里程碑）。
+            // 截图全局热键（默认 Alt+Q）：setup 里注册兜底；设置 → 图像里
+            // 的自定义配置由前端启动时经 screenshot_apply_config 回放覆盖。
+            // 失败仅打日志——热键被占用不该阻塞整个应用启动。
             {
                 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
                 match "alt+Q".parse::<Shortcut>() {
@@ -718,6 +719,7 @@ pub fn run() {
             screenshot_controller::screenshot_window_at,
             screenshot_controller::screenshot_confirm,
             screenshot_controller::screenshot_cancel,
+            screenshot_controller::screenshot_apply_config,
             cdp_probe::cdp_n0_probe,
             commands::render_office_preview,
             commands::document_to_markdown,

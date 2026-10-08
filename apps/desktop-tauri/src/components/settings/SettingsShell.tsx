@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import {
   ArrowLeft, Search, Cpu, Boxes, Server, Smartphone, SlidersHorizontal,
   Plug, Sparkles, Network, Image as ImageIcon, Activity, Shield,
@@ -7,7 +8,8 @@ import {
 
 import { cx } from "../../lib/cx";
 import { storage, STORAGE_KEYS } from "../../utils/storageCompat";
-import { Input, Switch, SettingsGroup, SettingsRow } from "../ui";
+import { Input, Switch, SettingsGroup, SettingsRow, SegmentedControl } from "../ui";
+import { toastWarning } from "../../hooks/useToast";
 import {
   PluginsTab, SkillsTab, ConnectorsTab, ToolsetsTab,
 } from "../config/ToolTabs";
@@ -70,7 +72,7 @@ const GROUPS: GroupDef[] = [
       { id: "general", label: "通用", hint: "工作模式、输入快捷键、系统能力与数据位置", icon: SlidersHorizontal, keywords: "mode domain 编程 办公 通知 自启 索引" },
       { id: "appearance", label: "外观", hint: "主题、强调色与壁纸，立即生效并持久保存", icon: Palette, keywords: "theme 主题 深色 浅色 跟随系统 强调色 accent 对比度" },
       { id: "model", label: "模型", hint: "统一管理内置与自定义模型；内置供应商只需填 API Key", icon: Cpu, keywords: "model llm provider api key 供应商" },
-      { id: "image", label: "图像", hint: "配置图片生成能力；当前为本地偏好，图片生成接入后自动生效", icon: ImageIcon, keywords: "image 图像 生成" },
+      { id: "image", label: "图像", hint: "图片生成偏好与系统截图（热键、开关）", icon: ImageIcon, keywords: "image 图像 生成 截图 screenshot 热键 hotkey 快捷键" },
     ],
   },
   {
@@ -272,7 +274,7 @@ function PageBody({
     case "general": return <Section><PageHeading def={def} /><GeneralTab /></Section>;
     case "appearance": return <Section><PageHeading def={def} /><AppearanceTab /></Section>;
     case "model": return <ModelListTab />;
-    case "image": return <Section><PageHeading def={def} /><ImageSettingsCard /></Section>;
+    case "image": return <Section><PageHeading def={def} /><ImageSettingsCard /><ScreenshotSettingsCard /></Section>;
     case "plugins": return <ToolSection><PageHeading def={def} /><PluginsTab query={toolQuery} onQuery={onToolQuery} /></ToolSection>;
     case "skills": return <ToolSection><PageHeading def={def} /><SkillsTab query={toolQuery} onQuery={onToolQuery} /></ToolSection>;
     case "connectors": return <ToolSection><PageHeading def={def} /><ConnectorsTab query={toolQuery} onQuery={onToolQuery} /></ToolSection>;
@@ -352,6 +354,85 @@ function ImageSettingsCard() {
             value={cfg.model}
             onChange={(e) => update({ model: e.target.value })}
             placeholder="例如 agnes-image-2.0"
+            className="mt-2"
+          />
+        </SettingsRow>
+      </SettingsGroup>
+    </div>
+  );
+}
+
+// ── 图像：系统截图偏好（前端持久化 + Rust 即时应用） ──────────────
+// 持久化走 localStorage（screenshotConfig），与 imageConfig 同模式；生效
+// 走 screenshot_apply_config 命令即时重注册全局热键，启动时 main.tsx 回放。
+
+interface ScreenshotConfig {
+  enabled: boolean;
+  hotkey: string;
+}
+
+// 显式宽化成 string：否则 const 字面量把 SegmentedControl 的泛型推成
+// 字面量联合，与 cfg.hotkey（string）不兼容。
+const SCREENSHOT_HOTKEYS: { value: string; label: string }[] = [
+  { value: "alt+Q", label: "Alt+Q" },
+  { value: "ctrl+Alt+A", label: "Ctrl+Alt+A" },
+  { value: "printscreen", label: "PrtSc" },
+  { value: "F4", label: "F4" },
+];
+
+function loadScreenshotConfig(): ScreenshotConfig {
+  try {
+    const raw = storage.getItem(STORAGE_KEYS.screenshotConfig);
+    if (raw) return { enabled: true, hotkey: "alt+Q", ...(JSON.parse(raw) as Partial<ScreenshotConfig>) };
+  } catch { /* ignore */ }
+  // 无存储 = 从未配置过：保持 Rust setup 已注册的默认 Alt+Q，不触发 apply。
+  return { enabled: true, hotkey: "alt+Q" };
+}
+
+function ScreenshotSettingsCard() {
+  const [cfg, setCfg] = useState<ScreenshotConfig>(loadScreenshotConfig);
+  const prevRef = useRef<ScreenshotConfig>(cfg);
+
+  // 变更 → 持久化 + 即时应用。注册失败（热键被占用）时回滚 UI 并提示，
+  // Rust 侧顺序是"先注册新、再解旧"，失败时旧热键仍在。
+  const apply = (next: ScreenshotConfig) => {
+    const prev = prevRef.current;
+    setCfg(next);
+    prevRef.current = next;
+    storage.setItem(STORAGE_KEYS.screenshotConfig, JSON.stringify(next));
+    void invoke("screenshot_apply_config", { enabled: next.enabled, hotkey: next.hotkey })
+      .catch((err) => {
+        setCfg(prev);
+        prevRef.current = prev;
+        storage.setItem(STORAGE_KEYS.screenshotConfig, JSON.stringify(prev));
+        toastWarning(`截图热键未生效：${String(err)}`);
+      });
+  };
+
+  return (
+    <div className="mt-6 space-y-6">
+      <SettingsGroup>
+        <SettingsRow
+          title="启用系统截图"
+          description="全局热键或标题栏相机按钮截取屏幕，选区直接进剪贴板。"
+          control={
+            <Switch
+              checked={cfg.enabled}
+              onChange={(v) => apply({ ...cfg, enabled: v })}
+              label="启用系统截图"
+            />
+          }
+        />
+        <SettingsRow
+          title="截图热键"
+          description="系统级全局热键，任何应用内可用；被占用时会提示并回滚。"
+        >
+          <SegmentedControl
+            label="截图热键"
+            size="sm"
+            options={SCREENSHOT_HOTKEYS}
+            value={cfg.hotkey}
+            onChange={(v) => apply({ ...cfg, hotkey: v })}
             className="mt-2"
           />
         </SettingsRow>

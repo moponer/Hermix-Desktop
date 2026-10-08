@@ -8,6 +8,7 @@ import App from "./App";
 import { ScreenshotOverlay } from "./components/ScreenshotOverlay";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { toastError, toastSuccess, toastWarning } from "./hooks/useToast";
+import { storage, STORAGE_KEYS } from "./utils/storageCompat";
 import { ToastContainer } from "./components/ToastContainer";
 import "./styles/globals.css";
 import "./styles/screenshot-overlay.css";
@@ -277,6 +278,18 @@ if (!isOverlayWindow) {
   listen("hermix:screenshot-copied", () => {
     toastSuccess("截图已复制到剪贴板");
   });
+
+  // 回放截图配置（设置 → 图像 持久化的开关/热键）。从未配置过则跳过——
+  // Rust setup 已注册默认 Alt+Q 兜底。
+  try {
+    const raw = storage.getItem(STORAGE_KEYS.screenshotConfig);
+    if (raw) {
+      const cfg = JSON.parse(raw) as { enabled: boolean; hotkey: string };
+      void invoke("screenshot_apply_config", { enabled: cfg.enabled, hotkey: cfg.hotkey }).catch(
+        (err) => console.warn("[screenshot] 配置回放失败:", err),
+      );
+    }
+  } catch { /* ignore */ }
 
   // 无边框窗口没有系统标题栏：启动异常卡住时，用户得能最小化/关闭。
   (function bindSplashWindowControls() {

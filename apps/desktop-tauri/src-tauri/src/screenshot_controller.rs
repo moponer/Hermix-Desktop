@@ -12,6 +12,13 @@ use serde::Serialize;
 use tauri::{Emitter, Manager};
 
 const OVERLAY_LABEL: &str = "screenshot-overlay";
+/// setup 默认注册的热键，与 lib.rs 保持一致；前端回放配置前的兜底。
+const DEFAULT_HOTKEY: &str = "alt+Q";
+
+/// 截图功能开关（设置 → 图像）。默认开；false 时热键与标题栏入口都拒绝。
+static ENABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+/// 当前已注册的全局热键字符串（apply 时先注册新的再解旧的，失败不破坏现状）。
+static REGISTERED_HOTKEY: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
 #[derive(Serialize, Clone)]
 pub struct FramePayload {
@@ -45,6 +52,9 @@ pub async fn start_screenshot(app: tauri::AppHandle) -> Result<(), String> {
 /// 会话主流程（重活，走 spawn_blocking 调用——抓屏 + PNG 编码数秒，
 /// 同步命令跑主线程会冻结整个应用 UI）。
 pub fn run_session(app: &tauri::AppHandle) -> Result<(), String> {
+    if !ENABLED.load(std::sync::atomic::Ordering::Relaxed) {
+        return Err("截图功能已在设置 → 图像中关闭".into());
+    }
     // 重入：先关旧覆盖窗（正常路径不会出现，热键连按兜底）。
     if let Some(win) = app.get_webview_window(OVERLAY_LABEL) {
         let _ = win.close();
@@ -206,6 +216,47 @@ pub fn screenshot_confirm(app: tauri::AppHandle, selection: Selection) -> Result
 #[tauri::command]
 pub fn screenshot_cancel(app: tauri::AppHandle) -> Result<(), String> {
     cancel_session(&app);
+    Ok(())
+}
+
+/// 应用截图配置（设置 → 图像）：开关 + 全局热键。
+/// 顺序是"先注册新的、成功后再解旧的"——注册失败（被占用）时旧热键
+/// 仍在，现状不被破坏。无存储配置时前端不调用，setup 默认热键继续生效。
+#[tauri::command]
+pub fn screenshot_apply_config(
+    app: tauri::AppHandle,
+    enabled: bool,
+    hotkey: String,
+) -> Result<(), String> {
+    use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
+
+    ENABLED.store(enabled, std::sync::atomic::Ordering::Relaxed);
+    if !enabled {
+        // 关闭：解掉当前热键（含 setup 默认注册的兜底）。
+        let mut registered = REGISTERED_HOTKEY.lock().unwrap();
+        let prev = registered.take().unwrap_or_else(|| DEFAULT_HOTKEY.into());
+        if let Ok(sc) = prev.parse::<Shortcut>() {
+            let _ = app.global_shortcut().unregister(sc);
+        }
+        return Ok(());
+    }
+
+    let gs = app.global_shortcut();
+    let sc: Shortcut = hotkey
+        .parse()
+        .map_err(|e| format!("热键 {hotkey} 格式无效: {e}"))?;
+    gs.register(sc)
+        .map_err(|e| format!("热键 {hotkey} 注册失败（可能被其他程序占用）: {e}"))?;
+
+    let mut registered = REGISTERED_HOTKEY.lock().unwrap();
+    let prev = registered
+        .replace(hotkey.clone())
+        .unwrap_or_else(|| DEFAULT_HOTKEY.into());
+    if prev != hotkey {
+        if let Ok(old) = prev.parse::<Shortcut>() {
+            let _ = gs.unregister(old);
+        }
+    }
     Ok(())
 }
 

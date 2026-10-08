@@ -155,6 +155,9 @@ export const STORAGE_KEYS = {
   userProfile: "hermix.user.profile",
   // 图片生成本地偏好（前端持久化，图片生成能力接入前作为集中配置入口）
   imageConfig: "hermix.config.image",
+  // 系统截图偏好：{enabled, hotkey}。启动时回放给 screenshot_apply_config，
+  // 未存储时 Rust setup 的默认 Alt+Q 继续生效。
+  screenshotConfig: "hermix.config.screenshot",
 } as const;
 
 export type StorageKey = (typeof STORAGE_KEYS)[keyof typeof STORAGE_KEYS];

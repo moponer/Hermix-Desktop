@@ -2,6 +2,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { Minus, Square, X, MessageSquare, Camera } from "lucide-react";
 import { useCallback } from "react";
+import { toastWarning } from "../hooks/useToast";
 
 /** 标题栏按**三栏**排布，与下方 .app-body 的三列共用同一组列宽变量
  *  （`--ab-left-w` / `--ab-right-w`），所以每一栏的边界都对齐到正下方那一列的
@@ -41,11 +42,13 @@ export function TitleBar({ title }: { title?: string }) {
     }
   }, []);
 
-  // 截图入口之二（热键 Alt+Q 之外）：主进程内触发，无需全局热键注册。
+  // 截图入口之二（热键之外）：主进程内触发，无需全局热键注册。
+  // 失败要可见（功能被关/抓屏失败），不能静默——用户不知道为什么没反应。
   const handleScreenshot = useCallback(() => {
-    void invoke("start_screenshot").catch((err) =>
-      console.error("[TitleBar] screenshot failed:", err),
-    );
+    void invoke("start_screenshot").catch((err) => {
+      console.error("[TitleBar] screenshot failed:", err);
+      toastWarning(String(err));
+    });
   }, []);
 
   return (
