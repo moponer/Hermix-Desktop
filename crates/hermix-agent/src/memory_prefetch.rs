@@ -568,6 +568,11 @@ pub fn memory_sync(
                     )
                     .is_ok()
                 {
+                    // latest-wins 互斥：此前 `user.style:{style}` 每种
+                    // 风格各占一行，direct/technical/mixed/exploratory
+                    // 四条互相矛盾的探测并存。隐藏其余可见风格行后，
+                    // 召回与 `most_frequent_user_style` 只见最新推断。
+                    let _ = embedded.soft_hide_other_user_styles(&key);
                     records.push(MemoryWriteRecord {
                         action: MemoryAction::Write,
                         memory_type: MemoryKind::Style,
@@ -870,6 +875,12 @@ pub fn drain_focus_conclusions(
     count
 }
 
+/// Retention windows for the per-message frame janitor. Long-term
+/// memory is untouched: it lives in `facts`（自带 TTL 梯度）、
+/// MEMORY.md / USER.md、daily memory.
+const TURN_FRAME_RETENTION_DAYS: i64 = 14;
+const SESSION_FRAME_RETENTION_DAYS: i64 = 30;
+
 /// Session-end side-effects:
 /// 1. Persist a session-level `FocusConclusion` to the embedded
 /// SQLite (memory.db) so cross-session recall works even when the
@@ -911,28 +922,49 @@ pub fn memory_on_session_end(
     // this hook the only writes to memory.db came from
     // `note_delegation_end`, leaving single-shot sessions with
     // 0 rows — the symptom the user reported as "会话记忆不工作".
-    let wrote_session_summary = build_session_summary(messages).map(|text| {
-        let router = router_owned.clone();
-        let session_id = config.session_id.clone().unwrap_or_default();
-        let conclusion = FocusConclusion {
-            source_frame_id: uuid::Uuid::new_v4(),
-            text: text.clone(),
-            salience: 0.5,
-            tags: vec!["session".to_string()],
-            created_at: chrono::Utc::now(),
-        };
-        tokio::spawn(async move {
-            if let Err(e) = router.upsert_conclusion(&conclusion).await {
-                tracing::warn!(
-                    target: "hermix.agent",
-                    session_id = %session_id,
-                    error = %e,
-                    "memory_on_session_end: upsert_conclusion failed"
-                );
-            }
-        });
-        text
-    });
+    //
+    // 去重：`finalize_agent_result` 是每条用户消息触发的，而本轮的
+    // user/assistant 对刚刚已被 `memory_sync` 存成 turn 帧——这里的
+    // 「会话总结」逐字重复同一对对话（存量 867 条 focus 帧全是这种）。
+    // 仅当 turn 帧路径没有刚覆盖同一文本时才写（真·会话收尾/旧数据
+    // 兼容），查不到 turn 帧则维持原语义。
+    let last_user_text = messages
+        .iter()
+        .rev()
+        .find(|m| m.role == MessageRole::User)
+        .map(|m| m.content.as_deref().unwrap_or("").trim().to_string())
+        .filter(|s| !s.is_empty());
+    let summary_already_covered = last_user_text
+        .as_deref()
+        .zip(router_owned.find_embedded_backend())
+        .map(|(text, backend)| backend.has_recent_turn_frame(text, 10).unwrap_or(false))
+        .unwrap_or(false);
+    let wrote_session_summary = if summary_already_covered {
+        None
+    } else {
+        build_session_summary(messages).map(|text| {
+            let router = router_owned.clone();
+            let session_id = config.session_id.clone().unwrap_or_default();
+            let conclusion = FocusConclusion {
+                source_frame_id: uuid::Uuid::new_v4(),
+                text: text.clone(),
+                salience: 0.5,
+                tags: vec!["session".to_string()],
+                created_at: chrono::Utc::now(),
+            };
+            tokio::spawn(async move {
+                if let Err(e) = router.upsert_conclusion(&conclusion).await {
+                    tracing::warn!(
+                        target: "hermix.agent",
+                        session_id = %session_id,
+                        error = %e,
+                        "memory_on_session_end: upsert_conclusion failed"
+                    );
+                }
+            });
+            text
+        })
+    };
 
     // Drain any pending focus conclusions.
     let session_id = config.session_id.clone().unwrap_or_default();
@@ -987,6 +1019,14 @@ pub fn memory_on_session_end(
     // gap. Idempotent: the canonical key is content-hashed, so a
     // re-promotion only bumps the fact's access_count.
     if let Some(backend) = router_owned.find_embedded_backend() {
+        // (生命周期) 每消息级维护：衰减过期的 turn/session 帧 +
+        // 清理过期 facts（facts TTL 此前只在 DB 打开时执行一次，
+        // 长驻进程内从不生效）。turn 帧 14 天、session 尾注 30 天；
+        // 置顶帧不衰减；软删可逆。长期记忆不受影响——它住在
+        // facts（自带 TTL 梯度）/ MEMORY.md / USER.md / daily 里。
+        let _ = backend.decay_stale_frames(TURN_FRAME_RETENTION_DAYS, SESSION_FRAME_RETENTION_DAYS);
+        let _ = backend.cleanup_expired_facts();
+
         // Re-promoting surviving entries every turn end is a silent
         // salience bump; the chat event fires only for genuinely new
         // ones, otherwise the card would repeat on every exchange.
