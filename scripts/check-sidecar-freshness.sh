@@ -96,6 +96,39 @@ if [ -n "$stray" ]; then
   exit 1
 fi
 
+# --- Check 2b: embedded / bundled static resources --------------------------
+# Same mtime logic as Check 2, but for static assets that ride into the app
+# through compile-time include_str! or the Tauri resources block:
+#   builtin-soul/SOUL.md — compiled into hermix-desktop.exe (first-launch seed)
+#   resources/loader/*   — shipped verbatim via tauri.conf.json `resources`
+# 2026-10-08: builtin-soul/SOUL.md was still the 08-12 revision while the
+# runtime copy had a same-day fix — fresh installs seeded the old persona.
+# Compare each file against its own directory subtree; a hit means the
+# packaged copy predates the tree and the bundle must be rebuilt.
+RES_STALE=""
+res_check() { # $1 = sentinel file, $2 = dir to compare against
+  [ -f "$1" ] || return 0
+  local hit
+  hit=$(find "$2" -type f -newer "$1" -print -quit 2>/dev/null | head -1)
+  if [ -n "$hit" ]; then
+    echo "  STALE: bundled resource predates its sources"
+    echo "         resource: $1"
+    echo "         newest  : $hit"
+    echo ""
+    RES_STALE=1
+  fi
+}
+res_check "apps/desktop-tauri/src-tauri/builtin-soul/SOUL.md" "apps/desktop-tauri/src-tauri/builtin-soul"
+res_check "apps/desktop-tauri/src-tauri/resources/loader/hx-shell.exe" "apps/desktop-tauri/src-tauri/resources/loader"
+res_check "apps/desktop-tauri/src-tauri/resources/loader/WebView2Loader.dll" "apps/desktop-tauri/src-tauri/resources/loader"
+res_check "apps/desktop-tauri/src-tauri/resources/loader/esbuild.exe" "apps/desktop-tauri/src-tauri/resources/loader"
+
+if [ -n "$RES_STALE" ]; then
+  echo "         Rebuild the bundle so the fresh copy is compiled/packaged in."
+  echo ""
+  exit 1
+fi
+
 # --- Check 3: the other externalBin sidecars are PRESENT --------------------
 # `officecli` / `markitdown` ship through the same mechanism, so a missing one
 # breaks the installer outright. Presence is checked; **staleness is not**,

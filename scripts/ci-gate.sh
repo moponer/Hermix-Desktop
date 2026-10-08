@@ -313,14 +313,21 @@ fi
 echo ""
 
 #-----------------------------------------------------------------------
-# 12. Sidecar freshness gate (SOFT gate — warn, never block)
-#     打包用的 sidecar 二进制可能比源码旧 —— cargo tauri build 不会自动
-#     刷新它。2026-10-06 的 v2.0 缺陷报告就是这么把 5 个已修 bug 报成
-#     "仍未修复"：复测跑的二进制比修复提交早 4 小时。这一关只提醒。
+# 12. Sidecar freshness gate (HARD gate)
+#     打包用的 sidecar 二进制 / builtin-soul / resources 静态资源可能比
+#     源码旧 —— cargo tauri build 不会自动刷新它们。2026-10-06 的 v2.0
+#     缺陷报告就是这么把 5 个已修 bug 报成"仍未修复"：复测跑的二进制
+#     比修复提交早 4 小时；2026-10-08 新装机器播种的还是 8 月的
+#     SOUL.md。过期即 fail，重编 + copy 后重跑即绿。
 #-----------------------------------------------------------------------
-echo "=== [12/12] sidecar freshness (soft) ==="
+echo "=== [12/12] sidecar freshness (HARD gate) ==="
+# 2026-10-08 起从 soft 升级为 hard：soft WARN 挡不住"打包含旧后端/旧
+# SOUL.md"——10-06、10-08 两次交付都栽在这里。freshness 脚本现覆盖
+# sidecar 二进制 + builtin-soul/resources 静态资源，exit 1 即打断 gate。
+# 注意：本机开发中改了源码还没重编 sidecar 时 gate 会红——这是有意
+# 行为，重编 + copy 后即绿（命令在脚本的 STALE 输出里）。
 if [ -f scripts/check-sidecar-freshness.sh ]; then
-  bash scripts/check-sidecar-freshness.sh || echo "  WARN: sidecar is stale — a retest through the packaged app would measure old code"
+  bash scripts/check-sidecar-freshness.sh || exit 1
 else
   echo "  SKIP: scripts/check-sidecar-freshness.sh not found"
 fi
