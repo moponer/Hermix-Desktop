@@ -385,8 +385,11 @@ impl ToolHandler for BrowserPtcHandler {
         }
 
         // 会话路由 + 自动 bootstrap（对齐其他 browser_* 工具的行为）。
+        // 一条 PTC 程序的所有步骤必须落在同一个会话的页面上，所以这里
+        // 先把 per-session 后端固化成局部句柄，全程不再读共享 key
+        // （见 `backend_for_call`）。
+        let backend = backend_for_call(&self.backend, &params);
         if let Some(s) = self.backend.as_sessioned() {
-            s.set_active_session(session_from_params(&params));
             s.ensure_browser_running().await;
         }
 
@@ -414,7 +417,7 @@ impl ToolHandler for BrowserPtcHandler {
             let remaining = deadline.saturating_duration_since(std::time::Instant::now());
             let step_result = tokio::time::timeout(
                 remaining,
-                self.execute_step(&self.backend, step, &mut vars, &mut output),
+                self.execute_step(&backend, step, &mut vars, &mut output),
             )
             .await;
             match step_result {
@@ -759,6 +762,25 @@ fn session_from_params(params: &Value) -> &str {
         .unwrap_or("default")
 }
 
+/// Bind one handler invocation to exactly one per-session backend.
+///
+/// Handlers must resolve this **before** their first `.await` and issue
+/// every subsequent call on the returned handle. The alternative — writing
+/// the session key into `SessionedBrowserBackend`'s shared slot and letting
+/// the wrapper re-read it per step — is racy: the slot is one process-wide
+/// `Mutex<String>` shared by every browser handler, so a concurrent call
+/// belonging to another session can overwrite it while this one awaits
+/// Chrome bootstrap, routing this call's later steps into the wrong page.
+/// Several handlers never set the slot at all and therefore read whatever
+/// the previous caller left behind. Holding a resolved handle removes the
+/// shared-mutable routing from the call entirely.
+fn backend_for_call(backend: &Arc<dyn BrowserBackend>, params: &Value) -> Arc<dyn BrowserBackend> {
+    match backend.as_sessioned() {
+        Some(s) => s.backend_for(session_from_params(params)),
+        None => backend.clone(),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Navigable-URL gate（修 1：注入面防护）
 // ---------------------------------------------------------------------------
@@ -835,8 +857,8 @@ impl ToolHandler for BrowserNavigateHandler {
         // effects. We do this by downcasting to `SessionedBrowserBackend`
         // when possible. A non-sessioned backend (legacy / cloud) is
         // still allowed and the call falls through unchanged.
+        let backend = backend_for_call(&self.backend, &params);
         if let Some(s) = self.backend.as_sessioned() {
-            s.set_active_session(session_from_params(&params));
             // Ensure Chrome is running *before* the SSRF/allowlist checks
             // so we fail fast with "browser unavailable" rather than
             // wasting time on URL validation when there's nothing to
@@ -874,7 +896,7 @@ impl ToolHandler for BrowserNavigateHandler {
             }
         }
 
-        self.backend.navigate(url).await
+        backend.navigate(url).await
     }
 
     fn schema(&self) -> ToolSchema {
@@ -927,14 +949,14 @@ impl ToolHandler for BrowserSnapshotHandler {
             .map(|n| n as u32);
         let target = params.get("target").and_then(|v| v.as_str());
         let compact = crate::param_coercion::bool_param(&params, "compact", false);
+        let backend = backend_for_call(&self.backend, &params);
         if let Some(s) = self.backend.as_sessioned() {
-            s.set_active_session(session_from_params(&params));
             // Auto-bootstrap Chrome on every browser tool call (not
             // just navigate) so the LLM never sees an opaque
             // "Failed to connect to Chrome CDP" error mid-task.
             s.ensure_browser_running().await;
         }
-        self.backend
+        backend
             .snapshot_with_options(depth, target, compact)
             .await
     }
@@ -1009,14 +1031,14 @@ impl ToolHandler for BrowserDiffHandler {
             .get("new")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidParams("Missing 'new' parameter".into()))?;
+        let backend = backend_for_call(&self.backend, &params);
         if let Some(s) = self.backend.as_sessioned() {
-            s.set_active_session(session_from_params(&params));
             // Auto-bootstrap Chrome on every browser tool call (not
             // just navigate) so the LLM never sees an opaque
             // "Failed to connect to Chrome CDP" error mid-task.
             s.ensure_browser_running().await;
         }
-        self.backend.diff_snapshot(old, new).await
+        backend.diff_snapshot(old, new).await
     }
 
     fn schema(&self) -> ToolSchema {
@@ -1066,14 +1088,14 @@ impl ToolHandler for BrowserClickHandler {
             .get("selector")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidParams("Missing 'selector' parameter".into()))?;
+        let backend = backend_for_call(&self.backend, &params);
         if let Some(s) = self.backend.as_sessioned() {
-            s.set_active_session(session_from_params(&params));
             // Auto-bootstrap Chrome on every browser tool call (not
             // just navigate) so the LLM never sees an opaque
             // "Failed to connect to Chrome CDP" error mid-task.
             s.ensure_browser_running().await;
         }
-        self.backend.click(selector).await
+        backend.click(selector).await
     }
 
     fn schema(&self) -> ToolSchema {
@@ -1125,14 +1147,14 @@ impl ToolHandler for BrowserTypeHandler {
             .get("text")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidParams("Missing 'text' parameter".into()))?;
+        let backend = backend_for_call(&self.backend, &params);
         if let Some(s) = self.backend.as_sessioned() {
-            s.set_active_session(session_from_params(&params));
             // Auto-bootstrap Chrome on every browser tool call (not
             // just navigate) so the LLM never sees an opaque
             // "Failed to connect to Chrome CDP" error mid-task.
             s.ensure_browser_running().await;
         }
-        self.backend.r#type(selector, text).await
+        backend.r#type(selector, text).await
     }
 
     fn schema(&self) -> ToolSchema {
@@ -1184,7 +1206,8 @@ impl ToolHandler for BrowserScrollHandler {
             .get("amount")
             .and_then(|v| v.as_u64())
             .map(|n| n as u32);
-        self.backend.scroll(direction, amount).await
+        let backend = backend_for_call(&self.backend, &params);
+        backend.scroll(direction, amount).await
     }
 
     fn schema(&self) -> ToolSchema {
@@ -1229,8 +1252,9 @@ impl BrowserBackHandler {
 
 #[async_trait]
 impl ToolHandler for BrowserBackHandler {
-    async fn execute(&self, _params: Value) -> Result<String, ToolError> {
-        self.backend.go_back().await
+    async fn execute(&self, params: Value) -> Result<String, ToolError> {
+        let backend = backend_for_call(&self.backend, &params);
+        backend.go_back().await
     }
 
     fn schema(&self) -> ToolSchema {
@@ -1263,7 +1287,8 @@ impl ToolHandler for BrowserPressHandler {
             .get("key")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidParams("Missing 'key' parameter".into()))?;
-        self.backend.press(key).await
+        let backend = backend_for_call(&self.backend, &params);
+        backend.press(key).await
     }
 
     fn schema(&self) -> ToolSchema {
@@ -1301,7 +1326,8 @@ impl BrowserGetImagesHandler {
 impl ToolHandler for BrowserGetImagesHandler {
     async fn execute(&self, params: Value) -> Result<String, ToolError> {
         let selector = params.get("selector").and_then(|v| v.as_str());
-        self.backend.get_images(selector).await
+        let backend = backend_for_call(&self.backend, &params);
+        backend.get_images(selector).await
     }
 
     fn schema(&self) -> ToolSchema {
@@ -1349,14 +1375,14 @@ impl ToolHandler for BrowserWaitForHandler {
         let state = params.get("state").and_then(|v| v.as_str());
         let url_glob = params.get("url_glob").and_then(|v| v.as_str());
         let js_fn = params.get("js_fn").and_then(|v| v.as_str());
+        let backend = backend_for_call(&self.backend, &params);
         if let Some(s) = self.backend.as_sessioned() {
-            s.set_active_session(session_from_params(&params));
             // Auto-bootstrap Chrome on every browser tool call (not
             // just navigate) so the LLM never sees an opaque
             // "Failed to connect to Chrome CDP" error mid-task.
             s.ensure_browser_running().await;
         }
-        self.backend
+        backend
             .wait_for(selector, timeout_ms, state, url_glob, js_fn)
             .await
     }
@@ -1439,14 +1465,14 @@ impl ToolHandler for BrowserVisionHandler {
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidParams("Missing 'instruction' parameter".into()))?;
         let annotate = crate::param_coercion::bool_param(&params, "annotate", false);
+        let backend = backend_for_call(&self.backend, &params);
         if let Some(s) = self.backend.as_sessioned() {
-            s.set_active_session(session_from_params(&params));
             // Auto-bootstrap Chrome on every browser tool call (not
             // just navigate) so the LLM never sees an opaque
             // "Failed to connect to Chrome CDP" error mid-task.
             s.ensure_browser_running().await;
         }
-        let mut out = self.backend.vision(instruction).await?;
+        let mut out = backend.vision(instruction).await?;
         if annotate {
             // Server-side hint: the backend always annotates when ref
             // tokens are present. We just mark it in the response so the
@@ -1509,14 +1535,14 @@ impl ToolHandler for BrowserConsoleHandler {
             .get("action")
             .and_then(|v| v.as_str())
             .unwrap_or("read");
+        let backend = backend_for_call(&self.backend, &params);
         if let Some(s) = self.backend.as_sessioned() {
-            s.set_active_session(session_from_params(&params));
             // Auto-bootstrap Chrome on every browser tool call (not
             // just navigate) so the LLM never sees an opaque
             // "Failed to connect to Chrome CDP" error mid-task.
             s.ensure_browser_running().await;
         }
-        self.backend.console(action).await
+        backend.console(action).await
     }
 
     fn schema(&self) -> ToolSchema {
@@ -1563,14 +1589,14 @@ impl ToolHandler for BrowserHighlightHandler {
             .get("selector")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidParams("Missing 'selector' parameter".into()))?;
+        let backend = backend_for_call(&self.backend, &params);
         if let Some(s) = self.backend.as_sessioned() {
-            s.set_active_session(session_from_params(&params));
             // Auto-bootstrap Chrome on every browser tool call (not
             // just navigate) so the LLM never sees an opaque
             // "Failed to connect to Chrome CDP" error mid-task.
             s.ensure_browser_running().await;
         }
-        self.backend.highlight(selector).await
+        backend.highlight(selector).await
     }
 
     fn schema(&self) -> ToolSchema {
@@ -1622,8 +1648,8 @@ impl ToolHandler for BrowserInitScriptHandler {
             .get("action")
             .and_then(|v| v.as_str())
             .unwrap_or("add");
+        let backend = backend_for_call(&self.backend, &params);
         if let Some(s) = self.backend.as_sessioned() {
-            s.set_active_session(session_from_params(&params));
             // Auto-bootstrap Chrome on every browser tool call (not
             // just navigate) so the LLM never sees an opaque
             // "Failed to connect to Chrome CDP" error mid-task.
@@ -1643,10 +1669,10 @@ impl ToolHandler for BrowserInitScriptHandler {
                         script.len()
                     )));
                 }
-                self.backend.add_init_script(script).await
+                backend.add_init_script(script).await
             }
-            "list" => self.backend.list_init_scripts().await,
-            "clear" => self.backend.clear_init_scripts().await,
+            "list" => backend.list_init_scripts().await,
+            "clear" => backend.clear_init_scripts().await,
             other => Err(ToolError::InvalidParams(format!(
                 "Unknown init_script action: '{other}'. Use add / list / clear."
             ))),
@@ -1692,6 +1718,24 @@ impl ToolHandler for BrowserInitScriptHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 非会话化后端（云 / 测试注入）必须原样使用，不能被"绑会话"改写。
+    #[test]
+    fn backend_for_call_keeps_a_non_sessioned_backend() {
+        let injected: Arc<dyn BrowserBackend> = Arc::new(MockBrowserBackend);
+        let bound = backend_for_call(&injected, &json!({"session": "alpha"}));
+        assert!(Arc::ptr_eq(&bound, &injected));
+    }
+
+    /// 注入的 hermix 会话 id 优先于 LLM 显式给的 `session`：前者是分发层
+    /// 的真实归属，后者只是覆盖入口。
+    #[test]
+    fn session_from_params_prefers_the_injected_id() {
+        assert_eq!(
+            session_from_params(&json!({"_session_id": "injected", "session": "explicit"})),
+            "injected"
+        );
+    }
 
     /// Regression guard for the "written but never wired" class of bug.
     ///
