@@ -6,7 +6,7 @@
 // data URL 经事件通道要过 JSON eval 注入，易碎且有一次监听竞态；帧在
 // 建窗前就已入静态缓存，前端挂载后直接拉，无时序耦合。
 
-use crate::screenshot::{self, Selection};
+use crate::screenshot;
 use base64::Engine as _;
 use serde::Serialize;
 use tauri::{Emitter, Manager};
@@ -182,21 +182,23 @@ pub fn screenshot_window_at(
     screenshot::window_rect_at((x, y), exclude)
 }
 
-/// 确认选区：裁剪 → 剪贴板 → 关覆盖窗。失败要可见（主窗 toast）。
+/// 编辑器提交：前端把编辑后的画布导出为 PNG data URL 回传，
+/// 解码 → 剪贴板 → 关覆盖窗。选区裁剪已在前端画布完成，Rust 只收成品。
 #[tauri::command]
-pub fn screenshot_confirm(app: tauri::AppHandle, selection: Selection) -> Result<(), String> {
-    let session_guard = screenshot::session().lock().unwrap();
-    let Some(session) = session_guard.as_ref() else {
-        return Err("截图会话已过期".into());
-    };
-    let Some(rgba) = screenshot::crop_rgba(session, selection) else {
-        return Err("选区超出屏幕范围".into());
-    };
-    let width = selection.width.max(0) as u32;
-    let height = selection.height.max(0) as u32;
-    drop(session_guard);
+pub fn screenshot_commit_edited(app: tauri::AppHandle, data_url: String) -> Result<(), String> {
+    const PREFIX: &str = "data:image/png;base64,";
+    let b64 = data_url
+        .strip_prefix(PREFIX)
+        .ok_or_else(|| "data URL 前缀无效".to_string())?;
+    let png = base64::engine::general_purpose::STANDARD
+        .decode(b64)
+        .map_err(|e| format!("base64 解码失败: {e}"))?;
+    let img = image::load_from_memory(&png)
+        .map_err(|e| format!("PNG 解码失败: {e}"))?
+        .to_rgba8();
+    let (width, height) = img.dimensions();
 
-    match screenshot::copy_png_to_clipboard(&rgba, width, height) {
+    match screenshot::copy_png_to_clipboard(img.as_raw(), width, height) {
         Ok(()) => {
             *screenshot::session().lock().unwrap() = None;
             *frame().lock().unwrap() = None;
@@ -205,7 +207,6 @@ pub fn screenshot_confirm(app: tauri::AppHandle, selection: Selection) -> Result
             Ok(())
         }
         Err(e) => {
-            // 剪贴板被占用等失败：覆盖窗留在原地，用户可重试或 ESC。
             let _ = app.emit("hermix:screenshot-error", e.clone());
             Err(e)
         }

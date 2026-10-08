@@ -1,11 +1,13 @@
-// 截图选区覆盖窗（独立 window：index.html#/screenshot-overlay）。
-// 全屏幕布上画矩形 / 窗口模式高亮；确认 → screenshot_confirm → 剪贴板。
+// 截图覆盖窗（独立 window：index.html#/screenshot-overlay）。
+// 全屏幕布上画矩形 / 窗口模式高亮；确认后进入编辑器（ScreenshotEditor），
+// 编辑完成 → screenshot_commit_edited → 剪贴板。
 // 帧经 invoke("screenshot_frame_data") 拉取（建窗前已入缓存，无时序竞态）；
 // 窗口 visible(false) 创建，帧就绪后 show——白屏不可能出现。
 // 交互契约见 docs/notes/implemented/feature/2026-10-07-screenshot-tool.md。
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { ScreenshotEditor } from "./ScreenshotEditor";
 
 interface FramePayload {
   data_url: string;
@@ -33,6 +35,8 @@ export function ScreenshotOverlay() {
   const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null);
   const [rect, setRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const [hoverWin, setHoverWin] = useState<WindowRect | null>(null);
+  // 编辑态：非 null = 选区已确认，进入编辑器（值 = 选区在帧图内的物理像素矩形）。
+  const [sel, setSel] = useState<{ sx: number; sy: number; sw: number; sh: number } | null>(null);
   const frameRef = useRef<FramePayload | null>(null);
   frameRef.current = frame;
   // 窗口模式 hover 去抖：rect 没变不 setState，避免 mousemove 洪泛重渲染。
@@ -56,26 +60,30 @@ export function ScreenshotOverlay() {
     void invoke("screenshot_cancel").catch(() => {});
   }, []);
 
-  const confirm = useCallback((r: { x: number; y: number; w: number; h: number }) => {
+  /** 选区确认（矩形松开 / 窗口模式点击）：转帧图物理像素，进入编辑器。
+   *  帧图 (0,0) 对应屏幕 (origin_x, origin_y)，故本地逻辑坐标 × scale
+   *  即帧图像素，无需 origin。 */
+  const beginEdit = useCallback((r: { x: number; y: number; w: number; h: number }) => {
     const f = frameRef.current;
-    if (!f || r.w < 2 || r.h < 2) return;
-    // 逻辑 → 物理像素 + 屏幕原点偏移。
+    if (!f || r.w < 4 || r.h < 4) return;
     const s = f.scale;
-    void invoke("screenshot_confirm", {
-      selection: {
-        x: f.origin_x + Math.round(r.x * s),
-        y: f.origin_y + Math.round(r.y * s),
-        width: Math.round(r.w * s),
-        height: Math.round(r.h * s),
-      },
-    }).catch(() => {});
+    const sx = Math.max(0, Math.round(r.x * s));
+    const sy = Math.max(0, Math.round(r.y * s));
+    setSel({
+      sx,
+      sy,
+      sw: Math.min(f.width - sx, Math.round(r.w * s)),
+      sh: Math.min(f.height - sy, Math.round(r.h * s)),
+    });
   }, []);
 
-  // 键盘：ESC 取消，Enter 确认，Tab 切模式。
+  // 键盘：ESC 取消全程；Enter 确认 / Tab 切模式仅选区阶段有效（编辑态
+  // Enter 归文本输入用）。
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") cancel();
-      else if (e.key === "Enter" && rect) confirm(rect);
+      else if (sel) return;
+      else if (e.key === "Enter" && rect) beginEdit(rect);
       else if (e.key === "Tab") {
         e.preventDefault();
         setMode((m) => (m === "rect" ? "window" : "rect"));
@@ -86,7 +94,7 @@ export function ScreenshotOverlay() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [cancel, confirm, rect]);
+  }, [cancel, beginEdit, rect, sel]);
 
   // 屏幕逻辑坐标 → 本地：监听期缓存窗口位置。
   const winPosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -144,7 +152,7 @@ export function ScreenshotOverlay() {
 
   const onMouseUp = () => {
     if (mode === "rect" && dragStart && rect && rect.w > 2 && rect.h > 2) {
-      confirm(rect);
+      beginEdit(rect);
     }
     setDragStart(null);
   };
@@ -153,7 +161,7 @@ export function ScreenshotOverlay() {
     if (mode === "window" && hoverWin) {
       const f = frameRef.current;
       if (!f) return;
-      confirm({
+      beginEdit({
         x: hoverWin.x / f.scale - f.origin_x,
         y: hoverWin.y / f.scale - f.origin_y,
         w: hoverWin.width / f.scale,
@@ -177,6 +185,16 @@ export function ScreenshotOverlay() {
 
   if (!frame) {
     return <div className="so-loading">正在截取屏幕…</div>;
+  }
+
+  // 编辑态：选区已确认，交给编辑器（覆盖全窗，选区 UI 不再渲染）。
+  if (sel) {
+    return (
+      <ScreenshotEditor
+        source={{ dataUrl: frame.data_url, ...sel, scale: frame.scale }}
+        onCancel={cancel}
+      />
+    );
   }
 
   // hover 窗口高亮框（本地逻辑坐标）
@@ -240,7 +258,7 @@ export function ScreenshotOverlay() {
           ⛶ 窗口
         </button>
         {rect && (
-          <button className="so-confirm" title="确认（Enter）" onClick={() => confirm(rect)}>
+          <button className="so-confirm" title="确认（Enter），进入编辑" onClick={() => beginEdit(rect)}>
             ✓
           </button>
         )}

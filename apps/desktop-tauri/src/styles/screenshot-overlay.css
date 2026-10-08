@@ -126,3 +126,145 @@
   background: rgba(232, 74, 74, 0.85);
   color: #fff;
 }
+
+/* ── 编辑器（ScreenshotEditor.tsx）────────────────────────────── */
+
+/* 编辑态根：全屏压暗，画布居中 */
+.se-root {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.85);
+  user-select: none;
+  cursor: default;
+}
+
+.se-canvas-wrap {
+  position: relative;
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.65);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: #000;
+}
+
+.se-canvas {
+  display: block;
+  cursor: crosshair;
+  /* 宽高由组件内联精确指定（JS 等比适配窗内空间），禁 max-*/object-fit：
+     letterbox 会破坏 getBoundingClientRect 坐标映射。 */
+}
+.se-canvas.tool-text {
+  cursor: text;
+}
+
+/* 文本工具的浮动输入框（逻辑坐标定位，样式模拟画布文字） */
+.se-text-input {
+  position: absolute;
+  min-width: 140px;
+  padding: 1px 4px;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px dashed rgba(0, 0, 0, 0.55);
+  outline: 2px solid var(--accent, #4c8dff);
+  font-weight: 700;
+  font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
+  z-index: 5;
+}
+
+/* 提交失败提示（工具条上方悬浮） */
+.se-err {
+  position: fixed;
+  bottom: 88px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 6px 14px;
+  border-radius: 8px;
+  background: rgba(120, 20, 20, 0.92);
+  color: #fff;
+  font-size: 13px;
+  z-index: 20;
+  max-width: 70vw;
+  word-break: break-all;
+}
+
+/* 编辑工具条：底部居中悬浮 */
+.se-toolbar {
+  position: fixed;
+  bottom: 28px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(24, 24, 28, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  z-index: 10;
+}
+
+.se-toolbar button {
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.se-toolbar .se-tool {
+  padding: 5px 10px;
+  border-radius: 6px;
+}
+
+.se-toolbar .se-tool:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.se-toolbar .se-tool.active {
+  background: var(--accent, #4c8dff);
+  color: #fff;
+}
+
+.se-toolbar .se-tool:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.se-toolbar .se-divider {
+  width: 1px;
+  height: 20px;
+  background: rgba(255, 255, 255, 0.15);
+  margin: 0 6px;
+}
+
+/* 色板圆点：当前色白圈标识 */
+.se-toolbar .se-color {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  margin: 0 2px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.25);
+}
+
+.se-toolbar .se-color.active {
+  border-color: #fff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6);
+}
+
+.se-toolbar .se-commit {
+  padding: 6px 14px;
+  border-radius: 6px;
+  background: var(--accent, #4c8dff);
+  color: #fff;
+  font-weight: 600;
+}
+
+.se-toolbar .se-commit:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+.se-toolbar .se-commit:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
