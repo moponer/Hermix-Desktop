@@ -1088,14 +1088,18 @@ fn ensure_index(allow_jwalk_fallback: bool, force: bool) {
         Ok(c) => c,
         Err(_) => return,
     };
-    if cell.building
-        || (!force
-            // TTL 只约束 jwalk 全量索引：USN 路径有 tail 重放持续保鲜，
-            // 周期性全量重建 = 周期性再弹 UAC（用户拒绝授权的元凶）。
-            && cell.index.source == IndexSource::Jwalk
-            && cell.built_at.map_or(false, |t| t.elapsed() < INDEX_TTL))
-    {
+    // 已建成则不重建：USN 索引由 tail 重放持续保鲜（重建 = 每次打开面板
+    // 都重扫全盘 + 反复 resnap，正是「关掉再开就归零重扫」的元凶）；
+    // jwalk 索引没有增量，靠 TTL 过期后才重建。
+    if cell.building {
         return;
+    }
+    if !force && cell.built_at.is_some() {
+        let fresh = cell.index.source == IndexSource::Usn
+            || cell.built_at.map_or(false, |t| t.elapsed() < INDEX_TTL);
+        if fresh {
+            return;
+        }
     }
     cell.building = true;
     drop(cell);

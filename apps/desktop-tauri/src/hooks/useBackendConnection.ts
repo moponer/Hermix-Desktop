@@ -6,8 +6,8 @@ import * as api from "../api";
 export type ConnState = "connecting" | "online" | "offline";
 
 /** 重启后等待服务可应答的预算。hermix.exe 冷启动（嵌入模型加载、
- *  toolset 初始化）实测可达数十秒，固定等 1.5s 必然误判为失败。 */
-const RESTART_PROBE_BUDGET_MS = 30_000;
+ *  toolset 初始化）实测可达数十秒（watchdog 侧校准 ~70s），30s 必然误判。 */
+const RESTART_PROBE_BUDGET_MS = 90_000;
 const RESTART_PROBE_INTERVAL_MS = 1_000;
 
 /**
@@ -79,7 +79,11 @@ export function useBackendConnection() {
       void check();
     }));
     reg(listen<number>("hermix:server-restarting", () => {
-      if (cancelled) return;
+      if (cancelled || restartingRef.current) return;
+      // 去重：watchdog 每次 spawn 都发此事件（"spawn 成功→又崩"会连环
+      // 发），若每次都重开一轮 30s 轮询，restarting 永远为 true —— 左下角
+      // 无限转圈。已有轮询在跑就让它自然收尾（探活成功置 online，
+      // gave-up 事件置失败）。
       setState("offline");
       setRestarting(true);
       void (async () => {

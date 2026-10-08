@@ -26,12 +26,10 @@ export function BackendStatus() {
     <button
       onClick={() => void handleRestart()}
       disabled={restarting}
-      className="ml-1 p-0.5 rounded hover:bg-white/10 transition-colors disabled:opacity-50"
-      title="重启后端服务"
-      aria-label="重启后端服务">
-      <RefreshCw
-        className={`icon-sm ${restarting ? "animate-spin text-text-muted" : "text-text-muted"}`}
-      />
+      className="ml-1 shrink-0 px-2 h-6 rounded text-tiny font-medium text-text-secondary border border-border-secondary hover:bg-bg-tertiary transition-colors disabled:opacity-50"
+      title="重新启动本地后端服务"
+      aria-label="重新连接后端服务">
+      重新连接
     </button>
   ) : null;
 
