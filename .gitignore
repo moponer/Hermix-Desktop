@@ -156,13 +156,8 @@ apps/desktop-tauri/src-tauri/resources/esbuild/
 *.orig
 *.original
 
-# Root-level ad-hoc preview / upload temp files
-/rainforest-bg-preview.html
-/upload_*.jpg
-
-# Agent-run work outputs & root preview leftovers
+# Agent-run work outputs (local only, never committed)
 /outputs/
-/approval-card-preview.html
 
 # 手工安装的 npm tarball / 解包目录。pnpm 会跳过 wasm32 的 optionalDependencies，
 # satteri 的浏览器侧 wasm 栈必须手工拉包，过程中留下这些中间产物。

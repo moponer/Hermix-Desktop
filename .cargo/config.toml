@@ -1,4 +1,11 @@
 [build]
+# sccache 编译缓存 (2026-10-07 加入):
+#   rustc-wrapper 让每次 rustc 调用先过 sccache —— 命中缓存时直接复用产物、
+#   跳过编译; 删了 target 重编也能秒回, 多 worktree / 多 profile 共享同一套
+#   依赖编译产物, 根治 "target 持续增大" 的痛点.
+#   sccache.exe 在 PATH, 这里用绝对路径更稳 (不受 shell PATH 影响).
+rustc-wrapper = "<USERPROFILE>/.cargo/bin/sccache.exe"
+
 # 编译产物位置（2026-08-10 定案，最终形态）:
 # 这里**不配置 target-dir**. 原因:
 #   1. 绝对路径 (如 "<repo>/release/target") 锁死仓库位置,
@@ -50,3 +57,11 @@ rustflags = [
     "-C", "link-arg=/LIBPATH:C:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.26100.0\\um\\x64",
     "-C", "link-arg=/LIBPATH:C:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.26100.0\\ucrt\\x64",
 ]
+
+# 2026-10-07: sccache 缓存目录与产物位置开关
+[env]
+# sccache 编译缓存目录. 放 F 盘 (空闲多), 缓存可随时删除重建, 不影响源码.
+SCCACHE_DIR = "F:/sccache-cache"
+# 如需把产物统一挪到仓库外、避免各 worktree 各编译一份 target 滚雪球,
+# 取消下一行注释即可 (项目作者授权用环境变量而非 config 内置 target-dir):
+# CARGO_TARGET_DIR = "F:/rust-targets/hermix-desktop"
