@@ -44,9 +44,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use base64::engine::general_purpose;
+use base64::Engine;
 use indexmap::IndexMap;
 use once_cell::sync::Lazy;
 use serde_json::{json, Value};
+use std::path::{Path, PathBuf};
 
 use hermix_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema, traits::RiskLevel as CoreRisk};
 use hermix_cua::{
@@ -204,6 +207,55 @@ fn extract_session_id(params: &Value) -> String {
         .to_string()
 }
 
+/// 解析可选的 `hwnd`。Windows 句柄恒为正，0 与负值要么是无意义的调用，
+/// 要么会让 UIA 拿 NULL 句柄、回退成从桌面根遍历——那正是"传了 hwnd
+/// 却仍拿到整棵桌面树"的现象。两种都显式报错，不留静默路径。
+fn parse_optional_hwnd(params: &Value) -> Result<Option<isize>, ToolError> {
+    match params.get("hwnd").and_then(|v| v.as_i64()) {
+        None => Ok(None),
+        Some(h) if h > 0 => Ok(Some(h as isize)),
+        Some(h) => Err(ToolError::InvalidParams(format!(
+            "hwnd must be a positive isize (got {h})"
+        ))),
+    }
+}
+
+/// 解析必需的 `hwnd`：没有它就无从下手的工具（按句柄点击窗口）用这条。
+fn parse_required_hwnd(params: &Value) -> Result<isize, ToolError> {
+    parse_optional_hwnd(params)?.ok_or_else(|| ToolError::InvalidParams("missing 'hwnd'".into()))
+}
+
+/// 把截图的 base64 载荷写成 PNG 文件，返回写入字节数。
+///
+/// 走这条路时像素不进上下文：1920×1080 的帧 base64 后是 1–2 MB，而每次
+/// 工具结果都会留在对话历史里被后续每一轮重复计费——这是 cua 工具
+/// token 成本的主要来源。给了 `save_to` 就只回路径和尺寸。
+fn save_png_base64(png_base64: &str, path: &Path) -> Result<usize, ToolError> {
+    let bytes = general_purpose::STANDARD
+        .decode(png_base64)
+        .map_err(|e| ToolError::ExecutionFailed(format!("screenshot base64 decode failed: {e}")))?;
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                ToolError::ExecutionFailed(format!("create_dir_all({}): {e}", parent.display()))
+            })?;
+        }
+    }
+    std::fs::write(path, &bytes)
+        .map_err(|e| ToolError::ExecutionFailed(format!("write({}): {e}", path.display())))?;
+    Ok(bytes.len())
+}
+
+/// 读取可选的 `save_to`。空串按未指定处理，免得写出一个空名文件。
+fn save_to_path(params: &Value) -> Option<PathBuf> {
+    params
+        .get("save_to")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+}
+
 // ---------------------------------------------------------------------------
 // 1) cua_screenshot
 // ---------------------------------------------------------------------------
@@ -260,6 +312,21 @@ impl ToolHandler for CuaScreenshotHandler {
         };
         let _ = TRACE.record(&event);
         let result = result?;
+        // 落盘分支：给 `save_to` 时只回路径与尺寸，像素不进上下文。
+        if let Some(path) = save_to_path(&params) {
+            let bytes = save_png_base64(&result.png_base64, &path)?;
+            return Ok(json!({
+                "tool": "cua_screenshot",
+                "monitor": result.monitor,
+                "monitor_name": result.monitor_name,
+                "width": result.width,
+                "height": result.height,
+                "bytes": bytes,
+                "saved_to": path.display().to_string(),
+                "ok": true,
+            })
+            .to_string());
+        }
         serde_json::to_string_pretty(&result).map_err(|e| {
             ToolError::ExecutionFailed(format!("screenshot JSON encode failed: {e}"))
         })
@@ -273,6 +340,16 @@ impl ToolHandler for CuaScreenshotHandler {
                 "type": "integer",
                 "minimum": 0,
                 "description": "Display index (0 = primary). Phase 1 only supports 0."
+            }),
+        );
+        props.insert(
+            "save_to".into(),
+            json!({
+                "type": "string",
+                "description": "Write the PNG to this path and return only the path + dimensions. \
+                                Use this whenever the image is not needed inline: a 1920x1080 frame \
+                                costs 1-2 MB of base64 that every later turn pays for again. \
+                                Parent directories are created. Omit to get `png_base64` inline."
             }),
         );
         tool_schema(
@@ -290,7 +367,11 @@ impl ToolHandler for CuaScreenshotHandler {
              ## Cost\n\
              The PNG payload is encoded once at capture time and streamed as\n\
              `png_base64` (standard base64, no line breaks). For a 1920×1080 screen\n\
-             that is ~1–2 MB. The desktop UI renders the result inline.\n\
+             that is ~1–2 MB, and every later turn in the conversation pays for it\n\
+             again. Pass `save_to` to keep the pixels out of the context: the PNG\n\
+             is written to that path and the result carries only the path and the\n\
+             frame dimensions. Omit it when the image is needed inline (the\n\
+             desktop UI renders `png_base64` directly).\n\
              \n\
              ## Coordinate system\n\
              All click / move / type coordinates returned by subsequent tools are\n\
@@ -896,15 +977,7 @@ impl Default for CuaClickWindowHandler {
 #[async_trait]
 impl ToolHandler for CuaClickWindowHandler {
     async fn execute(&self, params: Value) -> Result<String, ToolError> {
-        let hwnd = params
-            .get("hwnd")
-            .and_then(|v| v.as_i64())
-            .ok_or_else(|| ToolError::InvalidParams("missing 'hwnd'".into()))?;
-        if hwnd <= 0 {
-            return Err(ToolError::InvalidParams(format!(
-                "hwnd must be a positive isize (got {hwnd})"
-            )));
-        }
+        let hwnd = parse_required_hwnd(&params)?;
         let button_str = params
             .get("button")
             .and_then(|v| v.as_str())
@@ -1068,17 +1141,11 @@ impl ToolHandler for CuaUiTreeHandler {
             .get("max_depth")
             .and_then(|v| v.as_u64())
             .unwrap_or(3) as u32;
-        // Was silently dropped: the schema never declared `hwnd`, so the
-        // dispatcher ignored it and every call walked from the desktop
-        // root — returning the taskbar and every other window alongside
-        // the one the caller asked about.
-        let hwnd = params
-            .get("hwnd")
-            .and_then(|v| v.as_i64())
-            // Windows handles are pointer-sized; on the 64-bit target this
-            // is a lossless width match, same convention as the other
-            // hwnd-taking handlers in this file.
-            .map(|h| h as isize);
+        // Absent → walk the whole desktop. Present → scope to that window;
+        // a non-positive value is rejected rather than passed down, which
+        // used to fall back to the desktop root silently and read as
+        // "`hwnd` is ignored".
+        let hwnd = parse_optional_hwnd(&params)?;
         let session_id = extract_session_id(&params);
 
         let started = std::time::Instant::now();
@@ -1841,6 +1908,62 @@ impl ToolHandler for CuaMoveCursorHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `hwnd` 要么生效、要么报错，绝不静默回退到桌面根：0 与负值在 UIA
+    /// 侧等同于 NULL 句柄，走出来的正是"传了 hwnd 却仍拿到整棵桌面树"。
+    #[test]
+    fn parse_optional_hwnd_accepts_absent_and_positive() {
+        assert_eq!(parse_optional_hwnd(&json!({})).unwrap(), None);
+        assert_eq!(
+            parse_optional_hwnd(&json!({"hwnd": 22151398})).unwrap(),
+            Some(22151398)
+        );
+    }
+
+    #[test]
+    fn parse_optional_hwnd_rejects_zero_and_negative() {
+        let err = parse_optional_hwnd(&json!({"hwnd": 0})).unwrap_err();
+        assert!(matches!(err, ToolError::InvalidParams(_)), "{err:?}");
+        assert!(parse_optional_hwnd(&json!({"hwnd": -1})).is_err());
+    }
+
+    /// 按句柄点击窗口这类工具没有 hwnd 就无从下手，缺失必须单独报错。
+    #[test]
+    fn parse_required_hwnd_rejects_absent() {
+        assert!(parse_required_hwnd(&json!({})).is_err());
+    }
+
+    /// `save_to` 落盘：写进去的必须是解出来的 PNG 字节，父目录要能创建。
+    #[test]
+    fn save_png_base64_writes_decoded_bytes() {
+        let raw = b"\x89PNG\r\n\x1a\nrest-of-frame";
+        let b64 = general_purpose::STANDARD.encode(raw);
+        let dir = std::env::temp_dir().join(format!("hermix-cua-save-{}", std::process::id()));
+        let path = dir.join("nested").join("shot.png");
+        let written = save_png_base64(&b64, &path).expect("落盘应当成功");
+        assert_eq!(written, raw.len());
+        assert_eq!(std::fs::read(&path).expect("文件应可读"), raw.to_vec());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 坏 base64 必须报错，而不是写出一个空文件。
+    #[test]
+    fn save_png_base64_rejects_invalid_base64() {
+        let path = std::env::temp_dir().join(format!("hermix-cua-never-{}.png", std::process::id()));
+        assert!(save_png_base64("not base64!!", &path).is_err());
+        assert!(!path.exists(), "失败时不应留下文件");
+    }
+
+    /// 空串按"未指定"处理，避免写出一个空名文件。
+    #[test]
+    fn save_to_path_treats_empty_as_unspecified() {
+        assert!(save_to_path(&json!({})).is_none());
+        assert!(save_to_path(&json!({"save_to": "  "})).is_none());
+        assert_eq!(
+            save_to_path(&json!({"save_to": "out/shot.png"})).map(|p| p.display().to_string()),
+            Some("out/shot.png".to_string())
+        );
+    }
 
     #[test]
     fn schema_names_are_stable() {
