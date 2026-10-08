@@ -1,0 +1,101 @@
+/* 截图覆盖窗（ScreenshotOverlay.tsx）—— 全屏幕布 + 选区交互。
+   契约见 docs/notes/implemented/feature/2026-10-07-screenshot-tool.md */
+
+.so-root {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  cursor: crosshair;
+  user-select: none;
+  background: #000;
+}
+
+.so-loading {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.75);
+  font-size: 14px;
+  background: #000;
+}
+
+/* 幕布照片：铺满原样显示（尺寸 = 覆盖窗尺寸，无缩放） */
+.so-backdrop {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* 选区外变暗四片 */
+.so-shade {
+  position: absolute;
+  background: rgba(0, 0, 0, 0.42);
+  pointer-events: none;
+}
+
+/* 选区边框 */
+.so-selection {
+  position: absolute;
+  border: 1px solid var(--accent, #4c8dff);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+
+/* 尺寸标签（物理像素口径） */
+.so-size-tag {
+  position: absolute;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: rgba(20, 20, 20, 0.85);
+  color: #fff;
+  font-size: 12px;
+  font-family: ui-monospace, Consolas, monospace;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+/* 模式/确认工具条：右下角悬浮，不遮内容中心 */
+.so-toolbar {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  display: flex;
+  gap: 6px;
+  padding: 6px;
+  border-radius: 8px;
+  background: rgba(24, 24, 28, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.so-toolbar button {
+  padding: 5px 12px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.so-toolbar button:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.so-toolbar button.active {
+  background: var(--accent, #4c8dff);
+  color: #fff;
+}
+
+.so-toolbar .so-confirm {
+  background: var(--accent, #4c8dff);
+  color: #fff;
+}
+
+.so-toolbar .so-cancel:hover {
+  background: rgba(232, 74, 74, 0.85);
+  color: #fff;
+}

@@ -9,6 +9,8 @@ pub mod keep_awake;
 pub mod markitdown;
 pub mod officecli;
 pub mod portable_env;
+pub mod screenshot;
+pub mod screenshot_controller;
 pub mod sidecar;
 pub mod stdio_bridge;
 pub mod system_settings;
@@ -415,6 +417,17 @@ pub fn run() {
         // L4 系统能力：桌面通知 + 开机自启。托盘不引插件（用 tauri 的
         // `tray-icon` feature，见 Cargo.toml）。
         .plugin(tauri_plugin_notification::init())
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, _shortcut, event| {
+                    if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                        if let Err(e) = screenshot_controller::start_screenshot(app.clone()) {
+                            eprintln!("[screenshot] 热键触发失败: {e}");
+                        }
+                    }
+                })
+                .build(),
+        )
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
@@ -480,6 +493,20 @@ pub fn run() {
                         // 用户错过，错过 = HELPER_FAILED 判死 = 索引全空。
                         commands_local_search::start_background_index();
                     });
+                }
+            }
+
+            // 截图全局热键（默认 Alt+Q）：setup 里注册，失败仅打日志——
+            // 热键被占用不该阻塞整个应用启动。可配置化在 M3（笔记里程碑）。
+            {
+                use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
+                match "alt+Q".parse::<Shortcut>() {
+                    Ok(sc) => {
+                        if let Err(e) = app.global_shortcut().register(sc) {
+                            eprintln!("[screenshot] 热键 Alt+Q 注册失败（被占用?）: {e}");
+                        }
+                    }
+                    Err(e) => eprintln!("[screenshot] 热键解析失败: {e}"),
                 }
             }
 
@@ -681,6 +708,10 @@ pub fn run() {
             commands_local_search::local_search_reauthorize,
             commands_local_search::local_search_open,
             commands_local_search::local_search_preview,
+            screenshot_controller::start_screenshot,
+            screenshot_controller::screenshot_window_at,
+            screenshot_controller::screenshot_confirm,
+            screenshot_controller::screenshot_cancel,
             cdp_probe::cdp_n0_probe,
             commands::render_office_preview,
             commands::document_to_markdown,

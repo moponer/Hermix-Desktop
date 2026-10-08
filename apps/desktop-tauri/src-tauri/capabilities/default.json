@@ -1,7 +1,7 @@
 {
   "identifier": "default",
   "description": "Default capabilities for Hermix Desktop",
-  "windows": ["main"],
+  "windows": ["main", "screenshot-overlay"],
   "permissions": [
     "core:default",
     "core:window:allow-minimize",

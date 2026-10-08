@@ -56,10 +56,14 @@ hermix-config = { path = "../../../crates/hermix-config" }
 # 索引常用目录；全盘首次索引在后台线程完成，不阻塞 UI）。
 jwalk = "0.9"
 nucleo-matcher = "0.3"
+tauri-plugin-global-shortcut = "2"
+image = { version = "0.25", features = ["png"] }
 
 # 索引遍历线程降为 BELOW_NORMAL 优先级：全盘扫描不抢 UI 线程。
 # windows crate 已在依赖树中（hermix-cua 同版本 0.58），仅补 Threading feature。
 [target.'cfg(windows)'.dependencies]
+# xcap：截图抓屏（GDI 一次性抓帧，方案见 docs/notes/implemented/feature/2026-10-07-screenshot-tool.md）
+xcap = "0.9"
 windows = { version = "0.58", features = [
   "Win32_Foundation",
   "Win32_Security",
@@ -72,7 +76,14 @@ windows = { version = "0.58", features = [
   "Win32_System_WindowsProgramming",
   "Win32_UI_Shell",
   "Win32_UI_WindowsAndMessaging",
+  # 截图：剪贴板直写（DataExchange/Ole）+ 窗口识别排除 cloak（Dwm）
+  "Win32_System_DataExchange",
+  "Win32_System_Ole",
+  "Win32_Graphics_Dwm",
+  "Win32_Graphics_Gdi",
 ] }
+
+[target.windows.dependencies]
 
 # 提权索引辅助进程（读 MFT 需要管理员权限，主程序不提权）。
 # 作为同 crate 的第二个 bin：构建产物与主程序同目录，

@@ -1,5 +1,6 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Minus, Square, X, MessageSquare } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
+import { Minus, Square, X, MessageSquare, Camera } from "lucide-react";
 import { useCallback } from "react";
 
 /** 标题栏按**三栏**排布，与下方 .app-body 的三列共用同一组列宽变量
@@ -40,6 +41,13 @@ export function TitleBar({ title }: { title?: string }) {
     }
   }, []);
 
+  // 截图入口之二（热键 Alt+Q 之外）：主进程内触发，无需全局热键注册。
+  const handleScreenshot = useCallback(() => {
+    void invoke("start_screenshot").catch((err) =>
+      console.error("[TitleBar] screenshot failed:", err),
+    );
+  }, []);
+
   return (
     <div className="titlebar drag">
       {/* ① 左栏 —— 与侧栏同宽 */}
@@ -75,6 +83,16 @@ export function TitleBar({ title }: { title?: string }) {
           import order — belt and braces, since a swallowed click here
           would leave the window undraggable-but-unclosable. */}
       <div className="titlebar-zone titlebar-zone--right">
+        <button
+          type="button"
+          onClick={handleScreenshot}
+          className="titlebar-btn no-drag"
+          data-tauri-no-drag
+          title="截图（Alt+Q）"
+          aria-label="截图"
+        >
+          <Camera className="icon-md" />
+        </button>
         <button
           type="button"
           onClick={handleMinimize}

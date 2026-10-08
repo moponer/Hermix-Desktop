@@ -5,10 +5,12 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import * as api from "./api";
 import App from "./App";
+import { ScreenshotOverlay } from "./components/ScreenshotOverlay";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { toastWarning } from "./hooks/useToast";
 import { ToastContainer } from "./components/ToastContainer";
 import "./styles/globals.css";
+import "./styles/screenshot-overlay.css";
 import "./styles/inline-thinking-dot.css";
 // 2026-09-29：`components.css` 已删除。它是 `components-*.css` 的陈旧副本，
 // 两者曾同时加载且后者胜出，288 个选择器被双定义，只有旧副本赢。独有的
@@ -22,11 +24,21 @@ import { restoreScale } from "./utils/uiScale";
 // 用户设定值，会看到一次明显的整体缩放跳变。
 restoreScale();
 
+// 截图覆盖窗（独立 window，hash 路由分流）：全屏幕布 + 选区交互，
+// 不渲染主应用。必须早于 App 挂载判断，避免覆盖窗加载整套聊天 UI。
+const isOverlayWindow = window.location.hash.startsWith("#/screenshot-overlay");
+
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <ErrorBoundary>
-      <App />
-      <ToastContainer />
+      {isOverlayWindow ? (
+        <ScreenshotOverlay />
+      ) : (
+        <>
+          <App />
+          <ToastContainer />
+        </>
+      )}
     </ErrorBoundary>
   </React.StrictMode>,
 );
