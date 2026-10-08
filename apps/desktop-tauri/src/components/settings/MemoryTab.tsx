@@ -68,7 +68,9 @@ function GraphView() {
     setError(null);
     try {
       const [g, hits] = await Promise.all([
-        api.getMemoryGraph(400),
+        // 160：带常驻标签的力导图在 200+ 节点开始卡顿；配合
+        // labelLayout.hideOverlap，160 是流畅与信息量的平衡点。
+        api.getMemoryGraph(160),
         query.trim() ? api.searchMemory(query.trim(), 60) : Promise.resolve({ results: [] as api.MemoryGraphNode[] }),
       ]);
       // 搜索命中集之外的节点弱化处理：直接过滤，图谱聚焦命中子图。

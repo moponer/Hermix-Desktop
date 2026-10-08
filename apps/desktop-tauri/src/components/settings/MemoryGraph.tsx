@@ -107,6 +107,7 @@ export function MemoryGraph({ nodes, edges, loading, onSelectNode }: MemoryGraph
     const palette = categoryPalette(Math.max(kinds.length, 1), dark);
     const labelColor = cssVar("--color-text-secondary");
     const edgeColor = cssVar("--color-border-primary");
+    const cardBg = cssVar("--color-bg-card");
     const data = nodes.map((n) => {
       const color = palette[kinds.indexOf(n.kind) % palette.length];
       return {
@@ -117,13 +118,12 @@ export function MemoryGraph({ nodes, edges, loading, onSelectNode }: MemoryGraph
         pinned: n.pinned,
         preview: n.preview,
         category: kinds.indexOf(n.kind),
-        symbolSize: 12 + n.salience * 30 + (n.pinned ? 6 : 0),
+        symbolSize: 10 + n.salience * 24 + (n.pinned ? 5 : 0),
         itemStyle: {
           color,
-          borderColor: n.pinned ? labelColor : "transparent",
-          borderWidth: n.pinned ? 1.5 : 0,
-          shadowBlur: dark ? 10 : 0,
-          shadowColor: dark ? color : "transparent",
+          // 卡片底色描边把节点从标签文字里"抠"出来，视觉干净且零 GPU 成本
+          borderColor: cardBg,
+          borderWidth: 2,
         },
       };
     });
@@ -135,10 +135,12 @@ export function MemoryGraph({ nodes, edges, loading, onSelectNode }: MemoryGraph
       data,
       links: edges.map((e) => ({ source: e.source, target: e.target })),
       categories: kinds.map((k) => ({ name: KIND_LABELS[k] ?? k })),
-      force: { repulsion: 150, edgeLength: [44, 150], gravity: 0.09, layoutAnimation: true },
+      // layoutAnimation:false：拖拽/缩放时不再实时重算力导（卡顿主源）
+      force: { repulsion: 150, edgeLength: [44, 150], gravity: 0.12, layoutAnimation: false },
       scaleLimit: { min: 0.4, max: 4 },
       // 节点下方常驻内容缩略：记忆库不是「一屏圆点」，肉眼要能扫读。
-      // 悬停邻接时换长缩略（60 字）放大阅读。
+      // hideOverlap 自动藏掉互相压住的标签，缩放时逐级浮现。
+      labelLayout: { hideOverlap: true },
       label: {
         show: true,
         position: "bottom",
@@ -151,6 +153,7 @@ export function MemoryGraph({ nodes, edges, loading, onSelectNode }: MemoryGraph
       },
       emphasis: {
         focus: "adjacency",
+        itemStyle: { borderWidth: 2.5 },
         label: {
           show: true,
           color: cssVar("--color-text-primary"),
@@ -161,7 +164,7 @@ export function MemoryGraph({ nodes, edges, loading, onSelectNode }: MemoryGraph
           },
         },
       },
-      lineStyle: { color: edgeColor, opacity: 0.6, curveness: 0.1 },
+      lineStyle: { color: edgeColor, opacity: 0.35, width: 1, curveness: 0.1 },
     };
     return {
       backgroundColor: "transparent",
