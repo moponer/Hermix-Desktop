@@ -18,10 +18,16 @@ export interface EditorSource {
   scale: number;
 }
 
-type Tool = "rect" | "pen" | "text" | "mosaic" | "crop";
+type Tool = "rect" | "arrow" | "pen" | "text" | "mosaic" | "crop";
 
 const COLORS = ["#e5484d", "#f5a623", "#2f81f7", "#30a46c", "#111111", "#ffffff"];
 const HISTORY_MAX = 12;
+/** 笔画粗细档位（基准物理像素，实际 = 基准 × 屏缩放）。 */
+const STROKE_WIDTHS = [
+  { label: "细", w: 2 },
+  { label: "中", w: 4 },
+  { label: "粗", w: 7 },
+];
 
 export function ScreenshotEditor({
   source,
@@ -42,6 +48,7 @@ export function ScreenshotEditor({
   const [dims, setDims] = useState({ w: 0, h: 0 });
   const [tool, setTool] = useState<Tool>("rect");
   const [color, setColor] = useState(COLORS[0]);
+  const [strokeW, setStrokeW] = useState(STROKE_WIDTHS[1].w);
   const [canUndo, setCanUndo] = useState(false);
   const [committing, setCommitting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -63,9 +70,9 @@ export function ScreenshotEditor({
   textBoxRef.current = textBox;
 
   // 线宽/字号/笔刷随屏缩放：4K 屏逻辑显示只有一半，固定物理值会细成发丝。
-  const LINE = Math.max(3, Math.round(3 * source.scale));
+  const lineW = Math.max(2, Math.round(strokeW * source.scale));
   const TEXT_PX = Math.max(18, Math.round(20 * source.scale));
-  const BRUSH = Math.max(10, Math.round(14 * source.scale));
+  const BRUSH = Math.max(8, Math.round(strokeW * 4 * source.scale));
 
   /** 由基底重建全尺寸像素化画布（涂抹取样源）。 */
   const buildMosaic = useCallback((src: HTMLCanvasElement) => {
@@ -173,6 +180,29 @@ export function ScreenshotEditor({
     };
   };
 
+  /** 箭头：线身 + 实心三角头（张角 ±~25°）。预览与提交共用同一函数。 */
+  const drawArrow = (
+    ctx: CanvasRenderingContext2D,
+    x0: number, y0: number, x1: number, y1: number,
+  ) => {
+    const angle = Math.atan2(y1 - y0, x1 - x0);
+    const head = Math.max(lineW * 3.5, 10);
+    ctx.strokeStyle = colorRef.current;
+    ctx.fillStyle = colorRef.current;
+    ctx.lineWidth = lineW;
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(x0, y0);
+    ctx.lineTo(x1, y1);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x1 - head * Math.cos(angle - Math.PI / 7), y1 - head * Math.sin(angle - Math.PI / 7));
+    ctx.lineTo(x1 - head * Math.cos(angle + Math.PI / 7), y1 - head * Math.sin(angle + Math.PI / 7));
+    ctx.closePath();
+    ctx.fill();
+  };
+
   const commitTextBox = useCallback(() => {
     const tb = textBoxRef.current;
     const base = baseRef.current;
@@ -229,7 +259,7 @@ export function ScreenshotEditor({
       const ctx = base.getContext("2d");
       if (ctx) {
         ctx.strokeStyle = colorRef.current;
-        ctx.lineWidth = LINE;
+        ctx.lineWidth = lineW;
         ctx.lineCap = "round";
         ctx.lineJoin = "round";
         ctx.beginPath();
@@ -250,6 +280,8 @@ export function ScreenshotEditor({
         ctx.restore();
         redraw();
       }
+    } else if (tool === "arrow") {
+      redraw((ctx) => drawArrow(ctx, drag.x0, drag.y0, p.x, p.y));
     } else if (tool === "rect" || tool === "crop") {
       redraw((ctx) => {
         const x = Math.min(drag.x0, p.x);
@@ -258,7 +290,7 @@ export function ScreenshotEditor({
         const h = Math.abs(p.y - drag.y0);
         if (tool === "rect") {
           ctx.strokeStyle = colorRef.current;
-          ctx.lineWidth = LINE;
+          ctx.lineWidth = lineW;
           ctx.strokeRect(x, y, w, h);
         } else {
           // 裁剪预览：选框外压暗 + 白框
@@ -294,9 +326,17 @@ export function ScreenshotEditor({
         const ctx = base.getContext("2d");
         if (ctx) {
           ctx.strokeStyle = colorRef.current;
-          ctx.lineWidth = LINE;
+          ctx.lineWidth = lineW;
           ctx.strokeRect(x, y, w, h);
         }
+      }
+      redraw();
+    } else if (tool === "arrow") {
+      const p = toImg(e);
+      if (Math.hypot(p.x - drag.x0, p.y - drag.y0) > 6) {
+        pushHistory(base.toDataURL("image/png"));
+        const ctx = base.getContext("2d");
+        if (ctx) drawArrow(ctx, drag.x0, drag.y0, p.x, p.y);
       }
       redraw();
     } else if (tool === "crop") {
@@ -333,6 +373,7 @@ export function ScreenshotEditor({
 
   const tools: { id: Tool; label: string; title: string }[] = [
     { id: "rect", label: "▭ 框选", title: "画矩形框" },
+    { id: "arrow", label: "➜ 箭头", title: "拖拽画指示箭头" },
     { id: "pen", label: "✎ 画笔", title: "自由画笔" },
     { id: "text", label: "T 文本", title: "点击画布输入文字" },
     { id: "mosaic", label: "▓ 涂抹", title: "马赛克涂抹遮蔽隐私" },
@@ -396,6 +437,19 @@ export function ScreenshotEditor({
             onClick={() => setColor(c)}
           />
         ))}
+        <div className="se-divider" />
+        <div className="se-widths" title="笔画粗细（框选/箭头/画笔/涂抹共用）">
+          {STROKE_WIDTHS.map((s) => (
+            <button
+              key={s.w}
+              className={cx("se-width", strokeW === s.w && "active")}
+              title={`粗细：${s.label}`}
+              onClick={() => setStrokeW(s.w)}
+            >
+              <span style={{ width: 4 + s.w * 2, height: 4 + s.w * 2 }} />
+            </button>
+          ))}
+        </div>
         <div className="se-divider" />
         <button
           className="se-tool"

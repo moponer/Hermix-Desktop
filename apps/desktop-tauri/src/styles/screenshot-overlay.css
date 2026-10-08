@@ -252,6 +252,37 @@
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6);
 }
 
+/* 笔画粗细三档：圆点大小直观映射实际粗细 */
+.se-toolbar .se-widths {
+  display: flex;
+  gap: 2px;
+}
+
+.se-toolbar .se-width {
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.se-toolbar .se-width:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.se-toolbar .se-width.active {
+  background: var(--accent, #4c8dff);
+  color: #fff;
+}
+
+.se-toolbar .se-width span {
+  display: block;
+  border-radius: 50%;
+  background: currentColor;
+}
+
 .se-toolbar .se-commit {
   padding: 6px 14px;
   border-radius: 6px;
