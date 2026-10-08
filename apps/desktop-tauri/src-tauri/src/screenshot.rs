@@ -27,6 +27,8 @@ pub struct CaptureSession {
     /// 该位图对应显示器左上角在虚拟屏幕坐标系的位置
     pub origin_x: i32,
     pub origin_y: i32,
+    /// 该显示器的 DPI 缩放（逻辑→物理换算），主窗缩放不代表覆盖屏
+    pub scale: f64,
 }
 
 static SESSION: once_cell::sync::OnceCell<std::sync::Mutex<Option<CaptureSession>>> =
@@ -112,11 +114,18 @@ pub fn capture_monitor_at_cursor() -> Result<CaptureSession, String> {
     let (Ok(ox), Ok(oy)) = (monitor.x(), monitor.y()) else {
         return Err("显示器坐标获取失败".into());
     };
+    let scale = monitor
+        .scale_factor()
+        .map(|s| s as f64)
+        .ok()
+        .filter(|s| *s > 0.0)
+        .unwrap_or(1.0);
     Ok(CaptureSession {
         width: image.width(),
         height: image.height(),
         origin_x: ox,
         origin_y: oy,
+        scale,
         pixels,
     })
 }
@@ -140,45 +149,76 @@ pub struct WindowRect {
 }
 
 #[cfg(windows)]
-pub fn window_rect_at(cursor: (i32, i32)) -> Option<WindowRect> {
-    use windows::Win32::Foundation::{HWND, POINT, RECT};
+pub fn window_rect_at(cursor: (i32, i32), exclude: isize) -> Option<WindowRect> {
+    use windows::Win32::Foundation::{BOOL, HWND, LPARAM, POINT, RECT};
     use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetAncestor, GetWindowRect, IsWindowVisible, WindowFromPoint, GA_ROOT,
+        EnumWindows, GetWindowRect, IsIconic, IsWindowVisible,
     };
 
-    let pt = POINT { x: cursor.0, y: cursor.1 };
-    unsafe {
-        let hit = WindowFromPoint(pt);
-        if hit.0.is_null() {
-            return None;
+    // EnumWindows 按 Z 序（顶到底）枚举顶层窗口：跳过覆盖窗自身（全屏置顶，
+    // WindowFromPoint 永远先命中它），取第一个可见、未最小化、未 cloak 且
+    // 包含该点的窗口。不能用 WindowFromPoint——它只给最顶窗口，无法跳过覆盖窗。
+    struct Ctx {
+        pt: POINT,
+        exclude: isize,
+        result: Option<WindowRect>,
+    }
+    unsafe extern "system" fn probe(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        let ctx = unsafe { &mut *(lparam.0 as *mut Ctx) };
+        if ctx.result.is_some() {
+            return false.into();
         }
-        let root = GetAncestor(hit, GA_ROOT);
-        if root.0.is_null() || !IsWindowVisible(root).as_bool() {
-            return None;
+        if hwnd.0 as isize == ctx.exclude {
+            return true.into();
+        }
+        if !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() {
+            return true.into();
+        }
+        let mut rect = RECT::default();
+        if GetWindowRect(hwnd, &mut rect).is_err() {
+            return true.into();
+        }
+        let (l, t, r, b) = (rect.left, rect.top, rect.right, rect.bottom);
+        if r <= l || b <= t {
+            return true.into();
         }
         // cloak 的 UWP 幽灵窗（如搜索宿主）不参与识别
         let mut cloaked: u32 = 0;
         let _ = DwmGetWindowAttribute(
-            HWND(root.0),
+            hwnd,
             DWMWA_CLOAKED,
             &mut cloaked as *mut u32 as *mut _,
             std::mem::size_of::<u32>() as u32,
         );
         if cloaked != 0 {
-            return None;
+            return true.into();
         }
-        let mut rect = RECT::default();
-        if GetWindowRect(root, &mut rect).is_err() {
-            return None;
+        if ctx.pt.x < l || ctx.pt.x >= r || ctx.pt.y < t || ctx.pt.y >= b {
+            return true.into();
         }
-        // 覆盖窗自身也不参与（用户画到哪都指到覆盖窗上）
-        let (w, h) = (rect.right - rect.left, rect.bottom - rect.top);
-        if w <= 0 || h <= 0 {
-            return None;
-        }
-        Some(WindowRect { x: rect.left, y: rect.top, width: w, height: h })
+        ctx.result = Some(WindowRect { x: l, y: t, width: r - l, height: b - t });
+        false.into() // 命中即停
     }
+
+    unsafe {
+        let mut ctx = Ctx {
+            pt: POINT { x: cursor.0, y: cursor.1 },
+            exclude,
+            result: None,
+        };
+        let _ = EnumWindows(Some(probe), LPARAM(&mut ctx as *mut Ctx as isize));
+        ctx.result
+    }
+}
+
+/// ESC 是否处于按下状态。覆盖窗失去键盘焦点时 webview keydown 收不到，
+/// 控制器用它做兜底退出（GetAsyncKeyState 是系统级状态，与焦点无关）。
+#[cfg(windows)]
+pub fn esc_pressed() -> bool {
+    use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+    const VK_ESCAPE: i32 = 0x1B;
+    unsafe { (GetAsyncKeyState(VK_ESCAPE) as u16) & 0x8000 != 0 }
 }
 
 // ── 剪贴板直写（CF_DIB + 注册格式 "PNG" 双格式）─────────────────
@@ -321,6 +361,7 @@ mod tests {
             height: 2,
             origin_x: 100,
             origin_y: 200,
+            scale: 1.0,
         }
     }
 

@@ -7,7 +7,7 @@ import * as api from "./api";
 import App from "./App";
 import { ScreenshotOverlay } from "./components/ScreenshotOverlay";
 import { ErrorBoundary } from "./components/ErrorBoundary";
-import { toastWarning } from "./hooks/useToast";
+import { toastError, toastSuccess, toastWarning } from "./hooks/useToast";
 import { ToastContainer } from "./components/ToastContainer";
 import "./styles/globals.css";
 import "./styles/screenshot-overlay.css";
@@ -20,13 +20,20 @@ import "./styles/workbench.css";
 import "./styles/inline-approval-card.css";
 import { restoreScale } from "./utils/uiScale";
 
-// 恢复上次界面缩放。必须早于 React 渲染：否则首帧按 100% 布局、第二帧才跳到
-// 用户设定值，会看到一次明显的整体缩放跳变。
-restoreScale();
-
 // 截图覆盖窗（独立 window，hash 路由分流）：全屏幕布 + 选区交互，
 // 不渲染主应用。必须早于 App 挂载判断，避免覆盖窗加载整套聊天 UI。
 const isOverlayWindow = window.location.hash.startsWith("#/screenshot-overlay");
+
+if (isOverlayWindow) {
+  // 覆盖窗立即移除启动遮罩：遮罩 z-index 9999、亮色主题白底，曾把覆盖窗
+  // 糊成全屏白屏直到 10-20s 兜底触发。splash 生命周期整段对覆盖窗跳过。
+  document.getElementById("splash")?.remove();
+} else {
+  // 恢复上次界面缩放。必须早于 React 渲染：否则首帧按 100% 布局、第二帧才
+  // 跳到用户设定值，会看到一次明显的整体缩放跳变。覆盖窗禁用——zoom≠1 会
+  // 破坏选区屏幕坐标换算。
+  restoreScale();
+}
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
@@ -217,58 +224,70 @@ async function pollHealth() {
   safeDismiss(true);
 }
 
-// 终极兜底：先于所有探测注册，保证 splash 永不永久卡住。
-setTimeout(() => safeDismiss(false), HARD_FALLBACK_MS);
+// ── Splash 生命周期：仅主窗执行。覆盖窗复用本模块，但后端/启动屏逻辑
+//    与它无关，跑一遍只会拖慢首帧并把白底遮罩糊在全屏画布上。──
+if (!isOverlayWindow) {
+  // 终极兜底：先于所有探测注册，保证 splash 永不永久卡住。
+  setTimeout(() => safeDismiss(false), HARD_FALLBACK_MS);
 
-// 启动即动：不等 boot_stage 回查（invoke 往返有延迟，且失败路径才开爬的
-// 旧逻辑让 splash 在空窗期死在 0%）。模块加载时立刻点亮阶段 0 + 开爬行，
-// 真实 boot-stage 事件到达后 advanceSplashStage 会自然接管并停爬。
-advanceSplashStage("正在准备运行环境…");
-startProgressCrawl();
+  // 启动即动：不等 boot_stage 回查（invoke 往返有延迟，且失败路径才开爬的
+  // 旧逻辑让 splash 在空窗期死在 0%）。模块加载时立刻点亮阶段 0 + 开爬行，
+  // 真实 boot-stage 事件到达后 advanceSplashStage 会自然接管并停爬。
+  advanceSplashStage("正在准备运行环境…");
+  startProgressCrawl();
 
-pollHealth();
+  pollHealth();
 
-// Tauri 端 server-ready 事件（旧机制，保留兼容）：收到即 dismiss。
-listen("hermix:server-ready", () => {
-  setTimeout(() => safeDismiss(false), 600);
-});
+  // Tauri 端 server-ready 事件（旧机制，保留兼容）：收到即 dismiss。
+  listen("hermix:server-ready", () => {
+    setTimeout(() => safeDismiss(false), 600);
+  });
 
-// 启动阶段文案：Rust setup 的每个真实步骤都会 emit `hermix:boot-stage`。
-// setup 可能早于前端 listen，所以挂载后回查一次当前阶段补上丢失的事件。
-// 收到即推进阶段；Rust 端最后一步 emit 的文案含"就绪"——此时全阶段点亮
-// 并 dismiss（与 server-ready / pollHealth 成功三路竞走，先到先关）。
-listen<string>("hermix:boot-stage", (event) => {
-  advanceSplashStage(event.payload ?? "");
-  if (event.payload && event.payload.includes("就绪")) {
-    safeDismiss(false);
-  }
-});
-
-// 挂载后回查当前阶段（setup 可能早于 listen，补上错过的事件）。
-// 回查失败 / 返回空（旧 exe 没有 boot_stage command）都开爬行兜底 ——
-// 修复"进度条永远 0%、启动项全灰"的死屏观感。
-invoke<string>("boot_stage")
-  .then((stage) => {
-    if (stage) {
-      advanceSplashStage(stage);
-    } else {
-      startProgressCrawl();
+  // 启动阶段文案：Rust setup 的每个真实步骤都会 emit `hermix:boot-stage`。
+  // setup 可能早于前端 listen，所以挂载后回查一次当前阶段补上丢失的事件。
+  // 收到即推进阶段；Rust 端最后一步 emit 的文案含"就绪"——此时全阶段点亮
+  // 并 dismiss（与 server-ready / pollHealth 成功三路竞走，先到先关）。
+  listen<string>("hermix:boot-stage", (event) => {
+    advanceSplashStage(event.payload ?? "");
+    if (event.payload && event.payload.includes("就绪")) {
+      safeDismiss(false);
     }
-  })
-  .catch(() => {
-    // command 不存在（旧 exe）或纯浏览器调试：爬行兜底撑住观感。
-    startProgressCrawl();
   });
 
-// 无边框窗口没有系统标题栏：启动异常卡住时，用户得能最小化/关闭。
-(function bindSplashWindowControls() {
-  const bind = (id: string, action: () => void) => {
-    document.getElementById(id)?.addEventListener("click", action);
-  };
-  bind("sp-minimize", () => {
-    void getCurrentWindow().minimize().catch(() => {});
+  // 挂载后回查当前阶段（setup 可能早于 listen，补上错过的事件）。
+  // 回查失败 / 返回空（旧 exe 没有 boot_stage command）都开爬行兜底 ——
+  // 修复"进度条永远 0%、启动项全灰"的死屏观感。
+  invoke<string>("boot_stage")
+    .then((stage) => {
+      if (stage) {
+        advanceSplashStage(stage);
+      } else {
+        startProgressCrawl();
+      }
+    })
+    .catch(() => {
+      // command 不存在（旧 exe）或纯浏览器调试：爬行兜底撑住观感。
+      startProgressCrawl();
+    });
+
+  // 截图反馈：Rust 会话结果经全局事件回主窗（成功复制 / 失败原因）。
+  listen<string>("hermix:screenshot-error", (event) => {
+    toastError(event.payload ? `截图失败：${event.payload}` : "截图失败");
   });
-  bind("sp-close", () => {
-    void getCurrentWindow().close().catch(() => {});
+  listen("hermix:screenshot-copied", () => {
+    toastSuccess("截图已复制到剪贴板");
   });
-})();
+
+  // 无边框窗口没有系统标题栏：启动异常卡住时，用户得能最小化/关闭。
+  (function bindSplashWindowControls() {
+    const bind = (id: string, action: () => void) => {
+      document.getElementById(id)?.addEventListener("click", action);
+    };
+    bind("sp-minimize", () => {
+      void getCurrentWindow().minimize().catch(() => {});
+    });
+    bind("sp-close", () => {
+      void getCurrentWindow().close().catch(() => {});
+    });
+  })();
+}

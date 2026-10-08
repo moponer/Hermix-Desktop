@@ -21,6 +21,33 @@
   background: #000;
 }
 
+/* 帧拉取失败：错误文案 + 关闭按钮（ESC / Rust 侧键盘监听也可退出） */
+.so-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  max-width: 480px;
+  padding: 20px 24px;
+  text-align: center;
+  word-break: break-all;
+}
+
+.so-error button {
+  padding: 6px 18px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 6px;
+  background: transparent;
+  color: #fff;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.so-error button:hover {
+  background: rgba(232, 74, 74, 0.85);
+  border-color: transparent;
+}
+
 /* 幕布照片：铺满原样显示（尺寸 = 覆盖窗尺寸，无缩放） */
 .so-backdrop {
   position: absolute;

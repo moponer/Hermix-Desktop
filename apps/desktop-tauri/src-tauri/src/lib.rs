@@ -421,9 +421,14 @@ pub fn run() {
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, _shortcut, event| {
                     if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
-                        if let Err(e) = screenshot_controller::start_screenshot(app.clone()) {
-                            eprintln!("[screenshot] 热键触发失败: {e}");
-                        }
+                        // spawn_blocking：抓屏 + PNG 编码数秒，绝不能占主线程。
+                        let app = app.clone();
+                        tauri::async_runtime::spawn_blocking(move || {
+                            if let Err(e) = screenshot_controller::run_session(&app) {
+                                eprintln!("[screenshot] 热键触发失败: {e}");
+                                let _ = app.emit("hermix:screenshot-error", e);
+                            }
+                        });
                     }
                 })
                 .build(),
@@ -709,6 +714,7 @@ pub fn run() {
             commands_local_search::local_search_open,
             commands_local_search::local_search_preview,
             screenshot_controller::start_screenshot,
+            screenshot_controller::screenshot_frame_data,
             screenshot_controller::screenshot_window_at,
             screenshot_controller::screenshot_confirm,
             screenshot_controller::screenshot_cancel,

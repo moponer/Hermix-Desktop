@@ -1,9 +1,10 @@
 // 截图选区覆盖窗（独立 window：index.html#/screenshot-overlay）。
 // 全屏幕布上画矩形 / 窗口模式高亮；确认 → screenshot_confirm → 剪贴板。
+// 帧经 invoke("screenshot_frame_data") 拉取（建窗前已入缓存，无时序竞态）；
+// 窗口 visible(false) 创建，帧就绪后 show——白屏不可能出现。
 // 交互契约见 docs/notes/implemented/feature/2026-10-07-screenshot-tool.md。
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 interface FramePayload {
@@ -26,6 +27,7 @@ type Mode = "rect" | "window";
 
 export function ScreenshotOverlay() {
   const [frame, setFrame] = useState<FramePayload | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [mode, setMode] = useState<Mode>("rect");
   // 选区：物理像素（虚拟屏幕坐标）；state 存逻辑像素（CSS 尺寸）。
   const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null);
@@ -33,18 +35,21 @@ export function ScreenshotOverlay() {
   const [hoverWin, setHoverWin] = useState<WindowRect | null>(null);
   const frameRef = useRef<FramePayload | null>(null);
   frameRef.current = frame;
+  // 窗口模式 hover 去抖：rect 没变不 setState，避免 mousemove 洪泛重渲染。
+  const lastHoverKeyRef = useRef<string>("");
 
-  // 通知 Rust 覆盖窗就绪 → 收帧。
+  // 拉取幕布帧；无论成败都要 show 窗口（创建时是隐藏的，失败也得可见可退）。
   useEffect(() => {
-    let un: (() => void) | undefined;
     void (async () => {
-      const unListen = await listen<FramePayload>("screenshot-frame", (e) => {
-        setFrame(e.payload);
-      });
-      un = unListen;
-      await emit("screenshot-overlay-ready");
+      try {
+        const meta = await invoke<FramePayload>("screenshot_frame_data");
+        setFrame(meta);
+      } catch (e) {
+        setLoadError(String(e));
+      } finally {
+        void getCurrentWindow().show().catch(() => {});
+      }
     })();
-    return () => un?.();
   }, []);
 
   const cancel = useCallback(() => {
@@ -75,6 +80,8 @@ export function ScreenshotOverlay() {
         e.preventDefault();
         setMode((m) => (m === "rect" ? "window" : "rect"));
         setRect(null);
+        lastHoverKeyRef.current = "";
+        setHoverWin(null);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -114,7 +121,14 @@ export function ScreenshotOverlay() {
         y: f.origin_y + Math.round(p.y * f.scale),
       };
       void invoke<WindowRect | null>("screenshot_window_at", { x: phys.x, y: phys.y }).then(
-        (r) => setHoverWin(r ?? null),
+        (r) => {
+          const win = r ?? null;
+          const key = win ? `${win.x},${win.y},${win.width},${win.height}` : "none";
+          if (key !== lastHoverKeyRef.current) {
+            lastHoverKeyRef.current = key;
+            setHoverWin(win);
+          }
+        },
       );
       return;
     }
@@ -147,6 +161,19 @@ export function ScreenshotOverlay() {
       });
     }
   };
+
+  if (loadError) {
+    return (
+      <div className="so-loading">
+        <div className="so-error">
+          <div>截图初始化失败：{loadError}</div>
+          <button type="button" onClick={cancel}>
+            关闭（ESC）
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (!frame) {
     return <div className="so-loading">正在截取屏幕…</div>;

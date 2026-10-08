@@ -15,6 +15,11 @@
       // 暗色兜底：没设置主题且系统偏好暗色 → 默认 dark。
       (function() {
         var root = document.documentElement;
+        // 截图覆盖窗：底色压黑。主启动遮罩/亮色主题都是白底，覆盖窗复用
+        // 本页面时白底会在 JS 就绪前整屏闪白。
+        if (location.hash.indexOf("#/screenshot-overlay") === 0) {
+          root.setAttribute("data-overlay", "1");
+        }
         function apply(id) {
           root.setAttribute("data-theme", id);
           try { root.style.colorScheme = id === "light" ? "light" : "dark"; } catch (_) {}
@@ -83,6 +88,8 @@
       }
 
       html, body, #root { height: 100%; margin: 0; }
+      /* 截图覆盖窗：整页压黑，见上方 bootstrap 脚本 */
+      html[data-overlay], html[data-overlay] body { background: #000 !important; }
       body {
         background: var(--sp-bg);
         color: var(--sp-ink);
