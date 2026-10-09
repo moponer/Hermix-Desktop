@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>开发者文档 —— Hermix</title>
+<meta name="description" content="仓库结构、构建、内核四件套、接缝与插件、工具开发、HTTP 接口、数据模型、测试门禁、发版流程。" />
+<link rel="stylesheet" href="assets/site.css" />
+</head>
+<body>
+
+<nav class="nav" data-nav></nav>
+
+<div class="docs">
+  <aside class="side" id="side"></aside>
+  <main class="main" id="main"></main>
+</div>
+
+<footer class="ft" data-footer></footer>
+
+<script src="assets/site.js"></script>
+<script src="assets/docs.js"></script>
+<script>
+  HERMIX.boot('docs');
+  (function () {
+    var docs = (window.DOCS || {}).dev || [];
+    var side = document.getElementById('side');
+    var main = document.getElementById('main');
+
+    side.innerHTML =
+      '<div class="k">开发者文档</div>' +
+      docs.map(function (d) {
+        return '<a href="#' + d.id + '" data-id="' + d.id + '">' + d.title + '</a>';
+      }).join('') +
+      '<div class="k">其它</div>' +
+      '<a href="docs.html">使用文档</a>' +
+      '<a href="articles.html">文章</a>';
+
+    main.innerHTML = docs.map(function (d) {
+      return '<section id="' + d.id + '"><h2>' + d.title + '</h2>' + d.body.join('') + '</section>';
+    }).join('');
+
+    var links = Array.prototype.slice.call(side.querySelectorAll('[data-id]'));
+    function mark() {
+      var id = location.hash.replace('#', '');
+      links.forEach(function (a) { a.classList.toggle('on', a.dataset.id === id); });
+    }
+    window.addEventListener('hashchange', mark);
+
+    if (location.hash) {
+      var t = document.querySelector(location.hash);
+      if (t) setTimeout(function () { t.scrollIntoView(); }, 60);
+    } else if (links.length) {
+      links[0].classList.add('on');
+    }
+    mark();
+  })();
+</script>
+</body>
+</html>

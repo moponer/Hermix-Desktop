@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>使用文档 —— Hermix</title>
+<meta name="description" content="安装、配置模型、对话与会话、审批边界、本机工具、定时任务、记忆、手机配对、数据备份。" />
+<link rel="stylesheet" href="assets/site.css" />
+</head>
+<body>
+
+<nav class="nav" data-nav></nav>
+
+<div class="docs">
+  <aside class="side" id="side"></aside>
+  <main class="main" id="main"></main>
+</div>
+
+<footer class="ft" data-footer></footer>
+
+<script src="assets/site.js"></script>
+<script src="assets/docs.js"></script>
+<script>
+  HERMIX.boot('docs');
+  (function () {
+    var docs = (window.DOCS || {}).user || [];
+    var side = document.getElementById('side');
+    var main = document.getElementById('main');
+
+    side.innerHTML =
+      '<div class="k">使用文档</div>' +
+      docs.map(function (d) {
+        return '<a href="#' + d.id + '" data-id="' + d.id + '">' + d.title + '</a>';
+      }).join('') +
+      '<div class="k">其它</div>' +
+      '<a href="dev.html">开发者文档</a>' +
+      '<a href="articles.html">文章</a>';
+
+    main.innerHTML = docs.map(function (d) {
+      return '<section id="' + d.id + '"><h2>' + d.title + '</h2>' + d.body.join('') + '</section>';
+    }).join('');
+
+    var links = Array.prototype.slice.call(side.querySelectorAll('[data-id]'));
+    function mark() {
+      var id = location.hash.replace('#', '');
+      links.forEach(function (a) { a.classList.toggle('on', a.dataset.id === id); });
+    }
+    window.addEventListener('hashchange', mark);
+
+    // 首次进入：有锚点就定位，没有就把第一节标为当前。
+    if (location.hash) {
+      var t = document.querySelector(location.hash);
+      if (t) setTimeout(function () { t.scrollIntoView(); }, 60);
+    } else if (links.length) {
+      links[0].classList.add('on');
+    }
+    mark();
+  })();
+</script>
+</body>
+</html>

@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>更新日志 —— Hermix</title>
+<meta name="description" content="Hermix Desktop / 手机端 / Spiker 的版本与更新说明。版本号与校验值取自发布清单，与客户端检查更新同源。" />
+<link rel="stylesheet" href="assets/site.css" />
+</head>
+<body>
+
+<nav class="nav" data-nav></nav>
+
+<div class="hero">
+  <h1>更新日志</h1>
+  <p class="sub">这里的版本号、发布时间和 SHA-256 都是运行时从发布清单读出来的——和客户端点「检查更新」读到的是同一份文件。清单里没有的，这里也不写。</p>
+</div>
+
+<div class="sec">
+  <h2>当前版本</h2>
+  <div class="cards3">
+    <div class="c">
+      <div class="n">Hermix Desktop</div>
+      <div class="p">Windows 便携 exe</div>
+      <div class="v"><span data-ver="desktop.version">—</span> · <span data-ver="desktop.date">—</span></div>
+    </div>
+    <div class="c">
+      <div class="n">Hermix 手机端</div>
+      <div class="p">Android APK</div>
+      <div class="v"><span data-ver="apk.version">—</span></div>
+    </div>
+    <div class="c">
+      <div class="n">Spiker</div>
+      <div class="p">Windows 便携 zip</div>
+      <div class="v"><span data-ver="spiker.version">—</span> · <span data-ver="spiker.date">—</span></div>
+    </div>
+  </div>
+</div>
+
+<div class="sec">
+  <h2>版本条目</h2>
+  <p class="lead">更新说明取自清单的 notes 字段。为空是发布流程的真实状态——发版时没提供说明文字，不是页面没加载出来。</p>
+  <div class="log">
+    <div class="v">
+      <div class="n" data-ver="desktop.version">—<small>桌面端</small></div>
+      <div class="b">
+        <h3>Hermix Desktop <span data-ver="desktop.date"></span></h3>
+        <p style="font-size:13.5px;margin-bottom:10px">更新说明：<span data-ver="desktop.notes">未填写</span></p>
+        <ul>
+          <li>界面内在线更新：下载 → 校验 SHA-256 → 改名交换 → 启新进程确认存活，失败回滚</li>
+          <li>自研安装器替代 NSIS，简体中文界面，可控安装位置与便携模式</li>
+          <li>本机文件索引走提权辅助进程读 MFT/USN，几秒建完；单卷卡死有看门狗</li>
+          <li>设置页连接渠道改主从布局，relay 配置与手机凭据签发内嵌到「手机端」面板</li>
+          <li>sidecar 刷新链自动化，产物与源码不再可能不同步</li>
+        </ul>
+      </div>
+    </div>
+    <div class="v">
+      <div class="n" data-ver="spiker.version">—<small>Spiker</small></div>
+      <div class="b">
+        <h3>Spiker <span data-ver="spiker.date"></span></h3>
+        <p style="font-size:13.5px;margin-bottom:10px">更新说明：<span data-ver="spiker.notes">未填写</span></p>
+        <ul>
+          <li>双源 GPS 并行，5 秒一轮；首屏八路并发评估</li>
+          <li>四档合规判定（T0–T3），路单「已录入未生效」先查报备再判违规</li>
+          <li>报文下发带去重、TTL、失败计数与防误发复核闸</li>
+          <li>界面内自更新，纯 Rust 四段，带进度条不弹黑窗口</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="sec">
+  <h2>近期改动</h2>
+  <p class="lead">按提交日期排列。版本号与发布时间以发布清单为准，这里是改动本身。</p>
+  <div class="log">
+    <div class="v">
+      <div class="n">2026-10-09<small>桌面端 / 手机端</small></div>
+      <div class="b">
+        <ul>
+          <li>手机端：启动图不关闭的故障修复，界面重构，配对改局域网直连</li>
+          <li>relay：手机凭据签发与撤销端点，attachNode 凭据归属</li>
+          <li>server：relay 出站接线、手机绑定落盘、撤销联动</li>
+          <li>截图无条件落盘，主上下文零 base64</li>
+          <li>浏览器会话后端独占专用 tab，消除共享槽串台</li>
+          <li>本机索引：F: 卷 MFT 枚举卡死拖垮整次索引的修复</li>
+          <li>usn-indexer 拆为独立 crate</li>
+        </ul>
+      </div>
+    </div>
+    <div class="v">
+      <div class="n">2026-10-08<small>桌面端</small></div>
+      <div class="b">
+        <ul>
+          <li>记忆：事实抽取器收窄到显式陈述，会话式触发词整族移除</li>
+          <li>记忆脑图性能重做：标签防重叠、布局动画关闭、节点上限 160</li>
+          <li>截图编辑器加箭头工具与三档笔画粗细</li>
+          <li>本机文件索引一直建不起来的两个根因修复</li>
+        </ul>
+      </div>
+    </div>
+    <div class="v">
+      <div class="n">更早<small>归档中</small></div>
+      <div class="b">
+        <ul>
+          <li>MCP 目录改本地只读，默认不编译不启动</li>
+          <li>群聊模块整体下线，前后端能力一并移除</li>
+          <li>自定义应用切换 hx-shell 架构，替换 Neutralinojs</li>
+          <li>hermix-server 与 sidecar 切到 stdio 多路复用</li>
+        </ul>
+        <p style="font-size:13px;color:var(--fg3);margin-top:10px">完整的提交历史随开源仓库一起公布。</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="sec">
+  <h2>更新源与校验</h2>
+  <p class="lead">想把更新接进自己的脚本，直接读这三个地址。</p>
+  <dl class="kv">
+    <dt>桌面端清单</dt><dd class="mono">/desktop/manifest.json</dd>
+    <dt>桌面端整包</dt><dd class="mono">/desktop/latest.zip</dd>
+    <dt>桌面端 SHA-256</dt><dd class="mono" data-ver="desktop.sha">—</dd>
+    <dt>Spiker 清单</dt><dd class="mono">/spiker/manifest.json</dd>
+    <dt>Spiker 整包</dt><dd class="mono">/spiker/latest.zip</dd>
+    <dt>Spiker SHA-256</dt><dd class="mono" data-ver="spiker.sha">—</dd>
+    <dt>APK 信息</dt><dd class="mono">/api/app-info</dd>
+    <dt>APK SHA-256</dt><dd class="mono" data-ver="apk.sha">—</dd>
+  </dl>
+  <p style="margin-top:14px;font-size:13px;color:var(--fg3)">清单里存一份校验值，响应头 X-Checksum-Sha256 再带一份。两处不一致说明上传只完成了一半。</p>
+</div>
+
+<footer class="ft" data-footer></footer>
+
+<script src="assets/site.js"></script>
+<script>HERMIX.boot('changelog');</script>
+</body>
+</html>

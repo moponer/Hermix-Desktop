@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Hermix 手机端 —— 在外面也能指挥那台电脑</title>
+<meta name="description" content="Android 伴侣端。扫二维码直连或走中转，在外面给桌面端下指令、审它要做的操作、接通话。" />
+<link rel="stylesheet" href="assets/site.css" />
+</head>
+<body>
+
+<nav class="nav" data-nav></nav>
+
+<div class="hero">
+  <h1>在外面也能指挥那台电脑</h1>
+  <p class="sub">uni-app 写的 Android 端。跟桌面端配好对，在外面下指令、审它要做的操作、接通话。它自己不跑模型，活都在你那台电脑上干。</p>
+  <div class="acts">
+    <a class="btn" href="mobile.html#download">下载 APK</a>
+    <a class="btn ghost" href="docs.html#mobile">配对文档</a>
+    <span class="m"><span data-ver="apk.version">—</span></span>
+  </div>
+</div>
+
+<div class="sec">
+  <h2>配对</h2>
+  <p class="lead">两条路，看你在不在同一个网络里。</p>
+  <div class="feat">
+    <div class="it"><div class="t">同一网络：扫一下就行</div><div class="d">扫桌面端的二维码直连。指纹核对放在输码之前，时钟差太多当场就报。</div></div>
+    <div class="it"><div class="t">不在同一网络：走中转</div><div class="d">桌面端签发长期凭据，经自建 relay 转发。桌面端点一下撤销，手机这边立刻断。</div></div>
+    <div class="it"><div class="t">中转方看不到内容</div><div class="d">中转只做路由，不参与授权判定，也不解析内层帧。它校验的只有一件事：这个凭据是不是登记过的、绑到哪个节点。</div></div>
+    <div class="it"><div class="t">撤销是幂等的</div><div class="d">即使中转站那边没有这台手机的记录，撤销也返回成功——电脑端的撤销已经成立，不该出现「点了没反应」。</div></div>
+  </div>
+</div>
+
+<div class="sec">
+  <h2>界面</h2>
+  <p class="lead">五个界面，每个只做一件事。</p>
+  <div class="list">
+    <div class="it"><b>对话</b>长按说话。不做「说完自动发」——发出去之前你总看得到内容</div>
+    <div class="it"><b>审批</b>只有允许 / 拒绝两键，没有「永久允许」这种省事的口子</div>
+    <div class="it"><b>任务</b>排队项都标位次，不主动推送</div>
+    <div class="it"><b>通话</b>第五个模式，不是常驻状态；所有审批都要你眼睛确认过</div>
+    <div class="it"><b>启动</b>没配对时显示「还没连上电脑」，这是正常状态，不是卡住</div>
+    <div class="it"><b>设置</b>连接、凭据、外观都在这</div>
+  </div>
+</div>
+
+<div class="sec">
+  <h2>为什么审批只有两个键</h2>
+  <p>「永久允许」是最好用的功能，也是最危险的：点了它之后这类操作再也不会问你，而你可能一个月后忘了自己点过。远程场景下更严重——你不在电脑前，看不到操作发生在哪个窗口、哪个文件上。</p>
+  <p>所以这里不开这个口子。桌面端同理：把每次都问改成只在越界时问，弹窗少了，但每一次都值得看一眼。</p>
+</div>
+
+<div class="sec" id="download">
+  <h2>下载</h2>
+  <p class="lead">Android。需要先有一台已安装 Hermix Desktop 的电脑并完成配对。</p>
+  <div class="dlbar">
+    <div class="ver" data-ver="apk.version">—</div>
+    <div class="info">
+      <span data-ver-hide="apk.date"><span data-ver="apk.date"></span> · </span>
+      <span data-ver-hide="apk.size">大小 <span data-ver="apk.size"></span> · </span>
+      SHA-256 <span class="mono" data-ver="apk.shaShort">—</span>
+    </div>
+    <div class="go2">
+      <a class="btn sm" data-ver-href="apk.url" href="download/hermix.apk">下载 APK</a>
+    </div>
+  </div>
+  <p style="margin-top:16px;font-size:13px;color:var(--fg3)">APK 还没上传到发布目录时，这里显示「未上传」，下载按钮不给假链接。</p>
+</div>
+
+<div class="sec">
+  <h2>相关</h2>
+  <div class="cards3">
+    <a class="c" href="desktop.html"><div class="n">Hermix Desktop</div><div class="p">被遥控的那台。配对、签发凭据、撤销都在这里发起。</div><div class="go">查看 →</div></a>
+    <a class="c" href="article.html?id=pairing-scan"><div class="n">文章：手机扫一下就连上了</div><div class="p">二维码直连，指纹核对为什么放在输码之前。</div><div class="go">阅读 →</div></a>
+    <a class="c" href="article.html?id=pairing-relay"><div class="n">文章：不在同一个网络时怎么连</div><div class="p">中转服务器的职责边界，以及撤销怎么立刻生效。</div><div class="go">阅读 →</div></a>
+  </div>
+</div>
+
+<footer class="ft" data-footer></footer>
+
+<script src="assets/site.js"></script>
+<script>
+  HERMIX.boot('mobile');
+  // APK 未上传时把按钮换成不可点状态，不给假链接。
+  document.addEventListener('hermix:versions', function (e) {
+    if (e.detail['apk.ok']) return;
+    var a = document.querySelector('[data-ver-href="apk.url"]');
+    if (a) { a.classList.add('off'); a.removeAttribute('href'); a.textContent = '暂不可下载'; }
+  });
+</script>
+</body>
+</html>

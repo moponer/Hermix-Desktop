@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>文章 —— Hermix</title>
+<link rel="stylesheet" href="assets/site.css" />
+</head>
+<body>
+
+<nav class="nav" data-nav></nav>
+
+<article class="doc" id="doc">
+  <div class="empty">文章加载中……</div>
+</article>
+
+<footer class="ft" data-footer></footer>
+
+<script src="assets/site.js"></script>
+<script src="assets/articles.js"></script>
+<script>
+  HERMIX.boot('articles');
+  (function () {
+    var all = window.ARTICLES || [];
+    var names = { desktop: 'Hermix Desktop', mobile: 'Hermix 手机端', spiker: 'Spiker' };
+    var links = { desktop: 'desktop.html', mobile: 'mobile.html', spiker: 'spiker.html' };
+    var id = new URLSearchParams(location.search).get('id');
+    var i = all.findIndex(function (a) { return a.id === id; });
+    var doc = document.getElementById('doc');
+    var notFound =
+      '<div class="crumb"><a href="articles.html">文章</a></div>' +
+      '<h1>没找到这篇</h1>' +
+      '<p>链接里的文章不存在或已改名。<a href="articles.html">回文章列表</a>。</p>';
+
+    if (i < 0) { doc.innerHTML = notFound; return; }
+
+    var a = all[i];
+    document.title = a.title + ' —— Hermix';
+
+    var prev = i > 0 ? all[i - 1] : null;
+    var next = i < all.length - 1 ? all[i + 1] : null;
+    var nav = '<p style="margin-top:34px;padding-top:16px;border-top:1px solid var(--line);font-size:13.5px">' +
+      (prev ? '← <a href="article.html?id=' + prev.id + '">' + prev.title + '</a><br>' : '') +
+      (next ? '<a href="article.html?id=' + next.id + '">' + next.title + '</a> →' : '') + '</p>';
+
+    doc.innerHTML =
+      '<div class="crumb"><a href="articles.html">文章</a> · ' +
+      '<a href="' + links[a.client] + '">' + names[a.client] + '</a></div>' +
+      '<h1>' + a.title + '</h1>' +
+      '<p class="meta">约 ' + a.words + ' 字 · ' + a.cat + '</p>' +
+      a.body.join('') +
+      '<div class="src">改写自实现笔记：' + a.source + '</div>' +
+      nav;
+  })();
+</script>
+</body>
+</html>
