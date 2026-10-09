@@ -288,6 +288,14 @@ pub async fn serve_relay_socket(
             continue;
         };
 
+        // 配对会话必须在常规帧鉴权**之前**分派：配对时手机还没有设备凭据，
+        // verify_frame_auth 必然拒绝。信任锚见 pairing::PAIRING_SESSION_ID。
+        if env.tag == FrameTag::Route && sid == crate::pairing::PAIRING_SESSION_ID {
+            let st = state.clone();
+            tokio::spawn(crate::pairing::handle_pairing_frame(st, env, out_tx.clone()));
+            continue;
+        }
+
         // 鉴权先于拆包 —— 顺序是安全属性，不是风格。
         if let Err(why) = crate::mobile_ws::verify_frame_auth(&state, &env) {
             tracing::warn!(session = %sid, reason = %why, "relay 帧鉴权失败");

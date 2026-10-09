@@ -140,6 +140,12 @@ impl Identity {
     pub fn secret_bytes(&self) -> [u8; 32] {
         self.secret.to_bytes().into()
     }
+
+    /// 拆开一帧发给本机的信封，还原明文内层帧。方向恒为
+    /// [`Direction::DeviceToNode`]（收到的都是手机侧封的）。
+    pub fn open_route(&self, env: &Envelope) -> Result<String, CryptoError> {
+        open_envelope(env, &self.secret, Direction::DeviceToNode)
+    }
 }
 
 /// shared secret → content key。

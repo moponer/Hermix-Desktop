@@ -160,7 +160,7 @@ pub fn save_at(path: &Path, s: &RelaySettings) -> Result<(), String> {
 /// 用 `rand` 铸一个 node_id 也可以，但那样「这台电脑是谁」就与它的加密身份
 /// 脱钩了——而它本来就有唯一且稳定的公钥，且 `QrPayload::server_id` 已经是
 /// `hermix-<8 hex>` 这个形状（`pairing.rs:530`），两边能对上。
-fn derive_node_id() -> String {
+pub(crate) fn derive_node_id() -> String {
     use sha2::{Digest, Sha256};
     match crate::relay_identity::load_or_create() {
         Ok(id) => {
@@ -534,6 +534,45 @@ struct IssuedPhoneCredential {
     node_id: String,
 }
 
+/// 向 relay 签发一条手机凭据，返回**明文 token**（仅此一次下发）。
+///
+/// `base` 与配置同口径（wss:// / https:// / 裸 host 均可），内部换算成 HTTP。
+/// 生成配对二维码（`pairing::create_pairing_session`）与设置页手动签发共用。
+pub(crate) async fn issue_phone_credential(base: &str, node_token: &str) -> Result<String, String> {
+    let http_base = base
+        .trim()
+        .trim_end_matches('/')
+        .replacen("wss://", "https://", 1)
+        .replacen("ws://", "http://", 1);
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("构造 HTTP 客户端失败：{e}"))?;
+
+    let resp = client
+        .post(format!("{http_base}/api/relay/issue-phone"))
+        .bearer_auth(node_token)
+        .json(&serde_json::json!({ "label": "hermix-m" }))
+        .send()
+        .await
+        .map_err(|e| format!("连不上 relay：{e}"))?;
+
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        // relay 的错误原文要带出来：「凭据无效」和「只有 node 凭据能签发」
+        // 是两个完全不同的问题，混成一句「签发失败」等于把排查难度翻倍。
+        return Err(format!("relay 拒绝签发（HTTP {}）：{body}", status.as_u16()));
+    }
+
+    match serde_json::from_str::<IssuedPhoneCredential>(&body) {
+        Ok(v) if !v.token.is_empty() => Ok(v.token),
+        Ok(_) => Err("relay 返回的凭据是空的".into()),
+        Err(e) => Err(format!("relay 响应解析失败：{e}")),
+    }
+}
+
 pub async fn issue_phone(
     axum::extract::Extension(origin): axum::extract::Extension<hermix_core::Origin>,
     State(state): State<crate::state::HttpServerState>,
@@ -542,9 +581,9 @@ pub async fn issue_phone(
         return (StatusCode::FORBIDDEN, "仅桌面端可签发手机凭据").into_response();
     }
 
-    let (url, token) = {
+    let (url, token, node_id) = {
         let s = state.relay_settings.lock().await;
-        (s.url.clone(), s.token().to_string())
+        (s.url.clone(), s.token().to_string(), s.node_id.clone())
     };
     if url.trim().is_empty() {
         return (StatusCode::PRECONDITION_FAILED, "还没配 relay 地址").into_response();
@@ -557,67 +596,9 @@ pub async fn issue_phone(
             .into_response();
     }
 
-    // relay 的地址是给 WS 用的（wss://），这里要走 HTTP：把 scheme 换掉，
-    // 端口保持不变——relay 的 HTTP 与 WS 监听器是同一个端口（server.js 里
-    // express 与 WebSocketServer 共用 http server）。
-    let http_base = url
-        .trim()
-        .trim_end_matches('/')
-        .replacen("wss://", "https://", 1)
-        .replacen("ws://", "http://", 1);
-
-    let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-    {
-        Ok(c) => c,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("构造 HTTP 客户端失败：{e}"),
-            )
-                .into_response()
-        }
-    };
-
-    let resp = client
-        .post(format!("{http_base}/api/relay/issue-phone"))
-        .bearer_auth(&token)
-        .json(&serde_json::json!({ "label": "hermix-m" }))
-        .send()
-        .await;
-
-    let resp = match resp {
-        Ok(r) => r,
-        Err(e) => {
-            return (
-                StatusCode::BAD_GATEWAY,
-                format!("连不上 relay：{e}"),
-            )
-                .into_response()
-        }
-    };
-    let status = resp.status();
-    let body = resp.text().await.unwrap_or_default();
-
-    if !status.is_success() {
-        // relay 的错误原文要带出来：「凭据无效」和「只有 node 凭据能签发」
-        // 是两个完全不同的问题，混成一句「签发失败」等于把排查难度翻倍。
-        return (
-            StatusCode::BAD_GATEWAY,
-            format!("relay 拒绝签发（HTTP {}）：{body}", status.as_u16()),
-        )
-            .into_response();
-    }
-
-    match serde_json::from_str::<IssuedPhoneCredential>(&body) {
-        Ok(v) if !v.token.is_empty() => Json(v).into_response(),
-        Ok(_) => (StatusCode::BAD_GATEWAY, "relay 返回的凭据是空的").into_response(),
-        Err(e) => (
-            StatusCode::BAD_GATEWAY,
-            format!("relay 响应解析失败：{e}"),
-        )
-            .into_response(),
+    match issue_phone_credential(&url, &token).await {
+        Ok(t) => Json(IssuedPhoneCredential { token: t, node_id }).into_response(),
+        Err(e) => (StatusCode::BAD_GATEWAY, e).into_response(),
     }
 }
 

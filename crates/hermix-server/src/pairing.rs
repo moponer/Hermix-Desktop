@@ -1,18 +1,20 @@
 //! §5.5 第 3/4 层：设备配对与凭证。
 //!
-//! 一次性配对会话（TTL 60min，QQ 式 6 位码）+ 持久设备注册表（SQLite）。
-//! 交互抄 cc-haha 的配对码模型：桌面生成 6 位码 + 二维码（扫码打开 /pair
-//! 落地页），手机在落地页提交配对；码一次性、重新生成即作废、共享错误
-//! 预算 5 次防枚举。配对成功后设备持有长寿命 device_token（只存哈希），
-//! 后续请求以 `Authorization: Bearer <device_token>` 出示，由
-//! `security::request_guard` 校验后产出 `Origin::PairedDevice{device_id}`
-//! 进权限矩阵。
+//! 一次性配对会话（TTL 60min，6 位码）+ 持久设备注册表（SQLite）。
+//! 2026-10-10 起配对**全走 relay 中转**：桌面生成 6 位码 + 二维码（码里带
+//! 当场签发的手机 relay 凭据与本机 E2EE 公钥），手机扫码后经 relay 发密封
+//! 配对帧，本机判码后密封回 device_token；码一次性、重新生成即作废、按
+//! 凭据分桶的错误预算 5 次防枚举。配对成功后设备持有长寿命 device_token
+//! （只存哈希），后续请求以 `Authorization: Bearer <device_token>` 出示，
+//! 由 `security::request_guard` 校验后产出 `Origin::PairedDevice{device_id}`
+//! 进权限矩阵。局域网直连的 `POST /api/pairing/complete` 与 /pair 落地页
+//! 仍在（兼容旧码），但 App 端不再走它。
 //!
 //! 防滥用（对策 T6 暴力破解）：配对码 60min TTL + 一次性消费 + 错误预算
 //! （PAIRING_MAX_WRONG_ATTEMPTS，耗尽全部作废）+ 完成端点走全局 rate limiter。
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use axum::extract::State;
@@ -24,6 +26,7 @@ use hermix_store::{OpenMode, Store};
 use rand::{Rng, RngCore};
 use serde::{Deserialize, Serialize};
 
+use crate::relay_proto::Envelope;
 use crate::state::HttpServerState;
 use crate::tls;
 
@@ -359,23 +362,25 @@ impl DeviceRegistry {
 // 配对会话（内存态，TTL + 一次性）
 // ---------------------------------------------------------------------------
 
-/// 二维码负载（设计文档 §5.5 第 3 层；交互抄 cc-haha 配对码）。
-/// 二维码内容 = `pairing_url`（手机相机扫码直接打开 /pair 落地页）；
-/// 6 位 `pairing_code` 同时展示在桌面上，支持像 QQ 那样手动输入。
+/// 二维码负载。二维码内容 = `pairing_url`，6 位 `pairing_code` 同时展示在
+/// 桌面上。
+///
+/// 2026-10-10 起配对**全走 relay 中转**（拍板：实现复杂度不转嫁给用户）：
+/// `pairing_url` = `{relay}/pair?c=码&t=手机凭据&k=本机E2EE公钥`。手机扫码 →
+/// 用凭据连 relay → 密封配对帧 → 本机判码 → 密封回 device_token。不再有
+/// 局域网地址、本地端口与证书指纹——那三样是直连时代的产物。
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct QrPayload {
+    /// 稳定本机标识（node_id，`hermix-<8 hex>`）。给用户肉眼区分多台电脑。
     pub server_id: String,
-    pub host: String,
-    pub port: u16,
-    pub cert_fingerprint: String,
     pub pairing_code: String,
     pub pairing_url: String,
     pub proto_version: u32,
     /// 本机 E2EE 静态公钥，base64 的 65 字节未压缩 P-256。
     ///
-    /// **这是 E2EE 的信任锚**：手机扫码拿到它之后，才有办法把自己的公钥
-    /// 安全地送回 PC（用本公钥封一层，relay 看不到内容）。少了它 PC 只能
-    /// 发明文帧，而 relay 侧会直接拒。
+    /// 手机用它**密封配对请求**（relay 拒收明文 route 帧），也用它把后续的
+    /// `key.exchange` 封起来——没有它，PC 学不到手机的公钥而手机学得到 PC 的，
+    /// E2EE 就只剩单半边。
     pub node_public_key: String,
 }
 
@@ -383,8 +388,12 @@ struct PairingSession {
     expires_at: Instant,
     consumed: bool,
     /// `None` = 只有 6 位码、没有二维码负载（IM 通道用：码是打在 QQ 私聊里
-    /// 手动输进去的，本来就不需要 pairing_url 和证书指纹）。
+    /// 手动输进去的，本来就不需要 pairing_url）。
     payload: Option<QrPayload>,
+    /// 本码生成时一并向 relay 签发的手机凭据哈希（`sha256(hrel_*)`）。
+    /// 配对成功时写进绑定表，撤销才有 relay 侧的抓手；同时用于校验
+    /// 「来消费这个码的连接，就是扫码用的那条凭据」。
+    phone_token_hash: Option<String>,
 }
 
 /// 某个来源的失败预算。
@@ -491,61 +500,49 @@ impl PairingSessions {
         }
     }
 
-    /// 创建一次性配对会话（QQ 式 6 位码 + 扫码 URL）。
-    /// TLS 未开启时返回 Err（配对依赖加密面）。TLS 现已默认开启，
-    /// 仅显式设置 HERMIX_TLS_DISABLE=1 的用户会遇到本错误。
-    pub fn create(&self, tls_addr: Option<std::net::SocketAddr>) -> Result<QrPayload, String> {
+    /// 创建一次性配对会话（6 位码 + relay 配对链接）。
+    ///
+    /// `relay_base` 是给二维码用的 https:// 形态 relay 地址（调用方负责从
+    /// 配置里的 wss:// 换算）；`phone_token` 是**刚**向 relay 签发的手机凭据
+    /// 明文——只进二维码，不落盘。没配 relay 的桌面端出不了码：配对与连接
+    /// 都以中转为前提，这不是可选项。
+    pub fn create(&self, relay_base: &str, phone_token: &str) -> Result<QrPayload, String> {
         // E2EE 信任锚。**必须在进临界区之前取**——DPAPI 解密是系统调用，
         // 放锁里会放大 `inner` 的持有时间。`create()` 的 mint+insert 临界区
         // 刚被审计线（A 线批次 1）为修 TOCTOU 收窄过，别把慢操作塞回去。
-        //
-        // DPAPI 失败直接报错：出不了码就别出码，绝不退回"没有 E2EE 的配对"
-        // ——那等于让用户以为链路是加密的。
         let node_public_key = {
             use base64::Engine;
             let id = crate::relay_identity::load_or_create()
                 .map_err(|e| format!("准备 E2EE 身份失败: {e}"))?;
             base64::engine::general_purpose::STANDARD.encode(id.public_key())
         };
-        let tls_addr = tls_addr.ok_or_else(|| {
-            "TLS 已被关闭（检测到 HERMIX_TLS_DISABLE=1）。删除该环境变量并重启，再发起配对".to_string()
-        })?;
-        let material = tls::ensure_tls_material(&tls::tls_dir())
-            .map_err(|e| format!("加载 TLS 证书失败: {e}"))?;
-        let fingerprint = material.fingerprint_sha256;
+        let relay_base = relay_base.trim().trim_end_matches('/');
+        if !relay_base.starts_with("https://") && !relay_base.starts_with("http://") {
+            return Err(format!(
+                "relay 地址形态不对（{relay_base:?}）：二维码需要带 scheme 的完整地址"
+            ));
+        }
+        let phone_token = phone_token.trim();
+        if !phone_token.starts_with("hrel_") || phone_token.len() > 128 {
+            return Err("手机 relay 凭据格式不对（应以 hrel_ 开头）".to_string());
+        }
 
         // mint + insert 必须在同一临界区（对齐 create_code_only 的持锁
         // 模式）：两段锁之间，另一个并发 create() 会铸出同一个 6 位码
         // ——双方做碰撞检查时彼此都还没 insert，互相看不见；后 insert
         // 的会话覆盖前一个，前一个用户的配对会话被静默顶掉（TOCTOU，
-        // 体检批次 1-3）。best_effort_lan_ip 留在锁内属有意为之：配对是
-        // 人工节奏的操作，网卡枚举的亚毫秒争用可忽略。
+        // 体检批次 1-3）。
         let payload = {
             let mut inner = self.inner.lock().expect("pairing sessions lock");
             let code = Self::mint_code(&mut inner);
-            let host = tls::best_effort_lan_ip()
-                .map(|ip| ip.to_string())
-                .unwrap_or_else(|| tls_addr.ip().to_string());
+            let server_id = crate::relay_settings::derive_node_id();
             let payload = QrPayload {
-                server_id: format!("hermix-{}", &fingerprint[..8]),
-                // 二维码内容：手机相机扫码 → 浏览器打开 /pair 落地页（同 TLS 监听器）
-                //
-                // `fp` 携带本机 TLS 证书指纹。落地页把它回显给用户肉眼比对，
-                // 并在 `POST /api/pairing/complete` 时随配对码一起送回；服务端
-                // 与本机指纹比对，不符则拒绝签发 device_token。缺这一步时，
-                // 同网段 MITM 只要出示自己的自签证书、克隆 /pair 页，就能把
-                // 配对码换成 device_token（TOFU 锚点未被任何代码使用）。
-                pairing_url: format!(
-                    "https://{host}:{}/pair?c={code}&fp={fingerprint}",
-                    tls_addr.port()
-                ),
-                host,
-                port: tls_addr.port(),
-                cert_fingerprint: fingerprint,
+                server_id: if server_id.is_empty() { "hermix".to_string() } else { server_id },
+                // 二维码内容：手机 App 扫码 → 解出 relay 地址 + 手机凭据 + 配对码
+                // → 连 relay → 密封配对帧 → 本机判码 → 密封回 device_token。
+                // 凭据由本机当场签发、只走「屏幕 → 相机」这条信道，不落任何盘。
+                pairing_url: format!("{relay_base}/pair?c={code}&t={phone_token}&k={node_public_key}"),
                 pairing_code: code.clone(),
-                // 曾经硬编码 `1`，改 relay 的 PROTO_VERSION 时不会跟着动 ——
-                // 结果二维码告诉手机旧版本，手机按旧协议连上来被 relay 拒。
-                // 一律取常量。
                 proto_version: crate::relay_proto::PROTO_VERSION,
                 node_public_key,
             };
@@ -558,6 +555,7 @@ impl PairingSessions {
                     expires_at: Instant::now() + PAIRING_TTL,
                     consumed: false,
                     payload: Some(payload.clone()),
+                    phone_token_hash: Some(sha256_hex(phone_token.as_bytes())),
                 },
             );
             payload
@@ -580,6 +578,7 @@ impl PairingSessions {
                 expires_at: Instant::now() + PAIRING_TTL,
                 consumed: false,
                 payload: None,
+                phone_token_hash: None,
             },
         );
         code
@@ -614,6 +613,209 @@ impl PairingSessions {
             None => ConsumeOutcome::OkCode,
         }
     }
+
+    /// relay 配对消费成功后，取该码绑定的手机凭据哈希（`create` 时记下）。
+    ///
+    /// 用途有二：写进 `PhoneBindingStore`（撤销才有 relay 侧抓手），以及校验
+    /// 「来消费这个码的连接 = 扫码用的那条凭据」。
+    pub fn take_relay_grant(&self, code: &str) -> Option<String> {
+        let inner = self.inner.lock().expect("pairing sessions lock");
+        inner
+            .get(code)
+            .filter(|s| s.consumed)
+            .and_then(|s| s.phone_token_hash.clone())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// relay 配对通路（2026-10-10 起唯一配对路径；局域网直连退居历史）
+// ---------------------------------------------------------------------------
+
+/// 配对专用会话。走这条会话的帧**不经过设备凭据鉴权**（配对时手机还没有
+/// `hmxd_*`），信任锚是二维码本身：手机 relay 凭据由本机当场签发并印进
+/// 二维码，能持它连上 relay 并路由到本机，本身就证明「这是扫码的那台手机」。
+pub const PAIRING_SESSION_ID: &str = "im:pairing";
+
+/// 手机发来的配对请求帧（密封内层解出后的明文形态）。
+#[derive(Deserialize)]
+struct PairRequestFrame {
+    request_id: String,
+    pairing_code: String,
+    device_name: String,
+    /// 手机 E2EE 静态公钥（base64）。回信里装着 device_token，必须用它密封
+    /// ——relay 读得到也读不懂。
+    phone_public_key: String,
+}
+
+/// 回给手机的配对结果帧（密封前的明文形态）。
+#[derive(Serialize)]
+struct PairResultFrame {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    request_id: String,
+    ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    device_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    device_token: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+/// 处理一条 relay 配对帧并回信。由 `relay_client` 在常规帧鉴权**之前**分派
+/// （配对时手机还没有设备凭据，常规鉴权必然拒绝）。
+///
+/// 错误预算的桶 = 手机 relay 凭据哈希（relay 转发时无条件盖章，手机伪造不了）
+/// ——穷举只烧掉那一条凭据自己的预算，锁不死其他设备的配对。
+pub async fn handle_pairing_frame(
+    state: Arc<HttpServerState>,
+    env: Envelope,
+    out_tx: tokio::sync::mpsc::Sender<Envelope>,
+) {
+    let Some(reply) = pair_reply(&state, &env).await else {
+        // 请求坏到无法回信（解不开 / 不是合法帧）：不回，让手机侧超时报错。
+        return;
+    };
+    if let Err(e) = out_tx.send(reply).await {
+        tracing::warn!(error = %e, "配对回信发送失败（relay 连接可能已断）");
+    }
+}
+
+async fn pair_reply(state: &HttpServerState, env: &Envelope) -> Option<Envelope> {
+    let Some(payload) = env.payload.clone() else {
+        return None;
+    };
+
+    // ① 拆密封请求。relay 拒收明文 route 帧，能走到这里的都是密封帧。
+    if !crate::relay_crypto::is_sealed_payload(&payload) {
+        tracing::warn!("pairing: 配对请求不是密封帧，拒绝");
+        return None;
+    }
+    let inner = match crate::relay_identity::load_or_create() {
+        Ok(id) => match id.open_route(env) {
+            Ok(plain) => plain,
+            Err(e) => {
+                tracing::warn!(error = %e, "pairing: 配对请求解密失败");
+                return None;
+            }
+        },
+        Err(e) => {
+            tracing::warn!(error = %e, "pairing: 本机 E2EE 身份不可用");
+            return None;
+        }
+    };
+    let req: PairRequestFrame = match serde_json::from_str(&inner) {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(error = %e, "pairing: 配对请求字段不合法");
+            return None;
+        }
+    };
+
+    // ② 判码。桶 = relay 盖章的手机凭据哈希。
+    let bucket = env
+        .token_hash
+        .clone()
+        .unwrap_or_else(|| "relay-unstamped".to_string());
+    let outcome = state
+        .pairing_sessions
+        .consume_for(req.pairing_code.trim(), &bucket);
+
+    let mut result = PairResultFrame {
+        kind: "pairing.result",
+        request_id: req.request_id.clone(),
+        ok: false,
+        device_id: None,
+        device_token: None,
+        error: None,
+    };
+    match outcome {
+        ConsumeOutcome::Locked => {
+            result.error = Some("错误次数过多，配对已锁定。请在电脑上重新生成配对码。".into());
+        }
+        ConsumeOutcome::Invalid | ConsumeOutcome::OkCode => {
+            result.error = Some("配对码无效或已过期。请在电脑上重新生成。".into());
+        }
+        ConsumeOutcome::Ok(_) => {
+            // 码里带的凭据必须与请求方一致：防「A 手机的凭据消费 B 扫的码」。
+            let grant = state
+                .pairing_sessions
+                .take_relay_grant(req.pairing_code.trim());
+            match grant {
+                Some(hash) if Some(&hash) == env.token_hash.as_ref() => {}
+                _ => {
+                    result.error =
+                        Some("配对码与扫码使用的凭据不匹配。请在电脑上重新生成后重扫。".into());
+                    tracing::warn!(bucket = %bucket, "pairing: 凭据与配对码不匹配");
+                }
+            }
+            if result.error.is_none() {
+                let device_name = req.device_name.trim();
+                if device_name.is_empty() || device_name.len() > 64 {
+                    result.error = Some("设备名长度需在 1..=64".into());
+                } else if let Some(registry) = state.device_registry.as_ref() {
+                    match registry.pair(device_name) {
+                        Ok((device, token)) => {
+                            // §5.5 防滥用审计：配对成功落盘（来源经 relay，无直连 IP 可记）。
+                            registry.record_audit(
+                                AuditEvent::Pairing,
+                                Some(device.device_id.clone()),
+                                None,
+                                Some("allowed".to_string()),
+                            );
+                            // 撤销链路：绑定表记下这条手机凭据的哈希。写失败只
+                            // 记日志、不回滚配对——配对已成立，为绑定表搞失败更糟。
+                            if let Some(hash) = env.token_hash.as_deref() {
+                                let node_id = state.relay_settings.lock().await.node_id.clone();
+                                if let Err(e) = crate::relay_settings::PhoneBindingStore::at_default()
+                                    .put(&device.device_id, hash, &node_id)
+                                {
+                                    tracing::warn!(
+                                        device_id = %device.device_id,
+                                        error = %e,
+                                        "记录 relay 绑定失败 —— 这台设备之后无法从 relay 侧撤销"
+                                    );
+                                }
+                            }
+                            result.ok = true;
+                            result.device_id = Some(device.device_id);
+                            result.device_token = Some(token);
+                        }
+                        Err(e) => result.error = Some(format!("配对落库失败: {e}")),
+                    }
+                } else {
+                    result.error = Some("设备注册表不可用".into());
+                }
+            }
+        }
+    }
+
+    // ③ 密封回信。响应里装着 device_token，明文过 relay 等于把设备的会话
+    // 身份送人中——密封到手机公钥，relay 全程读不到。
+    let body = match serde_json::to_value(&result) {
+        Ok(v) => v,
+        Err(_) => return None,
+    };
+    seal_pair_reply(&req.phone_public_key, body)
+}
+
+/// 用手机的 E2EE 公钥封配对回信。公钥坏 / 封装失败就放弃回信（手机侧超时）。
+fn seal_pair_reply(phone_public_key: &str, body: serde_json::Value) -> Option<Envelope> {
+    use base64::Engine;
+    let pk = base64::engine::general_purpose::STANDARD
+        .decode(phone_public_key.trim())
+        .ok()?;
+    let peer = p256::PublicKey::from_sec1_bytes(&pk).ok()?;
+    let mut env = Envelope::route_for(PAIRING_SESSION_ID, String::new());
+    let frame_id: [u8; 16] = rand::random();
+    crate::relay_crypto::seal_envelope(
+        &mut env,
+        &serde_json::to_string(&body).ok()?,
+        &peer,
+        &frame_id,
+    )
+    .ok()?;
+    Some(env)
 }
 
 // ---------------------------------------------------------------------------
@@ -753,6 +955,10 @@ btn.addEventListener("click", function () {{
 }
 
 /// `POST /api/pairing/sessions` — 仅 Local。生成一次性配对二维码负载。
+///
+/// 2026-10-10 起配对全走 relay：生成二维码时**当场**向 relay 签发一条手机
+/// 凭据并印进码里。没配 relay 直接报错——配对与连接都以中转为前提，这不是
+/// 可选项，也没有「局域网降级」。
 pub async fn create_pairing_session(
     axum::extract::Extension(origin): axum::extract::Extension<hermix_core::Origin>,
     State(state): State<HttpServerState>,
@@ -764,10 +970,36 @@ pub async fn create_pairing_session(
         )
             .into_response();
     }
-    match state
-        .pairing_sessions
-        .create(tls::tls_addr_from_env())
-    {
+    let (relay_url, node_token) = {
+        let s = state.relay_settings.lock().await;
+        (s.url.clone(), s.token().to_string())
+    };
+    if relay_url.trim().is_empty() {
+        return (
+            StatusCode::PRECONDITION_FAILED,
+            "还没配置 relay 地址。配对与手机连接都经中转，请先在「设置 → 连接渠道」里填好 relay。",
+        )
+            .into_response();
+    }
+    if node_token.trim().is_empty() {
+        return (
+            StatusCode::PRECONDITION_FAILED,
+            "还没配置电脑侧 relay 凭据（hrel_*）。",
+        )
+            .into_response();
+    }
+    let phone_token =
+        match crate::relay_settings::issue_phone_credential(&relay_url, &node_token).await {
+            Ok(t) => t,
+            Err(e) => return (StatusCode::BAD_GATEWAY, e).into_response(),
+        };
+    // 二维码给手机解析，用 https 形态（wss/ws 是 WS 握手用的写法）。
+    let https_base = relay_url
+        .trim()
+        .trim_end_matches('/')
+        .replacen("wss://", "https://", 1)
+        .replacen("ws://", "http://", 1);
+    match state.pairing_sessions.create(&https_base, &phone_token) {
         Ok(payload) => Json(payload).into_response(),
         Err(e) => (StatusCode::CONFLICT, e).into_response(),
     }
@@ -1213,19 +1445,51 @@ mod tests {
         DeviceRegistry::open(&dir.path().join("devices.db")).expect("open")
     }
 
+    // relay 配对测试共用：二维码形态的 relay 地址 + 签发的手机凭据。
+    const RELAY: &str = "https://relay.example.com";
+    const PHONE_TOKEN: &str = "hrel_test0000deadbeef";
+
     #[test]
     fn pairing_session_roundtrip_and_one_time_consumption() {
         let sessions = PairingSessions::new();
-        let addr: std::net::SocketAddr = "0.0.0.0:8443".parse().expect("addr");
-        let payload = sessions.create(Some(addr)).expect("create session");
+        let payload = sessions.create(RELAY, PHONE_TOKEN).expect("create session");
         assert_eq!(payload.pairing_code.len(), 6, "6 位数字码");
         assert!(payload.pairing_code.chars().all(|c| c.is_ascii_digit()));
-        assert!(payload.pairing_url.contains("/pair?c="), "扫码 URL 指向落地页");
+        assert!(payload.pairing_url.contains("/pair?c="), "扫码 URL 指向落地路径");
+        assert!(
+            payload.pairing_url.contains("&t=hrel_"),
+            "二维码必须携带手机 relay 凭据"
+        );
+        assert!(
+            payload.pairing_url.contains("&k="),
+            "二维码必须携带本机 E2EE 公钥（配对请求要封给它）"
+        );
 
         let first = sessions.consume(&payload.pairing_code);
         assert!(matches!(first, ConsumeOutcome::Ok(_)), "首次消费应成功");
         let second = sessions.consume(&payload.pairing_code);
         assert_eq!(second, ConsumeOutcome::Invalid, "一次性：二次消费必须失败");
+    }
+
+    #[test]
+    fn relay_grant_binds_token_hash() {
+        // 消费成功后必须能取到「这码是配着哪条手机凭据发的」——撤销链路与
+        // 凭据一致性校验都靠它。
+        let sessions = PairingSessions::new();
+        let payload = sessions.create(RELAY, PHONE_TOKEN).expect("create");
+        assert_eq!(sessions.take_relay_grant(&payload.pairing_code), None);
+        assert!(matches!(
+            sessions.consume(&payload.pairing_code),
+            ConsumeOutcome::Ok(_)
+        ));
+        assert_eq!(
+            sessions.take_relay_grant(&payload.pairing_code),
+            Some(sha256_hex(PHONE_TOKEN.as_bytes())),
+            "grant 哈希必须等于签发凭据的 sha256"
+        );
+        // IM 通道的码没有凭据可绑。
+        let code_only = sessions.create_code_only();
+        assert_eq!(sessions.take_relay_grant(&code_only), None);
     }
 
     #[test]
@@ -1236,13 +1500,12 @@ mod tests {
         // 防的是将来有人把 insert 再挪出锁外的回归。
         use std::sync::Arc;
         let sessions = Arc::new(PairingSessions::new());
-        let addr: std::net::SocketAddr = "0.0.0.0:8443".parse().expect("addr");
         let mut handles = Vec::new();
         for _ in 0..4 {
             let s = Arc::clone(&sessions);
             handles.push(std::thread::spawn(move || {
                 (0..25)
-                    .filter_map(|_| s.create(Some(addr)).ok())
+                    .filter_map(|_| s.create(RELAY, PHONE_TOKEN).ok())
                     .map(|p| p.pairing_code)
                     .collect::<Vec<_>>()
             }));
@@ -1265,8 +1528,7 @@ mod tests {
     #[test]
     fn pairing_session_expiry_is_enforced() {
         let sessions = PairingSessions::new();
-        let addr: std::net::SocketAddr = "0.0.0.0:8443".parse().expect("addr");
-        let payload = sessions.create(Some(addr)).expect("create session");
+        let payload = sessions.create(RELAY, PHONE_TOKEN).expect("create session");
 
         // 直接把过期时间拨回过去（时间源注入前的最小可控方案）。
         {
@@ -1338,11 +1600,10 @@ mod tests {
     #[test]
     fn wrong_attempts_lockout_and_regeneration_reset() {
         let sessions = PairingSessions::new();
-        let addr: std::net::SocketAddr = "0.0.0.0:8443".parse().expect("addr");
 
         // 先生成一枚真码，再错 5 次 → 同一代际内预算耗尽 → 正确码也 Locked
         //（防穷举关键断言；合法用户的恢复路径是重新生成）。
-        let payload = sessions.create(Some(addr)).expect("create session");
+        let payload = sessions.create(RELAY, PHONE_TOKEN).expect("create session");
         for i in 0..PAIRING_MAX_WRONG_ATTEMPTS {
             let r = sessions.consume("000000");
             assert_eq!(r, ConsumeOutcome::Invalid, "第 {i} 次错误应为 Invalid");
@@ -1354,7 +1615,7 @@ mod tests {
         );
 
         // 重新生成 = 新码代际，预算清零 → 正常消费。
-        let payload2 = sessions.create(Some(addr)).expect("create session 2");
+        let payload2 = sessions.create(RELAY, PHONE_TOKEN).expect("create session 2");
         assert!(matches!(
             sessions.consume(&payload2.pairing_code),
             ConsumeOutcome::Ok(_)
@@ -1362,31 +1623,42 @@ mod tests {
     }
 
     #[test]
-    fn pairing_requires_tls_addr() {
+    fn create_rejects_bad_relay_base_and_token() {
         let sessions = PairingSessions::new();
-        assert!(sessions.create(None).is_err(), "TLS 未开启不能配对");
+        assert!(
+            sessions.create("relay.example.com", PHONE_TOKEN).is_err(),
+            "裸 host 没有 scheme，手机端解析不了"
+        );
+        assert!(
+            sessions.create(RELAY, "not-a-hrel-token").is_err(),
+            "手机凭据必须 hrel_ 开头（ relay 的 mintToken 口径）"
+        );
     }
 
     #[test]
-    fn qr_payload_carries_fingerprint_and_proto() {
+    fn qr_payload_carries_relay_link_and_proto() {
         let sessions = PairingSessions::new();
-        let addr: std::net::SocketAddr = "0.0.0.0:8443".parse().expect("addr");
-        let payload = sessions.create(Some(addr)).expect("create");
-        assert!(payload.cert_fingerprint.len() == 64, "指纹 64 hex");
+        let payload = sessions.create(RELAY, PHONE_TOKEN).expect("create");
         // 曾经断言 `== 1`：协议升到 v2 时这个测试会红，但它红的方式是
         // "实现的版本号是 2、测试期望 1"——容易被误读成"实现错了"。
         // 断言应当钉"二维码说的版本 == 线路常量"，版本升级时无需改这里。
         assert_eq!(payload.proto_version, crate::relay_proto::PROTO_VERSION);
-        // E2EE 信任锚：手机扫码拿到它才能把自己的公钥安全送回。
+        // E2EE 信任锚：手机拿到它才能把配对请求与后续 key.exchange 封给 PC。
         assert_eq!(
             payload.node_public_key.len(),
             88,
             "base64 的 65 字节 P-256 公钥应是 88 字符"
         );
-        assert_eq!(payload.port, 8443);
-        assert!(payload.server_id.starts_with("hermix-"));
+        assert!(payload.server_id.starts_with("hermix-") || payload.server_id == "hermix");
         assert!(payload.pairing_code.chars().all(|c| c.is_ascii_digit()));
-        assert!(payload.pairing_url.starts_with("https://"), "扫码 URL 走 TLS");
+        assert!(
+            payload.pairing_url.starts_with("https://relay.example.com/pair?c="),
+            "扫码 URL 指向 relay"
+        );
+        assert!(
+            !payload.pairing_url.contains("fp="),
+            "直连时代的证书指纹已随局域网直连一起退役"
+        );
     }
 
     #[test]
