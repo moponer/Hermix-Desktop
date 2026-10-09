@@ -1,0 +1,21 @@
+[package]
+name = "hermix-indexer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# 二进制名保持 usn-indexer：sidecar 命名（binaries/usn-indexer-<triple>.exe）、
+# 主进程 spawn、locate_helper 候选都按这个名字寻址，改名会断三处调用点。
+[[bin]]
+name = "usn-indexer"
+path = "src/main.rs"
+
+[dependencies]
+# 独立 bin crate（不依赖壳包、无 tauri-build）：编译期不触发 externalBin
+# 校验，ensure-sidecar 脚本可先于壳编译产出它，消除 bootstrap 死锁。
+windows = { workspace = true, features = [
+  "Win32_Storage_FileSystem",
+  "Win32_System_IO",
+  "Win32_System_Ioctl",
+] }
+serde_json = { workspace = true }

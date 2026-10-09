@@ -2,10 +2,6 @@
 name = "hermix-desktop"
 version = "0.1.9"
 edition = "2021"
-# 本包有两个 bin：主程序 + 主进程拉起的提权索引辅助进程
-# （usn-indexer，见下方 [[bin]]）。不指定 default-run 时 `cargo run`
-# 会报"could not determine which binary to run"。
-default-run = "hermix-desktop"
 
 [dependencies]
 # `tray-icon`：托盘（显示在菜单栏）用 Tauri 内置 feature，不引第三方插件。
@@ -85,12 +81,11 @@ windows = { version = "0.58", features = [
 
 [target.windows.dependencies]
 
-# 提权索引辅助进程（读 MFT 需要管理员权限，主程序不提权）。
-# 作为同 crate 的第二个 bin：构建产物与主程序同目录，
-# 主进程按 current_exe().parent()/usn-indexer.exe 定位拉起。
-[[bin]]
-name = "usn-indexer"
-path = "src/bin/usn_indexer.rs"
+# usn-indexer（提权索引辅助进程）已拆为独立 bin crate crates/hermix-indexer：
+# 原先与本包共享编译单元，build.rs 的 externalBin 校验要求 binaries/ 里已有
+# usn-indexer，而它又由本包编译产出 —— fresh clone 首次打包陷入 bootstrap
+# 死锁。拆出后由 ensure-sidecar 脚本独立编译，二进制名保持 usn-indexer，
+# 主进程按 current_exe().parent()/usn-indexer.exe 定位拉起的方式不变。
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

@@ -5,18 +5,16 @@
   "type": "module",
   "scripts": {
     "dev:vite": "vite",
-    "dev:backend": "cargo build -p hermix-server --target-dir ..\\..\\release\\target",
     "dev": "node scripts/dev.mjs dev",
     "build:vite": "vite build",
-    "build:backend": "cargo build -p hermix-server --release --target-dir ..\\..\\release\\target && cargo build --manifest-path src-tauri\\Cargo.toml --release --bin usn-indexer --target-dir ..\\..\\release\\target",
     "_:build-shell": "cargo build --release --manifest-path ../hx-shell/Cargo.toml --target-dir ..\\..\\release\\target",
-    "_:ensure-sidecar": "copy /y ..\\..\\release\\target\\release\\hermix.exe src-tauri\\binaries\\hermix-x86_64-pc-windows-msvc.exe && copy /y ..\\..\\release\\target\\release\\usn-indexer.exe src-tauri\\binaries\\usn-indexer-x86_64-pc-windows-msvc.exe",
     "_:sync-shell": "copy /y ..\\..\\release\\target\\release\\hx-shell.exe src-tauri\\resources\\loader\\hx-shell.exe",
     "_:sync-shell-runtime": "if not exist \"%USERPROFILE%\\.hermix\\loader\" mkdir \"%USERPROFILE%\\.hermix\\loader\" && copy /y ..\\..\\release\\target\\release\\hx-shell.exe \"%USERPROFILE%\\.hermix\\loader\\hx-shell.exe\"",
     "build": "node scripts/dev.mjs build",
     "check:tokens": "node ../../scripts/check-theme-tokens.mjs",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "ensure-sidecar": "node scripts/ensure-sidecar.mjs"
   },
   "dependencies": {
     "@bruits/satteri-wasm32-wasi": "0.10.5",

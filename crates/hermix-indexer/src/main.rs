@@ -592,7 +592,6 @@ fn main() {
     let resnap_path = dir.join("resnap.request");
     let shutdown_path = dir.join("shutdown.request");
     let snap_name = format!("snapshot-{}.jsonl", now_unix());
-    let snap_path = dir.join(&snap_name);
 
     // 已有存活 helper（主进程重启复用，免二次 UAC）：退出让位。
     if pid_path.exists() && alive_path.exists()
