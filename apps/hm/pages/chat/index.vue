@@ -17,10 +17,12 @@
  */
 import { ref, computed, nextTick } from 'vue'
 import { onUnmounted } from 'vue'
+import { onReady } from '@dcloudio/uni-app'
 import { isRiskyInstruction } from '../../core/voice'
 import { dispatch, reduce, initialChatState, type ChatState } from '../../core/frames'
 import { isPaired } from '../../core/pairing'
 import { relayBaseUrl } from '../../core/clock'
+import { ensureSplashClosed } from '../../core/boot'
 import type { AsrProvider } from '../../core/voice'
 
 interface Bubble {
@@ -58,6 +60,12 @@ const isEmpty = computed(() => messages.value.length === 0 && !streaming.value)
  */
 const paired = ref(isPaired())
 const hasRelay = ref(!!relayBaseUrl())
+
+// boot 页在 onLoad 里 reLaunch，其 onReady 大概率被跳过；这里是正常路径的
+// 兜底关点（首屏渲染完成后关启动图，根因见 core/boot.ts 的 ensureSplashClosed）。
+onReady(() => {
+  ensureSplashClosed()
+})
 
 const anchor = ref('')
 function scrollToTail() {

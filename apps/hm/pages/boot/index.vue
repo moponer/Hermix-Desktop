@@ -23,8 +23,8 @@
  * **一律进主界面**，未连接是主界面里的一个状态而不是一道门。
  */
 import { ref } from 'vue'
-import { onLoad } from '@dcloudio/uni-app'
-import { fatal, clearFatal } from '../../core/boot'
+import { onLoad, onReady } from '@dcloudio/uni-app'
+import { fatal, clearFatal, ensureSplashClosed } from '../../core/boot'
 
 /** 分流失败时的兜底文案（reLaunch 被拒等）。 */
 const stuck = ref('')
@@ -55,6 +55,12 @@ function retry() {
 onLoad(() => {
   if (fatal.value) return // 有致命错误就停在这儿，把错误摊开给用户看
   route()
+})
+
+// 首屏像素已上屏才关启动图：正常路径 onReady 可能因 onLoad 里的 reLaunch 而
+// 跳过，最终由 chat 页的 onReady 兜底；致命错误停在本页时这里就是唯一关点。
+onReady(() => {
+  ensureSplashClosed()
 })
 </script>
 

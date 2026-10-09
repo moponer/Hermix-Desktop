@@ -71,3 +71,26 @@ export function clearFatal(): void {
     /* 同上 */
   }
 }
+
+/**
+ * 显式关闭启动图。
+ *
+ * ## 为什么必须手动关
+ *
+ * 源 manifest 写 `alwaysShowBeforeRender:false` 后，编译器（uni-cli-shared
+ * splashscreen.js 的 initSplashscreen）会把打进 APK 的原生 autoclose 改成
+ * **false**，注释称「启用 uni-app 框架关闭 splash」——但当前基座的
+ * uni-jsframework-vue3.js 里没有任何关闭逻辑（全文件 0 处 splash 字样），
+ * 结果就是启动图永远不关，新 UI 全画在它后面，用户看到「一直转圈」。
+ * 只能由页面渲染完成后自己关。幂等：原生重复关无副作用。
+ */
+export function ensureSplashClosed(): void {
+  // #ifdef APP-PLUS
+  try {
+    ;(globalThis as unknown as { plus?: { navigator?: { closeSplashscreen?: () => void } } })
+      .plus?.navigator?.closeSplashscreen?.()
+  } catch {
+    /* plus 未就绪：尚无启动图可关，由后续调用点兜底 */
+  }
+  // #endif
+}
