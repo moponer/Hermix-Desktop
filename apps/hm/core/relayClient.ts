@@ -42,7 +42,8 @@ function backoff(attempt: number): number {
   return Math.min(base * Math.pow(2, Math.min(attempt, 16)), 30000)
 }
 
-function relayWsUrl(base: string, kind: 'phone' | 'node'): string {
+/** 拼 relay 的 WS 地址。导出给配对流程复用（配对也是一条 phone 连接）。 */
+export function relayWsUrl(base: string, kind: 'phone' | 'node'): string {
   const b = base.trim().replace(/\/+$/, '')
   if (b.startsWith('ws://')) return `${b}/relay/${kind}`
   if (b.startsWith('http://')) return `ws://${b.slice(7)}/relay/${kind}`

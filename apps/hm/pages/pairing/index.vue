@@ -1,34 +1,29 @@
 <script setup lang="ts">
 /**
- * 配对屏 —— 扫桌面端的码，直连那台电脑。
+ * 配对屏 —— 扫桌面端的码，经 relay 中转绑定。
  *
- * ## 这条链路是通的，不是新造的
+ * ## 这条链路是唯一的（2026-10-10 拍板）
  *
- * 桌面端 `设置 → 设备 → 手机端` 已经发着一个二维码，内容就是
- * `https://{lan_ip}:8443/pair?c={code}&fp={fingerprint}`；同一个 TLS 监听器上
- * 已经挂着 `POST /api/pairing/complete`。这一屏做的事，和那个二维码指向的
- * `/pair` 落地页里那段 JS **完全一样**（契约见 `core/direct.ts` 文件头）。
+ * 桌面端生成配对码时**当场**向 relay 签发一条手机凭据并印进二维码
+ * （`c=码 & t=凭据 & k=PC公钥`）。本屏扫到后：用凭据连 relay → 密封配对帧
+ * → 电脑判码 → 密封回 device_token。全程不要求同网、不比对证书指纹、
+ * 不需要电脑开任何入站端口——实现复杂度归实现侧。
  *
- * ## 为什么不再走 relay
- *
- * 原先这屏打的是 `POST {relay}/api/pairing/complete`，而 relay 里没有这条路由，
- * 必然 404。补 relay 中转要跨三端（relay + Rust + hm），因为配对码的判定权在
- * PC 的 `PairingSessions::consume`，而 PC 只出站连 relay。先把能用的接通。
- *
- * ## 顺序还是刻意的：先核对指纹，再提交
- *
- * 二维码里带着桌面端本机 TLS 证书的 SHA-256 指纹。提交时原样回传，服务端与
- * 自己的指纹比对，**不符直接 403 拒发 token**（`pairing.rs:810-830`）。这一步
- * 不是形式：同网段 MITM 出示自签证书 + 克隆 `/pair` 页就能把配对码换成
- * device_token。本屏把指纹显示出来，是为了让用户能拿它和桌面上那一行肉眼比对，
- * 而不是把一个自己声明的值当真。
+ * 旧「局域网直连」流程已退役（`fp=` 参数的码桌面端不再生成）。
  */
 import { ref } from 'vue'
-import { parsePairingUrl, completeDirect, shortFingerprint, defaultDeviceName, type DirectTarget } from '../../core/direct'
-import { storePairedDevice, hasSubtleCrypto, relayToken } from '../../core/pairing'
+import {
+  defaultDeviceName,
+  pairOverRelay,
+  parsePairingUrl,
+  type PairingTarget,
+} from '../../core/direct'
+import { generateIdentity } from '../../core/crypto'
+import { hasSubtleCrypto, setRelayToken, storePairedDevice } from '../../core/pairing'
+import { setRelayBaseUrl } from '../../core/clock'
 
 /** 扫到并解析成功、但用户还没确认提交的码。 */
-const target = ref<DirectTarget | null>(null)
+const target = ref<PairingTarget | null>(null)
 const busy = ref(false)
 const error = ref('')
 
@@ -48,32 +43,7 @@ function onScan() {
     fail: (e) => {
       const msg = String((e as { errMsg?: string })?.errMsg ?? '')
       if (/cancel/i.test(msg)) return // 用户自己取消不是错误
-      error.value = '扫码失败，请确认已允许相机权限。也可以用手机自带相机扫码，在浏览器里完成配对。'
-    },
-  })
-}
-
-/**
- * 手动通道：粘贴电脑复制的完整配对链接。
- *
- * 为什么不是「只输 6 位码」：服务端强制校验证书指纹（空=400、不符=403），
- * 码本身不含「连哪台电脑」和「证书是不是它」——这两样都在链接里。粘贴链接
- * 等价于扫码拿到的东西，指纹随链接走，安全不降级。
- */
-function onPaste() {
-  error.value = ''
-  uni.getClipboardData({
-    success: (res) => {
-      const t = parsePairingUrl(String(res.data ?? ''))
-      if (!t) {
-        error.value =
-          '剪贴板里不是 hermix 配对链接。在电脑「设置 → 设备 → 手机端」点「复制链接」再试。'
-        return
-      }
-      target.value = t
-    },
-    fail: () => {
-      error.value = '读取剪贴板失败，请重新复制电脑上的配对链接。'
+      error.value = '扫码失败，请确认已允许相机权限。'
     },
   })
 }
@@ -84,13 +54,13 @@ async function submit() {
   busy.value = true
   error.value = ''
   try {
-    // 把 relay 凭据一起报上去（报的是 sha256 哈希，不是明文）。电脑端靠它
-    // 才能在「撤销设备」时让 relay 断开这台手机——否则撤销只断一半。
-    const r = await completeDirect({
-      target: t,
-      deviceName: defaultDeviceName(),
-      relayToken: relayToken(),
-    })
+    // 配对身份只服务这一次密封往返：私钥不可导出，重启后自然换新，
+    // 每次连接都会重发 key.exchange（PC 侧 learn_peer 是 upsert）。
+    const identity = await generateIdentity()
+    const r = await pairOverRelay({ target: t, deviceName: defaultDeviceName(), identity })
+    // relay 地址与凭据随码而来，落盘后聊天页的常驻连接直接用。
+    setRelayBaseUrl(t.relayBase)
+    setRelayToken(t.phoneToken)
     await storePairedDevice({ deviceId: r.deviceId, deviceToken: r.deviceToken })
     uni.reLaunch({ url: '/pages/chat/index' })
   } catch (e) {
@@ -123,29 +93,27 @@ function reset() {
         </view>
         <text class="scan-t">扫码连接</text>
       </view>
-      <view class="paste" @tap="onPaste"><text>粘贴电脑上的配对链接</text></view>
       <text class="card-hint">
-        两种方式都要手机和电脑在同一个 Wi-Fi：扫上面的码，或在电脑上点「复制链接」后到这里粘贴（扫不了码时用）。
-        配对只需同网一次；之后在「设置」里填好 relay 凭据，跨网络也能连回电脑。
+        手机和电脑不必在同一网络：配对与连接都经中转（relay），手机能上网就行。
       </text>
     </view>
 
-    <!-- 第二步：核对身份，再提交 -->
+    <!-- 第二步：确认身份，再提交 -->
     <template v-else>
       <view class="card">
         <view class="fp-row">
           <text class="fp-label">这台电脑</text>
           <text class="fp-change" @tap="reset">换一个</text>
         </view>
-        <text class="fp-host">{{ target.baseUrl.replace(/^https?:\/\//, '') }}</text>
-        <text class="fp-hex">证书指纹 {{ shortFingerprint(target.fingerprint) }}</text>
+        <text class="fp-host">{{ target.relayBase.replace(/^https?:\/\//, '') }}</text>
+        <text class="fp-hex">配对码 {{ target.code }}</text>
         <text class="card-hint">
-          请与电脑「设置 → 设备 → 手机端」那一行显示的指纹核对一致后再连接。
+          请确认电脑屏幕上显示的配对码一致，再点连接。
         </text>
       </view>
 
       <view v-if="!cryptoOk" class="notice err">
-        <text>本机运行时没有 WebCrypto，配对后的端到端加密无法工作。请换用官方安装包。</text>
+        <text>本机运行时没有 WebCrypto，端到端加密无法工作。请换用官方安装包。</text>
       </view>
 
       <view v-if="error" class="notice err"><text>{{ error }}</text></view>
@@ -155,7 +123,7 @@ function reset() {
         :class="{ off: busy || !cryptoOk }"
         @tap="busy || !cryptoOk ? undefined : submit()"
       >
-        <text>{{ busy ? '连接中…' : '确认并连接' }}</text>
+        <text>{{ busy ? '正在连接…' : '确认并连接' }}</text>
       </view>
 
       <view class="btn-sec" @tap="reset"><text>返回</text></view>
@@ -250,18 +218,6 @@ function reset() {
   color: $accent;
 }
 
-/* 手动通道：扫码之外的等价入口，样式弱于主按钮。 */
-.paste {
-  margin-top: 24rpx;
-  height: 72rpx;
-  line-height: 72rpx;
-  text-align: center;
-  border-radius: 36rpx;
-  background: $raised;
-  color: $fg2;
-  font-size: 23rpx;
-}
-
 .fp-row {
   display: flex;
   align-items: center;
@@ -280,6 +236,7 @@ function reset() {
   margin-top: 8rpx;
   font-size: 25rpx;
   color: $fg;
+  word-break: break-all;
 }
 .fp-hex {
   display: block;

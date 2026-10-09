@@ -75,10 +75,19 @@ export interface SealedEnvelope {
   eid: string;
 }
 
-function b64(bytes: Uint8Array): string {
+/** 字节 → base64。导出给配对流程构造密封信封用。 */
+export function b64(bytes: Uint8Array): string {
   let s = '';
   for (const b of bytes) s += String.fromCharCode(b);
   return btoa(s);
+}
+
+/** base64 → 字节。配对流程要解帧头里的 eid / ep（导出给 core/direct 用）。 */
+export function b64decode(s: string): Uint8Array {
+  const bin = atob(s)
+  const out = new Uint8Array(bin.length)
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i)
+  return out
 }
 
 function subtle(): SubtleCrypto {
