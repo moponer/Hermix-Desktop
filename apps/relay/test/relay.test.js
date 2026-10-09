@@ -308,6 +308,23 @@ test('router: 手机 → 电脑，按 node 隔离', () => {
   assert.strictEqual(nodeA.sent[0].payload, payload, 'payload 不得被改写');
 });
 
+test('router: 手机帧无条件盖章 token_hash（手机自报的不可信）', () => {
+  // PC 侧的配对错误预算按「帧来自哪条手机凭据」分桶。手机若能自报哈希，
+  // 穷举者每帧换一个假哈希就能绕开预算——章必须由 relay 盖。
+  const r = new Router({ audit: { write: () => {} } });
+  const node = fakeConn();
+  r.attachNode('pc-A', 'hash-node-A', node);
+  r.attachPhone('pc-A', 'hash-phone-1', fakeConn());
+
+  r.phoneToNode('pc-A', 'hash-phone-1', { tag: 'route', payload: sealedPayload('x') });
+  assert.strictEqual(node.sent[0].token_hash, 'hash-phone-1', '缺失时补盖');
+
+  r.phoneToNode('pc-A', 'hash-phone-1', {
+    tag: 'route', payload: sealedPayload('y'), token_hash: 'FAKE',
+  });
+  assert.strictEqual(node.sent[1].token_hash, 'hash-phone-1', '自报的假值必须被覆盖');
+});
+
 test('router: 没有电脑在线时如实报告，不静默丢弃', () => {
   const r = new Router({ audit: { write: () => {} } });
   r.attachPhone('pc-B', 'h', fakeConn());

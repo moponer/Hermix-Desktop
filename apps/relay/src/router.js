@@ -154,6 +154,10 @@ class Router {
       this.audit.write('route', nodeId, 'phone', 'dropped_no_node');
       return 'no_node';
     }
+    // 无条件盖章：PC 侧的配对错误预算按「这条帧来自哪条手机凭据」分桶，
+    // 并校验「消费配对码的连接 = 扫码那条凭据」。章必须由 relay 盖——手机
+    // 自报的 token_hash 可以随口伪造，信它等于预算形同虚设。
+    envelope.token_hash = tokenHash;
     this.audit.write('route', nodeId, 'phone', 'delivered');
     s.nodeConn.sendFrame(envelope);
     return 'delivered';
