@@ -533,10 +533,16 @@ impl AgentLoop {
             let Some(tc) = tool_calls.iter().find(|t| t.id == result.tool_call_id) else {
                 continue;
             };
-            if tc.function.name != "read_image" {
+            // read_image 与 cua_screenshot（不带 save_to 的内联分支）都
+            // 在结果 JSON 里带整帧 base64；两者共用同一套提取逻辑。
+            if tc.function.name != "read_image" && tc.function.name != "cua_screenshot" {
                 continue;
             }
             if self.config.is_sub_agent {
+                // 子 agent：把像素转成真正的多模态内容块（下方统一注入）。
+                // 文本结果保持原样不剥——同一份 JSON 还要供 UI 的
+                // ScreenshotPreview 渲染，剥了预览就瞎；子 agent 上下文
+                // 是隔离边界，任务结束即销毁，双份成本有界。
                 if let Some(payload) =
                     crate::tool_result_processor::extract_image_payload(&result.content)
                 {

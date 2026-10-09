@@ -454,12 +454,15 @@ pub fn push_tool_result(
 /// unparseable base64) — the caller then falls back to text-only.
 pub fn extract_image_payload(content: &str) -> Option<(String, String)> {
     let parsed: serde_json::Value = serde_json::from_str(content).ok()?;
-    // New nested format first, legacy flat second.
+    // New nested format first, legacy flat second, cua_screenshot's
+    // inline `png_base64` third (whole-frame PNG, no mime_type field —
+    // the PNG default below is exactly right for it).
     let b64 = parsed
         .get("_image_meta")
         .and_then(|m| m.get("_image_data_b64"))
         .and_then(|v| v.as_str())
-        .or_else(|| parsed.get("_image_data").and_then(|v| v.as_str()))?;
+        .or_else(|| parsed.get("_image_data").and_then(|v| v.as_str()))
+        .or_else(|| parsed.get("png_base64").and_then(|v| v.as_str()))?;
     if b64.is_empty() || b64.starts_with("[stripped") {
         return None;
     }
@@ -793,6 +796,24 @@ mod tests {
         // No mime_type in the nested shape → default rather than bail.
         assert_eq!(mime, "image/png");
         assert_eq!(b64, "/9j/4AAQSkZJRg==");
+    }
+
+    /// cua_screenshot（不带 save_to）的内联分支：整帧 PNG 在顶层
+    /// `png_base64` 字段，无 mime_type —— PNG 默认值必须兜住。
+    #[test]
+    fn extract_image_payload_reads_screenshot_png_base64() {
+        let content = serde_json::json!({
+            "tool": "cua_screenshot",
+            "monitor": 0,
+            "width": 1920,
+            "height": 1080,
+            "png_base64": "iVBORw0KGgo=",
+        })
+        .to_string();
+        let (mime, b64) =
+            extract_image_payload(&content).expect("inline png_base64 must be extracted");
+        assert_eq!(mime, "image/png");
+        assert_eq!(b64, "iVBORw0KGgo=");
     }
 
     /// Already-stripped content must return `None`, not a payload made of
