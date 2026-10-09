@@ -61,7 +61,13 @@ fi
 # `apps/desktop-tauri/src` — frontend .ts/.tsx changes do not go into the
 # sidecar (they go into the Tauri bundle), so counting them here would raise a
 # false STALE on every UI-only commit and train people to ignore the gate.
+#
+# 2026-10-09: hermix-indexer became its own crate. Each sidecar is compared
+# only against its own source tree — hermix excludes crates/hermix-indexer,
+# usn-indexer checks only crates/hermix-indexer — otherwise an indexer-only
+# commit would flag the hermix sidecar STALE (false positive).
 stale=$(find crates apps/desktop-tauri/src-tauri/src \
+         -path 'crates/hermix-indexer' -prune -o \
          -name '*.rs' -newer "$SIDECAR" -print -quit 2>/dev/null | head -1)
 
 # usn-indexer is also built from THIS repo (same staleness logic as hermix).
@@ -70,7 +76,7 @@ stale=$(find crates apps/desktop-tauri/src-tauri/src \
 # Presence is enforced by Check 3 (externalBin enumeration); staleness here.
 USN_SIDECAR="$BIN_DIR/usn-indexer-x86_64-pc-windows-msvc.exe"
 if [ -z "$stale" ] && [ -f "$USN_SIDECAR" ]; then
-  stale=$(find crates apps/desktop-tauri/src-tauri/src \
+  stale=$(find crates/hermix-indexer \
            -name '*.rs' -newer "$USN_SIDECAR" -print -quit 2>/dev/null | head -1)
   SIDECAR="$USN_SIDECAR"
 fi
@@ -82,12 +88,9 @@ if [ -n "$stale" ]; then
   echo ""
   echo "         Anything tested through the packaged app is running code that"
   echo "         predates the current tree. Rebuild before believing a retest:"
-  echo "           cargo build --release -p hermix-server --bin hermix \\"
-  echo "             --target-dir release/target"
-  echo "           cp release/target/release/hermix.exe \\"
-  echo "              $SIDECAR"
-  echo "           # verify, do not assume — the copy must be byte-identical:"
-  echo "           cmp release/target/release/hermix.exe $SIDECAR"
+  echo "           cd apps/desktop-tauri && npm run ensure-sidecar"
+  echo "         (compiles hermix-server + hermix-indexer into repo-root target/,"
+  echo "          copies into binaries/ and verifies byte-identical via sha256)"
   echo ""
   exit 1
 fi
