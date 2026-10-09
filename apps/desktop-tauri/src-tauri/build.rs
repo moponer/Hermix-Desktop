@@ -2,14 +2,15 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// `hermix` sidecar — workspace 内部 crate, 必须先 `cargo build` 才有产物,
-/// 然后从仓库根 target/ (<repo_root>/target/<profile>/hermix.exe, cargo 默认产物位置,
-/// 见 .cargo/config.toml 注释: 不配置 target-dir) 拷到 Tauri externalBin 要求的 binaries/ 路径.
-/// 注意: 历史遗留的 release/target/ 是陈旧路径, 绝不能再指向它.
+/// `hermix` sidecar — workspace 内部 crate。合并单 workspace 后产物一律
+/// 在仓库根 target/<profile>/，build.rs 在壳编译时把最新二进制刷进
+/// binaries/（Tauri externalBin 硬要求 `binaries/{name}-{triple}.exe`
+/// 存在，否则 tauri_build::build() 直接 fail）。
 ///
-/// Tauri externalBin 校验逻辑: `binaries/{name}-{target_triple}.exe` 必须存在
-/// 否则 `tauri_build::build()` 会 fail. 所以 `cargo build -p hermix-server --release`
-/// 必须先跑. 复制顺序: tauri.conf.json `beforeBuildCommand` 之前完成.
+/// 源缺失的容错分级：release 缺源说明打包链断了（ensure-sidecar 没跑或
+/// 编译失败），继续打包只会复刻「安装包内嵌陈旧 sidecar」的交付事故，
+/// 必须立刻 panic；debug 缺源只是开发期后端还没编（fresh clone 的常态），
+/// 警告即可，dev 由 sidecar.rs 的候选解析兜底。
 fn copy_workspace_sidecar(manifest_dir: &Path, profile: &str) {
     let src = manifest_dir
         .join("../../../target")
@@ -18,31 +19,55 @@ fn copy_workspace_sidecar(manifest_dir: &Path, profile: &str) {
     let dst = manifest_dir.join("binaries").join("hermix-x86_64-pc-windows-msvc.exe");
 
     println!("cargo:rerun-if-changed={}", src.display());
-    println!("cargo:rerun-if-env-changed=HERMIX_SKIP_SIDECAR_COPY");
 
-    if env::var_os("HERMIX_SKIP_SIDECAR_COPY").is_some() {
-        return;
-    }
     if !src.exists() {
-        println!(
-            "cargo:warning=sidecar source not found: {} — run `cargo build --profile {} -p hermix-server` from repo root first",
-            src.display(),
-            profile
+        let msg = format!(
+            "hermix sidecar source not found: {}\nRun from repo root first:\n    cargo build --release -p hermix-server --bin hermix",
+            src.display()
         );
+        if profile == "release" {
+            panic!("{msg}");
+        }
+        println!("cargo:warning={msg}");
         return;
     }
 
     if let Err(e) = fs::create_dir_all(dst.parent().unwrap()) {
-        println!("cargo:warning=binaries dir create failed: {}", e);
+        let msg = format!("binaries dir create failed: {e}");
+        if profile == "release" {
+            panic!("{msg}");
+        }
+        println!("cargo:warning={msg}");
         return;
     }
     if let Err(e) = fs::copy(&src, &dst) {
-        println!(
-            "cargo:warning=sidecar copy failed: {} -> {}: {}",
-            src.display(),
-            dst.display(),
-            e
+        let msg = format!("sidecar copy failed: {} -> {}: {e}", src.display(), dst.display());
+        if profile == "release" {
+            panic!("{msg}");
+        }
+        println!("cargo:warning={msg}");
+    }
+}
+
+/// `usn-indexer` sidecar — 壳包自己的 [[bin]]，随壳编译产出，**不能**在本
+/// build.rs 里从 target/ 拷贝（build.rs 与它同包同时编译，此刻产物尚不
+/// 存在）；binaries/ 副本的刷新由 beforeBuildCommand 的 ensure-sidecar 脚本
+/// 在壳编译之后完成。这里只做存在性校验，分级同上。
+fn assert_usn_indexer_present(manifest_dir: &Path, profile: &str) {
+    let dst = manifest_dir
+        .join("binaries")
+        .join("usn-indexer-x86_64-pc-windows-msvc.exe");
+    println!("cargo:rerun-if-changed={}", dst.display());
+
+    if !dst.exists() {
+        let msg = format!(
+            "usn-indexer sidecar missing at {}\nIt is produced by `cargo build --release -p hermix-desktop --bin usn-indexer` and copied by the ensure-sidecar script.",
+            dst.display()
         );
+        if profile == "release" {
+            panic!("{msg}");
+        }
+        println!("cargo:warning={msg}");
     }
 }
 
@@ -99,6 +124,7 @@ fn main() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let profile = env::var("PROFILE").expect("CARGO sets PROFILE for build scripts");
     copy_workspace_sidecar(&manifest_dir, &profile);
+    assert_usn_indexer_present(&manifest_dir, &profile);
     assert_officecli_present(&manifest_dir);
 
     tauri_build::build();
