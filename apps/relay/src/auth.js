@@ -117,6 +117,29 @@ function openRegistry(dbPath) {
       if (typeof token !== 'string' || token === '') return false;
       return revoke.run(Date.now(), hashToken(token)).changes > 0;
     },
+
+    /**
+     * 按**凭据哈希**撤销。
+     *
+     * 为什么要有这个：电脑端要撤销某台手机，但它**不该持有那台手机的明文凭据**。
+     * 让手机在配对时把 `sha256(hrel_*)` 报给 hermix、hermix 只存哈希，
+     * 撤销时凭哈希来办——中间任何一环都不需要见过手机的真凭据。
+     *
+     * 哈希本来就存在库里（主键就是它），所以这里只是把撤销按主键走。
+     *
+     * @returns {boolean} 是否真的撤掉了
+     */
+    revokeByHash(tokenHash) {
+      if (typeof tokenHash !== 'string' || !/^[0-9a-f]{64}$/.test(tokenHash)) return false;
+      return revoke.run(Date.now(), tokenHash).changes > 0;
+    },
+
+    /** 该哈希是否存在且未撤销（撤销前后调用方都要确认再动连接）。 */
+    isActiveHash(tokenHash) {
+      if (typeof tokenHash !== 'string' || tokenHash === '') return false;
+      const row = getByHash.get(tokenHash);
+      return !!row && row.revoked_at === null;
+    },
   };
 }
 

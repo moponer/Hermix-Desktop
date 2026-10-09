@@ -27,6 +27,8 @@ class NodeSlot {
     this.nodeId = nodeId;
     /** @type {object|null} 电脑侧连接 */
     this.nodeConn = null;
+    /** 电脑侧连接的凭据哈希。**没有它就没法判断"来顶号的是不是同一个人"**。 */
+    this.nodeHash = null;
     /** @type {Map<string, object>} 手机连接：key = 手机 token 哈希 */
     this.phoneConns = new Map();
   }
@@ -52,13 +54,62 @@ class Router {
     return s;
   }
 
-  /** 电脑侧接入。同一 node 重连时顶掉旧连接（出站重连的常态）。 */
-  attachNode(nodeId, conn) {
+  /**
+   * 电脑侧接入。
+   *
+   * ## 顶号必须凭据相等
+   *
+   * 原实现无条件替换（`node_replaced`），于是**任何持有该 node_id 的另一条凭据
+   * 都能把真电脑踢下线**。这不是理论风险：`node_id` 只有 32 位熵，而且它就明晃晃
+   * 印在二维码的 `server_id` 与桌面端设置页里，猜到或抄到都不难。
+   *
+   * 改成「只有同一凭据才能顶掉旧连接」之后：真电脑重连（同一 `hrel_*`）行为不变，
+   * 而别人拿另一条凭据来抢同一个 node_id 会被拒绝。这条同时也是开放自助注册的前置
+   * 条件——没有它，任何人都能凭空注册一台电脑把受害者挤下线。
+   *
+   * @returns {'attached'|'replaced'|'conflict'}
+   */
+  attachNode(nodeId, tokenHash, conn) {
     const s = this.slot(nodeId);
+    if (s.nodeConn !== null && s.nodeHash !== tokenHash) {
+      this.audit.write('route', nodeId, 'node', 'node_evict_rejected');
+      return 'conflict';
+    }
     const replaced = s.nodeConn !== null;
     s.nodeConn = conn;
+    s.nodeHash = tokenHash;
     this.audit.write('route', nodeId, 'node', replaced ? 'node_replaced' : 'node_attached');
-    return replaced;
+    return replaced ? 'replaced' : 'attached';
+  }
+
+  /**
+   * 断开并移除持有该凭据哈希的手机连接。
+   *
+   * 撤销必须**立刻断连**，否则「撤销」只是个界面动作：那台手机虽然发不出帧
+   * （hermix 侧 `verify_frame_auth` 会拒），却还在持续接收广播给该 node 的所有
+   * 出站帧。`auth.js` 的判据原话是「否则撤销按钮就是个摆设」。
+   *
+   * @returns {number} 实际断开的连接数
+   */
+  dropPhone(tokenHash) {
+    let n = 0;
+    for (const [nodeId, s] of this.slots) {
+      const conn = s.phoneConns.get(tokenHash);
+      if (!conn) continue;
+      s.phoneConns.delete(tokenHash);
+      try {
+        conn.close(1000, 'revoked');
+      } catch {
+        // 连接可能已经死了；清理路由表才是要紧的，close 失败不影响。
+      }
+      this.audit.write('disconnect', nodeId, 'phone', 'phone_revoked');
+      n += 1;
+    }
+    // 整个 node 空了就回收
+    for (const [nodeId, s] of [...this.slots]) {
+      if (s.nodeConn === null && s.phoneConns.size === 0) this.slots.delete(nodeId);
+    }
+    return n;
   }
 
   /** 手机侧接入。同一 token 重连顶掉旧连接。 */

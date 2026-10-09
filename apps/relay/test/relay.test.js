@@ -150,6 +150,139 @@ test('auth: 只认 Authorization 头，query 传参一律不认', () => {
   assert.strictEqual(bearerFromHeaders({}), null, 'query 通道已移除');
 });
 
+// ------------------------------------------------- server.js 签发手机凭据
+
+/**
+ * 起一个真 relay 实例，用 fetch 打它的 HTTP 面。
+ *
+ * 这里**必须**用真 HTTP 而不直接调函数：要验的正是「没有 Bearer 就 401」
+ * 与「只有 node 角色能签发」这两条边界，而它们发生在中间件与路由层。
+ */
+async function withRelay(fn) {
+  const { server, registry } = createRelay({ dbPath: tmpDb() });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    return await fn({ base, registry });
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    registry.close();
+  }
+}
+
+test('issue-phone: 无凭据被 401', async () => {
+  await withRelay(async ({ base }) => {
+    const r = await fetch(`${base}/api/relay/issue-phone`, { method: 'POST' });
+    assert.strictEqual(r.status, 401);
+  });
+});
+
+test('issue-phone: 凭据无效被 401', async () => {
+  await withRelay(async ({ base }) => {
+    const r = await fetch(`${base}/api/relay/issue-phone`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer hrel_nope' },
+    });
+    assert.strictEqual(r.status, 401);
+  });
+});
+
+test('issue-phone: node 凭据换到同 node 名下的手机凭据', async () => {
+  await withRelay(async ({ base, registry }) => {
+    const nodeToken = registry.register({ nodeId: 'pc-1', role: 'node' });
+    const r = await fetch(`${base}/api/relay/issue-phone`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${nodeToken}` },
+      body: JSON.stringify({ label: '我的手机' }),
+    });
+    assert.strictEqual(r.status, 200);
+    const { token, node_id } = await r.json();
+    assert.strictEqual(node_id, 'pc-1', '必须挂在请求方自己的 node 名下');
+    assert.ok(token.startsWith('hrel_'), '明文只此一次下发');
+
+    // 签发出来的东西必须**真的能用**，否则等于给了一个假凭证
+    const who = registry.authenticate(token);
+    assert.ok(who, '新凭据必须能通过校验');
+    assert.strictEqual(who.role, 'phone');
+    assert.strictEqual(who.nodeId, 'pc-1');
+  });
+});
+
+test('issue-phone: 手机凭据不能再换手机凭据（防凭据扩散）', async () => {
+  await withRelay(async ({ base, registry }) => {
+    const phoneToken = registry.register({ nodeId: 'pc-1', role: 'phone' });
+    const r = await fetch(`${base}/api/relay/issue-phone`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${phoneToken}` },
+    });
+    assert.strictEqual(r.status, 403);
+  });
+});
+
+test('revoke-phone: 按哈希撤销并断连，凭据随即失效', async () => {
+  await withRelay(async ({ base, registry }) => {
+    const nodeToken = registry.register({ nodeId: 'pc-1', role: 'node' });
+    const issued = await (
+      await fetch(`${base}/api/relay/issue-phone`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${nodeToken}` },
+      })
+    ).json();
+    const { hashToken } = require('../src/auth');
+    const hash = hashToken(issued.token);
+    assert.ok(registry.isActiveHash(hash), '撤销前必须有效');
+
+    const r = await fetch(`${base}/api/relay/revoke-phone`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${nodeToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ token_hash: hash }),
+    });
+    assert.strictEqual(r.status, 200);
+    const body = await r.json();
+    assert.strictEqual(body.revoked, true);
+    assert.ok(!registry.isActiveHash(hash), '撤销后必须立刻失效');
+  });
+});
+
+test('revoke-phone: 手机凭据不能撤销别人', async () => {
+  await withRelay(async ({ base, registry }) => {
+    const phoneToken = registry.register({ nodeId: 'pc-1', role: 'phone' });
+    const r = await fetch(`${base}/api/relay/revoke-phone`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${phoneToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ token_hash: 'a'.repeat(64) }),
+    });
+    assert.strictEqual(r.status, 403);
+  });
+});
+
+test('revoke-phone: 哈希格式不对被 400，不当成"没找到"', async () => {
+  await withRelay(async ({ base, registry }) => {
+    const nodeToken = registry.register({ nodeId: 'pc-1', role: 'node' });
+    const r = await fetch(`${base}/api/relay/revoke-phone`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${nodeToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ token_hash: 'not-a-hash' }),
+    });
+    assert.strictEqual(r.status, 400);
+  });
+});
+
+test('revoke-phone: 撤销一个本机没有的哈希是幂等 200，不让 hermix 侧失败', async () => {
+  // hermix 里撤销设备时，手机可能压根没走过 relay（只做过局域网直连）。
+  // 那种情况下 relay 侧"没记录"是正常的，不该把整个撤销操作变成失败。
+  await withRelay(async ({ base, registry }) => {
+    const nodeToken = registry.register({ nodeId: 'pc-1', role: 'node' });
+    const r = await fetch(`${base}/api/relay/revoke-phone`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${nodeToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ token_hash: 'b'.repeat(64) }),
+    });
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual((await r.json()).revoked, false);
+  });
+});
+
 // -------------------------------------------------------------- router.js
 
 /** 假连接：只记录被发出去的帧。 */
@@ -166,7 +299,7 @@ test('router: 手机 → 电脑，按 node 隔离', () => {
   const events = [];
   const r = new Router({ audit: { write: (...a) => events.push(a) } });
   const nodeA = fakeConn();
-  r.attachNode('pc-A', nodeA);
+  r.attachNode('pc-A', 'hash-node-A', nodeA);
   r.attachPhone('pc-A', 'hash-phone-1', fakeConn());
 
   const payload = sealedPayload('hello');
@@ -183,7 +316,7 @@ test('router: 没有电脑在线时如实报告，不静默丢弃', () => {
 
 test('router: 电脑 → 多台手机全部投递（不负载均衡）', () => {
   const r = new Router({ audit: { write: () => {} } });
-  r.attachNode('pc-C', fakeConn());
+  r.attachNode('pc-C', 'hash-node-C', fakeConn());
   const p1 = fakeConn();
   const p2 = fakeConn();
   r.attachPhone('pc-C', 'h1', p1);
@@ -197,8 +330,8 @@ test('router: 不同 node 的手机互不可见', () => {
   const r = new Router({ audit: { write: () => {} } });
   const nodeA = fakeConn();
   const nodeB = fakeConn();
-  r.attachNode('pc-A', nodeA);
-  r.attachNode('pc-B', nodeB);
+  r.attachNode('pc-A', 'hash-node-A', nodeA);
+  r.attachNode('pc-B', 'hash-node-B', nodeB);
   const phoneA = fakeConn();
   r.attachPhone('pc-A', 'hash-a', phoneA);
   // pc-B 的帧只到 pc-B
@@ -210,9 +343,54 @@ test('router: 不同 node 的手机互不可见', () => {
 test('router: 全部断开后槽位被回收', () => {
   const r = new Router({ audit: { write: () => {} } });
   const node = fakeConn();
-  r.attachNode('pc-D', node);
+  r.attachNode('pc-D', 'hash-node-D', node);
   r.detach(node);
   assert.strictEqual(r.snapshot().nodes.length, 0, '空槽位必须回收，否则长跑进程攒内存');
+});
+
+// ── 顶号与撤销：这两个是安全语义，单独钉住 ──────────────────────
+
+test('router: 别的凭据不能顶掉在线的电脑', () => {
+  // node_id 只有 32 位熵且公开可见（印在二维码与设置页上），所以"拿着同一个
+  // node_id 的另一条凭据来抢"不是假想。原实现无条件替换，等于任何人都能把
+  // 受害者的电脑永久挤下线。
+  const r = new Router({ audit: { write: () => {} } });
+  const real = fakeConn();
+  assert.strictEqual(r.attachNode('pc-E', 'hash-real', real), 'attached');
+
+  const attacker = fakeConn();
+  assert.strictEqual(
+    r.attachNode('pc-E', 'hash-attacker', attacker),
+    'conflict',
+    '不同凭据必须被拒',
+  );
+  assert.strictEqual(r.snapshot().nodes[0].node_connected, true);
+  assert.strictEqual(r.slots.get('pc-E').nodeConn, real, '真连接必须原封不动');
+});
+
+test('router: 同一凭据重连可以顶掉自己的旧连接', () => {
+  const r = new Router({ audit: { write: () => {} } });
+  const first = fakeConn();
+  r.attachNode('pc-F', 'hash-f', first);
+  const second = fakeConn();
+  assert.strictEqual(r.attachNode('pc-F', 'hash-f', second), 'replaced');
+  assert.strictEqual(r.slots.get('pc-F').nodeConn, second, '出站重连必须能接管');
+});
+
+test('router: dropPhone 断开指定手机且不影响别的', () => {
+  const r = new Router({ audit: { write: () => {} } });
+  const closed = [];
+  const p1 = { ...fakeConn(), close: (code, why) => closed.push([code, why]) };
+  const p2 = fakeConn();
+  r.attachNode('pc-G', 'hash-g', fakeConn());
+  r.attachPhone('pc-G', 'hash-p1', p1);
+  r.attachPhone('pc-G', 'hash-p2', p2);
+
+  assert.strictEqual(r.dropPhone('hash-p1'), 1);
+  assert.strictEqual(closed.length, 1, '撤销必须**立刻断连**，否则它还在收广播');
+  assert.strictEqual(p2.sent.length, 0);
+  assert.strictEqual(r.slots.get('pc-G').phoneConns.size, 1, '另一台手机不受影响');
+  assert.strictEqual(r.dropPhone('hash-p1'), 0, '重复撤销幂等');
 });
 
 // --------------------------------------------------------- 端到端（真 WS）

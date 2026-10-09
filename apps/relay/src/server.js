@@ -44,6 +44,9 @@ function createRelay({ dbPath }) {
 
   const app = express();
   app.disable('x-powered-by');
+  // 只为 `POST /api/relay/issue-phone` 的 `{ label }`。之前全站没有 JSON
+  // body parser，这个端点是第一个需要读请求体的入口。
+  app.use(express.json({ limit: '4kb' }));
 
   app.get('/health', (_req, res) => {
     // 屏 1 展示的证书指纹。**必须是真证书的 sha256**，自己编一个常量就是
@@ -64,6 +67,81 @@ function createRelay({ dbPath }) {
       ...router.snapshot(),
       audit_failures: audit.failureCount(),
     })
+  });
+
+  // ── 签发手机凭据（凭据面，不碰 relay 协议面） ────────────────────
+  // 桌面端用**自己的** node 凭据来换一条手机凭据，省掉「每加一台手机就登
+  // 服务器敲一次 relayctl add-phone」。
+  //
+  // 为什么这样是安全的：node 凭据已经能代表这台电脑接入路由，再给它签发同
+  // node 名下的手机凭据不扩大攻击面——拿到它的人本来就能读这台电脑的流量
+  // （帧是密封的，读不到内容，但能投递）。反过来，**没有 node 凭据就拿不到
+  // 手机凭据**，所以这不是一个可以匿名滥用的签发口。
+  //
+  // 明文 token 仅此一次下发，与 `relayctl` 同一约定。
+  app.post('/api/relay/issue-phone', (req, res) => {
+    const token = bearerFromHeaders(req.headers);
+    if (!token) {
+      return res.status(401).json({ error: '缺少 Authorization: Bearer <node 凭据>' });
+    }
+    const who = registry.authenticate(token);
+    if (!who) {
+      return res.status(401).json({ error: '凭据无效或已撤销' });
+    }
+    // 只认 node 角色：手机拿手机凭据来换手机凭据没有意义，只会让凭据扩散。
+    if (who.role !== 'node') {
+      return res.status(403).json({ error: '只有 node 凭据能签发手机凭据' });
+    }
+    const label = typeof req.body?.label === 'string' ? req.body.label.slice(0, 64) : '';
+    try {
+      const issued = registry.register({ nodeId: who.nodeId, label, role: 'phone' });
+      audit.write('issue-phone', who.nodeId, 'node', 'phone_issued');
+      res.json({ token: issued, node_id: who.nodeId });
+    } catch (e) {
+      res.status(500).json({ error: `签发失败: ${e.message}` });
+    }
+  });
+
+  // ── 撤销一台手机的 relay 访问 ──────────────────────────────────
+  // 电脑端在 hermix 里撤销某台设备时调用这里。**只认凭据哈希**，不认明文——
+  // 电脑端从没见过那台手机的明文 `hrel_*`，它只有手机在配对时报上来的
+  // `sha256(token)`。
+  //
+  // 与 `issue-phone` 同一个信任前提：调用方必须是该 node 的 node 凭据。
+  // 手机只能撤自己（`issue-phone` 那侧已经用 role 挡住了）。
+  app.post('/api/relay/revoke-phone', (req, res) => {
+    const token = bearerFromHeaders(req.headers);
+    if (!token) {
+      return res.status(401).json({ error: '缺少 Authorization: Bearer <node 凭据>' });
+    }
+    const who = registry.authenticate(token);
+    if (!who) return res.status(401).json({ error: '凭据无效或已撤销' });
+    if (who.role !== 'node') {
+      return res.status(403).json({ error: '只有 node 凭据能撤销手机访问' });
+    }
+
+    // `express.json()` 只解析 `application/json`。别人发来 `text/plain`（fetch
+    // 的字符串 body 默认就是它）时 req.body 是空的——这时说「哈希格式不对」是
+    // 误导，会把人引到完全错误的方向上。
+    if (!req.body || typeof req.body !== 'object' || Object.keys(req.body).length === 0) {
+      return res.status(400).json({
+        error: '请求体为空或不是 JSON（content-type 须为 application/json）',
+      });
+    }
+    const hash = typeof req.body.token_hash === 'string' ? req.body.token_hash.trim() : '';
+    if (!/^[0-9a-f]{64}$/.test(hash)) {
+      return res.status(400).json({ error: 'token_hash 必须是 64 位小写 hex' });
+    }
+
+    // 顺序要紧：**先撤销凭据，再断连接**。反过来的话，连接在被踢之前还有
+    // 一瞬间能用已撤销的凭据发东西。
+    const revoked = registry.revokeByHash(hash);
+    const dropped = router.dropPhone(hash);
+    audit.write('revoke-phone', who.nodeId, 'node', revoked ? 'phone_revoked' : 'already_revoked');
+    // `revoked=false` 且 `dropped=0` = 这台手机从来没在这个 relay 上登记过，
+    // 幂等返回 200：hermix 侧的撤销仍然成立，不该因为"relay 那边没有记录"
+    // 就让整个操作失败。
+    res.json({ revoked, dropped, node_id: who.nodeId });
   });
 
   // ── 安装页 / APK 下载（静态，不碰 relay 协议面） ──────────────
@@ -287,7 +365,19 @@ function createRelay({ dbPath }) {
     };
 
     if (kind === 'node') {
-      router.attachNode(nodeId, ws);
+      const outcome = router.attachNode(nodeId, tokenHash, ws);
+      if (outcome === 'conflict') {
+        // 别人的凭据来抢这个 node_id：明确拒绝，并说清是"已有电脑在线"。
+        // 静默踢掉真电脑是 relay 最不该做的事——那等于让任何人把受害者挤下线。
+        ws.sendRaw(
+          buildEnvelope(TAG.CLOSE, {
+            node_id: nodeId,
+            detail: 'node_id_taken_by_another_credential',
+          }),
+        );
+        ws.close(4003, 'node_id already connected with a different credential');
+        return;
+      }
       ws.sendRaw(buildEnvelope(TAG.ACK, { node_id: nodeId, detail: 'node_registered' }));
     } else {
       router.attachPhone(nodeId, tokenHash, ws);
