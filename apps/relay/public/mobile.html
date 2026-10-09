@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Hermix 手机端 —— 在外面也能指挥那台电脑</title>
-<meta name="description" content="Android 伴侣端。扫二维码直连或走中转，在外面给桌面端下指令、审它要做的操作、接通话。" />
+<meta name="description" content="Android 伴侣端。扫桌面端的二维码配对，不用同一个网络；在外面给桌面端下指令、审它要做的操作、接通话。" />
 <link rel="stylesheet" href="assets/site.css" />
 </head>
 <body>
@@ -23,12 +23,12 @@
 
 <div class="sec">
   <h2>配对</h2>
-  <p class="lead">两条路，看你在不在同一个网络里。</p>
+  <p class="lead">扫桌面端的二维码。不需要同一个网络。</p>
   <div class="feat">
-    <div class="it"><div class="t">同一网络：扫一下就行</div><div class="d">扫桌面端的二维码直连。指纹核对放在输码之前，时钟差太多当场就报。</div></div>
-    <div class="it"><div class="t">不在同一网络：走中转</div><div class="d">桌面端签发长期凭据，经自建 relay 转发。桌面端点一下撤销，手机这边立刻断。</div></div>
+    <div class="it"><div class="t">扫的是电脑的码，连的是中转</div><div class="d">桌面端「设置 → 设备 → 手机端」出码，里面是中转地址、6 位配对码、手机凭据和电脑公钥。电脑在公司、手机在路上也能配。</div></div>
+    <div class="it"><div class="t">配对码还是要看一眼</div><div class="d">手机把配对请求密封发过去，电脑判码，通过才回长期凭据。码一次性、有有效期，试错次数也有限。时钟差太多当场就报。</div></div>
     <div class="it"><div class="t">中转方看不到内容</div><div class="d">中转只做路由，不参与授权判定，也不解析内层帧。它校验的只有一件事：这个凭据是不是登记过的、绑到哪个节点。</div></div>
-    <div class="it"><div class="t">撤销是幂等的</div><div class="d">即使中转站那边没有这台手机的记录，撤销也返回成功——电脑端的撤销已经成立，不该出现「点了没反应」。</div></div>
+    <div class="it"><div class="t">撤销权在电脑这边</div><div class="d">凭据是电脑签发的，中转站只存哈希。设置页点一下撤销，中转立刻断掉这条连接。即使中转站没有这台手机的记录也返回成功——撤销已经成立，不该出现「点了没反应」。</div></div>
   </div>
 </div>
 
@@ -72,8 +72,8 @@
   <h2>相关</h2>
   <div class="cards3">
     <a class="c" href="desktop.html"><div class="n">Hermix Desktop</div><div class="p">被遥控的那台。配对、签发凭据、撤销都在这里发起。</div><div class="go">查看 →</div></a>
-    <a class="c" href="article.html?id=pairing-scan"><div class="n">文章：手机扫一下就连上了</div><div class="p">二维码直连，指纹核对为什么放在输码之前。</div><div class="go">阅读 →</div></a>
-    <a class="c" href="article.html?id=pairing-relay"><div class="n">文章：不在同一个网络时怎么连</div><div class="p">中转服务器的职责边界，以及撤销怎么立刻生效。</div><div class="go">阅读 →</div></a>
+    <a class="c" href="article.html?id=pairing-scan"><div class="n">文章：扫一下桌面端的二维码就配好了</div><div class="p">二维码里装了什么，为什么不需要同一个网络。</div><div class="go">阅读 →</div></a>
+    <a class="c" href="article.html?id=pairing-relay"><div class="n">文章：中转那台服务器到底干什么</div><div class="p">不判授权、不解析内层帧，撤销权为什么在电脑手里。</div><div class="go">阅读 →</div></a>
   </div>
 </div>
 
