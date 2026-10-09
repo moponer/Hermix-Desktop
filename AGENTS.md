@@ -112,6 +112,10 @@ Key crates:
 
 ## Gotchas
 
+- **Rust 里没有正则字面量**（Rust 1.92 起，edition 2021 也不再解析 `/…/` 为正则）：
+  写 `if !/^[0-9a-f]{64}$/.test(s)` 会报 `expected expression, found '/'`，
+  看起来像括号配平错误，其实是语言特性没了。一律用 `regex::Regex::new(&pat)?`
+  （见 `crates/hermix-server/src/util.rs:35`）或手写 `chars().all(...)`。
 - **打包必须含最新后端与资源（每次打包前强制）**: 单 workspace 后产物一律在仓库根 `target/`；sidecar 刷新已自动化——`npm run build`（dev.mjs）与 `cargo tauri build` 的 `beforeBuildCommand` 都会跑 `npm run ensure-sidecar`（编译 hermix-server + hermix-indexer → 拷 binaries/ → sha256 逐字节校验，任一步失败即断）。**禁止绕过该脚本手工 copy**；build.rs 在 release 缺源时直接 panic。打包前仍跑 `./scripts/check-sidecar-freshness.sh`（exit 1 = 过期，禁止打包）：
   ```bash
   npm run build                # dev.mjs 全链路（含 ensure-sidecar）

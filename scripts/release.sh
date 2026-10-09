@@ -91,9 +91,12 @@ for s in hermix officecli markitdown usn-indexer; do
 done
 
 # resources（tauri.conf bundle.resources）：src-tauri/resources 相对路径原样保留。
+# 2016 个小文件用 robocopy /MT 多线程（cp 逐个过 Defender 实测过慢，曾致打包中断）；
+# robocopy 退出码 0-7 均为成功（1=有文件被复制），>=8 才是真失败。
+# 注意：必须在同一命令里短路吞掉成功码——set -e 会在 RC 赋值前就杀脚本。
 RES_SRC="$REPO_ROOT/apps/desktop-tauri/src-tauri/resources"
 [[ -d "$RES_SRC" ]] || { echo "错误：缺 resources 目录 $RES_SRC"; exit 1; }
-cp -r "$RES_SRC" "$APP/resources"
+robocopy "$(cygpath -w "$RES_SRC")" "$(cygpath -w "$APP/resources")" //E //MT:16 //NFL //NDL //NJH //NJS //NP || { RC=$?; [[ $RC -le 7 ]] || { echo "错误：robocopy 复制 resources 失败（退出码 $RC）"; exit 1; }; }
 
 # 许可与更新源自举（安装器 license 命令、更新后客户端检查都要）。
 cp "$REPO_ROOT/apps/desktop-tauri/src-tauri/license.rtf" "$APP/license.rtf"
@@ -123,8 +126,11 @@ fi
 # ── A 路：更新包 latest.zip + sha256 ─────────────────────────────
 echo "── A 路：打包 latest.zip"
 ZIP="$STAGING/latest.zip"
-powershell -NoProfile -Command "Compress-Archive -Path '$(cygpath -w "$APP")\*' -DestinationPath '$(cygpath -w "$ZIP")' -Force"
-SHA256="$(powershell -NoProfile -Command "(Get-FileHash '$(cygpath -w "$ZIP")' -Algorithm SHA256).Hash.ToLower()")"
+rm -f "$ZIP"
+# bsdtar（Windows 自带 tar.exe）按 .zip 扩展名自动选 zip 格式：比
+# Compress-Archive 快一个量级、无 2GB 限制；-C 使包内路径以 app 根为基准。
+(cd "$APP" && /c/Windows/System32/tar.exe -a -cf "$ZIP" .)
+SHA256="$(sha256sum "$ZIP" | awk '{print $1}')"
 echo "── sha256: $SHA256"
 
 # ── 更新日志：CHANGELOG 顶部段 → --notes → 兜底 ──────────────────
