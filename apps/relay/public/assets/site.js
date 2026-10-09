@@ -94,7 +94,9 @@
     var out = {};
     function put(ch, m, url) {
       var ok = !!(m && m.version);
-      out[ch + '.version'] = ok ? m.version : '未发布';
+      // 取不到清单不等于产品没发版——只是这台机器上没有清单文件
+      // （发布脚本部署到服务器，本地预览时没有）。措辞必须说清是「没读到」。
+      out[ch + '.version'] = ok ? m.version : '未读到清单';
       out[ch + '.date'] = ok ? fmtDate(m.pub_date || m.updatedAt) : '';
       out[ch + '.sha'] = ok ? (m.sha256 || '') : '';
       out[ch + '.shaShort'] = ok ? short(m.sha256) : '';
@@ -109,6 +111,7 @@
     var aok = !!(apk && apk.available);
     out['apk.ok'] = aok ? '1' : '';
     out['apk.version'] = aok ? (apk.version || '未标注') : '未上传';
+    out['apk.hint'] = aok ? '' : 'APK 还没放到发布目录';
     out['apk.date'] = aok ? fmtDate(apk.updatedAt) : '';
     out['apk.sha'] = aok ? (apk.sha256 || '') : '';
     out['apk.shaShort'] = aok ? short(apk.sha256) : '';

@@ -10,9 +10,11 @@
 
 <nav class="nav" data-nav></nav>
 
-<article class="doc" id="doc">
-  <div class="empty">文章加载中……</div>
-</article>
+<div class="reader">
+  <aside class="rail" id="rail"></aside>
+  <article class="body doc" id="doc"><div class="empty">文章加载中……</div></article>
+  <div class="spacer" aria-hidden="true"></div>
+</div>
 
 <footer class="ft" data-footer></footer>
 
@@ -24,18 +26,35 @@
     var all = window.ARTICLES || [];
     var names = { desktop: 'Hermix Desktop', mobile: 'Hermix 手机端', spiker: 'Spiker' };
     var links = { desktop: 'desktop.html', mobile: 'mobile.html', spiker: 'spiker.html' };
+    var order = ['desktop', 'mobile', 'spiker'];
     var id = new URLSearchParams(location.search).get('id');
     var i = all.findIndex(function (a) { return a.id === id; });
     var doc = document.getElementById('doc');
-    var notFound =
-      '<div class="crumb"><a href="articles.html">文章</a></div>' +
-      '<h1>没找到这篇</h1>' +
-      '<p>链接里的文章不存在或已改名。<a href="articles.html">回文章列表</a>。</p>';
+    var rail = document.getElementById('rail');
 
-    if (i < 0) { doc.innerHTML = notFound; return; }
+    // 左栏：按客户端分组的全部文章，当前篇高亮。
+    rail.innerHTML = order.map(function (c) {
+      var items = all.filter(function (a) { return a.client === c; });
+      if (!items.length) return '';
+      return '<div class="k">' + names[c] + '</div>' + items.map(function (a) {
+        return '<a href="article.html?id=' + a.id + '" data-id="' + a.id + '"' +
+          (a.id === id ? ' class="on"' : '') + '>' + a.title + '</a>';
+      }).join('');
+    }).join('') + '<div class="all"><a href="articles.html">全部 ' + all.length + ' 篇 →</a></div>';
+
+    if (i < 0) {
+      doc.innerHTML =
+        '<div class="crumb"><a href="articles.html">文章</a></div>' +
+        '<h1>没找到这篇</h1>' +
+        '<p>链接里的文章不存在或已改名。<a href="articles.html">回文章列表</a>。</p>';
+      return;
+    }
 
     var a = all[i];
     document.title = a.title + ' —— Hermix';
+
+    var cur = rail.querySelector('[data-id="' + a.id + '"]');
+    if (cur) cur.scrollIntoView({ block: 'nearest' });
 
     var prev = i > 0 ? all[i - 1] : null;
     var next = i < all.length - 1 ? all[i + 1] : null;
