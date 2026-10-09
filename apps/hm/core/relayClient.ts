@@ -5,6 +5,8 @@
  *
  * - `relay 凭据 hrel_*` → **HTTP 握手头**。relay 认的是**连接**，不是帧，
  *   所以它必须随 `connect` 的请求发出去，只在帧里带会被 401。
+ *   relay 侧只认 `Authorization: Bearer`（`auth.js` 的 `bearerFromHeaders`，
+ *   `?token=` 查询通道已被刻意删除），所以必须走 `uni.connectSocket({header})`。
  * - `hmxd_* 设备凭据 + 签名` → **帧内 `auth` 字段**。App 不直接向 hermix 发
  *   HTTP，中间那跳是 relay，请求头没有落脚的地方；凭据由 hermix 在 PC 侧验
  *   （`mobile_ws::verify_frame_auth`），relay 只透传。
@@ -54,7 +56,9 @@ function relayWsUrl(base: string, kind: 'phone' | 'node'): string {
  * 那是这个循环的职责，调用方只管发帧。
  */
 export class RelayClient {
-  private ws: WebSocket | null = null
+  private task: UniApp.SocketTask | null = null
+  /** 自己记连通性：`SocketTask` 不暴露 `readyState`。 */
+  private open = false
   private closed = false
   private attempt = 0
   private readonly opts: RelayClientOptions
@@ -69,14 +73,14 @@ export class RelayClient {
 
   close(): void {
     this.closed = true
-    this.ws?.close()
-    this.ws = null
+    this.open = false
+    this.task?.close({})
+    this.task = null
   }
 
   /** 往当前会话发一帧内层文本（会连带签名）。未连上时返回 false。 */
   send(payload: string): boolean {
-    const ws = this.ws
-    if (!ws || ws.readyState !== WebSocket.OPEN) return false
+    if (!this.task || !this.open) return false
     this.sendEnvelope(payload).catch((e) => this.opts.onError?.(String(e)))
     return true
   }
@@ -94,34 +98,50 @@ export class RelayClient {
       auth: { bearer: this.opts.deviceToken, signature: sig },
       payload,
     }
-    this.ws?.send(encodeEnvelope(env))
+    this.task?.send({ data: encodeEnvelope(env) })
   }
 
   private connect(): void {
     if (this.closed) return
     this.opts.onState?.('connecting')
-    // uni-app 的 WebSocket 在 H5 下就是浏览器 WebSocket；小程序/App 端由运行时
-    // 映射到原生实现。两边都支持自定义 header，但只有 H5 一定支持 —— 所以
-    // 握手头缺失时要显式报出来，而不是连上后被 relay 401 然后一脸茫然。
-    let ws: WebSocket
+    // 必须用 `uni.connectSocket` 而不是全局 `WebSocket`。
+    //
+    // relay 的凭据 `hrel_*` 只认 **HTTP 握手头**：`Authorization: Bearer …`
+    // （relay `server.js` 的 upgrade handler 直接 401，`auth.js` 的
+    // `bearerFromHeaders` 只读这个头，`?token=` 查询通道已被刻意删除）。
+    // 浏览器的 `new WebSocket(url)` **无法设置自定义头**，所以那条写法必然 401。
+    // `uni.connectSocket` 在 App / 小程序端由运行时映射到原生实现，能带头。
+    //
+    // 交付目标只有 App（Android）：`uni.connectSocket` 在那里由运行时映射到
+    // 原生实现，能带头。H5 不在范围内。
+    if (!this.opts.relayToken.trim()) {
+      this.scheduleRetry('没填 relay 凭据（hrel_*），无法连接')
+      return
+    }
+    let task: UniApp.SocketTask
     try {
-      ws = new WebSocket(relayWsUrl(this.opts.baseUrl, 'phone'))
+      task = uni.connectSocket({
+        url: relayWsUrl(this.opts.baseUrl, 'phone'),
+        header: { Authorization: `Bearer ${this.opts.relayToken.trim()}` },
+        complete: () => undefined,
+      })
     } catch (e) {
       this.scheduleRetry(String(e))
       return
     }
-    this.ws = ws
+    this.task = task
 
-    ws.onopen = () => {
+    task.onOpen(() => {
+      this.open = true
       this.attempt = 0
       this.opts.onState?.('open')
       const hello: Envelope = {
         ...helloFrame('', this.opts.nodeId),
         // relay 认连接上的凭据；hash 由 relay 侧自行算，这里只报身份
       }
-      ws.send(encodeEnvelope(hello))
-    }
-    ws.onmessage = (ev: MessageEvent) => {
+      task.send({ data: encodeEnvelope(hello) })
+    })
+    task.onMessage((ev) => {
       const parsed = parseEnvelope(typeof ev.data === 'string' ? ev.data : '')
       if (!parsed.ok) {
         if (parsed.versionMismatch) {
@@ -133,15 +153,23 @@ export class RelayClient {
       if (env.tag === 'route' && env.payload !== undefined) {
         this.opts.onFrame(env.payload)
       }
-    }
-    ws.onerror = () => {
+    })
+    task.onError((e) => {
+      this.open = false
       this.opts.onState?.('error')
-    }
-    ws.onclose = () => {
-      this.ws = null
+      const msg = String((e as { errMsg?: string })?.errMsg ?? '')
+      // 401 是最常见的一种，且原因明确（凭据没填 / 被撤销 / 注册在别的 node 下），
+      // 必须原样透出去，否则用户只会看到「连不上」。
+      if (/401|unauthorized/i.test(msg)) {
+        this.opts.onError?.('relay 拒绝了这条连接（401）：凭据无效或已被撤销')
+      }
+    })
+    task.onClose(() => {
+      this.open = false
+      this.task = null
       this.opts.onState?.('closed')
       this.scheduleRetry('relay 连接断开')
-    }
+    })
   }
 
   private scheduleRetry(reason: string): void {

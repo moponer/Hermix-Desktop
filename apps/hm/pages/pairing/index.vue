@@ -1,141 +1,140 @@
 <script setup lang="ts">
 /**
- * 屏 1 · 配对
+ * 配对屏 —— 扫桌面端的码，直连那台电脑。
  *
- * 顺序是刻意的：**先核对 relay 身份，再输配对码**。信任建立必须先于输入
- * 凭据——反过来做的话，用户已经在输码了才被告知要核对证书指纹。
+ * ## 这条链路是通的，不是新造的
  *
- * 三个安全相关的东西在这一屏：
- * 1. relay host + 证书指纹的显式确认（TOFU 单独用是不够的：首次信任对象
- *    由用户手输决定，输错或被换址就等于交出设备 token）；
- * 2. 设备时钟偏差（签名含时间戳，偏了会全 401，而现象是"连不上"）；
- * 3. 凭据落盘位置（见 credentials.ts 的诚实说明）。
+ * 桌面端 `设置 → 设备 → 手机端` 已经发着一个二维码，内容就是
+ * `https://{lan_ip}:8443/pair?c={code}&fp={fingerprint}`；同一个 TLS 监听器上
+ * 已经挂着 `POST /api/pairing/complete`。这一屏做的事，和那个二维码指向的
+ * `/pair` 落地页里那段 JS **完全一样**（契约见 `core/direct.ts` 文件头）。
+ *
+ * ## 为什么不再走 relay
+ *
+ * 原先这屏打的是 `POST {relay}/api/pairing/complete`，而 relay 里没有这条路由，
+ * 必然 404。补 relay 中转要跨三端（relay + Rust + hm），因为配对码的判定权在
+ * PC 的 `PairingSessions::consume`，而 PC 只出站连 relay。先把能用的接通。
+ *
+ * ## 顺序还是刻意的：先核对指纹，再提交
+ *
+ * 二维码里带着桌面端本机 TLS 证书的 SHA-256 指纹。提交时原样回传，服务端与
+ * 自己的指纹比对，**不符直接 403 拒发 token**（`pairing.rs:810-830`）。这一步
+ * 不是形式：同网段 MITM 出示自签证书 + 克隆 `/pair` 页就能把配对码换成
+ * device_token。本屏把指纹显示出来，是为了让用户能拿它和桌面上那一行肉眼比对，
+ * 而不是把一个自己声明的值当真。
  */
-import { ref, computed } from 'vue'
-import { onLoad } from '@dcloudio/uni-app'
-import { checkClockSkew, SKEW_WARN_SECS, setRelayBaseUrl, relayBaseUrl } from '../../core/clock'
-import { verifyConformance } from '../../core/signature'
-import { completePairing, fingerprintOf } from '../../core/pairing'
+import { ref } from 'vue'
+import { parsePairingUrl, completeDirect, shortFingerprint, defaultDeviceName, type DirectTarget } from '../../core/direct'
+import { storePairedDevice, hasSubtleCrypto, relayToken } from '../../core/pairing'
 
-// 默认预填运营方托管 relay（安装页同款地址）；自建中转的用户可在屏 1 改。
-const relayUrl = ref(relayBaseUrl() ?? 'https://hermix.cssso.com')
-const code = ref<string[]>(['', '', '', '', '', ''])
-const fingerprint = ref('')
-const fingerprintOk = ref(false)
-const skewSecs = ref<number | null>(null)
+/** 扫到并解析成功、但用户还没确认提交的码。 */
+const target = ref<DirectTarget | null>(null)
 const busy = ref(false)
 const error = ref('')
 
-const canSubmit = computed(
-  () => code.value.every((c) => c !== '') && fingerprintOk.value && !busy.value,
-)
+const cryptoOk = hasSubtleCrypto()
 
-onLoad(async (q) => {
-  if (q?.code) {
-    // 深链 hermix://pair?code=… 预填，但**不跳过指纹确认**
-    const raw = decodeURIComponent(q.code).replace(/\D/g, '').slice(0, 6)
-    if (raw.length === 6) code.value = raw.split('')
-  }
-  await probe()
-})
-
-async function probe() {
+function onScan() {
   error.value = ''
-  fingerprint.value = ''
-  fingerprintOk.value = false
-  try {
-    setRelayBaseUrl(relayUrl.value)
-    // 顺带量时钟：两个探针一起发，省一次往返
-    const [fp, skew] = await Promise.all([fingerprintOf(relayUrl.value), checkClockSkew(relayUrl.value)])
-    if (!fp) {
-      error.value = '连不上这个 relay。检查域名解析与证书。'
-      return
-    }
-    fingerprint.value = fp
-    skewSecs.value = skew
-  } catch (e) {
-    error.value = String(e)
-  }
-}
-
-function onCodeInput(i: number, e: { detail: { value: string } }) {
-  const digits = e.detail.value.replace(/\D/g, '')
-  const next = [...code.value]
-  // 一次粘贴 6 位时铺满，省得一个个点
-  if (digits.length > 1) {
-    digits.slice(0, 6).split('').forEach((d, k) => {
-      if (i + k < 6) next[i + k] = d
-    })
-  } else {
-    next[i] = digits
-  }
-  code.value = next
+  uni.scanCode({
+    success: (res) => {
+      const t = parsePairingUrl(res.result)
+      if (!t) {
+        error.value = '这不是 hermix 的配对码。请在电脑上「设置 → 设备 → 手机端」重新生成。'
+        return
+      }
+      target.value = t
+    },
+    fail: (e) => {
+      const msg = String((e as { errMsg?: string })?.errMsg ?? '')
+      if (/cancel/i.test(msg)) return // 用户自己取消不是错误
+      error.value = '扫码失败，请确认已允许相机权限。也可以用手机自带相机扫码，在浏览器里完成配对。'
+    },
+  })
 }
 
 async function submit() {
+  const t = target.value
+  if (!t) return
   busy.value = true
   error.value = ''
   try {
-    // 开发期自检：签名算法与 Rust 侧固定向量是否一致。
-    // 不一致就别发请求——发出去必然 401，而现象是"配对失败"，难查。
-    if (!(await verifyConformance())) {
-      error.value = '签名自检未通过（与 hermix 服务端不一致），已中止。'
-      return
-    }
-    await completePairing({ relayUrl: relayUrl.value, code: code.value.join('') })
-    uni.redirectTo({ url: '/pages/chat/index' })
+    // 把 relay 凭据一起报上去（报的是 sha256 哈希，不是明文）。电脑端靠它
+    // 才能在「撤销设备」时让 relay 断开这台手机——否则撤销只断一半。
+    const r = await completeDirect({
+      target: t,
+      deviceName: defaultDeviceName(),
+      relayToken: relayToken(),
+    })
+    await storePairedDevice({ deviceId: r.deviceId, deviceToken: r.deviceToken })
+    uni.reLaunch({ url: '/pages/chat/index' })
   } catch (e) {
-    error.value = String(e)
+    error.value = e instanceof Error ? e.message : String(e)
   } finally {
     busy.value = false
   }
+}
+
+function reset() {
+  target.value = null
+  error.value = ''
 }
 </script>
 
 <template>
   <view class="screen">
-    <!-- 吉祥物与桌面端同一个（static/mascot.png = apps/desktop-tauri/public/mascot-256.png）：
-         配对屏是用户第一眼，两端同一个形象才像"同一个产品"。 -->
     <image class="logo" src="/static/mascot.png" mode="aspectFit" />
+    <text class="hero">连接你的电脑</text>
+    <text class="sub">扫电脑「设置 → 设备」里的配对码</text>
 
-    <text class="hero">连接你的助手</text>
-    <text class="sub">先核对中转身份，再输码</text>
-
-    <view class="card">
-      <view class="fp-row">
-        <text class="fp-host">{{ relayUrl.replace(/^https?:\/\//, '') }}</text>
-        <text v-if="fingerprint" class="fp-ok">✓</text>
+    <!-- 第一步：扫 -->
+    <view v-if="!target" class="card">
+      <view class="scan" @tap="onScan">
+        <view class="scan-box">
+          <view class="corner tl" />
+          <view class="corner tr" />
+          <view class="corner bl" />
+          <view class="corner br" />
+        </view>
+        <text class="scan-t">扫码连接</text>
       </view>
-      <text v-if="fingerprint" class="fp-hex">SHA-256 {{ fingerprint.slice(0, 8) }}…{{ fingerprint.slice(-4) }}</text>
-      <text v-else class="fp-hex dim">正在读取证书指纹…</text>
+      <text class="card-hint">
+        手机和电脑要在同一个 Wi-Fi。扫不了就用手机自带相机扫同一个码，会在浏览器里打开配对页。
+      </text>
     </view>
 
-    <view class="code-row">
-      <input
-        v-for="(c, i) in code"
-        :key="i"
-        class="code-box"
-        type="number"
-        maxlength="6"
-        :value="c"
-        @input="onCodeInput(i, $event)"
-      />
-    </view>
+    <!-- 第二步：核对身份，再提交 -->
+    <template v-else>
+      <view class="card">
+        <view class="fp-row">
+          <text class="fp-label">这台电脑</text>
+          <text class="fp-change" @tap="reset">换一个</text>
+        </view>
+        <text class="fp-host">{{ target.baseUrl.replace(/^https?:\/\//, '') }}</text>
+        <text class="fp-hex">证书指纹 {{ shortFingerprint(target.fingerprint) }}</text>
+        <text class="card-hint">
+          请与电脑「设置 → 设备 → 手机端」那一行显示的指纹核对一致后再连接。
+        </text>
+      </view>
 
-    <view v-if="skewSecs !== null && Math.abs(skewSecs) > SKEW_WARN_SECS" class="notice warn">
-      <text>时钟{{ skewSecs > 0 ? '快' : '慢' }} {{ Math.abs(skewSecs) }} 秒。签名含时间戳，超 ±300 秒会全部被拒。</text>
-    </view>
+      <view v-if="!cryptoOk" class="notice err">
+        <text>本机运行时没有 WebCrypto，配对后的端到端加密无法工作。请换用官方安装包。</text>
+      </view>
 
-    <view v-if="error" class="notice err">{{ error }}</view>
+      <view v-if="error" class="notice err"><text>{{ error }}</text></view>
 
-    <button class="btn-pri" :disabled="!canSubmit" @tap="submit">
-      {{ busy ? '配对中…' : '扫码' }}
-    </button>
+      <view
+        class="btn-pri"
+        :class="{ off: busy || !cryptoOk }"
+        @tap="busy || !cryptoOk ? undefined : submit()"
+      >
+        <text>{{ busy ? '连接中…' : '确认并连接' }}</text>
+      </view>
 
-    <view class="relay-row" @tap="probe">
-      <text class="dim">relay 地址</text>
-      <text class="dim">{{ relayUrl.replace(/^https?:\/\//, '') }}</text>
-    </view>
+      <view class="btn-sec" @tap="reset"><text>返回</text></view>
+    </template>
+
+    <text class="foot">配对码 60 分钟内有效、只能用一次</text>
   </view>
 </template>
 
@@ -146,80 +145,159 @@ async function submit() {
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 120rpx 60rpx 60rpx;
+  padding: calc(var(--status-bar-height, 24px) + 80rpx) 48rpx
+    calc(env(safe-area-inset-bottom) + 48rpx);
   box-sizing: border-box;
 }
 .logo {
-  width: 132rpx;
-  height: 132rpx;
-  margin-bottom: 26rpx;
+  width: 112rpx;
+  height: 112rpx;
+  margin-bottom: 22rpx;
 }
-.hero { font-size: 34rpx; font-weight: 600; color: $fg; }
-.sub { font-size: 22rpx; color: $fg2; margin: 10rpx 0 40rpx; }
+.hero {
+  font-size: 34rpx;
+  font-weight: 600;
+  color: $fg;
+}
+.sub {
+  font-size: 22rpx;
+  color: $fg2;
+  margin: 10rpx 0 34rpx;
+}
 
 .card {
   width: 100%;
   background: $card;
-  border: 1rpx solid $line;
   border-radius: $r-card;
-  padding: 22rpx 24rpx;
-  margin-bottom: 40rpx;
+  padding: 26rpx 24rpx;
 }
-.fp-row { display: flex; align-items: center; justify-content: space-between; }
-.fp-host { font-size: 24rpx; color: $fg2; }
-.fp-ok { color: $ok; font-weight: 700; }
+.card-hint {
+  display: block;
+  margin-top: 18rpx;
+  font-size: 20rpx;
+  color: $fg4;
+  line-height: 1.6;
+}
+
+/* 扫码区：四角标记画在底色块上，不描边。 */
+.scan {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 24rpx 0 8rpx;
+}
+.scan-box {
+  position: relative;
+  width: 190rpx;
+  height: 190rpx;
+  background: $raised;
+  border-radius: 24rpx;
+}
+.corner {
+  position: absolute;
+  width: 40rpx;
+  height: 40rpx;
+  border-radius: 8rpx;
+  background: $accent;
+}
+.tl {
+  top: -6rpx;
+  left: -6rpx;
+}
+.tr {
+  top: -6rpx;
+  right: -6rpx;
+}
+.bl {
+  bottom: -6rpx;
+  left: -6rpx;
+}
+.br {
+  bottom: -6rpx;
+  right: -6rpx;
+}
+.scan-t {
+  margin-top: 24rpx;
+  font-size: 25rpx;
+  font-weight: 600;
+  color: $accent;
+}
+
+.fp-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.fp-label {
+  font-size: 20rpx;
+  color: $fg4;
+}
+.fp-change {
+  font-size: 21rpx;
+  color: $accent;
+}
+.fp-host {
+  display: block;
+  margin-top: 8rpx;
+  font-size: 25rpx;
+  color: $fg;
+}
 .fp-hex {
   display: block;
   margin-top: 10rpx;
   font-size: 19rpx;
-  color: $fg4;
+  color: $fg3;
   font-family: monospace;
   word-break: break-all;
-}
-.dim { color: $fg4; font-size: 21rpx; }
-
-.code-row { display: flex; gap: 12rpx; margin-bottom: 32rpx; }
-.code-box {
-  width: 68rpx;
-  height: 84rpx;
-  background: $card;
-  border: 1rpx solid $edge;
-  border-radius: 18rpx;
-  color: $fg;
-  font-size: 34rpx;
-  font-weight: 600;
-  text-align: center;
 }
 
 .notice {
   width: 100%;
-  border-radius: 20rpx;
+  margin-top: 20rpx;
+  border-radius: 18rpx;
   padding: 18rpx 20rpx;
   font-size: 21rpx;
   line-height: 1.5;
-  margin-bottom: 24rpx;
   box-sizing: border-box;
+  color: $fg2;
+  background: $card;
 }
-.notice.warn { background: $warn-bg; color: $warn; border: 1rpx solid rgba(211, 163, 76, 0.25); }
-.notice.err { background: $err-bg; color: $err; border: 1rpx solid rgba(224, 107, 82, 0.25); }
+.notice.err {
+  background: $err-bg;
+  color: $err;
+}
 
 .btn-pri {
   width: 100%;
+  margin-top: 26rpx;
   height: 88rpx;
   line-height: 88rpx;
+  text-align: center;
   border-radius: 44rpx;
   background: $accent;
   color: $on-accent;
   font-size: 26rpx;
   font-weight: 600;
-  border: none;
 }
-.btn-pri[disabled] { opacity: 0.4; }
+.btn-pri.off {
+  opacity: 0.4;
+}
+.btn-sec {
+  width: 100%;
+  margin-top: 14rpx;
+  height: 76rpx;
+  line-height: 76rpx;
+  text-align: center;
+  border-radius: 38rpx;
+  background: $card;
+  color: $fg2;
+  font-size: 23rpx;
+}
 
-.relay-row {
-  margin-top: 32rpx;
-  display: flex;
-  gap: 12rpx;
-  align-items: center;
+.foot {
+  margin-top: 28rpx;
+  font-size: 20rpx;
+  color: $fg4;
+  text-align: center;
 }
 </style>

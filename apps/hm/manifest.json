@@ -10,8 +10,8 @@
         "nvueStyleCompiler" : "uni-app",
         "compilerVersion" : 3,
         "splashscreen" : {
-            "alwaysShowBeforeRender" : true,
-            "waiting" : true,
+            "alwaysShowBeforeRender" : false,
+            "waiting" : false,
             "autoclose" : true,
             "delay" : 0
         },
@@ -22,14 +22,15 @@
                 "permissions" : [
                     "<uses-permission android:name=\"android.permission.INTERNET\"/>",
                     "<uses-permission android:name=\"android.permission.RECORD_AUDIO\"/>",
-                    "<uses-permission android:name=\"android.permission.ACCESS_NETWORK_STATE\"/>"
+                    "<uses-permission android:name=\"android.permission.ACCESS_NETWORK_STATE\"/>",
+                    "<uses-permission android:name=\"android.permission.CAMERA\"/>"
                 ]
             },
             "ios" : {
                 "privacyDescription" : {
-                    "NSCameraUsageDescription" : "扫描配对二维码",
+                    "NSCameraUsageDescription" : "扫描桌面上显示的配对二维码",
                     "NSMicrophoneUsageDescription" : "语音输入与语音对话",
-                    "NSLocalNetworkUsageDescription" : "连接同一网络下自建的 relay"
+                    "NSLocalNetworkUsageDescription" : "连接同一网络下的电脑完成配对"
                 },
                 "dSYMs" : false
             },

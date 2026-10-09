@@ -1,10 +1,10 @@
 {
   "pages": [
     {
-      "path": "pages/pairing/index",
+      "path": "pages/boot/index",
       "style": {
         "navigationStyle": "custom",
-        "navigationBarTitleText": "配对"
+        "navigationBarTitleText": "Hermix M"
       }
     },
     {
@@ -15,10 +15,17 @@
       }
     },
     {
-      "path": "pages/call/index",
+      "path": "pages/pairing/index",
       "style": {
         "navigationStyle": "custom",
-        "navigationBarTitleText": "通话"
+        "navigationBarTitleText": "配对"
+      }
+    },
+    {
+      "path": "pages/tasks/index",
+      "style": {
+        "navigationStyle": "custom",
+        "navigationBarTitleText": "任务"
       }
     },
     {
@@ -29,10 +36,17 @@
       }
     },
     {
-      "path": "pages/tasks/index",
+      "path": "pages/call/index",
       "style": {
         "navigationStyle": "custom",
-        "navigationBarTitleText": "任务"
+        "navigationBarTitleText": "通话"
+      }
+    },
+    {
+      "path": "pages/settings/index",
+      "style": {
+        "navigationStyle": "custom",
+        "navigationBarTitleText": "设置"
       }
     }
   ],
