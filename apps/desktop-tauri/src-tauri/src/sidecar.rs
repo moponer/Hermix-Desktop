@@ -66,41 +66,56 @@ impl HermixSidecar {
     ///
     /// Resolution order:
     /// 1. **`HERMIX_SIDECAR_BIN` env var**, if set. Lets the user
-    ///    point at an arbitrary binary (e.g. for staging builds or
-    ///    `pnpm tauri dev` with a custom cargo target dir).
+    ///    point at an arbitrary binary (e.g. for staging builds).
     /// 2. **Dev mode** (`cfg!(debug_assertions)`, i.e. `pnpm tauri
-    ///    dev`): look for the debug build at the workspace root —
-    ///    `target/debug/hermix.exe` first, then fall back to
-    ///    `target/release/hermix.exe` (some developers keep a
-    ///    release build around for perf reasons).
+    ///    dev`): the single workspace's root `target/` only —
+    ///    debug then release, **max-by-mtime** among the ones that
+    ///    exist. first-exists 曾让陈旧副本永远命中（装着几小时前的
+    ///    旧代码去测，浪费两天排查），同一教训也催生了
+    ///    `scripts/check-sidecar-freshness.sh`。
     /// 3. **Release mode** (the bundled installer): `hermix.exe`
     ///    next to the running Tauri executable. The bundler is
     ///    expected to drop it there.
-    fn hermix_bin_path() -> PathBuf {
+    fn hermix_bin_path() -> Result<PathBuf, String> {
         if let Ok(p) = std::env::var("HERMIX_SIDECAR_BIN") {
             if !p.is_empty() {
-                return PathBuf::from(p);
+                return Ok(PathBuf::from(p));
             }
         }
 
         if cfg!(debug_assertions) {
-            let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-            let ws_root = manifest_dir.join("../../..");
-            let debug = ws_root.join("release/target/debug/hermix.exe");
-            if debug.exists() {
-                return debug;
-            }
-            let debug_fallback = ws_root.join("target/debug/hermix.exe");
-            if debug_fallback.exists() {
-                return debug_fallback;
-            }
-            ws_root.join("release/target/release/hermix.exe")
+            // 单 workspace 后产物只在仓库根 target/，历史布局
+            // （release/target/、src-tauri/target/）一律不再候选。
+            let ws_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
+            let candidates = [
+                ws_root.join("target/debug/hermix.exe"),
+                ws_root.join("target/release/hermix.exe"),
+            ];
+            let best = candidates
+                .iter()
+                .filter(|p| p.exists())
+                .max_by_key(|p| {
+                    p.metadata()
+                        .and_then(|m| m.modified())
+                        .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+                })
+                .ok_or_else(|| {
+                    format!(
+                        "hermix binary not found; build it first:\n    cargo build -p hermix-server --bin hermix\n(searched: {})",
+                        candidates
+                            .iter()
+                            .map(|p| p.display().to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                })?;
+            Ok(best.clone())
         } else {
             let exe_dir = std::env::current_exe()
                 .ok()
                 .and_then(|p| p.parent().map(|p| p.to_path_buf()))
                 .unwrap_or_default();
-            exe_dir.join("hermix.exe")
+            Ok(exe_dir.join("hermix.exe"))
         }
     }
 
@@ -114,7 +129,7 @@ impl HermixSidecar {
             return Ok(()); // Already running
         }
 
-        let bin = Self::hermix_bin_path();
+        let bin = Self::hermix_bin_path()?;
         eprintln!("[Hermix] Looking for binary at: {}", bin.display());
         if !bin.exists() {
             return Err(format!("hermix binary not found at {}", bin.display()));

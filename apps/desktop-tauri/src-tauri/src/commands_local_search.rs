@@ -415,32 +415,26 @@ mod usn_helper {
         std::env::temp_dir().join("hermix-usn-index")
     }
 
-    /// 定位 usn-indexer.exe。候选覆盖三种 target 布局，**按 mtime 取最新**
-    /// 而非"第一个存在"：CARGO_TARGET_DIR 改道（release/target）后，
-    /// src-tauri/target/debug 里会残留一份 9-30 的旧 helper（含 touch/心跳
-    /// 旧 bug），first-exists 会永远选中它 —— 现场 updates.jsonl 膨胀
-    /// 315MB 的元凶之一。开发期候选多无妨，生产永远落在情形 1。
+    /// 定位 usn-indexer.exe。候选收敛到仓库根 target/（单 workspace 唯一
+    /// 产物目录），**按 mtime 取最新**而非"第一个存在"：历史教训是残留
+    /// 旧候选被 first-exists 永远选中（9-30 的旧 helper 含 touch/心跳
+    /// 旧 bug，updates.jsonl 膨胀 315MB 的元凶之一）。生产永远落在情形 1。
     pub fn locate_helper() -> Option<PathBuf> {
         let exe_name = "usn-indexer.exe";
-        let mut candidates: Vec<PathBuf> = Vec::with_capacity(5);
+        let mut candidates: Vec<PathBuf> = Vec::with_capacity(3);
         if let Ok(exe) = std::env::current_exe() {
             if let Some(dir) = exe.parent() {
                 candidates.push(dir.join(exe_name));
             }
         }
         // CARGO_MANIFEST_DIR = apps/desktop-tauri/src-tauri（编译期常量）。
+        // 单 workspace 后产物一律在仓库根 target/；dev 下 usn-indexer 与
+        // 壳同 profile 编出（debug），候选不再含历史布局目录。
         let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        // workspace 的 .cargo/config.toml 把 target-dir 指到 <repo>/release/target。
         if let Some(repo) = manifest.parent().and_then(|p| p.parent()) {
-            candidates.push(repo.join("release/target/debug").join(exe_name));
-            candidates.push(repo.join("release/target/release").join(exe_name));
+            candidates.push(repo.join("target/debug").join(exe_name));
+            candidates.push(repo.join("target/release").join(exe_name));
         }
-        candidates.push(manifest.join("target/debug").join(exe_name));
-        candidates.push(manifest.join("target/release").join(exe_name));
-        candidates.push(manifest.parent().and_then(|p| p.parent()).map_or_else(
-            || manifest.join("target/debug").join(exe_name),
-            |repo| repo.join("target/debug").join(exe_name),
-        ));
         candidates
             .into_iter()
             .filter(|p| p.exists())
