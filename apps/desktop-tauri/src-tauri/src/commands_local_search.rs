@@ -480,6 +480,25 @@ mod usn_helper {
     ///    SE_ERR_*（值 ≤32 的正数），只有灾难性失败才返回"假句柄"；
     ///    is_invalid() 只能抓后者，UAC 被拒（SE_ERR_ACCESSDENIED）会被
     ///    当成成功，主进程傻等 done.json 300s 超时后才判失败。
+    /// spawn 诊断日志：追加到交换目录 spawn_debug.log，同时打 stderr。
+    /// 临时排障用——UAC/ShellExecuteW 的失败在非提权进程里静默，
+    /// 没有这份日志就只能黑盒猜。
+    fn spawn_debug_log(msg: &str) {
+        let line = format!(
+            "[{:?}] {msg}\n",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0)
+        );
+        eprint!("[local_search] {line}");
+        let _ = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(exchange_dir().join("spawn_debug.log"))
+            .and_then(|mut f| std::io::Write::write_all(&mut f, line.as_bytes()));
+    }
+
     fn spawn_elevated(helper: &Path, out_dir: &Path, volumes: &[String]) -> Result<(), String> {
         use windows::core::PCWSTR;
         use windows::Win32::Foundation::HWND;
@@ -510,6 +529,14 @@ mod usn_helper {
                 SW_HIDE,
             )
         };
+        let last_err = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+        spawn_debug_log(&format!(
+            "ShellExecuteW hinst={} lasterr={} helper={} params_len={}",
+            h.0 as usize,
+            last_err,
+            helper.display(),
+            params.len()
+        ));
         // HRESULT 式包装：低位 16 位是 SE_ERR 码。≤32 且非 0 = 失败。
         let code = h.0 as usize;
         if code > 0 && code <= 32 {
@@ -529,7 +556,7 @@ mod usn_helper {
             return Err(format!("UAC/启动失败（SE_ERR {code}：{what}）"));
         }
         if h.is_invalid() {
-            return Err("UAC 被拒绝或 helper 启动失败".into());
+            return Err(format!("UAC 被拒绝或 helper 启动失败（lasterr={last_err}）"));
         }
         Ok(())
     }
@@ -793,6 +820,12 @@ mod usn_helper {
             // 这里清掉是兜底陈旧语义。
             let _ = std::fs::remove_file(dir.join("helper.pid"));
             let _ = std::fs::remove_file(dir.join("helper.alive"));
+            spawn_debug_log(&format!(
+                "run(): spawn 开始 helper={} dir={} volumes={:?} resident_before={resident}",
+                helper.display(),
+                dir.display(),
+                volumes
+            ));
             spawn_elevated(&helper, &dir, volumes)?;
         }
         spawn_heartbeat();
