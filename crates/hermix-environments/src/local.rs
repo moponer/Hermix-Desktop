@@ -1326,6 +1326,36 @@ mod tests {
         );
     }
 
+    #[test]
+    fn slash_norm_dollar_interpolation_never_flipped() {
+        // BUG-08 回归：变量插值的值运行时才可知。`"$base/system/..."`
+        // 看着像相对路径，实际 $base 展开后是 URL——按路径翻斜杠会把
+        // `https://x/system/a` 葬送成 `https://x\system\a`。含 `$` 的
+        // token 一律原样保留。
+        assert_eq!(
+            normalize_windows_path_slashes(
+                "Invoke-WebRequest -Uri \"$base/system/rights/companyinfo\""
+            ),
+            "Invoke-WebRequest -Uri \"$base/system/rights/companyinfo\""
+        );
+        // 变量赋值里的 URL 同理（$base = 'https://…'）。
+        assert_eq!(
+            normalize_windows_path_slashes("$base = 'https://sy.cssso.com'.Trim()"),
+            "$base = 'https://sy.cssso.com'.Trim()"
+        );
+    }
+
+    #[test]
+    fn slash_norm_flips_real_paths_beside_interpolation() {
+        // 同一条命令里真路径照翻、插值 token 不动——两者互不牵连。
+        assert_eq!(
+            normalize_windows_path_slashes(
+                "Get-Content C:/logs/a.txt; Invoke-WebRequest -Uri \"$base/system/x\""
+            ),
+            "Get-Content C:\\logs\\a.txt; Invoke-WebRequest -Uri \"$base/system/x\""
+        );
+    }
+
     #[tokio::test]
     async fn test_read_file_binary_image_suggests_read_image() {
         let dir = std::env::temp_dir().join("hermes_test_binary_read");
