@@ -112,15 +112,13 @@ Key crates:
 
 ## Gotchas
 
-- **打包必须含最新后端与资源（每次打包前强制）**: `cargo tauri build` 不会自动重编 sidecar，也不会刷新任何 `binaries/` / `builtin-soul/` / `resources/` 静态文件——它只是把现存文件塞进安装包。打包前必须走完整链路，并跑 `./scripts/check-sidecar-freshness.sh`（exit 1 = 过期，禁止打包）：
+- **打包必须含最新后端与资源（每次打包前强制）**: 单 workspace 后产物一律在仓库根 `target/`；sidecar 刷新已自动化——`npm run build`（dev.mjs）与 `cargo tauri build` 的 `beforeBuildCommand` 都会跑 `npm run ensure-sidecar`（编译 hermix-server + hermix-indexer → 拷 binaries/ → sha256 逐字节校验，任一步失败即断）。**禁止绕过该脚本手工 copy**；build.rs 在 release 缺源时直接 panic。打包前仍跑 `./scripts/check-sidecar-freshness.sh`（exit 1 = 过期，禁止打包）：
   ```bash
-  cargo build --release -p hermix-server --bin hermix --target-dir release/target
-  cp release/target/release/hermix.exe apps/desktop-tauri/src-tauri/binaries/hermix-x86_64-pc-windows-msvc.exe
-  cp release/target/release/usn-indexer.exe apps/desktop-tauri/src-tauri/binaries/usn-indexer-x86_64-pc-windows-msvc.exe
-  # builtin-soul/SOUL.md、resources/ 等有改动时同步确认（它们是编译期/打包期静态拷贝）
+  npm run build                # dev.mjs 全链路（含 ensure-sidecar）
+  # 或最小路径：cargo tauri build 的 beforeBuildCommand 自带 ensure-sidecar
   ./scripts/check-sidecar-freshness.sh   # 必须 exit 0
   ```
-  教训：2026-10-06 与 2026-10-08 两次"修了但新装的包里没有"——测试/交付跑在旧二进制上。
+  教训：2026-10-06 与 2026-10-08 两次"修了但新装的包里没有"——测试/交付跑在旧二进制上。根因（手工 copy 链 + 三处产物目录分裂）已于 2026-10-09 根治，决策记录：`docs/notes/implemented/architecture/2026-10-09-single-workspace-target-dir.md`。
 - `.cargo/config.toml` hardcodes MSVC linker path — don't override
 - Linker is `rust-lld.exe` (`.cargo/config.toml`), which bypasses Git Bash's `link.exe` shadow entirely — no env script needed
 - Tauri v2.9.2 doesn't support standalone zip bundle — NSIS produces portable archive
