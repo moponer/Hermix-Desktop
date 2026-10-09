@@ -12,6 +12,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::LazyLock;
 
+use base64::Engine;
 use hermix_core::{types::ContentPart, Message, ToolCall, ToolResult};
 
 use crate::context::ContextManager;
@@ -480,6 +481,31 @@ pub fn extract_image_payload(content: &str) -> Option<(String, String)> {
     Some((mime, b64.to_string()))
 }
 
+/// `cua_screenshot` 现在无条件落盘，结果只带 `saved_to` 路径（像素不进
+/// 上下文）。子 agent 的视觉通道需要真字节：从盘上读回 PNG、编 base64。
+/// 路径来自工具自己的结果（committed transcript），不是模型编的字符串。
+/// 文件读不到（被清理/被移动）就回 `None`，子 agent 拿文本结果照旧。
+/// 带 `png_base64` 的旧结果不走这里——那是 `extract_image_payload` 的
+/// 文本通道，避免一条结果被两条路径各注入一次。
+pub fn image_payload_from_saved_file(content: &str) -> Option<(String, String)> {
+    let parsed: serde_json::Value = serde_json::from_str(content).ok()?;
+    if parsed.get("png_base64").is_some() {
+        return None;
+    }
+    let path = parsed.get("saved_to").and_then(|v| v.as_str())?;
+    if parsed.get("ok").and_then(|v| v.as_bool()) != Some(true) {
+        return None;
+    }
+    let bytes = std::fs::read(path).ok()?;
+    if bytes.is_empty() {
+        return None;
+    }
+    Some((
+        "image/png".to_string(),
+        base64::engine::general_purpose::STANDARD.encode(bytes),
+    ))
+}
+
 /// (A+C product fix): when a tool call was **denied** (not
 /// merely failed on execution) — user拒绝 / 超时 / 连接中断 — inject a
 /// structured `system` note right after the `tool_result` so the LLM's
@@ -814,6 +840,67 @@ mod tests {
             extract_image_payload(&content).expect("inline png_base64 must be extracted");
         assert_eq!(mime, "image/png");
         assert_eq!(b64, "iVBORw0KGgo=");
+    }
+
+    /// cua_screenshot 落盘后的新结果形态：只有 `saved_to` 路径，像素从
+    /// 盘上读回。读不到文件、ok=false、或带 png_base64 的旧结果都必须
+    /// 回 None，不能误注入。
+    #[test]
+    fn image_payload_from_saved_file_reads_png_off_disk() {
+        let dir = std::env::temp_dir().join(format!(
+            "hermix-test-capture-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let png = dir.join("shot.png");
+        std::fs::write(&png, b"\x89PNG\r\n\x1a\nfake").unwrap();
+
+        let content = serde_json::json!({
+            "tool": "cua_screenshot",
+            "width": 1920,
+            "height": 1080,
+            "ok": true,
+            "saved_to": png.display().to_string(),
+        })
+        .to_string();
+        let (mime, b64) = image_payload_from_saved_file(&content)
+            .expect("saved_to 文件存在时必须读回 payload");
+        assert_eq!(mime, "image/png");
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD.encode(b"\x89PNG\r\n\x1a\nfake"),
+            b64
+        );
+
+        // 文件不存在 → None（子 agent 退化为纯文本）。
+        let missing = serde_json::json!({
+            "ok": true,
+            "saved_to": dir.join("nope.png").display().to_string(),
+        })
+        .to_string();
+        assert!(image_payload_from_saved_file(&missing).is_none());
+
+        // ok=false（失败结果）→ None。
+        let failed = serde_json::json!({
+            "ok": false,
+            "saved_to": png.display().to_string(),
+        })
+        .to_string();
+        assert!(image_payload_from_saved_file(&failed).is_none());
+
+        // 旧结果带 png_base64 → None，留给文本通道，防止双份注入。
+        let legacy = serde_json::json!({
+            "ok": true,
+            "saved_to": png.display().to_string(),
+            "png_base64": "iVBORw0KGgo=",
+        })
+        .to_string();
+        assert!(image_payload_from_saved_file(&legacy).is_none());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Already-stripped content must return `None`, not a payload made of

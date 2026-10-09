@@ -256,18 +256,33 @@ fn save_to_path(params: &Value) -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+/// 进程内自增序号：保证同毫秒内连拍也不重名。
+static CAPTURE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// 未指定 `save_to` 时的默认落盘位：`<hermix_home>/captures/`。
+/// 像素永远不进上下文——UI 经 asset 协议从 `saved_to` 渲染（该目录已在
+/// assetProtocol scope 内），子 agent 由 processor 从盘上读回注入视觉
+/// 块，主上下文零 base64。
+fn default_capture_path(monitor: usize) -> PathBuf {
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let seq = CAPTURE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    hermix_config::paths::hermix_home()
+        .join("captures")
+        .join(format!("capture-{millis}-{seq}-m{monitor}.png"))
+}
+
 // ---------------------------------------------------------------------------
 // 1) cua_screenshot
 // ---------------------------------------------------------------------------
 
-/// Capture the primary monitor and return a JSON envelope
-/// containing the PNG bytes (base64) and the captured frame's
-/// dimensions.
-/// The handler does **not** add a top-level wrapper around the
-/// `ScreenshotResult` struct — the inner `png_base64` field is
-/// already JSON-safe (standard base64, no `\n` padding noise)
-/// and the desktop UI reads the same shape for `computer_use`'s
-/// screenshot result.
+/// Capture the primary monitor and return a JSON envelope carrying the
+/// saved PNG path and the captured frame's dimensions — **never** the
+/// base64 pixels (they live on disk; the desktop UI renders `saved_to`
+/// via the asset protocol, and the sub-agent vision path reads the file
+/// back in `tool_result_processor`).
 pub struct CuaScreenshotHandler;
 
 impl CuaScreenshotHandler {
@@ -312,24 +327,27 @@ impl ToolHandler for CuaScreenshotHandler {
         };
         let _ = TRACE.record(&event);
         let result = result?;
-        // 落盘分支：给 `save_to` 时只回路径与尺寸，像素不进上下文。
-        if let Some(path) = save_to_path(&params) {
-            let bytes = save_png_base64(&result.png_base64, &path)?;
-            return Ok(json!({
-                "tool": "cua_screenshot",
-                "monitor": result.monitor,
-                "monitor_name": result.monitor_name,
-                "width": result.width,
-                "height": result.height,
-                "bytes": bytes,
-                "saved_to": path.display().to_string(),
-                "ok": true,
-            })
-            .to_string());
-        }
-        serde_json::to_string_pretty(&result).map_err(|e| {
-            ToolError::ExecutionFailed(format!("screenshot JSON encode failed: {e}"))
+        // 落盘分支（无条件）：像素永不进上下文。显式 `save_to` 用调用方
+        // 的路径，否则落到 <hermix_home>/captures/ 下；结果只带路径与
+        // 尺寸——UI 经 asset 协议渲染 `saved_to`，子 agent 由 processor
+        // 从盘上读回。1920×1080 的帧 base64 后 1–2 MB，留进对话历史会被
+        // 后续每一轮重复计费，这是 cua 工具 token 成本的主要来源。
+        let path = match save_to_path(&params) {
+            Some(p) => p,
+            None => default_capture_path(result.monitor),
+        };
+        let bytes = save_png_base64(&result.png_base64, &path)?;
+        Ok(json!({
+            "tool": "cua_screenshot",
+            "monitor": result.monitor,
+            "monitor_name": result.monitor_name,
+            "width": result.width,
+            "height": result.height,
+            "bytes": bytes,
+            "saved_to": path.display().to_string(),
+            "ok": true,
         })
+        .to_string())
     }
 
     fn schema(&self) -> ToolSchema {
@@ -346,15 +364,21 @@ impl ToolHandler for CuaScreenshotHandler {
             "save_to".into(),
             json!({
                 "type": "string",
-                "description": "Write the PNG to this path and return only the path + dimensions. \
-                                Use this whenever the image is not needed inline: a 1920x1080 frame \
-                                costs 1-2 MB of base64 that every later turn pays for again. \
-                                Parent directories are created. Omit to get `png_base64` inline."
+                "description": "Optional explicit destination for the PNG. When omitted the \
+                                frame is auto-saved under <hermix_home>/captures/ — either way \
+                                the result carries only the path + dimensions, never pixels."
             }),
         );
         tool_schema(
             "cua_screenshot",
-            "Capture the primary monitor and return the frame as base64-encoded PNG.\n\
+            "Capture the primary monitor. The PNG is written to disk (auto path under \
+             <hermix_home>/captures/, or the explicit `save_to` path) and the result \
+             carries only `saved_to` + frame dimensions — never base64 pixels, so the \
+             conversation context stays small (a 1920x1080 frame would otherwise cost \
+             1-2 MB of base64 that every later turn pays for again). The desktop UI \
+             renders the saved file automatically. For model vision over the frame, \
+             delegate to a sub-agent (the pixels are injected there) or read specific \
+             regions with other tools.\n\
              \n\
              ## When to use this (vs. `computer_use`)\n\
              `cua_screenshot` is the lower-latency sibling of the existing `computer_use`\n\
@@ -363,15 +387,6 @@ impl ToolHandler for CuaScreenshotHandler {
              `computer_use` session), prefer `cua_screenshot` because it does not\n\
              import the input-pipeline crates and is therefore ~2× faster on first\n\
              call.\n\
-             \n\
-             ## Cost\n\
-             The PNG payload is encoded once at capture time and streamed as\n\
-             `png_base64` (standard base64, no line breaks). For a 1920×1080 screen\n\
-             that is ~1–2 MB, and every later turn in the conversation pays for it\n\
-             again. Pass `save_to` to keep the pixels out of the context: the PNG\n\
-             is written to that path and the result carries only the path and the\n\
-             frame dimensions. Omit it when the image is needed inline (the\n\
-             desktop UI renders `png_base64` directly).\n\
              \n\
              ## Coordinate system\n\
              All click / move / type coordinates returned by subsequent tools are\n\
@@ -1963,6 +1978,18 @@ mod tests {
             save_to_path(&json!({"save_to": "out/shot.png"})).map(|p| p.display().to_string()),
             Some("out/shot.png".to_string())
         );
+    }
+
+    /// 默认落盘位必须落在 assetProtocol scope（`$HOME/.hermix/**`）内的
+    /// captures/ 目录、.png 后缀、带显示器号；连拍不重名靠序号兜底。
+    #[test]
+    fn default_capture_path_lands_in_hermix_captures() {
+        let a = default_capture_path(0);
+        let b = default_capture_path(0);
+        assert!(a.starts_with(hermix_config::paths::hermix_home().join("captures")));
+        assert_eq!(a.extension().and_then(|e| e.to_str()), Some("png"));
+        assert!(a.to_string_lossy().ends_with("-m0.png"));
+        assert_ne!(a, b, "同毫秒连拍文件名必须不同");
     }
 
     #[test]

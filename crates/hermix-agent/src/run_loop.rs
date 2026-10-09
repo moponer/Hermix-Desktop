@@ -543,9 +543,15 @@ impl AgentLoop {
                 // 文本结果保持原样不剥——同一份 JSON 还要供 UI 的
                 // ScreenshotPreview 渲染，剥了预览就瞎；子 agent 上下文
                 // 是隔离边界，任务结束即销毁，双份成本有界。
-                if let Some(payload) =
-                    crate::tool_result_processor::extract_image_payload(&result.content)
-                {
+                let payload = crate::tool_result_processor::extract_image_payload(&result.content)
+                    .or_else(|| {
+                        // cua_screenshot 无条件落盘后只回 saved_to 路径，
+                        // 像素从盘上读回（读不到就退化为纯文本）。
+                        crate::tool_result_processor::image_payload_from_saved_file(
+                            &result.content,
+                        )
+                    });
+                if let Some(payload) = payload {
                     child_images.push(payload);
                 }
                 continue;
