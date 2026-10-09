@@ -274,6 +274,55 @@ fn default_capture_path(monitor: usize) -> PathBuf {
         .join(format!("capture-{millis}-{seq}-m{monitor}.png"))
 }
 
+/// captures/ 的保留窗口与清理限频间隔。截图目录会无限增长，默认落盘
+/// 时顺带把过期文件扫掉。
+const CAPTURE_RETENTION: std::time::Duration = std::time::Duration::from_secs(7 * 24 * 3600);
+const CAPTURE_PRUNE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3600);
+/// 上次清理的 unix 秒；0 表示本次进程还没清理过。
+static LAST_CAPTURE_PRUNE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// 限频入口：默认落盘分支每次都调，但目录扫描至多每小时进行一次。
+/// 失败一律静默——清理是顺手维护，不能反过来弄失败截图本身。
+fn prune_stale_captures(dir: &Path) {
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let last = LAST_CAPTURE_PRUNE.load(std::sync::atomic::Ordering::Relaxed);
+    if last != 0 && now_secs.saturating_sub(last) < CAPTURE_PRUNE_INTERVAL.as_secs() {
+        return;
+    }
+    LAST_CAPTURE_PRUNE.store(now_secs, std::sync::atomic::Ordering::Relaxed);
+    let _ = sweep_stale_captures(dir, std::time::SystemTime::now());
+}
+
+/// 扫描 `dir`，删除 `capture-*.png` 命名（本工具自己的落盘模式）且
+/// 修改时间早于保留窗口的文件，返回删除数。子目录与其他命名的文件
+/// 一律不碰——目录里可能有用户手动放的东西，只清理自家产物。
+fn sweep_stale_captures(dir: &Path, now: std::time::SystemTime) -> usize {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        let Ok(meta) = entry.metadata() else { continue };
+        if meta.is_dir() {
+            continue;
+        }
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if !(name.starts_with("capture-") && name.ends_with(".png")) {
+            continue;
+        }
+        let Ok(modified) = meta.modified() else { continue };
+        let age = now.duration_since(modified).unwrap_or_default();
+        if age >= CAPTURE_RETENTION && std::fs::remove_file(entry.path()).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
+}
+
 // ---------------------------------------------------------------------------
 // 1) cua_screenshot
 // ---------------------------------------------------------------------------
@@ -334,7 +383,11 @@ impl ToolHandler for CuaScreenshotHandler {
         // 后续每一轮重复计费，这是 cua 工具 token 成本的主要来源。
         let path = match save_to_path(&params) {
             Some(p) => p,
-            None => default_capture_path(result.monitor),
+            None => {
+                // 只清理默认目录；显式 save_to 的文件归调用方管，绝不碰。
+                prune_stale_captures(&hermix_config::paths::hermix_home().join("captures"));
+                default_capture_path(result.monitor)
+            }
         };
         let bytes = save_png_base64(&result.png_base64, &path)?;
         Ok(json!({
@@ -1990,6 +2043,79 @@ mod tests {
         assert_eq!(a.extension().and_then(|e| e.to_str()), Some("png"));
         assert!(a.to_string_lossy().ends_with("-m0.png"));
         assert_ne!(a, b, "同毫秒连拍文件名必须不同");
+    }
+
+    /// 把文件 mtime 拨到 `age` 之前，供过期清理用例构造"陈旧"文件。
+    fn set_file_modified(path: &Path, age: std::time::Duration) {
+        let f = std::fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .expect("打开待拨 mtime 的文件");
+        let past = std::time::SystemTime::now()
+            .checked_sub(age)
+            .expect("age 超出系统时间表示范围");
+        f.set_modified(past).expect("set_modified");
+    }
+
+    #[test]
+    fn sweep_stale_captures_removes_only_own_stale_png() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let stale = tmp.path().join("capture-1000-0-m0.png");
+        let fresh = tmp.path().join("capture-2000-1-m0.png");
+        let foreign = tmp.path().join("keep-me-1000.png");
+        std::fs::write(&stale, b"old").expect("write stale");
+        std::fs::write(&fresh, b"new").expect("write fresh");
+        std::fs::write(&foreign, b"user file").expect("write foreign");
+        let eight_days = std::time::Duration::from_secs(8 * 24 * 3600);
+        set_file_modified(&stale, eight_days);
+        set_file_modified(&foreign, eight_days);
+
+        let removed = sweep_stale_captures(tmp.path(), std::time::SystemTime::now());
+
+        assert_eq!(removed, 1, "只应删掉一个过期 capture png");
+        assert!(!stale.exists(), "过期自家产物应被删除");
+        assert!(fresh.exists(), "未过期文件必须保留");
+        assert!(foreign.exists(), "非 capture-* 命名的文件绝不能碰");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn sweep_skips_subdirectories_even_when_stale() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let sub = tmp.path().join("capture-3000-2-m0.png");
+        std::fs::create_dir(&sub).expect("mkdir named like a capture");
+        // Windows 拒绝普通 write 句柄打开目录；拨目录 mtime 必须带
+        // FILE_FLAG_BACKUP_SEMANTICS。
+        let f = std::fs::OpenOptions::new()
+            .write(true)
+            .custom_flags(0x0200_0000)
+            .open(&sub)
+            .expect("以 backup semantics 打开目录句柄");
+        let past = std::time::SystemTime::now()
+            .checked_sub(std::time::Duration::from_secs(8 * 24 * 3600))
+            .expect("age 超出系统时间表示范围");
+        f.set_modified(past).expect("set dir mtime");
+
+        let removed = sweep_stale_captures(tmp.path(), std::time::SystemTime::now());
+
+        assert_eq!(removed, 0);
+        assert!(sub.exists(), "目录条目不删，哪怕名字撞上 capture-*");
+    }
+
+    #[test]
+    fn prune_stale_captures_runs_after_reset() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let stale = tmp.path().join("capture-4000-3-m0.png");
+        std::fs::write(&stale, b"old").expect("write stale");
+        set_file_modified(&stale, std::time::Duration::from_secs(8 * 24 * 3600));
+        // 清零限频水位，让本次调用必定真正扫描（避免被其他用例留下的
+        // 时间戳 short-circuit）。
+        LAST_CAPTURE_PRUNE.store(0, std::sync::atomic::Ordering::Relaxed);
+
+        prune_stale_captures(tmp.path());
+
+        assert!(!stale.exists(), "重置水位后限频入口应完成一次真实清理");
     }
 
     #[test]
