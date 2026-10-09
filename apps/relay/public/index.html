@@ -23,7 +23,7 @@
         <span class="m">桌面端 <span data-ver="desktop.version">—</span> · Spiker <span data-ver="spiker.version">—</span></span>
       </div>
     </div>
-    <img class="hero-mark" src="mascot.png" alt="Hermix" width="132" height="132">
+    <img class="hero-mark" src="mascot-128.png" srcset="mascot-128.png 1x, mascot.png 2x" alt="Hermix" width="132" height="132">
   </div>
 </div>
 
@@ -65,8 +65,34 @@
 <div class="sec">
   <h2>文章</h2>
   <p class="lead">从实现笔记改写。每篇讲一个机制怎么运转、当时为什么这么取舍。</p>
-  <div class="arts" id="home-arts"></div>
-  <p style="margin-top:18px"><a href="articles.html">全部文章 →</a></p>
+  <div class="arts">
+    <a class="a" href="article.html?id=compact-not-delete">
+      <div><div class="t">压缩之后，聊天记录还在吗<span class="tag">会话</span></div>
+      <div class="d">到阈值压一次。折掉的轮次没删，它们搬进一个子会话，原会话一行不动。</div></div>
+      <div class="r">约 1400 字<br>会话</div>
+    </a>
+    <a class="a" href="article.html?id=uac-on-startup">
+      <div><div class="t">启动时那次 UAC 是干嘛的<span class="tag">本机能力</span></div>
+      <div class="d">文件索引想快就得读磁盘元数据，读它要管理员权限。这篇讲为什么不退化成全盘遍历。</div></div>
+      <div class="r">约 1200 字<br>本机能力</div>
+    </a>
+    <a class="a" href="article.html?id=approval-boundary">
+      <div><div class="t">审批卡为什么变少了<span class="tag">安全</span></div>
+      <div class="d">每个命令都弹一次确认，用三天就会习惯性点同意。改成启动时划一次边界，边界内放行。</div></div>
+      <div class="r">约 1100 字<br>安全</div>
+    </a>
+    <a class="a" href="article.html?id=terminal-remembers">
+      <div><div class="t">终端终于能记住上一条命令<span class="tag">本机能力</span></div>
+      <div class="d">ConPTY 持久会话，命令之间状态连续；一次性命令走同一条通道，不留两套实现。</div></div>
+      <div class="r">约 1000 字<br>本机能力</div>
+    </a>
+    <a class="a" href="article.html?id=one-sentence-exe">
+      <div><div class="t">一句话生成一个自带全部资源的 exe<span class="tag">自定义应用</span></div>
+      <div class="d">从自然语言到多文件前端工程，再到单个 exe：资源嵌进 PE 资源节，运行期从内存直喂。</div></div>
+      <div class="r">约 1600 字<br>自定义应用</div>
+    </a>
+  </div>
+  <p style="margin-top:18px"><a href="articles.html">全部 24 篇 →</a></p>
 </div>
 
 <div class="sec">
@@ -83,20 +109,8 @@
 
 <footer class="ft" data-footer></footer>
 
+<!-- 首页不加载 articles.js（43KB）：只为渲染 5 条标题不值当，列表页与阅读页才引它。 -->
 <script src="assets/site.js"></script>
-<script src="assets/articles.js"></script>
-<script>
-  HERMIX.boot('home');
-  (function () {
-    var box = document.getElementById('home-arts');
-    var picks = (window.ARTICLES || []).slice(0, 5);
-    box.innerHTML = picks.map(function (a) {
-      return '<a class="a" href="article.html?id=' + a.id + '">' +
-        '<div><div class="t">' + a.title + '<span class="tag">' + a.cat + '</span></div>' +
-        '<div class="d">' + a.sub + '</div></div>' +
-        '<div class="r">约 ' + a.words + ' 字<br>' + a.cat + '</div></a>';
-    }).join('');
-  })();
-</script>
+<script>HERMIX.boot('home');</script>
 </body>
 </html>
