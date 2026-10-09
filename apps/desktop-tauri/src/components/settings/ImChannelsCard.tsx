@@ -59,7 +59,6 @@ interface QrPayload {
   server_id: string;
   pairing_code: string;
   pairing_url: string;
-  cert_fingerprint: string;
 }
 
 type ChannelId = "qq" | "wecom" | "mobile";
@@ -658,10 +657,7 @@ export function ImChannelsCard() {
                     </div>
                     <div className="text-[length:var(--text-meta)] text-text-muted">
                       服务器：<span className="font-mono text-text-secondary">{qr.payload.server_id}</span>
-                      {" · "}证书指纹（前 16 位）：
-                      <span className="font-mono text-text-secondary">
-                        {qr.payload.cert_fingerprint.slice(0, 16)}…
-                      </span>
+                      {" · "}手机扫码后经中转绑定，两台设备不必在同一网络。
                     </div>
                     <div className="flex items-center gap-1.5 text-[length:var(--text-meta)] text-text-muted">
                       <Clock3 className="icon-sm shrink-0" />
