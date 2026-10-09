@@ -245,6 +245,25 @@ pub async fn get_model_info(State(state): State<HttpServerState>) -> Json<ModelI
                 &m,
                 Some(&state.config.llm_providers),
             ) as u32;
+            // Pull reasoning / vision / tools capability bits from the static
+            // catalog so the desktop model-info card can show "supports thinking"
+            // instead of hardcoding `true`. `get_model_info` returns None for
+            // unknown models — in that case default tools=true (every chat model
+            // in this app is tool-calling), reasoning/vision=false.
+            let caps = hermix_intelligence::model_metadata::get_model_info(&m).unwrap_or_else(|| {
+                hermix_intelligence::model_metadata::ModelInfo {
+                    name: model_name.to_string(),
+                    provider: provider.to_string(),
+                    context_window: ctx_length as u64,
+                    max_output_tokens: None,
+                    supports_vision: false,
+                    supports_tools: true,
+                    supports_streaming: true,
+                    supports_reasoning: false,
+                    input_cost_per_million: None,
+                    output_cost_per_million: None,
+                }
+            });
             Json(ModelInfoResponse {
                 model: model_name.to_string(),
                 provider: provider.to_string(),
@@ -252,8 +271,9 @@ pub async fn get_model_info(State(state): State<HttpServerState>) -> Json<ModelI
                 config_context_length: 0,
                 effective_context_length: ctx_length,
                 capabilities: serde_json::json!({
-                    "supports_tools": true,
-                    "supports_vision": true,
+                    "supports_tools": caps.supports_tools,
+                    "supports_vision": caps.supports_vision,
+                    "supports_reasoning": caps.supports_reasoning,
                     "context_window": ctx_length,
                 }),
             })

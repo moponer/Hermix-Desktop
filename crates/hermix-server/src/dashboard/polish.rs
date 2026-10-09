@@ -123,6 +123,7 @@ async fn run_polish(
         // reach for terminal / file_read / etc.
         tools: Some(Vec::new()),
         permission: Some(PermissionLevel::Full),
+        enable_thinking: None,
         ..Default::default()
     };
 

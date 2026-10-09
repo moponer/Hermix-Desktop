@@ -24,6 +24,7 @@ import type { AcuiDecisionBus } from "../acui/AcuiRegistry";
 import { AcuiPanel } from "../acui/AcuiPanel";
 import { StreamErrorCard, type ErrorKind } from "./StreamErrorBanner";
 import { useModelSelector } from "./ModelSelector";
+import { useContextWindows } from "../hooks/useContextWindows";
 import { toastError } from "../hooks/useToast";
 import { useChannelsStatus } from "../hooks/useChannelsStatus";
 import { Composer } from "./Composer";
@@ -48,7 +49,7 @@ import { useSendKey } from "../hooks/useSendKey";
 import { useDesktopNotify } from "../hooks/useDesktopNotify";
 import { useWorkspaces } from "../hooks/useWorkspaces";
 import { pickDirectory } from "../desktopBridge";
-import { getAvailableTools, updateSessionMetadata, warmUpProvider, type ToolDescriptor } from "../api";
+import { getAvailableTools, updateSessionMetadata, warmUpProvider, getModelInfo, type ToolDescriptor } from "../api";
 import { storage, STORAGE_KEYS } from "../utils/storageCompat";
 import { compressImage, skipCompression, type CompressResult } from "../utils/imageCompressor";
 
@@ -291,6 +292,7 @@ export const ChatView = memo(function ChatView({
   // 工作台会话（workbench_id 已盖戳）→ 右栏差异化文案：欢迎页、placeholder
   // 都说"这台工作台"的事，而不是复读主对话的通用问候（方案 A）。
   const isWorkbenchChat = !!session?.workbench_id;
+  const welcomeGreeting = useWelcomeGreeting(session?.id ?? null);
   const [input, setInput] = useState("");
   const { apps: customApps } = useCustomApps();
   const [sending, setSending] = useState(false);
@@ -475,6 +477,41 @@ export const ChatView = memo(function ChatView({
   }, []);
 
   const [keepOriginalImage, setKeepOriginalImage] = useState(false);
+
+  // 思考开关（enableThinking）：按会话持久化。`true` = 显式开启；`false` = 显式关闭；
+  // `undefined` = 跟随 provider 默认。切了随下一条消息的 overrides 下发（见上方 overrides 构造块）。
+  // 键 = session id；切换会话时各自独立，不串。
+  const [enableThinkingMap, setEnableThinkingMap] = useState<Record<string, boolean>>(() => {
+    try {
+      const raw = storage.getItem("hermix.enableThinkingMap");
+      return raw ? (JSON.parse(raw) as Record<string, boolean>) : {};
+    } catch {
+      return {};
+    }
+  });
+  const currentEnableThinking = sessionId ? enableThinkingMap[sessionId] : undefined;
+  const handleEnableThinkingChange = useCallback((v: boolean) => {
+    if (!sessionId) return;
+    setEnableThinkingMap((prev) => {
+      const next = { ...prev, [sessionId]: v };
+      storage.setItem("hermix.enableThinkingMap", JSON.stringify(next));
+      return next;
+    });
+  }, [sessionId]);
+
+  // 上下文窗口批解析：对当前选中的模型问后端要真值（含来源分层），喂给模型信息卡。
+  const contextWindows = useContextWindows(selectedModel ? [selectedModel] : []);
+
+  // 当前模型是否支持 reasoning（思考开关键只在这时显）——从 /api/model/info 的能力位读。
+  const [supportsReasoning, setSupportsReasoning] = useState<boolean | undefined>(undefined);
+  useEffect(() => {
+    if (!selectedModel) { setSupportsReasoning(undefined); return; }
+    let cancelled = false;
+    getModelInfo().then((info) => {
+      if (!cancelled) setSupportsReasoning(info?.capabilities.supports_reasoning);
+    }).catch(() => { if (!cancelled) setSupportsReasoning(undefined); });
+    return () => { cancelled = true; };
+  }, [selectedModel]);
 
   const handleFilesAttach = useCallback(
     async (files: File[]) => {
@@ -782,6 +819,9 @@ export const ChatView = memo(function ChatView({
       if (selectedModel && selectedModel.includes(":") && selectedModel !== "unknown") {
         overrides.model = selectedModel;
       }
+      // 思考开关：仅当用户显式设过（map 里有本 session 的值）才下发，
+      // 否则 undefined = 后端保持 provider 默认行为。
+      if (currentEnableThinking !== undefined) overrides.enableThinking = currentEnableThinking;
       if (expert) {
         overrides.systemPromptOverride = expert.systemPrompt;
         markRecentUsed(expert.id);
@@ -934,9 +974,9 @@ export const ChatView = memo(function ChatView({
                   draggable={false}
                 />
               </div>
-              <h1 className="text-2xl font-bold text-text-primary mb-2 tracking-tight">你好！我是 Hermix</h1>
+              <h1 className="text-2xl font-bold text-text-primary mb-2 tracking-tight">{welcomeGreeting.title}</h1>
               <p className="text-sm text-text-secondary text-center mb-6 max-w-xs leading-relaxed">
-                一个智能 AI 助手。告诉我你的目标，我来帮你拆解并完成。
+                {welcomeGreeting.subtitle}
               </p>
             </>
           )}
@@ -958,6 +998,10 @@ export const ChatView = memo(function ChatView({
               models={models} byProvider={byProvider} selectedModel={selectedModel} setSelectedModel={setSelectedModelAndPersist}
               onSwitchModel={onSwitchModel}
               currentDisplay={currentDisplay}
+              contextWindows={contextWindows}
+              supportsReasoning={supportsReasoning}
+              enableThinking={currentEnableThinking}
+              onEnableThinkingChange={handleEnableThinkingChange}
               expert={expert} setExpert={setExpertWithCutoff}
               recentExperts={recentExperts}
               experts={experts} categories={categories} byCategory={byCategory}
@@ -1151,6 +1195,10 @@ export const ChatView = memo(function ChatView({
             models={models} byProvider={byProvider} selectedModel={selectedModel} setSelectedModel={setSelectedModelAndPersist}
             onSwitchModel={onSwitchModel}
             currentDisplay={currentDisplay}
+            contextWindows={contextWindows}
+            supportsReasoning={supportsReasoning}
+            enableThinking={currentEnableThinking}
+            onEnableThinkingChange={handleEnableThinkingChange}
             expert={expert} setExpert={setExpertWithCutoff}
             recentExperts={recentExperts}
             experts={experts} categories={categories} byCategory={byCategory}

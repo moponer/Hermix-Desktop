@@ -119,6 +119,9 @@ export interface ChatOverrides {
   /** 客户端已持有真实磁盘路径的附件（工作台文件树"加入对话"），
    *  直传路径、无需落盘。 */
   attachedFilePaths?: string[];
+  /** 每轮"思考开/关"开关。`true`/`false` 显式下发到后端（透传 provider
+   *  的 `enable_thinking` 参数）；`undefined` = 不下发，后端保持默认行为。 */
+  enableThinking?: boolean;
   /** Extensibility index — backend ignores unknown keys. */
   [key: string]: unknown;
 }

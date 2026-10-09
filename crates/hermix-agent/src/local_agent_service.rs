@@ -1280,6 +1280,19 @@ impl LocalAgentService {
             .map(str::trim)
             .filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case("auto"))
             .and_then(DomainMode::from_str);
+        // Per-turn thinking on/off switch. Merge into `extra_body` so the
+        // provider's existing `extra_body` → top-level body expansion
+        // (provider.rs:952-958, streaming:1027-1034) carries it to the LLM
+        // request unchanged — same pattern `reasoning_effort` uses.
+        // `None` (old clients / field omitted) → no injection, behavior
+        // identical to before this field existed.
+        if let Some(v) = overrides.enable_thinking {
+            let mut eb = config.extra_body.unwrap_or(serde_json::json!({}));
+            if let serde_json::Value::Object(ref mut map) = eb {
+                map["enable_thinking"] = serde_json::json!(v);
+            }
+            config.extra_body = Some(eb);
+        }
         let allowed = overrides
             .tools
             .as_ref()
@@ -3929,6 +3942,7 @@ mod override_tests {
             external_delivery: None,
             shutdown: None,
             attached_file_paths: None,
+            enable_thinking: None,
         };
         let (cfg, allowed) = LocalAgentService::apply_overrides(base, &overrides);
         assert_eq!(
@@ -3967,6 +3981,7 @@ mod override_tests {
             external_delivery: None,
             shutdown: None,
             attached_file_paths: None,
+            enable_thinking: None,
         };
         let (_cfg, allowed) = LocalAgentService::apply_overrides(base, &overrides);
         let allowed = allowed.expect("allowed set should be Some");

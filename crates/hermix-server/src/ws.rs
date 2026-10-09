@@ -129,6 +129,7 @@ pub(crate) async fn handle_ws(
             expert_toolset: None,
             attached_files: None,
             attached_file_paths: None,
+            enable_thinking: None,
         });
 
         // Non-image documents: bytes → disk, so the agent gets real paths.
@@ -156,6 +157,7 @@ pub(crate) async fn handle_ws(
             expert_toolset: request.expert_toolset.clone(),
             attached_file_paths: (!attached_paths.is_empty())
                 .then_some(attached_paths),
+            enable_thinking: request.enable_thinking,
             memory_dir: None,
             // An interactive chat turn is by definition user-initiated;
             // only the automation scheduler sets this. Keeping it
@@ -785,6 +787,7 @@ pub(crate) async fn handle_ws_stream_send(
         expert_toolset: request.expert_toolset.clone(),
         attached_file_paths: (!attached_paths.is_empty())
             .then_some(attached_paths),
+        enable_thinking: request.enable_thinking,
         approval_requester: {
             let registry = state.approval_registry.clone();
             Some(Arc::new(move |sess_id: String, req_id: String| {
@@ -3061,6 +3064,7 @@ async fn handle_inbound_frame(
                 expert_toolset: None,
                 attached_files: None,
                 attached_file_paths: None,
+                enable_thinking: None,
             };
                 // Return the inner outcome verbatim. This turn may have
                 // consumed a mid-stream user message and needs it re-driven
@@ -3127,6 +3131,7 @@ async fn handle_inbound_frame(
         expert_toolset: None,
         attached_files: None,
         attached_file_paths: None,
+        enable_thinking: None,
     });
     return handle_ws_stream_send(
         &mut *sender,

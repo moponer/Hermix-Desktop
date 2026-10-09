@@ -1501,6 +1501,7 @@ pub(crate) async fn send_message(
         domain_override: req.domain_override.clone(),
         expert_toolset: req.expert_toolset.clone(),
         attached_file_paths: (!attached_paths.is_empty()).then_some(attached_paths),
+        enable_thinking: req.enable_thinking,
         memory_dir: None,
         approval_requester: None,
         on_event: None,

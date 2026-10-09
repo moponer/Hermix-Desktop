@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
-import { Send, Square, FolderOpen, ChevronDown, ChevronRight, Sparkles, ShieldCheck, Image, X, Check, AlertTriangle, Lock, Clock, Code2, FileText } from "lucide-react";
+import { Send, Square, FolderOpen, ChevronDown, ChevronRight, Sparkles, ShieldCheck, Image, X, Check, AlertTriangle, Lock, Clock, Code2, FileText, Brain, BrainCircuit, Gauge } from "lucide-react";
 import type { DomainModeChoice } from "../hooks/useExpert";
 import { usePopover } from "../hooks/usePopover";
 import { PopoverShell, PopoverBody } from "./PopoverShell";
@@ -13,6 +13,7 @@ import type { ConfigCategory } from "./SystemConfigPanel";
 import { AppMentionInput } from "./AppMentionInput";
 import { formatBytes } from "../utils/imageCompressor";
 import { PERMISSION_LEVELS, type PermissionLevel } from "../hooks/useExpert";
+import type { ContextWindowEntry } from "../hooks/useContextWindows";
 import type { Workspace } from "../hooks/useWorkspaces";
 import type { ExpertDef } from "../data/builtinExperts";
 import type { QueuedMessage, QueuedFile, Session } from "../types";
@@ -81,6 +82,15 @@ export interface ComposerProps {
   onSendFromQueue?: (idx: number) => void;
   session?: Session | null;
   customApps?: CustomAppSummary[];
+  /** 模型"上下文窗口"栏的数据源（后端 resolve-context-windows 的批解析结果）。 */
+  contextWindows?: Record<string, ContextWindowEntry>;
+  /** 当前模型的思考/reasoning 能力位（后端 get_model_info 的 supports_reasoning）。
+   *  undefined = 未知（旧版后端 / 模型未收录），卡片只读不显开关。 */
+  supportsReasoning?: boolean;
+  /** 当前会话的"思考开/关"状态。`true` = 本轮显式开启；`false` = 显式关闭；
+   *  `undefined` = 跟随 provider 默认。切换后随下一条消息的 overrides 下发。 */
+  enableThinking?: boolean;
+  onEnableThinkingChange?: (v: boolean) => void;
 }
 
 export function Composer(p: ComposerProps) {
@@ -523,12 +533,55 @@ export function Composer(p: ComposerProps) {
                 <div className="px-3 pt-2.5 pb-2 flex items-center justify-between border-b border-border-primary mb-1">
                   <div className="flex items-center gap-2">
                     <span className="inline-block w-1 h-4 rounded-sm bg-accent" aria-hidden="true" />
-                    <span className="text-ui text-text-primary font-semibold tracking-wide">切换模型</span>
+                    <span className="text-ui text-text-primary font-semibold tracking-wide">模型</span>
                   </div>
                   <span className="text-tiny text-text-muted font-mono">
-                    {p.byProvider.reduce((acc, g) => acc + g.models.length, 0)} 个 · {p.byProvider.length} 厂商
+                    {p.byProvider ? `${p.byProvider.reduce((acc, g) => acc + g.models.length, 0)} 个 · ${p.byProvider.length} 厂商` : ""}
                   </span>
                 </div>
+
+                {/* 模型信息卡：上下文窗口 + 思考开关（仅当模型支持 reasoning 时显开关） */}
+                {(() => {
+                  const currentModelId = p.selectedModel;
+                  const ctxEntry = currentModelId ? p.contextWindows?.[currentModelId] : undefined;
+                  const ctxTokens = ctxEntry?.value ?? p.contextWindows?.[currentModelId ?? ""]?.value ?? 0;
+                  const ctxLabel =
+                    ctxTokens >= 1_000_000
+                      ? `${(ctxTokens / 1_000_000).toFixed(ctxTokens % 1_000_000 === 0 ? 0 : 1)}M`
+                      : ctxTokens >= 1000
+                        ? `${Math.round(ctxTokens / 1000)}K`
+                        : ctxTokens > 0
+                          ? String(ctxTokens)
+                          : "未知";
+                  const showThinkingToggle = p.supportsReasoning === true;
+                  return (
+                    <div className="px-3 pb-2 flex items-center gap-3 text-meta">
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <Gauge className="icon-sm shrink-0 text-text-muted" aria-hidden="true" />
+                        <span className="text-text-secondary">上下文</span>
+                        <span className="font-mono text-text-primary">{ctxLabel}</span>
+                      </div>
+                      {showThinkingToggle && (
+                        <button
+                          type="button"
+                          onClick={() => p.onEnableThinkingChange?.(!(p.enableThinking === true))}
+                          className={`ml-auto inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-tiny transition-colors ${
+                            p.enableThinking === true
+                              ? "bg-[color:var(--color-chip-model-bg)] text-[color:var(--color-chip-model-fg)]"
+                              : "text-text-muted hover:bg-bg-hover"
+                          }`}
+                          title="开启/关闭深度思考（对支持 reasoning 的模型生效；切换后随下一条消息下发）"
+                        >
+                          {p.enableThinking === true
+                            ? <Brain className="icon-sm shrink-0" aria-hidden="true" />
+                            : <BrainCircuit className="icon-sm shrink-0 opacity-50" aria-hidden="true" />}
+                          思考 {p.enableThinking === true ? "开" : "关"}
+                        </button>
+                      )}
+                    </div>
+                  );
+                })()}
+
                 <PopoverBody maxHeight="max-h-64">
                   {!p.byProvider || p.byProvider.length === 0 ? (
                     <div className="px-2.5 py-3 text-center">

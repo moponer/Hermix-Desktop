@@ -389,6 +389,10 @@ pub struct SendMessageRequest {
     /// `attached_files` paths into `AgentOverrides.attached_file_paths`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attached_file_paths: Option<Vec<String>>,
+    /// Per-turn "thinking on/off" switch (see `AgentOverrides.enable_thinking`).
+    /// `None` = leave the provider's default behavior untouched.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enable_thinking: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

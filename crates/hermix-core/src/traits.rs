@@ -504,6 +504,22 @@ pub struct AgentOverrides {
     /// and ordinary conversations are unaffected.
     #[serde(default)]
     pub external_delivery: Option<ExternalDelivery>,
+    /// Per-turn "thinking on/off" switch for providers that expose an
+    /// `enable_thinking`-style request parameter (DeepSeek, some OpenAI-
+    /// compatible endpoints, ...). `None` = leave the provider's default
+    /// behavior untouched (back-compat: old clients omitting the field
+    /// get no behavior change). `Some(false)` disables reasoning blocks
+    /// for this turn; `Some(true)` is a no-op alias for the default on
+    /// providers where thinking is already on by default, but is sent
+    /// explicitly so provider adapters that gate it behind the flag
+    /// (e.g. Anthropic's `thinking` block) receive the intent.
+    ///
+    /// The agent crate injects this into `extra_body` before the LLM
+    /// request is built; providers that don't recognize the key simply
+    /// ignore it (no 4xx on unknown body fields is a documented
+    /// OpenAI-compat guarantee).
+    #[serde(default)]
+    pub enable_thinking: Option<bool>,
     /// Callback to register an approval request with the WS handler.
     /// Arguments: `(session_id, request_id)` →
     /// `oneshot::Receiver<ApprovalOutcome>`. The receiver resolves when
@@ -583,6 +599,7 @@ impl std::fmt::Debug for AgentOverrides {
             .field("domain_override", &self.domain_override)
             .field("expert_toolset", &self.expert_toolset)
             .field("attached_file_paths", &self.attached_file_paths)
+            .field("enable_thinking", &self.enable_thinking)
             .field(
                 "approval_requester",
                 &self.approval_requester.as_ref().map(|_| "<callback>"),
@@ -622,6 +639,7 @@ impl PartialEq for AgentOverrides {
             && self.domain_override == other.domain_override
             && self.expert_toolset == other.expert_toolset
             && self.attached_file_paths == other.attached_file_paths
+            && self.enable_thinking == other.enable_thinking
     }
 }
 

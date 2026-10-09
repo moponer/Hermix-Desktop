@@ -639,6 +639,37 @@ export const getModelList = async (): Promise<ModelListResponse | null> => {
   }
 };
 
+/** 当前模型的元信息（上下文窗口 + 能力位）。`capabilities.supports_reasoning`
+ *  来自后端静态目录 `model_metadata::known_models()`；模型未收录时后端下发
+ *  `false`（卡片据此隐藏思考开关键，不显假能力）。 */
+export const getModelInfo = async (): Promise<{
+  model: string;
+  provider: string;
+  effective_context_length: number;
+  capabilities: {
+    supports_tools: boolean;
+    supports_vision: boolean;
+    supports_reasoning: boolean;
+    context_window: number;
+  };
+} | null> => {
+  try {
+    return await fetchJSON<{
+      model: string;
+      provider: string;
+      effective_context_length: number;
+      capabilities: {
+        supports_tools: boolean;
+        supports_vision: boolean;
+        supports_reasoning: boolean;
+        context_window: number;
+      };
+    }>("/api/model/info");
+  } catch {
+    return null;
+  }
+};
+
 export const saveModelList = async (
   models: ModelListEntry[],
   defaultModel: string | null,
