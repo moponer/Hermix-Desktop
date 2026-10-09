@@ -1,0 +1,28 @@
+[package]
+name = "hermix-installer"
+version = "0.1.0"
+edition = "2021"
+description = "Hermix 自绘安装器：单文件自解压 + 向导 UI（决策笔记 implemented/feature/2026-10-09-custom-installer.md）"
+license = "MIT"
+
+[build-dependencies]
+tauri-build = { version = "2" }
+
+[dependencies]
+tauri = { version = "2" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# 目录选择：原生对话框，不引 tauri-plugin-dialog（免 JS 插件 + capability 面）。
+rfd = "0.15"
+# 载荷自提取（#4/#5 接线）：zip 解压 + sha256 校验，与主应用更新器同代。
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
+sha2 = "0.10"
+# PE 资源读取（载荷自提取）：版本与 hermix-plugin 同为 0.52，避免多版本分裂。
+# Win32_Foundation：LibraryLoader 的函数声明依赖它（HMODULE/HRSRC 类型所在）。
+windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_System_LibraryLoader"] }
+# HKCU 卸载登记（register_uninstall / run_uninstall）。
+winreg = "0.10"
+
+[[bin]]
+name = "hermix-installer"
+path = "src/main.rs"

@@ -156,6 +156,65 @@ function ModelStatusBar({
 const MAX_DOC_MB = 30;
 const MAX_DOC_BYTES = MAX_DOC_MB * 1024 * 1024;
 
+// ── 欢迎页动态欢迎词 ─────────────────────────────────────────
+// 主标题/副标题分别来自两个公开问候 API；任一失败/超时（3s）回退到
+// 内置文案（副标题按 sessionId 哈希选取，保证同一会话稳定、跨会话有变化）。
+const GREETING_URL = "https://api.kuleu.com/api/getGreetingMessage";
+const YIYAN_URL = "https://api.kuleu.com/api/yiyan";
+const GREETING_TIMEOUT_MS = 3000;
+const FALLBACK_SUBTITLES = [
+  "告诉我你的目标，我来帮你拆解并完成。",
+  "写作、规划、分析、学习、开发，都可以交给我。",
+  "今天想从哪里开始？我可以直接动手。",
+  "把想法丢给我，我来变成可执行的步骤。",
+  "有问题就问，能查能写能跑代码。",
+];
+const FALLBACK_TITLE = "你好！我是 Hermix";
+
+function hashString(s: string): number {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return Math.abs(h);
+}
+
+function fallbackGreeting(sessionId: string | null): { title: string; subtitle: string } {
+  const idx = sessionId ? hashString(sessionId) % FALLBACK_SUBTITLES.length : 0;
+  return { title: FALLBACK_TITLE, subtitle: FALLBACK_SUBTITLES[idx] };
+}
+
+async function fetchGreetingText(url: string, signal: AbortSignal): Promise<string | null> {
+  try {
+    const res = await fetch(url, { signal });
+    if (!res.ok) return null;
+    const text = (await res.text()).trim();
+    return text ? text.slice(0, 120) : null;
+  } catch {
+    return null;
+  }
+}
+
+function useWelcomeGreeting(sessionId: string | null): { title: string; subtitle: string } {
+  const [greeting, setGreeting] = useState(() => fallbackGreeting(sessionId));
+  useEffect(() => {
+    // 加载期间先显示兜底文案，接口返回后再替换，避免闪空。
+    setGreeting(fallbackGreeting(sessionId));
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), GREETING_TIMEOUT_MS);
+    Promise.all([fetchGreetingText(GREETING_URL, ctrl.signal), fetchGreetingText(YIYAN_URL, ctrl.signal)])
+      .then(([title, subtitle]) => {
+        if (ctrl.signal.aborted) return;
+        const fb = fallbackGreeting(sessionId);
+        setGreeting({ title: title ?? fb.title, subtitle: subtitle ?? fb.subtitle });
+      })
+      .catch(() => {});
+    return () => {
+      clearTimeout(timer);
+      ctrl.abort();
+    };
+  }, [sessionId]);
+  return greeting;
+}
+
 interface ChatViewProps {
   session: Session | null;
   /** 历史翻页：hasMore 时列表顶部显示「加载更早的消息」，onLoadMore 前插一页。 */

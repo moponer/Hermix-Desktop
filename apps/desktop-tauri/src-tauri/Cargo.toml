@@ -29,6 +29,10 @@ dirs = "6"
 open = "5"
 base64 = "0.22"
 once_cell = "1"
+# 在线更新（updater.rs）：清单/zip 走 reqwest（已有），流式下载 + sha256 校验。
+futures = "0.3"
+sha2 = "0.10"
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
 # `which` is used by `commands::python_detect` for the Settings → Backend
 # tab "Python 运行时" probe (PATH:python, PATH:python3 etc.). NOT
 # consumed by hermix-tools directly because that crate has its own dep.

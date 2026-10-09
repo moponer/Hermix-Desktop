@@ -1,0 +1,10 @@
+{
+  "identifier": "default",
+  "description": "Installer window capabilities",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-close",
+    "core:window:allow-start-dragging"
+  ]
+}

@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { clsx } from "clsx";
 import {
   Globe, Palette, ZoomIn, BarChart3, Unplug, ChevronRight,
-  Sun, Moon, Monitor, Check,
+  Sun, Moon, Monitor, Check, Download,
 } from "lucide-react";
 import { useTheme } from "../hooks/useTheme";
 import { THEMES } from "../styles/themes/registry";
@@ -40,9 +40,13 @@ interface UserMenuPopoverProps {
   anchorRef: React.RefObject<HTMLDivElement | null>;
   onNavigateAnalytics: () => void;
   onDisconnect: () => void;
+  /** 有新版本时传版本号（菜单项变「有新版本 x.y.z」），无更新传 null。 */
+  updateBadge?: string | null;
+  /** 打开更新面板（面板内部会触发一次检查）。 */
+  onOpenUpdatePanel: () => void;
 }
 
-export function UserMenuPopover({ open, onClose, anchorRef, onNavigateAnalytics, onDisconnect }: UserMenuPopoverProps) {
+export function UserMenuPopover({ open, onClose, anchorRef, onNavigateAnalytics, onDisconnect, updateBadge, onOpenUpdatePanel }: UserMenuPopoverProps) {
   const [subMenu, setSubMenu] = useState<string | null>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
   const { mode, setMode } = useTheme();
@@ -149,12 +153,13 @@ export function UserMenuPopover({ open, onClose, anchorRef, onNavigateAnalytics,
   };
 
   /* Main items */
-  const items: { key: string; icon: React.ElementType; label: string; hasSub?: boolean; danger?: boolean; onClick?: () => void }[] = [
+  const items: { key: string; icon: React.ElementType; label: string; hasSub?: boolean; danger?: boolean; highlight?: boolean; onClick?: () => void }[] = [
     { key: "lang", icon: Globe, label: "界面语言", hasSub: true },
     { key: "theme", icon: Palette, label: "界面主题", hasSub: true },
     { key: "scale", icon: ZoomIn, label: "界面缩放", hasSub: true },
     { key: "analytics", icon: BarChart3, label: "使用统计", onClick: () => { onNavigateAnalytics(); onClose(); } },
-    { key: "disconnect", icon: Unplug, label: "断开连接", danger: true, onClick: () => { onDisconnect(); onClose(); } },
+    { key: "update", icon: Download, label: updateBadge ? `有新版本 ${updateBadge}` : "检查更新", highlight: !!updateBadge, onClick: () => { onOpenUpdatePanel(); onClose(); } },
+    { key: "disconnect", icon: Unplug, label: "重新连接", danger: true, onClick: () => { onDisconnect(); onClose(); } },
   ];
 
   return createPortal(
@@ -175,9 +180,9 @@ export function UserMenuPopover({ open, onClose, anchorRef, onNavigateAnalytics,
                 type="button"
                 role="menuitem"
                 onClick={() => item.hasSub ? setSubMenu(subMenu === item.key ? null : item.key) : item.onClick?.()}
-                className={clsx("user-menu-row", item.danger && "is-danger", showSub && "is-open")}
+                className={clsx("user-menu-row", item.danger && "is-danger", item.highlight && "text-accent", showSub && "is-open")}
               >
-                <Icon className={`icon-md ${clsx("shrink-0", item.danger ? "text-red-400" : "text-text-secondary")}`} />
+                <Icon className={`icon-md ${clsx("shrink-0", item.danger ? "text-red-400" : item.highlight ? "text-accent" : "text-text-secondary")}`} />
                 <span className="flex-1 text-left truncate">{item.label}</span>
                 {item.hasSub ? (
                   <>

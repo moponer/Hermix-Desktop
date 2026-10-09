@@ -129,6 +129,84 @@ function createRelay({ dbPath }) {
     fs.createReadStream(apkPath).pipe(res);
   });
 
+  // ── 桌面端在线更新面（静态，不碰 relay 协议面） ──────────────
+  // 运维把发布产物放到 <relay 根>/public/desktop/：
+  //   manifest.json   —— 版本清单（见 docs/notes/implemented/feature/2026-10-09-online-update.md）
+  //   latest.zip      —— 当前版桌面整包（文件名恒定，manifest 的 url 字段永不变更）
+  // manifest 缺失/损坏时如实报 404，客户端静默降级为「无更新」，不给假提示。
+  const desktopDir = path.join(publicDir, 'desktop');
+  const manifestPath = path.join(desktopDir, 'manifest.json');
+
+  app.get('/desktop/manifest.json', (_req, res) => {
+    let raw;
+    try {
+      raw = fs.readFileSync(manifestPath, 'utf8');
+    } catch {
+      return res.status(404).type('text/plain; charset=utf-8')
+        .send('更新清单尚未上传（运维需把 manifest.json 放到 relay 目录的 public/desktop/）');
+    }
+    const manifest = JSON.parse(raw);
+    // sha256 直读文件清单旁的 latest.zip，响应头带给客户端做下载前预检；
+    // 清单里也存了一份（发布脚本写入），两处不一致说明上传只完成了一半。
+    const zipSha = hashFileSync(path.join(desktopDir, 'latest.zip'));
+    if (zipSha) res.setHeader('X-Checksum-Sha256', zipSha);
+    res.setHeader('Cache-Control', 'no-cache');
+    res.json(manifest);
+  });
+
+  app.get('/desktop/latest.zip', (_req, res) => {
+    let st;
+    try {
+      st = fs.statSync(path.join(desktopDir, 'latest.zip'));
+    } catch {
+      return res.status(404).type('text/plain; charset=utf-8')
+        .send('更新包尚未上传（运维需把 latest.zip 放到 relay 目录的 public/desktop/）');
+    }
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Length', st.size);
+    res.setHeader('Content-Disposition', 'attachment; filename="hermix-desktop-update.zip"');
+    res.setHeader('X-Checksum-Sha256', hashFileSync(path.join(desktopDir, 'latest.zip')) || '');
+    fs.createReadStream(path.join(desktopDir, 'latest.zip')).pipe(res);
+  });
+
+  // ── spiker-tauri 桌面端在线更新面（静态，复用 relay 443，零新端口） ──
+  // 运维把发布产物放到 <relay 根>/public/spiker/：
+  //   manifest.json   —— 版本清单
+  //   latest.zip      —— 当前版整包（文件名恒定，manifest 的 url 字段永不变更）
+  // 与 /desktop/ 同构，spiker 无 sidecar，zip 只含 exe + resources。
+  const spikerDir = path.join(publicDir, 'spiker');
+  const spikerManifest = path.join(spikerDir, 'manifest.json');
+
+  app.get('/spiker/manifest.json', (_req, res) => {
+    let raw;
+    try {
+      raw = fs.readFileSync(spikerManifest, 'utf8');
+    } catch {
+      return res.status(404).type('text/plain; charset=utf-8')
+        .send('更新清单尚未上传（运维需把 manifest.json 放到 relay 目录的 public/spiker/）');
+    }
+    const manifest = JSON.parse(raw);
+    const zipSha = hashFileSync(path.join(spikerDir, 'latest.zip'));
+    if (zipSha) res.setHeader('X-Checksum-Sha256', zipSha);
+    res.setHeader('Cache-Control', 'no-cache');
+    res.json(manifest);
+  });
+
+  app.get('/spiker/latest.zip', (_req, res) => {
+    let st;
+    try {
+      st = fs.statSync(path.join(spikerDir, 'latest.zip'));
+    } catch {
+      return res.status(404).type('text/plain; charset=utf-8')
+        .send('更新包尚未上传（运维需把 latest.zip 放到 relay 目录的 public/spiker/）');
+    }
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Length', st.size);
+    res.setHeader('Content-Disposition', 'attachment; filename="spiker-tauri-update.zip"');
+    res.setHeader('X-Checksum-Sha256', hashFileSync(path.join(spikerDir, 'latest.zip')) || '');
+    fs.createReadStream(path.join(spikerDir, 'latest.zip')).pipe(res);
+  });
+
   const server = http.createServer(app);
   const wss = new WebSocketServer({ noServer: true });
 

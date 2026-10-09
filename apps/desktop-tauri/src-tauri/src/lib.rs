@@ -14,6 +14,7 @@ pub mod screenshot_controller;
 pub mod sidecar;
 pub mod stdio_bridge;
 pub mod system_settings;
+pub mod updater;
 pub mod webview2_probe;
 
 use sidecar::{HermixSidecar, WatchdogConfig};
@@ -438,6 +439,8 @@ pub fn run() {
             None,
         ))
         .setup(|app| {
+            // 在线更新检查：启动 30s 后首查 + 每 2h，失败静默（updater.rs）。
+            updater::spawn_check_scheduler(app.handle().clone());
             // ── N0 CDP 探针门控（批次 N 技术验证）──────────────────
             // HERMIX_CDP_PROBE=1 启动时，等主 webview 就绪后自动跑
             // Runtime.evaluate / DOMSnapshot / Accessibility 三个 CDP
@@ -686,6 +689,9 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            updater::update_check,
+            updater::update_download,
+            updater::update_install,
             system_settings::get_autostart,
             system_settings::set_autostart,
             system_settings::send_notification,

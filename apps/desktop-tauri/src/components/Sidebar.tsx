@@ -33,6 +33,8 @@ import { useUserProfile } from "../hooks/useUserProfile";
 import { UserAvatar } from "./UserAvatar";
 import { EditProfileDialog } from "./EditProfileDialog";
 import { UserMenuPopover } from "./UserMenuPopover";
+import { UpdatePanel } from "./UpdatePanel";
+import { useUpdater } from "../hooks/useUpdater";
 import { LocalSearchDialog } from "./LocalSearchDialog";
 import { useChannelsStatus } from "../hooks/useChannelsStatus";
 
@@ -96,6 +98,8 @@ export function Sidebar({
   const { profile, setProfile } = useUserProfile();
   const [editOpen, setEditOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  // 在线更新：菜单徽标 + 更新面板（hook 内部监听 update://status/progress）。
+  const updater = useUpdater();
   // IM 通道状态（机器人名 + 网关连接），远程助手分组的行内状态点用。
   const channels = useChannelsStatus();
   // 本地快速查找（Everything 风格）浮层。
@@ -729,11 +733,16 @@ export function Sidebar({
           onClose={() => setMenuOpen(false)}
           anchorRef={userCardRef}
           onNavigateAnalytics={() => onPageChange("analytics")}
+          updateBadge={updater.status?.kind !== "none" && updater.status ? updater.status.latest_version : null}
+          onOpenUpdatePanel={() => {
+            // 打开面板即检查一次（后端 none 也如实返回，面板显示「已是最新」）。
+            void updater.checkUpdate().then(() => updater.setPanelOpen(true));
+          }}
           onDisconnect={() => {
             /* restart sidecar = soft disconnect/reconnect.
                必须给可见反馈：静默失败时按钮看起来毫无作用（"点断开连接
                无效"），用户无法区分是没执行、还是执行了但连不上。 */
-            toastInfo("正在断开并重连后端服务…");
+            toastInfo("正在重新连接后端服务…");
             invoke("restart_sidecar")
               .then(() => toastInfo("后端服务已重连"))
               .catch((e) => {
@@ -742,6 +751,8 @@ export function Sidebar({
               });
           }}
         />
+        {/* 在线更新面板：forced 全屏阻断 / optional 普通弹窗 + 进度。 */}
+        <UpdatePanel updater={updater} />
         {editOpen && (
           <EditProfileDialog
             current={profile}
