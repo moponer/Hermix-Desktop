@@ -333,35 +333,53 @@ impl CloudBrowserBackendAdapter {
 
 impl AutoBrowserBackend {
     pub fn from_env() -> Self {
-        let inner = match resolve_browser_runtime_kind() {
-            BrowserRuntimeKind::Local => {
-                ResolvedBrowserBackend::Local(CdpBrowserBackend::from_env())
-            }
-            BrowserRuntimeKind::CamoFox => {
-                ResolvedBrowserBackend::CamoFox(CamoFoxBrowserBackend::from_env())
-            }
-            BrowserRuntimeKind::BrowserUse => ResolvedBrowserBackend::Cloud(
-                CloudBrowserBackendAdapter::new(Arc::new(BrowserUseCloudProvider {
-                    client: Client::new(),
-                })),
-            ),
-            BrowserRuntimeKind::Browserbase => ResolvedBrowserBackend::Cloud(
-                CloudBrowserBackendAdapter::new(Arc::new(BrowserbaseCloudProvider {
-                    client: Client::new(),
-                })),
-            ),
-            BrowserRuntimeKind::Firecrawl => ResolvedBrowserBackend::Cloud(
-                CloudBrowserBackendAdapter::new(Arc::new(FirecrawlCloudProvider {
-                    client: Client::new(),
-                })),
-            ),
-            BrowserRuntimeKind::Unsupported(provider) => {
-                ResolvedBrowserBackend::Unsupported(format!(
-                    "Browser provider '{provider}' is not implemented in hermes-agent-rust yet."
-                ))
-            }
-        };
-        Self { inner }
+        Self {
+            inner: resolved_backend_from_env(false),
+        }
+    }
+
+    /// 与 `from_env` 同源，但本地 CDP 后端进入「会话专用 tab」模式：
+    /// 本实例懒建并钉住一个独占 tab，多会话（每个会话一个实例）互不
+    /// 串台。云后端天然按会话隔离，不受此开关影响。
+    pub fn from_env_dedicated_tab() -> Self {
+        Self {
+            inner: resolved_backend_from_env(true),
+        }
+    }
+}
+
+fn resolved_backend_from_env(dedicated_tab: bool) -> ResolvedBrowserBackend {
+    match resolve_browser_runtime_kind() {
+        BrowserRuntimeKind::Local => ResolvedBrowserBackend::Local(
+            if dedicated_tab {
+                CdpBrowserBackend::from_env().into_dedicated()
+            } else {
+                CdpBrowserBackend::from_env()
+            },
+        ),
+        BrowserRuntimeKind::CamoFox => {
+            ResolvedBrowserBackend::CamoFox(CamoFoxBrowserBackend::from_env())
+        }
+        BrowserRuntimeKind::BrowserUse => ResolvedBrowserBackend::Cloud(
+            CloudBrowserBackendAdapter::new(Arc::new(BrowserUseCloudProvider {
+                client: Client::new(),
+            })),
+        ),
+        BrowserRuntimeKind::Browserbase => ResolvedBrowserBackend::Cloud(
+            CloudBrowserBackendAdapter::new(Arc::new(BrowserbaseCloudProvider {
+                client: Client::new(),
+            })),
+        ),
+        BrowserRuntimeKind::Firecrawl => ResolvedBrowserBackend::Cloud(
+            CloudBrowserBackendAdapter::new(Arc::new(FirecrawlCloudProvider {
+                client: Client::new(),
+            })),
+        ),
+        BrowserRuntimeKind::Unsupported(provider) => {
+            ResolvedBrowserBackend::Unsupported(format!(
+                "Browser provider '{provider}' is not implemented in hermes-agent-rust yet."
+            ))
+        }
     }
 }
 

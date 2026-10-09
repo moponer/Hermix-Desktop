@@ -133,7 +133,10 @@ impl BrowserRegistry {
             if let Some(b) = map.get(session_id) {
                 return b.clone();
             }
-            let b = Arc::new(AutoBrowserBackend::from_env());
+            // 每个会话的实例独占一个 tab（懒建于首次 CDP 命令）：会话
+            // 隔离必须落到 CDP target 层才算数——只隔离 refs 等进程内
+            // 状态的话，两个实例仍会挤进"最近导航的 tab"互相覆写页面。
+            let b = Arc::new(AutoBrowserBackend::from_env_dedicated_tab());
             map.insert(session_id.to_string(), b.clone());
             return b;
         }

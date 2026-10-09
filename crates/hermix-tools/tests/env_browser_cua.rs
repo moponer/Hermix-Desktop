@@ -92,6 +92,17 @@ document.getElementById('f').addEventListener('submit', function (e) {
 </body></html>
 "#;
 
+/// BUG-13 双会话隔离夹具：两页文本互斥，快照串台立刻现形。
+const ALPHA_HTML: &str = r#"<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>PAGE_ALPHA</title></head>
+<body><h1>PAGE_ALPHA heading</h1><p>Alpha page is the only page session A should ever see.</p></body></html>
+"#;
+
+const BETA_HTML: &str = r#"<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>PAGE_BETA</title></head>
+<body><h1>PAGE_BETA heading</h1><p>Beta page is the only page session B should ever see.</p></body></html>
+"#;
+
 /// 抓到的原始 HTTP 请求（含请求头，才能验证 Cookie 是否回传）。
 #[derive(Debug, Clone)]
 struct Captured {
@@ -128,9 +139,11 @@ async fn spawn_fixture_server() -> (u16, Arc<Mutex<Vec<Captured>>>) {
                 let path = target.split('?').next().unwrap_or("/");
                 let body = match path {
                     "/form.html" => FORM_HTML.to_string(),
+                    "/alpha" => ALPHA_HTML.to_string(),
+                    "/beta" => BETA_HTML.to_string(),
                     _ => "OK".to_string(),
                 };
-                let ctype = if path == "/form.html" {
+                let ctype = if path == "/form.html" || path == "/alpha" || path == "/beta" {
                     "text/html; charset=utf-8"
                 } else {
                     "text/plain; charset=utf-8"
@@ -745,6 +758,76 @@ async fn t15_loopback_blocked_by_default_real() {
         println!("t15: 已拦截 {blocked} -> {}", err.unwrap_err());
     }
     println!("t15 OK: loopback / link-local / 私网段默认全部被拦");
+}
+
+// ---------------------------------------------------------------------------
+// BUG-13 — 双会话 tab 隔离（CDP target 层）
+// ---------------------------------------------------------------------------
+
+/// 两个会话先后导航到不同页面，各自快照必须只看到自己的内容。
+/// 串台根因有两层，本用例两层都会抓：
+/// 1. handler 路由层共享槽（已修：backend_for_call per-session 绑定）；
+/// 2. CDP target 层——每个实例都连"最近导航的 tab"，B 后导航，
+///    A 的快照就会落到 B 的页面上（本用例主断言）。
+#[tokio::test(flavor = "multi_thread")]
+async fn t17_dual_session_tab_isolation_real() {
+    if !real_env() {
+        eprintln!("SKIP t17: set HERMIX_REAL_ENV=1");
+        return;
+    }
+    let (port, _seen) = spawn_fixture_server().await;
+    // 与 BrowserHarness::new 同款环境固定：后端端点必须指向本验收专用
+    // 的调试浏览器（9333），否则 from_env 落到默认 9222，撞上无关实例。
+    std::env::set_var("CHROME_CDP_URL", format!("http://127.0.0.1:{CDP_PORT}"));
+    std::env::set_var("no_proxy", "localhost,127.0.0.1");
+    std::env::remove_var("HTTP_PROXY");
+    std::env::remove_var("HTTPS_PROXY");
+    let registry = Arc::new(BrowserRegistry::new().with_cdp_port(Some(CDP_PORT)));
+    registry.ensure_browser_bootstrap_async().await;
+    let sessioned = Arc::new(SessionedBrowserBackend::new(registry));
+    let nav = BrowserNavigateHandler::disabled(sessioned.clone()).with_cdp_bootstrap(CDP_PORT);
+    let snap = BrowserSnapshotHandler::new(sessioned.clone());
+
+    let url_a = format!("http://127.0.0.1:{port}/alpha");
+    let url_b = format!("http://127.0.0.1:{port}/beta");
+    // B 后导航：若两层隔离缺任何一层，A 的后续快照都会落在 B 的页面。
+    let ra = nav
+        .execute(json!({ "url": url_a, "session": "bug13-a" }))
+        .await
+        .expect("会话 A navigate 失败");
+    assert_dispatched(&ra, "A navigate");
+    let rb = nav
+        .execute(json!({ "url": url_b, "session": "bug13-b" }))
+        .await
+        .expect("会话 B navigate 失败");
+    assert_dispatched(&rb, "B navigate");
+
+    let sa = snap
+        .execute(json!({ "session": "bug13-a" }))
+        .await
+        .expect("会话 A snapshot 失败");
+    let sb = snap
+        .execute(json!({ "session": "bug13-b" }))
+        .await
+        .expect("会话 B snapshot 失败");
+
+    assert!(
+        sa.contains("PAGE_ALPHA"),
+        "会话 A 快照看不到自己的 alpha 页（隔离失效）:\n{sa}"
+    );
+    assert!(
+        !sa.contains("PAGE_BETA"),
+        "会话 A 快照串台到了 B 的 beta 页:\n{sa}"
+    );
+    assert!(
+        sb.contains("PAGE_BETA"),
+        "会话 B 快照看不到自己的 beta 页（隔离失效）:\n{sb}"
+    );
+    assert!(
+        !sb.contains("PAGE_ALPHA"),
+        "会话 B 快照串台到了 A 的 alpha 页:\n{sb}"
+    );
+    println!("t17 OK: 两个会话各看到各的页面，CDP target 层隔离成立");
 }
 
 // ---------------------------------------------------------------------------

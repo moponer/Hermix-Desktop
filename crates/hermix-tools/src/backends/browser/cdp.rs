@@ -42,6 +42,14 @@ pub struct CdpBrowserBackend {
     /// scripts themselves are re-injected on every `navigate` (CDP does
     /// this automatically for any `addScriptToEvaluateOnNewDocument`).
     init_script_ids: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    /// 会话专用模式：首用时经 `/json/new` 开一个本实例独占的 tab 并把
+    /// 它的 websocket 地址钉死，后续所有 CDP 命令都只打这个 tab。
+    /// 非专用模式沿用旧行为——`/json` 里挑"最近导航的 page target"，
+    /// 多个实例会挤进同一个 tab，这是多会话串台的 CDP 层根因。
+    dedicated_tab: bool,
+    /// 专用模式下钉住的 tab websocket 地址。`None` = 尚未创建，首次
+    /// `resolve_target` 时懒建。连接失败时清空重开（tab 被用户手动关掉的兜底）。
+    pinned_target: std::sync::Arc<std::sync::Mutex<Option<String>>>,
 }
 
 /// CamoFox anti-detection browser backend (compat layer).
@@ -89,7 +97,55 @@ impl CdpBrowserBackend {
                 std::collections::HashMap::new(),
             )),
             init_script_ids: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            dedicated_tab: false,
+            pinned_target: std::sync::Arc::new(std::sync::Mutex::new(None)),
         }
+    }
+
+    /// 开启会话专用模式：本实例不再与别的实例抢"最近导航的 tab"，
+    /// 而是懒建一个自己的 tab 并终身钉住（连接失败时重开）。
+    pub fn into_dedicated(mut self) -> Self {
+        self.dedicated_tab = true;
+        self
+    }
+
+    /// 经 `/json/new` 创建一个新 tab，返回其 websocket 调试地址并钉住。
+    /// Chrome 111+ 只接受 PUT，老版本只接受 GET；PUT 被拒时返回的是
+    /// 405 + 纯文本（HTTP 层不报错），所以 GET 兜底条件必须包含
+    /// 「响应体不是 JSON」，只看请求是否发出会漏掉这种情况。
+    async fn create_dedicated_tab(&self) -> Result<String, ToolError> {
+        let base = self.endpoint.trim_end_matches('/');
+        let url = format!("{base}/json/new?about:blank");
+        let mut last_err: Option<String> = None;
+        for resp in [
+            self.client.put(&url).send().await,
+            self.client.get(&url).send().await,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            match resp.json::<Value>().await {
+                Ok(target) => {
+                    if let Some(ws) =
+                        target.get("webSocketDebuggerUrl").and_then(|v| v.as_str())
+                    {
+                        let ws = ws.to_string();
+                        if let Ok(mut pin) = self.pinned_target.lock() {
+                            *pin = Some(ws.clone());
+                        }
+                        return Ok(ws);
+                    }
+                    last_err = Some(format!("new-tab response has no webSocketDebuggerUrl: {target}"));
+                }
+                Err(e) => {
+                    last_err = Some(format!("new-tab response not JSON: {e}"));
+                }
+            }
+        }
+        Err(ToolError::ExecutionFailed(format!(
+            "Failed to create dedicated CDP tab at {url}: {}",
+            last_err.unwrap_or_else(|| "both PUT and GET failed to connect".into())
+        )))
     }
 
     /// Resolve a `[ref=eN]` token or a raw CSS selector into a real selector
@@ -161,6 +217,15 @@ impl CdpBrowserBackend {
         if looks_like_cdp_websocket(&self.endpoint) {
             return Ok(self.endpoint.clone());
         }
+        // 会话专用模式：只打自己创建的 tab，与其它会话的 tab 永不重叠。
+        if self.dedicated_tab {
+            if let Ok(pin) = self.pinned_target.lock() {
+                if let Some(ws) = pin.as_ref() {
+                    return Ok(ws.clone());
+                }
+            }
+            return self.create_dedicated_tab().await;
+        }
         let targets_resp = self
             .client
             .get(format!("{}/json", self.endpoint.trim_end_matches('/')))
@@ -197,25 +262,52 @@ impl CdpBrowserBackend {
     }
 
     /// Send a CDP command via HTTP/WebSocket discovery shim.
-    pub(crate) async fn cdp_command(&self, method: &str, params: Value) -> Result<Value, ToolError> {
+    /// 解析目标并建立 CDP websocket 连接。专用模式下若钉住的 tab 已被
+    /// 关闭（端点活着但旧 ws 连不上），清 pin 重开一个新 tab 再试一次；
+    /// 非专用模式保持原有报错语义，不重试。
+    async fn connect_target(&self, method: &str) -> Result<CdpSocket, ToolError> {
         let target = self.resolve_target().await?;
-        let connect_result = tokio::time::timeout(
+        let attempt = tokio::time::timeout(
             std::time::Duration::from_secs(5),
             connect_async(&target),
         )
         .await;
+        let first_err = match attempt {
+            Ok(Ok((ws, _))) => return Ok(ws),
+            Ok(Err(e)) => ToolError::ExecutionFailed(format!(
+                "Failed to connect to CDP websocket {target}: {e}"
+            )),
+            Err(_) => ToolError::ExecutionFailed(format!(
+                "CDP websocket connection timed out for {method}"
+            )),
+        };
+        if !self.dedicated_tab {
+            return Err(first_err);
+        }
+        if let Ok(mut pin) = self.pinned_target.lock() {
+            *pin = None;
+        }
+        let fresh = self.resolve_target().await?;
+        let (ws, _) = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            connect_async(&fresh),
+        )
+        .await
+        .map_err(|_| {
+            ToolError::ExecutionFailed(format!(
+                "CDP websocket connection timed out for {method} (fresh tab)"
+            ))
+        })?
+        .map_err(|e| {
+            ToolError::ExecutionFailed(format!(
+                "Failed to connect to CDP websocket {fresh} after tab recreate: {e}"
+            ))
+        })?;
+        Ok(ws)
+    }
 
-        let (mut ws, _) = connect_result
-            .map_err(|_| {
-                ToolError::ExecutionFailed(format!(
-                    "CDP websocket connection timed out for {method}"
-                ))
-            })?
-            .map_err(|e| {
-                ToolError::ExecutionFailed(format!(
-                    "Failed to connect to CDP websocket {target}: {e}"
-                ))
-            })?;
+    pub(crate) async fn cdp_command(&self, method: &str, params: Value) -> Result<Value, ToolError> {
+        let mut ws = self.connect_target(method).await?;
 
         static NEXT_CDP_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let request_id = NEXT_CDP_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -529,14 +621,7 @@ impl CdpBrowserBackend {
         event_method: Option<&str>,
         event_timeout: std::time::Duration,
     ) -> Result<(Value, Option<Value>), ToolError> {
-        let target = self.resolve_target().await?;
-        let (mut ws, _) = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            connect_async(&target),
-        )
-        .await
-        .map_err(|_| ToolError::ExecutionFailed(format!("CDP websocket connection timed out for {method}")))?
-        .map_err(|e| ToolError::ExecutionFailed(format!("Failed to connect to CDP websocket {target}: {e}")))?;
+        let mut ws = self.connect_target(method).await?;
 
         static NEXT_CDP_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let request_id = NEXT_CDP_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
