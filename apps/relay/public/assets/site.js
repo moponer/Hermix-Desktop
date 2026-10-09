@@ -32,7 +32,7 @@
       return '<a href="' + n.href + '"' + (n.key === active ? ' class="on"' : '') + '>' + n.label + '</a>';
     }).join('');
     return (
-      '<div class="brand" onclick="location.href=\'index.html\'"><span class="dot"></span>Hermix</div>' +
+      '<a class="brand" href="index.html"><img class="mark" src="brand.png" alt="" width="26" height="26">Hermix</a>' +
       '<button class="burger" id="burger" aria-label="菜单">菜单</button>' +
       '<div class="links" id="navlinks">' + links + '</div>' +
       '<div class="cta">' +
@@ -47,12 +47,24 @@
       ? '<a href="' + esc(REPO_URL) + '" target="_blank" rel="noopener">开源仓库</a>'
       : '<span>开源地址待公布</span>';
     return (
-      '<span>Hermix</span><span>hermix.cssso.com</span>' + repo +
+      '<img class="mark" src="brand.png" alt="" width="20" height="20"><span>Hermix</span>' +
+      '<span>hermix.cssso.com</span>' + repo +
       '<span class="sp">Windows x64 · Android</span>'
     );
   }
 
+  /* 标签页图标在 head 里注入，省得九个页面各写一行 link（改一处就够）。 */
+  function mountFavicon() {
+    if (document.querySelector('link[rel="icon"]')) return;
+    var l = document.createElement('link');
+    l.rel = 'icon';
+    l.type = 'image/png';
+    l.href = 'favicon.png';
+    document.head.appendChild(l);
+  }
+
   function mount(active) {
+    mountFavicon();
     var nav = document.querySelector('[data-nav]');
     if (nav) nav.innerHTML = navHtml(active);
     var ft = document.querySelector('[data-footer]');
