@@ -285,6 +285,15 @@ function createRelay({ dbPath }) {
     fs.createReadStream(path.join(spikerDir, 'latest.zip')).pipe(res);
   });
 
+  // ── 官网静态站（多页分站） ──────────────────────────────────
+  // 官网是多个 HTML 页面 + assets/，不是单文件，所以要把 public/ 整个托管出去。
+  //
+  // 必须挂在所有显式路由**之后**：/desktop/manifest.json 与 /spiker/manifest.json
+  // 要额外带 X-Checksum-Sha256 与 Cache-Control: no-cache，被 static 抢先命中
+  // 就退化成没有校验头的裸 JSON，客户端更新链路会静默降级成"永远无更新"。
+  // 顺序即语义，别往上挪。
+  app.use(express.static(publicDir));
+
   const server = http.createServer(app);
   const wss = new WebSocketServer({ noServer: true });
 
