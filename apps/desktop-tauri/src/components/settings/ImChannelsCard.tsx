@@ -489,6 +489,18 @@ export function ImChannelsCard() {
     }
   }, [pairCode]);
 
+  // 完整配对链接（含 IP:端口与证书指纹）——手机端「粘贴链接」通道的料。
+  // 只复制 6 位码不够：服务端强制校验指纹，码里没有「连哪台」和「证书是谁」。
+  const copyUrl = useCallback(async () => {
+    if (!qr) return;
+    try {
+      await navigator.clipboard.writeText(qr.payload.pairing_url);
+      toastSuccess("配对链接已复制，去手机配对页粘贴");
+    } catch {
+      toastError("复制失败，请手动选中复制");
+    }
+  }, [qr]);
+
   // 配对码倒计时（同 ZCode bind-code 面板：三段变色进度条 + 过期态）。
   const pairTotalMs = pairCode ? pairCode.ttl_secs * 1000 : 0;
   const pairRemainingMs = pairCode ? Math.max(0, pairCodeAt + pairTotalMs - nowTs) : 0;
@@ -636,8 +648,13 @@ export function ImChannelsCard() {
                         重新生成
                       </ActionBtn>
                     </div>
-                    <div className="text-[length:var(--text-meta)] text-text-muted break-all">
-                      扫码地址：<span className="font-mono text-text-secondary">{qr.payload.pairing_url}</span>
+                    <div className="text-[length:var(--text-meta)] text-text-muted break-all flex items-center gap-1.5 flex-wrap">
+                      <span>
+                        扫码地址：<span className="font-mono text-text-secondary">{qr.payload.pairing_url}</span>
+                      </span>
+                      <ActionBtn onClick={() => void copyUrl()} icon={<Copy className="icon-sm" />} title="复制完整配对链接，到手机配对页粘贴">
+                        复制链接
+                      </ActionBtn>
                     </div>
                     <div className="text-[length:var(--text-meta)] text-text-muted">
                       服务器：<span className="font-mono text-text-secondary">{qr.payload.server_id}</span>

@@ -53,6 +53,31 @@ function onScan() {
   })
 }
 
+/**
+ * 手动通道：粘贴电脑复制的完整配对链接。
+ *
+ * 为什么不是「只输 6 位码」：服务端强制校验证书指纹（空=400、不符=403），
+ * 码本身不含「连哪台电脑」和「证书是不是它」——这两样都在链接里。粘贴链接
+ * 等价于扫码拿到的东西，指纹随链接走，安全不降级。
+ */
+function onPaste() {
+  error.value = ''
+  uni.getClipboardData({
+    success: (res) => {
+      const t = parsePairingUrl(String(res.data ?? ''))
+      if (!t) {
+        error.value =
+          '剪贴板里不是 hermix 配对链接。在电脑「设置 → 设备 → 手机端」点「复制链接」再试。'
+        return
+      }
+      target.value = t
+    },
+    fail: () => {
+      error.value = '读取剪贴板失败，请重新复制电脑上的配对链接。'
+    },
+  })
+}
+
 async function submit() {
   const t = target.value
   if (!t) return
@@ -98,8 +123,10 @@ function reset() {
         </view>
         <text class="scan-t">扫码连接</text>
       </view>
+      <view class="paste" @tap="onPaste"><text>粘贴电脑上的配对链接</text></view>
       <text class="card-hint">
-        手机和电脑要在同一个 Wi-Fi。扫不了就用手机自带相机扫同一个码，会在浏览器里打开配对页。
+        两种方式都要手机和电脑在同一个 Wi-Fi：扫上面的码，或在电脑上点「复制链接」后到这里粘贴（扫不了码时用）。
+        配对只需同网一次；之后在「设置」里填好 relay 凭据，跨网络也能连回电脑。
       </text>
     </view>
 
@@ -221,6 +248,18 @@ function reset() {
   font-size: 25rpx;
   font-weight: 600;
   color: $accent;
+}
+
+/* 手动通道：扫码之外的等价入口，样式弱于主按钮。 */
+.paste {
+  margin-top: 24rpx;
+  height: 72rpx;
+  line-height: 72rpx;
+  text-align: center;
+  border-radius: 36rpx;
+  background: $raised;
+  color: $fg2;
+  font-size: 23rpx;
 }
 
 .fp-row {
