@@ -315,13 +315,7 @@ impl UiaAutomation {
             // *success* rendered as an error. This is UIA's "nothing matched"
             // signal, so route it to NotFound and leave the null check below
             // as the belt-and-braces path for runtimes that do return null.
-            .map_err(|e| {
-                if e.code().is_ok() {
-                    CuaError::NotFound("uia: no element matched".into())
-                } else {
-                    CuaError::Uia(format!("FindFirst: {e}"))
-                }
-            })?;
+            .map_err(map_find_error)?;
         // IUIAutomationElement has null inner pointer when nothing matches
         if found.as_raw().is_null() {
             return Ok(None);
@@ -388,13 +382,7 @@ impl UiaAutomation {
         let found = root
             .FindFirst(TreeScope_Descendants, &com_cond)
             // Same `Error::empty()` = HRESULT(0) trap as `find_first_from`.
-            .map_err(|e| {
-                if e.code().is_ok() {
-                    CuaError::NotFound("uia: no element matched".into())
-                } else {
-                    CuaError::Uia(format!("FindFirst: {e}"))
-                }
-            })?;
+            .map_err(map_find_error)?;
         if found.as_raw().is_null() {
             return Ok(None);
         }
@@ -848,6 +836,18 @@ pub unsafe fn focus_by_name(automation: &UiaAutomation, name: &str) -> CuaResult
     set_focus_element(&raw)
 }
 
+/// `FindFirst` 错误映射：HRESULT 为成功码（含 0）时是"没找到"，不是失败。
+/// UIA 的 null out-pointer 在 windows-rs 里以 `Error::empty()`（HRESULT(0)）
+/// 形态出现，Display 打印成"操作成功完成。(0x00000000)"——按错误处理会把
+/// 每次正常的空结果都变成假故障。
+fn map_find_error(e: windows::core::Error) -> CuaError {
+    if e.code().is_ok() {
+        CuaError::NotFound("uia: no element matched".into())
+    } else {
+        CuaError::Uia(format!("FindFirst: {e}"))
+    }
+}
+
 // =========================================================================
 // Tests
 // =========================================================================
@@ -855,6 +855,21 @@ pub unsafe fn focus_by_name(automation: &UiaAutomation, name: &str) -> CuaResult
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// HRESULT(0)（windows-rs 的 `Error::empty()`，UIA 空结果的载体）
+    /// 必须映射为 NotFound，不能当成 UIA 失败往外抛。
+    #[test]
+    fn find_error_hresult_zero_is_not_found() {
+        let e = windows::core::Error::empty();
+        assert!(matches!(map_find_error(e), CuaError::NotFound(_)));
+    }
+
+    /// 真失败码（E_FAIL）保持 Uia 错误并带原始消息，错误可见性不降级。
+    #[test]
+    fn find_error_real_failure_stays_uia_error() {
+        let e = windows::core::Error::from_hresult(windows::core::HRESULT(-2147467259));
+        assert!(matches!(map_find_error(e), CuaError::Uia(_)));
+    }
 
     #[test]
     fn control_type_round_trips() {
