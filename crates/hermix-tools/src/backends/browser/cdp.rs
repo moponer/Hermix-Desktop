@@ -1294,12 +1294,12 @@ impl BrowserBackend for CdpBrowserBackend {
         // Resolve `[ref=eN]` tokens against the last snapshot's ref map. The
         // pulse-class cleanup has to run page-wide either way, so it stays a
         // `Runtime.evaluate`; only the "which element" part differs per path.
-        let PREP = "document.querySelectorAll('.__hermix_hl_pulse')\
+        let prep = "document.querySelectorAll('.__hermix_hl_pulse')\
                    .forEach(function(n){n.remove();});";
         let (ok, reason) = match self.resolve_selector(selector)? {
             Resolved::Node(id) => {
                 let body = format!(
-                    "function(){{ {PREP} \
+                    "function(){{ {prep} \
                      if(!el) return {{ok:false, reason:'not_found'}}; \
                      el.scrollIntoView({{block:'center'}}); \
                      el.style.outline='3px solid #ff0066'; \
@@ -1316,7 +1316,7 @@ impl BrowserBackend for CdpBrowserBackend {
             Resolved::Css(ref sel) => {
                 let js = format!(
                     r#"(function(){{
-                        {PREP}
+                        {prep}
                         var el = document.querySelector({json});
                         if(!el) return JSON.stringify({{ok:false, reason:'not_found'}});
                         el.scrollIntoView({{block:'center'}});
