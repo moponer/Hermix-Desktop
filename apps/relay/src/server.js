@@ -33,6 +33,24 @@ function hashFileSync(p) {
     return null;
   }
 }
+
+// 按 mtime + 体积缓存文件指纹。更新包几十 MB，每次请求重算 SHA-256 会把
+// manifest 的响应拖到 200ms 量级并打满 CPU，而它一天也传不了几次。
+// 只看 mtime 不够——某些文件系统/上传方式会保留旧时间戳，所以带上 size。
+const shaCache = new Map();
+function hashFileCached(p) {
+  let st;
+  try {
+    st = fs.statSync(p);
+  } catch {
+    return null;
+  }
+  const hit = shaCache.get(p);
+  if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) return hit.sha256;
+  const sha256 = hashFileSync(p);
+  shaCache.set(p, { mtimeMs: st.mtimeMs, size: st.size, sha256 });
+  return sha256;
+}
 const { openRegistry, bearerFromHeaders } = require('./auth');
 const { openAudit } = require('./audit');
 const { Router } = require('./router');
@@ -44,6 +62,36 @@ function createRelay({ dbPath }) {
 
   const app = express();
   app.disable('x-powered-by');
+  // ── agent-bbs 反代（决策笔记 2026-10-09-agent-bbs-integration）────────
+  // BBS 是 relay 同机的独立 Node 进程，只绑 127.0.0.1（BBS_PORT，默认 3901）。
+  // 这里按 /bbs 前缀纯管道转发，relay 零 BBS 业务逻辑。
+  // **必须挂在 express.json 之前**：body 解析器会消费请求流，反代必须在
+  // 它之前拿到原始字节流（BBS 自己解析 JSON）。
+  const bbsPort = Number(process.env.BBS_PORT || 3901);
+  app.use('/bbs', (req, res) => {
+    const upstream = http.request(
+      {
+        host: '127.0.0.1',
+        port: bbsPort,
+        method: req.method,
+        path: req.originalUrl, // 保留 /bbs 前缀：BBS 路由按全路径注册
+        headers: { ...req.headers, host: `127.0.0.1:${bbsPort}` },
+      },
+      (up) => {
+        res.writeHead(up.statusCode || 502, up.headers);
+        up.pipe(res);
+      },
+    );
+    upstream.on('error', () => {
+      // BBS 进程没起/挂了：明确 502，不带出 relay 自身的堆栈。
+      if (!res.headersSent) {
+        res.status(502).json({ code: 'bbs_down', message: 'BBS 服务未启动（需在服务器上运行 apps/bbs）' });
+      } else {
+        res.end();
+      }
+    });
+    req.pipe(upstream);
+  });
   // 只为 `POST /api/relay/issue-phone` 的 `{ label }`。之前全站没有 JSON
   // body parser，这个端点是第一个需要读请求体的入口。
   app.use(express.json({ limit: '4kb' }));
@@ -226,7 +274,7 @@ function createRelay({ dbPath }) {
     const manifest = JSON.parse(raw);
     // sha256 直读文件清单旁的 latest.zip，响应头带给客户端做下载前预检；
     // 清单里也存了一份（发布脚本写入），两处不一致说明上传只完成了一半。
-    const zipSha = hashFileSync(path.join(desktopDir, 'latest.zip'));
+    const zipSha = hashFileCached(path.join(desktopDir, 'latest.zip'));
     if (zipSha) res.setHeader('X-Checksum-Sha256', zipSha);
     res.setHeader('Cache-Control', 'no-cache');
     res.json(manifest);
@@ -243,7 +291,7 @@ function createRelay({ dbPath }) {
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Length', st.size);
     res.setHeader('Content-Disposition', 'attachment; filename="hermix-desktop-update.zip"');
-    res.setHeader('X-Checksum-Sha256', hashFileSync(path.join(desktopDir, 'latest.zip')) || '');
+    res.setHeader('X-Checksum-Sha256', hashFileCached(path.join(desktopDir, 'latest.zip')) || '');
     fs.createReadStream(path.join(desktopDir, 'latest.zip')).pipe(res);
   });
 
@@ -264,7 +312,7 @@ function createRelay({ dbPath }) {
         .send('更新清单尚未上传（运维需把 manifest.json 放到 relay 目录的 public/spiker/）');
     }
     const manifest = JSON.parse(raw);
-    const zipSha = hashFileSync(path.join(spikerDir, 'latest.zip'));
+    const zipSha = hashFileCached(path.join(spikerDir, 'latest.zip'));
     if (zipSha) res.setHeader('X-Checksum-Sha256', zipSha);
     res.setHeader('Cache-Control', 'no-cache');
     res.json(manifest);
@@ -281,7 +329,7 @@ function createRelay({ dbPath }) {
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Length', st.size);
     res.setHeader('Content-Disposition', 'attachment; filename="spiker-tauri-update.zip"');
-    res.setHeader('X-Checksum-Sha256', hashFileSync(path.join(spikerDir, 'latest.zip')) || '');
+    res.setHeader('X-Checksum-Sha256', hashFileCached(path.join(spikerDir, 'latest.zip')) || '');
     fs.createReadStream(path.join(spikerDir, 'latest.zip')).pipe(res);
   });
 
@@ -292,7 +340,18 @@ function createRelay({ dbPath }) {
   // 要额外带 X-Checksum-Sha256 与 Cache-Control: no-cache，被 static 抢先命中
   // 就退化成没有校验头的裸 JSON，客户端更新链路会静默降级成"永远无更新"。
   // 顺序即语义，别往上挪。
-  app.use(express.static(publicDir));
+  app.use(express.static(publicDir, {
+    setHeaders(res, filePath) {
+      // 图片几乎不变，长缓存；CSS/JS 给 5 分钟——改完不用等浏览器过期，
+      // 但同一会话内翻页不再回源。HTML 不设，留给 ETag 协商：官网页面
+      // 改完必须立刻可见，缓存它等于给自己埋雷。
+      if (/\.(png|jpe?g|webp|ico|svg|woff2?)$/i.test(filePath)) {
+        res.setHeader('Cache-Control', 'public, max-age=604800');
+      } else if (/\.(css|js)$/i.test(filePath)) {
+        res.setHeader('Cache-Control', 'public, max-age=300');
+      }
+    },
+  }));
 
   const server = http.createServer(app);
   const wss = new WebSocketServer({ noServer: true });
