@@ -25,7 +25,7 @@ Status: implemented — 五批次落地（合并 workspace / build.rs 分级容�
 
 **schemars 0.8.22 + indexmap 1.9.3 编译炸（E0107）**：合并后全图 feature 统一，tauri-build 的 build-dep schemars 开 `preserve_order` 拉起 indexmap 1.9.3；其 build.rs 靠 autocfg 运行时探测 emit `has_std`，本机探测静默失败 → 走 no_std 分支（`IndexMap<K, V, S>` 三泛型无默认）→ schemars 两参调用 E0107。修法：**build-dependencies feature 垫片**（`indexmap1 = { package = "indexmap", version = "1.9", features = ["std"] }`）——resolver v2 下 build-dep 图与普通依赖图 feature 不互通，垫片必须放 `[build-dependencies]` 才统一进 schemars 编译单元；std 显式激活后 build.rs 走 `CARGO_FEATURE_STD` 快速路径无条件 emit，跳过探测。
 
-## Alternatives
+## Alternatives considered
 
 - **保留双 workspace + 自动化 copy**：只是把手工环节变自动，三产物目录与解析歧义仍在，下次换个入口（新脚本、IDE 集成）还会绕过。放弃。
 - **统一 `CARGO_TARGET_DIR` 环境变量**：dev.mjs 曾以此「统一」到 release/target——环境变量只在经由 dev.mjs 的路径生效，裸 cargo / tauri CLI 各自为政，且相对路径按 cwd 解析的历史坑（src-tauri 上溯 4 级跑仓库外）正是 2026-08-10 笔记废弃它的原因。放弃。

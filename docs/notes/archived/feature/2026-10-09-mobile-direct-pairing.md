@@ -1,6 +1,7 @@
 # Decision Note: 手机端配对改走局域网直连（先接通能用的那条）
 
-Status: implemented — 2026-10-09
+Status: archived — 2026-10-10（被 2026-10-10-mobile-pairing-via-relay.md 取代）
+Archived: 2026-10-10
 
 ## Decision
 

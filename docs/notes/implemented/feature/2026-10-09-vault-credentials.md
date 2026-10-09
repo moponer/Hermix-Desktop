@@ -1,6 +1,6 @@
 # Decision Note: 本地凭据保险库（vault）+ 手机远程取凭据
 
-Status: proposed — 待拍板；需求源自主人场景：人在外地，手机对话向桌面端要某平台的网址/密码
+Status: implemented — 已拍板开工（2026-10-09）；本地加密凭据库 + 手机 E2EE 取凭据，随实施保持同步
 
 ## Decision
 
