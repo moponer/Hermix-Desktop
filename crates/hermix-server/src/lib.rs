@@ -22,6 +22,7 @@ mod relay_client;
 mod relay_crypto;
 mod relay_identity;
 mod relay_proto;
+mod relay_settings;
 mod relay_transport;
 mod ws_transport;
 mod metrics;
@@ -49,7 +50,7 @@ use axum::http::header;
 use axum::http::{HeaderValue, Method, StatusCode};
 use axum::middleware;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get, patch, post};
+use axum::routing::{delete, get, patch, post, put};
 use axum::{Json, Router};
 use chrono::Utc;
 use futures::FutureExt;
@@ -328,6 +329,16 @@ pub fn router(state: HttpServerState) -> Router {
         // §5.5 P6：审计日志读端点（DiagnosticsTab 数据面）。仅 Local，
         // 与 revoke_device 同一 DeviceManagement 鉴权面。
         .route("/api/pairing/audit", get(pairing::list_audit))
+        // relay 出站连接的配置面。仅 Local：它读写的是这台电脑在公网中转上的
+        // 接入身份与凭据，不是公开信息。同一路径分两次 route 注册——axum 会把
+        // 两个 MethodRouter 合并，写成 `get(..).put(..)` 反而推不出 state 类型。
+        .route("/api/relay/config", get(relay_settings::get_config))
+        .route("/api/relay/config", put(relay_settings::put_config))
+        // 向 relay 换一条手机凭据。桌面端代发是因为 node 凭据明文只在这侧。
+        .route(
+            "/api/relay/phone-credential",
+            post(relay_settings::issue_phone),
+        )
         // IM 通道（QQ / 企业微信官方机器人）。全部仅 Local：铸码、扫码绑定
         // 都是本机操作，凭据是能直接操控本机的机器人密钥。
         .route("/api/channels/pairing-code", post(channels::create_pairing_code))
@@ -516,7 +527,11 @@ pub fn router(state: HttpServerState) -> Router {
 pub async fn run_server(addr: SocketAddr, config: GatewayConfig) -> Result<(), AgentError> {
     // 安全中心：按 config 的 security 刷新自动备份策略（与 main.rs 启动路径一致）。
     hermix_tools::backup::set_policy_from_config(&config.security, &hermix_config::paths::hermix_home());
-    let state = HttpServerState::build(config).await?.with_automation_scheduler();
+    let state = HttpServerState::build(config)
+        .await?
+        .with_automation_scheduler()
+        // 启动 relay 出站连接。未配地址时它自己直接返回，不产生任何流量。
+        .with_relay_client();
     // §5.5 第 2 层：TLS 监听器由 HERMIX_TLS_ADDR 显式开启（可选双监听器：
     // plaintext 保持现有暴露面语义，TLS 面向远程设备）。env 读法放在这里
     // 而不是 main.rs，是为了 run_server 的调用方零改动。

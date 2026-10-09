@@ -318,6 +318,17 @@ pub struct HttpServerState {
     pub nonce_cache: crate::request_signature::NonceCache,
     /// 一次性配对会话管理器（进程内，TTL 120s）。
     pub pairing_sessions: Arc<crate::pairing::PairingSessions>,
+    /// relay 连接设置（`<hermix_home>/relay.json`）。`tokio::sync::Mutex`
+    /// 而不是 `std::sync`：`PUT /api/relay/config` 是 async handler，
+    /// 在异步上下文里持 std 锁是经典的自死锁来源。外面再套一层 `Arc` 是因为
+    /// `HttpServerState` 自身要 `Clone`（WS handler 都持有它的克隆）。
+    pub relay_settings: Arc<tokio::sync::Mutex<crate::relay_settings::RelaySettings>>,
+    /// relay 出站连接状态，供 `/api/relay/config` 回给界面。内部已是 `Arc`，
+    /// `RelayStatus` 本身可以直接克隆共享。
+    pub relay_status: crate::relay_client::RelayStatus,
+    /// relay 最近一次连接失败的原因。`RelayStatus` 只记状态不记原因，
+    /// 而「连不上」的原因差别很大（DNS / 401 / 协议版本），界面要能说清。
+    pub relay_last_error: Arc<tokio::sync::Mutex<Option<String>>>,
 }
 
 impl HttpServerState {
@@ -851,6 +862,9 @@ impl HttpServerState {
             },
             pairing_sessions: Arc::new(crate::pairing::PairingSessions::new()),
             nonce_cache: crate::request_signature::NonceCache::new(),
+            relay_settings: Arc::new(tokio::sync::Mutex::new(crate::relay_settings::load())),
+            relay_status: crate::relay_client::RelayStatus::new(),
+            relay_last_error: Arc::new(tokio::sync::Mutex::new(None)),
         };
         state.register_task_tracker_tools();
 
@@ -1169,6 +1183,9 @@ impl HttpServerState {
             },
             pairing_sessions: Arc::new(crate::pairing::PairingSessions::new()),
             nonce_cache: crate::request_signature::NonceCache::new(),
+            relay_settings: Arc::new(tokio::sync::Mutex::new(crate::relay_settings::load())),
+            relay_status: crate::relay_client::RelayStatus::new(),
+            relay_last_error: Arc::new(tokio::sync::Mutex::new(None)),
         }; // close Self { ... }
         state.register_task_tracker_tools();
         Ok(state)
@@ -1198,6 +1215,72 @@ impl HttpServerState {
                 crate::dashboard::automation::DashboardCronjobBackend::new(self.clone()),
             ),
         );
+        self
+    }
+    /// 启动 relay 出站连接循环。
+    ///
+    /// ## 为什么必须显式调用
+    ///
+    /// `relay_client::connect_and_serve` 在本文件之前**没有任何生产调用方**——
+    /// 整个 relay 子系统（`relay_client` / `relay_transport` / `relay_identity` /
+    /// `relay_proto`）写完了但一根线没接，桌面端从来没有连过 relay。这个方法
+    /// 就是那根线；它做成 builder 而不是构造函数里自动跑，是为了让测试与 CLI
+    /// 模式不必真的去连公网。
+    ///
+    /// 幂等：重复调用只会多起一个循环，配置相同的两个循环是纯浪费，因此这里
+    /// 靠 `with_relay_client` 的调用方纪律保证只调一次（`lib.rs::run_server`）。
+    pub fn with_relay_client(self) -> Self {
+        // 克隆一份进后台任务：本方法要返回 `Self`，而任务需要 `'static` 的
+        // 所有权。`HttpServerState` 内部几乎全是 `Arc`，这一次全量克隆的代价
+        // 只在启动时付一次。
+        let worker = Arc::new(self.clone());
+        tokio::spawn(async move {
+            let (cfg, token) = {
+                let s = worker.relay_settings.lock().await;
+                (s.relay_config(), s.token().to_string())
+            };
+            if !cfg.enabled() {
+                tracing::info!("未配置 relay 地址，不启动出站连接");
+                return;
+            }
+            if token.trim().is_empty() {
+                // 有地址没凭据 = 连一次必然被 relay 401。提前说清楚，
+                // 否则界面上只会显示「未连接」，用户查不到是缺凭据。
+                tracing::warn!(
+                    relay = %cfg.url,
+                    "配了 relay 地址但没有 hrel_* 凭据，跳过连接（relay 会 401）"
+                );
+                *worker.relay_last_error.lock().await = Some(
+                    "配了 relay 地址但没有凭据（hrel_*）。在界面上填入，或在 relay 服务器上用 relayctl add-node 签发。"
+                        .into(),
+                );
+                return;
+            }
+            crate::relay_client::connect_and_serve(
+                cfg,
+                worker.relay_status.clone(),
+                |cfg| {
+                    let worker = worker.clone();
+                    let token = token.clone();
+                    async move {
+                        match crate::relay_client::serve_relay_socket(
+                            cfg,
+                            token,
+                            worker.clone(),
+                        )
+                        .await
+                        {
+                            Err(e) => {
+                                tracing::warn!(error = %e, "relay 连接失败");
+                                *worker.relay_last_error.lock().await = Some(e.to_string());
+                            }
+                            Ok(()) => *worker.relay_last_error.lock().await = None,
+                        }
+                    }
+                },
+            )
+            .await;
+        });
         self
     }
 }

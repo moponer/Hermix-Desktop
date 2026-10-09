@@ -115,6 +115,13 @@ pub fn empty_state() -> HttpServerState {
         pairing_sessions: Arc::new(crate::pairing::PairingSessions::new()),
         nonce_cache: crate::request_signature::NonceCache::new(),
         channel_sessions: Arc::new(std::sync::Mutex::new(Vec::new())),
+        // 测试里一律给默认值：`relay_settings::load()` 会读真实的
+        // `~/.hermix/relay.json`，让测试取决于开发者本机配置就不可复现了。
+        relay_settings: Arc::new(tokio::sync::Mutex::new(
+            crate::relay_settings::RelaySettings::default(),
+        )),
+        relay_status: crate::relay_client::RelayStatus::new(),
+        relay_last_error: Arc::new(tokio::sync::Mutex::new(None)),
     }
 }
 
@@ -177,6 +184,13 @@ fn build_state_with_home(home: PathBuf) -> HttpServerState {
         pairing_sessions: Arc::new(crate::pairing::PairingSessions::new()),
         nonce_cache: crate::request_signature::NonceCache::new(),
         channel_sessions: Arc::new(std::sync::Mutex::new(Vec::new())),
+        // 测试里一律给默认值：`relay_settings::load()` 会读真实的
+        // `~/.hermix/relay.json`，让测试取决于开发者本机配置就不可复现了。
+        relay_settings: Arc::new(tokio::sync::Mutex::new(
+            crate::relay_settings::RelaySettings::default(),
+        )),
+        relay_status: crate::relay_client::RelayStatus::new(),
+        relay_last_error: Arc::new(tokio::sync::Mutex::new(None)),
     }
 }
 

@@ -283,6 +283,23 @@ fn dpapi_unprotect(cipher: &[u8]) -> Result<Vec<u8>, IdentityError> {
     dpapi_unprotect_with(cipher, DPAPI_ENTROPY)
 }
 
+/// DPAPI 保护一段**别的**秘密（当前只有 relay 的 `hrel_*` 凭据）。
+///
+/// 与 E2EE 私钥分开是因为**熵必须不同**：共用一个熵的话，这个模块里任意一段
+/// 密文都能被当成另一段解开，秘密之间就没有隔离了。`label` 是调用方给的
+/// 用途标识，进了 DPAPI 的可选熵。
+pub(crate) fn protect_secret(plain: &[u8], label: &[u8]) -> Result<String, IdentityError> {
+    Ok(b64().encode(dpapi_protect_with(plain, label)?))
+}
+
+/// [`protect_secret`] 的逆。`label` 必须与加密时**逐字节相同**。
+pub(crate) fn unprotect_secret(cipher_b64: &str, label: &[u8]) -> Result<Vec<u8>, IdentityError> {
+    let cipher = b64()
+        .decode(cipher_b64.as_bytes())
+        .map_err(|e| IdentityError::Corrupt(format!("secret base64: {e}")))?;
+    dpapi_unprotect_with(&cipher, label)
+}
+
 /// 非 Windows 编译不过——hermix 是 Windows-only 项目（PR 禁区），
 /// 这里给的是清晰的编译错误而不是"运行时报不支持"。
 #[cfg(not(windows))]

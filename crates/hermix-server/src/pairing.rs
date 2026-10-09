@@ -784,6 +784,14 @@ pub struct CompletePairingBody {
     /// 证书 + 克隆 /pair 页即可劫持配对码换取 device_token。IM 手动
     /// 输入路径没有落地页，需由调用方补上桌面端展示的指纹。
     pub cert_fingerprint: String,
+    /// 该手机的 relay 凭据哈希（`sha256(hrel_*)`）。
+    ///
+    /// 有了它，桌面端撤销设备时才能一路断到 relay——否则手机发不出帧却仍在收
+    /// 广播帧，「撤销」就只是个界面动作。**只收哈希，绝不收明文**。
+    ///
+    /// 可空：没配 relay 的手机（纯局域网直连）就没有这个值。
+    #[serde(default)]
+    pub relay_token_hash: Option<String>,
 }
 
 /// `POST /api/pairing/complete` — Unpaired 也可访问（配对即信任建立本身）。
@@ -894,13 +902,31 @@ pub async fn complete_pairing(
                 src_ip,
                 Some("allowed".to_string()),
             );
+
+            // 记下这台手机在 relay 侧的凭据哈希，撤销时才有东西可撤。
+            // 写失败只记日志、**不回滚配对**：配对已经成立（设备 token 已签发），
+            // 绑定表只是让「撤销」更彻底。为它把刚成功的配对搞失败更糟。
+            if let Some(hash) = body.relay_token_hash.as_deref().map(str::trim) {
+                if !hash.is_empty() {
+                    let node_id = state.relay_settings.lock().await.node_id.clone();
+                    if let Err(e) = crate::relay_settings::PhoneBindingStore::at_default()
+                        .put(&device.device_id, hash, &node_id)
+                    {
+                        tracing::warn!(
+                            device_id = %device.device_id,
+                            error = %e,
+                            "记录 relay 绑定失败 —— 这台设备之后无法从 relay 侧撤销"
+                        );
+                    }
+                }
+            }
+
             Json(serde_json::json!({
                 "device_id": device.device_id,
                 "device_token": token,
             }))
             .into_response()
-        }
-        Err(e) => (
+        }        Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("配对落库失败: {e}").into_response(),
         )
@@ -1026,12 +1052,23 @@ pub async fn revoke_device(
                 src_ip,
                 Some("revoked".to_string()),
             );
-            StatusCode::NO_CONTENT.into_response()
+
+            // 撤销必须**一路断到 relay**。只撤本机 `devices.db` 的话，那台手机
+            // 虽然发不出帧了（这一层生效），却还在持续接收广播给该 node 的出站
+            // 帧——用户点的是「撤销」，界面不该让它继续收。
+            //
+            // 刻意**不因 relay 失败而让整个请求失败**：本地撤销已经生效，把它报成
+            // 失败会让用户以为什么都没发生、于是不再重试——那比重试更糟。relay 侧
+            // 的结果原样回给界面，由界面决定怎么提示。
+            let outcome = crate::relay_settings::revoke_device_on_relay(&state, &device_id).await;
+            if let Some(why) = &outcome.relay_error {
+                tracing::warn!(device_id = %device_id, error = %why, "relay 侧撤销失败");
+            }
+            (StatusCode::OK, Json(outcome)).into_response()
         }
         Some(registry) => {
             // 设备不存在也落审计行（decision = "not_found"，便于排查滥用扫描）。
-            registry.record_audit(
-                crate::pairing::AuditEvent::Revoke,
+            registry.record_audit(                crate::pairing::AuditEvent::Revoke,
                 Some(device_id.clone()),
                 src_ip,
                 Some("not_found".to_string()),

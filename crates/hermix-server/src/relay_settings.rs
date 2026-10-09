@@ -1,0 +1,787 @@
+//! relay 连接设置：落盘、读取、更新。以及 `GET/PUT /api/relay/config`。
+//!
+//! ## 为什么这些字段以前无处可配
+//!
+//! `relay_client.rs` 把 `RelayConfig { url, node_id }` 定义好了，`connect_and_serve`
+//! 也写好了，但**全仓库没有任何生产代码构造过它、也没有任何 `/api/relay/*` 端点**——
+//! 那四个模块（`relay_client` / `relay_transport` / `relay_identity` / `relay_proto`）
+//! 是一根线都没接的。本模块补上「配置从哪来、谁 spawn 它、UI 怎么改」这三件事。
+//!
+//! ## 凭据用 DPAPI，不用明文
+//!
+//! `hrel_*` 是 relay 侧的参与者凭据：泄露即可冒充这台电脑接入路由。量级上它
+//! 低于 E2EE 私钥（撤销即失效），但 `~/.hermix/` 下明文文件一大把，多一份不多、
+//! 少一份不少，而 DPAPI 是**现成的**（`relay_identity.rs` 已经在用），复用零成本。
+//! 熵与 E2EE 私钥的不同，见 `relay_identity::protect_secret`。
+//!
+//! ## 配置读坏了不静默当「没配过」
+//!
+//! 损坏的文件如果静默回落成默认，用户的现象是「我明明配过，怎么显示未连接」——
+//! 而真正原因是文件坏了。所以加载错误**带着走**，由 `/api/relay/config` 原样回给
+//! 界面显示，而不是吞进日志让人猜。
+
+use std::path::{Path, PathBuf};
+
+use axum::extract::State;
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use axum::Json;
+use serde::{Deserialize, Serialize};
+
+use crate::relay_client::RelayConfig;
+
+const FILE: &str = "relay.json";
+const VERSION: u32 = 1;
+/// 与 E2EE 私钥不同的熵标签，见 `relay_identity::protect_secret`。
+const DPAPI_LABEL: &[u8] = b"hermix/relay/token/v1";
+
+#[derive(Serialize, Deserialize, Clone, Default)]
+struct StoredRelay {
+    version: u32,
+    #[serde(default)]
+    url: String,
+    #[serde(default)]
+    node_id: String,
+    /// DPAPI 密文（base64）。空 = 没签发过。
+    #[serde(default)]
+    protected_token: String,
+}
+
+/// 进程内的 relay 设置。`token` 不外泄：API 只回「配没配」。
+#[derive(Clone, Default)]
+pub struct RelaySettings {
+    pub url: String,
+    pub node_id: String,
+    token: String,
+    /// 加载时的错误原样带着，供界面显示。
+    pub load_error: Option<String>,
+}
+
+impl RelaySettings {
+    /// 未配置地址 = 不启用（与 `RelayConfig::enabled` 同一判据）。
+    pub fn enabled(&self) -> bool {
+        !self.url.trim().is_empty()
+    }
+
+    /// 凭据配了没有。**没有凭据就不能连**——relay 会对没有 Bearer 的连接直接 401。
+    pub fn has_token(&self) -> bool {
+        !self.token.trim().is_empty()
+    }
+
+    pub fn relay_config(&self) -> RelayConfig {
+        RelayConfig {
+            url: self.url.clone(),
+            node_id: self.node_id.clone(),
+            ..Default::default()
+        }
+    }
+
+    pub fn token(&self) -> &str {
+        &self.token
+    }
+}
+
+fn settings_path() -> PathBuf {
+    hermix_config::paths::hermix_home().join(FILE)
+}
+
+/// 读取。文件不存在 = 从未配置（正常，不是错误）；文件存在但读不了 = 带着错误
+/// 回落成默认值，让界面能说出「配置读坏了」而不是「未配置」。
+pub fn load_at(path: &Path) -> RelaySettings {
+    match std::fs::read_to_string(path) {
+        Ok(raw) => match serde_json::from_str::<StoredRelay>(&raw) {
+            Ok(stored) => {
+                if stored.version != VERSION {
+                    return broken(format!("relay.json 版本不支持：{}", stored.version));
+                }
+                let token = if stored.protected_token.is_empty() {
+                    String::new()
+                } else {
+                    match crate::relay_identity::unprotect_secret(
+                        &stored.protected_token,
+                        DPAPI_LABEL,
+                    ) {
+                        Ok(plain) => String::from_utf8(plain).unwrap_or_default(),
+                        Err(e) => {
+                            return broken(format!(
+                                "relay 凭据解不开（多半是换了 Windows 账户或 profile 损坏）：{e}。请重新签发并填入。"
+                            ))
+                        }
+                    }
+                };
+                RelaySettings {
+                    url: stored.url,
+                    node_id: stored.node_id,
+                    token,
+                    load_error: None,
+                }
+            }
+            Err(e) => broken(format!("relay.json 解析失败：{e}")),
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => RelaySettings::default(),
+        Err(e) => broken(format!("relay.json 读不了：{e}")),
+    }
+}
+
+fn broken(msg: String) -> RelaySettings {
+    tracing::warn!("relay 配置加载失败：{msg}");
+    RelaySettings {
+        load_error: Some(msg),
+        ..Default::default()
+    }
+}
+
+pub fn load() -> RelaySettings {
+    load_at(&settings_path())
+}
+
+pub fn save_at(path: &Path, s: &RelaySettings) -> Result<(), String> {
+    let stored = StoredRelay {
+        version: VERSION,
+        url: s.url.clone(),
+        node_id: s.node_id.clone(),
+        protected_token: if s.token.trim().is_empty() {
+            String::new()
+        } else {
+            crate::relay_identity::protect_secret(s.token.as_bytes(), DPAPI_LABEL)
+                .map_err(|e| format!("保护 relay 凭据失败：{e}"))?
+        },
+    };
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("创建目录失败：{e}"))?;
+    }
+    let body =
+        serde_json::to_string_pretty(&stored).map_err(|e| format!("序列化失败：{e}"))?;
+    std::fs::write(path, body).map_err(|e| format!("写入失败：{e}"))
+}
+
+/// 稳定的本机标识：E2EE 公钥前 8 位十六进制。
+///
+/// 用 `rand` 铸一个 node_id 也可以，但那样「这台电脑是谁」就与它的加密身份
+/// 脱钩了——而它本来就有唯一且稳定的公钥，且 `QrPayload::server_id` 已经是
+/// `hermix-<8 hex>` 这个形状（`pairing.rs:530`），两边能对上。
+fn derive_node_id() -> String {
+    use sha2::{Digest, Sha256};
+    match crate::relay_identity::load_or_create() {
+        Ok(id) => {
+            let digest = Sha256::digest(id.public_key());
+            let hex: String = digest[..4].iter().map(|b| format!("{b:02x}")).collect();
+            format!("hermix-{hex}")
+        }
+        Err(e) => {
+            tracing::warn!("无法从 E2EE 身份推导 node_id：{e}；请在界面上手填");
+            String::new()
+        }
+    }
+}
+
+// ── 手机 ↔ relay 绑定表 ──────────────────────────────────────────
+
+/**
+ * 一台已配对手机在 relay 侧的凭据哈希，按 `device_id` 索引。
+ *
+ * ## 为什么只存哈希
+ *
+ * 撤销时 relay 要的是「把持有这条凭据的连接踢掉」。让 relay 支持**按哈希撤销**，
+ * hermix 就完全不必持有那台手机的明文 `hrel_*` —— 中间任何一环都没见过真凭据。
+ * 哈希本来就在 relay 库里当主键，不是额外泄露。
+ *
+ * 存在 `~/.hermix/relay_phones.json` 而不是 `devices.db`：后者是 SQLite 且正被
+ * 审计线改动，理由与 `relay_identity::PeerStore` 相同。
+ *
+ * ## 存哈希也意味着「撤销能力」本身要看得见
+ *
+ * 一台没登记过 relay 的手机（只做过局域网直连）在这里查不到记录，撤销时
+ * relay 侧无从下手。`GET /api/pairing/devices` 会带上 `relay_bound`，界面据此
+ * 告诉用户「这台设备没走过中转，撤销只影响直连」。
+ */
+#[derive(Serialize, Deserialize, Default, Clone)]
+struct StoredRelayPhones {
+    #[serde(default)]
+    devices: std::collections::BTreeMap<String, StoredRelayPhone>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+struct StoredRelayPhone {
+    /// `sha256(hrel_*)` 的小写 hex
+    token_hash: String,
+    node_id: String,
+    bound_at: u64,
+}
+
+/// 64 位小写 hex 判定。
+///
+/// ## 这里为什么不用正则字面量
+///
+/// Rust 1.92 起**即使 edition 2021 也不再把 `/…/` 解析成正则**（实测
+/// `rustc 1.92.0` 直接报 `expected expression, found '/'`）。看到这个报错时
+/// 不用查自己的括号配平——就是它。
+fn is_sha256_hex(s: &str) -> bool {
+    s.len() == 64
+        && s.bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+pub struct PhoneBindingStore {
+    path: PathBuf,
+}
+
+impl PhoneBindingStore {
+    pub fn at_default() -> Self {
+        Self {
+            path: hermix_config::paths::hermix_home().join("relay_phones.json"),
+        }
+    }
+
+    /// 测试用：指定路径。
+    pub fn at(path: PathBuf) -> Self {
+        Self { path }
+    }
+
+    fn read(&self) -> Result<StoredRelayPhones, String> {
+        match std::fs::read_to_string(&self.path) {
+            Ok(raw) => serde_json::from_str(&raw).map_err(|e| format!("relay_phones.json 解析失败：{e}")),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(StoredRelayPhones::default()),
+            Err(e) => Err(format!("relay_phones.json 读不了：{e}")),
+        }
+    }
+
+    fn write(&self, stored: &StoredRelayPhones) -> Result<(), String> {
+        if let Some(parent) = self.path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("创建目录失败：{e}"))?;
+        }
+        let body = serde_json::to_string_pretty(stored).map_err(|e| format!("序列化失败：{e}"))?;
+        std::fs::write(&self.path, body).map_err(|e| format!("写入失败：{e}"))
+    }
+
+    pub fn get(&self, device_id: &str) -> Option<String> {
+        self.read().ok()?.devices.get(device_id).map(|p| p.token_hash.clone())
+    }
+
+    /// 登记 / 覆盖一条绑定。哈希格式不对直接拒——写进去的坏值会让撤销静默失效。
+    pub fn put(&self, device_id: &str, token_hash: &str, node_id: &str) -> Result<(), String> {
+        if !is_sha256_hex(token_hash) {
+            return Err("relay 凭据哈希必须是 64 位小写 hex".into());
+        }
+        let mut stored = self.read()?;
+        stored.devices.insert(
+            device_id.to_string(),
+            StoredRelayPhone {
+                token_hash: token_hash.to_string(),
+                node_id: node_id.to_string(),
+                bound_at: now_secs(),
+            },
+        );
+        self.write(&stored)
+    }
+
+    /// 撤销后清掉本地记录：留着它会让下次撤销再打一次 relay（幂等但没意义），
+    /// 更糟的是让人以为这台设备还绑着中转。
+    pub fn remove(&self, device_id: &str) -> Result<(), String> {
+        let mut stored = self.read()?;
+        if stored.devices.remove(device_id).is_none() {
+            return Ok(());
+        }
+        self.write(&stored)
+    }
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// 撤销结果。**本地撤销与 relay 撤销是两件事，必须分开报。**
+#[derive(Serialize)]
+pub struct RevokeOutcome {
+    pub device_id: String,
+    /// hermix 侧的设备令牌已失效（= 这台设备发不出任何帧）。永远为 true。
+    pub local_revoked: bool,
+    /// 这台设备是否登记过 relay 绑定。没登记就没有 relay 侧可撤销的东西。
+    pub relay_bound: bool,
+    /// relay 侧是否真的撤了。`relay_bound` 为 false 时为 false 且不���错误。
+    pub relay_revoked: bool,
+    /// relay 不可达 / 拒绝时的人话原因。**不回 5xx**：本地撤销已经生效了，
+    /// 整体失败会让用户以为什么都没发生——那比重试更糟。
+    pub relay_error: Option<String>,
+}
+
+/// 让 relay 撤销某个手机凭据哈希并断开它的连接。
+pub async fn revoke_phone_at_relay(url: &str, node_token: &str, token_hash: &str) -> Result<bool, String> {
+    let http_base = url
+        .trim()
+        .trim_end_matches('/')
+        .replacen("wss://", "https://", 1)
+        .replacen("ws://", "http://", 1);
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("构造 HTTP 客户端失败：{e}"))?;
+
+    let resp = client
+        .post(format!("{http_base}/api/relay/revoke-phone"))
+        .bearer_auth(node_token)
+        .json(&serde_json::json!({ "token_hash": token_hash }))
+        .send()
+        .await
+        .map_err(|e| format!("连不上 relay：{e}"))?;
+
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(format!("relay 拒绝撤销（HTTP {}）：{body}", status.as_u16()));
+    }
+    Ok(body.contains("\"revoked\":true"))
+}
+
+/// 撤销一台设备的 relay 访问。由 `pairing::revoke_device` 在本地撤销成功后调用。
+pub(crate) async fn revoke_device_on_relay(
+    state: &crate::state::HttpServerState,
+    device_id: &str,
+) -> RevokeOutcome {
+    let hash = PhoneBindingStore::at_default().get(device_id);
+    let Some(hash) = hash else {
+        return RevokeOutcome {
+            device_id: device_id.to_string(),
+            local_revoked: true,
+            relay_bound: false,
+            relay_revoked: false,
+            relay_error: None,
+        };
+    };
+
+    let (url, node_token) = {
+        let s = state.relay_settings.lock().await;
+        (s.url.clone(), s.token().to_string())
+    };
+    if url.trim().is_empty() {
+        return RevokeOutcome {
+            device_id: device_id.to_string(),
+            local_revoked: true,
+            relay_bound: true,
+            relay_revoked: false,
+            relay_error: Some("这台电脑没有配置 relay 地址，无法通知它断开这台手机。".into()),
+        };
+    }
+
+    let outcome = match revoke_phone_at_relay(&url, &node_token, &hash).await {
+        Ok(true) => RevokeOutcome {
+            device_id: device_id.to_string(),
+            local_revoked: true,
+            relay_bound: true,
+            relay_revoked: true,
+            relay_error: None,
+        },
+        Ok(false) => RevokeOutcome {
+            device_id: device_id.to_string(),
+            local_revoked: true,
+            relay_bound: true,
+            relay_revoked: false,
+            relay_error: None,
+        },
+        Err(e) => RevokeOutcome {
+            device_id: device_id.to_string(),
+            local_revoked: true,
+            relay_bound: true,
+            relay_revoked: false,
+            relay_error: Some(e),
+        },
+    };
+    // 不论 relay 那边成没成，本地记录都要清掉：留着会让界面显示这台设备
+    // "还绑着中转"，而它其实已经撤销过了。
+    if let Err(e) = PhoneBindingStore::at_default().remove(device_id) {
+        tracing::warn!(error = %e, device_id, "清 relay 绑定记录失败");
+    }
+    outcome
+}
+
+// ── HTTP 面 ──────────────────────────────────────────────────────
+
+/// `GET /api/relay/config` —— 界面读当前配置与连接状态。
+///
+/// **不回 token 明文**：只回 `has_token`。界面没有理由显示它，回了只会让它
+/// 出现在 devtools / 截图 / 日志里。
+#[derive(Serialize)]
+pub struct RelayConfigView {
+    url: String,
+    node_id: String,
+    has_token: bool,
+    enabled: bool,
+    /// `disabled` / `connecting` / `connected`
+    state: &'static str,
+    attempts: u32,
+    /// 上次连接失败的原因（能拿到的话）。
+    last_error: Option<String>,
+    /// 配置读取时的错误：告诉用户「不是没配，是读坏了」。
+    load_error: Option<String>,
+}
+
+pub async fn get_config(
+    axum::extract::Extension(origin): axum::extract::Extension<hermix_core::Origin>,
+    State(state): State<crate::state::HttpServerState>,
+) -> Response {
+    if !matches!(origin, hermix_core::Origin::Local) {
+        return (StatusCode::FORBIDDEN, "仅桌面端可查看 relay 配置").into_response();
+    }
+    let settings = state.relay_settings.lock().await;
+    let status = state.relay_status.state();
+    Json(RelayConfigView {
+        url: settings.url.clone(),
+        node_id: settings.node_id.clone(),
+        has_token: settings.has_token(),
+        enabled: settings.enabled(),
+        state: match status {
+            crate::relay_client::RelayState::Disabled => "disabled",
+            crate::relay_client::RelayState::Connecting => "connecting",
+            crate::relay_client::RelayState::Connected => "connected",
+        },
+        attempts: state.relay_status.attempts(),
+        last_error: state.relay_last_error.lock().await.clone(),
+        load_error: settings.load_error.clone(),
+    })
+    .into_response()
+}
+
+#[derive(Deserialize)]
+pub struct PutRelayConfig {
+    pub url: String,
+    #[serde(default)]
+    pub node_id: String,
+    /// 空串 = 清掉凭据（下次必须重填才能连）。
+    #[serde(default)]
+    pub token: String,
+}
+
+/// `PUT /api/relay/config` —— 改配置。
+///
+/// 仅 Local：这个端点能把一台**已在 relay 上注册**的电脑的接入凭据换掉，
+/// 谁能调它谁就能决定这台电脑连到哪、拿什么身份连。远程可达就等于开放接管。
+pub async fn put_config(
+    axum::extract::Extension(origin): axum::extract::Extension<hermix_core::Origin>,
+    State(state): State<crate::state::HttpServerState>,
+    Json(body): Json<PutRelayConfig>,
+) -> Response {
+    if !matches!(origin, hermix_core::Origin::Local) {
+        return (
+            StatusCode::FORBIDDEN,
+            "仅桌面端可改 relay 配置",
+        )
+            .into_response();
+    }
+
+    let url = body.url.trim().to_string();
+    if !url.is_empty() {
+        let ok = url.starts_with("wss://") || url.starts_with("https://");
+        if !ok {
+            return (
+                StatusCode::BAD_REQUEST,
+                "relay 地址要以 wss:// 或 https:// 开头",
+            )
+                .into_response();
+        }
+    }
+    // 凭据格式与 relay 的 `mintToken` 对齐（`auth.js:26`）。错格式在这里拦下，
+    // 比让它连一次被 401 之后再来猜省事。
+    let token = body.token.trim().to_string();
+    if !token.is_empty() && !token.starts_with("hrel_") {
+        return (
+            StatusCode::BAD_REQUEST,
+            "relay 凭据应以 hrel_ 开头（在 relay 服务器上用 relayctl add-node 签发）",
+        )
+            .into_response();
+    }
+
+    let node_id = {
+        let existing = state.relay_settings.lock().await.node_id.clone();
+        let wanted = body.node_id.trim().to_string();
+        if !wanted.is_empty() {
+            wanted
+        } else if !existing.is_empty() {
+            existing
+        } else {
+            derive_node_id()
+        }
+    };
+
+    let next = RelaySettings {
+        url,
+        node_id,
+        token,
+        load_error: None,
+    };
+    if let Err(e) = save_at(&settings_path(), &next) {
+        return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response();
+    }
+    *state.relay_settings.lock().await = next;
+    // 重连由后台循环在下一轮退避后自然发生；刻意不杀任务——正在推进的
+    // 连接不该被一次配置保存打断。
+    tracing::info!("relay 配置已更新，等待重连生效");
+    StatusCode::NO_CONTENT.into_response()
+}
+
+/// `POST /api/relay/phone-credential` —— 向 relay 换一条手机凭据。
+///
+/// **为什么必须由桌面端代发**：node 凭据的明文只存在于这里（DPAPI 解出来的），
+/// API 面对前端只回 `has_token`。所以「签发手机凭据」这件事没法推到前端做。
+///
+/// 这样做的直接收益：加一台手机不必登服务器敲 `relayctl add-phone`。
+#[derive(Serialize, Deserialize)]
+struct IssuedPhoneCredential {
+    token: String,
+    node_id: String,
+}
+
+pub async fn issue_phone(
+    axum::extract::Extension(origin): axum::extract::Extension<hermix_core::Origin>,
+    State(state): State<crate::state::HttpServerState>,
+) -> Response {
+    if !matches!(origin, hermix_core::Origin::Local) {
+        return (StatusCode::FORBIDDEN, "仅桌面端可签发手机凭据").into_response();
+    }
+
+    let (url, token) = {
+        let s = state.relay_settings.lock().await;
+        (s.url.clone(), s.token().to_string())
+    };
+    if url.trim().is_empty() {
+        return (StatusCode::PRECONDITION_FAILED, "还没配 relay 地址").into_response();
+    }
+    if token.trim().is_empty() {
+        return (
+            StatusCode::PRECONDITION_FAILED,
+            "还没配电脑侧凭据（hrel_*），relay 会拒绝这个请求",
+        )
+            .into_response();
+    }
+
+    // relay 的地址是给 WS 用的（wss://），这里要走 HTTP：把 scheme 换掉，
+    // 端口保持不变——relay 的 HTTP 与 WS 监听器是同一个端口（server.js 里
+    // express 与 WebSocketServer 共用 http server）。
+    let http_base = url
+        .trim()
+        .trim_end_matches('/')
+        .replacen("wss://", "https://", 1)
+        .replacen("ws://", "http://", 1);
+
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("构造 HTTP 客户端失败：{e}"),
+            )
+                .into_response()
+        }
+    };
+
+    let resp = client
+        .post(format!("{http_base}/api/relay/issue-phone"))
+        .bearer_auth(&token)
+        .json(&serde_json::json!({ "label": "hermix-m" }))
+        .send()
+        .await;
+
+    let resp = match resp {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                format!("连不上 relay：{e}"),
+            )
+                .into_response()
+        }
+    };
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+
+    if !status.is_success() {
+        // relay 的错误原文要带出来：「凭据无效」和「只有 node 凭据能签发」
+        // 是两个完全不同的问题，混成一句「签发失败」等于把排查难度翻倍。
+        return (
+            StatusCode::BAD_GATEWAY,
+            format!("relay 拒绝签发（HTTP {}）：{body}", status.as_u16()),
+        )
+            .into_response();
+    }
+
+    match serde_json::from_str::<IssuedPhoneCredential>(&body) {
+        Ok(v) if !v.token.is_empty() => Json(v).into_response(),
+        Ok(_) => (StatusCode::BAD_GATEWAY, "relay 返回的凭据是空的").into_response(),
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            format!("relay 响应解析失败：{e}"),
+        )
+            .into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tmp() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join(FILE);
+        (dir, p)
+    }
+
+    #[test]
+    fn missing_file_is_not_an_error() {
+        let (_d, p) = tmp();
+        let s = load_at(&p);
+        assert_eq!(s.url, "");
+        assert!(!s.enabled());
+        assert!(s.load_error.is_none(), "没配过不是错误");
+    }
+
+    #[test]
+    fn roundtrip_preserves_fields_and_token() {
+        let (_d, p) = tmp();
+        let s = RelaySettings {
+            url: "wss://relay.example.com".into(),
+            node_id: "hermix-abcdef01".into(),
+            token: "hrel_deadbeef".into(),
+            load_error: None,
+        };
+        save_at(&p, &s).expect("save");
+        let back = load_at(&p);
+        assert_eq!(back.url, s.url);
+        assert_eq!(back.node_id, s.node_id);
+        assert!(back.has_token());
+        assert_eq!(back.token(), s.token(), "token 必须往返一致");
+        assert!(back.load_error.is_none());
+    }
+
+    #[test]
+    fn token_is_not_stored_in_plaintext() {
+        let (_d, p) = tmp();
+        let s = RelaySettings {
+            url: "wss://relay.example.com".into(),
+            node_id: "n".into(),
+            token: "hrel_supersecretvalue".into(),
+            load_error: None,
+        };
+        save_at(&p, &s).expect("save");
+        let raw = std::fs::read_to_string(&p).unwrap();
+        assert!(
+            !raw.contains("hrel_supersecretvalue"),
+            "凭据不得以明文躺在磁盘上：{raw}"
+        );
+    }
+
+    #[test]
+    fn corrupt_file_reports_error_instead_of_silently_defaulting() {
+        // 这是本模块最要紧的一条：静默回落会让用户看到「未配置」，
+        // 而真相是「配过但读坏了」，两者排查方向完全相反。
+        let (_d, p) = tmp();
+        std::fs::write(&p, b"{ this is not json").unwrap();
+        let s = load_at(&p);
+        assert!(s.load_error.is_some(), "损坏必须带错回来");
+        assert!(!s.enabled());
+    }
+
+    #[test]
+    fn wrong_version_is_reported() {
+        let (_d, p) = tmp();
+        std::fs::write(
+            &p,
+            br#"{"version":99,"url":"wss://x","node_id":"n","protected_token":""}"#,
+        )
+        .unwrap();
+        assert!(load_at(&p).load_error.is_some());
+    }
+
+    #[test]
+    fn tampered_token_does_not_load_as_valid() {
+        // 密文被手改 → 解不开 → 带错回来，而不是拿一个错的 token 去连。
+        let (_d, p) = tmp();
+        std::fs::write(
+            &p,
+            br#"{"version":1,"url":"wss://x","node_id":"n","protected_token":"bm90LWEtY2lwaGVy"}"#,
+        )
+        .unwrap();
+        let s = load_at(&p);
+        assert!(s.load_error.is_some());
+        assert!(!s.has_token());
+    }
+
+    #[test]
+    fn empty_token_survives_save_load_as_unset() {
+        let (_d, p) = tmp();
+        let s = RelaySettings {
+            url: "wss://relay.example.com".into(),
+            node_id: "n".into(),
+            token: String::new(),
+            load_error: None,
+        };
+        save_at(&p, &s).expect("save");
+        let back = load_at(&p);
+        assert!(back.enabled(), "地址配了就该算启用");
+        assert!(!back.has_token());
+    }
+
+    // ── 手机绑定表 ──────────────────────────────────────────────
+
+    const HASH_A: &str = "aa11bb22cc33dd44ee55ff6600778899aabbccddeeff00112233445566778899";
+
+    #[test]
+    fn binding_store_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = PhoneBindingStore::at(dir.path().join("relay_phones.json"));
+        assert_eq!(st.get("dev-1"), None, "没有记录就是没有，不是空串");
+        st.put("dev-1", HASH_A, "hermix-abc").expect("put");
+        assert_eq!(st.get("dev-1").as_deref(), Some(HASH_A));
+        assert_eq!(st.get("dev-2"), None, "不能串到别的 device");
+    }
+
+    #[test]
+    fn binding_store_rejects_bad_hash() {
+        // 写进去的坏值会让撤销**静默失效**：撤销请求带着它过去，relay 认不出，
+        // 于是界面说「已撤销」而连接还在。这种失败必须发生在写入时。
+        let dir = tempfile::tempdir().unwrap();
+        let st = PhoneBindingStore::at(dir.path().join("relay_phones.json"));
+        for bad in ["", "short", "AA11BB22CC33DD44EE55FF6600778899AABBCCDDEEFF00112233445566778899"] {
+            assert!(st.put("dev-1", bad, "n").is_err(), "{bad:?} 必须被拒");
+        }
+        assert_eq!(st.get("dev-1"), None, "被拒的写入不得留下记录");
+    }
+
+    #[test]
+    fn binding_store_remove_is_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = PhoneBindingStore::at(dir.path().join("relay_phones.json"));
+        st.put("dev-1", HASH_A, "n").unwrap();
+        st.remove("dev-1").expect("remove");
+        assert_eq!(st.get("dev-1"), None);
+        st.remove("dev-1").expect("重复移除不得报错");
+    }
+
+    #[test]
+    fn binding_store_keeps_only_the_latest_hash() {
+        // 手机重装后换了新凭据、同一个 device_id 再配一次：旧哈希必须被覆盖，
+        // 否则撤销会去撤一条已经不存在的凭据，真正的连接断不掉。
+        let dir = tempfile::tempdir().unwrap();
+        let st = PhoneBindingStore::at(dir.path().join("relay_phones.json"));
+        st.put("dev-1", HASH_A, "n").unwrap();
+        let newer = "bb11bb22cc33dd44ee55ff6600778899aabbccddeeff00112233445566778899";
+        st.put("dev-1", newer, "n").unwrap();
+        assert_eq!(st.get("dev-1").as_deref(), Some(newer));
+    }
+
+    #[test]
+    fn binding_store_survives_corrupt_file_without_panicking() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("relay_phones.json");
+        std::fs::write(&p, b"{ not json").unwrap();
+        let st = PhoneBindingStore::at(p);
+        // 损坏时读不出绑定 = 撤销会认为「没绑过」，界面据此提示；
+        // 绝不 panic —— 那会把一次文件损坏升级成整个服务起不来。
+        assert_eq!(st.get("dev-1"), None);
+    }
+}

@@ -719,6 +719,11 @@ mod approval_registry_tests {
             pairing_sessions: Arc::new(crate::pairing::PairingSessions::new()),
             nonce_cache: crate::request_signature::NonceCache::new(),
             channel_sessions: Arc::new(std::sync::Mutex::new(Vec::new())),
+            relay_settings: Arc::new(tokio::sync::Mutex::new(
+                crate::relay_settings::RelaySettings::default(),
+            )),
+            relay_status: crate::relay_client::RelayStatus::new(),
+            relay_last_error: Arc::new(tokio::sync::Mutex::new(None)),
         }
     }
 
