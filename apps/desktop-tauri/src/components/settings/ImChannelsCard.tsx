@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  AlertTriangle,
+  Building2,
+  Check,
   Clock3,
-  MessageSquare,
+  Copy,
+  MessageCircle,
   QrCode,
   RefreshCw,
-  Link as LinkIcon,
+  Smartphone,
   Unlink,
-  AlertTriangle,
-  Check,
-  Copy,
+  type LucideIcon,
 } from "lucide-react";
 import QRCode from "qrcode";
 import { fetchJSON } from "../../api/rest";
@@ -52,72 +54,156 @@ interface PairingCodeResult {
   single_use: boolean;
 }
 
-const PLATFORMS: {
-  id: string;
+/** `/api/pairing/sessions` 的一次性配对负载（pairing.rs::QrPayload）。 */
+interface QrPayload {
+  server_id: string;
+  pairing_code: string;
+  pairing_url: string;
+  cert_fingerprint: string;
+}
+
+type ChannelId = "qq" | "wecom" | "mobile";
+
+interface ChannelDef {
+  id: ChannelId;
   label: string;
-  /** 圆形字母徽标：贴近各品牌主色，一眼认出渠道，不画来路不明的 logo。 */
-  mark: string;
-  markBg: string;
-  markFg: string;
-  hint: string;
-  bindHint: string;
-  sandboxNote: string;
+  /** 一句话说明，出现在右栏标题下方与左栏副标题。 */
+  desc: string;
+  Icon: LucideIcon;
+  /** 徽标底色：贴近各渠道品牌主色，一眼认出是谁。 */
+  brand: string;
   /** 「网关未连接」错误面板里的排查建议（detail 原文之上的一句话）。 */
   failHint: string;
-}[] = [
+}
+
+const CHANNELS: ChannelDef[] = [
   {
     id: "qq",
-    label: "QQ",
-    mark: "Q",
-    markBg: "var(--color-brand-qq)",
-    markFg: "var(--color-on-accent)",
-    hint: "QQ 开放平台机器人 · 只处理私聊 · 流式消息",
-    bindHint: "用手机 QQ 扫码，创建并授权机器人，AppID 与 AppSecret 自动写入。",
-    /* 新建机器人默认在【沙箱环境】：只有被加进白名单的 QQ 号能给它发消息，
-       其他人私聊它收不到 —— 表现为「绑定了但机器人不回消息」的头号原因。 */
-    sandboxNote:
-      "刚建好的机器人默认处于沙箱环境：只有你在 QQ 开放平台把它加进「沙箱白名单」的那个 QQ 号才能私聊它并收到回复。要给别人用需发布到正式环境。",
+    label: "QQ 机器人",
+    desc: "QQ 开放平台机器人 · 只处理私聊 · 流式消息",
+    Icon: MessageCircle,
+    brand: "var(--color-brand-qq)",
     failHint: "查 AppSecret 是否填错、机器人是否在开放平台被停用，以及本机能否出网到 QQ 网关。",
   },
   {
     id: "wecom",
-    label: "企业微信",
-    mark: "微",
-    markBg: "var(--color-brand-wecom)",
-    markFg: "var(--color-on-accent)",
-    hint: "企业微信智能机器人 · 只处理单聊 · 气泡原地刷新",
-    bindHint: "用企业微信扫码，创建并授权智能机器人，botid 与 secret 自动写入。",
-    sandboxNote: "",
+    label: "企业微信机器人",
+    desc: "企业微信智能机器人 · 只处理单聊 · 气泡原地刷新",
+    Icon: Building2,
+    brand: "var(--color-brand-wecom)",
     failHint: "查 botid / secret 是否填错、智能机器人是否被停用，以及本机出网是否正常。",
+  },
+  {
+    id: "mobile",
+    label: "手机端",
+    desc: "扫码或输入配对码，把这台电脑连到手机；手机上的会话与审批同步到这里",
+    Icon: Smartphone,
+    brand: "var(--color-accent)",
+    failHint: "",
   },
 ];
 
-/** 卡片外框。抄 cc-haha 的 `rounded-[var(--radius-xl)] border … overflow-hidden` 卡片壳。 */
-function Card({ title, icon, children, action }: { title: string; icon: React.ReactNode; children: React.ReactNode; action?: React.ReactNode }) {
+/** IM 平台自己的绑定说明（与渠道定义分开，因为只有 IM 有扫码授权这一步）。 */
+const IM_BIND: Record<string, { hint: string; sandboxNote: string }> = {
+  qq: {
+    hint: "用手机 QQ 扫码，创建并授权机器人，AppID 与 AppSecret 自动写入。",
+    /* 新建机器人默认在【沙箱环境】：只有被加进白名单的 QQ 号能给它发消息，
+       其他人私聊它收不到 —— 表现为「绑定了但机器人不回消息」的头号原因。 */
+    sandboxNote:
+      "刚建好的机器人默认处于沙箱环境：只有你在 QQ 开放平台把它加进「沙箱白名单」的那个 QQ 号才能私聊它并收到回复。要给别人用需发布到正式环境。",
+  },
+  wecom: {
+    hint: "用企业微信扫码，创建并授权智能机器人，botid 与 secret 自动写入。",
+    sandboxNote: "",
+  },
+};
+
+/** `GET /api/relay/config` 的返回。凭据不回传——只回 `has_token`。 */
+interface RelayConfigView {
+  url: string;
+  node_id: string;
+  has_token: boolean;
+  enabled: boolean;
+  /** `disabled` / `connecting` / `connected` */
+  state: "disabled" | "connecting" | "connected";
+  attempts: number;
+  last_error: string | null;
+  /** 配置读坏了 —— 与「没配过」是两回事，必须分开显示 */
+  load_error: string | null;
+}
+
+/** 面板里的小节标题。 */
+function SubHead({ children }: { children: React.ReactNode }) {
   return (
-    <div className="rounded-xl border border-border-primary bg-bg-card overflow-hidden">
-      <div className="flex items-center gap-2 px-4 py-3 bg-bg-hover border-b border-border-primary">
-        {icon}
-        <span className="text-[length:var(--text-ui)] font-semibold text-text-primary">{title}</span>
-        {action ? <div className="ml-auto flex items-center gap-2">{action}</div> : null}
-      </div>
-      <div className="p-4 space-y-4">{children}</div>
+    <div className="text-[length:var(--text-tiny)] font-medium uppercase tracking-wide text-text-muted pt-1">
+      {children}
     </div>
   );
 }
 
+function ActionBtn({
+  children,
+  onClick,
+  icon,
+  disabled,
+  title,
+  tone = "ghost",
+  className = "",
+}: {
+  children: React.ReactNode;
+  onClick: () => void;
+  icon?: React.ReactNode;
+  disabled?: boolean;
+  title?: string;
+  tone?: "ghost" | "primary" | "danger";
+  className?: string;
+}) {
+  const toneCls =
+    tone === "primary"
+      ? "bg-accent text-[var(--color-on-accent)] hover:opacity-90"
+      : tone === "danger"
+        ? "bg-error-soft text-error hover:bg-bg-card-hover"
+        : "bg-bg-tertiary text-text-secondary hover:text-text-primary hover:bg-bg-active";
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      className={
+        "h-7 px-2.5 rounded-md flex items-center gap-1 text-[length:var(--text-meta)] transition-colors disabled:opacity-50 shrink-0 " +
+        toneCls +
+        " " +
+        className
+      }
+    >
+      {icon}
+      {children}
+    </button>
+  );
+}
+
 /**
- * IM 接入卡片。
+ * 连接渠道 —— 主从布局。
  *
- * 布局抄 cc-haha `AdapterSettings.tsx`：
- * **配对管理置顶**（在平台列表之上），因为它是"进来之后干什么"；平台绑定
- * 是"怎么进来"，属于准备步骤。每个平台一行，标题+说明+已绑定 id 在左，
- * 按钮在右，二维码展开在下一行——就是它 `QrBindPanel` 的结构。
+ * ## 为什么从「竖着排三块」改成「左边选、右边配」
  *
- * 绑定走厂商自己的接口（后端 `channels/provision.rs`）：这里只负责把授权
- * URL 渲染成二维码并轮询结果。凭据由后端落盘，前端永远拿不到 secret。
+ * 原来三个渠道各占一整块卡片竖着往下堆：一屏放不下两条渠道，扫一遍要滚动，
+ * 而**「我现在配的是哪个渠道」这件事在竖排里根本没有位置**——三块长得一样，
+ * 只能靠读标题才知道自己在看哪条。加上「配对与授权」又是一块，内容跟渠道
+ * 一一对应却又独立成块，于是既重复又散。
+ *
+ * 三个渠道是**同一件事的三个选项**，不是三个步骤，所以形态就该是「三选一」：
+ * 左栏是选择器（图标 + 名称 + 状态一眼扫完），右栏是**当前选中渠道的全部配置**。
+ * 配对码从全局块挪进各渠道自身——它本来就是按平台生成的（`makePairCode(platform)`），
+ * 挂在全局反而丢掉了「这枚码发给哪个机器人」这个前提。
+ *
+ * ## 层次不靠描边
+ *
+ * 全站与手机端统一：卡片用 `bg-bg-card`，控件用 `bg-bg-tertiary`，选中态用
+ * 底色差 + 左缘强调条，浮起用阴影。本组件内**没有任何 border**。
  */
 export function ImChannelsCard() {
+  const [active, setActive] = useState<ChannelId>("qq");
   const [status, setStatus] = useState<BindStatusItem[] | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
   /** 网关是否真连上了。凭据在 ≠ 通道活着 —— 「机器人不回消息」多半卡在这里。 */
@@ -137,6 +223,83 @@ export function ImChannelsCard() {
   const pollTimer = useRef<number | null>(null);
   const sessionKey = useRef<string | null>(null);
 
+  /* ── 手机端配对二维码（原先在 DevicesTab，与渠道割裂；挪进来后二维码跟着
+       渠道走，选到「手机端」才生成，不选就不做这份无用功）────────── */
+  const [qr, setQr] = useState<{ payload: QrPayload; svg: string } | null>(null);
+  const [qrError, setQrError] = useState<string | null>(null);
+
+  /* ── relay（跨网络）配置 ─────────────────────────────────────────── */
+  const [relay, setRelay] = useState<RelayConfigView | null>(null);
+  const [relayErr, setRelayErr] = useState<string | null>(null);
+  const [relayUrl, setRelayUrl] = useState("");
+  const [relayToken, setRelayToken] = useState("");
+  const [relayBusy, setRelayBusy] = useState(false);
+  /** 刚签发出来的手机凭据——**只这一次**能看到，所以要显眼。 */
+  const [issued, setIssued] = useState<{ token: string; node_id: string } | null>(null);
+  const [issuing, setIssuing] = useState(false);
+  const [issueErr, setIssueErr] = useState<string | null>(null);
+
+  /**
+   * 用电脑自己的 node 凭据向 relay 换一条手机凭据。
+   *
+   * 桌面端**看不到** node 凭据明文（Rust 侧只存 DPAPI 密文，API 只回
+   * `has_token`），所以这一步必须由 Rust 代发——它有明文。
+   */
+  const issuePhone = useCallback(async () => {
+    setIssuing(true);
+    setIssueErr(null);
+    try {
+      const r = await fetchJSON<{ token: string; node_id: string }>("/api/relay/phone-credential");
+      setIssued(r);
+      toastSuccess("手机凭据已签发 —— 明文只显示这一次");
+    } catch (e) {
+      setIssueErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setIssuing(false);
+    }
+  }, []);
+
+  const copyIssued = useCallback(async () => {
+    if (!issued) return;
+    try {
+      await navigator.clipboard.writeText(issued.token);
+      toastSuccess("已复制，填到手机「设置 → relay 凭据」里");
+    } catch {
+      toastError("复制失败，请手动选中复制");
+    }
+  }, [issued]);
+
+  const refreshRelay = useCallback(async () => {
+    try {
+      const r = await fetchJSON<RelayConfigView>("/api/relay/config");
+      setRelay(r);
+      setRelayUrl(r.url);
+      setRelayErr(null);
+    } catch (e) {
+      setRelayErr(e instanceof Error ? e.message : String(e));
+      setRelay(null);
+    }
+  }, []);
+
+  const saveRelay = useCallback(async () => {
+    setRelayBusy(true);
+    try {
+      // token 一栏留空 = 保持不变，而不是清空。原因：凭据是掩码输入框，
+      // 用户没重新填就提交时的直觉是「我没改它」，清空反而意外。
+      await fetchJSON("/api/relay/config", {
+        method: "PUT",
+        body: JSON.stringify({ url: relayUrl.trim(), token: relayToken.trim() }),
+      });
+      setRelayToken("");
+      await refreshRelay();
+      toastSuccess("relay 配置已保存，重连会在下一次退避后自动生效");
+    } catch (e) {
+      toastError(`保存失败：${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setRelayBusy(false);
+    }
+  }, [relayUrl, relayToken, refreshRelay]);
+
   const refreshStatus = useCallback(async () => {
     try {
       const res = await fetchJSON<{ platforms: BindStatusItem[] }>("/api/channels/bind/status");
@@ -144,14 +307,10 @@ export function ImChannelsCard() {
       setStatusError(null);
       fetchJSON<{ platforms: ChannelStatusItem[] }>("/api/channels/status")
         .then((st) => {
-          setLive(
-            Object.fromEntries(st.platforms.map((p) => [p.platform, p.connected])),
-          );
+          setLive(Object.fromEntries(st.platforms.map((p) => [p.platform, p.connected])));
           setLiveDetail(
             Object.fromEntries(
-              st.platforms
-                .filter((p) => p.detail)
-                .map((p) => [p.platform, p.detail as string]),
+              st.platforms.filter((p) => p.detail).map((p) => [p.platform, p.detail as string]),
             ),
           );
           setLiveLoaded(true);
@@ -166,12 +325,38 @@ export function ImChannelsCard() {
     }
   }, []);
 
+  const generateQr = useCallback(async () => {
+    setQrError(null);
+    try {
+      const payload = await fetchJSON<QrPayload>("/api/pairing/sessions", { method: "POST" });
+      const svg = await QRCode.toString(payload.pairing_url, {
+        type: "svg",
+        margin: 1,
+        errorCorrectionLevel: "M",
+      });
+      setQr({ payload, svg });
+    } catch (e) {
+      setQrError(e instanceof Error ? e.message : String(e));
+      setQr(null);
+    }
+  }, []);
+
   useEffect(() => {
     void refreshStatus();
     return () => {
       if (pollTimer.current !== null) window.clearTimeout(pollTimer.current);
     };
   }, [refreshStatus]);
+
+  // 手机端二维码：第一次切到该渠道时生成一次，之后复用（除非点重新生成）。
+  // relay 配置同理——它在同一个面板里，跟着「手机端」这个渠道一起加载。
+  const visited = useRef(false);
+  useEffect(() => {
+    if (active !== "mobile" || visited.current) return;
+    visited.current = true;
+    void generateQr();
+    void refreshRelay();
+  }, [active, generateQr, refreshRelay]);
 
   const stopPolling = useCallback(() => {
     if (pollTimer.current !== null) {
@@ -304,297 +489,638 @@ export function ImChannelsCard() {
     }
   }, [pairCode]);
 
-  const anyBound = status?.some((s) => s.bound) ?? false;
-
   // 配对码倒计时（同 ZCode bind-code 面板：三段变色进度条 + 过期态）。
   const pairTotalMs = pairCode ? pairCode.ttl_secs * 1000 : 0;
   const pairRemainingMs = pairCode ? Math.max(0, pairCodeAt + pairTotalMs - nowTs) : 0;
   const pairExpired = pairCode !== null && pairTotalMs > 0 && pairRemainingMs <= 0;
   const pairProgress = pairTotalMs > 0 ? pairRemainingMs / pairTotalMs : 0;
 
+  /** 左栏每个渠道的状态摘要 —— 扫一眼就知道哪个通了、哪个没配。 */
+  const railStatus = (c: ChannelDef): { text: string; tone: string; dot: string } => {
+    if (c.id === "mobile") {
+      if (relayErr) return { text: "relay 配置读取失败", tone: "text-error", dot: "bg-error" };
+      if (relay?.state === "connected")
+        return { text: "跨网络已接通", tone: "text-accent", dot: "bg-accent" };
+      if (relay?.state === "connecting")
+        return { text: "正在连接中转", tone: "text-warning", dot: "bg-warning" };
+      if (relay?.enabled)
+        return { text: "中转未接通", tone: "text-warning", dot: "bg-warning" };
+      if (qrError) return { text: "二维码生成失败", tone: "text-error", dot: "bg-error" };
+      return qr
+        ? { text: "可扫码配对", tone: "text-text-secondary", dot: "bg-bg-active" }
+        : { text: "正在准备…", tone: "text-text-muted", dot: "bg-bg-active" };
+    }
+    const s = status?.find((x) => x.platform === c.id);
+    if (status === null) return { text: "读取中…", tone: "text-text-muted", dot: "bg-bg-active" };
+    if (!s?.bound) return { text: "未绑定", tone: "text-text-muted", dot: "bg-bg-active" };
+    if (live[c.id]) return { text: "通道已连接", tone: "text-accent", dot: "bg-accent" };
+    return { text: "网关未连接", tone: "text-warning", dot: "bg-warning" };
+  };
+
+  const current = CHANNELS.find((c) => c.id === active)!;
+
   return (
-    <div className="space-y-6">
-      {/* ── 第 1 步 · 绑定机器人（QQ / 企业微信 二选一）──────────────
-          这是整条链路的入口：凭据不落盘，配对码就没地方发。 */}
-      {/* ── 渠道区（2026-09-30 按参考设计重排）──────────────────────
-          每个渠道一行、带自己的图标 / 状态 / 动作；不再用「第 1 步 / 第 2 步」
-          的步骤框架 —— 那是同一条链路的两个动作，不是两个平级渠道。 */}
-      <Card
-        title="移动端远程控制"
-        icon={<MessageSquare className="icon-md text-text-secondary" />}
-        action={
-          <button
-            onClick={() => void refreshStatus()}
-            className="h-7 px-2.5 rounded-md flex items-center gap-1 text-[length:var(--text-meta)] text-text-secondary hover:text-text-primary hover:bg-bg-card-hover border border-border-secondary"
-            title="刷新渠道状态"
-          >
-            <RefreshCw className="icon-sm" />
-            刷新
-          </button>
-        }
-      >
-        <p className="text-[length:var(--text-ui)] text-text-secondary">
-          在手机上继续本机会话、远程批权限。绑定一个机器人渠道后，桌面端会收到它的消息并在这里显示。
-        </p>
-        {status === null ? (
-          statusError ? (
-            <div className="flex items-start gap-2 text-[length:var(--text-meta)] text-text-secondary">
-              <AlertTriangle className="icon-md mt-0.5 shrink-0" />
-              <div>
-                读取绑定状态失败：<span className="font-mono">{statusError}</span>
-                <div className="mt-1 text-text-muted">
-                  通常是桌面端版本不一致 —— 重启开发脚本让后端重新编译后再试。
-                </div>
-              </div>
-              <button
-                onClick={() => void refreshStatus()}
-                className="ml-auto h-7 px-2.5 shrink-0 rounded-md text-[length:var(--text-meta)] text-text-secondary hover:text-text-primary hover:bg-bg-card-hover border border-border-secondary"
-              >
-                重试
-              </button>
-            </div>
-          ) : (
-            <div className="text-[length:var(--text-meta)] text-text-muted">正在读取…</div>
-          )
-        ) : (
-          PLATFORMS.map((p) => {
-            const s = status.find((x) => x.platform === p.id);
-            const bound = s?.bound ?? false;
-            const isBinding = binding?.platform === p.id;
+    <div className="space-y-4">
+      {/* ── 主从布局 ──────────────────────────────────────────────
+          左 232px 是选择器，右栏自适应。窄窗口下自动折成上下（先选后配），
+          避免 1024px 以下两栏互相挤压。 */}
+      <div className="grid gap-3 md:grid-cols-[232px_1fr] items-start">
+        {/* 左：渠道选择 */}
+        <div className="rounded-xl bg-bg-secondary p-1.5 space-y-1">
+          {CHANNELS.map((c) => {
+            const st = railStatus(c);
+            const on = c.id === active;
             return (
-              <div key={p.id} className="rounded-lg border border-border-secondary bg-bg-card p-4 space-y-3">
-                <div className="flex items-start justify-between gap-4">
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span
-                        className="inline-grid place-items-center h-6 w-6 rounded-full text-[length:var(--text-tiny)] font-semibold shrink-0"
-                        style={{ background: p.markBg, color: p.markFg }}
-                        aria-hidden="true"
-                      >
-                        {p.mark}
+              <button
+                key={c.id}
+                onClick={() => setActive(c.id)}
+                aria-current={on}
+                className={
+                  "w-full flex items-center gap-2.5 rounded-lg px-2.5 py-2.5 text-left transition-colors " +
+                  (on ? "bg-bg-card shadow-[0_1px_2px_rgba(0,0,0,0.35)]" : "hover:bg-bg-card-hover")
+                }
+              >
+                <span
+                  className="inline-grid place-items-center h-8 w-8 rounded-lg shrink-0"
+                  style={{ background: c.brand, color: "var(--color-on-accent)" }}
+                  aria-hidden="true"
+                >
+                  <c.Icon className="icon-md" />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[length:var(--text-ui)] font-medium text-text-primary truncate">
+                    {c.label}
+                  </span>
+                  <span className={"block text-[length:var(--text-tiny)] truncate " + st.tone}>
+                    {st.text}
+                  </span>
+                </span>
+                <span className={"h-1.5 w-1.5 rounded-full shrink-0 " + st.dot} aria-hidden="true" />
+              </button>
+            );
+          })}
+        </div>
+
+        {/* 右：当前渠道的全部配置 */}
+        <div className="rounded-xl bg-bg-card p-5 min-w-0">
+          <div className="flex items-start gap-3">
+            <span
+              className="inline-grid place-items-center h-10 w-10 rounded-xl shrink-0"
+              style={{ background: current.brand, color: "var(--color-on-accent)" }}
+              aria-hidden="true"
+            >
+              <current.Icon className="icon-lg" />
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="text-[length:var(--text-title)] font-semibold text-text-primary">
+                {current.label}
+              </div>
+              <div className="mt-0.5 text-[length:var(--text-meta)] text-text-secondary">
+                {current.desc}
+              </div>
+            </div>
+            <ActionBtn onClick={() => void refreshStatus()} icon={<RefreshCw className="icon-sm" />} title="刷新渠道状态">
+              刷新
+            </ActionBtn>
+          </div>
+
+          {/* ── 手机端：局域网配对 + 跨网络 relay ─────────────────── */}
+          {active === "mobile" && (
+            <div className="mt-5 space-y-6">
+              <section className="space-y-4">
+                <SubHead>局域网配对</SubHead>
+                <div className="text-[length:var(--text-ui)] text-text-secondary leading-relaxed">
+                  用手机相机扫下面的码，或在手机上直接输入这枚 6 位码，把这台电脑连进去。
+                  配对码 <strong className="text-text-primary">只能用一次</strong>，重新生成后旧码立即作废。
+                </div>
+
+              {qrError ? (
+                <div className="flex items-start gap-2 text-[length:var(--text-meta)] text-text-secondary">
+                  <AlertTriangle className="icon-md mt-0.5 shrink-0" />
+                  <div>
+                    生成配对码失败：<span className="font-mono">{qrError}</span>
+                    <div className="mt-1 text-text-muted">
+                      TLS 监听默认开启（端口 8443）；若设置了{" "}
+                      <code className="font-mono">HERMIX_TLS_DISABLE=1</code> 则无法配对，删除该变量并重启即可。
+                    </div>
+                  </div>
+                  <ActionBtn
+                    onClick={() => void generateQr()}
+                    className="ml-auto"
+                    icon={<RefreshCw className="icon-sm" />}
+                  >
+                    重试
+                  </ActionBtn>
+                </div>
+              ) : qr ? (
+                <div className="flex items-start gap-5 flex-wrap rounded-lg bg-bg-secondary p-4">
+                  <div
+                    className="shrink-0 rounded-lg bg-white p-2 [&>svg]:block"
+                    style={{ width: 168, height: 168 }}
+                    dangerouslySetInnerHTML={{ __html: qr.svg }}
+                  />
+                  <div className="min-w-0 flex-1 space-y-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-[length:var(--text-meta)] text-text-muted">配对码</span>
+                      <span className="font-mono font-bold tracking-[0.3em] text-[length:var(--text-display)] text-accent select-all">
+                        {qr.payload.pairing_code}
                       </span>
-                      <span className="text-[length:var(--text-ui)] font-semibold text-text-primary">{p.label}</span>
-                      {bound ? (
-                        <span className="inline-flex items-center gap-2 text-[length:var(--text-meta)] text-text-muted">
-                          <span className="inline-flex items-center gap-1">
-                            <Check className="icon-sm" />
-                            已绑定 {s?.id_preview}
-                            {s?.source === "env" && "（环境变量）"}
-                          </span>
-                          {live[p.id] ? (
-                            <span className="inline-flex items-center gap-1 text-accent">
-                              <span className="inline-block h-1.5 w-1.5 rounded-full bg-accent" />
-                              通道已连接
-                            </span>
-                          ) : (
-                            <span
-                              className="inline-flex items-center gap-1 text-warning"
-                              title="凭据在，但网关没连上（网络不通 / 凭据过期 / 机器人被停用）。机器人此时不会回消息。"
-                            >
-                              <AlertTriangle className="icon-sm" />
-                              网关未连接
-                            </span>
-                          )}
+                      <ActionBtn onClick={() => void copyCode()} icon={<Copy className="icon-sm" />} title="复制配对码">
+                        复制
+                      </ActionBtn>
+                      <ActionBtn
+                        onClick={() => void generateQr()}
+                        icon={<RefreshCw className="icon-sm" />}
+                        title="重新生成配对码（旧码立即作废）"
+                      >
+                        重新生成
+                      </ActionBtn>
+                    </div>
+                    <div className="text-[length:var(--text-meta)] text-text-muted break-all">
+                      扫码地址：<span className="font-mono text-text-secondary">{qr.payload.pairing_url}</span>
+                    </div>
+                    <div className="text-[length:var(--text-meta)] text-text-muted">
+                      服务器：<span className="font-mono text-text-secondary">{qr.payload.server_id}</span>
+                      {" · "}证书指纹（前 16 位）：
+                      <span className="font-mono text-text-secondary">
+                        {qr.payload.cert_fingerprint.slice(0, 16)}…
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1.5 text-[length:var(--text-meta)] text-text-muted">
+                      <Clock3 className="icon-sm shrink-0" />
+                      60 分钟内有效；连续输错 5 次将锁定，需重新生成。
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="text-[length:var(--text-meta)] text-text-muted">正在生成配对码…</div>
+              )}
+              </section>
+
+              {/* ── 跨网络 relay ─────────────────────────────────────
+                  与上面的局域网配对是**两件事**：配对是一次性的近距离操作，
+                  relay 是配好之后一直生效的通道。放在同一个渠道面板里，
+                  因为它们服务的都是「手机端」这一个渠道。 */}
+              <section className="space-y-4 border-t border-border-subtle pt-5">
+                <SubHead>跨网络访问（经中转）</SubHead>
+                <div className="text-[length:var(--text-meta)] text-text-muted leading-relaxed">
+                  手机不在同一个 Wi-Fi 时走这条路。<strong className="text-text-secondary">第一步在 relay 服务器上执行一次</strong>
+                  （每台电脑只需一次），之后这台电脑就能自己签发手机凭据，不用再登服务器。
+                </div>
+
+                {relayErr ? (
+                  <div className="flex items-start gap-2 text-[length:var(--text-meta)] text-text-secondary">
+                    <AlertTriangle className="icon-md mt-0.5 shrink-0" />
+                    <div>
+                      读取 relay 配置失败：<span className="font-mono">{relayErr}</span>
+                    </div>
+                    <ActionBtn onClick={() => void refreshRelay()} className="ml-auto">
+                      重试
+                    </ActionBtn>
+                  </div>
+                ) : !relay ? (
+                  <div className="text-[length:var(--text-meta)] text-text-muted">正在读取…</div>
+                ) : (
+                  <>
+                    {/* 配置读坏了 ≠ 没配过。两者排查方向相反，必须分开说。 */}
+                    {relay.load_error && (
+                      <div className="flex items-start gap-2 rounded-lg bg-error-soft px-4 py-3 text-[length:var(--text-meta)] text-text-secondary">
+                        <AlertTriangle className="icon-sm mt-0.5 shrink-0 text-error" />
+                        <span>{relay.load_error}</span>
+                      </div>
+                    )}
+
+                    <div className="flex items-center gap-3 flex-wrap rounded-lg bg-bg-secondary px-4 py-3">
+                      {relay.state === "connected" ? (
+                        <span className="inline-flex items-center gap-1.5 text-[length:var(--text-ui)] text-accent">
+                          <span className="inline-block h-1.5 w-1.5 rounded-full bg-accent" />
+                          已连上中转
+                        </span>
+                      ) : relay.state === "connecting" ? (
+                        <span className="inline-flex items-center gap-1.5 text-[length:var(--text-ui)] text-warning">
+                          <RefreshCw className="icon-sm animate-spin" />
+                          正在连接（第 {relay.attempts} 次）
+                        </span>
+                      ) : relay.enabled ? (
+                        <span className="inline-flex items-center gap-1.5 text-[length:var(--text-ui)] text-warning">
+                          <AlertTriangle className="icon-sm" />
+                          中转未接通
                         </span>
                       ) : (
-                        <span className="text-[length:var(--text-meta)] text-text-muted">未绑定</span>
+                        <span className="text-[length:var(--text-ui)] text-text-muted">
+                          未启用 —— 手机只能在同一个 Wi-Fi 下用
+                        </span>
+                      )}
+
+                      <div className="ml-auto">
+                        <ActionBtn
+                          onClick={() => void refreshRelay()}
+                          icon={<RefreshCw className="icon-sm" />}
+                          title="刷新连接状态"
+                        >
+                          刷新
+                        </ActionBtn>
+                      </div>
+                    </div>
+
+                    {relay.last_error && (
+                      <div className="flex items-start gap-2 rounded-lg bg-bg-secondary px-4 py-3">
+                        <AlertTriangle className="icon-sm mt-0.5 shrink-0 text-warning" />
+                        <div className="min-w-0 text-[length:var(--text-meta)]">
+                          <div className="font-medium text-text-primary">上次连接失败</div>
+                          <div className="mt-0.5 break-all font-mono text-text-secondary">
+                            {relay.last_error}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {!relay.has_token && relay.node_id && (
+                      // 这条命令是**手动的**，且刻意保持手动：relay 若能自助签发
+                      // 电脑侧凭据，就等于对公网开放注册——任何人都能凭空造一台
+                      // 「已登记的电脑」。第一次签发必须是运维在服务器上做的，
+                      // 这与自建服务「谁能注册节点」本来就是运营者决定的事一致。
+                      <div className="rounded-lg bg-bg-secondary p-4 space-y-2">
+                        <div className="text-[length:var(--text-ui)] text-text-secondary">
+                          第一步：在 relay 服务器上执行
+                        </div>
+                        <code className="block break-all rounded-md bg-bg-base px-3 py-2 font-mono text-[length:var(--text-meta)] text-accent select-all">
+                          node src/relayctl.js add-node {relay.node_id}
+                        </code>
+                        <div className="text-[length:var(--text-meta)] text-text-muted leading-relaxed">
+                          它会打印一条 <code className="font-mono">hrel_</code> 开头的凭据（**只显示这一次**），
+                          填进上面的「电脑侧凭据」再保存。这台电脑以后就不用再登服务器了——
+                          加手机由下面的「生成手机凭据」自助完成。
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <label className="block">
+                        <span className="block text-[length:var(--text-meta)] text-text-muted mb-1.5">
+                          中转地址
+                        </span>
+                        <input
+                          value={relayUrl}
+                          onChange={(e) => setRelayUrl(e.target.value)}
+                          placeholder="wss://relay.example.com"
+                          spellCheck={false}
+                          className="w-full h-9 px-3 rounded-lg bg-bg-tertiary text-[length:var(--text-ui)] text-text-primary placeholder:text-text-faint focus:outline-none focus:ring-1 focus:ring-accent"
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="block text-[length:var(--text-meta)] text-text-muted mb-1.5">
+                          电脑侧凭据（hrel_*）
+                        </span>
+                        <input
+                          value={relayToken}
+                          onChange={(e) => setRelayToken(e.target.value)}
+                          placeholder={relay.has_token ? "已填写 —— 留空表示不改" : "relayctl add-node 的输出"}
+                          type="password"
+                          spellCheck={false}
+                          className="w-full h-9 px-3 rounded-lg bg-bg-tertiary text-[length:var(--text-ui)] text-text-primary placeholder:text-text-faint focus:outline-none focus:ring-1 focus:ring-accent"
+                        />
+                      </label>
+                    </div>
+
+                    <div className="flex items-center gap-3">
+                      <ActionBtn onClick={() => void saveRelay()} disabled={relayBusy} tone="primary">
+                        {relayBusy ? "保存中…" : "保存"}
+                      </ActionBtn>
+                      <span className="text-[length:var(--text-meta)] text-text-muted">
+                        本机 id：<span className="font-mono">{relay.node_id || "（未生成）"}</span>
+                      </span>
+                    </div>
+
+                    {/* 加一台手机：不用登服务器敲 relayctl */}
+                    <div className="rounded-lg bg-bg-secondary p-4 space-y-3">
+                      <div className="text-[length:var(--text-ui)] text-text-secondary">
+                        加一台手机
+                      </div>
+                      <div className="text-[length:var(--text-meta)] text-text-muted leading-relaxed">
+                        点下面生成一条手机凭据，填到手机的「设置 → relay 凭据」里。明文只显示这一次。
+                      </div>
+                      {issueErr && (
+                        <div className="flex items-start gap-2 text-[length:var(--text-meta)] text-error">
+                          <AlertTriangle className="icon-sm mt-0.5 shrink-0" />
+                          <span className="break-all">{issueErr}</span>
+                        </div>
+                      )}
+                      {issued ? (
+                        <div className="space-y-2">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-mono text-[length:var(--text-meta)] text-accent break-all select-all">
+                              {issued.token}
+                            </span>
+                            <ActionBtn onClick={() => void copyIssued()} icon={<Copy className="icon-sm" />}>
+                              复制
+                            </ActionBtn>
+                            <ActionBtn onClick={() => setIssued(null)}>收起</ActionBtn>
+                          </div>
+                          <div className="text-[length:var(--text-meta)] text-warning">
+                            这是唯一一次能看到它。关掉就只能在 relay 服务器上重新签发。
+                          </div>
+                        </div>
+                      ) : (
+                        <ActionBtn
+                          onClick={() => void issuePhone()}
+                          disabled={issuing || !relay.has_token}
+                          icon={<QrCode className="icon-sm" />}
+                          title={
+                            relay.has_token
+                              ? "向 relay 换一条手机凭据"
+                              : "先填电脑侧凭据，否则 relay 会拒绝"
+                          }
+                        >
+                          {issuing ? "签发中…" : "生成手机凭据"}
+                        </ActionBtn>
                       )}
                     </div>
-                    <p className="mt-1 text-[length:var(--text-meta)] text-text-muted">
-                      {isBinding ? p.bindHint : bound ? `从${p.label}私聊机器人打开本机工作区。${p.hint}` : p.hint}
-                    </p>
-                  </div>
-
-                  <div className="flex items-center gap-2 shrink-0">
-                    {bound && (
-                      <button
-                        onClick={() => void makePairCode(p.id)}
-                        className="h-7 px-2.5 rounded-md flex items-center gap-1 text-[length:var(--text-meta)] text-text-secondary hover:text-text-primary hover:bg-bg-card-hover border border-border-secondary"
-                        title="生成一枚 6 位码，在 IM 私聊里发给机器人"
-                      >
-                        <QrCode className="icon-sm" />
-                        配对码
-                      </button>
-                    )}
-                    {bound && s?.source === "file" && (
-                      <button
-                        onClick={() => void unbind(p.id, p.label)}
-                        className="h-7 px-2.5 rounded-md flex items-center gap-1 text-[length:var(--text-meta)] text-text-secondary hover:text-text-primary hover:bg-bg-card-hover border border-border-secondary"
-                        title="删除本地保存的机器人凭据"
-                      >
-                        <Unlink className="icon-sm" />
-                        解绑
-                      </button>
-                    )}
-                    {isBinding ? (
-                      <button
-                        onClick={() => void cancelBind()}
-                        className="h-7 px-2.5 rounded-md text-[length:var(--text-meta)] text-text-secondary hover:text-text-primary hover:bg-bg-card-hover border border-border-secondary"
-                      >
-                        取消
-                      </button>
-                    ) : (
-                      <button
-                        onClick={() => void startBind(p.id)}
-                        disabled={busy}
-                        className="h-7 px-2.5 rounded-md text-[length:var(--text-meta)] text-text-secondary hover:text-text-primary hover:bg-bg-card-hover border border-border-secondary disabled:opacity-50"
-                      >
-                        {bound ? "重新扫码" : "扫码绑定"}
-                      </button>
-                    )}
-                  </div>
-                </div>
-
-                {bound && liveLoaded && !live[p.id] && (
-                  <div className="flex items-start gap-2 rounded-lg border border-border-secondary bg-bg-card-hover px-3 py-2">
-                    <AlertTriangle className="icon-sm mt-0.5 shrink-0 text-warning" />
-                    <div className="min-w-0">
-                      <div className="text-[length:var(--text-meta)] font-medium text-text-primary">网关连接失败</div>
-                      {liveDetail[p.id] ? (
-                        <div className="mt-0.5 break-all font-mono text-[length:var(--text-meta)] text-text-secondary">
-                          {liveDetail[p.id]}
-                        </div>
-                      ) : null}
-                      <div className="mt-1 text-[length:var(--text-meta)] text-text-muted">{p.failHint}</div>
-                    </div>
-                  </div>
+                  </>
                 )}
-
-                {isBinding && (
-                  <div className="flex flex-wrap items-start gap-4 pt-3 border-t border-border-secondary">
-                    <div
-                      className="shrink-0 rounded-lg border border-border-secondary bg-white p-2 [&>svg]:block"
-                      style={{ width: 152, height: 152 }}
-                      dangerouslySetInnerHTML={{ __html: binding.svg }}
-                    />
-                    <div className="min-w-0 flex-1 space-y-2 pt-2">
-                      <p className="text-[length:var(--text-ui)] text-text-secondary">{bindingNote ?? "请用手机扫码授权"}</p>
-                      <a
-                        href={binding.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="block truncate text-[length:var(--text-meta)] text-accent hover:underline"
-                      >
-                        {binding.url}
-                      </a>
-                    </div>
-                  </div>
-                )}
-
-                {bindingNote && !isBinding && (
-                  <p className="text-[length:var(--text-meta)] text-text-secondary">{bindingNote}</p>
-                )}
-
-                {bound && p.sandboxNote && (
-                  <p className="flex items-start gap-2 text-[length:var(--text-meta)] text-text-muted leading-relaxed">
-                    <AlertTriangle className="icon-sm mt-0.5 shrink-0 text-warning" />
-                    <span>{p.sandboxNote}</span>
-                  </p>
-                )}
-              </div>
-            );
-          })
-        )}
-      </Card>
-      {/* ── 配对管理（置顶）——抄 cc-haha 的「配对管理」块位置 ── */}
-      <Card
-        title="配对与授权"
-        icon={<LinkIcon className="icon-md text-text-secondary" />}
-        action={
-          <button
-            onClick={() => void refreshStatus()}
-            className="h-7 px-2.5 rounded-md flex items-center gap-1 text-[length:var(--text-meta)] text-text-secondary hover:text-text-primary hover:bg-bg-card-hover border border-border-secondary"
-            title="刷新绑定状态"
-          >
-            <RefreshCw className="icon-sm" />
-            刷新
-          </button>
-        }
-      >
-        <p className="text-[length:var(--text-ui)] text-text-secondary">
-          配对码发到 IM 私聊里完成身份绑定。配对成功的账号会出现在下方「已配对设备」中，可随时撤销。
-        </p>
-
-        {statusError && (
-          <div className="flex items-start gap-2 text-[length:var(--text-meta)] text-text-secondary">
-            <AlertTriangle className="icon-md mt-0.5 shrink-0" />
-            读取绑定状态失败：<span className="font-mono">{statusError}</span>
-          </div>
-        )}
-
-        {pairCode ? (
-          <div className="flex items-start gap-4 flex-wrap rounded-lg border border-border-secondary bg-bg-card-hover px-3 py-3">
-            <div className="min-w-0 flex-1">
-              <div className="text-[length:var(--text-meta)] text-text-secondary">
-                在 {pairCode.platform === "qq" ? "QQ" : "企业微信"} 私聊机器人窗口里把这枚码发过去：
-              </div>
-              <div className="mt-1 flex items-center gap-2">
-                <span className="font-mono font-bold tracking-[0.3em] text-[length:var(--text-display)] text-accent select-all">
-                  {pairCode.pairing_code}
-                </span>
-                <button
-                  onClick={() => void copyCode()}
-                  disabled={pairExpired}
-                  className="h-7 w-7 rounded-md grid place-items-center text-text-secondary hover:text-text-primary hover:bg-bg-card border border-border-secondary disabled:opacity-40 disabled:cursor-default"
-                  title={pairExpired ? "码已过期，需重新生成" : "复制配对码"}
-                >
-                  <Copy className="icon-sm" />
-                </button>
-                {pairExpired && (
-                  <button
-                    onClick={() => void makePairCode(pairCode.platform)}
-                    className="h-7 px-2.5 rounded-md text-[length:var(--text-meta)] text-accent hover:bg-bg-card border border-border-secondary"
-                  >
-                    重新生成
-                  </button>
-                )}
-                <button
-                  onClick={() => setPairCode(null)}
-                  className="h-7 px-2.5 rounded-md text-[length:var(--text-meta)] text-text-secondary hover:text-text-primary hover:bg-bg-card border border-border-secondary"
-                >
-                  收起
-                </button>
-              </div>
-              <div className="mt-1 flex items-center gap-1.5 text-[length:var(--text-meta)] text-text-muted">
-                <Clock3 className="icon-sm shrink-0" />
-                {pairExpired
-                  ? "码已过期，点「重新生成」再发一次"
-                  : `${Math.ceil(pairRemainingMs / 1000)} 秒内有效、只能用一次；重新生成后旧码立即作废。连续输错 5 次只锁定该账号，不影响其它人。`}
-              </div>
-              <div className="mt-2 h-1 overflow-hidden rounded-full bg-bg-hover">
-                <div
-                  className={
-                    "h-full " +
-                    (pairExpired
-                      ? "bg-border-secondary"
-                      : pairProgress <= 0.1
-                        ? "bg-error"
-                        : pairRemainingMs <= 10_000
-                          ? "bg-warning"
-                          : "bg-accent")
-                  }
-                  style={{
-                    width: "100%",
-                    transformOrigin: "left",
-                    transform: `scaleX(${pairProgress})`,
-                    transition: "transform 300ms linear",
-                  }}
-                />
-              </div>
+              </section>
             </div>
-          </div>
-        ) : anyBound ? (
-          <p className="text-[length:var(--text-meta)] text-text-muted leading-relaxed">
-            点渠道行的「配对码」生成一枚 6 位码，在该渠道的私聊里发给机器人完成授权。
-            <br />
-            配对成功后，你从 QQ / 企业微信发的每条消息都会在桌面端左侧栏出现（带渠道徽标），
-            桌面端也能直接在这条会话里回复 —— 同一个会话，双向。
-          </p>
-        ) : (
-          <p className="text-[length:var(--text-meta)] text-text-muted">先在上面绑定一个机器人渠道，这里才能生成配对码。</p>
-        )}
-      </Card>
+          )}
 
+          {/* ── IM 渠道：绑定 + 配对码 ─────────────────────────── */}
+          {active !== "mobile" && (
+            <ImPane
+              platform={active}
+              status={status}
+              statusError={statusError}
+              live={live}
+              liveDetail={liveDetail}
+              liveLoaded={liveLoaded}
+              binding={binding}
+              bindingNote={bindingNote}
+              pairCode={pairCode}
+              pairCodeAt={pairCodeAt}
+              pairRemainingMs={pairRemainingMs}
+              pairExpired={pairExpired}
+              pairProgress={pairProgress}
+              busy={busy}
+              onStartBind={startBind}
+              onCancelBind={cancelBind}
+              onUnbind={unbind}
+              onMakePairCode={makePairCode}
+              onCopyCode={copyCode}
+              onRefresh={refreshStatus}
+            />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 单个 IM 渠道的配置面板。抽成独立组件是为了让主从外壳只管「选中谁」，
+ * 不被每个渠道几十行细节淹没。
+ */
+function ImPane(props: {
+  platform: string;
+  status: BindStatusItem[] | null;
+  statusError: string | null;
+  live: Record<string, boolean>;
+  liveDetail: Record<string, string>;
+  liveLoaded: boolean;
+  binding: { platform: string; url: string; svg: string } | null;
+  bindingNote: string | null;
+  pairCode: PairingCodeResult | null;
+  pairCodeAt: number;
+  pairRemainingMs: number;
+  pairExpired: boolean;
+  pairProgress: number;
+  busy: boolean;
+  onStartBind: (platform: string) => Promise<void>;
+  onCancelBind: () => Promise<void>;
+  onUnbind: (platform: string, label: string) => Promise<void>;
+  onMakePairCode: (platform: string) => Promise<void>;
+  onCopyCode: () => Promise<void>;
+  onRefresh: () => Promise<void>;
+}) {
+  const {
+    platform,
+    status,
+    statusError,
+    live,
+    liveDetail,
+    liveLoaded,
+    binding,
+    bindingNote,
+    pairCode,
+    pairRemainingMs,
+    pairExpired,
+    pairProgress,
+    busy,
+    onStartBind,
+    onCancelBind,
+    onUnbind,
+    onMakePairCode,
+    onCopyCode,
+    onRefresh,
+  } = props;
+
+  const def = CHANNELS.find((c) => c.id === platform)!;
+  const label = def.label.replace(" 机器人", "");
+  const s = status?.find((x) => x.platform === platform);
+  const bound = s?.bound ?? false;
+  const isBinding = binding?.platform === platform;
+  const myCode = pairCode?.platform === platform ? pairCode : null;
+  const meta = IM_BIND[platform];
+
+  if (status === null) {
+    return statusError ? (
+      <div className="mt-5 flex items-start gap-2 text-[length:var(--text-meta)] text-text-secondary">
+        <AlertTriangle className="icon-md mt-0.5 shrink-0" />
+        <div>
+          读取绑定状态失败：<span className="font-mono">{statusError}</span>
+          <div className="mt-1 text-text-muted">
+            通常是桌面端版本不一致 —— 重启开发脚本让后端重新编译后再试。
+          </div>
+        </div>
+        <ActionBtn onClick={() => void onRefresh()} className="ml-auto">
+          重试
+        </ActionBtn>
+      </div>
+    ) : (
+      <div className="mt-5 text-[length:var(--text-meta)] text-text-muted">正在读取绑定状态…</div>
+    );
+  }
+
+  return (
+    <div className="mt-5 space-y-4">
+      {/* 状态条：凭据在 ≠ 通道活着，两件事分开说 */}
+      <div className="flex items-center gap-3 flex-wrap rounded-lg bg-bg-secondary px-4 py-3">
+        {bound ? (
+          <>
+            <span className="inline-flex items-center gap-1.5 text-[length:var(--text-ui)] text-text-primary">
+              <Check className="icon-sm text-accent" />
+              已绑定 <span className="font-mono">{s?.id_preview}</span>
+              {s?.source === "env" && <span className="text-text-muted">（环境变量）</span>}
+            </span>
+            {live[platform] ? (
+              <span className="inline-flex items-center gap-1.5 text-[length:var(--text-meta)] text-accent">
+                <span className="inline-block h-1.5 w-1.5 rounded-full bg-accent" />
+                通道已连接
+              </span>
+            ) : liveLoaded ? (
+              <span
+                className="inline-flex items-center gap-1.5 text-[length:var(--text-meta)] text-warning"
+                title="凭据在，但网关没连上（网络不通 / 凭据过期 / 机器人被停用）。机器人此时不会回消息。"
+              >
+                <AlertTriangle className="icon-sm" />
+                网关未连接
+              </span>
+            ) : null}
+          </>
+        ) : (
+          <span className="text-[length:var(--text-ui)] text-text-muted">未绑定 —— 先扫码把机器人授权进来</span>
+        )}
+
+        <div className="ml-auto flex items-center gap-2">
+          {bound && (
+            <ActionBtn
+              onClick={() => void onMakePairCode(platform)}
+              icon={<QrCode className="icon-sm" />}
+              title="生成一枚 6 位码，在 IM 私聊里发给机器人"
+            >
+              配对码
+            </ActionBtn>
+          )}
+          {bound && s?.source === "file" && (
+            <ActionBtn
+              onClick={() => void onUnbind(platform, label)}
+              icon={<Unlink className="icon-sm" />}
+              title="删除本地保存的机器人凭据"
+            >
+              解绑
+            </ActionBtn>
+          )}
+          {isBinding ? (
+            <ActionBtn onClick={() => void onCancelBind()}>取消</ActionBtn>
+          ) : (
+            <ActionBtn
+              onClick={() => void onStartBind(platform)}
+              disabled={busy}
+              icon={<QrCode className="icon-sm" />}
+              tone="primary"
+            >
+              {bound ? "重新扫码" : "扫码绑定"}
+            </ActionBtn>
+          )}
+        </div>
+      </div>
+
+      <p className="text-[length:var(--text-meta)] text-text-muted leading-relaxed">
+        {isBinding ? meta?.hint : bound ? `从${label}私聊机器人打开本机工作区。${def.desc}` : def.desc}
+      </p>
+
+      {/* 网关连接失败：detail 原文 + 一句人话排查方向 */}
+      {bound && liveLoaded && !live[platform] && (
+        <div className="flex items-start gap-2 rounded-lg bg-bg-secondary px-4 py-3">
+          <AlertTriangle className="icon-sm mt-0.5 shrink-0 text-warning" />
+          <div className="min-w-0">
+            <div className="text-[length:var(--text-ui)] font-medium text-text-primary">网关连接失败</div>
+            {liveDetail[platform] ? (
+              <div className="mt-0.5 break-all font-mono text-[length:var(--text-meta)] text-text-secondary">
+                {liveDetail[platform]}
+              </div>
+            ) : null}
+            <div className="mt-1 text-[length:var(--text-meta)] text-text-muted">{def.failHint}</div>
+          </div>
+        </div>
+      )}
+
+      {/* 扫码授权中的二维码 */}
+      {isBinding && (
+        <div className="flex items-start gap-4 flex-wrap rounded-lg bg-bg-secondary p-4">
+          <div
+            className="shrink-0 rounded-lg bg-white p-2 [&>svg]:block"
+            style={{ width: 152, height: 152 }}
+            dangerouslySetInnerHTML={{ __html: binding!.svg }}
+          />
+          <div className="min-w-0 flex-1 space-y-2 self-center">
+            <p className="text-[length:var(--text-ui)] text-text-secondary">{bindingNote ?? "请用手机扫码授权"}</p>
+            <a
+              href={binding!.url}
+              target="_blank"
+              rel="noreferrer"
+              className="block truncate text-[length:var(--text-meta)] text-accent hover:underline"
+            >
+              {binding!.url}
+            </a>
+          </div>
+        </div>
+      )}
+
+      {bindingNote && !isBinding && (
+        <p className="text-[length:var(--text-meta)] text-text-secondary">{bindingNote}</p>
+      )}
+
+      {bound && meta?.sandboxNote && (
+        <p className="flex items-start gap-2 rounded-lg bg-warning-soft px-4 py-3 text-[length:var(--text-meta)] text-text-secondary leading-relaxed">
+          <AlertTriangle className="icon-sm mt-0.5 shrink-0 text-warning" />
+          <span>{meta.sandboxNote}</span>
+        </p>
+      )}
+
+      {/* 配对码：跟着渠道走，不再是全局一块 */}
+      {myCode && (
+        <div className="rounded-lg bg-bg-secondary p-4">
+          <SubHead>配对码</SubHead>
+          <div className="mt-2 text-[length:var(--text-ui)] text-text-secondary">
+            在 {label} 私聊机器人窗口里把这枚码发过去：
+          </div>
+          <div className="mt-2 flex items-center gap-2 flex-wrap">
+            <span className="font-mono font-bold tracking-[0.3em] text-[length:var(--text-display)] text-accent select-all">
+              {myCode.pairing_code}
+            </span>
+            <ActionBtn onClick={() => void onCopyCode()} disabled={pairExpired} icon={<Copy className="icon-sm" />}>
+              复制
+            </ActionBtn>
+            {pairExpired && (
+              <ActionBtn onClick={() => void onMakePairCode(platform)} tone="primary">
+                重新生成
+              </ActionBtn>
+            )}
+            <ActionBtn onClick={() => onRefresh()}>收起</ActionBtn>
+          </div>
+          <div className="mt-2 flex items-center gap-1.5 text-[length:var(--text-meta)] text-text-muted">
+            <Clock3 className="icon-sm shrink-0" />
+            {pairExpired
+              ? "码已过期，点「重新生成」再发一次"
+              : `${Math.ceil(pairRemainingMs / 1000)} 秒内有效、只能用一次；重新生成后旧码立即作废。连续输错 5 次只锁定该账号。`}
+          </div>
+          <div className="mt-2 h-1 overflow-hidden rounded-full bg-bg-tertiary">
+            <div
+              className={
+                "h-full " +
+                (pairExpired
+                  ? "bg-text-faint"
+                  : pairProgress <= 0.1
+                    ? "bg-error"
+                    : pairRemainingMs <= 10_000
+                      ? "bg-warning"
+                      : "bg-accent")
+              }
+              style={{
+                width: "100%",
+                transformOrigin: "left",
+                transform: `scaleX(${pairProgress})`,
+                transition: "transform 300ms linear",
+              }}
+            />
+          </div>
+        </div>
+      )}
+
+      {bound && !myCode && (
+        <p className="text-[length:var(--text-meta)] text-text-muted leading-relaxed">
+          点上方「配对码」生成一枚 6 位码，在 {label} 私聊里发给机器人完成授权。配对成功后，你从{" "}
+          {label} 发的每条消息都会在桌面端左侧栏出现（带渠道徽标），桌面端也能直接回复 —— 同一个会话，双向。
+        </p>
+      )}
     </div>
   );
 }
