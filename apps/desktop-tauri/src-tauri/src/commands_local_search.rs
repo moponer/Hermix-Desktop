@@ -154,9 +154,16 @@ impl Index {
         &self.names[e.name_off as usize..e.name_off as usize + e.name_len as usize]
     }
 
+    /// 条目所属目录路径。防御式：越界（损坏的重放状态，如增量灌进
+    /// 尚未换入的空 Index）回落空串——目录缺失只影响显示，不值得
+    /// panic 掉整个搜索线程（2026-10-09 现场事故）。
+    fn dir_of(&self, e: &Entry) -> &str {
+        self.dirs.get(e.dir as usize).map(String::as_str).unwrap_or("")
+    }
+
     /// 完整显示路径 = 目录 + 反斜杠 + 文件名。
     fn path(&self, e: &Entry) -> String {
-        let dir = &self.dirs[e.dir as usize];
+        let dir = self.dir_of(e);
         let name = self.name(e);
         if dir.ends_with('\\') {
             format!("{dir}{name}")
@@ -669,9 +676,17 @@ mod usn_helper {
         });
     }
 
-    /// 应用一条增量到全局索引（锁内，O(1) 定位）。
-    fn replay_update(u: &UpdLine) {
+    /// 应用一条增量到全局索引（锁内，O(1) 定位）。pub(super) 供 tests 直调。
+    pub(super) fn replay_update(u: &UpdLine) {
         let Ok(mut cell) = index_cell().lock() else { return };
+        // 代次竞态防护：rebuild 放弃旧结果（gen 已前进）时不换入新
+        // Index，全局槽位可能还是默认空 Index（dirs 无 0 号占位）。
+        // 把增量灌进这种"空但有 entries 增长"的状态会造出 dir 悬空
+        // 引用（path() 索引 dirs[0] 直接越界 panic，2026-10-09 现场）。
+        // 占位目录不存在 = 索引未就绪 = 这批增量等 snapshot 全量重建。
+        if cell.index.dirs.is_empty() {
+            return;
+        }
         let idx = &mut cell.index;
         match u.op.as_str() {
             "del" => {
@@ -1084,12 +1099,18 @@ fn fallback_jwalk_index() -> Index {
         let handles: Vec<_> = roots.iter().map(|r| s.spawn(move || walk_root(r))).collect();
         handles.into_iter().filter_map(|h| h.join().ok()).collect()
     });
+    merge_shards(shards)
+}
 
+/// 合并各盘分片（纯函数，可单测）：重排 dir/name 下标。
+/// 分片 dirs[0] 是占位、条目从 1 起引用；skip(1) 并入后，分片目录 j
+/// 落在 merged 的 `len_before + j - 1`，故 dir_base 必须 -1 —— 此前
+/// 多加 1，所有条目指向下一个目录（路径错位），每片最后一条越界。
+fn merge_shards(shards: Vec<Index>) -> Index {
     let mut merged = Index::default();
     merged.dirs.push(String::new());
-    // 合并：重排 dir 下标（各分片的 dirs 独立编号）。
     for shard in shards {
-        let dir_base = merged.dirs.len() as u32;
+        let dir_base = merged.dirs.len() as u32 - 1;
         merged.dirs.extend(shard.dirs.into_iter().skip(1));
         let name_base = merged.names.len() as u32;
         merged.names.push_str(&shard.names);
@@ -1252,13 +1273,12 @@ fn search_blocking(query: String, ext: Option<String>, dirs_only: bool) -> Local
                 // 目录片段必须落在目录末尾（`sub` 只匹配 ...\sub，不匹配
                 // ...\subdir），文件名片段落在文件名里。
                 Some(dq) => {
-                    name_l.contains(name_q)
-                        && fold_into(&mut scratch, &idx.dirs[e.dir as usize]).ends_with(dq)
+                    name_l.contains(name_q) && fold_into(&mut scratch, idx.dir_of(e)).ends_with(dq)
                 }
                 None => {
                     // 先看文件名（短、命中率高），未中再看目录。
                     name_l.contains(name_q)
-                        || fold_into(&mut scratch, &idx.dirs[e.dir as usize]).contains(name_q)
+                        || fold_into(&mut scratch, idx.dir_of(e)).contains(name_q)
                 }
             };
             if matched {
@@ -1475,10 +1495,15 @@ pub fn local_search_preview(path: String) -> Result<PreviewPayload, String> {
 mod tests {
     use super::*;
 
+    /// 涉及全局 index_cell() 的测试必须串行（cargo test 默认多线程，
+    /// 并行注入/重放会互相覆盖全局槽位产生 flaky）。
+    static CELL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     /// 端到端功能验证：临时目录建索引 → 三条查询路径（模糊 / 子串 /
     /// ext 筛选）都能命中。arena 重排后 dir/name 偏移错了这里立刻炸。
     #[test]
     fn walk_and_search_finds_files() {
+        let _g = CELL_LOCK.lock().unwrap();
         let tmp = std::env::temp_dir().join(format!("hermix_lsearch_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(tmp.join("sub")).unwrap();
@@ -1549,5 +1574,89 @@ mod tests {
             RESNAP_TIMEOUT_SECS >= 120,
             "resnap 上限过小：一次全量枚举远超这个量级"
         );
+    }
+
+    /// 两个分片合并：dir/name 下标必须精确重排，路径不得错位或越界。
+    /// 锁 2026-10-09 修复的 off-by-one（dir_base 多加 1 → 每片最后一条
+    /// 越界、其余错位到下一个目录）。
+    #[test]
+    fn merge_shards_realigns_dir_indices() {
+        let mk = |dirs: &[&str], entries: &[(&str, u32)]| {
+            let mut idx = Index::default();
+            idx.dirs.push(String::new()); // 分片 0 号占位
+            for d in dirs {
+                idx.dirs.push((*d).to_string());
+            }
+            for (name, dir) in entries {
+                let off = idx.names.len() as u32;
+                idx.names.push_str(name);
+                idx.entries.push(Entry {
+                    name_off: off,
+                    name_len: name.len() as u16,
+                    dir: *dir,
+                    size: 0,
+                    mtime: 0,
+                    is_dir: false,
+                    frn: 0,
+                });
+            }
+            idx
+        };
+        // 分片 1：目录 [1]=\"C:\\a\"，两个条目都指 1；分片 2 同构。
+        let s1 = mk(&["C:\\a"], &[("f1.txt", 1), ("f2.txt", 1)]);
+        let s2 = mk(&["D:\\b"], &[("g1.txt", 1)]);
+        let merged = merge_shards(vec![s1, s2]);
+
+        assert_eq!(merged.dirs, vec!["", "C:\\a", "D:\\b"]);
+        let paths: Vec<String> = merged.entries.iter().map(|e| merged.path(e)).collect();
+        assert_eq!(
+            paths,
+            vec!["C:\\a\\f1.txt", "C:\\a\\f2.txt", "D:\\b\\g1.txt"]
+        );
+    }
+
+    /// 空 Index（dirs 无 0 号占位）时重放必须整体跳过——增量灌进未换入
+    /// 的默认槽位会造出 dir 悬空引用，path() 索引 dirs[0] panic
+    /// （2026-10-09 现场 tokio-rt-worker panic 的直接复现）。
+    #[test]
+    fn replay_into_empty_index_is_noop() {
+        let _g = CELL_LOCK.lock().unwrap();
+        *index_cell().lock().unwrap() = FileIndex::empty();
+        usn_helper::replay_update(&usn_helper::UpdLine {
+            op: "add".into(),
+            frn: 42,
+            parent: 0,
+            name: "ghost.txt".into(),
+            is_dir: false,
+            ts: 0,
+        });
+        let cell = index_cell().lock().unwrap();
+        assert!(cell.index.entries.is_empty(), "空 Index 不得被灌入条目");
+    }
+
+    /// 就绪 Index（有 0 号占位）时重放正常落库，dir=0（未知父）不越界。
+    #[test]
+    fn replay_into_ready_index_lands_entry() {
+        let _g = CELL_LOCK.lock().unwrap();
+        let mut idx = Index::default();
+        idx.dirs.push(String::new()); // 就绪标志：占位在
+        *index_cell().lock().unwrap() = FileIndex {
+            index: idx,
+            built_at: None,
+            building: false,
+            helper_state: HelperState::Ok,
+        };
+        usn_helper::replay_update(&usn_helper::UpdLine {
+            op: "add".into(),
+            frn: 7,
+            parent: 0,
+            name: "ok.txt".into(),
+            is_dir: false,
+            ts: 0,
+        });
+        let cell = index_cell().lock().unwrap();
+        assert_eq!(cell.index.entries.len(), 1);
+        // dir=0 合法（未知桶），path() 走占位目录不 panic。
+        assert_eq!(cell.index.path(&cell.index.entries[0]), "\\ok.txt");
     }
 }
