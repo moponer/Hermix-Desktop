@@ -3,25 +3,50 @@
 // prop-driven leaf components: they parse a JSON `output` string and
 // render; they depend only on React hooks + DOM, no MessageBubble internals.
 import { useMemo } from "react";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { openImageViewer } from "../imageViewer";
 import { extractLineStats } from "../../utils/lineStats";
 
+type ScreenshotParsed =
+  | {
+      kind: "inline";
+      png_base64: string;
+      width?: number;
+      height?: number;
+      bytes?: number;
+      monitor_name?: string;
+    }
+  | {
+      kind: "file";
+      saved_to: string;
+      width?: number;
+      height?: number;
+      bytes?: number;
+      monitor_name?: string;
+    };
+
 function ScreenshotPreview({ output }: { output?: string }) {
-  const parsed = useMemo(() => {
+  const parsed = useMemo<ScreenshotParsed | null>(() => {
     if (!output) return null;
     try {
       const v = JSON.parse(output);
-      if (
-        v && typeof v === "object" && !Array.isArray(v) &&
-        typeof v.png_base64 === "string" && v.png_base64.length > 0
-      ) {
-        return v as {
-          png_base64: string;
-          width?: number;
-          height?: number;
-          bytes?: number;
-          monitor_name?: string;
-        };
+      if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+      const common = {
+        width: typeof v.width === "number" ? v.width : undefined,
+        height: typeof v.height === "number" ? v.height : undefined,
+        bytes: typeof v.bytes === "number" ? v.bytes : undefined,
+        monitor_name:
+          typeof v.monitor_name === "string" && v.monitor_name
+            ? v.monitor_name
+            : undefined,
+      };
+      // 新形态：像素落盘，只回 saved_to 路径（asset 协议渲染）。
+      if (typeof v.saved_to === "string" && v.saved_to.length > 0) {
+        return { kind: "file", saved_to: v.saved_to, ...common };
+      }
+      // 旧形态：历史消息里仍有内联 base64，照常渲染。
+      if (typeof v.png_base64 === "string" && v.png_base64.length > 0) {
+        return { kind: "inline", png_base64: v.png_base64, ...common };
       }
     } catch {
       // not JSON, or wrong shape — fall through
@@ -29,28 +54,30 @@ function ScreenshotPreview({ output }: { output?: string }) {
     return null;
   }, [output]);
   if (!parsed) return null;
-  const w = typeof parsed.width === "number" ? parsed.width : 0;
-  const h = typeof parsed.height === "number" ? parsed.height : 0;
-  const bytes = typeof parsed.bytes === "number" ? parsed.bytes : 0;
-  const kb = (bytes / 1024).toFixed(0);
+  const w = parsed.width ?? 0;
+  const h = parsed.height ?? 0;
+  const kb = ((parsed.bytes ?? 0) / 1024).toFixed(0);
   const monitorLabel = parsed.monitor_name ? ` · ${parsed.monitor_name}` : "";
+  const src =
+    parsed.kind === "inline"
+      ? `data:image/png;base64,${parsed.png_base64}`
+      : convertFileSrc(parsed.saved_to);
+  const label = w && h ? `桌面截图 ${w}×${h}` : "桌面截图";
   return (
     <div className="mt-1.5 rounded-md overflow-hidden border border-border-primary/40 bg-bg-secondary/20">
       <img
-        src={`data:image/png;base64,${parsed.png_base64}`}
-        alt={w && h ? `桌面截图 ${w}×${h}` : "桌面截图"}
+        src={src}
+        alt={label}
         className="w-full h-auto max-h-[480px] object-contain bg-black/40"
         draggable={false}
-        onClick={() =>
-          openImageViewer({
-            src: `data:image/png;base64,${parsed.png_base64}`,
-            name: w && h ? `桌面截图 ${w}×${h}` : "桌面截图",
-          })
-        }
+        onClick={() => openImageViewer({ src, name: label })}
         style={{ cursor: "pointer" }}
       />
       <div className="flex items-center justify-between gap-2 px-2 py-1 text-[length:var(--text-meta)] text-text-faint bg-bg-secondary/40 border-t border-border-primary/30">
-        <span className="font-mono">{w}×{h}{monitorLabel}</span>
+        <span className="font-mono truncate">
+          {w}×{h}{monitorLabel}
+          {parsed.kind === "file" ? ` · ${parsed.saved_to}` : ""}
+        </span>
         <span>{kb} KB</span>
       </div>
     </div>
