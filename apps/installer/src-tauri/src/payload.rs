@@ -272,8 +272,12 @@ pub fn create_desktop_shortcut(install_dir: &std::path::Path) -> Result<(), Stri
         exe.display(),
         install_dir.display(),
     );
+    // CREATE_NO_WINDOW：否则安装最后一步会闪一个 PowerShell 控制台窗。
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     let status = std::process::Command::new("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", &ps])
+        .creation_flags(CREATE_NO_WINDOW)
         .status()
         .map_err(|e| format!("启动 powershell 失败: {e}"))?;
     if !status.success() {
@@ -282,10 +286,13 @@ pub fn create_desktop_shortcut(install_dir: &std::path::Path) -> Result<(), Stri
     Ok(())
 }
 
-/// 在安装目录里找主程序 exe。启发式：优先 hermix*（排除 uninstall.exe /
-/// 含 sidecar 字样的 binaries），#7 的 NSIS 文件清单对照会核实实际布局。
+/// 在安装目录里找主程序 exe。安装布局的主程序是 productName.exe
+/// （"Hermix Desktop.exe"，release.sh 由 hermix-desktop.exe 拷贝产物）；
+/// **hermix.exe 绝不能进候选**——那是 sidecar 服务端（无 UI 的后台进程），
+/// 且 Windows 文件系统大小写不敏感，连 "Hermix.exe" 都会误配到它：
+/// 误启动 sidecar = 用户看到"点了运行却什么都没发生"，比 None 更糟。
 pub fn find_main_exe(install_dir: &std::path::Path) -> Option<std::path::PathBuf> {
-    let candidates = ["hermix.exe", "hermix-desktop.exe", "Hermix Desktop.exe", "Hermix.exe"];
+    let candidates = ["Hermix Desktop.exe", "hermix-desktop.exe"];
     for c in candidates {
         let p = install_dir.join(c);
         if p.exists() {
@@ -370,15 +377,26 @@ pub fn run_uninstall() {
         .spawn();
 }
 
-// dirs 模块：快捷方式/桌面定位用（不引第三方 dirs crate，两行就够）。
+// dirs 模块：快捷方式/桌面定位用（桌面路径读注册表，复用已有 winreg 依赖，
+// 不引第三方 dirs crate）。
 #[cfg(windows)]
 mod dirs {
-    /// %USERPROFILE%\Desktop（OneDrive 重定向时回落 USERPROFILE）。
+    /// 用户真实看到的桌面。OneDrive / 域策略会把「桌面」重定向，此时
+    /// %USERPROFILE%\Desktop 是个没人看的旧目录（真机实测踩过：lnk 写进去了，
+    /// 桌面上却没有图标）。权威来源 = 注册表 Shell Folders 的 Desktop 值
+    /// （资源管理器维护的已展开路径），读不到或目录不存在再回落旧拼法。
     pub fn desktop_dir() -> Option<std::path::PathBuf> {
-        let home = home_dir()?;
-        // 优先注册表 Shell Folders？一期简单化：直接 Desktop，OneDrive 场景由
-        // #7 实测修正（失败不阻断安装——快捷方式是可选产物）。
-        Some(home.join("Desktop"))
+        use winreg::enums::HKEY_CURRENT_USER;
+        let shell = r"Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders";
+        if let Ok(key) = winreg::RegKey::predef(HKEY_CURRENT_USER).open_subkey(shell) {
+            if let Ok(p) = key.get_value::<String, _>("Desktop") {
+                let pb = std::path::PathBuf::from(p);
+                if pb.is_dir() {
+                    return Some(pb);
+                }
+            }
+        }
+        Some(home_dir()?.join("Desktop"))
     }
     pub fn home_dir() -> Option<std::path::PathBuf> {
         std::env::var_os("USERPROFILE")

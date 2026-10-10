@@ -111,13 +111,15 @@ pub fn installer_finish(
     run_now: bool,
 ) -> Result<(), String> {
     if run_now {
+        // 主 exe 名不硬编码：安装布局的主程序是 productName.exe（hermix-desktop
+        // 拷贝产物），硬编码 "hermix.exe" 会 filter(exists) 静默落空——勾选了
+        // 「立即运行」却什么都没发生。复用 payload 的候选启发式。
         let target = state
             .install_dir
             .lock()
             .unwrap()
             .clone()
-            .map(|d| d.join("hermix.exe"))
-            .filter(|p| p.exists());
+            .and_then(|d| crate::payload::find_main_exe(&d));
         if let Some(t) = target {
             #[cfg(windows)]
             {

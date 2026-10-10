@@ -57,8 +57,8 @@ echo "── 版本: $VERSION（$PRODUCT_NAME）"
 if [[ $SKIP_BUILD -eq 0 ]]; then
   echo "── 构建：前端 + ensure-sidecar（dev.mjs 全链路）"
   (cd "$REPO_ROOT/apps/desktop-tauri" && npm run build)
-  echo "── 构建：主程序 release"
-  (cd "$REPO_ROOT" && cargo build --release -p hermix-desktop)
+  echo "── 构建：主程序 release（custom-protocol：嵌入前端资产，缺它窗口导航 devUrl = localhost 拒绝连接）"
+  (cd "$REPO_ROOT" && cargo build --release --features hermix-desktop/custom-protocol -p hermix-desktop)
   echo "── 构建：安装器（vite 前端 → cargo，版本经 env 注入）"
   (cd "$REPO_ROOT/apps/installer" && npm install --no-audit --no-fund && npm run build:vite)
   (cd "$REPO_ROOT" && HERMIX_PRODUCT_VERSION="$VERSION" cargo build --release -p hermix-installer)
