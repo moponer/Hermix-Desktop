@@ -27,18 +27,21 @@
     });
   }
 
+  /* 导航与页脚各套一层居中容器：条带本身全宽（底纹与分隔线铺满），
+     内容锁在 --container 里，与正文左边缘对齐。 */
   function navHtml(active) {
     var links = NAV.map(function (n) {
       return '<a href="' + n.href + '"' + (n.key === active ? ' class="on"' : '') + '>' + n.label + '</a>';
     }).join('');
     return (
+      '<div class="nav-in">' +
       '<a class="brand" href="index.html"><img class="mark" src="brand.png" alt="" width="26" height="26">Hermix</a>' +
-      '<button class="burger" id="burger" aria-label="菜单">菜单</button>' +
+      '<button class="burger" id="burger" aria-label="菜单" aria-expanded="false" aria-controls="navlinks">菜单</button>' +
       '<div class="links" id="navlinks">' + links + '</div>' +
       '<div class="cta">' +
       '<span class="v" data-ver="desktop.version">—</span>' +
       '<a class="btn" href="desktop.html#download">下载</a>' +
-      '</div>'
+      '</div></div>'
     );
   }
 
@@ -47,13 +50,57 @@
       ? '<a href="' + esc(REPO_URL) + '" target="_blank" rel="noopener">开源仓库</a>'
       : '<span>开源地址待公布</span>';
     return (
+      '<div class="ft-in">' +
       '<img class="mark" src="brand.png" alt="" width="20" height="20"><span>Hermix</span>' +
       '<span>hermix.cssso.com</span>' + repo +
-      '<span class="sp">Windows x64 · Android</span>'
+      '<span class="sp">Windows x64 · Android</span></div>'
     );
   }
 
-  /* 标签页图标在 head 里注入，省得九个页面各写一行 link（改一处就够）。 */
+  /* 分享卡片：一处注入，九个页面共用。文章页标题是 JS 事后替换的，
+     那边调 setMeta 把 og 一起改掉，否则分享出去的还是通用标题。 */
+  function ensureMeta(selector, attr, key) {
+    var el = document.querySelector(selector);
+    if (!el) {
+      el = document.createElement('meta');
+      el.setAttribute(attr, key);
+      document.head.appendChild(el);
+    }
+    return el;
+  }
+
+  function mountMeta() {
+    var descEl = document.querySelector('meta[name="description"]');
+    var desc = descEl ? descEl.content : '';
+    var img = new URL('static-mascot.png', location.href).href;
+    ensureMeta('meta[property="og:title"]', 'property', 'og:title').content = document.title;
+    ensureMeta('meta[property="og:description"]', 'property', 'og:description').content = desc;
+    ensureMeta('meta[property="og:type"]', 'property', 'og:type').content = 'website';
+    ensureMeta('meta[property="og:url"]', 'property', 'og:url').content = location.href;
+    ensureMeta('meta[property="og:image"]', 'property', 'og:image').content = img;
+    ensureMeta('meta[property="og:locale"]', 'property', 'og:locale').content = 'zh_CN';
+    ensureMeta('meta[name="twitter:card"]', 'name', 'twitter:card').content = 'summary';
+    ensureMeta('meta[name="twitter:title"]', 'name', 'twitter:title').content = document.title;
+    ensureMeta('meta[name="twitter:description"]', 'name', 'twitter:description').content = desc;
+    ensureMeta('meta[name="theme-color"]', 'name', 'theme-color').content = '#f5f4ed';
+  }
+
+  function setMeta(o) {
+    mountMeta();
+    if (o.title) {
+      ensureMeta('meta[property="og:title"]', 'property', 'og:title').content = o.title;
+      ensureMeta('meta[name="twitter:title"]', 'name', 'twitter:title').content = o.title;
+    }
+    if (o.description) {
+      var d = document.querySelector('meta[name="description"]');
+      if (d) d.content = o.description;
+      ensureMeta('meta[property="og:description"]', 'property', 'og:description').content = o.description;
+      ensureMeta('meta[name="twitter:description"]', 'name', 'twitter:description').content = o.description;
+    }
+    if (o.url) ensureMeta('meta[property="og:url"]', 'property', 'og:url').content = o.url;
+  }
+
+  /* 标签页图标：页面已显式声明时跳过，这里只作兜底。 */
   function mountFavicon() {
     if (document.querySelector('link[rel="icon"]')) return;
     var l = document.createElement('link');
@@ -65,6 +112,7 @@
 
   function mount(active) {
     mountFavicon();
+    mountMeta();
     var nav = document.querySelector('[data-nav]');
     if (nav) nav.innerHTML = navHtml(active);
     var ft = document.querySelector('[data-footer]');
@@ -72,7 +120,8 @@
     var b = document.getElementById('burger');
     if (b) {
       b.addEventListener('click', function () {
-        document.getElementById('navlinks').classList.toggle('open');
+        var open = document.getElementById('navlinks').classList.toggle('open');
+        b.setAttribute('aria-expanded', open ? 'true' : 'false');
       });
     }
   }
@@ -170,6 +219,7 @@
     esc: esc,
     fmtDate: fmtDate,
     shortSha: short,
+    setMeta: setMeta,
     flatten: flatten,
     // 页面里写 <script>HERMIX.boot('desktop')</script> 即可装配导航 + 版本。
     boot: function (active) {

@@ -5,14 +5,16 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>使用文档 —— Hermix</title>
 <meta name="description" content="安装、配置模型、对话与会话、审批边界、本机工具、定时任务、记忆、手机配对、数据备份。" />
+<link rel="icon" type="image/png" href="favicon.png" />
 <link rel="stylesheet" href="assets/site.css" />
 </head>
 <body>
+<a class="skip" href="#main">跳到主要内容</a>
 
 <nav class="nav" data-nav></nav>
 
 <div class="docs">
-  <aside class="side" id="side"></aside>
+  <aside class="side" id="side" aria-label="文档目录"></aside>
   <main class="main" id="main"></main>
 </div>
 
@@ -26,6 +28,11 @@
     var docs = (window.DOCS || {}).user || [];
     var side = document.getElementById('side');
     var main = document.getElementById('main');
+
+    if (!docs.length) {
+      main.innerHTML = '<div class="empty err">文档索引没加载出来。<a href="docs.html">刷新重试</a>，或先去<a href="index.html">首页</a>。</div>';
+      return;
+    }
 
     side.innerHTML =
       '<div class="k">使用文档</div>' +
@@ -47,9 +54,10 @@
     }
     window.addEventListener('hashchange', mark);
 
-    // 首次进入：有锚点就定位，没有就把第一节标为当前。
+    // 锚点来自地址栏，可能是任意字符串：非法选择器会抛错，整页脚本就停在这里。
     if (location.hash) {
-      var t = document.querySelector(location.hash);
+      var t = null;
+      try { t = document.querySelector(location.hash); } catch (err) { t = null; }
       if (t) setTimeout(function () { t.scrollIntoView(); }, 60);
     } else if (links.length) {
       links[0].classList.add('on');

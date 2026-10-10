@@ -5,81 +5,116 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Spiker —— 车队合规监控与自动发报文</title>
 <meta name="description" content="双源 GPS、路单核验、四档合规判定、违规动车自动下发报文、历史归档。Rust 后端，便携 zip 解压即用。" />
+<link rel="icon" type="image/png" href="favicon.png" />
 <link rel="stylesheet" href="assets/site.css" />
 </head>
 <body>
+<a class="skip" href="#main">跳到主要内容</a>
 
 <nav class="nav" data-nav></nav>
 
 <div class="hero">
-  <h1>车队合规监控 + 自动发报文</h1>
-  <p class="sub">监控员打开就看得到车队实时状态与合规档位，识别违规动车并自动下发提示报文，路单接入与历史归档也在同一个界面里。Rust 后端 + React 19 前端，便携 zip 解压即用。</p>
-  <div class="acts">
-    <a class="btn" href="spiker.html#download">下载便携 zip</a>
-    <a class="btn ghost" href="changelog.html">更新日志</a>
-    <span class="m"><span data-ver="spiker.version">—</span> · <span data-ver="spiker.date">—</span></span>
+  <div class="wrap hero-in">
+    <div>
+      <h1>车队合规监控 + 自动发报文</h1>
+      <p class="sub">监控员打开就看得到车队实时状态与合规档位，识别违规动车并自动下发提示报文，路单接入与历史归档也在同一个界面里。Rust 后端 + React 19 前端，便携 zip 解压即用。</p>
+      <div class="acts">
+        <a class="btn" href="spiker.html#download">下载便携 zip</a>
+        <a class="btn ghost" href="changelog.html">更新日志</a>
+        <span class="m"><span data-ver="spiker.version">—</span> · <span data-ver="spiker.date">—</span></span>
+      </div>
+    </div>
+
+    <div class="shot-console" role="img" aria-label="Spiker 监控台示意：表头显示在线车辆数，列表逐行给出车牌、位置更新时间与合规档位，其中一行为 T3 违规动车">
+      <div class="ch"><span class="live"></span>GPS 双源 · 5 秒一轮<span class="r">在线 42 / 47</span></div>
+      <table>
+        <thead><tr><th>车牌</th><th>最近定位</th><th>路单</th><th>档位</th></tr></thead>
+        <tbody>
+          <tr><td>沪 D·7Q21</td><td>3 秒前</td><td>已生效</td><td><span class="tier t1">T1</span></td></tr>
+          <tr><td>沪 D·4M08</td><td>4 秒前</td><td>报备在期</td><td><span class="tier">T2</span></td></tr>
+          <tr><td>沪 D·9K37</td><td>2 秒前</td><td>无手续</td><td><span class="tier t3">T3</span></td></tr>
+          <tr><td>沪 D·2B15</td><td>5 秒前</td><td>未生效</td><td><span class="tier">T2</span></td></tr>
+          <tr><td>沪 D·6T44</td><td>3 秒前</td><td>已生效</td><td><span class="tier t1">T1</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<main id="main">
+
+<div class="sec">
+  <div class="wrap">
+    <h2>能做什么</h2>
+    <div class="feat">
+      <div class="it"><div class="t">双源 GPS</div><div class="d">两套平台并行，5 秒一轮；总览弹窗走 fresh 通道，绕过 90 秒缓存。</div></div>
+      <div class="it"><div class="t">四档合规判定</div><div class="d">按<em>车号 + 路单 + 报备</em>三态组合：T1 路单生效、T2 报备在期、T3 无手续，T0 是报备前置。</div></div>
+      <div class="it"><div class="t">路单核验</div><div class="d">报送平台的数据走 SM2（C1C3C2）解密。路单只录入还没生效时，先查报备；没有报备才判违规动车。</div></div>
+      <div class="it"><div class="t">报文下发</div><div class="d">T3 违规动车<em>启程那一刻</em>触发一次，不是持续告警。带去重、TTL、失败计数，还有一道防误发复核闸。</div></div>
+      <div class="it"><div class="t">失联能降级</div><div class="d">GPS / 路单 / 平台事件三路心跳。路单断了就退回纯 GPS 判定，恢复后自动停运。</div></div>
+      <div class="it"><div class="t">历史归档</div><div class="d">SQLite 双表留 7 天，预警和报文分开存，车牌支持模糊和后 N 位检索。</div></div>
+      <div class="it"><div class="t">对外接口</div><div class="d">内置无鉴权 HTTP 端口，别的系统可以直接拉快照、预警、报文。只监听本机。</div></div>
+      <div class="it"><div class="t">界面内更新</div><div class="d">纯 Rust 四段：下载 → 校验 SHA → 改名交换 → 启新进程 → 确认存活。失败回滚，成功清 temp。带进度条，不弹黑窗口。</div></div>
+    </div>
   </div>
 </div>
 
 <div class="sec">
-  <h2>能做什么</h2>
-  <div class="feat">
-    <div class="it"><div class="t">双源 GPS</div><div class="d">两套平台并行，5 秒一轮；总览弹窗走 fresh 通道，绕过 90 秒缓存。</div></div>
-    <div class="it"><div class="t">四档合规判定</div><div class="d">按<em>车号 + 路单 + 报备</em>三态组合：T1 路单生效、T2 报备在期、T3 无手续，T0 是报备前置。</div></div>
-    <div class="it"><div class="t">路单核验</div><div class="d">报送平台的数据走 SM2（C1C3C2）解密。路单只录入还没生效时，先查报备；没有报备才判违规动车。</div></div>
-    <div class="it"><div class="t">报文下发</div><div class="d">T3 违规动车<em>启程那一刻</em>触发一次，不是持续告警。带去重、TTL、失败计数，还有一道防误发复核闸。</div></div>
-    <div class="it"><div class="t">失联能降级</div><div class="d">GPS / 路单 / 平台事件三路心跳。路单断了就退回纯 GPS 判定，恢复后自动停运。</div></div>
-    <div class="it"><div class="t">历史归档</div><div class="d">SQLite 双表留 7 天，预警和报文分开存，车牌支持模糊和后 N 位检索。</div></div>
-    <div class="it"><div class="t">对外接口</div><div class="d">内置无鉴权 HTTP 端口，别的系统可以直接拉快照、预警、报文。只监听本机。</div></div>
-    <div class="it"><div class="t">界面内更新</div><div class="d">纯 Rust 四段：下载 → 校验 SHA → 改名交换 → 启新进程 → 确认存活。失败回滚，成功清 temp。带进度条，不弹黑窗口。</div></div>
+  <div class="wrap">
+    <h2>四档怎么判</h2>
+    <p>合规不是「有手续 / 没手续」两个状态。真实业务里有四种，判错任何一种都会造成误报或漏报。</p>
+    <div class="three">
+      <div class="r3"><div class="k">T1</div><div class="v">路单已生效，正常营运。</div></div>
+      <div class="r3"><div class="k">T2</div><div class="v">没有路单，但报备在有效期内。</div></div>
+      <div class="r3"><div class="k">T3</div><div class="v">既无路单也无报备，属于违规动车。</div></div>
+      <div class="r3"><div class="k">T0</div><div class="v">报备前置状态，还没进入判定链。</div></div>
+    </div>
+    <p style="margin-top:18px">最容易出错的地方是「已录入但未生效」：只看有没有记录会把未生效当成无效，进而误判成违规。所以顺序是先查报备，确实没有才判违规。</p>
   </div>
 </div>
 
 <div class="sec">
-  <h2>四档怎么判</h2>
-  <p>合规不是「有手续 / 没手续」两个状态。真实业务里有四种，判错任何一种都会造成误报或漏报。</p>
-  <dl class="kv">
-    <dt>T1</dt><dd>路单已生效，正常营运</dd>
-    <dt>T2</dt><dd>没有路单，但报备在有效期内</dd>
-    <dt>T3</dt><dd>既无路单也无报备，属于违规动车</dd>
-    <dt>T0</dt><dd>报备前置状态，还没进入判定链</dd>
-  </dl>
-  <p style="margin-top:14px">最容易出错的地方是「已录入但未生效」：只看有没有记录会把未生效当成无效，进而误判成违规。所以顺序是先查报备，确实没有才判违规。</p>
-</div>
-
-<div class="sec">
-  <h2>轻、快、稳</h2>
-  <div class="three">
-    <div class="r3"><div class="k">快</div><div class="v">GPS 五秒一轮，首屏八路并发一起评估，不用排队等；总览弹窗绕过缓存，取的是当下这一刻。</div></div>
-    <div class="r3"><div class="k">稳</div><div class="v">GPS、路单、平台三路心跳。路单断了就退回纯 GPS 判定，恢复后自动停运，不会一直误报。</div></div>
-    <div class="r3"><div class="k">轻</div><div class="v">便携 zip 解压即用，不装系统服务。历史只留七天，到期自动清，硬盘不越用越沉。</div></div>
+  <div class="wrap">
+    <h2>跑在监控机上</h2>
+    <p class="lead">这台机器通常是常开的，所以重点是别拖垮它。</p>
+    <div class="three">
+      <div class="r3"><div class="k">快</div><div class="v">GPS 五秒一轮，首屏八路并发一起评估，不用排队等；总览弹窗绕过缓存，取的是当下这一刻。</div></div>
+      <div class="r3"><div class="k">稳</div><div class="v">GPS、路单、平台三路心跳。路单断了就退回纯 GPS 判定，恢复后自动停运，不会一直误报。</div></div>
+      <div class="r3"><div class="k">轻</div><div class="v">便携 zip 解压即用，不装系统服务。历史只留七天，到期自动清，硬盘不越用越沉。</div></div>
+    </div>
   </div>
 </div>
 
 <div class="sec" id="download">
-  <h2>下载</h2>
-  <p class="lead">Windows x64。便携 zip，解压即用。</p>
-  <div class="dlbar">
-    <div class="ver" data-ver="spiker.version">—</div>
-    <div class="info">
-      <span data-ver="spiker.date">—</span> · 最低可升级 <span data-ver="spiker.min">—</span> · SHA-256 <span class="mono" data-ver="spiker.shaShort">—</span><br>
-      更新说明：<span data-ver="spiker.notes">—</span>
-    </div>
-    <div class="go2">
-      <a class="btn sm" data-ver-href="spiker.url" href="spiker/latest.zip">便携 zip</a>
-      <a class="btn sm ghost" href="changelog.html">更新日志</a>
+  <div class="wrap">
+    <h2>下载</h2>
+    <p class="lead">Windows x64。便携 zip，解压即用。</p>
+    <div class="dlbar">
+      <div class="ver" data-ver="spiker.version">—</div>
+      <div class="info">
+        <span data-ver="spiker.date">—</span> · 最低可升级 <span data-ver="spiker.min">—</span> · SHA-256 <span class="mono" data-ver="spiker.shaShort">—</span><br>
+        更新说明：<span data-ver="spiker.notes">—</span>
+      </div>
+      <div class="go2">
+        <a class="btn sm" data-ver-href="spiker.url" href="spiker/latest.zip">便携 zip</a>
+        <a class="btn sm ghost" href="changelog.html">更新日志</a>
+      </div>
     </div>
   </div>
 </div>
 
 <div class="sec">
-  <h2>相关</h2>
-  <div class="cards3">
-    <a class="c" href="article.html?id=spiker-four-tiers"><div class="n">文章：四档是怎么判出来的</div><div class="p">车号 + 路单 + 报备三态组合，以及路单失联怎么降级。</div><div class="go">阅读 →</div></a>
-    <a class="c" href="article.html?id=spiker-message-gate"><div class="n">文章：自动下发怎么保证不误发</div><div class="p">去重、TTL、失败计数，还有一道人工复核闸。</div><div class="go">阅读 →</div></a>
-    <a class="c" href="article.html?id=spiker-dual-gps"><div class="n">文章：两套 GPS 并行</div><div class="p">断一路还能判，恢复后自动停运。</div><div class="go">阅读 →</div></a>
+  <div class="wrap">
+    <h2>相关</h2>
+    <div class="cols3">
+      <div class="it"><b>四档是怎么判出来的</b><span>车号 + 路单 + 报备三态组合，以及路单失联怎么降级。<br><a href="article.html?id=spiker-four-tiers">阅读 →</a></span></div>
+      <div class="it"><b>自动下发怎么保证不误发</b><span>去重、TTL、失败计数，还有一道人工复核闸。<br><a href="article.html?id=spiker-message-gate">阅读 →</a></span></div>
+      <div class="it"><b>两套 GPS 并行</b><span>断一路还能判，恢复后自动停运。<br><a href="article.html?id=spiker-dual-gps">阅读 →</a></span></div>
+    </div>
   </div>
 </div>
+
+</main>
 
 <footer class="ft" data-footer></footer>
 

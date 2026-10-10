@@ -5,107 +5,145 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Hermix —— 又快又轻的 AI 助手</title>
 <meta name="description" content="Hermix Desktop / Hermix 手机端 / Spiker 的下载、版本说明与文档。Rust 后端，Windows 便携 exe，数据落在本机。" />
+<link rel="icon" type="image/png" href="favicon.png" />
 <link rel="stylesheet" href="assets/site.css" />
 <script>var HERMIX_M_VERSION = "";</script>
 </head>
 <body>
+<a class="skip" href="#main">跳到主要内容</a>
 
 <nav class="nav" data-nav></nav>
 
 <div class="hero">
-  <div class="hero-in">
+  <div class="wrap hero-in">
     <div>
-      <h1>HERMIX —— 又快又轻的 AI 助手</h1>
+      <h1>又快又轻的 AI 助手，数据留在你自己机器上</h1>
       <p class="sub">后端是 Rust，25 个 crate 各管一段；界面用 React 19 + Tauri v2，打成一个便携 exe，双击就开。数据落在本机 SQLite，模型走云端，所以老办公机也跑得动。</p>
       <div class="acts">
-        <a class="btn" href="desktop.html#download">下载</a>
+        <a class="btn" href="desktop.html#download">下载桌面版</a>
         <a class="btn ghost" href="docs.html">使用文档</a>
         <span class="m">桌面端 <span data-ver="desktop.version">—</span> · Spiker <span data-ver="spiker.version">—</span></span>
       </div>
     </div>
-    <img class="hero-mark" src="mascot-128.png" srcset="mascot-128.png 1x, mascot.png 2x" alt="Hermix" width="132" height="132">
+
+    <div class="shot" role="img" aria-label="Hermix Desktop 界面示意：左侧会话列表，右侧对话区与一张正在读取表格的工具结果卡">
+      <div class="shot-bar">
+        <span class="shot-dot"></span><span class="shot-dot"></span><span class="shot-dot live"></span>
+        <span class="shot-title">Hermix</span>
+      </div>
+      <div class="shot-body">
+        <div class="shot-side" aria-hidden="true">
+          <span class="sk k1 on"></span><span class="sk k2"></span><span class="sk k3"></span>
+          <span class="sk k2"></span><span class="sk k1"></span>
+        </div>
+        <div class="shot-main">
+          <div class="shot-msg">把这周的路单导出来，按车牌分组统计</div>
+          <div class="shot-msg me">已读到 <b>downloads/</b> 下 3 个 xlsx</div>
+          <div class="shot-tool">
+            <div class="th"><span class="sq"></span>读取表格 · 3 个文件</div>
+            <div class="tr"><span>sheet1 · 1,284 行</span><span>done</span></div>
+            <div class="shot-prog"><i></i></div>
+          </div>
+          <div class="shot-input"><span>继续说</span><span class="caret"></span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<main id="main">
+
+<div class="sec">
+  <div class="wrap">
+    <h2>客户端</h2>
+    <p class="lead">三个客户端各管各的，只共用同一个发布源。</p>
+    <div class="picks">
+      <a class="pick main" href="desktop.html">
+        <div class="n">Hermix Desktop</div>
+        <div class="p">双击就开的 Windows 助手。会话、工具结果、任务记录都落在你自己的机器上——我们不设服务器，也不存你的数据。</div>
+        <div class="v"><span data-ver="desktop.version">—</span> · <span data-ver="desktop.date">—</span></div>
+        <span class="go">查看 →</span>
+      </a>
+      <a class="pick sub" href="mobile.html">
+        <div>
+          <div class="n">Hermix 手机端</div>
+          <div class="p">Android 伴侣端。在外面也能给桌面端下指令、审它要做的操作、接通话。</div>
+        </div>
+        <div class="tail"><div class="v"><span data-ver="apk.version">—</span></div><span class="go">查看 →</span></div>
+      </a>
+      <a class="pick sub" href="spiker.html">
+        <div>
+          <div class="n">Spiker</div>
+          <div class="p">车队合规监控与自动发报文。双源 GPS、路单核验、四档判定，违规动车自动下发。</div>
+        </div>
+        <div class="tail"><div class="v"><span data-ver="spiker.version">—</span> · <span data-ver="spiker.date">—</span></div><span class="go">查看 →</span></div>
+      </a>
+    </div>
   </div>
 </div>
 
 <div class="sec">
-  <h2>客户端</h2>
-  <p class="lead">三个客户端，各管各的，只共用同一个发布源。</p>
-  <div class="cards3">
-    <a class="c" href="desktop.html">
-      <div class="n">Hermix Desktop</div>
-      <div class="p">双击就开的 Windows 助手。会话、工具结果、任务记录都落在你自己的机器上——我们不设服务器，也不存你的数据。</div>
-      <div class="v"><span data-ver="desktop.version">—</span> · <span data-ver="desktop.date">—</span></div>
-      <div class="go">查看 →</div>
-    </a>
-    <a class="c" href="mobile.html">
-      <div class="n">Hermix 手机端</div>
-      <div class="p">Android 伴侣端。在外面也能给桌面端下指令、审它要做的操作、接通话。</div>
-      <div class="v"><span data-ver="apk.version">—</span></div>
-      <div class="go">查看 →</div>
-    </a>
-    <a class="c" href="spiker.html">
-      <div class="n">Spiker</div>
-      <div class="p">车队合规监控与自动发报文。双源 GPS、路单核验、四档判定，违规动车自动下发。</div>
-      <div class="v"><span data-ver="spiker.version">—</span> · <span data-ver="spiker.date">—</span></div>
-      <div class="go">查看 →</div>
-    </a>
+  <div class="wrap">
+    <h2>轻、快、稳</h2>
+    <p class="lead">办公机最在乎的三件事。</p>
+    <div class="three">
+      <div class="r3"><div class="k">轻</div><div class="v">便携 exe，双击就开，不装服务、不写注册表。本机<em>不跑模型</em>，推理走 provider 接口，用不着好显卡。</div></div>
+      <div class="r3"><div class="k">快</div><div class="v">找文件读磁盘元数据，几秒建完索引；命令跑在持久终端里，上一条的目录和变量都还在；界面只画你看得见的那一屏。</div></div>
+      <div class="r3"><div class="k">稳</div><div class="v">数据只落一个 SQLite 文件。升级先校验 SHA-256 再替换，新版本起不来就<em>退回上一个</em>。</div></div>
+    </div>
   </div>
 </div>
 
 <div class="sec">
-  <h2>轻、快、稳</h2>
-  <p class="lead">办公机最在乎的三件事。</p>
-  <div class="three">
-    <div class="r3"><div class="k">轻</div><div class="v">便携 exe，双击就开，不装服务、不写注册表。本机<em>不跑模型</em>，推理走 provider 接口，用不着好显卡。</div></div>
-    <div class="r3"><div class="k">快</div><div class="v">找文件读磁盘元数据，几秒建完索引；命令跑在持久终端里，上一条的目录和变量都还在；界面只画你看得见的那一屏。</div></div>
-    <div class="r3"><div class="k">稳</div><div class="v">数据只落一个 SQLite 文件。升级先校验 SHA-256 再替换，新版本起不来就<em>退回上一个</em>。</div></div>
+  <div class="wrap">
+    <h2>文章</h2>
+    <p class="lead">从实现笔记改写。每篇讲一个机制怎么运转、当时为什么这么取舍。</p>
+    <div class="arts">
+      <a class="a" href="article.html?id=compact-not-delete">
+        <div><div class="t">压缩之后，聊天记录还在吗<span class="tag">会话</span></div>
+        <div class="d">到阈值压一次。折掉的轮次没删，它们搬进一个子会话，原会话一行不动。</div></div>
+        <div class="r">约 1400 字<br>会话</div>
+      </a>
+      <a class="a" href="article.html?id=uac-on-startup">
+        <div><div class="t">启动时那次 UAC 是干嘛的<span class="tag">本机能力</span></div>
+        <div class="d">文件索引想快就得读磁盘元数据，读它要管理员权限。这篇讲为什么不退化成全盘遍历。</div></div>
+        <div class="r">约 1200 字<br>本机能力</div>
+      </a>
+      <a class="a" href="article.html?id=approval-boundary">
+        <div><div class="t">审批卡为什么变少了<span class="tag">安全</span></div>
+        <div class="d">每个命令都弹一次确认，用三天就会习惯性点同意。改成启动时划一次边界，边界内放行。</div></div>
+        <div class="r">约 1100 字<br>安全</div>
+      </a>
+      <a class="a" href="article.html?id=terminal-remembers">
+        <div><div class="t">终端终于能记住上一条命令<span class="tag">本机能力</span></div>
+        <div class="d">ConPTY 持久会话，命令之间状态连续；一次性命令走同一条通道，不留两套实现。</div></div>
+        <div class="r">约 1000 字<br>本机能力</div>
+      </a>
+      <a class="a" href="article.html?id=one-sentence-exe">
+        <div><div class="t">一句话生成一个自带全部资源的 exe<span class="tag">自定义应用</span></div>
+        <div class="d">从自然语言到多文件前端工程，再到单个 exe：资源嵌进 PE 资源节，运行期从内存直喂。</div></div>
+        <div class="r">约 1600 字<br>自定义应用</div>
+      </a>
+    </div>
+    <p style="margin-top:20px"><a href="articles.html">全部 24 篇 →</a></p>
   </div>
 </div>
 
 <div class="sec">
-  <h2>文章</h2>
-  <p class="lead">从实现笔记改写。每篇讲一个机制怎么运转、当时为什么这么取舍。</p>
-  <div class="arts">
-    <a class="a" href="article.html?id=compact-not-delete">
-      <div><div class="t">压缩之后，聊天记录还在吗<span class="tag">会话</span></div>
-      <div class="d">到阈值压一次。折掉的轮次没删，它们搬进一个子会话，原会话一行不动。</div></div>
-      <div class="r">约 1400 字<br>会话</div>
-    </a>
-    <a class="a" href="article.html?id=uac-on-startup">
-      <div><div class="t">启动时那次 UAC 是干嘛的<span class="tag">本机能力</span></div>
-      <div class="d">文件索引想快就得读磁盘元数据，读它要管理员权限。这篇讲为什么不退化成全盘遍历。</div></div>
-      <div class="r">约 1200 字<br>本机能力</div>
-    </a>
-    <a class="a" href="article.html?id=approval-boundary">
-      <div><div class="t">审批卡为什么变少了<span class="tag">安全</span></div>
-      <div class="d">每个命令都弹一次确认，用三天就会习惯性点同意。改成启动时划一次边界，边界内放行。</div></div>
-      <div class="r">约 1100 字<br>安全</div>
-    </a>
-    <a class="a" href="article.html?id=terminal-remembers">
-      <div><div class="t">终端终于能记住上一条命令<span class="tag">本机能力</span></div>
-      <div class="d">ConPTY 持久会话，命令之间状态连续；一次性命令走同一条通道，不留两套实现。</div></div>
-      <div class="r">约 1000 字<br>本机能力</div>
-    </a>
-    <a class="a" href="article.html?id=one-sentence-exe">
-      <div><div class="t">一句话生成一个自带全部资源的 exe<span class="tag">自定义应用</span></div>
-      <div class="d">从自然语言到多文件前端工程，再到单个 exe：资源嵌进 PE 资源节，运行期从内存直喂。</div></div>
-      <div class="r">约 1600 字<br>自定义应用</div>
-    </a>
+  <div class="wrap">
+    <h2>更新源</h2>
+    <p class="lead">这里显示的版本号与校验值，和客户端点「检查更新」读到的是同一份文件。</p>
+    <dl class="kv">
+      <dt>桌面端清单</dt><dd class="mono">/desktop/manifest.json</dd>
+      <dt>桌面端 SHA-256</dt><dd class="mono" data-ver="desktop.sha">—</dd>
+      <dt>Spiker 清单</dt><dd class="mono">/spiker/manifest.json</dd>
+      <dt>Spiker SHA-256</dt><dd class="mono" data-ver="spiker.sha">—</dd>
+      <dt>APK 信息</dt><dd class="mono">/api/app-info</dd>
+    </dl>
   </div>
-  <p style="margin-top:18px"><a href="articles.html">全部 24 篇 →</a></p>
 </div>
 
-<div class="sec">
-  <h2>更新源</h2>
-  <p class="lead">这里显示的版本号与校验值，和客户端点「检查更新」读到的是同一份文件。</p>
-  <dl class="kv">
-    <dt>桌面端清单</dt><dd class="mono">/desktop/manifest.json</dd>
-    <dt>桌面端 SHA-256</dt><dd class="mono" data-ver="desktop.sha">—</dd>
-    <dt>Spiker 清单</dt><dd class="mono">/spiker/manifest.json</dd>
-    <dt>Spiker SHA-256</dt><dd class="mono" data-ver="spiker.sha">—</dd>
-    <dt>APK 信息</dt><dd class="mono">/api/app-info</dd>
-  </dl>
-</div>
+</main>
 
 <footer class="ft" data-footer></footer>
 
