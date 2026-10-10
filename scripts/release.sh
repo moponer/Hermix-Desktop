@@ -78,16 +78,64 @@ APP="$STAGING/app"
 rm -rf "$STAGING"; mkdir -p "$APP"
 cp "$SRC_MAIN" "$APP/$MAIN_EXE_NAME"
 
-# sidecar（externalBin 五件套）：权威来源 = src-tauri/binaries/（ensure-sidecar
-# 落点 + sha256 校验点，tauri.conf externalBin 所指）；target/release 仅作
-# hermix/usn-indexer/hermix-viewer 的回退（workspace 直编产物）。禁止绕过
-# ensure-sidecar。
+# sidecar 分两类，来源不同——这是事实，不是偏好。
+#
+#   本仓库构建（hermix / usn-indexer / hermix-viewer）
+#     来源 = target/release/，即 cargo 刚编出来的那个文件。出包**不再经过
+#     binaries/ 这一层副本**。此前这里写的是 $BINARIES/$s.exe，但目录里的实际
+#     文件名带 target triple 后缀（<name>-x86_64-pc-windows-msvc.exe），该判断
+#     恒为假、每轮都静默落到下面的 target/release 分支——与原注释"权威来源 =
+#     binaries/"正好相反。两份副本一旦分叉，打包到哪一份取决于文件名猜没猜对，
+#     而猜错不报错。直接取 target/release/，这个问题就不存在了。
+#
+#   项目资产 / 上游预编译（officecli / markitdown）
+#     仓库里没有 crate、没有构建脚本（更新流程见 build.rs 注释），ensure-sidecar
+#     也不碰它们。唯一的家就是 binaries/。
 BINARIES="$REPO_ROOT/apps/desktop-tauri/src-tauri/binaries"
-for s in hermix officecli markitdown usn-indexer hermix-viewer; do
-  f=""
-  [[ -f "$BINARIES/$s.exe" ]] && f="$BINARIES/$s.exe"
-  [[ -z "$f" && -f "$TARGET/$s.exe" ]] && f="$TARGET/$s.exe"
-  [[ -n "$f" ]] || { echo "错误：缺 sidecar $s.exe（先跑 npm run build / ensure-sidecar）"; exit 1; }
+
+for s in hermix usn-indexer hermix-viewer; do
+  f="$TARGET/$s.exe"
+  [[ -f "$f" ]] || { echo "错误：缺 sidecar $f（先跑 npm run build / ensure-sidecar）"; exit 1; }
+
+  # 新鲜度断言：产物必须晚于**它自己的**源码树里最新的 .rs。
+  #
+  # 为什么长在这里而不是只放在 check-sidecar-freshness.sh：那道门只被
+  # ci-gate.sh 调用，而 release.sh 从不经过它——守门人不在出包路上等于没有，
+  # 10-06 的「修了但新装的包里没有」就是这么漏的。这里是出包必经点，且
+  # --skip-build 同样照跑。
+  #
+  # hermix 的扫描只看 crates/，且跳过 crates/hermix-indexer：
+  #   跳过 indexer —— 否则改一下 indexer 就把 hermix 也误报成 STALE；
+  #   不看 src-tauri/src —— 那是**壳**（hermix-desktop）的代码，不进 hermix-server，
+  #     拿它做判定等于每次改壳都误报一次。误报多了这道门就没人当真了。
+  case "$s" in
+    hermix)
+      stale=$(find "$REPO_ROOT/crates" \
+                -type d -name hermix-indexer -prune -o \
+                -type f -name '*.rs' -newer "$f" -print -quit 2>/dev/null) ;;
+    usn-indexer)
+      stale=$(find "$REPO_ROOT/crates/hermix-indexer" \
+                -type f -name '*.rs' -newer "$f" -print -quit 2>/dev/null) ;;
+    hermix-viewer)
+      stale=$(find "$REPO_ROOT/apps/viewer" \
+                -type f -name '*.rs' -newer "$f" -print -quit 2>/dev/null) ;;
+  esac
+  if [ -n "$stale" ]; then
+    echo "错误：sidecar $s 比源码旧，拒绝出包（--skip-build 也不例外）"
+    echo "       产物: $f"
+    echo "       新于它的源码: ${stale#$REPO_ROOT/}"
+    echo "       修复: cd apps/desktop-tauri && npm run ensure-sidecar"
+    exit 1
+  fi
+
+  cp "$f" "$APP/$s.exe"
+done
+
+# 项目资产 / 上游预编译：唯一的家在 binaries/。**不参与上面的新鲜度判定**——
+# 仓库里没有它们的源码，拿本仓库的 .rs 去比毫无意义，只会让这道门天天误报。
+for s in officecli markitdown; do
+  f="$BINARIES/$s-x86_64-pc-windows-msvc.exe"
+  [[ -f "$f" ]] || { echo "错误：缺 sidecar $f"; exit 1; }
   cp "$f" "$APP/$s.exe"
 done
 
