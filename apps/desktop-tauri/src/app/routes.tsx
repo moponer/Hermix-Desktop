@@ -12,6 +12,7 @@ const AgentsView = lazy(() => import("../components/AgentsView").then((m) => ({ 
 const AnalyticsView = lazy(() => import("../components/AnalyticsView").then((m) => ({ default: m.AnalyticsView })));
 const CustomAppsView = lazy(() => import("../components/CustomAppsView").then((m) => ({ default: m.CustomAppsView })));
 const WorkbenchView = lazy(() => import("../components/WorkbenchView").then((m) => ({ default: m.WorkbenchView })));
+const VaultPanel = lazy(() => import("../components/VaultPanel").then((m) => ({ default: m.VaultPanel })));
 
 /** 渲染各非 chat 页面所需的 App 级依赖。chat 页面 props 复杂，
  *  由 App 预先渲染为 `chatNode` 元素传入，保持逻辑零改写。 */
@@ -56,6 +57,8 @@ export function renderRoutes(page: NavPage, ctx: RouteContext): ReactNode {
       return <Suspense fallback={<RouteLoading />}><AnalyticsView /></Suspense>;
     case "customapps":
       return <Suspense fallback={<RouteLoading />}><CustomAppsView onStartCreateApp={ctx.startCreateAppFlow} /></Suspense>;
+    case "vault":
+      return <Suspense fallback={<RouteLoading />}><VaultPanel /></Suspense>;
     case "systemconfig":
       return (
         <SystemConfigPanel

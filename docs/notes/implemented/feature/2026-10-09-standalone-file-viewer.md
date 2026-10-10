@@ -1,6 +1,6 @@
 # Decision Note: 独立文件浏览器（hermix-viewer）+ 可折叠 AI 右栏 + 文件关联接管
 
-Status: proposed — 待拍板；需求源自主人：把内置文件预览做成独立文件浏览器（多标签、不随主程序关闭、可被系统/主程序双向调用）
+Status: implemented — 2026-10-10 交付：apps/viewer（hermix-viewer.exe，第 5 个 sidecar）单 WebView 多标签 + AI 右栏（直连 /v1/）+ 文件关联设置页 + 主程序互调；一期 md/text/code/image/pdf 直渲，office 走系统程序兜底
 
 ## Decision
 

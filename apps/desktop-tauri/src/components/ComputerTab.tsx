@@ -8,6 +8,8 @@ import {
 import { FileTypeIcon } from "./FileTypeIcon";
 import { clsx } from "clsx";
 import { openExternalUrl, listDirectory, type DirEntry } from "../desktopBridge";
+import { invoke } from "@tauri-apps/api/core";
+import { toastWarning } from "../hooks/useToast";
 import { homeDir } from "@tauri-apps/api/path";
 import { FileExplorerContextMenu } from "./FileContextMenu";
 import { formatBytes, formatModifiedDate, pathToBreadcrumbs } from "./rightSidebarUtils";
@@ -160,6 +162,13 @@ export function ComputerTab({
         break;
       case "open_external":
         openExternalUrl(entry.path);
+        break;
+      case "open_in_viewer":
+        if (!entry.isDir) {
+          invoke("open_in_viewer", { path: entry.path }).catch((e) =>
+            toastWarning(String(e instanceof Error ? e.message : e)),
+          );
+        }
         break;
     }
   }, [contextMenu, navigateTo, onAddToChat, onPreviewFile]);

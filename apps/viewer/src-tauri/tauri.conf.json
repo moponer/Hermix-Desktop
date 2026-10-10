@@ -1,0 +1,30 @@
+{
+  "productName": "Hermix Viewer",
+  "version": "0.1.0",
+  "identifier": "com.hermix.viewer",
+  "build": {
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Hermix 查看器",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 640,
+        "minHeight": 420,
+        "resizable": true,
+        "center": true,
+        "visible": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data: blob:; object-src 'self' data:"
+    }
+  },
+  "bundle": {
+    "active": false,
+    "icon": []
+  }
+}

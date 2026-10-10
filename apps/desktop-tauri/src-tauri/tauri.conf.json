@@ -53,7 +53,8 @@
       "binaries/hermix",
       "binaries/officecli",
       "binaries/markitdown",
-      "binaries/usn-indexer"
+      "binaries/usn-indexer",
+      "binaries/hermix-viewer"
     ],
     "publisher": "Hermix",
     "shortDescription": "Hermix Desktop portable AI agent (Windows)",

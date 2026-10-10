@@ -11,6 +11,7 @@ pub mod cua;
 pub mod automation;
 pub mod config;
 pub mod env;
+pub mod vault_api;
 pub mod workflows;
 pub mod mcp;
 pub mod mcp_catalog;
@@ -89,6 +90,19 @@ pub fn router() -> Router<HttpServerState> {
         .route(
             "/api/tools/toolsets/enabled",
             put(skills::set_enabled_toolsets),
+        )
+        // Vault（凭据保险库）：列表永不含密码；明文只在 reveal / 编辑回填。
+        .route(
+            "/api/vault/entries",
+            get(vault_api::list_entries).post(vault_api::create_entry),
+        )
+        .route(
+            "/api/vault/entries/{id}",
+            put(vault_api::update_entry).delete(vault_api::delete_entry),
+        )
+        .route(
+            "/api/vault/entries/{id}/reveal",
+            post(vault_api::reveal_entry),
         )
         // Analytics
         .route("/api/analytics/usage", get(analytics::get_usage))

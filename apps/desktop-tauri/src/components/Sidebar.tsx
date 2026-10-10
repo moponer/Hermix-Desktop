@@ -4,7 +4,7 @@ import {
   Boxes, MoreHorizontal, Loader2, Bot,
   // Popover icons
   Pencil, Pin, Archive, Trash2, FolderOpenDot, Copy, FolderMinus,
-  Settings, PanelLeftClose, Search, LayoutDashboard, FolderSearch,
+  Settings, PanelLeftClose, Search, LayoutDashboard, FolderSearch, KeyRound,
   type LucideIcon,
 } from "lucide-react";
 import { clsx } from "clsx";
@@ -67,6 +67,7 @@ interface SidebarProps {
 const NAV_ITEMS: { icon: React.ElementType; label: string; page: NavPage }[] = [
   { icon: Boxes,    label: "应用",    page: "customapps" },
   { icon: LayoutDashboard, label: "工作台", page: "workbench" },
+  { icon: KeyRound, label: "凭据库", page: "vault" },
 ];
 
 // 「本地文件」不是页面而是弹窗动作，但入口形态与菜单项一致——放进

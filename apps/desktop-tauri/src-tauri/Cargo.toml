@@ -55,6 +55,8 @@ hermix-config = { path = "../../../crates/hermix-config" }
 jwalk = "0.9"
 nucleo-matcher = "0.3"
 tauri-plugin-global-shortcut = "2"
+# 文件关联设置页（HKCU\Software\Classes 登记；版本与 installer 同代）。
+winreg = "0.10"
 image = { version = "0.25", features = ["png"] }
 
 # 索引遍历线程降为 BELOW_NORMAL 优先级：全盘扫描不抢 UI 线程。

@@ -1,6 +1,6 @@
 import { useRef, useLayoutEffect, useEffect, useState } from "react";
 import {
-  FileText, Eye, Copy, FolderOpen, ExternalLink,
+  FileText, Eye, Copy, FolderOpen, ExternalLink, AppWindow,
 } from "lucide-react";
 import type { DirEntry } from "../desktopBridge";
 
@@ -51,6 +51,7 @@ export function FileExplorerContextMenu({
     { action: "copy_path", label: "复制路径", icon: Copy, divider: false },
     { action: "open_in_explorer", label: "在资源管理器中打开", icon: FolderOpen, divider: true },
     { action: "open_external", label: "用默认程序打开", icon: ExternalLink, divider: false },
+    { action: "open_in_viewer", label: "在查看器中打开", icon: AppWindow, divider: false },
   ];
 
   const dirItems = [

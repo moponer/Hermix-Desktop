@@ -8,6 +8,7 @@ description = "Tool registry, toolsets, and tool implementations for Hermix Agen
 
 [dependencies]
 hermix-core = { workspace = true }
+hermix-vault = { path = "../hermix-vault" }
 hermix-config = { workspace = true }
 hermix-context = { workspace = true }
 hermix-cua = { workspace = true }

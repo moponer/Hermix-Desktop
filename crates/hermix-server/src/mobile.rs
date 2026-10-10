@@ -98,6 +98,91 @@ pub(crate) async fn list_tasks(
     Json(serde_json::json!({ "tasks": visible })).into_response()
 }
 
+/// `GET /v1/vault/entries` — 手机端凭据列表（**永不含密码**）。
+///
+/// 信任边界（决策笔记 2026-10-09-vault-credentials）：仅配对设备可访问
+/// （Local 也放行供桌面调试）；E2EE 由 relay_transport 层透明完成，这里
+/// 返回普通 JSON。列表不含密码——密码走 `/v1/vault/reveal/{name}`。
+pub(crate) async fn vault_entries(
+    Extension(origin): Extension<hermix_core::Origin>,
+    Extension(device_scopes): Extension<Option<std::collections::HashSet<Capability>>>,
+) -> Response {
+    if let Err(resp) = crate::routes::check_capability_from_extensions(
+        Capability::Chat,
+        &origin,
+        &device_scopes,
+    ) {
+        return resp.into_response();
+    }
+    if origin.device_id().is_none() {
+        // 未配对来源（非 Local 也非 PairedDevice）：拒绝。
+        return (StatusCode::FORBIDDEN, "vault requires a paired device").into_response();
+    }
+    match hermix_vault::Vault::open() {
+        Ok(v) => match v.list() {
+            Ok(entries) => Json(serde_json::json!({ "entries": entries })).into_response(),
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("vault 读取失败: {e}"),
+            )
+                .into_response(),
+        },
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("vault 不可用: {e}"),
+        )
+            .into_response(),
+    }
+}
+
+/// `POST /v1/vault/reveal/{name}` — 手机端按名称取单条（含密码）。
+///
+/// 用户在手机对话里向 agent 要某平台凭据的场景（决策笔记需求源头）。
+/// 每次都现取（不缓存）；归途经 E2EE，relay 永不见明文。
+pub(crate) async fn vault_reveal(
+    Extension(origin): Extension<hermix_core::Origin>,
+    Extension(device_scopes): Extension<Option<std::collections::HashSet<Capability>>>,
+    Path(name): Path<String>,
+) -> Response {
+    if let Err(resp) = crate::routes::check_capability_from_extensions(
+        Capability::Chat,
+        &origin,
+        &device_scopes,
+    ) {
+        return resp.into_response();
+    }
+    if origin.device_id().is_none() {
+        return (StatusCode::FORBIDDEN, "vault requires a paired device").into_response();
+    }
+    match hermix_vault::Vault::open() {
+        Ok(v) => match v.get_by_name(&name) {
+            Ok(entry) => Json(serde_json::json!({
+                "name": entry.name,
+                "url": entry.url,
+                "username": entry.username,
+                "password": entry.secret,
+                "notes": entry.notes,
+            }))
+            .into_response(),
+            Err(hermix_vault::VaultError::NotFound(_)) => (
+                StatusCode::NOT_FOUND,
+                format!("保险库里没有名为「{name}」的条目"),
+            )
+                .into_response(),
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("vault 读取失败: {e}"),
+            )
+                .into_response(),
+        },
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("vault 不可用: {e}"),
+        )
+            .into_response(),
+    }
+}
+
 /// 通道侧调用：把当前 running / queues 重新发布成一份快照。
 ///
 /// 全量重建而不是增量维护：IM 规模下（几十个会话）重建成本可忽略，而增量维护

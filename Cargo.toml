@@ -11,6 +11,7 @@ exclude = []
 members = [
     "apps/desktop-tauri/src-tauri",
     "apps/installer/src-tauri",
+    "apps/viewer/src-tauri",
     "crates/hermix-indexer",
     "crates/hermix-store",
     "crates/hermix-session",
@@ -28,6 +29,7 @@ members = [
     "crates/hermix-config",
     "crates/hermix-intelligence",
     "crates/hermix-focus",
+    "crates/hermix-vault",
     "crates/hermix-server",
     "crates/hermix-telemetry",
     "crates/hermix-runtime",

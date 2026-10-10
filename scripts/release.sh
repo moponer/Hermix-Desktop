@@ -78,11 +78,12 @@ APP="$STAGING/app"
 rm -rf "$STAGING"; mkdir -p "$APP"
 cp "$SRC_MAIN" "$APP/$MAIN_EXE_NAME"
 
-# sidecar（externalBin 四件套）：权威来源 = src-tauri/binaries/（ensure-sidecar
+# sidecar（externalBin 五件套）：权威来源 = src-tauri/binaries/（ensure-sidecar
 # 落点 + sha256 校验点，tauri.conf externalBin 所指）；target/release 仅作
-# hermix/usn-indexer 的回退（workspace 直编产物）。禁止绕过 ensure-sidecar。
+# hermix/usn-indexer/hermix-viewer 的回退（workspace 直编产物）。禁止绕过
+# ensure-sidecar。
 BINARIES="$REPO_ROOT/apps/desktop-tauri/src-tauri/binaries"
-for s in hermix officecli markitdown usn-indexer; do
+for s in hermix officecli markitdown usn-indexer hermix-viewer; do
   f=""
   [[ -f "$BINARIES/$s.exe" ]] && f="$BINARIES/$s.exe"
   [[ -z "$f" && -f "$TARGET/$s.exe" ]] && f="$TARGET/$s.exe"

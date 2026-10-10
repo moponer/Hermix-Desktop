@@ -19,9 +19,9 @@ const srcTauri = path.join(appDir, "src-tauri");
 // 单 workspace 后唯一产物目录（仓库根 target/），无任何 --target-dir/env 覆盖。
 const target = path.join(repoRoot, "target");
 
-function sh(cmd, args) {
+function sh(cmd, args, cwd = repoRoot) {
   console.log(`[ensure-sidecar] $ ${cmd} ${args.join(" ")}`);
-  const r = spawnSync(cmd, args, { stdio: "inherit", cwd: repoRoot, shell: false });
+  const r = spawnSync(cmd, args, { stdio: "inherit", cwd, shell: false });
   if (r.error) {
     console.error(`[ensure-sidecar] ✗ 无法启动 ${cmd}:`, r.error);
     process.exit(1);
@@ -60,5 +60,16 @@ refresh("hermix.exe", "hermix-x86_64-pc-windows-msvc.exe");
 // 不再有「build.rs 校验 binaries/ 里尚未编出的 usn-indexer」的 bootstrap 死锁。
 sh("cargo", ["build", "--release", "-p", "hermix-indexer", "--bin", "usn-indexer"]);
 refresh("usn-indexer.exe", "usn-indexer-x86_64-pc-windows-msvc.exe");
+
+// viewer（第 5 个 sidecar）：先 vite 再 cargo——generate_context! 编译期把
+// apps/viewer/dist 嵌入 exe，顺序反了会嵌入旧 UI（与 sidecar 过期同类事故）。
+const viewerVite = path.join(repoRoot, "apps", "viewer", "node_modules", "vite", "bin", "vite.js");
+if (!existsSync(viewerVite)) {
+  console.error("[ensure-sidecar] ✗ apps/viewer 依赖未安装（先在 apps/viewer 跑 npm install）");
+  process.exit(1);
+}
+sh("node", [viewerVite, "build"], path.join(repoRoot, "apps", "viewer"));
+sh("cargo", ["build", "--release", "-p", "hermix-viewer"]);
+refresh("hermix-viewer.exe", "hermix-viewer-x86_64-pc-windows-msvc.exe");
 
 console.log("[ensure-sidecar] sidecar 已刷新并逐字节校验。");

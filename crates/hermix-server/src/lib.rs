@@ -313,6 +313,11 @@ pub fn router(state: HttpServerState) -> Router {
             post(mobile::interrupt_session),
         )
         .route("/v1/tasks", get(mobile::list_tasks))
+        // Vault（凭据保险库）手机面：仅配对设备；E2EE 由 relay_transport
+        // 层透明完成。列表永不含密码；reveal 按名称取单条（用户在手机
+        // 对话里要凭据的场景，决策笔记 2026-10-09-vault-credentials）。
+        .route("/v1/vault/entries", get(mobile::vault_entries))
+        .route("/v1/vault/reveal/{name}", post(mobile::vault_reveal))
         // §5.5 第 3/4 层：设备配对。complete 与 /pair 落地页对 Unpaired 开放
         // （信任建立本身），其余端点 handler 内强制 Local。
         .route("/pair", get(pairing::pair_page))

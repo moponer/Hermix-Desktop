@@ -1534,3 +1534,130 @@ pub fn set_python_override(path: Option<String>) -> Result<String, String> {
         }
     }
 }
+
+// ── 文件关联（hermix-viewer 接管；HKCU only，用户显式授权）─────────
+// 决策笔记 2026-10-09-standalone-file-viewer：按扩展名勾选，不静默抢关联。
+// ProgID = Hermix.Viewer；取消勾选时恢复勾选前的旧默认值（Backup 子键）。
+
+use winreg::enums::{HKEY_CURRENT_USER, KEY_READ, KEY_WRITE};
+use winreg::RegKey;
+
+const VIEWER_PROGID: &str = "Hermix.Viewer";
+/// 可勾选的扩展名白名单（信任边界：写注册表的入口必须过这扇门）。
+const ASSOC_EXTS: &[&str] = &[
+    "md", "markdown", "txt", "log", "json", "yaml", "yml", "toml", "csv",
+    "png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "pdf",
+];
+
+fn viewer_exe_path() -> Result<std::path::PathBuf, String> {
+    let exe = std::env::current_exe().map_err(|e| format!("定位主程序失败: {e}"))?;
+    let dir = exe.parent().ok_or_else(|| "无法定位安装目录".to_string())?;
+    Ok(dir.join("hermix-viewer.exe"))
+}
+
+/// ProgID + open command（指向 viewer exe；缺 exe 如实报错，不写半套）。
+fn ensure_viewer_progid() -> Result<(), String> {
+    let viewer = viewer_exe_path()?;
+    if !viewer.exists() {
+        return Err("未找到 hermix-viewer.exe（完整安装包才包含查看器）".into());
+    }
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let (progid, _) = hkcu
+        .create_subkey(format!("Software\\Classes\\{VIEWER_PROGID}"))
+        .map_err(|e| format!("创建 ProgID 失败: {e}"))?;
+    progid
+        .set_value("", &"Hermix 查看器".to_string())
+        .map_err(|e| format!("写 ProgID 名失败: {e}"))?;
+    let (shell, _) = hkcu
+        .create_subkey(format!(
+            "Software\\Classes\\{VIEWER_PROGID}\\shell\\open\\command"
+        ))
+        .map_err(|e| format!("创建 open command 失败: {e}"))?;
+    shell
+        .set_value("", &format!("\"{}\" \"%1\"", viewer.display()))
+        .map_err(|e| format!("写 open command 失败: {e}"))?;
+    Ok(())
+}
+
+fn read_default(classes: &RegKey, path: &str) -> Option<String> {
+    // 类型化读取（REG_SZ → String）；DWORD/其他类型或缺失 → None。
+    // winreg 0.10 的 RegValue 是裸结构体，不手解 UTF-16。
+    classes.get_value::<String, _>(path).ok()
+}
+
+/// 各扩展名当前勾选状态（owned = 默认值已指向 Hermix.Viewer）。
+#[tauri::command]
+pub fn file_assoc_list() -> Result<Vec<serde_json::Value>, String> {
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let classes = hkcu
+        .open_subkey("Software\\Classes")
+        .map_err(|e| format!("打开注册表失败: {e}"))?;
+    Ok(ASSOC_EXTS
+        .iter()
+        .map(|ext| {
+            serde_json::json!({
+                "ext": ext,
+                "owned": read_default(&classes, &format!(".{ext}")).as_deref() == Some(VIEWER_PROGID),
+            })
+        })
+        .collect())
+}
+
+/// 勾选/取消某扩展名（用户显式操作；取消时恢复旧默认值或清除）。
+#[tauri::command]
+pub fn file_assoc_set(ext: String, enable: bool) -> Result<(), String> {
+    let ext = ext.trim().trim_start_matches('.').to_ascii_lowercase();
+    if !ASSOC_EXTS.contains(&ext.as_str()) {
+        return Err(format!("不支持的扩展名: {ext}"));
+    }
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    if enable {
+        ensure_viewer_progid()?;
+    }
+    let classes = hkcu
+        .open_subkey_with_flags("Software\\Classes", KEY_READ | KEY_WRITE)
+        .map_err(|e| format!("打开注册表失败: {e}"))?;
+    let path = format!(".{ext}");
+    let cur = read_default(&classes, &path);
+    if enable {
+        // 备份现有非 Hermix 关联，取消勾选时可恢复。
+        if let Some(prev) = cur.filter(|v| v != VIEWER_PROGID && !v.is_empty()) {
+            if let Ok((bk, _)) = hkcu.create_subkey(format!("Software\\Classes\\{VIEWER_PROGID}\\Backup")) {
+                let _ = bk.set_value(&ext, &prev);
+            }
+        }
+        classes
+            .set_value(&path, &VIEWER_PROGID.to_string())
+            .map_err(|e| format!("写关联失败: {e}"))?;
+    } else if cur.as_deref() == Some(VIEWER_PROGID) {
+        let backup = hkcu
+            .open_subkey(format!("Software\\Classes\\{VIEWER_PROGID}\\Backup"))
+            .ok()
+            .and_then(|bk| bk.get_value::<String, _>(ext.as_str()).ok())
+            .filter(|s| !s.is_empty());
+        match backup {
+            Some(prev) => classes
+                .set_value(&path, &prev)
+                .map_err(|e| format!("恢复旧关联失败: {e}"))?,
+            None => {
+                let _ = classes.delete_value(path.as_str());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// 在查看器中打开（主程序 → viewer 互调；命令行参数传路径，
+/// viewer 单实例机制会把路径投递给已开窗口）。
+#[tauri::command]
+pub fn open_in_viewer(path: String) -> Result<(), String> {
+    let viewer = viewer_exe_path()?;
+    if !viewer.exists() {
+        return Err("未找到 hermix-viewer.exe（完整安装包才包含查看器）".into());
+    }
+    std::process::Command::new(&viewer)
+        .arg(&path)
+        .spawn()
+        .map_err(|e| format!("启动查看器失败: {e}"))?;
+    Ok(())
+}

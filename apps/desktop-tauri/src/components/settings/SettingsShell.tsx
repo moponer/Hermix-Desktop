@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   ArrowLeft, Search, Cpu, Boxes, Server, Smartphone, SlidersHorizontal,
   Plug, Sparkles, Network, Image as ImageIcon, Activity, Shield,
-  Archive, Palette, Brain,
+  Archive, Palette, Brain, AppWindow,
 } from "lucide-react";
 
 import { cx } from "../../lib/cx";
@@ -47,7 +47,7 @@ import { ArchiveTab } from "./ArchiveTab";
 export type SettingsPage =
   | "general" | "appearance" | "model" | "image"
   | "plugins" | "skills" | "connectors" | "toolsets"
-  | "backend" | "runtimes" | "devices" | "security" | "archive"
+  | "backend" | "runtimes" | "devices" | "security" | "fileassoc" | "archive"
   | "memory" | "diagnostics" | "advanced";
 
 interface PageDef {
@@ -91,6 +91,7 @@ const GROUPS: GroupDef[] = [
       { id: "runtimes", label: "内置运行时", hint: "Node / Python / Git 便携内置，优先于系统 PATH", icon: Boxes, keywords: "runtime node python git 运行时" },
       { id: "devices", label: "设备管理", hint: "IM 机器人与桌面配对两条通道；高危工具一律在桌面端强制确认", icon: Smartphone, keywords: "device 设备 配对 权限" },
       { id: "security", label: "安全", hint: "覆盖写入前先备份旧版本，误改可回滚", icon: Shield, keywords: "security 安全 备份 backup" },
+      { id: "fileassoc", label: "文件关联", hint: "勾选后由 Hermix 查看器接管对应扩展名；取消即恢复原程序", icon: AppWindow, keywords: "file association 关联 打开方式 viewer 查看器 md pdf png" },
       { id: "archive", label: "已归档", hint: "归档只是从侧栏收起，数据仍在本机，取消归档即可恢复", icon: Archive, keywords: "archive 归档 已归档" },
       { id: "memory", label: "记忆管理", hint: "记忆图谱、角色提示词、全局记忆文本与每日记忆的查看与编辑", icon: Brain, keywords: "memory 记忆 图谱 记忆库 persona 角色 soul 长期记忆 每日记忆 遗忘" },
     ],
@@ -283,6 +284,7 @@ function PageBody({
     case "runtimes": return <Section wide><PageHeading def={def} /><RuntimesTab /></Section>;
     case "devices": return <Section wide><PageHeading def={def} /><DevicesTab /></Section>;
     case "security": return <Section wide><PageHeading def={def} /><SecurityTab /></Section>;
+    case "fileassoc": return <Section><PageHeading def={def} /><FileAssocTab /></Section>;
     case "archive": return <Section><PageHeading def={def} /><ArchiveTab /></Section>;
     case "memory": return <Section wide><PageHeading def={def} /><MemoryTab /></Section>;
     case "diagnostics": return <Section wide><PageHeading def={def} /><DiagnosticsTab /></Section>;
@@ -436,6 +438,61 @@ function ScreenshotSettingsCard() {
             className="mt-2"
           />
         </SettingsRow>
+      </SettingsGroup>
+    </div>
+  );
+}
+
+// ── 文件关联：viewer 接管扩展名（HKCU 登记，显式授权） ─────────────
+
+interface FileAssocEntry {
+  ext: string;
+  owned: boolean;
+}
+
+function FileAssocTab() {
+  const [entries, setEntries] = useState<FileAssocEntry[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  useEffect(() => {
+    void invoke<FileAssocEntry[]>("file_assoc_list")
+      .then(setEntries)
+      .catch((e) => setError(String(e instanceof Error ? e.message : e)));
+  }, []);
+
+  const toggle = (ext: string, enable: boolean) => {
+    setBusy(ext);
+    setError(null);
+    void invoke("file_assoc_set", { ext, enable })
+      .then(() => invoke<FileAssocEntry[]>("file_assoc_list").then(setEntries))
+      .catch((e) => setError(String(e instanceof Error ? e.message : e)))
+      .finally(() => setBusy(null));
+  };
+
+  return (
+    <div>
+      {error && (
+        <p className="mb-3 text-[length:var(--text-meta)] text-[var(--color-danger, #dc2626)]">{error}</p>
+      )}
+      <SettingsGroup
+        title="由 Hermix 查看器打开"
+        description="勾选即明确授权查看器接管该扩展名的默认打开方式；取消勾选自动恢复勾选前的原程序关联。登记只写当前用户的注册表（HKCU），不需要管理员权限。"
+      >
+        {entries.map(({ ext, owned }) => (
+          <SettingsRow
+            key={ext}
+            title={`.${ext}`}
+            description={owned ? "已由查看器接管" : "当前由其他程序处理"}
+            control={
+              <Switch
+                checked={owned}
+                disabled={busy === ext}
+                onChange={(v) => toggle(ext, v)}
+              />
+            }
+          />
+        ))}
       </SettingsGroup>
     </div>
   );

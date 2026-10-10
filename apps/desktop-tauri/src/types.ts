@@ -686,7 +686,7 @@ export interface PluginSettings {
   tool_code_exec: boolean;
 }
 
-export type NavPage = "chat" | "systemconfig" | "automation" | "agents" | "experts" | "analytics" | "customapps" | "workbench";
+export type NavPage = "chat" | "systemconfig" | "automation" | "agents" | "experts" | "analytics" | "customapps" | "workbench" | "vault";
 // ↑ 无 "search"：搜索是动作不是页面，改由标题栏图标触发浮层
 //   （SessionPickerDialog），搜完即走、不丢当前视图。
 // ↑ "experts" is kept for backward compat — it's now an alias of "agents"

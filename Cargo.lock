@@ -3042,6 +3042,7 @@ dependencies = [
  "which 6.0.3",
  "windows 0.58.0",
  "windows-core 0.62.2",
+ "winreg 0.10.1",
  "xcap",
  "zip",
 ]
@@ -3246,6 +3247,7 @@ dependencies = [
  "hermix-telemetry",
  "hermix-tools",
  "hermix-transport",
+ "hermix-vault",
  "hermix-voice",
  "hkdf",
  "http-body-util",
@@ -3374,6 +3376,7 @@ dependencies = [
  "hermix-core",
  "hermix-cua",
  "hermix-plugin",
+ "hermix-vault",
  "image",
  "indexmap 2.14.0",
  "inventory",
@@ -3409,6 +3412,35 @@ dependencies = [
  "serde",
  "serde_json",
  "uuid",
+]
+
+[[package]]
+name = "hermix-vault"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "chrono",
+ "getrandom 0.2.17",
+ "hermix-config",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "uuid",
+ "windows-sys 0.52.0",
+ "zeroize",
+]
+
+[[package]]
+name = "hermix-viewer"
+version = "0.1.0"
+dependencies = [
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

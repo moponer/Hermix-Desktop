@@ -39,6 +39,7 @@ hermix-cua = { workspace = true }
 hermix-task = { workspace = true }
 hermix-automation = { workspace = true }
 hermix-intelligence = { workspace = true }
+hermix-vault = { path = "../hermix-vault" }
 async-trait = { workspace = true }
 tokio = { workspace = true }
 rusqlite = { workspace = true }

@@ -62,6 +62,8 @@ pub mod tool_chain;
 pub mod tts;
 pub mod url_safety;
 pub mod vendor;
+pub mod bbs;
+pub mod vault;
 pub mod workbench_manager;
 pub mod video_gen;
 pub mod voice_mode;

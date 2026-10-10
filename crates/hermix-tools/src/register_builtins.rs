@@ -103,6 +103,24 @@ pub fn register_builtin_tools(
     // them or the agent invents tool names.
     crate::tools::workbench_manager::register(registry);
 
+    // Agent BBS 工具 — bbs_read（Safe）/ bbs_post（Caution，外部可见）。
+    // 服务部署在 relay 同机（/bbs/* 反代）；key 走 env HERMIX_BBS_KEY，
+    // 未配置时工具照常注册（同 homeassistant 先例），执行时如实报缺 key。
+    crate::tools::bbs::register(registry);
+
+    // Vault（凭据保险库）— vault_list / vault_get。打开失败（如 CredMan
+    // 不可用）时跳过注册而不是崩进程：agent 少两个工具，其余照常工作。
+    // 信任边界：工具层不做二次鉴权（RiskLevel::Safe 只读）；手机/IM 通道
+    // 是否放行由通道侧设备配对判定（决策笔记 Consequences 有记）。
+    match hermix_vault::Vault::open() {
+        Ok(vault) => {
+            crate::tools::vault::register(registry, std::sync::Arc::new(vault));
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "vault 不可用，跳过 vault_list/vault_get 注册");
+        }
+    }
+
     tracing::info!("Registered {} built-in tools", registry.list_tools().len());
 
     // 4. Whitelist post-pass. `tools::register_all` registers every
