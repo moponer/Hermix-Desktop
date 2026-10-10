@@ -4,7 +4,7 @@ import {
   Boxes, MoreHorizontal, Loader2, Bot,
   // Popover icons
   Pencil, Pin, Archive, Trash2, FolderOpenDot, Copy, FolderMinus,
-  Settings, PanelLeftClose, Search, LayoutDashboard, FolderSearch, KeyRound,
+  Settings, PanelLeftClose, Search, LayoutDashboard, FolderSearch, KeyRound, TabletSmartphone,
   type LucideIcon,
 } from "lucide-react";
 import { clsx } from "clsx";
@@ -12,6 +12,7 @@ import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
 import { getVersion } from "@tauri-apps/api/app";
 import { ConnectionIndicator } from "./ConnectionIndicator";
+import { type ConfigCategory } from "./SystemConfigPanel";
 import { SessionPickerDialog } from "./SessionPickerDialog";
 import {
   resolveVisibleCount,
@@ -50,7 +51,8 @@ interface SidebarProps {
   onDeleteSession: (id: string) => void;
   /** Create a blank chat with this workspace already selected. */
   onNewChatInWorkspace?: (workspacePath: string) => void;
-  onOpenSettings?: () => void;
+  /** 打开设置页。可指定落点分类（设备入口直达「设备」），缺省由调用方默认页。 */
+  onOpenSettings?: (category?: ConfigCategory) => void;
   /** 折叠左侧栏。这一行是侧栏自身的头部，折叠入口归此最直观。 */
   onCollapseSidebar?: () => void;
   /** 打开会话搜索浮层。搜索是"动作"而非"页面"，所以不占导航位。 */
@@ -434,9 +436,9 @@ export function Sidebar({
             {onOpenSettings && (
               <button
                 type="button"
-                onClick={onOpenSettings}
+                onClick={() => onOpenSettings("devices")}
                 className="icon-btn ml-auto"
-                title="通道管理（设置）"
+                title="设备与连接渠道"
                 aria-label="通道管理"
               >
                 <Settings className="icon-sm" />
@@ -720,13 +722,27 @@ export function Sidebar({
           </span>
           <ConnectionIndicator />
           {onOpenSettings && (
-            <button
-              onClick={(e) => { e.stopPropagation(); onOpenSettings(); }}
-              className="user-card-action"
-              title="设置"
-            >
-              <Settings className="icon-md" />
-            </button>
+            <>
+              {/* 设备管理单独给一个常驻入口。原先只能从设置里翻到「设备」，
+                  而设备页管的是「手机/QQ/企微怎么连进来」——那是每天都要用的
+                  动作，藏在两层设置下面等于没有入口。落在连接指示与设置之间：
+                  语义上就是「连什么」，物理上也紧挨着连接状态。 */}
+              <button
+                onClick={(e) => { e.stopPropagation(); onOpenSettings("devices"); }}
+                className="user-card-action"
+                title="设备与连接渠道"
+                aria-label="设备与连接渠道"
+              >
+                <TabletSmartphone className="icon-md" />
+              </button>
+              <button
+                onClick={(e) => { e.stopPropagation(); onOpenSettings(); }}
+                className="user-card-action"
+                title="设置"
+              >
+                <Settings className="icon-md" />
+              </button>
+            </>
           )}
         </div>
         <UserMenuPopover

@@ -198,23 +198,29 @@
    *
    * 明度阶梯（相邻差 ≥ 3%，同色相下人眼要 ≥3% 才读得出高低）：
    *   100% #FFFFFF  页面 / 对话区
-   *    98% #FAFAFA  卡片
-   *    97% #F7F7F7  侧栏 / 顶栏 / 输入底
-   *    94% #F0F0F0  hover / chip
-   *    93% #EBEBEB  active / 分隔线
+   *    96% #F6F6F6  卡片
+   *    93% #EDEDED  侧栏 / 顶栏 / 输入底
+   *    89% #E4E4E4  hover / chip
+   *    86% #DCDCDC  active / 分隔线
+   *
+   * 2026-10-10 重排：原阶梯是 100 / 98 / 97 / 94 / 93，**每级只差 1~3%**，
+   * 卡片（98%）压在纯白页面上几乎看不出是张卡片，插件 / 技能 / 工具集三个页面
+   * 整片糊成一块。现在每级差 8~9%，与暗色那套（#101113 < #161719 < #1d1f22
+   * < #24262a < #2e3136）的可感知步长对齐。
+   * 约束：**相邻两级差不得小于 6%**，否则层级又会消失。
    * ────────────────────────────────────────────────────────────── */
   --color-bg-app: #ffffff;         /* 案·最外层：窗口底、列间空隙 */
   --color-bg-primary: #ffffff;     /* 纸·对话与主区底 = 最亮 */
-  --color-bg-card: #fafafa;         /* 面·卡片 */
-  --color-bg-base: #f7f7f7;
-  --color-bg-secondary: #f7f7f7;   /* 案·侧栏 / 顶栏 */
-  --color-bg-inset: #f7f7f7;
-  --color-bg-input: #fafafa;
-  --color-bg-card-hover: #f0f0f0;
-  --color-bg-tertiary: #f0f0f0;    /* 案·深一档：分隔区 / chip */
-  --color-bg-hover: #f0f0f0;
-  --color-bg-active: #ebebeb;
-  --color-bg-quaternary: #ebebeb;  /* 案·最深：轨道底 */
+  --color-bg-card: #f6f6f6;         /* 面·卡片 */
+  --color-bg-base: #ededed;
+  --color-bg-secondary: #ededed;   /* 案·侧栏 / 顶栏 */
+  --color-bg-inset: #ededed;
+  --color-bg-input: #f6f6f6;
+  --color-bg-card-hover: #e4e4e4;
+  --color-bg-tertiary: #e4e4e4;    /* 案·深一档：分隔区 / chip */
+  --color-bg-hover: #e4e4e4;
+  --color-bg-active: #dcdcdc;
+  --color-bg-quaternary: #dcdcdc;  /* 案·最深：轨道底 */
   --color-bg-elevated: #ffffff;     /* 浮·弹层 / 菜单 / 悬浮球 */
 
   /* Code / chat 场景面板 */

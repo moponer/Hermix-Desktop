@@ -245,9 +245,13 @@
 @keyframes modal-fade-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes modal-scale-in { from { opacity: 0; transform: scale(0.96) translateY(8px); } to { opacity: 1; transform: scale(1) translateY(0); } }
 
+/* 无描边：浮层靠阴影从背景里抬起来，而不是靠一圈线。浅色下那条 1px 边框
+   尤其碍事——它比内容本身更抢眼，且 `--color-border-primary` 在白底上与
+   卡片同色，等于画了一道看得见的「框的框」。全站规矩：UI 一律不用描边，
+   层次靠底色差 + 阴影 + 间距。 */
 .modal-card {
   background: var(--color-bg-elevated);
-  border: 1px solid var(--color-border-primary);
+  border: 0;
   border-radius: var(--radius-2xl);
   box-shadow: var(--shadow-modal);
   width: 100%;

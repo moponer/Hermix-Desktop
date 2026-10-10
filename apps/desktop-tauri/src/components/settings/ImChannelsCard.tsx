@@ -532,7 +532,12 @@ export function ImChannelsCard({
                 aria-current={on}
                 className={
                   "w-full flex items-center gap-2.5 rounded-lg px-2.5 py-2.5 text-left transition-colors " +
-                  (on ? "bg-bg-card shadow-[0_1px_2px_rgba(0,0,0,0.35)]" : "hover:bg-bg-card-hover")
+                  // 选中态：底色 + 左侧强调条，不加阴影。
+                  // 此前那个 `shadow-[0_1px_2px_rgba(0,0,0,0.35)]` 是任意阴影——
+                  // 暗色下压得还行，浅色下是一圈灰晕（0.35 透明度配白底），把
+                  // 底色差盖掉了，正是「分层不明显」的一部分。元数据里也没有
+                  // 对应的令牌，是当初随手写的。
+                  (on ? "bg-bg-card channel-item--on" : "hover:bg-bg-card-hover")
                 }
               >
                 <span

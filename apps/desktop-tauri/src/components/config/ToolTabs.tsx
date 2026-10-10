@@ -1,5 +1,6 @@
 import { ToolCardIcon } from "./ToolCardIcon";
 import { ToggleSwitch } from "../ToggleSwitch";
+import { MarkdownBody } from "../MarkdownBody";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Search,
@@ -118,7 +119,6 @@ export function PluginsTab({ query, onQuery }: { query: string; onQuery: (q: str
                 enabled={enabled}
                 saving={savingId === plugin.id}
                 disabled={loading}
-                noBorder
                 rightIcon={<ArrowUpRight className="icon-sm" />}
                 onToggle={() => togglePlugin(plugin, !enabled)}
               />
@@ -463,30 +463,53 @@ function SkillContentModal({ skill, catLabel, content, loading, onClose }: {
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal-card modal-card-lg" onClick={(e) => e.stopPropagation()} style={{ maxHeight: "80vh", display: "flex", flexDirection: "column" }}>
-        <div className="modal-header" style={{ flexShrink: 0 }}>
-          <div className="modal-icon modal-icon-info"><Sparkles className="icon-lg" /></div>
+      <div
+        className="modal-card modal-card-lg"
+        onClick={(e) => e.stopPropagation()}
+        style={{ maxHeight: "80vh", display: "flex", flexDirection: "column" }}
+      >
+        {/* 头部自带一层底色，与正文分开 —— 层次靠底色差，不靠描边。
+            标题与描述都限高：此前两者都不限，一段长描述会把整个头撑成十几行、
+            把关闭按钮顶到视线之外（"过长的标题会改变显示"就是这个）。 */}
+        <div
+          className="modal-header"
+          style={{ flexShrink: 0, background: "var(--color-bg-secondary)" }}
+        >
+          {/* 图标与列表卡共用 ToolCardIcon —— 此前这里用的是 .modal-icon-info
+              的灰色块，与卡片里的主色图标对不上，"图标没有颜色"。那个组件存在的
+              全部意义就是让四页图标必然一致，弹窗没走它就又漂了一处。 */}
+          <ToolCardIcon>
+            <Sparkles className="icon-lg" />
+          </ToolCardIcon>
           <div className="modal-title-block">
-            <h3 className="modal-title">{skill.name}</h3>
-            <p className="modal-subtitle">
-              {catLabel(skill.category)}{skill.description ? ` · ${skill.description}` : ""}
+            <h3 className="modal-title truncate" title={skill.display_name || skill.name}>
+              {skill.display_name || skill.name}
+            </h3>
+            <p className="modal-subtitle line-clamp-2">
+              {catLabel(skill.category)}
+              {skill.description ? ` · ${skill.description}` : ""}
             </p>
           </div>
-          <button onClick={onClose} className="modal-close" aria-label="关闭">
+          <button onClick={onClose} className="modal-close shrink-0" aria-label="关闭">
             <X className="icon-lg" />
           </button>
         </div>
-        <div style={{ flex: 1, overflow: "auto", padding: "12px 16px" }}>
+        {/* 正文走 MarkdownBody：SKILL.md 本来就是 markdown，用 <pre> 平铺等于
+            把标题层级、有序列表、行内代码全部抹平——「界面没有层次」的一半在
+            这里，另一半在头部那层底色。 */}
+        <div className="flex-1 overflow-auto bg-bg-elevated px-5 py-4">
           {loading ? (
-            <div className="text-xs text-text-muted animate-pulse">加载中…</div>
+            <div className="text-[length:var(--text-meta)] text-text-muted animate-pulse">
+              加载中…
+            </div>
           ) : content ? (
-            <pre className="text-xs text-text-secondary leading-relaxed whitespace-pre-wrap">
-              {content}
-            </pre>
+            <MarkdownBody content={content} />
           ) : (
-            <div className="text-xs text-text-muted">
+            <div className="text-[length:var(--text-meta)] text-text-muted">
               <p>无法加载技能内容</p>
-              <p className="mt-2 opacity-60">存放路径：~/.hermix/skills/{skill.category}/{skill.name}/SKILL.md</p>
+              <p className="mt-2 opacity-60 break-all">
+                存放路径：~/.hermix/skills/{skill.category}/{skill.name}/SKILL.md
+              </p>
             </div>
           )}
         </div>
@@ -1322,7 +1345,6 @@ function PluginCard({
   saving,
   disabled,
   highlight = false,
-  noBorder = false,
   /** 右侧装饰图标（开关按钮之前）。默认无。 */
   rightIcon,
   onToggle,
@@ -1335,7 +1357,6 @@ function PluginCard({
   saving: boolean;
   disabled: boolean;
   highlight?: boolean;
-  noBorder?: boolean;
   rightIcon?: React.ReactNode;
   onToggle: () => void;
 }) {
@@ -1343,14 +1364,15 @@ function PluginCard({
   // 夜墨则是 #1d1f22 压在 #171717 上）。描边在这种底色上只会画出一排灰线。
   // 状态不再叠「已启用/已停用」文字——开关本身已是状态，重复只会更吵；
   // 完整说明留在 ToggleSwitch 的 title/aria-label 里。
+  //
+  // 此前这里有一个 `noBorder` 分支走 `bg-bg-card/40`，全项目只有插件页一处调用。
+  // 那是把**背景调淡**而不是去描边：`#f6f6f6` 按 40% 压在白底上只剩 `#fbfbfb`，
+  // 卡片等于不存在——令牌怎么调都救不回来，也就是为什么唯独插件页调色阶毫无
+  // 反应。已删除该 prop，插件卡片与其余所有卡片走同一条实色分支。
   return (
     <div
       className={`h-enter group flex items-center gap-3 px-3 py-2.5 rounded-xl transition-colors ${
-        highlight
-          ? "bg-accent-soft/20"
-          : noBorder
-            ? "bg-bg-card/40 hover:bg-bg-card/70"
-            : "bg-bg-card hover:bg-bg-card-hover"
+        highlight ? "bg-accent-soft/20" : "bg-bg-card hover:bg-bg-card-hover"
       }`}
     >
       <ToolCardIcon>

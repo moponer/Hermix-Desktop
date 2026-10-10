@@ -331,15 +331,17 @@
   color: var(--color-text-muted);
   background: transparent;
   border: 0;
-  border-right: 1px solid var(--color-border-subtle);
   cursor: pointer;
   transition: background var(--duration-fast) ease, color var(--duration-fast) ease;
   border-radius: 0;
 }
-.titlebar-btn:last-child { border-right: 0; }
+/* 无描边：原先每个按钮一条 border-right 分隔，四个框把右上角切成一排格子，
+   在浅色下尤其像「贴上去的四个按钮」而不是窗口控件的一部分。层次交给 hover
+   底色——和全站「UI 一律不用描边」一致。 */
 .titlebar-btn:focus-visible {
   outline: 0;
-  box-shadow: inset 0 0 0 2px var(--color-accent);
+  background: var(--color-bg-active);
+  color: var(--color-text-primary);
 }
 .titlebar-btn:hover { background: var(--color-bg-hover); color: var(--color-text-secondary); }
 .titlebar-btn-danger:hover { background: var(--color-error); color: #ffffff; }
@@ -442,6 +444,14 @@
 }
 .nav-item-active:hover { background: var(--color-bg-hover); }
 .nav-item svg { flex-shrink: 0; }
+
+/* 渠道选中态（ImChannelsCard 左栏）：底色 + 左缘强调条。
+   与 .nav-item-active 同属「选中怎么表达」的同一族决策——本组件头部已声明
+   层次靠底色差 + 左缘强调条承担。此前这里用的是任意阴影，暗色下压得住、
+   浅色下是一圈灰晕，把底色差盖掉了。 */
+.channel-item--on {
+  box-shadow: inset 2px 0 0 var(--color-accent);
+}
 
 /* ════════════════════════════════════════════════════════════════════
    § 5.  SECTION HEADER (collapsible group label)
