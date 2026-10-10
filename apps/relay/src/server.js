@@ -141,6 +141,17 @@ function createRelay({ dbPath }) {
       return res.status(403).json({ error: '只有 node 凭据能签发手机凭据' });
     }
     const label = typeof req.body?.label === 'string' ? req.body.label.slice(0, 64) : '';
+    // N:1：签发口也必须拦。只在握手处拦不够——凭据已经发出去、对方拿着它
+    // 反复重连，每次都被拒，桌面端却还在正常出码，排查起来极难定位。真正的
+    // 拦截点是「这台电脑现在是否已经有一台手机连着」。
+    const bound = router.phoneHolder(router.slot(who.nodeId));
+    if (bound !== null) {
+      audit.write('issue-phone', who.nodeId, 'node', 'phone_issue_rejected');
+      return res.status(409).json({
+        error: '这台电脑已经连着一台手机了。换手机请先在桌面端「设备管理」里撤销原设备，再重新扫码。',
+        code: 'desktop_already_paired',
+      });
+    }
     try {
       const issued = registry.register({ nodeId: who.nodeId, label, role: 'phone' });
       audit.write('issue-phone', who.nodeId, 'node', 'phone_issued');
@@ -448,7 +459,20 @@ function createRelay({ dbPath }) {
       }
       ws.sendRaw(buildEnvelope(TAG.ACK, { node_id: nodeId, detail: 'node_registered' }));
     } else {
-      router.attachPhone(nodeId, tokenHash, ws);
+      const outcome = router.attachPhone(nodeId, tokenHash, ws);
+      if (outcome === 'conflict') {
+        // 这台电脑已经连着**另一台**手机了：明确拒绝，并说清要先去桌面端撤销。
+        // 放行等于一台电脑的会话内容同时流向任意多台手机——N:1 的全部意义就在
+        // 这道门上（详见 router.attachPhone）。
+        ws.sendRaw(
+          buildEnvelope(TAG.CLOSE, {
+            node_id: nodeId,
+            detail: 'desktop_already_paired_with_another_phone',
+          }),
+        );
+        ws.close(4009, 'this desktop is already connected to another phone');
+        return;
+      }
       ws.sendRaw(buildEnvelope(TAG.ACK, { node_id: nodeId, detail: 'phone_registered' }));
     }
 

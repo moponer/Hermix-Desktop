@@ -582,9 +582,17 @@ pub(crate) async fn issue_phone_credential(base: &str, node_token: &str) -> Resu
     let status = resp.status();
     let body = resp.text().await.unwrap_or_default();
     if !status.is_success() {
-        // relay 的错误原文要带出来：「凭据无效」和「只有 node 凭据能签发」
-        // 是两个完全不同的问题，混成一句「签发失败」等于把排查难度翻倍。
-        return Err(format!("relay 拒绝签发（HTTP {}）：{body}", status.as_u16()));
+        // relay 的错误原文要带出来：「凭据无效」「只有 node 凭据能签发」
+        // 「这台电脑已经连着一台手机」是完全不同的三个问题，混成一句
+        // 「签发失败」等于把排查难度翻倍。
+        //
+        // relay 回的是 JSON，取其中的 `error` 字段而不是整段 body——整段 body
+        // 直接甩到界面上就是一坨带转义的 JSON，而用户要读的是那句话。
+        let msg = serde_json::from_str::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_owned))
+            .unwrap_or_else(|| body.clone());
+        return Err(format!("relay 拒绝签发（HTTP {}）：{msg}", status.as_u16()));
     }
 
     match serde_json::from_str::<IssuedPhoneCredential>(&body) {

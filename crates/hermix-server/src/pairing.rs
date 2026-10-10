@@ -842,9 +842,12 @@ pub async fn create_pairing_session(
         (s.url.clone(), s.token().to_string())
     };
     if relay_url.trim().is_empty() {
+        // 地址现在有内置默认（relay_settings::DEFAULT_RELAY_URL），能走到这里
+        // 只剩一种情况：relay.json 读坏了。旧文案让用户去「连接渠道里填好
+        // relay」——那个输入框已经不存在了，照着做只会更困惑。
         return (
             StatusCode::PRECONDITION_FAILED,
-            "还没配置 relay 地址。配对与手机连接都经中转，请先在「设置 → 连接渠道」里填好 relay。",
+            "中转配置读不出来（多半是 relay.json 损坏）。请检查配置，或在「设置 → 连接渠道 → 手机端 → 高级」里重新保存一次。",
         )
             .into_response();
     }

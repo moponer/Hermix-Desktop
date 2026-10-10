@@ -15,13 +15,14 @@
  *   （签名覆盖 `METHOD\npath`，改了就全废）；
  * - 不校验 hermix 侧授权（那是链路另一端的事）。
  *
- * 手机 → 电脑是 1:1 转发；同一 node 名下多台手机时，每条手机连接只与
- * 「它自己与该 node 之间」的配对绑定——多台手机的消息**不会**互相可见。
+ * 手机 → 电脑是 1:1 转发。**一台桌面同时只允许一台手机接入**（见
+ * `attachPhone`）：手机端可以管多台桌面，但每台桌面的出站帧只流向当前那**一台**
+ * 手机连接。换手机必须先在桌面端撤销，否则那条旧连接会一直收着这台电脑的广播。
  */
 
 const { TAG, buildEnvelope } = require('./proto');
 
-/** 一个 node 名下：一条电脑连接 + 多条手机连接。 */
+/** 一个 node 名下：一条电脑连接 + **至多一条**手机连接（N:1，见 attachPhone）。 */
 class NodeSlot {
   constructor(nodeId) {
     this.nodeId = nodeId;
@@ -29,7 +30,11 @@ class NodeSlot {
     this.nodeConn = null;
     /** 电脑侧连接的凭据哈希。**没有它就没法判断"来顶号的是不是同一个人"**。 */
     this.nodeHash = null;
-    /** @type {Map<string, object>} 手机连接：key = 手机 token 哈希 */
+    /**
+     * 手机连接：key = 手机 token 哈希。
+     * N:1 之后**至多一条**——用 Map 而不是裸字段，是为了让 `dropPhone`、
+     * `detach` 这两处按凭据定位的既有逻辑不用改。
+     */
     this.phoneConns = new Map();
   }
 
@@ -112,13 +117,48 @@ class Router {
     return n;
   }
 
-  /** 手机侧接入。同一 token 重连顶掉旧连接。 */
+  /**
+   * 手机侧接入。
+   *
+   * ## 一台电脑同时只能被一台手机连着（N:1）
+   *
+   * 手机端可以管多台桌面（家里/公司），但反过来：**每台桌面同时只允许一台手机
+   * 接入**。别的手机要连，得先在桌面端把原来那台撤销掉。
+   *
+   * 为什么必须约束：电脑的出站帧是按 `node_id` 广播给该 node 名下**所有**手机
+   * 连接的（`nodeToPhones`）。不约束就等于一台电脑的会话内容同时流向任意多台
+   * 手机——只要其中一条凭据泄露，那台电脑就同时暴露给所有持有者。
+   *
+   * 拒绝而不是顶替，理由与 `attachNode` 的 conflict 完全一致：静默踢掉受害者
+   * 等于让凭据泄露者直接接管那台电脑。顶替会把「先撤销」这个显式动作抹掉。
+   *
+   * 同一 token 的重连照旧放行——那是手机自己的断线重连，不是换人。
+   *
+   * @returns {'attached'|'replaced'|'conflict'}
+   */
   attachPhone(nodeId, tokenHash, conn) {
     const s = this.slot(nodeId);
-    const replaced = s.phoneConns.has(tokenHash);
+    // 占着这个槽的若是**别的**凭据，就是第二台手机来抢：拒绝。
+    const holder = this.phoneHolder(s);
+    if (holder !== null && holder !== tokenHash) {
+      this.audit.write('route', nodeId, 'phone', 'phone_second_bind_rejected');
+      return 'conflict';
+    }
+    const replaced = holder === tokenHash;
     s.phoneConns.set(tokenHash, conn);
     this.audit.write('route', nodeId, 'phone', replaced ? 'phone_replaced' : 'phone_attached');
-    return replaced;
+    return replaced ? 'replaced' : 'attached';
+  }
+
+  /**
+   * 该 node 当前占槽的手机凭据哈希；没有手机接入时为 null。
+   *
+   * N:1 之后 `phoneConns` 最多一条，但**遍历取值而不是直接读某个键**——这样
+   * 「单槽」这条不变量一旦被写坏，这里立刻暴露，而不是悄悄按 Map 语义跑下去。
+   */
+  phoneHolder(s) {
+    for (const hash of s.phoneConns.keys()) return hash;
+    return null;
   }
 
   detach(conn) {

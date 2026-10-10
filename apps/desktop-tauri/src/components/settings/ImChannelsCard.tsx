@@ -236,8 +236,11 @@ export function ImChannelsCard() {
   const [relayBusy, setRelayBusy] = useState(false);
   /** 「高级」折叠区默认收起：中转地址是自建服务才要动的东西，不该占主视图。 */
   const [relayAdvOpen, setRelayAdvOpen] = useState(false);
-  // 「加一台手机」与其手动签发口已于 2026-10-10 移除：一机一机，手机凭据由配对码
-  // 当场签发。签发接口 `/api/relay/phone-credential` 仍在后端，供脚本/排障使用。
+  // 「加一台手机」与其手动签发口已于 2026-10-10 移除。理由不是「一机一机」，
+  // 真实模型是 **N:1**：一台手机可以连多台桌面（家里/公司），但**每台桌面同时
+  // 只能被一台手机连着**——所以在这台桌面上再签发一条手机凭据，等于给同一台
+  // 电脑开第二个入口，与该模型直接冲突。手机凭据只由配对码当场签发。
+  // 签发接口 `/api/relay/phone-credential` 仍在后端，供脚本/排障使用。
 
   const refreshRelay = useCallback(async () => {
     try {
@@ -578,24 +581,23 @@ export function ImChannelsCard() {
                 </div>
 
               {qrError ? (
-                <div className="flex items-start gap-2 text-[length:var(--text-meta)] text-text-secondary">
-                  <AlertTriangle className="icon-md mt-0.5 shrink-0" />
-                  <div>
-                    生成配对码失败：<span className="font-mono">{qrError}</span>
-                    <div className="mt-1 text-text-muted">
-                      出码需要本机已接入下方的中转连接（出码时要当场向 relay
-                      签发手机凭据）；未连上时先完成中转配置再重试。
+                  <div className="rounded-lg bg-warning-soft px-4 py-3 space-y-2">
+                    <div className="flex items-start gap-2 text-[length:var(--text-ui)] text-text-primary">
+                      <AlertTriangle className="icon-md mt-0.5 shrink-0 text-warning" />
+                      <span className="min-w-0 flex-1 break-all">{qrError}</span>
                     </div>
+                    {/* 不再指向「去下方填 relay 地址」——地址已有内置默认，那个输入框
+                        也不在主视图里。出码失败的真实原因就写在那句话里（未接中转 /
+                        缺电脑侧凭据 / 这台电脑已经连着一台手机），照着做即可。 */}
+                    <ActionBtn
+                      onClick={() => void generateQr()}
+                      icon={<RefreshCw className="icon-sm" />}
+                      title="重新尝试"
+                    >
+                      重试
+                    </ActionBtn>
                   </div>
-                  <ActionBtn
-                    onClick={() => void generateQr()}
-                    className="ml-auto"
-                    icon={<RefreshCw className="icon-sm" />}
-                  >
-                    重试
-                  </ActionBtn>
-                </div>
-              ) : qr ? (
+                ) : qr ? (
                 <div className="flex items-start gap-5 flex-wrap rounded-lg bg-bg-secondary p-4">
                   <div
                     className="shrink-0 rounded-lg bg-white p-2 [&>svg]:block"

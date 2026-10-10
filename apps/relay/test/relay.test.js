@@ -331,16 +331,40 @@ test('router: 没有电脑在线时如实报告，不静默丢弃', () => {
   assert.strictEqual(r.phoneToNode('pc-B', 'h', { tag: 'route' }), 'no_node');
 });
 
-test('router: 电脑 → 多台手机全部投递（不负载均衡）', () => {
+test('router: 电脑 → 当前那台手机投递（N:1）', () => {
+  const r = new Router({ audit: { write: () => {} } });
+  r.attachNode('pc-C', 'hash-node-C', fakeConn());
+  const p1 = fakeConn();
+  r.attachPhone('pc-C', 'h1', p1);
+  assert.strictEqual(r.nodeToPhones('pc-C', { tag: 'route', payload: sealedPayload('x') }), 1);
+  assert.strictEqual(p1.sent.length, 1);
+});
+
+test('router: 第二台手机被拒（每台桌面同时只能被一台手机连着）', () => {
+  // N:1 的核心断言。手机端可以管多台桌面，但**每台桌面同时只允许一台手机**
+  // 接入——不约束就等于一台电脑的会话内容同时流向任意多台手机。
   const r = new Router({ audit: { write: () => {} } });
   r.attachNode('pc-C', 'hash-node-C', fakeConn());
   const p1 = fakeConn();
   const p2 = fakeConn();
-  r.attachPhone('pc-C', 'h1', p1);
-  r.attachPhone('pc-C', 'h2', p2);
-  assert.strictEqual(r.nodeToPhones('pc-C', { tag: 'route', payload: sealedPayload('x') }), 2);
-  assert.strictEqual(p1.sent.length, 1);
-  assert.strictEqual(p2.sent.length, 1, '审批卡不能只出现在"某台"手机上');
+  assert.strictEqual(r.attachPhone('pc-C', 'h1', p1), 'attached');
+  assert.strictEqual(r.attachPhone('pc-C', 'h2', p2), 'conflict', '第二台手机必须被拒');
+  assert.strictEqual(
+    r.nodeToPhones('pc-C', { tag: 'route', payload: sealedPayload('x') }),
+    1,
+    '被拒的那台不得收到任何东西',
+  );
+  assert.strictEqual(p1.sent.length, 1, '原手机正常收');
+  assert.strictEqual(p2.sent.length, 0);
+});
+
+test('router: 同一凭据重连可以顶掉自己的旧连接（断线重连不是换人）', () => {
+  const r = new Router({ audit: { write: () => {} } });
+  const first = fakeConn();
+  r.attachPhone('pc-H', 'hash-self', first);
+  const second = fakeConn();
+  assert.strictEqual(r.attachPhone('pc-H', 'hash-self', second), 'replaced');
+  assert.strictEqual(r.slots.get('pc-H').phoneConns.get('hash-self'), second);
 });
 
 test('router: 不同 node 的手机互不可见', () => {
@@ -394,20 +418,22 @@ test('router: 同一凭据重连可以顶掉自己的旧连接', () => {
   assert.strictEqual(r.slots.get('pc-F').nodeConn, second, '出站重连必须能接管');
 });
 
-test('router: dropPhone 断开指定手机且不影响别的', () => {
+test('router: dropPhone 断连后空出的槽可以给新手机用', () => {
   const r = new Router({ audit: { write: () => {} } });
   const closed = [];
   const p1 = { ...fakeConn(), close: (code, why) => closed.push([code, why]) };
-  const p2 = fakeConn();
   r.attachNode('pc-G', 'hash-g', fakeConn());
   r.attachPhone('pc-G', 'hash-p1', p1);
-  r.attachPhone('pc-G', 'hash-p2', p2);
 
   assert.strictEqual(r.dropPhone('hash-p1'), 1);
   assert.strictEqual(closed.length, 1, '撤销必须**立刻断连**，否则它还在收广播');
-  assert.strictEqual(p2.sent.length, 0);
-  assert.strictEqual(r.slots.get('pc-G').phoneConns.size, 1, '另一台手机不受影响');
   assert.strictEqual(r.dropPhone('hash-p1'), 0, '重复撤销幂等');
+
+  // 换手机的完整路径：先撤销 → 槽空出来 → 新手机才接得上。
+  const p2 = fakeConn();
+  assert.strictEqual(r.attachPhone('pc-G', 'hash-p2', p2), 'attached');
+  r.nodeToPhones('pc-G', { tag: 'route', payload: sealedPayload('after') });
+  assert.strictEqual(p2.sent.length, 1, '新手机接管后开始收这台电脑的帧');
 });
 
 // --------------------------------------------------------- 端到端（真 WS）
