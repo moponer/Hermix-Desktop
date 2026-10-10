@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { RefreshCw, Smartphone, Trash2, AlertTriangle } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AlertTriangle, Building2, MessageCircle, RefreshCw, Smartphone, Trash2 } from "lucide-react";
 import { fetchJSON } from "../../api/rest";
 import { toastError, toastSuccess } from "../../hooks/useToast";
-import { ImChannelsCard } from "./ImChannelsCard";
+import { ImChannelsCard, type ChannelId } from "./ImChannelsCard";
 
 /** `GET /api/pairing/devices` 的行（pairing.rs::PairedDevice）。 */
 interface PairedDevice {
@@ -13,6 +13,46 @@ interface PairedDevice {
   last_seen_at: number | null;
   revoked_at: number | null;
 }
+
+/**
+ * 这一行设备属于哪个渠道。
+ *
+ * 设备表是**跨渠道一张表**：IM 账号与配对手机共用 `paired_devices`（见
+ * `channels/session.rs` 里 `qq:<openid>` 的写法），但**呈现**必须按选中渠道切分
+ * ——在企业微信下面看到 QQ 的设备和撤销按钮是串台，撤销还容易点错人。
+ *
+ * 判据用名字形态而非加字段：`^(qq|wecom):` 前缀是 IM 账号（由 channels 侧写入），
+ * 其余是走扫码配对进来的手机（名字由手机自报）。
+ */
+function channelOf(deviceName: string): ChannelId {
+  const m = /^(qq|wecom):/.exec(deviceName);
+  if (m) return m[1] as ChannelId;
+  return "mobile";
+}
+
+/** 列表标题跟着选中渠道走——固定写「已配对设备」会让人以为看到的是全局表。 */
+const CHANNEL_TITLES: Record<ChannelId, string> = {
+  qq: "QQ 已连接的账号",
+  wecom: "企业微信已连接的账号",
+  mobile: "手机端已连接的设备",
+};
+
+/**
+ * 行首图标跟渠道走。此前一律用手机图标，于是 QQ 账号前面摆着一部手机——
+ * 列表已经按渠道切分之后，这个图标不再需要「说明这是不是 IM」，只需要对得上
+ * 上面左栏选中的那个渠道。
+ */
+const CHANNEL_ICONS: Record<ChannelId, typeof Smartphone> = {
+  qq: MessageCircle,
+  wecom: Building2,
+  mobile: Smartphone,
+};
+
+const CHANNEL_EMPTY: Record<ChannelId, string> = {
+  qq: "还没有 QQ 账号连进来。在上面完成绑定即可。",
+  wecom: "还没有企业微信账号连进来。在上面完成绑定即可。",
+  mobile: "还没有手机连进来。在上面生成配对码，用手机扫一次即可。",
+};
 
 /**
  * `DELETE /api/pairing/devices/{id}` 的返回。
@@ -40,15 +80,15 @@ function formatUnixSec(sec: number | null): string {
  *
  * 分两块，职责不重叠：
  * - 上：**连接渠道**（ImChannelsCard）—— 三个渠道怎么接进来，左栏选、右栏配。
- * - 下：**已配对设备**—— 已经接过来了的是谁。这份列表是**跨渠道**的
- *   （IM 账号形如 `qq:<openid>` 也在这张表里），所以它是全局表而不是某个
- *   渠道的附属，放在主从布局之外。
+ * - 下：**该渠道已连接的设备**—— 已经接过来了的是谁。
  *
- * 配对二维码原先在本文件里，和「手机端」这个渠道割裂着放；2026-10-09 随
- * 渠道改主从布局一起挪进了 ImChannelsCard —— 选到「手机端」才生成，不选
- * 不做这份无用功。
+ * 「已连接」列表**跟着左栏选中的渠道走**（2026-10-10 改）。此前它是一张跨渠道的
+ * 全局表：选中企业微信时，底下照样列着 QQ 的设备和撤销按钮——既串台，撤销也容易
+ * 点错人。设备表本身仍是一张跨渠道的表（IM 账号与配对手机共用 `paired_devices`），
+ * 变的只是**呈现**：按 `channelOf()` 切分。
  */
 export function DevicesTab() {
+  const [active, setActive] = useState<ChannelId>("qq");
   const [devices, setDevices] = useState<PairedDevice[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -113,24 +153,26 @@ export function DevicesTab() {
     [refreshDevices],
   );
 
-  const activeDevices = devices?.filter((d) => !d.revoked_at) ?? [];
-  const revokedDevices = devices?.filter((d) => d.revoked_at) ?? [];
+  // 只呈现当前选中渠道的设备。见 channelOf() 的注释。
+  const scoped = useMemo(
+    () => (devices ?? []).filter((d) => channelOf(d.device_name) === active),
+    [devices, active],
+  );
+  const activeDevices = scoped.filter((d) => !d.revoked_at);
+  const revokedDevices = scoped.filter((d) => d.revoked_at);
 
-  /** IM 账号在设备表里的名字形如 `qq:<openid>` / `wecom:<userid>`（见 channels/session.rs）。 */
-  const imLabel = (name: string): string | null => {
-    const m = /^(qq|wecom):(.+)$/.exec(name);
-    if (!m) return null;
-    return m[1] === "qq" ? "QQ" : "企业微信";
-  };
+  const ChannelIcon = CHANNEL_ICONS[active];
 
   return (
     <div className="space-y-6">
-      <ImChannelsCard />
+      <ImChannelsCard active={active} onActiveChange={setActive} />
 
-      {/* 已配对设备 —— 跨渠道的全局表 */}
+      {/* 当前渠道已连接的设备 */}
       <div className="rounded-xl bg-bg-card overflow-hidden">
         <div className="flex items-center justify-between px-4 py-3 bg-bg-secondary">
-          <span className="text-[length:var(--text-ui)] font-medium text-text-primary">已配对设备</span>
+          <span className="text-[length:var(--text-ui)] font-medium text-text-primary">
+            {CHANNEL_TITLES[active]}
+          </span>
           <button
             onClick={() => void refreshDevices()}
             className="h-7 px-2.5 rounded-md flex items-center gap-1 text-[length:var(--text-meta)] text-text-secondary hover:text-text-primary hover:bg-bg-card-hover transition-colors"
@@ -150,7 +192,7 @@ export function DevicesTab() {
           <div className="px-4 py-3 text-[length:var(--text-meta)] text-text-muted">正在读取…</div>
         ) : activeDevices.length === 0 ? (
           <div className="px-4 py-3 text-[length:var(--text-meta)] text-text-muted">
-            暂无已配对设备。在上面选一个渠道完成绑定或扫码即可。
+            {CHANNEL_EMPTY[active]}
           </div>
         ) : (
           <ul className="p-2 space-y-1">
@@ -159,15 +201,10 @@ export function DevicesTab() {
                 key={d.device_id}
                 className="px-3 py-3 flex items-center gap-3 flex-wrap rounded-lg bg-bg-secondary hover:bg-bg-card-hover transition-colors"
               >
-                <Smartphone className="icon-md text-text-muted shrink-0" />
+                <ChannelIcon className="icon-md text-text-muted shrink-0" />
                 <div className="min-w-0 flex-1">
-                  <div className="text-[length:var(--text-ui)] text-text-primary font-medium truncate flex items-center gap-2">
+                  <div className="text-[length:var(--text-ui)] text-text-primary font-medium truncate">
                     {d.device_name}
-                    {imLabel(d.device_name) && (
-                      <span className="text-[length:var(--text-meta)] font-normal text-text-muted shrink-0">
-                        IM · {imLabel(d.device_name)}
-                      </span>
-                    )}
                   </div>
                   <div className="text-[length:var(--text-meta)] text-text-muted">
                     <span className="font-mono">{d.device_id}</span>

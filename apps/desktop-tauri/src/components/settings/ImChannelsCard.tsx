@@ -62,7 +62,7 @@ interface QrPayload {
   pairing_url: string;
 }
 
-type ChannelId = "qq" | "wecom" | "mobile";
+export type ChannelId = "qq" | "wecom" | "mobile";
 
 interface ChannelDef {
   id: ChannelId;
@@ -202,8 +202,18 @@ function ActionBtn({
  * 全站与手机端统一：卡片用 `bg-bg-card`，控件用 `bg-bg-tertiary`，选中态用
  * 底色差 + 左缘强调条，浮起用阴影。本组件内**没有任何 border**。
  */
-export function ImChannelsCard() {
-  const [active, setActive] = useState<ChannelId>("qq");
+/**
+ * 当前选中渠道由父级（`DevicesTab`）持有：下方的「已配对设备」列表要按选中
+ * 渠道过滤——在企业微信下面看到 QQ 的设备与撤销按钮是串台，撤销也容易点错人。
+ */
+export function ImChannelsCard({
+  active,
+  onActiveChange,
+}: {
+  active: ChannelId;
+  onActiveChange: (id: ChannelId) => void;
+}) {
+  const setActive = onActiveChange;
   const [status, setStatus] = useState<BindStatusItem[] | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
   /** 网关是否真连上了。凭据在 ≠ 通道活着 —— 「机器人不回消息」多半卡在这里。 */
