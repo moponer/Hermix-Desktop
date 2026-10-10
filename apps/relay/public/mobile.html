@@ -34,7 +34,7 @@
 
 <div class="sec">
   <h2>界面</h2>
-  <p class="lead">五个界面，每个只做一件事。</p>
+  <p class="lead">每个界面只做一件事。</p>
   <div class="list">
     <div class="it"><b>对话</b>长按说话。不做「说完自动发」——发出去之前你总看得到内容</div>
     <div class="it"><b>审批</b>只有允许 / 拒绝两键，没有「永久允许」这种省事的口子</div>
@@ -54,18 +54,26 @@
 <div class="sec" id="download">
   <h2>下载</h2>
   <p class="lead">Android。需要先有一台已安装 Hermix Desktop 的电脑并完成配对。</p>
-  <div class="dlbar">
-    <div class="ver" data-ver="apk.version">—</div>
-    <div class="info">
-      <span data-ver-hide="apk.date"><span data-ver="apk.date"></span> · </span>
-      <span data-ver-hide="apk.size">大小 <span data-ver="apk.size"></span> · </span>
-      SHA-256 <span class="mono" data-ver="apk.shaShort">—</span>
+  <div class="dlgrid">
+    <div class="dlqr">
+      <div id="apk-qr" class="qrbox" aria-label="APK 下载二维码"></div>
+      <div class="qrcap">手机相机扫码，直接下载 APK</div>
     </div>
-    <div class="go2">
-      <a class="btn sm" data-ver-href="apk.url" href="download/hermix.apk">下载 APK</a>
+    <div class="dlmeta">
+      <div class="dlbar">
+        <div class="ver" data-ver="apk.version">—</div>
+        <div class="info">
+          <span data-ver-hide="apk.date"><span data-ver="apk.date"></span> · </span>
+          <span data-ver-hide="apk.size">大小 <span data-ver="apk.size"></span> · </span>
+          SHA-256 <span class="mono" data-ver="apk.shaShort">—</span>
+        </div>
+        <div class="go2">
+          <a class="btn sm" data-ver-href="apk.url" href="download/hermix.apk">下载 APK</a>
+        </div>
+      </div>
+      <p class="dlhint">APK 还没上传到发布目录时，二维码不显示、按钮变灰——不给假链接。</p>
     </div>
   </div>
-  <p style="margin-top:16px;font-size:13px;color:var(--fg3)">APK 还没上传到发布目录时，这里显示「未上传」，下载按钮不给假链接。</p>
 </div>
 
 <div class="sec">
@@ -80,13 +88,27 @@
 <footer class="ft" data-footer></footer>
 
 <script src="assets/site.js"></script>
+<script src="assets/qrcode.min.js"></script>
 <script>
   HERMIX.boot('mobile');
-  // APK 未上传时把按钮换成不可点状态，不给假链接。
+  // 二维码：apk 可用时用**绝对 URL** 生成（手机扫码要能直接解析到公网地址，
+  // 相对路径扫出来打不开）；未上传时空态 + 按钮变灰，不给假链接。
   document.addEventListener('hermix:versions', function (e) {
-    if (e.detail['apk.ok']) return;
+    var d = e.detail;
     var a = document.querySelector('[data-ver-href="apk.url"]');
-    if (a) { a.classList.add('off'); a.removeAttribute('href'); a.textContent = '暂不可下载'; }
+    var box = document.getElementById('apk-qr');
+    var cap = document.querySelector('.qrcap');
+    if (d['apk.ok'] && box && window.qrcode) {
+      var abs = new URL(d['apk.url'], location.href).href;
+      var qr = qrcode(0, 'M');
+      qr.addData(abs);
+      qr.make();
+      box.innerHTML = qr.createSvgTag({ cellSize: 4, margin: 0, scalable: true });
+    } else {
+      if (a) { a.classList.add('off'); a.removeAttribute('href'); a.textContent = '暂不可下载'; }
+      if (box) { box.classList.add('off'); box.textContent = 'APK 未上传'; }
+      if (cap) cap.textContent = '上传后这里显示下载二维码';
+    }
   });
 </script>
 </body>

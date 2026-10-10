@@ -13,7 +13,7 @@
 
 <div class="hero">
   <h1>双击就开的 Windows 助手，老机器也跑得动</h1>
-  <p class="sub">25 个 Rust crate 做后端，React 19 + Tauri v2 做界面，打成一个便携 exe，不用装。会话、工具结果、任务记录都落在你机器上的 SQLite 里；后端用 axum 在 127.0.0.1:3000 开 HTTP/WebSocket，界面和你自己写的脚本调的是同一套接口。</p>
+  <p class="sub">25 个 Rust crate 做后端，React 19 + Tauri v2 做界面，打成一个便携 exe，不用装。会话、工具结果、任务记录都落在你机器上的 SQLite 里；界面与本地服务经 stdio 直连——不开监听端口，外部进程碰不到。</p>
   <div class="acts">
     <a class="btn" href="desktop.html#download">下载</a>
     <a class="btn ghost" href="docs.html">使用文档</a>
