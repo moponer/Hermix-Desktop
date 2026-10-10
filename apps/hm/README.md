@@ -30,17 +30,33 @@ npx tsx --test test/signature.conformance.test.ts  # 签名跨语言契约
 > 按文档实现客户端的人做出的签名一律被拒（现象是"配对成功但全部 401"），
 > 而且那个构造是**长度扩展攻击**的标准靶子。已改为真 HMAC-SHA256。
 
-## 五个界面
+## 界面
 
 | | 位置 | 关键取舍 |
 |---|---|---|
-| 配对 | `pages/pairing` | 指纹核对在**输码之前**；时钟偏差当场报 |
+| 启动 | `pages/boot` | 首屏；**无条件进主界面**，未配对时主界面是一张「还没有连接电脑」卡片，不是拦截层 |
+| 配对 | `pages/pairing` | 扫码经 relay（唯一路径）：码里带 relay 地址 + 配对码 + 手机凭据 + PC 公钥；不要求同网 |
 | 对话 | `pages/chat` | 长按说话（不做"说完自动发"） |
 | 审批 | `pages/approval` | **只有两键**，没有"永久允许" |
 | 任务 | `pages/tasks` | 每个排队项都标位次；不主动推送 |
 | 通话 | `pages/call` | 第五个**模式**；所有审批要视觉确认 |
+| 设置 | `pages/settings` | 凭据与中转地址管理 |
 
 三条"刻意不做"写在各页注释里，别当成没做完的补回去。
+
+## 配对：唯一路径 = 扫码经 relay（2026-10-10 拍板）
+
+手机扫桌面端二维码 → 码里带 relay 地址 + 6 位配对码 + 当场签发的手机凭据
+（`hrel_*`）+ PC 公钥 → 用凭据连 relay（`wss://<relay>/relay/phone`）→ 发
+**密封配对帧**（E2EE）→ 电脑判码 → 密封回长期 `device_token`。全程不要求
+同网、没有证书指纹、电脑不开任何入站端口；relay 只透传密文。
+
+旧「局域网直连」流程已退役：`core/direct.ts` 现在就是 relay 配对的实现
+（`parsePairingUrl` 解析 `c/t/k`，`pairOverRelay` 走密封帧往返），
+`pages/pairing` 只有扫码一条入口（无粘贴框、无手输码）。
+
+出网口唯一：`core/http.ts`（`uni.request` + 显式超时 + 永不 reject）；
+致命错误统一落到 `core/boot.ts`。
 
 ## 未决项（不是已解决的问题）
 
@@ -50,9 +66,10 @@ Keystore（`EncryptedSharedPreferences` 是原生能力）。token 明文泄漏 
 任意远程会话 + 任意工具授权。三个待选：UTS 原生插件透出 Keystore /
 凭据不落手机由 PC 代调 / 接受明文（不可接受）。
 
-**指纹是自证的。** H5 没有读 TLS 证书的标准 API，屏 1 的指纹只能来自 relay
-自己声明的 `X-Hermix-Cert-Sha256` 响应头。除非 relay 与客户端做公钥固定
-（pinning），否则那个指纹**没有安全价值**。原生壳要用原生 TLS 校验取真实证书。
+**指纹自证问题已随直连退役消失。** 旧流程在配对屏展示的 TLS 指纹只能来自
+relay 自声明的 `X-Hermix-Cert-Sha256` 响应头，本就**没有安全价值**；relay
+时代的配对不再展示指纹，信任建立 = 扫码 + 屏幕配对码核对 + E2EE 密封往返。
+若未来要做公钥固定（pinning），在原生壳里用原生 TLS 校验取真实证书。
 
 **流式 ASR / TTS 尚未接线。** 各页 `TODO(...)` 标了接入点。按已定方向：
 ASR 与 TTS 都在**手机端**直连云端（用户自带 API key），音频与文本都不过 relay，
@@ -67,7 +84,7 @@ relay 架构一行不改。
 
 CLI 侧两条门禁仍然有效：
 
-- `npm test`（42 项，tsx 直接跑 `core/*.ts`，不依赖布局）；
+- `npm test`（51 项，tsx 直接跑 `core/*.ts`，不依赖布局）；
 - `npm run build:h5` —— 通过 `cross-env UNI_INPUT_DIR=.` 指向根布局 +
   `index.html` 入口改指 `/main.js`。
 
@@ -89,9 +106,14 @@ vue`，已实测 dcloud 4 个版本线 × vue 3.4.21/3.5.22 全部如此）—�
 4. 「发行 → 原生 App-云打包」→ Android → 证书先用**公测证书**（省去自备
    keystore）→ 下载 APK。
 
-**装上 APK 后第一件事**：扫码配对 + 收第一帧加密消息——这是
+**装上 APK 后第一件事**：确认启动页不再卡在 splashscreen（旧版死锁的复发点），
+然后扫桌面端二维码完成配对（经 relay；桌面端需先在「设置 → 连接渠道」接入
+relay）+ 收第一帧加密消息——这是
 `crypto.subtle` 在 app-plus runtime 可用性的唯一验证点（风险记录在
 relay E2EE 决策笔记的 Consequences 一节）。
+
+端到端验证目前仍是一次都没在真机上跑过的欠账（含撤销后手机侧是否真断连），
+见 `docs/notes/implemented/process/2026-10-09-mobile-relay-handoff.md`。
 
 > 附：把源码转成 HBuilderX 布局后，`src/unpackage`（H5 构建产物）已随
 > 布局删除，H5 输出统一在 `dist/`。
