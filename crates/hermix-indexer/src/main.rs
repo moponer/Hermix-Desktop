@@ -25,6 +25,8 @@ use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process::exit;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use windows::core::PCWSTR;
@@ -422,6 +424,11 @@ const ENUM_BUDGET: Duration = Duration::from_secs(240);
 /// 逐卷限额让 F: 被跳过、C..H 的成果照常入库，索引从"完全没有"变成"少一个卷"。
 const PER_VOLUME_BUDGET: Duration = Duration::from_secs(60);
 
+/// 枚举期心跳间隔。必须远小于主进程的 60s 驻留窗口，否则枚举还在跑、
+/// helper.alive 却已陈旧，主进程会再拉起一个提权 helper 并发枚举（见
+/// [`spawn_watchdog`]）。5s 与常驻循环的 1s tick 同量级，留 12 倍余量。
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
+
 /// 写交接信号 done.json。`error` 为 None 时写 JSON null —— 成功就是成功，
 /// 不能带一句编出来的失败文案（排查时极具误导性）。
 fn write_done(dir: &Path, snapshot: &str, ok: bool, indexed: usize, error: Option<String>) {
@@ -480,63 +487,29 @@ fn alive_fresh(
 /// flush（卡死线程正阻塞在 DeviceIoControl 上、不持写锁，所以必然拿得到），
 /// 然后**按成功上报这部分索引**再退出。索引从「完全没有」变成「少一个卷」——
 /// 这正是要的降级：能搜到 C/D/E/G/H 的 131 万条，远好过一条都搜不到。
+///
+/// 看门狗同时是**枚举期的心跳**（见 [`spawn_watchdog`]）——不是顺手加的，
+/// 少了它主进程 60s 后就会误判"没有驻留 helper"而重复拉起，见该函数注释。
 fn enumerate_with_watchdog(
     dir: &Path,
     volumes: &[String],
     snap_name: &str,
+    alive: &Path,
 ) -> (bool, usize, Option<String>) {
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use std::sync::{Arc, Mutex};
-
     let snap_path = dir.join(snap_name);
     let writer: Arc<Mutex<Option<BufWriter<File>>>> = Arc::new(Mutex::new(None));
     let written: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
     let finished = Arc::new(AtomicBool::new(false));
-    {
-        let wd_dir = dir.to_path_buf();
-        let wd_snap = snap_name.to_string();
-        let wd_writer = writer.clone();
-        let wd_written = written.clone();
-        let wd_finished = finished.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(ENUM_BUDGET);
-            if wd_finished.load(Ordering::Acquire) {
-                return;
-            }
-            let mut n = 0usize;
-            if let Ok(mut slot) = wd_writer.lock() {
-                if let Some(w) = slot.as_mut() {
-                    let _ = w.flush();
-                    n = wd_written.load(Ordering::Acquire);
-                }
-            }
-            let _ = std::fs::remove_file(wd_dir.join("helper.pid"));
-            if n > 0 {
-                write_done(
-                    &wd_dir,
-                    &wd_snap,
-                    true,
-                    n,
-                    Some(format!(
-                        "超过 {}s 未完成：某个卷的 MFT 读取卡死，该卷已跳过（已收录 {n} 项）",
-                        ENUM_BUDGET.as_secs()
-                    )),
-                );
-            } else {
-                write_done(
-                    &wd_dir,
-                    &wd_snap,
-                    false,
-                    0,
-                    Some(format!(
-                        "全量枚举超过 {}s 未完成且无可用成果（某个卷的 MFT 读取卡死）",
-                        ENUM_BUDGET.as_secs()
-                    )),
-                );
-            }
-            std::process::exit(4);
-        });
-    }
+    spawn_watchdog(
+        dir.to_path_buf(),
+        alive.to_path_buf(),
+        snap_name.to_string(),
+        writer.clone(),
+        written.clone(),
+        finished.clone(),
+        ENUM_BUDGET,
+        HEARTBEAT_INTERVAL,
+    );
 
     let result = match OpenOptions::new()
         .write(true)
@@ -583,6 +556,82 @@ fn enumerate_with_watchdog(
     result
 }
 
+/// 看门狗线程：枚举期间持续刷新 `helper.alive`，到点仍未结束则上报成果退出。
+///
+/// **枚举期必须有心跳**——这是 2026-10-10 现场「本地文件反复扫描却永远没结果」
+/// 的根因。主进程的 `helper_resident()` 按 `helper.alive` 的 mtime 判驻留，
+/// 窗口 60s；而一次全量枚举最坏要 `ENUM_BUDGET`(240s)。此前心跳只在**枚举前**
+/// 写一次、**枚举完成后**的常驻循环里每秒写一次，中间那段 2~4 分钟完全静默：
+///
+/// 1. 60s 一到，主进程 `helper_resident()` 判 false → 走非驻留分支 → **再弹一次
+///    UAC、再拉起第二个提权 helper**；
+/// 2. 新 helper 的让位检查用的是同一个 60s 判定，也认为"没有别人" → 不让位
+///    → 两个提权进程并发枚举同一批卷；
+/// 3. 两者抢写同一个 `done.json`，主进程读到的 snapshot 可能属于另一个进程，
+///    自己那份变成无人认领的孤儿（现场：102MB + 170MB 两份都留在交换目录）；
+/// 4. 新主进程顺手删掉在跑那个 helper 的 `helper.pid`/`helper.alive`，它此后
+///    再不重写 pid → 变成注释里说的"幽灵"。
+///
+/// 结果就是用户看到的循环：每开一次应用就多一次全盘扫描，索引始终建不起来。
+/// 修法：**预算检查与心跳合并成同一个循环**，不为心跳新增线程。
+fn spawn_watchdog(
+    dir: PathBuf,
+    alive: PathBuf,
+    snap_name: String,
+    writer: Arc<Mutex<Option<BufWriter<File>>>>,
+    written: Arc<AtomicUsize>,
+    finished: Arc<AtomicBool>,
+    budget: Duration,
+    interval: Duration,
+) {
+    std::thread::spawn(move || {
+        let deadline = Instant::now() + budget;
+        loop {
+            std::thread::sleep(interval);
+            // 心跳无条件先刷新：即便预算已到点，这一次 touch 也落在退出之前。
+            touch(&alive);
+            if finished.load(Ordering::Acquire) {
+                return;
+            }
+            if Instant::now() >= deadline {
+                break;
+            }
+        }
+        let mut n = 0usize;
+        if let Ok(mut slot) = writer.lock() {
+            if let Some(w) = slot.as_mut() {
+                let _ = w.flush();
+                n = written.load(Ordering::Acquire);
+            }
+        }
+        let _ = std::fs::remove_file(dir.join("helper.pid"));
+        if n > 0 {
+            write_done(
+                &dir,
+                &snap_name,
+                true,
+                n,
+                Some(format!(
+                    "超过 {}s 未完成：某个卷的 MFT 读取卡死，该卷已跳过（已收录 {n} 项）",
+                    budget.as_secs()
+                )),
+            );
+        } else {
+            write_done(
+                &dir,
+                &snap_name,
+                false,
+                0,
+                Some(format!(
+                    "全量枚举超过 {}s 未完成且无可用成果（某个卷的 MFT 读取卡死）",
+                    budget.as_secs()
+                )),
+            );
+        }
+        std::process::exit(4);
+    });
+}
+
 fn main() {
     let (dir, volumes) = parse_args();
     let pid_path = dir.join("helper.pid");
@@ -607,7 +656,7 @@ fn main() {
 
     // 初扫与 resnap 走同一个带看门狗的枚举器 —— 两条路径面对同一批卷、
     // 同一个卡死风险（本机 F:）。
-    let (ok, n, err) = enumerate_with_watchdog(&dir, &volumes, &snap_name);
+    let (ok, n, err) = enumerate_with_watchdog(&dir, &volumes, &snap_name, &alive_path);
     write_done(&dir, &snap_name, ok, n, err);
     if !ok {
         let _ = std::fs::remove_file(&pid_path);
@@ -634,6 +683,11 @@ fn main() {
     loop {
         std::thread::sleep(Duration::from_millis(1000));
         touch(&alive_path);
+        // 身份自愈：pid 与心跳同批重写。主进程在"非驻留"分支会删掉这两个
+        // 文件（清理幽灵 helper），而本进程此刻活得很好 —— 不补写就退化成
+        // 注释里说的"幽灵"：有提权进程、锁着镜像文件、却没有 pid 可查，
+        // 下一个主进程必然再拉一个。2026-10-10 现场正是这条链。
+        let _ = std::fs::write(&pid_path, std::process::id().to_string());
 
         // 主进程正常退出前会写 shutdown.request：**不等心跳超时，立刻退出**。
         // 这一条是为「关掉应用就重装 / 升级」准备的——helper 是提权进程，一直
@@ -673,7 +727,7 @@ fn main() {
             // 同一个卡死风险，单独走一条没保护的路径等于把同一个 bug 留着。
             resnap_pending = false;
             let snap2 = format!("snapshot-{}.jsonl", now_unix());
-            let (ok2, n2, err2) = enumerate_with_watchdog(&dir, &volumes, &snap2);
+            let (ok2, n2, err2) = enumerate_with_watchdog(&dir, &volumes, &snap2, &alive_path);
             write_done(&dir, &snap2, ok2, n2, err2);
             // 日志可能已滚过失效点，重建 watch（NextUsn 取当前）。
             watches = volumes.iter().filter_map(|v| open_watch(v)).collect();
@@ -736,5 +790,49 @@ mod tests {
         assert!(HEARTBEAT_WINDOW < Duration::from_secs(60));
         // 且必须容得下主进程的 5s 心跳间隔。
         assert!(HEARTBEAT_WINDOW > Duration::from_secs(5) * 2);
+    }
+
+    /// 枚举期心跳间隔必须远小于**主进程的驻留窗口**（60s）。这是 2026-10-10
+    /// 那个 bug 的最小不变式：心跳停更超过 60s，主进程就判定"没有驻留
+    /// helper"，再拉起一个提权 helper 并发枚举同一批卷。
+    #[test]
+    fn enum_heartbeat_interval_stays_well_below_the_resident_window() {
+        assert!(HEARTBEAT_INTERVAL * 3 < Duration::from_secs(60));
+    }
+
+    /// 回归：看门狗线程**在枚举期间**就会刷新 helper.alive。
+    ///
+    /// 旧实现是"睡满 ENUM_BUDGET 再检查"的一次性 sleep，整个枚举期（最长
+    /// 240s）不碰 helper.alive —— 主进程 60s 后必然重复拉起 helper。
+    /// 这里用 50ms 间隔跑真实线程，断言心跳文件在预算到点前就已出现。
+    #[test]
+    fn watchdog_refreshes_alive_during_enumeration() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize};
+        use std::sync::{Arc, Mutex};
+
+        let dir = std::env::temp_dir().join(format!("hermix-usn-wd-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let alive = dir.join("helper.alive");
+        let _ = std::fs::remove_file(&alive);
+
+        spawn_watchdog(
+            dir.clone(),
+            alive.clone(),
+            "snapshot-test.jsonl".into(),
+            Arc::new(Mutex::new(None)),
+            Arc::new(AtomicUsize::new(0)),
+            // 置 true = 枚举已完成，线程会在第一次心跳后自行返回，
+            // 不会走到写 done.json + exit(4) 那条会杀掉测试进程的分支。
+            Arc::new(AtomicBool::new(true)),
+            Duration::from_secs(3600),
+            Duration::from_millis(50),
+        );
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline && !alive.exists() {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(alive.exists(), "看门狗未在预算到点前刷新 helper.alive");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

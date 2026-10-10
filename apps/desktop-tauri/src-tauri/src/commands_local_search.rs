@@ -820,6 +820,21 @@ mod usn_helper {
             // 这里清掉是兜底陈旧语义。
             let _ = std::fs::remove_file(dir.join("helper.pid"));
             let _ = std::fs::remove_file(dir.join("helper.alive"));
+            // 孤儿 snapshot 一并清掉。消费方只在**读完自己那一份**之后才删
+            // （见下方 remove_file(&snapshot)），所以任何没走到那一步的扫描
+            // ——主进程中途被杀、done.json 被后来的 helper 覆盖、双 helper 并发
+            // 时落败的那一方——都会把 100~170MB 的 snapshot 永久留在交换目录。
+            // 此刻正要拉起全新一轮枚举，旧 snapshot 已无主（done.json 同批删除），
+            // 留着只是纯垃圾。2026-10-10 现场积压了两份（102MB + 170MB），
+            // 而真正该被读的 131 万条成果就躺在其中一份里没人认领。
+            for stale in std::fs::read_dir(&dir)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .filter(|e| e.file_name().to_string_lossy().starts_with("snapshot-"))
+            {
+                let _ = std::fs::remove_file(stale.path());
+            }
             spawn_debug_log(&format!(
                 "run(): spawn 开始 helper={} dir={} volumes={:?} resident_before={resident}",
                 helper.display(),
@@ -858,6 +873,7 @@ mod usn_helper {
                     .map(|e| e.path())
             };
             let mut last_est: u64 = 0;
+            let mut enumerating = false;
             let mut resnap_deadline: Option<Instant> = None;
             loop {
                 if Instant::now() > deadline {
@@ -881,6 +897,22 @@ mod usn_helper {
                         ));
                     }
                 }
+                // 先探进度，再决定要不要 resnap。顺序不能反：snapshot 正在
+                // 增长 = helper 正在全量枚举，此刻发 resnap 等于叫它**刚扫完
+                // 再重扫一遍**——用户看到的"循环重复扫描"有一半来自这里。
+                if let Some(snap) = snap_probe(&dir) {
+                    if let Ok(meta) = std::fs::metadata(&snap) {
+                        let est = meta.len() / 90;
+                        if est > last_est {
+                            // 绝对值覆盖（估算含读取误差，不能累加）。
+                            PROGRESS.fetch_add(est - last_est, Ordering::Relaxed);
+                            last_est = est;
+                            enumerating = true;
+                        } else {
+                            enumerating = false;
+                        }
+                    }
+                }
                 if done_fresh(&dir) {
                     if let Ok(text) = std::fs::read_to_string(&done) {
                         if let Ok(d) = serde_json::from_str::<Done>(&text) {
@@ -891,31 +923,23 @@ mod usn_helper {
                                 Some(s) if dir.join(s).exists() => break d,
                                 _ => {
                                     // done 新鲜但 snapshot 缺失：等枚举写盘
-                                    if resnap_deadline.is_none() && resident {
+                                    if resnap_deadline.is_none() && resident && !enumerating {
                                         resnap_deadline = Some(
                                             Instant::now()
                                                 + Duration::from_secs(RESNAP_TIMEOUT_SECS),
                                         );
+                                        let _ = std::fs::write(dir.join("resnap.request"), b"1");
                                     }
                                 }
                             }
                         }
                     }
-                } else if resident && resnap_deadline.is_none() {
-                    // done 一直不新鲜：让驻留 helper 重新全量枚举。
+                } else if resident && resnap_deadline.is_none() && !enumerating {
+                    // done 一直不新鲜、且没有正在推进的 snapshot：驻留 helper
+                    // 确实闲着，让它重新全量枚举。
                     resnap_deadline =
                         Some(Instant::now() + Duration::from_secs(RESNAP_TIMEOUT_SECS));
                     let _ = std::fs::write(dir.join("resnap.request"), b"1");
-                }
-                if let Some(snap) = snap_probe(&dir) {
-                    if let Ok(meta) = std::fs::metadata(&snap) {
-                        let est = meta.len() / 90;
-                        if est > last_est {
-                            // 绝对值覆盖（估算含读取误差，不能累加）。
-                            PROGRESS.fetch_add(est - last_est, Ordering::Relaxed);
-                            last_est = est;
-                        }
-                    }
                 }
                 std::thread::sleep(Duration::from_millis(500));
             }
@@ -956,6 +980,20 @@ mod usn_helper {
         }
         PROGRESS.fetch_add((progress % 4096) as u64, Ordering::Relaxed);
         let _ = std::fs::remove_file(&snapshot); // ~300MB 临时数据不滞留
+        // 同一目录里的**其他** snapshot 一并清掉：它们来自没走到上面那步的
+        // 扫描（主进程中途被杀、done.json 被后来的 helper 覆盖、双 helper
+        // 并发时落败的一方）。留着就是几百 MB 的纯垃圾，而且极易让人误以为
+        // "索引明明建好了"——现场那份 170MB / 131 万条的成果就是这么被
+        // 丢在盘上没人读的。
+        for stale in std::fs::read_dir(&dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|e| e.path() != snapshot)
+            .filter(|e| e.file_name().to_string_lossy().starts_with("snapshot-"))
+        {
+            let _ = std::fs::remove_file(stale.path());
+        }
 
         // 第二遍：迭代重建每个 FRN 的完整路径（memoized，全量摊销 O(n)）。
         let mut paths: HashMap<u64, String> = HashMap::with_capacity(raws.len());
