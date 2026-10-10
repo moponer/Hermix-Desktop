@@ -100,6 +100,41 @@ sidecar 刷新的唯一入口是 `npm run ensure-sidecar`（`npm run build` 与 
 `https://hermix.cssso.com/desktop/manifest.json` 取更新。手机端 APK 由 HBuilderX 云打包后人工
 放到 `public/hermix.apk`。
 
+出包全流程（全链 cargo 编译远超单命令超时，分段预热再组装）：
+
+```bash
+./scripts/check-sidecar-freshness.sh        # 门禁必须 exit 0；STALE 就先 npm run ensure-sidecar
+npm run build                               # 前端 + ensure-sidecar（dev.mjs 全链路）
+cargo build --release -p hermix-desktop     # 主程序
+(cd apps/installer && npm run build:vite)   # 安装器前端
+HERMIX_PRODUCT_VERSION=<ver> cargo build --release -p hermix-installer
+./scripts/release.sh --skip-build --skip-upload   # 组装 app 根 → latest.zip + manifest + 嵌入安装包
+```
+
+待传文件打印在脚本尾部（`target/release/update-staging/` 与 `dist/`）。注意：
+
+- `hx-shell` 源码有改动时先 `(cd apps/hx-shell && cargo build --release)` 并把
+  `target/release/hx-shell.exe` 拷到 `apps/desktop-tauri/src-tauri/resources/loader/`；
+- loader 目录三个预编译二进制（hx-shell/WebView2Loader/esbuild）互为新鲜度参照，
+  单独 touch 其一会造成 mtime 环报 STALE——用 `touch -t` 把三者调成同一时间戳；
+- 后台跑 release.sh 必须真正脱离会话（detached 子 shell 会随会话结束被杀，
+  表现为日志冻结、进程归零），宁可前台分段跑完上述预热后 `--skip-build` 组装。
+
+Agent BBS 部署（relay 机器，代码在 `apps/bbs/`，决策笔记
+`docs/notes/implemented/feature/2026-10-09-agent-bbs-integration.md`）：
+
+```bash
+node apps/bbs/src/server.js                       # Node ≥22.13，只绑 127.0.0.1:3901
+node apps/bbs/scripts/migrate-from-legacy.js      # 旧站数据迁移（幂等，可重复跑）
+```
+
+relay 侧 `server.js` 已含 `/bbs/*` 反代，更新重启后 `/api/bbs/status` 才会从
+`bbs_down` 变为在线。
+
+旧站数据导出：ByetHost 对非浏览器流量有 JS 挑战，Node 抓不到——用
+`apps/bbs/scripts/export-legacy-bbs.browser.js` 在**浏览器控制台**里跑（打开
+旧站 → F12 → 粘贴回车 → 自动下载 `export.json`），再喂给迁移脚本。
+
 ## 官网
 
 官网是 `apps/relay/public/` 下的**多页静态站**，随 relay 一起部署，没有独立构建：
