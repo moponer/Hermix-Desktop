@@ -8,6 +8,14 @@ default-run = "hermix-viewer"
 
 [build-dependencies]
 tauri-build = { version = "2" }
+# feature 垫片：schemars 0.8（tauri-build 的 build-dependency）开 preserve_order
+# 后拉起 indexmap 1.9.3，其 build.rs 靠 autocfg 运行时探测 emit `has_std`，本机
+# 探测静默失败 → 走 no_std 分支（IndexMap<K, V, S> 三泛型无默认）→ schemars
+# 两参调用直接 E0107。resolver v2 下 build-dep 图与普通依赖图 feature 不互通，
+# 所以垫片必须放在这里（build-dependencies）才统一进 schemars 的编译单元。
+# 显式 std 后 build.rs 走 CARGO_FEATURE_STD 快速路径无条件 emit，跳过探测。
+# 代码不引用，仅为传递依赖统一 feature。与 desktop-tauri 同一坑，见其注释。
+indexmap1 = { package = "indexmap", version = "1.9", features = ["std"] }
 
 [dependencies]
 tauri = { version = "2" }

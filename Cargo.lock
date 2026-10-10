@@ -3105,6 +3105,7 @@ dependencies = [
 name = "hermix-installer"
 version = "0.1.0"
 dependencies = [
+ "indexmap 1.9.3",
  "rfd 0.15.4",
  "serde",
  "serde_json",
@@ -3435,6 +3436,7 @@ dependencies = [
 name = "hermix-viewer"
 version = "0.1.0"
 dependencies = [
+ "indexmap 1.9.3",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
