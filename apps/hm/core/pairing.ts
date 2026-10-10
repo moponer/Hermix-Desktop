@@ -149,10 +149,11 @@ export async function fingerprintOf(baseUrl: string): Promise<RelayIdentity> {
 
 // ── 配对 ───────────────────────────────────────────────────────
 //
-// 配对本身走 `core/direct.ts`（直连桌面端本机 TLS 监听器）。
-// 这里**不再有**「POST {relay}/api/pairing/complete」——relay 里从来没有这条
-// 路由，保留它只会让用户撞 404。跨网络的 relay 中转是下一步的事，见
-// docs/notes/proposed/feature/2026-10-09-mobile-ui-refactor 的 Consequences。
+// 配对走 `core/direct.ts`：手机扫码拿到 relay 地址 + 手机凭据(hrel_) + 配对码 +
+// PC 公钥(k)，经 relay 中转用密封帧完成绑定（见 `direct.ts` 文件头）。这是
+// 2026-10-10 拍板的唯一路径——不要求手机与电脑同网、不比对证书指纹、不依赖
+// 电脑开入站端口。`POST /api/pairing/complete` 与 `/pair` 落地页是旧直连时代的
+// 残留，已退役未删（PC 侧仍编译保留，移动端不再调用）。
 
 /** 本机运行时有 SubtleCrypto。E2EE 帧加密的前提，没它就不能配对。 */
 export function hasSubtleCrypto(): boolean {
@@ -169,16 +170,17 @@ export function hasSubtleCrypto(): boolean {
  * 一把，而 PC 侧存的旧公钥会失效。所以每次连上都要重发一次 `key.exchange`，
  * 公钥现在先备好，等 WS 通了直接用。
  *
- * ## `pcPublicKey` 目前恒为 undefined —— 一个已知缺口
+ * ## PC 公钥：从配对二维码的 `k` 参数而来，配对时落盘
  *
- * `core/crypto.ts` 的注释说「手机扫码已经拿到 `pk_pc`（二维码里带的）」，
- * **但二维码 URL 里并没有它**：`pairing_url` 只有 `c` 与 `fp` 两个参数
- * （`pairing.rs:538`），`node_public_key` 只存在于 `QrPayload` 的 JSON 里，
- * `/pair` 落地页的 URL 没带、页面也没把它传给前端。所以直连这条路拿不到
- * PC 公钥，必须等 WS 建连时用 `key.exchange` 帧协商。
+ * 2026-10-10 起配对全走 relay，二维码 URL 是
+ * `{relay}/pair?c=码&t=手机凭据&k=PC公钥`（`pairing.rs` 生成），`k` 即
+ * `node_public_key`。`core/direct.ts::parsePairingUrl` 把 `k` 解成
+ * `pcPublicKey`，`pages/pairing/index.vue` 在配对成功后通过
+ * `storePairedDevice({ ..., pcPublicKey })` 把它落盘。
  *
- * 宁可不存：存一个空值会让 `pcPublicKey()` 看起来"有值"，后续 seal 时才会炸，
- * 那比现在明确地缺更难查。
+ * 落盘的是公钥（本来就公开），泄漏不构成风险；私钥仍在 WebCrypto 里，冷启动
+ * 换新。聊天连接的密封帧信任锚就是它——重发 `key.exchange` 之前手机就能直接
+ * seal 给 PC，比"等首帧协商"少一次往返。
  */
 export async function storePairedDevice(opts: {
   deviceId: string

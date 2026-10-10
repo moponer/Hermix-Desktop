@@ -61,7 +61,12 @@ async function submit() {
     // relay 地址与凭据随码而来，落盘后聊天页的常驻连接直接用。
     setRelayBaseUrl(t.relayBase)
     setRelayToken(t.phoneToken)
-    await storePairedDevice({ deviceId: r.deviceId, deviceToken: r.deviceToken })
+    // PC 公钥(k) 一并落盘：聊天连接用它 seal 给 PC，冷重启后不丢。
+    await storePairedDevice({
+      deviceId: r.deviceId,
+      deviceToken: r.deviceToken,
+      pcPublicKey: t.pcPublicKey,
+    })
     uni.reLaunch({ url: '/pages/chat/index' })
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
