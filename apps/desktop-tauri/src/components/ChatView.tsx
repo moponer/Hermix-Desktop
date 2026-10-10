@@ -193,6 +193,11 @@ async function fetchGreetingText(url: string, signal: AbortSignal): Promise<stri
   }
 }
 
+/** 问候 API 会在正文前拼时间（「现在是 22:09:36，该休息了…」）。界面只要正文。 */
+function stripTimePrefix(text: string): string {
+  return text.replace(/^现在是\s*\d{1,2}:\d{2}(?::\d{2})?\s*[,，]\s*/, "").trim();
+}
+
 function useWelcomeGreeting(sessionId: string | null): { title: string; subtitle: string } {
   const [greeting, setGreeting] = useState(() => fallbackGreeting(sessionId));
   useEffect(() => {
@@ -204,7 +209,12 @@ function useWelcomeGreeting(sessionId: string | null): { title: string; subtitle
       .then(([title, subtitle]) => {
         if (ctrl.signal.aborted) return;
         const fb = fallbackGreeting(sessionId);
-        setGreeting({ title: title ?? fb.title, subtitle: subtitle ?? fb.subtitle });
+        // 主标题来自问候 API，可能带「现在是 22:09:36，」时间前缀——界面只
+        // 显示正文；副标题来自一言 API，无此前缀，原样使用。
+        setGreeting({
+          title: (title && stripTimePrefix(title)) || fb.title,
+          subtitle: subtitle ?? fb.subtitle,
+        });
       })
       .catch(() => {});
     return () => {
