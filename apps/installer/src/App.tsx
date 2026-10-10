@@ -16,7 +16,7 @@ interface InstallerMeta {
   default_dir: string;
 }
 
-const LICENSE_FALLBACK = "Hermix Desktop 许可协议\n\n完整许可文本见安装目录内 license.rtf。";
+const LICENSE_FALLBACK = "Hermix Desktop 许可协议\n\n完整许可文本见安装目录内 LICENSE.txt。";
 
 export function App() {
   const [step, setStep] = useState<Step>("welcome");

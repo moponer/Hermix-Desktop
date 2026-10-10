@@ -50,16 +50,12 @@ pub fn installer_meta() -> Result<InstallerMeta, String> {
     })
 }
 
-/// 许可文本：优先读 exe 旁 license.rtf；缺失时前端回落固定文案。
-/// rtf 直接展示原文（安装器一期不渲染富文本，纯文本可读性足够）。
+/// 许可文本：编译期内嵌（include_str!）。旧实现读 exe 旁 license.rtf——
+/// 但 Setup 是单文件安装器，用户机器上 exe 旁永远没有这个文件，许可页
+/// 于是永远落在兜底一行文案上。内嵌后无运行时依赖，不可能失败。
 #[tauri::command]
 pub fn installer_license() -> Result<String, String> {
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let rtf = exe
-        .parent()
-        .map(|d| d.join("license.rtf"))
-        .ok_or("no exe dir")?;
-    std::fs::read_to_string(rtf).map_err(|e| format!("license.rtf 读取失败: {e}"))
+    Ok(include_str!("../LICENSE.txt").to_string())
 }
 
 /// 原生目录选择对话框（rfd）。**必须 async + spawn_blocking**：sync 命令跑在

@@ -147,8 +147,11 @@ RES_SRC="$REPO_ROOT/apps/desktop-tauri/src-tauri/resources"
 [[ -d "$RES_SRC" ]] || { echo "错误：缺 resources 目录 $RES_SRC"; exit 1; }
 robocopy "$(cygpath -w "$RES_SRC")" "$(cygpath -w "$APP/resources")" //E //MT:16 //NFL //NDL //NJH //NJS //NP || { RC=$?; [[ $RC -le 7 ]] || { echo "错误：robocopy 复制 resources 失败（退出码 $RC）"; exit 1; }; }
 
-# 许可与更新源自举（安装器 license 命令、更新后客户端检查都要）。
-cp "$REPO_ROOT/apps/desktop-tauri/src-tauri/license.rtf" "$APP/license.rtf"
+# 许可随包分发（MIT 要求带许可文本）+ 更新源自举。安装器许可页读的是
+# 编译期内嵌副本（installer LICENSE.txt），这里拷同一份文件进 app 根，
+# 便携包里永远能找到许可正文。不再用旧 license.rtf（Unicode 转义、与
+# 内嵌文本无法对账）。
+cp "$REPO_ROOT/apps/installer/src-tauri/LICENSE.txt" "$APP/LICENSE.txt"
 printf '%s\n' "$BASE_URL/manifest.json" > "$APP/update-url.txt"
 
 # 文件清单（对照与审计用）。
