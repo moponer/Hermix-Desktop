@@ -488,8 +488,8 @@ export function ImChannelsCard() {
     }
   }, [pairCode]);
 
-  // 完整配对链接（含 IP:端口与证书指纹）——手机端「粘贴链接」通道的料。
-  // 只复制 6 位码不够：服务端强制校验指纹，码里没有「连哪台」和「证书是谁」。
+  // 完整配对链接（relay 地址 + 当场签发的手机凭据 + 电脑公钥）——即二维码
+  // 内容。手机端只有扫码一条路：「粘贴链接」通道随局域网直连一起退役了。
   const copyUrl = useCallback(async () => {
     if (!qr) return;
     try {
@@ -595,14 +595,15 @@ export function ImChannelsCard() {
             </ActionBtn>
           </div>
 
-          {/* ── 手机端：局域网配对 + 跨网络 relay ─────────────────── */}
+          {/* ── 手机端：扫码配对（经 relay）+ relay 中转连接 ──────── */}
           {active === "mobile" && (
             <div className="mt-5 space-y-6">
               <section className="space-y-4">
-                <SubHead>局域网配对</SubHead>
+                <SubHead>扫码配对</SubHead>
                 <div className="text-[length:var(--text-ui)] text-text-secondary leading-relaxed">
-                  用手机相机扫下面的码，或在手机上直接输入这枚 6 位码，把这台电脑连进去。
-                  配对码 <strong className="text-text-primary">只能用一次</strong>，重新生成后旧码立即作废。
+                  用手机相机扫下面的码，经中转（relay）把这台电脑连进去——
+                  两台设备不必在同一网络。屏幕上的 6 位码用于扫码后核对身份：
+                  <strong className="text-text-primary">只能用一次</strong>，重新生成后旧码立即作废。
                 </div>
 
               {qrError ? (
@@ -611,8 +612,8 @@ export function ImChannelsCard() {
                   <div>
                     生成配对码失败：<span className="font-mono">{qrError}</span>
                     <div className="mt-1 text-text-muted">
-                      TLS 监听默认开启（端口 8443）；若设置了{" "}
-                      <code className="font-mono">HERMIX_TLS_DISABLE=1</code> 则无法配对，删除该变量并重启即可。
+                      出码需要本机已接入下方的中转连接（出码时要当场向 relay
+                      签发手机凭据）；未连上时先完成中转配置再重试。
                     </div>
                   </div>
                   <ActionBtn
@@ -651,7 +652,7 @@ export function ImChannelsCard() {
                       <span>
                         扫码地址：<span className="font-mono text-text-secondary">{qr.payload.pairing_url}</span>
                       </span>
-                      <ActionBtn onClick={() => void copyUrl()} icon={<Copy className="icon-sm" />} title="复制完整配对链接，到手机配对页粘贴">
+                      <ActionBtn onClick={() => void copyUrl()} icon={<Copy className="icon-sm" />} title="复制完整配对链接（备用；手机端以扫码为准）">
                         复制链接
                       </ActionBtn>
                     </div>
@@ -670,15 +671,16 @@ export function ImChannelsCard() {
               )}
               </section>
 
-              {/* ── 跨网络 relay ─────────────────────────────────────
-                  与上面的局域网配对是**两件事**：配对是一次性的近距离操作，
-                  relay 是配好之后一直生效的通道。放在同一个渠道面板里，
-                  因为它们服务的都是「手机端」这一个渠道。 */}
+              {/* ── 中转连接（relay）──────────────────────────────────
+                  上面的扫码配对**依赖**这条通道：出配对码要当场向 relay
+                  签发手机凭据，配好之后聊天连接也常驻经 relay（E2EE，
+                  relay 只透传密文）。放在同一个渠道面板里，因为它们
+                  服务的都是「手机端」这一个渠道。 */}
               <section className="space-y-4 border-t border-border-subtle pt-5">
-                <SubHead>跨网络访问（经中转）</SubHead>
+                <SubHead>中转连接（relay）</SubHead>
                 <div className="text-[length:var(--text-meta)] text-text-muted leading-relaxed">
-                  手机不在同一个 Wi-Fi 时走这条路。<strong className="text-text-secondary">第一步在 relay 服务器上执行一次</strong>
-                  （每台电脑只需一次），之后这台电脑就能自己签发手机凭据，不用再登服务器。
+                  配对与日常连接都经中转。<strong className="text-text-secondary">第一步在 relay 服务器上执行一次</strong>
+                  （每台电脑只需一次），之后这台电脑就能自己签发手机凭据、出配对码，不用再登服务器。
                 </div>
 
                 {relayErr ? (
@@ -721,7 +723,7 @@ export function ImChannelsCard() {
                         </span>
                       ) : (
                         <span className="text-[length:var(--text-ui)] text-text-muted">
-                          未启用 —— 手机只能在同一个 Wi-Fi 下用
+                          未启用 —— 手机无法连接（配对与连接都经中转，直连已退役）
                         </span>
                       )}
 

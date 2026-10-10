@@ -318,14 +318,12 @@ pub fn router(state: HttpServerState) -> Router {
         // 对话里要凭据的场景，决策笔记 2026-10-09-vault-credentials）。
         .route("/v1/vault/entries", get(mobile::vault_entries))
         .route("/v1/vault/reveal/{name}", post(mobile::vault_reveal))
-        // §5.5 第 3/4 层：设备配对。complete 与 /pair 落地页对 Unpaired 开放
-        // （信任建立本身），其余端点 handler 内强制 Local。
-        .route("/pair", get(pairing::pair_page))
+        // §5.5 第 3/4 层：设备配对。出码仅 Local（handler 内强制）；
+        // 配对本身走 relay 密封帧（pairing.rs::handle_pairing_frame）。
         .route(
             "/api/pairing/sessions",
             post(pairing::create_pairing_session),
         )
-        .route("/api/pairing/complete", post(pairing::complete_pairing))
         .route("/api/pairing/devices", get(pairing::list_devices))
         .route(
             "/api/pairing/devices/{device_id}",
