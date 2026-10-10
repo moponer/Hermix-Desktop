@@ -1624,30 +1624,15 @@
   animation: modal-scale-in var(--duration-base, 160ms) var(--ease-out, cubic-bezier(0.16, 1, 0.3, 1)) both;
 }
 
-.file-pill.is-created:hover  svg,
-.file-pill.is-created      svg,
-.file-pill.is-modified svg,
-.file-pill.is-deleted  svg,
+/* ⚠️ 不要在本文件中定义 `.md-path-link`（或它的任何属性）。
+   本文件在 components-prose.css **之后**加载，同特异性下本文件胜出 ——
+   在此处写重复声明会静默压掉那边的 `display: inline-flex`。链接一旦退化成
+   非 flex 容器，Tailwind preflight 的 `svg { display: block }` 随之生效，
+   文件图标变成块级、独占一行，文件名被挤到下一行，看上去就是"图标浮在
+   文字上面一层"。`.md-path-link` 的唯一定义只在 components-prose.css。
 
-
-.md-path-link {
-  display: inline;
-  background: transparent;
-  border: 0;
-  padding: 0;
-  margin: 0;
-  font-family: inherit;
-  font-size: inherit;
-  font-weight: inherit;
-  line-height: inherit;
-  color: var(--color-link);
-  cursor: pointer;
-  text-decoration: underline;
-  text-underline-offset: 2px;
-  text-decoration-thickness: 1px;
-  vertical-align: baseline;
-  transition: color var(--duration-fast) ease;
-}
+   `.file-pill.* svg` 系列选择器已删除：`file-pill` 类名在组件中不存在，
+   无声明块的选择器永不命中。 */
 
 .preview-pane {
   scrollbar-gutter: stable;
