@@ -120,11 +120,12 @@ em{font-style:normal; font-weight:600; color:var(--ink)}
 .hero .acts .m{font-size:var(--fs-meta); color:var(--ink-3); font-variant-numeric:tabular-nums}
 
 /* ── 界面预览：手绘感高保真组件，不是空心 div 也不是渐变斑点 ──
- * 内部固定 640px 逻辑宽再整体等比缩放：手机与窄栏下窗口不会压成一条，
- * 内容是"缩小"而不是"挤扁"。桌面宽栏内缩放系数为 1，不生效。 */
-.sizer{container-type:inline-size}
-.launch{width:640px; transform-origin:top left;
-  transform:scale(calc(var(--fit) / 640))}
+ * 块内固定 560px 逻辑宽，外层 stage 负责按可用宽度等比缩放。
+ * 窗口内容因此在窄栏里是「整体缩小」而不是「挤成一条」。
+ * 缩放系数由 site.js 量取（纯 CSS 无法在元素自身被变换时拿到正确容器宽度），
+ * 脚本未执行时 stage 高度自动，块按原尺寸显示但不会撑破视口。 */
+.stage{overflow:hidden}
+.stage .fit{width:560px; transform-origin:top left}
 .shot{border:1px solid var(--line); border-radius:var(--r-lg); background:var(--paper-2);
   box-shadow:var(--shadow-3); overflow:hidden}
 .shot-bar{display:flex; align-items:center; gap:7px; height:36px; padding:0 13px;
@@ -399,7 +400,6 @@ em{font-style:normal; font-weight:600; color:var(--ink)}
 }
 @media (max-width:900px){
   .hero-in{grid-template-columns:1fr}
-  .hero .shot, .hero .shot-phone, .hero .shot-console{max-width:520px}
   .nav .links{display:none}
   .nav .links.open{display:flex; position:absolute; top:60px; left:0; right:0;
     flex-direction:column; gap:0; background:var(--paper);
@@ -413,9 +413,13 @@ em{font-style:normal; font-weight:600; color:var(--ink)}
   .pick.sub{grid-template-columns:1fr; gap:10px}
   .arts .a{grid-template-columns:1fr; gap:6px}
   .arts .a .r{text-align:left}
+  /* 窄屏侧栏折成横排目录条：一屏菜单会比整页滚动更难扫 */
   .docs{grid-template-columns:1fr}
-  .docs .side{position:static; max-height:none; padding:18px 0 20px;
-    border-bottom:1px solid var(--line)}
+  .docs .side{position:static; max-height:none; padding:14px 0;
+    border-bottom:1px solid var(--line); overflow-x:auto; white-space:nowrap}
+  .docs .side .k{display:inline-block; padding:0; margin:0 10px 0 0; vertical-align:middle}
+  .docs .side .k:not(:first-child){margin-left:14px}
+  .docs .side a{display:inline-block; margin:0 6px 0 0; padding:6px 13px}
   .reader{grid-template-columns:1fr; gap:0}
   .reader .rail{position:static; max-height:none; order:2; margin-top:38px;
     padding-top:18px; border-top:1px solid var(--line)}

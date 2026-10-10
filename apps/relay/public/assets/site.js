@@ -100,6 +100,21 @@
     if (o.url) ensureMeta('meta[property="og:url"]', 'property', 'og:url').content = o.url;
   }
 
+  /* 首屏预览的等比缩放。
+   * 预览块内部按固定逻辑宽排版（窄栏里窗口不该压成一条），可用宽度不够时
+   * 整体缩小。缩放系数必须由这里量 —— 元素自己带 transform 时，
+   * 纯 CSS 拿不到它未被变换前的容器宽度。 */
+  function fitShots() {
+    document.querySelectorAll('.stage .fit').forEach(function (el) {
+      var logical = el.offsetWidth;
+      var avail = el.parentNode.clientWidth;
+      if (!logical || !avail) return;
+      var s = Math.min(1, avail / logical);
+      el.style.transform = s < 1 ? 'scale(' + s + ')' : '';
+      el.parentNode.style.height = s < 1 ? (el.offsetHeight * s) + 'px' : '';
+    });
+  }
+
   /* 标签页图标：页面已显式声明时跳过，这里只作兜底。 */
   function mountFavicon() {
     if (document.querySelector('link[rel="icon"]')) return;
@@ -113,6 +128,13 @@
   function mount(active) {
     mountFavicon();
     mountMeta();
+    fitShots();
+    if (!window.__hermixFitBound) {
+      window.__hermixFitBound = true;
+      window.addEventListener('resize', fitShots);
+      // 字体加载完成后行高会变，缩放后高度要重算一次
+      if (document.fonts && document.fonts.ready) document.fonts.ready.then(fitShots);
+    }
     var nav = document.querySelector('[data-nav]');
     if (nav) nav.innerHTML = navHtml(active);
     var ft = document.querySelector('[data-footer]');
