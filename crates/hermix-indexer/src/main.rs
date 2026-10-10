@@ -605,6 +605,8 @@ fn spawn_watchdog(
             }
         }
         let _ = std::fs::remove_file(dir.join("helper.pid"));
+        // 同心跳自杀路径：清掉 alive，别让 60s 新鲜窗把死人当活人。
+        let _ = std::fs::remove_file(&alive);
         if n > 0 {
             write_done(
                 &dir,
@@ -660,6 +662,7 @@ fn main() {
     write_done(&dir, &snap_name, ok, n, err);
     if !ok {
         let _ = std::fs::remove_file(&pid_path);
+        let _ = std::fs::remove_file(&alive_path);
         exit(3);
     }
 
@@ -696,6 +699,7 @@ fn main() {
         if shutdown_path.exists() {
             let _ = std::fs::remove_file(&shutdown_path);
             let _ = std::fs::remove_file(&pid_path);
+            let _ = std::fs::remove_file(&alive_path);
             exit(0);
         }
 
@@ -711,6 +715,11 @@ fn main() {
             let idle = IDLE.with(|c| c.get()) + 1;
             IDLE.with(|c| c.set(idle));
             if idle > 60 {
+                // 自杀必须清掉 alive 标记：它此后 60s 内仍"新鲜"，只看 mtime
+                // 的驻留判定会把死人当活人（2026-10-10 现场：helper 随旧主
+                // 进程自杀后 15s，新主进程误判驻留、resnap 无人消费、240s
+                // 超时）。主进程侧已加 pid 判活兜底，这里清标记是除根。
+                let _ = std::fs::remove_file(&alive_path);
                 let _ = std::fs::remove_file(&pid_path);
                 exit(0);
             }

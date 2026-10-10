@@ -569,14 +569,51 @@ mod usn_helper {
             .map(|h| windows::Win32::Foundation::HWND(*h as *mut _))
     }
 
-    /// helper 是否已驻留（alive 文件 60s 内新鲜）→ 主进程重启免二次 UAC。
+    /// helper 是否已驻留 → 主进程重启免二次 UAC。
+    ///
+    /// 判定 = alive 文件 60s 内新鲜 **且** helper.pid 指向的进程真活。
+    /// 只看 mtime 会踩竞态（2026-10-10 现场）：helper 随旧主进程自杀后
+    /// （心跳停止），15s 内重启的新主进程看到的 alive 才 15s 旧——在
+    /// 60s 窗口内判「驻留」、不拉新 helper，随后写下的 resnap.request
+    /// 没有活人消费，240s 超时报「驻留 helper 未完成重枚举」。
+    /// OpenProcess 查询即可判活，无需提权句柄。
     fn helper_resident(dir: &Path) -> bool {
-        dir.join("helper.alive")
+        let fresh = dir
+            .join("helper.alive")
             .metadata()
             .ok()
             .and_then(|m| m.modified().ok())
             .map(|t| t.elapsed().unwrap_or_default() < Duration::from_secs(60))
-            .unwrap_or(false)
+            .unwrap_or(false);
+        if !fresh {
+            return false;
+        }
+        helper_pid_alive(dir)
+    }
+
+    /// helper.pid 里的进程号当前是否对应一个活进程。
+    fn helper_pid_alive(dir: &Path) -> bool {
+        use windows::Win32::System::Threading::{
+            OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+        let Ok(pid_text) = std::fs::read_to_string(dir.join("helper.pid")) else {
+            return false;
+        };
+        let Ok(pid) = pid_text.trim().parse::<u32>() else {
+            return false;
+        };
+        // 权限不足/不存在的 pid 都拿不到句柄 → 按死处理（宁可多弹一次 UAC，
+        // 也不能对着死人写 resnap 干等 240s）。windows 0.58：OpenProcess 返回
+        // Result<HANDLE>，拿到有效句柄即活（Windows 无僵尸态）。
+        // scrutinee 是 unsafe 块，let-else 里必须括起来，否则 `} else` 歧义。
+        let Ok(h) = (unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }) else {
+            return false;
+        };
+        let alive = !h.is_invalid();
+        unsafe {
+            let _ = windows::Win32::Foundation::CloseHandle(h);
+        }
+        alive
     }
 
     /// 主进程心跳线程：每 5s touch main.alive（helper 见不到新鲜心跳就自杀）。
