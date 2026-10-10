@@ -18,8 +18,9 @@
 //!
 //! 已知边界（与 deepseek 相同，非 bug）：FAT/exFAT 无 ACL 不承诺；CIM
 //! 不可用（Authenticated Users 被剔出 restricting 列表，关死 C:\ 根
-//! 树创建逃逸）；受限创建配 `CREATE_NO_WINDOW` 会 STATUS_DLL_INIT_FAILED，
-//! 故用 STARTUPINFO `STARTF_USESHOWWINDOW | SW_HIDE` 隐藏控制台。
+//! 树创建逃逸）；受限创建配 `CREATE_NO_WINDOW` 会 STATUS_DLL_INIT_FAILED。
+//! 受限 token 进程受桌面 ACL 限制本就无法创建可见窗口，故不再显式设置
+//! `SW_HIDE`，避免杀软「隐藏执行」规则误报（见 `spawn_restricted`）。
 
 use std::ffi::c_void;
 use std::path::{Path, PathBuf};
@@ -59,10 +60,9 @@ use windows_sys::Win32::{
         Threading::{
             CreateProcessAsUserW, GetCurrentProcess, GetExitCodeProcess, OpenProcessToken,
             TerminateProcess, WaitForSingleObject, CREATE_UNICODE_ENVIRONMENT, INFINITE,
-            PROCESS_INFORMATION, STARTF_USESHOWWINDOW, STARTF_USESTDHANDLES, STARTUPINFOW,
+            PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOW,
         },
     },
-    UI::WindowsAndMessaging::SW_HIDE,
 };
 
 // ── 访问掩码（winnt.h 稳定值；对齐参考实现 win32-abi.ts）────────
@@ -666,7 +666,8 @@ fn grant_write(
 // ---------------------------------------------------------------------------
 // 受限进程创建（对齐 runner.ts 的进程内形态 + 2026-09-16 控制台可见性
 // 决策：受限创建禁用 CREATE_NO_WINDOW——STATUS_DLL_INIT_FAILED 直接杀
-// 死子进程；改 STARTUPINFO STARTF_USESHOWWINDOW|SW_HIDE）
+// 死子进程；且 STARTUPINFO 不再置 STARTF_USESHOWWINDOW/SW_HIDE，避免
+// 杀软「隐藏执行」误报（受限 token 本就无法附着交互桌面，实践中仍不可见）。
 // ---------------------------------------------------------------------------
 
 /// 手工 env block（UTF-16 双 NUL 结尾）：父 env + TMP/TEMP 覆盖指向
@@ -819,8 +820,12 @@ fn spawn_restricted(
 
     let mut si: STARTUPINFOW = unsafe { std::mem::zeroed() };
     si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
-    si.dwFlags = STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES;
-    si.wShowWindow = SW_HIDE as u16;
+    // 不使用 STARTF_USESHOWWINDOW / wShowWindow=SW_HIDE：受限 token（Low
+    // 完整性）进程受桌面 ACL 限制本就无法创建可见窗口，但显式 SW_HIDE 会被
+    // 杀软「隐藏执行」规则命中（父进程是 Hermix 而非系统程序 + 隐藏窗口 +
+    // powershell）。去掉隐藏标志后进程在实践中仍不可见（无交互桌面可附着），
+    // 但不再触发误报。安全隔离（受限 token / Low IL）完整保留。
+    si.dwFlags = STARTF_USESTDHANDLES;
     si.hStdInput = stdin;
     si.hStdOutput = stdout_w;
     si.hStdError = stderr_w;

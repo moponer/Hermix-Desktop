@@ -510,6 +510,29 @@ impl TerminalBackend for LocalBackend {
             }
         }
 
+        // Windows 常规路径（danger-full-access 或无 workdir 才落到这里；
+        // 默认沙盒路径已在上方处理）。这些命令不进沙盒，但仍要避免
+        // CREATE_NO_WINDOW 隐藏执行被杀软拦截。非 background 命令改用 ConPTY
+        // 一次性执行（伪终端不弹窗、不隐藏，杀软友好，与 pty 路径一致）；
+        // background 必须 detach、ConPTY 不支持，下方保留 std::process（隐藏
+        // 标志对该场景是 detach 功能必需，见其注释）。
+        #[cfg(windows)]
+        if !background {
+            let effective_dir = workdir
+                .map(std::path::PathBuf::from)
+                .or_else(|| self.workspace_root.clone())
+                .map(|p| hermix_core::path_security::strip_win32_long_path_buf(&p));
+            return self
+                .pty_sessions
+                .execute_oneshot(
+                    command,
+                    timeout_secs,
+                    effective_dir.as_deref(),
+                    self.max_output_size,
+                )
+                .await;
+        }
+
         #[cfg(unix)]
         let mut cmd = {
             let mut c = TokioCommand::new("sh");
@@ -526,9 +549,12 @@ impl TerminalBackend for LocalBackend {
             }
             c
         };
-        // Hide the console window on Windows — without CREATE_NO_WINDOW,
-        // every shell tool call (dir /b, etc.) flashes a black cmd window
-        // on the user's desktop. Same pattern as cdp_bootstrap.rs.
+        // 仅 background（danger 模式 / 无 workdir）命令会走到这里并设置
+        // CREATE_NO_WINDOW：background 必须 detach，ConPTY 是同步 wait 不支持，
+        // 故保留无窗口以避免 GUI 应用后台进程永久挂一个黑窗。非 background
+        // 已在上方的 ConPTY 分支返回，不会到此。这是 detach 功能必需的隐藏
+        // 执行（非默认路径，用户已显式选 full access），不属于被杀软拦截的
+        // 交互式终端命令场景。
         #[cfg(windows)]
         {
             const CREATE_NO_WINDOW: u32 = 0x0800_0000;
