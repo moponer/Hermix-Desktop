@@ -35,6 +35,17 @@ const VERSION: u32 = 1;
 /// 与 E2EE 私钥不同的熵标签，见 `relay_identity::protect_secret`。
 const DPAPI_LABEL: &[u8] = b"hermix/relay/token/v1";
 
+/// 内置默认 relay 根地址。
+///
+/// **为什么要有默认值**：地址是**我们部署的**，不是用户该填的参数。此前
+/// `url` 空 = 未启用，界面上就得摆一个必填输入框，把「配地址」这件我们自己的
+/// 事推给用户——用户拿到手机端却连不上，报错还写「还没配置 relay 地址」。
+///
+/// 解析顺序与 `updater::manifest_url()` 同构（内置默认 → 落盘值覆盖）：
+/// 自建服务只需要把 `relay.json` 的 `url` 改成自己的地址，不填就用官方的。
+/// 地址不外露在界面上：显示出来等于让用户抄，抄错还是连不上。
+pub const DEFAULT_RELAY_URL: &str = "wss://hermix.cssso.com";
+
 #[derive(Serialize, Deserialize, Clone, Default)]
 struct StoredRelay {
     version: u32,
@@ -58,7 +69,9 @@ pub struct RelaySettings {
 }
 
 impl RelaySettings {
-    /// 未配置地址 = 不启用（与 `RelayConfig::enabled` 同一判据）。
+    /// 有地址 = 启用。`load()` 之后地址至少是 `DEFAULT_RELAY_URL`，所以正常
+    /// 配置下恒为真；唯一的例外是**配置读坏了**（`load_error` 分支回落成空
+    /// 地址）——那时宁可不连：拿半条配置去连，比不连更难排查。
     pub fn enabled(&self) -> bool {
         !self.url.trim().is_empty()
     }
@@ -110,7 +123,12 @@ pub fn load_at(path: &Path) -> RelaySettings {
                     }
                 };
                 RelaySettings {
-                    url: stored.url,
+                    // 空 = 从没改过 = 用官方的（见 DEFAULT_RELAY_URL）。
+                    url: if stored.url.trim().is_empty() {
+                        DEFAULT_RELAY_URL.into()
+                    } else {
+                        stored.url
+                    },
                     node_id: stored.node_id,
                     token,
                     load_error: None,
@@ -118,7 +136,10 @@ pub fn load_at(path: &Path) -> RelaySettings {
             }
             Err(e) => broken(format!("relay.json 解析失败：{e}")),
         },
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => RelaySettings::default(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => RelaySettings {
+            url: DEFAULT_RELAY_URL.into(),
+            ..Default::default()
+        },
         Err(e) => broken(format!("relay.json 读不了：{e}")),
     }
 }
@@ -616,9 +637,45 @@ mod tests {
     fn missing_file_is_not_an_error() {
         let (_d, p) = tmp();
         let s = load_at(&p);
-        assert_eq!(s.url, "");
-        assert!(!s.enabled());
+        // 没配过 = 用官方地址，不是「未启用」——地址是我们的部署参数，
+        // 不该变成用户必填项（见 DEFAULT_RELAY_URL）。
+        assert_eq!(s.url, DEFAULT_RELAY_URL);
+        assert!(s.enabled());
         assert!(s.load_error.is_none(), "没配过不是错误");
+    }
+
+    #[test]
+    fn empty_stored_url_falls_back_to_the_official_relay() {
+        let (_d, p) = tmp();
+        std::fs::write(&p, br#"{"version":1,"url":"","node_id":"n","protected_token":""}"#)
+            .unwrap();
+        let s = load_at(&p);
+        assert_eq!(s.url, DEFAULT_RELAY_URL);
+        assert!(s.enabled());
+    }
+
+    #[test]
+    fn self_hosted_url_wins_over_the_default() {
+        let (_d, p) = tmp();
+        let s = RelaySettings {
+            url: "wss://my-own-relay.internal".into(),
+            node_id: "n".into(),
+            token: String::new(),
+            load_error: None,
+        };
+        save_at(&p, &s).expect("save");
+        assert_eq!(load_at(&p).url, "wss://my-own-relay.internal");
+    }
+
+    #[test]
+    fn broken_config_does_not_silently_fall_back_to_connecting() {
+        let (_d, p) = tmp();
+        std::fs::write(&p, br#"{"version":99,"url":"","node_id":"n","protected_token":""}"#)
+            .unwrap();
+        let s = load_at(&p);
+        // 配置坏了 → 空地址 → 不连。拿半条配置去连比不连更难排查。
+        assert!(!s.enabled());
+        assert!(s.load_error.is_some());
     }
 
     #[test]

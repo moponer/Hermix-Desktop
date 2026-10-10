@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   Building2,
   Check,
+  ChevronDown,
   Clock3,
   Copy,
   MessageCircle,
@@ -233,40 +234,10 @@ export function ImChannelsCard() {
   const [relayUrl, setRelayUrl] = useState("");
   const [relayToken, setRelayToken] = useState("");
   const [relayBusy, setRelayBusy] = useState(false);
-  /** 刚签发出来的手机凭据——**只这一次**能看到，所以要显眼。 */
-  const [issued, setIssued] = useState<{ token: string; node_id: string } | null>(null);
-  const [issuing, setIssuing] = useState(false);
-  const [issueErr, setIssueErr] = useState<string | null>(null);
-
-  /**
-   * 用电脑自己的 node 凭据向 relay 换一条手机凭据。
-   *
-   * 桌面端**看不到** node 凭据明文（Rust 侧只存 DPAPI 密文，API 只回
-   * `has_token`），所以这一步必须由 Rust 代发——它有明文。
-   */
-  const issuePhone = useCallback(async () => {
-    setIssuing(true);
-    setIssueErr(null);
-    try {
-      const r = await fetchJSON<{ token: string; node_id: string }>("/api/relay/phone-credential");
-      setIssued(r);
-      toastSuccess("手机凭据已签发 —— 明文只显示这一次");
-    } catch (e) {
-      setIssueErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      setIssuing(false);
-    }
-  }, []);
-
-  const copyIssued = useCallback(async () => {
-    if (!issued) return;
-    try {
-      await navigator.clipboard.writeText(issued.token);
-      toastSuccess("已复制，填到手机「设置 → relay 凭据」里");
-    } catch {
-      toastError("复制失败，请手动选中复制");
-    }
-  }, [issued]);
+  /** 「高级」折叠区默认收起：中转地址是自建服务才要动的东西，不该占主视图。 */
+  const [relayAdvOpen, setRelayAdvOpen] = useState(false);
+  // 「加一台手机」与其手动签发口已于 2026-10-10 移除：一机一机，手机凭据由配对码
+  // 当场签发。签发接口 `/api/relay/phone-credential` 仍在后端，供脚本/排障使用。
 
   const refreshRelay = useCallback(async () => {
     try {
@@ -672,61 +643,60 @@ export function ImChannelsCard() {
               </section>
 
               {/* ── 中转连接（relay）──────────────────────────────────
-                  上面的扫码配对**依赖**这条通道：出配对码要当场向 relay
-                  签发手机凭据，配好之后聊天连接也常驻经 relay（E2EE，
-                  relay 只透传密文）。放在同一个渠道面板里，因为它们
-                  服务的都是「手机端」这一个渠道。 */}
-              <section className="space-y-4 border-t border-border-subtle pt-5">
-                <SubHead>中转连接（relay）</SubHead>
-                <div className="text-[length:var(--text-meta)] text-text-muted leading-relaxed">
-                  配对与日常连接都经中转。<strong className="text-text-secondary">第一步在 relay 服务器上执行一次</strong>
-                  （每台电脑只需一次），之后这台电脑就能自己签发手机凭据、出配对码，不用再登服务器。
-                </div>
+                  扫码配对**依赖**这条通道：出配对码要当场向 relay 签发手机凭据，
+                  配好之后聊天连接也常驻经 relay。放在同一个渠道面板里，因为它们
+                  服务的都是「手机端」这一个渠道。
+
+                  **地址不再是一个输入框**（2026-10-10）。地址是我们部署的，不是
+                  用户该填的参数——此前摆一个必填框，用户拿到手机端却连不上，报错
+                  还写「还没配置 relay 地址」。现在后端内置默认（relay_settings::
+                  DEFAULT_RELAY_URL），界面不显示也不要求填写；自建服务才展开
+                  地址框，见下面「高级」。 */}
+              <section className="space-y-4">
+                <SubHead>中转连接</SubHead>
 
                 {relayErr ? (
-                  <div className="flex items-start gap-2 text-[length:var(--text-meta)] text-text-secondary">
-                    <AlertTriangle className="icon-md mt-0.5 shrink-0" />
-                    <div>
-                      读取 relay 配置失败：<span className="font-mono">{relayErr}</span>
-                    </div>
-                    <ActionBtn onClick={() => void refreshRelay()} className="ml-auto">
+                  <div className="flex items-start gap-2 text-[length:var(--text-ui)] text-text-secondary">
+                    <AlertTriangle className="icon-md mt-0.5 shrink-0 text-error" />
+                    <span className="min-w-0 flex-1">
+                      读取中转配置失败：<span className="font-mono">{relayErr}</span>
+                    </span>
+                    <ActionBtn onClick={() => void refreshRelay()}>
                       重试
                     </ActionBtn>
                   </div>
                 ) : !relay ? (
-                  <div className="text-[length:var(--text-meta)] text-text-muted">正在读取…</div>
+                  <div className="text-[length:var(--text-ui)] text-text-muted">正在读取…</div>
                 ) : (
                   <>
-                    {/* 配置读坏了 ≠ 没配过。两者排查方向相反，必须分开说。 */}
-                    {relay.load_error && (
-                      <div className="flex items-start gap-2 rounded-lg bg-error-soft px-4 py-3 text-[length:var(--text-meta)] text-text-secondary">
-                        <AlertTriangle className="icon-sm mt-0.5 shrink-0 text-error" />
-                        <span>{relay.load_error}</span>
-                      </div>
-                    )}
-
-                    <div className="flex items-center gap-3 flex-wrap rounded-lg bg-bg-secondary px-4 py-3">
+                    {/* 状态一行说清，其余内容都从这个前提展开 */}
+                    <div
+                      className={`rounded-lg px-4 py-3 flex items-center gap-2 flex-wrap ${
+                        relay.state === "connected" ? "bg-bg-secondary" : "bg-warning-soft"
+                      }`}
+                    >
                       {relay.state === "connected" ? (
-                        <span className="inline-flex items-center gap-1.5 text-[length:var(--text-ui)] text-accent">
-                          <span className="inline-block h-1.5 w-1.5 rounded-full bg-accent" />
-                          已连上中转
-                        </span>
+                        <>
+                          <span className="inline-block h-2 w-2 rounded-full bg-accent shrink-0" />
+                          <span className="text-[length:var(--text-ui)] text-text-primary">
+                            已连上中转
+                          </span>
+                        </>
                       ) : relay.state === "connecting" ? (
-                        <span className="inline-flex items-center gap-1.5 text-[length:var(--text-ui)] text-warning">
-                          <RefreshCw className="icon-sm animate-spin" />
-                          正在连接（第 {relay.attempts} 次）
-                        </span>
-                      ) : relay.enabled ? (
-                        <span className="inline-flex items-center gap-1.5 text-[length:var(--text-ui)] text-warning">
-                          <AlertTriangle className="icon-sm" />
-                          中转未接通
-                        </span>
+                        <>
+                          <RefreshCw className="icon-sm animate-spin text-warning shrink-0" />
+                          <span className="text-[length:var(--text-ui)] text-text-secondary">
+                            正在连接（第 {relay.attempts} 次）
+                          </span>
+                        </>
                       ) : (
-                        <span className="text-[length:var(--text-ui)] text-text-muted">
-                          未启用 —— 手机无法连接（配对与连接都经中转，直连已退役）
-                        </span>
+                        <>
+                          <AlertTriangle className="icon-sm text-warning shrink-0" />
+                          <span className="text-[length:var(--text-ui)] text-text-secondary">
+                            尚未接通中转
+                          </span>
+                        </>
                       )}
-
                       <div className="ml-auto">
                         <ActionBtn
                           onClick={() => void refreshRelay()}
@@ -738,122 +708,114 @@ export function ImChannelsCard() {
                       </div>
                     </div>
 
-                    {relay.last_error && (
-                      <div className="flex items-start gap-2 rounded-lg bg-bg-secondary px-4 py-3">
-                        <AlertTriangle className="icon-sm mt-0.5 shrink-0 text-warning" />
-                        <div className="min-w-0 text-[length:var(--text-meta)]">
-                          <div className="font-medium text-text-primary">上次连接失败</div>
-                          <div className="mt-0.5 break-all font-mono text-text-secondary">
-                            {relay.last_error}
-                          </div>
-                        </div>
+                    {/* 配置读坏了 ≠ 没配过。两者排查方向相反，必须分开说。 */}
+                    {relay.load_error && (
+                      <div className="rounded-lg bg-error-soft px-4 py-3 text-[length:var(--text-meta)] text-text-secondary break-all">
+                        {relay.load_error}
                       </div>
                     )}
 
+                    {relay.last_error && (
+                      <div className="text-[length:var(--text-meta)] text-text-muted break-all">
+                        上次连接失败：{relay.last_error}
+                      </div>
+                    )}
+
+                    {/* 首次设置：没有电脑侧凭据就只能停在这里，所以这是当前唯一的
+                        阻塞项，放在最显眼处而不是塞进高级折叠区。 */}
                     {!relay.has_token && relay.node_id && (
-                      // 这条命令是**手动的**，且刻意保持手动：relay 若能自助签发
-                      // 电脑侧凭据，就等于对公网开放注册——任何人都能凭空造一台
-                      // 「已登记的电脑」。第一次签发必须是运维在服务器上做的，
-                      // 这与自建服务「谁能注册节点」本来就是运营者决定的事一致。
-                      <div className="rounded-lg bg-bg-secondary p-4 space-y-2">
-                        <div className="text-[length:var(--text-ui)] text-text-secondary">
-                          第一步：在 relay 服务器上执行
+                      <div className="rounded-lg bg-bg-secondary p-4 space-y-3">
+                        <div className="text-[length:var(--text-ui)] text-text-primary">
+                          还差一步：把这台电脑登记到中转
                         </div>
-                        <code className="block break-all rounded-md bg-bg-base px-3 py-2 font-mono text-[length:var(--text-meta)] text-accent select-all">
+                        <div className="text-[length:var(--text-meta)] text-text-secondary leading-relaxed">
+                          在中转服务器上执行下面这条命令，把打印出来的凭据填进去。
+                          这一步刻意保持手动——如果电脑能自助登记，任何人都能凭空注册一台
+                          「已登记的电脑」。做完这一次，之后生成配对码就不用再登服务器。
+                        </div>
+                        <code className="block break-all rounded-md bg-bg-tertiary px-3 py-2 font-mono text-[length:var(--text-meta)] text-accent select-all">
                           node src/relayctl.js add-node {relay.node_id}
                         </code>
-                        <div className="text-[length:var(--text-meta)] text-text-muted leading-relaxed">
-                          它会打印一条 <code className="font-mono">hrel_</code> 开头的凭据（**只显示这一次**），
-                          填进上面的「电脑侧凭据」再保存。这台电脑以后就不用再登服务器了——
-                          加手机由下面的「生成手机凭据」自助完成。
-                        </div>
+                        <label className="block">
+                          <span className="block text-[length:var(--text-meta)] text-text-muted mb-1.5">
+                            电脑侧凭据（hrel_*）
+                          </span>
+                          <input
+                            value={relayToken}
+                            onChange={(e) => setRelayToken(e.target.value)}
+                            placeholder="relayctl add-node 的输出"
+                            type="password"
+                            spellCheck={false}
+                            className="w-full h-9 px-3 rounded-lg bg-bg-tertiary text-[length:var(--text-ui)] text-text-primary placeholder:text-text-faint focus:outline-none focus:ring-1 focus:ring-accent"
+                          />
+                        </label>
+                        <ActionBtn
+                          onClick={() => void saveRelay()}
+                          disabled={relayBusy || !relayToken.trim()}
+                          tone="primary"
+                        >
+                          {relayBusy ? "保存中…" : "保存并连接"}
+                        </ActionBtn>
                       </div>
                     )}
 
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      <label className="block">
-                        <span className="block text-[length:var(--text-meta)] text-text-muted mb-1.5">
-                          中转地址
-                        </span>
-                        <input
-                          value={relayUrl}
-                          onChange={(e) => setRelayUrl(e.target.value)}
-                          placeholder="wss://relay.example.com"
-                          spellCheck={false}
-                          className="w-full h-9 px-3 rounded-lg bg-bg-tertiary text-[length:var(--text-ui)] text-text-primary placeholder:text-text-faint focus:outline-none focus:ring-1 focus:ring-accent"
+                    {/* 高级：自建服务才需要动地址 */}
+                    <div className="rounded-lg bg-bg-secondary overflow-hidden">
+                      <button
+                        type="button"
+                        onClick={() => setRelayAdvOpen((v) => !v)}
+                        className="w-full px-4 py-3 flex items-center gap-2 text-left hover:bg-bg-card-hover transition-colors"
+                      >
+                        <ChevronDown
+                          className={`icon-sm shrink-0 text-text-muted transition-transform ${
+                            relayAdvOpen ? "rotate-180" : ""
+                          }`}
                         />
-                      </label>
-                      <label className="block">
-                        <span className="block text-[length:var(--text-meta)] text-text-muted mb-1.5">
-                          电脑侧凭据（hrel_*）
+                        <span className="text-[length:var(--text-ui)] text-text-secondary">
+                          高级
                         </span>
-                        <input
-                          value={relayToken}
-                          onChange={(e) => setRelayToken(e.target.value)}
-                          placeholder={relay.has_token ? "已填写 —— 留空表示不改" : "relayctl add-node 的输出"}
-                          type="password"
-                          spellCheck={false}
-                          className="w-full h-9 px-3 rounded-lg bg-bg-tertiary text-[length:var(--text-ui)] text-text-primary placeholder:text-text-faint focus:outline-none focus:ring-1 focus:ring-accent"
-                        />
-                      </label>
-                    </div>
+                        <span className="text-[length:var(--text-meta)] text-text-muted truncate-1">
+                          自建中转服务
+                        </span>
+                      </button>
 
-                    <div className="flex items-center gap-3">
-                      <ActionBtn onClick={() => void saveRelay()} disabled={relayBusy} tone="primary">
-                        {relayBusy ? "保存中…" : "保存"}
-                      </ActionBtn>
-                      <span className="text-[length:var(--text-meta)] text-text-muted">
-                        本机 id：<span className="font-mono">{relay.node_id || "（未生成）"}</span>
-                      </span>
-                    </div>
-
-                    {/* 加一台手机：不用登服务器敲 relayctl */}
-                    <div className="rounded-lg bg-bg-secondary p-4 space-y-3">
-                      <div className="text-[length:var(--text-ui)] text-text-secondary">
-                        加一台手机
-                      </div>
-                      <div className="text-[length:var(--text-meta)] text-text-muted leading-relaxed">
-                        点下面生成一条手机凭据，填到手机的「设置 → relay 凭据」里。明文只显示这一次。
-                      </div>
-                      {issueErr && (
-                        <div className="flex items-start gap-2 text-[length:var(--text-meta)] text-error">
-                          <AlertTriangle className="icon-sm mt-0.5 shrink-0" />
-                          <span className="break-all">{issueErr}</span>
-                        </div>
-                      )}
-                      {issued ? (
-                        <div className="space-y-2">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="font-mono text-[length:var(--text-meta)] text-accent break-all select-all">
-                              {issued.token}
+                      {relayAdvOpen && (
+                        <div className="px-4 pb-4 space-y-3">
+                          <div className="text-[length:var(--text-meta)] text-text-muted leading-relaxed">
+                            默认走官方中转，不用管这一节。只有你自己部署了 relay 服务才需要改：
+                            填上你的地址（留空 = 改回官方）。
+                          </div>
+                          <label className="block">
+                            <span className="block text-[length:var(--text-meta)] text-text-muted mb-1.5">
+                              自建中转地址（可选）
                             </span>
-                            <ActionBtn onClick={() => void copyIssued()} icon={<Copy className="icon-sm" />}>
-                              复制
+                            <input
+                              value={relayUrl}
+                              onChange={(e) => setRelayUrl(e.target.value)}
+                              placeholder={relay.url || "wss://relay.example.com"}
+                              spellCheck={false}
+                              className="w-full h-9 px-3 rounded-lg bg-bg-tertiary text-[length:var(--text-ui)] text-text-primary placeholder:text-text-faint focus:outline-none focus:ring-1 focus:ring-accent"
+                            />
+                          </label>
+                          <div className="flex items-center gap-3 flex-wrap">
+                            <ActionBtn
+                              onClick={() => void saveRelay()}
+                              disabled={relayBusy}
+                              tone="primary"
+                            >
+                              {relayBusy ? "保存中…" : "保存"}
                             </ActionBtn>
-                            <ActionBtn onClick={() => setIssued(null)}>收起</ActionBtn>
-                          </div>
-                          <div className="text-[length:var(--text-meta)] text-warning">
-                            这是唯一一次能看到它。关掉就只能在 relay 服务器上重新签发。
+                            <span className="text-[length:var(--text-meta)] text-text-muted">
+                              本机 id：<span className="font-mono">{relay.node_id || "（未生成）"}</span>
+                            </span>
                           </div>
                         </div>
-                      ) : (
-                        <ActionBtn
-                          onClick={() => void issuePhone()}
-                          disabled={issuing || !relay.has_token}
-                          icon={<QrCode className="icon-sm" />}
-                          title={
-                            relay.has_token
-                              ? "向 relay 换一条手机凭据"
-                              : "先填电脑侧凭据，否则 relay 会拒绝"
-                          }
-                        >
-                          {issuing ? "签发中…" : "生成手机凭据"}
-                        </ActionBtn>
                       )}
                     </div>
                   </>
                 )}
               </section>
+
             </div>
           )}
 
