@@ -102,6 +102,17 @@ pub const HARD_ESSENTIAL_TOOLSETS: &[&str] = &[
     // 必然臆想工具名。显式 curated 白名单（enabled_toolsets.json）是旧
     // 版本清单，新 toolset 永远不在里面，floor 是唯一可靠通道。
     "workbench",
+    // vault：同一个坑的第二例（2026-10-11）。凭据保险库 2026-10-09 上线，
+    // 但 `enabled_toolsets.json` 是更早那次「用户在设置里点过一次」时写下的
+    // 快照，里面不可能有 vault → 启动时白名单后置过滤把整个 toolset 关掉，
+    // `vault_list` / `vault_get` 对 LLM 完全不可见。用户侧的现象是
+    // 「用远程对话问凭据，助手说它不知道有保险库这回事」——而前端面板照常
+    // 可用（面板走 dashboard/vault_api 自己 open，与工具注册是两条路）。
+    // 全程没有任何报错：工具注册成功、只是随后被静默关掉。
+    // 没有做「新 toolset 默认可见」的通用迁移是刻意的：白名单是安全闸，
+    // 让缺席项自动转正等于废掉它；这里的取舍是——保险库是产品头牌能力，
+    // 且本地会话按设计天然可信（见 tools/vault.rs 顶部信任边界），故进硬地板。
+    "vault",
 ];
 
 /// Soft essential toolsets — re-enabled by the floor ONLY when the
@@ -134,6 +145,7 @@ pub const ESSENTIAL_TOOLSETS: &[&str] = &[
     "security_guidance",
     "custom_app",
     "workbench",
+    "vault",
     // soft
     "document",
     "office",
@@ -195,6 +207,7 @@ mod tests {
                 "security_guidance",
                 "custom_app",
                 "workbench",
+                "vault",
             ],
             "HARD_ESSENTIAL_TOOLSETS changed — update the floor and any UI copy."
         );
@@ -258,6 +271,12 @@ mod tests {
         assert!(
             HARD_ESSENTIAL_TOOLSETS.contains(&"security_guidance"),
             "security_guidance (policy reader) must remain in the hard essential floor"
+        );
+        // 凭据保险库：2026-10-11 从白名单里漏掉过一次，LLM 因此答"不知道有
+        // 凭据保险库"。钉住它，避免下一次"整理"时又被移出硬地板。
+        assert!(
+            HARD_ESSENTIAL_TOOLSETS.contains(&"vault"),
+            "vault (credential vault read tools) must remain in the hard essential floor"
         );
     }
 }
