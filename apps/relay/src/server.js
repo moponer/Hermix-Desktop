@@ -292,5 +292,7 @@ if (require.main === module) {
     dbPath: process.env.HERMIX_RELAY_DB,
     relayRoot: process.env.HERMIX_RELAY_ROOT,
   });
-  relay.listen(port, () => console.log(`[relay] listening :${port}`));
+  // 缺省只绑回环:relay 前面永远有 nginx 反代,公网直达 7777 没有存在理由。
+  const host = process.env.HERMIX_RELAY_HOST || "127.0.0.1";
+  relay.server.listen({ port, host }, () => console.log(`[relay] listening ${host}:${port}`));
 }
