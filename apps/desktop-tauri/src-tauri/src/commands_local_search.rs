@@ -448,7 +448,8 @@ mod usn_helper {
     pub struct Done {
         pub ok: bool,
         pub indexed: usize,
-        pub snapshot: Option<String>,
+        /// string(旧 helper 单文件)或 array(新 helper 多文件),读取时归一。
+        pub snapshot: Option<serde_json::Value>,
         pub error: Option<String>,
     }
 
@@ -889,7 +890,8 @@ mod usn_helper {
         // 等待期间按 snapshot 文件增长量估算进度（每条记录约 90B）。
         let done_obj: Done = {
             let done = dir.join("done.json");
-            let deadline = Instant::now() + Duration::from_secs(300);
+            // 420s:六卷 x 60s 逐卷卡死预算(最坏全部卡死)+ UAC 等待 + 余量。
+        let deadline = Instant::now() + Duration::from_secs(420);
             let poll_start = std::time::SystemTime::now();
             let done_fresh = |dir: &Path| -> bool {
                 std::fs::metadata(dir.join("done.json"))
@@ -900,14 +902,16 @@ mod usn_helper {
             if resident && !done_fresh(&dir) {
                 let _ = std::fs::write(dir.join("resnap.request"), b"1");
             }
-            let snap_probe = |dir: &Path| -> Option<PathBuf> {
-                // 取最新的 snapshot-<ts>.jsonl（文件名含时间戳，字典序即时间序）。
+            let snap_size = |dir: &Path| -> u64 {
+                // 逐卷独立文件:全部 snapshot-* 的体积之和作为进度依据。
                 std::fs::read_dir(dir)
-                    .ok()?
+                    .into_iter()
+                    .flatten()
                     .flatten()
                     .filter(|e| e.file_name().to_string_lossy().starts_with("snapshot-"))
-                    .max_by_key(|e| e.file_name())
-                    .map(|e| e.path())
+                    .filter_map(|e| e.metadata().ok())
+                    .map(|m| m.len())
+                    .sum()
             };
             let mut last_est: u64 = 0;
             let mut enumerating = false;
@@ -937,9 +941,10 @@ mod usn_helper {
                 // 先探进度，再决定要不要 resnap。顺序不能反：snapshot 正在
                 // 增长 = helper 正在全量枚举，此刻发 resnap 等于叫它**刚扫完
                 // 再重扫一遍**——用户看到的"循环重复扫描"有一半来自这里。
-                if let Some(snap) = snap_probe(&dir) {
-                    if let Ok(meta) = std::fs::metadata(&snap) {
-                        let est = meta.len() / 90;
+                {
+                    let total = snap_size(&dir);
+                    if total > 0 {
+                        let est = total / 90;
                         if est > last_est {
                             // 绝对值覆盖（估算含读取误差，不能累加）。
                             PROGRESS.fetch_add(est - last_est, Ordering::Relaxed);
@@ -957,7 +962,7 @@ mod usn_helper {
                                 break d; // helper 明确失败
                             }
                             match &d.snapshot {
-                                Some(s) if dir.join(s).exists() => break d,
+                                Some(s) if snap_value_exists(&dir, s) => break d,
                                 _ => {
                                     // done 新鲜但 snapshot 缺失：等枚举写盘
                                     if resnap_deadline.is_none() && resident && !enumerating {
@@ -987,10 +992,19 @@ mod usn_helper {
                 done_obj.error.unwrap_or_else(|| "unknown".into())
             ));
         }
-        let snapshot = dir.join(done_obj.snapshot.as_deref().unwrap_or(""));
+        // snapshot 文件清单:string(旧 helper)与 array(新 helper)归一。
+        let snap_files: Vec<PathBuf> = match &done_obj.snapshot {
+            Some(serde_json::Value::String(one)) => vec![dir.join(one)],
+            Some(serde_json::Value::Array(arr)) => arr
+                .iter()
+                .filter_map(|v| v.as_str())
+                .map(|one| dir.join(one))
+                .collect(),
+            _ => Vec::new(),
+        };
 
-        // 流式读 snapshot：先收原始记录，再两遍完成路径重建。
-        // 第一遍：frn → (parent, name, is_dir, ts)；第二遍自顶向下拼路径。
+        // 流式读 snapshot:先收原始记录,再两遍完成路径重建。
+        // 第一遍:frn -> (parent, name, is_dir, ts);第二遍自顶向下拼路径。
         struct Raw {
             parent: u64,
             name: String,
@@ -998,35 +1012,35 @@ mod usn_helper {
             ts: i64,
         }
         let mut raws: HashMap<u64, Raw> = HashMap::with_capacity(done_obj.indexed + 1024);
-        let file = std::fs::File::open(&snapshot).map_err(|e| format!("open snapshot: {e}"))?;
         let mut progress: u64 = 0;
-        for line in BufReader::with_capacity(1 << 20, file).lines() {
-            let Ok(line) = line else { break };
-            if line.is_empty() {
-                continue;
+        for snapshot in &snap_files {
+            let file = std::fs::File::open(snapshot)
+                .map_err(|e| format!("open snapshot {}: {e}", snapshot.display()))?;
+            for line in BufReader::with_capacity(1 << 20, file).lines() {
+                let Ok(line) = line else { break };
+                if line.is_empty() {
+                    continue;
+                }
+                let Ok(r) = serde_json::from_str::<RawLine>(&line) else { continue };
+                raws.insert(
+                    r.frn,
+                    Raw { parent: r.parent, name: r.name, is_dir: r.is_dir, ts: r.ts },
+                );
+                progress += 1;
+                if progress % 4096 == 0 {
+                    PROGRESS.fetch_add(4096, Ordering::Relaxed);
+                }
             }
-            let Ok(r) = serde_json::from_str::<RawLine>(&line) else { continue };
-            raws.insert(
-                r.frn,
-                Raw { parent: r.parent, name: r.name, is_dir: r.is_dir, ts: r.ts },
-            );
-            progress += 1;
-            if progress % 4096 == 0 {
-                PROGRESS.fetch_add(4096, Ordering::Relaxed);
-            }
+            // ~300MB 临时数据不滞留:读完自己那份立刻删。
+            let _ = std::fs::remove_file(snapshot);
         }
         PROGRESS.fetch_add((progress % 4096) as u64, Ordering::Relaxed);
-        let _ = std::fs::remove_file(&snapshot); // ~300MB 临时数据不滞留
-        // 同一目录里的**其他** snapshot 一并清掉：它们来自没走到上面那步的
-        // 扫描（主进程中途被杀、done.json 被后来的 helper 覆盖、双 helper
-        // 并发时落败的一方）。留着就是几百 MB 的纯垃圾，而且极易让人误以为
-        // "索引明明建好了"——现场那份 170MB / 131 万条的成果就是这么被
-        // 丢在盘上没人读的。
+        // 其余无人认领的 snapshot 一并清掉(主进程中途被杀 / 双 helper 落败方)。
         for stale in std::fs::read_dir(&dir)
             .into_iter()
             .flatten()
             .flatten()
-            .filter(|e| e.path() != snapshot)
+            .filter(|e| !snap_files.contains(&e.path()))
             .filter(|e| e.file_name().to_string_lossy().starts_with("snapshot-"))
         {
             let _ = std::fs::remove_file(stale.path());
@@ -1137,6 +1151,20 @@ const UAC_DENIED_MARKERS: &[&str] = &["UAC"];
 
 /// 把 helper 失败归类为前端可呈现的状态。默认 Failed；错误文案含
 /// UAC 标记的视为用户未授权。
+
+/// done.json 的 snapshot 字段(string=旧 helper 单文件,array=新 helper 多文件)
+/// 指向的文件是否全部就位。等待循环用它判断"可以开始读了"。
+fn snap_value_exists(dir: &Path, v: &serde_json::Value) -> bool {
+    match v {
+        serde_json::Value::String(one) => dir.join(one).exists(),
+        serde_json::Value::Array(arr) => arr
+            .iter()
+            .filter_map(|x| x.as_str())
+            .all(|one| dir.join(one).exists()),
+        _ => false,
+    }
+}
+
 fn classify_helper_error(e: &str) -> HelperState {
     let upper = e.to_ascii_uppercase();
     if UAC_DENIED_MARKERS.iter().any(|m| upper.contains(m)) {

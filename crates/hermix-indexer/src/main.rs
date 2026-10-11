@@ -431,10 +431,15 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 
 /// 写交接信号 done.json。`error` 为 None 时写 JSON null —— 成功就是成功，
 /// 不能带一句编出来的失败文案（排查时极具误导性）。
-fn write_done(dir: &Path, snapshot: &str, ok: bool, indexed: usize, error: Option<String>) {
+fn write_done(dir: &Path, snapshots: &[String], ok: bool, indexed: usize, error: Option<String>) {
     let err_json = match &error {
         Some(e) => serde_json::to_string(e).unwrap(),
         None => "null".to_string(),
+    };
+    // 兼容两种形态:单文件(旧主进程读 string)、多文件(本版主进程读 array)。
+    let snap_json = match snapshots {
+        [one] => serde_json::to_string(one).unwrap(),
+        many => serde_json::to_string(many).unwrap(),
     };
     let _ = std::fs::write(
         dir.join("done.json"),
@@ -442,7 +447,7 @@ fn write_done(dir: &Path, snapshot: &str, ok: bool, indexed: usize, error: Optio
             r#"{{"ok":{},"indexed":{},"snapshot":{},"error":{}}}"#,
             ok,
             indexed,
-            serde_json::to_string(snapshot).unwrap(),
+            snap_json,
             err_json
         ),
     );
@@ -490,97 +495,145 @@ fn alive_fresh(
 ///
 /// 看门狗同时是**枚举期的心跳**（见 [`spawn_watchdog`]）——不是顺手加的，
 /// 少了它主进程 60s 后就会误判"没有驻留 helper"而重复拉起，见该函数注释。
-fn enumerate_with_watchdog(
+/// 卡死卷跳过清单。条目 {"<卷字母>": unixts}:7 天内不再尝试该卷 —— F: 这类
+/// DeviceIoControl 卡死的卷,每次重试都要白烧 60s 预算并留一个孤儿线程。
+/// 删除交换目录里的本文件即恢复重试。
+const SKIP_FILE: &str = "volumes.skip.json";
+const SKIP_TTL: Duration = Duration::from_secs(7 * 86400);
+
+fn read_skip_volumes(dir: &Path) -> std::collections::HashMap<String, u64> {
+    let Ok(text) = std::fs::read_to_string(dir.join(SKIP_FILE)) else {
+        return Default::default();
+    };
+    serde_json::from_str(&text).unwrap_or_default()
+}
+
+fn mark_skip_volume(dir: &Path, volume: &str) {
+    let mut map = read_skip_volumes(dir);
+    map.insert(volume.to_string(), now_unix());
+    let _ = std::fs::write(dir.join(SKIP_FILE), serde_json::to_string(&map).unwrap());
+}
+
+fn skip_fresh(ts: u64) -> bool {
+    let now = now_unix();
+    ts <= now && now - ts < SKIP_TTL.as_secs()
+}
+
+/// 全量枚举(逐卷隔离线程 + 全局看门狗)。初扫与 resnap 共用。
+///
+/// F: 卷的 DeviceIoControl 会卡死在**单次调用内部**(2026-10-08/10-12 两次
+/// 现场:60s 写出 ~1MB 后再也不动),批次边界的预算检查永远跑不到;而旧实现
+/// 的逐卷 guard 包住整个 index_volume,看门狗到点去 lock 写入器就被卡死线程
+/// 永久阻塞 —— 看门狗自己死锁,done.json 永远写不出来,helper 变幽灵
+/// (2026-10-11 现场:helper.alive 14 小时陈旧、进程仍活、无 done.json)。
+///
+/// 修复,三层:
+/// 1. **每卷独立线程 + 独立 snapshot 文件**:一个卷卡死只损失它自己,
+///    C/D/E/G/H 的成果照常落盘;编排线程 recv_timeout 到点即放弃该卷
+///    (卡死线程泄漏在 syscall 里,占用的只是它自己那卷的句柄与文件)。
+/// 2. **卡卷写入跳过清单**(SKIP_FILE,7 天 TTL):不再每次启动白烧 60s。
+///    删除该文件即恢复重试。
+/// 3. **看门狗零锁化**:不碰任何写入器,只读原子计数与已完成文件清单
+///    (编排线程永不挂死,锁必然拿得到),到点把已完成卷的 snapshot 清单
+///    写进 done.json 后退出 —— 多文件协议,主进程 Done.snapshots 兼容
+///    string(旧 helper)与 array(本版)两种形态。
+fn enumerate_volumes(
     dir: &Path,
     volumes: &[String],
-    snap_name: &str,
     alive: &Path,
-) -> (bool, usize, Option<String>) {
-    let snap_path = dir.join(snap_name);
-    let writer: Arc<Mutex<Option<BufWriter<File>>>> = Arc::new(Mutex::new(None));
+) -> (bool, usize, Option<String>, Vec<String>) {
+    let completed: Arc<std::sync::Mutex<Vec<String>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
     let written: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
-    let finished = Arc::new(AtomicBool::new(false));
+    let finished: Arc<std::sync::atomic::AtomicBool> =
+        Arc::new(std::sync::atomic::AtomicBool::new(false));
     spawn_watchdog(
         dir.to_path_buf(),
         alive.to_path_buf(),
-        snap_name.to_string(),
-        writer.clone(),
+        completed.clone(),
         written.clone(),
         finished.clone(),
         ENUM_BUDGET,
         HEARTBEAT_INTERVAL,
     );
 
-    let result = match OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&snap_path)
-    {
-        Ok(f) => {
-            *writer.lock().unwrap() = Some(BufWriter::with_capacity(1 << 20, f));
-            let mut total = 0usize;
-            let mut errs: Vec<String> = Vec::new();
-            for v in volumes {
-                // 逐卷预算：抓「慢但在推进」的卷（实测正常卷 3-40s，60s 留余量）。
-                // 抓不到「卡在单次调用内」的那种 —— 由看门狗兜底。
-                let limit = Instant::now() + PER_VOLUME_BUDGET;
-                let r = {
-                    let mut guard = writer.lock().unwrap();
-                    match guard.as_mut() {
-                        Some(w) => index_volume(v, w, Some(limit), &written),
-                        None => Err("writer missing".into()),
+    let skips = read_skip_volumes(dir);
+    let mut errs: Vec<String> = Vec::new();
+    for v in volumes {
+        if skip_fresh(*skips.get(v).unwrap_or(&0)) {
+            errs.push(format!(
+                "{v}: 跳过(此前枚举卡死,删除交换目录 {SKIP_FILE} 可重试)"
+            ));
+            continue;
+        }
+        let vol_file = format!("snapshot-{}-{}.jsonl", now_unix(), v);
+        let vol_path = dir.join(&vol_file);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let vol = v.clone();
+        let vol_path_worker = vol_path.clone();
+        let written_w = written.clone();
+        std::thread::spawn(move || {
+            let open = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&vol_path_worker);
+            let n = match open {
+                Ok(f) => {
+                    let mut w = BufWriter::with_capacity(1 << 20, f);
+                    let limit = Instant::now() + PER_VOLUME_BUDGET;
+                    match index_volume(&vol, &mut w, Some(limit), &written_w) {
+                        Ok(c) => {
+                            let _ = w.flush();
+                            c
+                        }
+                        Err(e) => {
+                            let _ = w.flush();
+                            eprintln!("[usn-indexer] {vol}: {e}");
+                            0
+                        }
                     }
-                };
-                match r {
-                    Ok(c) => total += c,
-                    Err(e) => errs.push(e),
+                }
+                Err(e) => {
+                    eprintln!("[usn-indexer] create {vol_path_worker:?}: {e}");
+                    0
+                }
+            };
+            let _ = tx.send(n);
+        });
+        match rx.recv_timeout(PER_VOLUME_BUDGET + Duration::from_secs(10)) {
+            Ok(count) => {
+                if count > 0 {
+                    completed.lock().unwrap().push(vol_file);
+                } else {
+                    let _ = std::fs::remove_file(&vol_path); // 空文件无价值
+                    errs.push(format!("{v}: 枚举完成但 0 条记录"));
                 }
             }
-            let flush_err = writer
-                .lock()
-                .unwrap()
-                .as_mut()
-                .and_then(|w| w.flush().err().map(|e| e.to_string()));
-            errs.extend(flush_err);
-            // **成功时 err 必须是 null**。此前这里用
-            // `unwrap_or_else(|| "no volumes")` 兜底，于是每一次成功扫描都写出
-            // `"ok":true, "error":"no volumes"` —— 一句凭空捏造的失败文案，
-            // 排查时极具误导性（本机就因此被误判过一次）。"没有卷"是另一个
-            // 条件（volumes 为空），不该复用错误字段。
-            let ok = total > 0 && errs.len() < volumes.len();
-            (ok, total, errs.first().cloned())
+            Err(_) => {
+                // 卡死:worker 泄漏在 DeviceIoControl 里,但只占用它自己那卷。
+                // 部分写出的 vol_file 保留 —— 主进程读它,能收多少收多少。
+                completed.lock().unwrap().push(vol_file);
+                mark_skip_volume(dir, v);
+                errs.push(format!("{v}: MFT 读取卡死,已跳过(7 天内不再尝试)"));
+            }
         }
-        Err(e) => (false, 0, Some(format!("create snapshot: {e}"))),
-    };
+    }
     finished.store(true, Ordering::Release);
-    result
+    let n = written.load(Ordering::Acquire);
+    let files = completed.lock().unwrap().clone();
+    let ok = !files.is_empty();
+    (ok, n, errs.first().cloned(), files)
 }
 
-/// 看门狗线程：枚举期间持续刷新 `helper.alive`，到点仍未结束则上报成果退出。
-///
-/// **枚举期必须有心跳**——这是 2026-10-10 现场「本地文件反复扫描却永远没结果」
-/// 的根因。主进程的 `helper_resident()` 按 `helper.alive` 的 mtime 判驻留，
-/// 窗口 60s；而一次全量枚举最坏要 `ENUM_BUDGET`(240s)。此前心跳只在**枚举前**
-/// 写一次、**枚举完成后**的常驻循环里每秒写一次，中间那段 2~4 分钟完全静默：
-///
-/// 1. 60s 一到，主进程 `helper_resident()` 判 false → 走非驻留分支 → **再弹一次
-///    UAC、再拉起第二个提权 helper**；
-/// 2. 新 helper 的让位检查用的是同一个 60s 判定，也认为"没有别人" → 不让位
-///    → 两个提权进程并发枚举同一批卷；
-/// 3. 两者抢写同一个 `done.json`，主进程读到的 snapshot 可能属于另一个进程，
-///    自己那份变成无人认领的孤儿（现场：102MB + 170MB 两份都留在交换目录）；
-/// 4. 新主进程顺手删掉在跑那个 helper 的 `helper.pid`/`helper.alive`，它此后
-///    再不重写 pid → 变成注释里说的"幽灵"。
-///
-/// 结果就是用户看到的循环：每开一次应用就多一次全盘扫描，索引始终建不起来。
-/// 修法：**预算检查与心跳合并成同一个循环**，不为心跳新增线程。
+/// 看门狗线程:枚举期间持续刷新 `helper.alive`,到点仍未结束则把已完成卷的
+/// snapshot 清单写进 done.json 后退出。**零锁**:不再碰任何写入器(旧实现
+/// 在这里 lock 写入器 flush,被卡死线程持有的锁永久阻塞 —— 2026-10-11 现场
+/// helper.alive 14 小时陈旧而进程仍活的根因),只读原子计数与已完成清单。
 fn spawn_watchdog(
     dir: PathBuf,
     alive: PathBuf,
-    snap_name: String,
-    writer: Arc<Mutex<Option<BufWriter<File>>>>,
+    completed: Arc<std::sync::Mutex<Vec<String>>>,
     written: Arc<AtomicUsize>,
-    finished: Arc<AtomicBool>,
+    finished: Arc<std::sync::atomic::AtomicBool>,
     budget: Duration,
     interval: Duration,
 ) {
@@ -588,7 +641,7 @@ fn spawn_watchdog(
         let deadline = Instant::now() + budget;
         loop {
             std::thread::sleep(interval);
-            // 心跳无条件先刷新：即便预算已到点，这一次 touch 也落在退出之前。
+            // 心跳无条件先刷新:即便预算已到点,这一次 touch 也落在退出之前。
             touch(&alive);
             if finished.load(Ordering::Acquire) {
                 return;
@@ -597,35 +650,30 @@ fn spawn_watchdog(
                 break;
             }
         }
-        let mut n = 0usize;
-        if let Ok(mut slot) = writer.lock() {
-            if let Some(w) = slot.as_mut() {
-                let _ = w.flush();
-                n = written.load(Ordering::Acquire);
-            }
-        }
+        let files = completed.lock().map(|c| c.clone()).unwrap_or_default();
+        let n = written.load(Ordering::Acquire);
         let _ = std::fs::remove_file(dir.join("helper.pid"));
-        // 同心跳自杀路径：清掉 alive，别让 60s 新鲜窗把死人当活人。
+        // 同心跳自杀路径:清掉 alive,别让 60s 新鲜窗把死人当活人。
         let _ = std::fs::remove_file(&alive);
-        if n > 0 {
+        if !files.is_empty() {
             write_done(
                 &dir,
-                &snap_name,
+                &files,
                 true,
                 n,
                 Some(format!(
-                    "超过 {}s 未完成：某个卷的 MFT 读取卡死，该卷已跳过（已收录 {n} 项）",
+                    "超过 {}s 未完成:存在 MFT 读取卡死的卷,已按已完成部分上报(收录 {n} 项)",
                     budget.as_secs()
                 )),
             );
         } else {
             write_done(
                 &dir,
-                &snap_name,
+                &files,
                 false,
                 0,
                 Some(format!(
-                    "全量枚举超过 {}s 未完成且无可用成果（某个卷的 MFT 读取卡死）",
+                    "全量枚举超过 {}s 未完成且无可用成果(卷的 MFT 读取卡死)",
                     budget.as_secs()
                 )),
             );
@@ -636,13 +684,14 @@ fn spawn_watchdog(
 
 fn main() {
     let (dir, volumes) = parse_args();
+    let _ = std::fs::create_dir_all(&dir); // 自愈:手动调试时主进程可能没建目录
     let pid_path = dir.join("helper.pid");
     let alive_path = dir.join("helper.alive");
     let main_alive = dir.join("main.alive");
     let updates_path = dir.join("updates.jsonl");
     let resnap_path = dir.join("resnap.request");
     let shutdown_path = dir.join("shutdown.request");
-    let snap_name = format!("snapshot-{}.jsonl", now_unix());
+
 
     // 已有存活 helper（主进程重启复用，免二次 UAC）：退出让位。
     if pid_path.exists() && alive_path.exists()
@@ -658,8 +707,8 @@ fn main() {
 
     // 初扫与 resnap 走同一个带看门狗的枚举器 —— 两条路径面对同一批卷、
     // 同一个卡死风险（本机 F:）。
-    let (ok, n, err) = enumerate_with_watchdog(&dir, &volumes, &snap_name, &alive_path);
-    write_done(&dir, &snap_name, ok, n, err);
+    let (ok, n, err, files) = enumerate_volumes(&dir, &volumes, &alive_path);
+    write_done(&dir, &files, ok, n, err);
     if !ok {
         let _ = std::fs::remove_file(&pid_path);
         let _ = std::fs::remove_file(&alive_path);
@@ -735,9 +784,8 @@ fn main() {
             // 与初扫共用 enumerate_with_watchdog —— resnap 面对的是同一批卷、
             // 同一个卡死风险，单独走一条没保护的路径等于把同一个 bug 留着。
             resnap_pending = false;
-            let snap2 = format!("snapshot-{}.jsonl", now_unix());
-            let (ok2, n2, err2) = enumerate_with_watchdog(&dir, &volumes, &snap2, &alive_path);
-            write_done(&dir, &snap2, ok2, n2, err2);
+            let (ok2, n2, err2, files2) = enumerate_volumes(&dir, &volumes, &alive_path);
+            write_done(&dir, &files2, ok2, n2, err2);
             // 日志可能已滚过失效点，重建 watch（NextUsn 取当前）。
             watches = volumes.iter().filter_map(|v| open_watch(v)).collect();
         }
