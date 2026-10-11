@@ -1,5 +1,12 @@
 /* 截图覆盖窗（ScreenshotOverlay.tsx）—— 全屏幕布 + 选区交互。
-   契约见 docs/notes/implemented/feature/2026-10-07-screenshot-tool.md */
+   契约见 docs/notes/implemented/feature/2026-10-07-screenshot-tool.md
+
+   配色说明：本窗恒为暗底（.so-root 压黑），所以强调色分两种取法——
+   实色按钮底用 `--color-accent`（白字对比 9:1），落在暗底上的细线用
+   `--color-accent-soft-strong`（accent 18% + 白，暗底上才看得见）。
+   此前 7 处写的是 `var(--accent, #4c8dff)`：`--accent` 在本项目从不存在，
+   实际渲染的是回退值 #4c8dff —— 一个饱和蓝（违反禁蓝紫）且不跟随主题，
+   白字压在它上面只有约 2.6:1。 */
 
 .so-root {
   position: fixed;
@@ -67,7 +74,7 @@
 /* 选区边框 */
 .so-selection {
   position: absolute;
-  border: 1px solid var(--accent, #4c8dff);
+  border: 1px solid var(--color-accent-soft-strong);
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
   pointer-events: none;
 }
@@ -113,12 +120,12 @@
 }
 
 .so-toolbar button.active {
-  background: var(--accent, #4c8dff);
+  background: var(--color-accent);
   color: #fff;
 }
 
 .so-toolbar .so-confirm {
-  background: var(--accent, #4c8dff);
+  background: var(--color-accent);
   color: #fff;
 }
 
@@ -166,7 +173,7 @@
   padding: 1px 4px;
   background: rgba(255, 255, 255, 0.94);
   border: 1px dashed rgba(0, 0, 0, 0.55);
-  outline: 2px solid var(--accent, #4c8dff);
+  outline: 2px solid var(--color-accent-soft-strong);
   font-weight: 700;
   font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
   z-index: 5;
@@ -222,7 +229,7 @@
 }
 
 .se-toolbar .se-tool.active {
-  background: var(--accent, #4c8dff);
+  background: var(--color-accent);
   color: #fff;
 }
 
@@ -274,7 +281,7 @@
 }
 
 .se-toolbar .se-width.active {
-  background: var(--accent, #4c8dff);
+  background: var(--color-accent);
   color: #fff;
 }
 
@@ -287,7 +294,7 @@
 .se-toolbar .se-commit {
   padding: 6px 14px;
   border-radius: 6px;
-  background: var(--accent, #4c8dff);
+  background: var(--color-accent);
   color: #fff;
   font-weight: 600;
 }

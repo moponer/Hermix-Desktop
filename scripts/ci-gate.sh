@@ -25,7 +25,7 @@
 #      can outlive the code and hijack skill routing — this gate fails on
 #      the drift instead of letting it silently mislead the agent.
 #
-# Hard gates (exit non-zero on failure): 1, 2, 3, 3b, 4b, 6, 8, 9, 10, 11
+# Hard gates (exit non-zero on failure): 1, 2, 3, 3b, 4b, 6, 8, 9, 10, 11, 15
 # Soft gates (warn but continue): 4, 5, 7, 12, 13, 14
 #
 # Usage (from repo root, in any terminal):
@@ -368,7 +368,7 @@ echo ""
 #     浏览器/dev server，CI 可跑。为 SOFT：ORDER 假设或拆分改动可能让它偶发
 #     误报，先观察一个周期再视情况升级为 HARD。
 #-----------------------------------------------------------------------
-echo "=== [14/14] desktop CSS dead-block guard ==="
+echo "=== [14/15] desktop CSS dead-block guard ==="
 if [ -f apps/desktop-tauri/scripts/analyze-css-cascade.cjs ]; then
   if [ -d apps/desktop-tauri/node_modules/postcss ]; then
     dead_count=$(cd apps/desktop-tauri && node scripts/analyze-css-cascade.cjs 2>/dev/null | grep -cE '^\[' || true)
@@ -383,6 +383,30 @@ if [ -f apps/desktop-tauri/scripts/analyze-css-cascade.cjs ]; then
   fi
 else
   echo "  SKIP: apps/desktop-tauri/scripts/analyze-css-cascade.cjs not found"
+fi
+echo ""
+
+#-----------------------------------------------------------------------
+# 15. Desktop CSS undefined-var reference guard (HARD gate)
+#     check-css-var-refs.cjs 收集所有 `--name:` 定义（CSS @theme/@property
+#     内联 + React 内联样式对象键 + setProperty）与 `var(--x)` 引用，
+#     任何未被定义的 var() 引用即 FAIL。捕捉"打错令牌前缀 → 静默隐形"
+#     这类 bug：原 VaultPanel 19 处 `var(--accent)` / `var(--bg-primary)`
+#     等不带 --color- 前缀的变量从未定义，元素底色回落 transparent、
+#     实色按钮变白底白字不可见，却全程 0 报错、0 构建失败、其它守卫全绿。
+#     纯静态、零依赖、CI 可跑。
+#-----------------------------------------------------------------------
+echo "=== [15/15] desktop CSS undefined-var reference guard ==="
+if [ -f apps/desktop-tauri/scripts/check-css-var-refs.cjs ]; then
+  if [ -d apps/desktop-tauri/node_modules ]; then
+    (cd apps/desktop-tauri && node scripts/check-css-var-refs.cjs) \
+      && echo "  OK: no undefined CSS var() references" \
+      || exit 1
+  else
+    echo "  SKIP: apps/desktop-tauri/node_modules not found"
+  fi
+else
+  echo "  SKIP: apps/desktop-tauri/scripts/check-css-var-refs.cjs not found"
 fi
 echo ""
 

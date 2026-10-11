@@ -473,7 +473,7 @@ function FileAssocTab() {
   return (
     <div>
       {error && (
-        <p className="mb-3 text-[length:var(--text-meta)] text-[var(--color-danger, #dc2626)]">{error}</p>
+        <p className="mb-3 text-[length:var(--text-meta)] text-error">{error}</p>
       )}
       <SettingsGroup
         title="由 Hermix 查看器打开"
