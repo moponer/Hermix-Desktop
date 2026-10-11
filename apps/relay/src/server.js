@@ -279,3 +279,18 @@ function createRelay({ dbPath, relayRoot } = {}) {
 }
 
 module.exports = { createRelay };
+
+// ── 自启动尾段（2026-10-11）────────────────────────────────────────
+// 仓库此前只导出 createRelay，没有任何 listen 入口——systemd
+// ExecStart=node src/server.js 拉起即退出（AGENT-RUNBOOK「远端实况待核」
+// 标注的缺口）。现在：直接跑 = 监听；被 require = 纯导出，测试不受影响。
+// 端口唯一来源 HERMIX_RELAY_PORT，缺省 7777 = nginx 反代目标（不开新端口）；
+// DB 缺省 = 包根/relay.db，与旧进程同库，手机配对不丢。
+if (require.main === module) {
+  const port = Number(process.env.HERMIX_RELAY_PORT || 7777);
+  const relay = createRelay({
+    dbPath: process.env.HERMIX_RELAY_DB,
+    relayRoot: process.env.HERMIX_RELAY_ROOT,
+  });
+  relay.listen(port, () => console.log(`[relay] listening :${port}`));
+}
