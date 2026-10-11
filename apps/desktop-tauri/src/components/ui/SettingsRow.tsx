@@ -68,17 +68,21 @@ export function SettingsRow({
 export interface SettingsGroupProps {
   title?: ReactNode;
   description?: ReactNode;
-  /** 行元素之间自动加分隔线；行自己不必管。 */
+  /**
+   * 行元素之间自动加分隔线；行自己不必管。默认 false：
+   * 分割线规则（2026-10-11）禁止列表逐行线——行距 + hover 底色已承担
+   * 分组，卡片只保留自身外框。仅个别确需"表格感"的组显式传 true。
+   */
   divided?: boolean;
   className?: string;
   children: ReactNode;
 }
 
-/** 分组卡片：圆角容器包若干行，行间 1px 分隔线。 */
+/** 分组卡片：圆角容器包若干行，行间靠间距分层（默认无分隔线）。 */
 export function SettingsGroup({
   title,
   description,
-  divided = true,
+  divided = false,
   className,
   children,
 }: SettingsGroupProps) {

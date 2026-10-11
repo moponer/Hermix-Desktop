@@ -230,7 +230,7 @@ export function ModelListTab() {
           sorted.map((row) => (
             <div
               key={row.id}
-              className="flex items-center gap-3 px-3 py-2.5 border-b border-border-subtle last:border-b-0 hover:bg-bg-hover"
+              className="flex items-center gap-3 px-3 py-2.5 hover:bg-bg-hover"
             >
               <ProviderIcon providerId={row.providerId} className="icon-lg shrink-0" />
               <div className="min-w-0 flex-1">

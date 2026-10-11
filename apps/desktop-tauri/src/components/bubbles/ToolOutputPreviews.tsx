@@ -73,7 +73,7 @@ function ScreenshotPreview({ output }: { output?: string }) {
         onClick={() => openImageViewer({ src, name: label })}
         style={{ cursor: "pointer" }}
       />
-      <div className="flex items-center justify-between gap-2 px-2 py-1 text-[length:var(--text-meta)] text-text-faint bg-bg-secondary/40 border-t border-border-primary/30">
+      <div className="flex items-center justify-between gap-2 px-2 py-1 text-[length:var(--text-meta)] text-text-faint bg-bg-secondary/40">
         <span className="font-mono truncate">
           {w}×{h}{monitorLabel}
           {parsed.kind === "file" ? ` · ${parsed.saved_to}` : ""}
@@ -128,7 +128,7 @@ function WindowListPreview({ output }: { output?: string }) {
   const { matched, truncated, windows } = parsed;
   return (
     <div className="mt-1.5 rounded-md overflow-hidden border border-border-primary/40 bg-bg-secondary/20">
-      <div className="px-2 py-1 text-[length:var(--text-meta)] text-text-faint bg-bg-secondary/40 border-b border-border-primary/30 flex items-center justify-between">
+      <div className="px-2 py-1 text-[length:var(--text-meta)] text-text-faint bg-bg-secondary/40 flex items-center justify-between">
         <span>顶层窗口</span>
         <span className="font-mono">
           {matched} 个{truncated ? "（已截断）" : ""}
@@ -297,7 +297,7 @@ function UiTreePreview({ output }: { output?: string }) {
   const { max_depth, elements, element_count } = parsed;
   return (
     <div className="mt-1.5 rounded-md overflow-hidden border border-border-primary/40 bg-bg-secondary/20">
-      <div className="px-2 py-1 text-[length:var(--text-meta)] text-text-faint bg-bg-secondary/40 border-b border-border-primary/30 flex items-center justify-between">
+      <div className="px-2 py-1 text-[length:var(--text-meta)] text-text-faint bg-bg-secondary/40 flex items-center justify-between">
         <span>UI 树（UIA control view）</span>
         <span className="font-mono">
           {element_count} 个 / depth ≤ {max_depth}
@@ -405,7 +405,7 @@ function UiFindPreview({ output }: { output?: string }) {
   const { count, truncated, elements } = parsed;
   return (
     <div className="mt-1.5 rounded-md overflow-hidden border border-border-primary/40 bg-bg-secondary/20">
-      <div className="px-2 py-1 text-[length:var(--text-meta)] text-text-faint bg-bg-secondary/40 border-b border-border-primary/30 flex items-center justify-between">
+      <div className="px-2 py-1 text-[length:var(--text-meta)] text-text-faint bg-bg-secondary/40 flex items-center justify-between">
         <span>UIA 查找结果</span>
         <span className="font-mono">
           {count} 个{truncated ? "（已截断）" : ""}

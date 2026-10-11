@@ -443,11 +443,13 @@
   display: flex;
   flex-direction: column;
   /* 清单与标题行之间一条发丝线：让「标题 / 明细」两层结构在视觉上分开，
-     取代原先靠 1px 间隙硬凑的排布。 */
+     取代原先靠 1px 间隙硬凑的排布。容器顶边，按分割线规则保留。 */
   border-top: 1px solid var(--color-border-subtle);
 }
+/* 分割线规则（2026-10-11）：清单内逐行线取消——行距 + 文件名等宽字体
+   已承担扫描分隔。 */
 .fcx-list li { margin: 0; padding: 0; }
-.fcx-list li + li { border-top: 1px solid var(--color-border-subtle); }
+.fcx-list li + li { margin-top: 4px; }
 .fcx-row {
   display: flex;
   align-items: center;

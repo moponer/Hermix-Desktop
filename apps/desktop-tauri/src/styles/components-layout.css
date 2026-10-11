@@ -1320,6 +1320,8 @@ height: 26px;
 }
 .subagent-list__running { color: var(--color-accent); }
 
+/* 分割线规则（2026-10-11）：列表逐行线禁止——hover 底色 + 6px 行距
+   已承担扫描分隔；.review-list__head 的容器顶边线保留。 */
 .review-row {
   display: flex;
   align-items: center;
@@ -1327,7 +1329,6 @@ height: 26px;
   width: 100%;
   padding: 6px 10px;
   border: 0;
-  border-bottom: 1px solid var(--color-border-subtle);
   background: transparent;
   color: var(--color-text-primary);
   font-size: var(--text-meta, 12px);
@@ -1383,9 +1384,11 @@ height: 26px;
 }
 
 /* 子代理卡片用 <details>：默认折叠（大多数子代理已结束，不需要占屏），
-   失败项强制展开（fail-open 原则：出错时最该被看见）。 */
-.subagent-card {
-  border-bottom: 1px solid var(--color-border-subtle);
+   失败项强制展开（fail-open 原则：出错时最该被看见）。
+   分割线规则（2026-10-11）：逐卡片 border-bottom 取消——相位色点 +
+   任务文本已区分，卡片靠间距分隔；头部容器线（.subagent-list__head）保留。 */
+.subagent-card + .subagent-card {
+  margin-top: 2px;
 }
 .subagent-card__head {
   display: flex;

@@ -1399,11 +1399,11 @@
   padding: 0;
   background: transparent;
 }
-/* Batch diff stacking — 每个文件一块, 上方贴个文件头. */
+/* Batch diff stacking — 每个文件一块, 上方贴个文件头.
+   分割线规则（2026-10-11）：卡片内不留虚线"缝线"——块头 .apv-diff-header
+   的文件名 + 间距已建立层级，虚线读作"缝合的盒子"。 */
 .apv-diff-block + .apv-diff-block {
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px dashed var(--color-border-subtle, #ececef);
+  margin-top: 16px;
 }
 .apv-diff-header {
   display: flex;
@@ -1508,9 +1508,8 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-top: 4px;
-  padding-top: 10px;
-  border-top: 1px dashed var(--color-border-subtle, #ececef);
+  /* 分割线规则（2026-10-11）：操作条上方不留虚线——间距承担分隔。 */
+  margin-top: 14px;
 }
 .apv-shortcut {
   font-size: 11px;
