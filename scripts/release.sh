@@ -75,6 +75,26 @@ else
   echo "── 跳过构建（--skip-build），沿用现有产物"
 fi
 
+# ── 前端新鲜度门 ────────────────────────────────────────────────
+# check-sidecar-freshness.sh 故意不看前端源码（UI-only 提交不该打 STALE），
+# 所以前端这条线全仓库没有对账 —— 0.1.10 三次「修了没进包」的共同根因。
+# 这里强制对账：任一前端源文件新于打包资产 → 断（--skip-build 也不例外）。
+FRONTEND_DIST="$REPO_ROOT/release/frontend/index.html"
+if [[ -f "$FRONTEND_DIST" ]]; then
+  stale_fe=$(find "$REPO_ROOT/apps/desktop-tauri/src" "$REPO_ROOT/apps/desktop-tauri/index.html" \
+              -type f -newer "$FRONTEND_DIST" -print -quit 2>/dev/null)
+  if [[ -n "$stale_fe" ]]; then
+    echo "错误：前端源码新于打包资产，旧前端会静默进包"
+    echo "  资产: $FRONTEND_DIST"
+    echo "  最新: $stale_fe"
+    echo "  先跑 (cd apps/desktop-tauri && npm run build) 再出包"
+    exit 1
+  fi
+  echo "── 前端新鲜度: OK（资产新于全部源码）"
+else
+  echo "错误：缺 $FRONTEND_DIST（前端未构建或构建到别处）"; exit 1
+fi
+
 # ── 自组装 app 根（NSIS 退场：不再解安装器，直接按 bundle 清单拼装）─────
 # 主 exe 名与 NSIS 时代一致（productName.exe）——更新交换脚本按旧 exe 名拉起
 # 新版，改名 = 交换后启动失败回滚，永远不许在 zip 里改主 exe 名。
