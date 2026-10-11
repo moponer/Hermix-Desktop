@@ -196,11 +196,14 @@ echo "── sha256: $SHA256"
 
 # ── 更新日志：CHANGELOG 顶部段 → --notes → 兜底 ──────────────────
 if [[ -z "$NOTES" && -f "$CHANGELOG" ]]; then
+  # 字面子串匹配（index），不能用 $0 ~ ver：ver 里的 [0.1.10] 方括号是
+  # 正则元字符（字符类），`## [0.1.10]` 永远匹配不上字面标题，notes
+  # 会静默回落默认文案（2026-10-11 出包实测踩中）。
   NOTES="$(awk -v ver="## [$VERSION]" '
-    $0 ~ ver {inblk=1; next}
-    inblk && /^## / {exit}
-    inblk {print}
-  ' "$CHANGELOG")"
+     index($0, ver) == 1 {inblk=1; next}
+     inblk && /^## / {exit}
+     inblk {print}
+   ' "$CHANGELOG")"
   [[ -n "$NOTES" ]] || echo "提示：CHANGELOG.md 无 [$VERSION] 段，回落 --notes / 默认文案"
 fi
 [[ -n "$NOTES" ]] || NOTES="本次更新包含修复与改进。"

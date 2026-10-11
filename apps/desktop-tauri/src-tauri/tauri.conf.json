@@ -1,6 +1,6 @@
 {
   "productName": "Hermix Desktop",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "identifier": "com.hermix.desktop",
   "build": {
     "frontendDist": "../../../release/frontend",

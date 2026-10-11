@@ -3010,7 +3010,7 @@ dependencies = [
 
 [[package]]
 name = "hermix-desktop"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "base64 0.22.1",
  "dirs 6.0.0",
