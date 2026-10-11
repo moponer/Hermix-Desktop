@@ -1,10 +1,11 @@
 // 截图覆盖窗（独立 window：index.html#/screenshot-overlay）。
 // 全屏幕布上画矩形 / 窗口模式高亮；确认后进入编辑器（ScreenshotEditor），
 // 编辑完成 → screenshot_commit_edited → 剪贴板。
-// 帧经 invoke("screenshot_frame_data") 拉取（建窗前已入缓存，无时序竞态）；
-// 窗口 visible(false) 创建，帧就绪后 show——白屏不可能出现。
+// 幕布帧经轮询 invoke("screenshot_frame_data") 获取：Rust 侧窗口创建后
+// 立即后台编码（与页面加载并行），None=编码中、Ready=渲染并 show、
+// Failed=错误 UI。页面首帧前由 index.html #overlay-boot 静态占位。
 // 交互契约见 docs/notes/implemented/feature/2026-10-07-screenshot-tool.md。
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ScreenshotEditor } from "./ScreenshotEditor";
@@ -17,6 +18,9 @@ interface FramePayload {
   height: number;
   scale: number;
 }
+
+/** Rust FrameState（serde untagged）：null=编码中；Ready 平铺；Failed 带 error。 */
+type FrameState = FramePayload | { error: string };
 
 interface WindowRect {
   x: number;
@@ -42,18 +46,44 @@ export function ScreenshotOverlay() {
   // 窗口模式 hover 去抖：rect 没变不 setState，避免 mousemove 洪泛重渲染。
   const lastHoverKeyRef = useRef<string>("");
 
-  // 拉取幕布帧；无论成败都要 show 窗口（创建时是隐藏的，失败也得可见可退）。
+  // 轮询幕布帧：Rust 侧窗口建好后后台线程编码 JPEG（与页面加载并行），
+  // 150ms 一跳；Ready → 渲染 + show 窗口，Failed → 错误 UI，30s 上限与
+  // Rust 侧 30s 关窗兜底同量级（前端先到先显示超时态，Rust 侧保证不留
+  // 隐形死窗）。轮询期间 .so-loading「正在截取屏幕…」持续显示。
   useEffect(() => {
-    void (async () => {
+    let stopped = false;
+    let pollTimer: number | undefined;
+    const deadline = Date.now() + 30_000;
+    const tick = async () => {
       try {
-        const meta = await invoke<FramePayload>("screenshot_frame_data");
-        setFrame(meta);
+        while (!stopped && Date.now() < deadline) {
+          const st = await invoke<FrameState | null>("screenshot_frame_data");
+          if (stopped) return;
+          if (!st) {
+            pollTimer = window.setTimeout(() => void tick(), 150);
+            return;
+          }
+          if ("error" in st) {
+            setLoadError(st.error);
+            // 失败也要亮窗：错误面板直接可见可退（ESC / 关闭按钮），
+            // 不再靠主窗 toast 单通道。
+            void getCurrentWindow().show().catch(() => {});
+          } else {
+            setFrame(st);
+            void getCurrentWindow().show().catch(() => {});
+          }
+          return;
+        }
+        if (!stopped) setLoadError("截图幕布 30s 未就绪");
       } catch (e) {
-        setLoadError(String(e));
-      } finally {
-        void getCurrentWindow().show().catch(() => {});
+        if (!stopped) setLoadError(String(e));
       }
-    })();
+    };
+    void tick();
+    return () => {
+      stopped = true;
+      if (pollTimer !== undefined) window.clearTimeout(pollTimer);
+    };
   }, []);
 
   const cancel = useCallback(() => {
@@ -76,6 +106,13 @@ export function ScreenshotOverlay() {
       sh: Math.min(f.height - sy, Math.round(r.h * s)),
     });
   }, []);
+
+  // 编辑器基底按需走 Rust 无损裁剪（screenshot_crop_data，只传选区不传整帧）。
+  // memo 保证 source 对象恒等——父组件重渲染不触发编辑器重取。
+  const editorSource = useMemo(
+    () => (sel && frame ? { ...sel, scale: frame.scale } : null),
+    [sel, frame],
+  );
 
   // 键盘：ESC 取消全程；Enter 确认 / Tab 切模式仅选区阶段有效（编辑态
   // Enter 归文本输入用）。
@@ -188,13 +225,8 @@ export function ScreenshotOverlay() {
   }
 
   // 编辑态：选区已确认，交给编辑器（覆盖全窗，选区 UI 不再渲染）。
-  if (sel) {
-    return (
-      <ScreenshotEditor
-        source={{ dataUrl: frame.data_url, ...sel, scale: frame.scale }}
-        onCancel={cancel}
-      />
-    );
+  if (sel && editorSource) {
+    return <ScreenshotEditor source={editorSource} onCancel={cancel} />;
   }
 
   // hover 窗口高亮框（本地逻辑坐标）

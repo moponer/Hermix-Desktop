@@ -20,22 +20,28 @@ Status: implemented — 2026-10-07 拍板并开工；M1/M2/M3 已交付（M4 打
 ```
 触发（全局热键 / 标题栏按钮 / 以后可加托盘菜单）
   → Rust: screenshot_controller.rs
-     ├─ ① xcap 抓全屏（多显示器：逐 Monitor 拿图像+坐标，缓存为原始位图）
-     ├─ ② 冻结幕布：把抓到的画面铺到一个全屏无边框置顶覆盖窗
-     │     （每个显示器一个覆盖窗，ScreenCaptureOverlay.html，无装饰、
-     │      always-on-top、skip-taskbar、focusable）
-     ├─ ③ 覆盖窗交互（前端，Canvas 渲染）：
+     ├─ ① xcap 抓屏（~200ms）：光标所在显示器图像 + 坐标 + scale，
+     │     原始位图入 static 会话缓存
+     ├─ ② 立即建覆盖窗（hidden）：无边框、置顶、skip-taskbar；
+     │     首帧是 index.html 的静态 #overlay-boot「正在截取屏幕…」占位
+     ├─ ③ 后台线程并行编码幕布 JPEG（q80，比整帧 PNG 小 5-10×）；
+     │     前端轮询 screenshot_frame_data（None=编码中 → Ready → 渲染并
+     │     show 窗口；Failed → 错误 UI）。30s 兜底：窗口仍存在且未亮
+     │     （页面/编码异常）→ 报错回主窗 toast + 关窗。绝不再"3s 亮出
+     │     半就绪页面"（那曾把 #splash 启动屏糊成全屏，2026-10-10 回归根因）
+     ├─ ④ 覆盖窗交互（前端）：
      │     - 默认拖拽矩形：按下→拖动→松开 = 选区；ESC 取消
-     │     - 窗口模式：鼠标移动 → Rust 查询光标下 HWND（WindowFromPoint +
-     │       GetAncestor 取顶层窗）→ 回传 rect（屏幕坐标）→ 覆盖窗画高亮框
+     │     - 窗口模式：鼠标移动 → Rust 查询光标下 HWND（EnumWindows 排除
+     │       覆盖窗自身）→ 回传 rect → 覆盖窗画高亮框
      │     - 模式切换：Tab / 悬浮工具条（矩形□ 窗口⛶ 确认✓ 取消✕）
-     ├─ ④ 确认：覆盖窗把选区 rect 发回 Rust
-     └─ ⑤ 编辑器（2026-10-08 起）：裁出图进编辑画布（框选/画笔/文本/
-          涂抹/裁剪/撤销 + 色板），完成才提交——
-          a) 前端 canvas 导出 PNG → screenshot_commit_edited →
-             解码 RGBA → 剪贴板直写（CF_DIB + PNG 双格式）
-          b) 关闭全部覆盖窗，焦点还给原前台窗口
-          c) 主窗口 toast「已复制到剪贴板」（唯一可见反馈，不打断）
+     ├─ ⑤ 编辑器（2026-10-08 起，2026-10-10 数据流修正）：选区确认后
+     │     前端 invoke screenshot_crop_data 按需取选区无损 PNG 裁剪
+     │     （只传选区不传整帧——幕布是 JPEG，编辑底必须无损），
+     │     编辑画布（框选/画笔/文本/涂抹/裁剪/撤销 + 色板），完成才提交
+     │     a) 前端 canvas 导出 PNG → screenshot_commit_edited →
+     │        解码 RGBA → 剪贴板直写（CF_DIB + PNG 双格式）
+     │     b) 关闭全部覆盖窗，焦点还给原前台窗口
+     │     c) 主窗口 toast「已复制到剪贴板」（唯一可见反馈，不打断）
 ```
 
 关键设计点：
@@ -119,3 +125,18 @@ windows-rs 直写（不引入 tauri-plugin-clipboard-manager——它不支持�
 - 截图会话期间覆盖窗全屏置顶——本应用自身若正在执行长任务（如 automation 跑批）不受影响（覆盖窗独立 window，不阻塞主窗）。
 - 剪贴板内容会被覆盖（截图即覆盖用户剪贴板原内容）——标准截图软件语义，不做事前备份（剪贴板历史由 Win+V 系统功能承担）。
 - 端到端验证需人工：热键在真实桌面、多屏、DPI 混排、各应用粘贴兼容性（微信/浏览器/WPS）均需手测，自动化只覆盖裁剪与坐标换算的纯函数部分。
+
+## 2026-10-10 回归与结构修复（"启动慢 + 全屏样式"）
+
+用户报修：截图"启动慢、样式是全屏"，且 9945d406（10-08 白屏根修）"之前测过生效"。回归根因三层叠加：
+
+1. **9945d406 只在 JS 层删 splash，兜底路径没堵住**：`#splash` 是 index.html 静态 HTML，覆盖窗加载即渲染（全屏启动屏样式，亮色白底）；JS 移除要等 bundle 加载完。Rust 侧 3s 兜底 `show()` 在页面加载超 3s（vite dev 冷启动、首开 WebView2、机器忙）时先把窗口亮出来——用户看到的就是"全屏白/黑启动屏糊在截图覆盖层上"。条件不同（dev server 热不热、何时测）表现就不同，所以"修好过又回去了"。
+2. **覆盖窗加载整份主应用 bundle**：main.tsx 静态 import App，覆盖窗（dev 走 vite dev server 网络拉取）把整套聊天 UI 几百个模块拉一遍，首帧数秒。
+3. **串行链路全程隐藏**：抓屏 → 整帧 PNG + base64 → 建窗 → 页面加载 → 多 MB IPC → 解码 → 才 show。
+
+结构修复（同日落地）：
+
+- 窗口在抓屏后（~200ms）即创建；幕布 **JPEG（q80）** 编码移到后台线程与页面加载并行；前端 **轮询** `screenshot_frame_data`（None/Ready/Failed 三态），Ready 才 show。感知等待 = max(编码, 加载)，且页面首帧有静态「正在截取屏幕…」占位（#overlay-boot，CSS data-overlay 控制，JS 崩了也显示）。
+- 3s 兜底 show 废除，改 **30s 兜底关窗 + 主窗 toast 报错**：窗口要么 Ready 后被前端亮出，要么 30s 强制收尾，绝不留隐形死窗，也绝不会亮出半就绪页面。
+- 编辑器基底改走 `screenshot_crop_data`（选区无损 PNG，按需裁剪）——幕布 JPEG 只服务选区交互，编辑输出不走幕布质量。
+- main.tsx 拆分：覆盖窗只加载 ScreenshotOverlay 小依赖图，主应用（App/api/Toast/主 CSS）全走主窗分支动态 import；`#splash` 对覆盖窗 CSS 静态隐藏（JS 移除保留为兜底）。

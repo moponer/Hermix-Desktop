@@ -90,6 +90,19 @@
       html, body, #root { height: 100%; margin: 0; }
       /* 截图覆盖窗：整页压黑，见上方 bootstrap 脚本 */
       html[data-overlay], html[data-overlay] body { background: #000 !important; }
+      /* 覆盖窗静态隐藏启动遮罩——#splash 是静态 HTML，覆盖窗加载时就先渲染
+         （启动屏样式、亮色白底），JS 层移除要等 bundle 加载完。CSS 静态
+         隐藏从源头堵住"兜底 show 时窗口亮成全屏启动屏"的整类问题。 */
+      html[data-overlay] #splash { display: none !important; }
+      /* 覆盖窗首帧占位（React 挂载前）：黑底 + 提示文字，与 .so-loading 同文无缝交接 */
+      #overlay-boot {
+        display: none;
+        position: fixed; inset: 0;
+        align-items: center; justify-content: center;
+        background: #000; color: rgba(255, 255, 255, 0.75);
+        font-size: 14px; z-index: 9998;
+      }
+      html[data-overlay] #overlay-boot { display: flex; }
       body {
         background: var(--sp-bg);
         color: var(--sp-ink);
@@ -340,6 +353,10 @@
 
       <div class="sp-footer">Hermix Desktop · Local-first AI</div>
     </div>
+
+    <!-- 截图覆盖窗（data-overlay）的 React 前占位：黑底 + 「正在截取屏幕…」，
+         主窗里 display:none。React 挂载后由 ScreenshotOverlay 移除。 -->
+    <div id="overlay-boot">正在截取屏幕…</div>
 
     <!-- 启动状态由 /src/main.tsx 驱动: 走 stdio bridge 探活, 并按
          hermix:boot-stage 事件刷新阶段文案。此处不再内联 HTTP 轮询

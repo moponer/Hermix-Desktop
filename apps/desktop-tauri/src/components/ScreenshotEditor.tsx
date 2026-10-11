@@ -1,5 +1,6 @@
 // 截图编辑器：选区确认后的画布编辑（矩形/画笔/文本/涂抹/裁剪/撤销 + 色板）。
-// 画布 = 选区物理像素；显示 = 逻辑尺寸（/scale）。提交 → PNG data URL →
+// 基底图经 Rust 按需无损裁剪（screenshot_crop_data，只传选区、不出幕布
+// JPEG 质量），显示 = 逻辑尺寸（/scale）。提交 → PNG data URL →
 // screenshot_commit_edited → 剪贴板。基底画布(base)存"已提交"像素，
 // 可见画布 = base + 进行中预览；撤销栈存 pre-op 快照（PNG dataURL，限 12 步）。
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -7,9 +8,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { cx } from "../lib/cx";
 
 export interface EditorSource {
-  /** 全帧照片 data URL */
-  dataUrl: string;
-  /** 选区在帧图内的物理像素矩形 */
+  /** 选区在帧图内的物理像素矩形（Rust 端裁剪坐标系，已钳帧内） */
   sx: number;
   sy: number;
   sw: number;
@@ -107,30 +106,47 @@ export function ScreenshotEditor({
     }
   }, []);
 
-  // 挂载：加载全帧图 → 裁出选区为基底 → 重建涂抹源 → 首绘。
+  // 挂载：向 Rust 取选区无损裁剪 → 载图建基底画布（尺寸 = 裁剪实际像素，
+  // Rust 端已按帧边界钳位）→ 重建涂抹源 → 首绘。取图前显示「正在准备图像…」。
   useEffect(() => {
-    const img = new Image();
-    img.onload = () => {
-      const base = document.createElement("canvas");
-      base.width = source.sw;
-      base.height = source.sh;
-      base.getContext("2d")?.drawImage(
-        img,
-        source.sx, source.sy, source.sw, source.sh,
-        0, 0, source.sw, source.sh,
-      );
-      baseRef.current = base;
-      buildMosaic(base);
-      const canvas = canvasRef.current;
-      if (canvas) {
-        canvas.width = source.sw;
-        canvas.height = source.sh;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const dataUrl = await invoke<string>("screenshot_crop_data", {
+          x: source.sx,
+          y: source.sy,
+          width: source.sw,
+          height: source.sh,
+        });
+        if (cancelled) return;
+        const img = new Image();
+        img.onload = () => {
+          if (cancelled) return;
+          const base = document.createElement("canvas");
+          base.width = img.naturalWidth;
+          base.height = img.naturalHeight;
+          base.getContext("2d")?.drawImage(img, 0, 0);
+          baseRef.current = base;
+          buildMosaic(base);
+          const canvas = canvasRef.current;
+          if (canvas) {
+            canvas.width = base.width;
+            canvas.height = base.height;
+          }
+          setDims({ w: base.width, h: base.height });
+          redraw();
+        };
+        img.onerror = () => {
+          if (!cancelled) setErr("截图图像加载失败");
+        };
+        img.src = dataUrl;
+      } catch (e) {
+        if (!cancelled) setErr(String(e));
       }
-      setDims({ w: source.sw, h: source.sh });
-      redraw();
+    })();
+    return () => {
+      cancelled = true;
     };
-    img.onerror = () => setErr("截图图像加载失败");
-    img.src = source.dataUrl;
   }, [source, buildMosaic, redraw]);
 
   const pushHistory = useCallback((preOp: string) => {
@@ -360,7 +376,7 @@ export function ScreenshotEditor({
 
   const commit = () => {
     const canvas = canvasRef.current;
-    if (!canvas || committing) return;
+    if (!canvas || committing || !baseRef.current) return;
     commitTextBox();
     setCommitting(true);
     setErr(null);
@@ -382,6 +398,7 @@ export function ScreenshotEditor({
 
   return (
     <div className="se-root" onMouseMove={onMouseMove} onMouseUp={onMouseUp}>
+      {dims.w === 0 && !err && <div className="so-loading">正在准备图像…</div>}
       <div className="se-canvas-wrap" style={{ width: disp.w || undefined }}>
         <canvas
           ref={canvasRef}
@@ -463,7 +480,7 @@ export function ScreenshotEditor({
         <button className="se-tool" title="放弃本次截图（ESC）" onClick={onCancel}>
           ✕
         </button>
-        <button className="se-commit" title="编辑完成，复制到剪贴板" onClick={commit} disabled={committing}>
+        <button className="se-commit" title="编辑完成，复制到剪贴板" onClick={commit} disabled={committing || dims.w === 0}>
           {committing ? "复制中…" : "✓ 复制"}
         </button>
       </div>

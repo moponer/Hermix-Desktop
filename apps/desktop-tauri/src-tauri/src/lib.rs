@@ -422,7 +422,8 @@ pub fn run() {
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, _shortcut, event| {
                     if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
-                        // spawn_blocking：抓屏 + PNG 编码数秒，绝不能占主线程。
+                        // spawn_blocking：抓屏 + 建窗走 GDI/IPC，不占主 UI 线程。
+                        // 幕布 JPEG 编码已在 run_session 内起后台线程，主线程零阻塞。
                         let app = app.clone();
                         tauri::async_runtime::spawn_blocking(move || {
                             if let Err(e) = screenshot_controller::run_session(&app) {
@@ -725,6 +726,7 @@ pub fn run() {
             commands_local_search::local_search_preview,
             screenshot_controller::start_screenshot,
             screenshot_controller::screenshot_frame_data,
+            screenshot_controller::screenshot_crop_data,
             screenshot_controller::screenshot_commit_edited,
             screenshot_controller::screenshot_window_at,
             screenshot_controller::screenshot_cancel,

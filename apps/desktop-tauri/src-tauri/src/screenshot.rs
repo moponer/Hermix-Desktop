@@ -344,6 +344,22 @@ pub fn encode_png(rgba: &[u8], width: u32, height: u32) -> Result<Vec<u8>, Strin
     Ok(buf.into_inner())
 }
 
+/// 幕布照片用 JPEG（q80）：屏幕照片多为平铺 UI 区域，q80 观感近无损，
+/// 体积比整帧 PNG 小 5-10×、编码快 3-5×，覆盖窗 IPC 传输与 <img> 解码
+/// 都跟着变小。选区编辑的无损底走 crop_rgba + encode_png 按需裁剪，
+/// 不经过幕布质量。
+/// 0.25 的 JpegEncoder::encode 只收 L8/Rgb8，RGBA 必须走 encode_image
+/// （alpha 直接丢弃——抓屏像素全不透明，无影响）。
+pub fn encode_jpeg(rgba: &[u8], width: u32, height: u32) -> Result<Vec<u8>, String> {
+    let img = image::RgbaImage::from_raw(width, height, rgba.to_vec())
+        .ok_or("像素长度与尺寸不匹配")?;
+    let mut buf: Vec<u8> = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, 80)
+        .encode_image(&img)
+        .map_err(|e| format!("JPEG 编码失败: {e}"))?;
+    Ok(buf)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -407,5 +423,28 @@ mod tests {
     fn bgra_to_rgba_swaps() {
         let out = bgra_to_rgba(&[1, 2, 3, 4]);
         assert_eq!(out, vec![3, 2, 1, 4]);
+    }
+
+    #[test]
+    fn jpeg_roundtrip_decodable() {
+        // 32×1 RGBA：红绿蓝白各 8px（各占一个 DCT 块），q80 下块内误差 <±10。
+        // 色块宽 8 是关键——窄于块宽度时相邻色在同一 DCT 块里会互相渗色。
+        let colors: [(u8, u8, u8); 4] = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 255)];
+        let mut px = Vec::with_capacity(32 * 4);
+        for &(cr, cg, cb) in &colors {
+            for _ in 0..8 {
+                px.extend_from_slice(&[cr, cg, cb, 255]);
+            }
+        }
+        let out = encode_jpeg(&px, 32, 1).unwrap();
+        let img = image::load_from_memory(&out).unwrap().to_rgb8();
+        assert_eq!((img.width(), img.height()), (32, 1));
+        for (i, &(er, eg, eb)) in colors.iter().enumerate() {
+            let [r, g, b] = img.get_pixel(4 + 8 * i as u32, 0).0;
+            assert!(
+                r.abs_diff(er) <= 10 && g.abs_diff(eg) <= 10 && b.abs_diff(eb) <= 10,
+                "pixel {i}: got ({r},{g},{b}) want ±10 of ({er},{eg},{eb})"
+            );
+        }
     }
 }
