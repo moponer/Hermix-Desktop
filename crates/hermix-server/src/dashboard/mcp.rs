@@ -71,6 +71,12 @@ pub struct McpServerEntry {
     pub args: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    /// Bearer token for remote (`http`) servers — sent as
+    /// `Authorization: Bearer <token>` on every request. Stored in
+    /// mcp_servers.json alongside the rest of the entry (plaintext at rest,
+    /// same trust level as relay.json; DPAPI wrapping is a future step).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env: Option<std::collections::BTreeMap<String, String>>,
     #[serde(default = "default_true")]
@@ -369,7 +375,14 @@ pub fn entry_to_server_config(
                     .url
                     .clone()
                     .ok_or_else(|| format!("server '{}' is http but has no url", entry.name))?;
-                hermix_mcp::McpServerConfig::http(url)
+                let mut cfg = hermix_mcp::McpServerConfig::http(url);
+                if let Some(token) = entry.token.as_deref().filter(|t| !t.trim().is_empty()) {
+                    cfg = cfg
+                        .with_auth(std::sync::Arc::new(hermix_mcp::BearerTokenAuth::new(
+                            token.trim().to_string(),
+                        )));
+                }
+                cfg
             }
     };
     if let Some(env_map) = &entry.env {
@@ -388,4 +401,59 @@ pub fn entry_to_server_config(
     // registrations end up prefixed by this — e.g. `filesystem__read_file`
     // — so it's the right thing to show in tool error messages.
     Ok((entry.name.clone(), cfg))
+}
+
+// ── 测试 ────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn http_entry(token: Option<&str>) -> McpServerEntry {
+        McpServerEntry {
+            id: "test-1".into(),
+            name: "ops-mcp".into(),
+            transport: McpTransport::Http,
+            command: None,
+            args: None,
+            url: Some("https://host/ops/mcp".into()),
+            token: token.map(str::to_string),
+            env: None,
+            enabled: true,
+            description: None,
+            created_at: String::new(),
+        }
+    }
+
+    #[test]
+    fn entry_with_token_wires_bearer_auth() {
+        let (_, cfg) = entry_to_server_config(&http_entry(Some("homk_abc"))).unwrap();
+        assert!(cfg.auth_provider.is_some(), "token 必须接通 auth_provider");
+    }
+
+    #[test]
+    fn entry_without_token_has_no_auth() {
+        let (_, cfg) = entry_to_server_config(&http_entry(None)).unwrap();
+        assert!(cfg.auth_provider.is_none());
+    }
+
+    #[test]
+    fn entry_with_blank_token_treated_as_absent() {
+        let (_, cfg) = entry_to_server_config(&http_entry(Some("   "))).unwrap();
+        assert!(cfg.auth_provider.is_none(), "空白 token 等同于无 token");
+    }
+
+    #[test]
+    fn token_survives_serde_roundtrip() {
+        let entry = http_entry(Some("homk_secret"));
+        let json = serde_json::to_string(&entry).unwrap();
+        let back: McpServerEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.token.as_deref(), Some("homk_secret"));
+        // 旧格式（无 token 字段）必须照常解析
+        let legacy = serde_json::from_str::<McpServerEntry>(
+            r#"{"id":"1","name":"n","transport":"http","url":"https://x","enabled":true,"created_at":""}"#,
+        )
+        .unwrap();
+        assert!(legacy.token.is_none());
+    }
 }

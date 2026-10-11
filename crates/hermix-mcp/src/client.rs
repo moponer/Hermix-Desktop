@@ -19,7 +19,7 @@ use hermix_core::{JsonSchema, ToolError, ToolHandler, ToolSchema};
 use hermix_tools::ToolRegistry;
 
 use crate::auth::McpAuthProvider;
-use crate::transport::{HttpSseTransport, McpTransport, StdioTransport};
+use crate::transport::{McpTransport, StdioTransport, StreamableHttpTransport};
 use crate::McpError;
 
 // ---------------------------------------------------------------------------
@@ -641,7 +641,7 @@ impl McpClient {
             } else {
                 None
             };
-            Ok(Box::new(HttpSseTransport::new(url, auth_token)))
+            Ok(Box::new(StreamableHttpTransport::new(url, auth_token)))
         } else {
             Err(McpError::Config(
                 "server config must specify either command (stdio) or url (http)".to_string(),

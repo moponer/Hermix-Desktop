@@ -559,135 +559,123 @@ impl McpTransport for HttpTransport {
 }
 
 // ---------------------------------------------------------------------------
-// HttpSseTransport
+// StreamableHttpTransport
 // ---------------------------------------------------------------------------
 
-/// Transport that sends JSON-RPC requests via HTTP POST and receives
-/// responses through a Server-Sent Events (SSE) stream.
-/// This is the standard transport for remote MCP servers that support
-/// the SSE protocol. The flow is:
-/// 1. Connect to the SSE endpoint to start receiving events
-/// 2. Send JSON-RPC requests via HTTP POST to the message endpoint
-/// 3. Receive JSON-RPC responses as SSE `message` events
-/// Falls back to reading the HTTP response body directly when the server
-/// does not use SSE for the response.
-pub struct HttpSseTransport {
-    /// The base URL of the MCP server.
+/// Streamable HTTP transport (MCP spec 2025-03-26 and later): every JSON-RPC
+/// message POSTs to the one endpoint and the response comes back inline
+/// (`application/json`) or as an SSE stream on the same POST. Notifications
+/// are acknowledged with 202 and no body.
+///
+/// Replaces the previous `HttpSseTransport`, which could not talk to any
+/// conformant server: its `start()` read the SSE response body to completion
+/// (an SSE stream never ends → hung forever), parsed the `endpoint` event as
+/// JSON where the spec sends a bare path, and failed on empty 202 bodies.
+/// Stateless servers need no session id; we still echo `Mcp-Session-Id` when
+/// the server issues one so stateful servers work too.
+pub struct StreamableHttpTransport {
+    /// The MCP endpoint URL (e.g. `https://host/ops/mcp`).
     url: String,
     /// Optional bearer token for authentication.
     auth_token: Option<String>,
-    /// HTTP client.
+    /// HTTP client with bounded connect/total timeouts — without a total
+    /// timeout a hung server stalls the whole agent loop.
     client: reqwest::Client,
-    /// Whether the transport has been started.
-    started: bool,
-    /// Pending response from the last POST (non-SSE fallback).
+    /// Session id echoed back from the server, if any.
+    session_id: Option<String>,
+    /// Pending response from the last POST.
     pending_response: Option<Value>,
-    /// The message endpoint URL discovered from the SSE stream, or default.
-    message_endpoint: Option<String>,
 }
 
-impl HttpSseTransport {
-    /// Create a new HTTP+SSE transport for the given URL.
+impl StreamableHttpTransport {
+    /// Create a new streamable HTTP transport for the given endpoint URL.
     pub fn new(url: &str, auth_token: Option<String>) -> Self {
+        let client = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(120))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
         Self {
             url: url.to_string(),
             auth_token,
-            client: reqwest::Client::new(),
-            started: false,
+            client,
+            session_id: None,
             pending_response: None,
-            message_endpoint: None,
         }
     }
 
-    /// Build the full URL for an MCP endpoint.
-    fn endpoint_url(&self, path: &str) -> String {
-        format!(
-            "{}/{}",
-            self.url.trim_end_matches('/'),
-            path.trim_start_matches('/')
-        )
-    }
-
-    /// The URL used for POSTing JSON-RPC messages.
-    fn post_url(&self) -> String {
-        if let Some(ref ep) = self.message_endpoint {
-            ep.clone()
+    /// Extract the JSON payload from a response body: the raw body when the
+    /// server answered inline JSON, otherwise the last `data:` line of the
+    /// SSE stream.
+    fn extract_json(body: &str, content_type: &str) -> Result<Value, McpError> {
+        let json_body = if content_type.contains("text/event-stream") || body.contains("data: ") {
+            let mut last: Option<&str> = None;
+            for line in body.lines() {
+                if let Some(data) = line.strip_prefix("data: ") {
+                    last = Some(data);
+                }
+            }
+            let data = last.ok_or_else(|| McpError::Protocol {
+                code: -32700,
+                message: "SSE response carried no data line".to_string(),
+            })?;
+            data.to_string()
         } else {
-            self.endpoint_url("/message")
+            body.to_string()
+        };
+        if json_body.trim().is_empty() {
+            // 202-style empty body (notification ack).
+            return Ok(Value::Null);
         }
-    }
-
-    /// Build a request with optional authentication.
-    fn build_request(&self, method: reqwest::Method, url: &str) -> reqwest::RequestBuilder {
-        let mut builder = self.client.request(method, url);
-        builder = builder.header("Content-Type", "application/json");
-        if let Some(ref token) = self.auth_token {
-            builder = builder.header("Authorization", format!("Bearer {}", token));
-        }
-        builder
+        serde_json::from_str(json_body.trim()).map_err(|e| McpError::Protocol {
+            code: -32700,
+            message: format!("Invalid JSON response: {}", e),
+        })
     }
 }
 
 #[async_trait]
-impl McpTransport for HttpSseTransport {
+impl McpTransport for StreamableHttpTransport {
     async fn start(&mut self) -> Result<(), McpError> {
-        if self.started {
-            return Err(McpError::ConnectionError(
-                "Transport already started".to_string(),
-            ));
-        }
-
-        // Try to connect to the SSE endpoint first for streaming support.
-        // If it fails, fall back to the base URL health check.
-        let sse_url = self.endpoint_url("/sse");
-        let mut sse_builder = self.client.get(&sse_url);
-        if let Some(ref token) = self.auth_token {
-            sse_builder = sse_builder.header("Authorization", format!("Bearer {}", token));
-        }
-
-        match sse_builder.send().await {
-            Ok(resp) if resp.status().is_success() => {
-                // If the SSE endpoint returns an `endpoint` field in the
-                // first event, use it for POSTing messages.
-                let body = resp.text().await.unwrap_or_default();
-                for line in body.lines() {
-                    if let Some(data) = line.strip_prefix("data: ") {
-                        if let Ok(val) = serde_json::from_str::<Value>(data) {
-                            if let Some(ep) = val.get("endpoint").and_then(|v| v.as_str()) {
-                                self.message_endpoint = Some(ep.to_string());
-                            }
-                        }
-                    }
-                }
-                info!("MCP HTTP+SSE transport connected to: {}", self.url);
-            }
-            _ => {
-                // SSE endpoint not available — verify the base URL is reachable.
-                let base_url = &self.url;
-                self.client.get(base_url).send().await.map_err(|e| {
-                    McpError::ConnectionError(format!(
-                        "Failed to connect to MCP server at {}: {}",
-                        self.url, e
-                    ))
-                })?;
-                info!("MCP HTTP+SSE transport connected (no SSE) to: {}", self.url);
-            }
-        }
-
-        self.started = true;
+        // Streamable HTTP has no out-of-band handshake — the JSON-RPC
+        // `initialize` (the first send) is the reachability check.
+        info!("MCP streamable HTTP transport ready for: {}", self.url);
         Ok(())
     }
 
     async fn send(&mut self, message: Value) -> Result<(), McpError> {
-        let url = self.post_url();
-        let builder = self.build_request(reqwest::Method::POST, &url);
+        let mut builder = self
+            .client
+            .post(&self.url)
+            .header("Content-Type", "application/json")
+            // Both accepts: servers choose inline JSON or an SSE stream.
+            .header("Accept", "application/json, text/event-stream");
+        if let Some(ref token) = self.auth_token {
+            builder = builder.header("Authorization", format!("Bearer {}", token));
+        }
+        if let Some(ref sid) = self.session_id {
+            builder = builder.header("Mcp-Session-Id", sid);
+        }
         let response = builder
             .json(&message)
             .send()
             .await
             .map_err(|e| McpError::ConnectionError(format!("HTTP send failed: {}", e)))?;
 
+        if let Some(sid) = response
+            .headers()
+            .get("mcp-session-id")
+            .and_then(|v| v.to_str().ok())
+        {
+            self.session_id = Some(sid.to_string());
+        }
+
         let status = response.status();
+        if status.as_u16() == 202 {
+            // Notification accepted; no response body follows.
+            self.pending_response = Some(Value::Null);
+            return Ok(());
+        }
         if !status.is_success() {
             let body = response
                 .text()
@@ -696,29 +684,18 @@ impl McpTransport for HttpSseTransport {
             return Err(classify_http_status_error(status, &body));
         }
 
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
         let body = response
             .text()
             .await
             .map_err(|e| McpError::ConnectionError(format!("Failed to read response: {}", e)))?;
 
-        // Parse response — may be SSE or plain JSON.
-        let json_body = if body.contains("data: ") {
-            // SSE-formatted response: extract the last `data:` line.
-            body.lines()
-                .filter_map(|line| line.strip_prefix("data: "))
-                .next_back()
-                .unwrap_or(&body)
-                .to_string()
-        } else {
-            body
-        };
-
-        let value: Value = serde_json::from_str(&json_body).map_err(|e| McpError::Protocol {
-            code: -32700,
-            message: format!("Invalid JSON response: {}", e),
-        })?;
-
-        self.pending_response = Some(value);
+        self.pending_response = Some(Self::extract_json(&body, &content_type)?);
         Ok(())
     }
 
@@ -732,10 +709,9 @@ impl McpTransport for HttpSseTransport {
     }
 
     async fn close(&mut self) -> Result<(), McpError> {
-        info!("Closing MCP HTTP+SSE transport");
-        self.started = false;
+        info!("Closing MCP streamable HTTP transport");
+        self.session_id = None;
         self.pending_response = None;
-        self.message_endpoint = None;
         Ok(())
     }
 }
@@ -798,5 +774,111 @@ mod tests {
         let e =
             classify_http_status_error(reqwest::StatusCode::SERVICE_UNAVAILABLE, "not configured");
         assert!(matches!(e, McpError::NotConfigured(_)));
+    }
+
+    #[test]
+    fn test_extract_json_inline() {
+        let v = StreamableHttpTransport::extract_json(
+            r#"{"jsonrpc":"2.0","id":1,"result":{"ok":true}}"#,
+            "application/json",
+        )
+        .unwrap();
+        assert_eq!(v["result"]["ok"], true);
+    }
+
+    #[test]
+    fn test_extract_json_sse_frame() {
+        let body = "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"x\":1}}\n\n";
+        let v = StreamableHttpTransport::extract_json(body, "text/event-stream").unwrap();
+        assert_eq!(v["result"]["x"], 1);
+    }
+
+    #[test]
+    fn test_extract_json_empty_202() {
+        let v = StreamableHttpTransport::extract_json("", "application/json").unwrap();
+        assert!(v.is_null());
+    }
+
+    /// Minimal one-request HTTP server: echoes whether the Authorization
+    /// header carried the expected bearer token, as inline JSON.
+    async fn spawn_echo_server(expected_auth: &'static str) -> std::net::SocketAddr {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else { return };
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 65536];
+                    let mut got = vec![];
+                    // Read until the full request (headers + content-length
+                    // body) has arrived.
+                    let (headers_end, content_length) = loop {
+                        let n = sock.read(&mut buf).await.unwrap();
+                        if n == 0 {
+                            return;
+                        }
+                        got.extend_from_slice(&buf[..n]);
+                        if let Some(pos) = got
+                            .windows(4)
+                            .position(|w| w == b"\r\n\r\n")
+                        {
+                            let head = String::from_utf8_lossy(&got[..pos]).to_lowercase();
+                            let cl = head
+                                .lines()
+                                .find_map(|l| l.strip_prefix("content-length:"))
+                                .and_then(|v| v.trim().parse::<usize>().ok())
+                                .unwrap_or(0);
+                            if got.len() >= pos + 4 + cl {
+                                break (pos, cl);
+                            }
+                        }
+                    };
+                    let head = String::from_utf8_lossy(&got[..headers_end]).to_string();
+                    let auth_ok = head.contains(expected_auth);
+                    let body = format!(
+                        "{{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{{\"auth\":{}}}}}",
+                        auth_ok
+                    );
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    sock.write_all(resp.as_bytes()).await.unwrap();
+                });
+            }
+        });
+        addr
+    }
+
+    #[tokio::test]
+    async fn test_streamable_http_roundtrip_sends_bearer() {
+        let addr = spawn_echo_server("Bearer homk_secret").await;
+        let mut transport =
+            StreamableHttpTransport::new(&format!("http://{addr}/mcp"), Some("homk_secret".into()));
+        transport.start().await.unwrap();
+        transport
+            .send(serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"protocolVersion": "2025-06-18"}
+            }))
+            .await
+            .unwrap();
+        let response = transport.receive().await.unwrap();
+        assert_eq!(response["result"]["auth"], true, "bearer header must reach the server");
+    }
+
+    #[tokio::test]
+    async fn test_streamable_http_sends_no_auth_header_without_token() {
+        let addr = spawn_echo_server("Bearer homk_secret").await;
+        let mut transport = StreamableHttpTransport::new(&format!("http://{addr}/mcp"), None);
+        transport.start().await.unwrap();
+        transport
+            .send(serde_json::json!({"jsonrpc":"2.0","id":1,"method":"initialize"}))
+            .await
+            .unwrap();
+        let response = transport.receive().await.unwrap();
+        assert_eq!(response["result"]["auth"], false);
     }
 }

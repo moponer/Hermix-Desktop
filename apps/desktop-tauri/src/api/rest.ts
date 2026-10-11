@@ -825,7 +825,7 @@ function isoToMs(iso: string | undefined): number {
   return Number.isFinite(t) ? t : 0;
 }
 
-function fromBackend(entry: { id: string; name: string; transport: string; command?: string; args?: string[]; url?: string; env?: Record<string, string>; enabled?: boolean; created_at?: string; description?: string }): McpServerEntry {
+function fromBackend(entry: { id: string; name: string; transport: string; command?: string; args?: string[]; url?: string; token?: string; env?: Record<string, string>; enabled?: boolean; created_at?: string; description?: string }): McpServerEntry {
   return {
     id: entry.id,
     name: entry.name,
@@ -833,6 +833,7 @@ function fromBackend(entry: { id: string; name: string; transport: string; comma
     command: entry.command,
     args: entry.args,
     url: entry.url,
+    token: entry.token,
     env: entry.env,
     enabled: entry.enabled ?? true,
     createdAt: isoToMs(entry.created_at),
@@ -847,6 +848,7 @@ function toBackend(entry: Omit<McpServerEntry, "id" | "createdAt">) {
     command: entry.command,
     args: entry.args,
     url: entry.url,
+    token: entry.token,
     env: entry.env,
     enabled: entry.enabled,
     description: (entry as McpServerEntry).description,
@@ -861,6 +863,7 @@ interface McpServerListResponse {
     command?: string;
     args?: string[];
     url?: string;
+    token?: string;
     env?: Record<string, string>;
     enabled?: boolean;
     created_at?: string;
@@ -972,7 +975,7 @@ export const getMcpServers = async (): Promise<McpServerEntry[]> => {
 };
 export const addMcpServer = async (entry: Omit<McpServerEntry, "id" | "createdAt">): Promise<McpServerEntry> => {
   try {
-    const res = await fetchJSON<{ id: string; name: string; transport: string; command?: string; args?: string[]; url?: string; env?: Record<string, string>; enabled?: boolean; created_at?: string; description?: string }>(
+    const res = await fetchJSON<{ id: string; name: string; transport: string; command?: string; args?: string[]; url?: string; token?: string; env?: Record<string, string>; enabled?: boolean; created_at?: string; description?: string }>(
       "/api/mcp/servers",
       { method: "POST", body: JSON.stringify(toBackend(entry)) },
     );
@@ -992,7 +995,7 @@ export const addMcpServer = async (entry: Omit<McpServerEntry, "id" | "createdAt
 };
 export const updateMcpServer = async (id: string, patch: Partial<McpServerEntry>): Promise<McpServerEntry | null> => {
   try {
-    const res = await fetchJSON<{ id: string; name: string; transport: string; command?: string; args?: string[]; url?: string; env?: Record<string, string>; enabled?: boolean; created_at?: string; description?: string }>(
+    const res = await fetchJSON<{ id: string; name: string; transport: string; command?: string; args?: string[]; url?: string; token?: string; env?: Record<string, string>; enabled?: boolean; created_at?: string; description?: string }>(
       `/api/mcp/servers/${encodeURIComponent(id)}`,
       { method: "PUT", body: JSON.stringify(patch) },
     );

@@ -341,6 +341,7 @@ pub async fn install(
         command,
         args,
         url,
+        token: None, // 目录安装走 npm/官方源，无凭据；远程 token 走手动添加
         env: if req.env.is_empty() { None } else { Some(req.env) },
         enabled: true,
         description: Some(item.description.clone()),

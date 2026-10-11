@@ -606,6 +606,14 @@ export function parseMcpJson(raw: string): McpSpec[] {
   const specs: McpSpec[] = [];
   for (const [name, cfgRaw] of Object.entries(root)) {
     const c = cfgRaw as Record<string, unknown>;
+    // Claude/Cursor 风格的 headers.Authorization: "Bearer xxx" → token 字段。
+    // 凭据不该散在 headers 里由前端透传，统一收敛到 token。
+    let token = typeof c.token === "string" ? c.token : undefined;
+    const headers = (typeof c.headers === "object" && c.headers ? c.headers : {}) as Record<string, unknown>;
+    const authHeader = typeof headers.Authorization === "string" ? headers.Authorization : "";
+    if (!token && authHeader.startsWith("Bearer ")) {
+      token = authHeader.slice("Bearer ".length).trim() || undefined;
+    }
     const base = {
       name,
       enabled: true,
@@ -613,7 +621,7 @@ export function parseMcpJson(raw: string): McpSpec[] {
       env: typeof c.env === "object" && c.env ? (c.env as Record<string, string>) : undefined,
     };
     if (typeof c.url === "string" && c.url) {
-      specs.push({ ...base, transport: "http", url: c.url });
+      specs.push({ ...base, transport: "http", url: c.url, token });
     } else if (typeof c.command === "string" && c.command) {
       const args = Array.isArray(c.args)
         ? (c.args as unknown[]).filter((x): x is string => typeof x === "string")
@@ -643,6 +651,7 @@ export function ConnectorsTab({ query, onQuery }: { query: string; onQuery: (q: 
     command: "",
     args: "",
     url: "",
+    token: "",
     env: "",
     description: "",
   });
@@ -674,13 +683,14 @@ export function ConnectorsTab({ query, onQuery }: { query: string; onQuery: (q: 
         command: newServer.transport === "stdio" ? newServer.command.trim() : undefined,
         args: newServer.transport === "stdio" && newServer.args.trim() ? newServer.args.trim().split(/\s+/) : undefined,
         url: newServer.transport === "http" ? newServer.url.trim() : undefined,
+        token: newServer.transport === "http" && newServer.token.trim() ? newServer.token.trim() : undefined,
         env: newServer.env.trim() ? Object.fromEntries(newServer.env.trim().split("\n").filter(Boolean).map((line) => { const idx = line.indexOf("="); return idx > 0 ? [line.slice(0, idx).trim(), line.slice(idx + 1).trim()] : null; }).filter(Boolean) as [string, string][]) : undefined,
         enabled: true,
         description: newServer.description.trim() || undefined,
       };
       const created = await api.addMcpServer(spec);
       setServers((prev) => [...prev, created]);
-      setNewServer({ name: "", transport: "stdio", command: "", args: "", url: "", env: "", description: "" });
+      setNewServer({ name: "", transport: "stdio", command: "", args: "", url: "", token: "", env: "", description: "" });
       setShowAddForm(false);
     } catch (e) {
       setAddError(e instanceof Error ? e.message : String(e));
@@ -811,6 +821,12 @@ export function ConnectorsTab({ query, onQuery }: { query: string; onQuery: (q: 
                   <div className="col-span-2">
                     <label className="text-[length:var(--text-meta)] text-text-muted">URL</label>
                     <input value={newServer.url} onChange={(e) => setNewServer((p) => ({ ...p, url: e.target.value }))} placeholder="https://example.com/mcp" className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary" />
+                  </div>
+                )}
+                {newServer.transport === "http" && (
+                  <div className="col-span-2">
+                    <label className="text-[length:var(--text-meta)] text-text-muted">Bearer Token （可选，远程服务鉴权）</label>
+                    <input value={newServer.token} onChange={(e) => setNewServer((p) => ({ ...p, token: e.target.value }))} placeholder="homk_…" className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary" />
                   </div>
                 )}
                 <div className="col-span-2">

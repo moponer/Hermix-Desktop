@@ -99,5 +99,5 @@ pub use serve::{
 };
 pub use server::McpServer;
 pub use transport::{
-    HttpSseTransport, HttpTransport, McpTransport, ServerStdioTransport, StdioTransport,
+    McpTransport, ServerStdioTransport, StdioTransport, StreamableHttpTransport,
 };

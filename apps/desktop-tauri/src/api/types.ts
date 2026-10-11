@@ -177,6 +177,8 @@ export interface McpServerEntry {
   args?: string[];
   env?: Record<string, string>;
   url?: string;
+  /** Bearer token for remote (http) servers — sent as Authorization header. */
+  token?: string;
   enabled: boolean;
   createdAt: number;
 }
