@@ -39,6 +39,7 @@ export function UpdatePanel({ updater }: { updater: Updater }) {
   if (!panelOpen) return null;
 
   const forced = status?.kind === "forced";
+  const isLatest = status?.kind === "none";
   const busy = phase !== "idle";
   const pct = progress && progress.total > 0 ? Math.min(100, Math.round((progress.received / progress.total) * 100)) : null;
 
@@ -85,7 +86,13 @@ export function UpdatePanel({ updater }: { updater: Updater }) {
             <Download className="icon-md text-accent shrink-0" />
           )}
           <span className="flex-1 font-semibold text-text-primary">
-            {forced ? "必须更新后才能继续使用" : status ? `有新版本 ${status.latest_version}` : "软件更新"}
+            {forced
+              ? "必须更新后才能继续使用"
+              : isLatest
+                ? "已是最新"
+                : status
+                  ? `有新版本 ${status.latest_version}`
+                  : "软件更新"}
           </span>
           {!forced && !busy && (
             <button
@@ -102,17 +109,23 @@ export function UpdatePanel({ updater }: { updater: Updater }) {
         {/* 内容 */}
         <div className="px-5 pb-4 overflow-y-auto min-h-0 flex-1">
           {status ? (
-            <>
-              <div className="text-[length:var(--text-meta)] text-text-faint mb-3">
-                当前版本 {status.current_version}
-                {status.pub_date ? ` · 发布于 ${status.pub_date.slice(0, 10)}` : ""}
+            isLatest ? (
+              <div className="text-sm text-text-secondary">
+                当前版本 {status.current_version} 已是最新发布版。
               </div>
-              {status.notes ? (
-                <div className="text-sm text-text-secondary leading-relaxed border-t border-border-secondary pt-3">
-                  <MarkdownBody content={status.notes} />
+            ) : (
+              <>
+                <div className="text-[length:var(--text-meta)] text-text-faint mb-3">
+                  当前版本 {status.current_version}
+                  {status.pub_date ? ` · 发布于 ${status.pub_date.slice(0, 10)}` : ""}
                 </div>
-              ) : null}
-            </>
+                {status.notes ? (
+                  <div className="text-sm text-text-secondary leading-[1.75] border-t border-border-secondary pt-3 [&_li]:marker:text-text-faint">
+                    <MarkdownBody content={status.notes} />
+                  </div>
+                ) : null}
+              </>
+            )
           ) : checkFailed ? (
             <div className="text-sm text-text-secondary">
               检查更新失败（网络或更新源未配置）。请稍后重试。
@@ -145,7 +158,7 @@ export function UpdatePanel({ updater }: { updater: Updater }) {
 
         {/* 底部动作 */}
         <div className="px-5 py-3 border-t border-border-secondary flex justify-end gap-2">
-          {!forced && !busy && (
+          {!forced && !busy && !isLatest && (
             <button
               type="button"
               onClick={() => setPanelOpen(false)}
@@ -154,29 +167,36 @@ export function UpdatePanel({ updater }: { updater: Updater }) {
               以后再说
             </button>
           )}
-          <button
-            type="button"
-            disabled={!status || busy}
-            onClick={() => void startUpdate()}
-            className={clsx(
-              "px-4 h-8 rounded text-sm font-medium flex items-center gap-1.5",
-              "bg-accent text-white hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed",
-            )}
-          >
-            {busy ? (
-              <>
-                <RefreshCw className="icon-sm animate-spin" /> 更新中…
-              </>
-            ) : status?.kind === "none" ? (
-              <>
-                <CheckCircle2 className="icon-sm" /> 已是最新
-              </>
-            ) : (
-              <>
-                <Download className="icon-sm" /> 立即更新
-              </>
-            )}
-          </button>
+          {isLatest && !busy ? (
+            // 已是最新：不存在可执行的更新动作，给关闭而不是可点的下载钮。
+            <button
+              type="button"
+              onClick={() => setPanelOpen(false)}
+              className="px-4 h-8 rounded text-sm font-medium flex items-center gap-1.5 border border-border-secondary text-text-secondary hover:bg-bg-tertiary"
+            >
+              <CheckCircle2 className="icon-sm text-text-muted" /> 关闭
+            </button>
+          ) : (
+            <button
+              type="button"
+              disabled={!status || busy || isLatest}
+              onClick={() => void startUpdate()}
+              className={clsx(
+                "px-4 h-8 rounded text-sm font-medium flex items-center gap-1.5",
+                "bg-accent text-white hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed",
+              )}
+            >
+              {busy ? (
+                <>
+                  <RefreshCw className="icon-sm animate-spin" /> 更新中…
+                </>
+              ) : (
+                <>
+                  <Download className="icon-sm" /> 立即更新
+                </>
+              )}
+            </button>
+          )}
         </div>
       </div>
     </div>

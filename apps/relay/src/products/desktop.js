@@ -36,15 +36,20 @@ function register(app, { deployDir, mount }) {
 
   /// 从 releases.json 现算 manifest；迁移期无 releases.json 时回退读
   /// legacy manifest.json 文件（返回 null 表示两者都缺 → 404）。
-  function currentManifest() {
+  /// origin 由调用方从请求头还原（X-Forwarded-Proto/Host——前面永远有
+  /// nginx 反代）；url 必须是绝对地址：0.1.10 及更早的客户端直接拿它
+  /// 下载，相对路径 = reqwest builder error（2026-10-12 出包实测踩中）。
+  function currentManifest(origin) {
     const releases = readReleases();
     if (Array.isArray(releases) && releases.length > 0) {
       const r = releases[0]; // 条目按版本倒序，[0] 即最新
       return {
         version: r.version,
-        notes: Array.isArray(r.notes) ? r.notes.join('；') : r.notes || '本次更新包含修复与改进。',
+        notes: Array.isArray(r.notes)
+          ? r.notes.map((s) => `- ${s}`).join('\n')
+          : r.notes || '本次更新包含修复与改进。',
         pub_date: r.date ? new Date(r.date).toISOString() : new Date().toISOString(),
-        url: `${mount}/latest.zip`,
+        url: `${origin}${mount}/latest.zip`,
         sha256: r.sha256 || null,
         min_version: r.min_version ?? null,
       };
@@ -56,8 +61,10 @@ function register(app, { deployDir, mount }) {
     }
   }
 
-  app.get(`${mount}/manifest.json`, (_req, res) => {
-    const manifest = currentManifest();
+  app.get(`${mount}/manifest.json`, (req, res) => {
+    const proto = req.get('X-Forwarded-Proto') || req.protocol || 'https';
+    const origin = `${proto}://${req.get('host')}`;
+    const manifest = currentManifest(origin);
     if (!manifest) {
       return res.status(404).type('text/plain; charset=utf-8')
         .send(`更新清单尚未上传（运维需发布到 ${mount}/，见 release.sh）`);

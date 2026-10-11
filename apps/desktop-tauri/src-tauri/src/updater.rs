@@ -101,8 +101,9 @@ fn http_client() -> Result<reqwest::Client, String> {
 }
 
 async fn fetch_manifest() -> Result<Manifest, String> {
+    let src = manifest_url();
     let body = http_client()?
-        .get(manifest_url())
+        .get(&src)
         .header("Cache-Control", "no-cache")
         .send()
         .await
@@ -111,9 +112,23 @@ async fn fetch_manifest() -> Result<Manifest, String> {
         return Err(format!("更新清单 HTTP {}", body.status()));
     }
     // 404 文本页（运维未上传）会在这里解析失败，如实报错即可，上层静默。
-    body.json::<Manifest>()
+    let mut manifest: Manifest = body
+        .json::<Manifest>()
         .await
-        .map_err(|e| format!("更新清单解析失败: {e}"))
+        .map_err(|e| format!("更新清单解析失败: {e}"))?;
+    // 兼容 0.1.11 及更早的 relay：现算 manifest 的 url 曾是相对路径（
+    // "/desktop/latest.zip"），拿去下载 = reqwest builder error。按清单源
+    // 的 origin 补全；绝对 url 原样保留。
+    if manifest.url.starts_with('/') {
+        let origin = reqwest::Url::parse(&src)
+            .ok()
+            .map(|u| u.origin().ascii_serialization())
+            .unwrap_or_default();
+        if !origin.is_empty() {
+            manifest.url = format!("{origin}{}", manifest.url);
+        }
+    }
+    Ok(manifest)
 }
 
 fn classify(m: Manifest, current: &str) -> UpdateStatus {
