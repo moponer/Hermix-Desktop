@@ -18,7 +18,7 @@ const { WebSocket } = require('ws');
 
 const http = require('node:http');
 const { createRelay } = require('../src/server');
-const { openRegistry, hashToken, bearerFromHeaders } = require('../src/auth');
+const { openRegistry, hashToken, bearerFromHeaders, deriveNodeIdFromPublicKey } = require('../src/auth');
 const { Router } = require('../src/router');
 const { parseEnvelope, buildEnvelope, isSealed, PROTO_VERSION, TAG } = require('../src/proto');
 
@@ -176,6 +176,100 @@ test('issue-phone: 无凭据被 401', async () => {
     assert.strictEqual(r.status, 401);
   });
 });
+
+// ------------------------------------------------------------ enroll-node
+
+// 与 Rust 侧 `relay_settings::derive_node_id` 共用的固定向量（sha256(65 字节
+// 原始公钥) 前 4 字节 hex）。两边任一漂移必有一边红——见 hermix-server 测试
+// `node_id_derivation_matches_relay_implementation`。
+const ENROLL_KEY_B64 =
+  'BAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0A=';
+const ENROLL_EXPECTED_NODE = 'hermix-0ed3a6ab';
+
+test('enroll-node: node_id 由公钥推导，与 Rust 同向量', () => {
+  assert.strictEqual(deriveNodeIdFromPublicKey(ENROLL_KEY_B64), ENROLL_EXPECTED_NODE);
+  for (const bad of [
+    '',
+    'not base64!!',
+    Buffer.alloc(64, 4).toString('base64'), // 少一个字节
+    Buffer.alloc(65, 1).toString('base64'), // 前缀不是 0x04
+  ]) {
+    assert.strictEqual(deriveNodeIdFromPublicKey(bad), null, `非法输入必须拒: ${bad}`);
+  }
+});
+
+test('enroll-node: 匿名签发一条 node 凭据，且真的能连上 /relay/node', async () => {
+  await withRelay(async ({ base, registry }) => {
+    const r = await fetch(`${base}/api/relay/enroll-node`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ public_key: ENROLL_KEY_B64 }),
+    });
+    assert.strictEqual(r.status, 200);
+    const { token, node_id } = await r.json();
+    assert.strictEqual(node_id, ENROLL_EXPECTED_NODE, 'node_id 必须由 relay 从公钥推导');
+    assert.ok(token.startsWith('hrel_'));
+
+    const who = registry.authenticate(token);
+    assert.ok(who, '签出来的凭据必须立刻可用');
+    assert.strictEqual(who.role, 'node');
+
+    // 端到端：凭据必须能完成 WS 握手，不只是过了 authenticate。
+    const ws = new WebSocket(`${base.replace('http', 'ws')}/relay/node`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const opened = await new Promise((resolve) => {
+      ws.once('open', () => resolve(true));
+      ws.once('unexpected-response', (_q, res) => resolve(res.statusCode));
+      ws.once('error', () => resolve(false));
+    });
+    assert.strictEqual(opened, true, 'enroll 出的凭据必须能连上 /relay/node');
+    ws.close();
+  });
+});
+
+test('enroll-node: 同一身份重复签发被 409（先到先得）', async () => {
+  await withRelay(async ({ base }) => {
+    const first = await fetch(`${base}/api/relay/enroll-node`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ public_key: ENROLL_KEY_B64 }),
+    });
+    assert.strictEqual(first.status, 200);
+
+    const second = await fetch(`${base}/api/relay/enroll-node`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ public_key: ENROLL_KEY_B64 }),
+    });
+    assert.strictEqual(second.status, 409, '持公钥者不能在真电脑离线时补签占槽');
+  });
+});
+
+test('enroll-node: 客户端自报 node_id 一律无效', async () => {
+  await withRelay(async ({ base }) => {
+    // 只认 public_key 推导：多带一个 node_id 字段改变不了归属。
+    const r = await fetch(`${base}/api/relay/enroll-node`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ public_key: ENROLL_KEY_B64, node_id: 'hermix-attacker' }),
+    });
+    const { node_id } = await r.json();
+    assert.strictEqual(node_id, ENROLL_EXPECTED_NODE);
+  });
+});
+
+test('enroll-node: 非法公钥被 400', async () => {
+  await withRelay(async ({ base }) => {
+    const r = await fetch(`${base}/api/relay/enroll-node`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ public_key: 'garbage' }),
+    });
+    assert.strictEqual(r.status, 400);
+  });
+});
+
 
 test('issue-phone: 凭据无效被 401', async () => {
   await withRelay(async ({ base }) => {
@@ -483,6 +577,80 @@ test('端到端: 手机 ↔ 电脑 经 relay 往返一帧', async () => {
   });
   assert.ok(gotBack);
   assert.strictEqual(gotBack.payload, back);
+
+  node.close();
+  phone.close();
+  relay.close();
+});
+
+test('端到端: 转发必须原样带过 session_id 与 auth', async () => {
+  // 这条是回归守卫。relay 的转发白名单一度漏了 session_id / auth，
+  // 后果不是握手失败而是「连上了但消息莫名消失」：
+  //   · PC 按 session_id 拆包（relay_client.rs），缺了就整帧丢弃；
+  //   · hermix 侧在重建的 `/v1/ws-stream/{sid}` 上复验签名，缺 auth 直接拒；
+  //   · 更底层，密封帧的 AAD 把 session_id 算进去了，丢它连解密都失败。
+  // 三层都在丢字段时静默失败，所以必须钉死。
+  const db = tmpDb();
+  const relay = createRelay({ dbPath: db });
+  const phoneToken = relay.registry.register({ nodeId: 'fwd', role: 'phone' });
+  const nodeToken = relay.registry.register({ nodeId: 'fwd', role: 'node' });
+
+  await new Promise((r) => relay.listen(0, r));
+  const { port } = relay.server.address();
+
+  const open = (path, token) =>
+    new Promise((resolve, reject) => {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}${path}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      ws.once('open', () => resolve(ws));
+      ws.once('error', reject);
+      ws.once('unexpected-response', (_req, res) => reject(new Error(`HTTP ${res.statusCode}`)));
+    });
+
+  const node = await open('/relay/node', nodeToken);
+  const phone = await open('/relay/phone', phoneToken);
+  await new Promise((r) => setTimeout(r, 60));
+
+  const payload = sealedPayload('{"type":"pairing.request"}');
+  const auth = { bearer: 'hmxd_test', signature: 'sig-blob' };
+  phone.send(
+    JSON.stringify({
+      proto_version: PROTO_VERSION,
+      tag: 'route',
+      session_id: 'im:device:dev-1',
+      auth,
+      payload,
+    }),
+  );
+
+  const got = await new Promise((resolve) => {
+    node.once('message', (data) => resolve(JSON.parse(data.toString('utf8'))));
+    setTimeout(() => resolve(null), 2000);
+  });
+  assert.ok(got, '电脑侧应收到帧');
+  assert.strictEqual(got.session_id, 'im:device:dev-1', 'session_id 必须原样带过（拆包与 AAD 都依赖它）');
+  assert.deepStrictEqual(got.auth, auth, 'auth 必须原样带过（签名在会话上复验）');
+  assert.strictEqual(got.payload, payload);
+
+  // 反向同样要带过去：PC → 手机靠 auth 里的签名授权。
+  const backAuth = { bearer: 'hmxd_test', signature: 'sig-back' };
+  node.send(
+    JSON.stringify({
+      proto_version: PROTO_VERSION,
+      tag: 'route',
+      session_id: 'im:device:dev-1',
+      auth: backAuth,
+      payload,
+    }),
+  );
+  const gotBack = await new Promise((resolve) => {
+    phone.once('message', (data) => resolve(JSON.parse(data.toString('utf8'))));
+    setTimeout(() => resolve(null), 2000);
+  });
+  assert.ok(gotBack);
+  assert.strictEqual(gotBack.session_id, 'im:device:dev-1');
+  assert.deepStrictEqual(gotBack.auth, backAuth);
 
   node.close();
   phone.close();

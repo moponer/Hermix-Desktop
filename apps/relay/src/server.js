@@ -1,99 +1,77 @@
 'use strict';
 
 /**
- * relay 服务本体：Express + WebSocket。
+ * relay 服务本体：Express + WebSocket —— 纯装配层。
  *
- * 两条入口路径：
+ * 这里只做四件事：中间件、凭据/审计端点、按注册表挂产品路由、listen。
+ * **不认识任何具体产品的路由细节**——产品见 src/registry.js 与 src/products/；
+ * WS 协议面见 src/connections.js。
+ *
+ * 两条 WS 入口路径（在 connections.js 内注册）：
  * - `GET /relay/node`   —— 电脑侧（PC 出站主动连）
  * - `GET /relay/phone`  —— 手机侧
  *
  * 两条都要求 `Authorization: Bearer <token>`，且 token 必须在本地登记过。
  * 握手期就比对自己的 `proto_version`——版本漂移必须在握手时报，而不是等
  * 消息「莫名消失」。
- *
- * 关于认证的两句话，别读混：
- * - 这里校验的是「这个 token 是不是本 relay 登记过、绑到哪个 node」，属**路由级**；
- * - hermix 侧在链路另一端独立校验同一凭据 + 请求签名，那才是**授权级**。
- * relay 不参与授权判定，也**不解析内层帧**。
  */
 
 const http = require('node:http');
-const fs = require('node:fs');
 const path = require('node:path');
-const crypto = require('node:crypto');
 const express = require('express');
-const { WebSocketServer } = require('ws');
 
-const { PROTO_VERSION, TAG, buildEnvelope, parseEnvelope } = require('./proto');
-
-function hashFileSync(p) {
-  try {
-    return crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex');
-  } catch {
-    return null;
-  }
-}
-
-// 按 mtime + 体积缓存文件指纹。更新包几十 MB，每次请求重算 SHA-256 会把
-// manifest 的响应拖到 200ms 量级并打满 CPU，而它一天也传不了几次。
-// 只看 mtime 不够——某些文件系统/上传方式会保留旧时间戳，所以带上 size。
-const shaCache = new Map();
-function hashFileCached(p) {
-  let st;
-  try {
-    st = fs.statSync(p);
-  } catch {
-    return null;
-  }
-  const hit = shaCache.get(p);
-  if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) return hit.sha256;
-  const sha256 = hashFileSync(p);
-  shaCache.set(p, { mtimeMs: st.mtimeMs, size: st.size, sha256 });
-  return sha256;
-}
-const { openRegistry, bearerFromHeaders } = require('./auth');
+const { PROTO_VERSION } = require('./proto');
+const { openRegistry, bearerFromHeaders, deriveNodeIdFromPublicKey } = require('./auth');
 const { openAudit } = require('./audit');
 const { Router } = require('./router');
+const { PRODUCTS, payloadProducts, proxyProducts } = require('./registry');
+const { setupConnections } = require('./connections');
 
-function createRelay({ dbPath }) {
+function createRelay({ dbPath, relayRoot } = {}) {
+  // relayRoot：发布面（deploy/）与静态站（public/）的根。默认 = 包根，
+  // 远端部署时 relay 进程的工作目录就是它（/www/wwwroot/hermix-relay）。
+  const root = relayRoot || path.join(__dirname, '..');
   const registry = openRegistry(dbPath);
   const audit = openAudit(dbPath);
   const router = new Router({ audit });
 
   const app = express();
   app.disable('x-powered-by');
-  // ── agent-bbs 反代（决策笔记 2026-10-09-agent-bbs-integration）────────
-  // BBS 是 relay 同机的独立 Node 进程，只绑 127.0.0.1（BBS_PORT，默认 3901）。
-  // 这里按 /bbs 前缀纯管道转发，relay 零 BBS 业务逻辑。
+
+  // ── 反代型产品（registry: type=proxy）────────────────────────────
+  // BBS 是 relay 同机的独立 Node 进程（决策笔记 2026-10-09-agent-bbs-integration）。
   // **必须挂在 express.json 之前**：body 解析器会消费请求流，反代必须在
   // 它之前拿到原始字节流（BBS 自己解析 JSON）。
-  const bbsPort = Number(process.env.BBS_PORT || 3901);
-  app.use('/bbs', (req, res) => {
-    const upstream = http.request(
-      {
-        host: '127.0.0.1',
-        port: bbsPort,
-        method: req.method,
-        path: req.originalUrl, // 保留 /bbs 前缀：BBS 路由按全路径注册
-        headers: { ...req.headers, host: `127.0.0.1:${bbsPort}` },
-      },
-      (up) => {
-        res.writeHead(up.statusCode || 502, up.headers);
-        up.pipe(res);
-      },
-    );
-    upstream.on('error', () => {
-      // BBS 进程没起/挂了：明确 502，不带出 relay 自身的堆栈。
-      if (!res.headersSent) {
-        res.status(502).json({ code: 'bbs_down', message: 'BBS 服务未启动（需在服务器上运行 apps/bbs）' });
-      } else {
-        res.end();
-      }
+  for (const p of proxyProducts()) {
+    const upstreamPort = Number(new URL(p.target).port) || 80;
+    app.use(p.mount, (req, res) => {
+      const upstream = http.request(
+        {
+          host: new URL(p.target).hostname,
+          port: upstreamPort,
+          method: req.method,
+          path: req.originalUrl, // 保留挂载前缀：上游路由按全路径注册
+          headers: { ...req.headers, host: new URL(p.target).host },
+        },
+        (up) => {
+          res.writeHead(up.statusCode || 502, up.headers);
+          up.pipe(res);
+        },
+      );
+      upstream.on('error', () => {
+        // 上游进程没起/挂了：明确 502，不带出 relay 自身的堆栈。
+        if (!res.headersSent) {
+          res.status(502).json({ code: `${p.name}_down`, message: `${p.name} 服务未启动` });
+        } else {
+          res.end();
+        }
+      });
+      req.pipe(upstream);
     });
-    req.pipe(upstream);
-  });
-  // 只为 `POST /api/relay/issue-phone` 的 `{ label }`。之前全站没有 JSON
-  // body parser，这个端点是第一个需要读请求体的入口。
+  }
+
+  // 只为凭据端点的 `{ label }` / `{ public_key }`。之前全站没有 JSON
+  // body parser，这两个端点是第一批需要读请求体的入口。
   app.use(express.json({ limit: '4kb' }));
 
   app.get('/health', (_req, res) => {
@@ -115,6 +93,50 @@ function createRelay({ dbPath }) {
       ...router.snapshot(),
       audit_failures: audit.failureCount(),
     })
+  });
+
+  // ── 电脑侧凭据自动签发（enroll） ────────────────────────────────
+  // 桌面端第一次启动时还没有 node 凭据。过去的流程是让用户登服务器敲
+  // `relayctl add-node` 再把明文抄回桌面端——这是一台「零安装」应用不该有的
+  // 人工环节。改为：桌面端把**自己的 E2EE 公钥**报上来，relay 从公钥推导
+  // node_id（与 Rust 侧 derive_node_id 同算法，见 auth.js），签发并一次性
+  // 下发凭据。用户全程无感。
+  //
+  // 安全边界（都是有意的取舍，见决策笔记 2026-10-11-relay-auto-enroll）：
+  // · node_id 一律由公钥推导，**不接受客户端自报**——路由归属不能由请求方
+  //   指定，否则凭空认领任意身份位。
+  // · 先到先得 + 冲突拒绝（409）：同一 node_id 只签发一次。持公钥（拍过
+  //   二维码）的攻击者无法在真电脑离线时补签一条占槽凭据；反过来，重装
+  //   电脑要重取凭据就得登服务器手动签——这是把「凭据可匿名重取」这个更大
+  //   的口子关掉换来的，值。
+  // · 总量闸门：未撤销 node 凭据条数有上限。匿名端点必须有界，否则
+  //   随机公钥刷库就是免费的存储 DoS。
+  const ENROLL_NODE_CAP = 512;
+  app.post('/api/relay/enroll-node', (req, res) => {
+    const publicKey = typeof req.body?.public_key === 'string' ? req.body.public_key.trim() : '';
+    const nodeId = deriveNodeIdFromPublicKey(publicKey);
+    if (!nodeId) {
+      return res.status(400).json({ error: 'public_key 必须是 65 字节未压缩 P-256 公钥的 base64' });
+    }
+    if (registry.hasActiveNode(nodeId)) {
+      audit.write('enroll-node', nodeId, 'anon', 'node_already_enrolled');
+      return res.status(409).json({
+        error: '这个电脑身份已在 relay 登记过。凭据丢失请在服务器上用 relayctl 重新签发。',
+        code: 'node_already_enrolled',
+      });
+    }
+    if (registry.countActiveNodes() >= ENROLL_NODE_CAP) {
+      audit.write('enroll-node', nodeId, 'anon', 'node_cap_reached');
+      return res.status(503).json({ error: 'node 凭据签发额度已满，请在服务器上清理后重试' });
+    }
+    try {
+      const token = registry.register({ nodeId, label: 'auto-enroll', role: 'node' });
+      audit.write('enroll-node', nodeId, 'anon', 'node_enrolled');
+      // 明文 token 仅此一次下发，与 relayctl / issue-phone 同一约定。
+      res.json({ token, node_id: nodeId });
+    } catch (e) {
+      res.status(500).json({ error: `签发失败: ${e.message}` });
+    }
   });
 
   // ── 签发手机凭据（凭据面，不碰 relay 协议面） ────────────────────
@@ -203,154 +225,24 @@ function createRelay({ dbPath }) {
     res.json({ revoked, dropped, node_id: who.nodeId });
   });
 
-  // ── 安装页 / APK 下载（静态，不碰 relay 协议面） ──────────────
-  // APK 由运维放到 <relay 根>/public/hermix.apk；没放就如实说"未上传"，
-  // 不给假按钮。文件指纹按 mtime 缓存——每次请求重算 SHA-256 会把 CPU
-  // 打满，而安装包一天也传不了几次。
-  const publicDir = path.join(__dirname, '..', 'public');
-  const apkPath = path.join(publicDir, 'hermix.apk');
-  let apkCache = { mtimeMs: 0, sha256: null };
-
-  function apkInfoSync() {
-    let st;
-    try {
-      st = fs.statSync(apkPath);
-    } catch {
-      return { available: false, version: null, size: 0, sha256: null, updatedAt: null };
-    }
-    if (apkCache.mtimeMs !== st.mtimeMs) {
-      apkCache = { mtimeMs: st.mtimeMs, sha256: hashFileSync(apkPath) };
-    }
-    const version = (() => {
-      try {
-        const html = fs.readFileSync(path.join(publicDir, 'index.html'), 'utf8');
-        const m = html.match(/HERMIX_M_VERSION\s*=\s*["']([^"']+)["']/) || html.match(/版本[：:]?\s*v?([0-9][^<\s]*)/);
-        return m ? m[1] : null;
-      } catch {
-        return null;
-      }
-    })();
-    return {
-      available: true,
-      version,
-      size: st.size,
-      sha256: apkCache.sha256,
-      updatedAt: new Date(st.mtimeMs).toISOString(),
-    };
+  // ── 产品路由（registry: type=payload）────────────────────────────
+  // 每个产品一个同构模块（products/<name>.js），deployDir 指向版本化的
+  // 发布面（symlink current）。**顺序即语义**：payload 路由必须挂在
+  // express.static 之前，否则静态层会抢先命中 manifest.json/zip，
+  // 退化成没有校验头的裸文件，客户端更新链路静默降级。
+  const publicDir = path.join(root, 'public');
+  for (const p of payloadProducts()) {
+    const mod = require(`./products/${p.name}`);
+    mod.register(app, {
+      deployDir: path.join(root, p.deployDir),
+      mount: p.mount,
+      publicDir,
+    });
   }
-
-  app.get('/', (_req, res) => {
-    res.sendFile(path.join(publicDir, 'index.html'));
-  });
-
-  app.get('/static-mascot.png', (_req, res) => {
-    res.sendFile(path.join(publicDir, 'static-mascot.png'));
-  });
-
-  app.get('/api/app-info', (_req, res) => {
-    res.json(apkInfoSync());
-  });
-
-  app.get('/download/hermix.apk', (_req, res) => {
-    let st;
-    try {
-      st = fs.statSync(apkPath);
-    } catch {
-      return res.status(404).type('text/plain; charset=utf-8')
-        .send('安装包尚未上传（运维需把 APK 放到 relay 目录的 public/hermix.apk 后重启项目）');
-    }
-    res.setHeader('Content-Type', 'application/vnd.android.package-archive');
-    res.setHeader('Content-Length', st.size);
-    res.setHeader('Content-Disposition', 'attachment; filename="hermix.apk"');
-    res.setHeader('X-Checksum-Sha256', apkInfoSync().sha256 || '');
-    fs.createReadStream(apkPath).pipe(res);
-  });
-
-  // ── 桌面端在线更新面（静态，不碰 relay 协议面） ──────────────
-  // 运维把发布产物放到 <relay 根>/public/desktop/：
-  //   manifest.json   —— 版本清单（见 docs/notes/implemented/feature/2026-10-09-online-update.md）
-  //   latest.zip      —— 当前版桌面整包（文件名恒定，manifest 的 url 字段永不变更）
-  // manifest 缺失/损坏时如实报 404，客户端静默降级为「无更新」，不给假提示。
-  const desktopDir = path.join(publicDir, 'desktop');
-  const manifestPath = path.join(desktopDir, 'manifest.json');
-
-  app.get('/desktop/manifest.json', (_req, res) => {
-    let raw;
-    try {
-      raw = fs.readFileSync(manifestPath, 'utf8');
-    } catch {
-      return res.status(404).type('text/plain; charset=utf-8')
-        .send('更新清单尚未上传（运维需把 manifest.json 放到 relay 目录的 public/desktop/）');
-    }
-    const manifest = JSON.parse(raw);
-    // sha256 直读文件清单旁的 latest.zip，响应头带给客户端做下载前预检；
-    // 清单里也存了一份（发布脚本写入），两处不一致说明上传只完成了一半。
-    const zipSha = hashFileCached(path.join(desktopDir, 'latest.zip'));
-    if (zipSha) res.setHeader('X-Checksum-Sha256', zipSha);
-    res.setHeader('Cache-Control', 'no-cache');
-    res.json(manifest);
-  });
-
-  app.get('/desktop/latest.zip', (_req, res) => {
-    let st;
-    try {
-      st = fs.statSync(path.join(desktopDir, 'latest.zip'));
-    } catch {
-      return res.status(404).type('text/plain; charset=utf-8')
-        .send('更新包尚未上传（运维需把 latest.zip 放到 relay 目录的 public/desktop/）');
-    }
-    res.setHeader('Content-Type', 'application/zip');
-    res.setHeader('Content-Length', st.size);
-    res.setHeader('Content-Disposition', 'attachment; filename="hermix-desktop-update.zip"');
-    res.setHeader('X-Checksum-Sha256', hashFileCached(path.join(desktopDir, 'latest.zip')) || '');
-    fs.createReadStream(path.join(desktopDir, 'latest.zip')).pipe(res);
-  });
-
-  // ── spiker-tauri 桌面端在线更新面（静态，复用 relay 443，零新端口） ──
-  // 运维把发布产物放到 <relay 根>/public/spiker/：
-  //   manifest.json   —— 版本清单
-  //   latest.zip      —— 当前版整包（文件名恒定，manifest 的 url 字段永不变更）
-  // 与 /desktop/ 同构，spiker 无 sidecar，zip 只含 exe + resources。
-  const spikerDir = path.join(publicDir, 'spiker');
-  const spikerManifest = path.join(spikerDir, 'manifest.json');
-
-  app.get('/spiker/manifest.json', (_req, res) => {
-    let raw;
-    try {
-      raw = fs.readFileSync(spikerManifest, 'utf8');
-    } catch {
-      return res.status(404).type('text/plain; charset=utf-8')
-        .send('更新清单尚未上传（运维需把 manifest.json 放到 relay 目录的 public/spiker/）');
-    }
-    const manifest = JSON.parse(raw);
-    const zipSha = hashFileCached(path.join(spikerDir, 'latest.zip'));
-    if (zipSha) res.setHeader('X-Checksum-Sha256', zipSha);
-    res.setHeader('Cache-Control', 'no-cache');
-    res.json(manifest);
-  });
-
-  app.get('/spiker/latest.zip', (_req, res) => {
-    let st;
-    try {
-      st = fs.statSync(path.join(spikerDir, 'latest.zip'));
-    } catch {
-      return res.status(404).type('text/plain; charset=utf-8')
-        .send('更新包尚未上传（运维需把 latest.zip 放到 relay 目录的 public/spiker/）');
-    }
-    res.setHeader('Content-Type', 'application/zip');
-    res.setHeader('Content-Length', st.size);
-    res.setHeader('Content-Disposition', 'attachment; filename="spiker-tauri-update.zip"');
-    res.setHeader('X-Checksum-Sha256', hashFileCached(path.join(spikerDir, 'latest.zip')) || '');
-    fs.createReadStream(path.join(spikerDir, 'latest.zip')).pipe(res);
-  });
+  require('./products/pages').register(app, { publicDir });
 
   // ── 官网静态站（多页分站） ──────────────────────────────────
   // 官网是多个 HTML 页面 + assets/，不是单文件，所以要把 public/ 整个托管出去。
-  //
-  // 必须挂在所有显式路由**之后**：/desktop/manifest.json 与 /spiker/manifest.json
-  // 要额外带 X-Checksum-Sha256 与 Cache-Control: no-cache，被 static 抢先命中
-  // 就退化成没有校验头的裸 JSON，客户端更新链路会静默降级成"永远无更新"。
-  // 顺序即语义，别往上挪。
   app.use(express.static(publicDir, {
     setHeaders(res, filePath) {
       // 图片几乎不变，长缓存；CSS/JS 给 5 分钟——改完不用等浏览器过期，
@@ -365,157 +257,7 @@ function createRelay({ dbPath }) {
   }));
 
   const server = http.createServer(app);
-  const wss = new WebSocketServer({ noServer: true });
-
-  server.on('upgrade', (req, socket, head) => {
-    const url = new URL(req.url, 'http://placeholder');
-    const kind = url.pathname === '/relay/node' ? 'node' : url.pathname === '/relay/phone' ? 'phone' : null;
-    if (kind === null) {
-      // 未知路径：明确拒绝，不静默接受（避免路径被改写后签名失效这类问题
-      // 在这里变成难以察觉的"连上了但什么都收不到"）。
-      socket.write('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n');
-      socket.destroy();
-      return;
-    }
-
-    // --- 鉴权：登记过 + 未撤销 ---
-    const token = bearerFromHeaders(req.headers);
-    const identity = token ? registry.authenticate(token) : null;
-    if (identity === null) {
-      // 统一 401，不区分"没 token"与"token 无效"——细分等于给攻击者一个
-      // 免费 oracle。与 hermix 侧 security::DeviceAuthError 同一条理由。
-      audit.write('auth', null, kind, 'denied');
-      socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
-      socket.destroy();
-      return;
-    }
-    // 角色必须与入口路径一致：手机不能占电脑的槽（否则一条手机连接能顶掉
-    // 真正的电脑连接，症状是"电脑突然连不上"）。
-    if (identity.role !== kind) {
-      audit.write('auth', identity.nodeId, kind, 'role_mismatch');
-      socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
-      socket.destroy();
-      return;
-    }
-
-    wss.handleUpgrade(req, socket, head, (ws) => {
-      // token 哈希在这里算一次：手机侧要用它做「连接 ↔ 手机」绑定键，
-      // 而明文 token 此后不再需要。
-      wss.emit('connection', ws, req, {
-        kind,
-        identity,
-        tokenHash: require('./auth').hashToken(token),
-      });
-    });
-  });
-
-  wss.on('connection', (ws, _req, meta) => {
-    attachConn(ws, meta.kind, meta.identity, meta.tokenHash);
-  });
-
-  /**
-   * 把一条连接接进路由表，并装上收发逻辑。
-   *
-   * 单独抽出来是为了测试：不必真开一个 HTTP 服务也能验证路由行为。
-   */
-  function attachConn(ws, kind, identity, tokenHash) {
-    const nodeId = identity.nodeId;
-
-    ws.sendFrame = (envelope) => {
-      if (ws.readyState !== ws.OPEN) return;
-      if (envelope && typeof envelope === 'object') {
-        // 内层 payload **原样**转发：这里不重新构造 payload 字段，
-        // 只补/保外层信封。已删的字段不会复活。
-        ws.send(
-          JSON.stringify({
-            proto_version: envelope.proto_version ?? PROTO_VERSION,
-            tag: envelope.tag,
-            ...(envelope.token_hash ? { token_hash: envelope.token_hash } : {}),
-            ...(envelope.node_id ? { node_id: envelope.node_id } : {}),
-            ...(envelope.payload !== undefined ? { payload: envelope.payload } : {}),
-          }),
-        );
-      } else {
-        ws.send(envelope);
-      }
-    };
-    ws.sendRaw = (text) => {
-      if (ws.readyState === ws.OPEN) ws.send(text);
-    };
-
-    if (kind === 'node') {
-      const outcome = router.attachNode(nodeId, tokenHash, ws);
-      if (outcome === 'conflict') {
-        // 别人的凭据来抢这个 node_id：明确拒绝，并说清是"已有电脑在线"。
-        // 静默踢掉真电脑是 relay 最不该做的事——那等于让任何人把受害者挤下线。
-        ws.sendRaw(
-          buildEnvelope(TAG.CLOSE, {
-            node_id: nodeId,
-            detail: 'node_id_taken_by_another_credential',
-          }),
-        );
-        ws.close(4003, 'node_id already connected with a different credential');
-        return;
-      }
-      ws.sendRaw(buildEnvelope(TAG.ACK, { node_id: nodeId, detail: 'node_registered' }));
-    } else {
-      const outcome = router.attachPhone(nodeId, tokenHash, ws);
-      if (outcome === 'conflict') {
-        // 这台电脑已经连着**另一台**手机了：明确拒绝，并说清要先去桌面端撤销。
-        // 放行等于一台电脑的会话内容同时流向任意多台手机——N:1 的全部意义就在
-        // 这道门上（详见 router.attachPhone）。
-        ws.sendRaw(
-          buildEnvelope(TAG.CLOSE, {
-            node_id: nodeId,
-            detail: 'desktop_already_paired_with_another_phone',
-          }),
-        );
-        ws.close(4009, 'this desktop is already connected to another phone');
-        return;
-      }
-      ws.sendRaw(buildEnvelope(TAG.ACK, { node_id: nodeId, detail: 'phone_registered' }));
-    }
-
-    ws.on('message', (data, isBinary) => {
-      // 二进制帧按文本解：hermix 侧的 WsTransport 接受客户端用二进制发 JSON
-      // （见 ws_transport.rs），relay 不必比它更严。
-      const raw = isBinary ? data.toString('utf8') : String(data);
-      const parsed = parseEnvelope(raw);
-      if (!parsed.ok) {
-        if (parsed.versionMismatch) {
-          // 版本漂移：明确拒绝并说明，别让它退化成"能连但消息消失"。
-          ws.sendRaw(
-            buildEnvelope(TAG.CLOSE, {
-              node_id: nodeId,
-              detail: 'proto_version_mismatch',
-            }),
-          );
-          ws.close(1002, 'proto_version mismatch');
-          return;
-        }
-        // 脏数据跳过，不断连接：relay 不该被一帧垃圾打掉。
-        audit.write('route', nodeId, kind, `bad_frame:${parsed.reason}`);
-        return;
-      }
-      const { envelope } = parsed;
-      if (envelope.tag === TAG.CLOSE) {
-        ws.close(1000, 'peer closed');
-        return;
-      }
-      if (envelope.tag !== TAG.ROUTE) {
-        // hello / ack 是链路自身的握手帧，不当作业务数据转发
-        return;
-      }
-      if (kind === 'phone') {
-        router.phoneToNode(nodeId, tokenHash, envelope);
-      } else {
-        router.nodeToPhones(nodeId, envelope);
-      }
-    });
-
-    ws.on('close', () => router.detach(ws));
-    ws.on('error', () => router.detach(ws));
-  }
+  const connections = setupConnections({ server, registry, audit, router });
 
   return {
     app,
@@ -523,13 +265,12 @@ function createRelay({ dbPath }) {
     router,
     registry,
     audit,
-    attachConn,
+    attachConn: connections.attachConn,
     listen(port, cb) {
       server.listen(port, cb);
     },
     close() {
-      wss.clients.forEach((c) => c.terminate());
-      wss.close();
+      connections.close();
       server.close();
       registry.close();
       audit.close();

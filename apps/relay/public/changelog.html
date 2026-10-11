@@ -49,22 +49,11 @@
 <div class="sec">
   <div class="wrap">
     <h2>版本条目</h2>
-    <p class="lead">更新说明取自清单的 notes 字段。为空是发布流程的真实状态——发版时没提供说明文字，不是页面没加载出来。</p>
+    <p class="lead">桌面端的版本与说明由发布流程写入 <span class="mono">/desktop/releases.json</span>，页面运行时读取渲染——发版后自动出现，无需改页面。读不到就是发布面还没就绪，这里也不编造。</p>
+    <div class="log" id="desktop-releases">
+      <p class="lead" id="desktop-releases-fallback">版本历史还没生成，发布第一个版本后这里自动出现。</p>
+    </div>
     <div class="log">
-      <div class="v cur">
-        <div class="n" data-ver="desktop.version">—<small>桌面端</small></div>
-        <div class="b">
-          <h3>Hermix Desktop <span data-ver="desktop.date"></span></h3>
-          <p style="font-size:var(--fs-sm);margin-bottom:11px">更新说明：<span data-ver="desktop.notes">未填写</span></p>
-          <ul>
-            <li>界面内在线更新：下载 → 校验 SHA-256 → 改名交换 → 启新进程确认存活，失败回滚</li>
-            <li>自研安装器替代 NSIS，简体中文界面，可控安装位置与便携模式</li>
-            <li>本机文件索引走提权辅助进程读 MFT/USN，几秒建完；单卷卡死有看门狗</li>
-            <li>设置页连接渠道改主从布局，relay 配置与手机凭据签发内嵌到「手机端」面板</li>
-            <li>sidecar 刷新链自动化，产物与源码不再可能不同步</li>
-          </ul>
-        </div>
-      </div>
       <div class="v">
         <div class="n" data-ver="spiker.version">—<small>Spiker</small></div>
         <div class="b">
@@ -160,5 +149,46 @@
 
 <script src="assets/site.js"></script>
 <script>HERMIX.boot('changelog');</script>
+<script>
+/* 桌面端版本历史：releases.json 是发布流程写的单一真相源（服务端由
+   products/desktop.js 从同一目录 serve），这里动态渲染——发版自动出现。
+   数据只进 textContent，不进 innerHTML。 */
+(function () {
+  var box = document.getElementById('desktop-releases');
+  if (!box) return;
+  fetch('/desktop/releases.json')
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (releases) {
+      if (!Array.isArray(releases) || releases.length === 0) return; // 保留 fallback 文案
+      box.textContent = '';
+      releases.forEach(function (rel) {
+        var v = document.createElement('div');
+        v.className = 'v' + (rel === releases[0] ? ' cur' : '');
+        var n = document.createElement('div');
+        n.className = 'n';
+        n.textContent = rel.version;
+        var small = document.createElement('small');
+        small.textContent = '桌面端';
+        n.appendChild(small);
+        var b = document.createElement('div');
+        b.className = 'b';
+        var h3 = document.createElement('h3');
+        h3.textContent = 'Hermix Desktop ' + (rel.date || '');
+        b.appendChild(h3);
+        var ul = document.createElement('ul');
+        (Array.isArray(rel.notes) ? rel.notes : rel.notes ? [rel.notes] : []).forEach(function (line) {
+          var li = document.createElement('li');
+          li.textContent = line;
+          ul.appendChild(li);
+        });
+        if (ul.children.length) b.appendChild(ul);
+        v.appendChild(n);
+        v.appendChild(b);
+        box.appendChild(v);
+      });
+    })
+    .catch(function () {}); /* 网络失败保留 fallback，不编造 */
+})();
+</script>
 </body>
 </html>

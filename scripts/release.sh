@@ -6,8 +6,17 @@
 #   docs/notes/implemented/feature/2026-10-09-custom-installer.md （B 路：安装包，NSIS 退场）
 #
 # 流程：构建（前端 + ensure-sidecar + 主程序 + 安装器）→ 自组装 app 根 staging
-# → A 路：latest.zip + sha256 + manifest.json → relay；B 路：zip 嵌入安装器 exe
-# → Hermix-Setup-<ver>.exe。
+# → A 路：latest.zip + manifest.json + releases.json → 上传到远端**版本目录**
+#   （deploy/desktop/<N+1>/，N = current 指向的编号），服务端对账 sha256 后
+#   **单次 rename 原子切换** current 符号链接——客户端请求要么看到完整旧版
+#   要么完整新版，不存在「manifest 先落地/zip 传一半」的窗口期。首次运行
+#   自动把旧 public/desktop/ 迁入 deploy/desktop/1/（幂等）。
+#   （决策笔记 2026-10-11-relay-structured-deployment.md §3/§6）
+# → B 路：zip 嵌入安装器 exe → Hermix-Setup-<ver>.exe。
+#
+# 远端布局（relayRoot = /www/wwwroot/hermix-relay）：
+#   deploy/desktop/<N>/{latest.zip,manifest.json,releases.json}
+#   deploy/desktop/current -> <N>     # serve 只认 current；回滚 = 链接指回
 #
 # 用法：
 #   scripts/release.sh [--host root@1.2.3.4] [--notes "..."] [--min-version 0.1.9]
@@ -27,7 +36,7 @@ STAGING="$TARGET/update-staging"
 OUT_DIR="$TARGET/dist"
 CHANGELOG="$REPO_ROOT/CHANGELOG.md"
 
-NOTES="" MIN_VERSION="" HOST="" REMOTE_DIR="/www/wwwroot/hermix-relay/public/desktop"
+NOTES="" MIN_VERSION="" HOST="" REMOTE_DIR="/www/wwwroot/hermix-relay/deploy/desktop"
 NSIS_BASELINE="" SKIP_BUILD=0 SKIP_UPLOAD=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -214,6 +223,41 @@ EOF
 echo "── manifest.json:"
 cat "$STAGING/manifest.json"
 
+# ── releases.json：版本历史，单一真相源（决策笔记 §6）──────────────
+# 当前版本（含 sha256/pub_date）+ CHANGELOG.md 历史段（最近 9 个）。
+# products/desktop.js 从最新条目**现算** manifest，网页 changelog.html
+# fetch 本文件渲染——升级包、更新弹窗、网页三处消费端读同一份，
+# 「升级包说 A 网页说 B」在结构上不可能发生。
+node -e '
+const fs = require("fs");
+const [version, sha256, pubDate, minJson, notesArg, changelogPath, outPath] = process.argv.slice(1);
+const notes = notesArg.split("\n").map((s) => s.trim()).filter(Boolean);
+const releases = [{ version, date: pubDate.slice(0, 10), notes, sha256, min_version: JSON.parse(minJson) }];
+try {
+  const lines = fs.readFileSync(changelogPath, "utf8").split(/\r?\n/);
+  let cur = null;
+  for (const line of lines) {
+    const h = line.match(/^## \[([0-9][^\]]*)\]/);
+    if (h) {
+      if (cur && cur.version !== version && releases.length < 10) {
+        releases.push({ version: cur.version, notes: cur.notes });
+      }
+      cur = h[1] === version ? null : { version: h[1], notes: [] };
+      continue;
+    }
+    if (cur) {
+      const b = line.match(/^\s*[-*]\s+(.*)/);
+      if (b) cur.notes.push(b[1].trim());
+    }
+  }
+  if (cur && cur.version !== version && releases.length < 10) {
+    releases.push({ version: cur.version, notes: cur.notes });
+  }
+} catch {}
+fs.writeFileSync(outPath, JSON.stringify(releases, null, 2) + "\n");
+' "$VERSION" "$SHA256" "$PUB_DATE" "$MIN_JSON" "$NOTES" "$CHANGELOG" "$STAGING/releases.json"
+echo "── releases.json: $(node -e "console.log(JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')).length)" "$STAGING/releases.json") 个版本条目"
+
 # ── B 路：安装包（载荷嵌入安装器 exe）────────────────────────────
 echo "── B 路：载荷嵌入安装器"
 INSTALLER_EXE="$TARGET/hermix-installer.exe"
@@ -224,21 +268,59 @@ cp "$INSTALLER_EXE" "$SETUP_OUT"
 "$TARGET/hermix-embed.exe" embed "$SETUP_OUT" "$ZIP"
 echo "── 安装包: $SETUP_OUT"
 
-# ── 上传（A 路；安装包走官网/网盘人工分发）────────────────────────
+# ── 上传（A 路：版本目录 + 原子切换，决策笔记 §3）─────────────────
 if [[ $SKIP_UPLOAD -eq 1 ]]; then
   echo "── 跳过上传（--skip-upload）。待传文件（面板上传用 [Win] 路径）："
-  echo "   $ZIP → $REMOTE_DIR/latest.zip"
-  echo "   $STAGING/manifest.json → $REMOTE_DIR/manifest.json"
+  echo "   三个文件 → $REMOTE_DIR/<新版本号>/：latest.zip、manifest.json、releases.json"
   echo "   [Win] $(cygpath -w "$ZIP")"
   echo "   [Win] $(cygpath -w "$STAGING/manifest.json")"
+  echo "   [Win] $(cygpath -w "$STAGING/releases.json")"
+  echo "   传完后在服务器上原子切换："
+  echo "     cd $REMOTE_DIR && ln -sfn <新版本号> .current.tmp && mv -Tf .current.tmp current"
   echo "   安装包（人工分发）: $SETUP_OUT"
   echo "   [Win] $(cygpath -w "$SETUP_OUT")"
   exit 0
 fi
 [[ -n "$HOST" ]] || { echo "错误：上传需要 --host user@server（或 --skip-upload）"; exit 1; }
-echo "── 上传到 $HOST:$REMOTE_DIR"
-ssh "$HOST" "mkdir -p '$REMOTE_DIR'"
-# manifest 最后传：它一落地客户端就能看到新版本，此时 zip 已就位。
-scp "$ZIP" "$HOST:$REMOTE_DIR/latest.zip"
-scp "$STAGING/manifest.json" "$HOST:$REMOTE_DIR/manifest.json"
-echo "── 完成。发版 $VERSION 已上线；安装包: $SETUP_OUT"
+
+# 首次运行迁移（幂等）：旧布局 <relay根>/public/desktop/{latest.zip,manifest.json}
+# → deploy/desktop/1/ + current 链接。已有 current 就直接读编号，不重复迁移。
+# 客户端 URL（/desktop/latest.zip）不变——relay 由 deploy/desktop/current serve。
+RELAY_ROOT="${REMOTE_DIR%/*/*}"
+CUR_N="$(ssh "$HOST" "set -e
+  mkdir -p '$REMOTE_DIR'
+  if [ -L '$REMOTE_DIR/current' ]; then
+    readlink '$REMOTE_DIR/current'
+  else
+    mkdir -p '$REMOTE_DIR/1'
+    if [ -f '$RELAY_ROOT/public/desktop/latest.zip' ]; then
+      cp -f '$RELAY_ROOT/public/desktop/latest.zip' '$RELAY_ROOT/public/desktop/manifest.json' '$REMOTE_DIR/1/' 2>/dev/null || true
+    fi
+    ln -sfn 1 '$REMOTE_DIR/.current.tmp' && mv -Tf '$REMOTE_DIR/.current.tmp' '$REMOTE_DIR/current'
+    echo 1
+  fi")"
+CUR_N="$((CUR_N + 0))"
+NEXT_N=$((CUR_N + 1))
+echo "── 上传到 $HOST:$REMOTE_DIR/$NEXT_N/（current -> $CUR_N）"
+ssh "$HOST" "mkdir -p '$REMOTE_DIR/$NEXT_N'"
+scp "$ZIP" "$HOST:$REMOTE_DIR/$NEXT_N/latest.zip"
+scp "$STAGING/manifest.json" "$STAGING/releases.json" "$HOST:$REMOTE_DIR/$NEXT_N/"
+
+# 服务端对账 + 原子切换。对账失败 = 传输坏批：版本目录留在盘上但 current
+# 不动，客户端继续消费旧版——坏载荷永远到不了用户。
+# 切换 = 单次 rename（mv -T）：客户端请求要么看到完整旧版要么完整新版，
+# 「manifest 先落地 / zip 传一半」的窗口期在结构上不存在。
+ssh "$HOST" "set -e
+  REMOTE_SHA=\$(sha256sum '$REMOTE_DIR/$NEXT_N/latest.zip' | awk '{print \$1}')
+  if [ \"\$REMOTE_SHA\" != '$SHA256' ]; then
+    echo \"错误：上传的 zip sha256 对账失败（远端=\$REMOTE_SHA 预期=$SHA256），放弃切换\" >&2
+    exit 1
+  fi
+  ln -sfn '$NEXT_N' '$REMOTE_DIR/.current.tmp' && mv -Tf '$REMOTE_DIR/.current.tmp' '$REMOTE_DIR/current'
+  # 只保留 current 与上一版（回滚窗口），更早的版本目录清掉。
+  cd '$REMOTE_DIR'
+  for d in [0-9]*; do
+    if [ -d \"\$d\" ] && [ \"\$d\" -ne '$NEXT_N' ] && [ \"\$d\" -ne '$CUR_N' ]; then rm -rf \"\$d\"; fi
+  done
+"
+echo "── 完成。发版 $VERSION 已上线（current -> $NEXT_N）；上一版 $CUR_N 保留可回滚（ln -sfn $CUR_N current）；安装包: $SETUP_OUT"

@@ -60,6 +60,12 @@ function openRegistry(dbPath) {
   const revoke = db.prepare(
     `UPDATE participants SET revoked_at = ? WHERE token_hash = ? AND revoked_at IS NULL`,
   );
+  const hasActiveNode = db.prepare(
+    `SELECT 1 FROM participants WHERE node_id = ? AND role = 'node' AND revoked_at IS NULL LIMIT 1`,
+  );
+  const countActiveNodes = db.prepare(
+    `SELECT COUNT(*) AS n FROM participants WHERE role = 'node' AND revoked_at IS NULL`,
+  );
 
   return {
     db,
@@ -87,6 +93,19 @@ function openRegistry(dbPath) {
         created_at: Date.now(),
       });
       return token;
+    },
+
+    /**
+     * 该 node_id 是否已有**未撤销**的 node 凭据。enroll-node 用它实现
+     * 「先到先得」：同一个 node_id 只允许自动签发一次。
+     */
+    hasActiveNode(nodeId) {
+      return !!hasActiveNode.get(nodeId);
+    },
+
+    /** 未撤销的 node 凭据总数（enroll-node 的总量闸门）。 */
+    countActiveNodes() {
+      return countActiveNodes.get().n;
     },
 
     /**
@@ -144,6 +163,26 @@ function openRegistry(dbPath) {
 }
 
 /**
+ * 从 E2EE 公钥推导 node_id —— 与 Rust 侧 `relay_settings::derive_node_id`
+ * 逐字节同算法：`hermix-` + sha256(65 字节未压缩公钥) 前 4 字节的 hex。
+ *
+ * 推导必须在 relay 侧做而不是信客户端自报：node_id 决定路由归属，
+ * 「报什么就信什么」等于任何人凭空认领别人的身份位。
+ *
+ * @param {string} publicKeyB64 65 字节未压缩 P-256 公钥（标准 base64）
+ * @returns {string|null} 非法输入返回 null
+ */
+function deriveNodeIdFromPublicKey(publicKeyB64) {
+  if (typeof publicKeyB64 !== 'string' || !/^[A-Za-z0-9+/]+={0,2}$/.test(publicKeyB64)) {
+    return null;
+  }
+  const raw = Buffer.from(publicKeyB64, 'base64');
+  if (raw.length !== 65 || raw[0] !== 0x04) return null;
+  const hex = crypto.createHash('sha256').update(raw).digest('hex').slice(0, 8);
+  return `hermix-${hex}`;
+}
+
+/**
  * 从握手请求里取 Bearer token。
  *
  * **只认 `Authorization` 头**：历史上还有 `?token=` query 通道，它让凭据进
@@ -159,4 +198,4 @@ function bearerFromHeaders(headers) {
   return token === '' ? null : token;
 }
 
-module.exports = { openRegistry, hashToken, mintToken, bearerFromHeaders };
+module.exports = { openRegistry, hashToken, mintToken, bearerFromHeaders, deriveNodeIdFromPublicKey };
