@@ -31,7 +31,7 @@ const PRODUCTS = [
     mount: '/bbs',
     type: 'proxy',
     target: 'http://127.0.0.1:3901',
-    health: '/bbs/api/health',
+    health: '/bbs/health',
   },
 ];
 
