@@ -165,11 +165,18 @@ export class RelayClient {
         this.opts.onError?.('relay 拒绝了这条连接（401）：凭据无效或已被撤销')
       }
     })
-    task.onClose(() => {
+    task.onClose((res?: { code?: number }) => {
       this.open = false
       this.task = null
       this.opts.onState?.('closed')
-      this.scheduleRetry('relay 连接断开')
+      // relay 的关闭码要说人话（apps/relay/src/server.js）：4009 = 这台电脑
+      // 已经连着另一台手机，重连解决不了，得先在电脑端撤销原设备。
+      // code 缺失（部分平台不透出）时回落通用文案，照常退避重连。
+      const reason =
+        res?.code === 4009
+          ? '这台电脑已连接另一台手机：请先在电脑端「设备管理」撤销原设备'
+          : 'relay 连接断开'
+      this.scheduleRetry(reason)
     })
   }
 

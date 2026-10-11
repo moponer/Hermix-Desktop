@@ -123,7 +123,10 @@ export function pairOverRelay(opts: {
       reject(new Error(msg))
     }
     const timer = setTimeout(() => {
-      fail('配对没有回音（30s 超时）。确认电脑端 hermix 正在运行，且已连上中转。')
+      fail(
+        '配对没有回音（30s 超时）。确认电脑端 hermix 正在运行且已连上中转；' +
+          '若反复如此，中转服务版本可能过旧（2026-10-11 前的 relay 会丢帧），需与桌面端一起升级。',
+      )
     }, 30000)
 
     const boot = async () => {
@@ -242,9 +245,17 @@ export function pairOverRelay(opts: {
         fail('连不上中转。确认手机能上网，且电脑端已配置同一个中转地址。')
       })
 
-      task.onClose(() => {
+      task.onClose((res?: { code?: number }) => {
         // 优雅路径（已 resolve 并主动 close）不算错误；走到这里说明被中途挂断。
-        if (!settled) fail('与中转的连接被断开，请重新扫码。')
+        // relay 的关闭码要说人话（apps/relay/src/server.js）：4009 = 这台电脑
+        // 已经连着另一台手机——照通用文案提示「重新扫码」会把人引去死路，
+        // 真正该做的是先在电脑端撤销原设备。code 缺失时回落通用文案。
+        if (settled) return
+        if (res?.code === 4009) {
+          fail('这台电脑已连接另一台手机。请先在电脑端「设备管理」撤销原设备，再重新扫码。')
+          return
+        }
+        fail('与中转的连接被断开，请重新扫码。')
       })
     }
 

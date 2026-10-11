@@ -1,8 +1,8 @@
 {
     "name" : "Hermix M",
     "appid" : "__UNI__0B255CA",
-    "description" : "Hermix 的手机伴侣端",
-    "versionName" : "0.1.1",
+    "description" : "Hermix 的手机远程对话连接端",
+    "versionName" : "0.1.5",
     "versionCode" : "2",
     "transformPx" : false,
     "app-plus" : {
