@@ -200,7 +200,7 @@ function ActionBtn({
  * ## 层次不靠描边
  *
  * 全站与手机端统一：卡片用 `bg-bg-card`，控件用 `bg-bg-tertiary`，选中态用
- * 底色差 + 左缘强调条，浮起用阴影。本组件内**没有任何 border**。
+ * 底色差，浮起用阴影。本组件内**没有任何 border**。
  */
 /**
  * 当前选中渠道由父级（`DevicesTab`）持有：下方的「已配对设备」列表要按选中
@@ -282,6 +282,28 @@ export function ImChannelsCard({
       setRelayBusy(false);
     }
   }, [relayUrl, relayToken, refreshRelay]);
+
+  /** 重置本机 E2EE 身份与 relay 凭据。DPAPI 主密钥丢失（还原备份 / 搬盘 /
+      重建 Windows 账户）后的显式恢复动作——身份不能静默重生成，每台已配对
+      手机的信任锚都封着这把公钥，所以确认框必须把代价说清。 */
+  const resetIdentity = useCallback(async () => {
+    if (
+      !window.confirm(
+        "重置本机加密身份？\n\n将删除本机身份与 relay 凭据并重新自动签发，所有已配对手机都需要重新扫码配对。",
+      )
+    )
+      return;
+    setRelayBusy(true);
+    try {
+      await fetchJSON("/api/relay/reset-identity", { method: "POST" });
+      await refreshRelay();
+      toastSuccess("已重置，正在重新签发并连接中转");
+    } catch (e) {
+      toastError(`重置失败：${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setRelayBusy(false);
+    }
+  }, [refreshRelay]);
 
   const refreshStatus = useCallback(async () => {
     try {
@@ -532,12 +554,12 @@ export function ImChannelsCard({
                 aria-current={on}
                 className={
                   "w-full flex items-center gap-2.5 rounded-lg px-2.5 py-2.5 text-left transition-colors " +
-                  // 选中态：底色 + 左侧强调条，不加阴影。
+                  // 选中态：只加深底色，不加阴影、不加左缘强调条。
                   // 此前那个 `shadow-[0_1px_2px_rgba(0,0,0,0.35)]` 是任意阴影——
                   // 暗色下压得还行，浅色下是一圈灰晕（0.35 透明度配白底），把
                   // 底色差盖掉了，正是「分层不明显」的一部分。元数据里也没有
                   // 对应的令牌，是当初随手写的。
-                  (on ? "bg-bg-card channel-item--on" : "hover:bg-bg-card-hover")
+                  (on ? "bg-bg-card" : "hover:bg-bg-card-hover")
                 }
               >
                 <span
@@ -738,17 +760,18 @@ export function ImChannelsCard({
                       </div>
                     )}
 
-                    {/* 首次设置：没有电脑侧凭据就只能停在这里，所以这是当前唯一的
-                        阻塞项，放在最显眼处而不是塞进高级折叠区。 */}
+                    {/* 兜底：正常情况下电脑侧凭据由启动/配对时自动签发（relay 的
+                        enroll-node）。只有自动签发失败——relay 版本过旧没有该端点、
+                        网络不通、或该身份已在 relay 登记过——才会看到这张卡。 */}
                     {!relay.has_token && relay.node_id && (
                       <div className="rounded-lg bg-bg-secondary p-4 space-y-3">
                         <div className="text-[length:var(--text-ui)] text-text-primary">
-                          还差一步：把这台电脑登记到中转
+                          电脑侧凭据自动签发没成功
                         </div>
                         <div className="text-[length:var(--text-meta)] text-text-secondary leading-relaxed">
-                          在中转服务器上执行下面这条命令，把打印出来的凭据填进去。
-                          这一步刻意保持手动——如果电脑能自助登记，任何人都能凭空注册一台
-                          「已登记的电脑」。做完这一次，之后生成配对码就不用再登服务器。
+                          先在上方「扫码配对」里点「重试」（或重启应用）再试一次自动签发。
+                          还不行的话，在中转服务器上执行下面这条命令，把打印出来的凭据填进去——
+                          做完这一次，之后生成配对码就不用再登服务器。
                         </div>
                         <code className="block break-all rounded-md bg-bg-tertiary px-3 py-2 font-mono text-[length:var(--text-meta)] text-accent select-all">
                           node src/relayctl.js add-node {relay.node_id}
@@ -772,6 +795,16 @@ export function ImChannelsCard({
                           tone="primary"
                         >
                           {relayBusy ? "保存中…" : "保存并连接"}
+                        </ActionBtn>
+                        {/* 提示反复出现的 E2EE 身份错误时用：DPAPI 主密钥丢失后
+                            手填凭据救不了（新凭据也解不开旧身份的锁），只有换身份。 */}
+                        <ActionBtn
+                          onClick={() => void resetIdentity()}
+                          disabled={relayBusy}
+                          tone="danger"
+                          title="删除本机加密身份与 relay 凭据并重新签发，已配对手机需重新扫码"
+                        >
+                          重置本机身份…
                         </ActionBtn>
                       </div>
                     )}

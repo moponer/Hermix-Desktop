@@ -329,6 +329,9 @@ pub struct HttpServerState {
     /// relay 最近一次连接失败的原因。`RelayStatus` 只记状态不记原因，
     /// 而「连不上」的原因差别很大（DNS / 401 / 协议版本），界面要能说清。
     pub relay_last_error: Arc<tokio::sync::Mutex<Option<String>>>,
+    /// 出站连接任务是否已在跑。启动拉起一次；`reset_identity` 重置后要再拉起，
+    /// 没有这道闸，连点两次重置就会有两个循环互相把对方的连接挤下线。
+    pub relay_connector_running: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl HttpServerState {
@@ -865,6 +868,7 @@ impl HttpServerState {
             relay_settings: Arc::new(tokio::sync::Mutex::new(crate::relay_settings::load())),
             relay_status: crate::relay_client::RelayStatus::new(),
             relay_last_error: Arc::new(tokio::sync::Mutex::new(None)),
+            relay_connector_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
         state.register_task_tracker_tools();
 
@@ -1186,6 +1190,7 @@ impl HttpServerState {
             relay_settings: Arc::new(tokio::sync::Mutex::new(crate::relay_settings::load())),
             relay_status: crate::relay_client::RelayStatus::new(),
             relay_last_error: Arc::new(tokio::sync::Mutex::new(None)),
+            relay_connector_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }; // close Self { ... }
         state.register_task_tracker_tools();
         Ok(state)
@@ -1227,13 +1232,28 @@ impl HttpServerState {
     /// 就是那根线；它做成 builder 而不是构造函数里自动跑，是为了让测试与 CLI
     /// 模式不必真的去连公网。
     ///
-    /// 幂等：重复调用只会多起一个循环，配置相同的两个循环是纯浪费，因此这里
-    /// 靠 `with_relay_client` 的调用方纪律保证只调一次（`lib.rs::run_server`）。
+    /// 重复调用受 `relay_connector_running` 闸保护，至多一个循环在跑。
     pub fn with_relay_client(self) -> Self {
-        // 克隆一份进后台任务：本方法要返回 `Self`，而任务需要 `'static` 的
+        self.spawn_relay_connector();
+        self
+    }
+
+    /// 拉起出站连接任务：没凭据先自动签发（enroll-node），然后进入重连循环。
+    ///
+    /// 启动时（`with_relay_client`）与 `relay_settings::reset_identity`
+    /// （重置后凭据为空、原任务早已退出）共用，所以闸在这里而不在调用方。
+    pub(crate) fn spawn_relay_connector(&self) {
+        // 克隆一份进后台任务：本方法要立即返回，而任务需要 `'static` 的
         // 所有权。`HttpServerState` 内部几乎全是 `Arc`，这一次全量克隆的代价
-        // 只在启动时付一次。
+        // 只在拉起时付一次。
         let worker = Arc::new(self.clone());
+        if worker
+            .relay_connector_running
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            tracing::info!("relay 出站连接任务已在运行，不重复拉起");
+            return;
+        }
         tokio::spawn(async move {
             let (cfg, token) = {
                 let s = worker.relay_settings.lock().await;
@@ -1241,20 +1261,36 @@ impl HttpServerState {
             };
             if !cfg.enabled() {
                 tracing::info!("未配置 relay 地址，不启动出站连接");
+                worker
+                    .relay_connector_running
+                    .store(false, std::sync::atomic::Ordering::SeqCst);
                 return;
             }
+            let mut token = token;
             if token.trim().is_empty() {
-                // 有地址没凭据 = 连一次必然被 relay 401。提前说清楚，
-                // 否则界面上只会显示「未连接」，用户查不到是缺凭据。
-                tracing::warn!(
-                    relay = %cfg.url,
-                    "配了 relay 地址但没有 hrel_* 凭据，跳过连接（relay 会 401）"
-                );
-                *worker.relay_last_error.lock().await = Some(
-                    "配了 relay 地址但没有凭据（hrel_*）。在界面上填入，或在 relay 服务器上用 relayctl add-node 签发。"
-                        .into(),
-                );
-                return;
+                // 首次启动还没有凭据：向 relay 自动签发（enroll-node），
+                // 成功即落盘并继续连接——用户不需要登服务器手工签发。
+                // 失败不 panic、不重试刷接口：保持人工兜底（界面里可重试、
+                // 可重置本机身份，或登服务器 relayctl add-node），下次拉起再试。
+                tracing::info!(relay = %cfg.url, "还没有 relay 凭据，尝试自动签发（enroll-node）");
+                match crate::relay_settings::ensure_node_credential(&cfg.url, &worker.relay_settings)
+                    .await
+                {
+                    Ok(new_token) => {
+                        tracing::info!(relay = %cfg.url, "relay 凭据自动签发成功");
+                        token = new_token;
+                    }
+                    Err(e) => {
+                        tracing::warn!(relay = %cfg.url, error = %e, "relay 凭据自动签发失败");
+                        *worker.relay_last_error.lock().await = Some(format!(
+                            "{e}。可在「手机端 → 中转连接」重试或重置本机身份，也可在 relay 服务器上用 relayctl add-node 手动签发。"
+                        ));
+                        worker
+                            .relay_connector_running
+                            .store(false, std::sync::atomic::Ordering::SeqCst);
+                        return;
+                    }
+                }
             }
             crate::relay_client::connect_and_serve(
                 cfg,
@@ -1280,8 +1316,11 @@ impl HttpServerState {
                 },
             )
             .await;
+            // connect_and_serve 返回 = 配置被置为禁用。闸放开，允许之后再拉起。
+            worker
+                .relay_connector_running
+                .store(false, std::sync::atomic::Ordering::SeqCst);
         });
-        self
     }
 }
 

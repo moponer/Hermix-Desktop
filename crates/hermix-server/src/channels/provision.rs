@@ -315,7 +315,7 @@ fn platform_code() -> u8 {
     }
 }
 
-fn urlencode(s: &str) -> String {
+pub(crate) fn urlencode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.as_bytes() {
         match b {
@@ -326,6 +326,27 @@ fn urlencode(s: &str) -> String {
         }
     }
     out
+}
+
+/// [`urlencode`] 的逆运算。`+` 一律当字面量（不是空格）——我们转义的是 base64
+/// 与 token，两者都不含 `+` 空格语义，手机端 `URLSearchParams` 的解码规则
+/// 与此不同，所以本函数只用于**测试**校验往返，不参与生产路径。
+#[cfg(test)]
+pub(crate) fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).expect("两位 hex");
+            out.push(u8::from_str_radix(hex, 16).expect("hex"));
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).expect("解出的是 UTF-8")
 }
 
 /// 轮询一次。首次成功后会缓存结果，重复轮询返回同一份。

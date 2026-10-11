@@ -26,8 +26,12 @@ use hermix_store::{OpenMode, Store};
 use rand::{Rng, RngCore};
 use serde::{Deserialize, Serialize};
 
+use crate::channels::provision::urlencode;
 use crate::relay_proto::Envelope;
 use crate::state::HttpServerState;
+
+#[cfg(test)]
+use crate::channels::provision::percent_decode;
 
 /// 取请求的来源 IP（字符串形式，供审计行 `source_ip` 列）。
 /// 优先 X-Forwarded-For 第一跳（TLS 终结在反代后），回退到连接对端。
@@ -540,7 +544,11 @@ impl PairingSessions {
                 // 二维码内容：手机 App 扫码 → 解出 relay 地址 + 手机凭据 + 配对码
                 // → 连 relay → 密封配对帧 → 本机判码 → 密封回 device_token。
                 // 凭据由本机当场签发、只走「屏幕 → 相机」这条信道，不落任何盘。
-                pairing_url: format!("{relay_base}/pair?c={code}&t={phone_token}&k={node_public_key}"),
+                pairing_url: format!(
+                    "{relay_base}/pair?c={code}&t={}&k={}",
+                    urlencode(&phone_token),
+                    urlencode(&node_public_key)
+                ),
                 pairing_code: code.clone(),
                 proto_version: crate::relay_proto::PROTO_VERSION,
                 node_public_key,
@@ -643,6 +651,11 @@ struct PairRequestFrame {
     device_name: String,
     /// 手机 E2EE 静态公钥（base64）。回信里装着 device_token，必须用它密封
     /// ——relay 读得到也读不懂。
+    ///
+    /// JSON 里叫 `pk`：与手机端 crypto 层（`crypto.ts` / `direct.ts`）的
+    /// 命名一致。对不上时 serde 直接解析失败，本函数返回 None 且**不发任何
+    /// 回信**（见 `handle_pairing_frame`），手机上表现为 30s 超时。
+    #[serde(rename = "pk")]
     phone_public_key: String,
 }
 
@@ -851,12 +864,23 @@ pub async fn create_pairing_session(
         )
             .into_response();
     }
+    let mut node_token = node_token;
     if node_token.trim().is_empty() {
-        return (
-            StatusCode::PRECONDITION_FAILED,
-            "还没配置电脑侧 relay 凭据（hrel_*）。",
-        )
-            .into_response();
+        // 启动时的自动签发可能因网络未通而失败过。用户此刻正主动发起配对，
+        // 是最合理的重试时机——成功则二维码照常出，失败才落回人工指引。
+        match crate::relay_settings::ensure_node_credential(&relay_url, &state.relay_settings).await
+        {
+            Ok(t) => node_token = t,
+            Err(e) => {
+                return (
+                    StatusCode::PRECONDITION_FAILED,
+                    format!(
+                        "电脑侧 relay 凭据自动签发失败：{e}。可点「重试」再来一次；若反复出现，在「中转连接」里重置本机身份（已配对手机需重新扫码），或登服务器用 relayctl add-node 手动签发。"
+                    ),
+                )
+                    .into_response();
+            }
+        }
     }
     let phone_token =
         match crate::relay_settings::issue_phone_credential(&relay_url, &node_token).await {
@@ -1367,6 +1391,76 @@ mod tests {
         assert!(
             !payload.pairing_url.contains("fp="),
             "直连时代的证书指纹已随局域网直连一起退役"
+        );
+    }
+
+    #[test]
+    fn qr_url_percent_encodes_key_and_token() {
+        // 回归守卫：base64 的 P-256 公钥里有 `+` 和 `/`，直接拼进 query 会
+        // 被手机端的 URLSearchParams 读成空格（`+` → 空格），`parsePairingUrl`
+        // 的 base64 正则随即判失败，手机只显示"这不是 hermix 的配对码"。
+        // 症状是绝大多数公钥扫不动、少数（不含 `+` 的）能扫，极难自查。
+        let sessions = PairingSessions::new();
+        let payload = sessions.create(RELAY, PHONE_TOKEN).expect("create");
+
+        let url = payload.pairing_url.clone();
+        let query = url.split_once('?').expect("URL 带 query").1;
+        let k = query
+            .split('&')
+            .find_map(|kv| kv.strip_prefix("k="))
+            .expect("URL 带 k=");
+        assert!(
+            !k.contains('+'),
+            "公钥里的 `+` 必须转义，否则被读成空格：{k}"
+        );
+        assert!(
+            !k.contains('/'),
+            "公钥里的 `/` 必须转义：{k}"
+        );
+        // 转义后仍必须能被解码回原始 base64，且与 payload 上的原值一致。
+        let decoded = percent_decode(k);
+        assert_eq!(decoded, payload.node_public_key);
+        // 手机端的接受域是 `^[A-Za-z0-9+/]+={0,2}$`。
+        assert!(
+            decoded.chars().all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '='),
+            "解码后仍须落在手机端接受的 base64 字符域内：{decoded}"
+        );
+    }
+
+    #[test]
+    fn pair_request_field_matches_mobile_naming() {
+        // 回归守卫：手机端（`apps/hm/core/direct.ts`）发的是 `pk`，不是
+        // `phone_public_key`。字段名对不上时 serde 解析失败，`handle_pairing_frame`
+        // **一条回信都不发**（不可解的帧无法定位收件人），手机上只剩 30s 超时。
+        let body = serde_json::json!({
+            "type": "pairing.request",
+            "request_id": "0123456789abcdef",
+            "pairing_code": "123456",
+            "device_name": "Hermix M · Test",
+            "pk": "BAtzc2VjcmV0LXB1YmxpYy1rZXk=",
+        });
+        let parsed: PairRequestFrame =
+            serde_json::from_value(body).expect("手机端发的 pk 必须能解析");
+        assert_eq!(parsed.pairing_code, "123456");
+        assert_eq!(parsed.device_name, "Hermix M · Test");
+        assert_eq!(parsed.request_id, "0123456789abcdef");
+        assert_eq!(parsed.phone_public_key, "BAtzc2VjcmV0LXB1YmxpYy1rZXk=");
+    }
+
+    #[test]
+    fn pair_request_rejects_unknown_key_spelling() {
+        // 反面钉死：别为了省事在手机端也改成 phone_public_key。两边任一
+        // 边单改都会静默退化，这里保证 Rust 侧只认 `pk`。
+        let body = serde_json::json!({
+            "type": "pairing.request",
+            "request_id": "0123456789abcdef",
+            "pairing_code": "123456",
+            "device_name": "Hermix M · Test",
+            "phone_public_key": "BAtzc2VjcmV0LXB1YmxpYy1rZXk=",
+        });
+        assert!(
+            serde_json::from_value::<PairRequestFrame>(body).is_err(),
+            "不接受 phone_public_key 拼写（手机端发的是 pk）"
         );
     }
 

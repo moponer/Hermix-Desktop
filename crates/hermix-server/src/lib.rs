@@ -342,6 +342,11 @@ pub fn router(state: HttpServerState) -> Router {
             "/api/relay/phone-credential",
             post(relay_settings::issue_phone),
         )
+        // 重置本机 E2EE 身份与 relay 凭据（DPAPI 主密钥丢失后的显式恢复动作）。
+        .route(
+            "/api/relay/reset-identity",
+            post(relay_settings::reset_identity),
+        )
         // IM 通道（QQ / 企业微信官方机器人）。全部仅 Local：铸码、扫码绑定
         // 都是本机操作，凭据是能直接操控本机的机器人密钥。
         .route("/api/channels/pairing-code", post(channels::create_pairing_code))

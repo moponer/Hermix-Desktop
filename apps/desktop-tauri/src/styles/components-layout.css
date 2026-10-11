@@ -445,13 +445,9 @@
 .nav-item-active:hover { background: var(--color-bg-hover); }
 .nav-item svg { flex-shrink: 0; }
 
-/* 渠道选中态（ImChannelsCard 左栏）：底色 + 左缘强调条。
-   与 .nav-item-active 同属「选中怎么表达」的同一族决策——本组件头部已声明
-   层次靠底色差 + 左缘强调条承担。此前这里用的是任意阴影，暗色下压得住、
-   浅色下是一圈灰晕，把底色差盖掉了。 */
-.channel-item--on {
-  box-shadow: inset 2px 0 0 var(--color-accent);
-}
+/* 渠道选中态（ImChannelsCard 左栏）：**只靠底色差**，不加左缘强调条。
+   与 .nav-item-active 同属「选中怎么表达」的同一族决策，一致收敛到只用底色
+   加深：强调条在 232px 窄栏里把行切成了两半，读起来像分栏而不是选中。 */
 
 /* ════════════════════════════════════════════════════════════════════
    § 5.  SECTION HEADER (collapsible group label)

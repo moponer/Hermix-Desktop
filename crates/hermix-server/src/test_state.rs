@@ -122,6 +122,7 @@ pub fn empty_state() -> HttpServerState {
         )),
         relay_status: crate::relay_client::RelayStatus::new(),
         relay_last_error: Arc::new(tokio::sync::Mutex::new(None)),
+            relay_connector_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     }
 }
 
@@ -191,6 +192,7 @@ fn build_state_with_home(home: PathBuf) -> HttpServerState {
         )),
         relay_status: crate::relay_client::RelayStatus::new(),
         relay_last_error: Arc::new(tokio::sync::Mutex::new(None)),
+            relay_connector_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     }
 }
 

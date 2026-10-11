@@ -28,7 +28,7 @@ use crate::relay_crypto::Identity;
 /// 数据被误当作本模块的密钥。
 const DPAPI_ENTROPY: &[u8] = b"hermix/relay/e2ee/v1";
 
-const IDENTITY_FILE: &str = "identity.json";
+pub(crate) const IDENTITY_FILE: &str = "identity.json";
 
 /// 落盘格式。`public_key` 明文（本来就是公开的，且配对要展示）；
 /// `protected_key` 是 DPAPI 密文。

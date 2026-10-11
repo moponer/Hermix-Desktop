@@ -724,6 +724,7 @@ mod approval_registry_tests {
             )),
             relay_status: crate::relay_client::RelayStatus::new(),
             relay_last_error: Arc::new(tokio::sync::Mutex::new(None)),
+            relay_connector_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 

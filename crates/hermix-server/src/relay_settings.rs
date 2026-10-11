@@ -32,6 +32,9 @@ use crate::relay_client::RelayConfig;
 
 const FILE: &str = "relay.json";
 const VERSION: u32 = 1;
+/// 手机绑定表（`PhoneBindingStore`）的文件名。重置身份时一并删除，
+/// 常量提出来保证两处路径永不漂移。
+const PHONE_BINDING_FILE: &str = "relay_phones.json";
 /// 与 E2EE 私钥不同的熵标签，见 `relay_identity::protect_secret`。
 const DPAPI_LABEL: &[u8] = b"hermix/relay/token/v1";
 
@@ -250,7 +253,7 @@ pub struct PhoneBindingStore {
 impl PhoneBindingStore {
     pub fn at_default() -> Self {
         Self {
-            path: hermix_config::paths::hermix_home().join("relay_phones.json"),
+            path: hermix_config::paths::hermix_home().join(PHONE_BINDING_FILE),
         }
     }
 
@@ -555,12 +558,98 @@ struct IssuedPhoneCredential {
     node_id: String,
 }
 
+/// 校验 enroll-node 的应答并取出明文 token。
+///
+/// node_id 必须与本机推导一致：relay 若返回别的 id，说明 relay 版本过旧、
+/// 推导算法漂移或应答被篡改——拿这种凭据连上去会以另一个身份挂在 relay 上，
+/// 配对码（`server_id`）就对不上了。当场拒绝比连上后再排查省一个量级。
+fn validate_enroll_reply(body: &str, expected_node_id: &str) -> Result<String, String> {
+    let parsed: IssuedPhoneCredential = serde_json::from_str(body)
+        .map_err(|e| format!("relay 响应解析失败：{e}"))?;
+    if parsed.token.is_empty() {
+        return Err("relay 返回的凭据是空的".into());
+    }
+    if parsed.node_id != expected_node_id {
+        return Err(format!(
+            "relay 推导的 node_id（{}）与本机（{expected_node_id}）不一致，拒绝采纳",
+            parsed.node_id
+        ));
+    }
+    Ok(parsed.token)
+}
+
+/// 电脑侧凭据自动签发：把本机 E2EE 公钥报给 relay，换回 node 凭据。
+///
+/// 首次启动的桌面端还没有 `hrel_*`，过去只能让用户登服务器敲 `relayctl
+/// add-node` 再把明文抄回界面。改为启动时（及配对前）自动调 relay 的
+/// `POST /api/relay/enroll-node`，凭据到手后由调用方落盘并连接——用户全程无感。
+///
+/// node_id 由 relay 从公钥推导（与 [`derive_node_id`] 同算法），本机只做
+/// **一致性校验**（见 [`validate_enroll_reply`]），不接受 relay 指定别的身份。
+pub(crate) async fn enroll_node_credential(base: &str) -> Result<String, String> {
+    let identity = crate::relay_identity::load_or_create()
+        .map_err(|e| format!("读取本机 E2EE 身份失败：{e}"))?;
+    let expected = derive_node_id();
+    if expected.is_empty() {
+        return Err("无法从 E2EE 身份推导 node_id".into());
+    }
+    let public_key = {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD.encode(identity.public_key())
+    };
+
+    let http_base = base
+        .trim()
+        .trim_end_matches('/')
+        .replacen("wss://", "https://", 1)
+        .replacen("ws://", "http://", 1);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("构造 HTTP 客户端失败：{e}"))?;
+
+    let resp = client
+        .post(format!("{http_base}/api/relay/enroll-node"))
+        .json(&serde_json::json!({ "public_key": public_key }))
+        .send()
+        .await
+        .map_err(|e| format!("连不上 relay：{e}"))?;
+
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        let msg = serde_json::from_str::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_owned))
+            .unwrap_or_else(|| body.clone());
+        return Err(format!("relay 拒绝签发（HTTP {}）：{msg}", status.as_u16()));
+    }
+    validate_enroll_reply(&body, &expected)
+}
+
+/// 自动签发并把凭据落盘（relay.json + 内存态）。
+///
+/// 两个调用方（启动时的出站连接、配对前的兜底）共用：签发成功后必须**同时**
+/// 更新磁盘与 `state.relay_settings`，否则界面（`GET /api/relay/config` 的
+/// `has_token`）看到的还是旧状态，用户会以为签发没发生。
+pub(crate) async fn ensure_node_credential(
+    url: &str,
+    settings: &tokio::sync::Mutex<RelaySettings>,
+) -> Result<String, String> {
+    let token = enroll_node_credential(url).await?;
+    let mut s = settings.lock().await;
+    s.node_id = derive_node_id();
+    s.token = token.clone();
+    s.load_error = None;
+    save_at(&settings_path(), &s)?;
+    Ok(token)
+}
+
 /// 向 relay 签发一条手机凭据，返回**明文 token**（仅此一次下发）。
 ///
 /// `base` 与配置同口径（wss:// / https:// / 裸 host 均可），内部换算成 HTTP。
 /// 生成配对二维码（`pairing::create_pairing_session`）与设置页手动签发共用。
-pub(crate) async fn issue_phone_credential(base: &str, node_token: &str) -> Result<String, String> {
-    let http_base = base
+pub(crate) async fn issue_phone_credential(base: &str, node_token: &str) -> Result<String, String> {    let http_base = base
         .trim()
         .trim_end_matches('/')
         .replacen("wss://", "https://", 1)
@@ -631,6 +720,78 @@ pub async fn issue_phone(
     }
 }
 
+/// 重置本机 E2EE 身份与 relay 凭据（文件层）。
+///
+/// 场景：DPAPI 主密钥丢失（还原备份 / 搬盘 / 重建 Windows 账户）后，
+/// `identity.json` 解不开且**不能**静默重生成——每台已配对手机的信任锚都封着
+/// 这把公钥，换钥必须显式。这是那个显式动作：
+///
+/// 1. 删 `identity.json`（下次 `load_or_create` 生成新身份 → 新 node_id）；
+/// 2. 删 `relay_phones.json`（旧手机绑定挂的是旧 node 的凭据哈希，已无意义）；
+/// 3. 重写 `relay.json`：凭据清空，**自建地址尽量抢救**——JSON 本身还能解析
+///    （DPAPI 坏的是 `protected_token` 的解密，不是文件），丢了地址用户就得
+///    重新手填。
+///
+/// 设备注册表（devices.db）刻意不动：设备列表与撤销能力照旧可用，旧设备
+/// 在界面上撤销或重新扫码都行。
+fn reset_local_identity(
+    identity_path: &Path,
+    phones_path: &Path,
+    relay_path: &Path,
+) -> Result<RelaySettings, String> {
+    let salvaged_url = std::fs::read_to_string(relay_path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<StoredRelay>(&raw).ok())
+        .map(|s| s.url.trim().to_string())
+        .filter(|u| !u.is_empty());
+    match std::fs::remove_file(identity_path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("删除本机身份失败：{e}")),
+    }
+    match std::fs::remove_file(phones_path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("删除手机绑定表失败：{e}")),
+    }
+    let fresh = RelaySettings {
+        url: salvaged_url.unwrap_or_default(),
+        node_id: String::new(),
+        token: String::new(),
+        load_error: None,
+    };
+    save_at(relay_path, &fresh)?;
+    Ok(fresh)
+}
+
+/// `POST /api/relay/reset-identity` —— 重置本机 E2EE 身份与 relay 凭据。
+///
+/// 仅 Local：它能删本机加密身份，远程可达就等于给任何网页一个「把这台电脑
+/// 踢出中转、强制重新配对」的按钮。成功后重新拉起出站连接任务（闸保证重复
+/// 调用不会叠出多个循环）——新身份 → 新 node_id → 自动签发直接走通，用户
+/// 只剩「重新扫码配对手机」这一件事。
+pub async fn reset_identity(
+    axum::extract::Extension(origin): axum::extract::Extension<hermix_core::Origin>,
+    State(state): State<crate::state::HttpServerState>,
+) -> Response {
+    if !matches!(origin, hermix_core::Origin::Local) {
+        return (StatusCode::FORBIDDEN, "仅桌面端可重置本机身份").into_response();
+    }
+    let home = hermix_config::paths::hermix_home();
+    let fresh = match reset_local_identity(
+        &home.join(crate::relay_identity::IDENTITY_FILE),
+        &home.join(PHONE_BINDING_FILE),
+        &settings_path(),
+    ) {
+        Ok(s) => s,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+    };
+    *state.relay_settings.lock().await = fresh;
+    tracing::info!("本机 E2EE 身份与 relay 凭据已重置，重新拉起出站连接");
+    state.spawn_relay_connector();
+    StatusCode::NO_CONTENT.into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -650,6 +811,91 @@ mod tests {
         assert_eq!(s.url, DEFAULT_RELAY_URL);
         assert!(s.enabled());
         assert!(s.load_error.is_none(), "没配过不是错误");
+    }
+
+    #[test]
+    fn node_id_derivation_matches_relay_implementation() {
+        // 跨语言钉死：relay 侧 `auth.js::deriveNodeIdFromPublicKey` 必须与本侧
+        // `derive_node_id` 同算法（sha256(65 字节原始公钥) 前 4 字节 hex）。
+        // 这里的期望值是独立算好的固定向量，relay 的 JS 测试对同一向量断言
+        // 同一结果——两边算法漂移时必有一边红。
+        use sha2::{Digest, Sha256};
+        let mut raw = vec![0x04u8];
+        raw.extend((1u8..=64).collect::<Vec<_>>());
+        let hex: String = Sha256::digest(&raw)[..4].iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(hex, "0ed3a6ab");
+        assert_eq!(format!("hermix-{hex}"), "hermix-0ed3a6ab");
+    }
+
+    #[test]
+    fn enroll_reply_happy_path() {
+        let token = validate_enroll_reply(
+            r#"{"token":"hrel_abc123","node_id":"hermix-0ed3a6ab"}"#,
+            "hermix-0ed3a6ab",
+        )
+        .expect("合法应答应通过");
+        assert_eq!(token, "hrel_abc123");
+    }
+
+    #[test]
+    fn enroll_reply_rejects_foreign_node_id() {
+        // relay 指定别的身份 = 推导漂移或应答被篡改。拿了这种凭据连上去，
+        // 配对码里的 server_id 就对不上手机扫码的预期，当场拒绝。
+        let err = validate_enroll_reply(
+            r#"{"token":"hrel_abc123","node_id":"hermix-deadbeef"}"#,
+            "hermix-0ed3a6ab",
+        )
+        .expect_err("node_id 不一致必须拒绝");
+        assert!(err.contains("不一致"), "错误里要说清是不一致：{err}");
+    }
+
+    #[test]
+    fn enroll_reply_rejects_empty_token_and_garbage() {
+        assert!(validate_enroll_reply(r#"{"token":"","node_id":"hermix-0ed3a6ab"}"#, "hermix-0ed3a6ab").is_err());
+        assert!(validate_enroll_reply("not json", "hermix-0ed3a6ab").is_err());
+    }
+
+    #[test]
+    fn reset_identity_clears_files_and_salvages_url() {
+        let dir = tempfile::tempdir().unwrap();
+        let identity = dir.path().join(crate::relay_identity::IDENTITY_FILE);
+        let phones = dir.path().join(PHONE_BINDING_FILE);
+        let relay = dir.path().join(FILE);
+
+        // 造一份「DPAPI 坏了」的现场：三个文件都在，relay.json 里的密文解不开
+        // 但 JSON 本身可解析——自建地址要能从这里抢救回来。
+        std::fs::write(&identity, r#"{"version":1,"public_key":"x","protected_key":"undecryptable"}"#).unwrap();
+        std::fs::write(&phones, r#"{"devices":{}}"#).unwrap();
+        std::fs::write(
+            &relay,
+            r#"{"version":1,"url":"wss://self.example","node_id":"hermix-old","protected_token":"undecryptable"}"#,
+        )
+        .unwrap();
+
+        let fresh = reset_local_identity(&identity, &phones, &relay).expect("重置应成功");
+        assert!(!identity.exists(), "身份文件必须删除");
+        assert!(!phones.exists(), "手机绑定表必须删除");
+        // 自建地址抢救回来；凭据与 node_id 清空（node_id 已随旧身份作废）。
+        assert_eq!(fresh.url, "wss://self.example");
+        assert!(fresh.token.is_empty() && fresh.node_id.is_empty());
+
+        // 落盘的那份也要能正常读回来，且下次启动自动签发会重新填 token。
+        let reloaded = load_at(&relay);
+        assert_eq!(reloaded.url, "wss://self.example");
+        assert!(!reloaded.has_token());
+        assert!(reloaded.load_error.is_none());
+    }
+
+    #[test]
+    fn reset_identity_is_idempotent_on_missing_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let fresh = reset_local_identity(
+            &dir.path().join(crate::relay_identity::IDENTITY_FILE),
+            &dir.path().join(PHONE_BINDING_FILE),
+            &dir.path().join(FILE),
+        )
+        .expect("文件本来就不存在也应成功");
+        assert!(fresh.url.is_empty(), "没有旧配置可抢救 = 回到默认地址");
     }
 
     #[test]
