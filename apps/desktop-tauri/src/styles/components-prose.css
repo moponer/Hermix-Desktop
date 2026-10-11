@@ -602,10 +602,6 @@
    Scoped strictly inside .preview-pane so SyntaxHighlighter's injected
    global <style> rules and markdown-rendered elements (<h1>, <strong>, …)
    never bleed into the chat area. */
-.preview-pane {
-  scrollbar-gutter: stable;
-}
-
 /* ── Monospace font scoping ──
    只对代码视图相关元素应用等宽字体，不能扩展到整个 .preview-pane：
    Markdown 预览正文 (.preview-md-body) 必须走 --font-family-primary，
@@ -624,14 +620,6 @@
 
 /* 下面这些选择器只针对历史残留的 markdown 注入做兜底
    （不针对 code-table，新版结构已无 .code-table） */
-.preview-pane-inner pre,
-.preview-pane-inner pre > code {
-  background: transparent !important;
-  width: 100% !important;
-  max-width: 100% !important;
-  box-sizing: border-box !important;
-}
-
 /* Markdown body inside preview pane: reset the old blanket `margin: 0`
    override that collapsed heading spacing. Now `.preview-md-body`
    owns its own typography (see code-view.css). We only keep the
@@ -657,31 +645,6 @@
 
 /* Path / filename rows in the preview header — read as plain text.
    11px / 500, matches lucide-docs density. */
-.preview-pane .preview-filename,
-.preview-pane .preview-path-row,
-.preview-pane .preview-path-row * {
-  font-weight: 500 !important;
-  font-size: 11px;
-  letter-spacing: 0;
-}
-.file-pill-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 0;
-  border-radius: 0;
-  font-size: var(--text-meta, 12px);
-  color: var(--color-link);
-  background: transparent;
-  border: 0;
-  cursor: pointer;
-  transition: color var(--duration-fast) ease;
-}
-.file-pill-toggle:hover {
-  color: var(--color-link-hover);
-  text-decoration: underline;
-}
-
 /* ── Memory update block ── */
 /* Surfaces what the agent remembered this turn. Palette is strictly
    gray/zinc + amber/green/red action tints — no blue/indigo/violet. */

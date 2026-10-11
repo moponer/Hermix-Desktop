@@ -26,7 +26,7 @@
 #      the drift instead of letting it silently mislead the agent.
 #
 # Hard gates (exit non-zero on failure): 1, 2, 3, 3b, 4b, 6, 8, 9, 10, 11
-# Soft gates (warn but continue): 4, 5, 7, 12
+# Soft gates (warn but continue): 4, 5, 7, 12, 13, 14
 #
 # Usage (from repo root, in any terminal):
 #   ./scripts/ci-gate.sh
@@ -44,7 +44,7 @@ echo ""
 #-----------------------------------------------------------------------
 # 1. Compile check
 #-----------------------------------------------------------------------
-echo "=== [1/12] cargo check --workspace --all-targets ==="
+echo "=== [1/14] cargo check --workspace --all-targets ==="
 cargo check --workspace --all-targets
 echo ""
 
@@ -58,7 +58,7 @@ echo ""
 #    lint. Those require code review (see P0-4 cdp.rs / P0-5 session.rs
 #    for the patterns to avoid: nested locks, lock-held-during-long-read).
 #-----------------------------------------------------------------------
-echo "=== [2/12] clippy await_holding_lock guard ==="
+echo "=== [2/14] clippy await_holding_lock guard ==="
 if rustup component list --installed 2>/dev/null | grep -q '^clippy'; then
   cargo clippy --workspace --all-targets -- \
     -D clippy::await_holding_lock
@@ -71,7 +71,7 @@ echo ""
 #-----------------------------------------------------------------------
 # 3. Unit tests
 #-----------------------------------------------------------------------
-echo "=== [3/12] cargo test --workspace --lib ==="
+echo "=== [3/14] cargo test --workspace --lib ==="
 cargo test --workspace --lib
 echo ""
 
@@ -83,7 +83,7 @@ echo ""
 #     they serve. Hard gate: a routing bug here strands every paired
 #     device silently.
 #-----------------------------------------------------------------------
-echo "=== [3b/12] relay tests (node --test) ==="
+echo "=== [3b/14] relay tests (node --test) ==="
 if [ -d apps/relay ]; then
   if [ ! -d apps/relay/node_modules ]; then
     echo "  FAIL: apps/relay/node_modules missing — run 'npm install' in apps/relay"
@@ -98,7 +98,7 @@ echo ""
 #-----------------------------------------------------------------------
 # 4. Frontend type check (soft gate — pre-existing errors are common)
 #-----------------------------------------------------------------------
-echo "=== [4/12] tsc --noEmit (frontend) ==="
+echo "=== [4/14] tsc --noEmit (frontend) ==="
 if [ -d apps/desktop-tauri ]; then
   # 直接调 tsc 二进制，**不要**用 `pnpm tsc --noEmit`：后者不执行类型检查，
   # 只跑 pnpm 自己的 install 流程就返回 0（~0.8s、输出 "Already up to date"）。
@@ -126,7 +126,7 @@ echo ""
 #     syntax error must not be able to reach a phone. The mobile-relay
 #     decision note explicitly refuses "shipped on local build only".
 #-----------------------------------------------------------------------
-echo "=== [4b/12] hermix-m: typecheck + protocol tests + H5 build ==="
+echo "=== [4b/14] hermix-m: typecheck + protocol tests + H5 build ==="
 if [ -d apps/hm ]; then
   if [ ! -d apps/hm/node_modules ]; then
     echo "  FAIL: apps/hm/node_modules missing — run 'npm install' in apps/hm"
@@ -145,7 +145,7 @@ echo ""
 #    to confirm it's NOT on an async path. When a sleep IS needed in
 #    async code, use tokio::time::sleep instead.
 #-----------------------------------------------------------------------
-echo "=== [5/12] advisory: std::thread::sleep in non-test src ==="
+echo "=== [5/14] advisory: std::thread::sleep in non-test src ==="
 sleep_hits=$(grep -rn 'std::thread::sleep' \
   crates/*/src/ --include='*.rs' \
   | grep -v 'mod tests' \
@@ -171,7 +171,7 @@ echo ""
 #
 #    Need: node >= 18. The script uses no external deps.
 #-----------------------------------------------------------------------
-echo "=== [6/12] theme token guard ==="
+echo "=== [6/14] theme token guard ==="
 if [ -f scripts/check-theme-tokens.mjs ]; then
   if command -v node >/dev/null 2>&1; then
     node scripts/check-theme-tokens.mjs 1>&2 || exit 1
@@ -195,7 +195,7 @@ echo ""
 #    removing an entry from the list (by splitting the file) is the way
 #    to tighten it. New god files cannot be introduced.
 #-----------------------------------------------------------------------
-echo "=== [7/12] god-file guard (> 2500 lines) ==="
+echo "=== [7/14] god-file guard (> 2500 lines) ==="
 # Accepted baseline. Remove a line only after actually splitting the file.
 KNOWN_GOD_FILES="crates/hermix-agent/src/local_agent_service.rs
 crates/hermix-agent/src/provider.rs
@@ -235,7 +235,7 @@ echo ""
 #     still reports green. This surfaces the count and fails on NEW
 #     ignores so a failing test can't be parked indefinitely.
 #-----------------------------------------------------------------------
-echo "=== [7b/12] ignored test count ==="
+echo "=== [7b/14] ignored test count ==="
 IGNORED_TOTAL=$(grep -rn '#\[ignore' crates/ --include='*.rs' 2>/dev/null | wc -l | tr -d ' ')
 IGNORED_BASELINE=17
 if [ "$IGNORED_TOTAL" -gt "$IGNORED_BASELINE" ]; then
@@ -248,7 +248,7 @@ fi
 echo "  OK: $IGNORED_TOTAL ignored (baseline $IGNORED_BASELINE)"
 echo ""
 
-echo "=== [8/12] pre-existing debt markers ==="
+echo "=== [8/14] pre-existing debt markers ==="
 debt_hits=$(grep -rn -E '(TODO|FIXME): pre-existing' \
   crates/ apps/desktop-tauri/src/ \
   --include='*.rs' --include='*.ts' --include='*.tsx' \
@@ -273,7 +273,7 @@ echo ""
 #    and the (narrow) exception for the generated workbench SKILL.md, which
 #    names those identifiers only to forbid them.
 #-----------------------------------------------------------------------
-echo "=== [9/12] skill freshness guard ==="
+echo "=== [9/14] skill freshness guard ==="
 if [ -f scripts/verify-skill-freshness.mjs ]; then
   if command -v node >/dev/null 2>&1; then
     node scripts/verify-skill-freshness.mjs 1>&2 || exit 1
@@ -289,7 +289,7 @@ echo ""
 # 10. Decision Notes structure gate (HARD gate)
 #     docs/notes/ 三态决策记录的结构/格式/强制节检查（制度见 docs/notes/README.md）
 #-----------------------------------------------------------------------
-echo "=== [10/12] decision notes structure ==="
+echo "=== [10/14] decision notes structure ==="
 if [ -f scripts/check-notes.sh ]; then
   bash scripts/check-notes.sh || exit 1
 else
@@ -304,7 +304,7 @@ echo ""
 #     只看已跟踪文件 —— 未跟踪的本地临时文件是开发者的事，脏工作区
 #     不该让门禁变红。
 #-----------------------------------------------------------------------
-echo "=== [11/12] repository hygiene ==="
+echo "=== [11/14] repository hygiene ==="
 if [ -f scripts/check-hygiene.sh ]; then
   bash scripts/check-hygiene.sh || exit 1
 else
@@ -320,7 +320,7 @@ echo ""
 #     比修复提交早 4 小时；2026-10-08 新装机器播种的还是 8 月的
 #     SOUL.md。过期即 fail，重编 + copy 后重跑即绿。
 #-----------------------------------------------------------------------
-echo "=== [12/12] sidecar freshness (HARD gate) ==="
+echo "=== [12/14] sidecar freshness (HARD gate) ==="
 # 2026-10-08 起从 soft 升级为 hard：soft WARN 挡不住"打包含旧后端/旧
 # SOUL.md"——10-06、10-08 两次交付都栽在这里。freshness 脚本现覆盖
 # sidecar 二进制 + builtin-soul/resources 静态资源，exit 1 即打断 gate。
@@ -330,6 +330,59 @@ if [ -f scripts/check-sidecar-freshness.sh ]; then
   bash scripts/check-sidecar-freshness.sh || exit 1
 else
   echo "  SKIP: scripts/check-sidecar-freshness.sh not found"
+fi
+echo ""
+#-----------------------------------------------------------------------
+# 13. Desktop CSS layer regression — 行内路径链接图标对齐（SOFT gate）
+#     verify-pathlink-icon.cjs 绕过整个 App，把 MarkdownBody 单独挂进真实
+#     dev server 的样式环境渲染，量 link / icon / 文字基线的真实像素关系，
+#     捕捉"图标被挤到上面一层"这类 CSS 层叠回归（tsc / vitest 全绿也说明不了）。
+#     依赖：dev server 已在 :1420 运行 + playwright（chrome/msedge 通道）。
+#     二者缺一即 SKIP —— 这道门禁是浏览器视觉探针，CI 无 dev server / 无浏览器，
+#     故为 SOFT：本地起 `npm run dev` 后跑 ci-gate 才会真正执行。
+#-----------------------------------------------------------------------
+echo "=== [13/14] desktop CSS layer regression (pathlink icon) ==="
+if [ -f apps/desktop-tauri/scripts/verify-pathlink-icon.cjs ]; then
+  if [ -d apps/desktop-tauri/node_modules/playwright ]; then
+    if curl -s -o /dev/null -m 3 "http://[::1]:1420" 2>/dev/null || \
+       curl -s -o /dev/null -m 3 "http://127.0.0.1:1420" 2>/dev/null; then
+      (cd apps/desktop-tauri && node scripts/verify-pathlink-icon.cjs) \
+        && echo "  OK: pathlink icon alignment regression clean" \
+        || echo "  WARNING: pathlink icon alignment regression — see outputs/pathlink-icon"
+    else
+      echo "  SKIP: dev server not on :1420 (run 'npm run dev' to enable this gate)"
+    fi
+  else
+    echo "  SKIP: playwright not installed in apps/desktop-tauri"
+  fi
+else
+  echo "  SKIP: apps/desktop-tauri/scripts/verify-pathlink-icon.cjs not found"
+fi
+echo ""
+
+#-----------------------------------------------------------------------
+# 14. Desktop CSS 死重复块守卫（SOFT gate，纯静态、零依赖）
+#     analyze-css-cascade.cjs 按 main.tsx import + globals.css @import 的级联
+#     顺序，找出"完全同选择器、较早出现、所有声明都被后续规则覆盖"的死块。
+#     本会话已清理 14 处此类死块；这道门禁防止它们回归。纯静态分析，不需要
+#     浏览器/dev server，CI 可跑。为 SOFT：ORDER 假设或拆分改动可能让它偶发
+#     误报，先观察一个周期再视情况升级为 HARD。
+#-----------------------------------------------------------------------
+echo "=== [14/14] desktop CSS dead-block guard ==="
+if [ -f apps/desktop-tauri/scripts/analyze-css-cascade.cjs ]; then
+  if [ -d apps/desktop-tauri/node_modules/postcss ]; then
+    dead_count=$(cd apps/desktop-tauri && node scripts/analyze-css-cascade.cjs 2>/dev/null | grep -cE '^\[' || true)
+    if [ "${dead_count:-0}" -gt 5 ]; then
+      echo "  WARNING: $dead_count dead CSS blocks found (expected 5 = .approval-btn* cross-file conflicts still pending merge)."
+      echo "  Run: cd apps/desktop-tauri && node scripts/analyze-css-cascade.cjs"
+    else
+      echo "  OK: dead CSS blocks within baseline ($dead_count; 5 are the pending .approval-btn* merge)"
+    fi
+  else
+    echo "  SKIP: postcss not installed in apps/desktop-tauri"
+  fi
+else
+  echo "  SKIP: apps/desktop-tauri/scripts/analyze-css-cascade.cjs not found"
 fi
 echo ""
 

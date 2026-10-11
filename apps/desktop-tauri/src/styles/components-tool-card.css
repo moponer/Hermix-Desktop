@@ -160,10 +160,6 @@
 .tw-msg-output-copy:focus-visible {
   opacity: 1;
 }
-.tw-msg-output-copy:hover {
-  color: var(--color-text-primary);
-  background: color-mix(in srgb, var(--color-bg-tertiary) 80%, transparent);
-}
 .tw-msg-output-copy[data-copied="true"] {
   opacity: 1;
   color: var(--color-success);
@@ -303,19 +299,6 @@
 /* Icon — plain outline glyph, no coloured chip, no background.
    Colour comes from the row's `data-state` (running/ok/error).
    Kept for backward compatibility with non-tool icon usage. */
-.tw-msg-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  flex-shrink: 0;
-  margin-right: 6px;
-  color: var(--color-text-faint);
-}
-.tw-msg-row[data-state="run"] .tw-msg-icon { color: var(--color-accent); }
-.tw-msg-row[data-state="ok"]  .tw-msg-icon { color: var(--color-text-muted); }
-.tw-msg-row[data-state="err"] .tw-msg-icon { color: var(--color-error); }
 .tw-msg-row:hover .tw-msg-verb,
 .tw-msg-row:focus-visible .tw-msg-verb,
 .tw-msg-row:hover .tw-msg-primary,
@@ -1134,11 +1117,6 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
-}
-.apv-btns {
-  display: flex;
-  gap: 8px;
-  flex-shrink: 0;
 }
 .apv-deny,
 .apv-allow {
