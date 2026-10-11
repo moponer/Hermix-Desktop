@@ -98,7 +98,7 @@ function PathLink({ path, onClick }: PathLinkProps) {
       {/* 11px 而非 13px：这个尺寸恰好等于 14px 正文的 cap 高度，图标下沿
           坐在基线上、顶不越 cap 线。13px 会高出 2.8px 显得"浮在上面"。
           对齐的实测数据见 components-prose.css 的 .md-path-link__icon。 */}
-      {showIcon && <FileTypeIcon name={name} size={11} className="md-path-link__icon" />}
+      {showIcon && <FileTypeIcon name={name} size={13} className="md-path-link__icon" />}
       {/* 只显示文件名：正文里写的是一整串 `<repo-parent>\...\db1.py`，铺满整行
           把句子撕成两段，读者真正要找的是 `db1.py`。目录信息不丢 —— title
           属性仍是完整路径，悬停即见。 */}
