@@ -14,10 +14,21 @@ import { renderRoutes, type RouteContext } from "./app/routes";
 import { type ConfigCategory } from "./components/SystemConfigPanel";
 import { useWallpaper } from "./hooks/useWallpaper";
 
-/** 壁纸宿主：无渲染输出，只为在应用启动时把壁纸状态装进 documentElement。 */
+/** 壁纸宿主：应用启动时装载壁纸状态，并在有壁纸时渲染整窗垫底层。
+ *
+ * 层用 `position:fixed; z-index:-1` 垫在所有内容之下（面板靠各自的
+ * 半透明 scrim 透出它，见 components-layout.css 壁纸段）。不用 CSS 变量
+ * 承载大图：数 MB 的 data URL 会被 Chromium 静默丢弃（详见 useWallpaper）。 */
 function WallpaperHost() {
-  useWallpaper();
-  return null;
+  const { url } = useWallpaper();
+  if (!url) return null;
+  return (
+    <div
+      className="wallpaper-layer"
+      style={{ backgroundImage: `url("${url}")` }}
+      aria-hidden="true"
+    />
+  );
 }
 import { useAppBootstrap } from "./app/useAppBootstrap";
 import {
@@ -3621,8 +3632,8 @@ return {
   return (
     <AppProviders value={streamChatApi}>
     {/* L3.6 壁纸：应用根挂一次即可（模块级共享 store，设置页再挂也是
-        同一份状态）。只负责把 CSS 变量与 data 属性写进 documentElement，
-        真正消费在 components-layout.css 的 [data-wallpaper="on"]。 */}
+        同一份状态）。有壁纸时渲染 fixed 垫底层，data 属性只作面板 scrim
+        规则的开关，消费在 components-layout.css 的 [data-wallpaper="on"]。 */}
     <WallpaperHost />
     <div
       className="app-shell"

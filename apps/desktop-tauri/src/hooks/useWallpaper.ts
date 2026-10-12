@@ -42,19 +42,21 @@ function emit() {
   for (const l of listeners) l(snap);
 }
 
-/** 把当前状态落到 DOM。**所有**变更路径都必须经过它——两处各写一遍
- * setProperty 是这个功能唯一会出 bug 的地方。 */
+/** 把当前状态落到 DOM。**所有**变更路径都必须经过它。
+ *
+ * ⚠ 这里只挂 data-wallpaper 属性（面板 scrim 规则的开关），**不再**把
+ * data URL 写进 `--wallpaper-image` CSS 变量：壁纸 base64 有数 MB，实测
+ * Chromium 对 CSS 自定义属性的单值长度有限制，超限后 setProperty **静默
+ * 失败**（读回永远是默认值 none，不抛错）——这就是「设置页有图、主窗全白」
+ * 的根因。大图改由 WallpaperHost 渲染的 `.wallpaper-layer` fixed 层承载
+ * （inline style 无此限制），本 hook 只提供 url。 */
 function applyToDom() {
   if (typeof document === "undefined") return;
   const root = document.documentElement;
   if (state.url) {
     root.dataset.wallpaper = "on";
-    // data URL 可能含特殊字符，但包进 url("…") 里是合法的（base64 只有
-    // 安全字符）；为稳妥这里仍用双引号包裹。
-    root.style.setProperty("--wallpaper-image", `url("${state.url}")`);
   } else {
     delete root.dataset.wallpaper;
-    root.style.removeProperty("--wallpaper-image");
   }
 }
 

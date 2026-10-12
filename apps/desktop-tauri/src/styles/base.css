@@ -294,15 +294,6 @@ button:disabled,
    答案，故保持静态（白），等 L3.5 的策展调色板把 on-accent 与 accent
    一起注入。 */
 :root {
-  /* 壁纸（L3.6）：**运行时注入**，由 `useWallpaper` 在 documentElement 的
-     行内样式上设 `url("asset://…")`。这里给 `none` 默认值，一是让
-     check-theme-tokens 的 orphan 检查（引用了却没定义）能过，二是让
-     "没设壁纸"是一条自解释的规则而不是"变量不存在"。
-
-     切勿改成空串或留白：空值会让 `var(--wallpaper-image)` 解析成空，
-     background-image 整条声明失效——和 L1 里 accent 踩过的那个坑同源。 */
-  --wallpaper-image: none;
-
   /* accent 的派生档（hover / on-text / soft / soft-strong）已于 2026-10-04
      移入 tokens.css 的 @theme：它们是 --color-accent 的 color-mix 派生，
      留在别名层时 Tailwind v4 不生成对应工具类。别名层只剩本体以外真正

@@ -136,28 +136,43 @@
 }
 
 /* ── 壁纸（L3.6，2026-10-12 升级：整窗平铺 + 鲁棒加载）──────────────
-   壁纸由后端编成 base64 data URL，前端注入 `--wallpaper-image` CSS 变量。
+   壁纸由后端编成 base64 data URL，WallpaperHost 渲染成 `.wallpaper-layer`
+   fixed 垫底层（CSS 变量方案已废：数 MB 值会被 Chromium 静默丢弃）。
    整窗铺底：挂到 .app-shell，让标题栏 / 三栏 / 所有浮层都能透出同一张图。
 
    各主面板**不是纯透明**（纯透明会让卡片 / 文字糊在图上、没法看），而是
-   盖一层「当前主题自己的底色」scrim（高不透明度）+ backdrop 模糊，把壁纸
+   盖一层「当前主题自己的底色」scrim（中等不透明度）+ backdrop 模糊，把壁纸
    以磨砂质感透出来——既看得出整窗铺了图，又保证正文对比度稳过 AA。scrim
-   用 color-mix 把固有色降到 ~88% 不透明，**用主题底色去压、而不是半透明黑**：
+   用 color-mix 把固有色降到 ~72%/58% 不透明（88%/80% 实测亮色壁纸下肉眼不可见），**用主题底色去压、而不是半透明黑**：
    黑蒙版在浅色主题下会把壁纸压成灰脏色，明暗两套主题观感都干净。
 
    之前（L3.6 初版）壁纸只铺 .chat-surface：侧栏 / 顶栏 / 右栏都是不透明实色，
    壁纸只在接缝露几像素、等于没挂。现在整窗铺 + 面板磨砂，才是"真能看见"。 */
-[data-wallpaper="on"] .app-shell {
-  background-image: var(--wallpaper-image);
+/* 壁纸垫底层：fixed 全窗，垫在所有内容之下（z:-1 绘制于 body 背景之上、
+   正常流内容之下）。大图走节点 inline style，不走 CSS 变量——数 MB 的
+   data URL 会被 Chromium 的自定义属性长度上限静默丢弃（实测踩坑）。
+   WorkBuddy 式观感 = 大模糊 + 降饱和，壁纸读成「一层色调」而非「一张
+   照片」；层四向外扩 48px，吃掉模糊带来的边缘发虚圈。 */
+.wallpaper-layer {
+  position: fixed;
+  inset: -48px;
+  z-index: -1;
   background-size: cover;
   background-position: center;
   background-repeat: no-repeat;
+  filter: blur(36px) saturate(0.88) brightness(1.02);
+  pointer-events: none;
+}
+
+/* 壁纸开着时壳自身的实底必须透空，否则垫底层被盖住只剩缝隙。 */
+[data-wallpaper="on"] .app-shell {
+  background: transparent;
 }
 
 /* 案面（三栏之间的缝隙 + 主区四周留白）：比面板更透一点，让壁纸在接缝处
    透出得更明显，强化"整窗平铺"的观感。 */
 [data-wallpaper="on"] .app-body {
-  background-color: color-mix(in srgb, var(--color-bg-secondary) 80%, transparent);
+  background-color: color-mix(in srgb, var(--color-bg-secondary) 58%, transparent);
   backdrop-filter: blur(16px) saturate(1.05);
   -webkit-backdrop-filter: blur(16px) saturate(1.05);
 }
@@ -165,18 +180,18 @@
 /* 四块主面板：标题栏 / 左栏 / 对话区 / 右栏。各自用自身主题底色做 ~88%
    scrim，磨砂后透出壁纸。可读性优先，所以比案面更实一点。 */
 [data-wallpaper="on"] .titlebar {
-  background-color: color-mix(in srgb, var(--theme-bg-titlebar, var(--color-bg-secondary)) 88%, transparent);
+  background-color: color-mix(in srgb, var(--theme-bg-titlebar, var(--color-bg-secondary)) 72%, transparent);
 }
 [data-wallpaper="on"] .pane-left {
-  background-color: color-mix(in srgb, var(--theme-bg-sidebar, var(--color-bg-secondary)) 88%, transparent);
+  background-color: color-mix(in srgb, var(--theme-bg-sidebar, var(--color-bg-secondary)) 72%, transparent);
 }
 [data-wallpaper="on"] .pane-main,
 [data-wallpaper="on"] .chat-surface {
-  background-color: color-mix(in srgb, var(--theme-bg-chat, var(--color-bg-primary)) 88%, transparent);
+  background-color: color-mix(in srgb, var(--theme-bg-chat, var(--color-bg-primary)) 72%, transparent);
 }
 /* PreviewBar 根节点的背景是内联 style，必须用 !important 才能覆盖。 */
 [data-wallpaper="on"] .preview-bar-aside {
-  background-color: color-mix(in srgb, var(--color-bg-primary) 88%, transparent) !important;
+  background-color: color-mix(in srgb, var(--color-bg-primary) 72%, transparent) !important;
 }
 
 /* 所有主面板统一磨砂。单独写一条，避免每个选择器重复 backdrop 声明。 */
