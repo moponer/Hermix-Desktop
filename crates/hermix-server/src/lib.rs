@@ -14,7 +14,7 @@ mod orchestration_bus;
 mod task_tracker_adapter;
 mod task_record_sink;
 mod security;
-mod crash_dump;
+pub mod crash_dump;
 mod mobile;
 mod mobile_protocol;
 mod mobile_ws;

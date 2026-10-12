@@ -14,6 +14,14 @@ async fn main() -> Result<(), AgentError> {
     let stdio = std::env::args().any(|a| a == "--stdio");
     init_telemetry_from_env("hermes-server", "info", stdio);
 
+    // 进程级 panic 兜底：任何 panic 在 unwind 前把 位置+消息+backtrace 同步写到
+    // <hermix_home>/logs/panic-*.log。stdio agent loop 没有 catch_unwind 包裹
+    // （那份只在已退役的 ws 路径），panic=unwind 会一路 unwind 进 main 退出进程；
+    // 默认 hook 的消息只到被 windows_subsystem 吞掉的 stderr —— 正是"后端中途
+    // 退出却查不到原因"的根因。装在任何可能 panic 的代码（含下面的 load_config）
+    // 之前。
+    hermix_server::crash_dump::install_panic_hook(hermix_config::paths::hermix_home());
+
     let config = load_config(None).map_err(|e| AgentError::Config(e.to_string()))?;
 
     // 安全中心：启动即按 config.yaml 的 security 刷新自动备份策略。

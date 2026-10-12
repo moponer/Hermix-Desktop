@@ -14,9 +14,14 @@
 //!   path, not async context) — no `spawn_blocking` needed.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+
+/// Monotonic suffix so two panics in the same wall-clock second don't
+/// overwrite each other's log file.
+static PANIC_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// Maximum number of recent messages to include in the dump.
 const MAX_MESSAGES: usize = 10;
@@ -196,6 +201,82 @@ fn rotate_dumps(dir: &Path) {
             );
         }
     }
+}
+
+/// Install a process-wide panic hook that durably records every panic —
+/// location, message, thread, and backtrace — to `<home>/logs/panic-<ts>-<seq>.log`
+/// before delegating to the previous (default) hook.
+///
+/// Why this exists: the agent loop's per-task `catch_unwind` + crash dump only
+/// covers the retired WebSocket path (`ws.rs`). The stdio transport the desktop
+/// sidecar actually uses runs the loop on the main future with **no** such
+/// wrapper, and `panic = "unwind"`, so a panic anywhere in the stdio loop
+/// unwinds straight into `main` and the process exits ("后端进程已退出"). The
+/// default hook's message only reaches stderr, which the packaged GUI app
+/// (`windows_subsystem = "windows"`) discards — the "backend exited mid-task,
+/// no local log, can't tell why" dead end. Writing the file synchronously here
+/// (the hook runs on the panicking thread before unwind completes) makes the
+/// cause durable on disk for every panic, on every transport.
+///
+/// Call once from `main` after telemetry init. Fires for *every* panic,
+/// including ones a later `catch_unwind` recovers — that noise is worth having:
+/// a panic happened, and now it's on record.
+pub fn install_panic_hook(home: PathBuf) {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info: &std::panic::PanicHookInfo<'_>| {
+        if let Err(e) = write_panic_log(&home, info) {
+            eprintln!("[crash_dump] failed to write panic log: {e}");
+        }
+        previous(info);
+    }));
+}
+
+/// Write one panic's details to `<home>/logs/panic-<ts>-<seq>.log`. Synchronous
+/// and infallible-by-contract: the caller logs any I/O error and moves on, so a
+/// panic-in-progress is never blocked by the diagnostics write itself.
+fn write_panic_log(home: &Path, info: &std::panic::PanicHookInfo<'_>) -> std::io::Result<()> {
+    let dir = home.join("logs");
+    std::fs::create_dir_all(&dir)?;
+    let ts = Utc::now().format("%Y-%m-%d-%H%M%S");
+    let seq = PANIC_SEQ.fetch_add(1, Ordering::Relaxed);
+    let path = dir.join(format!("panic-{ts}-{seq}.log"));
+
+    let location = info
+        .location()
+        .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+        .unwrap_or_else(|| "<unknown location>".to_string());
+    let message = info
+        .payload()
+        .downcast_ref::<&str>()
+        .map(|s| s.to_string())
+        .or_else(|| info.payload().downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "<non-string panic payload>".to_string());
+    let thread_name = std::thread::current()
+        .name()
+        .unwrap_or("<unnamed>")
+        .to_string();
+    let backtrace = std::backtrace::Backtrace::force_capture();
+
+    let body = format!(
+        "Hermix panic\n\
+         location:  {location}\n\
+         thread:    {thread_name}\n\
+         message:   {message}\n\
+         \n\
+         backtrace:\n{backtrace}\n"
+    );
+    std::fs::write(&path, body)?;
+
+    // Best-effort mirror into the rolling server log so the in-app diagnostics
+    // panel (which tails <home>/logs) surfaces it inline. Tracing may be
+    // mid-teardown during a fatal unwind; failure here is harmless — the file
+    // above is the durable copy.
+    tracing::error!(
+        target: "hermix.crash",
+        path = %path.display(),
+        "panic hook fired: {message} @ {location}"
+    );
+    Ok(())
 }
 
 #[cfg(test)]
