@@ -362,13 +362,26 @@ $backup = Join-Path $appDir 'update.backup'
 $newExe = Join-Path $appDir '{exe_name}'
 $oldExe = Join-Path $backup '{exe_name}'
 
-# 1. 等当前进程退出
-for ($i = 0; $i -lt 120; $i++) {{
+# 1. 等当前进程退出(宽限 15s 后强制结束)。
+#    纯等的教训(2026-10-12 现场):本产品有托盘,关窗口/退出流程不一定真正
+#    结束进程,旧脚本空等 120s 后带着文件锁去搬目录,Move-Item 抛错而
+#    窗口是隐藏的 —— 用户看到「更新完成」,exe 却纹丝不动(0.1.11 卡了四个
+#    版本)。现在:宽限 15s,仍在就 Stop-Process(同用户同完整性,允许)。
+for ($i = 0; $i -lt 30; $i++) {{
     if (-not (Get-Process -Id $pid0 -ErrorAction SilentlyContinue)) {{ break }}
     Start-Sleep -Milliseconds 500
+    if ($i -eq 29) {{
+        Stop-Process -Id $pid0 -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 2
+    }}
+}}
+# 1b. 收掉仍占着 app 根文件锁的附属进程(预览器/随包工具)
+foreach ($procName in @('hermix-viewer','markitdown','officecli')) {{
+    Stop-Process -Name $procName -Force -ErrorAction SilentlyContinue
 }}
 
 # 2. 旧目录入 backup（pending 目录留在原地，不搬）
+try {{
 if (Test-Path $backup) {{ Remove-Item $backup -Recurse -Force }}
 $moved = @()
 Get-ChildItem -LiteralPath $appDir | Where-Object {{ $_.FullName -ne $pending }} | ForEach-Object {{
@@ -377,6 +390,10 @@ Get-ChildItem -LiteralPath $appDir | Where-Object {{ $_.FullName -ne $pending }}
 }}
 # 3. 新文件就位
 Copy-Item -Path (Join-Path $src '*') -Destination $appDir -Recurse -Force
+}} catch {{
+    Set-Content -Path (Join-Path $pending 'update.failed') -Value ('swap error: ' + $_.Exception.Message + ' @ ' + (Get-Date).ToString('o'))
+    exit 1
+}}
 
 # 4. 拉起新 exe 并探活 30s
 $proc = Start-Process -FilePath $newExe -WorkingDirectory $appDir -PassThru
