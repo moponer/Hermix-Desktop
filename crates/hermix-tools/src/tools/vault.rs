@@ -168,10 +168,23 @@ impl ToolHandler for VaultImportHandler {
             .get("has_header")
             .and_then(|v| v.as_bool())
             .unwrap_or(true);
+        // 列名别名(2026-10-12 用户实测痛点:agent 先猜 secret_col 试错):
+        // 收常见同义词,省掉一轮"试错试出来的"。
         let col = |key: &str| {
-            params
-                .get(key)
-                .and_then(|v| v.as_str())
+            let aliases: &[&str] = match key {
+                "name_col" => &["site_col", "platform_col", "title_col"],
+                "username_col" => &["user_col", "account_col", "login_col"],
+                "password_col" => &["secret_col", "pwd_col", "pass_col"],
+                "url_col" => &["website_col", "link_col"],
+                _ => &[],
+            };
+            let first = params.get(key).and_then(|v| v.as_str());
+            first
+                .or_else(|| {
+                    aliases
+                        .iter()
+                        .find_map(|a| params.get(*a).and_then(|v| v.as_str()))
+                })
                 .map(str::to_string)
         };
 
@@ -292,6 +305,160 @@ impl ToolHandler for VaultImportHandler {
     }
 }
 
+
+// ── 更新 / 删除(按名称定位;secret=None 表示不改密码)──────────────────
+
+struct VaultUpdateHandler {
+    vault: Arc<Vault>,
+}
+
+impl VaultUpdateHandler {
+    fn new(vault: Arc<Vault>) -> Self {
+        Self { vault }
+    }
+}
+
+#[async_trait::async_trait]
+impl ToolHandler for VaultUpdateHandler {
+    async fn execute(&self, params: Value) -> Result<String, ToolError> {
+        let name = params
+            .get("name")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::InvalidParams("Missing 'name' parameter".into()))?;
+        let entry = self
+            .vault
+            .get_by_name(name)
+            .map_err(|e| ToolError::ExecutionFailed(format!("查无此凭据: {e}")))?;
+        let cur_url = entry.url.clone();
+        let cur_user = entry.username.clone();
+        let cur_notes = entry.notes.clone();
+        let new_name = params
+            .get("new_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or(name);
+        let new_url = params
+            .get("url")
+            .and_then(|v| v.as_str())
+            .unwrap_or(cur_url.as_str());
+        let new_user = params
+            .get("username")
+            .and_then(|v| v.as_str())
+            .unwrap_or(cur_user.as_str());
+        let new_notes = params
+            .get("notes")
+            .and_then(|v| v.as_str())
+            .unwrap_or(cur_notes.as_str());
+        // 省略 password = 不改密码(编辑表单没碰密码字段的语义)
+        let new_secret = params.get("password").and_then(|v| v.as_str());
+        let updated = self
+            .vault
+            .update(
+                &entry.id,
+                new_name,
+                new_url,
+                new_user,
+                new_secret,
+                new_notes,
+            )
+            .map_err(|e| ToolError::ExecutionFailed(format!("更新失败: {e}")))?;
+        Ok(format!(
+            "已更新「{}」{}{}",
+            updated.name,
+            if new_secret.is_some() { "(含新密码)" } else { "" },
+            if updated.name != name {
+                format!("(原名 {name})")
+            } else {
+                String::new()
+            }
+        ))
+    }
+
+    fn schema(&self) -> ToolSchema {
+        let mut props = indexmap::IndexMap::new();
+        props.insert(
+            "name".to_string(),
+            serde_json::json!({"type": "string", "description": "现有凭据的名称(大小写不敏感,定位用)"}),
+        );
+        props.insert(
+            "new_name".to_string(),
+            serde_json::json!({"type": "string", "description": "新名称(可选,不改就省略)"}),
+        );
+        props.insert(
+            "url".to_string(),
+            serde_json::json!({"type": "string", "description": "新网址(可选)"}),
+        );
+        props.insert(
+            "username".to_string(),
+            serde_json::json!({"type": "string", "description": "新用户名(可选)"}),
+        );
+        props.insert(
+            "password".to_string(),
+            serde_json::json!({"type": "string", "description": "新密码(可选)。省略 = 保持原密码不动"}),
+        );
+        props.insert(
+            "notes".to_string(),
+            serde_json::json!({"type": "string", "description": "新备注(可选)"}),
+        );
+        ToolSchema {
+            name: "vault_update".into(),
+            description: "按名称更新一条凭据。改密码时才传 password——省略表示保持原密码;                          改完建议 vault_get 复核。".into(),
+            parameters: JsonSchema {
+                schema_type: Some("object".into()),
+                properties: Some(props),
+                required: Some(vec!["name".into()]),
+                additional_properties: None,
+            },
+        }
+    }
+}
+
+struct VaultDeleteHandler {
+    vault: Arc<Vault>,
+}
+
+impl VaultDeleteHandler {
+    fn new(vault: Arc<Vault>) -> Self {
+        Self { vault }
+    }
+}
+
+#[async_trait::async_trait]
+impl ToolHandler for VaultDeleteHandler {
+    async fn execute(&self, params: Value) -> Result<String, ToolError> {
+        let name = params
+            .get("name")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::InvalidParams("Missing 'name' parameter".into()))?;
+        let entry = self
+            .vault
+            .get_by_name(name)
+            .map_err(|e| ToolError::ExecutionFailed(format!("查无此凭据: {e}")))?;
+        let entry_name = entry.name.clone();
+        self.vault
+            .delete(&entry.id)
+            .map_err(|e| ToolError::ExecutionFailed(format!("删除失败: {e}")))?;
+        Ok(format!("已删除「{entry_name}」"))
+    }
+
+    fn schema(&self) -> ToolSchema {
+        let mut props = indexmap::IndexMap::new();
+        props.insert(
+            "name".to_string(),
+            serde_json::json!({"type": "string", "description": "要删除的凭据名称(大小写不敏感)"}),
+        );
+        ToolSchema {
+            name: "vault_delete".into(),
+            description: "按名称删除一条凭据(不可撤销)。删除前建议先 vault_get 确认条目。".into(),
+            parameters: JsonSchema {
+                schema_type: Some("object".into()),
+                properties: Some(props),
+                required: Some(vec!["name".into()]),
+                additional_properties: None,
+            },
+        }
+    }
+}
+
 /// 注册（Safe：只读；数据面信任边界在设备配对层）。
 pub fn register(registry: &ToolRegistry, vault: Arc<Vault>) {
     let list = VaultListHandler::new(vault.clone());
@@ -325,7 +492,7 @@ pub fn register(registry: &ToolRegistry, vault: Arc<Vault>) {
         false,
     );
 
-    let imp = VaultImportHandler::new(vault);
+    let imp = VaultImportHandler::new(vault.clone());
     registry.register_with_risk(
         "vault_import",
         "vault",
@@ -336,6 +503,36 @@ pub fn register(registry: &ToolRegistry, vault: Arc<Vault>) {
         false,
         "从 CSV 导入凭据（编码自动探测,同名跳过,加密落库）",
         "📥",
+        None,
+        RiskLevel::Safe,
+        false,
+    );
+    let upd = VaultUpdateHandler::new(vault.clone());
+    registry.register_with_risk(
+        "vault_update",
+        "vault",
+        upd.schema(),
+        Arc::new(upd),
+        Arc::new(|| true),
+        Vec::new(),
+        false,
+        "按名称更新凭据（可改名称/网址/用户名/密码/备注；省略 password 表示不改密码）",
+        "✏️",
+        None,
+        RiskLevel::Safe,
+        false,
+    );
+    let del = VaultDeleteHandler::new(vault);
+    registry.register_with_risk(
+        "vault_delete",
+        "vault",
+        del.schema(),
+        Arc::new(del),
+        Arc::new(|| true),
+        Vec::new(),
+        false,
+        "按名称删除一条凭据（不可撤销；删前可先 vault_get 确认）",
+        "🗑️",
         None,
         RiskLevel::Safe,
         false,
@@ -406,4 +603,65 @@ mod tests {
             .unwrap_err();
         assert!(err.to_string().contains("找不到名称列"), "{err}");
     }
+
+    #[tokio::test]
+    async fn update_and_delete_roundtrip() {
+        let tmp = std::env::temp_dir().join(format!("vault-w-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let vault = std::sync::Arc::new(Vault::open_at(&tmp.join("v.db")).unwrap());
+        let e = vault.add("GitHub", "https://gh", "old", "oldpw", "note").unwrap();
+
+        // 改用户名,省略 password → 密码保持
+        let upd = VaultUpdateHandler::new(vault.clone());
+        let out = upd
+            .execute(serde_json::json!({"name": "GitHub", "username": "new"}))
+            .await
+            .unwrap();
+        assert!(out.contains("已更新"), "{out}");
+        let got = vault.get_by_name("GitHub").unwrap();
+        assert_eq!(got.username, "new");
+        assert_eq!(got.secret.as_deref(), Some("oldpw"), "省略 password 必须保持原密码");
+
+        // 改密码 + 改名
+        upd.execute(serde_json::json!({"name": "GitHub", "new_name": "GitHub2", "password": "np"}))
+            .await
+            .unwrap();
+        let got2 = vault.get_by_name("GitHub2").unwrap();
+        assert_eq!(got2.secret.as_deref(), Some("np"));
+        assert!(vault.get_by_name("GitHub").is_err(), "改名后旧名应查不到");
+
+        // 删除
+        let del = VaultDeleteHandler::new(vault.clone());
+        del.execute(serde_json::json!({"name": "GitHub2"})).await.unwrap();
+        assert!(vault.get_by_name("GitHub2").is_err());
+        // 重复删 → 如实报错
+        assert!(del.execute(serde_json::json!({"name": "GitHub2"})).await.is_err());
+        let _ = e;
+    }
+
+    #[tokio::test]
+    async fn import_accepts_column_aliases() {
+        let tmp = std::env::temp_dir().join(format!("vault-alias-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let vault = std::sync::Arc::new(Vault::open_at(&tmp.join("v.db")).unwrap());
+        let handler = VaultImportHandler::new(vault.clone());
+        let csv_path = tmp.join("c.csv");
+        std::fs::write(&csv_path, "site,account,secret
+示例站,zhang,s3cret
+").unwrap();
+        let out = handler
+            .execute(serde_json::json!({
+                "csv_path": csv_path.to_string_lossy(),
+                "name_col": "site", "username_col": "account", "password_col": "secret"
+            }))
+            .await
+            .unwrap();
+        let r: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(r["imported"], 1, "{out}");
+        let got = vault.get_by_name("示例站").unwrap();
+        assert_eq!(got.secret.as_deref(), Some("s3cret"));
+    }
+
 }
