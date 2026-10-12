@@ -179,9 +179,9 @@
   contain-intrinsic-size: auto 150px;
 }
 .msg-bubble-user {
-  /* 2026-09-29：去掉描边。抄 cc-haha `UserMessage.tsx` —— 用户气泡靠
-     「收拢 + 着色」辨识，不是靠框。留了边框，纸面就多出一层线。 */
-  background: var(--color-bg-tertiary);
+  /* 用户气泡靠「收拢 + 着色」辨识，不靠边框或灰块。accent 微染底让气泡
+     与主题强调色呼应：浅色是极淡的松墨绿灰，深色自动适配，不再突兀。 */
+  background: color-mix(in srgb, var(--color-accent) 8%, var(--color-bg-card));
   border: 0;
   border-radius: var(--radius-2xl) var(--radius-2xl) var(--radius-sm) var(--radius-2xl);
   padding: 10px 14px;
@@ -192,7 +192,7 @@
   transition: background var(--duration-fast) ease, border-color var(--duration-fast) ease;
 }
 .msg-bubble-user:hover {
-  background: var(--color-bg-hover);
+  background: color-mix(in srgb, var(--color-accent) 12%, var(--color-bg-card));
 }
 .msg-user-column {
   display: flex;
@@ -748,17 +748,24 @@
 }
 
 /* ── Stream error banner ─────────────────────────────────────────
-   Borderless alert above the composer. Base rule ships a flat
-   background + soft shadow that reads cleanly in *any* theme;
-   the dark-mode-only override below layers the glassy radial
-   wash + tint glow + backdrop blur on top, so light themes don't
-   get a flat white card pinned to a flat white background. The
-/* Dark theme upgrade: glassy tinted wash + halo + soft glow */
+   静默横幅：极淡 warning 染底 + 1px 混色细边框承担语义，无阴影无
+   光晕无动画。装饰性元素必须有信息或功能理由，否则删掉。 */
+.stream-error-card {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+  padding: 10px 12px;
+  border-radius: var(--radius-lg, 10px);
+  background: color-mix(in srgb, var(--color-warning) 4%, var(--color-bg-card));
+  border: 1px solid color-mix(in srgb, var(--color-warning) 14%, transparent);
+}
 .stream-error-card--amber-strong {
   --sec-tint:        color-mix(in srgb, var(--color-warning) 9%, transparent);
   --sec-tint-strong: color-mix(in srgb, var(--color-warning) 16%, transparent);
   --sec-halo:        color-mix(in srgb, var(--color-warning) 18%, transparent);
   --sec-glow:        color-mix(in srgb, var(--color-warning) 26%, transparent);
+  background: color-mix(in srgb, var(--color-warning) 7%, var(--color-bg-card));
+  border-color: color-mix(in srgb, var(--color-warning) 20%, transparent);
 }
 .stream-error-card--amber-soft {
   --sec-tint:        color-mix(in srgb, var(--color-warning) 4%, transparent);
@@ -785,22 +792,7 @@
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
-  border-radius: 999px;
   color: var(--color-warning);
-  background:
-    radial-gradient(circle at 30% 25%,
-      color-mix(in srgb, var(--color-warning) 30%, transparent),
-      color-mix(in srgb, var(--color-warning) 14%, transparent) 70%);
-  box-shadow:
-    0 0 0 4px color-mix(in srgb, var(--color-warning) 8%, transparent),
-    inset 0 0 0 1px color-mix(in srgb, var(--color-warning) 18%, transparent);
-  animation: sec-halo-pulse 2.6s ease-in-out infinite;
-}
-@keyframes sec-halo-pulse {
-  0%, 100% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-warning) 8%, transparent), inset 0 0 0 1px color-mix(in srgb, var(--color-warning) 18%, transparent); }
-  50%      { box-shadow: 0 0 0 6px color-mix(in srgb, var(--color-warning) 12%, transparent), inset 0 0 0 1px color-mix(in srgb, var(--color-warning) 22%, transparent); }
 }
 .stream-error-card__title {
   flex: 1;
@@ -827,14 +819,13 @@
   background: transparent;
   color: var(--color-text-faint);
   cursor: pointer;
-  transition: color var(--duration-fast) ease, background var(--duration-fast) ease, transform var(--duration-fast) ease;
+  transition: color var(--duration-fast) ease, background var(--duration-fast) ease;
 }
 .stream-error-card__dismiss:hover,
 .stream-error-card__dismiss:focus-visible {
   color: var(--color-text-primary);
   background: color-mix(in srgb, var(--color-warning) 12%, transparent);
   outline: none;
-  transform: scale(1.05);
 }
 .stream-error-card__message {
   min-width: 0;
@@ -919,21 +910,17 @@
   gap: 4px;
   padding: 4px 10px;
   border: 0;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--color-warning) 12%, transparent);
+  border-radius: var(--radius-sm, 4px);
+  background: color-mix(in srgb, var(--color-warning) 10%, transparent);
   color: var(--color-text-primary);
   font-size: var(--text-tiny, 11px);
   font-weight: 500;
   line-height: 1.3;
   cursor: pointer;
-  transition: background var(--duration-fast) ease, transform var(--duration-fast) ease;
+  transition: background var(--duration-fast) ease;
 }
 .stream-error-card__btn:hover {
-  background: color-mix(in srgb, var(--color-warning) 20%, transparent);
-  transform: translateY(-0.5px);
-}
-.stream-error-card__btn:active {
-  transform: translateY(0);
+  background: color-mix(in srgb, var(--color-warning) 16%, transparent);
 }
 .stream-error-card__btn:focus-visible {
   outline: none;
