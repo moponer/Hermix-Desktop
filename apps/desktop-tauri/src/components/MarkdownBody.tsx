@@ -62,7 +62,12 @@ function guessInlineLang(code: string): string | null {
 // 后者是 LLM 正文里最常见的写法 —— 需求文档里写"改 App.tsx 的登录逻辑"
 // 不带任何目录，原正则要求至少一个 `[\\/]`，这类 token 全部漏掉，
 // 结果就是文件图标和可点击预览都没了。
-const PATH_RE = /(?<=^|[\s\p{P}\p{Z}])(?:[A-Za-z]:)?(?:[\\/][\p{L}\p{N}_\-~.\s()（）【】\[\]]+){1,}\.[\p{L}\p{N}]{1,5}(?=$|[\s\p{P}\p{Z}])|(?<=^|[\s\p{P}\p{Z}])[\p{L}\p{N}_\-~]+\.[\p{L}\p{N}]{1,5}(?=$|[\s\p{P}\p{Z}])/giu;
+//
+// `%VAR%` 前缀（`%TEMP%\x\y.csv`）：Windows 环境变量路径。`%` 不在下面的
+// 路径字符类里，但它是 `\p{P}`，能通过 lookbehind —— 如果不显式匹配，
+// match 会从 `\x\y.csv` 开始，环境变量前缀被整段切掉，点击探测永远失败。
+// 所以在路径分支最前面加一个可选的 `(%VAR%)+` 段。
+const PATH_RE = /(?<=^|[\s\p{P}\p{Z}])(?:%[\p{L}\p{N}_]+%(?:[\\/][\p{L}\p{N}_\-~.\s()（）【】\[\]]+)*)?(?:[A-Za-z]:)?(?:[\\/][\p{L}\p{N}_\-~.\s()（）【】\[\]]+){1,}\.[\p{L}\p{N}]{1,5}(?=$|[\s\p{P}\p{Z}])|(?<=^|[\s\p{P}\p{Z}])[\p{L}\p{N}_\-~]+\.[\p{L}\p{N}]{1,5}(?=$|[\s\p{P}\p{Z}])/giu;
 const ABS_PATH_RE = /^(?:[A-Za-z]:[\\/])|(?:[\/])/;
 
 function isAbsolutePath(p: string): boolean {
@@ -76,6 +81,9 @@ interface PathLinkProps {
 
 function PathLink({ path, onClick }: PathLinkProps) {
   const abs = isAbsolutePath(path);
+  // %VAR% 开头（%TEMP%\x\y.csv）：后端会把环境变量展开后再探盘，语义上
+  // 和盘符绝对路径一样"一定能定位"，不该染成相对路径的警告琥珀色。
+  const env = /^%[\p{L}\p{N}_]+%/u.test(path);
   // 只给**带扩展名**的路径配图标：目录路径（`crates/hermix-agent`）没有
   // 文件类型，FileTypeIcon 会退化成灰色 "?" 问号，反而是噪声。
   const name = path.split(/[\\/]/).pop() ?? path;
@@ -84,7 +92,7 @@ function PathLink({ path, onClick }: PathLinkProps) {
   // 染成警告琥珀色是在说"这个路径可能解析不到"，但它本来就是正文里
   // 的中性引用（"改 App.tsx 的登录逻辑"），不是一条待解析的路径。
   const bare = !/[\\/]/.test(path);
-  const tone = abs ? "abs" : bare ? "bare" : "rel";
+  const tone = abs || env ? "abs" : bare ? "bare" : "rel";
   return (
     <button
       type="button"
@@ -92,12 +100,14 @@ function PathLink({ path, onClick }: PathLinkProps) {
         e.stopPropagation();
         onClick(path, e);
       }}
-      title={abs ? `打开 ${path}` : bare ? name : `相对路径：将以工作区根为基准解析 ${path}`}
+      title={env ? `环境变量路径：${path}` : abs ? `打开 ${path}` : bare ? name : `相对路径：将以工作区根为基准解析 ${path}`}
       className={`md-path-link md-path-link--${tone}`}
     >
-      {/* 11px 而非 13px：这个尺寸恰好等于 14px 正文的 cap 高度，图标下沿
-          坐在基线上、顶不越 cap 线。13px 会高出 2.8px 显得"浮在上面"。
-          对齐的实测数据见 components-prose.css 的 .md-path-link__icon。 */}
+      {/* 13px：正文是中文时，汉字字面占满整个 em box（约 14px 高），
+          不是拉丁文的小 cap 高度。CSS 里那套"11px = cap 高度"的实测是按
+          拉丁排版量的，对中文正文图标显得过小。13px + 图标自身
+          translateY(2px)（见 components-prose.css 的 .md-path-link__icon）
+          让图标光学居中于汉字行。 */}
       {showIcon && <FileTypeIcon name={name} size={13} className="md-path-link__icon" />}
       {/* 只显示文件名：正文里写的是一整串 `<repo-parent>\...\db1.py`，铺满整行
           把句子撕成两段，读者真正要找的是 `db1.py`。目录信息不丢 —— title

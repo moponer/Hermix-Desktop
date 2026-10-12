@@ -11,8 +11,9 @@ import { linkifyChildren } from "./MarkdownBody";
  * 会把句子撕成两段，读者真正要找的是 `db1.py` 本身。目录信息不能丢：
  * title 属性仍是完整路径，悬停可见、点击也仍按完整路径解析。
  *
- * 图标尺寸锁 11px：等于 14px 正文的 cap 高度，下沿坐在基线上、顶不越 cap
- * 线（13px 会高出 2.8px）。实测数据见 components-prose.css。
+ * 图标尺寸锁 13px：正文是中文时汉字字面占满整个 em box（≈14px），不是
+ * 拉丁文的 cap 高度 —— 早年"11px = cap 高度"的口径对中文正文图标过小。
+ * 对齐说明见 components-prose.css 的 .md-path-link__icon。
  *
  * 走 node 环境而非 jsdom：satteri 是 NAPI 模块，jsdom 下会撞 DataView
  * 视图转换问题（见 MarkdownBody.test.tsx 顶部说明）。本用例只调
@@ -35,10 +36,19 @@ describe("行内路径链接（PathLink）", () => {
     expect(html).toContain('title="打开 F:\\spiker\\hermix\\db1.py"');
   });
 
-  it("图标 11px 且不越出 cap 线", () => {
+  it("图标 13px（CJK 正文字面 ≈ em box，11px 过小）", () => {
     const html = render("改完了 F:\\spiker\\hermix\\db1.py 这个文件");
-    expect(html).toContain('width="11"');
-    expect(html).not.toContain('width="13"');
+    expect(html).toContain('width="13"');
+    expect(html).not.toContain('width="11"');
+  });
+
+  it("%VAR% 环境变量路径完整保留前缀，不再被 lookbehind 切断", () => {
+    const html = render("输出到 %TEMP%\\hermix-scratch\\creds_utf8.csv（2606 字节）");
+    expect(html).toContain("%TEMP%\\hermix-scratch\\creds_utf8.csv");
+    expect(html).toContain(">creds_utf8.csv<");
+    // 语义上等价绝对路径（后端展开后可定位），不染相对路径警告色
+    expect(html).toContain("md-path-link--abs");
+    expect(html).not.toContain("md-path-link--rel");
   });
 
   it("正斜杠路径同样只取文件名", () => {

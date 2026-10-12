@@ -568,23 +568,20 @@
   color: var(--color-text-primary);
   text-decoration-color: var(--color-accent);
 }
-/* 文件类型图标。图标尺寸（MarkdownBody 里 size={11}）才是对齐的关键，
-   这里不要加任何位移补偿。
-
-   实测（14px 正文 / line-height 1.75，探针量的是按钮**外面**正文基线）：
-     13px + top:2px  → 顶 -11.0 底 +2.0  光学偏差 +0.6px，但下沿压进下伸部
-                       2px，正好压在 `db1.py` 那个 y 的尾巴上
-     12px            → 顶 -12.0 底  0.0  光学偏差 -0.9px（高过 cap 顶 1.8px）
-     11px            → 顶 -11.0 底  0.0  光学偏差 -0.4px，且不碰下伸部 ← 采用
-   11px 正好等于 cap 高度，是这个字号下唯一不越界的尺寸。
+/* 文件类型图标。正文几乎全是中文时对齐基准变了：汉字字面占满整个
+   em box（14px 字号 ≈ 14px 字面），不是拉丁文的 cap 高度 —— CSS 里
+   早年那套"11px = cap 高度"的实测按拉丁排版量的，对中文正文图标
+   显得过小且偏低。现取 13px（MarkdownBody 里 size={13}）+ 图标自身
+   translateY(2px) 做光学居中：图标垂直居中于汉字行，不再浮在字顶
+   也不压下伸部。
 
    align-items 必须留在 baseline：按钮是 inline-flex，它的基线取自第一个
-   flex 项（图标）的 border box 下沿；只有 baseline 对齐才能让这个下沿和
-   文字基线重合。改成 center 会把整个链接往下推约 1.75px —— 图标看着
-   "居中了"，整块链接却脱离了正文基线。 */
+   flex 项（图标）的 border box 下沿；改成 center 会把整个链接往下推约
+   1.75px，整块链接脱离正文基线。位移补偿放在图标自身而不是改 align-items。 */
 .md-path-link__icon {
   flex-shrink: 0;
   border-radius: 2px;
+  transform: translateY(2px);
 }
 /* Relative paths keep the warning amber so the user can tell at a
    glance "this won't resolve unless I'm in the right workspace". */

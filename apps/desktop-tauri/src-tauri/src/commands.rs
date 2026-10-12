@@ -523,6 +523,40 @@ pub async fn backend_ready() -> bool {
     }
 }
 
+/// Expand Windows environment-variable segments (`%TEMP%\x\y.csv`,
+/// `%USERPROFILE%\…`) before path anchoring. The LLM legitimately writes
+/// paths in this form (it's how the tool output echoes them); without
+/// expansion the `%` survives into PathBuf, the file is never found, and
+/// every click on the chip reports "文件不存在或不在工作区内". Unknown or
+/// unset variables are left verbatim so the caller's error still names
+/// what the LLM actually wrote.
+fn expand_env_vars(path: &str) -> String {
+    if !path.contains('%') {
+        return path.to_string();
+    }
+    let mut out = String::with_capacity(path.len());
+    let mut rest = path;
+    while let Some(start) = rest.find('%') {
+        let after = &rest[start + 1..];
+        match after.find('%') {
+            Some(end) if end > 0 => {
+                let name = &after[..end];
+                match std::env::var(name) {
+                    Ok(val) => out.push_str(&val),
+                    Err(_) => out.push_str(&rest[start..start + end + 2]),
+                }
+                rest = &after[end + 1..];
+            }
+            _ => {
+                out.push_str(rest);
+                rest = "";
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Read a file for the "产物" (artifact) preview pane in the right sidebar or
 /// the in-chat inline preview popover.
 ///
@@ -550,7 +584,7 @@ pub async fn read_artifact_file(
 ) -> Result<ArtifactContent, String> {
     const MAX_BYTES: u64 = 2 * 1024 * 1024; // 2 MiB
 
-    let raw = PathBuf::from(&path);
+    let raw = PathBuf::from(expand_env_vars(&path));
     if raw.as_os_str().is_empty() {
         return Err("empty path".to_string());
     }
@@ -644,7 +678,7 @@ pub async fn read_artifact_file_bytes(
 ) -> Result<ArtifactBytesContent, String> {
     const MAX_BYTES: u64 = 10 * 1024 * 1024; // 10 MiB
 
-    let raw = PathBuf::from(&path);
+    let raw = PathBuf::from(expand_env_vars(&path));
     if raw.as_os_str().is_empty() {
         return Err("empty path".to_string());
     }
@@ -1038,7 +1072,7 @@ pub async fn artifact_path_exists(
     path: String,
     workspace_root: Option<String>,
 ) -> bool {
-    let raw = PathBuf::from(&path);
+    let raw = PathBuf::from(expand_env_vars(&path));
     if raw.as_os_str().is_empty() {
         return false;
     }
