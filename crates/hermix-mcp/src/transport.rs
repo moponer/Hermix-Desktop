@@ -2,7 +2,6 @@
 //!
 //! Provides transport abstraction for MCP communication:
 //! - **StdioTransport**: Communicates via stdin/stdout with a child process (JSON-RPC)
-//! - **HttpTransport**: Communicates via HTTP/SSE with a remote MCP server
 //!
 //! The transport layer handles:
 //! - Message framing with Content-Length header + JSON body
@@ -419,146 +418,6 @@ impl McpTransport for ServerStdioTransport {
 }
 
 // ---------------------------------------------------------------------------
-// HttpTransport
-// ---------------------------------------------------------------------------
-
-/// Transport that communicates via HTTP with a remote MCP server.
-/// Uses HTTP POST for sending JSON-RPC messages and receives responses
-/// directly. For servers supporting SSE (Server-Sent Events), this
-/// transport can also handle streaming responses.
-pub struct HttpTransport {
-    /// The base URL of the MCP server.
-    url: String,
-    /// Optional bearer token for authentication.
-    auth_token: Option<String>,
-    /// HTTP client.
-    client: reqwest::Client,
-    /// Whether the transport has been started.
-    started: bool,
-    /// Pending response from the server.
-    pending_response: Option<Value>,
-}
-
-impl HttpTransport {
-    /// Create a new HTTP transport for the given URL.
-    pub fn new(url: &str, auth_token: Option<String>) -> Self {
-        Self {
-            url: url.to_string(),
-            auth_token,
-            client: reqwest::Client::new(),
-            started: false,
-            pending_response: None,
-        }
-    }
-
-    /// Build the full URL for an MCP endpoint.
-    fn endpoint_url(&self, path: &str) -> String {
-        format!(
-            "{}/{}",
-            self.url.trim_end_matches('/'),
-            path.trim_start_matches('/')
-        )
-    }
-
-    /// Build a request with optional authentication.
-    fn build_request(&self, method: reqwest::Method, url: &str) -> reqwest::RequestBuilder {
-        let mut builder = self.client.request(method, url);
-        builder = builder.header("Content-Type", "application/json");
-        if let Some(ref token) = self.auth_token {
-            builder = builder.header("Authorization", format!("Bearer {}", token));
-        }
-        builder
-    }
-}
-
-#[async_trait]
-impl McpTransport for HttpTransport {
-    async fn start(&mut self) -> Result<(), McpError> {
-        // For HTTP transport, "starting" means verifying the server is reachable
-        if self.started {
-            return Err(McpError::ConnectionError(
-                "Transport already started".to_string(),
-            ));
-        }
-
-        // Verify the server is reachable
-        let url = self.endpoint_url("/health");
-        match self.client.get(&url).send().await {
-            Ok(_) => {
-                info!("MCP HTTP transport connected to: {}", self.url);
-                self.started = true;
-                Ok(())
-            }
-            Err(_) => {
-                // Health endpoint may not exist; try the base URL
-                let base_url = &self.url;
-                match self.client.get(base_url).send().await {
-                    Ok(_) => {
-                        info!("MCP HTTP transport connected to: {}", self.url);
-                        self.started = true;
-                        Ok(())
-                    }
-                    Err(e) => Err(McpError::ConnectionError(format!(
-                        "Failed to connect to MCP server at {}: {}",
-                        self.url, e
-                    ))),
-                }
-            }
-        }
-    }
-
-    async fn send(&mut self, message: Value) -> Result<(), McpError> {
-        let url = self.endpoint_url("/message");
-        let builder = self.build_request(reqwest::Method::POST, &url);
-        let response = builder
-            .json(&message)
-            .send()
-            .await
-            .map_err(|e| McpError::ConnectionError(format!("HTTP send failed: {}", e)))?;
-
-        let status = response.status();
-        if !status.is_success() {
-            let body = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "unknown error".to_string());
-            return Err(classify_http_status_error(status, &body));
-        }
-
-        // Store the response for receive()
-        let body = response
-            .text()
-            .await
-            .map_err(|e| McpError::ConnectionError(format!("Failed to read response: {}", e)))?;
-
-        let value: Value = serde_json::from_str(&body).map_err(|e| McpError::Protocol {
-            code: -32700,
-            message: format!("Invalid JSON response: {}", e),
-        })?;
-
-        self.pending_response = Some(value);
-        Ok(())
-    }
-
-    async fn receive(&mut self) -> Result<Value, McpError> {
-        // For HTTP transport, the response is already stored from send()
-        match self.pending_response.take() {
-            Some(value) => Ok(value),
-            None => Err(McpError::ConnectionError(
-                "No pending response. Call send() first.".to_string(),
-            )),
-        }
-    }
-
-    async fn close(&mut self) -> Result<(), McpError> {
-        info!("Closing MCP HTTP transport");
-        self.started = false;
-        self.pending_response = None;
-        Ok(())
-    }
-}
-
-// ---------------------------------------------------------------------------
 // StreamableHttpTransport
 // ---------------------------------------------------------------------------
 
@@ -731,36 +590,6 @@ mod tests {
         assert_eq!(transport.command, "echo");
         assert!(transport.args.is_empty());
         assert!(!transport.started);
-    }
-
-    #[test]
-    fn test_http_transport_new() {
-        let transport = HttpTransport::new("http://localhost:8080/mcp", None);
-        assert_eq!(transport.url, "http://localhost:8080/mcp");
-        assert!(transport.auth_token.is_none());
-        assert!(!transport.started);
-    }
-
-    #[test]
-    fn test_http_transport_with_auth() {
-        let transport = HttpTransport::new(
-            "http://localhost:8080/mcp",
-            Some("secret-token".to_string()),
-        );
-        assert_eq!(transport.auth_token, Some("secret-token".to_string()));
-    }
-
-    #[test]
-    fn test_endpoint_url() {
-        let transport = HttpTransport::new("http://localhost:8080/mcp/", None);
-        assert_eq!(
-            transport.endpoint_url("/message"),
-            "http://localhost:8080/mcp/message"
-        );
-        assert_eq!(
-            transport.endpoint_url("message"),
-            "http://localhost:8080/mcp/message"
-        );
     }
 
     #[test]

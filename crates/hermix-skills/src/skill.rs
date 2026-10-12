@@ -9,7 +9,6 @@ use hermix_core::types::{Skill, SkillMeta};
 use tracing::{debug, info, instrument};
 
 use crate::guard::SkillGuard;
-use crate::hub::SkillsHubClient;
 use crate::store::SkillStore;
 
 // ---------------------------------------------------------------------------
@@ -52,11 +51,9 @@ impl From<std::io::Error> for SkillError {
 // ---------------------------------------------------------------------------
 
 /// Central manager for skill CRUD operations.
-/// Delegates storage to a [`SkillStore`] implementation and optionally
-/// synchronises with a remote [`SkillsHubClient`].
+/// Delegates storage to a [`SkillStore`] implementation.
 pub struct SkillManager {
     store: Arc<dyn SkillStore>,
-    hub_client: Option<SkillsHubClient>,
     guard: SkillGuard,
 }
 
@@ -95,16 +92,6 @@ impl SkillManager {
     pub fn new(store: Arc<dyn SkillStore>) -> Self {
         Self {
             store,
-            hub_client: None,
-            guard: SkillGuard::default(),
-        }
-    }
-
-    /// Create a `SkillManager` that also connects to a Skills Hub.
-    pub fn with_hub(store: Arc<dyn SkillStore>, hub_client: SkillsHubClient) -> Self {
-        Self {
-            store,
-            hub_client: Some(hub_client),
             guard: SkillGuard::default(),
         }
     }
@@ -155,28 +142,6 @@ impl SkillManager {
         self.update_skill(name, &current.content).await
     }
 
-    /// Sync local skills to hub and return synced count.
-    pub async fn sync_with_hub(&self) -> Result<usize, AgentError> {
-        let Some(hub) = self.hub_client.as_ref() else {
-            return Ok(0);
-        };
-        let list = self.store.list().await.map_err(AgentError::from)?;
-        let mut synced = 0usize;
-        for meta in list {
-            if let Some(skill) = self
-                .store
-                .load(&meta.name)
-                .await
-                .map_err(AgentError::from)?
-            {
-                if hub.upload_skill(&skill).await.is_ok() {
-                    synced += 1;
-                }
-            }
-        }
-        Ok(synced)
-    }
-
     /// Install baseline built-in skills into local store if absent.
     pub async fn install_builtin_skills(&self) -> Result<usize, AgentError> {
         let mut installed = 0usize;
@@ -221,14 +186,6 @@ impl SkillProvider for SkillManager {
             AgentError::from(e)
         })?;
 
-        // Optionally upload to hub.
-        if let Some(ref hub) = self.hub_client {
-            match hub.upload_skill(&skill).await {
-                Ok(id) => debug!("Uploaded skill {} to hub with id {}", name, id),
-                Err(e) => tracing::warn!("Failed to upload skill {} to hub: {}", name, e),
-            }
-        }
-
         Ok(skill)
     }
 
@@ -265,14 +222,6 @@ impl SkillProvider for SkillManager {
             tracing::error!("Failed to update skill {}: {}", name, e);
             AgentError::from(e)
         })?;
-
-        // Optionally sync to hub.
-        if let Some(ref hub) = self.hub_client {
-            match hub.upload_skill(&skill).await {
-                Ok(id) => debug!("Synced updated skill {} to hub: {}", name, id),
-                Err(e) => tracing::warn!("Failed to sync updated skill {} to hub: {}", name, e),
-            }
-        }
 
         Ok(skill)
     }

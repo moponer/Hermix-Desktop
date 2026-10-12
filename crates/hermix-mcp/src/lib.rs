@@ -11,7 +11,6 @@
 
 pub mod auth;
 pub mod client;
-pub mod serve;
 pub mod server;
 pub mod transport;
 
@@ -88,14 +87,10 @@ impl From<serde_json::Error> for McpError {
 }
 
 // Re-export primary types
-pub use auth::{BearerTokenAuth, McpAuthProvider, OAuthConfig};
+pub use auth::{BearerTokenAuth, McpAuthProvider};
 pub use client::{
     ArcMcpManager, McpClient, McpManager, McpProbeResult, McpServerConfig, McpServerStatus,
     PromptArgument, PromptInfo, PromptMessage, PromptResult, ResourceInfo, SamplingConfig,
-};
-pub use serve::{
-    ApprovalStore as McpApprovalStore, BridgeEvent, EventBridge, HermesMcpServe,
-    InMemorySessionStore, PendingApproval, SessionEntry, SessionMessage, SessionStore,
 };
 pub use server::McpServer;
 pub use transport::{
