@@ -12,24 +12,7 @@ import { useStreamChat } from "./hooks/useStreamChat";
 import { AppProviders } from "./app/AppProviders";
 import { renderRoutes, type RouteContext } from "./app/routes";
 import { type ConfigCategory } from "./components/SystemConfigPanel";
-import { useWallpaper } from "./hooks/useWallpaper";
 
-/** 壁纸宿主：应用启动时装载壁纸状态，并在有壁纸时渲染整窗垫底层。
- *
- * 层用 `position:fixed; z-index:-1` 垫在所有内容之下（面板靠各自的
- * 半透明 scrim 透出它，见 components-layout.css 壁纸段）。不用 CSS 变量
- * 承载大图：数 MB 的 data URL 会被 Chromium 静默丢弃（详见 useWallpaper）。 */
-function WallpaperHost() {
-  const { url } = useWallpaper();
-  if (!url) return null;
-  return (
-    <div
-      className="wallpaper-layer"
-      style={{ backgroundImage: `url("${url}")` }}
-      aria-hidden="true"
-    />
-  );
-}
 import { useAppBootstrap } from "./app/useAppBootstrap";
 import {
   readDraftWorkspace,
@@ -1015,8 +998,16 @@ setPage("chat");
     if (session.messages.length > 0) return;
 
     let cancelled = false;
-    api.getSessionMessages(activeSessionId, { limit: api.INITIAL_MESSAGE_WINDOW })
-      .then(({ messages, contextUsage: restoredCtx, hasMore }) => {
+    // 等后端 ready 再拉消息：启动竞态里本 effect 早于 Rust init_global，
+    // 直接 getSessionMessages 会吃 503 "backend offline" 刷 console 且不重试。
+    void (async () => {
+      await api.waitForBackendReady();
+      if (cancelled) return;
+      try {
+        const { messages, contextUsage: restoredCtx, hasMore } = await api.getSessionMessages(
+          activeSessionId,
+          { limit: api.INITIAL_MESSAGE_WINDOW },
+        );
         if (cancelled) return;
         clearLoadError(activeSessionId);
         if (restoredCtx) setContextUsage(restoredCtx);
@@ -1024,13 +1015,13 @@ setPage("chat");
         setSessions((prev) => prev.map((s) =>
           s.id === activeSessionId ? { ...s, messages } : s
         ));
-      })
-      .catch((e) => {
+      } catch (e) {
         if (cancelled) return;
         const msg = e instanceof Error ? e.message : String(e);
         console.error(`[chat] getSessionMessages(${activeSessionId}) failed:`, msg);
         setLoadError(activeSessionId, msg);
-      });
+      }
+    })();
     return () => { cancelled = true; };
   }, [activeSessionId, sessions.length, setActiveSessionId, setLoadError, clearLoadError]);
 
@@ -3631,10 +3622,6 @@ return {
 
   return (
     <AppProviders value={streamChatApi}>
-    {/* L3.6 壁纸：应用根挂一次即可（模块级共享 store，设置页再挂也是
-        同一份状态）。有壁纸时渲染 fixed 垫底层，data 属性只作面板 scrim
-        规则的开关，消费在 components-layout.css 的 [data-wallpaper="on"]。 */}
-    <WallpaperHost />
     <div
       className="app-shell"
       /* 三栏布局的列宽变量与开合状态挂在**壳**上而不是 .app-body：标题栏要

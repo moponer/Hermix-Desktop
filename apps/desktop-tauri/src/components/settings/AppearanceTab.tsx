@@ -1,19 +1,15 @@
-import { useState } from "react";
-import { RotateCcw, Sun, Moon, Monitor, ImagePlus, Trash2, Loader2, Check } from "lucide-react";
+import { RotateCcw, Sun, Moon, Monitor, Check } from "lucide-react";
 
 import { useTheme, SYSTEM_THEME } from "../../hooks/useTheme";
-import { useWallpaper } from "../../hooks/useWallpaper";
 import { THEMES } from "../../styles/themes/registry";
 import { ACCENT_PALETTE, accentLabel } from "../../styles/themes/accentPalette";
 import { SettingsGroup, SettingsRow, Switch } from "../ui";
 import { ChoiceCard } from "./ChoiceCard";
 import { cx } from "../../lib/cx";
 import { ThemeToggle } from "../ThemeToggle";
-import { open } from "@tauri-apps/plugin-dialog";
-import { toastError, toastSuccess } from "../../hooks/useToast";
 
 /**
- * 外观页：明暗三选 + 强调色调色板 + 壁纸。
+ * 外观页：明暗三选 + 强调色调色板。
  *
  * 对比度滑杆（L3.5 后半）刻意不在这里：`--color-text-*` 在 tokens.css 的
  * `@theme` 里，改名会断掉 Tailwind 工具类生成；不改名就只有"在根元素挂
@@ -58,8 +54,6 @@ export function AppearanceTab() {
           />
         </div>
       </section>
-
-      <WallpaperGroup />
 
       {/* 强调色 */}
       <SettingsGroup
@@ -135,90 +129,5 @@ export function AppearanceTab() {
         />
       </SettingsGroup>
     </div>
-  );
-}
-
-/* ── L3.6 壁纸 ────────────────────────────────────────────────────
-   缩略图直接用 `useWallpaper().url`（就是铺在聊天区那张图的 asset URL），
-   不另存一份预览：两处各存一份就一定会漂移——用户换图后设置页还显示旧图，
-   是这类"选图"功能最常见的投诉。 */
-function WallpaperGroup() {
-  const { info, url, loading, setFrom, clear } = useWallpaper();
-  const [busy, setBusy] = useState(false);
-
-  const pick = async () => {
-    setBusy(true);
-    try {
-      const picked = await open({
-        multiple: false,
-        directory: false,
-        title: "选择壁纸",
-        filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "webp", "gif", "bmp", "avif"] }],
-      });
-      const path = typeof picked === "string" ? picked : null;
-      if (!path) return;
-      await setFrom(path);
-      toastSuccess("壁纸已更新");
-    } catch (e) {
-      toastError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const doClear = async () => {
-    setBusy(true);
-    try {
-      await clear();
-      toastSuccess("壁纸已清除");
-    } catch (e) {
-      toastError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <SettingsGroup
-      title="壁纸"
-      description="平铺整个窗口背景（标题栏、左栏、对话区、右栏都会透出磨砂质感）。原图会复制进数据目录，删掉原图不影响显示。"
-    >
-      <SettingsRow
-        title="窗口壁纸"
-        description={
-          loading
-            ? "读取中…"
-            : info
-              ? <span className="break-all">{info.source || "（来源未知）"}</span>
-              : "未设置壁纸。"
-        }
-      >
-        {url && (
-          <div
-            className="mt-2 h-24 w-full overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border-secondary)]"
-            style={{ backgroundImage: `url("${url}")`, backgroundSize: "cover", backgroundPosition: "center" }}
-          />
-        )}
-        <div className="mt-2 flex items-center gap-2">
-          <button
-            onClick={() => void pick()}
-            disabled={busy || loading}
-            className="flex h-7 items-center gap-1.5 rounded-lg border border-[var(--color-border-secondary)] px-2 text-[length:var(--text-meta)] text-[var(--color-text-secondary)] transition-colors hover:border-[var(--color-border-primary)] hover:text-[var(--color-text-primary)] disabled:opacity-40"
-          >
-            {busy ? <Loader2 className="icon-sm animate-spin" /> : <ImagePlus className="icon-sm" />}
-            {info ? "更换壁纸" : "添加壁纸"}
-          </button>
-          {info && (
-            <button
-              onClick={() => void doClear()}
-              disabled={busy}
-              className="flex h-7 items-center gap-1.5 rounded-lg border border-[var(--color-border-secondary)] px-2 text-[length:var(--text-meta)] text-[var(--color-text-secondary)] transition-colors hover:border-[var(--color-border-primary)] hover:text-[var(--color-text-primary)] disabled:opacity-40"
-            >
-              <Trash2 className="icon-sm" /> 移除
-            </button>
-          )}
-        </div>
-      </SettingsRow>
-    </SettingsGroup>
   );
 }

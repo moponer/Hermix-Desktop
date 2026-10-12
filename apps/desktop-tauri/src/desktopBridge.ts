@@ -310,29 +310,6 @@ export function syncTray(enabled: boolean): Promise<void> {
   return invoke("sync_tray", { enabled });
 }
 
-export interface WallpaperInfo {
-  /** 数据目录内的文件名（固定 `wallpaper`），不是原始路径。 */
-  file: string;
-  /** 用户当初挑的原图路径，仅供展示。 */
-  source: string;
-  /** 内联 base64 data URL（含 MIME 前缀）。前端直接 `url(...)` 渲染，
-   * 不依赖 Tauri asset 协议作用域——Windows 上靠 convertFileSrc 解析
-   * `$HOME` 失配，会导致壁纸整张变空白。 */
-  data_url: string;
-}
-
-export function getWallpaper(): Promise<WallpaperInfo | null> {
-  return invoke("get_wallpaper");
-}
-
-export function setWallpaper(sourcePath: string): Promise<WallpaperInfo> {
-  return invoke("set_wallpaper", { sourcePath });
-}
-
-export function clearWallpaper(): Promise<void> {
-  return invoke("clear_wallpaper");
-}
-
 // Aliases for SettingsView compatibility
 // `openSettingsDirectory` is the legacy name used by SettingsView.
 // It's a deprecated alias for `openDataDir`; callers should migrate

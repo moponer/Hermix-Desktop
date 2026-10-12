@@ -698,9 +698,6 @@ pub fn run() {
             system_settings::send_notification,
             system_settings::get_tray_enabled,
             system_settings::sync_tray,
-            system_settings::get_wallpaper,
-            system_settings::set_wallpaper,
-            system_settings::clear_wallpaper,
             keep_awake::set_keep_awake,
             commands::get_settings_dir,
             commands::get_data_dir,
@@ -804,3 +801,4 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running hermix-desktop");
 }
+
