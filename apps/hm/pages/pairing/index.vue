@@ -102,8 +102,10 @@ function reset() {
           <view class="corner tr" />
           <view class="corner bl" />
           <view class="corner br" />
+          <!-- 中央示意图标：给「哪里能点」一个视觉落点，纯 CSS 不引资源 -->
+          <view class="scan-glyph"><view class="scan-glyph-line" /></view>
         </view>
-        <text class="scan-t">扫码连接</text>
+        <text class="scan-t">点击中间开始扫码连接</text>
       </view>
       <text class="card-hint">
         手机和电脑不必在同一网络：配对与连接都经中转（relay），手机能上网就行。
@@ -120,10 +122,11 @@ function reset() {
           <text class="fp-label">这台电脑</text>
           <text class="fp-change" @tap="reset">换一个</text>
         </view>
-        <text class="fp-host">{{ target.relayBase.replace(/^https?:\/\//, '') }}</text>
-        <text class="fp-hex">配对码 {{ target.code }}</text>
+        <!-- 配对码是用户唯一要辨认的东西：大号居中，网页地址不参与辨认、不展示 -->
+        <text class="code-caption">配对码</text>
+        <text class="fp-code">{{ target.code }}</text>
         <text class="card-hint">
-          请确认电脑屏幕上显示的配对码一致，再点连接。
+          请对照电脑屏幕上显示的配对码，一致再点连接。
         </text>
         <!-- 多桌面：名字进设备清单，切换面板/设备管理都靠它辨认 -->
         <view class="namer">
@@ -229,6 +232,28 @@ function reset() {
   bottom: -6rpx;
   right: -6rpx;
 }
+/* 框中央的扫码示意图标：方框 + 中间扫描线，纯 CSS。 */
+.scan-glyph {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 64rpx;
+  height: 64rpx;
+  margin: -32rpx 0 0 -32rpx;
+  border: 6rpx solid $accent;
+  border-radius: 14rpx;
+  opacity: 0.9;
+}
+.scan-glyph-line {
+  position: absolute;
+  top: 50%;
+  left: 10rpx;
+  right: 10rpx;
+  height: 6rpx;
+  margin-top: -3rpx;
+  border-radius: 3rpx;
+  background: $accent;
+}
 .scan-t {
   margin-top: 24rpx;
   font-size: $fs-body;
@@ -249,20 +274,25 @@ function reset() {
   font-size: $fs-mini;
   color: $accent;
 }
-.fp-host {
+.code-caption {
+  display: block;
+  margin-top: 24rpx;
+  font-size: $fs-mini;
+  color: $fg4;
+  text-align: center;
+}
+/* 配对码是确认环节的主角：大号 + 字距拉开，扫一眼就能和电脑屏对上 */
+.fp-code {
   display: block;
   margin-top: 8rpx;
-  font-size: $fs-body;
+  font-size: 76rpx;
+  font-weight: 700;
+  line-height: 1.2;
   color: $fg;
-  word-break: break-all;
-}
-.fp-hex {
-  display: block;
-  margin-top: 10rpx;
-  font-size: $fs-mini;
-  color: $fg3;
   font-family: monospace;
-  word-break: break-all;
+  letter-spacing: 14rpx;
+  text-indent: 14rpx; /* 抵消末字符字距，保证真正居中 */
+  text-align: center;
 }
 
 /* 命名输入：多桌面后靠名字辨认设备，扫码确认卡里就地起名。 */
