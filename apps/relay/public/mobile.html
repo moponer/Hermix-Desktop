@@ -132,22 +132,40 @@
     var box = document.getElementById('apk-qr');
     var cap = document.getElementById('apk-cap');
     var why = document.getElementById('apk-why');
-    if (d['apk.ok'] && box && window.qrcode) {
-      var abs = new URL(d['apk.url'], location.href).href;
-      var qr = qrcode(0, 'M');
-      qr.addData(abs);
-      qr.make();
-      box.innerHTML = qr.createSvgTag({ cellSize: 4, margin: 0, scalable: true });
+      // 全量重算:apk.ok 与否都把按钮/二维码/黄条摆到正确状态。
+    // 旧写法在 ok 分支提前 return,「误报过一次的黄条」在数据恢复后永远不消失
+    // (2026-10-12 用户截图:卡片有版本+大小+sha,黄条却挂着「还没上传」)。
+    if (d['apk.ok']) {
+      why.hidden = true;
+      if (a) {
+        a.classList.remove('off');
+        a.setAttribute('href', 'download/hermix.apk');
+        a.removeAttribute('aria-disabled');
+        a.textContent = '下载 APK';
+      }
+      if (cap) cap.textContent = '手机相机扫码，直接下载 APK';
+      if (box && window.qrcode) {
+        var abs = new URL(d['apk.url'], location.href).href;
+        var qr = qrcode(0, 'M');
+        qr.addData(abs);
+        qr.make();
+        box.innerHTML = qr.createSvgTag({ cellSize: 4, margin: 0, scalable: true });
+        box.classList.remove('off');
+      }
       return;
     }
     if (a) {
       a.classList.add('off');
       a.removeAttribute('href');
       a.setAttribute('aria-disabled', 'true');
-      a.textContent = '暂不可下载';
+      a.textContent = 'Hermix M APK 暂不可下载';
     }
     if (box) { box.classList.add('off'); box.textContent = 'APK 未上传'; }
     if (cap) cap.textContent = '上传后这里显示下载二维码';
+    if (why) {
+      document.getElementById('apk-why-text').textContent = d['apk.hint'] || 'APK 还没上传到发布目录。';
+      why.hidden = false;
+    }
     if (why) {
       document.getElementById('apk-why-text').textContent = d['apk.hint'] || 'APK 还没上传到发布目录。';
       why.hidden = false;

@@ -180,11 +180,15 @@
       // 取不到清单不等于产品没发版——只是这台机器上没有清单文件
       // （发布脚本部署到服务器，本地预览时没有）。措辞必须说清是「没读到」。
       out[ch + '.version'] = ok ? m.version : '未读到清单';
-      out[ch + '.date'] = ok ? fmtDate(m.pub_date || m.updatedAt) : '';
+      // 只显日期:午夜 00:00 UTC 的时刻部分没有信息量,还占宽度
+      out[ch + '.date'] = ok ? (m.pub_date || m.updatedAt || '').slice(0, 10) : '';
       out[ch + '.sha'] = ok ? (m.sha256 || '') : '';
       out[ch + '.shaShort'] = ok ? short(m.sha256) : '';
       out[ch + '.notes'] = ok ? (m.notes || '') : '';
       out[ch + '.min'] = ok ? (m.min_version || '不限制') : '';
+      // 应用名+版本号:按钮文案用它(「更新包 zip」这类无名文案被否过)
+      var appName = ch === 'desktop' ? 'Hermix Desktop' : ch === 'spiker' ? 'Spiker' : ch;
+      out[ch + '.label'] = ok ? appName + ' ' + m.version : '';
       out[ch + '.url'] = ok ? (m.url || url) : url;
       out[ch + '.ok'] = ok ? '1' : '';
     }

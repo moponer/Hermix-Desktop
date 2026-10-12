@@ -120,14 +120,14 @@
       <div class="ver" data-ver="desktop.version">—</div>
       <div class="info">
         <span data-ver="desktop.date">—</span> · 最低可升级 <span data-ver="desktop.min">—</span> · SHA-256 <span class="mono" data-ver="desktop.shaShort">—</span><br>
-        更新说明：<span data-ver="desktop.notes">—</span>
+        更新说明：<span data-ver="desktop.notes" style="white-space:pre-line">—</span>
       </div>
       <div class="go2">
-        <a class="btn sm" data-ver-href="desktop.url" href="desktop.html#download">更新包 zip</a>
+        <a class="btn sm" data-ver-href="desktop.url" href="desktop.html#download">Hermix Desktop <span data-ver="desktop.version">—</span> 更新包</a>
         <a class="btn sm ghost" href="changelog.html">更新日志</a>
       </div>
     </div>
-    <p class="why"><b>更新说明为空</b>是发布流程的真实状态——发版时没有提供说明文字，不影响更新本身。</p>
+    <p class="why" id="notes-why" hidden><b>本次发布未附更新说明。</b>不影响更新本身。</p>
   </div>
 </div>
 
@@ -148,5 +148,12 @@
 
 <script src="assets/site.js"></script>
 <script>HERMIX.boot('desktop');</script>
+<script>
+// 空态说明随数据显隐:notes 有内容时这句提示本身就是假话,必须藏起来。
+document.addEventListener('hermix:versions', function (e) {
+  var why = document.getElementById('notes-why');
+  if (why) why.hidden = !!e.detail['desktop.notes'];
+});
+</script>
 </body>
 </html>
