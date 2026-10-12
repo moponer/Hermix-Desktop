@@ -885,6 +885,31 @@ pub async fn create_pairing_session(
     let phone_token =
         match crate::relay_settings::issue_phone_credential(&relay_url, &node_token).await {
             Ok(t) => t,
+            // 401 = 本机 node 凭据被 relay 撤销或不认识（relay 重置过登记表）。
+            // enroll-node 对已撤销节点放行（先到先得），重签一枚后重试一次；
+            // 重签若 409（relay 上还挂着别的有效凭据），原文报给用户走人工。
+            Err(e) if crate::relay_settings::is_relay_auth_reject(&e) => {
+                tracing::warn!(relay = %relay_url, "relay 拒绝本机凭据，签发配对码前先重签（enroll-node）");
+                let fresh = match crate::relay_settings::ensure_node_credential(
+                    &relay_url,
+                    &state.relay_settings,
+                )
+                .await
+                {
+                    Ok(t) => t,
+                    Err(enroll_err) => {
+                        return (
+                            StatusCode::BAD_GATEWAY,
+                            format!("{e}；自动重签也失败：{enroll_err}"),
+                        )
+                            .into_response()
+                    }
+                };
+                match crate::relay_settings::issue_phone_credential(&relay_url, &fresh).await {
+                    Ok(t) => t,
+                    Err(e) => return (StatusCode::BAD_GATEWAY, e).into_response(),
+                }
+            }
             Err(e) => return (StatusCode::BAD_GATEWAY, e).into_response(),
         };
     // 二维码给手机解析，用 https 形态（wss/ws 是 WS 握手用的写法）。

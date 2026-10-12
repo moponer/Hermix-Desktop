@@ -233,9 +233,16 @@ pub async fn serve_relay_socket(
     );
     // connect_async 返回 (WebSocketStream, http::Response) —— 顺序别搞反，
     // 搞反了会把 Response 当成流去 .next()。
-    let (ws, resp) = tokio_tungstenite::connect_async(req)
-        .await
-        .map_err(std::io::Error::other)?;
+    let (ws, resp) = tokio_tungstenite::connect_async(req).await.map_err(|e| {
+        // 401 单独点名：调用方靠这个字符串识别「凭据被 relay 拒绝」并触发重签，
+        // 与网络故障（退避重连即可）区分开。
+        if let tokio_tungstenite::tungstenite::Error::Http(r) = &e {
+            if r.status().as_u16() == 401 {
+                return std::io::Error::other("relay 握手被拒（HTTP 401）：凭据无效或已撤销");
+            }
+        }
+        std::io::Error::other(e)
+    })?;
     tracing::info!(
         relay = %cfg.url,
         node = %cfg.node_id,

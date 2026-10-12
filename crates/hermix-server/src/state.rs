@@ -1266,30 +1266,26 @@ impl HttpServerState {
                     .store(false, std::sync::atomic::Ordering::SeqCst);
                 return;
             }
-            let mut token = token;
             if token.trim().is_empty() {
                 // 首次启动还没有凭据：向 relay 自动签发（enroll-node），
                 // 成功即落盘并继续连接——用户不需要登服务器手工签发。
                 // 失败不 panic、不重试刷接口：保持人工兜底（界面里可重试、
                 // 可重置本机身份，或登服务器 relayctl add-node），下次拉起再试。
                 tracing::info!(relay = %cfg.url, "还没有 relay 凭据，尝试自动签发（enroll-node）");
-                match crate::relay_settings::ensure_node_credential(&cfg.url, &worker.relay_settings)
-                    .await
+                if let Err(e) = crate::relay_settings::ensure_node_credential(
+                    &cfg.url,
+                    &worker.relay_settings,
+                )
+                .await
                 {
-                    Ok(new_token) => {
-                        tracing::info!(relay = %cfg.url, "relay 凭据自动签发成功");
-                        token = new_token;
-                    }
-                    Err(e) => {
-                        tracing::warn!(relay = %cfg.url, error = %e, "relay 凭据自动签发失败");
-                        *worker.relay_last_error.lock().await = Some(format!(
-                            "{e}。可在「手机端 → 中转连接」重试或重置本机身份，也可在 relay 服务器上用 relayctl add-node 手动签发。"
-                        ));
-                        worker
-                            .relay_connector_running
-                            .store(false, std::sync::atomic::Ordering::SeqCst);
-                        return;
-                    }
+                    tracing::warn!(relay = %cfg.url, error = %e, "relay 凭据自动签发失败");
+                    *worker.relay_last_error.lock().await = Some(format!(
+                        "{e}。可在「手机端 → 中转连接」重试或重置本机身份，也可在 relay 服务器上用 relayctl add-node 手动签发。"
+                    ));
+                    worker
+                        .relay_connector_running
+                        .store(false, std::sync::atomic::Ordering::SeqCst);
+                    return;
                 }
             }
             crate::relay_client::connect_and_serve(
@@ -1297,18 +1293,47 @@ impl HttpServerState {
                 worker.relay_status.clone(),
                 |cfg| {
                     let worker = worker.clone();
-                    let token = token.clone();
                     async move {
+                        // 每次尝试都从设置里取当前凭据：401 自愈重签后，
+                        // 下一轮拿到的是新 token，不依赖外层捕获的旧值。
+                        let token = {
+                            let s = worker.relay_settings.lock().await;
+                            s.token().to_string()
+                        };
                         match crate::relay_client::serve_relay_socket(
-                            cfg,
+                            cfg.clone(),
                             token,
                             worker.clone(),
                         )
                         .await
                         {
                             Err(e) => {
-                                tracing::warn!(error = %e, "relay 连接失败");
-                                *worker.relay_last_error.lock().await = Some(e.to_string());
+                                let msg = e.to_string();
+                                // 401 = relay 不认这枚凭据（被撤销 / relay 重置过）。
+                                // enroll-node 对已撤销节点放行（先到先得），
+                                // 重签一枚落盘，退避后即用新凭据重连。
+                                if crate::relay_settings::is_relay_auth_reject(&msg) {
+                                    tracing::warn!(
+                                        relay = %cfg.url,
+                                        "relay 拒绝本机凭据，尝试重新签发（enroll-node）"
+                                    );
+                                    if let Err(enroll_err) = crate::relay_settings::
+                                        ensure_node_credential(&cfg.url, &worker.relay_settings)
+                                        .await
+                                    {
+                                        tracing::error!(error = %enroll_err, "relay 凭据重签失败");
+                                        *worker.relay_last_error.lock().await = Some(format!(
+                                            "{msg}；自动重签也失败：{enroll_err}"
+                                        ));
+                                        return;
+                                    }
+                                    tracing::info!(relay = %cfg.url, "relay 凭据已重签，退避后重连");
+                                    *worker.relay_last_error.lock().await =
+                                        Some("relay 凭据已重签，正在重连".into());
+                                } else {
+                                    tracing::warn!(error = %msg, "relay 连接失败");
+                                    *worker.relay_last_error.lock().await = Some(msg);
+                                }
                             }
                             Ok(()) => *worker.relay_last_error.lock().await = None,
                         }

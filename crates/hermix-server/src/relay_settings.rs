@@ -578,6 +578,12 @@ fn validate_enroll_reply(body: &str, expected_node_id: &str) -> Result<String, S
     Ok(parsed.token)
 }
 
+/// relay 侧拒绝本机凭据（401：被撤销或 relay 重置过登记表）。
+/// 配对签发与出站连接两处都要在此时重签凭据，判断口径必须一致。
+pub(crate) fn is_relay_auth_reject(err: &str) -> bool {
+    err.contains("HTTP 401")
+}
+
 /// 电脑侧凭据自动签发：把本机 E2EE 公钥报给 relay，换回 node 凭据。
 ///
 /// 首次启动的桌面端还没有 `hrel_*`，过去只能让用户登服务器敲 `relayctl
