@@ -1,3 +1,6 @@
+// 必须最先求值：App 端运行时缺 TextEncoder/btoa 等全局，core 模块（crypto.ts
+// 在模块顶层就 new TextEncoder()）依赖这里的补丁。见 core/encoding.ts 文件头。
+import './core/encoding'
 import { createSSRApp } from 'vue'
 import App from './App.vue'
 import { reportFatal } from './core/boot'

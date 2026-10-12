@@ -20,6 +20,9 @@
  * （https / localhost）可用。调用方因此一律 `await`，别图省事改同步。
  */
 
+// App 端没有全局 TextEncoder，装上补丁再用。
+import './encoding'
+
 /**
  * 跨语言契约向量。**从 Rust 抄来的字面量**，权威定义在
  * `crates/hermix-server/src/request_signature.rs::cross_language_signature_vector`。

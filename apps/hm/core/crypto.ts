@@ -29,6 +29,9 @@
  * 落地前需先在真机确认（见对应决策笔记的 Consequences）。
  */
 
+// 本模块顶层就会 `new TextEncoder()`，必须先装上 App 端的编码补丁。
+import './encoding'
+
 const KEY_BITS = 256;
 /** AES-GCM 标准 nonce 长度。96 位，不可与 key 复用。 */
 const NONCE_BYTES = 12;

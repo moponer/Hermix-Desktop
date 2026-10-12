@@ -2,7 +2,6 @@
  * 设备时钟偏差检查 + relay 基地址。
  *
  * ## 为什么必须有
- *
  * 请求签名覆盖 `METHOD\npath\nt\nnonce`，`t` 是**客户端**时钟的 unix 秒，
  * 服务端只接受 ±300 秒（`request_signature.rs::TIMESTAMP_WINDOW_SECS`）。
  * 时钟偏了 → 全部 401 → 用户看到「配对成功了但连不上」。这类故障极难自查，

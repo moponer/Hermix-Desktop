@@ -11,3 +11,6 @@ unpackage/res/*
 # 本地开发态的临时产物
 .DS_Store
 *.local
+
+# HBuilderX IDE 工程目录（本机 launch 配置）
+.hbuilderx/
