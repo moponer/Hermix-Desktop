@@ -1,5 +1,5 @@
 import { Cpu, Loader2, RefreshCw, Wifi, WifiOff } from "lucide-react";
-import { useBackendConnection } from "../hooks/useBackendConnection";
+import { useBackendConnectionContext } from "../context/BackendConnectionContext";
 import { toastError } from "../hooks/useToast";
 
 export function BackendStatus() {
@@ -8,7 +8,7 @@ export function BackendStatus() {
   //  探测通过；"offline" = 探测失败或收到 gave-up 事件）。
   // 旧实现连接中返回 null，在 hermix.exe 的 2-6s 启动窗口里看起来
   // 像界面卡死，故此处改为显式"连接中"呈现。
-  const { state, mode, restarting, gaveUp, restart } = useBackendConnection();
+  const { state, mode, restarting, gaveUp, restart } = useBackendConnectionContext();
 
   const handleRestart = async () => {
     // 重启失败要给用户可见反馈，不能静默 —— 失败后 UI 只是回到离线，

@@ -50,9 +50,6 @@ pub fn build_tool_preview(
         ("write_file", "path"),
         ("patch", "path"),
         ("search_files", "pattern"),
-        ("browser_navigate", "url"),
-        ("browser_click", "ref"),
-        ("browser_type", "text"),
         ("image_generate", "prompt"),
         ("text_to_speech", "text"),
         ("mixture_of_agents", "user_prompt"),
@@ -240,17 +237,6 @@ pub fn get_cute_tool_message(
             let target = get_str("target");
             let verb = if target == "files" { "find" } else { "grep" };
             format!("{} 🔎 {:9} {}  {}", prefix, verb, pattern, dur)
-        }
-        "browser_navigate" => {
-            let url = get_str("url");
-            let domain = url
-                .replace("https://", "")
-                .replace("http://", "")
-                .split('/')
-                .next()
-                .unwrap_or("")
-                .to_string();
-            format!("{} 🌐 navigate  {}  {}", prefix, trunc(&domain, 35), dur)
         }
         "execute_code" => {
             let code = get_str("code");

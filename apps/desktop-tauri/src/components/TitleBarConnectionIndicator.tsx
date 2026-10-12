@@ -1,5 +1,5 @@
 import { Loader2 } from "lucide-react";
-import { useBackendConnection } from "../hooks/useBackendConnection";
+import { useBackendConnectionContext } from "../context/BackendConnectionContext";
 
 /**
  * Title bar connection indicator — breathing pulse animation.
@@ -8,7 +8,7 @@ import { useBackendConnection } from "../hooks/useBackendConnection";
  * 状态机与重启流程见 `useBackendConnection`（三处连接 UI 共用一份实现）。
  */
 export function TitleBarConnectionIndicator() {
-  const { state, mode, restarting, gaveUp, restart } = useBackendConnection();
+  const { state, mode, restarting, gaveUp, restart } = useBackendConnectionContext();
 
   const isOnline  = state === "online" && mode === "local";
   const isOffline = state === "offline" || gaveUp;

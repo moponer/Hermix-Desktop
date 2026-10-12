@@ -1,5 +1,5 @@
 import { Loader2 } from "lucide-react";
-import { useBackendConnection } from "../hooks/useBackendConnection";
+import { useBackendConnectionContext } from "../context/BackendConnectionContext";
 
 /**
  * Connection status indicator — small colored dot shown in the sidebar.
@@ -12,7 +12,7 @@ import { useBackendConnection } from "../hooks/useBackendConnection";
  * 状态机与重启流程见 `useBackendConnection`。
  */
 export function ConnectionIndicator() {
-  const { state, mode, restarting, gaveUp, restart } = useBackendConnection();
+  const { state, mode, restarting, gaveUp, restart } = useBackendConnectionContext();
 
   // Visual semantics
   const isOnline  = state === "online" && mode === "local";

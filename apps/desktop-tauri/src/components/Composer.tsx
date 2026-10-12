@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
-import { Send, Square, FolderOpen, ChevronDown, ChevronRight, Sparkles, ShieldCheck, Image, X, Check, AlertTriangle, Lock, Clock, Code2, FileText, Brain, BrainCircuit, Gauge } from "lucide-react";
+import { Send, Square, FolderOpen, ChevronDown, ChevronRight, Sparkles, ShieldCheck, Image, X, Check, AlertTriangle, Lock, Clock, Code2, FileText, Brain, BrainCircuit } from "lucide-react";
 import type { DomainModeChoice } from "../hooks/useExpert";
 import { usePopover } from "../hooks/usePopover";
 import { PopoverShell, PopoverBody } from "./PopoverShell";
@@ -530,15 +530,59 @@ export function Composer(p: ComposerProps) {
             </button>
             {modelOpen && (
               <PopoverShell containerRef={modelContainerRef} triggerRef={modelTriggerRef} align="right" width="md" side="top">
-                <div className="px-3 pt-2.5 pb-2 flex items-center justify-between border-b border-border-primary mb-1">
-                  <span className="text-ui text-text-primary font-semibold tracking-wide">模型</span>
-                  <span className="text-tiny text-text-muted">
-                    {p.byProvider ? `${p.byProvider.reduce((acc, g) => acc + g.models.length, 0)} 个 · ${p.byProvider.length} 厂商` : ""}
-                  </span>
-                </div>
+                <PopoverBody maxHeight="max-h-72">
+                  {!p.byProvider || p.byProvider.length === 0 ? (
+                    <div className="px-3 py-6 text-center">
+                      <p className="text-meta text-text-muted">暂无可用模型</p>
+                      <p className="text-tiny text-text-muted mt-1">点下方「管理模型」去添加</p>
+                    </div>
+                  ) : (
+                    p.byProvider.map((group) => {
+                      const isSelectedHere = p.selectedModel
+                        ? p.selectedModel.startsWith(group.provider + ":")
+                        : false;
+                      const expanded = expandedProviders[group.provider] ?? isSelectedHere;
+                      return (
+                        <div key={group.provider}>
+                          <button
+                            type="button"
+                            onClick={() => toggleProvider(group.provider)}
+                            className="flex items-center gap-1.5 w-full px-3 py-1.5 text-left rounded-md hover:bg-bg-hover transition-colors"
+                            title={group.isCustom ? `自定义：${group.provider}（点击展开/折叠）` : `点击展开/折叠 ${group.provider}`}
+                            aria-expanded={expanded}
+                          >
+                            {expanded
+                              ? <ChevronDown className="icon-sm text-text-muted shrink-0" />
+                              : <ChevronRight className="icon-sm text-text-muted shrink-0" />}
+                            <span className="text-meta text-text-secondary font-medium truncate">{group.provider}</span>
+                            {group.isCustom && <span className="text-tiny text-text-faint shrink-0">自定义</span>}
+                          </button>
+                          {expanded && (
+                            <div className="pb-1">
+                              {group.models.map((m) => (
+                                <button
+                                  key={m.id}
+                                  onClick={() => {
+                                    p.onSwitchModel?.(m.id);
+                                    p.setSelectedModel(m.id);
+                                    setModelOpen(false);
+                                  }}
+                                  className="flex items-center gap-2 w-full px-3 py-2 pl-8 text-left rounded-md hover:bg-bg-hover transition-colors"
+                                >
+                                  <span className="truncate text-ui text-text-primary">{m.display}</span>
+                                  {p.selectedModel === m.id && <Check className="icon-md text-accent shrink-0 ml-auto" />}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })
+                  )}
+                </PopoverBody>
 
-                {/* 模型信息卡：上下文窗口 + 思考开关（仅当模型支持 reasoning 时显开关） */}
-                {(() => {
+                {/* 附加信息：上下文窗口 + 思考开关（仅当模型支持 reasoning 时显开关） */}
+                {p.byProvider && p.byProvider.length > 0 && (() => {
                   const currentModelId = p.selectedModel;
                   const ctxEntry = currentModelId ? p.contextWindows?.[currentModelId] : undefined;
                   const ctxTokens = ctxEntry?.value ?? p.contextWindows?.[currentModelId ?? ""]?.value ?? 0;
@@ -552,17 +596,15 @@ export function Composer(p: ComposerProps) {
                           : "未知";
                   const showThinkingToggle = p.supportsReasoning === true;
                   return (
-                    <div className="px-3 pb-2 flex items-center gap-3 text-meta">
-                      <div className="flex items-center gap-1.5 min-w-0">
-                        <Gauge className="icon-sm shrink-0 text-text-muted" aria-hidden="true" />
-                        <span className="text-text-secondary">上下文</span>
-                        <span className="font-mono text-text-primary">{ctxLabel}</span>
-                      </div>
+                    <div className="px-3 py-1.5 border-t border-border-primary flex items-center gap-3 text-meta">
+                      <span className="text-text-muted">
+                        上下文 <span className="font-mono text-text-secondary">{ctxLabel}</span>
+                      </span>
                       {showThinkingToggle && (
                         <button
                           type="button"
                           onClick={() => p.onEnableThinkingChange?.(!(p.enableThinking === true))}
-                          className={`ml-auto inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-tiny transition-colors ${
+                          className={`ml-auto inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-tiny transition-colors ${
                             p.enableThinking === true
                               ? "bg-[color:var(--color-chip-model-bg)] text-[color:var(--color-chip-model-fg)]"
                               : "text-text-muted hover:bg-bg-hover"
@@ -579,79 +621,16 @@ export function Composer(p: ComposerProps) {
                   );
                 })()}
 
-                <PopoverBody maxHeight="max-h-64">
-                  {!p.byProvider || p.byProvider.length === 0 ? (
-                    <div className="px-2.5 py-3 text-center">
-                      <p className="text-meta text-text-muted">暂无可用模型</p>
-                      <button
-                        type="button"
-                        className="mt-2 px-3 py-1.5 rounded-lg text-meta bg-accent text-on-accent hover:opacity-90 transition-opacity"
-                        onClick={() => { p.onOpenSettings?.("model"); setModelOpen(false); }}
-                      >
-                        去添加模型
-                      </button>
-                    </div>
-                  ) : (
-                    <>
-                      {p.byProvider.map((group) => {
-                        const isSelectedHere = p.selectedModel
-                          ? p.selectedModel.startsWith(group.provider + ":")
-                          : false;
-                        const expanded =
-                          expandedProviders[group.provider] ??
-                          (!group.isCustom || isSelectedHere);
-                        return (
-                          <div key={group.provider} className="mb-0.5">
-                            <button
-                              type="button"
-                              onClick={() => toggleProvider(group.provider)}
-                              className="flex items-center gap-2 w-full px-2 py-1.5 text-left rounded-md hover:bg-bg-hover transition-colors"
-                              title={group.isCustom ? `自定义：${group.provider}（点击展开/折叠）` : `点击展开/折叠 ${group.provider}`}
-                              aria-expanded={expanded}
-                            >
-                              {expanded
-                                ? <ChevronDown className="icon-sm text-text-muted shrink-0" />
-                                : <ChevronRight className="icon-sm text-text-muted shrink-0" />
-                              }
-                              <ProviderIcon providerId={group.provider} className="icon-md" title={group.provider} />
-                              <span className="text-meta text-text-secondary font-medium truncate">
-                                {group.provider}
-                                {group.isCustom && (
-                                  <span className="ml-1 text-tiny text-text-faint">· 自定义</span>
-                                )}
-                              </span>
-                              <span className="text-tiny text-text-faint font-mono ml-auto shrink-0">
-                                {group.models.length}
-                              </span>
-                            </button>
-                            {expanded && (
-                              <div className="pl-4 pr-1 pb-1">
-                                {group.models.map((m) => (
-                                  <button
-                                    key={m.id}
-                                    onClick={() => {
-                                      p.onSwitchModel?.(m.id);
-                                      p.setSelectedModel(m.id);
-                                      setModelOpen(false);
-                                    }}
-                                    className={`flex items-center gap-2 w-full px-2 py-2 text-left rounded-md transition-colors ${
-                                      p.selectedModel === m.id
-                                        ? "bg-[color:var(--color-chip-permission-bg)]"
-                                        : "hover:bg-bg-hover"
-                                    }`}
-                                  >
-                                    <span className="truncate font-mono text-meta text-text-primary">{m.display}</span>
-                                    {p.selectedModel === m.id && <Check className="icon-md text-accent shrink-0 ml-auto" />}
-                                  </button>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </>
-                  )}
-                </PopoverBody>
+                {/* 底部常驻操作：固定在列表下方，不随列表滚动。 */}
+                <div className="border-t border-border-primary">
+                  <button
+                    type="button"
+                    className="w-full px-3 py-2.5 text-left text-meta text-text-secondary hover:bg-bg-hover hover:text-text-primary transition-colors"
+                    onClick={() => { p.onOpenSettings?.("model"); setModelOpen(false); }}
+                  >
+                    管理模型
+                  </button>
+                </div>
               </PopoverShell>
             )}
           </div>

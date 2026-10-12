@@ -380,6 +380,10 @@ export function ProcessTimeline({
                   <div className="tl-text-inner">
                     <MarkdownBody
                       content={parsed.body}
+                      /* 最终答复正文：唯一带文件类型图标的位置。思考块 /
+                         工具结果 / 更新日志复用同一个 MarkdownBody，默认
+                         不画图标（见 MarkdownBodyProps.pathIcons）。 */
+                      pathIcons
                       onPathClick={onPathClick ?? (() => {})}
                     />
                   </div>

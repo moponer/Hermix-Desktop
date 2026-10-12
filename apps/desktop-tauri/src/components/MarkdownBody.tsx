@@ -76,18 +76,22 @@ function isAbsolutePath(p: string): boolean {
 
 interface PathLinkProps {
   path: string;
+  /** 是否渲染文件类型图标，由 `MarkdownBody.pathIcons` 统一控制。 */
+  icons: boolean;
   onClick: (path: string, e: React.MouseEvent) => void;
 }
 
-function PathLink({ path, onClick }: PathLinkProps) {
+function PathLink({ path, icons, onClick }: PathLinkProps) {
   const abs = isAbsolutePath(path);
   // %VAR% 开头（%TEMP%\x\y.csv）：后端会把环境变量展开后再探盘，语义上
   // 和盘符绝对路径一样"一定能定位"，不该染成相对路径的警告琥珀色。
   const env = /^%[\p{L}\p{N}_]+%/u.test(path);
   // 只给**带扩展名**的路径配图标：目录路径（`crates/hermix-agent`）没有
   // 文件类型，FileTypeIcon 会退化成灰色 "?" 问号，反而是噪声。
+  // 且只在 `icons` 打开时配 —— 思考块里一段能蹦出十几个彩色方块，正文被
+  // 切成色块拼贴画，比没有图标更难读。
   const name = path.split(/[\\/]/).pop() ?? path;
-  const showIcon = /\.[\p{L}\p{N}]{1,5}$/u.test(name);
+  const showIcon = icons && /\.[\p{L}\p{N}]{1,5}$/u.test(name);
   // 裸文件名（`App.tsx`）没有目录上下文，不按"相对路径"处理 ——
   // 染成警告琥珀色是在说"这个路径可能解析不到"，但它本来就是正文里
   // 的中性引用（"改 App.tsx 的登录逻辑"），不是一条待解析的路径。
@@ -103,12 +107,13 @@ function PathLink({ path, onClick }: PathLinkProps) {
       title={env ? `环境变量路径：${path}` : abs ? `打开 ${path}` : bare ? name : `相对路径：将以工作区根为基准解析 ${path}`}
       className={`md-path-link md-path-link--${tone}`}
     >
-      {/* 13px：正文是中文时，汉字字面占满整个 em box（约 14px 高），
-          不是拉丁文的小 cap 高度。CSS 里那套"11px = cap 高度"的实测是按
-          拉丁排版量的，对中文正文图标显得过小。13px + 图标自身
-          translateY(2px)（见 components-prose.css 的 .md-path-link__icon）
-          让图标光学居中于汉字行。 */}
-      {showIcon && <FileTypeIcon name={name} size={13} className="md-path-link__icon" />}
+      {/* 16px：图标是「彩色方块 + 白色扩展名字母」（PDF / TS / W），字母在
+          24 viewBox 里只有 7.5–10.5px，按 13px 渲染出来字母约 5.7px ——
+          小到只能看见一个色块，认不出是哪种文件。16px 才让字母够辨读。
+          正文是中文时汉字字面占满整个 em box（约 15px 高），不是拉丁文的
+          cap 高度；图标再配 CSS 的 translateY(2px)（见 components-prose.css
+          的 .md-path-link__icon）光学居中于汉字行。 */}
+      {showIcon && <FileTypeIcon name={name} size={16} className="md-path-link__icon" />}
       {/* 只显示文件名：正文里写的是一整串 `<repo-parent>\...\db1.py`，铺满整行
           把句子撕成两段，读者真正要找的是 `db1.py`。目录信息不丢 —— title
           属性仍是完整路径，悬停即见。 */}
@@ -120,6 +125,7 @@ function PathLink({ path, onClick }: PathLinkProps) {
 export function linkifyChildren(
   children: ReactNode,
   onPathClick: (path: string, e: React.MouseEvent) => void,
+  icons = false,
 ): ReactNode {
   return Children.map(children, (child) => {
     if (typeof child === "string") {
@@ -131,7 +137,7 @@ export function linkifyChildren(
       while ((m = PATH_RE.exec(child)) !== null) {
         if (m.index > last) parts.push(child.slice(last, m.index));
         parts.push(
-          <PathLink key={`pl-${k++}-${m.index}`} path={m[0]} onClick={onPathClick} />,
+          <PathLink key={`pl-${k++}-${m.index}`} path={m[0]} icons={icons} onClick={onPathClick} />,
         );
         last = m.index + m[0].length;
       }
@@ -150,13 +156,13 @@ export function linkifyChildren(
         if (cls.includes("language-")) return child;
         const props = child.props as { children?: ReactNode };
         if (props?.children) {
-          return { ...child, props: { ...props, children: linkifyChildren(props.children, onPathClick) } };
+          return { ...child, props: { ...props, children: linkifyChildren(props.children, onPathClick, icons) } };
         }
         return child;
       }
       const props = child.props as { children?: ReactNode };
       if (props?.children) {
-        return { ...child, props: { ...props, children: linkifyChildren(props.children, onPathClick) } };
+        return { ...child, props: { ...props, children: linkifyChildren(props.children, onPathClick, icons) } };
       }
     }
     return child;
@@ -369,6 +375,15 @@ export interface MarkdownBodyProps {
    *  sidebar. Optional — when omitted, path-click is a no-op
    *  (non-main-chat contexts don't have a sidebar to open). */
   onPathClick?: (path: string, e: React.MouseEvent) => void;
+  /**
+   * 正文里的文件路径是否带文件类型图标。**默认关** ——
+   *
+   * MarkdownBody 不只渲染最终答复：思考块、工具结果正文、更新日志、技能
+   * 文档都复用它。那些位置一段话里能有十几个路径，每个前面顶一个彩色
+   * 方块，正文被切成色块拼贴画，可读性反而不如纯文本。只有最终答复正文
+   * （`ToolCallBubble` 的 `kind === "text"` 步）显式打开。
+   */
+  pathIcons?: boolean;
 }
 
 // satteri features: 对齐 react-markdown 的 remarkPlugins=[remarkGfm, remarkBreaks]
@@ -408,7 +423,7 @@ function useThrottledValue<T>(value: T, intervalMs: number): T {
   return snapshot;
 }
 
-export const MarkdownBody = memo(function MarkdownBody({ content, onPathClick }: MarkdownBodyProps) {
+export const MarkdownBody = memo(function MarkdownBody({ content, onPathClick, pathIcons = false }: MarkdownBodyProps) {
   const handlePathClick = useCallback(onPathClick ?? (() => {}), [onPathClick]);
   const isDark = readIsDark();
   const displayContent = useThrottledValue(content, MARKDOWN_REPARSE_THROTTLE_MS);
@@ -426,10 +441,10 @@ export const MarkdownBody = memo(function MarkdownBody({ content, onPathClick }:
       jsxs,
       components: {
         p({ children, ...props }: { children?: ReactNode }) {
-          return <p {...props}>{linkifyChildren(children, handlePathClick)}</p>;
+          return <p {...props}>{linkifyChildren(children, handlePathClick, pathIcons)}</p>;
         },
         li({ children, ...props }: { children?: ReactNode }) {
-          return <li {...props}>{linkifyChildren(children, handlePathClick)}</li>;
+          return <li {...props}>{linkifyChildren(children, handlePathClick, pathIcons)}</li>;
         },
         // hast-util-to-jsx-runtime 给 inline code 的 children 已是字符串；
         // 但 fenced block 是单行/多行 + className="language-xxx"。
@@ -461,7 +476,7 @@ export const MarkdownBody = memo(function MarkdownBody({ content, onPathClick }:
         },
       },
     });
-  }, [displayContent, handlePathClick, isDark]);
+  }, [displayContent, handlePathClick, pathIcons, isDark]);
 
   return <div className="prose max-w-none">{rendered}</div>;
 });

@@ -568,16 +568,19 @@
   color: var(--color-text-primary);
   text-decoration-color: var(--color-accent);
 }
-/* 文件类型图标。正文几乎全是中文时对齐基准变了：汉字字面占满整个
-   em box（14px 字号 ≈ 14px 字面），不是拉丁文的 cap 高度 —— CSS 里
-   早年那套"11px = cap 高度"的实测按拉丁排版量的，对中文正文图标
-   显得过小且偏低。现取 13px（MarkdownBody 里 size={13}）+ 图标自身
-   translateY(2px) 做光学居中：图标垂直居中于汉字行，不再浮在字顶
-   也不压下伸部。
+/* 文件类型图标。图标本体是「彩色方块 + 白色扩展名字母」（PDF / TS / W），
+   字母在 24 viewBox 里只有 7.5–10.5px —— 13px 渲染出来字母约 5.7px，只剩
+   一个认不出类型的色块。取 16px（MarkdownBody 里 size={16}）让字母够辨读。
+
+   translateY(2px)：align-items 是 baseline，图标的 border box 下沿压在正文
+   基线上，方块整体在基线以上；正文 14px（--text-body）汉字字面约 12.3px 高、
+   略探到基线下，下移 2px 让图标光学居中于汉字行而不是浮在字顶。
 
    align-items 必须留在 baseline：按钮是 inline-flex，它的基线取自第一个
    flex 项（图标）的 border box 下沿；改成 center 会把整个链接往下推约
-   1.75px，整块链接脱离正文基线。位移补偿放在图标自身而不是改 align-items。 */
+   1.75px，整块链接脱离正文基线。位移补偿放在图标自身而不是改 align-items。
+
+   图标不再是默认件：只有最终答复正文开（MarkdownBody 的 pathIcons）。 */
 .md-path-link__icon {
   flex-shrink: 0;
   border-radius: 2px;

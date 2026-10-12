@@ -123,7 +123,6 @@ fn arb_gateway_config() -> impl Strategy<Value = GatewayConfig> {
                 web: ToolCapabilityConfig::default(),
                 image_gen: ToolCapabilityConfig::default(),
                 tts: ToolCapabilityConfig::default(),
-                browser: ToolCapabilityConfig::default(),
                 llm_providers: HashMap::new(),
                 smart_model_routing: SmartModelRoutingConfig::default(),
                 compaction: CompactionConfig::default(),

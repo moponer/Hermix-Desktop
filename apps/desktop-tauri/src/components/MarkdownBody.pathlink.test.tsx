@@ -11,8 +11,12 @@ import { linkifyChildren } from "./MarkdownBody";
  * 会把句子撕成两段，读者真正要找的是 `db1.py` 本身。目录信息不能丢：
  * title 属性仍是完整路径，悬停可见、点击也仍按完整路径解析。
  *
- * 图标尺寸锁 13px：正文是中文时汉字字面占满整个 em box（≈14px），不是
- * 拉丁文的 cap 高度 —— 早年"11px = cap 高度"的口径对中文正文图标过小。
+ * 图标只在最终答复正文出现（`linkifyChildren` 的第三个参数，由
+ * MarkdownBody 的 `pathIcons` 传入）：思考块 / 工具结果复用同一个渲染器，
+ * 一段十几个路径全顶彩色方块会毁掉可读性。
+ *
+ * 图标尺寸锁 16px：图标是「色块 + 白色扩展名字母」，字母在 24 viewBox 里
+ * 只有 7.5–10.5px，13px 渲染出来约 5.7px，小到认不出类型。
  * 对齐说明见 components-prose.css 的 .md-path-link__icon。
  *
  * 走 node 环境而非 jsdom：satteri 是 NAPI 模块，jsdom 下会撞 DataView
@@ -22,8 +26,8 @@ import { linkifyChildren } from "./MarkdownBody";
 
 const noop = () => {};
 
-function render(text: string): string {
-  return renderToStaticMarkup(<>{linkifyChildren(text, noop)}</>);
+function render(text: string, icons = false): string {
+  return renderToStaticMarkup(<>{linkifyChildren(text, noop, icons)}</>);
 }
 
 describe("行内路径链接（PathLink）", () => {
@@ -36,10 +40,18 @@ describe("行内路径链接（PathLink）", () => {
     expect(html).toContain('title="打开 F:\\spiker\\hermix\\db1.py"');
   });
 
-  it("图标 13px（CJK 正文字面 ≈ em box，11px 过小）", () => {
+  it("默认不画图标（思考块 / 工具结果共用同一渲染器）", () => {
     const html = render("改完了 F:\\spiker\\hermix\\db1.py 这个文件");
-    expect(html).toContain('width="13"');
-    expect(html).not.toContain('width="11"');
+    expect(html).not.toContain("md-path-link__icon");
+    // 路径本身仍然是可点的链接，只是不带图标
+    expect(html).toContain("md-path-link--abs");
+  });
+
+  it("最终答复正文开图标，尺寸 16px（13px 时扩展名字母认不出）", () => {
+    const html = render("改完了 F:\\spiker\\hermix\\db1.py 这个文件", true);
+    expect(html).toContain('width="16"');
+    expect(html).toContain("md-path-link__icon");
+    expect(html).not.toContain('width="13"');
   });
 
   it("%VAR% 环境变量路径完整保留前缀，不再被 lookbehind 切断", () => {

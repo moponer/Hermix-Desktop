@@ -49,7 +49,7 @@ import { useSendKey } from "../hooks/useSendKey";
 import { useDesktopNotify } from "../hooks/useDesktopNotify";
 import { useWorkspaces } from "../hooks/useWorkspaces";
 import { pickDirectory } from "../desktopBridge";
-import { getAvailableTools, updateSessionMetadata, warmUpProvider, getModelInfo, type ToolDescriptor } from "../api";
+import { getAvailableTools, waitForBackendReady, updateSessionMetadata, warmUpProvider, getModelInfo, type ToolDescriptor } from "../api";
 import { storage, STORAGE_KEYS } from "../utils/storageCompat";
 import { compressImage, skipCompression, type CompressResult } from "../utils/imageCompressor";
 
@@ -439,7 +439,14 @@ export const ChatView = memo(function ChatView({
         if (!cancelled) setAvailableTools(tools);
       });
     };
-    load();
+    // 首屏：等后端真正 ready 再取工具。启动竞态里本 effect 早于 Rust
+    // init_global 触发，此刻 /v1/tools 直接吃 503 "backend offline" 且不自动
+    // 重试，工具列表会一直空着。就绪后补发，一次成功、无 console 噪音。
+    void (async () => {
+      await waitForBackendReady();
+      if (!cancelled) load();
+    })();
+    // window focus 走快路：用户主动切回窗口时后端通常已在位，直接取。
     window.addEventListener("focus", load);
     return () => {
       cancelled = true;

@@ -5,6 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ScreenshotOverlay } from "./components/ScreenshotOverlay";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { BackendConnectionProvider } from "./context/BackendConnectionContext";
 import "./styles/screenshot-overlay.css";
 
 // 截图覆盖窗（独立 window，hash 路由分流）：全屏幕布 + 选区交互，不渲染主应用。
@@ -65,8 +66,10 @@ async function mainEntry() {
   ReactDOM.createRoot(document.getElementById("root")!).render(
     <React.StrictMode>
       <ErrorBoundary>
-        <App />
-        <ToastContainer />
+        <BackendConnectionProvider>
+          <App />
+          <ToastContainer />
+        </BackendConnectionProvider>
       </ErrorBoundary>
     </React.StrictMode>,
   );

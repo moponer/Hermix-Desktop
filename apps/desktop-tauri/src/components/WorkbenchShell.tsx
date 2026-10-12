@@ -127,7 +127,6 @@ export function WorkbenchShell({ manifest, chatNode, onNewSession, onSelectSessi
             className="wb-frame"
             src={entryUrl}
             title={manifest.name}
-            allowTransparency
           />
         ) : (
           <div className="wb-canvas-empty">工作台入口未就绪</div>

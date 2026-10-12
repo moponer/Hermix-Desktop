@@ -1167,6 +1167,29 @@ export const checkBackendHealth = async (): Promise<boolean> => {
   }
 };
 
+/** 轮询 `checkBackendHealth` 直到后端应答 `/health`（超时返回 false）。
+ *
+ *  用途：首屏 hydration 请求（`getAvailableTools` / `getSessionMessages`）
+ *  发出前先等后端就绪。dev / 冷启动时前端 effect 会早于 Rust 侧
+ *  `stdio_bridge::init_global`（sidecar spawn 成功即置 `BRIDGE_LIVE=true`）
+ *  触发，此刻经 stdio 桥的请求直接吃到 503 "backend offline" —— 既刷
+ *  console，又让首屏数据空跑且不自动重试（`getAvailableTools` 仅在 window
+ *  focus 时重试）。等到真正 ready 再发，请求一次成功、无噪音；超时后照常
+ *  发出，交由既有错误分支兜底（连接指示灯此时已显示离线，用户不盲）。
+ *  预算是 90s：冷启动实测可达数十秒，短预算会把慢启动误判成失败。 */
+export async function waitForBackendReady(
+  opts: { timeoutMs?: number; intervalMs?: number } = {},
+): Promise<boolean> {
+  const timeoutMs = opts.timeoutMs ?? 90_000;
+  const intervalMs = opts.intervalMs ?? 1_000;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await checkBackendHealth()) return true;
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  return false;
+}
+
 // ── Analytics / Usage ────────────────────────────────────────
 
 export const getAnalytics = async (days = 30): Promise<AnalyticsResponse> =>
