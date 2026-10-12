@@ -87,7 +87,9 @@
    刻意只对标识符/路径/行号生效：普通中文词不会被 markdown 成 code，
    所以不存在「一段中文被切成 5 个芯片」的情况。 */
 .prose code {
-  background: var(--color-bg-tertiary);
+  /* 2026-10-12 用户修正:芯片一多(表格里尤甚)实色底糊成一片脏感。
+     降到 45% 半透明 —— 单枚仍可扫读,成片时不再抢焦点。 */
+  background: color-mix(in srgb, var(--color-bg-tertiary) 45%, transparent);
   padding: 1px 5px;
   border-radius: 4px;
   font-size: 0.9em;
