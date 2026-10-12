@@ -185,12 +185,12 @@ onUnmounted(() => {
         {{
           hasRelay
             ? '连接之后，你在这里下的任务会在电脑上执行，审批和结果也回到这里。'
-            : '先去设置里填 relay 地址，再回来连接。'
+            : '扫电脑上的配对码即可连接：relay 地址与凭据会自动带上，无需手填。'
         }}
       </text>
       <view class="c-acts">
-        <view v-if="hasRelay" class="c-btn pri" @tap="goConnect"><text>去连接</text></view>
-        <view class="c-btn" @tap="goSettings"><text>{{ hasRelay ? '设置' : '去设置' }}</text></view>
+        <view class="c-btn pri" @tap="goConnect"><text>扫码连接电脑</text></view>
+        <view class="c-btn" @tap="goSettings"><text>设置</text></view>
       </view>
     </view>
 

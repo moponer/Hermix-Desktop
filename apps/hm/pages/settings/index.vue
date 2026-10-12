@@ -85,6 +85,10 @@ function saveToken() {
   saved.value = '已保存'
 }
 
+function goPairing() {
+  uni.navigateTo({ url: '/pages/pairing/index' })
+}
+
 function resetPairing() {
   uni.showModal({
     title: '重新配对',
@@ -103,9 +107,16 @@ function resetPairing() {
   <hm-shell title="设置" back>
     <!-- 连接 -->
     <text class="sec">连接</text>
+    <view class="row tap" @tap="goPairing">
+      <text class="k">扫码配对</text>
+      <text class="v-t ok">扫电脑上的配对码 →</text>
+    </view>
+    <view class="note">
+      推荐入口：扫码后 relay 地址与凭据自动带上，无需手填。桌面端在「设置 → 设备管理 → 手机端」生成配对码。
+    </view>
     <view class="row">
       <text class="k">配对方式</text>
-      <text class="v-t">扫电脑上的码直连</text>
+      <text class="v-t">扫电脑上的码（经中转）</text>
     </view>
     <view class="row">
       <text class="k">relay 凭据</text>
@@ -198,6 +209,9 @@ function resetPairing() {
   background: $card;
   border-radius: $r-card;
   margin: 0 0 8rpx;
+}
+.tap:active {
+  opacity: 0.7;
 }
 .k {
   flex: none;
