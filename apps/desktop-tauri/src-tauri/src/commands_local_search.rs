@@ -277,6 +277,36 @@ fn lower_current_thread_priority() {}
 /// 单盘遍历：产出该盘的 arena 分片。Serial 遍历发生在当前线程
 /// （不引 rayon——优先级才能落到干活线程上，见模块注释）；
 /// 并行度 = 每盘一根线程；线程优先级 BELOW_NORMAL。
+/// 索引遍历的排除表(目录名,大小写不敏感,命中整棵子树剪掉)。
+///
+/// 2026-10-12:用户提出"有没有真正排除依赖"——此前零过滤,node_modules/
+/// target/.git 既让扫描慢一个数量级,又把搜索结果淹成依赖噪声。
+///
+/// 保守边界:只排**无歧义的产物/依赖目录**。任何可能装着用户内容的名字
+/// 一律不排(AppData、build —— hermix 自己的 src-tauri/build 就是源码,
+/// 排了会让 build.rs 里的代码搜不到);系统目录(Windows、$Recycle.Bin、
+/// System Volume Information)不靠这张表,jwalk 遇权限错误本就跳过。
+const INDEX_SKIP_DIRS: &[&str] = &[
+    // JS / TS
+    "node_modules", ".next", ".nuxt", ".turbo", ".parcel-cache", ".svelte-kit",
+    // Rust
+    "target", ".cargo", ".rustup",
+    // 版本控制
+    ".git", ".svn", ".hg",
+    // Python
+    "__pycache__", ".venv", "venv", ".pytest_cache", ".mypy_cache", ".tox",
+    // Java / Gradle / Android
+    ".gradle", ".m2", ".android",
+    // 通用产物
+    "dist", "coverage", ".cache", ".turbo-old", ".output",
+    // 桌面端自身的产物(便携 app 根也在此列)
+    "update.pending", "update.backup",
+];
+
+fn is_skip_dir(name: &str) -> bool {
+    INDEX_SKIP_DIRS.iter().any(|d| d.eq_ignore_ascii_case(name))
+}
+
 fn walk_root(root: &Path) -> Index {
     lower_current_thread_priority();
     let mut index = Index::default();
@@ -288,7 +318,11 @@ fn walk_root(root: &Path) -> Index {
         // Serial：遍历在当前（低优先级）线程上执行，不引 rayon。
         .parallelism(jwalk::Parallelism::Serial)
         .process_read_dir(|_, _, _, dir_entries| {
-            dir_entries.retain(|e| e.as_ref().is_ok());
+            // 依赖/产物目录直接丢弃目录项 → jwalk 不再下降,整棵子树剪掉。
+            dir_entries.retain(|e| match e.as_ref() {
+                Ok(entry) => !is_skip_dir(&entry.file_name().to_string_lossy()),
+                Err(_) => false,
+            });
         });
 
     let mut local_progress = 0u64;
