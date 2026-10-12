@@ -18,6 +18,13 @@ import {
   vaultReveal,
   type VaultEntryMeta,
 } from "../api/vault";
+import { openExternalUrl } from "../desktopBridge";
+import {
+  buildBlobMap,
+  filterEntries,
+  sortEntries,
+  type VaultSortKey,
+} from "./vaultSearch";
 
 interface FormState {
   id: string | null; // null = 新增
@@ -159,6 +166,26 @@ function IconGlobe({ size = 16 }: { size?: number }) {
   );
 }
 
+/** 清除搜索 / 关闭详情的 X 图标。 */
+function IconX() {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M18 6 6 18" />
+      <path d="m6 6 12 12" />
+    </svg>
+  );
+}
+
 /** 图标按钮的 hover 说明浮层。
  *  不用原生 title：WebView2 里约 1s 才弹出且样式不可控。
  *  浮层向左上溢出，但列表容器是 `overflow-y-auto p-6`，上溢只落在 24px 内边距里
@@ -205,6 +232,12 @@ function Favicon({ url, size = 16 }: { url: string; size?: number }) {
   );
 }
 
+/** RFC3339 → 本地时间显示；解析失败原样返回。 */
+function formatTime(iso: string): string {
+  const t = Date.parse(iso);
+  return Number.isNaN(t) ? iso : new Date(t).toLocaleString();
+}
+
 export function VaultPanel() {
   const [entries, setEntries] = useState<VaultEntryMeta[]>([]);
   const [query, setQuery] = useState("");
@@ -221,6 +254,9 @@ export function VaultPanel() {
   const [showSecret, setShowSecret] = useState(false);
   const [modalShown, setModalShown] = useState(false);
   const copyTimer = useRef<number | null>(null);
+  // 点击行选中的凭据；右侧详情面板据此渲染（从 entries 按 id 查，筛选不丢选中）。
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [sortKey, setSortKey] = useState<VaultSortKey>("updated");
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -251,16 +287,21 @@ export function VaultPanel() {
     return undefined;
   }, [form]);
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return entries;
-    return entries.filter(
-      (e) =>
-        e.name.toLowerCase().includes(q) ||
-        e.url.toLowerCase().includes(q) ||
-        e.username.toLowerCase().includes(q),
-    );
-  }, [entries, query]);
+  const blobMap = useMemo(() => buildBlobMap(entries), [entries]);
+  const visible = useMemo(
+    () => sortEntries(filterEntries(entries, query, blobMap), sortKey),
+    [entries, query, blobMap, sortKey],
+  );
+  const selected = useMemo(
+    () => entries.find((e) => e.id === selectedId) ?? null,
+    [entries, selectedId],
+  );
+
+  /** 重置列表：清搜索条件 + 恢复默认排序。 */
+  const resetFilters = useCallback(() => {
+    setQuery("");
+    setSortKey("updated");
+  }, []);
 
   /** 点击显示密码：现取明文，30s 后自动掩回（前端不缓存）。 */
   const reveal = useCallback(async (id: string) => {
@@ -345,6 +386,7 @@ export function VaultPanel() {
         await vaultDelete(id);
         maskReveal(id);
         setConfirmingId(null);
+        setSelectedId((cur) => (cur === id ? null : cur));
         await refresh();
       } catch (e) {
         setError(String(e instanceof Error ? e.message : e));
@@ -384,10 +426,10 @@ export function VaultPanel() {
   }, []);
 
   return (
-    <div className="flex h-full flex-col gap-4 overflow-y-auto p-6">
+    <div className="flex h-full flex-col gap-4 p-6">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-lg font-semibibold text-text-primary">凭据保险库</h2>
+          <h2 className="text-lg font-semibold text-text-primary">凭据保险库</h2>
           <p className="text-xs text-text-secondary">
             AES-256-GCM 本地加密 · 主密钥在 Windows 凭据管理器 · 列表不含密码
           </p>
@@ -400,113 +442,332 @@ export function VaultPanel() {
         </button>
       </div>
 
-      <input
-        className="rounded-lg border border-border-secondary bg-bg-secondary px-3 py-2 text-sm text-text-primary outline-none focus:border-accent"
-        placeholder="搜索名称 / 网址 / 用户名…"
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-      />
-
-      {error && (
-        <div className="rounded-lg bg-error-soft px-3 py-2 text-sm text-error">{error}</div>
-      )}
-
-      {loading ? (
-        <div className="py-8 text-center text-sm text-text-secondary">加载中…</div>
-      ) : filtered.length === 0 ? (
-        <div className="py-8 text-center text-sm text-text-secondary">
-          {entries.length === 0 ? "还没有凭据，点右上角「新增凭据」开始" : "没有匹配的条目"}
-        </div>
-      ) : (
-        <div className="flex flex-col gap-2">
-          {filtered.map((e) => {
-            const shown = revealed[e.id] !== undefined;
-            const isConfirming = confirmingId === e.id;
-            return (
-              <div
-                key={e.id}
-                className="flex items-center gap-2 rounded-xl border border-border-primary bg-bg-card px-4 py-3 transition-colors hover:bg-bg-card-hover"
+      <div className="flex min-h-0 flex-1 gap-4">
+        <section className="flex min-w-0 flex-1 flex-col gap-3" aria-label="凭据列表">
+          <div className="relative">
+            <input
+              className="w-full rounded-lg border border-border-secondary bg-bg-secondary py-2 pl-3 pr-9 text-sm text-text-primary outline-none focus:border-accent"
+              placeholder="搜索名称 / 拼音 / 网址 / 用户名…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(ev) => {
+                if (ev.key === "Escape") {
+                  ev.stopPropagation();
+                  setQuery("");
+                }
+              }}
+            />
+            {query !== "" && (
+              <button
+                className="group absolute right-2 top-1/2 flex -translate-y-1/2 items-center rounded-md p-1 text-text-secondary transition-colors hover:bg-bg-card-hover"
+                aria-label="清除搜索"
+                onClick={() => setQuery("")}
               >
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <Favicon url={e.url} size={16} />
-                    <div className="truncate text-sm font-medium text-text-primary">{e.name}</div>
-                  </div>
-                  <div className="truncate text-xs text-text-secondary">
-                    {[e.url, e.username].filter(Boolean).join(" · ") || "—"}
-                  </div>
-                  {shown && revealed[e.id] && (
-                    <div className="mt-1 break-all font-mono text-xs text-text-secondary">
-                      {revealed[e.id]}
-                    </div>
-                  )}
-                  {e.notes.trim() !== "" && (
-                    <div className="mt-1 truncate text-xs text-text-faint">{e.notes}</div>
-                  )}
-                </div>
-                <div className="flex shrink-0 items-center gap-1">
-                  <button
-                    className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-text-secondary transition-colors hover:bg-bg-secondary"
-                    aria-label={shown ? "掩回密码" : "显示密码"}
-                    aria-pressed={shown}
-                    onClick={() => (shown ? maskReveal(e.id) : void reveal(e.id))}
-                  >
-                    {shown ? <IconEyeOff /> : <IconEye />}
-                    {shown ? "掩回" : "显示"}
-                  </button>
-                  <button
-                    className="group relative flex items-center rounded-lg p-1.5 text-text-secondary transition-colors hover:bg-bg-secondary"
-                    aria-label="复制用户名"
-                    onClick={() => copy(e.username, `${e.id}:user`)}
-                  >
-                    {copiedKey === `${e.id}:user` ? <IconCheck /> : <IconUser />}
-                    <Tip label="复制用户名" />
-                  </button>
-                  {shown && (
+                <IconX />
+                <Tip label="清除搜索" />
+              </button>
+            )}
+          </div>
+
+          {error && (
+            <div className="rounded-lg bg-error-soft px-3 py-2 text-sm text-error">{error}</div>
+          )}
+
+          {!loading && entries.length > 0 && (
+            <div className="flex items-center justify-between">
+              <p className="text-[length:var(--text-meta)] text-text-faint">
+                共 {entries.length} 条
+                {query.trim() !== "" && (
+                  <>
+                    {" · 匹配 "}
+                    {visible.length}
+                    {" 条 · "}
                     <button
-                      className="group relative flex items-center rounded-lg p-1.5 text-text-secondary transition-colors hover:bg-bg-secondary"
-                      aria-label="复制密码"
-                      onClick={() => copy(revealed[e.id], `${e.id}:secret`)}
+                      className="text-text-secondary underline-offset-2 transition-colors hover:text-text-primary hover:underline"
+                      onClick={resetFilters}
                     >
-                      {copiedKey === `${e.id}:secret` ? <IconCheck /> : <IconKey />}
-                      <Tip label="复制密码" />
+                      重置
                     </button>
-                  )}
-                  <button
-                    className="rounded-lg px-2 py-1 text-xs text-text-secondary transition-colors hover:bg-bg-secondary"
-                    onClick={() => startEdit(e)}
+                  </>
+                )}
+              </p>
+              <select
+                className="rounded-lg border border-border-secondary bg-bg-secondary px-2 py-1 text-[length:var(--text-meta)] text-text-primary outline-none focus:border-accent"
+                value={sortKey}
+                onChange={(e) => setSortKey(e.target.value as VaultSortKey)}
+                aria-label="排序方式"
+              >
+                <option value="updated">最近更新</option>
+                <option value="nameAsc">名称 A→Z</option>
+                <option value="nameDesc">名称 Z→A</option>
+              </select>
+            </div>
+          )}
+
+          {loading ? (
+            <div className="py-8 text-center text-sm text-text-secondary">加载中…</div>
+          ) : visible.length === 0 ? (
+            <div className="py-8 text-center text-sm text-text-secondary">
+              {entries.length === 0 ? "还没有凭据，点右上角「新增凭据」开始" : "没有匹配的条目"}
+            </div>
+          ) : (
+            <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pb-1">
+              {visible.map((e) => {
+                const shown = revealed[e.id] !== undefined;
+                const isConfirming = confirmingId === e.id;
+                const isSelected = e.id === selectedId;
+                return (
+                  <div
+                    key={e.id}
+                    onClick={() => setSelectedId(e.id)}
+                    className={`flex cursor-pointer items-center gap-2 rounded-xl border px-4 py-3 transition-colors hover:bg-bg-card-hover ${
+                      isSelected
+                        ? "border-accent bg-bg-card-hover"
+                        : "border-border-primary bg-bg-card"
+                    }`}
                   >
-                    编辑
-                  </button>
-                  {isConfirming ? (
-                    <>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <Favicon url={e.url} size={16} />
+                        <div className="truncate text-sm font-medium text-text-primary">{e.name}</div>
+                      </div>
+                      <div className="truncate text-xs text-text-secondary">
+                        {[e.url, e.username].filter(Boolean).join(" · ") || "—"}
+                      </div>
+                      {shown && revealed[e.id] && (
+                        <div className="mt-1 break-all font-mono text-xs text-text-secondary">
+                          {revealed[e.id]}
+                        </div>
+                      )}
+                      {e.notes.trim() !== "" && (
+                        <div className="mt-1 truncate text-xs text-text-faint">{e.notes}</div>
+                      )}
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1">
                       <button
-                        className="rounded-lg px-2 py-1 text-xs font-medium text-error transition-colors hover:bg-error-soft"
-                        onClick={() => void remove(e.id)}
+                        className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-text-secondary transition-colors hover:bg-bg-secondary"
+                        aria-label={shown ? "掩回密码" : "显示密码"}
+                        aria-pressed={shown}
+                        onClick={(ev) => {
+                          ev.stopPropagation();
+                          if (shown) maskReveal(e.id);
+                          else void reveal(e.id);
+                        }}
                       >
-                        确认删除
+                        {shown ? <IconEyeOff /> : <IconEye />}
+                        {shown ? "掩回" : "显示"}
                       </button>
+                      <button
+                        className="group relative flex items-center rounded-lg p-1.5 text-text-secondary transition-colors hover:bg-bg-secondary"
+                        aria-label="复制用户名"
+                        onClick={(ev) => {
+                          ev.stopPropagation();
+                          copy(e.username, `${e.id}:user`);
+                        }}
+                      >
+                        {copiedKey === `${e.id}:user` ? <IconCheck /> : <IconUser />}
+                        <Tip label="复制用户名" />
+                      </button>
+                      {shown && (
+                        <button
+                          className="group relative flex items-center rounded-lg p-1.5 text-text-secondary transition-colors hover:bg-bg-secondary"
+                          aria-label="复制密码"
+                          onClick={(ev) => {
+                            ev.stopPropagation();
+                            copy(revealed[e.id], `${e.id}:secret`);
+                          }}
+                        >
+                          {copiedKey === `${e.id}:secret` ? <IconCheck /> : <IconKey />}
+                          <Tip label="复制密码" />
+                        </button>
+                      )}
                       <button
                         className="rounded-lg px-2 py-1 text-xs text-text-secondary transition-colors hover:bg-bg-secondary"
-                        onClick={() => setConfirmingId(null)}
+                        onClick={(ev) => {
+                          ev.stopPropagation();
+                          startEdit(e);
+                        }}
                       >
-                        取消
+                        编辑
                       </button>
-                    </>
-                  ) : (
+                      {isConfirming ? (
+                        <>
+                          <button
+                            className="rounded-lg px-2 py-1 text-xs font-medium text-error transition-colors hover:bg-error-soft"
+                            onClick={(ev) => {
+                              ev.stopPropagation();
+                              void remove(e.id);
+                            }}
+                          >
+                            确认删除
+                          </button>
+                          <button
+                            className="rounded-lg px-2 py-1 text-xs text-text-secondary transition-colors hover:bg-bg-secondary"
+                            onClick={(ev) => {
+                              ev.stopPropagation();
+                              setConfirmingId(null);
+                            }}
+                          >
+                            取消
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          className="rounded-lg px-2 py-1 text-xs text-error transition-colors hover:bg-error-soft"
+                          onClick={(ev) => {
+                            ev.stopPropagation();
+                            setConfirmingId(e.id);
+                          }}
+                        >
+                          删除
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </section>
+
+        {selected && (
+          <aside
+            className="flex w-80 shrink-0 flex-col overflow-y-auto rounded-xl border border-border-primary bg-bg-card"
+            aria-label="凭据详情"
+          >
+            <div className="flex items-start gap-2 border-b border-border-primary p-4">
+              <Favicon url={selected.url} size={20} />
+              <div className="min-w-0 flex-1">
+                <h3 className="truncate text-[length:var(--text-ui)] font-semibold text-text-primary">
+                  {selected.name}
+                </h3>
+                <p className="text-[length:var(--text-meta)] text-text-faint">
+                  更新于 {formatTime(selected.updated_at)}
+                </p>
+              </div>
+              <button
+                className="group relative flex items-center rounded-md p-1 text-text-secondary transition-colors hover:bg-bg-secondary"
+                aria-label="关闭详情"
+                onClick={() => setSelectedId(null)}
+              >
+                <IconX />
+                <Tip label="关闭详情" />
+              </button>
+            </div>
+            <div className="flex flex-col gap-4 p-4">
+              {selected.url !== "" && (
+                <div>
+                  <p className="text-[length:var(--text-meta)] text-text-faint">网址</p>
+                  <button
+                    className="break-all text-left text-[length:var(--text-ui)] text-accent hover:underline"
+                    onClick={() => void openExternalUrl(selected.url)}
+                  >
+                    {selected.url}
+                  </button>
+                </div>
+              )}
+              <div>
+                <p className="text-[length:var(--text-meta)] text-text-faint">用户名</p>
+                <div className="flex items-center gap-2">
+                  <span className="min-w-0 flex-1 truncate text-[length:var(--text-ui)] text-text-primary">
+                    {selected.username || "—"}
+                  </span>
+                  {selected.username !== "" && (
                     <button
-                      className="rounded-lg px-2 py-1 text-xs text-error transition-colors hover:bg-error-soft"
-                      onClick={() => setConfirmingId(e.id)}
+                      className="group relative flex items-center rounded-md p-1 text-text-secondary transition-colors hover:bg-bg-secondary"
+                      aria-label="复制用户名"
+                      onClick={() => copy(selected.username, `${selected.id}:user`)}
                     >
-                      删除
+                      {copiedKey === `${selected.id}:user` ? <IconCheck /> : <IconUser />}
+                      <Tip label="复制用户名" />
                     </button>
                   )}
                 </div>
               </div>
-            );
-          })}
-        </div>
-      )}
+              <div>
+                <p className="text-[length:var(--text-meta)] text-text-faint">密码</p>
+                {revealed[selected.id] !== undefined ? (
+                  <div className="flex items-center gap-2">
+                    <span className="min-w-0 flex-1 break-all font-mono text-[length:var(--text-meta)] text-text-primary">
+                      {revealed[selected.id]}
+                    </span>
+                    <button
+                      className="group relative flex items-center rounded-md p-1 text-text-secondary transition-colors hover:bg-bg-secondary"
+                      aria-label="掩回密码"
+                      onClick={() => maskReveal(selected.id)}
+                    >
+                      <IconEyeOff />
+                      <Tip label="掩回密码" />
+                    </button>
+                    <button
+                      className="group relative flex items-center rounded-md p-1 text-text-secondary transition-colors hover:bg-bg-secondary"
+                      aria-label="复制密码"
+                      onClick={() => copy(revealed[selected.id], `${selected.id}:secret`)}
+                    >
+                      {copiedKey === `${selected.id}:secret` ? <IconCheck /> : <IconKey />}
+                      <Tip label="复制密码" />
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    {/* 固定位数圆点：不跟随真实密码长度，避免泄露长度信息。 */}
+                    <span className="flex-1 font-mono text-[length:var(--text-meta)] text-text-secondary">
+                      ••••••••
+                    </span>
+                    <button
+                      className="group relative flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-text-secondary transition-colors hover:bg-bg-secondary"
+                      aria-label="显示密码"
+                      onClick={() => void reveal(selected.id)}
+                    >
+                      <IconEye />
+                      显示
+                    </button>
+                  </div>
+                )}
+              </div>
+              {selected.notes.trim() !== "" && (
+                <div>
+                  <p className="text-[length:var(--text-meta)] text-text-faint">备注</p>
+                  <p className="whitespace-pre-wrap break-words text-[length:var(--text-ui)] text-text-secondary">
+                    {selected.notes}
+                  </p>
+                </div>
+              )}
+              <div className="flex gap-2 border-t border-border-primary pt-4">
+                <button
+                  className="flex-1 rounded-lg border border-border-secondary px-3 py-1.5 text-[length:var(--text-meta)] text-text-primary transition-colors hover:bg-bg-secondary"
+                  onClick={() => startEdit(selected)}
+                >
+                  编辑
+                </button>
+                {confirmingId === selected.id ? (
+                  <>
+                    <button
+                      className="flex-1 rounded-lg border border-border-secondary px-3 py-1.5 text-[length:var(--text-meta)] font-medium text-error transition-colors hover:bg-error-soft"
+                      onClick={() => void remove(selected.id)}
+                    >
+                      确认删除
+                    </button>
+                    <button
+                      className="flex-1 rounded-lg border border-border-secondary px-3 py-1.5 text-[length:var(--text-meta)] text-text-secondary transition-colors hover:bg-bg-secondary"
+                      onClick={() => setConfirmingId(null)}
+                    >
+                      取消
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    className="flex-1 rounded-lg border border-border-secondary px-3 py-1.5 text-[length:var(--text-meta)] text-error transition-colors hover:bg-error-soft"
+                    onClick={() => setConfirmingId(selected.id)}
+                  >
+                    删除
+                  </button>
+                )}
+              </div>
+            </div>
+          </aside>
+        )}
+      </div>
 
       {form && (
         <div
