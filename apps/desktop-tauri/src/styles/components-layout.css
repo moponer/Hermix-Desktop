@@ -1524,10 +1524,11 @@ height: 26px;
    胜出，288 个选择器被双定义。以下是仅存在于旧副本里的规则，随该文件
    一并删除。 */
 .user-menu-popover {
-  min-width: 220px;
+  min-width: 184px;
   border-radius: var(--radius-xl);
   border: 1px solid var(--color-border-subtle);
-  background: var(--color-bg-secondary);
+  /* 浮层专用令牌：比侧栏（--color-bg-secondary）亮一档，弹出菜单才有层 */
+  background: var(--color-bg-elevated);
   box-shadow:
     0 4px 24px rgba(0, 0, 0, 0.12),
     0 1px 4px rgba(0, 0, 0, 0.06);
