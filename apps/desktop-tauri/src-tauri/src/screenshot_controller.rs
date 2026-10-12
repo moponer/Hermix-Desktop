@@ -20,6 +20,13 @@ use serde::Serialize;
 use tauri::{Emitter, Manager};
 
 const OVERLAY_LABEL: &str = "screenshot-overlay";
+
+/// 覆盖窗的 WebView2 环境参数。必须与 tauri.conf.json 主窗口的
+/// additionalBrowserArgs **逐字一致**：同一 user data folder 下所有
+/// webview 共享一个浏览器进程，环境级选项不一致时创建直接报
+/// 0x8007139F（ERROR_INVALID_STATE）——覆盖窗此前没带这份参数，
+/// 就是「覆盖窗创建失败」的根因。改主窗参数时这里必须同步。
+const OVERLAY_BROWSER_ARGS: &str = "--disable-features=msSmartScreenProtection,EdgeFeed,CalculateNativeWinOcclusion,IntensiveWakeUpThrottling,RendererCodeIntegrity --disable-renderer-backgrounding --disable-background-timer-throttling --disk-cache-size=20971520 --js-flags=--max-old-space-size=1024";
 /// setup 默认注册的热键，与 lib.rs 保持一致；前端回放配置前的兜底。
 const DEFAULT_HOTKEY: &str = "alt+Q";
 /// 会话总兜底：编码 + 页面加载正常以秒计，30s 没就绪即判异常收尾。
@@ -104,6 +111,10 @@ pub fn run_session(app: &tauri::AppHandle) -> Result<(), String> {
         tauri::WebviewUrl::App("index.html#/screenshot-overlay".into()),
     )
     .title("Screenshot")
+    .additional_browser_args(OVERLAY_BROWSER_ARGS)
+    // 主窗是 InPrivate（conf incognito: true），覆盖窗对齐——截图内容不该
+    // 落进任何持久化 profile。这是 controller 级选项，不影响环境共享。
+    .incognito(true)
     .position(pos_x, pos_y)
     .inner_size(vw / scale, vh / scale)
     .decorations(false)
