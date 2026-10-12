@@ -85,7 +85,7 @@ function hangUp() {
 
 <style lang="scss" scoped>
 .clock {
-  font-size: 22rpx;
+  font-size: $fs-sub;
   color: $fg3;
   font-family: monospace;
 }
@@ -97,7 +97,7 @@ function hangUp() {
   padding: 70rpx 40rpx;
 }
 .turn {
-  font-size: 22rpx;
+  font-size: $fs-sub;
   color: $fg2;
 }
 .wave {
@@ -144,7 +144,7 @@ function hangUp() {
 }
 .line {
   display: block;
-  font-size: 21rpx;
+  font-size: $fs-mini;
   color: $fg2;
   line-height: 1.55;
   font-family: monospace;
@@ -154,11 +154,11 @@ function hangUp() {
 }
 
 .notice {
-  margin: 0 26rpx;
+  margin: 0 $gutter;
   background: $warn-bg;
   border-radius: 18rpx;
   padding: 20rpx;
-  font-size: 21rpx;
+  font-size: $fs-mini;
   line-height: 1.5;
   color: $warn;
 }
@@ -166,14 +166,15 @@ function hangUp() {
 .row {
   display: flex;
   gap: 16rpx;
-  padding: 0 26rpx;
+  padding: 0 $gutter;
 }
 .btn {
   flex: 1;
-  height: 96rpx;
-  line-height: 96rpx;
-  text-align: center;
-  border-radius: 48rpx;
+  height: 108rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 54rpx;
   background: $card;
   color: $fg2;
 }
@@ -182,6 +183,7 @@ function hangUp() {
   color: $err;
 }
 .bl {
-  font-size: 22rpx;
+  font-size: $fs-body;
+  font-weight: 500;
 }
 </style>

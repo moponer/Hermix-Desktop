@@ -19,11 +19,13 @@ import {
   type PairingTarget,
 } from '../../core/direct'
 import { generateIdentity } from '../../core/crypto'
-import { hasSubtleCrypto, setRelayToken, storePairedDevice } from '../../core/pairing'
+import { hasSubtleCrypto, setRelayToken, storePairedDevice, listDevices } from '../../core/pairing'
 import { setRelayBaseUrl } from '../../core/clock'
 
 /** 扫到并解析成功、但用户还没确认提交的码。 */
 const target = ref<PairingTarget | null>(null)
+/** 多桌面后「哪台是哪台」靠用户起名：默认按来源猜一个，可改。 */
+const devName = ref('')
 const busy = ref(false)
 const error = ref('')
 
@@ -39,6 +41,9 @@ function onScan() {
         return
       }
       target.value = t
+      // 起个默认名：设备 id 还没拿到（配对完成才有），先用时间槽位兜底，
+      // 用户在下一步可以改成「家里的电脑 / 公司工作站」这类好认的名字。
+      devName.value = `电脑 ${listDevices().length + 1}`
     },
     fail: (e) => {
       const msg = String((e as { errMsg?: string })?.errMsg ?? '')
@@ -59,6 +64,7 @@ async function submit() {
     const identity = await generateIdentity()
     const r = await pairOverRelay({ target: t, deviceName: defaultDeviceName(), identity })
     // relay 地址与凭据随码而来，落盘后聊天页的常驻连接直接用。
+    // 多桌面：name/relayBase/relayToken 一并入设备清单，不覆盖已有设备。
     setRelayBaseUrl(t.relayBase)
     setRelayToken(t.phoneToken)
     // PC 公钥(k) 一并落盘：聊天连接用它 seal 给 PC，冷重启后不丢。
@@ -66,6 +72,9 @@ async function submit() {
       deviceId: r.deviceId,
       deviceToken: r.deviceToken,
       pcPublicKey: t.pcPublicKey,
+      name: devName.value,
+      relayBase: t.relayBase,
+      relayToken: t.phoneToken,
     })
     uni.reLaunch({ url: '/pages/chat/index' })
   } catch (e) {
@@ -103,7 +112,7 @@ function reset() {
       </text>
     </view>
 
-    <!-- 第二步：确认身份，再提交 -->
+    <!-- 第二步：确认身份 + 起名，再提交 -->
     <template v-else>
       <view class="card">
         <view class="fp-row">
@@ -115,6 +124,11 @@ function reset() {
         <text class="card-hint">
           请确认电脑屏幕上显示的配对码一致，再点连接。
         </text>
+        <!-- 多桌面：名字进设备清单，切换面板/设备管理都靠它辨认 -->
+        <view class="namer">
+          <text class="namer-l">给它起个名字</text>
+          <input v-model="devName" class="namer-i" placeholder="比如：家里的电脑" :maxlength="20" />
+        </view>
       </view>
 
       <view v-if="!cryptoOk" class="notice err">
@@ -155,12 +169,12 @@ function reset() {
   margin-bottom: 22rpx;
 }
 .hero {
-  font-size: 34rpx;
+  font-size: $fs-title;
   font-weight: 600;
   color: $fg;
 }
 .sub {
-  font-size: 22rpx;
+  font-size: $fs-sub;
   color: $fg2;
   margin: 10rpx 0 34rpx;
 }
@@ -174,7 +188,7 @@ function reset() {
 .card-hint {
   display: block;
   margin-top: 18rpx;
-  font-size: 20rpx;
+  font-size: $fs-mini;
   color: $fg4;
   line-height: 1.6;
 }
@@ -218,7 +232,7 @@ function reset() {
 }
 .scan-t {
   margin-top: 24rpx;
-  font-size: 25rpx;
+  font-size: $fs-body;
   font-weight: 600;
   color: $accent;
 }
@@ -229,27 +243,47 @@ function reset() {
   justify-content: space-between;
 }
 .fp-label {
-  font-size: 20rpx;
+  font-size: $fs-mini;
   color: $fg4;
 }
 .fp-change {
-  font-size: 21rpx;
+  font-size: $fs-mini;
   color: $accent;
 }
 .fp-host {
   display: block;
   margin-top: 8rpx;
-  font-size: 25rpx;
+  font-size: $fs-body;
   color: $fg;
   word-break: break-all;
 }
 .fp-hex {
   display: block;
   margin-top: 10rpx;
-  font-size: 19rpx;
+  font-size: $fs-mini;
   color: $fg3;
   font-family: monospace;
   word-break: break-all;
+}
+
+/* 命名输入：多桌面后靠名字辨认设备，扫码确认卡里就地起名。 */
+.namer {
+  margin-top: 20rpx;
+  padding-top: 20rpx;
+}
+.namer-l {
+  display: block;
+  font-size: $fs-mini;
+  color: $fg4;
+  margin-bottom: 10rpx;
+}
+.namer-i {
+  height: 80rpx;
+  border-radius: 16rpx;
+  background: $base;
+  padding: 0 22rpx;
+  font-size: $fs-body;
+  color: $fg;
 }
 
 .notice {
@@ -257,7 +291,7 @@ function reset() {
   margin-top: 20rpx;
   border-radius: 18rpx;
   padding: 18rpx 20rpx;
-  font-size: 21rpx;
+  font-size: $fs-mini;
   line-height: 1.5;
   box-sizing: border-box;
   color: $fg2;
@@ -271,13 +305,14 @@ function reset() {
 .btn-pri {
   width: 100%;
   margin-top: 26rpx;
-  height: 88rpx;
-  line-height: 88rpx;
-  text-align: center;
+  height: $tap;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   border-radius: 44rpx;
   background: $accent;
   color: $on-accent;
-  font-size: 26rpx;
+  font-size: $fs-body;
   font-weight: 600;
 }
 .btn-pri.off {
@@ -286,18 +321,19 @@ function reset() {
 .btn-sec {
   width: 100%;
   margin-top: 14rpx;
-  height: 76rpx;
-  line-height: 76rpx;
-  text-align: center;
-  border-radius: 38rpx;
+  height: $tap;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 44rpx;
   background: $card;
   color: $fg2;
-  font-size: 23rpx;
+  font-size: $fs-sub;
 }
 
 .foot {
   margin-top: 28rpx;
-  font-size: 20rpx;
+  font-size: $fs-mini;
   color: $fg4;
   text-align: center;
 }

@@ -100,8 +100,8 @@ onShow(() => {
 .appr {
   background: $card;
   border-radius: $r-card;
-  padding: 24rpx;
-  margin: 0 26rpx 22rpx;
+  padding: 26rpx;
+  margin: 0 $gutter 22rpx;
 }
 .appr.gone {
   opacity: 0.55;
@@ -111,35 +111,35 @@ onShow(() => {
   justify-content: space-between;
   align-items: center;
   gap: 12rpx;
-  margin-bottom: 12rpx;
+  margin-bottom: 14rpx;
 }
 .state {
-  font-size: 24rpx;
+  font-size: $fs-body;
   font-weight: 600;
   color: $fg;
 }
 .rid {
   flex: none;
-  font-size: 18rpx;
+  font-size: $fs-mini;
   color: $fg4;
   font-family: monospace;
 }
 .tool {
   display: block;
-  font-size: 20rpx;
+  font-size: $fs-sub;
   color: $accent;
-  margin-bottom: 12rpx;
+  margin-bottom: 14rpx;
 }
 /* 参数块再往下沉一档（$base），比卡片本身更「内」——两层底色替代描边。 */
 .args {
   display: block;
   background: $base;
   border-radius: 14rpx;
-  padding: 16rpx;
-  font-size: 19rpx;
+  padding: 18rpx;
+  font-size: $fs-mini;
   color: $fg2;
   font-family: monospace;
-  margin-bottom: 18rpx;
+  margin-bottom: 20rpx;
   word-break: break-all;
 }
 
@@ -151,7 +151,7 @@ onShow(() => {
 }
 .remain {
   flex: none;
-  font-size: 20rpx;
+  font-size: $fs-mini;
   color: $warn;
 }
 .bar {
@@ -168,15 +168,16 @@ onShow(() => {
 
 .keys {
   display: flex;
-  gap: 12rpx;
+  gap: 14rpx;
 }
 .key {
   flex: 1;
-  height: 74rpx;
-  line-height: 74rpx;
-  text-align: center;
-  border-radius: 37rpx;
-  font-size: 24rpx;
+  height: $tap;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 44rpx;
+  font-size: $fs-sub;
   background: $raised;
   color: $fg2;
 }
@@ -188,14 +189,14 @@ onShow(() => {
 .cap {
   display: block;
   margin-top: 16rpx;
-  font-size: 19rpx;
+  font-size: $fs-mini;
   color: $fg4;
 }
 .expired-note {
   background: $err-bg;
   border-radius: 14rpx;
   padding: 16rpx;
-  font-size: 20rpx;
+  font-size: $fs-mini;
   color: $err;
 }
 </style>

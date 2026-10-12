@@ -2,13 +2,19 @@
 /**
  * 设置页。
  *
- * **只放真的有东西的条目。** 参考了 WorkBuddy 设置页的结构，但砍掉了它的
- * 记忆库、主题/语言四档、分享日志、意见反馈、账号注销——那些要么我们没有，
- * 要么（主题）只发布暗色一档，做个开关是假的。
+ * ## 2026-10-12 重设计：做减法
  *
- * 四项都是当场可验的：relay 地址、连接诊断、配对状态、重新配对。
+ * 旧版 13 个元素从上铺到下——relay 地址、凭据输入、配对方式、诊断结果、
+ * 设备 ID、版本……全是平铺的表单行，信息密度是网页后台的，不是手机设置页的。
+ * 现在按「一眼一件事」重排：
+ *
+ *   1. **连接状态卡**——顶部一张大卡，已连/未连一眼可判，附带设备号；
+ *   2. **扫码配对**——唯一的主按钮（推荐路径），说明压成一行；
+ *   3. **手动配置**——默认收起：99% 的用户走扫码，永远用不到手填；
+ *   4. **版本 + 危险操作**——页脚两行。
  */
 import { ref } from 'vue'
+import { onShow } from '@dcloudio/uni-app'
 import { relayBaseUrl, setRelayBaseUrl, checkClockSkew, type SkewProbe } from '../../core/clock'
 import {
   fingerprintOf,
@@ -17,23 +23,81 @@ import {
   clearCredentials,
   setRelayToken,
   hasRelayToken,
+  listDevices,
+  activeDevice,
+  renameDevice,
+  removeDevice,
+  switchDevice,
+  type DeviceRec,
   type RelayIdentity,
 } from '../../core/pairing'
 
 const url = ref(relayBaseUrl() ?? '')
-/**
- * relay 凭据（`hrel_*`）。
- *
- * 只在内存里编辑、点保存才落盘：明文 token 不该在界面上常驻显示，
- * 也没必要为它做「显示/隐藏」——它是一次性从桌面端复制过来的，
- * 不是需要反复查看的东西。
- */
+/** 手动配置默认收起——扫码是主路径，手填是兜底。 */
+const manualOpen = ref(false)
 const token = ref('')
 const saved = ref('')
 const id = ref<RelayIdentity | null>(null)
 const skew = ref<SkewProbe | null>(null)
 const probing = ref(false)
 const note = ref('')
+
+const paired = ref(isPaired())
+
+/** 已配对电脑清单（设备管理区）。onShow 刷新：从配对页回来要看到新机器。 */
+const devices = ref<DeviceRec[]>([])
+onShow(() => {
+  devices.value = listDevices()
+  paired.value = isPaired()
+})
+
+const curId = ref(deviceId())
+
+/** 点非当前设备 = 切换（与顶栏 sheet 同一语义：改指针 + reLaunch 重读）。 */
+function pickDevice(id: string) {
+  if (id === deviceId()) return
+  if (switchDevice(id)) uni.reLaunch({ url: '/pages/chat/index' })
+}
+
+function askRename(d: DeviceRec) {
+  uni.showModal({
+    title: '重命名',
+    editable: true,
+    placeholderText: '给这台电脑起个好认的名字',
+    content: d.name,
+    success: (res) => {
+      if (!res.confirm) return
+      if (renameDevice(d.id, res.content ?? '')) devices.value = listDevices()
+    },
+  })
+}
+
+function askRemove(d: DeviceRec) {
+  uni.showModal({
+    title: `移除「${d.name}」`,
+    content: '清掉这台电脑的配对凭据。以后要连它得重新扫码；电脑上的数据不受影响。',
+    confirmText: '移除',
+    confirmColor: '#e06b52',
+    success: (res) => {
+      if (!res.confirm) return
+      removeDevice(d.id)
+      devices.value = listDevices()
+      paired.value = isPaired()
+      curId.value = deviceId()
+    },
+  })
+}
+
+/** 行尾 ⋯：重命名 / 移除（删最后一台 = 回到未配对）。 */
+function manageDevice(d: DeviceRec) {
+  uni.showActionSheet({
+    itemList: ['重命名', '移除这台电脑'],
+    success: (res) => {
+      if (res.tapIndex === 0) askRename(d)
+      else askRemove(d)
+    },
+  })
+}
 
 /** App 端能读到真实版本号；H5 没有 version，退回「—」。 */
 const version = (() => {
@@ -105,185 +169,337 @@ function resetPairing() {
 
 <template>
   <hm-shell title="设置" back>
-    <!-- 连接 -->
-    <text class="sec">连接</text>
-    <view class="row tap" @tap="goPairing">
-      <text class="k">扫码配对</text>
-      <text class="v-t ok">扫电脑上的配对码 →</text>
-    </view>
-    <view class="note">
-      推荐入口：扫码后 relay 地址与凭据自动带上，无需手填。桌面端在「设置 → 设备管理 → 手机端」生成配对码。
-    </view>
-    <view class="row">
-      <text class="k">配对方式</text>
-      <text class="v-t">扫电脑上的码（经中转）</text>
-    </view>
-    <view class="row">
-      <text class="k">relay 凭据</text>
-      <text class="v-t" :class="hasRelayToken() ? 'ok' : 'warn'">
-        {{ hasRelayToken() ? '已填写' : '未填写' }}
-      </text>
-    </view>
-    <view v-if="hasRelayToken()" class="note">
-      已配对后，跨网络发消息靠它连中转。没有它就只能局域网直连。
-    </view>
-    <view class="row">
-      <input
-        v-model="token"
-        class="v"
-        placeholder="hrel_…（桌面端「手机端」渠道复制）"
-        :password="true"
-      />
-      <view class="btn-s" @tap="saveToken"><text>保存</text></view>
-    </view>
-    <text v-if="saved" class="note" :class="saved === '已保存' ? 'ok' : 'warn'">{{ saved }}</text>
-    <view class="row">
-      <text class="k">relay</text>
-      <input v-model="url" class="v" placeholder="https://…" />
-    </view>
-    <view class="acts">
-      <view class="btn" @tap="diagnose"><text>{{ probing ? '诊断中…' : '测试连接' }}</text></view>
+    <!-- 1. 连接状态卡：这一页唯一需要「一眼」的东西 -->
+    <view class="conn" :class="{ off: !paired }">
+      <view class="conn-dot" />
+      <view class="conn-txt">
+        <text class="conn-t">{{ paired ? '已连接电脑' : '未连接' }}</text>
+        <text class="conn-s">{{ paired ? deviceId() : '扫一次码就好，不用手填任何东西' }}</text>
+      </view>
     </view>
 
-    <view v-if="note" class="diag">
-      <text class="diag-t">{{ note }}</text>
-      <text v-if="id?.state === 'verified'" class="diag-s">
-        SHA-256 {{ id.fingerprint.slice(0, 8) }}…{{ id.fingerprint.slice(-4) }}
-      </text>
-      <text v-if="skew" class="diag-s">
-        {{
-          skew.skew === null
-            ? '时钟偏差：测不到'
-            : `时钟偏差：${skew.skew > 0 ? '快' : '慢'} ${Math.abs(skew.skew)} 秒`
-        }}
-      </text>
-      <text v-if="note" class="diag-s">改动后记得点「测试连接」生效</text>
+    <!-- 2. 主按钮：扫码配对（已有设备时话术变成「另一台」） -->
+    <view class="pri" @tap="goPairing"><text>{{ devices.length ? '连接另一台电脑' : '扫码连接电脑' }}</text></view>
+    <text class="hint">桌面端「设置 → 设备管理 → 手机端」生成配对码</text>
+
+    <!-- 2.5 设备管理：多桌面。点行=切换（非当前），⋯=重命名/移除。 -->
+    <template v-if="devices.length">
+      <text class="sec-t">已配对的电脑</text>
+      <view
+        v-for="d in devices"
+        :key="d.id"
+        class="drow"
+        @tap="pickDevice(d.id)"
+      >
+        <view class="ddot" :class="{ cur: d.id === deviceId() }" />
+        <view class="dtxt">
+          <text class="dn" :class="{ on: d.id === deviceId() }">{{ d.name }}</text>
+          <text class="ds">{{ d.id === deviceId() ? '当前连接' : d.id }}</text>
+        </view>
+        <text v-if="d.id === deviceId()" class="dtag">当前</text>
+        <view class="dmore" @tap.stop="manageDevice(d)"><text>⋯</text></view>
+      </view>
+    </template>
+
+    <!-- 3. 手动配置：默认收起 -->
+    <view class="manual-head" @tap="manualOpen = !manualOpen">
+      <text class="manual-t">手动配置 relay</text>
+      <text class="manual-c">{{ manualOpen ? '⌄' : '›' }}</text>
+    </view>
+    <view v-if="manualOpen" class="manual">
+      <view class="frow">
+        <text class="fl">relay 地址</text>
+        <input v-model="url" class="fv" placeholder="https://…" />
+      </view>
+      <view class="frow">
+        <text class="fl">relay 凭据</text>
+        <input
+          v-model="token"
+          class="fv"
+          placeholder="hrel_…"
+          :password="true"
+        />
+      </view>
+      <view class="fbtns">
+        <view class="fbtn" @tap="saveToken"><text>存凭据</text></view>
+        <view class="fbtn" @tap="diagnose"><text>{{ probing ? '测试中…' : '测试连接' }}</text></view>
+      </view>
+      <text v-if="saved" class="fnote" :class="saved === '已保存' ? 'ok' : 'warn'">{{ saved }}</text>
+      <view v-if="note" class="diag">
+        <text class="diag-t">{{ note }}</text>
+        <text v-if="id?.state === 'verified'" class="diag-s">
+          SHA-256 {{ id.fingerprint.slice(0, 8) }}…{{ id.fingerprint.slice(-4) }}
+        </text>
+        <text v-if="skew" class="diag-s">
+          {{
+            skew.skew === null
+              ? '时钟偏差：测不到'
+              : `时钟偏差：${skew.skew > 0 ? '快' : '慢'} ${Math.abs(skew.skew)} 秒`
+          }}
+        </text>
+      </view>
     </view>
 
-    <!-- 本机 -->
-    <text class="sec">本机</text>
-    <view class="row">
-      <text class="k">配对状态</text>
-      <text class="v-t">{{ isPaired() ? '已配对' : '未配对' }}</text>
-    </view>
-    <view class="row">
-      <text class="k">设备</text>
-      <text class="v-t mono">{{ deviceId() || '—' }}</text>
-    </view>
-    <view class="row">
-      <text class="k">版本</text>
-      <text class="v-t">{{ version }}</text>
-    </view>
-
-    <!-- TODO(在线更新): 版本检查入口放这里。manifest 里带 android 段，
-         App 启动时拉同一份清单，version 高于自身就在本页挂红点。
-         见 docs/notes/implemented/feature/2026-10-09-online-update.md 的手机端一节。 -->
-
-    <view class="acts">
-      <view class="btn danger" @tap="resetPairing"><text>清空凭据并重新配对</text></view>
+    <!-- 4. 页脚：版本 + 危险操作 -->
+    <view class="foot">
+      <text class="ver">Hermix M {{ version }}</text>
+      <view class="danger" @tap="resetPairing"><text>清空凭据并重新配对</text></view>
     </view>
   </hm-shell>
 </template>
 
 <style lang="scss" scoped>
-.sec {
-  display: block;
-  margin: 34rpx 26rpx 14rpx;
-  font-size: 20rpx;
-  color: $fg4;
-  letter-spacing: 1rpx;
+/* 连接状态卡：状态靠色点 + 大字，不靠表单行。 */
+.conn {
+  display: flex;
+  align-items: center;
+  gap: 20rpx;
+  margin: 28rpx $gutter 0;
+  padding: 28rpx;
+  background: $card;
+  border-radius: $r-card;
 }
-.note {
+.conn-dot {
+  flex: none;
+  width: 20rpx;
+  height: 20rpx;
+  border-radius: 50%;
+  background: $ok;
+}
+.conn.off .conn-dot {
+  background: $warn;
+}
+.conn-txt {
+  flex: 1;
+  min-width: 0;
+}
+.conn-t {
   display: block;
-  margin: 0 26rpx 16rpx;
-  font-size: 20rpx;
+  font-size: $fs-title;
+  font-weight: 600;
+  color: $fg;
+}
+.conn-s {
+  display: block;
+  margin-top: 6rpx;
+  font-size: $fs-mini;
+  color: $fg3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pri {
+  margin: 24rpx $gutter 0;
+  height: $tap;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 44rpx;
+  background: $accent;
+  color: $on-accent;
+  font-size: $fs-body;
+  font-weight: 600;
+}
+.pri:active {
+  opacity: 0.85;
+}
+
+/* 设备管理区 */
+.sec-t {
+  display: block;
+  margin: 32rpx $gutter 12rpx;
+  font-size: $fs-mini;
   color: $fg4;
-  line-height: 1.6;
-}/* 每行自成一张卡。原先靠 `:first-of-type` / `.sec + .row` 这些兄弟选择器去
-   拼「首行上圆角、末行下圆角」，加一行就错位；每行独立圆角反而更省事。 */
-.row {
+}
+.drow {
   display: flex;
   align-items: center;
   gap: 20rpx;
   padding: 24rpx 26rpx;
   background: $card;
   border-radius: $r-card;
-  margin: 0 0 8rpx;
+  margin: 0 $gutter 12rpx;
 }
-.tap:active {
-  opacity: 0.7;
+.drow:active {
+  opacity: 0.75;
 }
-.k {
+.ddot {
   flex: none;
-  width: 160rpx;
-  font-size: 23rpx;
-  color: $fg2;
+  width: 18rpx;
+  height: 18rpx;
+  border-radius: 50%;
+  background: $fg4;
 }
-.v {
+.ddot.cur {
+  background: $ok;
+}
+.dtxt {
   flex: 1;
   min-width: 0;
-  font-size: 23rpx;
-  color: $fg;
 }
-.v-t {
+.dn {
+  display: block;
+  font-size: $fs-body;
+  color: $fg;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dn.on {
+  color: $accent;
+  font-weight: 600;
+}
+.ds {
+  display: block;
+  font-size: $fs-mini;
+  color: $fg4;
+  margin-top: 4rpx;
+}
+.dtag {
+  flex: none;
+  font-size: $fs-mini;
+  color: $accent;
+  background: rgba(111, 174, 148, 0.14);
+  padding: 4rpx 16rpx;
+  border-radius: $r-pill;
+}
+.dmore {
+  flex: none;
+  width: 56rpx;
+  height: 56rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 28rpx;
+  color: $fg3;
+  font-size: $fs-title;
+}
+.hint {
+  display: block;
+  margin: 14rpx $gutter 0;
+  font-size: $fs-mini;
+  color: $fg4;
+  line-height: 1.6;
+}
+
+/* 手动配置：折叠头 + 收起后的表单。 */
+.manual-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 36rpx $gutter 0;
+  padding: 24rpx 28rpx;
+  background: $card;
+  border-radius: $r-card;
+}
+.manual-head:active {
+  opacity: 0.7;
+}
+.manual-t {
+  font-size: $fs-sub;
+  color: $fg2;
+}
+.manual-c {
+  font-size: $fs-sub;
+  color: $fg4;
+}
+.manual {
+  margin: 12rpx $gutter 0;
+  padding: 24rpx 28rpx;
+  background: $card;
+  border-radius: $r-card;
+}
+.frow {
+  display: flex;
+  align-items: center;
+  gap: 20rpx;
+  min-height: $tap;
+}
+.fl {
+  flex: none;
+  width: 170rpx;
+  font-size: $fs-sub;
+  color: $fg2;
+}
+.fv {
   flex: 1;
-  font-size: 23rpx;
+  min-width: 0;
+  height: $tap;
+  font-size: $fs-sub;
   color: $fg;
-  word-break: break-all;
 }
-.ok {
+.fbtns {
+  display: flex;
+  gap: 16rpx;
+  margin-top: 8rpx;
+}
+.fbtn {
+  flex: 1;
+  height: 76rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 38rpx;
+  background: $raised;
+  color: $fg;
+  font-size: $fs-sub;
+}
+.fbtn:active {
+  opacity: 0.7;
+}
+.fnote {
+  display: block;
+  margin-top: 14rpx;
+  font-size: $fs-mini;
+}
+.fnote.ok {
   color: $ok;
 }
-.warn {
+.fnote.warn {
   color: $warn;
 }
-.btn-s {
-  flex: none;
-  padding: 10rpx 22rpx;
-  border-radius: $r-pill;
-  background: $accent;
-  color: $on-accent;
-  font-size: 21rpx;
-}
-.mono {
-  font-family: monospace;
-  font-size: 20rpx;
-  color: $fg3;
-}
-
-.acts {
-  padding: 22rpx 26rpx 0;
-}
-.btn {
-  height: 76rpx;
-  line-height: 76rpx;
-  text-align: center;
-  border-radius: 38rpx;
-  background: $card;
-  color: $fg;
-  font-size: 23rpx;
-}
-.btn.danger {
-  background: $err-bg;
-  color: $err;
-}
-
 .diag {
-  margin: 16rpx 26rpx 0;
-  padding: 20rpx 22rpx;
-  border-radius: $r-card;
-  background: $card;
+  margin-top: 16rpx;
+  padding: 18rpx 20rpx;
+  border-radius: 14rpx;
+  background: $base;
 }
 .diag-t {
   display: block;
-  font-size: 22rpx;
+  font-size: $fs-mini;
   color: $fg;
+  line-height: 1.5;
 }
 .diag-s {
   display: block;
   margin-top: 8rpx;
-  font-size: 19rpx;
+  font-size: $fs-mini;
   color: $fg4;
   font-family: monospace;
+}
+
+.foot {
+  margin: 44rpx $gutter 40rpx;
+}
+.ver {
+  display: block;
+  text-align: center;
+  font-size: $fs-mini;
+  color: $fg4;
+}
+.danger {
+  margin-top: 20rpx;
+  height: $tap;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 44rpx;
+  background: $err-bg;
+  color: $err;
+  font-size: $fs-sub;
+}
+.danger:active {
+  opacity: 0.7;
 }
 </style>

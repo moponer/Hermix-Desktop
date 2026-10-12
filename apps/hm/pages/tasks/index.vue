@@ -76,15 +76,16 @@ onShow(() => {
 
 <style lang="scss" scoped>
 .icon-btn {
-  width: 56rpx;
-  height: 56rpx;
+  width: $tap;
+  height: $tap;
+  margin: -16rpx -16rpx -16rpx 0;
   display: flex;
   align-items: center;
   justify-content: center;
   border-radius: $r-pill;
   background: $raised;
   color: $fg;
-  font-size: 28rpx;
+  font-size: 32rpx;
 }
 
 /* 卡片比页底高一档，不描边。 */
@@ -94,8 +95,8 @@ onShow(() => {
   gap: 18rpx;
   background: $card;
   border-radius: $r-card;
-  padding: 22rpx;
-  margin: 0 26rpx 16rpx;
+  padding: 24rpx;
+  margin: 0 $gutter 16rpx;
 }
 .lead {
   flex: none;
@@ -124,7 +125,7 @@ onShow(() => {
   }
 }
 .pos {
-  font-size: 18rpx;
+  font-size: $fs-mini;
   color: $warn;
   background: $warn-bg;
   padding: 5rpx 12rpx;
@@ -136,7 +137,7 @@ onShow(() => {
 }
 .line {
   display: block;
-  font-size: 24rpx;
+  font-size: $fs-body;
   color: $fg;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -144,25 +145,26 @@ onShow(() => {
 }
 .sub {
   display: block;
-  font-size: 19rpx;
+  font-size: $fs-mini;
   color: $fg4;
   margin-top: 4rpx;
 }
 .stop {
   flex: none;
-  width: 52rpx;
-  height: 52rpx;
-  line-height: 52rpx;
-  text-align: center;
-  border-radius: 26rpx;
+  width: 72rpx;
+  height: 72rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 36rpx;
   background: $err-bg;
   color: $err;
-  font-size: 20rpx;
+  font-size: 26rpx;
 }
 
 .foot {
-  padding: 12rpx 26rpx 40rpx;
-  font-size: 20rpx;
+  padding: 12rpx $gutter 40rpx;
+  font-size: $fs-mini;
   color: $fg4;
 }
 </style>

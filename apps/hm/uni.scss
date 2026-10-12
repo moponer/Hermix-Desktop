@@ -42,3 +42,15 @@ $shadow-drawer: -8rpx 0 48rpx rgba(0, 0, 0, 0.5);
 $r-bubble: 15px;
 $r-card: 12px;
 $r-pill: 999px;
+
+/* ── 2026-10-12 移动端原生感改造 ─────────────────────────────────
+ * 字号梯度对齐原生（Android sp / iOS pt ≈ 2×rpx），不再用网页小字：
+ *   标题 34 · 正文 30 · 次级 26 · 脚注 22（rpx）
+ * 旧页面通篇 20~26rpx 是桌面网页的印刷尺度，在手机上要眯眼看。
+ * 触控目标统一 88rpx（= 44pt，成人指尖的下限）；页边距统一 32rpx。 */
+$fs-title: 34rpx;
+$fs-body: 30rpx;
+$fs-sub: 26rpx;
+$fs-mini: 22rpx;
+$tap: 88rpx;
+$gutter: 32rpx;

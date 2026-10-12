@@ -294,14 +294,14 @@ onUnmounted(() => {
   background: $warn;
 }
 .c-title {
-  font-size: 28rpx;
+  font-size: $fs-body;
   font-weight: 600;
   color: $fg;
 }
 .c-hint {
   display: block;
   margin-top: 12rpx;
-  font-size: 22rpx;
+  font-size: $fs-sub;
   color: $fg2;
   line-height: 1.6;
 }
@@ -312,13 +312,13 @@ onUnmounted(() => {
 }
 .c-btn {
   flex: 1;
-  height: 76rpx;
-  line-height: 76rpx;
+  height: $tap;
+  line-height: $tap;
   text-align: center;
-  border-radius: 38rpx;
+  border-radius: 44rpx;
   background: $raised;
   color: $fg;
-  font-size: 24rpx;
+  font-size: $fs-sub;
 }
 .c-btn.pri {
   background: $accent;
@@ -328,10 +328,10 @@ onUnmounted(() => {
 /* 气泡靠底色分层：用户=$raised（比页底高两档），助手=$card（高一档）。 */
 .bub {
   max-width: 84%;
-  padding: 18rpx 22rpx;
+  padding: 20rpx 24rpx;
   border-radius: $r-bubble;
-  margin: 0 26rpx 20rpx;
-  font-size: 26rpx;
+  margin: 0 $gutter 20rpx;
+  font-size: $fs-body;
   line-height: 1.55;
   box-sizing: border-box;
 }
@@ -355,7 +355,7 @@ onUnmounted(() => {
 .via {
   display: block;
   margin-top: 8rpx;
-  font-size: 18rpx;
+  font-size: $fs-mini;
   color: $fg4;
 }
 .tail {
@@ -363,10 +363,10 @@ onUnmounted(() => {
 }
 
 .notice {
-  margin: 0 26rpx 20rpx;
+  margin: 0 $gutter 20rpx;
   padding: 16rpx 20rpx;
   border-radius: 18rpx;
-  font-size: 21rpx;
+  font-size: $fs-mini;
   color: $fg2;
   background: $card;
 }
@@ -380,14 +380,14 @@ onUnmounted(() => {
 }
 
 .risky {
-  margin: 0 26rpx 20rpx;
+  margin: 0 $gutter 20rpx;
   background: $warn-bg;
   border-radius: 18rpx;
   padding: 20rpx 22rpx;
 }
 .risky-t {
   display: block;
-  font-size: 23rpx;
+  font-size: $fs-sub;
   font-weight: 600;
   color: $warn;
 }
@@ -395,7 +395,7 @@ onUnmounted(() => {
   display: block;
   margin-top: 6rpx;
   margin-bottom: 16rpx;
-  font-size: 22rpx;
+  font-size: $fs-mini;
   color: $fg2;
 }
 .risky-keys {
@@ -404,11 +404,11 @@ onUnmounted(() => {
 }
 .key {
   flex: 1;
-  height: 70rpx;
-  line-height: 70rpx;
+  height: $tap;
+  line-height: $tap;
   text-align: center;
-  border-radius: 35rpx;
-  font-size: 23rpx;
+  border-radius: 44rpx;
+  font-size: $fs-sub;
   background: $raised;
   color: $fg2;
 }
@@ -425,7 +425,7 @@ onUnmounted(() => {
 }
 .hint {
   display: block;
-  font-size: 20rpx;
+  font-size: $fs-mini;
   color: $fg2;
   margin-bottom: 10rpx;
 }
@@ -435,26 +435,26 @@ onUnmounted(() => {
 .field {
   display: flex;
   align-items: center;
-  height: 80rpx;
+  height: 96rpx;
   background: $card;
-  border-radius: 40rpx;
-  padding: 0 10rpx 0 24rpx;
+  border-radius: 48rpx;
+  padding: 0 12rpx 0 28rpx;
 }
 .inp {
   flex: 1;
   min-width: 0;
   color: $fg;
-  font-size: 26rpx;
+  font-size: $fs-body;
 }
 .mic {
   flex: none;
-  padding: 0 18rpx;
-  height: 60rpx;
-  line-height: 60rpx;
-  border-radius: 30rpx;
+  padding: 0 20rpx;
+  height: 72rpx;
+  line-height: 72rpx;
+  border-radius: 36rpx;
   background: $raised;
   color: $fg2;
-  font-size: 20rpx;
+  font-size: $fs-mini;
 }
 .mic.on {
   background: $accent;
@@ -462,15 +462,15 @@ onUnmounted(() => {
 }
 .send {
   flex: none;
-  width: 60rpx;
-  height: 60rpx;
-  line-height: 60rpx;
+  width: 72rpx;
+  height: 72rpx;
+  line-height: 72rpx;
   text-align: center;
-  border-radius: 30rpx;
+  border-radius: 36rpx;
   background: $accent;
   color: $on-accent;
-  margin-left: 10rpx;
-  font-size: 24rpx;
+  margin-left: 12rpx;
+  font-size: 30rpx;
 }
 .send.stop {
   background: $err-bg;

@@ -15,6 +15,7 @@
 import { computeSignature, signatureHeader, newNonce } from './signature'
 import { generateIdentity, type Identity } from './crypto'
 import { request, header } from './http'
+import { relayBaseUrl, setRelayBaseUrl } from './clock'
 
 const KEY_DEVICE_TOKEN = 'hermix.deviceToken'
 const KEY_DEVICE_ID = 'hermix.deviceId'
@@ -40,6 +41,33 @@ const KEY_E2EE_PUBLIC = 'hermix.e2ee.publicKey'
  */
 const KEY_E2EE_PC_PUBLIC = 'hermix.e2ee.pcPublicKey'
 
+// ── 多桌面（2026-10-12）───────────────────────────────────────────
+// 一台手机可以配对多台电脑。设备清单 + 「当前设备」指针，切换 = 改指针：
+//   hermix.devices      = DeviceRec[]
+//   hermix.activeDevice = 设备 id
+// 下面四个 KEY_* 单值键是旧单机模型的遗留，只在**迁移**时读一次，
+// 迁移完成后即删除——事实单一归属，不留双真相源。
+const KEY_DEVICES = 'hermix.devices'
+const KEY_ACTIVE = 'hermix.activeDevice'
+
+/** 一台已配对的电脑。relayBase/relayToken/pcPublicKey 都** per-device**：
+ * 两台电脑可以走不同 relay，E2EE 信任锚更是每台各一把。 */
+export interface DeviceRec {
+  /** PC 侧设备 id（`hm-xxxx`），也是清单内的唯一键。 */
+  id: string
+  /** 设备凭据 `hmxd_*`，仅配对成功那刻明文下发一次。 */
+  token: string
+  /** 用户起的名字（配对流程里输入），列表展示与切换面板都用它。 */
+  name: string
+  /** 该 PC 所在的 relay 地址。 */
+  relayBase: string
+  /** 该 relay 的参与者凭据 `hrel_*`。 */
+  relayToken: string
+  /** 这台 PC 的 E2EE 静态公钥（base64）。 */
+  pcPublicKey: string
+  addedAt: string
+}
+
 function get(k: string): string {
   try {
     return uni.getStorageSync(k) || ''
@@ -51,18 +79,128 @@ function set(k: string, v: string): void {
   uni.setStorageSync(k, v)
 }
 
-export const deviceToken = () => get(KEY_DEVICE_TOKEN)
-export const deviceId = () => get(KEY_DEVICE_ID)
-export const relayToken = () => get(KEY_RELAY_TOKEN)
+/**
+ * 旧单机键 → devices[0]，只在清单键不存在时跑一次，迁完即删旧键。
+ * 已配对用户升级后无感：activeDevice 直接指向原设备，token/凭据原样保留。
+ */
+function migrateLegacyIfNeeded(): void {
+  if (get(KEY_DEVICES)) return
+  const token = get(KEY_DEVICE_TOKEN)
+  if (!token) {
+    set(KEY_DEVICES, '[]')
+    return
+  }
+  const rec: DeviceRec = {
+    id: get(KEY_DEVICE_ID) || 'dev-legacy',
+    token,
+    name: '我的电脑',
+    relayBase: relayBaseUrl() ?? '',
+    relayToken: get(KEY_RELAY_TOKEN),
+    pcPublicKey: get(KEY_E2EE_PC_PUBLIC),
+    addedAt: new Date().toISOString(),
+  }
+  set(KEY_DEVICES, JSON.stringify([rec]))
+  set(KEY_ACTIVE, rec.id)
+  for (const k of [KEY_DEVICE_TOKEN, KEY_DEVICE_ID, KEY_RELAY_TOKEN, KEY_E2EE_PC_PUBLIC]) {
+    try {
+      uni.removeStorageSync(k)
+    } catch {
+      /* 单项失败不影响迁移主体 */
+    }
+  }
+}
+
+function loadDevices(): DeviceRec[] {
+  migrateLegacyIfNeeded()
+  try {
+    const parsed = JSON.parse(get(KEY_DEVICES) || '[]') as DeviceRec[]
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+function saveDevices(list: DeviceRec[]): void {
+  set(KEY_DEVICES, JSON.stringify(list))
+}
+
+/** 全部已配对的电脑（切换面板 / 设备管理页直接渲染这个）。 */
+export const listDevices = loadDevices
+
+/** 当前生效的设备。指针失效（被删/脏数据）时回落到第一台。 */
+export function activeDevice(): DeviceRec | null {
+  const list = loadDevices()
+  const id = get(KEY_ACTIVE)
+  return list.find((d) => d.id === id) ?? list[0] ?? null
+}
 
 /**
- * 清空本机全部凭据（设置页「重新配对」用）。
+ * 切换当前电脑。只改指针 + 同步 relay 镜像键——原设备的凭据原样留在清单里，
+ * 切回来不用重新配对。返回 false 表示 id 不在清单里（面板数据过期）。
+ */
+export function switchDevice(id: string): boolean {
+  const rec = loadDevices().find((d) => d.id === id)
+  if (!rec) return false
+  set(KEY_ACTIVE, id)
+  if (rec.relayBase) setRelayBaseUrl(rec.relayBase)
+  return true
+}
+
+/** 给设备改名（设备管理页）。返回 false = 设备不存在。 */
+export function renameDevice(id: string, name: string): boolean {
+  const list = loadDevices()
+  const rec = list.find((d) => d.id === id)
+  if (!rec) return false
+  rec.name = name.trim() || rec.name
+  saveDevices(list)
+  return true
+}
+
+/**
+ * 移除一台电脑。删的是当前设备时自动切到剩余的第一台（并同步 relay 镜像）；
+ * 删到最后一台 = 回到未配对状态。
+ */
+export function removeDevice(id: string): void {
+  const list = loadDevices().filter((d) => d.id !== id)
+  saveDevices(list)
+  if (get(KEY_ACTIVE) !== id) return
+  const next = list[0]
+  if (next) {
+    set(KEY_ACTIVE, next.id)
+    if (next.relayBase) setRelayBaseUrl(next.relayBase)
+  } else {
+    try {
+      uni.removeStorageSync(KEY_ACTIVE)
+    } catch {
+      /* 已是未配对态 */
+    }
+  }
+}
+
+export function deviceToken(): string {
+  return activeDevice()?.token ?? ''
+}
+export function deviceId(): string {
+  return activeDevice()?.id ?? ''
+}
+export function relayToken(): string {
+  return activeDevice()?.relayToken ?? ''
+}
+/** 当前设备的 E2EE 信任锚。多设备后每台各一把，切机随之切换。 */
+export function pcPublicKey(): string {
+  return activeDevice()?.pcPublicKey ?? ''
+}
+
+/**
+ * 清空本机全部配对与凭据（设置页「清空凭据并重新配对」用）。
  *
- * 必须连 `hermix.e2ee.publicKey` 一起清：E2EE 私钥本来就不可导出、冷启动
+ * 多设备后清的是**整个设备清单**，不只是当前那台。必须连
+ * `hermix.e2ee.publicKey` 一起清：E2EE 私钥本来就不可导出、冷启动
  * 就是新的一把，留着旧公钥只会让用户以为自己还连着旧会话。
  */
 export function clearCredentials(): void {
   for (const k of [
+    KEY_DEVICES,
+    KEY_ACTIVE,
     KEY_DEVICE_TOKEN,
     KEY_DEVICE_ID,
     KEY_RELAY_TOKEN,
@@ -95,7 +233,16 @@ export function isPaired(): boolean {
  * 帧本身是 E2EE 密封的，帧内的授权由 `hmxd_*` 决定。
  */
 export function setRelayToken(t: string): void {
-  set(KEY_RELAY_TOKEN, t.trim())
+  const v = t.trim()
+  // 镜像键只服务「未配对手填」的场景；已配对时真身在 active 设备记录里。
+  set(KEY_RELAY_TOKEN, v)
+  const list = loadDevices()
+  const cur = activeDevice()
+  const rec = cur ? list.find((d) => d.id === cur.id) : null
+  if (rec) {
+    rec.relayToken = v
+    saveDevices(list)
+  }
 }
 
 export const hasRelayToken = () => relayToken().length > 0
@@ -186,15 +333,32 @@ export async function storePairedDevice(opts: {
   deviceId: string
   deviceToken: string
   pcPublicKey?: string
+  /** 配对流程里用户起的名字；缺省回退「我的电脑」。 */
+  name?: string
+  /** 该 PC 所在的 relay；缺省取当前镜像（配对页在调它之前已 setRelayBaseUrl）。 */
+  relayBase?: string
+  /** 该 relay 的凭据；缺省取当前镜像。 */
+  relayToken?: string
 }): Promise<void> {
-  set(KEY_DEVICE_ID, opts.deviceId)
-  set(KEY_DEVICE_TOKEN, opts.deviceToken)
-  if (opts.pcPublicKey) set(KEY_E2EE_PC_PUBLIC, opts.pcPublicKey)
+  const list = loadDevices()
+  const rec: DeviceRec = {
+    id: opts.deviceId,
+    token: opts.deviceToken,
+    name: opts.name?.trim() || '我的电脑',
+    relayBase: opts.relayBase ?? relayBaseUrl() ?? '',
+    relayToken: opts.relayToken ?? get(KEY_RELAY_TOKEN),
+    pcPublicKey: opts.pcPublicKey ?? '',
+    addedAt: new Date().toISOString(),
+  }
+  // 同一台电脑重新配对 = 原地更新（token 换新），不重复进清单。
+  const idx = list.findIndex((d) => d.id === rec.id)
+  if (idx >= 0) list[idx] = rec
+  else list.push(rec)
+  saveDevices(list)
+  set(KEY_ACTIVE, rec.id)
+  if (rec.relayBase) setRelayBaseUrl(rec.relayBase)
   await generateOwnIdentity()
 }
-
-/** 桌面端 E2EE 公钥（base64，未压缩 P-256 65B）。没配对时是空串。 */
-export const pcPublicKey = () => get(KEY_E2EE_PC_PUBLIC)
 
 // ── E2EE 身份 ────────────────────────────────────────────────────
 
