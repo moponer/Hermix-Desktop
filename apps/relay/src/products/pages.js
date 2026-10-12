@@ -56,7 +56,18 @@ function register(app, { publicDir }) {
     res.json(apkInfoSync());
   });
 
-  app.get('/download/hermix.apk', (_req, res) => {
+  // 下载文件名带版本+平台标识（2026-10-12）：裸 hermix.apk 落到手机文件
+  // 管理器里认不出是哪个包、哪个端。版本号单一来源 = index.html 的
+  // HERMIX_M_VERSION（与 /api/app-info 同源，无第二处手填）。固定 URL
+  // 302 到带版本 URL，浏览器落盘名随之带版本；盘上仍只存一份 hermix.apk
+  // ——两份文件就是两份哈希，必然漂移。带版本 URL 是一次一发的易逝地址，
+  // 旧版本 URL 在新包上传后会拿到新字节+旧名字，以固定 URL 为准。
+  const apkVersionSafe = () => {
+    const v = apkInfoSync().version;
+    return v && /^[0-9A-Za-z.\-]+$/.test(v) ? v : null;
+  };
+
+  const serveApk = (res, filename) => {
     let st;
     try {
       st = fs.statSync(apkPath);
@@ -66,9 +77,24 @@ function register(app, { publicDir }) {
     }
     res.setHeader('Content-Type', 'application/vnd.android.package-archive');
     res.setHeader('Content-Length', st.size);
-    res.setHeader('Content-Disposition', 'attachment; filename="hermix.apk"');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.setHeader('X-Checksum-Sha256', apkInfoSync().sha256 || '');
     fs.createReadStream(apkPath).pipe(res);
+  };
+
+  app.get('/download/hermix.apk', (_req, res) => {
+    const v = apkVersionSafe();
+    if (v) return res.redirect(302, `/download/hermix-m-${v}.apk`);
+    // 版本号读不到（index.html 缺 marker）：退回旧行为，文件名不带版本
+    serveApk(res, 'hermix.apk');
+  });
+
+  app.get('/download/hermix-m-:ver.apk', (req, res) => {
+    const ver = /^[0-9A-Za-z.\-]+$/.test(req.params.ver) ? req.params.ver : null;
+    if (!ver) {
+      return res.status(400).type('text/plain; charset=utf-8').send('bad version in filename');
+    }
+    serveApk(res, `hermix-m-${ver}.apk`);
   });
 }
 
