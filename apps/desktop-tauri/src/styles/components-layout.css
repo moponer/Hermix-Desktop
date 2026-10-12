@@ -143,7 +143,7 @@
    各主面板**不是纯透明**（纯透明会让卡片 / 文字糊在图上、没法看），而是
    盖一层「当前主题自己的底色」scrim（中等不透明度）+ backdrop 模糊，把壁纸
    以磨砂质感透出来——既看得出整窗铺了图，又保证正文对比度稳过 AA。scrim
-   用 color-mix 把固有色降到 ~72%/58% 不透明（88%/80% 实测亮色壁纸下肉眼不可见），**用主题底色去压、而不是半透明黑**：
+   用 color-mix 把固有色降到 ~55%/40% 不透明（72% 实测仍近白；对齐 WorkBuddy「面板即色调」观感），**用主题底色去压、而不是半透明黑**：
    黑蒙版在浅色主题下会把壁纸压成灰脏色，明暗两套主题观感都干净。
 
    之前（L3.6 初版）壁纸只铺 .chat-surface：侧栏 / 顶栏 / 右栏都是不透明实色，
@@ -172,7 +172,7 @@
 /* 案面（三栏之间的缝隙 + 主区四周留白）：比面板更透一点，让壁纸在接缝处
    透出得更明显，强化"整窗平铺"的观感。 */
 [data-wallpaper="on"] .app-body {
-  background-color: color-mix(in srgb, var(--color-bg-secondary) 58%, transparent);
+  background-color: color-mix(in srgb, var(--color-bg-secondary) 40%, transparent);
   backdrop-filter: blur(16px) saturate(1.05);
   -webkit-backdrop-filter: blur(16px) saturate(1.05);
 }
@@ -180,18 +180,18 @@
 /* 四块主面板：标题栏 / 左栏 / 对话区 / 右栏。各自用自身主题底色做 ~88%
    scrim，磨砂后透出壁纸。可读性优先，所以比案面更实一点。 */
 [data-wallpaper="on"] .titlebar {
-  background-color: color-mix(in srgb, var(--theme-bg-titlebar, var(--color-bg-secondary)) 72%, transparent);
+  background-color: color-mix(in srgb, var(--theme-bg-titlebar, var(--color-bg-secondary)) 55%, transparent);
 }
 [data-wallpaper="on"] .pane-left {
-  background-color: color-mix(in srgb, var(--theme-bg-sidebar, var(--color-bg-secondary)) 72%, transparent);
+  background-color: color-mix(in srgb, var(--theme-bg-sidebar, var(--color-bg-secondary)) 55%, transparent);
 }
 [data-wallpaper="on"] .pane-main,
 [data-wallpaper="on"] .chat-surface {
-  background-color: color-mix(in srgb, var(--theme-bg-chat, var(--color-bg-primary)) 72%, transparent);
+  background-color: color-mix(in srgb, var(--theme-bg-chat, var(--color-bg-primary)) 55%, transparent);
 }
 /* PreviewBar 根节点的背景是内联 style，必须用 !important 才能覆盖。 */
 [data-wallpaper="on"] .preview-bar-aside {
-  background-color: color-mix(in srgb, var(--color-bg-primary) 72%, transparent) !important;
+  background-color: color-mix(in srgb, var(--color-bg-primary) 55%, transparent) !important;
 }
 
 /* 所有主面板统一磨砂。单独写一条，避免每个选择器重复 backdrop 声明。 */
@@ -212,8 +212,8 @@
    一条完整的水平带（参考界面也是这样）；卡片感由侧边与底边的案面 + 圆角给出。 */
 .pane-main {
   flex: 1;
-  border-radius: 12px;
-  margin-bottom: 8px;
+  /* 2026-10-12：主人指示去掉对话区圆角——与底边 8px 案面一起废除，
+     主区改为通铺到底，卡片隐喻只留给右栏。 */
   overflow: hidden;
 }
 
