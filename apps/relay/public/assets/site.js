@@ -156,8 +156,10 @@
     var d = new Date(iso);
     if (isNaN(d.getTime())) return String(iso);
     var p = function (n) { return n < 10 ? '0' + n : '' + n; };
-    return d.getUTCFullYear() + '-' + p(d.getUTCMonth() + 1) + '-' + p(d.getUTCDate()) +
-      ' ' + p(d.getUTCHours()) + ':' + p(d.getUTCMinutes()) + ' UTC';
+    // 本地时区渲染（2026-10-12 拍板不用 UTC）：getUTC* 换 get*，
+    // 浏览器自己按系统时区换算，用户看到的就是手机/电脑时钟上的时刻。
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) +
+      ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
   }
 
   function short(sha) {
