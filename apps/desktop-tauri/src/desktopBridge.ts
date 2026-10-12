@@ -315,6 +315,10 @@ export interface WallpaperInfo {
   file: string;
   /** 用户当初挑的原图路径，仅供展示。 */
   source: string;
+  /** 内联 base64 data URL（含 MIME 前缀）。前端直接 `url(...)` 渲染，
+   * 不依赖 Tauri asset 协议作用域——Windows 上靠 convertFileSrc 解析
+   * `$HOME` 失配，会导致壁纸整张变空白。 */
+  data_url: string;
 }
 
 export function getWallpaper(): Promise<WallpaperInfo | null> {

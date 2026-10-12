@@ -135,25 +135,58 @@
   background-color: var(--theme-bg-chat, var(--color-bg-primary));
 }
 
-/* ── 壁纸（L3.6）─────────────────────────────────────────────────
-   挂在 .chat-surface 而不是 .app-shell：侧边栏、顶栏、对话面板、弹窗
-   全是各自的不透明实色，壁纸铺在最底只会在接缝里露出几像素——看得见
-   但等于没挂。聊天滚动区是应用里最大的一块整面，且本来就该允许个性化，
-   壁纸铺在这里是唯一"真能看见"的位置。
+/* ── 壁纸（L3.6，2026-10-12 升级：整窗平铺 + 鲁棒加载）──────────────
+   壁纸由后端编成 base64 data URL，前端注入 `--wallpaper-image` CSS 变量。
+   整窗铺底：挂到 .app-shell，让标题栏 / 三栏 / 所有浮层都能透出同一张图。
 
-   蒙版用 color-mix 而不是半透明黑：黑蒙版在浅色主题下会把壁纸压成灰
-   脏色，用**当前主题自己的底色**去压，才能在明暗两套主题下都保持
-   壁纸的原有观感、同时把正文对比度托回 AA。 */
-[data-wallpaper="on"] .chat-surface {
-  background-image:
-    linear-gradient(
-      color-mix(in srgb, var(--theme-bg-chat, var(--color-bg-primary)) 86%, transparent),
-      color-mix(in srgb, var(--theme-bg-chat, var(--color-bg-primary)) 86%, transparent)
-    ),
-    var(--wallpaper-image);
+   各主面板**不是纯透明**（纯透明会让卡片 / 文字糊在图上、没法看），而是
+   盖一层「当前主题自己的底色」scrim（高不透明度）+ backdrop 模糊，把壁纸
+   以磨砂质感透出来——既看得出整窗铺了图，又保证正文对比度稳过 AA。scrim
+   用 color-mix 把固有色降到 ~88% 不透明，**用主题底色去压、而不是半透明黑**：
+   黑蒙版在浅色主题下会把壁纸压成灰脏色，明暗两套主题观感都干净。
+
+   之前（L3.6 初版）壁纸只铺 .chat-surface：侧栏 / 顶栏 / 右栏都是不透明实色，
+   壁纸只在接缝露几像素、等于没挂。现在整窗铺 + 面板磨砂，才是"真能看见"。 */
+[data-wallpaper="on"] .app-shell {
+  background-image: var(--wallpaper-image);
   background-size: cover;
   background-position: center;
   background-repeat: no-repeat;
+}
+
+/* 案面（三栏之间的缝隙 + 主区四周留白）：比面板更透一点，让壁纸在接缝处
+   透出得更明显，强化"整窗平铺"的观感。 */
+[data-wallpaper="on"] .app-body {
+  background-color: color-mix(in srgb, var(--color-bg-secondary) 80%, transparent);
+  backdrop-filter: blur(16px) saturate(1.05);
+  -webkit-backdrop-filter: blur(16px) saturate(1.05);
+}
+
+/* 四块主面板：标题栏 / 左栏 / 对话区 / 右栏。各自用自身主题底色做 ~88%
+   scrim，磨砂后透出壁纸。可读性优先，所以比案面更实一点。 */
+[data-wallpaper="on"] .titlebar {
+  background-color: color-mix(in srgb, var(--theme-bg-titlebar, var(--color-bg-secondary)) 88%, transparent);
+}
+[data-wallpaper="on"] .pane-left {
+  background-color: color-mix(in srgb, var(--theme-bg-sidebar, var(--color-bg-secondary)) 88%, transparent);
+}
+[data-wallpaper="on"] .pane-main,
+[data-wallpaper="on"] .chat-surface {
+  background-color: color-mix(in srgb, var(--theme-bg-chat, var(--color-bg-primary)) 88%, transparent);
+}
+/* PreviewBar 根节点的背景是内联 style，必须用 !important 才能覆盖。 */
+[data-wallpaper="on"] .preview-bar-aside {
+  background-color: color-mix(in srgb, var(--color-bg-primary) 88%, transparent) !important;
+}
+
+/* 所有主面板统一磨砂。单独写一条，避免每个选择器重复 backdrop 声明。 */
+[data-wallpaper="on"] .titlebar,
+[data-wallpaper="on"] .pane-left,
+[data-wallpaper="on"] .pane-main,
+[data-wallpaper="on"] .chat-surface,
+[data-wallpaper="on"] .preview-bar-aside {
+  backdrop-filter: blur(14px) saturate(1.05);
+  -webkit-backdrop-filter: blur(14px) saturate(1.05);
 }
 /* 中栏 = 一张「纸」卡片：白底 + 四角圆角，浮在 .app-body 的案面（灰）上。
    此前只有上两角圆角 + 与右栏共用一条 1px 分隔线，两栏读起来像「一张表格被

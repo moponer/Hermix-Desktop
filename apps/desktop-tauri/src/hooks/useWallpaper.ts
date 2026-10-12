@@ -1,9 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import { convertFileSrc } from "@tauri-apps/api/core";
 
 import {
   clearWallpaper as clearWallpaperCmd,
-  getDataDir,
   getWallpaper as getWallpaperCmd,
   setWallpaper as setWallpaperCmd,
   type WallpaperInfo,
@@ -17,13 +15,15 @@ import {
  * 写回旧值——表现就是"设置页说换好了、主界面没变"，且时有时无。这是
  * 典型的双权威 bug，与本项目 ModelSelector 踩过的那个同源。
  *
- * 落盘在数据目录 `assets/wallpaper.<ext>`，靠 Tauri asset 协议读取
- * （`tauri.conf.json` 的 `assetProtocol.scope` 已覆盖 `$HOME/.hermix/**`）。
+ * 渲染用后端内联的 base64 data URL（`info.data_url`），**不依赖 Tauri asset
+ * 协议作用域**：之前靠 `convertFileSrc` + `$HOME/.hermix/**` 作用域，在
+ * Windows 上 `$HOME` 解析失配，资产 URL 加载失败，预览与生效双双空白。
+ * data URL 内联进 CSS 变量，零作用域、零 CORS。
  *
  * 注入方式是给根元素挂 CSS 变量 + data 属性，由 `components-layout.css` 的
- * `[data-wallpaper="on"] .chat-surface` 消费。不用 React 节点直接铺：壁纸在
- * 消息滚动容器**下面**，任何一层 z-index 都要跟标题栏、弹窗、工作台浮层
- * 抢，节点方案迟早落到某个 overlay 之下看不见。
+ * `[data-wallpaper="on"]` 系列规则消费，整窗铺底。不用 React 节点直接铺：
+ * 壁纸要垫在标题栏、三栏、所有浮层**之下**，节点方案要跟每个 overlay 抢
+ * z-index，迟早落到某个浮层之下看不见。
  */
 
 interface Store {
@@ -49,6 +49,8 @@ function applyToDom() {
   const root = document.documentElement;
   if (state.url) {
     root.dataset.wallpaper = "on";
+    // data URL 可能含特殊字符，但包进 url("…") 里是合法的（base64 只有
+    // 安全字符）；为稳妥这里仍用双引号包裹。
     root.style.setProperty("--wallpaper-image", `url("${state.url}")`);
   } else {
     delete root.dataset.wallpaper;
@@ -66,11 +68,8 @@ let loaded = false;
 
 async function loadOnce() {
   try {
-    const [info, dir] = await Promise.all([getWallpaperCmd(), getDataDir()]);
-    setStore({
-      info,
-      url: info ? convertFileSrc(`${dir}/assets/${info.file}`) : null,
-    });
+    const info = await getWallpaperCmd();
+    setStore({ info, url: info?.data_url ?? null });
   } catch (e) {
     console.error("[useWallpaper] 读取壁纸失败:", e);
     setStore({ info: null, url: null });
@@ -100,8 +99,7 @@ export function useWallpaper() {
 
   const setFrom = useCallback(async (sourcePath: string) => {
     const info = await setWallpaperCmd(sourcePath);
-    const dir = await getDataDir();
-    setStore({ info, url: convertFileSrc(`${dir}/assets/${info.file}`) });
+    setStore({ info, url: info.data_url });
   }, []);
 
   const clear = useCallback(async () => {

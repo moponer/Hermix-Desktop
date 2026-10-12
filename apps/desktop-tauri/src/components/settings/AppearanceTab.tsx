@@ -181,10 +181,10 @@ function WallpaperGroup() {
   return (
     <SettingsGroup
       title="壁纸"
-      description="铺在聊天区背景。原图会复制进数据目录，删掉原图不影响显示。"
+      description="平铺整个窗口背景（标题栏、左栏、对话区、右栏都会透出磨砂质感）。原图会复制进数据目录，删掉原图不影响显示。"
     >
       <SettingsRow
-        title="聊天区壁纸"
+        title="窗口壁纸"
         description={
           loading
             ? "读取中…"

@@ -127,7 +127,7 @@ pub fn sync_tray(app: AppHandle, enabled: bool) -> Result<(), String> {
     Ok(())
 }
 
-// ── 壁纸（L3.6）──────────────────────────────────────────────────
+// ── 壁纸（L3.6，2026-10-12 升级：整窗平铺 + 鲁棒加载）─────────────
 
 #[derive(Serialize)]
 pub struct WallpaperInfo {
@@ -135,6 +135,35 @@ pub struct WallpaperInfo {
     file: String,
     /// 原始来源路径，仅供设置页展示"这张图来自哪"。
     source: String,
+    /// base64 data URL（含 MIME 前缀）。前端直接 `url(...)` 渲染，**不依赖
+    /// Tauri asset 协议作用域**——之前靠 `convertFileSrc` + `assetProtocol`
+    /// 在 Windows 上 `$HOME` 解析失配，导致资产 URL 加载失败、预览与生效
+    /// 双双空白。data URL 内联进 CSS 变量，零作用域、零 CORS。
+    data_url: String,
+}
+
+/// 把壁纸文件读成 base64 data URL。MIME 由扩展名推断（webview 靠扩展名判
+/// 类型，无扩展名会被当未知类型拒绝渲染——这就是早期"设了壁纸但没变化"
+/// 的另一个成因，这里在编码端就钉死 MIME）。
+fn wallpaper_data_url(path: &PathBuf) -> Result<String, String> {
+    let bytes = std::fs::read(path).map_err(|e| format!("读取壁纸失败：{e}"))?;
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("png")
+        .to_ascii_lowercase();
+    let mime = match ext.as_str() {
+        "jpg" | "jpeg" => "image/jpeg",
+        "png" => "image/png",
+        "webp" => "image/webp",
+        "gif" => "image/gif",
+        "bmp" => "image/bmp",
+        "avif" => "image/avif",
+        _ => "image/png",
+    };
+    use base64::Engine as _;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    Ok(format!("data:{mime};base64,{encoded}"))
 }
 
 /// 壁纸文件名前缀。只允许一张壁纸，存多张就要引入列表 / 缩略图 / 删除整套
@@ -187,7 +216,12 @@ pub fn get_wallpaper() -> Result<Option<WallpaperInfo>, String> {
         .unwrap_or_default()
         .trim()
         .to_string();
-    Ok(Some(WallpaperInfo { file, source }))
+    let data_url = wallpaper_data_url(&wallpaper_dir().join(&file))?;
+    Ok(Some(WallpaperInfo {
+        file,
+        source,
+        data_url,
+    }))
 }
 
 /// 选一张图当壁纸。复制进数据目录而不是记原路径——记原路径的话，用户
@@ -220,9 +254,13 @@ pub fn set_wallpaper(source_path: String) -> Result<WallpaperInfo, String> {
     std::fs::copy(&src, dir.join(&file)).map_err(|e| format!("复制壁纸失败：{e}"))?;
     std::fs::write(source_record_path(), source_path.as_bytes())
         .map_err(|e| format!("记录壁纸来源失败：{e}"))?;
+    // 复制完立刻编码 data URL：前端用内联 data URL 渲染，零 asset 协议作用域，
+    // 否则 Windows 上 $HOME 解析失配会把整张壁纸变空白。
+    let data_url = wallpaper_data_url(&dir.join(&file))?;
     Ok(WallpaperInfo {
         file,
         source: source_path,
+        data_url,
     })
 }
 
