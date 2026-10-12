@@ -710,7 +710,7 @@ mod memory_bridge_tests {
     /// （`is_state_mutating_tool` = risk != Safe，memory 是 Caution）
     /// 在 multi-thread runtime 的 worker 上同步调它 —— 线程仍标记
     /// entered，`context::enter_runtime` 直接 panic，整个 run 被拖死
-    /// （表现为当时同 run 的 `cua_screenshot` 等工具全部报 panic 错）。
+    /// （表现为当时同 run 的其它工具全部报 panic 错）。
     ///
     /// 本测试把桥接闭包放进 multi-thread runtime 的 worker 上下文里
     /// 同步调用 —— 修复前的裸 `block_on` 在这里必 panic。

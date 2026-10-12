@@ -806,8 +806,8 @@ pub(crate) async fn handle_ws_stream_send(
             // both maps — the agent loop calls this on a tokio
             // worker thread) and extracts a tool-specific signature
             // string from the params (e.g. first word for terminal,
-            // exact path for write_file, domain for web_extract,
-            // tool name for cua_*) via `extract_trust_signature`.
+            // exact path for write_file, domain for web_extract)
+            // via `extract_trust_signature`.
             // The allowlist gates on `tool` so a write_file
             // entry can't accidentally match a terminal call.
             let user_allowlist = state.user_allowlist.clone();

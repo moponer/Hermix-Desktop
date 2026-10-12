@@ -349,17 +349,6 @@ pub const DEFAULT_RESIDENT_TOOLS: &[&str] = &[
     // (install/list/configure) without first discovering the tool through
     // the tool_search bridge. Custom apps are part of the core workflow.
     "custom_app_manager",
-    // Browser (core set)
-    "browser_navigate",
-    "browser_snapshot",
-    "browser_click",
-    "browser_type",
-    "browser_scroll",
-    "browser_back",
-    "browser_press",
-    "browser_get_images",
-    "browser_vision",
-    "browser_console",
     // Bridge tools (always resident)
     "tool_search",
     "tool_describe",

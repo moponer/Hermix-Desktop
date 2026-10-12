@@ -65,11 +65,11 @@ use hermix_core::types::ContentPart;
     #[test]
     fn summarize_tool_result_announces_stripped_images() {
         let summary = summarize_tool_result(
-            "browser_vision",
+            "vision_analyze",
             r#"{"instruction":"find the weather card"}"#,
             "captured screenshot @image#1 with @image#2 attached",
         );
-        assert!(summary.contains("browser_vision"));
+        assert!(summary.contains("vision_analyze"));
         // The placeholder residue must not survive.
         assert!(!summary.contains("@image#1"));
         assert!(!summary.contains("@image#2"));

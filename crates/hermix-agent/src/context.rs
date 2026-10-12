@@ -640,7 +640,6 @@ This is your persistent self-improvement channel — not an admin task.\n\
 - `auto_create` / `auto_extract_from_conversation` — crystallize a workflow into a skill.\n\
 - `create` / `update` — manual skill management.\n\
 - `self_improve` — append a '## Improvement Feedback' section to an existing skill.\n\
-- `install_builtins` — seed the standard set when the workspace is empty.\n\
 \n\
 ### How to write a good skill\n\
 1. **Slug**: lowercase, hyphen-separated, ASCII only. `discover_skills` walks \
@@ -875,8 +874,6 @@ pub enum DirRoute {
     Subsequent,
     /// Caller opted in via `autonomous_mode = true`.
     Autonomous,
-    /// Active tool list contains a `browser_*` tool.
-    HasBrowser,
     /// Active tool list contains `memory`.
     HasMemory,
     /// Active tool list contains `session_search`.
@@ -972,7 +969,7 @@ impl DirRoute {
     /// Single source of truth for "does this direction fire this turn?".
     /// Returns `(fired, skip_reason)` so the audit log can show *why* a
     /// direction was skipped — useful when debugging "why didn't the
-    /// browser guidance show up?".
+    /// memory guidance show up?".
     pub fn matches(&self, ctx: &RouteContext<'_>) -> (bool, Option<String>) {
         let um = ctx.user_message.to_lowercase();
         let has = |name: &str| ctx.tool_names.contains(name);
@@ -989,10 +986,6 @@ impl DirRoute {
             DirRoute::Autonomous => {
                 if ctx.autonomous_mode { (true, None) }
                 else { (false, Some("caller did not opt in".into())) }
-            }
-            DirRoute::HasBrowser => {
-                if ctx.tool_names.iter().any(|n| n.starts_with("browser_")) { (true, None) }
-                else { (false, Some("no browser_* tool in scope".into())) }
             }
             DirRoute::HasMemory => {
                 if has("memory") { (true, None) }
@@ -1584,7 +1577,7 @@ mod tests {
     #[test]
     fn directions_first_turn_fires_format_full_not_short() {
         let mut tool_names = std::collections::HashSet::new();
-        tool_names.insert("browser_navigate");
+        tool_names.insert("memory");
 let ctx = RouteContext {
                     user_message: "",
                     tool_names: &tool_names,
@@ -1599,7 +1592,7 @@ let ctx = RouteContext {
             SystemDir::new("format.full", DirRoute::FirstTurn, "FULL"),
             SystemDir::new("format.short", DirRoute::Subsequent, "SHORT"),
             SystemDir::new("autonomous.block", DirRoute::Autonomous, "AUTO"),
-            SystemDir::new("browser.discipline", DirRoute::HasBrowser, "BROWSER"),
+            SystemDir::new("memory.discipline", DirRoute::HasMemory, "MEMORY"),
         ]);
         b.assemble_directions(&ctx);
         let audit = b.direction_audit();
@@ -1608,11 +1601,11 @@ let ctx = RouteContext {
         assert!(by_tag("format.full").fired);
         assert!(!by_tag("format.short").fired, "first-turn should not fire subsequent");
         assert!(!by_tag("autonomous.block").fired, "no opt-in → skip autonomous");
-        assert!(by_tag("browser.discipline").fired, "browser_* tool present");
+        assert!(by_tag("memory.discipline").fired, "memory tool present");
         let prompt = b.build();
         assert!(prompt.contains("FULL"));
         assert!(!prompt.contains("SHORT"));
-        assert!(prompt.contains("BROWSER"));
+        assert!(prompt.contains("MEMORY"));
     }
 
     /// an Autonomous direction that does not match still appears

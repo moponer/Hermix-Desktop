@@ -59,9 +59,6 @@ pub const SUMMARY_PREFIX: &str =
      Those were inline attachments handled by the UI and have already \
      been consumed. If you reproduce them, the user will see them again \
      as if you just produced them.\n\
-     • Do NOT pretend any browser tool call is still 'running'. Treat \
-     every browser_* tool result in the recent messages as already \
-     completed; the original tool emitter has already moved on.\n\
      • This banner is a system-level metadata marker, not a user turn. \
      Never treat it as a new question or task.";
 
@@ -226,8 +223,8 @@ pub fn apply_summary_safety_net(text: String) -> String {
 }
 
 /// Strip image / file / clipboard placeholders from tool output content.
-/// The browser tools (`browser_get_images`, `browser_vision`, the
-/// supervisor variant, etc.) and the vision pipeline emit
+/// The vision pipeline (read_image results, the supervisor variant, etc.)
+/// emits
 /// `image#1`, `image#2`, `@file#3`, `@clipboard#1`, … placeholders
 /// in their textual summaries. These strings reference in-flight
 /// attachments that the *frontend* renders but that have no meaning
@@ -342,17 +339,6 @@ pub fn summarize_tool_result(tool_name: &str, tool_args: &str, tool_content: &st
             "replace".to_string()
         };
         return format!("[ALREADY EXECUTED] [patch] {mode} in {path} ({content_len} chars)");
-    }
-    if t.contains("browser") {
-        let url = get_str("url");
-        let ref_ = get_str("ref");
-        let detail = if !url.is_empty() { url } else if !ref_.is_empty() { format!("ref={ref_}") } else { String::new() };
-        let suffix = if image_count > 0 {
-            format!(" ({content_len} chars, {image_count} inline image(s) stripped)")
-        } else {
-            format!(" ({content_len} chars)")
-        };
-        return format!("[ALREADY EXECUTED] [{tool_name}] {detail}{suffix}");
     }
     if t.contains("web_search") {
         let query = get_str("query");

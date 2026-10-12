@@ -68,7 +68,7 @@
 //! - [`SOFT_ESSENTIAL_TOOLSETS`] — re-asserted **only** when the
 //!   saved whitelist is in its default (`["*"]`) state. These are
 //!   genuinely optional capabilities (`document`, `office`,
-//!   `browser`, `cua`, `storage`): when the user has explicitly
+//!   `storage`): when the user has explicitly
 //!   curated their toolset list and left one of them out, that is a
 //!   deliberate disable and the floor must respect it. They are kept
 //!   on the floor purely so a *fresh* install (wildcard) still sees a
@@ -124,8 +124,6 @@ pub const HARD_ESSENTIAL_TOOLSETS: &[&str] = &[
 pub const SOFT_ESSENTIAL_TOOLSETS: &[&str] = &[
     "document",
     "office",
-    "browser",
-    "cua",
     "storage",
 ];
 
@@ -149,8 +147,6 @@ pub const ESSENTIAL_TOOLSETS: &[&str] = &[
     // soft
     "document",
     "office",
-    "browser",
-    "cua",
     "storage",
 ];
 
@@ -220,7 +216,7 @@ mod tests {
         // and re-introduce the startup override warning.
         assert_eq!(
             SOFT_ESSENTIAL_TOOLSETS,
-            &["document", "office", "browser", "cua", "storage"],
+            &["document", "office", "storage"],
             "SOFT_ESSENTIAL_TOOLSETS changed — soft toolsets must remain optional."
         );
     }

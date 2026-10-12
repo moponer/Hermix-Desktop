@@ -46,7 +46,6 @@ pub fn prefers_gateway(config_section: &str) -> bool {
         "web" => cfg.web.use_gateway,
         "image_gen" => cfg.image_gen.use_gateway,
         "tts" => cfg.tts.use_gateway,
-        "browser" => cfg.browser.use_gateway,
         _ => false,
     }
 }

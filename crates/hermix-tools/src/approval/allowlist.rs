@@ -285,9 +285,9 @@ impl UserAllowlist {
 ///   command (matches any subcommand/args; e.g. "cargo test"
 ///   and "cargo build" both hit `^cargo\b.*`).
 /// - `write_file` / `patch` / `edit_file` — exact absolute path.
-/// - `web_extract` / `browser` (when carrying a URL) — domain
+/// - `web_extract` (when carrying a URL) — domain
 ///   prefix (e.g. `^https?://(?:www\.)?example\.com(/.*)?$`).
-/// - Everything else (`web_search` without URL, `cua_*`, `memory`,
+/// - Everything else (`web_search` without URL, `memory`,
 ///   `skills`, ...) — trust the tool name itself, since per-call
 ///   signatures don't have a natural discriminator.
 /// Returns `None` when the params don't carry a usable signature
@@ -320,8 +320,8 @@ pub fn extract_trust_signature(
         }
         return Some(format!("^{}$", regex::escape(path)));
     }
-    // Web / browser: domain from URL when present.
-    if matches!(t.as_str(), "web_extract" | "browser") {
+    // Web: domain from URL when present.
+    if t == "web_extract" {
         if let Some(url) = str_param("url") {
             if let Some(domain) = extract_domain(url) {
                 return Some(format!(
@@ -332,7 +332,7 @@ pub fn extract_trust_signature(
         }
         // No URL: fall through to tool-name match.
     }
-    // web_search / cua_* / memory / skills / other: trust the tool
+    // web_search / memory / skills / other: trust the tool
     // name itself (narrower than "any call" — restricted to this
     // specific tool).
     Some(format!("^{}$", regex::escape(tool)))

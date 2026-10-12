@@ -1,8 +1,6 @@
-pub mod browser_cleanup;
 pub mod cdp_probe;
 pub mod commands;
 pub mod commands_custom_app;
-pub mod commands_cua;
 pub mod commands_local_search;
 pub mod commands_workbench;
 pub mod keep_awake;
@@ -660,12 +658,6 @@ pub fn run() {
                 let state = window.state::<AppState>();
                 let mut sb = state.sidecar.lock().unwrap();
                 sb.stop();
-                // Also reap any Chrome we previously spawned via the CDP
-                // bootstrap — its `Child` handle was deliberately detached
-                // (see `crates/hermix-tools/src/tools/cdp_bootstrap.rs`), so
-                // without this hook the browser outlives us and squats on
-                // `127.0.0.1:9222` across restarts.
-                browser_cleanup::kill_spawned_chrome();
                 // 同理：本地索引的提权 helper（usn-indexer.exe）是常驻进程，
                 // 退出前一直锁着自己的镜像文件 —— 不发信号的话，「关掉应用就重装」
                 // 会被 NSIS 的「无法打开要写入的文件」挡住。非提权的主进程杀不掉
@@ -748,25 +740,6 @@ pub fn run() {
             commands::set_python_override,
             // 内置运行时探测（Node / Python / Git）：内置位 → PATH → override。
             commands::runtime_detect,
-            commands_cua::screen::cua_screenshot,
-            commands_cua::screen::cua_screen_info,
-            commands_cua::screen::cua_left_click,
-            commands_cua::screen::cua_type_text,
-            commands_cua::screen::cua_press_key,
-            commands_cua::window::cua_list_windows,
-            commands_cua::window::cua_window_at_point,
-            commands_cua::window::cua_click_window,
-            // Phase 2-C: UIA element-tree commands
-            commands_cua::ui::cua_ui_tree,
-            commands_cua::ui::cua_ui_find,
-            commands_cua::ui::cua_ui_click,
-            commands_cua::ui::cua_ui_focus,
-            commands_cua::ui::cua_ui_invoke,
-            // Phase 2-E: Browser automation (self-hosted CDP)
-            commands_cua::browser::cua_browser_navigate,
-            commands_cua::browser::cua_browser_screenshot,
-            commands_cua::browser::cua_browser_evaluate,
-            commands_cua::browser::cua_browser_click,
             // Custom app management
             commands_custom_app::custom_app_init,
             commands_custom_app::custom_app_list,

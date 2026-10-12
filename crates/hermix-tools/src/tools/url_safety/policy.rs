@@ -203,7 +203,7 @@ impl WebsitePolicy {
         }
     }
 
-    /// Pre-check interface for web/browser tools. Returns `Err` if denied.
+    /// Pre-check interface for web tools. Returns `Err` if denied.
     pub fn pre_check(&self, url: &str) -> Result<PolicyCheckResult, ToolError> {
         let result = self.check_url(url);
         if result.action == PolicyAction::Deny {

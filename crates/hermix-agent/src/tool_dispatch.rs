@@ -13,9 +13,6 @@
 //!   toolset.
 //! - [`hydrate_session_search_args`] — inject the current session id
 //!   into `session_search` calls when the field is missing.
-//! - [`denial_repick_hint`] — when the user denies a tool call,
-//!   short prose appended to the deny reason so the next model turn
-//!   knows which tool to try instead.
 //! - [`resolve_pre_dispatch`] — fan out the
 //!   `AgentCallbacks::on_pre_tool_dispatch` hook for every tool call
 //!   and collect the per-call decisions.
@@ -161,39 +158,6 @@ pub(crate) fn hydrate_session_search_args(session_id: Option<&str>, tc: &mut Too
     );
     if let Ok(updated) = serde_json::to_string(&args) {
         tc.function.arguments = updated;
-    }
-}
-
-/// Build a per-tool hint that we append to a user-denial reason so the
-/// LLM, on its next turn, has a concrete suggestion for *which* tool
-/// would have been more appropriate.
-/// Static string table; no `self` dependency. Lives here so
-/// `resolve_pre_dispatch` (also here) keeps the hint generation close.
-pub(crate) fn denial_repick_hint(tool_name: &str, raw_args: &str) -> &'static str {
-    match tool_name {
-        "computer_use" => {
-            // Parse out the `action` so we can be specific. Default
-            // to screenshot if the field is missing.
-            let action = serde_json::from_str::<serde_json::Value>(raw_args)
-                .ok()
-                .and_then(|v| v.get("action").and_then(|x| x.as_str()).map(str::to_string))
-                .unwrap_or_else(|| "screenshot".to_string());
-            if action == "screenshot" {
-                " The user may have denied this because the question can be \
-                 answered without a screen capture — try `terminal` (e.g. `dir` \
-                 / `ls`), `list_files`, or `read_file` first."
-            } else {
-                " The user may have denied this because a non-GUI tool would \
-                 have worked — try `terminal` first (it can click via the \
-                 user32 API too, but most tasks don't need that)."
-            }
-        }
-        "browser" | "browser_use" => {
-            " The user may have denied this because the same information is \
-             reachable via `terminal` (curl / wget) or `web_extract` — try \
-             those first."
-        }
-        _ => "",
     }
 }
 
@@ -356,8 +320,7 @@ pub(crate) async fn resolve_pre_dispatch(
                         Err(ToolDenial {
                             kind: DenialKind::UserDenied,
                             reason: format!(
-                                "User denied the tool call and said: {note}.{}",
-                                denial_repick_hint(&tc.function.name, &tc.function.arguments),
+                                "User denied the tool call and said: {note}.",
                             ),
                         })
                     }
@@ -369,10 +332,7 @@ pub(crate) async fn resolve_pre_dispatch(
                         );
                         Err(ToolDenial {
                             kind: DenialKind::UserDenied,
-                            reason: format!(
-                                "User denied the tool call.{}",
-                                denial_repick_hint(&tc.function.name, &tc.function.arguments),
-                            ),
+                            reason: "User denied the tool call.".to_string(),
                         })
                     }
                     Ok(ApprovalOutcome::TimedOut { timeout_secs }) => {
@@ -387,8 +347,7 @@ pub(crate) async fn resolve_pre_dispatch(
                             reason: format!(
                                 "The {timeout_secs}-second approval window expired before a decision \
                                  was made, so the tool was not executed (the agent defaulted to \
-                                 deny).{hint}",
-                                hint = denial_repick_hint(&tc.function.name, &tc.function.arguments),
+                                 deny)."
                             ),
                         })
                     }

@@ -599,7 +599,7 @@ impl ContextCompressor {
                 continue;
             }
             // Even messages inside the "protect last N" window can carry
-            // raw `@image#N` placeholders from interrupted browser tools.
+            // raw `@image#N` placeholders from interrupted vision tools.
             // Strip them so the agent never echoes them as fresh content
             // and the frontend never hangs on a phantom "running" card.
             if let Some(content) = msg.content.as_ref() {

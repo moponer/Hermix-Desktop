@@ -56,9 +56,6 @@ pub fn builtin_distributions() -> Vec<ToolsetDistribution> {
         make_terminal_web(),
         make_creative(),
         make_reasoning(),
-        make_browser_use(),
-        make_browser_only(),
-        make_browser_tasks(),
         make_terminal_tasks(),
         make_mixed_tasks(),
     ]
@@ -69,7 +66,6 @@ fn base_weights() -> HashMap<String, f64> {
     w.insert("web".into(), 0.8);
     w.insert("terminal".into(), 0.9);
     w.insert("file".into(), 1.0);
-    w.insert("browser".into(), 0.3);
     w.insert("image_gen".into(), 0.2);
     w.insert("skills".into(), 0.7);
     w.insert("memory".into(), 0.6);
@@ -108,7 +104,6 @@ fn make_image_gen() -> ToolsetDistribution {
 fn make_research() -> ToolsetDistribution {
     let mut w = base_weights();
     w.insert("web".into(), 1.0);
-    w.insert("browser".into(), 0.9);
     w.insert("memory".into(), 0.9);
     w.insert("session_search".into(), 0.8);
     w.insert("terminal".into(), 0.3);
@@ -141,7 +136,6 @@ fn make_development() -> ToolsetDistribution {
     w.insert("web".into(), 0.7);
     w.insert("skills".into(), 0.9);
     w.insert("todo".into(), 1.0);
-    w.insert("browser".into(), 0.2);
     ToolsetDistribution {
         name: "development".into(),
         description: "软件开发，包含终端、文件和代码工具".into(),
@@ -154,7 +148,6 @@ fn make_safe() -> ToolsetDistribution {
     w.insert("web".into(), 0.7);
     w.insert("terminal".into(), 0.0);
     w.insert("file".into(), 0.5);
-    w.insert("browser".into(), 0.0);
     w.insert("skills".into(), 0.5);
     w.insert("memory".into(), 0.5);
     w.insert("todo".into(), 0.8);
@@ -173,7 +166,6 @@ fn make_balanced() -> ToolsetDistribution {
         "web",
         "terminal",
         "file",
-        "browser",
         "skills",
         "memory",
         "todo",
@@ -251,41 +243,6 @@ fn make_reasoning() -> ToolsetDistribution {
     }
 }
 
-fn make_browser_use() -> ToolsetDistribution {
-    let mut w = base_weights();
-    w.insert("browser".into(), 1.0);
-    w.insert("web".into(), 1.0);
-    ToolsetDistribution {
-        name: "browser_use".into(),
-        description: "完整工具包，强调浏览器".into(),
-        toolset_weights: w,
-    }
-}
-
-fn make_browser_only() -> ToolsetDistribution {
-    let mut w = HashMap::new();
-    w.insert("browser".into(), 1.0);
-    w.insert("web".into(), 0.5);
-    ToolsetDistribution {
-        name: "browser_only".into(),
-        description: "仅浏览器交互模式".into(),
-        toolset_weights: w,
-    }
-}
-
-fn make_browser_tasks() -> ToolsetDistribution {
-    let mut w = HashMap::new();
-    w.insert("browser".into(), 1.0);
-    w.insert("web".into(), 1.0);
-    w.insert("file".into(), 0.7);
-    w.insert("todo".into(), 0.8);
-    ToolsetDistribution {
-        name: "browser_tasks".into(),
-        description: "浏览器驱动的任务自动化".into(),
-        toolset_weights: w,
-    }
-}
-
 fn make_terminal_tasks() -> ToolsetDistribution {
     let mut w = HashMap::new();
     w.insert("terminal".into(), 1.0);
@@ -303,7 +260,6 @@ fn make_terminal_tasks() -> ToolsetDistribution {
 fn make_mixed_tasks() -> ToolsetDistribution {
     let mut w = HashMap::new();
     w.insert("terminal".into(), 0.8);
-    w.insert("browser".into(), 0.8);
     w.insert("web".into(), 0.9);
     w.insert("file".into(), 1.0);
     w.insert("code_execution".into(), 0.7);
@@ -312,7 +268,7 @@ fn make_mixed_tasks() -> ToolsetDistribution {
     w.insert("memory".into(), 0.6);
     ToolsetDistribution {
         name: "mixed_tasks".into(),
-        description: "混合终端+浏览器任务自动化".into(),
+        description: "混合终端+任务自动化".into(),
         toolset_weights: w,
     }
 }

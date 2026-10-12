@@ -106,9 +106,6 @@ impl GenericProvider {
         if name.starts_with("exec") || name.contains("terminal") || name.contains("shell") {
             return 1;
         }
-        if name.starts_with("browser_") {
-            return 2;
-        }
         3
     }
 

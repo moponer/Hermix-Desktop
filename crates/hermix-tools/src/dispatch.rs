@@ -124,10 +124,6 @@ pub fn per_tool_budget(tool: &str) -> Duration {
         // terminal 自身默认 120s（tools/terminal.rs），外部预算给 5 倍余量：
         // 前台跑构建/安装是长任务的主要形态，超时提示已引导转后台。
         "terminal" => Duration::from_secs(600),
-        // 浏览器链路：navigate + 等待 + 截图一次同步等待可达数分钟
-        // （页面慢、验证码等待），且中途失败重试成本高。
-        t if t.starts_with("browser_") => Duration::from_secs(900),
-        "computer_use" | "cua" => Duration::from_secs(900),
         // 子 agent 编排有自己的预算（orchestrator，默认 1800s），
         // 外部预算只做护栏，略微放行即可。
         "delegate_task" => Duration::from_secs(1900),

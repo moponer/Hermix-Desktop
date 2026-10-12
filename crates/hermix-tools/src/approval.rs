@@ -513,17 +513,16 @@ mod tests {
         assert_eq!(sig, Some(r"^F:/work/qcc/foo\.txt$".to_string()));
         let sig = extract_trust_signature("patch", &serde_json::json!({"path": "/etc/nginx.conf"}));
         assert_eq!(sig, Some(r"^/etc/nginx\.conf$".to_string()));
-        // web_extract / browser with URL: domain prefix
+        // web_extract with URL: domain prefix
         let sig = extract_trust_signature("web_extract", &serde_json::json!({"url": "https://example.com/page?q=1"}));
         assert_eq!(sig, Some(r"^https?://(?:www\.)?example\.com(/.*)?$".to_string()));
         // www. prefix stripped from anchor
-        let sig = extract_trust_signature("browser", &serde_json::json!({"url": "https://www.acme.io/path"}));
+        let sig = extract_trust_signature("web_extract", &serde_json::json!({"url": "https://www.acme.io/path"}));
         assert_eq!(sig, Some(r"^https?://(?:www\.)?acme\.io(/.*)?$".to_string()));
         // web_extract with no URL → falls back to tool-name match
         let sig = extract_trust_signature("web_extract", &serde_json::json!({}));
         assert_eq!(sig, Some(r"^web_extract$".to_string()));
-        // cua_* / memory / skills / web_search: tool-name match
-        assert_eq!(extract_trust_signature("cua_click", &serde_json::json!({})), Some(r"^cua_click$".to_string()));
+        // memory / skills / web_search: tool-name match
         assert_eq!(extract_trust_signature("memory", &serde_json::json!({"action": "store"})), Some(r"^memory$".to_string()));
     }
 

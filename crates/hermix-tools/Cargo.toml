@@ -11,7 +11,6 @@ hermix-core = { workspace = true }
 hermix-vault = { path = "../hermix-vault" }
 hermix-config = { workspace = true }
 hermix-context = { workspace = true }
-hermix-cua = { workspace = true }
 hermix-plugin = { workspace = true }
 tokio = { workspace = true }
 csv = "1"
@@ -25,7 +24,6 @@ regex = { workspace = true }
 reqwest = { workspace = true, features = ["json", "multipart", "stream"] }
 rusqlite = { workspace = true }
 futures = { workspace = true }
-tokio-tungstenite = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
@@ -43,13 +41,8 @@ lopdf = "0.34"
 # FileMemoryBackend. Picked over `fs2` because `fs2` hasn't shipped
 # since 2017 and `fs4` is the de-facto replacement.
 fs4 = "0.13"
-# cross-platform desktop automation tool (`computer_use`)
-enigo = { workspace = true }
-xcap = { workspace = true }
-arboard = { workspace = true }
-# `image` is re-exported by xcap but we use the codec APIs directly
-# (`PngEncoder`, `ExtendedColorType`) so declare it explicitly to keep
-# the surface stable across xcap minor versions.
+# `image` provides the codec APIs used by read_image / file_converter
+# (`PngEncoder`, `ExtendedColorType`, JPEG/WebP writers).
 image = { workspace = true }
 # Link-time plugin/extension registration. See
 # `hermix_tools::factory::ToolFactory` for the usage pattern.

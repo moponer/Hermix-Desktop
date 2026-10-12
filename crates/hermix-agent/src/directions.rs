@@ -6,7 +6,7 @@
 //!
 //! Items living here:
 //! - 15 guidance-block string constants (formatting / thinking / tool usage /
-//!   plan / autonomous / browser / memory / skills / context budget /
+//!   plan / autonomous / memory / skills / context budget /
 //!   user style / tool enforcement / OpenAI/Google/MiniMax operational hints).
 //! - `collect_directions` — assemble the route-gated [`SystemDir`] list that
 //!   the [`SystemPromptBuilder`] renders into the system prompt.
@@ -92,29 +92,6 @@ const PARALLEL_EXECUTION_GUIDANCE: &str = "\
 When you have two or more tool calls whose arguments do NOT depend on each other's results, issue them in the same turn in parallel rather than queuing them one per turn. Only serialize when a later call genuinely needs an earlier result (e.g. 'use the path the previous call returned').";
 
 const TOOL_USE_ENFORCEMENT_GUIDANCE: &str = "# Tool-use enforcement\nYou MUST use your tools to take action. Do not describe what you would do without actually doing it. When you say you will perform an action, make the corresponding tool call in the same response. Every response should either (a) contain tool calls that make progress, or (b) deliver a final result.";
-
-/// Tool-selection discipline for browser automation. Without this block, the
-/// model falls back to `web_extract` (a stateless HTTP scrape) when the browser
-/// reports "page still loading" and spirals into 5+ identical calls. The rule
-/// is: if a `browser_*` tool exists for the job, use it. `web_extract` is only
-/// for pages that don't require JS execution.
-const BROWSER_TOOL_SELECTION_GUIDANCE: &str = "\
-# Browser tool selection (mandatory)
-
-When the task involves a website needing interaction (login, form, click, scroll, captcha), \
-use `browser_*` tools — NOT `web_extract`. The two are not interchangeable:\n\
-- `web_extract` — stateless HTTP scrape. No JS, no cookies, no interaction.\n\
-- `browser_navigate` — opens a real browser at the URL.\n\
-- `browser_snapshot` — returns accessibility tree with `[ref=eN]` handles.\n\
-- `browser_wait_for` — polls for a CSS selector up to timeout.\n\
-- `browser_vision` — sends page as PNG to vision model. Last resort.\n\
-- `browser_click` / `browser_type` — accepts CSS selector or `[ref=eN]`.\n\n\
-## Hard rules\n\
-1. Never call `web_extract` after a `browser_*` call. Stay in the browser.\n\
-2. If `navigate` returns `load_observed: false`, call `wait_for` first.\n\
-3. For captchas: `wait_for` the image, then `browser_vision` to read it.\n\
-4. For form fills: `snapshot` once → use `[ref=eN]` handles.\n\
-5. Same tool returning identical output 2x in a row = stuck.";
 
 /// Where files may be written. Injected into every agent's system
 /// prompt (J1 of the 2026-09-30 plan).
@@ -260,8 +237,8 @@ You must NEVER generate or guess URLs, links, or web addresses. \
 If the user explicitly provided a URL in their message or a local file path, use it as-is. \
 Do not construct URLs from memory, do not guess domain names, and do not \
 suggest links to external resources unless the user directly provided them.\n\n\
-The exception: file paths and URLs returned by tools (web_search, web_extract, \
-browser_navigate) are verified and safe to use.";
+The exception: file paths and URLs returned by tools (web_search, web_extract) \
+are verified and safe to use.";
 
 /// Inform the model that context compression may occur.
 const COMPRESSION_AWARENESS_GUIDANCE: &str = "\
@@ -620,12 +597,6 @@ Always close `</think>` before visible text. The think block is for reasoning, n
         "safety.block",
         DirRoute::Always,
         SAFETY_GUIDANCE,
-    ));
-    // Browser tool-selection discipline.
-    dirs.push(SystemDir::new(
-        "browser.discipline",
-        DirRoute::HasBrowser,
-        BROWSER_TOOL_SELECTION_GUIDANCE,
     ));
 
     // Workbench context — only for sessions bound to a workbench

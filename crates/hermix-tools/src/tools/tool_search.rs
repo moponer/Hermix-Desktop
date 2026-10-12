@@ -413,7 +413,7 @@ impl ToolHandler for ToolDescribeHandler {
 /// what `coerce_args` produces when the model complies. But models —
 /// especially the ones that just ran `tool_describe` and saw the target
 /// tool's schema inline — frequently flatten the call instead:
-/// `{"name": "cua_type_text", "text": "cssso"}`, with the target's fields
+/// `{"name": "memory_store", "text": "cssso"}`, with the target's fields
 /// sitting next to `name` at the top level. The old code took
 /// `params["arguments"]` unconditionally and substituted `{}` when the key
 /// was missing, so the target tool ran with an empty parameter object and
@@ -612,7 +612,7 @@ mod tests {
     /// `tool_call` 的参数包装：合规形态（对象）必须原样透传。
     #[test]
     fn extract_arguments_passes_object_through() {
-        let params = serde_json::json!({"name": "cua_type_text", "arguments": {"text": "cssso"}});
+        let params = serde_json::json!({"name": "memory_store", "arguments": {"text": "cssso"}});
         assert_eq!(extract_arguments(&params), serde_json::json!({"text": "cssso"}));
     }
 
@@ -621,7 +621,7 @@ mod tests {
     /// 填 `{}`，目标工具拿着空参数对象报错。
     #[test]
     fn extract_arguments_flattens_when_arguments_absent() {
-        let params = serde_json::json!({"name": "cua_type_text", "text": "cssso"});
+        let params = serde_json::json!({"name": "memory_store", "text": "cssso"});
         assert_eq!(extract_arguments(&params), serde_json::json!({"text": "cssso"}));
     }
 
@@ -630,7 +630,7 @@ mod tests {
     #[test]
     fn extract_arguments_parses_json_string() {
         let params =
-            serde_json::json!({"name": "cua_left_click", "arguments": "{\"x\": 960, \"y\": 540}"});
+            serde_json::json!({"name": "todo", "arguments": "{\"x\": 960, \"y\": 540}"});
         assert_eq!(extract_arguments(&params), serde_json::json!({"x": 960, "y": 540}));
     }
 
@@ -1177,7 +1177,7 @@ mod tests {
         assert!(is_bridge("tool_describe"));
         assert!(is_bridge("tool_call"));
         assert!(!is_bridge("read_file"));
-        assert!(!is_bridge("browser_navigate"));
+        assert!(!is_bridge("web_search"));
     }
 
     #[test]

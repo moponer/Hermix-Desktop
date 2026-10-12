@@ -21,7 +21,6 @@ members = [
     "crates/hermix-core",
     "crates/hermix-agent",
     "crates/hermix-tools",
-    "crates/hermix-cua",
     "crates/hermix-cron",
     "crates/hermix-skills",
     "crates/hermix-mcp",
@@ -85,7 +84,6 @@ hermix-transport = { path = "crates/hermix-transport" }
 hermix-protocol = { path = "crates/hermix-protocol" }
 hermix-agent = { path = "crates/hermix-agent" }
 hermix-tools = { path = "crates/hermix-tools" }
-hermix-cua = { path = "crates/hermix-cua" }
 hermix-cron = { path = "crates/hermix-cron" }
 hermix-skills = { path = "crates/hermix-skills" }
 hermix-mcp = { path = "crates/hermix-mcp" }
@@ -162,8 +160,6 @@ sha2 = "0.10"
 p256 = { version = "0.13", features = ["ecdh"] }
 hkdf = "0.12"
 # relay E2EE 的静态私钥用 DPAPI 保护（crypt32.dll，零第三方密码学库）。
-# hermix-cua 直接写 `windows = { version = "0.58", features = [...] }`，
-# 其 features 与这里的自动并集 —— 所以两边只需各自声明自己要的。
 windows = { version = "0.58", features = [
   "Win32_Security_Cryptography",
   "Win32_Foundation",
@@ -217,13 +213,8 @@ fs4 = { version = "0.13", default-features = false }
 # Used by hermix-skills to watch for SKILL.md changes
 notify = { version = "7", default-features = false, features = ["macos_fsevent"] }
 
-# Cross-platform desktop automation (Phase 18+)
-enigo = { version = "0.6", default-features = false }
-xcap = { version = "0.9", default-features = false }
-arboard = { version = "3", default-features = false }
-# `image` is re-exported by xcap; we declare it as a workspace dep so
-# hermix-tools can use the PNG encoder APIs directly without depending
-# on the xcap surface. Pinned to match xcap's vendored version.
+# `image` is used by hermix-tools for the PNG/JPEG codec APIs
+# (read_image thumbnailing, file_converter output writers).
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
 # ----------------------------------------------------------------------

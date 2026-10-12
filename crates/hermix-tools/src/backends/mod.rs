@@ -10,8 +10,6 @@
 //!   They were mistakenly marked ❌ in TOOL_CLEANUP.md and we initially
 //!   deleted them, which broke the voice crate. Restored via `git restore`.
 
-pub mod browser;
-pub mod cua_backend;
 pub mod clarify;
 pub mod code_execution;
 pub mod cronjob;

@@ -38,13 +38,6 @@ zip = { version = "0.6", default-features = false, features = ["deflate"] }
 # consumed by hermix-tools directly because that crate has its own dep.
 which = "6"
 
-# Self-hosted Computer-Use Automation primitives (Phase 1).
-# Only `capture`/`action` modules are Windows-gated inside
-# `hermix-cua` itself, so this dep compiles cleanly on macOS / Linux
-# CI hosts — every Windows-only entry point there is `#[cfg(windows)]`
-# with a `NotFound` stub for the other side. The Tauri commands in
-# `commands_cua.rs` mirror the same pattern.
-hermix-cua = { path = "../../../crates/hermix-cua" }
 hermix-plugin = { path = "../../../crates/hermix-plugin" }
 hermix-config = { path = "../../../crates/hermix-config" }
 
@@ -61,7 +54,6 @@ winreg = "0.10"
 image = { version = "0.25", features = ["png", "jpeg"] }
 
 # 索引遍历线程降为 BELOW_NORMAL 优先级：全盘扫描不抢 UI 线程。
-# windows crate 已在依赖树中（hermix-cua 同版本 0.58），仅补 Threading feature。
 [target.'cfg(windows)'.dependencies]
 # xcap：截图抓屏（GDI 一次性抓帧，方案见 docs/notes/implemented/feature/2026-10-07-screenshot-tool.md）
 xcap = "0.9"
@@ -106,9 +98,6 @@ tauri-build = { version = "2", features = [] }
 indexmap1 = { package = "indexmap", version = "1.9", features = ["std"] }
 
 [dev-dependencies]
-# `browser_cleanup::tests` uses `tempfile::tempdir()` to pin
-# HERMIX_PORTABLE_DATA_DIR at a sandboxed path so we never touch
-# the developer's real data dir.
 tempfile = "3"
 
 [lib]

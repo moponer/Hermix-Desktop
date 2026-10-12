@@ -14,12 +14,9 @@
 //!   / tool_result_storage` references that pointed at the deleted files.
 
 pub mod aliases;
-pub mod browser;
-pub mod cdp_bootstrap;
 pub mod clarify;
 pub mod code_execution;
 pub mod cronjob;
-pub mod cua;
 pub mod custom_app_manager;
 pub mod daily_memory;
 pub mod delegation;
@@ -74,7 +71,6 @@ pub mod workflow;
 
     use hermix_core::{SkillProvider, TerminalBackend};
 
-    use crate::tools::browser::BrowserBackend;
     use crate::ToolRegistry;
     // `clarify::ClarifyBackend` is no longer imported here — clarify
     // registration moved entirely to `register_builtin_tools`.
@@ -83,7 +79,7 @@ pub mod workflow;
 /// During migration, unmigrated tools still go through `register_builtins.rs`.
 /// Once all tools are migrated, `register_builtins.rs` is deleted.
 /// P1.3 signature change: `register_all` now accepts the
-/// three backends that tools needed but didn't fit into a default
+/// two backends that tools needed but didn't fit into a default
 /// constructor:
 /// - `terminal_backend`: shared by `terminal`, `read_file`,
 /// `write_file` (and reachable from `delegate_task` / shell exec).
@@ -91,16 +87,10 @@ pub mod workflow;
 /// you call `register_all` from elsewhere, pass a backend of the
 /// same kind you'd pass to `register_builtin_tools`.
 /// - `skill_provider`: backs the three `skills_*` tools.
-/// - `browser_backend`: backs the ten `browser_*` tools. The
-/// `register_builtin_tools` caller constructs a
-/// `SessionedBrowserBackend` wrapping a `BrowserRegistry` so
-/// group-chat sessions get isolated CDP state; tests can pass any
-/// `Arc<dyn BrowserBackend>`.
 pub fn register_all(
     registry: &ToolRegistry,
     terminal_backend: Arc<dyn TerminalBackend>,
     skill_provider: Arc<dyn SkillProvider>,
-    browser_backend: Arc<dyn BrowserBackend>,
     todo_event_tx: Option<tokio::sync::broadcast::Sender<todo::TodoChange>>,
     // 接缝：主进程装配（hermix-context::boot）注入 fs/shell。`None` 时
     // file/terminal 工具退回老路径。tests 不需要传。
@@ -151,9 +141,7 @@ pub fn register_all(
         Arc::new(crate::backends::code_execution::LocalCodeExecutionBackend::default())
             as Arc<dyn code_execution::CodeExecutionBackend>,
     );
-    cua::register(registry);
-    vendor::register(registry);
-    //P1.3 : file tools (read_file / write_file / patch /
+    vendor::register(registry);    //P1.3 : file tools (read_file / write_file / patch /
     // search_files) share `terminal_backend` with the terminal tool so
     // every code path that opens files uses the same backend. Patch +
     // search get local backends (LocalPatchBackend / LocalSearchBackend)
@@ -214,9 +202,6 @@ pub fn register_all(
     // P1.3: skills tools (skills_list / skill_view / skill_manage).
     skills::register(registry, skill_provider);
     // slack::register(registry); // Untracked, broken - removed until fixed
-    // P1.3: browser tools (10 handlers backed by the sessioned
-    // backend so per-session CDP state stays isolated).
-    browser::register(registry, browser_backend);
     // Deferred-tool bridge (tool_search / tool_describe / tool_call).
     // Was never called from here, so the handlers existed but stayed
     // unreachable — see `tools::tool_search::register` for the full

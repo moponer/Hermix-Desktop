@@ -66,10 +66,6 @@ pub struct GatewayConfig {
     #[serde(default)]
     pub tts: ToolCapabilityConfig,
 
-    /// Browser automation backend selection (`cloud_provider`, `use_gateway`, ...).
-    #[serde(default)]
-    pub browser: ToolCapabilityConfig,
-
     /// Named LLM provider configurations.
     #[serde(default)]
     pub llm_providers: HashMap<String, LlmProviderConfig>,
@@ -169,7 +165,6 @@ impl Default for GatewayConfig {
             web: ToolCapabilityConfig::default(),
             image_gen: ToolCapabilityConfig::default(),
             tts: ToolCapabilityConfig::default(),
-            browser: ToolCapabilityConfig::default(),
             llm_providers: HashMap::new(),
             smart_model_routing: SmartModelRoutingConfig::default(),
             compaction: CompactionConfig::default(),
@@ -768,7 +763,7 @@ pub fn approval_timeout_secs() -> u64 {
 }
 
 /// Shared shape for tool-capability routing config copied from Python's
-/// `config.yaml` sections such as `web`, `tts`, `image_gen`, and `browser`.
+/// `config.yaml` sections such as `web`, `tts`, and `image_gen`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct ToolCapabilityConfig {
     /// Generic backend selector (`web.backend`, etc).
@@ -777,23 +772,9 @@ pub struct ToolCapabilityConfig {
     /// Generic provider selector (`tts.provider`, `image_gen.provider`, ...).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
-    /// Browser-specific cloud provider selector.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cloud_provider: Option<String>,
     /// When true, prefer the Nous Tool Gateway over direct credentials.
     #[serde(default)]
     pub use_gateway: bool,
-    /// Browser-specific: CDP port Chrome/Edge listens on.
-    /// Defaults to `9222` (Chrome's `--remote-debugging-port` default).
-    /// Set to a different port (e.g. `9223`) when running multiple browsers.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cdp_port: Option<u16>,
-    /// Browser-specific: launch Chrome/Edge with `--headless=new`.
-    /// `None` falls back to `HERMIX_BROWSER_HEADLESS` env var, then
-    /// defaults to `true` (matches vercel-labs/agent-browser behaviour
-    /// and avoids surprise GUI windows on headless servers).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub headless: Option<bool>,
 }
 
 /// Skills configuration.

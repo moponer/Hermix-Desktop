@@ -9,8 +9,6 @@ use std::sync::Arc;
 
 use hermix_core::{SkillProvider, TerminalBackend};
 
-use hermix_config::paths::hermix_home;
-
 use crate::tools::clarify::ClarifyBackend;
 use crate::ToolRegistry;
 
@@ -25,12 +23,8 @@ use crate::ToolRegistry;
 /// Backends that depend on environment variables (e.g. `OPENAI_API_KEY`,
 /// `FAL_KEY`, `HASS_URL`) are constructed eagerly; if the vars are absent
 /// the tools will return a clear error at *runtime*, not at registration.
-/// P1.4 : the body is now an honest three-step pipeline
-/// (build browser backend → register_all → reconcile whitelist + floor).
-/// The three `browser_*_from_config` helpers were merged into
-/// [`BrowserConfig::from_env`] (single IO instead of three) and the
-/// per-step rationale moved into the function-level doc below so the
-/// body itself reads top-to-bottom without inline commentary.
+/// The body is an honest pipeline: register_all → clarify override →
+/// post-passes (whitelist + essential floor).
 pub fn register_builtin_tools(
     registry: &ToolRegistry,
     terminal_backend: Arc<dyn TerminalBackend>,
@@ -43,27 +37,7 @@ pub fn register_builtin_tools(
     // 退回 file/terminal 的老路径。tests + 没装配的调用方都传 None。
     seams: Option<hermix_context::BootSeams>,
 ) {
-    // 1. Browser backend. We construct it here (not inside
-    // `tools::browser::register`) because the allowlist / port /
-    // headless settings come from `config.yaml` and we don't want
-    // the browser module to reach across the crate for config
-    // helpers. The `SessionedBrowserBackend` wrapper hands each
-    // `tools::browser::register` handler an indirection that
-    // dispatches by `session_id`, so group-chat agents in
-    // different sessions never share CDP state.
-    let browser_cfg = BrowserConfig::from_env();
-    let browser_registry = std::sync::Arc::new(
-        crate::backends::browser::BrowserRegistry::new()
-            .with_allowed_domains(browser_cfg.allowed_domains)
-            .with_cdp_port(browser_cfg.cdp_port)
-            .with_headless(browser_cfg.headless),
-    );
-    let browser_backend: Arc<dyn crate::tools::browser::BrowserBackend> =
-        std::sync::Arc::new(crate::backends::browser::SessionedBrowserBackend::new(
-            browser_registry,
-        ));
-
-    // 2. Clarify backend. Caller-provided (desktop uses
+    // 1. Clarify backend. Caller-provided (desktop uses
     // `ChannelClarifyBackend` for prompt-the-user) wins over the
     // signal-based default. The default is used by tests and CLI
     // callers that don't need a UI prompt.
@@ -72,7 +46,7 @@ pub fn register_builtin_tools(
         None => Arc::new(crate::backends::clarify::SignalClarifyBackend::new()),
     };
 
-    // 3. Wire everything into the registry via the per-tool
+    // 2. Wire everything into the registry via the per-tool
     // `register(...)` functions. Then re-register `clarify` on
     // top with the caller-provided backend so the desktop's
     // blocking prompt overrides the signal default that
@@ -81,7 +55,6 @@ pub fn register_builtin_tools(
         registry,
         terminal_backend,
         skill_provider,
-        browser_backend,
         todo_event_tx,
         seams,
     );
@@ -165,12 +138,6 @@ pub fn register_builtin_tools(
 // `hermix_config::paths::hermix_home()` and ignored `HERMIX_PORTABLE_DATA_DIR`,
 // which caused session_search to write to a different DB than the rest of
 // the app in portable-desktop mode. Use `paths::sessions_db_path()` instead.
-// `BrowserConfig::read_home_yaml` had the same P0: it read `$HERMIX_HOME` /
-// `$HERMES_HOME` directly via `std::env::var` instead of going through
-// `hermix_home()`. Fixed in P1.5 — portable-desktop launchers that set
-// `HERMIX_PORTABLE_DATA_DIR` now resolve to the right config.yaml, and the
-// legacy `$HERMES_HOME` alias (used by the original NousResearch agent)
-// cannot silently clobber a developer's browser config.
 
 #[cfg(test)]
 mod tests {
@@ -595,11 +562,9 @@ mod tests {
         // finds zero matching tools, returns count=0, and the LLM
         // ends up without the supposedly-essential tool. The UI
         // toggle (`set_enabled_toolsets`) is the symmetric bug:
-        // a user who disables `"browser"` thinks they turned off
-        // every browser_* tool, but the registry only flips the
-        // (non-existent) `"browser"` tag and leaves them all on.
-        // The fix side of this test lives in `tools::browser`,
-        // `tools::cua`, `tools::pdf`, `tools::office_cli`, and
+        // disabling a group name that no tool carries silently
+        // flips nothing. The fix side of this test lives in
+        // `tools::pdf`, `tools::office_cli`, and
         // `essential::ESSENTIAL_TOOLSETS` — together they keep the
         // floor's expectations and the runtime registration in lockstep.
         let registry = registry_with_builtins();
@@ -627,10 +592,10 @@ mod tests {
     #[test]
     fn every_floor_group_toolset_is_a_real_group() {
         // Symmetric to `essential_toolset_floor_aligns_with_runtime_registration`:
-        // the floor is anchored on *group* names (`"browser"`, `"cua"`),
+        // the floor is anchored on *group* names (e.g. `"file"`),
         // not on per-tool names. If a future `register_with` call goes
-        // back to tagging each tool with its own name, every browser_*
-        // / cua_* tool would land in its own singleton toolset and the
+        // back to tagging each tool with its own name, every file_*
+        // tool would land in its own singleton toolset and the
         // floor would still pass the previous test (because the
         // per-tool names *do* exist in `list_toolsets()`), but the
         // floor would then flip only one tool per call. Pin the
@@ -647,8 +612,6 @@ mod tests {
         };
         // Grouped toolsets the floor relies on.
         let expected_groups: &[(&str, usize)] = &[
-            ("browser", 7),        // 7 browser_* tools share one group
-            ("cua", 14),           // 14 cua_* tools share one group
             ("file", 6),           // read/write/patch/search + list_files/edit_file
             ("pdf", 1),            // read_pdf (P1.8 split out of "file")
             ("homeassistant", 4),  // ha_* tools
@@ -687,7 +650,6 @@ mod tests {
             "web_extract",
             "url_safety",
             "code_execution",
-            "browser",
             "skills_list",
             "skills_get",
             "skills_install",
@@ -730,354 +692,3 @@ mod tests {
     }
 }
 
-/// Read `browser.allowed_domains` / `browser.cdp_port` / `browser.headless`
-/// from `~/.hermix/config.yaml`.
-/// Hand-rolled YAML scan — we don't want a full YAML dep here for
-/// three fields. The expected shape is:
-/// ```yaml
-/// browser:
-/// allowed_domains:
-/// - example.com
-/// - "*.trusted.io"
-/// cdp_port: 9223
-/// headless: true
-/// ```
-/// P1.4 : the previous design had three separate
-/// `browser_*_from_config()` helpers, each of which independently
-/// re-`read_to_string`'d the file and re-scanned for its own key.
-/// That was three filesystem reads per `register_builtin_tools`
-/// call, plus 150 lines of near-duplicate code. [`BrowserConfig`]
-/// now reads the file once and populates every field in a single
-/// pass; the call site collapses to a single `BrowserConfig::from_env()`
-/// expression.
-#[derive(Default, Debug, PartialEq, Eq)]
-struct BrowserConfig {
-    /// `Some(list)` restricts navigation. `None` = no allowlist (the
-    /// SSRF guard still rejects private addresses). An empty `Some(vec![])`
-    /// would mean "no navigation allowed" — we collapse to `None` here
-    /// to keep the runtime semantics intuitive.
-    allowed_domains: Option<Vec<String>>,
-    /// CDP port to use for browser bootstrap. `None` falls back to
-    /// `cdp_bootstrap::DEFAULT_CDP_PORT` (9222) or `HERMIX_BROWSER_CDP_PORT`.
-    cdp_port: Option<u16>,
-    /// Override the `HERMIX_BROWSER_HEADLESS` env-var fallback. `None`
-    /// = consult the env var next.
-    headless: Option<bool>,
-}
-
-impl BrowserConfig {
-    /// Read the user's `config.yaml` from `$HERMIX_HOME` (with the
-    /// legacy `$HERMES_HOME` alias) and extract every browser
-    /// sub-field. Returns [`Default::default`] (all `None`) when the
-    /// file is missing or unreadable — startup should not fail
-    /// because the operator has not configured browser details yet.
-    fn from_env() -> Self {
-        match Self::read_home_yaml() {
-            Some(text) => Self::from_yaml(&text),
-            None => Self::default(),
-        }
-    }
-
-    /// Test-only entry point: read `config.yaml` from an explicit
-    /// directory. Lets unit tests exercise the disk round-trip
-    /// without mutating the process-global `$HERMIX_HOME` env var.
-    /// Why a parallel API: `from_env` reads `HERMIX_HOME` via
-    /// `hermix_config::paths::hermix_home()`, which re-reads the env
-    /// var on every call. Concurrent tests that mutate
-    /// `$HERMIX_HOME` to point at their own temp dir race even when
-    /// they hold `HERMIX_HOME_LOCK` — the lock only serialises the
-    /// test thread, but `hermix_home()` runs on whatever thread the
-    /// caller is on and sees whatever value is in the env at that
-    /// instant. Passing an explicit `home` argument removes the env
-    /// var from the loop entirely.
-    #[cfg(test)]
-    fn from_home(home: &std::path::Path) -> Self {
-        let path = home.join("config.yaml");
-        match std::fs::read_to_string(&path) {
-            Ok(text) => Self::from_yaml(&text),
-            Err(_) => Self::default(),
-        }
-    }
-
-    /// Parse the three browser sub-fields out of an already-read YAML
-    /// string. Pure function (no IO) — every test exercises this
-    /// path so we don't need to set `HERMIX_HOME` per case.
-    /// P1.8 : rewritten via `serde_yaml` so we get a
-    /// declarative schema instead of a 90-line line scanner. The
-    /// shape is exactly the same as before — `Some(vec)` for a
-    /// populated list, `None` for "absent" — so callers (and the
-    /// 14 test cases below) keep working unchanged.
-    fn from_yaml(text: &str) -> Self {
-        // Accept the same loose truthy/falsy spellings the previous
-        // hand-rolled parser accepted (true/yes/1/on vs false/no/0/off).
-        // We parse integers as 0/1 too — `serde_yaml` unmarks bare `1`
-        // as i64 by default, so we accept it via the `Int` variant.
-        #[derive(serde::Deserialize, Default)]
-        #[serde(untagged)]
-        enum HeadlessLoose {
-            Bool(bool),
-            Int(i64),
-            Str(HeadlessStr),
-            #[default]
-            Other,
-        }
-
-        #[derive(serde::Deserialize)]
-        #[serde(rename_all = "snake_case")]
-        enum HeadlessStr {
-            True,
-            Yes,
-            On,
-            False,
-            No,
-            Off,
-        }
-
-        impl HeadlessLoose {
-            fn resolve(self) -> Option<bool> {
-                match self {
-                    HeadlessLoose::Bool(b) => Some(b),
-                    HeadlessLoose::Int(n) => match n {
-                        1 => Some(true),
-                        0 => Some(false),
-                        _ => None,
-                    },
-                    HeadlessLoose::Str(s) => match s {
-                        HeadlessStr::True | HeadlessStr::Yes | HeadlessStr::On => Some(true),
-                        HeadlessStr::False | HeadlessStr::No | HeadlessStr::Off => Some(false),
-                    },
-                    HeadlessLoose::Other => None,
-                }
-            }
-        }
-
-        #[derive(serde::Deserialize, Default)]
-        struct BrowserYaml {
-            #[serde(default)]
-            allowed_domains: Option<Vec<String>>,
-            #[serde(default)]
-            cdp_port: Option<u16>,
-            #[serde(default)]
-            headless: Option<HeadlessLoose>,
-        }
-
-        #[derive(serde::Deserialize, Default)]
-        struct RootYaml {
-            #[serde(default)]
-            browser: Option<BrowserYaml>,
-        }
-
-        let root: RootYaml = match serde_yaml::from_str(text) {
-            Ok(v) => v,
-            Err(_) => return Self::default(),
-        };
-        let Some(b) = root.browser else {
-            return Self::default();
-        };
-
-        Self {
-            allowed_domains: b.allowed_domains.and_then(|v| {
-                let cleaned: Vec<String> = v
-                    .into_iter()
-                    .map(|s| s.trim().trim_matches(|c| c == '"' || c == '\'').to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect();
-                if cleaned.is_empty() {
-                    None
-                } else {
-                    Some(cleaned)
-                }
-            }),
-            cdp_port: b.cdp_port,
-            headless: b.headless.and_then(HeadlessLoose::resolve),
-        }
-    }
-
-    /// Read the canonical `$HERMIX_HOME/config.yaml` (resolved via
-    /// [`hermix_home`], which honors `HERMIX_PORTABLE_DATA_DIR` for
-    /// the Tauri portable-desktop launcher).
-    /// **Deliberate non-features** vs. the previous implementation:
-    /// * **No `$HERMES_HOME` fallback.** The original NousResearch
-    /// `hermes-agent` uses the same env var name; silently picking
-    /// it up would let two unrelated projects fight over one data
-    /// dir. Users running the old agent should set `HERMIX_HOME`
-    /// explicitly or run with `HERMIX_MIGRATE_FROM_HERMES=1`.
-    /// * **No raw `std::env::var("HERMIX_HOME")` lookup.** Going
-    /// through `hermix_home()` ensures the portable launcher and
-    /// the standard install resolve to the same file (this is the
-    /// same P0 fix that already cleaned up `session_search`).
-    /// Returns `None` when the home is empty or `config.yaml` is
-    /// unreadable — startup should not panic on a missing config.
-    fn read_home_yaml() -> Option<String> {
-        let home = hermix_home();
-        let path = home.join("config.yaml");
-        std::fs::read_to_string(&path).ok()
-    }
-}
-
-#[cfg(test)]
-mod browser_config_tests {
-    use super::*;
-
-    #[test]
-    fn parses_all_three_fields_in_one_pass() {
-        // The P1.4 win: a single YAML block, a single read, all
-        // three fields populated. The previous code did three reads.
-        let cfg = BrowserConfig::from_yaml(
-            "browser:\n  allowed_domains:\n    - example.com\n    - \"*.trusted.io\"\n  cdp_port: 9223\n  headless: true\n",
-        );
-        assert_eq!(
-            cfg.allowed_domains,
-            Some(vec!["example.com".to_string(), "*.trusted.io".to_string()])
-        );
-        assert_eq!(cfg.cdp_port, Some(9223));
-        assert_eq!(cfg.headless, Some(true));
-    }
-
-    #[test]
-    fn returns_default_when_browser_block_absent() {
-        let cfg = BrowserConfig::from_yaml("other_key: 1\n");
-        assert_eq!(cfg, BrowserConfig::default());
-    }
-
-    #[test]
-    fn allowed_domains_inline_array_syntax() {
-        let cfg = BrowserConfig::from_yaml("browser:\n  allowed_domains: [a.com, b.com]\n");
-        assert_eq!(
-            cfg.allowed_domains,
-            Some(vec!["a.com".to_string(), "b.com".to_string()])
-        );
-    }
-
-    #[test]
-    fn cdp_port_missing_yields_none() {
-        let cfg = BrowserConfig::from_yaml("browser:\n  allowed_domains: [a.com]\n");
-        assert_eq!(cfg.cdp_port, None);
-    }
-
-    #[test]
-    fn cdp_port_invalid_value_yields_none_not_panic() {
-        let cfg = BrowserConfig::from_yaml("browser:\n  cdp_port: not_a_number\n");
-        assert_eq!(cfg.cdp_port, None);
-    }
-
-    #[test]
-    fn headless_accepts_truthy_and_falsy_aliases() {
-        for (v, expected) in [
-            ("true", Some(true)),
-            ("True", Some(true)),
-            ("yes", Some(true)),
-            ("1", Some(true)),
-            ("on", Some(true)),
-            ("false", Some(false)),
-            ("False", Some(false)),
-            ("no", Some(false)),
-            ("0", Some(false)),
-            ("off", Some(false)),
-        ] {
-            let yaml = format!("browser:\n  headless: {v}\n");
-            let cfg = BrowserConfig::from_yaml(&yaml);
-            assert_eq!(cfg.headless, expected, "headless={v}");
-        }
-    }
-
-    #[test]
-    fn headless_unrecognised_value_yields_none() {
-        let cfg = BrowserConfig::from_yaml("browser:\n  headless: maybe\n");
-        assert_eq!(cfg.headless, None);
-    }
-
-    #[test]
-    fn allowed_domains_quoted_strings_strip_quotes() {
-        let cfg =
-            BrowserConfig::from_yaml("browser:\n  allowed_domains:\n    - \"quoted.example\"\n");
-        assert_eq!(
-            cfg.allowed_domains,
-            Some(vec!["quoted.example".to_string()])
-        );
-    }
-
-    #[test]
-    fn comments_are_stripped_before_parsing() {
-        let cfg = BrowserConfig::from_yaml(
-            "# top-level comment\nbrowser:\n  # block comment\n  cdp_port: 9333\n  headless: false\n",
-        );
-        assert_eq!(cfg.cdp_port, Some(9333));
-        assert_eq!(cfg.headless, Some(false));
-    }
-
-    #[test]
-    fn sibling_top_level_key_ends_browser_block() {
-        // After `logging:` the scanner must not pick up
-        // `level:` as a browser sub-field.
-        let cfg = BrowserConfig::from_yaml(
-            "browser:\n  cdp_port: 9223\nlogging:\n  level: info\n",
-        );
-        assert_eq!(cfg.cdp_port, Some(9223));
-    }
-
-    /// Live IO test for the disk round-trip path: when the
-    /// `<home>/config.yaml` file is missing, [`BrowserConfig::from_home`]
-    /// must return `default()` rather than panic. This exercises the
-    /// same code path as `from_env` (`read_to_string` → `from_yaml`),
-    /// just with the home dir passed explicitly so we don't have to
-    /// touch the process-global `$HERMIX_HOME` env var.
-    #[test]
-    fn from_home_returns_default_when_config_missing() {
-        use std::sync::atomic::AtomicU64;
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-
-        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!(
-            "hermix-browser-config-empty-{}-{n}",
-            std::process::id(),
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        // Note: deliberately do NOT create config.yaml.
-
-        let cfg = BrowserConfig::from_home(&dir);
-        assert_eq!(cfg, BrowserConfig::default());
-    }
-
-    /// The "don't silently read `$HERMES_HOME`" semantics are owned
-    /// by `hermix_config::paths::hermix_home()` and exercised there
-    /// in `tests::ignores_legacy_hermes_home`. They are NOT
-    /// duplicated here — `BrowserConfig::from_env` is now just
-    /// `read_home_yaml + from_yaml`, and we want the YAML layer to
-    /// stay testable without touching process-global env state.
-
-    /// Round-trip: write a YAML to `<home>/config.yaml`, point
-    /// [`BrowserConfig::from_home`] at the directory, assert all
-    /// three fields round-tripped. This exercises the same
-    /// `read_to_string → from_yaml` path that `from_env` walks, but
-    /// without mutating `$HERMIX_HOME` so concurrent tests can't
-    /// race us through `hermix_home()`.
-    #[test]
-    fn from_home_round_trip_through_disk() {
-        use std::io::Write;
-        use std::sync::atomic::AtomicU64;
-
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-
-        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!(
-            "hermix-browser-config-{}-{n}",
-            std::process::id(),
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("config.yaml");
-        {
-            let mut f = std::fs::File::create(&path).unwrap();
-            f.write_all(
-                b"browser:\n  allowed_domains:\n    - a.com\n  cdp_port: 9333\n  headless: true\n",
-            )
-            .unwrap();
-        }
-
-        let cfg = BrowserConfig::from_home(&dir);
-
-        assert_eq!(cfg.allowed_domains, Some(vec!["a.com".to_string()]));
-        assert_eq!(cfg.cdp_port, Some(9333));
-        assert_eq!(cfg.headless, Some(true));
-    }
-}

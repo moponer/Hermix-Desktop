@@ -68,8 +68,7 @@ pub fn emit_acui_hide(callbacks: &AgentCallbacks, id: impl Into<String>) {
 /// the LLM must always see because `KeywordRouter`'s scoring on
 /// CJK-heavy or generic-language queries can score them ≈ 0. Without
 /// always-forwarding, the agent falls back to `terminal cd/ls` to
-/// "find" a file the user already gave a path for, or never sees
-/// the browser tools when the user asks "open the website". This
+/// "find" a file the user already gave a path for. This
 /// list is intentionally not user-configurable — it's a safety /
 /// capability gate, not a routing preference.
 /// 2. **User-configurable `always_include` whitelist**: caller-supplied
@@ -117,17 +116,6 @@ pub fn default_tool_router(user_always_include: &[String]) -> Arc<dyn ToolSchema
         // file_converter, task_manager) without wasting turns
         // on tool_search (which doesn't exist as a callable tool).
         "list_tools".to_string(),
-        // Browser and computer-use tools must be always-forwarded
-        // so the LLM can access them when the user explicitly
-        // requests web browsing, page interaction, or GUI
-        // automation. Without this, KeywordRouter scores them ≈ 0
-        // on CJK-heavy queries and the LLM never sees them.
-        "browser_navigate".to_string(),
-        "browser_snapshot".to_string(),
-        "browser_click".to_string(),
-        "browser_type".to_string(),
-        "browser_scroll".to_string(),
-        "computer_use".to_string(),
         // workbench_manager must be always-forwarded so workbench-bound
         // sessions (skill pinned every turn, MODULE_DESIGN §13 layer 3)
         // can actually call it. KeywordRouter scores it ≈ 0 on

@@ -2,7 +2,7 @@
 use serde::{Deserialize, Serialize};
 
 // Server-Side Request Forgery protection for tools that fetch URLs on the
-// LLM's behalf (`web_extract`, `browser_navigate`, …). The guard rejects:
+// LLM's behalf (`web_extract`, `web_fetch`, …). The guard rejects:
 // - Schemes other than http/https (file://, gopher://, dict://, ftp://)
 // - Loopback (127.0.0.0/8, ::1)
 // - Link-local (169.254.0.0/16, fe80::/10) — includes the AWS/GCP/Azure

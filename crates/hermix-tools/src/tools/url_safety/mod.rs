@@ -7,7 +7,7 @@
 //! - [`handler`]: `UrlSafetyHandler` tool entrypoint
 //!
 //! The `UrlSafetyHandler` tool lets the LLM check a URL against the
-//! configured website policy before `web_tools`/`browser` access it.
+//! configured website policy before the web tools access it.
 
 pub mod policy;
 pub mod tirith;

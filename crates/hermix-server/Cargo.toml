@@ -35,7 +35,6 @@ hermix-telemetry = { workspace = true }
 hermix-runtime = { workspace = true }
 hermix-voice = { workspace = true }
 hermix-mcp = { workspace = true }
-hermix-cua = { workspace = true }
 hermix-task = { workspace = true }
 hermix-automation = { workspace = true }
 hermix-intelligence = { workspace = true }

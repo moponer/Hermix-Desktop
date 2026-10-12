@@ -21,19 +21,6 @@ pub const TOOLSET_WEB: &[&str] = &["web_search", "web_extract"];
 pub const TOOLSET_TERMINAL: &[&str] = &["terminal", "process"];
 /// File system tools.
 pub const TOOLSET_FILE: &[&str] = &["read_file", "write_file", "patch", "search_files"];
-/// Browser automation tools.
-pub const TOOLSET_BROWSER: &[&str] = &[
-    "browser_navigate",
-    "browser_snapshot",
-    "browser_click",
-    "browser_type",
-    "browser_scroll",
-    "browser_back",
-    "browser_press",
-    "browser_get_images",
-    "browser_vision",
-    "browser_console",
-];
 /// Image generation tools.
 pub const TOOLSET_IMAGE_GEN: &[&str] = &["image_generate"];
 /// Skills management tools.
@@ -70,7 +57,6 @@ pub static LEGACY_TOOLSET_MAP: LazyLock<HashMap<&'static str, &'static str>> =
         m.insert("web_tools", "web");
         m.insert("terminal_tools", "terminal");
         m.insert("file_tools", "file");
-        m.insert("browser_tools", "browser");
         m.insert("skills_tools", "skills");
         m.insert("memory_tools", "memory");
         m.insert("code_execution_tools", "code_execution");
@@ -164,10 +150,6 @@ impl ToolsetManager {
             TOOLSET_FILE.iter().map(|s| s.to_string()).collect(),
         ));
         self.register(Toolset::new(
-            "browser",
-            TOOLSET_BROWSER.iter().map(|s| s.to_string()).collect(),
-        ));
-        self.register(Toolset::new(
             "image_gen",
             TOOLSET_IMAGE_GEN.iter().map(|s| s.to_string()).collect(),
         ));
@@ -228,7 +210,6 @@ impl ToolsetManager {
                 "web",
                 "terminal",
                 "file",
-                "browser",
                 "skills",
                 "memory",
                 "todo",
@@ -246,7 +227,6 @@ impl ToolsetManager {
                 "web",
                 "terminal",
                 "file",
-                "browser",
                 "skills",
                 "memory",
                 "todo",

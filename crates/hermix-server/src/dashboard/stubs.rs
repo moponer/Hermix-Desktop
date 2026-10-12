@@ -17,7 +17,6 @@ use crate::HttpServerState;
 pub struct DashboardPluginSettings {
     pub mcp_filesystem: bool,
     pub mcp_terminal: bool,
-    pub mcp_browser: bool,
     pub mcp_database: bool,
     pub tool_code_exec: bool,
 }
@@ -27,7 +26,6 @@ impl Default for DashboardPluginSettings {
         Self {
             mcp_filesystem: true,
             mcp_terminal: true,
-            mcp_browser: false,
             mcp_database: false,
             tool_code_exec: true,
         }
@@ -122,19 +120,6 @@ fn plugin_bundles_root(hermix_home: &Path) -> std::path::PathBuf {
 /// plugins that have full backend implementations.
 fn builtin_plugin_seeds() -> Vec<(&'static str, Value)> {
     vec![
-        ("browser", json!({
-            "name": "browser",
-            "display_name": "浏览器",
-            "category": "自动化",
-            "description": "Headless browser automation with Playwright-style controls: navigate, click, fill, screenshot, scrape.",
-            "icon": "Globe",
-            "version": "0.1.0",
-            "author": "NousResearch",
-            "source": "official",
-            "availability": "ready",
-            "tags": ["browser", "web", "automation", "scraping"],
-            "tools": ["browser_navigate", "browser_click", "browser_fill", "browser_screenshot", "browser_extract"]
-        })),
         ("context_engine", json!({
             "name": "context_engine",
             "display_name": "上下文引擎",
@@ -515,9 +500,9 @@ mod tests {
     }
 
     #[test]
-    fn browser_and_memory_marked_ready() {
+    fn memory_marked_ready() {
         for (id, manifest) in builtin_plugin_seeds() {
-            if id == "browser" || id == "memory" {
+            if id == "memory" {
                 assert_eq!(
                     manifest.get("availability").and_then(|v| v.as_str()),
                     Some("ready"),

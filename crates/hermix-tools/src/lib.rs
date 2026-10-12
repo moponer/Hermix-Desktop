@@ -15,7 +15,7 @@
 //! - **ToolRegistry**: Central registry for all available tools with availability checks
 //! - **ToolsetManager**: Manages named groups of tools (toolsets) with recursive resolution
 //! - **Tool dispatch**: Parallel execution of multiple tool calls with budget enforcement
-//! - **Tool implementations**: Concrete handlers for web, terminal, file, browser, and more
+//! - **Tool implementations**: Concrete handlers for web, terminal, file, and more
 //! - **Approval system**: Dangerous command pattern detection for terminal safety
 
 pub mod approval;
@@ -68,20 +68,12 @@ pub mod deferred_loader;
 pub use credential_guard::CredentialGuard;
 
 // Re-export all tool handler implementations and their backend traits
-pub use tools::browser::{
-    BrowserBackend, BrowserClickHandler, BrowserNavigateHandler, BrowserPressHandler,
-    BrowserScrollHandler, BrowserSnapshotHandler, BrowserTypeHandler,
-};
 pub use tools::clarify::{ClarifyBackend, ClarifyHandler};
 pub use tools::code_execution::{CodeExecutionBackend, ExecuteCodeHandler};
 pub use tools::cronjob::{CronjobBackend, CronjobHandler};
 pub use tools::workflow::{
     get_workflow, list_workflows, remove_workflow, update_run_status, upsert_workflow,
     WorkflowEntry,
-};
-pub use tools::cua::{
-    CuaLeftClickHandler, CuaPressKeyHandler, CuaScreenInfoHandler,
-    CuaScreenshotHandler, CuaTypeTextHandler, CuaUiClickHandler, CuaUiTreeHandler,
 };
 pub use tools::delegation::{DelegateTaskHandler, DelegationBackend};
 pub use tools::file::{
@@ -111,7 +103,6 @@ pub use tools::url_safety::{TirithAction, TirithCheckResult, TirithConfig, Tirit
 pub use tools::web::{WebExtractBackend, WebExtractHandler, WebSearchBackend, WebSearchHandler};
 
 // Re-export real backend implementations
-pub use backends::browser::{AutoBrowserBackend, CamoFoxBrowserBackend, CdpBrowserBackend};
 pub use backends::clarify::{
     ChannelClarifyBackend, ClarifyDispatcher, ClarifySessionProvider, PendingClarify,
     PendingClarifySnapshot, SignalClarifyBackend,
