@@ -100,6 +100,10 @@ em{font-style:normal; font-weight:600; color:var(--ink)}
 .btn.off:hover{background:var(--paper-3); color:var(--ink-2)}
 /* 禁用原因与解锁路径必须同时可见，不能只变个颜色 */
 .why{font-size:var(--fs-meta); color:var(--ink-2); margin:10px 0 0; display:flex; gap:7px; align-items:baseline}
+/* .why 自带 display:flex 会顶掉 hidden 属性的 UA display:none（hidden 的本质
+   就是一条 UA 样式，特异性再低也输给任何作者 display 声明）——JS 里
+   why.hidden=true 因此从不生效，黄条常驻（2026-10-12 实测）。显式补回。 */
+.why[hidden]{display:none}
 .why b{color:var(--ink)}
 
 @media (hover:hover) and (pointer:fine){
