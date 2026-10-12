@@ -3,16 +3,14 @@
  *
  * Mount once at the App root. Reads from the singleton toast store
  * (see hooks/useToast.ts). No props needed.
+ *
+ * C 方向（design-previews/2026-10-12-toast-redesign）：右下角紧凑条，
+ * 语义色小圆点承担状态标识，进度条与圆底图标已随胶囊形态一起废除；
+ * 关闭按钮 hover / focus 才现身（样式在 base.css toast 段）。
  */
 
 import { useToasts, dismissToast } from "../hooks/useToast";
-import {
-  CheckCircle2,
-  AlertCircle,
-  Info,
-  AlertTriangle,
-  X,
-} from "lucide-react";
+import { X } from "lucide-react";
 
 type ToastVariant = "error" | "warning" | "info" | "success";
 
@@ -23,16 +21,6 @@ const variantClass: Record<ToastVariant, string> = {
   success: "toast--success",
 };
 
-// Lucide icons replace the emoji glyphs (✕ ! ℹ ✓) so the toast
-// stack reads as part of the same icon system as the rest of the
-// UI instead of feeling like a Bootstrap-era fallback.
-const variantIcon: Record<ToastVariant, typeof CheckCircle2> = {
-  success: CheckCircle2,
-  info: Info,
-  warning: AlertTriangle,
-  error: AlertCircle,
-};
-
 export function ToastContainer() {
   const { toasts } = useToasts();
 
@@ -41,18 +29,14 @@ export function ToastContainer() {
   return (
     <div className="toast-container" role="alert" aria-live="polite">
       {toasts.map((t) => {
-        const Icon = variantIcon[t.variant] ?? Info;
         const cls = variantClass[t.variant] ?? "toast--info";
-        const showProgress = t.duration > 0;
         return (
           <div
             key={t.id}
             className={`toast ${cls}`}
             onClick={() => dismissToast(t.id)}
           >
-            <span className="toast__icon" aria-hidden="true">
-              <Icon className="icon-md" strokeWidth={2.2} />
-            </span>
+            <span className="toast__dot" aria-hidden="true" />
             <span className="toast__msg">{t.message}</span>
             <button
               type="button"
@@ -62,13 +46,6 @@ export function ToastContainer() {
             >
               <X className="icon-sm" strokeWidth={2.2} />
             </button>
-            {showProgress && (
-              <span
-                className="toast__progress"
-                aria-hidden="true"
-                style={{ animationDuration: `${t.duration}ms` }}
-              />
-            )}
           </div>
         );
       })}

@@ -140,85 +140,67 @@ select:focus-visible {
 .error-boundary-fallback__summary { cursor: pointer; font-size: 12px; color: var(--color-text-faint); }
 .error-boundary-fallback__pre { margin-top: 8px; padding: 12px; background: var(--color-bg-secondary); border-radius: var(--radius-md); font-size: 12px; overflow: auto; max-height: 200px; white-space: pre-wrap; word-break: break-word; color: var(--color-error); }
 
-/* ── Toast notifications (top-center, card) ──────────────────────
-   顶部居中的提示卡。三条硬约束，改动前先读：
+/* ── Toast notifications（C 方向：右下角紧凑条，2026-10-12 重设计）──
+   四方向预览（design-previews/2026-10-12-toast-redesign）主人选定 C。
+   三条硬约束，改动前先读：
 
-   1. **形状跟随项目容器体系**：一律 `--radius-lg`，禁 `999px` 胶囊。
-      胶囊是移动端 snackbar 的语言，跟 PopoverShell(rounded-xl) /
-      对话框 / 审批卡这套方角体系不搭。
-   2. **位置顶部居中，非垂直居中**：垂直正中最挡正文与输入框，
-      且"新建对话"就在画面中央，两者会打架。顶部降入符合"系统通告"
-      的空间语义（与 TitleBar 同侧），也不遮挡阅读区。
-   3. **颜色全走语义 token**：用 `--color-*-soft` 系列，禁 `color-mix`
-      现调与字面 rgba。tokens.css 顶部契约要求组件只用变量，手调色
-      会绕过主题系统 —— 换主题时这里就成了漂移源。
+   1. **右下角案面**：与 composer 同侧的低打扰位，语义色小圆点承担状态
+      标识，不用图标区 / 圆底 / 进度条 —— 状态类消息要安静。
+   2. **紧凑单行**：padding 6/10、radius 8px（比卡片小一号的浮层语言）、
+      无 min-width，宽度跟内容走；关闭按钮 hover 才出现。
+   3. **颜色全走语义 token**：`--color-*` 系列，禁字面色值，跟随主题。
    ───────────────────────────────────────────────────────────────── */
 .toast-container {
   position: fixed;
-  top: 0;
-  left: 0;
   right: 0;
+  bottom: 0;
   z-index: 9999;
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: flex-end;
   gap: 8px;
-  /* TitleBar 固定 40px（components-layout.css .titlebar），留间距让
-     toast 落在其下方而不是压在窗口控制按钮上。 */
-  padding: 50px 16px 0;
+  padding: 0 16px 16px;
   pointer-events: none;
 }
 .toast {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 10px;
-  min-width: 240px;
-  max-width: min(420px, calc(100vw - 32px));
-  padding: 10px 12px 10px 14px;
-  border: 1px solid var(--color-border-primary);
-  border-radius: var(--radius-lg);
+  gap: 7px;
+  max-width: min(360px, calc(100vw - 32px));
+  padding: 6px 8px 6px 10px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 8px;
   background: var(--color-bg-elevated);
   box-shadow: var(--shadow-pop);
   color: var(--color-text-primary);
   pointer-events: auto;
   cursor: pointer;
-  overflow: hidden;
-  animation: toast-in 0.2s var(--ease-out);
+  font-size: var(--font-size-meta);
+  animation: toast-in 0.18s var(--ease-out);
   transition:
     box-shadow var(--duration-fast) ease,
     border-color var(--duration-fast) ease;
 }
 .toast:hover {
-  /* 只深一档边框 + 用标准弹出层阴影，不引入新的视觉重量 */
   border-color: var(--color-border-secondary);
   box-shadow: var(--shadow-modal);
 }
-/* 变体标识由图标色（--toast-accent）+ 柔和底块（--toast-wash）+ 底部
-   进度条共同承担，不再用左侧 3px 色条 —— 一侧粗彩条是 AI 生成 UI 的
-   最典型标志（impeccable side-tab），且三处同色语义已足够扫视识别。 */
-.toast--error   { --toast-accent: var(--color-error);   --toast-wash: var(--color-error-soft); }
-.toast--warning { --toast-accent: var(--color-warning); --toast-wash: var(--color-warning-soft); }
-.toast--info    { --toast-accent: var(--color-info);    --toast-wash: var(--color-info-soft); }
-.toast--success { --toast-accent: var(--color-success); --toast-wash: var(--color-success-soft); }
-
-/* 柔和底块取代原来的径向渐变光环：单色、无光晕，
-   与 --color-*-soft 令牌同源，跨主题自动跟随。 */
-.toast__icon {
+/* 状态标识 = 语义色小圆点。错误/警告靠点的颜色区分，不靠加大音量。 */
+.toast--error   { --toast-accent: var(--color-error);   }
+.toast--warning { --toast-accent: var(--color-warning); }
+.toast--info    { --toast-accent: var(--color-info);    }
+.toast--success { --toast-accent: var(--color-success); }
+.toast__dot {
   flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  border-radius: var(--radius-md);
-  color: var(--toast-accent);
-  background: var(--toast-wash);
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--toast-accent);
 }
 .toast__msg {
   flex: 1 1 auto;
   min-width: 0;
-  font-size: var(--font-size-meta);
   line-height: 1.45;
   color: var(--color-text-primary);
   word-break: break-word;
@@ -228,52 +210,37 @@ select:focus-visible {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
   padding: 0;
   background: none;
   border: none;
   border-radius: var(--radius-sm);
   cursor: pointer;
   color: var(--color-text-muted);
-  opacity: 0.6;
+  /* 低打扰：关闭控件 hover / focus 才现身 */
+  opacity: 0;
   transition:
     opacity var(--duration-fast) ease,
     background var(--duration-fast) ease,
     color var(--duration-fast) ease;
 }
+.toast:hover .toast__close,
+.toast__close:focus-visible {
+  opacity: 0.7;
+}
 .toast__close:hover {
   opacity: 1;
-  background: var(--toast-wash);
-  color: var(--toast-accent);
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
 }
-.toast__progress {
-  position: absolute;
-  left: 14px;
-  right: 14px;
-  bottom: 5px;
-  height: 2px;
-  border-radius: 999px;
-  background: var(--toast-accent);
-  opacity: 0.35;
-  transform-origin: left center;
-  animation: toast-progress linear forwards;
-  animation-duration: inherit;
-  pointer-events: none;
-}
-@keyframes toast-progress {
-  from { transform: scaleX(1); opacity: 0.35; }
-  to   { transform: scaleX(0); opacity: 0.15; }
-}
-/* 从上方外侧降入 —— toast 现在停在顶部居中，起点必须比落点更高，
-   否则会看着像从内容区里"长出来"。 */
+/* 从右侧滑入 —— toast 停在右下角，起点必须来自窗外同侧。 */
 @keyframes toast-in {
-  from { opacity: 0; transform: translateY(-12px); }
-  to   { opacity: 1; transform: translateY(0); }
+  from { opacity: 0; transform: translateX(12px); }
+  to   { opacity: 1; transform: translateX(0); }
 }
 @media (prefers-reduced-motion: reduce) {
   .toast { animation: none; }
-  .toast__progress { animation: none; }
 }
 
 /* ── Spreadsheet cell borders ─────────────────────────────────── */
