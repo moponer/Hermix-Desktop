@@ -69,27 +69,45 @@ export interface PairOverRelayResult {
  *
  * 解析失败返回 `null`，由调用方给出「扫到的不是 hermix 配对码」的提示。
  * 旧格式（带 `fp=` 的局域网直连码）不再接受——桌面端已不再生成。
+ *
+ * ## 为什么手工解析而不用 `new URL()`
+ *
+ * App 端 V8 运行时没有 WHATWG `URL` 全局（与缺 `TextEncoder` 同源的缺口），
+ * 扫码回调里 `new URL` 一抛 ReferenceError 就被 catch 吞成 null——用户看到
+ * 的是「响了一声再无反应」。PC 侧产码是固定格式
+ * `{origin}/pair?c=码&t=凭据&k=公钥`（`pairing.rs::urlencode` 严格 %XX），
+ * 手工解析不依赖任何运行时全局，H5 / App / 小程序行为一致。
  */
 export function parsePairingUrl(raw: string): PairingTarget | null {
-  let u: URL
-  try {
-    u = new URL(raw.trim())
-  } catch {
-    return null
-  }
-  if (u.protocol !== 'https:' && u.protocol !== 'wss:') return null
-  if (!/\/pair\/?$/.test(u.pathname)) return null
+  // 只收 https/wss：凭据与密封帧不该裸奔在明文信道上（旧实现同款约束）。
+  const m = /^(https|wss):\/\/([^/?#]+)\/pair\/?\?(.+)$/.exec(raw.trim())
+  if (!m) return null
+  const [, scheme, host, query] = m
 
-  const code = (u.searchParams.get('c') ?? '').replace(/\D/g, '')
+  const params = new Map<string, string>()
+  for (const part of query.split('&')) {
+    const eq = part.indexOf('=')
+    if (eq <= 0) continue
+    const key = part.slice(0, eq)
+    const val = part.slice(eq + 1)
+    try {
+      params.set(key, decodeURIComponent(val))
+    } catch {
+      // 畸形 % 序列：按原样收，交给下面的格式校验去拒
+      params.set(key, val)
+    }
+  }
+
+  const code = (params.get('c') ?? '').replace(/\D/g, '')
   if (code.length !== CODE_LEN) return null
 
-  const t = (u.searchParams.get('t') ?? '').trim()
+  const t = (params.get('t') ?? '').trim()
   if (!t.startsWith('hrel_') || t.length > 128) return null
 
-  const k = (u.searchParams.get('k') ?? '').trim()
+  const k = (params.get('k') ?? '').trim()
   if (!/^[A-Za-z0-9+/]+={0,2}$/.test(k)) return null
 
-  return { relayBase: u.origin, code, phoneToken: t, pcPublicKey: k }
+  return { relayBase: `${scheme.toLowerCase()}://${host}`, code, phoneToken: t, pcPublicKey: k }
 }
 
 /**

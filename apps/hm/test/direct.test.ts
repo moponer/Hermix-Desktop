@@ -40,6 +40,21 @@ test('拒绝 http —— 凭据与密封帧不该裸奔在明文信道上', () =
   assert.equal(parsePairingUrl(GOOD.replace('https://', 'http://')), null);
 });
 
+test('公钥里的 + / 按 PC 侧 urlencode 的 %XX 形态出现（真实产码）也能解出', () => {
+  // pairing.rs::urlencode 把 base64 的 + / = 全部编成 %XX；这里的 K 含 + 与 /，
+  // URL 里必须是编码形态——解析后要还原成原始 base64 给 sealBody 用。
+  const kRaw = 'BKu8+Xy9/Z0a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5p6q7r8s9t0u1v2w3x4y5z6A7B8c9D0e1F2g3H4i5J6k=';
+  const encoded = encodeURIComponent(kRaw).replace(/'/g, '%27'); // + → %2B, / → %2F
+  const t = parsePairingUrl(`https://relay.example.com/pair?c=654321&t=${TOKEN}&k=${encoded}`);
+  assert.ok(t, '编码形态的公钥必须能解析');
+  assert.equal(t.pcPublicKey, kRaw, '解出的公钥应还原为原始 base64');
+});
+
+test('畸形 % 序列不炸解析器（交给格式校验拒绝或原样收下）', () => {
+  // 扫到被截断/损坏的码时不能抛异常——回调里抛了就是又一次「响一声没反应」。
+  assert.doesNotThrow(() => parsePairingUrl(`https://h/pair?c=123456&t=${TOKEN}&k=%ZZ%2`));
+});
+
 test('拒绝非 /pair 路径', () => {
   assert.equal(parsePairingUrl(`https://relay.example.com/evil?c=123456&t=${TOKEN}&k=${K}`), null);
 });

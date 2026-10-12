@@ -110,6 +110,9 @@ function reset() {
       <text class="card-hint">
         手机和电脑不必在同一网络：配对与连接都经中转（relay），手机能上网就行。
       </text>
+      <!-- 错误必须在这一步就可见：扫码失败/解析失败时 target 还是空，
+           视图停在第一步——提示若只放第二步，用户看到的就是「响一声没反应」。 -->
+      <view v-if="error" class="notice err"><text>{{ error }}</text></view>
     </view>
 
     <!-- 第二步：确认身份 + 起名，再提交 -->
