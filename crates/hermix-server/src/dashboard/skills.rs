@@ -547,36 +547,6 @@ const BUILTIN_SKILLS: &[(&str, &str, &str)] = &[
         include_str!("skills/plan-writing.md"),
     ),
     (
-        "productivity",
-        "writing-assistant",
-        include_str!("skills/writing-assistant.md"),
-    ),
-    (
-        "productivity",
-        "learning-coach",
-        include_str!("skills/learning-coach.md"),
-    ),
-    (
-        "finance",
-        "investment-analysis",
-        include_str!("skills/investment-analysis.md"),
-    ),
-    (
-        "finance",
-        "finance-planning",
-        include_str!("skills/finance-planning.md"),
-    ),
-    (
-        "lifestyle",
-        "travel-planning",
-        include_str!("skills/travel-planning.md"),
-    ),
-    (
-        "lifestyle",
-        "health-wellness",
-        include_str!("skills/health-wellness.md"),
-    ),
-    (
         "writing",
         "web-novel",
         include_str!("skills/web-novel.md"),
@@ -796,10 +766,6 @@ mod tests {
             "architecture-design SKILL.md should exist"
         );
         assert!(
-            dir.path().join("finance").join("investment-analysis").join("SKILL.md").exists(),
-            "investment-analysis SKILL.md should exist"
-        );
-        assert!(
             dir.path().join("office").join("office-cli").join("SKILL.md").exists(),
             "office-cli SKILL.md should exist (re-enabled in P1.8)"
         );
@@ -835,7 +801,7 @@ mod tests {
         let store = hermix_skills::FileSkillStore::new(dir.path().to_path_buf());
 
         // Skills across different categories — all loadable by plain name
-        for name in &["architecture-design", "devops-practice", "plan-writing", "investment-analysis", "travel-planning"] {
+        for name in &["architecture-design", "devops-practice", "plan-writing"] {
             let skill = store.load(name).await.unwrap()
                 .unwrap_or_else(|| panic!("{name} should be loadable by name"));
             assert_eq!(&skill.name, name);
@@ -854,8 +820,6 @@ mod tests {
         assert!(names.contains(&"architecture-design"));
         assert!(names.contains(&"devops-practice"));
         assert!(names.contains(&"plan-writing"));
-        assert!(names.contains(&"investment-analysis"));
-        assert!(names.contains(&"travel-planning"));
         assert!(names.contains(&"web-novel"));
     }
 
@@ -997,7 +961,7 @@ mod tests {
         // (`terminal` is the documented regression test). We don't
         // hard-pin every entry in `ESSENTIAL_TOOLSETS` because
         // the constant has historically out-paced registration
-        // (e.g. `pdf`, `office`, `computer_use`, `cua` are in
+        // (e.g. `pdf`, `office` were once in
         // the floor but not in the runtime registry — a separate
         // P-bug tracked elsewhere). The P1.7 contract is "floor
         // toolsets that *are* registered must survive a runtime
@@ -1076,12 +1040,7 @@ mod tests {
     fn apply_toggle_with_floor_keeps_essentials_when_user_passes_partial_set() {
         let (reg, registered) = fixture_registry();
         // User keeps only `web`. Floor must re-assert. We pick
-        // `web` because it is both in the floor *and* registered
-        // (the floor lists `browser` too, but P1.3 split the
-        // browser toolset into per-action toolsets
-        // `browser_navigate`/`browser_click`/etc., so the
-        // single-name `browser` no longer exists in the runtime
-        // registry).
+        // `web` because it is both in the floor *and* registered.
         let mut requested: HashSet<String> = HashSet::new();
         requested.insert("web".to_string());
         let returned = apply_toggle_with_floor(&reg, &registered, &requested);

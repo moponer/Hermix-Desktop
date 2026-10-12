@@ -427,7 +427,6 @@ impl ToolHandler for SkillManageHandler {
                     .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
                 Ok(format!("Skill '{}' improved", name))
             }
-            "sync" => Ok("Skill sync request accepted (provider-specific hub sync path).".to_string()),
             "import_from_url" => {
                 //: ingest a community SKILL.md from
                 // a URL, parse the agentskills.io open-standard
@@ -533,29 +532,6 @@ impl ToolHandler for SkillManageHandler {
                     if existed { ", updated existing" } else { ", created" },
                 ))
             }
-            "install_builtins" => {
-                let builtins = [
-                    "planning","debugging","refactoring","testing","docs","git","review","web-research",
-                    "terminal","file-edit","security","performance","api-design","db-migrations",
-                    "incident-response","release","prompting","agent-orchestration","mcp","gateway",
-                    "voice-mode","cron","memory","session-search","tool-authoring","skill-authoring"
-                ];
-                let mut created = 0usize;
-                for name in builtins {
-                    let exists = self.provider.get_skill(name)
-                        .await
-                        .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?
-                        .is_some();
-                    if !exists {
-                        let content = format!("# {}\n\n1. Understand\n2. Execute\n3. Verify\n", name);
-                        self.provider.create_skill(name, &content, Some("builtin"))
-                            .await
-                            .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
-                        created += 1;
-                    }
-                }
-                Ok(format!("Installed {} built-in skills", created))
-            }
             // ── offline .hermes-skill file format ──
             "export_to_file" => {
                 let name = params.get("name")
@@ -620,7 +596,7 @@ impl ToolHandler for SkillManageHandler {
                     .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
                 Ok(format!("Imported skill '{}' from {}", name, file_path))
             }
-            other => Err(ToolError::InvalidParams(format!("Unknown action: '{}'. Use create/update/delete/auto_create/self_improve/sync/install_builtins/export_to_file/import_from_file.", other))),
+            other => Err(ToolError::InvalidParams(format!("Unknown action: '{}'. Use create/update/delete/auto_create/self_improve/export_to_file/import_from_file.", other))),
         }
     }
 
@@ -636,8 +612,6 @@ impl ToolHandler for SkillManageHandler {
                 "auto_create",
                 "auto_extract_from_conversation",
                 "self_improve",
-                "sync",
-                "install_builtins",
                 "export_to_file",
                 "import_from_file"
             ]

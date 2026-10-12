@@ -920,22 +920,23 @@ fn seed_builtin_skills_writes_all_builtins_to_fresh_dir() {
     let written = hermix_server::dashboard::skills::seed_builtin_skills(&skills_dir)
         .expect("seed should succeed on a fresh dir");
 
-    // 19 builtin skills across 9 categories
-    assert_eq!(written, 19);
+    // 13 builtin skills across 5 categories (6 lifestyle/finance/productivity
+    // toys removed 2026-10-12 — see docs/MCPHUB_BORROWINGS.md §10)
+    assert_eq!(written, 13);
 
-    // All 19 should now exist on disk under <category>/<name>/SKILL.md
+    // All 13 should now exist on disk under <category>/<name>/SKILL.md
     let entries: Vec<_> = walkdir::WalkDir::new(&skills_dir)
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| e.file_name() == "SKILL.md")
         .collect();
-    assert_eq!(entries.len(), 19);
+    assert_eq!(entries.len(), 13);
 
-    // Spot-check: the writing-assistant skill lands in productivity/
-    let writing = skills_dir.join("productivity").join("writing-assistant").join("SKILL.md");
-    assert!(writing.exists(), "writing-assistant should be seeded at {:?}", writing);
-    let content = std::fs::read_to_string(&writing).unwrap();
-    assert!(content.contains("writing-assistant"), "frontmatter should be intact");
+    // Spot-check: the plan-writing skill lands in productivity/
+    let planning = skills_dir.join("productivity").join("plan-writing").join("SKILL.md");
+    assert!(planning.exists(), "plan-writing should be seeded at {:?}", planning);
+    let content = std::fs::read_to_string(&planning).unwrap();
+    assert!(content.contains("plan-writing"), "frontmatter should be intact");
 }
 
 #[test]
@@ -945,10 +946,10 @@ fn seed_builtin_skills_is_idempotent() {
 
     let first = hermix_server::dashboard::skills::seed_builtin_skills(&skills_dir)
         .expect("first seed should succeed");
-    assert_eq!(first, 19);
+    assert_eq!(first, 13);
 
     // Mutate one file to prove the second call doesn't clobber it.
-    let target = skills_dir.join("productivity").join("writing-assistant").join("SKILL.md");
+    let target = skills_dir.join("productivity").join("plan-writing").join("SKILL.md");
     std::fs::write(&target, "USER CUSTOM CONTENT").unwrap();
 
     let second = hermix_server::dashboard::skills::seed_builtin_skills(&skills_dir)
@@ -1079,13 +1080,12 @@ async fn list_skills_endpoint_returns_seeded_skills() {
     let (status, body) = get_json(app, "/api/skills").await;
     assert_eq!(status, StatusCode::OK);
     let arr = body.as_array().expect("response should be an array");
-    assert_eq!(arr.len(), 19, "all 19 seeded skills should be visible via /api/skills");
+    assert_eq!(arr.len(), 13, "all 13 seeded skills should be visible via /api/skills");
 
-    // Spot-check: writing-assistant is in the response
+    // Spot-check: plan-writing is in the response
     let names: Vec<&str> = arr.iter().map(|s| s["name"].as_str().unwrap_or("")).collect();
-    assert!(names.contains(&"writing-assistant"));
-    assert!(names.contains(&"travel-planning"));
-    assert!(names.contains(&"health-wellness"));
+    assert!(names.contains(&"plan-writing"));
+    assert!(names.contains(&"web-novel"));
 }
 
 // ── /api/persona/* — file-backed persona management ─────────────────
