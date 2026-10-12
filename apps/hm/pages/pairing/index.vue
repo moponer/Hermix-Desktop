@@ -19,7 +19,7 @@ import {
   type PairingTarget,
 } from '../../core/direct'
 import { generateIdentity } from '../../core/crypto'
-import { hasSubtleCrypto, setRelayToken, storePairedDevice, listDevices } from '../../core/pairing'
+import { setRelayToken, storePairedDevice, listDevices } from '../../core/pairing'
 import { setRelayBaseUrl } from '../../core/clock'
 
 /** 扫到并解析成功、但用户还没确认提交的码。 */
@@ -28,8 +28,6 @@ const target = ref<PairingTarget | null>(null)
 const devName = ref('')
 const busy = ref(false)
 const error = ref('')
-
-const cryptoOk = hasSubtleCrypto()
 
 function onScan() {
   error.value = ''
@@ -134,16 +132,14 @@ function reset() {
         </view>
       </view>
 
-      <view v-if="!cryptoOk" class="notice err">
-        <text>本机运行时没有 WebCrypto，端到端加密无法工作。请换用官方安装包。</text>
-      </view>
-
       <view v-if="error" class="notice err"><text>{{ error }}</text></view>
 
+      <!-- E2EE 已换 @noble/* 纯 JS 实现（2026-10-12），打进应用包内，
+           不再依赖运行时的 WebCrypto——旧「没有 WebCrypto」门禁随之退役。 -->
       <view
         class="btn-pri"
-        :class="{ off: busy || !cryptoOk }"
-        @tap="busy || !cryptoOk ? undefined : submit()"
+        :class="{ off: busy }"
+        @tap="busy ? undefined : submit()"
       >
         <text>{{ busy ? '正在连接…' : '确认并连接' }}</text>
       </view>

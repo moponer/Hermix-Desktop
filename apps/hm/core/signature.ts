@@ -16,12 +16,19 @@
  * 线格式的就是这个固定向量。所以 `CONFORMANCE_VECTOR` 改动时，Rust 侧那个
  * 测试必须一起改。
  *
- * ⚠️ WebCrypto 的 `subtle.sign` 是**异步**的，且 H5 目标只在安全上下文
- * （https / localhost）可用。调用方因此一律 `await`，别图省事改同步。
+ * ## 2026-10-12：WebCrypto → @noble/hashes
+ *
+ * App 端 V8 没有 `crypto` 全局（subtle/getRandomValues 双缺），原 WebCrypto
+ * HMAC 路径在真机上必炸——与 crypto.ts 的 E2EE 是同一个坑，一起换 noble。
+ * `hmac(sha256,…)` 已在本仓库测试里与 Rust 固定向量逐字比对通过。
+ * 函数**保持 async**：调用方（relayClient/http）一律 await，签名不动调用面。
  */
 
 // App 端没有全局 TextEncoder，装上补丁再用。
 import './encoding'
+import { hmac } from '@noble/hashes/hmac.js'
+import { sha256 } from '@noble/hashes/sha2.js'
+import { randomBytes } from './crypto'
 
 /**
  * 跨语言契约向量。**从 Rust 抄来的字面量**，权威定义在
@@ -39,28 +46,15 @@ export const CONFORMANCE_VECTOR = {
   t: 1700000000,
   nonce: 'abc123',
   // 由 Rust `cross_language_signature_vector` 给出的权威值。
-  // 这一条同时验证了两侧：Rust 手写 HMAC（sha2）与 TS 的 WebCrypto HMAC
+  // 这一条同时验证了两侧：Rust 手写 HMAC（sha2）与 TS 的 noble HMAC
   // 在同一固定向量上算出同一个值 —— 两个独立实现互为佐证。
   sig: '521925f25e9194ded7ecc29a57879549d48ee8ceb752b390bf6a8f4e5b9a734f',
 } as const
 
-function toHex(buf: ArrayBuffer): string {
-  return Array.from(new Uint8Array(buf))
+function toHex(bytes: Uint8Array): string {
+  return Array.from(bytes)
     .map((b) => b.toString(16).padStart(2, '0'))
     .join('')
-}
-
-/** 十六进制密钥 → CryptoKey。HMAC-SHA256 要求 256 位密钥。 */
-async function importKey(secret: string): Promise<CryptoKey> {
-  // 密钥是 device token 的**原始 UTF-8 字节**，不是它的 hex —— 与 Rust 侧
-  // `compute_signature` 的 key 保持一致，不要"顺手"先 hex 解码。
-  return crypto.subtle.importKey(
-    'raw',
-    new TextEncoder().encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign'],
-  )
 }
 
 /**
@@ -81,17 +75,16 @@ export async function computeSignature(
   t: number,
   nonce: string,
 ): Promise<string> {
-  const key = await importKey(token)
+  // 密钥是 device token 的**原始 UTF-8 字节**，不是它的 hex —— 与 Rust 侧
+  // `compute_signature` 的 key 保持一致，不要"顺手"先 hex 解码。
+  const key = new TextEncoder().encode(token)
   const message = `${method}\n${path}\n${t}\n${nonce}`
-  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(message))
-  return toHex(sig)
+  return toHex(hmac(sha256, key, new TextEncoder().encode(message)))
 }
 
 /** 16 字节随机 nonce 的 hex。 */
 export function newNonce(): string {
-  const b = new Uint8Array(16)
-  crypto.getRandomValues(b)
-  return toHex(b.buffer)
+  return toHex(randomBytes(16))
 }
 
 /**

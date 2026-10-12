@@ -302,11 +302,6 @@ export async function fingerprintOf(baseUrl: string): Promise<RelayIdentity> {
 // 电脑开入站端口。`POST /api/pairing/complete` 与 `/pair` 落地页是旧直连时代的
 // 残留，已退役未删（PC 侧仍编译保留，移动端不再调用）。
 
-/** 本机运行时有 SubtleCrypto。E2EE 帧加密的前提，没它就不能配对。 */
-export function hasSubtleCrypto(): boolean {
-  return typeof globalThis.crypto?.subtle?.importKey === 'function'
-}
-
 /**
  * 落盘一次成功的配对结果。
  *

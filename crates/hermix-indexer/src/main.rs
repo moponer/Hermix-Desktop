@@ -872,14 +872,15 @@ mod tests {
         let alive = dir.join("helper.alive");
         let _ = std::fs::remove_file(&alive);
 
+        let completed: Arc<std::sync::Mutex<Vec<String>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
         spawn_watchdog(
             dir.clone(),
             alive.clone(),
-            "snapshot-test.jsonl".into(),
-            Arc::new(Mutex::new(None)),
-            Arc::new(AtomicUsize::new(0)),
+            completed,
             // 置 true = 枚举已完成，线程会在第一次心跳后自行返回，
             // 不会走到写 done.json + exit(4) 那条会杀掉测试进程的分支。
+            Arc::new(AtomicUsize::new(0)),
             Arc::new(AtomicBool::new(true)),
             Duration::from_secs(3600),
             Duration::from_millis(50),

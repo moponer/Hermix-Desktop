@@ -14,6 +14,14 @@
 
 const g = globalThis as Record<string, unknown>
 
+// ES2022 `Object.hasOwn` polyfill。@noble/curves、@noble/hashes 的 utils.js
+// 在模块顶层就调它，而 App 端老 V8 没有 —— 缺它整条 crypto 链加载即炸，
+// 表现为启动图永远不关（转圈）。语义与规范一致：只判自有属性。
+if (typeof g.Object !== 'object' || typeof (g.Object as { hasOwn?: unknown }).hasOwn !== 'function') {
+  ;(Object as unknown as { hasOwn: (o: object, k: PropertyKey) => boolean }).hasOwn = (o, k) =>
+    Object.prototype.hasOwnProperty.call(o, k)
+}
+
 /** UTF-8 编码。入参是本应交给 `TextEncoder` 的字符串。 */
 function utf8Encode(s: string): Uint8Array {
   const out: number[] = []

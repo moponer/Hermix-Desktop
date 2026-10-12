@@ -27,6 +27,7 @@ import {
   b64decode,
   importPublicKey,
   openBody,
+  randomBytes,
   sealBody,
   type Identity,
 } from './crypto'
@@ -124,7 +125,9 @@ export function pairOverRelay(opts: {
   const { target, deviceName, identity } = opts
   return new Promise((resolve, reject) => {
     let task: UniApp.SocketTask | null = null
-    const request_id = Array.from(globalThis.crypto.getRandomValues(new Uint8Array(8)))
+    // request_id / frameId 都走 crypto.randomBytes：App 端 V8 没有
+    // crypto.getRandomValues（与缺 TextEncoder/URL/subtle 同源），裸调必炸。
+    const request_id = Array.from(randomBytes(8))
       .map((b) => b.toString(16).padStart(2, '0'))
       .join('')
 
@@ -151,7 +154,7 @@ export function pairOverRelay(opts: {
       // ① 构造密封配对请求。收件人是二维码里那把 PC 公钥——relay 转发时
       //    看得到帧、解不开内容。
       const pcPublic = await importPublicKey(b64decode(target.pcPublicKey))
-      const frameId = globalThis.crypto.getRandomValues(new Uint8Array(16))
+      const frameId = randomBytes(16)
       const { sealed, ephemeralPublic } = await sealBody(
         new TextEncoder().encode(
           JSON.stringify({
