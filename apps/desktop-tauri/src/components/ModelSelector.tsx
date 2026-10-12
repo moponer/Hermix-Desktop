@@ -42,6 +42,8 @@ export function useModelSelector() {
   );
 
   useEffect(() => {
+    let cancelled = false;
+
     const refresh = () => {
       try {
         const raw = storage.getItem(MODEL_CONFIG_KEY);
@@ -57,14 +59,8 @@ export function useModelSelector() {
         setSelectedModel((prev) => prev || cfg.defaultModel || (cfg.enabled[0] ? `${cfg.enabled[0].providerId}:${cfg.enabled[0].modelId}` : ""));
       } catch {}
     };
-    const onChanged = () => refresh();
-    window.addEventListener(MODEL_CONFIG_CHANGED_EVENT, onChanged);
-    const onStorage = (e: StorageEvent) => {
-      if (e.key === MODEL_CONFIG_KEY) refresh();
-    };
-    window.addEventListener("storage", onStorage);
 
-    // reconcile: 统一权威规则（与 ModelTab 的 mount-fetch 对齐 ——
+    // reconcile: 统一权威规则（与 ModelListTab 的 load 对齐 ——
     // 后端 config.yaml 的 model_selector 是持久权威，localStorage 是跨 tab
     // 瞬态镜像；此前本文件注释自称"localStorage 单一来源"，与 ModelTab
     // "后端权威"注释矛盾，即"双权威漂移"：同一份数据 3 处各认一个权威。
@@ -76,14 +72,16 @@ export function useModelSelector() {
     // 取消勾选彻底白做。同时 saveModelList 主动覆盖后端,跟
     // toggleModel 的"用户主动 commit"语义冲突。
     //
-    // 统一后规则: 后端可达 → 后端即权威（本地条目中后端没有的剔除，
-    // 后端空列表也是权威：全 provider 未配钥时本地残留该清）；
-    // 后端不可达（离线）→ 本地镜像兜底，不吞勾选。
+    // 统一后规则: 后端可达 → 后端即权威。本地∩后端非空 = 权威 enabled
+    // （用户在设置页的增删已同步进镜像，交集保留用户意图）；交集为空但
+    // 后端非空 = 本地镜像整体陈旧（新增首个模型 / localStorage 被逐出 /
+    // 后端侧改名），采纳后端——不是旧 union 的复活勾选，后端本来就没有
+    // 被取消的项。后端空列表也是权威：全 provider 未配钥时本地残留该清。
+    // 后端不可达（离线）→ 本地镜像兜底，不吞勾选，也**不把空集写回镜像**
+    // （否则一次网络抖动就毒化镜像，聊天页一直显示"未配置"）。
     // 本组件永不主动调 saveModelList —— 写路径统一走
-    // writeModelConfigAndNotify（ModelTab 统一供应商面板，内置 + 自定义
-    // provider 共享同一份 config state），
+    // writeModelConfigAndNotify（ModelListTab / ModelAddDialog 统一走它），
     // 那里一次写 localStorage + 推后端，事件扇出保持所有消费方一致。
-    let cancelled = false;
     const reconcile = async () => {
       try {
         const backend = await getModelList().catch(() => null);
@@ -98,20 +96,15 @@ export function useModelSelector() {
           }
         } catch {}
 
-        // 后端可达：本地∩后端 = 权威 enabled 集合（后端空也清残留）。
-        // 单向求交有个死区：本地为空而后端有列表（重启后 localStorage 被
-        // WebView2 逐出，或欢迎界面挂载早于设置页回填）时，空数组 filter
-        // 仍是空——从不采纳后端列表，还把空集写回，欢迎界面就一直显示
-        // "未配置"，直到用户手动进设置页触发回填。故本地空而后端有列表
-        // 时采纳后端（与"后端即权威"同语义）。
-        // 后端不可达（backend === null）：本地镜像兜底，离线不吞勾选。
         const rawBackend = backend?.models ?? [];
         const backendIds = new Set(rawBackend.map((m) => `${m.provider_id}:${m.model_id}`));
+        const backendEnabled = rawBackend.map((m) => ({ providerId: m.provider_id, modelId: m.model_id }));
+        const intersected = local.enabled.filter((e) => backendIds.has(`${e.providerId}:${e.modelId}`));
         const enabled = backend === null
           ? local.enabled
-          : local.enabled.length === 0 && rawBackend.length > 0
-            ? rawBackend.map((m) => ({ providerId: m.provider_id, modelId: m.model_id }))
-            : local.enabled.filter((e) => backendIds.has(`${e.providerId}:${e.modelId}`));
+          : intersected.length > 0
+            ? intersected
+            : backendEnabled;
 
         // orphan-aware 默认模型：优先有效的本地默认，其次后端默认，最后取首项。
         const validIds = new Set(enabled.map((e) => `${e.providerId}:${e.modelId}`));
@@ -121,14 +114,30 @@ export function useModelSelector() {
               : (enabled.length > 0 ? `${enabled[0].providerId}:${enabled[0].modelId}` : "");
 
         const next: ModelConfigData = { enabled, defaultModel };
-        storage.setItem(MODEL_CONFIG_KEY, JSON.stringify(next));
+        if (backend !== null) storage.setItem(MODEL_CONFIG_KEY, JSON.stringify(next));
         setConfig(next);
         setSelectedModel((prev) =>
           (prev && validIds.has(prev)) ? prev : (validIds.has(defaultModel) ? defaultModel : "")
         );
       } catch {}
     };
-    reconcile();
+
+    // 配置写入（设置页各写入点统一走 writeModelConfigAndNotify）会广播
+    // 事件；除读镜像外再 reconcile 一次，兜住"只写后端的外部变更"
+    // （如手机面/手工改 config.yaml 后设置页 load() 镜像回写的场景）。
+    const onChanged = () => {
+      refresh();
+      void reconcile();
+    };
+    window.addEventListener(MODEL_CONFIG_CHANGED_EVENT, onChanged);
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === MODEL_CONFIG_KEY) {
+        refresh();
+        void reconcile();
+      }
+    };
+    window.addEventListener("storage", onStorage);
+    void reconcile();
 
     return () => {
       cancelled = true;

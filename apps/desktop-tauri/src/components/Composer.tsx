@@ -520,7 +520,7 @@ export function Composer(p: ComposerProps) {
               className={`flex items-center gap-1.5 px-2 py-1 text-ui transition-colors rounded-md max-w-narrow ${
                 (p.byProvider && p.byProvider.length > 0)
                   ? "text-text-secondary hover:bg-bg-hover hover:text-text-primary cursor-pointer"
-                  : "text-[color:var(--color-chip-permission-fg)] hover:bg-[#FAECE7]/60 cursor-pointer"
+                  : "text-[color:var(--color-chip-permission-fg)] hover:bg-error-soft cursor-pointer"
               }`}
               title={(p.byProvider && p.byProvider.length > 0) ? "切换模型" : "未配置模型，点击直达 设置 → 模型配置"}
             >
@@ -531,11 +531,8 @@ export function Composer(p: ComposerProps) {
             {modelOpen && (
               <PopoverShell containerRef={modelContainerRef} triggerRef={modelTriggerRef} align="right" width="md" side="top">
                 <div className="px-3 pt-2.5 pb-2 flex items-center justify-between border-b border-border-primary mb-1">
-                  <div className="flex items-center gap-2">
-                    <span className="inline-block w-1 h-4 rounded-sm bg-accent" aria-hidden="true" />
-                    <span className="text-ui text-text-primary font-semibold tracking-wide">模型</span>
-                  </div>
-                  <span className="text-tiny text-text-muted font-mono">
+                  <span className="text-ui text-text-primary font-semibold tracking-wide">模型</span>
+                  <span className="text-tiny text-text-muted">
                     {p.byProvider ? `${p.byProvider.reduce((acc, g) => acc + g.models.length, 0)} 个 · ${p.byProvider.length} 厂商` : ""}
                   </span>
                 </div>
@@ -586,7 +583,13 @@ export function Composer(p: ComposerProps) {
                   {!p.byProvider || p.byProvider.length === 0 ? (
                     <div className="px-2.5 py-3 text-center">
                       <p className="text-meta text-text-muted">暂无可用模型</p>
-                      <p className="text-tiny text-text-muted mt-1">请到「设置 → 模型管理」添加</p>
+                      <button
+                        type="button"
+                        className="mt-2 px-3 py-1.5 rounded-lg text-meta bg-accent text-on-accent hover:opacity-90 transition-opacity"
+                        onClick={() => { p.onOpenSettings?.("model"); setModelOpen(false); }}
+                      >
+                        去添加模型
+                      </button>
                     </div>
                   ) : (
                     <>
@@ -597,9 +600,6 @@ export function Composer(p: ComposerProps) {
                         const expanded =
                           expandedProviders[group.provider] ??
                           (!group.isCustom || isSelectedHere);
-                        const currentModelDisplay = isSelectedHere
-                          ? p.selectedModel!.slice(group.provider.length + 1)
-                          : null;
                         return (
                           <div key={group.provider} className="mb-0.5">
                             <button
@@ -622,11 +622,6 @@ export function Composer(p: ComposerProps) {
                               </span>
                               <span className="text-tiny text-text-faint font-mono ml-auto shrink-0">
                                 {group.models.length}
-                                {currentModelDisplay && (
-                                  <span className="ml-1.5 text-text-muted truncate">
-                                    · {currentModelDisplay}
-                                  </span>
-                                )}
                               </span>
                             </button>
                             {expanded && (
@@ -639,12 +634,14 @@ export function Composer(p: ComposerProps) {
                                       p.setSelectedModel(m.id);
                                       setModelOpen(false);
                                     }}
-                                    className={`flex items-center gap-2 w-full px-2 py-2 text-left rounded-md hover:bg-bg-hover transition-colors ${
-                                      p.selectedModel === m.id ? "bg-[color:var(--color-chip-permission-bg)]" : ""
+                                    className={`flex items-center gap-2 w-full px-2 py-2 text-left rounded-md transition-colors ${
+                                      p.selectedModel === m.id
+                                        ? "bg-[color:var(--color-chip-permission-bg)]"
+                                        : "hover:bg-bg-hover"
                                     }`}
                                   >
                                     <span className="truncate font-mono text-meta text-text-primary">{m.display}</span>
-                                    {p.selectedModel === m.id && <Check className="icon-md text-[color:var(--color-chip-model-fg)] shrink-0" />}
+                                    {p.selectedModel === m.id && <Check className="icon-md text-accent shrink-0 ml-auto" />}
                                   </button>
                                 ))}
                               </div>

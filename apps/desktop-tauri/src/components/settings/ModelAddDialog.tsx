@@ -15,6 +15,7 @@ import { useCallback, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { X, ChevronLeft, Loader2, CheckCircle2, AlertCircle } from "lucide-react";
 import * as api from "../../api";
+import { writeModelConfigAndNotify } from "../../hooks/useCurrentModel";
 import { PROVIDERS, catalogMismatchNote, type ProviderDef } from "./settingsUtils";
 import { ProviderIcon } from "../ProviderIcon";
 
@@ -173,7 +174,12 @@ export function ModelAddDialog({ onClose, onSaved, editing }: Props) {
             enabled.push({ provider_id: choice.def.id, model_id: newId });
           }
           const def = cur?.default_model ?? null;
-          await api.saveModelList(enabled, def && def === oldId ? `${choice.def.id}:${newId}` : def);
+          // 统一写路径：镜像 + 事件 + 后端一次完成。此前裸调 saveModelList，
+          // 聊天端选择器要等下次挂载 reconcile 才能看到新增/改名。
+          await writeModelConfigAndNotify({
+            enabled: enabled.map((m) => ({ providerId: m.provider_id, modelId: m.model_id })),
+            defaultModel: (def && def === oldId ? `${choice.def.id}:${newId}` : def) ?? "",
+          });
         }
       } else {
         // 自定义：POST /api/custom-providers 是 upsert（entry().or_insert 后

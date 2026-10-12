@@ -13,7 +13,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Plus, Star, Trash2, Pencil, Zap, Loader2 } from "lucide-react";
 import * as api from "../../api";
-import { storage, STORAGE_KEYS } from "../../utils/storageCompat";
+import { syncModelConfigLocal, writeModelConfigAndNotify } from "../../hooks/useCurrentModel";
 import { ProviderIcon } from "../ProviderIcon";
 import { ModelAddDialog, type EditingTarget } from "./ModelAddDialog";
 import { PROVIDERS, catalogMismatchNote } from "./settingsUtils";
@@ -27,8 +27,6 @@ interface ModelRow {
   isBuiltin: boolean;
   isDefault: boolean;
 }
-
-const MODEL_CONFIG_KEY = STORAGE_KEYS.modelConfig;
 
 /** inline 测试的 `kind` → 中文。后端已做四分类，这里只做展示层翻译，
  *  不让用户对着一串 HTTP 状态码猜。 */
@@ -97,6 +95,15 @@ export function ModelListTab() {
       }
       setRows(built);
       setError(null);
+      // 后端权威清单镜像进本地缓存 + 广播事件：聊天端 useModelSelector
+      // 事件回调立即读到最新（手机面/手工改 config.yaml 等绕过前端写路径
+      // 的变更，也在下次进设置页时被这次镜像兜住）。
+      if (list) {
+        syncModelConfigLocal({
+          enabled: (list.models ?? []).map((m) => ({ providerId: m.provider_id, modelId: m.model_id })),
+          defaultModel: list.default_model ?? "",
+        });
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -110,10 +117,13 @@ export function ModelListTab() {
 
   const setDefault = useCallback(async (id: string) => {
     try {
-      await api.saveModelList(
-        rows.map((r) => ({ provider_id: r.providerId, model_id: r.modelId })),
-        id,
-      );
+      // 统一写路径：localStorage 镜像 + 事件广播 + 后端落盘一次完成。
+      // 此前只调 saveModelList，镜像与事件都没动——聊天端选择器要等
+      // 下次挂载 reconcile 才能看到新默认模型。
+      await writeModelConfigAndNotify({
+        enabled: rows.map((r) => ({ providerId: r.providerId, modelId: r.modelId })),
+        defaultModel: id,
+      });
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -122,31 +132,15 @@ export function ModelListTab() {
 
   const remove = useCallback(async (row: ModelRow) => {
     try {
-      if (!row.isBuiltin) {
-        // 自定义 provider 的删除按 provider 走；模型级删除后端没有端点，
-        // 这里是"把这个模型从启用清单里摘掉"。
-        const remaining = rows.filter((r) => r.id !== row.id);
-        await api.saveModelList(
-          remaining.map((r) => ({ provider_id: r.providerId, model_id: r.modelId })),
-          rows.find((r) => r.isDefault && r.id !== row.id)?.id ?? null,
-        );
-      } else {
-        const remaining = rows.filter((r) => r.id !== row.id);
-        await api.saveModelList(
-          remaining.map((r) => ({ provider_id: r.providerId, model_id: r.modelId })),
-          rows.find((r) => r.isDefault && r.id !== row.id)?.id ?? null,
-        );
-      }
-      // 镜像同步到本地缓存，让聊天选择器立即看到（后端已是权威）。
-      storage.setItem(
-        MODEL_CONFIG_KEY,
-        JSON.stringify({
-          enabled: rows
-            .filter((r) => r.id !== row.id)
-            .map((r) => ({ providerId: r.providerId, modelId: r.modelId })),
-          defaultModel: rows.find((r) => r.isDefault && r.id !== row.id)?.id ?? "",
-        }),
-      );
+      // 模型级删除后端没有端点，这里是"把这个模型从启用清单里摘掉"。
+      // 内置/自定义此前两分支行为一致，收敛成同一次统一写路径
+      // （localStorage 镜像 + 事件广播 + 后端落盘）。
+      const remaining = rows.filter((r) => r.id !== row.id);
+      const nextDefault = rows.find((r) => r.isDefault && r.id !== row.id)?.id ?? "";
+      await writeModelConfigAndNotify({
+        enabled: remaining.map((r) => ({ providerId: r.providerId, modelId: r.modelId })),
+        defaultModel: nextDefault,
+      });
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
