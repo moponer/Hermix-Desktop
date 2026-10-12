@@ -197,7 +197,7 @@ export function McpCatalogGrid({ onInstalled }: { onInstalled: () => void }) {
           return (
             <div
               key={item.id}
-              className={`rounded-lg p-3 ${
+              className={`rounded-xl p-3 ${
                 blocked ? "bg-bg-tertiary/40" : "bg-bg-card"
               }`}
             >

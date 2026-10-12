@@ -341,7 +341,11 @@
   --color-on-error: #ffffff;     /* 错误红实底上的文字（暗色主题翻成深色） */
   --color-inverse-surface: #242424;
   --color-inverse-on-surface: #ffffff;
-  --color-primary-fixed-dim: #efded4;   /* 陶土红描边按钮的边框 */
+  /* 描边按钮 / 品牌徽标的淡染描边。原先是暖陶土粉 #efded4，浅色下整排按钮
+     边框发粉、与绿色强调色打架——"浅色主题看起来像粉色"的头号嫌疑。改为随
+     强调色淡染的中性描边：亮色压在卡片底上是一层极淡的绿调，暗色同理，
+     既保留"描边"语义又不引入第二个色相。 */
+  --color-primary-fixed-dim: color-mix(in srgb, var(--color-accent) 15%, var(--color-bg-card));
   --shadow-button-primary: 0 2px 10px rgba(36, 36, 36, 0.22);
   --shadow-focus-ring: 0 0 0 1px rgba(150, 68, 43, 0.24);
 

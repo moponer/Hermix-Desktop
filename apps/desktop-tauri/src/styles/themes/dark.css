@@ -61,12 +61,12 @@
   --color-border: #5f636b;
   --color-border-strong: #5f636b;
 
-  /* Text — 四级，主文字不用纯白（纯白在暗底上有光晕） */
-  /* 2026-10-01 L1 校准：fg / bg 对齐 ZCode 设置页截图取值
-     （fg #EDEDED、bg #171717）。仅锚点两值微调；下方灰阶是按 WCAG
-     对比度推导的，不是从截图逐级采样——截图只给了 fg/bg 两点。
+  /* Text — 四级，主文字不用纯白（纯白在暗底上有光晕）。
+     2026-10-12：把主文字从 #ededed 压到 #d6d7da。#ededed 在 #161719 暗底上
+     对比约 15:1，整屏近白文字在夜间长时间阅读会"刺眼"（用户实测投诉）。
+     #d6d7da 仍有约 12:1，远超 AA，但光晕感明显回落、对话更耐看。
      sidebar / titlebar 是 chrome 底色，不随内容区一起动。 */
-  --color-text-primary: #ededed;
+  --color-text-primary: #d6d7da;
   --color-text-secondary: #9a9ea6;
   --color-text-tertiary: #7f848c;
   --color-text-muted: #7f848c;
@@ -135,7 +135,8 @@
   --color-on-error: #20262b;           /* 暗色下错误红是浅色，文字必须翻深 */
   --color-inverse-surface: #e8e9eb;
   --color-inverse-on-surface: #161719;
-  --color-primary-fixed-dim: #333a41;
+  /* 暗色下描边按钮 / 品牌徽标描边：随强调色淡染，取消亮色的暖陶土粉观感。 */
+  --color-primary-fixed-dim: color-mix(in srgb, var(--color-accent) 20%, var(--color-bg-input));
   --shadow-button-primary: 0 2px 10px rgba(0, 0, 0, 0.4);
   --shadow-focus-ring: 0 0 0 1px rgba(208, 123, 82, 0.28);
 

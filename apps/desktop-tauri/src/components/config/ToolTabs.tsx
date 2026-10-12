@@ -1,4 +1,5 @@
 import { ToolCardIcon } from "./ToolCardIcon";
+import { MgmtTag } from "./MgmtTag";
 import { ToggleSwitch } from "../ToggleSwitch";
 import { MarkdownBody } from "../MarkdownBody";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -244,7 +245,7 @@ export function SkillsTab({ query, onQuery }: { query: string; onQuery: (q: stri
             className={`h-6 px-2 rounded-full text-[length:var(--text-tiny)] font-semibold transition-colors ${
               catFilter === null
                 ? "text-[var(--color-btn-primary-text)]"
-                : "bg-bg-tertiary text-text-muted hover:text-text-primary"
+                : "bg-[color-mix(in_srgb,var(--color-text-primary)_5%,transparent)] text-text-muted hover:text-text-primary"
             }`}
             style={catFilter === null ? { background: "var(--color-btn-primary-bg)" } : undefined}
           >
@@ -258,7 +259,7 @@ export function SkillsTab({ query, onQuery }: { query: string; onQuery: (q: stri
               className={`h-6 px-2 rounded-full text-[length:var(--text-tiny)] font-semibold transition-colors ${
                 catFilter === c
                   ? "text-[var(--color-btn-primary-text)]"
-                  : "bg-bg-tertiary text-text-muted hover:text-text-primary"
+                  : "bg-[color-mix(in_srgb,var(--color-text-primary)_5%,transparent)] text-text-muted hover:text-text-primary"
               }`}
               style={catFilter === c ? { background: "var(--color-btn-primary-bg)" } : undefined}
             >
@@ -277,7 +278,7 @@ export function SkillsTab({ query, onQuery }: { query: string; onQuery: (q: stri
         />      )}
 
       {error && (
-        <div className="mb-4 px-3 py-2 rounded-lg bg-bg-card text-xs text-error">
+        <div className="mb-4 px-3 py-2 rounded-lg bg-bg-card text-[length:var(--text-meta)] text-error">
           {error}
         </div>
       )}
@@ -297,23 +298,10 @@ export function SkillsTab({ query, onQuery }: { query: string; onQuery: (q: stri
         categoryOrder.map((cat) => (
           <div key={cat} className="mb-5">
             <div className="flex items-center gap-2 mb-2 px-1">
-              <span
-                className="w-[3px] h-[15px] rounded-[2px]"
-                style={{ background: "var(--color-btn-primary-bg)" }}
-                aria-hidden
-              />
               <h4 className="text-[length:var(--text-ui)] font-semibold text-text-primary">
                 {catLabel(cat)}
               </h4>
-              <span
-                className="text-[length:var(--text-tiny)] font-semibold rounded-full px-1.5 py-0.5"
-                style={{
-                  background: "var(--color-btn-primary-bg)",
-                  color: "var(--color-btn-primary-text)",
-                }}
-              >
-                {grouped[cat].length}
-              </span>
+              <MgmtTag tone="accent">{grouped[cat].length}</MgmtTag>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
               {grouped[cat].map((s) => (
@@ -326,7 +314,7 @@ export function SkillsTab({ query, onQuery }: { query: string; onQuery: (q: stri
         ))
       )}
 
-      <p className="text-xs text-text-muted pb-6">技能数据来自 hermix-skills 仓库，禁用会从文件系统中删除该技能。</p>
+      <p className="text-[length:var(--text-meta)] text-text-muted pb-6">技能数据来自 hermix-skills 仓库，禁用会从文件系统中删除该技能。</p>
     </>
   );
 }
@@ -388,25 +376,21 @@ function SkillCard({ skill, catLabel, onToggle }: {
 
   return (
     <>
-      <div className="rounded-xl bg-bg-card hover:bg-bg-card-hover transition-colors">
+      <div className="group rounded-xl bg-bg-card hover:bg-bg-card-hover transition-colors">
         <div className="flex items-center gap-3 px-3 py-2.5">
-          <button onClick={openContent} className="shrink-0 rounded-[var(--radius-md)]"
-            title="查看技能内容"
-            aria-label="查看技能内容">
-            <ToolCardIcon interactive>
-              <Wand2 className="icon-md" />
-            </ToolCardIcon>
-          </button>
+          <ToolCardIcon onClick={openContent} title="查看技能内容" aria-label="查看技能内容">
+            <Wand2 className="icon-md" />
+          </ToolCardIcon>
           <div className="min-w-0 flex-1 cursor-pointer" onClick={openContent}>
             <div className="flex items-center gap-2">
-              <span className="text-sm text-text-primary truncate">
+              <span className="text-[length:var(--text-ui)] font-medium text-text-primary truncate">
                 {skill.display_name || skill.name}
               </span>
-              <span className="text-[length:var(--text-meta)] uppercase tracking-wider text-text-muted bg-bg-tertiary rounded px-1.5 py-0.5 shrink-0">
+              <MgmtTag tone="neutral" className="shrink-0">
                 {catLabel(skill.category) || "skill"}
-              </span>
+              </MgmtTag>
             </div>
-            <p className="text-xs text-text-muted mt-0.5 line-clamp-2 group-hover:line-clamp-none">
+            <p className="text-[length:var(--text-meta)] text-text-muted mt-0.5 line-clamp-2 group-hover:line-clamp-none">
               {skill.description || "（无描述）"}
             </p>
           </div>
@@ -783,13 +767,13 @@ export function ConnectorsTab({ query, onQuery }: { query: string; onQuery: (q: 
                   onChange={(e) => setPasteJson(e.target.value)}
                   rows={7}
                   placeholder={'{"mcpServers":{"my-fs":{"command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","/tmp"]},"remote":{"url":"https://example.com/mcp"}}}'}
-                  className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary resize-none font-mono"
+                  className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-[length:var(--text-meta)] text-text-primary resize-none font-mono"
                 />
                 <p className="mt-1 text-[length:var(--text-meta)] text-text-muted">支持 mcpServers 对象或单条 server 配置，自动识别 stdio / http。</p>
               </div>
               <div className="flex items-center gap-2">
-                <button onClick={handleImportPaste} disabled={adding} className="px-3 py-1.5 rounded-lg bg-accent text-on-accent text-xs font-medium hover:opacity-90 disabled:opacity-50">导入</button>
-                <button onClick={() => { setShowAddForm(false); setAddError(null); }} className="px-3 py-1.5 rounded-lg text-xs text-text-muted hover:text-text-primary hover:bg-bg-tertiary">取消</button>
+                <button onClick={handleImportPaste} disabled={adding} className="px-3 py-1.5 rounded-lg bg-[var(--color-btn-primary-bg)] text-[var(--color-btn-primary-text)] text-[length:var(--text-meta)] font-medium hover:opacity-90 disabled:opacity-50">导入</button>
+                <button onClick={() => { setShowAddForm(false); setAddError(null); }} className="px-3 py-1.5 rounded-lg text-[length:var(--text-meta)] text-text-muted hover:text-text-primary hover:bg-bg-tertiary">取消</button>
               </div>
             </>
           ) : (
@@ -797,11 +781,11 @@ export function ConnectorsTab({ query, onQuery }: { query: string; onQuery: (q: 
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-[length:var(--text-meta)] text-text-muted">名称</label>
-                  <input value={newServer.name} onChange={(e) => setNewServer((p) => ({ ...p, name: e.target.value }))} placeholder="my-mcp-server" className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary" />
+                  <input value={newServer.name} onChange={(e) => setNewServer((p) => ({ ...p, name: e.target.value }))} placeholder="my-mcp-server" className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-[length:var(--text-meta)] text-text-primary" />
                 </div>
                 <div>
                   <label className="text-[length:var(--text-meta)] text-text-muted">传输方式</label>
-                  <select value={newServer.transport} onChange={(e) => setNewServer((p) => ({ ...p, transport: e.target.value as api.McpTransport }))} className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary">
+                  <select value={newServer.transport} onChange={(e) => setNewServer((p) => ({ ...p, transport: e.target.value as api.McpTransport }))} className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-[length:var(--text-meta)] text-text-primary">
                     <option value="stdio">stdio</option>
                     <option value="http">http</option>
                   </select>
@@ -810,39 +794,39 @@ export function ConnectorsTab({ query, onQuery }: { query: string; onQuery: (q: 
                   <>
                     <div>
                       <label className="text-[length:var(--text-meta)] text-text-muted">Command</label>
-                      <input value={newServer.command} onChange={(e) => setNewServer((p) => ({ ...p, command: e.target.value }))} placeholder="npx" className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary" />
+                      <input value={newServer.command} onChange={(e) => setNewServer((p) => ({ ...p, command: e.target.value }))} placeholder="npx" className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-[length:var(--text-meta)] text-text-primary" />
                     </div>
                     <div>
                       <label className="text-[length:var(--text-meta)] text-text-muted">Args （空格分隔）</label>
-                      <input value={newServer.args} onChange={(e) => setNewServer((p) => ({ ...p, args: e.target.value }))} placeholder="-y @modelcontextprotocol/server-filesystem /tmp" className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary" />
+                      <input value={newServer.args} onChange={(e) => setNewServer((p) => ({ ...p, args: e.target.value }))} placeholder="-y @modelcontextprotocol/server-filesystem /tmp" className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-[length:var(--text-meta)] text-text-primary" />
                     </div>
                   </>
                 ) : (
                   <div className="col-span-2">
                     <label className="text-[length:var(--text-meta)] text-text-muted">URL</label>
-                    <input value={newServer.url} onChange={(e) => setNewServer((p) => ({ ...p, url: e.target.value }))} placeholder="https://example.com/mcp" className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary" />
+                    <input value={newServer.url} onChange={(e) => setNewServer((p) => ({ ...p, url: e.target.value }))} placeholder="https://example.com/mcp" className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-[length:var(--text-meta)] text-text-primary" />
                   </div>
                 )}
                 {newServer.transport === "http" && (
                   <div className="col-span-2">
                     <label className="text-[length:var(--text-meta)] text-text-muted">Bearer Token （可选，远程服务鉴权）</label>
-                    <input value={newServer.token} onChange={(e) => setNewServer((p) => ({ ...p, token: e.target.value }))} placeholder="homk_…" className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary" />
+                    <input value={newServer.token} onChange={(e) => setNewServer((p) => ({ ...p, token: e.target.value }))} placeholder="homk_…" className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-[length:var(--text-meta)] text-text-primary" />
                   </div>
                 )}
                 <div className="col-span-2">
                   <label className="text-[length:var(--text-meta)] text-text-muted">环境变量 (每行 KEY=value)</label>
-                  <textarea value={newServer.env} onChange={(e) => setNewServer((p) => ({ ...p, env: e.target.value }))} placeholder={"API_KEY=xxx"} rows={2} className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary resize-none" />
+                  <textarea value={newServer.env} onChange={(e) => setNewServer((p) => ({ ...p, env: e.target.value }))} placeholder={"API_KEY=xxx"} rows={2} className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-[length:var(--text-meta)] text-text-primary resize-none" />
                 </div>
                 <div className="col-span-2">
                   <label className="text-[length:var(--text-meta)] text-text-muted">描述 （可选）</label>
-                  <input value={newServer.description} onChange={(e) => setNewServer((p) => ({ ...p, description: e.target.value }))} placeholder="自定义文件系统 MCP" className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary" />
+                  <input value={newServer.description} onChange={(e) => setNewServer((p) => ({ ...p, description: e.target.value }))} placeholder="自定义文件系统 MCP" className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-[length:var(--text-meta)] text-text-primary" />
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                <button onClick={handleAdd} disabled={adding} className="px-3 py-1.5 rounded-lg bg-accent text-on-accent text-xs font-medium hover:opacity-90 disabled:opacity-50">
+                <button onClick={handleAdd} disabled={adding} className="px-3 py-1.5 rounded-lg bg-[var(--color-btn-primary-bg)] text-[var(--color-btn-primary-text)] text-[length:var(--text-meta)] font-medium hover:opacity-90 disabled:opacity-50">
                   {adding ? "添加中..." : "确认添加"}
                 </button>
-                <button onClick={() => { setShowAddForm(false); setAddError(null); }} className="px-3 py-1.5 rounded-lg text-xs text-text-muted hover:text-text-primary hover:bg-bg-tertiary">
+                <button onClick={() => { setShowAddForm(false); setAddError(null); }} className="px-3 py-1.5 rounded-lg text-[length:var(--text-meta)] text-text-muted hover:text-text-primary hover:bg-bg-tertiary">
                   取消
                 </button>
               </div>
@@ -875,7 +859,7 @@ export function ConnectorsTab({ query, onQuery }: { query: string; onQuery: (q: 
         </div>
       )}
 
-      <p className="text-xs text-text-muted mt-4 pb-5">
+      <p className="text-[length:var(--text-meta)] text-text-muted mt-4 pb-5">
         配置需要 {`npx`} / {`uvx`} 等运行时可用。密钥请填入 env 字段。
       </p>
 
@@ -911,17 +895,15 @@ function ConnectorRow({
         <Icon className="icon-lg" />
       </ToolCardIcon>
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <span className="text-sm text-text-primary truncate">{server.name}</span>
-          <span className="text-[length:var(--text-meta)] uppercase tracking-wider text-text-muted bg-bg-tertiary rounded px-1.5 py-0.5">
-            {server.transport}
-          </span>
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-[length:var(--text-ui)] font-medium text-text-primary truncate">{server.name}</span>
+          <MgmtTag tone="neutral">{server.transport}</MgmtTag>
           {server.enabled && (
-            <span className="text-[length:var(--text-meta)] text-accent bg-accent-soft/40 rounded px-1.5 py-0.5">启用中</span>
+            <MgmtTag tone="accent">启用中</MgmtTag>
           )}
         </div>
         {server.description && (
-          <p className="text-xs text-text-muted mt-0.5 line-clamp-2 group-hover:line-clamp-none">
+          <p className="text-[length:var(--text-meta)] text-text-muted mt-0.5 line-clamp-2 group-hover:line-clamp-none">
             {server.description}
           </p>
         )}
@@ -1083,12 +1065,12 @@ export function ToolsetsTab({ query, onQuery }: { query: string; onQuery: (q: st
       )}
 
       {error && (
-        <div className="mb-4 px-3 py-2 rounded-lg bg-bg-card text-xs text-error flex items-start justify-between gap-2">
+        <div className="mb-4 px-3 py-2 rounded-lg bg-bg-card text-[length:var(--text-meta)] text-error flex items-start justify-between gap-2">
           <span>{error}</span>
           <button
             type="button"
             onClick={() => setError(null)}
-            className="text-text-muted hover:text-text-primary text-xs"
+            className="text-text-muted hover:text-text-primary text-[length:var(--text-meta)]"
             aria-label="关闭错误提示"
           >
             <X className="icon-sm" />
@@ -1096,12 +1078,12 @@ export function ToolsetsTab({ query, onQuery }: { query: string; onQuery: (q: st
         </div>
       )}
       {warning && (
-        <div className="mb-4 px-3 py-2 rounded-lg bg-bg-card text-xs text-warning flex items-start justify-between gap-2">
+        <div className="mb-4 px-3 py-2 rounded-lg bg-bg-card text-[length:var(--text-meta)] text-warning flex items-start justify-between gap-2">
           <span>{warning}</span>
           <button
             type="button"
             onClick={() => setWarning(null)}
-            className="text-text-muted hover:text-text-primary text-xs"
+            className="text-text-muted hover:text-text-primary text-[length:var(--text-meta)]"
             aria-label="关闭警告"
           >
             <X className="icon-sm" />
@@ -1134,7 +1116,7 @@ export function ToolsetsTab({ query, onQuery }: { query: string; onQuery: (q: st
         </Grid>
       )}
 
-      <p className="text-xs text-text-muted pb-6">工具集由后端 ToolRegistry 自动注册；关闭后该组的所有工具会从 LLM 的工具列表里消失，下次 agent 调用就不会看到。</p>
+      <p className="text-[length:var(--text-meta)] text-text-muted pb-6">工具集由后端 ToolRegistry 自动注册；关闭后该组的所有工具会从 LLM 的工具列表里消失，下次 agent 调用就不会看到。</p>
     </>
   );
 }
@@ -1164,15 +1146,38 @@ function ToolsetCard({
           <Icon className="icon-lg" />
         </ToolCardIcon>
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-text-primary truncate">{toolset.label}</span>
-            <span className="text-[length:var(--text-meta)] uppercase tracking-wider text-text-muted bg-bg-tertiary rounded px-1.5 py-0.5 shrink-0">
-              {tools.length} 个工具
-            </span>
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-[length:var(--text-ui)] font-medium text-text-primary truncate">{toolset.label}</span>
+            <MgmtTag tone="neutral">{tools.length} 个工具</MgmtTag>
           </div>
-          <p className="text-xs text-text-muted mt-0.5 line-clamp-2 group-hover:line-clamp-none">
+          <p className="text-[length:var(--text-meta)] text-text-muted mt-0.5 line-clamp-2 group-hover:line-clamp-none">
             {toolset.description || "（无描述）"}
           </p>
+          {tools.length > 0 && (
+            <div className="flex flex-wrap gap-1 mt-1.5">
+              {shown.map((tool) => (
+                <span
+                  key={tool}
+                  className="font-mono text-[length:var(--text-tiny)] text-text-secondary bg-[color-mix(in_srgb,var(--color-text-primary)_5%,transparent)] rounded px-1.5 py-0.5"
+                >
+                  {tool}
+                </span>
+              ))}
+              {hidden > 0 && !expanded && (
+                <span className="text-[length:var(--text-tiny)] text-text-muted self-center">+{hidden}</span>
+              )}
+            </div>
+          )}
+          {tools.length > 4 && (
+            <button
+              type="button"
+              onClick={() => setExpanded((v) => !v)}
+              className="mt-1.5 text-[length:var(--text-tiny)] font-medium text-text-muted hover:text-text-primary"
+              aria-expanded={expanded}
+            >
+              {expanded ? "收起" : "全部工具"}
+            </button>
+          )}
         </div>
         <ToggleSwitch
           enabled={enabled}
@@ -1183,33 +1188,6 @@ function ToolsetCard({
           className="shrink-0 mt-0.5"
         />
       </div>
-
-      {tools.length > 0 && (
-        <div className="flex flex-wrap gap-1 pl-12">
-          {shown.map((tool) => (
-            <span
-              key={tool}
-              className="font-mono text-[length:var(--text-tiny)] text-text-secondary bg-bg-tertiary rounded px-1.5 py-0.5"
-            >
-              {tool}
-            </span>
-          ))}
-          {hidden > 0 && !expanded && (
-            <span className="text-[length:var(--text-tiny)] text-text-muted self-center">+{hidden}</span>
-          )}
-        </div>
-      )}
-
-      {tools.length > 4 && (
-        <button
-          type="button"
-          onClick={() => setExpanded((v) => !v)}
-          className="self-start pl-12 text-[length:var(--text-tiny)] font-medium text-text-muted hover:text-text-primary"
-          aria-expanded={expanded}
-        >
-          {expanded ? "收起" : "全部工具"}
-        </button>
-      )}
     </div>
   );
 }
@@ -1233,7 +1211,7 @@ export function SearchBar({
           value={query}
           onChange={(e) => onQuery(e.target.value)}
           placeholder="搜索名称、描述或类别"
-          className="w-full h-9 bg-bg-tertiary border-0 rounded-lg pl-9 pr-3 text-sm text-text-primary placeholder-text-muted outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
+          className="w-full h-9 bg-bg-tertiary border-0 rounded-lg pl-9 pr-3 text-[length:var(--text-ui)] text-text-primary placeholder-text-muted outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
         />
       </div>
       {right}
@@ -1395,13 +1373,11 @@ function PluginCard({
         {icon}
       </ToolCardIcon>
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <span className="text-sm text-text-primary truncate">{name}</span>
-          <span className="text-[length:var(--text-meta)] uppercase tracking-wider text-text-muted bg-bg-tertiary rounded px-1.5 py-0.5 shrink-0">
-            {badge}
-          </span>
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-[length:var(--text-ui)] font-medium text-text-primary truncate">{name}</span>
+          <MgmtTag tone="neutral" className="shrink-0">{badge}</MgmtTag>
         </div>
-        <p className="text-xs text-text-muted mt-0.5 line-clamp-2 group-hover:line-clamp-none">{description}</p>
+        <p className="text-[length:var(--text-meta)] text-text-muted mt-0.5 line-clamp-2 group-hover:line-clamp-none">{description}</p>
       </div>
       {rightIcon && <span className="shrink-0 text-text-faint">{rightIcon}</span>}
       <ToggleSwitch enabled={enabled} onToggle={onToggle} disabled={saving || disabled} offLabel={`停用 ${name}`} onLabel={`启用 ${name}`} className="shrink-0" />

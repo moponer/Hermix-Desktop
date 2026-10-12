@@ -28,23 +28,44 @@ import type { ReactNode } from "react";
 export function ToolCardIcon({
   children,
   interactive = false,
+  onClick,
+  title,
+  "aria-label": ariaLabel,
 }: {
   children: ReactNode;
-  /** 原卡片里图标块可点（技能的图标点开即打开技能）。 */
+  /** hover 放大（卡片图标可点时的轻反馈）。 */
   interactive?: boolean;
+  /** 传入则在按钮语义下渲染（图标点开即打开技能 / 详情）。 */
+  onClick?: () => void;
+  title?: string;
+  "aria-label"?: string;
 }) {
+  const cls = `flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--radius-md)] transition-transform ${
+    onClick || interactive ? "cursor-pointer hover:scale-[1.04]" : ""
+  }`;
+  // 旧版是「实底主色 + 主按钮阴影」：一格一格的实心绿块在网格里堆叠会发"重"、
+  // 显廉价，正是"又脏又乱"的元凶之一。改为 accent-on-text 淡染底 + accent 字色，
+  // 轻、呼吸感、仍是锚点；去掉重阴影。明暗两套主题都走 color-mix，自动适配。
+  const style: React.CSSProperties = {
+    background: "var(--color-accent-on-text)",
+    color: "var(--color-accent)",
+  };
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        title={title}
+        aria-label={ariaLabel}
+        className={cls}
+        style={style}
+      >
+        {children}
+      </button>
+    );
+  }
   return (
-    <span
-      aria-hidden
-      className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--radius-md)] transition-transform ${
-        interactive ? "hover:scale-105" : ""
-      }`}
-      style={{
-        background: "var(--color-btn-primary-bg)",
-        color: "var(--color-btn-primary-text)",
-        boxShadow: "var(--shadow-button-primary)",
-      }}
-    >
+    <span aria-hidden className={cls} style={style}>
       {children}
     </span>
   );
