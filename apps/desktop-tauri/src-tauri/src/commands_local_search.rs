@@ -1301,7 +1301,10 @@ pub fn start_background_index() {
         return;
     }
     eprintln!("[local_search] background index scan starting");
-    ensure_index(false, false);
+    // 允许 jwalk 回退(2026-10-12):本机 USN/MFT 快速路径拿不到卷句柄
+    // (管理员态也被拒),目录遍历是唯一保证可用的路径。代价是冷启动扫盘
+    // 几分钟——但启动即自动跑(有进度上报),而不是等用户点搜索才发现。
+    ensure_index(true, false);
 }
 
 /// 主进程退出时调用：让常驻的提权 helper 立刻退出（见
