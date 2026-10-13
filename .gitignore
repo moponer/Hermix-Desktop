@@ -144,3 +144,7 @@ hermix_home/im_channels.json
 
 # git worktree 检出目录（本地开发态，不入库）
 .worktrees/
+
+# Python 字节码缓存（verify-stability-suite 等本机运行产物）
+__pycache__/
+*.pyc
