@@ -17,10 +17,11 @@
 // —— 与参考项目同构。**只列真的会开的**：终端（无 PTY）、审查（后端
 // file_change 不带 diff 正文）现在都做不出来，列出来就是点击无响应。
 
-import { X, FolderOpen, FileText, MessageSquare, ClipboardCheck, PanelRightClose } from "lucide-react";
+import { X, FolderOpen, FileText, MessageSquare, ClipboardCheck, PanelRightClose, LayoutTemplate } from "lucide-react";
 import { clsx } from "clsx";
 import type { ReactNode } from "react";
 import type { Artifact } from "../utils/artifacts";
+import { DocCanvasView } from "@hermix/preview";
 import type { ChatMessage, SubAgentState } from "../types";
 import { ComputerTab } from "./ComputerTab";
 import { PreviewPanel } from "./PreviewPanel";
@@ -33,6 +34,8 @@ export const BROWSER_TAB_ID = "browser";
 /** 审查 / 辅助对话都是单例：整个会话共用一份聚合视图，不需要多开。 */
 export const REVIEW_TAB_ID = "review";
 export const SUBAGENT_TAB_ID = "subagent";
+/** 文档画布是单例标签：一份回复至多一个 canvas（协议硬规则）。 */
+export const CANVAS_TAB_ID = "canvas";
 
 /**
  * 右侧栏的一个标签。判别联合而不是单一载荷 —— 新增标签种类时只加一个
@@ -42,7 +45,8 @@ export type SideTab =
   | { id: string; type: "file"; artifact: Artifact }
   | { id: string; type: "browser" }
   | { id: string; type: "review" }
-  | { id: string; type: "subagent" };
+  | { id: string; type: "subagent" }
+  | { id: string; type: "canvas" };
 
 /** 标签标题。 */
 function tabTitle(tab: SideTab): string {
@@ -53,6 +57,8 @@ function tabTitle(tab: SideTab): string {
       return "审查";
     case "subagent":
       return "辅助对话";
+    case "canvas":
+      return "文档画布";
     case "file":
       return tab.artifact.name;
   }
@@ -72,6 +78,8 @@ function tabIcon(tab: SideTab): { icon: ReactNode; hint: string } {
       return { icon: <ClipboardCheck className="icon-sm shrink-0" />, hint: "本次会话的文件变更" };
     case "subagent":
       return { icon: <MessageSquare className="icon-sm shrink-0" />, hint: "子代理目标与执行过程" };
+    case "canvas":
+      return { icon: <LayoutTemplate className="icon-sm shrink-0" />, hint: "流式文档画布" };
     case "file":
       return { icon: <FileTypeIcon name={tab.artifact.name} size={12} />, hint: tab.artifact.path };
   }
@@ -197,6 +205,15 @@ export function PreviewBar({
       ) : active?.type === "subagent" ? (
         <div className="min-h-0 flex-1 flex flex-col">
           <SubAgentTab subAgents={subAgents} />
+        </div>
+      ) : active?.type === "canvas" ? (
+        <div className="min-h-0 flex-1 flex flex-col">
+          {/* 文档画布：内容经 docCanvasStore 流式直达 viewer，无文件路径，
+              不走 PreviewPanel。编辑回传当前仅打日志（导出旁路 Phase 2 接）。 */}
+          <DocCanvasView
+            fileName="画布"
+            onEditCommit={(html) => console.log("[doc-canvas] edit committed", html.length, "chars")}
+          />
         </div>
       ) : active?.type === "file" ? (
         <div className="min-h-0 flex-1 flex flex-col">
