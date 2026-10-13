@@ -57,34 +57,34 @@
   --duration-base: 150ms;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg-primary: #0f172a;
-    --bg-secondary: #1e293b;
-    --bg-tabbar: #16202f;
-    --bg-tertiary: #1f2a3c;
-    --bg-card: #182236;
-    --bg-card-hover: #1f2c44;
-    --bg-hover: rgba(255, 255, 255, 0.06);
-    --bg-accent-soft: rgba(96, 165, 250, 0.16);
+/* 暗色由 JS 写入的 data-theme 驱动（theme.ts），不用媒体查询——
+   用户强制亮色时 OS 暗色不应抢走 token。 */
+:root[data-theme="dark"] {
+  --bg-primary: #0f172a;
+  --bg-secondary: #1e293b;
+  --bg-tabbar: #16202f;
+  --bg-tertiary: #1f2a3c;
+  --bg-card: #182236;
+  --bg-card-hover: #1f2c44;
+  --bg-hover: rgba(255, 255, 255, 0.06);
+  --bg-accent-soft: rgba(96, 165, 250, 0.16);
 
-    --border: #334155;
-    --border-subtle: #1e293b;
-    --text-primary: #e2e8f0;
-    --text-secondary: #94a3b8;
-    --text-muted: #64748b;
-    --text-faint: #475569;
+  --border: #334155;
+  --border-subtle: #1e293b;
+  --text-primary: #e2e8f0;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --text-faint: #475569;
 
-    --accent: #60a5fa;
-    --accent-strong: #3b82f6;
-    --danger: #f87171;
-    --info: #38bdf8;
-    --success: #22c55e;
+  --accent: #60a5fa;
+  --accent-strong: #3b82f6;
+  --danger: #f87171;
+  --info: #38bdf8;
+  --success: #22c55e;
 
-    --color-bg-code: #020617;
-    --color-bg-code-header: #0f172a;
-    --color-bg-code-border: #1e293b;
-  }
+  --color-bg-code: #020617;
+  --color-bg-code-header: #0f172a;
+  --color-bg-code-border: #1e293b;
 }
 
 * { box-sizing: border-box; }
@@ -199,7 +199,7 @@ html, body, #root {
   display: flex; flex: 1; min-height: 0;
 }
 
-/* ─── 侧栏：盘符 / 收藏 ───────────────────────────── */
+/* ─── 侧栏：书签 / 目录树（同一行结构） ────────────── */
 .sidebar {
   width: 200px; flex: none;
   background: var(--bg-secondary);
@@ -212,19 +212,49 @@ html, body, #root {
   color: var(--text-muted);
   padding: 6px 10px;
 }
-.sb-drive {
-  display: flex; align-items: center; gap: 6px;
-  width: 100%; border: none; background: transparent;
+.sb-row {
+  display: flex; align-items: center;
+  padding-right: 6px;
+  border-radius: 4px;
+}
+.sb-row:hover { background: var(--bg-hover); }
+.sb-row.is-active { background: var(--bg-accent-soft); }
+.sb-row-caret {
+  border: none; background: transparent;
+  color: var(--text-secondary); cursor: pointer;
+  width: 16px; height: 24px; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 0;
+}
+.sb-row-caret svg {
+  width: 12px; height: 12px;
+  transition: transform var(--duration-base) ease-out;
+}
+.sb-row-caret svg.is-open { transform: rotate(90deg); }
+.sb-row-label {
+  border: none; background: transparent;
   color: var(--text-primary); font-size: 13px;
-  text-align: left; padding: 6px 10px;
-  border-radius: 4px; cursor: pointer;
+  display: flex; align-items: center; gap: 6px;
+  flex: 1; min-width: 0;
+  text-align: left; padding: 5px 6px 5px 2px;
+  cursor: pointer;
 }
-.sb-drive:hover { background: var(--bg-hover); }
-.sb-drive.is-active {
-  background: var(--bg-accent-soft); color: var(--accent);
+.sb-row.is-active .sb-row-label { color: var(--accent); }
+.sb-row-label span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 悬停才出现的辅助操作（移除书签）——不挤占常态视觉 */
+.sb-row-aux {
+  border: none; background: transparent;
+  color: var(--text-muted); cursor: pointer;
+  font-size: 13px; line-height: 1;
+  padding: 0 4px; flex: none;
+  opacity: 0;
 }
-.sb-empty {
-  font-size: 12px; color: var(--text-muted); padding: 4px 10px;
+.sb-row:hover .sb-row-aux,
+.sb-row-aux:focus-visible { opacity: 1; }
+.sb-row-aux:hover { color: var(--danger); }
+.sb-row-empty {
+  font-size: 12px; color: var(--text-muted);
+  padding: 3px 6px;
 }
 
 /* ─── 中央：文件列表 ──────────────────────────────── */

@@ -12,9 +12,11 @@ import {
   ArrowLeft, ArrowRight, ArrowUp, RefreshCw, Search, Eye, EyeOff,
   ChevronRight, Folder, FolderOpen, File as FileIcon, FileText,
   HardDrive, Copy, ExternalLink, Sparkles, X,
+  Monitor, Moon, Star, Sun,
 } from "lucide-react";
 import type { DirEntryLike, DriveRootLike } from "@hermix/preview";
 import { viewerFileSource } from "./fileSource";
+import { useTheme, type ThemeMode } from "./theme";
 import { AiSidebar } from "./AiSidebar";
 import { PreviewHost } from "./PreviewHost";
 
@@ -30,7 +32,47 @@ interface ContextMenu {
   entry: DirEntryLike;
 }
 
+interface Bookmark {
+  path: string;
+  name: string;
+  isDir: boolean;
+}
+
+/** 目录树节点状态：children 为 null 表示尚未加载（懒加载）。 */
+interface TreeNodeState {
+  expanded: boolean;
+  children: DirEntryLike[] | null;
+}
+
+const BOOKMARKS_KEY = "hermix.viewer.bookmarks";
+
+const THEME_LABEL: Record<ThemeMode, string> = {
+  system: "跟随系统",
+  light: "浅色",
+  dark: "深色",
+};
+
 let nextTabId = 1;
+
+function readBookmarks(): Bookmark[] {
+  try {
+    const arr = JSON.parse(localStorage.getItem(BOOKMARKS_KEY) ?? "[]");
+    if (!Array.isArray(arr)) return [];
+    return arr.filter(
+      (b): b is Bookmark =>
+        b != null &&
+        typeof b.path === "string" &&
+        typeof b.name === "string" &&
+        typeof b.isDir === "boolean",
+    );
+  } catch {
+    return [];
+  }
+}
+
+function driveToEntry(d: DriveRootLike): DirEntryLike {
+  return { name: d.label, path: d.path, isDir: true, size: 0, mtime: null, extension: "", hidden: false };
+}
 
 function splitPath(p: string): string[] {
   return p.split(/[\\/]/).filter(Boolean);
@@ -50,6 +92,61 @@ function shortDate(iso: string | null): string {
   if (Number.isNaN(d.getTime())) return "";
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** 目录树行：递归渲染，子节点懒加载（children 为 null 时点开才取）。 */
+function TreeRow({
+  entry, depth, tree, currentPath, onToggle, onOpen,
+}: {
+  entry: DirEntryLike;
+  depth: number;
+  tree: Record<string, TreeNodeState>;
+  currentPath: string | null;
+  onToggle: (path: string) => void;
+  onOpen: (entry: DirEntryLike) => void;
+}) {
+  const st = tree[entry.path];
+  const expanded = st?.expanded ?? false;
+  const children = st?.children ?? null;
+  return (
+    <>
+      <div
+        className={`sb-row ${currentPath === entry.path ? "is-active" : ""}`}
+        style={{ paddingLeft: depth * 12 }}
+      >
+        {entry.isDir && (
+          <button
+            type="button"
+            className="sb-row-caret"
+            onClick={() => onToggle(entry.path)}
+            aria-expanded={expanded}
+            aria-label={expanded ? `收起 ${entry.name}` : `展开 ${entry.name}`}
+          >
+            <ChevronRight className={expanded ? "is-open" : ""} />
+          </button>
+        )}
+        <button type="button" className="sb-row-label" onClick={() => onOpen(entry)} title={entry.path}>
+          {depth === 0 ? <HardDrive className="entry-icon" /> : <Folder className="entry-icon" />}
+          <span>{entry.name}</span>
+        </button>
+      </div>
+      {expanded && children?.length === 0 && (
+        <div className="sb-row-empty" style={{ paddingLeft: depth * 12 + 22 }}>空目录</div>
+      )}
+      {expanded &&
+        children?.map((c) => (
+          <TreeRow
+            key={c.path}
+            entry={c}
+            depth={depth + 1}
+            tree={tree}
+            currentPath={currentPath}
+            onToggle={onToggle}
+            onOpen={onOpen}
+          />
+        ))}
+    </>
+  );
 }
 
 export function App() {
@@ -79,6 +176,15 @@ export function App() {
 
   // —— 右键菜单 ——
   const [ctxMenu, setCtxMenu] = useState<ContextMenu | null>(null);
+
+  // —— 书签（localStorage 持久化） ——
+  const [bookmarks, setBookmarks] = useState<Bookmark[]>(readBookmarks);
+
+  // —— 目录树（懒加载，键为目录路径） ——
+  const [tree, setTree] = useState<Record<string, TreeNodeState>>({});
+
+  // —— 主题 ——
+  const { resolved: theme, mode: themeMode, cycle: cycleTheme } = useTheme();
 
   // —— 拖放 ——
   const [dragOver, setDragOver] = useState(false);
@@ -298,6 +404,86 @@ export function App() {
     void navigator.clipboard?.writeText(path).catch(() => undefined);
   }, []);
 
+  // — 书签 —
+  useEffect(() => {
+    try {
+      localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(bookmarks));
+    } catch {
+      /* 持久化失败仅影响下次启动，本次会话内仍可用 */
+    }
+  }, [bookmarks]);
+
+  const toggleBookmark = useCallback((entry: DirEntryLike) => {
+    setBookmarks((bs) =>
+      bs.some((b) => b.path === entry.path)
+        ? bs.filter((b) => b.path !== entry.path)
+        : [...bs, { path: entry.path, name: entry.name, isDir: entry.isDir }],
+    );
+  }, []);
+
+  const openBookmark = useCallback(
+    (b: Bookmark) => {
+      if (b.isDir) {
+        navigate(b.path, true);
+        return;
+      }
+      // 文件书签：列表跳到父目录 + 直接开预览 tab
+      void viewerFileSource.fs?.parent(b.path).then((p) => {
+        if (p) navigate(p, true);
+      });
+      openPath(b.path);
+    },
+    [navigate, openPath],
+  );
+
+  // — 目录树 —
+  const loadTreeChildren = useCallback(
+    async (path: string) => {
+      if (!viewerFileSource.fs) return;
+      const r = await viewerFileSource.fs.listDir(path, showHidden);
+      setTree((t) => ({
+        ...t,
+        [path]: { expanded: true, children: r.ok ? r.entries.filter((e) => e.isDir) : [] },
+      }));
+    },
+    [showHidden],
+  );
+
+  const toggleTreeNode = useCallback(
+    (path: string) => {
+      const st = tree[path];
+      if (st?.expanded) {
+        setTree((t) => ({ ...t, [path]: { ...t[path], expanded: false } }));
+      } else if (st?.children) {
+        setTree((t) => ({ ...t, [path]: { ...t[path], expanded: true } }));
+      } else {
+        void loadTreeChildren(path);
+      }
+    },
+    [tree, loadTreeChildren],
+  );
+
+  const onTreeOpen = useCallback(
+    (entry: DirEntryLike) => {
+      navigate(entry.path, true);
+      if (tree[entry.path]?.children) {
+        setTree((t) => ({ ...t, [entry.path]: { ...t[entry.path], expanded: true } }));
+      } else {
+        void loadTreeChildren(entry.path);
+      }
+    },
+    [navigate, tree, loadTreeChildren],
+  );
+
+  // 隐藏文件开关变化：已展开节点的子列表按新可见性重取（展开状态保留）
+  const treeRef = useRef(tree);
+  treeRef.current = tree;
+  useEffect(() => {
+    for (const [p, v] of Object.entries(treeRef.current)) {
+      if (v.expanded) void loadTreeChildren(p);
+    }
+  }, [showHidden, loadTreeChildren]);
+
   // 面包屑
   const breadcrumbs = useMemo(() => {
     if (!currentPath) return [] as Array<{ label: string; path: string }>;
@@ -367,6 +553,9 @@ export function App() {
         >
           <Sparkles /> AI
         </button>
+        <button className="tb-btn" onClick={cycleTheme} title={`主题：${THEME_LABEL[themeMode]}`}>
+          {themeMode === "system" ? <Monitor /> : themeMode === "light" ? <Sun /> : <Moon />}
+        </button>
       </header>
 
       <nav className="breadcrumb-bar">
@@ -403,18 +592,47 @@ export function App() {
 
       <div className="body-row">
         <aside className="sidebar">
+          {bookmarks.length > 0 && (
+            <>
+              <div className="sb-head">书签</div>
+              {bookmarks.map((b) => (
+                <div
+                  key={b.path}
+                  className={`sb-row ${currentPath === b.path ? "is-active" : ""}`}
+                >
+                  <button
+                    type="button"
+                    className="sb-row-label"
+                    onClick={() => openBookmark(b)}
+                    title={b.path}
+                  >
+                    {b.isDir ? <Folder className="entry-icon" /> : <FileText className="entry-icon" />}
+                    <span>{b.name}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="sb-row-aux"
+                    onClick={() => setBookmarks((bs) => bs.filter((x) => x.path !== b.path))}
+                    aria-label={`移除书签 ${b.name}`}
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </>
+          )}
           <div className="sb-head">本机</div>
           {drives.map((d) => (
-            <button
+            <TreeRow
               key={d.path}
-              className={`sb-drive ${currentPath === d.path ? "is-active" : ""}`}
-              onClick={() => navigate(d.path, true)}
-            >
-              <HardDrive /> {d.label}
-            </button>
+              entry={driveToEntry(d)}
+              depth={0}
+              tree={tree}
+              currentPath={currentPath}
+              onToggle={toggleTreeNode}
+              onOpen={onTreeOpen}
+            />
           ))}
-          <div className="sb-head">书签</div>
-          <div className="sb-empty">暂无（即将上线）</div>
         </aside>
 
         <section className="explorer">
@@ -507,7 +725,7 @@ export function App() {
                 path={active.path}
                 name={active.name}
                 source={viewerFileSource}
-                isDark={false}
+                isDark={theme === "dark"}
               />
             )}
           </div>
@@ -533,6 +751,15 @@ export function App() {
             }}
           >
             <FolderOpen /> {ctxMenu.entry.isDir ? "进入文件夹" : "打开"}
+          </button>
+          <button
+            className="ctxmenu-item"
+            onClick={() => {
+              toggleBookmark(ctxMenu.entry);
+              setCtxMenu(null);
+            }}
+          >
+            <Star /> {bookmarks.some((b) => b.path === ctxMenu.entry.path) ? "移除书签" : "添加书签"}
           </button>
           <button
             className="ctxmenu-item"

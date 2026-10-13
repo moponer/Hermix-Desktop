@@ -103,7 +103,6 @@ pub fn main() {
             commands::viewer_search_dir,
             commands::viewer_open_with_system,
             commands::viewer_take_pending,
-            commands::viewer_exists,
             commands::ai_send,
         ])
         .setup(move |app| {

@@ -37,6 +37,9 @@ export function AiSidebar({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  // 会话 id 随面板生命周期：首条消息建会话，后续复用（多轮上下文在
+  // server 侧）；面板收起即视为对话结束，再开是新会话。
+  const sessionIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     listRef.current?.scrollTo(0, listRef.current.scrollHeight);
@@ -51,14 +54,16 @@ export function AiSidebar({
       setBusy(true);
       setMessages((m) => [...m, { role: "user", text: trimmed }]);
       try {
-        const reply = await invoke<{ reply?: string }>("ai_send", {
+        const reply = await invoke<{ reply: string; sessionId: string }>("ai_send", {
           text: trimmed,
           filePath,
           selection: selection || null,
+          sessionId: sessionIdRef.current,
         });
+        sessionIdRef.current = reply.sessionId;
         setMessages((m) => [
           ...m,
-          { role: "assistant", text: reply.reply ?? "(空回复)" },
+          { role: "assistant", text: reply.reply || "(空回复)" },
         ]);
       } catch (e) {
         setError(String(e instanceof Error ? e.message : e));

@@ -528,11 +528,13 @@ pub fn viewer_take_pending(state: tauri::State<ViewerState>) -> Vec<String> {
     pending.drain(..).map(|p| p.to_string_lossy().to_string()).collect()
 }
 
-/// 拖入/选择的新路径登记（前端从 drop 事件拿路径后再经这里统一读，
-/// 保持读入口单一——全部走 viewer_read_file）。
-#[tauri::command]
-pub fn viewer_exists(path: String) -> bool {
-    std::fs::metadata(&path).map(|m| m.is_file()).unwrap_or(false)
+/// ai_send 的归一化返回：reply 从 server 响应中取出，sessionId 回传给
+/// 前端，后续消息带上即可复用同一会话（多轮上下文由 server 侧保存）。
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct AiReply {
+    pub reply: String,
+    pub session_id: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -550,39 +552,46 @@ fn api_base() -> String {
         .unwrap_or_else(|| "http://127.0.0.1:3000".into())
 }
 
-/// 非流式问一轮：建会话（标题带文件名）→ send_message → 返回回复全文。
-/// 文件上下文拼进 prompt（服务器零改动；selection 为空只带路径）。
+/// 非流式问一轮：无 session_id 时建会话（标题带文件名），有则复用；
+/// 然后往同一会话 send_message。文件上下文拼进 prompt（服务器零改动；
+/// selection 为空只带路径）。
 #[tauri::command]
 pub async fn ai_send(
     text: String,
     file_path: Option<String>,
     selection: Option<String>,
-) -> Result<serde_json::Value, String> {
+    session_id: Option<String>,
+) -> Result<AiReply, String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(180))
         .build()
         .map_err(|e| format!("HTTP client 构建失败: {e}"))?;
     let base = api_base().trim_end_matches('/').to_string();
 
-    let title = file_path
-        .as_deref()
-        .and_then(|p| std::path::Path::new(p).file_name())
-        .map(|n| format!("查看器: {}", n.to_string_lossy()))
-        .unwrap_or_else(|| "查看器对话".into());
-    let created: serde_json::Value = client
-        .post(format!("{base}/v1/sessions"))
-        .json(&serde_json::json!({ "title": title }))
-        .send()
-        .await
-        .map_err(|e| format!("创建会话失败: {e}"))?
-        .json()
-        .await
-        .map_err(|e| format!("解析会话响应失败: {e}"))?;
-    let sid = created
-        .get("id")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| format!("会话响应缺 id: {created}"))?
-        .to_string();
+    let sid = match session_id.filter(|s| !s.trim().is_empty()) {
+        Some(sid) => sid,
+        None => {
+            let title = file_path
+                .as_deref()
+                .and_then(|p| std::path::Path::new(p).file_name())
+                .map(|n| format!("查看器: {}", n.to_string_lossy()))
+                .unwrap_or_else(|| "查看器对话".into());
+            let created: serde_json::Value = client
+                .post(format!("{base}/v1/sessions"))
+                .json(&serde_json::json!({ "title": title }))
+                .send()
+                .await
+                .map_err(|e| format!("创建会话失败: {e}"))?
+                .json()
+                .await
+                .map_err(|e| format!("解析会话响应失败: {e}"))?;
+            created
+                .get("id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| format!("会话响应缺 id: {created}"))?
+                .to_string()
+        }
+    };
 
     let mut prompt = String::new();
     if let Some(p) = &file_path {
@@ -613,5 +622,10 @@ pub async fn ai_send(
             body.get("error").and_then(|v| v.as_str()).unwrap_or("(无详情)")
         ));
     }
-    Ok(body)
+    let reply = body
+        .get("reply")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| format!("消息响应缺 reply: {body}"))?
+        .to_string();
+    Ok(AiReply { reply, session_id: sid })
 }
