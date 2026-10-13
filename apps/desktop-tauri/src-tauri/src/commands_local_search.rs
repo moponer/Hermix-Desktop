@@ -419,6 +419,9 @@ fn rebuild_index(gen: u64, allow_jwalk_fallback: bool) {
         }
         return;
     }
+    // 落盘放在换入**之前**：此刻 cell 里还是上一份索引，写盘的几秒（130 万
+    // 条约 150MB）不会阻塞正在用旧索引搜索的用户。
+    persist_snapshot(&merged);
     if let Ok(mut cell) = index_cell().lock() {
         std::mem::swap(&mut cell.index, &mut merged);
         cell.built_at = Some(Instant::now());
@@ -1287,6 +1290,199 @@ fn merge_shards(shards: Vec<Index>) -> Index {
     merged
 }
 
+// ── 索引落盘 ────────────────────────────────────────────────────────────
+//
+// 索引此前只活在内存里：进程一退就丢，每次启动都要重新弹 UAC、重新枚举
+// 全盘（本机 130 万条约 3 分钟）。用户反复重开应用 → 每轮都扫不完 →
+// 面板永远是空的。落盘后：启动先加载上次快照（秒级，立刻可搜），再后台
+// 刷新。用户第一次用之后就不再有"等 3 分钟"。
+
+/// 快照格式版本。结构变更时递增，旧快照自动作废（加载时拒绝）。
+const SNAPSHOT_VERSION: u32 = 1;
+const SNAPSHOT_MAGIC: &[u8; 8] = b"HMIXLDX1";
+
+/// 快照落点：`%LOCALAPPDATA%\hermix\local-index.bin`。
+///
+/// 不用 `%TEMP%`：系统磁盘清理/重启会清掉，那等于没落盘。
+/// 直接读环境变量而不用 `dirs` crate：本壳 Windows-only，`LOCALAPPDATA`
+/// 恒存在，标准库足够（少一条依赖，也避开 registry 里 dirs 7 源缺失）。
+fn snapshot_path() -> Option<PathBuf> {
+    let root = std::env::var_os("LOCALAPPDATA")?;
+    Some(PathBuf::from(root).join("hermix").join("local-index.bin"))
+}
+
+fn put_u64(out: &mut Vec<u8>, v: u64) {
+    out.extend_from_slice(&v.to_le_bytes());
+}
+fn put_u32(out: &mut Vec<u8>, v: u32) {
+    out.extend_from_slice(&v.to_le_bytes());
+}
+fn put_u16(out: &mut Vec<u8>, v: u16) {
+    out.extend_from_slice(&v.to_le_bytes());
+}
+fn put_bytes(out: &mut Vec<u8>, b: &[u8]) {
+    put_u64(out, b.len() as u64);
+    out.extend_from_slice(b);
+}
+
+/// 序列化索引。自写定长二进制（不用 serde/bincode）：entries 是百万级定长
+/// 结构，逐字段写省掉每条一份 JSON 的开销，也不引新依赖。
+fn serialize_index(idx: &Index) -> Vec<u8> {
+    // 预分配：names + dirs + entries×35B + 两个 map×(12B) + 头。
+    let cap = idx.names.len()
+        + idx.dirs.iter().map(|d| d.len() + 8).sum::<usize>()
+        + idx.entries.len() * 43
+        + 64;
+    let mut out: Vec<u8> = Vec::with_capacity(cap);
+    out.extend_from_slice(SNAPSHOT_MAGIC);
+    put_u32(&mut out, SNAPSHOT_VERSION);
+    put_bytes(&mut out, idx.names.as_bytes());
+    put_u64(&mut out, idx.dirs.len() as u64);
+    for d in &idx.dirs {
+        put_bytes(&mut out, d.as_bytes());
+    }
+    put_u64(&mut out, idx.entries.len() as u64);
+    for e in &idx.entries {
+        put_u32(&mut out, e.name_off);
+        put_u16(&mut out, e.name_len);
+        put_u32(&mut out, e.dir);
+        put_u64(&mut out, e.size);
+        out.extend_from_slice(&e.mtime.to_le_bytes());
+        out.push(e.is_dir as u8);
+        put_u64(&mut out, e.frn);
+    }
+    put_u64(&mut out, idx.frn_map.len() as u64);
+    for (&frn, &eid) in &idx.frn_map {
+        put_u64(&mut out, frn);
+        put_u32(&mut out, eid);
+    }
+    put_u64(&mut out, idx.frn_dirs.len() as u64);
+    for (&frn, &did) in &idx.frn_dirs {
+        put_u64(&mut out, frn);
+        put_u32(&mut out, did);
+    }
+    out.push(match idx.source {
+        IndexSource::Jwalk => 0,
+        IndexSource::Usn => 1,
+    });
+    out
+}
+
+/// 读游标。越界/损坏一律返回 None —— 快照坏了就当没有，宁可重建也不 panic。
+struct Cursor<'a> {
+    b: &'a [u8],
+    at: usize,
+}
+
+impl<'a> Cursor<'a> {
+    fn take(&mut self, n: usize) -> Option<&'a [u8]> {
+        let end = self.at.checked_add(n)?;
+        let s = self.b.get(self.at..end)?;
+        self.at = end;
+        Some(s)
+    }
+    fn u64(&mut self) -> Option<u64> {
+        Some(u64::from_le_bytes(self.take(8)?.try_into().ok()?))
+    }
+    fn u32(&mut self) -> Option<u32> {
+        Some(u32::from_le_bytes(self.take(4)?.try_into().ok()?))
+    }
+    fn u16(&mut self) -> Option<u16> {
+        Some(u16::from_le_bytes(self.take(2)?.try_into().ok()?))
+    }
+    fn bytes(&mut self) -> Option<String> {
+        let n = self.u64()? as usize;
+        String::from_utf8(self.take(n)?.to_vec()).ok()
+    }
+}
+
+fn deserialize_index(raw: &[u8]) -> Option<Index> {
+    let mut c = Cursor { b: raw, at: 0 };
+    if c.take(8)? != SNAPSHOT_MAGIC {
+        return None;
+    }
+    if c.u32()? != SNAPSHOT_VERSION {
+        return None;
+    }
+    let mut idx = Index::default();
+    idx.names = c.bytes()?;
+    let dirs = c.u64()?;
+    // 上界防御：损坏文件可能声明一个天文数字的条目数，按它预留容量会 OOM。
+    if dirs > raw.len() as u64 {
+        return None;
+    }
+    for _ in 0..dirs {
+        idx.dirs.push(c.bytes()?);
+    }
+    let entries = c.u64()?;
+    if entries > raw.len() as u64 {
+        return None;
+    }
+    idx.entries.reserve(entries as usize);
+    for _ in 0..entries {
+        idx.entries.push(Entry {
+            name_off: c.u32()?,
+            name_len: c.u16()?,
+            dir: c.u32()?,
+            size: c.u64()?,
+            mtime: i64::from_le_bytes(c.take(8)?.try_into().ok()?),
+            is_dir: c.take(1)?[0] != 0,
+            frn: c.u64()?,
+        });
+    }
+    let frn_map = c.u64()?;
+    if frn_map > raw.len() as u64 {
+        return None;
+    }
+    for _ in 0..frn_map {
+        idx.frn_map.insert(c.u64()?, c.u32()?);
+    }
+    let frn_dirs = c.u64()?;
+    if frn_dirs > raw.len() as u64 {
+        return None;
+    }
+    for _ in 0..frn_dirs {
+        idx.frn_dirs.insert(c.u64()?, c.u32()?);
+    }
+    idx.source = match c.take(1)?[0] {
+        1 => IndexSource::Usn,
+        _ => IndexSource::Jwalk,
+    };
+    // 占位目录是 replay_update 判断"索引就绪"的依据，缺了就必须整体作废。
+    if idx.dirs.is_empty() {
+        return None;
+    }
+    Some(idx)
+}
+
+/// 落盘（原子替换：写临时文件再 rename，写坏不破坏上一份）。
+fn persist_snapshot(idx: &Index) {
+    let Some(path) = snapshot_path() else { return };
+    let Some(parent) = path.parent() else { return };
+    if std::fs::create_dir_all(parent).is_err() {
+        return;
+    }
+    let tmp = path.with_extension("bin.tmp");
+    let bytes = serialize_index(idx);
+    if std::fs::write(&tmp, &bytes).is_err() {
+        return;
+    }
+    let _ = std::fs::rename(&tmp, &path);
+    // 刷新失败不影响搜索：索引已在内存里，下一轮重建会重写。
+}
+
+/// 启动时加载上次快照。任何异常都返回 None（当作首次运行）。
+fn load_snapshot() -> Option<Index> {
+    let path = snapshot_path()?;
+    let raw = std::fs::read(&path).ok()?;
+    let idx = deserialize_index(&raw)?;
+    // 空索引没有持久化价值，别拿它顶掉一次真实重建。
+    if idx.entries.is_empty() {
+        return None;
+    }
+    Some(idx)
+}
+
 /// 确保索引可用：未建或过期时在后台触发重建，立即返回。
 /// `allow_jwalk_fallback` = false 时只用提权 helper（见 [`rebuild_index`]）。
 /// `force` = true 时无视 TTL 与既有索引（"重新授权"按钮用：不管当前
@@ -1334,10 +1530,24 @@ pub fn start_background_index() {
     if AUTO_SCANNED.swap(true, Ordering::AcqRel) {
         return;
     }
-    eprintln!("[local_search] background index scan starting");
-    // 允许 jwalk 回退(2026-10-12):本机 USN/MFT 快速路径拿不到卷句柄
-    // (管理员态也被拒),目录遍历是唯一保证可用的路径。代价是冷启动扫盘
-    // 几分钟——但启动即自动跑(有进度上报),而不是等用户点搜索才发现。
+    // 有快照：先换入，启动即可搜（秒级），**不**在启动时触发重建 ——
+    // 启动就弹 UAC 是最劝退的一件事，而索引此刻已经能用。
+    //
+    // 源降级为 Jwalk（受 INDEX_TTL 约束）：Usn 的"恒新鲜"前提是 helper
+    // 常驻做增量重放，重启后没有 helper，那份快照只是"上次的样子"，必须
+    // 允许它过期后重建。
+    if let Some(mut idx) = load_snapshot() {
+        idx.source = IndexSource::Jwalk;
+        let n = idx.len();
+        if let Ok(mut cell) = index_cell().lock() {
+            cell.index = idx;
+            cell.built_at = Some(Instant::now());
+        }
+        eprintln!("[local_search] snapshot loaded: {n} entries");
+        return;
+    }
+    // 无快照（首次运行）：后台建索引，用户打开面板时才有东西可搜。
+    eprintln!("[local_search] no snapshot, background scan starting");
     ensure_index(true, false);
 }
 
@@ -1364,7 +1574,9 @@ fn search_blocking(query: String, ext: Option<String>, dirs_only: bool) -> Local
         }
     };
     let building = cell.building;
-    let indexed = if building {
+    // 重建中**但已有旧索引**（启动时加载的快照）时报可用条目数，而不是
+    // "已发现 0 项"——后者让用户以为索引是空的，实际此刻已经能搜到东西。
+    let indexed = if building && cell.index.len() == 0 {
         PROGRESS.load(Ordering::Relaxed) as usize
     } else {
         cell.index.len()
@@ -1526,7 +1738,8 @@ pub fn local_search_status() -> IndexStatus {
     };
     let building = cell.building;
     IndexStatus {
-        indexed: if building {
+        // 同 search_blocking：重建中有旧索引就报真实条目数，别显示 0。
+        indexed: if building && cell.index.len() == 0 {
             PROGRESS.load(Ordering::Relaxed) as usize
         } else {
             cell.index.len()
@@ -1665,6 +1878,52 @@ mod tests {
     /// 涉及全局 index_cell() 的测试必须串行（cargo test 默认多线程，
     /// 并行注入/重放会互相覆盖全局槽位产生 flaky）。
     static CELL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// 落盘往返必须原样还原：dirs / entries 偏移 / frn 映射 / source。
+    /// 路径拼错（dir 下标错位）在这里立刻红。
+    #[test]
+    fn snapshot_roundtrip_preserves_index() {
+        let mut idx = Index::default();
+        idx.dirs.push(String::new()); // 0 号占位
+        idx.dirs.push("C:\\a".into());
+        idx.dirs.push("D:\\b".into());
+        idx.names.push_str("f1.txt");
+        idx.entries.push(Entry {
+            name_off: 0,
+            name_len: 6,
+            dir: 1,
+            size: 10,
+            mtime: 123,
+            is_dir: false,
+            frn: 99,
+        });
+        idx.frn_map.insert(99, 0);
+        idx.frn_dirs.insert(7, 2);
+        idx.source = IndexSource::Usn;
+
+        let bytes = serialize_index(&idx);
+        let back = deserialize_index(&bytes).expect("快照反序列化失败");
+        assert_eq!(back.len(), 1);
+        assert_eq!(back.dirs, idx.dirs);
+        assert_eq!(back.path(&back.entries[0]), "C:\\a\\f1.txt");
+        assert_eq!(back.frn_map.get(&99), Some(&0));
+        assert_eq!(back.frn_dirs.get(&7), Some(&2));
+        assert_eq!(back.source, IndexSource::Usn);
+    }
+
+    /// 损坏/异版本快照必须被拒绝（返回 None），不得让坏数据顶替一次真实
+    /// 重建。占位目录缺失同样作废 —— 它是 replay_update 判"就绪"的依据。
+    #[test]
+    fn deserialize_rejects_corrupt_or_foreign_snapshot() {
+        assert!(deserialize_index(b"garbage").is_none());
+        // magic 对、版本不对
+        let mut v: Vec<u8> = SNAPSHOT_MAGIC.to_vec();
+        v.extend_from_slice(&(SNAPSHOT_VERSION + 1).to_le_bytes());
+        assert!(deserialize_index(&v).is_none());
+        // 默认 Index（无占位目录）不得被当作可用快照
+        let empty = serialize_index(&Index::default());
+        assert!(deserialize_index(&empty).is_none());
+    }
 
     /// 端到端功能验证：临时目录建索引 → 三条查询路径（模糊 / 子串 /
     /// ext 筛选）都能命中。arena 重排后 dir/name 偏移错了这里立刻炸。
