@@ -24,7 +24,10 @@ tauri-plugin-autostart = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
-reqwest = { version = "0.12", features = ["json"] }
+# `stream` 是 updater.rs 流式下载（resp.bytes_stream()）直接依赖的特性，
+# 必须自己声明——此前只靠全 workspace 构建时 hermix-tools/hermix-server
+# 的特性合并顺带带上，`cargo test -p hermix-desktop` 等单独构建会 E0599。
+reqwest = { version = "0.12", features = ["json", "stream"] }
 dirs = "6"
 open = "5"
 base64 = "0.22"
