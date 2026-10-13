@@ -8,7 +8,7 @@
     "build:vite": "vite build"
   },
   "dependencies": {
-    "@hermix/preview": "file:../../packages/preview",
+    "@hermix/preview": "workspace:*",
     "@tauri-apps/api": "^2.12.1",
     "docx-preview": "^0.4.1",
     "exceljs": "^4.4.0",

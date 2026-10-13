@@ -53,6 +53,21 @@ Status: implemented — viewer 已接入共享渲染包并重写为三栏资源�
   - 为什么当时不用 `link:`：它确实给真符号链接，但 pnpm **不会**为 link 目标安装其依赖，包内 `import "satteri"` 这类裸导入会从真实路径向上找不到 node_modules 而构建失败；要修就得给 `packages/preview` 自己的 `node_modules`（即 workspace 成员待遇）或让每个 app 显式声明全部渲染依赖。
   - 根治落地见下一节。
 
+## 根 pnpm workspace（同日根治）
+
+- **Decision**：建根 `pnpm-workspace.yaml`，成员只列**显式三项**——`apps/desktop-tauri`、`apps/viewer`、`packages/*`；两个 app 的 `@hermix/preview` 从 `file:` 改 `workspace:*`；删除两个 app 级的 `pnpm-workspace.yaml` 与 `pnpm-lock.yaml`，根下生成唯一 lock。效果：`apps/*/node_modules/@hermix/preview` 从此是**指向 `packages/preview` 工作树的真符号链接**，改包免安装即时生效；`packages/preview/node_modules` 存在，包内裸导入从真实路径可解析。
+- **为什么不写 `apps/*`**：`apps/` 下实际有 10 个项目（android / bbs / desktop-tauri / hm / hx-packager / hx-shell / installer / playground / relay / viewer），其中 relay 走 npm（`package-lock.json`）、android 根本不是 Node 工程。通配会把它们全拖进 pnpm 依赖图——实测一次就把 relay 的 `better-sqlite3` 连同 1400+ 包拉了进来，那是与本次目的完全无关的大范围迁移。**显式列举，别对 `apps/` 用通配。**
+- **合并的根配置**：两份 app 级 `pnpm-workspace.yaml` 的 `allowBuilds.esbuild` 与 desktop 的 `overrides["@types/hast"]`（satteri 依赖链的类型版本必须钉死）。另加 `@parcel/watcher`——它是 sass 的 optionalDependency，pnpm 默认不跑依赖构建脚本，遇到被拦的会以 `ERR_PNPM_IGNORED_BUILDS` **直接失败**（不是警告）。
+- **`apps/desktop-tauri/.npmrc` 留在原位**：它被 gitignore（可能含本地凭证），pnpm 在该目录下执行时仍会读到，不迁。
+- **顺带暴露并修掉三个此前被掩盖的问题**：
+  1. `packages/preview` 此前**没有声明 `@types/react` / `@types/react-dom`**。此前包是 store 里的副本，类型恰好从 app 侧兜住了；变成真链接 + 自己的 `node_modules` 后立刻暴露为满屏 TS7016。已补进包的 devDependencies。
+  2. 包把 `react` / `react-dom` 同时写进 `dependencies` 与 `peerDependencies`。已从 `dependencies` 删除只留 peer——否则 workspace 里会出现第二份 React，hooks 直接炸。pnpm 的 `auto-install-peers` 把 peer 解到与两个 app **同一个** `react@19.3.0` store 条目（已实测三处符号链接指向同一真实路径），因此无重复实例。
+  3. workspace 统一 TypeScript 到 5.9.3（原先两个 app 各钉 `^5.8.3`），TS 5.7+ 的 DOM 库把 `BlobPart` 收紧为 `ArrayBufferView<ArrayBuffer>`，把 `PreviewPanel` 灯箱那处 `new Blob([bytes])` 顶了出来。已按包内 MarkdownView 同法复制到 ArrayBuffer 支撑的 Uint8Array。**这属"版本统一后暴露的既有欠账"，不是迁移引入的回归。**
+- **Alternatives rejected**：`link:` 协议（不给 link 目标装依赖，裸导入解析失败）；保留 app 级 lock 只加根 workspace（workspace 的定义就是"单 lock 多成员"，两套并存没有意义）。
+- **副作用**：安装耗时显著变长（首次 1400+ 包），但之后改包不再需要 `pnpm install`。
+- **迁移后验证（全绿）**：`apps/viewer tsc --noEmit` exit 0；`apps/desktop-tauri tsc --noEmit` exit 0；`apps/desktop-tauri vitest run` 31 文件 / 297 用例全绿；`apps/viewer vite build` exit 0（1m15s，六引擎仍各自独立 chunk：exceljs 939.91KB / PdfView 437.89KB / xlsx 429.48KB / docx-preview 173.89KB / PptxView 154.56KB / workbook 9.56KB）；`apps/desktop-tauri vite build` exit 0（7m56s，`CODEBUDDY_SAFE_DELETE_ENABLED=0`；主包 2067KB 的既有大包警告未变）；`cargo check -p hermix-viewer` exit 0（9m09s，0 warning）。
+- **决定性验证**：在 `packages/preview` 写入一行探针注释，两个 app 的 `node_modules/@hermix/preview/src/lib/localAssets.ts` **无需 `pnpm install`** 即同时可见该行，撤销后同样同步——这正是旧 `file:` 布局做不到的。
+
 ## Reintroduction conditions
 
 - 恢复桌面本地副本的条件：共享包 path 依赖被证明不可行（如要发布独立仓库而 symlink 工具链不可用）。届时从 git 历史恢复 `components/preview/*`，并同步恢复 vitest include。
