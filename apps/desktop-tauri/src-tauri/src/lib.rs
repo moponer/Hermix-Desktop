@@ -1,7 +1,6 @@
 pub mod cdp_probe;
 pub mod commands;
 pub mod commands_custom_app;
-pub mod commands_local_search;
 pub mod commands_workbench;
 pub mod keep_awake;
 pub mod markitdown;
@@ -481,23 +480,12 @@ pub fn run() {
                 // 页面加载完成的 show 挂在 Builder::on_page_load（见下方）；
                 // 这里只放兜底定时器：页面加载失败时窗口也不能永远不出现。
                 if let Some(win) = app.get_webview_window("main") {
-                    // 记录主窗口 HWND：本地索引提权 helper 的 UAC 弹窗要挂在
-                    // 前台窗口上。null owner 时 UAC 可能落在后台 —— 用户
-                    // "说好首次要授权，实际从没弹出来"的直接原因之一。
-                    #[cfg(windows)]
-                    if let Ok(h) = win.hwnd() {
-                        commands_local_search::set_main_hwnd(h.0 as isize);
-                    }
                     let fallback = win.clone();
                     std::thread::spawn(move || {
                         // 4s：dev 模式 vite 冷启动可能超过 2.5s，太早 show 会把
                         // 白屏放回来；生产（本地资源）通常 <1s 就走正常路径。
                         std::thread::sleep(std::time::Duration::from_millis(4000));
                         let _ = fallback.show();
-                        // 自动索引挪到窗口 show 之后：UAC 授权弹窗需要可见的
-                        // 前台宿主；setup 里裸跑时窗口还隐藏着，弹窗极易被
-                        // 用户错过，错过 = HELPER_FAILED 判死 = 索引全空。
-                        commands_local_search::start_background_index();
                     });
                 }
             }
@@ -657,12 +645,6 @@ pub fn run() {
                 let state = window.state::<AppState>();
                 let mut sb = state.sidecar.lock().unwrap();
                 sb.stop();
-                // 同理：本地索引的提权 helper（usn-indexer.exe）是常驻进程，
-                // 退出前一直锁着自己的镜像文件 —— 不发信号的话，「关掉应用就重装」
-                // 会被 NSIS 的「无法打开要写入的文件」挡住。非提权的主进程杀不掉
-                // 它（OpenProcess ACCESS_DENIED），只能走文件信号；崩溃/强杀则由
-                // helper 侧 60s 心跳陈旧规则兜底。
-                commands_local_search::shutdown_background_index();
             }
         })
         // ── 启动白屏修复（2026-09-30）──────────────────────────────
@@ -707,11 +689,6 @@ pub fn run() {
             commands::open_in_viewer,
             commands::file_assoc_list,
             commands::file_assoc_set,
-            commands_local_search::local_search,
-            commands_local_search::local_search_status,
-            commands_local_search::local_search_reauthorize,
-            commands_local_search::local_search_open,
-            commands_local_search::local_search_preview,
             screenshot_controller::start_screenshot,
             screenshot_controller::screenshot_frame_data,
             screenshot_controller::screenshot_crop_data,

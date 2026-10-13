@@ -45,14 +45,16 @@
         "languages": [
           "SimpChinese"
         ],
-        "displayLanguageSelector": false
+        "displayLanguageSelector": false,
+        "headerImage": "installer/header.bmp",
+        "sidebarImage": "installer/sidebar.bmp",
+        "installerHooks": "installer/hooks.nsh"
       }
     },
     "createUpdaterArtifacts": false,
     "externalBin": [
       "binaries/hermix",
       "binaries/markitdown",
-      "binaries/usn-indexer",
       "binaries/hermix-viewer"
     ],
     "publisher": "Hermix",

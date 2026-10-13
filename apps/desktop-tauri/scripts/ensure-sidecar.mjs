@@ -56,11 +56,6 @@ function refresh(binName, destName) {
 sh("cargo", ["build", "--release", "-p", "hermix-server", "--bin", "hermix"]);
 refresh("hermix.exe", "hermix-x86_64-pc-windows-msvc.exe");
 
-// hermix-indexer 是独立 bin crate（无 tauri-build），先于壳编译产出，
-// 不再有「build.rs 校验 binaries/ 里尚未编出的 usn-indexer」的 bootstrap 死锁。
-sh("cargo", ["build", "--release", "-p", "hermix-indexer", "--bin", "usn-indexer"]);
-refresh("usn-indexer.exe", "usn-indexer-x86_64-pc-windows-msvc.exe");
-
 // viewer（第 5 个 sidecar）：先 vite 再 cargo——generate_context! 编译期把
 // apps/viewer/dist 嵌入 exe，顺序反了会嵌入旧 UI（与 sidecar 过期同类事故）。
 const viewerVite = path.join(repoRoot, "apps", "viewer", "node_modules", "vite", "bin", "vite.js");

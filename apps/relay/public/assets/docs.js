@@ -197,7 +197,6 @@ window.DOCS = {
         '<tr><td>crates/hermix-server</td><td>axum HTTP/WebSocket 服务</td></tr>',
         '<tr><td>crates/hermix-transport</td><td>传输（含 stdio 多路复用）</td></tr>',
         '<tr><td>crates/hermix-cua</td><td>屏幕、窗口、输入、OCR、无障碍树</td></tr>',
-        '<tr><td>crates/hermix-indexer</td><td>本机文件索引（MFT/USN）</td></tr>',
         '<tr><td>crates/hermix-vault</td><td>凭据存储（DPAPI）</td></tr>',
         '<tr><td>apps/desktop-tauri</td><td>桌面端前端与 Tauri 壳</td></tr>',
         '<tr><td>apps/hm</td><td>手机端 uni-app 工程</td></tr>',

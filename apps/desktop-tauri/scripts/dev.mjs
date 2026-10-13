@@ -81,7 +81,7 @@ if (mode === "dev") {
   sh(npmBin, ["run", "_:build-shell"]);
   sh(npmBin, ["run", "_:sync-shell"]);
   sh(npmBin, ["run", "_:sync-shell-runtime"]);
-  // 编译后端 + usn-indexer + 拷贝 + sha256 校验一条龙；cargo tauri build 的
+  // 编译后端 + 拷贝 + sha256 校验一条龙；cargo tauri build 的
   // beforeBuildCommand 会再跑一次（幂等，增量秒过）——防绕过本脚本直接
   // cargo tauri build 的路径，那是两次交付事故的入口。
   sh(npmBin, ["run", "ensure-sidecar"]);

@@ -4,7 +4,7 @@ import {
   Boxes, MoreHorizontal, Loader2, Bot,
   // Popover icons
   Pencil, Pin, Archive, Trash2, FolderOpenDot, Copy, FolderMinus,
-  Settings, PanelLeftClose, Search, LayoutDashboard, FolderSearch, KeyRound, TabletSmartphone,
+  Settings, PanelLeftClose, Search, LayoutDashboard, KeyRound, TabletSmartphone,
   type LucideIcon,
 } from "lucide-react";
 import { clsx } from "clsx";
@@ -36,7 +36,6 @@ import { EditProfileDialog } from "./EditProfileDialog";
 import { UserMenuPopover } from "./UserMenuPopover";
 import { UpdatePanel } from "./UpdatePanel";
 import { useUpdater } from "../hooks/useUpdater";
-import { LocalSearchDialog } from "./LocalSearchDialog";
 import { useChannelsStatus } from "../hooks/useChannelsStatus";
 
 interface SidebarProps {
@@ -72,10 +71,6 @@ const NAV_ITEMS: { icon: React.ElementType; label: string; page: NavPage }[] = [
   { icon: KeyRound, label: "凭据库", page: "vault" },
 ];
 
-// 「本地文件」不是页面而是弹窗动作，但入口形态与菜单项一致——放进
-// NAV_ITEMS 渲染循环之外单独渲染在「应用」上方，保持同样的行外观。
-const LOCAL_FILE_ITEM = { icon: FolderSearch, label: "本地文件" };
-
 // 已移除：工具箱整合进系统配置面板，保留旧名称便于搜索残留引用。
 
 /* ── Main Sidebar ── */
@@ -105,8 +100,6 @@ export function Sidebar({
   const updater = useUpdater();
   // IM 通道状态（机器人名 + 网关连接），远程助手分组的行内状态点用。
   const channels = useChannelsStatus();
-  // 本地快速查找（Everything 风格）浮层。
-  const [localSearchOpen, setLocalSearchOpen] = useState(false);
   const userCardRef = useRef<HTMLDivElement>(null);
 
   // 应用版本（来自 tauri.conf.json 的 version）。纯浏览器调试下没有 Tauri
@@ -389,15 +382,6 @@ export function Sidebar({
 
       {/* Nav */}
       <nav className="nav" style={{ flexShrink: 0 }}>
-        {/* 本地文件：菜单行外观，点击弹窗（非页面，无 active 态） */}
-        <button
-          type="button"
-          onClick={() => setLocalSearchOpen(true)}
-          className="nav-item"
-        >
-          <LOCAL_FILE_ITEM.icon className="icon-md" />
-          <span>{LOCAL_FILE_ITEM.label}</span>
-        </button>
         {NAV_ITEMS.map(({ icon: Icon, label, page: p }) => (
           <button
             key={p}
@@ -803,7 +787,6 @@ export function Sidebar({
         onSelect={onSelectSession}
         onClose={() => setPickerTarget(null)}
       />
-      <LocalSearchDialog open={localSearchOpen} onClose={() => setLocalSearchOpen(false)} />
     </aside>
   );
 }

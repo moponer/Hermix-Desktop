@@ -2,7 +2,7 @@
 
 ## What this is
 
-Hermix Desktop — a portable, zero-install AI assistant. Windows-only (MSVC). Rust backend (18 crates, ~200K lines) + React 19 + Tauri v2 frontend.
+Hermix Desktop — a portable, zero-install AI assistant. Windows-only (MSVC). Rust backend (23 crates, ~200K lines) + React 19 + Tauri v2 frontend.
 
 ## Build & verify
 
@@ -35,7 +35,7 @@ Build artifacts default to repo-internal `target/` dirs (gitignored). `CARGO_TAR
 
 ## Structure
 
-- `crates/` — 21 Rust crates. Core dependency chain: `hermix-core` → `hermix-config` → `hermix-agent` → `hermix-server` / `hermix-cli`
+- `crates/` — 23 Rust crates. Core dependency chain: `hermix-core` → `hermix-config` → `hermix-agent` → `hermix-server` / `hermix-cli`
 - `apps/desktop-tauri/` — Tauri v2 desktop app (React 19 + Tailwind 4 + Vite)
 - `scripts/` — CI gate, smoke tests, fixture recording
 - `crates/hermix-parity-tests/` — Python↔Rust golden fixtures (run: `cargo test -p hermix-parity-tests`)

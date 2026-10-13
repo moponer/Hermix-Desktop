@@ -12,7 +12,6 @@ members = [
     "apps/desktop-tauri/src-tauri",
     "apps/installer/src-tauri",
     "apps/viewer/src-tauri",
-    "crates/hermix-indexer",
     "crates/hermix-store",
     "crates/hermix-session",
     "crates/hermix-context",

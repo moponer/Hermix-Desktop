@@ -109,7 +109,7 @@ cp "$SRC_MAIN" "$APP/$MAIN_EXE_NAME"
 
 # sidecar 分两类，来源不同——这是事实，不是偏好。
 #
-#   本仓库构建（hermix / usn-indexer / hermix-viewer）
+#   本仓库构建（hermix / hermix-viewer）
 #     来源 = target/release/，即 cargo 刚编出来的那个文件。出包**不再经过
 #     binaries/ 这一层副本**。此前这里写的是 $BINARIES/$s.exe，但目录里的实际
 #     文件名带 target triple 后缀（<name>-x86_64-pc-windows-msvc.exe），该判断
@@ -122,7 +122,7 @@ cp "$SRC_MAIN" "$APP/$MAIN_EXE_NAME"
 #     也不碰它们。唯一的家就是 binaries/。
 BINARIES="$REPO_ROOT/apps/desktop-tauri/src-tauri/binaries"
 
-for s in hermix usn-indexer hermix-viewer; do
+for s in hermix hermix-viewer; do
   f="$TARGET/$s.exe"
   [[ -f "$f" ]] || { echo "错误：缺 sidecar $f（先跑 npm run build / ensure-sidecar）"; exit 1; }
 
@@ -133,17 +133,12 @@ for s in hermix usn-indexer hermix-viewer; do
   # 10-06 的「修了但新装的包里没有」就是这么漏的。这里是出包必经点，且
   # --skip-build 同样照跑。
   #
-  # hermix 的扫描只看 crates/，且跳过 crates/hermix-indexer：
   #   跳过 indexer —— 否则改一下 indexer 就把 hermix 也误报成 STALE；
   #   不看 src-tauri/src —— 那是**壳**（hermix-desktop）的代码，不进 hermix-server，
   #     拿它做判定等于每次改壳都误报一次。误报多了这道门就没人当真了。
   case "$s" in
     hermix)
       stale=$(find "$REPO_ROOT/crates" \
-                -type d -name hermix-indexer -prune -o \
-                -type f -name '*.rs' -newer "$f" -print -quit 2>/dev/null) ;;
-    usn-indexer)
-      stale=$(find "$REPO_ROOT/crates/hermix-indexer" \
                 -type f -name '*.rs' -newer "$f" -print -quit 2>/dev/null) ;;
     hermix-viewer)
       stale=$(find "$REPO_ROOT/apps/viewer" \

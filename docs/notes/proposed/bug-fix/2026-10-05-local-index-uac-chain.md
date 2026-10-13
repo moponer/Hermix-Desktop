@@ -1,6 +1,6 @@
 # Decision Note: 本地文件索引 UAC 链修复
 
-Status: proposed — 2026-10-05 现场取证确认自动索引链路被三处缺陷击穿(根因 + 策略 + 静默失败),同批修复;伴随 simplification 性质的增量流治理。
+Status: proposed — 2026-10-05 现场取证确认自动索引链路被三处缺陷击穿(根因 + 策略 + 静默失败),同批修复;伴随 simplification 性质的增量流治理。修复已随 2026-10-07 笔记落地；**该子系统已于 2026-10-13 整体移除**，见 implemented/simplification/2026-10-13-remove-local-file-search-module.md。
 
 ## Decision
 

@@ -44,12 +44,6 @@ which = "6"
 hermix-plugin = { path = "../../../crates/hermix-plugin" }
 hermix-config = { path = "../../../crates/hermix-config" }
 
-# 本地快速查找（侧栏「本地查找」）：jwalk 并行目录遍历建索引 +
-# nucleo-matcher（Helix 编辑器同款模糊匹配算法）。NTFS MFT 原始读取
-# 需要管理员权限，桌面应用不适合，因此用并行遍历方案（毫秒级即可
-# 索引常用目录；全盘首次索引在后台线程完成，不阻塞 UI）。
-jwalk = "0.9"
-nucleo-matcher = "0.3"
 tauri-plugin-global-shortcut = "2"
 # 文件关联设置页（HKCU\Software\Classes 登记；版本与 installer 同代）。
 winreg = "0.10"
@@ -83,11 +77,6 @@ windows = { version = "0.58", features = [
 
 [target.windows.dependencies]
 
-# usn-indexer（提权索引辅助进程）已拆为独立 bin crate crates/hermix-indexer：
-# 原先与本包共享编译单元，build.rs 的 externalBin 校验要求 binaries/ 里已有
-# usn-indexer，而它又由本包编译产出 —— fresh clone 首次打包陷入 bootstrap
-# 死锁。拆出后由 ensure-sidecar 脚本独立编译，二进制名保持 usn-indexer，
-# 主进程按 current_exe().parent()/usn-indexer.exe 定位拉起的方式不变。
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

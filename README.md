@@ -50,14 +50,14 @@ cd apps/desktop-tauri
 运行时数据目录均已 gitignore。
 
 sidecar 刷新的唯一入口是 `npm run ensure-sidecar`（`npm run build` 与 `cargo tauri build`
-的 `beforeBuildCommand` 都已挂载），它会编译 hermix-server / hermix-indexer 并做 sha256
+的 `beforeBuildCommand` 都已挂载），它会编译 hermix-server 并做 sha256
 校验；**禁止绕过它手工 copy**。打包前跑 `./scripts/check-sidecar-freshness.sh`（exit 1 即过期）。
 
 ## 仓库结构
 
 ```
 ├── Cargo.toml                 # cargo workspace（resolver = 2）
-├── crates/                    # 21 个 Rust crate
+├── crates/                    # 23 个 Rust crate
 │   ├── hermix-core            # 接缝定义（Fs/Shell/ExecWorld/Sandbox/Transport + ToolHandler）与 boot
 │   ├── hermix-context         # 服务注册与生命周期（ServiceGuard Drop 即注销）
 │   ├── hermix-session         # 会话 commit 协议（先落盘再并入内存日志）
@@ -68,7 +68,6 @@ sidecar 刷新的唯一入口是 `npm run ensure-sidecar`（`npm run build` 与 
 │   ├── hermix-server          # axum HTTP/WS API；产出二进制 `hermix`（sidecar 入口）
 │   ├── hermix-desktop         # Tauri 主程序
 │   ├── hermix-installer       # 自研安装器（替代 NSIS）
-│   ├── hermix-indexer         # usn-indexer（独立 bin crate）
 │   └── …                      # intelligence / focus / automation / mcp / gateway /
 │                              #   voice / cua / task / transport / telemetry / skills /
 │                              #   plugin / acp / runtime / environments / coreutils …
