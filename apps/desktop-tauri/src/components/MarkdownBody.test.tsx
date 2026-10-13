@@ -4,7 +4,7 @@ import { describe, it, expect } from "vitest";
 import { markdownToHast } from "satteri";
 import { toJsxRuntime } from "hast-util-to-jsx-runtime";
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
-import { hardenSoftLineBreaks } from "../lib/softBreaks";
+import { hardenSoftLineBreaks } from "@hermix/preview";
 import { autoCloseUnbalancedFences } from "../lib/markdownFence";
 
 // 验证 MarkdownBody.tsx 替换后的核心 pipeline:

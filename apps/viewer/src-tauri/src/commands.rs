@@ -7,7 +7,8 @@
 //!   html 走前端沙箱 iframe（srcDoc + 桥脚本转系统浏览器）；
 //!   老二进制 office 走「用系统程序打开」兜底。
 //!
-//! 文件读取上限（按类型给）：10MB 文本/图片/PDF/html，50MB xlsx/xls/docx/csv，
+//! 文件读取上限（按类型给）：10MB 文本/图片/PDF，**5MB html**（沙箱里要整页
+//! 渲染，体积大的页面没意义），50MB xlsx/xls/docx/csv，
 //! 100MB pptx（演示文稿常有大量图片）。
 
 use std::path::{Path, PathBuf};
@@ -19,8 +20,8 @@ use serde::Serialize;
 pub const SINGLETON_MUTEX: &str = "HermixViewerSingleton";
 pub const SINGLETON_PORT: u16 = 3907;
 
-/// 文件读取上限：按类型给——10MB 给文本/图片/PDF/html（看一眼够用），
-/// 50MB 给 xlsx/xls/docx/csv，100MB 给 pptx。超过一律建议走系统程序。
+/// 文件读取上限：按类型给——10MB 给文本/图片/PDF（看一眼够用），
+/// 5MB 给 html，50MB 给 xlsx/xls/docx/csv，100MB 给 pptx。超过一律建议走系统程序。
 const TEXT_BYTE_LIMIT: u64 = 10 * 1024 * 1024;
 const HTML_BYTE_LIMIT: u64 = 5 * 1024 * 1024;
 const XLSX_BYTE_LIMIT: u64 = 50 * 1024 * 1024;

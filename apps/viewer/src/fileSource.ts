@@ -37,13 +37,20 @@ function decodeBase64(b64: string): Uint8Array {
   return out;
 }
 
+/** base64 字符数 → 解码后字节数（够判大小，不必为拿 size 解一遍全量）。 */
+function base64ByteLength(b64: string): number {
+  const padding = b64.endsWith("==") ? 2 : b64.endsWith("=") ? 1 : 0;
+  return Math.max(0, Math.floor((b64.length * 3) / 4) - padding);
+}
+
 function asReadText(c: RustFileContent, path: string): ReadTextResult {
   if (c.kind === "text") {
     return { ok: true, content: c.content, resolvedPath: path };
   }
   if (c.kind === "image" || c.kind === "pdf" || c.kind === "bytes") {
-    const size = decodeBase64(c.data_base64).byteLength;
-    return { ok: true, isBinary: true, size, resolvedPath: path };
+    // 只算不解：调用方（markdownLoader / textLoader / htmlLoader）见到
+    // isBinary 就直接退出了，没必要为拿 size 把 50MB 的 base64 全解一遍。
+    return { ok: true, isBinary: true, size: base64ByteLength(c.data_base64), resolvedPath: path };
   }
   return { ok: false, message: `不支持的类型（${c.extension ?? c.kind}）：${c.reason}` };
 }
@@ -60,28 +67,34 @@ function asReadBytes(c: RustFileContent, path: string): ReadBytesResult {
   return { ok: false, message: `不支持的类型（${c.extension ?? c.kind}）：${c.reason}` };
 }
 
+/** 读单个文件并按类型分流——三条 read 共用的唯一 invoke 入口。 */
+async function readFile(path: string): Promise<
+  { ok: true; content: RustFileContent } | { ok: false; message: string }
+> {
+  try {
+    return { ok: true, content: await invoke<RustFileContent>("viewer_read_file", { path }) };
+  } catch (e) {
+    return { ok: false, message: String(e instanceof Error ? e.message : e) };
+  }
+}
+
 export const viewerFileSource: FileSource = {
   async readText(path: string): Promise<ReadTextResult> {
-    try {
-      const c = await invoke<RustFileContent>("viewer_read_file", { path });
-      return asReadText(c, path);
-    } catch (e) {
-      return { ok: false, message: String(e instanceof Error ? e.message : e) };
-    }
+    const r = await readFile(path);
+    return r.ok ? asReadText(r.content, path) : r;
   },
 
   async readBytes(path: string): Promise<ReadBytesResult> {
-    try {
-      const c = await invoke<RustFileContent>("viewer_read_file", { path });
-      return asReadBytes(c, path);
-    } catch (e) {
-      return { ok: false, message: String(e instanceof Error ? e.message : e) };
-    }
+    const r = await readFile(path);
+    return r.ok ? asReadBytes(r.content, path) : r;
   },
 
   async readMarkdown(path: string): Promise<ReadMarkdownResult> {
     // viewer 自己没有 markitdown sidecar：退化到 readText + markdown 视角。
-    const t = await this.readText(path);
+    // 走共享的 readFile 而非 `this.readText` —— 解构方法后 `this` 会丢。
+    const r = await readFile(path);
+    if (!r.ok) return r;
+    const t = asReadText(r.content, path);
     if (!t.ok) return { ok: false, message: t.message };
     if ("isBinary" in t && t.isBinary) {
       return { ok: false, message: "二进制文件无法渲染为 Markdown" };

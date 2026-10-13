@@ -7,8 +7,8 @@
  * 至 satteri —— Rust 解析 + hast-util-to-jsx-runtime 渲染，参考
  * src/__spike__/satteri-pipeline.test.tsx 验证。已保形：
  *   - react-markdown 的 `remark-gfm` 对应 satteri features.gfm
- *   - react-markdown 的 `remark-breaks` 由 src/lib/softBreaks.ts
- *     在 markdown 字符串层把软换行 → "  \n"（CommonMark hard break）
+ *   - react-markdown 的 `remark-breaks` 由 @hermix/preview 的
+ *     hardenSoftLineBreaks 在 markdown 字符串层把软换行 → "  \n"（CommonMark hard break）
  *   - 不平衡 fence 由 src/lib/markdownFence.ts 在 markdownToHast 之前
  *     关闭
  *   - 全部 components 配置（p / li / code / input）原样保留
@@ -23,7 +23,7 @@ import { Check, Copy, X } from "lucide-react";
 import { useSafeTimeout } from "../hooks/useSafeTimeout";
 import { highlightToReact, readIsDark } from "../lib/codeHighlight";
 import { autoCloseUnbalancedFences } from "../lib/markdownFence";
-import { hardenSoftLineBreaks } from "../lib/softBreaks";
+import { hardenSoftLineBreaks } from "@hermix/preview";
 import { FileTypeIcon } from "./FileTypeIcon";
 
 /**
@@ -388,7 +388,7 @@ export interface MarkdownBodyProps {
 
 // satteri features: 对齐 react-markdown 的 remarkPlugins=[remarkGfm, remarkBreaks]
 //   gfm:  tables / footnotes / strikethrough / task lists — 等价 remark-gfm
-//   softBreaks: 由 src/lib/softBreaks.ts 在字符串层处理
+//   softBreaks: 由 @hermix/preview 的 hardenSoftLineBreaks 在字符串层处理
 const SATTERI_FEATURES = { features: { gfm: true } } as const;
 
 const MARKDOWN_REPARSE_THROTTLE_MS = 120;

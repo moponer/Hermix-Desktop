@@ -35,7 +35,7 @@ Status: implemented — viewer 已接入共享渲染包并重写为三栏资源�
 - 桌面端测试无回归：31 文件 / 297 用例 全绿（之前 283 → 297 是把 markdownDoc 的 14 个用例 + resolveKind 的 7 个用例 通过新结构跑出来的）。
 - viewer 端有自己的"资源管理器 UX"：路径栏（可编辑 + breadcrumb）、后退/前进/上一级/刷新、隐藏文件开关、当前目录子串搜索、列表（名称/大小/修改时间）、右键菜单（进入/复制路径/系统打开/资源管理器中显示）、多 tab 预览、Markdown/Excel/Word/PPT/HTML/图片/PDF/代码/纯文本全保真。
 - 旧 `apps/viewer/src/md.ts`（viewer 自研极简 Markdown 渲染）随重写删除——它正是备选方案 4 拒绝的那条路，留着就是死代码。
-- 字节上限在 viewer Rust 侧按扩展名给（10MB 文本/图片/PDF/html、50MB xlsx/xls/docx/csv、100MB pptx），超过返错误由渲染层提示"用系统程序打开"；桌面端沿用旧的 50MB 文本上限（与 markitdown 配合，未改）。
+- 字节上限在 viewer Rust 侧按扩展名给（10MB 文本/图片/PDF、**5MB html**、50MB xlsx/xls/docx/csv、100MB pptx），超过返错误由渲染层提示"用系统程序打开"；桌面端沿用旧的 50MB 文本上限（与 markitdown 配合，未改）。html 单独压到 5MB 是因为它要整页进沙箱 iframe，体积大的页面在预览里没意义。
 - 引擎按需分包：exceljs (939KB) / PdfView (438KB) / PptxView (155KB) / DocxView (174KB) / xlsx (429KB) / satteri wasm (3MB) 全部独立 chunk —— viewer 构建警告中仅 4 个超过 500KB（pdf.worker / satteri wasm / exceljs / 主包），开 Markdown / 文本不会为引擎付下载成本。
 - 隐藏文件用 Windows `FILE_ATTRIBUTE_HIDDEN = 0x2`（cf-windows 用 `MetadataExt::file_attributes()`），非 Windows 平台用 `.` 兜底 —— 项目是 Windows-only 但留好跨平台路径便于单测。
 - RFC 3339 字符串化时间走极简实现（`civil_from_days` Howard Hinnant 算法），不引 chrono —— viewer 是 sidecar，多一个 crate 不划算。
@@ -45,15 +45,18 @@ Status: implemented — viewer 已接入共享渲染包并重写为三栏资源�
 
 - **Import 切换**：`PreviewPanel.tsx` 改从 `@hermix/preview` 取 `loadPreview` / `PreviewSurface` / `resolveKind` / `supportsTextView` 等；包的 `LoadRequest` 要求显式 `kind`（旧桌面 `LOADERS[kind]` 表随之废弃）。`resolveKind` 的第二参从 `ArtifactKind` 换成 `{ legacy }` hint，desktop 侧映射 `kind === "office" → { legacy: true }`。
 - **依赖倒置注入口**：桌面预览与包的差异点不靠复制解决，包 `PreviewSurface` 增加 `renderCode`（desktop 注入自己的 `CodeView`，保留 Ln/Col 光标与换行开关）与 `onOpenImage`（注入灯箱 `openImageViewer`）两个可选 prop；viewer 不传即走默认 CodeBlock / 无灯箱。原 `PreviewSurfaceWithCursor` 兼容壳无消费方，删除。
-- **softBreaks 入包**：桌面 MarkdownView 独有的 `hardenSoftLineBreaks`（软换行强化）包侧此前没有——迁入 `packages/preview/src/lib/softBreaks.ts` 并在包 MarkdownView 应用，viewer 因此同步受益。
+- **softBreaks 入包**：桌面 MarkdownView 独有的 `hardenSoftLineBreaks`（软换行强化）包侧此前没有——迁入 `packages/preview/src/lib/softBreaks.ts` 并在包 MarkdownView 应用，viewer 因此同步受益。同日复查时发现桌面副本（48 行，与包逐字一致）仍被 `MarkdownBody.tsx` 直接 import，已把该 import 改为 `@hermix/preview`，桌面副本与 `softBreaks.test.ts` 随之删除；用例移入包（`packages/preview/src/lib/softBreaks.test.ts`），覆盖不丢。`codeHighlight.ts` 因有两个包外消费方而保留，见下条。
 - **rightSidebarUtils 收敛为 re-export**：扩展名分流那批纯函数与包 `previewUtils` 逐字一致，本地实现删除、改为 `export ... from "@hermix/preview"`；本文件只剩右栏 UI 关注的事（标签、格式化、面包屑）。
-- **按笔记原文执行需修正两处**（原文与现实不符，已按实际执行）：① `components/CodeBlock.tsx` 不存在——CodeBlock 内嵌在 `MarkdownBody.tsx` 里；② `lib/codeHighlight.ts` 有 `MarkdownBody` + `CodeView` 两个包外消费方，**不能**随合入删除，保留（`lib/softBreaks.ts` 同理保留，MarkdownBody 在用）。MarkdownBody 内嵌 CodeBlock 与包 CodeBlock 的统一留作后续（条件：MarkdownBody 改造窗口）。
+- **按笔记原文执行需修正两处**（原文与现实不符，已按实际执行）：① `components/CodeBlock.tsx` 不存在——CodeBlock 内嵌在 `MarkdownBody.tsx` 里；② `lib/codeHighlight.ts` 有 `MarkdownBody` + `CodeView` 两个包外消费方，**不能**随合入删除，保留（`lib/softBreaks.ts` 当时同理保留，后已收敛，见上条）。MarkdownBody 内嵌 CodeBlock 与包 CodeBlock 的统一留作后续（条件：MarkdownBody 改造窗口）。
 - **vitest 接管包用例**：desktop `vitest.config.ts` include 扩到 `node_modules/@hermix/preview/src/**` 并配 `resolve.preserveSymlinks`——包测试**必须经符号链接路径**加载，若按真实路径（`packages/preview/src/…`）收集，包内 `import "xlsx"` 等裸导入从文件位置向上找不到 node_modules（pnpm 邻位依赖在链接目标侧）。exclude 需显式收窄（默认值 `**/node_modules/**` 会把包用例一起排掉）。31 文件 / 297 用例与合入前同数，51 个包用例从桌面副本无缝转为包本体。
+- **`file:` 依赖 = 每个 app 一份物理快照，不是工作树的符号链接**（复查发现，当日已根治）：仓库根既无 `pnpm-workspace.yaml` 也无 `package.json`，两个 app 各自是 pnpm 根（各有 lock、各有私有 `.pnpm` store）。`file:../../packages/preview` 会把包**复制**进各自的 store 再软链过去——`node_modules/@hermix/preview` 是符号链接没错，但它指向 `.pnpm/@hermix+preview@file+…/` 里的一份**独立副本**。后果：**改 `packages/preview` 后必须两个 app 各跑一次 `pnpm install`**，漏一个就分叉（实测：desktop 已重装而 viewer 未重装，viewer 少 softBreaks、渲染层落后一整个提交）。包内**新增文件**在任一 app 都不会出现，硬链接也只在原地改写时保持。这与 AGENTS.md 记录的"两次『修了但新装的包里没有』"同源。
+  - 为什么当时不用 `link:`：它确实给真符号链接，但 pnpm **不会**为 link 目标安装其依赖，包内 `import "satteri"` 这类裸导入会从真实路径向上找不到 node_modules 而构建失败；要修就得给 `packages/preview` 自己的 `node_modules`（即 workspace 成员待遇）或让每个 app 显式声明全部渲染依赖。
+  - 根治落地见下一节。
 
 ## Reintroduction conditions
 
 - 恢复桌面本地副本的条件：共享包 path 依赖被证明不可行（如要发布独立仓库而 symlink 工具链不可用）。届时从 git 历史恢复 `components/preview/*`，并同步恢复 vitest include。
-- **统一 MarkdownBody 内嵌 CodeBlock 与包 CodeBlock**：待 MarkdownBody 改造窗口。届时包需导出 `codeHighlight`（或 MarkdownBody 改用包 CodeBlock 的形状），然后删桌面 `lib/codeHighlight.ts`；`lib/softBreaks.ts` 已入包，桌面副本届时可一并删（改为从包 import）。
+- **统一 MarkdownBody 内嵌 CodeBlock 与包 CodeBlock**：待 MarkdownBody 改造窗口。届时包需导出 `codeHighlight`（或 MarkdownBody 改用包 CodeBlock 的形状），然后删桌面 `lib/codeHighlight.ts`（350 行，与包逐字一致，`MarkdownBody` + `CodeView` 两个消费方）。`lib/softBreaks.ts` 已收敛，不再属此项。
 
 ## 验证
 
@@ -71,5 +74,22 @@ Status: implemented — viewer 已接入共享渲染包并重写为三栏资源�
 - `apps/desktop-tauri tsc --noEmit` exit 0；`apps/viewer tsc --noEmit` exit 0
 - `apps/desktop-tauri vitest run` 31 文件 / 297 用例 全绿（含包内 51 用例）
 - `apps/desktop-tauri vite build` exit 0（4m12s，`CODEBUDDY_SAFE_DELETE_ENABLED=0`；超 2600KB chunk 警告为既有已知项）
-- `apps/viewer vite build` exit 0（38.18s，包侧改动后回归）
+- `apps/viewer vite build` exit 0（38.18s，包侧改动后回归）← **这条当时不成立**：viewer 的包副本当时停在改动前（见上文 `file:` 快照陷阱），它验的不是同一份代码
 - `npx -y impeccable@4.1.0 detect`（PreviewPanel / 包 PreviewSurface / 包 MarkdownView / fileSourceAdapter）exit 0
+
+## 复查与修复（同日，只读审查后）
+
+对三个提交做了一轮只读审查（不编译），修掉下列问题：
+
+1. **viewer 包副本落后一个提交**（阻塞级）—— 见 Consequences 的快照陷阱。两个 app 重跑 `pnpm install`，现在两端副本与工作树逐字一致（`loaders.ts` 20:48:38/9651 一致，`softBreaks.test.ts` 两端都在）。
+2. **AI 会话串台**：`App.tsx` 的 `<AiSidebar>` 没有 `key`，`sessionIdRef` 挂在面板生命周期上。不关 AI 栏换文件，下一句会接着上一个文件的会话问，只是把新文件路径拼进 prompt。加 `key={active?.path ?? "__none__"}` 重建面板即重置会话。
+3. **`text` kind 恒返回 `code` 载荷**：`loaders.ts` 里 `text` 与 `code` 共用一个 loader，而它只发 `code`，于是 `types.ts` 的 `{kind:"text"}` 变体与 `PreviewSurface` 的 `case "text"` 都是死代码，`.log` 这类未知扩展名文件在桌面端还会误显 Ln/Col。改为按 `req.kind` 分发（`emit` 显式标注 `PreviewPayload`，否则 TS 只能看到宽泛的 `PreviewKind` 而赋不进 union）。
+4. **html 字节上限文档失准**：笔记与 `commands.rs` 两处注释都写 10MB，代码是 5MB。三处统一为 5MB 并补上"沙箱整页渲染所以压得比文本低"的理由。
+5. **`softBreaks` 桌面重复副本**（48 行，与包逐字一致）：`MarkdownBody.tsx` 改从 `@hermix/preview` import，桌面副本与其测试删除，用例移入包。`codeHighlight.ts`（350 行）因有两个包外消费方保留，仍是已知未收项。
+6. **viewer `fileSource` 两处小疵**：`readText` 为拿 size 把整段 base64 全解一遍（50MB PDF 白做一次全量解码）→ 改为按字符数算字节数；`readMarkdown` 用 `this.readText`，解构方法后会静默炸 → 提为模块级 `readFile`，三条 read 共用同一个 invoke 入口。
+
+修复后验证：
+
+- `apps/viewer tsc --noEmit` exit 0（这条同时覆盖包的类型，因为 viewer 经 node_modules 引包）
+- `apps/desktop-tauri vitest run` 31 文件 / 297 用例 全绿（33.56s；包内 `resolveKind` 7 + `preview-md-list` 4 + `softBreaks` 5 + workbook 26 均从 `node_modules/@hermix/preview/src/` 路径跑到）
+- `cargo check -p hermix-viewer` / 两个 `vite build` / `desktop tsc` **本轮未跑**（按要求不编译；Rust 侧改动只有注释，无行为变化）
