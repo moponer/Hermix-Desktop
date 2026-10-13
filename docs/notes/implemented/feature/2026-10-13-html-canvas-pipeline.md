@@ -1,6 +1,7 @@
 # Decision Note: 文档画布管线——HTML 流式画布为富文档形态，导出走旁路
 
-Status: implemented — 画布链路已落地（marker 分流 / 流式画布 / 自动开面板），导出旁路与 skill 指引待后续提交
+Status: implemented — 画布链路与导出旁路已落地（marker 分流 / 流式画布 /
+自动开面板 / PDF·xlsx·docx 三键导出 / document-authoring skill）
 
 ## Decision
 
@@ -45,6 +46,34 @@ docx 导出两档：默认前端 `docx` npm 库（"干净不花哨"：结构、�
 表格全对，无精致排版）；用户明确要正式 Word 文档时才走重转换
 （pandoc / LibreOffice headless），慢但保真，不进默认链路。
 
+**导出旁路（2026-10-14 落地）**：
+
+- PDF：viewer 内 `window.print()`（postMessage 请求通道，编辑态先
+  收口再打印），`@page` 打印样式按几何分页（slide16x9 → 13.33×7.5in
+  横向 / a4 → A4 纵向），沙箱加 `allow-modals`（print 弹对话框必需，
+  风险与既有 allow-scripts 同级）。静默导出（webview2-com PrintToPdf
+  Rust 命令）仍是后续可选升级。
+- xlsx：`packages/preview/src/lib/exporters.ts` 两层——纯 DOM 解析的
+  模型层（colspan/rowspan 展开成真实网格坐标、`<th>` 语义表头、千分位
+  数值转换、caption 表名）+ ExcelJS 渲染层（动态加载不进主包）。无
+  表格时明确提示"文档中没有表格"，不产空工作簿。
+- docx：同一文件内的 IR 层（标题层级/strong-em 嵌套继承/列表嵌套
+  level 递进/表格原生 span/slide 间分页）+ docx 库渲染层。新依赖
+  `docx@^9.10.0` 仅入 packages/preview。
+- 真相源：viewer 内 `currentHtmlRef`（编辑版优先，未编辑从 store 块
+  历史拼接）→ 注入回调 `onExportXlsx/onExportDocx` → 宿主
+  `saveBinaryFile`（save 对话框 + plugin-fs 写字节，capability 白名单
+  首个消费者）+ toast 反馈。
+- 转换器模型层 12 个单测钉死契约（网格展开/表头语义/数值转换/表名
+  清洗/列表嵌套/slide 分页）。
+
+**skill 层（协议生效前提，2026-10-14 落地）**：builtin skill
+`document-authoring`（协议硬规则/版面规范/落盘要求/反例清单）播种进
+BUILTIN_SKILLS；tags 带中文触发短语——SkillLoader 的 CJK 匹配只查
+name/tags（`cjk_bigram_hit`），不注入中文 tags 时"做个PPT"等请求
+永远匹配不上（node 实证 10 种说法全命中）；directions.rs 文件路径
+规则加一行 canvas 管线指引（未加载 skill 不凭记忆模仿 marker）。
+
 ## Alternatives considered
 
 - **自建 Office 生成（officecli 路线复辟 / rust_xlsxwriter + docx-rs）**
@@ -71,18 +100,19 @@ docx 导出两档：默认前端 `docx` npm 库（"干净不花哨"：结构、�
 
 ## Consequences
 
-- 画布内容由 LLM 遵守 marker 协议保证——skill 指引（待提交）是协议
-  生效的前提；LLM 不守协议时画布不开启，降级为今天的代码块渲染，零
-  损失但不享受新体验。
+- 画布内容由 LLM 遵守 marker 协议保证——skill `document-authoring`
+  是协议生效的前提；LLM 不守协议时画布不开启，降级为代码块渲染，
+  零损失但不享受新体验。
 - pptx 导出**明确不承诺**。行业事实：高保真 pptx 程序化生成没有好的
   开源方案（GenOffice 实测亦然——转换层扎实但"一句话生成"风格漂移）。
   幻灯片交付形态 = 画布 HTML / 打印 PDF；要可编辑 pptx 是未来独立
   评估项（GenOffice 转换层或 COM）。
 - 画布是易逝视图：一份回复至多一个 canvas（协议硬规则），新画布开启
-  旧份被覆盖；持久产物靠 write_file 落盘（skill 指引会要求成稿同时
-  落盘）。编辑回传是全量 HTML 而非增量 diff——画布与文件内容的一致
-  性由后续的导出旁路负责，当前编辑结果不落盘。
-- tsc --noEmit 因执行限制未在本次提交链中跑通（vitest 全量 308/308
-  通过）；补跑是后续提交的前置项。
-- 导出旁路（PDF/docx/xlsx 三键 + skill 指引 + impeccable 门禁接入
-  画布完成事件）尚未实现，是下一个提交批次的内容。
+  旧份被覆盖；持久产物有两路——write_file 落盘（skill 要求成稿即做）
+  与导出旁路（PDF/xlsx/docx，编辑版优先作为真相源）。编辑回传是全量
+  HTML 而非增量 diff——导出是低频动作，正确性优先。
+- PDF 导出经系统打印对话框（用户选"另存为 PDF"），非静默；静默导出
+  可后续用 webview2-com PrintToPdf Rust 命令升级（绑定已核实存在）。
+- docx 导出质量口径是"结构正确、样式干净不花哨"——嵌套层级/表格/
+  列表全保真，但复杂版式（精确页码、母版级样式）不在承诺内；高保真
+  需求按拍板走重转换档（pandoc/LibreOffice），未进默认链路。

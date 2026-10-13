@@ -23,7 +23,7 @@
 // 是不透明源，编辑内容经 postMessage 出来，不碰应用存储。
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Pencil, Check } from "lucide-react";
+import { Pencil, Check, Printer, FileSpreadsheet, FileType2 } from "lucide-react";
 import { docCanvasStore, type CanvasMeta } from "../lib/docCanvasStore";
 
 // ── iframe 内的常驻渲染脚本 ──────────────────────────────────────
@@ -51,6 +51,10 @@ const CANVAS_RUNTIME = `(function(){
       appendBlock(d.hermixCanvasBlock);
     } else if (d.hermixCanvasSetEdit !== undefined) {
       setEditing(!!d.hermixCanvasSetEdit);
+    } else if (d.hermixCanvasPrint) {
+      // 打印请求：编辑态先退出（排队块放行），保证打印的是完整文档。
+      if (EDITING) setEditing(false);
+      window.print();
     }
   });
 
@@ -68,8 +72,15 @@ const CANVAS_RUNTIME = `(function(){
   }
 })();`;
 
-/** 画布页面骨架：几何样式内联，运行时脚本置于 body 末尾。 */
+/** 画布页面骨架：几何样式内联，运行时脚本置于 body 末尾。
+ *  打印样式（@page + @media print）让"打印 → 另存 PDF"的输出与画布
+ *  所见一致：slide16x9 → 13.33×7.5in 横向页，a4 → A4 纵向页；
+ *  灰底/阴影/页间空隙只在屏幕态存在。 */
 function canvasShell(geometry: "slide16x9" | "a4"): string {
+  const printCss =
+    geometry === "slide16x9"
+      ? `@page{size:13.33in 7.5in;margin:0;}`
+      : `@page{size:A4;margin:0;}`;
   const pageCss =
     geometry === "slide16x9"
       ? `body{background:#3a3f4b}
@@ -89,6 +100,13 @@ function canvasShell(geometry: "slide16x9" | "a4"): string {
   #stage{outline:none;}
   [data-editing="1"] #stage{box-shadow:0 0 0 2px #4c8bf5 inset;}
   ${pageCss}
+  @media print{
+    body{background:#fff;padding:0;}
+    #stage{width:auto;margin:0;}
+    [data-hermix-block]{margin:0;box-shadow:none;border-radius:0;
+      width:100%;min-height:0;}
+    ${printCss}
+  }
 </style></head><body><div id="stage"></div>
 <script>${CANVAS_RUNTIME}</script>
 </body></html>`;
@@ -97,10 +115,19 @@ function canvasShell(geometry: "slide16x9" | "a4"): string {
 export function DocCanvasView({
   fileName,
   onEditCommit,
+  onExportXlsx,
+  onExportDocx,
 }: {
   fileName: string;
-  /** 用户退出编辑时回传的整份文档 HTML（宿主可交给导出旁路）。 */
+  /** 用户退出编辑时回传的整份文档 HTML（导出旁路与宿主侧共用）。 */
   onEditCommit?: (html: string) => void;
+  /**
+   * 导出 xlsx：收到的是文档当前 HTML（编辑后则以编辑版为准）。
+   * 宿主负责转换（ExcelJS）与落盘（save 对话框 + plugin-fs）。
+   */
+  onExportXlsx?: (html: string) => void;
+  /** 导出 docx：同上，宿主用 docx 库映射落盘。 */
+  onExportDocx?: (html: string) => void;
 }) {
   const [meta, setMeta] = useState<CanvasMeta>(docCanvasStore.getMeta());
   const [editing, setEditing] = useState(false);
@@ -109,6 +136,14 @@ export function DocCanvasView({
    *  这一个游标：两边都以它为起点发送，恰好一次（修复 iframe 重载
    *  期间订阅块与重放双重投递的竞态）。几何切换（新画布）时归零。 */
   const sentCursorRef = useRef(0);
+  /**
+   * 导出真相源：文档当前 HTML。两路维护——用户编辑回传时整份替换；
+   * 流式期间从 store 块历史同步（编辑版优先：一旦编辑过，流式块的
+   * 追加不再覆盖编辑结果，直到下次编辑回传）。从未编辑且无块时为 null
+   * （导出按钮禁用）。
+   */
+  const currentHtmlRef = useRef<string | null>(null);
+  const editedRef = useRef(false);
 
   // 几何变化（新画布开启）→ 重建 srcDoc。低频：一份回复至多一次。
   const srcDoc = useMemo(() => canvasShell(meta.geometry ?? "a4"), [meta.geometry]);
@@ -147,6 +182,9 @@ export function DocCanvasView({
       const edited = (e.data as { hermixCanvasEdit?: unknown } | null)?.hermixCanvasEdit;
       if (typeof edited !== "string") return;
       setEditing(false);
+      // 真相源切换到编辑版：后续流式块（若有）不再覆盖编辑结果。
+      editedRef.current = true;
+      currentHtmlRef.current = edited;
       onEditCommit?.(edited);
     };
     window.addEventListener("message", onMessage);
@@ -157,6 +195,29 @@ export function DocCanvasView({
     const next = !editing;
     setEditing(next);
     iframeRef.current?.contentWindow?.postMessage({ hermixCanvasSetEdit: next }, "*");
+  };
+
+  // 导出 PDF：请求 iframe 内 window.print()（打印的是文档本身而非 app
+  // UI），系统对话框里选"另存为 PDF"。@page 打印样式保证分页与画布
+  // 几何一致（slide16x9 → 13.33×7.5in 横向，a4 → A4 纵向）。
+  const printCanvas = () => {
+    iframeRef.current?.contentWindow?.postMessage({ hermixCanvasPrint: true }, "*");
+  };
+
+  /** 导出的 HTML 真相源：编辑版优先，否则从 store 块历史拼接。 */
+  const exportSourceHtml = (): string | null => {
+    if (editedRef.current && currentHtmlRef.current) return currentHtmlRef.current;
+    const blocks = docCanvasStore.getBlocks();
+    return blocks.length > 0 ? blocks.join("\n") : currentHtmlRef.current;
+  };
+
+  const exportXlsx = () => {
+    const html = exportSourceHtml();
+    if (html) onExportXlsx?.(html);
+  };
+  const exportDocx = () => {
+    const html = exportSourceHtml();
+    if (html) onExportDocx?.(html);
   };
 
   if (!meta.geometry) {
@@ -177,6 +238,36 @@ export function DocCanvasView({
         <span className="preview-pdf-spacer" />
         <button
           type="button"
+          className="head-action"
+          onClick={printCanvas}
+          disabled={editing}
+          title="导出 PDF（打印对话框里选「另存为 PDF」）"
+          aria-label="导出 PDF"
+        >
+          <Printer className="icon-md" />
+        </button>
+        <button
+          type="button"
+          className="head-action"
+          onClick={exportXlsx}
+          disabled={editing || !onExportXlsx}
+          title="导出 Excel（文档中的表格 → .xlsx）"
+          aria-label="导出 Excel"
+        >
+          <FileSpreadsheet className="icon-md" />
+        </button>
+        <button
+          type="button"
+          className="head-action"
+          onClick={exportDocx}
+          disabled={editing || !onExportDocx}
+          title="导出 Word（文档 → .docx）"
+          aria-label="导出 Word"
+        >
+          <FileType2 className="icon-md" />
+        </button>
+        <button
+          type="button"
           className={editing ? "head-action is-active" : "head-action"}
           onClick={toggleEdit}
           title={editing ? "完成编辑" : "编辑内容"}
@@ -191,7 +282,7 @@ export function DocCanvasView({
           className="html-frame"
           srcDoc={srcDoc}
           title="文档画布"
-          sandbox="allow-scripts"
+          sandbox="allow-scripts allow-modals"
           onLoad={handleIframeLoad}
         />
       </div>

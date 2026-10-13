@@ -21,7 +21,9 @@ import { X, FolderOpen, FileText, MessageSquare, ClipboardCheck, PanelRightClose
 import { clsx } from "clsx";
 import type { ReactNode } from "react";
 import type { Artifact } from "../utils/artifacts";
-import { DocCanvasView } from "@hermix/preview";
+import { DocCanvasView, docCanvasStore, htmlToXlsxBytes, htmlToDocxBytes } from "@hermix/preview";
+import { saveBinaryFile } from "../desktopBridge";
+import { toastSuccess, toastError } from "../hooks/useToast";
 import type { ChatMessage, SubAgentState } from "../types";
 import { ComputerTab } from "./ComputerTab";
 import { PreviewPanel } from "./PreviewPanel";
@@ -47,6 +49,45 @@ export type SideTab =
   | { id: string; type: "review" }
   | { id: string; type: "subagent" }
   | { id: string; type: "canvas" };
+
+/** 文档画布导出旁路：转换（ExcelJS / docx，动态加载不进主包）+
+ *  saveBinaryFile 落盘（save 对话框 + plugin-fs）。画布 viewer 只给
+ *  当前 HTML（编辑版优先），落盘与用户反馈统一在这里。 */
+async function exportCanvasXlsx(html: string): Promise<void> {
+  try {
+    const bytes = await htmlToXlsxBytes(html);
+    if (!bytes) {
+      toastError("文档中没有表格，无法导出 Excel");
+      return;
+    }
+    const path = await saveBinaryFile(
+      "画布表格.xlsx",
+      bytes,
+      [{ name: "Excel 工作簿", extensions: ["xlsx"] }],
+    );
+    if (path) toastSuccess(`已导出 ${path}`);
+  } catch (e) {
+    console.error("[doc-canvas] xlsx export failed:", e);
+    toastError(e instanceof Error ? e.message : String(e));
+  }
+}
+
+async function exportCanvasDocx(html: string): Promise<void> {
+  try {
+    // 几何只影响分页语义（slide 间分页），从当前画布元信息取。
+    const geometry = docCanvasStore.getMeta().geometry ?? "a4";
+    const bytes = await htmlToDocxBytes(html, geometry);
+    const path = await saveBinaryFile(
+      "画布文档.docx",
+      bytes,
+      [{ name: "Word 文档", extensions: ["docx"] }],
+    );
+    if (path) toastSuccess(`已导出 ${path}`);
+  } catch (e) {
+    console.error("[doc-canvas] docx export failed:", e);
+    toastError(e instanceof Error ? e.message : String(e));
+  }
+}
 
 /** 标签标题。 */
 function tabTitle(tab: SideTab): string {
@@ -209,10 +250,13 @@ export function PreviewBar({
       ) : active?.type === "canvas" ? (
         <div className="min-h-0 flex-1 flex flex-col">
           {/* 文档画布：内容经 docCanvasStore 流式直达 viewer，无文件路径，
-              不走 PreviewPanel。编辑回传当前仅打日志（导出旁路 Phase 2 接）。 */}
+              不走 PreviewPanel。导出旁路：viewer 给当前 HTML（编辑版优先），
+              这里转换（ExcelJS / docx）+ saveBinaryFile 落盘。 */}
           <DocCanvasView
             fileName="画布"
             onEditCommit={(html) => console.log("[doc-canvas] edit committed", html.length, "chars")}
+            onExportXlsx={(html) => void exportCanvasXlsx(html)}
+            onExportDocx={(html) => void exportCanvasDocx(html)}
           />
         </div>
       ) : active?.type === "file" ? (

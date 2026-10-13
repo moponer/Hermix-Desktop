@@ -1,6 +1,7 @@
 // Tauri IPC bridge — replaces Electron preload
 import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
+import { writeFile } from "@tauri-apps/plugin-fs";
 import { toastError } from "./hooks/useToast";
 
 export async function pickDirectory(): Promise<string | null> {
@@ -8,6 +9,25 @@ export async function pickDirectory(): Promise<string | null> {
   if (typeof selected === "string") return selected;
   if (selected && typeof selected === "object" && "path" in selected) return (selected as { path: string }).path;
   return null;
+}
+
+/**
+ * 「导出文件」统一出口：save 对话框选目标路径 → plugin-fs 写字节。
+ * 返回实际写入的绝对路径；用户取消对话框返回 null（不是错误，调用方
+ * 静默即可）。写失败如实抛出，由调用方 toast。
+ *
+ * capability 依据：`dialog:allow-save` 与 fs 写权限已在
+ * capabilities/default.json 白名单（此前无人走，此函数是首个消费者）。
+ */
+export async function saveBinaryFile(
+  defaultName: string,
+  bytes: Uint8Array,
+  filters: { name: string; extensions: string[] }[],
+): Promise<string | null> {
+  const target = await save({ defaultPath: defaultName, filters });
+  if (!target) return null;
+  await writeFile(target, bytes);
+  return target;
 }
 
 export async function getRuntimeInfo(): Promise<{ runtime: string; platform: string; userDataDir: string }> {

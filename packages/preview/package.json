@@ -17,6 +17,7 @@
   "dependencies": {
     "@bruits/satteri-wasm32-wasi": "0.10.5",
     "@panzoom/panzoom": "^4.6.2",
+    "docx": "^9.10.0",
     "docx-preview": "^0.4.1",
     "exceljs": "^4.4.0",
     "hast-util-to-jsx-runtime": "^2.3.6",
@@ -35,4 +36,3 @@
     "@types/refractor": "^3.4.0"
   }
 }
-

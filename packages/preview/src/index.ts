@@ -81,5 +81,15 @@ export {
   type ColorLike,
 } from "./lib/workbook";
 
+export {
+  htmlToXlsxModel,
+  htmlToXlsxBytes,
+  htmlToDocxBlocks,
+  htmlToDocxBytes,
+  type XlsxModel,
+  type XlsxSheetModel,
+  type DocxBlock,
+} from "./lib/exporters";
+
 export { stripFrontmatter, extractHeadings } from "./lib/markdownDoc";
 export { colName, resolveRelative, dirnameOf, isExternalHref } from "./lib/localAssets";
