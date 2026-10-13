@@ -17,12 +17,12 @@
 //!
 //! ## Implementation notes
 //!
-//! - `resolve_binary()` mirrors `office_cli.rs` exactly: the binary is
+//! - `resolve_binary()` mirrors the sidecar resolution: the binary is
 //!   bundled next to the running executable (production), under a
 //!   `binaries/` sibling, or under `../src-tauri/binaries/` (dev /
 //!   unpackaged layouts).
 //! - Shelling out goes through the shared `TerminalBackend` (same path
-//!   as `office_cli`), which gives us a bounded timeout for free and
+//!   as the other sidecars), which gives us a bounded timeout for free and
 //!   keeps every subprocess launch in one consistent backend.
 //! - Local-only: hermix must not reach out to the network (PR禁区:
 //!   no external resource sensing), so URLs are rejected up front.
@@ -50,7 +50,7 @@ impl MarkitdownHandler {
 
     /// Resolve the bundled `markitdown` sidecar binary.
     ///
-    /// Mirrors `office_cli::OfficeCliHandler::resolve_binary`: the binary
+    /// Mirrors the sidecar resolution: the binary
     /// is bundled next to the running executable (production), under a
     /// `binaries/` sibling, or under `../src-tauri/binaries/` (dev /
     /// unpackaged layouts).
@@ -130,7 +130,7 @@ impl ToolHandler for MarkitdownHandler {
         let binary = Self::resolve_binary()?;
 
         // Build the argument list, then quote each arg the same way
-        // `office_cli` does so Windows paths with spaces / backslashes
+        // the other sidecars do so Windows paths with spaces / backslashes
         // survive the shell the TerminalBackend ultimately invokes.
         // `markitdown` auto-detects the file type from its extension /
         // magic number, so no explicit type flag is needed here (the CLI
@@ -219,8 +219,8 @@ impl ToolHandler for MarkitdownHandler {
              - You want the token-cheapest representation of a document.\n\n\
              ## PDF 分工 (v0.1.1+)\n\
              - **文本型 PDF**：本工具直接转换，默认路径已带轻量结构化（编号列表 / 编号小节标题转为 Markdown），可传 `max_chars` 截断大文档。\n\
-             - **扫描件 / 图片型 PDF**（转换结果为空或乱码）：本工具无 OCR，改用 `read_pdf`（其 OCR 降级链兜底）。\n\
-             - 拿不准 PDF 类型时：先本工具，空/乱 → `read_pdf`。\n\n\
+             - **扫描件 / 图片型 PDF**（转换结果为空或乱码）：本工具无 OCR，改用 `read_image` 走 LLM 视觉（本地 OCR 已从本构建移除）。\n\
+             - 拿不准 PDF 类型时：先本工具，空/乱 → `read_image`。\n\n\
              ## Tips\n\
              - markitdown auto-detects the file type from its extension / magic number — just pass the path.\n\
              - Non-PDF formats all go through markitdown.",
@@ -239,7 +239,7 @@ impl ToolHandler for MarkitdownHandler {
 /// `essential::ESSENTIAL_TOOLSETS` lists it as a floor entry and can
 /// re-assert it; without that, a user `enabled_toolsets.json` could
 /// silently disable the token-saving document reader. Shares the
-/// `terminal_backend` with `office_cli` / `file` so every subprocess
+/// `terminal_backend` with `file` so every subprocess
 /// launch goes through one consistent backend.
 pub fn register(registry: &ToolRegistry, terminal_backend: Arc<dyn TerminalBackend>) {
     let handler = Arc::new(MarkitdownHandler::new(terminal_backend));

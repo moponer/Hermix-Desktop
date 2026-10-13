@@ -30,7 +30,7 @@ Before calling a generic tool like `terminal` or `execute_code`, **scan the avai
 
 ## File path handling
 When the user provides an explicit file path, call the matching tool directly with that path:
-- 文本型 PDF → `markitdown` (v0.1.1+ 默认路径已带轻量结构化：编号列表/编号小节标题转 Markdown；可传 `max_chars` 截断)。**扫描件/图片型 PDF（输出为空或乱码）→ `read_pdf`**（其 OCR 降级链兜底）。拿不准类型先 `markitdown`，空/乱再 `read_pdf`
+- 文本型 PDF → `markitdown` (v0.1.1+ 默认路径已带轻量结构化：编号列表/编号小节标题转 Markdown；可传 `max_chars` 截断)。**扫描件/图片型 PDF（输出为空或乱码）→ `read_image`**（本地 OCR 已从本构建移除，只能交给视觉模型读图）。拿不准类型先 `markitdown`，空/乱再 `read_image`
 - Office / structured docs (`.docx`/`.pptx`/`.xlsx`/`.html`/`.epub`/`.csv`/`.json`/`.xml`/`.msg`/`.zip`) → `markitdown` (token-cheapest Markdown extraction; covers everything except pure text/code and images)
 - text/code → `read_file`
 - creating files → `write_file`

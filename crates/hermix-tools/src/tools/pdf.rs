@@ -443,7 +443,7 @@ impl ToolHandler for ReadPdfHandler {
              prefer this over running `pdftotext`, `pdf2txt`, or any PDF-parsing command via `terminal`. \
              Preserves CJK characters and physical layout by default. \
              Use the `pages` parameter to limit the range; use a smaller `max_chars` for very large documents. \
-             Scanned / image-based PDFs (no text layer) are recovered automatically by a 4th tier that rasterizes pages with `pdftoppm` and runs local OCR; set `ocr: true` to force the OCR report on any PDF. \
+             Scanned / image-based PDFs (no text layer) return an error: local OCR has been removed from this build, so delegate to a sub-agent `read_image` for LLM vision. The `ocr` flag is a no-op. \
              ⚠️ For PDFs > ~5 pages, call this INSIDE a sub-agent via `delegate_task` — reading a large PDF into the MAIN agent context dumps 30K+ tokens that bloat context and make the LLM drift off-task. \
              Delegate: `delegate_task(task=\"Summarize this PDF\", context=\"Path: ...\")`.",
             JsonSchema::object(props, vec!["path".into()]),
