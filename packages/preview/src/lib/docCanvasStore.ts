@@ -59,6 +59,11 @@ export class DocCanvasStore {
   /** 未决缓冲：疑似 marker 前缀（未开启时）或半截块（开启时）。 */
   private tail = "";
   private open = false;
+  /** 已上屏块的完整历史。iframe 晚于流加载时的重放数据源；
+   *  新画布开启 / reset 时清空。 */
+  private blocks: string[] = [];
+  /** 元信息合并发射：块驱动的高频变化合并到微任务，React 不逐块渲染。 */
+  private metaDirty = false;
 
   // ── 订阅 ────────────────────────────────────────────────────────
   onMeta(fn: MetaListener): () => void {
@@ -72,6 +77,10 @@ export class DocCanvasStore {
   }
   getMeta(): CanvasMeta {
     return this.meta;
+  }
+  /** 已上屏块的历史快照（iframe onload 后重放用）。 */
+  getBlocks(): readonly string[] {
+    return this.blocks;
   }
 
   /**
@@ -132,6 +141,7 @@ export class DocCanvasStore {
   reset(): void {
     this.tail = "";
     this.open = false;
+    this.blocks = [];
     this.meta = { geometry: null, blockCount: 0, closed: true };
     this.emitMeta();
   }
@@ -157,6 +167,7 @@ export class DocCanvasStore {
 
   private openCanvas(geometry: CanvasPageGeometry): void {
     this.open = true;
+    this.blocks = [];
     this.meta = { geometry, blockCount: 0, closed: false };
     this.emitMeta();
   }
@@ -192,9 +203,20 @@ export class DocCanvasStore {
 
   private emitBlock(html: string): void {
     if (!html.trim()) return;
+    this.blocks.push(html);
     this.meta = { ...this.meta, blockCount: this.meta.blockCount + 1 };
     for (const fn of this.blockListeners) fn(html);
-    this.emitMeta();
+    this.scheduleMetaEmit();
+  }
+
+  /** 块驱动的元信息变化合并到微任务：一帧多个块只触发一次监听。 */
+  private scheduleMetaEmit(): void {
+    if (this.metaDirty) return;
+    this.metaDirty = true;
+    queueMicrotask(() => {
+      this.metaDirty = false;
+      this.emitMeta();
+    });
   }
 
   private emitMeta(): void {

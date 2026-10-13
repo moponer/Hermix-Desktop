@@ -10,7 +10,7 @@ import type {
   PrefetchResultEntry,
 } from "./useStreamChat";
 import { narrowSectionGateReport } from "./streamChatUtils";
-import { docCanvasStore } from "../lib/docCanvasStore";
+import { docCanvasStore } from "@hermix/preview";
 
 /** Context-usage snapshot pushed by the backend each turn. */
 export interface ContextUsage {

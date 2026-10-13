@@ -19,7 +19,8 @@ export type PreviewKind =
   | "pptx"
   | "spreadsheet"
   | "code"
-  | "text";
+  | "text"
+  | "canvas";
 
 /**
  * 视图模式：排版视图（按源文件的版面渲染）与文本视图（退化成可搜索、可
@@ -42,7 +43,10 @@ export type PreviewPayload =
   | { kind: "pptx"; bytes: Uint8Array; fileName: string }
   | { kind: "spreadsheet"; model: ParsedWorkbook; fileName: string }
   | { kind: "code"; content: string; language: string | null }
-  | { kind: "text"; content: string };
+  | { kind: "text"; content: string }
+  /** 文档画布：内容不走 payload（流式块经 docCanvasStore 直达 viewer），
+   *  载荷只携带壳层需要的元信息。 */
+  | { kind: "canvas"; fileName: string };
 
 export type PreviewState =
   | { status: "idle" }
