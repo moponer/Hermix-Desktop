@@ -1,6 +1,6 @@
 # Decision Note: hermix-viewer 资源管理器化 + @hermix/preview 共享包
 
-Status: implemented — viewer 已接入共享渲染包并重写为三栏资源管理器；桌面端切换待主人 MarkdownBody 改造落定后单向合入
+Status: implemented — viewer 已接入共享渲染包并重写为三栏资源管理器；桌面端同日完成单向合入，`components/preview/*` 本地副本已删除，两端共用 `packages/preview` 一份实现
 
 ## Decision
 
@@ -13,7 +13,7 @@ Status: implemented — viewer 已接入共享渲染包并重写为三栏资源�
 - `fs?: { listDir, stat, parent, drives, search }` —— desktop 没有需要，viewer 有
 - `revealInExplorer?` / `openWithSystem?` —— desktop 留空，viewer 接系统调用
 
-桌面端这次**没有**切换到包，仍走自己的 `components/preview/*`（AGENTS.md 提醒主人在并行改 `MarkdownBody.tsx`，避开）。所有桌面端测试 297/297 通过；后续主人完成 `MarkdownBody` 改造后再合并是低风险、纯 import 路径替换。
+桌面端起初**没有**切换到包（抽包时主人正在并行改 `MarkdownBody.tsx`，避开同批文件）；MarkdownBody 改造落定后已于同日完成单向合入：`PreviewPanel` 改 import 共享包，`components/preview/*` 与 `lib/workbook` / `markdownDoc` / `localAssets` / `preview-doc.css` 副本全部删除。合入细节见下方「桌面端合入记录」。
 
 ## Alternatives considered
 
@@ -31,7 +31,7 @@ Status: implemented — viewer 已接入共享渲染包并重写为三栏资源�
 
 ## Consequences
 
-- `packages/preview/` 形成新的共享渲染层，**29 个文件 / ~4.6k 行**（含 26 个 workbook 用例、7 个 resolveKind 用例、14 个 markdownDoc 用例、preview-doc.css），与 `desktop-tauri/src/components/preview/*` 短暂并存。后续主人空闲时做 desktop → 包的单向切换。
+- `packages/preview/` 形成共享渲染层，desktop 与 viewer 都从它取；桌面端已无本地副本（合入时删除 `components/preview/*`、`lib/workbook|markdownDoc|localAssets`、`styles/preview-doc.css` 及 fixture，约 3.5k 行重复归一）。
 - 桌面端测试无回归：31 文件 / 297 用例 全绿（之前 283 → 297 是把 markdownDoc 的 14 个用例 + resolveKind 的 7 个用例 通过新结构跑出来的）。
 - viewer 端有自己的"资源管理器 UX"：路径栏（可编辑 + breadcrumb）、后退/前进/上一级/刷新、隐藏文件开关、当前目录子串搜索、列表（名称/大小/修改时间）、右键菜单（进入/复制路径/系统打开/资源管理器中显示）、多 tab 预览、Markdown/Excel/Word/PPT/HTML/图片/PDF/代码/纯文本全保真。
 - 旧 `apps/viewer/src/md.ts`（viewer 自研极简 Markdown 渲染）随重写删除——它正是备选方案 4 拒绝的那条路，留着就是死代码。
@@ -41,14 +41,23 @@ Status: implemented — viewer 已接入共享渲染包并重写为三栏资源�
 - RFC 3339 字符串化时间走极简实现（`civil_from_days` Howard Hinnant 算法），不引 chrono —— viewer 是 sidecar，多一个 crate 不划算。
 - `bases/viewer/capabilities/default.json` 不需要手动注册新命令（Tauri v2 同 crate 自定义命令默认允许）。
 
+## 桌面端合入记录（同日完成）
+
+- **Import 切换**：`PreviewPanel.tsx` 改从 `@hermix/preview` 取 `loadPreview` / `PreviewSurface` / `resolveKind` / `supportsTextView` 等；包的 `LoadRequest` 要求显式 `kind`（旧桌面 `LOADERS[kind]` 表随之废弃）。`resolveKind` 的第二参从 `ArtifactKind` 换成 `{ legacy }` hint，desktop 侧映射 `kind === "office" → { legacy: true }`。
+- **依赖倒置注入口**：桌面预览与包的差异点不靠复制解决，包 `PreviewSurface` 增加 `renderCode`（desktop 注入自己的 `CodeView`，保留 Ln/Col 光标与换行开关）与 `onOpenImage`（注入灯箱 `openImageViewer`）两个可选 prop；viewer 不传即走默认 CodeBlock / 无灯箱。原 `PreviewSurfaceWithCursor` 兼容壳无消费方，删除。
+- **softBreaks 入包**：桌面 MarkdownView 独有的 `hardenSoftLineBreaks`（软换行强化）包侧此前没有——迁入 `packages/preview/src/lib/softBreaks.ts` 并在包 MarkdownView 应用，viewer 因此同步受益。
+- **rightSidebarUtils 收敛为 re-export**：扩展名分流那批纯函数与包 `previewUtils` 逐字一致，本地实现删除、改为 `export ... from "@hermix/preview"`；本文件只剩右栏 UI 关注的事（标签、格式化、面包屑）。
+- **按笔记原文执行需修正两处**（原文与现实不符，已按实际执行）：① `components/CodeBlock.tsx` 不存在——CodeBlock 内嵌在 `MarkdownBody.tsx` 里；② `lib/codeHighlight.ts` 有 `MarkdownBody` + `CodeView` 两个包外消费方，**不能**随合入删除，保留（`lib/softBreaks.ts` 同理保留，MarkdownBody 在用）。MarkdownBody 内嵌 CodeBlock 与包 CodeBlock 的统一留作后续（条件：MarkdownBody 改造窗口）。
+- **vitest 接管包用例**：desktop `vitest.config.ts` include 扩到 `node_modules/@hermix/preview/src/**` 并配 `resolve.preserveSymlinks`——包测试**必须经符号链接路径**加载，若按真实路径（`packages/preview/src/…`）收集，包内 `import "xlsx"` 等裸导入从文件位置向上找不到 node_modules（pnpm 邻位依赖在链接目标侧）。exclude 需显式收窄（默认值 `**/node_modules/**` 会把包用例一起排掉）。31 文件 / 297 用例与合入前同数，51 个包用例从桌面副本无缝转为包本体。
+
 ## Reintroduction conditions
 
-- 桌面端要切到共享包时：把 `apps/desktop-tauri/src/components/preview/*` 缩成 4 行 re-export，新增 `lib/fileSourceAdapter.ts`（包 `tryReadArtifact*` / `tryConvertDocumentToMarkdown`），`PreviewPanel.tsx` 改 `import { ... } from "@hermix/preview"`，再删桌面里的 `CodeBlock.tsx` 与 `codeHighlight.ts`（desktop 的 `MarkdownBody.tsx` 仍走自己的 `CodeBlock`，等主人合并后再说）。
-- **切换前先给包的用例找 runner**：桌面 vitest 的 include 是 `src/**/*.test.{ts,tsx}`（`vitest.config.ts:14`），扫不到 `packages/preview/src/`——包内 4 个测试文件共 51 个用例（workbook 26 / markdownDoc 14 / resolveKind 7 / preview-md-list 4）目前靠桌面侧同名副本间接覆盖。删桌面副本的同时必须把 `vitest.config.ts` 的 include 扩到 `../../packages/preview/src/**`（或给包加自己的 test script），否则这 51 个用例随副本一起静默停跑。
-- viewer 仍依赖 `@hermix/preview` 的 path link；如要发布给其它工程，package.json `main`/`types`/`exports` 已经指向 `./src/index.ts`，搬到独立仓库只需把 import 改 workspace 形式。
-- 增加新文件类型：viewer 的 `classify()` 加分支；`size_limit_for_ext()` 加一行；桌面端 `rightSidebarUtils` 的 `officeExtGroup` 等已是共享，扩 `FRONTEND_PARSE_EXTS` 即可。
+- 恢复桌面本地副本的条件：共享包 path 依赖被证明不可行（如要发布独立仓库而 symlink 工具链不可用）。届时从 git 历史恢复 `components/preview/*`，并同步恢复 vitest include。
+- **统一 MarkdownBody 内嵌 CodeBlock 与包 CodeBlock**：待 MarkdownBody 改造窗口。届时包需导出 `codeHighlight`（或 MarkdownBody 改用包 CodeBlock 的形状），然后删桌面 `lib/codeHighlight.ts`；`lib/softBreaks.ts` 已入包，桌面副本届时可一并删（改为从包 import）。
 
 ## 验证
+
+抽包当时（viewer 侧）：
 
 - `cargo check -p hermix-viewer` exit 0（4.74s，0 warning）
 - `apps/viewer tsc --noEmit` exit 0
@@ -56,3 +65,11 @@ Status: implemented — viewer 已接入共享渲染包并重写为三栏资源�
 - `apps/desktop-tauri vitest run` 31 文件 / 297 用例 全绿（79.49s）
 - `apps/desktop-tauri tsc --noEmit` exit 0
 - `apps/desktop-tauri vite build`：IDE shell 内两次均失败于清空 outDir——WorkBuddy 经 `NODE_OPTIONS` 注入的 node shim 把 vite 的 `rmSync`（`emptyOutDir`）劫持到 genie-trash 回收站二进制，该二进制 ETIMEDOUT（15219 个模块 transform 全过，死在渲染 chunks 之前）。环境问题，非代码回归。IDE 内跑 `vite build` / `npm run build` 的处方：**`CODEBUDDY_SAFE_DELETE_ENABLED=0 <命令>`**（shim 自带的退出开关，只关删除劫持、保留语言 shim，实测 exit 0）；`env -u NODE_OPTIONS` 为全剥方案，亦可。
+
+桌面端单向合入后：
+
+- `apps/desktop-tauri tsc --noEmit` exit 0；`apps/viewer tsc --noEmit` exit 0
+- `apps/desktop-tauri vitest run` 31 文件 / 297 用例 全绿（含包内 51 用例）
+- `apps/desktop-tauri vite build` exit 0（4m12s，`CODEBUDDY_SAFE_DELETE_ENABLED=0`；超 2600KB chunk 警告为既有已知项）
+- `apps/viewer vite build` exit 0（38.18s，包侧改动后回归）
+- `npx -y impeccable@4.1.0 detect`（PreviewPanel / 包 PreviewSurface / 包 MarkdownView / fileSourceAdapter）exit 0

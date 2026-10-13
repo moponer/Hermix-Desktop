@@ -4,30 +4,73 @@
 // 所有"某种文件长什么样"的知识都在 PreviewSurface / viewers 里，
 // 且面板与全屏共用同一份渲染，不存在第二处 switch。
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   X, Copy, ExternalLink, FolderOpen,
   Loader2, AlertTriangle, WrapText, FileText, Code2, Maximize2, Minimize2,
 } from "lucide-react";
 import { clsx } from "clsx";
-import type { Artifact } from "../utils/artifacts";
-import { openExternalUrl } from "../desktopBridge";
-import { FileTypeIcon } from "./FileTypeIcon";
-import { formatBytes, fileTypeLabel, totalRows, modelLabel } from "./rightSidebarUtils";
-import { resolveKind, applyViewMode } from "./preview/resolveKind";
-import { LOADERS } from "./preview/loaders";
-import { PreviewSurface } from "./preview/PreviewSurface";
 import {
+  loadPreview,
+  PreviewSurface,
+  applyViewMode,
+  resolveKind,
   supportsTextView,
   supportsZoom,
+  type ArtifactKindHint,
   type PreviewPayload,
   type PreviewState,
   type ViewMode,
-} from "./preview/types";
+} from "@hermix/preview";
+import type { Artifact } from "../utils/artifacts";
+import { openExternalUrl } from "../desktopBridge";
+import { desktopFileSource } from "../lib/fileSourceAdapter";
+import { CodeView } from "./CodeView";
+import { openImageViewer } from "./imageViewer";
+import { FileTypeIcon } from "./FileTypeIcon";
+import { formatBytes, fileTypeLabel, totalRows, modelLabel } from "./rightSidebarUtils";
 
 const ZOOM_MIN = 50;
 const ZOOM_MAX = 200;
+
+/** ArtifactKind → 包侧 resolveKind 的 hint：后端给老二进制 Office 打的
+ *  "office" 标签在包里叫 legacy（走 markitdown 文本路径）。 */
+function kindHint(artifact: Artifact | null): ArtifactKindHint | undefined {
+  return artifact?.kind === "office" ? { legacy: true } : undefined;
+}
+
+/** 代码视图的行号由面板持有（状态栏要显示 Ln/Col），这里只做受控渲染。
+ *  经 PreviewSurface 的 renderCode 注入口喂给共享渲染层。 */
+function CodeSurface({
+  content,
+  language,
+  wrap,
+  isDark,
+  cursor,
+  onCursorChange,
+}: {
+  content: string;
+  language: string | null;
+  wrap: boolean;
+  isDark: boolean;
+  cursor: { line: number; col: number };
+  onCursorChange: (c: { line: number; col: number }) => void;
+}) {
+  if (!language) {
+    return <pre className="preview-plain-text">{content}</pre>;
+  }
+  return (
+    <CodeView
+      source={content}
+      language={language}
+      wrap={wrap}
+      isDark={isDark}
+      activeLine={cursor.line}
+      onLineClick={(line) => onCursorChange({ line, col: 1 })}
+    />
+  );
+}
 
 /** 状态栏右段的补充信息，按载荷种类给出。 */
 function statusExtra(payload: PreviewPayload): string | null {
@@ -79,6 +122,10 @@ export function PreviewPanel({
   const [zoom, setZoom] = useState(100);
   const [cursor, setCursor] = useState({ line: 1, col: 1 });
 
+  // FileSource 绑定 workspaceRoot（包加载器只收 path，root 在这里闭包进
+  // artifactReader 的祖先回溯链）；root 变了才重建，避免每渲染一份新 source。
+  const source = useMemo(() => desktopFileSource(workspaceRoot), [workspaceRoot]);
+
   // 换文件回到排版视图并复位光标，避免上一个文件的选择泄漏过来。
   useEffect(() => {
     setViewMode("layout");
@@ -92,16 +139,20 @@ export function PreviewPanel({
       setResolvedPath(null);
       return;
     }
-    const kind = applyViewMode(resolveKind(artifact.name, artifact.kind), viewMode);
+    const kind = applyViewMode(resolveKind(artifact.name, kindHint(artifact)), viewMode);
     let cancelled = false;
     setState({ status: "loading", kind });
 
-    LOADERS[kind]({
-      name: artifact.name,
-      path: artifact.path,
-      workspaceRoot,
-      viewMode,
-    })
+    loadPreview(
+      {
+        name: artifact.name,
+        path: artifact.path,
+        workspaceRoot,
+        viewMode,
+        kind,
+      },
+      source,
+    )
       .then((out) => {
         if (cancelled) return;
         if (!out.ok) {
@@ -123,7 +174,7 @@ export function PreviewPanel({
     return () => {
       cancelled = true;
     };
-  }, [artifact?.path, artifact?.name, artifact?.kind, workspaceRoot, viewMode]);
+  }, [artifact?.path, artifact?.name, artifact?.kind, workspaceRoot, viewMode, source]);
 
   useEffect(() => {
     if (!fullscreen) return;
@@ -146,7 +197,7 @@ export function PreviewPanel({
 
   if (!artifact) return null;
 
-  const baseKind = resolveKind(artifact.name, artifact.kind);
+  const baseKind = resolveKind(artifact.name, kindHint(artifact));
   const cleanPath = (resolvedPath ?? artifact.path).replace(/^\\\\\?\\/, "");
   const openContainingDir = () => {
     const dir = cleanPath.replace(/[/\\][^/\\]+$/, "");
@@ -313,13 +364,28 @@ export function PreviewPanel({
     return (
       <PreviewSurface
         payload={state.payload}
-        wrap={wrap}
+        source={source}
         isDark={isDark}
         fileName={artifact.name}
         resolvedPath={resolvedPath}
         zoom={zoom}
-        cursor={cursor}
-        onCursorChange={setCursor}
+        onOpenExternalUrl={openExternalUrl}
+        renderCode={(content, language) => (
+          <CodeSurface
+            content={content}
+            language={language}
+            wrap={wrap}
+            isDark={isDark}
+            cursor={cursor}
+            onCursorChange={setCursor}
+          />
+        )}
+        onOpenImage={(bytes, mime, name) =>
+          openImageViewer({
+            src: URL.createObjectURL(new Blob([bytes], { type: mime })),
+            name,
+          })
+        }
       />
     );
   };

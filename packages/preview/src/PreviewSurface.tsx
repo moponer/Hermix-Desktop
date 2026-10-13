@@ -50,6 +50,12 @@ function LazyEngine({ children }: { children: React.ReactNode }) {
  * 留这两个 prop 是为了 CodeView 风格切换（CodeView 实例由桌面面板持有，
  * viewer 走共享 CodeBlock）。viewer 当前不用 CodeView，但保留签名便于两
  * 端对齐。
+ *
+ * 两个可选注入口是给 desktop 的差异点（依赖倒置，包不反向依赖应用层）：
+ *   - `renderCode`：代码载荷的渲染器。desktop 注入自己的 CodeView（带
+ *     Ln/Col 光标追踪与换行开关）；缺省用包内 CodeBlock。
+ *   - `onOpenImage`：图片点击放大。desktop 注入灯箱（openImageViewer）；
+ *     缺省无放大行为。
  */
 export function PreviewSurface({
   payload,
@@ -59,6 +65,8 @@ export function PreviewSurface({
   resolvedPath,
   zoom,
   onOpenExternalUrl,
+  renderCode,
+  onOpenImage,
 }: {
   payload: PreviewPayload;
   source: FileSource;
@@ -69,10 +77,22 @@ export function PreviewSurface({
   /** HtmlView 桥脚本点击 / 「在浏览器打开」按钮的统一出口 —— desktop
    *  走 Tauri `openExternalUrl`，viewer 走 `openWithSystem` / 浏览器。 */
   onOpenExternalUrl?: (target: string) => void;
+  /** 代码载荷渲染器（desktop 注入 CodeView；缺省包内 CodeBlock）。 */
+  renderCode?: (content: string, language: string | null) => React.ReactNode;
+  /** 图片点击放大（desktop 注入灯箱；缺省不可点）。 */
+  onOpenImage?: (bytes: Uint8Array, mime: string, fileName: string) => void;
 }) {
   switch (payload.kind) {
     case "image":
-      return <ImageView bytes={payload.bytes} mime={payload.mime} />;
+      return (
+        <ImageView
+          bytes={payload.bytes}
+          mime={payload.mime}
+          onOpenViewer={
+            onOpenImage ? () => onOpenImage(payload.bytes, payload.mime, fileName) : undefined
+          }
+        />
+      );
     case "pdf":
       return (
         <LazyEngine>
@@ -114,26 +134,9 @@ export function PreviewSurface({
     case "spreadsheet":
       return <SpreadsheetView model={payload.model} fileName={payload.fileName} zoom={zoom} />;
     case "code":
+      if (renderCode) return <>{renderCode(payload.content, payload.language)}</>;
       return <CodeBlock language={payload.language ?? "text"} code={payload.content} isDark={isDark} />;
     case "text":
       return <pre className="preview-plain-text">{payload.content}</pre>;
   }
-}
-
-/**
- * 兼容形态：把旧签名（含 cursor / wrap / CodeView 集成）保留为别名壳；
- * 调用方仍然走新签名以避免 cursor 不在 LibreOffice 渲染层中真正被读。
- */
-export function PreviewSurfaceWithCursor(props: {
-  payload: PreviewPayload;
-  source: FileSource;
-  wrap?: boolean;
-  isDark: boolean;
-  fileName: string;
-  resolvedPath: string | null;
-  zoom: number;
-  onOpenExternalUrl?: (target: string) => void;
-}) {
-  const { wrap: _wrap, ...rest } = props;
-  return <PreviewSurface {...rest} />;
 }

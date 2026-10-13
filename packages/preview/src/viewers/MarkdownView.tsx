@@ -23,6 +23,7 @@ import { Fragment, jsx, jsxs } from "react/jsx-runtime";
 import type { FileSource } from "../lib/fileSource";
 import { dirnameOf, isExternalHref, resolveRelative } from "../lib/localAssets";
 import { stripFrontmatter, extractHeadings } from "../lib/markdownDoc";
+import { hardenSoftLineBreaks } from "../lib/softBreaks";
 import { CodeBlock } from "../lib/CodeBlock";
 
 /** 解析开关。GFM 全开（表格/删除线/任务列表/脚注），rawHtml 修掉内嵌 HTML 被吞。 */
@@ -105,7 +106,10 @@ export function MarkdownView({
   const articleRef = useRef<HTMLElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  const body = useMemo(() => stripFrontmatter(content), [content]);
+  const body = useMemo(
+    () => hardenSoftLineBreaks(stripFrontmatter(content)),
+    [content],
+  );
   const headings = useMemo(() => extractHeadings(body), [body]);
 
   // 相对路径图片 → blob URL。整篇共用一份，卸载时统一回收。

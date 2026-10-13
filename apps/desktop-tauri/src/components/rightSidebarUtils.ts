@@ -1,12 +1,36 @@
 // ── Pure helpers for the right sidebar tabs ─────────────
 // 纯函数 / 常量：标签管理、格式化、扩展名与语言检测。
 // 不依赖 React，可被 ComputerTab / ProductsTab / PreviewPanel 共用。
+//
+// 扩展名分流那批纯函数已迁到 @hermix/preview（previewUtils）—— 这里
+// re-export 维持既有 import 路径，实现只剩一份；留在本文件的是右栏 UI
+// 关注的事（标签、格式化、面包屑）。
 import type { ElementType } from "react";
 import {
   FolderOpen, FileCode, FileText, FileJson, FileImage, FileType2,
 } from "lucide-react";
 import type { ArtifactKind } from "../utils/artifacts";
-import type { ParsedWorkbook } from "../lib/workbook";
+import type { ParsedWorkbook } from "@hermix/preview";
+import {
+  detectLanguage,
+  isHtmlExt,
+  isImageExt,
+  isMarkdownExt,
+} from "@hermix/preview";
+
+export {
+  IMAGE_EXT_MIME,
+  IMAGE_BYTE_LIMIT,
+  isImageExt,
+  isMarkdownExt,
+  isPdfExt,
+  isHtmlExt,
+  detectLanguage,
+  FRONTEND_PARSE_EXTS,
+  officeExtGroup,
+  needsFrontendParse,
+  type OfficeExtGroup,
+} from "@hermix/preview";
 
 // ── Tab filters (tag management) ────────────────────────
 export const FILTERS: Array<{ key: "all" | ArtifactKind; label: string; icon: ElementType }> = [
@@ -22,125 +46,6 @@ export function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
-}
-
-/* Image extensions routed through the `image` preview path. */
-export const IMAGE_EXT_MIME: Record<string, string> = {
-  png: "image/png",
-  jpg: "image/jpeg",
-  jpeg: "image/jpeg",
-  gif: "image/gif",
-  webp: "image/webp",
-  bmp: "image/bmp",
-  ico: "image/x-icon",
-  tiff: "image/tiff",
-  tif: "image/tiff",
-  // SVG 是文本没错，但它是一张**图**：走 image 路径由 <img> 渲染，既能看到
-  // 成品也不会执行脚本（走代码视图反而看不出图形长什么样）。
-  svg: "image/svg+xml",
-};
-export const IMAGE_BYTE_LIMIT = 8 * 1024 * 1024; // 8 MiB
-
-export function isImageExt(name: string): boolean {
-  const ext = name.split(".").pop()?.toLowerCase() ?? "";
-  return ext in IMAGE_EXT_MIME;
-}
-
-export function isMarkdownExt(name: string): boolean {
-  const ext = name.split(".").pop()?.toLowerCase() ?? "";
-  return ext === "md" || ext === "mdx" || ext === "markdown";
-}
-
-export function isPdfExt(name: string): boolean {
-  const ext = name.split(".").pop()?.toLowerCase() ?? "";
-  return ext === "pdf";
-}
-
-/** 有版面要渲染的网页。走 code 视图的只有它自己，切视图即可看源码。 */
-export function isHtmlExt(name: string): boolean {
-  const ext = name.split(".").pop()?.toLowerCase() ?? "";
-  return ext === "html" || ext === "htm";
-}
-
-export function detectLanguage(name: string): string | null {
-  const ext = name.split(".").pop()?.toLowerCase() ?? "";
-  const map: Record<string, string> = {
-    // 编程语言
-    ts: "typescript", tsx: "tsx", js: "javascript", jsx: "jsx",
-    mjs: "javascript", cjs: "javascript",
-    rs: "rust", py: "python", pyw: "python", go: "go", java: "java",
-    kt: "kotlin", kts: "kotlin",
-    c: "c", h: "c", cpp: "cpp", cxx: "cpp", hpp: "cpp", cc: "cpp", hh: "cpp",
-    cs: "csharp", rb: "ruby", php: "php",
-    swift: "swift", lua: "lua", dart: "dart", scala: "scala", sc: "scala",
-    ex: "elixir", exs: "elixir", hs: "haskell", nim: "nim", zig: "zig",
-    jl: "julia", r: "r", sol: "solidity", proto: "protobuf",
-    // Shell / 脚本
-    sh: "bash", bash: "bash", zsh: "bash", fish: "bash",
-    ps1: "powershell", psm1: "powershell",
-    bat: "batch", cmd: "batch",
-    // 标记 / 模板
-    css: "css", scss: "scss", less: "less",
-    html: "markup", htm: "markup", xml: "markup", svg: "markup",
-    vue: "markup", svelte: "markup", razor: "markup",
-    pug: "pug", jade: "pug", hbs: "handlebars",
-    // 数据 / 配置
-    json: "json", json5: "json5", jsonp: "jsonp",
-    yaml: "yaml", yml: "yaml", toml: "toml",
-    ini: "ini", conf: "ini", cfg: "ini", env: "properties",
-    properties: "properties", props: "properties",
-    graphql: "graphql", gql: "graphql", sql: "sql",
-    // 文档
-    md: "markdown", mdx: "markdown",
-    adoc: "asciidoc", asc: "asciidoc",
-    rst: "rest", wiki: "wiki", tex: "latex",
-    // 构建 / 工具
-    dockerfile: "docker",
-    makefile: "makefile", make: "makefile", cmake: "cmake",
-    gitignore: "ignore", nginx: "nginx",
-    vim: "vim", viml: "vim", vimrc: "vim",
-    // 其他
-    diff: "diff", patch: "diff", http: "http", regex: "regex",
-    csv: "csv", tsv: "csv", mermaid: "mermaid", git: "git",
-    txt: "text", ino: "cpp",
-  };
-  const lang = map[ext] ?? null;
-  // Markdown 走专门的 Markdown 预览路径，不走 CodeView
-  if (lang === "markdown" || lang === "text") return null;
-  return lang;
-}
-
-/** File extensions the front-end parses itself. */
-export const FRONTEND_PARSE_EXTS = new Set([
-  "xlsx", "xls", "xlsm",
-  "csv", "tsv",
-]);
-
-/**
- * Office 格式按「能否在浏览器里直接渲染」分流。
- * OOXML（docx / pptx）是 ZIP+XML，纯前端引擎可以解析；老二进制格式
- * （doc / ppt 等）结构复杂，只能抽成文本（markitdown）看。
- */
-export type OfficeExtGroup = "docx" | "pptx" | "legacy" | null;
-
-const DOCX_EXTS = new Set(["docx", "docm", "dotx", "dotm"]);
-const PPTX_EXTS = new Set(["pptx", "pptm", "potx", "potm", "ppsx", "ppsm"]);
-const LEGACY_OFFICE_EXTS = new Set([
-  "doc", "xls", "ppt", "wps", "et", "dps", "rtf",
-  "odt", "ods", "odp", "ott", "ots", "otp",
-]);
-
-export function officeExtGroup(name: string): OfficeExtGroup {
-  const ext = name.split(".").pop()?.toLowerCase() ?? "";
-  if (DOCX_EXTS.has(ext)) return "docx";
-  if (PPTX_EXTS.has(ext)) return "pptx";
-  if (LEGACY_OFFICE_EXTS.has(ext)) return "legacy";
-  return null;
-}
-
-export function needsFrontendParse(name: string): boolean {
-  const ext = name.split(".").pop()?.toLowerCase() ?? "";
-  return FRONTEND_PARSE_EXTS.has(ext);
 }
 
 export function totalRows(model: ParsedWorkbook): number {

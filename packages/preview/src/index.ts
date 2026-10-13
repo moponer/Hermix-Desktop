@@ -16,7 +16,7 @@ export type {
 } from "./types";
 export { supportsTextView, supportsZoom } from "./types";
 
-export { resolveKind, applyViewMode } from "./resolveKind";
+export { resolveKind, applyViewMode, type ArtifactKindHint } from "./resolveKind";
 
 export { buildLoaders, loadPreview } from "./loaders";
 export type { FileSource } from "./loaders";
@@ -46,8 +46,9 @@ export {
   FRONTEND_PARSE_EXTS,
 } from "./lib/previewUtils";
 
-export { PreviewSurface, PreviewSurfaceWithCursor } from "./PreviewSurface";
+export { PreviewSurface } from "./PreviewSurface";
 export { CodeBlock } from "./lib/CodeBlock";
+export { hardenSoftLineBreaks } from "./lib/softBreaks";
 
 export { MarkdownView } from "./viewers/MarkdownView";
 export { HtmlView } from "./viewers/HtmlView";
