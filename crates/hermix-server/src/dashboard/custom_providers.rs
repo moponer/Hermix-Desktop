@@ -166,17 +166,21 @@ pub async fn create_custom_provider(
     State(state): State<HttpServerState>,
     Json(req): Json<CreateCustomProviderRequest>,
 ) -> Result<Json<OkResponse>, HttpError> {
-    // Validate ID
-    if !req.id.starts_with("custom-") || req.id.len() < 8 {
+    // Read config
+    let config_path = state.hermix_home.join("config.yaml");
+    let mut config = read_gateway_config(&state)?;
+
+    // 命名规范只约束**新建**：config 里已存在的 id（历史遗留的不规范 id，
+    // 如手工写进 config.yaml 或旧版本签发的）视为更新，放行——否则这些
+    // 条目永远无法编辑，前端保存必 400。
+    if !config.llm_providers.contains_key(&req.id)
+        && (!req.id.starts_with("custom-") || req.id.len() < 8)
+    {
         return Err(HttpError {
             status: axum::http::StatusCode::BAD_REQUEST,
             message: "Provider ID must start with 'custom-' and be at least 8 characters".to_string(),
         });
     }
-
-    // Read config
-    let config_path = state.hermix_home.join("config.yaml");
-    let mut config = read_gateway_config(&state)?;
 
     // Insert or update provider
     let entry = config
@@ -256,15 +260,17 @@ pub async fn delete_custom_provider(
     State(state): State<HttpServerState>,
     axum::extract::Path(id): axum::extract::Path<String>,
 ) -> Result<Json<OkResponse>, HttpError> {
-    if !id.starts_with("custom-") {
+    let config_path = state.hermix_home.join("config.yaml");
+    let mut config = read_gateway_config(&state)?;
+
+    // 命名规范只拦「不在册」的 id；config 里已有的（历史遗留不规范 id）
+    // 必须可删，否则遗留条目删不掉。
+    if !id.starts_with("custom-") && !config.llm_providers.contains_key(&id) {
         return Err(HttpError {
             status: axum::http::StatusCode::BAD_REQUEST,
             message: "Provider ID must start with 'custom-'".to_string(),
         });
     }
-
-    let config_path = state.hermix_home.join("config.yaml");
-    let mut config = read_gateway_config(&state)?;
 
     config.llm_providers.remove(&id);
 
@@ -666,11 +672,12 @@ pub async fn update_model_contexts(
     axum::extract::Path(id): axum::extract::Path<String>,
     Json(req): Json<UpdateModelContextsRequest>,
 ) -> Result<Json<OkResponse>, HttpError> {
-    if !id.starts_with("custom-") {
-        return Err(HttpError { status: axum::http::StatusCode::BAD_REQUEST, message: "Provider ID must start with 'custom-'".to_string() });
-    }
     let config_path = state.hermix_home.join("config.yaml");
     let mut config = read_gateway_config(&state)?;
+    // 与 create/delete 一致：命名规范只拦「不在册」的 id，历史遗留条目可改。
+    if !id.starts_with("custom-") && !config.llm_providers.contains_key(&id) {
+        return Err(HttpError { status: axum::http::StatusCode::BAD_REQUEST, message: "Provider ID must start with 'custom-'".to_string() });
+    }
     let model_contexts: HashMap<String, u64> = req.model_contexts.into_iter().filter(|(_, v)| *v > 0).collect();
     let count = model_contexts.len();
     config.llm_providers.entry(id.clone()).or_insert_with(hermix_config::LlmProviderConfig::default).model_contexts = model_contexts;
