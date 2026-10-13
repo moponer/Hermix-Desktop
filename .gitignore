@@ -43,27 +43,9 @@ apps/desktop-tauri/dist/
 # 临时构建产物目录 (某次 CARGO_TARGET_DIR=_hxbuild 构建遗留, 全部 .rlib/.rmeta)
 _hxbuild/
 
-# Custom App Shell — 独立 Tauri 子项目源码跟踪，编译产物不跟踪
-# 源码: main.rs / Cargo.toml / ui/index.html / tauri.conf.json 全部 commit
-# 产物: cargo build 后 custom-app-shell.exe + WebView2Loader.dll 复制到
-#       apps/desktop-tauri/src-tauri/resources/shell/ (作为 binary asset 跟踪)
-#
-# 双 target dir 注意:
-#   - release profile: 走根 .cargo/config.toml 的 target-dir = "release/target"
-#     (已 gitignore 第 60 行 /release/**)
-#   - debug profile: 用默认 nested target/ (cargo build 不带 --release 时)
-#   - cargo check (无 --release): 也是 debug profile 走 nested target/
-# 所以两个路径都要 ignore
-apps/custom-app-shell/src-tauri/target/
-apps/custom-app-shell/src-tauri/gen/
-
-# Sidecar binaries (officecli tracked, hermix build artifact ignored)
+# Sidecar binaries（构建产物，一律不提交；源码在 crates/ 与 apps/ 下，
+# 由 apps/desktop-tauri/scripts/ensure-sidecar.mjs 在打包前刷进 binaries/）
 apps/desktop-tauri/src-tauri/binaries/*
-!apps/desktop-tauri/src-tauri/binaries/officecli-x86_64-pc-windows-msvc.exe
-
-# Tauri .cargo (only config.toml is source)
-apps/desktop-tauri/src-tauri/.cargo/*
-!apps/desktop-tauri/src-tauri/.cargo/config.toml
 
 # Release directory (build outputs)
 /release/**
@@ -81,11 +63,6 @@ target_check_agent/
 
 # 本地 npm 配置（可能含凭证，不随源码提交）
 apps/desktop-tauri/.npmrc
-
-# Mobile/web app dev
-apps/mobile-app/.expo/
-apps/mobile-app/.metadata
-apps/web-app/.env.local
 
 # Dev-mode data (runtime artifacts, not source)
 hermix-data/
@@ -131,26 +108,6 @@ _count_lines.ps1
 
 # Tauri sidecar binaries (build outputs, NOT source — never commit)
 apps/desktop-tauri/src-tauri/binaries/
-/officecli.exe
-/⚠️
-
-# OCR models (~21MB) — NOT committed to git (keeps remote repo small).
-# Fetched at build/dev time by scripts/download-ocr-models.ps1 into this dir,
-# then bundled into the NSIS package via tauri.conf.json `bundle.resources`
-# and copied to hermix_home()/ocr/ on first run by ensure_ocr_models().
-# Offline build escape hatch: pre-place the 3 files here manually.
-apps/desktop-tauri/src-tauri/resources/ocr/
-
-# Custom-app runtime binaries (~12MB) — NOT committed to git (keeps remote
-# repo small). Built/fetched at build/dev time by:
-#   - scripts/build-app-shell.ps1  -> resources/shell/{app-shell.exe,WebView2Loader.dll}
-#   - scripts/download-esbuild.ps1  -> resources/esbuild/esbuild.exe
-# then bundled into the NSIS package via tauri.conf.json `bundle.resources`
-# and copied to hermix_home()/shell/ + hermix_home()/esbuild/ on first run by
-# ensure_app_shell_and_esbuild(). Offline build escape hatch: pre-place the
-# files here manually.
-apps/desktop-tauri/src-tauri/resources/shell/
-apps/desktop-tauri/src-tauri/resources/esbuild/
 
 # Editor / merge backup artifacts (never commit)
 *.orig
