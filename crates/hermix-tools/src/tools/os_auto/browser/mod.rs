@@ -21,6 +21,7 @@
 pub mod a11y;
 pub mod job;
 pub mod launch;
+pub mod screencast;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
