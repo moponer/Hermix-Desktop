@@ -10,6 +10,7 @@ import type {
   PrefetchResultEntry,
 } from "./useStreamChat";
 import { narrowSectionGateReport } from "./streamChatUtils";
+import { docCanvasStore } from "../lib/docCanvasStore";
 
 /** Context-usage snapshot pushed by the backend each turn. */
 export interface ContextUsage {
@@ -236,9 +237,17 @@ export function createMessageHandler(
           ctx.hasContent = true;
           ctx.hasAnyStreamEvent = true;
           ctx.setLastActivityAt(Date.now());
-          ctx.fullText += piece;
-          ctx.chunkBuffer += piece;
-          ctx.scheduleChunkFlush();
+          // 文档画布分流（2026-10-13）：`<hermix-canvas>` marker 之后的
+          // 增量归画布（store 吸收，块级缓冲后经 postMessage 上屏），
+          // marker 之前的归聊天气泡。feed 返回本次应进气泡的文本（可能
+          // 为空）；跨 chunk 边界的 marker 由 store 缓冲拼合。
+          // 见 lib/docCanvasStore.ts 顶部协议与不变量说明。
+          const bubblePiece = docCanvasStore.feed(piece);
+          if (bubblePiece) {
+            ctx.fullText += bubblePiece;
+            ctx.chunkBuffer += bubblePiece;
+            ctx.scheduleChunkFlush();
+          }
         }
         return;
       }
@@ -920,6 +929,15 @@ export function createMessageHandler(
       }
 
       if (evtType === "done") {
+        // 文档画布：流结束强制收口。开启态下未闭合块的缓冲整体上屏；
+        // 未开启态的疑似 marker 前缀残留（流断在字面量上）补回气泡，
+        // store 不静默吞正文。
+        const canvasLeftover = docCanvasStore.close();
+        if (canvasLeftover) {
+          ctx.fullText += canvasLeftover;
+          ctx.chunkBuffer += canvasLeftover;
+          ctx.scheduleChunkFlush();
+        }
         const reason: string | undefined =
           data?.finish_reason || data?.event?.finish_reason;
         // Terminal outcome classification from the server.
@@ -973,6 +991,13 @@ export function createMessageHandler(
       }
 
       if (evtType === "error") {
+        // 文档画布：错误路径同样收口，残留补回气泡。
+        const canvasLeftover = docCanvasStore.close();
+        if (canvasLeftover) {
+          ctx.fullText += canvasLeftover;
+          ctx.chunkBuffer += canvasLeftover;
+          ctx.scheduleChunkFlush();
+        }
         const errMsg = data?.message || data?.event?.message || "Stream error";
         const errDetail = data?.detail || data?.event?.detail;
         const errKind = data?.code || data?.event?.code;
