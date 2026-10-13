@@ -110,8 +110,8 @@ function PathLink({ path, icons, onClick }: PathLinkProps) {
       {/* 16px：图标是「彩色方块 + 白色扩展名字母」（PDF / TS / W），字母在
           24 viewBox 里只有 7.5–10.5px，按 13px 渲染出来字母约 5.7px ——
           小到只能看见一个色块，认不出是哪种文件。16px 才让字母够辨读。
-          正文是中文时汉字字面占满整个 em box（约 15px 高），不是拉丁文的
-          cap 高度；图标再配 CSS 的 translateY(2px)（见 components-prose.css
+          正文是中文时汉字字面占满整个 em box（--text-body 14px），不是拉丁文
+          的 cap 高度；图标再配 CSS 的 translateY(2px)（见 components-prose.css
           的 .md-path-link__icon）光学居中于汉字行。 */}
       {showIcon && <FileTypeIcon name={name} size={16} className="md-path-link__icon" />}
       {/* 只显示文件名：正文里写的是一整串 `<repo-parent>\...\db1.py`，铺满整行
