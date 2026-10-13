@@ -240,6 +240,13 @@ export function buildLoaders(source: FileSource): Record<PreviewKind, PreviewLoa
     spreadsheet: spreadsheetLoader(source),
     code: textLoader(source),
     text: textLoader(source),
+    // canvas 载荷不经过文件加载（内容经 docCanvasStore 流式直达 viewer），
+    // loader 表穷尽 Record<PreviewKind, …> 需要一个条目；运行时不可达，
+    // 返回明确错误的兜底而非省略（省略会让未来新增文件型 canvas 时静默失配）。
+    canvas: async () => ({
+      ok: false as const,
+      message: "文档画布由对话流驱动，没有对应的文件路径。",
+    }),
   };
 }
 

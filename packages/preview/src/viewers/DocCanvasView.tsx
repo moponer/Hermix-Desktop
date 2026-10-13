@@ -105,28 +105,40 @@ export function DocCanvasView({
   const [meta, setMeta] = useState<CanvasMeta>(docCanvasStore.getMeta());
   const [editing, setEditing] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  /** 已投递到当前 iframe 的最大块下标 + 1。订阅块与 onLoad 重放共用
+   *  这一个游标：两边都以它为起点发送，恰好一次（修复 iframe 重载
+   *  期间订阅块与重放双重投递的竞态）。几何切换（新画布）时归零。 */
+  const sentCursorRef = useRef(0);
 
   // 几何变化（新画布开启）→ 重建 srcDoc。低频：一份回复至多一次。
   const srcDoc = useMemo(() => canvasShell(meta.geometry ?? "a4"), [meta.geometry]);
+  if (meta.geometry === null) sentCursorRef.current = 0;
+
+  // 元信息订阅：壳层的块数 / 生成中 / 收口状态随 store 刷新（store 侧
+  // 已合并到微任务，多块一帧只触发一次 React 更新）。
+  useEffect(() => docCanvasStore.onMeta(setMeta), []);
 
   // 块数据不经 React：订阅 store 直接 postMessage 进 iframe。
   // iframe 未就绪时块已记入 store.blocks，onLoad 重放兜底（见下）。
   useEffect(() => {
-    return docCanvasStore.onBlock((html) => {
+    return docCanvasStore.onBlock((html, index) => {
+      if (index < sentCursorRef.current) return; // 恰好一次
+      sentCursorRef.current = index + 1;
       iframeRef.current?.contentWindow?.postMessage({ hermixCanvasBlock: html }, "*");
     });
   }, []);
 
-  // iframe 就绪：重放 store 块历史。onLoad 前经 postMessage 发出的块
-  // 会随 srcDoc 重置丢失，重放是唯一可靠通道；onLoad 后的块走订阅
-  // 通道。渲染脚本端不做去重——重放发生在任何订阅块到达之前
-  //（onLoad 先于后续块事件），两路恰好一次。
+  // iframe 就绪：从游标起重放剩余块历史。onLoad 前经订阅通道发出的块
+  // 会随 srcDoc 重置丢失——游标是唯一真相：重放 = blocks[sentCursor..]，
+  // 两条路合计恰好一次。
   const handleIframeLoad = () => {
     const win = iframeRef.current?.contentWindow;
     if (!win) return;
-    for (const block of docCanvasStore.getBlocks()) {
-      win.postMessage({ hermixCanvasBlock: block }, "*");
+    const blocks = docCanvasStore.getBlocks();
+    for (let i = sentCursorRef.current; i < blocks.length; i++) {
+      win.postMessage({ hermixCanvasBlock: blocks[i] }, "*");
     }
+    sentCursorRef.current = blocks.length;
   };
 
   // 编辑回传：整份 HTML 交给宿主（导出旁路用）。

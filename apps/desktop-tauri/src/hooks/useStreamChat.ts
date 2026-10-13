@@ -11,6 +11,7 @@ import {
   stripActivityMarkers,
 } from "./streamChatUtils";
 import { streamChannelName } from "../api";
+import { docCanvasStore } from "@hermix/preview";
 
 /**
  * Single row in the live task list. Mirrors
@@ -698,6 +699,18 @@ export function useStreamChat(activeSessionId: string | null) {
           const pending = ctx.chunkBuffer;
           ctx.chunkBuffer = "";
           if (pending) callbacks.onChunk?.(pending);
+
+          // 文档画布收口（所有终态的唯一漏斗）：用户点停止（reason="stop"，
+          // 不经过 parser 的 done 分支）、WS 断连 partial、超时、错误——
+          // 都要把画布从"生成中"收口，未闭合块的缓冲整体上屏；未开启态
+          // 的疑似 marker 前缀残留补回正文。done/error 分支已先各自调过
+          // close()，这里是幂等的二次调用（store 内 doneRef 语义由
+          // open/geometry 判断，重复 close 无副作用）。
+          const canvasLeftover = docCanvasStore.close();
+          if (canvasLeftover) {
+            ctx.fullText += canvasLeftover;
+            callbacks.onChunk?.(canvasLeftover);
+          }
 
           ctx.doneRef.current = true;
           // Stream is ending (done/error/cancel) — clear any in-flight

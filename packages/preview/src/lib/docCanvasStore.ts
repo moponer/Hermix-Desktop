@@ -45,7 +45,8 @@ export interface CanvasMeta {
 }
 
 type MetaListener = (meta: CanvasMeta) => void;
-type BlockListener = (html: string) => void;
+/** index = 该块在 getBlocks() 历史里的下标，viewer 用它做恰好一次投递。 */
+type BlockListener = (html: string, index: number) => void;
 
 /**
  * 文档画布 store。一次会话至多一个活动画布；新一轮带 marker 的回复
@@ -205,7 +206,8 @@ export class DocCanvasStore {
     if (!html.trim()) return;
     this.blocks.push(html);
     this.meta = { ...this.meta, blockCount: this.meta.blockCount + 1 };
-    for (const fn of this.blockListeners) fn(html);
+    const index = this.blocks.length - 1;
+    for (const fn of this.blockListeners) fn(html, index);
     this.scheduleMetaEmit();
   }
 

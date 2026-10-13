@@ -346,15 +346,20 @@ setPage("chat");
     setRightOpen(true);
   }, []);
 
-  // 订阅画布元信息：marker 首次命中（geometry 从 null 变为有值）自动开
-  // 画布 tab。只挂一次；打开动作本身走 rAF 延帧。
+  // 订阅画布元信息：画布开始流式增长时自动开画布 tab。两个触发边沿：
+  //  - geometry null→有值（marker 首次命中，本会话第一份画布）
+  //  - closed true→false（close() 后新一轮回复又开了画布——第二份、
+  //    第三份…也要把面板带回用户眼前）
+  // 只挂一次；打开动作本身走 rAF 延帧。
   useEffect(() => {
-    let lastGeometry: string | null = docCanvasStore.getMeta().geometry;
+    const initial = docCanvasStore.getMeta();
+    let wasIdle = initial.geometry === null || initial.closed;
     return docCanvasStore.onMeta((m) => {
-      if (m.geometry !== null && lastGeometry === null) {
+      const idle = m.geometry === null || m.closed;
+      if (!idle && wasIdle) {
         requestAnimationFrame(() => openCanvasTab());
       }
-      lastGeometry = m.geometry;
+      wasIdle = idle;
     });
   }, [openCanvasTab]);
 
