@@ -684,9 +684,23 @@ async fn capture(page: &Page, full_page: bool) -> Result<Vec<u8>, ToolError> {
         })
         .await
         .map_err(|e| ToolError::ExecutionFailed(format!("截图失败: {e}")))?;
-    // CDP returns base64; `Binary` is base64 on the wire and bytes on access.
-    let bytes: &[u8] = shot.result.data.as_ref();
-    Ok(bytes.to_vec())
+    decode_cdp_binary(&shot.result.data)
+}
+
+/// CDP hands binary payloads back as base64 **text**.
+///
+/// `chromiumoxide_types::Binary` looks like it decodes — it implements
+/// `AsRef<[u8]>` — but that impl is `self.0.as_bytes()`, i.e. the ASCII of the
+/// base64 string. Trusting it writes a text file named `.png` and attaches it
+/// as `image/png`, which no renderer will display.
+fn decode_cdp_binary(data: &chromiumoxide::types::Binary) -> Result<Vec<u8>, ToolError> {
+    use base64::Engine as _;
+    // Annotated because `Binary` implements both `AsRef<str>` and
+    // `AsRef<[u8]>`; only the str form is the base64 payload.
+    let encoded: &str = data.as_ref();
+    base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .map_err(|e| ToolError::ExecutionFailed(format!("CDP base64 解码失败: {e}")))
 }
 
 /// The saved path is the last non-empty line, which is what makes this parse
@@ -768,6 +782,24 @@ mod tests {
             assert!(!desc.trim().is_empty(), "{name}");
             assert!(!name.is_empty());
         }
+    }
+
+    #[test]
+    fn cdp_binary_is_base64_text_and_needs_decoding() {
+        // 1x1 transparent PNG. Regression guard: `Binary::as_ref::<[u8]>()`
+        // yields these ASCII bytes, not the image, and writing *those* to a
+        // `.png` produces a file nothing can render.
+        const PNG_B64: &str =
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+        let binary = chromiumoxide::types::Binary::from(PNG_B64.to_string());
+        let raw: &[u8] = binary.as_ref();
+        assert_eq!(
+            raw,
+            PNG_B64.as_bytes(),
+            "AsRef<[u8]> must stay understood as \"the base64 text\", not the image"
+        );
+        let png = decode_cdp_binary(&binary).expect("decodes");
+        assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n", "magic bytes after decode");
     }
 
     #[test]

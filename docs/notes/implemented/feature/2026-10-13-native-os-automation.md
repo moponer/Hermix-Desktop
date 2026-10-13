@@ -114,6 +114,12 @@ Firefox/WebKit（CDP 只保 Chromium 系）、`ahk_eval` 式任意代码逃生�
   会挂起导航。防御：独立下载目录（`hermix_home/downloads/browser/`）+
   CDP `Page.setDownloadBehavior` 显式指路；dialog 类事件自动 accept 并记入
   工具返回（LLM 知道发生了什么）。
+- **F6. `Binary::as_ref()` 不解码**（`browser_screenshot` 曾因此写出假 PNG）：
+  CDP 把二进制回传为 base64 **文本**。`chromiumoxide_types::Binary` 同时实现了
+  `AsRef<str>` 与 `AsRef<[u8]>`，而后者是 `self.0.as_bytes()` —— 看着像解码，
+  其实是 base64 字符串的 ASCII。防御：**任何** CDP 二进制都要显式
+  `base64::engine::general_purpose::STANDARD.decode()`；`browser::decode_cdp_binary`
+  是唯一入口，回归测试用 1x1 PNG 钉住"`as_ref` 不等于解码"这个反直觉点。
 
 ### 进程 / 系统层
 
