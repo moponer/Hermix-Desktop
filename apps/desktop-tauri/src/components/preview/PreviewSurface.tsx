@@ -7,9 +7,10 @@
 import { Suspense, lazy } from "react";
 import { Loader2 } from "lucide-react";
 import { CodeView } from "../CodeView";
-import { SpreadsheetView } from "../SpreadsheetView";
+import { SpreadsheetView } from "./viewers/SpreadsheetView";
 import { ImageView } from "./viewers/ImageView";
 import { MarkdownView } from "./viewers/MarkdownView";
+import { HtmlView } from "./viewers/HtmlView";
 import { openImageViewer } from "../imageViewer";
 import type { PreviewPayload } from "./types";
 
@@ -76,6 +77,8 @@ export function PreviewSurface({
   wrap,
   isDark,
   fileName,
+  resolvedPath,
+  zoom,
   cursor,
   onCursorChange,
 }: {
@@ -83,6 +86,8 @@ export function PreviewSurface({
   wrap: boolean;
   isDark: boolean;
   fileName: string;
+  resolvedPath: string | null;
+  zoom: number;
   cursor: { line: number; col: number };
   onCursorChange: (c: { line: number; col: number }) => void;
 }) {
@@ -109,7 +114,7 @@ export function PreviewSurface({
     case "docx":
       return (
         <LazyEngine>
-          <DocxView bytes={payload.bytes} />
+          <DocxView bytes={payload.bytes} zoom={zoom} />
         </LazyEngine>
       );
     case "pptx":
@@ -119,20 +124,13 @@ export function PreviewSurface({
         </LazyEngine>
       );
     case "markdown":
-      return <MarkdownView content={payload.content} isDark={isDark} />;
-    case "office":
       return (
-        <div className="preview-office" style={{ background: "var(--color-bg-primary)" }}>
-          <iframe
-            srcDoc={payload.htmlContent}
-            className="preview-office-frame"
-            title={payload.fileName}
-            sandbox="allow-same-origin"
-          />
-        </div>
+        <MarkdownView content={payload.content} isDark={isDark} resolvedPath={resolvedPath} zoom={zoom} />
       );
+    case "html":
+      return <HtmlView content={payload.content} resolvedPath={resolvedPath} zoom={zoom} />;
     case "spreadsheet":
-      return <SpreadsheetView model={payload.model} fileName={payload.fileName} />;
+      return <SpreadsheetView model={payload.model} fileName={payload.fileName} zoom={zoom} />;
     case "code":
       return (
         <CodeSurface

@@ -8,9 +8,7 @@ import {
   tryConvertDocumentToMarkdown,
   tryReadArtifact,
   tryReadArtifactBytes,
-  tryRenderOfficePreview,
 } from "../../utils/artifactReader";
-import { parseByExtension } from "../../lib/fileParser";
 import {
   IMAGE_BYTE_LIMIT,
   IMAGE_EXT_MIME,
@@ -18,16 +16,6 @@ import {
   isMarkdownExt,
 } from "../rightSidebarUtils";
 import type { LoadOutcome, LoadRequest, PreviewKind, PreviewLoader } from "./types";
-
-/// 排版视图失败原因 → 人话。原始错误是 Rust 侧字符串，直接给用户看
-/// 会出现 "officecli binary not found at F:\...\binaries\..." 这种路径噪音。
-function friendlyOfficeError(raw: string): string {
-  if (/unsupported file type/i.test(raw)) return "不支持的 Office 文件格式";
-  if (/officecli binary not found/i.test(raw)) {
-    return "OfficeCLI 渲染引擎未找到，请检查应用安装完整性";
-  }
-  return raw;
-}
 
 /// 后端拒绝读取的原因 → 人话。后端只抛英文字符串，这里收敛成用户能懂的话。
 function friendlyReadError(raw: string): string {
@@ -132,38 +120,46 @@ function documentMarkdownLoader(req: LoadRequest): Promise<LoadOutcome> {
   });
 }
 
-// 老二进制 Office 格式（doc / xls / ppt）没有纯前端解析器，仍走 officecli。
-// 它是唯一保留的外部进程依赖，失败时退到 markitdown 的 Markdown 表示。
-const officeLoader: PreviewLoader = async (req) => {
-  const res = await tryRenderOfficePreview(req.path, req.workspaceRoot);
-  if (!("error" in res)) {
-    return {
-      ok: true,
-      resolvedPath: res.resolvedPath,
-      payload: { kind: "office", htmlContent: res.htmlContent, fileName: res.fileName },
-    };
-  }
-  const fallback = await documentMarkdownLoader(req);
-  if (fallback.ok) return fallback;
-  return {
-    ok: false,
-    message: `排版视图失败：${friendlyOfficeError(res.error)}。文本视图也失败：${fallback.message}`,
-  };
-};
-
-const spreadsheetLoader: PreviewLoader = async ({ name, path, workspaceRoot }) => {
-  const res = await tryReadArtifactBytes(path, workspaceRoot);
+/** 网页源码。切到文本视图时同一个读取器再被 code 视图用一次。 */
+const htmlLoader: PreviewLoader = async (req) => {
+  const res = await tryReadArtifact(req.path, req.workspaceRoot);
   if (res.kind === "error") return { ok: false, message: friendlyReadError(res.message) };
-  const model = parseByExtension(name, res.bytes);
-  if (model.kind === "error") return { ok: false, message: model.message };
-  if (model.kind === "binary") {
-    return { ok: true, resolvedPath: res.resolvedPath, payload: { kind: "text", content: "" } };
+  if (res.kind === "binary") {
+    return { ok: false, message: `二进制文件（${humanMb(res.size)}），不是可渲染的网页。` };
   }
   return {
     ok: true,
     resolvedPath: res.resolvedPath,
-    payload: { kind: "spreadsheet", model, fileName: name },
+    payload: {
+      kind: "html",
+      content: res.kind === "text" ? res.content : "",
+      fileName: req.name,
+      resolvedPath: res.resolvedPath,
+    },
   };
+};
+
+/**
+ * 表格：按扩展名分派到唯一能读该格式的引擎。
+ *   xlsx/xlsm → ExcelJS（唯一能读回 OOXML 样式表的引擎）
+ *   xls       → SheetJS（ExcelJS 不支持 BIFF；样式读不回来，UI 如实标注）
+ *   csv/tsv   → PapaParse
+ * 引擎全部动态 import，打开 Markdown 时不为表格付下载成本。
+ */
+const spreadsheetLoader: PreviewLoader = async ({ name, path, workspaceRoot }) => {
+  const res = await tryReadArtifactBytes(path, workspaceRoot);
+  if (res.kind === "error") return { ok: false, message: friendlyReadError(res.message) };
+  const ext = name.split(".").pop()?.toLowerCase() ?? "";
+  try {
+    const { parseDelimited, parseXls, parseXlsx } = await import("../../lib/workbook");
+    const model =
+      ext === "xls" ? await parseXls(res.bytes) : ext === "csv" || ext === "tsv"
+        ? await parseDelimited(res.bytes)
+        : await parseXlsx(res.bytes);
+    return { ok: true, resolvedPath: res.resolvedPath, payload: { kind: "spreadsheet", model, fileName: name } };
+  } catch (e) {
+    return { ok: false, message: `表格解析失败：${String(e)}` };
+  }
 };
 
 const textLoader: PreviewLoader = async ({ name, path, workspaceRoot }) => {
@@ -184,9 +180,9 @@ export const LOADERS: Record<PreviewKind, PreviewLoader> = {
   image: imageLoader,
   pdf: byteLoader("pdf", 50 * 1024 * 1024, "PDF"),
   markdown: markdownLoader,
+  html: htmlLoader,
   docx: byteLoader("docx", 50 * 1024 * 1024, "文档"),
   pptx: byteLoader("pptx", 100 * 1024 * 1024, "演示文稿"),
-  office: officeLoader,
   spreadsheet: spreadsheetLoader,
   code: textLoader,
   text: textLoader,

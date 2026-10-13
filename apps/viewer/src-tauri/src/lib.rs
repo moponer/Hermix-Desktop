@@ -95,6 +95,12 @@ pub fn main() {
         .manage(commands::ViewerState::default())
         .invoke_handler(tauri::generate_handler![
             commands::viewer_read_file,
+            commands::viewer_list_dir,
+            commands::viewer_stat,
+            commands::viewer_parent,
+            commands::viewer_drives,
+            commands::viewer_reveal_in_explorer,
+            commands::viewer_search_dir,
             commands::viewer_open_with_system,
             commands::viewer_take_pending,
             commands::viewer_exists,

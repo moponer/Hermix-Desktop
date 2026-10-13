@@ -1,105 +1,218 @@
-// Markdown 渲染（satteri 管线）。
+// Markdown 预览（预览面板专用）。
 //
-// 与聊天里的 MarkdownBody 差别：
-//   - 不接 PathLink（预览的是本地文件，没有应用内路由）
-//   - 外部 https:// 链接交给系统浏览器打开
-//   - 不需要流式节流（预览一次性读全文）
-//   - 左侧标题大纲（TOC）：≥3 个标题时显示，点击滚动定位
+// 与聊天里的 MarkdownBody 的分工：聊天正文是流式渲染、要点路径跳转、
+// 要接 PathLink；预览的是**磁盘上一个已经写完的文件**，因此这里的重点
+// 完全不同 —— 版面要像一份文档（行长、层级、表格、脚注），而且正文里的
+// 相对路径必须能落到真实文件。
+//
+// 与旧实现相比修掉的四件事：
+//   1. rawHtml 之前没开，Markdown 里内嵌的 HTML 整段被吞掉（satteri 默认
+//      把它当不透明 raw 节点，toJsxRuntime 渲染不出来）。
+//   2. frontmatter（--- … ---）之前会当正文渲染出一坨元数据。
+//   3. 相对路径图片之前直接裂图：浏览器拿应用源去解析 `img/x.png`。现在
+//      按文档目录补全后走产物读取链（那条链已带产物根白名单）。
+//   4. 行宽写死 780px，窄侧栏里根本用不上、全屏又太宽。改由 CSS 按字符数
+//      约束，两种场景都落在可读区间。
 
-import { useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { ListTree, ChevronLeft, ChevronRight } from "lucide-react";
 import { markdownToHast } from "satteri";
 import { toJsxRuntime } from "hast-util-to-jsx-runtime";
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
 import { hardenSoftLineBreaks } from "../../../lib/softBreaks";
-import { CodeBlock } from "../../MarkdownBody";
+import { extractHeadings, stripFrontmatter } from "../../../lib/markdownDoc";
+import { dirnameOf, isExternalHref, resolveRelative } from "../../../lib/localAssets";
+import { tryReadArtifactBytes } from "../../../utils/artifactReader";
 import { openExternalUrl } from "../../../desktopBridge";
+import { CodeBlock } from "../../MarkdownBody";
 
-interface TocEntry {
-  level: number;
-  text: string;
-}
+/** 解析开关。GFM 全开（表格/删除线/任务列表/脚注），rawHtml 修掉内嵌 HTML 被吞。 */
+const FEATURES = { features: { gfm: true, rawHtml: true } } as const;
 
-/// 提取 ATX 标题（# ~ ######），跳过围栏代码块内的 `#` 行。
-/// setext 风格（=== / --- 下划线）少见且与分隔线歧义大，不取。
-function extractHeadings(content: string): TocEntry[] {
-  const entries: TocEntry[] = [];
-  let inFence = false;
-  for (const raw of content.split("\n")) {
-    const line = raw.trimStart();
-    if (/^(```|~~~)/.test(line)) {
-      inFence = !inFence;
-      continue;
-    }
-    if (inFence) continue;
-    const m = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
-    if (m) {
-      // 行内代码/链接记号只影响展示，剥掉常见包裹符
-      const text = m[2].replace(/[*`_]/g, "").trim();
-      if (text) entries.push({ level: m[1].length, text });
-    }
+/** 单张图片上限，与图片预览同一档，避免一张巨图把整页拖垮。 */
+const INLINE_ASSET_LIMIT = 8 * 1024 * 1024;
+
+const MIME_BY_EXT: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  bmp: "image/bmp",
+  svg: "image/svg+xml",
+  ico: "image/x-icon",
+  avif: "image/avif",
+};
+
+type HastNode = {
+  type: string;
+  tagName?: string;
+  properties?: Record<string, unknown>;
+  children?: HastNode[];
+};
+
+/* ── 纯函数在 lib/markdownDoc.ts（好单测）；这里只剩 IO 与渲染 ───── */
+
+/** 收集正文里全部带 src 的图片节点。 */
+function collectImages(root: HastNode, into: HastNode[] = []): HastNode[] {
+  if (root.type === "element" && (root.tagName === "img" || root.tagName === "image")) {
+    if (typeof root.properties?.src === "string") into.push(root);
   }
-  return entries;
+  for (const child of root.children ?? []) collectImages(child, into);
+  return into;
 }
 
-export function MarkdownView({ content, isDark }: { content: string; isDark: boolean }) {
-  const [tocOpen, setTocOpen] = useState(true);
-  const articleRef = useRef<HTMLElement>(null);
+/** 按扩展名猜 MIME；猜不到就不内联，交回 CSS 占位。 */
+function mimeFor(path: string): string | null {
+  const ext = path.split(".").pop()?.toLowerCase() ?? "";
+  return MIME_BY_EXT[ext] ?? null;
+}
 
-  const headings = useMemo(() => extractHeadings(content), [content]);
+/* ══════════════════════════════════════════════════════════════ */
+
+export function MarkdownView({
+  content,
+  isDark,
+  resolvedPath,
+  zoom,
+}: {
+  content: string;
+  isDark: boolean;
+  resolvedPath: string | null;
+  zoom: number;
+}) {
+  const [tocOpen, setTocOpen] = useState(true);
+  const [activeHeading, setActiveHeading] = useState(-1);
+  const articleRef = useRef<HTMLElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  const body = useMemo(() => hardenSoftLineBreaks(stripFrontmatter(content)), [content]);
+  const headings = useMemo(() => extractHeadings(body), [body]);
+
+  // 相对路径图片 → blob URL。整篇共用一份，卸载时统一回收。
+  const [assets, setAssets] = useState<ReadonlyMap<string, string>>(new Map());
+  const blobUrlsRef = useRef<string[]>([]);
+
+  useEffect(() => {
+    const dir = resolvedPath ? dirnameOf(resolvedPath) : null;
+    if (!dir) {
+      setAssets(new Map());
+      return;
+    }
+    let cancelled = false;
+    const pending = collectImages(markdownToHast(body, FEATURES)).filter(
+      (n) => !isExternalHref(n.properties?.src as string),
+    );
+    if (pending.length === 0) {
+      setAssets(new Map());
+      return;
+    }
+    void Promise.all(
+      pending.map(async (node) => {
+        const raw = node.properties?.src as string;
+        const mime = mimeFor(resolveRelative(dir, raw));
+        if (!mime) return null;
+        const res = await tryReadArtifactBytes(resolveRelative(dir, raw), null);
+        if (res.kind === "error" || res.bytes.byteLength > INLINE_ASSET_LIMIT) return null;
+        return { raw, url: URL.createObjectURL(new Blob([res.bytes], { type: mime })) };
+      }),
+    ).then((results) => {
+      if (cancelled) return;
+      const next = new Map<string, string>();
+      for (const r of results) {
+        if (r) {
+          next.set(r.raw, r.url);
+          blobUrlsRef.current.push(r.url);
+        }
+      }
+      setAssets(next);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [body, resolvedPath]);
+
+  useEffect(
+    () => () => {
+      for (const url of blobUrlsRef.current) URL.revokeObjectURL(url);
+      blobUrlsRef.current = [];
+    },
+    [],
+  );
 
   const rendered = useMemo<ReactNode>(() => {
-    const hardened = hardenSoftLineBreaks(content);
-    const hast = markdownToHast(hardened, { features: { gfm: true } });
+    const hast = markdownToHast(body, FEATURES);
+    const dir = resolvedPath ? dirnameOf(resolvedPath) : "";
     return toJsxRuntime(hast, {
       Fragment,
       jsx,
       jsxs,
       components: {
         a({ href, children, ...rest }: { href?: string; children?: ReactNode }) {
+          if (!href) return <a {...rest}>{children}</a>;
           return (
             <a
               href={href}
-              onClick={(e) => {
-                if (href && /^https?:\/\//i.test(href)) {
-                  e.preventDefault();
-                  openExternalUrl(href);
-                }
-              }}
               target="_blank"
               rel="noopener noreferrer"
+              onClick={(e) => {
+                e.preventDefault();
+                // 文档内锚点由浏览器自己跳；其余一律交给系统浏览器，
+                // 相对路径先按文档目录补全，否则系统也找不到文件。
+                if (!href.startsWith("#")) openExternalUrl(resolveRelative(dir, href));
+              }}
               {...rest}
             >
               {children}
             </a>
           );
         },
+        img({ src, alt, ...rest }: { src?: string; alt?: string }) {
+          if (!src) return null;
+          return <img src={assets.get(src) ?? src} alt={alt ?? ""} loading="lazy" {...rest} />;
+        },
         code({ className, children, ...props }: { className?: string; children?: ReactNode }) {
           const match = /language-([\w-]+)/.exec(className || "");
           const codeString = String(children ?? "").replace(/\n$/, "");
           if (match) {
-            return (
-              <CodeBlock language={match[1]!.toLowerCase()} code={codeString} isDark={isDark} />
-            );
+            return <CodeBlock language={match[1]!.toLowerCase()} code={codeString} isDark={isDark} />;
           }
           return <code {...props}>{children}</code>;
         },
+        // GFM 任务列表在预览里只读：勾选状态来自文件，能点却改不落盘会骗人。
+        input(props: { type?: string; checked?: boolean }) {
+          return <input {...props} disabled />;
+        },
       },
     });
-  }, [content, isDark]);
+  }, [body, isDark, assets, resolvedPath]);
 
-  const scrollToHeading = (idx: number) => {
-    // 渲染树中的标题与提取顺序一致（围栏内 # 已排除）；按文档顺序取第 idx 个
+  // 目录高亮：取当前滚动位置之上的最后一个标题。
+  const syncActive = useCallback(() => {
+    const nodes = articleRef.current?.querySelectorAll("h1,h2,h3,h4,h5,h6");
+    if (!nodes || nodes.length === 0) return;
+    let current = -1;
+    for (let i = 0; i < nodes.length; i++) {
+      if (nodes[i].getBoundingClientRect().top <= 80) current = i;
+    }
+    setActiveHeading((prev) => (prev === current ? prev : current));
+  }, []);
+
+  useEffect(() => {
+    syncActive();
+  }, [syncActive, rendered]);
+
+  const scrollToHeading = useCallback((idx: number) => {
     const nodes = articleRef.current?.querySelectorAll("h1,h2,h3,h4,h5,h6");
     nodes?.[idx]?.scrollIntoView({ behavior: "smooth", block: "start" });
-  };
+  }, []);
 
   const showToc = headings.length >= 3;
 
   return (
-    // 布局契约：host 是「固定 TOC 列 + 独立滚动正文列」的 flex 行。
-    // TOC 不在滚动流里 —— 滚动的只有正文列，目录钉死在左侧不跟正文跑。
+    // 布局契约：host 是「固定目录列 + 独立滚动正文列」的 flex 行。
+    // 目录不在滚动流里 —— 滚动的只有正文列。
     <div className={showToc ? "preview-md-layout" : "preview-md-host"}>
       {showToc && (
         <>
@@ -114,7 +227,9 @@ export function MarkdownView({ content, isDark }: { content: string; isDark: boo
                   <button
                     key={i}
                     type="button"
-                    className="preview-md-toc-item"
+                    className={
+                      i === activeHeading ? "preview-md-toc-item is-active" : "preview-md-toc-item"
+                    }
                     style={{ paddingLeft: `${(h.level - 1) * 12 + 8}px` }}
                     title={h.text}
                     onClick={() => scrollToHeading(i)}
@@ -136,8 +251,12 @@ export function MarkdownView({ content, isDark }: { content: string; isDark: boo
           </button>
         </>
       )}
-      <div className="preview-md-scroll">
-        <article ref={articleRef} className="preview-md-body">{rendered}</article>
+      <div className="preview-md-scroll" ref={scrollRef} onScroll={syncActive}>
+        <div className="preview-md-zoom" style={{ zoom: zoom / 100 }}>
+          <article ref={articleRef} className="preview-md-body">
+            {rendered}
+          </article>
+        </div>
       </div>
     </div>
   );

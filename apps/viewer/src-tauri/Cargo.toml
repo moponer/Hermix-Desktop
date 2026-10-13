@@ -27,7 +27,7 @@ reqwest = { workspace = true, features = ["json"] }
 # 单实例互斥体（CreateMutexW：Foundation + Security 双 feature 门控）；
 # GetLastError 在 Foundation（同 updater.rs 教训：跨模块声明依赖它）。
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Threading"] }
+windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Threading"] }
 
 [[bin]]
 name = "hermix-viewer"

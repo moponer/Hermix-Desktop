@@ -6,7 +6,7 @@ import {
   FolderOpen, FileCode, FileText, FileJson, FileImage, FileType2,
 } from "lucide-react";
 import type { ArtifactKind } from "../utils/artifacts";
-import type { PreviewModel } from "../lib/fileParser";
+import type { ParsedWorkbook } from "../lib/workbook";
 
 // ── Tab filters (tag management) ────────────────────────
 export const FILTERS: Array<{ key: "all" | ArtifactKind; label: string; icon: ElementType }> = [
@@ -35,6 +35,9 @@ export const IMAGE_EXT_MIME: Record<string, string> = {
   ico: "image/x-icon",
   tiff: "image/tiff",
   tif: "image/tiff",
+  // SVG 是文本没错，但它是一张**图**：走 image 路径由 <img> 渲染，既能看到
+  // 成品也不会执行脚本（走代码视图反而看不出图形长什么样）。
+  svg: "image/svg+xml",
 };
 export const IMAGE_BYTE_LIMIT = 8 * 1024 * 1024; // 8 MiB
 
@@ -51,6 +54,12 @@ export function isMarkdownExt(name: string): boolean {
 export function isPdfExt(name: string): boolean {
   const ext = name.split(".").pop()?.toLowerCase() ?? "";
   return ext === "pdf";
+}
+
+/** 有版面要渲染的网页。走 code 视图的只有它自己，切视图即可看源码。 */
+export function isHtmlExt(name: string): boolean {
+  const ext = name.split(".").pop()?.toLowerCase() ?? "";
+  return ext === "html" || ext === "htm";
 }
 
 export function detectLanguage(name: string): string | null {
@@ -110,7 +119,7 @@ export const FRONTEND_PARSE_EXTS = new Set([
 /**
  * Office 格式按「能否在浏览器里直接渲染」分流。
  * OOXML（docx / pptx）是 ZIP+XML，纯前端引擎可以解析；老二进制格式
- * （doc / xls / ppt）结构复杂，只能交给 officecli 这类外部转换器。
+ * （doc / ppt 等）结构复杂，只能抽成文本（markitdown）看。
  */
 export type OfficeExtGroup = "docx" | "pptx" | "legacy" | null;
 
@@ -134,16 +143,12 @@ export function needsFrontendParse(name: string): boolean {
   return FRONTEND_PARSE_EXTS.has(ext);
 }
 
-export function totalRows(model: PreviewModel): number {
-  if (model.kind === "spreadsheet") return model.sheets.reduce((s, sh) => s + sh.rowCount, 0);
-  if (model.kind === "csv") return model.rowCount;
-  return 0;
+export function totalRows(model: ParsedWorkbook): number {
+  return model.sheets.reduce((s, sh) => s + sh.rowCount, 0);
 }
 
-export function modelLabel(model: PreviewModel): string {
-  if (model.kind === "spreadsheet") return `${model.sheets.length} 个工作表`;
-  if (model.kind === "csv") return "CSV";
-  return "Text";
+export function modelLabel(model: ParsedWorkbook): string {
+  return `${model.sheets.length} 个工作表`;
 }
 
 export const LANG_LABELS: Record<string, string> = {
@@ -230,6 +235,13 @@ const EXT_TYPE_LABELS: Record<string, string> = {
 };
 
 export function fileTypeLabel(name: string): string {
+  // 图先判：svg / html 之类既是文本又是媒体的，靠后会被语言表当成源码类型。
+  if (isImageExt(name)) {
+    const ext = name.split(".").pop()?.toLowerCase() ?? "";
+    return (EXT_TYPE_LABELS[ext] ?? ext.toUpperCase()) || "图片";
+  }
+  if (isHtmlExt(name)) return "HTML";
+  if (isMarkdownExt(name)) return "Markdown";
   const lang = detectLanguage(name);
   if (lang) return LANG_LABELS[lang] ?? lang;
   const ext = name.split(".").pop()?.toLowerCase() ?? "";

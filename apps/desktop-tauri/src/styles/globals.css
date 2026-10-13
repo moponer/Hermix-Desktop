@@ -17,6 +17,7 @@
 @import "./components-helpers.css";
 @import "./inline-thinking-dot.css";
 @import "./code-view.css";
+@import "./preview-doc.css";
 @import "./utilities.css";
 
 /* Tailwind dark: 变体已废除 —— .dark 类不再挂载（useTheme 只设 data-theme），

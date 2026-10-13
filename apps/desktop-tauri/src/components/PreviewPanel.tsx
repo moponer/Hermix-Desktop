@@ -8,7 +8,7 @@ import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   X, Copy, ExternalLink, FolderOpen,
-  Loader2, AlertTriangle, WrapText, FileText, Maximize2, Minimize2,
+  Loader2, AlertTriangle, WrapText, FileText, Code2, Maximize2, Minimize2,
 } from "lucide-react";
 import { clsx } from "clsx";
 import type { Artifact } from "../utils/artifacts";
@@ -18,7 +18,16 @@ import { formatBytes, fileTypeLabel, totalRows, modelLabel } from "./rightSideba
 import { resolveKind, applyViewMode } from "./preview/resolveKind";
 import { LOADERS } from "./preview/loaders";
 import { PreviewSurface } from "./preview/PreviewSurface";
-import { supportsTextView, type PreviewPayload, type PreviewState, type ViewMode } from "./preview/types";
+import {
+  supportsTextView,
+  supportsZoom,
+  type PreviewPayload,
+  type PreviewState,
+  type ViewMode,
+} from "./preview/types";
+
+const ZOOM_MIN = 50;
+const ZOOM_MAX = 200;
 
 /** 状态栏右段的补充信息，按载荷种类给出。 */
 function statusExtra(payload: PreviewPayload): string | null {
@@ -30,6 +39,7 @@ function statusExtra(payload: PreviewPayload): string | null {
     case "pptx":
       return formatBytes(payload.bytes.byteLength);
     case "markdown":
+    case "html":
       return `${payload.content.length} 字符`;
     case "spreadsheet":
       return `${totalRows(payload.model)} 行`;
@@ -44,6 +54,8 @@ function copyableText(payload: PreviewPayload): string | null {
     case "code":
     case "text":
     case "markdown":
+    // 网页本身也是一份可直接复制的源码，排版视图下也该给。
+    case "html":
       return payload.content;
     default:
       return null;
@@ -64,12 +76,14 @@ export function PreviewPanel({
   const [fullscreen, setFullscreen] = useState(false);
   const [wrap, setWrap] = useState(true);
   const [viewMode, setViewMode] = useState<ViewMode>("layout");
+  const [zoom, setZoom] = useState(100);
   const [cursor, setCursor] = useState({ line: 1, col: 1 });
 
   // 换文件回到排版视图并复位光标，避免上一个文件的选择泄漏过来。
   useEffect(() => {
     setViewMode("layout");
     setCursor({ line: 1, col: 1 });
+    setZoom(100);
   }, [artifact?.path]);
 
   useEffect(() => {
@@ -198,12 +212,41 @@ export function PreviewPanel({
             <button
               type="button"
               onClick={() => setViewMode((m) => (m === "text" ? "layout" : "text"))}
-              title={viewMode === "text" ? "回到排版视图" : "文本视图（可搜索 / 可复制）"}
+              title={
+                baseKind === "html"
+                  ? viewMode === "text" ? "回到页面视图" : "查看源码"
+                  : viewMode === "text" ? "回到排版视图" : "文本视图（可搜索 / 可复制）"
+              }
               className={clsx("head-action", viewMode === "text" && "is-active")}
-              aria-label={viewMode === "text" ? "回到排版视图" : "文本视图"}
+              aria-label={baseKind === "html" ? "切换源码视图" : "切换文本视图"}
             >
-              <FileText className="icon-md" />
+              {baseKind === "html" ? <Code2 className="icon-md" /> : <FileText className="icon-md" />}
             </button>
+          )}
+          {supportsZoom(payload?.kind ?? baseKind) && viewMode === "layout" && (
+            <div className="preview-zoom" role="group" aria-label="预览缩放">
+              <button
+                type="button"
+                className="head-action"
+                onClick={() => setZoom((z) => Math.max(ZOOM_MIN, z - 10))}
+                disabled={zoom <= ZOOM_MIN}
+                title="缩小"
+                aria-label="缩小预览"
+              >
+                −
+              </button>
+              <span className="preview-zoom-val">{zoom}%</span>
+              <button
+                type="button"
+                className="head-action"
+                onClick={() => setZoom((z) => Math.min(ZOOM_MAX, z + 10))}
+                disabled={zoom >= ZOOM_MAX}
+                title="放大"
+                aria-label="放大预览"
+              >
+                ＋
+              </button>
+            </div>
           )}
           {payload?.kind === "code" && payload.language && (
             <button
@@ -273,6 +316,8 @@ export function PreviewPanel({
         wrap={wrap}
         isDark={isDark}
         fileName={artifact.name}
+        resolvedPath={resolvedPath}
+        zoom={zoom}
         cursor={cursor}
         onCursorChange={setCursor}
       />

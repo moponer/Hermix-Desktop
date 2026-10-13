@@ -11,7 +11,6 @@ import {
   convertDocumentToMarkdown,
   readArtifactFile,
   readArtifactFileBytes,
-  renderOfficePreview,
 } from "../desktopBridge";
 
 // Returns `D:\` for Windows absolute paths, `/` for POSIX absolute
@@ -164,7 +163,7 @@ export type DocumentMarkdownPayload = {
 };
 
 // Document → Markdown via the `markitdown` sidecar. Same ancestor-retry
-// chain as the Office renderer so cross-drive workspace paths resolve.
+// chain as the other artifact readers so cross-drive workspace paths resolve.
 export async function tryConvertDocumentToMarkdown(
   path: string,
   workspaceRoot?: string | null,
@@ -197,45 +196,3 @@ export async function tryConvertDocumentToMarkdown(
   return { error: lastRaw };
 }
 
-export type OfficePreviewResult = {
-  htmlPath: string;
-  htmlContent: string;
-  fileName: string;
-  resolvedPath: string;
-};
-
-// Office variants don't go through the text-reader chain — they
-// invoke a separate `render_office_preview` Tauri command (which
-// shells out to `officecli`). Same ancestor-retry logic applies so
-// `D:\` paths still work when workspaceRoot is on `C:\`.
-export async function tryRenderOfficePreview(
-  path: string,
-  workspaceRoot?: string | null,
-): Promise<OfficePreviewResult | { error: string }> {
-  const tried = new Set<string | null>();
-  const queue: Array<string | null> = [workspaceRoot ?? null];
-  for (const cand of candidateRoots(path)) {
-    if (!tried.has(cand)) queue.push(cand);
-  }
-
-  let lastRaw = "";
-  for (const root of queue) {
-    if (tried.has(root)) continue;
-    tried.add(root);
-    try {
-      const res = await renderOfficePreview(path, root);
-      return {
-        htmlPath: res.htmlPath,
-        htmlContent: res.htmlContent,
-        fileName: res.fileName,
-        resolvedPath: path,
-      };
-    } catch (e) {
-      lastRaw = String(e);
-      if (!/outside the allowed artifact roots/i.test(lastRaw)) {
-        return { error: lastRaw };
-      }
-    }
-  }
-  return { error: lastRaw };
-}
