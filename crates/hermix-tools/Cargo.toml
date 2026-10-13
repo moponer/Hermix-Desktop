@@ -44,6 +44,12 @@ fs4 = "0.13"
 # `image` provides the codec APIs used by read_image / file_converter
 # (`PngEncoder`, `ExtendedColorType`, JPEG/WebP writers).
 image = { workspace = true }
+# Native OS automation (2026-10-13 decision note): browser line drives the
+# system Edge over CDP via chromiumoxide; desktop line drives UI Automation
+# COM through the `windows` crate. Both are opt-in toolsets — see
+# `src/tools/os_auto/`.
+chromiumoxide = { workspace = true }
+windows = { workspace = true }
 # Link-time plugin/extension registration. See
 # `hermix_tools::factory::ToolFactory` for the usage pattern.
 inventory = { workspace = true }

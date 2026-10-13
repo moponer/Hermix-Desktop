@@ -86,6 +86,14 @@ pub use tools::homeassistant::{
 };
 pub use tools::image_gen::{ImageGenBackend, ImageGenerateHandler};
 pub use tools::memory::{MemoryBackend, MemoryHandler};
+// Native OS automation (2026-10-13 note). Re-exported so
+// `hermix-server`'s toolset reconciliation can apply the same
+// "opt-in toolsets start off" rule at startup that
+// `register_builtin_tools` applies at registration time — the two
+// paths must agree or a restart silently turns them back on.
+pub use tools::os_auto::{
+    apply_opt_in_defaults, BROWSER_TOOLSET, DESKTOP_TOOLSET, OPT_IN_TOOLSETS,
+};
 pub use tools::messaging::{MessagingBackend, SendMessageHandler};
 pub use tools::session_search::{SessionSearchBackend, SessionSearchHandler};
 pub use tools::session_stamper::SessionStamper;

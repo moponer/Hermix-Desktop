@@ -132,6 +132,24 @@ pub fn register_builtin_tools(
             "startup: re-enabled hard-essential toolset floor (whitelist did not contain it)"
         );
     }
+
+    // 6. Opt-in toolsets (native OS automation: `browser` / `desktop`).
+    // Runs last on purpose — steps 4 and 5 both *enable* toolsets, so
+    // anything earlier would be undone. These ship off even under the
+    // `["*"]` wildcard a fresh install starts from: driving the user's
+    // real browser and real desktop is not something a default install
+    // should do to a machine the operator has not opted in.
+    // `hermix-server::dashboard::skills::apply_persisted_toolset_state`
+    // calls the same helper with the persisted list, so the two paths
+    // cannot drift.
+    let opt_in_off =
+        crate::tools::os_auto::apply_opt_in_defaults(registry, enabled_toolsets.as_ref());
+    if opt_in_off > 0 {
+        tracing::info!(
+            toolsets = opt_in_off,
+            "startup: opt-in toolsets left disabled until explicitly enabled in Settings"
+        );
+    }
 }
 
 // `hermes_data_dir` / `dirs_home` were deleted: they bypassed
@@ -564,7 +582,7 @@ mod tests {
         // toggle (`set_enabled_toolsets`) is the symmetric bug:
         // disabling a group name that no tool carries silently
         // flips nothing. The fix side of this test lives in
-        // `tools::pdf`, `tools::office_cli`, and
+        // `tools::pdf` and
         // `essential::ESSENTIAL_TOOLSETS` — together they keep the
         // floor's expectations and the runtime registration in lockstep.
         let registry = registry_with_builtins();

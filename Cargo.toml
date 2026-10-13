@@ -163,7 +163,35 @@ hkdf = "0.12"
 windows = { version = "0.58", features = [
   "Win32_Security_Cryptography",
   "Win32_Foundation",
+  # Native OS automation (2026-10-13 note, docs/notes/implemented/feature/
+  # 2026-10-13-native-os-automation.md). Feature unification means these
+  # cost every dependent one extra `windows` build unit, so the list is
+  # kept to exactly what the two lines touch:
+  #   Win32_UI_Accessibility        — UIA client (desktop line)
+  #   Win32_System_Com              — CoInitializeEx / CoCreateInstance
+  #   Win32_System_JobObjects       — KILL_ON_JOB_CLOSE (browser orphan guard)
+  #   Win32_UI_Input_KeyboardAndMouse — SendInput fallback
+  #   Win32_UI_WindowsAndMessaging  — GetForegroundWindow / SetFocus / rect
+  #   Win32_Graphics_Gdi            — window / screen rect helpers
+  #   Win32_System_Threading        — thread handles, process handles
+  "Win32_UI_Accessibility",
+  "Win32_System_Com",
+  "Win32_System_JobObjects",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_Graphics_Gdi",
+  "Win32_System_Threading",
 ] }
+
+# CDP client for the browser-automation line. **Pinned to 0.8, not 0.9**:
+# 0.9 raises its reqwest floor to ^0.13, which would drag a second full
+# hyper/rustls stack into the binary beside the workspace's 0.12
+# (the OS-automation line never makes an outbound HTTP call — it only
+# speaks CDP over a loopback WebSocket). 0.8 depends on reqwest ^0.12
+# with default-features=false, which is already in the tree, so the
+# whole incremental cost is async-tungstenite + the cdp/types crates.
+# Bump to 0.9 only if the reqwest floor is ever unified across the workspace.
+chromiumoxide = "0.8"
 url = "2"
 directories = "6"
 minijinja = "2"

@@ -288,8 +288,8 @@ pub fn apply_persisted_toolset_state(
     // security_guidance, custom_app) is always re-enabled so a
     // hand-edited or partially migrated list containing only
     // `["file", "web"]` cannot leave the LLM answering "I don't have
-    // terminal". The SOFT floor (document, office, browser, cua,
-    // storage) is re-enabled only when the list is the default
+    // terminal". The SOFT floor (document, storage) is
+    // re-enabled only when the list is the default
     // wildcard, so an explicit disable is respected. See
     // `hermix_tools::essential` for the full rationale.
     // `soft_floor_active = wildcard`: when the saved whitelist is the
@@ -318,6 +318,22 @@ pub fn apply_persisted_toolset_state(
                  hermix_tools::essential if this is no longer desired."
             );
         }
+    }
+    // Opt-in toolsets (native OS automation: browser / desktop) - LAST,
+    // after both the whitelist reconciliation above and the essential
+    // floor. A fresh install starts from the wildcard ["*"], which means
+    // "everything we already knew about", not consent to let the agent
+    // drive the operator's real browser and real desktop. Only a literal
+    // toolset name in the persisted list opts in. Same helper
+    // `register_builtin_tools` calls at registration time - the two paths
+    // must agree or a restart flips them back on.
+    let persisted_set: HashSet<String> = persisted.enabled.iter().cloned().collect();
+    let opt_in_off = hermix_tools::apply_opt_in_defaults(registry, Some(&persisted_set));
+    if opt_in_off > 0 {
+        tracing::info!(
+            toolsets = opt_in_off,
+            "opt-in toolsets left disabled until explicitly enabled in Settings"
+        );
     }
 }
 
@@ -551,15 +567,6 @@ const BUILTIN_SKILLS: &[(&str, &str, &str)] = &[
         "web-novel",
         include_str!("skills/web-novel.md"),
     ),
-    // office-cli: re-enabled (P1.8) — the `office_cli` builtin
-    // tool was re-registered in register_builtins.rs and the desktop preview
-    // (render_office_preview) shells out to the bundled `officecli` binary,
-    // so this skill is live again. See hermix-tools register_builtins.rs.
-    (
-        "office",
-        "office-cli",
-        include_str!("skills/office/office-cli/SKILL.md"),
-    ),
     // custom-app-development: hx-shell 自定义应用开发指南（含真实 schema / API / 图标库），
     // 内置为 seed 以便分发到其它机器；单一真相位置定为 "hermix" 分类（与 store 动态扫描
     // 所有子目录的读取机制一致；运行期副本只在 ~/.hermix/skills/hermix/ 一份）。
@@ -766,8 +773,8 @@ mod tests {
             "architecture-design SKILL.md should exist"
         );
         assert!(
-            dir.path().join("office").join("office-cli").join("SKILL.md").exists(),
-            "office-cli SKILL.md should exist (re-enabled in P1.8)"
+            dir.path().join("devops").join("devops-practice").join("SKILL.md").exists(),
+            "devops-practice SKILL.md should exist"
         );
         // Idempotent: second call writes 0
         let second = seed_builtin_skills(dir.path()).unwrap();
@@ -977,6 +984,71 @@ mod tests {
         (reg, registered)
     }
 
+    /// Native OS automation ships **opt-in**: a fresh install starts from
+    /// the wildcard `["*"]`, and that must not switch on the tools that
+    /// drive the operator's real browser and real desktop. Only a literal
+    /// toolset name in `enabled_toolsets.json` opts in. Regression guard for
+    /// the two reconcile paths (this function and `register_builtin_tools`
+    /// step 6) drifting apart.
+    #[test]
+    fn os_automation_toolsets_are_opt_in_not_wildcard_enabled() {
+        let home = tempdir().unwrap();
+        let _home_guard = crate::test_env::EnvGuard::set("HERMIX_HOME", home.path());
+        let reg = hermix_tools::ToolRegistry::new();
+        hermix_tools::register_builtin_tools(
+            &reg,
+            Arc::new(NoopBackend),
+            Arc::new(NoopSkillProvider),
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+
+        let all_disabled = |toolset: &str| {
+            let entries: Vec<_> = reg
+                .list_tools()
+                .into_iter()
+                .filter(|e| e.toolset == toolset)
+                .collect();
+            !entries.is_empty() && entries.iter().all(|e| !e.is_enabled)
+        };
+        let all_enabled = |toolset: &str| {
+            let entries: Vec<_> = reg
+                .list_tools()
+                .into_iter()
+                .filter(|e| e.toolset == toolset)
+                .collect();
+            !entries.is_empty() && entries.iter().all(|e| e.is_enabled)
+        };
+
+        // Fresh install: no file at all -> wildcard default.
+        assert!(!home.path().join("enabled_toolsets.json").exists());
+        apply_persisted_toolset_state(&reg, home.path());
+        for ts in hermix_tools::OPT_IN_TOOLSETS {
+            assert!(
+                all_disabled(ts),
+                "opt-in toolset `{ts}` must stay disabled under the wildcard default"
+            );
+        }
+
+        // Operator names one of them in Settings -> that one comes back on,
+        // the unnamed one stays off.
+        std::fs::write(
+            home.path().join("enabled_toolsets.json"),
+            r#"{"enabled":["browser"]}"#,
+        )
+        .unwrap();
+        apply_persisted_toolset_state(&reg, home.path());
+        assert!(
+            all_enabled(hermix_tools::BROWSER_TOOLSET),
+            "an explicitly listed opt-in toolset must be enabled"
+        );
+        assert!(
+            all_disabled(hermix_tools::DESKTOP_TOOLSET),
+        );
+    }
     #[test]
     fn apply_toggle_with_floor_keeps_essentials_even_when_user_toggles_off() {
         let (reg, registered) = fixture_registry();

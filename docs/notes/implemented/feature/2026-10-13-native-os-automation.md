@@ -1,6 +1,6 @@
 # Decision Note: OS 自动化全自研——浏览器 CDP + 桌面 UIA，零外部运行时
 
-Status: proposed — 方案已评审待拍板；正文记录设计与全部已识别的坑
+Status: implemented — 已拍板并开工（2026-10-13）；正文记录设计、全部已识别的坑与落地事实
 
 ## Decision
 
@@ -161,4 +161,57 @@ Firefox/WebKit（CDP 只保 Chromium 系）、`ahk_eval` 式任意代码逃生�
 - **重启条件（对应 simplification 纪律的反向锚）**：若 v1 上线 8 周内
   工具调用成功率 < 70% 或月均新增行数超 500 行（范围失控信号），
   本笔记必须重审——回退到外部项目方案不丢人，丢的是纪律。
+
+### 落地事实（2026-10-13 交付时）
+
+代码在 `crates/hermix-tools/src/tools/os_auto/`，9 个文件约 2,930 行
+（浏览器线 1,340 行 / 桌面线 1,460 行 / 共享骨架 130 行），比预估的
+~2,500 行高约 17%，仍在同一量级，12 工具硬上限未破。
+
+**依赖决策（与上文正文的一处偏差，以本节为准）**：chromiumoxide 锁 **0.8**
+而非 0.9。0.9 把 reqwest 下限抬到 ^0.13，会在工作区已有的 0.12 旁边
+再塞进一整套 hyper/rustls——而这两条线根本不发任何对外 HTTP 请求
+（只讲 CDP over loopback WebSocket）。0.8 依赖 `reqwest ^0.12`
+（default-features=false，已在树里），新增成本只有 async-tungstenite
+与 cdp/types 三个小 crate。升 0.9 的前提是全工作区 reqwest 统一。
+
+**API 现实与设计的三处被迫修正**（都是读源码后改的，不是猜的）：
+
+1. `windows` 0.58 **没有** `IUIAutomation::ElementFromRuntimeId`，也没有
+   `GetRuntimeId`。所以 ref 表直接存 COM 元素句柄
+   `HashMap<String, IUIAutomationElement>`，每次 snapshot 整体替换；
+   "快照过期" 判定退化为"表里没有这个 ref"，比代际计数器更简单也更准。
+2. `chromiumoxide::Element::new` 是 crate 私有，ref 无法还原成 `Element`。
+   于是 ref 路径统一走 `DOM.resolveNode` + `Runtime.callFunctionOn`，
+   `user_gesture=true`（不开的话 Chrome 把脚本点击当不可信，一批按钮直接
+   没反应）；`selector` 路径仍走高阶 `Element` API。
+3. `Page::title()` 不存在（是 `get_title()`），导航是 `goto()` 而非
+   `navigate()`。
+
+**默认关闭的实现方式**：`hermix_home/enabled_toolsets.json` 在全新安装时
+是通配 `["*"]`，含义是"我们本来就知道的工具全开"，不是"同意让 agent 接管
+我的鼠标键盘"。因此 `OPT_IN_TOOLSETS = ["browser", "desktop"]` 由
+`os_auto::apply_opt_in_defaults` 处理，且启动路径上有**两处** reconcile
+（`register_builtin_tools` 与 hermix-server 的
+`apply_persisted_toolset_state`）必须调用同一个 helper——只改一处会在重启
+后被另一处悄悄打开。hermix-server 侧有一条回归测试钉住这个契约。
+
+**两条坑没有做到 100%，如实记录**：
+
+- 坑 F5 的下载目录已落地（`Browser.setDownloadBehavior` →
+  `hermix_home/downloads/browser/`），但 **JS 对话框自动 accept 没接**。
+  `Handler` 事件流要单独订阅对话框事件，v1 没做；补偿是
+  `browser_navigate` 全程带硬超时，弹窗不会把导航挂死。
+- 坑 B 的提权窗口只能"给准提示"不能"确诊"：`Win32_Security` feature
+  没开，拿不到 token API，所以 Invoke/Value 失败时返回的是
+  `[PERMISSION_DENIED]` + "目标可能以管理员运行"的提示，而不是一次真实的
+  提权比对。SendInput 短写计数是真实的（那来自内核）。
+
+**验证到什么程度**：`cargo check -p hermix-tools --all-targets` 通过，
+os_auto 单元测试（渲染/截断/文法/端口解析/ref 失效等）全绿，
+hermix-server 的 opt-in 契约测试全绿。**没有**做过真机端到端：
+需要用户装 hermix 包、在设置里打开工具集、手动调一次
+`browser_navigate → browser_snapshot → browser_click` 与
+`win_list_windows → win_snapshot → win_invoke` 才能确认 CDP 帧与
+UIA provider 的实际行为。
 
