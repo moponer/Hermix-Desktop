@@ -15,7 +15,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { generateIdentity, importPublicKey, sealBody, openBody } from '../core/crypto'
+import { generateIdentity, importPublicKey, sealBody, openBody, ensureCryptoRandomPolyfill } from '../core/crypto'
 
 const enc = new TextEncoder()
 const dec = new TextDecoder()
@@ -132,4 +132,27 @@ test('每帧 ephemeral 都不同（否则 key 可复用，前向保密失效）'
   const b = await sealBody(enc.encode('same plaintext'), args)
   assert.ok(!Buffer.from(a.ephemeralPublic).equals(Buffer.from(b.ephemeralPublic)))
   assert.ok(!Buffer.from(a.sealed.ciphertext).equals(Buffer.from(b.sealed.ciphertext)))
+})
+
+// ── 回归：App 端 V8 无 crypto 全局 ──────────────────────────────
+// noble 的 keygen 内部裸调 globalThis.crypto.getRandomValues，App 端 V8
+// 没有这个全局，真机配对页抛 "crypto.getRandomValues must be defined"。
+// crypto.ts 模块加载时把 DRBG 兜底挂上 polyfill——这里删掉原生全局、
+// 绕过 ESM 缓存重新加载模块，验证 keygen 全链路在"无 crypto"环境可用。
+test('无 crypto 全局时 generateIdentity 仍可用（DRBG polyfill 覆盖 noble keygen）', async () => {
+  const g = globalThis as { crypto?: Crypto }
+  const saved = g.crypto
+  // @ts-expect-error 模拟 App 端 V8：整个 crypto 全局不存在
+  delete g.crypto
+  try {
+    ensureCryptoRandomPolyfill()
+    const id = await generateIdentity()
+    assert.equal(id.publicKey.length, 65, '未压缩公钥应为 65B')
+    assert.equal(id.privateKey.length, 32, 'P-256 私钥应为 32B')
+    // polyfill 挂上后随机链可复用：两次 keygen 产出不同密钥
+    const id2 = await generateIdentity()
+    assert.ok(id.privateKey.some((b, i) => b !== id2.privateKey[i]), '两次 keygen 不应产出相同私钥')
+  } finally {
+    g.crypto = saved
+  }
 })

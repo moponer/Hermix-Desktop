@@ -113,7 +113,13 @@ export function randomBytes(n: number): Uint8Array {
     crypto?: { getRandomValues?: (b: Uint8Array) => Uint8Array };
   };
   if (g.crypto?.getRandomValues) return g.crypto.getRandomValues(new Uint8Array(n));
+  return drbgBytes(n);
+}
 
+/**
+ * HMAC-DRBG 兜底随机源。只在环境没有 CSPRNG 时使用（App 端 V8）。
+ */
+function drbgBytes(n: number): Uint8Array {
   let entropy = '';
   try {
     entropy += `${Date.now()}:${performance?.now?.() ?? 0}`;
@@ -139,6 +145,24 @@ export function randomBytes(n: number): Uint8Array {
   }
   return out;
 }
+
+// noble 系列库（curves 的 keygen、ciphers 的 nonce）内部直接调
+// `globalThis.crypto.getRandomValues`，App 端 V8 没有这个全局，裸调抛
+// "crypto.getRandomValues must be defined"。把 DRBG 兜底挂上去，让 noble
+// 与本模块共用同一条随机链。有原生 CSPRNG 的环境此函数什么都不做。
+export function ensureCryptoRandomPolyfill(): void {
+  const g = globalThis as { crypto?: { getRandomValues?: (b: Uint8Array) => Uint8Array } };
+  if (g.crypto?.getRandomValues) return;
+  const polyfill = (buf: Uint8Array): Uint8Array => {
+    buf.set(drbgBytes(buf.length));
+    return buf;
+  };
+  if (g.crypto) g.crypto.getRandomValues = polyfill;
+  else (g as { crypto: object }).crypto = { getRandomValues: polyfill };
+}
+
+// 模块加载即安装：noble 在调用时才读全局，晚挂不影响正确性，但越早越好。
+ensureCryptoRandomPolyfill();
 
 // ── 原语 ────────────────────────────────────────────────────────
 
