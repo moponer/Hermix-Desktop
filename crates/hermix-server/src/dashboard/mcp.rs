@@ -8,8 +8,8 @@
 //! 本文件此前"首次启动播种 5 个官方 server"的说法已不成立——前端那份
 //! `OFFICIAL_MCP_SEEDS` 兜底早被移除，后端这里也早已改成空播种，注释却
 //! 一直停留在旧设计。与"内置目录"是两回事：目录（`mcp_catalog.rs`）是
-//! 打包进去的**候选清单**，这里播种的是**已配置列表**，后者一律由用户在
-//! 目录里点安装产生。
+//! 打包进去的**候选清单**，这里播种的是**已配置列表**，后者由用户在目录里
+//! 点安装产生。
 //!
 //! This module only persists the *configuration* — it does not yet spawn
 //! the actual MCP processes. The hermes-mcp crate handles transport; once
@@ -46,14 +46,7 @@ pub fn mcp_state_path_for(hermix_home: &std::path::Path) -> PathBuf {
 /// every enabled entry — without needing to instantiate a full
 /// `HttpServerState` first.
 pub fn load_mcp_servers(hermix_home: &std::path::Path) -> McpServersState {
-    let path = mcp_state_path_for(hermix_home);
-    let Ok(data) = std::fs::read_to_string(&path) else {
-        return seed_default();
-    };
-    match serde_json::from_str::<McpServersState>(&data) {
-        Ok(v) => v,
-        Err(_) => seed_default(),
-    }
+    read_state(&mcp_state_path_for(hermix_home))
 }
 
 // ── Wire types ──────────────────────────────────────────
@@ -112,14 +105,7 @@ pub struct McpServersState {
 // ── Load / save / seed ─────────────────────────────────
 
 fn load_state(state: &HttpServerState) -> McpServersState {
-    let path = mcp_state_path(state);
-    let Ok(data) = std::fs::read_to_string(&path) else {
-        return seed_default();
-    };
-    match serde_json::from_str::<McpServersState>(&data) {
-        Ok(v) => v,
-        Err(_) => seed_default(),
-    }
+    read_state(&mcp_state_path(state))
 }
 
 fn save_state(state: &HttpServerState, body: &McpServersState) -> Result<(), String> {
@@ -156,6 +142,16 @@ fn seed_default() -> McpServersState {
         seeded: true,
         servers: vec![],
     }
+}
+
+// ── 内置 server（随本程序打包，无需用户在目录里安装） ───────────────
+
+/// 读盘。文件缺失/损坏退回空播种。
+fn read_state(path: &std::path::Path) -> McpServersState {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|d| serde_json::from_str::<McpServersState>(&d).ok())
+        .unwrap_or_else(seed_default)
 }
 
 // ── HTTP handlers ──────────────────────────────────────
@@ -455,5 +451,15 @@ mod tests {
         )
         .unwrap();
         assert!(legacy.token.is_none());
+    }
+
+    #[test]
+    fn read_state_falls_back_to_seed_on_missing_file() {
+        let path = std::env::temp_dir()
+            .join(format!("hermix-mcp-probe-{}", std::process::id()))
+            .join("nope")
+            .join("mcp_servers.json");
+        let state = read_state(&path);
+        assert!(state.seeded, "文件缺失必须退回播种态");
     }
 }
