@@ -193,22 +193,11 @@ export async function artifactPathExists(
   return invoke("artifact_path_exists", { path, workspaceRoot: workspaceRoot ?? null });
 }
 
-/// Render an Office document (.docx/.xlsx/.pptx) to HTML using the
-/// bundled `officecli` binary. Returns the rendered HTML content
-/// directly so the front-end can use `srcDoc` and avoid the Tauri 2
-/// asset-protocol scope complexity. `htmlPath` is still returned for
-/// debug / "open in browser" actions.
-export async function renderOfficePreview(
-  filePath: string,
-  workspaceRoot?: string | null,
-): Promise<{ htmlPath: string; htmlContent: string; fileName: string }> {
-  return invoke("render_office_preview", { filePath, workspaceRoot: workspaceRoot ?? null });
-}
-
 /// Convert a document (Office / PDF / HTML / EPUB / CSV …) to Markdown
 /// using the bundled `markitdown` sidecar. Used as the text-view path in
-/// the preview panel and as the fallback when `officecli` is unavailable —
-/// Markdown is searchable and copyable, unlike an embedded HTML render.
+/// the preview panel and as the representation for legacy binary Office
+/// formats (doc / xls / ppt) that have no in-browser parser — Markdown is
+/// searchable and copyable, unlike an embedded HTML render.
 export interface DocumentMarkdownResult {
   markdown: string;
   fileName: string;

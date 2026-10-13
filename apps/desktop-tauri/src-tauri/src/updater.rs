@@ -376,7 +376,7 @@ for ($i = 0; $i -lt 30; $i++) {{
     }}
 }}
 # 1b. 收掉仍占着 app 根文件锁的附属进程(预览器/随包工具)
-foreach ($procName in @('hermix-viewer','markitdown','officecli')) {{
+foreach ($procName in @('hermix-viewer','markitdown')) {{
     Stop-Process -Name $procName -Force -ErrorAction SilentlyContinue
 }}
 

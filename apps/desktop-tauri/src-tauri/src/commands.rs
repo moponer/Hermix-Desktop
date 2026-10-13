@@ -1,5 +1,4 @@
 use crate::AppState;
-use crate::officecli;
 use crate::portable_env;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -862,145 +861,10 @@ pub async fn restart_sidecar(
     .map_err(|e| format!("restart task failed: {e}"))?
 }
 
-const OFFICE_EXTENSIONS: &[&str] = &["docx", "doc", "xlsx", "xls", "pptx", "ppt"];
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct OfficePreviewResult {
-    pub html_path: String,
-    pub html_content: String,
-    pub file_name: String,
-}
-
-/// Render an Office document (.docx/.xlsx/.pptx) to HTML using the
-/// bundled `officecli` binary, and return the path to the generated
-/// HTML file for preview in an iframe.
-///
-/// The HTML is cached in `$APP_DATA/preview_cache/` keyed by a hash
-/// of the input path + modification time, so repeated previews of
-/// the same unchanged file are instant.
-#[tauri::command]
-pub async fn render_office_preview(
-    file_path: String,
-    workspace_root: Option<String>,
-) -> Result<OfficePreviewResult, String> {
-    let raw = PathBuf::from(&file_path);
-    if raw.as_os_str().is_empty() {
-        return Err("empty path".to_string());
-    }
-
-    // Resolve relative paths against workspace root.
-    let anchored: PathBuf = if raw.is_absolute() {
-        raw
-    } else {
-        let base = workspace_root
-            .as_deref()
-            .map(PathBuf::from)
-            .or_else(|| dirs::home_dir())
-            .ok_or_else(|| "no workspace base for relative path".to_string())?;
-        base.join(&raw)
-    };
-
-    let canonical = anchored
-        .canonicalize()
-        .map_err(|e| format!("cannot resolve '{}': {e}", anchored.display()))?;
-
-    // Validate extension.
-    let ext = canonical
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    if !OFFICE_EXTENSIONS.contains(&ext.as_str()) {
-        return Err(format!(
-            "unsupported file type '.{ext}'; supported: docx, doc, xlsx, xls, pptx, ppt"
-        ));
-    }
-
-    let file_name = canonical
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("document")
-        .to_string();
-
-    // Resolve officecli binary.
-    let officecli_bin = officecli::ensure_officecli()?;
-
-    // Build output path in preview_cache.
-    let data_dir = resolve_data_dir();
-    let cache_dir = data_dir.join("preview_cache");
-    std::fs::create_dir_all(&cache_dir)
-        .map_err(|e| format!("cannot create preview cache: {e}"))?;
-
-    // Use a deterministic hash: file path + last modified time.
-    let meta = std::fs::metadata(&canonical)
-        .map_err(|e| format!("cannot stat file: {e}"))?;
-    let modified = meta
-        .modified()
-        .map(|t| {
-            t.duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis())
-                .unwrap_or(0)
-        })
-        .unwrap_or(0);
-    let hash_input = format!("{}:{}", canonical.display(), modified);
-    let hash = {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-        let mut h = DefaultHasher::new();
-        hash_input.hash(&mut h);
-        format!("{:016x}", h.finish())
-    };
-    let html_path = cache_dir.join(format!("{hash}.html"));
-
-    // If cached HTML exists and is newer than the source, skip re-render.
-    let needs_render = if html_path.exists() {
-        html_path
-            .metadata()
-            .map(|m| m.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH) < meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH))
-            .unwrap_or(true)
-    } else {
-        true
-    };
-
-    // 刚渲染完时复用内存里的 bytes，不再 read_to_string 重读缓存文件。
-    let fresh_html: Option<String> = if needs_render {
-        let output = tokio::process::Command::new(&officecli_bin)
-            .args(["view", canonical.to_str().unwrap_or(""), "html"])
-            .env("OFFICECLI_NO_AUTO_RESIDENT", "1")
-            .creation_flags(0x08000000) // CREATE_NO_WINDOW: 防黑窗闪烁
-            .output()
-            .await
-            .map_err(|e| format!("failed to run officecli: {e}"))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("officecli failed: {}", stderr.trim()));
-        }
-
-        std::fs::write(&html_path, &output.stdout)
-            .map_err(|e| format!("cannot write preview HTML: {e}"))?;
-        Some(String::from_utf8_lossy(&output.stdout).into_owned())
-    } else {
-        None
-    };
-
-    let resolved = strip_unc_prefix(html_path.as_os_str());
-    let html_content = match fresh_html {
-        Some(content) => content,
-        None => std::fs::read_to_string(&html_path)
-            .map_err(|e| format!("cannot read cached preview: {e}"))?,
-    };
-    Ok(OfficePreviewResult {
-        html_path: resolved,
-        html_content,
-        file_name,
-    })
-}
-
-/// 文档 → Markdown。给预览面板一条不依赖 `officecli` 的兜底路径：
-/// sidecar 缺失或渲染失败时不再是白屏，而且文本视图可搜索、可复制，
-/// 比内嵌 HTML 更适合快速扫读。
+/// 文档 → Markdown。预览面板的文本视图、以及没有纯前端解析器的老二进制
+/// Office 格式（doc / xls / ppt）都走这条路径：markitdown sidecar 抽取
+/// 正文，可搜索、可复制，比内嵌 HTML 更适合快速扫读。
 const MARKITDOWN_EXTENSIONS: &[&str] = &[
     "docx", "doc", "xlsx", "xls", "pptx", "ppt", "pdf", "html", "htm", "epub",
     "csv", "tsv", "json", "xml", "msg", "zip", "rtf", "odt", "ods", "odp",

@@ -5,7 +5,6 @@ pub mod commands_local_search;
 pub mod commands_workbench;
 pub mod keep_awake;
 pub mod markitdown;
-pub mod officecli;
 pub mod portable_env;
 pub mod screenshot;
 pub mod screenshot_controller;
@@ -721,7 +720,6 @@ pub fn run() {
             screenshot_controller::screenshot_cancel,
             screenshot_controller::screenshot_apply_config,
             cdp_probe::cdp_n0_probe,
-            commands::render_office_preview,
             commands::document_to_markdown,
             commands::get_runtime_info,
             boot_stage,

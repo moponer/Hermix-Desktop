@@ -4,7 +4,7 @@ const MARKITDOWN_BINARY_NAME: &str = "markitdown-x86_64-pc-windows-msvc.exe";
 
 /// Resolve the path to the bundled `markitdown` sidecar.
 ///
-/// 解析顺序与 `officecli` 保持一致：显式环境变量 → 开发态 manifest 目录 →
+/// 解析顺序与其他 sidecar 保持一致：显式环境变量 → 开发态 manifest 目录 →
 /// 装版目录下的 `binaries/`。两条依赖走同一套规则，排查时不用记两份。
 pub fn resolve_markitdown_path() -> PathBuf {
     if let Ok(p) = std::env::var("MARKITDOWN_BIN") {

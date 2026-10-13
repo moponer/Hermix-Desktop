@@ -31,7 +31,7 @@ function buildSamples() {
       "word/document.xml": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
 <w:p><w:r><w:rPr><w:b/><w:sz w:val="48"/></w:rPr><w:t>PREVIEW ENGINE PROOF</w:t></w:r></w:p>
-<w:p><w:r><w:t>docx-preview 已接管渲染（纯前端，无 officecli 外部进程）</w:t></w:r></w:p>
+<w:p><w:r><w:t>docx-preview 已接管渲染（纯前端引擎）</w:t></w:r></w:p>
 <w:tbl><w:tr><w:tc><w:p><w:r><w:t>单元格 A</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>单元格 B</w:t></w:r></w:p></w:tc></w:tr></w:tbl>
 </w:body></w:document>`,
     };

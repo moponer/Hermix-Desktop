@@ -104,7 +104,7 @@ export interface ChatOverrides {
   skills?: string[];
   /** L1 域模式 pin："code" = 编码模式；不传/undefined = 自动检测（工作模式）。 */
   domainOverride?: string;
-  /** 受聘专家携带的工具组名（registry 标签，如 "office"）。后端把组成员
+  /** 受聘专家携带的工具组名（registry 标签，如 "document"）。后端把组成员
    *  并进本轮白名单——专家只能加工具，不会撤销用户已启用的集合。 */
   expertToolset?: string;
   /** Free-form overrides for future use; backend ignores unknown keys. */

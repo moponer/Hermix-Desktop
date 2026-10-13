@@ -350,7 +350,7 @@ mod tests {
     #[test]
     fn test_builtin_distributions_count() {
         let dists = builtin_distributions();
-        assert_eq!(dists.len(), 17);
+        assert_eq!(dists.len(), 14);
     }
 
     #[test]

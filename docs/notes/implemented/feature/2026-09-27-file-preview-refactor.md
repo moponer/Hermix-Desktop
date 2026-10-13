@@ -21,10 +21,13 @@ components/preview/
   PreviewSurface.tsx  唯一渲染入口：payload → JSX，面板与全屏共用
   viewers/
     PdfView.tsx     pdf.js → canvas，翻页 / 缩放
-    DocxView.tsx    docx-preview → HTML
+    DocxView.tsx    docx-preview → HTML（按纸张还原，见 2026-10-13 那篇）
     PptxView.tsx    pptx-browser → canvas，翻页
     ImageView.tsx   blob + panzoom，缩放 / 拖拽 / 旋转
-    MarkdownView.tsx  satteri（从旧组件抽出）
+    MarkdownView.tsx  satteri（从旧组件抽出；排版细节见 2026-10-13 那篇）
+    HtmlView.tsx    沙箱 iframe 渲染网页（2026-10-13 新增）
+    SpreadsheetView.tsx  带样式的表格网格（2026-10-13 新增）
+lib/workbook.ts     表格保真模型（2026-10-13 新增）
 PreviewPanel.tsx    壳：头部工具栏 + 加载状态机 + 全屏容器
 ```
 
@@ -42,10 +45,11 @@ PreviewPanel.tsx    壳：头部工具栏 + 加载状态机 + 全屏容器
 | DOCX | officecli 外部进程转 HTML | `docx-preview` 0.4.1 | Apache-2.0，0.93 MB，仅依赖 jszip |
 | PPTX | officecli 转 HTML，无分页概念 | `pptx-browser` 4.1.5 | MIT，0.42 MB，零依赖，Canvas 逐页渲染 |
 | 图片 | base64 拼串（8 MiB 上限，主线程卡死），无交互 | blob URL + `@panzoom/panzoom` | MIT，0.15 MB，零依赖 |
-| XLSX / CSV / XLS | SheetJS（已有） | 保留 | — |
+| XLSX / XL SM | SheetJS（已有） | **后改为 ExcelJS**：SheetJS 社区版读回的样式只有 fill | 见 [2026-10-13 格式保真重构](2026-10-13-preview-rendering-fidelity.md) |
+| CSV / XLS | SheetJS / PapaParse | 保留（SheetJS 只服务 BIFF 的 `.xls`） | — |
 | 代码 | prismjs + refractor（已有） | 保留 | — |
 | Markdown | satteri（已有） | 保留 | — |
-| doc / ppt（老二进制） | officecli | **保留 officecli 兜底** | 纯前端无解 |
+| doc / ppt（老二进制） | officecli | **保留 officecli 兜底** | 纯前端无解（2026-10-13 起该兜底已移除，改走 markitdown 文本，见 [移除 officecli 依赖](../../simplification/2026-10-13-remove-officecli-dependency.md)） |
 
 ## Alternatives considered
 
@@ -64,7 +68,11 @@ PreviewPanel.tsx    壳：头部工具栏 + 加载状态机 + 全屏容器
 
 ### 老二进制格式不一起换掉
 
-`doc` / `ppt` 是 OLE 复合文档，浏览器侧没有成熟解析器，因此**保留 officecli 兜底**。`.xls` 是例外——SheetJS 社区版读得动 BIFF，所以仍走前端。
+`doc` / `ppt` 是 OLE 复合文档，浏览器侧没有成熟解析器，因此**保留 officecli 兜底**。
+`.xls` 是例外——SheetJS 社区版读得动 BIFF，所以仍走前端。
+
+2026-10-13 更新：该兜底已随 [officecli 依赖移除](../../simplification/2026-10-13-remove-officecli-dependency.md)
+一并去掉，老二进制格式改由 markitdown 抽取成文本预览。
 
 ### 被否决的"在旧组件里继续加分支"
 
@@ -75,11 +83,11 @@ PreviewPanel.tsx    壳：头部工具栏 + 加载状态机 + 全屏容器
 - **pptx-browser 会请求 Google Fonts**（`fonts.js:503`）。库内没有禁用开关，离线时靠 5s 硬超时 + `onerror` 兜底，不会卡死，但首个 PPTX 可能慢几秒。Windows 自带 Calibri / Cambria / Segoe UI 会被识别为系统字体而跳过该请求。
 - **pdf.js 的 ArrayBuffer 会被转移所有权**，传参必须给副本，否则后续渲染拿到 detached buffer。
 - **pdf.js v6 的 `render()` 吃 `canvas` 而非 `canvasContext`**，`destroy()` 在 loadingTask 上而不是 document proxy 上——只丢 doc 引用会留着 worker。
-- **officecli 仍留在依赖里**，仅为 `doc` / `ppt` 兜底，牺牲了一次性删掉外部进程依赖的机会。
+- **officecli 曾留在依赖里**，仅为 `doc` / `ppt` 兜底，牺牲了一次性删掉外部进程依赖的机会。该妥协已于 2026-10-13 解除（见 [移除 officecli 依赖](../../simplification/2026-10-13-remove-officecli-dependency.md)）。
 - **放弃 WebView 内置 `<embed>` 查看器**（PDF 无页码、无缩放、无法选中文本），换来的是可控的渲染与独立 worker。
 
 ### 验证
 
 - `tsc --noEmit` 通过
-- `resolveKind.test.ts` 5 条通过（分派表 + 视图模式）
+- `resolveKind.test.ts` 8 条通过（分派表 + 视图模式，含 html 渲染页面、svg 走图片）
 - `vite build` 通过，`pdf.worker.min` 独立产出；CSP 已有 `worker-src 'self' blob:`，无需改动

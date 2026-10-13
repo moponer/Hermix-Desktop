@@ -127,8 +127,8 @@ pub fn per_tool_budget(tool: &str) -> Duration {
         // 子 agent 编排有自己的预算（orchestrator，默认 1800s），
         // 外部预算只做护栏，略微放行即可。
         "delegate_task" => Duration::from_secs(1900),
-        // 文档转换（officecli/markitdown）跑外部进程，大文件转换慢
-        "office_cli" | "markitdown" | "file_converter" | "read_pdf" => Duration::from_secs(300),
+        // 文档转换（Office MCP / markitdown）跑外部进程，大文件转换慢
+        "markitdown" | "file_converter" | "read_pdf" => Duration::from_secs(300),
         // 图片/视频生成走外部 API，出图 1-3 分钟是常态
         "image_generate" | "gpt_image_generate" | "video_generate" | "tts" => {
             Duration::from_secs(600)

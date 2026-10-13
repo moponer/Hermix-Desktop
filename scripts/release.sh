@@ -117,7 +117,7 @@ cp "$SRC_MAIN" "$APP/$MAIN_EXE_NAME"
 #     binaries/"正好相反。两份副本一旦分叉，打包到哪一份取决于文件名猜没猜对，
 #     而猜错不报错。直接取 target/release/，这个问题就不存在了。
 #
-#   项目资产 / 上游预编译（officecli / markitdown）
+#   项目资产 / 上游预编译（markitdown）
 #     仓库里没有 crate、没有构建脚本（更新流程见 build.rs 注释），ensure-sidecar
 #     也不碰它们。唯一的家就是 binaries/。
 BINARIES="$REPO_ROOT/apps/desktop-tauri/src-tauri/binaries"
@@ -162,7 +162,7 @@ done
 
 # 项目资产 / 上游预编译：唯一的家在 binaries/。**不参与上面的新鲜度判定**——
 # 仓库里没有它们的源码，拿本仓库的 .rs 去比毫无意义，只会让这道门天天误报。
-for s in officecli markitdown; do
+for s in markitdown; do
   f="$BINARIES/$s-x86_64-pc-windows-msvc.exe"
   [[ -f "$f" ]] || { echo "错误：缺 sidecar $f"; exit 1; }
   cp "$f" "$APP/$s.exe"

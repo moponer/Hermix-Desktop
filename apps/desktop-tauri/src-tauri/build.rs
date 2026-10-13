@@ -104,52 +104,6 @@ fn copy_usn_indexer_sidecar(manifest_dir: &Path, profile: &str) {
     }
 }
 
-/// `officecli` sidecar — 项目级扩展资源二进制 (externalBin).
-///
-/// 约束: 之前 build.rs 跨盘符找源 (D:\HermixDesktop\, repo\release\ 等),
-/// 违反"项目内自包含"原则. 现在 officecli.exe 是项目资产, 由维护者手动
-/// `cp` 到 `src-tauri/binaries/officecli-x86_64-pc-windows-msvc.exe`,
-/// Tauri externalBin 直接读取该路径打包. build.rs 只做存在性 + 大小合理性校验,
-/// 缺失立刻 panic 让 CI/本地立刻看到, 不再写 1KB stub 蒙混.
-///
-/// 更新流程:
-///   1. 拿到新的 officecli.exe
-///   2. `cp new_officecli.exe apps/desktop-tauri/src-tauri/binaries/officecli-x86_64-pc-windows-msvc.exe`
-///   3. `cargo tauri build` 重新打包 → NSIS 安装包内自动包含新版本
-///
-/// runtime fallback: 如果用户硬塞了 stub 启动, `officecli::ensure_officecli()` 在
-/// 真实 invoke 时会拿到 OS 错误 "不是有效的 Win32 应用", 给用户明确信号.
-const OFFICECLI_MIN_BYTES: u64 = 100 * 1024; // 100 KB — 任何真二进制都超过; stub 都不过
-fn assert_officecli_present(manifest_dir: &Path) {
-    let dst = manifest_dir.join("binaries").join("officecli-x86_64-pc-windows-msvc.exe");
-    println!("cargo:rerun-if-changed={}", dst.display());
-
-    let meta = match fs::metadata(&dst) {
-        Ok(m) => m,
-        Err(_) => panic!(
-            "officecli sidecar missing at {}\n\
-             \n\
-             This is a project-level resource binary. Place it manually:\n\
-             \n\
-                 cp <path-to>/officecli.exe {}\n\
-             \n\
-             Then rerun `cargo tauri build`. See build.rs for the update workflow.",
-            dst.display(),
-            dst.display()
-        ),
-    };
-
-    if meta.len() < OFFICECLI_MIN_BYTES {
-        // 不 panic —— 只警告, 让 stub placeholder 启动也能 build (刻意留的口子)
-        println!(
-            "cargo:warning=officecli sidecar at {} is suspiciously small ({} bytes, expected > {}). \
-             Likely a stub placeholder — replace with the real binary before shipping.",
-            dst.display(),
-            meta.len(),
-            OFFICECLI_MIN_BYTES
-        );
-    }
-}
 
 fn main() {
     // sidecar 处理必须先于 tauri_build::build(),
@@ -158,7 +112,6 @@ fn main() {
     let profile = env::var("PROFILE").expect("CARGO sets PROFILE for build scripts");
     copy_workspace_sidecar(&manifest_dir, &profile);
     copy_usn_indexer_sidecar(&manifest_dir, &profile);
-    assert_officecli_present(&manifest_dir);
 
     tauri_build::build();
 }

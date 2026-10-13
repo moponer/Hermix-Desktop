@@ -133,13 +133,13 @@ if [ -n "$RES_STALE" ]; then
 fi
 
 # --- Check 3: the other externalBin sidecars are PRESENT --------------------
-# `officecli` / `markitdown` ship through the same mechanism, so a missing one
+# `markitdown` ships through the same mechanism, so a missing one
 # breaks the installer outright. Presence is checked; **staleness is not**,
 # and that asymmetry is deliberate:
 #
 #   hermix      — built from THIS repo. Its binary must track the Rust tree,
 #                 so mtime is a valid signal and Check 2 applies.
-#   others      — prebuilt artifacts of separate upstream projects (OfficeCLI,
+#   others      — prebuilt artifacts of separate upstream projects (e.g.
 #                 markitdown-rs). There is no crate and no build script for
 #                 them in this repo; they are refreshed when their own project
 #                 publishes a release. Comparing their mtime against this

@@ -123,7 +123,6 @@ pub const HARD_ESSENTIAL_TOOLSETS: &[&str] = &[
 /// whitelist" warning firing on startup for toolsets like `document`.
 pub const SOFT_ESSENTIAL_TOOLSETS: &[&str] = &[
     "document",
-    "office",
     "storage",
 ];
 
@@ -146,7 +145,6 @@ pub const ESSENTIAL_TOOLSETS: &[&str] = &[
     "vault",
     // soft
     "document",
-    "office",
     "storage",
 ];
 
@@ -216,7 +214,7 @@ mod tests {
         // and re-introduce the startup override warning.
         assert_eq!(
             SOFT_ESSENTIAL_TOOLSETS,
-            &["document", "office", "storage"],
+            &["document", "storage"],
             "SOFT_ESSENTIAL_TOOLSETS changed — soft toolsets must remain optional."
         );
     }

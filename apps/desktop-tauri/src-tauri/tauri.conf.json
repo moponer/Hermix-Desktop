@@ -51,7 +51,6 @@
     "createUpdaterArtifacts": false,
     "externalBin": [
       "binaries/hermix",
-      "binaries/officecli",
       "binaries/markitdown",
       "binaries/usn-indexer",
       "binaries/hermix-viewer"
