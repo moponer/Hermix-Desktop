@@ -267,7 +267,7 @@ pub async fn get_memory_graph(
     let mut truncated = false;
 
     let mut node_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut push_node = |n: GraphNode, nodes: &mut Vec<GraphNode>, ids: &mut std::collections::HashSet<String>, truncated: &mut bool| {
+    let push_node = |n: GraphNode, nodes: &mut Vec<GraphNode>, ids: &mut std::collections::HashSet<String>, truncated: &mut bool| {
         if nodes.len() >= max_nodes {
             *truncated = true;
             return;

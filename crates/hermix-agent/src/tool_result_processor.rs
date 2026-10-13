@@ -12,7 +12,6 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::LazyLock;
 
-use base64::Engine;
 use hermix_core::{types::ContentPart, Message, ToolCall, ToolResult};
 
 use crate::context::ContextManager;
