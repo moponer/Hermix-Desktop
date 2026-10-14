@@ -41,10 +41,12 @@ update-url.txt）本就不含安装器。
   前端与 PE 嵌入工具）；`release.sh` 少一段退场对账逻辑。
 - **放弃**：自研安装器的品牌化安装 UI（Tauri React 向导、与 UpdatePanel 同族的设计语言）
   与 per-user HKCU 卸载登记——改由 NSIS 的向导页与卸载条目承担。
-- **风险（既有，非本次引入）**：zip 整包更新会把 app 根内容整体搬进 `update.backup`
-  再用 zip 覆盖；**落在安装目录内的 `uninstall.exe` 会在更新后丢失，卸载入口对
+- **风险（既有，已缓解）**：zip 整包更新会把 app 根内容整体搬进 `update.backup`
+  再用 zip 覆盖；**落在安装目录内的 `Uninstall.exe` 会在更新后丢失，卸载入口对
   「装过安装器 + 走过一次自动更新」的存量用户可能变死链**。NSIS 同构（卸载器同样住
-  安装目录），故不随本次退役消解，另行评估。
+  安装目录）。已通过 `updater.rs` 的 `apply-update.ps1` 在 swap / 回滚两步把卸载器
+  排除在搬移之外消除死链（残留=旧卸载器文件清单可能留孤儿文件，见
+  [在线更新 §3.1](../feature/2026-10-09-online-update.md)）。
 - **不动**：`apps/hx-packager` 与 `crates/hermix-plugin`（Custom App 打包仍在使用；自研
   安装器只是**曾**复用其 PE 资源嵌入能力，两者不是同一功能）。
 - 仓库与出包链中「自研安装器」的位置全部清理：`Cargo.toml` members、`release.sh`、
