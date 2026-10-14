@@ -17,26 +17,48 @@
  */
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { onShow } from '@dcloudio/uni-app'
+import { getTasks } from '../../core/tasks'
+import { getAllApprovals, submitDecision } from '../../core/approval'
 
 interface Approval {
   requestId: string
+  sid: string
   tool: string
   detail: string
-  /** 剩余秒数；到 0 = 已超时自动拒绝 */
   remainSecs: number
   expired: boolean
+  canPersist: boolean
 }
 
 const items = ref<Approval[]>([])
 
+async function loadApprovals() {
+  // 先拿 tasks 列表，从中提取 sid（relay 模式下手机只有一个设备级会话）
+  const tasks = await getTasks()
+  const sids = [...new Set(tasks.map((t) => t.sid).filter(Boolean))]
+  if (!sids.length) {
+    items.value = []
+    return
+  }
+  const raw = await getAllApprovals(sids)
+  items.value = raw.map((r) => ({
+    requestId: r.request_id,
+    sid: r.sid,
+    tool: r.tool,
+    detail: r.detail,
+    remainSecs: r.remain_secs,
+    expired: r.expired,
+    canPersist: r.can_persist,
+  }))
+}
+
 let timer: ReturnType<typeof setInterval> | undefined
 onMounted(() => {
+  void loadApprovals()
   timer = setInterval(() => {
     for (const a of items.value) {
       if (a.expired || a.remainSecs <= 0) continue
       a.remainSecs -= 1
-      // 到点 = 服务端已自动 deny（默认 600s）。前端只是把既成事实显示出来，
-      // 真正生效的是服务端；这里不能自己判「通过」。
       if (a.remainSecs <= 0) a.expired = true
     }
   }, 1000)
@@ -50,14 +72,17 @@ const active = computed(() => items.value.find((a) => !a.expired))
 async function decide(choice: 'allow' | 'deny') {
   const a = active.value
   if (!a) return
-  // TODO(接 REST): POST /v1/sessions/{sid}/approval
-  //   { request_id, decision: 'approved' | 'denied' }
-  //   决定后卡片置灰 + 徽标；点击未生效的态要显示 expired 而不是静默无响应
+  const res = await submitDecision(a.sid, a.requestId, choice === 'allow' ? 'approved' : 'denied')
+  if (!res.ok) {
+    uni.showToast({ title: res.reason ?? '提交失败', icon: 'none' })
+    return
+  }
+  // 成功后把这条从列表移除（服务端会同步更新）
   items.value = items.value.filter((x) => x.requestId !== a.requestId)
 }
 
 onShow(() => {
-  // TODO(接 REST): 拉待审批列表。服务端在 relay 边界已按设备过滤。
+  void loadApprovals()
 })
 </script>
 
@@ -86,7 +111,8 @@ onShow(() => {
           <view class="key allow" @tap="decide('allow')"><text>允许一次</text></view>
           <view class="key deny" @tap="decide('deny')"><text>拒绝</text></view>
         </view>
-        <text class="cap">永久放行需在桌面端确认</text>
+        <text v-if="!a.canPersist" class="cap">永久放行需在桌面端确认</text>
+        <text v-else class="cap accent">此次允许后仍可永久放行</text>
       </template>
 
       <view v-else class="expired-note">
@@ -198,5 +224,8 @@ onShow(() => {
   padding: 16rpx;
   font-size: $fs-mini;
   color: $err;
+}
+.cap.accent {
+  color: $accent;
 }
 </style>

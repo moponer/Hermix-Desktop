@@ -48,6 +48,13 @@
         "navigationStyle": "custom",
         "navigationBarTitleText": "设置"
       }
+    },
+    {
+      "path": "pages/history/index",
+      "style": {
+        "navigationStyle": "custom",
+        "navigationBarTitleText": "历史会话"
+      }
     }
   ],
   "globalStyle": {

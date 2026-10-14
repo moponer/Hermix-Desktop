@@ -299,7 +299,8 @@ const devName = computed(() => activeDevice()?.name ?? '')
   margin-bottom: 14rpx;
 }
 .dev.on {
-  box-shadow: inset 0 0 0 2rpx $accent;
+  /* 选中态靠背景色差，不再用 inset ring */
+  background: rgba(111, 174, 148, 0.1);
 }
 .dev-dot {
   flex: none;
@@ -341,7 +342,7 @@ const devName = computed(() => activeDevice()?.name ?? '')
   align-items: center;
   justify-content: center;
   border-radius: $r-card;
-  border: 2rpx dashed #3a3d42;
+  background: rgba(111, 174, 148, 0.08);
   color: $accent;
   font-size: $fs-sub;
   margin-top: 4rpx;

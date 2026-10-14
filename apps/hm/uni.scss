@@ -54,3 +54,80 @@ $fs-sub: 26rpx;
 $fs-mini: 22rpx;
 $tap: 88rpx;
 $gutter: 32rpx;
+
+/* markdown 渲染样式（rich-text 不吃 scoped，所以放全局） */
+.txt.md {
+  word-break: break-word;
+  line-height: 1.6;
+}
+.md-code {
+  background: $base;
+  border-radius: 8rpx;
+  padding: 16rpx 20rpx;
+  margin: 12rpx 0;
+  overflow-x: auto;
+  font-family: monospace;
+  font-size: 26rpx;
+  color: $fg;
+  white-space: pre;
+}
+.md-code-inline {
+  background: $raised;
+  border-radius: 6rpx;
+  padding: 2rpx 10rpx;
+  font-family: monospace;
+  font-size: 26rpx;
+  color: $accent;
+}
+.md-link {
+  color: $accent;
+  text-decoration: underline;
+}
+.md-h {
+  display: block;
+  font-size: 30rpx;
+  font-weight: 600;
+  color: $fg;
+  margin: 8rpx 0;
+}
+.md-ul {
+  margin: 8rpx 0;
+  padding-left: 36rpx;
+}
+.md-li {
+  font-size: 30rpx;
+  color: $fg;
+  line-height: 1.6;
+}
+/* 表格 */
+.md-table {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  margin: 12rpx 0;
+  border-collapse: collapse;
+  font-size: 28rpx;
+}
+.md-th,
+.md-td {
+  padding: 10rpx 16rpx;
+  color: $fg;
+  text-align: left;
+  border-bottom: 1px solid $raised;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 300rpx;
+}
+.md-th {
+  font-weight: 600;
+  color: $fg2;
+  background: $raised;
+}
+
+/* 键盘弹出补偿：把滚动区上移，保持底部输入栏贴近键盘。--kb-height 由 JS 设置。 */
+.kb-open .content {
+  transform: translateY(calc(-1 * var(--kb-height, 0px)));
+  transition: transform 0.12s ease-out;
+}

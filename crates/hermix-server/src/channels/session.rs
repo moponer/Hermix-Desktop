@@ -519,8 +519,10 @@ impl ChannelRuntime {
             .collect();
         let mut views: Vec<crate::state::ChannelSessionView> = Vec::new();
         for (key, text) in &running {
+            let user = key.split_once(':').map(|(_, u)| u).unwrap_or(&key);
             views.push(crate::state::ChannelSessionView {
                 key: key.clone(),
+                sid: session_id(crate::channels::session::DEVICE_PLATFORM, user),
                 state: "running",
                 first_line: first_line(text),
                 position: None,
@@ -528,9 +530,11 @@ impl ChannelRuntime {
         }
         let queues = self.queues.lock().unwrap_or_else(|e| e.into_inner());
         for (key, q) in queues.iter() {
+            let user = key.split_once(':').map(|(_, u)| u).unwrap_or(&key);
             for (i, (msg, _)) in q.items.iter().enumerate() {
                 views.push(crate::state::ChannelSessionView {
                     key: key.clone(),
+                    sid: session_id(crate::channels::session::DEVICE_PLATFORM, user),
                     state: "queued",
                     first_line: first_line(&msg.text),
                     position: Some(i + 1),

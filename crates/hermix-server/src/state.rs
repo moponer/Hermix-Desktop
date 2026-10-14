@@ -132,8 +132,10 @@ pub struct ClarifyBroadcast {
 /// 会话内容**。
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ChannelSessionView {
-    /// `{platform}:{user}`，与 `ChannelRuntime::key` 同形。
+    /// `{platform}:{user}`，与 `ChannelRuntime::key` 同形（显示用）。
     pub key: String,
+    /// 手机端调用 `interrupt_session` 所需的会话 ID（格式 `im:device:{device_id}`）。
+    pub sid: String,
     /// `running` | `queued`。
     pub state: &'static str,
     /// 正文首行（截断）。

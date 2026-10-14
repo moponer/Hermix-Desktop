@@ -331,15 +331,25 @@ pub async fn serve_relay_socket(
                 }
             }
             FrameTag::Route => {
-                if let Some(payload) = env.payload.clone() {
-                    let sink = mux.sink_for(&sid);
-                    // 队列满：报错而不是静默丢（静默丢会让两边都以为发出去了）
-                    if let Err(e) = sink.try_send(payload) {
-                        tracing::warn!(session = %sid, error = %e, "会话入队失败");
-                    }
-                }
-                // 首帧时起这个会话的 handle_ws_stream。transport 与上面的
-                // sink 共用 mux 里那条通道——各自建一条的话消息永远到不了。
+                // 必须走 `dispatch`，不能把 `env.payload` 直接塞进队列。
+                //
+                // 队列那一头是 `handle_ws_stream`，它按 `WsClientMessage` 解析
+                // **明文**；而 payload 是 `{"ct":…,"nonce":…,"ep":…,"eid":…}` 的
+                // 密文信封。原先直接 `try_send(payload)`，等于让会话收到一段
+                // 解不开的 JSON，解析失败后**没有任何报错**——症状正是
+                // 「手机发消息，电脑毫无反应」。
+                //
+                // `dispatch` 还顺手做两件只有它会做的事：学 `key.exchange` 的
+                // 设备公钥（出站 E2EE 的前提）、按 eid 去重（否则同一条密文
+                // 重投就是一次静默的指令重放）。
+                //
+                // 返回值刻意不分支：被拒的帧（解密失败/缺 sid）也照样把会话起
+                // 起来——`key.exchange` 与重连帧可能随后就到，先备好
+                // `handle_ws_stream` 比等下一条业务帧再起要稳。
+                mux.dispatch(&env);
+                // 首帧时起这个会话的 handle_ws_stream。transport 与上面
+                // dispatch 投进的 sink 共用 mux 里那条通道——各自建一条的话
+                // 消息永远到不了。
                 if !sessions.contains_key(&sid) {
                     let transport = mux.transport_for(&sid, out_tx.clone());
                     let st = state.clone();

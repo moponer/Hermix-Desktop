@@ -15,14 +15,18 @@
  * 「拆解为 N 个步骤 + 展开 + 完成态」）：手机上一步一行铺开，会把真正的
  * 回答顶出屏幕。
  */
-import { ref, computed, nextTick } from 'vue'
+import { ref, computed, nextTick, onMounted } from 'vue'
 import { onUnmounted } from 'vue'
-import { onReady } from '@dcloudio/uni-app'
+import { onReady, onShow } from '@dcloudio/uni-app'
 import { isRiskyInstruction } from '../../core/voice'
 import { dispatch, reduce, initialChatState, type ChatState } from '../../core/frames'
 import { isPaired } from '../../core/pairing'
 import { relayBaseUrl } from '../../core/clock'
 import { ensureSplashClosed } from '../../core/boot'
+import { ChatSession } from '../../core/session'
+import { renderMarkdown } from '../../core/markdown'
+import { newSessionId, loadSession, saveSession } from '../../core/history'
+import { interruptSession } from '../../core/tasks'
 import type { AsrProvider } from '../../core/voice'
 
 interface Bubble {
@@ -31,6 +35,10 @@ interface Bubble {
   text: string
   /** 语音发送的消息标记：这条是识别出来的，不是打字的 */
   viaVoice?: boolean
+  /** 已完成气泡的工具轨迹（从 turnActive=false 时 capture） */
+  doneTools?: string[]
+  /** 助手气泡的实时工具轨迹（流式中从 chat.runningTools 同步） */
+  runningTools?: string[]
 }
 
 const messages = ref<Bubble[]>([])
@@ -61,6 +69,102 @@ const isEmpty = computed(() => messages.value.length === 0 && !streaming.value)
 const paired = ref(isPaired())
 const hasRelay = ref(!!relayBaseUrl())
 
+/** 键盘高度（来自 VisualViewport 检测），用于输入栏定位补偿。 */
+const kbHeight = ref(0)
+
+function setupKbHeight() {
+  const vv = window.visualViewport
+  if (!vv) return
+  let lastKb = 0
+  let rafId = 0
+  const raf = window.requestAnimationFrame || ((fn: Function) => setTimeout(fn, 16))
+  function compute() {
+    const kb = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop))
+    return kb
+  }
+  function apply() {
+    const kb = compute()
+    if (Math.abs(kb - lastKb) < 6) return
+    lastKb = kb
+    kbHeight.value = kb
+    document.documentElement.style.setProperty('--kb-height', kb + 'px')
+  }
+  function schedule() {
+    if (rafId) return
+    rafId = raf(() => { rafId = 0; apply() })
+  }
+  vv.addEventListener('resize', schedule)
+  vv.addEventListener('scroll', schedule)
+  window.addEventListener('resize', schedule)
+  window.addEventListener('orientationchange', () => setTimeout(schedule, 200))
+  // 初始计算
+  setTimeout(schedule, 100)
+}
+
+// ── 会话持久化 ────────────────────────────────────────────────────
+/** 当前会话 id（未发过消息时为 null，发过即创建） */
+const currentSid = ref<string | null>(null)
+
+onMounted(() => {
+  setupKbHeight()
+  // 尝试恢复上一个被选中的会话
+  const restore = uni.getStorageSync('hermix.restoreSession') as string | ''
+  uni.removeStorageSync('hermix.restoreSession')
+  if (restore) {
+    const msgs = loadSession(restore)
+    if (msgs.length) {
+      messages.value = msgs
+      currentSid.value = restore
+      scrollToTail()
+    }
+  }
+})
+
+/** 每次轮次结束后保存会话（用户发消息时由 sendText 调用，助手回复落定后由 onFrame 调用） */
+function persistSession() {
+  if (!currentSid.value) return
+  saveSession(currentSid.value, messages.value as any)
+}
+
+
+// ── 会话连接 ──────────────────────────────────────────────────────
+//
+// 链路状态是**主界面上的一个状态**，不是拦截层：连不上时对话区照常在，
+// 只是发不出去并且说清楚为什么。早期版本把「没配对」做成整页拦截，
+// 那是把「不能做什么」和「进不来」混成一件事。
+const link = ref<'offline' | 'connecting' | 'online'>('offline')
+const linkMsg = ref('')
+let session: ChatSession | null = null
+
+function ensureSession() {
+  if (session || !paired.value) return
+  session = new ChatSession({
+    onPlain: (json) => onFrame(json),
+    onState: (s) => {
+      if (s === 'open') {
+        link.value = 'online'
+        linkMsg.value = ''
+      } else if (s === 'connecting') {
+        link.value = 'connecting'
+      } else if (s === 'closed' || s === 'error') {
+        link.value = 'connecting' // RelayClient 自己会退避重连，别谎报成断开
+        linkMsg.value = ''
+      }
+    },
+    onError: (m) => {
+      linkMsg.value = m
+    },
+  })
+  void session.start()
+}
+
+// 页面可能被反复进入（reLaunch 回来、tab 切换），onShow 里 start 是幂等的，
+// 不会叠连接。
+onShow(() => {
+  paired.value = isPaired()
+  if (paired.value) ensureSession()
+})
+
 // boot 页在 onLoad 里 reLaunch，其 onReady 大概率被跳过；这里是正常路径的
 // 兜底关点（首屏渲染完成后关启动图，根因见 core/boot.ts 的 ensureSplashClosed）。
 onReady(() => {
@@ -79,11 +183,19 @@ function scrollToTail() {
 function onFrame(raw: string) {
   const prev = chat.value.streamingId
   const next = reduce(chat.value, dispatch(raw))
-  chat.value = next
-  // 一轮落定：把流式气泡转成正式气泡
-  if (prev && next.streamingId && next.turnActive === false) {
-    messages.value.push({ id: prev, role: 'assistant', text: next.streamingText })
-    chat.value = { ...next, streamingId: null, streamingText: '' }
+  // turn.done 是唯一的"一轮落定"信号；doneTools 在此时已达最终态
+  const doneAtTurnEnd = !next.turnActive && prev && next.streamingId
+  chat.value = doneAtTurnEnd
+    ? { ...next, streamingId: null, streamingText: '' }
+    : next
+  if (doneAtTurnEnd) {
+    messages.value.push({
+      id: prev!,
+      role: 'assistant',
+      text: next.streamingText,
+      doneTools: [...next.doneTools],
+    })
+    persistSession()
   }
   scrollToTail()
 }
@@ -137,6 +249,29 @@ function goSettings() {
   uni.navigateTo({ url: '/pages/settings/index' })
 }
 
+function goHistory() {
+  uni.navigateTo({ url: '/pages/history/index' })
+}
+
+function confirmNew() {
+  if (!messages.value.length && !streaming.value) return
+  uni.showModal({
+    title: '新对话',
+    content: '清空当前上下文，开始一个新的会话？',
+    confirmText: '新对话',
+    success: (res) => {
+      if (!res.confirm) return
+      // 保存当前会话（如果有过消息）
+      if (currentSid.value) {
+        saveSession(currentSid.value, messages.value as any)
+      }
+      messages.value = []
+      chat.value = initialChatState()
+      currentSid.value = null
+    },
+  })
+}
+
 function send() {
   sendText(draft.value)
   draft.value = ''
@@ -145,36 +280,59 @@ function send() {
 function sendText(t: string) {
   const text = t.trim()
   if (!text) return
-  // 打字发的补一条（语音已经回显过气泡了）
-  if (!messages.value.some((m) => m.role === 'user' && m.text === text && m.viaVoice)) {
-    messages.value.push({ id: String(Date.now()), role: 'user', text })
+  // 首次发消息 → 创建会话 id 并落盘
+  if (!currentSid.value) {
+    currentSid.value = newSessionId()
+    saveSession(currentSid.value, [])
   }
-  // TODO(接 relayClient): send(JSON.stringify({ type: 'user.message', content: text }))
-  //   turnActive / 工具轨迹 / 三态回执都从回来的帧里推（见 onFrame），
-  //   **不在这里自己置 true** —— 那样"发出去"和"服务端开始跑"就分不开了。
-  // TODO(接麦克风): longpress 期间用 uni.getRecorderManager() 逐块调
-  //   asr.push(pcm)
-  scrollToTail()
+  ensureSession()
+  void (async () => {
+    // 先发出去，成功了才落气泡：连不上时留一条永远等不到回复的假消息，
+    // 比直接不落更糟——用户会以为电脑收到了。
+    const ok = (await session?.send(text)) ?? false
+    if (!ok) {
+      uni.showToast({ title: linkMsg.value || '还没连上电脑，正在重连', icon: 'none' })
+      return
+    }
+    // 打字发的补一条（语音已经回显过气泡了）
+    if (!messages.value.some((m) => m.role === 'user' && m.text === text && m.viaVoice)) {
+      messages.value.push({ id: String(Date.now()), role: 'user', text })
+    }
+    persistSession()
+    // turnActive / 工具轨迹 / 三态回执都从回来的帧里推（见 onFrame），
+    // **不在这里自己置 true** —— 那样"发出去"和"服务端开始跑"就分不开了。
+    scrollToTail()
+  })()
 }
 
 /**
  * 中断。只有 `turnActive` 为真时这个按钮才出现——那表示**服务端确实在跑**，
  * 所以它不是常驻的摆设按钮。
  */
-function stop() {
-  // TODO(接 REST): POST /v1/sessions/{sid}/interrupt
-  //   桌面端已经在 2026-09-30 起提供该端点；缺的是手机侧拿到 sid 的路径。
-  //   中断后**必须**回一句明确的话（PC 侧已终止），否则用户不知道点了没有。
-  uni.showToast({ title: '中断还没接上', icon: 'none' })
+async function stop() {
+  const res = await interruptSession(currentSid.value)
+  if (res.interrupted) {
+    uni.showToast({ title: '已中断', icon: 'none' })
+  } else {
+    uni.showToast({ title: res.reason ?? '中断失败', icon: 'none' })
+  }
 }
 
 onUnmounted(() => {
   draft.value = ''
+  // 连接跟着页面走：留着会让一条没人读的 socket 常驻，退避重连也停不下来。
+  session?.stop()
+  session = null
 })
 </script>
 
 <template>
-  <hm-shell title="对话" :scroll-into-view="anchor">
+  <hm-shell title="对话" :scroll-into-view="anchor" :class="{ 'kb-open': kbHeight > 120 }">
+    <template #end>
+      <hm-model-picker />
+      <view class="hist-btn" @tap="goHistory"><text>☰</text></view>
+      <view class="new-btn" @tap="confirmNew"><text>✛</text></view>
+    </template>
     <!-- 未连接：主界面里的一张卡片，不是拦截层 -->
     <view v-if="!paired" class="connect">
       <view class="c-top">
@@ -194,6 +352,12 @@ onUnmounted(() => {
       </view>
     </view>
 
+    <!-- 链路状态：连不上时对话区照常在，只是明确说清为什么发不出去 -->
+    <view v-if="paired && link !== 'online'" class="link-bar">
+      <view class="link-dot" />
+      <text class="link-txt">{{ linkMsg || '正在连电脑…' }}</text>
+    </view>
+
     <hm-empty
       v-else-if="isEmpty"
       title="还没有对话"
@@ -203,8 +367,9 @@ onUnmounted(() => {
     </hm-empty>
 
     <view v-for="m in messages" :key="m.id" :class="['bub', m.role]">
-      <hm-step v-if="m.role === 'assistant'" :running="[]" :done="[]" />
-      <text class="txt">{{ m.text }}</text>
+      <hm-step v-if="m.role === 'assistant'" :running="m.runningTools ?? []" :done="m.doneTools ?? []" />
+      <rich-text v-if="m.role === 'assistant'" class="txt md" :nodes="renderMarkdown(m.text)" />
+      <text v-else class="txt">{{ m.text }}</text>
       <text v-if="m.viaVoice" class="via">语音 · 长按可改</text>
     </view>
 
@@ -215,7 +380,7 @@ onUnmounted(() => {
     <!-- 流式中的助手气泡：单独一个壳，收尾时转成正式气泡 -->
     <view v-if="streaming" class="bub assistant">
       <hm-step :running="chat.runningTools" :done="chat.doneTools" />
-      <text class="txt">{{ streaming.text }}</text>
+      <rich-text class="txt md" :nodes="renderMarkdown(streaming.text)" />
     </view>
 
     <view v-if="chat.busy" class="notice warn"><text>上一轮还在跑 · 你发的话会排队</text></view>
@@ -281,6 +446,27 @@ onUnmounted(() => {
   padding: 28rpx;
   background: $card;
   border-radius: $r-card;
+}
+
+/* 链路条：不是拦截层，是一行状态。靠底色差与留白分层，不描边。 */
+.link-bar {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+  margin: 20rpx 26rpx 0;
+  padding: 16rpx 20rpx;
+  background: $card;
+  border-radius: $r-card;
+}
+.link-dot {
+  width: 14rpx;
+  height: 14rpx;
+  border-radius: 50%;
+  background: $warn;
+}
+.link-txt {
+  font-size: $fs-sub;
+  color: $fg2;
 }
 .c-top {
   display: flex;
@@ -449,9 +635,9 @@ onUnmounted(() => {
 .mic {
   flex: none;
   padding: 0 20rpx;
-  height: 72rpx;
-  line-height: 72rpx;
-  border-radius: 36rpx;
+  height: 88rpx;
+  line-height: 88rpx;
+  border-radius: 44rpx;
   background: $raised;
   color: $fg2;
   font-size: $fs-mini;
@@ -462,11 +648,11 @@ onUnmounted(() => {
 }
 .send {
   flex: none;
-  width: 72rpx;
-  height: 72rpx;
-  line-height: 72rpx;
+  width: 88rpx;
+  height: 88rpx;
+  line-height: 88rpx;
   text-align: center;
-  border-radius: 36rpx;
+  border-radius: 44rpx;
   background: $accent;
   color: $on-accent;
   margin-left: 12rpx;
@@ -478,5 +664,24 @@ onUnmounted(() => {
 }
 .send.off {
   opacity: 0.35;
+}
+
+/* 顶栏按钮：历史列表 + 新建对话 */
+:deep(.hist-btn),
+:deep(.new-btn) {
+  flex: none;
+  width: 64rpx;
+  height: 64rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 32rpx;
+  background: $raised;
+  color: $fg2;
+  font-size: 34rpx;
+}
+:deep(.hist-btn:active),
+:deep(.new-btn:active) {
+  opacity: 0.7;
 }
 </style>

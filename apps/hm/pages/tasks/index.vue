@@ -13,6 +13,7 @@
  */
 import { ref, computed } from 'vue'
 import { onShow } from '@dcloudio/uni-app'
+import { getTasks, interruptSession } from '../../core/tasks'
 
 interface TaskView {
   sid: string
@@ -26,14 +27,26 @@ const loading = ref(false)
 
 async function refresh() {
   loading.value = true
-  // TODO(接 REST): GET /v1/tasks（Authorization + 签名头）
-  //   服务端只回本设备的 sid，App 不做二次过滤
+  const list = await getTasks()
+  // 按 running 在前、queued 在后，再按 position 排序
+  tasks.value = list.sort((a, b) => {
+    if (a.state !== b.state) return a.state === 'running' ? -1 : 1
+    if (a.state === 'queued' && b.state === 'queued') {
+      return (a.position ?? 0) - (b.position ?? 0)
+    }
+    return 0
+  })
   loading.value = false
 }
 
 async function stop(sid: string) {
-  // TODO(接 REST): POST /v1/sessions/{sid}/interrupt
-  //   中断后必须回一句明确的话，否则用户以为没点上
+  const res = await interruptSession(sid)
+  if (res.interrupted) {
+    uni.showToast({ title: '已中断', icon: 'none' })
+    await refresh()
+  } else {
+    uni.showToast({ title: res.reason ?? '中断失败', icon: 'none' })
+  }
 }
 
 const running = computed(() => tasks.value.filter((t) => t.state === 'running'))

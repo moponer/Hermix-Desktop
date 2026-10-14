@@ -35,7 +35,10 @@ pub(crate) fn session_visible_to(origin: &hermix_core::Origin, sid: &str) -> boo
     sid == own
 }
 
-fn require_own_session(origin: &hermix_core::Origin, sid: &str) -> Result<(), Response> {
+/// `pub(crate)`：审批 REST 面（`list_pending_approvals` / `approve_via_rest`）
+/// 也走同一把闸——它们原来只在桌面段，手机端经 relay 接入后同样可达，
+/// 签名通过≠这条会话属于该设备。
+pub(crate) fn require_own_session(origin: &hermix_core::Origin, sid: &str) -> Result<(), Response> {
     if session_visible_to(origin, sid) {
         Ok(())
     } else {

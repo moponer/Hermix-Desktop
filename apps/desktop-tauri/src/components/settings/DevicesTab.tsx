@@ -2,33 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, Building2, MessageCircle, RefreshCw, Smartphone, Trash2 } from "lucide-react";
 import { fetchJSON } from "../../api/rest";
 import { toastError, toastSuccess } from "../../hooks/useToast";
-import { ImChannelsCard, type ChannelId } from "./ImChannelsCard";
-
-/** `GET /api/pairing/devices` 的行（pairing.rs::PairedDevice）。 */
-interface PairedDevice {
-  device_id: string;
-  device_name: string;
-  scopes: string;
-  issued_at: number;
-  last_seen_at: number | null;
-  revoked_at: number | null;
-}
-
-/**
- * 这一行设备属于哪个渠道。
- *
- * 设备表是**跨渠道一张表**：IM 账号与配对手机共用 `paired_devices`（见
- * `channels/session.rs` 里 `qq:<openid>` 的写法），但**呈现**必须按选中渠道切分
- * ——在企业微信下面看到 QQ 的设备和撤销按钮是串台，撤销还容易点错人。
- *
- * 判据用名字形态而非加字段：`^(qq|wecom):` 前缀是 IM 账号（由 channels 侧写入），
- * 其余是走扫码配对进来的手机（名字由手机自报）。
- */
-function channelOf(deviceName: string): ChannelId {
-  const m = /^(qq|wecom):/.exec(deviceName);
-  if (m) return m[1] as ChannelId;
-  return "mobile";
-}
+import { ImChannelsCard } from "./ImChannelsCard";
+import { channelOf, type ChannelId, type PairedDevice, type RevokeOutcome } from "./channelOf";
 
 /** 列表标题跟着选中渠道走——固定写「已配对设备」会让人以为看到的是全局表。 */
 const CHANNEL_TITLES: Record<ChannelId, string> = {
@@ -54,21 +29,7 @@ const CHANNEL_EMPTY: Record<ChannelId, string> = {
   mobile: "还没有手机连进来。在上面生成配对码，用手机扫一次即可。",
 };
 
-/**
- * `DELETE /api/pairing/devices/{id}` 的返回。
- *
- * **撤销是两件事**，必须分开报：本地设备令牌失效（= 发不出帧）永远成功；
- * relay 侧断开连接则可能失败（relay 不可达、没配地址、绑都没绑过）。
- * 把两者合成一句「已撤销」就是在骗用户——那台手机可能还在收广播帧。
- */
-interface RevokeOutcome {
-  device_id: string;
-  local_revoked: boolean;
-  /** 这台设备配对时是否报过 relay 凭据哈希。没报过就没有 relay 侧可撤。 */
-  relay_bound: boolean;
-  relay_revoked: boolean;
-  relay_error: string | null;
-}
+/** `RevokeOutcome` 住在 ./channelOf —— ImChannelsCard 撤销手机时也要读它。 */
 
 function formatUnixSec(sec: number | null): string {
   if (!sec) return "—";

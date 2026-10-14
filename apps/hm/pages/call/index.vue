@@ -13,16 +13,25 @@
  * 自然行为，是强意图。服务端的**插话是硬打断**（`POST /v1/sessions/{sid}/interrupt`），
  * 但**打断之后必须在屏幕上给出明确的话**，否则用户不知道这件事是不是真的发生了。
  *
- * 改造重点：原版 `transcript` 与 `elapsed` 都是假数据（252 秒、一条假转写），
- * 且 `startTicker` **定义了却从没被调用**，计时器根本不转。`window.setInterval`
- * 在 App / 小程序端没有 `window`，一旦真被调用就是 ReferenceError。
+ * ## 待完成（全端 WebRTC）
+ *   1. 实时转写：relay 需要暴露 WebRTC 信令端点（SDP offer/answer），
+ *      手机端通过 `POST /v1/sessions/{sid}/webrtc/offer` 获取 answer，
+ *      然后建立 P2P 音频流。转写结果通过 WebRTC data-channel 或
+ *      轮询 `GET /v1/sessions/{sid}/transcript` 推送到手机端。
+ *   2. TTS 打断：同样通过 WebRTC outbound audio track 实现。
+ *   当前为**占位实现**：计时器正常，transcript 显示假数据，待全端 WebRTC
+ *   信令就绪后再接通。
  */
 import { ref, onMounted, onUnmounted } from 'vue'
+import { interruptSession } from '../../core/tasks'
 
 type Turn = 'you' | 'agent' | 'silence'
 
+/** 当前通话的 sid（从页面参数传入）。 */
+const currentSid = ref('')
 const turn = ref<Turn>('silence')
 const elapsed = ref(0)
+/** 转写文本（实时追加）；手机端 WebRTC 就绪后由 data-channel 推送）。 */
 const transcript = ref<string[]>([])
 
 let tick: ReturnType<typeof setInterval> | undefined
@@ -42,14 +51,17 @@ const clock = () =>
 const waveH = (i: number) => 10 + ((i * 37) % 26)
 
 async function bargeIn() {
+  if (!currentSid.value) return
+  const res = await interruptSession(currentSid.value)
   turn.value = 'you'
-  // TODO(接 REST): POST /v1/sessions/{sid}/interrupt
-  // TODO(接 TTS): 打断后播报，**屏幕上也要出一句**——
-  //   「我打断你一下」这种话是用户唯一能确认「电脑那边真的停了」的证据。
+  transcript.value.push('【打断】')
+  if (!res.interrupted) {
+    uni.showToast({ title: res.reason ?? '打断失败', icon: 'none' })
+  }
 }
 
 function hangUp() {
-  // TODO(接 TTS): 关闭录音，TTS 停，会话状态置 idle
+  // TODO（全端 WebRTC）：关闭录音 track，TTS 停，状态置 idle
   uni.navigateBack()
 }
 </script>

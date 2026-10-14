@@ -62,7 +62,10 @@ interface QrPayload {
   pairing_url: string;
 }
 
-export type ChannelId = "qq" | "wecom" | "mobile";
+// 渠道判据与设备行类型住在 ./channelOf —— DevicesTab 也要用同一个判据切分
+// 已连设备列表，而它已经 import 了这个组件，反向 import 就是循环依赖。
+import { channelOf, type ChannelId, type PairedDevice, type RevokeOutcome } from "./channelOf";
+export type { ChannelId };
 
 interface ChannelDef {
   id: ChannelId;
@@ -131,6 +134,9 @@ interface RelayConfigView {
   /** 配置读坏了 —— 与「没配过」是两回事，必须分开显示 */
   load_error: string | null;
 }
+
+/** Unix 秒 → 本地时间。DevicesTab 里有一份同名的，抄一行不值得为它挪模块边界。 */
+const fmtSec = (sec: number | null): string => (sec ? new Date(sec * 1000).toLocaleString() : "—");
 
 /** 面板里的小节标题。 */
 function SubHead({ children }: { children: React.ReactNode }) {
@@ -237,6 +243,38 @@ export function ImChannelsCard({
        渠道走，选到「手机端」才生成，不选就不做这份无用功）────────── */
   const [qr, setQr] = useState<{ payload: QrPayload; svg: string } | null>(null);
   const [qrError, setQrError] = useState<string | null>(null);
+  /**
+   * 出码在途。用来把「正在生成配对码…」和「还没生成」分开——只有前者是等待，
+   * 后者要摆一个按钮。撤销掉手机之后正好落在后者：那格若还写着「正在生成…」，
+   * 就是一句永远不会兑现的谎话。
+   */
+  const [qrBusy, setQrBusy] = useState(false);
+  /**
+   * 已配对的那台手机（非 IM 账号）。**配对成功后不再出码**：二维码是「还没配上」
+   * 的入场券，已经配好了还摆一张，用户会以为是另一台电脑的码、或者再去扫一次
+   * ——而重扫会走「撤销旧设备 + 换码」那条路，代价比看一眼大得多。
+   *
+   * N:1 只约束手机这条线：QQ / 企业微信 / 手机三个渠道互不影响（判据见
+   * `channelOf`，设备表是跨渠道一张表）。
+   */
+  const [mobileDevice, setMobileDevice] = useState<PairedDevice | null>(null);
+
+  const refreshMobileDevice = useCallback(async (): Promise<PairedDevice | null> => {
+    try {
+      const list = await fetchJSON<PairedDevice[]>("/api/pairing/devices");
+      // 取最近一条未撤销的手机设备：撤销过的留着会让人以为还有一台在。
+      const alive = list
+        .filter((d) => channelOf(d.device_name) === "mobile" && d.revoked_at === null)
+        .sort((a, b) => b.issued_at - a.issued_at);
+      const latest = alive[0] ?? null;
+      setMobileDevice(latest);
+      return latest;
+    } catch {
+      // 读不到就按「未配对」处理：多出一张码不会出事，少显示一台才会。
+      setMobileDevice(null);
+      return null;
+    }
+  }, []);
 
   /* ── relay（跨网络）配置 ─────────────────────────────────────────── */
   const [relay, setRelay] = useState<RelayConfigView | null>(null);
@@ -332,6 +370,7 @@ export function ImChannelsCard({
 
   const generateQr = useCallback(async () => {
     setQrError(null);
+    setQrBusy(true);
     try {
       const payload = await fetchJSON<QrPayload>("/api/pairing/sessions", { method: "POST" });
       const svg = await QRCode.toString(payload.pairing_url, {
@@ -343,6 +382,8 @@ export function ImChannelsCard({
     } catch (e) {
       setQrError(e instanceof Error ? e.message : String(e));
       setQr(null);
+    } finally {
+      setQrBusy(false);
     }
   }, []);
 
@@ -353,22 +394,100 @@ export function ImChannelsCard({
     };
   }, [refreshStatus]);
 
-  // 手机端二维码：第一次切到该渠道时生成一次，之后复用（除非点重新生成）。
+  // 手机端配对面：**先问「有没有已配对的手机」，再决定要不要出码**。
+  // 二维码是**签发**动作（POST /api/pairing/sessions 当场向 relay 换一条手机
+  // 凭据 + 出一个新码），已经配好还出码等于给同一台电脑开第二个入口，与 N:1
+  // 直接冲突；而且用户会把它当成「另一台电脑的码」再扫一次。
   const visited = useRef(false);
   useEffect(() => {
     if (active !== "mobile") return;
-    // 二维码只在第一次进这个页时生成：`POST /api/pairing/sessions` 是**签发**
-    // 动作（当场向 relay 换一条手机凭据 + 出新码），跟着每次激活重跑等于
-    // 换码换凭据，屏上那组 6 位码与二维码当场作废。
-    if (!visited.current) {
+    void refreshRelay();
+    void (async () => {
+      const dev = await refreshMobileDevice();
+      if (dev) {
+        setQr(null); // 已配对：收起二维码，改显示那台手机 + 撤销/重新配对
+        visited.current = true;
+      } else if (!visited.current) {
+        visited.current = true;
+        void generateQr();
+      }
+    })();
+  }, [active, refreshMobileDevice, refreshRelay, generateQr]);
+
+  /**
+   * 出码后轮询配对是否落地。
+   *
+   * 配对动作发生在**手机上**：用户扫码、在手机上核对，之后走回电脑。桌面这边
+   * 除了查设备表没有别的信号，不轮询的话二维码会一直摆着，要等用户手动切走
+   * 再切回才变——看起来就是「扫了没反应」。
+   *
+   * 只在「码已出、还没配上」时轮询；配上一帧就停。设备表很小，2 秒一次不构成负担。
+   */
+  useEffect(() => {
+    if (active !== "mobile" || !qr || mobileDevice) return;
+    // 上限 10 分钟（2s × 300）。二维码有效 60 分钟，但没人会举着手机等那么久；
+    // 真要更久用户点「刷新」即可——**不能无限轮询**，面板一直开着就成后台负载了。
+    let tries = 0;
+    const t = window.setInterval(() => {
+      if (++tries > 300) {
+        window.clearInterval(t);
+        return;
+      }
+      void refreshMobileDevice().then((d) => {
+        if (d) {
+          setQr(null);
+          toastSuccess(`已连接：${d.device_name}`);
+          window.clearInterval(t);
+        }
+      });
+    }, 2000);
+    return () => window.clearInterval(t);
+  }, [active, qr, mobileDevice, refreshMobileDevice]);
+
+  /**
+   * 撤销当前这台手机。返回是否真的撤掉了。
+   *
+   * relay 侧的结果必须单独报：本地令牌失效了，但中转上的广播连接可能还活着，
+   * 一句「已撤销」会让用户以为那台手机彻底断开了（见 `RevokeOutcome`）。
+   */
+  const revokeMobile = useCallback(async (): Promise<boolean> => {
+    if (!mobileDevice) return true;
+    const name = mobileDevice.device_name;
+    try {
+      const r = await fetchJSON<RevokeOutcome>(
+        `/api/pairing/devices/${encodeURIComponent(mobileDevice.device_id)}`,
+        { method: "DELETE" },
+      );
+      setMobileDevice(null);
+      if (r.relay_error) {
+        toastError(`已撤销本地访问，但没能断开中转连接：${r.relay_error}。这台手机可能仍在接收消息。`);
+      } else {
+        toastSuccess(`已撤销：${name}${r.relay_bound ? "（含中转连接）" : ""}`);
+      }
+      return true;
+    } catch (e) {
+      toastError(`撤销失败：${e instanceof Error ? e.message : String(e)}`);
+      return false;
+    }
+  }, [mobileDevice]);
+
+  /**
+   * 换手机：先撤销当前这台，再出新码。
+   *
+   * 顺序不能反——先出码的话，旧设备还占着 relay 的手机槽（`attachPhone`
+   * 会以 4009 拒掉新连接），用户扫完码只会看到一句「已连接另一台手机」，
+   * 死路一条。撤销这一段复用 `revokeMobile`，两处对「relay 没断干净」
+   * 的说法就不会各说各话。
+   */
+  const rePair = useCallback(async () => {
+    if (!(await revokeMobile())) return;
+    visited.current = false;
+    void (async () => {
+      await refreshMobileDevice();
       visited.current = true;
       void generateQr();
-    }
-    // relay 状态不同：它是只读探针，而面板上写的是「正在连接（第 N 次）」/
-    // 「已连上中转」这种**活**状态。只在首次进入时拉一次的话，首次拉到的
-    // 那个瞬时值会一直挂到用户手动刷新为止——连上了也显示没连上。
-    void refreshRelay();
-  }, [active, generateQr, refreshRelay]);
+    })();
+  }, [revokeMobile, refreshMobileDevice, generateQr]);
 
   const stopPolling = useCallback(() => {
     if (pollTimer.current !== null) {
@@ -523,6 +642,12 @@ export function ImChannelsCard({
   const railStatus = (c: ChannelDef): { text: string; tone: string; dot: string } => {
     if (c.id === "mobile") {
       if (relayErr) return { text: "relay 配置读取失败", tone: "text-error", dot: "bg-error" };
+      // 已配对：这一行报的是**谁**连着，不是「能不能再连一个」。中转断了照样要
+      // 说断——绿灯配手机名会让人以为消息能过去。
+      if (mobileDevice)
+        return relay?.state === "connected"
+          ? { text: mobileDevice.device_name, tone: "text-accent", dot: "bg-accent" }
+          : { text: "手机已配对 · 中转未接通", tone: "text-warning", dot: "bg-warning" };
       if (relay?.state === "connected")
         return { text: "跨网络已接通", tone: "text-accent", dot: "bg-accent" };
       if (relay?.state === "connecting")
@@ -542,6 +667,16 @@ export function ImChannelsCard({
   };
 
   const current = CHANNELS.find((c) => c.id === active)!;
+
+  /**
+   * 面板右上角那个「刷新」。手机端渠道下**连带刷新已配对设备**——
+   * 配对是在手机上完成的，只刷渠道状态的话，用户刚配完点刷新看到的还是
+   * 「可扫码配对」，会以为没配上。
+   */
+  const refreshAll = useCallback(() => {
+    void refreshStatus();
+    if (active === "mobile") void refreshMobileDevice();
+  }, [refreshStatus, active, refreshMobileDevice]);
 
   return (
     <div className="space-y-4">
@@ -608,7 +743,7 @@ export function ImChannelsCard({
                 {current.desc}
               </div>
             </div>
-            <ActionBtn onClick={() => void refreshStatus()} icon={<RefreshCw className="icon-sm" />} title="刷新渠道状态">
+            <ActionBtn onClick={refreshAll} icon={<RefreshCw className="icon-sm" />} title="刷新渠道状态">
               刷新
             </ActionBtn>
           </div>
@@ -616,6 +751,61 @@ export function ImChannelsCard({
           {/* ── 手机端：扫码配对（经 relay）+ relay 中转连接 ──────── */}
           {active === "mobile" && (
             <div className="mt-5 space-y-6">
+              {/* ── 已配对 / 未配对 ──────────────────────────────────
+                  二维码是「还没配上」的入场券。已经配好了还摆一张，用户会当成
+                  「另一台电脑的码」再扫一次，而重扫要走「撤销旧设备 + 换码」那条
+                  路，代价比看一眼大得多。所以成功后这一格换成那台手机本身。 */}
+              {mobileDevice ? (
+                <section className="space-y-4">
+                  <SubHead>已连接手机</SubHead>
+                  <div className="rounded-lg bg-bg-secondary p-4 flex items-start gap-4 flex-wrap">
+                    <span
+                      className="inline-grid place-items-center h-11 w-11 rounded-xl bg-bg-card text-text-secondary shrink-0"
+                      aria-hidden="true"
+                    >
+                      <Smartphone className="icon-lg" />
+                    </span>
+                    <div className="min-w-0 flex-1 space-y-1">
+                      <div className="text-[length:var(--text-ui)] font-medium text-text-primary break-all">
+                        {mobileDevice.device_name}
+                      </div>
+                      <div className="text-[length:var(--text-meta)] text-text-muted break-all">
+                        <span className="font-mono">{mobileDevice.device_id}</span>
+                        {" · "}配对于 {fmtSec(mobileDevice.issued_at)}
+                      </div>
+                      <div className="text-[length:var(--text-meta)] text-text-muted">
+                        最近活跃 {fmtSec(mobileDevice.last_seen_at)}
+                      </div>
+                      <div className="flex items-center gap-1.5 text-[length:var(--text-meta)] text-text-muted">
+                        <Check className="icon-sm shrink-0 text-accent" />
+                        手机凭据与本机加密身份已绑定，配对码已核验。
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <ActionBtn
+                        onClick={() => void rePair()}
+                        icon={<QrCode className="icon-sm" />}
+                        title="撤销这台手机，并生成一张新的配对码"
+                      >
+                        重新配对
+                      </ActionBtn>
+                      <ActionBtn
+                        onClick={() => void revokeMobile()}
+                        icon={<Unlink className="icon-sm" />}
+                        tone="danger"
+                        title="撤销这台手机（含中转连接），但不出新码"
+                      >
+                        撤销
+                      </ActionBtn>
+                    </div>
+                  </div>
+                  <div className="text-[length:var(--text-meta)] text-text-muted leading-relaxed">
+                    一台电脑同时只连一台手机（N:1）。要换机器点「重新配对」——它会先断开现在这台
+                    再出新码；顺序反了的话新手机会被中转挡在门外。QQ / 企业微信渠道不受这条限制，
+                    和手机各连各的。
+                  </div>
+                </section>
+              ) : (
               <section className="space-y-4">
                 <SubHead>扫码配对</SubHead>
                 <div className="text-[length:var(--text-ui)] text-text-secondary leading-relaxed">
@@ -683,10 +873,17 @@ export function ImChannelsCard({
                     </div>
                   </div>
                 </div>
-              ) : (
+              ) : qrBusy ? (
                 <div className="text-[length:var(--text-meta)] text-text-muted">正在生成配对码…</div>
+              ) : (
+                /* 撤销掉手机后落在这一格：没有待生成的请求，就摆一个按钮，
+                   别让用户对着一句「正在生成…」干等。 */
+                <ActionBtn onClick={() => void generateQr()} icon={<QrCode className="icon-sm" />} tone="primary">
+                  生成配对码
+                </ActionBtn>
               )}
               </section>
+              )}
 
               {/* ── 中转连接（relay）──────────────────────────────────
                   扫码配对**依赖**这条通道：出配对码要当场向 relay 签发手机凭据，

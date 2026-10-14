@@ -729,6 +729,35 @@ mod tests {
         env
     }
 
+    /// **守 `relay_client` 的入站契约**：密文信封投进来，队列里必须是
+    /// **解密后的明文**。生产路径（`relay_client` 的 Route 分支）把
+    /// `env.payload` 原样塞进同一个队列——若那条路不解密，会话收到的是
+    /// `{"ct":…}`，`handle_ws_stream` 解析失败后静默丢弃，症状就是
+    /// 「手机发消息电脑毫无反应」，且**不会报任何错**。
+    #[tokio::test]
+    async fn 密文入站解密后明文进队列() {
+        let ctx = e2ee_for_tests(1);
+        let mut mux = SessionMux {
+            entries: HashMap::new(),
+            e2ee: Some(ctx.clone()),
+            replay: ReplayGuard::default(),
+        };
+        let (_tx, rx) = mux.pair_for("im:device:dev-1");
+        let env = sealed_inbound(
+            &ctx,
+            "im:device:dev-1",
+            "dev-1",
+            r#"{"type":"send","text":"你好"}"#,
+            &[9u8; 16],
+        );
+        assert!(mux.dispatch(&env), "合法密文帧应被接受");
+        assert_eq!(
+            rx.lock().await.recv().await.as_deref(),
+            Some(r#"{"type":"send","text":"你好"}"#),
+            "队列里必须是 handle_ws_stream 认得的明文，而不是密文信封"
+        );
+    }
+
     /// 同一密文原样重投：第一次投出，第二次被去重丢弃。
     /// eid 只进 HKDF salt——不去重的话这两次都会正常解密。
     #[test]

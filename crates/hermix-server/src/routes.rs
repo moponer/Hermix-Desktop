@@ -1,7 +1,7 @@
 //! HTTP REST handlers registered by `router`.
 
 
-use axum::extract::{Path, Query, State};
+use axum::extract::{Extension, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::Json;
 
@@ -1605,8 +1605,15 @@ pub(crate) async fn restore_session(
 /// "is the task running" probe is needed.
 pub(crate) async fn list_pending_approvals(
     State(state): State<HttpServerState>,
+    Extension(origin): Extension<hermix_core::Origin>,
     Path(session_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, HttpError> {
+    if let Err(resp) = crate::mobile::require_own_session(&origin, &session_id) {
+        return Err(HttpError {
+            status: resp.status(),
+            message: "session does not belong to this device".into(),
+        });
+    }
     let request_ids = state.approval_registry.list_pending(&session_id);
     let mut approvals = Vec::new();
     for rid in request_ids {
@@ -1637,9 +1644,16 @@ pub(crate) async fn list_pending_approvals(
 /// Request body: `{ "request_id": "...", "decision": "approved" | "denied" }`
 pub(crate) async fn approve_via_rest(
     State(state): State<HttpServerState>,
+    Extension(origin): Extension<hermix_core::Origin>,
     Path(session_id): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, HttpError> {
+    if let Err(resp) = crate::mobile::require_own_session(&origin, &session_id) {
+        return Err(HttpError {
+            status: resp.status(),
+            message: "session does not belong to this device".into(),
+        });
+    }
     let request_id = body
         .get("request_id")
         .and_then(|v| v.as_str())
