@@ -333,7 +333,8 @@ pub async fn update_install(app: AppHandle) -> Result<PathBuf, String> {
     // 便携模式的应用根 = exe 所在目录；zip 解出的是「app 根的内容」
     // （含 Hermes.exe / resources/ / binaries/）。脚本逻辑：
     //   1. 等 PID 退出（最多 120s）
-    //   2. app 根 → update.backup（排除 update.pending 自身）
+    //   2. app 根 → update.backup（排除 update.pending 与卸载器 Uninstall.exe；
+    //      卸载器不在 zip 内，搬走会让 Windows 卸载入口变死链）
     //   3. extracted/* → app 根
     //   4. 启动新 exe；30s 内出现 update.ok 握手文件 → 删 backup，成功
     //   5. 超时 → 杀新 exe、搬回 backup、启动旧 exe，写 update.failed
@@ -362,6 +363,13 @@ $backup = Join-Path $appDir 'update.backup'
 $newExe = Join-Path $appDir '{exe_name}'
 $oldExe = Join-Path $backup '{exe_name}'
 
+# 卸载器(NSIS 默认 Uninstall.exe / 旧自研 uninstall.exe)住在安装目录，
+# Windows「卸载」入口(UninstallString)直接指向它。它不在更新 zip 内
+# （由安装器在安装时生成），若随旧目录搬进 backup → 更新后卸载入口成
+# 死链。故 swap 全程保留它（详见 docs/notes/... 卸载器保留）。便携模式
+# 安装目录无卸载器，此排除为空操作，行为不变。
+$uninstallers = @('Uninstall.exe', 'uninstall.exe')
+
 # 1. 等当前进程退出(宽限 15s 后强制结束)。
 #    纯等的教训(2026-10-12 现场):本产品有托盘,关窗口/退出流程不一定真正
 #    结束进程,旧脚本空等 120s 后带着文件锁去搬目录,Move-Item 抛错而
@@ -384,7 +392,9 @@ foreach ($procName in @('hermix-viewer','markitdown')) {{
 try {{
 if (Test-Path $backup) {{ Remove-Item $backup -Recurse -Force }}
 $moved = @()
-Get-ChildItem -LiteralPath $appDir | Where-Object {{ $_.FullName -ne $pending }} | ForEach-Object {{
+Get-ChildItem -LiteralPath $appDir | Where-Object {{
+    $_.FullName -ne $pending -and $_.Name -notin $uninstallers
+}} | ForEach-Object {{
     $moved += $_.FullName
     Move-Item -LiteralPath $_.FullName -Destination $backup -Force
 }}
@@ -410,7 +420,8 @@ if ($alive) {{
 }}
 # 5. 回滚
 if (-not $proc.HasExited) {{ Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }}
-Remove-Item (Join-Path $appDir '*') -Exclude 'update.pending','update.backup' -Recurse -Force -ErrorAction SilentlyContinue
+# 回滚也保留卸载器：它本就不在 backup 里（step 2 已排除），别在这删掉。
+Remove-Item (Join-Path $appDir '*') -Exclude ('update.pending','update.backup' + $uninstallers) -Recurse -Force -ErrorAction SilentlyContinue
 Get-ChildItem -LiteralPath $backup | ForEach-Object {{ Move-Item -LiteralPath $_.FullName -Destination $appDir -Force }}
 Start-Process -FilePath $oldExe -WorkingDirectory $appDir
 Set-Content -Path (Join-Path $pending 'update.failed') -Value (Get-Date).ToString('o')

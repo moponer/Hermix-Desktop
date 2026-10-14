@@ -64,4 +64,4 @@ rustflags = [
 SCCACHE_DIR = "F:/sccache-cache"
 # 如需把产物统一挪到仓库外、避免各 worktree 各编译一份 target 滚雪球,
 # 取消下一行注释即可 (项目作者授权用环境变量而非 config 内置 target-dir):
-# CARGO_TARGET_DIR = "F:/rust-targets/hermix-desktop"
+# CARGO_TARGET_DIR = "F:/rust-targets/hermix-desktop"  # 已回退(2026-10-13): 启用会破坏 release.sh / ensure-sidecar.mjs 等依赖仓库根 target/release 的脚本; 若要共享 target 须先让这些脚本支持 CARGO_TARGET_DIR 环境变量

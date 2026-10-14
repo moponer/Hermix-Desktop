@@ -17,6 +17,13 @@
 //! Pitfall F3 — **declare the viewport**. Headless defaults to an 800x600
 //! window, so responsive layouts lay out differently from what the operator
 //! sees; `--window-size` is what makes a snapshot reproducible.
+//!
+//! **Always headless, permanently.** The browser is never meant to appear as a
+//! real window: a headed Edge steals focus, lands in Alt+Tab, and can be closed
+//! by a mis-click. The operator watches the session through the screencast fed
+//! `browser-view` sub-window instead. There is deliberately no headed path here
+//! — the schema is the model's behavioural boundary, so a headed mode must not
+//! be re-added without a product decision (see the proposal's escape hatch).
 
 use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
@@ -102,9 +109,11 @@ pub fn parse_dev_tools_active_port(raw: &str) -> Option<(u16, String)> {
 
 /// Start Edge in a throwaway profile and wait for its CDP endpoint.
 ///
+/// Always headless — see the module docs for why there is no headed variant.
+///
 /// Every failure path drops the [`Job`], which is what guarantees there is no
 /// orphan: we never leave an Edge running that hermix can no longer reach.
-pub async fn launch(headless: bool) -> Result<LaunchedBrowser, String> {
+pub async fn launch() -> Result<LaunchedBrowser, String> {
     let exe = resolve_edge_exe().ok_or_else(|| {
         "未找到 Microsoft Edge 可执行文件；请安装 Edge 或设置 HERMIX_BROWSER_PATH 指向 Chromium 内核浏览器".to_string()
     })?;
@@ -125,10 +134,8 @@ pub async fn launch(headless: bool) -> Result<LaunchedBrowser, String> {
         .arg("--disable-background-networking")
         .arg("--disable-sync")
         .arg("--disable-features=Translate,MediaRouter")
-        .arg("--window-size=1280,800"); // F3
-    if headless {
-        cmd.arg("--headless=new");
-    }
+        .arg("--window-size=1280,800") // F3
+        .arg("--headless=new");
     // A piped stderr that nobody reads fills the pipe buffer and deadlocks the
     // browser the moment it logs a warning; Edge chatters constantly.
     cmd.stdin(Stdio::null())
