@@ -12,6 +12,8 @@
 //!   writes it to `DevToolsActivePort` inside *our* throwaway profile.
 //! - The model never sees raw HTML ([`a11y`]). It sees an accessibility tree
 //!   with our own `ref=` handles, capped on both axes.
+//! - The browser is always headless; the operator watches it through the
+//!   screencast fed to the `browser-view` sub-window ([`screencast`]).
 //!
 //! Everything runs on one session guarded by a `tokio::sync::Mutex`: the tools
 //! are registered `is_interactive`, so the dispatcher already serialises them,
@@ -155,7 +157,6 @@ struct Session {
     /// what makes "no orphaned browser" a kernel guarantee instead of a
     /// best-effort cleanup.
     _launched: launch::LaunchedBrowser,
-    headless: bool,
     /// `ref` → DOM node, replaced wholesale by every snapshot.
     refs: HashMap<String, BackendNodeId>,
     snapshots: u64,
@@ -166,6 +167,10 @@ impl Drop for Session {
         // The handler task waits on a WebSocket owned by `browser`; aborting it
         // first avoids a task that outlives the session it was serving.
         self._handler_task.abort();
+        // Clear the screencast channel so the next session's start() builds a
+        // fresh one. Chrome-side pushing dies with the page on its own — this
+        // is the synchronous bookkeeping half only.
+        screencast::shutdown();
         let dir = self._launched.user_data_dir.clone();
         // A throwaway profile is a few MB of cache; leaving thousands of them
         // behind would be worse than the few ms this can cost.
@@ -183,13 +188,14 @@ fn session() -> &'static Mutex<Option<Session>> {
 
 /// The live session, starting one if needed.
 ///
-/// `headless` only applies when a session has to be created: switching modes on
-/// a live browser would mean silently throwing away the page the model is
-/// looking at.
-async fn ensure(headless: bool) -> Result<MutexGuard<'static, Option<Session>>, ToolError> {
+/// The browser is always headless and the screencast starts with the session:
+/// the `browser-view` sub-window has frames from the very first navigation,
+/// and the model has no parameter that could produce a real, focus-stealing
+/// window.
+async fn ensure() -> Result<MutexGuard<'static, Option<Session>>, ToolError> {
     let mut guard = session().lock().await;
     if guard.is_none() {
-        let launched = launch::launch(headless)
+        let launched = launch::launch()
             .await
             .map_err(ToolError::ExecutionFailed)?;
         let (browser, mut handler) = Browser::connect(launched.ws_url.clone())
@@ -210,13 +216,19 @@ async fn ensure(headless: bool) -> Result<MutexGuard<'static, Option<Session>>, 
         if let Err(e) = set_download_dir(&page).await {
             tracing::warn!(error = %e, "设置浏览器下载目录失败（下载行为保持默认）");
         }
-        tracing::info!(ws = %launched.ws_url, headless, "automation browser started");
+        // Frames flow from the first navigation on: the sub-window never has
+        // to wait for a tool call to "turn the camera on".
+        if let Err(e) = screencast::start(&page).await {
+            // Losing the picture must not kill the session — the model works
+            // off the AX tree; the window is for the operator.
+            tracing::warn!(error = %e, "screencast 启动失败（浏览器小窗将无画面，工具不受影响）");
+        }
+        tracing::info!(ws = %launched.ws_url, "automation browser started");
         *guard = Some(Session {
             browser,
             page,
             _handler_task: handler_task,
             _launched: launched,
-            headless,
             refs: HashMap::new(),
             snapshots: 0,
         });
@@ -442,9 +454,8 @@ impl ToolHandler for BrowserHandler {
                     .ok_or_else(|| ToolError::InvalidParams("缺少必填参数 `url`".into()))?;
                 let url = validate_url(raw)?.to_string();
                 let timeout_ms = opt_usize(&params, "timeout_ms", 30_000, 120_000) as u64;
-                let headless = bool_param(&params, "headless", true);
 
-                let mut guard = ensure(headless).await?;
+                let mut guard = ensure().await?;
                 let session = guard.as_mut().expect("ensure() leaves a session");
                 tokio::time::timeout(
                     Duration::from_millis(timeout_ms),
@@ -472,7 +483,7 @@ impl ToolHandler for BrowserHandler {
                 let max_nodes = opt_usize(&params, "max_nodes", 800, MAX_NODES);
                 let max_chars = opt_usize(&params, "max_chars", RESULT_CAP, MAX_CHARS);
 
-                let mut guard = ensure(true).await?;
+                let mut guard = ensure().await?;
                 let session = guard.as_mut().expect("ensure() leaves a session");
                 let (tree, refs) =
                     a11y::snapshot_with_refs(&session.page, max_depth, max_nodes)
@@ -491,7 +502,7 @@ impl ToolHandler for BrowserHandler {
             }
             Op::Click => {
                 exactly_one(&params, "ref", "selector")?;
-                let mut guard = ensure(true).await?;
+                let mut guard = ensure().await?;
                 let session = guard.as_mut().expect("ensure() leaves a session");
                 if let Some(reference) = opt_str(&params, "ref") {
                     let id = *resolve_ref(&session.refs, &reference)?;
@@ -525,7 +536,7 @@ impl ToolHandler for BrowserHandler {
                     ));
                 }
 
-                let mut guard = ensure(true).await?;
+                let mut guard = ensure().await?;
                 let session = guard.as_mut().expect("ensure() leaves a session");
                 let target = opt_str(&params, "ref")
                     .map(|r| format!("`{r}`"))
@@ -558,7 +569,7 @@ impl ToolHandler for BrowserHandler {
             }
             Op::Screenshot => {
                 let full_page = bool_param(&params, "full_page", false);
-                let mut guard = ensure(true).await?;
+                let mut guard = ensure().await?;
                 let session = guard.as_mut().expect("ensure() leaves a session");
                 let png = capture(&session.page, full_page).await?;
                 let path = screenshot_path();
@@ -623,7 +634,6 @@ impl ToolHandler for BrowserHandler {
                     IndexMap::from([
                         ("url".to_string(), json!({"type": "string", "description": "Absolute URL. Allowed schemes: http, https, about, file, data."})),
                         ("timeout_ms".to_string(), json!({"type": "integer", "minimum": 1000, "maximum": 120000, "default": 30000})),
-                        ("headless".to_string(), json!({"type": "boolean", "default": true, "description": "Only applies when starting a new browser; a live session keeps its current mode."})),
                     ]),
                     vec!["url".into()],
                 ),

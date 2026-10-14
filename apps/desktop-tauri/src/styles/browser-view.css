@@ -1,0 +1,118 @@
+/* 浏览器小窗（index.html#/browser-view）独立子窗样式。
+ * 固定深色底：这是 OS 级独立小窗（不继承主窗主题上下文），监控画面
+ * 深色底不刺眼；与截图覆盖窗同款“独立小图”定位。 */
+
+.bv-root {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: #141414;
+  color: #e8e8e8;
+  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: 12px;
+  overflow: hidden;
+}
+
+/* 顶栏：data-tauri-drag-region 让系统标题栏拖动区域覆盖这一条 */
+.bv-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  background: #1f1f1f;
+  border-bottom: 1px solid #2e2e2e;
+  flex: 0 0 auto;
+  user-select: none;
+}
+
+.bv-title {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.bv-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #9a9a9a;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.bv-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+.bv-dot--live {
+  background: #4caf50;
+}
+.bv-dot--paused {
+  background: #ff9800;
+}
+.bv-dot--idle {
+  background: #666;
+}
+
+.bv-actions {
+  display: flex;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.bv-btn {
+  appearance: none;
+  border: 1px solid #3a3a3a;
+  background: #2a2a2a;
+  color: #e8e8e8;
+  border-radius: 4px;
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.bv-btn:hover:not(:disabled) {
+  background: #353535;
+}
+.bv-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.bv-btn--close:hover {
+  background: #b3261e;
+  border-color: #b3261e;
+}
+
+/* 画面舞台：canvas 居中铺满，留黑边无所谓（监看场景） */
+.bv-stage {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #0a0a0a;
+}
+
+.bv-canvas {
+  max-width: 100%;
+  max-height: 100%;
+  display: block;
+}
+
+.bv-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  color: #777;
+  text-align: center;
+  line-height: 1.7;
+  pointer-events: none;
+}

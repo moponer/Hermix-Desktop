@@ -1,6 +1,6 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
-import { Minus, Square, X, MessageSquare, Camera } from "lucide-react";
+import { Minus, Square, X, MessageSquare, Camera, Globe } from "lucide-react";
 import { useCallback } from "react";
 import { toastWarning } from "../hooks/useToast";
 
@@ -51,6 +51,16 @@ export function TitleBar({ title }: { title?: string }) {
     });
   }, []);
 
+  // 浏览器小窗入口：打开/聚焦独立子窗，实时显示无头 Edge 的 screencast
+  // 帧流。窗口与浏览器会话解耦——会话未建立时小窗显示占位，模型调用
+  // 浏览器工具后自动出画面。
+  const handleBrowserView = useCallback(() => {
+    void invoke("browser_view_open").catch((err) => {
+      console.error("[TitleBar] browser view failed:", err);
+      toastWarning(`浏览器小窗打开失败：${String(err)}`);
+    });
+  }, []);
+
   return (
     <div className="titlebar drag">
       {/* ① 左栏 —— 与侧栏同宽 */}
@@ -86,6 +96,16 @@ export function TitleBar({ title }: { title?: string }) {
           import order — belt and braces, since a swallowed click here
           would leave the window undraggable-but-unclosable. */}
       <div className="titlebar-zone titlebar-zone--right">
+        <button
+          type="button"
+          onClick={handleBrowserView}
+          className="titlebar-btn no-drag"
+          data-tauri-no-drag
+          title="浏览器小窗（实时画面）"
+          aria-label="浏览器小窗"
+        >
+          <Globe className="icon-md" />
+        </button>
         <button
           type="button"
           onClick={handleScreenshot}
