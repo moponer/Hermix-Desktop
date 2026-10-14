@@ -34,6 +34,7 @@ members = [
     "crates/hermix-task",
     "crates/hermix-automation",
     "crates/hermix-plugin",
+    "crates/hermix-filesearch",
 ]
 
 [workspace.package]
