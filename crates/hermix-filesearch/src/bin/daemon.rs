@@ -21,6 +21,7 @@ fn main() {
     let mut volumes: Option<Vec<String>> = None;
     let mut data_dir = default_data_dir();
     let mut status_only = false;
+    let mut serve = false;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -38,8 +39,9 @@ fn main() {
                 data_dir = PathBuf::from(args.next().unwrap_or_default());
             }
             "--status" => status_only = true,
+            "--serve" => serve = true,
             "--help" | "-h" => {
-                println!("用法: hermix-filesearch [--volumes C:,D:] [--data-dir <path>] [--status]");
+                println!("用法: hermix-filesearch [--volumes C:,D:] [--data-dir <path>] [--status] [--serve]");
                 return;
             }
             other => {
@@ -63,15 +65,22 @@ fn main() {
         }
     };
 
-    let service = Arc::new(SearchService::new(data_dir.clone()));
+    let service: Arc<SearchService> = SearchService::new(data_dir.clone());
     {
         let service = service.clone();
         runtime.block_on(async move {
             service.ensure_started(volumes);
         });
     }
-    eprintln!("[filesearch] 服务已启动，等待 stdio 指令。");
 
+    if serve {
+        // 被提权拉起时的模式：跨提权边界无法继承 stdio 管道，
+        // 改用 127.0.0.1 回环 + token 握手（endpoint.json 供宿主发现）。
+        runtime.block_on(serve_loop(service, data_dir));
+        return;
+    }
+
+    eprintln!("[filesearch] 服务已启动，等待 stdio 指令。");
     // 单线程读+写：请求全部由同步方法处理（搜索/状态/改规则），无并发写 stdout。
     let stdin = std::io::stdin();
     for line in stdin.lock().lines() {
@@ -79,7 +88,7 @@ fn main() {
         if line.trim().is_empty() {
             continue;
         }
-        let response = handle(&service, &line);
+        let response = handle(&service, &line, None);
         let mut stdout = std::io::stdout().lock();
         let _ = writeln!(stdout, "{response}");
         let _ = stdout.flush();
@@ -89,11 +98,96 @@ fn main() {
     service.flush_all();
 }
 
-fn handle(service: &SearchService, line: &str) -> String {
+/// 回环 TCP 模式：bind 127.0.0.1:0 → 写 endpoint.json（port+token+pid）→ 逐连接处理 JSONL。
+async fn serve_loop(service: Arc<SearchService>, data_dir: PathBuf) {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    let token = generate_token();
+    let listener = match tokio::net::TcpListener::bind("127.0.0.1:0").await {
+        Ok(listener) => listener,
+        Err(error) => {
+            eprintln!("[filesearch] 回环端口绑定失败：{error}");
+            exit(1);
+        }
+    };
+    let port = listener
+        .local_addr()
+        .map(|addr| addr.port())
+        .unwrap_or_default();
+
+    let endpoint_path = data_dir.join("endpoint.json");
+    if let Some(parent) = endpoint_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let endpoint = serde_json::json!({
+        "port": port,
+        "token": token,
+        "pid": std::process::id(),
+        "startedAt": std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
+    });
+    if let Err(error) = std::fs::write(&endpoint_path, endpoint.to_string()) {
+        eprintln!("[filesearch] 写 endpoint.json 失败：{error}");
+        exit(1);
+    }
+    eprintln!("[filesearch] 服务已启动（回环 :{port}），等待指令。");
+
+    loop {
+        let Ok((stream, _addr)) = listener.accept().await else {
+            continue;
+        };
+        let service = service.clone();
+        let token = token.clone();
+        let endpoint_path = endpoint_path.clone();
+        tokio::spawn(async move {
+            let (reader, mut writer) = stream.into_split();
+            let mut lines = BufReader::new(reader).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                if line.trim().is_empty() {
+                    continue;
+                }
+                let response = handle(&service, &line, Some(&token));
+                let _ = writer.write_all(response.as_bytes()).await;
+                let _ = writer.write_all(b"\n").await;
+                // shutdown 指令：响应已回，刷盘退出（endpoint.json 一并清掉）。
+                if response.contains("\"shuttingDown\":true") {
+                    let _ = std::fs::remove_file(&endpoint_path);
+                    service.flush_all();
+                    eprintln!("[filesearch] 收到 shutdown，刷盘退出。");
+                    exit(0);
+                }
+            }
+        });
+    }
+}
+
+/// token：std RandomState 的种子来自 OS 熵，拼上时间纳秒足够回环握手用（无新增依赖）。
+fn generate_token() -> String {
+    use std::hash::{BuildHasher, Hasher};
+    let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+    hasher.write_u64(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0),
+    );
+    hasher.write_u64(std::process::id() as u64);
+    format!("{:016x}", hasher.finish())
+}
+
+fn handle(service: &SearchService, line: &str, expected_token: Option<&str>) -> String {
     let Ok(request) = serde_json::from_str::<serde_json::Value>(line) else {
         return error_response(None, "请求不是合法 JSON");
     };
     let id = request.get("id").cloned();
+    if let Some(expected) = expected_token {
+        let got = request.get("token").and_then(|v| v.as_str()).unwrap_or("");
+        if got != expected {
+            return error_response(id, "token 校验失败");
+        }
+    }
     let Some(method) = request.get("method").and_then(|v| v.as_str()) else {
         return error_response(id, "缺少 method 字段");
     };
@@ -122,6 +216,7 @@ fn handle(service: &SearchService, line: &str) -> String {
                 Err(error) => error_response(id, &format!("FilterRules 解析失败：{error}")),
             }
         }
+        "shutdown" => serde_json::json!({ "id": id, "result": {"shuttingDown": true} }).to_string(),
         other => error_response(id, &format!("未知 method：{other}")),
     }
 }

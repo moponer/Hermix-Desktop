@@ -70,7 +70,7 @@ impl SearchService {
     /// 发现全部受支持 NTFS 卷，装快照（秒级可搜）+ 起监听循环 + 缺失卷后台补建。
     /// `only` 给定时只处理指定卷（如 "C:","D:"）。
     pub fn ensure_started(self: &Arc<Self>, only: Option<Vec<String>>) {
-        let volumes_info = match windows_ntfs::list_volumes() {
+        let volumes_info = match self.list_volumes_guarded() {
             Ok(list) => list,
             Err(error) => {
                 eprintln!("[filesearch] 卷枚举失败：{error}");
@@ -206,6 +206,24 @@ impl SearchService {
             for state in map.values() {
                 monitor::flush_snapshot_on_exit(state, &self.data_dir);
             }
+        }
+    }
+
+    /// 卷枚举超时看门狗。本机实测 GetVolumeInformationW 偶发永不返回
+    /// （与 MFT 枚举同一类卡死卷问题），枚举线程被放弃，服务不陪葬。
+    const VOLUME_ENUM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
+    fn list_volumes_guarded(&self) -> Result<Vec<crate::core::model::VolumeInfo>, String> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(windows_ntfs::list_volumes());
+        });
+        match rx.recv_timeout(Self::VOLUME_ENUM_TIMEOUT) {
+            Ok(result) => result.map_err(|error| error.to_string()),
+            Err(_) => Err(format!(
+                "卷枚举超时（{:?}）——存在响应异常的卷设备，跳过自动发现。",
+                Self::VOLUME_ENUM_TIMEOUT
+            )),
         }
     }
 

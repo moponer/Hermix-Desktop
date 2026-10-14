@@ -62,48 +62,73 @@ mod imp {
     const BUFFER_SIZE: usize = 1024 * 1024;
 
     pub fn list_volumes() -> Result<Vec<VolumeInfo>> {
+        use std::sync::mpsc;
         let mask = unsafe { GetLogicalDrives() };
-        let mut volumes = Vec::new();
+        // 每卷一个探测线程：个别卷设备的 GetVolumeInformationW 会永不返回
+        //（本机实测），不能让一个坏卷拖死整个枚举。
+        let (tx, rx) = mpsc::channel::<VolumeInfo>();
+        let mut probes = 0usize;
 
         for index in 0..26 {
             if mask & (1 << index) == 0 {
                 continue;
             }
-
             let letter = (b'A' + index as u8) as char;
             let name = format!("{letter}:");
-            let root = format!("{name}\\");
-            let root_wide = wide_null(&root);
-            let drive_type_code = unsafe { GetDriveTypeW(root_wide.as_ptr()) };
-            let drive_type = drive_type_label(drive_type_code).to_string();
-
-            let (label, file_system) =
-                volume_information(&root).unwrap_or_else(|_| (String::new(), String::new()));
-            let is_local = drive_type_code == DRIVE_FIXED;
-            let is_ntfs = file_system.eq_ignore_ascii_case("NTFS");
-            let is_supported = is_local && is_ntfs;
-            let reason = if is_supported {
-                None
-            } else if !is_local {
-                Some("仅支持本地固定磁盘".to_string())
-            } else if file_system.is_empty() {
-                Some("无法读取文件系统类型".to_string())
-            } else {
-                Some(format!("暂不支持 {file_system} 文件系统"))
-            };
-
-            volumes.push(VolumeInfo {
-                name: name.clone(),
-                display_name: root,
-                label,
-                file_system,
-                drive_type,
-                is_supported,
-                reason,
+            let tx = tx.clone();
+            probes += 1;
+            std::thread::spawn(move || {
+                let _ = tx.send(probe_volume(&name));
             });
         }
+        drop(tx);
 
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut volumes = Vec::new();
+        for _ in 0..probes {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            match rx.recv_timeout(remaining) {
+                Ok(info) => volumes.push(info),
+                Err(_) => break,
+            }
+        }
+        volumes.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(volumes)
+    }
+
+    fn probe_volume(name: &str) -> VolumeInfo {
+        let root = format!("{name}\\");
+        let root_wide = wide_null(&root);
+        let drive_type_code = unsafe { GetDriveTypeW(root_wide.as_ptr()) };
+        let drive_type = drive_type_label(drive_type_code).to_string();
+
+        let (label, file_system) =
+            volume_information(&root).unwrap_or_else(|_| (String::new(), String::new()));
+        let is_local = drive_type_code == DRIVE_FIXED;
+        let is_ntfs = file_system.eq_ignore_ascii_case("NTFS");
+        let is_supported = is_local && is_ntfs;
+        let reason = if is_supported {
+            None
+        } else if !is_local {
+            Some("仅支持本地固定磁盘".to_string())
+        } else if file_system.is_empty() {
+            Some("无法读取文件系统类型".to_string())
+        } else {
+            Some(format!("暂不支持 {file_system} 文件系统"))
+        };
+
+        VolumeInfo {
+            name: name.to_string(),
+            display_name: root,
+            label,
+            file_system,
+            drive_type,
+            is_supported,
+            reason,
+        }
     }
 
     pub fn build_volume_index(volume: String, filter: &FilterRules) -> Result<NtfsIndexBuild> {

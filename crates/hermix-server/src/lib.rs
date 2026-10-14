@@ -26,6 +26,7 @@ mod relay_settings;
 mod relay_transport;
 mod ws_transport;
 mod metrics;
+mod filesearch;
 #[cfg(any(test, feature = "test-helpers"))]
 pub mod test_state;
 
@@ -291,6 +292,11 @@ pub fn router(state: HttpServerState) -> Router {
     let mut app = Router::new()
         .route("/health", get(health))
         .route("/shutdown", get(shutdown_server))
+        // 本地文件搜索：提权 helper（hermix-filesearch.exe）的 HTTP 面。
+        // helper 未运行时首个请求会触发 UAC（弹一次）。
+        .route("/v1/filesearch/search", get(filesearch::search))
+        .route("/v1/filesearch/status", get(filesearch::status))
+        .route("/v1/filesearch/shutdown", post(filesearch::shutdown))
         // 浏览器小窗暂停/恢复：桌面端小窗隐藏时把「停 Chrome 侧 screencast 编码」
         // 的指令发到 sidecar（浏览器会话在那），desktop 自己进程里的 pause 是空操作。
         .route("/api/browser-view/paused", post(browser_view_paused))
