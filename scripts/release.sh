@@ -31,7 +31,14 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TAURI_CONF="$REPO_ROOT/apps/desktop-tauri/src-tauri/tauri.conf.json"
-TARGET="$REPO_ROOT/target/release"
+# 产物位置：默认仓库根 target/release；设了 CARGO_TARGET_DIR 则优先用（共享 target，
+# 避免各 worktree 重复编译）。CARGO_TARGET_DIR 须为绝对路径——相对路径会被 cargo 按运行时
+# cwd 解析导致产物分裂两处（见 .cargo/config.toml 第 9-21 行说明）。
+if [[ -n "${CARGO_TARGET_DIR:-}" ]]; then
+  TARGET="$CARGO_TARGET_DIR/release"
+else
+  TARGET="$REPO_ROOT/target/release"
+fi
 STAGING="$TARGET/update-staging"
 OUT_DIR="$TARGET/dist"
 CHANGELOG="$REPO_ROOT/CHANGELOG.md"

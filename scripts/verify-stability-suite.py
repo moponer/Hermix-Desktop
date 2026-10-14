@@ -33,7 +33,10 @@ from pathlib import Path
 from typing import Callable, Iterable
 
 REPO = Path(__file__).resolve().parent.parent
-DEFAULT_HERMIX = REPO / "target" / "release" / "hermix.exe"
+# 默认仓库根 target/release/hermix.exe；设了 CARGO_TARGET_DIR 环境变量则优先用（与 cargo
+# 一致，env 为绝对路径）。release.sh / ensure-sidecar.mjs 同样读此变量。
+_ctd = os.environ.get("CARGO_TARGET_DIR")
+DEFAULT_HERMIX = (Path(_ctd) / "release" / "hermix.exe") if _ctd else (REPO / "target" / "release" / "hermix.exe")
 DEFAULT_DESKTOP = Path("D:/data/Hermix Desktop/hermix-desktop.exe")
 LOG_DIR = Path(os.environ.get("HERMIX_HOME", Path.home() / ".hermix")) / "logs"
 SCENARIOS = (

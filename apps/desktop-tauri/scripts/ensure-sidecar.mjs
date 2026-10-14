@@ -16,8 +16,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const appDir = path.resolve(__dirname, ".."); // apps/desktop-tauri
 const repoRoot = path.resolve(appDir, "..", "..");
 const srcTauri = path.join(appDir, "src-tauri");
-// 单 workspace 后唯一产物目录（仓库根 target/），无任何 --target-dir/env 覆盖。
-const target = path.join(repoRoot, "target");
+// 产物目录：默认仓库根 target/；设了 CARGO_TARGET_DIR 环境变量则优先用（与 cargo 一致，
+// env 为绝对路径，避免 tauri build 子进程按 cwd 解析分裂两处）。release.sh /
+// verify-stability-suite.py 同样读此变量，保证"取产物的地方"与"cargo 写产物的地方"一致。
+const target = process.env.CARGO_TARGET_DIR
+  ? path.join(process.env.CARGO_TARGET_DIR)
+  : path.join(repoRoot, "target");
 
 function sh(cmd, args, cwd = repoRoot) {
   console.log(`[ensure-sidecar] $ ${cmd} ${args.join(" ")}`);
