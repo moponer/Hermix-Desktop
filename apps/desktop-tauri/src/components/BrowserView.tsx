@@ -14,6 +14,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+
+/** `startResizeDragging` 的方向参数类型（v2.12 未导出 `ResizeDirection`，从方法签名推导）。 */
+type ResizeDir = Parameters<ReturnType<typeof getCurrentWindow>["startResizeDragging"]>[0];
 import "../styles/browser-view.css";
 
 interface BrowserFramePayload {
@@ -66,11 +69,19 @@ export function BrowserView() {
       frames = 0;
     }, 1000);
 
-    const unlisten = listen<BrowserFramePayload>("browser-frame", (event) => {
+    const unlisten = listen<{ channel: string; payload: string }>("stdio-frame", (event) => {
+      if (event.payload.channel !== "browser-frame") return;
+      if (pausedRef.current) return; // 暂停闸门：隐藏时不再渲染新帧
+      let parsed: BrowserFramePayload;
+      try {
+        parsed = JSON.parse(event.payload.payload) as BrowserFramePayload;
+      } catch {
+        return;
+      }
       frames += 1;
-      setFrameBytes(event.payload.bytes);
+      setFrameBytes(parsed.bytes);
       setEverFramed(true);
-      pendingFrameRef.current = event.payload.data;
+      pendingFrameRef.current = parsed.data;
       if (rafRef.current === null) {
         rafRef.current = requestAnimationFrame(drawPending);
       }
@@ -114,6 +125,20 @@ export function BrowserView() {
     void invoke("browser_view_set_paused", { paused: next }).catch(() => {});
   }, []);
 
+  // 最大化/还原（decorations(false) 后系统按钮没了，得自建）。
+  const handleMaximize = useCallback(() => {
+    void getCurrentWindow().toggleMaximize().catch(() => {});
+  }, []);
+
+  // 边缘缩放：decorations(false) 后系统边框消失，靠这些热区发起 OS 缩放。
+  const startResize = useCallback(
+    (direction: ResizeDir) => (e: React.MouseEvent) => {
+      e.preventDefault();
+      void getCurrentWindow().startResizeDragging(direction).catch(() => {});
+    },
+    [],
+  );
+
   // 保存当前帧：canvas → PNG 下载。帧流本身不落盘，这是唯一写盘路径。
   const saveFrame = useCallback(() => {
     const canvas = canvasRef.current;
@@ -148,6 +173,9 @@ export function BrowserView() {
           )}
         </span>
         <div className="bv-actions">
+          <button type="button" className="bv-btn" onClick={handleMaximize}>
+            最大化
+          </button>
           <button type="button" className="bv-btn" onClick={togglePaused}>
             {paused ? "恢复" : "暂停"}
           </button>
@@ -169,9 +197,19 @@ export function BrowserView() {
           <div className="bv-placeholder">
             浏览器会话尚未建立。
             <br />
-            模型调用浏览器工具后，这里会实时显示页面画面。
+            模型调用浏览器工具（如打开网页、点击元素）后，这里会实时显示页面画面。
           </div>
         )}
+      </div>
+      <div className="bv-resize-layer">
+        <div className="bv-resize bv-resize--n" onMouseDown={startResize("North")} />
+        <div className="bv-resize bv-resize--s" onMouseDown={startResize("South")} />
+        <div className="bv-resize bv-resize--w" onMouseDown={startResize("West")} />
+        <div className="bv-resize bv-resize--e" onMouseDown={startResize("East")} />
+        <div className="bv-resize bv-resize--nw" onMouseDown={startResize("NorthWest")} />
+        <div className="bv-resize bv-resize--ne" onMouseDown={startResize("NorthEast")} />
+        <div className="bv-resize bv-resize--sw" onMouseDown={startResize("SouthWest")} />
+        <div className="bv-resize bv-resize--se" onMouseDown={startResize("SouthEast")} />
       </div>
     </div>
   );

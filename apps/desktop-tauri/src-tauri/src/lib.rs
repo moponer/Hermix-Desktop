@@ -439,9 +439,9 @@ pub fn run() {
         .setup(|app| {
             // 在线更新检查：启动 30s 后首查 + 每 2h，失败静默（updater.rs）。
             updater::spawn_check_scheduler(app.handle().clone());
-            // 浏览器小窗：帧泵 + 窗口几何记忆（方案见 docs/notes/proposed/
-            // feature/2026-10-13-browser-virtual-window-token-discipline.md）。
-            browser_view_controller::init(app.handle());
+            // 浏览器小窗：窗口几何记忆由 browser_view_open 在建窗时注册；
+            // 帧流经 stdio 桥（sidecar 转发 browser-frame）直达前端，本进程
+            // 不再持有帧泵（评审修正：桌面侧 screencast::receiver() 永远为 None）。
             // ── N0 CDP 探针门控（批次 N 技术验证）──────────────────
             // HERMIX_CDP_PROBE=1 启动时，等主 webview 就绪后自动跑
             // Runtime.evaluate / DOMSnapshot / Accessibility 三个 CDP

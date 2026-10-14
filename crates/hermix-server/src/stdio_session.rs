@@ -67,6 +67,12 @@ pub async fn run_stdio_server(state: HttpServerState) -> Result<(), hermix_core:
         }
     });
 
+    // 浏览器小窗帧转发：会话（headless Edge + screencast）跑在 sidecar 进程，
+    // 桌面端 browser_view_controller 读自己的 screencast::receiver() 永远是 None
+    // （进程内 static 单例互不共享）。这里订阅本进程的 receiver，把帧经 stdout
+    // 推给桌面端——std::sync 层面只有一个 sidecar，跨进程的桥就是这条 stdio。
+    spawn_browser_frame_forwarder(writer_tx.clone());
+
     // HTTP /shutdown handler 用 Extension(watch::Sender<bool>) 驱动 graceful
     // shutdown，主循环通过同一个 watch channel 监听关闭信号。两者共用一个
     // sender/receiver pair：HTTP 请求触发发送 true，主循环收到后退出 while。
@@ -153,6 +159,49 @@ pub async fn run_stdio_server(state: HttpServerState) -> Result<(), hermix_core:
         rt.stop().await;
     }
     Ok(())
+}
+
+/// 浏览器小窗帧转发器（sidecar 进程内）。
+///
+/// 浏览器会话（headless Edge + screencast）只在 sidecar 进程建立，`screencast::CHANNEL`
+/// 是进程内 `static` 单例，桌面进程读不到。本任务订阅**本进程**的 `receiver()`，
+/// 把每帧 JPEG 以 `channel="browser-frame"` 的信封经 stdout 写回桌面端——
+/// 桌面端 `stdio_bridge` 读线程会把它转成 `stdio-frame` 事件推给前端 `BrowserView`。
+///
+/// 没有会话时 `receiver()` 为 None，循环 sleep 轮询；会话建立后拿到 receiver 即开始转发；
+/// 会话关闭（broadcast 发送端被 Drop）后 `recv()` 结束，回到外层等下一个会话——
+/// 与 desktop-tauri 旧帧泵（曾错误地读桌面自己的空 receiver）同一套轮询骨架。
+fn spawn_browser_frame_forwarder(writer_tx: mpsc::Sender<String>) {
+    tokio::spawn(async move {
+        use base64::Engine as _;
+        use hermix_tools::tools::os_auto::browser::screencast;
+        loop {
+            let Some(mut rx) = screencast::receiver() else {
+                tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                continue;
+            };
+            while let Ok(frame) = rx.recv().await {
+                let b64 = base64::engine::general_purpose::STANDARD.encode(&*frame);
+                let payload = serde_json::json!({
+                    "data": format!("data:image/jpeg;base64,{b64}"),
+                    "bytes": frame.len(),
+                })
+                .to_string();
+                let envelope = serde_json::json!({
+                    "channel": "browser-frame",
+                    "payload": payload,
+                })
+                .to_string();
+                // writer 队列满（前端掉线/卡顿）→ 丢旧帧保新帧：监控帧不需要积压。
+                // 队列已关闭（stdout 断）→ 退出转发任务。
+                match writer_tx.try_send(envelope) {
+                    Ok(()) => {}
+                    Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {}
+                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => return,
+                }
+            }
+        }
+    });
 }
 
 /// 处理一帧 REST 请求：payload 形如

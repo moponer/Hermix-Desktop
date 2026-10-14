@@ -291,6 +291,9 @@ pub fn router(state: HttpServerState) -> Router {
     let mut app = Router::new()
         .route("/health", get(health))
         .route("/shutdown", get(shutdown_server))
+        // 浏览器小窗暂停/恢复：桌面端小窗隐藏时把「停 Chrome 侧 screencast 编码」
+        // 的指令发到 sidecar（浏览器会话在那），desktop 自己进程里的 pause 是空操作。
+        .route("/api/browser-view/paused", post(browser_view_paused))
         // 手机端（Hermix M）经自建 relay 从公网接入的流式面。
         //
         // **这个端点曾经被删**（`181a51aa`，2026-09-26 端点审计）：当时的
@@ -737,6 +740,26 @@ pub async fn run_server_with_tls(
     .with_graceful_shutdown(shutdown)
     .await
     .map_err(|e| AgentError::Io(e.to_string()))
+}
+
+/// 浏览器小窗暂停/恢复。桌面端小窗最小化/遮挡时调用：真正停/恢复的是 sidecar
+/// 里 headless Edge 的 screencast 编码（CPU 闸门），不是桌面进程里的什么——
+/// 桌面进程没有浏览器会话，调用它自己的 `screencast::pause()` 只会静默 no-op。
+async fn browser_view_paused(Json(body): Json<serde_json::Value>) -> impl IntoResponse {
+    let paused = body
+        .get("paused")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if paused {
+        hermix_tools::tools::os_auto::browser::screencast::pause().await;
+    } else {
+        hermix_tools::tools::os_auto::browser::screencast::resume().await;
+    }
+    (
+        [("content-type", "application/json")],
+        "{\"ok\":true}",
+    )
+        .into_response()
 }
 
 async fn health() -> impl IntoResponse {

@@ -5,6 +5,7 @@
 .bv-root {
   display: flex;
   flex-direction: column;
+  position: relative;
   height: 100vh;
   background: #141414;
   color: #e8e8e8;
@@ -115,4 +116,73 @@
   text-align: center;
   line-height: 1.7;
   pointer-events: none;
+}
+
+/* 边缘缩放命中区：decorations(false) 后系统边框消失，靠这些 4px 热区拖拽缩放。
+ * 整层 pointer-events:none，仅命中区本身可点，不挡画面与按钮。 */
+.bv-resize-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 10;
+}
+.bv-resize {
+  position: absolute;
+  pointer-events: auto;
+}
+.bv-resize--n {
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 4px;
+  cursor: ns-resize;
+}
+.bv-resize--s {
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 4px;
+  cursor: ns-resize;
+}
+.bv-resize--w {
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 4px;
+  cursor: ew-resize;
+}
+.bv-resize--e {
+  top: 0;
+  bottom: 0;
+  right: 0;
+  width: 4px;
+  cursor: ew-resize;
+}
+.bv-resize--nw {
+  top: 0;
+  left: 0;
+  width: 7px;
+  height: 7px;
+  cursor: nwse-resize;
+}
+.bv-resize--ne {
+  top: 0;
+  right: 0;
+  width: 7px;
+  height: 7px;
+  cursor: nesw-resize;
+}
+.bv-resize--sw {
+  bottom: 0;
+  left: 0;
+  width: 7px;
+  height: 7px;
+  cursor: nesw-resize;
+}
+.bv-resize--se {
+  bottom: 0;
+  right: 0;
+  width: 7px;
+  height: 7px;
+  cursor: nwse-resize;
 }
