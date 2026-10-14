@@ -51,13 +51,15 @@ use crate::ToolRegistry;
 /// Outermost cap on any tool result. Inner caps (node count, element name)
 /// are the real budget; this is the backstop that keeps a pathological page
 /// from costing more context than the whole rest of the turn.
+/// 快照与所有 browser_* 文本结果的硬顶。模型传参可以调低，
+/// 不能调高——schema 的 maximum 与 clamp 上限都锚定在这里，
+/// 不存在"传 48000 翻倍"的后门。
 const RESULT_CAP: usize = 24_000;
 
 /// Outermost caps on the limits the model may ask for. A model that asks for
 /// 50 000 nodes is making a mistake, and obeying it would blow the turn.
 const MAX_DEPTH: usize = 32;
 const MAX_NODES: usize = 4_000;
-const MAX_CHARS: usize = 48_000;
 
 /// Schemes we will navigate to. `javascript:` in particular would let a page
 /// argument run code in the session's own origin, and anything unknown is
@@ -481,7 +483,7 @@ impl ToolHandler for BrowserHandler {
             Op::Snapshot => {
                 let max_depth = opt_usize(&params, "max_depth", 12, MAX_DEPTH);
                 let max_nodes = opt_usize(&params, "max_nodes", 800, MAX_NODES);
-                let max_chars = opt_usize(&params, "max_chars", RESULT_CAP, MAX_CHARS);
+                let max_chars = opt_usize(&params, "max_chars", RESULT_CAP, RESULT_CAP);
 
                 let mut guard = ensure().await?;
                 let session = guard.as_mut().expect("ensure() leaves a session");
@@ -643,7 +645,7 @@ impl ToolHandler for BrowserHandler {
                     IndexMap::from([
                         ("max_depth".to_string(), json!({"type": "integer", "minimum": 1, "maximum": MAX_DEPTH, "default": 12})),
                         ("max_nodes".to_string(), json!({"type": "integer", "minimum": 1, "maximum": MAX_NODES, "default": 800})),
-                        ("max_chars".to_string(), json!({"type": "integer", "minimum": 1000, "maximum": MAX_CHARS, "default": RESULT_CAP})),
+                        ("max_chars".to_string(), json!({"type": "integer", "minimum": 1000, "maximum": RESULT_CAP, "default": RESULT_CAP})),
                     ]),
                     vec![],
                 ),

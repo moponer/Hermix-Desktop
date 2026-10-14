@@ -382,7 +382,10 @@ export function PreviewPanel({
         )}
         onOpenImage={(bytes, mime, name) =>
           openImageViewer({
-            src: URL.createObjectURL(new Blob([bytes], { type: mime })),
+            // TS 5.7+ 的 Uint8Array 带泛型：ArrayBufferLike ≠ BlobPart 要求的
+            // ArrayBuffer。bytes 来自自家 artifact reader（全新分配、offset 0），
+            // cast 安全。
+            src: URL.createObjectURL(new Blob([bytes as unknown as BlobPart], { type: mime })),
             name,
           })
         }

@@ -39,8 +39,10 @@ const PUMP_POLL_MS: u64 = 300;
 /// 0x8007139F（ERROR_INVALID_STATE）——截图覆盖窗踩过这个坑。
 const VIEW_BROWSER_ARGS: &str = "--disable-features=msSmartScreenProtection,EdgeFeed,CalculateNativeWinOcclusion,IntensiveWakeUpThrottling,RendererCodeIntegrity --disable-renderer-backgrounding --disable-background-timer-throttling --disk-cache-size=20971520 --js-flags=--max-old-space-size=1024";
 
-/// 前端上报的暂停态：小窗最小化 / 被遮挡 / `document.hidden` 时为 true。
-/// 只停 Rust→前端推流，Chrome 照常出帧（广播丢旧帧兜底）。
+/// 前端上报的暂停/恢复入口：小窗不可见时**真停 Chrome 侧 screencast 编码**
+/// （评审修正 1：只停 Rust→前端推流是未实测就抄的退化路径，动画页 Edge
+/// 照常拉满）。Rust 侧仍保留 PAUSED 拦截（pause 生效前最后一两帧不推），
+/// 双保险：Chrome 停编码是 CPU 闸门，PAUSED 是推流闸门。
 static PAUSED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Serialize, Deserialize)]
@@ -126,11 +128,18 @@ pub async fn browser_view_open(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// 前端暂停/恢复上报：小窗不可见时暂停 Rust→前端推流（省 base64 与 IPC），
-/// Chrome 侧照常出帧。语义与代价见模块文档。
+/// 前端暂停/恢复上报：小窗不可见时真停 Chrome 侧 screencast 编码
+/// （`Page.stopScreencast`），恢复时对同一页面重发 start——CDP restart
+/// 成本毫秒级；若真机出现 ego 式恢复抖动，退化路径是只降
+/// every_nth_frame 不停流（见 implemented 笔记 P0 评审修正 1）。
 #[tauri::command]
-pub fn browser_view_set_paused(paused: bool) {
+pub async fn browser_view_set_paused(paused: bool) {
     PAUSED.store(paused, Ordering::Relaxed);
+    if paused {
+        hermix_tools::tools::os_auto::browser::screencast::pause().await;
+    } else {
+        hermix_tools::tools::os_auto::browser::screencast::resume().await;
+    }
 }
 
 /// setup 初始化：起帧泵（会话未建立时空转轮询 receiver，session 建起即

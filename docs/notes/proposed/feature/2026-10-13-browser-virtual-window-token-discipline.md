@@ -1,28 +1,15 @@
-# Decision Note: 浏览器自动化升级——应用内浏览器小窗 + Token 纪律
+# Decision Note: 浏览器自动化升级——Token 纪律 + 交互补全 + 清理
 
-Status: proposed — 2026-10-13。承接已实现的 [native-os-automation](../implemented/feature/2026-10-13-native-os-automation.md)，
-与 [Space 与登录态](./2026-10-07-browser-space-and-login-state.md)（N2）维度不同、互补：那篇管"进哪个浏览器"，
-本篇管"模型怎么看、人怎么看、每个动作花多少 token"。
+Status: proposed — 2026-10-13 提案；**P0 已于 2026-10-14 拆出实现**，见
+[implemented: browser-virtual-window-p0](../implemented/feature/2026-10-14-browser-virtual-window-p0.md)
+（其"评审修正"一节记录了 P0 实现对本篇的三处偏离与裁决：逃生门已裁决废弃、
+"不看不推"未兑现待实测、现状列高估）。本篇剩余范围：P1 Token 纪律 /
+P2 交互补全 / P3 清理。承接 [native-os-automation](../implemented/feature/2026-10-13-native-os-automation.md)，
+与 [Space 与登录态](./2026-10-07-browser-space-and-login-state.md)（N2）维度不同、互补。
 
-## Decision
-
-浏览器自动化走**内生升级**，不引入任何外部自动化栈（Playwright / browser-use / MCP 形态全部否决，理由见
-Alternatives）。一句话总纲：
-
-> **浏览器永不现形、模型只看文本、画面只进应用内小窗、每个动作按 token 计费。**
-
-四件事：
-
-1. **独立 Tauri 子窗口**：废弃 `headless=false` 真窗口路径，Edge 恒定 `--headless=new`
-   虚拟渲染——本机不存在任何浏览器窗口，不进任务栏、不进 Alt+Tab、不抢焦点。
-   浏览器画面经 screencast 帧流送进一个 Hermix 的独立子窗口（OS 级小窗：可拖动、
-   边角可缩放、可拖出主窗口、可上第二显示器、主窗口最小化时仍在）。
-   所有输入走 CDP 合成事件，不进系统输入队列。
-2. **Token 纪律**：快照默认只发可交互子树 + 增量 diff；新增 `browser_extract` 定向提取工具；
-   `browser_screenshot` 对模型关门（画面观察由画中画承担，零 prompt 成本）；大结果写盘回路径。
-3. **交互补全**：scroll / wait / back / tabs 四个 CDP 一行级工具。
-4. **清理**：删 `backends/browser.rs` 死代码（未接线，Python 移植残留，其声明的
-   cdp/cloud/a11y/registry/session_wrapper 子模块均不存在）。
+> 原 P0（独立 Tauri 子窗口）内容已移入 implemented 笔记，此处不再重复。
+> 原文对 ego 系 / agent-view 的调研（已核实真实）仍为 P1 设计依据，保留在
+> "参考实现"一节。
 
 ## 问题
 
