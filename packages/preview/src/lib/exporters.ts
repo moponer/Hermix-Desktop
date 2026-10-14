@@ -327,7 +327,6 @@ export async function htmlToDocxBytes(
   // 类型经顶层 type import（docx 的类型在渲染层函数签名处也要用），
   // 运行时仍走动态 import——引擎不进主包。
   const children: Array<InstanceType<typeof d.Paragraph> | InstanceType<typeof d.Table>> = [];
-  let orderedCounter = 0;
 
   const runsOf = (spans: DocxSpan[], extra?: { bold?: boolean; italics?: boolean }) =>
     spans.map(
@@ -365,7 +364,9 @@ export async function htmlToDocxBytes(
           }),
         );
         break;
-      case "list":
+      case "list": {
+        // 有序列表编号从 1 起（每个列表独立计数，不跨列表续号——评审 P2）。
+        let orderedCounter = 0;
         for (const item of b.items) {
           if (b.ordered) {
             orderedCounter += 1;
@@ -388,6 +389,7 @@ export async function htmlToDocxBytes(
           }
         }
         break;
+      }
       case "table": {
         const rows = b.rows.map(
           (cells) =>
@@ -413,6 +415,8 @@ export async function htmlToDocxBytes(
   }
 
   const doc = new d.Document({ sections: [{ children }] });
-  const buf = await d.Packer.toBuffer(doc);
-  return new Uint8Array(buf as unknown as ArrayBuffer);
+  // Packer.toBuffer 依赖 Node Buffer（评审 P2：Tauri webview 里大概率抛
+  // 错）；toBlob 走浏览器 Blob 路径，两端可用。
+  const blob = await d.Packer.toBlob(doc);
+  return new Uint8Array(await blob.arrayBuffer());
 }

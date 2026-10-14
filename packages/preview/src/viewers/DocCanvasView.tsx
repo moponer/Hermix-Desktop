@@ -132,26 +132,50 @@ export function DocCanvasView({
   const [meta, setMeta] = useState<CanvasMeta>(docCanvasStore.getMeta());
   const [editing, setEditing] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  /**
+   * 画布代数：每次"新画布开启"（closed true→false 边沿）+1。
+   * 用作 iframe 的 React key——代数变化强制卸载重建 iframe（旧 DOM、
+   * 旧渲染脚本状态全部丢弃），同时作为重置游标/编辑态的信号源。
+   * 不能依赖 geometry 变化：连续两份同几何画布 geometry 不变；
+   * 也不能依赖 geometry===null：openCanvas 从旧值直切新值，不经 null。
+   */
+  const [generation, setGeneration] = useState(0);
   /** 已投递到当前 iframe 的最大块下标 + 1。订阅块与 onLoad 重放共用
    *  这一个游标：两边都以它为起点发送，恰好一次（修复 iframe 重载
-   *  期间订阅块与重放双重投递的竞态）。几何切换（新画布）时归零。 */
+   *  期间订阅块与重放双重投递的竞态）。新画布开启时归零（见下）。 */
   const sentCursorRef = useRef(0);
   /**
    * 导出真相源：文档当前 HTML。两路维护——用户编辑回传时整份替换；
    * 流式期间从 store 块历史同步（编辑版优先：一旦编辑过，流式块的
-   * 追加不再覆盖编辑结果，直到下次编辑回传）。从未编辑且无块时为 null
-   * （导出按钮禁用）。
+   * 追加不再覆盖编辑结果，直到下次编辑回传）。新画布开启时重置
+   * （否则第二份画布的导出会把上一份的编辑版写进磁盘）。
    */
   const currentHtmlRef = useRef<string | null>(null);
   const editedRef = useRef(false);
 
   // 几何变化（新画布开启）→ 重建 srcDoc。低频：一份回复至多一次。
   const srcDoc = useMemo(() => canvasShell(meta.geometry ?? "a4"), [meta.geometry]);
-  if (meta.geometry === null) sentCursorRef.current = 0;
 
   // 元信息订阅：壳层的块数 / 生成中 / 收口状态随 store 刷新（store 侧
   // 已合并到微任务，多块一帧只触发一次 React 更新）。
-  useEffect(() => docCanvasStore.onMeta(setMeta), []);
+  // 新画布开启边沿（closed true→false）：generation+1 → iframe 因 key
+  // 变化而重建（清旧 DOM），sentCursor/编辑态全部归零——"第二份画布"
+  // 的系统性重置点（评审 P1 根因：openCanvas 不经过 geometry=null，
+  // 仅靠 geometry 边沿会漏掉同几何连续两份画布）。
+  useEffect(() => {
+    let wasClosed = docCanvasStore.getMeta().closed;
+    return docCanvasStore.onMeta((m) => {
+      setMeta(m);
+      if (wasClosed && !m.closed) {
+        sentCursorRef.current = 0;
+        currentHtmlRef.current = null;
+        editedRef.current = false;
+        setEditing(false);
+        setGeneration((g) => g + 1);
+      }
+      wasClosed = m.closed;
+    });
+  }, []);
 
   // 块数据不经 React：订阅 store 直接 postMessage 进 iframe。
   // iframe 未就绪时块已记入 store.blocks，onLoad 重放兜底（见下）。
@@ -181,6 +205,10 @@ export function DocCanvasView({
     const onMessage = (e: MessageEvent) => {
       const edited = (e.data as { hermixCanvasEdit?: unknown } | null)?.hermixCanvasEdit;
       if (typeof edited !== "string") return;
+      // 只接受当前画布 iframe 的消息：应用内其他沙箱 iframe（如 HtmlView
+      // 渲染不可信 HTML）可以 postMessage 任意内容，不校验 source 等于
+      // 把导出内容的伪造权交给所有预览页（评审 P2-3）。
+      if (e.source !== iframeRef.current?.contentWindow) return;
       setEditing(false);
       // 真相源切换到编辑版：后续流式块（若有）不再覆盖编辑结果。
       editedRef.current = true;
@@ -278,6 +306,7 @@ export function DocCanvasView({
       </div>
       <div className="html-stage">
         <iframe
+          key={generation}
           ref={iframeRef}
           className="html-frame"
           srcDoc={srcDoc}

@@ -46,7 +46,7 @@ docx 导出两档：默认前端 `docx` npm 库（"干净不花哨"：结构、�
 表格全对，无精致排版）；用户明确要正式 Word 文档时才走重转换
 （pandoc / LibreOffice headless），慢但保真，不进默认链路。
 
-**导出旁路（2026-10-14 落地）**：
+**导出旁路（2026-10-14 落地；同日评审修复第二份画布重置与导出健壮性）**：
 
 - PDF：viewer 内 `window.print()`（postMessage 请求通道，编辑态先
   收口再打印），`@page` 打印样式按几何分页（slide16x9 → 13.33×7.5in
@@ -66,6 +66,13 @@ docx 导出两档：默认前端 `docx` npm 库（"干净不花哨"：结构、�
   首个消费者）+ toast 反馈。
 - 转换器模型层 12 个单测钉死契约（网格展开/表头语义/数值转换/表名
   清洗/列表嵌套/slide 分页）。
+- 深度评审修复（2026-10-14）：①"第二份画布"系统性重置——generation
+  counter 以 `closed true→false` 边沿驱动（geometry 不经 null、同几何
+  连续两份画布仅靠几何边沿会漏），iframe 以 key 重建，sentCursor/
+  编辑态同点归零；②docx 有序列表编号每个列表独立计数；③docx 序列化
+  走 `Packer.toBlob`（`toBuffer` 依赖 Node Buffer，webview 不可用）；
+  ④`hermixCanvasEdit` 消息校验 `e.source`，导出内容的伪造权收归当前
+  画布 iframe。
 
 **skill 层（协议生效前提，2026-10-14 落地）**：builtin skill
 `document-authoring`（协议硬规则/版面规范/落盘要求/反例清单）播种进
