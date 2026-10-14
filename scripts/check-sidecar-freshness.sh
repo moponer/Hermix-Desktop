@@ -91,11 +91,14 @@ fi
 # runtime copy had a same-day fix — fresh installs seeded the old persona.
 # Compare each file against its own directory subtree; a hit means the
 # packaged copy predates the tree and the bundle must be rebuilt.
+# 外来二进制（esbuild.exe / WebView2Loader.dll）没有本仓源码，与自研产物
+# （hx-shell.exe，源码在 apps/hx-shell/）混放同一目录时，按目录比会让
+# 后来放入的外来文件把自研产物误判成 STALE——这类改跟自己的源码比。
 RES_STALE=""
-res_check() { # $1 = sentinel file, $2 = dir to compare against
+res_check() { # $1 = sentinel file, $2 = dir to compare against, $3 = 源码目录（可选，缺省用 $2）
   [ -f "$1" ] || return 0
   local hit
-  hit=$(find "$2" -type f -newer "$1" -print -quit 2>/dev/null | head -1)
+  hit=$(find "${3:-$2}" -type f -newer "$1" -print -quit 2>/dev/null | head -1)
   if [ -n "$hit" ]; then
     echo "  STALE: bundled resource predates its sources"
     echo "         resource: $1"
@@ -105,7 +108,7 @@ res_check() { # $1 = sentinel file, $2 = dir to compare against
   fi
 }
 res_check "apps/desktop-tauri/src-tauri/builtin-soul/SOUL.md" "apps/desktop-tauri/src-tauri/builtin-soul"
-res_check "apps/desktop-tauri/src-tauri/resources/loader/hx-shell.exe" "apps/desktop-tauri/src-tauri/resources/loader"
+res_check "apps/desktop-tauri/src-tauri/resources/loader/hx-shell.exe" "apps/desktop-tauri/src-tauri/resources/loader" "apps/hx-shell/src"
 res_check "apps/desktop-tauri/src-tauri/resources/loader/WebView2Loader.dll" "apps/desktop-tauri/src-tauri/resources/loader"
 res_check "apps/desktop-tauri/src-tauri/resources/loader/esbuild.exe" "apps/desktop-tauri/src-tauri/resources/loader"
 

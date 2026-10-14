@@ -1,6 +1,8 @@
 # Decision Note: 自研安装器（hermix-installer）+ 每次构建双产物（安装包 + 更新包）
 
 Status: implemented — 已拍板（2026-10-09）；自研安装器 + 每次构建双产物（安装包/更新包），随实施保持同步
+Archived: 2026-10-14
+被[回到 NSIS：自研安装器退役](../../implemented/simplification/2026-10-14-retire-custom-installer-return-to-nsis.md)取代
 
 ## Decision
 

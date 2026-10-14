@@ -1,7 +1,7 @@
 # 更新日志
 
 发版时 release.sh 从这里取更新说明（`## [版本]` 段），生成 manifest 与
-releases.json——升级包弹窗、安装器、网页 changelog 三端同源。格式：每版
+releases.json——升级包弹窗与网页 changelog 两处同源。格式：每版
 一个 `## [x.y.z] - 日期` 段，说明用 `-` 列表。
 
 ## [0.1.19] - 2026-10-12

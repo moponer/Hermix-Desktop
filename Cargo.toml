@@ -10,7 +10,6 @@ resolver = "2"
 exclude = []
 members = [
     "apps/desktop-tauri/src-tauri",
-    "apps/installer/src-tauri",
     "apps/viewer/src-tauri",
     "crates/hermix-store",
     "crates/hermix-session",
