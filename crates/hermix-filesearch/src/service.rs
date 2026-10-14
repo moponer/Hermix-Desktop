@@ -200,6 +200,15 @@ impl SearchService {
         ServiceStatus { volumes, skipped }
     }
 
+    /// 进程退出前把所有脏卷快照刷盘（阻塞调用，仅在退出路径使用）。
+    pub fn flush_all(&self) {
+        if let Ok(map) = self.volumes.read() {
+            for state in map.values() {
+                monitor::flush_snapshot_on_exit(state, &self.data_dir);
+            }
+        }
+    }
+
     fn record_skipped(&self, volume: &str, reason: String) {
         if let Ok(mut guard) = self.skipped.write() {
             guard.insert(volume.to_string(), reason);

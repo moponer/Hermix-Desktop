@@ -3057,6 +3057,7 @@ dependencies = [
  "anyhow",
  "bincode",
  "serde",
+ "serde_json",
  "tempfile",
  "tokio",
  "walkdir",
