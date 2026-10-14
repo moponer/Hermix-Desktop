@@ -17,10 +17,13 @@
 // —— 与参考项目同构。**只列真的会开的**：终端（无 PTY）、审查（后端
 // file_change 不带 diff 正文）现在都做不出来，列出来就是点击无响应。
 
-import { X, FolderOpen, FileText, MessageSquare, ClipboardCheck, PanelRightClose } from "lucide-react";
+import { X, FolderOpen, FileText, MessageSquare, ClipboardCheck, PanelRightClose, LayoutTemplate } from "lucide-react";
 import { clsx } from "clsx";
 import type { ReactNode } from "react";
 import type { Artifact } from "../utils/artifacts";
+import { DocCanvasView, docCanvasStore, htmlToXlsxBytes, htmlToDocxBytes } from "@hermix/preview";
+import { saveBinaryFile } from "../desktopBridge";
+import { toastSuccess, toastError } from "../hooks/useToast";
 import type { ChatMessage, SubAgentState } from "../types";
 import { ComputerTab } from "./ComputerTab";
 import { PreviewPanel } from "./PreviewPanel";
@@ -33,6 +36,8 @@ export const BROWSER_TAB_ID = "browser";
 /** 审查 / 辅助对话都是单例：整个会话共用一份聚合视图，不需要多开。 */
 export const REVIEW_TAB_ID = "review";
 export const SUBAGENT_TAB_ID = "subagent";
+/** 文档画布是单例标签：一份回复至多一个 canvas（协议硬规则）。 */
+export const CANVAS_TAB_ID = "canvas";
 
 /**
  * 右侧栏的一个标签。判别联合而不是单一载荷 —— 新增标签种类时只加一个
@@ -42,7 +47,47 @@ export type SideTab =
   | { id: string; type: "file"; artifact: Artifact }
   | { id: string; type: "browser" }
   | { id: string; type: "review" }
-  | { id: string; type: "subagent" };
+  | { id: string; type: "subagent" }
+  | { id: string; type: "canvas" };
+
+/** 文档画布导出旁路：转换（ExcelJS / docx，动态加载不进主包）+
+ *  saveBinaryFile 落盘（save 对话框 + plugin-fs）。画布 viewer 只给
+ *  当前 HTML（编辑版优先），落盘与用户反馈统一在这里。 */
+async function exportCanvasXlsx(html: string): Promise<void> {
+  try {
+    const bytes = await htmlToXlsxBytes(html);
+    if (!bytes) {
+      toastError("文档中没有表格，无法导出 Excel");
+      return;
+    }
+    const path = await saveBinaryFile(
+      "画布表格.xlsx",
+      bytes,
+      [{ name: "Excel 工作簿", extensions: ["xlsx"] }],
+    );
+    if (path) toastSuccess(`已导出 ${path}`);
+  } catch (e) {
+    console.error("[doc-canvas] xlsx export failed:", e);
+    toastError(e instanceof Error ? e.message : String(e));
+  }
+}
+
+async function exportCanvasDocx(html: string): Promise<void> {
+  try {
+    // 几何只影响分页语义（slide 间分页），从当前画布元信息取。
+    const geometry = docCanvasStore.getMeta().geometry ?? "a4";
+    const bytes = await htmlToDocxBytes(html, geometry);
+    const path = await saveBinaryFile(
+      "画布文档.docx",
+      bytes,
+      [{ name: "Word 文档", extensions: ["docx"] }],
+    );
+    if (path) toastSuccess(`已导出 ${path}`);
+  } catch (e) {
+    console.error("[doc-canvas] docx export failed:", e);
+    toastError(e instanceof Error ? e.message : String(e));
+  }
+}
 
 /** 标签标题。 */
 function tabTitle(tab: SideTab): string {
@@ -53,6 +98,8 @@ function tabTitle(tab: SideTab): string {
       return "审查";
     case "subagent":
       return "辅助对话";
+    case "canvas":
+      return "文档画布";
     case "file":
       return tab.artifact.name;
   }
@@ -72,6 +119,8 @@ function tabIcon(tab: SideTab): { icon: ReactNode; hint: string } {
       return { icon: <ClipboardCheck className="icon-sm shrink-0" />, hint: "本次会话的文件变更" };
     case "subagent":
       return { icon: <MessageSquare className="icon-sm shrink-0" />, hint: "子代理目标与执行过程" };
+    case "canvas":
+      return { icon: <LayoutTemplate className="icon-sm shrink-0" />, hint: "流式文档画布" };
     case "file":
       return { icon: <FileTypeIcon name={tab.artifact.name} size={12} />, hint: tab.artifact.path };
   }
@@ -197,6 +246,18 @@ export function PreviewBar({
       ) : active?.type === "subagent" ? (
         <div className="min-h-0 flex-1 flex flex-col">
           <SubAgentTab subAgents={subAgents} />
+        </div>
+      ) : active?.type === "canvas" ? (
+        <div className="min-h-0 flex-1 flex flex-col">
+          {/* 文档画布：内容经 docCanvasStore 流式直达 viewer，无文件路径，
+              不走 PreviewPanel。导出旁路：viewer 给当前 HTML（编辑版优先），
+              这里转换（ExcelJS / docx）+ saveBinaryFile 落盘。 */}
+          <DocCanvasView
+            fileName="画布"
+            onEditCommit={(html) => console.log("[doc-canvas] edit committed", html.length, "chars")}
+            onExportXlsx={(html) => void exportCanvasXlsx(html)}
+            onExportDocx={(html) => void exportCanvasDocx(html)}
+          />
         </div>
       ) : active?.type === "file" ? (
         <div className="min-h-0 flex-1 flex flex-col">

@@ -733,6 +733,9 @@ export function App() {
 
         {aiOpen && (
           <AiSidebar
+            // key 绑当前文件：切换标签时重建面板 → 会话 id 随之重置。
+            // 否则不关 AI 栏换文件，新文件路径会被拼进上一个文件的会话里。
+            key={active?.path ?? "__none__"}
             filePath={active?.path ?? null}
             selection={selection}
             onClose={() => setAiOpen(false)}

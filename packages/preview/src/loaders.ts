@@ -16,7 +16,13 @@ import {
   isMarkdownExt,
 } from "./lib/previewUtils";
 import { parseDelimited, parseXls, parseXlsx } from "./lib/workbook";
-import type { LoadOutcome, LoadRequest, PreviewKind, PreviewLoader } from "./types";
+import type {
+  LoadOutcome,
+  LoadRequest,
+  PreviewKind,
+  PreviewLoader,
+  PreviewPayload,
+} from "./types";
 
 /// 后端拒绝读取的原因 → 人话。后端只抛英文字符串，这里收敛成用户能懂的话。
 function friendlyReadError(raw: string): string {
@@ -193,27 +199,32 @@ const spreadsheetLoader =
     }
   };
 
+/**
+ * 文本与代码共用同一个读取器，但载荷不同：`code` 带语言（进 CodeView /
+ * CodeBlock，有语法高亮与 Ln/Col），`text` 不带语言（纯 `<pre>`，未知扩展名
+ * 的文件走这条）。此前两条路都发 `code`，导致 `types.ts` 的 `text` 变体与
+ * `PreviewSurface` 的 `case "text"` 永远不可达，且 .log 这类文件在桌面端会
+ * 误显 Ln/Col 光标。
+ */
 const textLoader =
   (source: FileSource): PreviewLoader =>
-  async ({ name, path }) => {
+  async ({ name, path, kind }) => {
     const res = await source.readText(path);
     if (!res.ok) return { ok: false, message: friendlyReadError(res.message) };
+    // 显式标注 PreviewPayload：靠 `kind === "text"` 三元收窄出字面量类型，
+    // 不标的话 TS 只能看到宽泛的 PreviewKind，赋不进 union。
+    const emit = (content: string): PreviewPayload =>
+      kind === "text"
+        ? { kind: "text", content }
+        : { kind: "code", content, language: detectLanguage(name) };
     if (res.ok && "isBinary" in res && res.isBinary) {
       return { ok: false, message: `二进制文件（${humanMb(res.size)}），不支持文本预览。` };
     }
     if (res.ok && "isEmpty" in res && res.isEmpty) {
-      return {
-        ok: true,
-        resolvedPath: res.resolvedPath,
-        payload: { kind: "code", content: "", language: detectLanguage(name) },
-      };
+      return { ok: true, resolvedPath: res.resolvedPath, payload: emit("") };
     }
     if (res.ok && "content" in res) {
-      return {
-        ok: true,
-        resolvedPath: res.resolvedPath,
-        payload: { kind: "code", content: res.content, language: detectLanguage(name) },
-      };
+      return { ok: true, resolvedPath: res.resolvedPath, payload: emit(res.content) };
     }
     return { ok: false, message: "读取失败" };
   };
@@ -229,6 +240,13 @@ export function buildLoaders(source: FileSource): Record<PreviewKind, PreviewLoa
     spreadsheet: spreadsheetLoader(source),
     code: textLoader(source),
     text: textLoader(source),
+    // canvas 载荷不经过文件加载（内容经 docCanvasStore 流式直达 viewer），
+    // loader 表穷尽 Record<PreviewKind, …> 需要一个条目；运行时不可达，
+    // 返回明确错误的兜底而非省略（省略会让未来新增文件型 canvas 时静默失配）。
+    canvas: async () => ({
+      ok: false as const,
+      message: "文档画布由对话流驱动，没有对应的文件路径。",
+    }),
   };
 }
 

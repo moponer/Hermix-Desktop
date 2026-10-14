@@ -5,7 +5,8 @@ import { Sidebar } from "./components/Sidebar";
 import { SidebarRevealRow } from "./components/SidebarRevealRow";
 import { ChatView } from "./components/ChatView";
 import { ImageLightbox } from "./components/ImageLightbox";
-import { PreviewBar, BROWSER_TAB_ID, REVIEW_TAB_ID, SUBAGENT_TAB_ID, type SideTab } from "./components/PreviewBar";
+import { PreviewBar, BROWSER_TAB_ID, REVIEW_TAB_ID, SUBAGENT_TAB_ID, CANVAS_TAB_ID, type SideTab } from "./components/PreviewBar";
+import { docCanvasStore } from "@hermix/preview";
 import { TitleBar } from "./components/TitleBar";
 import { SessionPickerDialog } from "./components/SessionPickerDialog";
 import { useStreamChat } from "./hooks/useStreamChat";
@@ -334,6 +335,33 @@ setPage("chat");
     setActivePreviewId(id);
     setRightOpen(true);
   }, []);
+
+  // 文档画布（单例）：marker 命中时由下方的 store 订阅自动打开。
+  // 滑入用 rAF 延后一帧（流畅性约定：画布打开不打断对话气泡的追加动画）。
+  const openCanvasTab = useCallback(() => {
+    setPreviewTabs((prev) =>
+      prev.some((t) => t.id === CANVAS_TAB_ID) ? prev : [...prev, { id: CANVAS_TAB_ID, type: "canvas" }],
+    );
+    setActivePreviewId(CANVAS_TAB_ID);
+    setRightOpen(true);
+  }, []);
+
+  // 订阅画布元信息：画布开始流式增长时自动开画布 tab。两个触发边沿：
+  //  - geometry null→有值（marker 首次命中，本会话第一份画布）
+  //  - closed true→false（close() 后新一轮回复又开了画布——第二份、
+  //    第三份…也要把面板带回用户眼前）
+  // 只挂一次；打开动作本身走 rAF 延帧。
+  useEffect(() => {
+    const initial = docCanvasStore.getMeta();
+    let wasIdle = initial.geometry === null || initial.closed;
+    return docCanvasStore.onMeta((m) => {
+      const idle = m.geometry === null || m.closed;
+      if (!idle && wasIdle) {
+        requestAnimationFrame(() => openCanvasTab());
+      }
+      wasIdle = idle;
+    });
+  }, [openCanvasTab]);
 
   const openReviewTab = useCallback(
     () => openSingletonTab(REVIEW_TAB_ID, "review"),

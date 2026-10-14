@@ -583,6 +583,14 @@ const BUILTIN_SKILLS: &[(&str, &str, &str)] = &[
         "impeccable-design",
         include_str!("skills/impeccable-design.md"),
     ),
+    // document-authoring: 文档编制画布协议（<hermix-canvas> marker / 页面
+    // 几何声明 / 块边界 / 版面规范 / 落盘要求）。与 DocCanvasView 的流式
+    // 分流协议一一对应（决策笔记 2026-10-13-html-canvas-pipeline）。
+    (
+        "design",
+        "document-authoring",
+        include_str!("skills/document-authoring.md"),
+    ),
 ];
 
 /// Sidecar next to a seeded `SKILL.md`, recording the SHA-256 of the

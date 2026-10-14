@@ -52,11 +52,21 @@ export { hardenSoftLineBreaks } from "./lib/softBreaks";
 
 export { MarkdownView } from "./viewers/MarkdownView";
 export { HtmlView } from "./viewers/HtmlView";
+export { DocCanvasView } from "./viewers/DocCanvasView";
 export { DocxView } from "./viewers/DocxView";
 export { SpreadsheetView } from "./viewers/SpreadsheetView";
 export { ImageView } from "./viewers/ImageView";
 export { PdfView } from "./viewers/PdfView";
 export { PptxView } from "./viewers/PptxView";
+
+export {
+  docCanvasStore,
+  DocCanvasStore,
+  CANVAS_OPEN_TAG,
+  CANVAS_CLOSE_TAG,
+  type CanvasMeta,
+  type CanvasPageGeometry,
+} from "./lib/docCanvasStore";
 
 export {
   parseRange,
@@ -70,6 +80,16 @@ export {
   type CellStyle,
   type ColorLike,
 } from "./lib/workbook";
+
+export {
+  htmlToXlsxModel,
+  htmlToXlsxBytes,
+  htmlToDocxBlocks,
+  htmlToDocxBytes,
+  type XlsxModel,
+  type XlsxSheetModel,
+  type DocxBlock,
+} from "./lib/exporters";
 
 export { stripFrontmatter, extractHeadings } from "./lib/markdownDoc";
 export { colName, resolveRelative, dirnameOf, isExternalHref } from "./lib/localAssets";

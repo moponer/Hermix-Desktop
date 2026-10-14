@@ -380,12 +380,17 @@ export function PreviewPanel({
             onCursorChange={setCursor}
           />
         )}
-        onOpenImage={(bytes, mime, name) =>
+        onOpenImage={(bytes, mime, name) => {
+          // 复制到 ArrayBuffer 支撑的 Uint8Array：TS 5.7+ 的 DOM 库把
+          // BlobPart 收紧成 ArrayBufferView<ArrayBuffer>，而 FileSource 契约里
+          // 的 bytes 是泛型默认的 Uint8Array<ArrayBufferLike>，直接传会被拒收。
+          const copy = new Uint8Array(bytes.byteLength);
+          copy.set(bytes);
           openImageViewer({
-            src: URL.createObjectURL(new Blob([bytes], { type: mime })),
+            src: URL.createObjectURL(new Blob([copy], { type: mime })),
             name,
-          })
-        }
+          });
+        }}
       />
     );
   };

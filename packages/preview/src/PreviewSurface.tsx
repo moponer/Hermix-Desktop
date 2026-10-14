@@ -11,6 +11,7 @@ import { SpreadsheetView } from "./viewers/SpreadsheetView";
 import { ImageView } from "./viewers/ImageView";
 import { MarkdownView } from "./viewers/MarkdownView";
 import { HtmlView } from "./viewers/HtmlView";
+import { DocCanvasView } from "./viewers/DocCanvasView";
 import type { FileSource } from "./lib/fileSource";
 import type { PreviewPayload } from "./types";
 
@@ -131,6 +132,9 @@ export function PreviewSurface({
           onOpenExternalUrl={onOpenExternalUrl}
         />
       );
+    case "canvas":
+      // 文档画布：内容经 docCanvasStore 流式直达 viewer，不走 payload。
+      return <DocCanvasView fileName={payload.fileName} />;
     case "spreadsheet":
       return <SpreadsheetView model={payload.model} fileName={payload.fileName} zoom={zoom} />;
     case "code":

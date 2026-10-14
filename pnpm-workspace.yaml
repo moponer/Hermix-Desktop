@@ -1,0 +1,34 @@
+# 根 pnpm workspace —— 2026-10-13 起把 packages/* 纳入。
+#
+# 为什么此前没有：抽 @hermix/preview 时为了避开并行改动，没动 app 级布局，
+# 两个 app 各自当 pnpm 根、各用 `file:` 引包。代价是 **`file:` 给的是物理快照
+# 不是工作树符号链接**——改包后漏在任一 app 跑 `pnpm install`，那个 app 就继续
+# 跑旧渲染层（当天真踩了一次：viewer 落后 desktop 整整一个提交）。与 AGENTS.md
+# 里记的「两次『修了但新装的包里没有』」同源。
+#
+# 现在 workspace 成员拿到**真符号链接 + 自己的 node_modules**：前者让改包即时
+# 生效，后者让包内 `import "satteri"` 这类裸导入能从 packages/preview/node_modules
+# 解析（`link:` 协议做不到这点，pnpm 不给 link 目标装依赖）。单 lock、单次 install。
+# 只列显式成员，**不要用 `apps/*`**：apps/ 下有 10 个项目（android / bbs /
+# desktop-tauri / hm / hx-packager / hx-shell / installer / playground /
+# relay / viewer），其中 relay 走 npm（package-lock.json）、android 根本不是
+# Node 工程。用通配会把它们全拖进 pnpm 的依赖图——那是一次与本次目的无关的
+# 大范围迁移，不该混在预览修复里。
+packages:
+  - "apps/desktop-tauri"
+  - "apps/viewer"
+  - "packages/*"
+
+# 允许跑 install 脚本的包。pnpm 默认**不**跑依赖的构建脚本，遇到被拦下的会
+# 直接以 ERR_PNPM_IGNORED_BUILDS 失败（不是警告）。
+allowBuilds:
+  # esbuild：Vite 的依赖，必须跑 install.js 生成平台原生二进制，否则转译失败。
+  esbuild: true
+  # @parcel/watcher：sass 的 optionalDependency，用于 dev 期文件监听（走原生
+  # 实现）。不给它则 sass 退回 chokidar，纯 JS 轮询，能用只是慢一点。
+  "@parcel/watcher": true
+
+# 来自 apps/desktop-tauri/pnpm-workspace.yaml：satteri 依赖链上的 hast 类型
+# 版本必须钉死，否则 markdown 渲染的类型面会飘。
+overrides:
+  "@types/hast": 3.0.4

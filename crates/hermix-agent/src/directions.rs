@@ -34,6 +34,7 @@ When the user provides an explicit file path, call the matching tool directly wi
 - Office / structured docs (`.docx`/`.pptx`/`.xlsx`/`.html`/`.epub`/`.csv`/`.json`/`.xml`/`.msg`/`.zip`) → `markitdown` (token-cheapest Markdown extraction; covers everything except pure text/code and images)
 - text/code → `read_file`
 - creating files → `write_file`
+- **Document authoring**（用户要做 PPT/报告/文档/表格）→ 按加载的 `document-authoring` skill 走 `<hermix-canvas page="slide16x9|a4">` 画布管线（流式可见 + 成稿 write_file 落盘）；未加载该 skill 时不要凭记忆模仿 marker 语法
 - rename/move → `move_file(source, destination)`
 - images by path → `delegate_task` (see Image analysis below)
 
