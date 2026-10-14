@@ -5,9 +5,6 @@
 //! 副作用，不是数据操作**。失败一律回 `Err(中文串)`，前端据此提示，
 //! 绝不静默吞掉——「开机自启看起来开了但没生效」这类问题最难查。
 
-use std::path::PathBuf;
-
-use serde::Serialize;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager};
