@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { flushSync } from "react-dom";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
+import { listen } from "@tauri-apps/api/event";
 import { Sidebar } from "./components/Sidebar";
 import { SidebarRevealRow } from "./components/SidebarRevealRow";
 import { ChatView } from "./components/ChatView";
@@ -55,7 +56,7 @@ import type {
   TimelineStep,
 } from "./types";
 import { storage, STORAGE_KEYS, sessionKey } from "./utils/storageCompat";
-import { sendNotification, setKeepAwake, KEEP_AWAKE_CHANGED_EVENT } from "./desktopBridge";
+import { sendNotification, setKeepAwake, KEEP_AWAKE_CHANGED_EVENT, setTrayTaskCount } from "./desktopBridge";
 import { applyScale, readScale, UI_SCALE_EVENT } from "./utils/uiScale";
 
 const LEFT_KEY = STORAGE_KEYS.sidebarWidth;
@@ -1241,6 +1242,27 @@ setPage("chat");
     selectSessionOnly(id);
     setPage("chat");
   }, [selectSessionOnly, setPage]);
+
+  // ── 托盘联动 ────────────────────────────────────────────────────
+  // 流式会话数上报 → 托盘菜单「正在执行的任务」项的文本/可用态。托盘被
+  // 设置页关掉时后端 no-op，这里不用关心托盘开关。流式计数只有本窗视角
+  // （streamingSessionId），后端定时任务不在此列——托盘项作为入口已经够用。
+  useEffect(() => {
+    setTrayTaskCount(streamingSessionId ? 1 : 0).catch(() => {});
+  }, [streamingSessionId]);
+
+  // 托盘菜单「正在执行的任务」：Rust 已唤起主窗，这里负责跳到流式会话；
+  // 没有在跑的就地回对话页。id 走 ref，避免每轮流式起停都重挂监听。
+  const streamingIdRef = useRef<string | null>(null);
+  useEffect(() => { streamingIdRef.current = streamingSessionId; }, [streamingSessionId]);
+  useEffect(() => {
+    const un = listen("hermix:tray-open-tasks", () => {
+      const id = streamingIdRef.current;
+      if (id) void handleSelectSession(id);
+      else setPage("chat");
+    });
+    return () => { void un.then((f) => f()).catch(() => {}); };
+  }, [handleSelectSession, setPage]);
 
   const handleDeleteSession = useCallback(async (id: string) => {
     // 乐观更新：先从 UI 移除再等 IPC 返回，否则点击后侧栏条目"卡住"到

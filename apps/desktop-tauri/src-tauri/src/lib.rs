@@ -595,6 +595,18 @@ pub fn run() {
             //     user hasn't created one yet. Embedded, so no resource lookup.
             ensure_default_soul_md(&hermix_home);
 
+            // 1d. Tray restore. desktop.json 里开着就重建托盘图标；关窗→
+            //     隐藏的拦截在 on_window_event（见下）。失败只打日志——
+            //     托盘建不起来（如图标缺失）不该拦住整个启动。
+            {
+                let _ = app.manage(system_settings::TrayState::default());
+                if system_settings::read_desktop_settings().tray {
+                    if let Err(e) = system_settings::build_tray(app.handle()) {
+                        eprintln!("[Hermix] 恢复托盘失败: {e}");
+                    }
+                }
+            }
+
             let sidecar = Arc::new(Mutex::new(HermixSidecar::new()));
             app.manage(AppState {
                 sidecar: sidecar.clone(),
@@ -645,10 +657,28 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::Destroyed = event {
-                let state = window.state::<AppState>();
-                let mut sb = state.sidecar.lock().unwrap();
-                sb.stop();
+            match event {
+                // 托盘模式的关窗去向：托盘存在 + 「关闭时最小化」开 → 只隐
+                // 藏窗口（agent / 定时任务后台继续，托盘可再唤起）；否则走
+                // 原生销毁。splash 的 sp-close 走同一条 close()，被同样拦
+                // 下——启动早期隐藏意味着应用继续在后台起服务，托盘可恢复。
+                tauri::WindowEvent::CloseRequested { api, .. } => {
+                    let app = window.app_handle();
+                    if window.label() == "main"
+                        && app.tray_by_id(system_settings::TRAY_ID).is_some()
+                        && system_settings::read_desktop_settings().close_to_tray
+                    {
+                        api.prevent_close();
+                        let _ = window.hide();
+                        system_settings::notify_hidden_once(app);
+                    }
+                }
+                tauri::WindowEvent::Destroyed => {
+                    let state = window.state::<AppState>();
+                    let mut sb = state.sidecar.lock().unwrap();
+                    sb.stop();
+                }
+                _ => {}
             }
         })
         // ── 启动白屏修复（2026-09-30）──────────────────────────────
@@ -673,8 +703,10 @@ pub fn run() {
             system_settings::get_autostart,
             system_settings::set_autostart,
             system_settings::send_notification,
-            system_settings::get_tray_enabled,
             system_settings::sync_tray,
+            system_settings::get_desktop_settings,
+            system_settings::set_close_action,
+            system_settings::tray_set_task_count,
             keep_awake::set_keep_awake,
             commands::get_settings_dir,
             commands::get_data_dir,

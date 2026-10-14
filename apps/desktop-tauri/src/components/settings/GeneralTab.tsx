@@ -6,7 +6,8 @@ import { useSendKey } from "../../hooks/useSendKey";
 import { useDesktopNotify } from "../../hooks/useDesktopNotify";
 import {
   getDataDir, openDataDir, copyText,
-  getAutostart, setAutostart, getTrayEnabled, syncTray,
+  getAutostart, setAutostart, getDesktopSettings, syncTray, setCloseAction,
+  type DesktopSettings,
 } from "../../desktopBridge";
 import { SettingsGroup, SettingsRow, SegmentedControl, Switch } from "../ui";
 import { ChoiceCard } from "./ChoiceCard";
@@ -103,13 +104,15 @@ function SendKeyRow() {
    幽灵 bug 的成因。 */
 function SystemGroup() {
   const [autostart, setAutostartOn] = useState<boolean | null>(null);
-  const [tray, setTrayOn] = useState<boolean | null>(null);
-  const [busy, setBusy] = useState<"autostart" | "tray" | null>(null);
+  // 托盘开关 + 关窗去向合在一份 DesktopSettings（后端单文件持久化），
+  // 回读一次同时刷新两项，不会出现「托盘关了、关窗行为还显示旧值」。
+  const [settings, setSettings] = useState<DesktopSettings | null>(null);
+  const [busy, setBusy] = useState<"autostart" | "tray" | "close" | null>(null);
   const { enabled: notifyOn, setEnabled: setNotifyOn, notify } = useDesktopNotify();
 
   const refresh = useCallback(() => {
     getAutostart().then(setAutostartOn).catch(() => setAutostartOn(null));
-    getTrayEnabled().then(setTrayOn).catch(() => setTrayOn(null));
+    getDesktopSettings().then(setSettings).catch(() => setSettings(null));
   }, []);
 
   useEffect(() => { refresh(); }, [refresh]);
@@ -128,14 +131,31 @@ function SystemGroup() {
     }
   };
 
+  const patchSettings = (patch: Partial<DesktopSettings>) =>
+    setSettings((s) => (s ? { ...s, ...patch } : s));
+
   const toggleTray = async (next: boolean) => {
     setBusy("tray");
-    setTrayOn(next);
+    patchSettings({ tray: next });
     try {
       await syncTray(next);
       refresh();
     } catch (e) {
-      setTrayOn(!next);
+      patchSettings({ tray: !next });
+      toastError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const changeCloseBehavior = async (closeToTray: boolean) => {
+    setBusy("close");
+    patchSettings({ close_to_tray: closeToTray });
+    try {
+      await setCloseAction(closeToTray);
+      refresh();
+    } catch (e) {
+      patchSettings({ close_to_tray: !closeToTray });
       toastError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(null);
@@ -145,7 +165,7 @@ function SystemGroup() {
   return (
     <SettingsGroup
       title="系统"
-      description="这三项会改动本机状态，改动立即生效，无需重启。"
+      description="这些项会改动本机状态，改动立即生效，无需重启。"
     >
       <SettingsRow
         title="开机自启动"
@@ -165,13 +185,32 @@ function SystemGroup() {
       />
       <SettingsRow
         title="显示在菜单栏"
-        description="在系统托盘常驻图标，左键单击唤起主窗口，右键菜单可退出。"
+        description="在系统托盘常驻图标：左键单击唤起主窗口，右键菜单有任务、更新与退出。"
         control={
           <Switch
-            checked={tray === true}
+            checked={settings?.tray === true}
             onChange={(v) => void toggleTray(v)}
-            disabled={tray === null || busy === "tray"}
+            disabled={settings === null || busy === "tray"}
             label="显示在菜单栏（系统托盘）"
+          />
+        }
+      />
+      <SettingsRow
+        title="关闭按钮行为"
+        description={
+          settings?.tray
+            ? "最小化到托盘时回复与定时任务在后台继续；退出程序则完全结束。"
+            : "关闭托盘后点关闭按钮将直接退出程序。"
+        }
+        control={
+          <SegmentedControl
+            label="关闭按钮行为"
+            value={settings?.close_to_tray ? "tray" : "quit"}
+            onChange={(v) => void changeCloseBehavior(v === "tray")}
+            options={[
+              { value: "tray", label: "最小化到托盘" },
+              { value: "quit", label: "退出程序" },
+            ]}
           />
         }
       />

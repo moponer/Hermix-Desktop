@@ -21,6 +21,7 @@ import {
   type ListReveal,
 } from "./sidebarListReveal";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import type { Session, NavPage } from "../types";
 import { useWorkspaces } from "../hooks/useWorkspaces";
 import { usePinnedArchived } from "../hooks/usePinnedArchived";
@@ -98,6 +99,13 @@ export function Sidebar({
   const [menuOpen, setMenuOpen] = useState(false);
   // 在线更新：菜单徽标 + 更新面板（hook 内部监听 update://status/progress）。
   const updater = useUpdater();
+  // 托盘菜单「检查更新」：检查一次并打开更新面板，与侧栏菜单按钮同一出口。
+  useEffect(() => {
+    const un = listen("hermix:tray-check-update", () => {
+      void updater.checkUpdate().then(() => updater.setPanelOpen(true));
+    });
+    return () => { void un.then((f) => f()).catch(() => {}); };
+  }, [updater.checkUpdate, updater.setPanelOpen]);
   // IM 通道状态（机器人名 + 网关连接），远程助手分组的行内状态点用。
   const channels = useChannelsStatus();
   const userCardRef = useRef<HTMLDivElement>(null);

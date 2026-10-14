@@ -311,12 +311,28 @@ export function sendNotification(title: string, body: string): Promise<void> {
   return invoke("send_notification", { title, body });
 }
 
-export function getTrayEnabled(): Promise<boolean> {
-  return invoke("get_tray_enabled");
-}
-
 export function syncTray(enabled: boolean): Promise<void> {
   return invoke("sync_tray", { enabled });
+}
+
+/** 桌面层 UI 行为开关（system_settings.rs::DesktopSettings）。 */
+export interface DesktopSettings {
+  tray: boolean;
+  /** 主窗点 X：true = 最小化到托盘，false = 退出程序。 */
+  close_to_tray: boolean;
+}
+
+export function getDesktopSettings(): Promise<DesktopSettings> {
+  return invoke("get_desktop_settings");
+}
+
+export function setCloseAction(closeToTray: boolean): Promise<void> {
+  return invoke("set_close_action", { closeToTray });
+}
+
+/** 上报正在流式执行的会话数，驱动托盘菜单「正在执行的任务」项。 */
+export function setTrayTaskCount(count: number): Promise<void> {
+  return invoke("tray_set_task_count", { count });
 }
 
 // Aliases for SettingsView compatibility
