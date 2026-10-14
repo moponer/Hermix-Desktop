@@ -37,7 +37,7 @@ import {
   PROTO_VERSION,
   type Envelope,
 } from './envelope'
-import { relayWsUrl } from './relayClient'
+import { BROWSER_UNSUPPORTED_HINT, isBrowserEnv, relayWsUrl } from './relayClient'
 
 /** 配对码位数。服务端 `mint_code` 固定 6 位。 */
 const CODE_LEN = 6
@@ -263,7 +263,16 @@ export function pairOverRelay(opts: {
           fail('中转拒绝了这条连接（401）：配对码可能已被用过，请重新扫码。')
           return
         }
-        fail('连不上中转。确认手机能上网，且电脑端已配置同一个中转地址。')
+        // 浏览器里**必然**连不上：凭据只走握手头，而浏览器的 WebSocket 带不了
+        // 自定义头，relay 一定 401，浏览器又把状态码吞成通用错误。不识别这个
+        // 环境，报出来的「确认手机能上网」就是把用户引去查一个好好的网络。
+        if (isBrowserEnv()) {
+          fail(BROWSER_UNSUPPORTED_HINT)
+          return
+        }
+        // 带上原始 errMsg：网络层失败的原因（DNS / TLS / 超时）只有它说得清，
+        // 抹掉之后所有失败都长成同一句话，没法自查。
+        fail(`连不上中转${msg ? `（${msg}）` : ''}。确认手机能上网，且电脑端已配置同一个中转地址。`)
       })
 
       task.onClose((res?: { code?: number }) => {

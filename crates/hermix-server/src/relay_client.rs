@@ -209,10 +209,17 @@ pub fn accept_inbound(raw: &str) -> Option<InboundFrame> {
 ///
 /// `token` 是 **relay 凭据**（`hrel_*`），不是 hermix 设备 token——这一跳只
 /// 过了 relay，hermix 侧的凭据在帧里（`FrameAuth`）。
+///
+/// `status` 必须在握手成功后置为 `Connected`：界面（`relay_settings::snapshot`
+/// → `ImChannelsCard`）只认这三个状态，不置位的话**连上了也永远显示
+/// 「正在连接（第 N 次）」**，用户据此判断"没连上"并反复重试——而实际
+/// socket 是通的。中转侧 `/health` 的 `node_connected:true` 与界面
+/// 「正在连接」同时成立过，就是这条路径漏了。
 pub async fn serve_relay_socket(
     cfg: RelayConfig,
     token: String,
     state: Arc<crate::state::HttpServerState>,
+    status: RelayStatus,
 ) -> std::io::Result<()> {
     use futures::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -249,6 +256,12 @@ pub async fn serve_relay_socket(
         status = %resp.status(),
         "已连上 relay"
     );
+    // 握手成功 = 这条链路真的通了。必须在**这里**置位，不能等收到第一帧
+    // 业务数据——relay 只在有手机发消息时才回帧，「等数据再置位」会让
+    // 一条健康但空闲的连接永远显示成「正在连接」。
+    // 顺带把重试计数清零（`set` 内部做），断线后从 2s 重新退避而不是
+    // 从历史高位起。
+    status.set(RelayState::Connected);
 
     // 一条 socket 要同时推流与收流（handler 在推的同时必须能读到手机的
     // out-of-band 消息），所以拆两半而不是一把锁串行。
@@ -506,5 +519,60 @@ mod tests {
         assert!(h.version_ok());
         // 登记帧不带 token —— 手机端的 token 不该出现在 PC 出站这一侧
         assert!(h.token_hash.is_none());
+    }
+
+    /// 握手成功必须把状态翻成 `Connected`。
+    ///
+    /// 这条不是锦上添花：状态是界面唯一的判据（`relay_settings::snapshot`
+    /// → `ImChannelsCard` 只认 disabled/connecting/connected）。曾经漏置位，
+    /// 于是中转 `/health` 报 `node_connected:true` 的同时界面一直显示
+    /// 「正在连接（第 1 次）」——用户据此认定没连上，反复重试，而 socket
+    /// 一直是通的。故对**真实握手**打桩，不测纯函数。
+    #[tokio::test]
+    async fn 握手成功即置为已连接() {
+        use futures::StreamExt;
+        use tokio_tungstenite::tungstenite::Message;
+
+        // 最小 relay：接下 upgrade，读到登记帧就收摊——刚好让
+        // serve_relay_socket 走完「握手成功」那段并正常返回。
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        tokio::spawn(async move {
+            let Ok((stream, _)) = listener.accept().await else {
+                return;
+            };
+            let Ok(mut ws) = tokio_tungstenite::accept_async(stream).await else {
+                return;
+            };
+            while let Some(Ok(msg)) = ws.next().await {
+                if matches!(msg, Message::Text(_)) {
+                    break;
+                }
+            }
+            let _ = ws.close(None).await;
+        });
+
+        let home = tempfile::tempdir().expect("home");
+        let state =
+            std::sync::Arc::new(crate::test_state::test_state_with_home(home.path()));
+        let status = RelayStatus::new();
+        let cfg = RelayConfig {
+            url: format!("ws://127.0.0.1:{port}"),
+            node_id: "node-1".into(),
+            ..Default::default()
+        };
+
+        serve_relay_socket(cfg, "hrel_test".into(), state, status.clone())
+            .await
+            .expect("握手应成功");
+
+        assert_eq!(
+            status.state(),
+            RelayState::Connected,
+            "握手成功就必须置为 Connected，否则界面永远停在「正在连接（第 N 次）」"
+        );
+        assert_eq!(status.attempts(), 0, "连上就要清零重试计数");
     }
 }

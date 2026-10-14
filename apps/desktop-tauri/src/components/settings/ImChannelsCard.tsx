@@ -354,12 +354,19 @@ export function ImChannelsCard({
   }, [refreshStatus]);
 
   // 手机端二维码：第一次切到该渠道时生成一次，之后复用（除非点重新生成）。
-  // relay 配置同理——它在同一个面板里，跟着「手机端」这个渠道一起加载。
   const visited = useRef(false);
   useEffect(() => {
-    if (active !== "mobile" || visited.current) return;
-    visited.current = true;
-    void generateQr();
+    if (active !== "mobile") return;
+    // 二维码只在第一次进这个页时生成：`POST /api/pairing/sessions` 是**签发**
+    // 动作（当场向 relay 换一条手机凭据 + 出新码），跟着每次激活重跑等于
+    // 换码换凭据，屏上那组 6 位码与二维码当场作废。
+    if (!visited.current) {
+      visited.current = true;
+      void generateQr();
+    }
+    // relay 状态不同：它是只读探针，而面板上写的是「正在连接（第 N 次）」/
+    // 「已连上中转」这种**活**状态。只在首次进入时拉一次的话，首次拉到的
+    // 那个瞬时值会一直挂到用户手动刷新为止——连上了也显示没连上。
     void refreshRelay();
   }, [active, generateQr, refreshRelay]);
 

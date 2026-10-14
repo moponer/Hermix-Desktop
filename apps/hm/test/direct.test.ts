@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { pairingFrameHeader, parsePairingUrl, PAIRING_SESSION_ID } from '../core/direct';
+import { relayWsUrl } from '../core/relayClient';
 import { PROTO_VERSION } from '../core/envelope';
 
 /**
@@ -89,4 +90,22 @@ test('配对帧 AAD 与 Rust Envelope::aad() 逐字节一致', () => {
     new TextDecoder().decode(pairingFrameHeader()),
     `v=${PROTO_VERSION};tag=Route;sid=${PAIRING_SESSION_ID};nid=`,
   );
+});
+
+test('二维码地址 → WS 握手地址整条链路（真实域名为准）', () => {
+  // 这条链曾经断在第二步：`parsePairingUrl` 原样保留二维码里的 `https://`
+  // （配对码不可能带 http 明文），而 `relayWsUrl` 漏了 `https://` 分支，
+  // 拼出 `wss://https://…/relay/phone` 这种畸形地址。现象是手机上
+  // 「连不上中转」，而中转活着、凭据有效、网络正常——三个都好的情况下
+  // 失败，说明问题在拼地址这一步。Rust 侧 `relay_ws_url` 有对应分支。
+  const t = parsePairingUrl(`https://hermix.example.com/pair?c=540157&t=${TOKEN}&k=${K}`);
+  assert.ok(t);
+  assert.equal(t.relayBase, 'https://hermix.example.com');
+  assert.equal(
+    relayWsUrl(t.relayBase, 'phone'),
+    'wss://hermix.example.com/relay/phone',
+    '从二维码解出的地址必须能直接拼成可用的 wss 地址',
+  );
+  // 不允许出现协议头嵌套——那正是漏分支时的产物。
+  assert.doesNotMatch(relayWsUrl(t.relayBase, 'phone'), /wss:\/\/https?:/);
 });

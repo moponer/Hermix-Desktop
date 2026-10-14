@@ -1304,6 +1304,9 @@ impl HttpServerState {
                             cfg.clone(),
                             token,
                             worker.clone(),
+                            // 握手成功后由 serve_relay_socket 置为 Connected，
+                            // 界面才能从「正在连接（第 N 次）」翻到「已连上中转」。
+                            worker.relay_status.clone(),
                         )
                         .await
                         {

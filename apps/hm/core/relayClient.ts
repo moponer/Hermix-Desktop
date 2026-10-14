@@ -42,12 +42,47 @@ function backoff(attempt: number): number {
   return Math.min(base * Math.pow(2, Math.min(attempt, 16)), 30000)
 }
 
-/** 拼 relay 的 WS 地址。导出给配对流程复用（配对也是一条 phone 连接）。 */
+/**
+ * 当前是不是浏览器环境（H5 / 小程序 webview）。
+ *
+ * 存在的理由：relay 凭据只走 **HTTP 握手头**（`Authorization: Bearer`），
+ * 而浏览器的 `WebSocket` 按规范**无法设置自定义头**。于是 H5 下每一次都必然
+ * 被 relay 401——而浏览器又把状态码吞成通用错误，`onError` 里根本看不到
+ * "401"。结果就是所有 H5 尝试都落进「连不上中转，确认手机能上网」：网络其实
+ * 好好的，用户却被引去查一个完全错误的方向。识别出来才说得上真话。
+ */
+export function isBrowserEnv(): boolean {
+  try {
+    const g = globalThis as { document?: unknown; window?: unknown }
+    return typeof g.document !== 'undefined' && typeof g.window !== 'undefined'
+  } catch {
+    return false
+  }
+}
+
+/** 浏览器里跑必然失败时的唯一诚实说法。 */
+export const BROWSER_UNSUPPORTED_HINT =
+  '这一步只能在手机 App 里做：relay 凭据必须随 WebSocket 握手头发出，' +
+  '而浏览器的 WebSocket 带不了自定义头，一定会被中转拒绝。' +
+  '这不是网络问题——请用 Hermix M App 扫码配对。'
+
+/**
+ * 拼 relay 的 WS 地址。导出给配对流程复用（配对也是一条 phone 连接）。
+ *
+ * ⚠️ **`https://` 分支不是可选的**：`parsePairingUrl` 原样保留二维码里的
+ * scheme，而配对二维码永远是 `https://relay/pair?…`（明文信道不带凭据，
+ * 见 `parsePairingUrl` 的收窄正则）。漏掉这一支会拼出
+ * `wss://https://relay/relay/phone` 这种畸形地址，**连不上且看不出原因**——
+ * 表现为「连不上中转」，而中转、凭据、网络全都是好的。
+ * 必须与 Rust 侧 `relay_client::relay_ws_url` 逐分支对齐。
+ */
 export function relayWsUrl(base: string, kind: 'phone' | 'node'): string {
   const b = base.trim().replace(/\/+$/, '')
+  if (b.startsWith('wss://')) return `${b}/relay/${kind}`
   if (b.startsWith('ws://')) return `${b}/relay/${kind}`
-  if (b.startsWith('http://')) return `ws://${b.slice(7)}/relay/${kind}`
-  return `wss://${b}/relay/${kind}`
+  if (b.startsWith('https://')) return `wss://${b.slice('https://'.length)}/relay/${kind}`
+  if (b.startsWith('http://')) return `ws://${b.slice('http://'.length)}/relay/${kind}`
+  return `wss://${b}/relay/${kind}` // 裸 host 补 wss：外网默认走 TLS
 }
 
 /**
@@ -163,6 +198,12 @@ export class RelayClient {
       // 必须原样透出去，否则用户只会看到「连不上」。
       if (/401|unauthorized/i.test(msg)) {
         this.opts.onError?.('relay 拒绝了这条连接（401）：凭据无效或已被撤销')
+        return
+      }
+      // 浏览器环境是「必然失败」而非「可能失败」：握手头发不出去，100% 被 401，
+      // 而浏览器把状态码吞掉了。归到通用文案等于让人去查网络。
+      if (isBrowserEnv()) {
+        this.opts.onError?.(BROWSER_UNSUPPORTED_HINT)
       }
     })
     task.onClose((res?: { code?: number }) => {
