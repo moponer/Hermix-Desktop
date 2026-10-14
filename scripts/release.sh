@@ -2,17 +2,17 @@
 # release.sh — 桌面端发布链：每次构建出双产物（安装包 exe + 更新包 zip）。
 #
 # 决策记录：
-#   docs/notes/implemented/feature/2026-10-09-online-update.md    （A 路：更新包）
-#   docs/notes/implemented/feature/2026-10-09-custom-installer.md （B 路：安装包，NSIS 退场）
+#   docs/notes/implemented/feature/2026-10-09-online-update.md                    （A 路：更新包）
+#   docs/notes/implemented/simplification/2026-10-14-retire-custom-installer-return-to-nsis.md （B 路：NSIS 安装包）
 #
-# 流程：构建（前端 + ensure-sidecar + 主程序 + 安装器）→ 自组装 app 根 staging
+# 流程：构建（前端 + ensure-sidecar + 主程序）→ 自组装 app 根 staging
 # → A 路：latest.zip + manifest.json + releases.json → 上传到远端**版本目录**
 #   （deploy/desktop/<N+1>/，N = current 指向的编号），服务端对账 sha256 后
 #   **单次 rename 原子切换** current 符号链接——客户端请求要么看到完整旧版
 #   要么完整新版，不存在「manifest 先落地/zip 传一半」的窗口期。首次运行
 #   自动把旧 public/desktop/ 迁入 deploy/desktop/1/（幂等）。
 #   （决策笔记 2026-10-11-relay-structured-deployment.md §3/§6）
-# → B 路：zip 嵌入安装器 exe → Hermix-Setup-<ver>.exe。
+# → B 路：cargo tauri bundle -b nsis → Hermix-Setup-<ver>.exe。
 #
 # 远端布局（relayRoot = /www/wwwroot/hermix-relay）：
 #   deploy/desktop/<N>/{latest.zip,manifest.json,releases.json}
@@ -21,12 +21,12 @@
 # 用法：
 #   scripts/release.sh [--host root@1.2.3.4] [--notes "..."] [--min-version 0.1.9]
 #     [--remote-dir ...] [--skip-build] [--skip-upload]
-#     [--nsis-baseline <setup.exe>]   # 退场对照：与 NSIS 基准产物比文件清单
 #
 # 更新源：默认 https://hermix.cssso.com/desktop（与客户端内置默认一致），
 # 可用 HERMIX_UPDATE_BASE_URL 覆写。
 #
-# 依赖：node/npm、cargo、powershell（Windows 自带）。NSIS / 7-Zip 不再需要。
+# 依赖：node/npm、cargo（含 cargo-tauri；NSIS 由 tauri bundle 自动获取）、
+# powershell（Windows 自带）。
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -37,14 +37,13 @@ OUT_DIR="$TARGET/dist"
 CHANGELOG="$REPO_ROOT/CHANGELOG.md"
 
 NOTES="" MIN_VERSION="" HOST="" REMOTE_DIR="/www/wwwroot/hermix-relay/deploy/desktop"
-NSIS_BASELINE="" SKIP_BUILD=0 SKIP_UPLOAD=0
+SKIP_BUILD=0 SKIP_UPLOAD=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --notes) NOTES="$2"; shift 2 ;;
     --min-version) MIN_VERSION="$2"; shift 2 ;;
     --host) HOST="$2"; shift 2 ;;
     --remote-dir) REMOTE_DIR="$2"; shift 2 ;;
-    --nsis-baseline) NSIS_BASELINE="$2"; shift 2 ;;
     --skip-build) SKIP_BUILD=1; shift ;;
     --skip-upload) SKIP_UPLOAD=1; shift ;;
     *) echo "未知参数: $1"; exit 1 ;;
@@ -68,9 +67,6 @@ if [[ $SKIP_BUILD -eq 0 ]]; then
   (cd "$REPO_ROOT/apps/desktop-tauri" && npm run build)
   echo "── 构建：主程序 release（custom-protocol：嵌入前端资产，缺它窗口导航 devUrl = localhost 拒绝连接）"
   (cd "$REPO_ROOT" && cargo build --release --features hermix-desktop/custom-protocol -p hermix-desktop)
-  echo "── 构建：安装器（vite 前端 → cargo，版本经 env 注入）"
-  (cd "$REPO_ROOT/apps/installer" && npm install --no-audit --no-fund && npm run build:vite)
-  (cd "$REPO_ROOT" && HERMIX_PRODUCT_VERSION="$VERSION" cargo build --release -p hermix-installer)
 else
   echo "── 跳过构建（--skip-build），沿用现有产物"
 fi
@@ -171,33 +167,15 @@ RES_SRC="$REPO_ROOT/apps/desktop-tauri/src-tauri/resources"
 [[ -d "$RES_SRC" ]] || { echo "错误：缺 resources 目录 $RES_SRC"; exit 1; }
 robocopy "$(cygpath -w "$RES_SRC")" "$(cygpath -w "$APP/resources")" //E //MT:16 //NFL //NDL //NJH //NJS //NP || { RC=$?; [[ $RC -le 7 ]] || { echo "错误：robocopy 复制 resources 失败（退出码 $RC）"; exit 1; }; }
 
-# 许可随包分发（MIT 要求带许可文本）+ 更新源自举。安装器许可页读的是
-# 编译期内嵌副本（installer LICENSE.txt），这里拷同一份文件进 app 根，
-# 便携包里永远能找到许可正文。不再用旧 license.rtf（Unicode 转义、与
-# 内嵌文本无法对账）。
-cp "$REPO_ROOT/apps/installer/src-tauri/LICENSE.txt" "$APP/LICENSE.txt"
+# 许可随包分发 + 更新源自举。许可正文单一真相源 = 桌面端 src-tauri/LICENSE.txt，
+# 拷进 app 根，便携包里永远能找到许可正文。不再用旧 license.rtf（Unicode 转义、
+# 与正文无法对账）。
+cp "$REPO_ROOT/apps/desktop-tauri/src-tauri/LICENSE.txt" "$APP/LICENSE.txt"
 printf '%s\n' "$BASE_URL/manifest.json" > "$APP/update-url.txt"
 
 # 文件清单（对照与审计用）。
 ( cd "$APP" && find . -type f | sed 's|^\./||' | sort ) > "$STAGING/app.filelist.txt"
 echo "── app 根组装完成：$(wc -l < "$STAGING/app.filelist.txt") 个文件"
-
-# ── NSIS 退场对照（--nsis-baseline <setup.exe>）───────────────────
-# 首次切换必须跑一次：自组装文件清单 ⊇ NSIS 安装清单（允许新增，不许缺失）。
-if [[ -n "$NSIS_BASELINE" ]]; then
-  echo "── NSIS 退场对照：$NSIS_BASELINE"
-  NSIS_TMP="$STAGING/nsis-raw"; mkdir -p "$NSIS_TMP"
-  powershell -NoProfile -Command "Expand-Archive -Path '$(cygpath -w "$NSIS_BASELINE")' -DestinationPath '$(cygpath -w "$NSIS_TMP")' -Force" \
-    || { echo "错误：NSIS 基准不是 zip 结构（若是 exe，用 7z 解一遍再传目录）"; exit 1; }
-  ( cd "$NSIS_TMP" && find . -type f | sed 's|^\./||' | sort ) > "$STAGING/nsis.filelist.txt"
-  MISSING="$(comm -23 "$STAGING/nsis.filelist.txt" "$STAGING/app.filelist.txt" || true)"
-  if [[ -n "$MISSING" ]]; then
-    echo "错误：自组装缺以下文件（NSIS 有、app 根没有）——补齐组装清单后才能退场："
-    echo "$MISSING"
-    exit 1
-  fi
-  echo "── 对照通过：NSIS 清单全部被自组装覆盖（可安全删除 nsis target）"
-fi
 
 # ── A 路：更新包 latest.zip + sha256 ─────────────────────────────
 echo "── A 路：打包 latest.zip"
@@ -276,14 +254,16 @@ fs.writeFileSync(outPath, JSON.stringify(releases, null, 2) + "\n");
 ' "$VERSION" "$SHA256" "$PUB_DATE" "$MIN_JSON" "$NOTES" "$CHANGELOG" "$STAGING/releases.json"
 echo "── releases.json: $(node -e "console.log(JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')).length)" "$STAGING/releases.json") 个版本条目"
 
-# ── B 路：安装包（载荷嵌入安装器 exe）────────────────────────────
-echo "── B 路：载荷嵌入安装器"
-INSTALLER_EXE="$TARGET/hermix-installer.exe"
-[[ -f "$INSTALLER_EXE" ]] || { echo "错误：找不到安装器 $INSTALLER_EXE"; exit 1; }
+# ── B 路：安装包（NSIS，标准 Tauri 打包）──────────────────────────
+# cargo tauri bundle 只跑 beforeBundleCommand，不重跑前端（前端已在上面构建段
+# 与自组装段就位），对已构建的 hermix-desktop.exe 出 NSIS setup。
+echo "── B 路：cargo tauri bundle -b nsis"
+(cd "$REPO_ROOT/apps/desktop-tauri" && cargo tauri bundle -b nsis)
+BUNDLE_SETUP="$TARGET/bundle/nsis/Hermix Desktop_${VERSION}_x64-setup.exe"
+[[ -f "$BUNDLE_SETUP" ]] || { echo "错误：未产出 NSIS 安装包 $BUNDLE_SETUP"; exit 1; }
 mkdir -p "$OUT_DIR"
 SETUP_OUT="$OUT_DIR/Hermix-Setup-$VERSION.exe"
-cp "$INSTALLER_EXE" "$SETUP_OUT"
-"$TARGET/hermix-embed.exe" embed "$SETUP_OUT" "$ZIP"
+cp "$BUNDLE_SETUP" "$SETUP_OUT"
 echo "── 安装包: $SETUP_OUT"
 
 # ── 上传（A 路：版本目录 + 原子切换，决策笔记 §3）─────────────────

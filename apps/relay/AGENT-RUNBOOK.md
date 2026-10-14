@@ -142,8 +142,8 @@ curl -sI https://hermix.cssso.com/download/hermix.apk | grep -iE "content-length
 # 7) BBS 反代：200（BBS 未起时这里是 502，属 BBS 侧问题，不是 relay）
 curl -s -o /dev/null -w "%{http_code}\n" https://hermix.cssso.com/bbs/
 
-# 8) 安装包冒烟（本地）：Hermix-Setup-<ver>.exe 双击 → 许可页完整正文 →
-#    装完启动 → 设置里检查更新显示「已是最新」（版本号 = 刚发的）
+# 8) 安装包冒烟（本地）：Hermix-Setup-<ver>.exe 双击 → 向导 → 装完启动 →
+#    设置里检查更新显示「已是最新」（版本号 = 刚发的）
 ```
 
 ## 6. 禁区（agent 不得做的事）

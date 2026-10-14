@@ -67,7 +67,6 @@ sidecar 刷新的唯一入口是 `npm run ensure-sidecar`（`npm run build` 与 
 │   ├── hermix-tools           # 30+ 工具后端 + 审批引擎 + 凭证防护
 │   ├── hermix-server          # axum HTTP/WS API；产出二进制 `hermix`（sidecar 入口）
 │   ├── hermix-desktop         # Tauri 主程序
-│   ├── hermix-installer       # 自研安装器（替代 NSIS）
 │   └── …                      # intelligence / focus / automation / mcp / gateway /
 │                              #   voice / cua / task / transport / telemetry / skills /
 │                              #   plugin / acp / runtime / environments / coreutils …
@@ -75,7 +74,6 @@ sidecar 刷新的唯一入口是 `npm run ensure-sidecar`（`npm run build` 与 
 │   ├── desktop-tauri/         # Tauri v2 桌面壳 + React 19 / Tailwind 4 / Vite 前端
 │   ├── hm/                    # 手机伴侣端（uni-app，HBuilderX 布局，见其 README）
 │   ├── relay/                 # 自建中转服务 + 官网静态页 + 桌面端/spiker 更新源
-│   ├── installer/             # 自研安装器前端（vite）+ 载荷嵌入工具
 │   ├── hx-shell/              # Custom App Shell 运行时
 │   ├── hx-packager/           # 自定义应用打包工具
 │   └── playground/            # 前端实验场
@@ -94,10 +92,10 @@ sidecar 刷新的唯一入口是 `npm run ensure-sidecar`（`npm run build` 与 
 
 ## 发版与官网
 
-桌面端走 `scripts/release.sh`：一次构建产出**安装包 exe**（载荷嵌入安装器）与**更新包 zip**
-（+ sha256 + `manifest.json`），上传到自建 relay 的 `public/desktop/`，客户端默认从
-`https://hermix.cssso.com/desktop/manifest.json` 取更新。手机端 APK 由 HBuilderX 云打包后人工
-放到 `public/hermix.apk`。
+桌面端走 `scripts/release.sh`：一次构建产出**安装包 exe**（NSIS，`cargo tauri bundle -b nsis`）
+与**更新包 zip**（+ sha256 + `manifest.json`），上传到自建 relay 的 `public/desktop/`，
+客户端默认从 `https://hermix.cssso.com/desktop/manifest.json` 取更新。手机端 APK 由 HBuilderX
+云打包后人工放到 `public/hermix.apk`。
 
 出包全流程（全链 cargo 编译远超单命令超时，分段预热再组装）：
 
@@ -105,9 +103,7 @@ sidecar 刷新的唯一入口是 `npm run ensure-sidecar`（`npm run build` 与 
 ./scripts/check-sidecar-freshness.sh        # 门禁必须 exit 0；STALE 就先 npm run ensure-sidecar
 npm run build                               # 前端 + ensure-sidecar（dev.mjs 全链路）
 cargo build --release -p hermix-desktop     # 主程序
-(cd apps/installer && npm run build:vite)   # 安装器前端
-HERMIX_PRODUCT_VERSION=<ver> cargo build --release -p hermix-installer
-./scripts/release.sh --skip-build --skip-upload   # 组装 app 根 → latest.zip + manifest + 嵌入安装包
+./scripts/release.sh --skip-build --skip-upload   # 组装 app 根 → latest.zip + manifest + NSIS 安装包
 ```
 
 待传文件打印在脚本尾部（`target/release/update-staging/` 与 `dist/`）。注意：

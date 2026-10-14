@@ -58,6 +58,7 @@
       "binaries/hermix-viewer"
     ],
     "publisher": "Hermix",
+    "copyright": "© 2026 Hermix hermix.cssso.com",
     "shortDescription": "Hermix Desktop portable AI agent (Windows)",
     "longDescription": "A fully portable AI agent desktop app. All user data lives next to the executable, no system-wide writes, no C drive bloat. Zip, copy, run.",
     "icon": [

@@ -51,7 +51,7 @@ Status: implemented — 已拍板（2026-10-09）；桌面端四段更新 + 手�
 
 ### 发布链路
 
-`scripts/release.sh` 一条链（构建 → 自组装 app 根 → A 路出 latest.zip + manifest → 上传 relay 静态目录；B 路同时产出安装包，见[自研安装器](2026-10-09-custom-installer.md)），杜绝 2026-10-06/08 那类「修了但包里没有」。
+`scripts/release.sh` 一条链（构建 → 自组装 app 根 → A 路出 latest.zip + manifest → 上传 relay 静态目录；B 路由 `cargo tauri bundle -b nsis` 出 NSIS 安装包，见[回到 NSIS：自研安装器退役](../simplification/2026-10-14-retire-custom-installer-return-to-nsis.md)），杜绝 2026-10-06/08 那类「修了但包里没有」。
 
 ### 手机端（Hermix M）自动更新（2026-10-09 补，与主人确认）
 
