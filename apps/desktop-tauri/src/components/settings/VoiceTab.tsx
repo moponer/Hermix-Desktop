@@ -85,7 +85,7 @@ export function VoiceTab() {
         <label className="block space-y-1">
           <span className="text-sm opacity-70">识别端点 URL（必须 https）</span>
           <input
-            className="w-full rounded border px-2 py-1.5 text-sm"
+            className="modal-input"
             placeholder="https://api.minimax.chat/v1/audio/transcriptions"
             value={cfg.endpoint}
             onChange={(e) => setCfg({ ...cfg, endpoint: e.target.value })}
@@ -95,7 +95,7 @@ export function VoiceTab() {
         <label className="block space-y-1">
           <span className="text-sm opacity-70">API Key（仅存本机与手机端，经端到端加密下发）</span>
           <input
-            className="w-full rounded border px-2 py-1.5 text-sm"
+            className="modal-input"
             type="password"
             value={cfg.api_key}
             onChange={(e) => setCfg({ ...cfg, api_key: e.target.value })}
@@ -106,7 +106,7 @@ export function VoiceTab() {
           <label className="block space-y-1">
             <span className="text-sm opacity-70">模型（可选）</span>
             <input
-              className="w-full rounded border px-2 py-1.5 text-sm"
+              className="modal-input"
               value={cfg.model ?? ""}
               onChange={(e) => setCfg({ ...cfg, model: e.target.value || null })}
             />
@@ -114,7 +114,7 @@ export function VoiceTab() {
           <label className="block space-y-1">
             <span className="text-sm opacity-70">语言（如 zh）</span>
             <input
-              className="w-full rounded border px-2 py-1.5 text-sm"
+              className="modal-input"
               value={cfg.language ?? ""}
               onChange={(e) => setCfg({ ...cfg, language: e.target.value || null })}
             />
@@ -124,7 +124,7 @@ export function VoiceTab() {
         <label className="block space-y-1">
           <span className="text-sm opacity-70">音频 MIME（与手机端录音格式配套，默认 audio/mpeg）</span>
           <input
-            className="w-full rounded border px-2 py-1.5 text-sm"
+            className="modal-input"
             value={cfg.audio_mime}
             onChange={(e) => setCfg({ ...cfg, audio_mime: e.target.value || "audio/mpeg" })}
           />
@@ -133,7 +133,7 @@ export function VoiceTab() {
         <label className="block space-y-1">
           <span className="text-sm opacity-70">附加请求头（JSON，可选；如 provider 要求特殊鉴权头）</span>
           <input
-            className="w-full rounded border px-2 py-1.5 text-sm"
+            className="modal-input"
             placeholder='{"x-custom":"value"}'
             value={cfg.extra_headers ? JSON.stringify(cfg.extra_headers) : ""}
             onChange={(e) => {
@@ -148,15 +148,16 @@ export function VoiceTab() {
         </label>
 
         <div className="flex items-center gap-3">
-          <button
-            className="rounded bg-blue-600 px-4 py-1.5 text-sm text-white disabled:opacity-50"
-            disabled={busy}
-            onClick={save}
-          >
+          <button className="modal-btn modal-btn-primary" disabled={busy} onClick={save}>
             {busy ? "保存中…" : "保存"}
           </button>
           {msg && (
-            <span className={`text-sm ${msg.ok ? "text-emerald-600" : "text-red-600"}`}>{msg.text}</span>
+            <span
+              className="text-sm"
+              style={{ color: msg.ok ? "var(--color-success)" : "var(--color-error)" }}
+            >
+              {msg.text}
+            </span>
           )}
         </div>
 
