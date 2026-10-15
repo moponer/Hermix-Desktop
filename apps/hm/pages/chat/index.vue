@@ -106,6 +106,8 @@ function persistSession() {
 // 那是把「不能做什么」和「进不来」混成一件事。
 const link = ref<'offline' | 'connecting' | 'online'>('offline')
 const linkMsg = ref('')
+/** 凭据被中转拒绝（终态，不会自动恢复）：横幅要给出处理入口。 */
+const linkRevoked = computed(() => /已被中转拒绝/.test(linkMsg.value))
 let session: ChatSession | null = null
 
 /** 返回等连接就绪的 Promise；已就绪时 resolve 得很快。 */
@@ -342,6 +344,9 @@ onUnmounted(() => {
     <view v-if="paired && link !== 'online'" class="link-bar">
       <view class="link-dot" />
       <text class="link-txt">{{ linkMsg || '正在连电脑…' }}</text>
+      <!-- 凭据被中转拒绝是终态（不再自动重连），必须给一条出路：
+           直达设备管理，移除后重新扫码。 -->
+      <view v-if="linkRevoked" class="link-act" @tap="goSettings"><text>去处理</text></view>
     </view>
 
     <hm-empty
@@ -453,6 +458,18 @@ onUnmounted(() => {
 .link-txt {
   font-size: $fs-sub;
   color: $fg2;
+}
+/* 终态（凭据被拒）横幅的出路按钮：暖色小药丸，与状态点同一行尾。 */
+.link-act {
+  flex: none;
+  margin-left: auto;
+  padding: 8rpx 24rpx;
+  border-radius: $r-pill;
+  background: $warn-bg;
+}
+.link-act text {
+  font-size: $fs-mini;
+  color: $warn;
 }
 .c-top {
   display: flex;

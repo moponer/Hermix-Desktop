@@ -147,8 +147,9 @@ export class ChatSession {
               }
             },
             onError: (m) => {
-              // 401 = 撤销：销毁 client，下次 start() 会重建（用新 token）。
-              if (/401|凭据已被撤销/i.test(m)) this.destroyClient()
+              // 401（平台透出状态码）与「已被中转拒绝」（App 端判活探测的结论）
+              // 都意味着凭据已死：销毁 client，下次 start() 会重建（用新 token）。
+              if (/401|凭据已被撤销|已被中转拒绝/i.test(m)) this.destroyClient()
               this.h.onError(m)
             },
           })

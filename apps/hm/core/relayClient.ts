@@ -19,6 +19,7 @@
  */
 import { signatureHeader } from './signature'
 import { encodeEnvelope, parseEnvelope, helloFrame, PROTO_VERSION, type Envelope } from './envelope'
+import { request } from './http'
 
 export interface RelayClientOptions {
   /** relay 根地址，如 `https://relay.example.com` */
@@ -97,6 +98,12 @@ export class RelayClient {
   private open = false
   private closed = false
   private attempt = 0
+  /** 连续握手失败次数；连上即清零。 */
+  private failStreak = 0
+  /** 凭据判活探测进行中（onError 与 onClose 常先后到达，防止叠发）。 */
+  private probing = false
+  /** 已排队的一次重连定时器。onError / onClose 双触发时只允许排一个。 */
+  private retryTimer: ReturnType<typeof setTimeout> | null = null
   private readonly opts: RelayClientOptions
 
   constructor(opts: RelayClientOptions) {
@@ -115,6 +122,10 @@ export class RelayClient {
   close(): void {
     this.closed = true
     this.open = false
+    if (this.retryTimer !== null) {
+      clearTimeout(this.retryTimer)
+      this.retryTimer = null
+    }
     this.task?.close({})
     this.task = null
   }
@@ -175,6 +186,7 @@ export class RelayClient {
     task.onOpen(() => {
       this.open = true
       this.attempt = 0
+      this.failStreak = 0
       this.opts.onState?.('open')
       const hello: Envelope = {
         ...helloFrame('', this.opts.nodeId, this.opts.sessionId),
@@ -212,6 +224,12 @@ export class RelayClient {
         this.opts.onError?.(BROWSER_UNSUPPORTED_HINT)
         return
       }
+      this.failStreak += 1
+      // 握手连续被拒而 /health 仍 200：唯一说得通的解释是 relay 在主动拒绝这条
+      // 凭据（电脑端撤销配对/换绑）。App 端原生 socket 的 errMsg 不透出 HTTP
+      // 状态码，「凭据已死」与「基站抽风」在它眼里长一样——这是唯一可靠的判据。
+      // 凭据已死就该终态停机：继续退避重试只会让用户永远盯着「连接错误 Xs 后重连」。
+      if (this.failStreak >= 2) void this.probeCredential()
       this.opts.onState?.('error')
       this.scheduleRetry('relay 连接错误')
     })
@@ -231,11 +249,46 @@ export class RelayClient {
     })
   }
 
+  /**
+   * 握手连续失败后的凭据判活：探测 relay 的 `/health`（无需凭据，恒 200）。
+   *
+   * health 不可达 = 网络/中转问题，什么都不做，照常退避重连；
+   * health 200 = 中转活着，被拒的就是这条凭据 → 终态停机，把处置办法
+   * 说给人听（去设置移除这台电脑、重新扫码），而不是无限重试。
+   */
+  private async probeCredential(): Promise<void> {
+    if (this.probing || this.closed) return
+    this.probing = true
+    const base = this.opts.baseUrl.trim().replace(/\/+$/, '')
+    const res = await request({ url: `${base}/health`, method: 'GET', timeout: 5000 })
+    this.probing = false
+    if (this.closed) return
+    if (!res.reachable || res.statusCode !== 200) return
+    this.closed = true
+    this.open = false
+    if (this.retryTimer !== null) {
+      clearTimeout(this.retryTimer)
+      this.retryTimer = null
+    }
+    this.task?.close({})
+    this.task = null
+    this.opts.onState?.('error')
+    this.opts.onError?.(
+      '中转在线，但拒绝了这台手机的凭据——多半是电脑端已撤销配对。到「设置 → 已配对的电脑」移除这台电脑，重新扫码即可。',
+    )
+  }
+
   private scheduleRetry(reason: string): void {
     if (this.closed) return
+    // onError 与 onClose 对同一次失败常先后到达，各排一个就是两条并行的
+    // 重连循环——socket 越叠越多，退避也失去意义。
+    if (this.retryTimer !== null) return
     const wait = backoff(this.attempt)
     this.attempt += 1
     this.opts.onError?.(`${reason}，${Math.round(wait / 1000)}s 后重连`)
-    setTimeout(() => this.connect(), wait)
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = null
+      this.connect()
+    }, wait)
   }
 }
