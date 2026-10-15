@@ -156,73 +156,89 @@ function ModelStatusBar({
 const MAX_DOC_MB = 30;
 const MAX_DOC_BYTES = MAX_DOC_MB * 1024 * 1024;
 
-// ── 欢迎页动态欢迎词 ─────────────────────────────────────────
-// 主标题/副标题分别来自两个公开问候 API；任一失败/超时（3s）回退到
-// 内置文案（副标题按 sessionId 哈希选取，保证同一会话稳定、跨会话有变化）。
-const GREETING_URL = "https://api.kuleu.com/api/getGreetingMessage";
-const YIYAN_URL = "https://api.kuleu.com/api/yiyan";
-const GREETING_TIMEOUT_MS = 3000;
-const FALLBACK_SUBTITLES = [
-  "告诉我你的目标，我来帮你拆解并完成。",
-  "写作、规划、分析、学习、开发，都可以交给我。",
-  "今天想从哪里开始？我可以直接动手。",
-  "把想法丢给我，我来变成可执行的步骤。",
-  "有问题就问，能查能写能跑代码。",
+// ── 欢迎页欢迎语 ─────────────────────────────────────────────
+// 纯内置哲理短句，按时间段分桶随机展示；无网络请求、无副标题。
+// 每次进入欢迎页（sessionId 变化 / 新建对话）重抽一条。
+const WELCOME_BY_HOUR: Array<[number, string[]]> = [
+  [
+    5,
+    [
+      "夜是白昼的谜底。",
+      "安静，是思想的声音。",
+      "星星不问路，也各有方向。",
+      "黑暗里走的路，天亮后叫经历。",
+      "凌晨的灯，照着不肯将就的人。",
+      "夜深了，灵感才刚醒。",
+      "睡去的人做梦，醒来的人造梦。",
+      "夜色收走喧嚣，只留一句实话。",
+    ],
+  ],
+  [
+    11,
+    [
+      "清晨的好处，是一切还没定型。",
+      "太阳每天都是新的，你也是。",
+      "早起的路最空，先走的人最静。",
+      "醒来，是一天里最公平的时刻。",
+      "把今天当第一页，不是续集。",
+      "露水不等谁，却落进每片叶子。",
+      "一天的方向，早晨就知道了。",
+      "风从窗外来，答案在心里走。",
+    ],
+  ],
+  [
+    14,
+    [
+      "走得再快的人，也要停下来吃饭。",
+      "正午没有影子，正好看清自己。",
+      "忙是生命的密度，闲是它的留白。",
+      "歇一歇，路又不会跑。",
+      "阳光正好，把心摊开晒一晒。",
+      "短暂停下，是为了走得更直。",
+      "午间的安静，是一天的深呼吸。",
+      "一顿好饭，是给下午的敬意。",
+    ],
+  ],
+  [
+    18,
+    [
+      "坚持不是用力，是不停。",
+      "慢一点没关系，别停就好。",
+      "大事，都是小事做完的样子。",
+      "影子长了，说明你还在光里。",
+      "路是走出来的，答案是问出来的。",
+      "下午的光斜了，心就定了。",
+      "时间不催人，只是陪着走。",
+      "下午，适合解决上午想不通的事。",
+    ],
+  ],
+  [
+    23,
+    [
+      "夜色温柔，适合原谅与放下。",
+      "复盘，是白天的回声。",
+      "晚灯下的人，离自己最近。",
+      "结束，也是一种完成。",
+      "夜里适合读书，也适合读自己。",
+      "今天没做完的，明天接着走。",
+      "把今天交给回忆，明天交给梦。",
+      "一天所获，不在多，在真。",
+    ],
+  ],
 ];
-const FALLBACK_TITLE = "你好！我是 Hermix";
 
-function hashString(s: string): number {
-  let h = 0;
-  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
-  return Math.abs(h);
+function pickWelcomeGreeting(): string {
+  const h = new Date().getHours();
+  const pool = (WELCOME_BY_HOUR.find(([max]) => h < max) ?? WELCOME_BY_HOUR[0])[1];
+  return pool[Math.floor(Math.random() * pool.length)];
 }
 
-function fallbackGreeting(sessionId: string | null): { title: string; subtitle: string } {
-  const idx = sessionId ? hashString(sessionId) % FALLBACK_SUBTITLES.length : 0;
-  return { title: FALLBACK_TITLE, subtitle: FALLBACK_SUBTITLES[idx] };
-}
-
-async function fetchGreetingText(url: string, signal: AbortSignal): Promise<string | null> {
-  try {
-    const res = await fetch(url, { signal });
-    if (!res.ok) return null;
-    const text = (await res.text()).trim();
-    return text ? text.slice(0, 120) : null;
-  } catch {
-    return null;
-  }
-}
-
-/** 问候 API 会在正文前拼时间（「现在是 22:09:36，该休息了…」）。界面只要正文。 */
-function stripTimePrefix(text: string): string {
-  return text.replace(/^现在是\s*\d{1,2}:\d{2}(?::\d{2})?\s*[,，]\s*/, "").trim();
-}
-
-function useWelcomeGreeting(sessionId: string | null): { title: string; subtitle: string } {
-  const [greeting, setGreeting] = useState(() => fallbackGreeting(sessionId));
+function useWelcomeGreeting(sessionId: string | null): string {
+  const [title, setTitle] = useState(pickWelcomeGreeting);
   useEffect(() => {
-    // 加载期间先显示兜底文案，接口返回后再替换，避免闪空。
-    setGreeting(fallbackGreeting(sessionId));
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), GREETING_TIMEOUT_MS);
-    Promise.all([fetchGreetingText(GREETING_URL, ctrl.signal), fetchGreetingText(YIYAN_URL, ctrl.signal)])
-      .then(([title, subtitle]) => {
-        if (ctrl.signal.aborted) return;
-        const fb = fallbackGreeting(sessionId);
-        // 主标题来自问候 API，可能带「现在是 22:09:36，」时间前缀——界面只
-        // 显示正文；副标题来自一言 API，无此前缀，原样使用。
-        setGreeting({
-          title: (title && stripTimePrefix(title)) || fb.title,
-          subtitle: subtitle ?? fb.subtitle,
-        });
-      })
-      .catch(() => {});
-    return () => {
-      clearTimeout(timer);
-      ctrl.abort();
-    };
+    setTitle(pickWelcomeGreeting());
   }, [sessionId]);
-  return greeting;
+  return title;
 }
 
 interface ChatViewProps {
@@ -1050,10 +1066,7 @@ export const ChatView = memo(function ChatView({
                   draggable={false}
                 />
               </div>
-              <h1 className="text-2xl font-bold text-text-primary mb-2 tracking-tight">{welcomeGreeting.title}</h1>
-              <p className="text-sm text-text-secondary text-center mb-6 max-w-xs leading-relaxed">
-                {welcomeGreeting.subtitle}
-              </p>
+              <h1 className="text-2xl font-bold text-text-primary mb-6 tracking-tight">{welcomeGreeting}</h1>
             </>
           )}
           <div className="w-full relative">
