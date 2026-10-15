@@ -31,6 +31,8 @@ export interface RouteContext {
    */
   upsertSessions: (list: Session[]) => void;
   startCreateAppFlow: () => void;
+  /** 工作流页「通过对话创建」：进入新对话并预填工作流设计指令。 */
+  startCreateWorkflowFlow: () => void;
   chatNode: ReactNode;
   /** 当前激活会话 id —— 工作台浮窗历史下拉高亮当前对话线。 */
   activeSessionId: string | null;
@@ -38,7 +40,7 @@ export interface RouteContext {
   settingsBack: () => void;
   /** 设置页落点分类，由 openSettings 的入参决定。 */
   settingsCategory?: string;
-  /** 工作流页「通过对话创建」：切回对话页，由用户与 agent 设计流程。 */
+  /** 工作流运行后的跳转：切回对话页（新对话空屏），不落在旧激活会话上。 */
   openChat: () => void;
 }
 
@@ -48,7 +50,7 @@ export function renderRoutes(page: NavPage, ctx: RouteContext): ReactNode {
     case "chat":
       return ctx.chatNode;
     case "automation":
-      return <Suspense fallback={<RouteLoading />}><AutomationView openChat={ctx.openChat} /></Suspense>;
+      return <Suspense fallback={<RouteLoading />}><AutomationView openChat={ctx.openChat} onCreateWorkflow={ctx.startCreateWorkflowFlow} /></Suspense>;
     case "agents":
       return <Suspense fallback={<RouteLoading />}><AgentsView /></Suspense>;
     case "experts":

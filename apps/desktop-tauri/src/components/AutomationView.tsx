@@ -105,7 +105,7 @@ function templateToTask(t: TaskTemplate): AutomationTask {
   };
 }
 
-export function AutomationView({ openChat }: { openChat: () => void }) {
+export function AutomationView({ openChat, onCreateWorkflow }: { openChat: () => void; onCreateWorkflow: () => void }) {
   const [tab, setTab] = useState<"auto" | "flow">("auto");
   const [tasks, setTasks] = useState<AutomationTask[]>([]);
   const [editing, setEditing] = useState<AutomationTask | null>(null);
@@ -293,7 +293,7 @@ export function AutomationView({ openChat }: { openChat: () => void }) {
         )}
         </>
         ) : (
-          <WorkflowPanel openChat={openChat} />
+          <WorkflowPanel openChat={openChat} onCreateWorkflow={onCreateWorkflow} />
         )}
       </div>
 
@@ -769,7 +769,7 @@ function Field({
 
 // ── 工作流 tab：对话里保存的再跑流程 ─────────────────────────
 
-function WorkflowPanel({ openChat }: { openChat: () => void }) {
+function WorkflowPanel({ openChat, onCreateWorkflow }: { openChat: () => void; onCreateWorkflow: () => void }) {
   const { workspaces } = useWorkspaces();
   const [items, setItems] = useState<api.WorkflowEntry[] | null>(null);
   const [runningId, setRunningId] = useState<string | null>(null);
@@ -829,7 +829,7 @@ function WorkflowPanel({ openChat }: { openChat: () => void }) {
           <span className="text-[length:var(--text-tiny)] text-text-faint">对所有项目可见</span>
         </div>
         <button
-          onClick={openChat}
+          onClick={onCreateWorkflow}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent text-bg-primary text-[length:var(--text-ui)] font-medium hover:bg-accent-hover"
         >
           <Plus className="icon-sm" /> 通过对话创建

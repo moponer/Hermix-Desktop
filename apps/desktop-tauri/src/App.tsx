@@ -1188,6 +1188,15 @@ setPage("chat");
     setPage("chat");
   }, [setActiveSessionId, setPage]);
 
+  // 从「自动化 → 工作流」页「通过对话创建」按钮触发：进入新对话并预填
+  // 工作流设计指令。不能只 setPage("chat")——那会复用上一个激活会话，
+  // 用户刚从工作台出来就会落进工作台对话空态（isWorkbenchChat），像跳错页。
+  const startCreateWorkflowFlow = useCallback(() => {
+    setPendingPrefill("帮我设计一个工作流：");
+    setActiveSessionId(null);
+    setPage("chat");
+  }, [setActiveSessionId, setPage]);
+
   /**
    * 切到某个会话并跳回对话页。侧栏/搜索结果该用这个。
    *
@@ -3663,11 +3672,17 @@ return {
     selectSessionOnly,
     upsertSessions,
     startCreateAppFlow,
+    startCreateWorkflowFlow,
     chatNode: chatViewNode,
     activeSessionId,
     settingsBack: () => setPage("chat"),
     settingsCategory: configCategory,
-    openChat: () => setPage("chat"),
+    // 运行工作流后的跳转：落到新对话空屏，不落在可能早已过期的激活会话
+    // （如工作台会话）。跑起来的会话出现在侧栏，用户自行点入。
+    openChat: () => {
+      setActiveSessionId(null);
+      setPage("chat");
+    },
   };
 
   return (
