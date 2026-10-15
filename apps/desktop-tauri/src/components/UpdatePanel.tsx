@@ -128,7 +128,7 @@ export function UpdatePanel({ updater }: { updater: Updater }) {
             )
           ) : checkFailed ? (
             <div className="text-sm text-text-secondary">
-              检查更新失败（网络或更新源未配置）。请稍后重试。
+              检查更新失败，具体原因见下方提示。
             </div>
           ) : (
             <div className="text-sm text-text-secondary">正在检查更新…</div>

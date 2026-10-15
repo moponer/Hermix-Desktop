@@ -109,6 +109,10 @@ async fn fetch_manifest() -> Result<Manifest, String> {
         .await
         .map_err(|e| format!("拉取更新清单失败: {e}"))?;
     if !body.status().is_success() {
+        // 404 = relay 占位页（清单从未发布），重试无效，如实告知而非笼统"网络"。
+        if body.status() == reqwest::StatusCode::NOT_FOUND {
+            return Err("更新清单不存在（服务端尚未发布更新）".into());
+        }
         return Err(format!("更新清单 HTTP {}", body.status()));
     }
     // 404 文本页（运维未上传）会在这里解析失败，如实报错即可，上层静默。

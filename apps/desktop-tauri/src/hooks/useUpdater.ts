@@ -61,9 +61,11 @@ export function useUpdater() {
       const s = await invoke<UpdateStatus>("update_check");
       setStatus(s);
       setCheckFailed(false);
+      setError(null);
       return s;
-    } catch {
-      // 检查失败面板显示失败态（不静默假装「正在检查」卡死）。
+    } catch (e) {
+      // 检查失败面板显示失败态；真实原因（404=源未发布 / DNS=网络）透传给面板，不吞。
+      setError(String(e));
       setCheckFailed(true);
       return null;
     }
