@@ -190,16 +190,17 @@
 
      两端的 max() 是下限保护：
      - 左：侧栏折叠时左列归零，但品牌不能跟着消失，保底 104px。
-     - 右：右栏收起时右列归零，但三颗窗口按钮共 120px 必须有地方放。
+     - 右：右栏收起时右列归零，但右栏 5 颗按钮（40px × 5 + 4×6px 间距 +
+       10px 右边距 ≈ 234px）必须有地方放，保底 240px。
      窗口按钮因此在两种状态下都停在窗口最右侧（基准相同），变化的只有中栏
      标题的可用宽度 —— 这正是期望的行为。 */
-  --tb-left-w: var(--ab-left-w, 200px);
-  --tb-right-w: var(--ab-right-w, 640px);
-  display: grid;
-  grid-template-columns:
-    max(var(--tb-left-w), 104px)
-    minmax(0, 1fr)
-    max(var(--tb-right-w), 120px);
+     --tb-left-w: var(--ab-left-w, 200px);
+     --tb-right-w: var(--ab-right-w, 640px);
+     display: grid;
+     grid-template-columns:
+     max(var(--tb-left-w), 104px)
+     minmax(0, 1fr)
+     max(var(--tb-right-w), 240px);
   align-items: center;
   height: 40px;
   position: relative;
@@ -218,7 +219,10 @@
 }
 .titlebar-zone--left { gap: 7px; padding-left: 10px; }
 .titlebar-zone--center { gap: 6px; padding: 0 12px; }
-.titlebar-zone--right { justify-content: flex-end; }
+/* 右栏 6px 统一间距 + 右端 10px 内边距：五个按钮原本 0 间距平铺，图标挤成
+   一团；关闭钮不加内边距会视觉贴住窗口右缘（无边框窗口无系统边框兜底）。
+   6px 与左/中栏的间距同一档，10px 右边距给 × 留出呼吸位。 */
+.titlebar-zone--right { justify-content: flex-end; gap: 6px; padding-right: 10px; }
 
 /* 中栏标题：单行省略。不用 JS 硬截断 —— 省略号由 CSS 按**实际可用宽度**
    决定，标题栏宽度会随三栏开关变化，硬编码 80 字在窄栏下会提前吃掉省略。 */
@@ -307,7 +311,11 @@
   align-items: center;
   justify-content: center;
   width: 40px;
-  height: 40px;
+  /* 32px 而非撑满 40px 栏高：悬停/焦点底色是 40×32 的横向长方形（常规
+     标题栏的比例），而不是一整块全高方块；zone 的 align-items:center 兜住垂直居中。 */
+  height: 32px;
+  /* 右栏轨道被压窄（右栏收起时轨道只剩下限）时按钮不得被压扁成竖条 */
+  flex-shrink: 0;
   color: var(--color-text-muted);
   background: transparent;
   border: 0;
