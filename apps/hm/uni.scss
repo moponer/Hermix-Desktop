@@ -7,6 +7,9 @@
  * 主题注释点明了原因：「纯灰在暗底上是水泥灰，带 4% 以内的色相偏移才有
  * 通透感」——所以这套不是纯中性灰，主文字也不用纯白。
  *
+ * 「不新造一套色」的例外仅有一处：下方并列的「墨绿」浅色主题套（2026-10-15
+ * 起），原因与边界见该节注释。
+ *
  * ── 2026-10-09 改造：取消描边 ─────────────────────────────────────
  * 原来的 `$line` / `$edge` 两支边框色被移除，全站不再有任何 `border`。
  * 层次改由三样东西承担：
@@ -32,6 +35,37 @@ $warn: #d3a34c; // warning
 $warn-bg: #332916; // warning-soft
 $err: #e06b52; // error
 $err-bg: #20262b; // error-soft
+
+/* ── 主题套 2：墨绿（浅色）· 2026-10-15 增加 ─────────────────────
+ * 与上面的暗色默认套**并列**的第二套主题，不替换、不混用。
+ * 与默认套的最大差异是主色：墨绿 #2f6b4f 是新造的品牌色（默认套的青碧
+ * #6fae94 与桌面端同源），启用本套即接受「端间主色分叉」。
+ * 取值与角色一一对应，命名 $hm-* 与暗色套的 $base/$card/... 区分开：
+ *   $hm-bg        页面底        $hm-text      主文字（~13:1）
+ *   $hm-surface   卡片/表单底   $hm-text-2    次要文字（~5.0:1）
+ *   $hm-surface-2 输入底/次表面 $hm-text-3    辅助文字（仅大字/图标）
+ *   $hm-surface-3 弱表面        $hm-primary   主色（墨绿）
+ *   $hm-border    描边          $hm-primary-weak / -border 主色弱底/边
+ *   $hm-danger / $hm-warn / $hm-ok 语义色     $hm-bubble-out 发出气泡
+ * $hm-on-primary 表里未列，按白补（#2f6b4f 底上白字 ≈ 5.9:1，达标）。
+ * 现状：**仅令牌，未接线**——页面仍消费暗色 $ 变量；要做主题切换时
+ * 再把消费层改成从本套取值（CSS 变量或编译期选择），届时两套一起动。 */
+$hm-bg: #f2f3f5;
+$hm-surface: #ffffff;
+$hm-surface-2: #eef0f3;
+$hm-surface-3: #f7f8fa;
+$hm-text: #1a1d21;
+$hm-text-2: #5f636b;
+$hm-text-3: #9aa0a8;
+$hm-primary: #2f6b4f;
+$hm-primary-weak: #e2eae6;
+$hm-primary-border: #acc4b9;
+$hm-border: #e3e6ea;
+$hm-danger: #e5484d;
+$hm-warn: #e8920c;
+$hm-ok: #2ba24a;
+$hm-bubble-out: #2f6b4f;
+$hm-on-primary: #ffffff;
 
 /* 阴影：暗底上几乎看不见，只用于浮层与抽屉的「脱离页面」暗示。
  * 卡片级别的层次靠 $paper → $card 的底色差，不靠这里。 */
