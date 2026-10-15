@@ -28,6 +28,11 @@ export default defineConfig({
     esbuildOptions: {
       target: "es2022",
     },
+    // 懒加载链上的依赖必须启动时预打包（include），否则首次用到时才被
+    // 运行时发现 → 中途重新优化 → 旧 hash 文件失效 → webview 拿过期地址
+    // 加载失败 → 白屏（2026-10-15 dev 白屏）。plugin-fs 经 desktopBridge
+    // 动态链引入；docx-preview（.docx 渲染，含 peer docx）是纯懒加载入口。
+    include: ["@tauri-apps/plugin-fs", "docx-preview"],
     // satteri 的浏览器 wasm 链用 `new URL("./x.wasm", import.meta.url)` 取
     // wasm 字节。预打包(esbuild optimizeDeps)会把 `import.meta.url` 改写成
     // `.vite/deps/` 下的路径，相对 wasm 在该目录不存在 → dev server 的 SPA
