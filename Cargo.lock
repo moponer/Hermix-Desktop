@@ -3315,12 +3315,14 @@ dependencies = [
 name = "hermix-telemetry"
 version = "0.1.1"
 dependencies = [
+ "chrono",
  "hermix-config",
  "once_cell",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
  "serde",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-appender",

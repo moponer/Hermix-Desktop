@@ -137,6 +137,8 @@ export function encodeEnvelope(e: Envelope): string {
 }
 
 /** 手机的登记帧：把 relay 凭据的哈希与目标电脑报给 relay。 */
-export function helloFrame(tokenHash: string, nodeId: string): Envelope {
-  return { protoVersion: PROTO_VERSION, tag: 'hello', tokenHash, nodeId }
+export function helloFrame(tokenHash: string, nodeId: string, sessionId?: string): Envelope {
+  const e: Envelope = { protoVersion: PROTO_VERSION, tag: 'hello', tokenHash, nodeId }
+  if (sessionId) e.sessionId = sessionId
+  return e
 }

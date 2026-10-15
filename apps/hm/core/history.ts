@@ -72,7 +72,7 @@ export function loadSession(id: string): StoredBubble[] {
  * 保存（创建或更新）一条会话。
  * 创建时插入元数据，更新时只改 updatedAt + msgCount。
  */
-export function saveSession(id: string, messages: StoredBubble[], isNew = false) {
+export function saveSession(id: string, messages: StoredBubble[]) {
   const list = sessions()
   const existing = list.find((s) => s.id === id)
   const rec: SessionRec = {

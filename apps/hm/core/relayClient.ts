@@ -103,6 +103,11 @@ export class RelayClient {
     this.opts = opts
   }
 
+  /** 外部可查：连接已永久关闭（401 / 用户主动 close）。 */
+  get isClosed(): boolean {
+    return this.closed
+  }
+
   start(): void {
     this.connect()
   }
@@ -172,8 +177,7 @@ export class RelayClient {
       this.attempt = 0
       this.opts.onState?.('open')
       const hello: Envelope = {
-        ...helloFrame('', this.opts.nodeId),
-        // relay 认连接上的凭据；hash 由 relay 侧自行算，这里只报身份
+        ...helloFrame('', this.opts.nodeId, this.opts.sessionId),
       }
       task.send({ data: encodeEnvelope(hello) })
     })
@@ -192,21 +196,27 @@ export class RelayClient {
     })
     task.onError((e) => {
       this.open = false
-      this.opts.onState?.('error')
       const msg = String((e as { errMsg?: string })?.errMsg ?? '')
-      // 401 是最常见的一种，且原因明确（凭据没填 / 被撤销 / 注册在别的 node 下），
-      // 必须原样透出去，否则用户只会看到「连不上」。
+      // 401 = 凭据被撤销。永远停重试——重试同一条被撤的 token 没意义。
       if (/401|unauthorized/i.test(msg)) {
-        this.opts.onError?.('relay 拒绝了这条连接（401）：凭据无效或已被撤销')
+        this.closed = true
+        this.opts.onState?.('error')
+        this.opts.onError?.('relay 拒绝了这条连接（401）：凭据已被撤销，请重新扫码配对')
         return
       }
       // 浏览器环境是「必然失败」而非「可能失败」：握手头发不出去，100% 被 401，
       // 而浏览器把状态码吞掉了。归到通用文案等于让人去查网络。
       if (isBrowserEnv()) {
+        this.closed = true
+        this.opts.onState?.('error')
         this.opts.onError?.(BROWSER_UNSUPPORTED_HINT)
+        return
       }
+      this.opts.onState?.('error')
+      this.scheduleRetry('relay 连接错误')
     })
     task.onClose((res?: { code?: number }) => {
+      if (this.closed) return
       this.open = false
       this.task = null
       this.opts.onState?.('closed')

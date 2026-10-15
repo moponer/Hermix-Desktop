@@ -21,6 +21,7 @@
  * 3. **高危动词命中 → 发前二次确认**。这是对**指令本身**的确认，与工具审批
  *    是两件事，两者都要、不能互相替代。
  */
+import { request } from './http'
 
 // ---------------------------------------------------------------------------
 // 高危动词
@@ -104,6 +105,26 @@ export interface CloudAsrConfig {
   language?: string
 }
 
+/** 多段 ArrayBuffer 拼成一份（整轮音频一次性上传用）。 */
+function concatChunks(chunks: ArrayBuffer[]): ArrayBuffer {
+  const total = chunks.reduce((n, c) => n + c.byteLength, 0)
+  const out = new Uint8Array(total)
+  let off = 0
+  for (const c of chunks) {
+    out.set(new Uint8Array(c), off)
+    off += c.byteLength
+  }
+  return out.buffer
+}
+
+function safeJson(s: string): unknown {
+  try {
+    return JSON.parse(s)
+  } catch {
+    return null
+  }
+}
+
 /**
  * 云端流式 ASR 的参考实现。
  *
@@ -146,30 +167,33 @@ export class CloudAsr implements AsrProvider {
     if (!this.enabled || this.chunks.length === 0) {
       return { partial: '', final: null }
     }
-    const body = new Blob(this.chunks as BlobPart[])
+    // 整轮音频拼成一份再上传。走 `uni.request`（见 http.ts）：App / 小程序端
+    // **没有全局 fetch，也没有 Blob**，用 fetch+Blob 在真机上是必崩的。
+    const body = concatChunks(this.chunks)
+    this.chunks = []
     try {
-      const res = await fetch(this.config.endpoint, {
+      const res = await request({
+        url: this.config.endpoint,
         method: 'POST',
-        headers: {
+        header: {
           authorization: `Bearer ${this.config.apiKey}`,
           'content-type': this.config.headers?.['content-type'] ?? 'application/octet-stream',
           ...(this.config.model ? { 'x-model': this.config.model } : {}),
           ...(this.config.headers ?? {}),
         },
-        body,
+        data: body,
+        timeout: 30000,
       })
-      if (!res.ok) {
+      if (!res.reachable || res.statusCode !== 200) {
         // 识别失败要说出来：静默返回空会让用户以为"麦克风坏了"
         return { partial: '', final: null }
       }
-      const data = (await res.json()) as { text?: string }
-      const text = (data.text ?? '').trim()
+      const data = typeof res.data === 'string' ? safeJson(res.data) : res.data
+      const text = ((data as { text?: string } | null)?.text ?? '').trim()
       if (text) this.partialCb(text)
       return { partial: text, final: text || null }
     } catch {
       return { partial: '', final: null }
-    } finally {
-      this.chunks = []
     }
   }
 
@@ -236,6 +260,9 @@ export class CloudTts implements TtsProvider {
   async speak(text: string): Promise<void> {
     const t = text.trim()
     if (!t || !this.enabled) return
+    // App / 小程序端没有全局 fetch（见 http.ts）；TTS 尚未接线，缺 API 时
+    // 直接静默降级，绝不抛。真正在 App 上出声需要 uni.createInnerAudioContext。
+    if (typeof fetch === 'undefined') return
     // 新的句子打断旧的——两句之间不该叠音
     await this.flush()
     const ac = new AbortController()
@@ -276,7 +303,7 @@ export class CloudTts implements TtsProvider {
 
 /** 播一段音频。H5 用 `<audio>`；原生壳走 uni 的音频 API。 */
 async function playBlob(blob: Blob, signal: AbortSignal): Promise<void> {
-  if (typeof Audio === 'undefined') return
+  if (typeof Audio === 'undefined' || typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') return
   const url = URL.createObjectURL(blob)
   try {
     await new Promise<void>((resolve) => {

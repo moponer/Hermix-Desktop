@@ -4,7 +4,7 @@ import {
   Boxes, MoreHorizontal, Loader2, Bot,
   // Popover icons
   Pencil, Pin, Archive, Trash2, FolderOpenDot, Copy, FolderMinus,
-  Settings, PanelLeftClose, Search, LayoutDashboard, KeyRound, TabletSmartphone,
+  Settings, PanelLeftClose, Search, LayoutDashboard, KeyRound, TabletSmartphone, Clock,
   type LucideIcon,
 } from "lucide-react";
 import { clsx } from "clsx";
@@ -69,6 +69,7 @@ interface SidebarProps {
 const NAV_ITEMS: { icon: React.ElementType; label: string; page: NavPage }[] = [
   { icon: Boxes,    label: "应用",    page: "customapps" },
   { icon: LayoutDashboard, label: "工作台", page: "workbench" },
+  { icon: Clock,    label: "自动化",  page: "automation" },
   { icon: KeyRound, label: "凭据库", page: "vault" },
 ];
 

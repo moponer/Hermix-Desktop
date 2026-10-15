@@ -112,7 +112,6 @@ export function reduce(state: ChatState, ev: MobileEvent): ChatState {
         streamingText: state.streamingText + ev.content,
         turnActive: true,
         // 回答又在流了 → 收工的工具从"在跑"里撤掉
-        doneTools: state.doneTools,
         runningTools: state.runningTools.filter((t) => !state.doneTools.includes(t)),
       }
     }

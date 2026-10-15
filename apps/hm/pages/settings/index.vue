@@ -179,7 +179,7 @@ function resetPairing() {
     </view>
 
     <!-- 2. 主按钮：扫码配对（已有设备时话术变成「另一台」） -->
-    <view class="pri" @tap="goPairing"><text>{{ devices.length ? '连接另一台电脑' : '扫码连接电脑' }}</text></view>
+    <view class="hm-pill pri pri" @tap="goPairing"><text>{{ devices.length ? '连接另一台电脑' : '扫码连接电脑' }}</text></view>
     <text class="hint">桌面端「设置 → 设备管理 → 手机端」生成配对码</text>
 
     <!-- 2.5 设备管理：多桌面。点行=切换（非当前），⋯=重命名/移除。 -->
@@ -221,8 +221,8 @@ function resetPairing() {
         />
       </view>
       <view class="fbtns">
-        <view class="fbtn" @tap="saveToken"><text>存凭据</text></view>
-        <view class="fbtn" @tap="diagnose"><text>{{ probing ? '测试中…' : '测试连接' }}</text></view>
+        <view class="hm-pill solid fbtn" @tap="saveToken"><text>存凭据</text></view>
+        <view class="hm-pill solid fbtn" @tap="diagnose"><text>{{ probing ? '测试中…' : '测试连接' }}</text></view>
       </view>
       <text v-if="saved" class="fnote" :class="saved === '已保存' ? 'ok' : 'warn'">{{ saved }}</text>
       <view v-if="note" class="diag">
@@ -243,7 +243,7 @@ function resetPairing() {
     <!-- 4. 页脚：版本 + 危险操作 -->
     <view class="foot">
       <text class="ver">Hermix M {{ version }}</text>
-      <view class="danger" @tap="resetPairing"><text>清空凭据并重新配对</text></view>
+      <view class="hm-pill danger danger" @tap="resetPairing"><text>清空凭据并重新配对</text></view>
     </view>
   </hm-shell>
 </template>
@@ -291,18 +291,8 @@ function resetPairing() {
 
 .pri {
   margin: 24rpx $gutter 0;
-  height: $tap;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 44rpx;
-  background: $accent;
-  color: $on-accent;
   font-size: $fs-body;
   font-weight: 600;
-}
-.pri:active {
-  opacity: 0.85;
 }
 
 /* 设备管理区 */
@@ -437,16 +427,7 @@ function resetPairing() {
 .fbtn {
   flex: 1;
   height: 76rpx;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   border-radius: 38rpx;
-  background: $raised;
-  color: $fg;
-  font-size: $fs-sub;
-}
-.fbtn:active {
-  opacity: 0.7;
 }
 .fnote {
   display: block;
@@ -490,16 +471,5 @@ function resetPairing() {
 }
 .danger {
   margin-top: 20rpx;
-  height: $tap;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 44rpx;
-  background: $err-bg;
-  color: $err;
-  font-size: $fs-sub;
-}
-.danger:active {
-  opacity: 0.7;
 }
 </style>

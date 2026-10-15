@@ -19,6 +19,7 @@ pub mod memory_inspect;
 pub mod persona;
 pub mod plugins_inspect;
 pub mod polish;
+pub mod log_view;
 pub mod skills;
 pub mod stubs;
 pub mod transcribe;
@@ -278,4 +279,8 @@ pub fn router() -> Router<HttpServerState> {
         .route("/api/custom-apps/{id}/package", post(custom_apps::package_app))
         .route("/api/custom-apps/{id}/run", post(custom_apps::run_app))
         .route("/api/custom-apps/{id}/icon", get(custom_apps::get_app_icon))
+        // Log viewer: list, read, disk-usage per category.
+        .route("/api/logs/files", get(log_view::list_log_files))
+        .route("/api/logs/read", get(log_view::read_log))
+        .route("/api/logs/disk_usage", get(log_view::disk_usage))
 }

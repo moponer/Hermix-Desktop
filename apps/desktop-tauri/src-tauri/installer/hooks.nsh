@@ -28,6 +28,12 @@ hermix_post_sc_fail:
 hermix_post_sc_ok:
   DetailPrint "Hermix Desktop：AI 内核就绪。"
 hermix_post_done:
+  ; 清理旧自研安装器残留的注册表项（若有）。
+  ; 自研安装器曾在 HKCU\...Uninstall\Hermix 写项，若残留与当前 INSTDIR 不同，
+  ; 旧的 UninstallString 仍会指向旧路径，导致「点卸载弹出旧安装器」。
+  ; 这里只删键值不删文件（文件在 $INSTDIR 内，NSIS 卸载时会统一清理）。
+  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Hermix" "UninstallString"
+  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Hermix" "InstallLocation"
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL

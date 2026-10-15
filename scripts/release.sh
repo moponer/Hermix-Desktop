@@ -44,7 +44,7 @@ OUT_DIR="$TARGET/dist"
 CHANGELOG="$REPO_ROOT/CHANGELOG.md"
 
 NOTES="" MIN_VERSION="" HOST="" REMOTE_DIR="/www/wwwroot/hermix-relay/deploy/desktop"
-SKIP_BUILD=0 SKIP_UPLOAD=0
+SKIP_BUILD=0 SKIP_UPLOAD=0 SKIP_NSIS=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --notes) NOTES="$2"; shift 2 ;;
@@ -53,6 +53,7 @@ while [[ $# -gt 0 ]]; do
     --remote-dir) REMOTE_DIR="$2"; shift 2 ;;
     --skip-build) SKIP_BUILD=1; shift ;;
     --skip-upload) SKIP_UPLOAD=1; shift ;;
+    --skip-nsis) SKIP_NSIS=1; shift ;;
     *) echo "未知参数: $1"; exit 1 ;;
   esac
 done
@@ -264,14 +265,22 @@ echo "── releases.json: $(node -e "console.log(JSON.parse(require('fs').read
 # ── B 路：安装包（NSIS，标准 Tauri 打包）──────────────────────────
 # cargo tauri bundle 只跑 beforeBundleCommand，不重跑前端（前端已在上面构建段
 # 与自组装段就位），对已构建的 hermix-desktop.exe 出 NSIS setup。
-echo "── B 路：cargo tauri bundle -b nsis"
-(cd "$REPO_ROOT/apps/desktop-tauri" && cargo tauri bundle -b nsis)
-BUNDLE_SETUP="$TARGET/bundle/nsis/Hermix Desktop_${VERSION}_x64-setup.exe"
-[[ -f "$BUNDLE_SETUP" ]] || { echo "错误：未产出 NSIS 安装包 $BUNDLE_SETUP"; exit 1; }
-mkdir -p "$OUT_DIR"
-SETUP_OUT="$OUT_DIR/Hermix-Setup-$VERSION.exe"
-cp "$BUNDLE_SETUP" "$SETUP_OUT"
-echo "── 安装包: $SETUP_OUT"
+# --skip-nsis：只出 A 路（zip 更新包）时用——NSIS bundle 需要完整工具链且耗时
+# 明显；此前这一步无条件执行导致「只想快出更新包」被迫绕到手工 ps1 脚本
+# （无新鲜度门、带 BOM），是出包链分裂的根因，见 2026-10-15 教训。
+SETUP_OUT=""
+if [[ $SKIP_NSIS -eq 0 ]]; then
+  echo "── B 路：cargo tauri bundle -b nsis"
+  (cd "$REPO_ROOT/apps/desktop-tauri" && cargo tauri bundle -b nsis)
+  BUNDLE_SETUP="$TARGET/bundle/nsis/Hermix Desktop_${VERSION}_x64-setup.exe"
+  [[ -f "$BUNDLE_SETUP" ]] || { echo "错误：未产出 NSIS 安装包 $BUNDLE_SETUP"; exit 1; }
+  mkdir -p "$OUT_DIR"
+  SETUP_OUT="$OUT_DIR/Hermix-Setup-$VERSION.exe"
+  cp "$BUNDLE_SETUP" "$SETUP_OUT"
+  echo "── 安装包: $SETUP_OUT"
+else
+  echo "── 跳过 NSIS（--skip-nsis）：只出 A 路更新包"
+fi
 
 # ── 上传（A 路：版本目录 + 原子切换，决策笔记 §3）─────────────────
 if [[ $SKIP_UPLOAD -eq 1 ]]; then
@@ -282,8 +291,10 @@ if [[ $SKIP_UPLOAD -eq 1 ]]; then
   echo "   [Win] $(cygpath -w "$STAGING/releases.json")"
   echo "   传完后在服务器上原子切换："
   echo "     cd $REMOTE_DIR && ln -sfn <新版本号> .current.tmp && mv -Tf .current.tmp current"
-  echo "   安装包（人工分发）: $SETUP_OUT"
-  echo "   [Win] $(cygpath -w "$SETUP_OUT")"
+  if [[ -n "$SETUP_OUT" ]]; then
+    echo "   安装包（人工分发）: $SETUP_OUT"
+    echo "   [Win] $(cygpath -w "$SETUP_OUT")"
+  fi
   exit 0
 fi
 [[ -n "$HOST" ]] || { echo "错误：上传需要 --host user@server（或 --skip-upload）"; exit 1; }
@@ -328,4 +339,4 @@ ssh "$HOST" "set -e
     if [ -d \"\$d\" ] && [ \"\$d\" -ne '$NEXT_N' ] && [ \"\$d\" -ne '$CUR_N' ]; then rm -rf \"\$d\"; fi
   done
 "
-echo "── 完成。发版 $VERSION 已上线（current -> $NEXT_N）；上一版 $CUR_N 保留可回滚（ln -sfn $CUR_N current）；安装包: $SETUP_OUT"
+echo "── 完成。发版 $VERSION 已上线（current -> $NEXT_N）；上一版 $CUR_N 保留可回滚（ln -sfn $CUR_N current）${SETUP_OUT:+；安装包: $SETUP_OUT}"

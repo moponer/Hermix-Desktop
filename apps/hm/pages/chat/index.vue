@@ -15,8 +15,7 @@
  * 「拆解为 N 个步骤 + 展开 + 完成态」）：手机上一步一行铺开，会把真正的
  * 回答顶出屏幕。
  */
-import { ref, computed, nextTick, onMounted } from 'vue'
-import { onUnmounted } from 'vue'
+import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue'
 import { onReady, onShow } from '@dcloudio/uni-app'
 import { isRiskyInstruction } from '../../core/voice'
 import { dispatch, reduce, initialChatState, type ChatState } from '../../core/frames'
@@ -27,8 +26,8 @@ import { ChatSession } from '../../core/session'
 import { renderMarkdown } from '../../core/markdown'
 import { newSessionId, loadSession, saveSession } from '../../core/history'
 import { interruptSession } from '../../core/tasks'
-import type { AsrProvider } from '../../core/voice'
-import { CloudAsr } from '../../core/voice'
+import { useKeyboardHeight } from '../../composables/useKeyboardHeight'
+import { useVoiceInput, type VoiceSttWire } from '../../composables/useVoiceInput'
 
 interface Bubble {
   id: string
@@ -40,12 +39,12 @@ interface Bubble {
   doneTools?: string[]
   /** 助手气泡的实时工具轨迹（流式中从 chat.runningTools 同步） */
   runningTools?: string[]
+  /** 消息已发到网络层，等待桌面端开始处理（收到 turn.busy / assistant.delta 首帧时清除） */
+  sending?: boolean
 }
 
 const messages = ref<Bubble[]>([])
 const draft = ref('')
-const recording = ref(false)
-const partial = ref('')
 /** 高危指令：识别完不直接发，先问一次 */
 const pendingRisky = ref<{ text: string } | null>(null)
 
@@ -70,45 +69,14 @@ const isEmpty = computed(() => messages.value.length === 0 && !streaming.value)
 const paired = ref(isPaired())
 const hasRelay = ref(!!relayBaseUrl())
 
-/** 键盘高度（来自 VisualViewport 检测），用于输入栏定位补偿。 */
-const kbHeight = ref(0)
-
-function setupKbHeight() {
-  if (typeof window === 'undefined') return
-  const vv = window.visualViewport
-  if (!vv) return
-  let lastKb = 0
-  let rafId = 0
-  const raf = window.requestAnimationFrame || ((fn: Function) => setTimeout(fn, 16))
-  function compute() {
-    const kb = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop))
-    return kb
-  }
-  function apply() {
-    const kb = compute()
-    if (Math.abs(kb - lastKb) < 6) return
-    lastKb = kb
-    kbHeight.value = kb
-    document.documentElement.style.setProperty('--kb-height', kb + 'px')
-  }
-  function schedule() {
-    if (rafId) return
-    rafId = raf(() => { rafId = 0; apply() })
-  }
-  vv.addEventListener('resize', schedule)
-  vv.addEventListener('scroll', schedule)
-  window.addEventListener('resize', schedule)
-  window.addEventListener('orientationchange', () => setTimeout(schedule, 200))
-  // 初始计算
-  setTimeout(schedule, 100)
-}
+/** 键盘高度补偿（VisualViewport 检测），用于输入栏定位补偿。 */
+const { kbHeight } = useKeyboardHeight()
 
 // ── 会话持久化 ────────────────────────────────────────────────────
 /** 当前会话 id（未发过消息时为 null，发过即创建） */
 const currentSid = ref<string | null>(null)
 
 onMounted(() => {
-  setupKbHeight()
   // 恢复上次下发的语音识别配置（WS 帧没到前先能用旧值）
   loadSavedVoiceConfig()
   // 尝试恢复上一个被选中的会话
@@ -127,7 +95,7 @@ onMounted(() => {
 /** 每次轮次结束后保存会话（用户发消息时由 sendText 调用，助手回复落定后由 onFrame 调用） */
 function persistSession() {
   if (!currentSid.value) return
-  saveSession(currentSid.value, messages.value as any)
+  saveSession(currentSid.value, messages.value)
 }
 
 
@@ -140,8 +108,11 @@ const link = ref<'offline' | 'connecting' | 'online'>('offline')
 const linkMsg = ref('')
 let session: ChatSession | null = null
 
-function ensureSession() {
-  if (session || !paired.value) return
+/** 返回等连接就绪的 Promise；已就绪时 resolve 得很快。 */
+async function ensureSession(): Promise<void> {
+  if (session?.connected) return
+  if (session) return session.start()
+  if (!paired.value) return
   session = new ChatSession({
     onPlain: (json) => onFrame(json),
     onState: (s) => {
@@ -159,14 +130,19 @@ function ensureSession() {
       linkMsg.value = m
     },
   })
-  void session.start()
+  await session.start()
 }
 
 // 页面可能被反复进入（reLaunch 回来、tab 切换），onShow 里 start 是幂等的，
 // 不会叠连接。
 onShow(() => {
   paired.value = isPaired()
-  if (paired.value) ensureSession()
+  // session 已死（401 撤销，closed=true）时清掉它，让 ensureSession 走 _doStart 重建。
+  // 正在连接中（isConnecting=true）的不动——让它继续，不要打断。
+  if (session && !session.connected && !session.isConnecting) {
+    session = null
+  }
+  if (paired.value) void ensureSession()
 })
 
 // boot 页在 onLoad 里 reLaunch，其 onReady 大概率被跳过；这里是正常路径的
@@ -197,7 +173,12 @@ function onFrame(raw: string) {
     // 非 JSON 不可能走到这，但保底按原路径处理
   }
   const prev = chat.value.streamingId
+  const prevTurnActive = chat.value.turnActive
   const next = reduce(chat.value, dispatch(raw))
+  // 桌面开始处理的第一帧：清除所有用户消息的 sending 状态
+  if (!prevTurnActive && next.turnActive) {
+    messages.value.forEach((m) => { m.sending = false })
+  }
   // turn.done 是唯一的"一轮落定"信号；doneTools 在此时已达最终态
   const doneAtTurnEnd = !next.turnActive && prev && next.streamingId
   chat.value = doneAtTurnEnd
@@ -215,130 +196,25 @@ function onFrame(raw: string) {
   scrollToTail()
 }
 
-let asr: AsrProvider | null = null
-
-/** 桌面端下发的语音识别配置帧体（voice_stt.rs）。 */
-interface VoiceSttWire {
-  enabled?: boolean
-  endpoint?: string
-  api_key?: string
-  model?: string | null
-  language?: string | null
-  audio_mime?: string
-  extra_headers?: Record<string, string> | null
-}
-
-const VOICE_STT_KEY = 'hermix.voiceStt'
-
-/** 配置落地：帧下发与本地缓存共用这一条路径，避免两处构建逻辑漂移。 */
-function applyVoiceConfig(cfg: VoiceSttWire | null) {
-  try {
-    if (cfg) uni.setStorageSync(VOICE_STT_KEY, JSON.stringify(cfg))
-    else uni.removeStorageSync(VOICE_STT_KEY)
-  } catch {
-    // 存储失败不阻塞：本次会话内 asr 仍然可用
+// ── 语音输入 ──────────────────────────────────────────────────────
+// 长按说话 → 云端识别 → 回显气泡。录音/上传细节在 composables/useVoiceInput；
+// 「落气泡」与「高危二次确认」是界面职责，留在页面。
+const {
+  recording,
+  partial,
+  applyConfig: applyVoiceConfig,
+  loadSavedConfig: loadSavedVoiceConfig,
+  start: onLongPressStart,
+  stop: onLongPressEnd,
+} = useVoiceInput((text) => {
+  // 回显成用户气泡（还没发出去）
+  messages.value.push({ id: `v${Date.now()}`, role: 'user', text, viaVoice: true })
+  scrollToTail()
+  if (isRiskyInstruction(text)) {
+    // 对**指令本身**的确认，与工具审批是两件事
+    pendingRisky.value = { text }
   }
-  if (cfg?.enabled && cfg.endpoint && cfg.api_key) {
-    asr = new CloudAsr({
-      endpoint: cfg.endpoint,
-      apiKey: cfg.api_key,
-      model: cfg.model ?? undefined,
-      language: cfg.language ?? undefined,
-      headers: {
-        'content-type': cfg.audio_mime || 'audio/mpeg',
-        ...(cfg.extra_headers ?? {}),
-      },
-    })
-  } else {
-    asr = null
-  }
-}
-
-function loadSavedVoiceConfig() {
-  try {
-    const raw = uni.getStorageSync(VOICE_STT_KEY) as string | ''
-    if (raw) applyVoiceConfig(JSON.parse(raw) as VoiceSttWire)
-  } catch {
-    // 缓存坏了等同未配置，等下一次帧下发覆盖
-  }
-}
-
-/** 平台录音管理器：整轮录 MP3，松手后读文件整体上传（比逐帧推兼容面宽）。 */
-let recorder: UniHelper.RecorderManager | null = null
-function ensureRecorder(): UniHelper.RecorderManager {
-  if (recorder) return recorder
-  const rec = uni.getRecorderManager()
-  rec.onStop((res) => {
-    const provider = asr
-    recording.value = false
-    void (async () => {
-      try {
-        const buf = await readAudioFile(res.tempFilePath)
-        if (buf?.byteLength) await provider.push(buf)
-      } catch {
-        // 读不到录音文件就按"没听清"走——不要静默假装成功
-      }
-      const result = await provider.stop()
-      const text = (result.final ?? '').trim()
-      partial.value = ''
-      if (!text) {
-        uni.showToast({ title: '没听清，请重试', icon: 'none' })
-        return
-      }
-      // 回显成用户气泡（还没发出去）
-      messages.value.push({ id: `v${Date.now()}`, role: 'user', text, viaVoice: true })
-      scrollToTail()
-      if (isRiskyInstruction(text)) {
-        // 对**指令本身**的确认，与工具审批是两件事
-        pendingRisky.value = { text }
-      }
-    })()
-  })
-  recorder = rec
-  return rec
-}
-
-/** App 端读录音临时文件为 ArrayBuffer。 */
-function readAudioFile(filePath: string): Promise<ArrayBuffer | null> {
-  return new Promise((resolve) => {
-    try {
-      const fsm = uni.getFileSystemManager()
-      fsm.readFile({
-        filePath,
-        success: (res) => resolve(res.data as ArrayBuffer),
-        fail: () => resolve(null),
-      })
-    } catch {
-      resolve(null)
-    }
-  })
-}
-
-async function onLongPressStart() {
-  if (!asr?.enabled) {
-    // 桌面端没开语音识别就不假装能听：明确说，而不是按住没反应
-    uni.showToast({ title: '桌面端未配置语音识别，仅支持文字发送', icon: 'none' })
-    return
-  }
-  recording.value = true
-  partial.value = ''
-  asr.onPartial((t) => {
-    partial.value = t
-  })
-  await asr.start()
-  ensureRecorder().start({
-    format: 'mp3',
-    duration: 60000,
-    sampleRate: 16000,
-    numberOfChannels: 1,
-  })
-}
-
-function onLongPressEnd() {
-  if (!asr || !recording.value) return
-  // 停录音触发 onStop，后续（读文件→上传→回显/高危确认）都在那里接续
-  ensureRecorder().stop()
-}
+})
 
 function confirmRisky() {
   if (pendingRisky.value) sendText(pendingRisky.value.text)
@@ -346,6 +222,10 @@ function confirmRisky() {
 }
 
 function goConnect() {
+  // 清理旧 session：旧设备的 token 在撤销后已无效，不清会让下一条消息
+  // 继续用旧 RelayClient（closed=true）白等。stop 后 ensureSession 会重建。
+  session?.stop()
+  session = null
   uni.navigateTo({ url: '/pages/pairing/index' })
 }
 
@@ -367,7 +247,7 @@ function confirmNew() {
       if (!res.confirm) return
       // 保存当前会话（如果有过消息）
       if (currentSid.value) {
-        saveSession(currentSid.value, messages.value as any)
+        saveSession(currentSid.value, messages.value)
       }
       messages.value = []
       chat.value = initialChatState()
@@ -389,8 +269,10 @@ function sendText(t: string) {
     currentSid.value = newSessionId()
     saveSession(currentSid.value, [])
   }
-  ensureSession()
   void (async () => {
+    // 等连接真正就绪（hello + key.exchange 完成）再发，否则 send() 返回 false
+    // 导致消息「发出去没回」而用户以为是网络慢。
+    await ensureSession()
     // 先发出去，成功了才落气泡：连不上时留一条永远等不到回复的假消息，
     // 比直接不落更糟——用户会以为电脑收到了。
     const ok = (await session?.send(text)) ?? false
@@ -400,7 +282,7 @@ function sendText(t: string) {
     }
     // 打字发的补一条（语音已经回显过气泡了）
     if (!messages.value.some((m) => m.role === 'user' && m.text === text && m.viaVoice)) {
-      messages.value.push({ id: String(Date.now()), role: 'user', text })
+      messages.value.push({ id: String(Date.now()), role: 'user', text, sending: true })
     }
     persistSession()
     // turnActive / 工具轨迹 / 三态回执都从回来的帧里推（见 onFrame），
@@ -451,8 +333,8 @@ onUnmounted(() => {
         }}
       </text>
       <view class="c-acts">
-        <view class="c-btn pri" @tap="goConnect"><text>扫码连接电脑</text></view>
-        <view class="c-btn" @tap="goSettings"><text>设置</text></view>
+        <view class="hm-pill pri c-btn" @tap="goConnect"><text>扫码连接电脑</text></view>
+        <view class="hm-pill solid c-btn" @tap="goSettings"><text>设置</text></view>
       </view>
     </view>
 
@@ -470,7 +352,7 @@ onUnmounted(() => {
       <image class="mascot" src="/static/mascot.png" mode="aspectFit" />
     </hm-empty>
 
-    <view v-for="m in messages" :key="m.id" :class="['bub', m.role]">
+    <view v-for="m in messages" :key="m.id" :class="['bub', m.role, m.sending ? 'sending' : '']">
       <hm-step v-if="m.role === 'assistant'" :running="m.runningTools ?? []" :done="m.doneTools ?? []" />
       <rich-text v-if="m.role === 'assistant'" class="txt md" :nodes="renderMarkdown(m.text)" />
       <text v-else class="txt">{{ m.text }}</text>
@@ -487,9 +369,9 @@ onUnmounted(() => {
       <rich-text class="txt md" :nodes="renderMarkdown(streaming.text)" />
     </view>
 
-    <view v-if="chat.busy" class="notice warn"><text>上一轮还在跑 · 你发的话会排队</text></view>
-    <view v-else-if="chat.turnActive" class="notice"><text>还在想 · 下一条心跳 60s 后</text></view>
-    <view v-if="chat.lastError" class="notice err"><text>{{ chat.lastError }}</text></view>
+    <view v-if="chat.busy" class="hm-notice warn notice-line"><text>上一轮还在跑 · 你发的话会排队</text></view>
+    <view v-else-if="chat.turnActive" class="hm-notice notice-line"><text>还在想 · 下一条心跳 60s 后</text></view>
+    <view v-if="chat.lastError" class="hm-notice err notice-line"><text>{{ chat.lastError }}</text></view>
 
     <view id="tail" class="tail" />
 
@@ -498,8 +380,8 @@ onUnmounted(() => {
       <text class="risky-t">确认发送这条？</text>
       <text class="risky-b">{{ pendingRisky.text }}</text>
       <view class="risky-keys">
-        <view class="key pri" @tap="confirmRisky"><text>发送</text></view>
-        <view class="key" @tap="pendingRisky = null"><text>取消</text></view>
+        <view class="hm-pill pri key" @tap="confirmRisky"><text>发送</text></view>
+        <view class="hm-pill soft key" @tap="pendingRisky = null"><text>取消</text></view>
       </view>
     </view>
 
@@ -602,17 +484,6 @@ onUnmounted(() => {
 }
 .c-btn {
   flex: 1;
-  height: $tap;
-  line-height: $tap;
-  text-align: center;
-  border-radius: 44rpx;
-  background: $raised;
-  color: $fg;
-  font-size: $fs-sub;
-}
-.c-btn.pri {
-  background: $accent;
-  color: $on-accent;
 }
 
 /* 气泡靠底色分层：用户=$raised（比页底高两档），助手=$card（高一档）。 */
@@ -652,21 +523,29 @@ onUnmounted(() => {
   height: 8rpx;
 }
 
-.notice {
+/* 发送中脉冲：用户消息右下角一个小圆点，收到回复后消失。 */
+.bub.user.sending::after {
+  content: '';
+  position: absolute;
+  bottom: 14rpx;
+  right: 14rpx;
+  width: 10rpx;
+  height: 10rpx;
+  border-radius: 50%;
+  background: $fg4;
+  animation: pulse 1.4s ease-in-out infinite;
+}
+.bub.user.sending {
+  position: relative;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.3; transform: scale(0.7); }
+}
+
+/* 提示条只留边距，形态见 styles/shared.scss 的 .hm-notice。 */
+.notice-line {
   margin: 0 $gutter 20rpx;
-  padding: 16rpx 20rpx;
-  border-radius: 18rpx;
-  font-size: $fs-mini;
-  color: $fg2;
-  background: $card;
-}
-.notice.warn {
-  background: $warn-bg;
-  color: $warn;
-}
-.notice.err {
-  background: $err-bg;
-  color: $err;
 }
 
 .risky {
@@ -694,17 +573,6 @@ onUnmounted(() => {
 }
 .key {
   flex: 1;
-  height: $tap;
-  line-height: $tap;
-  text-align: center;
-  border-radius: 44rpx;
-  font-size: $fs-sub;
-  background: $raised;
-  color: $fg2;
-}
-.key.pri {
-  background: $accent;
-  color: $on-accent;
 }
 
 /* 输入栏：与滚动区之间靠底色差分界，不画线。 */

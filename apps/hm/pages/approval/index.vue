@@ -108,8 +108,8 @@ onShow(() => {
           <view class="bar"><view class="fill" :style="{ width: Math.min(100, (a.remainSecs / 600) * 100) + '%' }" /></view>
         </view>
         <view class="keys">
-          <view class="key allow" @tap="decide('allow')"><text>允许一次</text></view>
-          <view class="key deny" @tap="decide('deny')"><text>拒绝</text></view>
+          <view class="hm-pill pri key" @tap="decide('allow')"><text>允许一次</text></view>
+          <view class="hm-pill soft key" @tap="decide('deny')"><text>拒绝</text></view>
         </view>
         <text v-if="!a.canPersist" class="cap">永久放行需在桌面端确认</text>
         <text v-else class="cap accent">此次允许后仍可永久放行</text>
@@ -198,18 +198,6 @@ onShow(() => {
 }
 .key {
   flex: 1;
-  height: $tap;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 44rpx;
-  font-size: $fs-sub;
-  background: $raised;
-  color: $fg2;
-}
-.key.allow {
-  background: $accent;
-  color: $on-accent;
 }
 
 .cap {

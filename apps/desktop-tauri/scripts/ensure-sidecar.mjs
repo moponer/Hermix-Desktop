@@ -71,4 +71,13 @@ sh("node", [viewerVite, "build"], path.join(repoRoot, "apps", "viewer"));
 sh("cargo", ["build", "--release", "-p", "hermix-viewer"]);
 refresh("hermix-viewer.exe", "hermix-viewer-x86_64-pc-windows-msvc.exe");
 
+// desktop-tauri 前端：vite 构建到 release/frontend（与 tauri.conf.json frontendDist 一致），
+// 必须在 cargo tauri build 之前完成（tauri bundler 直接读 frontendDist）。
+const desktopVite = path.join(appDir, "node_modules", "vite", "bin", "vite.js");
+if (!existsSync(desktopVite)) {
+  console.error("[ensure-sidecar] ✗ apps/desktop-tauri 依赖未安装");
+  process.exit(1);
+}
+sh("node", [desktopVite, "build"], appDir);
+
 console.log("[ensure-sidecar] sidecar 已刷新并逐字节校验。");

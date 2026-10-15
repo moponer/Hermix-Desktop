@@ -103,7 +103,7 @@ function openSheet() {
         </view>
       </view>
 
-      <view class="cancel-btn" @tap="open = false">
+      <view class="hm-pill ghost cancel-btn" @tap="open = false">
         <text>取消</text>
       </view>
     </view>
@@ -248,17 +248,7 @@ function openSheet() {
   50% { opacity: 0.3; }
 }
 .cancel-btn {
-  height: 88rpx;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   border-radius: $r-card;
-  background: $card;
-  color: $fg2;
-  font-size: $fs-sub;
   margin-top: 16rpx;
-}
-.cancel-btn:active {
-  opacity: 0.7;
 }
 </style>

@@ -82,14 +82,14 @@ function hangUp() {
       </view>
     </view>
 
-    <view class="notice warn">
+    <view class="hm-notice warn notice">
       <text>要做删除操作，请看一眼屏幕 —— 通话中所有审批都需要视觉确认</text>
     </view>
 
     <template #bottom>
       <view class="row">
-        <view class="btn" @tap="bargeIn"><text class="bl">打断</text></view>
-        <view class="btn end" @tap="hangUp"><text class="bl">挂断</text></view>
+        <view class="hm-pill ghost btn" @tap="bargeIn"><text class="bl">打断</text></view>
+        <view class="hm-pill danger btn" @tap="hangUp"><text class="bl">挂断</text></view>
       </view>
     </template>
   </hm-shell>
@@ -167,12 +167,7 @@ function hangUp() {
 
 .notice {
   margin: 0 $gutter;
-  background: $warn-bg;
-  border-radius: 18rpx;
   padding: 20rpx;
-  font-size: $fs-mini;
-  line-height: 1.5;
-  color: $warn;
 }
 
 .row {
@@ -183,16 +178,7 @@ function hangUp() {
 .btn {
   flex: 1;
   height: 108rpx;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   border-radius: 54rpx;
-  background: $card;
-  color: $fg2;
-}
-.btn.end {
-  background: $err-bg;
-  color: $err;
 }
 .bl {
   font-size: $fs-body;

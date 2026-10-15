@@ -35,6 +35,9 @@ onUnhandledRejection((event) => reportFatal(event?.reason ?? event, 'unhandledre
 </script>
 
 <style lang="scss">
+/* 跨页复用原件（提示条 / 胶囊按钮 / 卡片壳）。只此一处引入。 */
+@import './styles/shared.scss';
+
 /* 全局基底：暗色跟随主题，不给浅色留残影 */
 page {
   background-color: $paper;

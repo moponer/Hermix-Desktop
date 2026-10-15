@@ -148,3 +148,7 @@ hermix_home/im_channels.json
 # Python 字节码缓存（verify-stability-suite 等本机运行产物）
 __pycache__/
 *.pyc
+
+# html5ever vendor 修复的中间产物（只入库 -patched 副本，见 Cargo.toml [patch.crates-io]）
+patches/html5ever-0.39.0/
+patches/html5ever-0.39.0.crate

@@ -19,7 +19,14 @@ import {
   type PairingTarget,
 } from '../../core/direct'
 import { generateIdentity } from '../../core/crypto'
-import { setRelayToken, storePairedDevice, listDevices } from '../../core/pairing'
+import {
+  setRelayToken,
+  storePairedDevice,
+  listDevices,
+  removeDevice,
+  activeDevice,
+} from '../../core/pairing'
+import { interruptSession } from '../../core/tasks'
 import { setRelayBaseUrl } from '../../core/clock'
 
 /** 扫到并解析成功、但用户还没确认提交的码。 */
@@ -74,6 +81,22 @@ async function submit() {
       relayBase: t.relayBase,
       relayToken: t.phoneToken,
     })
+    // 切到聊天页之前把旧 session 清理掉：旧 token 已作废，
+    // 不清会让 ensureSession 认为 session 存在（closed=true）而跳过重建。
+    try {
+      void interruptSession(null)
+    } catch { /* tasks 与当前流程无关，失败不影响配对 */ }
+    // 配对成功后：只保留刚配上的这台，清掉同 relay 下其他旧设备记录。
+    // 原因：PC 侧撤销后旧设备 token 已无效，若 fallback 落到它会 401 白等。
+    // 新设备已经在 storePairedDevice 里作为 activeDevice 写入，清掉其余即可。
+    try {
+      const keep = activeDevice()?.id
+      if (keep) {
+        for (const d of listDevices()) {
+          if (d.id !== keep) removeDevice(d.id)
+        }
+      }
+    } catch { /* pairing 模块加载失败不影响主流程 */ }
     uni.reLaunch({ url: '/pages/chat/index' })
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
@@ -112,7 +135,7 @@ function reset() {
       </text>
       <!-- 错误必须在这一步就可见：扫码失败/解析失败时 target 还是空，
            视图停在第一步——提示若只放第二步，用户看到的就是「响一声没反应」。 -->
-      <view v-if="error" class="notice err"><text>{{ error }}</text></view>
+      <view v-if="error" class="hm-notice err notice"><text>{{ error }}</text></view>
     </view>
 
     <!-- 第二步：确认身份 + 起名，再提交 -->
@@ -135,19 +158,19 @@ function reset() {
         </view>
       </view>
 
-      <view v-if="error" class="notice err"><text>{{ error }}</text></view>
+      <view v-if="error" class="hm-notice err notice"><text>{{ error }}</text></view>
 
       <!-- E2EE 已换 @noble/* 纯 JS 实现（2026-10-12），打进应用包内，
            不再依赖运行时的 WebCrypto——旧「没有 WebCrypto」门禁随之退役。 -->
       <view
-        class="btn-pri"
+        class="hm-pill pri btn-pri"
         :class="{ off: busy }"
         @tap="busy ? undefined : submit()"
       >
         <text>{{ busy ? '正在连接…' : '确认并连接' }}</text>
       </view>
 
-      <view class="btn-sec" @tap="reset"><text>返回</text></view>
+      <view class="hm-pill ghost btn-sec" @tap="reset"><text>返回</text></view>
     </template>
 
     <text class="foot">配对码 60 分钟内有效、只能用一次</text>
@@ -315,32 +338,16 @@ function reset() {
   color: $fg;
 }
 
+/* 提示条只留布局，形态见 styles/shared.scss 的 .hm-notice。 */
 .notice {
   width: 100%;
   margin-top: 20rpx;
-  border-radius: 18rpx;
   padding: 18rpx 20rpx;
-  font-size: $fs-mini;
-  line-height: 1.5;
-  box-sizing: border-box;
-  color: $fg2;
-  background: $card;
-}
-.notice.err {
-  background: $err-bg;
-  color: $err;
 }
 
 .btn-pri {
   width: 100%;
   margin-top: 26rpx;
-  height: $tap;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 44rpx;
-  background: $accent;
-  color: $on-accent;
   font-size: $fs-body;
   font-weight: 600;
 }
@@ -350,14 +357,6 @@ function reset() {
 .btn-sec {
   width: 100%;
   margin-top: 14rpx;
-  height: $tap;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 44rpx;
-  background: $card;
-  color: $fg2;
-  font-size: $fs-sub;
 }
 
 .foot {

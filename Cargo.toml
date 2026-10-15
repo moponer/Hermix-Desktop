@@ -37,6 +37,12 @@ members = [
     "crates/hermix-filesearch",
 ]
 
+# html5ever v0.39.0: rsproxy.cn registry mirror 缓存不完整（缺 tree_builder/tag_sets.rs），
+# 导致 svg_html_integration_point / mathml_text_integration_point 链接失败。
+# 修复：从 crates.io 原装 tarball 重新填充源码（已含完整 tag_sets.rs + types.rs）。
+[patch.crates-io]
+html5ever = { path = "patches/html5ever-0.39.0-patched" }
+
 [workspace.package]
 version = "0.1.1"
 edition = "2021"

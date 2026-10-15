@@ -76,6 +76,10 @@ export class ChatSession {
   private deviceId = ''
   private sid = ''
   private ready = false
+  /** 连接进行中（start 已调用，onOpen 尚未触发）。 */
+  private connecting = false
+  /** 等连接就绪的 promise；resolve 时 this.ready 必为 true。 */
+  private startDeferred: { resolve: () => void; reject: (e: unknown) => void } | null = null
   private readonly h: ChatSessionHandlers
 
   constructor(handlers: ChatSessionHandlers) {
@@ -87,50 +91,96 @@ export class ChatSession {
     return this.ready
   }
 
+  /** 是否正在连接过程中（可区分「已断开」和「正在建连」）。 */
+  get isConnecting(): boolean {
+    return this.connecting
+  }
+
   /**
-   * 起连接。**幂等**：已起过就直接返回，避免页面 onShow 反复调时叠连接。
+   * 等连接就绪的 Promise——resolve 时 this.ready == true。
+   * 幂等：已起过（this.client 存在）时返回已存在的 deferred promise。
    */
-  async start(): Promise<void> {
-    if (this.client) return
-    const dev = activeDevice()
-    if (!dev?.token || !dev.relayBase || !dev.relayToken || !dev.pcPublicKey || !dev.id) {
-      this.h.onError('这台手机还没配对，或配对信息不全。请重新扫码配对。')
-      this.h.onState('error')
-      return
+  start(): Promise<void> {
+    // this.client 非空不代表可用：destroyClient() 后 client 还在但已 closed。
+    // 此时 _doStart 必须重建。
+    if (this.client && !this.client.isClosed) {
+      return this.startDeferred
+        ? new Promise((r) => this.startDeferred!.resolve)
+        : Promise.resolve()
     }
+    return this._doStart()
+  }
 
-    // 每次冷启动一把新私钥（内存里，不落盘）。
-    this.identity = await generateIdentity()
-    this.pcPublic = await importPublicKey(b64decode(dev.pcPublicKey))
-    // deviceId 与 sid 都在这里定死：后面 onOpen / onSealedFrame 都可能晚于这次
-    // 读取才跑（重连有退避），那时再查 activeDevice() 拿到的是别的状态。
-    this.deviceId = dev.id
-    this.sid = chatSessionId(dev.id)
+  private _doStart(): Promise<void> {
+    this.connecting = true
+    return new Promise((resolve, reject) => {
+      this.startDeferred = { resolve, reject }
+      const dev = activeDevice()
+      if (!dev?.token || !dev.relayBase || !dev.relayToken || !dev.pcPublicKey || !dev.id) {
+        this.h.onError('这台手机还没配对，或配对信息不全。请重新扫码配对。')
+        this.h.onState('error')
+        this.connecting = false
+        resolve()
+        return
+      }
 
-    this.client = new RelayClient({
-      baseUrl: dev.relayBase,
-      relayToken: dev.relayToken,
-      deviceToken: dev.token,
-      sessionId: this.sid,
-      nodeId: '',
-      onFrame: (payload) => void this.onSealedFrame(payload),
-      onState: (s) => {
-        if (s === 'open') void this.onOpen()
-        else {
-          // 连接一断就撤销就绪标记：否则界面会显示「已连接」而实际发不出去。
-          this.ready = false
-          this.h.onState(s)
+      // 每次冷启动一把新私钥（内存里，不落盘）。
+      void (async () => {
+        try {
+          this.identity = await generateIdentity()
+          this.pcPublic = await importPublicKey(b64decode(dev.pcPublicKey))
+          this.deviceId = dev.id
+          this.sid = chatSessionId(dev.id)
+
+          this.client = new RelayClient({
+            baseUrl: dev.relayBase,
+            relayToken: dev.relayToken,
+            deviceToken: dev.token,
+            sessionId: this.sid,
+            nodeId: '',
+            onFrame: (payload) => void this.onSealedFrame(payload),
+            onState: (s) => {
+              if (s === 'open') void this.onOpen()
+              else {
+                this.ready = false
+                this.h.onState(s)
+              }
+            },
+            onError: (m) => {
+              // 401 = 撤销：销毁 client，下次 start() 会重建（用新 token）。
+              if (/401|凭据已被撤销/i.test(m)) this.destroyClient()
+              this.h.onError(m)
+            },
+          })
+          this.client.start()
+        } catch (e) {
+          reject(e)
         }
-      },
-      onError: (m) => this.h.onError(m),
+      })()
     })
-    this.client.start()
   }
 
   stop(): void {
     this.client?.close()
     this.client = null
     this.ready = false
+    this.connecting = false
+    // 若有未完成的 start() promise，让它立即 resolve，避免等待已失效的连接。
+    this.startDeferred?.resolve()
+    this.startDeferred = null
+  }
+
+  /**
+   * 收到不可恢复错误后销毁 client。下次 start() 会重建。
+   * 401（撤销）时用：旧 token 作废，不重建就不换新 token。
+   */
+  destroyClient(): void {
+    this.client?.close()
+    this.client = null
+    this.ready = false
+    this.connecting = false
+    this.startDeferred?.resolve()
+    this.startDeferred = null
   }
 
   /** 建连成功后立刻补一次密钥交换——PC 得先学到这把新公钥才回得了帧。 */
@@ -148,6 +198,9 @@ export class ChatSession {
       return
     }
     this.ready = true
+    this.connecting = false
+    this.startDeferred?.resolve()
+    this.startDeferred = null
     this.h.onState('open')
   }
 
