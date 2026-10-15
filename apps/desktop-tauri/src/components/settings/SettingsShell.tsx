@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   ArrowLeft, Search, Cpu, Boxes, Server, Smartphone, SlidersHorizontal,
   Plug, Sparkles, Network, Image as ImageIcon, Activity, Shield,
-  Archive, Palette, Brain, AppWindow,
+  Archive, Palette, Brain, AppWindow, Mic,
 } from "lucide-react";
 
 import { cx } from "../../lib/cx";
@@ -21,6 +21,7 @@ import { AdvancedTab } from "./AdvancedSettingsTab";
 import { DiagnosticsTab } from "./DiagnosticsTab";
 import { RuntimesTab } from "./RuntimesTab";
 import { DevicesTab } from "./DevicesTab";
+import { VoiceTab } from "./VoiceTab";
 import { GeneralTab } from "./GeneralTab";
 import { AppearanceTab } from "./AppearanceTab";
 import { ArchiveTab } from "./ArchiveTab";
@@ -47,7 +48,7 @@ import { ArchiveTab } from "./ArchiveTab";
 export type SettingsPage =
   | "general" | "appearance" | "model" | "image"
   | "plugins" | "skills" | "connectors" | "toolsets"
-  | "backend" | "runtimes" | "devices" | "security" | "fileassoc" | "archive"
+  | "backend" | "runtimes" | "devices" | "voice" | "security" | "fileassoc" | "archive"
   | "memory" | "diagnostics" | "advanced";
 
 interface PageDef {
@@ -90,6 +91,7 @@ const GROUPS: GroupDef[] = [
       { id: "backend", label: "后端服务", hint: "本地服务与健康状态", icon: Server, keywords: "backend server 服务 端口 健康" },
       { id: "runtimes", label: "内置运行时", hint: "Node / Python / Git 便携内置，优先于系统 PATH", icon: Boxes, keywords: "runtime node python git 运行时" },
       { id: "devices", label: "设备管理", hint: "IM 机器人与桌面配对两条通道；高危工具一律在桌面端强制确认", icon: Smartphone, keywords: "device 设备 配对 权限" },
+      { id: "voice", label: "手机语音识别", hint: "配置云端语音识别 provider，手机端长按说话直发该 provider；未开启则手机仅支持文字", icon: Mic, keywords: "voice 语音 识别 asr stt minimax 转文字 手机" },
       { id: "security", label: "安全", hint: "覆盖写入前先备份旧版本，误改可回滚", icon: Shield, keywords: "security 安全 备份 backup" },
       { id: "fileassoc", label: "文件关联", hint: "勾选后由 Hermix 查看器接管对应扩展名；取消即恢复原程序", icon: AppWindow, keywords: "file association 关联 打开方式 viewer 查看器 md pdf png" },
       { id: "archive", label: "已归档", hint: "归档只是从侧栏收起，数据仍在本机，取消归档即可恢复", icon: Archive, keywords: "archive 归档 已归档" },
@@ -283,6 +285,7 @@ function PageBody({
     case "backend": return <Section><PageHeading def={def} /><BackendTab /></Section>;
     case "runtimes": return <Section wide><PageHeading def={def} /><RuntimesTab /></Section>;
     case "devices": return <Section wide><PageHeading def={def} /><DevicesTab /></Section>;
+    case "voice": return <Section><PageHeading def={def} /><VoiceTab /></Section>;
     case "security": return <Section wide><PageHeading def={def} /><SecurityTab /></Section>;
     case "fileassoc": return <Section><PageHeading def={def} /><FileAssocTab /></Section>;
     case "archive": return <Section><PageHeading def={def} /><ArchiveTab /></Section>;

@@ -23,6 +23,7 @@ pub mod skills;
 pub mod stubs;
 pub mod transcribe;
 pub mod types;
+pub mod voice_stt;
 
 // Re-export shared types used by multiple modules
 pub use types::*;
@@ -58,6 +59,11 @@ pub fn router() -> Router<HttpServerState> {
         .route(
             "/api/model/list",
             get(config::get_model_list).put(config::update_model_list),
+        )
+        // 手机端语音识别配置（桌面配置 → WS 密封帧下发手机，见 voice_stt.rs）
+        .route(
+            "/api/voice/stt",
+            get(voice_stt::get_voice_stt).put(voice_stt::put_voice_stt),
         )
         // Builtin provider metadata (id + env var) — single source of truth
         // in hermix-config; the frontend groups builtin/custom from here.

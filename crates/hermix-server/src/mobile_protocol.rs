@@ -55,6 +55,8 @@ pub fn to_mobile_event(msg_type: &str) -> Option<&'static str> {
         "user_message" => "user.message",
         "assistant_message" | "text" => "assistant.message",
         "tool_call" => "tool.start",
+        // 手机端语音识别配置（voice_stt.rs）：随 WS 会话建立下发
+        "voice_stt_config" => "voice.stt_config",
         "tool_result" => "tool.end",
         "request_approval" => "approval.request",
         "done" => "turn.done",
@@ -86,7 +88,16 @@ pub fn to_mobile_frame(frame: &Value) -> Option<Value> {
         "proto_version": crate::relay_proto::PROTO_VERSION,
     });
     // 原样带过已知字段；不猜未知字段。
-    for key in ["session_id", "message_id", "request_id", "content", "tool", "arguments"] {
+    for key in [
+        "session_id",
+        "message_id",
+        "request_id",
+        "content",
+        "tool",
+        "arguments",
+        // voice.stt_config 的配置体（voice_stt.rs），仅该类型帧携带
+        "voice_stt",
+    ] {
         if let Some(v) = frame.get(key) {
             out[key] = v.clone();
         }

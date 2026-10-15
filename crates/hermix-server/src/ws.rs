@@ -2631,6 +2631,18 @@ pub(crate) async fn handle_ws_stream(
         .send(serde_json::to_string(&connected).unwrap_or_default())
         .await;
 
+    // 手机端语音识别配置下发（2026-10-14 拍板）：桌面端配置的云 STT 在
+    // 会话建立时随 hydrate 一起推。经 relay 时由 mobile_protocol 映射为
+    // `voice.stt_config` 密封帧——relay 只见密文。未配置 = 不发帧，
+    // 手机端长按说话显示「桌面端未配置，仅支持文字发送」。
+    if let Some(cfg) = crate::dashboard::voice_stt::VoiceSttConfig::load(&state) {
+        let frame = serde_json::json!({
+            "type": "voice_stt_config",
+            "voice_stt": serde_json::to_value(&cfg).unwrap_or_default(),
+        });
+        let _ = sender.send(frame.to_string()).await;
+    }
+
     // Commit D — WS hydrate: send an authoritative per-session
     // TodoSnapshot right after `Connected` so reconnecting tabs /
     // WS reconnects see the full current todo list without waiting
