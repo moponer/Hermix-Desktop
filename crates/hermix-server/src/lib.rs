@@ -296,6 +296,7 @@ pub fn router(state: HttpServerState) -> Router {
         // helper 未运行时首个请求会触发 UAC（弹一次）。
         .route("/v1/filesearch/search", get(filesearch::search))
         .route("/v1/filesearch/status", get(filesearch::status))
+        .route("/v1/filesearch/filter", post(filesearch::filter))
         .route("/v1/filesearch/shutdown", post(filesearch::shutdown))
         // 浏览器小窗暂停/恢复：桌面端小窗隐藏时把「停 Chrome 侧 screencast 编码」
         // 的指令发到 sidecar（浏览器会话在那），desktop 自己进程里的 pause 是空操作。

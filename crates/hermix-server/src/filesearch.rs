@@ -238,6 +238,16 @@ pub async fn status() -> Result<impl IntoResponse, (StatusCode, String)> {
     Ok(Json(result))
 }
 
+/// 下发过滤规则（FilterRules，结构见 hermix-filesearch core/model.rs）。
+/// helper 重启后规则回到默认值，桌面端负责在启动时回放。
+pub async fn filter(
+    Json(rules): Json<Value>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    ensure_helper().await.map_err(api_error)?;
+    let result = request("setFilter", rules).await.map_err(api_error)?;
+    Ok(Json(result))
+}
+
 pub async fn shutdown() -> Result<impl IntoResponse, (StatusCode, String)> {
     let result = request("shutdown", json!({})).await.map_err(api_error)?;
     let _ = std::fs::remove_file(endpoint_path());

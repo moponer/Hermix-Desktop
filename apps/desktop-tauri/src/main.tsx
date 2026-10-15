@@ -23,6 +23,10 @@ const isOverlayWindow = window.location.hash.startsWith("#/screenshot-overlay");
 // 同款"独立小图"理由——不拉主应用图，首帧毫秒级；Rust 侧先建后亮。
 const isBrowserViewWindow = window.location.hash.startsWith("#/browser-view");
 
+// 文件搜索小窗（独立 window，hash 路由分流）：Alt+F 全局热键唤起的
+// Everything 式搜索面板。同款"独立小图"——不拉主应用图。
+const isFileSearchWindow = window.location.hash.startsWith("#/file-search");
+
 if (isOverlayWindow) {
   // 覆盖窗立即移除启动遮罩（#splash 已由 CSS data-overlay 静态隐藏，这里是
   // JS 兜底）并接管「正在截取屏幕…」占位（.so-loading 同文案无缝衔接），
@@ -47,6 +51,22 @@ if (isOverlayWindow) {
       </ErrorBoundary>
     </React.StrictMode>,
   );
+} else if (isFileSearchWindow) {
+  // 文件搜索小窗：启动遮罩移除（若存在），组件 mount 后自行 show。
+  document.getElementById("splash")?.remove();
+  void (async () => {
+    const [{ FileSearchWindow }] = await Promise.all([
+      import("./components/FileSearchWindow"),
+      import("./styles/file-search.css"),
+    ]);
+    ReactDOM.createRoot(document.getElementById("root")!).render(
+      <React.StrictMode>
+        <ErrorBoundary>
+          <FileSearchWindow />
+        </ErrorBoundary>
+      </React.StrictMode>,
+    );
+  })();
 } else {
   void mainEntry();
 }
@@ -201,6 +221,30 @@ async function mainEntry() {
       void invoke("screenshot_apply_config", { enabled: cfg.enabled, hotkey: cfg.hotkey }).catch(
         (err) => console.warn("[screenshot] 配置回放失败:", err),
       );
+    }
+  } catch { /* ignore */ }
+
+  // 回放文件搜索配置（热键/开关/过滤规则）。从未配置过则跳过——
+  // Rust setup 已注册默认 Alt+F 兜底，helper 用默认过滤规则。
+  try {
+    const raw = localStorage.getItem("hermix.filesearch.config");
+    if (raw) {
+      const cfg = JSON.parse(raw) as {
+        enabled: boolean;
+        hotkey: string;
+        filter?: Record<string, unknown>;
+      };
+      void invoke("file_search_apply_config", { enabled: cfg.enabled, hotkey: cfg.hotkey }).catch(
+        (err) => console.warn("[filesearch] 配置回放失败:", err),
+      );
+      if (cfg.filter) {
+        void api
+          .fetchJSON("/v1/filesearch/filter", {
+            method: "POST",
+            body: JSON.stringify(cfg.filter),
+          })
+          .catch((err) => console.warn("[filesearch] 过滤规则回放失败:", err));
+      }
     }
   } catch { /* ignore */ }
 

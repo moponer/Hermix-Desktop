@@ -3,6 +3,7 @@ pub mod cdp_probe;
 pub mod commands;
 pub mod commands_custom_app;
 pub mod commands_workbench;
+pub mod file_search_controller;
 pub mod keep_awake;
 pub mod markitdown;
 pub mod portable_env;
@@ -417,17 +418,25 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(|app, _shortcut, event| {
+                .with_handler(|app, shortcut, event| {
                     if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
-                        // spawn_blocking：抓屏 + 建窗走 GDI/IPC，不占主 UI 线程。
-                        // 幕布 JPEG 编码已在 run_session 内起后台线程，主线程零阻塞。
+                        // 按快捷键分发：Alt+Q 截图、Alt+F 文件搜索（新注册的热键
+                        // 都从这条 handler 过，漏分发 = 按了没反应）。
+                        let name = shortcut.to_string().to_lowercase();
                         let app = app.clone();
-                        tauri::async_runtime::spawn_blocking(move || {
-                            if let Err(e) = screenshot_controller::run_session(&app) {
-                                eprintln!("[screenshot] 热键触发失败: {e}");
-                                let _ = app.emit("hermix:screenshot-error", e);
-                            }
-                        });
+                        if name == "alt+q" {
+                            // spawn_blocking：抓屏 + 建窗走 GDI/IPC，不占主 UI 线程。
+                            // 幕布 JPEG 编码已在 run_session 内起后台线程，主线程零阻塞。
+                            tauri::async_runtime::spawn_blocking(move || {
+                                if let Err(e) = screenshot_controller::run_session(&app) {
+                                    eprintln!("[screenshot] 热键触发失败: {e}");
+                                    let _ = app.emit("hermix:screenshot-error", e);
+                                }
+                            });
+                        } else if name == "alt+f" {
+                            // toggle 本身轻量（建窗/显隐），直接当前线程跑。
+                            file_search_controller::toggle(&app);
+                        }
                     }
                 })
                 .build(),
@@ -508,6 +517,10 @@ pub fn run() {
                     Err(e) => eprintln!("[screenshot] 热键解析失败: {e}"),
                 }
             }
+
+            // 文件搜索全局热键（默认 Alt+F）：setup 兜底；搜索窗设置面板的
+            // 自定义配置由前端经 file_search_apply_config 回放覆盖。
+            file_search_controller::register_default_hotkey(app.handle());
 
             // 0. WebView2 runtime probe (Windows only). Tauri 2's
             //    own WebView creation step fails with a cryptic
@@ -732,6 +745,7 @@ pub fn run() {
             screenshot_controller::screenshot_window_at,
             screenshot_controller::screenshot_cancel,
             screenshot_controller::screenshot_apply_config,
+            file_search_controller::file_search_apply_config,
             cdp_probe::cdp_n0_probe,
             commands::document_to_markdown,
             browser_view_controller::browser_view_open,
