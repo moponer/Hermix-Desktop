@@ -58,10 +58,25 @@ rustflags = [
     "-C", "link-arg=/LIBPATH:C:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.26100.0\\ucrt\\x64",
 ]
 
-# 2026-10-07: sccache 缓存目录与产物位置开关
+# 2026-10-07 引入 sccache; 2026-10-15 修正使其真正生效:
+#   rustc-wrapper 让每次 rustc 调用先过 sccache, 命中即复用产物.
+#   关键修正 (sccache 0.18.0):
+#   1. in-process 模式忽略 SCCACHE_DIR, 只有 sccache server 才读它.
+#      故必须单独启动一个带 SCCACHE_DIR 的 server (见 scripts/start-sccache.ps1
+#      / 计划任务开机自启), server 常驻并接管所有缓存, 落 H 盘共享目录,
+#      多人 / 多 worktree 复用同一套依赖编译产物, 根治 target 膨胀.
+#   2. incremental 必须关 (已在根 Cargo.toml 的 [profile.dev]/[profile.test]
+#      设 incremental = false): sccache 对带 -C incremental 的编译一律
+#      non-cacheable, 不关则缓存命中率 0%, sccache 形同虚设.
+#   3. SCCACHE_CACHE_SIZE 调大 (见下 [env]): 依赖树 ~30GB, 默认 10GiB 会
+#      频繁驱逐, 放大到 50G 让绝大多数依赖常驻缓存, 重建接近秒回.
 [env]
-# sccache 编译缓存目录. 放 F 盘 (空闲多), 缓存可随时删除重建, 不影响源码.
-SCCACHE_DIR = "F:/sccache-cache"
+# sccache 共享缓存目录 (H 盘, 多人复用). 此变量只有 sccache SERVER 才读取;
+# in-process 模式会忽略它, 因此必须有一个带 SCCACHE_DIR 的 server 在跑
+# (见 scripts/start-sccache.ps1 / 计划任务开机自启).
+SCCACHE_DIR = "H:/sccache-cache"
+# 缓存上限放大到 50G (依赖树 ~30GB, 默认 10GiB 会频繁驱逐). server 读取.
+SCCACHE_CACHE_SIZE = "50G"
 # 如需把产物统一挪到仓库外、避免各 worktree 各编译一份 target 滚雪球,
 # 取消下一行注释即可 (项目作者授权用环境变量而非 config 内置 target-dir):
 # CARGO_TARGET_DIR = "F:/rust-targets/hermix-desktop"  # 已回退(2026-10-13): 启用会破坏 release.sh / ensure-sidecar.mjs 等依赖仓库根 target/release 的脚本; 若要共享 target 须先让这些脚本支持 CARGO_TARGET_DIR 环境变量

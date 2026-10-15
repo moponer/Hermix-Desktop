@@ -261,13 +261,18 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 #   1. cargo build --release 想看完整内联展开 → 把 debug 改 "1" 或 "2"
 #   2. dev 编译某个 .rs 报 "missing source location" → 临时改回默认
 #   3. 测试 fail 但 line tables 的栈追踪看不懂 → 临时改回 "1"
+#
+# 2026-10-15: incremental 必须 = false. sccache 对带 -C incremental 的编译
+# 一律判 non-cacheable, 不关则缓存命中率 0%、等于没开 sccache (实测 hermix-config
+# 全量 non-cacheable). 关掉增量后, 改动 crate 整编但依赖树走 sccache 命中,
+# 跨构建 / 跨 worktree / 跨 profile 复用同一套依赖产物, 重建接近秒回.
 [profile.dev]
 debug = "line-tables-only"
-incremental = true
+incremental = false
 
 [profile.test]
 debug = "line-tables-only"
-incremental = true
+incremental = false
 
 # Release profile — 2026-06-25 audit round 3.
 # opt-level=3 is the default; stated explicitly so it doesn't get silently

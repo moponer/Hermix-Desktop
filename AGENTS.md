@@ -126,6 +126,7 @@ Key crates:
   教训：2026-10-06 与 2026-10-08 两次"修了但新装的包里没有"——测试/交付跑在旧二进制上。根因（手工 copy 链 + 三处产物目录分裂）已于 2026-10-09 根治，决策记录：`docs/notes/implemented/architecture/2026-10-09-single-workspace-target-dir.md`。
 - `.cargo/config.toml` hardcodes MSVC linker path — don't override
 - Linker is `rust-lld.exe` (`.cargo/config.toml`), which bypasses Git Bash's `link.exe` shadow entirely — no env script needed
+- **sccache 缓存必须 H 盘 + server 在跑**：`[profile.*] incremental` 禁止改回 `true`（否则 sccache 命中率静默归零、无报错），server 掉则静默回退 C 盘。依据与运维见 `docs/notes/implemented/process/2026-10-15-sccache-h-shared-cache.md`；起 server 用 `scripts/start-sccache.ps1`（已建开机任务 `HermixSccacheServer`）
 - Tauri v2.9.2 doesn't support standalone zip bundle — NSIS produces portable archive
 - `hermix-server` has `test-helpers` feature for integration tests
 - PR禁区: no multi-platform distribution, no external resource sensing, no cross-platform targets
