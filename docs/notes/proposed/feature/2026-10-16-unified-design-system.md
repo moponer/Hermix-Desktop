@@ -40,6 +40,8 @@ L4 视觉单元      → CSS 类承载，只消费令牌，不得声明私有色
 
 **唯一重色纪律（2026-10-16，源自 WorkBuddy 对照分析）**：实色 accent 只允许出现在**每屏的主行动按钮**上；选中态一律 soft/tint 档；连接/运行等**状态语义一律走 success/warning**，不得借用品牌绿；装饰性圆点一律中性灰；进度条与图表刻度属数据语义，可走 accent（豁免登记）。违规样例已全部修正：AIGenerateWizard 选中 chips ×4、AutomationView cron/skill 选中 ×2、InlineExpertPanel 激活专家 ×1（实色→accent-soft）；ImChannelsCard 连接状态点 ×5、BackendSettings/SecurityTab 运行点 ×2（accent→success）。
 
+**阴影零色相（2026-10-16 深夜补充，用户实测暗色绿晕发脏）**：整套阴影系统（投影/晕圈/focus ring）一律中性——聚焦晕圈用主题墨色派生（暗=柔白雾、浅=淡灰雾），focus ring 暗=柔白 22%、浅=墨 30%，主按钮阴影中性墨。品牌色在色彩系统里只剩三个出口：主行动实底、链接、焦点描边着色。
+
 **面阶**（纸最亮 → 卡 → 案 → 底），方向统一为"抬起"：
 
 | 角色 | 语义 |
