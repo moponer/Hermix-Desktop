@@ -424,6 +424,29 @@ function useThrottledValue<T>(value: T, intervalMs: number): T {
   return snapshot;
 }
 
+/**
+ * 归一化 markdown 图片目的地里的 Windows 绝对路径（反斜杠 → 正斜杠）。
+ *
+ * 必须在 satteri 解析**之前**做：CommonMark 把 `\U` `\.` 等反斜杠当转义/
+ * 字面量处理，satteri 会把 `<USERPROFILE>\.hermix\x.png` 搞成
+ * `C:%5CUsers%5CAdministrator.hermix%5C...`——反斜杠被编码、`\.` 的反斜杠
+ * 被吞，路径信息不可逆丢失，下游 convertFileSrc 无力回天（2026-10-17
+ * 对话内截图破图根因）。跳过 fence 内的行，避免改写代码示例。
+ */
+function normalizeWindowsImagePaths(md: string): string {
+  const lines = md.split("\n");
+  let inFence = false;
+  const out = lines.map((line) => {
+    if (/^\s*(```|~~~)/.test(line)) inFence = !inFence;
+    if (inFence) return line;
+    return line.replace(/(!\[[^\]]*\]\()([^)\s]+)(\))/g, (m, pre: string, dest: string, post: string) => {
+      if (!/^[a-zA-Z]:[\\/]|^\\\\/.test(dest)) return m;
+      return pre + dest.replace(/\\/g, "/") + post;
+    });
+  });
+  return out.join("\n");
+}
+
 export const MarkdownBody = memo(function MarkdownBody({ content, onPathClick, pathIcons = false }: MarkdownBodyProps) {
   const handlePathClick = useCallback(onPathClick ?? (() => {}), [onPathClick]);
   const isDark = readIsDark();
@@ -433,7 +456,8 @@ export const MarkdownBody = memo(function MarkdownBody({ content, onPathClick, p
   // 3. satteri 解析 → hast tree
   // 4. hast-util-to-jsx-runtime → React element
   const rendered = useMemo(() => {
-    const balanced = autoCloseUnbalancedFences(content);
+    const normalized = normalizeWindowsImagePaths(content);
+    const balanced = autoCloseUnbalancedFences(normalized);
     const hardened = hardenSoftLineBreaks(balanced);
     const hast = markdownToHast(hardened, SATTERI_FEATURES);
     return toJsxRuntime(hast, {
