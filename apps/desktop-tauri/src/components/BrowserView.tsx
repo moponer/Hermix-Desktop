@@ -94,9 +94,14 @@ export function BrowserView() {
     };
   }, [drawPending]);
 
-  // mount 完即亮窗（Rust visible(false) 先建后亮）。
+  // mount 完即亮窗（Rust visible(false) 先建后亮）。show 不提前台——主窗
+  // 盖在小窗上方时用户会以为没打开（2026-10-17 实测），show 后必须 setFocus。
   useEffect(() => {
-    void getCurrentWindow().show().catch(() => {});
+    const win = getCurrentWindow();
+    void win
+      .show()
+      .then(() => win.setFocus())
+      .catch(() => {});
   }, []);
 
   // 不可见上报：只在 document.hidden（小窗被最小化/完全遮挡）时暂停。

@@ -143,6 +143,7 @@ pub async fn browser_view_open(app: tauri::AppHandle) -> Result<(), String> {
         }
         tracing::warn!("浏览器小窗 5s 未亮窗（子窗页面可能加载失败），Rust 侧兜底 show");
         let _ = win.show();
+        let _ = win.set_focus();
     });
     Ok(())
 }
