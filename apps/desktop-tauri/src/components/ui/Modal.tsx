@@ -69,10 +69,11 @@ export function Modal({ open, onClose, title, children, width = 560, footer, cla
   if (!open) return null;
 
   return createPortal(
-    <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-[var(--color-overlay-scrim)] p-4 backdrop-blur-[4px]"
-      onClick={onClose}
-    >
+    /* 墨与纸 v4 · 弹层纪律（WorkBuddy 设置弹层逐像素采样）：不用遮罩 ——
+       背景保持原亮度，浮层靠自身亮度差 + 底部单向投影"坐"在页面上；
+       无描边；圆角 17px（radius-xl）。backdrop 仅保留点击外部关闭的
+       命中区，视觉全透明。 */
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" onClick={onClose}>
       <div
         ref={panelRef}
         role="dialog"
@@ -81,8 +82,8 @@ export function Modal({ open, onClose, title, children, width = 560, footer, cla
         onClick={(e) => e.stopPropagation()}
         style={{ width, maxWidth: "calc(100vw - 2rem)" }}
         className={cx(
-          "flex max-h-[85vh] flex-col overflow-hidden rounded-[var(--radius-3xl)]",
-          "border border-[var(--color-border-primary)] bg-[var(--color-bg-elevated)]",
+          "flex max-h-[85vh] flex-col overflow-hidden rounded-[var(--radius-xl)]",
+          "bg-[var(--color-bg-elevated)]",
           "shadow-[var(--shadow-modal)]",
           "[animation:modal-scale-in_var(--duration-base,160ms)_var(--ease-out,cubic-bezier(0.16,1,0.3,1))_both]",
           className,

@@ -1478,20 +1478,27 @@ height: 26px;
    胜出，288 个选择器被双定义。以下是仅存在于旧副本里的规则，随该文件
    一并删除。 */
 .user-menu-popover {
-  min-width: 184px;
+  min-width: 220px;
   border-radius: var(--radius-xl);
-  border: 1px solid var(--color-border-subtle);
-  /* 浮层专用令牌：比侧栏（--color-bg-secondary）亮一档，弹出菜单才有层 */
+  /* 墨与纸 v4 · 弹层纪律：无描边 + 底部单向投影（模拟顶光，浮层"坐"在
+     页面上）；背景用 elevated（暗 #262626，接近参考的 #242424）。 */
   background: var(--color-bg-elevated);
   box-shadow:
-    0 4px 24px rgba(0, 0, 0, 0.12),
-    0 1px 4px rgba(0, 0, 0, 0.06);
+    0 20px 48px -12px rgba(0, 0, 0, 0.35),
+    0 8px 20px -10px rgba(0, 0, 0, 0.22);
   overflow: hidden;
   animation: menu-slide-up 0.15s ease-out;
 }
 
 .user-menu-main {
   padding: 4px;
+}
+
+/* 危险项前的独立分隔线（墨与纸 v4）：断开视觉流，让危险操作"隔一段"出现 */
+.user-menu-divider {
+  height: 1px;
+  margin: 4px 8px;
+  background: var(--color-border-subtle);
 }
 
 .user-menu-row {

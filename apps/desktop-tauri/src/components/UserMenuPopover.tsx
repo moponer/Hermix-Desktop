@@ -171,11 +171,14 @@ export function UserMenuPopover({ open, onClose, anchorRef, onNavigateAnalytics,
     >
       {/* Main list */}
       <div className="user-menu-main">
-        {items.map((item) => {
+        {items.map((item, idx) => {
           const Icon = item.icon;
           const showSub = item.hasSub && subMenu === item.key;
           return (
             <div key={item.key}>
+              {/* 墨与纸 v4：危险项前独立分隔（WorkBuddy 用户菜单纪律——
+                  退出/断开这类操作要与常规项隔开一段距离再出现） */}
+              {item.danger && idx > 0 && <div className="user-menu-divider" role="separator" />}
               <button
                 type="button"
                 role="menuitem"
