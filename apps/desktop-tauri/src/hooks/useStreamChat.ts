@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect, useMemo } from "react";
+import { useState, useCallback, useRef, useEffect, useMemo, type SetStateAction } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { AcuiDirective } from "../acui/types";
 import type { ApprovalRequestItem, SubAgentEventPayload } from "../types";
@@ -273,9 +273,9 @@ export function useStreamChat(activeSessionId: string | null) {
   // task_in_flight（排队回执）到达时立刻弹 toast 回显排队内容：状态 chip
   // 太轻，排队等待期间界面无新事件，用户会把"排队"误读成"卡死"
   // （2026-10-15 实机反馈：插入对话后 LLM 静默半分钟才续上）。
-  const setStreamingStatus = useCallback((content: string | null) => {
+  const setStreamingStatus = useCallback((content: SetStateAction<string | null>) => {
     setStreamingStatusState(content);
-    if (content && content.includes('"task_in_flight"')) {
+    if (typeof content === "string" && content.includes('"task_in_flight"')) {
       try {
         const queued = (JSON.parse(content) as { queued_text?: string }).queued_text;
         if (queued) toastInfo(`新消息已排队，当前任务完成后自动发送：${queued}`);

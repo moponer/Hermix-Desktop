@@ -9,7 +9,6 @@ import {
   Sparkles,
   RefreshCw,
   Boxes,
-  Plug,
   X,
   Network,
   Trash2,
