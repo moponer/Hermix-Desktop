@@ -376,10 +376,9 @@
      强调色淡染的中性描边：亮色压在卡片底上是一层极淡的绿调，暗色同理，
      既保留"描边"语义又不引入第二个色相。 */
   --color-primary-fixed-dim: color-mix(in srgb, var(--color-accent) 15%, var(--color-bg-card));
-  /* 主按钮阴影：单团黑影改为品牌绿调双层（贴地 + 扩散），柔和且有"抬起"感。
-     focus ring 此前残留陶土红 rgba(150,68,43)——2026-10-15 改回品牌绿。 */
-  --shadow-button-primary: 0 1px 2px rgba(30, 74, 60, 0.20), 0 3px 10px rgba(30, 74, 60, 0.14);
-  --shadow-focus-ring: 0 0 0 1px rgba(30, 74, 60, 0.30);
+  /* 主按钮阴影（墨与纸 v4：阴影零色相——绿调阴影在暗色下发脏，全部转中性） */
+  --shadow-button-primary: 0 1px 2px rgba(20, 20, 20, 0.20), 0 3px 10px rgba(20, 20, 20, 0.14);
+  --shadow-focus-ring: 0 0 0 1px rgba(20, 20, 20, 0.30);
 
 
   /* ── 语义四色：色相彼此拉开 ≥30°，全部避开品牌蓝区 ──
