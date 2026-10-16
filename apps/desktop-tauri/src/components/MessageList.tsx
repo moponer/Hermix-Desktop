@@ -17,6 +17,7 @@ import { SubAgentPanel } from "./SubAgentPanel";
 import { CompactionStatusBanner } from "./CompactionStatusBanner";
 import { PrefetchIntentChip } from "./MessageBubble";
 import { shouldShowAssistantHeader } from "./chatUtils";
+import { SkeletonCard } from "./ui";
 import type { ChatMessage, SubAgentState } from "../types";
 import type { StreamPhase, TodoSnapshotItem, StreamChatApi } from "../hooks/useStreamChat";
 
@@ -358,6 +359,13 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
               >
                 {historyPaging.loading ? "正在加载更早的消息…" : "加载更早的消息"}
               </button>
+            </div>
+          )}
+          {historyPaging?.loading && (
+            /* 骨架屏：翻页加载中在按钮下方预告两条消息的形状 */
+            <div className="max-w-reading mx-auto flex flex-col gap-5 pt-2" aria-hidden>
+              <SkeletonCard lines={2} />
+              <SkeletonCard lines={3} />
             </div>
           )}
           {streamRow.map((row, idx) => {
