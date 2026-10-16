@@ -200,7 +200,9 @@
 }
 /* 输入区聚焦 = 整体边界亮起品牌绿，"可以说话了"的状态可见 */
 .composer:focus-within {
-  border-color: color-mix(in srgb, var(--color-accent) 45%, var(--color-border-primary));
+  /* 聚焦反馈走阴影不走描边（用户实测：accent 混进边框发脏）——
+     描边只升一档到控件描边色，强调色全部交给 3px 柔光晕。 */
+  border-color: var(--color-border-secondary);
   box-shadow: var(--shadow-paper), 0 0 0 3px var(--color-accent-on-text);
 }
 /* Composer 三层材质 · ③ 底部副条（墨与纸 v4）：渐变贴底而非平涂，
@@ -214,14 +216,11 @@
   height: 38px;
   flex-shrink: 0;
   border-top: 1px solid var(--color-border-primary);
-  /* 渐变向 app 色（远离输入区）压暗一档：暗 #1f1f1f→#1a1a1a、
-     浅 #f6f6f6→#ececec —— 与输入区可感知地分开（此前暗色下两者同为
-     #1f1f1f，用户实测"分不出来"）。 */
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--color-bg-app) 45%, var(--color-bg-input)),
-    var(--color-bg-app)
-  );
+  /* 副条用 tertiary→quaternary 渐变（浅 #ededed→#e3e3e3、暗 #292929→#313131）：
+     与输入区（#f6f6f6 / #1f1f1f）相差一整个明度档，可感知地分开——
+     此前 mix(app) 只差 2%，用户实测"输入框背景与下面的一样"。
+     暗色向下渐亮恰好与 WorkBuddy 副条（#212121→#272727）同向。 */
+  background: linear-gradient(180deg, var(--color-bg-tertiary), var(--color-bg-quaternary));
   /* 副条贴着容器底边，必须内收 1px 跟随容器圆角，否则直角会从
      圆角容器里戳出来（用户实测截图问题 ①） */
   border-radius: 0 0 calc(var(--radius-xl) - 1px) calc(var(--radius-xl) - 1px);
