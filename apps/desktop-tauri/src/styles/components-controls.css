@@ -190,7 +190,9 @@
 
 .composer {
   border-radius: var(--radius-xl);
-  background: var(--color-bg-primary);
+  /* 墨与纸 v4：输入区用 bg-input（暗 #1f1f1f / 浅 #f6f6f6）——与画布
+     （暗 #141414 / 浅 #fff）拉开一档，composer 成为独立面而非"画布上的描边框" */
+  background: var(--color-bg-input);
   border: 1px solid var(--color-border-primary);
   box-shadow: var(--shadow-paper);
   overflow: visible;
@@ -212,11 +214,17 @@
   height: 38px;
   flex-shrink: 0;
   border-top: 1px solid var(--color-border-primary);
+  /* 渐变向 app 色（远离输入区）压暗一档：暗 #1f1f1f→#1a1a1a、
+     浅 #f6f6f6→#ececec —— 与输入区可感知地分开（此前暗色下两者同为
+     #1f1f1f，用户实测"分不出来"）。 */
   background: linear-gradient(
     180deg,
-    color-mix(in srgb, var(--color-bg-app) 50%, var(--color-bg-card)),
-    var(--color-bg-card)
+    color-mix(in srgb, var(--color-bg-app) 45%, var(--color-bg-input)),
+    var(--color-bg-app)
   );
+  /* 副条贴着容器底边，必须内收 1px 跟随容器圆角，否则直角会从
+     圆角容器里戳出来（用户实测截图问题 ①） */
+  border-radius: 0 0 calc(var(--radius-xl) - 1px) calc(var(--radius-xl) - 1px);
 }
 
 
