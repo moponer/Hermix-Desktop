@@ -78,8 +78,11 @@ fn save_geometry(app: &tauri::AppHandle) {
 /// 打开（或聚焦）浏览器小窗。幂等：已开则只聚焦。
 #[tauri::command]
 pub async fn browser_view_open(app: tauri::AppHandle) -> Result<(), String> {
+    eprintln!("[browser-view] open invoked");
     if let Some(win) = app.get_webview_window(VIEW_LABEL) {
-        win.set_focus().map_err(|e| format!("聚焦浏览器小窗失败: {e}"))?;
+        let focused = win.set_focus();
+        eprintln!("[browser-view] window exists, focus result: {focused:?}");
+        focused.map_err(|e| format!("聚焦浏览器小窗失败: {e}"))?;
         return Ok(());
     }
     let mut builder = WebviewWindowBuilder::new(
@@ -104,7 +107,11 @@ pub async fn browser_view_open(app: tauri::AppHandle) -> Result<(), String> {
 
     builder
         .build()
-        .map_err(|e| format!("浏览器小窗创建失败: {e}"))?;
+        .map_err(|e| {
+            eprintln!("[browser-view] BUILD FAILED: {e}");
+            format!("浏览器小窗创建失败: {e}")
+        })?;
+    eprintln!("[browser-view] window built ok");
     // 几何记忆注册在这一刻（WebviewWindow 的 on_window_event，不是 AppHandle
     // ——后者没有这个 API）。窗口销毁后监听自然失效，下次 open 重建时再注册。
     if let Some(win) = app.get_webview_window(VIEW_LABEL) {
