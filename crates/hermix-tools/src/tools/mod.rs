@@ -182,9 +182,10 @@ pub fn register_all(
     // reqwest HTML fetch).
     web::register(registry);
     // Native OS automation (2026-10-13 note): browser line over CDP +
-    // desktop line over UI Automation COM. Registered here, but
-    // both toolsets stay OFF until the operator enables them in
-    // Settings — see os_auto::OPT_IN_TOOLSETS.
+    // desktop line over UI Automation COM. `desktop` stays OFF until
+    // the operator enables it in Settings (os_auto::OPT_IN_TOOLSETS);
+    // `browser` is on the essential hard floor — see
+    // essential::HARD_ESSENTIAL_TOOLSETS.
     os_auto::register(registry);
     // P1.3: list_files / edit_file (aliases of search_files / patch)
     // + list_tools (introspection).

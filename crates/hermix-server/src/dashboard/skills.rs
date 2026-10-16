@@ -319,14 +319,15 @@ pub fn apply_persisted_toolset_state(
             );
         }
     }
-    // Opt-in toolsets (native OS automation: browser / desktop) - LAST,
+    // Opt-in toolsets (native OS automation: `desktop`) - LAST,
     // after both the whitelist reconciliation above and the essential
     // floor. A fresh install starts from the wildcard ["*"], which means
     // "everything we already knew about", not consent to let the agent
-    // drive the operator's real browser and real desktop. Only a literal
-    // toolset name in the persisted list opts in. Same helper
-    // `register_builtin_tools` calls at registration time - the two paths
-    // must agree or a restart flips them back on.
+    // drive the operator's real desktop. Only a literal
+    // toolset name in the persisted list opts in. (`browser` left the
+    // opt-in list in 2026-10-16 — see essential::HARD_ESSENTIAL_TOOLSETS.)
+    // Same helper `register_builtin_tools` calls at registration time -
+    // the two paths must agree or a restart flips them back on.
     let persisted_set: HashSet<String> = persisted.enabled.iter().cloned().collect();
     let opt_in_off = hermix_tools::apply_opt_in_defaults(registry, Some(&persisted_set));
     if opt_in_off > 0 {
@@ -992,14 +993,18 @@ mod tests {
         (reg, registered)
     }
 
-    /// Native OS automation ships **opt-in**: a fresh install starts from
-    /// the wildcard `["*"]`, and that must not switch on the tools that
-    /// drive the operator's real browser and real desktop. Only a literal
-    /// toolset name in `enabled_toolsets.json` opts in. Regression guard for
+    /// Native OS automation split (2026-10-16): `desktop` ships **opt-in**
+    /// — a fresh install starts from the wildcard `["*"]`, and that must
+    /// not switch on tools that drive the operator's real desktop. Only a
+    /// literal toolset name in `enabled_toolsets.json` opts in.
+    /// `browser` left the opt-in list when the virtual-window P0 removed
+    /// the "drives the user's real browser" concern; it is now on the
+    /// essential HARD floor, so it must be enabled even under the wildcard
+    /// default and even when a curated list omits it. Regression guard for
     /// the two reconcile paths (this function and `register_builtin_tools`
     /// step 6) drifting apart.
     #[test]
-    fn os_automation_toolsets_are_opt_in_not_wildcard_enabled() {
+    fn desktop_is_opt_in_but_browser_is_hard_floor() {
         let home = tempdir().unwrap();
         let _home_guard = crate::test_env::EnvGuard::set("HERMIX_HOME", home.path());
         let reg = hermix_tools::ToolRegistry::new();
@@ -1040,21 +1045,41 @@ mod tests {
                 "opt-in toolset `{ts}` must stay disabled under the wildcard default"
             );
         }
+        assert!(
+            all_enabled(hermix_tools::BROWSER_TOOLSET),
+            "`browser` is on the essential hard floor — it must be enabled \
+             under the wildcard default, not hidden behind an opt-in"
+        );
 
-        // Operator names one of them in Settings -> that one comes back on,
-        // the unnamed one stays off.
+        // A curated list that omits `browser` is still overridden by the
+        // hard floor (same semantics as `terminal`/`vault`), while the
+        // opt-in `desktop` stays off.
         std::fs::write(
             home.path().join("enabled_toolsets.json"),
-            r#"{"enabled":["browser"]}"#,
+            r#"{"enabled":["file","web"]}"#,
         )
         .unwrap();
         apply_persisted_toolset_state(&reg, home.path());
         assert!(
             all_enabled(hermix_tools::BROWSER_TOOLSET),
-            "an explicitly listed opt-in toolset must be enabled"
+            "hard-floor toolset `browser` must be re-enabled even when the \
+             curated whitelist omits it"
         );
         assert!(
             all_disabled(hermix_tools::DESKTOP_TOOLSET),
+            "opt-in toolset `desktop` must stay disabled unless explicitly named"
+        );
+
+        // Operator names `desktop` in Settings -> it comes back on.
+        std::fs::write(
+            home.path().join("enabled_toolsets.json"),
+            r#"{"enabled":["browser","desktop"]}"#,
+        )
+        .unwrap();
+        apply_persisted_toolset_state(&reg, home.path());
+        assert!(
+            all_enabled(hermix_tools::DESKTOP_TOOLSET),
+            "an explicitly listed opt-in toolset must be enabled"
         );
     }
     #[test]

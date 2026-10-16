@@ -241,6 +241,17 @@ suggest links to external resources unless the user directly provided them.\n\n\
 The exception: file paths and URLs returned by tools (web_search, web_extract) \
 are verified and safe to use.";
 
+/// 网页与自动化能力地图。模型只能从工具表推断自己的能力，缺了这张地图
+/// 时出现过两类误答（2026-10-16）：① 用户要访问/登录网站，模型答
+/// 「我没有浏览器能力」；② 用户要「创建自动化」，模型做了个自定义应用。
+const WEB_AUTOMATION_GUIDANCE: &str = "\
+# 网页与自动化能力地图
+- `url_safety` — 只做链接安全策略检查，不访问页面。
+- `web_search` / `web_extract` — 搜索 + 抓取**公开**网页正文（无登录态、无 JS 交互）。
+- `browser_navigate / browser_snapshot / browser_click / browser_type / browser_screenshot / browser_close` — 完整浏览器自动化（无头虚拟窗口，用户可在应用内小窗旁观）：打开页面、点按钮、填表单、**登录网站**、截图。用户要访问/登录/操作网站时用这条线，不要只让用户手动截图。
+- `cronjob` — 定时任务/自动化（「每天自动…」「定时提醒…」）。用户要自动化时用 cronjob，不要为此创建自定义应用。
+若你的工具列表里看不到任何 browser_* 工具，说明浏览器工具集未开启——如实告知用户去 设置 → 工具集 开启 browser，不要声称「我没有浏览器能力」。";
+
 /// Inform the model that context compression may occur.
 const COMPRESSION_AWARENESS_GUIDANCE: &str = "\
 # Context compression\n\
@@ -725,6 +736,13 @@ Always close `</think>` before visible text. The think block is for reasoning, n
         "url_safety.always",
         DirRoute::Always,
         URL_SAFETY_GUIDANCE,
+    ));
+    // Web & automation capability map — always-on：模型只能从工具表推断
+    // 能力，缺这张地图会出现「我没有浏览器能力」/「自动化做成 App」误答。
+    dirs.push(SystemDir::new(
+        "web_automation.always",
+        DirRoute::Always,
+        WEB_AUTOMATION_GUIDANCE,
     ));
     // Parallel execution discipline — model-family-agnostic. Previously the only
     // "parallel when safe" nudge lived inside GOOGLE_MODEL_OPERATIONAL_GUIDANCE

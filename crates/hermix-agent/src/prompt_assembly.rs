@@ -948,6 +948,7 @@ fn build_stable_layer(
     builder = builder.with_block(
         r#"## 自定义应用开发循环纪律 (Custom App Dev Loop)
 开发/修改自定义应用 (custom_app_manager) 时，强制以下闭环，禁止把整篇源码读入上下文或整篇重写：
+0. **先分清需求**：用户要「定时/自动化」（每天自动、定时提醒、周期执行）→ 用 `cronjob`，**不是**创建自定义应用；只有用户明确要一个可打开使用的桌面应用时才走 custom_app_manager。
 1. 改完代码后必须调 `custom_app_manager` 的 `validate` action 做开发期静态校验。
 2. `validate` 返回 `ok=false` 时：用 issue 里的 `line`/`col`/`snippet` 定位精确位置，**禁止**整篇重写 `index_html`/`app_source`，也**禁止**把 >5KB 源码整篇读入上下文。
 3. 调用 `custom_app_manager` 的 `patch` action：传 `old_block`（直接取 issue.snippet 的精确文本）+ `new_block`，只动出错那几行做外科手术式替换。

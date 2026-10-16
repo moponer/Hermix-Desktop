@@ -1,6 +1,6 @@
 //! Browser automation — CDP over the **system Edge**, in-house.
 //!
-//! Six tools, one shared browser session, one opt-in toolset. The session owns
+//! Six tools, one shared browser session, one essential-floor toolset. The session owns
 //! the pieces that make a browser session safe to leave running:
 //!
 //! - The process lives in a Job Object with `KILL_ON_JOB_CLOSE`

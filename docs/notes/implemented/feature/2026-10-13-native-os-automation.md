@@ -194,9 +194,12 @@ Firefox/WebKit（CDP 只保 Chromium 系）、`ahk_eval` 式任意代码逃生�
 3. `Page::title()` 不存在（是 `get_title()`），导航是 `goto()` 而非
    `navigate()`。
 
-**默认关闭的实现方式**：`hermix_home/enabled_toolsets.json` 在全新安装时
+**默认关闭的实现方式**（2026-10-16 起仅 `desktop`；`browser` 已移入
+essential 硬地板，见
+`docs/notes/implemented/architecture/2026-10-16-toolset-visibility-browser-cronjob-hard-floor.md`）：
+`hermix_home/enabled_toolsets.json` 在全新安装时
 是通配 `["*"]`，含义是"我们本来就知道的工具全开"，不是"同意让 agent 接管
-我的鼠标键盘"。因此 `OPT_IN_TOOLSETS = ["browser", "desktop"]` 由
+我的鼠标键盘"。因此 `OPT_IN_TOOLSETS = ["desktop"]` 由
 `os_auto::apply_opt_in_defaults` 处理，且启动路径上有**两处** reconcile
 （`register_builtin_tools` 与 hermix-server 的
 `apply_persisted_toolset_state`）必须调用同一个 helper——只改一处会在重启

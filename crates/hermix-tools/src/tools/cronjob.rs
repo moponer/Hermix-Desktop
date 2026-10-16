@@ -38,7 +38,7 @@ pub fn register_with_backend(registry: &ToolRegistry, backend: Arc<dyn CronjobBa
         Arc::new(|| true),
         vec![],
         false,
-        "Manage cron jobs: create, list, update, pause, resume, remove, or run scheduled tasks.",
+        "Manage scheduled automations (cron jobs): create, list, update, pause, resume, remove, or run. 定时任务/自动化（如「每天早上自动…」「定时提醒…」）一律用此工具，不要为此创建自定义应用。",
         "⏰",
         None,
         RiskLevel::Safe,
@@ -245,7 +245,7 @@ impl ToolHandler for CronjobHandler {
 
         tool_schema(
             "cronjob",
-            "Manage cron jobs: create, list, update, pause, resume, remove, or run scheduled tasks.",
+            "Manage scheduled automations (cron jobs): create, list, update, pause, resume, remove, or run. 定时任务/自动化（如「每天早上自动…」「定时提醒…」）一律用此工具，不要为此创建自定义应用。",
             JsonSchema::object(props, vec!["action".into()]),
         )
     }

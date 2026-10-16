@@ -133,12 +133,15 @@ pub fn register_builtin_tools(
         );
     }
 
-    // 6. Opt-in toolsets (native OS automation: `browser` / `desktop`).
+    // 6. Opt-in toolsets (native OS automation: `desktop`).
     // Runs last on purpose — steps 4 and 5 both *enable* toolsets, so
-    // anything earlier would be undone. These ship off even under the
+    // anything earlier would be undone. This ships off even under the
     // `["*"]` wildcard a fresh install starts from: driving the user's
-    // real browser and real desktop is not something a default install
-    // should do to a machine the operator has not opted in.
+    // real desktop is not something a default install should do to a
+    // machine the operator has not opted in.
+    // (`browser` was here too, but the virtual-window P0 removed the
+    // "drives the user's real browser" concern; it now lives on the
+    // essential hard floor — see `essential::HARD_ESSENTIAL_TOOLSETS`.)
     // `hermix-server::dashboard::skills::apply_persisted_toolset_state`
     // calls the same helper with the persisted list, so the two paths
     // cannot drift.

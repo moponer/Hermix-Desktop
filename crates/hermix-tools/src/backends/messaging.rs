@@ -2,28 +2,34 @@
 //!
 //! Two implementations:
 //!
-//! 1. **`SignalMessagingBackend`** — lightweight stub that returns a JSON envelope
-//!    with `status: pending`. Used when no gateway is running (e.g. CLI-only mode).
-//!    The gateway picks up these envelopes from the delivery queue.
+//! 1. **`SignalMessagingBackend`** — default when no gateway is attached.
+//!    **Reports honestly**: it returns an error stating the messaging gateway
+//!    is not wired into this installation. (Historically it returned a fake
+//!    `status: pending` envelope "for the gateway to pick up", but no such
+//!    delivery queue or consumer exists anywhere in this repo — the LLM got
+//!    a false "queued" success. Removed 2026-10-16, same honesty contract
+//!    as the `bbs` tools reporting a missing `HERMIX_BBS_KEY` at execution
+//!    time.)
 //!
-//! 2. **`GatewayMessagingBackend`** — holds an `Arc<DeliveryRouter>` and dispatches
-//!    directly to platform adapters. Used when the gateway is running in-process.
+//! 2. **`GatewayMessagingBackend`** — holds a delivery callback and dispatches
+//!    to platform adapters. Used when the gateway is running in-process.
 //!    This is the "real" backend that achieves parity with Python's `send_message_tool`.
 
 use async_trait::async_trait;
 use serde_json::json;
 
-use crate::tools::messaging::{DeliveryResult, DeliveryStatus, MessagingBackend, ResolvedChannel};
+use crate::tools::messaging::{DeliveryResult, MessagingBackend, ResolvedChannel};
 use hermix_core::ToolError;
 
 // ---------------------------------------------------------------------------
-// SignalMessagingBackend (queued / offline mode)
+// SignalMessagingBackend (no gateway attached — fails honestly)
 // ---------------------------------------------------------------------------
 
-/// Messaging backend that enqueues a delivery request as JSON.
-/// The gateway's delivery loop picks these up and routes them to the
-/// appropriate platform adapter. This is the default backend when the
-/// gateway is not running in-process.
+/// Messaging backend used when no gateway is attached. It **fails honestly**:
+/// every call returns an error stating the messaging gateway is not wired
+/// into this installation, so the LLM never mistakes a dead send for a
+/// queued one. See the module docs for why the old fake-`pending` envelope
+/// was removed.
 pub struct SignalMessagingBackend;
 
 impl SignalMessagingBackend {
@@ -38,60 +44,43 @@ impl Default for SignalMessagingBackend {
     }
 }
 
+const GATEWAY_NOT_WIRED: &str = "send_message is not available: no messaging gateway is \
+attached to this installation, so messages cannot be delivered. Do not claim the \
+message was sent. If the user expects channel delivery (Telegram/Discord/…), tell \
+them the messaging gateway needs to be configured first.";
+
 #[async_trait]
 impl MessagingBackend for SignalMessagingBackend {
     async fn send(
         &self,
-        platform: &str,
-        recipient: &str,
-        message: &str,
+        _platform: &str,
+        _recipient: &str,
+        _message: &str,
     ) -> Result<String, ToolError> {
-        Ok(json!({
-            "type": "messaging_request",
-            "platform": platform,
-            "recipient": recipient,
-            "message": message,
-            "status": "pending",
-            "note": "Message queued for delivery. The gateway will route it to the platform adapter."
-        })
-        .to_string())
+        Err(ToolError::ExecutionFailed(GATEWAY_NOT_WIRED.to_string()))
     }
 
     async fn send_tracked(
         &self,
         channel: &ResolvedChannel,
-        message: &str,
+        _message: &str,
         _split_long: bool,
         _max_chunk_size: usize,
     ) -> Result<DeliveryResult, ToolError> {
-        // In signal mode, we just queue — actual delivery happens later
-        self.send(&channel.platform, &channel.chat_id, message)
-            .await?;
-        Ok(DeliveryResult {
-            platform: channel.platform.clone(),
-            chat_id: channel.chat_id.clone(),
-            status: DeliveryStatus::Queued,
-            chunks_sent: 1,
-            error: None,
-        })
+        Err(ToolError::ExecutionFailed(format!(
+            "{} (target was {}:{})",
+            GATEWAY_NOT_WIRED, channel.platform, channel.chat_id
+        )))
     }
 
     async fn send_file(
         &self,
-        platform: &str,
-        recipient: &str,
-        file_path: &str,
-        caption: Option<&str>,
+        _platform: &str,
+        _recipient: &str,
+        _file_path: &str,
+        _caption: Option<&str>,
     ) -> Result<String, ToolError> {
-        Ok(json!({
-            "type": "file_delivery_request",
-            "platform": platform,
-            "recipient": recipient,
-            "file_path": file_path,
-            "caption": caption,
-            "status": "pending",
-        })
-        .to_string())
+        Err(ToolError::ExecutionFailed(GATEWAY_NOT_WIRED.to_string()))
     }
 }
 
@@ -231,24 +220,44 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn signal_backend_returns_pending() {
+    async fn signal_backend_fails_honestly() {
+        // The old fake-"pending" envelope was a false-success trap: no
+        // consumer of those envelopes exists, so the LLM was told "queued"
+        // for a message that would never deliver. The backend must error.
         let backend = SignalMessagingBackend::new();
-        let result = backend.send("telegram", "12345", "hello").await.unwrap();
-        assert!(result.contains("pending"));
-        assert!(result.contains("telegram"));
+        let err = backend
+            .send("telegram", "12345", "hello")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("gateway"));
+        assert!(!err.to_string().to_lowercase().contains("pending"));
+
+        let err = backend
+            .send_tracked(
+                &ResolvedChannel {
+                    platform: "telegram".into(),
+                    chat_id: "12345".into(),
+                    display_name: None,
+                },
+                "hello",
+                false,
+                4096,
+            )
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("telegram:12345"));
     }
 
     #[tokio::test]
-    async fn signal_backend_file_returns_pending() {
+    async fn signal_backend_file_fails_honestly() {
         let backend = SignalMessagingBackend::new();
         let path = std::env::temp_dir().join("file.png");
         let path_str = path.to_string_lossy().to_string();
-        let result = backend
+        let err = backend
             .send_file("telegram", "12345", &path_str, Some("caption"))
             .await
-            .unwrap();
-        assert!(result.contains("pending"));
-        assert!(result.contains("file.png"));
+            .unwrap_err();
+        assert!(err.to_string().contains("gateway"));
     }
 
     #[tokio::test]

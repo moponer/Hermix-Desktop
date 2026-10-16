@@ -12,9 +12,11 @@
 //!   `hermix-cua` (commit `c6442032`), so every call is funnelled
 //!   through that thread with a hard timeout.
 //!
-//! Both lines are **opt-in**: they are registered, but stay disabled
-//! until the operator flips them on in Settings → Toolsets. See
-//! [`OPT_IN_TOOLSETS`] and [`apply_opt_in_defaults`].
+//! `desktop` is **opt-in**: it is registered, but stays disabled until the
+//! operator flips it on in Settings → Toolsets. See [`OPT_IN_TOOLSETS`]
+//! and [`apply_opt_in_defaults`]. `browser` left the opt-in list when the
+//! virtual-window P0 landed (2026-10-14) — it is on the essential hard
+//! floor, see `crate::essential::HARD_ESSENTIAL_TOOLSETS`.
 
 pub mod browser;
 pub mod desktop;
@@ -47,12 +49,19 @@ pub const DESKTOP_TOOLSET: &str = "desktop";
 ///
 /// Rationale: a wildcard means "everything we know about", and the
 /// operator has never seen these tools in the UI. Driving the user's
-/// real browser (network + navigation + input) and their real desktop
-/// (keyboard injection into whatever window is focused) are the two
-/// most invasive things this agent can do; neither should switch on
-/// because of a default. The Settings → Toolsets tab already renders
-/// any registered toolset with a toggle, so opting in is one click.
-pub const OPT_IN_TOOLSETS: &[&str] = &[BROWSER_TOOLSET, DESKTOP_TOOLSET];
+/// real desktop (keyboard injection into whatever window is focused)
+/// is the most invasive thing this agent can do; it should not switch
+/// on because of a default. The Settings → Toolsets tab already
+/// renders any registered toolset with a toggle, so opting in is one
+/// click.
+///
+/// `browser` used to be on this list for the same reason ("drives the
+/// user's real browser"), but the virtual-window P0 (2026-10-14)
+/// removed that concern: the automation browser is always headless
+/// against a throwaway profile, inputs are synthetic CDP events, and
+/// the picture only ever shows in the app's own sub-window. It moved
+/// to the essential hard floor — see `essential::HARD_ESSENTIAL_TOOLSETS`.
+pub const OPT_IN_TOOLSETS: &[&str] = &[DESKTOP_TOOLSET];
 
 /// Register both lines. Individual handlers own their own risk levels;
 /// this only wires the toolsets into the registry.
@@ -122,8 +131,13 @@ mod tests {
     }
 
     #[test]
-    fn opt_in_toolsets_are_the_two_os_automation_lines() {
-        assert_eq!(OPT_IN_TOOLSETS, &[BROWSER_TOOLSET, DESKTOP_TOOLSET]);
+    fn opt_in_toolsets_are_the_desktop_line_only() {
+        // `browser` left the opt-in list in 2026-10-16: the virtual-window
+        // P0 removed the "drives the user's real browser" concern, so it
+        // moved to the essential hard floor. Only `desktop` (real keyboard
+        // injection into whatever window is focused) still ships off.
+        assert_eq!(OPT_IN_TOOLSETS, &[DESKTOP_TOOLSET]);
+        assert!(!OPT_IN_TOOLSETS.contains(&BROWSER_TOOLSET));
         // A wildcard must never be mistaken for a real toolset name.
         assert!(!OPT_IN_TOOLSETS.contains(&"*"));
         assert!(!OPT_IN_TOOLSETS.contains(&"all"));

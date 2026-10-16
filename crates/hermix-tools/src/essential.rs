@@ -113,6 +113,35 @@ pub const HARD_ESSENTIAL_TOOLSETS: &[&str] = &[
     // 让缺席项自动转正等于废掉它；这里的取舍是——保险库是产品头牌能力，
     // 且本地会话按设计天然可信（见 tools/vault.rs 顶部信任边界），故进硬地板。
     "vault",
+    // cronjob：同一个坑的第三例（2026-10-16）。用户在对话里说「创建一个
+    // 自动化」，LLM 答了 custom_app_manager——cronjob 工具链（工具 +
+    // AutomationScheduler + 真实后端接线）都是完整的，只是 toolset 被
+    // 旧白名单快照静默关掉，LLM 视野里根本没有它。头牌能力 + RiskLevel
+    // ::Safe（创建的是宿主内调度任务，非系统级副作用），进硬地板。
+    "cronjob",
+    // browser：opt-in 的原始理由是「驱动用户的真实浏览器」，但 2026-10-14
+    // 虚拟窗口 P0（docs/notes/implemented/feature/2026-10-14-browser-
+    // virtual-window-p0.md）落地后该理由已消失：恒 headless 虚拟渲染、
+    // 一次性 profile（永非用户自己的浏览器）、CDP 合成事件不进系统输入
+    // 队列、screencast 只进应用内小窗。副作用面与 terminal 同级（Caution
+    // 逐调用过审批闸）。留在 opt-in 的实际效果是整条产品线被藏死：LLM
+    // 不知道它存在，自然也不会引导用户去 Settings 开启。进硬地板。
+    "browser",
+    // 2026-10-16 盘点（第四批，同型坑一次清完）。以下 toolset 都是无条件
+    // 注册的头牌能力，但不在地板上、且系统提示曝光是 `tool_names.contains`
+    // 门控的——toolset 被旧白名单快照关掉时提示一起消失，LLM 连「我本可以
+    // 这么做」都不知道：
+    // - session_search：跨会话记忆召回（「上次聊到…」）。
+    // - todo：多步任务规划 + 前端实时进度卡。
+    // - clarify：唯一向用户提问的通道，关掉后 LLM 变「永不提问」模式。
+    // - delegate_task / get_subagent_result：子代理派单产品线，零上下文
+    //   膨胀约束（AGENTS.md Core principles 3）的执行机制。
+    // （session_search 有条件注册：DB 打开失败跳过并有 warn 日志，属预期。）
+    "session_search",
+    "todo",
+    "clarify",
+    "delegate_task",
+    "get_subagent_result",
 ];
 
 /// Soft essential toolsets — re-enabled by the floor ONLY when the
@@ -143,6 +172,13 @@ pub const ESSENTIAL_TOOLSETS: &[&str] = &[
     "custom_app",
     "workbench",
     "vault",
+    "cronjob",
+    "browser",
+    "session_search",
+    "todo",
+    "clarify",
+    "delegate_task",
+    "get_subagent_result",
     // soft
     "document",
     "storage",
@@ -202,6 +238,13 @@ mod tests {
                 "custom_app",
                 "workbench",
                 "vault",
+                "cronjob",
+                "browser",
+                "session_search",
+                "todo",
+                "clarify",
+                "delegate_task",
+                "get_subagent_result",
             ],
             "HARD_ESSENTIAL_TOOLSETS changed — update the floor and any UI copy."
         );
@@ -272,5 +315,25 @@ mod tests {
             HARD_ESSENTIAL_TOOLSETS.contains(&"vault"),
             "vault (credential vault read tools) must remain in the hard essential floor"
         );
+        // 定时任务：2026-10-16 被旧白名单快照静默关闭过，用户说「创建自动化」
+        // 时 LLM 只能答 custom_app。钉住它。
+        assert!(
+            HARD_ESSENTIAL_TOOLSETS.contains(&"cronjob"),
+            "cronjob (scheduled automation) must remain in the hard essential floor"
+        );
+        // 浏览器自动化：虚拟窗口 P0 落地后副作用面已收敛（headless 虚拟
+        // 渲染 + 一次性 profile），被 opt-in 藏死过一次。钉住它。
+        assert!(
+            HARD_ESSENTIAL_TOOLSETS.contains(&"browser"),
+            "browser (headless virtual-window automation) must remain in the hard essential floor"
+        );
+        // 第四批（2026-10-16 盘点）：跨会话召回 / 任务规划 / 用户提问通道 /
+        // 子代理派单，全是「缺了产品残废」级能力，曾被旧白名单快照静默关闭。
+        for ts in ["session_search", "todo", "clarify", "delegate_task"] {
+            assert!(
+                HARD_ESSENTIAL_TOOLSETS.contains(&ts),
+                "{ts} must remain in the hard essential floor"
+            );
+        }
     }
 }
