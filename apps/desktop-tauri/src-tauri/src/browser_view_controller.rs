@@ -157,14 +157,14 @@ pub async fn browser_view_open(app: tauri::AppHandle) -> Result<(), String> {
     open_or_focus(&app)
 }
 
-/// stdio 桥帧活动回调（由 `stdio_bridge` 在**主线程**上调用）：一段新的
-/// 浏览器帧流开始（距上一帧 ≥60s）时自动弹出小窗。突发（burst）内只在
- /// 开始时弹一次——用户中途关掉的窗口不会被逐帧反复拉起。
-pub fn on_browser_frame_burst(app: &tauri::AppHandle) {
+/// stdio 桥帧活动回调（由 `stdio_bridge` 在**主线程**上调用）：某会话一段
+/// 新的浏览器帧流开始（距上一帧 ≥60s）时自动弹出小窗。突发（burst）内
+/// 只在开始时弹一次——用户中途关掉的窗口不会被逐帧反复拉起。
+pub fn on_browser_frame_burst(app: &tauri::AppHandle, session: &str) {
     if app.get_webview_window(VIEW_LABEL).is_some() {
         return; // 已开着（含最小化/被遮挡），不打扰
     }
-    eprintln!("[browser-view] frame burst detected, auto-opening");
+    eprintln!("[browser-view] frame burst detected (session={session}), auto-opening");
     if let Err(e) = open_or_focus(app) {
         tracing::warn!(error = %e, "浏览器小窗自动弹出失败");
     }
@@ -174,10 +174,11 @@ pub fn on_browser_frame_burst(app: &tauri::AppHandle) {
 /// screencast 编码（CPU 闸门）。浏览器会话在 sidecar 进程，桌面进程自己的
 /// `screencast::pause()` 永远是空操作——指令必须经 stdio 桥发到 sidecar 才
 /// 真生效（评审修正：此前直接调桌面侧 pause 是静默 no-op）。
+/// `session`：多会话并行下暂停哪一路（小窗当前显示的会话）。
 #[tauri::command]
-pub async fn browser_view_set_paused(paused: bool) {
+pub async fn browser_view_set_paused(paused: bool, session: Option<String>) {
     if let Some(bridge) = crate::stdio_bridge::global() {
-        let body = serde_json::json!({ "paused": paused }).to_string();
+        let body = serde_json::json!({ "paused": paused, "session": session }).to_string();
         let _ = bridge
             .http_request("POST", "/api/browser-view/paused", Some(&body))
             .await;

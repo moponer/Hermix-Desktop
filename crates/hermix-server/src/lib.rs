@@ -757,10 +757,18 @@ async fn browser_view_paused(Json(body): Json<serde_json::Value>) -> impl IntoRe
         .get("paused")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+    // 多会话（2026-10-17）：暂停/恢复按会话键作用——小窗当前显示哪个
+    // 会话就停哪路编码。缺省回退 "default"（与工具侧键规则一致）。
+    let session = body
+        .get("session")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("default")
+        .to_string();
     if paused {
-        hermix_tools::tools::os_auto::browser::screencast::pause().await;
+        hermix_tools::tools::os_auto::browser::screencast::pause(&session).await;
     } else {
-        hermix_tools::tools::os_auto::browser::screencast::resume().await;
+        hermix_tools::tools::os_auto::browser::screencast::resume(&session).await;
     }
     (
         [("content-type", "application/json")],

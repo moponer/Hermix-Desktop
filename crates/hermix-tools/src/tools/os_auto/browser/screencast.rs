@@ -1,60 +1,48 @@
-//! Screencast 帧通道——浏览器小窗（`browser-view` 子窗）的画面来源。
+//! Screencast — per-session CDP frame capture (JPEG q60, broadcast, no disk).
 //!
-//! 浏览器恒定 headless（见 `launch`），本机不存在任何浏览器窗口；操作画面
-//! 经 `Page.startScreencast` 的 JPEG 帧流送到 desktop-tauri 的
-//! `browser_view_controller`，渲染成可拖动/可缩放的独立小窗。本机鼠标键盘
-//! 全程不受影响——所有输入走 CDP 合成事件，不进系统输入队列。
-//!
-//! 本模块只管 Chrome → Rust 的帧通道，**不涉及 Tauri**（consumer 在另一个
-//! crate）。职责切分：
-//!
-//! - `start` 幂等：同一时刻只有一条 screencast 通道。Session 建立即调用；
-//!   已存在则直接返回，不会泄漏第二个事件监听。
-//! - 帧必须逐帧 ack（`ScreencastFrameAck`），否则 Chrome 只推第一帧。
-//! - `broadcast` 容量 4：消费慢时丢旧帧保新帧，画面类数据不需要积压；
-//!   无人订阅时 send 直接 Err，零成本丢弃。
-//! - 暂停语义（`pause`/`resume`）：发 `Page.stopScreencast` **彻底停
-//!   Chrome 侧 JPEG 编码**——小窗最小化/遮挡时的 CPU 闸门（评审修正 1：
-//!   此前"只停 Rust→前端推流"是没实测就抄的退化路径，动画页 Edge 照常
-//!   拉满）。`resume` 重发 `start`（CDP restart 成本毫秒级；ego 的 WGC/
-//!   FFmpeg 停流抖动教训不适用于 CDP 路线，真机若见抖动再退化为
-//!   "只降 every_nth_frame"）。`start`/`pause` 幂等，resume 在未暂停时
-//!   是 no-op。
-//! - 单例可重置（`Mutex<Option<..>>` 而非 OnceLock）：Session 被替换时
-//!   Drop 跑 `shutdown()` 清场，新 session 的 start 才能真起一条新流。
+//! 多会话并行（2026-10-17）：每个浏览器会话（键 = `_session_id`）有独立的
+//! 通道与 Page 句柄——两路帧流互不干扰，小窗按会话切换显示。键控 API：
+//! `start(key, &page)` / `receiver(&key)` / `pause(&key)` / `resume(&key)` /
+//! `shutdown(&key)` / `active_keys()`。
 
-use std::sync::{Arc, Mutex, OnceLock};
+use std::collections::HashMap;
+use std::sync::{Arc, OnceLock};
 
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, Mutex};
 
 use super::ToolError;
 
-/// 帧广播发送端。`None` = 无活动 screencast（会话未建立 / 已关闭）。
+/// 帧广播发送端。
 type FrameTx = broadcast::Sender<Arc<Vec<u8>>>;
 
-static CHANNEL: OnceLock<Mutex<Option<FrameTx>>> = OnceLock::new();
+/// 键 → 帧通道。`key` 是浏览器会话键（`_session_id`，无上下文时 "default"）。
+static CHANNELS: OnceLock<Mutex<HashMap<String, FrameTx>>> = OnceLock::new();
 
-/// 当前 screencast 挂在哪个 Page 上（Clone 的 Arc 句柄）。pause/resume
-/// 需要它发 CDP 命令；`None` = 无活动 screencast。
-static PAGE: OnceLock<Mutex<Option<chromiumoxide::Page>>> = OnceLock::new();
+/// 键 → Page 句柄（pause/resume 要对同一页面发 CDP 命令）。
+static PAGES: OnceLock<Mutex<HashMap<String, chromiumoxide::Page>>> = OnceLock::new();
 
-fn channel() -> &'static Mutex<Option<FrameTx>> {
-    CHANNEL.get_or_init(|| Mutex::new(None))
+fn channels() -> &'static Mutex<HashMap<String, FrameTx>> {
+    CHANNELS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn page_slot() -> &'static Mutex<Option<chromiumoxide::Page>> {
-    PAGE.get_or_init(|| Mutex::new(None))
+fn pages() -> &'static Mutex<HashMap<String, chromiumoxide::Page>> {
+    PAGES.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// 当前 screencast 是否在跑（无会话或已关闭时为 false）。
-pub fn is_running() -> bool {
-    channel().lock().map(|g| g.is_some()).unwrap_or(false)
+/// 当前 key 的 screencast 是否在跑。
+pub async fn is_running(key: &str) -> bool {
+    channels().lock().await.contains_key(key)
 }
 
-/// 订阅帧流。返回 `None` = 当前没有活动的 screencast（浏览器会话未建立
-/// 或已关闭）——调用方应稍后重试，而不是当错误。
-pub fn receiver() -> Option<broadcast::Receiver<Arc<Vec<u8>>>> {
-    channel().lock().ok()?.as_ref().map(|tx| tx.subscribe())
+/// 所有活动会话的键（转发器与多路分发用）。
+pub async fn active_keys() -> Vec<String> {
+    channels().lock().await.keys().cloned().collect()
+}
+
+/// 订阅某会话的帧流。`None` = 该会话没有活动 screencast——调用方应稍后
+/// 重试，而不是当错误。
+pub async fn receiver(key: &str) -> Option<broadcast::Receiver<Arc<Vec<u8>>>> {
+    channels().lock().await.get(key).map(|tx| tx.subscribe())
 }
 
 /// screencast 启动参数。start 与 resume 共用同一份——resume 就是对同一
@@ -70,9 +58,9 @@ fn screencast_params() -> chromiumoxide::cdp::browser_protocol::page::StartScree
     }
 }
 
-/// 启动（或确认已启动）当前页面的 screencast。幂等。
-pub async fn start(page: &chromiumoxide::Page) -> Result<(), ToolError> {
-    if is_running() {
+/// 启动（或确认已启动）某会话页面的 screencast。幂等。
+pub async fn start(key: &str, page: &chromiumoxide::Page) -> Result<(), ToolError> {
+    if is_running(key).await {
         return Ok(());
     }
     page.execute(screencast_params())
@@ -104,24 +92,20 @@ pub async fn start(page: &chromiumoxide::Page) -> Result<(), ToolError> {
                 let _ = tx_task.send(Arc::new(bytes));
             }
         }
-        // 事件流结束 = 页面/浏览器没了。CHANNEL 留着死发送端，靠 Session
+        // 事件流结束 = 页面/浏览器没了。CHANNELS 留着死发送端，靠 Session
         // Drop 的 shutdown() 清场（主路径）；此处不清是因为无法分辨
         // "自己的页面死了"与"已被新 session 顶替"。
     });
 
-    let mut guard = channel().lock().map_err(|_| {
-        ToolError::ExecutionFailed("screencast 通道锁中毒".into())
-    })?;
-    if guard.is_some() {
+    let mut guard = channels().lock().await;
+    if guard.contains_key(key) {
         // 竞态输家：重复启动。新起的事件监听随本页 drop 自行结束，
         // 保留先到者的通道。
         return Ok(());
     }
-    *guard = Some(tx);
+    guard.insert(key.to_string(), tx);
     // 记住挂在哪个 Page 上：pause/resume 要对同一页面发 stop/start。
-    if let Ok(mut pg) = page_slot().lock() {
-        *pg = Some(page.clone());
-    }
+    pages().lock().await.insert(key.to_string(), page.clone());
     Ok(())
 }
 
@@ -131,35 +115,38 @@ pub async fn start(page: &chromiumoxide::Page) -> Result<(), ToolError> {
 /// （页面活着），帧泵的 recv 挂起等待；resume 后同一条监听自然续上，
 /// 这正是不能清通道的原因：清了会导致帧泵阻塞在旧 receiver 上永远
 /// 收不到新通道的帧。
-pub async fn pause() {
-    let Some(page) = page_slot().lock().ok().and_then(|g| g.clone()) else {
+pub async fn pause(key: &str) {
+    let Some(page) = pages().lock().await.get(key).cloned() else {
         return;
     };
     use chromiumoxide::cdp::browser_protocol::page::StopScreencastParams;
     let _ = page.execute(StopScreencastParams {}).await;
-    tracing::debug!("screencast paused（Chrome 侧编码已停）");
+    tracing::debug!(key = %key, "screencast paused（Chrome 侧编码已停）");
 }
 
 /// 恢复：对同一页面重发 `start` 参数（Chrome 继续用原会话推帧，监听与
-/// 通道无缝续上）。幂等；页面已死时静默失败——下一次 Session ensure 的
+/// 通道无缝续上）。幂等；页面已死时静默失败——下一次 ensure 的
 /// start 会重建一切。
-pub async fn resume() {
-    let Some(page) = page_slot().lock().ok().and_then(|g| g.clone()) else {
+pub async fn resume(key: &str) {
+    let Some(page) = pages().lock().await.get(key).cloned() else {
         return;
     };
     if let Err(e) = page.execute(screencast_params()).await {
-        tracing::debug!(error = %e, "screencast resume 失败（页面可能已死，等下次 ensure 重建）");
+        tracing::debug!(key = %key, error = %e, "screencast resume 失败（页面可能已死，等下次 ensure 重建）");
     }
 }
 
-/// 同步清空通道。**Session Drop 用**——Chrome 侧推流随页面关闭自动停止，
-/// 无需（也不能在同步 Drop 里）发 CDP 命令。清场后 `start` 可重建。
-pub fn shutdown() {
-    if let Ok(mut guard) = channel().lock() {
-        *guard = None;
+/// 同步清空某会话的通道。**Session Drop 用**——Chrome 侧推流随页面关闭
+/// 自动停止，无需（也不能在同步 Drop 里）发 CDP 命令。清场后 `start`
+/// 可重建。注意：这是同步锁（Drop 里不能 .await），CHANNELS 用的是
+/// tokio Mutex——同步 try_lock 失败时留下死发送端，由下次 start 的
+/// 覆盖注册兜底（与多会话前同款妥协，事件流本身已随页面死亡终止）。
+pub fn shutdown(key: &str) {
+    if let Ok(mut guard) = channels().try_lock() {
+        guard.remove(key);
     }
-    if let Ok(mut pg) = page_slot().lock() {
-        *pg = None;
+    if let Ok(mut pg) = pages().try_lock() {
+        pg.remove(key);
     }
 }
 
@@ -167,25 +154,33 @@ pub fn shutdown() {
 mod tests {
     use super::*;
 
-    /// 单例核心不变量：无会话时 receiver 为 None；有会话时订阅拿得到。
-    /// 与 ignored 实机测试共享进程级 CHANNEL，故用逻辑断言而非硬编码。
-    #[test]
-    fn receiver_tracks_channel_lifecycle() {
-        if is_running() {
-            assert!(receiver().is_some(), "通道在，订阅必须拿得到");
+    /// 键控核心不变量：无会话时 receiver 为 None；start（实机路径）后有。
+    /// 与 ignored 实机测试共享进程级 CHANNELS，故用逻辑断言而非硬编码。
+    #[tokio::test]
+    async fn receiver_tracks_channel_lifecycle() {
+        if is_running("selftest").await {
+            assert!(receiver("selftest").await.is_some(), "通道在，订阅必须拿得到");
         } else {
-            assert!(receiver().is_none(), "通道不在，订阅必须是 None");
+            assert!(receiver("selftest").await.is_none(), "通道不在，订阅必须是 None");
         }
     }
 
     /// shutdown 后可重建：清场 → is_running false → receiver None。
-    /// 放在实机流程后面跑时验证"旧会话清场不挡住新会话起流"。
-    #[test]
-    fn shutdown_clears_the_channel() {
-        shutdown();
-        assert!(!is_running());
-        assert!(receiver().is_none());
-        // 再次 start 的实机路径见 ignored 测试；这里只验证清场语义。
+    #[tokio::test]
+    async fn shutdown_clears_the_channel() {
+        shutdown("selftest-shutdown");
+        assert!(!is_running("selftest-shutdown").await);
+        assert!(receiver("selftest-shutdown").await.is_none());
+    }
+
+    /// 键隔离：shutdown 一个 key 不影响另一个 key 的通道。
+    #[tokio::test]
+    async fn shutdown_is_key_scoped() {
+        // 不起真 Edge：只验证"清 A 不动 B"在空表上是无害 no-op。
+        shutdown("selftest-a");
+        shutdown("selftest-b");
+        assert!(!is_running("selftest-a").await);
+        assert!(!is_running("selftest-b").await);
     }
 
     /// 手工验证原型：启动真实 Edge → screencast 常开（ensure 建立 session
@@ -195,6 +190,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "需要真实 Edge 进程，手工运行"]
     async fn captures_frames_from_real_edge() {
+        let key = "manual-edge-test";
         let launched = super::super::launch::launch()
             .await
             .expect("launch edge");
@@ -209,9 +205,10 @@ mod tests {
         let page = browser.new_page("about:blank").await.expect("new page");
 
         // 幂等：第二次启动不报错、不泄漏监听。
-        start(&page).await.expect("start 1");
-        start(&page).await.expect("start 2 (idempotent)");
-        let mut rx = receiver().expect("receiver");
+        start(key, &page).await.expect("start 1");
+        start(key, &page).await.expect("start 2 (idempotent)");
+        let mut rx = receiver(key).await.expect("receiver");
+        assert!(active_keys().await.contains(&key.to_string()));
 
         page.goto("https://example.com").await.expect("goto");
 
@@ -225,9 +222,9 @@ mod tests {
         }
 
         // 清场后可重建（下一次 ensure 的场景）。
-        shutdown();
-        assert!(!is_running());
-        start(&page).await.expect("restart after shutdown");
-        assert!(receiver().is_some(), "重建后订阅必须拿得到");
+        shutdown(key);
+        assert!(!is_running(key).await);
+        start(key, &page).await.expect("restart after shutdown");
+        assert!(receiver(key).await.is_some(), "重建后订阅必须拿得到");
     }
 }

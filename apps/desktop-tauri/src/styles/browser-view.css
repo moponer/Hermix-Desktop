@@ -65,6 +65,40 @@
   flex: 0 0 auto;
 }
 
+/* 会话标签（多会话并行时出现）：与 .bv-btn 同一家族的低饱和暗色，
+   激活态用亮边框区分——画面本身是主角，标签要退后。 */
+.bv-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 4px 10px 0;
+  background: #1f1f1f;
+  border-bottom: 1px solid #2e2e2e;
+  flex: 0 0 auto;
+  overflow-x: auto;
+}
+.bv-tab {
+  appearance: none;
+  border: 1px solid transparent;
+  border-bottom: none;
+  background: #262626;
+  color: #b8b8b8;
+  border-radius: 4px 4px 0 0;
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.bv-tab:hover {
+  background: #303030;
+  color: #e8e8e8;
+}
+.bv-tab--active {
+  background: #1f1f1f;
+  border-color: #4a4a4a;
+  color: #ffffff;
+  font-weight: 600;
+}
+
 .bv-btn {
   appearance: none;
   border: 1px solid #3a3a3a;

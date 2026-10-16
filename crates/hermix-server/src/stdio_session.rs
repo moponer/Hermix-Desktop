@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use axum::{body::Body, http::Method};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc};
 
 use crate::state::HttpServerState;
 use crate::transport::{ChannelSink, ChannelSource, Transport};
@@ -163,43 +163,73 @@ pub async fn run_stdio_server(state: HttpServerState) -> Result<(), hermix_core:
 
 /// 浏览器小窗帧转发器（sidecar 进程内）。
 ///
-/// 浏览器会话（headless Edge + screencast）只在 sidecar 进程建立，`screencast::CHANNEL`
-/// 是进程内 `static` 单例，桌面进程读不到。本任务订阅**本进程**的 `receiver()`，
-/// 把每帧 JPEG 以 `channel="browser-frame"` 的信封经 stdout 写回桌面端——
-/// 桌面端 `stdio_bridge` 读线程会把它转成 `stdio-frame` 事件推给前端 `BrowserView`。
+/// 浏览器会话（headless Edge + screencast）只在 sidecar 进程建立，桌面进程
+/// 读不到进程内单例。本任务多路轮询**本进程**所有活动会话的 `receiver(key)`
+/// （键 = `_session_id`，多会话并行时各路帧流独立），把每帧 JPEG 以
+/// `channel="browser-frame"`、payload 带 `session` 键的信封经 stdout 写回
+/// 桌面端——桌面端 `stdio_bridge` 读线程转成 `stdio-frame` 事件，前端
+/// `BrowserView` 按会话切换显示。
 ///
-/// 没有会话时 `receiver()` 为 None，循环 sleep 轮询；会话建立后拿到 receiver 即开始转发；
-/// 会话关闭（broadcast 发送端被 Drop）后 `recv()` 结束，回到外层等下一个会话——
-/// 与 desktop-tauri 旧帧泵（曾错误地读桌面自己的空 receiver）同一套轮询骨架。
+/// 没有会话时 100ms 轮询；会话建立后对每个 key 非阻塞排空 broadcast
+/// （Lagged 即丢帧——监控流宁可跳帧不可积压）。
 fn spawn_browser_frame_forwarder(writer_tx: mpsc::Sender<String>) {
     tokio::spawn(async move {
         use base64::Engine as _;
         use hermix_tools::tools::os_auto::browser::screencast;
+        let mut receivers: HashMap<String, broadcast::Receiver<Arc<Vec<u8>>>> =
+            HashMap::new();
         loop {
-            let Some(mut rx) = screencast::receiver() else {
+            let keys = screencast::active_keys().await;
+            // 清掉已消失会话的 receiver。
+            receivers.retain(|k, _| keys.contains(k));
+            if keys.is_empty() {
                 tokio::time::sleep(std::time::Duration::from_millis(300)).await;
                 continue;
-            };
-            while let Ok(frame) = rx.recv().await {
-                let b64 = base64::engine::general_purpose::STANDARD.encode(&*frame);
-                let payload = serde_json::json!({
-                    "data": format!("data:image/jpeg;base64,{b64}"),
-                    "bytes": frame.len(),
-                })
-                .to_string();
-                let envelope = serde_json::json!({
-                    "channel": "browser-frame",
-                    "payload": payload,
-                })
-                .to_string();
-                // writer 队列满（前端掉线/卡顿）→ 丢旧帧保新帧：监控帧不需要积压。
-                // 队列已关闭（stdout 断）→ 退出转发任务。
-                match writer_tx.try_send(envelope) {
-                    Ok(()) => {}
-                    Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {}
-                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => return,
+            }
+            let mut forwarded = 0usize;
+            for key in &keys {
+                if !receivers.contains_key(key) {
+                    if let Some(rx) = screencast::receiver(key).await {
+                        receivers.insert(key.clone(), rx);
+                    }
+                    continue;
+                }
+                let rx = receivers.get_mut(key).expect("checked above");
+                loop {
+                    match rx.try_recv() {
+                        Ok(frame) => {
+                            let b64 = base64::engine::general_purpose::STANDARD.encode(&*frame);
+                            let payload = serde_json::json!({
+                                "data": format!("data:image/jpeg;base64,{b64}"),
+                                "bytes": frame.len(),
+                                "session": key,
+                            })
+                            .to_string();
+                            let envelope = serde_json::json!({
+                                "channel": "browser-frame",
+                                "payload": payload,
+                            })
+                            .to_string();
+                            // writer 队列满（前端掉线/卡顿）→ 丢旧帧保新帧：监控帧不需要积压。
+                            // 队列已关闭（stdout 断）→ 退出转发任务。
+                            match writer_tx.try_send(envelope) {
+                                Ok(()) => forwarded += 1,
+                                Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {}
+                                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => return,
+                            }
+                        }
+                        Err(broadcast::error::TryRecvError::Empty) => break,
+                        Err(broadcast::error::TryRecvError::Lagged(_)) => continue, // 丢帧保新
+                        Err(broadcast::error::TryRecvError::Closed) => {
+                            receivers.remove(key);
+                            break;
+                        }
+                    }
                 }
             }
+            // 有活动会话时高频排空（20fps×N 路），空闲再降频。
+            let idle_ms = if forwarded > 0 { 50 } else { 200 };
+            tokio::time::sleep(std::time::Duration::from_millis(idle_ms)).await;
         }
     });
 }

@@ -1,6 +1,7 @@
 //! Browser automation — CDP over the **system Edge**, in-house.
 //!
-//! Six tools, one shared browser session, one essential-floor toolset. The session owns
+//! Six tools, one browser session **per conversation** (keyed by `_session_id`),
+//! one essential-floor toolset. Each session owns
 //! the pieces that make a browser session safe to leave running:
 //!
 //! - The process lives in a Job Object with `KILL_ON_JOB_CLOSE`
@@ -139,8 +140,7 @@ pub fn register(registry: &ToolRegistry) {
             risk,
             false,
         );
-        // One shared browser page: two of these running at once would interleave
-        // a click with a snapshot that invalidates its refs.
+        // One shared browser page: two of these running at once would interleave        // a click with a snapshot that invalidates its refs.
         registry.mark_interactive(name);
     }
 }
@@ -150,6 +150,8 @@ pub fn register(registry: &ToolRegistry) {
 // ---------------------------------------------------------------------------
 
 struct Session {
+    /// 本会话的键（`_session_id`）；Drop 清 screencast 时要拿它找通道。
+    key: String,
     browser: Browser,
     page: Page,
     /// Polls the CDP event stream. chromiumoxide will not answer any command
@@ -162,17 +164,24 @@ struct Session {
     /// `ref` → DOM node, replaced wholesale by every snapshot.
     refs: HashMap<String, BackendNodeId>,
     snapshots: u64,
+    /// 空闲回收计时：每 ensure 触碰即刷新。
+    last_used: std::time::Instant,
 }
+
+/// 每个对话一个浏览器；同时存活的浏览器实例上限（每个 Edge 数百 MB）。
+const MAX_SESSIONS: usize = 4;
+/// 空闲超过该时长的会话在下次 ensure 时被回收（Drop 杀 Edge 树 + 清 profile）。
+const IDLE_REAP_AFTER: std::time::Duration = std::time::Duration::from_secs(15 * 60);
 
 impl Drop for Session {
     fn drop(&mut self) {
         // The handler task waits on a WebSocket owned by `browser`; aborting it
         // first avoids a task that outlives the session it was serving.
         self._handler_task.abort();
-        // Clear the screencast channel so the next session's start() builds a
-        // fresh one. Chrome-side pushing dies with the page on its own — this
-        // is the synchronous bookkeeping half only.
-        screencast::shutdown();
+        // Clear THIS session's screencast channel so a later session with the
+        // same key starts a fresh one. Chrome-side pushing dies with the page
+        // on its own — this is the synchronous bookkeeping half only.
+        screencast::shutdown(&self.key);
         let dir = self._launched.user_data_dir.clone();
         // A throwaway profile is a few MB of cache; leaving thousands of them
         // behind would be worse than the few ms this can cost.
@@ -182,59 +191,97 @@ impl Drop for Session {
     }
 }
 
-static SESSION: OnceLock<Mutex<Option<Session>>> = OnceLock::new();
+static SESSIONS: OnceLock<Mutex<HashMap<String, Session>>> = OnceLock::new();
 
-fn session() -> &'static Mutex<Option<Session>> {
-    SESSION.get_or_init(|| Mutex::new(None))
+fn sessions() -> &'static Mutex<HashMap<String, Session>> {
+    SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// The live session, starting one if needed.
+/// 从工具参数取浏览器会话键。registry 的 `dispatch_with_context` 会把
+/// `_session_id` 注入 params（多会话并行用浏览器的隔离键）；无上下文
+/// （测试 / headless 调度）落回 `"default"`。
+fn session_key(params: &Value) -> String {
+    params
+        .get("_session_id")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("default")
+        .to_string()
+}
+
+/// The live session for `key`, starting one if needed.
 ///
 /// The browser is always headless and the screencast starts with the session:
 /// the `browser-view` sub-window has frames from the very first navigation,
 /// and the model has no parameter that could produce a real, focus-stealing
 /// window.
-async fn ensure() -> Result<MutexGuard<'static, Option<Session>>, ToolError> {
-    let mut guard = session().lock().await;
-    if guard.is_none() {
-        let launched = launch::launch()
-            .await
-            .map_err(ToolError::ExecutionFailed)?;
-        let (browser, mut handler) = Browser::connect(launched.ws_url.clone())
-            .await
-            .map_err(|e| {
-                ToolError::ExecutionFailed(format!("连接 Edge 调试端口失败 ({}): {e}", launched.ws_url))
-            })?;
-        let handler_task = tokio::spawn(async move {
-            use futures::StreamExt;
-            while handler.next().await.is_some() {}
-        });
-        let page = browser
-            .new_page("about:blank")
-            .await
-            .map_err(|e| ToolError::ExecutionFailed(format!("创建标签页失败: {e}")))?;
-        // Pitfall F5: without an explicit target, downloads land in the
-        // process CWD and dialogs block the navigation that raised them.
-        if let Err(e) = set_download_dir(&page).await {
-            tracing::warn!(error = %e, "设置浏览器下载目录失败（下载行为保持默认）");
+///
+/// 键控多会话（2026-10-17）：每个对话独立 Edge 实例（独立 profile、独立
+/// screencast），互不串页面。整张表共用一把锁——单次调用串行化，足以
+/// 防止 click/snapshot 交错；跨对话的调用序列隔离由键本身保证。
+async fn ensure(key: &str) -> Result<MutexGuard<'static, HashMap<String, Session>>, ToolError> {
+    let mut guard = sessions().lock().await;
+    // 空闲回收先行：释放预算，也避免 Edge 实例无上限累积。
+    guard.retain(|k, s| {
+        let idle = s.last_used.elapsed();
+        if idle >= IDLE_REAP_AFTER {
+            tracing::info!(session = %k, idle_secs = idle.as_secs(), "回收空闲浏览器会话");
+            false
+        } else {
+            true
         }
-        // Frames flow from the first navigation on: the sub-window never has
-        // to wait for a tool call to "turn the camera on".
-        if let Err(e) = screencast::start(&page).await {
-            // Losing the picture must not kill the session — the model works
-            // off the AX tree; the window is for the operator.
-            tracing::warn!(error = %e, "screencast 启动失败（浏览器小窗将无画面，工具不受影响）");
-        }
-        tracing::info!(ws = %launched.ws_url, "automation browser started");
-        *guard = Some(Session {
+    });
+    if let Some(s) = guard.get_mut(key) {
+        s.last_used = std::time::Instant::now();
+        return Ok(guard);
+    }
+    if guard.len() >= MAX_SESSIONS {
+        return Err(ToolError::ExecutionFailed(format!(
+            "浏览器并发会话已达上限（{MAX_SESSIONS}），请先让部分对话调用 browser_close 释放"
+        )));
+    }
+    let launched = launch::launch()
+        .await
+        .map_err(ToolError::ExecutionFailed)?;
+    let (browser, mut handler) = Browser::connect(launched.ws_url.clone())
+        .await
+        .map_err(|e| {
+            ToolError::ExecutionFailed(format!("连接 Edge 调试端口失败 ({}): {e}", launched.ws_url))
+        })?;
+    let handler_task = tokio::spawn(async move {
+        use futures::StreamExt;
+        while handler.next().await.is_some() {}
+    });
+    let page = browser
+        .new_page("about:blank")
+        .await
+        .map_err(|e| ToolError::ExecutionFailed(format!("创建标签页失败: {e}")))?;
+    // Pitfall F5: without an explicit target, downloads land in the
+    // process CWD and dialogs block the navigation that raised them.
+    if let Err(e) = set_download_dir(&page).await {
+        tracing::warn!(error = %e, "设置浏览器下载目录失败（下载行为保持默认）");
+    }
+    // Frames flow from the first navigation on: the sub-window never has
+    // to wait for a tool call to "turn the camera on".
+    if let Err(e) = screencast::start(key, &page).await {
+        // Losing the picture must not kill the session — the model works
+        // off the AX tree; the window is for the operator.
+        tracing::warn!(error = %e, "screencast 启动失败（浏览器小窗将无画面，工具不受影响）");
+    }
+    tracing::info!(ws = %launched.ws_url, session = %key, "automation browser started");
+    guard.insert(
+        key.to_string(),
+        Session {
+            key: key.to_string(),
             browser,
             page,
             _handler_task: handler_task,
             _launched: launched,
             refs: HashMap::new(),
             snapshots: 0,
-        });
-    }
+            last_used: std::time::Instant::now(),
+        },
+    );
     Ok(guard)
 }
 
@@ -448,6 +495,7 @@ struct BrowserHandler {
 #[async_trait]
 impl ToolHandler for BrowserHandler {
     async fn execute(&self, params: Value) -> Result<String, ToolError> {
+        let session_key = session_key(&params);
         let out: Result<String, ToolError> = match self.op {
             Op::Navigate => {
                 let raw = params
@@ -457,8 +505,8 @@ impl ToolHandler for BrowserHandler {
                 let url = validate_url(raw)?.to_string();
                 let timeout_ms = opt_usize(&params, "timeout_ms", 30_000, 120_000) as u64;
 
-                let mut guard = ensure().await?;
-                let session = guard.as_mut().expect("ensure() leaves a session");
+                let mut guard = ensure(&session_key).await?;
+                let session = guard.get_mut(&session_key).expect("ensure() leaves a session");
                 tokio::time::timeout(
                     Duration::from_millis(timeout_ms),
                     session.page.goto(url.clone()),
@@ -485,8 +533,8 @@ impl ToolHandler for BrowserHandler {
                 let max_nodes = opt_usize(&params, "max_nodes", 800, MAX_NODES);
                 let max_chars = opt_usize(&params, "max_chars", RESULT_CAP, RESULT_CAP);
 
-                let mut guard = ensure().await?;
-                let session = guard.as_mut().expect("ensure() leaves a session");
+                let mut guard = ensure(&session_key).await?;
+                let session = guard.get_mut(&session_key).expect("ensure() leaves a session");
                 let (tree, refs) =
                     a11y::snapshot_with_refs(&session.page, max_depth, max_nodes)
                         .await
@@ -504,8 +552,8 @@ impl ToolHandler for BrowserHandler {
             }
             Op::Click => {
                 exactly_one(&params, "ref", "selector")?;
-                let mut guard = ensure().await?;
-                let session = guard.as_mut().expect("ensure() leaves a session");
+                let mut guard = ensure(&session_key).await?;
+                let session = guard.get_mut(&session_key).expect("ensure() leaves a session");
                 if let Some(reference) = opt_str(&params, "ref") {
                     let id = *resolve_ref(&session.refs, &reference)?;
                     click_node(&session.page, id).await?;
@@ -538,8 +586,8 @@ impl ToolHandler for BrowserHandler {
                     ));
                 }
 
-                let mut guard = ensure().await?;
-                let session = guard.as_mut().expect("ensure() leaves a session");
+                let mut guard = ensure(&session_key).await?;
+                let session = guard.get_mut(&session_key).expect("ensure() leaves a session");
                 let target = opt_str(&params, "ref")
                     .map(|r| format!("`{r}`"))
                     .unwrap_or_else(|| {
@@ -571,8 +619,8 @@ impl ToolHandler for BrowserHandler {
             }
             Op::Screenshot => {
                 let full_page = bool_param(&params, "full_page", false);
-                let mut guard = ensure().await?;
-                let session = guard.as_mut().expect("ensure() leaves a session");
+                let mut guard = ensure(&session_key).await?;
+                let session = guard.get_mut(&session_key).expect("ensure() leaves a session");
                 let png = capture(&session.page, full_page).await?;
                 let path = screenshot_path();
                 if let Some(parent) = path.parent() {
@@ -589,12 +637,13 @@ impl ToolHandler for BrowserHandler {
                 ))
             }
             Op::Close => {
-                // Taking the session out and dropping it closes the job handle,
-                // which is what actually terminates Edge.
-                let taken = session().lock().await.take();
+                // Taking THIS conversation's session out and dropping it closes
+                // the job handle, which is what actually terminates Edge.
+                // 其它对话的浏览器实例不受影响（键控多会话）。
+                let taken = sessions().lock().await.remove(&session_key);
                 match taken {
-                    Some(_) => Ok("已关闭自动化浏览器并清理其临时 profile。".to_string()),
-                    None => Ok("没有正在运行的自动化浏览器，无需关闭。".to_string()),
+                    Some(_) => Ok("已关闭本对话的自动化浏览器并清理其临时 profile。".to_string()),
+                    None => Ok("本对话没有正在运行的自动化浏览器，无需关闭。".to_string()),
                 }
             }
         };
