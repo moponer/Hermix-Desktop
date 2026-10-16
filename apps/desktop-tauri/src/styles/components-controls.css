@@ -107,7 +107,12 @@
 .textarea:focus-visible,
 .select:focus-visible {
   outline: none;
-  border-color: var(--color-border-secondary);
+  /* 聚焦反馈 = 1px 描边着色 + 3px 极淡品牌绿晕（2026-10-15 前 focus 无任何
+     视觉变化，用户只能靠猜）。文本类已退出全局 outline，反馈由这里承担。 */
+  border-color: var(--color-accent);
+  /* 晕圈用 alpha 派生档（accent-on-text）而非 accent-soft：后者是混白派生，
+     暗色主题下会算出亮绿色块；alpha 叠加在任何底色上都成立。 */
+  box-shadow: 0 0 0 3px var(--color-accent-on-text);
 }
 .textarea { min-height: 70px; resize: vertical; line-height: 1.5; font-family: var(--font-mono); }
 
@@ -189,6 +194,29 @@
   border: 1px solid var(--color-border-primary);
   box-shadow: var(--shadow-paper);
   overflow: visible;
+  transition: border-color var(--duration-fast) ease, box-shadow var(--duration-fast) ease;
+}
+/* 输入区聚焦 = 整体边界亮起品牌绿，"可以说话了"的状态可见 */
+.composer:focus-within {
+  border-color: color-mix(in srgb, var(--color-accent) 45%, var(--color-border-primary));
+  box-shadow: var(--shadow-paper), 0 0 0 3px var(--color-accent-on-text);
+}
+/* Composer 三层材质 · ③ 底部副条（墨与纸 v4）：渐变贴底而非平涂，
+   顶部分隔线与外框描边共用同一 token（--color-border-primary）——
+   内部层次与外部轮廓共用一根线（WorkBuddy 规律 6）。 */
+.composer-subbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 10px;
+  height: 38px;
+  flex-shrink: 0;
+  border-top: 1px solid var(--color-border-primary);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--color-bg-app) 50%, var(--color-bg-card)),
+    var(--color-bg-card)
+  );
 }
 
 
@@ -231,7 +259,7 @@
   position: fixed;
   inset: 0;
   z-index: 60;
-  background: rgba(0, 0, 0, 0.4);
+  background: var(--color-overlay-scrim);
   backdrop-filter: blur(4px);
   -webkit-backdrop-filter: blur(4px);
   display: flex;

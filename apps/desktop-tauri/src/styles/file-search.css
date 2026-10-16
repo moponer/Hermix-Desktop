@@ -173,11 +173,17 @@
   background: #b5d4f4;
 }
 
-/* ── 表头 ── */
-.fsw-header-row {
+/* ── 列骨架（表头与结果行共用一份 grid-template；R3-7 前是两份
+      各写各的，改列宽必须同步两处）── */
+.fsw-header-row,
+.fsw-row {
   display: grid;
   grid-template-columns: minmax(180px, 1.1fr) 2fr 72px 128px;
   gap: 10px;
+}
+
+/* ── 表头 ── */
+.fsw-header-row {
   padding: 4px 14px;
   color: #8a8a84;
   font-size: 11px;
@@ -201,9 +207,6 @@
   color: #ef9f27;
 }
 .fsw-row {
-  display: grid;
-  grid-template-columns: minmax(180px, 1.1fr) 2fr 72px 128px;
-  gap: 10px;
   align-items: center;
   height: 32px;
   padding: 0 14px;

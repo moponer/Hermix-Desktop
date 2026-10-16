@@ -24,44 +24,51 @@
    完整覆盖 CONTRACT 全部色彩令牌 —— 缺一项 checker 即失败。
    ════════════════════════════════════════════════════════════════════ */
 :root[data-theme="ink-green"]:root {
-  /* ── 面（纸最亮 → 卡 → 案 → 最深，与亮色基线同方向） ── */
-  --color-bg-app: #f2f3f5;         /* 案·最外层：窗口底、列间空隙 */
-  --color-bg-primary: #ffffff;     /* 纸·对话与主区底 = 最亮 */
-  --color-bg-card: #f7f8fa;        /* 面·卡片（压纸一档） */
-  --color-bg-base: #eef0f3;
-  --color-bg-secondary: #eef0f3;   /* 案·侧栏 / 顶栏 */
-  --color-bg-inset: #eef0f3;
-  --color-bg-input: #f7f8fa;
-  --color-bg-card-hover: #eef0f3;
-  --color-bg-tertiary: #e3e6ea;    /* 案·深一档：分隔区 / chip */
-  --color-bg-hover: #e3e6ea;
-  --color-bg-active: #d9dee3;      /* 派生：比 #e3e6ea 再深一档 */
-  --color-bg-quaternary: #d9dee3;  /* 派生 */
+  /* ── 面（纸最亮 → 卡 → 案 → 最深，与亮色基线同方向） ──────────────
+     2026-10-16 重排：原取值是**偏蓝的灰**（#f2f3f5 / #eef0f3 / #e3e6ea），
+     与墨绿主色 #2f6b4f 不同族 —— 在桌面端（Windows gamma 2.2）尤其明显：
+     蓝灰衬绿会显得"脏、发闷"。新轴改为与墨绿同族的绿灰，且饱和度略高于
+     宣纸主题（4-6% vs 2-3%），两套主题因此一冷一暖，可辨认而不雷同。
+     相邻明度差 ≥4%，面间亮度比 ≥1.06 —— 桌面端 125%/150% 缩放下的硬门槛。 */
+  --color-bg-app: #e2e9e5;         /* 案·最外层：窗口底、列间空隙（最深） */
+  --color-bg-primary: #fdfefd;     /* 纸·对话与主区底 = 最亮 */
+  --color-bg-card: #f3f7f4;        /* 面·卡片（压纸一档） */
+  --color-bg-base: #e8eeea;
+  --color-bg-secondary: #e8eeea;   /* 案·侧栏 / 顶栏 */
+  --color-bg-inset: #e8eeea;
+  --color-bg-input: #f3f7f4;
+  --color-bg-card-hover: #dbe3de;
+  --color-bg-tertiary: #dbe3de;    /* 案·深一档：分隔区 / chip */
+  --color-bg-hover: #dbe3de;
+  --color-bg-active: #ced8d2;
+  --color-bg-quaternary: #ced8d2;
   --color-bg-elevated: #ffffff;    /* 浮·弹层 / 菜单 */
 
   /* Code / chat 场景面板 */
-  --color-bg-code: #f7f8fa;
-  --color-bg-code-header: #f2f3f5;
-  --color-bg-code-border: #e3e6ea;
-  --color-chat-assistant-bg: #ffffff;
-  --color-chat-tool-bg: #f7f8fa;
+  --color-bg-code: #f5f8f6;
+  --color-bg-code-header: #f0f5f2;
+  --color-bg-code-border: #e2eae5;
+  --color-chat-assistant-bg: #fdfefd;
+  --color-chat-tool-bg: #f5f8f6;
   --color-chat-terminal-bg: #17181b;  /* 终端恒暗：任何主题都一样 */
 
-  /* ── 分隔线 ── */
-  --color-border-subtle: #eef0f3;
-  --color-border-primary: #e3e6ea;
-  --color-border-secondary: #c8cdd3;  /* 派生：控件描边（WCAG 1.4.11 3:1） */
-  --color-border: #868d94;            /* 派生：强描边 / focus 参照 */
-  --color-border-strong: #868d94;
+  /* ── 分隔线：与所压底色亮度比 ≥1.10（缩放重采样余量） ── */
+  --color-border-subtle: #edf2ef;
+  --color-border-primary: #e0e9e4;
+  --color-border-secondary: #c6d2cb;  /* 控件描边（WCAG 1.4.11 3:1） */
+  --color-border: #7b8b83;            /* 强描边 / focus 参照 */
+  --color-border-strong: #7b8b83;
 
-  /* ── 文字：三级墨 ── */
-  --color-text-primary: #1a1d21;
-  --color-text-secondary: #5f636b;
-  --color-text-tertiary: #7d838b;   /* 派生：#5f636b 与 #9aa0a8 之间 */
-  --color-text-muted: #7d838b;
-  --color-text-faint: #9aa0a8;
-  --color-text-on-code: #33383e;
-  --color-text-thinking: #7d838b;   /* 过程文字 = tertiary，不与结论抢通道 */
+  /* ── 文字：四级墨，全部 ≥4.5:1 压在最深案面 #e8eeea 上 ── */
+  --color-text-primary: #1b221e;
+  --color-text-secondary: #54635b;
+  --color-text-tertiary: #5c6a62;
+  --color-text-muted: #5c6a62;
+  --color-text-faint: #5e6c64;
+  --color-text-on-code: #323c36;
+  --color-text-thinking: #5c6a62;   /* 过程文字 = tertiary，不与结论抢通道 */
+  /* hero 满对比（暗底主题用白）：空态大标题专用（墨与纸 v4） */
+  --color-text-hero: #ffffff;
 
   /* ── 墨：主色墨绿 #2f6b4f（新造品牌色，与亮色基线的青碧 #1e4a3c 分叉） ── */
   --color-accent: #2f6b4f;

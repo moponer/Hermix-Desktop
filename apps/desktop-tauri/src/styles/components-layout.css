@@ -158,15 +158,15 @@
   background: transparent;
   transition: background var(--duration-fast) ease;
 }
-.pane-resizer:hover { background: var(--color-accent-soft); }
-.pane-resizer:active { background: var(--color-accent-soft-strong); }
+.pane-resizer:hover { background: var(--color-bg-hover); }
+.pane-resizer:active { background: var(--color-bg-active); }
 .pane-resizer-right { right: 0; }
 .pane-resizer-left { left: 0; }
 
 .pane-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: var(--color-overlay-scrim);
   z-index: 10;
 }
 
@@ -246,19 +246,12 @@
   user-select: none;
 }
 .titlebar-brand .titlebar-title { pointer-events: none; }
-.titlebar-logo {
-  /* 22px 略大于 20px：与新 SVG 圆角 + 狐狸头比例更协调 */
-  width: 22px;
-  height: 22px;
-  flex-shrink: 0;
-  pointer-events: none;
-  /* 抗锯齿：SVG 缩放时边缘更锐利 */
-  shape-rendering: geometricPrecision;
-}
+/* 墨与纸 v4：titlebar-logo（吉祥物图版）已移除，品牌 = 纯文字。
+   名字升为 text-primary 满对比（WorkBuddy 文字 logo 规律）。 */
 .titlebar-title {
   font-size: var(--font-size-body);
   font-weight: 600;
-  color: var(--color-text-secondary);
+  color: var(--color-text-primary);
   /* 2026-09-30：负字距对中文小字是负优化（字面粘连）。改 0。 */
   letter-spacing: 0;
   pointer-events: none;
@@ -410,7 +403,9 @@
      与会话行同高，整栏落在同一条基线网格上。 */
   padding: 6px 10px;
   border-radius: var(--radius-md);
-  font-size: var(--text-ui, 13px);
+  /* 2026-10-15：ui(13) → body(14)。导航是侧栏的主操作行，对照参考侧栏
+     偏小；会话标题同步升到 ui(13)，meta 时间戳保持 tiny(11) —— 一屏 3 档。 */
+  font-size: var(--text-body, 14px);
   font-weight: 500;
   color: var(--color-text-secondary);
   background: transparent;
@@ -770,7 +765,7 @@ font-weight: 500;
   border-radius: calc(var(--radius-lg) - 3px);
   background: transparent;
   font-family: inherit;
-  font-size: 12px;
+  font-size: var(--text-ui, 13px); /* 2026-10-15：裸 12px 换令牌并升一档，与导航/会话行对齐 */
   color: var(--color-text-muted);
   cursor: pointer;
   white-space: nowrap;
@@ -790,7 +785,7 @@ font-weight: 500;
   text-overflow: ellipsis;
 }
 .sidebar-tab-count {
-  font-size: 10px;
+  font-size: var(--text-micro);
   line-height: 1;
   padding: 2px 5px;
   border-radius: 999px;
@@ -996,9 +991,11 @@ height: 26px;
 }
 .sidebar-row:hover { background: var(--color-bg-hover); }
 .sidebar-row.is-active {
-  /* 2026-09-30：选中会话的底色用 tertiary(#F0F0F0) 而非 active(#EBEBEB) ——
-     前者在白底上只比背景深一档，是"选中"而不是"按钮"。 */
-  background: var(--color-bg-tertiary);
+  /* 2026-10-15：选中态从中性灰改用极淡品牌绿。侧栏外壳保持无彩，但
+     "当前会话"是唯一需要 wayfinding 的地方——本仓库自己的规矩就是
+     「品牌色相只给主行动 / 当前选中」。hover 仍是中性灰，悬停 ≠ 选中。
+     用 alpha 混合而非 accent-soft（混白派生，暗色下会翻成亮色块）。 */
+  background: color-mix(in srgb, var(--color-accent) 14%, transparent);
   color: var(--color-text-primary);
   font-weight: 500;
 }
@@ -1016,7 +1013,9 @@ height: 26px;
   cursor: pointer;
   color: inherit;
   font-family: inherit;
-  font-size: var(--text-meta, 12px);
+  /* 2026-10-15：meta(12) → ui(13)。会话标题是侧栏的正文，12px 对照参考
+     明显偏小；时间戳保持 tiny(11)，主次关系不变。 */
+  font-size: var(--text-ui, 13px);
   text-align: left;
   border-radius: var(--radius-sm);
   transition: background var(--duration-fast) ease, transform var(--duration-fast) ease;
@@ -1558,8 +1557,8 @@ height: 26px;
 /* ════════════════════════════════════════════════════════════════════
    § 搜索行（cc-haha 位置：功能导航之下、分组之上）
    一条安静的胶囊：放大镜 + 占位文案 + ⌘K 提示。整行可点，作用是唤起
-   既有搜索弹窗（onOpenSearch），不在侧栏内做输入 —— 侧栏宽度已经只有
-   224px，塞一个真输入框会把会话列表挤没。
+   既有搜索弹窗（onOpenSearch），不在侧栏内做输入 —— 侧栏宽度只有
+   240px，塞一个真输入框会把会话列表挤没。
    ════════════════════════════════════════════════════════════════════ */
 .sidebar-search {
   padding: 0 10px;

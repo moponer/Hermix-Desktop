@@ -65,7 +65,17 @@ for (const entry of readdirSync(join(STYLES, "themes"))) {
   if (!entry.endsWith(".css")) continue;
   const id = entry.replace(/\.css$/, "");
   if (id === "light") continue; // light = 默认层本身
-  const defined = new Set([...read(join(STYLES, "themes", entry)).matchAll(/(--[a-z][a-z0-9-]*)\s*:/g)].map((m) => m[1]));
+  const content = read(join(STYLES, "themes", entry));
+  /* Check 1a（2026-10-16）：主题选择器必须精确存在。选择器写坏（实测：
+     dark.css 被写成双冒号 `::root[data-theme=…]`）会让整条规则被浏览器
+     当非法选择器丢弃，暗色主题静默失效成浅色 —— 而本工具只数令牌数
+     不出来，当时照样 103/103 全绿。 */
+  if (!content.includes(`:root[data-theme="${id}"]`)) {
+    failures++;
+    console.error(`[contract] ${id}: 找不到主题选择器 :root[data-theme="${id}"] —— 整条规则会被浏览器丢弃（暗色静默失效）`);
+    continue;
+  }
+  const defined = new Set([...content.matchAll(/(--[a-z][a-z0-9-]*)\s*:/g)].map((m) => m[1]));
   const missing = CONTRACT.filter((t) => !defined.has(t));
   if (missing.length) {
     failures++;

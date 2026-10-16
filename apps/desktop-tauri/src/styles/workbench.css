@@ -209,8 +209,8 @@
   font-family: inherit;
 }
 .wb-float__menu-item:hover { background: var(--color-bg-hover); }
-.wb-float__menu-item.is-current { background: var(--color-accent-soft); }
-.wb-float__menu-item.is-current .wb-float__menu-title { color: var(--color-accent); font-weight: var(--font-weight-medium); }
+.wb-float__menu-item.is-current { background: var(--color-bg-active); }
+.wb-float__menu-item.is-current .wb-float__menu-title { color: var(--color-text-primary); font-weight: var(--font-weight-medium); }
 .wb-float__menu-title {
   flex: 1;
   min-width: 0;
@@ -272,7 +272,7 @@
   transition: background var(--duration-fast) ease;
 }
 .wb-float--docked:hover .wb-float__dockresize {
-  background: var(--color-accent-soft);
+  background: var(--color-bg-hover);
 }
 
 /* 工作台对话栏 chrome：消息流 + 状态条。

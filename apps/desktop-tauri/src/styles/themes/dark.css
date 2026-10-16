@@ -1,112 +1,84 @@
 /* ════════════════════════════════════════════════════════════════════
    Dark — 「夜墨 Ink Night」
    ──────────────────────────────────────────────────────────────────
-   亮色「宣纸」在暗环境下的镜像：不是"把亮色反过来"，而是同一套
-   深度语法的夜间版。四个要点：
+   2026-10-16（墨与纸 v4，WorkBuddy 双主题逐像素采样后重写）：
 
-   1. **不用纯黑**。#0b0b0b 之上什么都读不出层，OLED 省电的收益对桌面
-      应用可忽略，代价是整屏死黑。底取 #0c0d0f（带极低饱和的冷调）。
+   1. **纯中性，零色相**。此前的冷蓝调（#101113/#161719，饱和 ≤4%）
+      被 WorkBuddy 对照推翻——其暗色画布 #141414、外壳 #1f1f1f 全是
+      R=G=B 纯灰，通样"大气"。色相个性收敛到 ink-green 主题。
+   2. **画布最深，外壳反提一档**（#141414 画布 < #1f1f1f 侧栏）——
+      暗色下让主画布成为最纯的那一层（与 WorkBuddy 同向）。
+   3. **hero 纯白满对比，正文降一档**（规律 2）。正文 #e9e9e9 比上一版
+      #d6d7da 提亮，落在 WorkBuddy 实测值上；2026-10-12 的"刺眼"投诉
+      针对 #ededed 全屏近白，#e9e9e9 + 降档的次级灰是折中。
+   4. **accent（#6fae94）只给主行动**；status chip 中性化；链接回归
+      品牌绿系（此前残留陶土红 #d07b52——2026-09-30 换色的漏网之鱼）。
 
-   2. **推翻"中性轴必须 R=G=B"的旧铁律**。纯中性灰是暗色"水泥感"的
-      直接来源：没有任何色温，暗底就失去通透。新的规则是
-      **允许色相，饱和度上限 4%** —— #0c0d0f 相对纯灰只多了 2 个点
-      的蓝，视觉上仍是中性，但层次立刻活起来。
-      （本条取代 dark.css 旧头部里"任何蓝紫偏移均违反铁律"的写法。）
-
-   3. **深度方向与亮色一致**：面(案) < 纸 < 面(卡) < 浮。暗色下"抬起"
-      靠轻微提亮 + 阴影，卡片不再是背景同色。
-
-   4. **青碧提亮**：#1d8a72 在暗底上发闷，提到 #35b899。
-      语义四色与青碧的色相关系与亮色保持一致（success 往黄绿挪、
-      error 走玫瑰，不与青碧同区）。
-
-   本文件是暗色的唯一真相源（tokens.css 的 .dark 块已废除）。
-   完整覆盖 CONTRACT 全部色彩令牌 —— 缺一项 checker 即失败。
+   本文件是暗色的唯一真相源。完整覆盖 CONTRACT 全部色彩令牌。
    ════════════════════════════════════════════════════════════════════ */
 :root[data-theme="dark"]:root {
-  /* Surfaces — 2026-09-29 抄 cc-haha `ink` 主题，与亮色同构。
-   *
-   * 暗色下"纸面最亮"要反过来读：页面最**深**，界面外壳向后退（更暗），
-   * 卡片与浮层向前提。色相统一带一点暖（棕墨），不再纯中性灰 ——
-   * 纯灰在暗底上是"水泥灰"，带 4% 以内的色相偏移才有通透感。
-   * 明度阶梯：#101113 < #161719(页) < #1d1f22(卡) < #24262a(hover) < #2e3136(线)
-   */
-  --color-bg-app: #161719;          /* 案·最外层：窗口底 */
-  --color-bg-primary: #161719;      /* 纸·对话与主区底 = 最深 */
-  --color-bg-card: #1d1f22;         /* 面·卡片 */
-  --color-bg-base: #101113;
-  --color-bg-secondary: #101113;    /* 案·侧栏 / 顶栏 */
-  --color-bg-inset: #101113;
-  --color-bg-input: #1d1f22;
-  --color-bg-card-hover: #24262a;
-  --color-bg-tertiary: #24262a;
-  --color-bg-hover: #24262a;
-  --color-bg-active: #2e3136;
-  --color-bg-quaternary: #2e3136;
-  --color-bg-elevated: #24262a;     /* 浮·弹层 / 菜单 */
+  /* Surfaces — 纯中性。画布最深，外壳/卡片反提，浮层再提。 */
+  --color-bg-app: #1a1a1a;          /* 案·最外层：窗口底 */
+  --color-bg-primary: #141414;      /* 纸·对话与主区底 = 最深最纯 */
+  --color-bg-card: #1f1f1f;         /* 面·卡片 */
+  --color-bg-base: #1f1f1f;
+  --color-bg-secondary: #1f1f1f;    /* 案·侧栏 / 顶栏 */
+  --color-bg-inset: #1f1f1f;
+  --color-bg-input: #1f1f1f;
+  --color-bg-card-hover: #292929;
+  --color-bg-tertiary: #292929;
+  --color-bg-hover: #292929;
+  --color-bg-active: #313131;
+  --color-bg-quaternary: #313131;
+  --color-bg-elevated: #262626;     /* 浮·弹层 / 菜单 */
 
   /* Code / chat */
-  --color-bg-code: #101113;
-  --color-bg-code-header: #1d1f22;
-  --color-bg-code-border: #2e3136;
-  --color-chat-assistant-bg: #161719;
-  --color-chat-tool-bg: #1d1f22;
+  --color-bg-code: #1a1a1a;
+  --color-bg-code-header: #202020;
+  --color-bg-code-border: #2e2e2e;
+  --color-chat-assistant-bg: #141414;
+  --color-chat-tool-bg: #1c1c1c;
   --color-chat-terminal-bg: #14120f;
 
-  /* Borders — 暗色靠"提亮"分界；--color-border-strong 现在两套同义
-     （强调描边），此前它在暗色下会翻成近白。 */
-  --color-border-subtle: #24262a;
-  --color-border-primary: #2e3136;
-  --color-border-secondary: #3f434a;   /* 控件描边 */
-  --color-border: #5f636b;
-  --color-border-strong: #5f636b;
+  /* Borders — 独立发丝线（比两侧都亮的独立分界，WorkBuddy 规律 6） */
+  --color-border-subtle: #242424;
+  --color-border-primary: #2e2e2e;
+  --color-border-secondary: #3d3d3d;   /* 控件描边 */
+  --color-border: #6e6e6e;
+  --color-border-strong: #6e6e6e;
 
-  /* Text — 四级，主文字不用纯白（纯白在暗底上有光晕）。
-     2026-10-12：把主文字从 #ededed 压到 #d6d7da。#ededed 在 #161719 暗底上
-     对比约 15:1，整屏近白文字在夜间长时间阅读会"刺眼"（用户实测投诉）。
-     #d6d7da 仍有约 12:1，远超 AA，但光晕感明显回落、对话更耐看。
-     sidebar / titlebar 是 chrome 底色，不随内容区一起动。 */
-  --color-text-primary: #d6d7da;
-  --color-text-secondary: #9a9ea6;
-  --color-text-tertiary: #7f848c;
-  --color-text-muted: #7f848c;
-  --color-text-faint: #5f636b;
-  --color-text-on-code: #dfe1e5;
-  /* 思考（过程）专用：暗底上比正文浅一档，不与结论抢注意力 */
-  --color-text-thinking: #7f848c;
+  /* Text — hero 纯白；主文字 #e9e9e9（WorkBuddy 值）；次级逐档降 */
+  --color-text-primary: #e9e9e9;
+  --color-text-secondary: #b9b9b9;
+  --color-text-tertiary: #a3a3a3;
+  --color-text-muted: #a3a3a3;
+  --color-text-faint: #8f8f8f;
+  --color-text-on-code: #e0e0e0;
+  /* 思考（过程）专用：暗底上不与结论抢注意力 */
+  --color-text-thinking: #9b9b9b;
+  /* hero 满对比（暗 #fff）：空态大标题专用 */
+  --color-text-hero: #ffffff;
 
-  /* Accent — 青碧提亮 */
-  /* 2026-09-30：与亮色同色相提亮（暗底上原色太沉会糊）。 */
-  /* 2026-10-04：改写 `--color-accent` 本身（原先覆写 `--color-accent-base`
-     再经 base.css 桥接）。见 tokens.css 同名注释：accent 必须在 @theme 内注册，
-     否则 Tailwind 不生成 bg-accent / text-accent / border-accent。 */
+  /* Accent — 主行动专用（松墨绿暗色提亮档） */
   --color-accent: #6fae94;
-  /* 2026-09-29：ink 主题实色 accent 按钮上的文字色。
-     2026-10-05 补回缺失的值——此前这行只有注释、token 根本没定义，暗色
-     下 `text-on-accent` 只能落到 :root 的白字，压在提亮后的 #6fae94 上
-     对比度不足。取值与同文件 --color-btn-primary-text 对齐（同为 #6fae94
-     底色的文字色），不自成一套。 */
   --color-on-accent: #14201b;
 
-  /* Link */
-  --color-link: #d07b52;
-  --color-link-hover: #de8f66;
-  --color-link-soft: #7f848c;
-  --color-link-soft-hover: #de8f66;
+  /* Link — 回归品牌绿系（陶土红残留清零） */
+  --color-link: #86c0a8;
+  --color-link-hover: #9fd0b8;
+  --color-link-soft: #9b9b9b;
+  --color-link-soft-hover: #9fd0b8;
 
-  /* Semantic 四色组（与亮色同色相关系） */
+  /* Semantic 四色组（功能性色彩，允许色相；soft 底保持 alpha 派生） */
   --color-success: #84b383;
   --color-success-soft: rgba(85, 168, 126, 0.14);
   --color-error: #e06b52;
-  --color-error-soft: #20262b;
+  --color-error-soft: #262020;
   --color-warning: #d3a34c;
-  --color-warning-soft: #332916;
+  --color-warning-soft: #2b2519;
   --color-text-warning: #d3a34c;
 
-  /* Tailwind 原生色槽 → 语义令牌重定向（L0，2026-10-01）。
-     声明在 @theme 对应的位置是必需的（Tailwind v4 只从 @theme 生成
-     工具类），指向本主题的四色组，使 101 处 `text-red-400` 之类的
-     类名跟随暗色主题与强调色。 */
+  /* Tailwind 原生色槽 → 语义令牌重定向（保持，跟随本主题四色组） */
   --color-red-200:      color-mix(in srgb, var(--color-error) 65%, transparent);
   --color-red-300:      color-mix(in srgb, var(--color-error) 82%, transparent);
   --color-red-400:      var(--color-error);
@@ -128,59 +100,54 @@
   --color-zinc-300:     var(--color-text-tertiary);
   --color-zinc-400:     var(--color-text-faint);
   --color-zinc-500:     var(--color-text-secondary);
-  --color-btn-secondary-bg: #1d1f22;
-  --color-btn-secondary-fg: #e8e9eb;
-  --color-btn-secondary-hover: #24262a;
-  --color-on-primary: #161719;
-  --color-on-error: #20262b;           /* 暗色下错误红是浅色，文字必须翻深 */
-  --color-inverse-surface: #e8e9eb;
-  --color-inverse-on-surface: #161719;
-  /* 暗色下描边按钮 / 品牌徽标描边：随强调色淡染，取消亮色的暖陶土粉观感。 */
+
+  /* Buttons — primary 绿钮照旧；secondary/ghost 全中性化 */
+  --color-btn-primary-bg: #6fae94;
+  --color-btn-primary-text: #14201b;
+  --color-btn-primary-hover: #86c0a8;
+  --color-btn-secondary-bg: transparent;
+  --color-btn-secondary-fg: #d4d4d4;
+  --color-btn-secondary-hover: #292929;
+  --color-btn-secondary-text: #d4d4d4;
+  --color-btn-ghost-bg: transparent;
+  --color-btn-ghost-text: #9b9b9b;
+  --color-btn-ghost-hover: #292929;
+  --color-on-primary: #141414;
+  --color-on-error: #202020;
+  --color-inverse-surface: #e9e9e9;
+  --color-inverse-on-surface: #141414;
   --color-primary-fixed-dim: color-mix(in srgb, var(--color-accent) 20%, var(--color-bg-input));
   --shadow-button-primary: 0 2px 10px rgba(0, 0, 0, 0.4);
-  --shadow-focus-ring: 0 0 0 1px rgba(208, 123, 82, 0.28);
+  /* focus ring 陶土红残留清零 → 品牌绿 */
+  --shadow-focus-ring: 0 0 0 1px rgba(111, 174, 148, 0.3);
 
-  --color-info: #7e8b99;
-  --color-info-soft: rgba(126, 139, 153, 0.14);
+  --color-info: #8a9aa8;
+  --color-info-soft: rgba(138, 154, 168, 0.14);
 
-  /* Status chips */
-  /* 与亮色同族：chip 三色统一进松墨绿邻域（2026-09-30）。 */
-  --color-chip-model-bg: rgba(111, 174, 148, 0.16);
-  --color-chip-model-fg: #86c0a8;
-  --color-chip-workspace-bg: rgba(111, 174, 148, 0.12);
-  --color-chip-workspace-fg: #9cc4b3;
-  --color-chip-permission-bg: rgba(111, 174, 148, 0.1);
-  --color-chip-permission-fg: #a9cdc0;
-  /* 渠道徽标品牌色：暗底上原色偏暗，提亮一档保持可辨。 */
+  /* Status chips — 墨与纸 v4：中性化（状态不是行动） */
+  --color-chip-model-bg: rgba(255, 255, 255, 0.07);
+  --color-chip-model-fg: #e9e9e9;
+  --color-chip-workspace-bg: #292929;
+  --color-chip-workspace-fg: #a3a3a3;
+  --color-chip-permission-bg: #292929;
+  --color-chip-permission-fg: #a3a3a3;
+  /* 渠道徽标品牌色：暗底提亮（保持） */
   --color-brand-qq: #4cc4f5;
   --color-brand-wecom: #3ecf83;
 
   /* Overlay */
-  --color-overlay-scrim: rgba(6, 7, 9, 0.66);
-  --color-modal-outline: rgba(233, 234, 238, 0.07);
-
-  /* Buttons */
-  /* 与亮色同色相提亮；暗底上用深绿会糊成一片。 */
-  --color-btn-primary-bg: #6fae94;
-  --color-btn-primary-text: #14201b;
-  --color-btn-primary-hover: #86c0a8;
-  --color-btn-secondary-hover: #21252c;
-  --color-btn-secondary-text: #b4b7be;
-  --color-btn-secondary-bg: transparent;
-  --color-btn-ghost-bg: transparent;
-  --color-btn-ghost-text: #8a8f98;
-  --color-btn-ghost-hover: #1e222a;
+  --color-overlay-scrim: rgba(0, 0, 0, 0.6);
+  --color-modal-outline: rgba(255, 255, 255, 0.06);
 
   /* Shadows — 暗色阴影加深才可感知 */
   --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.32);
   --shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.36);
-  /* 2026-09-29：ink 主题纸面阴影 —— 对比更高，更突出。 */
   --shadow-paper: 0 1px 4px rgba(0, 0, 0, 0.35);
   --shadow-modal: 0 28px 72px rgba(0, 0, 0, 0.62), 0 10px 26px rgba(0, 0, 0, 0.44);
 
-  /* Scene surfaces — 纸最亮、案低一档、外层最低（与亮色同一语法） */
-  --theme-bg-app: #171717;
-  --theme-bg-sidebar: #101113;
-  --theme-bg-titlebar: #101113;   /* 与侧栏同案面：取消独立色带 */
-  --theme-bg-chat: #171717;
+  /* Scene surfaces — 画布最深、外壳反提（WorkBuddy 暗色同向） */
+  --theme-bg-app: #1a1a1a;
+  --theme-bg-sidebar: #1f1f1f;
+  --theme-bg-titlebar: #1f1f1f;
+  --theme-bg-chat: #141414;
 }

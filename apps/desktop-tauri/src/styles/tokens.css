@@ -31,12 +31,20 @@
      根因（旧档位定义仍在文件尾部做别名，供 var() 引用）。
      禁半档（11.5 / 12.5 / 13.5 …）：一屏内字号档位 ≤ 3。 */
   --text-micro: 10px;    /* 角标、计数徽标（全局 ≤5% 出现） */
-  --text-tiny: 11px;     /* 元信息：时间、计数、路径、参数预览 */
+  /* R1-6（2026-10-16）：tiny 11→12。功能文字下限统一为 12px（桌面端
+     125% 缩放下 11px 已是可读性下限）。tiny 与 meta 因此同为 12 ——
+     新代码请直接用 --text-meta，tiny 仅作过渡别名保留。 */
+  --text-tiny: 12px;     /* 元信息：时间、计数、路径、参数预览 */
   --text-meta: 12px;     /* 工具名、chip、命令输出、区块标题 */
   --text-ui: 13px;       /* 界面文本：按钮、列表项、表单标签、思考正文 */
   --text-body: 14px;     /* 对话正文（全局唯一正文字号） */
   --text-title: 16px;    /* 小标题：区块标题、弹窗标题 */
   --text-display: 20px;  /* 页面标题 / 空态（一次性使用） */
+  /* hero 40px（2026-10-16）：空态首屏的一次性资产档（tokens 注释"特殊尺寸
+     允许保留"为此留的口子）。只给空态用，不进正文档位系统——"大气感"的
+     第一来源就是这一行字。700 字重在 40px 命中雅黑真粗体（font-synthesis
+     兜底不会糊）；中文负字距是负优化，hero 保持 0 字距。 */
+  --text-hero: 40px;
 
   /* 旧名别名 —— 仅供 var(--font-size-*) 引用，禁止新代码使用 */
   --font-size-display: 20px;
@@ -44,7 +52,7 @@
   --font-size-h2: 14px;
   --font-size-body: 14px;
   --font-size-meta: 12px;
-  --font-size-tiny: 11px;
+  --font-size-tiny: 12px;
 
   /* ── 字重（4 档）────────────────────────────────────────────
      中文在 13px 以下用 700 会糊成块，所以最高只到 600。
@@ -146,11 +154,14 @@
    *    跨主题恒定；唯一变更点是新加尺寸档位，旧代码统一收敛。
    * ------------------------------------------------------------------ */
 
-  /* Icon 三档 —— Lucide 等图标库 size={N} 一律收敛到这里。
-     sm=12 与 text-[11/12px] 同高（内联图标）；md=14 与 text-meta/default 同高
+  /* Icon 档位 —— Lucide 等图标库 size={N} 一律收敛到这里（单轨）。
+     xs=10 行内状态微图标（11px 文本行里的 spinner/状态点/行内删除钮，
+     2026-10-16 新增：40+ 处 9-10px 微图标强拔到 12 会撑爆紧凑行）；
+     sm=12 与 text-meta 同高（内联图标）；md=14 与 text-ui 同高
      （按钮/侧栏默认）；lg=16 与 text-body 同高（强调/头部图标）。
-     特殊尺寸（22/24/28/32/36/48/72）允许保留——它们是品牌/Logo 等
-     一次性资产，不进档位系统。 */
+     特殊尺寸（22/24/28/32/36/48/72）允许保留——它们是品牌/Logo、
+     空态大图标、灯箱导航等一次性资产，不进档位系统。 */
+  --icon-size-xs: 10px;
   --icon-size-sm: 12px;
   --icon-size-md: 14px;
   --icon-size-lg: 16px;
@@ -162,6 +173,13 @@
   --width-narrow: 240px;
   --width-base: 420px;
   --width-wide: 720px;
+  /* 2026-10-16（R1-4）：页面内容宽度两档 —— 页头/网格收敛的配套令牌。
+     page=672 常规设置页；wide-page=896 数据/宽页。 */
+  --width-page: 672px;
+  --width-wide-page: 896px;
+  /* 2026-10-16（R1-1）：起排线 —— 助手消息续条与首条正文共用的缩进。
+     头像 22px + gap 10px = 32px，废止散落的 30px。 */
+  --indent-thread: 32px;
   /* reading = 对话正文行长，随视口伸缩：窄屏守住 820px（约 50 汉字），
      宽屏/全屏按 68vw 跟到 1240px 封顶 —— 全屏下两侧空白不再夸张。
      代码块 / 表格 / 长命令行不跟随此档，各自按内容需要放宽。 */
@@ -209,48 +227,60 @@
    * < #24262a < #2e3136）的可感知步长对齐。
    * 约束：**相邻两级差不得小于 6%**，否则层级又会消失。
    * ────────────────────────────────────────────────────────────── */
-  --color-bg-app: #ffffff;         /* 案·最外层：窗口底、列间空隙 */
-  --color-bg-primary: #ffffff;     /* 纸·对话与主区底 = 最亮 */
+  /* 2026-10-16（墨与纸 v4，WorkBuddy 对照采样后定稿）：中性轴回到
+     **纯中性灰**（R=G=B），松墨绿只保留给「主行动按钮 / 链接 / 焦点环」。
+     此前 2026-10-15 的"染色轴"实验（≤4% 绿相）被用户实测否决——大气感
+     的来源是**克制**，不是色相贯穿；WorkBuddy 双主题逐像素采样证明
+     组件层 100% 中性灰反而更贵。色相个性收敛到 ink-green 主题。
+     其余桌面端纪律沿用：级差 ≥4%、亮度比 ≥1.06、全实色。 */
+  --color-bg-app: #ececec;         /* 案·最外层：窗口底、列间空隙 */
+  --color-bg-primary: #ffffff;     /* 纸·对话与主区底 = 最亮最纯 */
   --color-bg-card: #f6f6f6;         /* 面·卡片 */
-  --color-bg-base: #ededed;
-  --color-bg-secondary: #ededed;   /* 案·侧栏 / 顶栏 */
-  --color-bg-inset: #ededed;
+  --color-bg-base: #f5f5f5;
+  --color-bg-secondary: #f5f5f5;   /* 案·侧栏 / 顶栏 */
+  --color-bg-inset: #f5f5f5;
   --color-bg-input: #f6f6f6;
-  --color-bg-card-hover: #e4e4e4;
-  --color-bg-tertiary: #e4e4e4;    /* 案·深一档：分隔区 / chip */
-  --color-bg-hover: #e4e4e4;
-  --color-bg-active: #dcdcdc;
-  --color-bg-quaternary: #dcdcdc;  /* 案·最深：轨道底 */
+  --color-bg-card-hover: #ededed;
+  --color-bg-tertiary: #ededed;    /* 案·深一档：分隔区 / chip */
+  --color-bg-hover: #ededed;
+  --color-bg-active: #e3e3e3;
+  --color-bg-quaternary: #e3e3e3;  /* 案·最深：轨道底 / 选中药丸 */
   --color-bg-elevated: #ffffff;     /* 浮·弹层 / 菜单 / 悬浮球 */
 
   /* Code / chat 场景面板 */
   --color-bg-code: #f8f8f8;
-  --color-bg-code-header: #f7f7f7;
-  --color-bg-code-border: #ebebeb;
+  --color-bg-code-header: #f4f4f4;
+  --color-bg-code-border: #e7e7e7;
   --color-chat-assistant-bg: #ffffff;
   --color-chat-tool-bg: #f8f8f8;
   --color-chat-terminal-bg: #17181b;  /* 终端恒暗：任何主题都一样 */
 
   /* ── 分隔线：发丝观感，看得见但不抢戏 ── */
+  /* 描边与所压底色的亮度比 ≥1.10（不是 1.05）：1px 线在 125% / 150% 缩放
+     的重采样里会被削成半透明，必须留出余量才不至于整条消失。 */
   --color-border-subtle: #f0f0f0;
-  --color-border-primary: #ebebeb;
-  --color-border-secondary: #d6d6d6;  /* 控件描边（WCAG 1.4.11 3:1） */
-  --color-border: #8c8c8c;             /* 强描边 / focus 参照 */
-  --color-border-strong: #8c8c8c;
+  --color-border-primary: #e5e5e5;
+  --color-border-secondary: #d4d4d4;  /* 控件描边（WCAG 1.4.11 3:1） */
+  --color-border: #7c7c7c;             /* 强描边 / focus 参照 */
+  --color-border-strong: #7c7c7c;
   /* 2026-09-29：此前的 --color-border-strong 在暗色下会翻成近白（#e9eaee），
      却被当边框色用（workbench.css / components-layout.css），语义已不成立。
      现两套主题同值，且它现在表示"强调描边"而非"更重的分隔线"。 */
 
-  /* ── 文字：三级墨。主文字刻意不用纯黑 ── */
-  --color-text-primary: #242424;
-  --color-text-secondary: #575757;
-  --color-text-tertiary: #6e6e6e;
-  --color-text-muted: #6e6e6e;
-  --color-text-faint: #8c8c8c;
-  --color-text-on-code: #3a3a3e;
+  /* ── 文字：四级墨 + hero 满对比（WorkBuddy 规律 2：英雄纯黑，正文降档）── */
+  /* 四级墨全部满足 WCAG AA（≥4.5:1 压在本主题案面 #f5f5f5 上）。 */
+  --color-text-primary: #181818;
+  --color-text-secondary: #565656;
+  --color-text-tertiary: #5f5f5f;
+  --color-text-muted: #5f5f5f;
+  --color-text-faint: #6a6a6a;
+  --color-text-on-code: #3a3a3a;
   /* 思考（过程）专用：比正文浅一档 + 小一档字号。过程不是内容，
      不能和结论抢同一条视觉通道。 */
-  --color-text-thinking: #6e6e6e;
+  --color-text-thinking: #5f5f5f;
+  /* hero 满对比（浅 #000 / 暗 #fff，由主题覆盖）：空态大标题专用，
+     全屏唯一的最粗最黑元素 —— 一屏一主角（2026-10-16 墨与纸 v4）。 */
+  --color-text-hero: #000000;
 
   /* ── 墨：品牌陶土红（terracotta）。绝不用作 error/success 语义 ──
    * 抄 cc-haha：强调色与 warning 原本同属橙系（色相差仅约 30°），
@@ -324,7 +354,7 @@
 
   --color-link: #1e4a3c;
   --color-link-hover: #163a2f;
-  --color-link-soft: #6e6e6e;
+  --color-link-soft: #5f5f5f;
   --color-link-soft-hover: #2f6b58;
   /* ── 按钮语义对 ──────────────────────────────────────────────────
      2026-09-30：这里此前有**两套并存的按钮 token**（`-fg` 与 `-text`），
@@ -334,20 +364,22 @@
   --color-btn-primary-bg: #1e4a3c;
   --color-btn-primary-text: #ffffff;
   --color-btn-primary-hover: #163a2f;
-  --color-btn-secondary-bg: #fafafa;
-  --color-btn-secondary-fg: #242424;
-  --color-btn-secondary-hover: #f0f0f0;
-  --color-on-primary: #fbf6ec;   /* 陶土红实底上的文字 */
+  --color-btn-secondary-bg: transparent;
+  --color-btn-secondary-fg: #181818;
+  --color-btn-secondary-hover: #ededed;
+  --color-on-primary: #ffffff;   /* 品牌绿实底上的文字 */
   --color-on-error: #ffffff;     /* 错误红实底上的文字（暗色主题翻成深色） */
-  --color-inverse-surface: #242424;
+  --color-inverse-surface: #181818;
   --color-inverse-on-surface: #ffffff;
   /* 描边按钮 / 品牌徽标的淡染描边。原先是暖陶土粉 #efded4，浅色下整排按钮
      边框发粉、与绿色强调色打架——"浅色主题看起来像粉色"的头号嫌疑。改为随
      强调色淡染的中性描边：亮色压在卡片底上是一层极淡的绿调，暗色同理，
      既保留"描边"语义又不引入第二个色相。 */
   --color-primary-fixed-dim: color-mix(in srgb, var(--color-accent) 15%, var(--color-bg-card));
-  --shadow-button-primary: 0 2px 10px rgba(36, 36, 36, 0.22);
-  --shadow-focus-ring: 0 0 0 1px rgba(150, 68, 43, 0.24);
+  /* 主按钮阴影：单团黑影改为品牌绿调双层（贴地 + 扩散），柔和且有"抬起"感。
+     focus ring 此前残留陶土红 rgba(150,68,43)——2026-10-15 改回品牌绿。 */
+  --shadow-button-primary: 0 1px 2px rgba(30, 74, 60, 0.20), 0 3px 10px rgba(30, 74, 60, 0.14);
+  --shadow-focus-ring: 0 0 0 1px rgba(30, 74, 60, 0.30);
 
 
   /* ── 语义四色：色相彼此拉开 ≥30°，全部避开品牌蓝区 ──
@@ -408,54 +440,52 @@
   --color-zinc-400:     var(--color-text-faint);
   --color-zinc-500:     var(--color-text-secondary);
 
-  /* Status chips（Composer 会话状态胶囊） */
-  /* 2026-09-30：三个 chip 全部并进松墨绿系（此前 model 是苹果蓝、
-     permission 是土黄 —— 强调色统一后它们成了杂色）。 */
-  --color-chip-model-bg: rgba(30, 74, 60, 0.1);
-  --color-chip-model-fg: #1e4a3c;
-  --color-chip-workspace-bg: #e6edea;
-  --color-chip-workspace-fg: #1e4a3c;
-  --color-chip-permission-bg: #e6edea;
-  --color-chip-permission-fg: #1e4a3c;
+  /* Status chips（Composer 会话状态胶囊）—— 墨与纸 v4：中性化，
+     色相退出组件层（WorkBuddy 规律 3）；它们是状态不是行动。 */
+  --color-chip-model-bg: rgba(20, 20, 20, 0.06);
+  --color-chip-model-fg: #181818;
+  --color-chip-workspace-bg: #f0f0f0;
+  --color-chip-workspace-fg: #6f6f6f;
+  --color-chip-permission-bg: #f0f0f0;
+  --color-chip-permission-fg: #6f6f6f;
 
   /* Overlay */
-  --color-overlay-scrim: rgba(28, 28, 30, 0.4);
-  --color-modal-outline: rgba(28, 28, 30, 0.06);
+  --color-overlay-scrim: rgba(20, 20, 20, 0.44);
+  --color-modal-outline: rgba(20, 20, 20, 0.06);
 
   /* Buttons（primary 见上「按钮语义对」——不重复声明） */
   --color-btn-secondary-bg: transparent;
-  --color-btn-secondary-text: #3a3a3e;
-  --color-btn-secondary-hover: #ebebec;
+  --color-btn-secondary-text: #353535;
+  --color-btn-secondary-hover: #ededed;
   --color-btn-ghost-bg: transparent;
-  --color-btn-ghost-text: #6e6e73;
-  --color-btn-ghost-hover: rgba(28, 28, 30, 0.05);
+  --color-btn-ghost-text: #6a6a6a;
+  --color-btn-ghost-hover: rgba(20, 20, 20, 0.05);
 
-  /* Shadows（中性冷灰，不偏黄不偏黑） */
-  --shadow-card: 0 1px 2px rgba(28, 28, 30, 0.04);
-  --shadow-pop: 0 6px 20px rgba(28, 28, 30, 0.1), 0 2px 6px rgba(28, 28, 30, 0.06);
+  /* Shadows（中性，2026-10-16 墨与纸 v4：色相退出阴影） */
+  --shadow-card: 0 1px 2px rgba(20, 20, 20, 0.05);
+  --shadow-pop: 0 6px 20px rgba(20, 20, 20, 0.1), 0 2px 6px rgba(20, 20, 20, 0.06);
   /* 2026-09-29：纸面层级阴影 —— 抄 cc-haha，比 --shadow-card 更柔和，
    * 用于输入框、卡片、预览栏等最常用浮起层。 */
-  --shadow-paper: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
-  --shadow-modal: 0 24px 64px rgba(28, 28, 30, 0.16), 0 8px 24px rgba(28, 28, 30, 0.08);
+  --shadow-paper: 0 1px 3px rgba(20, 20, 20, 0.06), 0 1px 2px rgba(20, 20, 20, 0.04);
+  --shadow-modal: 0 24px 64px rgba(20, 20, 20, 0.16), 0 8px 24px rgba(20, 20, 20, 0.08);
 
-  /* Scene surfaces — 应用骨架四大区。
-     纸（对话区）最亮，案（侧栏/顶栏）低一档，列间空隙（app）最低 ——
-     主区因此天然"浮起来"，不需要靠边框去分隔。 */
-  --theme-bg-app: #ffffff;
-  --theme-bg-sidebar: #f7f7f7;
-  --theme-bg-titlebar: #f7f7f7;   /* 与侧栏同案面：取消独立色带 */
+  /* Scene surfaces — 应用骨架四大区（墨与纸 v4：缝变浅，接近平齐，
+     面与面靠发丝线与阴影分界，不再靠深色缝隙 —— WorkBuddy 规律 6）。 */
+  --theme-bg-app: #ececec;
+  --theme-bg-sidebar: #f5f5f5;
+  --theme-bg-titlebar: #f5f5f5;   /* 与侧栏同案面：取消独立色带 */
   --theme-bg-chat: #ffffff;
 
   /* ── 玻璃浮层：保留极轻模糊（与纸面/案面区分），不再大面积铺 ── */
-  --glass-frosted-bg: rgba(250, 250, 252, 0.72);
+  --glass-frosted-bg: rgba(251, 251, 251, 0.72);
   --glass-frosted-blur: blur(6px) saturate(140%);
-  --glass-liquid-bg: rgba(250, 250, 252, 0.82);
+  --glass-liquid-bg: rgba(251, 251, 251, 0.82);
   --glass-liquid-blur: blur(8px) saturate(150%);
-  --glass-liquid-strong-bg: rgba(253, 253, 255, 0.9);
+  --glass-liquid-strong-bg: rgba(253, 253, 253, 0.9);
   --glass-liquid-strong-blur: blur(12px) saturate(170%);
   --glass-inset-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.75);
-  --glass-inset-shadow: inset 0 -1px 0 rgba(28, 28, 30, 0.05);
-  --glass-shadow: 0 8px 32px rgba(28, 28, 30, 0.1), 0 2px 8px rgba(28, 28, 30, 0.05);
+  --glass-inset-shadow: inset 0 -1px 0 rgba(20, 20, 20, 0.05);
+  --glass-shadow: 0 8px 32px rgba(20, 20, 20, 0.1), 0 2px 8px rgba(20, 20, 20, 0.05);
 }
 
 /* ------------------------------------------------------------------

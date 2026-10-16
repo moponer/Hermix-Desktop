@@ -42,6 +42,10 @@
    icon-sm=12 / icon-md=14 / icon-lg=16；旧 size={11/12/13/14/15/16/18}
    一律收敛到这 3 档（覆盖 ~87%）。特殊尺寸（22/24/28/32/36/48/72）保留
    字面值 —— 品牌/Logo 等一次性资产不进档位。 */
+@utility icon-xs {
+  width: var(--icon-size-xs);
+  height: var(--icon-size-xs);
+}
 @utility icon-sm {
   width: var(--icon-size-sm);
   height: var(--icon-size-sm);
@@ -69,6 +73,11 @@
 @utility max-w-narrow { max-width: var(--width-narrow); }
 @utility max-w-base { max-width: var(--width-base); }
 @utility max-w-wide { max-width: var(--width-wide); }
+/* 页面内容宽度两档（R1-4）：常规 672 / 宽页 896 */
+@utility max-w-page { max-width: var(--width-page); }
+@utility max-w-wide-page { max-width: var(--width-wide-page); }
+/* 起排线（R1-1）：助手消息续条缩进 */
+@utility pl-thread { padding-left: var(--indent-thread); }
 /* max-w-reading = 对话正文行长档（640px / 约 38 汉字）。改行宽只改这一个令牌，
    不再在组件里写 max-w-[XXXpx] 字面值。 */
 @utility max-w-reading { max-width: var(--width-reading); }

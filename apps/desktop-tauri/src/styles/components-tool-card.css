@@ -531,8 +531,9 @@
   /* Subtle, color-only differentiation. No border, no gradient. */
 }
 .tw-msg-run-badge {
-  color: var(--color-accent);
-  background: var(--color-accent-soft);
+  /* 墨与纸 v4：运行中是状态不是行动，中性化 */
+  color: var(--color-text-secondary);
+  background: var(--color-bg-tertiary);
 }
 .tw-msg-err-badge {
   /* 错误状态用 warning 琥珀而非 error 红, 避免刺眼。 */
@@ -1701,8 +1702,8 @@
   flex-shrink: 0;
   margin-right: 6px;
   box-shadow: 0 1px 2px rgba(0,0,0,0.10);
-  
-  background: var(--color-accent-soft);
+
+  background: var(--color-bg-tertiary);
 }
 
 .tw-msg-icon-tile .tw-msg-icon-svg {
