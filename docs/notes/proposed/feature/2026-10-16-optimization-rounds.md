@@ -92,6 +92,16 @@ Status: proposed — 基于 `2026-10-16-component-inventory.md` 基线数字与 
 - **验证**：detect 0｜契约 103/103｜type-debt 0｜Composer/ChatView 转换 200｜lints 0
 - **遗留 P2**：副条 chip 尚无小图标（spec 有 图标+文字+箭头 形制）；场景药丸的"设计"第三档无对应机制未加
 
+## 实施记录（弹层纪律 + R2 拆分 · 2026-10-16 晚间）
+
+- **弹层纪律落地 ✓**（WorkBuddy 设置弹层/用户菜单逐像素采样）：`ui/Modal` 去遮罩去描边、圆角 24→17px，背景保持原亮度靠亮度差浮起；`--shadow-modal` 重定义为底部单向投影（大 y 偏移 + 负扩散，亮/暗双主题）；用户菜单弹层 bg elevated + 同款投影 + 去描边 + min-width 220px；危险项（重新连接）前加独立分隔线
+- **R2 ToolTabs 拆分（三步，tsc 解锁后全程编译器把关）**：
+  - 第一步 `toolTabsData.ts`（常量表 + parseMcpJson）
+  - 第二步 `toolTabsShared.tsx`（SearchBar/SummaryBar/Section/Grid/EmptyHint/SkeletonGrid，136 行）
+  - 第三步 `SkillCard.tsx`（SkillCard + 内容阅读弹窗，182 行）
+  - **ToolTabs 1330 → 913 行（-31%）**，每步 tsc exit 0 + detect 0
+- **验证**：全部门禁绿；tsc-unlock 基础设施已提交（05a505bb）
+
 ## 实施记录（R3 剩余小项批次 · 2026-10-16）
 
 - **R3-5 部分 ✓**：**修掉「批量审批恒显示中风险」**——批量项自带 `risk` 字段，现按「最险者胜」推导（`ApprovalDrawer.tsx`，reduce + rank 表）；`MessageBubble:113-116` 的双 `return null` 死分支**未动**（已决议卡片是否留在流里属交互决策，待用户拍板）
