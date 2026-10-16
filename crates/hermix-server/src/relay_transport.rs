@@ -502,6 +502,16 @@ impl SessionMux {
         };
 
         let plain = match &self.e2ee {
+            // 无 E2EE 上下文时**绝不放行密封帧**：透传等于让上层处理一段
+            // 解不开的密文——历史上就是这么把 `{ct:…}` 喂给 LLM、还把密文
+            // 当会话历史落了盘（2026-10-16 案）。明文帧照旧放行（单测路径）。
+            None if crate::relay_crypto::is_sealed_payload(payload) => {
+                tracing::warn!(
+                    session = %sid,
+                    "未启用 E2EE，密封帧已拒收（绝不透传密文给上层）"
+                );
+                return false;
+            }
             None => payload.to_string(),
             Some(ctx) => match ctx.open_inbound(env) {
                 Ok(p) => {
@@ -640,6 +650,27 @@ mod tests {
         let ctx = e2ee_for_tests(1);
         let mut env = Envelope::route_for("im:device:dev-x", String::new());
         assert!(ctx.seal_outbound(&mut env, "x", "dev-x").is_err());
+    }
+
+    /// 回归守卫（2026-10-16 密文案）：**未启用 E2EE 时密封帧必须被拒**。
+    /// 放行的后果不是「看不见」，而是 LLM 对着 `{ct:…}` 照常胡说、并把密文
+    /// 当会话历史落库——现场完全看不出是安全故障，只像模型变傻了。
+    #[test]
+    fn no_e2ee_rejects_sealed_inbound_never_transits_ciphertext() {
+        let mut mux = SessionMux {
+            entries: HashMap::new(),
+            e2ee: None,
+            replay: ReplayGuard::default(),
+        };
+        let sealed = Envelope {
+            session_id: Some("im:device:dev-1".into()),
+            payload: Some(
+                r#"{"ct":"BAtz","nonce":"AAAA","ep":"BAtz","eid":"BAtz"}"#.into(),
+            ),
+            ..Envelope::new(FrameTag::Route)
+        };
+        assert!(!mux.dispatch(&sealed), "无 E2EE 时密封帧必须被拒");
+        assert!(!mux.contains("im:device:dev-1"), "被拒的帧不该建会话队列");
     }
 
     /// 明文 route 帧在启用 E2EE 时被拒——不静默放行。

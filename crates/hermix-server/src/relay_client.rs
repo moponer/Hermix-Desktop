@@ -264,7 +264,8 @@ pub async fn serve_relay_socket(
     status.set(RelayState::Connected);
 
     // 一条 socket 要同时推流与收流（handler 在推的同时必须能读到手机的
-    // out-of-band 消息），所以拆两半而不是一把锁串行。
+    // out-of-band 消息），所以拆两半而不是一把锁串行。sink 加锁共享：
+    // 业务出站线程与心跳 Ping 都要写它。
     let (mut out_sink, mut in_stream) = ws.split();
 
     // 登记帧：告诉 relay 自己是哪台电脑 + 线路版本
@@ -273,25 +274,81 @@ pub async fn serve_relay_socket(
     }
 
     // 出站方向：各会话的 Transport 把帧塞进来，统一发到 relay
+    let sink = Arc::new(tokio::sync::Mutex::new(out_sink));
     let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<Envelope>(256);
-    tokio::spawn(async move {
-        while let Some(env) = out_rx.recv().await {
-            match serde_json::to_string(&env) {
-                Ok(text) => {
-                    if out_sink.send(Message::Text(text.into())).await.is_err() {
-                        break;
+    {
+        let sink = sink.clone();
+        tokio::spawn(async move {
+            while let Some(env) = out_rx.recv().await {
+                match serde_json::to_string(&env) {
+                    Ok(text) => {
+                        if sink
+                            .lock()
+                            .await
+                            .send(Message::Text(text.into()))
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
                     }
+                    Err(e) => tracing::warn!(error = %e, "relay 出站帧序列化失败"),
                 }
-                Err(e) => tracing::warn!(error = %e, "relay 出站帧序列化失败"),
             }
-        }
-    });
+        });
+    }
 
-    let mut mux = crate::relay_transport::SessionMux::new();
+    // 必须带 E2EE 上下文：`new()` 是**明文单测路径**，用它建 mux 时
+    // `dispatch` 会把手机发来的密封信封 `{ct,…}` 原样当消息投给 agent——
+    // 症状是 LLM 收到一坨密文照着胡说，还把密文当会话历史落了盘
+    // （2026-10-16 案）。身份读不出（identity.json 损坏 / DPAPI 拒绝）时
+    // 退回 `new()`，由 dispatch 一律拒收密封帧：宁可手机通道不可用，
+    // 也不裸奔——用户以为在加密、实际明文是最坏结果。
+    let mut mux = crate::relay_transport::SessionMux::with_e2ee().unwrap_or_else(|e| {
+        tracing::warn!(
+            error = ?e,
+            "E2EE 身份加载失败：手机密封帧将一律拒收（不降级为明文）"
+        );
+        crate::relay_transport::SessionMux::new()
+    });
     let mut sessions: HashMap<String, tokio::task::JoinHandle<()>> = HashMap::new();
 
-    while let Some(msg) = in_stream.next().await {
-        let Ok(msg) = msg else { break };
+    // 半开自愈（2026-10-16 配对无回音案）：relay 空闲时整条连接静默，半开
+    // TCP 上读侧永远 Pending、写侧不报错，状态仍是 Connected——手机经 relay
+    // 发的帧全部落进死连接，界面却一片绿。这里每 30s 主动 Ping（对端 WS 栈
+    // 自动回 Pong），连续 90s 没有任何入帧即判定死亡，break 出去交给外层
+    // 退避重连。90s = 3 个周期，容忍丢一个 Pong；30s 远小于常见 NAT 空闲
+    // 超时（60-300s），顺带把中间设备Keepalive住。
+    const PING_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
+    const LINK_DEAD_AFTER: std::time::Duration = std::time::Duration::from_secs(90);
+    let mut last_rx = std::time::Instant::now();
+    let mut ping = tokio::time::interval(PING_INTERVAL);
+    ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+    loop {
+        let msg = tokio::select! {
+            m = in_stream.next() => match m {
+                // 流结束（None）或读错误（Err）都断开，交给外层退避重连
+                Some(Ok(m)) => m,
+                _ => break,
+            },
+            _ = ping.tick() => {
+                if last_rx.elapsed() >= LINK_DEAD_AFTER {
+                    tracing::warn!(
+                        silence = ?last_rx.elapsed(),
+                        "relay 连接长时间无任何入帧，判定半开，断开重连"
+                    );
+                    break;
+                }
+                if sink.lock().await.send(Message::Ping(Vec::new())).await.is_err() {
+                    tracing::warn!("relay 心跳 Ping 写失败，断开重连");
+                    break;
+                }
+                continue;
+            }
+        };
+        // 任何入帧（Pong / Ping / 业务）都是链路活着的证据。
+        last_rx = std::time::Instant::now();
         let text = match msg {
             Message::Text(t) => t.to_string(),
             Message::Binary(b) => String::from_utf8_lossy(&b).to_string(),
