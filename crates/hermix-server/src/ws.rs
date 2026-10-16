@@ -330,6 +330,19 @@ pub(crate) enum StreamSendOutcome {
     DeferredUserMessage(String),
 }
 
+/// `task_in_flight` 排队回执：`queued_text` 带消息预览（截 120 字符），
+/// 前端据此立即弹 toast 回显——排队等待期间界面无新事件，只靠状态 chip
+/// 用户会把"排队"误读成"卡死"（2026-10-15 实机反馈）。
+fn task_in_flight_status(queued_text: &str) -> String {
+    let preview: String = queued_text.chars().take(120).collect();
+    serde_json::json!({
+        "event": "task_in_flight",
+        "message": "上一条消息仍在处理中，你的新消息已排队，将在当前任务结束后自动发送。",
+        "queued_text": preview,
+    })
+    .to_string()
+}
+
 /// Handle a single `SendMessageRequest` inside a streaming WS session.
 /// Extracted so the `WsClientMessage::Send` path and the legacy
 /// `SendMessageRequest` / plain-text path share the same logic.
@@ -2373,7 +2386,7 @@ WsClientMessage::ApprovalBatchResponse { batch_id, decision, note } => {
                                              seq: None,
                                              attachment_id: None,
                                             event: StreamEvent::Status {
-                                                content: "{\"event\":\"task_in_flight\",\"message\":\"上一条消息仍在处理中，你的新消息已排队，将在当前任务结束后自动发送。\"}".to_string(),
+                                                content: task_in_flight_status(&text),
                                             },
                                         };
                                         let _ = sender
@@ -2416,7 +2429,7 @@ WsClientMessage::ApprovalBatchResponse { batch_id, decision, note } => {
                                  seq: None,
                                  attachment_id: None,
                                 event: StreamEvent::Status {
-                                    content: "{\"event\":\"task_in_flight\",\"message\":\"上一条消息仍在处理中，你的新消息已排队，将在当前任务结束后自动发送。\"}".to_string(),
+                                    content: task_in_flight_status(&text),
                                 },
                             };
                             let _ = sender

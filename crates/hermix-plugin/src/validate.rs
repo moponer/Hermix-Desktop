@@ -287,6 +287,25 @@ pub fn validate_custom_app(app_dir: &Path) -> ValidationReport {
                 ),
             ));
         }
+
+        // 引用未转译的 TS/TSX 源码 —— 两种运行模式都跑不起来：
+        //   · dev(run)   = hx-shell --html 单文件 html，外联 src/*.tsx 不会加载；
+        //   · package    = esbuild 把 src/main.tsx 编到 resources/js/app.js，
+        //                  index.html 应引打包产物，不是源文件。
+        // 而且浏览器无法解析 TS 语法（(window as any) / 类型注解），模块加载即失败 →
+        // 页面空白、交互函数全部 undefined（2026-10-15 实机：fetchNow is not defined）。
+        if let Some(bad) = detect_ts_script_src(&html) {
+            issues.push(issue(
+                "error",
+                "html",
+                format!(
+                    "index.html 直接引用了未转译的 TS 源码: `{bad}`。\
+                     浏览器不认 TS 语法，dev 与打包两模式都会白屏。\
+                     修法: 逻辑内联进 <script>（单文件自包含），或让 index.html 引 \
+                     `resources/js/app.js`（打包产物，由 package 生成）。"
+                ),
+            ));
+        }
     }
 
     // 检查 hx API 调用 (在 HTML 或 TSX 中) — hx-shell 桥通过 WebView2 原生桥注入，无需外部库
@@ -751,6 +770,32 @@ fn detect_remote_runtime_assets(code: &str) -> Vec<String> {
         }
     }
     hits
+}
+
+/// 找出 index.html 里指向 TS/TSX 源文件的 `<script src=...>` —— 未转译的
+/// TS 在浏览器里解析即失败，dev 与打包两模式都白屏。
+fn detect_ts_script_src(html: &str) -> Option<String> {
+    let lower = html.to_lowercase();
+    let mut pos = 0;
+    while let Some(rel) = lower[pos..].find("<script") {
+        let start = pos + rel;
+        let Some(gt) = lower[start..].find('>') else { break };
+        let tag = &lower[start..start + gt];
+        if let Some(eq) = tag.find("src=") {
+            let rest = &tag[eq + 4..];
+            let quote = rest.chars().next().unwrap_or('"');
+            let src: String = rest
+                .trim_start_matches(quote)
+                .chars()
+                .take_while(|c| *c != quote)
+                .collect();
+            if src.ends_with(".tsx") || src.ends_with(".ts") || src.ends_with(".jsx") {
+                return Some(src);
+            }
+        }
+        pos = start + gt + 1;
+    }
+    None
 }
 
 /// 逐段抽取 HTML 中的 `<script>` 内容, 用 esbuild 真 parser 校验,

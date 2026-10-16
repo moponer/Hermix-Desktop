@@ -278,7 +278,7 @@ fn ensure_vendor() -> Result<(), String> {
 
     let tools = crate::WB_TOOLS_TS;
     let sdk_path = dir.join("wb-sdk.js");
-    let sdk = WB_SDK_JS.replace("window.__wbTools || {}", &tools_object_literal(tools));
+    let sdk = WB_SDK_JS.replace("window.__wbTools || {}", &tools_inline_iife(tools));
     if !fs::read_to_string(&sdk_path).map(|s| s == sdk).unwrap_or(false) {
         fs::write(&sdk_path, &sdk).map_err(|e| format!("write wb-sdk.js: {}", e))?;
     }
@@ -621,13 +621,18 @@ fn type_run_end(b: &[char], start: usize) -> usize {
 
 /// `out` 的末尾是不是「标识符刚结束」—— 即紧邻冒号左侧是一个变量名。
 
+/// 工具箱剥类型并去掉 export 后的纯 JS —— 函数名与 TS 源一致。
+fn stripped_tools_js(tools_ts: &str) -> String {
+    // 对象字面量/IIFE 内不能有 export，这里逐处去掉；`wb-tools.js` 那条路径保留。
+    strip_typescript(tools_ts)
+        .replace("export function ", "function ")
+        .replace("export const ", "const ")
+}
+
 /// 把剥完类型的工具箱包成一个 `{ virtualWindow, diffLines, parseDelimited, columnStats }`
 /// 字面量，挂给 `__wbTools`。
 fn tools_object_literal(tools_ts: &str) -> String {
-    // 对象字面量内不能有 export，这里逐处去掉；`wb-tools.js` 那条路径保留。
-    let js = strip_typescript(tools_ts)
-        .replace("export function ", "function ")
-        .replace("export const ", "const ");
+    let js = stripped_tools_js(tools_ts);
     let names = [
         "virtualWindow",
         "diffLines",
@@ -641,6 +646,18 @@ fn tools_object_literal(tools_ts: &str) -> String {
         }
     }
     format!("{{\n    {}\n  }}", fields.join(",\n    "))
+}
+
+/// SDK 内联工具箱：IIFE 里**先定义函数**再返回字面量。
+/// 不能只注入 `{ name: name }` 字面量 —— 函数在 wb-sdk.js 里没有定义，
+/// 生成文件一执行就 `ReferenceError: virtualWindow is not defined`，
+/// window.wb 整个挂载失败、工作台全白屏（2026-10-15 用户实机踩中）。
+fn tools_inline_iife(tools_ts: &str) -> String {
+    format!(
+        "(function () {{\n{}\n  return {};\n  }})()",
+        stripped_tools_js(tools_ts),
+        tools_object_literal(tools_ts)
+    )
 }
 
 /// 已安装的第三方库清单。放在 `_vendor/index.json` 而非硬编码进二进制：
@@ -1353,6 +1370,29 @@ mod tests {
         for name in ["virtualWindow", "diffLines", "parseDelimited", "columnStats"] {
             assert!(lit.contains(&format!("{name}: {name}")), "LIT: {}", lit);
         }
+    }
+
+    /// SDK 内联必须是「先定义函数再返回字面量」的 IIFE。
+    /// 回归钉子：曾生成过只有 `{ name: name }` 引用、没有函数定义的 SDK，
+    /// 测试全绿（断言只看字面量内容），运行时 ReferenceError、工作台全白屏。
+    #[test]
+    fn sdk_inline_defines_functions_before_referencing() {
+        let sdk = WB_SDK_JS.replace(
+            "window.__wbTools || {}",
+            &tools_inline_iife(crate::WB_TOOLS_TS),
+        );
+        // 每个函数的定义必须出现在 SDK 文件里（且在挂载点之前）
+        for name in ["virtualWindow", "diffLines", "parseDelimited", "columnStats"] {
+            let defined = sdk.find(&format!("function {name}("));
+            let mounted = sdk.find(&format!("{name}: {name}"));
+            assert!(defined.is_some(), "SDK 内联缺 {name} 定义");
+            assert!(
+                defined.zip(mounted).map_or(false, |(d, m)| d < m),
+                "{name} 的定义必须先于引用"
+            );
+        }
+        // IIFE 立即执行后返回真对象，不是裸引用
+        assert!(sdk.contains("return {"), "{}", &sdk[..sdk.len().min(2000)]);
     }
 
     /// 剥类型的每一处误伤都对应一个已踩过的坑，逐个钉住。

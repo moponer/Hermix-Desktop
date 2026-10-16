@@ -18,23 +18,26 @@
  *   3. **间距**——分隔靠留白，不靠一条线。
  * 这是全站统一的规则，不要在局部页例外加回 border。
  */
-$base: #101113; // bg-base
-$paper: #161719; // bg-primary · 页 / 对话底
-$card: #1d1f22; // bg-card
-$raised: #24262a; // bg-elevated
+/* 下列颜色变量改为引用 CSS 自定义属性（定义见 App.vue 的 :root / :root.theme-dark）。
+ * 这样所有消费这些 $ 变量的页面 / 组件无需改动即可随主题切换：
+ * 浅色（墨绿）为默认主题，深色通过 :root.theme-dark 提供。 */
+$base: var(--c-base);
+$paper: var(--c-paper);
+$card: var(--c-card);
+$raised: var(--c-raised);
 
-$fg: #ededed; // text-primary
-$fg2: #9a9ea6; // text-secondary
-$fg3: #7f848c; // text-tertiary
-$fg4: #5f636b; // text-faint
+$fg: var(--c-fg);
+$fg2: var(--c-fg2);
+$fg3: var(--c-fg3);
+$fg4: var(--c-fg4);
 
-$accent: #6fae94; // accent-base · 青碧提亮
-$on-accent: #14201b; // btn-primary-text
-$ok: #84b383; // success
-$warn: #d3a34c; // warning
-$warn-bg: #332916; // warning-soft
-$err: #e06b52; // error
-$err-bg: #20262b; // error-soft
+$accent: var(--c-accent);
+$on-accent: var(--c-on-accent);
+$ok: var(--c-ok);
+$warn: var(--c-warn);
+$warn-bg: var(--c-warn-bg);
+$err: var(--c-err);
+$err-bg: var(--c-err-bg);
 
 /* ── 主题套 2：墨绿（浅色）· 2026-10-15 增加 ─────────────────────
  * 与上面的暗色默认套**并列**的第二套主题，不替换、不混用。
@@ -48,8 +51,8 @@ $err-bg: #20262b; // error-soft
  *   $hm-border    描边          $hm-primary-weak / -border 主色弱底/边
  *   $hm-danger / $hm-warn / $hm-ok 语义色     $hm-bubble-out 发出气泡
  * $hm-on-primary 表里未列，按白补（#2f6b4f 底上白字 ≈ 5.9:1，达标）。
- * 现状：**仅令牌，未接线**——页面仍消费暗色 $ 变量；要做主题切换时
- * 再把消费层改成从本套取值（CSS 变量或编译期选择），届时两套一起动。 */
+ * 现状：**已接线**——暗色 $ 变量已改为引用 CSS 自定义属性（--c-*，见 App.vue
+ * 的 :root / :root.theme-dark），浅色（墨绿）默认、深色可切换；两套一起动。 */
 $hm-bg: #f2f3f5;
 $hm-surface: #ffffff;
 $hm-surface-2: #eef0f3;
