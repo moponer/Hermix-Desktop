@@ -156,12 +156,12 @@ export const AwakeningCard: AcuiComponent = ({ show }) => {
           )
         ) : healthy ? (
           <>
-            <Loader2 size={10} className="text-zinc-300 animate-spin shrink-0" />
+            <Loader2 className="icon-xs text-zinc-300 animate-spin shrink-0" />
             <span className="text-text-muted">自检中…</span>
           </>
         ) : (
           <>
-            <AlertTriangle size={10} className="text-amber-300 shrink-0" />
+            <AlertTriangle className="icon-xs text-amber-300 shrink-0" />
             <span className="text-amber-200/80">部分检查异常</span>
           </>
         )}

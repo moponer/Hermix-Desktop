@@ -71,7 +71,11 @@ export function MessageActions({
     setVote(readVotes()[message.id] ?? null);
   }, [message.id]);
 
-  if (!message.content.trim()) return null;
+  // R3-3（2026-10-16）：空正文（纯工具轮）不再整行 return null ——
+  // CSS 侧 `.message-copy-row` 常驻 min-height:24px，整行消失会让
+  // 消息间距塌陷。保留行容器，只隐藏对空内容无意义的动作（复制/赞踩），
+  // 重新生成与时间戳仍然可用。
+  const hasContent = !!message.content.trim();
 
   const copyMessage = async () => {
     try {
@@ -93,40 +97,46 @@ export function MessageActions({
 
   return (
     <div className={className}>
-      <button
-        type="button"
-        onClick={copyMessage}
-        className="message-action-btn"
-        title="复制消息"
-        aria-label="复制消息"
-      >
-        {copied ? <Check className="icon-md" /> : <Copy className="icon-md" />}
-        <span>{copied ? "已复制" : "复制"}</span>
-      </button>
+      {hasContent && (
+        <button
+          type="button"
+          onClick={copyMessage}
+          className="message-action-btn"
+          title="复制消息"
+          aria-label="复制消息"
+        >
+          {copied ? <Check className="icon-md" /> : <Copy className="icon-md" />}
+          <span>{copied ? "已复制" : "复制"}</span>
+        </button>
+      )}
 
-      {/* 赞 / 踩 —— 本机记录，不上报。见文件头说明。 */}
-      <button
-        type="button"
-        onClick={() => toggle("up")}
-        className="message-action-btn message-action-icon"
-        data-active={vote === "up" ? "true" : undefined}
-        title="这条回答有帮助（仅记录在本机）"
-        aria-label="有帮助"
-        aria-pressed={vote === "up"}
-      >
-        <ThumbsUp className="icon-md" />
-      </button>
-      <button
-        type="button"
-        onClick={() => toggle("down")}
-        className="message-action-btn message-action-icon"
-        data-active={vote === "down" ? "true" : undefined}
-        title="这条回答没帮上忙（仅记录在本机）"
-        aria-label="没帮上忙"
-        aria-pressed={vote === "down"}
-      >
-        <ThumbsDown className="icon-md" />
-      </button>
+      {/* 赞 / 踩 —— 本机记录，不上报。见文件头说明。空正文无意义，隐藏。 */}
+      {hasContent && (
+        <>
+          <button
+            type="button"
+            onClick={() => toggle("up")}
+            className="message-action-btn message-action-icon"
+            data-active={vote === "up" ? "true" : undefined}
+            title="这条回答有帮助（仅记录在本机）"
+            aria-label="有帮助"
+            aria-pressed={vote === "up"}
+          >
+            <ThumbsUp className="icon-md" />
+          </button>
+          <button
+            type="button"
+            onClick={() => toggle("down")}
+            className="message-action-btn message-action-icon"
+            data-active={vote === "down" ? "true" : undefined}
+            title="这条回答没帮上忙（仅记录在本机）"
+            aria-label="没帮上忙"
+            aria-pressed={vote === "down"}
+          >
+            <ThumbsDown className="icon-md" />
+          </button>
+        </>
+      )}
 
       {onRetry && (
         <button

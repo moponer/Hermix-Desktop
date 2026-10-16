@@ -72,10 +72,11 @@ const LEFT_MIN = 200;
 const LEFT_MAX = 360;
 // 左列默认 280，给主列留出空间，使三列共存时主列更宽、工作区名称更舒展。
 // 已存在会话的 localStorage 宽度不自动升级（用户拖动过的尊重保留），仅默认提高。
-// 2026-09-30：280 → 224。对齐 cc-haha 的窄侧栏 —— 280px 下会话标题
-// 有足够空间，但整栏占比过大，扫视时"框"比"内容"更抢眼；224px 恰好
-// 容纳一行中文标题 + 右侧时间戳。
-const LEFT_DEFAULT = 224;
+// 2026-09-30：280 → 224。对齐 cc-haha 的窄侧栏。
+// 2026-10-15：224 → 240 → 280。用户对照参考（CodeBuddy 类侧栏 ≈264px）
+// 反馈偏窄；240 只 +16px 察觉不到，直接取 280（回到首发值，但语义不同：
+// 当时是"收窄实验"的起点，现在是"对齐参考"的终点）。侧栏可拖，上限 360。
+const LEFT_DEFAULT = 280;
 // 右列默认 640，拖动范围 360-840；vw=1440 时主列 = 1440 - 200 - 640 = 800。
 // 640 足以完整显示中文长标题分类（如"节假日危险品重大危险源..."），
 // 480 会让这类标题被截断；640 也不挤压主列。
@@ -477,23 +478,16 @@ setPage("chat");
   // 里的 "change in the order of Hooks" 报告）。useResizable 现在只负责
   // 自己那列的 min/max 静态边界，动态夹紧走这里的单一 effect，单向数据
   // 流，没有循环依赖。
-  // 旧默认值一次性迁移：曾经把 LEFT_DEFAULT 设为 280，那条记录只可能是
-  // 「没拖过、用默认值」，不是用户的选择 —— 直接改写成新默认。其他任何
-  // 数值都视为用户拖动过的意图，原样尊重。
-  useEffect(() => {
-    try {
-      if (storage.getItem(LEFT_KEY) === "280") {
-        storage.setItem(LEFT_KEY, String(LEFT_DEFAULT));
-      }
-    } catch { /* storage 不可用时忽略 */ }
-  }, []);
-
+  // 旧默认值迁移走 useResizable 的 legacyDefaults（state 初始化时命中即
+  // 采用新默认）：不要在 effect 里改 storage —— useResizable 的持久化
+  // effect 会把旧 state 原样写回，迁移被原地覆盖（2026-10-15 踩过）。
   const left = useResizable({
     storageKey: LEFT_KEY,
     defaultWidth: LEFT_DEFAULT,
     min: LEFT_MIN,
     max: LEFT_MAX,
     side: "left",
+    legacyDefaults: ["280", "224", "240"],
   });
   const right = useResizable({
     storageKey: RIGHT_KEY,

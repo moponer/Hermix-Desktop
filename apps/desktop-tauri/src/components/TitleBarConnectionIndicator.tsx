@@ -44,7 +44,7 @@ export function TitleBarConnectionIndicator() {
         style={{ background: dotColor }}
       />
       {/* 旋转加载图标 */}
-      {isConnecting && <Loader2 size={8} className="conn-spin" />}
+      {isConnecting && <Loader2 className="icon-xs conn-spin" />}
     </button>
   );
 }

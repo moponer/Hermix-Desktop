@@ -17,6 +17,7 @@ import { AgentForm } from "./agents/AgentForm";
 import { AIGenerateWizard } from "./agents/AIGenerateWizard";
 import { TestDialog } from "./agents/TestDialog";
 import { BuiltInExpertsTab } from "./agents/BuiltInExpertsTab";
+import { EmptyState, PageHeader } from "./ui";
 
 
 
@@ -139,18 +140,48 @@ export function AgentsView({
   return (
     <div className="h-full flex flex-col overflow-hidden">
       {/* Header */}
-      <div className="flex items-center justify-between px-6 py-4">
-        <div className="flex items-center gap-2.5">
-          <Brain size={20} className="text-text-secondary" />
-          <h2 className="text-[length:var(--text-title)] font-semibold text-text-primary">专家</h2>
-          <span className="text-[length:var(--text-meta)] text-text-faint font-mono">{agents.length}</span>
-        </div>
+      <PageHeader
+        icon={<Brain className="icon-lg" />}
+        title="专家"
+        count={agents.length}
+        actions={
+          <>
+            {tab === "my" && mode === "list" && (
+              <>
+                <button
+                  onClick={() => { setEditingId(null); setMode("create"); }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[length:var(--text-ui)] font-medium"
+                  style={{ background: "var(--color-btn-secondary-bg)", color: "var(--color-btn-secondary-text)" }}
+                >
+                  <Plus className="icon-md" /> 手动创建
+                </button>
+                <button
+                  onClick={() => setMode("generate")}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[length:var(--text-ui)] font-medium"
+                  style={{ background: "var(--color-btn-primary-bg)", color: "var(--color-btn-primary-text)" }}
+                >
+                  <Sparkles className="icon-md" /> AI 生成
+                </button>
+              </>
+            )}
+            {tab === "my" && mode !== "list" && (
+              <button
+                onClick={() => { setMode("list"); setEditingId(null); }}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[length:var(--text-ui)] font-medium"
+                style={{ background: "var(--color-btn-secondary-bg)", color: "var(--color-btn-secondary-text)" }}
+              >
+                <ArrowLeft className="icon-md" /> 返回列表
+              </button>
+            )}
+          </>
+        }
+      >
         <div className="flex items-center gap-1 rounded-lg bg-bg-tertiary p-0.5">
           <button
             onClick={() => switchTab("my")}
             className={clsx(
               "px-3 py-1 rounded-md text-[length:var(--text-ui)]",
-              tab === "my" ? "bg-accent-soft text-accent font-medium" : "text-text-muted hover:text-text-primary"
+              tab === "my" ? "bg-bg-active text-text-primary font-medium" : "text-text-muted hover:text-text-primary"
             )}
           >
             我的专家
@@ -160,43 +191,14 @@ export function AgentsView({
             onClick={() => switchTab("builtin")}
             className={clsx(
               "px-3 py-1 rounded-md text-[length:var(--text-ui)]",
-              tab === "builtin" ? "bg-accent-soft text-accent font-medium" : "text-text-muted hover:text-text-primary"
+              tab === "builtin" ? "bg-bg-active text-text-primary font-medium" : "text-text-muted hover:text-text-primary"
             )}
           >
             内置专家
             <span className="ml-1 text-[length:var(--text-meta)] text-text-faint">{BUILTIN_EXPERTS.length}</span>
           </button>
         </div>
-        <div className="flex gap-2">
-          {tab === "my" && mode === "list" && (
-            <>
-              <button
-                onClick={() => { setEditingId(null); setMode("create"); }}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[length:var(--text-ui)] font-medium"
-                style={{ background: "var(--color-btn-secondary-bg)", color: "var(--color-btn-secondary-text)" }}
-              >
-                <Plus className="icon-md" /> 手动创建
-              </button>
-              <button
-                onClick={() => setMode("generate")}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[length:var(--text-ui)] font-medium"
-                style={{ background: "var(--color-btn-primary-bg)", color: "var(--color-btn-primary-text)" }}
-              >
-                <Sparkles className="icon-md" /> AI 生成
-              </button>
-            </>
-          )}
-          {tab === "my" && mode !== "list" && (
-            <button
-              onClick={() => { setMode("list"); setEditingId(null); }}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[length:var(--text-ui)] font-medium"
-              style={{ background: "var(--color-btn-secondary-bg)", color: "var(--color-btn-secondary-text)" }}
-            >
-              <ArrowLeft className="icon-md" /> 返回列表
-            </button>
-          )}
-        </div>
-      </div>
+      </PageHeader>
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto min-h-0">
@@ -206,25 +208,30 @@ export function AgentsView({
               <div className="p-6">
                 {agents.length === 0 ? (
                   <div className="flex flex-col items-center justify-center py-20 text-center">
-                    <Bot size={48} className="text-text-faint mb-4" />
-                    <h3 className="text-[length:var(--text-body)] font-medium text-text-secondary mb-2">还没有专家</h3>
-                    <p className="text-[length:var(--text-ui)] text-text-muted mb-6">手动创建或让 AI 帮你生成一个专家</p>
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => { setEditingId(null); setMode("create"); }}
-                        className="px-4 py-2 rounded-lg text-[length:var(--text-ui)] font-medium"
-                        style={{ background: "var(--color-btn-secondary-bg)", color: "var(--color-btn-secondary-text)" }}
-                      >
-                        手动创建
-                      </button>
-                      <button
-                        onClick={() => setMode("generate")}
-                        className="px-4 py-2 rounded-lg text-[length:var(--text-ui)] font-medium"
-                        style={{ background: "var(--color-btn-primary-bg)", color: "var(--color-btn-primary-text)" }}
-                      >
-                        AI 生成
-                      </button>
-                    </div>
+                    <EmptyState
+                      variant="plain"
+                      icon={<Bot className="icon-lg" />}
+                      title="还没有专家"
+                      description="手动创建或让 AI 帮你生成一个专家"
+                      action={
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => { setEditingId(null); setMode("create"); }}
+                            className="px-4 py-2 rounded-lg text-[length:var(--text-ui)] font-medium"
+                            style={{ background: "var(--color-btn-secondary-bg)", color: "var(--color-btn-secondary-text)" }}
+                          >
+                            手动创建
+                          </button>
+                          <button
+                            onClick={() => setMode("generate")}
+                            className="px-4 py-2 rounded-lg text-[length:var(--text-ui)] font-medium"
+                            style={{ background: "var(--color-btn-primary-bg)", color: "var(--color-btn-primary-text)" }}
+                          >
+                            AI 生成
+                          </button>
+                        </div>
+                      }
+                    />
                   </div>
                 ) : (
                   <>

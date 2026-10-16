@@ -83,7 +83,7 @@ export function ThoughtStreamCard({
               key={ev.key}
               className={`thought-stream-event ${KIND_CLASS[ev.kind ?? "info"]}`}
             >
-              {ev.kind === "intent" && <Sparkles size={9} aria-hidden="true" />}
+              {ev.kind === "intent" && <Sparkles aria-hidden="true" className="icon-xs" />}
               {ev.label}
             </span>
           ))}

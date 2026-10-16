@@ -245,7 +245,7 @@ export function ComputerTab({
                 {seg.label}
               </button>
               {i < breadcrumbs.length - 1 && (
-                <ChevronRight size={10} className="computer-crumb-sep" />
+                <ChevronRight className="icon-xs computer-crumb-sep" />
               )}
             </span>
           ))}

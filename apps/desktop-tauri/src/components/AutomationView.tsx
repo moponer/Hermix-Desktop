@@ -9,6 +9,7 @@ import {
 
   AlertTriangle,
   Info,
+  Clock,
 } from "lucide-react";
 import * as api from "../api";
 import type { AutomationTask } from "../types";
@@ -17,6 +18,7 @@ import { storage, STORAGE_KEYS } from "../utils/storageCompat";
 import { setKeepAwake, KEEP_AWAKE_CHANGED_EVENT } from "../desktopBridge";
 import { useWorkspaces } from "../hooks/useWorkspaces";
 import { toastInfo, toastError } from "../hooks/useToast";
+import { EmptyState, PageHeader } from "./ui";
 
 /** A small set of cron presets the editor offers as quick-pick chips.
  *  Each entry: [label, cronExpression, humanDescription]. */
@@ -218,15 +220,15 @@ export function AutomationView({ openChat, onCreateWorkflow }: { openChat: () =>
   );
 
   return (
-    <div className="flex-1 overflow-y-auto px-8 py-6 min-h-0">
-      <div className="max-w-4xl mx-auto">
-        {/* Header：双 tab（自动化 | 工作流），对齐 ZCode 的页面结构 */}
-        <div className="flex items-center gap-5 mb-5">
+    <div className="flex-1 flex flex-col min-h-0">
+      {/* Header：双 tab（自动化 | 工作流），统一 PageHeader（R1-3，废止 text-2xl 大字 tab） */}
+      <PageHeader icon={<Clock className="icon-lg" />} title="自动化">
+        <div className="flex items-center gap-1 rounded-lg bg-bg-tertiary p-0.5">
           <button
             type="button"
             onClick={() => setTab("auto")}
-            className={`text-2xl font-semibold transition-colors ${
-              tab === "auto" ? "text-text-primary" : "text-text-faint hover:text-text-secondary"
+            className={`px-3 py-1 rounded-md text-[length:var(--text-ui)] transition-colors ${
+              tab === "auto" ? "bg-bg-active text-text-primary font-medium" : "text-text-muted hover:text-text-primary"
             }`}
           >
             自动化
@@ -234,13 +236,16 @@ export function AutomationView({ openChat, onCreateWorkflow }: { openChat: () =>
           <button
             type="button"
             onClick={() => setTab("flow")}
-            className={`text-2xl font-semibold transition-colors ${
-              tab === "flow" ? "text-text-primary" : "text-text-faint hover:text-text-secondary"
+            className={`px-3 py-1 rounded-md text-[length:var(--text-ui)] transition-colors ${
+              tab === "flow" ? "bg-bg-active text-text-primary font-medium" : "text-text-muted hover:text-text-primary"
             }`}
           >
             工作流
           </button>
         </div>
+      </PageHeader>
+      <div className="flex-1 overflow-y-auto px-8 pb-6 min-h-0">
+      <div className="max-w-4xl mx-auto">
         {tab === "auto" ? (
           <>
             <div className="flex items-start justify-between mb-6 gap-4">
@@ -267,16 +272,18 @@ export function AutomationView({ openChat, onCreateWorkflow }: { openChat: () =>
         {loading && tasks.length === 0 ? (
           <p className="text-[length:var(--text-ui)] text-text-faint py-8 text-center">加载中…</p>
         ) : tasks.length === 0 ? (
-          <p className="text-[length:var(--text-ui)] text-text-faint py-8 text-center">
-            还没有任何自动化任务，点击右上「新建自动化」开始
-          </p>
+          <EmptyState
+            variant="plain"
+            title="还没有自动化任务"
+            description="点击右上「新建自动化」开始"
+          />
         ) : (
           categories.map((cat) => (
             <div key={cat} className="mb-6">
-              <h2 className="text-[length:var(--text-ui)] font-medium text-text-muted uppercase tracking-wider mb-2">
+              <h2 className="text-[length:var(--text-ui)] font-semibold text-text-muted mb-2">
                 {cat} · {grouped[cat].length}
               </h2>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {grouped[cat].map((t) => (
                   <TaskCard
                     key={t.id}
@@ -291,57 +298,58 @@ export function AutomationView({ openChat, onCreateWorkflow }: { openChat: () =>
             </div>
           ))
         )}
+        {/* Hermix 有任务在跑时保持电脑唤醒（对齐 ZCode 的 keep-awake 语义）：
+            开启后，会话正在流式**或**后台定时任务正在执行，均阻止系统睡眠。
+            后台任务这一路尤其重要——到点执行时没有任何 UI 会话在流式，
+            只看流式会让笔记本合盖错过执行窗口。
+            生效逻辑在 App 层（全局挂载），这里只负责开关与持久化。
+            R1-4：从滚动根下移入同一 max-w 容器，消除两层宽度体系。 */}
+        {tab === "auto" && (
+          <>
+        <div className="flex items-center justify-between rounded-xl border border-border-primary bg-bg-card px-4 py-3 mb-5">
+          <div className="flex items-center gap-2 text-[length:var(--text-ui)] text-text-secondary">
+            <Info className="icon-md text-text-muted shrink-0" />
+            <span>Hermix 有任务在跑时保持电脑唤醒（对话进行中或定时任务执行中）。</span>
+          </div>
+          <input
+            type="checkbox"
+            checked={keepAwake}
+            onChange={(e) => toggleKeepAwake(e.target.checked)}
+            className="rounded border-border-primary"
+            aria-label="Hermix 有任务在跑时保持电脑唤醒"
+          />
+        </div>
+
+        {/* 定时任务模板：一键预填编辑器，保存前可自由改。 */}
+        <p className="text-[length:var(--text-ui)] text-text-muted mb-2">定时任务模板</p>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+          {TEMPLATES.map((t) => (
+            <button
+              key={t.name}
+              onClick={() => setCreating(templateToTask(t))}
+              className="text-left rounded-xl border border-border-primary bg-bg-card p-3.5 hover:bg-bg-hover transition-colors"
+            >
+              <div className="flex items-center gap-2">
+                <span className="text-base shrink-0">{t.icon}</span>
+                <span className="text-[length:var(--text-ui)] font-semibold text-text-primary">
+                  {t.name}
+                </span>
+              </div>
+              <p className="mt-1 text-[length:var(--text-ui)] text-text-muted leading-snug line-clamp-2">
+                {t.description}
+              </p>
+              <p className="mt-1.5 text-[length:var(--text-ui)] text-text-faint">{t.scheduleLabel}</p>
+            </button>
+          ))}
+        </div>
+          </>
+        )}
         </>
         ) : (
           <WorkflowPanel openChat={openChat} onCreateWorkflow={onCreateWorkflow} />
         )}
       </div>
-
-      {/* Hermix 有任务在跑时保持电脑唤醒（对齐 ZCode 的 keep-awake 语义）：
-          开启后，会话正在流式**或**后台定时任务正在执行，均阻止系统睡眠。
-          后台任务这一路尤其重要——到点执行时没有任何 UI 会话在流式，
-          只看流式会让笔记本合盖错过执行窗口。
-          生效逻辑在 App 层（全局挂载），这里只负责开关与持久化。 */}
-      {tab === "auto" && (
-        <>
-      <div className="flex items-center justify-between rounded-xl border border-border-primary bg-bg-card px-4 py-3 mb-5">
-        <div className="flex items-center gap-2 text-[length:var(--text-ui)] text-text-secondary">
-          <Info className="icon-md text-text-muted shrink-0" />
-          <span>Hermix 有任务在跑时保持电脑唤醒（对话进行中或定时任务执行中）。</span>
-        </div>
-        <input
-          type="checkbox"
-          checked={keepAwake}
-          onChange={(e) => toggleKeepAwake(e.target.checked)}
-          className="rounded border-border-primary"
-          aria-label="Hermix 有任务在跑时保持电脑唤醒"
-        />
       </div>
-
-      {/* 定时任务模板：一键预填编辑器，保存前可自由改。 */}
-      <p className="text-[length:var(--text-ui)] text-text-muted mb-2">定时任务模板</p>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 mb-6">
-        {TEMPLATES.map((t) => (
-          <button
-            key={t.name}
-            onClick={() => setCreating(templateToTask(t))}
-            className="text-left rounded-xl border border-border-primary bg-bg-card p-3.5 hover:bg-bg-hover transition-colors"
-          >
-            <div className="flex items-center gap-2">
-              <span className="text-base shrink-0">{t.icon}</span>
-              <span className="text-[length:var(--text-ui)] font-semibold text-text-primary">
-                {t.name}
-              </span>
-            </div>
-            <p className="mt-1 text-[length:var(--text-ui)] text-text-muted leading-snug line-clamp-2">
-              {t.description}
-            </p>
-            <p className="mt-1.5 text-[length:var(--text-ui)] text-text-faint">{t.scheduleLabel}</p>
-          </button>
-        ))}
-      </div>
-        </>
-      )}
 
       {/* Editor modal */}
       {(editing || creating) && (
@@ -451,21 +459,21 @@ function TaskCard({
           className="flex items-center gap-1 px-2 py-1 text-[length:var(--text-ui)] text-text-secondary hover:text-text-primary hover:bg-bg-hover rounded disabled:opacity-40"
           title="立刻跑一次"
         >
-          <Play size={10} /> 立即运行
+          <Play className="icon-xs" /> 立即运行
         </button>
         <button
           onClick={onEdit}
           className="flex items-center gap-1 px-2 py-1 text-[length:var(--text-ui)] text-text-secondary hover:text-text-primary hover:bg-bg-hover rounded"
           title="编辑"
         >
-          <Pencil size={10} /> 编辑
+          <Pencil className="icon-xs" /> 编辑
         </button>
         <button
           onClick={onDelete}
           className="flex items-center gap-1 px-2 py-1 text-[length:var(--text-ui)] text-text-faint hover:text-error hover:bg-bg-hover rounded"
           title="删除"
           aria-label="删除">
-          <Trash2 size={10} />
+          <Trash2 className="icon-xs" />
         </button>
         <div className="flex-1" />
         <button
@@ -477,7 +485,7 @@ function TaskCard({
           }`}
           title={task.enabled ? "点击停用" : "点击启用"}
         >
-          <Power size={10} />
+          <Power className="icon-xs" />
           {task.enabled ? "已启用" : "已停用"}
         </button>
       </div>
@@ -603,7 +611,7 @@ function TaskEditor({
                   onClick={() => update("schedule", expr)}
                   className={`px-2 py-0.5 text-[length:var(--text-ui)] rounded ${
                     draft.schedule === expr
-                      ? "bg-accent text-bg-primary"
+                      ? "bg-bg-active text-text-primary font-medium"
                       : "bg-bg-secondary text-text-secondary hover:bg-bg-hover border border-border-primary"
                   }`}
                   title={desc}
@@ -620,7 +628,7 @@ function TaskEditor({
               placeholder="0 9 * * 1-5"
             />
           </Field>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <Field label="分类" hint="（可选）用于卡片分组">
               <input
                 type="text"
@@ -641,7 +649,7 @@ function TaskEditor({
               />
             </Field>
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <Field label="模型" hint="（可选）provider:model">
               <input
                 type="text"
@@ -667,7 +675,7 @@ function TaskEditor({
               </select>
             </Field>
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <Field
               label="运行次数上限"
               hint="（可选）累计跑满 N 次后自动停用；留空 = 无限循环"
@@ -702,7 +710,7 @@ function TaskEditor({
                       title={sk.description}
                       className={`px-2 py-1 text-[length:var(--text-ui)] rounded border transition-colors ${
                         selected
-                          ? "bg-accent text-bg-primary border-accent"
+                          ? "bg-bg-active text-text-primary border-border-secondary font-medium"
                           : "bg-bg-secondary text-text-secondary border-border-primary hover:bg-bg-hover"
                       }`}
                     >
@@ -942,7 +950,7 @@ function WorkflowCard({
           className="flex items-center gap-1 px-2 py-1 text-[length:var(--text-ui)] text-text-secondary hover:text-text-primary hover:bg-bg-hover rounded disabled:opacity-40"
           title="再跑一次"
         >
-          <Play size={10} /> 再跑一次
+          <Play className="icon-xs" /> 再跑一次
         </button>
         <div className="flex-1" />
         <button
@@ -951,7 +959,7 @@ function WorkflowCard({
           aria-label="删除"
           title="删除"
         >
-          <Trash2 size={10} />
+          <Trash2 className="icon-xs" />
         </button>
       </div>
     </div>

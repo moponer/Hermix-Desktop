@@ -38,7 +38,7 @@ export function ConnectionIndicator() {
       className="connection-indicator"
       style={{ cursor: isOffline && !restarting ? "pointer" : "default" }}
     >
-      {isConnecting && <Loader2 size={10} className="animate-spin opacity-70" />}
+      {isConnecting && <Loader2 className="icon-xs animate-spin opacity-70" />}
       <span className="connection-dot" style={{ background: dotColor }} />
     </button>
   );

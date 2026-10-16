@@ -183,7 +183,7 @@ export function UpdatePanel({ updater }: { updater: Updater }) {
               onClick={() => void startUpdate()}
               className={clsx(
                 "px-4 h-8 rounded text-sm font-medium flex items-center gap-1.5",
-                "bg-accent text-white hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed",
+                "bg-accent text-on-accent hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed",
               )}
             >
               {busy ? (

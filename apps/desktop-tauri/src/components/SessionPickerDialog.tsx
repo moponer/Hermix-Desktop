@@ -134,7 +134,7 @@ export function SessionPickerDialog({
                   </p>
                 )}
                 <div className="flex items-center gap-1 mt-1 ml-5">
-                  <Clock size={10} className="text-text-faint" />
+                  <Clock className="icon-xs text-text-faint" />
                   <span className="text-tiny text-text-faint">
                     {new Date(session.updated_at).toLocaleDateString("zh-CN")}
                   </span>

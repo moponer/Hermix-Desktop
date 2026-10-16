@@ -153,24 +153,24 @@ export function InlineApprovalCard({ request, onApprove, onDeny, resolved }: Inl
               <span className="font-mono">{request.tool}</span>
             </span>
             <span className={badge.cls}>
-              <ShieldAlert size={9} />
+              <ShieldAlert className="icon-xs" />
               {badge.label}
             </span>
             {resolved === "approved" && (
               <span className="approval-pill approval-pill-approved ml-auto">
-                <Check size={9} />
+                <Check className="icon-xs" />
                 已允许
               </span>
             )}
             {resolved === "denied" && (
               <span className="approval-pill approval-pill-denied ml-auto">
-                <X size={9} />
+                <X className="icon-xs" />
                 已拒绝
               </span>
             )}
             {resolved === "expired" && (
               <span className="approval-pill approval-pill-expired ml-auto">
-                <Clock size={9} />
+                <Clock className="icon-xs" />
                 已超时
               </span>
             )}

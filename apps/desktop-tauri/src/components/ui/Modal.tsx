@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useId, useRef, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 
@@ -19,12 +19,17 @@ export interface ModalProps {
  * 居中弹窗。遮罩用 token（`--color-overlay-scrim`），此前 `.modal-backdrop`
  * 和 `.pane-overlay` 各自硬编码了一个 rgba，是三份不同深度的遮罩。
  *
+ * R2-2（2026-10-16）加固：入场动画（复用 `.modal-scale-in` 关键帧）、
+ * 遮罩 backdrop-blur、`aria-labelledby` 指向标题、焦点陷阱选择器补
+ * details/summary/contenteditable 并排除 disabled 元素。
+ *
  * 焦点陷阱（Tab 循环 + Esc 关闭 + 关闭后还焦）与 `inert` 背景是这套东西的
  * 全部价值；少了前两项就是个能聚焦到后面去的 div。
  */
 export function Modal({ open, onClose, title, children, width = 560, footer, className }: ModalProps) {
   const panelRef = useRef<HTMLDivElement>(null);
   const restoreRef = useRef<HTMLElement | null>(null);
+  const titleId = useId();
 
   useEffect(() => {
     if (!open) return;
@@ -36,9 +41,11 @@ export function Modal({ open, onClose, title, children, width = 560, footer, cla
         return;
       }
       if (e.key !== "Tab" || !panelRef.current) return;
-      const focusables = panelRef.current.querySelectorAll<HTMLElement>(
-        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
-      );
+      const focusables = Array.from(
+        panelRef.current.querySelectorAll<HTMLElement>(
+          'button, [href], input, select, textarea, details, summary, [contenteditable="true"], [tabindex]:not([tabindex="-1"])',
+        ),
+      ).filter((el) => !el.hasAttribute("disabled") && el.offsetParent !== null);
       if (focusables.length === 0) return;
       const first = focusables[0]!;
       const last = focusables[focusables.length - 1]!;
@@ -63,25 +70,30 @@ export function Modal({ open, onClose, title, children, width = 560, footer, cla
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-[var(--color-overlay-scrim)] p-4"
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-[var(--color-overlay-scrim)] p-4 backdrop-blur-[4px]"
       onClick={onClose}
     >
       <div
         ref={panelRef}
         role="dialog"
         aria-modal="true"
+        aria-labelledby={title ? titleId : undefined}
         onClick={(e) => e.stopPropagation()}
         style={{ width, maxWidth: "calc(100vw - 2rem)" }}
         className={cx(
           "flex max-h-[85vh] flex-col overflow-hidden rounded-[var(--radius-3xl)]",
           "border border-[var(--color-border-primary)] bg-[var(--color-bg-elevated)]",
           "shadow-[var(--shadow-modal)]",
+          "[animation:modal-scale-in_var(--duration-base,160ms)_var(--ease-out,cubic-bezier(0.16,1,0.3,1))_both]",
           className,
         )}
       >
         {title && (
           <div className="flex shrink-0 items-center justify-between gap-3 px-5 py-4">
-            <h2 className="text-[length:var(--text-title)] font-semibold leading-tight text-[var(--color-text-primary)]">
+            <h2
+              id={titleId}
+              className="text-[length:var(--text-title)] font-semibold leading-tight text-[var(--color-text-primary)]"
+            >
               {title}
             </h2>
             <button
@@ -116,6 +128,9 @@ export interface ConfirmDialogProps {
   /** 危险操作（删除、撤销、解绑）用 danger —— 默认就是 danger，
    *  因为确认弹窗绝大多数场景确实是危险操作。 */
   confirmVariant?: "primary" | "danger";
+  /** 异步确认进行中：双按钮禁用，确认键显示「处理中…」。
+   *  （R2-2：从 ToolTabs 私有 ConfirmDialog 收编的能力） */
+  busy?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -127,6 +142,7 @@ export function ConfirmDialog({
   confirmLabel = "确认",
   cancelLabel = "取消",
   confirmVariant = "danger",
+  busy = false,
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
@@ -138,11 +154,11 @@ export function ConfirmDialog({
       width={460}
       footer={
         <>
-          <Button variant="secondary" onClick={onCancel}>
+          <Button variant="secondary" onClick={onCancel} disabled={busy}>
             {cancelLabel}
           </Button>
-          <Button variant={confirmVariant} onClick={onConfirm}>
-            {confirmLabel}
+          <Button variant={confirmVariant} onClick={onConfirm} disabled={busy}>
+            {busy ? "处理中…" : confirmLabel}
           </Button>
         </>
       }

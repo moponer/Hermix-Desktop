@@ -185,7 +185,7 @@ export function QueueItemRow({
               className="text-tiny px-1.5 py-0.5 rounded font-medium"
               style={{
                 background: "var(--color-accent)",
-                color: "var(--color-accent-on-text)",
+                color: "var(--color-on-accent)",
               }}
             >
               保存

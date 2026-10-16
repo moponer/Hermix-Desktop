@@ -3,7 +3,7 @@
 /// and stay legible at 18–40px. Pure black/white high-contrast.
 /// - Assistant: the Hermix fox portrait (SVG). Vector source means @1x/@2x/
 /// @3x all stay crisp without per-density exports; also removes the
-/// `mascot-avatar-*.png` quartet from `src/assets/`.
+/// `mascot-avatar-*.png` quartet from `public/`（T4 去重后保留的一组）。
 
 import { useState } from "react";
 import { UserAvatar } from "./UserAvatar";

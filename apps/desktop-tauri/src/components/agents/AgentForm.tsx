@@ -168,7 +168,7 @@ export function AgentForm({ initial, onSave, onCancel }: AgentFormProps) {
           {(form.skills || []).map((s) => (
             <span key={s} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[length:var(--text-meta)] font-medium bg-bg-tertiary text-text-secondary">
               {s}
-              <button type="button" onClick={() => removeFromList("skills", s)} className="text-text-faint hover:text-error"><X size={10} /></button>
+              <button type="button" onClick={() => removeFromList("skills", s)} className="text-text-faint hover:text-error"><X className="icon-xs" /></button>
             </span>
           ))}
         </div>
@@ -214,7 +214,7 @@ export function AgentForm({ initial, onSave, onCancel }: AgentFormProps) {
           {(form.personality || []).map((p) => (
             <span key={p} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[length:var(--text-meta)] font-medium bg-bg-tertiary text-text-secondary">
               {p}
-              <button type="button" onClick={() => removeFromList("personality", p)} className="text-text-faint hover:text-error"><X size={10} /></button>
+              <button type="button" onClick={() => removeFromList("personality", p)} className="text-text-faint hover:text-error"><X className="icon-xs" /></button>
             </span>
           ))}
         </div>

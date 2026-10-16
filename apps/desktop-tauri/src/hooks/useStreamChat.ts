@@ -11,6 +11,7 @@ import {
   stripActivityMarkers,
 } from "./streamChatUtils";
 import { streamChannelName } from "../api";
+import { toastInfo } from "./useToast";
 import { docCanvasStore } from "@hermix/preview";
 
 /**
@@ -268,7 +269,19 @@ export function useStreamChat(activeSessionId: string | null) {
   // composer-disabled state to the specific session that's mid-stream.
   const [streamingSessionId, setStreamingSessionId] = useState<string | null>(null);
   const streamingSessionIdRef = useRef<string | null>(null);
-  const [streamingStatus, setStreamingStatus] = useState<string | null>(null);
+  const [streamingStatus, setStreamingStatusState] = useState<string | null>(null);
+  // task_in_flight（排队回执）到达时立刻弹 toast 回显排队内容：状态 chip
+  // 太轻，排队等待期间界面无新事件，用户会把"排队"误读成"卡死"
+  // （2026-10-15 实机反馈：插入对话后 LLM 静默半分钟才续上）。
+  const setStreamingStatus = useCallback((content: string | null) => {
+    setStreamingStatusState(content);
+    if (content && content.includes('"task_in_flight"')) {
+      try {
+        const queued = (JSON.parse(content) as { queued_text?: string }).queued_text;
+        if (queued) toastInfo(`新消息已排队，当前任务完成后自动发送：${queued}`);
+      } catch { /* content 非 JSON 时跳过回显 */ }
+    }
+  }, []);
   const [compactionStatus, setCompactionStatus] =
     useState<import("../components/CompactionStatusBanner").CompactionStatus | null>(null);
   const [contextUsage, setContextUsage] =

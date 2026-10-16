@@ -106,13 +106,11 @@ export function MessageBubble({
   if (message.role === "user") return <UserMessage message={message} />;
   if (message.role === "system") return <SystemMessage message={message} />;
   if (message.role === "approval") {
-    // 已决议的审批卡直接消失，不在消息流留痕。
-    // Pending 态也不再内联渲染 —— 待决定审批统一由 ChatView 底部的
-    // ApprovalDrawer（输入框上方抽屉）承载，避免同一请求出现两处
-    // 可点击的决策面。
-    if (message.approval?.decision) {
-      return null;
-    }
+    // 审批消息一律不内联渲染（T7：原写法是 if(decision) return null;
+    // return null; 的冗余双分支，行为等价，简化为单 return）——
+    // Pending 态由 ChatView 底部的 ApprovalDrawer（输入框上方抽屉）
+    // 统一承载，避免同一请求出现两处可点击的决策面；已决议的不在
+    // 消息流留痕（决议结果体现在工具卡的 approval-pill 上）。
     return null;
   }
   if (message.role === "clarify") {
@@ -174,7 +172,7 @@ export function PrefetchIntentChip({ intent, confidence }: PrefetchIntentChipPro
   return (
     <div className="prefetch-chip h-enter" title={`意图预判：${intent}`}>
       <div className="prefetch-dot" />
-      <Sparkles size={9} className="text-success" />
+      <Sparkles className="icon-xs text-success" />
       <span className="prefetch-label">预取</span>
       <span className="prefetch-label" style={{ color: "var(--color-text-primary)" }}>{intent}</span>
       <span className="prefetch-confidence">{pct}%</span>

@@ -114,7 +114,7 @@ export function SecurityTab() {
             aria-checked={sec.auto_backup}
             onClick={() => update({ auto_backup: !sec.auto_backup })}
             className={`relative h-6 w-11 rounded-full transition-colors ${
-              sec.auto_backup ? "bg-accent" : "bg-bg-tertiary"
+              sec.auto_backup ? "bg-success" : "bg-bg-tertiary"
             }`}
           >
             <span

@@ -2,7 +2,7 @@
 // renderer, the live terminal, and the file-change / memory meta blocks.
 // Extracted from MessageBubble.tsx.
 import { buildActivitySummary } from "./chat/activitySummary";
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useId, useState, useEffect, useMemo } from "react";
 import {
   ChevronDown, ChevronRight, Loader2,
   FilePlus, Edit3, Trash2, Brain,
@@ -21,6 +21,7 @@ import { formatDuration } from "./bubbleUtils";
 import { ThinkingDots, ReasoningBlock } from "./ThinkingBubble";
 import { ProcessLine, type ProcessLineVM, type ProcessStatus } from "./ProcessLine";
 import { FileChangeSummary } from "./FileChangeSummary";
+import { useDisclosure } from "./chat/activitySummary";
 
 /**
  * 运行态的一行过程。只负责把 `ToolGroup` 映射成 `ProcessLineVM`，
@@ -83,6 +84,7 @@ export function ProcessTimeline({
   onApproveBatchApproval,
   onDenyBatchApproval,
   onReasoningFoldChange,
+  disclosureKey,
 }: {
   steps: TimelineStep[];
   isStreaming?: boolean;
@@ -122,6 +124,10 @@ export function ProcessTimeline({
    *  decide whether the bottom-of-chat `<ReasoningTicker>` should
    *  show (only when the user has folded the reasoning block). */
   onReasoningFoldChange?: (folded: boolean) => void;
+  /** 稳定的轮次 key（通常是 message.id）：折叠态按它存进模块级 Map，
+   *  `content-visibility` 回收重挂后展开状态不丢（R3-4）。缺省时退化为
+   *  实例级 useId —— 不会跨实例串台，但重挂后会回默认值。 */
+  disclosureKey?: string;
 }) {
   // 2026-09-29 的展开判定：按「这一组是不是活跃轮次的尾巴」判，
   // **不按「有没有工具正在执行」**判。
@@ -138,7 +144,10 @@ export function ProcessTimeline({
   //
   // 此前这里 `expanded = isStreaming || keepOpen ? true : …`，导致运行中
   // 思考永远展开且不可收 —— 正是用户截图里「多段思考糊成一片」的成因。
-  const [userOverride, setUserOverride] = useState<boolean | null>(null);
+  // R3-4（2026-10-16）：注释承诺的迁移这才真正落地 —— 此前仍是本地
+  // useState（旧 L141），用户展开的过程一滚出视口就被打回折叠。
+  const fallbackKey = useId();
+  const [userOverride, setUserOverride] = useDisclosure(disclosureKey ?? `pt${fallbackKey}`);
   const settled = !(isStreaming || keepOpen);
   const expanded = settled ? (userOverride ?? false) : true;
 
@@ -200,7 +209,9 @@ export function ProcessTimeline({
     // so the memo will recompute when steps actually change. When the
     // stream settles (`isStreaming` flips false), the groups must also
     // recompute because `streamComplete` changes stranded→error.
-    [steps, isStreaming],
+    // R3-4：`streamComplete` 还受 hasRunningTool/keepOpen 影响，仅盯
+    // isStreaming 会在「流结束但工具还在跑」的窗口漏一次重算。
+    [steps, isStreaming, streamComplete],
   );
 
   // 早退必须放在**所有** hooks 之后（下面还有 segments useMemo）——
@@ -336,7 +347,7 @@ export function ProcessTimeline({
           结束后多段思考 + 全部执行过程收成这一行，下面只剩正文。 */}
       {settled && hasProcessContent && (
         <button
-          onClick={() => setUserOverride((v) => !v)}
+          onClick={() => setUserOverride(!expanded)}
           className="reasoning-header tl-process-header"
           data-has-failure={summary.failed > 0 ? "true" : undefined}
           aria-expanded={expanded}
@@ -552,6 +563,7 @@ export function UnifiedTimelineRenderer({
   onApproveBatchApproval,
   onDenyBatchApproval,
   onReasoningFoldChange,
+  disclosureKey,
 }: {
   steps: TimelineStep[];
   isStreaming?: boolean;
@@ -584,6 +596,8 @@ export function UnifiedTimelineRenderer({
    *  decide whether the bottom-of-chat `<ReasoningTicker>` should
    *  show (only when the user has folded the reasoning block). */
   onReasoningFoldChange?: (folded: boolean) => void;
+  /** 转发给 `<ProcessTimeline>`：折叠态持久化用的稳定轮次 key。 */
+  disclosureKey?: string;
 }) {
   const hasTools = toolCalls.length > 0;
   const hasAnyToolStep = steps.some((s) => s.kind === "tools");
@@ -628,6 +642,7 @@ export function UnifiedTimelineRenderer({
         onApproveBatchApproval={onApproveBatchApproval}
         onDenyBatchApproval={onDenyBatchApproval}
         onReasoningFoldChange={onReasoningFoldChange}
+        disclosureKey={disclosureKey}
       />
 
       {/* Trailing meta blocks — file changes / memory updates /
@@ -836,7 +851,7 @@ export function StatusPill({ status }: { status: "running" | "done" | "error" | 
     "运行中";
   return (
     <span className={cls}>
-      {safe === "running" && <Loader2 size={9} className="animate-spin" />}
+      {safe === "running" && <Loader2 className="icon-xs animate-spin" />}
       {label}
     </span>
   );

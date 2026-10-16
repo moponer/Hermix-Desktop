@@ -553,7 +553,7 @@ export function Sidebar({
                               : isRemoving ? <Loader2 className="icon-md animate-spin" /> : null}
 {imSourceOf(s.id) && (
                               <span
-                                className="shrink-0 inline-flex items-center gap-1 rounded-full bg-accent-soft px-1.5 h-[18px] text-[length:var(--text-tiny)] text-accent"
+                                className="shrink-0 inline-flex items-center gap-1 rounded-full bg-bg-tertiary px-1.5 h-[18px] text-[length:var(--text-tiny)] text-text-secondary"
                                 title={`来自${IM_SOURCE_LABEL[imSourceOf(s.id)!]}的远程对话`}
                               >
                                 {IM_SOURCE_LABEL[imSourceOf(s.id)!]}
@@ -561,7 +561,7 @@ export function Sidebar({
                             )}
                             <span className={clsx("truncate-1", isRemoving && "opacity-60")}>{s.title || "新建对话"}</span>
                             <span className="sidebar-row-meta">{formatSidebarTime(s.updated_at)}</span>
-                            {isPinned(s.id, "session") && <Pin size={10} className="sidebar-row-pin" />}
+                            {isPinned(s.id, "session") && <Pin className="icon-xs sidebar-row-pin" />}
                           </button>
                           <div className="sidebar-row-actions">
                             <SidebarMenu label="对话操作" items={sessionMenu(s)} />
@@ -603,7 +603,7 @@ export function Sidebar({
                           <FolderOpen className="icon-sm" />
                           {wsRemoving ? <Loader2 className="icon-md animate-spin" /> : null}
                           <span className={clsx("sidebar-project-name", wsRemoving && "opacity-60")}>{ws.name}</span>
-                          {isPinned(ws.id, "workspace") && <Pin size={10} className="sidebar-row-pin" />}
+                          {isPinned(ws.id, "workspace") && <Pin className="icon-xs sidebar-row-pin" />}
                           {wsSessions.length > 0 && (
                             <span className="sidebar-tab-count">{wsSessions.length}</span>
                           )}
@@ -647,7 +647,7 @@ export function Sidebar({
                                     : psRemoving ? <Loader2 className="icon-md animate-spin" /> : null}
 {imSourceOf(s.id) && (
                                   <span
-                                    className="shrink-0 inline-flex items-center gap-1 rounded-full bg-accent-soft px-1.5 h-[18px] text-[length:var(--text-tiny)] text-accent"
+                                    className="shrink-0 inline-flex items-center gap-1 rounded-full bg-bg-tertiary px-1.5 h-[18px] text-[length:var(--text-tiny)] text-text-secondary"
                                     title={`来自${IM_SOURCE_LABEL[imSourceOf(s.id)!]}的远程对话`}
                                   >
                                     {IM_SOURCE_LABEL[imSourceOf(s.id)!]}
@@ -655,7 +655,7 @@ export function Sidebar({
                                 )}
                                   <span className={clsx("truncate-1", psRemoving && "opacity-60")}>{s.title || "新建对话"}</span>
                                   <span className="sidebar-row-meta">{formatSidebarTime(s.updated_at)}</span>
-                                  {isPinned(s.id, "session") && <Pin size={10} className="sidebar-row-pin" />}
+                                  {isPinned(s.id, "session") && <Pin className="icon-xs sidebar-row-pin" />}
                                 </button>
                                 <div className="sidebar-row-actions">
                                   <SidebarMenu label="对话操作" items={sessionMenu(s)} />

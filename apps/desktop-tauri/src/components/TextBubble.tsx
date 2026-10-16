@@ -188,7 +188,7 @@ export function AssistantMessage({
       {showHeader && (
         <Avatar role="assistant" size={22} className="shrink-0 mt-0.5" />
       )}
-      <div className={showHeader ? "flex-1 min-w-0" : "pl-[30px]"}>
+      <div className={showHeader ? "flex-1 min-w-0" : "pl-thread"}>
         {/* Header: model · stop chip · 已压缩。**时间不在这里** ——
             2026-10-01 用户修正：头像右边那个「刚刚 / N 分钟前」是消息的
             **年龄**，不是这一轮的**耗时**，两个数字贴在一起只会互相
@@ -244,6 +244,7 @@ export function AssistantMessage({
           onApproveBatchApproval={onApproveBatchApproval}
           onDenyBatchApproval={onDenyBatchApproval}
           onReasoningFoldChange={onReasoningFoldChange}
+          disclosureKey={message.id}
         />
 
         {/* 记忆沉淀卡：本轮 agent 写入了什么记忆（事实 / 总结 /

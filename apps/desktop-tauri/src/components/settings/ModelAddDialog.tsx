@@ -388,7 +388,7 @@ export function ModelAddDialog({ onClose, onSaved, editing }: Props) {
 const inputCls =
   "mt-1 w-full px-3 py-2 rounded-lg bg-bg-tertiary text-[length:var(--text-ui)] text-text-primary border border-border-secondary outline-none focus:border-accent transition-colors";
 const btnPrimary =
-  "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs bg-accent text-white hover:opacity-90 disabled:opacity-50";
+  "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs bg-accent text-on-accent hover:opacity-90 disabled:opacity-50";
 const btnGhost =
   "px-3 py-1.5 rounded-lg text-xs text-text-secondary border border-border-secondary hover:text-text-primary";
 

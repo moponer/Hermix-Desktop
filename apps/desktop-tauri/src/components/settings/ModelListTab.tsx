@@ -283,7 +283,7 @@ export function ModelListTab() {
 }
 
 const primaryBtn =
-  "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs bg-accent text-white hover:opacity-90 shrink-0";
+  "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs bg-accent text-on-accent hover:opacity-90 shrink-0";
 
 function IconBtn({
   title,

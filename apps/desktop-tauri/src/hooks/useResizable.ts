@@ -16,6 +16,13 @@ export interface UseResizableOptions {
    * - "right" → width = window.innerWidth - clientX
    */
   side: "left" | "right";
+  /**
+   * 历史默认值清单：存储值命中其一即视为「没拖过、用旧默认」，本次直接
+   * 采用 defaultWidth（持久化 effect 会随即把新默认写回）。
+   * 迁移必须发生在 state 初始化时 —— 若在 effect 里改 storage，本 hook
+   * 的持久化 effect 会把旧 state 原样写回，迁移被原地覆盖（2026-10-15 踩过）。
+   */
+  legacyDefaults?: string[];
 }
 
 export function useResizable({
@@ -24,6 +31,7 @@ export function useResizable({
   min,
   max,
   side,
+  legacyDefaults,
 }: UseResizableOptions) {
   // Hook order must stay stable across renders — never branch around
   // these calls.
@@ -33,6 +41,7 @@ export function useResizable({
   const [width, setWidth] = useState<number>(() => {
     try {
       const raw = storage.getItem(storageKey);
+      if (raw && legacyDefaults?.includes(raw)) return defaultWidth;
       const n = raw ? Number(raw) : NaN;
       if (!Number.isFinite(n)) return defaultWidth;
       return Math.min(max, Math.max(min, n));

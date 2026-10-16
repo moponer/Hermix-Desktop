@@ -10,6 +10,7 @@
 // 回归守卫：apps/desktop-tauri/scripts/check-css-var-refs.cjs
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ShieldCheck } from "lucide-react";
 import {
   vaultList,
   vaultCreate,
@@ -19,6 +20,7 @@ import {
   type VaultEntryMeta,
 } from "../api/vault";
 import { openExternalUrl } from "../desktopBridge";
+import { ConfirmDialog, PageHeader } from "./ui";
 import {
   buildBlobMap,
   filterEntries,
@@ -248,8 +250,8 @@ export function VaultPanel() {
   const [revealed, setRevealed] = useState<Record<string, string>>({});
   const revealTimers = useRef<Record<string, number>>({});
 
-  // 打磨：删除行内两步确认 / 复制瞬时反馈 / 弹窗入场动画状态。
-  const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  // 打磨：删除确认走 ui/ConfirmDialog（R3-6）/ 复制瞬时反馈 / 弹窗入场动画状态。
+  const [confirmTarget, setConfirmTarget] = useState<{ id: string; name: string } | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [showSecret, setShowSecret] = useState(false);
   const [modalShown, setModalShown] = useState(false);
@@ -385,7 +387,6 @@ export function VaultPanel() {
       try {
         await vaultDelete(id);
         maskReveal(id);
-        setConfirmingId(null);
         setSelectedId((cur) => (cur === id ? null : cur));
         await refresh();
       } catch (e) {
@@ -427,20 +428,23 @@ export function VaultPanel() {
 
   return (
     <div className="flex h-full flex-col gap-4 p-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-lg font-semibold text-text-primary">凭据保险库</h2>
-          <p className="text-xs text-text-secondary">
-            AES-256-GCM 本地加密 · 主密钥在 Windows 凭据管理器 · 列表不含密码
-          </p>
-        </div>
-        <button
-          className="active:scale-[0.98] rounded-lg bg-accent px-3 py-1.5 text-sm text-on-accent transition-transform hover:bg-accent-hover"
-          onClick={openAdd}
-        >
-          + 新增凭据
-        </button>
-      </div>
+      <PageHeader
+        icon={<ShieldCheck className="icon-lg" />}
+        title="凭据保险库"
+        as="h1"
+        actions={
+          <button
+            className="active:scale-[0.98] rounded-lg bg-accent px-3 py-1.5 text-sm text-on-accent transition-transform hover:bg-accent-hover"
+            onClick={openAdd}
+          >
+            + 新增凭据
+          </button>
+        }
+      >
+        <span className="text-[length:var(--text-meta)] text-text-secondary">
+          AES-256-GCM 本地加密 · 主密钥在 Windows 凭据管理器 · 列表不含密码
+        </span>
+      </PageHeader>
 
       <div className="flex min-h-0 flex-1 gap-4">
         <section className="flex min-w-0 flex-1 flex-col gap-3" aria-label="凭据列表">
@@ -514,7 +518,6 @@ export function VaultPanel() {
             <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pb-1">
               {visible.map((e) => {
                 const shown = revealed[e.id] !== undefined;
-                const isConfirming = confirmingId === e.id;
                 const isSelected = e.id === selectedId;
                 return (
                   <div
@@ -590,38 +593,16 @@ export function VaultPanel() {
                       >
                         编辑
                       </button>
-                      {isConfirming ? (
-                        <>
-                          <button
-                            className="rounded-lg px-2 py-1 text-xs font-medium text-error transition-colors hover:bg-error-soft"
-                            onClick={(ev) => {
-                              ev.stopPropagation();
-                              void remove(e.id);
-                            }}
-                          >
-                            确认删除
-                          </button>
-                          <button
-                            className="rounded-lg px-2 py-1 text-xs text-text-secondary transition-colors hover:bg-bg-secondary"
-                            onClick={(ev) => {
-                              ev.stopPropagation();
-                              setConfirmingId(null);
-                            }}
-                          >
-                            取消
-                          </button>
-                        </>
-                      ) : (
-                        <button
-                          className="rounded-lg px-2 py-1 text-xs text-error transition-colors hover:bg-error-soft"
-                          onClick={(ev) => {
-                            ev.stopPropagation();
-                            setConfirmingId(e.id);
-                          }}
-                        >
-                          删除
-                        </button>
-                      )}
+                      {/* R3-6：删除确认统一走 ui/ConfirmDialog，行内两步按钮废止 */}
+                      <button
+                        className="rounded-lg px-2 py-1 text-xs text-error transition-colors hover:bg-error-soft"
+                        onClick={(ev) => {
+                          ev.stopPropagation();
+                          setConfirmTarget({ id: e.id, name: e.name || e.username || e.id });
+                        }}
+                      >
+                        删除
+                      </button>
                     </div>
                   </div>
                 );
@@ -740,29 +721,12 @@ export function VaultPanel() {
                 >
                   编辑
                 </button>
-                {confirmingId === selected.id ? (
-                  <>
-                    <button
-                      className="flex-1 rounded-lg border border-border-secondary px-3 py-1.5 text-[length:var(--text-meta)] font-medium text-error transition-colors hover:bg-error-soft"
-                      onClick={() => void remove(selected.id)}
-                    >
-                      确认删除
-                    </button>
-                    <button
-                      className="flex-1 rounded-lg border border-border-secondary px-3 py-1.5 text-[length:var(--text-meta)] text-text-secondary transition-colors hover:bg-bg-secondary"
-                      onClick={() => setConfirmingId(null)}
-                    >
-                      取消
-                    </button>
-                  </>
-                ) : (
-                  <button
-                    className="flex-1 rounded-lg border border-border-secondary px-3 py-1.5 text-[length:var(--text-meta)] text-error transition-colors hover:bg-error-soft"
-                    onClick={() => setConfirmingId(selected.id)}
-                  >
-                    删除
-                  </button>
-                )}
+                <button
+                  className="flex-1 rounded-lg border border-border-secondary px-3 py-1.5 text-[length:var(--text-meta)] text-error transition-colors hover:bg-error-soft"
+                  onClick={() => setConfirmTarget({ id: selected.id, name: selected.name || selected.username || selected.id })}
+                >
+                  删除
+                </button>
               </div>
             </div>
           </aside>
@@ -873,6 +837,19 @@ export function VaultPanel() {
           </div>
         </div>
       )}
+
+      {/* R3-6：删除凭据统一确认弹窗（原行内两步按钮已废止） */}
+      <ConfirmDialog
+        open={confirmTarget !== null}
+        title="删除凭据"
+        body={`确定删除「${confirmTarget?.name ?? ""}」？删除后无法恢复。`}
+        confirmLabel="删除"
+        onConfirm={() => {
+          if (confirmTarget) void remove(confirmTarget.id);
+          setConfirmTarget(null);
+        }}
+        onCancel={() => setConfirmTarget(null)}
+      />
     </div>
   );
 }

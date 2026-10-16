@@ -63,16 +63,9 @@ export function TitleBar({ title }: { title?: string }) {
 
   return (
     <div className="titlebar drag">
-      {/* ① 左栏 —— 与侧栏同宽 */}
+      {/* ① 左栏 —— 与侧栏同宽。墨与纸 v4：品牌区改纯文字（白粗名，
+          无图标底板；版本号由侧栏头部承担，不重复）。 */}
       <div className="titlebar-zone titlebar-zone--left titlebar-brand">
-        <img
-          src="/mascot-avatar-bg-round-24.png"
-          alt=""
-          width={22}
-          height={22}
-          draggable={false}
-          className="titlebar-logo"
-        />
         <span className="titlebar-title">Hermix</span>
       </div>
 
@@ -124,7 +117,8 @@ export function TitleBar({ title }: { title?: string }) {
           title="最小化"
           aria-label="最小化"
         >
-          <Minus className="icon-lg" />
+          {/* 五个窗口按钮统一 icon-md（R1-2）：同一组按钮此前 md/lg 混档 */}
+          <Minus className="icon-md" />
         </button>
         <button
           type="button"
@@ -144,7 +138,7 @@ export function TitleBar({ title }: { title?: string }) {
           title="关闭"
           aria-label="关闭"
         >
-          <X className="icon-lg" />
+          <X className="icon-md" />
         </button>
       </div>
     </div>

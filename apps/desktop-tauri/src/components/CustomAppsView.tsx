@@ -13,6 +13,7 @@ import {
 import { AppCard } from "./custom-apps/AppCard";
 import { AppDetailModal } from "./custom-apps/AppDetailModal";
 import { useSafeTimeout } from "../hooks/useSafeTimeout";
+import { EmptyState, PageHeader } from "./ui";
 
 /** Auto-refresh interval (ms) — keeps the list in sync when apps are
  *  created/updated/deleted via the LLM tool while this page is open. */
@@ -154,39 +155,38 @@ export function CustomAppsView({ onStartCreateApp }: { onStartCreateApp?: () => 
 
   return (
     <div className="custom-apps-view">
-      <div className="custom-apps-view__header">
-        <div className="custom-apps-view__title-row">
-          <h1 className="custom-apps-view__title">
-            <Boxes size={24} />
-            自定义应用
-          </h1>
-          <button
-            onClick={onStartCreateApp}
-            className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[length:var(--text-ui)] font-medium transition-colors hover:opacity-90"
-            style={{
-              marginLeft: "auto",
-              marginRight: 8,
-              background: "var(--color-accent, #b8860b)",
-              color: "#fff",
-            }}
-            title="创建新应用"
-          >
-            <Plus className="icon-lg" />
-            创建新应用
-          </button>
-          <button
-            className="custom-apps-view__refresh"
-            onClick={() => loadApps()}
-            disabled={loading}
-            title="刷新"
-          >
-            <RefreshCw className={`icon-lg ${loading ? "spin" : ""}`} />
-          </button>
-        </div>
-        <p className="custom-apps-view__subtitle">
-          管理通过对话创建的桌面应用 · 共 {apps.length} 个 · 已打包 {packagedCount} 个
-        </p>
-      </div>
+      <PageHeader
+        icon={<Boxes className="icon-lg" />}
+        title="自定义应用"
+        count={`${apps.length} 个 · 已打包 ${packagedCount}`}
+        actions={
+          <>
+            <button
+              onClick={onStartCreateApp}
+              className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[length:var(--text-ui)] font-medium transition-colors hover:opacity-90"
+              style={{
+                background: "var(--color-accent)",
+                color: "var(--color-on-accent)",
+              }}
+              title="创建新应用"
+            >
+              <Plus className="icon-lg" />
+              创建新应用
+            </button>
+            <button
+              className="custom-apps-view__refresh"
+              onClick={() => loadApps()}
+              disabled={loading}
+              title="刷新"
+            >
+              <RefreshCw className={`icon-lg ${loading ? "spin" : ""}`} />
+            </button>
+          </>
+        }
+      />
+      <p className="custom-apps-view__subtitle">
+        管理通过对话创建的桌面应用
+      </p>
 
       {error && (
         <div className="custom-apps-view__alert custom-apps-view__alert--error">
@@ -218,17 +218,16 @@ export function CustomAppsView({ onStartCreateApp }: { onStartCreateApp?: () => 
             <p>加载中…</p>
           </div>
         ) : filteredApps.length === 0 ? (
-          <div className="custom-apps-view__empty">
-            <Boxes size={48} className="custom-apps-view__empty-icon" />
-            <h3 className="custom-apps-view__empty-title">
-              {query.trim() ? "没有匹配的应用" : "还没有自定义应用"}
-            </h3>
-            <p className="custom-apps-view__empty-desc">
-              {query.trim()
+          <EmptyState
+            variant="plain"
+            icon={<Boxes className="icon-lg" />}
+            title={query.trim() ? "没有匹配的应用" : "还没有自定义应用"}
+            description={
+              query.trim()
                 ? "尝试其他搜索关键词"
-                : "在对话中让 AI 为你创建一个桌面应用，它将出现在这里。"}
-            </p>
-          </div>
+                : "在对话中让 AI 为你创建一个桌面应用，它将出现在这里。"
+            }
+          />
         ) : (
           <div className="custom-apps-view__grid">
             {filteredApps.map((app) => (

@@ -174,7 +174,16 @@ export function ApprovalDrawer({
 
   if (total === 0) return null;
 
-  const risk = single ? riskKey(single.riskLevel) : "caution";
+  // R3-5（2026-10-16）：批量此前恒显示「中风险」——批量项自带 risk 字段，
+  // 按「最险者胜」推导（一个 dangerous 就整批按 dangerous 提示）。
+  const batchRisk = batch
+    ? batch.items.reduce<Risk>((worst, it) => {
+        const rank: Record<Risk, number> = { safe: 0, caution: 1, dangerous: 2 };
+        const k = riskKey(it.risk);
+        return rank[k] > rank[worst] ? k : worst;
+      }, "safe")
+    : "safe";
+  const risk = single ? riskKey(single.riskLevel) : batchRisk;
   const riskCls =
     risk === "dangerous" ? "text-error bg-error-soft"
     : risk === "safe" ? "text-success bg-success-soft"

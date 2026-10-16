@@ -13,6 +13,7 @@ export {
   type TextAreaProps,
 } from "./Input";
 export { Modal, ConfirmDialog, type ModalProps, type ConfirmDialogProps } from "./Modal";
+export { PageHeader, type PageHeaderProps } from "./PageHeader";
 export { SegmentedControl, type SegmentedControlProps } from "./SegmentedControl";
 export {
   SettingsGroup,

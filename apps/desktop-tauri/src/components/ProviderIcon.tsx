@@ -131,13 +131,10 @@ function resolveLobeKey(providerId: string): keyof typeof REGISTRY | null {
   return null;
 }
 
-/** 12% alpha 软底（hex8） */
+/** 12% 软底 —— color-mix 派生（R4，2026-10-16）：此前字符串拼 hex8
+ *  （#RRGGBB+1F）不支持 CSS 变量、暗色主题无法适配，规范明令禁止。 */
 function softBg(color: string): string {
-  // 支持 #RRGGBB → #RRGGBB1F
-  if (color.startsWith("#") && color.length === 7) {
-    return color + "1F";
-  }
-  return color;
+  return `color-mix(in srgb, ${color} 12%, transparent)`;
 }
 
 export interface ProviderIconProps {
@@ -154,11 +151,11 @@ export interface ProviderIconProps {
 export function ProviderIcon({ providerId, size = 16, radius, className, title }: ProviderIconProps) {
   const key = resolveLobeKey(providerId);
   const Component = key ? REGISTRY[key] : null;
-  // 自定义厂商（齿轮）：灰色
-  // 已知厂商：品牌主色
+  // 自定义厂商（齿轮）：中性灰走令牌（随主题适配）
+  // 已知厂商：品牌主色（登记于 themes/EXCEPTIONS.md）
   const color = key
     ? (BRAND_COLOR[key] ?? "currentColor")
-    : "#6B7280";
+    : "var(--color-text-faint)";
   const r = radius ?? Math.max(3, size / 4);
   const bgSoft = softBg(color);
 

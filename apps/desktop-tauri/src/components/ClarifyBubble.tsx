@@ -125,7 +125,7 @@ export function ClarifyComposer({
           className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md text-meta font-medium transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
           style={{
             background: "var(--color-accent)",
-            color: "var(--color-accent-on-text)",
+            color: "var(--color-on-accent)",
           }}
         >
           提交

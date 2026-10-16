@@ -222,7 +222,7 @@ function StreamingBubbleImpl({
       {showHeader && (
         <Avatar role="assistant" size={22} className="shrink-0 mt-0.5" />
       )}
-      <div className={showHeader ? "flex-1 min-w-0" : "pl-[30px]"}>
+      <div className={showHeader ? "flex-1 min-w-0" : "pl-thread"}>
         {/* Meta line: time + status. Copy is deliberately rendered
             below the message body, matching the settled assistant bubble
             and keeping the action attached to the content it copies. */}

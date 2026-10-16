@@ -36,7 +36,7 @@ export function AgentCard({ agent, onEdit, onDelete, onTest }: AgentCardProps) {
               </p>
             </div>
             <span
-              className="text-[length:var(--text-meta)] font-medium px-1.5 py-0.5 rounded shrink-0 mt-0.5 bg-accent-soft text-accent"
+              className="text-[length:var(--text-meta)] font-medium px-1.5 py-0.5 rounded shrink-0 mt-0.5 bg-bg-tertiary text-text-secondary"
             >
               {label}
             </span>

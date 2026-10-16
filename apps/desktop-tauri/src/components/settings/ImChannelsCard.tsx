@@ -373,9 +373,11 @@ export function ImChannelsCard({
     setQrBusy(true);
     try {
       const payload = await fetchJSON<QrPayload>("/api/pairing/sessions", { method: "POST" });
+      // 尺寸/留白别缩水：手机扫码器对屏幕上的小码会激进变焦（uni.scanCode
+      // 无法关闭该行为），240px + margin 2 让正常距离一扫即中。
       const svg = await QRCode.toString(payload.pairing_url, {
         type: "svg",
-        margin: 1,
+        margin: 2,
         errorCorrectionLevel: "M",
       });
       setQr({ payload, svg });
@@ -646,10 +648,10 @@ export function ImChannelsCard({
       // 说断——绿灯配手机名会让人以为消息能过去。
       if (mobileDevice)
         return relay?.state === "connected"
-          ? { text: mobileDevice.device_name, tone: "text-accent", dot: "bg-accent" }
+          ? { text: mobileDevice.device_name, tone: "text-success", dot: "bg-success" }
           : { text: "手机已配对 · 中转未接通", tone: "text-warning", dot: "bg-warning" };
       if (relay?.state === "connected")
-        return { text: "跨网络已接通", tone: "text-accent", dot: "bg-accent" };
+        return { text: "跨网络已接通", tone: "text-success", dot: "bg-success" };
       if (relay?.state === "connecting")
         return { text: "正在连接中转", tone: "text-warning", dot: "bg-warning" };
       if (relay?.enabled)
@@ -662,7 +664,7 @@ export function ImChannelsCard({
     const s = status?.find((x) => x.platform === c.id);
     if (status === null) return { text: "读取中…", tone: "text-text-muted", dot: "bg-bg-active" };
     if (!s?.bound) return { text: "未绑定", tone: "text-text-muted", dot: "bg-bg-active" };
-    if (live[c.id]) return { text: "通道已连接", tone: "text-accent", dot: "bg-accent" };
+    if (live[c.id]) return { text: "通道已连接", tone: "text-success", dot: "bg-success" };
     return { text: "网关未连接", tone: "text-warning", dot: "bg-warning" };
   };
 
@@ -835,7 +837,7 @@ export function ImChannelsCard({
                 <div className="flex items-start gap-5 flex-wrap rounded-lg bg-bg-secondary p-4">
                   <div
                     className="shrink-0 rounded-lg bg-white p-2 [&>svg]:block"
-                    style={{ width: 168, height: 168 }}
+                    style={{ width: 240, height: 240 }}
                     dangerouslySetInnerHTML={{ __html: qr.svg }}
                   />
                   <div className="min-w-0 flex-1 space-y-2">
@@ -920,7 +922,7 @@ export function ImChannelsCard({
                     >
                       {relay.state === "connected" ? (
                         <>
-                          <span className="inline-block h-2 w-2 rounded-full bg-accent shrink-0" />
+                          <span className="inline-block h-2 w-2 rounded-full bg-success shrink-0" />
                           <span className="text-[length:var(--text-ui)] text-text-primary">
                             已连上中转
                           </span>
@@ -1191,8 +1193,8 @@ function ImPane(props: {
               {s?.source === "env" && <span className="text-text-muted">（环境变量）</span>}
             </span>
             {live[platform] ? (
-              <span className="inline-flex items-center gap-1.5 text-[length:var(--text-meta)] text-accent">
-                <span className="inline-block h-1.5 w-1.5 rounded-full bg-accent" />
+              <span className="inline-flex items-center gap-1.5 text-[length:var(--text-meta)] text-success">
+                <span className="inline-block h-1.5 w-1.5 rounded-full bg-success" />
                 通道已连接
               </span>
             ) : liveLoaded ? (
@@ -1333,7 +1335,7 @@ function ImPane(props: {
                     ? "bg-error"
                     : pairRemainingMs <= 10_000
                       ? "bg-warning"
-                      : "bg-accent")
+                      : "bg-success")
               }
               style={{
                 width: "100%",

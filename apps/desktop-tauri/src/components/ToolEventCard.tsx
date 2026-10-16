@@ -693,26 +693,26 @@ function ToolRow({ group }: { group: ToolGroup }) {
           {dur && <span className="tw-msg-dur">{dur}</span>}
           {isRunning && !group.endedAt ? (
             <span className="tw-msg-badge tw-msg-run-badge">
-              <Loader2 size={9} className="animate-spin" />
+              <Loader2 className="icon-xs animate-spin" />
               运行中
             </span>
           ) : isError ? (
             <span className="tw-msg-badge tw-msg-err-badge">
               {/* Error uses a neutral amber warning triangle + "工具执行中断"
                    wording, not a red error colour. */}
-              <AlertTriangle size={10} className="shrink-0" />
+              <AlertTriangle className="icon-xs shrink-0" />
               {group.statusNote?.startsWith("执行已中断") ? "已中断" : "失败"}
             </span>
           ) : memResult ? (
             <span className={`tw-msg-badge ${memoryStatusColor(memResult.status)}`}>
               {memResult.status === "not_found" ? (
-                <SearchX size={10} className="shrink-0" />
+                <SearchX className="icon-xs shrink-0" />
               ) : memResult.status === "ambiguous" ? (
-                <AlertTriangle size={10} className="shrink-0" />
+                <AlertTriangle className="icon-xs shrink-0" />
               ) : memResult.status === "error" ? (
-                <AlertCircle size={10} className="shrink-0" />
+                <AlertCircle className="icon-xs shrink-0" />
               ) : (
-                <Check size={10} className="shrink-0" />
+                <Check className="icon-xs shrink-0" />
               )}
               {memoryStatusLabel(memResult.status)}
             </span>
@@ -721,7 +721,7 @@ function ToolRow({ group }: { group: ToolGroup }) {
               {/* Done uses a neutral success-green check + "工具执行完毕"
                    wording; it does not assert success — success/failure is
                    decided by the result content. */}
-              <Check size={10} className="shrink-0" />
+              <Check className="icon-xs shrink-0" />
               已完成
             </span>
           )}
@@ -858,7 +858,7 @@ function LiveTerminal({ content, running }: { content: string; running: boolean 
         title={copied ? "已复制" : "复制输出"}
         aria-label={copied ? "已复制" : "复制输出"}
       >
-        {copied ? <CheckCheck size={10} /> : <Copy size={10} />}
+        {copied ? <CheckCheck className="icon-xs" /> : <Copy className="icon-xs" />}
       </button>
       {hasContent ? (
         <pre className="tw-msg-output-text">{displayContent}</pre>

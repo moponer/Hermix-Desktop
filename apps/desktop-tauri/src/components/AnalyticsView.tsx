@@ -6,6 +6,7 @@ import {
   type AnalyticsResponse,
   type AnalyticsDebugResponse,
 } from "../api";
+import { EmptyState, PageHeader } from "./ui";
 
 // Cache hit rate proxy: of all prompt tokens (freshly-written `input`
 // + cache-served `cache_read`), what fraction came from the cache.
@@ -91,21 +92,22 @@ export function AnalyticsView() {
   if (lastError) {
     return (
       <div className="h-full overflow-auto p-4 space-y-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <BarChart3 className="w-5 h-5 text-accent" />
-            <h2 className="text-lg font-semibold">使用统计</h2>
-          </div>
-          <select
-            value={days}
-            onChange={(e) => setDays(Number(e.target.value))}
-            className="px-3 py-1.5 rounded-lg bg-bg-secondary border border-border-primary text-sm"
-          >
-            <option value={7}>近 7 天</option>
-            <option value={30}>近 30 天</option>
-            <option value={90}>近 90 天</option>
-          </select>
-        </div>
+        <PageHeader
+          icon={<BarChart3 className="icon-lg" />}
+          title="使用统计"
+          as="h1"
+          actions={
+            <select
+              value={days}
+              onChange={(e) => setDays(Number(e.target.value))}
+              className="px-3 py-1.5 rounded-lg bg-bg-secondary border border-border-primary text-sm"
+            >
+              <option value={7}>近 7 天</option>
+              <option value={30}>近 30 天</option>
+              <option value={90}>近 90 天</option>
+            </select>
+          }
+        />
         <div className="rounded-xl border border-red-500/40 bg-red-500/5 p-4">
           <div className="flex items-start gap-3">
             <AlertTriangle className="w-5 h-5 text-red-400 mt-0.5 shrink-0" />
@@ -139,7 +141,7 @@ export function AnalyticsView() {
   if (!data) {
     return (
       <div className="flex items-center justify-center h-full">
-        <div className="text-text-faint">暂无统计数据</div>
+        <EmptyState variant="plain" icon={<BarChart3 className="icon-lg" />} title="暂无统计数据" />
       </div>
     );
   }
@@ -171,40 +173,44 @@ export function AnalyticsView() {
   );
 
   return (
-    <div className="h-full overflow-auto p-4 space-y-6">
+    <div className="h-full flex flex-col min-h-0">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <BarChart3 className="w-5 h-5 text-accent" />
-          <h2 className="text-lg font-semibold">使用统计</h2>
-          {!hasRealTokens && totals.total_sessions > 0 && (
-            <span className="text-xs text-text-faint ml-2">
-              (token 数据从 起收集)
-            </span>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => {
-              setDebugOpen(true);
-              if (!debug) loadDebug();
-            }}
-            title="诊断统计数据库"
-            className="p-1.5 rounded-lg bg-bg-secondary border border-border-primary hover:border-accent/50"
-          >
-            <Bug className="w-4 h-4 text-text-secondary" />
-          </button>
-          <select
-            value={days}
-            onChange={(e) => setDays(Number(e.target.value))}
-            className="px-3 py-1.5 rounded-lg bg-bg-secondary border border-border-primary text-sm"
-          >
-            <option value={7}>近 7 天</option>
-            <option value={30}>近 30 天</option>
-            <option value={90}>近 90 天</option>
-          </select>
-        </div>
-      </div>
+      <PageHeader
+        icon={<BarChart3 className="icon-lg" />}
+        title="使用统计"
+        as="h1"
+        actions={
+          <>
+            <button
+              onClick={() => {
+                setDebugOpen(true);
+                if (!debug) loadDebug();
+              }}
+              title="诊断统计数据库"
+              className="p-1.5 rounded-lg bg-bg-secondary border border-border-primary hover:border-accent/50"
+            >
+              <Bug className="w-4 h-4 text-text-secondary" />
+            </button>
+            <select
+              value={days}
+              onChange={(e) => setDays(Number(e.target.value))}
+              className="px-3 py-1.5 rounded-lg bg-bg-secondary border border-border-primary text-sm"
+            >
+              <option value={7}>近 7 天</option>
+              <option value={30}>近 30 天</option>
+              <option value={90}>近 90 天</option>
+            </select>
+          </>
+        }
+      >
+        {!hasRealTokens && totals.total_sessions > 0 && (
+          <span className="text-[length:var(--text-meta)] text-text-faint">
+            (token 数据从 起收集)
+          </span>
+        )}
+      </PageHeader>
+      <div className="flex-1 overflow-y-auto min-h-0">
+      <div className="max-w-wide-page mx-auto p-4 space-y-6">
 
       {/* Totals Cards */}
       <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
@@ -371,6 +377,8 @@ export function AnalyticsView() {
           onReload={loadDebug}
         />
       )}
+    </div>
+    </div>
     </div>
   );
 }

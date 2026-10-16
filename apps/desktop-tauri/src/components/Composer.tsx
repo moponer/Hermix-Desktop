@@ -201,14 +201,14 @@ export function Composer(p: ComposerProps) {
                   className="absolute top-0.5 right-0.5 p-0.5 rounded-md bg-bg-elevated/90 text-text-muted hover:text-error transition-colors"
                   title="移除附件"
                 >
-                  <X size={10} />
+                  <X className="icon-xs" />
                 </button>
               </div>
             ))}
           </div>
           <div className="flex items-center gap-2 mt-1.5">
             <span className="h-tiny text-text-muted flex items-center gap-1">
-              <Image size={10} />
+              <Image className="icon-xs" />
               已附加 {p.pendingImages.length} 个附件
             </span>
             <label className="flex items-center gap-1 h-tiny text-text-faint cursor-pointer">
@@ -234,7 +234,7 @@ export function Composer(p: ComposerProps) {
                 style={{ background: "var(--color-bg-tertiary)", border: "1px solid var(--color-border-subtle)" }}
                 title={doc.name}
               >
-                <FileText size={18} className="shrink-0 text-text-muted" />
+                <FileText className="icon-lg shrink-0 text-text-muted" />
                 <div className="flex-1 min-w-0">
                   <div className="text-meta text-text-primary truncate leading-tight">{doc.name}</div>
                   <div className="text-tiny text-text-faint">{formatBytes(doc.sizeBytes)}</div>
@@ -245,14 +245,14 @@ export function Composer(p: ComposerProps) {
                   className="absolute top-0.5 right-0.5 p-0.5 rounded-md bg-bg-elevated/90 text-text-muted hover:text-error transition-colors"
                   title="移除附件"
                 >
-                  <X size={10} />
+                  <X className="icon-xs" />
                 </button>
               </div>
             ))}
           </div>
           <div className="flex items-center gap-2 mt-1.5">
             <span className="h-tiny text-text-muted flex items-center gap-1">
-              <FileText size={10} />
+              <FileText className="icon-xs" />
               已附加 {p.pendingDocs.length} 个文档
             </span>
           </div>
@@ -356,139 +356,6 @@ export function Composer(p: ComposerProps) {
             </button>
           </div>
 
-          <div className="relative">
-            <button
-              ref={projTriggerRef as React.RefObject<HTMLButtonElement>}
-              onClick={() => {
-                if (p.workspaceLocked) return;
-                projToggle();
-              }}
-              disabled={p.workspaceLocked}
-              className={`flex items-center shrink-0 text-ui transition-colors rounded-md ${
-                toolbarCompact ? "px-1.5 py-1" : "gap-1.5 px-2 py-1 max-w-[160px]"
-              } ${
-                p.workspaceLocked
-                  ? "text-text-faint cursor-not-allowed opacity-60"
-                  : p.activeWorkspace
-                  ? "text-[color:var(--color-chip-workspace-fg)] hover:bg-[color:var(--color-chip-workspace-bg)] font-medium cursor-pointer"
-                  : "text-text-secondary hover:bg-bg-hover hover:text-text-primary cursor-pointer"
-              }`}
-              title={
-                p.workspaceLocked
-                  ? "对话进行中，工作区已锁定"
-                  : p.activeWorkspace
-                  ? `已限制到：${p.activeWorkspace.path}（点击可重新选择）`
-                  : "限制当前对话的读写范围（推荐）"
-              }
-            >
-              {p.workspaceLocked ? (
-                <Lock className="icon-sm text-text-faint" />
-              ) : (
-                <FolderOpen className={`icon-sm ${p.activeWorkspace ? "text-[color:var(--color-chip-workspace-fg)]" : "text-text-faint"}`} />
-              )}
-              <span
-                className={toolbarCompact ? "max-w-0 overflow-hidden whitespace-nowrap" : "truncate"}
-              >
-                {p.activeWorkspace ? p.activeWorkspace.name : "目录"}
-              </span>
-            </button>
-            {projOpen && (
-              <PopoverShell containerRef={projContainerRef} triggerRef={projTriggerRef} width="sm" side="top">
-                <button
-                  onClick={async () => { await p.onAddWorkspace(); setProjOpen(false); }}
-                  className="flex items-center justify-center gap-1.5 w-full px-2.5 py-2 text-meta text-[color:var(--color-chip-workspace-fg)] hover:bg-[color:var(--color-chip-workspace-bg)] rounded-lg transition-colors font-medium"
-                  title="选择本地目录添加为工作区"
-                >
-                  添加新工作区
-                </button>
-                {p.workspaces.length > 0 && (
-                  <>
-                    <div className="my-1 border-t border-border-primary" />
-                    <div className="px-2.5 py-1 text-meta text-text-secondary font-medium">工作目录</div>
-                    <PopoverBody maxHeight="max-h-48">
-                      {p.workspaces.map((ws) => (
-                        <button
-                          key={ws.id}
-                          onClick={() => { p.onSelectWorkspace(ws.path); setProjOpen(false); }}
-                          className={`flex items-center gap-2.5 w-full px-2.5 py-2.5 text-left rounded-lg hover:bg-bg-hover transition-colors ${
-                            p.activeWorkspace?.id === ws.id ? "bg-[color:var(--color-chip-workspace-bg)]" : ""
-                          }`}
-                          title={ws.path}
-                        >
-                          <FolderOpen className="icon-md shrink-0 text-[color:var(--color-chip-workspace-fg)] opacity-70" />
-                          <div className="flex-1 min-w-0">
-                            <div className="text-ui text-text-primary truncate">{ws.name}</div>
-                            <div className="text-tiny text-text-faint truncate">{ws.path}</div>
-                          </div>
-                          {p.activeWorkspace?.id === ws.id && <Check className="icon-md text-[color:var(--color-chip-workspace-fg)] shrink-0" />}
-                        </button>
-                      ))}
-                    </PopoverBody>
-                    <div className="border-t border-border-primary" />
-                    <button
-                      onClick={() => { p.onSelectWorkspace(null); setProjOpen(false); }}
-                      className="flex items-center justify-center w-full px-2.5 py-2 text-tiny text-text-muted hover:bg-bg-hover rounded-lg transition-colors"
-                    >
-                      不绑定目录
-                    </button>
-                  </>
-                )}
-              </PopoverShell>
-            )}
-          </div>
-
-          <div className="relative">
-            <button
-              ref={permTriggerRef as React.RefObject<HTMLButtonElement>}
-              onClick={permToggle}
-              className={`flex items-center shrink-0 text-ui transition-colors rounded-md ${
-                toolbarCompact ? "px-1.5 py-1" : "gap-1.5 px-2 py-1 max-w-[160px]"
-              } ${
-                p.permissionLevel === "full"
-                  ? "text-[color:var(--color-chip-permission-fg)] hover:bg-[color:var(--color-chip-permission-bg)] font-medium"
-                  : "text-text-secondary hover:bg-bg-hover hover:text-text-primary"
-              }`}
-              title="权限级别"
-            >
-              {p.permissionLevel === "full"
-                ? <AlertTriangle className="icon-sm text-[color:var(--color-chip-permission-fg)]" />
-                : <ShieldCheck className="icon-sm text-text-muted" />}
-              <span
-                className={toolbarCompact ? "max-w-0 overflow-hidden whitespace-nowrap" : "truncate"}
-              >
-                {p.permissionLevel === "full" ? "完全访问" : "默认权限"}
-              </span>
-            </button>
-            {permOpen && (
-              <PopoverShell containerRef={permContainerRef} triggerRef={permTriggerRef} width="md" side="top">
-                <div className="px-2.5 py-1 text-meta text-text-secondary font-medium">权限级别</div>
-                <PopoverBody maxHeight="max-h-48">
-                  {PERMISSION_LEVELS.map((lvl) => (
-                    <button
-                      key={lvl.id}
-                      onClick={() => { p.setPermissionLevel(lvl.id); setPermOpen(false); }}
-                      className={`w-full px-2.5 py-3 text-left rounded-lg hover:bg-bg-hover transition-colors ${
-                        p.permissionLevel === lvl.id ? "bg-[color:var(--color-chip-permission-bg)]" : ""
-                      }`}
-                    >
-                      <div className="flex items-start gap-2">
-                        <span className="shrink-0 mt-0.5">
-                          {lvl.id === "full"
-                            ? <AlertTriangle className="icon-lg text-[color:var(--color-chip-permission-fg)]" />
-                            : <ShieldCheck className="icon-lg text-[color:var(--color-chip-workspace-fg)]" />}
-                        </span>
-                        <div className="flex-1 min-w-0">
-                          <div className="text-ui text-text-primary font-medium">{lvl.label}</div>
-                          <div className="text-tiny text-text-faint mt-0.5 leading-snug">{lvl.description}</div>
-                        </div>
-                        {p.permissionLevel === lvl.id && <Check className="icon-md text-[color:var(--color-chip-model-fg)] shrink-0 mt-0.5" />}
-                      </div>
-                    </button>
-                  ))}
-                </PopoverBody>
-              </PopoverShell>
-            )}
-          </div>
 
           {/* 工作 / 编码模式切换 —— 直接点按切换（两档无需弹层）。
               code = pin 代码开发域（DomainMode::Code）；auto = 交给后端自动识别。 */}
@@ -498,12 +365,12 @@ export function Composer(p: ComposerProps) {
               toolbarCompact ? "px-1.5 py-1" : "gap-1.5 px-2 py-1"
             } ${
               p.domainMode === "code"
-                ? "text-[color:var(--color-accent)] font-medium hover:bg-bg-hover"
+                ? "text-text-primary font-medium hover:bg-bg-hover"
                 : "text-text-secondary hover:bg-bg-hover hover:text-text-primary"
             }`}
             title="编码模式：固定代码开发域，工具优先级与领域指令随之切换；关闭则自动识别工作类型"
           >
-            <Code2 className={`icon-sm ${p.domainMode === "code" ? "text-[color:var(--color-accent)]" : "text-text-muted"}`} />
+            <Code2 className={`icon-sm ${p.domainMode === "code" ? "text-text-primary" : "text-text-muted"}`} />
             <span className={toolbarCompact ? "max-w-0 overflow-hidden whitespace-nowrap" : "truncate"}>
               {p.domainMode === "code" ? "编码模式" : "自动"}
             </span>
@@ -670,25 +537,27 @@ export function Composer(p: ComposerProps) {
                   <button
                     onClick={p.handleSubmit}
                     disabled={sendDisabled}
-                    className="relative flex items-center justify-center w-8 h-8 rounded-lg transition-opacity disabled:opacity-30 disabled:cursor-not-allowed"
+                    aria-label={canQueue ? "加入队列" : "发送"}
+                    /* 墨与纸 v4：发送钮是结构件不是 CTA —— 永不用强调色，
+                       主行动靠位置（右下角）表达（WorkBuddy 规律 4）。 */
+                    className="relative flex items-center justify-center w-8 h-8 rounded-full transition-opacity disabled:opacity-30 disabled:cursor-not-allowed"
                     style={{
-                      background: hasContent && canQueue
-                        ? "var(--color-success, #16a34a)"
-                        : hasContent
-                          ? "var(--color-accent)"
-                          : "var(--color-bg-tertiary)",
-                      color: hasContent ? "white" : "var(--color-text-faint)",
+                      background: hasContent
+                        ? "var(--color-inverse-surface)"
+                        : "var(--color-bg-quaternary)",
+                      color: hasContent
+                        ? "var(--color-inverse-on-surface)"
+                        : "var(--color-text-faint)",
                     }}
                     title={canQueue ? "加入队列，等当前回复完成后自动发送 (Enter)" : "发送 (Enter)"}
                   >
                     <Send className="icon-md" />
                     {canQueue && (
                       <Clock
-                        size={9}
-                        className="absolute -top-0.5 -right-0.5 p-[1px] rounded-full"
+                        className="icon-xs absolute -top-0.5 -right-0.5 p-[1px] rounded-full"
                         style={{
-                          background: "var(--color-success, #16a34a)",
-                          color: "white",
+                          background: "var(--color-bg-quaternary)",
+                          color: "var(--color-text-secondary)",
                         }}
                       />
                     )}
@@ -697,19 +566,21 @@ export function Composer(p: ComposerProps) {
                 {showStopButton && (
                   <button
                     onClick={() => p.onStop?.(p.activeComposerSessionId)}
-                    className="flex items-center justify-center w-7 h-7 rounded-md transition-opacity hover:opacity-90"
+                    /* R3-2：与发送键同位同尺寸（32px），消除互斥切换时的跳版 */
+                    className="flex items-center justify-center w-8 h-8 rounded-lg transition-opacity hover:opacity-90"
                     style={{
                       background:
-                        "color-mix(in srgb, var(--color-error, #dc2626) 14%, transparent)",
-                      color: "var(--color-error, #dc2626)",
+                        "color-mix(in srgb, var(--color-error) 14%, transparent)",
+                      color: "var(--color-error)",
                     }}
+                    aria-label="停止生成"
                     title={
                       p.messageQueue && p.messageQueue.length > 0
                         ? `插话：停止当前回复并发送队列中的 ${p.messageQueue.length} 条消息`
                         : "停止生成"
                     }
                   >
-                    <Square size={10} fill="currentColor" />
+                    <Square fill="currentColor" className="icon-sm" />
                   </button>
                 )}
               </>
@@ -717,6 +588,143 @@ export function Composer(p: ComposerProps) {
           })()}
         </div>
       </div>
+        {p.variant !== "workbench" && (
+          <div className="composer-subbar">
+          <div className="relative">
+            <button
+              ref={projTriggerRef as React.RefObject<HTMLButtonElement>}
+              onClick={() => {
+                if (p.workspaceLocked) return;
+                projToggle();
+              }}
+              disabled={p.workspaceLocked}
+              className={`flex items-center shrink-0 text-ui transition-colors rounded-md ${
+                toolbarCompact ? "px-1.5 py-1" : "gap-1.5 px-2 py-1 max-w-[160px]"
+              } ${
+                p.workspaceLocked
+                  ? "text-text-faint cursor-not-allowed opacity-60"
+                  : p.activeWorkspace
+                  ? "text-[color:var(--color-chip-workspace-fg)] hover:bg-[color:var(--color-chip-workspace-bg)] font-medium cursor-pointer"
+                  : "text-text-secondary hover:bg-bg-hover hover:text-text-primary cursor-pointer"
+              }`}
+              title={
+                p.workspaceLocked
+                  ? "对话进行中，工作区已锁定"
+                  : p.activeWorkspace
+                  ? `已限制到：${p.activeWorkspace.path}（点击可重新选择）`
+                  : "限制当前对话的读写范围（推荐）"
+              }
+            >
+              {p.workspaceLocked ? (
+                <Lock className="icon-sm text-text-faint" />
+              ) : (
+                <FolderOpen className={`icon-sm ${p.activeWorkspace ? "text-[color:var(--color-chip-workspace-fg)]" : "text-text-faint"}`} />
+              )}
+              <span
+                className={toolbarCompact ? "max-w-0 overflow-hidden whitespace-nowrap" : "truncate"}
+              >
+                {p.activeWorkspace ? p.activeWorkspace.name : "目录"}
+              </span>
+            </button>
+            {projOpen && (
+              <PopoverShell containerRef={projContainerRef} triggerRef={projTriggerRef} width="sm" side="top">
+                <button
+                  onClick={async () => { await p.onAddWorkspace(); setProjOpen(false); }}
+                  className="flex items-center justify-center gap-1.5 w-full px-2.5 py-2 text-meta text-[color:var(--color-chip-workspace-fg)] hover:bg-[color:var(--color-chip-workspace-bg)] rounded-lg transition-colors font-medium"
+                  title="选择本地目录添加为工作区"
+                >
+                  添加新工作区
+                </button>
+                {p.workspaces.length > 0 && (
+                  <>
+                    <div className="my-1 border-t border-border-primary" />
+                    <div className="px-2.5 py-1 text-meta text-text-secondary font-medium">工作目录</div>
+                    <PopoverBody maxHeight="max-h-48">
+                      {p.workspaces.map((ws) => (
+                        <button
+                          key={ws.id}
+                          onClick={() => { p.onSelectWorkspace(ws.path); setProjOpen(false); }}
+                          className={`flex items-center gap-2.5 w-full px-2.5 py-2.5 text-left rounded-lg hover:bg-bg-hover transition-colors ${
+                            p.activeWorkspace?.id === ws.id ? "bg-[color:var(--color-chip-workspace-bg)]" : ""
+                          }`}
+                          title={ws.path}
+                        >
+                          <FolderOpen className="icon-md shrink-0 text-[color:var(--color-chip-workspace-fg)] opacity-70" />
+                          <div className="flex-1 min-w-0">
+                            <div className="text-ui text-text-primary truncate">{ws.name}</div>
+                            <div className="text-tiny text-text-faint truncate">{ws.path}</div>
+                          </div>
+                          {p.activeWorkspace?.id === ws.id && <Check className="icon-md text-[color:var(--color-chip-workspace-fg)] shrink-0" />}
+                        </button>
+                      ))}
+                    </PopoverBody>
+                    <div className="border-t border-border-primary" />
+                    <button
+                      onClick={() => { p.onSelectWorkspace(null); setProjOpen(false); }}
+                      className="flex items-center justify-center w-full px-2.5 py-2 text-tiny text-text-muted hover:bg-bg-hover rounded-lg transition-colors"
+                    >
+                      不绑定目录
+                    </button>
+                  </>
+                )}
+              </PopoverShell>
+            )}
+          </div>
+
+          <div className="relative">
+            <button
+              ref={permTriggerRef as React.RefObject<HTMLButtonElement>}
+              onClick={permToggle}
+              className={`flex items-center shrink-0 text-ui transition-colors rounded-md ${
+                toolbarCompact ? "px-1.5 py-1" : "gap-1.5 px-2 py-1 max-w-[160px]"
+              } ${
+                p.permissionLevel === "full"
+                  ? "text-[color:var(--color-chip-permission-fg)] hover:bg-[color:var(--color-chip-permission-bg)] font-medium"
+                  : "text-text-secondary hover:bg-bg-hover hover:text-text-primary"
+              }`}
+              title="权限级别"
+            >
+              {p.permissionLevel === "full"
+                ? <AlertTriangle className="icon-sm text-[color:var(--color-chip-permission-fg)]" />
+                : <ShieldCheck className="icon-sm text-text-muted" />}
+              <span
+                className={toolbarCompact ? "max-w-0 overflow-hidden whitespace-nowrap" : "truncate"}
+              >
+                {p.permissionLevel === "full" ? "完全访问" : "默认权限"}
+              </span>
+            </button>
+            {permOpen && (
+              <PopoverShell containerRef={permContainerRef} triggerRef={permTriggerRef} width="md" side="top">
+                <div className="px-2.5 py-1 text-meta text-text-secondary font-medium">权限级别</div>
+                <PopoverBody maxHeight="max-h-48">
+                  {PERMISSION_LEVELS.map((lvl) => (
+                    <button
+                      key={lvl.id}
+                      onClick={() => { p.setPermissionLevel(lvl.id); setPermOpen(false); }}
+                      className={`w-full px-2.5 py-3 text-left rounded-lg hover:bg-bg-hover transition-colors ${
+                        p.permissionLevel === lvl.id ? "bg-[color:var(--color-chip-permission-bg)]" : ""
+                      }`}
+                    >
+                      <div className="flex items-start gap-2">
+                        <span className="shrink-0 mt-0.5">
+                          {lvl.id === "full"
+                            ? <AlertTriangle className="icon-lg text-[color:var(--color-chip-permission-fg)]" />
+                            : <ShieldCheck className="icon-lg text-[color:var(--color-chip-workspace-fg)]" />}
+                        </span>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-ui text-text-primary font-medium">{lvl.label}</div>
+                          <div className="text-tiny text-text-faint mt-0.5 leading-snug">{lvl.description}</div>
+                        </div>
+                        {p.permissionLevel === lvl.id && <Check className="icon-md text-[color:var(--color-chip-model-fg)] shrink-0 mt-0.5" />}
+                      </div>
+                    </button>
+                  ))}
+                </PopoverBody>
+              </PopoverShell>
+            )}
+          </div>
+          </div>
+        )}
     </div>
   );
 }

@@ -63,7 +63,7 @@ export function LiveTerminal({ content, running }: { content: string; running: b
         title={copied ? "已复制" : "复制输出"}
         aria-label={copied ? "已复制" : "复制输出"}
       >
-        {copied ? <CheckCheck size={10} /> : <Copy size={10} />}
+        {copied ? <CheckCheck className="icon-xs" /> : <Copy className="icon-xs" />}
       </button>
       {hasContent ? (
         <pre className="tw-msg-output-text">{displayContent}</pre>

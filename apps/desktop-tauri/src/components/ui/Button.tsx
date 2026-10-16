@@ -5,11 +5,11 @@ import { Spinner } from "./Spinner";
 
 export type ButtonVariant =
   | "primary"
-  /** 陶土红实底。只给一个面上「不容错过」的那一个动作 —— 输入框的发送键。 */
+  /** 品牌绿（松墨绿）实底。只给一个面上「不容错过」的那一个动作 —— 输入框的发送键。 */
   | "accent"
   | "secondary"
   | "tonal"
-  /** 陶土红描边，hover 反转为实底。次要动作。 */
+  /** 品牌绿描边，hover 反转为实底。次要动作。 */
   | "tonal-outline"
   | "ghost"
   | "danger"
@@ -46,15 +46,17 @@ const DISABLED_FILL =
 const DISABLED_FADE = "disabled:opacity-50";
 
 const VARIANT_CLASSES: Record<ButtonVariant, string> = {
-  // 实心墨块、hover 转陶土红。刻意不用品牌色打底：在一屏陶土红已经到处
+  // 实心墨块、hover 压深一档。刻意不用品牌色打底：在一屏品牌绿已经到处
   // 标记强调的界面里，墨块才读得出「这是个按钮」。
-  primary: `bg-[var(--color-btn-primary-bg)] text-[var(--color-btn-primary-text)] shadow-[var(--shadow-button-primary)] hover:bg-[var(--color-accent)] hover:-translate-y-px active:translate-y-0 active:scale-[0.97] ${DISABLED_FILL}`,
+  // hover 此前指向 --color-accent（亮色下与本体同值 = hover 无效），改指向
+  // 主题各自的 hover 档。
+  primary: `bg-[var(--color-btn-primary-bg)] text-[var(--color-btn-primary-text)] shadow-[var(--shadow-button-primary)] hover:bg-[var(--color-btn-primary-hover)] hover:-translate-y-px active:translate-y-0 active:scale-[0.97] ${DISABLED_FILL}`,
   accent: `bg-[var(--color-accent)] text-[var(--color-on-primary)] shadow-[var(--shadow-button-primary)] hover:bg-[var(--color-accent-hover)] hover:-translate-y-px active:translate-y-0 active:scale-[0.97] ${DISABLED_FILL}`,
   secondary: `bg-[var(--color-bg-card)] text-[var(--color-text-primary)] border border-[var(--color-border-primary)] hover:border-[var(--color-border-secondary)] hover:bg-[var(--color-bg-hover)] active:scale-[0.98] ${DISABLED_FILL}`,
   tonal: `bg-[var(--color-accent-soft)] text-[var(--color-accent)] hover:bg-[var(--color-accent-soft-strong)] active:scale-[0.98] ${DISABLED_FILL}`,
   "tonal-outline": `bg-transparent text-[var(--color-accent)] border border-[var(--color-primary-fixed-dim)] hover:bg-[var(--color-accent)] hover:border-[var(--color-accent)] hover:text-[var(--color-on-primary)] active:scale-[0.98] ${DISABLED_FADE}`,
   ghost: `bg-transparent text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)] active:scale-[0.98] ${DISABLED_FADE}`,
-  danger: `bg-[var(--color-error)] text-[var(--color-on-error)] hover:brightness-110 hover:-translate-y-px active:translate-y-0 active:scale-[0.97] ${DISABLED_FILL}`,
+  danger: `bg-[var(--color-error)] text-[var(--color-on-error)] hover:bg-[color-mix(in_srgb,var(--color-error)_88%,black)] hover:-translate-y-px active:translate-y-0 active:scale-[0.97] ${DISABLED_FILL}`,
   "danger-outline": `bg-transparent text-[var(--color-error)] border border-[var(--color-error)] hover:bg-[var(--color-error-soft)] active:scale-[0.98] ${DISABLED_FADE}`,
   link: `bg-transparent text-[var(--color-accent)] underline-offset-2 hover:underline hover:text-[var(--color-accent-hover)] px-0 ${DISABLED_FADE}`,
   inverse: `bg-[var(--color-inverse-surface)] text-[var(--color-inverse-on-surface)] hover:bg-[var(--color-accent)] hover:-translate-y-px active:translate-y-0 active:scale-[0.97] ${DISABLED_FILL}`,

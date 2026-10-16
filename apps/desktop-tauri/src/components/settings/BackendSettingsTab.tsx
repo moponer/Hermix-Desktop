@@ -69,7 +69,7 @@ export function BackendTab() {
             disabled={tickLoopLoading}
             onClick={handleToggleTickLoop}
             className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
-              tickLoopRunning ? "bg-accent" : "bg-bg-tertiary"
+              tickLoopRunning ? "bg-success" : "bg-bg-tertiary"
             } ${tickLoopLoading ? "opacity-60 cursor-wait" : "cursor-pointer"}`}
           >
             <span
