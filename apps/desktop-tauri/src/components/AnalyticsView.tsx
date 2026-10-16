@@ -6,7 +6,7 @@ import {
   type AnalyticsResponse,
   type AnalyticsDebugResponse,
 } from "../api";
-import { EmptyState, PageHeader } from "./ui";
+import { EmptyState, PageHeader, SkeletonCard } from "./ui";
 
 // Cache hit rate proxy: of all prompt tokens (freshly-written `input`
 // + cache-served `cache_read`), what fraction came from the cache.
@@ -81,9 +81,18 @@ export function AnalyticsView() {
   };
 
   if (loading) {
+    /* 骨架屏：形状预告真实布局（概览卡 + 图表区），零布局跳动 */
     return (
-      <div className="flex items-center justify-center h-full">
-        <div className="text-text-faint">加载中…</div>
+      <div className="h-full overflow-auto p-4">
+        <div className="max-w-wide-page mx-auto space-y-6">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <SkeletonCard key={i} lines={1} />
+            ))}
+          </div>
+          <SkeletonCard lines={4} className="h-56" />
+          <SkeletonCard lines={4} className="h-56" />
+        </div>
       </div>
     );
   }
