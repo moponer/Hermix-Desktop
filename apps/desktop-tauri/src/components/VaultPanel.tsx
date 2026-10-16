@@ -20,7 +20,7 @@ import {
   type VaultEntryMeta,
 } from "../api/vault";
 import { openExternalUrl } from "../desktopBridge";
-import { ConfirmDialog, PageHeader } from "./ui";
+import { ConfirmDialog, PageHeader, SkeletonCard } from "./ui";
 import {
   buildBlobMap,
   filterEntries,
@@ -509,7 +509,12 @@ export function VaultPanel() {
           )}
 
           {loading ? (
-            <div className="py-8 text-center text-sm text-text-secondary">加载中…</div>
+            /* 骨架屏：凭据行形状预告（图 + 名 + 用户名行） */
+            <div className="flex flex-col gap-2 py-1">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <SkeletonCard key={i} lines={1} />
+              ))}
+            </div>
           ) : visible.length === 0 ? (
             <div className="py-8 text-center text-sm text-text-secondary">
               {entries.length === 0 ? "还没有凭据，点右上角「新增凭据」开始" : "没有匹配的条目"}
