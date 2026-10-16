@@ -261,7 +261,7 @@ impl SessionPersistence {
         // Migrate old timestamp-prefixed files on first write
         Self::recover_orphan_session_logs(&self.sessions_dir, session_id);
 
-        let filename = format!("{session_id}.md");
+        let filename = format!("{}.md", crate::session_persistence::session_stem(session_id));
         let path = self.sessions_dir.join(&filename);
 
         let mut content = String::new();
@@ -334,7 +334,7 @@ impl SessionPersistence {
         std::fs::create_dir_all(&self.trajectories_dir)
             .map_err(|e| AgentError::Io(format!("Failed to create trajectories dir: {e}")))?;
 
-        let filename = format!("{session_id}.json");
+        let filename = format!("{}.json", crate::session_persistence::session_stem(session_id));
         let path = self.trajectories_dir.join(&filename);
 
         let trajectory = serde_json::json!({
@@ -367,8 +367,11 @@ impl SessionPersistence {
                 Ok(n) => n,
                 Err(_) => continue,
             };
-            // Match: anything like `2026-06-18_130000-<sid>.md`
-            if name.ends_with(&format!("-{session_id}.md")) && name != format!("{session_id}.md") {
+            // Match: anything like `2026-06-18_130000-<sid>.md`。消毒规则与
+            // 写入端一致（见 `session_stem`），否则 `im:device:*` 这类 id
+            // 永远匹配不上自己写的文件。
+            let stem = crate::session_persistence::session_stem(session_id);
+            if name.ends_with(&format!("-{stem}.md")) && name != format!("{stem}.md") {
                 let orphans_dir = sessions_dir.join("orphans");
                 let _ = std::fs::create_dir_all(&orphans_dir);
                 let dest = orphans_dir.join(&name);

@@ -29,11 +29,27 @@ use serde::{Deserialize, Serialize};
 // lock held, etc.) we log a warning and continue — `busy_timeout`
 // alone still resolves the silent-drop bug.
 pub(crate) fn open_with_wal(path: &Path) -> Result<rusqlite::Connection, AgentError> {
-    // Delegates to hermix-store so the pragmas here cannot drift from
-    // the ones the server-side readers apply — that drift is what
+    // Delegates to hermix-store so the pragmas here cannot drift from the
+    // ones the server-side readers apply — that drift is what
     // produced the "database disk image is malformed" reports.
     hermix_store::open_connection(path, hermix_store::OpenMode::Write)
         .map_err(|e| AgentError::Io(format!("Failed to open sessions db: {e}")))
+}
+
+/// 会话 id → 文件名主体。`im:device:*`、`im:qq:*` 这类 id 带冒号，而
+/// Windows 禁用 `: * ? " < > | / \`——直接拼路径必然 `os error 123`
+/// （「文件名、目录名或卷标语法不正确」），日志落盘全部失败（2026-10-16 案）。
+/// 写 .md / 写 trajectory / 孤儿恢复匹配三处必须共用本函数，否则改完规则
+/// 就再也认不出对方生成的文件。
+pub(crate) fn session_stem(session_id: &str) -> String {
+    session_id
+        .chars()
+        .map(|c| match c {
+            ':' | '*' | '?' | '"' | '<' | '>' | '|' | '/' | '\\' => '_',
+            c if (c as u32) < 0x20 => '_',
+            c => c,
+        })
+        .collect()
 }
 
 /// Application-level retry with random jitter for write contention.
