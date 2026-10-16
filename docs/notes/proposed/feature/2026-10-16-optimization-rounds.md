@@ -102,6 +102,15 @@ Status: proposed — 基于 `2026-10-16-component-inventory.md` 基线数字与 
   - **ToolTabs 1330 → 913 行（-31%）**，每步 tsc exit 0 + detect 0
 - **验证**：全部门禁绿；tsc-unlock 基础设施已提交（05a505bb）
 
+## 实施记录（R2 ToolTabs 拆分收官 · 2026-10-16 深夜）
+
+- **God Object 退役 ✓**：ToolTabs.tsx **1330 → 8 行 barrel**（-99%），实现分布七个文件：
+  `PluginsTab.tsx`(148) / `SkillsTab.tsx`(188) / `ConnectorsTab.tsx`(310) / `ToolsetsTab.tsx`(276) / `toolTabsShared.tsx`(142) / `toolTabsData.ts`(常量+解析器) / `SkillCard.tsx`(技能卡+阅读弹窗)
+- SettingsShell 导入路径不变（barrel 再导出，零调用方改动）
+- 方法论：行级手术脚本 + 断言 + **tsc 当依赖分析器**（搬移后按 TS6133/TS2304 精确修导入，三轮收敛）
+- 验证：tsc exit 0｜detect 0｜契约 103/103×2
+- R2 剩余：ChatView（53KB）与 ImChannelsCard（60KB）同法拆分、弹窗浮层归一、SettingsGroup 采用率
+
 ## 实施记录（R3 剩余小项批次 · 2026-10-16）
 
 - **R3-5 部分 ✓**：**修掉「批量审批恒显示中风险」**——批量项自带 `risk` 字段，现按「最险者胜」推导（`ApprovalDrawer.tsx`，reduce + rank 表）；`MessageBubble:113-116` 的双 `return null` 死分支**未动**（已决议卡片是否留在流里属交互决策，待用户拍板）
