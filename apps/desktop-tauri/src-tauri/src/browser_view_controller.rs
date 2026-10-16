@@ -119,6 +119,24 @@ pub async fn browser_view_open(app: tauri::AppHandle) -> Result<(), String> {
         });
     }
     tracing::info!("浏览器小窗已创建（{VIEW_LABEL}）");
+    // 兜底 show：正常路径是前端 mount 后自调 show（先建后亮，白屏不可见）。
+    // 但子窗侧任何 JS/权限故障都会让 show 永远不来——窗口"创建成功却永不
+    // 出现"，用户侧症状是"点图标没反应"（2026-10-16 capabilities 漏配
+    // browser-view 就是这么静默的）。5s 后仍不可见就 Rust 侧强制亮窗：
+    // 小窗页面无启动屏（main.tsx 分支不拉主应用图），最坏闪一下占位 UI，
+    // 远好于永远不可见。
+    let fallback_app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(5));
+        let Some(win) = fallback_app.get_webview_window(VIEW_LABEL) else {
+            return; // 窗口已被用户/会话结束路径关闭
+        };
+        if win.is_visible().unwrap_or(true) {
+            return; // 前端已正常亮窗
+        }
+        tracing::warn!("浏览器小窗 5s 未亮窗（子窗页面可能加载失败），Rust 侧兜底 show");
+        let _ = win.show();
+    });
     Ok(())
 }
 
