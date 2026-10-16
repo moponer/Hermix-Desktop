@@ -19,6 +19,7 @@ import { markdownToHast } from "satteri";
 import { toJsxRuntime } from "hast-util-to-jsx-runtime";
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
 import type { ReactNode } from "react";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { Check, Copy, X } from "lucide-react";
 import { useSafeTimeout } from "../hooks/useSafeTimeout";
 import { highlightToReact, readIsDark } from "../lib/codeHighlight";
@@ -473,6 +474,27 @@ export const MarkdownBody = memo(function MarkdownBody({ content, onPathClick, p
         input({ type, ...props }: { type?: string }) {
           if (type === "checkbox") return null;
           return <input type={type} {...props} />;
+        },
+        img({ src, alt, ...props }: { src?: string; alt?: string }) {
+          // 模型经常把工具落盘的截图（如 browser_screenshot 的
+          // `~/.hermix/screenshots/...png`）写成 markdown 图片。WebView2
+          // 页面 origin 加载不了磁盘绝对路径，必须经 asset 协议转换——
+          // scope 在 tauri.conf.json（`$HOME/.hermix/**`，生产数据根即此）。
+          const raw = typeof src === "string" ? src : "";
+          const isLocal =
+            /^(?:[a-zA-Z]:[\\/]|\\\\|file:\/\/)/i.test(raw) &&
+            !/^(?:https?|data|blob|asset|https\+asset):/i.test(raw);
+          const resolved = isLocal ? convertFileSrc(raw) : raw;
+          return (
+            <img
+              {...props}
+              src={resolved}
+              alt={alt ?? ""}
+              loading="lazy"
+              draggable={false}
+              className="my-1 max-w-full rounded-md border border-border-primary/40"
+            />
+          );
         },
       },
     });

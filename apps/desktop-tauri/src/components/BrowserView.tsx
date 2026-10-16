@@ -99,23 +99,19 @@ export function BrowserView() {
     void getCurrentWindow().show().catch(() => {});
   }, []);
 
-  // 不可见上报：document.hidden（最小化/遮挡）与窗口 blur 都算“没人看”。
-  // 恢复时取消暂停。Rust 侧只停推流不停 Chrome 出帧，见模块头注释。
+  // 不可见上报：只在 document.hidden（小窗被最小化/完全遮挡）时暂停。
+  // **不含 blur**——小窗的核心场景恰恰是"用户焦点在主窗看聊天、小窗在
+  // 旁边直播"；加 blur 会把它一打开就永久冻住（2026-10-16 用户实测踩过）。
+  // 恢复可见时取消暂停。手动暂停（togglePaused）仍随时可用。
   useEffect(() => {
     const setPausedBoth = (next: boolean) => {
       setPaused(next);
       void invoke("browser_view_set_paused", { paused: next }).catch(() => {});
     };
     const onVisibility = () => setPausedBoth(document.hidden);
-    const onBlur = () => setPausedBoth(true);
-    const onFocus = () => setPausedBoth(false);
     document.addEventListener("visibilitychange", onVisibility);
-    window.addEventListener("blur", onBlur);
-    window.addEventListener("focus", onFocus);
     return () => {
       document.removeEventListener("visibilitychange", onVisibility);
-      window.removeEventListener("blur", onBlur);
-      window.removeEventListener("focus", onFocus);
     };
   }, []);
 
