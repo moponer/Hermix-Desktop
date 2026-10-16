@@ -239,6 +239,10 @@ function goHistory() {
   uni.navigateTo({ url: '/pages/history/index' })
 }
 
+function goCall() {
+  uni.navigateTo({ url: '/pages/call/index' })
+}
+
 function confirmNew() {
   if (!messages.value.length && !streaming.value) return
   uni.showModal({
@@ -319,6 +323,8 @@ onUnmounted(() => {
     <template #end>
       <hm-model-picker />
       <view class="hist-btn" @tap="goHistory"><text>☰</text></view>
+      <!-- 通话：当前对话的另一种交互模式，入口挂在这条对话上，不占底部频道位 -->
+      <view class="call-btn" @tap="goCall"><text>☎</text></view>
       <view class="new-btn" @tap="confirmNew"><text>✛</text></view>
     </template>
     <!-- 未连接：主界面里的一张卡片，不是拦截层 -->
@@ -655,8 +661,9 @@ onUnmounted(() => {
   opacity: 0.35;
 }
 
-/* 顶栏按钮：历史列表 + 新建对话 */
+/* 顶栏按钮：历史列表 + 通话 + 新建对话 */
 :deep(.hist-btn),
+:deep(.call-btn),
 :deep(.new-btn) {
   flex: none;
   width: 64rpx;
@@ -670,6 +677,7 @@ onUnmounted(() => {
   font-size: 34rpx;
 }
 :deep(.hist-btn:active),
+:deep(.call-btn:active),
 :deep(.new-btn:active) {
   opacity: 0.7;
 }

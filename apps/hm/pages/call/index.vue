@@ -24,10 +24,12 @@
  */
 import { ref, onMounted, onUnmounted } from 'vue'
 import { interruptSession } from '../../core/tasks'
+import { deviceId } from '../../core/pairing'
+import { chatSessionId } from '../../core/session'
 
 type Turn = 'you' | 'agent' | 'silence'
 
-/** 当前通话的 sid（从页面参数传入）。 */
+/** 当前通话的 sid：与对话页同一条会话（PC 侧 id 由设备 id 合成）。 */
 const currentSid = ref('')
 const turn = ref<Turn>('silence')
 const elapsed = ref(0)
@@ -36,6 +38,7 @@ const transcript = ref<string[]>([])
 
 let tick: ReturnType<typeof setInterval> | undefined
 onMounted(() => {
+  currentSid.value = chatSessionId(deviceId())
   tick = setInterval(() => {
     elapsed.value += 1
   }, 1000)
@@ -67,7 +70,7 @@ function hangUp() {
 </script>
 
 <template>
-  <hm-shell title="通话中">
+  <hm-shell title="通话中" back>
     <template #end><text class="clock">{{ clock() }}</text></template>
 
     <view class="center">

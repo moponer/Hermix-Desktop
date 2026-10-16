@@ -39,10 +39,18 @@ const error = ref('')
 function onScan() {
   error.value = ''
   uni.scanCode({
+    // 只认 QR：配对码永远是二维码，混入条码只会读到无关内容。
+    scanType: ['qrCode'],
     success: (res) => {
       const t = parsePairingUrl(res.result)
       if (!t) {
-        error.value = '这不是 hermix 的配对码。请在电脑上「设置 → 设备 → 手机端」重新生成。'
+        // 2026-10-16 复发案：两端代码实测都能解析标准配对 URL，但手机仍报
+        // 此错——嫌疑只剩扫码回调返回的内容本身（空串/误读/SDK 差异）。
+        // 把读到的原文亮出来，一次扫码即可定位，不再让人盲猜。
+        const raw = res.result ?? ''
+        error.value = raw
+          ? `扫码内容不是 hermix 配对码（读到 ${raw.length} 字符）：${raw.slice(0, 100)}`
+          : '扫码没有读到内容（0 字符）。请重试一次；反复如此请重启 HBuilderX 真机运行。'
         return
       }
       target.value = t

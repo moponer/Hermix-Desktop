@@ -31,12 +31,14 @@ const props = withDefaults(
 
 const paired = computed(() => isPaired())
 
-/** 底部标签栏：只放顶层四个频道。设置从对话页进，不占一位。 */
+/** 底部标签栏：只放顶层频道。设置不进标签栏——顶栏常驻入口（见 .bar 的设置
+ * 按钮），配对后也能随时进：凭据被撤销时「去设置 → 已配对的电脑 → 移除」
+ * 是唯一的自救出口，藏起来等于把死路留给用户。通话同理挂在对话页顶栏，
+ * 它是「当前对话的另一种交互模式」，不是独立频道。 */
 const TABS = [
   { key: 'chat', label: '对话', path: '/pages/chat/index' },
   { key: 'tasks', label: '任务', path: '/pages/tasks/index' },
   { key: 'approval', label: '审批', path: '/pages/approval/index' },
-  { key: 'call', label: '通话', path: '/pages/call/index' },
 ]
 
 /** 当前页（按 title 前缀匹配，通话页标题是「通话中」）在标签栏里高亮；
@@ -74,6 +76,10 @@ function addDevice() {
   uni.navigateTo({ url: '/pages/pairing/index' })
 }
 
+function goSettings() {
+  uni.navigateTo({ url: '/pages/settings/index' })
+}
+
 function go(path: string) {
   // 顶层频道互切：reLaunch 不让栈越压越深。
   uni.reLaunch({ url: path })
@@ -99,7 +105,12 @@ const devName = computed(() => activeDevice()?.name ?? '')
         <text class="dp-cv">▾</text>
       </view>
       <text v-else class="title">{{ props.title }}</text>
-      <view class="slot-end"><slot name="end" /></view>
+      <view class="slot-end">
+        <slot name="end" />
+        <!-- 顶层页常驻设置入口（次级页不显示，那里「设置」不指向自己）。
+             配对后这是唯一通往设备管理的门：凭据被撤销时没有它就无路可走。 -->
+        <view v-if="!props.back" class="icon-btn" @tap="goSettings"><text>⚙</text></view>
+      </view>
     </view>
 
     <scroll-view class="content" scroll-y :scroll-into-view="props.scrollIntoView" :scroll-with-animation="true">
