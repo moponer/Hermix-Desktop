@@ -142,6 +142,35 @@ impl StdioBridge {
         bridge
     }
 
+    /// 浏览器帧活动检测：距上一帧 ≥60s 视为一段新帧流（burst）的开始，
+    /// 在主线程上触发小窗自动弹出。burst 内的后续帧直接返回（锁内一次
+    /// Instant 比较，20fps 下零成本）。
+    fn note_browser_frame(app: &tauri::AppHandle) {
+        static LAST: std::sync::OnceLock<std::sync::Mutex<Option<std::time::Instant>>> =
+            std::sync::OnceLock::new();
+        let slot = LAST.get_or_init(|| std::sync::Mutex::new(None));
+        let burst = {
+            let mut guard = match slot.lock() {
+                Ok(g) => g,
+                Err(_) => return,
+            };
+            let now = std::time::Instant::now();
+            let burst = match *guard {
+                None => true,
+                Some(t) => now.duration_since(t) >= std::time::Duration::from_secs(60),
+            };
+            *guard = Some(now);
+            burst
+        };
+        if !burst {
+            return;
+        }
+        let app2 = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            crate::browser_view_controller::on_browser_frame_burst(&app2);
+        });
+    }
+
     fn spawn_reader(&self, stdout: ChildStdout) {
         let inner = self.inner.clone();
         let app = self.app.clone();
@@ -177,6 +206,11 @@ impl StdioBridge {
                         eprintln!("[stdio-bridge] http reply without waiter, id={id}");
                     }
                 } else {
+                    // 浏览器帧活动检测：一段新帧流（≥60s 空窗后恢复）开始时
+                    // 自动弹出小窗——LLM 开始操作浏览器，画面应自动现身。
+                    if frame.channel == "browser-frame" {
+                        note_browser_frame(&app);
+                    }
                     // 流式/主通道推送：转发给前端订阅者。
                     let _ = app.emit(
                         "stdio-frame",

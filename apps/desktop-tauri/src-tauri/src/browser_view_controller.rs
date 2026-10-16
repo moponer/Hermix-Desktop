@@ -76,9 +76,11 @@ fn save_geometry(app: &tauri::AppHandle) {
 }
 
 /// 打开（或聚焦）浏览器小窗。幂等：已开则只聚焦。
-#[tauri::command]
-pub async fn browser_view_open(app: tauri::AppHandle) -> Result<(), String> {
-    eprintln!("[browser-view] open invoked");
+///
+/// 由两个入口共用：标题栏 🌐（用户手动）与 stdio 桥的帧活动自动弹窗
+/// （LLM 开始操作浏览器时小窗应自动现身——画面是给人看的，人不该还得
+/// 自己去找开关）。
+pub fn open_or_focus(app: &tauri::AppHandle) -> Result<(), String> {
     if let Some(win) = app.get_webview_window(VIEW_LABEL) {
         let focused = win.set_focus();
         eprintln!("[browser-view] window exists, focus result: {focused:?}");
@@ -86,7 +88,7 @@ pub async fn browser_view_open(app: tauri::AppHandle) -> Result<(), String> {
         return Ok(());
     }
     let mut builder = WebviewWindowBuilder::new(
-        &app,
+        app,
         VIEW_LABEL,
         WebviewUrl::App(VIEW_ROUTE.into()),
     )
@@ -146,6 +148,26 @@ pub async fn browser_view_open(app: tauri::AppHandle) -> Result<(), String> {
         let _ = win.set_focus();
     });
     Ok(())
+}
+
+/// 标题栏 🌐 入口（用户手动）。
+#[tauri::command]
+pub async fn browser_view_open(app: tauri::AppHandle) -> Result<(), String> {
+    eprintln!("[browser-view] open invoked");
+    open_or_focus(&app)
+}
+
+/// stdio 桥帧活动回调（由 `stdio_bridge` 在**主线程**上调用）：一段新的
+/// 浏览器帧流开始（距上一帧 ≥60s）时自动弹出小窗。突发（burst）内只在
+ /// 开始时弹一次——用户中途关掉的窗口不会被逐帧反复拉起。
+pub fn on_browser_frame_burst(app: &tauri::AppHandle) {
+    if app.get_webview_window(VIEW_LABEL).is_some() {
+        return; // 已开着（含最小化/被遮挡），不打扰
+    }
+    eprintln!("[browser-view] frame burst detected, auto-opening");
+    if let Err(e) = open_or_focus(app) {
+        tracing::warn!(error = %e, "浏览器小窗自动弹出失败");
+    }
 }
 
 /// 前端上报暂停/恢复：小窗最小化/遮挡时停 sidecar 里 headless Edge 的
