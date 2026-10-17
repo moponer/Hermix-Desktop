@@ -51,6 +51,7 @@ pub mod task_manager;
 pub mod task_tracker;
 pub mod approval_tokens;
 pub mod file_converter;
+pub mod office_export;
 pub mod tool_search;
 pub mod tool_chain;
 pub mod tts;
@@ -146,6 +147,9 @@ pub fn register_all(
     // because they need fuzzy-match + ripgrep semantics that the
     // TerminalBackend trait doesn't expose.
     file::register(registry, terminal_backend.clone(), seams.as_ref().map(|s| s.fs.clone()));
+    // office_export: 二进制 Office 导出（2026-10-17 决策笔记批次 1，XLSX 先行）。
+    // 纯 Rust OOXML 写入——docx/pptx 批次未落地前 format 参数显式拒绝。
+    office_export::register(registry);
     //P1.8-style : `markitdown` converts arbitrary local documents
     // (PDF/PPTX/DOCX/XLSX/HTML/EPUB/CSV/JSON/XML/MSG/ZIP/image) into
     // compact LLM-friendly Markdown — the token-saving file reader.

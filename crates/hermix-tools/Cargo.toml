@@ -54,6 +54,7 @@ windows = { workspace = true }
 # `hermix_tools::factory::ToolFactory` for the usage pattern.
 inventory = { workspace = true }
 sha2 = { workspace = true }
+rust_xlsxwriter = "0.99.1"
 
 [dev-dependencies]
 proptest = { workspace = true }

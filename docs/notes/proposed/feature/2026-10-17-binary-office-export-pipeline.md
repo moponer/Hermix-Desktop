@@ -35,11 +35,18 @@ umya / xlsxwriter / calamine 引用）。读取链路已完备（`markitdown` �
 
 ### 分批
 
-1. XLSX 先行（`rust_xlsxwriter` 成熟度最高，配合 `spreadsheet-analysis` 技能
-   闭环）。
-2. DOCX（`docx-rs`，映射画布 a4 结构）。
+1. **XLSX（已落地 2026-10-17）**：`rust_xlsxwriter` 0.99.1 进
+   `hermix-tools`；新工具 `office_export`（toolset "file"，RiskLevel
+   **Caution**——与 write_file 保持 file 工具集风险分级一致，此为对提案
+   "Safe" 的事实修正）。参数 = path + format("xlsx") + sheets[{name,rows}]，
+   单元格 string/number/bool/null；前置校验（sheet 名 ≤31 字符且唯一、
+   列 ≤16384、总行 ≤10 万 sanity 帽）失败不落盘；写后回执绝对路径 +
+   行数 + 字节数，回执内提示 markitdown 读回校验。docx/pptx 传参显式
+   报错（含去向说明）。5 个单测（多表写入、格式拒绝、重名/坏单元格、
+   覆盖写、schema 三要素）。
+2. DOCX（`docx-rs`，映射画布 a4 结构）——待实施。
 3. PPTX（`ppt-rs`，映射 slide16x9 结构；该 crate 最年轻，先做只读验证再上
-   生成）。
+   生成）——待实施。
 
 ## Alternatives considered
 
