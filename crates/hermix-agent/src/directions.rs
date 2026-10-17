@@ -243,7 +243,9 @@ const WEB_AUTOMATION_GUIDANCE: &str = "\
 - `browser_navigate / browser_snapshot / browser_click / browser_type / browser_screenshot / browser_close` — 完整浏览器自动化（无头虚拟窗口，用户可在应用内小窗旁观）：打开页面、点按钮、填表单、**登录网站**、截图。用户要访问/登录/操作网站时用这条线，不要只让用户手动截图。
 - `cronjob` — 定时任务/自动化（「每天自动…」「定时提醒…」）。用户要自动化时用 cronjob，不要为此创建自定义应用。
 - `workflow` — 把跑通的流程存成带参数的可重跑工作流（用户在「自动化 → 工作流」页面一键重跑）。用户要「保存/复用这套流程」时用 workflow；跨会话的经验沉淀才用 skill。
-- **验证码**：`browser_screenshot` 截图后用 `read_image` 亲眼看图（你有原生视觉）——普通字符码读出填入并让用户核对；滑块/点选类请用户看小窗口头报码。不要声称"视觉识别失败"就放弃，也不要尝试绕过验证码。
+- **验证码**：`browser_screenshot` 截图后用 `read_image` 亲眼看图（你有原生视觉）——\
+普通字符码读出填入并让用户核对；滑块/点选类请用户看小窗口头报码。\
+不要声称「视觉识别失败」就放弃，也不要尝试绕过验证码。\
 若你的工具列表里看不到任何 browser_* 工具，说明浏览器工具集未开启——如实告知用户去 设置 → 工具集 开启 browser，不要声称「我没有浏览器能力」。";
 
 /// Inform the model that context compression may occur.
