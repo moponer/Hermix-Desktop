@@ -166,8 +166,9 @@ impl StdioBridge {
             return;
         }
         let app2 = app.clone();
+        let session2 = session.to_string();
         let _ = app.run_on_main_thread(move || {
-            crate::browser_view_controller::on_browser_frame_burst(&app2, session);
+            crate::browser_view_controller::on_browser_frame_burst(&app2, &session2);
         });
     }
 
@@ -216,7 +217,7 @@ impl StdioBridge {
                                     .and_then(|s| s.as_str().map(str::to_string))
                             })
                             .unwrap_or_else(|| "default".to_string());
-                        note_browser_frame(&app, &key);
+                        Self::note_browser_frame(&app, &key);
                     }
                     // 流式/主通道推送：转发给前端订阅者。
                     let _ = app.emit(
