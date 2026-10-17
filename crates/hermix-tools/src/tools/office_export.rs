@@ -108,6 +108,11 @@ fn write_cell(
     }
 }
 
+/// Sanity caps for document/presentation exports.
+const MAX_BLOCKS: usize = 5_000;
+const MAX_SLIDES: usize = 200;
+const MAX_TEXT_CHARS: usize = 1_000_000;
+
 #[async_trait]
 impl ToolHandler for OfficeExportHandler {
     async fn execute(&self, params: Value) -> Result<String, ToolError> {
@@ -120,13 +125,25 @@ impl ToolHandler for OfficeExportHandler {
             .get("format")
             .and_then(|v| v.as_str())
             .unwrap_or("xlsx");
-        if !format.eq_ignore_ascii_case("xlsx") {
-            return Err(ToolError::from_message(format!(
-                "office_export: format \"{format}\" is not supported yet — only \"xlsx\". \
-                 .docx/.pptx export is planned (see the binary-office-export decision note); \
-                 meanwhile use the document-authoring canvas for documents/slides."
-            )));
+        let abs = to_absolute_path(path_str);
+        match format.to_ascii_lowercase().as_str() {
+            "xlsx" => self.export_xlsx(&params, &abs),
+            "docx" => self.export_docx(&params, &abs),
+            "pptx" => self.export_pptx(&params, &abs),
+            other => Err(ToolError::from_message(format!(
+                "office_export: format \"{other}\" is not supported — supported: xlsx, docx, pptx."
+            ))),
         }
+    }
+
+    fn schema(&self) -> ToolSchema {
+        self.office_schema()
+    }
+}
+
+impl OfficeExportHandler {
+    /// XLSX export: structured table data → real workbook.
+    fn export_xlsx(&self, params: &Value, abs: &str) -> Result<String, ToolError> {
         let sheets = params
             .get("sheets")
             .and_then(|v| v.as_array())
@@ -220,8 +237,7 @@ impl ToolHandler for OfficeExportHandler {
         }
 
         // --- Save ---
-        let abs = to_absolute_path(path_str);
-        let path = Path::new(&abs);
+        let path = Path::new(abs);
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {
                 std::fs::create_dir_all(parent).map_err(|e| {
@@ -249,21 +265,226 @@ impl ToolHandler for OfficeExportHandler {
         .to_string())
     }
 
-    fn schema(&self) -> ToolSchema {
+    /// Shared save helper: create parent dirs, write bytes, return size.
+    fn save_bytes(path: &Path, bytes: &[u8]) -> Result<u64, ToolError> {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent).map_err(|e| {
+                    ToolError::from_message(format!(
+                        "office_export: create_dir_all {}: {e}",
+                        parent.display()
+                    ))
+                })?;
+            }
+        }
+        std::fs::write(path, bytes).map_err(|e| {
+            ToolError::from_message(format!("office_export: write {}: {e}", path.display()))
+        })?;
+        Ok(std::fs::metadata(path).map(|m| m.len()).unwrap_or(0))
+    }
+
+    /// DOCX export: heading/paragraph/bullet blocks → real Word document.
+    fn export_docx(&self, params: &Value, abs: &str) -> Result<String, ToolError> {
+        use docx_rs::{AbstractNumbering, Docx, Level, LevelJc, LevelText, NumberFormat, Numbering, NumberingId, IndentLevel, Paragraph, Run, Start};
+
+        let blocks = params
+            .get("blocks")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| ToolError::from_message("office_export: missing `blocks` array"))?;
+        if blocks.is_empty() {
+            return Err(ToolError::from_message(
+                "office_export: `blocks` must contain at least one block",
+            ));
+        }
+        if blocks.len() > MAX_BLOCKS {
+            return Err(ToolError::from_message(format!(
+                "office_export: {len} blocks exceeds the {MAX_BLOCKS} sanity cap",
+                len = blocks.len()
+            )));
+        }
+        let mut total_chars = 0usize;
+        for (i, b) in blocks.iter().enumerate() {
+            let text = b.get("text").and_then(|v| v.as_str()).unwrap_or_default();
+            if text.trim().is_empty() {
+                return Err(ToolError::from_message(format!(
+                    "office_export: blocks[{i}].text is empty"
+                )));
+            }
+            total_chars += text.chars().count();
+            if total_chars > MAX_TEXT_CHARS {
+                return Err(ToolError::from_message(format!(
+                    "office_export: total text exceeds the {MAX_TEXT_CHARS} char sanity cap"
+                )));
+            }
+        }
+
+        // One bullet numbering definition shared by all bullet blocks.
+        let mut docx = Docx::new()
+            .add_abstract_numbering(
+                AbstractNumbering::new(1).add_level(Level::new(
+                    0,
+                    Start::new(1),
+                    NumberFormat::new("bullet"),
+                    LevelText::new("•"),
+                    LevelJc::new("left"),
+                )),
+            )
+            .add_numbering(Numbering::new(1, 1));
+
+        for b in blocks {
+            let text = b.get("text").and_then(|v| v.as_str()).unwrap_or_default();
+            let kind = b.get("type").and_then(|v| v.as_str()).unwrap_or("paragraph");
+            let run = Run::new().add_text(text);
+            let paragraph = match kind {
+                "heading1" => Paragraph::new().style("Heading1").add_run(run),
+                "heading2" => Paragraph::new().style("Heading2").add_run(run),
+                "heading3" => Paragraph::new().style("Heading3").add_run(run),
+                "bullet" => Paragraph::new()
+                    .numbering(NumberingId::new(1), IndentLevel::new(0))
+                    .add_run(run),
+                "paragraph" => Paragraph::new().add_run(run),
+                other => {
+                    return Err(ToolError::from_message(format!(
+                        "office_export: unknown block type \"{other}\" — supported: \
+                         heading1, heading2, heading3, paragraph, bullet"
+                    )));
+                }
+            };
+            docx = docx.add_paragraph(paragraph);
+        }
+
+        let path = Path::new(abs);
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent).map_err(|e| {
+                    ToolError::from_message(format!(
+                        "office_export: create_dir_all {}: {e}",
+                        parent.display()
+                    ))
+                })?;
+            }
+        }
+        let file = std::fs::File::create(path).map_err(|e| {
+            ToolError::from_message(format!(
+                "office_export: create {}: {e}",
+                path.display()
+            ))
+        })?;
+        docx.pack(file).map_err(|e| {
+            ToolError::from_message(format!("office_export: pack {}: {e}", path.display()))
+        })?;
+        let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+
+        Ok(json!({
+            "ok": true,
+            "path": abs,
+            "format": "docx",
+            "blocks": blocks.len(),
+            "total_chars": total_chars,
+            "size_bytes": size,
+            "note": "Verify before delivering: re-read via markitdown and check the heading structure."
+        })
+        .to_string())
+    }
+
+    /// PPTX export: title + bullets per slide → real presentation.
+    fn export_pptx(&self, params: &Value, abs: &str) -> Result<String, ToolError> {
+        use ppt_rs::{create_pptx_with_content, SlideContent};
+
+        let presentation_name = params
+            .get("title")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or("Presentation");
+        let slides = params
+            .get("slides")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| ToolError::from_message("office_export: missing `slides` array"))?;
+        if slides.is_empty() {
+            return Err(ToolError::from_message(
+                "office_export: `slides` must contain at least one slide",
+            ));
+        }
+        if slides.len() > MAX_SLIDES {
+            return Err(ToolError::from_message(format!(
+                "office_export: {} slides exceeds the {MAX_SLIDES} sanity cap",
+                slides.len()
+            )));
+        }
+        let mut total_chars = 0usize;
+        for (i, s) in slides.iter().enumerate() {
+            let title = s
+                .get("title")
+                .and_then(|v| v.as_str())
+                .filter(|t| !t.trim().is_empty())
+                .ok_or_else(|| {
+                    ToolError::from_message(format!(
+                        "office_export: slides[{i}] missing `title`"
+                    ))
+                })?;
+            total_chars += title.chars().count();
+            let bullets = s.get("bullets").and_then(|v| v.as_array());
+            for (j, b) in bullets.unwrap_or(&Vec::new()).iter().enumerate() {
+                let text = b.as_str().unwrap_or_default();
+                if text.trim().is_empty() {
+                    return Err(ToolError::from_message(format!(
+                        "office_export: slides[{i}].bullets[{j}] is empty or not a string"
+                    )));
+                }
+                total_chars += text.chars().count();
+            }
+        }
+        if total_chars > MAX_TEXT_CHARS {
+            return Err(ToolError::from_message(format!(
+                "office_export: total text exceeds the {MAX_TEXT_CHARS} char sanity cap"
+            )));
+        }
+
+        let mut built: Vec<SlideContent> = Vec::with_capacity(slides.len());
+        for s in slides {
+            let title = s.get("title").and_then(|v| v.as_str()).unwrap_or_default();
+            let mut slide = SlideContent::new(title);
+            if let Some(bullets) = s.get("bullets").and_then(|v| v.as_array()) {
+                for b in bullets {
+                    // unwrap_or_default unreachable: validated above.
+                    slide = slide.add_bullet(b.as_str().unwrap_or_default());
+                }
+            }
+            built.push(slide);
+        }
+
+        let bytes = create_pptx_with_content(presentation_name, built)
+            .map_err(|e| ToolError::from_message(format!("office_export: pptx build: {e}")))?;
+        let path = Path::new(abs);
+        let size = Self::save_bytes(path, &bytes)?;
+
+        Ok(json!({
+            "ok": true,
+            "path": abs,
+            "format": "pptx",
+            "slides": slides.len(),
+            "total_chars": total_chars,
+            "size_bytes": size,
+            "note": "Verify before delivering: re-read via markitdown and check slide titles."
+        })
+        .to_string())
+    }
+
+    fn office_schema(&self) -> ToolSchema {
         let mut props = IndexMap::new();
         props.insert(
             "path".into(),
             json!({
                 "type": "string",
-                "description": "Output .xlsx path (absolute, or workspace-relative). Overwrites if the file exists (mirrors write_file)."
+                "description": "Output file path (absolute, or workspace-relative), with the matching extension. Overwrites if the file exists (mirrors write_file)."
             }),
         );
         props.insert(
             "format".into(),
             json!({
                 "type": "string",
-                "enum": ["xlsx"],
-                "description": "Output format. Only \"xlsx\" is supported today; .docx/.pptx are planned."
+                "enum": ["xlsx", "docx", "pptx"],
+                "description": "Output format. xlsx → requires `sheets`; docx → requires `blocks`; pptx → requires `slides`."
             }),
         );
         props.insert(
@@ -287,14 +508,14 @@ impl ToolHandler for OfficeExportHandler {
         );
         tool_schema(
             "office_export",
-            "Write structured data to a REAL .xlsx spreadsheet (editable in Excel/WPS).\n\n\
+            "Write structured data to a REAL binary Office file — .xlsx workbook, .docx Word document, or .pptx presentation (all editable in Office/WPS).\n\n\
              ## When to use\n\
-             Delivering processed/merged/cleaned data as an editable spreadsheet — the write side of the spreadsheet-analysis skill (read schema → process → export → read back to verify).\n\n\
+             Delivering data as an editable spreadsheet (pairs with spreadsheet-analysis skill); delivering a Word/PPT deliverable the canvas pipeline cannot produce. Format branches: xlsx → `sheets` [{name, rows[[cell]]}], cells are string|number|bool|null; docx → `blocks` [{type: heading1|heading2|heading3|paragraph|bullet, text}]; pptx → `title` + `slides` [{title, bullets: [string]}].\n\n\
              ## When NOT to use\n\
-             Reading spreadsheets (markitdown); styled documents/slides (document-authoring canvas); CSV dumps (write_file).\n\n\
+             Reading any Office file (markitdown); styled/flowing documents and HTML slides (document-authoring canvas — this tool produces plain structured exports, not designed layouts); CSV dumps (write_file).\n\n\
              ## Discipline\n\
-             Cells are string | number | bool | null. Sheet names ≤ 31 chars, unique. Overwrite allowed (mirrors write_file). After export, verify via markitdown read-back and report the absolute path.",
-            JsonSchema::object(props, vec!["path".into(), "format".into(), "sheets".into()]),
+             Overwrite allowed (mirrors write_file). After export, verify via markitdown read-back and report the absolute path in your reply.",
+            JsonSchema::object(props, vec!["path".into(), "format".into()]),
         )
     }
 }
@@ -349,17 +570,123 @@ mod tests {
     #[tokio::test]
     async fn rejects_unsupported_format_explicitly() {
         let tmp = tempfile::tempdir().unwrap();
-        let path = tmp.path().join("out.docx");
+        let path = tmp.path().join("out.odp");
         let err = OfficeExportHandler
             .execute(json!({
                 "path": path.to_string_lossy(),
-                "format": "docx",
-                "sheets": [{"name": "s", "rows": [["a"]]}]
+                "format": "odp",
+                "slides": [{"title": "t"}]
             }))
             .await
             .unwrap_err();
-        assert!(err.to_string().contains("not supported yet"), "got: {err}");
+        assert!(
+            err.to_string().contains("not supported"),
+            "got: {err}"
+        );
         assert!(!path.exists(), "nothing should be written on rejection");
+    }
+
+    #[tokio::test]
+    async fn docx_export_writes_heading_structure() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("out").join("报告.docx");
+        let result = OfficeExportHandler
+            .execute(json!({
+                "path": path.to_string_lossy(),
+                "format": "docx",
+                "blocks": [
+                    {"type": "heading1", "text": "季度报告"},
+                    {"type": "paragraph", "text": "本季度营收同比增长 12%。"},
+                    {"type": "heading2", "text": "风险"},
+                    {"type": "bullet", "text": "汇率波动"},
+                    {"type": "bullet", "text": "供应链延迟"}
+                ]
+            }))
+            .await
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["ok"], true);
+        assert_eq!(parsed["blocks"], 5);
+        let bytes = std::fs::read(&path).unwrap();
+        assert!(bytes.len() > 100);
+        assert_eq!(&bytes[0..2], b"PK", "docx is a zip container");
+    }
+
+    #[tokio::test]
+    async fn docx_rejects_unknown_block_type_and_empty_text() {
+        let handler = OfficeExportHandler;
+        let base = tempfile::tempdir().unwrap();
+        let p = base.path().join("a.docx").to_string_lossy().to_string();
+
+        let err = handler
+            .execute(json!({
+                "path": p, "format": "docx",
+                "blocks": [{"type": "table", "text": "x"}]
+            }))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("unknown block type"), "got: {err}");
+
+        let err = handler
+            .execute(json!({
+                "path": p, "format": "docx",
+                "blocks": [{"type": "paragraph", "text": "  "}]
+            }))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("text is empty"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn pptx_export_writes_slides() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("out").join("deck.pptx");
+        let result = OfficeExportHandler
+            .execute(json!({
+                "path": path.to_string_lossy(),
+                "format": "pptx",
+                "title": "季度汇报",
+                "slides": [
+                    {"title": "概览", "bullets": ["营收 +12%", "成本 -3%"]},
+                    {"title": "风险"}
+                ]
+            }))
+            .await
+            .unwrap();
+        let parsed: Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["ok"], true);
+        assert_eq!(parsed["slides"], 2);
+        let bytes = std::fs::read(&path).unwrap();
+        assert!(bytes.len() > 100);
+        assert_eq!(&bytes[0..2], b"PK", "pptx is a zip container");
+    }
+
+    #[tokio::test]
+    async fn pptx_rejects_missing_title_and_empty_bullet() {
+        let handler = OfficeExportHandler;
+        let base = tempfile::tempdir().unwrap();
+        let p = base.path().join("a.pptx").to_string_lossy().to_string();
+
+        let err = handler
+            .execute(json!({
+                "path": p, "format": "pptx",
+                "slides": [{"bullets": ["x"]}]
+            }))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("missing `title`"), "got: {err}");
+
+        let err = handler
+            .execute(json!({
+                "path": p, "format": "pptx",
+                "slides": [{"title": "t", "bullets": ["ok", "   "]}]
+            }))
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("empty or not a string"),
+            "got: {err}"
+        );
     }
 
     #[tokio::test]

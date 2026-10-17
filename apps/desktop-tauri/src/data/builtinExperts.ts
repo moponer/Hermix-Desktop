@@ -28,6 +28,23 @@ export interface ExpertDef {
   isBuiltin: boolean;
 }
 
+/**
+ * 专家 → 工具组接线（STABILITY_AND_REMOTE_PLAN §3.2-2）。
+ * 语义是"只增不删"：后端把组成员并进本轮白名单（ChatView → expert_toolset
+ * → registry.toolset_members），保证专家领域工具在场；不会收窄用户已启用
+ * 的集合。未列出的专家（socratic-tutor）是对话型，不依赖工具。
+ * 每位专家只声明一个最关键的工具组——需要多组时后端按需扩展数组。
+ */
+const EXPERT_TOOLSETS: Record<string, string> = {
+  "builtin-code-reviewer": "terminal", // clippy / tsc 机检
+  "builtin-architect": "file", // read_file 抽查结构
+  "builtin-debugger": "terminal", // 最小复现命令
+  "builtin-writer": "document", // markitdown 读素材
+  "builtin-translator": "document",
+  "builtin-data-analyst": "code_execution", // pandas 处理
+  "builtin-product-manager": "web", // 竞品/市场调研
+};
+
 /** Ordered category list for the sidebar filter. */
 export const EXPERT_CATEGORIES: ExpertCategory[] = [
   "编程",
@@ -302,7 +319,7 @@ export async function registerBuiltinsToBackend(): Promise<unknown> {
     category: e.category,
     description: e.description,
     system_prompt: e.systemPrompt,
-    toolset: e.toolset ?? null,
+    toolset: e.toolset ?? EXPERT_TOOLSETS[e.id] ?? null,
     is_builtin: e.isBuiltin,
   }));
   if (remote.length === 0) {

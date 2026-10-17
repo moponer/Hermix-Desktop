@@ -55,6 +55,8 @@ windows = { workspace = true }
 inventory = { workspace = true }
 sha2 = { workspace = true }
 rust_xlsxwriter = "0.99.1"
+docx-rs = "0.4.22"
+ppt-rs = "0.2.36"
 
 [dev-dependencies]
 proptest = { workspace = true }

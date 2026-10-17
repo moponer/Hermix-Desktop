@@ -1,6 +1,6 @@
 # Decision Note: 二进制 Office 导出管线（纯 Rust 三件套）
 
-Status: proposed — 已完成生态评估，待拍板后集成
+Status: implemented — 2026-10-17 全部三批落地（同日完成）
 
 ## 背景
 
@@ -44,9 +44,16 @@ umya / xlsxwriter / calamine 引用）。读取链路已完备（`markitdown` �
    行数 + 字节数，回执内提示 markitdown 读回校验。docx/pptx 传参显式
    报错（含去向说明）。5 个单测（多表写入、格式拒绝、重名/坏单元格、
    覆盖写、schema 三要素）。
-2. DOCX（`docx-rs`，映射画布 a4 结构）——待实施。
-3. PPTX（`ppt-rs`，映射 slide16x9 结构；该 crate 最年轻，先做只读验证再上
-   生成）——待实施。
+2. **DOCX（已落地 2026-10-17）**：`docx-rs` 0.4.22。`office_export` format
+   分派（xlsx/docx/pptx 三分支）；docx 参数 = `blocks`
+   [{type: heading1|heading2|heading3|paragraph|bullet, text}]，heading 走
+   内置 Heading1/2/3 样式，bullet 共享一个 AbstractNumbering 定义。注意：
+   docs.rs 页面文档覆盖率仅 5.5%，`Level::new` 实为 5 参（含 `LevelJc`）、
+   `Paragraph` 用 `.style("Heading1")` 而非 `add_style`——以 crate 源码为准。
+3. **PPTX（已落地 2026-10-17）**：`ppt-rs` 0.2.36。参数 = `title` +
+   `slides` [{title, bullets[string]}]，`create_pptx_with_content` →
+   `std::fs::write`。9 个单测覆盖三格式（写读回 PK 头、显式拒绝、坏参数、
+   覆盖写）。`hermix-tools` 748 passed 全绿。
 
 ## Alternatives considered
 
