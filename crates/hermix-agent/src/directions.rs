@@ -28,15 +28,7 @@ const TOOL_USAGE_GUIDANCE: &str = r#"
 
 Before calling a generic tool like `terminal` or `execute_code`, **scan the available tool list** for a purpose-built alternative. Purpose-built tools encode correct arguments, error handling, and side-effect discipline that generic tools cannot match.
 
-## File path handling
-When the user provides an explicit file path, call the matching tool directly with that path:
-- 文本型 PDF → `markitdown` (v0.1.1+ 默认路径已带轻量结构化：编号列表/编号小节标题转 Markdown；可传 `max_chars` 截断)。**扫描件/图片型 PDF（输出为空或乱码）→ `read_image`**（本地 OCR 已从本构建移除，只能交给视觉模型读图）。拿不准类型先 `markitdown`，空/乱再 `read_image`
-- Office / structured docs (`.docx`/`.pptx`/`.xlsx`/`.html`/`.epub`/`.csv`/`.json`/`.xml`/`.msg`/`.zip`) → `markitdown` (token-cheapest Markdown extraction; covers everything except pure text/code and images)
-- text/code → `read_file`
-- creating files → `write_file`
-- **Document authoring**（用户要做 PPT/报告/文档/表格）→ 按加载的 `document-authoring` skill 走 `<hermix-canvas page="slide16x9|a4">` 画布管线（流式可见 + 成稿 write_file 落盘）；未加载该 skill 时不要凭记忆模仿 marker 语法
-- rename/move → `move_file(source, destination)`
-- images by path → `delegate_task` (see Image analysis below)
+**Per-tool routing rules live in each tool's own description** — trust them (document conversion → `markitdown`; images by path → `read_image` inside a sub-agent; text/code → `read_file`; document authoring → the loaded `document-authoring` skill's `<hermix-canvas>` pipeline; rename/move → `move_file`). The system prompt carries only the cross-cutting rule below.
 
 ## Delegate heavy reads to sub-agents
 
@@ -251,6 +243,7 @@ const WEB_AUTOMATION_GUIDANCE: &str = "\
 - `browser_navigate / browser_snapshot / browser_click / browser_type / browser_screenshot / browser_close` — 完整浏览器自动化（无头虚拟窗口，用户可在应用内小窗旁观）：打开页面、点按钮、填表单、**登录网站**、截图。用户要访问/登录/操作网站时用这条线，不要只让用户手动截图。
 - `cronjob` — 定时任务/自动化（「每天自动…」「定时提醒…」）。用户要自动化时用 cronjob，不要为此创建自定义应用。
 - `workflow` — 把跑通的流程存成带参数的可重跑工作流（用户在「自动化 → 工作流」页面一键重跑）。用户要「保存/复用这套流程」时用 workflow；跨会话的经验沉淀才用 skill。
+- **验证码**：`browser_screenshot` 截图后用 `read_image` 亲眼看图（你有原生视觉）——普通字符码读出填入并让用户核对；滑块/点选类请用户看小窗口头报码。不要声称"视觉识别失败"就放弃，也不要尝试绕过验证码。
 若你的工具列表里看不到任何 browser_* 工具，说明浏览器工具集未开启——如实告知用户去 设置 → 工具集 开启 browser，不要声称「我没有浏览器能力」。";
 
 /// Inform the model that context compression may occur.

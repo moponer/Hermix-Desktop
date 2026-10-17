@@ -69,7 +69,7 @@ impl std::fmt::Debug for ToolEntry {
 }
 
 /// A simple registry mapping tool names to their schemas and handlers.
-/// The full-featured implementation lives in `hermes-tools`; this minimal
+/// The full-featured implementation lives in `hermix-tools`; this minimal
 /// version exists so the agent loop can be tested and used independently.
 #[derive(Debug, Clone)]
 pub struct ToolRegistry {

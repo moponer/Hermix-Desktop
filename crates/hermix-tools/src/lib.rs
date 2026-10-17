@@ -7,7 +7,7 @@
     dead_code,
     noop_method_call
 )]
-//! # hermes-tools
+//! # hermix-tools
 //!
 //! Tool registry, toolset system, and tool implementations for Hermes Agent.
 //!

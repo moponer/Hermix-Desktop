@@ -120,6 +120,24 @@ impl Default for ConvergenceConfig {
     }
 }
 
+impl ConvergenceConfig {
+    /// Domain-biased thresholds. Only the **user pin** (`AgentConfig::
+    /// domain_override`) is honored: the auto-detected domain changes per
+    /// turn while the detector is per-run state, so re-thresholding per
+    /// turn would corrupt the similar-content counters.
+    ///
+    /// Operate 域放宽 similar-content 阈值——批量文件操作天然高重复度
+    /// （同路径逐条清单回执、批量重命名），默认 5/10 会误杀。
+    pub(crate) fn for_domain(pin: Option<hermix_intelligence::DomainMode>) -> Self {
+        let mut cfg = Self::default();
+        if matches!(pin, Some(hermix_intelligence::DomainMode::Operate)) {
+            cfg.max_similar_content_turns = 8;
+            cfg.max_similar_content_hard_stop_turns = 16;
+        }
+        cfg
+    }
+}
+
 /// Tracks convergence signals across turns.
 #[derive(Debug, Default)]
 #[allow(dead_code)]
@@ -160,13 +178,6 @@ impl ConvergenceDetector {
             ..Default::default()
         }
     }
-
-    /// Adjust the no-progress threshold based on the L1 Domain Mode
-    /// preset's `max_stall_turns`.
-    /// Each domain has a different tolerance for tool-only turns:
-    /// - Code: 5 (compile-test cycle is short)
-    /// - Research: 7 (multi-source gathering takes longer)
-    /// - Write: 4 (writing should produce visible text quickly)
 
     /// Record a completed turn and check for convergence.
     /// Parameters:
@@ -350,6 +361,31 @@ fn jaccard_similarity(a: &str, b: &str) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_for_domain_operate_relaxes_similar_content() {
+        let cfg = ConvergenceConfig::for_domain(Some(hermix_intelligence::DomainMode::Operate));
+        assert_eq!(cfg.max_similar_content_turns, 8);
+        assert_eq!(cfg.max_similar_content_hard_stop_turns, 16);
+        // 其余阈值不变——只放宽 similar-content
+        assert_eq!(cfg.max_no_progress_turns, 15);
+        assert_eq!(cfg.max_error_turns, 3);
+    }
+
+    #[test]
+    fn test_for_domain_non_operate_keeps_defaults() {
+        for mode in [
+            hermix_intelligence::DomainMode::Chat,
+            hermix_intelligence::DomainMode::Code,
+            hermix_intelligence::DomainMode::Research,
+            hermix_intelligence::DomainMode::Write,
+        ] {
+            let cfg = ConvergenceConfig::for_domain(Some(mode));
+            assert_eq!(cfg.max_similar_content_turns, 5, "mode={mode:?}");
+        }
+        let cfg = ConvergenceConfig::for_domain(None);
+        assert_eq!(cfg.max_similar_content_turns, 5);
+    }
 
     #[test]
     fn test_no_progress_warns_but_does_not_kill() {

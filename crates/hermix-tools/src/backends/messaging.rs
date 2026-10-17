@@ -91,7 +91,7 @@ impl MessagingBackend for SignalMessagingBackend {
 /// Callback-based messaging backend that delegates to a delivery function.
 /// The gateway layer constructs this with a closure that calls
 /// `DeliveryRouter::send_to_platform`. This avoids a direct dependency
-/// from `hermes-tools` to `hermes-gateway`.
+/// from `hermix-tools` to `hermes-gateway`.
 pub struct GatewayMessagingBackend {
     /// Async function: (platform, chat_id, message) -> Result
     send_fn: Box<

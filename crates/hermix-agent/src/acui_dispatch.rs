@@ -135,7 +135,12 @@ pub fn default_tool_router(user_always_include: &[String]) -> Arc<dyn ToolSchema
         }
     }
     let kw = Arc::new(KeywordRouter::new());
-    Arc::new(AlwaysInclude::new(kw, whitelist))
+    let always = Arc::new(AlwaysInclude::new(kw, whitelist));
+    // PriorityBoost: L1 Domain Mode integration. `TurnContext::priority_tools`
+    // flows from `DomainPreset::priority_tools` via `AgentLoopConfig::route_tools`;
+    // this wrapper re-ranks those tools (+5.0) without force-including them.
+    // Empty priority list (Chat domain / no preset tools) → pass-through.
+    Arc::new(hermix_intelligence::PriorityBoost::with_default_boost(always))
 }
 
 #[cfg(test)]

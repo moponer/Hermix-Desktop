@@ -126,7 +126,7 @@ tags:
    - 测试版窗口**按 F12 打开 WebView2 开发者工具**（Console/Elements/Network 齐全），查运行时报错、DOM、请求就靠它；打包后的正式 exe 不响应 F12
    - 页面自身的 JS 错误还会自动落盘到应用目录的 `.runtime-errors.log`
 8. **更新文档**：每次改动后 → `update_doc` 把状态写进 开发计划进度.md；bug 修复后 → `log_iteration` 把【问题/根因/修复/验证】追加到 更新迭代.md；交付前 → `update_doc` README.md 给最终用户看
-9. **代码审查闸门**：对照 code-review.md + frontend-architecture.md，跑 smoke 确认无运行时/控制台报错，提示友好
+9. **代码审查闸门**：对照 code-review.md + architecture-design.md，跑 smoke 确认无运行时/控制台报错，提示友好
 10. 交付说明：去哪运行（run 测试版 / package 出 exe）、如何打包、如何回来 `update` 继续
 
 ### 修复/迭代流程（强制顺序）
@@ -218,8 +218,8 @@ $('save').onclick=async()=>{const r=await window.hx.writeFile('output.txt',$('in
 ## References
 
 - 同目录 `code-review.md`：交付前审查清单（无低级错误/死代码/权限一致/离线可用/设计落实）
-- 同目录 `frontend-architecture.md`：前端质量基线（布局层级/控件尺寸/响应式）
-- 同目录 `code-craftsmanship.md`：通用代码精炼标准（YAGNI/标准库/原生平台/现有依赖/单行/最小实现 + 不重复造轮子），适用于 hermix 与 workbuddy
+- 同目录 `architecture-design.md`：前端选型/状态分层/性能清单等设计基线（布局层级/控件尺寸/响应式归 impeccable-design）
+- 通用代码精炼标准（YAGNI/标准库/原生平台/现有依赖/单行/最小实现）已并入 AGENTS.md 六步决策阶梯与 impeccable-design.md
 - 图标库：内置 2007 个 Lucide SVG，清单见 `apps/desktop-tauri/src-tauri/resources/icons/`（文件名去 `.svg` 即 `manifest.icon` 名，如 `music`/`settings`/`folder`）
 - **`tile_color`（可选）**：`#RRGGBB` 或 `#RRGGBBAA`，给列表卡片/详情头部/窗口标题栏/打包 exe 任务栏图标加一个**纯色圆角背景块 + 白色字形**（无渐变）。规则：`icon_file`/`icon_data` 或 `icon` 为 emoji 时**跳过**背景；非法值被 `validate_tile_color` 拒绝。
 - hx-shell API 真相源：`window.hx.getInfo()`（运行时返回完整可用 API 清单，本文档可能滞后）

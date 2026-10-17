@@ -25,7 +25,13 @@ pub fn register(registry: &ToolRegistry, backend: Arc<dyn DelegationBackend>) {
         Arc::new(|| true),
         vec![],
         true,
-        "Delegate a task to a sub-agent with an isolated context. SYNCHRONOUS: sub-agent runs to completion, result returned in tool_result — continue task immediately.",
+        "Delegate a task to a sub-agent with an ISOLATED context: the sub-agent reads/analyzes on its own and only its concise conclusion (capped ~8,000 chars) returns as the tool_result. SYNCHRONOUS — blocks until done; no polling.\n\n\
+         ## When to use (default: prefer this over reading in the MAIN context)\n\
+         Images (2,000-8,000 tokens per image if read inline), large files (> ~50 KB / ~1500 lines), PDFs > 5 pages, multi-doc comparison, and any read you will not branch on.\n\n\
+         ## When NOT to use\n\
+         Images the user pasted/attached in the current message (already visible — analyze directly); tiny files you need verbatim; anything where you must branch on the raw content turn-by-turn.\n\n\
+         ## Parameter discipline\n\
+         Pass PATHS, never inline file contents into `task`. For 4+ images split into batches of 3-5 and issue batches in parallel. Example: task=\"Summarize this PDF and list key clauses\", context=\"Path: C:\\\\docs\\\\contract.pdf\". Roles: Explore (read-only) / Plan (read+planning) / General (default).",
         "🤝",
         None,
         RiskLevel::Caution,

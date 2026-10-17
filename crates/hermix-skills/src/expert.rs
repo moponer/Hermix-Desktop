@@ -32,7 +32,7 @@ pub struct ExpertEntry {
     /// System prompt body, injected at the top of the agent system prompt.
     pub system_prompt: String,
     /// Optional backend toolset name; the agent loop uses it to filter the
-    /// tool allow-list. See `crates/hermes-tools/src/toolset_distributions.rs`.
+    /// tool allow-list. See `crates/hermix-tools/src/toolset_distributions.rs`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub toolset: Option<String>,
     /// `true` for entries bundled with the desktop binary.

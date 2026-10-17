@@ -64,7 +64,13 @@ pub fn register(
         Arc::new(|| true),
         vec![],
         true,
-        "Execute a shell command on the user's system. You have full access to the filesystem (including C:\\ and other drives). Per-command risk is decided by an internal ApprovalManager; this tool-level risk is Caution (commands may have side effects). A command that needs user approval is presented as a confirmation prompt — you cannot approve it yourself, and there is no text marker that bypasses the prompt.",
+        "Execute a shell command in the user's workspace (Windows, unified PowerShell layer; backslash paths, PowerShell cmdlets preferred).\n\n\
+         ## When to use\n\
+         Building, running tests, git operations, and anything the structured tools cannot do.\n\n\
+         ## When NOT to use\n\
+         Reading file contents (read_file / markitdown), searching (search_files), moving/copying (move_file), deleting (storage_clean) — purpose-built tools handle those with correct argument validation, risk grading, and Windows quoting. Falling back to the shell for these is how quoting and path bugs start.\n\n\
+         ## Output discipline\n\
+         Output is capped; unbounded dumps (dir /s /b, cat huge.log, find /) are blocked — pipe through Select-String / head / tail first. Per-command risk is decided by the internal ApprovalManager; a command needing user approval is presented as a confirmation card — you cannot approve it yourself, and no text marker bypasses the prompt.",
         "💻",
         None,
         RiskLevel::Caution,

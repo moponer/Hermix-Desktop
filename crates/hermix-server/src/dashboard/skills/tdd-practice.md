@@ -2,147 +2,57 @@
 name: "tdd-practice"
 display_name: "测试驱动开发"
 category: "software-development"
-description: "用于实施测试驱动开发（TDD）工作流 —— 先写测试再写代码、强制 RED-GREEN-REFACTOR 循环，或提升既有代码的测试覆盖率。"
-version: "0.1.0"
-author: "Hermes Desktop"
+description: "RED-GREEN-REFACTOR 循环开发与补测：先写失败测试再写实现，或为既有代码补行为测试。用于：新功能开发、修 bug 前锁定行为、重构前搭安全网。不适用于：一次性脚本（测试成本高于收益）、性能基准（用基准工具）。"
+version: "0.2.0"
+author: "Hermix Desktop"
 source: "builtin"
 security_level: "safe"
-tags: ["software-development", "builtin"]
+tags: ["software-development", "builtin", "testing"]
 ---
 
-# 测试驱动开发 Skill
+# 测试驱动开发
 
-## When to Activate
+## 工具接线（本仓库验证命令）
 
-Use this skill when:
-- 需要按 TDD 流程开发新功能（先写测试，再写实现）
-- 需要对现有代码补充测试（先理解行为，再补测试）
-- 需要重构代码并确保行为不变（测试作为安全网）
-- 需要评审测试质量（测试是否小而专注、独立、快速）
+1. `terminal` 跑测试，失败原因必须是"断言失败"而非"编译错误"——编译错误
+   不算 RED：
+   - Rust 单 crate：`cargo test -p <crate> --lib`
+   - Rust 全量：`cargo test --workspace --lib`
+   - TS：`cd apps/desktop-tauri && ./node_modules/.bin/tsc --noEmit`（类型层）
+   - Python：`python -m pytest <目标> -x -q`
+2. 改动前先确认现状测试是绿的；在红的基础上继续写码 = 看不懂结果。
+3. 大范围补测（> 10 个用例）走 `delegate_task`，task 给行为清单，让子代理
+   起草用例再人工收敛。
 
-Do not activate for:
-- 纯探索性编程（先 prototype 再补测试，不算 TDD）
-- 脚本/一次性工具（测试成本高于收益）
-- 性能基准测试（用 benchmark 工具，不是 TDD）
+## RED-GREEN-REFACTOR 纪律
 
-## Core Concepts
+1. **RED**：写一个失败的测试，用自然语言命名的行为做测试名
+   （`test_user_cannot_login_with_wrong_password`）。跑一次确认失败原因
+   符合预期。
+2. **GREEN**：写**最少**的代码让测试通过，不追求完美。
+3. **REFACTOR**：消除重复、改善命名，每步重跑测试。
 
-### RED-GREEN-REFACTOR 循环
+循环要小（分钟级）；大功能拆成多个小循环，每轮循环对应一次提交粒度的进展。
 
-```
-RED   → 写一个失败的测试（定义期望行为）
-GREEN → 写最少的代码让测试通过（不追求完美）
-REFACTOR → 重构代码，保持测试通过（消除重复、提升可读性）
-```
+## 测试五原则
 
-每一轮循环应该很小（几分钟到十几分钟），大的功能拆成多个小循环。
+小而专注（一测试一行为）、独立（不共享状态不依赖顺序）、快速（单元毫秒级）、
+确定性（同输入同输出）、自描述（测试名即行为文档）。
 
-### 测试原则
+## 何时停止写测试
 
-1. **小而专注**：每个测试只验证一个行为
-2. **独立**：测试之间不共享状态、不依赖执行顺序
-3. **快速**：单元测试毫秒级，集成测试秒级
-4. **确定性**：同样的输入，同样的输出，不依赖外部状态
-5. **自描述**：测试名就是行为描述（`test_user_cannot_login_with_wrong_password`）
+边界条件与错误路径全覆盖、边际收益递减时停。测试也是代码，同样要维护——
+不给私有实现细节写测试，给行为写。
 
-### 测试金字塔
+## 反例（不要这样做）
 
-```
-        /  E2E  \        ← 少量，验证关键路径
-       / 集成测试 \       ← 中量，验证模块协作
-      /  单元测试   \      ← 大量，验证单个函数/方法
-```
+- ❌ 跳过 RED 直接写实现——没有失败过的测试等于没测试
+- ❌ GREEN 阶段顺手优化——先通过，重构阶段再说
+- ❌ Mock 一切——真实行为比 mock 可靠，只在边界（网络/时钟/文件系统）mock
+- ❌ 一个测试验证五个断言链——拆成独立小测试
 
-## Practical Guidance
+## 集成
 
-### TDD 五步法
-
-1. **写失败测试**：用自然语言描述期望行为，运行确认失败
-2. **看测试失败**：确认失败原因是你预期的（不是编译错误）
-3. **写最少代码**：让测试通过，不做多余的事
-4. **看测试通过**：确认通过
-5. **重构**：消除重复、改善命名、提取函数，每步都跑测试
-
-### 何时停止写测试
-
-- 当你对"这段代码的行为"有信心时
-- 当继续写测试的边际收益递减时
-- 当所有边界条件和错误路径都被覆盖时
-
-### Rust 中的 TDD
-
-```rust
-// RED: 先写测试
-#[test]
-fn test_add_positive_numbers() {
-    assert_eq!(add(2, 3), 5);
-}
-
-// GREEN: 再写实现
-fn add(a: i32, b: i32) -> i32 {
-    a + b
-}
-
-// REFACTOR: 如果有重复，提取函数
-```
-
-### JavaScript/TypeScript 中的 TDD
-
-```typescript
-// RED
-test('calculate total with tax', () => {
-  expect(calculateTotal(100, 0.1)).toBe(110);
-});
-
-// GREEN
-function calculateTotal(price: number, taxRate: number): number {
-  return price * (1 + taxRate);
-}
-```
-
-## Gotchas
-
-- 不要跳过 RED 步骤直接写代码——没有失败的测试等于没有测试
-- 不要在 GREEN 步骤追求完美代码——先通过，再重构
-- 不要让一个测试验证太多东西——拆成多个独立测试
-- Mock 不要过度使用——真实行为比 mock 更可靠
-- 测试代码也是代码，也需要重构和维护
-
-## Examples
-
-```python
-# Python + pytest TDD 示例
-# RED
-def test_empty_list_returns_zero():
-    assert total([]) == 0
-
-# GREEN
-def total(items):
-    return 0
-
-# RED (下一轮)
-def test_single_item():
-    assert total([10]) == 10
-
-# GREEN
-def total(items):
-    if not items:
-        return 0
-    return items[0]
-
-# 逐步迭代直到全部通过...
-```
-
-## Integration
-
-- 与 `refactoring` skill 配合：重构时 TDD 是安全网
-- 与 `debugging` skill 配合：先写复现 bug 的测试（RED），再修复（GREEN）
-- 与 `testing` skill 配合：TDD 是测试策略的一种，测试 skill 提供更多测试技术
-- 与 `planning` skill 配合：大功能拆成多个 TDD 循环的计划
-
-## References
-
-- Kent Beck《Test Driven Development: By Example》
-- Rust: `cargo test` 内置 TDD 支持
-- JavaScript: Jest / Vitest 提供 watch mode 适合 TDD
-- Python: pytest + `--looponfail` 自动重跑失败测试
+- `debugging-methodology`：修 bug 先写复现测试（RED）再修（GREEN）
+- `code-review`：测试覆盖是审查项
+- 参考：Kent Beck《Test Driven Development: By Example》

@@ -1091,7 +1091,11 @@ let mut empty_stop_retry_count: u32 = 0;
         // still aliased to a local. The other 13 locals were either
         // dropped or replaced with `record_*` / `bump_*` / `store_*`
         // methods on the inner structs.
-        let mut state = LoopState::default();
+        let mut state = LoopState::with_convergence(
+            crate::convergence_detector::ConvergenceConfig::for_domain(
+                self.config.domain_override,
+            ),
+        );
         // LoopState owns total_turns; aliased here for hot-path readability.
         let mut total_turns: u32 = state.total_turns;
 
@@ -1776,7 +1780,11 @@ self.notify_phase(&LoopPhase::Init, 0);
         let mut post_tool_summarize_count: u32 = 0;
         let session_id = self.config.session_id.as_deref().unwrap_or("");
 
-        let mut state = LoopState::default();
+        let mut state = LoopState::with_convergence(
+            crate::convergence_detector::ConvergenceConfig::for_domain(
+                self.config.domain_override,
+            ),
+        );
         //: same as in `run`. Only `total_turns`
         // keeps the local-alias pattern. The two message caches live
         // on `state.message_cache` (mutated in place) and the two

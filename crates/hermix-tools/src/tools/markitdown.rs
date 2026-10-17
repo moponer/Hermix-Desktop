@@ -217,6 +217,10 @@ impl ToolHandler for MarkitdownHandler {
              ## When to use\n\
              - You need the text/content of a .docx/.pptx/.xlsx/.html/.epub/.csv/.pdf/etc. for reasoning.\n\
              - You want the token-cheapest representation of a document.\n\n\
+             ## When NOT to use\n\
+             - Plain text / code files → `read_file` (direct, keeps line numbers).\n\
+             - Long documents or multi-doc comparison where you only need conclusions → `delegate_task` (keeps the main context lean); pass paths, not contents.\n\
+             - You need a *modified* file, not the extracted text — this tool is read-only.\n\n\
              ## PDF 分工 (v0.1.1+)\n\
              - **文本型 PDF**：本工具直接转换，默认路径已带轻量结构化（编号列表 / 编号小节标题转为 Markdown），可传 `max_chars` 截断大文档。\n\
              - **扫描件 / 图片型 PDF**（转换结果为空或乱码）：本工具无 OCR，改用 `read_image` 走 LLM 视觉（本地 OCR 已从本构建移除）。\n\

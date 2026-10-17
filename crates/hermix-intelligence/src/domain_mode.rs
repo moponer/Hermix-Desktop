@@ -125,6 +125,10 @@ pub struct DomainPreset {
     pub mode: DomainMode,
     /// 附加到系统提示词的 domain 指令块（`Chat` 为空串 —— 不注入）
     pub system_directive: &'static str,
+    /// L1 域的工具路由偏置：路由打分后对这些工具 +5.0
+    /// （经 `PriorityBoost` 消费，`TurnContext::priority_tools`）。
+    /// 加权不是开关——未列出的工具仍可用。`Chat` 为空表。
+    pub priority_tools: &'static [&'static str],
 }
 
 // ---------------------------------------------------------------------------
@@ -133,39 +137,35 @@ pub struct DomainPreset {
 
 pub const CODE_DOMAIN_DIRECTIVE: &str = "\
 # 代码开发模式
-你当前在代码开发模式。以下规则优先于通用规则：
-1. 修改前先读文件 — 不要凭记忆改代码，先 read_file 确认当前内容
-2. 改完即验证 — 有测试就跑测试，有编译就 cargo check / tsc
-3. diff 优先 — 展示修改时用 diff 格式，不要重贴整个文件
-4. 类型安全 — Rust/TS 改动后确保类型检查通过
-5. 提交纪律 — 不要自动 git commit，除非用户明确要求";
+1. 改前先读：任何编辑前用 read_file 看当前内容（> 1500 行用 offset/limit 分段）；禁止凭记忆改代码
+2. 改后即验：Rust 跑 cargo check --workspace --all-targets；TS 跑 node_modules/.bin/tsc --noEmit；有对应测试就跑最小集。验证失败不得报告完成
+3. 展示用 diff：给用户看修改时用 diff 片段，禁止重贴整个文件
+4. 不自动 git commit——除非用户明确要求；git 安全规则以系统提示为准
+5. 临时脚本不进源码树：走 code_execution 或系统临时目录（file_lifecycle 规则为准）";
 
 pub const RESEARCH_DOMAIN_DIRECTIVE: &str = "\
 # 信息研究模式
-你当前在信息研究模式。以下规则优先于通用规则：
-1. 多源交叉 — 重要结论至少需要 2 个独立来源验证
-2. 引用来源 — 每个事实性陈述后附 [来源] 标记
-3. 时效性 — 优先引用近期信息，标注信息日期
-4. 不确定即说明 — 信息不足时明确说\"目前无法确认\"，不要编造
-5. 总结先行 — 回答开头给一句话结论，再展开细节";
+1. 多源交叉：重要结论至少 2 个独立来源验证；用 web_search 检索、web_extract 抓正文
+2. 长文档/多网页走 delegate_task（Explore 角色）隔离阅读，返回结论不贴原文
+3. 引用来源：每个事实性结论标注来源与日期；链接经 url_safety 校验
+4. 不确定即说明——信息不足时明确说\"目前无法确认\"，不要编造
+5. 总结先行：回答开头给一句话结论，再展开细节";
 
 pub const WRITE_DOMAIN_DIRECTIVE: &str = "\
 # 内容创作模式
-你当前在内容创作模式。以下规则优先于通用规则：
-1. 先明确格式 — 开始前确认文档类型（邮件/报告/方案/通知）和目标读者
-2. 结构先行 — 先给大纲，再填充内容（除非用户已给明确结构）
-3. 语气适配 — 根据场景调整：正式报告 vs 内部通知 vs 私人邮件
-4. 完整交付 — 产出完整可用文档，不要给\"你可以这样写...\"的片段
-5. 格式规范 — Markdown 格式，标题层级清晰，列表对齐";
+1. 先明确四要素：文档类型、读者、渠道、期望长度——缺了先问一句
+2. 结构先行：先给大纲，确认后成文（用户已给明确结构除外）
+3. 文档类产物走 document-authoring 画布管线（<hermix-canvas> 流式 + write_file 落盘）；素材用 markitdown 读、长文 delegate_task 隔离读
+4. 完整交付：产出完整可用文档，不给\"你可以这样写…\"的片段
+5. 格式与分节遵循系统提示 REPORT_SECTIONING 规则";
 
 pub const OPERATE_DOMAIN_DIRECTIVE: &str = "\
 # 系统操作模式
-你当前在系统操作模式。以下规则优先于通用规则：
-1. 操作前预览 — 批量操作前先列出将要执行的操作清单
-2. 不可逆操作确认 — 删除/移动/覆盖前明确提示风险
-3. 路径绝对化 — 使用绝对路径，不要依赖当前目录
-4. 原子操作 — 尽量原子化操作，失败可回滚
-5. 结果验证 — 操作后验证目标状态（ls/check/exist）";
+1. 批量操作先列清单：将要执行的逐条操作先展示再执行（terminal / storage_clean）
+2. 不可逆操作（删除/覆盖/移动）前明确确认；删除用 storage_clean（回收站可恢复），不用裸 Remove-Item
+3. 路径用绝对路径（反斜杠原生形态），不依赖当前目录
+4. 结构化工具优先于 shell：move_file 代替 mv/Copy-Item，storage_analyzer 代替手工扫描——审批引擎对它们有准确的风险分级
+5. 操作后验证目标状态（list_files / Get-Item），验证失败不得报完成";
 
 // ---------------------------------------------------------------------------
 // 预设表
@@ -183,29 +183,64 @@ pub fn preset_for(mode: DomainMode) -> &'static DomainPreset {
     }
 }
 
+/// Code 域路由偏置：读写代码与执行验证的工具加权
+pub const CODE_PRIORITY_TOOLS: &[&str] = &[
+    "read_file",
+    "search_files",
+    "terminal",
+    "code_execution",
+    "write_file",
+];
+
+/// Research 域路由偏置：检索、抓取、隔离阅读
+pub const RESEARCH_PRIORITY_TOOLS: &[&str] = &[
+    "web_search",
+    "web_extract",
+    "delegate_task",
+    "markitdown",
+    "session_search",
+];
+
+/// Write 域路由偏置：素材读取与产物落盘
+pub const WRITE_PRIORITY_TOOLS: &[&str] = &["write_file", "markitdown", "delegate_task"];
+
+/// Operate 域路由偏置：结构化文件/磁盘操作
+pub const OPERATE_PRIORITY_TOOLS: &[&str] = &[
+    "terminal",
+    "move_file",
+    "storage_analyzer",
+    "storage_clean",
+    "code_execution",
+];
+
 pub static CODE_PRESET: DomainPreset = DomainPreset {
     mode: DomainMode::Code,
     system_directive: CODE_DOMAIN_DIRECTIVE,
+    priority_tools: CODE_PRIORITY_TOOLS,
 };
 
 pub static RESEARCH_PRESET: DomainPreset = DomainPreset {
     mode: DomainMode::Research,
     system_directive: RESEARCH_DOMAIN_DIRECTIVE,
+    priority_tools: RESEARCH_PRIORITY_TOOLS,
 };
 
 pub static WRITE_PRESET: DomainPreset = DomainPreset {
     mode: DomainMode::Write,
     system_directive: WRITE_DOMAIN_DIRECTIVE,
+    priority_tools: WRITE_PRIORITY_TOOLS,
 };
 
 pub static OPERATE_PRESET: DomainPreset = DomainPreset {
     mode: DomainMode::Operate,
     system_directive: OPERATE_DOMAIN_DIRECTIVE,
+    priority_tools: OPERATE_PRIORITY_TOOLS,
 };
 
 pub static CHAT_PRESET: DomainPreset = DomainPreset {
     mode: DomainMode::Chat,
     system_directive: "",
+    priority_tools: &[],
 };
 
 
@@ -320,6 +355,37 @@ mod tests {
                 assert!(!p.system_directive.is_empty(), "directive empty for {mode:?}");
             }
         }
+    }
+
+    #[test]
+    fn test_priority_tools_non_empty_except_chat() {
+        for mode in DomainMode::all() {
+            let p = preset_for(*mode);
+            if *mode == DomainMode::Chat {
+                assert!(p.priority_tools.is_empty());
+            } else {
+                assert!(!p.priority_tools.is_empty(), "priority_tools empty for {mode:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_priority_tools_no_duplicates_within_preset() {
+        for mode in DomainMode::all() {
+            let p = preset_for(*mode);
+            let mut seen = std::collections::HashSet::new();
+            for name in p.priority_tools {
+                assert!(seen.insert(*name), "duplicate tool {name} in {mode:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_code_priority_tools_expected_entries() {
+        let p = preset_for(DomainMode::Code);
+        assert!(p.priority_tools.contains(&"read_file"));
+        assert!(p.priority_tools.contains(&"terminal"));
+        assert!(p.priority_tools.contains(&"code_execution"));
     }
 
 

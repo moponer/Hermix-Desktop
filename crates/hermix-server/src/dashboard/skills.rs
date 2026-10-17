@@ -503,7 +503,7 @@ fn apply_toggle_with_floor(
 }
 
 // ── Builtin skill seeding ────────────────────────────────────────────
-// The 15 .md files in `dashboard/skills/` are bundled into the binary at
+// The 16 .md files in `dashboard/skills/` are bundled into the binary at
 // compile time. On first start we materialise them into the user's skills
 // directory (`~/.hermix/skills/<category>/<name>/SKILL.md`) so the front-end
 // "扩展 → 技能" tab has a populated list right away.
@@ -525,23 +525,8 @@ const BUILTIN_SKILLS: &[(&str, &str, &str)] = &[
     ),
     (
         "software-development",
-        "api-design",
-        include_str!("skills/api-design.md"),
-    ),
-    (
-        "software-development",
         "code-review",
         include_str!("skills/code-review.md"),
-    ),
-    (
-        "software-development",
-        "database-design",
-        include_str!("skills/database-design.md"),
-    ),
-    (
-        "software-development",
-        "frontend-architecture",
-        include_str!("skills/frontend-architecture.md"),
     ),
     (
         "software-development",
@@ -554,9 +539,14 @@ const BUILTIN_SKILLS: &[(&str, &str, &str)] = &[
         include_str!("skills/tdd-practice.md"),
     ),
     (
-        "devops",
-        "devops-practice",
-        include_str!("skills/devops-practice.md"),
+        "software-development",
+        "github-workflow",
+        include_str!("skills/github-workflow.md"),
+    ),
+    (
+        "software-development",
+        "browser-automation",
+        include_str!("skills/browser-automation.md"),
     ),
     (
         "productivity",
@@ -564,9 +554,34 @@ const BUILTIN_SKILLS: &[(&str, &str, &str)] = &[
         include_str!("skills/plan-writing.md"),
     ),
     (
-        "writing",
-        "web-novel",
-        include_str!("skills/web-novel.md"),
+        "productivity",
+        "summarize-research",
+        include_str!("skills/summarize-research.md"),
+    ),
+    (
+        "productivity",
+        "spreadsheet-analysis",
+        include_str!("skills/spreadsheet-analysis.md"),
+    ),
+    (
+        "productivity",
+        "pdf-processing",
+        include_str!("skills/pdf-processing.md"),
+    ),
+    (
+        "productivity",
+        "image-workflow",
+        include_str!("skills/image-workflow.md"),
+    ),
+    (
+        "productivity",
+        "self-improvement",
+        include_str!("skills/self-improvement.md"),
+    ),
+    (
+        "hermix",
+        "skill-vetting",
+        include_str!("skills/skill-vetting.md"),
     ),
     // custom-app-development: hx-shell 自定义应用开发指南（含真实 schema / API / 图标库），
     // 内置为 seed 以便分发到其它机器；单一真相位置定为 "hermix" 分类（与 store 动态扫描
@@ -782,8 +797,8 @@ mod tests {
             "architecture-design SKILL.md should exist"
         );
         assert!(
-            dir.path().join("devops").join("devops-practice").join("SKILL.md").exists(),
-            "devops-practice SKILL.md should exist"
+            dir.path().join("software-development").join("github-workflow").join("SKILL.md").exists(),
+            "github-workflow SKILL.md should exist"
         );
         // Idempotent: second call writes 0
         let second = seed_builtin_skills(dir.path()).unwrap();
@@ -801,9 +816,9 @@ mod tests {
         let skill = store.load("architecture-design").await.unwrap()
             .expect("architecture-design should be found by name alone");
         assert_eq!(skill.name, "architecture-design");
-        assert!(skill.content.contains("## 核心原则"), "content should have markdown body");
+        assert!(skill.content.contains("## 工具接线"), "content should have markdown body");
         assert_eq!(skill.category.as_deref(), Some("software-development"));
-        assert!(skill.description.as_deref().unwrap_or("").contains("单体 vs 微服务"));
+        assert!(skill.description.as_deref().unwrap_or("").contains("架构决策"));
 
         // Non-existent name returns None
         let missing = store.load("no-such-skill").await.unwrap();
@@ -817,7 +832,7 @@ mod tests {
         let store = hermix_skills::FileSkillStore::new(dir.path().to_path_buf());
 
         // Skills across different categories — all loadable by plain name
-        for name in &["architecture-design", "devops-practice", "plan-writing"] {
+        for name in &["architecture-design", "github-workflow", "plan-writing"] {
             let skill = store.load(name).await.unwrap()
                 .unwrap_or_else(|| panic!("{name} should be loadable by name"));
             assert_eq!(&skill.name, name);
@@ -834,9 +849,9 @@ mod tests {
         // Verify names from each category
         let names: Vec<&str> = metas.iter().map(|m| m.name.as_str()).collect();
         assert!(names.contains(&"architecture-design"));
-        assert!(names.contains(&"devops-practice"));
+        assert!(names.contains(&"github-workflow"));
         assert!(names.contains(&"plan-writing"));
-        assert!(names.contains(&"web-novel"));
+        assert!(names.contains(&"summarize-research"));
     }
 
     // ── P1.7: essential-floor override at runtime ────────────────────

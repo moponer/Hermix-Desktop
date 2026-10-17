@@ -136,6 +136,23 @@ pub(crate) struct LoopState {
     pub(crate) last_recall_keys: Vec<String>,
 }
 
+impl LoopState {
+    /// Construct with a domain-biased convergence config
+    /// ([`ConvergenceConfig::for_domain`]). All other fields keep the
+    /// `Default` all-zeros semantics — see the invariant test
+    /// `p1_loop_state_defaults_to_zero`.
+    pub(crate) fn with_convergence(
+        convergence_config: crate::convergence_detector::ConvergenceConfig,
+    ) -> Self {
+        Self {
+            convergence_detector: crate::convergence_detector::ConvergenceDetector::with_config(
+                convergence_config,
+            ),
+            ..Default::default()
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 //Background-spawned compression bookkeeping (P1, )
 // ---------------------------------------------------------------------------

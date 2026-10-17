@@ -198,6 +198,33 @@ impl SubAgentRole {
             Self::Plan => "plan",
         }
     }
+
+    /// Role-specific return contract appended to the sub-agent's system
+    /// guidance. Empty for `General` (general-purpose results need no
+    /// fixed shape). This is what makes the role more than a tool
+    /// whitelist: the child is told what its final answer must look like.
+    pub fn return_contract(&self) -> &'static str {
+        match self {
+            Self::General => "",
+            Self::Explore => {
+                "\n# Return contract (Explore role)\n\
+                 Your job is FINDINGS, not dumps. Your final response must be:\n\
+                 - Conclusion first, then evidence: `path:line` + one-line quote per finding.\n\
+                 - NEVER paste source excerpts longer than 5 lines or raw file contents.\n\
+                 - State coverage: what you searched and what you did NOT check.\n\
+                 - If information is missing, say what is missing — do not guess.\n"
+            }
+            Self::Plan => {
+                "\n# Return contract (Plan role)\n\
+                 Return a structured plan with exactly these sections:\n\
+                 1. **Goal** — one sentence, measurable.\n\
+                 2. **Steps** — ordered; each step states how to verify it.\n\
+                 3. **Risks** — each with a mitigation.\n\
+                 4. **Open questions** — decisions the parent must make.\n\
+                 No implementation code — you are a planner, not an implementer.\n"
+            }
+        }
+    }
 }
 
 /// Tools available to the Explore role (read-only).
@@ -690,6 +717,7 @@ impl SubAgentOrchestrator {
             req.context.as_deref(),
             &req.attachments,
             req.output_schema.as_deref(),
+            req.role,
         )
         .await;
 
@@ -955,6 +983,7 @@ async fn initial_messages(
     context: Option<&str>,
     attachments: &[ImageAttachment],
     output_schema: Option<&str>,
+    role: SubAgentRole,
 ) -> Vec<Message> {
     let mut messages = Vec::new();
 
@@ -1030,6 +1059,11 @@ async fn initial_messages(
          - If you run out of turns before finishing all batches, return a partial\n\
            summary noting which items were not processed.\n",
     );
+
+    // Role return contract: tells the child what its final answer must
+    // look like (Explore = findings-not-dumps; Plan = structured plan).
+    // Empty for General — nothing to add.
+    sub_agent_guidance.push_str(role.return_contract());
 
     if let Some(schema) = output_schema {
         if !schema.trim().is_empty() {
@@ -1396,7 +1430,7 @@ mod tests {
 
     #[tokio::test]
     async fn initial_messages_includes_sub_agent_guidance() {
-        let msgs = initial_messages("test task", None, &[], None).await;
+        let msgs = initial_messages("test task", None, &[], None, SubAgentRole::General).await;
         // Should have 2 messages: system guidance + user task.
         assert_eq!(msgs.len(), 2);
         // First message is system guidance.
@@ -1421,6 +1455,7 @@ mod tests {
             Some("paths: a.jpg, b.jpg"),
             &[],
             None,
+            SubAgentRole::General,
         )
         .await;
         assert_eq!(msgs.len(), 2);
@@ -1432,7 +1467,7 @@ mod tests {
 
     #[tokio::test]
     async fn initial_messages_without_context_no_context_label() {
-        let msgs = initial_messages("do something", None, &[], None).await;
+        let msgs = initial_messages("do something", None, &[], None, SubAgentRole::General).await;
         let user_content = msgs[1].content.as_deref().unwrap_or("");
         assert!(!user_content.contains("[Context]"));
     }
@@ -1444,6 +1479,7 @@ mod tests {
             None,
             &[],
             Some(r#"{"summary":"string","score":0.0}"#),
+            SubAgentRole::General,
         )
         .await;
         assert_eq!(msgs.len(), 2);
@@ -1451,5 +1487,29 @@ mod tests {
         assert!(guidance.contains("Expected output format"));
         assert!(guidance.contains("summary"));
         assert!(guidance.contains("score"));
+    }
+
+    #[tokio::test]
+    async fn initial_messages_explore_role_injects_findings_contract() {
+        let msgs = initial_messages("explore the codebase", None, &[], None, SubAgentRole::Explore)
+            .await;
+        let guidance = msgs[0].content.as_deref().unwrap_or("");
+        assert!(guidance.contains("Return contract (Explore role)"));
+        assert!(guidance.contains("FINDINGS, not dumps"));
+    }
+
+    #[tokio::test]
+    async fn initial_messages_plan_role_injects_plan_contract() {
+        let msgs = initial_messages("plan the refactor", None, &[], None, SubAgentRole::Plan).await;
+        let guidance = msgs[0].content.as_deref().unwrap_or("");
+        assert!(guidance.contains("Return contract (Plan role)"));
+        assert!(guidance.contains("Open questions"));
+    }
+
+    #[tokio::test]
+    async fn initial_messages_general_role_has_no_contract() {
+        let msgs = initial_messages("do it", None, &[], None, SubAgentRole::General).await;
+        let guidance = msgs[0].content.as_deref().unwrap_or("");
+        assert!(!guidance.contains("Return contract"));
     }
 }

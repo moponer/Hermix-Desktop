@@ -638,12 +638,22 @@ always_include: vec![
             .into_iter()
             .rev()
             .collect();
+        // L1 Domain Mode bias: resolve the current domain (user pin
+        // wins, else auto-detect) and boost its preset tools via the
+        // `PriorityBoost` wrapper in `default_tool_router`. Weighting,
+        // not gating — unlisted tools remain routable.
+        let domain_mode =
+            crate::prompt_assembly::resolve_domain_mode(&self.config, &user_message);
         let ctx = TurnContext {
             user_message,
             recent_messages: recent,
             active_toolsets: self.config.active_toolsets.clone(),
             max_tools: candidates.len().min(self.config.max_routed_tools),
-            priority_tools: Vec::new(),
+            priority_tools: hermix_intelligence::preset_for(domain_mode)
+                .priority_tools
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
         };
         let routed: Vec<ToolSchema> = router
             .route(&ctx, candidates)

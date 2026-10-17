@@ -1040,7 +1040,10 @@ impl ToolHandler for ReadImageHandler {
              - Screenshots, diagrams, charts\n\
              - Any visual content you want the LLM to analyse\n\
              \n\
-             ## Cost: FREE — no external API calls",
+             ## Cost: FREE — no external API calls\n\
+             \n\
+             ## Where to run (CRITICAL)\n\
+             Each call injects a large base64 payload into the calling context, paid on every subsequent turn. In the MAIN agent context this is 2,000-8,000 tokens per image, forever — so analysis of images NOT already visible in the conversation MUST go through `delegate_task` (batch 3-5 images per call). Images the user pasted/attached in the current message are already multimodal-visible: analyze directly, no tool call.",
             JsonSchema::object(props, vec!["path".into()]),
         )
     }

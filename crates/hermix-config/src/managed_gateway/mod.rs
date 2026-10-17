@@ -17,7 +17,7 @@
 //! [`is_managed_tool_gateway_ready`]) and decide which transport to use,
 //! without each backend re-implementing env-var parsing and JSON probing.
 //!
-//! Lives in `hermix-config` (not `hermes-tools`) so that lower-level
+//! Lives in `hermix-config` (not `hermix-tools`) so that lower-level
 //! crates such as `hermes-environments` can also depend on it without
 //! pulling in the full tool registry.
 //!
