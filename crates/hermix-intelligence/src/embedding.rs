@@ -275,6 +275,34 @@ impl EmbeddingProvider for HashingEmbeddingProvider {
     }
 }
 
+impl HashingEmbeddingProvider {
+    /// Synchronous embedding — same algorithm as the async trait impl.
+    /// For sync call sites (e.g. the skill auto-router, which runs on
+    /// every turn inside non-async matching code) that must not block
+    /// on a runtime: hashing is pure CPU with no I/O, so a sync twin
+    /// is safe and avoids `block_on` re-entrancy hazards.
+    pub fn embed_sync(&self, text: &str) -> Vec<f32> {
+        hashing_embed(text, self.dim, self.ngram_size)
+    }
+}
+
+/// Cosine similarity between two equal-length vectors. Returns 0.0 when
+/// either vector has zero norm (no signal) or lengths differ.
+/// Dimension mismatch = vectors from different providers — treat as no
+/// signal rather than panicking; callers re-embed when they see this.
+pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+    if a.len() != b.len() || a.is_empty() {
+        return 0.0;
+    }
+    let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
+    let na: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let nb: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if na <= 0.0 || nb <= 0.0 {
+        return 0.0;
+    }
+    dot / (na * nb)
+}
+
 // ---------------------------------------------------------------------------
 // FastEmbedEmbeddingProvider — feature-gated, production path
 // ---------------------------------------------------------------------------

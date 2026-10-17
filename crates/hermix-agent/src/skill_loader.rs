@@ -22,7 +22,7 @@
 //! the existing `<available_skills>` block.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::skill_orchestrator::{SkillCommandInfo, SkillOrchestrator};
 
@@ -63,9 +63,14 @@ pub struct SkillLoader {
     /// Maximum number of auto-matched skills to inject per turn (default 3).
     max_matches: usize,
     /// Maximum lines of an auto-injected SKILL.md body (default 500).
-    /// Soft cap — longer bodies are truncated to this many lines, not
-    /// an error.
+    /// Over-cap bodies degrade to a section SKELETON (see `load_body`),
+    /// not a truncated half-article.
     max_body_lines: usize,
+    /// Vector-recall threshold (cosine over the description, default 0.18).
+    /// Only governs skills matching exclusively via vector; keyword matches
+    /// keep their score. An operator raising `min_score` above its 0.3
+    /// default raises this bar too.
+    semantic_min_score: f32,
 }
 
 impl SkillLoader {
@@ -76,6 +81,7 @@ impl SkillLoader {
             min_score: 0.3,
             max_matches: 3,
             max_body_lines: 500,
+            semantic_min_score: 0.18,
         }
     }
 
@@ -86,6 +92,7 @@ impl SkillLoader {
             min_score: 0.3,
             max_matches: 3,
             max_body_lines: 500,
+            semantic_min_score: 0.18,
         }
     }
 
@@ -103,9 +110,16 @@ impl SkillLoader {
 
     /// Override the per-skill body line cap. Default is 500; we
     /// expose the setter so tests can pin a tiny cap (5 lines) to
-    /// assert the truncation footer fires deterministically.
+    /// assert the skeleton degradation fires deterministically.
     pub fn with_max_body_lines(mut self, max: usize) -> Self {
         self.max_body_lines = max;
+        self
+    }
+
+    /// Override the vector-recall cosine threshold (default 0.30).
+    /// Exposed for tests to pin deterministic behavior.
+    pub fn with_semantic_min_score(mut self, min: f32) -> Self {
+        self.semantic_min_score = min;
         self
     }
 
@@ -141,7 +155,7 @@ impl SkillLoader {
             .filter(|t| !STOPWORDS.contains(t)) // skip trivial words
             .collect();
 
-        if msg_tokens.is_empty() {
+        if message.trim().is_empty() {
             return Vec::new();
         }
 
@@ -227,7 +241,11 @@ impl SkillLoader {
                 }
             }
 
-            let keyword_score = matched_tokens as f32 / msg_tokens.len() as f32;
+            let keyword_score = if msg_tokens.is_empty() {
+                0.0
+            } else {
+                matched_tokens as f32 / msg_tokens.len() as f32
+            };
             let fuzzy_score = description_fuzzy_score(&msg_tokens, &desc_lower);
             let score = keyword_score.max(fuzzy_score);
 
@@ -235,35 +253,10 @@ impl SkillLoader {
                 continue;
             }
 
-            // Load the skill body
-            let body = match std::fs::read_to_string(&info.skill_md_path) {
-                Ok(content) => {
-                    let (_, body) = crate::skill_orchestrator::parse_frontmatter(&content);
-                    let trimmed = body.trim();
-                    // Soft-cap body at `max_body_lines` lines so a 5,000-line
-                    // skill doesn't blow up the context. Trailing truncation
-                    // is not an error — the rest is still on disk and
-                    // retrievable via `skill_view` if the LLM needs more.
-                    let capped: String = if trimmed.lines().count() > self.max_body_lines {
-                        let mut out = String::new();
-                        for (i, line) in trimmed.lines().enumerate() {
-                            if i >= self.max_body_lines {
-                                out.push_str(&format!(
-                                    "\n\n[…truncated at {} lines; use skill_view to load the rest.]",
-                                    self.max_body_lines
-                                ));
-                                break;
-                            }
-                            out.push_str(line);
-                            out.push('\n');
-                        }
-                        out
-                    } else {
-                        trimmed.to_string()
-                    };
-                    capped
-                }
-                Err(_) => continue,
+            // Load the skill body (over-cap → skeleton, never a half-article)
+            let body = match self.load_body(&info.skill_md_path) {
+                Some(b) => b,
+                None => continue,
             };
 
             scored.push(SkillMatch {
@@ -276,6 +269,77 @@ impl SkillLoader {
             });
         }
 
+        // --- Vector recall (semantic layer, additive) ---
+        // Keyword/CJK/fuzzy passes are literal: a same-meaning paraphrase
+        // ("界面美化配色" vs a skill written as "视觉设计规范") misses them
+        // all. This pass embeds (name + description + tags) and the query
+        // with the always-on hashing embedder (pure CPU, no network, no
+        // model download; the fastembed upgrade is feature-gated and slots
+        // in behind the same cosine contract). A skill matching ONLY via
+        // vector must clear `semantic_min_score`; keyword matches keep
+        // their score (exact-token signal always wins on ties).
+        let embedder =
+            hermix_intelligence::embedding::HashingEmbeddingProvider::with_ngram(512, 2);
+        // Embed the STOPWORD-FILTERED query (English glue bigrams like
+        // "at"/"er" from "that"/"are" otherwise dominate short-text
+        // cosine and false-positive generic descriptions). CJK runs are
+        // alphanumeric → survive the token filter intact; when filtering
+        // empties the query (pure-CJK, no whitespace) fall back to the
+        // raw message.
+        let query_for_vec = if msg_tokens.is_empty() {
+            message.to_string()
+        } else {
+            msg_tokens.join(" ")
+        };
+        let query_vec = embedder.embed_sync(&query_for_vec);
+        // Operator strictness link: raising `min_score` ABOVE the 0.3
+        // default raises the semantic bar with it (a pinned 0.99 test /
+        // strict operator must not get vector matches the keyword layer
+        // would reject). The 0.3 default itself does NOT leak into the
+        // semantic layer — CJK paraphrase cosines sit around 0.15-0.25.
+        let semantic_threshold = if self.min_score > 0.3 {
+            self.min_score
+        } else {
+            self.semantic_min_score
+        };
+        for (cmd_key, info) in commands {
+            if scored.iter().any(|m| m.name == info.name) {
+                continue;
+            }
+            // Description-only embedding: name/tags are curated literal
+            // trigger surfaces already served by the keyword/CJK passes —
+            // embedding them lets a single shared bigram ("存储" in a tag)
+            // false-positive on unrelated queries. The description is
+            // where paraphrase signal lives. Stopwords stripped on the
+            // description side for the same glue-bigram reason as the
+            // query (CJK runs survive — is_alphanumeric covers CJK).
+            let desc_for_vec: String = info
+                .description
+                .to_lowercase()
+                .split(|c: char| !c.is_alphanumeric())
+                .filter(|w| !w.is_empty() && !STOPWORDS.contains(w))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let sim = hermix_intelligence::embedding::cosine_similarity(
+                &query_vec,
+                &embedder.embed_sync(&desc_for_vec),
+            );
+            if sim < semantic_threshold {
+                continue;
+            }
+            let Some(body) = self.load_body(&info.skill_md_path) else {
+                continue;
+            };
+            scored.push(SkillMatch {
+                command_key: cmd_key.clone(),
+                name: info.name.clone(),
+                description: info.description.clone(),
+                score: sim,
+                body,
+                matched_on: "vector".into(),
+            });
+        }
+
         // Sort by score descending, take top N
         scored.sort_by(|a, b| {
             b.score
@@ -284,6 +348,44 @@ impl SkillLoader {
         });
         scored.truncate(self.max_matches);
         scored
+    }
+
+    /// Load a skill body with progressive-disclosure degradation.
+    /// - Body within `max_body_lines`: full body.
+    /// - Over cap: section SKELETON (every heading + the first content
+    ///   line under it) + a footer pointing at `skill_view`. We never
+    ///   inject a truncated half-article — a cut-off instruction block
+    ///   reads as complete and gets followed halfway.
+    /// Returns `None` when the file is unreadable (caller skips the skill).
+    fn load_body(&self, skill_md_path: &Path) -> Option<String> {
+        let content = std::fs::read_to_string(skill_md_path).ok()?;
+        let (_, body) = crate::skill_orchestrator::parse_frontmatter(&content);
+        let trimmed = body.trim();
+        let total_lines = trimmed.lines().count();
+        if total_lines <= self.max_body_lines {
+            return Some(trimmed.to_string());
+        }
+        let mut out = String::new();
+        let mut last_was_heading = false;
+        for line in trimmed.lines() {
+            let t = line.trim_end();
+            if t.starts_with('#') {
+                out.push_str(t);
+                out.push('\n');
+                last_was_heading = true;
+            } else if last_was_heading && !t.trim().is_empty() {
+                out.push_str("  ");
+                out.push_str(t);
+                out.push('\n');
+                last_was_heading = false;
+            }
+        }
+        out.push_str(&format!(
+            "\n[Skeleton preview: full text is {total_lines} lines, over the {} line \
+             injection cap — use skill_view to read the complete content before acting.]",
+            self.max_body_lines
+        ));
+        Some(out)
     }
 
     /// Build the injection text for matched skills.
@@ -1033,14 +1135,94 @@ mod tests {
         assert_eq!(matches.len(), 1);
         let m = &matches[0];
 
-        // Body has the truncation footer at the configured line cap.
+        // Over-cap body degrades to a skeleton: footer points at
+        // `skill_view` (never a silent half-article).
         assert!(
-            m.body.contains("truncated at 5 lines"),
-            "expected soft-cap footer, got body ending: …{}",
-            &m.body[m.body.len().saturating_sub(80)..]
+            m.body.contains("Skeleton preview"),
+            "expected skeleton footer, got body tail: …{}",
+            &m.body[m.body.len().saturating_sub(120)..]
         );
-        // It must NOT contain line 199 — that means truncation
-        // actually fired and not just appended a label.
+        assert!(m.body.contains("use skill_view"));
+        // Skeleton keeps headings + the first content line…
+        assert!(m.body.contains("# Long"));
+        assert!(m.body.contains("line 0"));
+        // …but not deep-section lines (that's the whole point).
         assert!(!m.body.contains("line 199"));
+    }
+
+    // --- Vector recall (semantic layer) ---
+
+    /// A CJK paraphrase that shares NO whitespace tokens and NO CJK
+    /// trigger tags with the skill — only the keyword passes miss it.
+    fn setup_semantic_test_skill() -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().unwrap();
+        let skill_dir = tmp.path().join("impeccable-design");
+        fs::create_dir_all(&skill_dir).unwrap();
+        // Deliberately NO Chinese tags: keyword/CJK passes cannot fire.
+        let content = "---\nname: impeccable-design\ndescription: 界面与视觉设计规范，覆盖界面设计、配色方案、页面美化与排版布局。\ntags: [design, builtin]\n---\n# 设计规范\n\n按纪律执行。\n";
+        fs::write(skill_dir.join("SKILL.md"), content).unwrap();
+        tmp
+    }
+
+    #[test]
+    fn vector_recall_matches_cjk_paraphrase_keyword_misses() {
+        let tmp = setup_semantic_test_skill();
+        let mut loader = SkillLoader::with_dir(tmp.path());
+        loader.scan();
+
+        // "界面配色" shares 界面/配 trigrams with the description but has
+        // no literal tag/name hit (tags are English) → only the vector
+        // layer can surface this skill.
+        let matches = loader.match_message("帮我美化一下界面配色");
+        let names: Vec<&str> = matches.iter().map(|m| m.name.as_str()).collect();
+        assert!(
+            names.contains(&"impeccable-design"),
+            "paraphrase should match via vector recall, got: {names:?}"
+        );
+        let m = matches.iter().find(|m| m.name == "impeccable-design").unwrap();
+        assert_eq!(m.matched_on, "vector");
+    }
+
+    #[test]
+    fn vector_recall_does_not_fire_on_unrelated_query() {
+        let tmp = setup_semantic_test_skill();
+        let mut loader = SkillLoader::with_dir(tmp.path());
+        loader.scan();
+
+        // Unrelated query must NOT surface the design skill.
+        let matches = loader.match_message("帮我清理C盘垃圾文件");
+        let names: Vec<&str> = matches.iter().map(|m| m.name.as_str()).collect();
+        assert!(
+            !names.contains(&"impeccable-design"),
+            "unrelated query must not match: {names:?}"
+        );
+    }
+
+    #[test]
+    fn keyword_match_score_wins_over_vector() {
+        let tmp = setup_test_skills();
+        let mut loader = SkillLoader::with_dir(tmp.path());
+        loader.scan();
+
+        // "commit message" keyword-matches commit-message; the vector
+        // layer must not duplicate it or overwrite matched_on.
+        let matches = loader.match_message("help me write a git commit message");
+        let cm = matches.iter().find(|m| m.name == "commit-message").unwrap();
+        assert_ne!(cm.matched_on, "vector");
+        assert_eq!(
+            matches.iter().filter(|m| m.name == "commit-message").count(),
+            1,
+            "dedupe: one entry per skill"
+        );
+    }
+
+    #[test]
+    fn cosine_similarity_basics() {
+        use hermix_intelligence::embedding::cosine_similarity;
+        assert!((cosine_similarity(&[1.0, 0.0], &[1.0, 0.0]) - 1.0).abs() < 1e-6);
+        assert!(cosine_similarity(&[1.0, 0.0], &[0.0, 1.0]).abs() < 1e-6);
+        assert_eq!(cosine_similarity(&[], &[]), 0.0);
+        assert_eq!(cosine_similarity(&[1.0], &[1.0, 2.0]), 0.0, "dim mismatch");
+        assert_eq!(cosine_similarity(&[0.0, 0.0], &[1.0, 1.0]), 0.0, "zero norm");
     }
 }
