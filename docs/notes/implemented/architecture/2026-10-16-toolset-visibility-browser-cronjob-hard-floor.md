@@ -17,7 +17,7 @@ Status: implemented — 2026-10-16
 - **保持 opt-in，只在提示里教 LLM 引导用户开开关** — 否决：把"找到开关"的成本转嫁给用户，且 LLM 从未见过该工具时引导话术形同虚设；vault 先例已证明硬地板是唯一可靠通道。
 - **仅改 description 不动 floor** — 否决：工具被静默关闭后 description 根本不进模型视野，改了也白改。
 - **`send_message` 从注册表撤下** — 否决：homeassistant 先例（缺 key 仍注册、执行时如实报错）保留可发现性，宿主接线真实后端后零代码变更即恢复功能。
-- **长尾 toolset（kanban/workflow/task/approval/vendor 等）一并进 floor** — 暂缓：非头牌，等出现真实用户报告再逐个裁决，避免硬地板无限膨胀。
+- **长尾 toolset（kanban/task/approval/vendor 等）一并进 floor** — 暂缓：非头牌，等出现真实用户报告再逐个裁决，避免硬地板无限膨胀。（`workflow` 2026-10-17 因用户问「LLM 知道工作流吗」而补入硬地板——它挂着「自动化 → 工作流」产品页面，属头牌相邻。）
 
 ## Consequences
 

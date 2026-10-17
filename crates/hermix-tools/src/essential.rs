@@ -136,12 +136,16 @@ pub const HARD_ESSENTIAL_TOOLSETS: &[&str] = &[
     // - clarify：唯一向用户提问的通道，关掉后 LLM 变「永不提问」模式。
     // - delegate_task / get_subagent_result：子代理派单产品线，零上下文
     //   膨胀约束（AGENTS.md Core principles 3）的执行机制。
+    // - workflow：可重跑工作流（保存后在「自动化 → 工作流」页面运行），
+    //   与 cronjob 同属自动化产品线（2026-10-17 用户问「LLM 知道工作流吗」
+    //   时发现仍被旧快照关闭）。
     // （session_search 有条件注册：DB 打开失败跳过并有 warn 日志，属预期。）
     "session_search",
     "todo",
     "clarify",
     "delegate_task",
     "get_subagent_result",
+    "workflow",
 ];
 
 /// Soft essential toolsets — re-enabled by the floor ONLY when the
@@ -179,6 +183,7 @@ pub const ESSENTIAL_TOOLSETS: &[&str] = &[
     "clarify",
     "delegate_task",
     "get_subagent_result",
+    "workflow",
     // soft
     "document",
     "storage",
@@ -245,6 +250,7 @@ mod tests {
                 "clarify",
                 "delegate_task",
                 "get_subagent_result",
+                "workflow",
             ],
             "HARD_ESSENTIAL_TOOLSETS changed — update the floor and any UI copy."
         );
@@ -329,7 +335,7 @@ mod tests {
         );
         // 第四批（2026-10-16 盘点）：跨会话召回 / 任务规划 / 用户提问通道 /
         // 子代理派单，全是「缺了产品残废」级能力，曾被旧白名单快照静默关闭。
-        for ts in ["session_search", "todo", "clarify", "delegate_task"] {
+        for ts in ["session_search", "todo", "clarify", "delegate_task", "workflow"] {
             assert!(
                 HARD_ESSENTIAL_TOOLSETS.contains(&ts),
                 "{ts} must remain in the hard essential floor"
