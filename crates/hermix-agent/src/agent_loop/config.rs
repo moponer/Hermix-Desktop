@@ -132,6 +132,23 @@ impl AgentLoop {
         let stage = phase.as_orchestration_stage();
         let phase_str = phase.as_str();
         let stage_str = stage.as_str();
+        // Transition contract (C6): a phase that skips a stage is how a bad
+        // branch turns into "the turn silently stopped". Warn, don't abort —
+        // the loop must survive, but the trace names the illegal edge.
+        let prev_index = self.last_loop_phase.swap(
+            phase.as_index(),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        if let Some(prev) = LoopPhase::from_index(prev_index) {
+            if !prev.can_transition_to(phase) {
+                tracing::warn!(
+                    from = prev.as_str(),
+                    to = phase_str,
+                    turn = turn,
+                    "illegal loop phase transition — a stage was skipped"
+                );
+            }
+        }
         tracing::debug!(
             phase = phase_str,
             stage = stage_str,
@@ -342,7 +359,7 @@ impl AgentLoop {
         tool_registry: Arc<ToolRegistry>,
         llm_provider: Arc<dyn LlmProvider>,
     ) -> Self {
-        Self {
+        let loop_state = Self {
             config,
             tool_registry,
             llm_provider,
@@ -384,7 +401,10 @@ always_include: vec![
             embedding_provider: None,
             compression_in_flight: std::sync::Mutex::new(None),
             background_tasks: Arc::new(Mutex::new(Vec::new())),
-        }
+            last_loop_phase: std::sync::atomic::AtomicU8::new(0),
+        };
+        loop_state.restore_pending_steer();
+        loop_state
     }
 
     /// Create a new agent loop with a shared interrupt controller.
@@ -394,7 +414,7 @@ always_include: vec![
         llm_provider: Arc<dyn LlmProvider>,
         interrupt: InterruptController,
     ) -> Self {
-        Self {
+        let loop_state = Self {
             config,
             tool_registry,
             llm_provider,
@@ -436,7 +456,10 @@ always_include: vec![
             embedding_provider: None,
             compression_in_flight: std::sync::Mutex::new(None),
             background_tasks: Arc::new(Mutex::new(Vec::new())),
-        }
+            last_loop_phase: std::sync::atomic::AtomicU8::new(0),
+        };
+        loop_state.restore_pending_steer();
+        loop_state
     }
 
     /// Attach a memory router for time-aware recall.
@@ -677,7 +700,74 @@ always_include: vec![
     /// Queue mid-run user guidance (Python `AIAgent.steer`).
     /// Returns `false` when the text is empty/whitespace-only.
     pub fn steer(&self, text: &str) -> bool {
-        crate::steer::steer(&self.pending_steer, text)
+        let accepted = crate::steer::steer(&self.pending_steer, text);
+        if accepted {
+            // Crash-safe spool: a steer accepted mid-turn but not yet
+            // drained dies with the process otherwise (the user's
+            // instruction silently disappears).
+            self.persist_pending_steer();
+        }
+        accepted
+    }
+
+    /// Spool path for this session's pending steer, if we know the session.
+    fn pending_steer_path(&self) -> Option<std::path::PathBuf> {
+        let session = self.config.session_id.as_deref()?;
+        let home = self
+            .config
+            .hermix_home
+            .as_deref()
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(hermix_config::paths::hermix_home);
+        Some(
+            home.join("pending_steer")
+                .join(format!("{}.txt", crate::session_persistence::session_stem(session))),
+        )
+    }
+
+    /// Mirror the current buffer to disk (`None` ⇒ delete the spool).
+    pub(crate) fn persist_pending_steer(&self) {
+        let Some(path) = self.pending_steer_path() else {
+            return;
+        };
+        let text = self
+            .pending_steer
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone());
+        match text {
+            Some(text) if !text.trim().is_empty() => {
+                if let Some(dir) = path.parent() {
+                    let _ = std::fs::create_dir_all(dir);
+                }
+                if let Err(e) = std::fs::write(&path, text) {
+                    tracing::warn!(error = %e, "failed to spool pending steer");
+                }
+            }
+            _ => {
+                let _ = std::fs::remove_file(&path);
+            }
+        }
+    }
+
+    /// Restore a steer that was spooled before a restart/crash.
+    pub(crate) fn restore_pending_steer(&self) {
+        let Some(path) = self.pending_steer_path() else {
+            return;
+        };
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            return;
+        };
+        if text.trim().is_empty() {
+            let _ = std::fs::remove_file(&path);
+            return;
+        }
+        if let Ok(mut guard) = self.pending_steer.lock() {
+            if guard.is_none() {
+                *guard = Some(text);
+                tracing::info!("restored spooled mid-run steer from a previous process");
+            }
+        }
     }
 
     /// 交出 steer 缓冲的句柄，让**外部**（`LocalAgentService` 的按会话
@@ -693,7 +783,8 @@ always_include: vec![
 
     /// Clear any queued `/steer` guidance without applying it.
     pub fn clear_pending_steer(&self) {
-        crate::steer::clear_pending_steer(&self.pending_steer)
+        crate::steer::clear_pending_steer(&self.pending_steer);
+        self.persist_pending_steer();
     }
 
     //── : FocusStack plumbing ────────────────────────────────────

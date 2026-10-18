@@ -241,12 +241,7 @@ pub(crate) async fn resolve_pre_dispatch(
                 //      兜底 = 主超时 + 60s 余量（主层先到，兜底永远不与它
                 //      竞争）；主超时为 0（用户显式要求永不超时）时退回
                 //      24h——旧行为的语义原样保留。
-                let primary_secs = hermix_config::approval_timeout_secs();
-                let net_secs = if primary_secs == 0 {
-                    86_400
-                } else {
-                    primary_secs + 60
-                };
+                let (_, net_secs) = approval_wait_bounds(hermix_config::approval_timeout_secs());
                 let resolved = match shutdown {
                     Some(notify) => {
                         let notified = notify.notified();
@@ -468,6 +463,22 @@ pub(crate) struct ToolDenial {
     pub reason: String,
 }
 
+/// Pure decision table for the approval wait window (P2-6 scheduling
+/// extraction). Returns `(primary_secs, net_secs)`:
+/// - primary = the user-configured approval timeout (`0` = never expire
+///   by intent);
+/// - safety net = primary + 60s margin so the registry's own timeout
+///   always wins the race; when primary is `0` the net falls back to
+///   24h so a lost approval event still cannot park the loop forever.
+pub(crate) fn approval_wait_bounds(primary_secs: u64) -> (u64, u64) {
+    let net_secs = if primary_secs == 0 {
+        86_400
+    } else {
+        primary_secs.saturating_add(60)
+    };
+    (primary_secs, net_secs)
+}
+
 /// Max delegation nesting depth, env-overridable. Default 4 when the
 /// env var is absent or unparseable.
 pub(crate) fn resolve_max_delegate_depth() -> u32 {
@@ -669,6 +680,20 @@ mod tests {
         assert_eq!(DenialKind::UserDenied.as_str(), "user_denied");
         assert_eq!(DenialKind::TimedOut.as_str(), "timed_out");
         assert_eq!(DenialKind::ChannelClosed.as_str(), "channel_closed");
+    }
+
+    #[test]
+    fn approval_wait_bounds_primary_plus_margin() {
+        assert_eq!(approval_wait_bounds(600), (600, 660));
+        assert_eq!(approval_wait_bounds(1), (1, 61));
+    }
+
+    #[test]
+    fn approval_wait_bounds_zero_primary_falls_back_to_24h() {
+        // User explicitly asked for "never time out" — the safety net
+        // still must be bounded so a lost approval event can't park the
+        // loop forever.
+        assert_eq!(approval_wait_bounds(0), (0, 86_400));
     }
 
     #[test]

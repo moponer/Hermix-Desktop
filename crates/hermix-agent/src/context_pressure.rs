@@ -35,6 +35,23 @@ pub struct ContextPressureMonitor {
     pub(crate) last_warn_at: Option<Instant>,
     /// Last progress percentage at which we emitted a warning.
     pub(crate) last_warn_percent: f64,
+    /// Turn numbers of recent successful compactions (rapid-refill
+    /// detection, ZCode evaluateRapidRefill analog).
+    pub(crate) compact_turns: Vec<u32>,
+}
+
+impl ContextPressureMonitor {
+    /// Record a successful compaction at `turn`. Returns `true` when the
+    /// refill pace is pathological — **≥3 compactions within the last 5
+    /// turns** — meaning something is re-filling the context faster than
+    /// compression can shrink it (e.g. a tool dumping a huge blob every
+    /// turn). Callers hard-stop the run instead of burning tokens on a
+    /// compression storm.
+    pub(crate) fn record_compaction(&mut self, turn: u32) -> bool {
+        self.compact_turns.push(turn);
+        self.compact_turns.retain(|t| turn.saturating_sub(*t) <= 4);
+        self.compact_turns.len() >= 3
+    }
 }
 
 impl ContextPressureMonitor {
@@ -78,6 +95,18 @@ impl ContextPressureMonitor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rapid_refill_trips_on_three_compactions_in_five_turns() {
+        let mut m = ContextPressureMonitor::default();
+        assert!(!m.record_compaction(10));
+        assert!(!m.record_compaction(12));
+        // 第三次（5 轮窗口内）→ 熔断。
+        assert!(m.record_compaction(14));
+        // 老记录滑出窗口后自动恢复。
+        assert!(!m.record_compaction(19));
+    }
+
 
     #[test]
     fn default_state_emits_no_warning_until_conditions_met() {

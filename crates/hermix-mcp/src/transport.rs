@@ -642,7 +642,7 @@ mod tests {
                     let mut got = vec![];
                     // Read until the full request (headers + content-length
                     // body) has arrived.
-                    let (headers_end, content_length) = loop {
+                    let (headers_end, _content_length) = loop {
                         let n = sock.read(&mut buf).await.unwrap();
                         if n == 0 {
                             return;

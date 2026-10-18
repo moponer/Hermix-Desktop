@@ -439,6 +439,11 @@ impl SessionPersistence {
                 if let Err(e) = self.save_session_log(session_id, messages, model) {
                     tracing::warn!("Failed to save session log (non-fatal): {e}");
                 }
+                // JSONL 镜像（Codex rollout 双轨 analog）：DB 损坏时可按行
+                // 重建时间线。增量 append，成本 O(delta)。
+                if let Err(e) = self.save_message_mirror(session_id, messages) {
+                    tracing::warn!("Failed to append JSONL mirror (non-fatal): {e}");
+                }
                 if let Some(query) = user_query {
                     if let Err(e) = self.save_trajectory(session_id, messages, query, completed) {
                         tracing::warn!("Failed to save trajectory (non-fatal): {e}");

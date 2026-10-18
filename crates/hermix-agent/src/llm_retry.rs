@@ -12,13 +12,16 @@
 //! modules — no `AgentLoop` dependency.
 
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use tokio::time::sleep;
 
 use hermix_core::{AgentError, LlmProvider, LlmResponse, ToolSchema};
 
 use crate::agent_config::AgentConfig;
-use crate::agent_helpers::{classify_error, jittered_backoff, AgentCallbacks, ErrorClass};
+use crate::agent_helpers::{
+    classify_error, jittered_backoff, parse_retry_after_ms, AgentCallbacks, ErrorClass,
+};
 use crate::agent_loop::TurnRuntimeRoute;
 use crate::context::ContextManager;
 use crate::credential_pool::CredentialPool;
@@ -236,7 +239,10 @@ pub(crate) async fn call_llm_with_retry(
                             "Auth error persisted after token refresh: {err_str}"
                         )));
                     }
-                    ErrorClass::Fatal | ErrorClass::ContextOverflow => {
+                    // Quota is terminal: the same account's fallback model
+                    // hits the same wall, so retry/fallback only adds
+                    // latency before the inevitable error surfaces.
+                    ErrorClass::Fatal | ErrorClass::Quota | ErrorClass::ContextOverflow => {
                         return Err(AgentError::LlmApi(err_str));
                     }
                     ErrorClass::RateLimit | ErrorClass::Retryable => {
@@ -281,11 +287,19 @@ pub(crate) async fn call_llm_with_retry(
                             }
                             return Err(AgentError::LlmApi(err_str));
                         }
-                        let delay = jittered_backoff(
-                            attempt,
-                            effective_base_delay_ms,
-                            retry.max_delay_ms,
-                        );
+                        // Provider-suggested wait (Retry-After header echoed
+                        // into the error, or prose) wins over local backoff —
+                        // the provider knows its own load. Absent/over-cap →
+                        // local exponential backoff as before.
+                        let delay = parse_retry_after_ms(&err_str)
+                            .map(Duration::from_millis)
+                            .unwrap_or_else(|| {
+                                jittered_backoff(
+                                    attempt,
+                                    effective_base_delay_ms,
+                                    retry.max_delay_ms,
+                                )
+                            });
                         tracing::info!(
                             "Retrying in {}ms (attempt {}/{})",
                             delay.as_millis(),
@@ -324,5 +338,36 @@ mod tests {
         let d = jittered_backoff(0, 1000, 30000);
         assert!(d.as_millis() >= 850);
         assert!(d.as_millis() <= 1150);
+    }
+
+    #[test]
+    fn retry_after_header_seconds_is_honoured() {
+        assert_eq!(
+            parse_retry_after_ms("429 Too Many Requests (retry-after: 12)"),
+            Some(12_000)
+        );
+    }
+
+    #[test]
+    fn retry_after_prose_is_honoured() {
+        assert_eq!(
+            parse_retry_after_ms("rate limited — please try again in 30 seconds"),
+            Some(30_000)
+        );
+        assert_eq!(
+            parse_retry_after_ms("provider overloaded: retry after 2 minutes"),
+            Some(120_000)
+        );
+    }
+
+    #[test]
+    fn retry_after_caps_at_five_minutes_and_ignores_noise() {
+        // 10 minutes over cap → ignored entirely (treated as absent).
+        assert_eq!(
+            parse_retry_after_ms("quota window: retry after 10 minutes"),
+            None
+        );
+        // Unrelated durations don't hijack the backoff.
+        assert_eq!(parse_retry_after_ms("request timed out after 30 seconds"), None);
     }
 }

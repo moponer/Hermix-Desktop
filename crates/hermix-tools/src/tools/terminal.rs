@@ -311,7 +311,7 @@ impl ToolHandler for TerminalHandler {
             "timeout".into(),
             json!({
                 "type": "integer",
-                "description": "Timeout in milliseconds (default: 30000)"
+                "description": "Timeout in seconds. Default and hard cap: 120 (commands are killed at the cap)."
             }),
         );
         props.insert(
@@ -584,9 +584,12 @@ async fn execute_inner(
             }
         }
 
+        // `timeout` 单位是秒；历史上 schema 误写"毫秒, default 30000"，
+        // LLM 按旧文档传 30000 = 8.3 小时。无论传什么，clamp 到硬上限。
         let timeout = params
             .get("timeout")
             .and_then(|v| v.as_u64())
+            .map(|s| s.clamp(1, TERMINAL_HARD_TIMEOUT_SECS))
             .or(Some(TERMINAL_HARD_TIMEOUT_SECS));
 
         // Resolve effective workdir:
@@ -885,7 +888,7 @@ async fn execute_session_call(
 
 /// 会话输出格式化：正文 + 会话状态页脚（id / busy 轮询指引 / 退出提示）。
 fn format_session_output(output: &PtySessionOutput, just_created: bool) -> String {
-    const MAX_OUTPUT_CHARS: usize = 100_000;
+    const MAX_OUTPUT_CHARS: usize = crate::result_budget::TERMINAL_OUTPUT_CHARS;
     let mut result = output.text.clone();
     if result.chars().count() > MAX_OUTPUT_CHARS {
         let truncated: String = result.chars().take(MAX_OUTPUT_CHARS).collect();
@@ -920,7 +923,7 @@ fn format_session_output(output: &PtySessionOutput, just_created: bool) -> Strin
 
 /// Format command output for display.
 fn format_command_output(output: &CommandOutput) -> String {
-    const MAX_OUTPUT_CHARS: usize = 100_000; // 100K chars safety limit
+    const MAX_OUTPUT_CHARS: usize = crate::result_budget::TERMINAL_OUTPUT_CHARS;
     let mut result = String::new();
     if !output.stdout.is_empty() {
         result.push_str(&output.stdout);

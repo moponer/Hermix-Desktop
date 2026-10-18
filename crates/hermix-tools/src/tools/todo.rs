@@ -91,7 +91,8 @@ pub fn register(
         Arc::new(|| true),
         vec![],
         false,
-        "Task orchestration: create, update, list, delete, get_next, depend, record_execution tasks.",
+        "Session task graph: create/update/list/depend/record_execution for THIS conversation's work items, with `get_next` for dependency-ordered execution. In-memory per session. \
+         BOUNDARY — use `todo` for agent execution bookkeeping (what am I doing next in this chat); use `task_create` (task_tracker) when the work must survive the session and be attributable (durable records, subtasks, deliverable artifacts); use `kanban` only for the user's cross-session visual board.",
         "📋",
         None,
         RiskLevel::Safe,

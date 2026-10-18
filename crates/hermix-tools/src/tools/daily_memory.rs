@@ -249,7 +249,11 @@ pub fn register(registry: &ToolRegistry) {
         Arc::new(|| true),
         vec![],
         false,
-        "Append a structured note (goals|progress|conclusions) to today's daily working memory in SQLite. Required by the operating-principles workflow: record goals at task start, progress as you go, conclusions at wrap-up.",
+        "Append a structured note (goals|progress|conclusions) to today's daily working memory in SQLite. Required by the operating-principles workflow: record goals at task start, progress as you go, conclusions at wrap-up.\n\n\
+         BOUNDARY (three memory layers, pick one): `daily_memory` = this task's timeline \
+         (what I decided, what is left) — read back after a restart; `memory` = durable facts \
+         injected every turn (preferences/environment) — do not park task progress there; \
+         `session_search` = read-only search over past conversations, cannot write.",
         "📅",
         None,
         RiskLevel::Safe,

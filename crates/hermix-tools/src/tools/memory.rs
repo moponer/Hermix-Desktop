@@ -197,7 +197,13 @@ pub fn register(registry: &ToolRegistry) {
         false,
         "Save durable information to persistent memory across sessions. \
          target='user' for user preferences; target='memory' for environment/workflow notes. \
-         Do not store temporary task progress.",
+         Do not store temporary task progress.\n\n\
+         BOUNDARY (three memory layers, pick one): `memory` = durable facts that stay true \
+         across sessions (preferences, environment, conventions) — injected every turn, keep it \
+         tiny and stable; `daily_memory` = today's working log for the CURRENT task (goals → \
+         progress → conclusions), never injected automatically, read it back when resuming; \
+         `session_search` = READ-ONLY recovery of what was said in past conversations \
+         (\"we discussed this last week\") — it cannot write anything.",
         "🧠",
         None,
         RiskLevel::Caution,

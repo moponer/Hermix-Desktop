@@ -50,12 +50,12 @@ pub fn register(registry: &ToolRegistry) {
         Arc::new(|| true),
         vec![],
         true,
-        "Write structured data to a REAL .xlsx spreadsheet (editable in Excel/WPS). \
-         Use for: delivering processed/merged/cleaned data as an editable spreadsheet — \
-         pairs with the spreadsheet-analysis skill's read-back verification. \
-         NOT for: reading spreadsheets (use markitdown), styled reports/pages \
-         (use the document-authoring canvas). Currently supports format=\"xlsx\" \
-         only; .docx/.pptx are planned and rejected with an explicit error.",
+        "Write structured data to REAL Office files (editable in Excel/WPS/Word/PowerPoint): \
+         format=\"xlsx\" spreadsheets, format=\"docx\" documents (heading1-3/paragraph/bullet \
+         blocks), format=\"pptx\" presentations. \
+         Use for: delivering processed/merged/cleaned data or documents as editable files. \
+         NOT for: reading files (use markitdown), HTML→Word conversion (use html_to_docx), \
+         PDF export (use file_converter).",
         "📊",
         None,
         RiskLevel::Caution,

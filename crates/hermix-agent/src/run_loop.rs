@@ -1,23 +1,18 @@
 use std::sync::atomic::Ordering;
-use crate::budget;
-use crate::spill;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::Instant;
-use serde_json::{json, Value};
+use serde_json::Value;
 use tracing::{info, instrument};
-use hermix_core::{AgentError,AgentResult,format_token_count,LlmResponse,Message,MessageRole,StreamChunk,ToolCall,ToolErrorRecord,ToolSchema,UsageStats};
+use hermix_core::{AgentError,AgentResult,Message,MessageRole,StreamChunk,ToolCall,ToolSchema,UsageStats};
 use crate::agent_helpers::default_max_autonomous_nudges;
 use crate::agent_loop::{
     AgentLoop, LoopPhase, LoopState, PostLlmAction, PostResponseAction, PreparedRun, TurnRuntimeRoute,
-    extract_last_user_assistant, extract_file_change,
 };
-use crate::context::ContextManager;
 use crate::cost_guard::merge_usage;
 use crate::plugins::HookType;
 use crate::stream_collect::StreamCollectOutcome;
-use crate::tool_result_processor::push_tool_result;
 
 /// O1.1: return type for `do_pre_turn_setup` — either the agent
 /// should stop (graceful interrupt / max-turns) or continue with
@@ -48,15 +43,28 @@ pub fn build_active_skills_block(
     user_text: &str,
     char_budget: usize,
 ) -> Option<String> {
+    build_active_skills_block_with_tools(skills_dir, user_text, char_budget)
+        .map(|(block, _)| block)
+}
+
+/// Same as [`build_active_skills_block`] but also returns the union of the
+/// matched skills' `allowed-tools` (None = unrestricted). The loop stores it
+/// on `LoopState` for the turn and subtracts it from the dispatch surface —
+/// skill activation can only narrow, never widen, the session toolset.
+pub fn build_active_skills_block_with_tools(
+    skills_dir: &std::path::Path,
+    user_text: &str,
+    char_budget: usize,
+) -> Option<(String, Option<std::collections::HashSet<String>>)> {
     if user_text.is_empty() {
         return None;
     }
     let mut loader = crate::skill_loader::SkillLoader::with_dir(skills_dir);
     loader.scan();
-    let injection = loader.build_injection(user_text)?;
+    let (injection, tools) = loader.build_injection_and_tools(user_text)?;
 
     if injection.len() <= char_budget {
-        return Some(injection);
+        return Some((injection, tools));
     }
 
     // Soft-cap: truncate at budget, leave room for the footer.
@@ -71,7 +79,7 @@ pub fn build_active_skills_block(
     // floor to the nearest valid boundary instead.
     out.truncate(out.floor_char_boundary(cap));
     out.push_str(&footer);
-    Some(out)
+    Some((out, tools))
 }
 
 /// Outcome of [`AgentLoop::do_tool_turn`] — tells the caller what
@@ -90,933 +98,41 @@ enum ToolTurnOutcome {
     Continue,
 }
 
+// --- split-out impl blocks (pure relocation, see module docs) ---
+mod pre_turn;
+mod tool_turn;
+mod verification;
+
 impl AgentLoop {
-    #[allow(clippy::too_many_arguments)]
-    async fn do_pre_turn_setup(
-        &self,
-        ctx: &mut ContextManager,
-        state: &mut LoopState,
-        session_id: &str,
-        tool_errors: &[ToolErrorRecord],
-        session_started_hooks_fired: bool,
-        persist_user_idx: Option<usize>,
-        _finish_reason: Option<&str>,
-    ) -> Result<PreTurnAction, AgentError> {
-        // (type-B diagnostic): INFO log every pre-turn setup
-        // entry so a future hang between turns shows up in stdout.
-        // Without this, the only signal between `PostToolExec` and the
-        // `PreTurnSetup` phase is a `tracing::debug!` that the default
-        // log level never emits — and the user sees an unexplained
-        // "● ● ● 正在思考" forever. Pair this with the matching
-        // "post-tool finished" INFO at the end of
-        // `do_post_tool_iteration` and you can pinpoint the hang to
-        // exactly one frame.
-        tracing::info!(
-            turn    = state.total_turns + 1,
-            session = session_id,
-            "do_pre_turn_setup: entering"
-        );
-
-        // --- Graceful interrupt ---
-        if self.interrupt.take_interrupt_graceful().is_some() {
-            return Ok(PreTurnAction::Stop(self.graceful_interrupt_result(
-                ctx,
-                state.total_turns,
-                tool_errors,
-                state.cost_guard.accumulated_usage.clone(),
-                state.cost_guard.session_cost_usd,
-                session_started_hooks_fired,
-                persist_user_idx,
-            )));
-        }
-
-        // poll any background-spawned compression ---
-        // Non-blocking probe: if a previous spawn finished while the
-        // agent loop was processing the last turn, roll the result
-        // into `ctx` *before* anything else reads `ctx` (memory
-        // recall, skill injection, LLM call). This is the only point
-        // in the loop where the in-flight handle is reliably polled
-        // every turn.
-        let _ = self.poll_in_flight_compression(ctx, false).await;
-
-        // --- `/steer` pre-API drain ---
-        self.pre_api_apply_pending_steer(ctx);
-
-        // --- Max turns: soft cap ---
-        // max_turns == 0 means unlimited. The real hard stops are:
-        // ErrorLoop (convergence detector), Cost Guard (max_cost_usd),
-        // and the LLM's natural stopping (no tool calls → finalize).
-        // max_turns is NOT a hard stop — hitting it triggers a progress
-        // summary (using the conversation's active model) and resets the
-        // turn counter so long tasks keep running. Without this, every
-        // task longer than max_turns turns is silently truncated.
-
-        // --- Turn counter ---
-        state.total_turns += 1;
-        tracing::debug!("Agent turn {}", state.total_turns);
-
-        // --- OAuth refresh ---
-        self.oauth_refresh
-            .refresh_if_needed(&self.auth_tokens_path(), &self.config.runtime_providers)
-            .await;
-
-        // --- Skill nudge counter ---
-        if self.config.skill_creation_nudge_interval > 0
-            && self
-                .tool_registry
-                .names()
-                .iter()
-                .any(|n| n == "skill_manage")
-        {
-            if let Ok(mut c) = self.evolution_counters.lock() {
-                c.iters_since_skill = c.iters_since_skill.saturating_add(1);
-            }
-        }
-
-        // --- Checkpoint ---
-        if self.config.checkpoint_interval_turns > 0
-            && (state.total_turns - 1).is_multiple_of(self.config.checkpoint_interval_turns)
-        {
-            state.message_cache.store_checkpoint(ctx.get_messages().to_vec());
-        }
-
-        // --- Memory turn-start notification ---
-        self.memory_on_turn_start(state.total_turns, "");
-
-        // Removed Memory review hint (every 20 turns).
-        // The system prompt already contains memory management guidance.
-        // Injecting "review and consolidate" hints pollutes the context
-        // and distracts the LLM from the user's actual task.
-
-        // --- Memory sync at flush interval ---
-        if state.total_turns.is_multiple_of(self.config.memory_flush_interval) && state.total_turns > 0 {
-            let msgs = ctx.get_messages();
-            let (u, a) = extract_last_user_assistant(msgs);
-            self.memory_sync(&u, &a, session_id);
-        }
-
-        // --- Background snapshot + frame cap ---
-        self.maybe_freeze_snapshot(session_id, state.total_turns);
-        self.maybe_enforce_frame_cap(state.total_turns);
-
-        //(A): per-turn memory recall ---
-        // Cheap heuristic: every Nth turn (default 5) OR when the
-        // user turn's first token differs from the previous recall,
-        // we re-pull the top-N salient facts and emit a
-        // `memory_recall` status event. The drift check uses the
-        // first meaningful token of the user text (no embedding).
-        let user_text: String = ctx
-            .get_messages()
-            .iter()
-            .rev()
-            .find(|m| m.role == MessageRole::User)
-            .and_then(|m| m.content.as_deref())
-            .unwrap_or("")
-            .to_string();
-        if let Some(plan) = self.maybe_recall(state, &user_text) {
-            // Track keys for next-turn drift detection.
-            state.last_recall_keys =
-                plan.items.iter().map(|i| i.canonical_key.clone()).collect();
-            // Inject recall block into ctx so the LLM can actually
-            // use it. Previously this was emit-only (user could see
-            // "thought of N items" but the agent couldn't). Now the
-            // rendered block lands in message history as a system
-            // message, same pattern as `memory_prefetch` at session
-            // start. Compression will fold old recall blocks when
-            // the context grows past the threshold.
-            let recall_block = crate::recall_scheduler::render_prompt_block(&plan);
-            if !recall_block.is_empty() {
-                ctx.add_message(Message::system(&recall_block));
-            }
-        }
-
-        //: auto-activate matching skills ---
-        // Cheap keyword + subsequence-fuzzy match the user's message
-        // against the skill directory and inject up to 3 skills'
-        // full bodies into ctx. The skill bodies are appended as a
-        // system message so the LLM sees them alongside the recall
-        // block. Compression folds them on context pressure.
-        if !user_text.is_empty() {
-            let skills_dir =
-                hermix_config::paths::hermix_home().join("skills");
-            if let Some(trimmed) = build_active_skills_block(
-                &skills_dir,
-                &user_text,
-                self.config.skill_injection_char_budget,
-            ) {
-                ctx.add_message(Message::system(&trimmed));
-            }
-        }
-
-        // --- Pre-LLM hook + route resolution ---
-        let turn_runtime_route = state
-            .route_state
-            .forced_runtime_route
-            .clone()
-            .or_else(|| self.resolve_smart_runtime_route(ctx.get_messages()));
-        let active_model = turn_runtime_route
-            .as_ref()
-            .map(|r| r.model.as_str())
-            .unwrap_or(self.config.model.as_str())
-            .to_string();
-        let hook_ctx = serde_json::json!({"turn": state.total_turns, "model": active_model});
-
-        // Soft turn cap: at the boundary, summarize progress with the
-        // conversation's own model, inject the summary, reset the counter
-        // and keep going. Long tasks are no longer truncated at
-        // `max_turns`; CostGuard / ErrorLoop remain the hard stops.
-        if self.config.max_turns > 0 && state.total_turns >= self.config.max_turns {
-            tracing::warn!(
-                "Max turns ({}) reached — summarizing progress and continuing",
-                self.config.max_turns
-            );
-            self.emit_status(
-                "lifecycle",
-                &format!(
-                    "已执行 {} 轮，正在整理进度并继续…",
-                    self.config.max_turns
-                ),
-            );
-            let summary_msg = self.handle_max_iterations(ctx, &active_model).await?;
-            if let Some(msg) = summary_msg {
-                ctx.add_message(msg);
-            }
-            state.total_turns = 0;
-        }
-
-        let pre_results = self.invoke_hook(HookType::PreLlmCall, &hook_ctx);
-        self.inject_hook_context(&pre_results, ctx);
-
-        Ok(PreTurnAction::Continue {
-            turn_runtime_route,
-            active_model,
-        })
-    }
-
-    /// O1.1: shared prefetch block — was ~80 lines of duplication between
-    /// run() and run_stream(). Identical logic: intent classification,
-    /// safe tool dispatch, thinking mode selection, ACUI emission.
-    async fn do_prefetch(
-        &self,
-        ctx: &mut ContextManager,
-        tool_schemas: &[ToolSchema],
-        total_turns: u32,
-    ) {
-        let Some(ref prefetcher) = self.prefetcher else {
-            return;
-        };
-        let tool_names: Vec<String> = tool_schemas.iter().map(|t| t.name.clone()).collect();
-        let user_text: String = ctx
-            .get_messages()
-            .iter()
-            .filter(|m| m.role == MessageRole::User)
-            .filter_map(|m| m.content.as_deref())
-            .collect::<Vec<_>>()
-            .join("\n");
-        let recent_msgs: Vec<Message> = ctx
-            .get_messages()
-            .iter()
-            .cloned()
-            .rev()
-            .take(10)
-            .collect();
-        let tc = hermix_intelligence::TurnContext::from_user_message(user_text.clone())
-            .with_recent_messages(recent_msgs);
-        if let Some(ref outcome) = prefetcher.run(&tc, &tool_names).await {
-            let block = outcome.to_system_prompt_block();
-            if !block.is_empty() {
-                ctx.add_message(Message::system(&block));
-                tracing::trace!(intent = ?outcome.intent, confidence = outcome.confidence, "prefetch result injected as system prompt block");
-            }
-            if let Some(ref on_prefetch_intent) = self.callbacks.on_prefetch_intent {
-                let json = serde_json::to_string(&json!({
-                    "intent": serde_json::to_value(outcome.intent.clone()).unwrap_or_default(),
-                    "confidence": outcome.confidence,
-                    "results": outcome.results.iter().map(|r| json!({
-                        "tool": &r.tool,
-                        "args": &r.args,
-                        "output": &r.output,
-                        "errored": r.errored,
-                        "duration_ms": r.duration_ms,
-                    })).collect::<Value>(),
-                }));
-                if let Ok(ref payload) = json {
-                    on_prefetch_intent(payload);
-                }
-            }
-        }
-
-        // L4: dual-layer thinking mode selection
-        let thinking_decision = {
-            use hermix_intelligence::{select_mode, ThinkingConfig};
-            let cfg = ThinkingConfig::default();
-            let history_len = ctx.get_messages().len();
-            select_mode(user_text.as_str(), history_len, &cfg)
-        };
-        tracing::trace!(
-            mode = thinking_decision.mode.as_str(),
-            reason = thinking_decision.reason.as_str(),
-            confidence = thinking_decision.confidence,
-            "L4 thinking mode selected for this turn"
-        );
-        if let Some(ref on_acui) = self.callbacks.on_acui_directive {
-            let directive = hermix_core::AcuiDirective::Show(
-                hermix_core::AcuiShow::new(
-                    format!("thinking-mode-{}", total_turns),
-                    "thinking_mode",
-                    serde_json::json!({
-                        "mode": thinking_decision.mode.as_str(),
-                        "reason": thinking_decision.reason.as_str(),
-                        "confidence": thinking_decision.confidence,
-                    }),
-                ),
-            );
-            if let Ok(json) = serde_json::to_string(&directive) {
-                on_acui(&json);
-            }
-        }
-    }
-
-    /// O1.1: shared post-tool iteration block — was ~200 lines of
-    /// duplication between run() and run_stream(). Handles: post-tool
-    /// hooks, file-change events, memory/delegation notifications,
-    /// budget enforcement, budget pressure, push results, steer,
-    /// execute_code deduction, background review, context pressure,
-    /// auto-compression, state writeback.
-    #[allow(clippy::too_many_arguments)]
-    async fn do_post_tool_iteration(
-        &self,
-        ctx: &mut ContextManager,
-        tool_calls: &[ToolCall],
-        results: Vec<hermix_core::ToolResult>,
-        state: &mut LoopState,
-        _session_id: &str,
-        _tool_errors: &mut Vec<ToolErrorRecord>,
-        _session_started_hooks_fired: bool,
-        _persist_user_idx: Option<usize>,
-        _review_memory_at_end: bool,
-        total_turns: &mut u32,
-        tool_call_ids: &HashMap<String, String>,
-        stream_needs_break: Option<&AtomicBool>,
-        on_chunk: Option<&(dyn Fn(StreamChunk) + Send + Sync)>,
-    ) {
-        // Post-tool hooks + callbacks
-        for res in &results {
-            let Some(tc) = tool_calls.iter().find(|tc| tc.id == res.tool_call_id) else {
-                continue;
-            };
-            let tc_ctx = serde_json::json!({"tool": &tc.function.name, "is_error": res.is_error, "turn": total_turns});
-            self.invoke_hook(HookType::PostToolCall, &tc_ctx);
-            if let Some(ref cb) = self.callbacks.on_tool_complete {
-                let tool_call_id = tool_call_ids
-                    .get(&tc.id)
-                    .cloned()
-                    .unwrap_or_else(|| format!("legacy-{}", tc.function.name));
-                cb(
-                    &tool_call_id,
-                    &tc.function.name,
-                    &res.content,
-                    res.denial_kind.as_deref().unwrap_or(""),
-                    res.is_error,
-                );
-            }
-        }
-
-        // File-change summary events
-        for res in &results {
-            let Some(tc) = tool_calls.iter().find(|tc| tc.id == res.tool_call_id) else {
-                continue;
-            };
-            if res.is_error {
-                continue;
-            }
-            if let Some(change) = extract_file_change(&tc.function.name, &tc.function.arguments, &res.content) {
-                if let Some(ref cb) = self.callbacks.on_tool_complete {
-                    let synth_id = format!("file_change::{}", change.path);
-                    let synth_name = format!("file_change::{}", change.path);
-                    let payload = serde_json::json!({
-                        "change_type": change.change_type,
-                        "file_path": change.path,
-                        "file_summary": change.summary,
-                    }).to_string();
-                    cb(&synth_id, &synth_name, &payload, "", false);
-                }
-            }
-        }
-
-        self.notify_memory_writes(tool_calls, &results);
-        self.notify_delegations(tool_calls, &results);
-
-        // Enforce budget on tool results. Oversized results are spilled to
-        // disk first so the model can retrieve them with read_file instead
-        // of only seeing a lossy truncation marker. Sink is built lazily:
-        // no oversized result means no filesystem work at all.
-        let mut results = results;
-
-        // 空的 tool_result 会被替换成一句人类可读的说明，而不是原样送进上下文。
-        // 抄 cc-haha `toolResultStorage.ts:287-296`：提示词末尾挂一条裸空结果时，
-        // 某些模型会直接把它当成"说完了"而吐停止序列——一次工具调用白跑一轮。
-        // 只处理成功的空结果：错误结果本身就有文字。
-        {
-            let name_by_id: std::collections::HashMap<&str, &str> = tool_calls
-                .iter()
-                .map(|tc| (tc.id.as_str(), tc.function.name.as_str()))
-                .collect();
-            for r in &mut results {
-                if r.is_error || !r.content.trim().is_empty() {
-                    continue;
-                }
-                let name = name_by_id
-                    .get(r.tool_call_id.as_str())
-                    .copied()
-                    .unwrap_or("tool");
-                r.content = format!("({name} completed with no output)");
-            }
-        }
-
-        let spill_sink = results
-            .iter()
-            .any(|r| r.content.chars().count() > spill::SPILL_INLINE_CHARS)
-            .then(spill::SpillSink::default_dir);
-        budget::enforce_budget_with_spill(&mut results, &self.config.budget, spill_sink.as_ref());
-
-        // Removed verification notes injection and budget
-        // pressure injection into tool results. These were polluting the
-        // context with system-level messages that interfered with the
-        // LLM's natural reasoning. The tool results themselves already
-        // contain execution status. Cost guard warnings go to the UI,
-        // not into the LLM's context.
-
-        // (type-B diagnostic): emit an INFO log *before* the
-        // post-tool writeback loop consumes `results` via `into_iter()`
-        // — the count + error count would otherwise be unavailable.
-        // Pair this with the `do_pre_turn_setup: entering` INFO at the
-        // top of the next phase: if you see this INFO but never see
-        // the pre-turn-setup INFO, the hang is in this body
-        // (writeback / hooks / cost guard / `auto_compress`). If you
-        // see the pre-turn-setup INFO but no `llm_response_received`
-        // for the next turn, the hang is in `do_pre_turn_setup` or
-        // `collect_stream_llm_response`.
-        tracing::info!(
-            turn    = state.total_turns,
-            results = results.len(),
-            errors  = results.iter().filter(|r| r.is_error).count(),
-            "do_post_tool_iteration: post-tool results accepted, entering writeback & auto-compress"
-        );
-
-        // (v2 — zero-context-overhead model, inspired by
-        // Hermes Agent's delegate_task design): When the LLM calls
-        // `read_image` in the main context, NO image base64 is ever
-        // injected into the main context. All base64 is stripped from
-        // tool results (see `strip_image_base64` in
-        // `tool_result_processor.rs`). Instead, a system nudge is
-        // injected telling the LLM to use `delegate_task` for image
-        // analysis — the sub-agent's isolated context absorbs the
-        // base64 cost and destroys it when done.
-        // This is the "zero-context-overhead" model: the main context
-        // NEVER contains image base64, period. Even a single image
-        // costs 2,000–8,000 tokens that are paid on every subsequent
-        // turn — that's always wasteful.
-        //
-        // A `delegate_task` child is exempt, and takes the opposite path:
-        // it is already the isolation boundary this rule exists to create,
-        // so its `read_image` result is re-injected as a real multimodal
-        // content block. The nudge below is skipped there because it points
-        // at `delegate_task`, which `BLOCKED_TOOLS_FOR_SUBAGENT` removes from
-        // the child's registry — following it would be impossible.
-        let mut read_image_paths: Vec<String> = Vec::new();
-        let mut child_images: Vec<(String, String)> = Vec::new();
-        for result in &results {
-            if result.is_error {
-                continue;
-            }
-            let Some(tc) = tool_calls.iter().find(|t| t.id == result.tool_call_id) else {
-                continue;
-            };
-            // read_image 的结果 JSON 里带整帧 base64，提取成
-            // 子 agent 的多模态内容块。
-            if tc.function.name != "read_image" {
-                continue;
-            }
-            if self.config.is_sub_agent {
-                // 子 agent：把像素转成真正的多模态内容块（下方统一注入）。
-                // 文本结果保持原样不剥——同一份 JSON 还要供 UI 的
-                // ScreenshotPreview 渲染，剥了预览就瞎；子 agent 上下文
-                // 是隔离边界，任务结束即销毁，双份成本有界。
-                let payload = crate::tool_result_processor::extract_image_payload(&result.content);
-                if let Some(payload) = payload {
-                    child_images.push(payload);
-                }
-                continue;
-            }
-            let Ok(parsed) = serde_json::from_str::<Value>(&result.content) else {
-                continue;
-            };
-            let img_path = parsed
-                .get("path")
-                .and_then(|v| v.as_str())
-                .unwrap_or("<unknown>");
-            read_image_paths.push(img_path.to_string());
-        }
-
-        if !read_image_paths.is_empty() {
-            let total = read_image_paths.len();
-            tracing::info!(
-                paths = ?read_image_paths,
-                total = total,
-                "read_image called in main context — injecting delegate_task nudge (zero-context-overhead model)"
-            );
-            // Universal nudge: ALWAYS use delegate_task for image analysis.
-            let paths_str = read_image_paths.join(", ");
-            ctx.add_message(Message::system(&format!(
-                "[SYSTEM — 图片分析必须使用 delegate_task]\n\
-                 你刚才在主上下文中调用了 read_image 读取了 {total} 张图片：{paths}\n\n\
-                 ⚠️ 图片 base64 已从工具结果中剥离，你无法在主上下文中看到图片内容。\n\n\
-                 【必须操作】使用 `delegate_task` 将图片分析任务派给子 agent：\n\
-                 - 子 agent 拥有隔离的上下文，可以自由调用 read_image 查看和分析图片\n\
-                 - 子 agent 完成后只回传纯文字结论，图片 base64 不会进入你的上下文\n\
-                 - 如有多张图片，可分批派发给多个子 agent（建议每批 3-5 张）\n\n\
-                 示例：\n\
-                 delegate_task(task=\"读取并分析图片，返回图片中可见的所有关键信息（文字、数字、证件字段等）的 JSON 摘要\", \\\n\
-                 context=\"图片路径：{paths}\")\n\n\
-                 🔴 禁止在主上下文中再次调用 read_image。所有图片分析必须通过 delegate_task 进行。\
-                 这条规则没有例外——即使是单张图片也必须走子 agent。",
-                total = total,
-                paths = paths_str,
-            )));
-        }
-
-        for result in results {
-            // Record failed tools for the terminal hint's ping-pong
-            // prevention: if a structured alternative already failed,
-            // the hint won't suggest it again.
-            if result.is_error {
-                if let Some(name) = tool_calls
-                    .iter()
-                    .find(|tc| tc.id == result.tool_call_id)
-                    .map(|tc| tc.function.name.as_str())
-                {
-                    crate::tool_result_processor::record_tool_failure(name);
-                }
-            }
-            // Apply terminal failure hint: if the terminal command failed
-            // due to shell-compatibility issues, append a structured
-            // suggestion to use move_file / read_file / execute_code instead.
-            let tool_name = tool_calls
-                .iter()
-                .find(|tc| tc.id == result.tool_call_id)
-                .map(|tc| tc.function.name.as_str());
-            let content = crate::tool_result_processor::maybe_append_terminal_failure_hint(
-                &result.content,
-                tool_name,
-                result.is_error,
-            );
-            push_tool_result(ctx, tool_calls, &result.tool_call_id, &content);
-            // (human-approval fix): if this tool call was approved by the
-            // USER clicking 允许 on the approval card (not an allowlist /
-            // session-bypass auto-allow), inject an explicit system note so
-            // the LLM knows the tool ran because the *user* consciously
-            // approved it. Without this, the model cannot tell a manual
-            // approval from a silent rule-based allow, and may report the
-            // action as if it auto-passed. We consume the id so the note
-            // fires exactly once, on the turn the tool actually executes.
-            if let Some(ids) = &self.callbacks.human_approved_ids {
-                let mut guard = ids.lock().expect("human_approved_ids poisoned");
-                if guard.remove(&result.tool_call_id) {
-                    drop(guard);
-                    let name = tool_name.unwrap_or("<未知工具>");
-                    ctx.add_message(Message::system(format!(
-                        "[人工审批确认] 你刚才请求的 `{name}` 工具调用，已由用户在审批卡片上点击「允许」人工审查通过。\
-                         这不是自动放行或白名单放行，而是用户有意识的人工批准。请尊重这一人工决策，\
-                         并在向用户汇报时如实说明：该操作是经用户手动批准后才执行的。",
-                        name = name,
-                    )));
-                }
-            }
-            // if the result is a *denial* (user拒绝 /
-            // 超时 / 连接中断), inject the structured "tell the user"
-            // system note right after the tool_result so the LLM's
-            // next turn obeys it instead of going quiet or silently
-            // retrying.
-            crate::tool_result_processor::inject_denial_note_if_needed(
-                ctx,
-                tool_calls,
-                &result,
-            );
-            // (sandbox-permission fix): if the tool failed with
-            // a PERMISSION_DENIED error, inject the "ask the user to grant
-            // access" guidance right after the denial note (the two are
-            // orthogonal — a denial is a user refusal, a permission error is a
-            // runtime restriction).
-            crate::tool_result_processor::inject_permission_note_if_needed(
-                ctx,
-                tool_calls,
-                &result,
-            );
-        }
-        // Sub-agent vision: the tool result text is metadata only; the pixels
-        // go in as `content_parts`, the shape every provider's vision path
-        // expects (`provider.rs` rewrites `content_parts` → `content`).
-        //
-        // Emitted AFTER the whole writeback loop above, never inside it — a
-        // `user` message wedged between an assistant's `tool_calls` and its
-        // `tool` results breaks the strict pairing that
-        // `provider.rs::enforce_strict_tool_pairing` exists to protect
-        // (MiniMax-M3 answers HTTP 400 `(2013) tool call result does not
-        // follow tool call`).
-        if !child_images.is_empty() {
-            let n = child_images.len();
-            tracing::info!(
-                images = n,
-                "read_image in sub-agent context — injecting multimodal content blocks"
-            );
-            let refs: Vec<(&str, &str)> = child_images
-                .iter()
-                .map(|(m, b)| (m.as_str(), b.as_str()))
-                .collect();
-            ctx.add_message(Message::user_with_images(
-                &format!("[已加载 {n} 张图片，以下为图像内容 —— 请直接查看并分析，不要再次调用 read_image]"),
-                &refs,
-            ));
-        }
-        self.post_tool_apply_pending_steer(ctx);
-        // Removed execute_code turn-counter deduction hack.
-        // It was compensating for execute_code not counting as a "real"
-        // turn, but this conflated turn accounting with tool semantics.
-        // Trust the turn counter — every loop iteration is a turn.
-
-        // Stream break control (stream-only)
-        if let (Some(snb), Some(on_c)) = (stream_needs_break, on_chunk) {
-            snb.store(true, Ordering::Release);
-            on_c(StreamChunk {
-                delta: Some(hermix_core::StreamDelta {
-                    content: None,
-                    tool_calls: None,
-                    extra: Some(serde_json::json!({"control": "stream_break"})),
-                }),
-                finish_reason: None,
-                usage: None,
-            });
-        }
-
-        self.emit_background_review_metrics(state.total_turns, ctx);
-
-        // Continuous tool-result roll-up: drain stale tool bodies every
-        // turn so context pressure doesn't spike to the compression
-        // threshold. Idempotent + cheap; Pass1 inside compress() stays
-        // as the final safety net. Originals are appended to the
-        // per-session evidence log BEFORE they vanish from ctx so the
-        // one-line summaries stay backed by recoverable full text.
-        let rolled =
-            crate::compression::rollup_tool_results(ctx.get_messages_mut(), 30, 8_000);
-        if !rolled.is_empty() {
-            crate::archive::append_rollup_archive(
-                &hermix_config::paths::hermix_home(),
-                self.config.session_id.as_deref(),
-                &rolled,
-            );
-            ctx.recompute_total_tokens();
-        }
-
-        // Context pressure check
-        let total_tokens = ctx.total_tokens();
-        let threshold = ctx.pressure_threshold_tokens();
-        let max_tokens = ctx.max_context_tokens();
-        // Fire a context_usage event every turn so the frontend can
-        // render a persistent context-usage bar. We send it through
-        // the on_chunk callback (same path as status/compaction events).
-        if let Some(on_c) = on_chunk {
-            let percent = if max_tokens > 0 {
-                ((total_tokens as f64 / max_tokens as f64) * 100.0).min(100.0)
-            } else {
-                0.0
-            };
-            // Include cumulative cache hit/miss data from
-            // the CostGuard so the frontend can display "缓存命中 45k"
-            // alongside the context usage bar.
-            let (cache_read, cache_creation) = state
-                .cost_guard
-                .accumulated_usage
-                .as_ref()
-                .map(|u| (u.cache_read_tokens, u.cache_creation_tokens))
-                .unwrap_or((0, 0));
-            on_c(StreamChunk {
-                delta: Some(hermix_core::StreamDelta {
-                    content: None,
-                    tool_calls: None,
-                    extra: Some(serde_json::json!({
-                        "event": "context_usage",
-                        "used_tokens": total_tokens as u64,
-                        "max_tokens": max_tokens as u64,
-                        "threshold_tokens": threshold as u64,
-                        "percent": percent,
-                        "cache_read_tokens": cache_read,
-                        "cache_creation_tokens": cache_creation,
-                    })),
-                }),
-                finish_reason: None,
-                usage: None,
-            });
-        }
-        if threshold > 0 {
-            let progress = total_tokens as f64 / threshold as f64;
-            let tier = if progress >= 0.95 {
-                0.95
-            } else if progress >= 0.85 {
-                0.85
-            } else {
-                0.0
-            };
-            if state.context_pressure.should_emit_warning(progress, tier) {
-                let message = format!(
-                    "Context pressure {:.0}% of compaction threshold ({} / {})",
-                    progress * 100.0,
-                    format_token_count(total_tokens),
-                    format_token_count(threshold)
-                );
-                tracing::warn!("{}", message);
-                self.emit_status("lifecycle", &message);
-            }
-        }
-
-        self.auto_compress_if_over_threshold(ctx).await;
-
-        // After compression, emit an updated context_usage event so the
-        // frontend progress bar reflects the reduced token count immediately
-        // (the pre-compression event was already sent above with the old value).
-        let new_total = ctx.total_tokens();
-        if new_total < total_tokens {
-            if let Some(on_c) = on_chunk {
-                let new_percent = if max_tokens > 0 {
-                    ((new_total as f64 / max_tokens as f64) * 100.0).min(100.0)
-                } else {
-                    0.0
-                };
-                on_c(StreamChunk {
-                    delta: Some(hermix_core::StreamDelta {
-                        content: None,
-                        tool_calls: None,
-                        extra: Some(serde_json::json!({
-                            "event": "context_usage",
-                            "used_tokens": new_total as u64,
-                            "max_tokens": max_tokens as u64,
-                            "threshold_tokens": threshold as u64,
-                            "percent": new_percent,
-                            "cache_read_tokens": 0,
-                            "cache_creation_tokens": 0,
-                        })),
-                    }),
-                    finish_reason: None,
-                    usage: None,
-                });
-            }
-        }
-        // `total_turns` lives on `state` now (the previous `&mut u32`
-        // parameter was hoisted into `LoopState`); no copy-back needed.
-    }
-
-    //: shared tool-execution + post-tool + convergence +
-    // TurnReport block. Both `run()` and `run_stream()` had identical
-    // ~60-line copies of this code. The only real differences are:
-    // - log level (info vs debug for phase notification)
-    // - `finalize_agent_result` params (is_stream flag + last_finish_reason)
-    // - `do_post_tool_iteration` stream params (None vs Some)
-    // All three are parameterized here.
-    #[allow(clippy::too_many_arguments)]
-    async fn do_tool_turn(
-        &self,
-        ctx: &mut ContextManager,
-        state: &mut LoopState,
-        tool_calls: &[ToolCall],
-        total_turns: u32,
-        tool_errors: &mut Vec<ToolErrorRecord>,
-        session_id: &str,
-        session_started_hooks_fired: bool,
-        persist_user_idx: Option<usize>,
-        review_memory_at_end: bool,
-        tool_call_ids: &HashMap<String, String>,
-        response: &LlmResponse,
-        is_stream: bool,
-        last_finish_reason: Option<String>,
-        stream_needs_break: Option<&Arc<AtomicBool>>,
-        on_chunk: Option<&(dyn Fn(StreamChunk) + Send + Sync)>,
-    ) -> ToolTurnOutcome {
-        // --- tool execution ---
-        let tool_start = Instant::now();
-        if is_stream {
-            tracing::debug!(
-                phase = %LoopPhase::ToolExecution,
-                turn = total_turns,
-                tools = tool_calls.len(),
-                "do_tool_turn: executing tool calls"
-            );
-        } else {
-            tracing::info!(
-                phase = %LoopPhase::ToolExecution,
-                turn = total_turns,
-                tools = tool_calls.len(),
-                "do_tool_turn: executing tool calls"
-            );
-        }
-        self.notify_phase(&LoopPhase::ToolExecution, total_turns);
-
-        let results = self
-            .execute_tool_calls(
-                tool_calls,
-                total_turns,
-                self.config
-                    .max_cost_usd
-                    .map(|limit| (limit - state.cost_guard.session_cost_usd).max(0.0)),
-                tool_errors,
-            )
-            .await;
-        state
-            .timings
-            .record_tool(tool_start.elapsed().as_millis() as u64);
-
-        // --- Rollback check ---
-        let turn_error_count = results.iter().filter(|r| r.is_error).count() as u32;
-        if self.config.rollback_on_tool_error_threshold > 0
-            && turn_error_count >= self.config.rollback_on_tool_error_threshold
-        {
-            if let Some(snapshot) = state.message_cache.checkpoint().cloned() {
-                *ctx.get_messages_mut() = snapshot;
-                ctx.add_message(Message::system(format!(
-                    "Auto-rollback: {} tool call(s) failed in one turn. \
-                     Restored latest checkpoint and continuing.",
-                    turn_error_count
-                )));
-                ctx.recompute_total_tokens();
-                return ToolTurnOutcome::Rollback;
-            }
-        }
-
-        // --- post-tool execution ---
-        tracing::debug!(
-            phase = %LoopPhase::PostToolExec,
-            turn = total_turns,
-            "do_tool_turn: post-tool iteration"
-        );
-        self.notify_phase(&LoopPhase::PostToolExec, total_turns);
-
-        let mut total_turns_mut = total_turns;
-        self.do_post_tool_iteration(
-            ctx,
-            tool_calls,
-            results.clone(),
-            state,
-            session_id,
-            tool_errors,
-            session_started_hooks_fired,
-            persist_user_idx,
-            review_memory_at_end,
-            &mut total_turns_mut,
-            tool_call_ids,
-            stream_needs_break.map(|a| a.as_ref()),
-            on_chunk,
-        )
-        .await;
-
-        // --- Convergence detection ---
-        let visible_text_this_turn = response.message.content.as_deref().unwrap_or("");
-        let has_visible = Self::assistant_visible_text_after_think_blocks(&response.message);
-        // Build per-tool failure/success lists for the convergence detector.
-        // This lets it detect "terminal keeps failing even though read_file
-        // succeeds" — a pattern the old aggregate error count missed.
-        let failed_tool_names: Vec<&str> = results
-            .iter()
-            .filter(|r| r.is_error)
-            .filter_map(|r| {
-                tool_calls
-                    .iter()
-                    .find(|tc| tc.id == r.tool_call_id)
-                    .map(|tc| tc.function.name.as_str())
-            })
-            .collect();
-        let succeeded_tool_names: Vec<&str> = results
-            .iter()
-            .filter(|r| !r.is_error)
-            .filter_map(|r| {
-                tool_calls
-                    .iter()
-                    .find(|tc| tc.id == r.tool_call_id)
-                    .map(|tc| tc.function.name.as_str())
-            })
-            .collect();
-        let convergence_signal = state.convergence_detector.check(
-            has_visible,
-            tool_calls.len(),
-            turn_error_count as usize,
-            visible_text_this_turn,
-            &failed_tool_names,
-            &succeeded_tool_names,
-        );
-        match convergence_signal {
-            crate::convergence_detector::ConvergenceSignal::Converge {
-                reason,
-                consecutive_count,
-            } => {
+    /// Arm the one-shot stop-signal forwarder (2026-10-18).
+    ///
+    /// The server's per-turn `shutdown` Notify is the wire-level Stop
+    /// request (`WsClientMessage::Stop` → `notify_one`). Until now that
+    /// Notify was only consumed by the approval-wait select, so a Stop
+    /// during an in-flight LLM call did nothing — the turn kept running
+    /// (minutes, on slow providers) and a re-sent message was deferred
+    /// behind it. This task converts the FIRST notify into a real
+    /// `InterruptController::interrupt()`, activating every cancellation
+    /// consumer: the llm_retry O1.2 `select!` (in-flight LLM call dies
+    /// immediately), the approval-wait select, and all `check_interrupt`
+    /// polls. The loop then drains to `interrupted` and the terminal
+    /// `Done(outcome="interrupted")` frame is the frontend's cleanup
+    /// trigger.
+    ///
+    /// One-shot by design: a stopped turn drains to its terminal frame;
+    /// notifies arriving after this turn are stored permits on a Notify
+    /// instance that dies with this agent task — harmless.
+    fn arm_stop_signal_forwarder(&self) {
+        if let Some(shutdown) = self.callbacks.shutdown.clone() {
+            let interrupt = self.interrupt.clone();
+            tokio::spawn(async move {
+                shutdown.notified().await;
                 tracing::info!(
-                    reason = ?reason,
-                    consecutive = consecutive_count,
-                    "convergence detected (hard stop) — concluding run"
+                    "stop signal forwarded: InterruptController::interrupt()"
                 );
-                self.persist_session_terminal(
-                    ctx,
-                    session_id,
-                    total_turns,
-                    review_memory_at_end,
-                );
-                let result = self.finalize_agent_result(
-                    ctx,
-                    total_turns,
-                    tool_errors,
-                    state.cost_guard.accumulated_usage.clone(),
-                    state.cost_guard.session_cost_usd,
-                    session_started_hooks_fired,
-                    persist_user_idx,
-                    is_stream,
-                    false,
-                    last_finish_reason,
-                );
-                return ToolTurnOutcome::Converge(Ok(result));
-            }
-            _ => {}
+                interrupt.interrupt(None);
+            });
         }
-
-        // --- TurnReport ---
-        crate::turn_report::TurnReport {
-            turn: total_turns,
-            end_phase: LoopPhase::PostToolExec,
-            stage: LoopPhase::PostToolExec.as_orchestration_stage(),
-            api_ms: state.timings.total_api_time_ms,
-            tool_ms: state.timings.total_tool_time_ms,
-            tool_calls: vec![],
-            replay_count: 0,
-            has_visible_text: has_visible,
-            has_thinking: response
-                .message
-                .reasoning_content
-                .as_deref()
-                .is_some_and(|s| !s.trim().is_empty()),
-            prompt_tokens: response
-                .usage
-                .as_ref()
-                .map(|u| u.prompt_tokens)
-                .unwrap_or(0),
-            completion_tokens: response
-                .usage
-                .as_ref()
-                .map(|u| u.completion_tokens)
-                .unwrap_or(0),
-            context_tokens: ctx.total_tokens() as u64,
-            outcome: crate::turn_report::TurnOutcome::Continue,
-            mode: None,
-            task_id: None,
-        }
-        .emit();
-
-        ToolTurnOutcome::Continue
     }
 
     #[instrument(
@@ -1043,6 +159,7 @@ impl AgentLoop {
     //   修复规则：read path 只做纯数据加载，streaming 逻辑只在
     //   write path（LLM → ctx → DB）中运行。
     //   测试：run_loop_tests（隐式 — run 函数的 read/write 分离覆盖）
+
     pub async fn run(
         &self,
         messages: Vec<Message>,
@@ -1051,6 +168,7 @@ impl AgentLoop {
         // Reset per-run terminal hint counter so a new user message
         // gets a fresh allowance of failure hints.
         crate::tool_result_processor::reset_terminal_hint_counter();
+        self.arm_stop_signal_forwarder();
 
         // ---- Step 1: Prepare the run context ----
         // Sanitize messages, route tools, build the system prompt, hydrate the
@@ -1392,6 +510,33 @@ self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
                 &mut state.message_cache,
             );
 
+            // Truncated-args gate (same as run_stream): streaming can end
+            // mid-tool-call (finish_reason="length" from
+            // has_truncated_tool_args); executing the half JSON would
+            // feed a tool error into the convergence detector. Pop the
+            // assistant message and retry within the cap.
+            if response.finish_reason.as_deref() == Some("length")
+                && assistant_msg
+                    .tool_calls
+                    .as_ref()
+                    .is_some_and(|calls| !calls.is_empty())
+            {
+                let count = state.retry_counters.bump_truncated_tool();
+                if count <= self.config.truncated_tool_call_max_retries {
+                    self.emit_status(
+                        "lifecycle",
+                        &format!(
+                            "Truncated tool arguments — retrying ({}/{})",
+                            count, self.config.truncated_tool_call_max_retries
+                        ),
+                    );
+                    let _ = ctx.get_messages_mut().pop();
+                    ctx.recompute_total_tokens();
+                    continue;
+                }
+            }
+            state.retry_counters.reset_truncated_tool();
+
             // Step complete callback
             if let Some(ref cb) = self.callbacks.on_step_complete {
                 cb(total_turns);
@@ -1684,6 +829,7 @@ self.notify_phase(&LoopPhase::ToolValidation, total_turns);
         // Reset per-run terminal hint counter so a new user message
         // gets a fresh allowance of failure hints.
         crate::tool_result_processor::reset_terminal_hint_counter();
+        self.arm_stop_signal_forwarder();
 
         let _run_started = Instant::now();
         info!(
@@ -2575,70 +1721,6 @@ self.notify_phase(&LoopPhase::ToolValidation, total_turns);
     // Internal helpers
     // -----------------------------------------------------------------------
 
-    /// Verify tool execution results and inject verification status.
-    /// This is the "verify work" step from Claude Code's gather→act→verify pattern.
-    /// Checks file modifications, terminal exit codes, and tool errors.
-    pub fn verify_tool_results(
-        &self,
-        tool_calls: &[ToolCall],
-        results: &[hermix_core::ToolResult],
-    ) -> Vec<String> {
-        let mut verification_notes = Vec::new();
-
-        for res in results {
-            let Some(tc) = tool_calls.iter().find(|tc| tc.id == res.tool_call_id) else {
-                continue;
-            };
-
-            if res.is_error {
-                // Tool execution failed
-                verification_notes.push(format!(
-                    "VERIFICATION: {} failed - {}",
-                    tc.function.name, res.content
-                ));
-                continue;
-            }
-
-            // Check file modification results
-            if let Some(change) = extract_file_change(&tc.function.name, &tc.function.arguments, &res.content) {
-                verification_notes.push(format!(
-                    "VERIFICATION: {} modified {} ({})",
-                    tc.function.name, change.path, change.change_type
-                ));
-            }
-
-            // Check terminal command results
-            if tc.function.name == "terminal" {
-                if let Ok(data) = serde_json::from_str::<Value>(&res.content) {
-                    if let Some(exit_code) = data.get("exit_code").and_then(|v| v.as_i64()) {
-                        if exit_code != 0 {
-                            verification_notes.push(format!(
-                                "VERIFICATION: {} exited with code {}",
-                                tc.function.name, exit_code
-                            ));
-                        }
-                    }
-                }
-            }
-        }
-
-        verification_notes
-    }
-
-    /// Inject verification notes into the context as a system message.
-    pub fn inject_verification_notes(
-        ctx: &mut ContextManager,
-        notes: &[String],
-    ) {
-        if notes.is_empty() {
-            return;
-        }
-        let verification_text = format!(
-            "[VERIFICATION]\n{}\n\nIf any verification failed, investigate and fix before proceeding.",
-            notes.join("\n")
-        );
-        ctx.add_message(Message::system(&verification_text));
-    }
 
 }
 

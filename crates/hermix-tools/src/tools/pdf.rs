@@ -51,8 +51,8 @@ const PDFTOTEXT_BIN: &str = "pdftotext.exe";
 #[cfg(not(windows))]
 const PDFTOTEXT_BIN: &str = "pdftotext";
 
-/// Default cap on returned text size.
-const DEFAULT_MAX_CHARS: usize = 50_000;
+/// Default cap on returned text size (central budget — see `result_budget`).
+const DEFAULT_MAX_CHARS: usize = crate::result_budget::PDF_TEXT_CHARS;
 
 /// Windows `STATUS_INVALID_IMAGE_NOT_FORMAT` (0xc000007b).
 const STATUS_INVALID_IMAGE_NOT_FORMAT: i32 = -1_073_741_701;

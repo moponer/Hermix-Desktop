@@ -74,6 +74,11 @@ impl std::fmt::Debug for ToolEntry {
 #[derive(Debug, Clone)]
 pub struct ToolRegistry {
     tools: HashMap<String, ToolEntry>,
+    /// Plan-mode flag shared with the source `hermix_tools::ToolRegistry`
+    /// through [`Self::set_plan_mode_handle`]. Clones (including
+    /// `without_tools` / `retain_only`) keep the same `Arc`, so every
+    /// derived registry — sub-agents included — observes one mode.
+    plan_mode: Arc<std::sync::RwLock<bool>>,
 }
 
 impl ToolRegistry {
@@ -81,7 +86,20 @@ impl ToolRegistry {
     pub fn new() -> Self {
         Self {
             tools: HashMap::new(),
+            plan_mode: Arc::new(std::sync::RwLock::new(false)),
         }
+    }
+
+    /// Adopt the plan-mode handle owned by the full tool registry, so
+    /// `enter_plan_mode` / `exit_plan_mode` (which flip the source handle)
+    /// are visible to the loop's pre-dispatch gate.
+    pub fn set_plan_mode_handle(&mut self, handle: Arc<std::sync::RwLock<bool>>) {
+        self.plan_mode = handle;
+    }
+
+    /// `true` while the agent is in the read-only research phase.
+    pub fn plan_mode_active(&self) -> bool {
+        *self.plan_mode.read().unwrap_or_else(|p| p.into_inner())
     }
 
     /// Register a tool.
@@ -567,11 +585,84 @@ pub struct AgentCallbacks {
 // Error classification + backoff
 // ---------------------------------------------------------------------------
 
+/// Extract a provider-suggested wait from an LLM error text.
+///
+/// Providers surface the HTTP `Retry-After` header (or prose like "try
+/// again in 30 seconds") inside error strings; honoring it beats local
+/// exponential backoff because the provider knows its own load. Values
+/// over 5 minutes are ignored (treated as absent) — a multi-minute
+/// provider-mandated wait is better surfaced as an error than silently
+/// parking the loop.
+///
+/// Only durations in a retry context ("retry|after|again|wait" within the
+/// preceding few words) are considered, so unrelated numbers ("after 3
+/// seconds of idle") don't hijack the backoff.
+pub fn parse_retry_after_ms(err: &str) -> Option<u64> {
+    const CAP_MS: u64 = 300_000;
+    let lower = err.to_lowercase();
+    let words: Vec<&str> = lower
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .collect();
+
+    let mut best: Option<u64> = None;
+    let consider = |ms: u64, best: &mut Option<u64>| {
+        // Over-cap waits are ignored entirely (treated as absent): parking
+        // the loop for minutes on a provider hint is worse than surfacing
+        // the error and letting the caller decide.
+        if ms > 0 && ms <= CAP_MS {
+            *best = Some(best.map_or(ms, |b| b.max(ms)));
+        }
+    };
+
+    for i in 0..words.len() {
+        let Ok(n) = words[i].parse::<f64>() else {
+            continue;
+        };
+        // Unit after the number.
+        let ms = match words.get(i + 1).copied().unwrap_or("") {
+            "s" | "sec" | "secs" | "second" | "seconds" => (n * 1000.0) as u64,
+            "m" | "min" | "mins" | "minute" | "minutes" => (n * 60_000.0) as u64,
+            "ms" | "millisecond" | "milliseconds" => n as u64,
+            // Bare number directly after "retry after"/"retry-after": the
+            // HTTP header convention is seconds.
+            "" | "please" | "to" | "and" | "later" => {
+                let prev_is_retry_after = i >= 1
+                    && (words[i - 1] == "after"
+                        && i >= 2
+                        && words[i - 2] == "retry"
+                        || words[i - 1] == "retryafter");
+                if !prev_is_retry_after {
+                    continue;
+                }
+                (n * 1000.0) as u64
+            }
+            _ => continue,
+        };
+        // Retry context within the preceding few words. Bare "after" is NOT
+        // enough ("timed out after 30 seconds" is a failure report, not a
+        // wait suggestion) — a retry verb must be present.
+        let context_ok = words[..i]
+            .iter()
+            .rev()
+            .take(4)
+            .any(|w| matches!(*w, "retry" | "retryafter" | "again" | "wait"));
+        if context_ok {
+            consider(ms, &mut best);
+        }
+    }
+    best
+}
+
 /// Classify an API error for retry/failover decisions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ErrorClass {
     Retryable,
     RateLimit,
+    /// Terminal quota / billing / plan exhaustion. Never retried — even
+    /// when the provider wraps it in HTTP 429 — because the outcome
+    /// cannot change until the budget resets or the plan is upgraded.
+    Quota,
     ContextOverflow,
     Auth,
     Fatal,
@@ -670,11 +761,36 @@ fn strip_prompt_mirror(s: &str) -> String {
 pub fn classify_error(err: &str) -> ErrorClass {
     let lower = err.to_lowercase();
 
+    // Terminal quota / billing / plan errors — checked FIRST so they win
+    // over the generic rate-limit phrases below. Providers commonly wrap
+    // these in HTTP 429, but retrying cannot change the outcome: the
+    // budget resets on a daily/monthly boundary or requires a plan change.
+    // Retrying only burns the retry budget and adds up to ~90s of backoff
+    // before the (inevitable) failure surfaces. Policy mirrors ZCode's
+    // BigModel business-error table: transient load retries, quota/plan/
+    // permission does not — even when carried by 429.
+    if lower.contains("insufficient_quota")
+        || lower.contains("exceeded your current quota")
+        || lower.contains("quota exhausted")
+        || lower.contains("quota exceeded")
+        || lower.contains("billing")
+        || lower.contains("payment required")
+        || lower.contains("usage limit")
+        || lower.contains("daily limit")
+        || lower.contains("monthly limit")
+        || lower.contains("weekly limit")
+        || lower.contains("insufficient credits")
+        || lower.contains("credit balance")
+        || lower.contains("plan expired")
+        || lower.contains("subscription expired")
+    {
+        return ErrorClass::Quota;
+    }
+
     // Rate limiting — exact status or well-known phrases
     if lower.contains("rate limit")
         || lower.contains("rate_limit")
         || lower.contains("too many requests")
-        || lower.contains("quota exceeded")
     {
         return ErrorClass::RateLimit;
     }
@@ -946,6 +1062,50 @@ mod tests {
         let out = redact_body_for_log(body);
         assert!(!out.contains("secret system prompt"));
         assert!(out.contains("redacted"));
+    }
+
+    #[test]
+    fn quota_exhaustion_is_terminal_not_rate_limit() {
+        // Providers wrap quota exhaustion in HTTP 429 — the classifier
+        // must still see through to the terminal nature.
+        assert_eq!(
+            classify_error(
+                "429 You exceeded your current quota, please check your plan and billing details"
+            ),
+            ErrorClass::Quota
+        );
+        assert_eq!(
+            classify_error("429 insufficient_quota: daily usage limit reached"),
+            ErrorClass::Quota
+        );
+        assert_eq!(
+            classify_error("402 payment required — plan expired"),
+            ErrorClass::Quota
+        );
+    }
+
+    #[test]
+    fn transient_rate_limit_still_retries() {
+        // Concurrency/rate phrasing without quota vocabulary stays retryable.
+        assert_eq!(
+            classify_error("429 too many requests, slow down"),
+            ErrorClass::RateLimit
+        );
+        assert_eq!(
+            classify_error("rate limit exceeded, try again shortly"),
+            ErrorClass::RateLimit
+        );
+    }
+
+    #[test]
+    fn infra_denials_are_not_execution_errors() {
+        use hermix_core::ToolResult;
+        assert!(ToolResult::denied("id", "x", "timed_out").is_infra_denial());
+        assert!(ToolResult::denied("id", "x", "channel_closed").is_infra_denial());
+        // Deliberate signals keep counting toward convergence.
+        assert!(!ToolResult::denied("id", "x", "user_denied").is_infra_denial());
+        assert!(!ToolResult::denied("id", "x", "policy").is_infra_denial());
+        assert!(!ToolResult::err("id", "boom").is_infra_denial());
     }
 
     #[test]

@@ -36,14 +36,18 @@ impl AgentLoop {
         count
     }
 
-    /// Pre-LLM-call drain: inject steer into the last tool result if possible; otherwise restash.
+    /// Pre-LLM-call drain: land the steer as a user message (Codex-style),
+    /// then sync the crash spool (buffer empty ⇒ spool file removed).
     pub(crate) fn pre_api_apply_pending_steer(&self, ctx: &mut ContextManager) {
-        crate::steer::pre_api_apply_pending_steer(&self.pending_steer, ctx)
+        crate::steer::pre_api_apply_pending_steer(&self.pending_steer, ctx);
+        self.persist_pending_steer();
     }
 
-    /// Post-tool-call apply: inject steer into the last tool result if pending.
+    /// Post-tool-call drain: same rule; drains the shared buffer so a steer
+    /// is injected exactly once.
     pub(crate) fn post_tool_apply_pending_steer(&self, ctx: &mut ContextManager) {
-        crate::steer::post_tool_apply_pending_steer(&self.pending_steer, ctx)
+        crate::steer::post_tool_apply_pending_steer(&self.pending_steer, ctx);
+        self.persist_pending_steer();
     }
 
     // -- Plugin hook helpers ------------------------------------------------

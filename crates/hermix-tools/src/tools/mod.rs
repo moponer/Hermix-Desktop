@@ -23,6 +23,8 @@ pub mod delegation;
 pub mod get_subagent_result;
 pub mod disk_cleanup;
 pub mod file;
+pub mod file_read_state;
+pub mod plan_mode;
 pub mod gpt_image;
 pub mod hermix_achievements;
 pub mod homeassistant;
@@ -47,10 +49,11 @@ pub mod storage_clean;
 // pub mod slack; // Untracked, broken - removed until fixed
 pub mod terminal;
 pub mod todo;
-pub mod task_manager;
+
 pub mod task_tracker;
 pub mod approval_tokens;
 pub mod file_converter;
+pub mod html_to_docx;
 pub mod office_export;
 pub mod tool_search;
 pub mod tool_chain;
@@ -104,7 +107,12 @@ pub fn register_all(
     cronjob::register(registry);
     workflow::register(registry);
     todo::register(registry, todo_event_tx);
-    task_manager::register(registry);
+    // Plan mode（ZCode Enter/ExitPlanMode analog）：只读调研阶段，
+    // 写/执行类工具在 do_tool_turn 派发前被拒绝。
+    plan_mode::register(registry);
+    // task_manager 已移除（2026-10-18 能力对齐审计）：内存态 Vec 无持久化
+    // （重启即失的残品），与 todo/task_tracker/kanban 三套任务机制重叠。
+    // 依据见 docs/notes/proposed/architecture/2026-10-18-capability-alignment-audit.md。
     approval_tokens::register(registry);
     file_converter::register(registry);
     tts::register(registry);
@@ -150,6 +158,9 @@ pub fn register_all(
     // office_export: 二进制 Office 导出（2026-10-17 决策笔记批次 1，XLSX 先行）。
     // 纯 Rust OOXML 写入——docx/pptx 批次未落地前 format 参数显式拒绝。
     office_export::register(registry);
+    // html_to_docx: HTML→Word 转换（2026-10-17 稳定性与组装优化方案 P3），
+    // 补齐"模型输出 HTML 但要交付 .docx"的转换缺口，纯 Rust 零新依赖。
+    html_to_docx::register(registry);
     //P1.8-style : `markitdown` converts arbitrary local documents
     // (PDF/PPTX/DOCX/XLSX/HTML/EPUB/CSV/JSON/XML/MSG/ZIP/image) into
     // compact LLM-friendly Markdown — the token-saving file reader.

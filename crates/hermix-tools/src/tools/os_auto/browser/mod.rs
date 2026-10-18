@@ -1,6 +1,6 @@
 //! Browser automation — CDP over the **system Edge**, in-house.
 //!
-//! Six tools, one browser session **per conversation** (keyed by `_session_id`),
+//! Eight tools, one browser session **per conversation** (keyed by `_session_id`),
 //! one essential-floor toolset. Each session owns
 //! the pieces that make a browser session safe to leave running:
 //!
@@ -24,6 +24,8 @@
 pub mod a11y;
 pub mod job;
 pub mod launch;
+/// Embedded WebView2 panel bridge (port registry + CDP discovery).
+pub mod panel;
 pub mod screencast;
 
 use std::collections::HashMap;
@@ -77,14 +79,16 @@ enum Op {
     Type,
     Screenshot,
     Close,
+    Wait,
+    Scroll,
 }
 
-const TOOLS: [(&str, Op, RiskLevel, &str); 6] = [
+const TOOLS: [(&str, Op, RiskLevel, &str); 8] = [
     (
         "browser_navigate",
         Op::Navigate,
         RiskLevel::Caution,
-        "Open a URL in the automation browser (a throwaway Edge profile, never your own). Returns the final URL and title; call browser_snapshot next to see the page.",
+        "Open a URL in the automation browser (a throwaway Edge profile, never your own). Returns the final URL and title; call browser_snapshot next to see the page. For SPAs that render after load, follow with browser_wait.",
     ),
     (
         "browser_snapshot",
@@ -116,9 +120,21 @@ const TOOLS: [(&str, Op, RiskLevel, &str); 6] = [
         RiskLevel::Safe,
         "Close the automation browser and delete its throwaway profile. The next browser tool call starts a fresh one.",
     ),
+    (
+        "browser_wait",
+        Op::Wait,
+        RiskLevel::Safe,
+        "Block until a CSS selector exists in the page (polls every 200ms). Use after browser_navigate on SPAs / lazy-loaded pages before calling browser_snapshot, so you don't snapshot a half-rendered page.",
+    ),
+    (
+        "browser_scroll",
+        Op::Scroll,
+        RiskLevel::Safe,
+        "Scroll the page. Give exactly one of: `by` (pixels, negative scrolls up), `target` (\"top\" or \"bottom\"), or `ref`/`selector` to scroll an element into view. Lazy-loaded lists need scrolling before their content enters the snapshot.",
+    ),
 ];
 
-/// Register the six browser tools under the `browser` toolset.
+/// Register the eight browser tools under the `browser` toolset.
 pub fn register(registry: &ToolRegistry) {
     for (name, op, risk, desc) in TOOLS {
         let handler = Arc::new(BrowserHandler { op });
@@ -159,8 +175,14 @@ struct Session {
     _handler_task: JoinHandle<()>,
     /// Holds the Job Object handle. Dropping it kills the Edge tree — that is
     /// what makes "no orphaned browser" a kernel guarantee instead of a
-    /// best-effort cleanup.
-    _launched: launch::LaunchedBrowser,
+    /// best-effort cleanup. `None` when the session is attached to the
+    /// embedded UI panel (the panel's lifetime belongs to the window, not to
+    /// us — closing it is the UI's job).
+    _launched: Option<launch::LaunchedBrowser>,
+    /// `true` when this session drives the embedded UI panel. Such a session
+    /// must be rebuilt as soon as the panel closes — its `Page` belongs to a
+    /// destroyed webview and every later command would fail.
+    attached_to_panel: bool,
     /// `ref` → DOM node, replaced wholesale by every snapshot.
     refs: HashMap<String, BackendNodeId>,
     snapshots: u64,
@@ -182,11 +204,15 @@ impl Drop for Session {
         // same key starts a fresh one. Chrome-side pushing dies with the page
         // on its own — this is the synchronous bookkeeping half only.
         screencast::shutdown(&self.key);
-        let dir = self._launched.user_data_dir.clone();
-        // A throwaway profile is a few MB of cache; leaving thousands of them
-        // behind would be worse than the few ms this can cost.
-        if let Err(e) = std::fs::remove_dir_all(&dir) {
-            tracing::debug!(path = %dir.display(), error = %e, "浏览器 profile 目录清理失败（将留待下次启动）");
+        // Panel-attached sessions own no profile: the WebView2 panel lives in
+        // the app's own user-data folder and is closed by the UI.
+        if let Some(launched) = self._launched.as_ref() {
+            let dir = launched.user_data_dir.clone();
+            // A throwaway profile is a few MB of cache; leaving thousands of them
+            // behind would be worse than the few ms this can cost.
+            if let Err(e) = std::fs::remove_dir_all(&dir) {
+                tracing::debug!(path = %dir.display(), error = %e, "浏览器 profile 目录清理失败（将留待下次启动）");
+            }
         }
     }
 }
@@ -231,6 +257,11 @@ async fn ensure(key: &str) -> Result<MutexGuard<'static, HashMap<String, Session
             true
         }
     });
+    // 面板关窗后，附着在面板上的页面已随 webview 销毁——这类会话必须
+    // 丢弃重建，否则后续每条 CDP 命令都会失败（用户看到的是"工具坏了"）。
+    if panel::current().is_none() {
+        guard.retain(|_, s| !s.attached_to_panel);
+    }
     if let Some(s) = guard.get_mut(key) {
         s.last_used = std::time::Instant::now();
         return Ok(guard);
@@ -240,6 +271,81 @@ async fn ensure(key: &str) -> Result<MutexGuard<'static, HashMap<String, Session
             "浏览器并发会话已达上限（{MAX_SESSIONS}），请先让部分对话调用 browser_close 释放"
         )));
     }
+    // Panel-first: if the desktop UI registered an embedded browser panel
+    // (WebView2 + remote debugging), drive THAT page — the user watches the
+    // automation inside the app instead of a stray Edge window. Any failure
+    // here degrades to the standalone Edge path below.
+    if let Some(state) = panel::current() {
+        match panel::discover_ws_url(state.port).await {
+            Ok(ws) => match Browser::connect(ws.clone()).await {
+                Ok((browser, mut handler)) => {
+                    let handler_task = tokio::spawn(async move {
+                        use futures::StreamExt;
+                        while handler.next().await.is_some() {}
+                    });
+                    // Prefer the panel's own tab; fall back to a fresh one.
+                    let page = match browser.pages().await {
+                        Ok(mut pages) => match pages.pop() {
+                            Some(page) => page,
+                            None => browser
+                                .new_page("about:blank")
+                                .await
+                                .map_err(|e| {
+                                    ToolError::ExecutionFailed(format!("面板新建标签页失败: {e}"))
+                                })?,
+                        },
+                        Err(e) => {
+                            tracing::warn!(error = %e, "读取面板标签页失败，新建一个");
+                            browser.new_page("about:blank").await.map_err(|e| {
+                                ToolError::ExecutionFailed(format!("面板新建标签页失败: {e}"))
+                            })?
+                        }
+                    };
+                    if let Err(e) = set_download_dir(&page).await {
+                        tracing::warn!(error = %e, "设置面板下载目录失败（保持默认）");
+                    }
+                    if let Err(e) = screencast::start(key, &page).await {
+                        tracing::warn!(error = %e, "面板 screencast 启动失败（工具不受影响）");
+                    }
+                    tracing::info!(
+                        port = state.port,
+                        ws = %ws,
+                        session = %key,
+                        "attached to embedded browser panel"
+                    );
+                    guard.insert(
+                        key.to_string(),
+                        Session {
+                            key: key.to_string(),
+                            browser,
+                            page,
+                            _handler_task: handler_task,
+                            _launched: None,
+                            attached_to_panel: true,
+                            refs: HashMap::new(),
+                            snapshots: 0,
+                            last_used: std::time::Instant::now(),
+                        },
+                    );
+                    return Ok(guard);
+                }
+                Err(e) => tracing::warn!(
+                    error = %e,
+                    port = state.port,
+                    "面板 CDP 连接失败，回退到独立 Edge"
+                ),
+            },
+            Err(e) => {
+                // Stale registry: the user closed the panel via the window's
+                // X button, which does not run our close command. Drop the
+                // panel-bound sessions so later calls do not keep issuing
+                // commands to a destroyed webview.
+                guard.retain(|_, s| !s.attached_to_panel);
+                tracing::warn!(error = %e, "面板调试端点不可达，回退到独立 Edge");
+            }
+        }
+    }
+
     let launched = launch::launch()
         .await
         .map_err(ToolError::ExecutionFailed)?;
@@ -276,7 +382,8 @@ async fn ensure(key: &str) -> Result<MutexGuard<'static, HashMap<String, Session
             browser,
             page,
             _handler_task: handler_task,
-            _launched: launched,
+            _launched: Some(launched),
+            attached_to_panel: false,
             refs: HashMap::new(),
             snapshots: 0,
             last_used: std::time::Instant::now(),
@@ -484,6 +591,23 @@ fn screenshot_path() -> PathBuf {
         .join(format!("shot-{stamp}.png"))
 }
 
+/// Current vertical scroll position and remaining scrollable height,
+/// reported back after a scroll so the model knows whether the page has
+/// more below the fold. Best-effort: failures read as `(0, 0)`.
+async fn scroll_position(page: &Page) -> (i64, i64) {
+    let expr = "JSON.stringify({y: window.scrollY, \
+                total: document.documentElement.scrollHeight - window.innerHeight})";
+    match page.evaluate(expr).await {
+        Ok(res) => {
+            let v: Value = res.into_value().unwrap_or(Value::Null);
+            let y = v.get("y").and_then(Value::as_i64).unwrap_or(0);
+            let total = v.get("total").and_then(Value::as_i64).unwrap_or(0);
+            (y, total.max(y))
+        }
+        Err(_) => (0, 0),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Handler
 // ---------------------------------------------------------------------------
@@ -646,6 +770,97 @@ impl ToolHandler for BrowserHandler {
                     None => Ok("本对话没有正在运行的自动化浏览器，无需关闭。".to_string()),
                 }
             }
+            Op::Wait => {
+                let selector = params
+                    .get("selector")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| ToolError::InvalidParams("缺少必填参数 `selector`".into()))?
+                    .to_string();
+                let timeout_ms = opt_usize(&params, "timeout_ms", 5_000, 30_000) as u64;
+                let deadline = std::time::Instant::now() + Duration::from_millis(timeout_ms);
+
+                let mut guard = ensure(&session_key).await?;
+                let session = guard.get_mut(&session_key).expect("ensure() leaves a session");
+                loop {
+                    if session.page.find_element(&selector).await.is_ok() {
+                        return Ok(format!("`{selector}` 已出现，可以继续操作。"));
+                    }
+                    if std::time::Instant::now() >= deadline {
+                        return Err(ToolError::Timeout(format!(
+                            "等待 `{selector}` 出现超时（{timeout_ms}ms）— 页面可能渲染失败或选择器有误"
+                        )));
+                    }
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                }
+            }
+            Op::Scroll => {
+                let provided = [
+                    params.get("by").is_some(),
+                    params.get("target").is_some(),
+                    params.get("ref").is_some() || params.get("selector").is_some(),
+                ];
+                if provided.iter().filter(|p| **p).count() != 1 {
+                    return Err(ToolError::InvalidParams(
+                        "browser_scroll 需要且只需要 `by` / `target` / (`ref` 或 `selector`) 之一".into(),
+                    ));
+                }
+                let js: String = if let Some(n) = params.get("by").and_then(Value::as_i64) {
+                    format!("window.scrollBy(0, {n}); 'ok'")
+                } else if let Some(t) = opt_str(&params, "target") {
+                    match t.as_str() {
+                        "top" => "window.scrollTo(0, 0); 'ok'".to_string(),
+                        "bottom" => "window.scrollTo(0, document.body.scrollHeight); 'ok'".to_string(),
+                        other => {
+                            return Err(ToolError::InvalidParams(format!(
+                                "`target` 只接受 top/bottom，收到 `{other}`"
+                            )));
+                        }
+                    }
+                } else {
+                    // scrollIntoView — element refs go through the same
+                    // ResolveNode path the click/type helpers use.
+                    String::new() // filled below
+                };
+
+                let mut guard = ensure(&session_key).await?;
+                let session = guard.get_mut(&session_key).expect("ensure() leaves a session");
+                if !js.is_empty() {
+                    session
+                        .page
+                        .evaluate(js)
+                        .await
+                        .map_err(|e| ToolError::ExecutionFailed(format!("滚动失败: {e}")))?;
+                } else if let Some(reference) = opt_str(&params, "ref") {
+                    let id = *resolve_ref(&session.refs, &reference)?;
+                    call_on(&session.page, id, "this.scrollIntoView({block: 'center'});").await?;
+                } else {
+                    let selector = opt_str(&params, "selector").expect("validated above");
+                    // JSON-encode the selector so it is a safe JS string
+                    // literal regardless of quotes it contains.
+                    let lit = serde_json::to_string(&selector)
+                        .map_err(|e| ToolError::ExecutionFailed(format!("选择器编码失败: {e}")))?;
+                    let js = format!(
+                        "(() => {{ const el = document.querySelector({lit}); \
+                         if (!el) return 'missing'; \
+                         el.scrollIntoView({{block: 'center'}}); return 'ok'; }})()"
+                    );
+                    let result = session
+                        .page
+                        .evaluate(js)
+                        .await
+                        .map_err(|e| ToolError::ExecutionFailed(format!("滚动失败: {e}")))?;
+                    let v: Value = result.into_value().unwrap_or(Value::Null);
+                    if v.as_str() == Some("missing") {
+                        return Err(ToolError::InvalidParams(format!(
+                            "找不到 `{selector}`（元素未渲染或选择器有误）"
+                        )));
+                    }
+                }
+                let (y, total) = scroll_position(&session.page).await;
+                Ok(format!(
+                    "已滚动。当前纵向位置 {y} / {total} 像素。下方内容已进入视口后可重新 browser_snapshot。"
+                ))
+            }
         };
         Ok(truncate_chars(&out?, RESULT_CAP))
     }
@@ -728,6 +943,26 @@ impl ToolHandler for BrowserHandler {
                     vec![],
                 ),
                 Op::Close => ("browser_close", TOOLS[5].3, IndexMap::new(), vec![]),
+            Op::Wait => (
+                "browser_wait",
+                TOOLS[6].3,
+                IndexMap::from([
+                    ("selector".to_string(), json!({"type": "string", "description": "CSS selector to wait for."})),
+                    ("timeout_ms".to_string(), json!({"type": "integer", "minimum": 500, "maximum": 30000, "default": 5000})),
+                ]),
+                vec!["selector".into()],
+            ),
+            Op::Scroll => (
+                "browser_scroll",
+                TOOLS[7].3,
+                IndexMap::from([
+                    ("by".to_string(), json!({"type": "integer", "description": "Pixels to scroll vertically; negative scrolls up."})),
+                    ("target".to_string(), json!({"type": "string", "enum": ["top", "bottom"], "description": "Scroll to page top or bottom."})),
+                    ("ref".to_string(), reference("preferred")),
+                    ("selector".to_string(), json!({"type": "string", "description": "CSS selector fallback; give exactly one of by/target/ref/selector."})),
+                ]),
+                vec![],
+            ),
             };
         tool_schema(name, desc, JsonSchema::object(props, required))
     }
@@ -831,7 +1066,8 @@ mod tests {
     fn reading_tools_are_safe_and_acting_tools_are_caution() {
         for (name, _, risk, _) in TOOLS {
             let expected = match name {
-                "browser_snapshot" | "browser_screenshot" | "browser_close" => RiskLevel::Safe,
+                "browser_snapshot" | "browser_screenshot" | "browser_close" | "browser_wait"
+                | "browser_scroll" => RiskLevel::Safe,
                 _ => RiskLevel::Caution,
             };
             assert_eq!(risk, expected, "{name}");

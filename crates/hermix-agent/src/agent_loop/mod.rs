@@ -135,6 +135,12 @@ pub struct AgentLoop {
     pub(crate) sub_agent_orchestrator: Option<Arc<crate::sub_agent_orchestrator::SubAgentOrchestrator>>,
     /// Mid-run `/steer` buffer (Python `AIAgent._pending_steer`).
     pending_steer: Arc<Mutex<Option<String>>>,
+    /// Last emitted [`LoopPhase`], packed as `u8` (`0` = none yet).
+    /// Used by `notify_phase` to flag illegal transitions — the phase
+    /// sequence is a contract (`PostLlmCall → ToolValidation → …`), and a
+    /// silent skip is how a bad branch turns into "the turn just stopped".
+    /// `AtomicU8` keeps `notify_phase` `&self` and lock-free.
+    pub(crate) last_loop_phase: std::sync::atomic::AtomicU8,
     /// Optional tool schema router. When set, the LLM only sees the routed
     /// subset of `tool_registry` ( H1 — token saving, see
     /// `docs/PROPOSAL_BAILONGMA_INSPIRED.md` §3). When `None`, the full

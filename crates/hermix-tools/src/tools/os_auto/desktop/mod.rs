@@ -30,7 +30,7 @@ const RESULT_CAP: usize = 8_000;
 /// mistake, and obeying it would cost more context than the whole run.
 const MAX_DEPTH: u32 = 32;
 const MAX_NODES: u32 = 5_000;
-const MAX_CHARS: u32 = 20_000;
+const MAX_CHARS: u32 = crate::result_budget::DESKTOP_SNAPSHOT_CHARS as u32;
 
 #[derive(Clone, Copy)]
 enum Op {

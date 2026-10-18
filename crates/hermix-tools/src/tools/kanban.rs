@@ -25,7 +25,8 @@ pub fn register(registry: &ToolRegistry) {
         Arc::new(|| true),
         vec![],
         true,
-        "Create boards, add/move/list cards",
+        "Persistent cross-session Kanban board (boards/columns/cards, stored in kanban.json). \
+         BOUNDARY — this is the USER's visual planning surface, not the agent's execution bookkeeping: for what to do next in this conversation use `todo`; for durable task records with artifacts use `task_create`.",
         "📌",
         None,
         RiskLevel::Safe,

@@ -27,6 +27,8 @@ pub mod dispatch;
 pub mod essential;
 pub mod register_builtins;
 pub mod registry;
+/// Central per-tool result budgets (declarative, ZCode resultBudget analog).
+pub mod result_budget;
 // `sandbox` module removed — 491 lines of dead code with zero
 // external callers and zero integration into `ApprovalEngine`. The full
 // sandbox/approval wiring will be rebuilt the next time a tool actually

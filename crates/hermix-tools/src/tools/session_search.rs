@@ -119,7 +119,11 @@ impl ToolHandler for SessionSearchHandler {
 
         tool_schema(
             "session_search",
-            "Search long-term memory of past conversations, or browse recent sessions when query is omitted.",
+            "Search long-term memory of past conversations, or browse recent sessions when query is omitted.\n\n\
+             BOUNDARY (three memory layers, pick one): `session_search` = READ-ONLY recall of \
+             what was said in earlier sessions (\"we discussed X last week\") — it never writes; \
+             `memory` = durable facts you want injected into every turn; `daily_memory` = this \
+             task's working log. Use this when the user references the past, not to store new facts.",
             JsonSchema::object(props, vec![]),
         )
     }

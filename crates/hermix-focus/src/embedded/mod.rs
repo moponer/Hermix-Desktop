@@ -1134,7 +1134,7 @@ mod tests {
     #[tokio::test]
     async fn p17_has_recent_turn_frame_matches_exact_user_text() {
         let b = EmbeddedMemoryBackend::open_in_memory().unwrap();
-        b.record_turn("帮我修登录", "好", "s1", 1);
+        let _ = b.record_turn("帮我修登录", "好", "s1", 1);
         assert!(b.has_recent_turn_frame("帮我修登录", 10).unwrap());
         assert!(!b.has_recent_turn_frame("别的文本", 10).unwrap());
     }
@@ -1144,9 +1144,9 @@ mod tests {
     #[tokio::test]
     async fn p17_decay_stale_frames_respects_pin_and_source() {
         let b = EmbeddedMemoryBackend::open_in_memory().unwrap();
-        b.record_turn("旧对话", "旧回复", "s1", 1);
-        b.record_turn("置顶旧对话", "留着", "s1", 2);
-        b.record_turn("新对话", "新回复", "s1", 3);
+        let _ = b.record_turn("旧对话", "旧回复", "s1", 1);
+        let _ = b.record_turn("置顶旧对话", "留着", "s1", 2);
+        let _ = b.record_turn("新对话", "新回复", "s1", 3);
         let old = (chrono::Utc::now() - chrono::Duration::days(30)).to_rfc3339();
         {
             let conn = b.conn.lock();

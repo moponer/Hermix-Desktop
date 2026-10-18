@@ -114,7 +114,8 @@ pub fn register(registry: &ToolRegistry, backend: Arc<dyn TaskTrackerBackend>) {
         Arc::new(|| true),
         vec![],
         false,
-        "Create a new task in the orchestration engine. Use this to track work items.",
+        "Create a DURABLE task record in the orchestration engine (persisted, attributable, supports subtasks and deliverable artifacts). \
+         BOUNDARY — use this when the work must outlive the conversation or be reported to the user afterwards; use `todo` for the in-session execution checklist; use `kanban` only for the user's visual board.",
         "📋",
         None,
         RiskLevel::Safe,

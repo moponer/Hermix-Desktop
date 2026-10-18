@@ -46,6 +46,36 @@ use crate::agent_loop::AgentLoop;
 /// enough to avoid overwhelming external services.
 const MAX_CONCURRENT_TOOLS: usize = 5;
 
+/// Meta tools that stay callable even when an activated skill declares an
+/// `allowed-tools` restriction — the model must always be able to inspect
+/// skills, manage todos, ask the user, and collect background sub-agent
+/// results regardless of the active skill's scope.
+pub(crate) const SKILL_SCOPE_ALWAYS_ALLOWED: &[&str] = &[
+    "skills_list",
+    "skill_view",
+    "skill_manage",
+    "todo",
+    "clarify",
+    "get_subagent_result",
+];
+
+/// `true` when `name` may run under the current skill scope.
+///
+/// `None` or an empty set = unrestricted. Enforcement is **subtract-only**
+/// (ZCode semantics): an activated skill's `allowed-tools` can narrow what
+/// this turn may call, never expand beyond the session whitelist — that
+/// whitelist was already applied when the registry was built.
+pub(crate) fn tool_allowed_by_active_skill(
+    allowed: Option<&std::collections::HashSet<String>>,
+    name: &str,
+) -> bool {
+    let Some(set) = allowed else { return true };
+    if set.is_empty() {
+        return true;
+    }
+    set.contains(name) || SKILL_SCOPE_ALWAYS_ALLOWED.contains(&name)
+}
+
 impl AgentLoop {
     /// Execute a batch of tool calls in parallel using a JoinSet.
     #[tracing::instrument(
@@ -157,6 +187,43 @@ impl AgentLoop {
         let mut orchestrated: Vec<ToolResult> = Vec::new();
         if let Some(orch) = orchestrator.as_ref() {
             for tc in tool_calls {
+                // `stop_subagent` rides the same interception path: the
+                // orchestrator owns the abort handle, the registered handler
+                // is only a "no orchestrator attached" fallback.
+                if tc.function.name == "stop_subagent" {
+                    if let Some(Err(denial)) = pre_dispatch.get(&tc.id) {
+                        orchestrated.push(ToolResult::denied(
+                            &tc.id,
+                            denial.reason.clone(),
+                            denial.kind.as_str(),
+                        ));
+                        continue;
+                    }
+                    let parsed: Value = serde_json::from_str(&tc.function.arguments)
+                        .unwrap_or(Value::Null);
+                    let Some(id) = parsed.get("sub_agent_id").and_then(|v| v.as_str()) else {
+                        orchestrated.push(ToolResult::err(
+                            &tc.id,
+                            "stop_subagent requires 'sub_agent_id'.",
+                        ));
+                        continue;
+                    };
+                    let stopped = orch.stop_background(id).await;
+                    orchestrated.push(ToolResult::ok(
+                        &tc.id,
+                        serde_json::json!({
+                            "sub_agent_id": id,
+                            "status": if stopped { "cancelled" } else { "not_running" },
+                            "note": if stopped {
+                                "后台子代理已停止，lineage 已标记为 cancelled。"
+                            } else {
+                                "该 id 当前没有在运行（可能已完成或已停止）。"
+                            },
+                        })
+                        .to_string(),
+                    ));
+                    continue;
+                }
                 if tc.function.name != "delegate_task" {
                     continue;
                 }
@@ -169,19 +236,12 @@ impl AgentLoop {
                     ));
                     continue;
                 }
-                //push a focus-stack frame BEFORE delegating.
-                // We pass an empty sub_agent_id — `note_delegation_end`
-                // matches the topmost Delegation frame when the id is
-                // empty (see its docstring). This decouples push from
-                // the orchestrator's internal UUID generation.
+                // Focus-stack frame is pushed AFTER every validation gate
+                // (depth / toolset blocklist / empty task / unknown profile):
+                // those `continue` paths never emit a terminal sub_agent
+                // event, so a frame pushed earlier would never be popped and
+                // the stack would grow unbounded across failed delegations.
                 let parsed_for_focus = serde_json::from_str::<Value>(&tc.function.arguments).ok();
-                let task_for_focus = parsed_for_focus
-                    .as_ref()
-                    .and_then(|v| v.get("task"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                self.note_delegation_start(&task_for_focus, "");
                 if current_delegate_depth >= max_delegate_depth {
                     orchestrated.push(ToolResult::err(
                         &tc.id,
@@ -244,16 +304,72 @@ impl AgentLoop {
                     ));
                     continue;
                 }
+                // Declarative profile (ZCode subagent-markdown analog):
+                // `agent: "explore"` loads <home>/agents/explore.md and
+                // applies its role (read-only whitelist), turn budget, tool
+                // hints and prompt body. Unknown name → clear error instead
+                // of a silent plain delegation.
+                let mut profile_context_extra: Option<String> = None;
+                let mut profile_role: Option<crate::sub_agent_orchestrator::SubAgentRole> = None;
+                let mut profile_max_turns: Option<u32> = None;
+                let mut profile_tools: Option<String> = None;
+                let mut profile_background = false;
+                if let Some(agent_name) = parsed.get("agent").and_then(|v| v.as_str()) {
+                    let home = self.config.hermix_home.clone().unwrap_or_else(|| {
+                        hermix_config::paths::hermix_home().to_string_lossy().to_string()
+                    });
+                    let dir = crate::agent_profiles::profiles_dir(std::path::Path::new(&home));
+                    match crate::agent_profiles::find_profile(&dir, agent_name) {
+                        Some(profile) => {
+                            profile_role = Some(profile.role);
+                            profile_max_turns = profile.max_turns;
+                            profile_background = profile.background;
+                            // Declared tool list is a narrowing hint: the role
+                            // whitelist is still the enforcement, and the child
+                            // registry drops blocked names anyway.
+                            if let Some(tools) = profile.tools.as_ref() {
+                                profile_tools = Some(tools.join(","));
+                            }
+                            if !profile.body.trim().is_empty() {
+                                profile_context_extra = Some(profile.body.clone());
+                            }
+                        }
+                        None => {
+                            orchestrated.push(ToolResult::err(
+                                &tc.id,
+                                format!(
+                                    "未知子代理档案 `{agent_name}`（在 {} 下未找到同名 .md）。\
+                                     用 agent_profiles 目录里的名字，或省略 `agent` 参数走通用子代理。",
+                                    dir.display()
+                                ),
+                            ));
+                            continue;
+                        }
+                    }
+                }
+
+                // Profile body goes FIRST in the context so the role
+                // instructions frame whatever the caller added.
+                let mut req_context = parsed
+                    .get("context")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string);
+                if let Some(extra) = profile_context_extra {
+                    req_context = Some(match req_context {
+                        Some(caller) => format!("{extra}\n\n{caller}"),
+                        None => extra,
+                    });
+                }
+
+                self.note_delegation_start(&task, "");
                 let req = crate::sub_agent_orchestrator::SubAgentRequest {
                     task,
-                    context: parsed
-                        .get("context")
-                        .and_then(|v| v.as_str())
-                        .map(str::to_string),
+                    context: req_context,
                     toolset: parsed
                         .get("toolset")
                         .and_then(|v| v.as_str())
-                        .map(str::to_string),
+                        .map(str::to_string)
+                        .or(profile_tools),
                     model: parsed
                         .get("model")
                         .and_then(|v| v.as_str())
@@ -264,7 +380,8 @@ impl AgentLoop {
                     max_iterations: parsed
                         .get("max_iterations")
                         .and_then(|v| v.as_u64())
-                        .map(|v| v as u32),
+                        .map(|v| v as u32)
+                        .or(profile_max_turns),
                     //Parse role from args; default to General.
                     role: parsed
                         .get("role")
@@ -275,6 +392,9 @@ impl AgentLoop {
                             "general" => Some(crate::sub_agent_orchestrator::SubAgentRole::General),
                             _ => None,
                         })
+                        // A profile's role applies when the caller did not
+                        // override it (explicit `role` wins).
+                        .or(profile_role)
                         .unwrap_or_default(),
                     //Parse parent_task_id from args if present.
                     parent_task_id: parsed
@@ -302,6 +422,38 @@ impl AgentLoop {
                         .and_then(|v| v.as_str())
                         .map(str::to_string),
                 };
+                // Background delegation (`background: true`): return the
+                // sub-agent id immediately and let the child run detached.
+                // The parent keeps working and polls get_subagent_result.
+                // The focus-stack frame is popped by the terminal
+                // sub_agent_update event (phase "done"/"failed"), same as
+                // the synchronous path — nothing extra to clean up here.
+                if parsed
+                    .get("background")
+                    .and_then(|v| v.as_bool())
+                    // Profile default: `background: true` in the .md means
+                    // "prefer detached" unless the caller says otherwise.
+                    .unwrap_or(profile_background)
+                {
+                    match orch.spawn_background(req).await {
+                        Ok(id) => orchestrated.push(ToolResult::ok(
+                            &tc.id,
+                            serde_json::json!({
+                                "status": "spawned",
+                                "sub_agent_id": id,
+                                "background": true,
+                                "note": "Sub-agent is running in the background. Continue with other work and call get_subagent_result with this sub_agent_id to collect the result — do NOT wait in place.",
+                            })
+                            .to_string(),
+                        )),
+                        Err(e) => orchestrated.push(ToolResult::err(
+                            &tc.id,
+                            format!("spawn_background failed: {e}"),
+                        )),
+                    }
+                    continue;
+                }
+
                 // Orchestrator spawns execute_inner on its own tokio task
                 // (breaking async recursion) and WAITS for the child to
                 // finish — synchronous from the LLM's perspective. The
@@ -938,5 +1090,29 @@ mod split_limit_tests {
             "the model must be told the call never ran, got: {}",
             skipped[0].content
         );
+    }
+
+    #[test]
+    fn skill_scope_is_subtract_only_and_exempts_meta_tools() {
+        use std::collections::HashSet;
+        // No active restriction → everything allowed.
+        assert!(tool_allowed_by_active_skill(None, "terminal"));
+        // Empty declaration → treated as unrestricted (never brick the loop).
+        let empty: HashSet<String> = HashSet::new();
+        assert!(tool_allowed_by_active_skill(Some(&empty), "terminal"));
+
+        let scope: HashSet<String> = ["read_file", "patch"].iter().map(|s| s.to_string()).collect();
+        assert!(tool_allowed_by_active_skill(Some(&scope), "read_file"));
+        assert!(tool_allowed_by_active_skill(Some(&scope), "patch"));
+        // Outside the declaration → denied.
+        assert!(!tool_allowed_by_active_skill(Some(&scope), "terminal"));
+        assert!(!tool_allowed_by_active_skill(Some(&scope), "delegate_task"));
+        // Meta tools stay available regardless of scope.
+        for meta in SKILL_SCOPE_ALWAYS_ALLOWED {
+            assert!(
+                tool_allowed_by_active_skill(Some(&scope), meta),
+                "meta tool `{meta}` must never be scoped out"
+            );
+        }
     }
 }

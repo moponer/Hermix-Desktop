@@ -110,6 +110,31 @@ fn run_async_in_blocking_with_context(
 // ToolRegistry
 // ---------------------------------------------------------------------------
 
+/// Middle truncation (Codex-style, see codex-utils-output-truncation):
+/// keep head (60%) and tail (40%) of the char budget with an explicit
+/// removed-count marker — command summaries and final status usually live
+/// in the tail, which a pure head cut discards. Char-safe on CJK/emoji.
+fn truncate_middle_chars(output: &str, max_chars: usize) -> String {
+    const MIN_HEAD: usize = 200; // tiny budgets still get a usable head
+    let total = output.chars().count();
+    if total <= max_chars {
+        return output.to_string();
+    }
+    let head = if max_chars > MIN_HEAD * 2 {
+        (max_chars - 80) * 3 / 5
+    } else {
+        max_chars * 3 / 5
+    };
+    let tail = max_chars.saturating_sub(head).max(0);
+    let removed = total - head - tail;
+    let mut out: String = output.chars().take(head).collect();
+    out.push_str(&format!(
+        "\n\n[... truncated {removed} characters; head and tail preserved ...]\n\n"
+    ));
+    out.extend(output.chars().skip(total - tail));
+    out
+}
+
 /// Thread-safe registry of all available tools.
 pub struct ToolRegistryInner {
     /// Registered tools keyed by name.
@@ -133,6 +158,11 @@ pub struct ToolRegistryInner {
     pub terminal_approval_ctx: Arc<std::sync::Mutex<TerminalApprovalContext>>,
     /// Effect Sandwich 持久化钩子（P3）。`None` ⇒ 零开销跳过。
     pub effect_sink: Option<std::sync::Arc<dyn EffectSink>>,
+    /// Plan-mode flag (read-only research phase). `enter_plan_mode` /
+    /// `exit_plan_mode` flip it; `do_tool_turn` reads it to deny mutating
+    /// tools before dispatch. Shared via `Arc` so derived registries
+    /// (sub-agents) see the same mode.
+    pub plan_mode: Arc<std::sync::RwLock<bool>>,
 }
 
 /// Effect Sandwich 持久化钩子（P3，设计 §3.4）。
@@ -174,6 +204,7 @@ impl ToolRegistry {
                     TerminalApprovalContext::default(),
                 )),
                 effect_sink: None,
+                plan_mode: Arc::new(std::sync::RwLock::new(false)),
             })),
         }
     }
@@ -189,8 +220,30 @@ impl ToolRegistry {
                     TerminalApprovalContext::default(),
                 )),
                 effect_sink: None,
+                plan_mode: Arc::new(std::sync::RwLock::new(false)),
             })),
         }
+    }
+
+    /// Shared plan-mode handle — `plan_mode` tools flip it, the agent loop
+    /// reads it before dispatch.
+    pub fn plan_mode_handle(&self) -> Arc<std::sync::RwLock<bool>> {
+        self.inner
+            .read()
+            .expect("registry rwlock not poisoned")
+            .plan_mode
+            .clone()
+    }
+
+    /// `true` while the agent is in the read-only research phase.
+    pub fn plan_mode_active(&self) -> bool {
+        *self
+            .inner
+            .read()
+            .expect("registry rwlock not poisoned")
+            .plan_mode
+            .read()
+            .expect("plan_mode rwlock not poisoned")
     }
 
     /// Get a clone of the shared terminal-workspace handle. `register_builtin_tools`
@@ -482,18 +535,12 @@ impl ToolRegistry {
         match result {
             Ok(output) => {
                 if output.chars().count() > max_chars {
-                    // UTF-8 safe: `truncate_chars` slices on a
-                    // char boundary even when `max_chars` lands in
-                    // the middle of a multi-byte code point. Earlier
-                    // versions used `&output[..max_chars]` (byte
-                    // index) which panicked on every CJK / emoji
-                    // output over the limit.
-                    let head = truncate_chars(&output, max_chars);
-                    let removed = output.chars().count() - max_chars;
-                    Self::tool_result(&format!(
-                        "{}\n\n[... truncated {} characters ...]",
-                        head, removed
-                    ))
+                    // UTF-8 safe middle truncation (Codex-style, see
+                    // codex-utils-output-truncation): keep head AND tail —
+                    // command summaries and final status usually live in the
+                    // tail, which a pure head cut discards. Char-safe on
+                    // CJK / emoji (same boundary rule as truncate_chars).
+                    Self::tool_result(&truncate_middle_chars(&output, max_chars))
                 } else {
                     Self::tool_result(&output)
                 }
@@ -802,6 +849,26 @@ mod tests {
     use async_trait::async_trait;
     use hermix_core::{tool_schema, JsonSchema, ToolError, ToolSchema};
     use serde_json::{json, Value};
+
+    #[test]
+    fn truncate_middle_keeps_head_and_tail() {
+        let out = "HEAD-START\n".repeat(30) + "TAIL-END-STATUS: exit 0\n";
+        let cut = truncate_middle_chars(&out, 120);
+        assert!(cut.starts_with("HEAD-START"));
+        assert!(cut.contains("TAIL-END-STATUS: exit 0"), "tail must survive");
+        assert!(cut.contains("truncated") && cut.contains("head and tail preserved"));
+        // Budget respected (marker adds ~80 chars by design).
+        assert!(cut.chars().count() <= 120 + 80);
+    }
+
+    #[test]
+    fn truncate_middle_is_cjk_safe() {
+        let out = "字".repeat(5_000);
+        let cut = truncate_middle_chars(&out, 300);
+        assert!(cut.chars().count() <= 300 + 80);
+        // 每个字符都是完整 UTF-8（无 panic 即证明边界安全）。
+        assert!(cut.contains('字'));
+    }
 
     struct EchoHandler;
 

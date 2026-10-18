@@ -45,6 +45,8 @@ pub struct SkillMatch {
     pub body: String,
     /// Which field matched: "name", "description", or "tags".
     pub matched_on: String,
+    /// `allowed-tools` declared by the skill (None / empty = unrestricted).
+    pub allowed_tools: Option<Vec<String>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -266,6 +268,7 @@ impl SkillLoader {
                 score,
                 body,
                 matched_on,
+                allowed_tools: info.allowed_tools.clone(),
             });
         }
 
@@ -337,6 +340,7 @@ impl SkillLoader {
                 score: sim,
                 body,
                 matched_on: "vector".into(),
+                allowed_tools: info.allowed_tools.clone(),
             });
         }
 
@@ -392,6 +396,18 @@ impl SkillLoader {
     /// Returns `None` if no skills matched. The returned text is suitable
     /// for appending to the system prompt.
     pub fn build_injection(&self, message: &str) -> Option<String> {
+        self.build_injection_and_tools(message).map(|(text, _)| text)
+    }
+
+    /// Same injection text as [`Self::build_injection`], plus the union of
+    /// the matched skills' `allowed-tools` (None when no matched skill
+    /// declares any, or all declarations are empty). The agent loop stores
+    /// this per turn and **subtracts** it from the dispatch surface —
+    /// activation never expands what the session may call.
+    pub fn build_injection_and_tools(
+        &self,
+        message: &str,
+    ) -> Option<(String, Option<std::collections::HashSet<String>>)> {
         let matches = self.match_message(message);
         if matches.is_empty() {
             return None;
@@ -412,7 +428,22 @@ impl SkillLoader {
             ));
         }
 
-        Some(parts.join("\n"))
+        let mut tools: Option<std::collections::HashSet<String>> = None;
+        for m in &matches {
+            if let Some(list) = m.allowed_tools.as_ref() {
+                if !list.is_empty() {
+                    let set = tools.get_or_insert_with(std::collections::HashSet::new);
+                    for t in list {
+                        let t = t.trim();
+                        if !t.is_empty() {
+                            set.insert(t.to_string());
+                        }
+                    }
+                }
+            }
+        }
+
+        Some((parts.join("\n"), tools))
     }
 
     /// Find skills for a capability gap.
@@ -1224,5 +1255,42 @@ mod tests {
         assert_eq!(cosine_similarity(&[], &[]), 0.0);
         assert_eq!(cosine_similarity(&[1.0], &[1.0, 2.0]), 0.0, "dim mismatch");
         assert_eq!(cosine_similarity(&[0.0, 0.0], &[1.0, 1.0]), 0.0, "zero norm");
+    }
+
+    #[test]
+    fn build_injection_and_tools_surfaces_allowed_tools() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        let skill_dir = dir.join("pdf-scope");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: pdf-scope\ndescription: Extract PDF text safely\n\
+             allowed-tools: [read_file, read_pdf]\n---\n# PDF Scope\nUse read_pdf only.",
+        )
+        .unwrap();
+
+        let mut loader = SkillLoader::with_dir(dir);
+        loader.scan();
+        let (block, tools) = loader
+            .build_injection_and_tools("extract text from this pdf")
+            .expect("skill should match");
+        assert!(block.contains("PDF Scope"));
+        let tools = tools.expect("allowed-tools must surface");
+        assert!(tools.contains("read_file"));
+        assert!(tools.contains("read_pdf"));
+        assert!(!tools.contains("terminal"));
+    }
+
+    #[test]
+    fn build_injection_and_tools_is_none_without_declaration() {
+        // Skills with no `allowed-tools` must not impose any scope.
+        let tmp = setup_test_skills();
+        let mut loader = SkillLoader::with_dir(tmp.path());
+        loader.scan();
+        let (_block, tools) = loader
+            .build_injection_and_tools("write a commit message")
+            .expect("skill should match");
+        assert!(tools.is_none(), "no declaration → no restriction");
     }
 }

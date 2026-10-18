@@ -292,7 +292,16 @@ impl ConvergenceDetector {
         if has_visible_text && !visible_text.is_empty() {
             if !self.last_visible_text.is_empty() {
                 let sim = jaccard_similarity(&self.last_visible_text, visible_text);
-                if sim >= self.config.similarity_threshold {
+                // High Jaccard alone is a false-positive magnet: long
+                // structured replies (status lists, per-file receipts,
+                // repeated headers) share most template vocabulary with
+                // the previous turn while carrying genuinely new content.
+                // Require the turn to add few NEW words before counting
+                // it as a repeat — genuine verbatim loops add ~0.
+                let new_ratio = new_word_ratio(&self.last_visible_text, visible_text);
+                if sim >= self.config.similarity_threshold
+                    && new_ratio < SIMILAR_CONTENT_NEW_WORD_FLOOR
+                {
                     self.similar_content_count += 1;
                 } else {
                     self.similar_content_count = 0;
@@ -339,11 +348,22 @@ impl ConvergenceDetector {
     }
 }
 
+/// Word-level token set with punctuation stripped from token edges, so
+/// "successfully." and "successfully" compare equal instead of masquerading
+/// as distinct vocabulary (which inflated new-word counts and depressed
+/// Jaccard on templated replies).
+fn tokenize(s: &str) -> std::collections::HashSet<&str> {
+    s.split_whitespace()
+        .map(|w| w.trim_matches(|c: char| c.is_ascii_punctuation()))
+        .filter(|w| !w.is_empty())
+        .collect()
+}
+
 /// Compute Jaccard similarity between two strings (word-level).
 /// Returns a value between 0.0 (completely different) and 1.0 (identical).
 fn jaccard_similarity(a: &str, b: &str) -> f64 {
-    let set_a: std::collections::HashSet<&str> = a.split_whitespace().collect();
-    let set_b: std::collections::HashSet<&str> = b.split_whitespace().collect();
+    let set_a = tokenize(a);
+    let set_b = tokenize(b);
 
     if set_a.is_empty() && set_b.is_empty() {
         return 1.0;
@@ -357,6 +377,23 @@ fn jaccard_similarity(a: &str, b: &str) -> f64 {
 
     intersection as f64 / union as f64
 }
+
+/// Fraction of `b`'s distinct words that do NOT appear in `a`.
+/// Measures how much *new* vocabulary the latest turn introduced.
+fn new_word_ratio(a: &str, b: &str) -> f64 {
+    let set_a = tokenize(a);
+    let set_b = tokenize(b);
+    if set_b.is_empty() {
+        return 0.0;
+    }
+    let new_words = set_b.difference(&set_a).count();
+    new_words as f64 / set_b.len() as f64
+}
+
+/// A turn only counts as "similar" to the previous one when it adds less
+/// than this fraction of new distinct words. Genuine verbatim loops add
+/// ~0; templated but progressing replies add 15-50%.
+const SIMILAR_CONTENT_NEW_WORD_FLOOR: f64 = 0.15;
 
 #[cfg(test)]
 mod tests {
@@ -605,6 +642,43 @@ mod tests {
         assert!((jaccard_similarity("hello world", "goodbye world") - 0.33).abs() < 0.1);
         assert!((jaccard_similarity("", "") - 1.0).abs() < 0.01);
         assert!((jaccard_similarity("hello", "") - 0.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn templated_but_new_content_does_not_count_as_similar() {
+        // Long structured replies (per-file receipts, status lists) share
+        // template vocabulary between turns while introducing genuinely
+        // new tokens. High Jaccard alone must not accumulate the
+        // similar-content counter — the new-word floor blocks it.
+        let mut d = ConvergenceDetector::default();
+        let t1 = "已完成批量重命名 status: done path: C:/a/old1.txt -> C:/a/new1.txt";
+        let t2 = "已完成批量重命名 status: done path: C:/a/old2.txt -> C:/a/new2.txt";
+        d.check(true, 0, 0, t1, &[], &[]);
+        // jaccard(t1,t2) is high (~0.7+ with normalized tokens) but
+        // new_word_ratio = 2/8 = 0.25 >= 0.15 → must reset, not count.
+        assert_eq!(
+            d.check(true, 0, 0, t2, &[], &[]),
+            ConvergenceSignal::Continue
+        );
+    }
+
+    #[test]
+    fn verbatim_repeat_with_new_punctuation_still_counts() {
+        // Punctuation-only variation must NOT evade the detector.
+        let mut d = ConvergenceDetector::with_config(ConvergenceConfig {
+            max_similar_content_turns: 2,
+            max_similar_content_hard_stop_turns: 0,
+            ..Default::default()
+        });
+        d.check(true, 0, 0, "The file has been created successfully", &[], &[]);
+        d.check(true, 0, 0, "The file has been created successfully.", &[], &[]);
+        assert!(matches!(
+            d.check(true, 0, 0, "The file has been created successfully!", &[], &[]),
+            ConvergenceSignal::Warn {
+                reason: ConvergenceReason::SimilarContent,
+                ..
+            }
+        ));
     }
 
     #[test]

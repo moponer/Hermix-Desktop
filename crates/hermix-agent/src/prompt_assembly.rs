@@ -117,6 +117,67 @@ pub fn effective_provider_for_prompt(config: &AgentConfig, model: &str) -> Optio
         .filter(|s| !s.is_empty())
 }
 
+/// Total character budget for the `<available_skills>` metadata block
+/// (ZCode `DEFAULT_SKILL_METADATA_BUDGET` analog). Over budget → degrade
+/// to names-only: the model keeps discoverability (it can still
+/// `skills_list` / `skill_view`) without the block eating the system
+/// prompt.
+const SKILL_METADATA_BUDGET_CHARS: usize = 20_000;
+
+/// Render the skill index. Two tiers:
+/// 1. Detailed — grouped by category, `- cmd: description [tags]` rows,
+///    capped at 80 skills;
+/// 2. Over budget → names-only (`- cmd`), preserving discoverability.
+///
+/// 参数形状跟着 `SkillOrchestrator::scan_skill_commands` 走：它返回
+/// `&HashMap`（避免每次组装 prompt 重建一张表），排序在这里做。
+fn render_skill_index(
+    commands: &std::collections::HashMap<String, crate::skill_orchestrator::SkillCommandInfo>,
+    budget: usize,
+) -> String {
+    let detailed = |rows: &[(&String, &crate::skill_orchestrator::SkillCommandInfo)]| {
+        let mut categories: std::collections::BTreeMap<String, Vec<_>> =
+            std::collections::BTreeMap::new();
+        for (cmd, info) in rows.iter().take(80) {
+            let cat = if info.category.is_empty() { "other" } else { &info.category };
+            categories
+                .entry(cat.to_string())
+                .or_default()
+                .push((cmd, info));
+        }
+        let mut body = String::new();
+        for (cat, skills) in &categories {
+            body.push_str(&format!("### {cat}\n"));
+            for (cmd, info) in skills {
+                let tags_str = if info.tags.is_empty() {
+                    String::new()
+                } else {
+                    format!(" [{}]", info.tags.join(", "))
+                };
+                body.push_str(&format!("- {cmd}: {}{tags_str}\n", info.description.trim()));
+            }
+        }
+        body
+    };
+
+    let mut rows: Vec<_> = commands.iter().collect();
+    rows.sort_by(|a, b| a.0.cmp(b.0));
+
+    let body = detailed(&rows);
+    if body.chars().count() <= budget {
+        return body;
+    }
+    // Names-only 降级：保留可发现性（skills_list/skill_view 仍在），
+    // 描述全部让位给预算。
+    let mut names_only = String::from(
+        "[技能数量超出元数据预算 — 已降级为仅名称列表。用 `skill_view <名称>` 查看任一技能的完整说明。]\n",
+    );
+    for (cmd, _) in rows.iter().take(80) {
+        names_only.push_str(&format!("- {cmd}\n"));
+    }
+    names_only
+}
+
 /// Render the `<available_skills>` block plus any ephemeral per-turn
 /// skills set via `AgentOverrides::skills`. Returns `None` when there are
 /// no skills-management tools loaded AND no ephemeral skills requested.
@@ -148,32 +209,7 @@ pub fn skills_system_prompt(
     if commands.is_empty() {
         body.push_str("(no installed skills discovered via skill_manage -- only ephemeral skills below are active)\n");
     } else {
-        let mut rows: Vec<_> = commands.iter().collect();
-        rows.sort_by(|a, b| a.0.cmp(b.0));
-
-        // Group skills by category for the index
-        let mut categories: std::collections::BTreeMap<String, Vec<_>> = std::collections::BTreeMap::new();
-        for (cmd, info) in rows.into_iter().take(80) {
-            let cat = if info.category.is_empty() { "other" } else { &info.category };
-            categories.entry(cat.to_string()).or_default().push((cmd, info));
-        }
-
-        for (cat, skills) in &categories {
-            body.push_str(&format!("### {}\n", cat));
-            for (cmd, info) in skills {
-                let tags_str = if info.tags.is_empty() {
-                    String::new()
-                } else {
-                    format!(" [{}]", info.tags.join(", "))
-                };
-                body.push_str(&format!(
-                    "- {}: {}{}\n",
-                    cmd,
-                    info.description.trim(),
-                    tags_str,
-                ));
-            }
-        }
+        body.push_str(&render_skill_index(commands, SKILL_METADATA_BUDGET_CHARS));
     }
     body.push_str("</available_skills>");
 

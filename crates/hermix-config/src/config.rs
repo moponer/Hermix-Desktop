@@ -296,6 +296,21 @@ pub struct AgentLoopBehaviorConfig {
     /// the loop without turning off memory review entirely.
     #[serde(default = "default_agent_auto_skill_extraction")]
     pub auto_skill_extraction: bool,
+    /// Deadline (seconds) for the first chunk of a streaming LLM reply.
+    /// Providers that open the SSE connection but push no data trip this
+    /// and the turn recovers with `finish_reason="no_first_chunk"`
+    /// instead of pinning the UI for the full 180 s outer timeout.
+    /// Raise it for slow-reasoning providers; `0` disables the tripwire.
+    #[serde(default = "default_agent_stream_first_chunk_timeout_secs")]
+    pub stream_first_chunk_timeout_secs: u64,
+    /// Hard outer timeout (seconds) for one streaming completion.
+    #[serde(default = "default_agent_stream_overall_timeout_secs")]
+    pub stream_overall_timeout_secs: u64,
+    /// Inter-chunk idle deadline (seconds) after the first chunk arrived.
+    /// A paused provider ends the reply with the partial content instead of
+    /// hanging until the outer timeout. `0` disables the deadline.
+    #[serde(default = "default_agent_stream_idle_timeout_secs")]
+    pub stream_idle_timeout_secs: u64,
 }
 
 fn default_agent_memory_nudge_interval() -> u32 {
@@ -314,6 +329,18 @@ fn default_agent_auto_skill_extraction() -> bool {
     true
 }
 
+fn default_agent_stream_first_chunk_timeout_secs() -> u64 {
+    30
+}
+
+fn default_agent_stream_overall_timeout_secs() -> u64 {
+    180
+}
+
+fn default_agent_stream_idle_timeout_secs() -> u64 {
+    120
+}
+
 impl Default for AgentLoopBehaviorConfig {
     fn default() -> Self {
         Self {
@@ -321,6 +348,9 @@ impl Default for AgentLoopBehaviorConfig {
             skill_creation_nudge_interval: default_agent_skill_nudge_interval(),
             background_review_enabled: default_agent_background_review_enabled(),
             auto_skill_extraction: default_agent_auto_skill_extraction(),
+            stream_first_chunk_timeout_secs: default_agent_stream_first_chunk_timeout_secs(),
+            stream_overall_timeout_secs: default_agent_stream_overall_timeout_secs(),
+            stream_idle_timeout_secs: default_agent_stream_idle_timeout_secs(),
         }
     }
 }

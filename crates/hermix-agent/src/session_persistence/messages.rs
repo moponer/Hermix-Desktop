@@ -249,6 +249,61 @@ impl SessionPersistence {
     /// **Fixed filename**: `<session_id>.md` (overwrite, not new-file-per-save).
     /// Old timestamp-prefixed files (`{ts}-<sid>.md`) are moved to `orphans/`
     /// on first write; see `recover_orphan_session_logs`.
+    /// Append-only JSONL mirror of the persisted timeline — Codex rollout
+    /// 双轨 analog：`sessions.db` 损坏时可按行重建对话。每行一个 JSON
+    /// 对象（role/content/tool_calls/reasoning），只 append 新增消息：
+    /// 现有行数即高水位（flush 每轮重写 DB，但时间线顺序稳定），
+    /// 每轮成本 O(delta)。
+    pub fn save_message_mirror(
+        &self,
+        session_id: &str,
+        messages: &[Message],
+    ) -> Result<(), AgentError> {
+        std::fs::create_dir_all(&self.sessions_dir)
+            .map_err(|e| AgentError::Io(format!("Failed to create sessions dir: {e}")))?;
+        let path = self
+            .sessions_dir
+            .join(format!("{}.jsonl", crate::session_persistence::session_stem(session_id)));
+
+        let already = std::fs::read_to_string(&path)
+            .map(|s| s.lines().filter(|l| !l.trim().is_empty()).count())
+            .unwrap_or(0);
+        let persistable: Vec<&Message> = messages
+            .iter()
+            .filter(|m| !m.ephemeral && !matches!(m.role, MessageRole::System))
+            .collect();
+        if persistable.len() <= already {
+            return Ok(());
+        }
+
+        use std::io::Write as _;
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .map_err(|e| AgentError::Io(format!("Failed to open JSONL mirror: {e}")))?;
+        for m in &persistable[already..] {
+            let line = serde_json::json!({
+                "ts": Utc::now().to_rfc3339(),
+                "role": match m.role {
+                    MessageRole::System => "system",
+                    MessageRole::User => "user",
+                    MessageRole::Assistant => "assistant",
+                    MessageRole::Tool => "tool",
+                    MessageRole::Automation => "automation",
+                },
+                "content": m.content,
+                "reasoning_content": m.reasoning_content,
+                "tool_calls": m.tool_calls,
+                "tool_call_id": m.tool_call_id,
+                "name": m.name,
+            });
+            writeln!(f, "{line}")
+                .map_err(|e| AgentError::Io(format!("Failed to append JSONL mirror: {e}")))?;
+        }
+        Ok(())
+    }
+
     pub fn save_session_log(
         &self,
         session_id: &str,

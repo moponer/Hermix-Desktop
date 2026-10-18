@@ -52,6 +52,13 @@ use hermix_core::{Message, MessageRole, ToolCall, ToolResult};
 use hermix_focus::SessionFrameStatus;
 use serde_json::Value;
 
+/// Upper bound on the pre-turn embedding call. A hung/slow embedding
+/// endpoint otherwise stalls every turn before the LLM request is even
+/// built; on timeout we degrade to text-only recall.
+const MEMORY_PREFETCH_EMBED_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+/// Upper bound on the whole recall query (router round-trip incl. SQLite).
+const MEMORY_PREFETCH_RECALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 //── Memory-operation surfacing ──────────────────────
 // These types describe a single memory mutation so the agent can
 // emit a `StreamEvent::MemoryUpdate` (bridged via the
@@ -230,19 +237,37 @@ pub async fn memory_prefetch(
         if let Some(tw) = time_window {
             q = q.with_time_window(tw);
         }
-        // Generate embedding for vector recall if provider is available
+        // Generate embedding for vector recall if provider is available.
+        // Bounded: a slow/hung embedding endpoint must not stall every
+        // turn's pre-turn path — degrade to text recall instead.
         if let Some(ep) = embedding_provider {
-            match ep.embed(query).await {
-                Ok(embedding) => {
+            let embed_fut = ep.embed(query);
+            match tokio::time::timeout(MEMORY_PREFETCH_EMBED_TIMEOUT, embed_fut).await {
+                Ok(Ok(embedding)) => {
                     q.embedding = Some(embedding);
                 }
-                Err(e) => tracing::debug!("embedding failed (falling back to text recall): {e}"),
+                Ok(Err(e)) => {
+                    tracing::debug!("embedding failed (falling back to text recall): {e}")
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        timeout_secs = MEMORY_PREFETCH_EMBED_TIMEOUT.as_secs(),
+                        "embedding timed out (falling back to text recall)"
+                    );
+                }
             }
         }
-        match router.recognize(&q).await {
-            Ok(hits) => hits,
-            Err(e) => {
+        match tokio::time::timeout(MEMORY_PREFETCH_RECALL_TIMEOUT, router.recognize(&q)).await {
+            Ok(Ok(hits)) => hits,
+            Ok(Err(e)) => {
                 tracing::warn!("time-aware memory recall failed: {e}");
+                Vec::new()
+            }
+            Err(_) => {
+                tracing::warn!(
+                    timeout_secs = MEMORY_PREFETCH_RECALL_TIMEOUT.as_secs(),
+                    "memory recall timed out — continuing without memory hits"
+                );
                 Vec::new()
             }
         }

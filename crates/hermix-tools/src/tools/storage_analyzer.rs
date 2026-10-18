@@ -605,7 +605,9 @@ pub fn register(registry: &ToolRegistry) {
         Arc::new(|| true),
         vec![],
         true,
-        "【磁盘分析首选工具】只读磁盘占用分析：扫描目录或 Windows 热点，返回子目录大小与盘符容量。优先使用此工具而非 terminal+PowerShell。",
+        "【磁盘分析首选工具】只读磁盘占用分析：扫描目录或 Windows 热点，返回子目录大小与盘符容量。优先使用此工具而非 terminal+PowerShell。\
+         BOUNDARY（存储三件套）：`storage_analyzer` = 只读分析用户磁盘；`storage_clean` = 在审批后删除用户选中的 junk 路径（Dangerous）；\
+         `disk_cleanup` = 只清理 HERMIX_HOME（本应用自己的缓存/旧会话产物）。",
         "💽",
         None,
         RiskLevel::Safe,

@@ -201,8 +201,56 @@ pub fn to_absolute_path(path: &str) -> String {
 // ---------------------------------------------------------------------------
 
 /// Total number of lines in `text` (an empty string is 0 lines).
+#[cfg(test)]
 fn count_lines(text: &str) -> u64 {
     text.lines().count() as u64
+}
+
+/// Line-aware output cap for `read_file` (C2).
+///
+/// Includes whole lines until `budget` chars are exhausted, then appends a
+/// pagination hint whose `offset` is the **1-based line number the reader
+/// should resume from**, expressed in the same coordinate space as the
+/// caller's `offset` parameter (`start_line`). Returns
+/// `(body_with_hint, truncated)`.
+///
+/// Why line-aware: the previous char-loop cut mid-line (a resumed read began
+/// mid-record) and reported `next_offset` as the *total* line count of the
+/// slice — pointing past the end of what the model had just read.
+fn paginate_read_body(content: &str, start_line: u64, budget: usize) -> (String, bool) {
+    // `budget` is in **characters** (the registry/`read_file` contract), so the
+    // accumulator must count chars too — `String::len()` is bytes, and with CJK
+    // a byte-based check would cut roughly three times earlier than promised.
+    let mut body = String::with_capacity(budget.min(content.len()));
+    let mut used_chars: usize = 0;
+    let mut included_lines: u64 = 0;
+    let mut overflow = false;
+    for line in content.split_inclusive('\n') {
+        let line_chars = line.chars().count();
+        if used_chars + line_chars > budget {
+            overflow = true;
+            break;
+        }
+        body.push_str(line);
+        used_chars += line_chars;
+        included_lines += 1;
+    }
+    if overflow && body.is_empty() {
+        // A single line longer than the whole budget (minified bundle): fall
+        // back to a char-boundary cut so we still return something usable.
+        body = content.chars().take(budget).collect();
+        included_lines = 1;
+    }
+    if overflow {
+        let next = start_line + included_lines;
+        body.push_str(&format!(
+            "\n\n[truncated: output exceeds {budget} chars. \
+             Continue reading with offset={next} (1-based line number; \
+             this reply ends at line {})]",
+            next.saturating_sub(1)
+        ));
+    }
+    (body, overflow)
 }
 
 /// Line-level pagination, 1-based `offset` (matching `TerminalBackend`
@@ -296,44 +344,31 @@ impl ToolHandler for ReadFileHandler {
                 .map_err(|e| ToolError::from_message(e.to_string()))?
         };
 
-        // Character-level output cap. The backend's `limit` is line-based
-        // and optional — a huge file (e.g. a multi-MB log) or a file with
-        // very long single lines (minified JS) can otherwise produce a
-        // multi-MB tool_result that blows up the next LLM request's
-        // context and 400s. Cap here so the LLM always gets a bounded
-        // body plus a hint to page through with offset/limit.
-        const MAX_OUTPUT_CHARS: usize = 300_000;
-        let mut body = String::with_capacity(MAX_OUTPUT_CHARS.min(content.len()));
-        let mut chars_read = 0usize;
-        let mut overflow = false;
-        // While paging we know the line count, so report the next
-        // readable line instead of leaving the model to guess.
-        let mut next_offset: Option<u64> = None;
-        for ch in content.chars() {
-            if chars_read >= MAX_OUTPUT_CHARS {
-                overflow = true;
-                next_offset = Some(count_lines(&content));
-                break;
-            }
-            body.push(ch);
-            chars_read += 1;
-        }
-        if overflow {
-            let hint = match next_offset {
-                Some(n) => format!(
-                    "\n\n[truncated: output exceeds {MAX_OUTPUT_CHARS} chars. Continue reading with offset={n} (1-based line number)]"
-                ),
-                None => format!(
-                    "\n\n[truncated: output exceeds {MAX_OUTPUT_CHARS} chars]"
-                ),
-            };
-            body.push_str(&hint);
-        }
+        // Output cap — **line-aware** (C2). Two defects in the previous
+        // char-loop version: (a) it cut mid-line, so a resumed read started
+        // in the middle of a record; (b) it reported `next_offset` as the
+        // TOTAL line count of the slice, which points past the end of what
+        // the model just read instead of at the first line that did not fit.
+        // Now whole lines are included until the budget is exhausted and the
+        // hint carries the 1-based number of the next line, in the SAME
+        // coordinate space as the caller's `offset` parameter.
+        const MAX_OUTPUT_CHARS: usize = crate::result_budget::READ_FILE_CHARS;
+        let start_line = offset.unwrap_or(1).max(1);
+        let (body, overflow) = paginate_read_body(&content, start_line, MAX_OUTPUT_CHARS);
 
         // Prefix the content with an absolute-path header so the LLM
         // (and the front-end artifact extractor) can unambiguously
         // reference the file later. Format mirrors write_file.
         let abs = to_absolute_path(path);
+        // read-file-state：记录本次读取（会话内 patch 的编辑依据）。
+        // partial = 输出被截断的部分视图，patch 会拒绝以它为依据编辑。
+        if let Some(session) = params.get("_session_id").and_then(|v| v.as_str()) {
+            crate::tools::file_read_state::record(
+                session,
+                Path::new(&abs),
+                overflow,
+            );
+        }
         Ok(format!("[file: {abs}]\n{body}"))
     }
 
@@ -437,6 +472,10 @@ impl ToolHandler for WriteFileHandler {
         // to a non-canonicalized form if the file is on a path that can't be
         // canonicalized (rare, but happens with bind-mounts / junctions).
         let abs = to_absolute_path(path);
+        // read-file-state：写入成功即记录最新指纹（后续 patch 的编辑依据）。
+        if let Some(session) = params.get("_session_id").and_then(|v| v.as_str()) {
+            crate::tools::file_read_state::record(session, Path::new(&abs), false);
+        }
         Ok(format!("Successfully wrote {} bytes to {}", content.len(), abs))
     }
 
@@ -538,6 +577,36 @@ impl ToolHandler for PatchHandler {
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidParams("Missing 'path' parameter".into()))?;
 
+        // Read-before-edit gate（ZCode read-file-state 机制级移植）：仅对
+        // 携带 `_session_id` 的 agent 派发生效；dashboard/API 直调不注入
+        // session，保持直调兼容。
+        let edit_session = params.get("_session_id").and_then(|v| v.as_str());
+        if let Some(session) = edit_session {
+            let abs_edit_target = to_absolute_path(path);
+            use crate::tools::file_read_state::{check_edit, EditCheck};
+            match check_edit(Some(session), Path::new(&abs_edit_target)) {
+                EditCheck::Ok => {}
+                EditCheck::NotRead => {
+                    return Err(ToolError::InvalidParams(format!(
+                        "patch 前必须先 read_file 目标文件（本会话尚未读取 `{abs_edit_target}`）。\
+                         先用 read_file 读取要修改的区域，再重试 patch。"
+                    )));
+                }
+                EditCheck::Partial => {
+                    return Err(ToolError::InvalidParams(format!(
+                        "`{abs_edit_target}` 上次读取是截断视图，不能作为编辑依据。\
+                         请重新 read_file（必要时分段读取）后再 patch。"
+                    )));
+                }
+                EditCheck::Stale => {
+                    return Err(ToolError::InvalidParams(format!(
+                        "`{abs_edit_target}` 在你读取后被外部修改过（mtime/size 变化）。\
+                         请重新 read_file 获取最新内容后再 patch，避免覆盖他人改动。"
+                    )));
+                }
+            }
+        }
+
         let old_string = params
             .get("old_string")
             .and_then(|v| v.as_str())
@@ -598,12 +667,35 @@ impl ToolHandler for PatchHandler {
                 edits.push((old.to_string(), new.to_string(), ra));
             }
 
-            return self.backend.patch_file_multi(path, &edits, allow_fuzzy).await;
+            let result = self.backend.patch_file_multi(path, &edits, allow_fuzzy).await;
+            // 编辑成功 → 刷新读状态指纹（下次 patch 的依据）。
+            if result.is_ok() {
+                if let Some(session) = edit_session {
+                    crate::tools::file_read_state::record(
+                        session,
+                        Path::new(&to_absolute_path(path)),
+                        false,
+                    );
+                }
+            }
+            return result;
         }
 
-        self.backend
+        let result = self
+            .backend
             .patch_file(path, old_string, new_string, replace_all, allow_fuzzy)
-            .await
+            .await;
+        // 编辑成功 → 刷新读状态指纹（下次 patch 的依据）。
+        if result.is_ok() {
+            if let Some(session) = edit_session {
+                crate::tools::file_read_state::record(
+                    session,
+                    Path::new(&to_absolute_path(path)),
+                    false,
+                );
+            }
+        }
+        result
     }
 
     fn schema(&self) -> ToolSchema {
@@ -849,12 +941,15 @@ pub fn read_image_for_llm(
 
     let mime = mime_from_ext(path).to_string();
 
-    // Resize JPEG/PNG images > 1 MiB to reduce base64 payload.
-    // GIF/WEBP/BMP are harder to re-encode reliably; leave as-is.
-    let can_resize = mime == "image/jpeg" || mime == "image/png";
+    // Unified image processor (C5): decode **whatever the `image` crate can
+    // read** (PNG/JPEG/GIF/WEBP/BMP — the old code only handled JPEG/PNG, so
+    // a 12 MB BMP or a 30-frame GIF went to the vision API verbatim and was
+    // rejected/charged in full), downscale past the vision dimension cap, and
+    // re-encode to JPEG. Formats the decoder cannot handle fall through to raw
+    // bytes — identical to the previous behaviour.
     let needs_resize = bytes.len() > MAX_RAW_SIZE_BYTES;
 
-    if can_resize && needs_resize {
+    if needs_resize {
         match image::load_from_memory(&bytes) {
             Ok(img) => {
                 let (w, h) = (img.width(), img.height());
@@ -869,8 +964,11 @@ pub fn read_image_for_llm(
                         image::imageops::FilterType::Lanczos3,
                     );
                 }
+                // Palette/alpha sources (GIF/WEBP/BMP) must lose alpha before
+                // JPEG encoding, otherwise `write_to` fails and we fall back
+                // to shipping the original bytes.
                 let mut jpeg_buf = Vec::with_capacity(256 * 1024);
-                match resized.write_to(
+                match image::DynamicImage::ImageRgb8(resized.to_rgb8()).write_to(
                     &mut std::io::Cursor::new(&mut jpeg_buf),
                     image::ImageFormat::Jpeg,
                 ) {
@@ -1567,6 +1665,61 @@ mod tests {
     }
 
     #[test]
+    fn paginate_read_body_cuts_on_line_boundaries_and_reports_next_offset() {
+        // Each line is 9 bytes ("line0001\n"); budget 45 fits exactly 5.
+        let content: String = (1..=10).map(|i| format!("line{i:04}\n")).collect();
+        let (body, truncated) = paginate_read_body(&content, 1, 45);
+        assert!(truncated);
+        let hint_start = body.find("[truncated:").expect("hint present");
+        let visible = body[..hint_start].trim_end();
+        assert_eq!(
+            visible, "line0001\nline0002\nline0003\nline0004\nline0005",
+            "cut must land on a line boundary"
+        );
+        assert!(
+            body.contains("offset=6 "),
+            "next offset must be the first line that did not fit, got: {body}"
+        );
+        assert!(body.contains("ends at line 5"));
+    }
+
+    #[test]
+    fn paginate_read_body_offset_is_relative_to_caller_window() {
+        // Caller resumed at line 100 → next page must be 100 + included.
+        let content: String = (1..=10).map(|i| format!("line{i:04}\n")).collect();
+        let (body, truncated) = paginate_read_body(&content, 100, 45);
+        assert!(truncated);
+        assert!(
+            body.contains("offset=105 "),
+            "offset must be in the caller's coordinate space, got: {body}"
+        );
+        assert!(body.contains("ends at line 104"));
+    }
+
+    #[test]
+    fn paginate_read_body_counts_characters_not_bytes() {
+        // 中文 3 bytes per char: a byte-based counter would stop at ~1/3 of
+        // the promised budget. 100 chars per line × 3 lines with a 250-char
+        // budget must fit two full lines and stop on the third.
+        let line = format!("{}\n", "字".repeat(99)); // 99 CJK chars + newline
+        let content = format!("{line}{line}{line}");
+        let (body, truncated) = paginate_read_body(&content, 1, 250);
+        assert!(truncated);
+        // Exactly two 100-char lines fit (250-char budget); a byte-based
+        // counter would have stopped after ~83 chars.
+        assert!(body.starts_with(&format!("{line}{line}")));
+        assert!(!body.starts_with(&format!("{line}{line}{line}")));
+        assert!(body.contains("offset=3 "));
+    }
+
+    #[test]
+    fn paginate_read_body_passes_through_when_under_budget() {
+        let (body, truncated) = paginate_read_body("short\nfile\n", 1, 300_000);
+        assert!(!truncated);
+        assert_eq!(body, "short\nfile\n");
+        assert!(!body.contains("[truncated:"));
+    }
+
     fn slice_lines_paginates_one_based() {
         let text = "l1\nl2\nl3\nl4\nl5";
         assert_eq!(slice_lines(text, Some(1), Some(2)), "l1\nl2\n");

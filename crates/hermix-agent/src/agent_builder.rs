@@ -146,6 +146,14 @@ pub fn build_agent_config(
             }
             sa
         },
+        // Stream watchdogs — user-tunable via `agent.stream_*_timeout_secs`
+        // in `~/.hermix/config.yaml` (serde defaults keep old configs
+        // loading unchanged). Slow-reasoning providers raise the
+        // first-chunk tripwire instead of eating `no_first_chunk`
+        // turn finalizations.
+        stream_first_chunk_timeout_secs: config.agent.stream_first_chunk_timeout_secs,
+        stream_overall_timeout_secs: config.agent.stream_overall_timeout_secs,
+        stream_idle_timeout_secs: config.agent.stream_idle_timeout_secs,
         ..AgentConfig::default()
     }
 }
@@ -182,6 +190,9 @@ pub fn bridge_tool_registry(
     memory_handler: Option<Arc<MemoryHandler>>,
 ) -> AgentToolRegistry {
     let mut agent_registry = AgentToolRegistry::new();
+    // Plan mode is owned by the full registry (the plan_mode tools hold its
+    // handle); the loop reads it from the bridged registry before dispatch.
+    agent_registry.set_plan_mode_handle(tools.plan_mode_handle());
     for schema in tools.get_definitions() {
         if let Some(allow) = allowed_tool_names {
             if !allow.contains(&schema.name) {

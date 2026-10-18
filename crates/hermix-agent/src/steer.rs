@@ -1,8 +1,12 @@
 //! Mid-run `/steer` support (Python `AIAgent.steer` parity subset).
 //!
-//! Hermes keeps user guidance in a pending buffer and injects it into the
-//! **last tool result** in the conversation tail, prefixed with a provenance
-//! marker (`User guidance:`) so models don't confuse it with tool output.
+//! A steer is a **user turn**, not tool output. The old implementation
+//! appended it to the last `Tool` message's content — that corrupted the
+//! tool result the model was reading (a tool that returned `A` now "returned"
+//! `A\n\nUser guidance:\n…`), broke result-equality expectations, and made
+//! cache/trace comparisons useless. Codex injects steering as a separate
+//! `user` input item; we do the same: drain the buffer and push one
+//! standalone user message with a provenance header.
 
 use std::sync::Mutex;
 
@@ -10,7 +14,10 @@ use hermix_core::{Message, MessageRole};
 
 use crate::context::ContextManager;
 
-const USER_GUIDANCE_MARKER: &str = "User guidance:";
+/// Header on the injected user message. Kept short and unambiguous: it tells
+/// the model this is an in-flight instruction, not a new task.
+const USER_GUIDANCE_HEADER: &str =
+    "[User guidance — mid-run instruction from the user. It refines the current task; it does not replace it.]";
 
 /// Normalize steer text for acceptance (mirrors Python tests).
 pub fn normalize_accepted_steer_text(text: &str) -> Option<String> {
@@ -30,21 +37,34 @@ pub fn concat_pending(existing: Option<String>, next: String) -> String {
     }
 }
 
-fn append_user_guidance_to_text(base: &str, guidance: &str) -> String {
-    let guidance_block = format!("\n\n{USER_GUIDANCE_MARKER}\n{guidance}");
-    format!("{base}{guidance_block}")
-}
-
-/// Apply pending steer guidance to the last `MessageRole::Tool` message in `messages`.
-/// Returns `true` when a tool message was found and mutated.
-pub fn apply_pending_steer_to_last_tool_message(messages: &mut [Message], guidance: &str) -> bool {
-    let Some(idx) = messages.iter().rposition(|m| m.role == MessageRole::Tool) else {
+/// Append the guidance as a standalone user message. Returns `true`
+/// (there is always somewhere to put a user message — that is the point
+/// of the change: steering can no longer be dropped for lack of a tool
+/// result to piggyback on).
+pub fn push_steer_message(ctx: &mut ContextManager, guidance: &str) -> bool {
+    let guidance = guidance.trim();
+    if guidance.is_empty() {
         return false;
-    };
-
-    let msg = &mut messages[idx];
-    let base = msg.content.clone().unwrap_or_default();
-    msg.content = Some(append_user_guidance_to_text(&base, guidance));
+    }
+    // Protocol guard: an assistant turn that requested tools must be followed
+    // by its `tool` results before any user message. Injecting in that window
+    // produces a request providers reject outright ("tool_calls must be
+    // followed by tool messages"). Callers restash and try again after the
+    // tool results land.
+    if let Some(last) = ctx.get_messages().last() {
+        let pending_tool_calls = last.role == MessageRole::Assistant
+            && last
+                .tool_calls
+                .as_ref()
+                .map(|calls| !calls.is_empty())
+                .unwrap_or(false);
+        if pending_tool_calls {
+            return false;
+        }
+    }
+    ctx.add_message(Message::user(format!(
+        "{USER_GUIDANCE_HEADER}\n{guidance}"
+    )));
     true
 }
 
@@ -63,13 +83,14 @@ pub fn drain_pending_steer(pending_steer: &Mutex<Option<String>>) -> Option<Stri
 /// into (the steer would otherwise be silently dropped).
 pub fn restash_pending_steer(pending_steer: &Mutex<Option<String>>, text: String) {
     if let Ok(mut guard) = pending_steer.lock() {
-        *guard = Some(text);
+        // Append, never overwrite: a fresh `steer()` may have arrived between
+        // drain and restash, and clobbering it would silently drop the user's
+        // newest instruction.
+        *guard = Some(concat_pending(guard.take(), text));
     }
 }
 
-/// Pre-LLM-call drain: inject the pending steer text into the last
-/// tool result if one exists, otherwise restash so the post-tool-call
-/// path can try again on the next turn.
+/// Pre-LLM-call drain: land the pending steer as a user message.
 pub fn pre_api_apply_pending_steer(
     pending_steer: &Mutex<Option<String>>,
     ctx: &mut ContextManager,
@@ -77,18 +98,15 @@ pub fn pre_api_apply_pending_steer(
     let Some(text) = drain_pending_steer(pending_steer) else {
         return;
     };
-    if apply_pending_steer_to_last_tool_message(ctx.get_messages_mut(), &text) {
+    if push_steer_message(ctx, &text) {
         ctx.recompute_total_tokens();
-        return;
+    } else {
+        restash_pending_steer(pending_steer, text);
     }
-    restash_pending_steer(pending_steer, text);
 }
 
-/// Post-tool-call apply: same as `pre_api_apply_pending_steer` but
-/// called after tool dispatch — the typical case is that the previous
-/// `pre_api_apply_pending_steer` found no `Tool` message (because the
-/// loop was mid-tool-call when steer arrived) and restashed; this
-/// call lands the steer now that tool results are in the context.
+/// Post-tool-call drain: same landing rule. Running both is safe — the
+/// buffer is drained on the first call, so a steer is injected exactly once.
 pub fn post_tool_apply_pending_steer(
     pending_steer: &Mutex<Option<String>>,
     ctx: &mut ContextManager,
@@ -96,11 +114,11 @@ pub fn post_tool_apply_pending_steer(
     let Some(text) = drain_pending_steer(pending_steer) else {
         return;
     };
-    if apply_pending_steer_to_last_tool_message(ctx.get_messages_mut(), &text) {
+    if push_steer_message(ctx, &text) {
         ctx.recompute_total_tokens();
-        return;
+    } else {
+        restash_pending_steer(pending_steer, text);
     }
-    restash_pending_steer(pending_steer, text);
 }
 
 /// Queue mid-run user guidance (Python `AIAgent.steer`).
@@ -148,17 +166,54 @@ mod tests {
     }
 
     #[test]
-    fn appends_to_last_tool_result_only() {
-        let mut msgs = vec![
-            Message::user("u"),
-            Message::tool_result("a", "A", Some("tool_a")),
-            Message::tool_result("b", "B", Some("tool_b")),
-        ];
-        assert!(apply_pending_steer_to_last_tool_message(&mut msgs, "note"));
+    fn steering_lands_as_its_own_user_message_and_never_touches_tool_output() {
+        let mut ctx = ContextManager::new(2048);
+        ctx.add_message(Message::user("u"));
+        ctx.add_message(Message::tool_result("a", "A", Some("tool_a")));
+        ctx.add_message(Message::tool_result("b", "B", Some("tool_b")));
+
+        assert!(push_steer_message(&mut ctx, "  focus on tests  "));
+
+        let msgs = ctx.get_messages();
+        // Tool outputs are byte-identical to what the tools returned.
         assert_eq!(msgs[1].content.as_deref(), Some("A"));
-        let b = msgs[2].content.as_deref().unwrap_or("");
-        assert!(b.starts_with("B"));
-        assert!(b.contains("User guidance:"));
-        assert!(b.contains("note"));
+        assert_eq!(msgs[2].content.as_deref(), Some("B"));
+        // The steer is a new user turn carrying the provenance header.
+        let last = msgs.last().expect("steer message pushed");
+        assert_eq!(last.role, hermix_core::MessageRole::User);
+        let text = last.content.as_deref().unwrap_or("");
+        assert!(text.contains("mid-run instruction"));
+        assert!(text.contains("focus on tests"));
+        assert!(!text.contains("  focus")); // trimmed
+    }
+
+    #[test]
+    fn steer_is_deferred_while_tool_calls_await_results() {
+        // assistant(tool_calls) with no tool results yet → injecting a user
+        // message here breaks the provider protocol, so the push is refused
+        // (caller restashes; post-tool path lands it later).
+        let mut ctx = ContextManager::new(2048);
+        let mut assistant = Message::assistant("");
+        assistant.tool_calls = Some(vec![hermix_core::ToolCall {
+            id: "c1".into(),
+            function: hermix_core::FunctionCall {
+                name: "read_file".into(),
+                arguments: "{}".into(),
+            },
+        }]);
+        ctx.add_message(assistant);
+        assert!(!push_steer_message(&mut ctx, "wait"));
+
+        // Once the tool result is in place, the same steer is accepted.
+        ctx.add_message(Message::tool_result("c1", "ok", Some("read_file")));
+        assert!(push_steer_message(&mut ctx, "wait"));
+    }
+
+    #[test]
+    fn empty_steer_is_not_pushed() {
+        let mut ctx = ContextManager::new(2048);
+        let before = ctx.get_messages().len();
+        assert!(!push_steer_message(&mut ctx, "   \n "));
+        assert_eq!(ctx.get_messages().len(), before);
     }
 }

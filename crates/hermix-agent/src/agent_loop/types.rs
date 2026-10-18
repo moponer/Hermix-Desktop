@@ -134,6 +134,11 @@ pub(crate) struct LoopState {
     /// token compare; no embedding). On a recall hit we replace
     /// it with the new top-k.
     pub(crate) last_recall_keys: Vec<String>,
+    /// `allowed-tools` union of the skills auto-activated for the CURRENT
+    /// turn (None = no active skill declares a restriction). Read by
+    /// `do_tool_turn` to subtract non-listed tools before dispatch.
+    /// Recomputed every turn in `do_pre_turn_setup`; never persisted.
+    pub(crate) active_skill_tools: Option<std::collections::HashSet<String>>,
 }
 
 impl LoopState {
@@ -263,6 +268,61 @@ pub(crate) enum LoopPhase {
 }
 
 impl LoopPhase {
+    /// Stable index for the transition tracker (`0` is reserved for "none").
+    pub(crate) fn as_index(&self) -> u8 {
+        match self {
+            Self::Init => 1,
+            Self::PreTurnSetup => 2,
+            Self::Prefetch => 3,
+            Self::LlmCall => 4,
+            Self::PostLlmCall => 5,
+            Self::ToolValidation => 6,
+            Self::ToolExecution => 7,
+            Self::PostToolExec => 8,
+            Self::Finalize => 9,
+        }
+    }
+
+    pub(crate) fn from_index(value: u8) -> Option<Self> {
+        Some(match value {
+            1 => Self::Init,
+            2 => Self::PreTurnSetup,
+            3 => Self::Prefetch,
+            4 => Self::LlmCall,
+            5 => Self::PostLlmCall,
+            6 => Self::ToolValidation,
+            7 => Self::ToolExecution,
+            8 => Self::PostToolExec,
+            9 => Self::Finalize,
+            _ => return None,
+        })
+    }
+
+    /// Legal next phases (ZCode `TurnPhase.canTransitionTo` analog).
+    ///
+    /// The loop is a straight pipeline with one loop-back edge
+    /// (`PostToolExec → PreTurnSetup`). Anything else means a branch skipped
+    /// a stage — historically that is what a "turn silently stopped" looks
+    /// like from the inside. Re-emitting the same phase is allowed (the LLM
+    /// retry loop legitimately stays in `LlmCall`).
+    pub(crate) fn can_transition_to(&self, next: &Self) -> bool {
+        use LoopPhase::*;
+        if self == next {
+            return true;
+        }
+        match self {
+            Init => matches!(next, PreTurnSetup | Finalize),
+            PreTurnSetup => matches!(next, Prefetch | Finalize),
+            Prefetch => matches!(next, LlmCall | Finalize),
+            LlmCall => matches!(next, PostLlmCall | Finalize),
+            PostLlmCall => matches!(next, ToolValidation | Finalize),
+            ToolValidation => matches!(next, ToolExecution | Finalize),
+            ToolExecution => matches!(next, PostToolExec | Finalize),
+            PostToolExec => matches!(next, PreTurnSetup | Finalize),
+            Finalize => false,
+        }
+    }
+
     /// Short label for tracing spans.
     pub(crate) fn as_str(&self) -> &'static str {
         match self {

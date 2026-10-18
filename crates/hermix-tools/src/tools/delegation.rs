@@ -13,6 +13,41 @@ use std::sync::Arc;
 // Registration
 // ---------------------------------------------------------------------------
 
+/// Handler for `stop_subagent`. In production the orchestrator intercepts
+/// this name before dispatch (see `tool_executor`); reaching this handler
+/// means no orchestrator is attached, i.e. nothing can be running.
+struct StopSubagentHandler;
+
+#[async_trait]
+impl ToolHandler for StopSubagentHandler {
+    async fn execute(&self, _params: Value) -> Result<String, ToolError> {
+        Err(ToolError::ExecutionFailed(
+            "stop_subagent: no sub-agent orchestrator is attached to this agent instance — \
+             nothing can be running in the background."
+                .to_string(),
+        ))
+    }
+
+    fn schema(&self) -> ToolSchema {
+        tool_schema(
+            "stop_subagent",
+            "Stop a background sub-agent spawned by delegate_task(background: true).",
+            JsonSchema::object(
+                [(
+                    "sub_agent_id".to_string(),
+                    json!({
+                        "type": "string",
+                        "description": "The sub_agent_id returned by delegate_task when it answered {\"status\":\"spawned\"}."
+                    }),
+                )]
+                .into_iter()
+                .collect::<IndexMap<_, _>>(),
+                vec!["sub_agent_id".into()],
+            ),
+        )
+    }
+}
+
 /// Register this tool with the registry (P1.2 migration).
 pub fn register(registry: &ToolRegistry, backend: Arc<dyn DelegationBackend>) {
     let handler = Arc::new(DelegateTaskHandler::new(backend));
@@ -35,6 +70,26 @@ pub fn register(registry: &ToolRegistry, backend: Arc<dyn DelegationBackend>) {
         "🤝",
         None,
         RiskLevel::Caution,
+        false,
+    );
+
+    // stop_subagent — companion of background delegation (ZCode TaskStop).
+    let stop = Arc::new(StopSubagentHandler);
+    let stop_schema = stop.schema();
+    registry.register_with_risk(
+        "stop_subagent",
+        "delegate_task",
+        stop_schema,
+        stop,
+        Arc::new(|| true),
+        vec![],
+        true,
+        "Stop a background sub-agent (one spawned with delegate_task `background: true`). \
+         Its lineage flips to `cancelled`; get_subagent_result then reports the terminal state. \
+         Returns `not_running` (not an error) when the id already finished.",
+        "🛑",
+        None,
+        RiskLevel::Safe,
         false,
     );
 }
@@ -182,7 +237,14 @@ impl ToolHandler for DelegateTaskHandler {
             json!({
                 "type": "string",
                 "enum": ["general", "explore", "plan"],
-                "description": "Sub-agent role. 'explore' = read-only (good for research/lookups). 'plan' = read + planning tools. 'general' = full toolset (default)."
+                "description": "Sub-agent role. 'explore' = read-only (good for research/lookups). 'plan' = read + planning tools. 'general' = full toolset (default). Overrides the role declared by an `agent` profile."
+            }),
+        );
+        props.insert(
+            "agent".into(),
+            json!({
+                "type": "string",
+                "description": "Named sub-agent profile from <HERMIX_HOME>/agents/<name>.md (built-ins: 'explore', 'general-purpose'). A profile carries a role (its tool whitelist), a default turn budget, a tool hint list and a system-prompt body. Use `explore` for read-only research so the child physically cannot write."
             }),
         );
         props.insert(
@@ -197,6 +259,13 @@ impl ToolHandler for DelegateTaskHandler {
             json!({
                 "type": "string",
                 "description": "If this delegation is part of a parent task tree, pass the parent's task id so results can be attributed."
+            }),
+        );
+        props.insert(
+            "background".into(),
+            json!({
+                "type": "boolean",
+                "description": "Run the sub-agent detached. When true, returns {\"status\":\"spawned\",\"sub_agent_id\":…} immediately instead of blocking; poll `get_subagent_result` with that id to collect the result. Use it when the child's work is independent of your next step and you want to keep working (e.g. long research while continuing the main edit). The child still obeys depth/role/turn caps and inherits the parent budget."
             }),
         );
         props.insert(
@@ -223,7 +292,7 @@ impl ToolHandler for DelegateTaskHandler {
 
         tool_schema(
             "delegate_task",
-            "Delegate a task to a sub-agent with an isolated context. SYNCHRONOUS: delegate_task blocks until the sub-agent finishes and returns its result as a normal tool result — just like any other tool. You do NOT need to call get_subagent_result to poll. The sub-agent's text conclusion (capped at ~8,000 chars) comes back directly in the tool result. Use it to continue your task.\n\n\
+            "Delegate a task to a sub-agent with an isolated context. By default SYNCHRONOUS: blocks until the sub-agent finishes and returns its result as a normal tool result — you do NOT need to poll. With `background: true` it returns {\"status\":\"spawned\",\"sub_agent_id\":…} immediately and you collect the result later via `get_subagent_result`. The sub-agent's text conclusion is capped at ~8,000 chars.\n\n\
              # When to use\n\
              - The task is genuinely independent of your current focus (no shared state needed mid-task).\n\
              - You want a separate context (e.g. image analysis where you don't want the pixels in YOUR context).\n\

@@ -543,6 +543,20 @@ impl ToolResult {
             denial_kind: Some(kind.into()),
         }
     }
+
+    /// True when this result is an *infrastructure* denial — the call
+    /// never reached the tool because the approval transport failed
+    /// (`timed_out` / `channel_closed`). This is not evidence that the
+    /// model is stuck: the convergence detector excludes these from
+    /// ErrorLoop counting so a network blip cannot manufacture a hard
+    /// stop. `user_denied` and `policy` stay counted — they are
+    /// deliberate signals the model must adapt to.
+    pub fn is_infra_denial(&self) -> bool {
+        matches!(
+            self.denial_kind.as_deref(),
+            Some("timed_out") | Some("channel_closed")
+        )
+    }
 }
 
 // ---------------------------------------------------------------------------

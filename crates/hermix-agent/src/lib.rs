@@ -74,6 +74,8 @@ pub mod session_persistence;
 pub mod session_lifecycle;
 pub mod skill_orchestrator;
 pub mod skill_loader;
+/// Declarative sub-agent profiles (`<home>/agents/*.md`).
+pub mod agent_profiles;
 pub mod skill_health;
 pub mod skill_auto_create;
 pub mod skill_patch;

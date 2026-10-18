@@ -33,7 +33,10 @@ pub fn register(registry: &ToolRegistry) {
         Arc::new(|| true),
         vec![],
         true,
-        "Scan and prune stale files under HERMIX_HOME",
+        "Scan and prune stale files under HERMIX_HOME (this app's own caches, old session artifacts, orphaned cron output). \
+         BOUNDARY — storage trio: `disk_cleanup` = HERMIX_HOME only (app housekeeping); \
+         `storage_analyzer` = read-only usage report over user disk; \
+         `storage_clean` = delete user-chosen junk paths (Dangerous, safelisted roots, also covers HERMIX_HOME).",
         "🧹",
         None,
         RiskLevel::Caution,

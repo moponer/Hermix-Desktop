@@ -30,6 +30,11 @@ pub struct SkillCommandInfo {
     pub category: String,
     /// Tags from frontmatter.
     pub tags: Vec<String>,
+    /// `allowed-tools` from frontmatter (already kebab→snake normalized).
+    /// `None` / empty = no restriction. Enforced per-turn by the loop when
+    /// the skill is auto-activated (subtract-only: never expands the
+    /// session toolset).
+    pub allowed_tools: Option<Vec<String>>,
 }
 
 /// Parsed SKILL.md frontmatter.
@@ -539,6 +544,7 @@ impl SkillOrchestrator {
                 skill_dir,
                 category,
                 tags,
+                allowed_tools: frontmatter.allowed_tools,
             },
         );
     }
@@ -897,6 +903,7 @@ allowed-tools:
                 skill_dir: PathBuf::from("/tmp/skill"),
                 category: "test".to_string(),
                 tags: vec![],
+                allowed_tools: None,
             },
         );
 

@@ -19,10 +19,13 @@
 //! [`crate::AgentLoop::with_sub_agent_orchestrator`] to swap the default
 //! signal-only behavior with real execution.
 
+use std::collections::HashMap;
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -125,6 +128,21 @@ pub struct SubAgentLineage {
     /// Parent task ID for linking sub-agents to the task tree.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_task_id: Option<String>,
+    /// Final assistant text of a completed run (already capped to
+    /// `SUB_AGENT_RESULT_MAX_CHARS` by `extract_final_assistant_text`).
+    /// Absent while running and on failure. This is what makes
+    /// `get_subagent_result` able to return a real result for background
+    /// sub-agents — before this field existed the tool always read
+    /// `null`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<String>,
+    /// Whether `result` was truncated to the 8k cap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub truncated: Option<bool>,
+    /// Whether the child ended because the model stopped (true) or because
+    /// it hit its turn/iteration cap (false).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_naturally: Option<bool>,
 }
 
 /// Terminal state vocabulary for sub-agent lineage records.
@@ -339,6 +357,16 @@ pub struct SubAgentOrchestratorConfig {
     pub task_record_sink: Option<Arc<dyn TaskRecordSink>>,
 }
 
+/// Abort handles of **background** sub-agents, keyed by `sub_agent_id`.
+/// Process-global because the id is the public handle handed to the model —
+/// a second orchestrator instance (e.g. after a reconnect) must be able to
+/// stop a task the first one spawned. Entries are removed when the child
+/// finishes or is stopped, so the map stays proportional to live tasks.
+fn background_tasks() -> &'static Mutex<HashMap<String, tokio::task::AbortHandle>> {
+    static TASKS: OnceLock<Mutex<HashMap<String, tokio::task::AbortHandle>>> = OnceLock::new();
+    TASKS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
 /// In-process executor for `delegate_task` tool calls.
 pub struct SubAgentOrchestrator {
     cfg: SubAgentOrchestratorConfig,
@@ -425,6 +453,9 @@ impl SubAgentOrchestrator {
             error: None,
             role: req.role,
             parent_task_id: req.parent_task_id.clone(),
+            result: None,
+            truncated: None,
+            finished_naturally: None,
         }
     }
 
@@ -444,6 +475,14 @@ impl SubAgentOrchestrator {
                     lineage.completion_tokens = Some(usage.completion_tokens);
                     lineage.estimated_cost_usd = usage.estimated_cost;
                 }
+                // Persist the final text so background consumers
+                // (get_subagent_result polling the lineage file) see a
+                // real result instead of `null`.
+                let (final_text, was_truncated) =
+                    extract_final_assistant_text(&result.messages);
+                lineage.result = Some(final_text);
+                lineage.truncated = Some(was_truncated);
+                lineage.finished_naturally = Some(result.finished_naturally);
                 lineage.ended_at = Some(Utc::now());
             }
             Err(e) => {
@@ -578,20 +617,130 @@ impl SubAgentOrchestrator {
         Box::pin(async move { this.execute_inner(req).await })
     }
 
+    /// Detached spawn (background delegation, ZCode/Codex-style):
+    /// returns the sub-agent id **immediately**; the child runs on its own
+    /// tokio task and writes its terminal state — including the final
+    /// `result` text — into the lineage file, which `get_subagent_result`
+    /// polls.
+    ///
+    /// The `started` lineage record (and `task_record_sink.started`) is
+    /// written before this returns, so an immediate poll sees `started`
+    /// rather than `not_found`.
+    pub fn spawn_background(
+        self: &Arc<Self>,
+        req: SubAgentRequest,
+    ) -> BoxSendFuture<Result<String, String>> {
+        // Boxed like `execute_async`: the child's future reaches back into
+        // an orchestrator, so a concrete `impl Future` would force the
+        // compiler through a recursion cycle it cannot prove.
+        let this = self.clone();
+        Box::pin(async move {
+            let sub_agent_id = format!("subagent-{}", uuid::Uuid::new_v4());
+            let lineage = this.build_lineage(&req, &sub_agent_id, SubAgentStatus::Started);
+            this.persist_lineage(&lineage).await;
+            if let Some(sink) = this.cfg.task_record_sink.as_ref() {
+                sink.started(
+                    &sub_agent_id,
+                    lineage.parent_session_id.as_deref(),
+                    &req.task,
+                );
+            }
+            let spawn_this = this.clone();
+            let id = sub_agent_id.clone();
+            let cleanup_id = id.clone();
+            // announce=false: lifecycle already announced above; the task
+            // only runs the child and persists the terminal record.
+            //
+            // spawn + insert happen under ONE lock: if the child finished
+            // before we inserted (it can, for a stub provider), its own
+            // cleanup would remove nothing and the stale AbortHandle would
+            // linger — later `stop_background` would then flip an already
+            // completed lineage to `cancelled`.
+            {
+                let mut map = background_tasks()
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                let handle = tokio::spawn(async move {
+                    spawn_this.execute_inner_with_id(req, id, false).await;
+                    if let Ok(mut map) = background_tasks().lock() {
+                        map.remove(&cleanup_id);
+                    }
+                });
+                map.insert(sub_agent_id.clone(), handle.abort_handle());
+            }
+            Ok(sub_agent_id)
+        })
+    }
+
+    /// Stop a background sub-agent (`stop_subagent` tool).
+    ///
+    /// Aborts the detached task and rewrites its lineage as `cancelled`, so
+    /// `get_subagent_result` reports a terminal state instead of "still
+    /// running" forever. Returns `false` when the id is unknown (already
+    /// finished, or never existed) — callers surface that as a plain "not
+    /// running" answer, not an error.
+    pub fn stop_background(self: &Arc<Self>, sub_agent_id: &str) -> BoxSendFuture<bool> {
+        let this = self.clone();
+        let id = sub_agent_id.to_string();
+        Box::pin(async move {
+            let handle = background_tasks()
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .remove(&id);
+            let Some(handle) = handle else {
+                return false;
+            };
+            handle.abort();
+
+            // Terminal lineage (best-effort): read → patch → write.
+            let path = this
+                .cfg
+                .hermix_home
+                .join("subagents")
+                .join(format!("{id}.json"));
+            if let Ok(raw) = tokio::fs::read_to_string(&path).await {
+                if let Ok(mut lineage) = serde_json::from_str::<SubAgentLineage>(&raw) {
+                    lineage.status = SubAgentStatus::Cancelled;
+                    lineage.error = Some("stopped by request".into());
+                    lineage.ended_at = Some(Utc::now());
+                    this.persist_lineage(&lineage).await;
+                }
+            }
+            if let Some(sink) = this.cfg.task_record_sink.as_ref() {
+                sink.terminal(&id, "aborted", Some("stopped by request"));
+            }
+            true
+        })
+    }
+
     async fn execute_inner(self: Arc<Self>, req: SubAgentRequest) -> String {
         let sub_agent_id = format!("subagent-{}", uuid::Uuid::new_v4());
+        self.execute_inner_with_id(req, sub_agent_id, true).await
+    }
+
+    /// Core child run. `announce` controls whether the `started` lineage
+    /// record + TaskRecord are written here (sync path) or were already
+    /// written by `spawn_background` (background path).
+    async fn execute_inner_with_id(
+        self: Arc<Self>,
+        req: SubAgentRequest,
+        sub_agent_id: String,
+        announce: bool,
+    ) -> String {
         let lineage = self.build_lineage(&req, &sub_agent_id, SubAgentStatus::Started);
 
         // Best-effort lineage persistence — failures must never break delegation.
-        self.persist_lineage(&lineage).await;
+        if announce {
+            self.persist_lineage(&lineage).await;
 
-        // §3.3 热路径生产者：Running 记录落 TaskRecordStore（best-effort）。
-        if let Some(sink) = self.cfg.task_record_sink.as_ref() {
-            sink.started(
-                &sub_agent_id,
-                lineage.parent_session_id.as_deref(),
-                &req.task,
-            );
+            // §3.3 热路径生产者：Running 记录落 TaskRecordStore（best-effort）。
+            if let Some(sink) = self.cfg.task_record_sink.as_ref() {
+                sink.started(
+                    &sub_agent_id,
+                    lineage.parent_session_id.as_deref(),
+                    &req.task,
+                );
+            }
         }
 
         // Rolling log of the sub-agent's last N internal actions (tool
@@ -939,8 +1088,17 @@ impl SubAgentOrchestrator {
                 return;
             }
         };
-        if let Err(e) = tokio::fs::write(&path, body).await {
-            tracing::debug!(error = %e, path = %path.display(), "sub-agent lineage write failed");
+        // Atomic write (tmp + rename): a concurrent reader — the UI's
+        // `get_subagent_result` poller, or `stop_background` rewriting the
+        // terminal state — must never observe a half-written JSON document.
+        let tmp = path.with_extension("json.tmp");
+        if let Err(e) = tokio::fs::write(&tmp, body).await {
+            tracing::debug!(error = %e, path = %tmp.display(), "sub-agent lineage write failed");
+            return;
+        }
+        if let Err(e) = tokio::fs::rename(&tmp, &path).await {
+            tracing::debug!(error = %e, path = %path.display(), "sub-agent lineage rename failed");
+            let _ = tokio::fs::remove_file(&tmp).await;
         }
     }
 }
@@ -1288,6 +1446,146 @@ mod tests {
             .extension()
             .map(|s| s == "json")
             .unwrap_or(false));
+    }
+
+    #[tokio::test]
+    async fn spawn_background_returns_id_immediately_and_records_result() {
+        let tmp = tempfile::tempdir().unwrap();
+        let orch = Arc::new(SubAgentOrchestrator::new(SubAgentOrchestratorConfig {
+            parent_config: AgentConfig {
+                max_turns: 3,
+                model: "noop".into(),
+                ..AgentConfig::default()
+            },
+            tool_registry: Arc::new(ToolRegistry::new()),
+            llm_provider: Arc::new(NoopProvider),
+            parent_interrupt: InterruptController::new(),
+            hermix_home: tmp.path().to_path_buf(),
+            parent_session_id: Some("parent".into()),
+            timeout: Duration::from_secs(10),
+            chunk_emitter: None,
+            task_record_sink: None,
+        }));
+
+        let id = orch
+            .spawn_background(SubAgentRequest {
+                task: "background task".into(),
+                child_depth: 1,
+                max_depth: 4,
+                ..Default::default()
+            })
+            .await
+            .expect("spawn_background");
+        assert!(id.starts_with("subagent-"), "unexpected id: {id}");
+
+        // Started lineage must exist BEFORE the id is returned, so an
+        // immediate poll sees "started" rather than "not_found".
+        let path = tmp.path().join("subagents").join(format!("{id}.json"));
+        assert!(path.exists(), "started lineage written eagerly");
+
+        // Poll until the detached child reaches a terminal state.
+        let mut parsed: Value = Value::Null;
+        for _ in 0..100 {
+            let raw = tokio::fs::read_to_string(&path).await.unwrap_or_default();
+            if let Ok(v) = serde_json::from_str::<Value>(&raw) {
+                let status = v.get("status").and_then(|s| s.as_str()).unwrap_or("");
+                if status == "completed" || status == "failed" {
+                    parsed = v;
+                    break;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(
+            parsed.get("status").and_then(|s| s.as_str()),
+            Some("completed"),
+            "background child never reached a terminal state: {parsed}"
+        );
+        // The result text is what get_subagent_result returns — it must
+        // be persisted (previously this field did not exist at all).
+        assert_eq!(
+            parsed.get("result").and_then(|s| s.as_str()),
+            Some("done")
+        );
+        assert_eq!(
+            parsed.get("finished_naturally").and_then(|v| v.as_bool()),
+            Some(true)
+        );
+    }
+
+    #[tokio::test]
+    async fn stop_background_cancels_and_marks_lineage() {
+        struct HangingProvider;
+        #[async_trait::async_trait]
+        impl LlmProvider for HangingProvider {
+            async fn chat_completion(
+                &self,
+                _messages: &[Message],
+                _tools: &[ToolSchema],
+                _max_tokens: Option<u32>,
+                _temperature: Option<f64>,
+                _model: Option<&str>,
+                _extra_body: Option<&serde_json::Value>,
+            ) -> Result<LlmResponse, AgentError> {
+                tokio::time::sleep(Duration::from_secs(30)).await;
+                Ok(LlmResponse {
+                    message: Message::assistant("late"),
+                    usage: None,
+                    model: "hang".into(),
+                    finish_reason: Some("stop".into()),
+                })
+            }
+            fn chat_completion_stream(
+                &self,
+                _messages: &[Message],
+                _tools: &[ToolSchema],
+                _max_tokens: Option<u32>,
+                _temperature: Option<f64>,
+                _model: Option<&str>,
+                _extra_body: Option<&serde_json::Value>,
+            ) -> BoxStream<'static, Result<StreamChunk, AgentError>> {
+                futures::stream::empty().boxed()
+            }
+        }
+
+        let tmp = tempfile::tempdir().unwrap();
+        let orch = Arc::new(SubAgentOrchestrator::new(SubAgentOrchestratorConfig {
+            parent_config: AgentConfig {
+                max_turns: 2,
+                model: "hang".into(),
+                ..AgentConfig::default()
+            },
+            tool_registry: Arc::new(ToolRegistry::new()),
+            llm_provider: Arc::new(HangingProvider),
+            parent_interrupt: InterruptController::new(),
+            hermix_home: tmp.path().to_path_buf(),
+            parent_session_id: Some("parent".into()),
+            timeout: Duration::from_secs(60),
+            chunk_emitter: None,
+            task_record_sink: None,
+        }));
+
+        let id = orch
+            .spawn_background(SubAgentRequest {
+                task: "long running".into(),
+                child_depth: 1,
+                max_depth: 4,
+                ..Default::default()
+            })
+            .await
+            .expect("spawn");
+
+        assert!(orch.stop_background(&id).await, "running task must stop");
+        // The lineage flips to a terminal cancelled state so a poller does
+        // not wait forever on "started".
+        let path = tmp.path().join("subagents").join(format!("{id}.json"));
+        let raw = tokio::fs::read_to_string(&path).await.unwrap();
+        let v: Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(v["status"], "cancelled");
+        assert_eq!(v["error"], "stopped by request");
+
+        // Stopping again is a no-op, not an error.
+        assert!(!orch.stop_background(&id).await);
     }
 
     #[tokio::test]

@@ -3213,6 +3213,83 @@ let u = UsageStats {
         assert!(message_cache.last_content_with_tools.is_none());
     }
 
+    #[test]
+    pub(crate) fn loop_phase_transition_contract() {
+        use crate::agent_loop::LoopPhase as P;
+        // The one legal loop-back edge.
+        assert!(P::PostToolExec.can_transition_to(&P::PreTurnSetup));
+        // Straight pipeline edges.
+        assert!(P::Init.can_transition_to(&P::PreTurnSetup));
+        assert!(P::PostLlmCall.can_transition_to(&P::ToolValidation));
+        assert!(P::ToolValidation.can_transition_to(&P::ToolExecution));
+        // Skipping a stage is illegal (this is the bug class the warn catches).
+        assert!(!P::PostLlmCall.can_transition_to(&P::ToolExecution));
+        assert!(!P::LlmCall.can_transition_to(&P::PreTurnSetup));
+        assert!(!P::Init.can_transition_to(&P::LlmCall));
+        // Same phase re-emission is legal (LLM retry loop stays in LlmCall).
+        assert!(P::LlmCall.can_transition_to(&P::LlmCall));
+        // Finalize is terminal.
+        assert!(!P::Finalize.can_transition_to(&P::PreTurnSetup));
+        // Index round-trips.
+        for p in [
+            P::Init,
+            P::PreTurnSetup,
+            P::Prefetch,
+            P::LlmCall,
+            P::PostLlmCall,
+            P::ToolValidation,
+            P::ToolExecution,
+            P::PostToolExec,
+            P::Finalize,
+        ] {
+            assert_eq!(P::from_index(p.as_index()), Some(p));
+        }
+        assert_eq!(P::from_index(0), None);
+    }
+
+    #[tokio::test]
+    pub(crate) async fn steer_spools_to_disk_and_survives_a_restart() {
+        // A steer accepted mid-turn must not die with the process: it is
+        // spooled under <home>/pending_steer/<session>.txt and restored by
+        // the next AgentLoop built for the same session.
+        let tmp = tempfile::tempdir().unwrap();
+        let config = AgentConfig {
+            session_id: Some("steer-spool".into()),
+            hermix_home: Some(tmp.path().to_string_lossy().to_string()),
+            ..AgentConfig::default()
+        };
+        let agent = AgentLoop::new(
+            config.clone(),
+            Arc::new(ToolRegistry::new()),
+            Arc::new(stub_provider::EmptyProvider),
+        );
+        assert!(agent.steer("focus on the failing test"));
+        let spool = tmp
+            .path()
+            .join("pending_steer")
+            .join("steer-spool.txt");
+        assert!(spool.is_file(), "steer must be spooled to disk");
+        assert!(std::fs::read_to_string(&spool).unwrap().contains("focus on the failing test"));
+
+        // "Restart": a fresh loop for the same session picks the spool up.
+        let restarted = AgentLoop::new(
+            config,
+            Arc::new(ToolRegistry::new()),
+            Arc::new(stub_provider::EmptyProvider),
+        );
+        let pending = restarted
+            .steer_buffer()
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap_or_default();
+        assert!(pending.contains("focus on the failing test"));
+
+        // Clearing removes the spool so it cannot resurrect next launch.
+        restarted.clear_pending_steer();
+        assert!(!spool.exists(), "clearing must delete the spool");
+    }
+
     #[tokio::test]
     pub(crate) async fn resolve_pre_dispatch_allow_when_hook_unset() {
         // No hook installed → resolve_pre_dispatch returns an empty map and

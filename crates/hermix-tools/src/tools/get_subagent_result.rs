@@ -80,6 +80,8 @@ impl ToolHandler for GetSubAgentResultHandler {
             "sub_agent_id": sub_agent_id,
             "status": status,
             "result": lineage.get("result").cloned(),
+            "truncated": lineage.get("truncated").cloned(),
+            "finished_naturally": lineage.get("finished_naturally").cloned(),
             "error": lineage.get("error").cloned(),
             "total_turns": lineage.get("total_turns"),
             "estimated_cost_usd": lineage.get("estimated_cost_usd"),

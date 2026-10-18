@@ -261,6 +261,35 @@
     }
 
     #[test]
+    fn jsonl_mirror_is_incremental_and_idempotent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sp = SessionPersistence::new(tmp.path());
+        let mut msgs = vec![
+            Message::user("第一问"),
+            Message::assistant("第一答"),
+        ];
+        sp.save_message_mirror("mirror-1", &msgs).unwrap();
+        let path = sp.sessions_dir.join("mirror-1.jsonl");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap().lines().count(),
+            2
+        );
+        // 重复 flush 不重复 append。
+        sp.save_message_mirror("mirror-1", &msgs).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap().lines().count(),
+            2
+        );
+        // 新增一条 → 只 append 增量。
+        msgs.push(Message::user("第二问"));
+        sp.save_message_mirror("mirror-1", &msgs).unwrap();
+        let body = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(body.lines().count(), 3);
+        assert!(body.lines().next().unwrap().contains("第一问"));
+        assert!(body.lines().last().unwrap().contains("第二问"));
+    }
+
+    #[test]
     fn test_save_session_log() {
         let tmp = tempfile::tempdir().unwrap();
         let sp = SessionPersistence::new(tmp.path());

@@ -625,6 +625,23 @@ pub struct AgentConfig {
     #[serde(default = "default_stream_first_chunk_timeout_secs")]
     pub stream_first_chunk_timeout_secs: u64,
 
+    /// Inter-chunk idle deadline (seconds) — the **post-first-chunk**
+    /// counterpart of `stream_first_chunk_timeout_secs`.
+    /// The first-chunk tripwire only covers "SSE opened, no data ever".
+    /// Once data starts flowing the stream could still die silently
+    /// (provider stops pushing, TCP stays open): previously the idle arm
+    /// degraded to a 24h sleep + a notice, so the turn hung until the
+    /// outer 180 s watchdog — which then returned an **empty** reply and
+    /// threw away the partial text already shown to the user.
+    /// With this deadline, a gap longer than `stream_idle_timeout_secs`
+    /// between two chunks aborts collection and returns the partial
+    /// content as `Interrupted(finish_reason="stream_idle")`, so the
+    /// already-visible text is persisted and never replayed.
+    /// Default 120 s (≈4× the default 30 s activity cadence);
+    /// `0` opts out (legacy: notify forever, outer timeout decides).
+    #[serde(default = "default_stream_idle_timeout_secs")]
+    pub stream_idle_timeout_secs: u64,
+
     /// hard deadline (seconds) for the gap between the end
     /// of one LLM turn's tool-execution bookkeeping and the start of
     /// the next turn's stream-collection call. Watched by the
@@ -867,6 +884,12 @@ fn default_stream_first_chunk_timeout_secs() -> u64 {
     30
 }
 
+/// Post-first-chunk idle deadline — see
+/// [`AgentConfig::stream_idle_timeout_secs`].
+fn default_stream_idle_timeout_secs() -> u64 {
+    120
+}
+
 /// Default watchdog (seconds) for the window spanning tool execution
 /// (including the approval wait) through the next turn's pre-turn
 /// setup. See [`AgentConfig::turn_transition_deadline_secs`].
@@ -954,6 +977,7 @@ impl Default for AgentConfig {
             stream_activity_interval_secs: default_stream_activity_interval_secs(),
             stream_activity_stall_secs: default_stream_activity_stall_secs(),
             stream_overall_timeout_secs: default_stream_overall_timeout_secs(),
+            stream_idle_timeout_secs: default_stream_idle_timeout_secs(),
             stream_first_chunk_timeout_secs: default_stream_first_chunk_timeout_secs(),
             turn_transition_deadline_secs: default_turn_transition_deadline_secs(),
             workspace: None,

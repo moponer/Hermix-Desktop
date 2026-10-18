@@ -509,6 +509,16 @@ pub(crate) async fn collect_stream_inner(
         config.stream_first_chunk_timeout_secs.max(1);
     let collect_started = std::time::Instant::now();
     let mut first_chunk_arrived = false;
+    // Post-first-chunk idle deadline (C1). The first-chunk tripwire only
+    // covers "SSE opened, no data ever"; a stream that starts and then goes
+    // silent used to degrade to a 24h sleep + a notice, leaving the turn to
+    // the 180 s outer watchdog — which throws away the partial text the user
+    // already saw. With this deadline a silent gap returns the partial
+    // content as `Interrupted(finish_reason="stream_idle")`, so the visible
+    // text is persisted and never replayed (no-duplicate-output rule).
+    let idle_timeout_secs = config.stream_idle_timeout_secs;
+    let idle_abort_dur = Duration::from_secs(idle_timeout_secs);
+    let mut last_chunk_at = collect_started;
 
     if activity_secs == 0 {
         // `activity_secs == 0` is the "silence activity notices"
@@ -530,6 +540,17 @@ pub(crate) async fn collect_stream_inner(
                             if !first_chunk_arrived {
                                 first_chunk_arrived = true;
                             }
+                            // Any chunk re-arms the post-first-chunk idle
+                            // deadline (C1): silence, not slowness, aborts.
+                            last_chunk_at = std::time::Instant::now();
+                            idle.as_mut().reset(
+                                tokio::time::Instant::now()
+                                    + if idle_abort_dur.is_zero() {
+                                        IDLE_ARM_MAX
+                                    } else {
+                                        idle_abort_dur
+                                    },
+                            );
                             if interrupt.take_interrupt_graceful().is_some() {
                                 let (flush_content, flush_reasoning) = think_parser.flush();
                                 if !flush_content.is_empty() {
@@ -600,9 +621,42 @@ pub(crate) async fn collect_stream_inner(
                     }
                 }
                 _ = idle.as_mut() => {
-                    // After first chunk, idle becomes effectively
-                    // unbounded (no activity notices to fire).
+                    // After first chunk, silence is bounded by the idle
+                    // deadline (C1): abort with the partial content instead
+                    // of sleeping 24h until the outer watchdog discards it.
                     if first_chunk_arrived {
+                        if !idle_abort_dur.is_zero()
+                            && last_chunk_at.elapsed() >= idle_abort_dur
+                        {
+                            tracing::warn!(
+                                elapsed_secs = last_chunk_at.elapsed().as_secs(),
+                                idle_timeout_secs,
+                                active_model = %active_model,
+                                "stream idle after first chunk — aborting with partial content"
+                            );
+                            emit_status(
+                                config,
+                                callbacks,
+                                "activity",
+                                &format!(
+                                    "Model output paused for {idle_timeout_secs}s — \
+                                     stopping this reply and keeping what already arrived."
+                                ),
+                            );
+                            let (flush_c, flush_r) = think_parser.flush();
+                            if !flush_c.is_empty() { content.push_str(&flush_c); }
+                            if !flush_r.is_empty() { reasoning_content.push_str(&flush_r); }
+                            tool_call_sanitizer.flush();
+                            let message = assemble_stream_assistant_message(
+                                &content, &reasoning_content, &tool_calls,
+                            );
+                            return Ok(StreamCollectOutcome::Interrupted(LlmResponse {
+                                message,
+                                usage: last_usage.clone(),
+                                model: active_model.to_string(),
+                                finish_reason: Some("stream_idle".to_string()),
+                            }, Some(format!("stream idle for {idle_timeout_secs}s after first chunk"))));
+                        }
                         if !stall_notice_sent {
                             emit_status(
                                 config,
@@ -611,12 +665,16 @@ pub(crate) async fn collect_stream_inner(
                                 "Still no model output — the stream may be stuck.",
                             );
                             stall_notice_sent = true;
-                            idle.as_mut()
-                                .reset(tokio::time::Instant::now() + IDLE_ARM_MAX);
-                        } else {
-                            idle.as_mut()
-                                .reset(tokio::time::Instant::now() + IDLE_ARM_MAX);
                         }
+                        idle.as_mut().reset(
+                            tokio::time::Instant::now()
+                                + if idle_abort_dur.is_zero() {
+                                    IDLE_ARM_MAX
+                                } else {
+                                    idle_abort_dur.saturating_sub(last_chunk_at.elapsed())
+                                        .max(Duration::from_millis(100))
+                                },
+                        );
                         continue;
                     }
                     // Pre-first-chunk: enforce the deadline.
@@ -701,6 +759,9 @@ pub(crate) async fn collect_stream_inner(
                                 if !first_chunk_arrived {
                                     first_chunk_arrived = true;
                                 }
+                                // Re-arm the post-first-chunk idle deadline
+                                // (C1) — see the activity_secs==0 branch.
+                                last_chunk_at = std::time::Instant::now();
                                 if interrupt.take_interrupt_graceful().is_some() {
                                     let message = assemble_stream_assistant_message(
                                         &content,
@@ -826,6 +887,54 @@ pub(crate) async fn collect_stream_inner(
                             }
                             continue;
                         }
+                        // Idle abort (C1): silence longer than the deadline
+                        // ends the reply with the partial content, instead of
+                        // holding the turn until the 180 s outer watchdog
+                        // discards everything already shown.
+                        if !idle_abort_dur.is_zero()
+                            && last_chunk_at.elapsed() >= idle_abort_dur
+                        {
+                            tracing::warn!(
+                                elapsed_secs = last_chunk_at.elapsed().as_secs(),
+                                idle_timeout_secs,
+                                active_model = %active_model,
+                                "stream idle after first chunk (silence_watch) — aborting with partial content"
+                            );
+                            emit_status(
+                                config,
+                                callbacks,
+                                "activity",
+                                &format!(
+                                    "Model output paused for {idle_timeout_secs}s — \
+                                     stopping this reply and keeping what already arrived."
+                                ),
+                            );
+                            let (flush_c, flush_r) = think_parser.flush();
+                            if !flush_c.is_empty() { content.push_str(&flush_c); }
+                            if !flush_r.is_empty() { reasoning_content.push_str(&flush_r); }
+                            tool_call_sanitizer.flush();
+                            let message = assemble_stream_assistant_message(
+                                &content, &reasoning_content, &tool_calls,
+                            );
+                            return Ok(StreamCollectOutcome::Interrupted(LlmResponse {
+                                message,
+                                usage: last_usage.clone(),
+                                model: active_model.to_string(),
+                                finish_reason: Some("stream_idle".to_string()),
+                            }, Some(format!("stream idle for {idle_timeout_secs}s after first chunk"))));
+                        }
+                        // Re-arm toward the idle abort deadline, never to 24h:
+                        // a 24h re-arm would push the `stream_idle` check out
+                        // past the 180 s outer watchdog, making the whole
+                        // post-first-chunk abort dead code (the exact bug this
+                        // deadline was added to fix).
+                        let next_arm = if idle_abort_dur.is_zero() {
+                            IDLE_ARM_MAX
+                        } else {
+                            idle_abort_dur
+                                .saturating_sub(last_chunk_at.elapsed())
+                                .max(Duration::from_millis(100))
+                        };
                         if !warm_notice_sent {
                             emit_status(
                                 config,
@@ -834,13 +943,12 @@ pub(crate) async fn collect_stream_inner(
                                 "Still waiting for the model…",
                             );
                             warm_notice_sent = true;
-                            if stall_secs > 0 {
-                                idle.as_mut()
-                                    .reset(tokio::time::Instant::now() + stall_dur);
+                            let arm = if stall_secs > 0 {
+                                stall_dur.min(next_arm)
                             } else {
-                                idle.as_mut()
-                                    .reset(tokio::time::Instant::now() + IDLE_ARM_MAX);
-                            }
+                                next_arm
+                            };
+                            idle.as_mut().reset(tokio::time::Instant::now() + arm);
                         } else if stall_secs > 0 && !stall_notice_sent {
                             emit_status(
                                 config,
@@ -849,11 +957,9 @@ pub(crate) async fn collect_stream_inner(
                                 "Still no model output — the stream may be stuck.",
                             );
                             stall_notice_sent = true;
-                            idle.as_mut()
-                                .reset(tokio::time::Instant::now() + IDLE_ARM_MAX);
+                            idle.as_mut().reset(tokio::time::Instant::now() + next_arm);
                         } else {
-                            idle.as_mut()
-                                .reset(tokio::time::Instant::now() + IDLE_ARM_MAX);
+                            idle.as_mut().reset(tokio::time::Instant::now() + next_arm);
                         }
                     }
                 }
@@ -1374,6 +1480,105 @@ mod tests {
         // path is exercised.
         let _ = chunks;
         Ok(outcome)
+    }
+
+    /// C1: a stream that emits ONE chunk then goes silent must end with
+    /// `finish_reason = "stream_idle"` and keep the partial text. Before
+    /// this deadline existed the turn hung on a 24h idle arm until the
+    /// outer watchdog returned an EMPTY reply — discarding text the user
+    /// had already seen.
+    #[tokio::test]
+    async fn idle_after_first_chunk_aborts_with_partial_content() {
+        struct OneThenSilent;
+
+        #[async_trait::async_trait]
+        impl LlmProvider for OneThenSilent {
+            async fn chat_completion(
+                &self,
+                _messages: &[hermix_core::Message],
+                _tools: &[hermix_core::ToolSchema],
+                _max_tokens: Option<u32>,
+                _temperature: Option<f64>,
+                _model: Option<&str>,
+                _extra_body: Option<&serde_json::Value>,
+            ) -> Result<LlmResponse, AgentError> {
+                unreachable!("stream path only")
+            }
+
+            fn chat_completion_stream(
+                &self,
+                _messages: &[hermix_core::Message],
+                _tools: &[hermix_core::ToolSchema],
+                _max_tokens: Option<u32>,
+                _temperature: Option<f64>,
+                _model: Option<&str>,
+                _extra_body: Option<&serde_json::Value>,
+            ) -> BoxStream<'static, Result<StreamChunk, AgentError>> {
+                Box::pin(stream! {
+                    yield Ok(StreamChunk {
+                        delta: Some(StreamDelta {
+                            content: Some("部分内容".to_string()),
+                            tool_calls: None,
+                            extra: None,
+                        }),
+                        finish_reason: None,
+                        usage: None,
+                    });
+                    // Then silence forever — the provider stops pushing
+                    // while the TCP stream stays open.
+                    std::future::pending::<()>().await;
+                })
+            }
+        }
+
+        let mut config = AgentConfig::default();
+        config.stream_activity_interval_secs = 0;
+        config.stream_first_chunk_timeout_secs = 5;
+        config.stream_idle_timeout_secs = 1;
+        config.stream_overall_timeout_secs = 30;
+
+        let oauth = OAuthRefresh::new();
+        let interrupt = InterruptController::new();
+        let ctx = crate::context::ContextManager::new(2048);
+        let on_chunk: Box<dyn Fn(StreamChunk) + Send + Sync> = Box::new(|_: StreamChunk| {});
+        let provider: Arc<dyn LlmProvider> = Arc::new(OneThenSilent);
+
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(5),
+            crate::stream_collect::collect_stream_llm_response(
+                &config,
+                &oauth,
+                &AgentCallbacks::default(),
+                &provider,
+                None,
+                &interrupt,
+                &ctx,
+                &[],
+                None,
+                "test-model",
+                &*on_chunk,
+            ),
+        )
+        .await
+        .expect("idle watchdog never fired — stream hung")
+        .expect("collect must not error");
+
+        match outcome {
+            StreamCollectOutcome::Interrupted(resp, err) => {
+                assert_eq!(
+                    resp.finish_reason.as_deref(),
+                    Some("stream_idle"),
+                    "expected stream_idle finish_reason"
+                );
+                let content = resp.message.content.clone().unwrap_or_default();
+                assert!(
+                    content.contains("部分内容"),
+                    "partial content must be preserved, got: {content:?}"
+                );
+                assert!(err.is_some(), "idle abort must report an error string");
+            }
+            other => panic!("expected Interrupted(stream_idle), got {other:?}"),
+        }
     }
 
     /// Provider hangs forever → outer watchdog fires after

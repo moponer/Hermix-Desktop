@@ -492,7 +492,9 @@ pub fn register(registry: &ToolRegistry) {
         Arc::new(|| true),
         vec![],
         true,
-        "在聊天审批后删除/移回收站 junk 文件（仅安全目录，拒绝系统目录）",
+        "在聊天审批后删除/移回收站 junk 文件（仅安全目录，拒绝系统目录）。\
+         BOUNDARY（存储三件套）：先 `storage_analyzer` 看占用（只读），再用本工具删除选中路径；\
+         只想清理 HERMIX_HOME（应用自身缓存）时用 `disk_cleanup`，无需审批卡。",
         "🧹",
         None,
         RiskLevel::Dangerous,
