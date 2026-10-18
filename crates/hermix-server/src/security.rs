@@ -475,12 +475,6 @@ impl DeviceAuthError {
     }
 }
 
-/// Unpaired 纵深防御关口（对策 T1）：仅放行配对完成端点与 /pair 扫码
-/// 落地页（信任建立本身）。/health 与 /metrics 在更早分支已返回。
-fn unpaired_gate_allows(path: &str) -> bool {
-    path == "/api/pairing/complete" || path == "/pair"
-}
-
 pub async fn request_guard(
     security: Arc<HttpSecurity>,
     rate: Arc<RateLimiter>,
@@ -665,7 +659,15 @@ pub async fn request_guard(
         );
         origin = Origin::Unpaired;
     }
-    if matches!(origin, Origin::Unpaired) && !unpaired_gate_allows(path) {
+    // 未配对来源一律 403，**没有任何路径豁免**。
+    //
+    // 这里原本放行 `/api/pairing/complete` 与 `/pair`——两条路由在配对改走 relay
+    // （2026-10-10）之后就不存在了。豁免留着是地雷：将来谁在这个名字上新建路由，
+    // 它会**默认不带认证**。配对现在走 relay 帧（`pairing::handle_pairing_frame`），
+    // 不经过这个 HTTP 面。
+    //
+    // `/health` 与 `/metrics` 不靠这条分支——它们在更早的地方就返回了。
+    if matches!(origin, Origin::Unpaired) {
         hermix_telemetry::record_http_reject();
         // 未配对闸门是**认证失败**的一种：不计入失败预算的话，攻击者可以
         // 拿无限次 403 免费探测路径存在性，且这条分支永远不触发锁定。
@@ -841,16 +843,17 @@ mod tests {
         }
     }
 
+    /// 未配对关口对**任何**路径都不豁免。
+    ///
+    /// 曾经放行 `/api/pairing/complete` 与 `/pair`（配对改走 relay 前的旧端点），
+    /// 那两条路由已不存在；豁免留着等于给同名的未来路由预开一个免认证口子。
     #[test]
-    fn unpaired_gate_blocks_non_pairing_paths() {        // 远程无凭证 = Unpaired。
+    fn unpaired_gate_has_no_exemptions() {
+        // 远程无凭证 = Unpaired。
         assert!(matches!(
             derive_origin(None, Some([192, 168, 1, 50].into())),
             Origin::Unpaired
         ));
-        // 关口只放配对完成端点。
-        assert!(unpaired_gate_allows("/api/pairing/complete"));
-        assert!(!unpaired_gate_allows("/v1/sessions"));
-        assert!(!unpaired_gate_allows("/api/config"));
         // 回环无凭证 = Local（桌面自身），不受关口约束。
         assert!(matches!(
             derive_origin(None, Some([127, 0, 0, 1].into())),
