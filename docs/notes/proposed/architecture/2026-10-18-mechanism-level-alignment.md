@@ -144,3 +144,10 @@ ot_running（非错误）。测试 stop_background_cancels_and_marks_lineage。
 - 关闭即释放：`Session` 新增 `attached_to_panel`；`ensure()` 在 `panel::current()` 消失时 retain 掉面板会话并重建（避免对已销毁 webview 的 Page 继续下命令）。tools 767 全绿。
 - 现状分层：①帧流小窗（无头 Edge + screencast，已稳定，默认）②交互面板（WebView2 窗口 + CDP 直驱，需手动开启，用户可直接点击/输入）。
 - 真机验证清单（本机无法 GUI 验证）：打开交互面板 → `curl http://127.0.0.1:9333/json/list` 应只列出面板页（**不得**出现主窗口页面，否则说明主 app webview 也被开了调试端口，属安全问题需改用独立 WebView2 环境/进程）；随后 browser_navigate/snapshot/screenshot 应落在面板窗口；关闭面板后一次工具调用应自动回到独立 Edge。
+## 提交前审查（2026-10-18）：发现 14 项，修复 13 项
+
+提交 48a42201 / e2207577 / 8f62d527（main）。
+
+已修：①panel discover_ws_url 无超时（改 800ms deadline，避免持 sessions 锁永久挂死）②stream_idle 在 activity 通知路径被 24h 重置覆盖（改按 last_chunk 剩余时间重装，否则整个中止是死代码）③spawn_background insert-after-spawn 竞态（spawn+insert 同锁，避免完成态被改写成 cancelled）④file_converter stderr 未 drain 会阻塞子进程（改 Stdio::null）+ 所有退出路径统一 kill/wait ⑤html_to_docx 跨 run 空格被吞（`This isimportanttext`）+ 十六进制实体永远解析失败 ⑥agent_profiles frontmatter 行内 `#` 注释未剥离（示例自身解析错）+ BOM + tools/background 声明真正生效 ⑦steer restash 覆盖后来指令（改 concat）⑧file_read_state 锁 poisoned 后每次调用 panic（改 into_inner）⑨note_delegation_start 在错误路径不弹栈（移到全部校验后）⑩plan_mode 拒绝清单补齐（disk_cleanup/storage_clean/skill_manage/send_message/bbs_post…）并把 win_* 精确为写动作（只读的 win_find_elements/win_list_windows 保留）⑪面板残留登记导致死 page（discover 失败即丢弃面板会话）⑫refresh_skill_group 版本不可解析时不再覆盖用户文件 ⑬persist_lineage 改 tmp+rename 原子写 ⑭paginate_read_body 字节/字符混淆（预算按字符，含中文回归测试）。
+
+未修（记录在案，非本次引入或需结构改造）：file_read_state 对超大文件永远 partial 导致 patch 死循环（需"已覆盖行区间"模型）；file_read_state 会话表无回收（常驻进程内无界）；plan_mode 是进程级 bool（per-session 需改 registry 结构）；html_to_docx 嵌套 table 覆盖；prompt_assembly 超 80 技能无提示；面板多会话共用同一 page；面板端口固定 9333 未校验占用者身份；stream_idle 中止时未过滤残缺 tool_call；file.rs 单行超预算时 offset 提示跳过该行剩余部分。
