@@ -144,7 +144,10 @@ fn spawn_power_watcher(notify: Arc<Notify>) {
     };
     match registered {
         Ok(handle) => {
-            std::mem::forget(handle);
+            // HPOWERNOTIFY 是 Copy 的裸句柄：订阅在进程生命周期内保持，
+            // 没有 Drop 需要抑制（`mem::forget` 对 Copy 是空操作，触发
+            // forgetting_copy_types 警告）。
+            let _ = handle;
             tracing::info!("已订阅系统休眠/唤醒通知");
         }
         Err(e) => tracing::warn!(error = %e, "订阅休眠/唤醒通知失败，回退到超时判定"),
