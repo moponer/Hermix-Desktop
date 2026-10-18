@@ -924,6 +924,48 @@ async fn mobile_activity_endpoint_is_wired() {
     );
 }
 
+/// POST 带 JSON 体（现有的 `post_json` 只发空体，拿它测带 body 的端点会 422）。
+async fn post_json_with(
+    app: axum::Router,
+    uri: &str,
+    body: serde_json::Value,
+) -> (StatusCode, serde_json::Value) {
+    let res = app
+        .oneshot(local(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        ))
+        .await
+        .unwrap();
+    let status = res.status();
+    let payload = res.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value =
+        serde_json::from_slice(&payload).unwrap_or(serde_json::Value::Null);
+    (status, json)
+}
+
+/// 桌面注意力上报必须真的挂在路由上。
+///
+/// 这条同样是**静默失效**的：前端上报失败是吞掉的（下一次心跳会补），所以路由写错
+/// 不会报错，只会让审批永远按「有人在」计时——那正是它要解决的问题。
+#[tokio::test]
+async fn presence_endpoint_records_attention() {
+    let app = test_app().await;
+    let (status, body) = post_json_with(
+        app,
+        "/api/dashboard/presence",
+        serde_json::json!({ "active": true }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["ok"], true);
+    assert_eq!(body["active"], true);
+}
+
 // ── Builtin skill seeding ────────────────────────────────────────────
 #[test]
 fn seed_builtin_skills_writes_all_builtins_to_fresh_dir() {

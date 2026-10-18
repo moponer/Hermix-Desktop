@@ -64,6 +64,11 @@ const LEFT_KEY = STORAGE_KEYS.sidebarWidth;
 /** 后台 run 活动计数轮询间隔。保活信号丢一次无害，取值偏保守。 */
 const KEEP_AWAKE_POLL_MS = 10_000;
 
+/**
+ * 窗口注意力心跳间隔。后端 TTL 给到 90 秒（3 倍），丢一两次心跳不会误判离开。
+ */
+const PRESENCE_HEARTBEAT_MS = 30_000;
+
 const RIGHT_KEY = STORAGE_KEYS.rightWidth;
 const RIGHT_OPEN_KEY = STORAGE_KEYS.rightOpen;
 const ACTIVE_SESSION_KEY = STORAGE_KEYS.activeSession;
@@ -650,6 +655,45 @@ setPage("chat");
         (streamingSessionId !== null || activeRuns > 0 || mobileActive),
     );
   }, [keepAwakeEnabled, streamingSessionId, activeRuns, mobileActive]);
+
+  // 上报「人在不在电脑前」。审批的超时按「可送达时间」计费，靠的就是这个信号：
+  // 人不在时倒计时暂停，回来还能批，不必让那一轮任务白跑。
+  // **必须主动上报**——后端若拿请求流量推断，本组件每 10 秒的防休眠轮询会把
+  // 「进程活着」误当成「人在看」，暂停就永远不会生效。
+  useEffect(() => {
+    let heartbeat: number | undefined;
+    const report = (active: boolean) => {
+      void api.postPresence(active);
+    };
+    const start = () => {
+      report(true);
+      if (heartbeat) window.clearInterval(heartbeat);
+      heartbeat = window.setInterval(() => report(true), PRESENCE_HEARTBEAT_MS);
+    };
+    const stop = () => {
+      if (heartbeat) {
+        window.clearInterval(heartbeat);
+        heartbeat = undefined;
+      }
+      report(false);
+    };
+    const sync = () => {
+      if (document.hasFocus() && document.visibilityState === "visible") start();
+      else stop();
+    };
+    sync();
+    window.addEventListener("focus", sync);
+    window.addEventListener("blur", sync);
+    document.addEventListener("visibilitychange", sync);
+    return () => {
+      window.removeEventListener("focus", sync);
+      window.removeEventListener("blur", sync);
+      document.removeEventListener("visibilitychange", sync);
+      if (heartbeat) window.clearInterval(heartbeat);
+      // 卸载时明确报「离开」，别让后端停在「有人」。
+      report(false);
+    };
+  }, []);
 
   /**
    * Most recent stream error, scoped to the active session.  Set when
@@ -1795,6 +1839,24 @@ setPage("chat");
     );
   }, []);
 
+  // 计划确认卡「知道了」：本地置 acknowledged，卡片随即消失。
+  // 后端没有计划确认回传通道（无 WsClientMessage 变体、无 agent
+  // loop 等待方），所以这里不发任何上行帧。
+  const handleAcknowledgePlan = useCallback((messageId: string) => {
+    setSessions((prev) =>
+      prev.map((s) => ({
+        ...s,
+        messages: s.messages.map((m) => {
+          if (m.id !== messageId || m.role !== "plan" || !m.planConfirm) return m;
+          return {
+            ...m,
+            planConfirm: { ...m.planConfirm, acknowledged: true },
+          };
+        }),
+      })),
+    );
+  }, []);
+
   // ── ACUI directive state + decision bus ─────────────────────
   // The agent emits ACUI (Agent-Controlled UI) directives over the
   // streaming WebSocket (`{ type: "acui", directive: {...} }`). We
@@ -2328,6 +2390,39 @@ streamPhaseRef.current = null;
       });
     };
 
+    // ── 编排总线事件（ws.rs 的 orchestration 桥）──────────────
+    // 桌面端只消费两类：自动化触发弹 toast；计划确认插一张
+    // 只读卡片（后端无确认回传通道，点了"知道了"即消失）。
+    // Task 生命周期事件留空——桌面暂无任务面板，接了也是噪音。
+    const onOrchestrationEvent = (ev: import("./hooks/useStreamChat").OrchestrationEventInfo) => {
+      if (ev.type === "automation_triggered") {
+        const name = ev.automationName || ev.automationId || "自动化任务";
+        toastInfo(`自动化「${name}」已触发`);
+        return;
+      }
+      if (ev.type === "plan_confirmation_required") {
+        const planMsg: ChatMessage = {
+          id: `plan-${ev.taskId}-${Date.now()}`,
+          role: "plan",
+          content: ev.planText,
+          timestamp: new Date().toISOString(),
+          planConfirm: {
+            taskId: ev.taskId,
+            planText: ev.planText,
+            acknowledged: false,
+          },
+        };
+        setSessions((prev) => prev.map((s) => {
+          if (s.id !== sessionId) return s;
+          return {
+            ...s,
+            messages: [...s.messages, planMsg],
+            updated_at: new Date().toISOString(),
+          };
+        }));
+      }
+    };
+
     // ── tool_stdout 批处理 ─────────────────────────────────────
     // 每个 stdout chunk 原本各跑一次全量 setSessions（map 所有
     // session→message→unified_steps）。大输出以帧级速率涌回时，
@@ -2821,6 +2916,7 @@ return {
           onApprovalRequest,
           onApprovalBatchRequest,
           onClarifyRequest,
+          onOrchestrationEvent,
           // 用户点击停止时（cancelStream）在 WS 关闭前触发：直接把仍在途的
           // 审批请求以 denied 否决发往后端，使 agent loop 立即解除阻塞，而非
           // 干等其 300s 审批超时。clarify 同理以空答案解除阻塞。
@@ -3671,6 +3767,7 @@ return {
       onApproveBatchApproval={handleApproveBatch}
       onDenyBatchApproval={handleDenyBatch}
       onAnswerClarify={handleAnswerClarify}
+      onAcknowledgePlan={handleAcknowledgePlan}
       acuiState={acui.state}
       acuiBus={acuiBus}
       acuiStats={acui.stats}

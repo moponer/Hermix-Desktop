@@ -659,10 +659,11 @@ pub async fn request_guard(
         );
         origin = Origin::Unpaired;
     }
-    // 已鉴权的客户端刚说过话 —— 记一笔「有人在」。
-    // 审批超时按可送达时间计费就靠这个信号：人在、或是有人能看见审批，才计时。
-    if !matches!(origin, Origin::Unpaired) {
-        crate::presence::touch();
+    // 只有**手机经代理**的请求算「设备在活动」。桌面端的请求故意不算：它为了
+    // 防休眠每 10 秒轮询一次，把这种后台心跳当成「人在看」，会让审批的在场判定
+    // 永久为真、暂停永不生效。桌面端的注意力由前端显式上报（见 presence 模块）。
+    if matches!(origin, Origin::PairedDevice { .. }) {
+        crate::presence::note_device_activity();
     }
 
     // 未配对来源一律 403，**没有任何路径豁免**。

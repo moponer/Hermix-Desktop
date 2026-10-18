@@ -109,6 +109,24 @@ pub async fn get_mobile_activity() -> Json<MobileActivityResponse> {
     })
 }
 
+// ── 桌面注意力 ──────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PresenceBody {
+    /// 窗口此刻是否在前台（带 30 秒心跳）。
+    pub active: bool,
+}
+
+/// POST /api/dashboard/presence —— 桌面端显式上报「人在不在电脑前」。
+///
+/// 为什么不能靠请求流量推断：桌面端为了防休眠每 10 秒轮询一次，窗口最小化
+/// 也照轮，于是「有进程在」被误当成「有人在看」，审批的在场判定永远为真。
+/// 注意力必须由**知道自己在前台的那一端**主动说（见 `presence` 模块注释）。
+pub async fn post_presence(Json(body): Json<PresenceBody>) -> Json<serde_json::Value> {
+    crate::presence::set_attention(body.active);
+    Json(json!({ "ok": true, "active": body.active }))
+}
+
 /// PUT /api/dashboard/plugins — persist plugin settings for remote mode.
 pub async fn set_plugins(
     State(state): State<HttpServerState>,

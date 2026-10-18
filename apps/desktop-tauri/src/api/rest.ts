@@ -1131,6 +1131,24 @@ export const getMobileActivity = async (): Promise<boolean> => {
   }
 };
 
+/**
+ * 上报窗口注意力（审批超时按「可送达时间」计费靠它）。
+ *
+ * 必须由**知道自己在前台的那一端**主动说：后端把请求流量当在场的话，
+ * 桌面端每 10 秒的防休眠轮询会把「进程活着」误当成「人在看」。
+ * 失败静默——上报丢一次只影响一次判定，心跳会补上。
+ */
+export const postPresence = async (active: boolean): Promise<void> => {
+  try {
+    await fetchJSON<unknown>("/api/dashboard/presence", {
+      method: "POST",
+      body: JSON.stringify({ active }),
+    });
+  } catch {
+    // 不打扰用户：下一次心跳（或失焦时的 false）会纠正。
+  }
+};
+
 export const getPluginSettings = async (): Promise<PluginSettings> => {
   try {
     const payload = await fetchJSON<{ plugins?: PluginSettings }>("/api/dashboard/plugins");

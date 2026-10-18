@@ -415,8 +415,8 @@ pub async fn serve_relay_socket(
             tracing::warn!(session = %sid, reason = %why, "relay 帧鉴权失败");
             continue;
         }
-        // 手机刚说过话：同样算「有人在」，让审批超时按可送达时间计费。
-        crate::presence::touch();
+        // 手机刚说过话：算「设备在活动」，让审批超时按可送达时间计费。
+        crate::presence::note_device_activity();
 
         match env.tag {
             FrameTag::Close => {

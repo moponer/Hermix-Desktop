@@ -126,6 +126,8 @@ pub fn router() -> Router<HttpServerState> {
         .route("/api/dashboard/plugin-manifests", get(stubs::get_plugin_manifests))
         // 移动端活动探测：桌面端拿它参与「保持唤醒」判定
         .route("/api/dashboard/mobile-activity", get(stubs::get_mobile_activity))
+        // 桌面注意力上报：审批超时按「可送达时间」计费要靠它
+        .route("/api/dashboard/presence", post(stubs::post_presence))
         // MCP server CRUD (config layer; actual spawn handled by hermes-mcp)
         .route(
             "/api/mcp/servers",
