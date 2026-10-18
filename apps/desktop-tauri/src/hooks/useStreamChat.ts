@@ -301,6 +301,8 @@ export function useStreamChat(activeSessionId: string | null) {
   // the `.close()`-shape call sites so the rest of the file does
   // not need to know about the transport.
   const wsRef = useRef<(() => void) | null>(null);
+  // 2026-10-18 停止协议化：Stop 帧发出后等待后端终态确认的定时器句柄。
+  const stopTimeoutRef = useRef<number | null>(null);
   // type-B observability + direct-send: send a raw text frame on the
   // live `stream:<sessionId>` channel via the stdio bridge. Returns
   // false (no-op) if the channel is not currently subscribed, so
@@ -701,7 +703,12 @@ export function useStreamChat(activeSessionId: string | null) {
           if (ctx.doneRef.current) return;
           // Guard against stale WS event handlers.
           if (ctx.activeSendIdRef.current !== ctx.mySendId) return;
-          // Turn is truly ending.
+          // Turn is truly ending. Clear the stop-confirm timer: the
+          // backend answered, the request/confirmation round-trip is done.
+          if (stopTimeoutRef.current !== null) {
+            window.clearTimeout(stopTimeoutRef.current);
+            stopTimeoutRef.current = null;
+          }
           setLastActivityAt(null);
           disarmTimeouts();
           // Drain any chunks that arrived after the last rAF tick.
@@ -807,6 +814,23 @@ export function useStreamChat(activeSessionId: string | null) {
    * to fall back to its legacy "全局 cancel" behavior when called
    * from contexts that don't have a sessionId handy.
    */
+  /** Stop 确认超时（ms）。超过即视后端不可达，本地清理会话身份。 */
+  const STOP_CONFIRM_TIMEOUT_MS = 3_000;
+
+  /** 本地拆除流（停止超时 / 无桥通道路径）。与 done 帧路径互斥由 doneRef 仲裁。 */
+  const teardownLocalStop = useCallback(() => {
+    if (settleRef.current) {
+      // Disarm timeouts first so they don't fire after we settle.
+      disarmTimeoutsRef.current?.();
+      settleRef.current("", undefined, "stop", "completed");
+    }
+    wsRef.current?.();
+    wsRef.current = null;
+    streamingSessionIdRef.current = null;
+    setStreamingSessionId(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const cancel = useCallback((sessionId?: string): boolean => {
     const currentStreamId = streamingSessionIdRef.current;
     if (sessionId !== undefined && currentStreamId !== sessionId) {
@@ -819,37 +843,44 @@ export function useStreamChat(activeSessionId: string | null) {
       );
       return false;
     }
-    // If there's an active send, settle it immediately so the
-    // UI's `sending` state gets reset without waiting for the
-    // asynchronous WS `onclose` event.  `settle()` is a no-op
-    // if it already ran (`done` guard), so double-cancel is safe.
-    if (settleRef.current) {
-      // 在 settle 关闭 WS **之前**通知调用方：此时 WS 仍 OPEN，可把
-      // 仍在途的审批/澄清直接否决发往后端，使 agent loop 立即解除阻塞。
-      pendingCallbacksRef.current?.onCancel?.();
-      // Disarm timeouts first so they don't fire after we settle.
-      disarmTimeoutsRef.current?.();
-      settleRef.current("", undefined, "stop", "completed");
+    // Notify UI intent immediately (stop button flips back to send).
+    pendingCallbacksRef.current?.onCancel?.();
+
+    // ── 2026-10-18 停止协议化 ─────────────────────────────────────
+    // 旧实现只做本地结算 + 解除监听 + 清 session 身份，后端完全不知情：
+    // agent loop 继续跑（慢 provider 下数分钟），期间用户再发消息以
+    // 未解析帧到达、被推迟到旧任务自然结束——"点停止后卡很久"。
+    // 现在停止是一等协议消息：发 `{"type":"stop"}` → 后端 fire
+    // interrupt → agent loop drain 到 `Done(outcome=interrupted)` →
+    // 该终态帧走正常 done 分支完成 settle + 断链 + 清 session 身份。
+    // 前后端从此共享同一个状态机，本地不再提前"分叉"。
+    const stopSent = wsSendRaw(JSON.stringify({ type: "stop" }));
+    if (stopSent) {
+      console.log(
+        `[WS-STOP] stop frame sent session=${currentStreamId ?? "(none)"}`,
+      );
+      // 请求-确认超时：后端必须在协议超时内回终态帧；桥已死等不可达
+      // 场景由这里接管本地清理（与 send 的 slow-watchdog 同类语义，
+      // 是协议超时而非兜底路径）。
+      if (stopTimeoutRef.current !== null) {
+        window.clearTimeout(stopTimeoutRef.current);
+      }
+      stopTimeoutRef.current = window.setTimeout(() => {
+        stopTimeoutRef.current = null;
+        if (!doneRef.current) {
+          console.log("[WS-STOP] stop confirm timeout — local teardown");
+          teardownLocalStop();
+        }
+      }, STOP_CONFIRM_TIMEOUT_MS);
+      return true;
     }
-    // Defensive: ensure WS is closed and streaming state is cleared
-    // even if settle() somehow didn't run.
-    // Log the real caller instead of claiming user intent: `cancel()` has
-    // TWO callers — the Composer stop button AND `chatStateReset`
-    // (session/model switch). The old hardcoded "用户点击停止" text fired
-    // for both, which made "the stream died by itself" reports
-    // undiagnosable.
-    const cancelCaller =
-      new Error()
-        .stack?.split("\n")
-        .slice(2, 4)
-        .map((l) => l.trim())
-        .join(" <- ") ?? "unknown";
-    console.log(`[WS-CLOSE] site=cancel caller=${cancelCaller}`);
-    wsRef.current?.();
-    wsRef.current = null;
-    streamingSessionIdRef.current = null;
-    setStreamingSessionId(null);
+    // 无存活桥通道（未在流式 / 桥已断）——没有可通知的对端，直接本地清理。
+    console.log(
+      `[WS-CLOSE] site=cancel local-only (no bridge channel) session=${currentStreamId ?? "(none)"}`,
+    );
+    teardownLocalStop();
     return true;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // 稳定引用的 API 对象：每次 render 都新建字面量会让 StreamChatContext 的
