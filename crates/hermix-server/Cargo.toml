@@ -75,7 +75,14 @@ p256 = { workspace = true }
 hkdf = { workspace = true }
 # ShellExecuteExW 提权拉起 filesearch helper：Win32_UI_Shell（SHELLEXECUTEINFOW）
 # + Win32_System_Registry（ShellExecuteExW 本体被它门控，见 windows-0.58 mod.rs:4588）
-windows = { workspace = true, features = ["Win32_UI_Shell", "Win32_System_Registry"] }
+windows = { workspace = true, features = [
+    "Win32_UI_Shell",
+    "Win32_System_Registry",
+    # 网络变化感知（net_watch.rs）：NotifyAddrChange 拿地址/路由变更通知，
+    # 把「切 Wi-Fi 后最坏 150s 恢复」压到秒级。OVERLAPPED 自带在 Win32_System_IO。
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_System_IO",
+] }
 regex = { workspace = true }
 # `test_state.rs` lives in the lib tree (gated by `#![cfg(any(test,
 # feature = "test-helpers"))]`) and uses `tempfile::tempdir` — so it

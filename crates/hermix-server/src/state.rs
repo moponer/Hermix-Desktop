@@ -1293,6 +1293,8 @@ impl HttpServerState {
             crate::relay_client::connect_and_serve(
                 cfg,
                 worker.relay_status.clone(),
+                // 网络变化时打断退避：切 Wi-Fi / 拔网线后不必干等满一轮。
+                Some(crate::net_watch::subscribe()),
                 |cfg| {
                     let worker = worker.clone();
                     async move {

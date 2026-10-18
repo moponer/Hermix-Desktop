@@ -58,6 +58,18 @@ impl RelayConfig {
         let secs = base.saturating_mul(1u64 << attempt.min(16));
         Duration::from_secs(secs.min(self.max_backoff_secs.max(base)))
     }
+
+    /// 给退避加 0.75–1.0 的抖动（**只向下**）。
+    ///
+    /// 没有抖动的指数退避会让所有客户端在 relay 重启后同一秒撞上来（惊群），
+    /// 而 relay 刚起来时正是最脆弱的时候。只向下抖动是为了不突破
+    /// `max_backoff_secs`：那个上限的意义是「relay 恢复后能接上」，
+    /// 抖动不该把它顶穿。
+    pub fn jittered(wait: Duration) -> Duration {
+        use rand::Rng;
+        let factor: f64 = rand::thread_rng().gen_range(0.75..=1.0);
+        Duration::from_millis((wait.as_millis() as f64 * factor) as u64)
+    }
 }
 
 /// 一条从手机侧来的待处理帧。
@@ -134,14 +146,27 @@ impl RelayStatus {
         g.attempts = g.attempts.saturating_add(1);
         g.attempts
     }
+
+    /// 退避归零（网络变化时用）：链路都换了，还按上次的失败次数等着没有意义。
+    fn reset_attempts(&self) {
+        let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        g.attempts = 0;
+    }
 }
 
 /// 出站连接循环的骨架：重连 + 退避。
 ///
 /// 真实连接由 [`connect_and_serve`] 提供，单独抽出来是为了**退避逻辑可测**——
 /// 退避错（无上限 / 不重置）会让 relay 恢复后接不上，而那种故障在现场极难复现。
-pub async fn connect_and_serve<F, Fut>(cfg: RelayConfig, status: RelayStatus, mut one_shot: F)
-where
+///
+/// `net_changed` 非 `None` 时，退避等待可被外部信号打断：切 Wi-Fi / 拔网线后
+/// 不必干等满一轮退避（`net_watch` 负责产生这个信号）。
+pub async fn connect_and_serve<F, Fut>(
+    cfg: RelayConfig,
+    status: RelayStatus,
+    net_changed: Option<Arc<tokio::sync::Notify>>,
+    mut one_shot: F,
+) where
     F: FnMut(RelayConfig) -> Fut,
     Fut: std::future::Future<Output = ()>,
 {
@@ -155,13 +180,25 @@ where
         if !cfg.enabled() {
             return;
         }
-        let wait = cfg.backoff(attempt);
+        let wait = RelayConfig::jittered(cfg.backoff(attempt));
         tracing::info!(
             attempt,
-            wait_secs = wait.as_secs(),
+            wait_ms = wait.as_millis() as u64,
             "relay 连接断开，退避后重连"
         );
-        tokio::time::sleep(wait).await;
+        match &net_changed {
+            Some(net) => {
+                tokio::select! {
+                    _ = tokio::time::sleep(wait) => {}
+                    _ = net.notified() => {
+                        // 链路可能已经换了，按上次的失败次数继续等着没有意义。
+                        status.reset_attempts();
+                        tracing::info!("网络变化，跳过退避立即重连");
+                    }
+                }
+            }
+            None => tokio::time::sleep(wait).await,
+        }
     }
 }
 
@@ -506,6 +543,7 @@ mod tests {
         connect_and_serve(
             RelayConfig::default(),
             status.clone(),
+            None,
             move |_| {
                 let seen = seen.clone();
                 async move {
@@ -531,6 +569,64 @@ mod tests {
         s.set(RelayState::Connected);
         assert_eq!(s.attempts(), 0, "连上就得清零，否则下次断线从高位退避起");
         assert_eq!(s.state(), RelayState::Connected);
+    }
+
+    /// 抖动只改分布不改上限：落在 [0.75, 1.0] × 基准内。
+    #[test]
+    fn 退避抖动落在四分之一区间内() {
+        let base = Duration::from_secs(8);
+        for _ in 0..200 {
+            let j = RelayConfig::jittered(base);
+            assert!(
+                j >= Duration::from_millis(6000) && j <= base,
+                "抖动必须只向下且不越界：{j:?}"
+            );
+        }
+        // 上限那一档也不能被顶穿。
+        let capped = Duration::from_secs(60);
+        assert!(RelayConfig::jittered(capped) <= capped);
+    }
+
+    /// 网络变化必须**打断退避**，而不是等满一轮。
+    ///
+    /// 这是「切 Wi-Fi 后最坏 150s」那条的一半：没有这个打断，链路换了还得
+    /// 按上次的失败次数干等（上限 60s）。
+    #[tokio::test]
+    async fn 网络变化打断退避立即重连() {
+        let mut cfg = cfg();
+        cfg.initial_backoff_secs = 30; // 不打断的话这一轮要等 30s
+        cfg.max_backoff_secs = 60;
+        let status = RelayStatus::new();
+        let net = Arc::new(tokio::sync::Notify::new());
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = calls.clone();
+
+        let handle = tokio::spawn(connect_and_serve(
+            cfg,
+            status.clone(),
+            Some(net.clone()),
+            move |_| {
+                let seen = seen.clone();
+                async move {
+                    seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+            },
+        ));
+
+        // 第一次连接立刻返回，随后进入 30s 退避。
+        tokio::time::sleep(Duration::from_millis(120)).await;
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        net.notify_waiters();
+
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "网络变化后应立即重连，而不是等满退避"
+        );
+        assert_eq!(status.attempts(), 1, "被打断后退避计数归零重来");
+        handle.abort();
     }
 
     #[test]

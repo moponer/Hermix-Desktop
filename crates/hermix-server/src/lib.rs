@@ -18,6 +18,7 @@ pub mod crash_dump;
 mod mobile;
 mod mobile_protocol;
 mod mobile_ws;
+mod net_watch;
 mod relay_client;
 mod relay_crypto;
 mod relay_identity;
