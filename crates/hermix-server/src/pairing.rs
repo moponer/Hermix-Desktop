@@ -1594,4 +1594,118 @@ mod tests {
         assert!(token.starts_with("hmxd_"), "设备 token 前缀稳定（协议面）");
         assert!(token.len() >= 32 + 5, "token 熵下限");
     }
+
+    // ── 配对全链路：密封帧进、密封帧出 ───────────────────────────
+
+    /// 配对唯一的安全断言：手机发来的密封请求，换回一个**密封的** device_token，
+    /// 而且那个 token 立刻能通过设备鉴权。
+    ///
+    /// 在此之前只有 `consume_for` 的单测（预算 / 锁定 / 分桶），「密封帧进、
+    /// 密封帧出」这一段零覆盖。它坏掉的表现很阴：手机侧 30 秒超时，PC 日志里
+    /// 一片安静（`handle_pairing_frame` 遇到无法回信的请求是**故意不吭声**的）。
+    #[tokio::test]
+    async fn 密封配对帧换回密封的_device_token() {
+        const PHONE_TOKEN: &str = "hrel_phone_under_test";
+        let dir = tempfile::tempdir().expect("tempdir");
+        // `relay_identity` 与 `PhoneBindingStore` 都按 HERMIX_HOME 走真实路径，
+        // 不隔离就会写到用户本人的 ~/.hermix 里去。
+        let _home = crate::test_env::EnvGuard::set("HERMIX_HOME", dir.path());
+
+        let mut state = crate::test_state::test_state_with_home(dir.path());
+        state.device_registry = Some(Arc::new(
+            DeviceRegistry::open(&dir.path().join("devices.db")).expect("open registry"),
+        ));
+        let state = Arc::new(state);
+
+        // 电脑端出一枚码，绑定手机的中转凭据。
+        let payload = state
+            .pairing_sessions
+            .create("https://relay.example.com", PHONE_TOKEN)
+            .expect("create pairing");
+
+        use base64::Engine;
+        use p256::elliptic_curve::sec1::ToEncodedPoint;
+        let b64 = base64::engine::general_purpose::STANDARD;
+        let phone = p256::SecretKey::from_slice(&[7u8; 32]).expect("phone key");
+        let phone_pub = phone.public_key().to_encoded_point(false);
+
+        let pc_identity = crate::relay_identity::load_or_create().expect("pc identity");
+        let pc_pub =
+            p256::PublicKey::from_sec1_bytes(&pc_identity.public_key()).expect("pc public key");
+
+        let request = serde_json::json!({
+            "request_id": "req-1",
+            "pairing_code": payload.pairing_code,
+            "device_name": "iPhone",
+            // JSON 名是 `pk`（与手机侧 crypto 层一致）；写错 serde 直接失败，
+            // 而失败路径**不发回信**——测试会卡在 recv 上。
+            "pk": b64.encode(phone_pub.as_bytes()),
+        });
+
+        let mut env = Envelope::route_for(PAIRING_SESSION_ID, String::new());
+        // relay 盖章的手机凭据哈希：错误预算分桶与「码与凭据一致性」都按它算。
+        env.token_hash = Some(sha256_hex(PHONE_TOKEN.as_bytes()));
+
+        // 方向是 DeviceToNode（手机 → PC）。**不能用 `seal_envelope`**：
+        // 它把方向写死成 NodeToDevice（PC 出站专用），拿它封进来的帧 PC 解不开，
+        // 而解不开的帧不会回信——测试只会卡在 recv 上，看不出原因。
+        let frame_id = [3u8; 16];
+        let sealed = crate::relay_crypto::seal_body(
+            request.to_string().as_bytes(),
+            &pc_pub,
+            &crate::relay_crypto::FrameContext {
+                frame_id: &frame_id,
+                header: &env.aad(),
+                direction: crate::relay_crypto::Direction::DeviceToNode,
+            },
+        );
+        env.payload = Some(
+            serde_json::json!({
+                "ct": b64.encode(&sealed.ciphertext),
+                "nonce": b64.encode(sealed.nonce),
+                "ep": b64.encode(sealed.ephemeral_public),
+                "eid": b64.encode(frame_id),
+            })
+            .to_string(),
+        );
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        handle_pairing_frame(state.clone(), env, tx).await;
+
+        let reply = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+            .await
+            .expect("超时：配对必须回信")
+            .expect("回信通道不该关闭");
+        assert_eq!(reply.session_id.as_deref(), Some(PAIRING_SESSION_ID));
+
+        // relay 看得见这封信，但读不懂——device_token 只能在手机私钥下还原。
+        let plain = crate::relay_crypto::open_envelope(
+            &reply,
+            &phone,
+            crate::relay_crypto::Direction::NodeToDevice,
+        )
+        .expect("回信必须能用手机私钥解开");
+        let body: serde_json::Value = serde_json::from_str(&plain).expect("json");
+        assert_eq!(body["ok"], true, "配对应成功：{body}");
+
+        let token = body["device_token"]
+            .as_str()
+            .expect("必须下发 device_token");
+        assert!(body["device_id"].as_str().is_some());
+
+        // 这个 token 必须**立刻可用**——配对的意义就是它。
+        let devices = state.device_registry.as_ref().expect("registry");
+        assert!(
+            devices.authenticate(token).is_some(),
+            "下发的 token 应能通过设备鉴权"
+        );
+
+        // 码是一次性的：同一枚再提交必须失败。
+        assert!(matches!(
+            state
+                .pairing_sessions
+                .consume_for(&payload.pairing_code, &sha256_hex(PHONE_TOKEN.as_bytes())),
+            ConsumeOutcome::Invalid | ConsumeOutcome::Locked
+        ));
+    }
 }
