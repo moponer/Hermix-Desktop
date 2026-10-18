@@ -70,8 +70,11 @@ Status: proposed — 差距审计已完成，方案未动工，等拍板。
 整组耗时 0.21s → 0.01s。**长期偶发红会让所有人学会「红了重跑」，真回归就藏进去了。**
 
 
-**未动**：12（`ws.rs:67` 的 `spawn_broadcast_forwarder` 死注释——该文件当时有在途改动，
-留待下一批）、14–21（P2 及以后）。
+**12 已落地（2026-10-18）**：`ws.rs` 里「依赖 `spawn_broadcast_forwarder`」的描述
+（该函数从未存在，注释自己都承认了）改为直述实际机制——每连接各自 spawn forward
+task、各持 receiver，sender drop 后一起退出。留个幽灵函数名比没注释更坏。
+
+**未动**：14–21（P2 及以后）。
 
 **P2 第一批已落地（2026-10-18）**：改造点 14、15。
 
@@ -309,7 +312,7 @@ PC hermix-server ──WSS /relay/node(出站)───┘   默认 wss://hermix
 **根因**（最关键的一条）：`GET /v1/sessions/{id}/subscribe?since_seq=` 这个快照能力建在 **HTTP 面**
 （`routes.rs:995-1046`、`lib.rs:408-411`），而手机走的是 **relay 帧通道**——relay 只透传 WS 帧、
 **不做 HTTP 中转**。于是「重连补历史」这件事在协议上根本走不通。
-`ws.rs:23-26` 明确写着「订阅前的事件不重放」，`ws.rs:67` 挂着一条 `spawn_broadcast_forwarder`
+`ws.rs:23-26` 明确写着「订阅前的事件不重放」，`session_broadcast` 注册表是只写的
 **从未实现**的死注释。这是**分层断裂**，不是漏写代码。
 
 **后果**：手机切后台 / 切 Wi-Fi / 进出地铁 → 这一轮的结果手机上**永久看不到**。
@@ -426,7 +429,7 @@ HttpServerState.session_links: HashMap<sid, SessionLink>
 | 9 | P1 | 会话日志 | `SessionJournal`：有界环形缓冲（默认 512 事件 / sid）+ 单调 seq | 新模块 |
 | 10 | P1 | 补发协议 | `Sync` 帧：手机重连带 `since_seq` → PC 补发 | `relay_proto.rs` |
 | 11 | P1 | 手机 hydrate | 重连后先发 `Sync` 再发 `Connected` | `ws.rs:2664-2794`、`apps/hm` |
-| 12 | P1 | 死注释 | 实现 `spawn_broadcast_forwarder` 或删掉注释 | `ws.rs:67` |
+| 12 | P1 | 死注释 | ✅ 已改为直述实际扇出机制 | `ws.rs` `session_broadcast_drop` |
 | 13 | P1 | 端到端测试 | 起真 relay + 假手机客户端，跑通「出码→扫码→绑定→常驻→断线→重连→补历史」 | `crates/hermix-server/tests/` |
 | 14 | P2 | 退避抖动 | 加 ±30% jitter；PC 上限对齐 30s | `relay_client.rs:56-60` |
 | 15 | P2 | 网络变化探测 | `NotifyAddrChange` 后台线程 → 触发健康检查/立即重连 | 新模块 |

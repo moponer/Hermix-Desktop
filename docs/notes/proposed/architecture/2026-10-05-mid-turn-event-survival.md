@@ -7,7 +7,7 @@ Status: proposed — ①②（事件通道重挂载）待专项实施；③④ �
 把「进行中回合」的事件流从发起连接上解耦，使断线/重连后审批卡与流式输出存活。四步，按性价比排序：
 
 1. **事件镜像移出 forward loop**：`ws.rs` 中 per-turn `mpsc` 的消费端目前独占于发起连接的 forward 循环——连接死即 `rx` drop，后续 `tx.send` 全部静默失败（coalescer 只留 debug 日志）。改为由独立 drain task 持有 `rx` 并写入 `session_broadcast`（seq 戳 `next_envelope_seq` 已存在），回合事件从此与连接生死解耦。
-2. **实现订阅侧**：`session_broadcast` 注册表现在是只写的——`spawn_broadcast_forwarder` 明确注释"该函数从未实现"（ws.rs:67）。新连接 `Connected` 后按 `since_seq` 订阅并泵送活尾巴（含 `RequestApprovalsBatch`）。
+2. **实现订阅侧**：`session_broadcast` 注册表现在是只写的（没有订阅者取号泵送；原先引用的 `spawn_broadcast_forwarder` 从未存在，注释已于 2026-10-18 清掉）。新连接 `Connected` 后按 `since_seq` 订阅并泵送活尾巴（含 `RequestApprovalsBatch`）。
 3. **新连接时推未决审批**：连接建立（或 `task_in_flight` 应答）时服务端主动推 `approval_registry.list_pending(session_id)`——注册表进程级、任意连接可解（ws.rs:2841 已支持），卡片无需依赖前端重发才补投。
 4. **修 live-decline 分支的宽限竞态**：`task_in_flight` 分支不取消旧连接死亡时排的 90s 宽限定时器（zombie 分支有 `abort_pending_grace`）——用户 90s 内重连重发，审批仍被陈旧定时器自动拒绝。**已落地**：live-decline 分支入口处 `abort_pending_grace`（旧 socket 的宽限因存活重连而过时）。
 
@@ -29,5 +29,5 @@ Status: proposed — ①②（事件通道重挂载）待专项实施；③④ �
 
 ## Consequences
 
-- 第 1-2 步触碰 forward 循环主路径，需压测多连接/多会话扇出；`spawn_broadcast_forwarder` 实现要处理慢消费者（broadcast channel lagged 语义）与 seq 去重。
+- 第 1-2 步触碰 forward 循环主路径，需压测多连接/多会话扇出；订阅侧实现要处理慢消费者（broadcast channel lagged 语义）与 seq 去重。
 - 事件镜像进 broadcast 后，重连补发会重放已决定卡片的原始事件——前端 step 写入按 requestId 去重已幂等（App.tsx onApprovalRequest），但 resolver 重注册语义需评审。
