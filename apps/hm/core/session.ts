@@ -38,6 +38,7 @@ import {
 } from './crypto'
 import { RelayClient } from './relayClient'
 import { PROTO_VERSION } from './envelope'
+import { ReplayWindow } from './replay'
 
 /** 会话 id。PC 侧按 `session_id` 拆包，格式必须与它一致。 */
 export function chatSessionId(deviceId: string): string {
@@ -81,6 +82,8 @@ export class ChatSession {
   /** 等连接就绪的 promise；resolve 时 this.ready 必为 true。 */
   private startDeferred: { resolve: () => void; reject: (e: unknown) => void } | null = null
   private readonly h: ChatSessionHandlers
+  /** 出站帧重放窗口（relay 是威胁模型里的潜在攻击者）。 */
+  private readonly replay = new ReplayWindow()
 
   constructor(handlers: ChatSessionHandlers) {
     this.h = handlers
@@ -214,6 +217,10 @@ export class ChatSession {
     } catch {
       return
     }
+    // 重投的帧是字节级复制（relay 没有密钥，封不出新 `eid`），所以 eid 相同
+    // 就是同一条旧帧。必须**在解密前**判：否则 relay 重投一条旧
+    // `approval.request` 会让审批按钮重新可点。
+    if (!this.replay.accept(sf.eid)) return
     try {
       const plain = await openBody(
         { nonce: b64decode(sf.nonce), ciphertext: b64decode(sf.ct) },
