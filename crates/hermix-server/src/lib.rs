@@ -19,6 +19,7 @@ mod mobile;
 mod mobile_protocol;
 mod mobile_ws;
 mod net_watch;
+mod presence;
 mod relay_client;
 mod relay_crypto;
 mod relay_identity;

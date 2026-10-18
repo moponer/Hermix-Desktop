@@ -659,6 +659,12 @@ pub async fn request_guard(
         );
         origin = Origin::Unpaired;
     }
+    // 已鉴权的客户端刚说过话 —— 记一笔「有人在」。
+    // 审批超时按可送达时间计费就靠这个信号：人在、或是有人能看见审批，才计时。
+    if !matches!(origin, Origin::Unpaired) {
+        crate::presence::touch();
+    }
+
     // 未配对来源一律 403，**没有任何路径豁免**。
     //
     // 这里原本放行 `/api/pairing/complete` 与 `/pair`——两条路由在配对改走 relay

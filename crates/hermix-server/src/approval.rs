@@ -20,6 +20,13 @@ pub struct ApprovalRegistry {
     /// session count × batch count, in practice <100.
     batches: Arc<std::sync::Mutex<HashMap<String, HashMap<String, Vec<String>>>>>,
     default_timeout: Duration,
+    /// 「现在有没有人可能答复」的判定。`None` = **不做在场判定**，按墙钟固定超时
+    /// （`with_timeout` 的语义，测试与调用方自定义超时时用）。
+    ///
+    /// `Some` 时超时按**可送达时间**计费：没有客户端在线就不计时。理由见
+    /// [`crate::presence`]：无人在线时那条回答在物理上不可能到达，倒计时照走
+    /// 等于保证失败。
+    presence: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
 }
 
 impl Default for ApprovalRegistry {
@@ -29,20 +36,38 @@ impl Default for ApprovalRegistry {
 }
 
 impl ApprovalRegistry {
+    /// 生产构造：超时按「可送达时间」计费（没有客户端在线时暂停）。
     pub fn new() -> Self {
-        Self::with_timeout(std::time::Duration::from_secs(
-            hermix_config::approval_timeout_secs(),
-        ))
+        Self::with_presence(
+            std::time::Duration::from_secs(hermix_config::approval_timeout_secs()),
+            Arc::new(|| crate::presence::seen_within(crate::presence::PRESENCE_WINDOW)),
+        )
     }
 
     /// Create a registry whose pending approvals auto-resolve to
     /// `false` after `default_timeout` of inactivity. Use
     /// `Duration::ZERO` to disable the timeout.
+    ///
+    /// **不做在场判定**：超时按墙钟走。测试用这个保证确定性（测试进程里没有
+    /// 真实的客户端活动，若也按在场计费会一直等下去）。
     pub fn with_timeout(default_timeout: Duration) -> Self {
         Self {
             inner: Arc::new(std::sync::Mutex::new(HashMap::new())),
             batches: Arc::new(std::sync::Mutex::new(HashMap::new())),
             default_timeout,
+            presence: None,
+        }
+    }
+
+    /// 显式给定在场判定。生产走 [`Self::new`]，测试用它把「有没有人在看」
+    /// 变成一个可控输入。
+    pub fn with_presence(
+        default_timeout: Duration,
+        presence: Arc<dyn Fn() -> bool + Send + Sync>,
+    ) -> Self {
+        Self {
+            presence: Some(presence),
+            ..Self::with_timeout(default_timeout)
         }
     }
 
@@ -104,8 +129,46 @@ impl ApprovalRegistry {
             let inner = Arc::clone(&self.inner);
             let sess = session_id.to_string();
             let req = request_id.to_string();
+            let presence = self.presence.clone();
             tokio::spawn(async move {
-                tokio::time::sleep(to).await;
+                // 无人在场时的绝对上限：不能因为有「暂时没人」就真挂住 agent。
+                const HARD_CAP: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+                // 小超时（单测）要够快，分钟级超时不必一秒多探。
+                let tick = (to / 4).clamp(Duration::from_millis(10), Duration::from_secs(1));
+                let mut waited = Duration::ZERO; // 墙钟
+                let mut visible = Duration::ZERO; // 有人可答复的时间
+                loop {
+                    tokio::time::sleep(tick).await;
+                    waited += tick;
+                    // 已被答复就别空转——原来的实现会照睡满整段超时。
+                    let still_pending = {
+                        let mut sessions = inner.lock().unwrap_or_else(|e| e.into_inner());
+                        sessions
+                            .get_mut(&sess)
+                            .map(|session| session.contains_key(&req))
+                            .unwrap_or(false)
+                    };
+                    if !still_pending {
+                        return;
+                    }
+                    match &presence {
+                        // 按「可送达时间」计费：没人在线就暂停，只受绝对上限约束。
+                        Some(seen) => {
+                            if seen() {
+                                visible += tick;
+                            }
+                            if visible >= to || waited >= HARD_CAP {
+                                break;
+                            }
+                        }
+                        // 无在场判定：墙钟固定超时（与旧行为一致）。
+                        None => {
+                            if waited >= to {
+                                break;
+                            }
+                        }
+                    }
+                }
                 let tx_opt = {
                     let mut sessions = inner.lock().unwrap_or_else(|e| e.into_inner());
                     sessions
@@ -117,6 +180,7 @@ impl ApprovalRegistry {
                         session_id = %sess,
                         request_id = %req,
                         timeout_secs = to.as_secs(),
+                        waited_secs = waited.as_secs(),
                         "approval request timed out (default deny)"
                     );
                     let _ = tx.send(ApprovalOutcome::TimedOut {
@@ -1166,5 +1230,74 @@ mod approval_registry_tests {
         assert!(!by_id["req-1"], "req-1 was already resolved");
         assert!(by_id["req-0"]);
         assert!(by_id["req-2"]);
+    }
+
+    // ── 超时按「可送达时间」计费 ──────────────────────────────────
+
+    /// 没有客户端在线时，倒计时不该流逝——那条回答物理上到不了。
+    ///
+    /// 这正是「人在地铁上 / 手机被系统杀掉后台」的场景：旧实现照走固定超时，
+    /// 等价于保证失败，agent 那一轮白跑。
+    #[tokio::test]
+    async fn 无人可答复时不倒计时_有人回来才继续() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let here = Arc::new(AtomicBool::new(false));
+        let probe = {
+            let here = here.clone();
+            Arc::new(move || here.load(Ordering::SeqCst))
+        };
+        let reg = ApprovalRegistry::with_presence(Duration::from_millis(80), probe);
+        let mut rx = reg.request_approval("sess-a", "req-1");
+
+        // 远超固定超时，但没人能答复 → 必须还在等
+        assert!(
+            tokio::time::timeout(Duration::from_millis(400), &mut rx)
+                .await
+                .is_err(),
+            "无人在场时不该判超时"
+        );
+        assert!(reg.is_pending("sess-a", "req-1"), "请求应仍在待批状态");
+
+        // 有人回来了 → 计时开始，很快到期
+        here.store(true, Ordering::SeqCst);
+        let outcome = tokio::time::timeout(Duration::from_secs(2), &mut rx)
+            .await
+            .expect("有人在场后应在超时时间内判超时")
+            .unwrap();
+        assert!(matches!(
+            outcome,
+            hermix_core::ApprovalOutcome::TimedOut { .. }
+        ));
+    }
+
+    /// 有人在场的路径与旧行为一致：到点就超时。
+    #[tokio::test]
+    async fn 有人在场时照常超时() {
+        let reg =
+            ApprovalRegistry::with_presence(Duration::from_millis(60), Arc::new(|| true));
+        let rx = reg.request_approval("sess-a", "req-1");
+        let outcome = tokio::time::timeout(Duration::from_secs(2), rx)
+            .await
+            .expect("应超时")
+            .unwrap();
+        assert!(matches!(
+            outcome,
+            hermix_core::ApprovalOutcome::TimedOut { .. }
+        ));
+    }
+
+    /// `with_timeout` 不带在场判定：墙钟固定超时（测试与自定义超时的语义）。
+    #[tokio::test]
+    async fn 显式构造的超时不看在场() {
+        let reg = ApprovalRegistry::with_timeout(Duration::from_millis(50));
+        let rx = reg.request_approval("sess-a", "req-1");
+        let outcome = tokio::time::timeout(Duration::from_secs(2), rx)
+            .await
+            .expect("固定超时不该被在场判定影响")
+            .unwrap();
+        assert!(matches!(
+            outcome,
+            hermix_core::ApprovalOutcome::TimedOut { .. }
+        ));
     }
 }
