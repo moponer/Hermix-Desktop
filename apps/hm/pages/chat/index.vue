@@ -19,7 +19,7 @@ import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue'
 import { onReady, onShow } from '@dcloudio/uni-app'
 import { isRiskyInstruction } from '../../core/voice'
 import { dispatch, reduce, initialChatState, type ChatState } from '../../core/frames'
-import { noteApprovalRequest } from '../../core/approvalQueue'
+import { noteApprovalRequest, forgetApproval } from '../../core/approvalQueue'
 import { isPaired } from '../../core/pairing'
 import { relayBaseUrl } from '../../core/clock'
 import { ensureSplashClosed } from '../../core/boot'
@@ -208,6 +208,35 @@ function onFrame(raw: string) {
     persistSession()
   }
   scrollToTail()
+}
+
+// ── 工具审批 ──────────────────────────────────────────────────────
+//
+// 审批是对话里的一条消息：`approval.request` 停在 `chat.pendingApproval` 上等人点，
+// 点完把决定**从同一条上行**发回 PC（`approval_response`），agent 才继续往下跑。
+// 不做本地先行结算——结果以 PC 的真实进展为准。
+const approvalBusy = ref(false)
+
+async function answerApproval(decision: 'approved' | 'denied') {
+  const pending = chat.value.pendingApproval
+  if (!pending || approvalBusy.value) return
+  if (!session) return
+  approvalBusy.value = true
+  try {
+    const sent = await session.respondApproval(pending.requestId, decision)
+    if (!sent) {
+      // 通道没就绪（正在重连 / 未配对）：别假装成功，用户会以为批过了
+      uni.showToast({ title: '没发出去，检查连接后重试', icon: 'none' })
+      return
+    }
+    chat.value = reduce(chat.value, {
+      kind: 'approval.answered',
+      requestId: pending.requestId,
+    })
+    forgetApproval(pending.requestId)
+  } finally {
+    approvalBusy.value = false
+  }
 }
 
 // ── 语音输入 ──────────────────────────────────────────────────────
@@ -405,6 +434,19 @@ onUnmounted(() => {
       <view class="risky-keys">
         <view class="hm-pill pri key" @tap="confirmRisky"><text>发送</text></view>
         <view class="hm-pill soft key" @tap="pendingRisky = null"><text>取消</text></view>
+      </view>
+    </view>
+
+    <!-- 工具审批：PC 停在等这一下，和对话在同一处，不另开页面 -->
+    <view v-if="chat.pendingApproval" class="risky approval">
+      <text class="risky-t">电脑要用「{{ chat.pendingApproval.tool }}」</text>
+      <text class="risky-b">
+        点了之后任务会按你的答复继续往下跑。
+        <text v-if="!chat.pendingApproval.canPersist">永久放行只能在电脑上操作。</text>
+      </text>
+      <view class="risky-keys">
+        <view class="hm-pill pri key" @tap="answerApproval('approved')"><text>允许一次</text></view>
+        <view class="hm-pill soft key" @tap="answerApproval('denied')"><text>拒绝</text></view>
       </view>
     </view>
 

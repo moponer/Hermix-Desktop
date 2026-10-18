@@ -137,3 +137,49 @@ test('空增量不新建气泡', () => {
   assert.equal(s.streamingId, null, '空内容不该凭空开一个气泡')
   assert.equal(s.streamingText, '')
 })
+
+// ------------------------------------------------------------- 工具审批
+
+test('审批帧停在会话状态里等人点', () => {
+  const s = feed(
+    initialChatState(),
+    '{"type":"approval.request","request_id":"r1","tool":"terminal","can_persist":false}',
+  )
+  assert.deepEqual(s.pendingApproval, {
+    requestId: 'r1',
+    tool: 'terminal',
+    canPersist: false,
+  })
+  // PC 正卡在等这个回答，所以这一轮仍然是「进行中」
+  assert.equal(s.turnActive, true)
+})
+
+test('缺 can_persist 时按不可永久放行处理', () => {
+  const s = feed(
+    initialChatState(),
+    '{"type":"approval.request","request_id":"r1","tool":"terminal"}',
+  )
+  assert.equal(s.pendingApproval?.canPersist, false, '危险默认值不能是「能永久放行」')
+})
+
+test('答复后只清掉自己那条', () => {
+  const s = feed(
+    initialChatState(),
+    '{"type":"approval.request","request_id":"r1","tool":"terminal","can_persist":false}',
+  )
+  const cleared = reduce(s, { kind: 'approval.answered', requestId: 'r1' })
+  assert.equal(cleared.pendingApproval, null)
+
+  // 期间来了下一条（批量审批），回答旧的不能把新的清掉
+  const s2 = reduce(s, { kind: 'approval.answered', requestId: 'other' })
+  assert.equal(s2.pendingApproval?.requestId, 'r1')
+})
+
+test('一轮结束时不留悬空审批', () => {
+  const s = feed(
+    initialChatState(),
+    '{"type":"approval.request","request_id":"r1","tool":"terminal","can_persist":false}',
+    '{"type":"turn.done"}',
+  )
+  assert.equal(s.pendingApproval, null, '这一轮都结束了，没有人还会等它')
+})

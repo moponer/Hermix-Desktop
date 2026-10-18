@@ -308,6 +308,25 @@ export class ChatSession {
     return this.sendPlain({ type: 'send', text })
   }
 
+  /**
+   * 回传工具审批决定。
+   *
+   * 走**和聊天同一条密封上行**，不走 REST：审批是对话里的一个消息回合，
+   * PC 侧 `WsClientMessage::ApprovalResponse` 收到后 resolve 掉等待，
+   * agent 才按用户的答复继续。分成 HTTP 一条路会让「对话里看到」与
+   * 「结果回到哪」脱节。
+   */
+  async respondApproval(
+    requestId: string,
+    decision: 'approved' | 'denied',
+  ): Promise<boolean> {
+    return this.sendPlain({
+      type: 'approval_response',
+      request_id: requestId,
+      decision,
+    })
+  }
+
   /** 封一帧明文上行。`send` 与补发请求共用，密封细节只写一次。 */
   private async sendPlain(obj: unknown): Promise<boolean> {
     if (!this.client || !this.identity || !this.pcPublic || !this.ready) return false

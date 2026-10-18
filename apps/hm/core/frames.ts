@@ -15,6 +15,7 @@ export type MobileEvent =
   | { kind: 'tool.start'; tool: string }
   | { kind: 'tool.end'; tool: string }
   | { kind: 'approval.request'; requestId: string; tool: string; canPersist: boolean }
+  | { kind: 'approval.answered'; requestId: string }
   | { kind: 'turn.done' }
   | { kind: 'turn.error'; content: string }
   | { kind: 'turn.busy' }
@@ -78,6 +79,22 @@ export interface ChatState {
   lastError: string | null
   /** 服务端说"上一轮还在跑"——用于提示用户别重复发 */
   busy: boolean
+  /**
+   * 正在等的工具审批。审批是**对话里的一条消息**：PC 发 `approval.request`
+   * 停在这里等人点，点了发 `approval_response` 回 PC，agent 才继续。
+   *
+   * 之所以放进会话状态而不是让页面另开一条轮询：审批和回答、工具轨迹一样，
+   * 都属于「这一轮正在发生什么」。分成两套状态机就会出现「对话里看不到、
+   * 另一个页面才有」的割裂。
+   */
+  pendingApproval: PendingApproval | null
+}
+
+export interface PendingApproval {
+  requestId: string
+  tool: string
+  /** 配对设备恒为 false（永久放行只能在电脑端操作）。 */
+  canPersist: boolean
 }
 
 export function initialChatState(): ChatState {
@@ -89,6 +106,7 @@ export function initialChatState(): ChatState {
     turnActive: false,
     lastError: null,
     busy: false,
+    pendingApproval: null,
   }
 }
 
@@ -132,12 +150,34 @@ export function reduce(state: ChatState, ev: MobileEvent): ChatState {
           : [...state.doneTools, ev.tool],
       }
     case 'turn.done':
-      return { ...state, turnActive: false, busy: false, runningTools: [] }
+      return { ...state, turnActive: false, busy: false, runningTools: [], pendingApproval: null }
     case 'turn.error':
-      return { ...state, turnActive: false, busy: false, lastError: ev.content || '出错了' }
+      return {
+        ...state,
+        turnActive: false,
+        busy: false,
+        lastError: ev.content || '出错了',
+        // 这一轮已经结束，还挂着的审批没有人会等它了
+        pendingApproval: null,
+      }
     case 'turn.busy':
       return { ...state, busy: true }
     case 'approval.request':
+      // 停在对话里等人点。`turnActive` 置真：agent 正卡在等这个回答。
+      return {
+        ...state,
+        turnActive: true,
+        pendingApproval: {
+          requestId: ev.requestId,
+          tool: ev.tool,
+          canPersist: ev.canPersist,
+        },
+      }
+    case 'approval.answered':
+      // 只清自己那条：期间可能已经来了下一条（批量审批），别误清。
+      return state.pendingApproval?.requestId === ev.requestId
+        ? { ...state, pendingApproval: null }
+        : state
     case 'user.echo':
     case 'unknown':
     default:
