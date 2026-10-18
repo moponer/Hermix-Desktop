@@ -80,9 +80,25 @@ Status: proposed — 差距审计已完成，方案未动工，等拍板。
    `#[cfg(windows)]` 的后台线程复杂得多；而 `hermix-server` 早已硬绑 Windows
    （DPAPI 在非 Windows 是编译错误），这里不多欠一笔新债。非 Windows 编译成空实现。
 
-**未做（下一步）**：16（休眠唤醒）——`WM_POWERBROADCAST` 要窗口与消息循环，
-`RegisterSuspendResumeNotification` 要维护回调的 FFI 生命周期；且唤醒时网络栈重新绑定
-通常也触发地址变化，能被 15 覆盖大半。17（`keep_awake` 联动）、18（N-1 版本窗口）同理待办。
+**未做（下一步）**：17（`keep_awake` 联动：手机会话在线时自动保持唤醒——这是产品决策，
+要不要为了远端一直不让电脑睡，得你拍板）、18（N-1 版本窗口）。
+
+**P2 第二批已落地（2026-10-18）**：改造点 16，以及一处顺带清掉的安全门禁死代码。
+
+| # | 落地位置 | 说明 |
+|---|---|---|
+| 16 休眠唤醒 | `net_watch::spawn_power_watcher` | `RegisterSuspendResumeNotification` 的**回调**模式，不需要窗口/消息循环 |
+| 顺带 | `security::request_guard` | 未配对关口取消 `/api/pairing/complete`、`/pair` 两个豁免 |
+
+**为什么 16 这次能做了**：原判断是「`WM_POWERBROADCAST` 要窗口与消息循环，太重」。
+查了 API 才发现 `RegisterSuspendResumeNotification` 有 `DEVICE_NOTIFY_CALLBACK` 模式，
+只要一份注册参数 + 一个回调指针，完全不碰窗口——和 `NotifyAddrChange` 是同一量级的活。
+代价是两处刻意的泄漏（注册参数与返回句柄必须活到进程结束，句柄一释放注册就解除）。
+
+**为什么顺手清那条豁免**：它放行的是两条 2026-10-10 之后就不存在的路由。功能上无害
+（走到 handler 也是 404），但它是个**预开的免认证口子**——将来谁在这两个名字上新建
+路由，默认不带认证，而没人会想到去翻一个叫「放行列表」的函数。
+
 
 
 
