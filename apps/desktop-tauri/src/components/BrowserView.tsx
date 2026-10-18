@@ -212,6 +212,27 @@ export function BrowserView() {
     }, "image/png");
   }, []);
 
+  // 交互面板：打开一个真正的 WebView2 浏览器窗口（带 CDP 调试端口），
+  // agent 的 browser_* 工具会改为驱动那个窗口——用户可以直接在上面点击、
+  // 输入，而不是只看帧流。失败时保持帧流小窗原样（工具会回退独立 Edge）。
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [panelMsg, setPanelMsg] = useState<string | null>(null);
+  const togglePanel = useCallback(async () => {
+    try {
+      if (panelOpen) {
+        await invoke("browser_panel_close");
+        setPanelOpen(false);
+        setPanelMsg("交互面板已关闭，恢复独立浏览器");
+      } else {
+        await invoke<string>("browser_panel_open");
+        setPanelOpen(true);
+        setPanelMsg("交互面板已打开：agent 将在此窗口内操作");
+      }
+    } catch (e) {
+      setPanelMsg(`切换失败: ${String(e)}`);
+    }
+  }, [panelOpen]);
+
   const sessionCount = sessionOrder.length;
   const activeSession = selected ?? sessionOrder[0] ?? DEFAULT_SESSION;
 
@@ -242,6 +263,9 @@ export function BrowserView() {
           <button type="button" className="bv-btn" onClick={saveFrame} disabled={!everFramed}>
             保存当前帧
           </button>
+          <button type="button" className="bv-btn" onClick={() => void togglePanel()}>
+            {panelOpen ? "关闭交互面板" : "交互面板"}
+          </button>
           <button
             type="button"
             className="bv-btn bv-btn--close"
@@ -251,6 +275,11 @@ export function BrowserView() {
           </button>
         </div>
       </div>
+      {panelMsg && (
+        <div className="bv-tabs" role="status" style={{ fontSize: 12, opacity: 0.85 }}>
+          {panelMsg}
+        </div>
+      )}
       {sessionCount > 1 && (
         <div className="bv-tabs" role="tablist" aria-label="浏览器会话">
           {sessionOrder.map((key) => {

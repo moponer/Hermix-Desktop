@@ -47,6 +47,10 @@ _hxbuild/
 # 由 apps/desktop-tauri/scripts/ensure-sidecar.mjs 在打包前刷进 binaries/）
 apps/desktop-tauri/src-tauri/binaries/*
 
+# dsh 转换引擎（Office→PDF；由 scripts/fetch-dsh-engine.mjs 下载，
+# 189MB 二进制载荷不入库，见 docs/notes/implemented/feature/2026-10-17-dsh-office-engine.md）
+apps/desktop-tauri/src-tauri/resources/dsh-engine/
+
 # Release directory (build outputs)
 /release/**
 # 散落到 apps/ 下的 release 是错误位置（统一产物在仓库根 /release/target）

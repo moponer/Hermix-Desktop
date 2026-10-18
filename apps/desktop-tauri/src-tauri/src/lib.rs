@@ -42,11 +42,78 @@ const CUSTOM_APP_SKILL: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/builtin-skills/hermix/custom-app-development/SKILL.md"
 ));
+// 工作流方法论三篇（自写，非 superpowers 原文搬运）：测试先行 / 系统化调试 /
+// 完成前验证。与 ponytail（简化纪律）互补。
+const WORKFLOW_TDD_SKILL: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/builtin-skills/hermix/workflow-tdd/SKILL.md"
+));
+const WORKFLOW_DEBUGGING_SKILL: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/builtin-skills/hermix/workflow-debugging/SKILL.md"
+));
+const WORKFLOW_VERIFICATION_SKILL: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/builtin-skills/hermix/workflow-verification/SKILL.md"
+));
+// DOCX 文档编写方法论（路由选择 / python-docx 模板 / 字体与表格硬规则 /
+// dsh 引擎渲染验证闭环）。脚本由 agent 落到工作区，不随包分发。
+const DOCX_SKILL: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/builtin-skills/hermix/docx/SKILL.md"
+));
+// 浏览器操作/测试方法论（snapshot→act→wait→verify 循环、懒加载、截图取证）。
+const WEB_GUI_TESTER_SKILL: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/builtin-skills/hermix/web-gui-tester/SKILL.md"
+));
+// 自诊断方法论（日志位置、症状→关键字对照表、配置项、报告格式）。
+const SELF_DIAGNOSIS_SKILL: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/builtin-skills/hermix/self-diagnosis/SKILL.md"
+));
+
+// 技能附带的脚本/资源（非 SKILL.md）：首启写入，已存在则不覆盖（用户改动优先）。
+// docx 的 build_docx.py 把中文字体/页边距/定宽表格等硬规则固化在生成器里。
+const DOCX_BUILD_SCRIPT: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/builtin-skills/hermix/docx/scripts/build_docx.py"
+));
+
+const BUILTIN_SKILL_EXTRA_FILES: &[(&str, &str)] = &[(
+    "hermix/docx/scripts/build_docx.py",
+    DOCX_BUILD_SCRIPT,
+)];
+
+// 内置子代理档案（ZCode subagent-markdown analog）：首启写入
+// <HERMIX_HOME>/agents/，已存在则不覆盖（用户可自建同名档案）。
+const BUILTIN_AGENT_PROFILES: &[(&str, &str)] = &[
+    (
+        "explore.md",
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/builtin-agents/explore.md"
+        )),
+    ),
+    (
+        "general-purpose.md",
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/builtin-agents/general-purpose.md"
+        )),
+    ),
+];
 
 const BUILTIN_SKILLS: &[(&str, &str)] = &[
     ("hermix/storage-analyzer", STORAGE_ANALYZER_SKILL),
     ("hermix/ponytail", PONYTAIL_SKILL),
     ("hermix/custom-app-development", CUSTOM_APP_SKILL),
+    ("hermix/workflow-tdd", WORKFLOW_TDD_SKILL),
+    ("hermix/workflow-debugging", WORKFLOW_DEBUGGING_SKILL),
+    ("hermix/workflow-verification", WORKFLOW_VERIFICATION_SKILL),
+    ("hermix/docx", DOCX_SKILL),
+    ("hermix/web-gui-tester", WEB_GUI_TESTER_SKILL),
+    ("hermix/self-diagnosis", SELF_DIAGNOSIS_SKILL),
 ];
 
 /// Default `SOUL.md` (persona) shipped *inside the binary* via `include_str!`.
@@ -122,6 +189,25 @@ fn ensure_builtin_skills(skills_dir: &std::path::Path) {
     if wrote > 0 {
         println!("[Hermix] wrote {wrote} built-in skills to {}", skills_dir.display());
     }
+
+    // 技能附带文件（脚本等）：只在缺失时写入——它们没有 version 语义，
+    // 用户可能按需改过。
+    for (rel, content) in BUILTIN_SKILL_EXTRA_FILES {
+        let target = skills_dir.join(rel);
+        if target.exists() {
+            continue;
+        }
+        if let Some(parent) = target.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                eprintln!("[Hermix] failed to create {}: {e}", parent.display());
+                continue;
+            }
+        }
+        match std::fs::write(&target, content) {
+            Ok(()) => println!("[Hermix] wrote builtin skill file {rel}"),
+            Err(e) => eprintln!("[Hermix] failed to write builtin skill file {rel}: {e}"),
+        }
+    }
 }
 
 /// Extract the `version` field from a SKILL.md YAML frontmatter.
@@ -195,20 +281,18 @@ fn ensure_bundled_skills(resource_dir: &std::path::Path, skills_dir: &std::path:
         }
         let group_name = group.file_name().to_string_lossy().into_owned();
         let target = skills_dir.join(&group_name);
-        if target.exists() {
-            // Already extracted on a prior launch; skip this group to avoid
-            // overwriting any user modifications.
-            continue;
-        }
-        if let Err(e) = std::fs::create_dir_all(&target) {
-            eprintln!("[Hermix] failed to create bundled-skills dir {group_name}: {e}");
-            had_error = true;
-            continue;
-        }
-        match copy_dir_recursively(&group.path(), &target) {
+        // Version-aware refresh instead of "group exists → skip forever":
+        // a skill shipped in v1.0 stayed frozen on disk even after the
+        // installer advanced to v1.2, so documentation fixes never reached
+        // existing users. Rules:
+        //   · SKILL.md — overwrite only when the bundled frontmatter
+        //     `version` is strictly greater than the installed one (user
+        //     edits at the same/greater version are preserved);
+        //   · any other file — copy when missing, never overwrite.
+        match refresh_skill_group(&group.path(), &target) {
             Ok(copied) => total_copied += copied,
             Err(e) => {
-                eprintln!("[Hermix] failed to copy bundled skills group {group_name}: {e}");
+                eprintln!("[Hermix] failed to refresh bundled skills group {group_name}: {e}");
                 had_error = true;
             }
         }
@@ -221,6 +305,146 @@ fn ensure_bundled_skills(resource_dir: &std::path::Path, skills_dir: &std::path:
     } else if !had_error {
         // Nothing new to extract (all groups already present) — normal no-op.
     }
+}
+
+/// Default loopback CDP port for the embedded browser panel. Fixed so the
+/// agent tools can find it even after an app restart; the window is a
+/// singleton (label `browser-panel`), so two panels cannot collide.
+const BROWSER_PANEL_CDP_PORT: u16 = 9333;
+
+/// Open the **visible browser panel** (WebView2 window with CDP debugging).
+///
+/// The agent tools do not launch their own Edge when a panel is registered
+/// (`browser::panel::current()`): they attach to this window's page over CDP,
+/// so the user watches the automation inside the app.
+///
+/// `--remote-debugging-port` is passed as a WebView2 additional browser
+/// argument. It binds to loopback only; the port registry file is deleted on
+/// close so tools never attach to a stale port.
+#[tauri::command]
+async fn browser_panel_open(
+    app: tauri::AppHandle,
+    url: Option<String>,
+) -> Result<String, String> {
+    let label = "browser-panel";
+    if let Some(existing) = app.get_webview_window(label) {
+        let _ = existing.close();
+    }
+
+    let start_url = url.unwrap_or_else(|| "https://www.bing.com".to_string());
+    let parsed: tauri::Url = start_url
+        .parse()
+        .map_err(|e| format!("无效的 URL `{start_url}`: {e}"))?;
+
+    let builder = tauri::WebviewWindowBuilder::new(
+        &app,
+        label,
+        tauri::WebviewUrl::External(parsed),
+    )
+    .title("浏览器面板")
+    .inner_size(1100.0, 780.0)
+    .additional_browser_args(&format!(
+        "--remote-debugging-port={BROWSER_PANEL_CDP_PORT}"
+    ));
+
+    builder
+        .build()
+        .map_err(|e| format!("打开浏览器面板失败: {e}"))?;
+
+    hermix_tools::tools::os_auto::browser::panel::register(BROWSER_PANEL_CDP_PORT, None)
+        .map_err(|e| format!("登记面板端口失败: {e}"))?;
+
+    Ok(format!(
+        "浏览器面板已打开（CDP 端口 {BROWSER_PANEL_CDP_PORT}）。agent 的 browser_* 工具将驱动这个可见面板。"
+    ))
+}
+
+/// Close the panel and unregister its port (tools fall back to a fresh Edge).
+#[tauri::command]
+fn browser_panel_close(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("browser-panel") {
+        let _ = window.close();
+    }
+    hermix_tools::tools::os_auto::browser::panel::clear();
+    Ok(())
+}
+
+/// Seed the built-in sub-agent profiles (`<home>/agents/*.md`). Files that
+/// already exist are user-owned and never overwritten.
+fn ensure_builtin_agent_profiles(home: &std::path::Path) {
+    let dir = home.join("agents");
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        eprintln!("[Hermix] failed to create agents dir {}: {e}", dir.display());
+        return;
+    }
+    for (file, content) in BUILTIN_AGENT_PROFILES {
+        let target = dir.join(file);
+        if target.exists() {
+            continue;
+        }
+        match std::fs::write(&target, content) {
+            Ok(()) => println!("[Hermix] seeded agent profile {}", target.display()),
+            Err(e) => eprintln!("[Hermix] failed to write agent profile {file}: {e}"),
+        }
+    }
+}
+
+/// Refresh one bundled skill group into `target`, returning the number of
+/// files written.
+///
+/// Rules (kept here so the caller's doc block stays honest):
+/// * `SKILL.md` — overwritten only when the bundled frontmatter `version` is
+///   strictly greater **and both sides parse**; unparsable versions are
+///   treated as user-owned and left alone;
+/// * any other file — copied only when missing (never overwritten).
+fn refresh_skill_group(src: &std::path::Path, target: &std::path::Path) -> std::io::Result<u32> {
+    std::fs::create_dir_all(target)?;
+    let mut copied = 0u32;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let path = entry.path();
+        let dest = target.join(entry.file_name());
+        if path.is_dir() {
+            copied += refresh_skill_group(&path, &dest)?;
+            continue;
+        }
+        let is_skill_md = entry.file_name().to_string_lossy() == "SKILL.md";
+        if !dest.exists() {
+            std::fs::copy(&path, &dest)?;
+            copied += 1;
+            continue;
+        }
+        if is_skill_md {
+            let bundled_ver = std::fs::read_to_string(&path)
+                .map(|s| extract_skill_version_ord(&s))
+                .unwrap_or((0, 0, 0));
+            let installed_ver = std::fs::read_to_string(&dest)
+                .map(|s| extract_skill_version_ord(&s))
+                .unwrap_or((0, 0, 0));
+            // An unparsable version (e.g. `1.0.0-beta`, a trailing comment,
+            // or a hand-edited file) yields (0,0,0) — treat it as
+            // "not comparable" and keep the user's file. Overwriting on an
+            // unparsable version would silently destroy local edits.
+            let comparable = bundled_ver != (0, 0, 0) && installed_ver != (0, 0, 0);
+            if comparable && bundled_ver > installed_ver {
+                eprintln!(
+                    "[Hermix] refreshing bundled skill {}: installed {:?} < bundled {:?}",
+                    dest.display(),
+                    installed_ver,
+                    bundled_ver
+                );
+                std::fs::copy(&path, &dest)?;
+                copied += 1;
+            } else if !comparable {
+                tracing::debug!(
+                    path = %dest.display(),
+                    "skill version not comparable — keeping the installed file"
+                );
+            }
+        }
+        // Non-SKILL.md files that already exist are treated as user-owned.
+    }
+    Ok(copied)
 }
 
 /// Extract the custom-app runtime pieces (neutralino binary + client library) from
@@ -318,27 +542,38 @@ fn ensure_loader(
     }
 }
 
-/// Recursive directory copy. Returns the number of files copied.
-fn copy_dir_recursively(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<u32> {
-    let mut count = 0u32;
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let ty = entry.file_type()?;
-        let file_name = entry.file_name();
-        let src_path = entry.path();
-        let dst_path = dst.join(&file_name);
-        if ty.is_dir() {
-            std::fs::create_dir_all(&dst_path)?;
-            count += copy_dir_recursively(&src_path, &dst_path)?;
-        } else {
-            // Skip copy if the destination already has the file.
-            if !dst_path.exists() {
-                std::fs::copy(&src_path, &dst_path)?;
-                count += 1;
+/// Parse a skill `version` for comparison: supports both the plain integer
+/// form (`version: 1`, used by the include_str! builtins) and the dotted
+/// semver-ish form the modelscope skills ship (`metadata: version: "1.0.0"`).
+/// Returns `(major, minor, patch)`; an unparsable/missing version is `(0,0,0)`.
+fn extract_skill_version_ord(content: &str) -> (u32, u32, u32) {
+    let mut start = None;
+    let mut end = None;
+    for (i, line) in content.lines().enumerate() {
+        if line.trim() == "---" {
+            if start.is_none() {
+                start = Some(i);
+            } else {
+                end = Some(i);
+                break;
             }
         }
     }
-    Ok(count)
+    let (Some(s), Some(e)) = (start, end) else {
+        return (0, 0, 0);
+    };
+    for line in content.lines().skip(s + 1).take(e.saturating_sub(s + 1)) {
+        let Some(rest) = line.trim().strip_prefix("version:") else {
+            continue;
+        };
+        let raw = rest.trim().trim_matches('"').trim_matches('\'');
+        let mut parts = raw.split('.');
+        let major = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
+        let minor = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
+        let patch = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
+        return (major, minor, patch);
+    }
+    (0, 0, 0)
 }
 
 pub struct AppState {
@@ -596,6 +831,8 @@ pub fn run() {
             set_boot_stage(&handle, "正在解包内置技能…");
             let skills_dir = hermix_home.join("skills");
             ensure_builtin_skills(&skills_dir);
+            // 内置子代理档案（explore / general-purpose），同样随二进制分发。
+            ensure_builtin_agent_profiles(&hermix_home);
             if let Ok(resource_dir) = app.path().resource_dir() {
                 set_boot_stage(&handle, "正在准备运行时组件…");
                 ensure_bundled_skills(&resource_dir, &skills_dir);
@@ -797,6 +1034,8 @@ pub fn run() {
             commands_workbench::workbench_fs_list,
             commands_workbench::workbench_undo,
             commands_workbench::workbench_history,
+            browser_panel_open,
+            browser_panel_close,
         ])
         .run(tauri::generate_context!())
         .expect("error while running hermix-desktop");

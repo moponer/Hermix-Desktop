@@ -80,4 +80,8 @@ if (!existsSync(desktopVite)) {
 }
 sh("node", [desktopVite, "build"], appDir);
 
+// dsh 转换引擎（Office→PDF，构建期捆绑，运行期完全离线）：幂等，
+// 已就位且版本一致时秒过。见 scripts/fetch-dsh-engine.mjs 头注。
+sh("node", [path.join(__dirname, "fetch-dsh-engine.mjs")]);
+
 console.log("[ensure-sidecar] sidecar 已刷新并逐字节校验。");
