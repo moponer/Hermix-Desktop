@@ -674,6 +674,14 @@ struct PairResultFrame {
     error: Option<String>,
 }
 
+/// 取 relay 盖章的手机凭据哈希，作为错误预算的分桶键。
+///
+/// `None` 或空串都视为「没有盖章」：空串如果照用，会变成一个所有人共享的
+/// `""` 桶，等于把「按凭据分桶」退化成全局桶（任意来源连错 5 次锁死所有人）。
+fn pairing_bucket(token_hash: Option<&str>) -> Option<&str> {
+    token_hash.filter(|h| !h.is_empty())
+}
+
 /// 处理一条 relay 配对帧并回信。由 `relay_client` 在常规帧鉴权**之前**分派
 /// （配对时手机还没有设备凭据，常规鉴权必然拒绝）。
 ///
@@ -725,10 +733,15 @@ async fn pair_reply(state: &HttpServerState, env: &Envelope) -> Option<Envelope>
     };
 
     // ② 判码。桶 = relay 盖章的手机凭据哈希。
-    let bucket = env
-        .token_hash
-        .clone()
-        .unwrap_or_else(|| "relay-unstamped".to_string());
+    //
+    // 拿不到盖章哈希就整帧拒收。旧实现退化成共享桶 `"relay-unstamped"`，
+    // 于是「任意来源连错 5 次」就能锁死所有人的配对码——一个免费的 DoS，
+    // 且把「按凭据分桶」这条防线整个抹平。没有哈希本来也过不了 ③ 的凭据
+    // 一致性校验，早拒没有任何功能损失。
+    let Some(bucket) = pairing_bucket(env.token_hash.as_deref()).map(str::to_string) else {
+        tracing::warn!("pairing: 帧缺 relay 盖章的凭据哈希，整帧拒收（不消费共享预算桶）");
+        return None;
+    };
     let outcome = state
         .pairing_sessions
         .consume_for(req.pairing_code.trim(), &bucket);
@@ -754,7 +767,7 @@ async fn pair_reply(state: &HttpServerState, env: &Envelope) -> Option<Envelope>
                 .pairing_sessions
                 .take_relay_grant(req.pairing_code.trim());
             match grant {
-                Some(hash) if Some(&hash) == env.token_hash.as_ref() => {}
+                Some(hash) if hash == bucket => {}
                 _ => {
                     result.error =
                         Some("配对码与扫码使用的凭据不匹配。请在电脑上重新生成后重扫。".into());
@@ -775,19 +788,18 @@ async fn pair_reply(state: &HttpServerState, env: &Envelope) -> Option<Envelope>
                                 None,
                                 Some("allowed".to_string()),
                             );
-                            // 撤销链路：绑定表记下这条手机凭据的哈希。写失败只
-                            // 记日志、不回滚配对——配对已成立，为绑定表搞失败更糟。
-                            if let Some(hash) = env.token_hash.as_deref() {
-                                let node_id = state.relay_settings.lock().await.node_id.clone();
-                                if let Err(e) = crate::relay_settings::PhoneBindingStore::at_default()
-                                    .put(&device.device_id, hash, &node_id)
-                                {
-                                    tracing::warn!(
-                                        device_id = %device.device_id,
-                                        error = %e,
-                                        "记录 relay 绑定失败 —— 这台设备之后无法从 relay 侧撤销"
-                                    );
-                                }
+                            // 撤销链路：绑定表记下这条手机凭据的哈希（bucket 就是
+                            // 它，前面已确认存在）。写失败只记日志、不回滚配对——
+                            // 配对已成立，为绑定表搞失败更糟。
+                            let node_id = state.relay_settings.lock().await.node_id.clone();
+                            if let Err(e) = crate::relay_settings::PhoneBindingStore::at_default()
+                                .put(&device.device_id, &bucket, &node_id)
+                            {
+                                tracing::warn!(
+                                    device_id = %device.device_id,
+                                    error = %e,
+                                    "记录 relay 绑定失败 —— 这台设备之后无法从 relay 侧撤销"
+                                );
                             }
                             result.ok = true;
                             result.device_id = Some(device.device_id);
@@ -1248,6 +1260,44 @@ mod tests {
         // IM 通道的码没有凭据可绑。
         let code_only = sessions.create_code_only();
         assert_eq!(sessions.take_relay_grant(&code_only), None);
+    }
+
+    /// 错误预算的分桶键必须真的来自 relay 盖章的凭据哈希。
+    ///
+    /// 缺失时旧实现退化成共享桶 `"relay-unstamped"` —— 任意来源连错 5 次
+    /// 就能锁死所有人的配对码。空串同理会变成一个 `""` 共享桶，所以两者
+    /// 一律视为「没有盖章」。
+    #[test]
+    fn pairing_bucket_requires_a_real_stamped_hash() {
+        assert_eq!(pairing_bucket(None), None, "缺字段 = 没盖章");
+        assert_eq!(pairing_bucket(Some("")), None, "空串 = 没盖章");
+        assert_eq!(pairing_bucket(Some("abc123")), Some("abc123"));
+    }
+
+    /// 两个不同来源各自烧自己的预算：这是「按凭据分桶」的核心断言。
+    #[test]
+    fn distinct_buckets_do_not_share_budget() {
+        let sessions = PairingSessions::new();
+        let payload = sessions.create(RELAY, PHONE_TOKEN).expect("create");
+        let bucket_a = pairing_bucket(Some("hash-a")).expect("bucket a");
+        for _ in 0..PAIRING_MAX_WRONG_ATTEMPTS {
+            assert_eq!(
+                sessions.consume_for("000000", bucket_a),
+                ConsumeOutcome::Invalid
+            );
+        }
+        assert_eq!(
+            sessions.consume_for(&payload.pairing_code, bucket_a),
+            ConsumeOutcome::Locked,
+            "烧光预算的来源自己被锁"
+        );
+        assert!(
+            matches!(
+                sessions.consume_for(&payload.pairing_code, "hash-b"),
+                ConsumeOutcome::Ok(_)
+            ),
+            "另一条凭据不受牵连"
+        );
     }
 
     #[test]
