@@ -386,6 +386,9 @@ pub async fn serve_relay_socket(
                 if let Some(h) = sessions.remove(&sid) {
                     h.abort();
                 }
+                // 会话真的结束了，待补发的事件没有意义——只保留序号游标，
+                // 让手机下次连上来能看出「这一段没了」而不是拿到一份空列表。
+                crate::session_journal::global().clear(&sid);
             }
             FrameTag::Route => {
                 // 必须走 `dispatch`，不能把 `env.payload` 直接塞进队列。
@@ -408,7 +411,11 @@ pub async fn serve_relay_socket(
                 // dispatch 投进的 sink 共用 mux 里那条通道——各自建一条的话
                 // 消息永远到不了。
                 if !sessions.contains_key(&sid) {
-                    let transport = mux.transport_for(&sid, out_tx.clone());
+                    let transport = mux.transport_for(
+                        &sid,
+                        out_tx.clone(),
+                        Some(crate::session_journal::global()),
+                    );
                     let st = state.clone();
                     let sid_for_task = sid.clone();
                     sessions.insert(

@@ -47,6 +47,11 @@ pub struct RelayTransport {
     outbound_tx: mpsc::Sender<Envelope>,
     /// E2EE 上下文。`None` = 未启用（测试路径），帧按明文走。
     e2ee: Option<Arc<E2eeCtx>>,
+    /// 会话事件日志。`None` = 不做补发（单测路径）。
+    ///
+    /// 生命周期必须长于 relay 连接——放在 `SessionMux` 里就会随每次重连一起
+    /// 丢掉，而「重连后补齐」正是它存在的理由。
+    journal: Option<Arc<crate::session_journal::JournalRegistry>>,
 }
 
 /// 进程级的 E2EE 状态：本机私钥 + 各设备的公钥。
@@ -169,6 +174,30 @@ pub fn device_id_of(session_id: &str) -> Option<&str> {
     session_id.strip_prefix("im:device:")
 }
 
+/// 封一帧出站内层明文并发到 relay。
+///
+/// `RelaySink::send` 与补发回信共用——**没配对成功就发不出去**这条规则
+/// 只能有一处实现，两边各写一遍必然漂移。宁可不发，也不发明文。
+async fn seal_and_send(
+    outbound_tx: &mpsc::Sender<Envelope>,
+    e2ee: &Option<Arc<E2eeCtx>>,
+    session_id: &str,
+    inner: String,
+) -> Result<(), String> {
+    // AAD 取路由字段，所以先把 Envelope 的路由部分填好，payload 留空
+    // 占位——`seal_outbound` 会就地填上密文。
+    let mut env = Envelope::route_for(session_id, String::new());
+    match e2ee {
+        None => env.payload = Some(inner),
+        Some(ctx) => {
+            let device_id =
+                device_id_of(session_id).ok_or("session_id 不是设备来源，无从取对端公钥")?;
+            ctx.seal_outbound(&mut env, &inner, device_id)?;
+        }
+    }
+    outbound_tx.send(env).await.map_err(|e| e.to_string())
+}
+
 /// 一条会话的入站队列。上限是有意的：手机断线时不至于把 PC 的内存吃光。
 const INBOUND_CAP: usize = 256;
 
@@ -178,11 +207,13 @@ impl RelayTransport {
     /// 必须与 `SessionMux` 持有的是同一条通道——各自建一条的话，投进 mux
     /// 的帧永远到不了 transport，而这种错误不报任何错（编译过、测试也过），
     /// 症状是「手机发的消息 agent 收不到」。
-    pub fn over_channel(
+    /// 带事件日志的版本：`journal = None` 时不做补发（单测路径）。
+    pub fn over_channel_with_journal(
         session_id: String,
         outbound_tx: mpsc::Sender<Envelope>,
         inbound: Inbound,
         e2ee: Option<Arc<E2eeCtx>>,
+        journal: Option<Arc<crate::session_journal::JournalRegistry>>,
     ) -> Self {
         let (inbound_tx, inbound_rx) = inbound;
         Self {
@@ -191,6 +222,7 @@ impl RelayTransport {
             inbound_rx,
             outbound_tx,
             e2ee,
+            journal,
         }
     }
 
@@ -212,6 +244,7 @@ impl RelayTransport {
                 inbound_rx: rx,
                 outbound_tx,
                 e2ee,
+                journal: None,
             },
             inbound_tx,
         )
@@ -220,18 +253,31 @@ impl RelayTransport {
 
 impl Transport for RelayTransport {
     fn split(self) -> (Box<dyn TransportSink>, Box<dyn TransportSource>) {
-        let session_id = self.session_id.clone();
-        let outbound_tx = self.outbound_tx.clone();
-        let inbound_tx = self.inbound_tx.clone();
+        let RelayTransport {
+            session_id,
+            inbound_tx,
+            inbound_rx,
+            outbound_tx,
+            e2ee,
+            journal,
+        } = self;
         (
             Box::new(RelaySink {
-                session_id,
-                outbound_tx,
-                e2ee: self.e2ee,
+                session_id: session_id.clone(),
+                outbound_tx: outbound_tx.clone(),
+                e2ee: e2ee.clone(),
+                journal: journal.clone(),
             }),
+            // 补发走 recv 这条路：手机发来的 `sync` 请求必须在交给
+            // `handle_ws_stream` 之前截下来（它只认 `WsClientMessage`，
+            // 见到不认识的 type 会整帧丢弃且不报错）。
             Box::new(RelaySource {
-                inbound_rx: self.inbound_rx,
+                session_id,
+                inbound_rx,
                 inbound_tx,
+                outbound_tx,
+                e2ee,
+                journal,
             }),
         )
     }
@@ -241,6 +287,7 @@ struct RelaySink {
     session_id: String,
     outbound_tx: mpsc::Sender<Envelope>,
     e2ee: Option<Arc<E2eeCtx>>,
+    journal: Option<Arc<crate::session_journal::JournalRegistry>>,
 }
 
 #[async_trait::async_trait]
@@ -261,30 +308,24 @@ impl TransportSink for RelaySink {
         if mapped.get("type").and_then(|t| t.as_str()) == Some("approval.request") {
             crate::mobile_protocol::set_can_persist_false(&mut mapped);
         }
-        let inner =
-            serde_json::to_string(&mapped).map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
+        // 序号必须在**帧里**：手机用它记「我看到哪了」，重连时把 last_seq
+        // 带回来。日志存的也必须是含 seq 的同一份字节——否则补发出去的帧
+        // 没有序号，手机会一直认为自己停在原地。
+        let inner = match &self.journal {
+            Some(journal) => journal
+                .append(&self.session_id, |seq| {
+                    mapped["seq"] = serde_json::Value::from(seq);
+                    mapped.to_string()
+                })
+                .1,
+            None => serde_json::to_string(&mapped)
+                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?,
+        };
 
-        // AAD 取路由字段，所以先把 Envelope 的路由部分填好，payload 留空
-        // 占位——`seal_outbound` 会就地填上密文。
-        let mut env = Envelope::route_for(&self.session_id, String::new());
-        match &self.e2ee {
-            None => {
-                // 未启用 E2EE（单测 / 旧路径）：明文走。
-                env.payload = Some(inner);
-            }
-            Some(ctx) => {
-                // **没配对成功就发不出去**——这是有意的。发明文等于让 relay
-                // 看穿，relay 侧也会直接拒（`isSealed`）。宁可这里明确失败，
-                // 也不要一条"看起来成功但其实裸奔"的路径。
-                let device_id = device_id_of(&self.session_id)
-                    .ok_or("session_id 不是设备来源，无从取对端公钥")?;
-                ctx.seal_outbound(&mut env, &inner, device_id)?;
-            }
-        }
-        self.outbound_tx
-            .send(env)
+        // 出站方向只走这一条封帧路径（与补发回信共用）。
+        seal_and_send(&self.outbound_tx, &self.e2ee, &self.session_id, inner)
             .await
-            .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
+            .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
         Ok(())
     }
 
@@ -303,10 +344,15 @@ impl TransportSink for RelaySink {
 }
 
 struct RelaySource {
+    session_id: String,
     inbound_rx: Arc<tokio::sync::Mutex<mpsc::Receiver<String>>>,
     /// 保留发送端：否则 `handle_ws_stream` 一放开 Recv 就会看到通道关闭，
     /// 把"暂时没有新帧"误判成"对端已关闭"。
     inbound_tx: mpsc::Sender<String>,
+    /// 补发要自己封帧发回去，所以接收侧也得握有出站口与 E2EE 上下文。
+    outbound_tx: mpsc::Sender<Envelope>,
+    e2ee: Option<Arc<E2eeCtx>>,
+    journal: Option<Arc<crate::session_journal::JournalRegistry>>,
 }
 
 #[async_trait::async_trait]
@@ -314,7 +360,63 @@ impl TransportSource for RelaySource {
     async fn recv(&mut self) -> Option<String> {
         // 发送端由本结构体持有（见字段注释），所以它会一直 await 到真有帧，
         // 而不是把"暂时没消息"当成"对端已关闭"。
-        self.inbound_rx.lock().await.recv().await
+        loop {
+            let msg = { self.inbound_rx.lock().await.recv().await }?;
+            // 补发请求在这里截住：往下走是 `handle_ws_stream`，它只认业务帧，
+            // 见到 `sync` 会整帧丢弃且**不报任何错**——症状是「手机重连后
+            // 一片空白，日志里什么都没有」。
+            match crate::mobile_protocol::parse_sync_request(&msg) {
+                Some(since_seq) => self.reply_sync(since_seq).await,
+                None => return Some(msg),
+            }
+        }
+    }
+}
+
+impl RelaySource {
+    /// 按 `since_seq` 把漏掉的事件打包回信。
+    async fn reply_sync(&self, since_seq: u64) {
+        let Some(journal) = &self.journal else {
+            tracing::warn!(session = %self.session_id, "收到补发请求但没有事件日志，忽略");
+            return;
+        };
+        let (events, truncated) = journal.since(&self.session_id, since_seq);
+        let frames: Vec<serde_json::Value> = events
+            .iter()
+            .filter_map(|(seq, raw)| match serde_json::from_str::<serde_json::Value>(raw) {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    tracing::warn!(seq, error = %e, "日志里的帧不是合法 JSON，跳过");
+                    None
+                }
+            })
+            .collect();
+        tracing::info!(
+            session = %self.session_id,
+            since_seq,
+            count = frames.len(),
+            truncated,
+            "补发断连期间的事件"
+        );
+        let payload = serde_json::json!({
+            "type": crate::mobile_protocol::MOBILE_SYNC_RESULT,
+            "proto_version": crate::relay_proto::PROTO_VERSION,
+            "since_seq": since_seq,
+            // 缺口必须**明说**：环形日志覆盖掉的那一段真的没了，
+            // 让 UI 提示「部分历史已丢失」，而不是给一份看起来完整的列表。
+            "truncated": truncated,
+            "events": frames,
+        });
+        if let Err(e) = seal_and_send(
+            &self.outbound_tx,
+            &self.e2ee,
+            &self.session_id,
+            payload.to_string(),
+        )
+        .await
+        {
+            tracing::warn!(session = %self.session_id, error = %e, "补发回信发送失败");
+        }
     }
 }
 
@@ -426,13 +528,20 @@ impl SessionMux {
         &mut self,
         sid: &str,
         outbound_tx: mpsc::Sender<Envelope>,
+        journal: Option<Arc<crate::session_journal::JournalRegistry>>,
     ) -> RelayTransport {
         let inbound = self
             .entries
             .entry(sid.to_string())
             .or_insert_with(new_inbound)
             .clone();
-        RelayTransport::over_channel(sid.to_string(), outbound_tx, inbound, self.e2ee.clone())
+        RelayTransport::over_channel_with_journal(
+            sid.to_string(),
+            outbound_tx,
+            inbound,
+            self.e2ee.clone(),
+            journal,
+        )
     }
 
     /// 取出（或首次为）某条会话的入队句柄。
@@ -1100,5 +1209,177 @@ mod tests {
             json!(false),
             "必须显式告诉 App 永久放行不可用，否则它只能静默少一个按钮"
         );
+    }
+
+    // ── 断线重连补发（SessionJournal + sync） ────────────────────────
+
+    /// 建一条带日志的会话，返回 (mux, 出站接收端)。「重连」= 再调一次：
+    /// 真实重连就是 `SessionMux` 被丢掉重建，而日志活在它之外——**这正是
+    /// 要验的不变量**，用重建 mux 来模拟比开真 socket 更稳且更贴题。
+    fn wired_session(
+        pc: &Arc<E2eeCtx>,
+        sid: &str,
+        journal: &Arc<crate::session_journal::JournalRegistry>,
+    ) -> (
+        SessionMux,
+        RelayTransport,
+        mpsc::Receiver<Envelope>,
+    ) {
+        let (out_tx, out_rx) = mpsc::channel(16);
+        let mut mux = SessionMux {
+            entries: HashMap::new(),
+            e2ee: Some(pc.clone()),
+            replay: ReplayGuard::default(),
+        };
+        let transport = mux.transport_for(sid, out_tx, Some(journal.clone()));
+        (mux, transport, out_rx)
+    }
+
+    /// 手机断线期间的出站事件，重连后必须补齐。
+    ///
+    /// 验收整条链：`sink.send` → 事件名映射 → 记日志（带 seq）→ 封帧 →
+    /// relay；重连时手机发 `sync{since_seq}` → `RelaySource::recv` 截获 →
+    /// 打包成一条 `sync.result` 回信。
+    #[tokio::test]
+    async fn reconnect_replays_events_missed_while_offline() {
+        let pc = e2ee_for_tests(9);
+        let phone = p256::SecretKey::from_slice(&[8u8; 32]).unwrap();
+        let sid = "im:device:dev-replay";
+        let journal = Arc::new(crate::session_journal::JournalRegistry::new());
+        // 生产上这条公钥是重连时那次 key.exchange 学到的；这里直接塞进去，
+        // 免得测试同时验两件事。
+        pc.peers
+            .lock()
+            .unwrap()
+            .insert("dev-replay".to_string(), phone.public_key());
+
+        // ---- 第一次连接：PC 发了 3 条，手机只收到前 2 条就断线了 ----
+        let (_mux1, transport1, mut out_rx1) = wired_session(&pc, sid, &journal);
+        let (mut sink1, _src1) = transport1.split();
+        for text in ["one", "two", "three"] {
+            sink1
+                .send(json!({"type": "text", "content": text}).to_string())
+                .await
+                .expect("出站应成功");
+        }
+
+        let mut seen_last_seq = 0;
+        for _ in 0..2 {
+            let env = out_rx1.recv().await.expect("应有出站帧");
+            let plain = open_envelope(&env, &phone, Direction::NodeToDevice).expect("手机应能解开");
+            let v: serde_json::Value = serde_json::from_str(&plain).unwrap();
+            assert_eq!(v["type"], "assistant.message");
+            assert_eq!(v["proto_version"], crate::relay_proto::PROTO_VERSION);
+            // 序号必须落在帧里，否则手机无从记「我看到哪了」。
+            seen_last_seq = v["seq"].as_u64().expect("每帧都要带 seq");
+        }
+        assert_eq!(seen_last_seq, 2, "手机看到第 2 条就断了");
+
+        // 第三条已经在 relay 的路由表里发不出去 —— 相当于断线期间产生，
+        // 手机没收到的它，但日志里有。
+        assert_eq!(journal.len(sid), 3, "3 条都要进日志，包括手机没收到的那条");
+
+        // ---- 重连：新 mux（模拟 mux 重建），同一份日志 ----
+        let (mut mux2, transport2, mut out_rx2) = wired_session(&pc, sid, &journal);
+        let (_sink2, mut src2) = transport2.split();
+
+        // 手机把 last_seq 带回来。
+        mux2.sink_for(sid)
+            .send(json!({"type": "sync", "since_seq": seen_last_seq}).to_string())
+            .await
+            .expect("sync 请求应入队");
+
+        // recv 会在等业务帧的过程中把补发回信发出去。
+        let recv_task = tokio::spawn(async move {
+            // 没有后续业务帧，它会一直等——回信已经发出，abort 收尾。
+            let _ = src2.recv().await;
+        });
+
+        let env = tokio::time::timeout(std::time::Duration::from_secs(2), out_rx2.recv())
+            .await
+            .expect("超时：补发回信没发出来")
+            .expect("出站通道不该关闭");
+        recv_task.abort();
+
+        let plain = open_envelope(&env, &phone, Direction::NodeToDevice).expect("手机应能解开回信");
+        let v: serde_json::Value = serde_json::from_str(&plain).unwrap();
+        assert_eq!(v["type"], "sync.result");
+        assert_eq!(v["since_seq"], 2);
+        assert_eq!(v["truncated"], json!(false), "没被环形日志覆盖就不该报缺口");
+        let events = v["events"].as_array().expect("events 必须是数组");
+        assert_eq!(events.len(), 1, "只补第 3 条");
+        assert_eq!(events[0]["content"], "three");
+        assert_eq!(events[0]["seq"], 3, "补发的帧要带原序号，手机才能续上进度");
+    }
+
+    /// 环形日志被覆盖时，回信必须**明说**缺口，而不是给一份看起来完整的列表。
+    #[tokio::test]
+    async fn replay_reports_truncation_instead_of_pretending_complete() {
+        let pc = e2ee_for_tests(9);
+        let phone = p256::SecretKey::from_slice(&[9u8; 32]).unwrap();
+        let sid = "im:device:dev-trunc";
+        // 容量 1：发 3 条只留最后一条。
+        let journal = Arc::new(crate::session_journal::JournalRegistry::with_cap(1));
+        pc.peers
+            .lock()
+            .unwrap()
+            .insert("dev-trunc".to_string(), phone.public_key());
+
+        let (_mux1, transport1, _out_rx1) = wired_session(&pc, sid, &journal);
+        let (mut sink1, _src1) = transport1.split();
+        for text in ["one", "two", "three"] {
+            sink1
+                .send(json!({"type": "text", "content": text}).to_string())
+                .await
+                .unwrap();
+        }
+
+        let (mut mux2, transport2, mut out_rx2) = wired_session(&pc, sid, &journal);
+        let (_sink2, mut src2) = transport2.split();
+        mux2.sink_for(sid)
+            .send(json!({"type": "sync", "since_seq": 0}).to_string())
+            .await
+            .unwrap();
+        let recv_task = tokio::spawn(async move {
+            let _ = src2.recv().await;
+        });
+
+        let env = tokio::time::timeout(std::time::Duration::from_secs(2), out_rx2.recv())
+            .await
+            .expect("超时")
+            .expect("通道关闭");
+        recv_task.abort();
+
+        let plain = open_envelope(&env, &phone, Direction::NodeToDevice).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&plain).unwrap();
+        assert_eq!(v["truncated"], json!(true), "被覆盖的区间必须报缺口");
+        assert_eq!(v["events"].as_array().unwrap().len(), 1);
+    }
+
+    /// `sync` 不能被当成业务帧交给 `handle_ws_stream` —— 它按
+    /// `WsClientMessage` 解析，遇到不认识的 type 会整帧丢弃且不报错。
+    #[tokio::test]
+    async fn sync_request_is_not_delivered_to_the_session_handler() {
+        let pc = e2ee_for_tests(9);
+        let sid = "im:device:dev-sync-hidden";
+        let journal = Arc::new(crate::session_journal::JournalRegistry::new());
+        let (mut mux, transport, _out_rx) = wired_session(&pc, sid, &journal);
+        let (_sink, mut src) = transport.split();
+
+        let tx = mux.sink_for(sid);
+        tx.send(json!({"type": "sync", "since_seq": 0}).to_string())
+            .await
+            .unwrap();
+        tx.send(json!({"type": "send", "text": "hi"}).to_string())
+            .await
+            .unwrap();
+
+        let got = tokio::time::timeout(std::time::Duration::from_secs(2), src.recv())
+            .await
+            .expect("超时")
+            .expect("应有业务帧");
+        let v: serde_json::Value = serde_json::from_str(&got).unwrap();
+        assert_eq!(v["type"], "send", "sync 被吃掉后才轮到真正的业务帧");
+        assert_eq!(v["text"], "hi");
     }
 }

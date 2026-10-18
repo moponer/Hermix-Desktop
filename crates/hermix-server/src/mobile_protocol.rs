@@ -76,6 +76,27 @@ pub fn to_hermes_type(event: &str) -> Option<&'static str> {
     })
 }
 
+/// App → PC：请求补齐 `since_seq` 之后的事件。
+///
+/// **不走 `to_hermes_type`**：这不是给 agent 的消息，`handle_ws_stream` 只认
+/// `WsClientMessage`，把它混进业务帧会被整帧丢弃且不报错。它在
+/// `RelaySource::recv` 就被截下，回一个 [`MOBILE_SYNC_RESULT`]。
+pub const MOBILE_SYNC_REQUEST: &str = "sync";
+
+/// PC → App：补发结果。`{type, since_seq, truncated, events[]}`。
+pub const MOBILE_SYNC_RESULT: &str = "sync.result";
+
+/// 认出补发请求，返回手机已经看到的最后一个序号（缺省 0 = 全量）。
+pub fn parse_sync_request(plain: &str) -> Option<u64> {
+    let v: Value = serde_json::from_str(plain).ok()?;
+    if v.get("type")?.as_str()? != MOBILE_SYNC_REQUEST {
+        return None;
+    }
+    // `since_seq` 缺失 / 非数字一律当 0（全量）：宁可多发几条重复事件，
+    // 也不要因为一个字段格式问题让手机永远看不到断连那一段。
+    Some(v.get("since_seq").and_then(Value::as_u64).unwrap_or(0))
+}
+
 /// 把一条 hermix 帧转成 App 侧帧。
 ///
 /// 不可映射的类型返回 `None`（调用方跳过），**不产出半成品帧**——给 App 一个

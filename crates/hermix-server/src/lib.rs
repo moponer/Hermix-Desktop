@@ -24,6 +24,7 @@ mod relay_identity;
 mod relay_proto;
 mod relay_settings;
 mod relay_transport;
+mod session_journal;
 mod ws_transport;
 mod metrics;
 mod filesearch;
