@@ -48,11 +48,15 @@ struct SessionLog {
     next: u64,
     /// 已被淘汰的最旧序号上界：`since_seq` 早于它就意味着缺口。
     dropped_through: u64,
+    /// 最近一次出站事件的时刻。桌面端用它判断「手机是不是正在干活」，
+    /// 从而决定要不要阻止系统休眠。
+    last_push: Option<std::time::Instant>,
 }
 
 impl SessionLog {
     fn push_with_seq(&mut self, seq: u64, frame: String, cap: usize) {
         self.next = seq;
+        self.last_push = Some(std::time::Instant::now());
         self.entries.push_back((seq, frame));
         while self.entries.len() > cap {
             if let Some((dropped, _)) = self.entries.pop_front() {
@@ -142,7 +146,22 @@ impl JournalRegistry {
         if let Some(log) = g.get_mut(sid) {
             log.dropped_through = log.next;
             log.entries.clear();
+            log.last_push = None;
         }
+    }
+
+    /// 最近 `window` 内是否有任何会话产生过事件——即「手机正在干活」。
+    ///
+    /// 桌面端用它参与防休眠判定：`keep_awake` 开关原本只认桌面自己的流式状态，
+    /// 手机在跑的时候电脑照样会睡，一轮任务做到一半被挂起。
+    ///
+    /// 刻意**不**用「有没有设备连着」当判据：手机连着但闲着时，没有任何理由
+    /// 阻止电脑休眠。
+    pub fn active_within(&self, window: std::time::Duration) -> bool {
+        let now = std::time::Instant::now();
+        let g = self.logs.lock().unwrap_or_else(|e| e.into_inner());
+        g.values()
+            .any(|l| l.last_push.is_some_and(|t| now.duration_since(t) <= window))
     }
 
     /// 某会话当前保留的条数（诊断 / 测试用）。
@@ -228,6 +247,18 @@ mod tests {
         let (ev, truncated) = j.since("nope", 5);
         assert!(ev.is_empty());
         assert!(!truncated);
+    }
+
+    #[test]
+    fn 新会话不算活跃_出过事件才算() {
+        let j = JournalRegistry::new();
+        assert!(!j.active_within(std::time::Duration::from_secs(60)));
+
+        j.push("s", "a".into());
+        assert!(j.active_within(std::time::Duration::from_secs(60)));
+
+        j.clear("s");
+        assert!(!j.active_within(std::time::Duration::from_secs(60)), "会话结束后不该再算活跃");
     }
 
     #[test]

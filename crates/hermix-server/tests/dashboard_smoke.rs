@@ -908,8 +908,23 @@ async fn session_undo_on_empty_session_returns_zero() {
     assert_eq!(body["deactivated"], 0);
 }
 
-// ── Builtin skill seeding ────────────────────────────────────────────
+/// 移动端活动探测必须真的挂在路由上。
+///
+/// 这条路由坏掉是**静默**的：前端 `catch` 之后按 `active:false` 处理，
+/// 表现只是「手机在跑，电脑照样睡」——没有报错、没有日志。所以要有一条
+/// 断言把「路由存在且能回 JSON」钉住。
+#[tokio::test]
+async fn mobile_activity_endpoint_is_wired() {
+    let app = test_app().await;
+    let (status, body) = get_json(app, "/api/dashboard/mobile-activity").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["active"], false,
+        "没有手机会话产生事件时不该声称在跑（否则电脑永远不睡）"
+    );
+}
 
+// ── Builtin skill seeding ────────────────────────────────────────────
 #[test]
 fn seed_builtin_skills_writes_all_builtins_to_fresh_dir() {
     let dir = tempfile::tempdir().expect("tempdir");

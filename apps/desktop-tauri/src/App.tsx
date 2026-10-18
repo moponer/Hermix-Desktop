@@ -599,18 +599,57 @@ setPage("chat");
     };
   }, []);
 
+  // 「运行会话时保持电脑唤醒」开关的状态镜像 + 手机是否在跑。
+  // 开关本身存在 localStorage（自动化页写入），这里跟着事件同步，
+  // 只为了决定「要不要去探测移动端活动」——不探测就别开定时器。
+  const [keepAwakeEnabled, setKeepAwakeEnabled] = useState(() => {
+    try {
+      return storage.getItem(STORAGE_KEYS.keepAwake) === "true";
+    } catch {
+      return false;
+    }
+  });
+  const [mobileActive, setMobileActive] = useState(false);
+
   useEffect(() => {
-    const apply = () => {
-      let enabled = false;
+    const sync = () => {
       try {
-        enabled = storage.getItem(STORAGE_KEYS.keepAwake) === "true";
-      } catch {}
-      setKeepAwake(enabled && (streamingSessionId !== null || activeRuns > 0));
+        setKeepAwakeEnabled(storage.getItem(STORAGE_KEYS.keepAwake) === "true");
+      } catch {
+        setKeepAwakeEnabled(false);
+      }
     };
-    apply();
-    window.addEventListener(KEEP_AWAKE_CHANGED_EVENT, apply);
-    return () => window.removeEventListener(KEEP_AWAKE_CHANGED_EVENT, apply);
-  }, [streamingSessionId, activeRuns]);
+    window.addEventListener(KEEP_AWAKE_CHANGED_EVENT, sync);
+    return () => window.removeEventListener(KEEP_AWAKE_CHANGED_EVENT, sync);
+  }, []);
+
+  // 手机端在跑的时候也要防休眠：桌面自己的流式状态看不到移动端，
+  // 否则一轮任务做到一半电脑就睡了，手机那头表现为「一直在跑，然后没了」。
+  useEffect(() => {
+    if (!keepAwakeEnabled) {
+      setMobileActive(false);
+      return;
+    }
+    let cancelled = false;
+    const tick = () => {
+      void api.getMobileActivity().then((on) => {
+        if (!cancelled) setMobileActive(on);
+      });
+    };
+    tick();
+    const timer = window.setInterval(tick, 15_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [keepAwakeEnabled]);
+
+  useEffect(() => {
+    setKeepAwake(
+      keepAwakeEnabled &&
+        (streamingSessionId !== null || activeRuns > 0 || mobileActive),
+    );
+  }, [keepAwakeEnabled, streamingSessionId, activeRuns, mobileActive]);
 
   /**
    * Most recent stream error, scoped to the active session.  Set when

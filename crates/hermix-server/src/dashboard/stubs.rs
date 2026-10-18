@@ -82,6 +82,33 @@ pub async fn get_plugins(State(state): State<HttpServerState>) -> Json<Dashboard
     })
 }
 
+// ── 移动端活动探测 ──────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MobileActivityResponse {
+    /// 最近几分钟内有手机会话在产生事件（即：有一个移动端回合在跑）。
+    pub active: bool,
+}
+
+/// 判定窗口。取 5 分钟而不是「有没有设备连着」：
+///
+/// - 连着但闲着时没有任何理由阻止电脑休眠（用户合盖就是想睡）；
+/// - 一个长工具调用可能几分钟没有新事件，窗口太短会让防休眠在任务中途失效，
+///   那正是它唯一要防的场景。
+const MOBILE_ACTIVE_WINDOW_SECS: u64 = 300;
+
+/// GET /api/dashboard/mobile-activity
+///
+/// 桌面端的 `keep_awake` 开关原本只认自己的流式状态（`streamingSessionId` /
+/// `activeRuns`），手机在跑的时候电脑照样会睡，一轮任务做到一半被挂起——
+/// 手机那头表现为「一直在跑，然后没了」。这个探测补上那一维。
+pub async fn get_mobile_activity() -> Json<MobileActivityResponse> {
+    Json(MobileActivityResponse {
+        active: crate::session_journal::global()
+            .active_within(std::time::Duration::from_secs(MOBILE_ACTIVE_WINDOW_SECS)),
+    })
+}
+
 /// PUT /api/dashboard/plugins — persist plugin settings for remote mode.
 pub async fn set_plugins(
     State(state): State<HttpServerState>,
@@ -331,6 +358,45 @@ fn builtin_plugin_seeds() -> Vec<(&'static str, Value)> {
     ]
 }
 
+/// Catalog-only plugins: they appear in the official catalog with
+/// `availability: "seeded"` but have **no local backend implementation**.
+/// Each entry documents the missing piece so a future session can pick one up
+/// without re-deriving why it is not wired.
+pub const SEEDED_PLUGIN_IDS: &[(&str, &str)] = &[
+    (
+        "context_engine",
+        "needs a chunking + cross-session retrieval service; hermix has compression + memory but no plugin seam for it",
+    ),
+    (
+        "dashboard_auth",
+        "Nous Portal OAuth; hermix uses device pairing + local vault instead",
+    ),
+    (
+        "google_meet",
+        "needs meeting-bot infra (join/record/transcribe); no local backend",
+    ),
+    (
+        "observability",
+        "needs OTLP export wiring; hermix has tracing logs + telemetry crate only",
+    ),
+    (
+        "spotify",
+        "needs Spotify Web API OAuth; no connector yet",
+    ),
+    (
+        "teams_pipeline",
+        "needs Microsoft Teams bot framework; no connector yet",
+    ),
+    (
+        "video_gen",
+        "catalog alias only — the actual capability is the video_generate tool + toolset",
+    ),
+    (
+        "example_dashboard",
+        "sample plugin used as a manifest template; never meant to be functional",
+    ),
+];
+
 /// On first start, write the official plugin manifest seeds into
 /// `$HERMIX_HOME/dashboard-plugins/<id>/manifest.json` so the front-end
 /// PluginsView has a populated catalog right away. This is idempotent —
@@ -338,6 +404,14 @@ fn builtin_plugin_seeds() -> Vec<(&'static str, Value)> {
 /// We mark the seeds as `availability: "seeded"` or `"ready"` so the UI can
 /// distinguish "official catalog, not yet wired into Rust backend" from
 /// "fully usable today".
+///
+/// ## The `seeded` backlog is an explicit, tested list
+///
+/// [`SEEDED_PLUGIN_IDS`] enumerates every catalog-only plugin **with the
+/// reason it is not wired**. Keeping it explicit (and asserted by
+/// `seeded_ids_match_the_catalog` below) means the backlog cannot silently
+/// grow: adding a plugin with `availability: "seeded"` without listing it —
+/// or listing one that later becomes `ready` — fails the test.
 /// **T1-C **: previously marked dead — but it is called by
 /// [`discover_plugin_manifests`]. Restored.
 pub fn seed_official_plugin_manifests(hermix_home: &Path) -> std::io::Result<usize> {
@@ -447,6 +521,36 @@ pub async fn rescan_plugins(State(state): State<HttpServerState>) -> Json<Value>
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn seeded_ids_match_the_catalog() {
+        use super::{builtin_plugin_seeds, SEEDED_PLUGIN_IDS};
+        let seeds = builtin_plugin_seeds();
+        // Every catalog-only id must exist in the seeds with the same
+        // availability marker…
+        for (id, reason) in SEEDED_PLUGIN_IDS {
+            assert!(!reason.trim().is_empty(), "`{id}` needs a reason");
+            let seed = seeds
+                .iter()
+                .find(|(sid, _)| sid == id)
+                .unwrap_or_else(|| panic!("SEEDED_PLUGIN_IDS lists `{id}` but no seed exists"));
+            assert_eq!(
+                seed.1.get("availability").and_then(|v| v.as_str()),
+                Some("seeded"),
+                "`{id}` is listed as catalog-only but the seed says otherwise"
+            );
+        }
+        // …and no seed may claim `seeded` without being listed (keeps the
+        // backlog from growing silently).
+        for (id, manifest) in &seeds {
+            if manifest.get("availability").and_then(|v| v.as_str()) == Some("seeded") {
+                assert!(
+                    SEEDED_PLUGIN_IDS.iter().any(|(sid, _)| sid == id),
+                    "seed `{id}` is `seeded` but missing from SEEDED_PLUGIN_IDS"
+                );
+            }
+        }
+    }
+
     use super::*;
 
     #[test]

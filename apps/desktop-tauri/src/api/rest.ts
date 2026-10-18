@@ -1116,6 +1116,21 @@ export const triggerAutomationTask = async (id: string): Promise<boolean> => {
   }
 };
 
+/**
+ * 手机上是否有回合正在跑（决定要不要阻止电脑休眠）。
+ *
+ * 取不到就返回 `false`：朝向「允许休眠」失败。反过来的失败模式（探测挂了
+ * 就一直不让电脑睡）没人会发现，而前者最多是这一轮没保住。
+ */
+export const getMobileActivity = async (): Promise<boolean> => {
+  try {
+    const payload = await fetchJSON<{ active?: boolean }>("/api/dashboard/mobile-activity");
+    return payload.active === true;
+  } catch {
+    return false;
+  }
+};
+
 export const getPluginSettings = async (): Promise<PluginSettings> => {
   try {
     const payload = await fetchJSON<{ plugins?: PluginSettings }>("/api/dashboard/plugins");
