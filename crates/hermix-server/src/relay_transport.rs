@@ -543,6 +543,24 @@ impl SessionMux {
             };
             match parse_key_exchange(&plain) {
                 Ok((device_id, pk)) => {
+                    // 明文里自报的 `device_id` 必须与信封路由一致。
+                    //
+                    // 少了这一步，已配对设备 A 可以在自己会话里声明
+                    // `device_id = B`，把 B 的公钥条目覆盖成自己的——此后 PC 发给
+                    // B 的帧 A 能解开。B 下次 key.exchange 会自愈，但自愈之前的
+                    // 窗口是白送的。`device_id_of` 本来就是这条会话的可信来源。
+                    match device_id_of(sid) {
+                        Some(sid_device) if sid_device == device_id => {}
+                        other => {
+                            tracing::warn!(
+                                session = %sid,
+                                claimed = %device_id,
+                                routed = ?other,
+                                "key.exchange 声明的 device_id 与信封路由不符，已丢弃"
+                            );
+                            return false;
+                        }
+                    }
                     let parsed = PublicKey::from_sec1_bytes(&pk);
                     match parsed {
                         Ok(pk) => {
@@ -726,8 +744,75 @@ mod tests {
         assert!(pc.seal_outbound(&mut out, "hi", "dev-9").is_ok());
     }
 
-    // ── 入站重放去重（ReplayGuard） ───────────────────────────────
+    /// 已配对设备 A 不能在自己会话里声明 `device_id = B` 去覆盖 B 的公钥。
+    ///
+    /// 没有这道校验时，A 学到的公钥会顶掉 B 的条目，此后 PC 发给 B 的帧
+    /// A 能解开；要等 B 下一次 `key.exchange` 才自愈，中间的窗口是白送的。
+    #[test]
+    fn key_exchange_cannot_claim_another_device_id() {
+        let pc = e2ee_for_tests(9);
+        let attacker = p256::SecretKey::from_slice(&[7u8; 32]).unwrap();
+        let mut mux = SessionMux {
+            entries: HashMap::new(),
+            e2ee: Some(pc.clone()),
+            replay: ReplayGuard::default(),
+        };
 
+        // 路由到 dev-9 的会话，却在明文里自称 dev-victim。
+        let mut env = Envelope::route_for("im:device:dev-9", String::new());
+        build_key_exchange_envelope(
+            &mut env,
+            &pc.own.public_key(),
+            "dev-victim",
+            &attacker
+                .public_key()
+                .to_encoded_point(false)
+                .as_bytes()
+                .try_into()
+                .unwrap(),
+            b"kx",
+        )
+        .expect("build");
+
+        assert!(!mux.dispatch(&env), "device_id 与路由不符的帧必须拒收");
+        assert!(
+            pc.peer("dev-victim").is_none(),
+            "不得因此学到/覆盖别的设备公钥"
+        );
+        assert!(pc.peer("dev-9").is_none(), "也不该把攻击者公钥记到 dev-9");
+    }
+
+    /// 非设备来源的会话（sid 不带 `im:device:` 前缀）不该接受 key.exchange：
+    /// 没有可信的两端身份可比对，学了就是无条件信任。
+    #[test]
+    fn key_exchange_rejected_for_non_device_session() {
+        let pc = e2ee_for_tests(9);
+        let phone = p256::SecretKey::from_slice(&[8u8; 32]).unwrap();
+        let mut mux = SessionMux {
+            entries: HashMap::new(),
+            e2ee: Some(pc.clone()),
+            replay: ReplayGuard::default(),
+        };
+        let mut env = Envelope::route_for("stream:local-1", String::new());
+        build_key_exchange_envelope(
+            &mut env,
+            &pc.own.public_key(),
+            "dev-9",
+            &phone
+                .public_key()
+                .to_encoded_point(false)
+                .as_bytes()
+                .try_into()
+                .unwrap(),
+            b"kx",
+        )
+        .expect("build");
+
+        assert!(!mux.dispatch(&env));
+        assert!(pc.peer("dev-9").is_none());
+    }
+
+    // ── 入站重放去重（ReplayGuard） ───────────────────────────────
     /// 用手机身份封一帧"投给 PC"的入站帧。方向必须显式给 DeviceToNode
     /// ——`seal_envelope` 写死 NodeToDevice（PC 出站专用），所以这里走
     /// 低层 `seal_body` + 手工组装信封，与生产入站方向一致。
