@@ -211,8 +211,19 @@ for (const file of CSS_SCAN) {
   const rel = relative(SRC, file).split(sep).join("/");
   if (allowedFiles.has(rel)) continue;
   const lines = read(file).split("\n");
+  let inBlock = false;
   for (let i = 0; i < lines.length; i++) {
     const ln = lines[i];
+    // 跨行 /* … */ 注释状态机：注释中间行（不以 * 开头的中文行）也豁免。
+    if (inBlock) {
+      if (ln.includes("*/")) inBlock = false;
+      continue;
+    }
+    const openIdx = ln.indexOf("/*");
+    if (openIdx >= 0 && !ln.slice(0, openIdx).includes("*/")) {
+      if (!ln.slice(openIdx).includes("*/")) inBlock = true;
+      continue;
+    }
     if (/^\s*(\/\/|\*|\/\*)/.test(ln)) continue;
     if (!COLOR_RX.test(ln)) continue;
     // 整行都是 var() 声明（定义侧，如 `--x: #fff;`）不算裸色消费
@@ -250,6 +261,27 @@ if (cssTypeHits.length) {
   for (const h of cssTypeHits) console.warn(h);
 } else {
   console.log("[css-type-debt] CSS 层无 px 字号 ✓");
+}
+
+/* ---------- Check 3d: CSS 层暗色字面量兜底（HARD） ----------
+   `var(--x, #1e293b)` 形态把「暗色」写死为默认值：令牌缺失时静默
+   变深色，排查困难（themes/EXCEPTIONS.md 纪律 2 同源问题）。
+   2026-10-18 存量 237 处已全量清除（一次性脚本验证变量确有定义后
+   变量确有定义才删）；此后出现即为新增债，直接 fail。 */
+const fallbackRx = /var\(--[a-zA-Z0-9-]+,\s*(#[0-9a-fA-F]{3,8}|rgba?\()/g;
+const fallbackHits = [];
+for (const file of CSS_SCAN) {
+  const rel = relative(SRC, file).split(sep).join("/");
+  if (allowedFiles.has(rel)) continue;
+  const n = [...read(file).matchAll(fallbackRx)].length;
+  if (n) fallbackHits.push(`  ${rel}: ${n} 处`);
+}
+if (fallbackHits.length) {
+  console.error(`[css-fallback-debt] 暗色字面量兜底禁止（删兜底值，令牌已在 tokens.css 定义）:`);
+  for (const h of fallbackHits) console.error(h);
+  process.exitCode = 1;
+} else {
+  console.log("[css-fallback-debt] CSS 层无暗色兜底 ✓");
 }
 
 /* ---------- Check 4: Tailwind 原生色阶类 ----------

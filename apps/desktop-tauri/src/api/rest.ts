@@ -1,5 +1,5 @@
 // Hermix Desktop API Client — REST 运行时（从 api.ts 拆分；类型见 ./types，WS 见 ./ws）
-import type { ChatMessage, Session, AutomationTask } from "../types";
+import type { Session, AutomationTask } from "../types";
 import { storage, STORAGE_KEYS } from "../utils/storageCompat";
 // v5: reuse detectToolError from messageParser for errorReason extraction
 // on reloaded tool messages — same helper as the live-streaming path.
@@ -466,10 +466,8 @@ export const getAvailableTools = async (
   }
 };
 
-/** Force the next call to `getAvailableTools` to re-fetch. */
-export const invalidateToolsCache = (): void => {
-  _toolsCache = null;
-};
+// invalidateToolsCache 于 2026-10-18 移除（零调用）：调用方直接用
+// `getAvailableTools(true)` 即可强制重取。
 
 export const renameSession = async (id: string, title: string): Promise<boolean> => {
   await fetchVoid(`/v1/sessions/${encodeURIComponent(id)}`, {
@@ -558,22 +556,9 @@ export const getSessionMessages = async (
   };
 };
 
-export const sendMessage = async (id: string, content: string): Promise<ChatMessage> => {
-  await fetchJSON(
-    `/v1/sessions/${encodeURIComponent(id)}/messages`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: content, request_id: `req-${Date.now()}` }),
-    }
-  );
-  return {
-    id: `sent-${Date.now()}`,
-    role: "user",
-    content,
-    timestamp: new Date().toISOString(),
-  };
-};
+// sendMessage（REST 版 POST /v1/sessions/{id}/messages）于 2026-10-18
+// 移除：消息发送已全面走 stream:<sid> WS 通道（useStreamChat），REST
+// 封装零调用（App.tsx 仅注释提及）。后端端点保留给移动端面。
 
 /** 持久化前端构建的 unified_steps 时间线到最近一条 assistant 消息。
  *  流结束后 fire-and-forget，失败静默（不影响 UI / 不阻塞对话）。
@@ -1397,8 +1382,9 @@ export const deleteMemoryItem = async (kind: string, id: string): Promise<boolea
 export const searchMemory = async (q: string, limit = 30): Promise<{ results: MemoryGraphNode[] }> =>
   fetchJSON(`/api/memory/search?q=${encodeURIComponent(q)}&limit=${limit}`);
 
-export const getMemoryOverview = async (): Promise<MemoryOverview> =>
-  fetchJSON("/api/memory/overview");
+// getMemoryOverview（GET /api/memory/overview）于 2026-10-18 移除：
+// 与 getMemoryGraph().stats 同一数据源（后端同一 overview() 函数），
+// 记忆统计行走 graph.stats，封装零调用。
 
 export const pinMemory = async (id: string, pinned: boolean): Promise<void> => {
   await fetchJSON("/api/memory/pin", {

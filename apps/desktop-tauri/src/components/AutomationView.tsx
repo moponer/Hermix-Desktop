@@ -17,8 +17,8 @@ import { AiGenerateButton } from "./AiGenerateButton";
 import { storage, STORAGE_KEYS } from "../utils/storageCompat";
 import { setKeepAwake, KEEP_AWAKE_CHANGED_EVENT } from "../desktopBridge";
 import { useWorkspaces } from "../hooks/useWorkspaces";
-import { toastInfo, toastError } from "../hooks/useToast";
-import { EmptyState, PageHeader, SkeletonCard } from "./ui";
+import { toastInfo, toastError, toastSuccess } from "../hooks/useToast";
+import { ConfirmDialog, EmptyState, PageHeader, SkeletonCard } from "./ui";
 
 /** A small set of cron presets the editor offers as quick-pick chips.
  *  Each entry: [label, cronExpression, humanDescription]. */
@@ -112,6 +112,8 @@ export function AutomationView({ openChat, onCreateWorkflow }: { openChat: () =>
   const [tasks, setTasks] = useState<AutomationTask[]>([]);
   const [editing, setEditing] = useState<AutomationTask | null>(null);
   const [creating, setCreating] = useState<AutomationTask | null>(null);
+  const [confirmReset, setConfirmReset] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   // 「运行会话时保持电脑唤醒」开关。写档 + 广播事件；App 层监听事件并
@@ -165,7 +167,6 @@ export function AutomationView({ openChat, onCreateWorkflow }: { openChat: () =>
 
   const onDelete = useCallback(
     async (id: string) => {
-      if (!confirm("确定要删除这条自动化任务吗？历史运行记录会一并清掉。")) return;
       if (await api.deleteAutomationTask(id)) {
         await refresh();
       } else {
@@ -174,6 +175,18 @@ export function AutomationView({ openChat, onCreateWorkflow }: { openChat: () =>
     },
     [refresh],
   );
+
+  /** 恢复官方任务清单：POST /api/automation/reset。后端丢弃当前清单、
+   *  重新播种内置官方任务；成功后重拉列表。 */
+  const doReset = useCallback(async () => {
+    try {
+      await api.fetchJSON("/api/automation/reset", { method: "POST" });
+      toastSuccess("已恢复官方任务清单");
+      await refresh();
+    } catch (e) {
+      toastError(`恢复失败：${e instanceof Error ? e.message : String(e)}`);
+    }
+  }, [refresh]);
 
   const onToggle = useCallback(
     async (task: AutomationTask) => {
@@ -255,6 +268,14 @@ export function AutomationView({ openChat, onCreateWorkflow }: { openChat: () =>
               </p>
               <div className="flex items-center gap-2 shrink-0">
                 <button
+                  onClick={() => setConfirmReset(true)}
+                  disabled={tasks.length === 0}
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-text-secondary text-[length:var(--text-ui)] hover:text-error hover:bg-error-soft disabled:opacity-40"
+                  title="恢复为内置官方任务清单（丢弃全部现有任务）"
+                >
+                  恢复官方清单
+                </button>
+                <button
                   onClick={() => setCreating(blankDraft())}
                   className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-accent text-bg-primary text-[length:var(--text-ui)] font-medium hover:bg-accent-hover"
                 >
@@ -292,7 +313,7 @@ export function AutomationView({ openChat, onCreateWorkflow }: { openChat: () =>
                     key={t.id}
                     task={t}
                     onEdit={() => setEditing(t)}
-                    onDelete={() => void onDelete(t.id)}
+                    onDelete={() => setConfirmDelete(t.id)}
                     onToggle={() => void onToggle(t)}
                     onTrigger={() => void onTrigger(t.id)}
                   />
@@ -366,6 +387,31 @@ export function AutomationView({ openChat, onCreateWorkflow }: { openChat: () =>
           onSave={(t) => void onSave(t, creating !== null)}
         />
       )}
+
+      <ConfirmDialog
+        open={confirmDelete !== null}
+        title="删除自动化任务"
+        body="确定要删除这条自动化任务吗？历史运行记录会一并清掉。"
+        confirmLabel="删除"
+        onCancel={() => setConfirmDelete(null)}
+        onConfirm={() => {
+          const id = confirmDelete;
+          setConfirmDelete(null);
+          if (id) void onDelete(id);
+        }}
+      />
+
+      <ConfirmDialog
+        open={confirmReset}
+        title="恢复官方任务清单"
+        body={`将删除全部 ${tasks.length} 个自动化任务（含运行历史），恢复为内置官方清单。此操作不可撤销。`}
+        confirmLabel="恢复官方清单"
+        onCancel={() => setConfirmReset(false)}
+        onConfirm={() => {
+          setConfirmReset(false);
+          void doReset();
+        }}
+      />
     </div>
   );
 }

@@ -622,11 +622,10 @@ pub async fn get_daily_memory(
 }
 
 /// GET /api/memory/overview — counts for the page header row.
-pub async fn get_memory_overview(
-    State(state): State<HttpServerState>,
-) -> Result<Json<MemoryOverview>, HttpError> {
-    Ok(Json(overview(&state, memory_backend(&state).as_ref())))
-}
+// GET /api/memory/overview 于 2026-10-18 移除：与
+// `GET /api/memory/graph` 的 `stats` 字段调用同一个 `overview()`，
+// 是同一份数据的两个端点；前端统计行一直走 graph.stats，overview
+// 零消费（对接审查确认）。
 
 /// POST /api/memory/pin — {id: "frame:<uuid>", pinned: bool}.
 pub async fn pin_memory(

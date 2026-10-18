@@ -325,7 +325,7 @@
   color: var(--color-text-primary);
 }
 .titlebar-btn:hover { background: var(--color-bg-hover); color: var(--color-text-secondary); }
-.titlebar-btn-danger:hover { background: var(--color-error); color: #ffffff; }
+.titlebar-btn-danger:hover { background: var(--color-error); color: var(--color-on-accent); }
 
 /* ── Connection indicator in titlebar ── */
 .titlebar-conn-indicator {
@@ -481,7 +481,7 @@
 .sidebar-tree-section .section-header-toggle {
   min-height: 28px;
   gap: 7px;
-  font-size: 13px;
+  font-size: var(--text-ui);
   font-weight: 600;
   letter-spacing: 0.01em;
   color: var(--color-text-secondary);
@@ -559,7 +559,7 @@
 }
 .user-card-name {
   flex: 1;
-  font-size: 12px;
+  font-size: var(--text-meta);
   color: var(--color-text-secondary);
   font-weight: 500;
   overflow: hidden;
@@ -777,7 +777,7 @@ font-weight: 500;
   background: var(--color-bg-primary);
   color: var(--color-text-primary);
   font-weight: 600;
-  box-shadow: 0 1px 3px rgb(0 0 0 / 0.12);
+  box-shadow: var(--shadow-card);
 }
 .sidebar-tab-name {
   max-width: 96px;
@@ -885,7 +885,7 @@ height: 26px;
   border-radius: var(--radius-md);
   background: var(--color-bg-elevated);
   border: 1px solid var(--color-border-primary);
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18), 0 1px 3px rgba(0, 0, 0, 0.08);
+  box-shadow: var(--shadow-pop);
   z-index: 1000;
   /* tiny enter animation — fade + slide up 4px */
   animation: sidebar-popover-in 100ms ease-out;
@@ -941,7 +941,7 @@ height: 26px;
 
 .sidebar-section-empty {
   padding: 8px 10px;
-  font-size: 12px;
+  font-size: var(--text-meta);
   color: var(--color-text-muted);
 }
 
@@ -1092,7 +1092,7 @@ height: 26px;
 }
 
 .sidebar-new-room-error {
-  font-size: 12px;
+  font-size: var(--text-meta);
   padding: 4px 8px;
   border-radius: 6px;
   background: var(--color-error-soft);
@@ -1117,7 +1117,7 @@ height: 26px;
 .sidebar-new-room-row .input {
   flex: 1;
   padding: 5px 10px;
-  font-size: 13px;
+  font-size: var(--text-ui);
 }
 
 /* ════════════════════════════════════════════════════════════════════
@@ -1128,7 +1128,7 @@ height: 26px;
   background: var(--color-bg-primary);
   border: 1px solid var(--color-border-primary);
   border-radius: 12px;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  box-shadow: var(--shadow-card);
   transition: border-color 160ms var(--ease-out), box-shadow 160ms var(--ease-out);
 }
 .groupchat-composer:focus-within {
@@ -1484,8 +1484,7 @@ height: 26px;
      页面上）；背景用 elevated（暗 #262626，接近参考的 #242424）。 */
   background: var(--color-bg-elevated);
   box-shadow:
-    0 20px 48px -12px rgba(0, 0, 0, 0.35),
-    0 8px 20px -10px rgba(0, 0, 0, 0.22);
+    var(--shadow-modal);
   overflow: hidden;
   animation: menu-slide-up 0.15s ease-out;
 }
@@ -1508,7 +1507,7 @@ height: 26px;
   width: 100%;
   padding: 9px 12px;
   border-radius: var(--radius-md);
-  font-size: 13px;
+  font-size: var(--text-ui);
   color: var(--color-text-primary);
   background: transparent;
   border: none;

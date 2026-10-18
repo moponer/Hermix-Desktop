@@ -240,10 +240,6 @@ pub fn router() -> Router<HttpServerState> {
         )
         .route("/api/memory/search", get(memory_inspect::search_memory))
         .route("/api/memory/daily", get(memory_inspect::get_daily_memory))
-        .route(
-            "/api/memory/overview",
-            get(memory_inspect::get_memory_overview),
-        )
         .route("/api/memory/pin", post(memory_inspect::pin_memory))
         // §2 Polish — doc rewrite endpoints used by the desktop
         // "润色" / "改写" affordances. `polish::post_polish_chat`

@@ -78,7 +78,7 @@
   flex: none;
   max-width: 46%;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--text-meta);
   color: var(--color-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -97,7 +97,7 @@
 .process-line-peek {
   flex: 1 1 auto;
   min-width: 0;
-  font-size: 12px;
+  font-size: var(--text-meta);
   color: var(--color-text-faint);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -117,7 +117,7 @@
   display: flex;
   gap: 5px;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-tiny);
 }
 .process-line-stat--add { color: var(--color-success); }
 .process-line-stat--del { color: var(--color-text-faint); }

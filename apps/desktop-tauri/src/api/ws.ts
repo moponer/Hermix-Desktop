@@ -20,7 +20,6 @@
 // `invoke("backend_channel_send")`.
 
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { invoke } from "@tauri-apps/api/core";
 
 /** Channel-name prefix that the server's stdio handler routes into
  *  `handle_ws_stream(session_id)`. Mirrors the prefix in
@@ -55,16 +54,11 @@ export async function listenStreamChannel(
   return unlisten;
 }
 
-/** Send a JSON Lines frame upstream on a non-HTTP channel. The
- *  payload is the verbatim JSON the server expects on that channel —
- *  `SendMessageRequest` for `stream:<sid>`, etc. The bridge does NOT
- *  wrap or parse
- *  the payload, so callers own their protocol shape. */
-export async function sendToStreamChannel(
-  channel: string,
-  payload: unknown,
-): Promise<void> {
-  const text = typeof payload === "string" ? payload : JSON.stringify(payload);
-  await invoke<void>("backend_channel_send", { channel, payload: text });
-}
+// sendToStreamChannel 于 2026-10-18 移除：调用点全部直接
+// `invoke("backend_channel_send", …)`（useStreamParser /
+// useStreamChat），封装零调用、徒增一层间接。
+
+/** Send a JSON Lines frame upstream on a non-HTTP channel. Callers
+ *  invoke `backend_channel_send` directly — the bridge does NOT wrap
+ *  or parse the payload, so callers own their protocol shape. */
 

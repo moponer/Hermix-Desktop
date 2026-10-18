@@ -82,7 +82,7 @@
     ensureMeta('meta[name="twitter:card"]', 'name', 'twitter:card').content = 'summary';
     ensureMeta('meta[name="twitter:title"]', 'name', 'twitter:title').content = document.title;
     ensureMeta('meta[name="twitter:description"]', 'name', 'twitter:description').content = desc;
-    ensureMeta('meta[name="theme-color"]', 'name', 'theme-color').content = '#f5f4ed';
+    ensureMeta('meta[name="theme-color"]', 'name', 'theme-color').content = '#161412';
   }
 
   function setMeta(o) {

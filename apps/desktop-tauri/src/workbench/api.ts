@@ -3,6 +3,13 @@
 //
 // 例外：会话归属（`sessions.workbench_id`）走 HTTP —— 会话表由 sidecar
 // 持有，桌面端直接开库会和它抢写锁，只能经由后端改。
+//
+// 接线现状（2026-10-18 审查）：Create/List/SetPrimary/Delete/BindSession
+// + workbenchGateway/EntryUrl 由 WorkbenchView/WorkbenchShell 使用；
+// 文件读写（read/write/files）、lint、deps、undo/history、vendor、
+// moduleIndex 等封装对应的 Rust command 已注册但**尚无 UI 入口**——
+// 画布 iframe 经 workbenchGateway 的 fs.* 走另一条通路。这些封装是
+// 画布功能（撤销/依赖申请/lint 预检）的预留面，接 UI 前勿删。
 import { invoke } from "@tauri-apps/api/core";
 import { getSessions, updateSessionMetadata } from "../api/rest";
 

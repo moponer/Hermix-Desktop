@@ -7,6 +7,8 @@ import { McpCatalogGrid } from "./McpCatalogGrid";
 import { ToolCardIcon } from "./ToolCardIcon";
 import { MgmtTag } from "./MgmtTag";
 import { ToggleSwitch } from "../ToggleSwitch";
+import { ConfirmDialog } from "../ui";
+import { toastError, toastSuccess } from "../../hooks/useToast";
 import { SearchBar, EmptyHint, SkeletonGrid, SummaryBar } from "./toolTabsShared";
 
 // ── Connectors tab: user-configured MCP servers ──────────────────────
@@ -18,6 +20,7 @@ export function ConnectorsTab({ query, onQuery }: { query: string; onQuery: (q: 
   const [adding, setAdding] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
   const [addMode, setAddMode] = useState<"paste" | "manual">("paste");
+  const [confirmReset, setConfirmReset] = useState(false);
   const [pasteJson, setPasteJson] = useState("");
   const [newServer, setNewServer] = useState({
     name: "",
@@ -102,6 +105,18 @@ export function ConnectorsTab({ query, onQuery }: { query: string; onQuery: (q: 
 
   const enabledCount = useMemo(() => servers.filter((s) => s.enabled).length, [servers]);
 
+  /** 恢复官方清单：POST /api/mcp/servers/reset。后端丢弃当前清单、
+   *  重新播种内置官方服务；成功后重拉列表。 */
+  const doReset = async () => {
+    try {
+      await api.fetchJSON("/api/mcp/servers/reset", { method: "POST" });
+      toastSuccess("已恢复官方 MCP 清单");
+      setServers(await api.getMcpServers());
+    } catch (e) {
+      toastError(`恢复失败：${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+
   return (
     <>
       <SearchBar query={query} onQuery={onQuery} />
@@ -127,8 +142,28 @@ export function ConnectorsTab({ query, onQuery }: { query: string; onQuery: (q: 
           >
             <Plus className="icon-sm" /> 添加 MCP
           </button>
+          <button
+            onClick={() => setConfirmReset(true)}
+            disabled={servers.length === 0}
+            className="flex items-center gap-1 px-2 py-1 rounded-md text-[length:var(--text-meta)] text-text-secondary hover:text-error hover:bg-error-soft disabled:opacity-40"
+            title="恢复为内置官方 MCP 服务清单（丢弃全部自定义条目）"
+          >
+            恢复官方清单
+          </button>
         </div>
       </div>
+
+      <ConfirmDialog
+        open={confirmReset}
+        title="恢复官方 MCP 清单"
+        body={`将删除全部 ${servers.length} 个已配置的 MCP 服务（含自定义条目），恢复为内置官方清单。此操作不可撤销。`}
+        confirmLabel="恢复官方清单"
+        onCancel={() => setConfirmReset(false)}
+        onConfirm={() => {
+          setConfirmReset(false);
+          void doReset();
+        }}
+      />
 
       {showAddForm && (
         <div className="rounded-xl bg-bg-card p-4 mb-3 space-y-3">

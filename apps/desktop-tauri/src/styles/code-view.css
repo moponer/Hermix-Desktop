@@ -114,7 +114,7 @@
 /* 文件名 — 升级到 14px / 600，对齐 VS Code 标签栏字号
    保留字重对比但不再"小字"——标题信息需做美化处理 */
 .preview-pane .preview-filename {
-  font-size: 14px;
+  font-size: var(--text-body);
   font-weight: 600;
   color: var(--color-text-primary);
   letter-spacing: 0;
@@ -135,7 +135,7 @@
   margin: 0;
   background: color-mix(in srgb, var(--color-info) 12%, transparent);
   color: var(--color-info);
-  font-size: 10px;
+  font-size: var(--text-tiny);
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -169,7 +169,7 @@
   flex: 1 1 auto;
   min-width: 0;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-tiny);
   font-weight: 400;
   color: color-mix(in srgb, var(--color-info) 78%, var(--color-text-muted));
   text-decoration: none;
@@ -189,7 +189,7 @@
 .preview-pane .preview-path::before {
   content: "›";
   color: color-mix(in srgb, var(--color-text-faint) 80%, transparent);
-  font-size: 12px;
+  font-size: var(--text-meta);
   line-height: 1;
 }
 .preview-pane .preview-path:hover {
@@ -212,7 +212,7 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 10px;
+  font-size: var(--text-tiny);
   font-weight: 400;
   color: var(--color-text-faint);
   font-family: var(--font-mono);
@@ -270,7 +270,7 @@
   font-family: "JetBrains Mono", "JetBrainsMono NF", "Cascadia Mono",
     "Cascadia Code", Consolas, "Source Code Pro", Menlo, ui-monospace,
     monospace;
-  font-size: 13px;
+  font-size: var(--text-ui);
   line-height: 1.6;
   color: var(--color-text-on-code);
   overflow: auto;
@@ -415,7 +415,7 @@
 
 .preview-pane .code-empty {
   padding: 32px 16px;
-  font-size: 11px;
+  font-size: var(--text-tiny);
   color: var(--color-text-faint);
   text-align: center;
   font-family: "JetBrains Mono", monospace;
@@ -433,7 +433,7 @@
   background: var(--color-bg-code-header, var(--color-bg-tertiary));
   border-top: 1px solid var(--color-border-subtle);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-tiny);
   color: var(--color-text-faint);
   flex-shrink: 0;
 }
@@ -800,7 +800,7 @@
   border-radius: 4px;
   cursor: pointer;
   transition: background 120ms ease;
-  font-size: 12px;
+  font-size: var(--text-meta);
   color: var(--color-text-primary);
 }
 .computer-detail-row:hover {
@@ -869,7 +869,7 @@
 }
 
 .computer-icon-label {
-  font-size: 11px;
+  font-size: var(--text-tiny);
   color: var(--color-text-primary);
   max-width: 80px;
   overflow: hidden;
@@ -995,14 +995,14 @@
   border-bottom: 1px solid var(--color-border-secondary);
 }
 .preview-pdf-page {
-  font-size: 12px;
+  font-size: var(--text-meta);
   color: var(--color-text-secondary);
   min-width: 72px;
   text-align: center;
   font-variant-numeric: tabular-nums;
 }
 .preview-pdf-zoom {
-  font-size: 12px;
+  font-size: var(--text-meta);
   color: var(--color-text-secondary);
   min-width: 46px;
   text-align: center;
@@ -1070,12 +1070,12 @@
   justify-content: center;
   gap: 8px;
   height: 100%;
-  font-size: 12px;
+  font-size: var(--text-meta);
   color: var(--color-text-muted);
 }
 .preview-state-error {
   padding: 16px;
-  font-size: 12px;
+  font-size: var(--text-meta);
   color: var(--color-error);
 }
 .preview-state-error-row {
@@ -1083,14 +1083,14 @@
   align-items: flex-start;
   gap: 8px;
   padding: 16px;
-  font-size: 12px;
+  font-size: var(--text-meta);
   color: var(--color-error);
 }
 .preview-plain-text {
   margin: 0;
   padding: 16px;
   font-family: var(--font-sans);
-  font-size: 13px;
+  font-size: var(--text-ui);
   line-height: 1.6;
   color: var(--color-text-primary);
   white-space: pre-wrap;

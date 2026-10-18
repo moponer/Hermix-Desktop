@@ -10,8 +10,8 @@
 // A bare `fetch("/api/polish/chat")` cannot work in this app — the TCP era's
 // host:port no longer exists (see api/rest.ts header), so the request always
 // failed and the whitespace fallback silently masked a dead feature.
-import { CHAT_POLISH_PROMPT, type ChatPolishInput } from "../prompts/polish.chat";
-import { AUTOMATION_POLISH_PROMPT, type AutomationPolishInput } from "../prompts/polish.automation";
+import { type ChatPolishInput } from "../prompts/polish.chat";
+import { type AutomationPolishInput } from "../prompts/polish.automation";
 import { fetchJSON } from "./rest";
 
 interface PolishBackendResponse {
@@ -64,8 +64,5 @@ export async function polishAutomation(input: AutomationPolishInput): Promise<st
   return input.draft.replace(/\s+/g, " ").trim();
 }
 
-// 暴露给上层做 telemetry / 调试
-export const POLISH_PROMPTS_FOR_DEBUG = {
-  chat: CHAT_POLISH_PROMPT,
-  automation: AUTOMATION_POLISH_PROMPT,
-} as const;
+// POLISH_PROMPTS_FOR_DEBUG 于 2026-10-18 移除（零调用）。提示词模板
+// 单一真相源在 src/prompts/，调试直接看文件。
