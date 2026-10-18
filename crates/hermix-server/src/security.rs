@@ -42,6 +42,12 @@ pub struct HttpSecurity {
     /// 按 source IP 累计认证失败次数，窗口内超阈值即锁定，冷却期内
     /// 该 IP 所有请求直接 429 拒绝（防 brute-force 撞 token/api_key）。
     pub auth_fail_lockout: Option<Arc<AuthFailLockout>>,
+    /// 是否信任 `X-Forwarded-*` 等代理证据头（`HERMIX_TRUST_FORWARDED=1`）。
+    ///
+    /// 默认**不信任**：loopback 来源一旦带了转发证据，就不再判 `Local`。
+    /// 理由是同机反代（nginx / vite proxy）会把外部请求转成 `127.0.0.1`，
+    /// 只看对端 IP 等于把「公网请求」认证成「本机请求」。
+    pub trust_forwarded: bool,
 }
 
 /// 暴力破解 IP 锁定（§5.5 对策 T6，headless 可验的纯内存结构）。
@@ -138,7 +144,7 @@ impl HttpSecurity {
             == Some("1");
         let rate_limit_per_minute = env_compat("HERMIX_HTTP_RATE_LIMIT_PER_MINUTE", "HERMES_HTTP_RATE_LIMIT_PER_MINUTE")
             .and_then(|s| s.parse().ok())
-            .unwrap_or(0);
+            .unwrap_or(DEFAULT_RATE_LIMIT_PER_MINUTE);
         let allowed_ips = parse_allowed_ips_from_env();
         // §5.5 对策 T6：暴力破解 IP 锁定。默认启用（防 brute-force 撞
         // token/api_key），HERMIX_AUTH_FAIL_LOCKOUT=0 可关。阈值 / 窗口 /
@@ -173,8 +179,22 @@ impl HttpSecurity {
             allowed_ips,
             nonce_cache: crate::request_signature::NonceCache::new(),
             auth_fail_lockout,
+            trust_forwarded: env_compat("HERMIX_TRUST_FORWARDED", "HERMES_TRUST_FORWARDED")
+                .as_deref()
+                == Some("1"),
         }
     }
+}
+
+/// 请求是否带「经过了代理」的证据头。
+///
+/// `X-Forwarded-For` / `Forwarded` / `X-Real-IP` / `X-Forwarded-Host` 任一出现
+/// 即算。同机反代会把对端重写成 `127.0.0.1`，此时对端地址不再证明「请求来自
+/// 本机进程」——只有一个本机进程才会不带这些头直接连 loopback。
+fn has_forwarded_evidence(headers: &axum::http::HeaderMap) -> bool {
+    ["forwarded", "x-forwarded-for", "x-forwarded-host", "x-real-ip"]
+        .iter()
+        .any(|h| headers.contains_key(*h))
 }
 
 fn parse_allowed_ips_from_env() -> Option<Vec<IpAddr>> {
@@ -200,6 +220,17 @@ pub struct RateLimiter {
     per_minute: u32,
 }
 
+/// 每分钟每来源的默认请求上限。
+///
+/// 600 的依据是 dashboard 的轮询频率（2s 一次 ≈ 30/min）留 20 倍余量，
+/// 同时让「6 位配对码在线枚举」在 60 分钟 TTL 内最多只能试 3.6 万次，
+/// 配合配对码自身的 5 次预算，枚举不再可行。
+///
+/// 旧默认值是 `0`，而 `0` 在 [`RateLimiter::allow`] 里等于**完全不限流**，
+/// 于是「有全局限流」只存在于注释里。现在要关掉必须显式设置
+/// `HERMIX_HTTP_RATE_LIMIT_PER_MINUTE=0`。
+pub const DEFAULT_RATE_LIMIT_PER_MINUTE: u32 = 600;
+
 impl RateLimiter {
     pub fn new(per_minute: u32) -> Self {
         Self {
@@ -208,6 +239,7 @@ impl RateLimiter {
         }
     }
 
+    /// `per_minute == 0` = 显式关闭（只可能来自 env 的显式配置）。
     pub async fn allow(&self, key: String) -> bool {
         if self.per_minute == 0 {
             return true;
@@ -616,9 +648,30 @@ pub async fn request_guard(
     }
 
     // §5.5 第 5 层：来源推导 + Unpaired 关口。
-    let origin = derive_origin(device.as_ref(), client_ip(&req));
+    //
+    // loopback 只证明「对端是本机」，不证明「请求由本机进程发起」：同机反代
+    // （nginx / vite proxy）把外部请求转成 127.0.0.1 时会照抄客户端的转发头。
+    // 出现转发证据就不再把来源判成 `Local`（最宽权限），降为 `Unpaired`
+    // ——要么带上设备凭据，要么去走配对端点。确需信任反代时用
+    // `HERMIX_TRUST_FORWARDED=1` 显式恢复旧行为。
+    let mut origin = derive_origin(device.as_ref(), client_ip(&req));
+    if matches!(origin, Origin::Local)
+        && !security.trust_forwarded
+        && has_forwarded_evidence(req.headers())
+    {
+        tracing::warn!(
+            path = %path,
+            "loopback 请求带转发头 —— 不按本机来源处理（HERMIX_TRUST_FORWARDED=1 可显式信任）"
+        );
+        origin = Origin::Unpaired;
+    }
     if matches!(origin, Origin::Unpaired) && !unpaired_gate_allows(path) {
         hermix_telemetry::record_http_reject();
+        // 未配对闸门是**认证失败**的一种：不计入失败预算的话，攻击者可以
+        // 拿无限次 403 免费探测路径存在性，且这条分支永远不触发锁定。
+        if let Some(lockout) = &security.auth_fail_lockout {
+            lockout.record_failure(&client_key(&req)).await;
+        }
         return (
             StatusCode::FORBIDDEN,
             "unpaired origin: only /health and pairing endpoints are available",
@@ -1007,5 +1060,94 @@ mod tests {
             lo.is_locked("3.3.3.3").await,
             "持续失败应续期冷却，不会准时解锁"
         );
+    }
+
+    // ----- 代理证据头：loopback 不再天然等于「本机来源」 -----
+
+    /// 同机反代会把外部请求转成 `127.0.0.1`。出现转发证据时，来源必须
+    /// 降级（否则「公网请求」被认证成「本机请求」，拿到 Local 的全宽权限）。
+    #[test]
+    fn forwarded_headers_are_recognised() {
+        for h in ["forwarded", "x-forwarded-for", "x-forwarded-host", "x-real-ip"] {
+            let mut headers = axum::http::HeaderMap::new();
+            headers.insert(
+                axum::http::HeaderName::from_static(h),
+                axum::http::HeaderValue::from_static("203.0.113.9"),
+            );
+            assert!(has_forwarded_evidence(&headers), "{h} 应被识别为转发证据");
+        }
+        assert!(
+            !has_forwarded_evidence(&axum::http::HeaderMap::new()),
+            "没有转发头时不应误判"
+        );
+    }
+
+    /// loopback 没有转发证据时仍然是 `Local`（桌面 stdio 桥就是这样进来的）。
+    #[test]
+    fn loopback_without_forwarding_stays_local() {
+        assert_eq!(
+            derive_origin(None, Some([127, 0, 0, 1].into())),
+            Origin::Local
+        );
+        assert!(!has_forwarded_evidence(&axum::http::HeaderMap::new()));
+    }
+
+    // ----- CORS：默认只回显本机来源 -----
+
+    #[test]
+    fn local_origins_are_recognised() {
+        for o in [
+            "http://tauri.localhost",
+            "https://tauri.localhost",
+            "http://asset.localhost",
+            "http://localhost:1420",
+            "http://127.0.0.1:3000",
+            "https://127.0.0.1",
+            "http://[::1]:8443",
+            "tauri://localhost",
+        ] {
+            assert!(crate::is_local_origin(o), "{o} 应被认作本机来源");
+        }
+    }
+
+    /// 这是本次收紧的核心断言：第三方站点不能再靠 `Access-Control-Allow-Origin`
+    /// 回显读到本机 API 的响应体。
+    #[test]
+    fn foreign_origins_are_rejected() {
+        for o in [
+            "https://evil.example.com",
+            "https://localhost.evil.com",
+            "https://127.0.0.1.evil.com",
+            "http://tauri.localhost.evil.com",
+            "null",
+        ] {
+            assert!(!crate::is_local_origin(o), "{o} 不应被认作本机来源");
+        }
+    }
+
+    // ----- 限流默认值不再等于「不限流」 -----
+
+    #[test]
+    fn default_rate_limit_is_finite() {
+        assert!(
+            DEFAULT_RATE_LIMIT_PER_MINUTE > 0,
+            "默认值必须有限：0 在 allow() 里等于完全不限流"
+        );
+    }
+
+    #[tokio::test]
+    async fn zero_still_means_explicitly_disabled() {
+        let rl = RateLimiter::new(0);
+        for _ in 0..1000 {
+            assert!(rl.allow("k".to_string()).await, "显式 0 仍是关闭限流");
+        }
+    }
+
+    #[tokio::test]
+    async fn limiter_blocks_after_quota() {
+        let rl = RateLimiter::new(2);
+        assert!(rl.allow("k".to_string()).await);
+        assert!(rl.allow("k".to_string()).await);
+        assert!(!rl.allow("k".to_string()).await, "第 3 次应被拒");
     }
 }
