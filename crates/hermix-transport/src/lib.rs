@@ -1054,6 +1054,21 @@ pub enum WsClientMessage {
     /// is what the user typed (or the choice they picked) and is fed back
     /// to the agent loop as the tool result.
     ClarifyResponse { request_id: String, answer: String },
+    /// User pressed Stop while a turn is streaming. This is a
+    /// **request**, not a command: the backend fires its interrupt
+    /// controller, the agent loop drains to a terminal
+    /// `Done(outcome="interrupted")`, and THAT frame is the single
+    /// source of truth for "the turn is over" (the frontend must not
+    /// settle the turn locally before it — that divergence is what
+    /// historically made stop → re-send hang until the stale turn
+    /// finished naturally).
+    Stop {
+        /// Session the stop applies to. `None` means "the session this
+        /// connection is currently streaming" (the only session a
+        /// frontend connection can legally stop).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session_id: Option<String>,
+    },
     Ping,
 }
 
@@ -1388,6 +1403,26 @@ mod tests {
         // None fields should be skipped
         assert!(value.get("provider").is_none());
 
+        let parsed: WsClientMessage = serde_json::from_value(value).expect("deserialize");
+        assert_eq!(parsed, msg);
+    }
+
+    /// 前端点停止发的是 `{"type":"stop"}`（不带 session_id）。
+    ///
+    /// 解析不出来时后端的 `other =>` 分支会**静默丢弃**，症状正是「点了停止没反应」
+    /// ——所以这个线格式必须被一条测试钉住。
+    #[test]
+    fn ws_client_message_stop_round_trips() {
+        let bare: WsClientMessage = serde_json::from_value(serde_json::json!({"type": "stop"}))
+            .expect("不带 session_id 的 stop 必须能解析");
+        assert_eq!(bare, WsClientMessage::Stop { session_id: None });
+
+        let msg = WsClientMessage::Stop {
+            session_id: Some("sess-a".into()),
+        };
+        let value = serde_json::to_value(&msg).expect("serialize");
+        assert_eq!(value["type"], "stop");
+        assert_eq!(value["session_id"], "sess-a");
         let parsed: WsClientMessage = serde_json::from_value(value).expect("deserialize");
         assert_eq!(parsed, msg);
     }

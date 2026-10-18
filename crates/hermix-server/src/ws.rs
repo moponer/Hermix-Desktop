@@ -2132,9 +2132,9 @@ pub(crate) async fn handle_ws_stream_send(
                 let hb = WsEnvelope {
                     version: 1,
                     request_id: None,
-                    trace_id: trace_id_heartbeat.clone(),
-                     seq: None,
-                     attachment_id: None,
+                                        trace_id: trace_id_heartbeat.clone(),
+                                        seq: None,
+                                        attachment_id: None,
                     event: StreamEvent::Heartbeat,
                 };
                 if sender
@@ -2337,6 +2337,37 @@ WsClientMessage::ApprovalBatchResponse { batch_id, decision, note } => {
                                     };
                                     let _ = sender
                                         .send(serde_json::to_string(&pong).unwrap_or_default())
+                                        .await;
+                                }
+                                WsClientMessage::Stop { .. } => {
+                                    // User pressed Stop. Fire the per-send
+                                    // soft-shutdown Notify: the agent loop's
+                                    // forward task converts it into
+                                    // `InterruptController::interrupt()`, which
+                                    // (a) races the in-flight LLM call
+                                    // (llm_retry O1.2 select), (b) unblocks an
+                                    // approval wait, (c) trips every
+                                    // `check_interrupt()` poll. The loop then
+                                    // drains to `Done(outcome="interrupted")` —
+                                    // that terminal frame, not this Status, is
+                                    // what tells the frontend the turn ended.
+                                    tracing::info!(
+                                        session = %session_id,
+                                        "ws_stream_send: Stop received — firing interrupt"
+                                    );
+                                    shutdown_notify.notify_one();
+                                    let stopping = WsEnvelope {
+                                        version: 1,
+                                        request_id: None,
+                                        trace_id: trace_id_heartbeat.clone(),
+                                         seq: None,
+                                         attachment_id: None,
+                                        event: StreamEvent::Status {
+                                            content: "正在停止当前任务…".to_string(),
+                                        },
+                                    };
+                                    let _ = sender
+                                        .send(serde_json::to_string(&stopping).unwrap_or_default())
                                         .await;
                                 }
                                 other => {
@@ -3123,6 +3154,18 @@ async fn handle_inbound_frame(
                 let _ = sender
                     .send(serde_json::to_string(&pong).unwrap_or_default())
                     .await;
+                return StreamSendOutcome::Completed;
+            }
+            WsClientMessage::Stop { .. } => {
+                // Stop outside a streaming turn: there is no in-flight
+                // agent task to interrupt. Idempotent no-op — the
+                // frontend sends Stop after its stop click regardless of
+                // whether the turn already finished (the terminal Done
+                // may have raced the click). Keep the session alive.
+                tracing::debug!(
+                    session = %session_id,
+                    "ws_stream: Stop outside streaming turn — no in-flight task, no-op"
+                );
                 return StreamSendOutcome::Completed;
             }
         }
