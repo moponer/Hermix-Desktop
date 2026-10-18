@@ -2,6 +2,18 @@ import { useState, useCallback, useRef, useEffect, useMemo, type SetStateAction 
 import { invoke } from "@tauri-apps/api/core";
 import type { AcuiDirective } from "../acui/types";
 import type { ApprovalRequestItem, SubAgentEventPayload } from "../types";
+
+/** Wire shape of the orchestration-bus events the server bridges onto
+ *  the WS stream (`OrchestrationEvent::to_stream_event` in
+ *  `orchestration_bus.rs`; tag names are snake_case on the wire). */
+export type OrchestrationEventInfo =
+  | { type: "task_created"; taskId: string; title: string; mode: string; workspacePath: string }
+  | { type: "task_updated"; taskId: string; title: string; status: string }
+  | { type: "task_status_changed"; taskId: string; oldStatus: string; newStatus: string }
+  | { type: "automation_triggered"; automationId: string; automationName: string; taskId: string }
+  | { type: "result_delivered"; taskId: string }
+  | { type: "loop_phase_changed"; sessionId: string | null; taskId: string | null; phase: string; stage: string; turn: number }
+  | { type: "plan_confirmation_required"; taskId: string; planText: string };
 import { createPhaseController } from "./useStreamPhase";
 import { createMessageHandler, type StreamChatSendContext } from "./useStreamParser";
 import { createConnector } from "./useWsConnection";
@@ -178,6 +190,13 @@ export interface StreamCallbacks {
     turnNumber: number;
   }) => void;
   onSubAgentEvent?: (info: SubAgentEventPayload) => void;
+  /** Orchestration-bus events bridged onto the WS stream (see
+   *  `ws.rs`'s orchestration listener). The desktop client handles a
+   *  subset: plan confirmation renders a card, automation triggers
+   *  raise a toast, loop-phase changes update the status chip. Task
+   *  lifecycle events are accepted for completeness — the desktop has
+   *  no task panel yet, so callers may ignore them. */
+  onOrchestrationEvent?: (ev: OrchestrationEventInfo) => void;
   onTodoChange?: (change:
     | { kind: "snapshot"; sessionId: string; items: TodoSnapshotItem[] }
     | { kind: "group_started"; sessionId: string; groupId: string; groupTitle: string | null; messageId: string | null }

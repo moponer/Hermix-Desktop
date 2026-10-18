@@ -18,7 +18,7 @@ import { storage, STORAGE_KEYS } from "../utils/storageCompat";
 import { setKeepAwake, KEEP_AWAKE_CHANGED_EVENT } from "../desktopBridge";
 import { useWorkspaces } from "../hooks/useWorkspaces";
 import { toastInfo, toastError } from "../hooks/useToast";
-import { EmptyState, PageHeader } from "./ui";
+import { EmptyState, PageHeader, SkeletonCard } from "./ui";
 
 /** A small set of cron presets the editor offers as quick-pick chips.
  *  Each entry: [label, cronExpression, humanDescription]. */
@@ -270,7 +270,10 @@ export function AutomationView({ openChat, onCreateWorkflow }: { openChat: () =>
             )}
 
         {loading && tasks.length === 0 ? (
-          <p className="text-[length:var(--text-ui)] text-text-faint py-8 text-center">加载中…</p>
+          <div className="py-8 flex flex-col items-center gap-3">
+            <SkeletonCard lines={2} />
+            <SkeletonCard lines={2} />
+          </div>
         ) : tasks.length === 0 ? (
           <EmptyState
             variant="plain"
@@ -782,6 +785,7 @@ function WorkflowPanel({ openChat, onCreateWorkflow }: { openChat: () => void; o
   const [items, setItems] = useState<api.WorkflowEntry[] | null>(null);
   const [runningId, setRunningId] = useState<string | null>(null);
   const [paramFor, setParamFor] = useState<api.WorkflowEntry | null>(null);
+  const [editing, setEditing] = useState<api.WorkflowEntry | null>(null);
 
   const load = useCallback(async () => {
     const list = await api.getWorkflows();
@@ -836,15 +840,25 @@ function WorkflowPanel({ openChat, onCreateWorkflow }: { openChat: () => void; o
           <h2 className="text-[length:var(--text-ui)] font-medium text-text-primary">全局</h2>
           <span className="text-[length:var(--text-tiny)] text-text-faint">对所有项目可见</span>
         </div>
-        <button
-          onClick={onCreateWorkflow}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent text-bg-primary text-[length:var(--text-ui)] font-medium hover:bg-accent-hover"
-        >
-          <Plus className="icon-sm" /> 通过对话创建
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setEditing({ id: "", name: "", description: "", workspace: null, prompt: "", created_at: 0, updated_at: 0 })}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent text-bg-primary text-[length:var(--text-ui)] font-medium hover:bg-accent-hover"
+          >
+            <Plus className="icon-sm" /> 手动创建
+          </button>
+          <button
+            onClick={onCreateWorkflow}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-primary text-[length:var(--text-ui)] font-medium hover:bg-bg-hover"
+          >
+            通过对话创建
+          </button>
+        </div>
       </div>
       {!items ? (
-        <p className="text-[length:var(--text-ui)] text-text-faint py-6 text-center">加载中…</p>
+        <div className="py-6 flex flex-col items-center gap-3">
+          <SkeletonCard lines={2} />
+        </div>
       ) : global.length === 0 ? (
         <p className="rounded-xl border border-border-primary bg-bg-card px-4 py-6 text-center text-[length:var(--text-ui)] text-text-muted">
           还没有全局工作流。适合放不依赖某个项目的流程，例如深度调研。
@@ -893,6 +907,140 @@ function WorkflowPanel({ openChat, onCreateWorkflow }: { openChat: () => void; o
           onRun={(params) => void doRun(paramFor, params)}
         />
       )}
+      {editing && (
+        <WorkflowEditorDialog
+          wf={editing}
+          workspaces={workspaces.map((w) => ({ path: w.path, name: w.name }))}
+          onCancel={() => setEditing(null)}
+          onSaved={async () => {
+            setEditing(null);
+            await load();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/** 手动新建 / 编辑工作流。保存走 `POST /api/workflows`（upsert：
+ *  id 为空即新建，非空即另存覆盖）。 */
+function WorkflowEditorDialog({
+  wf,
+  workspaces,
+  onCancel,
+  onSaved,
+}: {
+  wf: api.WorkflowEntry;
+  workspaces: Array<{ path: string; name: string }>;
+  onCancel: () => void;
+  onSaved: () => Promise<void>;
+}) {
+  const isNew = wf.id === "";
+  const [name, setName] = useState(wf.name);
+  const [description, setDescription] = useState(wf.description ?? "");
+  const [prompt, setPrompt] = useState(wf.prompt);
+  const [workspace, setWorkspace] = useState<string>(wf.workspace ?? "");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const onSave = async () => {
+    if (!name.trim()) {
+      setError("名称不能为空");
+      return;
+    }
+    if (!prompt.trim()) {
+      setError("提示词不能为空");
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    const saved = await api.saveWorkflow({
+      id: isNew ? undefined : wf.id,
+      name: name.trim(),
+      description: description.trim() || undefined,
+      workspace: workspace || null,
+      prompt,
+    });
+    setSaving(false);
+    if (saved) {
+      toastInfo("已保存");
+      await onSaved();
+    } else {
+      setError("保存失败，请检查后端日志");
+    }
+  };
+
+  return (
+    <div className="modal-backdrop" onClick={onCancel}>
+      <div className="modal-card flex flex-col max-h-[90vh]" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <div className="modal-title-block">
+            <h3 className="modal-title">{isNew ? "新建工作流" : `编辑 · ${wf.name}`}</h3>
+          </div>
+          <button onClick={onCancel} className="modal-close" aria-label="关闭">
+            <X className="icon-lg" />
+          </button>
+        </div>
+        <div className="modal-form">
+          <div className="modal-field">
+            <label className="modal-field-label">名称</label>
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              className="modal-input"
+              placeholder="例如：竞品调研"
+            />
+          </div>
+          <div className="modal-field">
+            <label className="modal-field-label">说明（可选）</label>
+            <input
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              className="modal-input"
+              placeholder="一句话说明这个流程做什么"
+            />
+          </div>
+          <div className="modal-field">
+            <label className="modal-field-label">可见范围</label>
+            <select
+              value={workspace}
+              onChange={(e) => setWorkspace(e.target.value)}
+              className="modal-input"
+            >
+              <option value="">全局（对所有项目可见）</option>
+              {workspaces.map((w) => (
+                <option key={w.path} value={w.path}>
+                  {w.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="modal-field">
+            <label className="modal-field-label">提示词</label>
+            <textarea
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              className="modal-input min-h-40"
+              placeholder={"跑起来后发给 agent 的指令。可用 {{参数}} 作为占位符，运行时再填。"}
+            />
+          </div>
+          {error && (
+            <p className="text-[length:var(--text-ui)] text-error">{error}</p>
+          )}
+        </div>
+        <div className="modal-footer">
+          <button onClick={onCancel} className="modal-btn modal-btn-secondary">
+            取消
+          </button>
+          <button
+            onClick={() => void onSave()}
+            disabled={saving}
+            className="modal-btn modal-btn-primary"
+          >
+            {saving ? "保存中…" : "保存"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

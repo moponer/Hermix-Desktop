@@ -96,13 +96,16 @@ const cssFiles = [];
 })(STYLES);
 
 let anyDefined = new Set();
+// CSS 块注释先剥掉：注释里的示例写法（"曾经写成 var(--accent)"）会被
+// var() 正则当成真实引用，报出幽灵孤儿变量。
+const stripCssComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, "");
 for (const f of cssFiles)
-  for (const n of [...read(f).matchAll(/(--[a-z][a-z0-9-]*)\s*:/g)].map((m) => m[1]))
+  for (const n of [...stripCssComments(read(f)).matchAll(/(--[a-z][a-z0-9-]*)\s*:/g)].map((m) => m[1]))
     anyDefined.add(n);
 
 let usedVars = new Set();
 for (const f of cssFiles)
-  for (const m of read(f).matchAll(/var\(\s*(--[a-z0-9-]+)/g)) {
+  for (const m of stripCssComments(read(f)).matchAll(/var\(\s*(--[a-z0-9-]+)/g)) {
     // 过滤 `var(--color-${x})` 这类模板拼接产生的非完整名
     if (m[1].endsWith("-") || m[1] === "--color") continue;
     usedVars.add(m[1]);
@@ -113,7 +116,9 @@ for (const f of cssFiles)
     if (statSync(p).isDirectory()) {
       if (!e.startsWith("themes")) scanTsx(p); // 主题目录自身是定义方
     } else if (/\.tsx?$/.test(e) && !e.includes(".test.")) {
-      for (const m of read(p).matchAll(/var\(\s*(--[a-z0-9-]+)/g)) {
+      // 注释里的示例（"禁写 bg-[var(--accent)]"）不是真实引用，先剥掉
+      const src = read(p).replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|\s)\/\/.*$/gm, "$1");
+      for (const m of src.matchAll(/var\(\s*(--[a-z0-9-]+)/g)) {
         // 过滤 `var(--color-${x})` 这类模板拼接产生的非完整名（裸 "--color-"）
         if (m[1].endsWith("-") || m[1] === "--color") continue;
         usedVars.add(m[1]);
@@ -148,12 +153,25 @@ function walkTsx(d) {
   return out;
 }
 
+// CSS 层同规。2026-10-18 扩围：此前只扫 tsx/ts，styles/** 约 370 处字面色值
+// 与 130+ 处 px 字号永远报绿——TYPOGRAPHY_SYSTEM.md「已全部归到 token」的
+// 结论与代码事实不符。存量较大，先 WARN 统计（见文件末汇总），逐文件迁移
+// 收敛到零后改阻断。
+const CSS_SCAN = cssFiles.filter((f) => !f.includes(`${sep}themes${sep}`));
+
 const allowedFiles = new Set();
 if (existsSync(EXC)) {
   for (const line of read(EXC).split("\n")) {
-    const m = line.match(/\|\s*(E\d+)\s*\|\s*`([^`]+)`/);
+    // 表格第一列是文件路径（`src/...` 或 `apps/desktop-tauri/src/...`）。
+    // 2026-10-18 修：旧正则要求 `| E编号 |` 列，而登记表从来没有编号列
+    // ——allowedFiles 恒为空，ProviderIcon/FileTypeIcon 等"已登记"项
+    // 实际上从未生效过（门禁一直红着没人发现，因为没人单独跑它）。
+    const m = line.match(/^\|\s*`([^`]+)`/);
     if (!m) continue;
-    allowedFiles.add(m[2].replace(/^apps\/desktop-tauri\/src\//, ""));
+    const p = m[1]
+      .replace(/^apps\/desktop-tauri\/src\//, "")
+      .replace(/^src\//, "");
+    allowedFiles.add(p);
   }
 }
 
@@ -179,6 +197,59 @@ if (violations.length) {
   console.error("  → 改用语义令牌，或登记 EXCEPTIONS.md。");
 } else {
   console.log("[bare-color] 无裸色 ✓");
+}
+
+/* ---------- Check 3b: CSS 层裸色（WARN，迁移收敛后改阻断） ---------- */
+// 豁免规则收紧：旧版「行内含 var(--color- 即整行豁免」，于是
+// `var(--color-error, #dc2626)` 这种兜底写法整行放行。新版把色值出现位置
+// 全部限定在 var() 的兜底参数里——即去掉所有 var(...) 段之后不再有裸色。
+function stripVarSegments(line) {
+  return line.replace(/var\(\s*--[a-z0-9-]+\s*(?:,[^()]*)?\)/g, "");
+}
+const cssColorHits = [];
+for (const file of CSS_SCAN) {
+  const rel = relative(SRC, file).split(sep).join("/");
+  if (allowedFiles.has(rel)) continue;
+  const lines = read(file).split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const ln = lines[i];
+    if (/^\s*(\/\/|\*|\/\*)/.test(ln)) continue;
+    if (!COLOR_RX.test(ln)) continue;
+    // 整行都是 var() 声明（定义侧，如 `--x: #fff;`）不算裸色消费
+    if (/^\s*--[a-z0-9-]+\s*:/.test(ln)) continue;
+    if (COLOR_RX.test(stripVarSegments(ln))) {
+      cssColorHits.push(`${rel}:${i + 1}: ${ln.trim().slice(0, 100)}`);
+    }
+  }
+}
+if (cssColorHits.length) {
+  console.warn(`[css-bare-color] ${cssColorHits.length} 处 CSS 层裸色（WARN，登记或迁移）:`);
+  const byFile = new Map();
+  for (const h of cssColorHits) {
+    const f = h.split(":")[0];
+    byFile.set(f, (byFile.get(f) ?? 0) + 1);
+  }
+  for (const [f, n] of [...byFile.entries()].sort((a, b) => b[1] - a[1])) {
+    console.warn(`  ${f}: ${n} 处`);
+  }
+} else {
+  console.log("[css-bare-color] CSS 层无裸色 ✓");
+}
+
+/* ---------- Check 3c: CSS 层 px 字号（WARN） ---------- */
+const cssTypeRx = /font-size:\s*(\d+(?:\.\d+)?)px/g;
+const cssTypeHits = [];
+for (const file of CSS_SCAN) {
+  const rel = relative(SRC, file).split(sep).join("/");
+  if (allowedFiles.has(rel)) continue;
+  const hits = [...read(file).matchAll(cssTypeRx)].map((m) => m[1]);
+  if (hits.length) cssTypeHits.push(`  ${rel}: ${hits.length} 处（${[...new Set(hits)].join("/")}px）`);
+}
+if (cssTypeHits.length) {
+  console.warn(`[css-type-debt] CSS 层 px 字号（WARN，改用 --text-* 七档）:`);
+  for (const h of cssTypeHits) console.warn(h);
+} else {
+  console.log("[css-type-debt] CSS 层无 px 字号 ✓");
 }
 
 /* ---------- Check 4: Tailwind 原生色阶类 ----------

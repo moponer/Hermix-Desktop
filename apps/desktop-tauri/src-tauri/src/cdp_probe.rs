@@ -26,8 +26,9 @@ use webview2_com::CallDevToolsProtocolMethodCompletedHandler;
 use webview2_com::Microsoft;
 use windows_core::{PCWSTR, HSTRING};
 
-/// `#[tauri::command]` 形态的真机探针入口：前端 `invoke("cdp_n0_probe")`
-/// 触发，在主 webview 上跑三个 CDP 方法并返回 `(方法名, 摘要)` 列表。
+/// `#[tauri::command]` 形态的真机探针入口。注册供人工/脚本触发
+/// （devtools console 里 `invoke("cdp_n0_probe")`）——前端 UI 没有
+/// 调用点：这是 N0 批次的真机验证工具，不是产品功能。
 #[tauri::command]
 pub fn cdp_n0_probe(
     webview: tauri::Webview<tauri::Wry>,

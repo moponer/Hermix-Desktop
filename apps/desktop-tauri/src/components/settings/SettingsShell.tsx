@@ -8,7 +8,7 @@ import {
 
 import { cx } from "../../lib/cx";
 import { storage, STORAGE_KEYS } from "../../utils/storageCompat";
-import { Input, Switch, SettingsGroup, SettingsRow, SegmentedControl } from "../ui";
+import { Switch, SettingsGroup, SettingsRow, SegmentedControl } from "../ui";
 import { toastWarning } from "../../hooks/useToast";
 import {
   PluginsTab, SkillsTab, ConnectorsTab, ToolsetsTab,
@@ -73,7 +73,7 @@ const GROUPS: GroupDef[] = [
       { id: "general", label: "通用", hint: "工作模式、输入快捷键、系统能力与数据位置", icon: SlidersHorizontal, keywords: "mode domain 编程 办公 通知 自启 索引" },
       { id: "appearance", label: "外观", hint: "主题、强调色与壁纸，立即生效并持久保存", icon: Palette, keywords: "theme 主题 深色 浅色 跟随系统 强调色 accent 对比度" },
       { id: "model", label: "模型", hint: "统一管理内置与自定义模型；内置供应商只需填 API Key", icon: Cpu, keywords: "model llm provider api key 供应商" },
-      { id: "image", label: "图像", hint: "图片生成偏好与系统截图（热键、开关）", icon: ImageIcon, keywords: "image 图像 生成 截图 screenshot 热键 hotkey 快捷键" },
+      { id: "image", label: "截图", hint: "系统截图热键与开关", icon: ImageIcon, keywords: "image 截图 screenshot 热键 hotkey 快捷键" },
     ],
   },
   {
@@ -277,7 +277,7 @@ function PageBody({
     case "general": return <Section><PageHeading def={def} /><GeneralTab /></Section>;
     case "appearance": return <Section><PageHeading def={def} /><AppearanceTab /></Section>;
     case "model": return <ModelListTab />;
-    case "image": return <Section><PageHeading def={def} /><ImageSettingsCard /><ScreenshotSettingsCard /></Section>;
+    case "image": return <Section><PageHeading def={def} /><ScreenshotSettingsCard /></Section>;
     case "plugins": return <ToolSection><PageHeading def={def} /><PluginsTab query={toolQuery} onQuery={onToolQuery} /></ToolSection>;
     case "skills": return <ToolSection><PageHeading def={def} /><SkillsTab query={toolQuery} onQuery={onToolQuery} /></ToolSection>;
     case "connectors": return <ToolSection><PageHeading def={def} /><ConnectorsTab query={toolQuery} onQuery={onToolQuery} /></ToolSection>;
@@ -311,61 +311,8 @@ function ToolSection({ children }: { children: ReactNode }) {
   );
 }
 
-// ── 图像：本地图片生成偏好（前端持久化） ──────────────────────────
-
-interface ImageConfig {
-  enabled: boolean;
-  model: string;
-}
-
-function loadImageConfig(): ImageConfig {
-  try {
-    const raw = storage.getItem(STORAGE_KEYS.imageConfig);
-    if (raw) return { enabled: false, model: "", ...(JSON.parse(raw) as Partial<ImageConfig>) };
-  } catch { /* ignore */ }
-  return { enabled: false, model: "" };
-}
-
-function ImageSettingsCard() {
-  const [cfg, setCfg] = useState<ImageConfig>(loadImageConfig);
-
-  const update = (next: Partial<ImageConfig>) => {
-    setCfg((prev) => {
-      const merged = { ...prev, ...next };
-      storage.setItem(STORAGE_KEYS.imageConfig, JSON.stringify(merged));
-      return merged;
-    });
-  };
-
-  return (
-    <div className="space-y-6">
-      <SettingsGroup>
-        <SettingsRow
-          title="启用图片生成"
-          description="开启后，对话中可调用图片生成技能。"
-          control={
-            <Switch
-              checked={cfg.enabled}
-              onChange={(v) => update({ enabled: v })}
-              label="启用图片生成"
-            />
-          }
-        />
-        <SettingsRow
-          title="图片模型"
-          description="留空时由后端决定使用哪个图片模型。"
-        >
-          <Input
-            value={cfg.model}
-            onChange={(e) => update({ model: e.target.value })}
-            placeholder="例如 agnes-image-2.0"
-            className="mt-2"
-          />
-        </SettingsRow>
-      </SettingsGroup>
-    </div>
-  );
-}
+// ── 图像页：只剩系统截图偏好。图片生成设置已于 2026-10-18 移除——
+// 无后端能力支撑，纯 localStorage 摆设（决策见前后端对接审查）。
 
 // ── 图像：系统截图偏好（前端持久化 + Rust 即时应用） ──────────────
 // 持久化走 localStorage（screenshotConfig），与 imageConfig 同模式；生效

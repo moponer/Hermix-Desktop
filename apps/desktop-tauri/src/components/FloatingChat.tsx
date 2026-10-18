@@ -34,6 +34,7 @@ import { useStreamChatContext } from "../context/StreamChatContext";
 import { getSessions } from "../api/rest";
 import type { Session } from "../types";
 import { formatSidebarTime } from "../utils/time";
+import { SkeletonCard } from "./ui";
 
 const ORB_SIZE = 48;
 const WIN_MIN_W = 320;
@@ -484,7 +485,11 @@ export function FloatingChat({
             </div>
             {menuOpen && (
               <div className="wb-float__menu" role="menu" aria-label="本工作台的历史会话">
-                {historyLoading && <div className="wb-float__menu-empty">加载中…</div>}
+                {historyLoading && (
+                  <div className="wb-float__menu-empty" aria-busy="true">
+                    <SkeletonCard lines={2} />
+                  </div>
+                )}
                 {!historyLoading && (history?.length ?? 0) === 0 && (
                   <div className="wb-float__menu-empty">还没有历史会话</div>
                 )}

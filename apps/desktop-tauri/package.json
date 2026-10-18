@@ -12,6 +12,7 @@
     "_:sync-shell-runtime": "if not exist \"%USERPROFILE%\\.hermix\\loader\" mkdir \"%USERPROFILE%\\.hermix\\loader\" && copy /y ..\\..\\release\\target\\release\\hx-shell.exe \"%USERPROFILE%\\.hermix\\loader\\hx-shell.exe\"",
     "build": "node scripts/dev.mjs build",
     "check:tokens": "node ../../scripts/check-theme-tokens.mjs",
+    "check:design": "node ../../scripts/check-design-guard.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "ensure-sidecar": "node scripts/ensure-sidecar.mjs"

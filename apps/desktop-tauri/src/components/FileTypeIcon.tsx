@@ -192,6 +192,8 @@ export function FileTypeIcon({
 }) {
   const look = useMemo(() => (name ? lookFor(name) : null), [name]);
   const label = look?.label ?? "?";
+  // 未知类型的兜底灰——文件类型图标是官方品牌色系（见 FILE_LOOKS），
+  // 不随主题。design-guard: allow
   const bg = look?.bg ?? "#6b7280";
 
   // Per-icon gradient id.  Embedding the bg in the id avoids the
@@ -221,6 +223,8 @@ export function FileTypeIcon({
           <stop offset="1" stopColor={bg} stopOpacity="0.86" />
         </linearGradient>
         <linearGradient id={`${gid}-ear`} x1="0" y1="0" x2="0" y2="1">
+          {/* 折角高光：叠在任意 body 色上的恒定白色渐变，不随主题。 */}
+          {/* design-guard: allow */}
           <stop offset="0" stopColor="#ffffff" stopOpacity="0.35" />
           <stop offset="1" stopColor="#ffffff" stopOpacity="0.18" />
         </linearGradient>

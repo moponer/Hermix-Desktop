@@ -116,23 +116,9 @@ pub fn get_data_dir() -> Result<String, String> {
     Ok(path.to_string_lossy().to_string())
 }
 
-/// **Deprecated**: kept for one release as an alias for [`get_data_dir`].
-///
-/// Phase 9 callers (and any third-party code that wired itself to
-/// `get_settings_dir`) continue to work — the implementation now
-/// resolves to the same place as `get_data_dir` instead of
-/// `%APPDATA%\\hermix\\` (which would silently scatter data outside
-/// the install root, defeating the whole portable-mode promise).
-///
-/// Front-end code MUST migrate to `get_data_dir`. The companion
-/// `openSettingsDir` in `desktopBridge.ts` is also deprecated.
-#[tauri::command]
-pub fn get_settings_dir() -> Result<String, String> {
-    eprintln!(
-        "[Hermix] WARNING: 'get_settings_dir' is deprecated, use 'get_data_dir' instead"
-    );
-    get_data_dir()
-}
+/// `get_settings_dir` 于 2026-10-18 移除（零调用）：前端已全部迁到
+/// `get_data_dir`，其"保留一个 release 的 deprecated alias"承诺的那个
+/// release 早已过去，留着只会误导新调用方。
 
 #[tauri::command]
 pub async fn pick_directory(app: tauri::AppHandle) -> Result<Option<String>, String> {

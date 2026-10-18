@@ -330,6 +330,85 @@ export function createMessageHandler(
         return;
       }
 
+      // Orchestration-bus events (bridged in `ws.rs`). Without these
+      // branches the server's Task lifecycle / automation / plan
+      // events arrived on the wire and were silently dropped by the
+      // switch below. The caller wires the subset the desktop uses;
+      // unhandled variants stay no-ops here.
+      if (
+        evtType === "task_created" ||
+        evtType === "task_updated" ||
+        evtType === "task_status_changed" ||
+        evtType === "automation_triggered" ||
+        evtType === "result_delivered" ||
+        evtType === "loop_phase_changed" ||
+        evtType === "plan_confirmation_required"
+      ) {
+        ctx.hasAnyStreamEvent = true;
+        ctx.setLastActivityAt(Date.now());
+        const ev = data?.event ?? data;
+        if (evtType === "task_created") {
+          ctx.callbacks.onOrchestrationEvent?.({
+            type: "task_created",
+            taskId: String(ev?.task_id ?? ""),
+            title: String(ev?.title ?? ""),
+            mode: String(ev?.mode ?? ""),
+            workspacePath: String(ev?.workspace_path ?? ""),
+          });
+        } else if (evtType === "task_updated") {
+          ctx.callbacks.onOrchestrationEvent?.({
+            type: "task_updated",
+            taskId: String(ev?.task_id ?? ""),
+            title: String(ev?.title ?? ""),
+            status: String(ev?.status ?? ""),
+          });
+        } else if (evtType === "task_status_changed") {
+          ctx.callbacks.onOrchestrationEvent?.({
+            type: "task_status_changed",
+            taskId: String(ev?.task_id ?? ""),
+            oldStatus: String(ev?.old_status ?? ""),
+            newStatus: String(ev?.new_status ?? ""),
+          });
+        } else if (evtType === "automation_triggered") {
+          ctx.callbacks.onOrchestrationEvent?.({
+            type: "automation_triggered",
+            automationId: String(ev?.automation_id ?? ""),
+            automationName: String(ev?.automation_name ?? ""),
+            taskId: String(ev?.task_id ?? ""),
+          });
+        } else if (evtType === "result_delivered") {
+          ctx.callbacks.onOrchestrationEvent?.({
+            type: "result_delivered",
+            taskId: String(ev?.task_id ?? ""),
+          });
+        } else if (evtType === "loop_phase_changed") {
+          const stage = String(ev?.stage ?? "");
+          const stageLabel: Record<string, string> = {
+            perception: "感知",
+            reasoning: "推理",
+            action: "执行",
+            observation: "观察",
+          };
+          const label = stageLabel[stage] ?? stage;
+          ctx.setStreamingStatus(label ? `阶段：${label}` : null);
+          ctx.callbacks.onOrchestrationEvent?.({
+            type: "loop_phase_changed",
+            sessionId: typeof ev?.session_id === "string" ? ev.session_id : null,
+            taskId: typeof ev?.task_id === "string" ? ev.task_id : null,
+            phase: String(ev?.phase ?? ""),
+            stage,
+            turn: typeof ev?.turn === "number" ? ev.turn : 0,
+          });
+        } else {
+          ctx.callbacks.onOrchestrationEvent?.({
+            type: "plan_confirmation_required",
+            taskId: String(ev?.task_id ?? ""),
+            planText: String(ev?.plan_text ?? ""),
+          });
+        }
+        return;
+      }
+
       if (evtType === "tool_chunk") {
         const tool = data?.tool || data?.event?.tool || "tool";
         const toolCallId =
@@ -505,6 +584,56 @@ export function createMessageHandler(
       if (evtType === "status" || evtType === "activity") {
         const content =
           typeof evtContent === "string" ? evtContent : "";
+        // 后端把 section_gate / prefetch_intent / acui 三类结构化事件
+        // 包成 `Status{content: <raw extra JSON>}`（ws.rs 的
+        // "section_gate" | "prefetch_intent" | "acui" 分支）。该包装
+        // 让下方三个专用分支永远不可达（status 先 return），chip 还会
+        // 闪出原始 JSON。在此解包并直接执行对应动作，恢复事件链。
+        const unwrapped = (() => {
+          if (!content) return null;
+          try {
+            const parsed = JSON.parse(content) as { event?: unknown };
+            const kind = typeof parsed?.event === "string" ? parsed.event : null;
+            if (kind === "section_gate" || kind === "prefetch_intent" || kind === "acui") {
+              return { kind, parsed };
+            }
+          } catch {
+            /* not a wrapped structured event */
+          }
+          return null;
+        })();
+        if (unwrapped) {
+          if (unwrapped.kind === "section_gate") {
+            const narrowed = narrowSectionGateReport(
+              (unwrapped.parsed as { report?: unknown }).report ?? null,
+            );
+            if (narrowed) ctx.callbacks.onSectionGate?.(narrowed);
+            return;
+          }
+          if (unwrapped.kind === "prefetch_intent") {
+            const ev = unwrapped.parsed as {
+              intent?: unknown; confidence?: unknown; results?: unknown;
+            };
+            const intent = typeof ev.intent === "string" ? ev.intent : "unknown";
+            const confidence = typeof ev.confidence === "number" ? ev.confidence : 0;
+            const results: PrefetchResultEntry[] = Array.isArray(ev.results)
+              ? (ev.results as Array<Record<string, unknown>>).map((r) => ({
+                  tool: typeof r?.tool === "string" ? r.tool : "unknown",
+                  args: r?.args ?? {},
+                  output: typeof r?.output === "string" ? r.output : "",
+                  errored: !!r?.errored,
+                  durationMs: typeof r?.duration_ms === "number" ? r.duration_ms : 0,
+                }))
+              : [];
+            ctx.onPrefetchRef.current?.({ intent, confidence, results });
+            return;
+          }
+          const directive = (unwrapped.parsed as { directive?: unknown }).directive;
+          if (directive && typeof directive === "object" && "op" in directive) {
+            ctx.callbacks.onAcuiDirective?.(directive as AcuiDirective);
+          }
+          return;
+        }
         ctx.setStreamingStatus(content || null);
         // `task_in_flight` on a Status means the backend consumed a user
         // message that arrived mid-stream and QUEUED it — the turn for it

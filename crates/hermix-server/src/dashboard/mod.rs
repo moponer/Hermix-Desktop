@@ -19,7 +19,6 @@ pub mod memory_inspect;
 pub mod persona;
 pub mod plugins_inspect;
 pub mod polish;
-pub mod log_view;
 pub mod skills;
 pub mod stubs;
 pub mod transcribe;
@@ -133,6 +132,9 @@ pub fn router() -> Router<HttpServerState> {
             "/api/mcp/servers",
             get(mcp::list_servers).post(mcp::create_server),
         )
+        // reset：把 MCP server 列表重置回官方种子。桌面端暂无入口
+        // （2026-10-18 审查确认）——用户改乱后的恢复手段，保留；
+        // 补 UI 入口（带确认）或经 CLI/排障调用。
         .route("/api/mcp/servers/reset", post(mcp::reset_to_official))
         // MCP 内置目录（一键添加）。2026-10-04 取消远程拉取：原先的
         // /api/mcp/catalog/sources（源清单 + 切换）与 /probe（连通性探测）
@@ -166,6 +168,8 @@ pub fn router() -> Router<HttpServerState> {
             "/api/automation/active-count",
             get(automation::active_count),
         )
+        // reset：把自动化任务重置回官方种子。桌面端暂无入口（2026-10-18
+        // 审查确认）——同 mcp/servers/reset，保留待入口或排障。
         .route("/api/automation/reset", post(automation::reset_to_official))
         // Workflows: 对话里跑通后由 `workflow` 工具保存的再跑流程。
         // 运行走 agent_service.send_message()（铁律 DD），会话 id =
@@ -280,8 +284,8 @@ pub fn router() -> Router<HttpServerState> {
         .route("/api/custom-apps/{id}/package", post(custom_apps::package_app))
         .route("/api/custom-apps/{id}/run", post(custom_apps::run_app))
         .route("/api/custom-apps/{id}/icon", get(custom_apps::get_app_icon))
-        // Log viewer: list, read, disk-usage per category.
-        .route("/api/logs/files", get(log_view::list_log_files))
-        .route("/api/logs/read", get(log_view::read_log))
-        .route("/api/logs/disk_usage", get(log_view::disk_usage))
+        // 日志查看端点（/api/logs/{files,read,disk_usage}）2026-10-18 移除：
+        // 桌面端日志查看走 Tauri command（list_backend_log_files /
+        // read_backend_log_tail / open_log_directory，desktopBridge.ts），
+        // HTTP 面零消费，是同一能力的两份实现。
 }

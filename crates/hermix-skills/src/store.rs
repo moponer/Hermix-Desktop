@@ -374,6 +374,11 @@ impl FileSkillStore {
                                     category,
                                     description: fm.description,
                                     display_name: fm.display_name,
+                                    // A `.disabled` path component means the
+                                    // skill was moved there by `disable()`.
+                                    enabled: !path
+                                        .components()
+                                        .any(|c| c.as_os_str() == ".disabled"),
                                 });
                             }
                             Err(e) => {

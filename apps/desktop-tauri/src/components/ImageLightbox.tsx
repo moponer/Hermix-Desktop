@@ -290,6 +290,8 @@ function ToolbarBtn({
         e.stopPropagation();
         onClick();
       }}
+      // 恒暗图片浮层（登记的显式例外）上的 hover 高光，非主题样式。
+      // design-guard: allow
       onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.14)")}
       onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
       style={{

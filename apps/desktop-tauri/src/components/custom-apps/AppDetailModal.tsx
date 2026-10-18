@@ -36,6 +36,7 @@ import {
 import { formatCategory, formatPermission, permHint } from "./labels";
 import { resolveAppIconEl } from "./iconResolver";
 import { CodeView } from "../CodeView";
+import { SkeletonCard } from "../ui";
 
 interface AppDetailModalProps {
   appId: string;
@@ -151,8 +152,8 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
   if (loading) {
     return (
       <div className="modal-overlay" onClick={onClose}>
-        <div className="modal-content modal-content--wide" onClick={(e) => e.stopPropagation()}>
-          <div className="modal-loading">加载中…</div>
+        <div className="modal-content modal-content--wide modal-content--loading" onClick={(e) => e.stopPropagation()}>
+          <SkeletonCard lines={5} />
         </div>
       </div>
     );

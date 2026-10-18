@@ -3,12 +3,90 @@
    Used by AgentsView, AIGenerateWizard, TestDialog.
    ════════════════════════════════════════════════════════════════ */
 
-import { fetchJSON, apiInvoke } from "../../api";
+import { fetchJSON } from "../../api";
 import { storage, STORAGE_KEYS } from "../../utils/storageCompat";
 import type { AgentPersona } from "./types";
 import { pickColor } from "./types";
 
 export const STORAGE_KEY = STORAGE_KEYS.agents;
+
+/* ── Wire mapping ────────────────────────────────────────────────
+   后端 `dashboard/agents.rs` 的 AgentPersonaJson/SaveAgentRequest 是
+   snake_case 且无 deny_unknown_fields：前端直发 camelCase 会被静默
+   忽略、字段走 default 蒸发。决策（2026-10-18）：前端迁就后端，
+   在此做双向映射，wire 格式只此一处。 */
+interface WireAgent {
+  id: string;
+  name: string;
+  avatar: string;
+  role: string;
+  identity: string;
+  soul: string;
+  skills: string[];
+  specialty: string;
+  dialog_style: string;
+  background: string;
+  personality: string[];
+  system_prompt: string;
+  model?: string;
+  color_theme: string;
+  usage_count: number;
+  last_used_at: number;
+  created_at: number;
+  updated_at: number;
+  sample_dialog?: { q: string; a: string };
+}
+
+export function toWireAgent(a: AgentPersona): WireAgent {
+  return {
+    id: a.id,
+    name: a.name,
+    avatar: a.avatar,
+    role: a.role,
+    identity: a.identity,
+    soul: a.soul,
+    skills: a.skills,
+    specialty: a.specialty,
+    dialog_style: a.dialogStyle,
+    background: a.background,
+    personality: a.personality,
+    system_prompt: a.systemPrompt,
+    model: a.model,
+    color_theme: a.colorTheme,
+    usage_count: a.usageCount,
+    last_used_at: a.lastUsedAt,
+    created_at: a.createdAt,
+    updated_at: a.updatedAt,
+    sample_dialog: a.sampleDialog,
+  };
+}
+
+/** Accept both wire shapes (snake_case from backend, camelCase from
+ *  legacy localStorage records) so old caches keep loading. */
+export function fromWireAgent(raw: Record<string, unknown>): AgentPersona {
+  const a = raw as Partial<AgentPersona> & Partial<WireAgent>;
+  return {
+    id: String(a.id ?? ""),
+    name: String(a.name ?? ""),
+    avatar: String(a.avatar ?? "🤖"),
+    role: String(a.role ?? ""),
+    identity: String(a.identity ?? ""),
+    soul: String(a.soul ?? ""),
+    skills: a.skills ?? [],
+    specialty: String(a.specialty ?? ""),
+    dialogStyle: String(a.dialogStyle ?? a.dialog_style ?? ""),
+    background: String(a.background ?? ""),
+    personality: a.personality ?? [],
+    systemPrompt: String(a.systemPrompt ?? a.system_prompt ?? ""),
+    model: a.model ?? undefined,
+    colorTheme: (a.colorTheme ?? a.color_theme ?? pickColor(String(a.name ?? a.id ?? ""))) as AgentPersona["colorTheme"],
+    usageCount: Number(a.usageCount ?? a.usage_count ?? 0),
+    lastUsedAt: Number(a.lastUsedAt ?? a.last_used_at ?? a.updatedAt ?? a.updated_at ?? Date.now()),
+    createdAt: Number(a.createdAt ?? a.created_at ?? Date.now()),
+    updatedAt: Number(a.updatedAt ?? a.updated_at ?? Date.now()),
+    sampleDialog: a.sampleDialog ?? a.sample_dialog ?? undefined,
+  };
+}
 
 /** Load agents from the backend API, falling back to localStorage
  *  if the server is unreachable (e.g. running in standalone mode).
@@ -16,15 +94,16 @@ export const STORAGE_KEY = STORAGE_KEYS.agents;
  *  same axum route, just inside a JSON Lines envelope. */
 export async function loadAgentsAsync(): Promise<AgentPersona[]> {
   try {
-    const data = await fetchJSON<{ agents: AgentPersona[] }>("/api/agents/custom");
+    const data = await fetchJSON<{ agents: Array<Record<string, unknown>> }>("/api/agents/custom");
     if (!data.agents || !Array.isArray(data.agents)) return [];
     // Migrate old records to new shape
-    return data.agents.map((a) => ({
-      ...a,
-      colorTheme: a.colorTheme || pickColor(a.name || a.id),
-      usageCount: a.usageCount ?? 0,
-      lastUsedAt: a.lastUsedAt ?? a.updatedAt ?? a.createdAt ?? Date.now(),
-    }));
+    return data.agents.map((a) => {
+      const persona = fromWireAgent(a);
+      return {
+        ...persona,
+        colorTheme: persona.colorTheme || pickColor(persona.name || persona.id),
+      };
+    });
   } catch {
     // Fallback to localStorage
     return loadAgentsLocal();
@@ -36,13 +115,14 @@ export function loadAgentsLocal(): AgentPersona[] {
   try {
     const raw = storage.getItem(STORAGE_KEY);
     if (!raw) return [];
-    const parsed = JSON.parse(raw) as AgentPersona[];
-    return parsed.map((a) => ({
-      ...a,
-      colorTheme: a.colorTheme || pickColor(a.name || a.id),
-      usageCount: a.usageCount ?? 0,
-      lastUsedAt: a.lastUsedAt ?? a.updatedAt ?? a.createdAt ?? Date.now(),
-    }));
+    const parsed = JSON.parse(raw) as Array<Record<string, unknown>>;
+    return parsed.map((a) => {
+      const persona = fromWireAgent(a);
+      return {
+        ...persona,
+        colorTheme: persona.colorTheme || pickColor(persona.name || persona.id),
+      };
+    });
   } catch {
     return [];
   }
@@ -52,7 +132,10 @@ export function loadAgentsLocal(): AgentPersona[] {
  *  localStorage batch-save if the server is unreachable. */
 export async function saveAgentAsync(agent: AgentPersona): Promise<void> {
   try {
-    await apiInvoke("POST", "/api/agents/custom", agent);
+    await fetchJSON("/api/agents/custom", {
+      method: "POST",
+      body: JSON.stringify(toWireAgent(agent)),
+    });
   } catch {
     // Fallback: merge into the localStorage cache (don't clobber other agents)
     upsertAgentLocal(agent);
@@ -63,7 +146,7 @@ export async function saveAgentAsync(agent: AgentPersona): Promise<void> {
  *  localStorage batch-save if the server is unreachable. */
 export async function deleteAgentAsync(id: string, remaining: AgentPersona[]): Promise<void> {
   try {
-    await apiInvoke("DELETE", `/api/agents/custom/${encodeURIComponent(id)}`);
+    await fetchJSON(`/api/agents/custom/${encodeURIComponent(id)}`, { method: "DELETE" });
   } catch {
     saveAgentsLocal(remaining);
   }

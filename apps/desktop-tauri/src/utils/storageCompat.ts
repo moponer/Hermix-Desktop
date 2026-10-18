@@ -153,11 +153,12 @@ export const STORAGE_KEYS = {
   archivedWorkspaces:"hermix.desktop.archived.workspaces",
   // 本地用户档案（无登录体系，纯本机可编辑）：{displayName, avatarDataUrl, handle}
   userProfile: "hermix.user.profile",
-  // 图片生成本地偏好（前端持久化，图片生成能力接入前作为集中配置入口）
-  imageConfig: "hermix.config.image",
   // 系统截图偏好：{enabled, hotkey}。启动时回放给 screenshot_apply_config，
   // 未存储时 Rust setup 的默认 Alt+Q 继续生效。
   screenshotConfig: "hermix.config.screenshot",
+  // 消息赞/踩（本地缓存）。后端无 vote 端点（2026-10-18 审查确认保留为
+  // 本地功能），此处登记 key 以守「canonical source」约定。
+  messageVotes: "hermix.messageVotes",
 } as const;
 
 export type StorageKey = (typeof STORAGE_KEYS)[keyof typeof STORAGE_KEYS];

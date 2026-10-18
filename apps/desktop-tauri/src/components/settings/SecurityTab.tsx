@@ -4,6 +4,7 @@ import * as api from "../../api";
 import { openInExplorer } from "../../desktopBridge";
 import { toastError } from "../../hooks/useToast";
 import { useSafeTimeout } from "../../hooks/useSafeTimeout";
+import { SkeletonCard } from "../ui";
 
 interface SecurityState {
   auto_backup: boolean;
@@ -155,7 +156,7 @@ export function SecurityTab() {
       <div className="rounded-lg border border-border-primary bg-bg-card p-4 space-y-3">
         <div className="text-sm font-medium text-text-primary">备份状态</div>
         {!loaded ? (
-          <div className="text-[length:var(--text-meta)] text-text-muted">加载中…</div>
+          <SkeletonCard lines={2} />
         ) : (
           <div className="space-y-2 text-[length:var(--text-meta)]">
             <Row label="状态" value={status?.enabled ? "已启用" : "未启用"} />

@@ -4,6 +4,7 @@
 import { lazy, Suspense, type ReactNode } from "react";
 import type { NavPage, Session } from "../types";
 import { SystemConfigPanel } from "../components/SystemConfigPanel";
+import { SkeletonCard } from "../components/ui";
 
 // 重视图（ECharts / 大表单 / 全量列表）懒加载：首次进入才求值模块并挂载，
 // 且切走即卸载，不占常驻内存。chat 页面是首屏主路径，保持静态导入。
@@ -51,8 +52,6 @@ export function renderRoutes(page: NavPage, ctx: RouteContext): ReactNode {
       return ctx.chatNode;
     case "automation":
       return <Suspense fallback={<RouteLoading />}><AutomationView openChat={ctx.openChat} onCreateWorkflow={ctx.startCreateWorkflowFlow} /></Suspense>;
-    case "agents":
-      return <Suspense fallback={<RouteLoading />}><AgentsView /></Suspense>;
     case "experts":
       return <Suspense fallback={<RouteLoading />}><AgentsView initialTab="builtin" /></Suspense>;
     case "analytics":
@@ -85,9 +84,10 @@ export function renderRoutes(page: NavPage, ctx: RouteContext): ReactNode {
 }
 
 function RouteLoading() {
+  // 骨架屏而非「加载中…」文字——ui/Skeleton 的规范（感知更快、零布局跳动）。
   return (
-    <div className="flex-1 flex items-center justify-center text-[color:var(--color-text-muted)] text-sm">
-      加载中…
+    <div className="flex-1 flex flex-col items-center justify-center gap-3 p-6">
+      <SkeletonCard lines={2} />
     </div>
   );
 }

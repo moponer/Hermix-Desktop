@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Loader2, Save } from "lucide-react";
 import * as api from "../../api";
-import { Button } from "../ui";
+import { Button, SkeletonCard } from "../ui";
 
 interface TextMemoryProps {
   title: string;
@@ -67,7 +67,7 @@ function TextMemoryEditor({ title, description, load, save }: TextMemoryProps) {
       </div>
       <p className="mt-1 text-[length:var(--text-meta)] text-[var(--color-text-muted)]">{description}</p>
       {loading ? (
-        <p className="py-8 text-center text-[length:var(--text-meta)] text-[var(--color-text-muted)]">加载中…</p>
+        <SkeletonCard lines={4} />
       ) : (
         <textarea
           value={content}

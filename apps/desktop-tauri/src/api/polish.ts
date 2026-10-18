@@ -5,9 +5,14 @@
 // If the backend endpoint is unreachable or returns `null`, falls back to a
 // no-op that only collapses whitespace, so the UI stays usable when the server
 // isn't running.
-
+//
+// Transport: the stdio bridge (`fetchJSON`), same as every other REST call.
+// A bare `fetch("/api/polish/chat")` cannot work in this app — the TCP era's
+// host:port no longer exists (see api/rest.ts header), so the request always
+// failed and the whitespace fallback silently masked a dead feature.
 import { CHAT_POLISH_PROMPT, type ChatPolishInput } from "../prompts/polish.chat";
 import { AUTOMATION_POLISH_PROMPT, type AutomationPolishInput } from "../prompts/polish.automation";
+import { fetchJSON } from "./rest";
 
 interface PolishBackendResponse {
   ok: boolean;
@@ -19,14 +24,11 @@ async function callPolishEndpoint(endpoint: string, payload: unknown): Promise<s
   // Backend routes are at /api/polish/{chat, automation} (dashboard/polish.rs).
   // Falls back to whitespace-only polish when the server is unreachable.
   try {
-    const resp = await fetch(endpoint, {
+    const data = await fetchJSON<PolishBackendResponse>(endpoint, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    if (!resp.ok) return null;
-    const data = (await resp.json()) as PolishBackendResponse;
-    if (data.ok && typeof data.text === "string") return data.text;
+    if (data?.ok && typeof data.text === "string") return data.text;
     return null;
   } catch {
     return null;

@@ -20,7 +20,7 @@ import {
   type VaultEntryMeta,
 } from "../api/vault";
 import { openExternalUrl } from "../desktopBridge";
-import { ConfirmDialog, PageHeader, SkeletonCard } from "./ui";
+import { ConfirmDialog, Modal, PageHeader, SkeletonCard } from "./ui";
 import {
   buildBlobMap,
   filterEntries,
@@ -250,11 +250,10 @@ export function VaultPanel() {
   const [revealed, setRevealed] = useState<Record<string, string>>({});
   const revealTimers = useRef<Record<string, number>>({});
 
-  // 打磨：删除确认走 ui/ConfirmDialog（R3-6）/ 复制瞬时反馈 / 弹窗入场动画状态。
+  // 打磨：删除确认走 ui/ConfirmDialog（R3-6）/ 复制瞬时反馈。
   const [confirmTarget, setConfirmTarget] = useState<{ id: string; name: string } | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [showSecret, setShowSecret] = useState(false);
-  const [modalShown, setModalShown] = useState(false);
   const copyTimer = useRef<number | null>(null);
   // 点击行选中的凭据；右侧详情面板据此渲染（从 entries 按 id 查，筛选不丢选中）。
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -278,16 +277,6 @@ export function VaultPanel() {
     const timers = revealTimers.current;
     return () => Object.values(timers).forEach((t) => window.clearTimeout(t));
   }, [refresh]);
-
-  // 弹窗挂载后下一帧翻转显隐状态，触发入场过渡（reduced-motion 由类名兜底）。
-  useEffect(() => {
-    if (form) {
-      const t = window.setTimeout(() => setModalShown(true), 10);
-      return () => window.clearTimeout(t);
-    }
-    setModalShown(false);
-    return undefined;
-  }, [form]);
 
   const blobMap = useMemo(() => buildBlobMap(entries), [entries]);
   const visible = useMemo(
@@ -739,22 +728,30 @@ export function VaultPanel() {
       </div>
 
       {form && (
-        <div
-          className={`fixed inset-0 z-50 flex items-center justify-center bg-black/40 transition-opacity duration-150 ${
-            modalShown ? "opacity-100" : "opacity-0"
-          }`}
-          onClick={() => setForm(null)}
+        <Modal
+          open
+          onClose={() => setForm(null)}
+          title={form.id ? "编辑凭据" : "新增凭据"}
+          width={480}
+          footer={
+            <>
+              <button
+                className="rounded-lg px-3 py-1.5 text-sm text-text-secondary transition-colors hover:bg-bg-secondary"
+                onClick={() => setForm(null)}
+              >
+                取消
+              </button>
+              <button
+                className="rounded-lg bg-accent px-3 py-1.5 text-sm text-on-accent transition-colors hover:bg-accent-hover disabled:opacity-50"
+                disabled={saving}
+                onClick={() => void save()}
+              >
+                {saving ? "保存中…" : "保存"}
+              </button>
+            </>
+          }
         >
-          <div
-            className={`w-full max-w-md rounded-3xl border border-border-primary bg-bg-elevated p-5 shadow-modal transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none ${
-              modalShown ? "scale-100 opacity-100" : "scale-95 opacity-0"
-            }`}
-            onClick={(ev) => ev.stopPropagation()}
-          >
-            <h3 className="mb-4 text-base font-semibold text-text-primary">
-              {form.id ? "编辑凭据" : "新增凭据"}
-            </h3>
-            <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-3">
               {(
                 [
                   ["name", "名称 *", "text"],
@@ -823,24 +820,8 @@ export function VaultPanel() {
                   onChange={(ev) => setForm((f) => (f ? { ...f, notes: ev.target.value } : f))}
                 />
               </label>
-            </div>
-            <div className="mt-5 flex justify-end gap-2">
-              <button
-                className="active:scale-[0.98] rounded-lg px-3 py-1.5 text-sm text-text-secondary transition-transform hover:bg-bg-secondary"
-                onClick={() => setForm(null)}
-              >
-                取消
-              </button>
-              <button
-                className="active:scale-[0.98] rounded-lg bg-accent px-3 py-1.5 text-sm text-on-accent transition-transform hover:bg-accent-hover disabled:opacity-50"
-                disabled={saving}
-                onClick={() => void save()}
-              >
-                {saving ? "保存中…" : "保存"}
-              </button>
-            </div>
           </div>
-        </div>
+        </Modal>
       )}
 
       {/* R3-6：删除凭据统一确认弹窗（原行内两步按钮已废止） */}

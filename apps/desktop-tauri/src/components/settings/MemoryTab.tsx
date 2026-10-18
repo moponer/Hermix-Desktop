@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Brain, Pin, PinOff, RefreshCw, Search, Trash2 } from "lucide-react";
 import * as api from "../../api";
-import { Button, ConfirmDialog, Modal, SegmentedControl } from "../ui";
+import { Button, ConfirmDialog, Modal, SegmentedControl, SkeletonCard } from "../ui";
 import { MemoryGraph, KIND_LABELS } from "./MemoryGraph";
 import { PersonasPanel } from "./PersonasPanel";
 import { MemoryTextPanel } from "./MemoryTextPanel";
@@ -167,7 +167,7 @@ function GraphView() {
             <Stat label="库大小" value={formatBytes(stats.db_bytes)} />
           </>
         ) : (
-          <span>{loading ? "加载中…" : "—"}</span>
+          <span>{loading ? "…" : "—"}</span>
         )}
         <Button variant="ghost" size="sm" onClick={load} disabled={loading} className="ml-auto">
           <RefreshCw className={`size-3.5 ${loading ? "animate-spin" : ""}`} /> 刷新
@@ -260,7 +260,7 @@ function GraphView() {
         }
       >
         {itemLoading ? (
-          <p className="py-6 text-center text-[length:var(--text-meta)] text-[var(--color-text-muted)]">加载中…</p>
+          <SkeletonCard lines={4} />
         ) : item ? (
           <pre className="max-h-[50vh] overflow-auto whitespace-pre-wrap rounded-md bg-[var(--color-bg-tertiary)] p-3 text-[length:var(--text-meta)] leading-relaxed text-[var(--color-text-primary)]">
             {item.content}

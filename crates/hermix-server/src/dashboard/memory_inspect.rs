@@ -17,8 +17,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use axum::extract::{Query, State};
-use axum::routing::{get, post};
-use axum::{Json, Router};
+use axum::Json;
 use hermix_focus::embedded::ui::UiMemoryRow;
 use hermix_focus::EmbeddedMemoryBackend;
 use serde::Serialize;
@@ -670,12 +669,7 @@ fn ensure_under_home(state: &HttpServerState, path: &std::path::Path) -> Result<
     }
 }
 
-pub fn router() -> Router<HttpServerState> {
-    Router::new()
-        .route("/api/memory/graph", get(get_memory_graph))
-        .route("/api/memory/item", get(get_memory_item).delete(delete_memory_item))
-        .route("/api/memory/search", get(search_memory))
-        .route("/api/memory/daily", get(get_daily_memory))
-        .route("/api/memory/overview", get(get_memory_overview))
-        .route("/api/memory/pin", post(pin_memory))
-}
+// 本模块的路由注册在 `super::mod` 里逐条 `.route()` 完成（同一批
+// 路径）。此处不再提供 `router()`：2026-10-18 删除的那份与 mod.rs
+// 是重复定义，且从未被挂载——两份并存时改一处漏一处，正是它没被
+// 任何人调用的原因。

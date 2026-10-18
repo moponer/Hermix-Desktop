@@ -770,6 +770,7 @@ mod tests {
                 category: None,
                 description: None,
                 display_name: None,
+                enabled: true,
             }])
         }
         async fn update_skill(&self, name: &str, content: &str) -> Result<Skill, AgentError> {

@@ -118,6 +118,26 @@ fi
 echo ""
 
 #-----------------------------------------------------------------------
+# 4c. DesignGuard (hard gate) — impeccable/typography 硬约束的 grep 门禁。
+#     TSX 字面色值 / dark: 变体 / 图标按钮缺 aria-label / 「加载中…」
+#     字面量 / window.confirm。规则史与豁免见脚本头注释。
+#-----------------------------------------------------------------------
+echo "=== [4c/14] design guard (TSX) ==="
+if [ -f apps/desktop-tauri/src ]; then
+  echo "  SKIP: unexpected layout"
+elif [ -d apps/desktop-tauri/src ]; then
+  if node scripts/check-design-guard.mjs; then
+    echo "  OK: design guard clean"
+  else
+    echo "  FAIL: design guard violations — fix before commit"
+    exit 1
+  fi
+else
+  echo "  SKIP: apps/desktop-tauri not found"
+fi
+echo ""
+
+#-----------------------------------------------------------------------
 # 4b. Hermix M (apps/hm) — protocol tests + H5 build
 #     The companion app signs every request and frames every relay
 #     message; both were built black-box against a spec. `build:h5` is

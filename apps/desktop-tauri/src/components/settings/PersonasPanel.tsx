@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Check, Loader2, RotateCcw, Save, Trash2 } from "lucide-react";
 import * as api from "../../api";
-import { Button, ConfirmDialog } from "../ui";
+import { Button, ConfirmDialog, SkeletonCard } from "../ui";
 
 /** 内置人设的中文显示名；自定义人设直接展示文件名。 */
 const DISPLAY_NAMES: Record<string, string> = {
@@ -180,7 +180,7 @@ export function PersonasPanel() {
               </span>
             </button>
           ))}
-          {loading && <p className="px-2.5 py-2 text-[var(--color-text-muted)]">加载中…</p>}
+          {loading && <SkeletonCard lines={1} />}
         </div>
 
         {/* 编辑区 */}

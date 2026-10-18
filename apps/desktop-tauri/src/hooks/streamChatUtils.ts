@@ -59,6 +59,12 @@ export function buildConnectedPayload(
   if (overrides.expertToolset) payload.expert_toolset = overrides.expertToolset;
   if (typeof overrides.enableThinking === "boolean") payload.enable_thinking = overrides.enableThinking;
   if (overrides.attachedFiles && overrides.attachedFiles.length > 0) payload.attached_files = overrides.attachedFiles;
+  // 工作台文件树的路径附件：后端 `SendMessageRequest.attached_file_paths`
+  // 真实消费该字段（ws.rs 把它并入 attached_paths），漏映射会让 Agent
+  // 回复"没有看到任何文件"。
+  if (overrides.attachedFilePaths && overrides.attachedFilePaths.length > 0) {
+    payload.attached_file_paths = overrides.attachedFilePaths;
+  }
   return payload;
 }
 

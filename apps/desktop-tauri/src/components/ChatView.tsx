@@ -320,6 +320,7 @@ interface ChatViewProps {
   onApproveBatchApproval?: (batchId: string, remember?: boolean) => void;
   onDenyBatchApproval?: (batchId: string, note?: string) => void;
   onAnswerClarify?: (requestId: string, answer: string) => void;
+  onAcknowledgePlan?: (messageId: string) => void;
   messageLoadError?: string | null;
   onRetryLoad?: () => void;
   streamError?: { message: string; detail?: string; kind?: ErrorKind } | null;
@@ -387,6 +388,7 @@ export const ChatView = memo(function ChatView({
   onDenyBatchApproval,
   onPathClick,
   onAnswerClarify,
+  onAcknowledgePlan,
   messageLoadError,
   onRetryLoad,
   streamError,
@@ -1093,7 +1095,7 @@ export const ChatView = memo(function ChatView({
           ) : (
             <>
               {/* 墨与纸 v4：吉祥物移除、留空 —— hero 标题独当焦点，空白即大气 */}
-              <h1 className="text-hero font-bold text-[var(--color-text-hero)] mb-5">{welcomeGreeting}</h1>
+              <h1 className="text-hero font-semibold text-[var(--color-text-hero)] mb-5">{welcomeGreeting}</h1>
               {/* 场景切换：独立药丸，接真实机制 domainMode（办公=自动识别 / 开发=钉代码域） */}
               <div className="flex items-center gap-2.5 mb-5">
                 <button
@@ -1285,6 +1287,7 @@ export const ChatView = memo(function ChatView({
         onApproveBatchApproval={onApproveBatchApproval}
         onDenyBatchApproval={onDenyBatchApproval}
         onAnswerClarify={onAnswerClarify}
+        onAcknowledgePlan={onAcknowledgePlan}
         workspaceRoot={workspaceRoot}
         sending={sending}
         onReasoningFoldChange={handleReasoningFoldChange}

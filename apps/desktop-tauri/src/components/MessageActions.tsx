@@ -15,14 +15,15 @@ import {
   Check, Copy, ThumbsUp, ThumbsDown, RefreshCw,
 } from "lucide-react";
 import { useSafeTimeout } from "../hooks/useSafeTimeout";
+import { storage, STORAGE_KEYS } from "../utils/storageCompat";
 
 type Vote = "up" | "down";
-const VOTE_KEY = "hermix.messageVotes";
+const VOTE_KEY = STORAGE_KEYS.messageVotes;
 
 /** 读全部投票记录。坏数据直接当空，不让它把整个消息列表带崩。 */
 function readVotes(): Record<string, Vote> {
   try {
-    const raw = localStorage.getItem(VOTE_KEY);
+    const raw = storage.getItem(VOTE_KEY);
     if (!raw) return {};
     const v = JSON.parse(raw);
     return v && typeof v === "object" ? (v as Record<string, Vote>) : {};
@@ -36,7 +37,7 @@ function writeVote(messageId: string, vote: Vote | null) {
     const all = readVotes();
     if (vote) all[messageId] = vote;
     else delete all[messageId];
-    localStorage.setItem(VOTE_KEY, JSON.stringify(all));
+    storage.setItem(VOTE_KEY, JSON.stringify(all));
   } catch {
     // 隐私模式 / 配额满：静默失败，UI 已经给了即时反馈，不阻塞使用
   }

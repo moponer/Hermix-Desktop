@@ -334,6 +334,8 @@ pub fn router(state: HttpServerState) -> Router {
         .route("/v1/filesearch/search", get(filesearch::search))
         .route("/v1/filesearch/status", get(filesearch::status))
         .route("/v1/filesearch/filter", post(filesearch::filter))
+        // shutdown：前端无调用点（窗口常驻，关闭走 helper 自身生命周期）。
+        // 保留给排障/脚本——helper 卡死时手工关掉重来。
         .route("/v1/filesearch/shutdown", post(filesearch::shutdown))
         // 浏览器小窗暂停/恢复：桌面端小窗隐藏时把「停 Chrome 侧 screencast 编码」
         // 的指令发到 sidecar（浏览器会话在那），desktop 自己进程里的 pause 是空操作。
@@ -363,6 +365,8 @@ pub fn router(state: HttpServerState) -> Router {
         // Vault（凭据保险库）手机面：仅配对设备；E2EE 由 relay_transport
         // 层透明完成。列表永不含密码；reveal 按名称取单条（用户在手机
         // 对话里要凭据的场景，决策笔记 2026-10-09-vault-credentials）。
+        // 注：移动端 apps/hm 尚未接线这两个端点（2026-10-18 审查确认）——
+        // 能力就绪等前端，不是死代码；若移动端不做该场景再议下线。
         .route("/v1/vault/entries", get(mobile::vault_entries))
         .route("/v1/vault/reveal/{name}", post(mobile::vault_reveal))
         // §5.5 第 3/4 层：设备配对。出码仅 Local（handler 内强制）；
@@ -468,6 +472,9 @@ pub fn router(state: HttpServerState) -> Router {
             "/v1/todos/{todo_id}",
             patch(routes::patch_todo).delete(routes::delete_todo),
         )
+        // /v1/commands：无会话的命令执行入口。桌面/移动 UI 均无调用点
+        // （唯一调用者是 http_smoke 测试）——保留为排障/脚本面，
+        // 不是产品功能。
         .route("/v1/commands", post(routes::exec_command))
         .route("/v1/llm/warmup", post(routes::warm_up_provider_handler))
         // Expert catalog (driven by the desktop client's bundled built-ins).

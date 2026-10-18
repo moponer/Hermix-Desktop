@@ -58,6 +58,7 @@ Key crates:
 - **Parity fixtures** — `hermix-parity-tests/fixtures/` has golden JSON; `pending/` is excluded from test runs
 - **Desktop app frontend** — `apps/desktop-tauri/src/`, uses `@` alias for `src/`
 - **界面改动必读内置设计 skill** — `crates/hermix-server/src/dashboard/skills/impeccable-design.md`（仓库里唯一的界面设计规范）。改完 UI 必跑 `npx -y impeccable@4.1.0 detect <路径>`，退出码 0 才算干净；报告「已修好」之前检测结果就是证据。令牌层规范另见 `docs/TYPOGRAPHY_SYSTEM.md` + `npm run check:tokens`。注意 detect 对**解析不了的文件会静默返回 0**，所以先跑 `tsc --noEmit` 再信它的绿灯。
+- **前端 UI 纪律（DesignGuard，2026-10-18）** — `scripts/check-design-guard.mjs`（`npm run check:design`，进 ci-gate）把 impeccable/typography 的硬约束做成 grep 门禁：TSX 禁字面色值/禁 `dark:` 变体/图标按钮必须 `aria-label`/视图文件禁 `加载中…` 字面量与 `window.confirm`。此前同类规则只写在文档里，CSS 层与既有组件的违规从未被检出。新增约束优先写进门禁而不是靠自觉。
 
 ## Core principles (2026-07-23, applies to all work — code, design, bug fix, doc)
 

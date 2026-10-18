@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use hermix_tools::extract_trust_signature;
 use super::*;
+use crate::orchestration_bus::OrchestrationEvent;
 use crate::transport::{Transport, TransportSink, TransportSource};
 
 /// Per-session broadcast channel registry. Lets reconnecting WS clients
@@ -680,6 +681,60 @@ pub(crate) async fn handle_ws_stream_send(
             let _ = clarify_tx.send(envelope).await;
         }
     });
+
+    // Orchestration event listener. Bridges the process-wide
+    // `OrchestrationEventBus` (Task lifecycle / automation triggers /
+    // loop phase / plan confirmation) onto this WS connection. Without
+    // this bridge the events died on the bus — `to_stream_event` had
+    // no production subscriber, so the desktop client never saw them.
+    //
+    // Routing: `LoopPhaseChanged` carries a `session_id` — `Some` is
+    // filtered to the owning session, `None` (CLI / legacy bootstrap)
+    // fans out like the todo bridge below. The remaining variants
+    // have no session context (task_id only) and fan out: the desktop
+    // is single-user and the front-end filters per active session.
+    {
+        let orch_tx = tx.clone();
+        let orch_session = session_id.to_string();
+        let orch_trace = trace_id.to_string();
+        let orch_rid = request.request_id.clone();
+        let mut orch_rx = state.orchestration_bus.subscribe();
+        tokio::spawn(async move {
+            loop {
+                match orch_rx.recv().await {
+                    Ok(ev) => {
+                        if let OrchestrationEvent::LoopPhaseChanged {
+                            session_id: Some(ref s),
+                            ..
+                        } = ev
+                        {
+                            if s != &orch_session {
+                                continue;
+                            }
+                        }
+                        let envelope = WsEnvelope {
+                            version: 1,
+                            request_id: orch_rid.clone(),
+                            trace_id: orch_trace.clone(),
+                             seq: None,
+                             attachment_id: None,
+                            event: ev.to_stream_event(),
+                        };
+                        let _ = orch_tx.send(envelope).await;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                        tracing::warn!(
+                            session = %orch_session,
+                            skipped,
+                            "orchestration_rx lagged; some orchestration events were dropped"
+                        );
+                        continue;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+    }
 
     // Todo event listener. The `todo` tool stamps each `TodoChange`
     // with the **active session id** (set by `agent_loop` via
@@ -1538,6 +1593,17 @@ pub(crate) async fn handle_ws_stream_send(
                                 .get("error")
                                 .and_then(|v| v.as_str())
                                 .map(String::from);
+                            // Rolling step log — the orchestrator emits it
+                            // (sub_agent_orchestrator.rs); forward it so the
+                            // front-end panel's `recent_steps` isn't always
+                            // undefined.
+                            let recent_steps = extra.get("recent_steps").and_then(|v| v.as_array()).map(
+                                |arr| {
+                                    arr.iter()
+                                        .filter_map(|s| s.as_str().map(String::from))
+                                        .collect::<Vec<String>>()
+                                },
+                            );
                             WsEnvelope {
                                 version: 1,
                                 request_id: request_id.clone(),
@@ -1552,6 +1618,7 @@ pub(crate) async fn handle_ws_stream_send(
                                     turns,
                                     cost_usd,
                                     error,
+                                    recent_steps,
                                 },
                             }
                         }

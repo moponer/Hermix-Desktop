@@ -5,6 +5,7 @@ import * as api from "../../api";
 import type { SkillInfo } from "../../api";
 import { ToolCardIcon } from "./ToolCardIcon";
 import { MgmtTag } from "./MgmtTag";
+import { SkeletonCard } from "../ui";
 import { ToggleSwitch } from "../ToggleSwitch";
 import { MarkdownBody } from "../MarkdownBody";
 import { ConfirmDialog } from "../ui";
@@ -172,9 +173,7 @@ export function SkillContentModal({ skill, catLabel, content, loading, onClose }
             这里，另一半在头部那层底色。 */}
         <div className="flex-1 overflow-auto bg-bg-elevated px-5 py-4">
           {loading ? (
-            <div className="text-[length:var(--text-meta)] text-text-muted animate-pulse">
-              加载中…
-            </div>
+            <SkeletonCard lines={6} />
           ) : content ? (
             <MarkdownBody content={content} />
           ) : (

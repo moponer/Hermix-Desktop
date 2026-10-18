@@ -74,6 +74,7 @@ export interface MessageListProps {
   /** 「重新生成」：重新发送上一条用户消息。父级不传就不渲染该按钮。 */
   onRetryLastMessage?: () => void;
   onAnswerClarify?: (requestId: string, answer: string) => void;
+  onAcknowledgePlan?: (messageId: string) => void;
   workspaceRoot?: string | null;
   sending: boolean;
 }
@@ -95,6 +96,7 @@ const MemoMessageBubble = memo(MessageBubble, (prev, next) => {
   if (prev.onDenyBatchApproval !== next.onDenyBatchApproval) return false;
   if (prev.onReasoningFoldChange !== next.onReasoningFoldChange) return false;
   if (prev.onAnswerClarify !== next.onAnswerClarify) return false;
+  if (prev.onAcknowledgePlan !== next.onAcknowledgePlan) return false;
   if (prev.showHeader !== next.showHeader) return false;
   if (prev.isStreaming !== next.isStreaming) return false;
   if (prev.onPathClick !== next.onPathClick) return false;
@@ -136,6 +138,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
     onReasoningFoldChange,
     onRetryLastMessage,
     onAnswerClarify,
+    onAcknowledgePlan,
     workspaceRoot,
     sending,
   } = props;
@@ -378,6 +381,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
                     itemsById={row.group.itemsById}
                     onPatch={onTodoPatch}
                     justPatchedRef={justPatchedTodoRef}
+                    sessionId={session?.id}
                   />
                 </div>
               );
@@ -415,6 +419,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
                 onReasoningFoldChange={onReasoningFoldChange}
         onRetryLastMessage={onRetryLastMessage}
                 onAnswerClarify={onAnswerClarify}
+                onAcknowledgePlan={onAcknowledgePlan}
                 showHeader={showHeader}
                 isStreaming={!!streamingAssistantId && msg.id === streamingAssistantId}
                 keepOpen={

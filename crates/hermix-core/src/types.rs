@@ -1143,6 +1143,18 @@ pub struct SkillMeta {
     /// `/api/skills` 永远返回 null，界面显示的还是英文 name。
     #[serde(default)]
     pub display_name: Option<String>,
+    /// `false` when the skill lives under a `.disabled/` directory
+    /// (moved there by `FileSkillStore::disable`). `FileSkillStore::list`
+    /// scans recursively and still returns disabled skills, so callers
+    /// that surface enable/disable state (e.g. `GET /api/skills`) need
+    /// this — the old `enabled: true` hardcode made the settings UI
+    /// show every skill as enabled, including disabled ones.
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+}
+
+fn default_enabled() -> bool {
+    true
 }
 
 /// A skill definition.

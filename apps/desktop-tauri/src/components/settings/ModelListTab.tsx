@@ -53,18 +53,24 @@ export function ModelListTab() {
   /** 非空 = 弹窗处于编辑态，预填这一条。null = 新增。 */
   const [editing, setEditing] = useState<EditingTarget | null>(null);
   const [customs, setCustoms] = useState<CustomProviderSummary[]>([]);
+  /** 后端 env 实况（GET /api/env，仅 is_set 可信，值已脱敏）。内置
+   *  provider 的"密钥已配"判定用它，不再硬编码 true —— 硬编码会让
+   *  编辑弹窗对未配 key 的厂商说"已配置"，用户留空保存后跑起来才报错。 */
+  const [envVars, setEnvVars] = useState<Record<string, { is_set: boolean }>>({});
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
       // 后端是权威：/api/model/list 给出已启用模型与默认模型。
-      const [list, customs, meta] = await Promise.all([
+      const [list, customs, meta, envs] = await Promise.all([
         api.getModelList().catch(() => null),
         api.getCustomProviders().catch(() => []),
         api.getProviderMeta().catch(() => []),
+        api.getEnvVars().catch(() => ({})),
       ]);
       const customIds = new Set(customs.map((c) => c.id));
       setCustoms(customs);
+      setEnvVars(envs);
       const metaNames = new Map(meta.map((m) => [m.id, m.id]));
       const def = list?.default_model ?? "";
       const built: ModelRow[] = (list?.models ?? []).map((m) => ({
@@ -254,7 +260,7 @@ export function ModelListTab() {
                     : customs.find((c) => c.id === row.providerId)?.base_url,
                   // èªå®ä¹é¡¹åç«¯ç´æ¥ç» has_keyï¼åç½®é¡¹æ²¡è¿ä¸ªå­æ®µï¼ä½è½åºç°å¨è¿å¼ åè¡¨éæ¬èº«å°±è¯´æå¯é¥å·²éââæå¡ç«¯ /api/model/list æ provider_has_key è¿æ»¤è¿ï¼æ¿å®å½çç¸æ¯è¾åå ä¸ä¸ªç«¯ç¹äº¤ç»æå¡ç«¯æ¥åã
                   hasKey: row.isBuiltin
-                    ? true
+                    ? Boolean(envVars[PROVIDERS.find((p) => p.id === row.providerId)?.keyEnvVar ?? ""]?.is_set)
                     : Boolean(customs.find((c) => c.id === row.providerId)?.has_key),
                 }); setAddOpen(true); }}>
                   <Pencil className="icon-sm" />

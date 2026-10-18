@@ -1106,14 +1106,17 @@
   margin-bottom: 12px;
 }
 
+/* 语义四色令牌（2026-10-18）：此前是 Material 的 #f44336 / #4caf50 /
+   #6c63ff —— 与「宣纸·青碧」语义色系无关且不跟随主题（亮色主题下
+   一块荧光绿/紫的告警）。accent 派生一律 color-mix，不拼 hex8。 */
 .custom-apps-view__alert--error {
-  background: rgba(244, 67, 54, 0.12);
-  color: #f44336;
+  background: var(--color-error-soft);
+  color: var(--color-error-text);
 }
 
 .custom-apps-view__alert--success {
-background: rgba(76, 175, 80, 0.12);
-color: #4caf50;
+  background: var(--color-success-soft);
+  color: var(--color-text-success);
 }
 
 
@@ -1167,10 +1170,10 @@ color: #4caf50;
 }
 
 .custom-apps-view__empty-spinner {
-  width: 32px;
-  height: 32px;
-  border: 3px solid rgba(108, 99, 255, 0.2);
-  border-top-color: #6c63ff;
+  width: 28px;
+  height: 28px;
+  border: 2.5px solid var(--color-accent-soft-strong);
+  border-top-color: var(--color-accent);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
   margin-bottom: 12px;
@@ -1301,9 +1304,12 @@ color: #4caf50;
   font-weight: 500;
 }
 
+/* 语义色令牌（2026-10-18）：Material 三原色 #4caf50 / #6c63ff / #f44336
+   换成不跟随主题就是错的——亮色主题下它们照样荧光。run/package/delete
+   分别落 success / accent / error，hover 用 soft-strong 加深一档。 */
 .custom-app-card__badge--packaged {
-  background: rgba(76, 175, 80, 0.15);
-  color: #4caf50;
+  background: var(--color-success-soft);
+  color: var(--color-text-success);
 }
 
 .custom-app-card__description {
@@ -1350,13 +1356,13 @@ color: #4caf50;
   cursor: pointer;
   transition: background 0.15s, color 0.15s, opacity 0.15s;
   background: var(--color-bg-tertiary, #2a2a3e);
-  /* 文字/图标默认色：dark theme 下保证清晰可见，避免与深灰背景融合 */
-  color: #d0d0dc;
+  /* 文字/图标默认色：跟随主题的次级文本色，不再写死暗色 #d0d0dc */
+  color: var(--color-text-secondary, #d0d0dc);
 }
 
 .custom-app-card__btn:hover {
   background: var(--color-bg-quaternary, #333350);
-  color: #ffffff;
+  color: var(--color-text-primary, #ffffff);
 }
 
 .custom-app-card__btn:disabled {
@@ -1365,21 +1371,21 @@ color: #4caf50;
 }
 
 .custom-app-card__btn--run {
-  background: rgba(76, 175, 80, 0.15);
-  color: #4caf50;
+  background: var(--color-success-soft);
+  color: var(--color-text-success);
 }
 
 .custom-app-card__btn--run:hover {
-  background: rgba(76, 175, 80, 0.25);
+  background: color-mix(in srgb, var(--color-success) 25%, transparent);
 }
 
 .custom-app-card__btn--package {
-  background: rgba(108, 99, 255, 0.15);
-  color: #6c63ff;
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
 }
 
 .custom-app-card__btn--package:hover {
-  background: rgba(108, 99, 255, 0.25);
+  background: var(--color-accent-soft-strong);
 }
 
 
@@ -1391,8 +1397,8 @@ color: #4caf50;
 }
 
 .custom-app-card__btn--delete:hover {
-  background: rgba(244, 67, 54, 0.15);
-  color: #f44336;
+  background: var(--color-error-soft);
+  color: var(--color-error-text);
 }
 
 /* Detail Modal */
@@ -1469,8 +1475,8 @@ color: #4caf50;
   font-size: 10px;
   padding: 2px 8px;
   border-radius: var(--radius-sm, 4px);
-  background: rgba(76, 175, 80, 0.15);
-  color: #4caf50;
+  background: var(--color-success-soft);
+  color: var(--color-text-success);
 }
 
 .modal-close {
@@ -1556,14 +1562,15 @@ color: #4caf50;
   background: rgba(0, 0, 0, 0.06);
 }
 
+/* 语义色令牌（2026-10-18）：同 custom-apps 段，Material 三原色不跟随主题 */
 .modal-alert--error {
-  background: rgba(244, 67, 54, 0.12);
-  color: #f44336;
+  background: var(--color-error-soft);
+  color: var(--color-error-text);
 }
 
 .modal-alert--success {
-  background: rgba(76, 175, 80, 0.12);
-  color: #4caf50;
+  background: var(--color-success-soft);
+  color: var(--color-text-success);
 }
 
 

@@ -100,10 +100,14 @@ pub struct AutomationTask {
     /// Optional emoji / lucide-name string for the UI card.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_run_at: Option<String>,
     /// "ok" | "failed" | "running" | None
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_run_at: Option<String>,
     #[serde(default)]
     pub run_count: u32,
@@ -440,6 +444,79 @@ pub async fn list_tasks(State(state): State<HttpServerState>) -> Json<Automation
     Json(snapshot)
 }
 
+/// PUT /api/automation/tasks/{id} — partial merge patch. Every field
+/// optional: absent = keep the stored value. The desktop client sends
+/// single-key patches (e.g. the enable/disable toggle sends only
+/// `{enabled}`), so a whole-struct `Json<AutomationTask>` extractor
+/// 422'd on the missing required fields. `null` for an `Option` field
+/// clears it.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct UpdateTaskRequest {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub prompt: Option<String>,
+    #[serde(default)]
+    pub schedule: Option<String>,
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub schedule_label: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub expert_id: Option<String>,
+    #[serde(default)]
+    pub workspace_path: Option<String>,
+    #[serde(default)]
+    pub permission_level: Option<String>,
+    #[serde(default)]
+    pub skills: Option<Vec<String>>,
+    #[serde(default)]
+    pub max_runs: Option<u32>,
+    #[serde(default)]
+    pub category: Option<String>,
+    #[serde(default)]
+    pub icon: Option<String>,
+    /// Server-managed fields are accepted but ignored on patch —
+    /// run history / next-run are recomputed by the scheduler.
+    #[serde(default)]
+    pub last_run_at: Option<String>,
+    #[serde(default)]
+    pub last_status: Option<String>,
+    #[serde(default)]
+    pub last_error: Option<String>,
+    #[serde(default)]
+    pub next_run_at: Option<String>,
+}
+
+/// Full-row → patch request (used by the in-process `cronjob` tool,
+/// which works with whole `AutomationTask` values).
+fn to_patch(t: &AutomationTask) -> UpdateTaskRequest {
+    UpdateTaskRequest {
+        name: Some(t.name.clone()),
+        description: t.description.clone(),
+        prompt: Some(t.prompt.clone()),
+        schedule: Some(t.schedule.clone()),
+        enabled: Some(t.enabled),
+        schedule_label: t.schedule_label.clone(),
+        model: t.model.clone(),
+        expert_id: t.expert_id.clone(),
+        workspace_path: t.workspace_path.clone(),
+        permission_level: t.permission_level.clone(),
+        skills: t.skills.clone(),
+        max_runs: t.max_runs,
+        category: t.category.clone(),
+        icon: t.icon.clone(),
+        last_run_at: t.last_run_at.clone(),
+        last_status: t.last_status.clone(),
+        last_error: t.last_error.clone(),
+        next_run_at: t.next_run_at.clone(),
+    }
+}
+
 /// POST /api/automation/tasks — create. Server assigns id/timestamps if missing.
 pub async fn create_task(
     State(state): State<HttpServerState>,
@@ -491,34 +568,82 @@ pub async fn create_task(
     Ok(Json(body))
 }
 
-/// PUT /api/automation/tasks/{id} — replace. Returns 404 if id unknown.
+/// PUT /api/automation/tasks/{id} — merge patch (see UpdateTaskRequest).
+/// Returns 404 if id unknown. Validates the *merged* result, not the patch.
 pub async fn update_task(
     State(state): State<HttpServerState>,
     AxumPath(id): AxumPath<String>,
-    Json(mut body): Json<AutomationTask>,
+    Json(body): Json<UpdateTaskRequest>,
 ) -> Result<Json<AutomationTask>, (StatusCode, String)> {
-    if body.prompt.trim().is_empty() {
-        return Err((StatusCode::BAD_REQUEST, "prompt 不能为空".into()));
-    }
-    if normalize_cron_expr(&body.schedule).parse::<Schedule>().is_err() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            format!("schedule 不合法: '{}'", body.schedule),
-        ));
-    }
     let mut s = load_state(&state);
     let slot = s
         .tasks
         .iter_mut()
         .find(|t| t.id == id)
         .ok_or_else(|| (StatusCode::NOT_FOUND, format!("task id 不存在: {}", id)))?;
-    body.id = id.clone();
-    body.created_at = slot.created_at.clone();
-    body.updated_at = now_iso();
-    ensure_next_run(&mut body);
-    *slot = body.clone();
+
+    // Merge onto the stored row; validate after merging so a
+    // single-key patch (e.g. `{enabled}`) can't bypass the
+    // prompt/schedule invariants by shipping empty strings.
+    let mut merged = slot.clone();
+    if let Some(v) = body.name {
+        merged.name = v;
+    }
+    if body.description.is_some() {
+        merged.description = body.description;
+    }
+    if let Some(v) = body.prompt {
+        merged.prompt = v;
+    }
+    if let Some(v) = body.schedule {
+        merged.schedule = v;
+    }
+    if let Some(v) = body.enabled {
+        merged.enabled = v;
+    }
+    if body.schedule_label.is_some() {
+        merged.schedule_label = body.schedule_label;
+    }
+    if body.model.is_some() {
+        merged.model = body.model;
+    }
+    if body.expert_id.is_some() {
+        merged.expert_id = body.expert_id;
+    }
+    if body.workspace_path.is_some() {
+        merged.workspace_path = body.workspace_path;
+    }
+    if body.permission_level.is_some() {
+        merged.permission_level = body.permission_level;
+    }
+    if body.skills.is_some() {
+        merged.skills = body.skills;
+    }
+    if body.max_runs.is_some() {
+        merged.max_runs = body.max_runs;
+    }
+    if body.category.is_some() {
+        merged.category = body.category;
+    }
+    if body.icon.is_some() {
+        merged.icon = body.icon;
+    }
+
+    if merged.prompt.trim().is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "prompt 不能为空".into()));
+    }
+    if normalize_cron_expr(&merged.schedule).parse::<Schedule>().is_err() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!("schedule 不合法: '{}'", merged.schedule),
+        ));
+    }
+    merged.id = id.clone();
+    merged.updated_at = now_iso();
+    ensure_next_run(&mut merged);
+    *slot = merged.clone();
     save_state(&state, &s).await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
-    Ok(Json(body))
+    Ok(Json(merged))
 }
 
 /// DELETE /api/automation/tasks/{id} — remove. Returns 404 if unknown.
@@ -903,7 +1028,7 @@ impl CronjobBackend for DashboardCronjobBackend {
         if let Some(e) = enabled {
             t.enabled = e;
         }
-        let _ = update_task(State(self.state.clone()), AxumPath(id.to_string()), Json(t))
+        let _ = update_task(State(self.state.clone()), AxumPath(id.to_string()), Json(to_patch(&t)))
             .await
             .map_err(|(_, e)| ToolError::ExecutionFailed(e))?;
         Ok(format!("已更新定时任务 {id}"))
@@ -912,7 +1037,7 @@ impl CronjobBackend for DashboardCronjobBackend {
     async fn pause(&self, id: &str) -> Result<String, ToolError> {
         let mut t = self.find_task(id)?;
         t.enabled = false;
-        let _ = update_task(State(self.state.clone()), AxumPath(id.to_string()), Json(t))
+        let _ = update_task(State(self.state.clone()), AxumPath(id.to_string()), Json(to_patch(&t)))
             .await
             .map_err(|(_, e)| ToolError::ExecutionFailed(e))?;
         Ok(format!("定时任务 {id} 已暂停"))
@@ -921,7 +1046,7 @@ impl CronjobBackend for DashboardCronjobBackend {
     async fn resume(&self, id: &str) -> Result<String, ToolError> {
         let mut t = self.find_task(id)?;
         t.enabled = true;
-        let _ = update_task(State(self.state.clone()), AxumPath(id.to_string()), Json(t))
+        let _ = update_task(State(self.state.clone()), AxumPath(id.to_string()), Json(to_patch(&t)))
             .await
             .map_err(|(_, e)| ToolError::ExecutionFailed(e))?;
         Ok(format!("定时任务 {id} 已恢复"))

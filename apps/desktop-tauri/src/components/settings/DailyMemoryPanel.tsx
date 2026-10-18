@@ -7,6 +7,7 @@
 
 import { useEffect, useState } from "react";
 import * as api from "../../api";
+import { SkeletonCard } from "../ui";
 
 export function DailyMemoryPanel() {
   const [days, setDays] = useState<api.DailyMemoryDay[]>([]);
@@ -29,7 +30,11 @@ export function DailyMemoryPanel() {
   }, []);
 
   if (loading) {
-    return <p className="py-10 text-center text-[length:var(--text-meta)] text-[var(--color-text-muted)]">加载中…</p>;
+    return (
+      <div className="py-10 flex flex-col items-center gap-3">
+        <SkeletonCard lines={3} />
+      </div>
+    );
   }
   if (error) {
     return (

@@ -41,6 +41,8 @@ import { useAcuiState, type AcuiDecisionBus } from "./acui";
 import type { Artifact } from "./utils/artifacts";
 import { canonicalPath, classifyArtifactKind } from "./utils/artifacts";
 import * as api from "./api";
+import { wireArrayToChatMessages, type WireMessage } from "./protocolAdapter";
+import { detectToolError } from "./components/messageParser";
 import { registerBuiltinsToBackend } from "./data/builtinExperts";
 import type {
   NavPage,
@@ -1801,9 +1803,39 @@ setPage("chat");
   const handleDenyBatch = useCallback(
     (batchId: string, note?: string) => {
       console.info(`[APPROVAL-BATCH-DENY] id=${batchId} t=${Date.now()}`);
+      // REST 1s fallback — mirrors handleApproveBatch. Without it a
+      // dropped WS deny frame leaves the agent blocked until the
+      // server-side approval timeout (600s). The backend resolves
+      // batch ids via the same `request_id` field.
+      const restSid =
+        pendingApprovalSessionsRef.current.get(batchId) ?? activeSessionId;
+      if (restSid) {
+        const t = window.setTimeout(async () => {
+          approvalRestTimersRef.current.delete(t);
+          try {
+            await api.fetchJSON<{ matched?: boolean }>(
+              `/v1/sessions/${encodeURIComponent(restSid)}/approval`,
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  request_id: batchId,
+                  decision: "denied",
+                  ...(note?.trim() ? { note: note.trim() } : {}),
+                }),
+              },
+            );
+          } catch (e) {
+            console.error(
+              `[APPROVAL-BATCH-REST-FAIL] id=${batchId} error=${String(e)}`,
+            );
+          }
+        }, 1000);
+        approvalRestTimersRef.current.add(t);
+      }
       resolveApprovalBatch(batchId, "denied", undefined, note?.trim() || undefined);
     },
-    [resolveApprovalBatch],
+    [activeSessionId, resolveApprovalBatch],
   );
 
   /**
@@ -3407,14 +3439,20 @@ return {
           // - false（已追上空增量）→ 仅刷新本地 seq 锚，不替换消息
           //   （本地状态 == 服务端，无需动数据）
           // 消息类型：订阅端点回的服务端 `SessionMessagesResponse.messages`
-          // （ProtocolMessage 形态），与本地 `ChatMessage[]` 同源于
-          // `GET /v1/sessions` 的 session 加载路径（同一 loader），
-          // 直接断言回填——不做二次转换（本地 ChatMessage 本就是
-          // 该 loader 的产物）。best-effort：对账失败（bridge 死时
-          // 快照调用 reject）由 useWsConnection 吞掉，这里收不到回调。
+          // （ProtocolMessage 形态）。本地回填必须过一次
+          // `wireArrayToChatMessages`——与 `GET /v1/sessions/{id}/messages`
+          // 的加载路径同一个适配器（protocolAdapter：tool 行并入
+          // assistant、approval 行补 meta、snake→camel、坏行跳过）。
+          // 曾经直接 `as ChatMessage[]` 断言，重连后 tool/approval 行渲染
+          // 异常。best-effort：对账失败（bridge 死时快照调用 reject）由
+          // useWsConnection 吞掉，这里收不到回调。
           onReconciled: (snapshot) => {
             if (snapshot.fullSnapshot) {
-              const reloaded = snapshot.messages as ChatMessage[];
+              const reloaded = wireArrayToChatMessages(
+                snapshot.messages as WireMessage[],
+                snapshot.sessionId,
+                detectToolError,
+              );
               setSessions((prev) => prev.map((s) => {
                 if (s.id !== snapshot.sessionId) return s;
                 return {
@@ -3700,7 +3738,9 @@ return {
   }, []);
   const handleTodoPatch = useCallback(async (id: string, patch: { status?: string; title?: string; priority?: string }) => {
     try {
-      await api.patchTodo(id, patch);
+      // sessionId 必传：后端从 query 读它，缺省会产生 session_id=None 的
+      // 孤儿行，重连快照不再包含该 todo（routes.rs 注释明示）。
+      await api.patchTodo(id, patch, activeSessionId ?? undefined);
     } catch (e) {
       console.error('[App] patchTodo failed', e);
       throw e;

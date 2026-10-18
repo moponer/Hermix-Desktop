@@ -26,6 +26,11 @@ fn resolve_apps_dir() -> PathBuf {
 }
 
 /// Initialize the custom app system. Called once at startup.
+///
+/// 2026-10-18：保留但零前端调用 —— 启动期自检入口（hx-shell 模板 /
+/// WebView2Loader 是否就位），排障时可在 devtools console 里
+/// `invoke("custom_app_init")` 查环境。产品功能面走
+/// `/api/custom-apps*`（lib/customAppApi.ts）。
 #[tauri::command]
 pub async fn custom_app_init() -> Result<CustomAppInitResult, String> {
     let loader_path = resolve_hx_shell_path();
@@ -63,6 +68,10 @@ pub struct CustomAppInitResult {
 }
 
 /// Scan all custom apps and return their summaries.
+///
+/// 2026-10-18：保留但零前端调用 —— 排障用（devtools
+/// `invoke("custom_app_list")` 可直接扫目录，绕过 HTTP 层定位问题）。
+/// 产品列表面是 `GET /api/custom-apps`。
 #[tauri::command]
 pub async fn custom_app_list() -> Result<serde_json::Value, String> {
     let apps_dir = resolve_apps_dir();
@@ -97,6 +106,9 @@ pub async fn custom_app_list() -> Result<serde_json::Value, String> {
 
 /// Package a custom app as a standalone EXE.
 /// `build_mode` can be "sidecar" (default) or "neu-build".
+///
+/// 2026-10-18：保留但零前端调用 —— 排障用。产品打包面是
+/// `POST /api/custom-apps/{id}/package`。
 #[tauri::command]
 pub async fn custom_app_package(
     id: String,
@@ -128,6 +140,9 @@ pub async fn custom_app_package(
 }
 
 /// Run a custom app (build latest source then launch).
+///
+/// 2026-10-18：保留但零前端调用 —— 排障用。产品运行面是
+/// `POST /api/custom-apps/{id}/run`。
 #[tauri::command]
 pub async fn custom_app_run(id: String) -> Result<serde_json::Value, String> {
     let apps_dir = resolve_apps_dir();
@@ -156,6 +171,8 @@ pub async fn custom_app_run(id: String) -> Result<serde_json::Value, String> {
 }
 
 /// Open a file explorer at the app's directory.
+///
+/// 2026-10-18：保留但零前端调用 —— 排障用（应用打不开时直接看它的目录）。
 #[tauri::command]
 pub async fn custom_app_open_dir(id: String) -> Result<(), String> {
     let apps_dir = resolve_apps_dir();

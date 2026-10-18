@@ -196,6 +196,7 @@ export function AnalyticsView() {
                 if (!debug) loadDebug();
               }}
               title="诊断统计数据库"
+              aria-label="诊断统计数据库"
               className="p-1.5 rounded-lg bg-bg-secondary border border-border-primary hover:border-accent/50"
             >
               <Bug className="w-4 h-4 text-text-secondary" />

@@ -256,6 +256,9 @@ function renderLucideFallback(app: IconLike, opts: ResolveIconOpts): ReactNode {
   const LucideIcon = lookupIcon(app) ?? CATEGORY_DEFAULT[app.category ?? ""] ?? Boxes;
   const tile = app.tile_color?.trim();
   const spanStyle: React.CSSProperties | undefined = tile
+    // 用户自定义 tile 底色上恒用白前景——固定搭配，不随主题
+    // （图标背景必须不透明、行为稳定，见函数头注释）。
+    // design-guard: allow
     ? { backgroundColor: tile, color: "#ffffff" }
     : undefined;
   return (

@@ -25,7 +25,9 @@ pub async fn list_skills(State(state): State<HttpServerState>) -> Json<Vec<Skill
                 display_name: m.display_name,
                 description: m.description.unwrap_or_default(),
                 category: m.category.unwrap_or_default(),
-                enabled: true, // file-based skills are always enabled if present
+                // Truth from the store: `false` when the skill directory
+                // sits under `.disabled/` (the toggle moves it there).
+                enabled: m.enabled,
             })
             .collect(),
     )

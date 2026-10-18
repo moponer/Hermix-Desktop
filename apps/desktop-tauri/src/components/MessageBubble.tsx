@@ -5,6 +5,7 @@ import {
   UserMessage, SystemMessage, AssistantMessage,
 } from "./TextBubble";
 import { ClarifyCard } from "./ClarifyBubble";
+import { PlanConfirmCard } from "./PlanConfirmCard";
 import { ToolMessageCard } from "./ToolCallBubble";
 import { AutomationBubble } from "./AutomationBubble";
 
@@ -50,6 +51,9 @@ interface MessageBubbleProps {
   /** 「重新生成」：重新发送上一条用户消息。父级不传就不渲染该按钮。 */
   onRetryLastMessage?: () => void;
   onAnswerClarify?: (requestId: string, answer: string) => void;
+  /** Dismiss a plan-confirmation card (`role: "plan"`). Parent
+   *  marks the message acknowledged; the card then disappears. */
+  onAcknowledgePlan?: (messageId: string) => void;
   /** Click handler for absolute/relative paths mentioned in tool
    *  rows and the file-change list.  Used to pop the inline file
    *  preview.  Only meaningful on top-level `role: "tool"` messages
@@ -94,6 +98,7 @@ export function MessageBubble({
   message, workspaceRoot,
   onApproveApproval, onDenyApproval, onAnswerClarify,
   onApproveBatchApproval, onDenyBatchApproval,
+  onAcknowledgePlan,
   onReasoningFoldChange,
   onRetryLastMessage,
   onPathClick,
@@ -122,6 +127,14 @@ export function MessageBubble({
       <ClarifyCard
         message={message}
         onAnswer={onAnswerClarify}
+      />
+    );
+  }
+  if (message.role === "plan") {
+    return (
+      <PlanConfirmCard
+        message={message}
+        onAcknowledge={onAcknowledgePlan}
       />
     );
   }

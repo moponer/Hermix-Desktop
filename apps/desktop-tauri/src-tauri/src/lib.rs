@@ -958,7 +958,6 @@ pub fn run() {
             system_settings::set_close_action,
             system_settings::tray_set_task_count,
             keep_awake::set_keep_awake,
-            commands::get_settings_dir,
             commands::get_data_dir,
             commands::pick_directory,
             commands::open_external_url,
@@ -1004,12 +1003,10 @@ pub fn run() {
             commands::set_python_override,
             // 内置运行时探测（Node / Python / Git）：内置位 → PATH → override。
             commands::runtime_detect,
-            // Custom app management
-            commands_custom_app::custom_app_init,
-            commands_custom_app::custom_app_list,
-            commands_custom_app::custom_app_package,
-            commands_custom_app::custom_app_run,
-            commands_custom_app::custom_app_open_dir,
+            // Custom app management。list/package/run/open_dir 的 HTTP 面
+            // （/api/custom-apps*）已被前端全面采用（lib/customAppApi.ts），
+            // 这四个 IPC 命令零调用，2026-10-18 移除注册；validate /
+            // smoke_test 仍由前端直接 invoke，保留。
             commands_custom_app::custom_app_validate,
             commands_custom_app::custom_app_smoke_test,
             commands_workbench::workbench_create,

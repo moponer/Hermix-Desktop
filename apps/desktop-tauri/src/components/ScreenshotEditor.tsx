@@ -19,6 +19,8 @@ export interface EditorSource {
 
 type Tool = "rect" | "arrow" | "pen" | "text" | "mosaic" | "crop";
 
+// 标注笔颜色：画在截图像素上的固定色板（含黑/白两端），不随主题。
+// design-guard: allow
 const COLORS = ["#e5484d", "#f5a623", "#2f81f7", "#30a46c", "#111111", "#ffffff"];
 const HISTORY_MAX = 12;
 /** 笔画粗细档位（基准物理像素，实际 = 基准 × 屏缩放）。 */
@@ -313,8 +315,10 @@ export function ScreenshotEditor({
           ctx.beginPath();
           ctx.rect(0, 0, base.width, base.height);
           ctx.rect(x, y, w, h);
+          // 裁剪遮罩画在截图位图上，恒定压暗 + 白框，不随主题。design-guard: allow
           ctx.fillStyle = "rgba(0,0,0,0.55)";
           ctx.fill("evenodd");
+          // design-guard: allow
           ctx.strokeStyle = "#ffffff";
           ctx.lineWidth = 1;
           ctx.strokeRect(x, y, w, h);

@@ -65,6 +65,7 @@ interface QrPayload {
 // 渠道判据与设备行类型住在 ./channelOf —— DevicesTab 也要用同一个判据切分
 // 已连设备列表，而它已经 import 了这个组件，反向 import 就是循环依赖。
 import { channelOf, type ChannelId, type PairedDevice, type RevokeOutcome } from "./channelOf";
+import { ConfirmDialog } from "../ui";
 export type { ChannelId };
 
 interface ChannelDef {
@@ -236,6 +237,11 @@ export function ImChannelsCard({
   const [pairCodeAt, setPairCodeAt] = useState(0);
   const [nowTs, setNowTs] = useState(() => Date.now());
   const [busy, setBusy] = useState(false);
+  /** 两个破坏性动作（重置加密身份 / 解绑机器人）的确认态。用应用内
+      ConfirmDialog 取代 window.confirm——原生确认框不跟随主题、样式
+     不可控，且 Sidebar 已确立应用内确认的约定。 */
+  const [confirmResetIdentity, setConfirmResetIdentity] = useState(false);
+  const [confirmUnbind, setConfirmUnbind] = useState<{ platform: string; label: string } | null>(null);
   const pollTimer = useRef<number | null>(null);
   const sessionKey = useRef<string | null>(null);
 
@@ -325,12 +331,6 @@ export function ImChannelsCard({
       重建 Windows 账户）后的显式恢复动作——身份不能静默重生成，每台已配对
       手机的信任锚都封着这把公钥，所以确认框必须把代价说清。 */
   const resetIdentity = useCallback(async () => {
-    if (
-      !window.confirm(
-        "重置本机加密身份？\n\n将删除本机身份与 relay 凭据并重新自动签发，所有已配对手机都需要重新扫码配对。",
-      )
-    )
-      return;
     setRelayBusy(true);
     try {
       await fetchJSON("/api/relay/reset-identity", { method: "POST" });
@@ -577,7 +577,6 @@ export function ImChannelsCard({
 
   const unbind = useCallback(
     async (platform: string, label: string) => {
-      if (!window.confirm(`解除 ${label} 机器人绑定？已配对的 IM 账号不会被删除。`)) return;
       try {
         await fetchJSON("/api/channels/bind/unbind", {
           method: "POST",
@@ -1005,7 +1004,7 @@ export function ImChannelsCard({
                         {/* 提示反复出现的 E2EE 身份错误时用：DPAPI 主密钥丢失后
                             手填凭据救不了（新凭据也解不开旧身份的锁），只有换身份。 */}
                         <ActionBtn
-                          onClick={() => void resetIdentity()}
+                          onClick={() => setConfirmResetIdentity(true)}
                           disabled={relayBusy}
                           tone="danger"
                           title="删除本机加密身份与 relay 凭据并重新签发，已配对手机需重新扫码"
@@ -1094,7 +1093,7 @@ export function ImChannelsCard({
               busy={busy}
               onStartBind={startBind}
               onCancelBind={cancelBind}
-              onUnbind={unbind}
+              onAskUnbind={(p, l) => setConfirmUnbind({ platform: p, label: l })}
               onMakePairCode={makePairCode}
               onCopyCode={copyCode}
               onRefresh={refreshStatus}
@@ -1102,6 +1101,31 @@ export function ImChannelsCard({
           )}
         </div>
       </div>
+
+      <ConfirmDialog
+        open={confirmResetIdentity}
+        title="重置本机加密身份"
+        body="将删除本机身份与 relay 凭据并重新自动签发，所有已配对手机都需要重新扫码配对。"
+        confirmLabel="重置身份"
+        onCancel={() => setConfirmResetIdentity(false)}
+        onConfirm={() => {
+          setConfirmResetIdentity(false);
+          void resetIdentity();
+        }}
+      />
+
+      <ConfirmDialog
+        open={confirmUnbind !== null}
+        title="解除机器人绑定"
+        body={`解除 ${confirmUnbind?.label ?? ""} 机器人绑定？已配对的 IM 账号不会被删除。`}
+        confirmLabel="解除绑定"
+        onCancel={() => setConfirmUnbind(null)}
+        onConfirm={() => {
+          const t = confirmUnbind;
+          setConfirmUnbind(null);
+          if (t) void unbind(t.platform, t.label);
+        }}
+      />
     </div>
   );
 }
@@ -1127,7 +1151,8 @@ function ImPane(props: {
   busy: boolean;
   onStartBind: (platform: string) => Promise<void>;
   onCancelBind: () => Promise<void>;
-  onUnbind: (platform: string, label: string) => Promise<void>;
+  /** 请求主组件弹确认框（确认后才真正执行解绑）。 */
+  onAskUnbind: (platform: string, label: string) => void;
   onMakePairCode: (platform: string) => Promise<void>;
   onCopyCode: () => Promise<void>;
   onRefresh: () => Promise<void>;
@@ -1148,7 +1173,7 @@ function ImPane(props: {
     busy,
     onStartBind,
     onCancelBind,
-    onUnbind,
+    onAskUnbind,
     onMakePairCode,
     onCopyCode,
     onRefresh,
@@ -1223,7 +1248,7 @@ function ImPane(props: {
           )}
           {bound && s?.source === "file" && (
             <ActionBtn
-              onClick={() => void onUnbind(platform, label)}
+              onClick={() => onAskUnbind(platform, label)}
               icon={<Unlink className="icon-sm" />}
               title="删除本地保存的机器人凭据"
             >

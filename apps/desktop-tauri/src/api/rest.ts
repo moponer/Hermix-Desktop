@@ -173,8 +173,14 @@ export async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T>
     const message = reply.enc === "utf8"
       ? (() => {
           try {
-            const parsed = JSON.parse(reply.body) as { message?: unknown };
-            return typeof parsed.message === "string" ? parsed.message : reply.body;
+            // Backend error envelope is `{error}` (errors.rs
+            // HttpError::into_response), NOT `{message}`. Reading only
+            // `message` made every 4xx/5xx surface the raw JSON body.
+            // Accept both keys — `error` wins when present.
+            const parsed = JSON.parse(reply.body) as { message?: unknown; error?: unknown };
+            if (typeof parsed.error === "string" && parsed.error) return parsed.error;
+            if (typeof parsed.message === "string" && parsed.message) return parsed.message;
+            return reply.body;
           } catch {
             return reply.body;
           }
@@ -310,8 +316,13 @@ export async function resolveContextWindows(
 export async function patchTodo(
   id: string,
   patch: { status?: string; title?: string; priority?: string },
+  sessionId?: string,
 ): Promise<{ ok: boolean; raw?: string }> {
-  return fetchJSON(`/v1/todos/${encodeURIComponent(id)}`, {
+  // 后端从 query 读 session_id；缺省时该行以 session_id=None 落库，
+  // 重连快照不再包含它（routes.rs 注释明示的孤儿行问题）。调用方
+  // 持有会话上下文时必须传入。
+  const qs = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : "";
+  return fetchJSON(`/v1/todos/${encodeURIComponent(id)}${qs}`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(patch),

@@ -13,7 +13,7 @@ import {
 import { AppCard } from "./custom-apps/AppCard";
 import { AppDetailModal } from "./custom-apps/AppDetailModal";
 import { useSafeTimeout } from "../hooks/useSafeTimeout";
-import { EmptyState, PageHeader } from "./ui";
+import { EmptyState, PageHeader, SkeletonCard } from "./ui";
 
 /** Auto-refresh interval (ms) — keeps the list in sync when apps are
  *  created/updated/deleted via the LLM tool while this page is open. */
@@ -178,6 +178,7 @@ export function CustomAppsView({ onStartCreateApp }: { onStartCreateApp?: () => 
               onClick={() => loadApps()}
               disabled={loading}
               title="刷新"
+              aria-label="刷新应用列表"
             >
               <RefreshCw className={`icon-lg ${loading ? "spin" : ""}`} />
             </button>
@@ -214,8 +215,7 @@ export function CustomAppsView({ onStartCreateApp }: { onStartCreateApp?: () => 
       <div className="custom-apps-view__content">
         {loading && apps.length === 0 ? (
           <div className="custom-apps-view__empty">
-            <div className="custom-apps-view__empty-spinner" />
-            <p>加载中…</p>
+            <SkeletonCard lines={3} />
           </div>
         ) : filteredApps.length === 0 ? (
           <EmptyState

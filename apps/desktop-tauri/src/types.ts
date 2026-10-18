@@ -91,6 +91,18 @@ export interface ClarifyMessageMeta {
   answer?: string | null;
 }
 
+/** Metadata for a plan-confirmation card (`role: "plan"`). Driven by
+ *  `StreamEvent::PlanConfirmationRequired`. Read-only by design: the
+ *  backend has no plan-confirmation response channel (no
+ *  `WsClientMessage` variant, no agent-loop waiter), so the card
+ *  acknowledges locally and disappears — it must not pretend to gate
+ *  execution. */
+export interface PlanConfirmMessageMeta {
+  taskId: string;
+  planText: string;
+  acknowledged?: boolean;
+}
+
 /**
  * Metadata for an inline tool-execution message (`role: "tool"`).
  *
@@ -213,7 +225,7 @@ export interface AutomationMessageMeta {
 // ---------------------------------------------------------------------------
 export interface ChatMessage {
   id: string;
-  role: "user" | "assistant" | "system" | "approval" | "clarify" | "tool" | "automation";
+  role: "user" | "assistant" | "system" | "approval" | "clarify" | "tool" | "automation" | "plan";
   content: string;
   timestamp: string;
   model?: string;
@@ -235,6 +247,8 @@ export interface ChatMessage {
   /// Populated when `role === "clarify"`. Mirrors the server-side
   /// `PendingClarify` fields exposed via `StreamEvent::ClarifyRequest`.
   clarify?: ClarifyMessageMeta;
+  /// Populated when `role === "plan"`. Inline plan-confirmation card.
+  planConfirm?: PlanConfirmMessageMeta;
   /// Populated when `role === "tool"`. Drives the inline tool-execution
   /// card that sits between assistant messages in the conversation flow.
   tool?: ToolMessageMeta;
@@ -686,11 +700,15 @@ export interface PluginSettings {
   tool_code_exec: boolean;
 }
 
-export type NavPage = "chat" | "systemconfig" | "automation" | "agents" | "experts" | "analytics" | "customapps" | "workbench" | "vault";
+export type NavPage = "chat" | "systemconfig" | "automation" | "experts" | "analytics" | "customapps" | "workbench" | "vault";
 // ↑ 无 "search"：搜索是动作不是页面，改由标题栏图标触发浮层
 //   （SessionPickerDialog），搜完即走、不丢当前视图。
-// ↑ "experts" is kept for backward compat — it's now an alias of "agents"
-// with initialTab="builtin". Sidebar no longer exposes it directly.
+// ↑ "experts" 是专家视图的正式导航名（AgentsView initialTab="builtin"）。
+//   2026-10-18 移除别名 "agents"——routes.tsx 的 case 分支全仓零触发
+//   （无任何 setPage("agents")），expert 面板「全部专家」链接走的正是
+//   "experts"。
+// ↑ "analytics" 无侧栏项，入口在头像浮层菜单（UserMenuPopover）——
+//   低频页刻意收进二级入口，不是死路由。
 
 
 // Re-export from api

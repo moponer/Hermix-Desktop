@@ -60,9 +60,12 @@ export interface TodoListCardProps {
    * ids that are currently in-flight, preventing rapid-toggle races.
    */
   justPatchedRef?: MutableRefObject<Set<string>>;
+  /** Owning session — required for the direct `api.patchTodo` fallback
+   *  path so the row is not persisted without a session_id (orphan). */
+  sessionId?: string | null;
 }
 
-export function TodoListCard({ groupId, groupTitle, itemsById, onPatch, justPatchedRef }: TodoListCardProps) {
+export function TodoListCard({ groupId, groupTitle, itemsById, onPatch, justPatchedRef, sessionId }: TodoListCardProps) {
   // Derived default: 任务全部完成/失败 → 默认折叠成单行 (产品体验).
   // 2026-08-05 调整: 消息发出后旧 todo 卡片不再展开挂在消息流里占屏。
   //   - 全部结案 (completed/failed) → 一行 "✓ N/N" 不再霸屏
@@ -102,7 +105,7 @@ export function TodoListCard({ groupId, groupTitle, itemsById, onPatch, justPatc
         if (onPatch) {
           await onPatch(item.id, { status: nextStatus });
         } else {
-          await api.patchTodo(item.id, { status: nextStatus });
+          await api.patchTodo(item.id, { status: nextStatus }, sessionId ?? undefined);
         }
       } catch (e) {
         console.error("[TodoListCard] patch failed", e);

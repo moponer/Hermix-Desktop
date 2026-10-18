@@ -4,6 +4,7 @@ import { fetchJSON } from "../../api/rest";
 import { toastError, toastSuccess } from "../../hooks/useToast";
 import { ImChannelsCard } from "./ImChannelsCard";
 import { channelOf, type ChannelId, type PairedDevice, type RevokeOutcome } from "./channelOf";
+import { ConfirmDialog } from "../ui";
 
 /** 列表标题跟着选中渠道走——固定写「已配对设备」会让人以为看到的是全局表。 */
 const CHANNEL_TITLES: Record<ChannelId, string> = {
@@ -54,6 +55,7 @@ export function DevicesTab() {
   const [listError, setListError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [revoking, setRevoking] = useState<string | null>(null);
+  const [confirmRevoke, setConfirmRevoke] = useState<PairedDevice | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
   const refreshDevices = useCallback(async () => {
@@ -82,7 +84,6 @@ export function DevicesTab() {
 
   const onRevoke = useCallback(
     async (deviceId: string, deviceName: string) => {
-      if (!window.confirm(`撤销设备「${deviceName}」？撤销后其 token 立即失效。`)) return;
       setRevoking(deviceId);
       try {
         const r = await fetchJSON<RevokeOutcome>(
@@ -174,7 +175,7 @@ export function DevicesTab() {
                   </div>
                 </div>
                 <button
-                  onClick={() => void onRevoke(d.device_id, d.device_name)}
+                  onClick={() => setConfirmRevoke(d)}
                   disabled={revoking === d.device_id}
                   className="h-7 px-2.5 rounded-md flex items-center gap-1 text-[length:var(--text-meta)] text-text-secondary hover:text-error hover:bg-error-soft transition-colors disabled:opacity-50 shrink-0"
                   title="撤销此设备的访问权限"
@@ -201,6 +202,19 @@ export function DevicesTab() {
           </div>
         )}
       </div>
+
+      <ConfirmDialog
+        open={confirmRevoke !== null}
+        title="撤销设备"
+        body={`撤销设备「${confirmRevoke?.device_name ?? ""}」？撤销后其 token 立即失效，需要重新配对才能接入。`}
+        confirmLabel="撤销"
+        onCancel={() => setConfirmRevoke(null)}
+        onConfirm={() => {
+          const d = confirmRevoke;
+          setConfirmRevoke(null);
+          if (d) void onRevoke(d.device_id, d.device_name);
+        }}
+      />
     </div>
   );
 }

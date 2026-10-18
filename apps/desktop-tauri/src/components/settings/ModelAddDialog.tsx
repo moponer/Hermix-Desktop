@@ -11,7 +11,7 @@
 // 测试连接走 `POST /api/providers/test`：**未落盘的配置也能测**，避免"先
 // 建一个 provider 再测、取消时留下垃圾"。
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { X, ChevronLeft, Loader2, CheckCircle2, AlertCircle } from "lucide-react";
 import * as api from "../../api";
@@ -73,6 +73,30 @@ export function ModelAddDialog({ onClose, onSaved, editing }: Props) {
   // placeholder / 提示语改成「已配置」还是「未配置」，让"留空 = 不改"
   // 这条语义对用户可见。
   const editingHasKey = editing?.hasKey ?? false;
+  // 新增态同样要知道 key 是否已配：内置 provider 的密钥在 env 里，
+  // 用户可能是"key 早就配好、现在加第二个模型"。没有这个查询时
+  // 提示语会对已配好 key 的厂商说"尚未配置"。
+  const [envHasKey, setEnvHasKey] = useState(false);
+  useEffect(() => {
+    const keyVar = choice?.kind === "builtin" ? choice.def.keyEnvVar : null;
+    if (!keyVar || editingHasKey) {
+      setEnvHasKey(false);
+      return;
+    }
+    let alive = true;
+    void api
+      .getEnvVars()
+      .then((envs) => {
+        if (alive) setEnvHasKey(Boolean(envs[keyVar]?.is_set));
+      })
+      .catch(() => {
+        if (alive) setEnvHasKey(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [choice, editingHasKey]);
+  const hasKey = editingHasKey || envHasKey;
   const [caps, setCaps] = useState({ tools: true, images: false, thinking: false });
   const [testing, setTesting] = useState(false);
   const [test, setTest] = useState<api.InlineTestResponse | null>(null);
@@ -313,10 +337,10 @@ export function ModelAddDialog({ onClose, onSaved, editing }: Props) {
               <Field
                 label="API Key"
                 hint={
-                  editingHasKey
+                  hasKey
                     ? `已配置。留空则保持当前密钥不变——改端点或模型名不必重输。${
-                        editChoice && editChoice.kind === "builtin"
-                          ? `（保存在 ${editChoice.def.keyEnvVar}）`
+                        choice && choice.kind === "builtin"
+                          ? `（保存在 ${choice.def.keyEnvVar}）`
                           : ""
                       }`
                     : "尚未配置。留空表示不设置；该供应商在配好密钥前不会出现在模型列表里。"
@@ -326,7 +350,7 @@ export function ModelAddDialog({ onClose, onSaved, editing }: Props) {
                   type="password"
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
-                  placeholder={editingHasKey ? "留空保持不变" : "sk-..."}
+                  placeholder={hasKey ? "留空保持不变" : "sk-..."}
                   className={inputCls}
                 />
               </Field>

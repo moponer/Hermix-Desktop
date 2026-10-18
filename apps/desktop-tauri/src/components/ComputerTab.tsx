@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { createPortal } from "react-dom";
 import {
   Folder, ArrowLeft, ArrowRight, ArrowUp,
-  RefreshCw, List, FileText, LayoutGrid, Loader2,
+  RefreshCw, List, FileText, LayoutGrid,
   AlertTriangle, FolderOpen, ChevronRight,
 } from "lucide-react";
 import { FileTypeIcon } from "./FileTypeIcon";
@@ -10,6 +10,7 @@ import { clsx } from "clsx";
 import { openExternalUrl, listDirectory, type DirEntry } from "../desktopBridge";
 import { invoke } from "@tauri-apps/api/core";
 import { toastWarning } from "../hooks/useToast";
+import { SkeletonCard } from "./ui";
 import { homeDir } from "@tauri-apps/api/path";
 import { FileExplorerContextMenu } from "./FileContextMenu";
 import { formatBytes, formatModifiedDate, pathToBreadcrumbs } from "./rightSidebarUtils";
@@ -284,9 +285,8 @@ export function ComputerTab({
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto computer-body min-h-0">
         {loading && (
-          <div className="flex items-center gap-2 px-3 py-8 justify-center text-xs text-text-muted">
-            <Loader2 className="icon-md animate-spin" />
-            加载中…
+          <div className="px-3 py-8 flex flex-col items-center gap-3">
+            <SkeletonCard lines={2} />
           </div>
         )}
         {error && (

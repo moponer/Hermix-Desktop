@@ -731,6 +731,12 @@ pub enum StreamEvent {
         /// Human-readable terminal error (only present on `failed` phase).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
+        /// Rolling step log (tool calls / thinking), newest last. Emitted
+        /// by the orchestrator; the server forwards it so the front-end's
+        /// sub-agent panel can render a live trace instead of just a
+        /// phase badge.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        recent_steps: Option<Vec<String>>,
     },
     Error {
         code: String,
