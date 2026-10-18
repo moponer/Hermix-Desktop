@@ -90,14 +90,15 @@ Status: proposed — 差距审计已完成，方案未动工，等拍板。
    `#[cfg(windows)]` 的后台线程复杂得多；而 `hermix-server` 早已硬绑 Windows
    （DPAPI 在非 Windows 是编译错误），这里不多欠一笔新债。非 Windows 编译成空实现。
 
-**未做（下一步）**：17（`keep_awake` 联动：手机会话在线时自动保持唤醒——这是产品决策，
-要不要为了远端一直不让电脑睡，得你拍板）、18（N-1 版本窗口）。
+**未做（下一步）**：18（N-1 版本窗口——当前没有 v1 客户端在线，做了也没有对象可接；
+更实的做法是让版本不匹配在手机侧**看得见**，但那需要一条不依赖 E2EE 的控制帧，单独评估）。
 
 **P2 第二批已落地（2026-10-18）**：改造点 16，以及一处顺带清掉的安全门禁死代码。
 
 | # | 落地位置 | 说明 |
 |---|---|---|
 | 16 休眠唤醒 | `net_watch::spawn_power_watcher` | `RegisterSuspendResumeNotification` 的**回调**模式，不需要窗口/消息循环 |
+| 17 防休眠联动 | `GET /api/dashboard/mobile-activity` + `App.tsx` 轮询 | 开关仍是唯一真相源，只补上「手机在跑」这一维 |
 | 顺带 | `security::request_guard` | 未配对关口取消 `/api/pairing/complete`、`/pair` 两个豁免 |
 
 **为什么 16 这次能做了**：原判断是「`WM_POWERBROADCAST` 要窗口与消息循环，太重」。
