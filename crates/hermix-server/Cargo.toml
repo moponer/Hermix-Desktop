@@ -98,6 +98,9 @@ tracing-subscriber = { workspace = true }
 proptest = { workspace = true }
 walkdir = "2"
 hermix-context = { workspace = true }
+# `#[tokio::test(start_paused = true)]` 需要它：把时间虚拟化，让心跳这类
+# 依赖时序的用例不再靠真 sleep 赌调度。只在测试构建里生效。
+tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true

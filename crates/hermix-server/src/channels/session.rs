@@ -1461,7 +1461,10 @@ mod tests {
         assert!(!first.contains(&"长".repeat(61)), "不该整段塞进去");
     }
 
-    #[tokio::test]
+    // 时间虚拟化：这三个用例只看「心跳有没有按序发出来」，不需要真实等待。
+    // 原来用真 sleep + 40/120ms 窗口，全量并发跑时任务排不上队就会偶发变红——
+    // 而变红的理由跟被测行为毫无关系，纯粹是调度抖动。
+    #[tokio::test(start_paused = true)]
     async fn 心跳持续发且abort后彻底停() {
         let sent = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let port = std::sync::Arc::new(RecordingPort {
@@ -1494,7 +1497,10 @@ mod tests {
         assert_eq!(after, running, "abort 后不得再发心跳");
     }
 
-    #[tokio::test]
+    // 时间虚拟化：这三个用例只看「心跳有没有按序发出来」，不需要真实等待。
+    // 原来用真 sleep + 40/120ms 窗口，全量并发跑时任务排不上队就会偶发变红——
+    // 而变红的理由跟被测行为毫无关系，纯粹是调度抖动。
+    #[tokio::test(start_paused = true)]
     async fn 心跳带出工具轨迹_没有工具时说还在想() {
         let sent = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let port = std::sync::Arc::new(RecordingPort {
@@ -1534,7 +1540,10 @@ mod tests {
         hb.abort();
     }
 
-    #[tokio::test]
+    // 时间虚拟化：这三个用例只看「心跳有没有按序发出来」，不需要真实等待。
+    // 原来用真 sleep + 40/120ms 窗口，全量并发跑时任务排不上队就会偶发变红——
+    // 而变红的理由跟被测行为毫无关系，纯粹是调度抖动。
+    #[tokio::test(start_paused = true)]
     async fn 心跳降频会明说而不是静默() {
         let sent = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let port = std::sync::Arc::new(RecordingPort {
