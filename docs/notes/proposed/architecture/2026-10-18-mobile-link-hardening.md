@@ -63,6 +63,28 @@ Status: proposed — 差距审计已完成，方案未动工，等拍板。
 **未动**：12（`ws.rs:67` 的 `spawn_broadcast_forwarder` 死注释——该文件当时有在途改动，
 留待下一批）、14–21（P2 及以后）。
 
+**P2 第一批已落地（2026-10-18）**：改造点 14、15。
+
+| # | 落地位置 | 回归测试 |
+|---|---|---|
+| 14 退避抖动 | `relay_client::RelayConfig::jittered`（0.75–1.0，**只向下**，不顶穿上限） | `退避抖动落在四分之一区间内` |
+| 15 网络变化探测 | 新模块 `net_watch.rs`（`NotifyAddrChange` + `OVERLAPPED`/事件），`connect_and_serve` 的退避改为可打断 | `网络变化打断退避立即重连` |
+
+**两处判断修正**：
+
+1. **抖动只向下不向上**。原方案写 ±25%，但向上会突破 `max_backoff_secs`——那个上限
+   的意义是「relay 恢复后能接上」，不该被抖动顶穿。向下 0.75–1.0 同样能打散惊群
+   （60s 档散布在 45–60s，15 秒窗口足够），且语义干净。
+2. **平台 API 放在 `hermix-server` 而不是桌面壳**（推翻本文 5.3.3 的原意见）。
+   跨进程传「网络变了」要在 stdio 协议上加消息类型、加分发、加失败路径，比一个
+   `#[cfg(windows)]` 的后台线程复杂得多；而 `hermix-server` 早已硬绑 Windows
+   （DPAPI 在非 Windows 是编译错误），这里不多欠一笔新债。非 Windows 编译成空实现。
+
+**未做（下一步）**：16（休眠唤醒）——`WM_POWERBROADCAST` 要窗口与消息循环，
+`RegisterSuspendResumeNotification` 要维护回调的 FFI 生命周期；且唤醒时网络栈重新绑定
+通常也触发地址变化，能被 15 覆盖大半。17（`keep_awake` 联动）、18（N-1 版本窗口）同理待办。
+
+
 
 ---
 
