@@ -53,7 +53,6 @@ export interface SkillInfo {
 export interface PluginSettings {
   mcp_filesystem: boolean;
   mcp_terminal: boolean;
-  mcp_browser: boolean;
   mcp_database: boolean;
   tool_code_exec: boolean;
 }

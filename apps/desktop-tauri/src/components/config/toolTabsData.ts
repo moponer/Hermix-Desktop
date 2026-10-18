@@ -7,8 +7,10 @@ import {
 import * as api from "../../api";
 import type { PluginSettings } from "../../api";
 
-// Plugin toggles map to the backend's DashboardPluginSettings (5 hard slots).
+// Plugin toggles map to the backend's DashboardPluginSettings (4 hard slots).
 // The icon is purely cosmetic — the source of truth is the boolean on the server.
+// `mcp_browser` 不在其中：浏览器工具链已随 hermix-cua 一起移除（c6442032）,
+// 留着这一行会让开关拨了不持久化（PUT 被 serde 丢掉，GET 不回该字段）。
 export const BUILTIN_PLUGINS: Array<{
   id: string;
   key: keyof PluginSettings;
@@ -19,7 +21,6 @@ export const BUILTIN_PLUGINS: Array<{
 }> = [
   { id: "mcp-filesystem", key: "mcp_filesystem", name: "文件系统", description: "读写本地文件和文件夹", icon: FileCode, category: "MCP" },
   { id: "mcp-terminal", key: "mcp_terminal", name: "终端", description: "执行 Shell 命令", icon: Terminal, category: "MCP" },
-  { id: "mcp-browser", key: "mcp_browser", name: "浏览器", description: "浏览和检索网页内容", icon: Globe, category: "MCP" },
   { id: "mcp-database", key: "mcp_database", name: "数据库", description: "执行 SQLite 和 PostgreSQL 查询", icon: Database, category: "MCP" },
   { id: "tool-code-exec", key: "tool_code_exec", name: "代码执行", description: "在沙箱中运行代码", icon: Cpu, category: "Tools" },
 ];
@@ -27,7 +28,6 @@ export const BUILTIN_PLUGINS: Array<{
 export const DEFAULT_PLUGIN_SETTINGS: PluginSettings = {
   mcp_filesystem: true,
   mcp_terminal: true,
-  mcp_browser: true,
   mcp_database: false,
   tool_code_exec: true,
 };

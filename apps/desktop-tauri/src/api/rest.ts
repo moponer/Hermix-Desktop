@@ -1119,9 +1119,9 @@ export const triggerAutomationTask = async (id: string): Promise<boolean> => {
 export const getPluginSettings = async (): Promise<PluginSettings> => {
   try {
     const payload = await fetchJSON<{ plugins?: PluginSettings }>("/api/dashboard/plugins");
-    return payload.plugins ?? { mcp_filesystem: true, mcp_terminal: true, mcp_browser: false, mcp_database: false, tool_code_exec: true };
+    return payload.plugins ?? { mcp_filesystem: true, mcp_terminal: true, mcp_database: false, tool_code_exec: true };
   } catch {
-    return { mcp_filesystem: true, mcp_terminal: true, mcp_browser: false, mcp_database: false, tool_code_exec: true };
+    return { mcp_filesystem: true, mcp_terminal: true, mcp_database: false, tool_code_exec: true };
   }
 };
 
