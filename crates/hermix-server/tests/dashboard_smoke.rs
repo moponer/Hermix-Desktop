@@ -121,7 +121,6 @@ async fn dashboard_plugins_put_then_get_roundtrip() {
         "plugins": {
             "mcp_filesystem": false,
             "mcp_terminal": true,
-            "mcp_browser": true,
             "mcp_database": false,
             "tool_code_exec": false
         }
@@ -140,7 +139,6 @@ async fn dashboard_plugins_put_then_get_roundtrip() {
     let plugins = b2["plugins"].as_object().unwrap();
     assert_eq!(plugins["mcp_filesystem"], false);
     assert_eq!(plugins["mcp_terminal"], true);
-    assert_eq!(plugins["mcp_browser"], true);
     assert_eq!(plugins["mcp_database"], false);
     assert_eq!(plugins["tool_code_exec"], false);
 }
@@ -920,17 +918,17 @@ fn seed_builtin_skills_writes_all_builtins_to_fresh_dir() {
     let written = hermix_server::dashboard::skills::seed_builtin_skills(&skills_dir)
         .expect("seed should succeed on a fresh dir");
 
-    // 13 builtin skills across 5 categories (6 lifestyle/finance/productivity
-    // toys removed 2026-10-12 — see docs/MCPHUB_BORROWINGS.md §10)
-    assert_eq!(written, 13);
+    // 期望值从 BUILTIN_SKILLS 取，不写死数字——加技能时这里自动跟着走。
+    let expected = hermix_server::dashboard::skills::builtin_skills_len();
+    assert_eq!(written, expected);
 
-    // All 13 should now exist on disk under <category>/<name>/SKILL.md
+    // 每一份都应落盘到 <category>/<name>/SKILL.md
     let entries: Vec<_> = walkdir::WalkDir::new(&skills_dir)
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| e.file_name() == "SKILL.md")
         .collect();
-    assert_eq!(entries.len(), 13);
+    assert_eq!(entries.len(), expected);
 
     // Spot-check: the plan-writing skill lands in productivity/
     let planning = skills_dir.join("productivity").join("plan-writing").join("SKILL.md");
@@ -946,7 +944,7 @@ fn seed_builtin_skills_is_idempotent() {
 
     let first = hermix_server::dashboard::skills::seed_builtin_skills(&skills_dir)
         .expect("first seed should succeed");
-    assert_eq!(first, 13);
+    assert_eq!(first, hermix_server::dashboard::skills::builtin_skills_len());
 
     // Mutate one file to prove the second call doesn't clobber it.
     let target = skills_dir.join("productivity").join("plan-writing").join("SKILL.md");
@@ -1080,12 +1078,16 @@ async fn list_skills_endpoint_returns_seeded_skills() {
     let (status, body) = get_json(app, "/api/skills").await;
     assert_eq!(status, StatusCode::OK);
     let arr = body.as_array().expect("response should be an array");
-    assert_eq!(arr.len(), 13, "all 13 seeded skills should be visible via /api/skills");
+    assert_eq!(
+        arr.len(),
+        hermix_server::dashboard::skills::builtin_skills_len(),
+        "落盘的内置技能都该出现在 /api/skills"
+    );
 
-    // Spot-check: plan-writing is in the response
+    // Spot-check：取一条确实还在内置清单里的技能。
+    // （原来还断言了 `web-novel`，那是已下线的内置技能，全仓只剩这一处引用。）
     let names: Vec<&str> = arr.iter().map(|s| s["name"].as_str().unwrap_or("")).collect();
     assert!(names.contains(&"plan-writing"));
-    assert!(names.contains(&"web-novel"));
 }
 
 // ── /api/persona/* — file-backed persona management ─────────────────

@@ -780,6 +780,15 @@ pub fn seed_builtin_skills_default() -> usize {
     BUILTIN_SKILLS.len()
 }
 
+/// 内置技能条数。
+///
+/// 导出它是为了消灭「加了技能、忘了改测试里的数字」这类漂移：
+/// `BUILTIN_SKILLS` 是唯一的真相源，测试读这里而不是各自硬编码一份。
+/// 2026-10-18 就是三处硬编码 13 与实际 16 条对不上，红了四个测试。
+pub fn builtin_skills_len() -> usize {
+    BUILTIN_SKILLS.len()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
