@@ -19,6 +19,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { onShow } from '@dcloudio/uni-app'
 import { getTasks } from '../../core/tasks'
 import { getAllApprovals, submitDecision } from '../../core/approval'
+import { onApprovalRequest, forgetApproval } from '../../core/approvalQueue'
 
 interface Approval {
   requestId: string
@@ -53,6 +54,10 @@ async function loadApprovals() {
 }
 
 let timer: ReturnType<typeof setInterval> | undefined
+/** 审批帧到达 → 立刻拉一次（防抖，补发可能一次送来好几条）。 */
+let wakeTimer: ReturnType<typeof setTimeout> | undefined
+let unsubscribeFrames: (() => void) | undefined
+
 onMounted(() => {
   void loadApprovals()
   timer = setInterval(() => {
@@ -62,9 +67,21 @@ onMounted(() => {
       if (a.remainSecs <= 0) a.expired = true
     }
   }, 1000)
+  // 审批本来就是消息：帧里一出现就去拉，不等轮询。
+  // 重连后 `sync` 补回的审批也走这里——否则要白等一个轮询周期，
+  // 而 PC 侧的计时早就走完了。
+  unsubscribeFrames = onApprovalRequest(() => {
+    if (wakeTimer) clearTimeout(wakeTimer)
+    wakeTimer = setTimeout(() => {
+      wakeTimer = undefined
+      void loadApprovals()
+    }, 300)
+  })
 })
 onUnmounted(() => {
   if (timer) clearInterval(timer)
+  if (wakeTimer) clearTimeout(wakeTimer)
+  unsubscribeFrames?.()
 })
 
 const active = computed(() => items.value.find((a) => !a.expired))
@@ -79,6 +96,7 @@ async function decide(choice: 'allow' | 'deny') {
   }
   // 成功后把这条从列表移除（服务端会同步更新）
   items.value = items.value.filter((x) => x.requestId !== a.requestId)
+  forgetApproval(a.requestId)
 }
 
 onShow(() => {

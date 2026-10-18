@@ -19,6 +19,7 @@ import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue'
 import { onReady, onShow } from '@dcloudio/uni-app'
 import { isRiskyInstruction } from '../../core/voice'
 import { dispatch, reduce, initialChatState, type ChatState } from '../../core/frames'
+import { noteApprovalRequest } from '../../core/approvalQueue'
 import { isPaired } from '../../core/pairing'
 import { relayBaseUrl } from '../../core/clock'
 import { ensureSplashClosed } from '../../core/boot'
@@ -176,7 +177,18 @@ function onFrame(raw: string) {
   }
   const prev = chat.value.streamingId
   const prevTurnActive = chat.value.turnActive
-  const next = reduce(chat.value, dispatch(raw))
+  const ev = dispatch(raw)
+  // 审批是消息，不是「另一条 REST 上的资源」。帧到手就记一笔，审批页会立刻
+  // 去拉一次，而不是等下一个轮询周期——重连补发回来的审批也走这条路径。
+  if (ev.kind === 'approval.request') {
+    noteApprovalRequest({
+      requestId: ev.requestId,
+      tool: ev.tool,
+      sid: currentSid.value ?? undefined,
+      receivedAt: Date.now(),
+    })
+  }
+  const next = reduce(chat.value, ev)
   // 桌面开始处理的第一帧：清除所有用户消息的 sending 状态
   if (!prevTurnActive && next.turnActive) {
     messages.value.forEach((m) => { m.sending = false })
