@@ -48,7 +48,7 @@ use base64::Engine as _;
 
 use axum::body::Body;
 use axum::http::header;
-use axum::http::{HeaderValue, Method, StatusCode};
+use axum::http::{HeaderName, HeaderValue, Method, StatusCode};
 use axum::middleware;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, patch, post, put};
@@ -232,33 +232,66 @@ fn redact_query_credentials(uri: &axum::http::Uri) -> String {
     format!("{}?{}", uri.path(), redacted.join("&"))
 }
 
-/// CORS: comma-separated allowlist in `HERMES_HTTP_CORS_ORIGINS` (e.g. `https://app.example.com`).
-/// Empty / invalid → permissive (local dev / same-origin split defaults).
+/// 判断一个 Origin 是否属于「本机」——桌面 webview（`tauri.localhost` /
+/// `asset.localhost`）、Vite dev（`localhost:1420`）、直连 loopback。
+///
+/// 只放行本机来源是刻意的：`127.0.0.1` 上的 API 被 `derive_origin` 判为
+/// `Local`（最宽权限），若 CORS 对任意站点回显 `*`，任何网页都能读它的响应。
+fn is_local_origin(origin: &str) -> bool {
+    let rest = ["http://", "https://", "tauri://"]
+        .iter()
+        .find_map(|p| origin.strip_prefix(p))
+        .unwrap_or(origin);
+    let authority = rest.split('/').next().unwrap_or("");
+    // 去掉 `:port`（IPv6 字面量本身带冒号，只有尾部纯数字才算端口）。
+    let host = match authority.rsplit_once(':') {
+        Some((h, port)) if !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) => h,
+        _ => authority,
+    };
+    let host = host
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_ascii_lowercase();
+    matches!(host.as_str(), "localhost" | "127.0.0.1" | "::1")
+        || host.ends_with(".localhost")
+}
+
+/// CORS：`HERMES_HTTP_CORS_ORIGINS`（逗号分隔）追加白名单。
+///
+/// 未配置时**不再 permissive**，只回显本机来源。原因：`127.0.0.1` 的 API 在
+/// `security::derive_origin` 里是 `Local`（全放行），而 `RateLimiter` 曾经
+/// 默认不限流——两条叠加等于任意网页可对本机 agent 发写请求（改 relay 地址、
+/// 重置加密身份、签发配对码）。跨站读响应需要 `Access-Control-Allow-Origin`
+/// 回显，收回它就把这条链断在浏览器侧。
 fn http_cors_layer() -> CorsLayer {
     let raw = env_compat("HERMIX_HTTP_CORS_ORIGINS", "HERMES_HTTP_CORS_ORIGINS").unwrap_or_default();
-    let origins: Vec<&str> = raw
+    let explicit: Vec<HeaderValue> = raw
         .split(',')
         .map(str::trim)
         .filter(|s| !s.is_empty())
+        .filter_map(|o| match o.parse::<HeaderValue>() {
+            Ok(v) => Some(v),
+            Err(_) => {
+                tracing::warn!(origin = %o, "invalid CORS origin, skipped");
+                None
+            }
+        })
         .collect();
-    if origins.is_empty() {
-        tracing::debug!("HERMES_HTTP_CORS_ORIGINS unset — using permissive CORS");
-        return CorsLayer::permissive();
+    if explicit.is_empty() {
+        tracing::debug!("HERMIX_HTTP_CORS_ORIGINS 未配置 —— 仅放行本机来源");
+    } else {
+        tracing::info!(count = explicit.len(), "CORS 显式白名单已加载");
     }
-    let mut header_values: Vec<HeaderValue> = Vec::new();
-    for o in origins {
-        match o.parse::<HeaderValue>() {
-            Ok(v) => header_values.push(v),
-            Err(_) => tracing::warn!(origin = %o, "invalid CORS origin, skipped"),
-        }
-    }
-    if header_values.is_empty() {
-        tracing::warn!("HERMES_HTTP_CORS_ORIGINS had no valid origins — permissive CORS");
-        return CorsLayer::permissive();
-    }
-    tracing::info!(count = header_values.len(), "CORS allowlist enabled");
+    let allowlist = explicit.clone();
     CorsLayer::new()
-        .allow_origin(AllowOrigin::list(header_values))
+        .allow_origin(AllowOrigin::predicate(
+            move |origin: &HeaderValue, _req: &axum::http::request::Parts| {
+                let Ok(s) = origin.to_str() else {
+                    return false;
+                };
+                allowlist.iter().any(|v| v.as_bytes() == s.as_bytes()) || is_local_origin(s)
+            },
+        ))
         .allow_methods([
             Method::GET,
             Method::POST,
@@ -269,6 +302,7 @@ fn http_cors_layer() -> CorsLayer {
         .allow_headers(AllowHeaders::list([
             header::AUTHORIZATION,
             header::CONTENT_TYPE,
+            HeaderName::from_static("x-hermix-signature"),
         ]))
 }
 
