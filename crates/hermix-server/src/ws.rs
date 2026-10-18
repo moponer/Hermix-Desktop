@@ -51,24 +51,20 @@ fn session_broadcast_get_or_create(
 
 /// Drop the per-session broadcast sender. Called when the agent task
 /// completes — no further events will ever be produced for this
-/// session. Existing subscribers (reconnect forwarders parked in
-/// `spawn_broadcast_forwarder`) see `Closed` on their next `recv()` and
-/// exit cleanly. A no-op if no sender was ever created for this
+/// session. Existing subscribers (the per-connection forward tasks
+/// each holding a receiver clone) see `Closed` on their next `recv()`
+/// and exit cleanly. A no-op if no sender was ever created for this
 /// session (e.g. short messages that completed before any event was
 /// published).
 ///
-/// P5 多端 attachment（设计 §3.5）：此 drop 是**安全**的——调用点在
-/// agent task 的完成块（见 `handle_ws_stream_send` 的 `agent_handle`
-/// 分支），此时该 session 的 agent task 已结束、不会再产事件，所有
-/// 订阅者（无论 attachment_id 是否相同）都该退出。多端并存的扇出
-/// 靠 `broadcast::channel` 单 sender 多 receiver 天然支持（每个 WS
-/// 连接从 `session_broadcast_get_or_create` 拿 sender clone 后 spawn
-/// 的 per-connection forward task 各自持有 receiver），**不依赖**
-/// `spawn_broadcast_forwarder`（该函数从未实现，注释提及是历史遗留
-/// 措辞，多端扇出的实际机制是 broadcast channel 多 receiver）。
-/// 因此本函数无需 attachment-aware 改造：agent task 完成即所有
-/// attachment 的 forwarder 都该退出，drop sender 让所有 receiver 见
-/// `Closed` 是正确语义。
+/// 多端并存（P5，设计 §3.5）下这个 drop 是**安全**的：调用点在 agent
+/// task 的完成块（`handle_ws_stream_send` 的 `agent_handle` 分支），
+/// 此时该 session 的 agent task 已结束、不会再产事件，所有订阅者
+/// （无论 attachment_id 是否相同）都该退出。扇出靠 `broadcast::channel`
+/// 单 sender 多 receiver 天然支持：每个 WS 连接从
+/// `session_broadcast_get_or_create` 拿 sender clone 后自己 spawn 一条
+/// forward task、各自持有 receiver。因此本函数无需 attachment-aware
+/// 改造——agent task 完成即所有 forwarder 都该退出。
 fn session_broadcast_drop(session_id: &str) {
     let mut g = session_broadcasts().lock().unwrap_or_else(|e| e.into_inner());
     g.remove(session_id);
@@ -2065,8 +2061,9 @@ pub(crate) async fn handle_ws_stream_send(
                         );
 
                         // Mirror the envelope to any reconnecting subscribers
-                        // (forwarders spawned by `spawn_broadcast_forwarder`
-                        // in the stale-handle takeover path). Non-blocking:
+                        // (each connection spawns its own forward task holding
+                        // a receiver clone, so a reconnect can pick up mid-turn).
+                        // Non-blocking:
                         // a slow subscriber gets `Lagged` on its next recv
                         // and the dropped events are re-pulled from the DB
                         // transcript. No subscriber = no-op (the broadcast
