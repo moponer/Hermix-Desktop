@@ -82,6 +82,8 @@ windows = { workspace = true, features = [
     # 把「切 Wi-Fi 后最坏 150s 恢复」压到秒级。OVERLAPPED 自带在 Win32_System_IO。
     "Win32_NetworkManagement_IpHelper",
     "Win32_System_IO",
+    # 休眠/唤醒通知（RegisterSuspendResumeNotification，回调式，不需要窗口）。
+    "Win32_System_Power",
 ] }
 regex = { workspace = true }
 # `test_state.rs` lives in the lib tree (gated by `#![cfg(any(test,

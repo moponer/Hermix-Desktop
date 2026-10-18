@@ -24,7 +24,7 @@ use std::sync::{Arc, OnceLock};
 
 use tokio::sync::Notify;
 
-/// 订阅网络变化。进程内只起一个监听线程，重复调用共享同一个信号源。
+/// 订阅网络变化与系统唤醒。进程内只起一次监听，重复调用共享同一个信号源。
 ///
 /// 返回的 `Notify` 用法是 `notify.notified().await`——调用方（relay 重连循环）
 /// 只需要「被打断」这一件事，不需要知道变化的具体内容。
@@ -34,6 +34,7 @@ pub fn subscribe() -> Arc<Notify> {
         .get_or_init(|| {
             let notify = Arc::new(Notify::new());
             spawn_watcher(notify.clone());
+            spawn_power_watcher(notify.clone());
             notify
         })
         .clone()
@@ -97,6 +98,61 @@ fn spawn_watcher(_notify: Arc<Notify>) {
     // 非 Windows：没有主动信号，重连完全依赖心跳超时判定。
     // 这里刻意不报错——「少一个优化」不是错误。
 }
+
+/// 休眠/唤醒监听。
+///
+/// 用 `RegisterSuspendResumeNotification` 的**回调**模式（`DEVICE_NOTIFY_CALLBACK`），
+/// 不需要窗口和消息循环——这是它比 `WM_POWERBROADCAST` 省事的地方，也是这一批
+/// 敢做的原因。
+///
+/// 注册参数与返回句柄都必须活到进程结束：句柄一释放，注册就解除。所以两者都
+/// 泄漏成 `'static`——本函数只执行一次，泄漏量固定且极小。
+#[cfg(windows)]
+fn spawn_power_watcher(notify: Arc<Notify>) {
+    use windows::Win32::Foundation::{ERROR_SUCCESS, HANDLE};
+    use windows::Win32::System::Power::{
+        DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS, RegisterSuspendResumeNotification,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::DEVICE_NOTIFY_CALLBACK;
+
+    unsafe extern "system" fn on_power(
+        context: *const core::ffi::c_void,
+        event: u32,
+        _setting: *const core::ffi::c_void,
+    ) -> u32 {
+        if context.is_null() {
+            return ERROR_SUCCESS.0;
+        }
+        // SAFETY: 指针来自下面的 `Box::into_raw`，且永不释放（进程级生命周期）。
+        let notify = &*(context as *const Arc<Notify>);
+        tracing::info!(event, "系统电源状态变化，唤醒 relay 重连");
+        notify.notify_waiters();
+        ERROR_SUCCESS.0
+    }
+
+    let context = Box::into_raw(Box::new(notify));
+    let params = Box::into_raw(Box::new(DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS {
+        Callback: Some(on_power),
+        // 字段类型是 `*mut`；我们只读，但签名如此。
+        Context: context as *mut core::ffi::c_void,
+    }));
+    let registered = unsafe {
+        RegisterSuspendResumeNotification(
+            HANDLE(params as *mut core::ffi::c_void),
+            DEVICE_NOTIFY_CALLBACK,
+        )
+    };
+    match registered {
+        Ok(handle) => {
+            std::mem::forget(handle);
+            tracing::info!("已订阅系统休眠/唤醒通知");
+        }
+        Err(e) => tracing::warn!(error = %e, "订阅休眠/唤醒通知失败，回退到超时判定"),
+    }
+}
+
+#[cfg(not(windows))]
+fn spawn_power_watcher(_notify: Arc<Notify>) {}
 
 #[cfg(test)]
 mod tests {
