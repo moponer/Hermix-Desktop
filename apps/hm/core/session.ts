@@ -39,6 +39,16 @@ import {
 import { RelayClient } from './relayClient'
 import { PROTO_VERSION } from './envelope'
 import { ReplayWindow } from './replay'
+import { SyncOrdering, isSyncResult, type SyncResult } from './syncOrder'
+
+/**
+ * 等 `sync.result` 的上限。
+ *
+ * 超时不代表成功，只是**不再阻塞实时帧**：PC 侧版本较老时不认识 `sync`，
+ * 会把请求整帧丢弃且不回错误，没有这个兜底，重连后所有实时帧都会堆在
+ * `pendingLive` 里不显示——比不补发更糟。
+ */
+const SYNC_TIMEOUT_MS = 3000
 
 /** 会话 id。PC 侧按 `session_id` 拆包，格式必须与它一致。 */
 export function chatSessionId(deviceId: string): string {
@@ -84,9 +94,17 @@ export class ChatSession {
   private readonly h: ChatSessionHandlers
   /** 出站帧重放窗口（relay 是威胁模型里的潜在攻击者）。 */
   private readonly replay = new ReplayWindow()
+  /** 补发结果的顺序控制（实时帧与补发流的竞态由它兜）。 */
+  private readonly order: SyncOrdering
+  private syncTimer: ReturnType<typeof setTimeout> | null = null
 
   constructor(handlers: ChatSessionHandlers) {
     this.h = handlers
+    this.order = new SyncOrdering(
+      (text) => this.h.onPlain(text),
+      // 环形日志覆盖掉的那一段真的没了。明确告知用户，不假装完整。
+      () => this.h.onError('断连期间的部分历史已超出缓存上限丢失，建议回电脑查看完整记录。'),
+    )
   }
 
   /** 当前是否具备收发条件（已建连 + 密钥已交换）。 */
@@ -206,6 +224,9 @@ export class ChatSession {
     this.startDeferred?.resolve()
     this.startDeferred = null
     this.h.onState('open')
+    // 建连即补：把上一次连接到现在漏掉的事件要回来。丢包/切网/后台被挂起
+    // 都会走到这里，而 PC 侧只在日志里留着它们——不主动要就永远看不到。
+    void this.requestSync()
   }
 
   /** 入站：密封信封 → 明文 JSON。解不开就丢这一帧，不打断整条会话。 */
@@ -232,10 +253,47 @@ export class ChatSession {
           ephemeralPublic: await importPublicKey(b64decode(sf.ep)),
         },
       )
-      this.h.onPlain(new TextDecoder().decode(plain))
+      this.dispatch(new TextDecoder().decode(plain))
     } catch {
       // 解不开的常见原因是密钥没换对（PC 侧还没学到本机新公钥）。
       // 这种帧丢就丢了，下一次 key.exchange 之后自然恢复。
+    }
+  }
+
+  /**
+   * 明文 → UI 的唯一入口。补发回信在这里被拆开，不交给 UI 当普通帧。
+   *
+   * 拆开是必须的：`sync.result` 里的 `events[]` 每一条都是**当时**下发的
+   * 完整帧（同 `assistant.message` 形状），而手机 UI 只认单条事件。
+   */
+  private dispatch(text: string): void {
+    if (isSyncResult(text)) {
+      try {
+        this.order.applyResult(JSON.parse(text) as SyncResult)
+      } catch {
+        // 解析失败就当没收到，等下次重连再要一次。
+      }
+      return
+    }
+    this.order.offer(text)
+  }
+
+  /** 补发请求。失败不致命：下一次重连会再要一次。 */
+  private async requestSync(): Promise<void> {
+    if (!this.client || !this.identity || !this.pcPublic) return
+    this.order.begin()
+    // 兜底：PC 没回 sync.result（旧版本 / 帧丢了）时不能一直卡着——
+    // 那样后续所有实时帧都会被扣在队列里不显示。
+    this.syncTimer = setTimeout(() => {
+      this.syncTimer = null
+      this.order.end()
+    }, SYNC_TIMEOUT_MS)
+    const ok = await this.sendPlain({ type: 'sync', since_seq: this.order.lastSeqSeen })
+    if (!ok) {
+      // 发不出去就直接放开，别等超时。
+      if (this.syncTimer) clearTimeout(this.syncTimer)
+      this.syncTimer = null
+      this.order.end()
     }
   }
 
@@ -247,8 +305,13 @@ export class ChatSession {
    * 不会回错误码，整轮就静默消失——所以这个字符串由 Rust 侧的枚举定义。
    */
   async send(text: string): Promise<boolean> {
+    return this.sendPlain({ type: 'send', text })
+  }
+
+  /** 封一帧明文上行。`send` 与补发请求共用，密封细节只写一次。 */
+  private async sendPlain(obj: unknown): Promise<boolean> {
     if (!this.client || !this.identity || !this.pcPublic || !this.ready) return false
-    const plain = new TextEncoder().encode(JSON.stringify({ type: 'send', text }))
+    const plain = new TextEncoder().encode(JSON.stringify(obj))
     // frameId 同时进 HKDF salt 与信封的 `eid`，两处必须同一份。
     const frameId = randomBytes(16)
     const { sealed, ephemeralPublic } = await sealBody(plain, {
