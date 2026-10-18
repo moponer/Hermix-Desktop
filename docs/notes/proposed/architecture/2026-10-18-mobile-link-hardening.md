@@ -37,7 +37,32 @@ Status: proposed — 差距审计已完成，方案未动工，等拍板。
 需要配套迁移（旧 id 别名期 + 绑定表重写）才能动。当前风险由 relay 侧 `attachNode`
 拒绝挤占来兜，不构成可用性缺口，排到 P2 与版本窗口一起做。
 
-**未动**：9–21（P1 及以后）。
+**P1 批次已落地（2026-10-18）**：改造点 9、10、11，以及 13 的裁剪版。
+
+| # | 落地位置 | 回归测试 |
+|---|---|---|
+| 9 会话日志 | 新模块 `session_journal.rs`（环形 512 条 / seq 单调 / `truncated` 显式缺口） | 7 例单测 |
+| 10 `Sync` 帧 | **不走新 `FrameTag`**：明文内层 `{"type":"sync","since_seq":N}`，回 `{"type":"sync.result",events[],truncated}`。理由见下 | — |
+| 11 手机 hydrate | `apps/hm/core/syncOrder.ts` + `session.ts`（`onOpen` 即请求，实时帧排队防竞态） | 7 例（`test/syncOrder.test.ts`） |
+| 13 端到端 | 在 `SessionMux` 接缝测「断线 → 重建 mux → 补齐」，不开 socket | `reconnect_replays_events_missed_while_offline` 等 3 例 |
+
+**两处与原计划不同，都是审计后改的**：
+
+1. **不加 `FrameTag::Sync`**。补发是「一条会话的内部事务」，用内层明文字段就够；
+   新增 tag 要改 relay 的路由白名单（`apps/relay/src/proto.js`）并升协议版本，
+   而 relay 本来就不该理解这个语义。
+2. **补发存的是映射后的明文事件，不是重封密文**。手机冷启动会换新的 P-256 静态
+   密钥，重封旧密文必须换 `eid` 重做 ECDH；而一次性封成 batch 只带一份
+   nonce/一次性公钥，还天然避开手机侧按 `eid` 去重的窗口。
+
+**13 的裁剪说明**：没起真 relay + 真 socket，用的是「重建 `SessionMux` + 同一份日志」。
+真实重连就是 mux 被丢掉重建，而这正是要验的不变量；开 socket 会让测试变慢且
+引入端口/时序 flake，收益只有「顺带测了 relay 的 Node 实现」——那归 `apps/relay`
+自己的 31KB 测试套。
+
+**未动**：12（`ws.rs:67` 的 `spawn_broadcast_forwarder` 死注释——该文件当时有在途改动，
+留待下一批）、14–21（P2 及以后）。
+
 
 ---
 
