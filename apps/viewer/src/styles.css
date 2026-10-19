@@ -867,6 +867,41 @@ html, body, #root {
 }
 .img-link:hover { color: var(--accent-strong); }
 
+/* ─── 打不开时的元信息卡（F8） ────────────────────────────────
+   用户遇到看不懂的类型时需要的是：多大、什么时候改的、用什么程序打开。 */
+.meta-card {
+  background: var(--bg-card);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.10);
+  padding: 18px 20px;
+  max-width: 420px;
+  text-align: left;
+}
+.meta-card-msg {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin: 0 0 12px;
+  line-height: 1.6;
+}
+.meta-card-info {
+  display: flex; flex-direction: column; gap: 6px;
+  margin: 0 0 14px;
+  font-size: 12px;
+}
+.meta-card-info > div {
+  display: flex; gap: 10px;
+}
+.meta-card-info dt {
+  flex: none; width: 60px;
+  color: var(--text-muted);
+}
+.meta-card-info dd {
+  margin: 0;
+  color: var(--text-primary);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.meta-card-actions { display: flex; gap: 8px; }
+
 /* ─── PDF 页列表（F6） ─────────────────────────────────────── */
 .pdf-pages {
   list-style: none;

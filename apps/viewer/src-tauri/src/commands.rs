@@ -113,18 +113,38 @@ fn ext_of(p: &str) -> String {
         .unwrap_or_default()
 }
 
+/// 扩展名 → 读取类别。
+///
+/// **这张表必须与共享预览层（`packages/preview`）的分派表对齐**：
+/// 前端 `detectLanguage` / `isMarkdownExt` 认得扩展名，后端这里再判
+/// unsupported，就会出现「前端已选好渲染器，后端却不给字节」——
+/// 用户看到的是「不支持该类型」，但能力其实早就有了。
+/// 2026-10-20 实测：两张表分叉导致 57 个扩展名白拿不到内容。
+///
+/// 类别：text（按文本读）/ code（文本，按代码高亮）/ image / pdf /
+/// bytes（前端自己解析）/ legacy_office（老二进制，走系统程序）。
 fn classify(ext: &str) -> &'static str {
     match ext {
         // html/htm 是**文本**：共享预览层的 htmlLoader 走 readText 取源码，
         // 塞进沙箱 iframe 渲染。此前把 html 归到 "bytes"，Rust 于是回
         // FileContent::Bytes，前端 readText 判成 isBinary → HTML 预览
         // 永远报"二进制文件，不是可渲染的网页"。
-        "md" | "markdown" | "txt" | "log" | "json" | "yaml" | "yml" | "toml" | "ini" | "cfg"
-        | "csv" | "tsv" | "html" | "htm" => "text",
-        "rs" | "py" | "js" | "ts" | "tsx" | "jsx" | "c" | "cpp" | "h" | "hpp" | "cs" | "java"
-        | "go" | "sh" | "bash" | "bat" | "ps1" | "sql" | "css" | "scss" | "less" | "vue" | "rb"
-        | "php" | "lua" | "swift" | "kt" | "dart" | "scala" => "code",
-        "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "bmp" | "ico" | "avif" => "image",
+        "md" | "markdown" | "mdx" | "txt" | "log" | "text" | "json" | "json5" | "jsonp"
+        | "yaml" | "yml" | "toml" | "ini" | "cfg" | "conf" | "env" | "properties" | "props"
+        | "csv" | "tsv" | "html" | "htm" | "ipynb" | "lock" | "map" | "srt" | "vtt"
+        | "m3u" | "m3u8" | "npmrc" | "editorconfig" | "gitignore" => "text",
+        "rs" | "py" | "pyw" | "js" | "mjs" | "cjs" | "ts" | "tsx" | "jsx" | "c" | "cpp"
+        | "cxx" | "cc" | "h" | "hpp" | "hh" | "ino" | "cs" | "java" | "go" | "sh" | "bash"
+        | "zsh" | "fish" | "bat" | "cmd" | "ps1" | "psm1" | "sql" | "css" | "scss" | "less"
+        | "vue" | "svelte" | "razor" | "rb" | "php" | "lua" | "swift" | "kt" | "kts"
+        | "dart" | "scala" | "sc" | "ex" | "exs" | "hs" | "nim" | "zig" | "jl" | "r" | "sol"
+        | "proto" | "xml" | "pug" | "jade" | "hbs" | "graphql" | "gql" | "adoc" | "asc"
+        | "rst" | "wiki" | "tex" | "dockerfile" | "makefile" | "make" | "cmake" | "nginx"
+        | "vim" | "viml" | "vimrc" | "diff" | "patch" | "http" | "regex" | "mermaid" | "git" => "code",
+        // tif/tiff：浏览器解不了，但 Rust 的 image 内核能解（编辑器用得上），
+        // 预览侧由 viewer 走 image_rasterize 转 PNG。
+        "png" | "jpg" | "jpeg" | "jfif" | "gif" | "webp" | "svg" | "bmp" | "ico" | "avif"
+        | "tif" | "tiff" => "image",
         "pdf" => "pdf",
         // 字节类：xlsx/xlsm/xls 由前端 ExcelJS/SheetJS 解析，
         // docx/docm/dotx/dotm 由 docx-preview 解析，pptx/pptm/ppsx/ppsm/potx/potm 由 pptx-browser 解析。
@@ -349,13 +369,14 @@ pub fn viewer_read_file(path: String) -> Result<FileContent, String> {
         "image" => {
             let mime = match ext.as_str() {
                 "png" => "image/png",
-                "jpg" | "jpeg" => "image/jpeg",
+                "jpg" | "jpeg" | "jfif" => "image/jpeg",
                 "gif" => "image/gif",
                 "webp" => "image/webp",
                 "svg" => "image/svg+xml",
                 "bmp" => "image/bmp",
                 "ico" => "image/x-icon",
                 "avif" => "image/avif",
+                "tif" | "tiff" => "image/tiff",
                 _ => "application/octet-stream",
             };
             FileContent::Image {

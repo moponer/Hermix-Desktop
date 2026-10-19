@@ -56,6 +56,92 @@ const EDITOR_HINT: Record<Exclude<EditorKind, "none">, string> = {
   text: "编辑文本（另存为新文件）",
 };
 
+/**
+ * 「打不开」时的落点：不是一句红字，而是**元信息卡**。
+ *
+ * 用户遇到看不懂的类型时真正需要的是：它多大、什么时候改的、用什么
+ * 程序能打开。所以这里把 stat 拿到的元信息摆出来，并给两个能立刻
+ * 采取行动的按钮。
+ */
+function UnsupportedCard({
+  message,
+  path,
+  name,
+  source,
+}: {
+  message: string;
+  path: string;
+  name: string;
+  source: FileSource;
+}) {
+  const [meta, setMeta] = useState<{ size: number; mtime: string | null } | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void source.fs?.stat(path).then((st) => {
+      if (cancelled || !st) return;
+      setMeta({ size: st.size, mtime: st.mtime });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [path, source]);
+
+  return (
+    <div className="preview-state-center">
+      <div className="meta-card">
+        <p className="meta-card-msg">{message}</p>
+        <dl className="meta-card-info">
+          <div>
+            <dt>名称</dt>
+            <dd title={path}>{name}</dd>
+          </div>
+          <div>
+            <dt>大小</dt>
+            <dd>{meta ? formatSize(meta.size) : "—"}</dd>
+          </div>
+          <div>
+            <dt>修改时间</dt>
+            <dd>{meta?.mtime ? formatTime(meta.mtime) : "—"}</dd>
+          </div>
+        </dl>
+        <div className="meta-card-actions">
+          <button
+            type="button"
+            className="tb-btn"
+            onClick={() => void source.openWithSystem?.(path)}
+            disabled={!source.openWithSystem}
+          >
+            用系统程序打开
+          </button>
+          <button
+            type="button"
+            className="tb-btn"
+            onClick={() => void source.revealInExplorer?.(path)}
+            disabled={!source.revealInExplorer}
+          >
+            在资源管理器中显示
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function formatSize(n: number): string {
+  if (!n) return "0 B";
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  return `${(n / 1024 / 1024 / 1024).toFixed(1)} GB`;
+}
+
+function formatTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 export function PreviewHost({
   path,
   name,
@@ -250,12 +336,7 @@ export function PreviewHost({
             }}
           />
         ) : state.status === "error" ? (
-          <div className="preview-state-center">
-            <div className="preview-state-error">
-              <p>{state.message}</p>
-              <small>{path}</small>
-            </div>
-          </div>
+          <UnsupportedCard message={state.message} path={path} name={name} source={source} />
         ) : (
           <div className="preview-state-center">正在读取 {name}…</div>
         )}

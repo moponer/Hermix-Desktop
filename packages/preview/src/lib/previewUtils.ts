@@ -10,12 +10,17 @@ export const IMAGE_EXT_MIME: Record<string, string> = {
   png: "image/png",
   jpg: "image/jpeg",
   jpeg: "image/jpeg",
+  // jfif 就是 JPEG（老相机/扫描仪的另一个后缀名）。
+  jfif: "image/jpeg",
   gif: "image/gif",
   webp: "image/webp",
   bmp: "image/bmp",
   ico: "image/x-icon",
   tiff: "image/tiff",
   tif: "image/tiff",
+  // avif：Chromium 85+ 原生能解。缺这一行时 avif 会落进「文本」分派，
+  // 读回来是二进制 → 用户看到「二进制文件，不支持文本预览」的矛盾文案。
+  avif: "image/avif",
   // SVG 是文本没错，但它是一张**图**：走 image 路径由 <img> 渲染，既能看到
   // 成品也不会执行脚本（走代码视图反而看不出图形长什么样）。
   svg: "image/svg+xml",
