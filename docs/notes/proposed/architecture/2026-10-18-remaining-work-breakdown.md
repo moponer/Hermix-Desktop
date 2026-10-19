@@ -1,6 +1,22 @@
-# 剩余工作拆分：5 张可独立执行的任务卡
+# Decision Note: 剩余工作拆分：5 张可独立执行的任务卡
 
 Status: proposed — 每张卡自包含（范围/文件/步骤/验收/风险），一个会话只做一张。上游依据：`2026-10-18-capability-alignment-audit.md`、`2026-10-18-mechanism-level-alignment.md`。
+
+## Decision
+
+把对齐审计与机制对标里剩余的 5 项工作，拆成**5 张自包含任务卡**（后台子代理 / PlanMode / Skill allowed-tools 强字段 / 文档技能包 docx 先行 / superpowers 适配），每张卡写清范围、涉及文件、步骤、验收与风险。执行规则：**一个会话只做一张卡**，避免多线并行导致上下文互相污染。
+
+## Alternatives considered
+
+- **一次性大改（5 项一起做）**：否决——五项分属工具层、交互层、技能层、产线层，互相耦合面小但工作量叠加，出问题时无法定位。
+- **按模块分批（工具层一批、UI 一批）**：否决——跨模块的依赖会打断同一张卡的上下文，验收更难做。
+- **只列缺口不写步骤**：否决——「知道要做什么」无法直接开工，必须自包含。
+
+## Consequences
+
+- 5 张卡可由不同会话分别领取，互不阻塞；每张卡的验收标准独立可测。
+- 卡内写明了「现状事实」（文件 + 符号），执行者不必重新翻源码定位。
+- 卡片里的风险项若在实施中不成立，需要回到本篇修订而不是在实现里临时改口径。
 
 ## 任务卡 1：后台子代理（能力缺口，最高优先）
 
@@ -97,7 +113,9 @@ Status: proposed — 每张卡自包含（范围/文件/步骤/验收/风险）�
 ## 状态更新
 
 - **任务卡 1（后台子代理）：已完成（2026-10-18）**。
-  - SubAgentLineage 新增 esult / 	runcated / inished_naturally（此前 get_subagent_result 的 esult 恒为 null——真 bug 修复）。
+  - SubAgentLineage 新增 
+esult / 	runcated / inished_naturally（此前 get_subagent_result 的 
+esult 恒为 null——真 bug 修复）。
   - SubAgentOrchestrator::spawn_background()：先写 started lineage（poll 立即可见）→ 	okio::spawn detached 执行 → 终态含结果文本落盘；返回 BoxSendFuture 打破递归 future 环。
   - xecute_inner 拆为 xecute_inner_with_id(req, id, announce)，同步路径行为不变。
   - 	ool_executor 拦截层识别 ackground: true → 立即返回 {"status":"spawned","sub_agent_id":…}。
@@ -108,7 +126,8 @@ Status: proposed — 每张卡自包含（范围/文件/步骤/验收/风险）�
 - **任务卡 3（Skill allowed-tools 强制）：已完成（2026-10-18）**。
   - SkillCommandInfo / SkillMatch 携带 llowed_tools（frontmatter 已解析字段，此前从未向下传递）。
   - SkillLoader::build_injection_and_tools()：一次匹配同时产出注入文本与 allowed-tools 并集；uild_injection 委托它保持兼容。
-  - un_loop::build_active_skills_block_with_tools()；LoopState.active_skill_tools 每轮重算（不会串轮）。
+  - 
+un_loop::build_active_skills_block_with_tools()；LoopState.active_skill_tools 每轮重算（不会串轮）。
   - 强制执行：do_tool_turn 过滤非白名单工具（返回 skill_scope 拒绝信封）；	ool_executor::tool_allowed_by_active_skill 纯函数 + SKILL_SCOPE_ALWAYS_ALLOWED 元工具豁免（skills_list/view/manage、todo、clarify、get_subagent_result）。
   - 语义：**只做减法**（空声明=不限制；不扩大既有会话白名单）。
   - 测试：skill_scope_is_subtract_only_and_exempts_meta_tools、uild_injection_and_tools_surfaces_allowed_tools、uild_injection_and_tools_is_none_without_declaration；agent 1088 全绿。
@@ -142,9 +161,11 @@ Status: proposed — 每张卡自包含（范围/文件/步骤/验收/风险）�
 - **C1 流式 idle 真中断：已完成**。新增 AgentConfig.stream_idle_timeout_secs（默认 120，用户可在 gent.stream_idle_timeout_secs 配置，gent_builder 桥接）。stream_collect.rs 两个分支（activity=0 / 有通知）均：每 chunk 重置 idle 定时器；首个 chunk 后静默超过期限 → 返回 Interrupted(finish_reason="stream_idle") 并**保留已到达的部分内容**（旧行为：24h 空转 → 外层 180s → 空回复丢弃用户已见文本）。测试 idle_after_first_chunk_aborts_with_partial_content。
 - **C2 read_file 分页精度：已完成**。抽出纯函数 paginate_read_body(content, start_line, budget)：按**整行**截断（旧版切在半行中），
 ext_offset = 调用方坐标系下的下一条行号（旧版错误地报总行数，指到已读内容之后）；超长单行回退字符级截断。3 个测试（含 offset 坐标系偏移与未超限直通）。count_lines 降为 #[cfg(test)]。
-- **B1 dashboard seeded 假插件清算：已完成**。新增 SEEDED_PLUGIN_IDS: &[(id, 原因)]（8 项逐条写明缺什么），并加不变量测试 seeded_ids_match_the_catalog：catalog 标 seeded 却不在清单 → 失败；清单项变 eady → 失败。挂账从"沉默"变为"CI 可见"。
+- **B1 dashboard seeded 假插件清算：已完成**。新增 SEEDED_PLUGIN_IDS: &[(id, 原因)]（8 项逐条写明缺什么），并加不变量测试 seeded_ids_match_the_catalog：catalog 标 seeded 却不在清单 → 失败；清单项变 
+eady → 失败。挂账从"沉默"变为"CI 可见"。
 - **A1 docx 脚本随包分发：已完成**。uiltin-skills/hermix/docx/scripts/build_docx.py（spec JSON → docx，内化中文字体双设置/页边距/首行缩进/定宽表格/页码域；支持 --check）；lib.rs 新增 BUILTIN_SKILL_EXTRA_FILES 未存在即写（不覆盖用户改动）；SKILL.md 改为"优先用随包生成器"。
-- **A2 前端 PlanMode 开关：不做（记录理由）**。egistry.plan_mode 是进程级共享句柄（子代理与桥接共享同一 Arc）；per-session override 在两会话并发时会串扰（A 开计划模式 → B 的写操作被拒）。正确实现需要 per-session registry inner 拆分（结构性改动），当前 agent 工具自服务路径已覆盖实际需求。
+- **A2 前端 PlanMode 开关：不做（记录理由）**。
+egistry.plan_mode 是进程级共享句柄（子代理与桥接共享同一 Arc）；per-session override 在两会话并发时会串扰（A 开计划模式 → B 的写操作被拒）。正确实现需要 per-session registry inner 拆分（结构性改动），当前 agent 工具自服务路径已覆盖实际需求。
 - 顺带修复并行会话引入的门禁阻断：pairing.rs 测试缺 ToEncodedPoint import（E0599）、
 et_watch.rs 对 Copy 句柄 mem::forget 警告（改 let _ = handle; 并注明原因）。
 

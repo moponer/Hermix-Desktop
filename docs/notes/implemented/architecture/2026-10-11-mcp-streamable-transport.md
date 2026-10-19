@@ -1,6 +1,6 @@
-# Decision: MCP 客户端换 streamable HTTP 传输 + token 字段
+# Decision Note: MCP 客户端换 streamable HTTP 传输 + token 字段
 
-Status: implemented
+Status: implemented — 2026-10-11 落地（class: architecture）
 Class: architecture
 Date: 2026-10-11
 

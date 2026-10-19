@@ -1,6 +1,6 @@
-# 集成 FilePulse 后端作为本地文件搜索
+# Decision Note: 集成 FilePulse 后端作为本地文件搜索
 
-Status: implemented
+Status: implemented — 2026-10-14 交付，2026-10-15 转入 implemented
 Archived: 2026-10-15
 
 Archived 原因：P1/P2/P3 全部交付（fdabe182 / b284d54d / 6788d464 / 67e7ebd9），从 proposed 转入 implemented。

@@ -1,8 +1,10 @@
-# 对齐分析报告：hermix 全量能力 vs ZCode 参照系
+# Decision Note: 对齐分析报告：hermix 全量能力 vs ZCode 参照系
 
 Status: proposed — 审计报告与处置计划（2026-10-18）。**批次 1（P0）与批次 2 部分项已于 2026-10-18 交付，见文末执行记录**；机制级写法对标另见 `2026-10-18-mechanism-level-alignment.md`。参照系：ZCode 源码（<repo-parent>/zcode-ref，同形态产品：桌面/CLI agent + 工具 + 技能 + 插件）；辅助参照 DeepSeek harness（文档技能包/裁剪引擎路线，已另行落地 dsh 引擎）。
 
-## 判定规则（用户拍板）
+## Decision
+
+判定规则（用户拍板）
 
 1. 双方都有 → 参照 ZCode 优化或重写；
 2. 仅我方有 → 评估存在必要性，明确保留/移除结论与依据；
@@ -81,6 +83,19 @@ Status: proposed — 审计报告与处置计划（2026-10-18）。**批次 1（
 - **批次 2（P1）**：patch file-state 校验；terminal 后台任务+git 安全；task_manager 持久化或移除；dashboard stubs 清算；文档技能包骨架（docx 先行，dsh render 补 PDF→图）。
 - **批次 3（P2）**：clarify 结构化、delegate_task 后台模式、PlanMode、superpowers 适配、任务三套收敛、记忆仲裁说明、modelscope skills 处置。
 - **批次 4（P3）**：存储三件套合并、visualize 等 P3 新增、voice_mode 清理、录屏。
+
+## Alternatives considered
+
+- **整体对标 ZCode 的产品形态**（桌面/CLI 双形态、插件市场、iOS 端）：否决——hermix 是单形态桌面应用，移植成本远大于收益，逐项对齐即可。
+- **引入 Codex 插件层作为运行时**：否决——hermix 自有 plugin kernel 已覆盖同类需求（见 `2026-09-24-plugin-kernel-design`），引入第二套运行时等于两套生命周期。
+- **直接搬 dsh 的文档技能包/裁剪引擎**：采纳为工具层实现（document-skills-pack + document 工具），不作为对标参照系。
+- **保留 pandoc 做文档转换**：已出局（dsh 引擎替代），见 Reintroduction conditions。
+
+## Consequences
+
+- 差距清单按批次 1~4 排期落地，批次 1（P0）与批次 2 部分项已于 2026-10-18 交付（见文末执行记录），批次 3~4 仍在 proposed 状态。
+- 对齐按「先补能力、再改写法」两阶段推进：能力缺口进实现队列，写法差异进机制级笔记（`2026-10-18-mechanism-level-alignment.md`）。
+- 工具层新增能力（后台任务、git 安全策略、file-state 校验）会改变既有工具语义，需要对应的回归验证。
 
 ## Reintroduction conditions
 

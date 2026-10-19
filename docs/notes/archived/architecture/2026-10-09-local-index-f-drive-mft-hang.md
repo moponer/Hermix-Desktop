@@ -1,5 +1,8 @@
 # Decision Note: 本机文件索引建不起来——F: 卷 MFT 枚举卡死拖垮整次扫描
 
+Archived: 2026-10-13
+归档原因：对应工作已结束（结论已落地或被后续方案取代），归档件只作历史依据，不再编辑。
+
 Status: implemented — 真机验证通过（192 万条 / 121 秒 / ok:true）
 Archived: 2026-10-13 — 所属子系统（本地文件搜索 / usn-indexer）已整体移除，见 implemented/simplification/2026-10-13-remove-local-file-search-module.md
 

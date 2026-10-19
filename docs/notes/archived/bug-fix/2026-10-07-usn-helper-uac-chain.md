@@ -1,5 +1,8 @@
 # Decision Note: 本机索引 helper「没弹 UAC / 扫描半天搜不到」修复链
 
+Archived: 2026-10-13
+归档原因：对应工作已结束（结论已落地或被后续方案取代），归档件只作历史依据，不再编辑。
+
 Status: implemented — 修复位于 `commands_local_search.rs`（spawn_elevated / locate_helper / 退位握手 / set_main_hwnd）与 `lib.rs`（HWND 记入 + 自动索引时机）；幽灵进程与陈旧二进制已于 2026-10-07 现场清理。
 Archived: 2026-10-13 — 所属子系统（本地文件搜索 / usn-indexer）已整体移除，见 implemented/simplification/2026-10-13-remove-local-file-search-module.md
 

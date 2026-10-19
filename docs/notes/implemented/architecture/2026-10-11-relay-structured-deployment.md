@@ -1,6 +1,6 @@
-# Decision: relay 服务端结构化重构——产品自治 + 路由注册表 + 原子发布
+# Decision Note: relay 服务端结构化重构——产品自治 + 路由注册表 + 原子发布
 
-Status: implemented
+Status: implemented — 2026-10-11 落地（class: architecture）
 Class: architecture
 Date: 2026-10-11
 
@@ -123,6 +123,8 @@ deploy/desktop/releases.json        # 唯一真相源，随版本目录一起原
 - **消费端 3（安装器许可/说明页）**：安装器 payload 里嵌的 manifest 来自同一条流水线，无需单独改动（现状已读 manifest，只需 notes 结构从 string 变 string[] 时同步解析）。
 - **一致性保证是结构性的**：zip、manifest、releases.json 三者住在**同一个版本目录**、被**同一次 symlink swap** 原子切换——不存在「zip 新了 manifest 还是旧的」的窗口期；manifest 由 product 模块现算还多一层保险（serve 时校验 sha256 与 zip 实际值一致，不一致 500）。
 - **兼容**：`manifest.json` 字段保持现状形状（version/notes/pub_date/url/sha256/min_version），老版本客户端零感知；releases.json 是新增文件，只有新消费端读。
+
+## Alternatives considered
 
 1. **拆成多个 Node 进程/端口**（desktop-relay、spiker-relay 各一个，Nginx 分流）——否决：违反「不新开域名/端口」的既定约束（见摘要 constraints），运维面从 1 个进程变 N 个，跨产品共享的 auth/proto 还得抽包，复杂度净增。
 2. **纯路径约定不写注册表**（`/x/manifest.json` 永远映射 `deploy/x/current/`，零代码登记）——部分采纳：registry 本质就是这个约定 + proxy 例外。但纯约定无法表达 bbs 反代、apk 下载这类非载荷路由，留 registry 一处收敛比散在 server.js 各处好。

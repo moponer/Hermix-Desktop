@@ -1,5 +1,8 @@
 # Decision Note: 删除 usn 索引三处死代码（add_entry / frn_dirs_get / RawLine.op）
 
+Archived: 2026-10-13
+归档原因：对应工作已结束（结论已落地或被后续方案取代），归档件只作历史依据，不再编辑。
+
 Status: implemented — 三处 dead_code warning 清零，索引行为零变化
 Archived: 2026-10-13 — 所属子系统（本地文件搜索 / usn-indexer）已整体移除，见 implemented/simplification/2026-10-13-remove-local-file-search-module.md
 

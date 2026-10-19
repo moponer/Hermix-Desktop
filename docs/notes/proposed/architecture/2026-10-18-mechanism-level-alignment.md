@@ -1,6 +1,25 @@
-# 机制级写法逻辑对标：hermix vs ZCode vs Codex（vs DeepSeek harness）
+# Decision Note: 机制级写法逻辑对标：hermix vs ZCode vs Codex（vs DeepSeek harness）
 
 Status: proposed — 三方源码级机制对比与抄写清单（2026-10-18）。源码位置：hermix（仓库内）、ZCode（<repo-parent>/zcode-ref）、Codex（<refs>/ref-codex）、dsh-libreoffice-kit（<refs>\dsh-spike\kit，已另有笔记）。每项给出：各方写法 → 判定 → hermix 应抄的具体机制（文件+符号）。
+
+## Decision
+
+以 ZCode（最强项）与 Codex（最强机制）为参照系，逐项判定 hermix 的写法差距，并把**可直接抄的机制**列成清单（文件 + 符号级）。本篇只做机制层判定，不含产品形态与工具数量层面的差距（那部分见 `2026-10-18-capability-alignment-audit.md`）。
+
+判定结论：13 项机制差距中，hermix 侧最需要补的是**文件编辑的先读后改状态校验**、**工具输出截断的真实性**、**会话日志的完整入盘**、**模型侧强制 MCP 注入**；其余为增强项。
+
+## Alternatives considered
+
+- **以 Codex 为唯一参照系**：否决——Codex 的强项在插件/事件机制，ZCode 在桌面交互与工具策略覆盖面更全，单选一方会漏项。
+- **直接引入 Codex 的插件运行时**：否决——hermix 自有 plugin kernel 已覆盖同类需求，两套运行时并存会让生命周期与权限模型分裂。
+- **把机制级差异并入能力审计那篇**：否决——两篇粒度不同（能力层 vs 写法层），混写会让落地清单无法按「文件+符号」执行。
+- **只列差距不写抄写清单**：否决——「知道差在哪」不产生改动，清单必须能直接开工。
+
+## Consequences
+
+- 差距清单进入实现队列，按下方优先级建议与落地清单分批推进。
+- 每条抄写清单都指到具体文件与符号，避免「照着做」时二次翻源码。
+- 机制改动会触及工具执行链与上下文组装，落地时必须同步更新既有单测与工具描述。
 
 ## 1. 文件编辑可靠性 —— 判定：ZCode 最强，hermix 零状态是硬伤
 
@@ -115,7 +134,8 @@ Status: proposed — 三方源码级机制对比与抄写清单（2026-10-18）�
 - **pending steer 落盘（C4）**：AgentLoop::steer 成功后镜像到 <home>/pending_steer/<session>.txt；drain 后删除；AgentLoop::new/with_interrupt 启动时恢复。测试覆盖「落盘 → 重启恢复 → 清理删除」。
 - **LoopPhase 迁移校验（C6a）**：LoopPhase::as_index/from_index/can_transition_to（允许 PostToolExec→PreTurnSetup 唯一回边、同相位重入）；
 otify_phase 对非法迁移 warn（AgentLoop.last_loop_phase: AtomicU8）。1 测试。
-- **读图统一 processor（C5）**：ead_image 的缩放/重编码从「仅 JPEG/PNG」扩展到解码器支持的任意格式（GIF/WEBP/BMP），调色板/alpha 源先 	o_rgb8 再 JPEG；解码失败仍回退原始字节。4 测试。
+- **读图统一 processor（C5）**：
+ead_image 的缩放/重编码从「仅 JPEG/PNG」扩展到解码器支持的任意格式（GIF/WEBP/BMP），调色板/alpha 源先 	o_rgb8 再 JPEG；解码失败仍回退原始字节。4 测试。
 - **记忆三层仲裁（B3）**：memory / daily_memory / session_search 三处工具描述互加 BOUNDARY 段（写什么、何时读、谁只读）。
 - **modelscope skills 版本刷新（B2）**：nsure_bundled_skills 由「组存在即跳过」改为版本感知逐文件刷新（xtract_skill_version_ord 支持 1.0.0 与整数两种写法；SKILL.md 仅在 bundled 版本更高时覆盖，其余文件只补缺失）。
 - **新增技能（B4/自诊断）**：web-gui-tester（snapshot→act→wait→verify 循环、懒加载、截图取证、注入防护）、self-diagnosis（日志位置、症状→关键字表、配置项、报告格式），include_str! 注册。
