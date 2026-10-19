@@ -65,3 +65,4 @@ Status: implemented — 渲染器样式收进 `@hermix/preview`；共享组件�
   - viewer 首调 IPC 挂起约 20s 的冷启仍未定位（见懒加载那篇）。
 - **门禁**：上述缺口已收口为 `scripts/check-preview-layer.mjs`（ci-gate 的 `[4d/14]` 硬门禁）——共享组件类名必须在共享 CSS 里有规则、共享 CSS 的 token 两侧齐备，AGENTS.md 的"前端 UI 纪律"一节同步登记。用临时脚本注入一个 Tailwind 原子类验证过门禁会红。
 - **仍未收口**：没有任何检查能发现"两个 app 的 `tauri.conf.json` CSP 漏了共享栈需要的指令"（见 CSP 那篇）；也没有检查能发现"viewer 的 Rust 侧扩展名分类与共享层读取器预期不一致"——后者本次靠新增的 `classify_matches_shared_preview_readers` 单元测试钉住单点，但没有跨 app 的交叉校验。
+- **该缺口后续已补**：2026-10-20 的 [hermix-viewer 双模式化与全能力重构](../feature/2026-10-19-hermix-viewer-overhaul.md) 开工时实测到 `classify()` 与共享层分派表**分叉 57 个扩展名**（后端认得前端不认，或反之），已补齐并扩展该回归测试。**分叉的根因是两侧各有一份扩展名表**，所以后续新增类型时必须同时改两侧，否则同类分叉会复发。

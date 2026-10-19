@@ -1,0 +1,248 @@
+# Decision Note: hermix-viewer 双模式化与全能力重构（超长任务总纲）
+
+Status: implemented — F0–F9 全部交付。双模式（纯净/重量）、彩色类型图标、启动卡顿根因修复、全屏平铺、图片处理内核、PDF/文本编辑、AI 一键入对话、常见文件类型覆盖矩阵均已落地并各自提交（`106bd5f2` → `08621066`）
+
+关联：[hermix-viewer 资源管理器化 + @hermix/preview 共享包](../feature/2026-10-13-hermix-viewer-resource-manager.md)、[独立文件浏览器（hermix-viewer）+ 可折叠 AI 右栏 + 文件关联接管](../feature/2026-10-09-standalone-file-viewer.md)、[共享预览层的样式归属与 Tailwind 边界](../architecture/2026-10-19-shared-preview-layer-ownership.md)
+
+## Decision
+
+把独立文件浏览器 `apps/viewer`（`hermix-viewer`）从「三栏只读资源管理器」升级为**双模式全能力查看器**：
+
+- **纯净模式（light）** — 被文件关联唤起（`HKCU` 登记的 `hermix-viewer.exe` 带路径启动）时进入。无侧栏、无资源管理器、无 AI 栏，只有一条细工具条（另存 / 打开方式 / 显示方式 / 切到重量模式 / 关闭）。目标是「双击一个文件就看到它」，进程与首屏都轻。
+- **重量模式（heavy）** — 独立启动时进入：驱动器侧栏 + 目录资源管理器 + 多标签预览 + AI 协助 + **文件编辑与转换工具集**（图片处理、文档/PDF/文本编辑、格式转换）。产物一律另存，**原文件永不被覆盖**。
+
+同时落地三件已定位根因的修复：
+
+1. **启动卡顿** — `viewer_drives` 原是同步 `#[tauri::command]`，内部对每个盘符做 `std::fs::metadata`（`apps/viewer/src-tauri/src/commands.rs:429-453`）。同步命令默认在主线程执行，而 `GetFileAttributesEx` 打在断开的网络映射盘上会阻塞到 SMB 超时（可达数十秒）。前端还把首屏路径挂在驱动器列表后面（`apps/viewer/src/App.tsx:207` 与 `:212-220` 两次调用 `drives()`，第二次拿到结果才 `setCurrentPath`）。→ 驱动器列表改为「异步 + 不做文件系统 IO + 不阻塞首屏 + 侧栏加载态 + 1.5s 超时降级」。
+2. **全屏不平铺** — `apps/viewer/src/styles.css` 的 `.explorer { flex: 1; min-width: 280px; max-width: 460px; }` 把中栏宽度钉死在 460px，`.sidebar` 200px、`.ai-side` 320px 又是固定值；窗口没有任何全屏/最大化状态处理。宽屏下剩余空间全是空底色。→ 三栏按比例铺满 + 可拖拽分隔条 + 全屏/最大化状态自适应。
+3. **彩色类型图标** — 现状是 lucide 单色图标。→ 建「扩展名 → 专属图标 + 专属色」的类型系统，文件夹有独立图标；桌面端 `FileAssocTab` 的关联后缀列表同步显示对应类型图标。
+
+**归属**：`packages/preview`（`@hermix/preview`）继续是唯一渲染层，desktop 与 viewer 共用；类型判定、图标映射、渲染器样式归共享包，桌面端 `code-view.css` 只留 `.code-*` 与桌面外壳（见 `scripts/check-preview-layer.mjs`）。编辑/转换的**计算内核**归 `apps/viewer/src-tauri`（Rust），交互面板归 viewer 前端——**编辑器不进共享包**：共享包同时被 desktop 消费，把编辑器塞进去会让 desktop 白背一份 CSS 与 token 契约。
+
+**执行方式**：本篇既是立项记录，也是**执行台账**（见下「## 执行台账」），台账已随每个子任务同步更新。
+
+## Alternatives considered
+
+1. **驱动器标签继续用 `std::fs::metadata`** —— 拒绝：这是启动卡顿的物理根因。改用 `GetDriveTypeW` 判「本地磁盘 / 网络驱动器 / 可移动 / 光驱」不碰文件系统，标签文本随之降级，换来的是断网映射盘不再冻结启动。
+2. **首屏等驱动器就绪再渲染** —— 拒绝：盘符枚举是毫秒级的 IO，代价却是要等网络盘超时。改为首屏用兜底路径（上次访问目录 → 用户目录 → 首个可用盘）直接渲染，驱动器列表后到后替换。
+3. **纯前端 Canvas 做全部图片处理** —— 备选但未全采纳：Canvas 交互与预览快、零依赖，但格式编解码覆盖面（尤其 ico 多尺寸打包、tiff、heic）与批处理弱。最终形态是「前端 Canvas 负责交互与即时预览，Rust 侧负责编码/封装与落盘」，Rust 侧只用 `image` 一类纯 Rust 库。
+4. **引入 monaco / codemirror 做代码编辑** —— 拒绝：体量与编译/打包成本远超收益，且预览层已有 `CodeBlock` 渲染。纯文本编辑用原生 `textarea` + 现有 `textDecode` 编码探测。
+5. **引入 vscode-icons / iconify 全量图标集** —— 拒绝：真彩色图标集体积大、许可各异；`lucide-react`（viewer 已装 `^0.511.0`）是单色，配色后即达「一眼分辨类型」的效果。最终形态是「lucide 单色图标 + 每类型专属色」，图标组件收进共享包由两端共用。
+6. **纯净模式用 CSS 隐藏侧栏实现** —— 拒绝：隐藏的 DOM 仍会加载与订阅，纯净模式的意义就是轻。改为不渲染侧栏组件本身。
+7. **编辑产物原地覆盖** —— 拒绝（用户硬要求 + 数据安全）：所有编辑/转换/AI 产物写到新路径（`<name>.edited.<ext>` / `<name>.ai.<ext>`），原文件字节不变，可用 sha256 前后比对验证。
+8. **把「文件关联」从 desktop 搬到 viewer** —— 拒绝：关联登记是 `HKCU` 系统级写操作，已有 `file_assoc_list` / `file_assoc_set` 在 desktop 侧。viewer 只做被关联唤起时的行为。
+9. **一次性重写 viewer 全部代码** —— 拒绝：违反仓库「不堆屎山 + 六步决策阶梯」。按子任务逐个交付、逐个提交，任何一步都可 revert。
+10. **饱和度用 `image` 库现成算子** —— 拒绝：`image 0.25` 的 `imageops/colorops.rs` 只有 grayscale/invert/contrast/brighten/huerotate/dither/index_colors，**没有饱和度**。改为两端各手写一份 `gray + (c - gray) * factor`（`gray = (max + min) / 2`），Rust 侧用单测锁公式，前端逐位复刻。
+11. **WebP 有损在 Rust 侧编码** —— 拒绝：`image 0.25` 的 WebP 编码器**只支持无损**（`codecs/webp/encoder.rs:12` 明写）。有损 WebP 走前端 `canvas.toBlob('image/webp', q)` 出字节，Rust 只负责落盘。
+12. **ico / tiff 也交给浏览器解** —— 拒绝：浏览器解不了这两类。改由 Rust `image_rasterize` 转 PNG 再给前端（降采样兜底图），且**原图尺寸必须另问 Rust**（`image_info`）——拿兜底图尺寸当原图尺寸会让裁剪坐标整体缩错。
+13. **撤销/重做存像素快照** —— 拒绝：4000×3000 的 dataURL 快照 × N 步 = 内存爆炸。改为存 op 列表，重做即重放。
+14. **文字图层进 op 链** —— 拒绝：op 链是前后端一一对应的纯几何/色彩算子，文字图层是浏览器渲染的合成层。文字图层作为独立图层由浏览器渲染，导出时走 `image_write_composite` 合成落盘。
+15. **未知扩展名兜底当文本** —— 拒绝：Rust 侧继续用白名单判定并回 `unsupported`，前端出「元信息卡」。兜底解文本会让 GBK 兜底把二进制解成乱码——这正是共享预览层笔记里已修过的形态。
+16. **媒体走 IPC 字节通道** —— 拒绝：媒体动辄几百 MB，走「读字节 → base64 → IPC → 前端解回」要搬两遍。改走 Tauri **asset 协议**（原生支持 Range，媒体元素可边下边播、可拖进度条）。
+17. **docx / pptx / xlsx 写回** —— 本轮不做：需要 zip 读写的**第 3 个**直接依赖，超出「Rust 侧新增直接依赖 ≤ 2 族」的预算。docx/pptx/xlsx 维持只读预览。
+
+## Consequences
+
+- **不取代旧笔记。** 本篇是 `2026-10-13-hermix-viewer-resource-manager.md`（三栏形态 + 抽 `@hermix/preview` 包）与 `2026-10-09-standalone-file-viewer.md` 的**后续**，共享包与三栏决策仍以那两篇为准；本篇不推翻它们，只在其上加模式分层、编辑转换能力与三处修复。
+- **依赖面变大但下载量为零**：新增 3 个 Rust 直接依赖（`image` / `tauri-plugin-dialog` / `lopdf`）+ 1 个 tauri feature（`protocol-asset`），三者及其传递依赖**全部已在工作区 `Cargo.lock` 中**（`hermix-tools` / `hermix-plugin` / desktop 在用），**新增下载 = 0**。前端 npm 新增 = 0。
+- **代码量在预算内**：手写源码净增 ≈ 5,693 行（预算 6,000），单文件最大 `pdf_ops.rs` 1,187 行（门禁告警线 2,500）。
+- **编译速度**：`cargo check --workspace --all-targets` 本轮 4.49s（sccache 热）。工作区并集已含 `image` 全 features，viewer 单包冷编译增量实测在 +60~120s 区间，workspace 并集增量 ≈ 0。
+- **viewer 尚不可打包分发**：`apps/viewer/src-tauri/tauri.conf.json` 的 `bundle.active = false`，它是独立开发态应用。本任务不负责打包发布，只保证 `cargo check` / `tsc` / `vitest` / `vite build` 四条链路绿。
+- **共享层风险已兑现又已控住**：`packages/preview` 是 desktop 与 viewer 的共享面，本轮改了它（`FileTypeIcon` 收进包内 + `previewUtils` 补 5 行）。两端 `tsc --noEmit` 与 desktop 的 vitest（35 文件 / 330 用例）全绿。
+- **工作区开工时不干净**：仓库有大量他人未提交改动。本任务每个 commit 只 add 触及的具体文件路径，全程未用 `git add -A` / `git commit -a`。
+- **门禁脚本不可直接执行**：本机没有可用 bash（`C:\Windows\System32\bash.exe` 只是 WSL 启动器且无发行版，Git Bash 也不存在），`scripts/ci-gate.sh` / `check-notes.sh` / `check-hygiene.sh` / `check-sidecar-freshness.sh` 无法运行，每个子任务用等价命令复刻。notes 结构检查另补了 `scripts/check-notes.ps1`（bash 版等价复刻，含 CRLF 归一化），门禁脚本本体保持 bash 不动。
+
+## Reintroduction conditions
+
+- 若「彩色类型图标」最终选了轻量方案（lucide + 配色）而用户仍要求真彩色多色图标集，则在图标集体积与许可问题有解时重新引入。
+- 若 PDF 结构级编辑（删页 / 插页 / 重排）被证明必须引入完整 PDF 渲染后端，则在 Rust 侧 PDF 栈落地时重新评估。
+- 若纯净模式在实际使用中证明与重量模式差异不足以抵消复杂度，则合并回单模式 + 可折叠侧栏。
+- 若 docx / pptx / xlsx 写回的需求确认，则引入 zip 读写依赖（Rust 直接依赖增至 4 族，需重新评估预算）。
+- 若 WebView2 的媒体 codec 在目标机器上不可用（依赖 Edge 媒体组件），则音视频预览需退回到「用系统程序打开」。
+
+## 执行台账
+
+**规则**：状态先于代码落盘——开工置 `doing` + 心跳 → 动代码 → 过门禁 → 提交 → 置 `done` + 写 commit SHA。表格行只增不减，状态只走 `pending` → `doing` → `done`。
+
+| # | 子任务 | 状态 | 心跳 | 提交 SHA |
+|---|--------|------|------|----------|
+| F0 | 基线记录（门禁现状 / 代码行数 / 编译耗时 / 脏树快照） | done | 23:38 | 106bd5f2 |
+| F1 | 启动卡顿：驱动器列表异步化 + 侧栏加载态 | done | 23:52 | 106bd5f2（Rust）+ 93c6c499（前端） |
+| F2 | 全屏/最大化平铺 + 可拖拽分隔条 | done | 23:45 | 84d126a9 |
+| F3 | 彩色类型图标系统（列表 + 关联后缀 + 文件夹） | done | 23:50 | e9834e33 |
+| F4 | 双模式：纯净模式 / 重量模式与切换 | done | 23:52 | 4c124829 |
+| F5 | 重量模式：图片处理工具集 | done | 00:20 | 16576f2a（Rust 内核）+ 273e4518（前端编辑器） |
+| F6 | 重量模式：文本 / 文档 / PDF 编辑与转换 | done | 00:33 | f42545f8 + 3643173c（独立审查修复） |
+| F7 | AI 协助：一键入对话 + 改图提示词 + 原图保留 | done | 23:52 | 16bbb5be |
+| F8 | 常见文件类型覆盖矩阵（预览 / 编辑下限） | done | 00:36 | df3c8f26（后端白名单 + 图标 + 元信息卡）+ 08621066（媒体预览） |
+| F9 | 收尾：一致性审查 + 全量门禁 + 笔记归档 + 总结 | done | 00:47 | 本篇归档提交 |
+
+## 交付现状
+
+### 新增依赖清单
+
+| 依赖 | 版本 / feature | 用在哪 | 为什么现有能力不够 | 下载量 | 编译增量 |
+|------|---------------|--------|------------------|--------|----------|
+| `image` | 0.25（`default-features = false`，features = png/jpeg/webp/gif/bmp/ico/tiff） | F5 图片编解码内核 | 浏览器 Canvas 编解码覆盖不到 ico 多尺寸打包与 tiff | 0（`Cargo.lock` 已有 0.25.10） | 工作区并集已含 image 全 features，并集增量 ≈ 0；viewer 单包冷编译 +60~120s |
+| `tauri-plugin-dialog` | 2 | F5 保存 / 打开对话框 | 原生平台能力优先于库：自绘文件选择器等于重做一遍系统对话框 | 0（lock 已有 2.8.2） | 极小 |
+| `lopdf` | 0.34（不开 `embed_image`） | F6 PDF 结构级操作（删/插/重排/旋转/文本替换/图转 PDF） | 纯 Rust、可做结构级页操作，不引入 C 依赖 | 0（lock 已有；传递依赖 chrono/encoding_rs/flate2/nom/weezl 亦全在 lock） | 中等 |
+| `tauri` feature `protocol-asset` | 2 | F8 媒体预览 | asset 协议原生支持 Range，媒体可边下边播；不走 IPC 搬字节 | 0（仅 feature） | 无 |
+| 前端 npm | — | — | — | **0**（`lucide-react` 等已在 viewer） | — |
+
+`avif` feature 明确不开：`ravif → rav1e` 的 asm feature 需要 nasm，MSVC 机器上没有。
+
+### 代码行数增量
+
+| 目录 | 基线（2026-10-19 23:38） | 现状 | 增量 |
+|------|------|------|------|
+| `apps/viewer/src`（前端） | 11 文件 / 1,895 行 | 17 文件 / 4,954 行 | +6 / +3,059 |
+| `apps/viewer/src-tauri/src`（Rust） | 3 文件 / 740 行 | 6 文件 / 2,900 行 | +3 / +2,160 |
+| `packages/preview/src`（共享包） | 35 文件 / 6,116 行 | 36 文件 / 6,562 行 | +1 / +446 |
+| `apps/desktop-tauri/src` | — | — | +15（`FileTypeIcon` 迁出包内 -183/+2，`SettingsShell` +7，其余为 import 调整） |
+
+`git diff --shortstat 106bd5f2..HEAD` = **30 文件、5,954 插入、129 删除**，其中 132 行落在 tauri 自动生成的 `apps/viewer/src-tauri/gen/schemas/*.json`，**手写源码净增 ≈ 5,693 行**，在 6,000 行预算内。单文件最大 `pdf_ops.rs` 1,187 行 / `ImageEditor.tsx` 986 行，均低于 2,500 行告警线。
+
+### 门禁证据（2026-10-20 00:38–00:44 实跑）
+
+| 命令 | 结果 |
+|------|------|
+| `cargo check --workspace --all-targets` | exit 0（4.49s，sccache 热，0 warning） |
+| `cargo test -p hermix-viewer --lib` | **27 passed / 0 failed**（3.15s） |
+| `apps/viewer` `node_modules/.bin/tsc --noEmit` | exit 0 |
+| `apps/desktop-tauri` `node_modules/.bin/tsc --noEmit` | exit 0 |
+| `apps/desktop-tauri` `node_modules/.bin/vitest run` | **35 文件 / 330 用例全绿**（17.67s） |
+| `check-design-guard.mjs`（cwd=apps/viewer） | `DesignGuard: clean` |
+| `check-design-guard.mjs`（cwd=apps/desktop-tauri） | `DesignGuard: clean` |
+| `node scripts/check-preview-layer.mjs` | OK（64 个类名全部有规则；42 个 token 两侧齐备） |
+| `node scripts/check-theme-tokens.mjs` | exit 0（dark 103/103、ink-green 103/103、无孤儿引用、无裸色） |
+| `pwsh -NoProfile -File scripts/check-notes.ps1` | `notes: OK` |
+| `npx -y impeccable@4.1.0 detect apps/viewer/src` | exit 0 |
+| `apps/viewer` `vite build` | exit 0（11.87s） |
+
+### F8 常见文件类型覆盖矩阵
+
+Rust `classify()` 的白名单与共享预览层分派表**逐项对齐**——本轮开工前两端已分叉 57 个扩展名（后端认得、前端不认，或反之），F8 补齐后由 `classify_matches_shared_preview_readers` 回归测试钉住。
+
+| 类别 | 扩展名 | 预览下限 | 编辑 / 转换下限 |
+|------|--------|---------|-----------------|
+| 位图 | png / jpg / jpeg / jfif / gif / webp / bmp / ico / tif / tiff | 内联预览；ico / tiff 由 Rust `image_rasterize` 转 PNG | 重量模式全量编辑：裁剪 / 旋转 / 翻转 / 缩放 / 拼接 / 转黑白 / 亮度 / 对比度 / 饱和度 / 模糊 / 马赛克 / 加文字 / 格式转换 / 批量 |
+| 矢量 | svg | 内联预览 | 无——`image` 解不了矢量，编辑按钮不露出（给一个点开就报错的按钮不如不给） |
+| PDF | pdf | pdf.js 渲染 | 页删除 / 插入空白页 / 重排 / 旋转 / 提取 / 图片转 PDF / 文本层替换 |
+| 文本与代码 | 60+（md / txt / json / yaml / toml / html / css / js / ts / tsx / py / rs / go / sql / sh …） | 代码视图 / Markdown 渲染 / HTML 沙箱 | 行内编辑 + 另存（编码探测复用 `textDecode`） |
+| 表格 | xlsx / xlsm / xls / csv / tsv | ExcelJS / SheetJS / Papa 解析 | 只读（写回需 zip 第 3 个直接依赖，本轮不做） |
+| 文档 | docx / docm / dotx / dotm | docx-preview 渲染 | 只读（同上） |
+| 演示 | pptx / pptm / ppsx / ppsm / potx / potm | pptx-browser 渲染 | 只读 |
+| 老 Office | doc / ppt / wps / et / dps / rtf / odt / ods / odp | 文本表示 | 无——「用系统程序打开」兜底 |
+| 音视频 | mp3 / wav / m4a / aac / flac / ogg / opus / wma / aiff / mid；mp4 / m4v / mov / webm / ogv / mkv / avi / wmv / flv / mpg / mpeg / 3gp | asset 协议原生播放（Range） | 无——浏览器解不了的容器触发 error 事件后落回「用系统程序打开」 |
+| 其它 | 未列扩展名 | 元信息卡（大小 / 修改时间 / 类型）+「用系统程序打开」 | 无 |
+
+### 已知限制与未验证项
+
+**未做真机 GUI 验证**——本机没有可驱动 Tauri 窗口的自动化手段，以下全部是**代码级保证**而非**运行级证据**：
+
+- 媒体 codec 支持：WebView2 的 H.264 / AAC 依赖 Edge 媒体组件，未实测。mkv / avi / wmv / flv / mpg 大概率不可解（已设计为落回「用系统程序打开」）。
+- asset 协议在 Windows 上的路径形态（`convertFileSrc` + Range）未在真实播放器里跑过。
+- PDF 产物在 pdf.js / Acrobat 中的实际渲染未验证。
+- 图片编辑 / 拼接 / 文字导出的视觉结果未验证。
+- 纯净 ↔ 重量模式的跨启动持久化未实测（代码已写）。
+- 启动卡顿的验收指标「断网映射盘下冷启动首屏 < 1.2s」**未实测**——本机没有断网映射盘可复现该条件；根因（同步命令 + 文件系统 IO）已消除，但指标本身无证据。
+
+**功能边界（有意为之，非缺陷）**：
+
+- docx / pptx / xlsx 写回未做（依赖预算）。
+- PDF 文本替换只改内容流文本，不动字形、表格结构与 XObject。
+- GIF 动图编辑语义定为「取首帧并明示」。
+- EXIF 方向修正未做（`image` 不自动应用 EXIF orientation）。
+
+## 各子任务要点
+
+### F0 基线（2026-10-19 23:38 实测）
+
+| 项目 | 结果 |
+|------|------|
+| `cargo check -p hermix-viewer --all-targets` | exit 0，2m13s（sccache 热） |
+| `apps/viewer` tsc --noEmit | exit 0 |
+| `apps/desktop-tauri` tsc --noEmit | exit 0 |
+| `apps/desktop-tauri` vitest run | 35 文件 / 330 用例全绿，exit 0 |
+| design guard（desktop + viewer 两个 cwd） | clean |
+| preview-layer guard | OK（64 个类名 / 42 个 token） |
+| `npx -y impeccable@4.1.0 detect apps/viewer/src` | exit 0 |
+| 行数基线 | viewer 前端 11 文件 / 1895 行；viewer rust 3 文件 / 740 行；packages/preview 35 文件 / 6116 行 |
+
+**两个必须记住的环境事实**：
+
+1. **本机没有可用的 bash**。`C:\Windows\System32\bash.exe` 只是 WSL 启动器，且未安装任何发行版；Git Bash 也不存在。因此 `scripts/ci-gate.sh`、`scripts/check-notes.sh`、`scripts/check-hygiene.sh`、`scripts/check-sidecar-freshness.sh` **无法直接执行**——每个子任务用等价命令复刻（cargo check / 两处 tsc / vitest / design guard ×2 / preview-layer / impeccable detect + notes 结构复核）。这不是代码缺陷，是本机缺件；门禁脚本本身保持 bash 不动。
+2. **开工时工作区不干净**：100 个文件已被暂存（他人/上一轮的在途改动：预览共享层归属、查看器预览引擎懒加载、文本解码、CSP 修复、组合注入等）。这批改动已由 `106bd5f2` 单独落地；F1 的 Rust 侧改动被同一次提交捎带进去（见 F1 行的 SHA 说明）。
+
+**既有门禁失败（与本任务无关，已修）**：`docs/MCPHUB_BORROWINGS.md` 留在 `docs/` 顶层却不在 `scripts/check-notes.sh` 的 `ALLOWED` 白名单里 → notes 结构检查必红（该文件来自提交 `0b72f4f4`，当时归档了 MCPHUB 借鉴笔记却没同步白名单）。F9 已把它加进白名单。
+
+### F1 提交归属说明
+
+F1 的改动被拆在两个提交里，原因是**看门狗与主会话并发提交**（首次执行时台账还没落 doing 状态，看门狗判成「有 pending 无 doing」而接管，与主会话同时改同一个工作树）：
+
+- `106bd5f2` — 102 文件：开工前已暂存的在途改动（100）+ F1 的 Rust 侧（`apps/viewer/src-tauri/Cargo.toml` / `src/commands.rs` / `src/lib.rs`）。归属混合。
+- `93c6c499` — 2 文件：F1 的前端侧（`apps/viewer/src/App.tsx` / `src/styles.css`）。
+
+**已修的根因**：看门狗的接管判据改为「先读存活标记 `<TMPDIR>\hermix-viewer-task\live.txt`，20 分钟内更新过 = 主会话活着，只报告不动手」。
+
+### F5 图片处理：调研结论
+
+调研只读完成，事实逐条落到本机 cargo registry 源码与依赖树，不是凭记忆。
+
+**依赖：零新增下载。** `image 0.25.10` 已在 `Cargo.lock`（工作区依赖，`hermix-tools` / `hermix-plugin` 都在用），`tauri-plugin-dialog 2.8.2` 已在 lock（desktop 在用）。前端 npm 增量保持 0。
+
+**三条决定实现形态的硬事实**：
+
+1. **`image` 没有饱和度** → 饱和度手写 HSL 调整，两端各一份。
+2. **`image` 的 WebP 编码只支持无损** → WebP 有损必须走前端 `canvas.toBlob('image/webp', q)` 出字节、Rust 只负责落盘。
+3. **浏览器不解 ico / tiff** → 这两类预览必须由 Rust 转 PNG 再给前端（`image_rasterize` 命令）。
+
+**另外三条**：`image` 不自动应用 EXIF 方向（EXIF 归 F8）；GIF 动图编辑语义定为「取首帧并明示」；`avif` feature 绝不开。
+
+**ICO 多尺寸不用手写字节布局**——`image` 已给 `IcoFrame::as_png` + `IcoEncoder::encode_images`，比仓内 `crates/hermix-plugin/src/icon_library.rs` 的手工装配更可靠。
+
+**编辑器放 `apps/viewer/`，不进 `packages/preview`**：共享包同时被 desktop 消费，把编辑器塞进去会让 desktop 白背一份 CSS 与 token 契约。`packages/preview` 在 F5 全程零改动。
+
+**像素运算的两份实现用「op 列表 + 公式约定」钉死**：交互预览在前端 Canvas（60fps），导出在 Rust（权威）；亮度=加法、对比度=以 127.5 为中心的系数、灰度=Rec.601，Rust 侧用单测锁公式。撤销/重做走 op 列表而非像素快照。
+
+**仓内先例比外部项目更该抄**：`apps/desktop-tauri/src/components/ScreenshotEditor.tsx`（马赛克降采样 + 最近邻放大、`ctx.fillText` 加中文、拖拽裁剪）、`crates/hermix-plugin/src/icon_library.rs`（多尺寸 ICO）、`crates/hermix-tools/src/tools/file_converter.rs`（读→编→写骨架）。外部参考（fabric.js 的「源图 + 滤镜数组 + 每次重算」模型、cropperjs 的比例锁定数学、imagepipe 的「一 op 一纯函数」组织、Loupe/Gwenview 的「查看与编辑分模式」结构）只借鉴机制，不引入代码。
+
+### F5 前端编辑器接入（实施要点）
+
+Rust 内核（`16576f2a`）落地后，前端编辑器接入时改了三处**真实缺陷**，不是接线：
+
+1. **格式 ↔ 扩展名必须一致**。原实现里 `default_output_path` 用的是**源文件**扩展名，于是「png 转 webp」会产出名为 `.edited.png`、内容是 WebP 的文件。改为：格式先归一化（`jpeg`→`jpg`、`tif`→`tiff`），默认产物名用**目标格式**扩展名；另存对话框里若改了后缀，**扩展名反过来决定编码格式**（名实必须一致）。Rust 侧加了 `normalize_format` + 3 个单测锁住。
+2. **坐标系三步换算**。指针事件给的是 CSS 像素，画布 backing store 是设备像素，op 里的坐标是原图像素空间——三者要串起来：`原图 = CSS × (画布宽/画布CSS宽) ÷ previewScale`。原先的写法漏了 CSS→设备像素这一跳，裁剪框会整体偏掉。裁剪选框也必须与 canvas 像素级贴合，所以加了 `.img-canvas-frame`（`position:relative; display:inline-block`）包住 canvas 与选框。
+3. **原图尺寸要问 Rust**。浏览器解不了 ico/tiff 时走 `image_rasterize` 兜底，兜底图是**降采样**的；若拿它的尺寸当原图尺寸，裁剪坐标就整体缩错了。改为先 `image_info` 拿原图真身尺寸，几何一律按原图算（画面略糊但几何正确），拿不到才回退到解码尺寸。
+
+另外两处实现纪律：`undo/redo` 不在 `setState` 的 updater 里再 `setState`（updater 必须纯函数，StrictMode 下会跑两遍）；`ImageEditor` 走 `React.lazy` 懒加载（编辑器是重量模式的重量功能，纯净模式与文本预览不该为它付首屏 bundle）。
+
+编辑能力只在**重量模式**露出（`PreviewHost` 新增 `canEdit` prop），且只对栅格格式露出（SVG 是矢量，`image` 解不了）。
+
+### F6 PDF / 文本编辑：语义钉死与审查发现
+
+**PDF 页号语义钉死三条**（实现前先钉，否则前后端必然打架）：
+
+1. 列表项要么是**原页号**，要么是**空白页**——不引入「虚拟页号」第三种东西。
+2. op 顺序固定：`keep` → `insertBlank`（最终位置**从小到大**插）→ `rotate`（用**最终页号**）。
+3. 旋转用**绝对**角（0/90/180/270），不是相对增量。
+
+**`pdf_ops` 提供**：删页 / 提取页 / 重排 / 旋转 / 插空白页（op 列表**顺序执行**）、`pdf_info`（含每页绝对 rotation）、`pdf_replace_text`（命中数统计，**0 命中报错**）、`images_to_pdf`、`write_text`（补 src_path 守卫）。
+
+**独立审查（`verifier` 子 agent）发现并已修**：
+
+1. **硬链接绕过路径守卫** —— 原守卫只比路径字符串，`fs::hard_link` 出来的同 inode 不同路径能把产物写到源文件头上。新增 `apps/viewer/src-tauri/src/paths.rs` 统一三层判据：规范化绝对路径 + 小写 → `canonicalize` → **文件身份**（`GetFileInformationByHandle` 的 volume serial + file index）。实测本机可建硬链接，测试走真实分支。
+2. **LeafPage 属性继承丢失** —— 插空白页时未继承 crop_box / rotate，导致插页尺寸或朝向与原页不一致。
+3. **加密 PDF 报错不准** —— 按 `/V` 分版本判定（`/V 4` 用 RC4/AES-40，`/V 5` 用 AES-256），不再一律报「不支持」。
+4. **静默 no-op** —— Count 与 Kids 数量不一致时 op 应当报错而不是默默跳过。
+5. **编码处理** —— 移除 gb18030（PDF 标准字体编码不认它），未知编码明确报错而非乱码。
+
+三处写盘（图片 / PDF / 文本）共用 `paths.rs` 一份守卫。
+
+### F8 覆盖矩阵：后端白名单必须与共享预览层对齐
+
+开工时 `classify()` 与共享层分派表**分叉 57 个扩展名**——后端认得前端不认的类型会落进「不支持」，前端认得后端不认的类型会拿到错误的读取方式。F8 补齐 57+ 个扩展名，并给 `IMAGE_EXT_MIME` 补 avif / jfif。`FileTypeIcon` 的 LOOK 表补约 70 项（字体 / 音视频 / Office 变体）。
+
+`PreviewHost` 的错误态从「一句错误文案」改成**元信息卡**（大小 / 修改时间 / 类型 +「用系统程序打开」），不支持的类型不再是死胡同。
+
+**媒体走 asset 协议**：`convertFileSrc` + Range，需 tauri `protocol-asset` feature + CSP 加 `media-src 'self' asset: blob: data:` + assetProtocol scope 放开（viewer 本就是文件浏览器，能读任意路径，asset 协议没有引入新权限）。

@@ -36,7 +36,7 @@ Status: implemented — viewer 已接入共享渲染包并重写为三栏资源�
 - viewer 端有自己的"资源管理器 UX"：路径栏（可编辑 + breadcrumb）、后退/前进/上一级/刷新、隐藏文件开关、当前目录子串搜索、列表（名称/大小/修改时间）、右键菜单（进入/复制路径/系统打开/资源管理器中显示）、多 tab 预览、Markdown/Excel/Word/PPT/HTML/图片/PDF/代码/纯文本全保真。
 - 旧 `apps/viewer/src/md.ts`（viewer 自研极简 Markdown 渲染）随重写删除——它正是备选方案 4 拒绝的那条路，留着就是死代码。
 - 字节上限在 viewer Rust 侧按扩展名给（10MB 文本/图片/PDF、**5MB html**、50MB xlsx/xls/docx/csv、100MB pptx），超过返错误由渲染层提示"用系统程序打开"；桌面端沿用旧的 50MB 文本上限（与 markitdown 配合，未改）。html 单独压到 5MB 是因为它要整页进沙箱 iframe，体积大的页面在预览里没意义。
-- 引擎按需分包：exceljs (939KB) / PdfView (438KB) / PptxView (155KB) / DocxView (174KB) / xlsx (429KB) / satteri wasm (3MB) 全部独立 chunk —— viewer 构建警告中仅 4 个超过 500KB（pdf.worker / satteri wasm / exceljs / 主包），开 Markdown / 文本不会为引擎付下载成本。
+- 引擎按需分包：exceljs (940KB) / PreviewSurface (921KB) / PdfView (438KB) / xlsx (429KB) / docx-preview (174KB) / PptxView (155KB) / satteri wasm (3MB) 全部独立 chunk；重量模式的编辑面板也各自独立（ImageEditor 20KB / PreviewHost 12KB / PdfPageEditor 8KB / TextEditor 4KB / imageOps 4KB），开 Markdown / 文本不会为引擎与编辑器付下载成本。
 - 隐藏文件用 Windows `FILE_ATTRIBUTE_HIDDEN = 0x2`（cf-windows 用 `MetadataExt::file_attributes()`），非 Windows 平台用 `.` 兜底 —— 项目是 Windows-only 但留好跨平台路径便于单测。
 - RFC 3339 字符串化时间走极简实现（`civil_from_days` Howard Hinnant 算法），不引 chrono —— viewer 是 sidecar，多一个 crate 不划算。
 - `bases/viewer/capabilities/default.json` 不需要手动注册新命令（Tauri v2 同 crate 自定义命令默认允许）。
@@ -108,3 +108,13 @@ Status: implemented — viewer 已接入共享渲染包并重写为三栏资源�
 - `apps/viewer tsc --noEmit` exit 0（这条同时覆盖包的类型，因为 viewer 经 node_modules 引包）
 - `apps/desktop-tauri vitest run` 31 文件 / 297 用例 全绿（33.56s；包内 `resolveKind` 7 + `preview-md-list` 4 + `softBreaks` 5 + workbook 26 均从 `node_modules/@hermix/preview/src/` 路径跑到）
 - `cargo check -p hermix-viewer` / 两个 `vite build` / `desktop tsc` **本轮未跑**（按要求不编译；Rust 侧改动只有注释，无行为变化）
+
+## 后续变更（2026-10-20）
+
+本篇确立的三栏资源管理器形态与共享包决策**未被推翻**，[hermix-viewer 双模式化与全能力重构](../feature/2026-10-19-hermix-viewer-overhaul.md) 在其上叠加了模式分层与编辑转换能力。以下是**事实层面的变化**，细节与理由在那篇：
+
+- **三栏布局不再钉死宽度**。原 `.explorer { max-width: 460px }` 导致全屏下大片留白，现改为按比例铺满 + 可拖拽分隔条 + 全屏/最大化自适应。
+- **viewer 分成两种模式**：纯净模式（被文件关联唤起，只渲染预览面，**不产生侧栏 DOM**）与重量模式（资源管理器 + AI + 编辑工具集）。本篇描述的「资源管理器 UX」属重量模式。
+- **类型图标收进共享包**：`apps/desktop-tauri/src/components/FileTypeIcon.tsx` 迁到 `packages/preview/src/FileTypeIcon.tsx`，走独立子路径出口（不进 barrel）以保住懒加载分块，桌面端与 viewer 共用一份彩色版本。
+- **编辑器不进共享包**：`apps/viewer/src/image/`、`apps/viewer/src/document/` 的编辑面板留在 viewer 侧——共享包同时被 desktop 消费，把编辑器塞进去会让 desktop 白背一份 CSS 与 token 契约。
+- **Rust 侧 `classify()` 与共享层分派表对齐**：开工时两者分叉 57 个扩展名，已补齐（见 [共享预览层的样式归属与 Tailwind 边界](../architecture/2026-10-19-shared-preview-layer-ownership.md) 里的同款记录）。**两侧各有一份扩展名表是分叉的根因，新增类型时必须同改两侧。**

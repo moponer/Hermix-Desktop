@@ -14,7 +14,7 @@ Status: implemented — 2026-10-10 交付：apps/viewer（hermix-viewer.exe，�
 
 - **多标签浏览**：单 WebView 内标签切换（不做每标签一窗口——WebView2 实例 ~100MB/个）；Rust 后端流式读文件，打开速度的真正来源在后端而非渲染层。
 - **文件类型支持**：复用现有转换链——docx/xlsx/pptx 经 `officecli`/`markitdown` sidecar 转 Markdown 后用现有渲染器（预览级，非编辑级；「用系统程序打开」按钮兜底编辑需求）；PDF 走 read_pdf 能力；图片/文本/代码/MD 直接渲染。
-- **类型图标**：不同扩展名不同图标（纯前端资源表）。
+- **类型图标**：不同扩展名不同图标。图标组件已收进共享包 `packages/preview/src/FileTypeIcon.tsx`（独立子路径出口 `@hermix/preview/FileTypeIcon`，不进 barrel 以保住预览引擎的懒加载分块），桌面端与 viewer 共用同一份，每类扩展名配专属色。详见 [hermix-viewer 双模式化与全能力重构](../feature/2026-10-19-hermix-viewer-overhaul.md)。
 - **AI 右栏（可折叠）**：内嵌聊天面板连本地 server 的 agent 通道，上下文自动携带当前文件路径/选中文本；快捷指令（总结/检查/润色）形态同 WorkBuddy 参考。
 - **与主程序互调**：主程序「在查看器中打开」→ 命令行参数/IPC 传路径给 viewer；主程序右栏选「全屏」时反向调用 viewer 打开（独立进程架构的自然结果）。
 
