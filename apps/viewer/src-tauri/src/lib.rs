@@ -111,6 +111,9 @@ pub fn main() {
             image_ops::image_apply,
             image_ops::image_batch,
             image_ops::image_save_dialog,
+            image_ops::image_open_dialog,
+            image_ops::image_montage,
+            image_ops::image_write_composite,
         ])
         .plugin(tauri_plugin_dialog::init())
         .setup(move |app| {

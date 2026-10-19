@@ -236,10 +236,32 @@ pub fn encode(
 //  产物路径：原图保护
 // ════════════════════════════════════════════════════════════════════
 
+/// 归一化输出格式名：`jpeg`→`jpg`、`tif`→`tiff`；不认识的一律 None
+/// （None = 不该拿它当编码格式）。
+pub fn normalize_format(s: &str) -> Option<String> {
+    let f = s.trim().to_ascii_lowercase();
+    Some(match f.as_str() {
+        "png" => "png",
+        "jpg" | "jpeg" => "jpg",
+        "webp" => "webp",
+        "bmp" => "bmp",
+        "tiff" | "tif" => "tiff",
+        "gif" => "gif",
+        "ico" => "ico",
+        _ => return None,
+    }
+    .to_string())
+}
+
 /// 默认产物名：`<原名>.edited.<扩展名>`（同目录）。
-pub fn default_output_path(src: &Path) -> PathBuf {
+///
+/// `ext` 是**目标格式**的扩展名——格式转换时必须跟着格式走，否则会出现
+/// 「png 转 webp，产物却叫 .edited.png」这种名实不符的文件。
+pub fn default_output_path(src: &Path, ext: Option<&str>) -> PathBuf {
     let stem = src.file_stem().map(|s| s.to_string_lossy().to_string());
-    let ext = src.extension().map(|s| s.to_string_lossy().to_string());
+    let ext = ext
+        .map(str::to_string)
+        .or_else(|| src.extension().map(|s| s.to_string_lossy().to_string()));
     let dir = src.parent().unwrap_or_else(|| Path::new(""));
     let name = match (stem, ext) {
         (Some(s), Some(e)) => format!("{s}.edited.{e}"),
@@ -272,10 +294,10 @@ fn same_file(a: &Path, b: &Path) -> bool {
 }
 
 /// 产物路径守卫：与源文件相同一律拒绝（哪怕前端传了同一个路径）。
-pub fn safe_output_path(src: &Path, requested: Option<&str>) -> Result<PathBuf, String> {
+pub fn safe_output_path(src: &Path, requested: Option<&str>, ext: Option<&str>) -> Result<PathBuf, String> {
     let candidate = match requested.map(str::trim).filter(|s| !s.is_empty()) {
         Some(p) => PathBuf::from(p),
-        None => default_output_path(src),
+        None => default_output_path(src, ext),
     };
     if same_file(&candidate, src) {
         return Err("产物路径不能与原文件相同：原文件只读，请换一个文件名".into());
@@ -379,12 +401,23 @@ pub fn image_apply(
     }
     let img = decode(&src)?;
     let edited = apply_ops(img, &ops.unwrap_or_default())?;
-    let out = safe_output_path(&src, out_path.as_deref())?;
-    let fmt = format.unwrap_or_else(|| {
-        src.extension()
-            .map(|e| e.to_string_lossy().to_ascii_lowercase())
-            .unwrap_or_else(|| "png".into())
-    });
+    // 格式：显式参数优先，其次源文件扩展名，最后兜底 png。
+    let fmt = format
+        .as_deref()
+        .and_then(normalize_format)
+        .or_else(|| {
+            src.extension()
+                .and_then(|e| normalize_format(&e.to_string_lossy()))
+        })
+        .unwrap_or_else(|| "png".into());
+    // 默认产物名用**目标格式**的扩展名（png→webp 得 .edited.webp）。
+    let out = safe_output_path(&src, out_path.as_deref(), Some(&fmt))?;
+    // 另存对话框里改了后缀 → 编码跟着后缀走：名实必须一致，
+    // 否则会产出「扩展名写着 .png、内容是 webp」的文件。
+    let fmt = out
+        .extension()
+        .and_then(|e| normalize_format(&e.to_string_lossy()))
+        .unwrap_or(fmt);
     let bytes = encode(&edited, &fmt, quality, &ico_sizes.unwrap_or_default())?;
     if let Some(parent) = out.parent() {
         if !parent.as_os_str().is_empty() && !parent.exists() {
@@ -426,7 +459,10 @@ pub fn image_batch(
         std::fs::create_dir_all(&dir).map_err(|e| format!("无法创建输出目录: {e}"))?;
     }
     let ops = ops.unwrap_or_default();
-    let fmt = format.unwrap_or_else(|| "png".into());
+    let fmt = format
+        .as_deref()
+        .and_then(normalize_format)
+        .unwrap_or_else(|| "png".into());
     let mut out = Vec::new();
     for p in paths {
         let src = PathBuf::from(&p);
@@ -458,7 +494,7 @@ fn batch_one(
 ) -> Result<PathBuf, String> {
     let img = decode(src)?;
     let edited = apply_ops(img, ops)?;
-    let target = safe_output_path(src, None)?;
+    let target = safe_output_path(src, None, Some(fmt))?;
     let name = target
         .file_name()
         .map(|s| s.to_string_lossy().to_string())
@@ -489,6 +525,191 @@ pub fn image_save_dialog(
     dlg.blocking_save_file()
         .and_then(|p| p.into_path().ok())
         .map(|p| p.to_string_lossy().to_string())
+}
+
+/// 「选择图片」多选对话框：拼接功能要一次挑多张。
+#[tauri::command(async)]
+pub fn image_open_dialog(app: tauri::AppHandle) -> Option<Vec<String>> {
+    use tauri_plugin_dialog::DialogExt;
+    let dlg = app.dialog().file().add_filter(
+        "图片",
+        &["png", "jpg", "jpeg", "webp", "bmp", "tiff", "tif", "gif", "ico"],
+    );
+    dlg.blocking_pick_files().map(|files| {
+        files
+            .into_iter()
+            .filter_map(|f| f.into_path().ok())
+            .map(|p| p.to_string_lossy().to_string())
+            .collect()
+    })
+}
+
+/// 拼图排布：把若干张图放进网格。纯函数（不做 IO），便于单测。
+///
+/// 单元格取所有图的**最大宽高**，每张图按比例装进单元格并居中——
+/// 这是最省心也最不出错的拼法（不用猜行列比例）。
+/// 返回 (画布, 宽, 高)。
+pub fn montage_grid(
+    imgs: &[DynamicImage],
+    cols: u32,
+    gap: u32,
+    bg: Rgba<u8>,
+) -> (RgbaImage, u32, u32) {
+    let cell_w = imgs
+        .iter()
+        .map(|i| i.width())
+        .max()
+        .unwrap_or(1)
+        .max(1);
+    let cell_h = imgs
+        .iter()
+        .map(|i| i.height())
+        .max()
+        .unwrap_or(1)
+        .max(1);
+    let cols = cols.clamp(1, imgs.len().max(1) as u32);
+    let rows = (imgs.len() as u32).div_ceil(cols);
+    let total_w = cols * cell_w + gap * (cols - 1);
+    let total_h = rows * cell_h + gap * (rows - 1);
+    let mut canvas = RgbaImage::from_pixel(total_w, total_h, bg);
+    for (i, im) in imgs.iter().enumerate() {
+        let r = i as u32 / cols;
+        let c = i as u32 % cols;
+        let ox = c * (cell_w + gap);
+        let oy = r * (cell_h + gap);
+        // resize 保比：装进单元格而不拉伸。
+        let fitted = im.resize(cell_w, cell_h, SampleFilter::Lanczos3);
+        let dx = ox + (cell_w - fitted.width()) / 2;
+        let dy = oy + (cell_h - fitted.height()) / 2;
+        image::imageops::overlay(&mut canvas, &fitted.to_rgba8(), dx as i64, dy as i64);
+    }
+    (canvas, total_w, total_h)
+}
+
+/// 拼图（montage）：多张图按网格拼成一张新图。
+///
+/// 背景默认透明；输出 jpg / bmp 时铺白底（这两种格式没有 alpha 通道，
+/// 透明会变成黑块）。
+#[tauri::command(async)]
+pub fn image_montage(
+    paths: Vec<String>,
+    columns: Option<u32>,
+    spacing: Option<u32>,
+    out_path: Option<String>,
+    format: Option<String>,
+    quality: Option<u8>,
+) -> Result<ImageOutput, String> {
+    if paths.is_empty() {
+        return Err("没有选择图片".into());
+    }
+    if paths.len() > 64 {
+        return Err("一次最多拼接 64 张".into());
+    }
+    let mut imgs = Vec::with_capacity(paths.len());
+    for p in &paths {
+        imgs.push(decode(Path::new(p))?);
+    }
+    let fmt = format
+        .as_deref()
+        .and_then(normalize_format)
+        .unwrap_or_else(|| "png".into());
+    // jpg / bmp 没有 alpha：铺白底，避免透明区变黑块。
+    let bg = if matches!(fmt.as_str(), "jpg" | "bmp") {
+        Rgba([255, 255, 255, 255])
+    } else {
+        Rgba([0, 0, 0, 0])
+    };
+    let n = imgs.len() as u32;
+    let cols = columns
+        .filter(|c| *c > 0)
+        .unwrap_or_else(|| (n as f64).sqrt().ceil() as u32)
+        .clamp(1, n);
+    let gap = spacing.unwrap_or(0);
+    let (canvas, total_w, total_h) = montage_grid(&imgs, cols, gap, bg);
+    if total_w > 20000 || total_h > 20000 {
+        return Err("拼接结果超过 20000 像素上限，请减少张数或列数".into());
+    }
+    let img = DynamicImage::ImageRgba8(canvas);
+    // 产物名：以第一张图为准（`<首图名>.montage.<ext>`）。
+    let first = PathBuf::from(&paths[0]);
+    let out = match out_path.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(p) => PathBuf::from(p),
+        None => {
+            let stem = first.file_stem().map(|s| s.to_string_lossy().to_string());
+            let dir = first.parent().unwrap_or_else(|| Path::new(""));
+            let name = match stem {
+                Some(s) => format!("{s}.montage.{fmt}"),
+                None => format!("montage.{fmt}"),
+            };
+            dir.join(name)
+        }
+    };
+    // 原图保护：产物不能是**任何一张**源图。
+    for p in &paths {
+        if same_file(&out, Path::new(p)) {
+            return Err("产物路径不能与原文件相同：原文件只读，请换一个文件名".into());
+        }
+    }
+    let fmt = out
+        .extension()
+        .and_then(|e| normalize_format(&e.to_string_lossy()))
+        .unwrap_or(fmt);
+    let bytes = encode(&img, &fmt, quality, &[])?;
+    if let Some(parent) = out.parent() {
+        if !parent.as_os_str().is_empty() && !parent.exists() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("无法创建输出目录: {e}"))?;
+        }
+    }
+    std::fs::write(&out, &bytes).map_err(|e| format!("写入失败: {e}"))?;
+    Ok(ImageOutput {
+        path: out.to_string_lossy().to_string(),
+        bytes: bytes.len(),
+        width: total_w,
+        height: total_h,
+    })
+}
+
+/// 写回「浏览器合成好的 PNG」：文字图层由浏览器渲染（系统字体 + 中文
+/// 排版只有浏览器做得来），Rust 负责解码、转到目标格式、落盘。
+///
+/// 之所以不直接把 PNG 字节写出去：目标格式可能是 jpg / webp / tiff 等，
+/// 直接写 PNG 会让**扩展名与内容不符**。这里统一走 `encode`。
+#[tauri::command(async)]
+pub fn image_write_composite(
+    src_path: String,
+    out_path: Option<String>,
+    png_base64: String,
+    format: Option<String>,
+    quality: Option<u8>,
+) -> Result<ImageOutput, String> {
+    use crate::commands::base64_decode;
+    let src = PathBuf::from(&src_path);
+    let raw = base64_decode(&png_base64).ok_or("合成图 base64 解码失败")?;
+    let img = image::load_from_memory_with_format(&raw, ImageFormat::Png)
+        .map_err(|e| format!("合成图 PNG 解码失败: {e}"))?;
+    let fmt = format
+        .as_deref()
+        .and_then(normalize_format)
+        .unwrap_or_else(|| "png".into());
+    let out = safe_output_path(&src, out_path.as_deref(), Some(&fmt))?;
+    let fmt = out
+        .extension()
+        .and_then(|e| normalize_format(&e.to_string_lossy()))
+        .unwrap_or(fmt);
+    let bytes = encode(&img, &fmt, quality, &[])?;
+    if let Some(parent) = out.parent() {
+        if !parent.as_os_str().is_empty() && !parent.exists() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("无法创建输出目录: {e}"))?;
+        }
+    }
+    std::fs::write(&out, &bytes).map_err(|e| format!("写入失败: {e}"))?;
+    let (w, h) = img.dimensions();
+    Ok(ImageOutput {
+        path: out.to_string_lossy().to_string(),
+        bytes: bytes.len(),
+        width: w,
+        height: h,
+    })
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -535,21 +756,35 @@ mod tests {
 
     #[test]
     fn default_output_path_inserts_suffix() {
-        let p = default_output_path(Path::new(r"C:\pics\cat.png"));
+        let p = default_output_path(Path::new(r"C:\pics\cat.png"), None);
         assert_eq!(p.file_name().unwrap().to_string_lossy(), "cat.edited.png");
+    }
+
+    #[test]
+    fn default_output_path_follows_target_format() {
+        // png → webp：产物名必须跟着目标格式走，否则名实不符。
+        let p = default_output_path(Path::new(r"C:\pics\cat.png"), Some("webp"));
+        assert_eq!(p.file_name().unwrap().to_string_lossy(), "cat.edited.webp");
+    }
+
+    #[test]
+    fn normalize_format_maps_aliases() {
+        assert_eq!(normalize_format("JPEG").as_deref(), Some("jpg"));
+        assert_eq!(normalize_format("tif").as_deref(), Some("tiff"));
+        assert_eq!(normalize_format("exe"), None);
     }
 
     #[test]
     fn safe_output_path_rejects_source() {
         let src = PathBuf::from(r"C:\pics\cat.png");
-        let err = safe_output_path(&src, Some(r"C:\pics\cat.png")).unwrap_err();
+        let err = safe_output_path(&src, Some(r"C:\pics\cat.png"), None).unwrap_err();
         assert!(err.contains("不能与原文件相同"));
     }
 
     #[test]
     fn safe_output_path_rejects_same_file_different_case() {
         let src = PathBuf::from(r"C:\pics\cat.png");
-        let err = safe_output_path(&src, Some(r"C:\Pics\CAT.PNG")).unwrap_err();
+        let err = safe_output_path(&src, Some(r"C:\Pics\CAT.PNG"), None).unwrap_err();
         assert!(err.contains("不能与原文件相同"));
     }
 
@@ -592,5 +827,29 @@ mod tests {
         let hi = encode(&img, "jpg", Some(95), &[]).unwrap();
         let lo = encode(&img, "jpg", Some(20), &[]).unwrap();
         assert!(lo.len() < hi.len(), "低质量应更小: {} vs {}", lo.len(), hi.len());
+    }
+
+    #[test]
+    fn montage_grid_uses_max_cell() {
+        // 一张 10×8、一张 4×4：单元格取 10×8，网格 2 列 1 行。
+        let a = DynamicImage::ImageRgba8(RgbaImage::from_pixel(10, 8, Rgba([255, 0, 0, 255])));
+        let b = DynamicImage::ImageRgba8(RgbaImage::from_pixel(4, 4, Rgba([0, 255, 0, 255])));
+        let (canvas, w, h) = montage_grid(&[a, b], 2, 0, Rgba([0, 0, 0, 0]));
+        assert_eq!((w, h), (20, 8));
+        // 第一格正好铺满单元格：左上角是 a 的红色。
+        assert_eq!(canvas.get_pixel(0, 0).0, [255, 0, 0, 255]);
+        // 小图在格子里居中：4 宽的图在 10 宽的格子里左偏 3px。
+        let second_cell_x = 10 + 3;
+        assert_eq!(canvas.get_pixel(second_cell_x, 0).0, [0,  255, 0, 255]);
+    }
+
+    #[test]
+    fn montage_grid_respects_gap() {
+        let a = DynamicImage::ImageRgba8(RgbaImage::from_pixel(4, 4, Rgba([1, 2, 3, 255])));
+        let b = DynamicImage::ImageRgba8(RgbaImage::from_pixel(4, 4, Rgba([4, 5, 6, 255])));
+        let (canvas, w, h) = montage_grid(&[a, b], 2, 3, Rgba([0, 0, 0, 0]));
+        assert_eq!((w, h), (11, 4));
+        // 间隙是透明的。
+        assert_eq!(canvas.get_pixel(4, 0).0, [0, 0, 0, 0]);
     }
 }

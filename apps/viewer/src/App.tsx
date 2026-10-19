@@ -1058,6 +1058,7 @@ export function App() {
                   name={active.name}
                   source={viewerFileSource}
                   isDark={theme === "dark"}
+                  canEdit={mode === "heavy"}
                 />
               </Suspense>
             )}

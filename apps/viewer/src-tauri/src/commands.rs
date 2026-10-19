@@ -149,8 +149,7 @@ fn size_limit_for_ext(ext: &str) -> u64 {
 }
 
 /// 零依赖 base64：避免引入 base64 crate（六步阶梯）。
-pub(crate) fn base64_encode(bytes: &[u8]) -> String {
-    use std::fmt::Write;
+pub(crate) fn base64_encode(bytes: &[u8]) -> String {    use std::fmt::Write;
     const TBL: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
@@ -170,6 +169,40 @@ pub(crate) fn base64_encode(bytes: &[u8]) -> String {
         };
     }
     out
+}
+
+/// 零依赖 base64 解码：`base64_encode` 的逆。空白字符（换行）跳过，
+/// 其它非法字符直接判失败——解码失败必须可见，不能静默产出垃圾字节。
+pub(crate) fn base64_decode(text: &str) -> Option<Vec<u8>> {
+    fn val(c: u8) -> Option<u8> {
+        Some(match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => return None,
+        })
+    }
+    let mut acc: u32 = 0;
+    let mut bits: u32 = 0;
+    let mut out = Vec::with_capacity(text.len() * 3 / 4);
+    for &c in text.as_bytes() {
+        if c.is_ascii_whitespace() {
+            continue;
+        }
+        if c == b'=' {
+            break;
+        }
+        let v = val(c)? as u32;
+        acc = (acc << 6) | v;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+        }
+    }
+    Some(out)
 }
 
 /// RFC 3339 (秒精度)。前端用 `new Date(s)` 直接解析。
@@ -674,7 +707,28 @@ pub async fn ai_send(
 
 #[cfg(test)]
 mod tests {
-    use super::classify;
+    use super::{base64_decode, base64_encode, classify};
+
+    /// base64 编解码必须是互逆的——图片合成的 PNG 走解码路径，
+    /// 差一个 bit 就会让整张合成图报废。
+    #[test]
+    fn base64_roundtrip() {
+        for bytes in [
+            vec![],
+            vec![0u8],
+            vec![1, 2, 3],
+            (0u8..=255).collect::<Vec<u8>>(),
+        ] {
+            let enc = base64_encode(&bytes);
+            assert_eq!(base64_decode(&enc).as_deref(), Some(bytes.as_slice()));
+        }
+    }
+
+    /// 非法字符必须判失败，而不是静默产出垃圾字节。
+    #[test]
+    fn base64_decode_rejects_garbage() {
+        assert!(base64_decode("!!!!").is_none());
+    }
 
     /// viewer 侧的扩展名分类必须与共享预览层（@hermix/preview）的读取器
     /// 预期一致：共享层的 htmlLoader / markdownLoader / textLoader 走

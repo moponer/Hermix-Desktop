@@ -6,7 +6,8 @@
 // 共享一份样式 token。
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { RotateCcw } from "lucide-react";
+import { lazy, Suspense } from "react";
+import { Pencil, RotateCcw } from "lucide-react";
 import {
   loadPreview,
   PreviewSurface,
@@ -20,6 +21,13 @@ import {
   type PreviewKind,
   type ViewMode,
 } from "@hermix/preview";
+import { isEditableImage } from "./image/imageOps";
+
+// 图片编辑器懒加载：它是重量模式的重量功能，纯净模式与文本预览都不该
+// 为它付首屏 bundle 的钱。
+const ImageEditor = lazy(() =>
+  import("./image/ImageEditor").then((m) => ({ default: m.ImageEditor })),
+);
 
 const ZOOM_MIN = 50;
 const ZOOM_MAX = 200;
@@ -29,15 +37,19 @@ export function PreviewHost({
   name,
   source,
   isDark,
+  canEdit = false,
 }: {
   path: string;
   name: string;
   source: FileSource;
   isDark: boolean;
+  /** 重量模式才给编辑能力（纯净模式是"双击就看"，不塞工具）。 */
+  canEdit?: boolean;
 }) {
   const [state, setState] = useState<PreviewState>({ status: "loading", kind: "text" });
   const [viewMode, setViewMode] = useState<ViewMode>("layout");
   const [zoom, setZoom] = useState(100);
+  const [editing, setEditing] = useState(false);
   const loadToken = useRef(0);
 
   const kind: PreviewKind = useMemo(() => resolveKind(name), [name]);
@@ -72,13 +84,37 @@ export function PreviewHost({
   // 否则状态提示会掉到 .preview-body 左边（flex 行容器里宽度自适应），
   // 表现为"贴在左上角而不是整栏居中"。
   const readyState = state.status === "ready" ? state : null;
+  const editable = canEdit && effectiveKind === "image" && isEditableImage(name);
 
   return (
     <div className="preview-pane">
       <div className="preview-toolbar">
         <span className="preview-toolbar-name" title={path}>{name}</span>
         <span className="preview-toolbar-spacer" />
-        {supportsTextView(kind) && (
+        {editable && !editing && (
+          <button
+            type="button"
+            className="tb-btn"
+            onClick={() => setEditing(true)}
+            title="编辑图片（裁剪 / 调整 / 转换格式）"
+            aria-label="编辑图片"
+          >
+            <Pencil className="icon-sm" />
+            编辑
+          </button>
+        )}
+        {editing && (
+          <button
+            type="button"
+            className="tb-btn"
+            onClick={() => setEditing(false)}
+            title="返回预览"
+            aria-label="返回预览"
+          >
+            返回预览
+          </button>
+        )}
+        {!editing && supportsTextView(kind) && (
           <div className="seg">
             <button
               type="button"
@@ -96,7 +132,7 @@ export function PreviewHost({
             </button>
           </div>
         )}
-        {supportsZoom(effectiveKind) && (
+        {!editing && supportsZoom(effectiveKind) && (
           <div className="seg" role="group" aria-label="预览缩放">
             <button
               type="button"
@@ -134,7 +170,16 @@ export function PreviewHost({
         )}
       </div>
       <div className="preview-pane-inner">
-        {readyState ? (
+        {editing ? (
+          <Suspense fallback={<div className="preview-state-center">正在准备编辑器…</div>}>
+            <ImageEditor
+              path={path}
+              name={name}
+              source={source}
+              onClose={() => setEditing(false)}
+            />
+          </Suspense>
+        ) : readyState ? (
           <PreviewSurface
             payload={readyState.payload}
             source={source}
