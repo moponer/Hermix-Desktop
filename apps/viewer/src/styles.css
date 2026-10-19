@@ -629,23 +629,103 @@ html, body, #root {
   width: 14px; height: 14px;
 }
 
-/* ─── 图片编辑器（F5 重量模式） ─────────────────────────────
+/* ─── 编辑器外壳（图片 / PDF / 文本 三个编辑器共用） ───────────────
    层次全靠底色差 + 阴影 + 间距，**不描边**（与全局约定一致）。
    .img-canvas-frame 必须与 canvas 像素级贴合：裁剪框的坐标是
    相对 canvas 的 CSS 像素，frame 一旦有 padding/border 就对不齐。 */
+.ed-editor,
 .img-editor {
   display: flex; flex-direction: column;
   height: 100%; min-height: 0;
   background: var(--bg-primary);
 }
+.ed-toolbar,
 .img-toolbar {
   display: flex; align-items: center; gap: 4px;
   padding: 6px 10px; flex: none;
   background: var(--bg-tabbar);
   box-shadow: 0 1px 4px rgba(15, 23, 42, 0.08);
 }
+.ed-toolbar-name {
+  font-size: 13px; color: var(--text-primary);
+  max-width: 45%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ed-dirty {
+  font-size: 11px; color: var(--accent);
+  background: var(--bg-accent-soft);
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+.ed-encoding {
+  display: flex; align-items: center; gap: 4px;
+  font-size: 12px; color: var(--text-secondary);
+}
+.ed-encoding select {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border: none;
+  border-radius: 6px;
+  padding: 3px 6px;
+  font-size: 12px;
+  font-family: inherit;
+}
+.ed-body,
 .img-body {
   display: flex; flex: 1 1 0%; min-height: 0;
+}
+.ed-panel {
+  flex: 1 1 auto; min-width: 0; min-height: 0;
+  overflow: auto;
+  padding: 12px;
+  background: var(--color-bg-code);
+}
+.ed-side,
+.img-params {
+  flex: none;
+  width: 248px;
+  overflow-y: auto;
+  padding: 4px 0 12px;
+  background: var(--bg-secondary);
+  box-shadow: -6px 0 14px -12px rgba(15, 23, 42, 0.45);
+}
+.ed-side .sb-head,
+.img-params .sb-head {
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding: 10px 12px 4px;
+}
+.ed-status {
+  padding: 6px 12px;
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+.ed-actions {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 6px 12px;
+}
+.ed-btn {
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  width: 100%;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border: none;
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.ed-btn:hover:not(:disabled) { background: var(--bg-card-hover); }
+.ed-btn:disabled { opacity: 0.45; cursor: default; }
+.ed-note {
+  padding: 6px 12px 0;
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  word-break: break-all;
 }
 .img-canvas-wrap {
   flex: 1 1 auto; min-width: 0; min-height: 0;
@@ -671,21 +751,6 @@ html, body, #root {
   background: var(--bg-accent-soft);
   box-shadow: 0 0 0 1px var(--accent);
   pointer-events: none;
-}
-.img-params {
-  flex: none;
-  width: 248px;
-  overflow-y: auto;
-  padding: 4px 0 12px;
-  background: var(--bg-secondary);
-  box-shadow: -6px 0 14px -12px rgba(15, 23, 42, 0.45);
-}
-.img-params .sb-head {
-  text-transform: none;
-  letter-spacing: 0;
-  font-size: 12px;
-  color: var(--text-secondary);
-  padding: 10px 12px 4px;
 }
 .img-param {
   display: grid;
@@ -786,3 +851,43 @@ html, body, #root {
   text-align: left;
 }
 .img-link:hover { color: var(--accent-strong); }
+
+/* ─── PDF 页列表（F6） ─────────────────────────────────────── */
+.pdf-pages {
+  list-style: none;
+  margin: 0; padding: 0;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.pdf-page {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--bg-card);
+  border-radius: 8px;
+  padding: 6px 8px 6px 10px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+}
+.pdf-page.is-sel { background: var(--bg-accent-soft); }
+.pdf-page-check {
+  display: flex; align-items: center; gap: 8px;
+  flex: 1; min-width: 0;
+  font-size: 12px; color: var(--text-primary);
+  cursor: pointer;
+}
+.pdf-page-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pdf-page-ops { display: flex; gap: 2px; flex: none; }
+
+/* ─── 文本编辑区（F6） ─────────────────────────────────────── */
+.text-editor-area {
+  width: 100%; height: 100%;
+  min-height: 320px;
+  resize: none;
+  border: none;
+  outline: none;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.6;
+  padding: 12px;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+}

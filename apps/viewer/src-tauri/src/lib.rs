@@ -7,6 +7,7 @@
 
 pub mod commands;
 pub mod image_ops;
+pub mod pdf_ops;
 
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -114,6 +115,11 @@ pub fn main() {
             image_ops::image_open_dialog,
             image_ops::image_montage,
             image_ops::image_write_composite,
+            pdf_ops::pdf_info,
+            pdf_ops::pdf_ops,
+            pdf_ops::pdf_replace_text,
+            pdf_ops::images_to_pdf,
+            pdf_ops::write_text,
         ])
         .plugin(tauri_plugin_dialog::init())
         .setup(move |app| {

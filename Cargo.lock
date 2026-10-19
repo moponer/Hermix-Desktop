@@ -3490,12 +3490,15 @@ dependencies = [
 name = "hermix-viewer"
 version = "0.1.0"
 dependencies = [
+ "image",
  "indexmap 1.9.3",
+ "lopdf",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
  "tauri",
  "tauri-build",
+ "tauri-plugin-dialog",
  "windows-sys 0.52.0",
 ]
 

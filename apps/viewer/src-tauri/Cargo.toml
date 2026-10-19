@@ -29,6 +29,12 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 # 「另存为」系统对话框：只调 Rust 侧 API，前端不装 npm 包
 #（@tauri-apps/plugin-dialog），前端依赖增量保持 0。
 tauri-plugin-dialog = "2"
+# PDF 结构级操作（F6）：删页/提取/旋转/重排/插空白页。
+# 纯 Rust、无 C 依赖；0.34 已被 crates/hermix-tools 锁定在工作区 Cargo.lock，
+# 传递依赖（chrono/encoding_rs/flate2/nom/weezl…）全在 → 新增编译成本 ≈ 0。
+# 刻意不开 lopdf 的 embed_image feature：它会拉 image 0.25 的默认特性，
+# 传染 F5 的 image feature 集（bmp/exr/gif/ico/tiff/webp 全开）。
+lopdf = "0.34"
 # AI 右栏：直连本地 server 的 /v1/ REST（viewer 是独立进程，不走主程序
 # 的 stdio 桥——那根管道归主 app 的前端所有）。
 reqwest = { workspace = true, features = ["json"] }
