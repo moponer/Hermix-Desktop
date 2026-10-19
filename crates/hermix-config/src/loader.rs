@@ -894,6 +894,15 @@ pub fn auto_correct_model(config: &mut GatewayConfig) -> Option<AutoCorrectRepor
     configured.sort();
     configured.dedup();
 
+    // 内置免费渠道不参与「自动挑默认模型」：付费厂商优先，免费渠道只在
+    // 一个能用的厂商都没有时由启动逻辑兜底（见 hermix-server state）。
+    // 注意只影响**挑选**，不影响校验：`config.model` 显式指向免费渠道时
+    // 上面的 `provider_has_key` 会因哨兵凭据而通过，不会被改写。
+    let preferred: Vec<&String> = configured
+        .iter()
+        .filter(|p| !crate::free_channel::is_free_provider(p))
+        .collect();
+
     let before = config.model.clone();
 
     // Priority order, loosely matching `LocalAgentService::fallback_model`
@@ -929,9 +938,9 @@ pub fn auto_correct_model(config: &mut GatewayConfig) -> Option<AutoCorrectRepor
         None => {
             let provider = PRIORITY
                 .iter()
-                .find(|p| configured.iter().any(|c| c == *p))
+                .find(|p| preferred.iter().any(|c| c.as_str() == **p))
                 .map(|s| s.to_string())
-                .or_else(|| configured.first().cloned());
+                .or_else(|| preferred.first().map(|s| (*s).clone()));
             match provider {
                 Some(p) => (p, "unset".to_string()),
                 None => return None, // nothing configured at all
@@ -948,9 +957,9 @@ pub fn auto_correct_model(config: &mut GatewayConfig) -> Option<AutoCorrectRepor
             }
             let replacement = PRIORITY
                 .iter()
-                .find(|p| configured.iter().any(|c| c == *p))
+                .find(|p| preferred.iter().any(|c| c.as_str() == **p))
                 .map(|s| s.to_string())
-                .or_else(|| configured.first().cloned());
+                .or_else(|| preferred.first().map(|s| (*s).clone()));
             match replacement {
                 Some(p) if p != provider => (p, "no_key".to_string()),
                 Some(p) => (p, "no_key".to_string()),
@@ -1170,5 +1179,52 @@ model: custom-agnes:agnes-2.0-flash
             user_config_field_display(&c, "llm.openai.args").unwrap(),
             "--stdio,--model,gpt-4o-mini"
         );
+    }
+
+    /// 回归：免费渠道的凭据是哨兵值，provider_has_key 视为"已配置"。
+    /// 若这条判定退回"无真实 key 即不可用"，启动时的 auto-correct 会把
+    /// 用户选中的免费模型改写成一个完全无关的付费厂商，并**写回磁盘**。
+    #[test]
+    fn auto_correct_keeps_explicit_free_channel_model() {
+        let mut config = GatewayConfig::default();
+        config.llm_providers.insert(
+            "custom-free-zen".to_string(),
+            crate::config::LlmProviderConfig {
+                api_key: Some("public".to_string()),
+                base_url: Some("https://example.invalid/v1".to_string()),
+                model: Some("m1".to_string()),
+                ..Default::default()
+            },
+        );
+        config.model = Some("custom-free-zen:m1".to_string());
+
+        assert!(
+            auto_correct_model(&mut config).is_none(),
+            "explicit free-channel default must not be rewritten"
+        );
+        assert_eq!(config.model.as_deref(), Some("custom-free-zen:m1"));
+    }
+
+    /// 免费渠道只做兜底：自动挑选默认模型时绝不选它。
+    #[test]
+    fn auto_correct_never_picks_free_channel() {
+        let mut config = GatewayConfig::default();
+        for id in ["custom-free-zen", "custom-free-kilo"] {
+            config.llm_providers.insert(
+                id.to_string(),
+                crate::config::LlmProviderConfig {
+                    api_key: Some("public".to_string()),
+                    model: Some("m1".to_string()),
+                    ..Default::default()
+                },
+            );
+        }
+        if let Some(report) = auto_correct_model(&mut config) {
+            assert!(
+                !report.after.starts_with("custom-free-"),
+                "free channel must never be auto-picked, got {}",
+                report.after
+            );
+        }
     }
 }

@@ -425,10 +425,15 @@ fn build_model_list(cfg: &hermix_config::GatewayConfig) -> ModelListResponse {
     let mut models = Vec::new();
     for (pid, pc) in &cfg.llm_providers {
         if let Some(m) = &pc.model {
-            if !m.trim().is_empty() && is_configured(pid) {
+            if !is_configured(pid) {
+                continue;
+            }
+            // `model` 是逗号分隔的清单（自定义 provider / 内置免费渠道都写多值）。
+            // 整串当成一个模型 id 会造出 `a,b` 这种假条目——切换到它必失败。
+            for part in m.split(',').map(str::trim).filter(|s| !s.is_empty()) {
                 models.push(hermix_config::ModelSelectorEntry {
                     provider_id: pid.clone(),
-                    model_id: m.clone(),
+                    model_id: part.to_string(),
                 });
             }
         }
@@ -595,6 +600,30 @@ mod model_list_tests {
         let resp = build_model_list(&cfg);
         assert!(resp.models.is_empty());
         assert!(resp.default_model.is_none());
+    }
+
+    /// `model` 是逗号分隔清单（内置免费渠道默认就写多条）。整串当成一个
+    /// id 会让切换器出现 `a,b` 这种假条目，选中必失败。
+    #[test]
+    fn csv_model_field_splits_into_entries() {
+        let mut cfg = GatewayConfig::default();
+        cfg.llm_providers.insert(
+            "custom-free-kilo".to_string(),
+            LlmProviderConfig {
+                api_key: Some("none".to_string()),
+                model: Some("openrouter/free, minimax/minimax-m3.1-flash:free".to_string()),
+                ..Default::default()
+            },
+        );
+        cfg.model = Some("custom-free-kilo:openrouter/free".to_string());
+
+        let resp = build_model_list(&cfg);
+        let ids: Vec<&str> = resp.models.iter().map(|m| m.model_id.as_str()).collect();
+        assert_eq!(ids, vec!["openrouter/free", "minimax/minimax-m3.1-flash:free"]);
+        assert_eq!(
+            resp.default_model.as_deref(),
+            Some("custom-free-kilo:openrouter/free")
+        );
     }
 }
 

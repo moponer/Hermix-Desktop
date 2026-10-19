@@ -50,6 +50,9 @@ pub struct CustomProviderSummary {
     /// `fetch-models` or set by hand. Mirrors `LlmProviderConfig.model_contexts`.
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub model_contexts: HashMap<String, u64>,
+    /// 内置免费渠道（`custom-free-*`）：UI 据此显示"免费源"标记与免责提示。
+    #[serde(default)]
+    pub is_free_channel: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -141,7 +144,7 @@ pub async fn list_custom_providers(
                 .unwrap_or_default();
             CustomProviderSummary {
                 id: id.clone(),
-                display_name: None,
+                display_name: cfg.display_name.clone(),
                 base_url: cfg.base_url.as_deref().unwrap_or("").to_string(),
                 has_key: cfg
                     .api_key
@@ -151,6 +154,7 @@ pub async fn list_custom_providers(
                 models,
                 context_window: cfg.context_window,
                 model_contexts: cfg.model_contexts.clone(),
+                is_free_channel: hermix_config::free_channel::is_free_provider(id),
             }
         })
         .collect();
@@ -190,6 +194,14 @@ pub async fn create_custom_provider(
 
     if !req.base_url.is_empty() {
         entry.base_url = Some(req.base_url.trim_end_matches('/').to_string());
+    }
+    if let Some(name) = req
+        .display_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        entry.display_name = Some(name.to_string());
     }
     if !req.api_key.is_empty() {
         entry.api_key = Some(req.api_key);
@@ -346,12 +358,12 @@ pub async fn fetch_models(
     let url = format!("{}/models", base_url.trim_end_matches('/'));
 
     let client = reqwest::Client::new();
-    match client
-        .get(&url)
-        .header("Authorization", format!("Bearer {}", api_key))
-        .send()
-        .await
-    {
+    let mut request = client.get(&url);
+    // 无鉴权端点（免费渠道里 api_key: none）不发 Authorization 头。
+    if let Some(value) = hermix_config::free_channel::auth_header(Some(api_key)) {
+        request = request.header("Authorization", value);
+    }
+    match request.send().await {
         Ok(resp) => {
             let status = resp.status().as_u16();
             if resp.status().is_success() {
@@ -394,12 +406,20 @@ pub async fn fetch_models(
                             if persisted_count.is_some() {
                                 let path = state.hermix_home.join("config.yaml");
                                 match hermix_config::loader::save_config_yaml(&path, &cfg) {
-                                    Ok(_) => eprintln!(
-                                        "[custom_providers:fetch_models] persisted {} models ({} with context_window) for '{}'",
-                                        data.data.len(),
-                                        persisted_count.unwrap_or(0),
-                                        id
-                                    ),
+                                    Ok(_) => {
+                                        eprintln!(
+                                            "[custom_providers:fetch_models] persisted {} models ({} with context_window) for '{}'",
+                                            data.data.len(),
+                                            persisted_count.unwrap_or(0),
+                                            id
+                                        );
+                                        // 刷新结果必须热推送：否则模型清单更新了、
+                                        // 正在跑的 agent 仍按旧 provider 快照解析
+                                        // context_window / 默认模型。
+                                        if let Ok(v) = serde_json::to_value(&cfg) {
+                                            state.agent_service.set_config(v);
+                                        }
+                                    }
                                     Err(e) => eprintln!(
                                         "[custom_providers:fetch_models] failed to persist models for '{}': {}",
                                         id, e
@@ -462,13 +482,12 @@ pub async fn test_connection(
 
     let url = format!("{}/models", base_url.trim_end_matches('/'));
     let client = reqwest::Client::new();
+    let mut request = client.get(&url);
+    if let Some(value) = hermix_config::free_channel::auth_header(Some(api_key)) {
+        request = request.header("Authorization", value);
+    }
 
-    match client
-        .get(&url)
-        .header("Authorization", format!("Bearer {}", api_key))
-        .send()
-        .await
-    {
+    match request.send().await {
         Ok(resp) => {
             let status = resp.status().as_u16();
             let ok = resp.status().is_success();
@@ -583,7 +602,9 @@ pub async fn test_inline(
         _ => req.api_key.clone(),
     };
 
-    if base.is_empty() || api_key.trim().is_empty() {
+    // `none` 哨兵 = 无鉴权端点（内置免费渠道），空 key 仍然是配置错误。
+    let no_auth = api_key.trim().eq_ignore_ascii_case(hermix_config::free_channel::KEY_NO_AUTH);
+    if base.is_empty() || (api_key.trim().is_empty() && !no_auth) {
         return Ok(Json(InlineTestResponse {
             ok: false,
             kind: Some("bad_request".into()),
@@ -603,13 +624,12 @@ pub async fn test_inline(
         .timeout(std::time::Duration::from_secs(10))
         .build()
         .unwrap_or_else(|_| reqwest::Client::new());
+    let mut request = client.get(&url);
+    if let Some(value) = hermix_config::free_channel::auth_header(Some(api_key.as_str())) {
+        request = request.header("Authorization", value);
+    }
 
-    match client
-        .get(&url)
-        .header("Authorization", format!("Bearer {}", api_key))
-        .send()
-        .await
-    {
+    match request.send().await {
         Ok(resp) => {
             let status = resp.status().as_u16();
             let ok = resp.status().is_success();

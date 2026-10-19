@@ -874,11 +874,13 @@ impl GenericProvider {
         api_key: &str,
         body: &Value,
     ) -> reqwest::RequestBuilder {
-        let mut req = client
-            .post(url)
-            .header("Authorization", format!("Bearer {}", api_key))
-            .header("Content-Type", "application/json")
-            .json(body);
+        // 无鉴权端点（内置免费渠道里 `api_key: none` 的那类）必须省略
+        // Authorization 头——发 `Bearer none` 会被上游按错误凭据拒绝。
+        let mut req = client.post(url).header("Content-Type", "application/json");
+        if let Some(value) = hermix_config::free_channel::auth_header(Some(api_key)) {
+            req = req.header("Authorization", value);
+        }
+        let mut req = req.json(body);
         for (key, value) in &self.extra_headers {
             req = req.header(key.as_str(), value.as_str());
         }
@@ -2413,6 +2415,40 @@ fn parse_openai_response(json: &Value) -> Result<LlmResponse, AgentError> {
 mod tests {
     use super::*;
     use hermix_core::types::ContentPart;
+
+    /// 真实联网验证内置免费渠道（Kilo 公共网关）在**我们的**请求构造下可用：
+    /// 无 Authorization 头 + tool schema + 非流式。
+    ///
+    /// 默认忽略（CI 不出网）。手工跑：
+    /// `cargo test -p hermix-agent --lib free_channel_gateway_supports_tools -- --ignored`
+    #[tokio::test]
+    #[ignore = "network: hits api.kilo.ai (free tier)"]
+    async fn free_channel_gateway_supports_tools() {
+        let provider = GenericProvider::new(
+            "https://api.kilo.ai/api/gateway".to_string(),
+            hermix_config::free_channel::KEY_NO_AUTH,
+            "openrouter/free",
+        );
+        let messages = vec![Message::user("What is the weather in Paris? Use the tool.")];
+        let tools = vec![ToolSchema {
+            name: "get_weather".to_string(),
+            description: "Get current weather".to_string(),
+            parameters: hermix_core::tool_schema::JsonSchema::new("object"),
+        }];
+
+        let resp = provider
+            .chat_completion(&messages, &tools, Some(128), None, None, None)
+            .await
+            .expect("free gateway call");
+
+        let calls = resp.message.tool_calls.unwrap_or_default();
+        assert!(
+            !calls.is_empty(),
+            "free gateway returned no tool_call; finish_reason={:?}",
+            resp.finish_reason
+        );
+        assert_eq!(calls[0].function.name, "get_weather");
+    }
 
     #[test]
     fn test_parse_openai_response_basic() {

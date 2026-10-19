@@ -90,6 +90,11 @@ pub struct GatewayConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proxy: Option<ProxyConfig>,
 
+    /// 内置免费模型渠道（虚拟 provider `custom-free-*`）。
+    /// 关掉即摘除对应 provider 条目；端点/清单地址可在 config.yaml 覆盖。
+    #[serde(default)]
+    pub free_channel: FreeChannelConfig,
+
     /// Approval / safety-gate settings.
     #[serde(default)]
     pub approval: ApprovalConfig,
@@ -170,6 +175,7 @@ impl Default for GatewayConfig {
             compaction: CompactionConfig::default(),
             advanced: AdvancedSettingsConfig::default(),
             proxy: None,
+            free_channel: FreeChannelConfig::default(),
             approval: ApprovalConfig::default(),
             skills: SkillsSettings::default(),
             mcp_servers: Vec::new(),
@@ -486,6 +492,12 @@ fn default_max_turns() -> u32 {
 /// Configuration for a named LLM provider endpoint.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct LlmProviderConfig {
+    /// Human-readable name shown in the UI. `None` falls back to the
+    /// provider id (custom providers have no separate name store
+    /// elsewhere; the add-model dialog used to collect this and drop it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+
     /// API key (or env-var reference like "${MY_API_KEY}").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
@@ -871,6 +883,50 @@ pub struct ProxyConfig {
     /// SOCKS5 proxy URL (e.g. "socks5://proxy:1080").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub socks_proxy: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// FreeChannelConfig（内置免费模型渠道）
+// ---------------------------------------------------------------------------
+
+/// 内置免费模型渠道的开关与端点覆盖。
+///
+/// 免费渠道以普通 `custom-free-*` provider 形态存在于 `llm_providers`
+/// 中，因此沿用既有的模型开关、热推送、审批链路，不需要新的运行时。
+/// 凭据是上游公开的哨兵值（如 OpenCode 的 `public`）或 `none`
+/// （表示请求不带 `Authorization` 头）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FreeChannelConfig {
+    /// 全局开关。关闭时启动阶段会摘除所有 `custom-free-*` 条目。
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// 覆盖全部免费渠道的推理 base_url（测试/换端点用）。`None` = 用内置默认。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+
+    /// 覆盖模型清单地址（`GET {models_url}`）。`None` = `{base_url}/models`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub models_url: Option<String>,
+
+    /// 启动时后台刷新一次模型清单（best-effort，失败静默）。
+    #[serde(default = "default_true")]
+    pub refresh_on_start: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for FreeChannelConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            base_url: None,
+            models_url: None,
+            refresh_on_start: true,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

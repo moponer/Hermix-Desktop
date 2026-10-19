@@ -8,6 +8,7 @@
 //! and sensible defaults.
 
 pub mod config;
+pub mod free_channel;
 pub mod loader;
 pub mod managed_gateway;
 pub mod merge;
@@ -23,8 +24,8 @@ pub mod streaming;
 pub use config::{
     approval_timeout_secs, default_approval_timeout_secs, set_approval_timeout_secs,
     AdvancedSettingsConfig, AgentLoopBehaviorConfig, ApprovalConfig, CheapModelRouteConfig,
-    CompactionConfig, GatewayConfig, LlmProviderConfig, McpServerEntry, ModelSelectorConfig,
-    ModelSelectorEntry, ProfileConfig,
+    CompactionConfig, FreeChannelConfig, GatewayConfig, LlmProviderConfig, McpServerEntry,
+    ModelSelectorConfig, ModelSelectorEntry, ProfileConfig,
     ProxyConfig, SecurityConfig, SkillsSettings, SmartModelRoutingConfig, TerminalBackendType,
     TerminalConfig, ToolCapabilityConfig,
 };

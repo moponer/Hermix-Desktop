@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use hermix_config::{
     SecurityConfig,
     AdvancedSettingsConfig, AgentLoopBehaviorConfig, ApprovalConfig, CompactionConfig,
-    DailyReset, GatewayConfig, IdleReset, PlatformConfig, ProfileConfig,
+    DailyReset, FreeChannelConfig, GatewayConfig, IdleReset, PlatformConfig, ProfileConfig,
     SessionConfig, SessionResetPolicy, SkillsSettings, SmartModelRoutingConfig,
     StreamingConfig, TerminalConfig, ToolCapabilityConfig,
     UnauthorizedDmBehavior,
@@ -128,6 +128,7 @@ fn arb_gateway_config() -> impl Strategy<Value = GatewayConfig> {
                 compaction: CompactionConfig::default(),
                 advanced: AdvancedSettingsConfig::default(),
                 proxy: None,
+                free_channel: FreeChannelConfig::default(),
                 approval: ApprovalConfig::default(),
                 security: SecurityConfig::default(),
                 skills: SkillsSettings::default(),

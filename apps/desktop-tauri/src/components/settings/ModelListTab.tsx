@@ -26,6 +26,8 @@ interface ModelRow {
   providerName: string;
   isBuiltin: boolean;
   isDefault: boolean;
+  /** 内置免费渠道：显示"免费源"标记（数据会流经第三方，见列表顶部说明）。 */
+  isFree: boolean;
 }
 
 /** inline 测试的 `kind` → 中文。后端已做四分类，这里只做展示层翻译，
@@ -69,6 +71,7 @@ export function ModelListTab() {
         api.getEnvVars().catch(() => ({})),
       ]);
       const customIds = new Set(customs.map((c) => c.id));
+      const freeIds = new Set(customs.filter((c) => c.is_free_channel).map((c) => c.id));
       setCustoms(customs);
       setEnvVars(envs);
       const metaNames = new Map(meta.map((m) => [m.id, m.id]));
@@ -80,6 +83,7 @@ export function ModelListTab() {
         providerName: metaNames.get(m.provider_id) ?? m.provider_id,
         isBuiltin: !customIds.has(m.provider_id),
         isDefault: `${m.provider_id}:${m.model_id}` === def,
+        isFree: freeIds.has(m.provider_id),
       }));
       // 自定义 provider 里登记了但还没进启用清单的模型也要露出来，
       // 否则"建了却看不到"会被当成保存失败。
@@ -96,6 +100,7 @@ export function ModelListTab() {
             providerName: c.display_name ?? c.id,
             isBuiltin: false,
             isDefault: id === def,
+            isFree: c.is_free_channel === true,
           });
         }
       }
@@ -211,12 +216,18 @@ export function ModelListTab() {
       </div>
 
       {error && (
-        <div className="mt-3 px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/30 text-xs text-red-400">
+        <div className="mt-3 px-3 py-2 rounded-[var(--radius-md)] bg-red-500/12 text-[length:var(--text-ui)] text-red-400">
           {error}
         </div>
       )}
 
-      <div className="mt-4 rounded-xl border border-border-primary overflow-hidden">
+      {sorted.some((r) => r.isFree) && (
+        <p className="mt-3 px-3 py-2 rounded-[var(--radius-md)] bg-bg-tertiary/50 text-[length:var(--text-meta)] text-text-muted">
+          免费模型来自社区公开端点，随时可能失效；对话内容会发往第三方服务，请勿用于敏感内容。
+        </p>
+      )}
+
+      <div className="mt-4 overflow-hidden rounded-[var(--radius-lg)] bg-bg-card shadow-[var(--shadow-paper)]">
         {loading ? (
           <div className="flex items-center gap-2 px-4 py-6 text-xs text-text-muted">
             <Loader2 className="icon-sm animate-spin" />
@@ -238,6 +249,9 @@ export function ModelListTab() {
                   <span className="text-[length:var(--text-ui)] text-text-primary truncate">{row.modelId}</span>
                   {row.isDefault && (
                     <span className="px-1.5 py-0.5 rounded text-[length:var(--text-meta)] bg-accent/15 text-accent shrink-0">默认</span>
+                  )}
+                  {row.isFree && (
+                    <span className="px-1.5 py-0.5 rounded text-[length:var(--text-meta)] bg-bg-quaternary text-text-muted shrink-0">免费源</span>
                   )}
                 </div>
                 <div className="text-[length:var(--text-meta)] text-text-muted truncate">

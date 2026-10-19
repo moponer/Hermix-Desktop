@@ -8,6 +8,7 @@
 //! Policy HTTP routes are intentionally omitted (Hermes Python does not expose them).
 
 pub mod dashboard;
+pub mod free_channel;
 pub mod test_env;
 mod automation_trigger;
 mod orchestration_bus;

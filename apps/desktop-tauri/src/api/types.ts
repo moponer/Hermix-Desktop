@@ -406,6 +406,8 @@ export interface CustomProviderSummary {
   models: string[];
   context_window?: number;
   model_contexts?: Record<string, number>;
+  /** 内置免费渠道（`custom-free-*`）：UI 显示"免费源"标记与免责提示。 */
+  is_free_channel?: boolean;
 }
 
 export interface CustomProviderCreateRequest {

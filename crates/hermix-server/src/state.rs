@@ -381,6 +381,23 @@ impl HttpServerState {
         mut config: GatewayConfig,
         hermix_home: std::path::PathBuf,
     ) -> Result<Self, AgentError> {
+        // ── 内置免费渠道：摘除 → auto-correct → seed → 兜底默认模型。
+        //
+        // 顺序是有意的，不能交换：
+        //  · 摘除必须早于 auto-correct，否则 config.model 会留下指向已被
+        //    删除 provider 的孤儿；
+        //  · seed 必须在 auto-correct 之后，否则刚写进去的 `custom-free-*`
+        //    会参与"挑默认厂商"的竞争（auto_correct_model 本身也已把它们
+        //    排除在候选之外）；
+        //  · 免费渠道只在"一个能用的厂商都没有"时充当默认模型，绝不抢
+        //    用户已配好的厂商。
+        let mut config_dirty = false;
+
+        if !config.free_channel.enabled && hermix_config::free_channel::strip(&mut config) {
+            config_dirty = true;
+            tracing::info!("startup: free channel disabled — removed custom-free-* providers");
+        }
+
         // ── Auto-correct config.model BEFORE building the agent
         // service. Without this, a fresh install with only
         // `MINIMAX_API_KEY` in `.env` (no `config.yaml`) starts with
@@ -400,12 +417,56 @@ impl HttpServerState {
                 configured = ?report.configured_providers,
                 "startup: auto-corrected config.model"
             );
+            config_dirty = true;
+        }
+
+        if hermix_config::free_channel::ensure_seeded(&mut config) {
+            config_dirty = true;
+            tracing::info!(
+                providers = ?hermix_config::free_channel::FREE_CHANNELS
+                    .iter()
+                    .map(|c| c.id)
+                    .collect::<Vec<_>>(),
+                "startup: seeded built-in free model channels"
+            );
+        }
+
+        // 全新安装 / 无任何自配厂商：让免费渠道兜底成为默认模型，
+        // 保证"装上就能对话"。有自配厂商时不动 config.model。
+        let has_paid_provider = config.llm_providers.keys().any(|id| {
+            !hermix_config::free_channel::is_free_provider(id)
+                && hermix_config::provider_has_key(&config, id)
+        });
+        if config.model.is_none() && !has_paid_provider {
+            if let Some((provider_id, model_id)) =
+                hermix_config::free_channel::default_model(&config)
+            {
+                let full = format!("{provider_id}:{model_id}");
+                config.model = Some(full.clone());
+                if config.model_selector.is_none() {
+                    config.model_selector = Some(hermix_config::ModelSelectorConfig {
+                        enabled: vec![hermix_config::ModelSelectorEntry {
+                            provider_id: provider_id.clone(),
+                            model_id,
+                        }],
+                        default_model: Some(full),
+                    });
+                }
+                config_dirty = true;
+                tracing::info!(
+                    model = %config.model.as_deref().unwrap_or_default(),
+                    "startup: free channel is the fallback default model"
+                );
+            }
+        }
+
+        if config_dirty {
             let config_path = hermix_home.join("config.yaml");
             if let Err(e) = hermix_config::save_config_yaml(&config_path, &config) {
                 tracing::warn!(
                     error = %e,
                     path = %config_path.display(),
-                    "startup: failed to persist auto-corrected config (continuing with in-memory fix)"
+                    "startup: failed to persist corrected config (continuing with in-memory fix)"
                 );
             }
         }
@@ -873,6 +934,10 @@ impl HttpServerState {
             relay_connector_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
         state.register_task_tracker_tools();
+
+        // 内置免费渠道：启动后延迟刷新一次模型清单（best-effort，
+        // 失败沿用上次成功快照，不阻塞首屏）。
+        crate::free_channel::spawn_startup_refresh(&state);
 
         // : Start the automation scheduler with the unified
         // dispatch path. The trigger callback calls `agent_service.send_message()`,
