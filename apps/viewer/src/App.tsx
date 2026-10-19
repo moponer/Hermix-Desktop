@@ -11,10 +11,10 @@ import type { CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   ArrowLeft, ArrowRight, ArrowUp, RefreshCw, Search, Eye, EyeOff,
-  ChevronRight, Folder, FolderOpen, File as FileIcon, FileText,
-  HardDrive, Copy, ExternalLink, Sparkles, X,
+  ChevronRight, FolderOpen, HardDrive, Copy, ExternalLink, Sparkles, X,
   Monitor, Moon, Star, Sun,
 } from "lucide-react";
+import { FileTypeIcon, FolderTypeIcon } from "@hermix/preview/FileTypeIcon";
 import type { DirEntryLike, DriveRootLike } from "@hermix/preview";
 import { viewerFileSource } from "./fileSource";
 import { useTheme, type ThemeMode } from "./theme";
@@ -240,7 +240,11 @@ function TreeRow({
           </button>
         )}
         <button type="button" className="sb-row-label" onClick={() => onOpen(entry)} title={entry.path}>
-          {depth === 0 ? <HardDrive className="entry-icon" /> : <Folder className="entry-icon" />}
+          {depth === 0 ? (
+            <HardDrive className="entry-icon" />
+          ) : (
+            <FolderTypeIcon size={16} open={expanded} className="entry-icon" />
+          )}
           <span>{entry.name}</span>
         </button>
       </div>
@@ -804,7 +808,11 @@ export function App() {
                     onClick={() => openBookmark(b)}
                     title={b.path}
                   >
-                    {b.isDir ? <Folder className="entry-icon" /> : <FileText className="entry-icon" />}
+                    {b.isDir ? (
+                      <FolderTypeIcon size={16} className="entry-icon" />
+                    ) : (
+                      <FileTypeIcon name={b.name} size={16} className="entry-icon" />
+                    )}
                     <span>{b.name}</span>
                   </button>
                   <button
@@ -886,7 +894,11 @@ export function App() {
                           身份，列宽才能由 table-layout: fixed 分配，
                           名字列吃掉剩余宽度（宽屏下不再留空白）。 */}
                       <span className="cell-main">
-                        {e.isDir ? <Folder className="entry-icon" /> : <FileIcon className="entry-icon" />}
+                        {e.isDir ? (
+                          <FolderTypeIcon size={16} className="entry-icon" />
+                        ) : (
+                          <FileTypeIcon name={e.name} size={16} className="entry-icon" />
+                        )}
                         <span className="cell-text">{e.name}</span>
                       </span>
                     </td>
@@ -910,7 +922,7 @@ export function App() {
                 onClick={() => setActiveTabId(t.id)}
                 title={t.path}
               >
-                <FileText className="tab-icon" />
+                <FileTypeIcon name={t.name} size={14} className="tab-icon" />
                 <span className="tab-title">{t.name}</span>
                 <button
                   className="tab-close"

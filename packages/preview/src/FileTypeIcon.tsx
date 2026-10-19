@@ -1,6 +1,16 @@
 /* ─────────────────────────────────────────────────────────────────
    FileTypeIcon — Material Design / Google Drive style file icons.
    ─────────────────────────────────────────────────────────────────
+
+   住在共享包 @hermix/preview（2026-10-19 从 desktop 的
+   src/components/ 搬过来）：文件类型图标是"文件长什么样"的公共知识，
+   desktop 与 viewer 都要用——复制一份就是两套图标体系必然分叉
+   （与 2026-10-13 抽包同一条理由：预览层只留一份实现）。
+
+   走独立子路径出口 `@hermix/preview/FileTypeIcon` 而非 barrel：
+   viewer 的首屏 bundle 靠 tree-shaking 才没把 exceljs / pdf.js /
+   satteri 拖进去，图标这种两端都要用的轻组件单独出口最稳。
+
    Each icon is a small SVG that fills the entire viewBox:
      • Square body  (rounded corners)
      • Top-right dog-ear corner (a triangle in lighter shade)
@@ -15,7 +25,7 @@
      • Theme control: colors come from `currentColor` or a per-type
        hex, so we get the same look in light + dark without a
        runtime cost.
-     • Tiny: this file is < 8 KB for ~60 file types.
+     • Tiny: this file is < 12 KB for ~100 file types.
      • Crisp at any size (14px list rows, 30px modal header,
        60px preview tab).
 
@@ -27,6 +37,7 @@
    ─────────────────────────────────────────────────────────────── */
 
 import { useMemo } from "react";
+import type { CSSProperties } from "react";
 
 /** Per-extension visual: brand color + 1-3 char label.
  *
@@ -150,6 +161,45 @@ const LOOK: Record<string, { bg: string; label: string }> = {
   dylib: { bg: "#374151", label: "D"  },
   // ── Config / lockfiles ────────────────────────────────────
   lock: { bg: "#6b7280", label: "L"    },
+  // ── 更多常见类型（2026-10-19 补齐 viewer 文件列表用） ────
+  // 现代图片格式
+  avif: { bg: "#059669", label: "AVIF" },
+  heic: { bg: "#059669", label: "HEIC" },
+  heif: { bg: "#059669", label: "HEIF" },
+  jfif: { bg: "#059669", label: "JFIF" },
+  apng: { bg: "#059669", label: "APNG" },
+  psd:  { bg: "#31a8ff", label: "PSD" },
+  ai:   { bg: "#ff9a00", label: "AI"  },
+  sketch: { bg: "#f2b21c", label: "SK" },
+  fig:  { bg: "#a259ff", label: "FIG" },
+  // 电子书
+  epub: { bg: "#2e7d32", label: "EPUB" },
+  mobi: { bg: "#2e7d32", label: "MOBI" },
+  azw3: { bg: "#2e7d32", label: "AZW3" },
+  // 安装包 / 镜像
+  iso:  { bg: "#6b7280", label: "ISO" },
+  msi:  { bg: "#374151", label: "MSI" },
+  apk:  { bg: "#3ddc84", label: "APK" },
+  deb:  { bg: "#d70a53", label: "DEB" },
+  rpm:  { bg: "#a51c30", label: "RPM" },
+  // 数据库
+  sqlite: { bg: "#0f6fbf", label: "SQL" },
+  sqlite3: { bg: "#0f6fbf", label: "SQL" },
+  db:  { bg: "#0f6fbf", label: "DB"  },
+  // 日志 / 临时 / 补丁
+  log: { bg: "#6b7280", label: "LOG" },
+  bak: { bg: "#9ca3af", label: "BAK" },
+  tmp: { bg: "#9ca3af", label: "TMP" },
+  patch: { bg: "#6b7280", label: "PATCH" },
+  diff: { bg: "#6b7280", label: "DIFF" },
+  properties: { bg: "#6b7280", label: "CFG" },
+  gitignore: { bg: "#f05033", label: "GIT" },
+  // 笔记本 / 构建
+  ipynb: { bg: "#da5b0b", label: "IPYNB" },
+  dockerfile: { bg: "#0f7bc4", label: "DOCK" },
+  makefile: { bg: "#6b7280", label: "MAKE" },
+  cmake: { bg: "#0f6fbf", label: "CMAKE" },
+  gradle: { bg: "#02303a", label: "GRAD" },
 };
 
 function lookFor(name: string): { bg: string; label: string } | null {
@@ -188,7 +238,7 @@ export function FileTypeIcon({
   name?: string;
   size?: number;
   className?: string;
-  style?: React.CSSProperties;
+  style?: CSSProperties;
 }) {
   const look = useMemo(() => (name ? lookFor(name) : null), [name]);
   const label = look?.label ?? "?";
@@ -273,6 +323,59 @@ export function FileTypeIcon({
       >
         {label}
       </text>
+    </svg>
+  );
+}
+
+/**
+ * 文件夹图标：与文件图标同一套视觉语言（实心 + 折角 + 顶边高光），
+ * 用暖琥珀色把「目录」和「文件」一眼分开。展开态用斜前板区别。
+ */
+export function FolderTypeIcon({
+  size = 18,
+  open = false,
+  className,
+  style,
+}: {
+  size?: number;
+  open?: boolean;
+  className?: string;
+  style?: CSSProperties;
+}) {
+  // 品牌识别色系：目录色不随主题切换。
+  // design-guard: allow
+  const back = "#d97706";
+  // design-guard: allow
+  const front = "#f59e0b";
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      className={className}
+      style={style}
+      display="block"
+      aria-hidden="true"
+    >
+      {/* 背板 + 标签（目录的"提手"） */}
+      <path
+        d="M3 7a2 2 0 0 1 2-2h3.3a2 2 0 0 1 1.5.7L11.2 7H19a2 2 0 0 1 2 2v2H3z"
+        fill={back}
+      />
+      {open ? (
+        /* 打开态：前板斜着翻下来，形状一眼区别于闭合态 */
+        <path
+          d="M6.6 11.5h15.6l-3 8.4a1.7 1.7 0 0 1-1.6 1.1H4.4a1.7 1.7 0 0 1-1.6-2.1z"
+          fill={front}
+        />
+      ) : (
+        <path
+          d="M3 11.5h18v7.6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"
+          fill={front}
+        />
+      )}
     </svg>
   );
 }

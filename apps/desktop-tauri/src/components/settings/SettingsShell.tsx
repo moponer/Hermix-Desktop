@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 
 import { cx } from "../../lib/cx";
+import { FileTypeIcon } from "@hermix/preview/FileTypeIcon";
 import { storage, STORAGE_KEYS } from "../../utils/storageCompat";
 import { Switch, SettingsGroup, SettingsRow, SegmentedControl } from "../ui";
 import { toastWarning } from "../../hooks/useToast";
@@ -485,7 +486,12 @@ function FileAssocTab() {
         {entries.map(({ ext, owned }) => (
           <SettingsRow
             key={ext}
-            title={`.${ext}`}
+            title={
+              <span className="flex items-center gap-2">
+                <FileTypeIcon name={`sample.${ext}`} size={16} />
+                {`.${ext}`}
+              </span>
+            }
             description={owned ? "已由查看器接管" : "当前由其他程序处理"}
             control={
               <Switch

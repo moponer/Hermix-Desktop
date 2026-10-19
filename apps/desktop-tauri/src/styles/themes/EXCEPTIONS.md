@@ -8,7 +8,7 @@
 | 文件 | 常量 | 用途 | 说明 |
 |---|---|---|---|
 | `src/components/ProviderIcon.tsx` | `BRAND_COLOR`（26 项） | 厂商 logo 软底/前景 | lobehub/官方站点主色；软底已改 `color-mix` 派生（2026-10-16），禁拼 hex8 |
-| `src/components/FileTypeIcon.tsx` | 按扩展名的色表（97 处） | 文件类型图标底色 | 待分批令牌化（R4 剩余），新增色必须同时登记 |
+| `packages/preview/src/FileTypeIcon.tsx` | 按扩展名的色表（130 处） | 文件类型图标底色 | 2026-10-19 从 `src/components/` 搬进共享包（desktop 与 viewer 共用同一份图标体系）。本表只扫 `apps/desktop-tauri/src`，共享包不在其范围内——登记保留以备该表将来扩围 |
 | `src/components/agents/types.ts` | 8 处 hex | 专家头像色板 | 后续并入 ColorPicker 档位 |
 | `src/lib/codeHighlight.ts` | 高亮色板（约 40 处） | 代码语法高亮 token 色 | 第三方高亮库（highlight.js 主题）的输入数据，非界面装饰；主题切换时由调用方整体换肤 |
 | `src/styles/themes/accentPalette.ts` | `ACCENT_PALETTE`（5 组） | 强调色候选色板（用户选色数据） | 与 ProviderIcon 同类：色值是数据不是装饰；swatch/on 成对登记 |

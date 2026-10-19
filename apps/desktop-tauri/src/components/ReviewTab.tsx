@@ -17,7 +17,7 @@ import { FilePlus2, FilePenLine, FileX2, FileClock } from "lucide-react";
 import { clsx } from "clsx";
 import type { ChatMessage, ExecutionTimelineEvent } from "../types";
 import { canonicalPath } from "../utils/artifacts";
-import { FileTypeIcon } from "./FileTypeIcon";
+import { FileTypeIcon } from "@hermix/preview/FileTypeIcon";
 
 type ChangeType = NonNullable<ExecutionTimelineEvent["change_type"]>;
 

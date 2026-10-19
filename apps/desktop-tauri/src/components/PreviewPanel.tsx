@@ -31,7 +31,7 @@ import { openExternalUrl } from "../desktopBridge";
 import { desktopFileSource } from "../lib/fileSourceAdapter";
 import { CodeView } from "./CodeView";
 import { openImageViewer } from "./imageViewer";
-import { FileTypeIcon } from "./FileTypeIcon";
+import { FileTypeIcon } from "@hermix/preview/FileTypeIcon";
 import { formatBytes, fileTypeLabel, totalRows, modelLabel } from "./rightSidebarUtils";
 
 const ZOOM_MIN = 50;

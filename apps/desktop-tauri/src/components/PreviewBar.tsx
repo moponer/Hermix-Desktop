@@ -27,7 +27,7 @@ import { toastSuccess, toastError } from "../hooks/useToast";
 import type { ChatMessage, SubAgentState } from "../types";
 import { ComputerTab } from "./ComputerTab";
 import { PreviewPanel } from "./PreviewPanel";
-import { FileTypeIcon } from "./FileTypeIcon";
+import { FileTypeIcon } from "@hermix/preview/FileTypeIcon";
 import { ReviewTab } from "./ReviewTab";
 import { SubAgentTab } from "./SubAgentTab";
 

@@ -27,7 +27,7 @@ import { useSafeTimeout } from "../hooks/useSafeTimeout";
 import { highlightToReact, readIsDark } from "../lib/codeHighlight";
 import { autoCloseUnbalancedFences } from "../lib/markdownFence";
 import { hardenSoftLineBreaks } from "@hermix/preview";
-import { FileTypeIcon } from "./FileTypeIcon";
+import { FileTypeIcon } from "@hermix/preview/FileTypeIcon";
 
 /**
  * 行内代码的语言猜测 —— CommonMark 的 `` `foo` `` 不带语言标记，

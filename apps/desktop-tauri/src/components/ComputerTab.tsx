@@ -5,7 +5,7 @@ import {
   RefreshCw, List, FileText, LayoutGrid,
   AlertTriangle, FolderOpen, ChevronRight,
 } from "lucide-react";
-import { FileTypeIcon } from "./FileTypeIcon";
+import { FileTypeIcon } from "@hermix/preview/FileTypeIcon";
 import { clsx } from "clsx";
 import { openExternalUrl, listDirectory, type DirEntry } from "../desktopBridge";
 import { invoke } from "@tauri-apps/api/core";
