@@ -568,7 +568,16 @@ html, body, #root {
 }
 .ai-busy { color: var(--text-secondary); }
 .ai-error { color: var(--danger); font-size: 12px; padding: 4px 10px; }
-.ai-quick { display: flex; gap: 6px; padding: 6px 10px 0; flex: none; }
+.ai-quick { display: flex; flex-direction: column; gap: 6px; padding: 6px 10px 0; flex: none; }
+.ai-quick-group { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.ai-quick-label {
+  font-size: 10px; color: var(--text-muted);
+  letter-spacing: 0.05em; flex: none;
+}
+.ai-note {
+  font-size: 11px; color: var(--text-muted);
+  padding: 4px 10px 0; line-height: 1.4; flex: none;
+}
 .ai-quick-btn {
   background: var(--bg-secondary);
   color: var(--text-primary); border-radius: 999px;

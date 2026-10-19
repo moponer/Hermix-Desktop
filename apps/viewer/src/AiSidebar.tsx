@@ -4,33 +4,38 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { isImageExt } from "@hermix/preview";
+import {
+  GENERAL_PROMPTS,
+  IMAGE_PROMPTS,
+  aiOutputName,
+  type AiPromptTemplate,
+} from "./aiPrompts";
 
 interface Msg {
   role: "user" | "assistant";
   text: string;
 }
 
-/** 快捷指令（决策笔记「快捷指令」形态同 WorkBuddy：一键预填发送）。 */
-const QUICK_ACTIONS: { label: string; tpl: (sel: string) => string }[] = [
-  { label: "总结", tpl: () => "总结这个文件的主要内容" },
-  {
-    label: "检查",
-    tpl: () => "检查这个文件有没有问题（错误、风险、遗漏），逐条列出",
-  },
-  {
-    label: "解释选中",
-    tpl: (sel) => `解释这段内容的含义：\n\n${sel.slice(0, 2000)}`,
-  },
-];
+/** 外部请求发送一条消息（文件列表右键「加入 AI 对话」走这条）。 */
+export interface PendingSend {
+  text: string;
+  /** 每次请求一个唯一值：同一条消息不会被发两遍。 */
+  nonce: number;
+}
 
 export function AiSidebar({
   filePath,
   selection,
   onClose,
+  pending,
+  onPendingHandled,
 }: {
   filePath: string | null;
   selection: string;
   onClose: () => void;
+  pending?: PendingSend | null;
+  onPendingHandled?: () => void;
 }) {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
@@ -74,6 +79,27 @@ export function AiSidebar({
     [busy, filePath, selection],
   );
 
+  // 外部触发的发送（右键「加入 AI 对话」）。nonce 保证同一条只发一次。
+  const handledNonce = useRef(-1);
+  useEffect(() => {
+    if (!pending || handledNonce.current === pending.nonce) return;
+    handledNonce.current = pending.nonce;
+    void send(pending.text);
+    onPendingHandled?.();
+  }, [pending, send, onPendingHandled]);
+
+  // 模板：图片给改图组，通用组两种文件都适用。
+  const isImage = !!filePath && isImageExt(filePath);
+  const fileName = filePath ? (filePath.split(/[\\/]/).pop() ?? filePath) : "当前文件";
+  const outName = aiOutputName(fileName);
+
+  const sendTemplate = useCallback(
+    (t: AiPromptTemplate) => {
+      void send(t.build(fileName, outName));
+    },
+    [send, fileName, outName],
+  );
+
   return (
     <aside className="ai-side">
       <div className="ai-head">
@@ -109,17 +135,51 @@ export function AiSidebar({
 
       {error && <div className="ai-error">{error}</div>}
 
+      {filePath && (
+        <div className="ai-note">AI 的产物会另存为新文件，原文件不会被改动</div>
+      )}
+
       <div className="ai-quick">
-        {QUICK_ACTIONS.map((q) => (
-          <button
-            key={q.label}
-            className="ai-quick-btn"
-            disabled={busy}
-            onClick={() => void send(q.tpl(selection))}
-          >
-            {q.label}
-          </button>
-        ))}
+        {isImage && (
+          <div className="ai-quick-group">
+            <span className="ai-quick-label">改图</span>
+            {IMAGE_PROMPTS.map((t) => (
+              <button
+                key={t.id}
+                className="ai-quick-btn"
+                disabled={busy}
+                title={t.hint}
+                onClick={() => sendTemplate(t)}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+        )}
+        <div className="ai-quick-group">
+          <span className="ai-quick-label">通用</span>
+          {GENERAL_PROMPTS.map((t) => (
+            <button
+              key={t.id}
+              className="ai-quick-btn"
+              disabled={busy}
+              title={t.hint}
+              onClick={() => sendTemplate(t)}
+            >
+              {t.label}
+            </button>
+          ))}
+          {selection && (
+            <button
+              className="ai-quick-btn"
+              disabled={busy}
+              title="解释选中的文本"
+              onClick={() => void send(`解释这段内容的含义：\n\n${selection.slice(0, 2000)}`)}
+            >
+              解释选中
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="ai-input-row">

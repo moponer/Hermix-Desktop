@@ -19,7 +19,8 @@ import { FileTypeIcon, FolderTypeIcon } from "@hermix/preview/FileTypeIcon";
 import type { DirEntryLike, DriveRootLike } from "@hermix/preview";
 import { viewerFileSource } from "./fileSource";
 import { useTheme, type ThemeMode } from "./theme";
-import { AiSidebar } from "./AiSidebar";
+import { AiSidebar, type PendingSend } from "./AiSidebar";
+import { joinConversationPrompt } from "./aiPrompts";
 
 // 预览引擎懒加载：PreviewHost → @hermix/preview barrel → satteri 的 3MB
 // WASM + ExcelJS + pdf.js + pptx。静态引入会让整条预览栈进首屏 bundle，
@@ -310,6 +311,7 @@ export function App() {
 
   // —— AI 右栏 ——
   const [aiOpen, setAiOpen] = useState(false);
+  const [aiPending, setAiPending] = useState<PendingSend | null>(null);
   const [selection, setSelection] = useState("");
 
   // —— 导航历史 ——
@@ -331,6 +333,8 @@ export function App() {
   // —— 拖放 ——
   const [dragOver, setDragOver] = useState(false);
   const openedRef = useRef<Set<string>>(new Set());
+  /** 「加入 AI 对话」的请求序号：每次自增，保证同一条消息不被发两遍。 */
+  const aiNonceRef = useRef(0);
 
   // 启动参数 / 单实例投递（与旧实现一致）
   useEffect(() => {
@@ -446,6 +450,8 @@ export function App() {
       /* 持久化失败仅影响下次启动，本次会话内仍可用 */
     }
   }, []);
+
+  const clearAiPending = useCallback(() => setAiPending(null), []);
 
   const layoutVars = useMemo(
     () =>
@@ -1067,6 +1073,8 @@ export function App() {
               key={active?.path ?? "__none__"}
               filePath={active?.path ?? null}
               selection={selection}
+              pending={aiPending}
+              onPendingHandled={clearAiPending}
               onClose={() => setAiOpen(false)}
             />
           </>
@@ -1102,6 +1110,23 @@ export function App() {
             }}
           >
             <Copy /> 复制完整路径
+          </button>
+          <button
+            className="ctxmenu-item"
+            onClick={() => {
+              const entry = ctxMenu.entry;
+              setCtxMenu(null);
+              if (entry.isDir) return;
+              openPath(entry.path);
+              setAiOpen(true);
+              setAiPending({
+                text: joinConversationPrompt(entry.name),
+                nonce: ++aiNonceRef.current,
+              });
+            }}
+            disabled={ctxMenu.entry.isDir}
+          >
+            <Sparkles /> 加入 AI 对话
           </button>
           <button
             className="ctxmenu-item"
