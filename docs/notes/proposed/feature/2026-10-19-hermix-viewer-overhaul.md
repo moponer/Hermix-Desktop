@@ -62,11 +62,11 @@ Status: proposed — 方案已成形（2026-10-19），执行台账未开始，�
 | F0 | 基线记录（门禁现状 / 代码行数 / 编译耗时 / 脏树快照） | done | 23:38 | 106bd5f2 |
 | F1 | 启动卡顿：驱动器列表异步化 + 侧栏加载态 | done | 23:52 | 106bd5f2（Rust）+ 93c6c499（前端） |
 | F2 | 全屏/最大化平铺 + 可拖拽分隔条 | done | 23:45 | 84d126a9 |
-| F3 | 彩色类型图标系统（列表 + 关联后缀 + 文件夹） | doing | 23:48 | - |
-| F4 | 双模式：纯净模式 / 重量模式与切换 | pending | - | - |
-| F5 | 重量模式：图片处理工具集 | pending | - | - |
+| F3 | 彩色类型图标系统（列表 + 关联后缀 + 文件夹） | done | 23:50 | e9834e33 |
+| F4 | 双模式：纯净模式 / 重量模式与切换 | done | 23:52 | 4c124829 |
+| F5 | 重量模式：图片处理工具集 | doing | 23:55 | - |
 | F6 | 重量模式：文本 / 文档 / PDF 编辑与转换 | pending | - | - |
-| F7 | AI 协助：一键入对话 + 改图提示词 + 原图保留 | pending | - | - |
+| F7 | AI 协助：一键入对话 + 改图提示词 + 原图保留 | done | 23:52 | 16bbb5be |
 | F8 | 常见文件类型覆盖矩阵（预览 / 编辑下限） | pending | - | - |
 | F9 | 收尾：一致性审查 + 全量门禁 + 笔记归档 + 总结 | pending | - | - |
 
@@ -90,7 +90,33 @@ Status: proposed — 方案已成形（2026-10-19），执行台账未开始，�
 
 **既有门禁失败（与本任务无关）**：`docs/MCPHUB_BORROWINGS.md` 留在 `docs/` 顶层却不在 `scripts/check-notes.sh` 的 `ALLOWED` 白名单里 → notes 结构检查必红（该文件来自提交 `0b72f4f4`，当时归档了 MCPHUB 借鉴笔记但没同步白名单）。F9 一并处理。
 
-### F1 提交归属说明
+### F5 图片处理：调研结论（2026-10-19 23:45，落地前必读）
+
+调研只读完成，事实逐条落到本机 cargo registry 源码与依赖树，不是凭记忆。
+
+**依赖：零新增下载。** `image 0.25.10` 已在 `Cargo.lock`（工作区依赖，`hermix-tools` / `hermix-plugin` 都在用），`tauri-plugin-dialog 2.8.2` 已在 lock（desktop 在用）。前端 npm 增量保持 0。
+
+**三条决定实现形态的硬事实**：
+
+1. **`image` 没有饱和度**（`imageops/colorops.rs` 只有 grayscale/invert/contrast/brighten/huerotate/dither/index_colors）→ 饱和度手写 HSL 调整，两端各一份。
+2. **`image` 的 WebP 编码只支持无损**（`codecs/webp/encoder.rs:12` 明写）→ WebP 有损必须走前端 `canvas.toBlob('image/webp', q)` 出字节、Rust 只负责落盘。
+3. **浏览器不解 ico / tiff** → 这两类预览必须由 Rust 转 PNG 再给前端（`image_rasterize` 命令）。
+
+**另外三条**：`image` 不自动应用 EXIF 方向（EXIF 归 F8）；GIF 动图编辑语义定为「取首帧并明示」；`avif` feature 绝不开（`ravif → rav1e` 需要 nasm，MSVC 机器上没有）。
+
+**ICO 多尺寸不用手写字节布局**——`image` 已给 `IcoFrame::as_png` + `IcoEncoder::encode_images`（`codecs/ico/encoder.rs:71,95`），比仓内 `crates/hermix-plugin/src/icon_library.rs` 的手工装配更可靠。
+
+**编辑器放 `apps/viewer/`，不进 `packages/preview`**：共享包同时被 desktop 消费，把编辑器塞进去会让 desktop 白背一份 CSS 与 token 契约（`scripts/check-preview-layer.mjs` 的硬约束）。`packages/preview` 在 F5 全程零改动。
+
+**像素运算的两份实现用「op 列表 + 公式约定」钉死**：交互预览在前端 Canvas（60fps），导出在 Rust（权威）；亮度=加法、对比度=以 127.5 为中心的系数、灰度=Rec.601，Rust 侧用单测锁公式。撤销/重做走 op 列表而非像素快照（4000×3000 的 dataURL 快照 × N 步 = 内存爆炸）。
+
+**仓内先例比外部项目更该抄**：`apps/desktop-tauri/src/components/ScreenshotEditor.tsx`（马赛克降采样 + 最近邻放大、`ctx.fillText` 加中文、拖拽裁剪）、`crates/hermix-plugin/src/icon_library.rs`（多尺寸 ICO）、`crates/hermix-tools/src/tools/file_converter.rs`（读→编→写骨架）。外部参考（fabric.js 的「源图 + 滤镜数组 + 每次重算」模型、cropperjs 的比例锁定数学、imagepipe 的「一 op 一纯函数」组织、Loupe/Gwenview 的「查看与编辑分模式」结构）只借鉴机制，不引入代码——npm 增量必须为 0，且引入后要裁剪成只用 filters，成本高于自写。
+
+**四批次实施**：①地基（依赖 + 元信息 + 读→编→写新文件闭环）②几何（裁剪/旋转/翻转/缩放/拼接 + 撤销重做）③色彩与效果（灰度/亮度/对比度/饱和度/模糊/马赛克 + WebP 有损）④叠加与批量（加文字/贴图/压缩/批量）。
+
+**红线**：Rust 侧新增直接依赖 ≤ 2（`image` + `tauri-plugin-dialog`），前端 npm = 0；`cargo check -p hermix-viewer` 增量必须实测记录（工作区并集已含 `image` 全 features，预期并集增量 ≈ 0，单包冷编译预期 +60~120s）。
+
+## F1 提交归属说明
 
 F1 的改动被拆在两个提交里，原因是**看门狗与主会话并发提交**（首次执行时台账还没落 doing 状态，看门狗判成「有 pending 无 doing」而接管，与主会话同时改同一个工作树）：
 

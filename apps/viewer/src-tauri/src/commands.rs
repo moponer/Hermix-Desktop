@@ -149,7 +149,7 @@ fn size_limit_for_ext(ext: &str) -> u64 {
 }
 
 /// 零依赖 base64：避免引入 base64 crate（六步阶梯）。
-fn base64_encode(bytes: &[u8]) -> String {
+pub(crate) fn base64_encode(bytes: &[u8]) -> String {
     use std::fmt::Write;
     const TBL: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);

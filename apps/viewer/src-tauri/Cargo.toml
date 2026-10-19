@@ -21,6 +21,14 @@ indexmap1 = { package = "indexmap", version = "1.9", features = ["std"] }
 tauri = { version = "2" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# 图片处理内核（F5 重量模式）。与 desktop-tauri 的 image 声明并存：
+# feature 集不同（viewer 还要 ico / tiff / webp / gif / bmp 供编辑与转换），
+# Cargo 取 feature 并集。刻意 default-features = false 且**不开 avif**——
+# avif 走 ravif → rav1e，rav1e 的 asm feature 需要 nasm（本机 MSVC 没有）。
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp", "ico", "tiff"] }
+# 「另存为」系统对话框：只调 Rust 侧 API，前端不装 npm 包
+#（@tauri-apps/plugin-dialog），前端依赖增量保持 0。
+tauri-plugin-dialog = "2"
 # AI 右栏：直连本地 server 的 /v1/ REST（viewer 是独立进程，不走主程序
 # 的 stdio 桥——那根管道归主 app 的前端所有）。
 reqwest = { workspace = true, features = ["json"] }

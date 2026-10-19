@@ -6,6 +6,7 @@
 //! 组织：命令在 commands.rs（lib.rs 根定义会与 generate_handler 冲突）。
 
 pub mod commands;
+pub mod image_ops;
 
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -105,7 +106,13 @@ pub fn main() {
             commands::viewer_open_with_system,
             commands::viewer_take_pending,
             commands::ai_send,
+            image_ops::image_info,
+            image_ops::image_rasterize,
+            image_ops::image_apply,
+            image_ops::image_batch,
+            image_ops::image_save_dialog,
         ])
+        .plugin(tauri_plugin_dialog::init())
         .setup(move |app| {
             seed_pending(app.handle(), &init_args);
             spawn_singleton_listener(app.handle().clone());
