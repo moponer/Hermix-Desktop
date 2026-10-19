@@ -22,6 +22,7 @@ import {
   type ViewMode,
 } from "@hermix/preview";
 import { isEditableImage } from "./image/imageOps";
+import { isMediaFile, MediaView } from "./media/MediaView";
 
 // 编辑器懒加载：它们是重量模式的重量功能，纯净模式与文本预览都不该
 // 为它们付首屏 bundle 的钱。
@@ -43,6 +44,8 @@ type EditorKind = "none" | "image" | "pdf" | "text";
 
 /** 这个文件有没有对应的编辑器。SVG 是矢量，图片内核解不了 → 不给。 */
 function editorFor(kind: PreviewKind, name: string): EditorKind {
+  // 媒体走 asset 协议播放，不进文本编辑器。
+  if (isMediaFile(name)) return "none";
   if (kind === "image") return isEditableImage(name) ? "image" : "none";
   if (kind === "pdf") return "pdf";
   if (kind === "text" || kind === "code" || kind === "markdown") return "text";
@@ -164,9 +167,12 @@ export function PreviewHost({
 
   const kind: PreviewKind = useMemo(() => resolveKind(name), [name]);
   const effectiveKind = applyViewMode(kind, viewMode);
+  /** 媒体走 asset 协议，不进共享预览管线（几百 MB 的文件不经 IPC 搬）。 */
+  const isMedia = useMemo(() => isMediaFile(name), [name]);
 
   // 加载阶段：每次 path / viewMode 变了重读
   useEffect(() => {
+    if (isMedia) return;
     const myToken = ++loadToken.current;
     let cancelled = false;
     setState({ status: "loading", kind: effectiveKind });
@@ -188,7 +194,7 @@ export function PreviewHost({
     return () => {
       cancelled = true;
     };
-  }, [name, path, viewMode, effectiveKind, source]);
+  }, [name, path, viewMode, effectiveKind, source, isMedia]);
 
   // 外壳（工具条 + 内容区）常驻：载入 / 错误态也走同一套壳，
   // 否则状态提示会掉到 .preview-body 左边（flex 行容器里宽度自适应），
@@ -283,7 +289,13 @@ export function PreviewHost({
         )}
       </div>
       <div className="preview-pane-inner">
-        {editor === "image" ? (
+        {isMedia ? (
+          <MediaView
+            path={path}
+            name={name}
+            onFallback={() => void source.openWithSystem?.(path)}
+          />
+        ) : editor === "image" ? (
           <Suspense fallback={<div className="preview-state-center">正在准备编辑器…</div>}>
             <ImageEditor
               path={path}
