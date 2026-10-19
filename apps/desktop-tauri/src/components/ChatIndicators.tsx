@@ -107,6 +107,8 @@ export function QueueItemRow({
   canEdit,
   canRemove,
   canSend,
+  status,
+  error,
   onEdit,
   onRemove,
   onSend,
@@ -114,6 +116,9 @@ export function QueueItemRow({
   index: number;
   total: number;
   text: string;
+  /** 等待 / 发送中 / 失败 —— 三态必须有可见差异，否则用户读不出队列在干什么。 */
+  status?: "queued" | "sending" | "failed";
+  error?: string;
   canEdit: boolean;
   canRemove: boolean;
   canSend: boolean;
@@ -157,9 +162,23 @@ export function QueueItemRow({
 
   return (
     <li className="group flex items-start gap-1.5 rounded px-2 py-1 hover:bg-bg-tertiary/50 transition-colors">
-      <span className="shrink-0 mt-0.5 text-tiny font-mono tabular-nums text-text-faint w-4 text-center">
-        {index + 1}
-      </span>
+      <span
+        className={`mt-1.5 size-1.5 shrink-0 rounded-full ${
+          status === "failed"
+            ? "bg-[var(--color-error)]"
+            : status === "sending"
+              ? "bg-[var(--color-accent)] animate-pulse"
+              : "bg-[var(--color-border-secondary)]"
+        }`}
+        title={
+          status === "failed"
+            ? `发送失败${error ? `：${error}` : ""}`
+            : status === "sending"
+              ? "正在发送"
+              : `第 ${index + 1} 条，等待发送`
+        }
+        aria-label={status === "failed" ? "发送失败" : status === "sending" ? "正在发送" : "等待发送"}
+      />
 
       {editing ? (
         <div className="flex-1 min-w-0">

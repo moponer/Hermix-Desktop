@@ -59,6 +59,7 @@ Key crates:
 - **Desktop app frontend** — `apps/desktop-tauri/src/`, uses `@` alias for `src/`
 - **界面改动必读内置设计 skill** — `crates/hermix-server/src/dashboard/skills/impeccable-design.md`（仓库里唯一的界面设计规范）。改完 UI 必跑 `npx -y impeccable@4.1.0 detect <路径>`，退出码 0 才算干净；报告「已修好」之前检测结果就是证据。令牌层规范另见 `docs/TYPOGRAPHY_SYSTEM.md` + `npm run check:tokens`。注意 detect 对**解析不了的文件会静默返回 0**，所以先跑 `tsc --noEmit` 再信它的绿灯。
 - **前端 UI 纪律（DesignGuard，2026-10-18）** — `scripts/check-design-guard.mjs`（`npm run check:design`，进 ci-gate）把 impeccable/typography 的硬约束做成 grep 门禁：TSX 禁字面色值/禁 `dark:` 变体/图标按钮必须 `aria-label`/视图文件禁 `加载中…` 字面量与 `window.confirm`。此前同类规则只写在文档里，CSS 层与既有组件的违规从未被检出。新增约束优先写进门禁而不是靠自觉。
+- **共享预览层纪律（preview-layer gate，2026-10-19）** — `scripts/check-preview-layer.mjs`（进 ci-gate 的 `[4d/14]`）守 `@hermix/preview` 的一致性：共享组件的类名必须在 `packages/preview/src/styles/preview-doc.css` 里有规则（**禁 Tailwind 原子类**——viewer 刻意不装 Tailwind，原子类在那边是空操作），共享 CSS 用到的每个 `var(--token)` 两侧都要定义（`var()` 解析失败 = 整条声明被丢弃）。渲染器样式（image/pdf/pptx/纯文本/状态/头部按钮）必须住在共享包里，桌面端 `code-view.css` 只留 `.code-*` 与桌面外壳。依据：`docs/notes/implemented/architecture/2026-10-19-shared-preview-layer-ownership.md`。
 
 ## Core principles (2026-07-23, applies to all work — code, design, bug fix, doc)
 
@@ -118,13 +119,12 @@ Key crates:
   写 `if !/^[0-9a-f]{64}$/.test(s)` 会报 `expected expression, found '/'`，
   看起来像括号配平错误，其实是语言特性没了。一律用 `regex::Regex::new(&pat)?`
   （见 `crates/hermix-server/src/util.rs:35`）或手写 `chars().all(...)`。
-- **打包必须含最新后端与资源（每次打包前强制）**: 单 workspace 后产物一律在仓库根 `target/`；sidecar 刷新已自动化——`npm run build`（dev.mjs）与 `cargo tauri build` 的 `beforeBuildCommand` 都会跑 `npm run ensure-sidecar`（编译 hermix-server + hermix-indexer → 拷 binaries/ → sha256 逐字节校验，任一步失败即断）。**禁止绕过该脚本手工 copy**；build.rs 在 release 缺源时直接 panic。打包前仍跑 `./scripts/check-sidecar-freshness.sh`（exit 1 = 过期，禁止打包）：
+- **打包必须含最新前端/后端/资源（每次打包前强制）**: `beforeBuildCommand` 统一跑 `apps/desktop-tauri/scripts/prepare-build.mjs`——先 `vite build` 产出 `release/frontend`（tauri 的 `frontendDist`），再 `ensure-sidecar.mjs` 编译 sidecar + 拷 binaries/ + sha256 逐字节校验；任一步失败即断。`npm run build`（dev.mjs）不再单独调用这两步，全部经钩子，**绕过 dev.mjs 直接 `cargo tauri build` 也跳不过**。**禁止手工 copy 产物**；build.rs 在 release 缺源时直接 panic。打包前仍跑 `./scripts/check-sidecar-freshness.sh`（exit 1 = 过期，禁止打包）：
   ```bash
-  npm run build                # dev.mjs 全链路（含 ensure-sidecar）
-  # 或最小路径：cargo tauri build 的 beforeBuildCommand 自带 ensure-sidecar
+  npm run build                # dev.mjs 全链路（钩子内构建前端 + sidecar）
   ./scripts/check-sidecar-freshness.sh   # 必须 exit 0
   ```
-  教训：2026-10-06 与 2026-10-08 两次"修了但新装的包里没有"——测试/交付跑在旧二进制上。根因（手工 copy 链 + 三处产物目录分裂）已于 2026-10-09 根治，决策记录：`docs/notes/implemented/architecture/2026-10-09-single-workspace-target-dir.md`。
+  教训：2026-10-06 / 10-08 两次"修了但新装的包里没有"（sidecar 停在旧二进制）；2026-10-19 同类事故复发在前端——钩子当时只刷 sidecar，前端靠人工 `vite build`，于是 10-14 的 exe 配 10-16 的 UI、源码已到 10-18。两条根因现都由 prepare-build 钩子收口；单 workspace 决策记录：`docs/notes/implemented/architecture/2026-10-09-single-workspace-target-dir.md`。
 - `.cargo/config.toml` hardcodes MSVC linker path — don't override
 - Linker is `rust-lld.exe` (`.cargo/config.toml`), which bypasses Git Bash's `link.exe` shadow entirely — no env script needed
 - **sccache 缓存必须 H 盘 + server 在跑**：`[profile.*] incremental` 禁止改回 `true`（否则 sccache 命中率静默归零、无报错），server 掉则静默回退 C 盘。依据与运维见 `docs/notes/implemented/process/2026-10-15-sccache-h-shared-cache.md`；起 server 用 `scripts/start-sccache.ps1`（已建开机任务 `HermixSccacheServer`）

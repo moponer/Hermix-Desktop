@@ -242,10 +242,10 @@ export function ModelAddDialog({ onClose, onSaved, editing }: Props) {
         role="dialog"
         aria-modal="true"
         aria-label="添加模型"
-        className="flex flex-col rounded-xl border border-border-primary shadow-modal overflow-hidden"
+        className="flex flex-col rounded-[var(--radius-xl)] bg-bg-elevated shadow-modal overflow-hidden"
         style={{ width: "min(94vw, 560px)", maxHeight: "86vh", background: "var(--color-bg-app)" }}
       >
-        <div className="flex items-center gap-2 px-4 py-3 border-b border-border-primary bg-bg-secondary shrink-0">
+        <div className="flex items-center gap-2 rounded-t-[var(--radius-xl)] bg-bg-secondary px-4 py-3 shrink-0">
           {choice && (
             <button
               onClick={() => { setChoice(null); setTest(null); setError(null); }}
@@ -282,7 +282,7 @@ export function ModelAddDialog({ onClose, onSaved, editing }: Props) {
                   <button
                     key={p.id}
                     onClick={() => setChoice({ kind: "builtin", def: p })}
-                    className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg border border-border-secondary hover:bg-bg-hover text-left"
+                    className="w-full flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] bg-bg-tertiary/50 transition-colors hover:bg-bg-quaternary text-left"
                   >
                     <ProviderIcon providerId={p.id} className="icon-lg" />
                     <span className="flex-1 min-w-0">
@@ -294,9 +294,9 @@ export function ModelAddDialog({ onClose, onSaved, editing }: Props) {
                 ))}
                 <button
                   onClick={() => setChoice({ kind: "custom" })}
-                  className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg border border-dashed border-border-secondary hover:bg-bg-hover text-left"
+                  className="w-full flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] bg-bg-tertiary/40 transition-colors hover:bg-bg-quaternary text-left"
                 >
-                  <span className="w-4 h-4 shrink-0 rounded-full border border-dashed border-border-secondary" />
+                  <span className="w-4 h-4 shrink-0 rounded-full bg-bg-quaternary" />
                   <span className="flex-1 min-w-0">
                     <span className="block text-[length:var(--text-ui)] text-text-primary">自定义</span>
                     <span className="block text-[length:var(--text-meta)] text-text-muted">
@@ -368,7 +368,7 @@ export function ModelAddDialog({ onClose, onSaved, editing }: Props) {
                 <button
                   onClick={() => void testNow()}
                   disabled={testing}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-secondary text-xs text-text-secondary hover:text-text-primary disabled:opacity-40"
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-[var(--radius-md)] bg-bg-tertiary text-[length:var(--text-ui)] text-text-secondary transition-colors hover:bg-bg-quaternary hover:text-text-primary disabled:opacity-40"
                 >
                   {testing && <Loader2 className="icon-sm animate-spin" />}
                   测试连接
@@ -376,7 +376,7 @@ export function ModelAddDialog({ onClose, onSaved, editing }: Props) {
                 {test && <TestResult r={test} />}
               </div>
 
-              <details className="rounded-lg border border-border-secondary px-3 py-2">
+              <details className="rounded-[var(--radius-md)] bg-bg-tertiary/50 px-3 py-2">
                 <summary className="text-xs text-text-secondary cursor-pointer">高级配置</summary>
                 <div className="mt-2 space-y-1.5">
                   <Cap label="支持工具调用" checked={caps.tools} onChange={(v) => setCaps((c) => ({ ...c, tools: v }))} />
@@ -386,7 +386,7 @@ export function ModelAddDialog({ onClose, onSaved, editing }: Props) {
               </details>
 
               {error && (
-                <div className="px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/30 text-xs text-red-400">
+                <div className="px-3 py-2 rounded-[var(--radius-md)] bg-red-500/12 text-[length:var(--text-ui)] text-red-400">
                   {error}
                 </div>
               )}
@@ -395,7 +395,7 @@ export function ModelAddDialog({ onClose, onSaved, editing }: Props) {
         </div>
 
         {choice && (
-          <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-border-primary bg-bg-secondary shrink-0">
+          <div className="flex items-center justify-end gap-2 rounded-b-[var(--radius-xl)] bg-bg-secondary px-4 py-3 shrink-0">
             <button onClick={onClose} className={btnGhost}>取消</button>
             <button onClick={() => void save()} disabled={saving} className={btnPrimary}>
               {saving && <Loader2 className="icon-sm animate-spin" />}
@@ -410,11 +410,11 @@ export function ModelAddDialog({ onClose, onSaved, editing }: Props) {
 }
 
 const inputCls =
-  "mt-1 w-full px-3 py-2 rounded-lg bg-bg-tertiary text-[length:var(--text-ui)] text-text-primary border border-border-secondary outline-none focus:border-accent transition-colors";
+  "mt-1 w-full rounded-[var(--radius-md)] bg-bg-tertiary px-3 py-2 text-[length:var(--text-ui)] text-text-primary outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/40";
 const btnPrimary =
   "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs bg-accent text-on-accent hover:opacity-90 disabled:opacity-50";
 const btnGhost =
-  "px-3 py-1.5 rounded-lg text-xs text-text-secondary border border-border-secondary hover:text-text-primary";
+  "px-3 py-1.5 rounded-[var(--radius-md)] bg-bg-tertiary text-[length:var(--text-ui)] text-text-secondary transition-colors hover:bg-bg-quaternary hover:text-text-primary";
 
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (

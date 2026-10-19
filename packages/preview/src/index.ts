@@ -92,4 +92,5 @@ export {
 } from "./lib/exporters";
 
 export { stripFrontmatter, extractHeadings } from "./lib/markdownDoc";
+export { decodeTextBytes, textResultFromBytes, type DecodedText } from "./lib/textDecode";
 export { colName, resolveRelative, dirnameOf, isExternalHref } from "./lib/localAssets";

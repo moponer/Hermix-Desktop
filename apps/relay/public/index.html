@@ -3,11 +3,10 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Hermix —— 又快又轻的 AI 助手</title>
-<meta name="description" content="Hermix Desktop / Hermix 手机端 / Spiker 的下载、版本说明与文档。Rust 后端，Windows 便携 exe，数据落在本机。" />
+<title>Hermix —— 跑在你自己电脑上的 AI 助手</title>
+<meta name="description" content="一个便携 exe，双击就开；手机端扫一下配对。会话、文件、任务记录全落在本机。产品下载、文档、Blog 与更新日志。" />
 <link rel="icon" type="image/png" href="favicon.png" />
-<link rel="stylesheet" href="assets/site.css" />
-<!-- impeccable-disable cramped-padding: .shot/.shot-bar 是 role=img 拟真窗口预览，贴边是拟真形态 -->
+<link rel="stylesheet" href="assets/site.css?v=2" />
 <script>var HERMIX_M_VERSION = "0.1.5";</script>
 </head>
 <body>
@@ -16,41 +15,21 @@
 <nav class="nav" data-nav></nav>
 
 <div class="hero">
-  <div class="wrap hero-in">
-    <div>
-      <h1>又快又轻的 AI 助手，数据留在你自己机器上</h1>
-      <p class="sub">后端是 Rust，25 个 crate 各管一段；界面用 React 19 + Tauri v2，打成一个便携 exe，双击就开。数据落在本机 SQLite，模型走云端，所以老办公机也跑得动。</p>
-      <div class="acts">
-        <a class="btn" href="desktop.html#download">下载桌面版</a>
-        <a class="btn ghost" href="docs.html">使用文档</a>
-        <span class="m">桌面端 <span data-ver="desktop.version">—</span> · Spiker <span data-ver="spiker.version">—</span></span>
-      </div>
+  <div class="wrap">
+    <p class="kicker">Hermix · 本机优先的 AI 助手</p>
+    <h1>AI 助手装回你的电脑，<br>数据也是</h1>
+    <p class="sub">桌面端一个便携 exe，双击就开；手机端扫一下配对，在外面遥控它。模型调用走云端 API，其余一切不经过任何人。</p>
+    <div class="acts">
+      <a class="btn" href="hermix.html">了解 Hermix</a>
+      <a class="btn ghost" href="docs.html">使用文档</a>
+      <span class="m">桌面端 <span data-ver="desktop.version">—</span> · 手机端 <span data-ver="apk.version">—</span></span>
     </div>
-
-    <div class="stage">
-    <div class="shot fit" role="img" aria-label="Hermix Desktop 界面示意：左侧会话列表，右侧对话区与一张正在读取表格的工具结果卡">
-      <div class="shot-bar">
-        <span class="shot-dot"></span><span class="shot-dot"></span><span class="shot-dot live"></span>
-        <span class="shot-title">Hermix</span>
-      </div>
-      <div class="shot-body">
-        <div class="shot-side" aria-hidden="true">
-          <span class="sk k1 on"></span><span class="sk k2"></span><span class="sk k3"></span>
-          <span class="sk k2"></span><span class="sk k1"></span>
-        </div>
-        <div class="shot-main">
-          <div class="shot-msg">把这周的路单导出来，按车牌分组统计</div>
-          <div class="shot-msg me">已读到 <b>downloads/</b> 下 3 个 xlsx</div>
-          <div class="shot-tool">
-            <div class="th"><span class="sq"></span>读取表格 · 3 个文件</div>
-            <div class="tr"><span>sheet1 · 1,284 行</span><span>done</span></div>
-            <div class="shot-prog"><i></i></div>
-          </div>
-          <div class="shot-input"><span>继续说</span><span class="caret"></span></div>
-        </div>
-      </div>
-    </div>
-    </div>
+    <ul class="trust">
+      <li>Windows 10+ · Android</li>
+      <li>不装服务，不写注册表</li>
+      <li>数据落在本机 SQLite</li>
+      <li>老办公机跑得动</li>
+    </ul>
   </div>
 </div>
 
@@ -58,49 +37,35 @@
 
 <div class="sec">
   <div class="wrap">
-    <h2>客户端</h2>
-    <p class="lead">三个客户端各管各的，只共用同一个发布源。</p>
+    <h2>三条底线</h2>
+    <p class="lead">不是特性列表，是这个产品立起来的三根柱子。</p>
+    <div class="cols3">
+      <div class="it"><b>不设服务器</b><span>会话、文件、任务记录只存在你的机器上，我们不存你的数据。备份就是复制一个 SQLite 文件。</span></div>
+      <div class="it"><b>先划界，再放行</b><span>装好那一刻按用途划定审批边界：边界内不打扰，越界必问你。弹窗少了，每一次都值得看。</span></div>
+      <div class="it"><b>远程不失控</b><span>手机能下指令、能接通话，但每次敏感操作都要你在手机上亲眼点允许——没有「永久允许」这个口子。</span></div>
+    </div>
+  </div>
+</div>
+
+<div class="sec">
+  <div class="wrap">
+    <h2>一个产品，两个客户端</h2>
+    <p class="lead">电脑上是主战场，手机是遥控器。</p>
     <div class="picks">
-      <a class="pick main" href="desktop.html">
-        <div class="n">Hermix Desktop</div>
-        <div class="p">双击就开的 Windows 助手。会话、工具结果、任务记录都落在你自己的机器上——我们不设服务器，也不存你的数据。</div>
+      <a class="pick main" href="hermix.html">
+        <div class="n">Hermix</div>
+        <div class="p">桌面端便携 exe，双击就开；手机端扫一下配对，在外面下指令、审操作、接通话。工具调用、审批、会话留痕，全程明面上。</div>
         <div class="v"><span data-ver="desktop.version">—</span> · <span data-ver="desktop.date">—</span></div>
         <span class="go">查看 →</span>
       </a>
-      <a class="pick sub" href="mobile.html">
-        <div>
-          <div class="n">Hermix 手机端</div>
-          <div class="p">Android 伴侣端。在外面也能给桌面端下指令、审它要做的操作、接通话。</div>
-        </div>
-        <div class="tail"><div class="v"><span data-ver="apk.version">—</span></div><span class="go">查看 →</span></div>
-      </a>
-      <a class="pick sub" href="spiker.html">
-        <div>
-          <div class="n">Spiker</div>
-          <div class="p">车队合规监控与自动发报文。双源 GPS、路单核验、四档判定，违规动车自动下发。</div>
-        </div>
-        <div class="tail"><div class="v"><span data-ver="spiker.version">—</span> · <span data-ver="spiker.date">—</span></div><span class="go">查看 →</span></div>
-      </a>
     </div>
   </div>
 </div>
 
 <div class="sec">
   <div class="wrap">
-    <h2>轻、快、稳</h2>
-    <p class="lead">办公机最在乎的三件事。</p>
-    <div class="three">
-      <div class="r3"><div class="k">轻</div><div class="v">便携 exe，双击就开，不装服务、不写注册表。本机<em>不跑模型</em>，推理走 provider 接口，用不着好显卡。</div></div>
-      <div class="r3"><div class="k">快</div><div class="v">找文件读磁盘元数据，几秒建完索引；命令跑在持久终端里，上一条的目录和变量都还在；界面只画你看得见的那一屏。</div></div>
-      <div class="r3"><div class="k">稳</div><div class="v">数据只落一个 SQLite 文件。升级先校验 SHA-256 再替换，新版本起不来就<em>退回上一个</em>。</div></div>
-    </div>
-  </div>
-</div>
-
-<div class="sec">
-  <div class="wrap">
-    <h2>文章</h2>
-    <p class="lead">从实现笔记改写。每篇讲一个机制怎么运转、当时为什么这么取舍。</p>
+    <h2>实现笔记</h2>
+    <p class="lead">不写趋势，只写机制：它怎么运转，当时为什么这么取舍。</p>
     <div class="arts">
       <a class="a" href="article.html?id=compact-not-delete">
         <div><div class="t">压缩之后，聊天记录还在吗<span class="tag">会话</span></div>
@@ -134,8 +99,8 @@
 
 <div class="sec">
   <div class="wrap">
-    <h2>更新源</h2>
-    <p class="lead">这里显示的版本号与校验值，和客户端点「检查更新」读到的是同一份文件。</p>
+    <h2>透明发布</h2>
+    <p class="lead">这个页面上的版本号与校验值，和客户端点「检查更新」读到的是同一份文件。</p>
     <dl class="kv">
       <dt>桌面端清单</dt><dd class="mono">/desktop/manifest.json</dd>
       <dt>桌面端 SHA-256</dt><dd class="mono" data-ver="desktop.sha">—</dd>
@@ -151,7 +116,7 @@
 <footer class="ft" data-footer></footer>
 
 <!-- 首页不加载 articles.js（43KB）：只为渲染 5 条标题不值当，列表页与阅读页才引它。 -->
-<script src="assets/site.js?v=3"></script>
+<script src="assets/site.js?v=4"></script>
 <script>HERMIX.boot('home');</script>
 </body>
 </html>

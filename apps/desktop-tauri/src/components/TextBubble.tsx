@@ -12,6 +12,7 @@ import {
 import { UnifiedTimelineRenderer, MemoryConsolidationCard } from "./ToolCallBubble";
 import { MessageCopyAction } from "./MessageCopyAction";
 import { MessageActions } from "./MessageActions";
+import { injectIntoComposer } from "../lib/composerInjection";
 import type { ChatMessage } from "../types";
 export function StopReasonChip({ reason, meta }: { reason: string; meta?: string }) {
   // Normal terminations: render nothing. The content + WaitForInputIndicator
@@ -60,6 +61,9 @@ export function UserMessage({ message }: { message: ChatMessage }) {
       <MessageCopyAction
         content={message.content}
         className="message-copy-row message-copy-row--user"
+        onEdit={() =>
+          injectIntoComposer({ source: "edit", text: message.content, mode: "replace" })
+        }
       />
     </div>
   );

@@ -179,8 +179,8 @@ export async function readArtifactFile(
   path: string,
   workspaceRoot?: string | null,
 ): Promise<{
-  kind: "text" | "binary" | "empty";
-  content: string | null | undefined;
+  kind: "bytes" | "empty";
+  dataBase64: string | null;
   size: number;
   resolvedPath?: string | null;
 }> {

@@ -53,7 +53,7 @@ function TextMemoryEditor({ title, description, load, save }: TextMemoryProps) {
   };
 
   return (
-    <div className="rounded-lg border border-[var(--color-border-primary)] bg-[var(--color-bg-card)] p-3">
+    <div className="rounded-lg bg-[var(--color-bg-card)] shadow-[var(--shadow-paper)] p-3">
       <div className="flex items-center gap-2">
         <h3 className="text-[length:var(--text-ui)] font-medium text-[var(--color-text-primary)]">{title}</h3>
         {path && (
@@ -73,7 +73,7 @@ function TextMemoryEditor({ title, description, load, save }: TextMemoryProps) {
           value={content}
           onChange={(e) => { setContent(e.target.value); setDirty(true); }}
           spellCheck={false}
-          className="mt-2 h-[260px] w-full resize-y rounded-md border border-[var(--color-border-primary)] bg-[var(--color-bg-tertiary)] p-3 font-mono text-[length:var(--text-meta)] leading-relaxed text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
+          className="mt-2 h-[260px] w-full resize-y rounded-[var(--radius-md)] bg-[var(--color-bg-tertiary)] p-3 font-mono text-[length:var(--text-meta)] leading-relaxed text-[var(--color-text-primary)] outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/40"
         />
       )}
       {notice && <p className="mt-1 text-[length:var(--text-meta)] text-[var(--color-text-secondary)]">{notice}</p>}

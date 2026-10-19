@@ -102,7 +102,7 @@ export function SecurityTab() {
   return (
     <div className="space-y-5">
       {/* 自动备份开关 */}
-      <div className="rounded-lg border border-border-primary bg-bg-card p-4 space-y-4">
+      <div className="rounded-[var(--radius-lg)] bg-bg-card p-4 space-y-4 shadow-[var(--shadow-paper)]">
         <div className="flex items-center justify-between">
           <div>
             <div className="text-sm text-text-primary">启用自动备份</div>
@@ -132,7 +132,7 @@ export function SecurityTab() {
             value={sec.backup_dir}
             onChange={(e) => update({ backup_dir: e.target.value })}
             placeholder="留空使用 <数据目录>/backups"
-            className="mt-1 w-full px-3 py-2 rounded-lg border border-border-secondary bg-bg-primary text-sm text-text-primary outline-none focus:border-accent transition-colors"
+            className="mt-1 w-full rounded-[var(--radius-md)] bg-bg-tertiary px-3 py-2 text-[length:var(--text-ui)] text-text-primary outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/40"
           />
           <p className="mt-1 text-[length:var(--text-meta)] text-text-muted">
             默认位于 Hermix 数据目录下的 backups 文件夹。
@@ -146,14 +146,14 @@ export function SecurityTab() {
             min={1}
             value={sec.backup_max_mb}
             onChange={(e) => update({ backup_max_mb: Math.max(1, Number(e.target.value) || 1) })}
-            className="mt-1 w-full px-3 py-2 rounded-lg border border-border-secondary bg-bg-primary text-sm text-text-primary outline-none focus:border-accent transition-colors"
+            className="mt-1 w-full rounded-[var(--radius-md)] bg-bg-tertiary px-3 py-2 text-[length:var(--text-ui)] text-text-primary outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/40"
           />
           <p className="mt-1 text-[length:var(--text-meta)] text-text-muted">超过后按时间删除最旧的备份。</p>
         </div>
       </div>
 
       {/* 备份状态 */}
-      <div className="rounded-lg border border-border-primary bg-bg-card p-4 space-y-3">
+      <div className="rounded-[var(--radius-lg)] bg-bg-card p-4 space-y-3 shadow-[var(--shadow-paper)]">
         <div className="text-sm font-medium text-text-primary">备份状态</div>
         {!loaded ? (
           <SkeletonCard lines={2} />
@@ -170,7 +170,7 @@ export function SecurityTab() {
             <button
               onClick={openBackupDir}
               disabled={!status?.dir}
-              className="flex items-center gap-2 px-3 py-1.5 mt-1 rounded-lg border border-border-secondary text-text-secondary text-[length:var(--text-meta)] hover:text-text-primary hover:bg-bg-hover transition-colors disabled:opacity-40"
+              className="flex items-center gap-2 px-3 py-1.5 mt-1 rounded-[var(--radius-md)] bg-bg-tertiary text-text-secondary text-[length:var(--text-meta)] transition-colors hover:bg-bg-quaternary hover:text-text-primary disabled:opacity-40"
             >
               <FolderOpen className="icon-md" /> 打开备份目录
             </button>

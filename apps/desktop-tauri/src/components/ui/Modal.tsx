@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 
@@ -13,6 +13,22 @@ export interface ModalProps {
   width?: number;
   footer?: ReactNode;
   className?: string;
+  /** 面板高度；缺省只受 max-h-[85vh] 约束。整幅面板（设置）传具体高度。 */
+  height?: number | string;
+  /** 内容区类名覆盖。整幅面板需要贴边布局时传 `p-0 overflow-hidden`。 */
+  bodyClassName?: string;
+  /** 无 title 时的可访问名（设置这类自绘头部的面板用）。 */
+  ariaLabel?: string;
+  /**
+   * Esc 是否直接关闭。默认 true；需要「先清搜索再关」两级行为的调用方
+   * 传 false 自行处理（否则第一下 Esc 就把面板关了）。
+   */
+  closeOnEscape?: boolean;
+  /**
+   * 面板可拖动：内容里带 `data-modal-drag-handle` 的元素作为拖拽把手
+   * （按钮/输入框上的按下不算）。默认 false —— 小确认框不需要挪位置。
+   */
+  draggable?: boolean;
 }
 
 /**
@@ -26,16 +42,31 @@ export interface ModalProps {
  * 焦点陷阱（Tab 循环 + Esc 关闭 + 关闭后还焦）与 `inert` 背景是这套东西的
  * 全部价值；少了前两项就是个能聚焦到后面去的 div。
  */
-export function Modal({ open, onClose, title, children, width = 560, footer, className }: ModalProps) {
+export function Modal({
+  open, onClose, title, children, width = 560, footer, className,
+  height, bodyClassName, ariaLabel, closeOnEscape = true, draggable = false,
+}: ModalProps) {
   const panelRef = useRef<HTMLDivElement>(null);
   const restoreRef = useRef<HTMLElement | null>(null);
   const titleId = useId();
+
+  // 拖动位移只作用在外层包装上：面板本身的入场动画也吃 transform，
+  // 两者写在同一元素会互相覆盖。
+  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+  const dragRef = useRef<{
+    startX: number; startY: number; baseX: number; baseY: number; rect: DOMRect;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!open) setDragOffset({ x: 0, y: 0 });
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
     restoreRef.current = document.activeElement as HTMLElement | null;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
+        if (!closeOnEscape) return;
         e.stopPropagation();
         onClose();
         return;
@@ -64,7 +95,39 @@ export function Modal({ open, onClose, title, children, width = 560, footer, cla
       window.clearTimeout(t);
       restoreRef.current?.focus?.();
     };
-  }, [open, onClose]);
+  }, [open, onClose, closeOnEscape]);
+
+  /** 拖拽：只在 `[data-modal-drag-handle]` 上按下时启动，按钮/输入框不接管。 */
+  const onHandlePointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (!draggable || !panelRef.current) return;
+    const target = e.target as HTMLElement;
+    if (!target.closest("[data-modal-drag-handle]")) return;
+    if (target.closest("button, input, textarea, select, a, [role='button']")) return;
+    const rect = panelRef.current.getBoundingClientRect();
+    dragRef.current = {
+      startX: e.clientX, startY: e.clientY,
+      baseX: dragOffset.x, baseY: dragOffset.y, rect,
+    };
+    e.currentTarget.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  };
+
+  const onHandlePointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const d = dragRef.current;
+    if (!d) return;
+    // 至少留 8px 在视口内，避免把面板拖丢。
+    const dx = Math.min(
+      Math.max(e.clientX - d.startX, 8 - d.rect.left),
+      window.innerWidth - 8 - d.rect.right,
+    );
+    const dy = Math.min(
+      Math.max(e.clientY - d.startY, 8 - d.rect.top),
+      window.innerHeight - 8 - d.rect.bottom,
+    );
+    setDragOffset({ x: d.baseX + dx, y: d.baseY + dy });
+  };
+
+  const endDrag = () => { dragRef.current = null; };
 
   if (!open) return null;
 
@@ -74,13 +137,26 @@ export function Modal({ open, onClose, title, children, width = 560, footer, cla
        无描边；圆角 17px（radius-xl）。backdrop 仅保留点击外部关闭的
        命中区，视觉全透明。 */
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" onClick={onClose}>
+      {/* 拖动位移挂在外层：面板自身有 scale-in 动画，同样占用 transform。 */}
+      <div
+        style={{
+          transform: dragOffset.x || dragOffset.y
+            ? `translate(${dragOffset.x}px, ${dragOffset.y}px)`
+            : undefined,
+        }}
+      >
       <div
         ref={panelRef}
+        onPointerDown={onHandlePointerDown}
+        onPointerMove={onHandlePointerMove}
+        onPointerUp={endDrag}
+        onPointerCancel={endDrag}
         role="dialog"
         aria-modal="true"
         aria-labelledby={title ? titleId : undefined}
+        aria-label={title ? undefined : ariaLabel}
         onClick={(e) => e.stopPropagation()}
-        style={{ width, maxWidth: "calc(100vw - 2rem)" }}
+        style={{ width, maxWidth: "calc(100vw - 2rem)", height }}
         className={cx(
           "flex max-h-[85vh] flex-col overflow-hidden rounded-[var(--radius-xl)]",
           "bg-[var(--color-bg-elevated)]",
@@ -106,7 +182,13 @@ export function Modal({ open, onClose, title, children, width = 560, footer, cla
             </button>
           </div>
         )}
-        <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-5 text-[length:var(--text-ui)] leading-6 text-[var(--color-text-secondary)]">
+        <div
+          className={cx(
+            "min-h-0 flex-1",
+            bodyClassName
+              ?? "overflow-y-auto px-5 pb-5 text-[length:var(--text-ui)] leading-6 text-[var(--color-text-secondary)]",
+          )}
+        >
           {children}
         </div>
         {footer && (
@@ -114,6 +196,7 @@ export function Modal({ open, onClose, title, children, width = 560, footer, cla
             {footer}
           </div>
         )}
+      </div>
       </div>
     </div>,
     document.body,

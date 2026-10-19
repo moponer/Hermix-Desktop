@@ -153,7 +153,7 @@ function GraphView() {
   return (
     <div className="space-y-3">
       {/* 概览行 */}
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg border border-[var(--color-border-primary)] bg-[var(--color-bg-card)] px-4 py-2.5 text-[length:var(--text-meta)] text-[var(--color-text-secondary)]">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg bg-[var(--color-bg-card)] shadow-[var(--shadow-paper)] px-4 py-2.5 text-[length:var(--text-meta)] text-[var(--color-text-secondary)]">
         <span className="flex items-center gap-1.5 font-medium text-[var(--color-text-primary)]">
           <Brain className="size-4 text-[var(--color-accent)]" /> 记忆总览
         </span>
@@ -175,7 +175,7 @@ function GraphView() {
       </div>
 
       {error && (
-        <div className="rounded-lg border border-[var(--color-border-primary)] bg-[var(--color-bg-card)] px-4 py-3 text-[length:var(--text-meta)] text-[var(--color-text-secondary)]">
+        <div className="rounded-lg bg-[var(--color-bg-card)] shadow-[var(--shadow-paper)] px-4 py-3 text-[length:var(--text-meta)] text-[var(--color-text-secondary)]">
           记忆接口不可用（{error}）。刚更新后端时需要重启应用后重试。
         </div>
       )}
@@ -188,7 +188,7 @@ function GraphView() {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="搜索记忆内容…"
-            className="h-8 w-full rounded-md border border-[var(--color-border-primary)] bg-[var(--color-bg-input,transparent)] pl-8 pr-3 text-[length:var(--text-meta)] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-muted)] focus:border-[var(--color-accent)]"
+            className="h-8 w-full rounded-[var(--radius-md)] bg-[var(--color-bg-tertiary)] pl-8 pr-3 text-[length:var(--text-ui)] text-[var(--color-text-primary)] outline-none transition-shadow placeholder:text-[var(--color-text-muted)] focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/40"
           />
         </div>
         {allKinds.map(([kind, count]) => {
@@ -201,10 +201,10 @@ function GraphView() {
                 if (next.has(kind)) next.delete(kind); else next.add(kind);
                 return next;
               })}
-              className={`rounded-full border px-2.5 py-0.5 text-[length:var(--text-meta)] transition-colors ${
+              className={`rounded-full px-2.5 py-0.5 text-[length:var(--text-meta)] transition-colors ${
                 hidden
-                  ? "border-[var(--color-border-primary)] text-[var(--color-text-muted)]"
-                  : "border-[var(--color-accent)] text-[var(--color-accent)]"
+                  ? "bg-[var(--color-bg-tertiary)] text-[var(--color-text-muted)]"
+                  : "bg-[var(--color-accent-soft-strong)] text-[var(--color-accent)]"
               }`}
             >
               {KIND_LABELS[kind] ?? kind} · {count}
@@ -219,7 +219,7 @@ function GraphView() {
         </p>
       )}
 
-      <div className="rounded-lg border border-[var(--color-border-primary)] bg-[var(--color-bg-card)] p-1">
+      <div className="rounded-lg bg-[var(--color-bg-card)] shadow-[var(--shadow-paper)] p-1">
         <MemoryGraph nodes={nodes} edges={edges} loading={loading} onSelectNode={openDetail} />
       </div>
       <p className="text-[length:var(--text-meta)] text-[var(--color-text-muted)]">

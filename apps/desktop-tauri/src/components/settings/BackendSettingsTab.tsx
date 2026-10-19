@@ -35,7 +35,7 @@ export function BackendTab() {
 
   return (
     <div className="space-y-6">
-      <div className="rounded-xl border border-border-primary bg-bg-card p-4">
+      <div className="rounded-[var(--radius-lg)] bg-bg-card p-4 shadow-[var(--shadow-paper)]">
         <div className="text-sm font-medium text-text-primary mb-2">后端状态</div>
         <div className="flex items-center gap-2">
           <div className={`w-2 h-2 rounded-full ${health ? "bg-green-400" : health === false ? "bg-red-400" : "bg-yellow-400"}`} />
@@ -44,11 +44,11 @@ export function BackendTab() {
         {defaultModel
           ? <div className="mt-3 text-xs text-text-muted">当前模型：<span className="text-text-primary font-medium">{defaultModel}</span></div>
           : <div className="mt-3 text-xs text-text-muted">当前模型：<span className="text-amber-400">未设置（请到「模型配置」选择一个）</span></div>}
-        <button onClick={async () => { const ok = await api.checkBackendHealth(); setHealth(ok); }} className="mt-3 flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-secondary text-xs text-text-secondary hover:text-text-primary">
+        <button onClick={async () => { const ok = await api.checkBackendHealth(); setHealth(ok); }} className="mt-3 flex items-center gap-1.5 px-3 py-1.5 rounded-[var(--radius-md)] bg-bg-tertiary text-[length:var(--text-ui)] text-text-secondary transition-colors hover:bg-bg-quaternary hover:text-text-primary">
           <RefreshCw className="icon-sm" /> 刷新状态
         </button>
       </div>
-      <div className="rounded-xl border border-border-primary bg-bg-card p-4">
+      <div className="rounded-[var(--radius-lg)] bg-bg-card p-4 shadow-[var(--shadow-paper)]">
         <div className="flex items-center justify-between">
           <div>
             <div className="text-sm font-medium text-text-primary">TickLoop 后台心跳</div>
@@ -156,7 +156,7 @@ export function PythonRuntimePanel() {
   const selectedRow = probe?.entries.find((e) => e.path === probe.selected);
 
   return (
-    <div className="rounded-xl border border-border-primary bg-bg-card p-4">
+    <div className="rounded-[var(--radius-lg)] bg-bg-card p-4 shadow-[var(--shadow-paper)]">
       <div className="flex items-start justify-between gap-4">
         <div className="flex-1">
           <div className="text-sm font-medium text-text-primary">Python 运行时</div>
@@ -168,7 +168,7 @@ export function PythonRuntimePanel() {
         <button
           onClick={runProbe}
           disabled={probeLoading}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-secondary text-xs text-text-secondary hover:text-text-primary disabled:opacity-40 shrink-0"
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-[var(--radius-md)] bg-bg-tertiary text-[length:var(--text-ui)] text-text-secondary transition-colors hover:bg-bg-quaternary hover:text-text-primary disabled:opacity-40 shrink-0"
         >
           <RefreshCw className={`icon-sm ${probeLoading ? "animate-spin" : ""}`} />
           {probeLoading ? "检测中" : "重新检测"}
@@ -195,8 +195,8 @@ export function PythonRuntimePanel() {
               key={`${e.path}-${i}`}
               className={`flex items-center gap-2 px-2.5 py-1.5 rounded text-[length:var(--text-meta)] font-mono ${
                 probe.selected === e.path
-                  ? "bg-accent/10 border border-accent/30"
-                  : "bg-bg-tertiary/30 border border-border-secondary/40"
+                  ? "bg-accent/15"
+                  : "bg-bg-tertiary/60"
               }`}
             >
               <span
@@ -211,13 +211,13 @@ export function PythonRuntimePanel() {
         </div>
       )}
       {probeErr && (
-        <div className="mt-2 flex items-center gap-2 px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/30 text-xs text-red-400">
+        <div className="mt-2 flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] bg-red-500/12 text-[length:var(--text-ui)] text-red-400">
           {probeErr}
         </div>
       )}
 
       {/* Override input */}
-      <div className="mt-4 pt-3 border-t border-border-primary space-y-2">
+      <div className="mt-5 space-y-2">
         <label className="block text-xs font-medium text-text-primary">
           自定义 Python 路径（可选）
         </label>
@@ -226,7 +226,7 @@ export function PythonRuntimePanel() {
             value={overrideInput}
             onChange={(e) => setOverrideInput(e.target.value)}
             placeholder="例如 C:\Python311\python.exe"
-            className="flex-1 bg-bg-tertiary border border-border-primary rounded-lg px-3 py-1.5 text-xs text-text-primary placeholder-text-muted outline-none font-mono"
+            className="flex-1 rounded-[var(--radius-md)] bg-bg-tertiary px-3 py-1.5 font-mono text-[length:var(--text-ui)] text-text-primary outline-none transition-shadow placeholder:text-[var(--color-text-muted)] focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/40"
           />
           <button
             onClick={handleSaveOverride}

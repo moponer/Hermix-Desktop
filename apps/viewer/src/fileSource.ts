@@ -11,6 +11,7 @@
 //     泄到渲染层。
 
 import { invoke } from "@tauri-apps/api/core";
+import { textResultFromBytes } from "@hermix/preview";
 import type {
   DirEntryLike,
   DriveRootLike,
@@ -23,7 +24,7 @@ import type {
 
 // Tauri 侧 viewer_read_file 返回这种 discriminated union。
 type RustFileContent =
-  | { kind: "text"; name: string; variant: string; content: string }
+  | { kind: "text"; name: string; variant: string; data_base64: string }
   | { kind: "image"; name: string; mime: string; data_base64: string }
   | { kind: "pdf"; name: string; data_base64: string }
   | { kind: "bytes"; name: string; extension: string; data_base64: string }
@@ -45,7 +46,9 @@ function base64ByteLength(b64: string): number {
 
 function asReadText(c: RustFileContent, path: string): ReadTextResult {
   if (c.kind === "text") {
-    return { ok: true, content: c.content, resolvedPath: path };
+    // Rust 送的是原始字节；编码判定（BOM / UTF-16 / GBK）与二进制嗅探
+    // 统一在共享层做，规则只有一份（packages/preview/src/lib/textDecode.ts）。
+    return textResultFromBytes(decodeBase64(c.data_base64), path);
   }
   if (c.kind === "image" || c.kind === "pdf" || c.kind === "bytes") {
     // 只算不解：调用方（markdownLoader / textLoader / htmlLoader）见到
@@ -61,8 +64,10 @@ function asReadBytes(c: RustFileContent, path: string): ReadBytesResult {
     return { ok: true, bytes, size: bytes.byteLength, resolvedPath: path };
   }
   if (c.kind === "text") {
-    const u8 = new TextEncoder().encode(c.content);
-    return { ok: true, bytes: u8, size: u8.byteLength, resolvedPath: path };
+    // 文本类的原始字节同样要原样透传：重新 encode 一次会把 UTF-16 / GBK
+    // 的内容洗成 UTF-8 乱码。
+    const bytes = decodeBase64(c.data_base64);
+    return { ok: true, bytes, size: bytes.byteLength, resolvedPath: path };
   }
   return { ok: false, message: `不支持的类型（${c.extension ?? c.kind}）：${c.reason}` };
 }

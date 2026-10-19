@@ -6,6 +6,7 @@
 // 共享一份样式 token。
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { RotateCcw } from "lucide-react";
 import {
   loadPreview,
   PreviewSurface,
@@ -19,6 +20,9 @@ import {
   type PreviewKind,
   type ViewMode,
 } from "@hermix/preview";
+
+const ZOOM_MIN = 50;
+const ZOOM_MAX = 200;
 
 export function PreviewHost({
   path,
@@ -64,22 +68,13 @@ export function PreviewHost({
     };
   }, [name, path, viewMode, effectiveKind, source]);
 
-  if (state.status === "loading" || state.status === "idle") {
-    return <div className="preview-state-center">正在读取 {name}…</div>;
-  }
-  if (state.status === "error") {
-    return (
-      <div className="preview-state-error">
-        <p>{state.message}</p>
-        <small>{path}</small>
-      </div>
-    );
-  }
-  // state.status === "ready"
-  const readyState = state;
+  // 外壳（工具条 + 内容区）常驻：载入 / 错误态也走同一套壳，
+  // 否则状态提示会掉到 .preview-body 左边（flex 行容器里宽度自适应），
+  // 表现为"贴在左上角而不是整栏居中"。
+  const readyState = state.status === "ready" ? state : null;
 
   return (
-    <div className="preview-pane h-full min-h-0 overflow-hidden flex flex-col">
+    <div className="preview-pane">
       <div className="preview-toolbar">
         <span className="preview-toolbar-name" title={path}>{name}</span>
         <span className="preview-toolbar-spacer" />
@@ -102,39 +97,78 @@ export function PreviewHost({
           </div>
         )}
         {supportsZoom(effectiveKind) && (
-          <div className="seg">
-            <button type="button" onClick={() => setZoom((z) => Math.max(50, z - 10))}>−</button>
+          <div className="seg" role="group" aria-label="预览缩放">
+            <button
+              type="button"
+              onClick={() => setZoom((z) => Math.max(ZOOM_MIN, z - 10))}
+              disabled={zoom <= ZOOM_MIN}
+              title="缩小"
+              aria-label="缩小预览"
+            >
+              −
+            </button>
             <span className="seg-val">{zoom}%</span>
-            <button type="button" onClick={() => setZoom((z) => Math.min(200, z + 10))}>+</button>
-            <button type="button" onClick={() => setZoom(100)}>100%</button>
+            <button
+              type="button"
+              onClick={() => setZoom((z) => Math.min(ZOOM_MAX, z + 10))}
+              disabled={zoom >= ZOOM_MAX}
+              title="放大"
+              aria-label="放大预览"
+            >
+              ＋
+            </button>
+            {/* 重置按钮只在偏离 100% 时出现：常驻的话，默认缩放下工具条
+                里会并排出现两个 "100%"（当前值 + 写死的重置值），看着像重复。 */}
+            {zoom !== 100 && (
+              <button
+                type="button"
+                className="seg-reset"
+                onClick={() => setZoom(100)}
+                title="重置为 100%"
+                aria-label="重置预览缩放"
+              >
+                <RotateCcw className="icon-sm" />
+              </button>
+            )}
           </div>
         )}
       </div>
-      <div className="preview-pane-inner flex-1 overflow-auto min-h-0">
-        <PreviewSurface
-          payload={readyState.payload}
-          source={source}
-          isDark={isDark}
-          fileName={name}
-          resolvedPath={readyState.resolvedPath}
-          zoom={zoom}
-          onOpenExternalUrl={async (target) => {
-            // 优先 `openWithSystem` —— desktop 走 Tauri 浏览器命令，
-            // viewer 走 explorer（html 会拉起默认浏览器）。失败时再回
-            // 到 `window.open`，让浏览器的默认行为兜底。
-            if (source.openWithSystem) {
-              const r = await source.openWithSystem(target);
-              if (r.ok) return;
-            }
-            if (typeof window !== "undefined") {
-              try {
-                window.open(target, "_blank", "noopener,noreferrer");
-              } catch {
-                /* 沙箱阻挡时无可作为 */
+      <div className="preview-pane-inner">
+        {readyState ? (
+          <PreviewSurface
+            payload={readyState.payload}
+            source={source}
+            isDark={isDark}
+            fileName={name}
+            resolvedPath={readyState.resolvedPath}
+            zoom={zoom}
+            onOpenExternalUrl={async (target) => {
+              // 优先 `openWithSystem` —— desktop 走 Tauri 浏览器命令，
+              // viewer 走 explorer（html 会拉起默认浏览器）。失败时再回
+              // 到 `window.open`，让浏览器的默认行为兜底。
+              if (source.openWithSystem) {
+                const r = await source.openWithSystem(target);
+                if (r.ok) return;
               }
-            }
-          }}
-        />
+              if (typeof window !== "undefined") {
+                try {
+                  window.open(target, "_blank", "noopener,noreferrer");
+                } catch {
+                  /* 沙箱阻挡时无可作为 */
+                }
+              }
+            }}
+          />
+        ) : state.status === "error" ? (
+          <div className="preview-state-center">
+            <div className="preview-state-error">
+              <p>{state.message}</p>
+              <small>{path}</small>
+            </div>
+          </div>
+        ) : (
+          <div className="preview-state-center">正在读取 {name}…</div>
+        )}
       </div>
     </div>
   );

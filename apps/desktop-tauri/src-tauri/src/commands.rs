@@ -557,9 +557,10 @@ fn expand_env_vars(path: &str) -> String {
 /// can't be opened on the user's machine.
 ///
 /// Returns:
-/// - `kind = "text"`   → content is the decoded UTF-8 string
-/// - `kind = "binary"` → content is `null`; UI shows a binary placeholder
-/// - `kind = "empty"`  → content is `""`; UI shows an empty-state hint
+/// - `kind = "bytes"`  → `data_base64` holds the raw file bytes; the shared
+///   front-end layer decides text vs binary (and which encoding to decode
+///   with) — see `packages/preview/src/lib/textDecode.ts`
+/// - `kind = "empty"`  → `data_base64` is `null`; UI shows an empty-state hint
 /// - `resolved_path`   → the canonical absolute path (so the front-end can
 ///                       display it back to the user and update its records)
 #[tauri::command]
@@ -623,26 +624,25 @@ pub async fn read_artifact_file(
     if bytes.is_empty() {
         return Ok(ArtifactContent {
             kind: "empty",
-            content: None,
+            data_base64: None,
             size,
             resolved_path: Some(resolved),
         });
     }
 
-    match String::from_utf8(bytes) {
-        Ok(s) => Ok(ArtifactContent {
-            kind: "text",
-            content: Some(s),
-            size,
-            resolved_path: Some(resolved),
-        }),
-        Err(_) => Ok(ArtifactContent {
-            kind: "binary",
-            content: None,
-            size,
-            resolved_path: Some(resolved),
-        }),
-    }
+    // 载荷是**原始字节**而不是字符串：Windows 上记事本存的 txt 常是
+    // UTF-16 LE，国内老软件导出的 csv 常是 GBK。Rust 侧一刀
+    // `String::from_utf8` 会把它们判成二进制（严格模式）或解成乱码
+    // （宽松模式）。编码判定与二进制嗅探统一放在共享前端层
+    // （packages/preview/src/lib/textDecode.ts），那边才拿得到 BOM。
+    use base64::Engine;
+    let data_base64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    Ok(ArtifactContent {
+        kind: "bytes",
+        data_base64: Some(data_base64),
+        size,
+        resolved_path: Some(resolved),
+    })
 }
 
 /// Read an artifact's **raw bytes** as base64. Used by the front-end
@@ -730,8 +730,10 @@ pub struct ArtifactBytesContent {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ArtifactContent {
-    pub kind: &'static str, // "text" | "binary" | "empty"
-    pub content: Option<String>,
+    /// "bytes" | "empty" —— 文本 / 二进制的判定在共享前端层做
+    /// （packages/preview/src/lib/textDecode.ts），那边才拿得到 BOM。
+    pub kind: &'static str,
+    pub data_base64: Option<String>,
     pub size: u64,
     /// The canonical absolute path that was actually read. Helps the front-end
     /// display "found at <path>" when the original request was relative, and

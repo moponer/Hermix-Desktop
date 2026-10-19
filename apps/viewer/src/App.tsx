@@ -6,7 +6,7 @@
 //
 // 共享包走 @hermix/preview —— 与桌面 app 用同一份解析器、同一份样式层。
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   ArrowLeft, ArrowRight, ArrowUp, RefreshCw, Search, Eye, EyeOff,
@@ -18,7 +18,13 @@ import type { DirEntryLike, DriveRootLike } from "@hermix/preview";
 import { viewerFileSource } from "./fileSource";
 import { useTheme, type ThemeMode } from "./theme";
 import { AiSidebar } from "./AiSidebar";
-import { PreviewHost } from "./PreviewHost";
+
+// 预览引擎懒加载：PreviewHost → @hermix/preview barrel → satteri 的 3MB
+// WASM + ExcelJS + pdf.js + pptx。静态引入会让整条预览栈进首屏 bundle，
+// webview 首次加载被拖到 10s+，Rust 侧主线程等它加载完才处理 IPC →
+// 文件列表 20s 后才出现（实测 21.48s）。改成懒加载后，"浏览文件"不再
+// 等"预览引擎"，与主程序 main.tsx 的分窗小图是同款思路。
+const PreviewHost = lazy(() => import("./PreviewHost").then((m) => ({ default: m.PreviewHost })));
 
 interface Tab {
   id: number;
@@ -720,13 +726,15 @@ export function App() {
                 </p>
               </div>
             ) : (
-              <PreviewHost
-                key={active.id}
-                path={active.path}
-                name={active.name}
-                source={viewerFileSource}
-                isDark={theme === "dark"}
-              />
+              <Suspense fallback={<div className="preview-pane" />}>
+                <PreviewHost
+                  key={active.id}
+                  path={active.path}
+                  name={active.name}
+                  source={viewerFileSource}
+                  isDark={theme === "dark"}
+                />
+              </Suspense>
             )}
           </div>
         </section>

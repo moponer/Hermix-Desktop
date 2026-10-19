@@ -66,7 +66,7 @@ export function AdvancedTab() {
   return (
     <div className="space-y-6">
       {/* Compression Settings */}
-      <div className="rounded-xl border border-border-primary bg-bg-card p-4">
+      <div className="rounded-[var(--radius-lg)] bg-bg-card p-4 shadow-[var(--shadow-paper)]">
         <div className="text-sm font-medium text-text-primary mb-3">压缩设置</div>
         <div className="space-y-3">
           <div>
@@ -75,7 +75,7 @@ export function AdvancedTab() {
               type="number"
               value={config.min_summary_tokens}
               onChange={(e) => handleChange("min_summary_tokens", Number(e.target.value))}
-              className="mt-1 w-full px-3 py-1.5 rounded-lg border border-border-secondary bg-bg-primary text-text-primary text-sm"
+              className="mt-1 w-full rounded-[var(--radius-md)] bg-bg-tertiary px-3 py-2 text-[length:var(--text-ui)] text-text-primary outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/40"
             />
             <p className="text-[length:var(--text-meta)] text-text-muted mt-0.5">摘要生成的最小 token 预算</p>
           </div>
@@ -85,7 +85,7 @@ export function AdvancedTab() {
               type="number"
               value={config.summary_tokens_ceiling}
               onChange={(e) => handleChange("summary_tokens_ceiling", Number(e.target.value))}
-              className="mt-1 w-full px-3 py-1.5 rounded-lg border border-border-secondary bg-bg-primary text-text-primary text-sm"
+              className="mt-1 w-full rounded-[var(--radius-md)] bg-bg-tertiary px-3 py-2 text-[length:var(--text-ui)] text-text-primary outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/40"
             />
             <p className="text-[length:var(--text-meta)] text-text-muted mt-0.5">摘要输出的 token 上限</p>
           </div>
@@ -93,7 +93,7 @@ export function AdvancedTab() {
       </div>
 
       {/* Sub-agent Settings */}
-      <div className="rounded-xl border border-border-primary bg-bg-card p-4">
+      <div className="rounded-[var(--radius-lg)] bg-bg-card p-4 shadow-[var(--shadow-paper)]">
         <div className="text-sm font-medium text-text-primary mb-3">子 Agent 设置</div>
         <div className="space-y-3">
           <div>
@@ -102,7 +102,7 @@ export function AdvancedTab() {
               type="number"
               value={config.sub_agent_timeout_secs}
               onChange={(e) => handleChange("sub_agent_timeout_secs", Number(e.target.value))}
-              className="mt-1 w-full px-3 py-1.5 rounded-lg border border-border-secondary bg-bg-primary text-text-primary text-sm"
+              className="mt-1 w-full rounded-[var(--radius-md)] bg-bg-tertiary px-3 py-2 text-[length:var(--text-ui)] text-text-primary outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/40"
             />
             <p className="text-[length:var(--text-meta)] text-text-muted mt-0.5">单个子 Agent 执行的超时时间</p>
           </div>
@@ -112,7 +112,7 @@ export function AdvancedTab() {
               type="number"
               value={config.sub_agent_min_turns}
               onChange={(e) => handleChange("sub_agent_min_turns", Number(e.target.value))}
-              className="mt-1 w-full px-3 py-1.5 rounded-lg border border-border-secondary bg-bg-primary text-text-primary text-sm"
+              className="mt-1 w-full rounded-[var(--radius-md)] bg-bg-tertiary px-3 py-2 text-[length:var(--text-ui)] text-text-primary outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/40"
             />
             <p className="text-[length:var(--text-meta)] text-text-muted mt-0.5">子 Agent 最少执行轮次</p>
           </div>
@@ -122,7 +122,7 @@ export function AdvancedTab() {
               type="number"
               value={config.sub_agent_max_turns_cap}
               onChange={(e) => handleChange("sub_agent_max_turns_cap", Number(e.target.value))}
-              className="mt-1 w-full px-3 py-1.5 rounded-lg border border-border-secondary bg-bg-primary text-text-primary text-sm"
+              className="mt-1 w-full rounded-[var(--radius-md)] bg-bg-tertiary px-3 py-2 text-[length:var(--text-ui)] text-text-primary outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/40"
             />
             <p className="text-[length:var(--text-meta)] text-text-muted mt-0.5">子 Agent 最多执行轮次</p>
           </div>
@@ -132,7 +132,7 @@ export function AdvancedTab() {
               type="number"
               value={config.delegation_max_iterations}
               onChange={(e) => handleChange("delegation_max_iterations", Number(e.target.value))}
-              className="mt-1 w-full px-3 py-1.5 rounded-lg border border-border-secondary bg-bg-primary text-text-primary text-sm"
+              className="mt-1 w-full rounded-[var(--radius-md)] bg-bg-tertiary px-3 py-2 text-[length:var(--text-ui)] text-text-primary outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/40"
             />
             <p className="text-[length:var(--text-meta)] text-text-muted mt-0.5">委托任务的最大迭代次数</p>
           </div>

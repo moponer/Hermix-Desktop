@@ -364,13 +364,32 @@ export interface QueuedFile {
   sizeBytes: number;
 }
 
-/** An item held in `messageQueue` between turns. */
+/**
+ * 入队时快照的发送参数：排空时必须原样使用，不能读当时的 activeSession.model。
+ * 附件（File 句柄 / 字节）单独走 QueuedMessage 的字段，不进快照。
+ */
+export type QueuedOverrides = Omit<
+  import("./hooks/useStreamChat").ChatOverrides,
+  "images" | "image" | "imageMimeType" | "attachedFiles" | "attachedFilePaths"
+>;
+
+/** An item held in the per-session outbox between turns. */
 export interface QueuedMessage {
+  /** 稳定 id —— 队列操作按 id，不按下标。 */
+  id: string;
+  /** 入队时所属会话；null = 欢迎态（尚未建会话）。 */
+  sessionId: string | null;
   text: string;
   images?: QueuedImage[];
   attachedFiles?: QueuedFile[];
   /** 真实磁盘路径附件（工作台文件树"加入对话"），与 attachedFiles 并存。 */
   attachedFilePaths?: string[];
+  /** 入队时的模型/权限/领域/专家/工具/技能快照。 */
+  overrides?: QueuedOverrides;
+  status?: "queued" | "sending" | "failed";
+  attempts?: number;
+  error?: string;
+  createdAt?: string;
 }
 
 export interface ToolCall {
@@ -700,7 +719,7 @@ export interface PluginSettings {
   tool_code_exec: boolean;
 }
 
-export type NavPage = "chat" | "systemconfig" | "automation" | "experts" | "analytics" | "customapps" | "workbench" | "vault";
+export type NavPage = "chat" | "automation" | "experts" | "analytics" | "customapps" | "workbench" | "vault";
 // ↑ 无 "search"：搜索是动作不是页面，改由标题栏图标触发浮层
 //   （SessionPickerDialog），搜完即走、不丢当前视图。
 // ↑ "experts" 是专家视图的正式导航名（AgentsView initialTab="builtin"）。

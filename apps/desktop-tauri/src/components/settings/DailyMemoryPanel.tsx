@@ -38,7 +38,7 @@ export function DailyMemoryPanel() {
   }
   if (error) {
     return (
-      <p className="rounded-lg border border-[var(--color-border-primary)] bg-[var(--color-bg-card)] px-4 py-3 text-[length:var(--text-meta)] text-[var(--color-text-secondary)]">
+      <p className="rounded-lg bg-[var(--color-bg-card)] shadow-[var(--shadow-paper)] px-4 py-3 text-[length:var(--text-meta)] text-[var(--color-text-secondary)]">
         每日记忆不可用（{error}）。
       </p>
     );
@@ -54,7 +54,7 @@ export function DailyMemoryPanel() {
 
   return (
     <div className="grid grid-cols-1 gap-3 md:grid-cols-[180px_1fr]">
-      <div className="max-h-[420px] space-y-0.5 overflow-y-auto rounded-lg border border-[var(--color-border-primary)] bg-[var(--color-bg-card)] p-1.5">
+      <div className="max-h-[420px] space-y-0.5 overflow-y-auto rounded-lg bg-[var(--color-bg-card)] shadow-[var(--shadow-paper)] p-1.5">
         {days.map((d) => (
           <button
             key={d.date}
@@ -70,7 +70,7 @@ export function DailyMemoryPanel() {
           </button>
         ))}
       </div>
-      <div className="space-y-3 rounded-lg border border-[var(--color-border-primary)] bg-[var(--color-bg-card)] p-3">
+      <div className="space-y-3 rounded-lg bg-[var(--color-bg-card)] shadow-[var(--shadow-paper)] p-3">
         <Section title="目标（goals）" body={current.goals} />
         <Section title="进展（progress）" body={current.progress} />
         <Section title="结论（conclusions）" body={current.conclusions} />

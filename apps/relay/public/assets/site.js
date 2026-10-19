@@ -13,11 +13,10 @@
 
   var NAV = [
     { href: 'index.html', key: 'home', label: '首页' },
-    { href: 'desktop.html', key: 'desktop', label: 'Hermix Desktop' },
-    { href: 'mobile.html', key: 'mobile', label: 'Hermix 手机端' },
-    { href: 'spiker.html', key: 'spiker', label: 'Spiker' },
+    { href: 'hermix.html', key: 'hermix', label: 'Hermix' },
+    { href: 'others.html', key: 'others', label: '其他应用' },
     { href: 'changelog.html', key: 'changelog', label: '更新日志' },
-    { href: 'articles.html', key: 'articles', label: '文章' },
+    { href: 'articles.html', key: 'articles', label: 'Blog' },
     { href: 'docs.html', key: 'docs', label: '文档' },
   ];
 
@@ -39,8 +38,7 @@
       '<button class="burger" id="burger" aria-label="菜单" aria-expanded="false" aria-controls="navlinks">菜单</button>' +
       '<div class="links" id="navlinks">' + links + '</div>' +
       '<div class="cta">' +
-      '<span class="v" data-ver="desktop.version">—</span>' +
-      '<a class="btn" href="desktop.html#download">下载</a>' +
+      '<a class="btn" href="hermix.html#download">下载</a>' +
       '</div></div>'
     );
   }
@@ -82,7 +80,7 @@
     ensureMeta('meta[name="twitter:card"]', 'name', 'twitter:card').content = 'summary';
     ensureMeta('meta[name="twitter:title"]', 'name', 'twitter:title').content = document.title;
     ensureMeta('meta[name="twitter:description"]', 'name', 'twitter:description').content = desc;
-    ensureMeta('meta[name="theme-color"]', 'name', 'theme-color').content = '#161412';
+    ensureMeta('meta[name="theme-color"]', 'name', 'theme-color').content = '#0f1115';
   }
 
   function setMeta(o) {

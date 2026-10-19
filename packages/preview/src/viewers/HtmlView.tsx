@@ -17,7 +17,7 @@
 // 环境时用工具条上的「浏览器打开」。
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Monitor, Tablet, Smartphone, ExternalLink } from "lucide-react";
+import { Monitor, Tablet, Smartphone, ExternalLink, Scan } from "lucide-react";
 import { dirnameOf, resolveRelative } from "../lib/localAssets";
 
 type Viewport = "fit" | "desktop" | "tablet" | "phone";
@@ -99,7 +99,9 @@ export function HtmlView({
     <div className="html-root">
       <div className="preview-pdf-bar">
         <div className="html-viewports" role="group" aria-label="预览视口宽度">
-          <ViewportButton icon={<Monitor className="icon-md" />} label="适应面板宽度" active={viewport === "fit"} onClick={() => setViewport("fit")} />
+          {/* 适应宽度与桌面都用 Monitor 时两个按钮长得一样，用户点了分不出
+              变化（且下方 max-width 曾把固定宽度压回 100%）。改用 Scan 区分。 */}
+          <ViewportButton icon={<Scan className="icon-md" />} label="适应面板宽度" active={viewport === "fit"} onClick={() => setViewport("fit")} />
           <ViewportButton icon={<Monitor className="icon-md" />} label="桌面 1280" active={viewport === "desktop"} onClick={() => setViewport("desktop")} />
           <ViewportButton icon={<Tablet className="icon-md" />} label="平板 834" active={viewport === "tablet"} onClick={() => setViewport("tablet")} />
           <ViewportButton icon={<Smartphone className="icon-md" />} label="手机 390" active={viewport === "phone"} onClick={() => setViewport("phone")} />

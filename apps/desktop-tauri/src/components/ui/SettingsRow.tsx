@@ -38,7 +38,7 @@ export function SettingsRow({
         ? { type: "button" as const, onClick, disabled }
         : {})}
       className={cx(
-        "flex w-full items-center gap-4 px-4 py-3 text-left",
+        "flex w-full items-center gap-4 px-5 py-3.5 text-left",
         interactive &&
           "transition-colors hover:bg-[var(--color-bg-card-hover)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[var(--color-accent)]",
         className,
@@ -47,14 +47,14 @@ export function SettingsRow({
       <div className="min-w-0 flex-1">
         <div
           className={cx(
-            "text-[length:var(--text-ui)] text-[var(--color-text-primary)]",
+            "text-[length:var(--text-body)] font-medium text-[var(--color-text-primary)]",
             interactive && "cursor-pointer",
           )}
         >
           {title}
         </div>
         {description && (
-          <div className="mt-0.5 text-[length:var(--text-meta)] leading-relaxed text-[var(--color-text-muted)]">
+          <div className="mt-1 text-[length:var(--text-ui)] leading-relaxed text-[var(--color-text-muted)]">
             {description}
           </div>
         )}
@@ -68,21 +68,14 @@ export function SettingsRow({
 export interface SettingsGroupProps {
   title?: ReactNode;
   description?: ReactNode;
-  /**
-   * 行元素之间自动加分隔线；行自己不必管。默认 false：
-   * 分割线规则（2026-10-11）禁止列表逐行线——行距 + hover 底色已承担
-   * 分组，卡片只保留自身外框。仅个别确需"表格感"的组显式传 true。
-   */
-  divided?: boolean;
   className?: string;
   children: ReactNode;
 }
 
-/** 分组卡片：圆角容器包若干行，行间靠间距分层（默认无分隔线）。 */
+/** 分组卡片：圆角容器包若干行，行间靠间距分层（全组无描边线）。 */
 export function SettingsGroup({
   title,
   description,
-  divided = false,
   className,
   children,
 }: SettingsGroupProps) {
@@ -91,7 +84,7 @@ export function SettingsGroup({
       {(title || description) && (
         <header className="px-1">
           {title && (
-            <h3 className="text-[length:var(--text-ui)] font-medium text-[var(--color-text-primary)]">
+            <h3 className="text-[length:var(--text-ui)] font-medium text-[var(--color-text-secondary)]">
               {title}
             </h3>
           )}
@@ -102,34 +95,11 @@ export function SettingsGroup({
           )}
         </header>
       )}
-      <div
-        className={cx(
-          "overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border-primary)] bg-[var(--color-bg-card)]",
-        )}
-      >
-        {divided ? <DividedRows>{children}</DividedRows> : children}
+      {/* 卡片不画描边：面靠底色差（白卡压在灰底）+ 极淡投影抬起。
+          1px 边框会把每张卡读成「输入框」，满屏盒子感正是廉价感的来源。 */}
+      <div className="overflow-hidden rounded-[var(--radius-lg)] bg-[var(--color-bg-card)] shadow-[var(--shadow-paper)]">
+        {children}
       </div>
     </section>
-  );
-}
-
-/** 给直接子元素（非 SettingsRow 的裸 div）也补上分隔线。 */
-function DividedRows({ children }: { children: ReactNode }) {
-  // 过滤条件渲染留下的 false/null：留着会给那一行画一条分隔线，
-  // 视觉上像"下面还有内容但没渲染出来"。
-  const items = (Array.isArray(children) ? children.flat() : [children]).filter(
-    (c) => c !== null && c !== undefined && c !== false,
-  );
-  return (
-    <>
-      {items.map((child, i) => (
-        <div
-          key={i}
-          className={cx(i > 0 && "border-t border-[var(--color-border-subtle)]")}
-        >
-          {child}
-        </div>
-      ))}
-    </>
   );
 }

@@ -66,7 +66,12 @@ iframe 已经隔断了脚本执行面，没有理由为一个预览页动全局�
 - **HTML 预览继承宿主 CSP**：走 https 的外部样式表/脚本不加载，相对路径图片不解析。
   这是沙箱的代价，已写进 `HtmlView` 的文件头注释与工具条提示。
 - **`preview-doc.css` 是新的排版权威源**：Markdown 排版、目录、Word 纸张、表格网格、
-  网页舞台的规则都在这里；`code-view.css` 只留代码视图与图片/PDF 画布。改预览排版
-  请改新文件，不要在旧文件里加第二条同选择器规则。
+  网页舞台的规则都在这里；`code-view.css` 只留代码视图与桌面专属外壳
+  （`.preview-head` / `.preview-fullscreen` / 状态条）。图片、PDF、PPTX 画布原本
+  还留在 `code-view.css`，2026-10-19 已一并搬进 `preview-doc.css`——共享包
+  `@hermix/preview` 被桌面端与 viewer 同时消费，渲染器样式留在桌面端会让
+  viewer 的这些类型完全没有样式。改预览排版请改共享包那个文件，不要在
+  `code-view.css` 里加第二条同选择器规则。详见
+  [共享预览层的样式归属与 Tailwind 边界](../architecture/2026-10-19-shared-preview-layer-ownership.md)。
 - **缩放只在 `markdown` / `docx` / `spreadsheet` / `html` 上出现**：PDF 与 PPTX 是
   canvas，缩放由各自引擎的像素倍率管（见 `PdfView` / `PptxView`），再叠一层会双重缩放。

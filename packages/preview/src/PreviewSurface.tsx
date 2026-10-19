@@ -31,7 +31,7 @@ const PptxView = lazy(() =>
 function EngineFallback() {
   return (
     <div className="preview-state-center">
-      <Loader2 className="icon-md animate-spin" />
+      <Loader2 className="icon-md preview-spin" />
       正在载入渲染引擎…
     </div>
   );

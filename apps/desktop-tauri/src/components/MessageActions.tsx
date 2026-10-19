@@ -12,9 +12,10 @@
 // 真的上报是另一件事（需要新端点 + 存储），不在本次范围内。
 import { useEffect, useState } from "react";
 import {
-  Check, Copy, ThumbsUp, ThumbsDown, RefreshCw,
+  Check, Copy, ThumbsUp, ThumbsDown, RefreshCw, Quote,
 } from "lucide-react";
 import { useSafeTimeout } from "../hooks/useSafeTimeout";
+import { injectIntoComposer } from "../lib/composerInjection";
 import { storage, STORAGE_KEYS } from "../utils/storageCompat";
 
 type Vote = "up" | "down";
@@ -111,6 +112,30 @@ export function MessageActions({
         </button>
       )}
 
+      {hasContent && (
+        <button
+          type="button"
+          onClick={() =>
+            injectIntoComposer({
+              source: "quote",
+              // 只引前 12 行：整段长回答塞进输入框会把用户自己写的话顶走。
+              text: message.content
+                .split("\n")
+                .slice(0, 12)
+                .map((line) => `> ${line}`)
+                .join("\n") + "\n\n",
+              mode: "at-caret",
+            })
+          }
+          className="message-action-btn"
+          title="引用到输入框"
+          aria-label="引用到输入框"
+        >
+          <Quote className="icon-md" />
+          <span>引用</span>
+        </button>
+      )}
+
       {/* 赞 / 踩 —— 本机记录，不上报。见文件头说明。空正文无意义，隐藏。 */}
       {hasContent && (
         <>
@@ -151,7 +176,11 @@ export function MessageActions({
         </button>
       )}
 
-      {clock && <span className="message-action-clock tabular-nums">{clock}</span>}
+      {/* 时刻与其它动作同进退：空正文不渲染操作行，clock 也不例外。
+          （此前 clock 漏了 hasContent 守卫，空正文消息仍挂一个时间戳。） */}
+      {hasContent && clock && (
+        <span className="message-action-clock tabular-nums">{clock}</span>
+      )}
     </div>
   );
 }

@@ -132,7 +132,7 @@ export function DiagnosticsTab() {
   return (
     <div className="space-y-4">
       {/* Path + actions */}
-      <div className="rounded-lg border border-border-primary bg-bg-card p-4 space-y-3">
+      <div className="rounded-[var(--radius-lg)] bg-bg-card shadow-[var(--shadow-paper)] p-4 space-y-3">
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <div className="flex items-center gap-2 min-w-0">
             <FileText className="icon-md text-text-muted shrink-0" />
@@ -145,7 +145,7 @@ export function DiagnosticsTab() {
             <select
               value={tailLines}
               onChange={(e) => setTailLines(Number(e.target.value))}
-              className="px-2 py-1 rounded-md bg-bg-tertiary text-[length:var(--text-meta)] text-text-primary border border-border-secondary"
+              className="px-2 py-1 rounded-[var(--radius-md)] bg-bg-tertiary text-[length:var(--text-meta)] text-text-primary"
             >
               {TAIL_LINE_OPTIONS.map((n) => (
                 <option key={n} value={n}>
@@ -155,7 +155,7 @@ export function DiagnosticsTab() {
             </select>
             <button
               onClick={() => void refresh()}
-              className="h-7 px-2.5 rounded-md flex items-center gap-1 text-[length:var(--text-meta)] text-text-secondary hover:text-text-primary hover:bg-bg-hover border border-border-secondary"
+              className="h-7 px-2.5 rounded-[var(--radius-md)] flex items-center gap-1 bg-bg-tertiary text-[length:var(--text-meta)] text-text-secondary transition-colors hover:bg-bg-quaternary hover:text-text-primary"
               title="重新读取"
             >
               <RefreshCw className="icon-sm" />
@@ -163,7 +163,7 @@ export function DiagnosticsTab() {
             </button>
             <button
               onClick={onOpenDir}
-              className="h-7 px-2.5 rounded-md flex items-center gap-1 text-[length:var(--text-meta)] text-text-secondary hover:text-text-primary hover:bg-bg-hover border border-border-secondary"
+              className="h-7 px-2.5 rounded-[var(--radius-md)] flex items-center gap-1 bg-bg-tertiary text-[length:var(--text-meta)] text-text-secondary transition-colors hover:bg-bg-quaternary hover:text-text-primary"
               title="在文件管理器中打开日志目录"
             >
               <FolderOpen className="icon-sm" />
@@ -186,7 +186,7 @@ export function DiagnosticsTab() {
       </div>
 
       {error && (
-        <div className="rounded-lg border border-border-secondary bg-bg-card p-3 flex items-start gap-2">
+        <div className="rounded-[var(--radius-lg)] bg-bg-card p-3 flex items-start gap-2 shadow-[var(--shadow-paper)]">
           <AlertTriangle className="icon-md text-text-muted mt-0.5 shrink-0" />
           <div className="text-[length:var(--text-meta)] text-text-secondary">
             读取日志失败：<span className="font-mono">{error}</span>
@@ -199,15 +199,15 @@ export function DiagnosticsTab() {
       )}
 
       {tail && tail.lines.length > 0 && (
-        <div className="rounded-lg border border-border-primary bg-bg-card">
-          <div className="flex items-center justify-between px-3 py-2 border-b border-border-primary">
+        <div className="rounded-[var(--radius-lg)] bg-bg-card shadow-[var(--shadow-paper)]">
+          <div className="flex items-center justify-between bg-bg-tertiary/40 px-3 py-2">
             <div className="text-[length:var(--text-meta)] text-text-secondary truncate font-mono">
               {tail.fileName}{" "}
               <span className="text-text-muted">（共 {tail.totalLines} 行，显示尾部 {tail.lines.length} 行）</span>
             </div>
             <button
               onClick={onCopyTail}
-              className="h-7 px-2.5 rounded-md flex items-center gap-1 text-[length:var(--text-meta)] text-text-secondary hover:text-text-primary hover:bg-bg-hover border border-border-secondary"
+              className="h-7 px-2.5 rounded-[var(--radius-md)] flex items-center gap-1 bg-bg-tertiary text-[length:var(--text-meta)] text-text-secondary transition-colors hover:bg-bg-quaternary hover:text-text-primary"
             >
               <Clipboard className="icon-sm" />
               复制
@@ -233,8 +233,8 @@ export function DiagnosticsTab() {
       )}
 
       {/* 安全审计事件（GET /api/pairing/audit，时间倒序） */}
-      <div className="rounded-lg border border-border-primary bg-bg-card">
-        <div className="flex items-center justify-between px-3 py-2 border-b border-border-primary">
+      <div className="rounded-[var(--radius-lg)] bg-bg-card shadow-[var(--shadow-paper)]">
+        <div className="flex items-center justify-between bg-bg-tertiary/40 px-3 py-2">
           <div className="flex items-center gap-2">
             <ShieldCheck className="icon-md text-text-muted" />
             <span className="text-[length:var(--text-meta)] text-text-secondary">安全审计事件</span>
@@ -244,7 +244,7 @@ export function DiagnosticsTab() {
           </div>
           <button
             onClick={() => void refreshAudit()}
-            className="h-7 px-2.5 rounded-md flex items-center gap-1 text-[length:var(--text-meta)] text-text-secondary hover:text-text-primary hover:bg-bg-hover border border-border-secondary"
+            className="h-7 px-2.5 rounded-[var(--radius-md)] flex items-center gap-1 bg-bg-tertiary text-[length:var(--text-meta)] text-text-secondary transition-colors hover:bg-bg-quaternary hover:text-text-primary"
             title="重新读取审计事件"
           >
             <RefreshCw className="icon-sm" />
@@ -270,7 +270,7 @@ export function DiagnosticsTab() {
               </thead>
               <tbody>
                 {audit.map((row, i) => (
-                  <tr key={i} className="border-t border-border-secondary text-text-secondary">
+                  <tr key={i} className={`text-text-secondary ${i % 2 === 1 ? "bg-bg-tertiary/40" : ""}`}>
                     <td className="px-3 py-1.5 font-mono whitespace-nowrap">{formatAuditTime(row.ts)}</td>
                     <td className="px-3 py-1.5">{AUDIT_EVENT_LABELS[row.event] ?? row.event}</td>
                     <td className="px-3 py-1.5 font-mono truncate max-w-[160px]" title={row.device_id ?? ""}>

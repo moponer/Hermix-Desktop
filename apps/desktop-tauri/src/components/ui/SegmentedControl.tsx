@@ -57,7 +57,7 @@ export function SegmentedControl<T extends string>({
       role={as}
       aria-label={label}
       className={cx(
-        "inline-flex gap-0.5 border border-[var(--color-border-primary)] bg-[var(--color-bg-secondary)] p-0.5",
+        "inline-flex gap-0.5 bg-[var(--color-bg-tertiary)] p-0.5",
         APPEARANCE[appearance],
         layout === "fill" && "flex w-full",
         className,
@@ -91,7 +91,7 @@ export function SegmentedControl<T extends string>({
               SIZE[size],
               active
                 ? cx(
-                    "bg-[var(--color-bg-card)] text-[var(--color-text-primary)] shadow-[var(--shadow-card)]",
+                    "bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)] shadow-[var(--shadow-card)]",
                     appearance === "underline" && "rounded-none shadow-none",
                   )
                 : "text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]",

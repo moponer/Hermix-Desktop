@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Spiker —— 车队合规监控与自动发报文</title>
-<meta name="description" content="双源 GPS、路单核验、四档合规判定、违规动车自动下发报文、历史归档。Rust 后端，便携 zip 解压即用。" />
+<title>Spiker —— 车队合规监控台</title>
+<meta name="description" content="打开就是车队实时状态与合规档位。双源 GPS、路单核验、四档判定，违规动车自动下发报文。Rust 后端，便携 zip 解压即用。" />
 <link rel="icon" type="image/png" href="favicon.png" />
-<link rel="stylesheet" href="assets/site.css" />
+<link rel="stylesheet" href="assets/site.css?v=2" />
 </head>
 <body>
 <a class="skip" href="#main">跳到主要内容</a>
@@ -16,8 +16,8 @@
 <div class="hero">
   <div class="wrap hero-in">
     <div>
-      <h1>车队合规监控 + 自动发报文</h1>
-      <p class="sub">监控员打开就看得到车队实时状态与合规档位，识别违规动车并自动下发提示报文，路单接入与历史归档也在同一个界面里。Rust 后端 + React 19 前端，便携 zip 解压即用。</p>
+      <h1>车队什么状态，<br>打开就看得到</h1>
+      <p class="sub">实时定位 + 四档合规判定，违规动车启程那一刻自动下发报文。路单接入、历史归档都在同一个界面里。Rust 后端，便携 zip 解压即用。</p>
       <div class="acts">
         <a class="btn" href="spiker.html#download">下载便携 zip</a>
         <a class="btn ghost" href="changelog.html">更新日志</a>
@@ -47,7 +47,7 @@
 
 <div class="sec">
   <div class="wrap">
-    <h2>能做什么</h2>
+    <h2>能干什么</h2>
     <div class="feat">
       <div class="it"><div class="t">双源 GPS</div><div class="d">两套平台并行，5 秒一轮；总览弹窗走 fresh 通道，绕过 90 秒缓存。</div></div>
       <div class="it"><div class="t">四档合规判定</div><div class="d">按<em>车号 + 路单 + 报备</em>三态组合：T1 路单生效、T2 报备在期、T3 无手续，T0 是报备前置。</div></div>
@@ -61,10 +61,10 @@
   </div>
 </div>
 
-<div class="sec">
+<div class="sec" id="tiers">
   <div class="wrap">
     <h2>四档怎么判</h2>
-    <p>合规不是「有手续 / 没手续」两个状态。真实业务里有四种，判错任何一种都会造成误报或漏报。</p>
+    <p>合规不是「有手续 / 没手续」两个状态，真实业务里有四种。判错任何一种，要么误报扰人，要么漏报出事。</p>
     <div class="three">
       <div class="r3"><div class="k">T1</div><div class="v">路单已生效，正常营运。</div></div>
       <div class="r3"><div class="k">T2</div><div class="v">没有路单，但报备在有效期内。</div></div>
@@ -120,7 +120,7 @@
 
 <footer class="ft" data-footer></footer>
 
-<script src="assets/site.js?v=3"></script>
+<script src="assets/site.js?v=4"></script>
 <script>HERMIX.boot('spiker');</script>
 </body>
 </html>

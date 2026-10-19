@@ -62,116 +62,82 @@
   display: flex;
   flex-direction: column;
   gap: 0;
-  padding: 18px 22px 14px;
-  /* Gradient header — auto-adapts: in dark mode bg-code-header is
-     a deeper shade, in light mode it's a soft cream. The 1px
-     bottom border uses a slightly tinted color so it reads as
-     "soft divider" not "hard line". */
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--color-bg-code-header) 100%, transparent) 0%,
-    color-mix(in srgb, var(--color-bg-code-header) 88%, var(--color-bg-primary)) 100%
-  );
-  border-bottom: 1px solid color-mix(
-    in srgb,
-    var(--color-border-subtle) 70%,
-    transparent
-  );
+  /* 2026-10-19 收敛：原来两行 18/22 padding + 渐变 + 顶部发光条，
+     在窄栏里像两层工具栏叠着。现在一行：身份块（图标 + 名称/路径
+     两行）+ 操作组，padding 收到 10。 */
+  padding: 10px 12px 10px 14px;
+  background: var(--color-bg-code-header);
+  border-bottom: 1px solid var(--color-border-subtle);
   font-family: var(--font-sans);
   flex-shrink: 0;
   position: relative;
 }
-/* Hairline accent strip on top of the header — picks up the
-   primary brand color in both themes. In dark mode it shows as a
-   cool blue glow; in light mode it's a quiet blue band that ties
-   the modal back to the global accent. */
-.preview-pane .preview-head::before {
-  content: "";
-  position: absolute;
-  inset: 0 0 auto 0;
-  height: 1px;
-  background: linear-gradient(
-    90deg,
-    transparent 0%,
-    color-mix(in srgb, var(--color-accent, var(--color-info)) 35%, transparent) 50%,
-    transparent 100%
-  );
-  pointer-events: none;
-}
 .preview-pane .preview-head.is-fullscreen {
-  padding: 14px 28px;
+  padding: 10px 16px;
 }
 
-/* Row 1: icon · name · lang · spacer · close */
-.preview-pane .preview-head-row1 {
+/* 单行主体：图标 · 名称/路径 · 操作组 */
+.preview-pane .preview-head-main {
   display: flex;
   align-items: center;
-  gap: 12px;
-  min-height: 32px;
+  gap: 10px;
+  min-width: 0;
+}
+.preview-pane .preview-head-titles {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.preview-pane .preview-head-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 .preview-pane .preview-head-spacer { flex: 1 1 auto; min-width: 8px; }
 
-/* 文件名 — 升级到 14px / 600，对齐 VS Code 标签栏字号
-   保留字重对比但不再"小字"——标题信息需做美化处理 */
+/* 文件名：13px / 600，和路径同宽截断 */
 .preview-pane .preview-filename {
-  font-size: var(--text-body);
+  font-size: var(--text-ui);
   font-weight: 600;
   color: var(--color-text-primary);
   letter-spacing: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  line-height: 1.25;
+  line-height: 1.3;
   font-family: inherit;
   min-width: 0;
 }
 
-/* 语言徽章 — 升级为带边框的精致 chip */
+/* 类型徽章：中性 chip（原来的蓝色发光胶囊比正文还抢眼） */
 .preview-pane .preview-lang {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 3px 9px 3px 7px;
+  padding: 1px 6px;
   margin: 0;
-  background: color-mix(in srgb, var(--color-info) 12%, transparent);
-  color: var(--color-info);
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-secondary);
   font-size: var(--text-tiny);
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  border-radius: 999px;
-  border: 1px solid color-mix(in srgb, var(--color-info) 22%, transparent);
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  border-radius: var(--radius-sm);
+  border: 0;
   font-family: inherit;
   flex-shrink: 0;
-  line-height: 1.3;
-  /* subtle inner highlight for premium feel */
-  box-shadow: inset 0 1px 0 color-mix(in srgb, #ffffff 8%, transparent);
-}
-.preview-pane .preview-lang-dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: currentColor;
-  box-shadow: 0 0 6px currentColor;
+  line-height: 1.5;
 }
 
-/* Row 2: path · action group */
-.preview-pane .preview-head-row2 {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-top: 8px;
-  min-height: 24px;
-}
-
-/* 路径：单行省略 + 改进 hover */
+/* 路径：名称下方的第二行，点击打开所在目录 */
 .preview-pane .preview-path {
-  flex: 1 1 auto;
+  display: block;
+  width: 100%;
   min-width: 0;
   font-family: var(--font-mono);
   font-size: var(--text-tiny);
   font-weight: 400;
-  color: color-mix(in srgb, var(--color-info) 78%, var(--color-text-muted));
+  color: var(--color-text-faint);
   text-decoration: none;
   white-space: nowrap;
   overflow: hidden;
@@ -181,22 +147,12 @@
   border: 0;
   padding: 0;
   text-align: left;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
   transition: color var(--duration-fast) ease;
 }
-.preview-pane .preview-path::before {
-  content: "›";
-  color: color-mix(in srgb, var(--color-text-faint) 80%, transparent);
-  font-size: var(--text-meta);
-  line-height: 1;
-}
 .preview-pane .preview-path:hover {
-  color: var(--color-info);
+  color: var(--color-text-secondary);
   text-decoration: underline;
-  text-decoration-color: color-mix(in srgb, var(--color-info) 50%, transparent);
-  text-underline-offset: 3px;
+  text-underline-offset: 2px;
 }
 
 /* 操作按钮组 */
@@ -221,40 +177,10 @@
 }
 .preview-pane .preview-stats-dot { opacity: 0.6; }
 
-/* 头部动作按钮 */
-.preview-pane .head-action {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  border-radius: 6px;
-  background: transparent;
-  border: 0;
-  color: var(--color-text-muted);
-  cursor: pointer;
-  transition:
-    background var(--duration-fast) ease,
-    color var(--duration-fast) ease,
-    transform var(--duration-fast) ease;
-  font-family: inherit;
-}
-.preview-pane .head-action:hover {
-  background: color-mix(in srgb, var(--color-text-faint) 18%, transparent);
-  color: var(--color-text-primary);
-  transform: translateY(-1px);
-}
-.preview-pane .head-action:active {
-  transform: translateY(0);
-}
-.preview-pane .head-action.is-active {
-  background: color-mix(in srgb, var(--color-info) 18%, transparent);
-  color: var(--color-info);
-}
-.preview-pane .head-action.is-danger:hover {
-  background: color-mix(in srgb, var(--color-error) 18%, transparent);
-  color: var(--color-error);
-}
+/* 头部动作按钮（.head-action）的样式已搬到共享包
+   @hermix/preview/styles/preview-doc.css —— 共享组件（图片 / PDF / PPTX /
+   HTML / 文档画布）都在自己的工具条里放这些按钮，样式必须跟着组件走。
+   桌面端预览头（.preview-head-actions）用的是同一批类，无需本地副本。 */
 
 /* ════════════════════════════════════════════════════════════════════
    代码视图 — 全新结构
@@ -543,53 +469,9 @@
   min-height: 0;
 }
 
-/* ════════════════════════════════════════════════════════════════════
-   图片预览 — 居中、可缩放、棋盘格背景显示透明通道
-   ════════════════════════════════════════════════════════════════════ */
-.preview-pane .preview-image-stage {
-  flex: 1 1 auto;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  /* Checkered background — exposes alpha channel for PNG/WebP,
-     common case for screenshots / icons.  12px squares are a
-     good balance between visible alpha and not-busy. */
-  background-color: var(--color-bg-code);
-  background-image:
-    linear-gradient(45deg,
-      color-mix(in srgb, var(--color-text-faint) 12%, transparent) 25%,
-      transparent 25%),
-    linear-gradient(-45deg,
-      color-mix(in srgb, var(--color-text-faint) 12%, transparent) 25%,
-      transparent 25%),
-    linear-gradient(45deg,
-      transparent 75%,
-      color-mix(in srgb, var(--color-text-faint) 12%, transparent) 75%),
-    linear-gradient(-45deg,
-      transparent 75%,
-      color-mix(in srgb, var(--color-text-faint) 12%, transparent) 75%);
-  background-size: 16px 16px;
-  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
-  padding: 24px;
-  overflow: auto;
-  min-height: 0;
-}
-.preview-pane .preview-image-img {
-  /* `max-width: 100%` so wide screenshots don't blow out the
-     modal; `max-height: 100%` so portraits don't push the
-     status bar off-screen.  Object-fit keeps aspect ratio. */
-  max-width: 100%;
-  max-height: 100%;
-  width: auto;
-  height: auto;
-  display: block;
-  border-radius: 4px;
-  box-shadow:
-    0 4px 12px rgba(0, 0, 0, 0.18),
-    0 1px 3px rgba(0, 0, 0, 0.12);
-  user-select: none;
-  -webkit-user-drag: none;
-}
+/* 图片预览（.preview-image-stage / .preview-image-img）的样式已搬到共享包
+   @hermix/preview/styles/preview-doc.css：共享的 ImageView 两端都在用，
+   样式留在桌面端会让 viewer 的图片按原始尺寸贴在左上角。 */
 
 /* ════════════════════════════════════════════════════════════════════
    Computer Tab — Windows Explorer-style file browser
@@ -749,6 +631,9 @@
   transition: background 120ms ease;
   font-size: var(--text-meta, 12px);
   color: var(--color-text-primary);
+  /* 列表行不可选中：双击文件名时浏览器会选中文本（高亮块），
+     表现为"双击后文件名变色"。系统资源管理器同样不允许在列表里选文本。 */
+  user-select: none;
 }
 .computer-list-row:hover {
   background: color-mix(in srgb, var(--color-text-faint) 10%, transparent);
@@ -802,6 +687,7 @@
   transition: background 120ms ease;
   font-size: var(--text-meta);
   color: var(--color-text-primary);
+  user-select: none;
 }
 .computer-detail-row:hover {
   background: color-mix(in srgb, var(--color-text-faint) 10%, transparent);
@@ -917,24 +803,9 @@
   }
 }
 
-/* ── Enhanced preview header actions ──────────────────────── */
-.preview-pane .head-action {
-  position: relative;
-  overflow: hidden;
-}
-.preview-pane .head-action::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  background: currentColor;
-  opacity: 0;
-  transition: opacity 160ms ease;
-  pointer-events: none;
-}
-.preview-pane .head-action:active::after {
-  opacity: 0.08;
-}
+/* ── Enhanced preview header actions ────────────────────────
+   .head-action 的基础样式与按下高光已搬到共享包
+   @hermix/preview/styles/preview-doc.css。 */
 
 /* ── Preview body inner glow for code ──────────────────────── */
 .preview-pane .preview-pane-inner {
@@ -966,134 +837,14 @@
 
 /* ════════════════════════════════════════════════════════════════════
    文件预览渲染器 — PDF / PPTX / DOCX / 图片 / 纯文本
-   面板与全屏共用同一批类名，故两个容器都列在选择器里（只写
-   `.preview-pane` 会让全屏预览丢样式——旧实现正是这样）。
+   ────────────────────────────────────────────────────────────────────
+   这批渲染器样式已全部搬到共享包
+   @hermix/preview/styles/preview-doc.css。共享包被 desktop / viewer
+   两个应用消费，渲染器样式留在桌面端会让 viewer 的这些类型完全没有
+   样式（图片贴在左上角、PDF 画布不居中、纯文本顶到最上面）。
+
+   桌面端 code-view.css 现在只负责两类东西：
+     1. 代码视图（.code-*）—— 桌面独有的 Ln/Col 光标与换行开关；
+     2. 桌面专属外壳（.preview-head / .preview-fullscreen / 状态条）。
    ════════════════════════════════════════════════════════════════════ */
 
-/* 竖向容器：工具条固定，画布区吃掉剩余高度并可滚动 */
-.preview-pane .preview-pdf,
-.preview-pane .preview-pptx,
-.preview-pane .preview-docx,
-.preview-pane .preview-image,
-.preview-fullscreen .preview-pdf,
-.preview-fullscreen .preview-pptx,
-.preview-fullscreen .preview-docx,
-.preview-fullscreen .preview-image {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  min-height: 0;
-}
-
-/* ── 分页工具条（PDF / PPTX / 图片共用） ───────────────────── */
-.preview-pdf-bar {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 6px 10px;
-  border-bottom: 1px solid var(--color-border-secondary);
-}
-.preview-pdf-page {
-  font-size: var(--text-meta);
-  color: var(--color-text-secondary);
-  min-width: 72px;
-  text-align: center;
-  font-variant-numeric: tabular-nums;
-}
-.preview-pdf-zoom {
-  font-size: var(--text-meta);
-  color: var(--color-text-secondary);
-  min-width: 46px;
-  text-align: center;
-  font-variant-numeric: tabular-nums;
-}
-.preview-pdf-spacer {
-  flex: 1 1 auto;
-}
-
-/* ── 画布舞台 ──────────────────────────────────────────────── */
-.preview-pane .preview-pdf-stage,
-.preview-pane .preview-pptx-stage,
-.preview-fullscreen .preview-pdf-stage,
-.preview-fullscreen .preview-pptx-stage {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: auto;
-  display: flex;
-  justify-content: center;
-  align-items: flex-start;
-  padding: 16px;
-  background: var(--color-bg-code);
-}
-.preview-pdf-stage canvas,
-.preview-pptx-stage canvas {
-  display: block;
-  background: #fff;
-  border-radius: 4px;
-  box-shadow:
-    0 4px 12px rgba(0, 0, 0, 0.18),
-    0 1px 3px rgba(0, 0, 0, 0.12);
-}
-/* 渲染中给一点视觉反馈，避免大文件看起来像卡住 */
-.preview-pdf-stage[data-busy] {
-  opacity: 0.6;
-}
-
-/* ── 图片：旋转层与缩放层分离 ──────────────────────────────── */
-.preview-pane .preview-image-stage,
-.preview-fullscreen .preview-image-stage {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: hidden;
-}
-.preview-image-rotor {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.preview-pane .preview-image-img,
-.preview-fullscreen .preview-image-img {
-  max-width: 100%;
-  max-height: 100%;
-  width: auto;
-  height: auto;
-  display: block;
-  user-select: none;
-  -webkit-user-drag: none;
-}
-
-/* ── 状态：载入 / 错误 / 纯文本 ────────────────────────────── */
-.preview-state-center {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  height: 100%;
-  font-size: var(--text-meta);
-  color: var(--color-text-muted);
-}
-.preview-state-error {
-  padding: 16px;
-  font-size: var(--text-meta);
-  color: var(--color-error);
-}
-.preview-state-error-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  padding: 16px;
-  font-size: var(--text-meta);
-  color: var(--color-error);
-}
-.preview-plain-text {
-  margin: 0;
-  padding: 16px;
-  font-family: var(--font-sans);
-  font-size: var(--text-ui);
-  line-height: 1.6;
-  color: var(--color-text-primary);
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-

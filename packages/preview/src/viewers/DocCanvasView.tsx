@@ -259,7 +259,7 @@ export function DocCanvasView({
   return (
     <div className="html-root">
       <div className="preview-pdf-bar">
-        <span className="text-sm text-text-secondary">
+        <span className="preview-doc-meta">
           {fileName} · {meta.geometry === "slide16x9" ? "幻灯片 16:9" : "文档 A4"} ·{" "}
           {meta.blockCount} 块{meta.closed ? "" : " · 生成中…"}
         </span>

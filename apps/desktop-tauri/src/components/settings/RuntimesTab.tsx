@@ -85,7 +85,7 @@ export function RuntimesTab() {
   return (
     <div className="space-y-6 max-w-2xl mx-auto">
       {error && (
-        <div className="px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/30 text-xs text-red-400">
+        <div className="px-3 py-2 rounded-[var(--radius-md)] bg-red-500/12 text-[length:var(--text-ui)] text-red-400">
           {error}
         </div>
       )}
@@ -98,7 +98,7 @@ export function RuntimesTab() {
           return (
             <div
               key={kind}
-              className="rounded-xl border border-border-primary bg-bg-card p-4"
+              className="rounded-[var(--radius-lg)] bg-bg-card p-4 shadow-[var(--shadow-paper)]"
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="flex items-start gap-2.5 min-w-0">
@@ -111,7 +111,7 @@ export function RuntimesTab() {
                 <button
                   onClick={() => void probe(kind)}
                   disabled={!!loading[kind]}
-                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border-secondary text-xs text-text-secondary hover:text-text-primary disabled:opacity-40 shrink-0"
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-[var(--radius-md)] bg-bg-tertiary text-[length:var(--text-ui)] text-text-secondary transition-colors hover:bg-bg-quaternary hover:text-text-primary disabled:opacity-40 shrink-0"
                 >
                   <RefreshCw className={`icon-sm ${loading[kind] ? "animate-spin" : ""}`} />
                   {loading[kind] ? "检测中" : "重新检测"}

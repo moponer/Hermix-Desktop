@@ -27,7 +27,10 @@ reqwest = { workspace = true, features = ["json"] }
 # 单实例互斥体（CreateMutexW：Foundation + Security 双 feature 门控）；
 # GetLastError 在 Foundation（同 updater.rs 教训：跨模块声明依赖它）。
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Threading"] }
+# Win32_System_WindowsProgramming：DRIVE_FIXED / DRIVE_REMOTE / DRIVE_CDROM
+# 等盘符类型常量在 windows-sys 0.52 里位于该模块（不在 FileSystem 下），
+# 用来在不碰文件系统的前提下判定盘符类型（见 commands.rs::viewer_drives）。
+windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Threading", "Win32_System_WindowsProgramming"] }
 
 [[bin]]
 name = "hermix-viewer"

@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Hermix —— 桌面端 + 手机端，一个产品</title>
+<meta name="description" content="一个便携 exe 装在电脑上，一个 APK 装在手机里。会话、文件、任务记录全在本机；在外面用手机下指令、审操作、接通话。" />
+<link rel="icon" type="image/png" href="favicon.png" />
+<link rel="stylesheet" href="assets/site.css?v=2" />
+<!-- impeccable-disable cramped-padding: .shot/.shot-bar 是 role=img 拟真窗口预览，贴边是拟真形态 -->
+</head>
+<body>
+<a class="skip" href="#main">跳到主要内容</a>
+
+<nav class="nav" data-nav></nav>
+
+<div class="hero">
+  <div class="wrap hero-in">
+    <div>
+      <h1>你的 AI 助手，<br>装在电脑上，握在手里</h1>
+      <p class="sub">桌面端是一个便携 exe，双击就开，数据全在本机。手机端扫一下就配对——在外面下指令、审操作、接通话。一套产品，两个客户端。</p>
+      <div class="acts">
+        <a class="btn" href="#download">下载</a>
+        <a class="btn ghost" href="docs.html">使用文档</a>
+        <span class="m">桌面端 <span data-ver="desktop.version">—</span> · 手机端 <span data-ver="apk.version">—</span></span>
+      </div>
+    </div>
+
+    <div class="stage">
+    <div class="shot fit" role="img" aria-label="Hermix 桌面端界面示意：左侧会话列表，右侧对话区与一张磁盘分析的工具结果卡">
+      <div class="shot-bar">
+        <span class="shot-dot"></span><span class="shot-dot"></span><span class="shot-dot live"></span>
+        <span class="shot-title">Hermix</span>
+      </div>
+      <div class="shot-body">
+        <div class="shot-side" aria-hidden="true">
+          <span class="sk k1 on"></span><span class="sk k2"></span><span class="sk k3"></span>
+          <span class="sk k2"></span><span class="sk k1"></span>
+        </div>
+        <div class="shot-main">
+          <div class="shot-msg">C 盘又红了，帮我看看什么占的空间</div>
+          <div class="shot-msg me">正在读磁盘元数据，<b>2.1 秒</b>建完索引</div>
+          <div class="shot-tool">
+            <div class="th"><span class="sq"></span>磁盘分析 · C 盘</div>
+            <div class="tr"><span>视频缓存 38.2 GB</span><span>done</span></div>
+            <div class="shot-prog"><i></i></div>
+          </div>
+          <div class="shot-input"><span>清掉它</span><span class="caret"></span></div>
+        </div>
+      </div>
+    </div>
+    </div>
+  </div>
+</div>
+
+<main id="main">
+
+<div class="sec">
+  <div class="wrap">
+    <h2>看一轮工作怎么走</h2>
+    <p class="lead">演给你看：思考、工具、审批，每一步都在明面上，会话里都查得到。</p>
+    <div class="trace" id="trace" aria-label="一次整理下载文件夹任务的演示：指令、思考、工具调用与审批逐步出现">
+      <div class="trace-head"><span class="dot"></span>Hermix · 演示<span class="r">全程 6.8 秒</span></div>
+      <div class="trace-body" id="trace-body">
+        <div class="trace-step shot-msg">下载文件夹乱成一锅粥，把超过 500MB 的文件找出来，重复的清掉</div>
+        <details class="trace-step think">
+          <summary>已思考</summary>
+          <div class="think-in">先走磁盘索引按大小列出文件，再算哈希找重复组。删除不在自动放行边界内，动手前先请示。</div>
+        </details>
+        <div class="trace-step shot-tool">
+          <div class="th"><span class="sq"></span>查找文件 · &gt;500MB</div>
+          <div class="tr"><span>42 个 · 共 8.3 GB</span><span>0.4s</span></div>
+        </div>
+        <div class="trace-step shot-tool">
+          <div class="th"><span class="sq"></span>重复检测 · 按内容哈希</div>
+          <div class="tr"><span>6 组重复 · 可释放 2.1 GB</span><span>1.2s</span></div>
+        </div>
+        <div class="trace-step shot-tool">
+          <div class="th"><span class="sq"></span>待审批 · 删除 6 个重复文件</div>
+          <div class="shot-approve ap"><span class="go">允许</span><span>拒绝</span></div>
+        </div>
+        <div class="trace-step shot-msg me">已清出 <b>2.1 GB</b>：删掉 6 个重复文件，你的原文件一个没动。</div>
+      </div>
+      <div class="trace-foot">
+        <button class="btn sm ghost" id="trace-replay" type="button">再演一遍</button>
+        <span class="m">2 次工具调用 · 1 次审批 · 都写进会话记录</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="sec" id="download">
+  <div class="wrap">
+    <h2>下载</h2>
+    <p class="lead">两个客户端，各装各的。手机端需要先有装好桌面端的电脑。</p>
+    <div class="dlbar">
+      <div class="ver" data-ver="desktop.version">—</div>
+      <div class="info">
+        Windows 10+（x64）· <span data-ver="desktop.date">—</span> · SHA-256 <span class="mono" data-ver="desktop.shaShort">—</span><br>
+        更新说明：<span data-ver="desktop.notes" style="white-space:pre-line">—</span>
+      </div>
+      <div class="go2">
+        <a class="btn sm" data-ver-href="desktop.url" href="desktop/latest.zip">下载桌面端</a>
+        <a class="btn sm ghost" href="changelog.html">更新日志</a>
+      </div>
+    </div>
+    <p class="why" id="notes-why" hidden><b>本次发布未附更新说明。</b>不影响更新本身。</p>
+    <div class="dlgrid" style="margin-top:14px">
+      <div class="dlqr">
+        <div id="apk-qr" class="qrbox" aria-label="APK 下载二维码"></div>
+        <div class="qrcap" id="apk-cap">手机相机扫码，直接下载 APK</div>
+      </div>
+      <div class="dlmeta">
+        <div class="dlbar">
+          <div class="ver" data-ver="apk.version">—</div>
+          <div class="info">
+            Android · <span data-ver-hide="apk.date"><span data-ver="apk.date"></span> · </span>
+            <span data-ver-hide="apk.size">大小 <span data-ver="apk.size"></span> · </span>
+            SHA-256 <span class="mono" data-ver="apk.shaShort">—</span>
+          </div>
+          <div class="go2">
+            <a class="btn sm" data-ver-href="apk.url" href="download/hermix.apk">下载 APK</a>
+          </div>
+        </div>
+        <!-- 禁用态必须同时给出原因与解锁路径，不能只把按钮变灰 -->
+        <p class="why" id="apk-why" hidden><b>暂不可下载：</b><span id="apk-why-text">APK 还没上传到发布目录。</span><a href="changelog.html">看发布状态 →</a></p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="sec">
+  <div class="wrap">
+    <h2>桌面端怎么干活</h2>
+    <p class="lead">八件事，每件都有明确的取舍。</p>
+    <div class="feat">
+      <div class="it"><div class="t">大活派给子代理</div><div class="d">大文件、长 PDF、长命令输出、批量网页——体量超阈值且不中途分支的任务派给子代理。子代理读完只回结论，主上下文不长胖。</div></div>
+      <div class="it"><div class="t">压缩不删东西</div><div class="d">到阈值压一次。折掉的轮次作为真实消息行搬进子会话，原会话一行不动，摘要只当索引用。</div></div>
+      <div class="it"><div class="t">终端有记忆</div><div class="d">ConPTY 持久会话，命令之间状态连续（cd、环境变量、REPL 都留着），输出转义序列先剥干净再给你看。</div></div>
+      <div class="it"><div class="t">浏览器控制走进程内 CDP</div><div class="d">用 WebView2 自带的 DevTools 协议，不开 remote debugging 端口，不额外分发 Chromium。</div></div>
+      <div class="it"><div class="t">审批只在越界时问</div><div class="d">启动时按 profile 划一次边界，边界内放行，越界才拦。叠加受限令牌、Job Object、低完整性 AppContainer 四层约束。</div></div>
+      <div class="it"><div class="t">记忆会过期</div><div class="d">事实按 TTL 分层：对话回放帧 14 天、会话尾注 30 天衰减，置顶的永不衰减。设置里有记忆图谱，能查、能固定、能隐藏。</div></div>
+      <div class="it"><div class="t">文件索引挑便宜的路</div><div class="d">启动走 MFT/USN，几秒建完；helper 不可用就留空，不退化为全盘遍历。只有你打开查找面板才允许兜底扫描。</div></div>
+      <div class="it"><div class="t">一句话生成一个应用</div><div class="d">自然语言到多文件前端工程，一键打成单个 exe：资源嵌进 PE 资源节，运行期内存直喂，跑起来不联网取资源。</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="sec">
+  <div class="wrap">
+    <h2>还有这些</h2>
+    <p class="lead">内置 30 多个工具后端，挑日常最常用的几个说。</p>
+    <div class="list">
+      <div class="it"><b>截图</b>全局热键（默认 Alt+Q）或标题栏相机；截完 PNG 直接进剪贴板</div>
+      <div class="it"><b>文件预览</b>PDF、图片、Office、代码；大文档先转可读文本再给模型</div>
+      <div class="it"><b>语音</b>语音转写、语音模式对话、流式朗读</div>
+      <div class="it"><b>定时任务</b>cron / rrule；条件提醒翻译成一次 SQL 查询，不烧 token</div>
+      <div class="it"><b>任务与看板</b>任务追踪、看板、待办，排队项带位次</div>
+      <div class="it"><b>文档与演示</b>生成演示文稿、套主题、Office 命令行处理</div>
+      <div class="it"><b>磁盘</b>存储分析、清理；指定临时目录内清理免确认，安全检查照跑</div>
+      <div class="it"><b>技能</b>列出 / 安装 / 读取；打包时内嵌一套，启动落盘到数据目录</div>
+      <div class="it"><b>网页</b>搜索、正文抽取、URL 安全检查</div>
+      <div class="it"><b>会话搜索</b>按内容找回历史会话与片段</div>
+      <div class="it"><b>IM 通道</b>接渠道机器人，侧栏单独分组，故障原文可查</div>
+      <div class="it"><b>图像与视频</b>生成图片、生成并轮询视频任务状态</div>
+    </div>
+  </div>
+</div>
+
+<div class="sec">
+  <div class="wrap duo">
+    <div>
+      <h2>手机端：在外面也能指挥那台电脑</h2>
+      <p class="lead">扫一下就配对，不用同一个网络。手机自己不跑模型，活都在电脑上干。</p>
+      <div class="feat">
+        <div class="it"><div class="t">扫的是电脑的码，连的是中转</div><div class="d">二维码里是中转地址、6 位配对码、手机凭据和电脑公钥。电脑在公司、手机在路上也能配。</div></div>
+        <div class="it"><div class="t">配对码还是要看一眼</div><div class="d">配对请求密封发送，电脑判码通过才回长期凭据。码一次性、有有效期，试错次数有限。</div></div>
+        <div class="it"><div class="t">中转方看不到内容</div><div class="d">中转只做路由，不参与授权判定，也不解析内层帧。</div></div>
+        <div class="it"><div class="t">撤销权在电脑这边</div><div class="d">凭据是电脑签发的。设置页点一下撤销，中转立刻断开这条连接。</div></div>
+      </div>
+    </div>
+    <div class="stage">
+    <div class="shot-phone" role="img" aria-label="Hermix 手机端示意：一条桌面端发来的操作请求，下方只有允许与拒绝两个按钮">
+      <div class="pbar"><span>9:41</span></div>
+      <div class="pbody">
+        <div class="shot-msg"><span class="who">来自桌面端</span>要在 downloads 下新建一个 xlsx</div>
+        <div class="shot-approve"><span class="go">允许</span><span>拒绝</span></div>
+        <div class="shot-msg me">允许</div>
+        <div class="shot-msg"><span class="who">桌面端</span>已写入，1.2 MB</div>
+      </div>
+    </div>
+    </div>
+  </div>
+</div>
+
+<div class="sec">
+  <div class="wrap">
+    <h2>为什么审批只有两个键</h2>
+    <p>「永久允许」是最好用的功能，也是最危险的：点了它之后这类操作再也不会问你，而你可能一个月后忘了自己点过。远程场景下更严重——你不在电脑前，看不到操作发生在哪个窗口、哪个文件上。</p>
+    <p>所以这里不开这个口子。桌面端同理：把每次都问改成只在越界时问，弹窗少了，但每一次都值得看一眼。</p>
+  </div>
+</div>
+
+<div class="sec">
+  <div class="wrap">
+    <h2>相关</h2>
+    <div class="cols3">
+      <div class="it"><b>使用文档</b><span>安装、配对、配置模型、审批边界、数据备份，一步步来。<br><a href="docs.html">查看 →</a></span></div>
+      <div class="it"><b>扫一下就配好了</b><span>二维码里装了什么，为什么不需要同一个网络。<br><a href="article.html?id=pairing-scan">阅读 →</a></span></div>
+      <div class="it"><b>其他应用</b><span>车队合规监控台 Spiker，同一个发布体系。<br><a href="others.html">查看 →</a></span></div>
+    </div>
+  </div>
+</div>
+
+</main>
+
+<footer class="ft" data-footer></footer>
+
+<script src="assets/site.js?v=4"></script>
+<script src="assets/qrcode.min.js"></script>
+<script>
+  HERMIX.boot('hermix');
+  // 空态说明随数据显隐：notes 有内容时这句提示本身就是假话，必须藏起来。
+  document.addEventListener('hermix:versions', function (e) {
+    var why = document.getElementById('notes-why');
+    if (why) why.hidden = !!e.detail['desktop.notes'];
+  });
+  // APK 二维码：apk 可用时用绝对 URL 生成；未上传时空态 + 按钮置灰，
+  // 并给出原因与下一步，不给假链接。ok 与否都全量重算，避免「误报过的
+  // 黄条在数据恢复后永远不消失」（2026-10-12 实测）。
+  document.addEventListener('hermix:versions', function (e) {
+    var d = e.detail;
+    var a = document.querySelector('[data-ver-href="apk.url"]');
+    var box = document.getElementById('apk-qr');
+    var cap = document.getElementById('apk-cap');
+    var why = document.getElementById('apk-why');
+    if (d['apk.ok']) {
+      why.hidden = true;
+      if (a) {
+        a.classList.remove('off');
+        a.setAttribute('href', 'download/hermix.apk');
+        a.removeAttribute('aria-disabled');
+        a.textContent = '下载 APK';
+      }
+      if (cap) cap.textContent = '手机相机扫码，直接下载 APK';
+      if (box && window.qrcode) {
+        var abs = new URL(d['apk.url'], location.href).href;
+        var qr = qrcode(0, 'M');
+        qr.addData(abs);
+        qr.make();
+        box.innerHTML = qr.createSvgTag({ cellSize: 4, margin: 0, scalable: true });
+        box.classList.remove('off');
+      }
+      return;
+    }
+    if (a) {
+      a.classList.add('off');
+      a.removeAttribute('href');
+      a.setAttribute('aria-disabled', 'true');
+      a.textContent = 'APK 暂不可下载';
+    }
+    if (box) { box.classList.add('off'); box.textContent = 'APK 未上传'; }
+    if (cap) cap.textContent = '上传后这里显示下载二维码';
+    if (why) {
+      document.getElementById('apk-why-text').textContent = d['apk.hint'] || 'APK 还没上传到发布目录。';
+      why.hidden = false;
+    }
+  });
+  // 会话回放播放器：滚入视口开演，按节奏逐步点亮；重放按钮从头再来。
+  // .js 类由这里挂——JS 不可用时步骤静态全可见，不藏内容。
+  (function () {
+    var trace = document.getElementById('trace');
+    if (!trace || !('IntersectionObserver' in window)) return;
+    var steps = trace.querySelectorAll('.trace-step');
+    var btn = document.getElementById('trace-replay');
+    var timers = [];
+    function clear() { timers.forEach(clearTimeout); timers = []; }
+    function play() {
+      clear();
+      trace.classList.add('js');
+      steps.forEach(function (el) { el.classList.remove('in'); el.open = false; });
+      var t = 350;
+      steps.forEach(function (el) {
+        timers.push(setTimeout(function () { el.classList.add('in'); }, t));
+        t += 700;
+      });
+    }
+    if (btn) btn.addEventListener('click', play);
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (en) {
+        if (en.isIntersecting) { play(); io.disconnect(); }
+      });
+    }, { threshold: 0.35 });
+    io.observe(trace);
+  })();
+</script>
+</body>
+</html>

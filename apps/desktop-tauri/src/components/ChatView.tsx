@@ -15,7 +15,7 @@ import type {
   Session,
 } from "../types";
 import type { ChatOverrides, StreamPhase, TodoSnapshotItem } from "../hooks/useStreamChat";
-import type { ConfigCategory } from "./SystemConfigPanel";
+import type { ConfigCategory } from "./SettingsDialog";
 import { CompactionStatusBanner } from "./CompactionStatusBanner";
 import { mergeConsecutiveAssistantMessages, isRowRenderable, shouldShowAssistantHeader, mergeLegacyToolMessages } from "./chatUtils";
 import type { PendingImage } from "./chatUtils";
@@ -25,7 +25,8 @@ import { AcuiPanel } from "../acui/AcuiPanel";
 import { StreamErrorCard, type ErrorKind } from "./StreamErrorBanner";
 import { useModelSelector } from "./ModelSelector";
 import { useContextWindows } from "../hooks/useContextWindows";
-import { toastError } from "../hooks/useToast";
+import { toastError, toastInfo } from "../hooks/useToast";
+import { injectIntoComposer, subscribeComposerInjection } from "../lib/composerInjection";
 import { useChannelsStatus } from "../hooks/useChannelsStatus";
 import { Composer } from "./Composer";
 import { ApprovalDrawer, type PendingApprovals } from "./ApprovalDrawer";
@@ -279,7 +280,8 @@ interface ChatViewProps {
   session: Session | null;
   /** 历史翻页：hasMore 时列表顶部显示「加载更早的消息」，onLoadMore 前插一页。 */
   historyPaging?: { hasMore: boolean; loading: boolean; onLoadMore: () => void } | null;
-  onSendMessage: (content: string, projectId?: string, overrides?: ChatOverrides, attachments?: { images?: QueuedImage[]; attachedFilePaths?: string[]; attachedFiles?: QueuedFile[] }) => Promise<void>;
+  /** 返回 false = 没发出去（建会话失败 / 流式层错误）。调用方据此恢复草稿。 */
+  onSendMessage: (content: string, projectId?: string, overrides?: ChatOverrides, attachments?: { images?: QueuedImage[]; attachedFilePaths?: string[]; attachedFiles?: QueuedFile[] }) => Promise<boolean>;
   onNewChat?: () => void;
   pendingPrefill?: string | null;
   onConsumePrefill?: () => void;
@@ -351,9 +353,9 @@ interface ChatViewProps {
   messageQueue?: QueuedMessage[];
   onAddToQueue?: (msg: QueuedMessage) => void;
   onClearQueue?: () => void;
-  onRemoveFromQueue?: (idx: number) => void;
-  onEditQueueItem?: (idx: number, newText: string) => void;
-  onSendFromQueue?: (idx: number) => void;
+  onRemoveFromQueue?: (id: string) => void;
+  onEditQueueItem?: (id: string, newText: string) => void;
+  onSendFromQueue?: (id: string) => void;
   pendingFileAttachment?: string | null;
   onConsumeFileAttachment?: () => void;
 }
@@ -414,7 +416,37 @@ export const ChatView = memo(function ChatView({
   // 都说"这台工作台"的事，而不是复读主对话的通用问候（方案 A）。
   const isWorkbenchChat = !!session?.workbench_id;
   const welcomeGreeting = useWelcomeGreeting(session?.id ?? null);
-  const [input, setInput] = useState("");
+  // ── 输入草稿：按会话隔离 ──────────────────────────────────────
+  // 原先是单个 useState，A 会话写一半切到 B，B 的输入框里是 A 的内容。
+  // 现在 key 用 sessionId（欢迎态用 welcome），并防抖落 localStorage。
+  const draftKey = session?.id ?? "welcome";
+  const [drafts, setDrafts] = useState<Record<string, string>>(() => {
+    try {
+      const raw = storage.getItem("hermix.composer.drafts.v1");
+      return raw ? (JSON.parse(raw) as Record<string, string>) : {};
+    } catch {
+      return {};
+    }
+  });
+  const input = drafts[draftKey] ?? "";
+  const setInput = useCallback((value: string | ((prev: string) => string)) => {
+    setDrafts((prev) => {
+      const current = prev[draftKey] ?? "";
+      const next = typeof value === "function" ? value(current) : value;
+      if (next === current) return prev;
+      return { ...prev, [draftKey]: next };
+    });
+  }, [draftKey]);
+  useEffect(() => {
+    const t = setTimeout(() => {
+      try {
+        storage.setItem("hermix.composer.drafts.v1", JSON.stringify(drafts));
+      } catch {
+        /* 配额满 / 隐私模式：草稿只在内存里，不阻塞输入 */
+      }
+    }, 400);
+    return () => clearTimeout(t);
+  }, [drafts]);
   const { apps: customApps } = useCustomApps();
   const [sending, setSending] = useState(false);
   const [inlineCompactionDismissed, setInlineCompactionDismissed] = useState(false);
@@ -453,18 +485,48 @@ export const ChatView = memo(function ChatView({
 
   useEffect(() => {
     if (!pendingPrefill) return;
-    setInput(pendingPrefill);
-    requestAnimationFrame(() => {
-      const ta = textareaRef.current;
-      if (ta) {
-        ta.focus();
-        const len = ta.value.length;
-        ta.setSelectionRange(len, len);
-      }
-    });
+    // 统一走注入总线：预填 / 引用 / 编辑重发 / 语音 / 润色 共用一条链路。
+    injectIntoComposer({ source: "prefill", text: pendingPrefill, mode: "replace" });
     onConsumePrefill?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingPrefill]);
+
+  // 注入总线订阅：replace 覆盖；append 追加；at-caret 在当前选区插入。
+  useEffect(() => {
+    return subscribeComposerInjection((req) => {
+      const ta = textareaRef.current;
+      const focusAt = (pos: number) => {
+        if (req.focus === false) return;
+        requestAnimationFrame(() => {
+          const el = textareaRef.current;
+          if (!el) return;
+          el.focus();
+          el.setSelectionRange(pos, pos);
+        });
+      };
+
+      if (req.mode === "replace") {
+        setInput(req.text);
+        focusAt(req.text.length);
+        return;
+      }
+      if (req.mode === "append") {
+        const base = ta?.value ?? "";
+        const sep = base && !base.endsWith("\n") ? "\n" : "";
+        const next = `${base}${sep}${req.text}`;
+        setInput(next);
+        focusAt(next.length);
+        return;
+      }
+      // at-caret：以 DOM 当前选区为准（React state 可能比用户点击慢一拍）。
+      const value = ta?.value ?? "";
+      const start = ta?.selectionStart ?? value.length;
+      const end = ta?.selectionEnd ?? start;
+      const next = value.slice(0, start) + req.text + value.slice(end);
+      setInput(next);
+      focusAt(start + req.text.length);
+    });
+  }, [setInput]);
 
   // 输入框高度自适应由 AppMentionInput 内部负责（textarea 撑满内容高度、
   // 外层容器滚动），这里不要再改 height —— 父组件的 useEffect 在子组件
@@ -901,12 +963,19 @@ export const ChatView = memo(function ChatView({
     );
   }, [streamRow]);
 
+  // 防连按 Enter：同文本 500ms 内只受理一次（替代旧的"队列按文本去重"，
+  // 后者会把合法的重复指令「继续」也吞掉）。
+  const lastSubmitRef = useRef<{ text: string; at: number }>({ text: "", at: 0 });
+
   const handleSubmit = async () => {
     const trimmed = input.trim();
     // @app → 目标自定义应用头。
     let finalText = buildMentionPrefix(trimmed, customApps, MENTION_TRIGGER_APP, "自定义应用", "app_id");
     if (!trimmed && pendingImages.length === 0 && filePaths.length === 0 && pendingDocs.length === 0) return;
     if (isProcessingFiles) return;
+    const now = Date.now();
+    if (finalText === lastSubmitRef.current.text && now - lastSubmitRef.current.at < 500) return;
+    lastSubmitRef.current = { text: finalText, at: now };
     const attachedImages: QueuedImage[] = pendingImages.map((img) => ({
       file: img.file,
       blobUrl: img.blobUrl,
@@ -924,6 +993,56 @@ export const ChatView = memo(function ChatView({
             attachedFiles: pendingDocs.length > 0 ? [...pendingDocs] : undefined,
           }
         : undefined;
+    // 发送参数先算好：入队与直发必须用同一份（旧实现队列只带 model，
+    // 权限/专家/领域/工具/技能静默丢失）。
+    const overrides: ChatOverrides = { permissionLevel };
+    if (domainMode === "code") overrides.domainOverride = "code";
+    if (selectedModel && selectedModel.includes(":") && selectedModel !== "unknown") {
+      overrides.model = selectedModel;
+    }
+    // 思考开关：仅当用户显式设过（map 里有本 session 的值）才下发，
+    // 否则 undefined = 后端保持 provider 默认行为。
+    if (currentEnableThinking !== undefined) overrides.enableThinking = currentEnableThinking;
+    if (expert) {
+      overrides.systemPromptOverride = expert.systemPrompt;
+      markRecentUsed(expert.id);
+    }
+    const enabledToolNames = availableTools
+      .filter((t) => t.isEnabled)
+      .map((t) => t.name);
+    if (enabledToolNames.length > 0) {
+      overrides.tools = enabledToolNames;
+    }
+    // 专家 toolset（STABILITY_AND_REMOTE_PLAN §3.2-2）：作为独立字段传
+    // 后端，由 registry 展开成组成员并进白名单——不再丢弃。
+    if (expert?.toolset) overrides.expertToolset = expert.toolset;
+    const fallbackWorkspace =
+      (workspace && workspace.trim()) ||
+      (session?.workspace && session.workspace.trim()) ||
+      (() => {
+        try {
+          const raw = storage.getItem(
+            sessionId
+              ? `hermix.session.${sessionId}.workspace`
+              : STORAGE_KEYS.draftWorkspace,
+          );
+          return raw && raw.trim() ? raw : null;
+        } catch {
+          return null;
+        }
+      })();
+    if (fallbackWorkspace) overrides.workspace = fallbackWorkspace;
+    if (activeSkills.length > 0) overrides.skills = activeSkills;
+
+    // 失败恢复用的快照（清空之后还要把这些放回去）。
+    // images 用 PendingImage（带压缩元数据），不能拿 QueuedImage 顶回去。
+    const draftSnapshot = {
+      text: trimmed,
+      images: [...pendingImages],
+      paths: attachedPaths,
+      docs: [...pendingDocs],
+    };
+
     setForceScrollSeq((s) => s + 1);
     messageListRef.current?.scrollToBottom(true);
     onClearStreamError?.(sessionId);
@@ -931,56 +1050,41 @@ export const ChatView = memo(function ChatView({
     clearPendingImages();
     setFilePaths([]);
     setPendingDocs([]);
+
     if (isStreaming || sending) {
       onAddToQueue?.({
+        id: `q-${now}-${Math.random().toString(36).slice(2, 6)}`,
+        sessionId,
         text: finalText,
         images: attachedImages.length > 0 ? attachedImages : undefined,
         attachedFilePaths: attachedPaths.length > 0 ? attachedPaths : undefined,
         attachedFiles: pendingDocs.length > 0 ? [...pendingDocs] : undefined,
+        overrides,
+        status: "queued",
+        attempts: 0,
+        createdAt: new Date().toISOString(),
       });
+      toastInfo("已加入待发队列");
       return;
     }
+
     setSending(true);
     try {
-      const overrides: ChatOverrides = { permissionLevel };
-      if (domainMode === "code") overrides.domainOverride = "code";
-      if (selectedModel && selectedModel.includes(":") && selectedModel !== "unknown") {
-        overrides.model = selectedModel;
+      const ok = await onSendMessage(finalText, undefined, overrides, attachments);
+      if (!ok) {
+        // 没发出去：把原文与附件放回输入区。若用户已经开始输入新内容，
+        // 追加而不是覆盖 —— 不能把刚打的新字也一起冲掉。
+        setInput((prev) => (prev.trim() ? `${prev}\n${draftSnapshot.text}` : draftSnapshot.text));
+        if (draftSnapshot.images.length > 0) {
+          setPendingImages((prev) => [...draftSnapshot.images, ...prev]);
+        }
+        if (draftSnapshot.paths.length > 0) {
+          setFilePaths((prev) => Array.from(new Set([...draftSnapshot.paths, ...prev])));
+        }
+        if (draftSnapshot.docs.length > 0) {
+          setPendingDocs((prev) => [...draftSnapshot.docs, ...prev]);
+        }
       }
-      // 思考开关：仅当用户显式设过（map 里有本 session 的值）才下发，
-      // 否则 undefined = 后端保持 provider 默认行为。
-      if (currentEnableThinking !== undefined) overrides.enableThinking = currentEnableThinking;
-      if (expert) {
-        overrides.systemPromptOverride = expert.systemPrompt;
-        markRecentUsed(expert.id);
-      }
-      const enabledToolNames = availableTools
-        .filter((t) => t.isEnabled)
-        .map((t) => t.name);
-      if (enabledToolNames.length > 0) {
-        overrides.tools = enabledToolNames;
-      }
-      // 专家 toolset（STABILITY_AND_REMOTE_PLAN §3.2-2）：作为独立字段传
-      // 后端，由 registry 展开成组成员并进白名单——不再丢弃。
-      if (expert?.toolset) overrides.expertToolset = expert.toolset;
-      const fallbackWorkspace =
-        (workspace && workspace.trim()) ||
-        (session?.workspace && session.workspace.trim()) ||
-        (() => {
-          try {
-            const raw = storage.getItem(
-              sessionId
-                ? `hermix.session.${sessionId}.workspace`
-                : STORAGE_KEYS.draftWorkspace,
-            );
-            return raw && raw.trim() ? raw : null;
-          } catch {
-            return null;
-          }
-        })();
-      if (fallbackWorkspace) overrides.workspace = fallbackWorkspace;
-      if (activeSkills.length > 0) overrides.skills = activeSkills;
-      await onSendMessage(finalText, undefined, overrides, attachments);
     } finally {
       setSending(false);
     }

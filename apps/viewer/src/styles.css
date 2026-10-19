@@ -46,15 +46,57 @@
   --color-bg-card: var(--bg-card);
   --color-bg-card-hover: var(--bg-card-hover);
   --color-bg-hover: var(--bg-hover);
-  --color-bg-code: #0b1220;
-  --color-bg-code-header: #1e293b;
-  --color-bg-code-border: #1f2937;
+  /* 代码面（预览正文 / 代码块 / 图片棋盘格 / PDF 画布的底色）随主题走。
+     之前这里硬编码深色 #0b1220，而文字 token 跟随亮色主题 → 亮色主题下
+     暗底暗字，Markdown 正文几乎读不出来；语法高亮也按 isDark 选了亮色
+     配色，落在深底上同样看不清。取值对齐桌面端 tokens.css / dark.css。 */
+  --color-bg-code: #f8fafc;
+  --color-bg-code-header: #f1f5f9;
+  --color-bg-code-border: #e2e8f0;
   --color-text-primary: var(--text-primary);
   --color-text-muted: var(--text-muted);
   --color-text-secondary: var(--text-secondary);
   --color-border-subtle: var(--border-subtle);
 
   --duration-base: 150ms;
+
+  /* ─── 共享预览层补充 token ──────────────────────────────────
+   * 共享 CSS（@hermix/preview）现在用到 42 个 token，viewer 原本只复刻了
+   * 桌面 token 的子集，缺的 20 个会让 var() 解析失败 → 整条声明被
+   * 丢弃 → 圆角 / 间距 / 字号 / 行高 / 字重 / 链接色 / 目录选中底色
+   * 全部静默失效（表现为"排版塌了但看不出原因"）。
+   * 命名与取值对齐桌面端 tokens.css；颜色类走 var(--accent) 等引用，
+   * 暗色主题自动跟随，不需要再写一份。
+   * 缺项由 scripts/check-preview-layer.mjs 守门禁。 */
+  --text-tiny: 12px;
+  --text-ui: 13px;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --leading-ui: 1.5;
+  --leading-compact: 1.4;
+  --leading-heading: 1.3;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-5: 20px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 13px;
+  --radius-full: 9999px;
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--bg-accent-soft);
+  --color-accent-soft-strong: color-mix(in srgb, var(--accent) 18%, transparent);
+  --color-link: var(--accent);
+  --color-link-hover: var(--accent-strong);
+  /* 共享层把它用在搜索框 placeholder 与三角标上，需要可读；viewer 的
+   * --text-faint 是纯装饰色（#cbd5e1），用 --text-muted 才够对比度。 */
+  --color-text-faint: var(--text-muted);
+  /* 渲染器外壳用到的三枚：状态色、按下底色、控件描边。
+   * 都走 var() 引用，暗色主题自动跟随。 */
+  --color-info: var(--info);
+  --color-error: var(--danger);
+  --color-bg-active: var(--bg-tertiary);
+  --color-border-secondary: var(--border);
+  --duration-fast: 120ms;
 }
 
 /* 暗色由 JS 写入的 data-theme 驱动（theme.ts），不用媒体查询——
@@ -238,6 +280,7 @@ html, body, #root {
   flex: 1; min-width: 0;
   text-align: left; padding: 5px 6px 5px 2px;
   cursor: pointer;
+  user-select: none;
 }
 .sb-row.is-active .sb-row-label { color: var(--accent); }
 .sb-row-label span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -265,7 +308,10 @@ html, body, #root {
 .explorer-error {
   padding: 24px; color: var(--danger); text-align: center;
 }
-.entries { width: 100%; border-collapse: collapse; font-size: 13px; }
+/* 文件列表不可选中：双击文件名时浏览器会选中文本（高亮块），
+   表现为"双击后文件名后缀变色"。系统资源管理器同样不允许在列表里
+   选文本，这里对齐系统行为。 */
+.entries { width: 100%; border-collapse: collapse; font-size: 13px; user-select: none; }
 .entries thead th {
   position: sticky; top: 0; z-index: 1;
   background: var(--bg-secondary);
@@ -328,9 +374,33 @@ html, body, #root {
 .tabbar-spacer { flex: 1; }
 .preview-body { flex: 1; min-height: 0; overflow: hidden; display: flex; }
 
-/* 共享预览面板内部 */
-.preview-pane { background: var(--bg-primary); }
-.preview-pane-inner { background: var(--bg-primary); }
+/* 共享预览面板内部
+   ────────────────────────────────────────────────────────────────────
+   布局契约：外壳是撑满右栏的 flex 列，内容区吃掉剩余高度并独立滚动。
+   viewer 刻意不装 Tailwind（vite.config 注释：最小化，无 Tailwind），
+   所以这里的 display/flex 全部要真写出来 —— 之前 PreviewHost 用的是
+   `flex flex-col h-full min-h-0 overflow-hidden` 这类 Tailwind 原子类，
+   在 viewer 里全是空操作：外壳退化成普通块，图片按原始尺寸贴在左上角。
+   共享渲染层的内容样式由 @hermix/preview 提供，这里只管 viewer 的壳。 */
+.preview-pane {
+  display: flex;
+  flex-direction: column;
+  /* .preview-body 是 flex 行容器，不给 flex-basis 的话外壳宽度会
+     收缩到内容宽度 —— 整栏预览塌成左上角一小块。 */
+  flex: 1 1 0%;
+  min-width: 0;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  /* 预览区整体是"代码面"（与桌面端 .preview-body 同底色），
+     正文 / 表格 / 代码块都落在这张底上。 */
+  background: var(--color-bg-code);
+}
+/* 内容区：flex:1 + overflow:auto 由共享层给
+   （.preview-pane .preview-pane-inner），两端同一份规则。
+   底色与外壳一致（都是代码面），避免纯文本这类"没有自己的底色"的
+   内容落在一块与四周不同的底上。 */
+.preview-pane-inner { background: var(--color-bg-code); }
 
 /* 预览内置工具条（由 PreviewHost 渲染） */
 .preview-toolbar {
@@ -357,18 +427,23 @@ html, body, #root {
   padding: 4px 10px; cursor: pointer;
 }
 .seg button:hover { color: var(--text-primary); }
+.seg button:disabled,
+.seg button:disabled:hover { color: var(--text-muted); cursor: default; }
 .seg button.is-active { background: var(--bg-accent-soft); color: var(--accent); }
+/* 缩放重置按钮：方块形，图标垂直居中。 */
+.seg button.seg-reset {
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 4px 8px;
+}
 .seg-val {
   font-size: 12px; padding: 4px 8px;
   color: var(--text-primary); align-self: center;
   font-variant-numeric: tabular-nums;
 }
 
-.preview-state-center, .preview-state-error {
-  margin: auto; padding: 24px;
-  text-align: center; color: var(--text-secondary);
-}
-.preview-state-error { color: var(--danger); }
+/* .preview-state-center / .preview-state-error 的样式由共享层
+   @hermix/preview/styles/preview-doc.css 提供（与桌面端同一份），
+   viewer 不再自带副本。 */
 
 .empty {
   margin: auto; padding: 32px;

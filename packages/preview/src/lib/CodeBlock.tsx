@@ -1,8 +1,11 @@
-// 共享 CodeBlock —— 聊天 MarkdownBody 与预览 MarkdownView 都用它。
+// 共享 CodeBlock —— 预览 MarkdownView 与代码预览都用它。
 // 关键约束：
 //   1. 不依赖任何应用层 hook（useSafeTimeout 这种应用态逻辑要在这里
 //      重新内联或换写法），保证包是「只读 react + 给定 deps」的纯渲染层。
 //   2. 高亮走 lib/codeHighlight：与 CodeView 同一份，语法不会漂。
+//   3. 不用 Tailwind 原子类 —— viewer 刻意不装 Tailwind，原子类在那边
+//      全是空操作（类名不报错，样式静默丢失）。版式一律走 .preview-code*
+//      语义类，定义在本包的 styles/preview-doc.css。
 
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Check, Copy, X } from "lucide-react";
@@ -105,35 +108,34 @@ function CodeBlockImpl({
   };
   return (
     <div
-      className="not-prose my-2.5 overflow-hidden rounded-md"
+      className="preview-code"
       style={{
         background: "var(--color-bg-code)",
         border: "1px solid var(--color-bg-code-border)",
       }}
     >
       <div
-        className="flex items-center justify-between px-4 py-2 text-[length:var(--text-meta)] border-b"
+        className="preview-code-head"
         style={{
           background: "var(--color-bg-code-header)",
           color: "var(--color-text-muted)",
-          borderColor: "var(--color-border-subtle)",
         }}
       >
-        <div className="flex items-center gap-2">
-          <span className="font-mono uppercase tracking-wider">
+        <div className="preview-code-head-main">
+          <span className="preview-code-lang">
             {LANG_LABEL[language] ?? "Code"}
           </span>
           {shouldCollapse && (
-            <span className="text-[length:var(--text-meta)] opacity-50">{lineCount} 行</span>
+            <span className="preview-code-count">{lineCount} 行</span>
           )}
         </div>
         <button
           onClick={handleCopy}
-          className="flex items-center gap-1.5 rounded px-1.5 py-0.5 transition-colors hover:bg-bg-hover"
+          className="preview-code-copy"
           style={{ color: "var(--color-text-muted)" }}
         >
           {copied ? <Check className="icon-sm" /> : failed ? <X className="icon-sm" /> : <Copy className="icon-sm" />}
-          <span className="font-medium">{copied ? "已复制" : failed ? "复制失败" : "复制"}</span>
+          <span className="preview-code-copy-label">{copied ? "已复制" : failed ? "复制失败" : "复制"}</span>
         </button>
       </div>
       <div style={{ position: "relative" }}>

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { flushSync } from "react-dom";
-import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
+import { getCurrentWindow, LogicalSize, currentMonitor } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import { Sidebar } from "./components/Sidebar";
 import { SidebarRevealRow } from "./components/SidebarRevealRow";
@@ -13,7 +13,7 @@ import { SessionPickerDialog } from "./components/SessionPickerDialog";
 import { useStreamChat } from "./hooks/useStreamChat";
 import { AppProviders } from "./app/AppProviders";
 import { renderRoutes, type RouteContext } from "./app/routes";
-import { type ConfigCategory } from "./components/SystemConfigPanel";
+import { SettingsDialog, type ConfigCategory } from "./components/SettingsDialog";
 
 import { useAppBootstrap } from "./app/useAppBootstrap";
 import {
@@ -98,11 +98,11 @@ const RIGHT_DEFAULT = 640;
 // 三列共存临界视口: LEFT_MIN(200) + MAIN_MIN_WIDTH(580) + RIGHT_MIN(360) = 1140。
 // 默认视口 1440 时: 左 200 + 主 580 + 右 640 = 1420 (剩 20 给 splitter, OK).
 // 默认视口 1680 时: 左 200 + 主 840 + 右 640 = 1680.
-// 用户主动想看右栏时（点 TitleBar 产物按钮且视口 < 1140），把 Tauri 窗口
-// outer 宽扩到 DEFAULT_WINDOW_WIDTH (1280 = tauri.conf.json 默认)，高度保留当前 outer；
-// 装下三列后 setRightOpen(true)。这与 resize 拖小窗口时"装不下就关右栏"不冲突：
-// 后者是被动收缩，这里是用户主动请求更多空间。
-// setSize 失败时仍 setRightOpen(true)，让 layout 走退化路径（窗口不够宽则右栏内容窄显示）。
+// 用户主动开右栏（标题栏按钮 / 点文件 / 打开浏览器 / 画布 / 目录 chip）时统一走
+// openRightPane：视口装不下三列就**把窗口向右扩**（左边缘不动，缺口 = 左列 +
+// 主列舒适最小宽 + 右列 − 当前视口），主列不被挤扁；只有最大化或贴着屏幕右缘
+// 时右侧真的没有空间，才退回挤压/自动关闭的旧行为。
+// setSize 失败也仍打开：宁可挤压，也不能让用户点了没反应。
 // 默认视口 1920 时: 左 200 + 主 1080 + 右 640 = 1920.
 /* 自适应 MAIN_MIN_WIDTH — 按**等效视口**动态缩小主列最小宽，避免窄窗口下
    左列 + 主列合计最小宽度超过视口：
@@ -143,6 +143,9 @@ export default function App() {
   // 设置落点分类。默认「模型」：配置入口绝大多数是"没配模型/想换模型"，
   // 此前硬编码落在「工具」→ 用户点了"配置模型"却看到插件页。
   const [configCategory, setConfigCategory] = useState<ConfigCategory>("model");
+  // 设置是整幅浮层（2026-10-19 用户拍板）：开着时背景页保持原样，
+  // 关闭即回到原视图，不再走 NavPage 整页切换。
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   // 「自定义应用」页「创建新应用」按钮跳转时注入的预填指令（一次性消费）。
   const [pendingPrefill, setPendingPrefill] = useState<string | null>(null);
@@ -150,29 +153,47 @@ export default function App() {
   const [mainMinWidth, setMainMinWidth] = useState(() => computeMainMinWidth(window.innerWidth));
   const [leftMin, setLeftMin] = useState(() => computeLeftMin(window.innerWidth));
   // 包装 setPage: 右栏是 chat 专属 UI，切到任意非对话页时主动关闭产物栏
-  // （agents/experts/settings/plugins/automation/search）。
+  // （agents/experts/plugins/automation/search）。
   const setPage = useCallback((p: NavPage) => {
     setPageRaw(p);
     if (p !== "chat") setRightOpen(false);
   }, []);
 
-  /** 打开设置页。`category` 让调用方指定落点（如聊天输入框的
+  /** 打开设置浮层。`category` 让调用方指定落点（如聊天输入框的
    *  "未配置模型"入口应直达「模型」），缺省「模型」。
    *
-   *  必须走 `setPage` 包装而不是 `setPageRaw`：包装里那条
-   *  `if (p !== "chat") setRightOpen(false)` 才是"切非对话页收右栏"的唯一
-   *  真相源。直接调 setPageRaw 会绕过它，右侧预览竖条就会留在设置页上。 */
+   *  浮层不切页：背景保持当前对话/工作台，右侧产物栏也不动 —— 调完设置
+   *  关闭即回到原视图，这是 2026-10-19 从整页改回弹窗的核心理由。 */
   const openSettings = useCallback((category: ConfigCategory = "model") => {
     setConfigCategory(category);
-    setPage("systemconfig");
-  }, [setPage]);
-
-  // 设置页是专注视图：侧栏让位，把整幅宽度交给设置内容，点「返回」才回主界面。
-  // 刻意**不改 sidebarOpen** —— 那是用户的全局布局偏好，若在这里把它置 false，
-  // 从设置返回后侧栏就永久收起了，得用户自己去拉回来。只做派生，见下方
-  // sidebarVisible。
+    setSettingsOpen(true);
+  }, []);
 const [sessions, setSessions] = useState<Session[]>([]);
-const [messageQueue, setMessageQueue] = useState<QueuedMessage[]>([]);
+const OUTBOX_STORAGE_KEY = "hermix.outbox.v1";
+const [messageQueue, setMessageQueue] = useState<QueuedMessage[]>(() => {
+  // 待发队列持久化：重启后仍能看到上次没发出去的消息。
+  // 带 File 句柄的条目（图片 / 文档）无法序列化，写入时会被过滤掉。
+  try {
+    const raw = storage.getItem(OUTBOX_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as QueuedMessage[];
+    return Array.isArray(parsed)
+      ? parsed.filter((m) => m && typeof m.text === "string" && !!m.id)
+      : [];
+  } catch {
+    return [];
+  }
+});
+useEffect(() => {
+  const persistable = messageQueue
+    .filter((m) => !m.images?.length && !m.attachedFiles?.length)
+    .map((m) => (m.status === "sending" ? { ...m, status: "queued" as const } : m));
+  try {
+    storage.setItem(OUTBOX_STORAGE_KEY, JSON.stringify(persistable));
+  } catch {
+    /* 配额满：仅内存态，不影响发送 */
+  }
+}, [messageQueue]);
 // 右栏"加入对话"右键菜单触发外部文件附件。
 const [pendingFileAttachment, setPendingFileAttachment] = useState<string | null>(null);
 const handleAddFileToChat = useCallback((path: string) => {
@@ -183,11 +204,11 @@ setPage("chat");
 
   // 队列变更 handlers 保持 memoized，避免 ChatComposer 在主输入框每次按键时重渲染。
   // sendFromQueue 闭包依赖下方定义的 streaming / handleSendMessage，故在其后声明。
-  const removeFromQueue = useCallback((idx: number) => {
-    setMessageQueue((prev) => prev.filter((_, i) => i !== idx));
+  const removeFromQueue = useCallback((id: string) => {
+    setMessageQueue((prev) => prev.filter((m) => m.id !== id));
   }, []);
-  const editQueueItem = useCallback((idx: number, newText: string) => {
-    setMessageQueue((prev) => prev.map((m, i) => (i === idx ? { ...m, text: newText } : m)));
+  const editQueueItem = useCallback((id: string, newText: string) => {
+    setMessageQueue((prev) => prev.map((m) => (m.id === id ? { ...m, text: newText } : m)));
   }, []);
 
   // 视口自适应 — 窗口尺寸变化时重算面板最小宽度
@@ -216,6 +237,9 @@ setPage("chat");
       // 2026-09-30：侧栏搜索行上的 ⌘K 提示原本是假的 —— 没有任何键绑定。
       // 补上 Ctrl/Cmd+K，提示才成立。
       if (e.key === "k" || e.key === "K") {
+        // 设置浮层内 Ctrl/Cmd+K 归它自己的设置搜索框；这里抢走会把全局
+        // 会话搜索盖在设置层之上。
+        if (settingsOpen) return;
         e.preventDefault();
         setSearchOpen(true);
         return;
@@ -232,7 +256,7 @@ setPage("chat");
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [settingsOpen]);
 
   const [activeSessionId, setActiveSessionIdRaw] = useState<string | null>(() => {
     try { return storage.getItem(ACTIVE_SESSION_KEY); } catch { return null; }
@@ -296,7 +320,7 @@ setPage("chat");
   // 设置页是专注视图：侧栏让位，把整幅宽度交给设置内容，点「返回」才回主界面。
   // 刻意**不改 sidebarOpen** —— 那是用户的全局布局偏好，若在这里把它置 false，
   // 从设置返回后侧栏就永久收起了，得用户自己去拉回来。这里只做派生。
-  const sidebarVisible = sidebarOpen && page !== "systemconfig";
+  const sidebarVisible = sidebarOpen;
 
   // 全局搜索浮层。从主导航摘掉"搜索"页后由标题栏图标触发。
   const [searchOpen, setSearchOpen] = useState(false);
@@ -307,6 +331,14 @@ setPage("chat");
   useEffect(() => {
     try { storage.setItem(RIGHT_OPEN_KEY, String(rightOpen)); } catch {}
   }, [rightOpen]);
+
+  // 打开右栏的唯一入口在下方（需要 left/right 当前宽度才知缺口），这里先放
+  // 一个稳定 ref：点文件 / 开浏览器 / 画布 / 目录 chip 等早期回调都经由它，
+  // 不再各写一份"要不要扩窗"的判断。
+  const openRightPaneRef = useRef<() => void>(() => {});
+  // 扩窗后到布局稳定之间的时间窗：期间 viewport-aware effect 不得拿旧的
+  // innerWidth 把刚打开的右栏掐掉。
+  const rightOpenGuardUntil = useRef(0);
 
   // ── 侧栏：一屏多标签，手动关闭 ──────────────────────────────
   // 点对话里的文件路径 / 文件浏览器里的文件都会在这里开一个标签；同一
@@ -322,7 +354,7 @@ setPage("chat");
       prev.some((t) => t.id === id) ? prev : [...prev, { id, type: "file", artifact }],
     );
     setActivePreviewId(id);
-    setRightOpen(true);
+    openRightPaneRef.current();
   }, []);
 
   const openBrowserTab = useCallback(() => {
@@ -332,7 +364,7 @@ setPage("chat");
         : [...prev, { id: BROWSER_TAB_ID, type: "browser" }],
     );
     setActivePreviewId(BROWSER_TAB_ID);
-    setRightOpen(true);
+    openRightPaneRef.current();
   }, []);
 
   // 审查 / 辅助对话同构：单例标签 + 幂等切换。两个都只有一份聚合视图，
@@ -342,7 +374,7 @@ setPage("chat");
       prev.some((t) => t.id === id) ? prev : [...prev, { id, type } as SideTab],
     );
     setActivePreviewId(id);
-    setRightOpen(true);
+    openRightPaneRef.current();
   }, []);
 
   // 文档画布（单例）：marker 命中时由下方的 store 订阅自动打开。
@@ -352,7 +384,7 @@ setPage("chat");
       prev.some((t) => t.id === CANVAS_TAB_ID) ? prev : [...prev, { id: CANVAS_TAB_ID, type: "canvas" }],
     );
     setActivePreviewId(CANVAS_TAB_ID);
-    setRightOpen(true);
+    openRightPaneRef.current();
   }, []);
 
   // 订阅画布元信息：画布开始流式增长时自动开画布 tab。两个触发边沿：
@@ -415,10 +447,8 @@ setPage("chat");
     [openPreviewArtifact],
   );
 
-  // 三列临界视口 + 默认窗口宽（见上方注释块）。
-  const THREE_COL_MIN_VIEWPORT = 1140;
+  // 默认窗口宽（启动高度适配用）。
   const DEFAULT_WINDOW_WIDTH = 1280;
-  const appWindow = getCurrentWindow();
 
   // 缩放护栏：最大化 / 还原 / 拖边是整窗重排最重的时刻，期间给根节点挂
   // .is-resizing（CSS 关掉毛玻璃、动画、过渡），停手 120ms 后摘掉。
@@ -442,33 +472,14 @@ setPage("chat");
   // 具体副作用已抽到 ./app/useAppBootstrap，此处仅组合调用。
   useAppBootstrap(DEFAULT_WINDOW_WIDTH);
 
-  // 切换右栏：视口 < 三列临界时，先 await 把窗口扩到能装下三列，再 setRightOpen(true)；
-  // resize 路径仍由 viewport-aware effect 处理（装不下就关右栏）。
-  // 必须在 setSize 完成后再开右栏：setSize 异步期间 window.innerWidth 仍 < 临界，
-  // viewport-aware effect 看到 rightOpen=true + vw<临界会立刻掐掉，造成"点一下抖一下"。
-  // setSize 失败时保持 rightOpen 不变并 console.warn，让用户手动拉宽窗口再点或重试点。
-  const handleToggleRight = useCallback(async () => {
+  // 切换右栏：关闭直接关；打开走统一入口（见下方 openRightPane，
+  // 视口不足时先向右扩窗再开）。
+  const handleToggleRight = useCallback(() => {
     if (rightOpen) {
-      // 关闭动作 — 任何视口下都直接关。
       setRightOpen(false);
       return;
     }
-    // 打开动作 — 视口不足时先扩窗.
-    if (window.innerWidth < THREE_COL_MIN_VIEWPORT) {
-      try {
-        const outer = await appWindow.outerSize();
-        const factor = await appWindow.scaleFactor();
-        // outerSize / scaleFactor → logical px (setSize 用 logical).
-        const logicalH = Math.max(1, Math.round(outer.height / factor));
-        await appWindow.setSize(new LogicalSize(DEFAULT_WINDOW_WIDTH, logicalH));
-      } catch (e) {
-        // setSize 失败 — 保持 rightOpen 不动, 不开右栏, 避免"开了又
-        // 立刻被掐"的抖动. 用户可以手动拉宽窗口再点.
-        console.warn("[right] auto-expand window failed, right sidebar not opened:", e);
-        return;
-      }
-    }
-    setRightOpen(true);
+    openRightPaneRef.current();
   }, [rightOpen]);
 
   // 欢迎页（empty state）默认关闭产物栏。ChatView 切到 welcome 时通过 onEnterWelcome
@@ -503,6 +514,59 @@ setPage("chat");
     max: RIGHT_MAX,
     side: "right",
   });
+
+  /**
+   * 打开右栏：优先**向右扩窗**，而不是把主列挤扁。
+   *
+   * 自然三列宽度 = 左列 + 主列舒适最小宽 + 右列。窗口不够时把窗口本身向右
+   * 扩（左/上边缘不动），主列宽度保持不变；只有屏幕右侧真的没有空间
+   * （最大化、贴着屏幕右缘）才退回挤压布局 —— 即"最大化时才向左挤"。
+   */
+  const openRightPane = useCallback(async () => {
+    if (rightOpen) return;
+    const need = Math.ceil(left.width + mainMinWidth + right.width);
+    const vw = window.innerWidth / currentZoom();
+    if (vw >= need) {
+      setRightOpen(true);
+      return;
+    }
+    try {
+      const win = getCurrentWindow();
+      if (await win.isMaximized()) {
+        // 最大化：没有向右的空间，接受挤压。
+        setRightOpen(true);
+        return;
+      }
+      const [factor, outer, pos, monitor] = await Promise.all([
+        win.scaleFactor(), win.outerSize(), win.outerPosition(), currentMonitor(),
+      ]);
+      const area = monitor?.workArea;
+      if (!area) {
+        setRightOpen(true);
+        return;
+      }
+      // 物理像素：屏幕可用区右缘 − 当前窗口右缘 − 12px 边距。
+      const room = area.position.x + area.size.width - (pos.x + outer.width) - 12;
+      // 缺口按等效视口算，再换算回逻辑像素（缩放 ≠ 1 时不会扩得不够）。
+      const grow = Math.min((need - vw) * currentZoom() * factor, room);
+      if (grow > 8) {
+        // 扩窗是异步的：先立起护栏，避免 viewport effect 用旧 innerWidth
+        // 把刚打开的右栏立刻掐掉。
+        rightOpenGuardUntil.current = Date.now() + 800;
+        // setSize 理论上是即时的，但 Tauri 卡住时不能把"打开右栏"一起拖死。
+        await Promise.race([
+          win.setSize(new LogicalSize((outer.width + grow) / factor, outer.height / factor)),
+          new Promise((resolve) => setTimeout(resolve, 600)),
+        ]);
+      }
+    } catch (e) {
+      // 扩窗失败不能阻止用户看内容：退回挤压布局。
+      console.warn("[right] auto-expand window failed:", e);
+    }
+    setRightOpen(true);
+  }, [rightOpen, left.width, mainMinWidth, right.width]);
+
+  openRightPaneRef.current = () => { void openRightPane(); };
   const streamChatApi = useStreamChat(activeSessionId);
   // 仅保留 App 自身（标题栏/指示器/审批流）需要的字段；流状态展示已
   // 改由 ChatView 通过 StreamChatContext 直接读，不再逐层透传。
@@ -981,7 +1045,7 @@ setPage("chat");
   // 点目录 chip（已选工作区时）→ 打开右侧预览栏（栏内左上角有文件浏览入口），
   // 不再弹 chooser 列表。
   const openComputer = useCallback(() => {
-    setRightOpen(true);
+    openRightPaneRef.current();
   }, []);
 
   // Auto-collapse sidebar on small screens
@@ -1034,6 +1098,9 @@ setPage("chat");
       // 临界阈值随之降低, 右栏可以在更小的窗口下保持打开.
       const minThreeCol = leftMin + mainMinWidth + RIGHT_MIN;
       if (vw < minThreeCol && rightOpen) {
+        // 程序化扩窗尚未生效（setSize 异步）：别拿旧 innerWidth 把刚打开
+        // 的右栏掐掉，否则用户看到"点一下闪一下"。
+        if (Date.now() < rightOpenGuardUntil.current) return;
         setRightOpen(false);
         return;
       }
@@ -1952,7 +2019,7 @@ setPage("chat");
           kind: classifyStreamErrorKind(msg),
           detail: msg,
         });
-        return;
+        return false;
       }
       setSessions((prev) => [session, ...prev]);
       setActiveSessionId(session.id);
@@ -3470,6 +3537,7 @@ return {
         },
         finalOverrides,
       );
+      return true;
     } catch (e) {
       // (React 18 batching bug fix): same capture pattern
       // as onError above. By the time catch runs, onError may have
@@ -3501,6 +3569,7 @@ return {
           kind: classifyStreamErrorKind(eMsg),
         });
       }
+      return false;
     }
   }, [activeSessionId, sessions, sendStream]);
 
@@ -3515,43 +3584,48 @@ return {
   // below (keyed on `[streaming, messageQueue]`) will
   // pick it up the next tick `streaming` settles.
   const sendFromQueue = useCallback(
-    async (idx: number) => {
-      // Snapshot the queue item atomically inside the updater so we
-      // don't race against any in-flight queue mutation (e.g. the
-      // drain effect also calls setMessageQueue).
-      let snapshot: QueuedMessage | undefined;
-      setMessageQueue((prev) => {
-        const found = prev[idx];
-        if (found && found.text.trim()) snapshot = found;
-        return prev;
-      });
-      const item = snapshot;
-      if (!item || !item.text.trim()) return;
-
-      // Pop the item first so the UI updates instantly.
-      setMessageQueue((prev) => prev.filter((_, i) => i !== idx));
-      if (streaming) {
-        setMessageQueue((prev) => [item, ...prev]);
+    async (id: string) => {
+      const item = messageQueue.find((m) => m.id === id);
+      if (!item) return;
+      // 队列现在是会话级：别的会话的条目不能在这里发出去。
+      if ((item.sessionId ?? null) !== (activeSessionId ?? null)) {
+        toastError("这条消息属于另一个会话，请切回该会话后再发送");
         return;
       }
-      try {
-        await handleSendMessage(
-          item.text,
-          undefined,
-          undefined,
-          item.images || item.attachedFilePaths || item.attachedFiles
-            ? { images: item.images, attachedFilePaths: item.attachedFilePaths, attachedFiles: item.attachedFiles }
-            : undefined,
-        );
-      } catch {
-        // Failure → put it back at the head of the queue so the
-        // user can retry. We don't share the drain effect's retry
-        // tracker because that's keyed on auto-drain failures, not
-        // manual sends.
-        setMessageQueue((prev) => [item, ...prev]);
+      if (streaming) {
+        // 立即发送在流式中没有"立刻"可言：移到队首 + 明确告知，
+        // 而不是取出来再放回去、让用户以为按钮坏了。
+        setMessageQueue((prev) => {
+          const found = prev.find((m) => m.id === id);
+          if (!found) return prev;
+          // 手动点发送即视为"重新排队"：清掉 failed，否则排空会因为
+          // status==="failed" 跳过它，看起来还是没反应。
+          return [
+            { ...found, status: "queued" as const, error: undefined },
+            ...prev.filter((m) => m.id !== id),
+          ];
+        });
+        toastInfo("当前回复结束后发送这条消息");
+        return;
+      }
+      setMessageQueue((prev) => prev.filter((m) => m.id !== id));
+      const ok = await handleSendMessage(
+        item.text,
+        undefined,
+        item.overrides,
+        item.images || item.attachedFilePaths || item.attachedFiles
+          ? { images: item.images, attachedFilePaths: item.attachedFilePaths, attachedFiles: item.attachedFiles }
+          : undefined,
+      );
+      if (!ok) {
+        setMessageQueue((prev) => [
+          { ...item, status: "failed", error: "发送失败", attempts: (item.attempts ?? 0) + 1 },
+          ...prev,
+        ]);
+        toastError("发送失败，消息已留在队列中");
       }
     },
-    [streaming, handleSendMessage],
+    [messageQueue, activeSessionId, streaming, handleSendMessage],
   );
 
   const retryLastMessage = useCallback(async () => {
@@ -3651,40 +3725,46 @@ return {
   // 碰巧可行，但是个隐患：若 handleSendMessage 将来闭包捕获了 streaming/messageQueue 之外的
   // 变化依赖（如流中 activeSessionId 翻转），effect 会调用陈旧闭包而丢弃队列消息。
   // 失败时 .catch() 重新入队（原先静默丢弃）。最多 3 次重试，用 ref 计数器防无限循环。
-  const queueRetriesRef = useRef<Record<string, number>>({});
+  // 排空守卫：一次只发一条，避免 effect 在 streaming 状态落定前重入。
+  const drainingRef = useRef(false);
   useEffect(() => {
-    if (!streaming && messageQueue.length > 0) {
-      const next = messageQueue[0];
-      setMessageQueue(prev => prev.slice(1));
-      const queuedAttachments = next.images || next.attachedFilePaths || next.attachedFiles
-        ? { images: next.images, attachedFilePaths: next.attachedFilePaths, attachedFiles: next.attachedFiles }
-        : undefined;
-      // drain 必须传当前 selectedModel 作为 overrides.model，否则后端按
-      // config.yaml 默认模型请求。activeSession.model 由
-      // setSelectedModelAndPersist PATCH 同步写入——用户在 busy 期间切了
-      // 模型的话，drain 用新模型。
-      // 守 ChatComposer 同款 guard（line ~1843）：必须形如 "provider:model" 且非
-      // "unknown" sentinel 才注入；否则让 backend 回落到其 configured default 而不报 400。
-      const drainedModel = activeSession?.model;
-      const drainedOverrides: import("./hooks/useStreamChat").ChatOverrides | undefined =
-        drainedModel && drainedModel.includes(":") && drainedModel !== "unknown"
-          ? { model: drainedModel }
-          : undefined;
-      handleSendMessage(next.text, undefined, drainedOverrides, queuedAttachments).catch((_cause) => {
-        // Limit retries: track per-message so a permanently failing
-        // backend doesn't spin forever.
-        const key = next.text.slice(0, 60); // first 60 chars as key
-        const retries = queueRetriesRef.current;
-        if ((retries[key] ?? 0) >= 3) {
-          console.warn("[queue] giving up on message after 3 retries", next.text);
-          delete retries[key];
-          return; // drop — user can retype
+    if (streaming || drainingRef.current) return;
+    // 只排当前会话的条目：队列是会话级的，A 的待发消息不能进 B。
+    const sessionKey = activeSessionId ?? null;
+    const head = messageQueue.find((m) => (m.sessionId ?? null) === sessionKey);
+    if (!head) return;
+    // 失败条目停在队首等用户处理（重试 / 编辑 / 删除），不自动重放。
+    if (head.status === "failed") return;
+    if ((head.attempts ?? 0) >= 3) return;
+
+    drainingRef.current = true;
+    setMessageQueue((prev) => prev.filter((m) => m.id !== head.id));
+    void handleSendMessage(
+      head.text,
+      undefined,
+      // 用入队时的快照，而不是排空时 activeSession 的模型/权限/专家。
+      head.overrides,
+      head.images || head.attachedFilePaths || head.attachedFiles
+        ? { images: head.images, attachedFilePaths: head.attachedFilePaths, attachedFiles: head.attachedFiles }
+        : undefined,
+    )
+      .then((ok) => {
+        if (!ok) {
+          setMessageQueue((prev) => [
+            {
+              ...head,
+              status: "failed" as const,
+              attempts: (head.attempts ?? 0) + 1,
+              error: "发送失败",
+            },
+            ...prev,
+          ]);
         }
-        retries[key] = (retries[key] ?? 0) + 1;
-        setMessageQueue(prev => [next, ...prev]);
+      })
+      .finally(() => {
+        drainingRef.current = false;
       });
-    }
-  }, [streaming, messageQueue, handleSendMessage]);
+  }, [streaming, messageQueue, activeSessionId, handleSendMessage]);
 
   // /undo: soft-delete the most recent user→assistant turn, then re-fetch
   // the active session so the UI reflects the change immediately. The
@@ -3726,16 +3806,25 @@ return {
   const openExperts = useCallback(() => setPage("experts"), [setPage]);
   const expandSidebar = useCallback(() => setSidebarOpen(true), []);
   const openSearch = useCallback(() => setSearchOpen(true), []);
-  const clearQueue = useCallback(() => setMessageQueue([]), []);
+  // 清空只清当前会话：别的会话的待发消息不受影响。
+  const clearQueue = useCallback(() => {
+    const key = activeSessionId ?? null;
+    setMessageQueue((prev) => prev.filter((m) => (m.sessionId ?? null) !== key));
+  }, [activeSessionId]);
   const addToQueue = useCallback((msg: QueuedMessage) => {
-    // 同文本不重复入队(防快速按 Enter 多次),
-    // 但仍返回新数组引用让 React 触发 re-render — 否则
-    // 重复添加相同文本时 Composer 看不到 queue 长度变化。
-    setMessageQueue(prev => {
-      if (prev.some((m) => m.text === msg.text)) return [...prev];
-      return [...prev, msg];
-    });
-  }, []);
+    // 不再按文本去重：连发两次「继续」是合法指令，之前第二次会被静默吞掉。
+    // 防连按 Enter 由 ChatView 的 500ms 同文本窗口负责。
+    setMessageQueue((prev) => [
+      ...prev,
+      {
+        ...msg,
+        sessionId: msg.sessionId ?? activeSessionId ?? null,
+        status: msg.status ?? "queued",
+        attempts: msg.attempts ?? 0,
+        createdAt: msg.createdAt ?? new Date().toISOString(),
+      },
+    ]);
+  }, [activeSessionId]);
   const handleTodoPatch = useCallback(async (id: string, patch: { status?: string; title?: string; priority?: string }) => {
     try {
       // sessionId 必传：后端从 query 读它，缺省会产生 session_id=None 的
@@ -3774,6 +3863,12 @@ return {
     ? (streamErrors.get(activeSessionId) ?? streamErrors.get(WELCOME_KEY) ?? null)
     : (streamErrors.get(WELCOME_KEY) ?? null);
 
+  // 输入框只显示当前会话的待发队列（会话级 outbox）。
+  const queueForActiveSession = useMemo(
+    () => messageQueue.filter((m) => (m.sessionId ?? null) === (activeSessionId ?? null)),
+    [messageQueue, activeSessionId],
+  );
+
   const chatViewNode = (
     <ChatView
       session={activeSession}
@@ -3811,7 +3906,7 @@ return {
       acuiState={acui.state}
       acuiBus={acuiBus}
       acuiStats={acui.stats}
-      messageQueue={messageQueue}
+      messageQueue={queueForActiveSession}
       onAddToQueue={addToQueue}
       onClearQueue={clearQueue}
       onRemoveFromQueue={removeFromQueue}
@@ -3845,8 +3940,6 @@ return {
     startCreateWorkflowFlow,
     chatNode: chatViewNode,
     activeSessionId,
-    settingsBack: () => setPage("chat"),
-    settingsCategory: configCategory,
     // 运行工作流后的跳转：落到新对话空屏，不落在可能早已过期的激活会话
     // （如工作台会话）。跑起来的会话出现在侧栏，用户自行点入。
     openChat: () => {
@@ -3877,6 +3970,11 @@ return {
         sessions={chatSessions}
         onSelect={handleSelectSession}
         onClose={() => setSearchOpen(false)}
+      />
+      <SettingsDialog
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        initialCategory={configCategory}
       />
       {denialBanner && (() => {
         const sub =
@@ -3962,7 +4060,7 @@ return {
                 不与「专家」「自动化」等页头重叠。
               main 因此改为 flex column：路由内容包在弹性容器里占剩余高度，
               动作行出现时页面整体下移，不会把内容顶出可视区。 */}
-          {!sidebarVisible && page !== "chat" && page !== "systemconfig" && (
+          {!sidebarVisible && page !== "chat" && (
             <SidebarRevealRow
               onExpand={() => setSidebarOpen(true)}
               onOpenSearch={() => setSearchOpen(true)}
@@ -4015,8 +4113,8 @@ return {
             · 面板开着 → 收起按钮在右栏自己的标签条右端（PreviewBar onCollapse）；
             · 面板收起 → ChatView 标题行的 PanelRight 按钮（showRightToggle
               仅在收起态渲染，不依赖 displayTitle，新建会话没标题时也在）；
-            · 点对话正文里的路径 / 产物 → setRightOpen(true)；
-            · 目录 chip → openComputer。
+            · 点对话正文里的路径 / 产物 → openRightPane（视口不足先向右扩窗）；
+            · 目录 chip → openComputer（同样走 openRightPane）。
             2026-10-03 曾把收起职责整个挪进标题行，两处并存没有归属，已回退。 */}
       </div>
 

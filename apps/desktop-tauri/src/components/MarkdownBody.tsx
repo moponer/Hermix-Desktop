@@ -14,13 +14,15 @@
  *   - 全部 components 配置（p / li / code / input）原样保留
  */
 
-import { Children, isValidElement, memo, useCallback, useMemo, useRef, useState, useEffect } from "react";
+import { Children, cloneElement, isValidElement, memo, useCallback, useMemo, useRef, useState, useEffect, type ReactElement } from "react";
 import { markdownToHast } from "satteri";
 import { toJsxRuntime } from "hast-util-to-jsx-runtime";
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
 import type { ReactNode } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { Check, Copy, X } from "lucide-react";
+import { Check, Copy, X, ChevronDown, ListOrdered } from "lucide-react";
+import katex from "katex";
+import "katex/dist/katex.min.css";
 import { useSafeTimeout } from "../hooks/useSafeTimeout";
 import { highlightToReact, readIsDark } from "../lib/codeHighlight";
 import { autoCloseUnbalancedFences } from "../lib/markdownFence";
@@ -222,6 +224,8 @@ function CodeBlockImpl({ language, code, isDark = false }: { language: string; c
   const [copied, setCopied] = useState(false);
   const [failed, setFailed] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  const [showLines, setShowLines] = useState(false);
+  const isDiff = /^(diff|patch)$/i.test(language);
 
   const highlighted = useMemo(
     () => highlightToReact(code, language, isDark),
@@ -276,38 +280,101 @@ function CodeBlockImpl({ language, code, isDark = false }: { language: string; c
             <span className="text-[length:var(--text-meta)] opacity-50">{lineCount} 行</span>
           )}
         </div>
-        <button
-          onClick={handleCopy}
-          className="flex items-center gap-1.5 rounded px-1.5 py-0.5 transition-colors hover:bg-bg-hover"
-          style={{ color: "var(--color-text-muted)" }}
-        >
-          {copied ? <Check className="icon-sm" /> : failed ? <X className="icon-sm" /> : <Copy className="icon-sm" />}
-          <span className="font-medium">{copied ? "已复制" : failed ? "复制失败" : "复制"}</span>
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => setShowLines((v) => !v)}
+            title={showLines ? "隐藏行号" : "显示行号"}
+            aria-label={showLines ? "隐藏行号" : "显示行号"}
+            aria-pressed={showLines}
+            className={`grid size-6 place-items-center rounded transition-colors hover:bg-bg-hover ${showLines ? "text-text-primary" : "text-text-muted"}`}
+          >
+            <ListOrdered className="icon-sm" />
+          </button>
+          <button
+            onClick={handleCopy}
+            className="flex items-center gap-1.5 rounded px-1.5 py-0.5 transition-colors hover:bg-bg-hover"
+            style={{ color: "var(--color-text-muted)" }}
+          >
+            {copied ? <Check className="icon-sm" /> : failed ? <X className="icon-sm" /> : <Copy className="icon-sm" />}
+            <span className="font-medium">{copied ? "已复制" : failed ? "复制失败" : "复制"}</span>
+          </button>
+        </div>
       </div>
       <div style={{ position: "relative" }}>
-        <pre
+        <div
           style={{
-            margin: 0,
-            padding: "16px",
-            background: "transparent",
             overflow: shouldCollapse && !expanded ? "hidden" : "auto",
-            fontSize: "13px",
-            lineHeight: "1.6",
             maxHeight: shouldCollapse && !expanded ? "640px" : undefined,
           }}
         >
-          <code
-            className={`language-${language}`}
-            style={{
-              padding: 0,
-              background: "transparent",
-              fontFamily: "var(--font-mono)",
-            }}
-          >
-            {highlighted}
-          </code>
-        </pre>
+          <div style={{ display: "flex", alignItems: "flex-start", minWidth: "100%" }}>
+            {/* 行号列独立成列并 sticky 左侧：横向滚动时序号不跟着跑丢。 */}
+            {showLines && (
+              <pre
+                aria-hidden="true"
+                style={{
+                  margin: 0,
+                  padding: "16px 8px 16px 12px",
+                  position: "sticky",
+                  left: 0,
+                  zIndex: 1,
+                  background: "var(--color-bg-code)",
+                  textAlign: "right",
+                  color: "var(--color-text-faint)",
+                  fontSize: "13px",
+                  lineHeight: "1.6",
+                  fontFamily: "var(--font-mono)",
+                  userSelect: "none",
+                  flex: "0 0 auto",
+                }}
+              >
+                {Array.from({ length: lineCount }, (_, i) => i + 1).join("\n")}
+              </pre>
+            )}
+            <pre
+              style={{
+                margin: 0,
+                padding: "16px",
+                background: "transparent",
+                fontSize: "13px",
+                lineHeight: "1.6",
+                flex: "1 1 auto",
+                minWidth: 0,
+              }}
+            >
+              <code
+                className={`language-${language}`}
+                style={{
+                  padding: 0,
+                  background: "transparent",
+                  fontFamily: "var(--font-mono)",
+                }}
+              >
+                {isDiff
+                  ? code.split("\n").map((line, i) => {
+                      const kind =
+                        line.startsWith("+++") || line.startsWith("---")
+                          ? "meta"
+                          : line.startsWith("@@")
+                            ? "hunk"
+                            : line.startsWith("+")
+                              ? "add"
+                              : line.startsWith("-")
+                                ? "del"
+                                : "ctx";
+                      return (
+                        <span key={i} className={`md-diff-line md-diff-line--${kind}`}>
+                          {line || " "}
+                          {"\n"}
+                        </span>
+                      );
+                    })
+                  : highlighted}
+              </code>
+            </pre>
+          </div>
+        </div>
         {shouldCollapse && !expanded && (
           <div
             style={{
@@ -370,6 +437,282 @@ export const CodeBlock = memo(
 
 /* ── Top-level body renderer ──────────────────────────────── */
 
+/* ── 小节包装：复制本节 / 折叠 ─────────────────────────────────── */
+
+/** 递归取纯文本（复制与标题识别用）。 */
+function nodeText(node: ReactNode): string {
+  if (node == null || typeof node === "boolean") return "";
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(nodeText).join("");
+  if (isValidElement(node)) return nodeText((node.props as { children?: ReactNode }).children);
+  return "";
+}
+
+/** 从节点树头部剥掉 n 个字符（用于去掉引用块里的 [!NOTE] 标记）。 */
+function stripLeadingText(node: ReactNode, n: number): ReactNode {
+  if (n <= 0) return node;
+  if (typeof node === "string") return node.slice(n);
+  if (Array.isArray(node)) {
+    const out: ReactNode[] = [];
+    let left = n;
+    for (const child of node) {
+      const len = nodeText(child).length;
+      if (left >= len) { left -= len; continue; }
+      out.push(stripLeadingText(child, left));
+      left = 0;
+    }
+    return out;
+  }
+  if (isValidElement(node)) {
+    const props = node.props as { children?: ReactNode };
+    return cloneElement(
+      node as ReactElement<{ children?: ReactNode }>,
+      { children: stripLeadingText(props.children, n) },
+    );
+  }
+  return node;
+}
+
+/* ── 数学公式 ────────────────────────────────────────────────
+ * satteri 不认 $...$，这里在解析前把公式换成一个哨兵包裹的行内代码，
+ * 由 code 渲染器接住交给 KaTeX。块公式换成 ```math 围栏。
+ * 不引 remark-math：多一个 AST 插件，而且我们只需要两种形态。 */
+const MATH_SENTINEL = "\uE000";
+
+function replaceInlineMath(line: string): string {
+  return line.replace(
+    /(^|[^\\$])\$(?!\$)([^\n$]+?)\$(?!\$)/g,
+    (m, pre: string, tex: string) => {
+      // 只认"像公式"的内容：至少有一个字母/反斜杠/上下标/花括号/等号，
+      // 纯数字（$5$）更像金额，不转。含空格又没有任何公式符号的（"$5 and "）
+      // 也放过 —— 那是金额区间，不是公式。
+      if (!/[A-Za-z\\^_{}=]/.test(tex)) return m;
+      if (/\s/.test(tex.trim()) && !/[\\^_{}=]/.test(tex)) return m;
+      return `${pre}\`${MATH_SENTINEL}${tex}${MATH_SENTINEL}\``;
+    },
+  );
+}
+
+function transformMath(md: string): string {
+  const lines = md.split("\n");
+  const out: string[] = [];
+  let inFence = false;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    if (/^\s*(```|~~~)/.test(line)) {
+      inFence = !inFence;
+      out.push(line);
+      continue;
+    }
+    if (inFence) {
+      out.push(line);
+      continue;
+    }
+    const open = /^\s*\$\$(.*)$/.exec(line);
+    if (open) {
+      const oneLine = /^(.*?)\$\$\s*$/.exec(open[1] ?? "");
+      if (oneLine) {
+        out.push("```math", (oneLine[1] ?? "").trim(), "```");
+        continue;
+      }
+      const body: string[] = [open[1] ?? ""];
+      let j = i + 1;
+      for (; j < lines.length; j++) {
+        const end = /^(.*?)\$\$\s*$/.exec(lines[j]!);
+        if (end) {
+          body.push(end[1] ?? "");
+          break;
+        }
+        body.push(lines[j]!);
+      }
+      if (j < lines.length) {
+        out.push("```math", body.join("\n").trim(), "```");
+        i = j;
+        continue;
+      }
+    }
+    out.push(replaceInlineMath(line));
+  }
+  return out.join("\n");
+}
+
+function MathNode({ tex, display }: { tex: string; display?: boolean }) {
+  const html = useMemo(() => {
+    try {
+      return katex.renderToString(tex, {
+        displayMode: display === true,
+        throwOnError: false,
+        strict: false,
+        output: "html",
+      });
+    } catch {
+      return null;
+    }
+  }, [tex, display]);
+  if (!html) return <code>{tex}</code>;
+  return (
+    <span
+      className={display ? "md-math md-math--block" : "md-math"}
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
+  );
+}
+
+/* ── Mermaid：按需加载（进独立 chunk，主包不背这 1MB） ────────── */
+let mermaidPromise: Promise<typeof import("mermaid")> | null = null;
+function loadMermaid() {
+  if (!mermaidPromise) mermaidPromise = import("mermaid");
+  return mermaidPromise;
+}
+
+function MermaidBlock({ code, isDark }: { code: string; isDark: boolean }) {
+  const [svg, setSvg] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [showSource, setShowSource] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setSvg(null);
+    setError(null);
+    loadMermaid()
+      .then(async (mod) => {
+        const mermaid = mod.default;
+        mermaid.initialize({
+          startOnLoad: false,
+          theme: isDark ? "dark" : "default",
+          securityLevel: "strict",
+          fontFamily: "var(--font-sans)",
+        });
+        const id = `hermix-mmd-${Math.random().toString(36).slice(2, 10)}`;
+        const out = await mermaid.render(id, code);
+        if (!cancelled) setSvg(out.svg);
+      })
+      .catch((e: unknown) => {
+        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+      });
+    return () => { cancelled = true; };
+  }, [code, isDark]);
+
+  return (
+    <div className="md-mermaid not-prose">
+      <div className="md-mermaid-head">
+        <span className="md-mermaid-label">Mermaid</span>
+        <button
+          type="button"
+          className="md-mermaid-btn"
+          onClick={() => setShowSource((v) => !v)}
+          aria-pressed={showSource}
+        >
+          {showSource ? "看图表" : "看源码"}
+        </button>
+      </div>
+      {error ? (
+        <pre className="md-mermaid-error">{code}</pre>
+      ) : showSource ? (
+        <pre className="md-mermaid-source">{code}</pre>
+      ) : svg ? (
+        <div className="md-mermaid-svg" dangerouslySetInnerHTML={{ __html: svg }} />
+      ) : (
+        <div className="md-mermaid-loading">正在绘制图表…</div>
+      )}
+    </div>
+  );
+}
+
+const CALLOUT_RE = /^\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*/i;
+const CALLOUT_LABEL: Record<string, string> = {
+  NOTE: "提示", TIP: "技巧", IMPORTANT: "重要", WARNING: "注意", CAUTION: "警告",
+};
+const CALLOUT_TONE: Record<string, string> = {
+  NOTE: "", TIP: "md-callout--success", IMPORTANT: "", WARNING: "md-callout--warning", CAUTION: "md-callout--danger",
+};
+
+/** 把 > [!NOTE] 这种块引用识别成提示块，并剥掉标记本身。 */
+function extractCallout(children: ReactNode): { kind: string | null; children: ReactNode } {
+  const arr = Children.toArray(children);
+  const first = arr[0];
+  if (!isValidElement(first)) return { kind: null, children };
+  const m = CALLOUT_RE.exec(nodeText(first));
+  if (!m) return { kind: null, children };
+  return {
+    kind: (m[1] ?? "").toUpperCase(),
+    children: [stripLeadingText(first, m[0].length), ...arr.slice(1)],
+  };
+}
+
+interface MarkdownSectionModel {
+  id: string;
+  heading: ReactNode | null;
+  body: ReactNode[];
+}
+
+/** 按 h1/h2 切小节。h3 留在正文里，避免层级切得太碎。 */
+function groupSections(nodes: ReactNode[]): MarkdownSectionModel[] {
+  const groups: MarkdownSectionModel[] = [];
+  let current: MarkdownSectionModel = { id: "s0", heading: null, body: [] };
+  let n = 0;
+  for (const node of nodes) {
+    const tag = isValidElement(node) ? String(node.type) : "";
+    if (tag === "h1" || tag === "h2") {
+      if (current.heading || current.body.length) groups.push(current);
+      n += 1;
+      current = { id: `s${n}-${nodeText(node).slice(0, 24)}`, heading: node, body: [] };
+    } else {
+      current.body.push(node);
+    }
+  }
+  if (current.heading || current.body.length) groups.push(current);
+  return groups;
+}
+
+function MarkdownSection({ heading, children }: { heading: ReactNode; children: ReactNode }) {
+  const [open, setOpen] = useState(true);
+  const [copied, setCopied] = useState(false);
+  const bodyRef = useRef<HTMLDivElement | null>(null);
+  const safeSetTimeout = useSafeTimeout();
+
+  const copy = async () => {
+    const text = `${nodeText(heading)}\n\n${bodyRef.current?.textContent ?? ""}`.trim();
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      safeSetTimeout(() => setCopied(false), 1400);
+    } catch {
+      /* 剪贴板不可用：保持静默，不打断阅读 */
+    }
+  };
+
+  return (
+    <section className="md-section">
+      <div className="md-section-head">
+        {heading}
+        <div className="md-section-actions">
+          <button
+            type="button"
+            className="md-section-btn"
+            onClick={() => void copy()}
+            title="复制本节"
+            aria-label="复制本节"
+          >
+            {copied ? <Check className="icon-sm" /> : <Copy className="icon-sm" />}
+          </button>
+          <button
+            type="button"
+            className="md-section-btn"
+            onClick={() => setOpen((v) => !v)}
+            title={open ? "折叠本节" : "展开本节"}
+            aria-label={open ? "折叠本节" : "展开本节"}
+            aria-expanded={open}
+          >
+            <ChevronDown className={`icon-sm transition-transform ${open ? "" : "-rotate-90"}`} />
+          </button>
+        </div>
+      </div>
+      <div ref={bodyRef} hidden={!open}>{children}</div>
+    </section>
+  );
+}
+
 export interface MarkdownBodyProps {
   content: string;
   /** Path-click handler for linking tool results to the preview
@@ -385,6 +728,11 @@ export interface MarkdownBodyProps {
    * （`ToolCallBubble` 的 `kind === "text"` 步）显式打开。
    */
   pathIcons?: boolean;
+  /**
+   * 小节交互（复制本节 / 折叠）。**流式渲染传 false**：每个 chunk 重组小节树
+   * 会让展开态反复重建；正文定型后再挂交互。
+   */
+  interactive?: boolean;
 }
 
 // satteri features: 对齐 react-markdown 的 remarkPlugins=[remarkGfm, remarkBreaks]
@@ -447,7 +795,9 @@ function normalizeWindowsImagePaths(md: string): string {
   return out.join("\n");
 }
 
-export const MarkdownBody = memo(function MarkdownBody({ content, onPathClick, pathIcons = false }: MarkdownBodyProps) {
+export const MarkdownBody = memo(function MarkdownBody({
+  content, onPathClick, pathIcons = false, interactive = true,
+}: MarkdownBodyProps) {
   const handlePathClick = useCallback(onPathClick ?? (() => {}), [onPathClick]);
   const isDark = readIsDark();
   const displayContent = useThrottledValue(content, MARKDOWN_REPARSE_THROTTLE_MS);
@@ -459,7 +809,8 @@ export const MarkdownBody = memo(function MarkdownBody({ content, onPathClick, p
     const normalized = normalizeWindowsImagePaths(content);
     const balanced = autoCloseUnbalancedFences(normalized);
     const hardened = hardenSoftLineBreaks(balanced);
-    const hast = markdownToHast(hardened, SATTERI_FEATURES);
+    const withMath = transformMath(hardened);
+    const hast = markdownToHast(withMath, SATTERI_FEATURES);
     return toJsxRuntime(hast, {
       Fragment,
       jsx,
@@ -468,8 +819,60 @@ export const MarkdownBody = memo(function MarkdownBody({ content, onPathClick, p
         p({ children, ...props }: { children?: ReactNode }) {
           return <p {...props}>{linkifyChildren(children, handlePathClick, pathIcons)}</p>;
         },
-        li({ children, ...props }: { children?: ReactNode }) {
-          return <li {...props}>{linkifyChildren(children, handlePathClick, pathIcons)}</li>;
+        li({ children, className, ...props }: { children?: ReactNode; className?: string }) {
+          // GFM task list：勾选框此前被 input 渲染器整个丢掉，列表退化成圆点。
+          const kids = Children.toArray(children);
+          let checked: boolean | null = null;
+          const rest: ReactNode[] = [];
+          for (const kid of kids) {
+            if (isValidElement(kid) && kid.type === "input") {
+              const p = kid.props as { type?: string; checked?: boolean };
+              if (p.type === "checkbox") { checked = !!p.checked; continue; }
+            }
+            rest.push(kid);
+          }
+          const isTask = checked !== null || /task-list-item/.test(className ?? "");
+          return (
+            <li {...props} className={[className, isTask ? "md-task" : ""].filter(Boolean).join(" ") || undefined}>
+              {isTask && (
+                <span className="md-task-box" data-checked={checked ? "true" : "false"} aria-hidden="true">
+                  {checked ? "✓" : ""}
+                </span>
+              )}
+              {linkifyChildren(rest, handlePathClick, pathIcons)}
+            </li>
+          );
+        },
+        blockquote({ children, ...props }: { children?: ReactNode }) {
+          const { kind, children: cleaned } = extractCallout(children);
+          if (kind) {
+            return (
+              <div className={`md-callout ${CALLOUT_TONE[kind] ?? ""}`.trim()} {...props}>
+                <span className="md-callout-icon" aria-hidden="true">
+                  {kind === "WARNING" || kind === "CAUTION" ? "!" : kind === "TIP" ? "★" : "i"}
+                </span>
+                <div className="md-callout-body">
+                  <span className="md-callout-title">{CALLOUT_LABEL[kind] ?? kind}</span>
+                  {linkifyChildren(cleaned, handlePathClick, pathIcons)}
+                </div>
+              </div>
+            );
+          }
+          return <blockquote {...props}>{linkifyChildren(children, handlePathClick, pathIcons)}</blockquote>;
+        },
+        // 表格外层加横向滚动容器：宽表不再把列挤成一条线。
+        table({ children, ...props }: { children?: ReactNode }) {
+          return (
+            <div className="md-table-wrap">
+              <table {...props}>{children}</table>
+            </div>
+          );
+        },
+        th({ children, align, ...props }: { children?: ReactNode; align?: string }) {
+          return <th {...props} data-align={align ?? undefined}>{children}</th>;
+        },
+        td({ children, align, ...props }: { children?: ReactNode; align?: string }) {
+          return <td {...props} data-align={align ?? undefined}>{children}</td>;
         },
         // hast-util-to-jsx-runtime 给 inline code 的 children 已是字符串；
         // 但 fenced block 是单行/多行 + className="language-xxx"。
@@ -477,11 +880,21 @@ export const MarkdownBody = memo(function MarkdownBody({ content, onPathClick, p
         code({ className, children, ...props }: { className?: string; children?: ReactNode }) {
           const match = /language-([\w-]+)/.exec(className || "");
           const codeString = String(children ?? "").replace(/\n$/, "");
+          // 公式：行内（哨兵包裹）与块（```math）
+          if (codeString.length > 2 && codeString.startsWith(MATH_SENTINEL) && codeString.endsWith(MATH_SENTINEL)) {
+            return <MathNode tex={codeString.slice(1, -1)} />;
+          }
+          if ((match?.[1] ?? "").toLowerCase() === "math") {
+            return <MathNode tex={codeString} display />;
+          }
           const inferred =
             !match && codeString.includes("\n")
               ? inferLangFromCode(codeString)
               : null;
           const lang = (match?.[1] ?? inferred ?? "").toLowerCase();
+          if (lang === "mermaid") {
+            return <MermaidBlock code={codeString} isDark={isDark} />;
+          }
           if (lang) {
             return <CodeBlock language={lang} code={codeString} isDark={isDark} />;
           }
@@ -524,5 +937,17 @@ export const MarkdownBody = memo(function MarkdownBody({ content, onPathClick, p
     });
   }, [displayContent, handlePathClick, pathIcons, isDark]);
 
-  return <div className="prose max-w-none">{rendered}</div>;
+  // 正文定型后才切小节（复制/折叠）。流式阶段保持扁平，避免每 chunk 重建小节树。
+  const body = useMemo(() => {
+    if (!interactive) return rendered;
+    return groupSections(Children.toArray(rendered)).map((g) =>
+      g.heading ? (
+        <MarkdownSection key={g.id} heading={g.heading}>{g.body}</MarkdownSection>
+      ) : (
+        <Fragment key={g.id}>{g.body}</Fragment>
+      ),
+    );
+  }, [rendered, interactive]);
+
+  return <div className="prose max-w-none">{body}</div>;
 });

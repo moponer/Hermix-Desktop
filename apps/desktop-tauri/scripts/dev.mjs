@@ -81,10 +81,10 @@ if (mode === "dev") {
   sh(npmBin, ["run", "_:build-shell"]);
   sh(npmBin, ["run", "_:sync-shell"]);
   sh(npmBin, ["run", "_:sync-shell-runtime"]);
-  // 编译后端 + 拷贝 + sha256 校验一条龙；cargo tauri build 的
-  // beforeBuildCommand 会再跑一次（幂等，增量秒过）——防绕过本脚本直接
-  // cargo tauri build 的路径，那是两次交付事故的入口。
-  sh(npmBin, ["run", "ensure-sidecar"]);
+  // 前端（vite build）+ sidecar（编译/拷贝/sha256）由 tauri.conf.json 的
+  // beforeBuildCommand → prepare-build.mjs 统一执行，这里不重复调用：
+  // 直接 cargo tauri build 也会过同一个钩子，绕不过去（2026-10-19 前端
+  // 陈旧事故的根治：此前钩子只刷 sidecar，前端靠人工构建）。
   console.log(`[build] Building Tauri installer...`);
   sh("cargo", ["tauri", "build"]);
 }

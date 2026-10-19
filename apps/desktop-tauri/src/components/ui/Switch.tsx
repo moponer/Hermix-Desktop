@@ -16,20 +16,20 @@ export interface SwitchProps {
    尺寸随字号缩放会让一列开关参差不齐，反而更难扫读。 */
 const TRACK = {
   sm: "h-4 w-7",
-  md: "h-5 w-9",
+  md: "h-6 w-10",
 } as const;
 const KNOB = {
   sm: "h-3 w-3",
-  md: "h-4 w-4",
+  md: "h-5 w-5",
 } as const;
 /* 轨道内边距 2px；开态位移 = 轨道宽 − 滑块宽 − 2×2。 */
 const TRAVEL = {
   sm: "translate-x-3.5",
-  md: "translate-x-4.5",
+  md: "translate-x-4",
 } as const;
 
 /**
- * 设置页专用开关：36×20 胶囊 + 滑块，跟随 `--color-accent`。
+ * 设置页专用开关：40×24 胶囊 + 滑块，跟随 `--color-accent`。
  *
  * 与组件根目录那份 `ToggleSwitch.tsx` 的区别不是"新旧"，而是语义：
  * 老的写死 success 绿、轨道 44px、带 ✓/✕ 图标，服务于"启用某能力"的

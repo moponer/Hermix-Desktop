@@ -12,6 +12,7 @@ import {
   readArtifactFile,
   readArtifactFileBytes,
 } from "../desktopBridge";
+import { decodeTextBytes } from "@hermix/preview";
 
 // Returns `D:\` for Windows absolute paths, `/` for POSIX absolute
 // paths, or null for relative paths (so we never fabricate a root).
@@ -51,6 +52,16 @@ export type ArtifactBytesResult =
   | { kind: "bytes"; bytes: Uint8Array; size: number; resolvedPath: string }
   | { kind: "error"; message: string };
 
+// `atob` + manual `Uint8Array` fill (cross-browser, no polyfill).
+function base64ToBytes(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) {
+    bytes[i] = bin.charCodeAt(i);
+  }
+  return bytes;
+}
+
 // Same fallback chain as `tryReadArtifact` but returns raw bytes —
 // used for binary formats the front-end parses in-browser (xlsx,
 // xls, csv via SheetJS, etc.). The base64 payload is decoded with
@@ -71,12 +82,7 @@ export async function tryReadArtifactBytes(
     tried.add(root);
     try {
       const res = await readArtifactFileBytes(path, root);
-      const b64 = res.contentBase64 ?? "";
-      const bin = atob(b64);
-      const bytes = new Uint8Array(bin.length);
-      for (let i = 0; i < bin.length; i++) {
-        bytes[i] = bin.charCodeAt(i);
-      }
+      const bytes = base64ToBytes(res.contentBase64 ?? "");
       return {
         kind: "bytes",
         bytes,
@@ -113,13 +119,19 @@ export async function tryReadArtifact(
     try {
       const res = await readArtifactFile(path, root);
       const resolved = res.resolvedPath ?? path;
-      if (res.kind === "text") {
-        return { kind: "text", content: res.content ?? "", resolvedPath: resolved };
+      if (res.kind === "empty" || !res.dataBase64) {
+        return { kind: "empty", resolvedPath: resolved };
       }
-      if (res.kind === "binary") {
+      // 后端送的是原始字节；文本 / 二进制判定与编码解码统一在共享层做
+      // （BOM / UTF-16 / GBK），规则只有一份。
+      const decoded = decodeTextBytes(base64ToBytes(res.dataBase64));
+      if (decoded.kind === "empty") {
+        return { kind: "empty", resolvedPath: resolved };
+      }
+      if (decoded.kind === "binary") {
         return { kind: "binary", size: res.size, resolvedPath: resolved };
       }
-      return { kind: "empty", resolvedPath: resolved };
+      return { kind: "text", content: decoded.text, resolvedPath: resolved };
     } catch (e) {
       lastRaw = String(e);
       if (!/outside the allowed artifact roots/i.test(lastRaw)) {

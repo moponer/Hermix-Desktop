@@ -141,13 +141,13 @@ export function PersonasPanel() {
   return (
     <div className="space-y-3">
       {error && (
-        <p className="rounded-lg border border-[var(--color-border-primary)] bg-[var(--color-bg-card)] px-4 py-3 text-[length:var(--text-meta)] text-[var(--color-text-secondary)]">
+        <p className="rounded-lg bg-[var(--color-bg-card)] shadow-[var(--shadow-paper)] px-4 py-3 text-[length:var(--text-meta)] text-[var(--color-text-secondary)]">
           角色接口不可用（{error}）。
         </p>
       )}
       <div className="grid grid-cols-1 gap-3 md:grid-cols-[220px_1fr]">
         {/* 列表 */}
-        <div className="space-y-1 rounded-lg border border-[var(--color-border-primary)] bg-[var(--color-bg-card)] p-1.5">
+        <div className="space-y-1 rounded-lg bg-[var(--color-bg-card)] shadow-[var(--shadow-paper)] p-1.5">
           <button
             onClick={openSoul}
             className={`flex w-full items-center justify-between rounded-md px-2.5 py-1.5 text-left text-[length:var(--text-meta)] ${
@@ -184,7 +184,7 @@ export function PersonasPanel() {
         </div>
 
         {/* 编辑区 */}
-        <div className="space-y-2 rounded-lg border border-[var(--color-border-primary)] bg-[var(--color-bg-card)] p-3">
+        <div className="space-y-2 rounded-lg bg-[var(--color-bg-card)] shadow-[var(--shadow-paper)] p-3">
           {active == null ? (
             <p className="py-10 text-center text-[length:var(--text-meta)] text-[var(--color-text-muted)]">
               选择左侧角色查看提示词全文。
@@ -198,7 +198,7 @@ export function PersonasPanel() {
                     : `${DISPLAY_NAMES[active] ?? active}（${active}）`}
                 </h3>
                 {builtin && (
-                  <span className="rounded-full border border-[var(--color-border-primary)] px-2 py-0.5 text-[length:var(--text-meta)] text-[var(--color-text-muted)]">
+                  <span className="rounded-full bg-[var(--color-bg-tertiary)] px-2 py-0.5 text-[length:var(--text-meta)] text-[var(--color-text-muted)]">
                     内置角色只读 — 可另存为自定义版本
                   </span>
                 )}
@@ -210,7 +210,7 @@ export function PersonasPanel() {
                         切回默认灵魂（清掉 {DISPLAY_NAMES[defaultPersona] ?? defaultPersona}）
                       </Button>
                     ) : (
-                      <span className="rounded-full border border-[var(--color-border-primary)] px-2 py-0.5 text-[length:var(--text-meta)] text-[var(--color-text-muted)]">
+                      <span className="rounded-full bg-[var(--color-bg-tertiary)] px-2 py-0.5 text-[length:var(--text-meta)] text-[var(--color-text-muted)]">
                         默认生效中
                       </span>
                     )
@@ -240,7 +240,7 @@ export function PersonasPanel() {
                 onChange={(e) => { setContent(e.target.value); setDirty(true); }}
                 readOnly={builtin}
                 spellCheck={false}
-                className="h-[380px] w-full resize-y rounded-md border border-[var(--color-border-primary)] bg-[var(--color-bg-tertiary)] p-3 font-mono text-[length:var(--text-meta)] leading-relaxed text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
+                className="h-[380px] w-full resize-y rounded-[var(--radius-md)] bg-[var(--color-bg-tertiary)] p-3 font-mono text-[length:var(--text-meta)] leading-relaxed text-[var(--color-text-primary)] outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/40"
               />
               {notice && (
                 <p className="text-[length:var(--text-meta)] text-[var(--color-text-secondary)]">{notice}</p>

@@ -41,7 +41,7 @@ function ModeCards() {
 
   return (
     <section className="space-y-2">
-      <h3 className="px-1 text-[length:var(--text-ui)] font-medium text-[var(--color-text-primary)]">
+      <h3 className="px-1 text-[length:var(--text-ui)] font-medium text-[var(--color-text-secondary)]">
         工作模式
       </h3>
       <div className="grid grid-cols-2 gap-3" role="radiogroup" aria-label="工作模式">
@@ -221,7 +221,7 @@ function SystemGroup() {
           <div className="flex items-center gap-2">
             <button
               onClick={() => notify("Hermix Desktop", "这是一条测试通知。", true)}
-              className="flex h-7 items-center gap-1.5 rounded-lg border border-[var(--color-border-secondary)] px-2 text-[length:var(--text-meta)] text-[var(--color-text-secondary)] transition-colors hover:border-[var(--color-border-primary)] hover:text-[var(--color-text-primary)]"
+              className="flex h-7 items-center gap-1.5 rounded-[var(--radius-md)] bg-[var(--color-bg-tertiary)] px-2 text-[length:var(--text-meta)] text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-quaternary)] hover:text-[var(--color-text-primary)]"
             >
               <BellRing className="icon-sm" /> 测试
             </button>
@@ -283,7 +283,7 @@ function DataDirGroup() {
             <button
               onClick={copy}
               disabled={!dir}
-              className="flex h-7 items-center gap-1.5 rounded-lg border border-[var(--color-border-secondary)] px-2 text-[length:var(--text-meta)] text-[var(--color-text-secondary)] transition-colors hover:border-[var(--color-border-primary)] hover:text-[var(--color-text-primary)] disabled:opacity-40"
+              className="flex h-7 items-center gap-1.5 rounded-[var(--radius-md)] bg-[var(--color-bg-tertiary)] px-2 text-[length:var(--text-meta)] text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-quaternary)] hover:text-[var(--color-text-primary)] disabled:opacity-40"
             >
               {copied ? <Check className="icon-sm" /> : <Copy className="icon-sm" />}
               {copied ? "已复制" : "复制"}
@@ -293,7 +293,7 @@ function DataDirGroup() {
                 openDataDir().catch(() => toastError("打开目录失败"));
               }}
               disabled={!dir}
-              className="flex h-7 items-center gap-1.5 rounded-lg border border-[var(--color-border-secondary)] px-2 text-[length:var(--text-meta)] text-[var(--color-text-secondary)] transition-colors hover:border-[var(--color-border-primary)] hover:text-[var(--color-text-primary)] disabled:opacity-40"
+              className="flex h-7 items-center gap-1.5 rounded-[var(--radius-md)] bg-[var(--color-bg-tertiary)] px-2 text-[length:var(--text-meta)] text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-quaternary)] hover:text-[var(--color-text-primary)] disabled:opacity-40"
             >
               <FolderOpen className="icon-sm" /> 打开
             </button>

@@ -1157,6 +1157,8 @@
   border-color: color-mix(in srgb, var(--color-error) 35%, transparent);
   color: var(--color-error);
 }
+.apv-deny:hover:not(:disabled) {
+  background: var(--color-error);
   color: var(--color-on-accent);
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-error) 14%, transparent);
 }
@@ -1558,6 +1560,8 @@
   border-color: color-mix(in srgb, var(--color-error) 35%, transparent);
   color: var(--color-error);
 }
+.apv-btn-danger:hover:not(:disabled) {
+  background: var(--color-error);
   color: var(--color-on-accent);
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-error) 14%, transparent);
 }
@@ -1610,13 +1614,23 @@
   scrollbar-gutter: stable;
 }
 
-.preview-pane,
-.preview-pane *,
-.preview-pane *::before,
-.preview-pane *::after {
-  font-family: "JetBrains Mono", "JetBrainsMono NF", "Cascadia Mono",
-    "Cascadia Code", Consolas, "Source Code Pro", Menlo, ui-monospace,
-    monospace !important;
+/* 预览面板里的等宽强制**只作用在代码视图上**。
+   以前这条写成 `.preview-pane *`，把整个预览面板压成等宽 + 字重 400：
+     · 共享渲染层的 Markdown 正文（.preview-md-body）变成等宽代码字体，
+       标题不再加粗、标题上边距被归零 —— 与 components-prose.css 里
+       "不能扩展到整个 .preview-pane，Markdown 预览正文必须走正文字体"
+       的既定意图直接冲突；
+     · 预览头的文件名（font-weight:600）、类型徽章（500）被压回 400。
+   components-prose.css 已经把等宽限定在 .code-viewport 系列，这里
+   补上 font-style / font-weight 两项，语义一致。 */
+.preview-pane .code-viewport,
+.preview-pane .code-viewport *,
+.preview-pane .code-status,
+.preview-pane .code-status *,
+.preview-pane .code-empty,
+.preview-pane .code-copy-btn,
+.preview-pane .code-copy-btn * {
+  font-family: var(--font-mono) !important;
   font-style: normal !important;
   font-weight: 400 !important;
 }
@@ -1629,6 +1643,12 @@
   box-sizing: border-box !important;
 }
 
+/* 旧 markdown 注入的兜底。
+   这里刻意**不加 !important**：共享渲染层的排版由
+   @hermix/preview/styles/preview-doc.css 拥有，它的
+   `.preview-pane .preview-md-body h1` 等规则特异性更高（0,2,1），
+   本条（0,1,1）不加 !important 才压不过它 —— 之前带 !important 时
+   标题上边距被归零、段落间距压到 0.4em，Markdown 正文排版整体塌陷。 */
 .preview-pane h1,
 .preview-pane h2,
 .preview-pane h3,
@@ -1645,13 +1665,14 @@
 .preview-pane a,
 .preview-pane img,
 .preview-pane hr {
-  font-family: inherit !important;
-  margin-top: 0 !important;
-  margin-bottom: 0.4em !important;
-  max-width: 100% !important;
+  font-family: inherit;
+  margin-top: 0;
+  margin-bottom: 0.4em;
+  max-width: 100%;
 }
 
-.preview-pane .preview-filename,
+/* `.preview-filename` 不在这条兜底里：它是头部主标题，字号由 code-view.css
+   的组件规则决定，这里再用 !important 压成 tiny 会把标题压没。 */
 .preview-pane .preview-path-row,
 .preview-pane .preview-path-row * {
   font-weight: 500 !important;

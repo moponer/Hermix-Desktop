@@ -99,6 +99,7 @@ pub fn main() {
             commands::viewer_stat,
             commands::viewer_parent,
             commands::viewer_drives,
+            commands::viewer_home_dir,
             commands::viewer_reveal_in_explorer,
             commands::viewer_search_dir,
             commands::viewer_open_with_system,

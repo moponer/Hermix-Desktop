@@ -78,6 +78,6 @@
 @utility max-w-wide-page { max-width: var(--width-wide-page); }
 /* 起排线（R1-1）：助手消息续条缩进 */
 @utility pl-thread { padding-left: var(--indent-thread); }
-/* max-w-reading = 对话正文行长档（640px / 约 38 汉字）。改行宽只改这一个令牌，
-   不再在组件里写 max-w-[XXXpx] 字面值。 */
+/* max-w-reading = 对话正文行长档（780px / 14px 正文约 52 汉字）。
+   改行宽只改 tokens.css 的 --width-reading，不再在组件里写字面值。 */
 @utility max-w-reading { max-width: var(--width-reading); }

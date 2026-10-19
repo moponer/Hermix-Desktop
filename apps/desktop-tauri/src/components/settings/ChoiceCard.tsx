@@ -60,12 +60,13 @@ export function ChoiceCard({
       disabled={disabled}
       onClick={onSelect}
       className={cx(
-        "flex w-full flex-col items-start gap-2.5 rounded-[var(--radius-lg)] border p-3.5 text-left transition-colors",
+        "flex w-full flex-col items-start gap-2.5 rounded-[var(--radius-lg)] p-4 text-left transition-colors",
+        "shadow-[var(--shadow-paper)]",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/40",
         "disabled:cursor-not-allowed disabled:opacity-50",
         selected
-          ? "border-[var(--color-accent)] bg-[var(--color-accent-on-text)]"
-          : "border-[var(--color-border-secondary)] bg-[var(--color-bg-card)] hover:border-[var(--color-border-primary)]",
+          ? "bg-[var(--color-accent-soft)] ring-1 ring-[var(--color-accent)]"
+          : "bg-[var(--color-bg-card)] hover:bg-[var(--color-bg-card-hover)]",
       )}
     >
       <div className="flex w-full items-center gap-2.5">
@@ -78,7 +79,7 @@ export function ChoiceCard({
         </span>
         <span className="min-w-0 flex-1">
           <span
-            className="block text-[length:var(--text-ui)] font-medium leading-tight"
+            className="block text-[length:var(--text-body)] font-medium leading-tight"
             style={{ color: selected ? "var(--color-accent)" : "var(--color-text-primary)" }}
           >
             {label}
@@ -113,7 +114,7 @@ export function ChoiceCard({
         </span>
       </div>
 
-      <span className="text-[length:var(--text-meta)] leading-relaxed text-[var(--color-text-muted)]">
+      <span className="text-[length:var(--text-ui)] leading-relaxed text-[var(--color-text-muted)]">
         {description}
       </span>
     </button>

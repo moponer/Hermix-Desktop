@@ -60,7 +60,7 @@ export function ArchiveTab() {
   return (
     <div className="space-y-6">
       {rows.length === 0 ? (
-        <div className="rounded-[var(--radius-lg)] border border-[var(--color-border-primary)] bg-[var(--color-bg-card)] px-4 py-10 text-center text-[length:var(--text-ui)] text-[var(--color-text-muted)]">
+        <div className="rounded-[var(--radius-lg)] bg-[var(--color-bg-card)] px-4 py-10 shadow-[var(--shadow-paper)] text-center text-[length:var(--text-ui)] text-[var(--color-text-muted)]">
           还没有归档的会话。在侧边栏会话上右键即可归档。
         </div>
       ) : (
@@ -73,7 +73,7 @@ export function ArchiveTab() {
               control={
                 <button
                   onClick={() => { toggleArchive(r.id, "session"); void load(); }}
-                  className="flex h-7 items-center gap-1.5 rounded-lg border border-[var(--color-border-secondary)] px-2 text-[length:var(--text-meta)] text-[var(--color-text-secondary)] transition-colors hover:border-[var(--color-border-primary)] hover:text-[var(--color-text-primary)]"
+                  className="flex h-7 items-center gap-1.5 rounded-[var(--radius-md)] bg-[var(--color-bg-tertiary)] px-2 text-[length:var(--text-meta)] text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-quaternary)] hover:text-[var(--color-text-primary)]"
                 >
                   <ArchiveRestore className="icon-sm" /> 取消归档
                 </button>

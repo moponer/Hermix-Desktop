@@ -1,9 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback, useEffect, useMemo, useRef, useState,
+  type CSSProperties, type ReactNode,
+} from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   ArrowLeft, Search, Cpu, Boxes, Server, Smartphone, SlidersHorizontal,
   Plug, Sparkles, Network, Image as ImageIcon, Activity, Shield,
-  Archive, Palette, Brain, AppWindow, Mic,
+  Archive, Palette, Brain, AppWindow, Mic, X,
 } from "lucide-react";
 
 import { cx } from "../../lib/cx";
@@ -27,14 +30,14 @@ import { AppearanceTab } from "./AppearanceTab";
 import { ArchiveTab } from "./ArchiveTab";
 
 /**
- * 设置页：左导航（分组 + 搜索）+ 右内容区。
+ * 设置：左导航（分组 + 搜索）+ 右内容区。
  *
- * **是整页，不是浮层**。此前沿用旧 `SystemConfigPanel` 的
- * `createPortal` + `role="dialog"` + 遮罩形态，内容换了外壳没换——结果
- * 用户看到"还是一个弹窗套新内容"，与 ZCode 那种整页设置的心智不符：
- * 浮层意味着"临时看一眼、关掉就消失"，而设置是需要停留和反复对照的
- * 地方。整页后它与「应用 / 工作台」同级，走 `NavPage="systemconfig"`
- * 路由，`setPage` 切走时还会顺带关掉右侧产物栏（那是 chat 专属 UI）。
+ * **2026-10-19 起是浮层弹窗（dialog）**。此前一度改成整页
+ * （`NavPage="systemconfig"`），理由写在这里存档：整页意味着设置与
+ * 「应用 / 工作台」同级、切走时顺带关右栏。用户重新拍板要弹窗形态——
+ * 调完设置就关、不打断当前会话，这是弹窗的价值；因此外壳交回
+ * `ui/Modal`（焦点陷阱 / Esc / 点击外部关闭由它统一负责），本组件只
+ * 保留 `variant="dialog"` 的布局能力，不再承担整页路由。
  *
  * 为什么从平铺分类改成分组：7 个平铺项在 780px 高的面板里要靠图标 +
  * 两行文字才能区分"工具"和"插件/技能/连接器/工具集"这四件同源的事。
@@ -123,12 +126,15 @@ export function resolvePage(id?: string): SettingsPage {
 }
 
 export interface SettingsShellProps {
-  /** 返回上一个页面（回对话）。整页形态下没有"关闭"，只有"离开"。 */
+  /** 关闭设置（dialog）或返回上一页（page）。 */
   onBack: () => void;
   initialPage?: string;
+  /** `page`：带"返回工作区"条的整页；`dialog`：浮层内使用，无返回条，
+   *  由外层 Modal 的标题栏和关闭按钮承担。默认 `page`。 */
+  variant?: "page" | "dialog";
 }
 
-export function SettingsShell({ onBack, initialPage }: SettingsShellProps) {
+export function SettingsShell({ onBack, initialPage, variant = "page" }: SettingsShellProps) {
   const [page, setPage] = useState<SettingsPage>(() => resolvePage(initialPage));
   const [query, setQuery] = useState("");
   const [toolQuery, setToolQuery] = useState("");
@@ -176,81 +182,130 @@ export function SettingsShell({ onBack, initialPage }: SettingsShellProps) {
     setQuery("");
   }, []);
 
+  const dialog = variant === "dialog";
+
+  const navNode = (
+    /* 无右边线：侧栏与内容区同底色，靠内容区自己的内边距与卡片分界。
+       加一条竖线等于在已经平整的面上再画一刀。 */
+    <nav className="flex w-[228px] shrink-0 flex-col bg-[var(--color-bg-secondary)]">
+      <div className="px-3 pb-1 pt-3">
+        <div className="relative">
+          <Search className="icon-md pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)]" />
+          <input
+            ref={searchRef}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="搜索设置…"
+            aria-label="搜索设置"
+            className="w-full rounded-[var(--radius-md)] bg-[var(--color-bg-tertiary)] py-2 pl-8 pr-2 text-[length:var(--text-ui)] text-[var(--color-text-primary)] outline-none transition-colors placeholder:text-[var(--color-text-muted)] focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
+          />
+        </div>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
+        {filtered.length === 0 ? (
+          <div className="px-3 py-6 text-center text-[length:var(--text-meta)] text-[var(--color-text-muted)]">
+            没有匹配「{query}」的设置项
+          </div>
+        ) : (
+          filtered.map((g) => (
+            <div key={g.label} className="mb-2">
+              <div className="px-3 pb-1 pt-4 text-[length:var(--text-meta)] font-medium text-[var(--color-text-faint)]">
+                {g.label}
+              </div>
+              {g.items.map(({ id, label, icon: Icon }) => (
+                <button
+                  key={id}
+                  onClick={() => go(id)}
+                  aria-current={page === id ? "page" : undefined}
+                  className={cx(
+                    "flex w-full items-center gap-2.5 rounded-[var(--radius-md)] px-3 py-2 text-left transition-colors",
+                    /* 选中态用「深一档的底 + 满墨文字」，强调色只留给开关和
+                       主按钮——导航是位置，不是行动。把强调色铺在导航上，
+                       整块侧栏会抢走内容的注意力。 */
+                    page === id
+                      ? "bg-[var(--color-bg-active)] text-[var(--color-text-primary)]"
+                      : "text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-tertiary)] hover:text-[var(--color-text-primary)]",
+                  )}
+                >
+                  <Icon
+                    className={cx(
+                      "icon-lg shrink-0",
+                      page === id ? "opacity-100" : "opacity-55",
+                    )}
+                  />
+                  <span className="min-w-0 flex-1 truncate text-[length:var(--text-body)]">{label}</span>
+                </button>
+              ))}
+            </div>
+          ))
+        )}
+      </div>
+    </nav>
+  );
+
+  /* 右内容：与侧栏同为案面（#f5f5f5），卡片才是抬起的白面。
+     2026-10-19 反转了「页面最亮、卡片后退」的方向——那套让每张卡都得靠
+     描边撑存在感；反过来（灰案 + 白卡 + 极淡投影）一眼就是「信息块」，
+     也不需要边框。`--color-bg-card` 在这里被重写成 elevated，
+     所有子页面里的 bg-card 自动变成白卡，无需逐页改类名。 */
+  const contentNode = (
+    <div
+      className="min-w-0 flex-1 overflow-y-auto bg-[var(--color-bg-secondary)]"
+      style={{ "--color-bg-card": "var(--color-bg-elevated)" } as CSSProperties}
+    >
+      <PageBody def={current} toolQuery={toolQuery} onToolQuery={setToolQuery} />
+    </div>
+  );
+
+  if (dialog) {
+    return (
+      <div className="flex h-full min-h-0">
+        {navNode}
+        <div className="flex min-w-0 flex-1 flex-col">
+          {/* 36px 拖拽条只压在内容列上：左导航保持通天，避免出现一条横贯
+              面板的标题带（用户实测 56px 头部"又高又不舒服"）。整条都是
+              移动把手，关闭钮除外。 */}
+          <div
+            data-modal-drag-handle
+            className="flex h-9 shrink-0 cursor-grab select-none items-center justify-between bg-[var(--color-bg-secondary)] pl-6 pr-2 active:cursor-grabbing [touch-action:none]"
+          >
+            <span className="text-[length:var(--text-meta)] font-medium text-[var(--color-text-faint)]">
+              设置
+            </span>
+            <button
+              onClick={onBack}
+              aria-label="关闭设置"
+              className="grid size-7 cursor-pointer place-items-center rounded-full text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
+            >
+              <X className="size-4" />
+            </button>
+          </div>
+          <div className="flex min-h-0 flex-1 overflow-hidden">{contentNode}</div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-full min-h-0 flex-col bg-[var(--color-bg-app)]">
-        {/* Header：整页设置的退出条，只承担「返回」。页面身份（页名 + 说明）
-            在内容区页头 —— 原先挂右上角的 hint 离侧栏选中项和内容都最远，
-            读不出归属。 */}
-        <div className="flex shrink-0 items-center gap-3 bg-[var(--color-bg-secondary)] px-4 py-2.5">
-          <button
-            onClick={onBack}
-            className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[length:var(--text-ui)] text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]"
-          >
-            <ArrowLeft className="icon-sm" />
-            返回工作区
-          </button>
-          <span className="text-[length:var(--text-ui)] font-medium text-[var(--color-text-primary)]">
-            设置
-          </span>
-        </div>
+      <div className="flex shrink-0 items-center gap-3 bg-[var(--color-bg-secondary)] px-4 py-2.5">
+        <button
+          onClick={onBack}
+          className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[length:var(--text-ui)] text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]"
+        >
+          <ArrowLeft className="icon-sm" />
+          返回工作区
+        </button>
+        <span className="text-[length:var(--text-ui)] font-medium text-[var(--color-text-primary)]">
+          设置
+        </span>
+      </div>
 
-        <div className="flex min-h-0 flex-1 overflow-hidden">
-          {/* 左导航 */}
-          {/* 无右边线：侧栏与内容区靠 bg-bg-secondary / bg-bg-app 的底色差分界。
-              加一条竖线等于在已经分明的两块之间再画一刀。 */}
-          <nav className="flex w-[232px] shrink-0 flex-col bg-[var(--color-bg-secondary)]">
-            <div className="px-3 pb-2 pt-3">
-              <div className="relative">
-                <Search className="icon-sm pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)]" />
-                <input
-                  ref={searchRef}
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  placeholder="搜索设置…"
-                  aria-label="搜索设置"
-                  className="w-full rounded-lg bg-[var(--color-bg-tertiary)] py-1.5 pl-8 pr-2 text-[length:var(--text-ui)] text-[var(--color-text-primary)] outline-none transition-colors placeholder:text-[var(--color-text-muted)] focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
-                />
-              </div>
-            </div>
-
-            <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
-              {filtered.length === 0 ? (
-                <div className="px-3 py-6 text-center text-[length:var(--text-meta)] text-[var(--color-text-muted)]">
-                  没有匹配「{query}」的设置项
-                </div>
-              ) : (
-                filtered.map((g) => (
-                  <div key={g.label} className="mb-3">
-                    <div className="px-2.5 pb-1 pt-2 text-[length:var(--text-tiny,11px)] font-medium uppercase tracking-wide text-[var(--color-text-faint)]">
-                      {g.label}
-                    </div>
-                    {g.items.map(({ id, label, icon: Icon }) => (
-                      <button
-                        key={id}
-                        onClick={() => go(id)}
-                        aria-current={page === id ? "page" : undefined}
-                        className={cx(
-                          "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left transition-colors",
-                          page === id
-                            ? "bg-[var(--color-bg-active)] text-[var(--color-accent)]"
-                            : "text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]",
-                        )}
-                      >
-                        <Icon className="icon-sm shrink-0 opacity-70" />
-                        <span className="min-w-0 flex-1 truncate text-[length:var(--text-ui)]">{label}</span>
-                      </button>
-                    ))}
-                  </div>
-                ))
-              )}
-            </div>
-          </nav>
-
-          {/* 右内容 */}
-          <div className="min-w-0 flex-1 overflow-y-auto">
-            <PageBody def={current} toolQuery={toolQuery} onToolQuery={setToolQuery} />
-          </div>
-        </div>
+      <div className="flex min-h-0 flex-1 overflow-hidden">
+        {navNode}
+        {contentNode}
+      </div>
     </div>
   );
 }
@@ -259,9 +314,9 @@ export function SettingsShell({ onBack, initialPage }: SettingsShellProps) {
  *  （原描述文案迁入 PageDef.hint，侧栏搜索与页头共用一份）。 */
 function PageHeading({ def }: { def: PageDef }) {
   return (
-    <header className="mb-5">
-      <h2 className="text-[length:var(--text-body)] font-medium text-[var(--color-text-primary)]">{def.label}</h2>
-      <p className="mt-1 text-[length:var(--text-meta)] text-[var(--color-text-muted)]">{def.hint}</p>
+    <header className="mb-6">
+      <h2 className="text-[length:var(--text-title)] font-semibold text-[var(--color-text-primary)]">{def.label}</h2>
+      <p className="mt-1 text-[length:var(--text-ui)] text-[var(--color-text-muted)]">{def.hint}</p>
     </header>
   );
 }
@@ -295,20 +350,18 @@ function PageBody({
   }
 }
 
+/* 内容左对齐（不再 mx-auto）：侧栏选中项与内容块共用同一条左起始线，
+   扫视路径是直的；居中对齐会让每页的左边界随宽度漂移。 */
 function Section({ children, wide }: { children: ReactNode; wide?: boolean }) {
   return (
-    <div className="px-6 py-5">
-      <div className={cx("mx-auto", wide ? "max-w-5xl" : "max-w-2xl")}>{children}</div>
+    <div className="px-7 py-6">
+      <div className={wide ? undefined : "max-w-[760px]"}>{children}</div>
     </div>
   );
 }
 
 function ToolSection({ children }: { children: ReactNode }) {
-  return (
-    <div className="px-6 py-5">
-      <div className="mx-auto max-w-4xl">{children}</div>
-    </div>
-  );
+  return <div className="px-7 py-6">{children}</div>;
 }
 
 // ── 图像页：只剩系统截图偏好。图片生成设置已于 2026-10-18 移除——

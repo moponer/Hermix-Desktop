@@ -130,7 +130,7 @@ export function DevicesTab() {
       <ImChannelsCard active={active} onActiveChange={setActive} />
 
       {/* 当前渠道已连接的设备 */}
-      <div className="rounded-xl bg-bg-card overflow-hidden">
+      <div className="overflow-hidden rounded-[var(--radius-lg)] bg-bg-card shadow-[var(--shadow-paper)]">
         <div className="flex items-center justify-between px-4 py-3 bg-bg-secondary">
           <span className="text-[length:var(--text-ui)] font-medium text-text-primary">
             {CHANNEL_TITLES[active]}

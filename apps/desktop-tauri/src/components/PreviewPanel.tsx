@@ -4,13 +4,16 @@
 // 所有"某种文件长什么样"的知识都在 PreviewSurface / viewers 里，
 // 且面板与全屏共用同一份渲染，不存在第二处 switch。
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import {
-  X, Copy, ExternalLink, FolderOpen,
+  X, Copy, ExternalLink, FolderOpen, MoreHorizontal,
   Loader2, AlertTriangle, WrapText, FileText, Code2, Maximize2, Minimize2,
 } from "lucide-react";
 import { clsx } from "clsx";
+import { PopoverShell, PopoverBody } from "./PopoverShell";
+import { usePopover } from "../hooks/usePopover";
+import { toastSuccess, toastError } from "../hooks/useToast";
 import {
   loadPreview,
   PreviewSurface,
@@ -103,6 +106,84 @@ function copyableText(payload: PreviewPayload): string | null {
     default:
       return null;
   }
+}
+
+/** 预览头部的「更多」菜单：低频动作收进来，头部只留高频控件。
+ *  每个头部实例各自持有状态与锚点（面板态 / 全屏态各一份），
+ *  避免共用 ref 时把菜单锚到看不见的那一份上。 */
+function PreviewMenu({
+  copyText,
+  showBrowser,
+  onOpenBrowser,
+  onOpenExternal,
+  onOpenFolder,
+}: {
+  copyText: string | null;
+  showBrowser: boolean;
+  onOpenBrowser: () => void;
+  onOpenExternal: () => void;
+  onOpenFolder: () => void;
+}) {
+  const [open, , containerRef, triggerRef, toggle, close] = usePopover();
+  const itemCls =
+    "flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[length:var(--text-ui)] text-text-secondary transition-colors hover:bg-bg-hover hover:text-text-primary";
+
+  const copy = () => {
+    if (copyText === null) return;
+    void navigator.clipboard
+      .writeText(copyText)
+      .then(() => toastSuccess("已复制到剪贴板"))
+      .catch(() => toastError("复制失败，剪贴板不可用"));
+  };
+
+  return (
+    <>
+      <button
+        ref={triggerRef as RefObject<HTMLButtonElement>}
+        type="button"
+        onClick={toggle}
+        title="更多操作"
+        aria-label="更多操作"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        className={clsx("head-action", open && "is-active")}
+      >
+        <MoreHorizontal className="icon-md" />
+      </button>
+      {open && (
+        <PopoverShell
+          containerRef={containerRef}
+          triggerRef={triggerRef}
+          align="right"
+          side="bottom"
+          width="sm"
+        >
+          <PopoverBody maxHeight="max-h-64" className="py-0.5">
+            {copyText !== null && (
+              <button type="button" className={itemCls} onClick={() => { copy(); close(); }}>
+                <Copy className="icon-sm shrink-0 opacity-70" />
+                复制内容
+              </button>
+            )}
+            {showBrowser && (
+              <button type="button" className={itemCls} onClick={() => { close(); onOpenBrowser(); }}>
+                <ExternalLink className="icon-sm shrink-0 opacity-70" />
+                用浏览器打开
+              </button>
+            )}
+            <button type="button" className={itemCls} onClick={() => { close(); onOpenExternal(); }}>
+              <ExternalLink className="icon-sm shrink-0 opacity-70" />
+              用默认程序打开
+            </button>
+            <button type="button" className={itemCls} onClick={() => { close(); onOpenFolder(); }}>
+              <FolderOpen className="icon-sm shrink-0 opacity-70" />
+              在资源管理器中打开
+            </button>
+          </PopoverBody>
+        </PopoverShell>
+      )}
+    </>
+  );
 }
 
 export function PreviewPanel({
@@ -209,52 +290,23 @@ export function PreviewPanel({
 
   const renderHeader = (isFs: boolean) => (
     <div className={clsx("preview-head", isFs && "is-fullscreen")}>
-      <div className="preview-head-row1">
-        <div
-          className="file-icon-tile file-icon-tile--branded"
-          style={{ width: isFs ? 44 : 40, height: isFs ? 44 : 40, background: "transparent", boxShadow: "none" }}
-          title={artifact.name}
-        >
-          <FileTypeIcon name={artifact.name} size={isFs ? 44 : 40} style={{ display: "block" }} />
+      <div className="preview-head-main">
+        <FileTypeIcon name={artifact.name} size={isFs ? 30 : 26} style={{ display: "block" }} />
+
+        <div className="preview-head-titles">
+          <div className="preview-head-title-row">
+            <span className="preview-filename" title={artifact.name}>{artifact.name}</span>
+            <span className="preview-lang">{fileTypeLabel(artifact.name)}</span>
+          </div>
+          <button
+            type="button"
+            className="preview-path"
+            title={`打开所在目录：${cleanPath}`}
+            onClick={openContainingDir}
+          >
+            {cleanPath}
+          </button>
         </div>
-
-        <span className="preview-filename">{artifact.name}</span>
-        <span className="preview-lang">
-          <span className="preview-lang-dot" />
-          {fileTypeLabel(artifact.name)}
-        </span>
-
-        <div className="preview-head-spacer" />
-
-        <button
-          type="button"
-          onClick={() => setFullscreen((f) => !f)}
-          title={fullscreen ? "退出全屏" : "全屏预览"}
-          className="head-action"
-          aria-label={fullscreen ? "退出全屏" : "全屏预览"}
-        >
-          {fullscreen ? <Minimize2 className="icon-md" /> : <Maximize2 className="icon-md" />}
-        </button>
-        <button
-          type="button"
-          onClick={onBack}
-          title="关闭预览"
-          className="head-action is-danger"
-          aria-label="关闭预览"
-        >
-          <X className="icon-md" />
-        </button>
-      </div>
-
-      <div className="preview-head-row2">
-        <button
-          type="button"
-          className="preview-path"
-          title={`打开所在目录：${cleanPath}`}
-          onClick={openContainingDir}
-        >
-          {cleanPath}
-        </button>
 
         <div className="preview-head-spacer" />
 
@@ -310,34 +362,32 @@ export function PreviewPanel({
               <WrapText className="icon-md" />
             </button>
           )}
-          {copyText !== null && (
-            <button
-              type="button"
-              onClick={() => void navigator.clipboard.writeText(copyText)}
-              title="复制内容"
-              className="head-action"
-              aria-label="复制内容"
-            >
-              <Copy className="icon-md" />
-            </button>
-          )}
           <button
             type="button"
-            onClick={() => openExternalUrl(resolvedPath ?? artifact.path)}
-            title="用默认程序打开"
+            onClick={() => setFullscreen((f) => !f)}
+            title={fullscreen ? "退出全屏" : "全屏预览"}
             className="head-action"
-            aria-label="用默认程序打开"
+            aria-label={fullscreen ? "退出全屏" : "全屏预览"}
           >
-            <ExternalLink className="icon-md" />
+            {fullscreen ? <Minimize2 className="icon-md" /> : <Maximize2 className="icon-md" />}
           </button>
+          <PreviewMenu
+            copyText={copyText}
+            showBrowser={payload?.kind === "html"}
+            onOpenBrowser={() => {
+              if (resolvedPath) openExternalUrl(resolvedPath);
+            }}
+            onOpenExternal={() => openExternalUrl(resolvedPath ?? artifact.path)}
+            onOpenFolder={openContainingDir}
+          />
           <button
             type="button"
-            onClick={openContainingDir}
-            title="在资源管理器中打开"
-            className="head-action"
-            aria-label="在资源管理器中打开"
+            onClick={onBack}
+            title="关闭预览"
+            className="head-action is-danger"
+            aria-label="关闭预览"
           >
-            <FolderOpen className="icon-md" />
+            <X className="icon-md" />
           </button>
         </div>
       </div>

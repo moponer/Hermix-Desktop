@@ -155,7 +155,7 @@ export function StreamingReasoningBlock({ content }: { content: string; isStream
   if (!clean) return null;
   return (
     <div className="tl-reasoning-row">
-      <MarkdownBody content={clean} onPathClick={() => {}} />
+      <MarkdownBody content={clean} onPathClick={() => {}} interactive={false} />
     </div>
   );
 }

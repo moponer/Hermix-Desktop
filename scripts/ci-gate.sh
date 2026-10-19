@@ -138,6 +138,26 @@ fi
 echo ""
 
 #-----------------------------------------------------------------------
+# 4d. Preview layer guard (hard gate) — 共享预览层的一致性。
+#     共享包 @hermix/preview 的类名必须有共享 CSS 规则（不许 Tailwind
+#     原子类：viewer 不装 Tailwind）；共享 CSS 的 token 两侧都要定义
+#     （var() 解析失败 = 整条声明被丢弃）。依据见
+#     docs/notes/implemented/architecture/2026-10-19-shared-preview-layer-ownership.md
+#-----------------------------------------------------------------------
+echo "=== [4d/14] preview layer guard (shared @hermix/preview) ==="
+if [ -d packages/preview/src ]; then
+  if node scripts/check-preview-layer.mjs; then
+    echo "  OK: preview layer consistent"
+  else
+    echo "  FAIL: preview layer violations — fix before commit"
+    exit 1
+  fi
+else
+  echo "  SKIP: packages/preview not found"
+fi
+echo ""
+
+#-----------------------------------------------------------------------
 # 4b. Hermix M (apps/hm) — protocol tests + H5 build
 #     The companion app signs every request and frames every relay
 #     message; both were built black-box against a spec. `build:h5` is

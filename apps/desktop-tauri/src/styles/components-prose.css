@@ -12,7 +12,7 @@
   text-wrap: pretty;
   line-break: strict;
 }
-.prose p { margin: 0 0 0.85em; }
+.prose p { margin: 0 0 0.95em; }
 .prose p:last-child { margin-bottom: 0; }
 /* 2026-09-30：540 是为可变字体设的中间档，Microsoft YaHei UI / Segoe UI
    非可变时会跳档，渲染成忽粗忽细。归到 500/600 两档 + 中文不加负字距。 */
@@ -30,44 +30,245 @@
   border-bottom-color: transparent;
   opacity: 1;
 }
+/* 标题：与正文拉开一档尺度。此前 h2 只比正文大 4px，层级全靠字重撑着。 */
 .prose h1,
 .prose h2,
 .prose h3,
 .prose h4 {
   color: var(--color-text-primary);
   font-weight: 600;
-  margin: 1em 0 0.4em;
-  line-height: 1.3;
+  margin: 1.6em 0 0.5em;
+  line-height: 1.35;
   letter-spacing: 0;
 }
-.prose h1 { font-size: 1.42em; }
-.prose h2 { font-size: 1.22em; }
-.prose h3 { font-size: 1.08em; }
-.prose h4 { font-size: 0.98em; color: var(--color-text-secondary); }
+.prose > :first-child { margin-top: 0; }
+
+/* Mermaid 图表块 */
+.md-mermaid {
+  margin: 0.9em 0;
+  border: 1px solid var(--color-border-primary);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--color-bg-secondary);
+}
+.md-mermaid-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--color-border-primary);
+  font-size: var(--text-meta);
+  color: var(--color-text-muted);
+}
+.md-mermaid-btn {
+  font-size: var(--text-tiny);
+  color: var(--color-text-secondary);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+}
+.md-mermaid-btn:hover { background: var(--color-bg-hover); color: var(--color-text-primary); }
+.md-mermaid-svg {
+  padding: 12px;
+  display: flex;
+  justify-content: center;
+  overflow-x: auto;
+  background: var(--color-bg-primary);
+}
+.md-mermaid-svg svg { max-width: 100%; height: auto; }
+.md-mermaid-source,
+.md-mermaid-error {
+  margin: 0;
+  padding: 12px;
+  font-family: var(--font-mono);
+  font-size: var(--text-meta);
+  line-height: 1.6;
+  color: var(--color-text-secondary);
+  overflow: auto;
+  background: var(--color-bg-code);
+}
+.md-mermaid-error { color: var(--color-error); }
+.md-mermaid-loading {
+  padding: 24px;
+  text-align: center;
+  font-size: var(--text-meta);
+  color: var(--color-text-muted);
+}
+
+/* 数学公式（KaTeX） */
+.prose .md-math { font-size: 1.02em; }
+.prose .md-math--block {
+  display: block;
+  margin: 0.8em 0;
+  padding: 0.2em 0;
+  text-align: center;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.prose .md-math .katex { font-size: 1.05em; }
+
+/* diff 代码块：整行底色表达增删，不依赖 prism 词法（diff 没有 token）。 */
+.prose .md-diff-line { display: block; }
+.prose .md-diff-line--add {
+  background: color-mix(in srgb, var(--color-success) 18%, var(--color-bg-code));
+  color: var(--color-success);
+}
+.prose .md-diff-line--del {
+  background: color-mix(in srgb, var(--color-error) 18%, var(--color-bg-code));
+  color: var(--color-error);
+}
+.prose .md-diff-line--hunk { color: var(--color-text-secondary); }
+.prose .md-diff-line--meta { color: var(--color-text-faint); }
+
+/* 小节包装（复制本节 / 折叠）：按钮只在 hover 或键盘聚焦时出现，
+   不常驻、不抢标题的层级。 */
+.prose .md-section,
+.prose .md-section-head { position: relative; }
+.prose .md-section:first-child .md-section-head > h1,
+.prose .md-section:first-child .md-section-head > h2 { margin-top: 0; }
+.prose .md-section-actions {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity var(--duration-fast) ease;
+}
+.prose .md-section-head:hover .md-section-actions,
+.prose .md-section-actions:focus-within { opacity: 1; }
+.prose .md-section-btn {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+.prose .md-section-btn:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+.prose .md-section-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--color-accent);
+}
+.prose h1 { font-size: 1.55em; }
+.prose h2 { font-size: 1.33em; }
+.prose h3 { font-size: 1.14em; }
+.prose h4 { font-size: 1em; color: var(--color-text-secondary); }
 .prose ul,
 .prose ol { 
   padding-left: 1.4em; 
-  margin: 0.7em 0; 
+  margin: 0.8em 0; 
   list-style-position: outside;
 }
 .prose ul { list-style-type: disc; }
 .prose ol { list-style-type: decimal; }
-.prose li { margin: 0.3em 0; }
+.prose li { margin: 0.35em 0; }
 .prose li::marker { color: var(--color-text-secondary); }
-.prose blockquote {
-  padding: 0 0 0 0.8em;
-  margin: 0.4em 0;
-  color: var(--color-text-secondary);
-  font-style: italic;
-  /* R3-7：边框色此前误用背景变量（--color-bg-tertiary），跨主题对比度
-     不可控。改用描边专用令牌（与所压底色亮度比 ≥1.10）。 */
-  border-left: 2px solid var(--color-border-secondary);
+
+/* GFM 任务列表：勾选框以前被渲染器整个丢掉（return null），
+   列表退化成普通圆点。这里用只读方块表达状态。 */
+.prose li.md-task {
+  list-style: none;
+  margin-left: -1.15em;
 }
-.prose hr { border: 0; border-top: 1px solid var(--color-bg-tertiary); margin: 0.9em 0; }
-.prose table { border-collapse: collapse; margin: 0.5em 0; font-size: 0.92em; width: 100%; }
+.prose .md-task-box {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  margin-right: 6px;
+  vertical-align: -2px;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 4px;
+  color: transparent;
+}
+.prose .md-task-box[data-checked="true"] {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: var(--color-on-accent);
+}
+
+/* 引用：中文斜体是浏览器合成倾斜（歪且脏），改为中性色 + 实底 */
+.prose blockquote {
+  padding: 0.55em 0.85em;
+  margin: 0.8em 0;
+  color: var(--color-text-secondary);
+  font-style: normal;
+  background: var(--color-bg-secondary);
+  border-radius: var(--radius-sm);
+  border-left: 3px solid var(--color-border-secondary);
+}
+.prose blockquote p:last-child { margin-bottom: 0; }
+
+/* 提示块（> [!NOTE] / [!TIP] / [!WARNING] / [!CAUTION]） */
+.prose .md-callout {
+  display: flex;
+  gap: 10px;
+  margin: 0.9em 0;
+  padding: 0.7em 0.9em;
+  border: 1px solid var(--color-border-primary);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-secondary);
+  font-style: normal;
+  color: var(--color-text-secondary);
+}
+.prose .md-callout > .md-callout-icon { flex-shrink: 0; margin-top: 2px; color: var(--color-text-muted); }
+.prose .md-callout > .md-callout-body { min-width: 0; flex: 1; }
+.prose .md-callout > .md-callout-body > :first-child { margin-top: 0; }
+.prose .md-callout > .md-callout-body > :last-child { margin-bottom: 0; }
+.prose .md-callout-title {
+  display: block;
+  margin-bottom: 2px;
+  font-size: var(--text-meta);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+.prose .md-callout--warning > .md-callout-icon { color: var(--color-warning); }
+.prose .md-callout--danger > .md-callout-icon { color: var(--color-error); }
+.prose .md-callout--success > .md-callout-icon { color: var(--color-success); }
+
+.prose hr { border: 0; border-top: 1px solid var(--color-bg-tertiary); margin: 1.1em 0; }
+
+/* 表格：去网格。全边框 + 表头底色是 Excel 观感，正文表格只需要行分隔。 */
+.prose .md-table-wrap {
+  margin: 0.8em 0;
+  overflow-x: auto;
+}
+/* 宽表按内容撑开、外层横向滚动；窄表仍然铺满可用宽度。 */
+.prose .md-table-wrap table { min-width: max-content; }
+.prose table {
+  border-collapse: collapse;
+  margin: 0;
+  font-size: 0.95em;
+  width: 100%;
+}
 .prose th,
-.prose td { padding: 0.4em 0.6em; border: 1px solid var(--color-border-secondary); }
-.prose th { background: var(--color-bg-secondary); font-weight: 600; color: var(--color-text-primary); }
+.prose td {
+  padding: 0.5em 0.7em;
+  border: 0;
+  border-bottom: 1px solid var(--color-border-subtle, var(--color-border-secondary));
+  vertical-align: top;
+}
+.prose th {
+  background: transparent;
+  font-size: var(--text-meta);
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  text-align: left;
+  border-bottom-color: var(--color-border-secondary);
+}
+.prose tbody tr:hover { background: var(--color-bg-hover); }
+.prose td[data-align="right"], .prose th[data-align="right"] { text-align: right; }
+.prose td[data-align="center"], .prose th[data-align="center"] { text-align: center; }
 /* 行内代码芯片（2026-10-01）。
    此前是「透明底 + 一条下划线」—— 下划线在长段落里既不像代码也不像
    链接，眼睛抓不到标识符。改成浅色圆角块：正文里一眼定位

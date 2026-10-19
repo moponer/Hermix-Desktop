@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
-import { Send, Square, FolderOpen, ChevronDown, ChevronRight, Sparkles, ShieldCheck, Image, X, Check, AlertTriangle, Lock, Clock, Code2, FileText, Brain, BrainCircuit } from "lucide-react";
+import { Send, Square, FolderOpen, ChevronDown, Sparkles, ShieldCheck, Image, X, Check, AlertTriangle, Lock, Clock, Code2, FileText, Brain, BrainCircuit, Settings2 } from "lucide-react";
 import type { DomainModeChoice } from "../hooks/useExpert";
 import { usePopover } from "../hooks/usePopover";
 import { PopoverShell, PopoverBody } from "./PopoverShell";
@@ -9,7 +9,8 @@ import { VoiceButton } from "./VoiceButton";
 import { VisionButton } from "./VisionButton";
 import { PolishButton } from "./PolishButton";
 import { ProviderIcon } from "./ProviderIcon";
-import type { ConfigCategory } from "./SystemConfigPanel";
+import type { ConfigCategory } from "./SettingsDialog";
+import { injectIntoComposer } from "../lib/composerInjection";
 import { AppMentionInput } from "./AppMentionInput";
 import { formatBytes } from "../utils/imageCompressor";
 import { PERMISSION_LEVELS, type PermissionLevel } from "../hooks/useExpert";
@@ -77,9 +78,9 @@ export interface ComposerProps {
   messageQueue?: QueuedMessage[];
   onAddToQueue?: (msg: QueuedMessage) => void;
   onClearQueue?: () => void;
-  onRemoveFromQueue?: (idx: number) => void;
-  onEditQueueItem?: (idx: number, newText: string) => void;
-  onSendFromQueue?: (idx: number) => void;
+  onRemoveFromQueue?: (id: string) => void;
+  onEditQueueItem?: (id: string, newText: string) => void;
+  onSendFromQueue?: (id: string) => void;
   session?: Session | null;
   customApps?: CustomAppSummary[];
   /** 模型"上下文窗口"栏的数据源（后端 resolve-context-windows 的批解析结果）。 */
@@ -99,6 +100,8 @@ export function Composer(p: ComposerProps) {
   const dragCounter = useRef(0);
   const [modelOpen, setModelOpen, modelContainerRef, modelTriggerRef, modelToggle] = usePopover();
   const [expertPanelOpen, setExpertPanelOpen] = useState(false);
+  // 待发队列默认折叠：常驻展开会与输入区争夺垂直空间。
+  const [queueOpen, setQueueOpen] = useState(false);
   const [permOpen, setPermOpen, permContainerRef, permTriggerRef, permToggle] = usePopover();
 
   const [expandedProviders, setExpandedProviders] = useState<Record<string, boolean>>({});
@@ -259,37 +262,54 @@ export function Composer(p: ComposerProps) {
         </div>
       )}
 
-      {p.messageQueue && p.messageQueue.length > 0 && (
-        <div className="px-4 pt-2 pb-1.5 border-t border-border-subtle">
-          <div className="flex items-center justify-between mb-1.5">
-            <span className="h-tiny text-text-muted">
-              队列中 {p.messageQueue.length} 条消息
-            </span>
-            <button
-              onClick={() => p.onClearQueue?.()}
-              className="h-tiny text-text-muted hover:text-text-primary px-1.5 py-0.5 rounded hover:bg-bg-tertiary"
-            >
-              清空
-            </button>
+      {p.messageQueue && p.messageQueue.length > 0 && (() => {
+        const failedCount = p.messageQueue!.filter((m) => m.status === "failed").length;
+        return (
+          <div className="px-4 pt-2 pb-1.5 border-t border-border-subtle">
+            {/* 默认折叠成一行：队列常驻展开会和输入区争夺垂直空间。 */}
+            <div className="flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => setQueueOpen((v) => !v)}
+                aria-expanded={queueOpen}
+                className="flex h-tiny items-center gap-1.5 text-text-muted transition-colors hover:text-text-primary"
+              >
+                <ChevronDown className={`icon-xs transition-transform ${queueOpen ? "" : "-rotate-90"}`} />
+                待发送 {p.messageQueue!.length} 条
+                {failedCount > 0 && (
+                  <span className="text-[var(--color-error)]">· {failedCount} 条失败</span>
+                )}
+              </button>
+              <button
+                onClick={() => p.onClearQueue?.()}
+                className="h-tiny rounded px-1.5 py-0.5 text-text-muted transition-colors hover:bg-bg-tertiary hover:text-text-primary"
+              >
+                清空
+              </button>
+            </div>
+            {queueOpen && (
+              <ul className="mt-1.5 max-h-40 space-y-1 overflow-y-auto">
+                {p.messageQueue!.map((msg, idx) => (
+                  <QueueItemRow
+                    key={msg.id}
+                    index={idx}
+                    total={p.messageQueue!.length}
+                    text={msg.text}
+                    status={msg.status}
+                    error={msg.error}
+                    canEdit={!!p.onEditQueueItem}
+                    canRemove={!!p.onRemoveFromQueue}
+                    canSend={!!p.onSendFromQueue}
+                    onEdit={(t) => p.onEditQueueItem?.(msg.id, t)}
+                    onRemove={() => p.onRemoveFromQueue?.(msg.id)}
+                    onSend={() => p.onSendFromQueue?.(msg.id)}
+                  />
+                ))}
+              </ul>
+            )}
           </div>
-          <ul className="space-y-1 max-h-32 overflow-y-auto">
-            {p.messageQueue.map((msg, idx) => (
-              <QueueItemRow
-                key={`${idx}-${msg.text.slice(0, 24)}`}
-                index={idx}
-                total={p.messageQueue!.length}
-                text={msg.text}
-                canEdit={!!p.onEditQueueItem}
-                canRemove={!!p.onRemoveFromQueue}
-                canSend={!!p.onSendFromQueue}
-                onEdit={(t) => p.onEditQueueItem?.(idx, t)}
-                onRemove={() => p.onRemoveFromQueue?.(idx)}
-                onSend={() => p.onSendFromQueue?.(idx)}
-              />
-            ))}
-          </ul>
-        </div>
-      )}
+        );
+      })()}
 
       {expertPanelOpen && (
         <InlineExpertPanel
@@ -396,12 +416,12 @@ export function Composer(p: ComposerProps) {
               <ChevronDown className="icon-sm shrink-0 opacity-60" />
             </button>
             {modelOpen && (
-              <PopoverShell containerRef={modelContainerRef} triggerRef={modelTriggerRef} align="right" width="md" side="top">
+              <PopoverShell containerRef={modelContainerRef} triggerRef={modelTriggerRef} align="right" width="lg" side="top">
                 <PopoverBody maxHeight="max-h-72">
                   {!p.byProvider || p.byProvider.length === 0 ? (
-                    <div className="px-3 py-6 text-center">
-                      <p className="text-meta text-text-muted">暂无可用模型</p>
-                      <p className="text-tiny text-text-muted mt-1">点下方「管理模型」去添加</p>
+                    <div className="px-2.5 py-8 text-center">
+                      <p className="text-[length:var(--text-ui)] text-text-secondary">暂无可用模型</p>
+                      <p className="mt-1 text-[length:var(--text-meta)] text-text-muted">在下方「管理模型」里添加</p>
                     </div>
                   ) : (
                     p.byProvider.map((group) => {
@@ -410,36 +430,53 @@ export function Composer(p: ComposerProps) {
                         : false;
                       const expanded = expandedProviders[group.provider] ?? isSelectedHere;
                       return (
-                        <div key={group.provider}>
+                        <div key={group.provider} className="mb-0.5 last:mb-0">
+                          {/* 供应商是**分组标题**，不是一级菜单项：左侧不再放
+                              展开箭头（那会让它读起来像另一条可选项），箭头统一
+                              收到右侧；模型行也不再阶梯缩进。 */}
                           <button
                             type="button"
                             onClick={() => toggleProvider(group.provider)}
-                            className="flex items-center gap-1.5 w-full px-3 py-1.5 text-left rounded-md hover:bg-bg-hover transition-colors"
+                            className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left transition-colors hover:bg-bg-hover"
                             title={group.isCustom ? `自定义：${group.provider}（点击展开/折叠）` : `点击展开/折叠 ${group.provider}`}
                             aria-expanded={expanded}
                           >
-                            {expanded
-                              ? <ChevronDown className="icon-sm text-text-muted shrink-0" />
-                              : <ChevronRight className="icon-sm text-text-muted shrink-0" />}
-                            <span className="text-meta text-text-secondary font-medium truncate">{group.provider}</span>
-                            {group.isCustom && <span className="text-tiny text-text-faint shrink-0">自定义</span>}
+                            <span className="truncate text-[length:var(--text-meta)] font-semibold tracking-wide text-text-faint">
+                              {group.provider}
+                            </span>
+                            {group.isCustom && (
+                              <span className="shrink-0 rounded-sm bg-bg-tertiary px-1 py-px text-[length:var(--text-tiny,11px)] text-text-faint">
+                                自定义
+                              </span>
+                            )}
+                            <ChevronDown
+                              className={`ml-auto icon-sm shrink-0 text-text-faint transition-transform ${expanded ? "" : "-rotate-90"}`}
+                            />
                           </button>
                           {expanded && (
-                            <div className="pb-1">
-                              {group.models.map((m) => (
-                                <button
-                                  key={m.id}
-                                  onClick={() => {
-                                    p.onSwitchModel?.(m.id);
-                                    p.setSelectedModel(m.id);
-                                    setModelOpen(false);
-                                  }}
-                                  className="flex items-center gap-2 w-full px-3 py-2 pl-8 text-left rounded-md hover:bg-bg-hover transition-colors"
-                                >
-                                  <span className="truncate text-ui text-text-primary">{m.display}</span>
-                                  {p.selectedModel === m.id && <Check className="icon-md text-accent shrink-0 ml-auto" />}
-                                </button>
-                              ))}
+                            <div className="pb-0.5">
+                              {group.models.map((m) => {
+                                const selected = p.selectedModel === m.id;
+                                return (
+                                  <button
+                                    key={m.id}
+                                    onClick={() => {
+                                      p.onSwitchModel?.(m.id);
+                                      p.setSelectedModel(m.id);
+                                      setModelOpen(false);
+                                    }}
+                                    aria-current={selected ? "true" : undefined}
+                                    className={`flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left transition-colors ${
+                                      selected
+                                        ? "bg-[var(--color-accent-soft)] text-text-primary"
+                                        : "text-text-secondary hover:bg-bg-hover hover:text-text-primary"
+                                    }`}
+                                  >
+                                    <span className="truncate text-[length:var(--text-ui)]">{m.display}</span>
+                                    {selected && <Check className="ml-auto icon-sm shrink-0 text-accent" />}
+                                  </button>
+                                );
+                              })}
                             </div>
                           )}
                         </div>
@@ -463,7 +500,7 @@ export function Composer(p: ComposerProps) {
                           : "未知";
                   const showThinkingToggle = p.supportsReasoning === true;
                   return (
-                    <div className="px-3 py-1.5 border-t border-border-primary flex items-center gap-3 text-meta">
+                    <div className="mt-1 flex items-center gap-3 border-t border-border-primary px-2.5 py-1.5 text-[length:var(--text-meta)]">
                       <span className="text-text-muted">
                         上下文 <span className="font-mono text-text-secondary">{ctxLabel}</span>
                       </span>
@@ -471,7 +508,7 @@ export function Composer(p: ComposerProps) {
                         <button
                           type="button"
                           onClick={() => p.onEnableThinkingChange?.(!(p.enableThinking === true))}
-                          className={`ml-auto inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-tiny transition-colors ${
+                          className={`ml-auto inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[length:var(--text-tiny,11px)] transition-colors ${
                             p.enableThinking === true
                               ? "bg-[color:var(--color-chip-model-bg)] text-[color:var(--color-chip-model-fg)]"
                               : "text-text-muted hover:bg-bg-hover"
@@ -489,12 +526,13 @@ export function Composer(p: ComposerProps) {
                 })()}
 
                 {/* 底部常驻操作：固定在列表下方，不随列表滚动。 */}
-                <div className="border-t border-border-primary">
+                <div className="mt-1 border-t border-border-primary pt-1">
                   <button
                     type="button"
-                    className="w-full px-3 py-2.5 text-left text-meta text-text-secondary hover:bg-bg-hover hover:text-text-primary transition-colors"
+                    className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-[length:var(--text-ui)] text-text-secondary transition-colors hover:bg-bg-hover hover:text-text-primary"
                     onClick={() => { p.onOpenSettings?.("model"); setModelOpen(false); }}
                   >
+                    <Settings2 className="icon-sm shrink-0 opacity-70" />
                     管理模型
                   </button>
                 </div>
@@ -502,10 +540,10 @@ export function Composer(p: ComposerProps) {
             )}
           </div>
           <VisionButton onFilesAttach={(files) => p.onFilesAttach?.(files)} />
-          <VoiceButton onTranscribe={(text) => p.setInput(p.input + text)} />
+          <VoiceButton onTranscribe={(text) => injectIntoComposer({ source: "voice", text, mode: "at-caret" })} />
           <PolishButton
             draft={p.input}
-            onResult={(polished) => p.setInput(polished)}
+            onResult={(polished) => injectIntoComposer({ source: "polish", text: polished, mode: "replace" })}
             recentTurns={recentTurns}
             hasAttachments={hasAttachments}
             disabled={p.sending || p.isStreaming}
@@ -574,11 +612,7 @@ export function Composer(p: ComposerProps) {
                       color: "var(--color-error)",
                     }}
                     aria-label="停止生成"
-                    title={
-                      p.messageQueue && p.messageQueue.length > 0
-                        ? `插话：停止当前回复并发送队列中的 ${p.messageQueue.length} 条消息`
-                        : "停止生成"
-                    }
+                    title="停止生成"
                   >
                     <Square fill="currentColor" className="icon-sm" />
                   </button>

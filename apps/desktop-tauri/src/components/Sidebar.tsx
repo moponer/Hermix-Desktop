@@ -12,7 +12,7 @@ import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
 import { getVersion } from "@tauri-apps/api/app";
 import { ConnectionIndicator } from "./ConnectionIndicator";
-import { type ConfigCategory } from "./SystemConfigPanel";
+import { type ConfigCategory } from "./SettingsDialog";
 import { SessionPickerDialog } from "./SessionPickerDialog";
 import {
   resolveVisibleCount,
@@ -239,7 +239,7 @@ export function Sidebar({
     });
   }, [workspaces, sessionsByWs]);
 
-  // SystemConfig 已由 系统配置 按钮直接跳转，无需 popup 状态。
+  // 设置已改为整幅浮层（App 持有开关），侧栏只负责触发，不保存 popup 状态。
 
 
   // Delete flow: in-app confirm dialog (replaces native window.confirm) +

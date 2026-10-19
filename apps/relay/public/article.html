@@ -6,7 +6,7 @@
 <title>文章 —— Hermix</title>
 <meta name="description" content="从实现笔记改写的机制说明：讲一个机制怎么运转、当时为什么这么选、放弃了什么。" />
 <link rel="icon" type="image/png" href="favicon.png" />
-<link rel="stylesheet" href="assets/site.css" />
+<link rel="stylesheet" href="assets/site.css?v=2" />
 </head>
 <body>
 <a class="skip" href="#doc">跳到正文</a>
@@ -24,14 +24,14 @@
 
 <footer class="ft" data-footer></footer>
 
-<script src="assets/site.js?v=3"></script>
+<script src="assets/site.js?v=4"></script>
 <script src="assets/articles.js"></script>
 <script>
   HERMIX.boot('articles');
   (function () {
     var all = window.ARTICLES || [];
     var names = { desktop: 'Hermix Desktop', mobile: 'Hermix 手机端', spiker: 'Spiker' };
-    var links = { desktop: 'desktop.html', mobile: 'mobile.html', spiker: 'spiker.html' };
+    var links = { desktop: 'hermix.html', mobile: 'hermix.html', spiker: 'spiker.html' };
     var order = ['desktop', 'mobile', 'spiker'];
     var id = new URLSearchParams(location.search).get('id');
     var doc = document.getElementById('doc');

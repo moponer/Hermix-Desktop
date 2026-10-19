@@ -72,11 +72,16 @@ pub struct DriveRoot {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum FileContent {
     /// Markdown / 纯文本 / 代码：前端按 variant 选渲染器。
+    ///
+    /// 载荷是**原始字节**（base64），不是字符串：Windows 上记事本存的
+    /// txt 常是 UTF-16 LE，国内老软件导出的 csv 常是 GBK，Rust 侧一刀
+    /// 按 UTF-8 解会把内容变成乱码。解码规则统一放在共享前端层
+    /// （packages/preview/src/lib/textDecode.ts），那里才拿得到 BOM。
     Text {
         name: String,
         /// md | text | code
         variant: String,
-        content: String,
+        data_base64: String,
     },
     /// 图片（png/jpg/gif/webp/svg/bmp/ico）：data URL 前端直渲染。
     Image {
@@ -110,18 +115,21 @@ fn ext_of(p: &str) -> String {
 
 fn classify(ext: &str) -> &'static str {
     match ext {
+        // html/htm 是**文本**：共享预览层的 htmlLoader 走 readText 取源码，
+        // 塞进沙箱 iframe 渲染。此前把 html 归到 "bytes"，Rust 于是回
+        // FileContent::Bytes，前端 readText 判成 isBinary → HTML 预览
+        // 永远报"二进制文件，不是可渲染的网页"。
         "md" | "markdown" | "txt" | "log" | "json" | "yaml" | "yml" | "toml" | "ini" | "cfg"
-        | "csv" | "tsv" => "text",
+        | "csv" | "tsv" | "html" | "htm" => "text",
         "rs" | "py" | "js" | "ts" | "tsx" | "jsx" | "c" | "cpp" | "h" | "hpp" | "cs" | "java"
         | "go" | "sh" | "bash" | "bat" | "ps1" | "sql" | "css" | "scss" | "less" | "vue" | "rb"
         | "php" | "lua" | "swift" | "kt" | "dart" | "scala" => "code",
         "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "bmp" | "ico" | "avif" => "image",
         "pdf" => "pdf",
         // 字节类：xlsx/xlsm/xls 由前端 ExcelJS/SheetJS 解析，
-        // docx/docm/dotx/dotm 由 docx-preview 解析，pptx/pptm/ppsx/ppsm/potx/potm 由 pptx-browser 解析，
-        // html/htm 走前端沙箱 iframe。
+        // docx/docm/dotx/dotm 由 docx-preview 解析，pptx/pptm/ppsx/ppsm/potx/potm 由 pptx-browser 解析。
         "xlsx" | "xlsm" | "xls" | "docx" | "docm" | "dotx" | "dotm" | "pptx" | "pptm" | "ppsx"
-        | "ppsm" | "potx" | "potm" | "html" | "htm" => "bytes",
+        | "ppsm" | "potx" | "potm" => "bytes",
         // 老二进制 office 仍走系统程序
         "doc" | "ppt" | "wps" | "et" | "dps" | "rtf" | "odt" | "ods" | "odp" => "legacy_office",
         _ => "unsupported",
@@ -282,7 +290,10 @@ fn sort_entries(entries: &mut [DirEntry]) {
 // ════════════════════════════════════════════════════════════════════
 
 /// 读文件并按扩展名分发。路径是绝对路径（资源管理器/主程序/命令行传入）。
-#[tauri::command]
+///
+/// `command(async)`：文件 IO 走 async runtime，不占 Tauri 主线程——
+/// 同步命令默认在主线程执行，50MB 的 xlsx 读盘会把窗口冻住。
+#[tauri::command(async)]
 pub fn viewer_read_file(path: String) -> Result<FileContent, String> {
     let p = validate_path(&path)?;
     let meta = std::fs::metadata(&p).map_err(|e| format!("无法读取文件信息: {e}"))?;
@@ -325,12 +336,11 @@ pub fn viewer_read_file(path: String) -> Result<FileContent, String> {
             data_base64: base64_encode(&bytes),
         },
         "text" | "code" => {
-            let content = String::from_utf8_lossy(&bytes).to_string();
             let variant = if class == "text" { "text" } else { "code" };
             FileContent::Text {
                 name,
                 variant: variant.into(),
-                content,
+                data_base64: base64_encode(&bytes),
             }
         }
         "bytes" => FileContent::Bytes {
@@ -353,7 +363,8 @@ pub fn viewer_read_file(path: String) -> Result<FileContent, String> {
 
 /// 列目录。可选 `show_hidden`：默认 false（与 Windows 资源管理器一致）。
 /// 不递归：树形 UI 由前端按需逐级请求，避免一次性把大目录全塞回来。
-#[tauri::command]
+/// `command(async)`：目录枚举在 async runtime 上跑，主线程不被 IO 占住。
+#[tauri::command(async)]
 pub fn viewer_list_dir(path: String, show_hidden: Option<bool>) -> Result<Vec<DirEntry>, String> {
     let p = validate_path(&path)?;
     let meta = std::fs::metadata(&p).map_err(|e| format!("无法访问: {e}"))?;
@@ -376,7 +387,8 @@ pub fn viewer_list_dir(path: String, show_hidden: Option<bool>) -> Result<Vec<Di
 }
 
 /// 单个文件 / 目录的元信息。前端用它判断能否进入 / 能否预览。
-#[tauri::command]
+/// `command(async)`：stat 也要 IO（打网络盘会等 SMB 超时），挪出主线程。
+#[tauri::command(async)]
 pub fn viewer_stat(path: String) -> Result<FileStat, String> {
     let p = validate_path(&path)?;
     match std::fs::metadata(&p) {
@@ -418,11 +430,23 @@ pub fn viewer_parent(path: String) -> Option<String> {
 }
 
 /// 列出本机盘符（Windows）。Linux/macOS 留空数组。
-#[tauri::command]
+///
+/// **为什么不用 `std::fs::metadata` 判盘符类型**：那是对文件系统的真实
+/// IO，打在断开的网络映射盘（`net use` 留下的 Z:/Y:）上会阻塞到 SMB
+/// 超时（可达数十秒）。这个命令在启动路径上，而同步命令默认在 Tauri
+/// 主线程执行——一次阻塞就是整个窗口白屏。`GetDriveTypeW` 只问驱动类型，
+/// 不碰文件系统，恒为内核态快操作。
+///
+/// 代价：不显示卷标（"Windows (C:)" 这类）。卷标要 `GetVolumeInformationW`
+/// ——那是真 IO，留给将来后台补齐，不进启动路径。
+#[tauri::command(async)]
 pub fn viewer_drives() -> Vec<DriveRoot> {
     #[cfg(windows)]
     {
-        use windows_sys::Win32::Storage::FileSystem::GetLogicalDrives;
+        use windows_sys::Win32::Storage::FileSystem::{GetDriveTypeW, GetLogicalDrives};
+        use windows_sys::Win32::System::WindowsProgramming::{
+            DRIVE_CDROM, DRIVE_FIXED, DRIVE_RAMDISK, DRIVE_REMOTE, DRIVE_REMOVABLE,
+        };
         let mask = unsafe { GetLogicalDrives() };
         (0..26)
             .filter_map(|i| {
@@ -431,9 +455,15 @@ pub fn viewer_drives() -> Vec<DriveRoot> {
                 }
                 let letter = ((b'A' + i) as char).to_string();
                 let path = format!("{letter}:\\");
-                let label = match std::fs::metadata(&path) {
-                    Ok(_) => format!("本地磁盘 ({letter}:)"),
-                    Err(_) => format!("磁盘 ({letter}:)"),
+                let mut wide: Vec<u16> = path.encode_utf16().collect();
+                wide.push(0);
+                let label = match unsafe { GetDriveTypeW(wide.as_ptr()) } {
+                    DRIVE_FIXED => format!("本地磁盘 ({letter}:)"),
+                    DRIVE_REMOVABLE => format!("可移动磁盘 ({letter}:)"),
+                    DRIVE_REMOTE => format!("网络驱动器 ({letter}:)"),
+                    DRIVE_CDROM => format!("光驱 ({letter}:)"),
+                    DRIVE_RAMDISK => format!("内存盘 ({letter}:)"),
+                    _ => format!("磁盘 ({letter}:)"),
                 };
                 Some(DriveRoot { letter, path, label })
             })
@@ -443,6 +473,17 @@ pub fn viewer_drives() -> Vec<DriveRoot> {
     {
         Vec::new()
     }
+}
+
+/// 用户主目录：首屏的兜底路径（上次访问目录之后）。
+/// 纯路径解析，不做文件系统 IO。
+#[tauri::command(async)]
+pub fn viewer_home_dir(app: tauri::AppHandle) -> Option<String> {
+    use tauri::Manager;
+    app.path()
+        .home_dir()
+        .ok()
+        .map(|p| p.to_string_lossy().to_string())
 }
 
 /// 在 Windows 资源管理器里高亮选中一个文件（`explorer /select,"path"`）。
@@ -468,7 +509,7 @@ pub fn viewer_reveal_in_explorer(path: String) -> Result<(), String> {
 
 /// 在目录下做文件名子串搜索（深度 1，不递归到子目录——避免大目录爆栈）。
 /// `max` 限制返回条数（默认 200），避免一次性传太多。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn viewer_search_dir(
     path: String,
     query: String,
@@ -629,4 +670,34 @@ pub async fn ai_send(
         .ok_or_else(|| format!("消息响应缺 reply: {body}"))?
         .to_string();
     Ok(AiReply { reply, session_id: sid })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::classify;
+
+    /// viewer 侧的扩展名分类必须与共享预览层（@hermix/preview）的读取器
+    /// 预期一致：共享层的 htmlLoader / markdownLoader / textLoader 走
+    /// readText，表格与 Office 走 readBytes。分类错一档，viewer 侧就
+    /// 永远看不到对应类型的预览（曾因此把 .html 判成二进制）。
+    #[test]
+    fn classify_matches_shared_preview_readers() {
+        // readText 家族：源码 / 正文类
+        for ext in ["md", "markdown", "txt", "json", "csv", "tsv", "html", "htm"] {
+            assert_eq!(classify(ext), "text", "{ext} 应走 readText");
+        }
+        for ext in ["rs", "ts", "tsx", "py", "vue"] {
+            assert_eq!(classify(ext), "code", "{ext} 应走 readText");
+        }
+        // readBytes 家族：前端引擎解析
+        for ext in ["xlsx", "xlsm", "xls", "docx", "pptx"] {
+            assert_eq!(classify(ext), "bytes", "{ext} 应走 readBytes");
+        }
+        for ext in ["png", "jpg", "webp", "svg", "gif"] {
+            assert_eq!(classify(ext), "image", "{ext} 应走图片分支");
+        }
+        assert_eq!(classify("pdf"), "pdf");
+        assert_eq!(classify("doc"), "legacy_office");
+        assert_eq!(classify("unknownext"), "unsupported");
+    }
 }

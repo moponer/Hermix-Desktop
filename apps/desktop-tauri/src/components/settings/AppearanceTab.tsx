@@ -23,7 +23,7 @@ export function AppearanceTab() {
     <div className="space-y-7">
       {/* 明暗模式 */}
       <section className="space-y-2">
-        <h3 className="px-1 text-[length:var(--text-ui)] font-medium text-[var(--color-text-primary)]">
+        <h3 className="px-1 text-[length:var(--text-ui)] font-medium text-[var(--color-text-secondary)]">
           明暗模式
         </h3>
         <div className="grid grid-cols-3 gap-3" role="radiogroup" aria-label="明暗模式">
@@ -78,7 +78,7 @@ export function AppearanceTab() {
                 <span
                   aria-hidden
                   className="inline-block h-4 w-4 rounded-full"
-                  style={{ background: accent, border: "1px solid var(--color-border-secondary)" }}
+                  style={{ background: accent, boxShadow: "inset 0 0 0 1px var(--color-border-subtle)" }}
                 />
                 <span className="font-mono">{accentLabel(accent)}</span>
                 <button
@@ -97,10 +97,10 @@ export function AppearanceTab() {
                     aria-label={c.label}
                     aria-pressed={c.value === accent}
                     className={cx(
-                      "flex h-7 items-center gap-1.5 rounded-lg border px-2 text-[length:var(--text-meta)] transition-colors",
+                      "flex h-7 items-center gap-1.5 rounded-[var(--radius-md)] bg-[var(--color-bg-tertiary)] px-2 text-[length:var(--text-meta)] transition-colors",
                       c.value === accent
-                        ? "border-[var(--color-accent)] text-[var(--color-text-primary)]"
-                        : "border-[var(--color-border-secondary)] text-[var(--color-text-muted)] hover:border-[var(--color-border-primary)] hover:text-[var(--color-text-primary)]",
+                        ? "bg-[var(--color-accent-soft-strong)] text-[var(--color-text-primary)]"
+                        : "text-[var(--color-text-muted)] hover:bg-[var(--color-bg-quaternary)] hover:text-[var(--color-text-primary)]",
                     )}
                   >
                     <span

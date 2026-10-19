@@ -1,14 +1,17 @@
 import { useState } from "react";
-import { Check, Copy } from "lucide-react";
+import { Check, Copy, Pencil } from "lucide-react";
 import { useSafeTimeout } from "../hooks/useSafeTimeout";
 
 // 复制按钮常驻在所属消息上，hover/focus 淡入，不挤占元数据头部
 export function MessageCopyAction({
   content,
   className,
+  onEdit,
 }: {
   content: string;
   className: string;
+  /** 用户消息：把原文注入输入框（编辑重发）。 */
+  onEdit?: () => void;
 }) {
   const safeSetTimeout = useSafeTimeout();
   const [copied, setCopied] = useState(false);
@@ -38,6 +41,18 @@ export function MessageCopyAction({
         {copied ? <Check className="icon-sm" /> : <Copy className="icon-sm" />}
         <span>{copied ? "已复制" : "复制"}</span>
       </button>
+      {onEdit && (
+        <button
+          type="button"
+          onClick={onEdit}
+          className="message-copy-button"
+          title="编辑并重发"
+          aria-label="编辑并重发"
+        >
+          <Pencil className="icon-sm" />
+          <span>编辑</span>
+        </button>
+      )}
     </div>
   );
 }
