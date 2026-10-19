@@ -59,9 +59,9 @@ Status: proposed — 方案已成形（2026-10-19），执行台账未开始，�
 
 | # | 子任务 | 状态 | 心跳 | 提交 SHA |
 |---|--------|------|------|----------|
-| F0 | 基线记录（门禁现状 / 代码行数 / 编译耗时 / 脏树快照） | pending | - | - |
-| F1 | 启动卡顿：驱动器列表异步化 + 侧栏加载态 | pending | - | - |
-| F2 | 全屏/最大化平铺 + 可拖拽分隔条 | pending | - | - |
+| F0 | 基线记录（门禁现状 / 代码行数 / 编译耗时 / 脏树快照） | done | 23:38 | 106bd5f2 |
+| F1 | 启动卡顿：驱动器列表异步化 + 侧栏加载态 | done | 23:52 | 106bd5f2（Rust）+ 93c6c499（前端） |
+| F2 | 全屏/最大化平铺 + 可拖拽分隔条 | doing | 23:42 | - |
 | F3 | 彩色类型图标系统（列表 + 关联后缀 + 文件夹） | pending | - | - |
 | F4 | 双模式：纯净模式 / 重量模式与切换 | pending | - | - |
 | F5 | 重量模式：图片处理工具集 | pending | - | - |
@@ -69,6 +69,36 @@ Status: proposed — 方案已成形（2026-10-19），执行台账未开始，�
 | F7 | AI 协助：一键入对话 + 改图提示词 + 原图保留 | pending | - | - |
 | F8 | 常见文件类型覆盖矩阵（预览 / 编辑下限） | pending | - | - |
 | F9 | 收尾：一致性审查 + 全量门禁 + 笔记归档 + 总结 | pending | - | - |
+
+### F0 基线（2026-10-19 23:38 实测）
+
+| 项目 | 结果 |
+|------|------|
+| `cargo check -p hermix-viewer --all-targets` | exit 0，2m13s（sccache 热） |
+| `apps/viewer` tsc --noEmit | exit 0 |
+| `apps/desktop-tauri` tsc --noEmit | exit 0 |
+| `apps/desktop-tauri` vitest run | 35 文件 / 330 用例全绿，exit 0 |
+| design guard（desktop + viewer 两个 cwd） | clean |
+| preview-layer guard | OK（64 个类名 / 42 个 token） |
+| `npx -y impeccable@4.1.0 detect apps/viewer/src` | exit 0 |
+| 行数基线 | viewer 前端 11 文件 / 1895 行；viewer rust 3 文件 / 740 行；packages/preview 35 文件 / 6116 行 |
+
+**两个必须记住的环境事实**：
+
+1. **本机没有可用的 bash**。`C:\Windows\System32\bash.exe` 只是 WSL 启动器，且未安装任何发行版；Git Bash 也不存在。因此 `scripts/ci-gate.sh`、`scripts/check-notes.sh`、`scripts/check-hygiene.sh`、`scripts/check-sidecar-freshness.sh` **无法直接执行**——每个子任务用等价命令复刻（cargo check / 两处 tsc / vitest / design guard ×2 / preview-layer / impeccable detect + notes 结构人工复核）。这不是代码缺陷，是本机缺件；门禁脚本本身保持 bash 不动。
+2. **开工时工作区不干净**：100 个文件已被暂存（他人/上一轮的在途改动：预览共享层归属、查看器预览引擎懒加载、文本解码、CSP 修复、组合注入等）。这批改动已由 `106bd5f2` 单独落地；F1 的 Rust 侧改动被同一次提交捎带进去（见 F1 行的 SHA 说明）。
+
+**既有门禁失败（与本任务无关）**：`docs/MCPHUB_BORROWINGS.md` 留在 `docs/` 顶层却不在 `scripts/check-notes.sh` 的 `ALLOWED` 白名单里 → notes 结构检查必红（该文件来自提交 `0b72f4f4`，当时归档了 MCPHUB 借鉴笔记但没同步白名单）。F9 一并处理。
+
+### F1 提交归属说明
+
+F1 的改动被拆在两个提交里，原因是**看门狗与主会话并发提交**（首次执行时台账还没落 doing 状态，看门狗判成「有 pending 无 doing」而接管，与主会话同时改同一个工作树）：
+
+- `106bd5f2` — 102 文件：开工前已暂存的在途改动（100）+ F1 的 Rust 侧（`apps/viewer/src-tauri/Cargo.toml` / `src/commands.rs` / `src/lib.rs`）。归属混合。
+- `93c6c499` — 2 文件：F1 的前端侧（`apps/viewer/src/App.tsx` / `src/styles.css`）。
+
+**已修的根因**：看门狗的接管判据改为「先读存活标记 `<TMPDIR>\hermix-viewer-task\live.txt`，20 分钟内更新过 = 主会话活着，只报告不动手」。主会话每步都会刷新该文件。
+
 
 **子任务优先级与依赖**：F0 → F1 → F2 → F3 → F4 → F5 → F6 → F7 → F8 → F9。F3 的「关联后缀图标」依赖 desktop 设置页同步改动，与 F4 可并行但文件不可重叠（桌面端 `SettingsShell.tsx` 归 F3 独占，viewer 端归 F4 独占）。
 

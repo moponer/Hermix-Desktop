@@ -7,6 +7,7 @@
 // 共享包走 @hermix/preview —— 与桌面 app 用同一份解析器、同一份样式层。
 
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   ArrowLeft, ArrowRight, ArrowUp, RefreshCw, Search, Eye, EyeOff,
@@ -55,6 +56,8 @@ const BOOKMARKS_KEY = "hermix.viewer.bookmarks";
 const LAST_PATH_KEY = "hermix.viewer.lastPath";
 /** 驱动器枚举超过这个时长还没回来 → 侧栏转「慢」态，不再显示骨架。 */
 const DRIVES_TIMEOUT_MS = 1500;
+/** 栏宽持久化键。 */
+const LAYOUT_KEY = "hermix.viewer.layout";
 
 const THEME_LABEL: Record<ThemeMode, string> = {
   system: "跟随系统",
@@ -95,6 +98,94 @@ function readLastPath(): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * 栏宽布局：侧栏固定 px、文件列表按**比例**、AI 栏固定 px。
+ *
+ * 文件列表用比例而不是绝对像素——窗口拉大 / 全屏时它跟着铺满，
+ * 这正是"全屏下组件没有平铺"的病根：原先 `.col-name` 被钉死在
+ * `max-width: 240px`、`.explorer` 被钉死在 `max-width: 460px`，
+ * 宽屏下表格右侧全是空白。比例列在 1080p 与 4K 上都按同一份"观感"分栏。
+ */
+interface Layout {
+  sbW: number;
+  exRatio: number;
+  aiW: number;
+}
+
+const LAYOUT_DEFAULT: Layout = { sbW: 200, exRatio: 0.3, aiW: 320 };
+
+function clamp(v: number, lo: number, hi: number): number {
+  return Math.min(hi, Math.max(lo, v));
+}
+
+function readLayout(): Layout {
+  try {
+    const raw = JSON.parse(localStorage.getItem(LAYOUT_KEY) ?? "");
+    if (!raw || typeof raw !== "object") return LAYOUT_DEFAULT;
+    const l = raw as Partial<Layout>;
+    return {
+      sbW: clamp(typeof l.sbW === "number" ? l.sbW : LAYOUT_DEFAULT.sbW, 140, 420),
+      exRatio: clamp(
+        typeof l.exRatio === "number" ? l.exRatio : LAYOUT_DEFAULT.exRatio,
+        0.16,
+        0.6,
+      ),
+      aiW: clamp(typeof l.aiW === "number" ? l.aiW : LAYOUT_DEFAULT.aiW, 240, 560),
+    };
+  } catch {
+    return LAYOUT_DEFAULT;
+  }
+}
+
+/** 栏宽拖拽条：拖动改相邻栏宽度，方向键也能调（无障碍）。 */
+function Resizer({
+  onDelta,
+  label,
+}: {
+  onDelta: (delta: number) => void;
+  label: string;
+}) {
+  const onPointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      let lastX = e.clientX;
+      const move = (ev: PointerEvent) => {
+        const dx = ev.clientX - lastX;
+        lastX = ev.clientX;
+        onDelta(dx);
+      };
+      const up = () => {
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", up);
+        document.body.style.userSelect = "";
+      };
+      document.body.style.userSelect = "none";
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", up);
+    },
+    [onDelta],
+  );
+  return (
+    <div
+      className="resizer"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label={label}
+      tabIndex={0}
+      onPointerDown={onPointerDown}
+      onKeyDown={(e) => {
+        if (e.key === "ArrowLeft") {
+          e.preventDefault();
+          onDelta(-16);
+        } else if (e.key === "ArrowRight") {
+          e.preventDefault();
+          onDelta(16);
+        }
+      }}
+    />
+  );
 }
 
 function splitPath(p: string): string[] {
@@ -182,6 +273,9 @@ export function App() {
     items: DriveRootLike[];
   }>({ status: "loading", items: [] });
   const drives = drivesState.items;
+
+  // —— 栏宽布局（可拖拽；文件列表按比例，窗口变大自动铺满） ——
+  const [layout, setLayout] = useState<Layout>(readLayout);
   const [showHidden, setShowHidden] = useState(false);
   const [searchQ, setSearchQ] = useState("");
   const [searching, setSearching] = useState(false);
@@ -282,6 +376,39 @@ export function App() {
       /* 持久化失败仅影响下次启动，本次会话内仍可用 */
     }
   }, [currentPath]);
+
+  // 栏宽持久化。
+  useEffect(() => {
+    try {
+      localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout));
+    } catch {
+      /* 持久化失败仅影响下次启动，本次会话内仍可用 */
+    }
+  }, [layout]);
+
+  const onSbDelta = useCallback((dx: number) => {
+    setLayout((l) => ({ ...l, sbW: clamp(l.sbW + dx, 140, 420) }));
+  }, []);
+  const onExDelta = useCallback((dx: number) => {
+    setLayout((l) => ({
+      ...l,
+      // 比例列按窗口宽度换算成比例增量：拖动 100px ≈ 窗口的 8%。
+      exRatio: clamp(l.exRatio + dx / Math.max(window.innerWidth, 800), 0.16, 0.6),
+    }));
+  }, []);
+  const onAiDelta = useCallback((dx: number) => {
+    setLayout((l) => ({ ...l, aiW: clamp(l.aiW - dx, 240, 560) }));
+  }, []);
+
+  const layoutVars = useMemo(
+    () =>
+      ({
+        "--sb-w": `${layout.sbW}px`,
+        "--ex-ratio": layout.exRatio,
+        "--ai-w": `${layout.aiW}px`,
+      }) as unknown as CSSProperties,
+    [layout],
+  );
 
   // 列表加载
   useEffect(() => {
@@ -574,6 +701,7 @@ export function App() {
   return (
     <div
       className="app"
+      style={layoutVars}
       onDragOver={(e) => {
         e.preventDefault();
         setDragOver(true);
@@ -717,6 +845,8 @@ export function App() {
           )}
         </aside>
 
+        <Resizer onDelta={onSbDelta} label="调整侧栏宽度" />
+
         <section className="explorer">
           {error ? (
             <div className="explorer-error">
@@ -752,8 +882,13 @@ export function App() {
                     title={e.path}
                   >
                     <td className="col-name">
-                      {e.isDir ? <Folder className="entry-icon" /> : <FileIcon className="entry-icon" />}
-                      <span>{e.name}</span>
+                      {/* 图标 + 名字包一层 flex 容器：td 保持 table-cell
+                          身份，列宽才能由 table-layout: fixed 分配，
+                          名字列吃掉剩余宽度（宽屏下不再留空白）。 */}
+                      <span className="cell-main">
+                        {e.isDir ? <Folder className="entry-icon" /> : <FileIcon className="entry-icon" />}
+                        <span className="cell-text">{e.name}</span>
+                      </span>
                     </td>
                     <td className="col-size">{e.isDir ? "—" : fmtSize(e.size)}</td>
                     <td className="col-mtime">{shortDate(e.mtime)}</td>
@@ -763,6 +898,8 @@ export function App() {
             </table>
           )}
         </section>
+
+        <Resizer onDelta={onExDelta} label="调整文件列表宽度" />
 
         <section className="preview">
           <div className="tabbar">
@@ -816,14 +953,17 @@ export function App() {
         </section>
 
         {aiOpen && (
-          <AiSidebar
-            // key 绑当前文件：切换标签时重建面板 → 会话 id 随之重置。
-            // 否则不关 AI 栏换文件，新文件路径会被拼进上一个文件的会话里。
-            key={active?.path ?? "__none__"}
-            filePath={active?.path ?? null}
-            selection={selection}
-            onClose={() => setAiOpen(false)}
-          />
+          <>
+            <Resizer onDelta={onAiDelta} label="调整 AI 栏宽度" />
+            <AiSidebar
+              // key 绑当前文件：切换标签时重建面板 → 会话 id 随之重置。
+              // 否则不关 AI 栏换文件，新文件路径会被拼进上一个文件的会话里。
+              key={active?.path ?? "__none__"}
+              filePath={active?.path ?? null}
+              selection={selection}
+              onClose={() => setAiOpen(false)}
+            />
+          </>
         )}
       </div>
 
