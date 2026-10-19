@@ -51,6 +51,10 @@ interface TreeNodeState {
 }
 
 const BOOKMARKS_KEY = "hermix.viewer.bookmarks";
+/** 上次访问目录：首屏兜底路径的第一优先级（不依赖驱动器枚举）。 */
+const LAST_PATH_KEY = "hermix.viewer.lastPath";
+/** 驱动器枚举超过这个时长还没回来 → 侧栏转「慢」态，不再显示骨架。 */
+const DRIVES_TIMEOUT_MS = 1500;
 
 const THEME_LABEL: Record<ThemeMode, string> = {
   system: "跟随系统",
@@ -78,6 +82,19 @@ function readBookmarks(): Bookmark[] {
 
 function driveToEntry(d: DriveRootLike): DirEntryLike {
   return { name: d.label, path: d.path, isDir: true, size: 0, mtime: null, extension: "", hidden: false };
+}
+
+/** 上次访问目录：首屏兜底路径的第一优先级（不依赖驱动器枚举）。 */
+function readLastPath(): string | null {
+  try {
+    const p = localStorage.getItem(LAST_PATH_KEY);
+    if (!p) return null;
+    // 只认盘符开头或 UNC 开头：相对路径会随工作目录漂移到别处。
+    if (!/^([a-zA-Z]:|\\\\)/.test(p)) return null;
+    return p;
+  } catch {
+    return null;
+  }
 }
 
 function splitPath(p: string): string[] {
@@ -160,7 +177,11 @@ export function App() {
   const [currentPath, setCurrentPath] = useState<string | null>(null);
   const [pathInput, setPathInput] = useState("");
   const [entries, setEntries] = useState<DirEntryLike[]>([]);
-  const [drives, setDrives] = useState<DriveRootLike[]>([]);
+  const [drivesState, setDrivesState] = useState<{
+    status: "loading" | "slow" | "ready";
+    items: DriveRootLike[];
+  }>({ status: "loading", items: [] });
+  const drives = drivesState.items;
   const [showHidden, setShowHidden] = useState(false);
   const [searchQ, setSearchQ] = useState("");
   const [searching, setSearching] = useState(false);
@@ -204,19 +225,62 @@ export function App() {
     import("@tauri-apps/api/event").then(({ listen }) =>
       listen<string>("viewer-open-file", (e) => openPath(e.payload)).then((u) => u),
     );
-    void viewerFileSource.fs!.drives().then(setDrives);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 当前目录：打开时 stat → 找到默认根（第一个盘符）。
+  // 驱动器列表：只请求一次，与首屏解耦。Rust 侧已不碰文件系统，但网络盘
+  // 枚举仍可能慢——超过 DRIVES_TIMEOUT_MS 就转「慢」态（骨架换成提示），
+  // 后台继续等结果，拿到就覆盖。
+  useEffect(() => {
+    if (!viewerFileSource.fs) return;
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (!settled) {
+        setDrivesState((s) => (s.status === "loading" ? { ...s, status: "slow" } : s));
+      }
+    }, DRIVES_TIMEOUT_MS);
+    void viewerFileSource.fs.drives().then((ds) => {
+      settled = true;
+      clearTimeout(timer);
+      setDrivesState({ status: "ready", items: ds });
+    });
+    return () => clearTimeout(timer);
+  }, []);
+
+  // 首屏目录：不等驱动器。兜底顺序 = 上次访问目录 → 用户主目录 →
+  // 首个盘符（最后一项要等驱动器到位，只在前两项都拿不到时才走）。
   useEffect(() => {
     if (currentPath !== null) return;
+    let cancelled = false;
     void (async () => {
-      if (!viewerFileSource.fs) return;
-      const ds = await viewerFileSource.fs.drives();
-      setDrives(ds);
-      if (ds.length > 0) setCurrentPath(ds[0].path);
+      const last = readLastPath();
+      if (last) {
+        if (!cancelled) setCurrentPath(last);
+        return;
+      }
+      const home = await invoke<string | null>("viewer_home_dir").catch(() => null);
+      if (cancelled) return;
+      if (home) {
+        setCurrentPath(home);
+        return;
+      }
+      const ds = viewerFileSource.fs ? await viewerFileSource.fs.drives() : [];
+      if (!cancelled && ds.length > 0) setCurrentPath(ds[0].path);
     })();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentPath]);
+
+  // 当前目录持久化：下次启动直接回到这里，路径栏同步显示。
+  useEffect(() => {
+    if (!currentPath) return;
+    setPathInput(currentPath);
+    try {
+      localStorage.setItem(LAST_PATH_KEY, currentPath);
+    } catch {
+      /* 持久化失败仅影响下次启动，本次会话内仍可用 */
+    }
   }, [currentPath]);
 
   // 列表加载
@@ -628,17 +692,29 @@ export function App() {
             </>
           )}
           <div className="sb-head">本机</div>
-          {drives.map((d) => (
-            <TreeRow
-              key={d.path}
-              entry={driveToEntry(d)}
-              depth={0}
-              tree={tree}
-              currentPath={currentPath}
-              onToggle={toggleTreeNode}
-              onOpen={onTreeOpen}
-            />
-          ))}
+          {drivesState.status === "loading" ? (
+            // 骨架屏：驱动器还没回来，但位置已经占好——不留空白侧栏。
+            <div className="sb-skeleton">
+              <div className="sb-skeleton-row" />
+              <div className="sb-skeleton-row" />
+              <div className="sb-skeleton-row" />
+            </div>
+          ) : (
+            drives.map((d) => (
+              <TreeRow
+                key={d.path}
+                entry={driveToEntry(d)}
+                depth={0}
+                tree={tree}
+                currentPath={currentPath}
+                onToggle={toggleTreeNode}
+                onOpen={onTreeOpen}
+              />
+            ))
+          )}
+          {drivesState.status === "slow" && (
+            <div className="sb-hint">部分驱动器无响应，正在继续读取…</div>
+          )}
         </aside>
 
         <section className="explorer">

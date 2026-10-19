@@ -300,6 +300,24 @@ html, body, #root {
   padding: 3px 6px;
 }
 
+/* 驱动器加载态：骨架行占位，不留空白侧栏。层次靠底色差，不加描边。 */
+.sb-skeleton { padding: 2px 0; }
+.sb-skeleton-row {
+  height: 20px; margin: 6px 10px; border-radius: 4px;
+  background: var(--bg-hover);
+  animation: sb-pulse 1.5s ease-in-out infinite;
+}
+.sb-skeleton-row:nth-child(2) { width: 78%; }
+.sb-skeleton-row:nth-child(3) { width: 58%; }
+@keyframes sb-pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 0.85; }
+}
+.sb-hint {
+  font-size: 11px; color: var(--text-muted);
+  padding: 6px 10px; line-height: 1.4;
+}
+
 /* ─── 中央：文件列表 ──────────────────────────────── */
 .explorer {
   flex: 1; min-width: 280px; max-width: 460px;
