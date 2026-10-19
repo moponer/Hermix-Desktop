@@ -7,6 +7,7 @@
 
 pub mod commands;
 pub mod image_ops;
+pub mod paths;
 pub mod pdf_ops;
 
 use std::io::{Read, Write};

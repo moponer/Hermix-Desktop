@@ -1,22 +1,24 @@
 //! PDF / 文本编辑内核（F6）。
 //!
-//! **原文件保护**：任何写盘都过 `safe_output_path`——产物与源文件相同
-//! （Windows 上大小写不敏感，`..`、相对路径都算同一文件）一律拒绝。
-//! 默认产物名 `<原名>.edited.<扩展名>`，前端传什么都不覆盖原文件。
+//! **原文件保护**：任何写盘都过 `paths::safe_output_path`——产物与源文件
+//! 相同（Windows 上大小写不敏感，`..`、相对路径、**硬链接**都算同一
+//! 文件）一律拒绝。默认产物名 `<原名>.edited.<扩展名>`，前端传什么都
+//! 不覆盖原文件。
 //!
-//! **依赖**：只用已有的 lopdf / image / serde，不新增 crate。GBK 编码走
-//! Win32 `WideCharToMultiByte`（CP 936），本文件自带 extern 声明，因此
-//! **不需要**改 Cargo.toml；若想换成类型化 API，则给 windows-sys 加
-//! `Win32_Globalization`（windows-sys 0.52 里 `Win32_Globalization = ["Win32"]`，
-//! 当前未启用）。
+//! **依赖**：新增唯一直接依赖 `lopdf` 0.34（0.34 已在工作区 Cargo.lock，
+//! 传递依赖全在 → 编译成本 ≈ 0）。GBK 编码走 Win32 `WideCharToMultiByte`
+//! （CP 936），本文件自带 extern 声明，**不引 encoding_rs**。
 //!
-//! **能力边界**：lopdf 0.34 只支持 V1/V2 加密（RC4），AES 加密件返回可读
-//! 错误而不是静默失败；文本层替换只认 `Tj` 算子且要求整串精确相等。
+//! **能力边界**：lopdf 0.34 支持 V1/V2 加密（RC4）、不支持 AES（V4/V5）；
+//! 文本层替换只认 `Tj` 算子且要求整串精确相等（`TJ` 数组显示文本不处理）。
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use crate::paths::safe_output_path;
 use image::DynamicImage;
-use lopdf::{Dictionary, Document, Object, ObjectId, Stream};
+use lopdf::content::Content;
+use lopdf::{Dictionary, Document, Encoding, Object, ObjectId, Stream};
 use serde::{Deserialize, Serialize};
 
 // ── op 模型 ──────────────────────────────────────────────────────────
@@ -57,56 +59,14 @@ pub struct SaveResult {
     pub bytes: usize,
     /// 实际使用的编码（仅文本另存有值，其余为 null）
     pub encoding_used: Option<String>,
+    /// 实际替换的处数（仅文本替换有值，其余为 null）
+    pub replaced: Option<usize>,
 }
 
 // ── 产物路径：原文件保护 ─────────────────────────────────────────────
-
-/// 默认产物名：`<原名>.edited.<扩展名>`（同目录）。
-pub fn default_output_path(src: &Path) -> PathBuf {
-    let stem = src.file_stem().map(|s| s.to_string_lossy().to_string());
-    let ext = src.extension().map(|s| s.to_string_lossy().to_string());
-    let dir = src.parent().unwrap_or_else(|| Path::new(""));
-    let name = match (stem, ext) {
-        (Some(s), Some(e)) => format!("{s}.edited.{e}"),
-        (Some(s), None) => format!("{s}.edited"),
-        _ => "edited".to_string(),
-    };
-    dir.join(name)
-}
-
-/// 同一个文件吗？Windows 上路径大小写不敏感，`..` / 相对路径都能绕，
-/// 所以先比规范化绝对路径，再比 canonical（能拿到真实同一文件的判据）。
-fn same_file(a: &Path, b: &Path) -> bool {
-    let norm = |p: &Path| {
-        let abs = if p.is_absolute() {
-            p.to_path_buf()
-        } else {
-            std::env::current_dir()
-                .unwrap_or_else(|_| PathBuf::from("."))
-                .join(p)
-        };
-        abs.to_string_lossy().to_lowercase()
-    };
-    if norm(a) == norm(b) {
-        return true;
-    }
-    match (a.canonicalize(), b.canonicalize()) {
-        (Ok(x), Ok(y)) => x == y,
-        _ => false,
-    }
-}
-
-/// 产物路径守卫：与源文件相同一律拒绝（哪怕前端传了同一个路径）。
-pub fn safe_output_path(src: &Path, requested: Option<&str>) -> Result<PathBuf, String> {
-    let candidate = match requested.map(str::trim).filter(|s| !s.is_empty()) {
-        Some(p) => PathBuf::from(p),
-        None => default_output_path(src),
-    };
-    if same_file(&candidate, src) {
-        return Err("产物路径不能与原文件相同：原文件只读，请换一个文件名".into());
-    }
-    Ok(candidate)
-}
+//
+// 守卫实现在 `paths.rs`（图片 / PDF / 文本共用一份）：判据含**文件身份**
+// （volume serial + file index），硬链接也会被拦住。
 
 /// 落盘公共出口：守卫 → 建目录 → 写盘 → 回报路径与字节数。
 fn save_output(
@@ -114,7 +74,7 @@ fn save_output(
     requested_out: Option<&str>,
     bytes: &[u8],
 ) -> Result<SaveResult, String> {
-    let out = safe_output_path(src, requested_out)?;
+    let out = safe_output_path(src, requested_out, None)?;
     save_bytes(&out, bytes, None)
 }
 
@@ -137,6 +97,7 @@ fn save_bytes(
         path: out.to_string_lossy().to_string(),
         bytes: bytes.len(),
         encoding_used,
+        replaced: None,
     })
 }
 
@@ -144,14 +105,25 @@ fn save_bytes(
 
 /// 页树里的一页：id + 从祖先继承来的属性。
 ///
-/// 中间层 Pages 节点可以携带子页共享的 MediaBox / Resources；页树扁平化
-/// 后中间节点会被剪掉，这些继承属性必须显式落到页上，否则读者按默认
-/// 纸张尺寸渲染。
+/// 中间层 Pages 节点可以携带子页共享的 MediaBox / Resources / CropBox /
+/// Rotate；页树扁平化后中间节点会被剪掉，这些继承属性必须显式落到页上，
+/// 否则读者按默认纸张尺寸渲染、角度与裁剪被静默改掉。
 #[derive(Clone)]
 struct LeafPage {
     id: ObjectId,
     media_box: Option<Object>,
     resources: Option<Object>,
+    crop_box: Option<Object>,
+    rotate: Option<i64>,
+}
+
+/// 祖先链上继承下来的页属性。
+#[derive(Clone, Default)]
+struct Inherited {
+    media_box: Option<Object>,
+    resources: Option<Object>,
+    crop_box: Option<Object>,
+    rotate: Option<i64>,
 }
 
 /// 解引用：Kids 可能是间接引用（最多跟 8 层，防环）。
@@ -174,29 +146,43 @@ fn resolve<'a>(doc: &'a Document, obj: &'a Object) -> &'a Object {
 fn collect_pages(
     doc: &Document,
     node: ObjectId,
-    inherited_media: Option<&Object>,
-    inherited_res: Option<&Object>,
+    inherited: &Inherited,
     out: &mut Vec<LeafPage>,
 ) -> Result<(), String> {
     let dict = doc
         .get_dictionary(node)
         .map_err(|e| format!("PDF 结构损坏: {e}"))?;
-    let media = dict.get(b"MediaBox").ok().or(inherited_media);
-    let res = dict.get(b"Resources").ok().or(inherited_res);
+    let media = dict.get(b"MediaBox").ok().or(inherited.media_box.as_ref());
+    let res = dict.get(b"Resources").ok().or(inherited.resources.as_ref());
+    let crop = dict.get(b"CropBox").ok().or(inherited.crop_box.as_ref());
+    // Rotate 是整数（页显示角度，继承自祖先页节点）。
+    let rotate = dict
+        .get(b"Rotate")
+        .ok()
+        .and_then(|o| o.as_i64().ok())
+        .or(inherited.rotate);
     // 有 Kids 的是中间层 Pages 节点，没有的就是叶子页
     let kids = dict.get(b"Kids").ok().map(|k| resolve(doc, k));
     match kids {
         Some(kids) => {
             let arr = kids.as_array().map_err(|_| "PDF 页树 Kids 异常".to_string())?;
+            let child_inherited = Inherited {
+                media_box: media.cloned(),
+                resources: res.cloned(),
+                crop_box: crop.cloned(),
+                rotate,
+            };
             for kid in arr {
                 let id = kid.as_reference().map_err(|_| "PDF 页树引用异常".to_string())?;
-                collect_pages(doc, id, media, res, out)?;
+                collect_pages(doc, id, &child_inherited, out)?;
             }
         }
         None => out.push(LeafPage {
             id: node,
             media_box: media.cloned(),
             resources: res.cloned(),
+            crop_box: crop.cloned(),
+            rotate,
         }),
     }
     Ok(())
@@ -217,7 +203,7 @@ fn read_pages(doc: &Document) -> Result<PdfPages, String> {
         .as_reference()
         .map_err(|_| "PDF 页树根节点异常".to_string())?;
     let mut leaves = Vec::new();
-    collect_pages(doc, root, None, None, &mut leaves)?;
+    collect_pages(doc, root, &Inherited::default(), &mut leaves)?;
     if leaves.is_empty() {
         return Err("PDF 没有页面".into());
     }
@@ -237,6 +223,7 @@ fn write_page_tree(
     for &i in order {
         let page = &pages[i];
         let (id, media, res) = (page.id, page.media_box.clone(), page.resources.clone());
+        let (crop, rotate) = (page.crop_box.clone(), page.rotate);
         let dict = doc
             .get_dictionary_mut(id)
             .map_err(|e| format!("PDF 结构损坏: {e}"))?;
@@ -249,6 +236,18 @@ fn write_page_tree(
         if !dict.has(b"Resources") {
             if let Some(r) = res {
                 dict.set("Resources", r);
+            }
+        }
+        // CropBox / Rotate 同样可继承：丢了会让页面的裁剪与显示角度被
+        // 静默改掉（读者以为是自己转的，其实是被文件编辑弄丢的）。
+        if !dict.has(b"CropBox") {
+            if let Some(c) = crop {
+                dict.set("CropBox", c);
+            }
+        }
+        if !dict.has(b"Rotate") {
+            if let Some(rot) = rotate {
+                dict.set("Rotate", Object::Integer(rot));
             }
         }
     }
@@ -381,6 +380,8 @@ pub fn apply_pdf_op(doc: &mut Document, op: &PdfOp) -> Result<(), String> {
                     id: page_id,
                     media_box: None,
                     resources: None,
+                    crop_box: None,
+                    rotate: None,
                 },
             );
             let order: Vec<usize> = (0..leaves.len()).collect();
@@ -417,7 +418,9 @@ fn resolve_encoding(name: &str) -> (TextEncoding, bool) {
         "" | "utf-8" | "utf8" => (TextEncoding::Utf8, false),
         "utf-16le" | "utf-16-le" | "utf16le" | "ucs-2" | "ucs2" => (TextEncoding::Utf16Le, false),
         "utf-16be" | "utf-16-be" | "utf16be" => (TextEncoding::Utf16Be, false),
-        "gbk" | "gb2312" | "cp936" | "ms936" | "gb18030" => (TextEncoding::Gbk, false),
+        // 刻意不接 gb18030：它是 GBK 超集，用 CP936 编码会丢字符。
+        // 宁可报「不支持」也不要写出一个内容不对的文件。
+        "gbk" | "gb2312" | "cp936" | "ms936" => (TextEncoding::Gbk, false),
         _ => (TextEncoding::Utf8, true),
     }
 }
@@ -581,6 +584,35 @@ pub struct PdfInfo {
     pub encrypted: bool,
     /// 文件字节数
     pub bytes: u64,
+    /// 每页当前的显示角度（0/90/180/270，含从祖先继承来的）。
+    /// 前端「再转 90°」必须基于它算**绝对**角度——后端写的是绝对值。
+    pub rotations: Vec<i64>,
+}
+
+/// 加密 PDF 的处置：**准确**的原因。
+///
+/// lopdf 0.34 支持 V1/V2（RC4，`decrypt` 可用），不支持 V4/V5（AES）。
+/// 此前一律报「AES 加密」，会把 RC4 加密件误诊——用户以为自己遇上的是
+/// 最常见的那种 AES，实际是能解开的 RC4。
+fn reject_encrypted(doc: &Document) -> Result<(), String> {
+    if !doc.is_encrypted() {
+        return Ok(());
+    }
+    let version = doc
+        .trailer
+        .get(b"Encrypt")
+        .ok()
+        .and_then(|o| o.as_reference().ok())
+        .and_then(|id| doc.get_dictionary(id).ok())
+        .and_then(|d| d.get(b"V").ok())
+        .and_then(|o| o.as_i64().ok());
+    Err(match version {
+        Some(1) | Some(2) => {
+            "该 PDF 使用 RC4 口令加密（V1/V2），当前不支持编辑；请先用阅读器另存为无加密版本".to_string()
+        }
+        Some(4) | Some(5) => "该 PDF 使用 AES 加密（V4/V5），当前不支持编辑".to_string(),
+        _ => "该 PDF 已加密，当前不支持编辑".to_string(),
+    })
 }
 
 #[tauri::command(async)]
@@ -597,14 +629,20 @@ pub fn pdf_info(src_path: String) -> Result<PdfInfo, String> {
             pages: 0,
             encrypted: true,
             bytes,
+            rotations: Vec::new(),
         });
     }
-    let pages = read_pages(&doc)?.leaves.len() as u32;
+    let leaves = read_pages(&doc)?.leaves;
+    let rotations = leaves
+        .iter()
+        .map(|p| p.rotate.unwrap_or(0).rem_euclid(360))
+        .collect();
     Ok(PdfInfo {
         path: src_path,
-        pages,
+        pages: leaves.len() as u32,
         encrypted: false,
         bytes,
+        rotations,
     })
 }
 
@@ -629,11 +667,9 @@ pub fn pdf_ops(
         return Err("没有要执行的操作".into());
     }
     // 早失败：路径不合法就别白读一遍 PDF
-    safe_output_path(&src, out_path.as_deref())?;
+    safe_output_path(&src, out_path.as_deref(), None)?;
     let mut doc = Document::load(&src).map_err(|e| format!("无法打开 PDF: {e}"))?;
-    if doc.is_encrypted() {
-        return Err("该 PDF 使用 AES 加密，当前不支持编辑".into());
-    }
+    reject_encrypted(&doc)?;
     for op in &ops {
         apply_pdf_op(&mut doc, op)?;
     }
@@ -646,11 +682,63 @@ pub fn pdf_ops(
     save_output(&src, out_path.as_deref(), &buf)
 }
 
+/// 统计第 `page` 页里「用 Tj 算子显示、且文本整串等于 from」的次数。
+///
+/// 与 lopdf 的 `replace_text` 用**同一套**编码解析（页字体 → 字体编码 →
+/// `decode_text`），所以命中数与实际会不会被替换是一致的——不会出现
+/// 「报告替换了 N 处，其实一处没改」。
+fn count_text_hits(doc: &Document, page: u32, from: &str) -> Result<usize, String> {
+    let page_id = doc
+        .page_iter()
+        .nth(page.saturating_sub(1) as usize)
+        .ok_or_else(|| format!("页码 {page} 超出范围"))?;
+    let encodings: BTreeMap<Vec<u8>, Encoding<'_>> = doc
+        .get_page_fonts(page_id)
+        .map_err(|e| format!("读取页字体失败: {e}"))?
+        .into_iter()
+        .map(|(name, font)| font.get_font_encoding(doc).map(|it| (name, it)))
+        .collect::<std::result::Result<BTreeMap<Vec<u8>, Encoding<'_>>, lopdf::Error>>()
+        .map_err(|e| format!("读取字体编码失败: {e}"))?;
+    let data = doc
+        .get_page_content(page_id)
+        .map_err(|e| format!("读取页内容失败: {e}"))?;
+    let content =
+        Content::decode(&data).map_err(|e| format!("解析页内容失败: {e}"))?;
+    let mut current: Option<&Encoding> = None;
+    let mut hits = 0usize;
+    for op in &content.operations {
+        match op.operator.as_ref() {
+            "Tf" => {
+                current = op
+                    .operands
+                    .first()
+                    .and_then(|o| o.as_name().ok())
+                    .and_then(|n| encodings.get(n));
+            }
+            "Tj" => {
+                if let (Some(enc), Some(Object::String(bytes, _))) =
+                    (current, op.operands.first())
+                {
+                    if let Ok(text) = Document::decode_text(enc, bytes) {
+                        if text == from {
+                            hits += 1;
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(hits)
+}
+
 /// PDF 文本层替换。
 ///
 /// **能力有限**（lopdf 0.34 的实现边界，命令名如实体现）：只处理 `Tj`
 /// 算子，要求整串精确相等（不是子串替换），且字体编码解不出来时会跳过
-/// 该处并告警。扫描件（纯图片）没有文本层，本命令无效。
+/// 该处。扫描件（纯图片）没有文本层，本命令无效。
+///
+/// 命中 0 处时**直接报错**而不是静默产出一个内容未变的文件。
 #[tauri::command(async)]
 pub fn pdf_replace_text(
     src_path: String,
@@ -663,26 +751,43 @@ pub fn pdf_replace_text(
     if !src.is_file() {
         return Err(format!("不是文件: {src_path}"));
     }
-    let out = safe_output_path(&src, out_path.as_deref())?;
+    let out = safe_output_path(&src, out_path.as_deref(), None)?;
     let mut doc = Document::load(&src).map_err(|e| format!("无法打开 PDF: {e}"))?;
-    if doc.is_encrypted() {
-        return Err("该 PDF 使用 AES 加密，当前不支持编辑".into());
+    reject_encrypted(&doc)?;
+    let hits = count_text_hits(&doc, page, &from)?;
+    if hits == 0 {
+        return Err(format!(
+            "第 {page} 页没有找到可整串替换的文本「{from}」\
+             （该 PDF 可能没有文本层、文本用 TJ 数组显示，或被拆成多段）"
+        ));
     }
     doc.replace_text(page, &from, &to)
         .map_err(|e| format!("文本替换失败: {e}"))?;
     let mut buf = Vec::new();
     doc.save_to(&mut buf)
         .map_err(|e| format!("写入 PDF 失败: {e}"))?;
-    save_bytes(&out, &buf, None)
+    let mut r = save_bytes(&out, &buf, None)?;
+    r.replaced = Some(hits);
+    Ok(r)
 }
 
 /// 图片转 PDF：每张图一页。
+///
+/// `src_path` 用于**原文件保护**：产物不能是源文件本身（哪怕源是图片、
+/// 产物是 .pdf，路径撞上仍会覆盖）。传 None 表示没有可比对的源文件。
 #[tauri::command(async)]
-pub fn images_to_pdf(sources: Vec<ImageSource>, out_path: String) -> Result<SaveResult, String> {
+pub fn images_to_pdf(
+    sources: Vec<ImageSource>,
+    out_path: String,
+    src_path: Option<String>,
+) -> Result<SaveResult, String> {
     if sources.is_empty() {
         return Err("没有可转换的图片".into());
     }
-    let out = PathBuf::from(&out_path);
+    let out = match src_path.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(src) => safe_output_path(Path::new(src), Some(&out_path), None)?,
+        None => PathBuf::from(&out_path),
+    };
     let mut doc = Document::with_version("1.5");
     let pages_id = doc.new_object_id();
     let mut page_ids = Vec::with_capacity(sources.len());
@@ -725,9 +830,15 @@ pub fn write_text(
     encoding: String,
 ) -> Result<SaveResult, String> {
     let src = PathBuf::from(&src_path);
-    let (enc, _fell_back) = resolve_encoding(&encoding);
+    let (enc, fell_back) = resolve_encoding(&encoding);
+    if fell_back {
+        // 静默回退 UTF-8 会让用户以为写的是 GBK，实际是 UTF-8。
+        return Err(format!(
+            "未知编码「{encoding}」，已支持：utf-8 / utf-16le / utf-16be / gbk"
+        ));
+    }
     let bytes = encode_text(&text, enc)?;
-    let out = safe_output_path(&src, out_path.as_deref())?;
+    let out = safe_output_path(&src, out_path.as_deref(), None)?;
     save_bytes(&out, &bytes, Some(enc.name().to_string()))
 }
 
@@ -740,22 +851,19 @@ mod tests {
     #[test]
     fn path_guard_rejects_source_keeps_other() {
         let src = PathBuf::from(r"C:\pics\cat.pdf");
-        assert!(safe_output_path(&src, Some(r"C:\pics\cat.pdf"))
+        assert!(safe_output_path(&src, Some(r"C:\pics\cat.pdf"), None)
             .unwrap_err()
             .contains("不能与原文件相同"));
         // 大小写不同的同一路径也要拒（Windows 不敏感）
-        assert!(safe_output_path(&src, Some(r"C:\Pics\CAT.PDF"))
+        assert!(safe_output_path(&src, Some(r"C:\Pics\CAT.PDF"), None)
             .unwrap_err()
             .contains("不能与原文件相同"));
-        let out = safe_output_path(&src, Some(r"C:\pics\cat.edited.pdf")).unwrap();
+        let out = safe_output_path(&src, Some(r"C:\pics\cat.edited.pdf"), None).unwrap();
         assert_eq!(out.file_name().unwrap().to_string_lossy(), "cat.edited.pdf");
     }
 
-    #[test]
-    fn default_output_name_inserts_edited() {
-        let p = default_output_path(Path::new(r"C:\pics\cat.pdf"));
-        assert_eq!(p.file_name().unwrap().to_string_lossy(), "cat.edited.pdf");
-    }
+    // 路径守卫的测试住在 `paths.rs`（图片 / PDF / 文本共用一份实现，
+    // 硬链接判据的测试也在那里）。
 
     #[test]
     fn pdf_op_serde_round_trip() {
@@ -891,6 +999,25 @@ mod tests {
             .collect()
     }
 
+    /// 页树根节点的 (Count, Kids 长度)。
+    ///
+    /// 为什么要单独断言：`Count` 错了 lopdf 的 `page_iter()` **照样绿**
+    /// （它只遍历 Kids，从不读 Count）——不单独断言就等于没测。
+    fn count_and_kids(path: &Path) -> (i64, usize) {
+        let doc = Document::load(path).unwrap();
+        let root = doc
+            .catalog()
+            .unwrap()
+            .get(b"Pages")
+            .unwrap()
+            .as_reference()
+            .unwrap();
+        let d = doc.get_dictionary(root).unwrap();
+        let count = d.get(b"Count").unwrap().as_i64().unwrap();
+        let kids = d.get(b"Kids").unwrap().as_array().unwrap().len();
+        (count, kids)
+    }
+
     /// 跑一个 op 并写回，返回产物路径。
     fn run_op(src: &Path, out: &Path, op: PdfOp) {
         let mut doc = Document::load(src).unwrap();
@@ -949,6 +1076,10 @@ mod tests {
             },
         );
         assert_eq!(marks(&dir.join("blank.pdf")), vec![1, 0, 2, 3, 4]);
+        // Count 必须与 Kids 一致（否则读者报「文件损坏」）。
+        let (count, kids) = count_and_kids(&dir.join("blank.pdf"));
+        assert_eq!(count as usize, kids);
+        assert_eq!(kids, 5);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -984,6 +1115,9 @@ mod tests {
         doc.save(&out).unwrap();
         // keep 后是 [4,2]，插空白后是 [4,空白,2]（空白页没有标记 → 0）。
         assert_eq!(marks(&out), vec![4, 0, 2]);
+        let (count, kids) = count_and_kids(&out);
+        assert_eq!(count as usize, kids);
+        assert_eq!(kids, 3);
         // 旋转作用在插页之后的第 3 页 = 原第 2 页。
         let page = Document::load(&out).unwrap().page_iter().nth(2).unwrap();
         let rot = Document::load(&out)
@@ -1045,7 +1179,7 @@ mod tests {
             height: 8,
         };
         let out = dir.join("out.pdf");
-        let res = images_to_pdf(vec![src.clone(), src], out.to_string_lossy().to_string()).unwrap();
+        let res = images_to_pdf(vec![src.clone(), src], out.to_string_lossy().to_string(), None).unwrap();
         assert!(res.bytes > 0);
         assert_eq!(Document::load(&out).unwrap().get_pages().len(), 2);
         let _ = std::fs::remove_dir_all(&dir);

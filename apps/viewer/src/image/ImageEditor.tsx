@@ -99,6 +99,8 @@ export function ImageEditor({
   const [activeText, setActiveText] = useState<number | null>(null);
   /** 拼接用的其它图片（当前图永远是第一张）。 */
   const [montagePaths, setMontagePaths] = useState<string[]>([]);
+  /** 导出 PDF 用的图片列表（当前图永远是第一张）。 */
+  const [pdfPaths, setPdfPaths] = useState<string[]>([]);
   const [format, setFormat] = useState(() => defaultFormat(name));
   const [quality, setQuality] = useState(90);
   const [busy, setBusy] = useState(false);
@@ -409,6 +411,60 @@ export function ImageEditor({
     }
   }, [path, montagePaths, format, quality]);
 
+  // ── 导出 PDF（多张图各占一页）───────────────────────────────
+  const pickPdfImages = useCallback(async () => {
+    try {
+      const picked = await invoke<string[] | null>("image_open_dialog");
+      if (!picked || picked.length === 0) return;
+      setPdfPaths((ps) => [...ps, ...picked]);
+    } catch (e) {
+      setNote(`选择失败：${e instanceof Error ? e.message : String(e)}`);
+    }
+  }, []);
+
+  const doExportPdf = useCallback(async () => {
+    setBusy(true);
+    setNote(null);
+    try {
+      const out = await invoke<string | null>("image_save_dialog", {
+        defaultName: defaultOutputName(name, "pdf"),
+        filters: [["PDF", ["pdf"]]],
+      });
+      if (!out) {
+        setBusy(false);
+        return;
+      }
+      const sources = [];
+      for (const p of [path, ...pdfPaths]) {
+        const r = await source.readBytes(p);
+        if (!r.ok) {
+          setNote(`读取失败：${r.message}`);
+          setBusy(false);
+          return;
+        }
+        const info = await invoke<{ width: number; height: number }>("image_info", {
+          path: p,
+        });
+        sources.push({
+          name: p.split(/[\\/]/).pop() ?? p,
+          dataBase64: bytesToBase64(r.bytes),
+          width: info.width,
+          height: info.height,
+        });
+      }
+      const res = await invoke<{ path: string; bytes: number }>("images_to_pdf", {
+        sources,
+        outPath: out,
+        srcPath: path,
+      });
+      setNote(`已导出 ${res.path}（${Math.round(res.bytes / 1024)} KB）`);
+    } catch (e) {
+      setNote(`导出 PDF 失败：${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }, [path, pdfPaths, name, source]);
+
   const doSaveAs = useCallback(async () => {
     setBusy(true);
     try {
@@ -700,6 +756,36 @@ export function ImageEditor({
               />
             </label>
           </div>
+          <button type="button" className="img-toggle" onClick={() => void pickPdfImages()}>
+            <Images className="icon-sm" /> 加入 PDF 的图片…
+          </button>
+          {pdfPaths.length > 0 && (
+            <>
+              <div className="img-text-list">
+                {pdfPaths.map((p) => (
+                  <div key={p} className="img-text-item is-plain">
+                    <span title={p}>{p.split(/[\\/]/).pop()}</span>
+                    <button
+                      type="button"
+                      className="tb-btn"
+                      onClick={() => setPdfPaths((ps) => ps.filter((x) => x !== p))}
+                      aria-label={`移除 ${p}`}
+                    >
+                      <X className="icon-sm" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <button
+                type="button"
+                className="img-toggle"
+                disabled={busy}
+                onClick={() => void doExportPdf()}
+              >
+                导出 PDF（{pdfPaths.length + 1} 页）
+              </button>
+            </>
+          )}
 
           <div className="sb-head">文字</div>
           <button
@@ -886,7 +972,11 @@ function mimeOf(name: string): string {
  * 整个文件会爆调用栈（几 MB 的图就够炸）。
  */
 async function blobToBase64(blob: Blob): Promise<string> {
-  const bytes = new Uint8Array(await blob.arrayBuffer());
+  return bytesToBase64(new Uint8Array(await blob.arrayBuffer()));
+}
+
+/** Uint8Array → base64（分块，理由同 blobToBase64）。 */
+function bytesToBase64(bytes: Uint8Array): string {
   let bin = "";
   const chunk = 0x8000;
   for (let i = 0; i < bytes.length; i += chunk) {

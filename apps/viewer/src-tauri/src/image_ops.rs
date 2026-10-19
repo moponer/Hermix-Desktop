@@ -20,6 +20,7 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::paths::{safe_output_path, same_file};
 use image::codecs::ico::{IcoEncoder, IcoFrame};
 use image::codecs::jpeg::JpegEncoder;
 use image::imageops::FilterType as SampleFilter;
@@ -235,74 +236,27 @@ pub fn encode(
 // ════════════════════════════════════════════════════════════════════
 //  产物路径：原图保护
 // ════════════════════════════════════════════════════════════════════
+//
+// 守卫实现在 `paths.rs`（与 PDF / 文本侧共用一份）：判据含**文件身份**
+// （volume serial + file index），硬链接也会被拦住。
 
 /// 归一化输出格式名：`jpeg`→`jpg`、`tif`→`tiff`；不认识的一律 None
 /// （None = 不该拿它当编码格式）。
 pub fn normalize_format(s: &str) -> Option<String> {
     let f = s.trim().to_ascii_lowercase();
-    Some(match f.as_str() {
-        "png" => "png",
-        "jpg" | "jpeg" => "jpg",
-        "webp" => "webp",
-        "bmp" => "bmp",
-        "tiff" | "tif" => "tiff",
-        "gif" => "gif",
-        "ico" => "ico",
-        _ => return None,
-    }
-    .to_string())
-}
-
-/// 默认产物名：`<原名>.edited.<扩展名>`（同目录）。
-///
-/// `ext` 是**目标格式**的扩展名——格式转换时必须跟着格式走，否则会出现
-/// 「png 转 webp，产物却叫 .edited.png」这种名实不符的文件。
-pub fn default_output_path(src: &Path, ext: Option<&str>) -> PathBuf {
-    let stem = src.file_stem().map(|s| s.to_string_lossy().to_string());
-    let ext = ext
-        .map(str::to_string)
-        .or_else(|| src.extension().map(|s| s.to_string_lossy().to_string()));
-    let dir = src.parent().unwrap_or_else(|| Path::new(""));
-    let name = match (stem, ext) {
-        (Some(s), Some(e)) => format!("{s}.edited.{e}"),
-        (Some(s), None) => format!("{s}.edited"),
-        _ => "edited".to_string(),
-    };
-    dir.join(name)
-}
-
-/// 同一个文件吗？Windows 上路径大小写不敏感，且 `..` / 相对路径都能绕，
-/// 所以先比规范化绝对路径，再比 canonical（能拿到真实同一文件的判据）。
-fn same_file(a: &Path, b: &Path) -> bool {
-    let norm = |p: &Path| {
-        let abs = if p.is_absolute() {
-            p.to_path_buf()
-        } else {
-            std::env::current_dir()
-                .unwrap_or_else(|_| PathBuf::from("."))
-                .join(p)
-        };
-        abs.to_string_lossy().to_lowercase()
-    };
-    if norm(a) == norm(b) {
-        return true;
-    }
-    match (a.canonicalize(), b.canonicalize()) {
-        (Ok(x), Ok(y)) => x == y,
-        _ => false,
-    }
-}
-
-/// 产物路径守卫：与源文件相同一律拒绝（哪怕前端传了同一个路径）。
-pub fn safe_output_path(src: &Path, requested: Option<&str>, ext: Option<&str>) -> Result<PathBuf, String> {
-    let candidate = match requested.map(str::trim).filter(|s| !s.is_empty()) {
-        Some(p) => PathBuf::from(p),
-        None => default_output_path(src, ext),
-    };
-    if same_file(&candidate, src) {
-        return Err("产物路径不能与原文件相同：原文件只读，请换一个文件名".into());
-    }
-    Ok(candidate)
+    Some(
+        match f.as_str() {
+            "png" => "png",
+            "jpg" | "jpeg" => "jpg",
+            "webp" => "webp",
+            "bmp" => "bmp",
+            "tiff" | "tif" => "tiff",
+            "gif" => "gif",
+            "ico" => "ico",
+            _ => return None,
+        }
+        .to_string(),
+    )
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -755,38 +709,14 @@ mod tests {
     }
 
     #[test]
-    fn default_output_path_inserts_suffix() {
-        let p = default_output_path(Path::new(r"C:\pics\cat.png"), None);
-        assert_eq!(p.file_name().unwrap().to_string_lossy(), "cat.edited.png");
-    }
-
-    #[test]
-    fn default_output_path_follows_target_format() {
-        // png → webp：产物名必须跟着目标格式走，否则名实不符。
-        let p = default_output_path(Path::new(r"C:\pics\cat.png"), Some("webp"));
-        assert_eq!(p.file_name().unwrap().to_string_lossy(), "cat.edited.webp");
-    }
-
-    #[test]
     fn normalize_format_maps_aliases() {
         assert_eq!(normalize_format("JPEG").as_deref(), Some("jpg"));
         assert_eq!(normalize_format("tif").as_deref(), Some("tiff"));
         assert_eq!(normalize_format("exe"), None);
     }
 
-    #[test]
-    fn safe_output_path_rejects_source() {
-        let src = PathBuf::from(r"C:\pics\cat.png");
-        let err = safe_output_path(&src, Some(r"C:\pics\cat.png"), None).unwrap_err();
-        assert!(err.contains("不能与原文件相同"));
-    }
-
-    #[test]
-    fn safe_output_path_rejects_same_file_different_case() {
-        let src = PathBuf::from(r"C:\pics\cat.png");
-        let err = safe_output_path(&src, Some(r"C:\Pics\CAT.PNG"), None).unwrap_err();
-        assert!(err.contains("不能与原文件相同"));
-    }
+    // 路径守卫的测试住在 `paths.rs`（与 PDF / 文本侧共用一份实现，
+    // 硬链接判据的测试也在那里）。
 
     #[test]
     fn crop_clamps_to_image_bounds() {

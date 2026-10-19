@@ -26,12 +26,16 @@ interface PdfInfo {
   pages: number;
   encrypted: boolean;
   bytes: number;
+  /** 每页当前的显示角度（0/90/180/270，含继承来的）。 */
+  rotations: number[];
 }
 
 interface SaveResult {
   path: string;
   bytes: number;
   encodingUsed: string | null;
+  /** 实际替换的处数（仅文本替换有值）。 */
+  replaced?: number | null;
 }
 
 /** 与 Rust `PdfOp` 对应（serde tag = "op"，camelCase 变体名）。 */
@@ -63,6 +67,10 @@ export function PdfPageEditor({
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // ── 文本层替换 ──
+  const [replacePage, setReplacePage] = useState(1);
+  const [replaceFrom, setReplaceFrom] = useState("");
+  const [replaceTo, setReplaceTo] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -75,7 +83,12 @@ export function PdfPageEditor({
           return;
         }
         setPages(
-          Array.from({ length: r.pages }, (_, i) => ({ source: i + 1, rotation: 0 })),
+          Array.from({ length: r.pages }, (_, i) => ({
+            source: i + 1,
+            // 绝对角度（后端写的也是绝对值）：原本就转过 90° 的页，
+            // 再点一次「转 90°」应该是 180° 而不是 90°。
+            rotation: r.rotations?.[i] ?? 0,
+          })),
         );
       })
       .catch((e) => {
@@ -130,7 +143,12 @@ export function PdfPageEditor({
 
   const reset = useCallback(() => {
     if (!info) return;
-    setPages(Array.from({ length: info.pages }, (_, i) => ({ source: i + 1, rotation: 0 })));
+    setPages(
+      Array.from({ length: info.pages }, (_, i) => ({
+        source: i + 1,
+        rotation: info.rotations?.[i] ?? 0,
+      })),
+    );
     setSelected(new Set());
     setNote(null);
   }, [info]);
@@ -218,6 +236,35 @@ export function PdfPageEditor({
     const m = note.match(/已导出 (.+?)（/);
     if (m) await source.revealInExplorer?.(m[1]);
   }, [note, source]);
+
+  /**
+   * 文本层替换：只认 Tj 算子、整串精确相等。
+   * 后端会先统计命中数，0 命中直接报错——不会静默产出一个内容没变的文件。
+   */
+  const doReplaceText = useCallback(async () => {
+    if (!replaceFrom) {
+      setNote("请填写要替换的原文");
+      return;
+    }
+    setBusy(true);
+    setNote(null);
+    try {
+      const r = await invoke<SaveResult>("pdf_replace_text", {
+        srcPath: path,
+        outPath: null,
+        page: replacePage,
+        from: replaceFrom,
+        to: replaceTo,
+      });
+      setNote(
+        `已替换 ${r.replaced ?? 0} 处并导出 ${r.path}（${Math.round(r.bytes / 1024)} KB）`,
+      );
+    } catch (e) {
+      setNote(`替换失败：${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }, [path, replacePage, replaceFrom, replaceTo]);
 
   const summary = useMemo(() => {
     const blanks = pages.filter((p) => p.source === null).length;
@@ -344,6 +391,49 @@ export function PdfPageEditor({
           </div>
           <div className="ed-status">
             导出为新文件，原 PDF 不会被改动。
+          </div>
+
+          <div className="sb-head">文本替换</div>
+          <div className="ed-actions">
+            <label className="ed-field">
+              <span>页码</span>
+              <input
+                type="number"
+                min={1}
+                max={info?.pages ?? 1}
+                value={replacePage}
+                onChange={(e) =>
+                  setReplacePage(Math.max(1, Number(e.target.value) || 1))
+                }
+              />
+            </label>
+            <label className="ed-field">
+              <span>原文</span>
+              <input
+                value={replaceFrom}
+                placeholder="整串匹配，如「旧标题」"
+                onChange={(e) => setReplaceFrom(e.target.value)}
+              />
+            </label>
+            <label className="ed-field">
+              <span>新文</span>
+              <input
+                value={replaceTo}
+                placeholder="留空即删除"
+                onChange={(e) => setReplaceTo(e.target.value)}
+              />
+            </label>
+            <button
+              type="button"
+              className="ed-btn"
+              disabled={busy || !!error || !replaceFrom}
+              onClick={() => void doReplaceText()}
+            >
+              替换并导出
+            </button>
+          </div>
+          <div className="ed-status">
+            只处理文本层里的整串文字（扫描件与 TJ 数组排版会明确报「未找到」）。
           </div>
           {note && (
             <div className="ed-note">
