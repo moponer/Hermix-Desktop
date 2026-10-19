@@ -153,6 +153,21 @@ html, body, #root {
 .icon-sm { width: 14px; height: 14px; }
 .icon-md { width: 18px; height: 18px; }
 
+/* ─── 纯净模式：一条细工具条 + 预览面（无侧栏 / 无资源管理器 / 无 AI） ── */
+.pure-bar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px;
+  background: var(--bg-tabbar);
+  flex: none;
+}
+.pure-name {
+  font-size: 13px; color: var(--text-primary);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-width: 50%;
+}
+/* 纯净模式不显示标签条：只留预览本身 */
+.preview.is-pure .tabbar { display: none; }
+
 /* ─── App 容器：垂直栈 工具条 / breadcrumb / 三栏主区 ───────── */
 .app { display: flex; flex-direction: column; height: 100%; }
 

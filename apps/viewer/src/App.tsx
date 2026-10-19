@@ -9,6 +9,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   ArrowLeft, ArrowRight, ArrowUp, RefreshCw, Search, Eye, EyeOff,
   ChevronRight, FolderOpen, HardDrive, Copy, ExternalLink, Sparkles, X,
@@ -58,6 +59,9 @@ const LAST_PATH_KEY = "hermix.viewer.lastPath";
 const DRIVES_TIMEOUT_MS = 1500;
 /** 栏宽持久化键。 */
 const LAYOUT_KEY = "hermix.viewer.layout";
+/** 视图模式：纯净（只预览）/ 重量（资源管理器 + 预览 + AI + 工具）。 */
+type ViewerMode = "pure" | "heavy";
+const MODE_KEY = "hermix.viewer.mode";
 
 const THEME_LABEL: Record<ThemeMode, string> = {
   system: "跟随系统",
@@ -118,6 +122,16 @@ const LAYOUT_DEFAULT: Layout = { sbW: 200, exRatio: 0.3, aiW: 320 };
 
 function clamp(v: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, v));
+}
+
+/** 上次显式选择的视图模式；从未选过返回 null（此时由启动场景决定）。 */
+function readMode(): ViewerMode | null {
+  try {
+    const v = localStorage.getItem(MODE_KEY);
+    return v === "pure" || v === "heavy" ? v : null;
+  } catch {
+    return null;
+  }
 }
 
 function readLayout(): Layout {
@@ -280,6 +294,9 @@ export function App() {
 
   // —— 栏宽布局（可拖拽；文件列表按比例，窗口变大自动铺满） ——
   const [layout, setLayout] = useState<Layout>(readLayout);
+
+  // —— 视图模式：纯净（只预览）/ 重量（资源管理器 + 预览 + AI + 工具） ——
+  const [mode, setMode] = useState<ViewerMode>("heavy");
   const [showHidden, setShowHidden] = useState(false);
   const [searchQ, setSearchQ] = useState("");
   const [searching, setSearching] = useState(false);
@@ -317,9 +334,25 @@ export function App() {
 
   // 启动参数 / 单实例投递（与旧实现一致）
   useEffect(() => {
-    void invoke<string[]>("viewer_take_pending").then((paths) =>
-      paths.forEach((p) => openPath(p)),
-    );
+    void invoke<string[]>("viewer_take_pending").then((paths) => {
+      // 启动场景决定初始模式：被文件关联唤起 → 纯净模式（"双击就看"，
+      // 不带侧栏与 AI）；独立启动 → 重量模式（资源管理器）。
+      // 用户显式切过的模式优先——显式选择永远压过默认推断。
+      setMode(readMode() ?? (paths.length > 0 ? "pure" : "heavy"));
+      const load = async () => {
+        for (const p of paths) {
+          const st = await viewerFileSource.fs?.stat(p);
+          if (st?.isDir) {
+            // 目录必须靠资源管理器看 → 切重量模式
+            setMode("heavy");
+            navigate(p, false);
+          } else {
+            openPath(p);
+          }
+        }
+      };
+      void load();
+    });
     import("@tauri-apps/api/event").then(({ listen }) =>
       listen<string>("viewer-open-file", (e) => openPath(e.payload)).then((u) => u),
     );
@@ -402,6 +435,16 @@ export function App() {
   }, []);
   const onAiDelta = useCallback((dx: number) => {
     setLayout((l) => ({ ...l, aiW: clamp(l.aiW - dx, 240, 560) }));
+  }, []);
+
+  /** 切换视图模式并持久化（显式选择压过启动场景推断）。 */
+  const switchMode = useCallback((m: ViewerMode) => {
+    setMode(m);
+    try {
+      localStorage.setItem(MODE_KEY, m);
+    } catch {
+      /* 持久化失败仅影响下次启动，本次会话内仍可用 */
+    }
   }, []);
 
   const layoutVars = useMemo(
@@ -713,6 +756,7 @@ export function App() {
       onDragLeave={() => setDragOver(false)}
       onDrop={onDrop}
     >
+      {mode === "heavy" && (
       <header className="toolbar">
         <button className="tb-btn" onClick={back} disabled={backStack.length === 0} title="后退">
           <ArrowLeft />
@@ -759,7 +803,9 @@ export function App() {
           {themeMode === "system" ? <Monitor /> : themeMode === "light" ? <Sun /> : <Moon />}
         </button>
       </header>
+      )}
 
+      {mode === "heavy" && (
       <nav className="breadcrumb-bar">
         {breadcrumbs.map((b, i) => (
           <span key={i} className="bc-segment">
@@ -791,8 +837,54 @@ export function App() {
           </form>
         )}
       </nav>
+      )}
+
+      {mode === "pure" && (
+        <header className="pure-bar">
+          {active ? (
+            <>
+              <FileTypeIcon name={active.name} size={16} />
+              <span className="pure-name" title={active.path}>
+                {active.name}
+              </span>
+            </>
+          ) : (
+            <span className="pure-name">未打开文件</span>
+          )}
+          <div className="toolbar-spacer" />
+          <button
+            className="tb-btn"
+            disabled={!active}
+            onClick={() => {
+              if (active) void viewerFileSource.openWithSystem?.(active.path);
+            }}
+            title="用系统默认程序打开"
+          >
+            <ExternalLink />
+            系统打开
+          </button>
+          <button
+            className="tb-btn"
+            onClick={() => switchMode("heavy")}
+            title="切到重量模式（资源管理器 + AI 协助）"
+          >
+            <HardDrive />
+            重量模式
+          </button>
+          <button
+            className="tb-btn"
+            onClick={() => void getCurrentWindow().close()}
+            title="关闭查看器"
+          >
+            <X />
+            关闭
+          </button>
+        </header>
+      )}
 
       <div className="body-row">
+        {mode === "heavy" && (
+        <>
         <aside className="sidebar">
           {bookmarks.length > 0 && (
             <>
@@ -912,8 +1004,10 @@ export function App() {
         </section>
 
         <Resizer onDelta={onExDelta} label="调整文件列表宽度" />
+        </>
+        )}
 
-        <section className="preview">
+        <section className={`preview ${mode === "pure" ? "is-pure" : ""}`}>
           <div className="tabbar">
             {tabs.map((t) => (
               <div
@@ -964,7 +1058,7 @@ export function App() {
           </div>
         </section>
 
-        {aiOpen && (
+        {mode === "heavy" && aiOpen && (
           <>
             <Resizer onDelta={onAiDelta} label="调整 AI 栏宽度" />
             <AiSidebar
