@@ -89,22 +89,36 @@ function stopRunningViewer() {
 
 console.log(`[${mode}] 产物目录: ${targetDir}（单 workspace，仓库根 target/）`);
 
-if (mode === "dev") {
-  sh("cargo", ["build", "-p", "hermix-server", "--bin", "hermix"]);
-  const src = path.join(targetDir, "debug", "hermix.exe");
+/**
+ * 编译一个 sidecar 并把 debug 产物同步进 `src-tauri/binaries/`。
+ *
+ * tauri 的 `externalBin` 在 **build.rs 阶段**就要求文件存在（不是打包时），
+ * 所以清单里每加一个 sidecar，dev 链路就得同步一个——漏一个的报错是
+ * `resource path binaries\xxx.exe doesn't exist`，看起来像配置错，其实是
+ * 少了一次拷贝。
+ */
+function syncDevSidecar(pkg, binName) {
+  sh("cargo", ["build", "-p", pkg, "--bin", binName]);
+  const src = path.join(targetDir, "debug", `${binName}.exe`);
   const dst = path.join(
     appDir,
     "src-tauri",
     "binaries",
-    "hermix-x86_64-pc-windows-msvc.exe",
+    `${binName}-x86_64-pc-windows-msvc.exe`,
   );
   if (!existsSync(src)) {
-    console.error(`[dev] ✗ 后端产物缺失: ${src}（cargo build 声称成功，环境异常）`);
+    console.error(`[dev] ✗ 产物缺失: ${src}（cargo build 声称成功，环境异常）`);
     process.exit(1);
   }
   console.log(`[dev] Copying fresh binary to sidecar dir...`);
   copyFileSync(src, dst);
   console.log(`[dev] Sidecar updated: ${dst}`);
+}
+
+if (mode === "dev") {
+  syncDevSidecar("hermix-server", "hermix");
+  // 本地文件索引守护进程（viewer 路径栏模糊搜索 / Alt+F 共用）。
+  syncDevSidecar("hermix-filesearch", "hermix-filesearch");
   buildViewer();
   console.log(`[dev] Starting Tauri dev...`);
   shOptional(npmBin, ["run", "_:sync-shell-runtime"]);
