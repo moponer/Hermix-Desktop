@@ -1,6 +1,28 @@
 # Decision Note: 查看器的「钉住预览」浮窗 —— 可拖动、可置顶、位置记忆
 
-Status: implemented — 2026-10-21 落地：预览工具条与右键菜单可把文件/目录钉成独立只读浮窗，浮窗可置顶、可挪到屏幕八宫格任意位置、位置跨次启动记忆。
+Status: proposed — 2026-10-21 调研完成；**实现已试过但未落地**：窗口能开出来（标题、位置、置顶、尺寸都对），但浮窗里的**网页视图加载不出应用**（整窗空白），定位未果，已从 main 回退（`36bb53d7`）。
+
+## 当前状态（为什么还是 proposed）
+
+2026-10-21 的实现尝试（已回退，见 `6dda2ad4` / `36bb53d7`）做到：
+
+- ✅ 浮窗窗口本身正常：`WebviewWindowBuilder` 建窗成功，标题 =「文件名 · Hermix」，
+  落位到记录的位置与尺寸，置顶生效，主窗口关闭时连带关闭。
+- ❌ **浮窗里的 webview 白屏**：`<iframe>`/页面没渲染出来。已排除的猜测：
+  - URL 里带 query（`index.html?pin=…`）被 Tauri 当成文件名的一部分 → 改成纯
+    `index.html` + 路径走 Rust 侧注册表（label → 路径），仍白屏。
+  - `main.tsx` 在模块顶层调 `getCurrentWebviewWindow()` 抛异常导致整页崩 →
+    改成问 Rust 要角色（`viewer_window_role`），仍白屏。
+  - capability 的 `windows: ["main", "pin-*"]` 通配可能没生效 → 去掉 `windows`
+    让 capability 覆盖所有窗口，仍白屏。
+- 下一步要查的方向：**Tauri v2 在运行期创建的窗口加载 `WebviewUrl::App` 应用
+  资源**这条路（对比桌面端 `browser_panel_open` 用的是 `WebviewUrl::External`
+  加载**外部网址**，不是应用资产 —— 它是走通的）。下一步应先用 `External`
+  指向一个真实 URL 验证「子窗口 webview 能不能正常加载」，再回头处理「加载
+  应用自己的资源」。
+
+回退的原因很直接：**空白窗口是坏体验，比没有这个功能更糟**。调研与设计仍然
+有效（下面三条约束都是实测/查证过的），等加载问题定位清楚再重新落地。
 
 ## Decision
 
