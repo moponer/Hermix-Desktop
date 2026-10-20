@@ -40,6 +40,11 @@
   --space-6: 24px;
   --space-8: 32px;
 
+  /* 工具条控件统一高度：路径框 / 搜索框 / 工具条按钮 / 右侧选项组白面
+     全部 28px。「对齐」不是感觉，是同一套数值——原来搜索框是 24px、
+     字号还小一号，放在同一屏里两个输入框明显不是一套。 */
+  --ctl-h: 28px;
+
   --color-bg-primary: var(--bg-primary);
   --color-bg-secondary: var(--bg-secondary);
   --color-bg-tertiary: var(--bg-tertiary);
@@ -172,15 +177,19 @@ html, body, #root {
 .app { display: flex; flex-direction: column; height: 100%; }
 
 /* ─── 工具条 ─────────────────────────────────────── */
+/* 两行的左右内边距统一 12px：第一行原来是 10px、第二行 12px，
+   于是导航按钮与面包屑差 2px、选项组与搜索框差 2px——两行各自
+   看着齐，合在一起右边框错开。 */
 .toolbar {
   display: flex; align-items: center; gap: 4px;
-  padding: 6px 10px;
+  padding: 6px 12px;
   background: var(--bg-tabbar);
   flex: none;
 }
 .tb-btn {
   border: none; background: transparent; color: var(--text-secondary);
-  padding: 6px 8px; border-radius: 6px; cursor: pointer;
+  padding: 0 8px; height: var(--ctl-h);
+  border-radius: 6px; cursor: pointer;
   display: inline-flex; align-items: center; gap: 4px;
   font-size: 13px;
 }
@@ -192,49 +201,62 @@ html, body, #root {
 
 /* 右上角视图选项组：三个开关/切换控件收在一块抬起的白面上。
    分组是为了让它们看起来是"一组控件"而不是三个漂着的灰线条；
-   白面压在浅灰工具条上，层次靠底色差（不用描边）。 */
+   白面压在浅灰工具条上，层次靠底色差（不用描边）。
+   白面与路径框同高（--ctl-h），内按钮矮 4px 留出内边距——
+   这样"组"和路径框是齐的两个面，而不是一高一矮。 */
 .tb-group {
   display: inline-flex; align-items: center; gap: 2px;
   flex: none;
   background: var(--bg-primary);
   border-radius: 8px;
   padding: 2px;
+  height: var(--ctl-h);
 }
-.tb-group .tb-btn { padding: 5px 9px; font-size: 12px; }
+.tb-group .tb-btn {
+  padding: 0 9px; height: calc(var(--ctl-h) - 4px); font-size: 13px;
+}
 
+/* 路径输入框原来 flex:1 吃满整行（1216px 下 760px 宽），一个空输入框
+   占掉三分之二屏。现在它有界：基准 460px，可压缩不扩张，右侧留白
+   交给视图选项组——左一簇右一簇，中间是干净的底色。 */
 .path-form {
-  display: flex; flex: 1; align-items: center; gap: 4px;
-  margin-left: 6px; min-width: 0;
+  display: flex; flex: 0 1 460px; align-items: center; gap: 4px;
+  margin-left: 6px; min-width: 120px;
 }
 .path-input {
   flex: 1; min-width: 0;
+  height: var(--ctl-h);
   background: var(--bg-primary);
   color: var(--text-primary);
   /* 输入框不描边：层次靠底色差（白底压在浅灰工具条上）。原来漏写
      border，浏览器默认描边整个漏了出来。 */
   border: none;
-  border-radius: 6px; padding: 6px 10px; font-size: 13px;
+  border-radius: 6px; padding: 0 10px; font-size: 13px;
   font-family: var(--font-mono);
 }
-.toolbar-spacer { width: 8px; }
+.toolbar-spacer { flex: 1; }
 
 /* ─── 面包屑 + 搜索 ──────────────────────────────── */
 .breadcrumb-bar {
   display: flex; align-items: center; gap: 4px;
   padding: 6px 12px; background: var(--bg-secondary);
-  flex: none;
+  flex: none; min-width: 0; overflow: hidden;
 }
 .bc-segment {
   display: inline-flex; align-items: center; gap: 2px;
   font-size: 12px; color: var(--text-secondary);
+  min-width: 0;
 }
 .bc-btn {
   border: none; background: transparent;
   color: inherit; cursor: pointer; padding: 2px 6px;
   border-radius: 4px; font-size: 12px;
+  /* 单段过长就截断：路径深了面包屑一行撑开会把搜索框挤出窗口。 */
+  max-width: 180px; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; display: inline-block; vertical-align: middle;
 }
 .bc-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
-.bc-sep { width: 12px; height: 12px; opacity: 0.5; }
+.bc-sep { width: 12px; height: 12px; opacity: 0.5; flex: none; }
 
 .search-form {
   margin-left: auto; flex: none;
@@ -250,8 +272,9 @@ html, body, #root {
   background: var(--bg-primary);
   color: var(--text-primary);
   border: none;
-  border-radius: 6px; padding: 5px 28px 5px 26px;
-  font-size: 12px; width: 220px;
+  height: var(--ctl-h);
+  border-radius: 6px; padding: 0 28px 0 26px;
+  font-size: 13px; width: 240px;
 }
 .search-clear {
   position: absolute; right: 4px;
@@ -459,6 +482,7 @@ html, body, #root {
   display: flex; align-items: stretch;
   background: var(--bg-tabbar); min-height: 32px;
   flex: none; overflow-x: auto;
+  padding: 0 4px;
   /* 标签多到放不下时横向滚动，但不画滚动条：8px 的滚动条会把
      标签条撑成两行高，看着像错位。滚轮/拖拽照常可用。 */
   scrollbar-width: none;
@@ -469,21 +493,30 @@ html, body, #root {
   padding: 0 8px; cursor: pointer;
   color: var(--text-secondary); font-size: 12px;
   user-select: none;
+  /* 标签之间留 4px：挤成一排字看不出哪个是哪个（原来完全无缝）。
+     flex:none 让标签多时横向滚动，而不是被压扁挤成一团。 */
+  flex: none; margin-right: 4px;
+  border-radius: 6px 6px 0 0;
 }
 .tab.active { background: var(--bg-primary); color: var(--text-primary); }
 .tab-icon { width: 14px; height: 14px; flex: none; }
 .tab-title {
   max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+/* 关闭图标平时不显示，只在「正在看的那个标签」上出现：
+   hover / 激活 / 键盘聚焦任一即可见。只用 opacity（保留占位）→
+   切换标签时标题宽度不跳，且按钮仍在 Tab 序列里（键盘可达）。 */
 .tab-close {
   border: none; background: transparent; color: inherit;
   cursor: pointer; padding: 0 4px;
   border-radius: 4px; font-size: 14px;
+  opacity: 0;
+  transition: opacity 0.12s ease-out;
 }
+.tab:hover .tab-close,
+.tab.active .tab-close,
+.tab-close:focus-visible { opacity: 1; }
 .tab-close:hover { color: var(--danger); }
-.tabbar-hint {
-  padding: 8px 12px; font-size: 12px; color: var(--text-muted);
-}
 .tabbar-spacer { flex: 1; }
 .preview-body { flex: 1; min-height: 0; overflow: hidden; display: flex; }
 
@@ -564,7 +597,12 @@ html, body, #root {
   align-items: center; gap: 6px;
   text-align: center; color: var(--text-secondary);
 }
-.empty-icon { font-size: 36px; opacity: 0.5; }
+.empty-icon {
+  /* 原来是一个 📂 emoji：Windows 上渲染成彩色系统文件夹，跟全站
+     线性图标不是一套，还随系统语言变样。换成 lucide 线条图标。 */
+  color: var(--text-muted); opacity: 0.65;
+  display: flex; margin-bottom: 2px;
+}
 .empty-sub { font-size: 12px; color: var(--text-muted); }
 
 .drop-overlay {

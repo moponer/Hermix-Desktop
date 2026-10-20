@@ -11,7 +11,8 @@ import type { CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
-  ArrowLeft, ArrowRight, ArrowUp, RefreshCw, Search, Eye, EyeOff,
+  ArrowLeft, ArrowRight, ArrowUp, RefreshCw, Search, Eye,
+  Funnel, FunnelX, FileSearch,
   ChevronRight, FolderOpen, HardDrive, Copy, ExternalLink, Sparkles, X,
   Monitor, Moon, Star, Sun,
 } from "lucide-react";
@@ -816,7 +817,10 @@ export function App() {
                 : "正在隐藏带「隐藏」属性的文件，点击改为显示"
             }
           >
-            {showHidden ? <Eye size={16} /> : <EyeOff size={16} />}
+            {/* 漏斗而不是眼睛：眼睛是通用「可见性」语义，用户会以为管的是
+                预览的显隐（"那个眼睛是干啥的"）；漏斗说的是「这份列表被
+                筛了没有」，正好是这个开关干的事。 */}
+            {showHidden ? <Funnel size={16} /> : <FunnelX size={16} />}
             隐藏文件
           </button>
           <button
@@ -1049,6 +1053,10 @@ export function App() {
         )}
 
         <section className={`preview ${mode === "pure" ? "is-pure" : ""}`}>
+          {/* 标签条只在有标签时出现：空着的时候留一条灰条 + 一句
+              "单击文件即可预览"，和下面的空状态说的是同一件事（同一屏
+              说两遍）。空状态的文案已经覆盖了"单击"和"拖入"。 */}
+          {tabs.length > 0 && (
           <div className="tabbar">
             {tabs.map((t) => (
               <div
@@ -1071,18 +1079,18 @@ export function App() {
                 </button>
               </div>
             ))}
-            {tabs.length === 0 && (
-              <div className="tabbar-hint">单击文件即可在右侧预览；拖入文件亦可</div>
-            )}
             <div className="tabbar-spacer" />
           </div>
+          )}
           <div className="preview-body">
             {!active ? (
               <div className="empty">
-                <div className="empty-icon">📂</div>
+                <div className="empty-icon">
+                  <FileSearch size={40} strokeWidth={1.5} />
+                </div>
                 <p>在左侧文件列表单击文件即可预览</p>
                 <p className="empty-sub">
-                  支持 Markdown / 文本 / 代码 / 图片 / PDF / Office / HTML
+                  也可直接拖入文件 · 支持 Markdown / 文本 / 代码 / 图片 / PDF / Office / HTML
                 </p>
               </div>
             ) : (
