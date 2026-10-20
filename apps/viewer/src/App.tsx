@@ -14,7 +14,7 @@ import {
   ArrowLeft, ArrowRight, ArrowUp, RefreshCw, Search,
   Funnel, FunnelX, FileSearch,
   ChevronRight, HardDrive, ExternalLink, Sparkles, X,
-  Monitor, Moon, Sun,
+  Monitor, Moon, Sun, Activity, Info, LogOut,
 } from "lucide-react";
 import { FileTypeIcon, FolderTypeIcon } from "@hermix/preview/FileTypeIcon";
 import type { DirEntryLike, DriveRootLike } from "@hermix/preview";
@@ -24,7 +24,7 @@ import { AiSidebar, type PendingSend } from "./AiSidebar";
 import { joinConversationPrompt } from "./aiPrompts";
 import { ContextMenu } from "./ContextMenu";
 import { TitleBar } from "./TitleBar";
-import { SystemPanel } from "./SystemPanel";
+import { AboutDialog, SystemPanel } from "./SystemPanel";
 import type { MenuGroup } from "./MenuBar";
 import { buildMenu, type MenuTarget, type SortKind } from "./contextMenuModel";
 
@@ -426,21 +426,29 @@ export function App() {
   // 启动参数 / 单实例投递（与旧实现一致）
   useEffect(() => {
     void invoke<string[]>("viewer_take_pending").then((paths) => {
-      // 启动场景决定初始模式：被文件关联唤起 → 纯净模式（"双击就看"，
-      // 不带侧栏与 AI）；独立启动 → 重量模式（资源管理器）。
-      // 用户显式切过的模式优先——显式选择永远压过默认推断。
-      setMode(readMode() ?? (paths.length > 0 ? "pure" : "heavy"));
+      // 启动场景决定初始模式：
+      //   - 无路径启动 = 主程序的「文件管理器」入口 → 重量模式（资源管理器）。
+      //     这里**不看**上次显式选择：那个动作的意思是「打开文件管理器」，
+      //     上次预览文件时用的是纯净模式，不该把入口变成一个空预览页。
+      //   - 带路径启动：被文件关联唤起 → 纯净模式（"双击就看"，不带侧栏与 AI）；
+      //     用户显式切过的模式优先——显式选择永远压过默认推断。
+      setMode(paths.length === 0 ? "heavy" : (readMode() ?? "pure"));
       const load = async () => {
         for (const p of paths) await openTarget(p);
       };
       void load();
     });
-    import("@tauri-apps/api/event").then(({ listen }) =>
+    void import("@tauri-apps/api/event").then(async ({ listen }) => {
       // 单实例投递：目录进资源管理器，文件开预览（与启动参数同一条判别）。
-      listen<string>("viewer-open-file", (e) => {
+      await listen<string>("viewer-open-file", (e) => {
         void openTarget(e.payload);
-      }).then((u) => u),
-    );
+      });
+      // 「打开文件管理器」投递（主程序入口，无路径）：没有文件可开——切到
+      // 资源管理器模式（窗口已由 Rust 侧叫到前面）。
+      await listen("viewer-open-explorer", () => {
+        switchMode("heavy");
+      });
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -633,22 +641,42 @@ export function App() {
         id: "file",
         label: "文件",
         items: [
-          { id: "refresh", label: "刷新", shortcut: "F5" },
-          { id: "close-tabs", label: "关闭所有标签" },
+          { id: "refresh", label: "刷新", shortcut: "F5", icon: <RefreshCw size={13} /> },
+          { id: "close-tabs", label: "关闭所有标签", icon: <X size={13} /> },
           "-",
-          { id: "quit", label: "退出", danger: true },
+          { id: "quit", label: "退出", danger: true, icon: <LogOut size={13} /> },
         ],
       },
       {
         id: "view",
         label: "视图",
         items: [
-          { id: "toggle-hidden", label: "显示隐藏文件", checked: showHidden },
-          { id: "toggle-ai", label: "AI 助手栏", checked: aiOpen },
+          {
+            id: "toggle-hidden",
+            label: "显示隐藏文件",
+            checked: showHidden,
+            icon: <Funnel size={13} />,
+          },
+          { id: "toggle-ai", label: "AI 助手栏", checked: aiOpen, icon: <Sparkles size={13} /> },
           "-",
-          { id: "theme-system", label: "主题：跟随系统", checked: themeMode === "system" },
-          { id: "theme-light", label: "主题：浅色", checked: themeMode === "light" },
-          { id: "theme-dark", label: "主题：深色", checked: themeMode === "dark" },
+          {
+            id: "theme-system",
+            label: "主题：跟随系统",
+            checked: themeMode === "system",
+            icon: <Monitor size={13} />,
+          },
+          {
+            id: "theme-light",
+            label: "主题：浅色",
+            checked: themeMode === "light",
+            icon: <Sun size={13} />,
+          },
+          {
+            id: "theme-dark",
+            label: "主题：深色",
+            checked: themeMode === "dark",
+            icon: <Moon size={13} />,
+          },
         ],
       },
       {
@@ -659,13 +687,14 @@ export function App() {
             id: "sys-panel",
             label: "系统资源管理…",
             shortcut: "Ctrl+Shift+Esc",
+            icon: <Activity size={13} />,
           },
         ],
       },
       {
         id: "help",
         label: "帮助",
-        items: [{ id: "about", label: "关于 Hermix 文件查看器" }],
+        items: [{ id: "about", label: "关于 Hermix 文件查看器", icon: <Info size={13} /> }],
       },
     ],
     [showHidden, aiOpen, themeMode],
@@ -1621,28 +1650,7 @@ export function App() {
         onMenuCommand={onMenuCommand}
       />
       {sysOpen && <SystemPanel onClose={() => setSysOpen(false)} />}
-      {aboutOpen && (
-        <div
-          className="syspanel-overlay"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setAboutOpen(false);
-          }}
-        >
-          <div className="about-card" role="dialog" aria-modal="true" aria-label="关于">
-            <h3>Hermix 文件查看器</h3>
-            <p className="dim">
-              独立文件浏览器：资源管理器 + 多格式预览 + AI 右栏 + 系统资源管理。
-            </p>
-            <p className="dim">
-              预览引擎与桌面端共用 @hermix/preview；系统资源管理使用内核快照枚举进程，
-              垃圾清理为规则驱动（白名单 + 二次确认），不会触碰系统关键目录。
-            </p>
-            <button type="button" className="pane-btn" onClick={() => setAboutOpen(false)}>
-              知道了
-            </button>
-          </div>
-        </div>
-      )}
+      {aboutOpen && <AboutDialog onClose={() => setAboutOpen(false)} />}
       {mode === "heavy" && (
       <header className="toolbar">
         <button className="tb-btn" onClick={back} disabled={backStack.length === 0} title="后退" aria-label="后退">

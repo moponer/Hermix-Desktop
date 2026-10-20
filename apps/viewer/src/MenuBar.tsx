@@ -3,18 +3,22 @@
 // 交互照 Windows 菜单的既有习惯，不自创：
 // - 点一下展开；展开状态下鼠标移到别的菜单直接切换（不用再点）；
 // - 点外面 / Esc / 选中一项 → 收起；
-// - 选中项用 ✓ 表示"当前生效"（显示隐藏文件、主题、AI 栏这类开关）。
+// - 选中项用 ✓ 表示"当前生效"（显示隐藏文件、主题、AI 栏这类开关）；
+// - 方向键在菜单项之间走，Enter 执行（键盘用户不该被排除在外）。
 //
-// 为什么不复用 ContextMenu：那是"在坐标处弹一次"的浮层（fixed + 手动定
-// 位），菜单栏要的是"挂在按钮下方、随窗口移动、有 hover 切换"，用同一套
-// 逻辑反而要加一堆模式开关。
+// 弹出层方向：靠窗口右缘的菜单（工具 / 帮助）如果仍按 `left:0` 展开，
+// 会有一半跑到窗口外面——实测"菜单太长看不到右边"。所以打开后先量一下
+// 宽度，越界就改成右对齐（与 ContextMenu 的翻转同思路）。
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import { Check } from "lucide-react";
 
 export interface MenuItem {
   id: string;
   label: string;
+  /** 行首图标（与文字同为 14px，保持视觉重量一致）。 */
+  icon?: ReactNode;
   /** 右侧快捷键提示（纯展示，键位绑定在 App 里）。 */
   shortcut?: string;
   disabled?: boolean;
@@ -39,15 +43,52 @@ export interface MenuBarProps {
 
 export function MenuBar({ menus, onCommand }: MenuBarProps) {
   const [open, setOpen] = useState<string | null>(null);
+  const [flip, setFlip] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(-1);
   const rootRef = useRef<HTMLDivElement>(null);
+  const popRef = useRef<HTMLDivElement>(null);
+
+  // 展开后测量：右边界越界就翻到右对齐。窗口大小变了也要重测。
+  useLayoutEffect(() => {
+    if (!open || !popRef.current) {
+      setFlip(false);
+      return;
+    }
+    const measure = () => {
+      const rect = popRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      setFlip(rect.right > window.innerWidth - 6);
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [open]);
 
   useEffect(() => {
-    if (!open) return;
-    const onPointerDown = (e: PointerEvent) => {
-      if (!rootRef.current?.contains(e.target as Node)) setOpen(null);
+    if (!open) {
+      setActiveIndex(-1);
+      return;
+    }
+    const onPointerDown = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(null);
     };
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(null);
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpen(null);
+        return;
+      }
+      if (!popRef.current) return;
+      const buttons = Array.from(
+        popRef.current.querySelectorAll<HTMLButtonElement>("button.menubar-item:not(:disabled)"),
+      );
+      if (buttons.length === 0) return;
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        const step = event.key === "ArrowDown" ? 1 : -1;
+        const next = (activeIndex + step + buttons.length) % buttons.length;
+        setActiveIndex(next);
+        buttons[next]?.focus();
+      }
     };
     document.addEventListener("pointerdown", onPointerDown, true);
     document.addEventListener("keydown", onKeyDown, true);
@@ -55,7 +96,16 @@ export function MenuBar({ menus, onCommand }: MenuBarProps) {
       document.removeEventListener("pointerdown", onPointerDown, true);
       document.removeEventListener("keydown", onKeyDown, true);
     };
-  }, [open]);
+  }, [open, activeIndex]);
+
+  const run = useCallback(
+    (item: MenuItem) => {
+      if (item.disabled) return;
+      setOpen(null);
+      onCommand(item.id);
+    },
+    [onCommand],
+  );
 
   return (
     <div className="menubar" role="menubar" ref={rootRef}>
@@ -78,7 +128,12 @@ export function MenuBar({ menus, onCommand }: MenuBarProps) {
               {menu.label}
             </button>
             {expanded && (
-              <div className="menubar-pop" role="menu" aria-label={menu.label}>
+              <div
+                className={`menubar-pop${flip ? " is-flipped" : ""}`}
+                role="menu"
+                aria-label={menu.label}
+                ref={popRef}
+              >
                 {menu.items.map((entry, index) =>
                   entry === "-" ? (
                     <div className="menubar-sep" key={`sep-${index}`} role="separator" />
@@ -90,18 +145,22 @@ export function MenuBar({ menus, onCommand }: MenuBarProps) {
                       aria-checked={entry.checked ? "true" : "false"}
                       className={`menubar-item${entry.danger ? " is-danger" : ""}`}
                       disabled={entry.disabled}
-                      onClick={() => {
-                        setOpen(null);
-                        onCommand(entry.id);
+                      onFocus={() => {
+                        const buttons = Array.from(
+                          popRef.current?.querySelectorAll<HTMLButtonElement>(
+                            "button.menubar-item:not(:disabled)",
+                          ) ?? [],
+                        );
+                        setActiveIndex(buttons.indexOf(document.activeElement as HTMLButtonElement));
                       }}
+                      onClick={() => run(entry)}
                     >
                       <span className="menubar-check" aria-hidden="true">
                         {entry.checked ? <Check size={12} /> : null}
                       </span>
+                      {entry.icon && <span className="menubar-icon">{entry.icon}</span>}
                       <span className="menubar-label">{entry.label}</span>
-                      {entry.shortcut && (
-                        <span className="menubar-kbd">{entry.shortcut}</span>
-                      )}
+                      {entry.shortcut && <span className="menubar-kbd">{entry.shortcut}</span>}
                     </button>
                   ),
                 )}

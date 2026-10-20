@@ -222,15 +222,32 @@ pub struct CleanResult {
 // 扫描是大目录遍历，清理是 I/O 密集：一律 spawn_blocking，别堵 IPC 线程。
 
 #[tauri::command]
-pub async fn cleanup_scan(drive: Option<String>) -> Result<ScanReport, String> {
-    tauri::async_runtime::spawn_blocking(move || scan(drive))
+pub async fn cleanup_scan(
+    app: tauri::AppHandle,
+    drive: Option<String>,
+) -> Result<ScanReport, String> {
+    use tauri::Emitter;
+    // 进度走 Tauri 事件（`cleanup-progress`）：扫描是分规则串行的，
+    // 每完成一条推一次，前端据此画确定进度条而不是干转圈。
+    let progress: Progress = std::sync::Arc::new(move |payload| {
+        let _ = app.emit("cleanup-progress", payload);
+    });
+    tauri::async_runtime::spawn_blocking(move || scan_with_progress(drive, Some(progress)))
         .await
         .map_err(|error| format!("扫描失败：{error}"))
 }
 
 #[tauri::command]
-pub async fn cleanup_execute(ids: Vec<String>, drive: Option<String>) -> Result<CleanResult, String> {
-    tauri::async_runtime::spawn_blocking(move || clean(&ids, drive))
+pub async fn cleanup_execute(
+    app: tauri::AppHandle,
+    ids: Vec<String>,
+    drive: Option<String>,
+) -> Result<CleanResult, String> {
+    use tauri::Emitter;
+    let progress: Progress = std::sync::Arc::new(move |payload| {
+        let _ = app.emit("cleanup-progress", payload);
+    });
+    tauri::async_runtime::spawn_blocking(move || clean_with_progress(&ids, drive, Some(progress)))
         .await
         .map_err(|error| format!("清理失败：{error}"))
 }
@@ -258,8 +275,16 @@ impl Budget {
     }
 }
 
+/// 进度回调：命令层把它接到 Tauri 事件上，前端据此画进度条。
+/// 手工跑测试时传 `None`，逻辑完全一致。
+pub type Progress = std::sync::Arc<dyn Fn(serde_json::Value) + Send + Sync>;
+
 /// 扫描：按盘符过滤（`None` = 全部盘），返回每个清理项的体积与文件数。
 pub fn scan(drive: Option<String>) -> ScanReport {
+    scan_with_progress(drive, None)
+}
+
+pub fn scan_with_progress(drive: Option<String>, progress: Option<Progress>) -> ScanReport {
     let started = Instant::now();
     let mut items = Vec::with_capacity(RULES.len());
     let mut total_bytes = 0u64;
@@ -287,6 +312,17 @@ pub fn scan(drive: Option<String>) -> ScanReport {
                     .unwrap_or_else(|| vec![r"$RECYCLE.BIN".to_string()]),
                 available: true,
             });
+            if let Some(progress) = &progress {
+                progress(serde_json::json!({
+                    "phase": "scan",
+                    "ruleId": rule.id,
+                    "title": rule.title,
+                    "bytes": total_bytes,
+                    "files": total_files,
+                    "done": items.len(),
+                    "total": RULES.len(),
+                }));
+            }
             continue;
         }
 
@@ -301,6 +337,17 @@ pub fn scan(drive: Option<String>) -> ScanReport {
         // 预算耗尽后停止枚举：后面的规则如实报 0，不当成"没有垃圾"。
         total_bytes += bytes;
         total_files += files;
+        if let Some(progress) = &progress {
+            progress(serde_json::json!({
+                "phase": "scan",
+                "ruleId": rule.id,
+                "title": rule.title,
+                "bytes": total_bytes,
+                "files": total_files,
+                "done": items.len() + 1,
+                "total": RULES.len(),
+            }));
+        }
         items.push(CleanItem {
             id: rule.id.to_string(),
             title: rule.title.to_string(),
@@ -326,6 +373,14 @@ pub fn scan(drive: Option<String>) -> ScanReport {
 
 /// 清理：**重新展开规则**再删——前端的路径一律不信。
 pub fn clean(ids: &[String], drive: Option<String>) -> CleanResult {
+    clean_with_progress(ids, drive, None)
+}
+
+pub fn clean_with_progress(
+    ids: &[String],
+    drive: Option<String>,
+    progress: Option<Progress>,
+) -> CleanResult {
     let mut result = CleanResult {
         freed_bytes: 0,
         deleted: 0,
@@ -334,8 +389,13 @@ pub fn clean(ids: &[String], drive: Option<String>) -> CleanResult {
         messages: Vec::new(),
     };
     let mut budget = Budget::new();
+    let selected: Vec<&CleanRule> = RULES
+        .iter()
+        .filter(|rule| ids.iter().any(|id| id == rule.id))
+        .collect();
+    let total = selected.len().max(1);
 
-    for rule in RULES.iter().filter(|r| ids.iter().any(|id| id == r.id)) {
+    for (index, rule) in selected.into_iter().enumerate() {
         if rule.id == "recycle-bin" {
             match empty_recycle_bin(drive.as_deref()) {
                 Ok(()) => result.messages.push("回收站已清空。".to_string()),
@@ -343,6 +403,17 @@ pub fn clean(ids: &[String], drive: Option<String>) -> CleanResult {
                     result.failed += 1;
                     result.messages.push(error);
                 }
+            }
+            if let Some(progress) = &progress {
+                progress(serde_json::json!({
+                    "phase": "clean",
+                    "ruleId": rule.id,
+                    "title": rule.title,
+                    "done": index + 1,
+                    "total": total,
+                    "deleted": result.deleted,
+                    "freedBytes": result.freed_bytes,
+                }));
             }
             continue;
         }
@@ -354,6 +425,18 @@ pub fn clean(ids: &[String], drive: Option<String>) -> CleanResult {
             // 空目录（只删空的，非空时 remove_dir 自然失败）。
             let (base, _) = split_pattern(root);
             remove_empty_dirs(&base, &mut budget);
+        }
+        if let Some(progress) = &progress {
+            progress(serde_json::json!({
+                "phase": "clean",
+                "ruleId": rule.id,
+                "title": rule.title,
+                "done": index + 1,
+                "total": total,
+                "deleted": result.deleted,
+                "freedBytes": result.freed_bytes,
+                "skipped": result.skipped,
+            }));
         }
     }
 

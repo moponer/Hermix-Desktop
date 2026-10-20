@@ -89,6 +89,12 @@ pub struct SystemOverview {
     pub used_memory_mb: f64,
     pub cpu_count: usize,
     pub process_count: usize,
+    /// 全局 CPU 占用（0–100，相对全部逻辑核心；同样来自两次采样差分）。
+    pub cpu_usage: f32,
+    /// 开机时长（秒），前端显示为"已运行 x 天 y 小时"。
+    pub uptime_secs: u64,
+    pub host_name: String,
+    pub os_version: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -227,6 +233,11 @@ pub fn snapshot() -> ProcessSnapshot {
         used_memory_mb: used,
         cpu_count: system.cpus().len(),
         process_count: rows.len(),
+        cpu_usage: system.global_cpu_usage(),
+        uptime_secs: sysinfo::System::uptime(),
+        // 主机名/系统版本是静态信息，取失败就给空串（UI 不显示即可）。
+        host_name: sysinfo::System::host_name().unwrap_or_default(),
+        os_version: sysinfo::System::long_os_version().unwrap_or_default(),
     };
 
     ProcessSnapshot {

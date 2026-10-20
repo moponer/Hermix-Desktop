@@ -10,7 +10,7 @@
 // 边缘缩放：tauri.conf.json 里 decorations=false 会连 WS_THICKFRAME 一起去掉
 // （窗口就不能拖边缩放了），Rust 侧 setup 时把它加回来了（见 lib.rs）。
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Copy, Eye, Minus, Square, X } from "lucide-react";
@@ -57,23 +57,85 @@ export function TitleBar({ title, subject, subjectTitle, menus, onMenuCommand }:
     };
   }, [win]);
 
-  const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (e.button !== 0) return;
-    if ((e.target as HTMLElement).closest("button")) return;
-    // 拖动时别选中标题文字。
-    e.preventDefault();
+  /**
+   * 双击标题栏 = 最大化 / 还原；按住拖动 = 移动窗口。
+   *
+   * 这两件事**不能同时靠浏览器事件**：startDragging() 走的是系统模态拖拽
+   * 循环，一旦启动，后续点击就被它吞掉——dblclick 事件根本不会派发（第一版
+   * 就是这么写的，真机双击毫无反应）。
+   *
+   * 所以改成自己判：按下时先不拖，记下时间与位置；
+   *   - 400ms 内的第二次按下 → 双击，直接切换最大化（此时还没起拖拽，
+   *     第二下不会被吞）；
+   *   - 指针一动（>4px）→ 判定为拖动，立刻起拖（无延迟）；
+   *   - 按住不动 → 等满 220ms 再起拖（此时仍不是双击）。
+   */
+  const dragRef = useRef<{
+    x: number;
+    y: number;
+    downAt: number;
+    dragging: boolean;
+    timer?: number;
+  } | null>(null);
+
+  const startDrag = useCallback(() => {
+    const st = dragRef.current;
+    if (!st || st.dragging) return;
+    st.dragging = true;
+    if (st.timer) {
+      window.clearTimeout(st.timer);
+      st.timer = undefined;
+    }
     // 失败要静默：拖不动窗口不该把错误甩到界面上（权限缺失之类的
     // 是部署问题，不是用户操作问题）。
     void win.startDragging().catch(() => undefined);
+  }, [win]);
+
+  const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    if ((e.target as HTMLElement).closest("button")) return;
+    const now = Date.now();
+    const st = dragRef.current;
+    if (st && now - st.downAt < 400 && st.downAt > 0) {
+      // 双击：最大化 / 还原。downAt 清零，第三次点击不再判定为双击。
+      st.downAt = 0;
+      if (st.timer) {
+        window.clearTimeout(st.timer);
+        st.timer = undefined;
+      }
+      void win.toggleMaximize();
+      return;
+    }
+    // 拖动时别选中标题文字。
+    e.preventDefault();
+    dragRef.current = { x: e.clientX, y: e.clientY, downAt: now, dragging: false };
+    dragRef.current.timer = window.setTimeout(startDrag, 220);
   };
 
-  const onDoubleClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if ((e.target as HTMLElement).closest("button")) return;
-    void win.toggleMaximize();
+  const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const st = dragRef.current;
+    if (!st || st.dragging) return;
+    if (Math.abs(e.clientX - st.x) > 4 || Math.abs(e.clientY - st.y) > 4) startDrag();
+  };
+
+  const onPointerUp = () => {
+    const st = dragRef.current;
+    if (!st) return;
+    // 没起拖就松手 = 一次点击（不是拖动）：把待起拖的定时器撤掉。
+    // downAt 保留——双击判定看的是「两次按下的间隔」，松手不清。
+    if (!st.dragging && st.timer) {
+      window.clearTimeout(st.timer);
+      st.timer = undefined;
+    }
   };
 
   return (
-    <div className="titlebar" onPointerDown={onPointerDown} onDoubleClick={onDoubleClick}>
+    <div
+      className="titlebar"
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+    >
       <div className="tb-brand">
         <Eye className="tb-mark" aria-hidden="true" />
         <span className="tb-title">{title}</span>
