@@ -811,6 +811,17 @@ html, body, #root {
   cursor: default;
 }
 .img-canvas.is-crop { cursor: crosshair; }
+.img-canvas.is-mosaic { cursor: crosshair; }
+/* 笔刷光标：跟着指针的圆，半透明填充 + 一圈浅色描边（用 box-shadow
+   而不是 border，与全局「不用描边」的约定一致）。 */
+.img-brush-cursor {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--text-primary) 40%, transparent);
+}
 .img-crop-box {
   position: absolute;
   background: var(--bg-accent-soft);
@@ -819,7 +830,8 @@ html, body, #root {
 }
 .img-param {
   display: grid;
-  grid-template-columns: 44px 1fr 44px;
+  /* 首列 64px：「整图马赛克」「笔刷大小」这类标签要放得下 */
+  grid-template-columns: 64px 1fr 44px;
   align-items: center; gap: 8px;
   padding: 5px 12px;
   font-size: 12px;
@@ -894,6 +906,12 @@ html, body, #root {
 .img-text-item.is-plain { cursor: default; }
 .img-status {
   padding: 10px 12px 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+.img-hint {
+  padding: 6px 12px 0;
   font-size: 11px;
   color: var(--text-muted);
   line-height: 1.5;

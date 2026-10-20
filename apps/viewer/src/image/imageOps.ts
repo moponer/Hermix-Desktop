@@ -92,6 +92,138 @@ export function drawTextLayers(
   }
 }
 
+// ════════════════════════════════════════════════════════════════════
+//  马赛克笔（局部打码）
+// ════════════════════════════════════════════════════════════════════
+
+/**
+ * 一笔马赛克涂抹。
+ *
+ * 坐标是**状态空间**（op 链折叠后的画布尺寸，单位＝原图像素）——
+ * 与文字图层同一套约定：预览按 scale 放大绘制，导出按 1:1 绘制，
+ * 两边看到的是同一份结果。
+ */
+export interface MosaicStroke {
+  /** 马赛克格子边长（状态空间像素） */
+  block: number;
+  /** 笔刷半径（状态空间像素） */
+  radius: number;
+  /** 轨迹点（状态空间坐标） */
+  points: { x: number; y: number }[];
+  /** 落笔时的状态画布尺寸：之后若发生裁剪/缩放，按比例映射回去 */
+  refW: number;
+  refH: number;
+}
+
+/**
+ * 把马赛克笔的涂抹叠到画布上（就地修改 canvas）。
+ *
+ * 做法：**整图马赛克算一次当底图**，再用笔刷轨迹做蒙版，只把蒙版覆盖到
+ * 的像素换成底图像素——涂过的地方马赛克，没涂的地方原样保留。
+ *
+ * 为什么用 canvas 合成（destination-in）而不是逐像素 JS：
+ * 整图马赛克只算一次、混合走 GPU，拖动时能保持流畅；
+ * 逐像素会让 1200×800 的画布每帧跑百万次循环。
+ *
+ * @param scale 状态空间 → 画布设备像素的换算系数（预览 <1，导出 =1）
+ * @param stateW/stateH 当前状态画布尺寸（笔画按 ref 尺寸等比映射过来）
+ */
+export function applyMosaicStrokes(
+  canvas: HTMLCanvasElement,
+  strokes: MosaicStroke[],
+  scale: number,
+  stateW: number,
+  stateH: number,
+): void {
+  if (strokes.length === 0) return;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  // 按格子大小分组：同尺寸的笔画共用一份马赛克底图
+  const groups = new Map<number, MosaicStroke[]>();
+  for (const s of strokes) {
+    const key = Math.max(1, Math.round(s.block));
+    const list = groups.get(key);
+    if (list) list.push(s);
+    else groups.set(key, [s]);
+  }
+  for (const [block, list] of groups) {
+    const base = applyMosaic(canvas, Math.max(1, Math.round(block * scale)));
+    for (const s of list) {
+      blendStroke(ctx, canvas, base, s, scale, stateW, stateH);
+    }
+  }
+}
+
+/**
+ * 把一笔涂抹混进画布：取笔刷包围盒那块底图，按笔刷蒙版裁掉未涂区域，再叠回。
+ *
+ * 边缘是**软过渡**（蒙版带抗锯齿 alpha，source-over 混合）——
+ * 硬边会让人一眼看出"贴了块马赛克上去"，软边才像真的涂抹。
+ */
+function blendStroke(
+  ctx: CanvasRenderingContext2D,
+  dst: HTMLCanvasElement,
+  base: HTMLCanvasElement,
+  stroke: MosaicStroke,
+  scale: number,
+  stateW: number,
+  stateH: number,
+): void {
+  const pts = stroke.points;
+  if (pts.length === 0) return;
+  // 落笔之后又改了画布尺寸（裁剪/缩放）→ 笔画等比映射过去
+  const kx = stateW / Math.max(1, stroke.refW);
+  const ky = stateH / Math.max(1, stroke.refH);
+  const r = Math.max(0.5, stroke.radius * Math.min(kx, ky)) * scale;
+
+  const px: number[] = [];
+  const py: number[] = [];
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const p of pts) {
+    const x = p.x * kx * scale;
+    const y = p.y * ky * scale;
+    px.push(x);
+    py.push(y);
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+  }
+  const x0 = Math.max(0, Math.floor(minX - r));
+  const y0 = Math.max(0, Math.floor(minY - r));
+  const x1 = Math.min(dst.width, Math.ceil(maxX + r));
+  const y1 = Math.min(dst.height, Math.ceil(maxY + r));
+  const w = x1 - x0;
+  const h = y1 - y0;
+  if (w <= 0 || h <= 0) return;
+
+  // 笔刷蒙版：圆头折线（lineCap/lineJoin=round）＝一串圆
+  const mask = newCanvas(w, h);
+  const mctx = mask.getContext("2d")!;
+  mctx.strokeStyle = "#fff";
+  mctx.lineWidth = r * 2;
+  mctx.lineCap = "round";
+  mctx.lineJoin = "round";
+  mctx.beginPath();
+  mctx.moveTo(px[0] - x0, py[0] - y0);
+  for (let i = 1; i < px.length; i++) mctx.lineTo(px[i] - x0, py[i] - y0);
+  if (px.length === 1) mctx.lineTo(px[0] - x0 + 0.01, py[0] - y0);
+  mctx.stroke();
+
+  // 底图只取这一块，再按蒙版裁掉没涂到的像素
+  const region = newCanvas(w, h);
+  const rctx = region.getContext("2d")!;
+  rctx.drawImage(base, x0, y0, w, h, 0, 0, w, h);
+  rctx.globalCompositeOperation = "destination-in";
+  rctx.drawImage(mask, 0, 0);
+  rctx.globalCompositeOperation = "source-over";
+
+  ctx.drawImage(region, x0, y0);
+}
+
 /** 像素级 op（改 RGB，不改画布尺寸）。 */
 const PIXEL_OPS = new Set(["grayscale", "brighten", "contrast", "saturate"]);
 

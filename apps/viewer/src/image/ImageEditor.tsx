@@ -19,7 +19,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
-  Crop, FlipHorizontal, FlipVertical, RotateCw, RotateCcw, Undo2, Redo2,
+  Crop, FlipHorizontal, FlipVertical, Paintbrush, RotateCw, RotateCcw, Undo2, Redo2,
   Save, FolderOpen, SlidersHorizontal, Type, Images, X,
 } from "lucide-react";
 import type { FileSource } from "@hermix/preview";
@@ -29,8 +29,10 @@ import {
   stateSize,
   drawTextLayers,
   readTokenColor,
+  applyMosaicStrokes,
   EDITABLE_FORMATS,
   type ImageOp,
+  type MosaicStroke,
   type TextLayer,
 } from "./imageOps";
 
@@ -49,13 +51,24 @@ const CANVAS_MAX_AREA = 268_000_000;
 /** 文字图层 id 计数器（模块级：跨实例唯一）。 */
 let nextTextId = 1;
 
-type Tool = "none" | "crop" | "text";
+type Tool = "none" | "crop" | "text" | "mosaic";
 
 interface Rect {
   x: number;
   y: number;
   w: number;
   h: number;
+}
+
+/**
+ * 撤销栈的一个快照。
+ *
+ * 只装 op 链与马赛克笔画：文字图层历来不进撤销栈（滑杆每改一次就压一条
+ * 历史会把栈撑爆），维持原样不扩大范围。
+ */
+interface EditSnapshot {
+  ops: ImageOp[];
+  strokes: MosaicStroke[];
 }
 
 interface ExportResult {
@@ -90,13 +103,23 @@ export function ImageEditor({
   /** 原图尺寸（权威）：几何换算的基准，**不随预览降采样变化**。 */
   const [orig, setOrig] = useState<{ w: number; h: number } | null>(null);
   const [ops, setOps] = useState<ImageOp[]>([]);
-  const [past, setPast] = useState<ImageOp[][]>([]);
-  const [future, setFuture] = useState<ImageOp[][]>([]);
+  const [past, setPast] = useState<EditSnapshot[]>([]);
+  const [future, setFuture] = useState<EditSnapshot[]>([]);
   const [tool, setTool] = useState<Tool>("none");
   const [cropRect, setCropRect] = useState<Rect | null>(null);
   /** 文字图层：独立于 op 链（见 imageOps.ts 的说明）。 */
   const [texts, setTexts] = useState<TextLayer[]>([]);
   const [activeText, setActiveText] = useState<number | null>(null);
+  /** 马赛克笔的已落笔笔画（局部打码，只打码涂过的地方）。 */
+  const [strokes, setStrokes] = useState<MosaicStroke[]>([]);
+  /** 正在画的这一笔：还没进历史栈，抬笔才落定。 */
+  const [liveStroke, setLiveStroke] = useState<MosaicStroke | null>(null);
+  /** 笔刷半径（状态空间像素）。 */
+  const [brushRadius, setBrushRadius] = useState(28);
+  /** 马赛克格子边长（状态空间像素）。 */
+  const [mosaicBlock, setMosaicBlock] = useState(12);
+  /** 笔刷光标位置（画布内 CSS 像素 + 直径）。 */
+  const [brushCursor, setBrushCursor] = useState<{ x: number; y: number; d: number } | null>(null);
   /** 拼接用的其它图片（当前图永远是第一张）。 */
   const [montagePaths, setMontagePaths] = useState<string[]>([]);
   /** 导出 PDF 用的图片列表（当前图永远是第一张）。 */
@@ -179,37 +202,54 @@ export function ImageEditor({
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     ctx.drawImage(out, 0, 0);
+    // 马赛克笔：只把涂过的区域换成马赛克（导出走同一条路径 → 所见即所得）。
+    const allStrokes = liveStroke ? [...strokes, liveStroke] : strokes;
+    if (allStrokes.length > 0) {
+      applyMosaicStrokes(canvas, allStrokes, scale, state.w, state.h);
+    }
     // 文字图层画在 op 结果之上（原图空间 × scale）。
     drawTextLayers(ctx, texts, scale);
-  }, [img, ops, srcW, srcH, texts, scale]);
+  }, [img, ops, srcW, srcH, texts, strokes, liveStroke, scale, state.w, state.h]);
 
   // ── op 变更（带撤销栈）─────────────────────────────────────
   // 注意：不要在 setState 的 updater 里再 setState——updater 必须是纯函数，
   // StrictMode 下会被调用两次，副作用会翻倍。这里用闭包里的 ops 直接算。
   const pushOps = useCallback(
     (next: ImageOp[]) => {
-      setPast((p) => [...p, ops]);
+      setPast((p) => [...p, { ops, strokes }]);
       setFuture([]);
       setOps(next);
     },
-    [ops],
+    [ops, strokes],
+  );
+
+  /** 落笔一笔马赛克（同样进撤销栈，一笔 = 一步）。 */
+  const pushStrokes = useCallback(
+    (next: MosaicStroke[]) => {
+      setPast((p) => [...p, { ops, strokes }]);
+      setFuture([]);
+      setStrokes(next);
+    },
+    [ops, strokes],
   );
 
   const undo = useCallback(() => {
     if (past.length === 0) return;
     const prev = past[past.length - 1];
     setPast(past.slice(0, -1));
-    setFuture([ops, ...future]);
-    setOps(prev);
-  }, [past, future, ops]);
+    setFuture([{ ops, strokes }, ...future]);
+    setOps(prev.ops);
+    setStrokes(prev.strokes);
+  }, [past, future, ops, strokes]);
 
   const redo = useCallback(() => {
     if (future.length === 0) return;
     const [next, ...rest] = future;
-    setPast([...past, ops]);
+    setPast([...past, { ops, strokes }]);
     setFuture(rest);
-    setOps(next);
-  }, [past, future, ops]);
+    setOps(next.ops);
+    setStrokes(next.strokes);
+  }, [past, future, ops, strokes]);
 
   /** 参数类：同类型替换；动作类：追加。 */
   const applyOp = useCallback(
@@ -229,6 +269,8 @@ export function ImageEditor({
     setTool("none");
     setTexts([]);
     setActiveText(null);
+    setStrokes([]);
+    setLiveStroke(null);
   }, [pushOps]);
 
   /** 改一个文字图层的字段。 */
@@ -248,8 +290,44 @@ export function ImageEditor({
     [scale],
   );
 
+  /**
+   * 指针位置 → 状态空间坐标（+ 画布内 CSS 坐标与设备像素比）。
+   *
+   * 三步换算（与裁剪工具同源）：CSS 像素 → 设备像素（×deviceRatio）→
+   * 状态像素（÷scale）。
+   */
+  const pointerToState = useCallback(
+    (e: React.PointerEvent<HTMLCanvasElement>) => {
+      const canvas = e.currentTarget;
+      const rect = canvas.getBoundingClientRect();
+      const cssX = e.clientX - rect.left;
+      const cssY = e.clientY - rect.top;
+      return {
+        x: cssToState(cssX, canvas),
+        y: cssToState(cssY, canvas),
+        cssX,
+        cssY,
+        deviceRatio: rect.width > 0 ? canvas.width / rect.width : 1,
+      };
+    },
+    [cssToState],
+  );
+
   const onPointerDown = useCallback(
     (e: React.PointerEvent<HTMLCanvasElement>) => {
+      if (tool === "mosaic") {
+        // 落笔：起一条新笔画。指针捕获住，拖出画布也继续跟手。
+        const p = pointerToState(e);
+        setLiveStroke({
+          block: mosaicBlock,
+          radius: brushRadius,
+          points: [{ x: p.x, y: p.y }],
+          refW: state.w,
+          refH: state.h,
+        });
+        e.currentTarget.setPointerCapture(e.pointerId);
+        return;
+      }
       if (tool !== "crop") return;
       const rect = e.currentTarget.getBoundingClientRect();
       const x = e.clientX - rect.left;
@@ -257,11 +335,22 @@ export function ImageEditor({
       dragStart.current = { x, y };
       setCropRect({ x, y, w: 0, h: 0 });
     },
-    [tool],
+    [tool, pointerToState, mosaicBlock, brushRadius, state.w, state.h],
   );
 
   const onPointerMove = useCallback(
     (e: React.PointerEvent<HTMLCanvasElement>) => {
+      if (tool === "mosaic") {
+        const p = pointerToState(e);
+        // 笔刷光标：状态像素 → 画布设备像素 → CSS 像素
+        setBrushCursor({
+          x: p.cssX,
+          y: p.cssY,
+          d: (brushRadius * scale) / p.deviceRatio,
+        });
+        setLiveStroke((s) => (s ? { ...s, points: [...s.points, { x: p.x, y: p.y }] } : s));
+        return;
+      }
       if (tool !== "crop" || !dragStart.current) return;
       const rect = e.currentTarget.getBoundingClientRect();
       const x = e.clientX - rect.left;
@@ -275,12 +364,19 @@ export function ImageEditor({
         h: Math.abs(y - sy),
       });
     },
-    [tool],
+    [tool, pointerToState, brushRadius, scale],
   );
 
   const onPointerUp = useCallback(
     (e: React.PointerEvent<HTMLCanvasElement>) => {
       dragStart.current = null;
+      if (tool === "mosaic") {
+        // 抬笔落定：一笔 = 一步撤销
+        const s = liveStroke;
+        setLiveStroke(null);
+        if (s && s.points.length > 0) pushStrokes([...strokes, s]);
+        return;
+      }
       if (tool === "text") {
         // 文字模式：点哪儿放哪儿（左上角锚点）。
         const canvas = e.currentTarget;
@@ -317,7 +413,7 @@ export function ImageEditor({
       setCropRect(null);
       setTool("none");
     },
-    [tool, cropRect, cssToState, ops, pushOps, state.h],
+    [tool, cropRect, cssToState, ops, pushOps, state.h, liveStroke, strokes, pushStrokes],
   );
 
   // ── 导出 ───────────────────────────────────────────────────
@@ -339,18 +435,23 @@ export function ImageEditor({
     const out = renderOps(img, srcW, srcH, ops, Number.MAX_SAFE_INTEGER);
     const ctx = out.getContext("2d");
     if (!ctx) throw new Error("画布不可用");
+    // 马赛克笔在导出时按 1:1 重放（预览是按 scale 缩放画的），
+    // 与预览同一套代码 → 所见即所得。
+    if (strokes.length > 0) applyMosaicStrokes(out, strokes, 1, state.w, state.h);
     drawTextLayers(ctx, texts, 1);
     const blob = await new Promise<Blob | null>((res) => out.toBlob(res, "image/png"));
     if (!blob) throw new Error("浏览器合成失败");
     return blob;
-  }, [img, srcW, srcH, ops, texts, state.w, state.h]);
+  }, [img, srcW, srcH, ops, texts, strokes, state.w, state.h]);
 
   const doExport = useCallback(
     async (outPath: string | null) => {
       setBusy(true);
       setNote(null);
       try {
-        if (texts.length > 0) {
+        // 有文字图层或马赛克笔画时走**浏览器合成**路径：这两样都只有浏览器
+        // 画得对（笔画是路径蒙版，Rust 的 op 链表达不了）。
+        if (texts.length > 0 || strokes.length > 0) {
           const blob = await composeFull();
           const pngBase64 = await blobToBase64(blob);
           const r = await invoke<ExportResult>("image_write_composite", {
@@ -377,7 +478,7 @@ export function ImageEditor({
         setBusy(false);
       }
     },
-    [path, ops, format, quality, texts, composeFull],
+    [path, ops, format, quality, texts, strokes, composeFull],
   );
 
   // ── 拼接 ───────────────────────────────────────────────────
@@ -540,6 +641,18 @@ export function ImageEditor({
         >
           <Type />
         </button>
+        <button
+          type="button"
+          className={`tb-btn ${tool === "mosaic" ? "is-active" : ""}`}
+          onClick={() => {
+            setTool(tool === "mosaic" ? "none" : "mosaic");
+            setBrushCursor(null);
+          }}
+          title="马赛克笔（按住拖动，只打码涂过的区域）"
+          aria-label="马赛克笔"
+        >
+          <Paintbrush />
+        </button>
         <div className="toolbar-spacer" />
         <button type="button" className="tb-btn" onClick={undo} disabled={past.length === 0} title="撤销" aria-label="撤销">
           <Undo2 />
@@ -547,7 +660,14 @@ export function ImageEditor({
         <button type="button" className="tb-btn" onClick={redo} disabled={future.length === 0} title="重做" aria-label="重做">
           <Redo2 />
         </button>
-        <button type="button" className="tb-btn" onClick={reset} disabled={ops.length === 0} title="重置全部修改" aria-label="重置修改">
+        <button
+          type="button"
+          className="tb-btn"
+          onClick={reset}
+          disabled={ops.length === 0 && strokes.length === 0 && texts.length === 0}
+          title="重置全部修改"
+          aria-label="重置修改"
+        >
           <SlidersHorizontal />
         </button>
         <div className="toolbar-spacer" />
@@ -575,11 +695,24 @@ export function ImageEditor({
             <div className="img-canvas-frame">
               <canvas
                 ref={canvasRef}
-                className={`img-canvas ${tool === "crop" ? "is-crop" : ""}`}
+                className={`img-canvas ${tool === "crop" ? "is-crop" : ""} ${
+                  tool === "mosaic" ? "is-mosaic" : ""
+                }`}
                 onPointerDown={onPointerDown}
                 onPointerMove={onPointerMove}
                 onPointerUp={onPointerUp}
               />
+              {tool === "mosaic" && brushCursor && (
+                <div
+                  className="img-brush-cursor"
+                  style={{
+                    left: brushCursor.x,
+                    top: brushCursor.y,
+                    width: brushCursor.d,
+                    height: brushCursor.d,
+                  }}
+                />
+              )}
               {cropRect && (
                 <div
                   className="img-crop-box"
@@ -671,7 +804,7 @@ export function ImageEditor({
             <b>{blur?.sigma ?? 0}</b>
           </label>
           <label className="img-param">
-            <span>马赛克</span>
+            <span>整图马赛克</span>
             <input
               type="range"
               min={0}
@@ -701,6 +834,47 @@ export function ImageEditor({
           >
             转黑白
           </button>
+
+          <div className="sb-head">马赛克笔</div>
+          <label className="img-param">
+            <span>笔刷大小</span>
+            <input
+              type="range"
+              min={4}
+              max={200}
+              value={brushRadius}
+              onChange={(e) => setBrushRadius(Number(e.target.value))}
+            />
+            <b>{brushRadius}</b>
+          </label>
+          <label className="img-param">
+            <span>格子大小</span>
+            <input
+              type="range"
+              min={2}
+              max={64}
+              value={mosaicBlock}
+              onChange={(e) => setMosaicBlock(Number(e.target.value))}
+            />
+            <b>{mosaicBlock}</b>
+          </label>
+          <button
+            type="button"
+            className={`img-toggle ${tool === "mosaic" ? "is-active" : ""}`}
+            onClick={() => {
+              setTool(tool === "mosaic" ? "none" : "mosaic");
+              setBrushCursor(null);
+            }}
+          >
+            <Paintbrush className="icon-sm" />
+            {tool === "mosaic" ? "涂抹中：在画布上按住拖动" : "拿起马赛克笔"}
+          </button>
+          {strokes.length > 0 && (
+            <button type="button" className="img-toggle" onClick={() => pushStrokes([])}>
+              清除全部涂抹（{strokes.length} 笔）
+            </button>
+          )}
+          <div className="img-hint">只打码涂过的区域，没涂的地方原样保留。</div>
 
           <div className="sb-head">尺寸</div>
           <div className="img-param-row">
