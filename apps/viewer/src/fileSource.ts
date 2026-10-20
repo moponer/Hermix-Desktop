@@ -108,7 +108,37 @@ async function readFile(path: string): Promise<
   }
 }
 
-export const viewerFileSource: FileSource = {
+/**
+ * viewer 私有的扩展能力（共享 FileSource 里没有 desktop 用得上的部分）。
+ *
+ * 不塞进 packages/preview 的 FileSource：这些是资源管理器专属动作
+ * （剪贴板里的文件、打开方式探测），desktop 侧用不上，往共享接口里
+ * 加可选方法只会让两边都背着一份用不到的类型。
+ */
+export interface ViewerFileSource extends FileSource {
+  /** 用指定方式打开：default / notepad / code / properties / reveal。 */
+  openWith?(path: string, app: string): Promise<{ ok: boolean; message?: string }>;
+  /** 复制文件/文件夹到剪贴板（CF_HDROP，资源管理器式"复制文件"）。 */
+  copyFiles?(
+    paths: string[],
+  ): Promise<{ ok: boolean; message?: string; count?: number }>;
+  /** 从剪贴板粘贴文件到目录（同名项跳过，不覆盖）。 */
+  pasteFiles?(
+    dir: string,
+  ): Promise<{ ok: boolean; message?: string; copied?: string[]; skipped?: string[] }>;
+  /** 本机可用的"打开方式"（notepad / code…），用于把没装的置灰。 */
+  availableApps?(): Promise<string[]>;
+  /**
+   * 写 / 读剪贴板文本。
+   *
+   * 走 Rust 而不是 navigator.clipboard：WebView2 里读剪贴板要
+   * clipboard-read 权限，而 WebView2 没有权限弹窗——直接失败。
+   */
+  copyText?(text: string): Promise<{ ok: boolean; message?: string }>;
+  pasteText?(): Promise<{ ok: true; text: string } | { ok: false; message: string }>;
+}
+
+export const viewerFileSource: ViewerFileSource = {
   async readText(path: string): Promise<ReadTextResult> {
     const r = await readFile(path);
     return r.ok ? asReadText(r.content, path) : r;
@@ -246,6 +276,68 @@ export const viewerFileSource: FileSource = {
       return { ok: true, ...r };
     } catch (e) {
       return { ok: false, message: String(e instanceof Error ? e.message : e) };
+    }
+  },
+
+  /** 用指定方式打开（右键菜单的「打开方式」）。 */
+  async openWith(path: string, app: string) {
+    try {
+      await invoke("viewer_open_with", { path, app });
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, message: String(e instanceof Error ? e.message : e) };
+    }
+  },
+
+  /** 复制文件/文件夹到剪贴板（CF_HDROP）。 */
+  async copyFiles(paths: string[]) {
+    try {
+      const count = await invoke<number>("viewer_copy_files", { paths });
+      return { ok: true, count };
+    } catch (e) {
+      return { ok: false, message: String(e instanceof Error ? e.message : e) };
+    }
+  },
+
+  /** 从剪贴板粘贴文件到目录（同名项跳过，不覆盖）。 */
+  async pasteFiles(dir: string) {
+    try {
+      const r = await invoke<{ copied: string[]; skipped: string[] }>(
+        "viewer_paste_files",
+        { dir },
+      );
+      return { ok: true, ...r };
+    } catch (e) {
+      return { ok: false, message: String(e instanceof Error ? e.message : e) };
+    }
+  },
+
+  /** 本机可用的「打开方式」。探测失败就当只有系统默认程序。 */
+  async availableApps() {
+    try {
+      return await invoke<string[]>("viewer_available_apps");
+    } catch {
+      return [] as string[];
+    }
+  },
+
+  /** 写剪贴板文本。 */
+  async copyText(text: string) {
+    try {
+      await invoke("viewer_copy_text", { text });
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, message: String(e instanceof Error ? e.message : e) };
+    }
+  },
+
+  /** 读剪贴板文本。 */
+  async pasteText() {
+    try {
+      const text = await invoke<string>("viewer_paste_text");
+      return { ok: true as const, text };
+    } catch (e) {
+      return { ok: false as const, message: String(e instanceof Error ? e.message : e) };
     }
   },
 };

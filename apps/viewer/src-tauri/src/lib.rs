@@ -5,6 +5,7 @@
 //!
 //! 组织：命令在 commands.rs（lib.rs 根定义会与 generate_handler 冲突）。
 
+pub mod clipboard;
 pub mod commands;
 pub mod filesearch;
 pub mod gui;
@@ -149,6 +150,12 @@ pub fn main() {
             commands::viewer_reveal_in_explorer,
             commands::viewer_search_dir,
             commands::viewer_open_with_system,
+            commands::viewer_open_with,
+            commands::viewer_available_apps,
+            commands::viewer_copy_files,
+            commands::viewer_paste_files,
+            commands::viewer_copy_text,
+            commands::viewer_paste_text,
             commands::viewer_run_executable,
             filesearch::viewer_search_global,
             filesearch::viewer_filesearch_status,

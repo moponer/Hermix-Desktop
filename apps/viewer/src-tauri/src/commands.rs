@@ -622,7 +622,10 @@ pub fn viewer_home_dir(app: tauri::AppHandle) -> Option<String> {
 }
 
 /// 在 Windows 资源管理器里高亮选中一个文件（`explorer /select,"path"`）。
-/// 没有原生 API 走这条路径——全靠 Shell 启动 explorer.exe。
+///
+/// 走 ShellExecute 而不是 `Command::new("explorer.exe").spawn()`：后者是
+/// 「程序自己创建子进程」，正是 360 行为监控的误报触发点（见 shell_exec
+/// 的说明）。这里让系统 shell 去开 explorer，语义与资源管理器双击同构。
 #[tauri::command]
 pub fn viewer_reveal_in_explorer(path: String) -> Result<(), String> {
     #[cfg(windows)]
@@ -631,15 +634,81 @@ pub fn viewer_reveal_in_explorer(path: String) -> Result<(), String> {
         if !p.exists() {
             return Err(format!("文件不存在: {path}"));
         }
-        let arg = format!("/select,{}", p.display());
-        std::process::Command::new("explorer.exe")
-            .arg(&arg)
-            .spawn()
-            .map_err(|e| format!("启动资源管理器失败: {e}"))?;
-        Ok(())
+        reveal_in_explorer(&p)
     }
     #[cfg(not(windows))]
     Err("仅支持 Windows（项目边界）".into())
+}
+
+/// shell32 的 PIDL 接口（"在资源管理器中打开并选中"用）。
+///
+/// 为什么自己声明：windows-sys 0.52 没有 `Win32_UI_Shell_Common` 特性，
+/// 而 `ILCreateFromPathW` / `SHOpenFolderAndSelectItems` 这些函数的参数
+/// 类型正好挂在那个缺失的模块下（`Common::ITEMIDLIST`），0.52 里拿不到。
+/// 升级 windows-sys 会波及全仓 0.52 约定的其它调用点（HWND / HANDLE 在
+/// 0.59 之后从 isize 变回指针），为 6 个函数动整个工作区不划算。
+///
+/// ITEMIDLIST 的布局是稳定的：`cb`（字节数）+ 变长记录。
+#[cfg(windows)]
+mod pidl {
+    #[repr(C)]
+    pub struct ItemIdList {
+        pub cb: u16,
+        pub ab_record: [u8; 1],
+    }
+
+    extern "system" {
+        pub fn ILCreateFromPathW(pszpath: *const u16) -> *mut ItemIdList;
+        pub fn ILClone(pidl: *const ItemIdList) -> *mut ItemIdList;
+        pub fn ILRemoveLastID(pidl: *mut ItemIdList) -> i32;
+        pub fn ILFindLastID(pidl: *const ItemIdList) -> *mut ItemIdList;
+        pub fn ILFree(pidl: *mut ItemIdList);
+        pub fn SHOpenFolderAndSelectItems(
+            pidlfolder: *const ItemIdList,
+            cidl: u32,
+            apidl: *const *const ItemIdList,
+            dwflags: u32,
+        ) -> i32;
+    }
+}
+
+/// 在资源管理器里定位并选中一个已存在的路径。
+///
+/// 用 `SHOpenFolderAndSelectItems`（shell32 的官方 API），**不用**
+/// `explorer.exe /select,...`：后者要么自己创建子进程（360 行为监控的
+/// 误报触发点），要么经 ShellExecute 时参数被 shell 吞掉（实测
+/// ShellExecuteEx 返回成功但窗口没开）。
+/// SHOpenFolderAndSelectItems 直接跟已在运行的 explorer.exe 说话，
+/// 既不创建进程，又能真正「打开并选中」。
+#[cfg(windows)]
+fn reveal_in_explorer(p: &Path) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    use pidl::{
+        ILClone, ILCreateFromPathW, ILFindLastID, ILFree, ILRemoveLastID,
+        SHOpenFolderAndSelectItems,
+    };
+
+    let wide: Vec<u16> = p.as_os_str().encode_wide().chain(Some(0)).collect();
+    unsafe {
+        // 整条路径的 PIDL
+        let full = ILCreateFromPathW(wide.as_ptr());
+        if full.is_null() {
+            return Err("无法解析该路径（Shell 拒绝）".into());
+        }
+        // 最后一段 = 要选中的文件；去掉最后一段 = 它所在的文件夹
+        let item = ILFindLastID(full);
+        let folder = ILClone(full);
+        ILRemoveLastID(folder);
+        let item_ptr: *const pidl::ItemIdList = item;
+        let apidl: *const *const pidl::ItemIdList = &item_ptr;
+        let hr = SHOpenFolderAndSelectItems(folder, 1, apidl, 0);
+        ILFree(folder);
+        ILFree(full);
+        if hr < 0 {
+            return Err(format!("打开资源管理器失败（HRESULT {hr:#x}）"));
+        }
+    }
+    Ok(())
 }
 
 /// 在目录下做文件名子串搜索（深度 1，不递归到子目录——避免大目录爆栈）。
@@ -699,20 +768,48 @@ pub fn viewer_search_dir(
 /// 免得程序读不到同目录的配置文件。
 #[cfg(windows)]
 fn shell_open(target: &Path, working_dir: Option<&Path>) -> Result<(), String> {
+    shell_exec(Some("open"), target, None, working_dir)
+}
+
+/// 通用 ShellExecuteEx 包装：动词（open / properties / …）+ 目标 + 参数。
+///
+/// 所有「viewer 让系统去做点什么」的动作都走这里——**绝不能**改回
+/// `Command::new(..).spawn()`（360 误报，2026-10-20 教训）。
+#[cfg(windows)]
+fn shell_exec(
+    verb: Option<&str>,
+    file: &Path,
+    params: Option<&str>,
+    working_dir: Option<&Path>,
+) -> Result<(), String> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::UI::Shell::{ShellExecuteExW, SHELLEXECUTEINFOW};
     use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
-    let target_w: Vec<u16> = target.as_os_str().encode_wide().chain(Some(0)).collect();
-    let verb_w: Vec<u16> = "open\0".encode_utf16().collect();
+    let target_w: Vec<u16> = file.as_os_str().encode_wide().chain(Some(0)).collect();
+    let verb_w: Vec<u16> = verb
+        .map(|v| v.encode_utf16().chain(Some(0)).collect())
+        .unwrap_or_default();
+    let params_w: Vec<u16> = params
+        .map(|v| v.encode_utf16().chain(Some(0)).collect())
+        .unwrap_or_default();
     let dir_w: Vec<u16> = working_dir
         .map(|d| d.as_os_str().encode_wide().chain(Some(0)).collect())
         .unwrap_or_default();
 
     let mut sei: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
     sei.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
-    sei.lpVerb = verb_w.as_ptr();
+    sei.lpVerb = if verb_w.is_empty() {
+        std::ptr::null()
+    } else {
+        verb_w.as_ptr()
+    };
     sei.lpFile = target_w.as_ptr();
+    sei.lpParameters = if params_w.is_empty() {
+        std::ptr::null()
+    } else {
+        params_w.as_ptr()
+    };
     sei.lpDirectory = if dir_w.is_empty() {
         std::ptr::null()
     } else {
@@ -725,6 +822,162 @@ fn shell_open(target: &Path, working_dir: Option<&Path>) -> Result<(), String> {
         return Err(format!("系统无法打开该目标（ShellExecute 返回 {ok}）"));
     }
     Ok(())
+}
+
+/// `%SystemRoot%\System32` 下的系统可执行文件（notepad / explorer）。
+#[cfg(windows)]
+fn system_exe(name: &str) -> Option<PathBuf> {
+    let root = std::env::var_os("SystemRoot")?;
+    let p = PathBuf::from(root).join("System32").join(name);
+    if p.exists() {
+        Some(p)
+    } else {
+        None
+    }
+}
+
+/// 在 PATH 里找可执行文件（用于「用 VS Code 打开」）。
+#[cfg(windows)]
+fn find_in_path(name: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path) {
+        let cand = dir.join(name);
+        if cand.is_file() {
+            return Some(cand);
+        }
+    }
+    None
+}
+
+/// 用指定方式打开目标。`app` 取值：
+///   - `default`    系统默认程序（等价双击）
+///   - `notepad`    记事本
+///   - `code`       VS Code（code.exe 不在 PATH 时直接报错，不静默失败）
+///   - `properties` Windows 属性对话框
+///   - `reveal`     在资源管理器中定位
+#[tauri::command]
+pub fn viewer_open_with(path: String, app: String) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let p = validate_path(&path)?;
+        match app.as_str() {
+            "default" => shell_open(&p, p.parent()),
+            "notepad" => {
+                let np = system_exe("notepad.exe").ok_or("找不到系统记事本（notepad.exe）")?;
+                let params = format!("\"{}\"", p.display());
+                shell_exec(Some("open"), &np, Some(&params), p.parent())
+            }
+            "code" => {
+                let exe = find_in_path("code.exe").ok_or("未找到 VS Code（code.exe 不在 PATH 中）")?;
+                let params = format!("\"{}\"", p.display());
+                shell_exec(Some("open"), &exe, Some(&params), p.parent())
+            }
+            "properties" => shell_exec(Some("properties"), &p, None, None),
+            "reveal" => reveal_in_explorer(&p),
+            other => Err(format!("不支持的打开方式: {other}")),
+        }
+    }
+    #[cfg(not(windows))]
+    Err("仅支持 Windows（项目边界）".into())
+}
+
+/// 探测本机可用的「打开方式」——右键菜单据此把没装的置灰，
+/// 而不是给一个点了才报错的假按钮。
+#[tauri::command]
+pub fn viewer_available_apps() -> Vec<String> {
+    #[cfg(windows)]
+    {
+        let mut apps: Vec<String> = Vec::new();
+        if system_exe("notepad.exe").is_some() {
+            apps.push("notepad".into());
+        }
+        if find_in_path("code.exe").is_some() {
+            apps.push("code".into());
+        }
+        apps
+    }
+    #[cfg(not(windows))]
+    Vec::new()
+}
+
+/// 写文本到剪贴板（路径复制 / 复制选中文本）。
+#[tauri::command]
+pub fn viewer_copy_text(text: String) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        crate::clipboard::write_text(&text)
+    }
+    #[cfg(not(windows))]
+    Err("仅支持 Windows（项目边界）".into())
+}
+
+/// 读剪贴板文本（路径栏「粘贴」）。
+#[tauri::command]
+pub fn viewer_paste_text() -> Result<String, String> {
+    #[cfg(windows)]
+    {
+        crate::clipboard::read_text()
+    }
+    #[cfg(not(windows))]
+    Err("仅支持 Windows（项目边界）".into())
+}
+
+/// 复制文件/文件夹到剪贴板（CF_HDROP），返回条目数。
+///
+/// 与浏览器 Clipboard API 无关：那个 API 写不了「文件列表」。
+#[tauri::command]
+pub fn viewer_copy_files(paths: Vec<String>) -> Result<usize, String> {
+    #[cfg(windows)]
+    {
+        crate::clipboard::copy_to_clipboard(&paths)
+    }
+    #[cfg(not(windows))]
+    Err("仅支持 Windows（项目边界）".into())
+}
+
+/// 从剪贴板粘贴文件到目标目录。已存在的同名项**跳过**（不覆盖）。
+#[tauri::command]
+pub fn viewer_paste_files(dir: String) -> Result<PasteResult, String> {
+    #[cfg(windows)]
+    {
+        let target = validate_path(&dir)?;
+        if !target.is_dir() {
+            return Err(format!("不是目录: {dir}"));
+        }
+        let items = crate::clipboard::paste_from_clipboard()?;
+        if items.is_empty() {
+            return Err("剪贴板里没有文件".into());
+        }
+        let mut copied: Vec<String> = Vec::new();
+        let mut skipped: Vec<String> = Vec::new();
+        for src in items {
+            let name = src
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            if name.is_empty() {
+                continue;
+            }
+            let dst = target.join(&name);
+            if dst.exists() {
+                skipped.push(name);
+                continue;
+            }
+            crate::clipboard::copy_recursive(&src, &dst)?;
+            copied.push(name);
+        }
+        Ok(PasteResult { copied, skipped })
+    }
+    #[cfg(not(windows))]
+    Err("仅支持 Windows（项目边界）".into())
+}
+
+/// 粘贴结果：复制成功的与因同名被跳过的。
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct PasteResult {
+    pub copied: Vec<String>,
+    pub skipped: Vec<String>,
 }
 
 /// 用系统默认程序打开。

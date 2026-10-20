@@ -9,12 +9,11 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
-  ArrowLeft, ArrowRight, ArrowUp, RefreshCw, Search, Eye,
+  ArrowLeft, ArrowRight, ArrowUp, RefreshCw, Search,
   Funnel, FunnelX, FileSearch,
-  ChevronRight, FolderOpen, HardDrive, Copy, ExternalLink, Sparkles, X,
-  Monitor, Moon, Star, Sun,
+  ChevronRight, HardDrive, ExternalLink, Sparkles, X,
+  Monitor, Moon, Sun,
 } from "lucide-react";
 import { FileTypeIcon, FolderTypeIcon } from "@hermix/preview/FileTypeIcon";
 import type { DirEntryLike, DriveRootLike } from "@hermix/preview";
@@ -22,6 +21,8 @@ import { viewerFileSource } from "./fileSource";
 import { useTheme, type ThemeMode } from "./theme";
 import { AiSidebar, type PendingSend } from "./AiSidebar";
 import { joinConversationPrompt } from "./aiPrompts";
+import { ContextMenu } from "./ContextMenu";
+import { buildMenu, type MenuTarget, type SortKind } from "./contextMenuModel";
 
 // 预览引擎懒加载：PreviewHost → @hermix/preview barrel → satteri 的 3MB
 // WASM + ExcelJS + pdf.js + pptx。静态引入会让整条预览栈进首屏 bundle，
@@ -34,12 +35,6 @@ interface Tab {
   id: number;
   path: string;
   name: string;
-}
-
-interface ContextMenu {
-  x: number;
-  y: number;
-  entry: DirEntryLike;
 }
 
 interface Bookmark {
@@ -61,6 +56,8 @@ const LAST_PATH_KEY = "hermix.viewer.lastPath";
 const DRIVES_TIMEOUT_MS = 1500;
 /** 栏宽持久化键。 */
 const LAYOUT_KEY = "hermix.viewer.layout";
+/** 列表排序方式持久化键（右键菜单可切）。 */
+const SORT_KEY = "hermix.viewer.sort";
 /** 视图模式：纯净（只预览）/ 重量（资源管理器 + 预览 + AI + 工具）。 */
 type ViewerMode = "pure" | "heavy";
 const MODE_KEY = "hermix.viewer.mode";
@@ -208,6 +205,47 @@ function splitPath(p: string): string[] {
   return p.split(/[\\/]/).filter(Boolean);
 }
 
+/**
+ * 从 DOM 元素的 data-ctx 系列属性还原右键落点。
+ *
+ * 组件只负责标属性（data-ctx / data-ctx-path / data-ctx-name /
+ * data-ctx-dir / data-ctx-from），菜单内容由 contextMenuModel 按 kind
+ * 决定——新增一类落点只要加一个 kind，不用改所有组件。
+ */
+function resolveCtxTarget(el: HTMLElement | null): MenuTarget {
+  if (!el) return { kind: "app" };
+  const path = el.dataset.ctxPath ?? "";
+  const name = el.dataset.ctxName ?? "";
+  switch (el.dataset.ctx) {
+    case "entry":
+      return {
+        kind: "entry",
+        path,
+        name,
+        isDir: el.dataset.ctxDir === "1",
+        from: el.dataset.ctxFrom === "tree" || el.dataset.ctxFrom === "bookmark"
+          ? el.dataset.ctxFrom
+          : "list",
+      };
+    case "explorer":
+      return { kind: "explorer" };
+    case "tab":
+      return { kind: "tab", id: Number(el.dataset.ctxId ?? "0"), path, name };
+    case "preview":
+      return { kind: "preview", path, name };
+    case "pathbar":
+      return { kind: "pathbar" };
+    default:
+      break;
+  }
+  // 其它输入框（搜索框、AI 输入框）：给文本编辑菜单——
+  // 拦掉原生右键之后，没有菜单的话右键就没法粘贴了。
+  if (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable) {
+    return { kind: "field" };
+  }
+  return { kind: "app" };
+}
+
 function fmtSize(n: number): string {
   if (!n) return "";
   if (n < 1024) return `${n} B`;
@@ -243,6 +281,11 @@ function TreeRow({
       <div
         className={`sb-row ${currentPath === entry.path ? "is-active" : ""}`}
         style={{ paddingLeft: depth * 12 }}
+        data-ctx="entry"
+        data-ctx-path={entry.path}
+        data-ctx-name={entry.name}
+        data-ctx-dir={entry.isDir ? "1" : "0"}
+        data-ctx-from="tree"
       >
         {entry.isDir && (
           <button
@@ -312,10 +355,21 @@ export function App() {
   const [searchNote, setSearchNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  /** 列表排序方式：name（后端默认）/ size / mtime。 */
+  const [sortBy, setSortBy] = useState<SortKind>(() => {
+    try {
+      const v = localStorage.getItem(SORT_KEY);
+      return v === "size" || v === "mtime" || v === "name" ? v : "name";
+    } catch {
+      return "name";
+    }
+  });
 
   // —— 多 tab + 预览 ——
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeTabId, setActiveTabId] = useState<number | null>(null);
+  /** 当前激活的标签（预览区、标题栏、菜单都要用）。 */
+  const active = tabs.find((t) => t.id === activeTabId) ?? null;
 
   // —— AI 右栏 ——
   const [aiOpen, setAiOpen] = useState(false);
@@ -326,8 +380,23 @@ export function App() {
   const [backStack, setBackStack] = useState<string[]>([]);
   const [forwardStack, setForwardStack] = useState<string[]>([]);
 
-  // —— 右键菜单 ——
-  const [ctxMenu, setCtxMenu] = useState<ContextMenu | null>(null);
+  // —— 右键菜单（全局拦截原生右键，落点由 data-ctx 属性决定） ——
+  const [menu, setMenu] = useState<{
+    x: number;
+    y: number;
+    target: MenuTarget;
+    /** 键盘唤起（detail === 0）——键盘用户要能直接用方向键走菜单。 */
+    viaKeyboard: boolean;
+    /** 输入框里选中的文字（没有选区时为空——菜单据此把「复制选区」置灰）。 */
+    fieldSelection: string;
+  } | null>(null);
+  /** 本机可用的「打开方式」（notepad / code…）——没装的在菜单里置灰。 */
+  const [openApps, setOpenApps] = useState<string[]>([]);
+  /** 一次性轻提示（复制/粘贴/打开的结果反馈）。 */
+  const [notice, setNotice] = useState<{ text: string; kind: "ok" | "err" } | null>(null);
+  const noticeTimer = useRef<number | undefined>(undefined);
+  /** 菜单打开时聚焦着的输入框（文本编辑动作作用在它身上）。 */
+  const fieldRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
 
   // —— 书签（localStorage 持久化） ——
   const [bookmarks, setBookmarks] = useState<Bookmark[]>(readBookmarks);
@@ -336,7 +405,7 @@ export function App() {
   const [tree, setTree] = useState<Record<string, TreeNodeState>>({});
 
   // —— 主题 ——
-  const { resolved: theme, mode: themeMode, cycle: cycleTheme } = useTheme();
+  const { resolved: theme, mode: themeMode, cycle: cycleTheme, set: setTheme } = useTheme();
 
   // —— 拖放 ——
   const [dragOver, setDragOver] = useState(false);
@@ -814,31 +883,301 @@ export function App() {
     [runSearch, searchQ],
   );
 
-  // 右键菜单
-  const onContextMenu = useCallback(
-    (e: React.MouseEvent, entry: DirEntryLike) => {
-      e.preventDefault();
-      setCtxMenu({ x: e.clientX, y: e.clientY, entry });
+  // —— 右键菜单：全局拦截原生右键 + 落点解析 ——
+  //
+  // 为什么在 document 上 capture 阶段统一拦截：WebView2 的原生右键菜单
+  // 是 Chromium 那套（重新加载 / 查看源代码 / 检查），配色与本项目两套
+  // 主题都不搭，而且给不了文件操作菜单。capture 阶段 preventDefault 之后，
+  // 系统菜单对**任何**元素都不会出现——输入框、预览正文、HTML 沙箱都算。
+  //
+  // 落点靠 data-ctx 属性识别：组件只标属性，菜单内容由 contextMenuModel
+  // 按 kind 决定，不必给每个组件挂 onContextMenu（少一层耦合）。
+  const openMenu = useCallback(
+    (
+      x: number,
+      y: number,
+      target: MenuTarget,
+      viaKeyboard = false,
+      fieldEl?: Element | null,
+    ) => {
+      // 记下菜单打开时聚焦着的输入框：菜单一打开就会把焦点抢到第一项上，
+      // 到时候再问 document.activeElement 已经问不到输入框了。右键落点
+      // 本身就是输入框时以它为准（输入框不一定被浏览器聚焦过）。
+      const pick = (e: Element | null | undefined) =>
+        e && (e.tagName === "INPUT" || e.tagName === "TEXTAREA") && "value" in e
+          ? (e as HTMLInputElement | HTMLTextAreaElement)
+          : null;
+      fieldRef.current = pick(fieldEl) ?? pick(document.activeElement);
+      const f = fieldRef.current;
+      const fieldSelection = f
+        ? f.value.slice(f.selectionStart ?? 0, f.selectionEnd ?? 0)
+        : "";
+      setMenu({ x, y, target, viaKeyboard, fieldSelection });
     },
     [],
   );
 
   useEffect(() => {
-    const close = () => setCtxMenu(null);
-    if (ctxMenu) {
-      document.addEventListener("click", close);
-      document.addEventListener("scroll", close, true);
-      return () => {
-        document.removeEventListener("click", close);
-        document.removeEventListener("scroll", close, true);
-      };
-    }
-    return undefined;
-  }, [ctxMenu]);
+    // 长按（触摸）阈值：与 Chromium 的长按判定一致。
+    const LONG_PRESS_MS = 500;
+    let timer: number | undefined;
+    let origin = { x: 0, y: 0 };
+    let lastLongPress = 0;
+    /**
+     * 「刚刚用键盘唤起了菜单」标记。
+     *
+     * Chrome 的 contextmenu 事件，鼠标右键与键盘菜单键都是 detail===0，
+     * 分不出来——只能自己记：按过菜单键（ContextMenu）或 Shift+F10 才算。
+     * 键盘唤起时要自动聚焦第一项（键盘用户直接用方向键走），
+     * 鼠标唤起时不能聚焦（否则第一项顶着焦点环，像被选中）。
+     */
+    let keyboardInvoke = false;
+    const onMenuKey = (e: KeyboardEvent) => {
+      if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) {
+        keyboardInvoke = true;
+      }
+    };
 
-  const copyPath = useCallback((path: string) => {
-    void navigator.clipboard?.writeText(path).catch(() => undefined);
+    /**
+     * 解析右键落点。
+     *
+     * 输入框自己就是落点，优先于向上找 data-ctx：.app 这类祖先也带
+     * data-ctx="app"，靠 closest 会把搜索框 / AI 输入框的右键变成
+     * 「应用菜单」，文本编辑（粘贴 / 复制选区 / 全选）全丢。
+     */
+    const ctxEl = (raw: Element | null) => {
+      const own =
+        raw instanceof HTMLElement &&
+        (raw.tagName === "INPUT" || raw.tagName === "TEXTAREA" || raw.isContentEditable)
+          ? raw
+          : null;
+      return { own, el: own ?? raw?.closest<HTMLElement>("[data-ctx]") ?? null };
+    };
+
+    const onContextMenu = (e: MouseEvent) => {
+      e.preventDefault();
+      // 长按已经开过菜单：Chromium 随后还会补一个 contextmenu 事件，
+      // 不挡就会弹两次（第二份还盖在第一份上）。
+      if (Date.now() - lastLongPress < 800) return;
+      const { own, el } = ctxEl(e.target instanceof Element ? e.target : null);
+      openMenu(e.clientX, e.clientY, resolveCtxTarget(el), keyboardInvoke, own);
+      keyboardInvoke = false;
+    };
+
+    const onPointerDown = (e: PointerEvent) => {
+      // 鼠标走 contextmenu 事件；只有触摸/手写笔才需要自己实现长按。
+      if (e.pointerType === "mouse") return;
+      const { own, el } = ctxEl(e.target instanceof Element ? e.target : null);
+      if (!el) return;
+      origin = { x: e.clientX, y: e.clientY };
+      timer = window.setTimeout(() => {
+        timer = undefined;
+        lastLongPress = Date.now();
+        openMenu(origin.x, origin.y, resolveCtxTarget(el), false, own);
+      }, LONG_PRESS_MS);
+    };
+    const onPointerMove = (e: PointerEvent) => {
+      if (timer === undefined) return;
+      if (Math.abs(e.clientX - origin.x) > 10 || Math.abs(e.clientY - origin.y) > 10) {
+        window.clearTimeout(timer);
+        timer = undefined;
+      }
+    };
+    const onPointerUp = () => {
+      if (timer !== undefined) {
+        window.clearTimeout(timer);
+        timer = undefined;
+      }
+    };
+
+    document.addEventListener("contextmenu", onContextMenu, true);
+    document.addEventListener("pointerdown", onPointerDown, true);
+    document.addEventListener("pointermove", onPointerMove, true);
+    document.addEventListener("pointerup", onPointerUp, true);
+    document.addEventListener("pointercancel", onPointerUp, true);
+    document.addEventListener("keydown", onMenuKey, true);
+    return () => {
+      document.removeEventListener("contextmenu", onContextMenu, true);
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      document.removeEventListener("pointermove", onPointerMove, true);
+      document.removeEventListener("pointerup", onPointerUp, true);
+      document.removeEventListener("pointercancel", onPointerUp, true);
+      document.removeEventListener("keydown", onMenuKey, true);
+    };
+  }, [openMenu]);
+
+  // 菜单开着时滚动页面：菜单是固定定位的，不跟着走——直接关掉。
+  useEffect(() => {
+    if (!menu) return undefined;
+    const close = () => setMenu(null);
+    document.addEventListener("scroll", close, true);
+    return () => document.removeEventListener("scroll", close, true);
+  }, [menu]);
+
+  // 轻提示：动作结果必须看得见——静默成功等于没做。
+  const notify = useCallback((text: string, kind: "ok" | "err" = "ok") => {
+    setNotice({ text, kind });
+    if (noticeTimer.current) window.clearTimeout(noticeTimer.current);
+    noticeTimer.current = window.setTimeout(() => setNotice(null), 2600);
   }, []);
+
+  const copyPath = useCallback(
+    (path: string) => {
+      if (!path) return;
+      void viewerFileSource.copyText?.(path).then((r) => {
+        if (!r) return;
+        if (r.ok) notify("路径已复制");
+        else notify(r.message ?? "复制失败", "err");
+      });
+    },
+    [notify],
+  );
+
+  const copyText = useCallback(
+    (text: string) => {
+      if (!text) return;
+      void viewerFileSource.copyText?.(text).then((r) => {
+        if (!r) return;
+        if (r.ok) notify("已复制选中文本");
+        else notify(r.message ?? "复制失败", "err");
+      });
+    },
+    [notify],
+  );
+
+  const pasteText = useCallback(() => {
+    void viewerFileSource.pasteText?.().then((r) => {
+      if (!r) return;
+      if (!r.ok) {
+        notify(r.message ?? "读不到剪贴板内容", "err");
+        return;
+      }
+      setPathInput(r.text);
+      notify("已粘贴到路径栏");
+    });
+  }, [notify]);
+
+  /** 复制文件/文件夹到剪贴板（CF_HDROP，可直接粘到别的资源管理器窗口）。 */
+  const copyFiles = useCallback(
+    (paths: string[]) => {
+      void viewerFileSource.copyFiles?.(paths).then((r) => {
+        if (!r) return;
+        if (r.ok) notify(`已复制 ${r.count ?? paths.length} 个项目`);
+        else notify(r.message ?? "复制失败", "err");
+      });
+    },
+    [notify],
+  );
+
+  /** 从剪贴板粘贴文件到当前目录（同名项跳过，不覆盖）。 */
+  const pasteFiles = useCallback(
+    (dir: string) => {
+      void viewerFileSource.pasteFiles?.(dir).then((r) => {
+        if (!r) return;
+        if (!r.ok) {
+          notify(r.message ?? "粘贴失败", "err");
+          return;
+        }
+        const copied = r.copied?.length ?? 0;
+        const skipped = r.skipped?.length ?? 0;
+        notify(
+          skipped
+            ? `已粘贴 ${copied} 个，跳过 ${skipped} 个同名项`
+            : `已粘贴 ${copied} 个项目`,
+        );
+        refresh();
+      });
+    },
+    [notify, refresh],
+  );
+
+  /** 用指定程序打开（default / notepad / code / properties）。 */
+  const openWith = useCallback(
+    (path: string, app: string) => {
+      void viewerFileSource.openWith?.(path, app).then((r) => {
+        if (!r) return;
+        if (!r.ok) notify(r.message ?? "打开失败", "err");
+      });
+    },
+    [notify],
+  );
+
+  const showProperties = useCallback(
+    (path: string) => {
+      void viewerFileSource.openWith?.(path, "properties").then((r) => {
+        if (!r) return;
+        if (!r.ok) notify(r.message ?? "打不开属性", "err");
+      });
+    },
+    [notify],
+  );
+
+  const reveal = useCallback(
+    (path: string) => {
+      void viewerFileSource.revealInExplorer?.(path).then((r) => {
+        if (!r) return;
+        if (!r.ok) notify(r.message ?? "无法在资源管理器中定位", "err");
+      });
+    },
+    [notify],
+  );
+
+  /** 把文件交给 AI 右栏（开 tab + 带上引导语）。 */
+  const addToAi = useCallback(
+    (path: string, name: string) => {
+      openPath(path);
+      setAiOpen(true);
+      setAiPending({ text: joinConversationPrompt(name), nonce: ++aiNonceRef.current });
+    },
+    [openPath],
+  );
+
+  /** 输入框的文本编辑动作（作用在菜单打开时聚焦的那个输入框上）。 */
+  const fieldAction = useCallback(
+    (action: "paste" | "copy" | "selectAll") => {
+      const el = fieldRef.current;
+      if (!el) return;
+      if (action === "selectAll") {
+        el.select();
+        return;
+      }
+      if (action === "copy") {
+        const start = el.selectionStart ?? 0;
+        const end = el.selectionEnd ?? 0;
+        const text = el.value.slice(start, end);
+        if (!text) {
+          notify("没有选中文字", "err");
+          return;
+        }
+        copyText(text);
+        return;
+      }
+      void viewerFileSource.pasteText?.().then((r) => {
+        if (!r) return;
+        if (!r.ok) {
+          notify(r.message ?? "读不到剪贴板内容", "err");
+          return;
+        }
+        const start = el.selectionStart ?? el.value.length;
+        const end = el.selectionEnd ?? start;
+        const next = el.value.slice(0, start) + r.text + el.value.slice(end);
+        // React 在元素**实例**上劫持了 value（用它记「上一次的值」来判断
+        // onChange 要不要触发）。直接 el.value = next，React 认为没变化、
+        // onChange 不会触发——必须走原型上的原生 setter 绕过劫持。
+        const setter = Object.getOwnPropertyDescriptor(
+          Object.getPrototypeOf(el),
+          "value",
+        )?.set;
+        if (setter) setter.call(el, next);
+        else el.value = next;
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        const caret = start + r.text.length;
+        el.setSelectionRange(caret, caret);
+        notify("已粘贴");
+      });
+    },
+    [copyText, notify],
+  );
 
   // — 书签 —
   useEffect(() => {
@@ -849,7 +1188,7 @@ export function App() {
     }
   }, [bookmarks]);
 
-  const toggleBookmark = useCallback((entry: DirEntryLike) => {
+  const toggleBookmark = useCallback((entry: Pick<DirEntryLike, "path" | "name" | "isDir">) => {
     setBookmarks((bs) =>
       bs.some((b) => b.path === entry.path)
         ? bs.filter((b) => b.path !== entry.path)
@@ -934,7 +1273,6 @@ export function App() {
     return acc;
   }, [currentPath]);
 
-  const active = tabs.find((t) => t.id === activeTabId) ?? null;
   /**
    * 列表显示什么：**搜索进行中或已出结果** → 搜索结果；否则 → 目录内容。
    *
@@ -944,10 +1282,209 @@ export function App() {
    */
   const visibleEntries = searching || searchScope ? searchResults : entries;
 
+  /**
+   * 排序：后端已按「目录在前 + 名称」排好；按大小/时间排时前端再排一次。
+   *
+   * 目录永远在前（资源管理器惯例），同级内按选定键排。
+   */
+  const sortedEntries = useMemo(() => {
+    if (sortBy === "name") return visibleEntries;
+    const list = [...visibleEntries];
+    list.sort((a, b) => {
+      if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+      if (sortBy === "size") {
+        return (b.size || 0) - (a.size || 0) || a.name.localeCompare(b.name, "zh");
+      }
+      const at = Date.parse(a.mtime ?? "") || 0;
+      const bt = Date.parse(b.mtime ?? "") || 0;
+      return bt - at || a.name.localeCompare(b.name, "zh");
+    });
+    return list;
+  }, [visibleEntries, sortBy]);
+
+  // 排序方式持久化。
+  useEffect(() => {
+    try {
+      localStorage.setItem(SORT_KEY, sortBy);
+    } catch {
+      /* 持久化失败仅影响下次启动，本次会话内仍可用 */
+    }
+  }, [sortBy]);
+
+  // 可用的「打开方式」：探测一次即可（装没装 VS Code 不会中途变）。
+  useEffect(() => {
+    let alive = true;
+    void viewerFileSource.availableApps?.().then((apps) => {
+      if (alive) setOpenApps(apps);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const closeOtherTabs = useCallback((id: number) => {
+    setTabs((ts) => {
+      for (const t of ts) if (t.id !== id) openedRef.current.delete(t.path);
+      const rest = ts.filter((t) => t.id === id);
+      setActiveTabId((cur) => (rest.some((t) => t.id === cur) ? cur : rest[0]?.id ?? null));
+      return rest;
+    });
+  }, []);
+
+  const closeAllTabs = useCallback(() => {
+    setTabs([]);
+    openedRef.current.clear();
+    setActiveTabId(null);
+  }, []);
+
+  /** 菜单要用的状态与动作（一次算好，菜单打开时直接取）。 */
+  const menuContext = useMemo(
+    () => ({
+      currentPath,
+      activeFile: active ? { path: active.path, name: active.name } : null,
+      sortBy,
+      showHidden,
+      mode,
+      themeMode,
+      openApps,
+      isBookmarked: (path: string) => bookmarks.some((b) => b.path === path),
+      tabCount: tabs.length,
+      selection,
+      fieldSelection: menu?.fieldSelection ?? "",
+      openEntry: (path: string, isDir: boolean) => {
+        if (isDir) navigate(path, true);
+        else openPath(path);
+      },
+      openWith,
+      showProperties,
+      reveal,
+      copyPath,
+      copyFiles,
+      pasteFiles,
+      copyText,
+      pasteText,
+      fieldAction,
+      toggleBookmark: (path: string, name: string, isDir: boolean) =>
+        toggleBookmark({ path, name, isDir }),
+      addToAi,
+      refresh,
+      goUp: () => {
+        void up();
+      },
+      closeTab: (id?: number) => {
+        const target = id ?? activeTabId;
+        if (target !== null && target !== undefined) closeTab(target);
+      },
+      closeOtherTabs,
+      closeAllTabs,
+      setSort: (kind: SortKind) => setSortBy(kind),
+      setShowHidden: (visible: boolean) => setShowHidden(visible),
+      setTheme,
+      setMode: (m: ViewerMode) => switchMode(m),
+    }),
+    [
+      active,
+      activeTabId,
+      addToAi,
+      bookmarks,
+      closeAllTabs,
+      closeOtherTabs,
+      closeTab,
+      copyFiles,
+      copyPath,
+      copyText,
+      currentPath,
+      fieldAction,
+      menu?.fieldSelection,
+      mode,
+      navigate,
+      openApps,
+      openPath,
+      openWith,
+      pasteFiles,
+      pasteText,
+      refresh,
+      reveal,
+      selection,
+      setTheme,
+      showHidden,
+      showProperties,
+      sortBy,
+      switchMode,
+      tabs.length,
+      themeMode,
+      toggleBookmark,
+      up,
+    ],
+  );
+
+  /**
+   * 全局快捷键——菜单里写的提示必须真的能按。
+   *
+   * 输入框里让位（Ctrl+V 之类交给输入框自己处理）；F5 例外，刷新在
+   * 任何地方都该生效。
+   */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        if (menu) {
+          setMenu(null);
+          return;
+        }
+        if (searchScope) exitSearch();
+        return;
+      }
+      if (e.key === "F5") {
+        e.preventDefault();
+        refresh();
+        return;
+      }
+      const t = e.target as HTMLElement | null;
+      const inField =
+        !!t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
+      if (inField || menu) return;
+      if (e.altKey && e.key === "ArrowLeft") {
+        e.preventDefault();
+        back();
+      } else if (e.altKey && e.key === "ArrowRight") {
+        e.preventDefault();
+        forward();
+      } else if (e.altKey && e.key === "ArrowUp") {
+        e.preventDefault();
+        void up();
+      } else if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "c") {
+        e.preventDefault();
+        copyPath(currentPath ?? "");
+      } else if (e.ctrlKey && e.key.toLowerCase() === "w") {
+        e.preventDefault();
+        if (activeTabId !== null) closeTab(activeTabId);
+      } else if (e.ctrlKey && e.key.toLowerCase() === "v") {
+        e.preventDefault();
+        if (currentPath) pasteFiles(currentPath);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [
+    activeTabId,
+    back,
+    closeTab,
+    copyPath,
+    currentPath,
+    exitSearch,
+    forward,
+    menu,
+    pasteFiles,
+    refresh,
+    searchScope,
+    up,
+  ]);
+
   return (
     <div
       className="app"
       style={layoutVars}
+      data-ctx="app"
       onDragOver={(e) => {
         e.preventDefault();
         setDragOver(true);
@@ -981,6 +1518,7 @@ export function App() {
             value={pathInput}
             onChange={(e) => setPathInput(e.target.value)}
             placeholder="路径 / 网址 / 搜索…"
+            data-ctx="pathbar"
           />
           <button type="submit" className="tb-btn" title="跳转" aria-label="跳转">→</button>
         </form>
@@ -1108,14 +1646,6 @@ export function App() {
             <HardDrive />
             重量模式
           </button>
-          <button
-            className="tb-btn"
-            onClick={() => void getCurrentWindow().close()}
-            title="关闭查看器"
-          >
-            <X />
-            关闭
-          </button>
         </header>
       )}
 
@@ -1130,6 +1660,11 @@ export function App() {
                 <div
                   key={b.path}
                   className={`sb-row ${currentPath === b.path ? "is-active" : ""}`}
+                  data-ctx="entry"
+                  data-ctx-path={b.path}
+                  data-ctx-name={b.name}
+                  data-ctx-dir={b.isDir ? "1" : "0"}
+                  data-ctx-from="bookmark"
                 >
                   <button
                     type="button"
@@ -1184,7 +1719,7 @@ export function App() {
 
         <Resizer onDelta={onSbDelta} label="调整侧栏宽度" />
 
-        <section className="explorer">
+        <section className="explorer" data-ctx="explorer">
           {error ? (
             <div className="explorer-error">
               <p>{error}</p>
@@ -1207,7 +1742,7 @@ export function App() {
                     </td>
                   </tr>
                 )}
-                {visibleEntries.map((e) => (
+                {sortedEntries.map((e) => (
                   <tr
                     key={e.path}
                     className={`entry-row ${e.isDir ? "is-dir" : ""} ${
@@ -1221,8 +1756,12 @@ export function App() {
                       if (ev.detail !== 1) return;
                       openEntry(e);
                     }}
-                    onContextMenu={(ev) => onContextMenu(ev, e)}
                     title={e.path}
+                    data-ctx="entry"
+                    data-ctx-path={e.path}
+                    data-ctx-name={e.name}
+                    data-ctx-dir={e.isDir ? "1" : "0"}
+                    data-ctx-from="list"
                   >
                     <td className="col-name">
                       {/* 图标 + 名字包一层 flex 容器：td 保持 table-cell
@@ -1262,6 +1801,10 @@ export function App() {
                 className={`tab ${t.id === activeTabId ? "active" : ""}`}
                 onClick={() => setActiveTabId(t.id)}
                 title={t.path}
+                data-ctx="tab"
+                data-ctx-id={t.id}
+                data-ctx-path={t.path}
+                data-ctx-name={t.name}
               >
                 <FileTypeIcon name={t.name} size={14} className="tab-icon" />
                 <span className="tab-title">{t.name}</span>
@@ -1280,7 +1823,12 @@ export function App() {
             <div className="tabbar-spacer" />
           </div>
           )}
-          <div className="preview-body">
+          <div
+            className="preview-body"
+            data-ctx="preview"
+            data-ctx-path={active?.path ?? ""}
+            data-ctx-name={active?.name ?? ""}
+          >
             {!active ? (
               <div className="empty">
                 <div className="empty-icon">
@@ -1323,73 +1871,19 @@ export function App() {
         )}
       </div>
 
-      {ctxMenu && (
-        <div className="ctxmenu" style={{ left: ctxMenu.x, top: ctxMenu.y }}>
-          <button
-            className="ctxmenu-item"
-            onClick={() => {
-              if (ctxMenu.entry.isDir) navigate(ctxMenu.entry.path, true);
-              else openPath(ctxMenu.entry.path);
-              setCtxMenu(null);
-            }}
-          >
-            <FolderOpen /> {ctxMenu.entry.isDir ? "进入文件夹" : "打开"}
-          </button>
-          <button
-            className="ctxmenu-item"
-            onClick={() => {
-              toggleBookmark(ctxMenu.entry);
-              setCtxMenu(null);
-            }}
-          >
-            <Star /> {bookmarks.some((b) => b.path === ctxMenu.entry.path) ? "移除书签" : "添加书签"}
-          </button>
-          <button
-            className="ctxmenu-item"
-            onClick={() => {
-              copyPath(ctxMenu.entry.path);
-              setCtxMenu(null);
-            }}
-          >
-            <Copy /> 复制完整路径
-          </button>
-          <button
-            className="ctxmenu-item"
-            onClick={() => {
-              const entry = ctxMenu.entry;
-              setCtxMenu(null);
-              if (entry.isDir) return;
-              openPath(entry.path);
-              setAiOpen(true);
-              setAiPending({
-                text: joinConversationPrompt(entry.name),
-                nonce: ++aiNonceRef.current,
-              });
-            }}
-            disabled={ctxMenu.entry.isDir}
-          >
-            <Sparkles /> 加入 AI 对话
-          </button>
-          <button
-            className="ctxmenu-item"
-            onClick={async () => {
-              await viewerFileSource.openWithSystem?.(ctxMenu.entry.path);
-              setCtxMenu(null);
-            }}
-            disabled={!viewerFileSource.openWithSystem}
-          >
-            <ExternalLink /> 用系统程序打开
-          </button>
-          <button
-            className="ctxmenu-item"
-            onClick={async () => {
-              await viewerFileSource.revealInExplorer?.(ctxMenu.entry.path);
-              setCtxMenu(null);
-            }}
-            disabled={!viewerFileSource.revealInExplorer}
-          >
-            <Eye /> 在资源管理器中显示
-          </button>
+      {menu && (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          groups={buildMenu(menu.target, menuContext)}
+          autoFocusFirst={menu.viaKeyboard}
+          onClose={() => setMenu(null)}
+        />
+      )}
+
+      {notice && (
+        <div className={`toast ${notice.kind === "err" ? "is-err" : ""}`} role="status">
+          {notice.text}
         </div>
       )}
 

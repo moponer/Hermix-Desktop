@@ -46,6 +46,8 @@ export function useTheme(): {
   resolved: ResolvedTheme;
   mode: ThemeMode;
   cycle: () => void;
+  /** 直接指定主题（右键菜单里「浅色 / 深色 / 跟随系统」三项要用）。 */
+  set: (mode: ThemeMode) => void;
 } {
   const [mode, setMode] = useState<ThemeMode>(readStored);
   const [resolved, setResolved] = useState<ResolvedTheme>(() => apply(readStored()));
@@ -72,5 +74,5 @@ export function useTheme(): {
     setMode((m) => (m === "system" ? "light" : m === "light" ? "dark" : "system"));
   }, []);
 
-  return { resolved, mode, cycle };
+  return { resolved, mode, cycle, set: setMode };
 }

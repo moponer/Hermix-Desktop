@@ -173,7 +173,7 @@ html, body, #root {
 /* 纯净模式不显示标签条：只留预览本身 */
 .preview.is-pure .tabbar { display: none; }
 
-/* ─── App 容器：垂直栈 工具条 / breadcrumb / 三栏主区 ───────── */
+/* ─── App 容器：垂直栈 工具条 / breadcrumb / 三栏主区 ───── */
 .app { display: flex; flex-direction: column; height: 100%; }
 
 /* ─── 工具条 ─────────────────────────────────────── */
@@ -718,26 +718,101 @@ html, body, #root {
 }
 .ai-send:disabled { opacity: 0.5; cursor: default; }
 
-/* ─── 右键菜单 ────────────────────────────────────── */
+/* ─── 右键菜单 ──────────────────────────────────────────────
+   自绘菜单：WebView2 的原生菜单配色与本项目两套主题都不搭，
+   而且给不了文件操作（打开方式 / 复制文件 / 粘贴…）。
+   层次靠"浮起的卡片 + 阴影"，不描边。 */
+.ctxmenu-backdrop {
+  position: fixed; inset: 0;
+  z-index: 99;
+}
 .ctxmenu {
   position: fixed;
   background: var(--bg-card);
-  border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
-  padding: 4px;
-  min-width: 180px;
+  border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.18), 0 2px 6px rgba(15, 23, 42, 0.08);
+  padding: 5px;
+  min-width: 208px;
+  max-width: 320px;
+  /* 菜单比屏幕还高时内部滚动，而不是被切掉 */
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
   z-index: 100;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+.ctxmenu-group + .ctxmenu-group {
+  /* 组之间只留间距，不画分隔线——本项目的硬规矩是"一律不用描边"，
+     层次靠底色差 + 阴影 + 间距。菜单分组靠这段留白读出来。 */
+  margin-top: 5px;
+  padding-top: 5px;
 }
 .ctxmenu-item {
-  display: flex; align-items: center; gap: 8px;
+  display: flex; align-items: center; gap: 9px;
   width: 100%; border: none; background: transparent;
   color: var(--text-primary);
-  padding: 6px 10px;
-  border-radius: 4px; cursor: pointer;
+  padding: 6px 9px;
+  border-radius: 6px; cursor: pointer;
   font-size: 13px; text-align: left;
+  line-height: 1.4;
 }
-.ctxmenu-item:hover:not(:disabled) { background: var(--bg-hover); }
-.ctxmenu-item:disabled { color: var(--text-faint); cursor: default; }
+.ctxmenu-item:hover:not([aria-disabled="true"]) { background: var(--bg-hover); }
+/* 键盘焦点环：全项目唯一保留的描边（无障碍必需）。菜单容器本身是
+   布局元素，不画环——真正需要指示的是菜单项。 */
+.ctxmenu:focus { outline: none; }
+.ctxmenu-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.ctxmenu-item[aria-disabled="true"] {
+  color: var(--text-faint); cursor: default;
+}
+.ctxmenu-item.is-danger { color: var(--danger); }
+.ctxmenu-item.is-danger:hover:not([aria-disabled="true"]) {
+  background: var(--bg-accent-soft);
+}
+.ctxmenu-icon {
+  width: 15px; height: 15px; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--text-secondary);
+}
+.ctxmenu-item.is-danger .ctxmenu-icon { color: var(--danger); }
+.ctxmenu-item.is-checked .ctxmenu-icon { color: var(--accent); }
+.ctxmenu-label {
+  flex: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* 快捷键提示：右对齐的等宽小字，颜色比正文淡一档 */
+.ctxmenu-hint {
+  flex: none; margin-left: 12px;
+  font-family: var(--font-mono);
+  font-size: 11px; color: var(--text-muted);
+}
+/* 菜单内滚动条不喧宾夺主 */
+.ctxmenu::-webkit-scrollbar { width: 6px; }
+.ctxmenu::-webkit-scrollbar-thumb { background: var(--bg-tertiary); border-radius: 3px; }
+
+/* 触摸设备：行高放大到手指点得中的尺寸 */
+@media (pointer: coarse) {
+  .ctxmenu-item { padding: 10px 10px; font-size: 14px; }
+  .ctxmenu { min-width: 232px; }
+}
+
+/* 轻提示：动作结果的即时反馈（复制/粘贴/打开）。 */
+.toast {
+  position: fixed; left: 50%; bottom: 26px;
+  transform: translateX(-50%);
+  background: var(--bg-card);
+  color: var(--text-primary);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.18);
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 12.5px;
+  z-index: 120;
+  pointer-events: none;
+  max-width: 70vw; text-align: center;
+}
+.toast.is-err { color: var(--danger); }
 
 /* 共享预览 view 内部使用的图标大小提示 */
 .preview-md-toc-head svg, .preview-md-toc-toggle svg,
