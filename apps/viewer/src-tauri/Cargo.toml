@@ -20,7 +20,9 @@ indexmap1 = { package = "indexmap", version = "1.9", features = ["std"] }
 [dependencies]
 # protocol-asset：开 asset 协议（媒体预览用；它原生支持 Range 请求，
 # 几百 MB 的视频不必经 IPC 搬两遍）。只是 tauri 的 feature，不是新依赖。
-tauri = { version = "2", features = ["protocol-asset"] }
+# unstable：Windows 上「主窗口内的子 webview」（add_child）是 unstable API，
+# 内嵌网页视图（通道 A）要用它。
+tauri = { version = "2", features = ["protocol-asset", "unstable"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # 图片处理内核（F5 重量模式）。与 desktop-tauri 的 image 声明并存：
@@ -49,6 +51,10 @@ hermix-config = { path = "../../../crates/hermix-config" }
 # docx-rs / rust_xlsxwriter) -- adding them here adds zero new build units.
 zip = "8.6"
 quick-xml = "0.41"
+# 同步 WebSocket 客户端（通道 B 的 CDP 传输）。
+# tungstenite 0.29 已在 Cargo.lock（tokio-tungstenite 的依赖），默认 feature
+# 只有 handshake（不含 TLS）→ 不新增任何下载，也不引入 TLS 栈。
+tungstenite = "0.29"
 # 系统资源管理（进程快照 / CPU 差分 / 磁盘容量）。工作区已锁定，
 # 无新增下载成本；它的 Windows 后端就是 SystemProcessInformation 全量快照。
 sysinfo = { workspace = true }

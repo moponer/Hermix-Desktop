@@ -21,6 +21,7 @@ import {
   FolderSearch,
   Info,
   PenLine,
+  Pin,
   Pencil,
   RefreshCw,
   Sparkles,
@@ -84,6 +85,8 @@ export interface MenuContext {
 
   openEntry: (path: string, isDir: boolean) => void;
   openWith: (path: string, app: string) => void;
+  /** 钉住到独立浮窗（可钉文件，也可钉目录）。 */
+  pin: (path: string) => void;
   showProperties: (path: string) => void;
   reveal: (path: string) => void;
   copyPath: (path: string) => void;
@@ -164,6 +167,16 @@ function entryMenu(
     });
   }
   groups.push(open);
+
+  // 钉住：把这一项钉到独立浮窗（文件、目录都行）。
+  groups.push([
+    {
+      id: "pin",
+      label: "钉住（独立浮窗）",
+      icon: <Pin size={15} />,
+      onSelect: () => ctx.pin(t.path),
+    },
+  ]);
 
   const locate: MenuItem[] = [
     {

@@ -47,6 +47,16 @@ export interface McpSettings {
   allowRemote: boolean;
 }
 
+/** 网页预览用哪个内核。 */
+export type BrowserKernel = "embedded" | "system";
+
+export interface BrowserSettings {
+  /** embedded = 应用内子 webview 渲染；system = 交给系统浏览器。 */
+  kernel: BrowserKernel;
+  /** agent 驱动系统浏览器时默认有头（弹真实窗口）还是无头。 */
+  headed: boolean;
+}
+
 export interface GeneralSettings {
   /** 启动时进的目录（空 = 上次目录 → 主目录 → 首个盘符）。 */
   defaultDir: string;
@@ -58,6 +68,7 @@ export interface ViewerSettings {
   search: SearchSettings;
   ai: AiSettings;
   mcp: McpSettings;
+  browser: BrowserSettings;
   general: GeneralSettings;
 }
 
@@ -91,6 +102,7 @@ export const DEFAULT_SETTINGS: ViewerSettings = {
     hasKey: false,
   },
   mcp: { enabled: false, port: 3911, allowRemote: false },
+  browser: { kernel: "embedded", headed: false },
   general: {
     defaultDir: "",
     showHiddenByDefault: false,
@@ -101,7 +113,15 @@ export const DEFAULT_SETTINGS: ViewerSettings = {
 export async function loadSettings(): Promise<ViewerSettings> {
   try {
     const s = await invoke<ViewerSettings>("viewer_get_settings");
-    return { ...DEFAULT_SETTINGS, ...s, search: { ...DEFAULT_SETTINGS.search, ...s.search }, ai: { ...DEFAULT_SETTINGS.ai, ...s.ai }, mcp: { ...DEFAULT_SETTINGS.mcp, ...s.mcp }, general: { ...DEFAULT_SETTINGS.general, ...s.general } };
+    return {
+      ...DEFAULT_SETTINGS,
+      ...s,
+      search: { ...DEFAULT_SETTINGS.search, ...s.search },
+      ai: { ...DEFAULT_SETTINGS.ai, ...s.ai },
+      mcp: { ...DEFAULT_SETTINGS.mcp, ...s.mcp },
+      browser: { ...DEFAULT_SETTINGS.browser, ...s.browser },
+      general: { ...DEFAULT_SETTINGS.general, ...s.general },
+    };
   } catch {
     return DEFAULT_SETTINGS;
   }

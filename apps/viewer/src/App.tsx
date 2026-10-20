@@ -14,7 +14,7 @@ import {
   ArrowLeft, ArrowRight, ArrowUp, RefreshCw, Search,
   Funnel, FunnelX, FileSearch,
   ChevronRight, HardDrive, ExternalLink, Sparkles, X,
-  Monitor, Moon, Sun, Activity, Info, LogOut, Settings2, Pencil, List,
+  Monitor, Moon, Sun, Activity, Info, LogOut, Settings2, Pencil, List, Globe,
 } from "lucide-react";
 import { FileTypeIcon, FolderTypeIcon } from "@hermix/preview/FileTypeIcon";
 import { resolveKind } from "@hermix/preview";
@@ -29,8 +29,12 @@ import { AboutDialog, SystemPanel } from "./SystemPanel";
 import type { MenuGroup } from "./MenuBar";
 import { buildMenu, type MenuTarget, type SortKind } from "./contextMenuModel";
 import { SettingsDialog } from "./SettingsDialog";
-import { DEFAULT_SETTINGS, loadSettings, type ViewerSettings } from "./settings";
+import { DEFAULT_SETTINGS, loadSettings, saveSettings, type ViewerSettings } from "./settings";
 import { editorFor, editorLabel } from "./editKind";
+import { WebPane } from "./WebPane";
+import { BrowserPanel } from "./BrowserPanel";
+import { pinPreview } from "./pin";
+import { isUrlInput, normalizeUrlInput, urlTabName } from "./webPreview";
 
 // 预览引擎懒加载：PreviewHost → @hermix/preview barrel → satteri 的 3MB
 // WASM + ExcelJS + pdf.js + pptx。静态引入会让整条预览栈进首屏 bundle，
@@ -43,6 +47,8 @@ interface Tab {
   id: number;
   path: string;
   name: string;
+  /** 网页标签：path 是网址，预览走内嵌网页视图而不是文件预览管线。 */
+  web?: boolean;
 }
 
 interface Bookmark {
@@ -403,6 +409,7 @@ export function App() {
 
   // —— 标题栏菜单弹出的窗口 ——
   const [sysOpen, setSysOpen] = useState(false);
+  const [browserOpen, setBrowserOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   /** 设置（搜索行为 / AI 后端 / MCP / 通用偏好）。Rust 侧是权威源。 */
@@ -686,6 +693,25 @@ export function App() {
   }, [active, mode]);
   const requestEdit = useCallback(() => setEditRequest((n) => n + 1), []);
 
+  /**
+   * 切换「网页内核」：内嵌视图（应用内子 webview）还是系统浏览器。
+   *
+   * 落到设置里 → 重启也在。切换只影响**之后**输入的网址，已经开着的
+   * 网页标签不变（用户看得见的页面不该被后台改掉）。
+   */
+  const setBrowserKernel = useCallback(
+    async (kernel: "embedded" | "system") => {
+      const next: ViewerSettings = { ...settings, browser: { ...settings.browser, kernel } };
+      setSettings(next);
+      try {
+        setSettings(await saveSettings(next));
+      } catch {
+        /* 存不进去不阻塞：本次会话仍然生效 */
+      }
+    },
+    [settings],
+  );
+
   const menus = useMemo<MenuGroup[]>(
     () => [
       {
@@ -709,6 +735,19 @@ export function App() {
             icon: <Funnel size={13} />,
           },
           { id: "toggle-ai", label: "AI 助手栏", checked: aiOpen, icon: <Sparkles size={13} /> },
+          "-",
+          {
+            id: "kernel-embedded",
+            label: "网页内核：内嵌视图",
+            checked: settings.browser.kernel === "embedded",
+            icon: <Monitor size={13} />,
+          },
+          {
+            id: "kernel-system",
+            label: "网页内核：系统浏览器",
+            checked: settings.browser.kernel === "system",
+            icon: <ExternalLink size={13} />,
+          },
           "-",
           {
             id: "theme-system",
@@ -747,6 +786,11 @@ export function App() {
             shortcut: "Ctrl+Shift+Esc",
             icon: <Activity size={13} />,
           },
+          {
+            id: "browser-panel",
+            label: "浏览器会话…",
+            icon: <Globe size={13} />,
+          },
           "-",
           { id: "settings", label: "设置…", icon: <Settings2 size={13} /> },
         ],
@@ -757,7 +801,7 @@ export function App() {
         items: [{ id: "about", label: "关于 Hermix 文件查看器", icon: <Info size={13} /> }],
       },
     ],
-    [showHidden, aiOpen, themeMode, activeEditorKind],
+    [showHidden, aiOpen, themeMode, activeEditorKind, settings.browser.kernel],
   );
 
   const onMenuCommand = useCallback(
@@ -791,6 +835,15 @@ export function App() {
         case "sys-panel":
           setSysOpen(true);
           break;
+        case "browser-panel":
+          setBrowserOpen(true);
+          break;
+        case "kernel-embedded":
+          void setBrowserKernel("embedded");
+          break;
+        case "kernel-system":
+          void setBrowserKernel("system");
+          break;
         case "edit":
           requestEdit();
           break;
@@ -804,7 +857,7 @@ export function App() {
           break;
       }
     },
-    [refresh, setTheme],
+    [refresh, setTheme, setBrowserKernel],
   );
 
   // 快捷键：F5 刷新、Ctrl+Shift+Esc 打开系统资源管理（与任务管理器同键位）。
@@ -964,6 +1017,27 @@ export function App() {
   }, []);
 
   /**
+   * 打开一个**网页标签**：预览区用内嵌网页视图（通道 A）渲染，不出应用。
+   *
+   * 网址当 tab 的 key：同一个网址不重复开（跟文件路径一个规矩）。
+   */
+  const openWebTab = useCallback((url: string) => {
+    const target = normalizeUrlInput(url);
+    if (openedRef.current.has(target)) {
+      setTabs((ts) => {
+        const hit = ts.find((t) => t.path === target);
+        if (hit) setActiveTabId(hit.id);
+        return ts;
+      });
+      return;
+    }
+    openedRef.current.add(target);
+    const id = nextTabId++;
+    setTabs((ts) => [...ts, { id, path: target, name: urlTabName(target), web: true }]);
+    setActiveTabId(id);
+  }, []);
+
+  /**
    * 把左侧树展开到指定目录。
    *
    * 树只存「已加载的 children」，所以定位到深度 N 必须逐级 listDir
@@ -1056,7 +1130,8 @@ export function App() {
 
   /**
    * 路径栏是**万能输入框**，按输入形态分派：
-   *   1. 网址（http/https/www）→ 用系统浏览器打开；
+   *   1. 网址（http/https/www）→ 按设置里的「网页内核」走：内嵌视图（不出
+   *      应用）或系统浏览器；
    *   2. 绝对路径 → 目录进资源管理器，文件开预览标签（并跟着定位）；
    *   3. 其余 → 当搜索词（转交搜索）。
    *
@@ -1069,9 +1144,13 @@ export function App() {
       const v = pathInput.trim();
       if (!v) return;
       // 1. 网址
-      if (/^(https?:\/\/|www\.)/i.test(v)) {
-        const target = v.startsWith("www.") ? `https://${v}` : v;
-        await viewerFileSource.openWithSystem?.(target);
+      if (isUrlInput(v)) {
+        const target = normalizeUrlInput(v);
+        if (settings.browser.kernel === "embedded") {
+          openWebTab(target);
+        } else {
+          await viewerFileSource.openWithSystem?.(target);
+        }
         return;
       }
       // 2. 绝对路径（盘符 / UNC）
@@ -1091,7 +1170,7 @@ export function App() {
       setSearchQ(v);
       void runSearch(v);
     },
-    [pathInput, navigate, openTarget, runSearch],
+    [pathInput, navigate, openTarget, openWebTab, runSearch, settings.browser.kernel],
   );
 
   // 驱动器列表到位后，补做一次首屏期间排队的「跟随定位」。
@@ -1613,6 +1692,12 @@ export function App() {
         else openPath(path);
       },
       openWith,
+      pin: (path: string) => {
+        void pinPreview(path).then((r) => {
+          if ("error" in r) notify(r.error, "err");
+          else notify("已钉住到独立浮窗");
+        });
+      },
       showProperties,
       reveal,
       copyPath,
@@ -1772,6 +1857,7 @@ export function App() {
         onMenuCommand={onMenuCommand}
       />
       {sysOpen && <SystemPanel onClose={() => setSysOpen(false)} />}
+      {browserOpen && <BrowserPanel onClose={() => setBrowserOpen(false)} />}
       {aboutOpen && <AboutDialog onClose={() => setAboutOpen(false)} />}
       <SettingsDialog
         open={settingsOpen}
@@ -2172,6 +2258,8 @@ export function App() {
                   也可直接拖入文件 · 支持 Markdown / 文本 / 代码 / 图片 / PDF / Office / HTML
                 </p>
               </div>
+            ) : active.web ? (
+              <WebPane key={active.id} url={active.path} />
             ) : (
               <Suspense fallback={<div className="preview-pane" />}>
                 <PreviewHost

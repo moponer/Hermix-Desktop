@@ -222,6 +222,40 @@ export function SettingsDialog({
                   />
                   <span>关闭标签页前先确认</span>
                 </label>
+                <div className="set-row">
+                  <span className="set-label">网页内核</span>
+                  <div className="set-seg">
+                    <button
+                      className={`set-seg-btn ${draft.browser.kernel === "embedded" ? "is-active" : ""}`}
+                      onClick={() =>
+                        patch((s) => ({ ...s, browser: { ...s.browser, kernel: "embedded" } }))
+                      }
+                    >
+                      内嵌视图
+                    </button>
+                    <button
+                      className={`set-seg-btn ${draft.browser.kernel === "system" ? "is-active" : ""}`}
+                      onClick={() =>
+                        patch((s) => ({ ...s, browser: { ...s.browser, kernel: "system" } }))
+                      }
+                    >
+                      系统浏览器
+                    </button>
+                  </div>
+                </div>
+                <label className="set-check">
+                  <input
+                    type="checkbox"
+                    checked={draft.browser.headed}
+                    onChange={(e) =>
+                      patch((s) => ({
+                        ...s,
+                        browser: { ...s.browser, headed: e.target.checked },
+                      }))
+                    }
+                  />
+                  <span>agent 浏览器默认有头（弹出真实窗口）</span>
+                </label>
               </>
             )}
 

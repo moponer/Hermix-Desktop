@@ -7,7 +7,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { lazy, Suspense } from "react";
-import { Pencil, Play, RotateCcw } from "lucide-react";
+import { Pencil, Pin, Play, RotateCcw } from "lucide-react";
 import {
   loadPreview,
   PreviewSurface,
@@ -23,6 +23,7 @@ import {
 } from "@hermix/preview";
 import { isMediaFile, MediaView } from "./media/MediaView";
 import { EDITOR_HINT, editorFor, type EditorKind } from "./editKind";
+import { pinPreview } from "./pin";
 
 // 编辑器懒加载：它们是重量模式的重量功能，纯净模式与文本预览都不该
 // 为它们付首屏 bundle 的钱。
@@ -179,6 +180,8 @@ export function PreviewHost({
   const [viewMode, setViewMode] = useState<ViewMode>("layout");
   const [zoom, setZoom] = useState(100);
   const [editor, setEditor] = useState<EditorKind>("none");
+  /** 钉住浮窗失败的原因（工具条里显示，别让「点了没反应」变成谜）。 */
+  const [pinError, setPinError] = useState<string | null>(null);
   /** Word / Excel：打开就是可编辑的文档/表格本体（Office 的样子）。 */
   const [officeReadonly, setOfficeReadonly] = useState(false);
   const loadToken = useRef(0);
@@ -274,6 +277,23 @@ export function PreviewHost({
             编辑
           </button>
         )}
+        {!editing && (
+          <button
+            type="button"
+            className="tb-btn"
+            onClick={() => {
+              void pinPreview(path).then((r) => {
+                setPinError("error" in r ? r.error : null);
+              });
+            }}
+            title="钉住到独立浮窗（可挪到屏幕任意位置，方便对比）"
+            aria-label="钉住到独立浮窗"
+          >
+            <Pin className="icon-sm" />
+            钉住
+          </button>
+        )}
+        {pinError && <span className="tb-error">{pinError}</span>}
         {editing && (
           <button
             type="button"

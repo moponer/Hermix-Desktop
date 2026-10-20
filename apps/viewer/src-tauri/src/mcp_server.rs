@@ -145,6 +145,94 @@ fn tool_defs() -> Vec<ToolDef> {
             read_only: false,
             destructive: true,
         },
+        ToolDef {
+            name: "browser_open",
+            description: "用系统浏览器（Edge / Chrome）打开网址，供 agent 操作页面。\
+                          **每个 session 一个独立浏览器进程 + 独立 profile**\
+                          （cookie / 登录态互不干扰，多 agent 可并行）。\
+                          headed=true 弹出真实浏览器窗口（用户看得见、也能接管），\
+                          false 则无头运行。",
+            properties: json!({
+                "url": {"type": "string", "description": "要打开的网址（http / https）"},
+                "session": {"type": "string", "description": "会话 id（隔离键，缺省 default）"},
+                "headed": {"type": "boolean", "description": "是否有头（默认 false = 无头）"},
+            }),
+            required: &["url"],
+            read_only: false,
+            destructive: false,
+        },
+        ToolDef {
+            name: "browser_navigate",
+            description: "让浏览器会话跳到新网址（复用已开好的会话，不要重复 browser_open）。",
+            properties: json!({
+                "session": {"type": "string", "description": "会话 id"},
+                "url": {"type": "string", "description": "目标网址"},
+            }),
+            required: &["session", "url"],
+            read_only: false,
+            destructive: false,
+        },
+        ToolDef {
+            name: "browser_text",
+            description: "读取当前页面的可见文本。比截图省 token，读页面内容首选。",
+            properties: json!({
+                "session": {"type": "string", "description": "会话 id"},
+            }),
+            required: &["session"],
+            read_only: true,
+            destructive: false,
+        },
+        ToolDef {
+            name: "browser_eval",
+            description: "在当前页面执行一段 JavaScript，返回其返回值（按值返回，Promise 会被等待）。",
+            properties: json!({
+                "session": {"type": "string", "description": "会话 id"},
+                "expression": {"type": "string", "description": "要执行的 JavaScript 表达式"},
+            }),
+            required: &["session", "expression"],
+            read_only: false,
+            destructive: false,
+        },
+        ToolDef {
+            name: "browser_click",
+            description: "点击当前页面的某个坐标（CSS 像素，相对视口左上角）。",
+            properties: json!({
+                "session": {"type": "string", "description": "会话 id"},
+                "x": {"type": "number", "description": "横坐标"},
+                "y": {"type": "number", "description": "纵坐标"},
+            }),
+            required: &["session", "x", "y"],
+            read_only: false,
+            destructive: true,
+        },
+        ToolDef {
+            name: "browser_screenshot",
+            description: "给当前页面截图：返回缩略图（给模型看）与落盘路径（用户可直接打开）。",
+            properties: json!({
+                "session": {"type": "string", "description": "会话 id"},
+            }),
+            required: &["session"],
+            read_only: true,
+            destructive: false,
+        },
+        ToolDef {
+            name: "browser_sessions",
+            description: "列出当前所有浏览器会话（id / 有头无头 / 当前网址）。",
+            properties: json!({}),
+            required: &[],
+            read_only: true,
+            destructive: false,
+        },
+        ToolDef {
+            name: "browser_close",
+            description: "关闭浏览器会话，并删除它的 profile（cookie / 缓存不留痕）。",
+            properties: json!({
+                "session": {"type": "string", "description": "会话 id"},
+            }),
+            required: &["session"],
+            read_only: false,
+            destructive: true,
+        },
     ]
 }
 
@@ -201,7 +289,7 @@ fn preview_text(path: &str) -> Result<String, String> {
 }
 
 /// 按字符（不是字节）截断：中文一个字 3 字节，按字节切会切出半个字。
-fn truncate_chars(text: &str, cap: usize) -> String {
+pub(crate) fn truncate_chars(text: &str, cap: usize) -> String {
     if text.chars().count() <= cap {
         return text.to_string();
     }
@@ -227,8 +315,43 @@ fn entries_to_text(entries: &[crate::commands::DirEntry]) -> String {
     out
 }
 
+/// 工具输出：纯文本，或「文本 + 图片」（截图给模型看）。
+enum ToolOutput {
+    Text(String),
+    TextAndImage {
+        text: String,
+        data_base64: String,
+        mime: String,
+    },
+}
+
+/// 取字符串参数。
+fn arg_str(args: &Value, key: &str) -> Result<String, String> {
+    args.get(key)
+        .and_then(|v| v.as_str())
+        .map(|v| v.to_string())
+        .ok_or_else(|| format!("缺少参数 {key}"))
+}
+
+/// 执行一个工具调用。
+///
+/// 截图类工具要同时给模型**文字**与**图片**（MCP 的 content 数组支持
+/// image 块），所以返回类型是 `ToolOutput` 而不是纯字符串。
+fn call_tool(name: &str, args: &Value) -> Result<ToolOutput, String> {
+    if name == "browser_screenshot" {
+        let session = arg_str(args, "session")?;
+        let (path, data_base64, mime) = crate::browser::screenshot(&session)?;
+        return Ok(ToolOutput::TextAndImage {
+            text: format!("截图已保存：{path}"),
+            data_base64,
+            mime,
+        });
+    }
+    call_tool_text(name, args).map(ToolOutput::Text)
+}
+
 /// 执行一个工具调用，返回给模型的文本。
-fn call_tool(name: &str, args: &Value) -> Result<String, String> {
+fn call_tool_text(name: &str, args: &Value) -> Result<String, String> {
     let str_arg = |key: &str| -> Result<String, String> {
         args.get(key)
             .and_then(|v| v.as_str())
@@ -343,6 +466,72 @@ fn call_tool(name: &str, args: &Value) -> Result<String, String> {
             let vk = args.get("vk").and_then(|v| v.as_u64()).unwrap_or(13) as u32;
             crate::gui::press_key(&hwnd, vk)
         }
+        "browser_open" => {
+            let url = str_arg("url")?;
+            let session = args
+                .get("session")
+                .and_then(|v| v.as_str())
+                .unwrap_or("default")
+                .to_string();
+            // 有头 / 无头：参数优先；没给就用设置里的默认值
+            // （设置 → 通用 → "agent 浏览器默认有头"）。
+            let headed = args
+                .get("headed")
+                .and_then(|v| v.as_bool())
+                .unwrap_or_else(|| {
+                    crate::settings::ViewerSettings::load().browser.headed
+                });
+            let info = crate::browser::open(&session, &url, headed)?;
+            Ok(format!(
+                "会话 {} 已打开（{}）：{}\n会话 id = {}",
+                info.id,
+                if info.headed { "有头" } else { "无头" },
+                info.url,
+                info.id
+            ))
+        }
+        "browser_navigate" => {
+            let session = str_arg("session")?;
+            let url = str_arg("url")?;
+            let final_url = crate::browser::navigate(&session, &url)?;
+            Ok(format!("已跳转到 {final_url}"))
+        }
+        "browser_text" => {
+            let session = str_arg("session")?;
+            crate::browser::page_text(&session)
+        }
+        "browser_eval" => {
+            let session = str_arg("session")?;
+            let expression = str_arg("expression")?;
+            crate::browser::eval(&session, &expression)
+        }
+        "browser_click" => {
+            let session = str_arg("session")?;
+            let x = args.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let y = args.get("y").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            crate::browser::click(&session, x, y)
+        }
+        "browser_sessions" => {
+            let list = crate::browser::list();
+            if list.is_empty() {
+                return Ok("（没有浏览器会话）".into());
+            }
+            let mut out = String::new();
+            for s in list {
+                out.push_str(&format!(
+                    "{}\t{}\t{}\n",
+                    s.id,
+                    if s.headed { "有头" } else { "无头" },
+                    s.url
+                ));
+            }
+            Ok(out)
+        }
+        "browser_close" => {
+            let session = str_arg("session")?;
+            crate::browser::close(&session)?;
+            Ok(format!("会话 {session} 已关闭"))
+        }
         other => Err(format!("未知工具：{other}")),
     }
 }
@@ -393,14 +582,28 @@ pub fn handle_request(request: &Value) -> Option<Value> {
                 return Some(error(id, -32602, "tools/call 缺少 name"));
             }
             let outcome = call_tool(name, &args);
-            let (text, is_error) = match outcome {
-                Ok(text) => (truncate_chars(&text, RESULT_CAP), false),
-                Err(message) => (message, true),
+            let (content, is_error) = match outcome {
+                Ok(ToolOutput::Text(text)) => (
+                    json!([{"type": "text", "text": truncate_chars(&text, RESULT_CAP)}]),
+                    false,
+                ),
+                Ok(ToolOutput::TextAndImage {
+                    text,
+                    data_base64,
+                    mime,
+                }) => (
+                    json!([
+                        {"type": "text", "text": truncate_chars(&text, RESULT_CAP)},
+                        {"type": "image", "data": data_base64, "mimeType": mime}
+                    ]),
+                    false,
+                ),
+                Err(message) => (json!([{"type": "text", "text": message}]), true),
             };
             Some(result(
                 id,
                 json!({
-                    "content": [{"type": "text", "text": text}],
+                    "content": content,
                     "isError": is_error,
                 }),
             ))

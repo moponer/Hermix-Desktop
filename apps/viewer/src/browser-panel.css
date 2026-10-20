@@ -1,0 +1,230 @@
+/* 浏览器会话面板（通道 B 的会话管理）。
+ *
+ * 层次靠底色差 + 阴影 + 间距，**不用描边**（项目硬规则）：
+ * 面板本体用 --bg-card，浮在 --bg-primary 之上；行用 --bg-card-hover。
+ * 只保留键盘 focus-visible 的焦点环（无障碍必需）。
+ */
+
+.bpanel-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 23, 42, 0.38);
+}
+
+.bpanel {
+  width: min(760px, calc(100vw - 48px));
+  max-height: min(78vh, 720px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-card);
+  border-radius: 10px;
+  box-shadow: 0 18px 48px rgba(15, 23, 42, 0.28);
+}
+
+.bpanel-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--bg-secondary);
+  flex: none;
+}
+
+.bpanel-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.bpanel-close {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.bpanel-close:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.bpanel-body {
+  padding: 14px;
+  overflow: auto;
+}
+
+.bpanel-block {
+  margin-bottom: 16px;
+}
+
+.bpanel-block:last-child {
+  margin-bottom: 0;
+}
+
+.bpanel-block-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.bpanel-block-head .tb-btn {
+  margin-left: auto;
+}
+
+.bpanel-hint {
+  margin: 0 0 10px;
+  padding: 9px 11px;
+  border-radius: 8px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.bpanel-hint strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.bpanel-form {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.bpanel-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 150px;
+}
+
+.bpanel-field-grow {
+  flex: 1 1 240px;
+  width: auto;
+}
+
+.bpanel-label {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.bpanel-input {
+  height: var(--ctl-h);
+  padding: 0 8px;
+  border: none;
+  border-radius: 6px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  outline: none;
+}
+
+.bpanel-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.bpanel-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: var(--ctl-h);
+  padding: 0 8px;
+  border-radius: 6px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.bpanel-go {
+  height: var(--ctl-h);
+}
+
+.bpanel-error {
+  margin: 8px 0 0;
+  color: var(--danger);
+  font-size: 12px;
+}
+
+.bpanel-empty {
+  margin: 0;
+  padding: 14px;
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.bpanel-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.bpanel-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border-radius: 8px;
+  background: var(--bg-card-hover);
+}
+
+.bpanel-item-id {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-primary);
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bpanel-chip {
+  flex: none;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.bpanel-chip.is-headed {
+  background: var(--bg-accent-soft);
+  color: var(--accent-strong);
+}
+
+.bpanel-item-url {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

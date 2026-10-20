@@ -1,28 +1,7 @@
 # Decision Note: 查看器的「钉住预览」浮窗 —— 可拖动、可置顶、位置记忆
 
-Status: proposed — 2026-10-21 调研完成；**实现已试过但未落地**：窗口能开出来（标题、位置、置顶、尺寸都对），但浮窗里的**网页视图加载不出应用**（整窗空白），定位未果，已从 main 回退（`36bb53d7`）。
-
-## 当前状态（为什么还是 proposed）
-
-2026-10-21 的实现尝试（已回退，见 `6dda2ad4` / `36bb53d7`）做到：
-
-- ✅ 浮窗窗口本身正常：`WebviewWindowBuilder` 建窗成功，标题 =「文件名 · Hermix」，
-  落位到记录的位置与尺寸，置顶生效，主窗口关闭时连带关闭。
-- ❌ **浮窗里的 webview 白屏**：`<iframe>`/页面没渲染出来。已排除的猜测：
-  - URL 里带 query（`index.html?pin=…`）被 Tauri 当成文件名的一部分 → 改成纯
-    `index.html` + 路径走 Rust 侧注册表（label → 路径），仍白屏。
-  - `main.tsx` 在模块顶层调 `getCurrentWebviewWindow()` 抛异常导致整页崩 →
-    改成问 Rust 要角色（`viewer_window_role`），仍白屏。
-  - capability 的 `windows: ["main", "pin-*"]` 通配可能没生效 → 去掉 `windows`
-    让 capability 覆盖所有窗口，仍白屏。
-- 下一步要查的方向：**Tauri v2 在运行期创建的窗口加载 `WebviewUrl::App` 应用
-  资源**这条路（对比桌面端 `browser_panel_open` 用的是 `WebviewUrl::External`
-  加载**外部网址**，不是应用资产 —— 它是走通的）。下一步应先用 `External`
-  指向一个真实 URL 验证「子窗口 webview 能不能正常加载」，再回头处理「加载
-  应用自己的资源」。
-
-回退的原因很直接：**空白窗口是坏体验，比没有这个功能更糟**。调研与设计仍然
-有效（下面三条约束都是实测/查证过的），等加载问题定位清楚再重新落地。
+Status: implemented — 2026-10-21 落地。上一轮因「浮窗白屏」回退，本轮定位到
+真正的原因并改掉建窗路线，真机验证通过（见「两次翻车的真实原因」）。
 
 ## Decision
 
@@ -36,16 +15,69 @@ Status: proposed — 2026-10-21 调研完成；**实现已试过但未落地**�
 - **浮窗是只读预览**：文件走共享预览层（`loadPreview` + `PreviewSurface`），
   目录走轻量条目列表。**浮窗不给编辑能力**——主窗口已经在编辑同一个文件，
   浮窗再来一份可编辑的等于两个实例写同一个文件。
-- **可置顶**、**可挪到屏幕八宫格任意位置**（左/中/右 × 上/中/下）、
-  **位置跨次启动记忆**（`$hermix_home/pinned-windows.json`）。
+- **可置顶**、**可挪到屏幕任意位置**、**位置跨次启动记忆**
+  （`$hermix_home/pinned-windows.json`）。
 - **浮窗有独立轻量入口**：`main.tsx` 看 URL 上的 `?pin=` 参数决定渲染
   `PinWindow` 还是完整 `App` —— 浮窗不加载资源管理器 / AI 栏 / 工具条。
-- **主窗口关闭 → 连带关掉所有浮窗**（浮窗是主流程的例外，不留孤儿窗口）。
 - **同一路径重复钉 = 复用既有浮窗**（聚焦它），不刷出一堆重复窗口。
-- **同时最多 6 个浮窗**，超限时关掉最旧的那个（每个浮窗 = 一个独立
+- **同时最多 6 个浮窗**，超限时关掉最旧的（每个浮窗 = 一个独立
   WebView2 实例，内存线性增长，必须有上限）。
 
-### 三条被调研与实测钉死的约束
+## 两次翻车的真实原因（这一节是本笔记最有价值的部分）
+
+第一轮实现（`be232c28` + `83e948f1`，已回退）失败在两个地方：
+
+1. **`WebviewUrl::App("index.html?pin=…")`** → Tauri 把 `?pin=…` 当成
+   **文件名的一部分**去找前端资源 → **建窗直接失败**。改成了
+   `WebviewUrl::App("index.html")` + 路径走 Rust 侧注册表。
+2. **窗口开得出来，但内容空白** → 当时据此判定"运行期创建的窗口加载不了
+   应用资源"，把整个功能回退了。
+
+**第 2 条是误判。真根因有两条，都跟"建窗"有关**（本轮用 **CDP 取证**定位，
+不是靠看截图猜）：
+
+取证手段：给查看器加 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=
+--remote-debugging-port=9223` 启动，再用 CDP 直接问每个 webview target 的
+`url` 与 `document.body.innerHTML.length`——比截图可靠得多。
+
+- **根因 A：在主线程上创建 webview**。wry 的 Windows 注意事项（wry#583）写
+  得清楚：在**同步命令 / 事件回调**里创建 webview 会死锁，必须放到单独线程。
+  Tauri 的**同步命令跑在主线程上** → 浮窗的 HWND 建出来了，但导航事件排在
+  主线程队列里没人处理 → **永远停在 `about:blank`**（实测：该 target 的
+  `url = about:blank`、DOM 长度 0）。
+  **修法**：建窗命令写成 `async fn`（Tauri 的异步命令跑在 tokio 工作线程上）。
+  **旁证**：同一份代码里的**子 webview** 从第一版就是 `async` 命令 → 它一直
+  正常。同一个坑，同一处差异。
+- **根因 B：顶层窗口用 `WebviewUrl::External(应用地址)` 拿不到协议的
+  处理器**。浮窗的 webview 确实导航到了 `http://tauri.localhost/`，但页面是
+  **"ERR_CONNECTION_REFUSED"**（真空白，不是截图假象）；而**同样的地址在子
+  webview 里能正常渲染**（子 webview 走的是另一条注入路径）。
+  **修法**：顶层浮窗改用 `WebviewUrl::App("index.html")` —— 主窗口就是它
+  这么起来的。
+
+**顺带一条取证纪律**：当时的"白屏"证据来自 `PrintWindow` 截图。
+`PrintWindow` 只抓窗口自己的 DC，**WebView2 的合成层不在里面**——网页 /
+预览内容在 PrintWindow 截图里**本来就是一片空白**，跟它有没有渲染无关。
+验证"界面有没有渲染出来"必须用**屏幕实拍**（`CopyFromScreen`）或 devtools /
+CDP。取证方法错了，结论就会一路错到"回退一个本来能用的功能"。
+
+**顺带一条**：Tauri 的资源服务**不认带 query 的地址**（`?pin=…` 找不到前端
+资源）。凡是"用 URL 传参数给窗口"的设计都要先确认这条；窗口身份用
+**label** 传（运行期就有，不进 URL）。
+
+## 建窗路线：`WebviewUrl::App("index.html")`（与主窗口同一条路）
+
+浮窗的 webview 用 `WebviewUrl::App("index.html")`：
+
+- **不**用 `WebviewUrl::External("http://tauri.localhost/")`：实测（CDP 取证）
+  顶层窗口里的那个 webview **拿不到应用的协议处理器** → 页面是
+  "ERR_CONNECTION_REFUSED"（真空白，不是截图假象）。同样���地址在**子
+  webview**里却能正常渲染（子 webview 走的是另一条注入路径）。
+- **不**在 URL 里带 query：Tauri 的资源服务不认带 query 的地址。
+- 浮窗的身份（被钉住的是谁）**不进 URL**，前端按自己的窗口 label 去 Rust
+  侧查（`pin_path`）。
+
+## 三条被调研与实测钉死的约束
 
 1. **每个浮窗是独立的 JS realm**。Tauri 的每个 `WebviewWindow` 都是独立
    WebView2 环境，模块级变量不共享（Obsidian 官方开发者文档明确：pop-out
@@ -105,4 +137,5 @@ Status: proposed — 2026-10-21 调研完成；**实现已试过但未落地**�
 - 浮窗的**轻量入口**只渲染预览，不加载资源管理器 / AI 栏 / 系统面板 ——
   这既是性能考虑，也避免了"两个窗口都能改同一个文件"的歧义。
 - 未做：**并排对比视图**（同步缩放 + 同步滚动的比较模式）；**浮窗内的
-  编辑**；**浮窗分组/工作区**（PowerToys Workspaces 那套）。
+  编辑**；**浮窗分组/工作区**（PowerToys Workspaces 那套）；浮窗的
+  **拖动条**（用系统原生标题栏，拖动由系统负责）。

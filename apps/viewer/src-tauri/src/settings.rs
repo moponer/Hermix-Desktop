@@ -108,6 +108,36 @@ impl Default for McpSettings {
 }
 
 // ---------------------------------------------------------------------------
+// 浏览器
+// ---------------------------------------------------------------------------
+
+/// 浏览器内核的选择。
+///
+/// - `embedded` = **内嵌网页视图**（通道 A）：远程网页渲染在应用内的子
+///   webview 里，用户不出应用就能看页面。
+/// - `system` = **系统浏览器**（通道 B）：交给系统 Edge / Chrome 打开。
+///
+/// 两条通道的取舍见决策笔记
+/// `docs/notes/implemented/feature/2026-10-21-viewer-web-preview-and-browser-kernel.md`。
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase", default)]
+pub struct BrowserSettings {
+    /// 网页预览用哪个内核：`embedded` | `system`。
+    pub kernel: String,
+    /// agent 驱动系统浏览器时默认有头（弹出真实窗口）还是无头。
+    pub headed: bool,
+}
+
+impl Default for BrowserSettings {
+    fn default() -> Self {
+        Self {
+            kernel: "embedded".into(),
+            headed: false,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // 通用
 // ---------------------------------------------------------------------------
 
@@ -142,6 +172,7 @@ pub struct ViewerSettings {
     pub search: SearchSettings,
     pub ai: AiSettings,
     pub mcp: McpSettings,
+    pub browser: BrowserSettings,
     pub general: GeneralSettings,
 }
 

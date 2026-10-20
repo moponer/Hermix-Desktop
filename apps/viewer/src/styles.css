@@ -672,6 +672,106 @@ html, body, #root {
    内容落在一块与四周不同的底上。 */
 .preview-pane-inner { background: var(--color-bg-code); }
 
+/* 内嵌网页视图（通道 A）
+   ────────────────────────────────────────────────────────────────────
+   网页本身不在 DOM 里：它是主窗口里的一个**子 webview**（独立 HWND），
+   永远盖在 DOM 之上。所以这里只留一个**占位**元素，它的物理像素矩形
+   会被同步给 Rust，子 webview 正好盖在这个矩形上。
+   占位必须撑满内容区（inset: 0），否则网页会只盖住一小块。 */
+.web-pane-host { position: relative; overflow: hidden; }
+.web-pane-slot { position: absolute; inset: 0; }
+.web-pane-url {
+  font-family: var(--font-mono); font-size: 12px;
+  color: var(--text-secondary);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-width: 55%;
+}
+.web-pane-error {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  padding: 16px; text-align: center;
+  color: var(--danger); font-size: 13px;
+}
+
+/* 钉住浮窗
+   ────────────────────────────────────────────────────────────────────
+   浮窗是独立窗口（自己的 WebView2 环境），里面只渲染被钉住的那一项：
+   目录 → 条目列表；文件 → 共享预览层（与主窗口同一套渲染）。
+   层次靠底色差 + 阴影，不用描边。 */
+.tb-error {
+  color: var(--danger);
+  font-size: 11px;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pin-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.pin-dir {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--color-bg-code);
+}
+
+.pin-dir-title {
+  flex: none;
+  padding: 6px 10px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.pin-dir-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0;
+  overflow: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.pin-dir-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 10px;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.pin-dir-item.is-dir {
+  color: var(--text-secondary);
+}
+
+.pin-dir-size {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.pin-dir-empty {
+  color: var(--text-muted);
+}
+
+.pin-file {
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+  background: var(--color-bg-code);
+}
+
 /* 预览内置工具条（由 PreviewHost 渲染） */
 .preview-toolbar {
   display: flex; align-items: center; gap: 6px;

@@ -7,6 +7,7 @@
 
 pub mod ai;
 pub mod artifacts;
+pub mod browser;
 pub mod cleanup;
 pub mod clipboard;
 pub mod commands;
@@ -19,8 +20,10 @@ pub mod mcp_http;
 pub mod mcp_server;
 pub mod paths;
 pub mod pdf_ops;
+pub mod pin_window;
 pub mod settings;
 pub mod sysmon;
+pub mod webview_host;
 
 // 被嵌进二进制的前端内容指纹（build.rs 生成，见 build.rs 头注）。
 // dist 变了它就变 → crate 必然重编 → 不会出现「exe 里是旧 UI」。
@@ -254,6 +257,19 @@ pub fn main() {
             cleanup::cleanup_execute,
             drive_scan::cleanup_scan_drive,
             drive_scan::cleanup_remove_entries,
+            webview_host::web_open,
+            webview_host::web_bounds,
+            webview_host::web_close,
+            webview_host::web_navigate,
+            webview_host::web_exec,
+            webview_host::web_state,
+            browser::browser_open,
+            browser::browser_sessions,
+            browser::browser_close,
+            pin_window::pin_open,
+            pin_window::pin_close,
+            pin_window::pin_list,
+            pin_window::pin_path,
         ])
         .plugin(tauri_plugin_dialog::init())
         .on_window_event(|_w, event| {

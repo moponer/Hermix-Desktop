@@ -3502,6 +3502,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
+ "tungstenite 0.29.0",
  "windows-sys 0.52.0",
  "zip",
 ]
