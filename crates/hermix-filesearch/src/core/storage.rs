@@ -42,13 +42,13 @@ pub fn save_snapshot(data_dir: &Path, snapshot: &IndexSnapshot) -> Result<PathBu
 pub fn save_snapshot_parts(
     data_dir: &Path,
     volume_state: &super::model::VolumeIndexState,
-    entries: &[super::model::FileEntry],
+    entries: &[super::model::IndexEntry],
 ) -> Result<PathBuf> {
     #[derive(serde::Serialize)]
     struct SnapshotView<'a> {
         version: u32,
         volume_state: &'a super::model::VolumeIndexState,
-        entries: &'a [super::model::FileEntry],
+        entries: &'a [super::model::IndexEntry],
     }
     let view = SnapshotView {
         version: SNAPSHOT_VERSION,

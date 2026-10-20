@@ -2,12 +2,13 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use super::{
     index::build_entries_from_records,
-    model::{BuildIndexSummary, FileEntry, FilterRules, NtfsRecord, VolumeIndexState, VolumeInfo},
+    model::{BuildIndexSummary, FilterRules, IndexEntry, NtfsRecord, VolumeIndexState, VolumeInfo},
 };
 
 pub struct NtfsIndexBuild {
     pub state: VolumeIndexState,
-    pub entries: Vec<FileEntry>,
+    /// 紧凑索引条目（无绝对路径）——路径在查询时回溯。
+    pub entries: Vec<IndexEntry>,
     pub summary: BuildIndexSummary,
 }
 

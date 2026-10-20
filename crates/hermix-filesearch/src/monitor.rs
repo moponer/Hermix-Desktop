@@ -1,5 +1,4 @@
 use std::{
-    collections::HashSet,
     path::PathBuf,
     sync::{
         atomic::Ordering,
@@ -10,7 +9,6 @@ use std::{
 
 use crate::{
     core::{
-        metadata,
         model::{ChangeStats, FileSearchEvent, FilterRules, MonitorState, SyncSummary},
         storage, windows_ntfs,
     },
@@ -160,10 +158,11 @@ pub async fn sync_once(state: &VolumeState) -> Result<SyncSummary, String> {
     let next_usn = changes.next_usn;
     let records = changes.records;
     let cursor_changed = next_usn != previous_next_usn;
-    let changed_file_refs: HashSet<u64> = records.iter().map(|record| record.file_ref).collect();
     let synced_at = now_ms();
 
-    let (stats, entries_to_hydrate) = if records.is_empty() {
+    // 增量只改受影响的条目：不重建路径、不重排全表、不重建小写副本
+    // （旧实现每秒做这三件 O(N) 的事，百万文件机器直接被拖死）。
+    let stats = if records.is_empty() {
         if cursor_changed {
             let mut index = state
                 .index
@@ -171,15 +170,13 @@ pub async fn sync_once(state: &VolumeState) -> Result<SyncSummary, String> {
                 .map_err(|_| sync_error(state, "搜索索引锁状态异常。".to_string()))?;
             index.advance_sync_cursor(next_usn, synced_at);
         }
-        (ChangeStats::default(), Vec::new())
+        ChangeStats::default()
     } else {
         let mut index = state
             .index
             .write()
             .map_err(|_| sync_error(state, "搜索索引锁状态异常。".to_string()))?;
-        let stats = index.apply_changes(records, next_usn, synced_at);
-        let entries = index.entries_for_file_refs(&changed_file_refs);
-        (stats, entries)
+        index.apply_changes(records, next_usn, synced_at)
     };
 
     let changed = cursor_changed || stats.applied > 0 || stats.updated > 0 || stats.deleted > 0;
@@ -187,34 +184,12 @@ pub async fn sync_once(state: &VolumeState) -> Result<SyncSummary, String> {
         state.snapshot_dirty.store(true, Ordering::Release);
     }
 
-    let metadata_warning = if entries_to_hydrate.is_empty() {
-        None
-    } else {
-        match tokio::task::spawn_blocking(move || {
-            metadata::collect_file_metadata(&entries_to_hydrate)
-        })
-        .await
-        {
-            Ok(entry_metadata) => {
-                let mut index = state
-                    .index
-                    .write()
-                    .map_err(|_| sync_error(state, "搜索索引锁状态异常。".to_string()))?;
-                index.apply_metadata(entry_metadata);
-                None
-            }
-            Err(error) => Some(format!("文件变化已同步，但元数据补全失败：{error}")),
-        }
-    };
-
     mark_sync_success(state, synced_at, notify_on_success);
-    let message = metadata_warning.unwrap_or_else(|| {
-        if changed {
-            "同步完成。".to_string()
-        } else {
-            "没有新的变化。".to_string()
-        }
-    });
+    let message = if changed {
+        "同步完成。".to_string()
+    } else {
+        "没有新的变化。".to_string()
+    };
     let summary = SyncSummary {
         volume,
         applied: stats.applied,

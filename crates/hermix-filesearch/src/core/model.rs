@@ -29,11 +29,33 @@ pub struct VolumeIndexState {
     pub source: String,
 }
 
+/// 索引里的一条记录 —— 等价 Everything 的 `(FRN, ParentFRN, name, attrs)`。
+///
+/// **不存绝对路径**：路径由 `parent_ref` 在查询时回溯出来，只给最终返回的
+/// 前 N 条拼。这是 Everything / Lertaro / SwiftList 这类实现的共同点，也是
+/// 内存从"GB 级"降到"百 MB 级"的关键：全盘百万文件，每条只需名字和两个
+/// 引用号；存路径等于把每个目录前缀重复存一遍。
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IndexEntry {
+    pub file_ref: u64,
+    pub parent_ref: u64,
+    pub name: String,
+    /// 小写副本，供搜索直接 `contains`（避免每次按键对百万条做 to_lowercase）。
+    pub name_lower: String,
+    pub modified: u64,
+    pub is_dir: bool,
+    pub last_usn: i64,
+    pub attributes: u32,
+}
+
+/// 搜索结果（JSON 契约不变：前端要 `path` 与 `size`）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct IndexSnapshot {
     pub version: u32,
     pub volume_state: VolumeIndexState,
-    pub entries: Vec<FileEntry>,
+    pub entries: Vec<IndexEntry>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -205,4 +227,6 @@ pub struct ChangeStats {
     pub deleted: usize,
 }
 
-pub const SNAPSHOT_VERSION: u32 = 1;
+/// 快照格式版本。v2：条目从 `FileEntry`（含 path/volume）换成紧凑的
+/// `IndexEntry`（只有名字与父引用）——旧快照直接判版本不匹配、触发重建。
+pub const SNAPSHOT_VERSION: u32 = 2;

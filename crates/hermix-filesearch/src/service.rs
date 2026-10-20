@@ -9,12 +9,23 @@ use serde::Serialize;
 use crate::{
     core::{
         model::{FileEntry, FilterRules, IndexStatus, SearchResponse},
-        search::{compare_entries, search_rank},
         windows_ntfs,
     },
     monitor, ops,
     state::VolumeState,
 };
+
+/// 跨卷合并时的排名（与 `core::search::rank_of` 同口径）。
+fn rank_file(entry: &FileEntry, query_lower: &str) -> u8 {
+    let name = entry.name.to_lowercase();
+    if name == query_lower {
+        0
+    } else if name.starts_with(query_lower) {
+        1
+    } else {
+        2
+    }
+}
 
 /// 多卷聚合状态（给 UI / stdio 协议消费）。
 #[derive(Debug, Clone, Serialize)]
@@ -157,14 +168,19 @@ impl SearchService {
         }
 
         if normalized.is_empty() {
-            merged.sort_by(compare_entries);
+            merged.sort_by(|a, b| {
+                b.is_dir
+                    .cmp(&a.is_dir)
+                    .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+                    .then_with(|| a.file_ref.cmp(&b.file_ref))
+            });
         } else {
             merged.sort_by(|a, b| {
-                search_rank(a, &normalized)
-                    .cmp(&search_rank(b, &normalized))
+                rank_file(a, &normalized)
+                    .cmp(&rank_file(b, &normalized))
                     .then_with(|| b.is_dir.cmp(&a.is_dir))
                     .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-                    .then_with(|| a.path.to_lowercase().cmp(&b.path.to_lowercase()))
+                    .then_with(|| a.file_ref.cmp(&b.file_ref))
             });
         }
 
@@ -275,8 +291,8 @@ mod tests {
 
         let mut rows = vec![other.clone(), prefix_rs.clone(), prefix_go.clone(), exact.clone()];
         rows.sort_by(|a, b| {
-            search_rank(a, "main")
-                .cmp(&search_rank(b, "main"))
+            rank_file(a, "main")
+                .cmp(&rank_file(b, "main"))
                 .then_with(|| b.is_dir.cmp(&a.is_dir))
                 .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
         });

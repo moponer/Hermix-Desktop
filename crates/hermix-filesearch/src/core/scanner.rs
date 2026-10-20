@@ -63,7 +63,12 @@ pub fn scan_directory(root: PathBuf) -> Result<(Vec<FileEntry>, BuildIndexSummar
         });
     }
 
-    entries.sort_by(super::search::compare_entries);
+    entries.sort_by(|a, b| {
+        b.is_dir
+            .cmp(&a.is_dir)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+            .then_with(|| a.file_ref.cmp(&b.file_ref))
+    });
 
     let summary = BuildIndexSummary {
         volume: root_display,

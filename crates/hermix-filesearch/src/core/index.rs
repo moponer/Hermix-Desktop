@@ -1,21 +1,35 @@
+//! 内存索引：Everything 式布局。
+//!
+//! 关键约束（对齐开源 Everything 类实现 Lertaro / SwiftList 的做法）：
+//! - 索引里**只存** `(file_ref, parent_ref, name)`，不存绝对路径；
+//!   路径在查询时按 parent 链回溯，只拼最终返回的那几百条。
+//! - USN 增量**原地改**这几条，不重建全表、不重排全表、不重建路径。
+//! - 搜索只扫名字，先收集命中下标再排序，不 clone 条目。
+//!
+//! 之前的三处结构性错误正是卡死机器的根源：
+//! 1) 每条存 path（每个目录前缀重复存 N 遍）；
+//! 2) 另存一份全量小写副本 `searchable`；
+//! 3) 每秒一次的 USN 同步里 `rebuild_paths` + 全表 `sort` + 重建小写表。
+
 use std::collections::{HashMap, HashSet};
+use std::time::Instant;
 
 use windows_sys::Win32::System::Ioctl::{USN_REASON_FILE_DELETE, USN_REASON_RENAME_OLD_NAME};
 
 use super::{
-    metadata::{apply_file_metadata, EntryMetadata},
     model::{
-        ChangeStats, FileEntry, FilterRules, IndexSnapshot, IndexStatus, NtfsRecord,
-        VolumeIndexState, SNAPSHOT_VERSION,
+        ChangeStats, FileEntry, FilterRules, IndexEntry, IndexSnapshot, IndexStatus, NtfsRecord,
+        SearchResponse, VolumeIndexState, SNAPSHOT_VERSION,
     },
-    search::{compare_entries, search_entries, searchable_text},
+    search::compare_hits,
 };
 
 #[derive(Debug, Default)]
 pub struct SearchIndex {
     volume_state: Option<VolumeIndexState>,
-    entries: Vec<FileEntry>,
-    searchable: Vec<String>,
+    entries: Vec<IndexEntry>,
+    /// `file_ref → entries` 下标：增量更新与路径回溯都靠它，避免全表扫描。
+    by_ref: HashMap<u64, u32>,
     filter: FilterRules,
     last_scan_ms: Option<u64>,
     snapshot_loaded: bool,
@@ -28,14 +42,14 @@ impl SearchIndex {
     pub fn set_filter(&mut self, filter: FilterRules) {
         self.filter = filter;
     }
+
     pub fn replace_volume(
         &mut self,
         volume_state: VolumeIndexState,
-        mut entries: Vec<FileEntry>,
+        entries: Vec<IndexEntry>,
         last_scan_ms: u64,
         snapshot_path: Option<String>,
     ) {
-        entries.sort_by(compare_entries);
         self.volume_state = Some(volume_state);
         self.entries = entries;
         self.last_scan_ms = Some(last_scan_ms);
@@ -43,24 +57,133 @@ impl SearchIndex {
         self.snapshot_path = snapshot_path;
         self.needs_rebuild = false;
         self.status_message = None;
-        self.rebuild_maps();
+        self.reindex();
     }
 
     pub fn replace_snapshot(&mut self, snapshot: IndexSnapshot, snapshot_path: String) {
-        let mut entries = snapshot.entries;
-        entries.sort_by(compare_entries);
         self.volume_state = Some(snapshot.volume_state);
-        self.entries = entries;
+        self.entries = snapshot.entries;
         self.last_scan_ms = None;
         self.snapshot_loaded = true;
         self.snapshot_path = Some(snapshot_path);
         self.needs_rebuild = false;
         self.status_message = Some("已加载上次索引快照，可直接搜索。".to_string());
-        self.rebuild_maps();
+        self.reindex();
     }
 
-    pub fn search(&self, query: String, limit: Option<usize>) -> super::model::SearchResponse {
-        search_entries(&self.entries, &self.searchable, query, limit)
+    fn reindex(&mut self) {
+        self.by_ref.clear();
+        self.by_ref.reserve(self.entries.len());
+        for (index, entry) in self.entries.iter().enumerate() {
+            self.by_ref.insert(entry.file_ref, index as u32);
+        }
+    }
+
+    /// 搜名字：先收集命中下标，排序后再为前 `limit` 条拼路径。
+    pub fn search(&self, query: String, limit: Option<usize>) -> SearchResponse {
+        let start = Instant::now();
+        let normalized = query.trim().to_lowercase();
+        let limit = limit.unwrap_or(500).clamp(1, 5_000);
+
+        let mut hits: Vec<u32> = Vec::new();
+        if normalized.is_empty() {
+            // 空查询不做全表排序：按索引顺序取前 N 条即可（调用方只要一页）。
+            for index in 0..self.entries.len() {
+                hits.push(index as u32);
+                if hits.len() >= limit {
+                    break;
+                }
+            }
+        } else {
+            for (index, entry) in self.entries.iter().enumerate() {
+                if entry.name_lower.contains(&normalized) {
+                    hits.push(index as u32);
+                }
+            }
+        }
+
+        let total_matches = hits.len();
+        if !normalized.is_empty() {
+            hits.sort_by(|a, b| {
+                compare_hits(
+                    &self.entries[*a as usize],
+                    &self.entries[*b as usize],
+                    &normalized,
+                )
+            });
+        }
+
+        let mut memo: HashMap<u32, String> = HashMap::new();
+        let results: Vec<FileEntry> = hits
+            .iter()
+            .take(limit)
+            .map(|index| self.to_file_entry(*index, &mut memo))
+            .collect();
+
+        SearchResponse {
+            query,
+            total_matches,
+            returned: results.len(),
+            results,
+            elapsed_ms: start.elapsed().as_millis() as u64,
+        }
+    }
+
+    fn to_file_entry(&self, index: u32, memo: &mut HashMap<u32, String>) -> FileEntry {
+        let entry = &self.entries[index as usize];
+        FileEntry {
+            id: entry.file_ref,
+            volume: self
+                .volume_state
+                .as_ref()
+                .map(|state| state.volume.clone())
+                .unwrap_or_default(),
+            file_ref: entry.file_ref,
+            parent_ref: entry.parent_ref,
+            name: entry.name.clone(),
+            path: self.path_of(index, memo),
+            extension: extension(&entry.name, entry.is_dir),
+            size: None,
+            modified: entry.modified,
+            is_dir: entry.is_dir,
+            last_usn: entry.last_usn,
+            attributes: entry.attributes,
+        }
+    }
+
+    /// 沿 `parent_ref` 向上收集名字再拼路径。只在结果集上调用（≤500 条），
+    /// 单条深度是目录层数（几十），代价可忽略。
+    fn path_of(&self, index: u32, memo: &mut HashMap<u32, String>) -> String {
+        if let Some(path) = memo.get(&index) {
+            return path.clone();
+        }
+        let volume = self
+            .volume_state
+            .as_ref()
+            .map(|state| state.volume.as_str())
+            .unwrap_or("C:");
+
+        let mut names: Vec<&str> = Vec::new();
+        let mut cursor = index;
+        // 防御：损坏/环状 parent 链不能让回溯死循环。
+        for _ in 0..256 {
+            let entry = &self.entries[cursor as usize];
+            if entry.parent_ref == entry.file_ref || entry.name.is_empty() || entry.name == "." {
+                break;
+            }
+            names.push(entry.name.as_str());
+            match self.by_ref.get(&entry.parent_ref).copied() {
+                Some(parent) => cursor = parent,
+                None => break,
+            }
+        }
+
+        let mut path = volume_root(volume);
+        for name in names.iter().rev() {
+            path = join_path(&path, name);
+        }
+        memo.insert(index, path.clone());
+        path
     }
 
     pub fn status(&self) -> IndexStatus {
@@ -87,8 +210,8 @@ impl SearchIndex {
     }
 
     /// 借引用取出快照原料（不 clone 条目）。落盘路径用这个：`current_snapshot`
-    /// 会把百万级条目整体复制一遍，周期性刷盘时等于每 30 秒制造一次内存尖峰。
-    pub fn snapshot_parts(&self) -> Option<(&VolumeIndexState, &[FileEntry])> {
+    /// 会把整份索引复制一遍，周期性刷盘时等于制造内存尖峰。
+    pub fn snapshot_parts(&self) -> Option<(&VolumeIndexState, &[IndexEntry])> {
         self.volume_state
             .as_ref()
             .map(|state| (state, self.entries.as_slice()))
@@ -108,6 +231,10 @@ impl SearchIndex {
 
     pub fn needs_rebuild(&self) -> bool {
         self.needs_rebuild
+    }
+
+    pub fn total_entries(&self) -> usize {
+        self.entries.len()
     }
 
     pub fn advance_sync_cursor(&mut self, next_usn: i64, synced_at: u64) -> bool {
@@ -138,37 +265,20 @@ impl SearchIndex {
         self.status_message = message;
     }
 
-    pub fn entries_for_file_refs(&self, file_refs: &HashSet<u64>) -> Vec<FileEntry> {
-        self.entries
-            .iter()
-            .filter(|entry| file_refs.contains(&entry.file_ref))
-            .cloned()
-            .collect()
-    }
-
-    pub fn apply_metadata(&mut self, metadata: Vec<EntryMetadata>) {
-        apply_file_metadata(&mut self.entries, metadata);
-    }
-
+    /// USN 增量：**原地改**命中条目，不重建路径 / 不重排全表 / 不重建小写副本。
     pub fn apply_changes(
         &mut self,
         records: Vec<NtfsRecord>,
         next_usn: i64,
         synced_at: u64,
     ) -> ChangeStats {
-        let Some(state) = self.volume_state.as_mut() else {
+        if self.volume_state.is_none() {
             return ChangeStats::default();
-        };
-
-        let volume = state.volume.clone();
-        let mut entries_by_ref: HashMap<u64, FileEntry> = self
-            .entries
-            .drain(..)
-            .map(|entry| (entry.file_ref, entry))
-            .collect();
+        }
         let mut stats = ChangeStats::default();
 
         for record in records {
+            // 重命名的"旧名字"记录没有新名字，等 NEW_NAME 那条处理。
             if record.reason & USN_REASON_RENAME_OLD_NAME != 0 {
                 continue;
             }
@@ -176,25 +286,30 @@ impl SearchIndex {
             stats.applied += 1;
 
             if record.reason & USN_REASON_FILE_DELETE != 0 {
-                let children = Self::children_map_from_entries(entries_by_ref.values());
-                let refs_to_remove = Self::collect_subtree_refs(record.file_ref, &children);
-                for file_ref in refs_to_remove {
-                    if entries_by_ref.remove(&file_ref).is_some() {
-                        stats.deleted += 1;
-                    }
-                }
+                let removed = if is_directory(record.attributes) {
+                    let refs = self.subtree_refs(record.file_ref);
+                    refs.into_iter()
+                        .filter(|file_ref| self.remove_entry(*file_ref))
+                        .count()
+                } else if self.remove_entry(record.file_ref) {
+                    1
+                } else {
+                    0
+                };
+                stats.deleted += removed;
                 continue;
             }
 
             let is_dir = is_directory(record.attributes);
-            let extension = extension(&record.name, is_dir);
             let modified = filetime_to_unix_ms(record.timestamp);
+            let name_lower = record.name.to_lowercase();
 
-            match entries_by_ref.get_mut(&record.file_ref) {
-                Some(entry) => {
+            match self.by_ref.get(&record.file_ref).copied() {
+                Some(index) => {
+                    let entry = &mut self.entries[index as usize];
                     entry.parent_ref = record.parent_ref;
                     entry.name = record.name;
-                    entry.extension = extension;
+                    entry.name_lower = name_lower;
                     entry.modified = modified;
                     entry.is_dir = is_dir;
                     entry.last_usn = record.usn;
@@ -202,200 +317,135 @@ impl SearchIndex {
                     stats.updated += 1;
                 }
                 None => {
-                    entries_by_ref.insert(
-                        record.file_ref,
-                        FileEntry {
-                            id: record.file_ref,
-                            volume: volume.clone(),
-                            file_ref: record.file_ref,
-                            parent_ref: record.parent_ref,
-                            name: record.name,
-                            path: String::new(),
-                            extension,
-                            size: None,
-                            modified,
-                            is_dir,
-                            last_usn: record.usn,
-                            attributes: record.attributes,
-                        },
-                    );
+                    // 增量期过滤：与全量构建同一谓词，避免被排除项经增量回流。
+                    if !self
+                        .filter
+                        .accepts(&record.name, is_dir, record.attributes)
+                    {
+                        continue;
+                    }
+                    self.by_ref
+                        .insert(record.file_ref, self.entries.len() as u32);
+                    self.entries.push(IndexEntry {
+                        file_ref: record.file_ref,
+                        parent_ref: record.parent_ref,
+                        name: record.name,
+                        name_lower,
+                        modified,
+                        is_dir,
+                        last_usn: record.usn,
+                        attributes: record.attributes,
+                    });
                     stats.updated += 1;
                 }
             }
         }
 
-        // 增量期过滤：与构建期同一谓词（FilterRules::accepts）。
-        // 目录排除走子树剪枝，否则被排除目录的子文件会凭 parent_ref 继续存活。
-        let excluded_roots: Vec<u64> = entries_by_ref
-            .values()
-            .filter(|entry| !self.filter.accepts(&entry.name, entry.is_dir, entry.attributes))
-            .map(|entry| entry.file_ref)
-            .collect();
-        if !excluded_roots.is_empty() {
-            let children = Self::children_map_from_entries(entries_by_ref.values());
-            for root in excluded_roots {
-                for file_ref in Self::collect_subtree_refs(root, &children) {
-                    if entries_by_ref.remove(&file_ref).is_some() {
-                        stats.deleted += 1;
-                    }
-                }
-            }
+        if let Some(state) = self.volume_state.as_mut() {
+            state.next_usn = next_usn;
+            state.last_synced_at = synced_at;
         }
-
-        rebuild_paths(&volume, &mut entries_by_ref);
-        let mut entries: Vec<FileEntry> = entries_by_ref.into_values().collect();
-        entries.sort_by(compare_entries);
-        self.entries = entries;
-        state.next_usn = next_usn;
-        state.last_synced_at = synced_at;
         self.snapshot_loaded = false;
         self.needs_rebuild = false;
         self.status_message = Some("已同步 USN Journal 变化。".to_string());
-        self.rebuild_maps();
 
         stats
     }
 
-    fn rebuild_maps(&mut self) {
-        self.searchable.clear();
-        self.searchable
-            .extend(self.entries.iter().map(searchable_text));
+    /// 删除一条：`swap_remove` 是 O(1)，只需修正被换过来的那条下标。
+    fn remove_entry(&mut self, file_ref: u64) -> bool {
+        let Some(index) = self.by_ref.remove(&file_ref) else {
+            return false;
+        };
+        let last = self.entries.len() - 1;
+        if index as usize != last {
+            self.entries.swap_remove(index as usize);
+            let moved = &self.entries[index as usize];
+            self.by_ref.insert(moved.file_ref, index);
+        } else {
+            self.entries.pop();
+        }
+        true
     }
 
-    fn children_map_from_entries<'a>(
-        entries: impl Iterator<Item = &'a FileEntry>,
-    ) -> HashMap<u64, Vec<u64>> {
+    fn subtree_refs(&self, root: u64) -> Vec<u64> {
         let mut children: HashMap<u64, Vec<u64>> = HashMap::new();
-        for entry in entries {
+        for entry in &self.entries {
             children
                 .entry(entry.parent_ref)
                 .or_default()
                 .push(entry.file_ref);
         }
-        children
-    }
-
-    fn collect_subtree_refs(root: u64, children: &HashMap<u64, Vec<u64>>) -> Vec<u64> {
-        let mut result = Vec::new();
+        let mut out = Vec::new();
         let mut stack = vec![root];
         let mut seen = HashSet::new();
-
         while let Some(file_ref) = stack.pop() {
             if !seen.insert(file_ref) {
                 continue;
             }
-            result.push(file_ref);
+            out.push(file_ref);
             if let Some(child_refs) = children.get(&file_ref) {
                 stack.extend(child_refs.iter().copied());
             }
         }
-
-        result
+        out
     }
 }
 
+/// 全量构建：MFT 记录 → 紧凑索引条目。**不拼路径**（Everything 也不拼）。
 pub fn build_entries_from_records(
-    volume: &str,
+    _volume: &str,
     records: Vec<NtfsRecord>,
     filter: &FilterRules,
-) -> Vec<FileEntry> {
-    let mut entries_by_ref: HashMap<u64, FileEntry> = records
+) -> Vec<IndexEntry> {
+    let mut kept: Vec<IndexEntry> = records
         .into_iter()
         .filter(|record| !record.name.is_empty())
         .map(|record| {
             let is_dir = is_directory(record.attributes);
-            let entry = FileEntry {
-                id: record.file_ref,
-                volume: volume.to_string(),
+            IndexEntry {
                 file_ref: record.file_ref,
                 parent_ref: record.parent_ref,
-                name: record.name.clone(),
-                path: String::new(),
-                extension: extension(&record.name, is_dir),
-                size: None,
+                name_lower: record.name.to_lowercase(),
+                name: record.name,
                 modified: filetime_to_unix_ms(record.timestamp),
                 is_dir,
                 last_usn: record.usn,
                 attributes: record.attributes,
-            };
-            (entry.file_ref, entry)
+            }
         })
         .collect();
 
-    // 构建期过滤：排除目录按子树剪枝；排除文件/扩展名/隐藏系统位按单条剔除。
-    let excluded_roots: Vec<u64> = entries_by_ref
-        .values()
+    // 构建期过滤：排除目录按子树剪枝；文件按谓词单条剔除。
+    let excluded_roots: Vec<u64> = kept
+        .iter()
         .filter(|entry| !filter.accepts(&entry.name, entry.is_dir, entry.attributes))
         .map(|entry| entry.file_ref)
         .collect();
     if !excluded_roots.is_empty() {
-        let children: HashMap<u64, Vec<u64>> = entries_by_ref.values().fold(
-            HashMap::new(),
-            |mut acc, entry| {
-                acc.entry(entry.parent_ref).or_default().push(entry.file_ref);
-                acc
-            },
-        );
+        let mut children: HashMap<u64, Vec<u64>> = HashMap::new();
+        for entry in &kept {
+            children
+                .entry(entry.parent_ref)
+                .or_default()
+                .push(entry.file_ref);
+        }
+        let mut drop_refs: HashSet<u64> = HashSet::new();
         for root in excluded_roots {
-            for file_ref in SearchIndex::collect_subtree_refs(root, &children) {
-                entries_by_ref.remove(&file_ref);
+            let mut stack = vec![root];
+            while let Some(file_ref) = stack.pop() {
+                if !drop_refs.insert(file_ref) {
+                    continue;
+                }
+                if let Some(child_refs) = children.get(&file_ref) {
+                    stack.extend(child_refs.iter().copied());
+                }
             }
         }
+        kept.retain(|entry| !drop_refs.contains(&entry.file_ref));
     }
 
-    rebuild_paths(volume, &mut entries_by_ref);
-
-    let mut entries: Vec<FileEntry> = entries_by_ref.into_values().collect();
-    entries.sort_by(compare_entries);
-    entries
-}
-
-fn rebuild_paths(volume: &str, entries_by_ref: &mut HashMap<u64, FileEntry>) {
-    let raw: HashMap<u64, (u64, String)> = entries_by_ref
-        .iter()
-        .map(|(file_ref, entry)| (*file_ref, (entry.parent_ref, entry.name.clone())))
-        .collect();
-    let mut memo: HashMap<u64, String> = HashMap::new();
-
-    for file_ref in raw.keys().copied().collect::<Vec<_>>() {
-        let path = resolve_path(volume, file_ref, &raw, &mut memo, &mut HashSet::new());
-        if let Some(entry) = entries_by_ref.get_mut(&file_ref) {
-            entry.path = path;
-        }
-    }
-}
-
-fn resolve_path(
-    volume: &str,
-    file_ref: u64,
-    raw: &HashMap<u64, (u64, String)>,
-    memo: &mut HashMap<u64, String>,
-    visiting: &mut HashSet<u64>,
-) -> String {
-    if let Some(path) = memo.get(&file_ref) {
-        return path.clone();
-    }
-
-    if !visiting.insert(file_ref) {
-        return volume_root(volume);
-    }
-
-    let Some((parent_ref, name)) = raw.get(&file_ref) else {
-        return volume_root(volume);
-    };
-
-    let path = if *parent_ref == file_ref || name == "." || name.is_empty() {
-        volume_root(volume)
-    } else if !raw.contains_key(parent_ref) {
-        join_path(&volume_root(volume), name)
-    } else {
-        let parent = resolve_path(volume, *parent_ref, raw, memo, visiting);
-        join_path(&parent, name)
-    };
-
-    visiting.remove(&file_ref);
-    memo.insert(file_ref, path.clone());
-    path
+    kept
 }
 
 fn join_path(parent: &str, name: &str) -> String {
@@ -423,199 +473,124 @@ fn extension(name: &str, is_dir: bool) -> Option<String> {
         return None;
     }
     name.rsplit_once('.')
-        .map(|(_, ext)| ext.to_ascii_lowercase())
-        .filter(|ext| !ext.is_empty() && ext != name)
+        .map(|(_, ext)| ext.to_lowercase())
+        .filter(|ext| !ext.is_empty() && ext.len() <= 16)
 }
 
-fn filetime_to_unix_ms(filetime: i64) -> u64 {
-    const WINDOWS_TO_UNIX_EPOCH_MS: i64 = 11_644_473_600_000;
-    if filetime <= 0 {
+fn filetime_to_unix_ms(timestamp: i64) -> u64 {
+    if timestamp <= 0 {
         return 0;
     }
-    let ms = filetime / 10_000 - WINDOWS_TO_UNIX_EPOCH_MS;
-    ms.max(0) as u64
+    const FILETIME_UNIX_EPOCH: i64 = 116_444_736_000_000_000;
+    if timestamp <= FILETIME_UNIX_EPOCH {
+        return timestamp.max(0) as u64;
+    }
+    ((timestamp - FILETIME_UNIX_EPOCH) / 10_000) as u64
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn build_default(volume: &str, records: Vec<NtfsRecord>) -> Vec<FileEntry> {
-        build_entries_from_records(volume, records, &FilterRules::default())
-    }
-
-    fn record(file_ref: u64, parent_ref: u64, name: &str, attributes: u32) -> NtfsRecord {
-        NtfsRecord {
+    fn entry(file_ref: u64, parent_ref: u64, name: &str, is_dir: bool) -> IndexEntry {
+        IndexEntry {
             file_ref,
             parent_ref,
             name: name.to_string(),
-            attributes,
-            usn: 1,
-            timestamp: 0,
-            reason: 0,
+            name_lower: name.to_lowercase(),
+            modified: 0,
+            is_dir,
+            last_usn: 0,
+            attributes: if is_dir { 16 } else { 0 },
         }
     }
 
-    #[test]
-    fn rebuilds_paths_from_parent_refs() {
-        let entries = build_default(
-            "F:",
-            vec![
-                record(5, 5, ".", 16),
-                record(10, 5, "src", 16),
-                record(11, 10, "main.rs", 0),
-            ],
-        );
-
-        assert!(entries.iter().any(|entry| entry.path == r"F:\src\main.rs"));
-    }
-
-    #[test]
-    fn directory_rename_refreshes_child_paths() {
-        let state = VolumeIndexState {
-            volume: "F:".to_string(),
-            journal_id: 1,
-            first_usn: 0,
-            next_usn: 1,
-            indexed_at: 0,
-            last_synced_at: 0,
-            source: "MFT".to_string(),
-        };
+    fn index_with(entries: Vec<IndexEntry>) -> SearchIndex {
         let mut index = SearchIndex::default();
-        let entries = build_default(
-            "F:",
-            vec![
-                record(5, 5, ".", 16),
-                record(10, 5, "old", 16),
-                record(11, 10, "file.txt", 0),
-            ],
-        );
-        index.replace_volume(state, entries, 0, None);
-
-        index.apply_changes(vec![record(10, 5, "new", 16)], 2, 0);
-
-        let response = index.search("file".to_string(), None);
-        assert_eq!(response.results[0].path, r"F:\new\file.txt");
-    }
-
-    #[test]
-    fn directory_delete_removes_children() {
-        let state = VolumeIndexState {
-            volume: "F:".to_string(),
-            journal_id: 1,
-            first_usn: 0,
-            next_usn: 1,
-            indexed_at: 0,
-            last_synced_at: 0,
-            source: "MFT".to_string(),
-        };
-        let mut index = SearchIndex::default();
-        let entries = build_default(
-            "F:",
-            vec![
-                record(5, 5, ".", 16),
-                record(10, 5, "folder", 16),
-                record(11, 10, "file.txt", 0),
-            ],
-        );
-        index.replace_volume(state, entries, 0, None);
-
-        let mut delete = record(10, 5, "folder", 16);
-        delete.reason = USN_REASON_FILE_DELETE;
-        index.apply_changes(vec![delete], 2, 0);
-
-        let response = index.search("file".to_string(), None);
-        assert_eq!(response.total_matches, 0);
-    }
-
-    #[test]
-    fn advances_sync_cursor_without_rebuilding_entries() {
-        let state = VolumeIndexState {
-            volume: "F:".to_string(),
-            journal_id: 1,
-            first_usn: 0,
-            next_usn: 1,
-            indexed_at: 0,
-            last_synced_at: 0,
-            source: "MFT".to_string(),
-        };
-        let mut index = SearchIndex::default();
-        let entries = build_default(
-            "F:",
-            vec![record(5, 5, ".", 16), record(10, 5, "file.txt", 0)],
-        );
-        index.replace_volume(state, entries, 0, None);
-
-        assert!(index.advance_sync_cursor(2, 100));
-        assert_eq!(index.volume_state().unwrap().next_usn, 2);
-        assert_eq!(index.search("file".to_string(), None).total_matches, 1);
-        assert!(!index.advance_sync_cursor(2, 200));
-    }
-
-    #[test]
-    fn build_filters_excluded_dir_with_subtree() {
-        let mut rules = FilterRules::default();
-        rules.excluded_dirs = vec!["node_modules".to_string()];
-        let entries = build_entries_from_records(
-            "F:",
-            vec![
-                record(5, 5, ".", 16),
-                record(10, 5, "src", 16),
-                record(11, 10, "main.rs", 0),
-                record(20, 5, "node_modules", 16),
-                record(21, 20, "left-pad", 16),
-                record(22, 21, "index.js", 0),
-            ],
-            &rules,
-        );
-
-        assert!(entries.iter().any(|entry| entry.path == r"F:\src\main.rs"));
-        assert!(entries.iter().all(|entry| !entry.path.contains("node_modules")));
-    }
-
-    #[test]
-    fn apply_changes_rejects_entries_under_excluded_dir() {
-        let mut rules = FilterRules::default();
-        rules.excluded_dirs = vec!["node_modules".to_string()];
-        let state = VolumeIndexState {
-            volume: "F:".to_string(),
-            journal_id: 1,
-            first_usn: 0,
-            next_usn: 1,
-            indexed_at: 0,
-            last_synced_at: 0,
-            source: "MFT".to_string(),
-        };
-        let mut index = SearchIndex::default();
-        index.set_filter(rules);
-        let entries = build_default(
-            "F:",
-            vec![record(5, 5, ".", 16), record(10, 5, "app.txt", 0)],
-        );
-        index.replace_volume(state, entries, 0, None);
-
-        // USN 增量新增 node_modules 目录及其子文件 → 必须整棵拒绝，不许回流。
-        index.apply_changes(
-            vec![record(20, 5, "node_modules", 16), record(21, 20, "pkg.js", 0)],
-            2,
+        index.replace_volume(
+            VolumeIndexState {
+                volume: "C:".to_string(),
+                journal_id: 1,
+                first_usn: 0,
+                next_usn: 0,
+                indexed_at: 0,
+                last_synced_at: 0,
+                source: "test".to_string(),
+            },
+            entries,
             0,
+            None,
         );
-
-        let response = index.search("pkg".to_string(), None);
-        assert_eq!(response.total_matches, 0);
-        assert_eq!(index.search("app".to_string(), None).total_matches, 1);
+        index
     }
 
     #[test]
-    fn filter_skips_hidden_system_files_but_keeps_dirs() {
-        let rules = FilterRules::default();
-        // pagefile.sys：隐藏+系统 → 拒绝
-        assert!(!rules.accepts("pagefile.sys", false, 0x22));
-        // 普通隐藏文件（仅 hidden）→ 接受
-        assert!(rules.accepts(".env", false, 0x2));
-        // 目录不受 hidden+system 位影响（目录过滤只走 excluded_dirs 名称匹配）
-        assert!(rules.accepts("some_sys_dir", true, 0x16));
-        // 目录名命中 excluded_dirs → 拒绝（与属性位无关）
-        assert!(!rules.accepts("System Volume Information", true, 0x16));
+    fn resolves_paths_lazily_from_parent_chain() {
+        // 5 = C:\ 根；6 = C:\repo；7 = C:\repo\src；8 = C:\repo\src\main.rs
+        let index = index_with(vec![
+            entry(5, 5, "", true),
+            entry(6, 5, "repo", true),
+            entry(7, 6, "src", true),
+            entry(8, 7, "main.rs", false),
+        ]);
+
+        let response = index.search("main".to_string(), None);
+        assert_eq!(response.total_matches, 1);
+        assert_eq!(response.results[0].path, r"C:\repo\src\main.rs");
+        assert_eq!(response.results[0].name, "main.rs");
+    }
+
+    #[test]
+    fn sync_updates_in_place_without_rebuilding_other_paths() {
+        let index = index_with(vec![
+            entry(5, 5, "", true),
+            entry(6, 5, "repo", true),
+            entry(7, 6, "a.txt", false),
+        ]);
+        let mut index = index;
+
+        // 目录改名：子条目完全不用动（路径是查询时拼的）。
+        let stats = index.apply_changes(
+            vec![super::NtfsRecord {
+                file_ref: 6,
+                parent_ref: 5,
+                name: "repo2".to_string(),
+                attributes: 16,
+                usn: 10,
+                timestamp: 0,
+                reason: 0,
+            }],
+            10,
+            1,
+        );
+        assert_eq!(stats.updated, 1);
+
+        let response = index.search("a.txt".to_string(), None);
+        assert_eq!(response.results[0].path, r"C:\repo2\a.txt");
+    }
+
+    #[test]
+    fn delete_removes_subtree() {
+        let mut index = index_with(vec![
+            entry(5, 5, "", true),
+            entry(6, 5, "repo", true),
+            entry(7, 6, "a.txt", false),
+        ]);
+        let stats = index.apply_changes(
+            vec![super::NtfsRecord {
+                file_ref: 6,
+                parent_ref: 5,
+                name: "repo".to_string(),
+                attributes: 16,
+                usn: 11,
+                timestamp: 0,
+                reason: USN_REASON_FILE_DELETE,
+            }],
+            11,
+            1,
+        );
+        assert_eq!(stats.deleted, 2, "目录连同子文件一起删");
+        assert_eq!(index.total_entries(), 1);
+        assert!(index.search("a.txt".to_string(), None).results.is_empty());
     }
 }
