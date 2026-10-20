@@ -422,6 +422,22 @@ function ProcessPane() {
     [confirmPid, load],
   );
 
+  // 索引助手是提权进程：「结束进程」对它无效（Access denied），
+  // 但它能自己退出——这里给一条正经的停法。
+  const helper = useMemo(
+    () => rows.find((row) => row.name.toLowerCase() === "hermix-filesearch.exe"),
+    [rows],
+  );
+
+  const stopHelper = useCallback(async () => {
+    try {
+      setNotice(await invoke<string>("viewer_filesearch_stop"));
+    } catch (cause) {
+      setNotice(errorText(cause));
+    }
+    void load();
+  }, [load]);
+
   const toggleSort = (key: SortKey) => {
     setSort((prev) => (prev.key === key ? { key, desc: !prev.desc } : { key, desc: key !== "name" }));
   };
@@ -456,6 +472,21 @@ function ProcessPane() {
 
       {error && <p className="pane-error">{error}</p>}
       {notice && <p className="pane-notice">{notice}</p>}
+      {helper && (
+        <div className="pane-banner">
+          <ShieldAlert size={14} aria-hidden="true" />
+          <span>
+            本地索引服务在运行（提权进程，PID {helper.pid}，占{" "}
+            {helper.memoryMb >= 1024
+              ? `${(helper.memoryMb / 1024).toFixed(2)} GB`
+              : `${Math.round(helper.memoryMb)} MB`}
+            ）。它需要管理员权限读 MFT，普通「结束进程」对它无效。
+          </span>
+          <button type="button" className="pane-btn" onClick={() => void stopHelper()}>
+            优雅停止索引服务
+          </button>
+        </div>
+      )}
 
       <div className="proc-table" role="table" aria-label="进程列表">
         <div className="proc-row proc-head" role="row">

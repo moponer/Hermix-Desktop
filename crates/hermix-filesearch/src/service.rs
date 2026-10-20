@@ -263,11 +263,31 @@ impl SearchService {
 
     /// 进程退出前把所有脏卷快照刷盘（阻塞调用，仅在退出路径使用）。
     pub fn flush_all(&self) {
-        if let Ok(map) = self.volumes.read() {
-            for state in map.values() {
-                monitor::flush_snapshot_on_exit(state, &self.data_dir);
-            }
+        let Ok(map) = self.volumes.read() else {
+            return;
+        };
+        // 只刷**脏**的卷：全部重写一遍等于往磁盘写 1GB（本机 6 个卷），
+        // 退出要多等几十秒，用户会以为"关不掉"。
+        let dirty: Vec<(Arc<VolumeState>, PathBuf)> = map
+            .values()
+            .filter(|state| {
+                state
+                    .snapshot_dirty
+                    .load(std::sync::atomic::Ordering::Acquire)
+            })
+            .map(|state| (state.clone(), self.data_dir.clone()))
+            .collect();
+        if dirty.is_empty() {
+            return;
         }
+        // 并行刷盘：各卷写各的，串行是 N 倍等待。
+        std::thread::scope(|scope| {
+            for (state, data_dir) in dirty {
+                scope.spawn(move || {
+                    monitor::flush_snapshot_on_exit(&state, &data_dir);
+                });
+            }
+        });
     }
 
     /// 卷枚举超时看门狗。本机实测 GetVolumeInformationW 偶发永不返回

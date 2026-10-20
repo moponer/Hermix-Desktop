@@ -243,18 +243,27 @@ pub fn flush_snapshot_on_exit(state: &VolumeState, data_dir: &std::path::Path) {
         return;
     }
 
-    let snapshot = match state
-        .index
-        .read()
-        .ok()
-        .and_then(|index| index.current_snapshot())
-    {
-        Some(snapshot) => snapshot,
-        None => return,
+    // 借引用序列化：`current_snapshot()` 会把百万级条目整体 clone 一份
+    // （退出瞬间内存翻倍，容易把机器推到卡死）。`snapshot_parts` 只借切片。
+    //
+    // 读锁必须在下面 `index.write()` 之前释放，否则自己等自己 = 死锁：
+    // 所以把写盘放进一个作用域，让 guard 在作用域结束时掉。
+    let saved = {
+        let Ok(index) = state.index.read() else {
+            return;
+        };
+        let Some((volume_state, entries)) = index.snapshot_parts() else {
+            return;
+        };
+        let volume = volume_state.volume.clone();
+        (
+            storage::save_snapshot_parts(data_dir, volume_state, entries),
+            volume,
+        )
     };
+    let (result, volume) = saved;
 
-    let volume = snapshot.volume_state.volume.clone();
-    match storage::save_snapshot(data_dir, &snapshot) {
+    match result {
         Ok(path) => {
             if let Ok(mut index) = state.index.write() {
                 index.set_snapshot_path(Some(path.display().to_string()));

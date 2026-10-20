@@ -22,6 +22,7 @@ fn main() {
     let mut data_dir = default_data_dir();
     let mut status_only = false;
     let mut serve = false;
+    let mut stop_only = false;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -40,8 +41,12 @@ fn main() {
             }
             "--status" => status_only = true,
             "--serve" => serve = true,
+            "--stop" => stop_only = true,
             "--help" | "-h" => {
-                println!("用法: hermix-filesearch [--volumes C:,D:] [--data-dir <path>] [--status] [--serve]");
+                println!(
+                    "用法: hermix-filesearch [--volumes C:,D:] [--data-dir <path>] [--status] [--serve] [--stop]\n\
+                     --stop  停掉正在运行的另一个自己（提权进程只能让它自己退出）"
+                );
                 return;
             }
             other => {
@@ -53,6 +58,12 @@ fn main() {
 
     if status_only {
         print_snapshot_status(&data_dir);
+        return;
+    }
+
+    // 停掉正在跑的另一个自己（不需要管理员权限）。
+    if stop_only {
+        stop_running_helper(&data_dir);
         return;
     }
 
@@ -156,15 +167,84 @@ async fn serve_loop(service: Arc<SearchService>, data_dir: PathBuf) {
                 let _ = writer.write_all(response.as_bytes()).await;
                 let _ = writer.write_all(b"\n").await;
                 // shutdown 指令：响应已回，刷盘退出（endpoint.json 一并清掉）。
+                //
+                // **刷盘必须离开 async 上下文**：`operation_gate` 是 tokio Mutex，
+                // 在 worker 线程里 `blocking_lock()` 会 panic —— 任务当场死掉，
+                // `exit(0)` 永远执行不到，进程就变成"活着但关不掉"（正是
+                // 用户遇到的现象）。这里丢进 spawn_blocking，另加一个看门狗，
+                // 刷盘卡住也一定退得掉。
                 if response.contains("\"shuttingDown\":true") {
                     let _ = std::fs::remove_file(&endpoint_path);
-                    service.flush_all();
-                    eprintln!("[filesearch] 收到 shutdown，刷盘退出。");
-                    exit(0);
+                    let service = service.clone();
+                    // 看门狗：刷盘最多等 60s，超时直接退（快照丢了只是下次
+                    // 重建索引，不能变成"永远关不掉"）。
+                    std::thread::spawn(|| {
+                        std::thread::sleep(std::time::Duration::from_secs(60));
+                        eprintln!("[filesearch] 刷盘超时，强制退出。");
+                        exit(0);
+                    });
+                    tokio::task::spawn_blocking(move || {
+                        service.flush_all();
+                        eprintln!("[filesearch] 收到 shutdown，刷盘退出。");
+                        exit(0);
+                    });
+                    return;
                 }
             }
         });
     }
+}
+
+/// 停掉正在跑的另一个自己。
+///
+/// **为什么需要它**：helper 是**提权进程**，普通 shell 的 `taskkill` 会被
+/// Windows 拒绝（Access is denied），于是"重建它"会因 exe 被占用而失败
+/// （`os error 5`）。但它**能自己退出**：回环协议里有 `shutdown` 方法，
+/// 收到后刷盘、删 endpoint.json、退出。所以停它的正确姿势是"请它走"，
+/// 而不是"杀它"。
+fn stop_running_helper(data_dir: &std::path::Path) {
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpStream;
+    use std::time::Duration;
+
+    let endpoint_path = data_dir.join("endpoint.json");
+    let Ok(raw) = std::fs::read_to_string(&endpoint_path) else {
+        println!("索引服务未在运行（没有 endpoint.json）");
+        return;
+    };
+    let Ok(endpoint) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        println!("endpoint.json 解析失败");
+        return;
+    };
+    let port = endpoint.get("port").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
+    let token = endpoint
+        .get("token")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    if port == 0 {
+        println!("endpoint.json 缺少端口");
+        return;
+    }
+
+    let mut stream = match TcpStream::connect(("127.0.0.1", port)) {
+        Ok(stream) => stream,
+        Err(error) => {
+            println!("连接索引服务失败（可能已退出）：{error}");
+            return;
+        }
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+    let payload = serde_json::json!({"id": 1, "method": "shutdown", "token": token}).to_string();
+    if let Err(error) = stream.write_all(format!("{payload}\n").as_bytes()) {
+        println!("发送 shutdown 失败：{error}");
+        return;
+    }
+    let _ = stream.flush();
+
+    let mut line = String::new();
+    let _ = BufReader::new(stream).read_line(&mut line);
+    println!("索引服务已停止：{}", line.trim());
 }
 
 /// token：std RandomState 的种子来自 OS 熵，拼上时间纳秒足够回环握手用（无新增依赖）。

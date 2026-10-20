@@ -115,9 +115,27 @@ function syncDevSidecar(pkg, binName) {
   console.log(`[dev] Sidecar updated: ${dst}`);
 }
 
+/**
+ * 请正在运行的索引助手退出。
+ *
+ * 它是**提权进程**（读 MFT 要管理员权限）：普通 shell 的 taskkill 会被
+ * Windows 拒绝（Access is denied），exe 被它占着时 cargo build 会
+ * `os error 5` 覆盖失败。但它**能自己退出**——回环协议里的 `shutdown`
+ * 方法让它刷盘后退出（`--stop` 就是这条命令的入口）。
+ */
+function stopIndexHelper() {
+  const exe = path.join(targetDir, "debug", "hermix-filesearch.exe");
+  if (!existsSync(exe)) return;
+  const result = spawnSync(exe, ["--stop"], { stdio: "ignore", timeout: 15000 });
+  if (result.status === 0) {
+    console.log("[dev] 已请索引助手退出（提权进程无法强杀）");
+  }
+}
+
 if (mode === "dev") {
   syncDevSidecar("hermix-server", "hermix");
   // 本地文件索引守护进程（viewer 路径栏模糊搜索 / Alt+F 共用）。
+  stopIndexHelper();
   syncDevSidecar("hermix-filesearch", "hermix-filesearch");
   buildViewer();
   console.log(`[dev] Starting Tauri dev...`);

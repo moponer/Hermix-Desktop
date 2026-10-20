@@ -406,6 +406,33 @@ pub async fn viewer_disk_usage(
         .map_err(|error| format!("磁盘体积分析失败：{error}"))?
 }
 
+/// 优雅停止索引服务。
+///
+/// helper 是**提权进程**，普通 shell 的 `taskkill` 会被 Windows 拒绝；但它
+/// 能自己退出——回环协议里的 `shutdown` 方法让它刷盘后退出。这个命令就是
+/// 那条"请它走"的通道（普通权限即可调用）。
+pub fn stop_service() -> Result<String, String> {
+    let endpoint = read_endpoint().map_err(|error| format!("索引服务未在运行：{error}"))?;
+    let result = request(&endpoint, "shutdown", json!({}))?;
+    let flag = result
+        .get("shuttingDown")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    if flag {
+        Ok("索引服务已停止（已刷盘退出）".to_string())
+    } else {
+        Err("索引服务未确认停止".to_string())
+    }
+}
+
+/// Tauri 命令：停止索引服务（释放它占的内存）。
+#[tauri::command(async)]
+pub async fn viewer_filesearch_stop() -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(stop_service)
+        .await
+        .map_err(|error| format!("停止索引服务失败：{error}"))?
+}
+
 /// 索引服务状态（给「搜索」面板显示是否已就绪）。
 #[tauri::command(async)]
 pub async fn viewer_filesearch_status() -> Result<Value, String> {

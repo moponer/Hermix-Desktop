@@ -472,3 +472,13 @@
 }
 .treemap-crumb:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-primary); }
 .treemap-crumb:disabled { opacity: 0.5; cursor: default; }
+
+/* 进程页里的提权服务提示条 */
+.pane-banner {
+  flex: none; display: flex; align-items: center; gap: 8px;
+  padding: 7px 11px; border-radius: 8px;
+  background: rgba(180, 83, 9, 0.1); color: var(--text-primary);
+  font-size: 12px; line-height: 1.5;
+}
+.pane-banner svg { color: var(--warning, #b45309); flex: none; }
+.pane-banner .pane-btn { margin-left: auto; flex: none; }
