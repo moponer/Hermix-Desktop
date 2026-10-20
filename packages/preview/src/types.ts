@@ -52,7 +52,7 @@ export type PreviewState =
   | { status: "idle" }
   | { status: "loading"; kind: PreviewKind }
   | { status: "ready"; kind: PreviewKind; payload: PreviewPayload; resolvedPath: string | null }
-  | { status: "error"; message: string };
+  | { status: "error"; message: string; executable?: boolean };
 
 /** 加载器的输入。刻意保持最小：路径 + 根 + 视图模式。 */
 export type LoadRequest = {
@@ -67,7 +67,7 @@ export type LoadRequest = {
 
 export type LoadOutcome =
   | { ok: true; payload: PreviewPayload; resolvedPath: string | null }
-  | { ok: false; message: string };
+  | { ok: false; message: string; executable?: boolean };
 
 export type PreviewLoader = (req: LoadRequest) => Promise<LoadOutcome>;
 

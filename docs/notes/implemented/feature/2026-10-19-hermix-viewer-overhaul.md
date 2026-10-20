@@ -1,6 +1,6 @@
 # Decision Note: hermix-viewer 双模式化与全能力重构（超长任务总纲）
 
-Status: implemented — F0–F9 全部交付。双模式（纯净/重量）、彩色类型图标、启动卡顿根因修复、全屏平铺、图片处理内核、PDF/文本编辑、AI 一键入对话、常见文件类型覆盖矩阵均已落地并各自提交（`106bd5f2` → `08621066`）；F10 交互与界面返修（列表改单击即预览 + 溢出/对齐/胶囊/描边清理）、F11 图片编辑器马赛克改「涂抹画笔」、F12 顶部右侧选项组改带文字标签、F13 应用改名「Hermix 文件查看器」、F14 顶部区域打磨（对齐/分层/不溢出 + 标签关闭按钮按需显示）见「交互与界面返修」与「F11」「F12」「F13」「F14」章节
+Status: implemented — F0–F9 全部交付。双模式（纯净/重量）、彩色类型图标、启动卡顿根因修复、全屏平铺、图片处理内核、PDF/文本编辑、AI 一键入对话、常见文件类型覆盖矩阵均已落地并各自提交（`106bd5f2` → `08621066`）；F10 交互与界面返修（列表改单击即预览 + 溢出/对齐/胶囊/描边清理）、F11 图片编辑器马赛克改「涂抹画笔」、F12 顶部右侧选项组改带文字标签、F13 应用改名「Hermix 文件查看器」、F14 顶部区域打磨（对齐/分层/不溢出 + 标签关闭按钮按需显示）见「交互与界面返修」与「F11」「F12」「F13」「F14」章节；F15–F18（可执行文件「立即运行」、反向路径同步 + 驱动器真实卷标 + 表头对齐配色、顶部路径栏万能输入 + 全盘索引搜索、开放能力 MCP 服务）各自独立成篇：见 [可执行文件「立即运行」](../feature/2026-10-20-viewer-executable-run-immediately.md)、[路径栏万能输入 + 全盘索引搜索](../feature/2026-10-20-viewer-pathbar-universal-input-and-global-search.md)、[开放能力 MCP 服务](../feature/2026-10-20-viewer-open-capabilities-mcp.md)
 
 关联：[hermix-viewer 资源管理器化 + @hermix/preview 共享包](../feature/2026-10-13-hermix-viewer-resource-manager.md)、[独立文件浏览器（hermix-viewer）+ 可折叠 AI 右栏 + 文件关联接管](../feature/2026-10-09-standalone-file-viewer.md)、[共享预览层的样式归属与 Tailwind 边界](../architecture/2026-10-19-shared-preview-layer-ownership.md)、[前端内容指纹纳入编译指纹 —— 根治「exe 里是旧 UI」](../bug-fix/2026-10-20-frontend-fingerprint-in-build.md)
 
@@ -81,6 +81,10 @@ Status: implemented — F0–F9 全部交付。双模式（纯净/重量）、�
 | F12 | 顶部右侧视图选项组：光图标 → 带文字标签的分组控件 | done | 12:55 | 本轮提交 |
 | F13 | 应用改名：「Hermix 查看器」→「Hermix 文件查看器」（窗口标题 / productName / ProgID 名 / 设置文案） | done | 12:56 | 本轮提交 |
 | F14 | 顶部区域打磨：两行对齐分层 + 不溢出 + 标签关闭按钮按需显示 + 换两处图标 | done | 13:25 | 本轮提交 |
+| F15 | 可执行文件元信息卡「立即运行」+ 二进制不可预览文案（Rust 白名单 + 原生确认框） | done | 15:10 | 本轮提交 |
+| F16 | 反向路径同步（拖入/外部打开 → 树与中间栏定位）+ 驱动器真实卷标 + 中栏表头与右侧 tab 表头对齐配色 | done | 15:40 | 本轮提交 |
+| F17 | 顶部路径栏万能输入（网址 / 绝对路径 / 搜索词）+ 全盘索引搜索（类 Everything，helper 回环 TCP） | done | 16:05 | 本轮提交 |
+| F18 | 开放能力：viewer `--mcp` 规范兼容 MCP 服务（文件预览/搜索/编辑 + 桌面 GUI 自动操作） | done | 16:25 | 本轮提交 |
 
 ## 交付现状
 

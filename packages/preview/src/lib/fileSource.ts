@@ -15,11 +15,11 @@ export type ReadTextResult =
   | { ok: true; content: string; resolvedPath: string | null }
   | { ok: true; isBinary: true; size: number; resolvedPath: string | null }
   | { ok: true; isEmpty: true; resolvedPath: string | null }
-  | { ok: false; message: string };
+  | { ok: false; message: string; executable?: boolean };
 
 export type ReadBytesResult =
   | { ok: true; bytes: Uint8Array; size: number; resolvedPath: string | null }
-  | { ok: false; message: string };
+  | { ok: false; message: string; executable?: boolean };
 
 export type ReadMarkdownResult =
   | {
@@ -90,4 +90,32 @@ export interface FileSource {
   revealInExplorer?(path: string): Promise<{ ok: boolean; message?: string }>;
   /** 用系统默认程序打开 — 可选。 */
   openWithSystem?(path: string): Promise<{ ok: boolean; message?: string }>;
+  /**
+   * 立即运行一个可执行文件 — 可选（desktop 不提供，viewer 提供）。
+   *
+   * 只对后端判定为「可执行文件」的载荷有意义（错误结果里的
+   * `executable` 标志）。实现方负责在真正执行前向用户确认——
+   * 静默执行是这条路径最大的风险。
+   */
+  runExecutable?(path: string): Promise<{ ok: boolean; message?: string }>;
+  /**
+   * 全盘模糊搜索（本地文件索引，类 Everything）— 可选。
+   *
+   * 只有接了本地索引服务的实现方提供。**不可用时返回
+   * `{ ok: false, message }` 而不是抛错**：调用方会据此退回目录内搜索，
+   * 一次失败不该让整条搜索链路断掉。
+   */
+  searchGlobal?(
+    query: string,
+    limit: number,
+  ): Promise<
+    | {
+        ok: true;
+        entries: DirEntryLike[];
+        totalMatches: number;
+        returned: number;
+        elapsedMs: number;
+      }
+    | { ok: false; message: string }
+  >;
 }

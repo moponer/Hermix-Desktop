@@ -50,10 +50,12 @@ async function readBytesWithin(
   label: string,
 ): Promise<
   | { ok: true; bytes: Uint8Array; size: number; resolvedPath: string | null }
-  | { ok: false; message: string }
+  | { ok: false; message: string; executable?: boolean }
 > {
   const res = await source.readBytes(path);
-  if (!res.ok) return { ok: false, message: friendlyReadError(res.message) };
+  if (!res.ok) {
+    return { ok: false, message: friendlyReadError(res.message), executable: res.executable };
+  }
   if (res.size > limit) {
     return {
       ok: false,
@@ -210,7 +212,9 @@ const textLoader =
   (source: FileSource): PreviewLoader =>
   async ({ name, path, kind }) => {
     const res = await source.readText(path);
-    if (!res.ok) return { ok: false, message: friendlyReadError(res.message) };
+    if (!res.ok) {
+      return { ok: false, message: friendlyReadError(res.message), executable: res.executable };
+    }
     // 显式标注 PreviewPayload：靠 `kind === "text"` 三元收窄出字面量类型，
     // 不标的话 TS 只能看到宽泛的 PreviewKind，赋不进 union。
     const emit = (content: string): PreviewPayload =>

@@ -28,7 +28,14 @@ type RustFileContent =
   | { kind: "image"; name: string; mime: string; data_base64: string }
   | { kind: "pdf"; name: string; data_base64: string }
   | { kind: "bytes"; name: string; extension: string; data_base64: string }
-  | { kind: "unsupported"; name: string; extension: string; reason: string };
+  | {
+      kind: "unsupported";
+      name: string;
+      extension: string;
+      reason: string;
+      /** 后端判定这是可执行文件（exe / msi / …）——可展示「立即运行」。 */
+      executable: boolean;
+    };
 
 /** base64 → Uint8Array（无第三方依赖：charCodeAt 单字节累加）。 */
 function decodeBase64(b64: string): Uint8Array {
@@ -44,6 +51,24 @@ function base64ByteLength(b64: string): number {
   return Math.max(0, Math.floor((b64.length * 3) / 4) - padding);
 }
 
+/**
+ * 不支持类型的失败结果。
+ *
+ * 可执行文件单独措辞：后端已经给了「二进制可执行文件不可预览，点击「立即
+ * 运行」执行」，再加「不支持的类型（exe）：」前缀会把重点冲淡；其余类型
+ * 沿用「不支持的类型（ext）：原因」。
+ */
+function unsupportedResult(c: Extract<RustFileContent, { kind: "unsupported" }>): {
+  ok: false;
+  message: string;
+  executable?: boolean;
+} {
+  if (c.executable) {
+    return { ok: false, message: c.reason, executable: true };
+  }
+  return { ok: false, message: `不支持的类型（${c.extension ?? c.kind}）：${c.reason}` };
+}
+
 function asReadText(c: RustFileContent, path: string): ReadTextResult {
   if (c.kind === "text") {
     // Rust 送的是原始字节；编码判定（BOM / UTF-16 / GBK）与二进制嗅探
@@ -55,7 +80,7 @@ function asReadText(c: RustFileContent, path: string): ReadTextResult {
     // isBinary 就直接退出了，没必要为拿 size 把 50MB 的 base64 全解一遍。
     return { ok: true, isBinary: true, size: base64ByteLength(c.data_base64), resolvedPath: path };
   }
-  return { ok: false, message: `不支持的类型（${c.extension ?? c.kind}）：${c.reason}` };
+  return unsupportedResult(c);
 }
 
 function asReadBytes(c: RustFileContent, path: string): ReadBytesResult {
@@ -69,7 +94,7 @@ function asReadBytes(c: RustFileContent, path: string): ReadBytesResult {
     const bytes = decodeBase64(c.data_base64);
     return { ok: true, bytes, size: bytes.byteLength, resolvedPath: path };
   }
-  return { ok: false, message: `不支持的类型（${c.extension ?? c.kind}）：${c.reason}` };
+  return unsupportedResult(c);
 }
 
 /** 读单个文件并按类型分流——三条 read 共用的唯一 invoke 入口。 */
@@ -185,6 +210,40 @@ export const viewerFileSource: FileSource = {
     try {
       await invoke("viewer_open_with_system", { path });
       return { ok: true };
+    } catch (e) {
+      return { ok: false, message: String(e instanceof Error ? e.message : e) };
+    }
+  },
+
+  /**
+   * 立即运行可执行文件。确认框在 Rust 侧弹（原生对话框，用户必须亲手
+   * 点「运行」）——这里只负责把结果如实传回去：用户取消不是错误。
+   */
+  async runExecutable(path: string) {
+    try {
+      await invoke<boolean>("viewer_run_executable", { path });
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, message: String(e instanceof Error ? e.message : e) };
+    }
+  },
+
+  /**
+   * 全盘模糊搜索（本地索引，类 Everything）。
+   *
+   * 索引服务没跑时 Rust 侧会尝试提权拉起（UAC 弹一次）；拉不起来就返回
+   * 失败，前端据此退回「当前目录内搜索」——搜索这条路不能因为索引缺失
+   * 就整个不通。
+   */
+  async searchGlobal(query: string, limit: number) {
+    try {
+      const r = await invoke<{
+        entries: DirEntryLike[];
+        totalMatches: number;
+        returned: number;
+        elapsedMs: number;
+      }>("viewer_search_global", { query, limit });
+      return { ok: true, ...r };
     } catch (e) {
       return { ok: false, message: String(e instanceof Error ? e.message : e) };
     }

@@ -303,6 +303,13 @@ export function App() {
   const [searchQ, setSearchQ] = useState("");
   const [searching, setSearching] = useState(false);
   const [searchResults, setSearchResults] = useState<DirEntryLike[]>([]);
+  /**
+   * 搜索结果的来源：global = 全盘索引（类 Everything），local = 当前目录。
+   * 用户要能一眼看出「搜的是全盘还是这一层」——两者结果范围差几个数量级。
+   */
+  const [searchScope, setSearchScope] = useState<"global" | "local" | null>(null);
+  /** 搜索来源的补充说明（索引不可用时说明为什么退回目录搜索）。 */
+  const [searchNote, setSearchNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
 
@@ -334,6 +341,8 @@ export function App() {
   // —— 拖放 ——
   const [dragOver, setDragOver] = useState(false);
   const openedRef = useRef<Set<string>>(new Set());
+  /** 待补做的「跟随定位」目录：驱动器列表还没回来时先记着（首屏并发）。 */
+  const pendingSyncRef = useRef<string | null>(null);
   /** 「加入 AI 对话」的请求序号：每次自增，保证同一条消息不被发两遍。 */
   const aiNonceRef = useRef(0);
 
@@ -501,6 +510,10 @@ export function App() {
       setSearchQ("");
       setSearchResults([]);
       setSearching(false);
+      // 换目录 = 搜索作废：范围标签必须一起清，否则用户会以为看到的是
+      // 刚才那次搜索的结果。
+      setSearchScope(null);
+      setSearchNote(null);
     },
     [],
   );
@@ -535,13 +548,67 @@ export function App() {
 
   const refresh = useCallback(() => setReloadKey((k) => k + 1), []);
 
-  const onPathSubmit = useCallback(
-    (e: React.FormEvent) => {
-      e.preventDefault();
-      const v = pathInput.trim();
-      if (v && v !== currentPath) navigate(v, true);
+  const exitSearch = useCallback(() => {
+    setSearchQ("");
+    setSearchResults([]);
+    setSearching(false);
+    setSearchScope(null);
+    setSearchNote(null);
+  }, []);
+
+  /**
+   * 搜索：先走全盘索引（类 Everything），索引服务不可用时退回当前目录。
+   *
+   * 为什么不只做目录搜索：目录搜索是「在这一层里翻一遍」，用户要找的
+   * 文件多半不在当前层——那等于没有搜索。全盘索引跨卷、毫秒级返回，
+   * 是 Everything 的体验。但索引服务可能没跑或没授权，这时**必须**退回
+   * 目录搜索：一次索引失败不该让整条搜索链路断掉。
+   */
+  const runSearch = useCallback(
+    async (query: string) => {
+      const q = query.trim();
+      if (!q) {
+        exitSearch();
+        return;
+      }
+      setSearchQ(q);
+      setSearching(true);
+      setSearchNote("正在搜索全盘索引（首次会请求管理员授权以建立索引）…");
+      // 1. 全盘索引
+      const global = await viewerFileSource.searchGlobal?.(q, 300);
+      if (global?.ok) {
+        setSearchResults(global.entries);
+        setSearchScope("global");
+        setSearchNote(
+          global.totalMatches > global.entries.length
+            ? `全盘索引命中 ${global.totalMatches} 条，显示前 ${global.entries.length} 条`
+            : `全盘索引命中 ${global.totalMatches} 条`,
+        );
+        setSearching(false);
+        return;
+      }
+      const reason = global?.message ?? "全盘索引不可用";
+      // 2. 退回当前目录
+      if (!currentPath || !viewerFileSource.fs) {
+        setSearchResults([]);
+        setSearchScope("local");
+        setSearchNote(`${reason}；当前没有目录可搜`);
+        setSearching(false);
+        return;
+      }
+      const local = await viewerFileSource.fs.search(currentPath, q, showHidden, 300);
+      if (local.ok) {
+        setSearchResults(local.entries);
+        setSearchScope("local");
+        setSearchNote(`仅在当前目录内搜索（${reason}）`);
+      } else {
+        setSearchResults([]);
+        setSearchScope("local");
+        setSearchNote(`搜索失败：${local.message}`);
+      }
+      setSearching(false);
     },
-    [pathInput, currentPath, navigate],
+    [currentPath, exitSearch, showHidden, viewerFileSource],
   );
 
   // — 单击：文件夹进、文件开 tab —
@@ -573,6 +640,79 @@ export function App() {
     setActiveTabId(id);
   }, []);
 
+  /**
+   * 把左侧树展开到指定目录。
+   *
+   * 树只存「已加载的 children」，所以定位到深度 N 必须逐级 listDir
+   * （N 次串行目录枚举）——这是"跟随定位"的固有代价；不做的话树停在
+   * 盘根，等于没定位。每一级的 key 一律取**后端返回的** e.path：树节点
+   * 的 key 就是它，自己拼字符串会对不上（盘符根带尾反斜杠、UNC 前缀）。
+   */
+  const syncTreeTo = useCallback(
+    async (dir: string) => {
+      const fs = viewerFileSource.fs;
+      if (!fs) return;
+      const drive = drives.find((d) =>
+        dir.toLowerCase().startsWith(`${d.letter.toLowerCase()}:`),
+      );
+      if (!drive) {
+        // 驱动器列表还没回来（首屏并发）：记下来，等它到了再补一次。
+        pendingSyncRef.current = dir;
+        return;
+      }
+      const listDir = fs.listDir;
+      let cur = drive.path;
+      let entries = await listDir(cur, showHidden);
+      setTree((t) => ({
+        ...t,
+        [cur]: {
+          expanded: true,
+          children: entries.ok ? entries.entries.filter((e) => e.isDir) : [],
+        },
+      }));
+      for (const seg of dir.slice(drive.path.length).split(/[\\/]+/).filter(Boolean)) {
+        if (!entries.ok) return;
+        const hit = entries.entries.find(
+          (e) => e.isDir && e.name.toLowerCase() === seg.toLowerCase(),
+        );
+        if (!hit) return;
+        cur = hit.path;
+        entries = await listDir(cur, showHidden);
+        setTree((t) => ({
+          ...t,
+          [cur]: {
+            expanded: true,
+            children: entries.ok ? entries.entries.filter((e) => e.isDir) : [],
+          },
+        }));
+      }
+    },
+    [drives, showHidden],
+  );
+
+  /**
+   * 文件从**别处**被打开（拖入 / 主程序「在查看器中打开」/ 命令行 /
+   * 单实例投递）时，中间栏与左侧树跟着定位到它实际所在的目录——
+   * 否则右边开了个文件，左边还停在另一个盘，用户的空间感直接断掉。
+   *
+   * 纯净模式下不渲染树与中间栏，只把当前目录记下来（切到重量模式时
+   * 目录已经是对的）；重量模式下同时逐级展开树。
+   */
+  const syncToFile = useCallback(
+    async (filePath: string) => {
+      const dir = await viewerFileSource.fs?.parent(filePath);
+      if (!dir) return;
+      if (mode === "heavy") {
+        navigate(dir, false);
+        void syncTreeTo(dir);
+      } else {
+        setCurrentPath(dir);
+        setPathInput(dir);
+      }
+    },
+    [mode, navigate, syncTreeTo],
+  );
+
   /** 打开一个路径：目录进资源管理器（切重量模式），文件开预览标签。
    *  启动参数与单实例投递共用这一条判别——主程序「在查看器中打开」传目录
    *  是常规动作，走错分支会得到一个报「不是文件」的标签页。 */
@@ -585,10 +725,59 @@ export function App() {
         navigate(path, false);
       } else {
         openPath(path);
+        void syncToFile(path);
       }
     },
-    [navigate, openPath],
+    [navigate, openPath, syncToFile],
   );
+
+  /**
+   * 路径栏是**万能输入框**，按输入形态分派：
+   *   1. 网址（http/https/www）→ 用系统浏览器打开；
+   *   2. 绝对路径 → 目录进资源管理器，文件开预览标签（并跟着定位）；
+   *   3. 其余 → 当搜索词（转交搜索）。
+   *
+   * 以前只有「目录」一种理解：传文件路径会报「不是目录」，用户只能
+   * 自己在中间栏找。现在一个框能吃下三类输入。
+   */
+  const onPathSubmit = useCallback(
+    async (e: React.FormEvent) => {
+      e.preventDefault();
+      const v = pathInput.trim();
+      if (!v) return;
+      // 1. 网址
+      if (/^(https?:\/\/|www\.)/i.test(v)) {
+        const target = v.startsWith("www.") ? `https://${v}` : v;
+        await viewerFileSource.openWithSystem?.(target);
+        return;
+      }
+      // 2. 绝对路径（盘符 / UNC）
+      if (/^[a-zA-Z]:[\\/]/.test(v) || v.startsWith("\\\\")) {
+        const st = await viewerFileSource.fs?.stat(v);
+        if (st?.isDir) {
+          navigate(v, true);
+          return;
+        }
+        if (st?.isFile) {
+          await openTarget(v);
+          return;
+        }
+        // 路径不存在：不当路径，当搜索词（用户多半想找它）
+      }
+      // 3. 搜索词
+      setSearchQ(v);
+      void runSearch(v);
+    },
+    [pathInput, navigate, openTarget, runSearch],
+  );
+
+  // 驱动器列表到位后，补做一次首屏期间排队的「跟随定位」。
+  useEffect(() => {
+    const target = pendingSyncRef.current;
+    if (!target || drives.length === 0) return;
+    pendingSyncRef.current = null;
+    void syncTreeTo(target);
+  }, [drives, syncTreeTo]);
 
   const closeTab = useCallback((id: number) => {
     setTabs((ts) => {
@@ -620,26 +809,10 @@ export function App() {
   const onSearchSubmit = useCallback(
     async (e: React.FormEvent) => {
       e.preventDefault();
-      if (!currentPath || !viewerFileSource.fs) return;
-      const q = searchQ.trim();
-      if (!q) {
-        setSearchResults([]);
-        setSearching(false);
-        return;
-      }
-      setSearching(true);
-      const r = await viewerFileSource.fs.search(currentPath, q, showHidden, 200);
-      if (r.ok) setSearchResults(r.entries);
-      else setError(r.message);
+      await runSearch(searchQ);
     },
-    [searchQ, currentPath, showHidden],
+    [runSearch, searchQ],
   );
-
-  const exitSearch = useCallback(() => {
-    setSearchQ("");
-    setSearchResults([]);
-    setSearching(false);
-  }, []);
 
   // 右键菜单
   const onContextMenu = useCallback(
@@ -762,7 +935,14 @@ export function App() {
   }, [currentPath]);
 
   const active = tabs.find((t) => t.id === activeTabId) ?? null;
-  const visibleEntries = searching ? searchResults : entries;
+  /**
+   * 列表显示什么：**搜索进行中或已出结果** → 搜索结果；否则 → 目录内容。
+   *
+   * 曾经用 `searching` 判断，但 `searching` 是「请求在飞」的意思——搜索**完成**
+   * 后它回到 false，于是「0 命中」的结果集被丢掉，列表又变回目录内容，
+   * 用户看到的像是「搜索没生效」。判据必须是「有没有搜索结果集」。
+   */
+  const visibleEntries = searching || searchScope ? searchResults : entries;
 
   return (
     <div
@@ -800,7 +980,7 @@ export function App() {
             className="path-input"
             value={pathInput}
             onChange={(e) => setPathInput(e.target.value)}
-            placeholder="路径（例如 C:\Users\…）"
+            placeholder="路径 / 网址 / 搜索…"
           />
           <button type="submit" className="tb-btn" title="跳转" aria-label="跳转">→</button>
         </form>
@@ -866,14 +1046,32 @@ export function App() {
               className="search-input"
               value={searchQ}
               onChange={(e) => setSearchQ(e.target.value)}
-              placeholder="在当前目录下搜索…"
+              placeholder="搜索文件…"
             />
             {searching && (
-              <button type="button" className="search-clear" onClick={exitSearch}>
+              <button
+                type="button"
+                className="search-clear"
+                onClick={exitSearch}
+                aria-label="退出搜索"
+              >
                 <X />
               </button>
             )}
           </form>
+        )}
+        {/* 搜索范围：全盘索引 vs 当前目录——两者结果差几个数量级，
+            用户必须一眼看出「搜到的是不是全盘」。
+            搜索**进行中**也要有反馈（首次搜索可能要等 UAC + 索引装载，
+            几秒到几十秒不等），所以条件是 searchNote 而不是 searchScope
+            （scope 要等结果回来才定）。 */}
+        {searchNote && (
+          <span
+            className={`search-scope ${searchScope === "global" ? "is-global" : ""}`}
+            title={searchNote}
+          >
+            {searchNote}
+          </span>
         )}
       </nav>
       )}
@@ -1005,7 +1203,7 @@ export function App() {
                 {visibleEntries.length === 0 && (
                   <tr>
                     <td colSpan={3} className="empty-cell">
-                      {searching ? "无搜索结果" : "空目录"}
+                      {searching ? "正在搜索…" : searchScope ? "无搜索结果" : "空目录"}
                     </td>
                   </tr>
                 )}

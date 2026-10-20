@@ -46,7 +46,12 @@ reqwest = { workspace = true, features = ["json"] }
 # Win32_System_WindowsProgramming：DRIVE_FIXED / DRIVE_REMOTE / DRIVE_CDROM
 # 等盘符类型常量在 windows-sys 0.52 里位于该模块（不在 FileSystem 下），
 # 用来在不碰文件系统的前提下判定盘符类型（见 commands.rs::viewer_drives）。
-windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Threading", "Win32_System_WindowsProgramming"] }
+# Win32_UI_Shell + Win32_System_Registry：ShellExecuteExW 提权拉起索引
+# helper（filesearch.rs::spawn_elevated）；SHELLEXECUTEINFOW 还需要
+# System_Registry（HKEY 字段）。
+# Win32_UI_WindowsAndMessaging：桌面 GUI 自动化（gui.rs：列窗口/找控件/
+# 点击/填文本/按键）。全走 Win32 消息，不引 windows crate 的 COM 层。
+windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Threading", "Win32_System_WindowsProgramming", "Win32_System_Registry", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 [[bin]]
 name = "hermix-viewer"

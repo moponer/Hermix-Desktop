@@ -6,6 +6,7 @@
 //! 组织：命令在 commands.rs（lib.rs 根定义会与 generate_handler 冲突）。
 
 pub mod commands;
+pub mod filesearch;
 pub mod image_ops;
 pub mod paths;
 pub mod pdf_ops;
@@ -137,6 +138,9 @@ pub fn main() {
             commands::viewer_reveal_in_explorer,
             commands::viewer_search_dir,
             commands::viewer_open_with_system,
+            commands::viewer_run_executable,
+            filesearch::viewer_search_global,
+            filesearch::viewer_filesearch_status,
             commands::viewer_take_pending,
             commands::ai_send,
             image_ops::image_info,

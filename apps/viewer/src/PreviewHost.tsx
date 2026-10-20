@@ -7,7 +7,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { lazy, Suspense } from "react";
-import { Pencil, RotateCcw } from "lucide-react";
+import { Pencil, Play, RotateCcw } from "lucide-react";
 import {
   loadPreview,
   PreviewSurface,
@@ -65,19 +65,25 @@ const EDITOR_HINT: Record<Exclude<EditorKind, "none">, string> = {
  * 用户遇到看不懂的类型时真正需要的是：它多大、什么时候改的、用什么
  * 程序能打开。所以这里把 stat 拿到的元信息摆出来，并给两个能立刻
  * 采取行动的按钮。
+ *
+ * 可执行文件（exe / msi / …）多给一个「立即运行」——它不可预览，
+ * 但用户要的往往正是把它跑起来。执行前由后端弹原生确认框。
  */
 function UnsupportedCard({
   message,
   path,
   name,
   source,
+  executable = false,
 }: {
   message: string;
   path: string;
   name: string;
   source: FileSource;
+  executable?: boolean;
 }) {
   const [meta, setMeta] = useState<{ size: number; mtime: string | null } | null>(null);
+  const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
     void source.fs?.stat(path).then((st) => {
@@ -88,6 +94,12 @@ function UnsupportedCard({
       cancelled = true;
     };
   }, [path, source]);
+
+  const run = async () => {
+    setError(null);
+    const r = await source.runExecutable?.(path);
+    if (r && !r.ok) setError(r.message ?? "运行失败");
+  };
 
   return (
     <div className="preview-state-center">
@@ -107,6 +119,19 @@ function UnsupportedCard({
             <dd>{meta?.mtime ? formatTime(meta.mtime) : "—"}</dd>
           </div>
         </dl>
+        {executable && (
+          <button
+            type="button"
+            className="tb-btn meta-card-run"
+            onClick={() => void run()}
+            disabled={!source.runExecutable}
+            title="运行这个可执行文件（执行前会弹出确认）"
+          >
+            <Play size={14} className="icon-sm" />
+            立即运行
+          </button>
+        )}
+        {error && <p className="meta-card-error">{error}</p>}
         <div className="meta-card-actions">
           <button
             type="button"
@@ -181,7 +206,7 @@ export function PreviewHost({
       const out: LoadOutcome = await loadPreview({ ...req, kind: effectiveKind }, source);
       if (cancelled || myToken !== loadToken.current) return;
       if (!out.ok) {
-        setState({ status: "error", message: out.message });
+        setState({ status: "error", message: out.message, executable: out.executable });
         return;
       }
       setState({
@@ -348,7 +373,13 @@ export function PreviewHost({
             }}
           />
         ) : state.status === "error" ? (
-          <UnsupportedCard message={state.message} path={path} name={name} source={source} />
+          <UnsupportedCard
+            message={state.message}
+            path={path}
+            name={name}
+            source={source}
+            executable={state.executable}
+          />
         ) : (
           <div className="preview-state-center">正在读取 {name}…</div>
         )}

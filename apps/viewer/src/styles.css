@@ -283,6 +283,18 @@ html, body, #root {
   padding: 2px;
 }
 .search-clear:hover { color: var(--text-primary); }
+/* 搜索范围标签：告诉用户结果是「全盘索引」还是「当前目录」——两者差几个
+   数量级，混为一谈会让人以为「搜不到就是没有」。层次靠底色差，不描边。 */
+.search-scope {
+  flex: none; display: inline-flex; align-items: center;
+  height: var(--ctl-h); max-width: 260px;
+  padding: 0 8px; border-radius: 6px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: 12px; line-height: 1;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.search-scope.is-global { color: var(--accent); background: var(--bg-accent-soft); }
 
 /* 键盘焦点指示——无障碍必需，是全文件唯一保留的描边。
    静态描边一律去掉，层次改由底色差承担。 */
@@ -425,10 +437,16 @@ html, body, #root {
 .entries { width: 100%; border-collapse: collapse; font-size: 13px; user-select: none; table-layout: fixed; }
 .entries thead th {
   position: sticky; top: 0; z-index: 1;
-  background: var(--bg-secondary);
+  /* 表头底色与**上方路径栏**区分开：原来两者都是 --bg-secondary，
+     上下糊成一片。改用 --bg-tabbar —— 与右侧 .tabbar 同色，于是
+     左右两栏的「标题行」同色，横向也顺带对齐了。 */
+  background: var(--bg-tabbar);
   text-align: left; font-weight: 500;
   font-size: 11px; color: var(--text-secondary);
-  padding: 6px 12px;
+  /* 高度 32px = 右侧 .tabbar 高度；再把上内距调到让 11px 的表头文字
+     与 tab 里 12px 的文字落在同一水平线上（tab 文字居中于 32px，
+     基线约 18.4；这里 10px 上内距 → 基线约 18.8，肉眼同一线）。 */
+  padding: 10px 12px 9px;
 }
 /* 「大小」列的值是右对齐的，表头也得右对齐，否则标题飘在左边、
    数字贴着右边，中间一大片空。 */
@@ -1019,6 +1037,27 @@ html, body, #root {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .meta-card-actions { display: flex; gap: 8px; }
+
+/* 「立即运行」：可执行文件的主操作，单独一行放在次要按钮之上。
+   实心 accent 底（不用描边）——一眼看出这是主按钮；真正的安全闸门
+   是执行前那道原生确认框，不是把按钮画得吓人。 */
+.meta-card-run {
+  background: var(--accent);
+  color: #fff;
+  padding: 0 12px;
+  margin-bottom: 12px;
+}
+.meta-card-run:hover:not(:disabled) {
+  background: var(--accent-strong);
+  color: #fff;
+}
+.meta-card-run:disabled { opacity: 0.45; }
+
+.meta-card-error {
+  margin: 0 0 12px;
+  font-size: 12px;
+  color: var(--danger);
+}
 
 /* ─── 媒体预览（F8） ───────────────────────────────────────── */
 .media-wrap {

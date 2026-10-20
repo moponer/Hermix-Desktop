@@ -103,8 +103,18 @@ pub enum FileContent {
         name: String,
         extension: String,
         reason: String,
+        /// 这是个可执行文件（exe / msi / …）——不可预览，但能直接跑。
+        /// 前端据此显示「立即运行」；判定权在后端（见 EXECUTABLE_EXT），
+        /// 前端不自己猜扩展名，两边各一份表必然分叉。
+        executable: bool,
     },
 }
+
+/// Windows 上双击即执行 / 启动的二进制扩展名。
+///
+/// 这张表同时是**信任边界**：`viewer_run_executable` 只放行这些扩展名，
+/// 不能被用来启动任意文件（.bat / .ps1 需要 shell 语义，另走系统程序打开）。
+const EXECUTABLE_EXT: &[&str] = &["exe", "msi", "com", "scr", "pif"];
 
 fn ext_of(p: &str) -> String {
     PathBuf::from(p)
@@ -233,6 +243,11 @@ fn mtime_to_rfc3339(t: std::time::SystemTime) -> Option<String> {
     chrono_like(secs)
 }
 
+/// unix 毫秒 → RFC 3339（索引 helper 的 `modified` 是毫秒）。
+pub(crate) fn ms_to_rfc3339(ms: u64) -> Option<String> {
+    chrono_like((ms / 1000) as i64)
+}
+
 /// 没有 chrono 依赖下的极简 RFC 3339：把 unix 秒换成本地年/月/日/时/分/秒。
 /// 时区偏移用本地时间表达（前端用 new Date 解析时不需要时区，行为一致）。
 fn chrono_like(secs: i64) -> Option<String> {
@@ -356,6 +371,14 @@ pub fn viewer_read_file(path: String) -> Result<FileContent, String> {
     let name = file_name_lossy(&p);
     let ext = ext_of(&path);
     let class = classify(&ext);
+
+    // 可执行文件不可预览：连字节都不读（大 exe 有几百 MB，读一遍再丢掉
+    // 是白费 IO 与内存），也不吃大小上限——超大的 exe 同样不可预览，
+    // 报「文件过大」只会让用户更困惑。
+    if EXECUTABLE_EXT.contains(&ext.as_str()) {
+        return Ok(unsupported_content(name, ext));
+    }
+
     let limit = size_limit_for_ext(&ext);
     if meta.len() > limit {
         return Err(format!(
@@ -406,13 +429,26 @@ pub fn viewer_read_file(path: String) -> Result<FileContent, String> {
             name,
             extension: ext,
             reason: "老版二进制格式需要 Office，请用系统程序打开".into(),
+            executable: false,
         },
-        _ => FileContent::Unsupported {
-            name,
-            extension: ext,
-            reason: "暂不支持该类型，请用系统程序打开".into(),
-        },
+        _ => unsupported_content(name, ext),
     })
+}
+
+/// 「不渲染」的结果。措辞分两种：可执行文件说清「不可预览但能跑」，
+/// 其余类型说清「用系统程序打开」。
+fn unsupported_content(name: String, ext: String) -> FileContent {
+    let executable = EXECUTABLE_EXT.contains(&ext.as_str());
+    FileContent::Unsupported {
+        name,
+        extension: ext,
+        reason: if executable {
+            "二进制可执行文件不可预览，点击「立即运行」执行".into()
+        } else {
+            "暂不支持该类型，请用系统程序打开".into()
+        },
+        executable,
+    }
 }
 
 /// 列目录。可选 `show_hidden`：默认 false（与 Windows 资源管理器一致）。
@@ -488,11 +524,47 @@ pub fn viewer_parent(path: String) -> Option<String> {
 /// **为什么不用 `std::fs::metadata` 判盘符类型**：那是对文件系统的真实
 /// IO，打在断开的网络映射盘（`net use` 留下的 Z:/Y:）上会阻塞到 SMB
 /// 超时（可达数十秒）。这个命令在启动路径上，而同步命令默认在 Tauri
+/// 卷标（用户给这块盘起的名字，如 "Windows" / "工作盘"）。
+///
+/// `GetVolumeInformationW` 是**真 IO**，只对本地盘调用：网络盘的卷标查询
+/// 要走网络，断开的映射盘会卡到 SMB 超时（几十秒）——那正是本命令
+/// 当初被改成 `GetDriveTypeW` 的原因。网络盘保留类型标签。
+#[cfg(windows)]
+fn volume_label(root: &str) -> Option<String> {
+    use windows_sys::Win32::Storage::FileSystem::GetVolumeInformationW;
+    let mut wide: Vec<u16> = root.encode_utf16().collect();
+    wide.push(0);
+    let mut buf = vec![0u16; 260];
+    // 只需要卷标：文件系统名缓冲区传 NULL + 长度 0（Windows 允许）。
+    let ok = unsafe {
+        GetVolumeInformationW(
+            wide.as_ptr(),
+            buf.as_mut_ptr(),
+            buf.len() as u32,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if ok == 0 {
+        return None;
+    }
+    let len = buf.iter().position(|&c| c == 0).unwrap_or(0);
+    if len == 0 {
+        return None;
+    }
+    Some(String::from_utf16_lossy(&buf[..len]))
+}
+
 /// 主线程执行——一次阻塞就是整个窗口白屏。`GetDriveTypeW` 只问驱动类型，
 /// 不碰文件系统，恒为内核态快操作。
 ///
-/// 代价：不显示卷标（"Windows (C:)" 这类）。卷标要 `GetVolumeInformationW`
-/// ——那是真 IO，留给将来后台补齐，不进启动路径。
+/// 卷标（"Windows (C:)" 这类用户自己起的名字）另外用
+/// `GetVolumeInformationW` 取，只对**本地盘**取——网络盘的卷标查询要走
+/// 网络，断开的映射盘会卡到 SMB 超时（可达数十秒），那会让整个驱动器
+/// 列表迟迟不出现。
 #[tauri::command(async)]
 pub fn viewer_drives() -> Vec<DriveRoot> {
     #[cfg(windows)]
@@ -511,13 +583,22 @@ pub fn viewer_drives() -> Vec<DriveRoot> {
                 let path = format!("{letter}:\\");
                 let mut wide: Vec<u16> = path.encode_utf16().collect();
                 wide.push(0);
-                let label = match unsafe { GetDriveTypeW(wide.as_ptr()) } {
-                    DRIVE_FIXED => format!("本地磁盘 ({letter}:)"),
-                    DRIVE_REMOVABLE => format!("可移动磁盘 ({letter}:)"),
-                    DRIVE_REMOTE => format!("网络驱动器 ({letter}:)"),
-                    DRIVE_CDROM => format!("光驱 ({letter}:)"),
-                    DRIVE_RAMDISK => format!("内存盘 ({letter}:)"),
-                    _ => format!("磁盘 ({letter}:)"),
+                let drive_type = unsafe { GetDriveTypeW(wide.as_ptr()) };
+                // 有卷标就用卷标（用户真正认得的名字），没有才退回类型名。
+                let volume = match drive_type {
+                    DRIVE_FIXED | DRIVE_REMOVABLE | DRIVE_RAMDISK => volume_label(&path),
+                    _ => None,
+                };
+                let label = match volume {
+                    Some(v) if !v.trim().is_empty() => format!("{} ({letter}:)", v.trim()),
+                    _ => match drive_type {
+                        DRIVE_FIXED => format!("本地磁盘 ({letter}:)"),
+                        DRIVE_REMOVABLE => format!("可移动磁盘 ({letter}:)"),
+                        DRIVE_REMOTE => format!("网络驱动器 ({letter}:)"),
+                        DRIVE_CDROM => format!("光驱 ({letter}:)"),
+                        DRIVE_RAMDISK => format!("内存盘 ({letter}:)"),
+                        _ => format!("磁盘 ({letter}:)"),
+                    },
                 };
                 Some(DriveRoot { letter, path, label })
             })
@@ -602,16 +683,109 @@ pub fn viewer_search_dir(
     Ok(out)
 }
 
+/// 用系统 shell「打开」一个文件或网址（等价于在资源管理器里双击）。
+///
+/// **为什么不用 `Command::new(path).spawn()`**：那是「程序自己创建子进程」，
+/// 正是 Windows 行为监控（360 的「恶意行为监控」等）的经典误报触发点。
+/// 2026-10-20 实测：viewer 用 CreateProcess 启动 notepad.exe，被 360 判成
+/// 「ADVtrojan/GenInjector.E（木马病毒）」并**直接杀掉 viewer 进程**——
+/// 程序本身干净，但用户看到的是「我的软件报毒了」。
+///
+/// 走 ShellExecute 则是「请系统 shell 打开这个文件」：子进程由 shell
+/// （explorer.exe）创建，不由 viewer 创建。这与用户在资源管理器里双击
+/// 完全同构，行为监控看到的是一次普通的「打开文件」。
+///
+/// `working_dir` 对应 Explorer 双击的语义（工作目录 = 文件所在目录），
+/// 免得程序读不到同目录的配置文件。
+#[cfg(windows)]
+fn shell_open(target: &Path, working_dir: Option<&Path>) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::UI::Shell::{ShellExecuteExW, SHELLEXECUTEINFOW};
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    let target_w: Vec<u16> = target.as_os_str().encode_wide().chain(Some(0)).collect();
+    let verb_w: Vec<u16> = "open\0".encode_utf16().collect();
+    let dir_w: Vec<u16> = working_dir
+        .map(|d| d.as_os_str().encode_wide().chain(Some(0)).collect())
+        .unwrap_or_default();
+
+    let mut sei: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
+    sei.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
+    sei.lpVerb = verb_w.as_ptr();
+    sei.lpFile = target_w.as_ptr();
+    sei.lpDirectory = if dir_w.is_empty() {
+        std::ptr::null()
+    } else {
+        dir_w.as_ptr()
+    };
+    sei.nShow = SW_SHOWNORMAL;
+    // ShellExecuteEx 成功返回 > 32；<= 32 是 SE_ERR_* 错误码。
+    let ok = unsafe { ShellExecuteExW(&mut sei) };
+    if ok <= 32 {
+        return Err(format!("系统无法打开该目标（ShellExecute 返回 {ok}）"));
+    }
+    Ok(())
+}
+
 /// 用系统默认程序打开。
 #[tauri::command]
 pub fn viewer_open_with_system(path: String) -> Result<(), String> {
     #[cfg(windows)]
     {
-        std::process::Command::new("explorer.exe")
-            .arg(&path)
-            .spawn()
-            .map_err(|e| format!("打开失败: {e}"))?;
-        Ok(())
+        shell_open(Path::new(&path), None)
+    }
+    #[cfg(not(windows))]
+    Err("仅支持 Windows（项目边界）".into())
+}
+
+/// 运行一个可执行文件（exe / msi / com / scr / pif）。
+///
+/// 三道信任边界：
+///   1. 扩展名必须在 `EXECUTABLE_EXT` 白名单里——这个命令不能被用来启动
+///      任意文件（.bat / .ps1 需要 shell 语义，另走「用系统程序打开」）；
+///   2. 路径必须存在且是文件；
+///   3. **执行前弹原生确认框**：预览一个陌生 exe 就把它跑起来是最短的
+///      误触路径，所以确认必须由用户亲手点，不能静默执行。
+///
+/// 返回 true = 已启动；false = 用户在确认框里取消了（不是错误）。
+#[tauri::command(async)]
+pub fn viewer_run_executable(app: tauri::AppHandle, path: String) -> Result<bool, String> {
+    #[cfg(windows)]
+    {
+        use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+        let p = validate_path(&path)?;
+        let ext = ext_of(&path);
+        if !EXECUTABLE_EXT.contains(&ext.as_str()) {
+            return Err(format!("不支持直接运行该类型（{ext}）"));
+        }
+        if !p.is_file() {
+            return Err(format!("文件不存在或不是文件: {path}"));
+        }
+        let name = file_name_lossy(&p);
+        let confirmed = app
+            .dialog()
+            .message(format!(
+                "即将运行：{name}\n\n路径：{}\n\n运行来源不明的程序可能影响系统，确认可信后再继续。",
+                p.display()
+            ))
+            .title("运行可执行文件")
+            .buttons(MessageDialogButtons::OkCancelCustom(
+                "运行".into(),
+                "取消".into(),
+            ))
+            .blocking_show();
+        if !confirmed {
+            return Ok(false);
+        }
+        // 交给系统 shell「打开」——工作目录设为文件所在目录：程序若读同目录
+        // 的配置文件，从 viewer 的工作目录启动会找不到（双击 exe 时 cwd
+        // 就是它所在目录）。
+        //
+        // 刻意**不**用 Command::new(path).spawn()：自己创建子进程是行为
+        // 监控的经典误报触发点（360 会判成木马并杀掉 viewer）。
+        let cwd = p.parent().unwrap_or_else(|| std::path::Path::new("."));
+        shell_open(&p, Some(cwd))?;
+        Ok(true)
     }
     #[cfg(not(windows))]
     Err("仅支持 Windows（项目边界）".into())
@@ -728,7 +902,7 @@ pub async fn ai_send(
 
 #[cfg(test)]
 mod tests {
-    use super::{base64_decode, base64_encode, classify};
+    use super::{base64_decode, base64_encode, classify, EXECUTABLE_EXT};
 
     /// base64 编解码必须是互逆的——图片合成的 PNG 走解码路径，
     /// 差一个 bit 就会让整张合成图报废。
@@ -774,5 +948,22 @@ mod tests {
         assert_eq!(classify("pdf"), "pdf");
         assert_eq!(classify("doc"), "legacy_office");
         assert_eq!(classify("unknownext"), "unsupported");
+        assert_eq!(classify("exe"), "unsupported");
+    }
+
+    /// EXECUTABLE_EXT 是「立即运行」的信任边界：多一个扩展名，就多一类
+    /// 能被直接启动的文件；少一个，用户点了「立即运行」会被拒。
+    ///
+    /// 脚本类（bat / cmd / ps1）刻意不在表内——它们需要 shell 语义
+    /// （cmd.exe / powershell 的解析与策略），走「用系统程序打开」，
+    /// 不由 viewer 直接启动。dll / sys 是库不是程序，双击也不会执行。
+    #[test]
+    fn executable_whitelist_is_exact() {
+        for ext in ["exe", "msi", "com", "scr", "pif"] {
+            assert!(EXECUTABLE_EXT.contains(&ext), "{ext} 应可直接运行");
+        }
+        for ext in ["bat", "cmd", "ps1", "vbs", "js", "txt", "dll", "sys"] {
+            assert!(!EXECUTABLE_EXT.contains(&ext), "{ext} 不该被直接启动");
+        }
     }
 }
