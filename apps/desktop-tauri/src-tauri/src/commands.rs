@@ -1535,15 +1535,20 @@ pub fn file_assoc_set(ext: String, enable: bool) -> Result<(), String> {
 
 /// 在查看器中打开（主程序 → viewer 互调；命令行参数传路径，
 /// viewer 单实例机制会把路径投递给已开窗口）。
+///
+/// path 可选：不带路径就是「打开文件管理器」——查看器按自己记住的
+/// 上次目录进入资源管理器模式（Tauri v2 里 `Option<T>` 参数可以整个
+/// 省略，缺失即 None）。
 #[tauri::command]
-pub fn open_in_viewer(path: String) -> Result<(), String> {
+pub fn open_in_viewer(path: Option<String>) -> Result<(), String> {
     let viewer = viewer_exe_path()?;
     if !viewer.exists() {
         return Err("未找到 hermix-viewer.exe（完整安装包才包含查看器）".into());
     }
-    std::process::Command::new(&viewer)
-        .arg(&path)
-        .spawn()
-        .map_err(|e| format!("启动查看器失败: {e}"))?;
+    let mut cmd = std::process::Command::new(&viewer);
+    if let Some(p) = path.filter(|p| !p.trim().is_empty()) {
+        cmd.arg(p);
+    }
+    cmd.spawn().map_err(|e| format!("启动查看器失败: {e}"))?;
     Ok(())
 }

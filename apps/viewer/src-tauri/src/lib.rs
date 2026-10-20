@@ -64,6 +64,16 @@ fn spawn_singleton_listener(app: tauri::AppHandle) {
             }
             let path = buf.trim().to_string();
             if path.is_empty() {
+                // 空投递 = 「打开文件管理器」（主程序的标题栏入口）：没有路径
+                // 可开，但要把已开的窗口叫到前面（最小化 / 藏着的都拉回来），
+                // 并让前端切到资源管理器模式——否则用户在主程序点了按钮，
+                // 这边什么也不会发生。
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.unminimize();
+                    let _ = w.show();
+                    let _ = w.set_focus();
+                }
+                let _ = app.emit("viewer-open-explorer", ());
                 continue;
             }
             let state = app.state::<commands::ViewerState>();

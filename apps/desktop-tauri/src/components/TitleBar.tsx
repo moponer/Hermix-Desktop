@@ -1,6 +1,6 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
-import { Minus, Square, X, MessageSquare, Camera, Globe } from "lucide-react";
+import { Minus, Square, X, MessageSquare, Camera, Globe, FolderTree } from "lucide-react";
 import { useCallback } from "react";
 import { toastWarning } from "../hooks/useToast";
 
@@ -61,6 +61,17 @@ export function TitleBar({ title }: { title?: string }) {
     });
   }, []);
 
+  // 文件管理器入口：hermix-viewer 是独立进程（多格式预览 + 全盘搜索 +
+  // 文件操作右键菜单），主程序里只有右栏一个窄窄的「浏览目录」，此前
+  // 唯一能开到查看器的路径是右键菜单里的「在查看器中打开」——没有一级
+  // 入口，用户根本不知道它存在。这里给标题栏一个常驻按钮。
+  const handleFileManager = useCallback(() => {
+    void invoke("open_in_viewer", { path: null }).catch((err) => {
+      console.error("[TitleBar] file manager failed:", err);
+      toastWarning(`文件管理器打开失败：${String(err)}`);
+    });
+  }, []);
+
   return (
     <div className="titlebar drag">
       {/* ① 左栏 —— 与侧栏同宽。墨与纸 v4：品牌区改纯文字（白粗名，
@@ -89,6 +100,16 @@ export function TitleBar({ title }: { title?: string }) {
           import order — belt and braces, since a swallowed click here
           would leave the window undraggable-but-unclosable. */}
       <div className="titlebar-zone titlebar-zone--right">
+        <button
+          type="button"
+          onClick={handleFileManager}
+          className="titlebar-btn no-drag"
+          data-tauri-no-drag
+          title="文件管理器（独立查看器）"
+          aria-label="文件管理器"
+        >
+          <FolderTree className="icon-md" />
+        </button>
         <button
           type="button"
           onClick={handleBrowserView}
