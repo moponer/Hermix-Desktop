@@ -12,8 +12,9 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { ChevronUp, ChevronDown, RotateCw, Save, FolderOpen, FilePlus2 } from "lucide-react";
+import { ChevronUp, ChevronDown, RotateCw, Save, FolderOpen, FilePlus2, Wrench } from "lucide-react";
 import type { FileSource } from "@hermix/preview";
+import { PdfToolsDialog } from "./PdfToolsDialog";
 
 /** 一个页面项：原页号（1-based）或空白页（source = null）。 */
 interface PageEntry {
@@ -71,6 +72,8 @@ export function PdfPageEditor({
   const [replacePage, setReplacePage] = useState(1);
   const [replaceFrom, setReplaceFrom] = useState("");
   const [replaceTo, setReplaceTo] = useState("");
+  // ── 文档工具（合并 / 裁剪 / 水印 / 页码 / 信息 / 密码）──
+  const [toolsOpen, setToolsOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -283,6 +286,16 @@ export function PdfPageEditor({
         <button
           type="button"
           className="tb-btn"
+          onClick={() => setToolsOpen(true)}
+          disabled={busy}
+          title="文档工具（合并 / 裁剪 / 水印 / 页码 / 文档信息 / 密码）"
+          aria-label="打开 PDF 文档工具"
+        >
+          <Wrench className="icon-sm" /> 文档工具
+        </button>
+        <button
+          type="button"
+          className="tb-btn"
           onClick={() => void doExport(null)}
           disabled={busy || !!error}
           title="导出为新文件"
@@ -447,6 +460,14 @@ export function PdfPageEditor({
           )}
         </aside>
       </div>
+      {toolsOpen && (
+        <PdfToolsDialog
+          path={path}
+          name={name}
+          source={source}
+          onClose={() => setToolsOpen(false)}
+        />
+      )}
     </div>
   );
 }

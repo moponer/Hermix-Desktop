@@ -1452,6 +1452,58 @@ html, body, #root {
 }
 .dx-filter input:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
 
+/* ─── PDF 文档工具对话框 ────────────────────────────────────────────
+   与设置面板同一套外壳（遮罩 + 卡片 + 左导航），层次靠底色差与阴影。 */
+.pdf-tools-card { width: min(680px, 92vw); }
+.set-nav-item.is-active {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+}
+.pdf-tools-body {
+  flex: 1 1 auto; min-width: 0;
+  padding: 14px 16px;
+  display: flex; flex-direction: column; gap: 10px;
+  background: var(--bg-primary);
+  overflow: auto;
+}
+.pdf-tools-hint {
+  margin: 0;
+  font-size: var(--text-meta);
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+.pdf-tools-field {
+  display: flex; flex-direction: column; gap: 4px;
+  font-size: var(--text-meta);
+  color: var(--text-secondary);
+}
+.pdf-tools-field input {
+  border: none; outline: none;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: var(--text-body);
+  font-family: inherit;
+}
+.pdf-tools-field input:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
+.pdf-tools-row { display: flex; gap: 10px; flex-wrap: wrap; }
+.pdf-tools-row .pdf-tools-field { flex: 1 1 120px; }
+.pdf-tools-error {
+  margin: 0;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--bg-accent-soft);
+  color: var(--danger);
+  font-size: var(--text-meta);
+}
+.pdf-tools-note {
+  margin: 0;
+  font-size: var(--text-meta);
+  color: var(--text-secondary);
+}
+
 /* ─── Excel 网格编辑器（重量模式） ──────────────────────────────────
    表头 / 行号用次级底色与正文区分，网格线用极浅底色差代替描边（Excel
    那种密集灰线在这个界面里太吵）。 */

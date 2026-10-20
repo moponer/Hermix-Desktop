@@ -891,6 +891,28 @@ pub fn viewer_wordcraft_path() -> Option<String> {
     None
 }
 
+/// 多选文件对话框（合并 PDF 等需要一次挑多份文件的操作）。
+///
+/// `filters` 是 (显示名, 扩展名列表) 列表；空 = 不过滤。
+#[tauri::command(async)]
+pub fn viewer_pick_files(
+    app: tauri::AppHandle,
+    filters: Option<Vec<(String, Vec<String>)>>,
+) -> Option<Vec<String>> {
+    use tauri_plugin_dialog::DialogExt;
+    let mut dlg = app.dialog().file();
+    for (name, exts) in filters.unwrap_or_default() {
+        let refs: Vec<&str> = exts.iter().map(|s| s.as_str()).collect();
+        dlg = dlg.add_filter(name, &refs);
+    }
+    dlg.blocking_pick_files().map(|paths| {
+        paths
+            .into_iter()
+            .filter_map(|p| p.into_path().ok())
+            .map(|p| p.to_string_lossy().to_string())
+            .collect()
+    })
+}
 
 /// 用指定方式打开目标。`app` 取值：
 ///   - `default`    系统默认程序（等价双击）
