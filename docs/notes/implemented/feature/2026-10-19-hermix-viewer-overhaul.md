@@ -138,10 +138,11 @@ Rust `classify()` 的白名单与共享预览层分派表**逐项对齐**——�
 
 ### 真机验证（2026-10-20 12:00 后补做）与由此暴露的缺陷
 
-本篇初稿写的是「未做真机 GUI 验证」。随后按用户要求真机跑了一次，**发现两处只有跑起来才会暴露的缺陷，均已修复**（提交见下）：
+本篇初稿写的是「未做真机 GUI 验证」。随后按用户要求真机跑了一次，**发现三处只有跑起来才会暴露的缺陷，均已修复**（提交见下）：
 
 1. **目录被当文件打开**。主程序「在查看器中打开」传目录进来时，Rust 的 `seed_pending` 只收 `p.is_file()` → 目录被静默丢弃；单实例投递那条路更是无条件 `emit("viewer-open-file")`，前端无条件 `openPath()` → 目录变成一个报「不是文件」的标签页。**F4 只修了启动路径的目录/文件判别，投递路径与拖放路径漏了。** 现在启动参数、单实例投递、拖放三条路共用前端同一条判别 `openTarget`。
 2. **图片编辑器画布永远空白**。`ImageEditor.tsx` 里 `const ctx = out.getContext("2d")` 取错了对象（out 是离屏画布），于是 `ctx.drawImage(out, 0, 0)` 是把画布画在自己身上。**导出的那条路取的是 out，所以导出结果其实正确——只有屏幕上看不到。** 这是最坏的一种缺陷形态：功能"能用"，但用户眼前的界面是错的。
+3. **媒体预览在 Windows 上被 CSP 拦掉**。真机投递 WAV 落回「这个浏览器解不了该媒体格式（WAV）」，但 Chromium 原生支持 WAV，根因不在解码器：Tauri v2 在 Windows 上把 asset 协议映射成 **http 承载**的自定义 scheme（`convert_file_src` → `http://asset.localhost/<encoded>`），macOS/Linux 才是 `asset://localhost`。viewer 的 CSP 只写了 `media-src 'self' asset: ...`——`asset:` 是 **scheme 源**，匹配不到 `http://asset.localhost` → 浏览器直接把媒体请求拦掉 → `<audio>` 触发 error → UI 把「协议被拦」误报成「格式解不了」。desktop 端的 CSP 早就写着 `http://asset.localhost`（img-src / frame-src），viewer 端漏了。同时把错误提示按 `MediaError.code` 分成两类：DECODE / SRC_NOT_SUPPORTED 才叫「解不了」，其余归为「加载失败（被占用 / 权限 / 协议拦截）」——原来只有一句话，把两类根因糊在一起，误导排障。
 
 真机跑通的项（有截图证据）：重量模式三栏 + 彩色类型图标 + 驱动器异步列表；纯净模式（带文件启动 → 只渲染预览面，细工具条「系统打开 / 重量模式 / 关闭」）；目录投递 → 正确导航进目录；单实例投递文件 → 正确开预览标签；图片编辑器（裁剪/旋转/翻转/文字/参数滑杆/转黑白/尺寸/导出/拼接 +「原图 1200×800 · 当前 1200×800 · 原文件不…」）；AI 栏（8 个改图提示词模板 +「AI 的产物会另存为新文件，原文件不会被改动」）。
 
@@ -153,8 +154,8 @@ Rust `classify()` 的白名单与共享预览层分派表**逐项对齐**——�
 
 **仍未验证**（本机无法复现所需条件，如实标注）：
 
-- 媒体 codec 支持：WebView2 的 H.264 / AAC 依赖 Edge 媒体组件，未实测。mkv / avi / wmv / flv / mpg 大概率不可解（已设计为落回「用系统程序打开」）。
-- asset 协议在 Windows 上的路径形态（`convertFileSrc` + Range）未在真实播放器里跑过。
+- 媒体 codec 支持：**已实测**——PCM 的 wav 与 H.264 + AAC 的 mp4 均能内联播放（asset 协议 + Range 正常）。mkv / avi / wmv / flv / mpg 未实测（已设计为落回「用系统程序打开」）。
+- asset 协议在 Windows 上的路径形态：**已实测**——走 `http://asset.localhost`，必须写进 CSP 的 `media-src`（`asset:` 只覆盖 macOS/Linux 形态），否则请求被浏览器静默拦掉。
 - PDF 产物在 pdf.js / Acrobat 中的实际渲染未验证。
 - 图片**导出产物**的像素结果未验证（画布渲染已验证，导出路径与画布同源但未落盘比对）。
 - 纯净 ↔ 重量模式的跨启动持久化未实测（代码已写）。

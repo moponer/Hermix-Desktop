@@ -36,6 +36,20 @@ function isAudio(name: string): boolean {
   return AUDIO_EXTS.has(ext);
 }
 
+/**
+ * 媒体打不开有两种根因，不能混成一句话：
+ * - `unsupported`：文件本身解不了（容器/编码 WebView 不支持）→ 换系统播放器有意义
+ * - `load`：请求没到位（协议被拦、文件被占、权限不足）→ 说成「解不了」是误导
+ */
+type MediaFailure = "unsupported" | "load";
+
+function classify(err: MediaError | null): MediaFailure {
+  const code = err?.code;
+  return code === MediaError.MEDIA_ERR_DECODE || code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED
+    ? "unsupported"
+    : "load";
+}
+
 export function MediaView({
   path,
   name,
@@ -45,16 +59,19 @@ export function MediaView({
   name: string;
   onFallback: (reason: string) => void;
 }) {
-  const [failed, setFailed] = useState(false);
+  const [failure, setFailure] = useState<MediaFailure | null>(null);
   const src = useMemo(() => convertFileSrc(path), [path]);
   const audio = isAudio(name);
+  const ext = name.split(".").pop()?.toUpperCase() ?? "";
 
-  if (failed) {
+  if (failure) {
     return (
       <div className="preview-state-center">
         <div className="meta-card">
           <p className="meta-card-msg">
-            这个浏览器解不了该媒体格式（{name.split(".").pop()?.toUpperCase()}）。
+            {failure === "unsupported"
+              ? `这个浏览器解不了该媒体格式（${ext}）。`
+              : `媒体加载失败（${ext}），文件可能正被其他程序占用，或读取协议被拦。`}
           </p>
           <div className="meta-card-actions">
             <button
@@ -73,11 +90,10 @@ export function MediaView({
   if (audio) {
     return (
       <div className="media-wrap is-audio">
-        
         <audio
           src={src}
           controls
-          onError={() => setFailed(true)}
+          onError={(e) => setFailure(classify(e.currentTarget.error))}
           aria-label={name}
         />
       </div>
@@ -86,11 +102,10 @@ export function MediaView({
 
   return (
     <div className="media-wrap">
-      
       <video
         src={src}
         controls
-        onError={() => setFailed(true)}
+        onError={(e) => setFailure(classify(e.currentTarget.error))}
         aria-label={name}
       />
     </div>
