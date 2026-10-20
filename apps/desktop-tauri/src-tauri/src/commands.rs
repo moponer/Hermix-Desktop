@@ -1452,7 +1452,7 @@ fn ensure_viewer_progid() -> Result<(), String> {
         .create_subkey(format!("Software\\Classes\\{VIEWER_PROGID}"))
         .map_err(|e| format!("创建 ProgID 失败: {e}"))?;
     progid
-        .set_value("", &"Hermix 查看器".to_string())
+        .set_value("", &"Hermix 文件查看器".to_string())
         .map_err(|e| format!("写 ProgID 名失败: {e}"))?;
     let (shell, _) = hkcu
         .create_subkey(format!(

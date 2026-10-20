@@ -1,5 +1,5 @@
 {
-  "productName": "Hermix Viewer",
+  "productName": "Hermix 文件查看器",
   "version": "0.1.0",
   "identifier": "com.hermix.viewer",
   "build": {
@@ -9,7 +9,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Hermix 查看器",
+        "title": "Hermix 文件查看器",
         "width": 1200,
         "height": 800,
         "minWidth": 640,

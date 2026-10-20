@@ -1,6 +1,6 @@
 # Decision Note: hermix-viewer 双模式化与全能力重构（超长任务总纲）
 
-Status: implemented — F0–F9 全部交付。双模式（纯净/重量）、彩色类型图标、启动卡顿根因修复、全屏平铺、图片处理内核、PDF/文本编辑、AI 一键入对话、常见文件类型覆盖矩阵均已落地并各自提交（`106bd5f2` → `08621066`）；F10 交互与界面返修（列表改单击即预览 + 溢出/对齐/胶囊/描边清理）、F11 图片编辑器马赛克改「涂抹画笔」见「交互与界面返修」与「F11」章节
+Status: implemented — F0–F9 全部交付。双模式（纯净/重量）、彩色类型图标、启动卡顿根因修复、全屏平铺、图片处理内核、PDF/文本编辑、AI 一键入对话、常见文件类型覆盖矩阵均已落地并各自提交（`106bd5f2` → `08621066`）；F10 交互与界面返修（列表改单击即预览 + 溢出/对齐/胶囊/描边清理）、F11 图片编辑器马赛克改「涂抹画笔」、F12 顶部右侧选项组改带文字标签、F13 应用改名「Hermix 文件查看器」见「交互与界面返修」与「F11」「F12」「F13」章节
 
 关联：[hermix-viewer 资源管理器化 + @hermix/preview 共享包](../feature/2026-10-13-hermix-viewer-resource-manager.md)、[独立文件浏览器（hermix-viewer）+ 可折叠 AI 右栏 + 文件关联接管](../feature/2026-10-09-standalone-file-viewer.md)、[共享预览层的样式归属与 Tailwind 边界](../architecture/2026-10-19-shared-preview-layer-ownership.md)、[前端内容指纹纳入编译指纹 —— 根治「exe 里是旧 UI」](../bug-fix/2026-10-20-frontend-fingerprint-in-build.md)
 
@@ -79,6 +79,7 @@ Status: implemented — F0–F9 全部交付。双模式（纯净/重量）、�
 | F10 | 交互与界面返修：列表单击即预览 + 溢出/对齐/胶囊/描边清理 | done | 15:20 | 本轮提交 |
 | F11 | 图片编辑器：马赛克改「涂抹画笔」（局部打码），不再只有整图打码 | done | 12:40 | 本轮提交 |
 | F12 | 顶部右侧视图选项组：光图标 → 带文字标签的分组控件 | done | 12:55 | 本轮提交 |
+| F13 | 应用改名：「Hermix 查看器」→「Hermix 文件查看器」（窗口标题 / productName / ProgID 名 / 设置文案） | done | 12:56 | 本轮提交 |
 
 ## 交付现状
 
@@ -255,6 +256,31 @@ Rust `classify()` 的白名单与共享预览层分派表**逐项对齐**——�
 **顺带验证的既有行为**（未改，只确认没坏）：点「隐藏文件」→ 图标由 EyeOff 变 Eye、按钮高亮、隐藏文件出现在列表顶部；点主题按钮 → 跟随系统 → 浅色 → 深色 循环，图标与标签同步。
 
 **真机验证**：亮色 1216px / 640px（应用最小宽）、暗色各截一版逐项核对。640px 下路径框文字截断、选项组完整不溢出；暗色下分组面与路径框同为 `--bg-primary`，与工具条拉开一档，激活项是 accent 底色 + accent 文字。
+
+### F13 应用改名：「Hermix 查看器」→「Hermix 文件查看器」
+
+用户原话：「名字改为Hermix 文件查看器」。
+
+原名「Hermix 查看器」少了「文件」二字：它在任务栏标题、Windows「打开方式」列表、桌面的设置提示里读作「看什么器」，而这个应用实际能开的是 md / 文本 / 代码 / 图片 / PDF / Office——**名字没把能力说全**。
+
+**改名落在四个品牌位**（逐个确认语义，不是全局替换）：
+
+1. `apps/viewer/index.html` 的 `<title>` —— WebView 文档标题。
+2. `apps/viewer/src-tauri/tauri.conf.json` 的窗口 `title` —— 标题栏 / 任务栏，**用户最常看到的那一处**。
+3. 同文件 `productName` —— Windows 应用显示名（写进 VERSIONINFO 资源）。
+4. `apps/desktop-tauri` 侧两处引用同一产品名的地方：注册表 ProgID 的友好名（`ensure_viewer_progid` 写 `HKCU\Software\Classes\Hermix.Viewer` 的默认值，Windows「打开方式」列表显示的就是它）+ 设置页「文件关联」分组标题与提示文案。
+
+**刻意没改的**：
+
+- `identifier: "com.hermix.viewer"` —— 改它会换掉应用数据目录与单实例互斥的标识，属破坏性变更，不在改名诉求内。
+- **`hermix-viewer.exe` 文件名** —— 由 `Cargo.toml` 的 `[[bin]] name` 钉死；桌面端 `viewer_exe_path()` 硬编码 `dir.join("hermix-viewer.exe")` 找它。`productName` 只进 bundle 与 VERSIONINFO，**不改 exe 名**，所以「在查看器中打开」链路不受影响（`bundle.active = false`，本来也不走打包）。实测重编后产物仍是 `target/debug/hermix-viewer.exe`。
+- 代码与界面里泛指的「查看器」不动（`打开方式` / `查看器对话` / `关闭查看器`）——那些是动词短语或通用名词，不是品牌名。
+
+**真机验证**：重建前端产物（`vite build` → `dist/index.html` 的 title 已是新名，UTF-8 22 字节 = `Hermix 文件查看器`）→ 重编 Rust（`tauri.conf.json` 是 `generate_context!` 的输入，**必须重编才生效**）→ 启动真机：`MainWindowTitle` 码点逐字等于 `Hermix 文件查看器`（`U+6587 U+4EF6 U+67E5 U+770B U+5668`），标题栏截图核对。
+
+**门禁**：viewer `tsc` / desktop `tsc` 均 exit 0；`check-design-guard.mjs` clean；`check-preview-layer.mjs` OK；`impeccable detect src` exit 0 且 findings 为空——并用四反模式探针（`side-tab` / `bounce-easing` / `layout-transition` / `broken-image`）自证 detect 真能检出（退出码 2、四条全中），不是空跑绿灯。
+
+**本轮未做的**：桌面端 exe 没有重链。`tauri-build` 的 `copy_binaries` 要删 `target/debug/hermix.exe` 再拷 sidecar，而该文件被**运行中的 sidecar** 持有（Windows 文件锁），重链必须先结束正在跑的主程序——不为一次改名中断用户正在使用的桌面端。设置页新文案与 ProgID 新名会在**下一次重新构建桌面端**后生效；Rust 侧编译正确性另用独立 target 目录（绕开文件锁）跑 `cargo check -p hermix-desktop --all-targets` 验证。本机 `HKCU\Software\Classes\Hermix.Viewer` 实测**不存在**（用户从未勾选过文件关联），因此没有旧名残留需要清理。
 
 ## 各子任务要点
 ### F0 基线（2026-10-19 23:38 实测）

@@ -1,4 +1,4 @@
-/* Hermix 查看器 — Explorer + 共享预览样式。
+/* Hermix 文件查看器 — Explorer + 共享预览样式。
  * 设计语言：从桌面 app 沿用（slate 主色 + token 驱动），但 viewer 是
  * 独立进程，复刻桌面 token 子集即可。共享预览样式由 @hermix/preview
  * 提供（main.tsx 中 import "@hermix/preview/styles/preview-doc.css"）。 */

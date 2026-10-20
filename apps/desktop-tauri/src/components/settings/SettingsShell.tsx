@@ -97,7 +97,7 @@ const GROUPS: GroupDef[] = [
       { id: "devices", label: "设备管理", hint: "IM 机器人与桌面配对两条通道；高危工具一律在桌面端强制确认", icon: Smartphone, keywords: "device 设备 配对 权限" },
       { id: "voice", label: "手机语音识别", hint: "配置云端语音识别 provider，手机端长按说话直发该 provider；未开启则手机仅支持文字", icon: Mic, keywords: "voice 语音 识别 asr stt minimax 转文字 手机" },
       { id: "security", label: "安全", hint: "覆盖写入前先备份旧版本，误改可回滚", icon: Shield, keywords: "security 安全 备份 backup" },
-      { id: "fileassoc", label: "文件关联", hint: "勾选后由 Hermix 查看器接管对应扩展名；取消即恢复原程序", icon: AppWindow, keywords: "file association 关联 打开方式 viewer 查看器 md pdf png" },
+      { id: "fileassoc", label: "文件关联", hint: "勾选后由 Hermix 文件查看器接管对应扩展名；取消即恢复原程序", icon: AppWindow, keywords: "file association 关联 打开方式 viewer 查看器 md pdf png" },
       { id: "archive", label: "已归档", hint: "归档只是从侧栏收起，数据仍在本机，取消归档即可恢复", icon: Archive, keywords: "archive 归档 已归档" },
       { id: "memory", label: "记忆管理", hint: "记忆图谱、角色提示词、全局记忆文本与每日记忆的查看与编辑", icon: Brain, keywords: "memory 记忆 图谱 记忆库 persona 角色 soul 长期记忆 每日记忆 遗忘" },
     ],
@@ -480,7 +480,7 @@ function FileAssocTab() {
         <p className="mb-3 text-[length:var(--text-meta)] text-error">{error}</p>
       )}
       <SettingsGroup
-        title="由 Hermix 查看器打开"
+        title="由 Hermix 文件查看器打开"
         description="勾选即明确授权查看器接管该扩展名的默认打开方式；取消勾选自动恢复勾选前的原程序关联。登记只写当前用户的注册表（HKCU），不需要管理员权限。"
       >
         {entries.map(({ ext, owned }) => (
