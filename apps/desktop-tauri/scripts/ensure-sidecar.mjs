@@ -71,6 +71,13 @@ sh("node", [viewerVite, "build"], path.join(repoRoot, "apps", "viewer"));
 sh("cargo", ["build", "--release", "-p", "hermix-viewer"]);
 refresh("hermix-viewer.exe", "hermix-viewer-x86_64-pc-windows-msvc.exe");
 
+// filesearch helper（第 6 个 sidecar）：本地文件索引服务。提权守护进程
+// （MFT 建索引要管理员），跨提权边界继承不了 stdio → 走 127.0.0.1 回环 +
+// token 握手。viewer's 路径栏模糊搜索（类 Everything）与 desktop 的
+// Alt+F 文件搜索共用它；不随包发它，两边的全盘搜索就都是死的。
+sh("cargo", ["build", "--release", "-p", "hermix-filesearch", "--bin", "hermix-filesearch"]);
+refresh("hermix-filesearch.exe", "hermix-filesearch-x86_64-pc-windows-msvc.exe");
+
 // desktop-tauri 前端：vite 构建到 release/frontend（与 tauri.conf.json frontendDist 一致），
 // 必须在 cargo tauri build 之前完成（tauri bundler 直接读 frontendDist）。
 const desktopVite = path.join(appDir, "node_modules", "vite", "bin", "vite.js");

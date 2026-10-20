@@ -55,7 +55,8 @@
     "externalBin": [
       "binaries/hermix",
       "binaries/markitdown",
-      "binaries/hermix-viewer"
+      "binaries/hermix-viewer",
+      "binaries/hermix-filesearch"
     ],
     "publisher": "Hermix",
     "copyright": "© 2026 Hermix hermix.cssso.com",
