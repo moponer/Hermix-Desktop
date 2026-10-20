@@ -9,6 +9,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   ArrowLeft, ArrowRight, ArrowUp, RefreshCw, Search,
   Funnel, FunnelX, FileSearch,
@@ -23,6 +24,8 @@ import { AiSidebar, type PendingSend } from "./AiSidebar";
 import { joinConversationPrompt } from "./aiPrompts";
 import { ContextMenu } from "./ContextMenu";
 import { TitleBar } from "./TitleBar";
+import { SystemPanel } from "./SystemPanel";
+import type { MenuGroup } from "./MenuBar";
 import { buildMenu, type MenuTarget, type SortKind } from "./contextMenuModel";
 
 // 预览引擎懒加载：PreviewHost → @hermix/preview barrel → satteri 的 3MB
@@ -377,6 +380,10 @@ export function App() {
   const [aiPending, setAiPending] = useState<PendingSend | null>(null);
   const [selection, setSelection] = useState("");
 
+  // —— 标题栏菜单弹出的窗口 ——
+  const [sysOpen, setSysOpen] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
+
   // —— 导航历史 ——
   const [backStack, setBackStack] = useState<string[]>([]);
   const [forwardStack, setForwardStack] = useState<string[]>([]);
@@ -617,6 +624,110 @@ export function App() {
   }, [currentPath, navigate]);
 
   const refresh = useCallback(() => setReloadKey((k) => k + 1), []);
+
+  // ── 标题栏菜单 ─────────────────────────────────────────────────────
+  // 菜单是"命令表 + 分发"，不放业务逻辑：每一项只映射到一个已有动作。
+  const menus = useMemo<MenuGroup[]>(
+    () => [
+      {
+        id: "file",
+        label: "文件",
+        items: [
+          { id: "refresh", label: "刷新", shortcut: "F5" },
+          { id: "close-tabs", label: "关闭所有标签" },
+          "-",
+          { id: "quit", label: "退出", danger: true },
+        ],
+      },
+      {
+        id: "view",
+        label: "视图",
+        items: [
+          { id: "toggle-hidden", label: "显示隐藏文件", checked: showHidden },
+          { id: "toggle-ai", label: "AI 助手栏", checked: aiOpen },
+          "-",
+          { id: "theme-system", label: "主题：跟随系统", checked: themeMode === "system" },
+          { id: "theme-light", label: "主题：浅色", checked: themeMode === "light" },
+          { id: "theme-dark", label: "主题：深色", checked: themeMode === "dark" },
+        ],
+      },
+      {
+        id: "tools",
+        label: "工具",
+        items: [
+          {
+            id: "sys-panel",
+            label: "系统资源管理…",
+            shortcut: "Ctrl+Shift+Esc",
+          },
+        ],
+      },
+      {
+        id: "help",
+        label: "帮助",
+        items: [{ id: "about", label: "关于 Hermix 文件查看器" }],
+      },
+    ],
+    [showHidden, aiOpen, themeMode],
+  );
+
+  const onMenuCommand = useCallback(
+    (id: string) => {
+      switch (id) {
+        case "refresh":
+          refresh();
+          break;
+        case "close-tabs":
+          setTabs([]);
+          setActiveTabId(null);
+          break;
+        case "quit":
+          void getCurrentWindow().close();
+          break;
+        case "toggle-hidden":
+          setShowHidden((v) => !v);
+          break;
+        case "toggle-ai":
+          setAiOpen((v) => !v);
+          break;
+        case "theme-system":
+          setTheme("system");
+          break;
+        case "theme-light":
+          setTheme("light");
+          break;
+        case "theme-dark":
+          setTheme("dark");
+          break;
+        case "sys-panel":
+          setSysOpen(true);
+          break;
+        case "about":
+          setAboutOpen(true);
+          break;
+        default:
+          break;
+      }
+    },
+    [refresh, setTheme],
+  );
+
+  // 快捷键：F5 刷新、Ctrl+Shift+Esc 打开系统资源管理（与任务管理器同键位）。
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "F5") {
+        event.preventDefault();
+        refresh();
+        return;
+      }
+      if (event.ctrlKey && event.shiftKey && event.key === "Escape") {
+        event.preventDefault();
+        setSysOpen(true);
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [refresh]);
 
   const exitSearch = useCallback(() => {
     setSearchQ("");
@@ -1506,7 +1617,32 @@ export function App() {
         title="Hermix 文件查看器"
         subject={titleSubject}
         subjectTitle={titleSubjectFull}
+        menus={menus}
+        onMenuCommand={onMenuCommand}
       />
+      {sysOpen && <SystemPanel onClose={() => setSysOpen(false)} />}
+      {aboutOpen && (
+        <div
+          className="syspanel-overlay"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setAboutOpen(false);
+          }}
+        >
+          <div className="about-card" role="dialog" aria-modal="true" aria-label="关于">
+            <h3>Hermix 文件查看器</h3>
+            <p className="dim">
+              独立文件浏览器：资源管理器 + 多格式预览 + AI 右栏 + 系统资源管理。
+            </p>
+            <p className="dim">
+              预览引擎与桌面端共用 @hermix/preview；系统资源管理使用内核快照枚举进程，
+              垃圾清理为规则驱动（白名单 + 二次确认），不会触碰系统关键目录。
+            </p>
+            <button type="button" className="pane-btn" onClick={() => setAboutOpen(false)}>
+              知道了
+            </button>
+          </div>
+        </div>
+      )}
       {mode === "heavy" && (
       <header className="toolbar">
         <button className="tb-btn" onClick={back} disabled={backStack.length === 0} title="后退" aria-label="后退">

@@ -5,6 +5,7 @@
 //!
 //! 组织：命令在 commands.rs（lib.rs 根定义会与 generate_handler 冲突）。
 
+pub mod cleanup;
 pub mod clipboard;
 pub mod commands;
 pub mod filesearch;
@@ -13,6 +14,7 @@ pub mod image_ops;
 pub mod mcp_server;
 pub mod paths;
 pub mod pdf_ops;
+pub mod sysmon;
 
 // 被嵌进二进制的前端内容指纹（build.rs 生成，见 build.rs 头注）。
 // dist 变了它就变 → crate 必然重编 → 不会出现「exe 里是旧 UI」。
@@ -214,6 +216,11 @@ pub fn main() {
             pdf_ops::pdf_replace_text,
             pdf_ops::images_to_pdf,
             pdf_ops::write_text,
+            sysmon::sysmon_processes,
+            sysmon::sysmon_kill_process,
+            sysmon::sysmon_disks,
+            cleanup::cleanup_scan,
+            cleanup::cleanup_execute,
         ])
         .plugin(tauri_plugin_dialog::init())
         .on_window_event(|_w, event| {

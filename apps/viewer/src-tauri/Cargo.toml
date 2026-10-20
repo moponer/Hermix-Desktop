@@ -40,6 +40,9 @@ lopdf = "0.34"
 # AI 右栏：直连本地 server 的 /v1/ REST（viewer 是独立进程，不走主程序
 # 的 stdio 桥——那根管道归主 app 的前端所有）。
 reqwest = { workspace = true, features = ["json"] }
+# 系统资源管理（进程快照 / CPU 差分 / 磁盘容量）。工作区已锁定，
+# 无新增下载成本；它的 Windows 后端就是 SystemProcessInformation 全量快照。
+sysinfo = { workspace = true }
 # 单实例互斥体（CreateMutexW：Foundation + Security 双 feature 门控）；
 # GetLastError 在 Foundation（同 updater.rs 教训：跨模块声明依赖它）。
 [target.'cfg(windows)'.dependencies]

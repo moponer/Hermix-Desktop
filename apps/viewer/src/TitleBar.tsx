@@ -14,6 +14,7 @@ import { useEffect, useState } from "react";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Copy, Eye, Minus, Square, X } from "lucide-react";
+import { MenuBar, type MenuGroup } from "./MenuBar";
 
 export interface TitleBarProps {
   /** 主标题（应用名）。 */
@@ -22,9 +23,12 @@ export interface TitleBarProps {
   subject?: string;
   /** 副标题的完整值（悬停提示）。 */
   subjectTitle?: string;
+  /** 菜单栏菜单（文件/视图/工具/帮助）。 */
+  menus?: MenuGroup[];
+  onMenuCommand?: (id: string) => void;
 }
 
-export function TitleBar({ title, subject, subjectTitle }: TitleBarProps) {
+export function TitleBar({ title, subject, subjectTitle, menus, onMenuCommand }: TitleBarProps) {
   const [maximized, setMaximized] = useState(false);
   const win = getCurrentWindow();
 
@@ -79,6 +83,12 @@ export function TitleBar({ title, subject, subjectTitle }: TitleBarProps) {
           </span>
         )}
       </div>
+      {menus && menus.length > 0 && (
+        <>
+          <MenuBar menus={menus} onCommand={onMenuCommand ?? (() => undefined)} />
+          <div className="tb-spacer" />
+        </>
+      )}
       <div className="tb-window">
         <button
           type="button"
