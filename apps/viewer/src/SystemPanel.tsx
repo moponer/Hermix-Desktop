@@ -29,6 +29,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import { Treemap, type TreemapNode } from "./Treemap";
 
 // ── 与 Rust 侧 serde(camelCase) 对齐的类型 ────────────────────────────
 
@@ -134,6 +135,15 @@ interface FoundFile {
   reason: string;
 }
 
+/** 目录体积节点（父目录总量已含后代）。 */
+interface DirUsage {
+  path: string;
+  parent: string;
+  bytes: number;
+  files: number;
+  depth: number;
+}
+
 interface DriveScanReport {
   drive: string;
   artifacts: ArtifactDir[];
@@ -141,6 +151,7 @@ interface DriveScanReport {
   big: FoundFile[];
   emptyDirs: string[];
   emptyDirCount: number;
+  dirs: DirUsage[];
   dirsScanned: number;
   elapsedMs: number;
   truncated: boolean;
@@ -634,6 +645,8 @@ function CleanupPane() {
   const [deepSel, setDeepSel] = useState<Set<string>>(new Set());
   const [deepBusy, setDeepBusy] = useState(false);
   const [deepConfirm, setDeepConfirm] = useState(false);
+  /** Treemap 当前下钻到的目录（null = 盘根）。 */
+  const [treemapPath, setTreemapPath] = useState<string | null>(null);
 
   useEffect(() => {
     void invoke<DiskRow[]>("sysmon_disks")
@@ -700,6 +713,7 @@ function CleanupPane() {
   useEffect(() => {
     setDeep(null);
     setDeepSel(new Set());
+    setTreemapPath(null);
   }, [drive]);
 
   const scanDeep = useCallback(async () => {
@@ -769,6 +783,44 @@ function CleanupPane() {
       setDeepBusy(false);
     }
   }, [deep, deepSel, drive, deepConfirm, scanDeep]);
+
+  // 目录体积树：Rust 给的是扁平列表（parent → children），这里按 parent 分组。
+  const dirChildren = useMemo(() => {
+    const map = new Map<string, DirUsage[]>();
+    for (const node of deep?.dirs ?? []) {
+      const list = map.get(node.parent) ?? [];
+      list.push(node);
+      map.set(node.parent, list);
+    }
+    for (const list of map.values()) list.sort((a, b) => b.bytes - a.bytes);
+    return map;
+  }, [deep]);
+
+  const treemapNodes = useMemo<TreemapNode[]>(() => {
+    const rootKey = drive ? `${drive}\\` : "";
+    const level = dirChildren.get(treemapPath ?? rootKey) ?? [];
+    return level.map((node) => ({
+      path: node.path,
+      name: node.path.split("\\").filter(Boolean).pop() ?? node.path,
+      bytes: node.bytes,
+    }));
+  }, [dirChildren, treemapPath, drive]);
+
+  const treemapCrumbs = useMemo(() => {
+    if (!treemapPath || !drive) return [];
+    const prefix = `${drive}\\`;
+    const rest = treemapPath.startsWith(prefix)
+      ? treemapPath.slice(prefix.length)
+      : treemapPath;
+    let acc = prefix;
+    return rest
+      .split("\\")
+      .filter(Boolean)
+      .map((part) => {
+        acc += `${part}\\`;
+        return { name: part, path: acc };
+      });
+  }, [treemapPath, drive]);
 
   const ageText = (modified: number) => {
     if (!modified) return "时间未知";
@@ -1002,6 +1054,44 @@ function CleanupPane() {
                 扫过 {deep.dirsScanned.toLocaleString()} 个目录，用时 {deep.elapsedMs} ms
                 {deep.truncated && "（已达预算上限，结果不完整）"}
               </p>
+
+              {treemapNodes.length > 0 && (
+                <div className="deep-group">
+                  <h5>
+                    目录体积
+                    <span className="dim">点色块下钻</span>
+                  </h5>
+                  <div className="treemap-bar">
+                    <button
+                      type="button"
+                      className="treemap-crumb"
+                      onClick={() => setTreemapPath(null)}
+                      disabled={!treemapPath}
+                    >
+                      盘根
+                    </button>
+                    {treemapCrumbs.map((crumb) => (
+                      <button
+                        type="button"
+                        key={crumb.path}
+                        className="treemap-crumb"
+                        onClick={() => setTreemapPath(crumb.path)}
+                      >
+                        {crumb.name}
+                      </button>
+                    ))}
+                    <span className="dim">
+                      共{" "}
+                      {formatBytes(treemapNodes.reduce((sum, node) => sum + node.bytes, 0))}
+                    </span>
+                  </div>
+                  <Treemap
+                    nodes={treemapNodes}
+                    onSelect={(node) => setTreemapPath(node.path)}
+                    selectedPath={treemapPath}
+                  />
+                </div>
+              )}
 
               {deep.artifacts.length > 0 && (
                 <div className="deep-group">

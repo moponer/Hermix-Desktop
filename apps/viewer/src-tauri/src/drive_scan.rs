@@ -74,7 +74,9 @@ const FORBIDDEN: &[&str] = &[
     r"c:\windows.old",
 ];
 
-/// 扫描时整棵跳过的目录（既不是垃圾、也不该浪费时间下去）。
+/// 扫描时整棵跳过的目录：系统自己管理的地盘，不参与"谁吃掉了空间"的排行
+/// （Windows / Program Files 的体积对用户没有决策价值）。其余一律进入，
+/// 包括 `node_modules` / `target` —— 它们恰恰是最该被看见的大头。
 const SKIP_DIRS: &[&str] = &[
     "$recycle.bin",
     "system volume information",
@@ -82,11 +84,13 @@ const SKIP_DIRS: &[&str] = &[
     "windows.old",
     "program files",
     "program files (x86)",
-    "appdata",
-    ".git",
-    "node_modules", // 产物目录：遇到就作为条目记录，不再向下找项目
-    "target",
 ];
+
+/// 目录体积树保留的深度（层数）。再深对"找大目录"没有帮助，却会成倍放大
+/// 记录条数。
+const MAX_TREE_DEPTH: usize = 4;
+/// 返回给前端的目录节点上限。
+const DIR_LIMIT: usize = 400;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -114,6 +118,18 @@ pub struct FoundFile {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DirUsage {
+    pub path: String,
+    /// 父目录路径（前端据此把扁平列表还原成树）。
+    pub parent: String,
+    pub bytes: u64,
+    pub files: u64,
+    /// 相对卷根的层数（1 = 卷根的直接子目录）。
+    pub depth: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DriveScanReport {
     pub drive: String,
     pub artifacts: Vec<ArtifactDir>,
@@ -123,6 +139,8 @@ pub struct DriveScanReport {
     pub big: Vec<FoundFile>,
     pub empty_dirs: Vec<String>,
     pub empty_dir_count: u64,
+    /// 目录体积树（扁平列表，前端按 `parent` 还原成树）。
+    pub dirs: Vec<DirUsage>,
     pub dirs_scanned: u64,
     pub elapsed_ms: u64,
     /// 命中预算被截断（结果不完整，UI 要明确告知）。
@@ -161,6 +179,7 @@ pub fn scan_drive(
         big: Vec::new(),
         empty_dirs: Vec::new(),
         empty_dir_count: 0,
+        dirs: Vec::new(),
         dirs_scanned: 0,
         elapsed_ms: 0,
         truncated: false,
@@ -183,7 +202,7 @@ pub fn scan_drive(
         &root,
         drive,
         &mut budget,
-        &mut |dir, entries: &[DirItem], this_bytes| {
+        &mut |dir, entries: &[DirItem], subtree_bytes, subtree_files| {
             scanned += 1;
             // ① 空目录（没有子项，且不是卷根）
             if entries.is_empty() && dir != root {
@@ -205,7 +224,7 @@ pub fn scan_drive(
                     let Some(marker) = markers.iter().find(|m| marker_present(parent, m)) else {
                         continue;
                     };
-                    let (bytes, files) = tree_size(dir, &mut Budget::new());
+                    let (bytes, files) = (subtree_bytes, subtree_files);
                     report.artifacts.push(ArtifactDir {
                         path: dir.display().to_string(),
                         kind: (*artifact).to_string(),
@@ -218,8 +237,23 @@ pub fn scan_drive(
                 }
             }
 
-            // ③ 残留文件 / 大文件：按单文件判定（this_bytes 只用于空目录判断）
-            let _ = this_bytes;
+            // ④ 目录体积：深度 ≤ MAX_TREE_DEPTH 的节点进树（父目录总量已含后代）。
+            let depth = dir_depth(dir, drive);
+            if depth > 0 && depth <= MAX_TREE_DEPTH && subtree_bytes > 0 {
+                report.dirs.push(DirUsage {
+                    path: dir.display().to_string(),
+                    parent: dir
+                        .parent()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_default(),
+                    bytes: subtree_bytes,
+                    files: subtree_files,
+                    depth,
+                });
+            }
+
+            // ③ 残留文件 / 大文件：按单文件判定
+            let _ = subtree_bytes;
             for item in entries {
                 if item.is_dir {
                     continue;
@@ -286,6 +320,11 @@ pub fn scan_drive(
     report.artifacts.sort_by(|a, b| b.bytes.cmp(&a.bytes));
     report.stale = stale;
     report.big = big;
+    // 目录体积：按体积降序，前端画 Treemap 时大块在前更符合直觉。
+    report.dirs.sort_by(|a, b| b.bytes.cmp(&a.bytes));
+    if report.dirs.len() > DIR_LIMIT {
+        report.dirs.truncate(DIR_LIMIT);
+    }
     report.dirs_scanned = budget.dirs as u64;
     report.truncated = budget.exhausted();
     report.elapsed_ms = started.elapsed().as_millis() as u64;
@@ -306,18 +345,20 @@ fn walk(
     dir: &Path,
     drive: &str,
     budget: &mut Budget,
-    on_dir: &mut dyn FnMut(&Path, &[DirItem], u64),
-) {
+    on_dir: &mut dyn FnMut(&Path, &[DirItem], u64, u64),
+) -> (u64, u64) {
     if budget.exhausted() {
-        return;
+        return (0, 0);
     }
     budget.dirs += 1;
 
     let Ok(reader) = fs::read_dir(dir) else {
-        return;
+        return (0, 0);
     };
     let mut items: Vec<DirItem> = Vec::new();
     let mut dirs: Vec<PathBuf> = Vec::new();
+    let mut own_bytes = 0u64;
+    let mut own_files = 0u64;
 
     for entry in reader.flatten() {
         if budget.exhausted() {
@@ -335,14 +376,7 @@ fn walk(
             continue;
         }
         if meta.is_dir() && SKIP_DIRS.iter().any(|skip| lower == *skip) {
-            // 跳过整棵，但要把它本身作为条目交给上层（产物目录要能识别）。
-            items.push(DirItem {
-                name,
-                path: path.display().to_string(),
-                is_dir: true,
-                bytes: 0,
-                modified: modified_secs(&path),
-            });
+            // 系统地盘：整棵跳过，不计入体积排行（不是用户的决策对象）。
             continue;
         }
         if !is_allowed(&path, drive) {
@@ -358,6 +392,8 @@ fn walk(
                 modified: modified_secs(&path),
             });
         } else {
+            own_bytes += meta.len();
+            own_files += 1;
             items.push(DirItem {
                 name,
                 path: path.display().to_string(),
@@ -373,11 +409,34 @@ fn walk(
         }
     }
 
-    on_dir(dir, &items, 0);
-
+    let mut child_bytes = 0u64;
+    let mut child_files = 0u64;
     for child in dirs {
-        walk(&child, drive, budget, on_dir);
+        let (bytes, files) = walk(&child, drive, budget, on_dir);
+        child_bytes += bytes;
+        child_files += files;
     }
+
+    // 自底向上：父目录总量 = 自己的文件 + 全部后代。`du` 的算法，
+    // 也是 Treemap 需要的输入。
+    let total_bytes = own_bytes + child_bytes;
+    let total_files = own_files + child_files;
+    on_dir(dir, &items, total_bytes, total_files);
+    (total_bytes, total_files)
+}
+
+/// 目录相对卷根的层数（1 = 卷根的直接子目录；卷根本身算 0）。
+fn dir_depth(dir: &Path, drive: &str) -> usize {
+    let text = dir.display().to_string().replace('/', "\\");
+    let prefix = format!("{}\\", drive.trim_end_matches('\\'));
+    let rest = text
+        .strip_prefix(&prefix)
+        .unwrap_or(text.as_str())
+        .trim_matches('\\');
+    if rest.is_empty() {
+        return 0;
+    }
+    rest.split('\\').filter(|part| !part.is_empty()).count()
 }
 
 /// marker 判定：`*.csproj` 这类通配要列目录，普通名直接 exists。
@@ -395,36 +454,6 @@ fn marker_present(dir: &Path, marker: &str) -> bool {
         });
     }
     dir.join(marker).is_file()
-}
-
-fn tree_size(dir: &Path, budget: &mut Budget) -> (u64, u64) {
-    let mut bytes = 0u64;
-    let mut files = 0u64;
-    let mut stack = vec![dir.to_path_buf()];
-    while let Some(current) = stack.pop() {
-        if budget.exhausted() {
-            break;
-        }
-        budget.dirs += 1;
-        let Ok(reader) = fs::read_dir(&current) else {
-            continue;
-        };
-        for entry in reader.flatten() {
-            let Ok(meta) = fs::symlink_metadata(entry.path()) else {
-                continue;
-            };
-            if meta.file_type().is_symlink() {
-                continue;
-            }
-            if meta.is_dir() {
-                stack.push(entry.path());
-            } else {
-                bytes += meta.len();
-                files += 1;
-            }
-        }
-    }
-    (bytes, files)
 }
 
 fn modified_secs(path: &Path) -> u64 {
@@ -690,6 +719,45 @@ mod tests {
         assert_eq!(bytes, 2048);
         assert!(!target.exists());
         assert!(root.exists(), "只删产物目录，不动项目根");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// 目录体积自底向上聚合：父目录总量 = 自己的文件 + 全部后代（`du` 语义）。
+    /// Treemap 依赖这个不变量，否则父块会比子块加起来还小。
+    #[test]
+    fn walk_aggregates_subtree_sizes() {
+        let root = temp_drive_dir("agg");
+        let nested = root.join("a").join("b");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(root.join("f1.bin"), vec![0u8; 100]).unwrap();
+        fs::write(nested.join("f2.bin"), vec![0u8; 200]).unwrap();
+
+        let mut budget = Budget::new();
+        let mut totals: Vec<(String, u64, u64)> = Vec::new();
+        {
+            // 盘符从临时目录实际所在盘取（本机 %TEMP% 在 F:，写死 C: 会让
+            // 准入检查把整棵树拒掉，测试就变成"聚合恒为 0"）。
+            let drive: String = root.display().to_string().chars().take(2).collect();
+            let mut collect = |dir: &Path, _items: &[DirItem], bytes: u64, files: u64| {
+                totals.push((dir.display().to_string(), bytes, files));
+            };
+            walk(&root, &drive, &mut budget, &mut collect);
+        }
+
+        let root_total = totals
+            .iter()
+            .find(|(path, _, _)| path == &root.display().to_string())
+            .expect("root visited");
+        assert_eq!(root_total.1, 300, "父目录总量 = 自己的文件 + 后代");
+        assert_eq!(root_total.2, 2);
+
+        let nested_total = totals
+            .iter()
+            .find(|(path, _, _)| path.ends_with("a\\b"))
+            .expect("nested visited");
+        assert_eq!(nested_total.1, 200);
+        assert_eq!(nested_total.2, 1);
 
         let _ = fs::remove_dir_all(&root);
     }

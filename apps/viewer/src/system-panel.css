@@ -442,3 +442,33 @@
   gap: 10px; font-size: 12px; padding-top: 6px;
   border-top: 1px solid var(--border-subtle);
 }
+
+/* ─── Treemap（squarified） ─────────────────────────────────────── */
+.treemap { width: 100%; }
+.treemap svg { width: 100%; height: auto; display: block; }
+.treemap-cell { cursor: pointer; }
+.treemap-cell rect {
+  transition: filter 140ms ease-out, stroke 140ms ease-out;
+}
+.treemap-cell:hover rect { filter: brightness(1.1); }
+.treemap-cell.is-selected rect { stroke: var(--text-primary); stroke-width: 2; }
+.treemap-label {
+  font-size: 15px; fill: #fff; font-weight: 600;
+  font-family: var(--font-sans); pointer-events: none;
+}
+.treemap-size {
+  font-size: 12px; fill: rgba(255, 255, 255, 0.88);
+  font-family: var(--font-mono); pointer-events: none;
+}
+.treemap-bar {
+  display: flex; align-items: center; gap: 5px; flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+.treemap-crumb {
+  border: none; background: var(--bg-tertiary); color: var(--text-secondary);
+  cursor: pointer; padding: 2px 8px; border-radius: 5px;
+  font-size: 11px; font-family: var(--font-sans);
+  transition: background 120ms ease-out;
+}
+.treemap-crumb:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-primary); }
+.treemap-crumb:disabled { opacity: 0.5; cursor: default; }
