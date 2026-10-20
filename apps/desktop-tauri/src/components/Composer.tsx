@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useMemo, useCallback } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { Send, Square, FolderOpen, ChevronDown, Sparkles, ShieldCheck, Image, X, Check, AlertTriangle, Lock, Clock, Code2, FileText, Brain, BrainCircuit, Settings2 } from "lucide-react";
 import type { DomainModeChoice } from "../hooks/useExpert";
 import { usePopover } from "../hooks/usePopover";
@@ -105,14 +105,16 @@ export function Composer(p: ComposerProps) {
   const dragCounter = useRef(0);
   const [modelOpen, setModelOpen, modelContainerRef, modelTriggerRef, modelToggle] = usePopover();
   const [expertPanelOpen, setExpertPanelOpen] = useState(false);
-  // 待发队列默认折叠：常驻展开会与输入区争夺垂直空间。
+  // 待发队列默认折叠；但第一次入队时自动展开一次 —— 否则用户只看到
+  // "待发送 1 条"，看不到自己刚排进去的内容。
+  const prevQueueLenRef = useRef(0);
+  useEffect(() => {
+    const len = p.messageQueue?.length ?? 0;
+    if (prevQueueLenRef.current === 0 && len > 0) setQueueOpen(true);
+    prevQueueLenRef.current = len;
+  }, [p.messageQueue]);
   const [queueOpen, setQueueOpen] = useState(false);
   const [permOpen, setPermOpen, permContainerRef, permTriggerRef, permToggle] = usePopover();
-
-  const [expandedProviders, setExpandedProviders] = useState<Record<string, boolean>>({});
-  const toggleProvider = useCallback((provider: string) => {
-    setExpandedProviders((prev) => ({ ...prev, [provider]: !prev[provider] }));
-  }, []);
 
   const toolbarRef = useRef<HTMLDivElement>(null);
   const [toolbarCompact, setToolbarCompact] = useState(false);
@@ -280,20 +282,33 @@ export function Composer(p: ComposerProps) {
                 className="flex h-tiny items-center gap-1.5 text-text-muted transition-colors hover:text-text-primary"
               >
                 <ChevronDown className={`icon-xs transition-transform ${queueOpen ? "" : "-rotate-90"}`} />
-                待发送 {p.messageQueue!.length} 条
+                {p.messageQueue!.length} 条排队中
                 {failedCount > 0 && (
                   <span className="text-[var(--color-error)]">· {failedCount} 条失败</span>
                 )}
               </button>
-              <button
-                onClick={() => p.onClearQueue?.()}
-                className="h-tiny rounded px-1.5 py-0.5 text-text-muted transition-colors hover:bg-bg-tertiary hover:text-text-primary"
-              >
-                清空
-              </button>
+              <div className="flex items-center gap-0.5">
+                {p.onSendFromQueue && (
+                  <button
+                    type="button"
+                    onClick={() => p.onSendFromQueue?.(p.messageQueue![0]!.id)}
+                    className="grid size-6 place-items-center rounded text-text-muted transition-colors hover:bg-bg-tertiary hover:text-text-primary"
+                    title="立即发送队首消息"
+                    aria-label="立即发送队首消息"
+                  >
+                    <Send className="icon-sm" />
+                  </button>
+                )}
+                <button
+                  onClick={() => p.onClearQueue?.()}
+                  className="h-tiny rounded px-1.5 py-0.5 text-text-muted transition-colors hover:bg-bg-tertiary hover:text-text-primary"
+                >
+                  清空
+                </button>
+              </div>
             </div>
             {queueOpen && (
-              <ul className="mt-1.5 max-h-40 space-y-1 overflow-y-auto">
+              <ul className="mt-2 max-h-48 space-y-0.5 overflow-y-auto">
                 {p.messageQueue!.map((msg, idx) => (
                   <QueueItemRow
                     key={msg.id}
@@ -421,7 +436,7 @@ export function Composer(p: ComposerProps) {
               <ChevronDown className="icon-sm shrink-0 opacity-60" />
             </button>
             {modelOpen && (
-              <PopoverShell containerRef={modelContainerRef} triggerRef={modelTriggerRef} align="right" width="lg" side="top">
+              <PopoverShell containerRef={modelContainerRef} triggerRef={modelTriggerRef} align="right" width="xl" side="top">
                 <PopoverBody maxHeight="max-h-72">
                   {!p.byProvider || p.byProvider.length === 0 ? (
                     <div className="px-2.5 py-8 text-center">
@@ -429,142 +444,114 @@ export function Composer(p: ComposerProps) {
                       <p className="mt-1 text-[length:var(--text-meta)] text-text-muted">在下方「管理模型」里添加</p>
                     </div>
                   ) : (
-                    p.byProvider.map((group) => {
-                      const isSelectedHere = p.selectedModel
-                        ? p.selectedModel.startsWith(group.provider + ":")
-                        : false;
-                      const expanded = expandedProviders[group.provider] ?? isSelectedHere;
-                      return (
-                        <div key={group.provider} className="mb-0.5 last:mb-0">
-                          {/* 供应商是**分组标题**，不是一级菜单项：左侧不再放
-                              展开箭头（那会让它读起来像另一条可选项），箭头统一
-                              收到右侧；模型行也不再阶梯缩进。 */}
-                          <button
-                            type="button"
-                            onClick={() => toggleProvider(group.provider)}
-                            className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left transition-colors hover:bg-bg-hover"
-                            title={`${group.label}（点击展开/折叠）`}
-                            aria-expanded={expanded}
-                          >
-                            <span className="truncate text-[length:var(--text-meta)] font-semibold tracking-wide text-text-faint">
-                              {group.label}
+                    p.byProvider.map((group) => (
+                      <div key={group.provider} className="pb-0.5 last:pb-0">
+                        {/* 分组标题是**静态标签**，不是可点击项：模型卡片要一眼
+                            扫完（对齐参考稿的「内置模型」段头），多一层折叠只会
+                            把候选藏起来。 */}
+                        <div className="flex items-center gap-2 px-2.5 pb-1 pt-2">
+                          <span className="truncate text-[length:var(--text-meta)] font-medium tracking-wide text-text-faint">
+                            {group.label}
+                          </span>
+                          {group.isFree && (
+                            <span className="shrink-0 rounded-sm bg-success-soft px-1 py-px text-[length:var(--text-tiny,11px)] text-success">
+                              免费源
                             </span>
-                            {group.isFree ? (
-                              <span className="shrink-0 rounded-sm bg-success-soft px-1 py-px text-[length:var(--text-tiny,11px)] text-success">
-                                免费源
-                              </span>
-                            ) : group.isCustom ? (
-                              <span className="shrink-0 rounded-sm bg-bg-tertiary px-1 py-px text-[length:var(--text-tiny,11px)] text-text-faint">
-                                自定义
-                              </span>
-                            ) : null}
-                            <ChevronDown
-                              className={`ml-auto icon-sm shrink-0 text-text-faint transition-transform ${expanded ? "" : "-rotate-90"}`}
-                            />
-                          </button>
-                          {expanded && (
-                            <div className="pb-0.5">
-                              {group.models.map((m) => {
-                                const selected = p.selectedModel === m.id;
-                                const ctx = formatContextTokens(m.info?.context_window);
-                                return (
-                                  <button
-                                    key={m.id}
-                                    onClick={() => {
-                                      p.onSwitchModel?.(m.id);
-                                      p.setSelectedModel(m.id);
-                                      setModelOpen(false);
-                                    }}
-                                    aria-current={selected ? "true" : undefined}
-                                    title={m.id}
-                                    className={`flex w-full items-center gap-1.5 rounded-md px-2.5 py-1.5 text-left transition-colors ${
-                                      selected
-                                        ? "bg-[var(--color-accent-soft)] text-text-primary"
-                                        : "text-text-secondary hover:bg-bg-hover hover:text-text-primary"
-                                    }`}
-                                  >
-                                    <span className="truncate text-[length:var(--text-ui)]">{m.name}</span>
-                                    {m.info?.supports_reasoning && (
-                                      <span className="shrink-0 rounded-sm bg-bg-tertiary px-1 py-px text-[length:var(--text-tiny,11px)] text-text-faint">
-                                        思考
-                                      </span>
-                                    )}
-                                    {m.info?.supports_vision && (
-                                      <span className="shrink-0 rounded-sm bg-bg-tertiary px-1 py-px text-[length:var(--text-tiny,11px)] text-text-faint">
-                                        视觉
-                                      </span>
-                                    )}
-                                    {ctx && (
-                                      <span className="ml-auto shrink-0 font-mono text-[length:var(--text-meta)] text-text-faint">
-                                        {ctx}
-                                      </span>
-                                    )}
-                                    {selected && (
-                                      <Check
-                                        className={`${ctx ? "" : "ml-auto"} icon-sm shrink-0 text-accent`}
-                                      />
-                                    )}
-                                  </button>
-                                );
-                              })}
-                            </div>
+                          )}
+                          {!group.isFree && group.isCustom && (
+                            <span className="shrink-0 rounded-sm bg-bg-tertiary px-1 py-px text-[length:var(--text-tiny,11px)] text-text-faint">
+                              自定义
+                            </span>
                           )}
                         </div>
-                      );
-                    })
+                        {group.models.map((m) => {
+                          const selected = p.selectedModel === m.id;
+                          const ctx = formatContextTokens(m.info?.context_window);
+                          return (
+                            <button
+                              key={m.id}
+                              onClick={() => {
+                                p.onSwitchModel?.(m.id);
+                                p.setSelectedModel(m.id);
+                                setModelOpen(false);
+                              }}
+                              aria-current={selected ? "true" : undefined}
+                              title={m.id}
+                              className={`flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left transition-colors ${
+                                selected
+                                  ? "bg-[var(--color-accent-soft)] text-text-primary"
+                                  : "text-text-secondary hover:bg-bg-hover hover:text-text-primary"
+                              }`}
+                            >
+                              <ProviderIcon providerId={m.provider} size={14} className="shrink-0" title={m.provider} />
+                              <span className="min-w-0 flex-1 truncate text-[length:var(--text-ui)]">{m.name}</span>
+                              {m.info?.supports_reasoning && (
+                                <span className="shrink-0 rounded-sm bg-bg-tertiary px-1 py-px text-[length:var(--text-tiny,11px)] text-text-faint">
+                                  思考
+                                </span>
+                              )}
+                              {m.info?.supports_vision && (
+                                <span className="shrink-0 rounded-sm bg-bg-tertiary px-1 py-px text-[length:var(--text-tiny,11px)] text-text-faint">
+                                  视觉
+                                </span>
+                              )}
+                              {/* 上下文按固定宽度右对齐：一列数字读起来才像表格，
+                                  不会因为有的模型没报而为每一行错位。 */}
+                              <span className="w-10 shrink-0 text-right font-mono text-[length:var(--text-meta)] text-text-faint">
+                                {ctx ?? "—"}
+                              </span>
+                              <Check
+                                className={`icon-sm shrink-0 text-accent ${selected ? "" : "opacity-0"}`}
+                                aria-hidden="true"
+                              />
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ))
                   )}
                 </PopoverBody>
 
-                {/* 附加信息：上下文窗口 + 思考开关（仅当模型支持 reasoning 时显开关） */}
+                {/* 附加信息：上下文 + 思考开关，免责独占一行。
+                    放在同一行时开关会被挤成竖排（"思/考"两字换行），
+                    长免责文案也会把整行撑出弹层。 */}
                 {p.byProvider && p.byProvider.length > 0 && (() => {
                   const currentModelId = p.selectedModel;
                   const ctxEntry = currentModelId ? p.contextWindows?.[currentModelId] : undefined;
-                  const ctxTokens = ctxEntry?.value ?? p.contextWindows?.[currentModelId ?? ""]?.value ?? 0;
-                  const ctxLabel =
-                    ctxTokens >= 1_000_000
-                      ? `${(ctxTokens / 1_000_000).toFixed(ctxTokens % 1_000_000 === 0 ? 0 : 1)}M`
-                      : ctxTokens >= 1000
-                        ? `${Math.round(ctxTokens / 1000)}K`
-                        : ctxTokens > 0
-                          ? String(ctxTokens)
-                          : "未知";
+                  const ctxTokens = ctxEntry?.value ?? 0;
+                  const ctxLabel = formatContextTokens(ctxTokens) ?? "未知";
                   const showThinkingToggle = p.supportsReasoning === true;
                   const selectedInfo = p.models.find((m) => m.id === currentModelId)?.info;
                   return (
-                    <div className="mt-1 flex items-center gap-3 border-t border-border-primary px-2.5 py-1.5 text-[length:var(--text-meta)]">
-                      <span className="shrink-0 text-text-muted">
-                        上下文 <span className="font-mono text-text-secondary">{ctxLabel}</span>
-                      </span>
-                      {selectedInfo?.is_free && (
-                        <span
-                          className="truncate text-text-faint"
-                          title={
-                            selectedInfo.trains_on_prompts
-                              ? "上游声明会拿提示词训练模型；敏感内容不要发给免费源"
-                              : "社区免费源可能随时失效"
-                          }
-                        >
-                          {selectedInfo.trains_on_prompts
-                            ? "提示词会被上游用于训练"
-                            : "随时可能失效"}
+                    <div className="mt-1 border-t border-border-primary px-2.5 py-1.5">
+                      <div className="flex items-center gap-3 text-[length:var(--text-meta)]">
+                        <span className="shrink-0 whitespace-nowrap text-text-muted">
+                          上下文 <span className="font-mono text-text-secondary">{ctxLabel}</span>
                         </span>
-                      )}
-                      {showThinkingToggle && (
-                        <button
-                          type="button"
-                          onClick={() => p.onEnableThinkingChange?.(!(p.enableThinking === true))}
-                          className={`ml-auto inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[length:var(--text-tiny,11px)] transition-colors ${
-                            p.enableThinking === true
-                              ? "bg-[color:var(--color-chip-model-bg)] text-[color:var(--color-chip-model-fg)]"
-                              : "text-text-muted hover:bg-bg-hover"
-                          }`}
-                          title="开启/关闭深度思考（对支持 reasoning 的模型生效；切换后随下一条消息下发）"
-                        >
-                          {p.enableThinking === true
-                            ? <Brain className="icon-sm shrink-0" aria-hidden="true" />
-                            : <BrainCircuit className="icon-sm shrink-0 opacity-50" aria-hidden="true" />}
-                          思考 {p.enableThinking === true ? "开" : "关"}
-                        </button>
+                        {showThinkingToggle && (
+                          <button
+                            type="button"
+                            onClick={() => p.onEnableThinkingChange?.(!(p.enableThinking === true))}
+                            className={`ml-auto inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md px-1.5 py-0.5 text-[length:var(--text-tiny,11px)] transition-colors ${
+                              p.enableThinking === true
+                                ? "bg-[color:var(--color-chip-model-bg)] text-[color:var(--color-chip-model-fg)]"
+                                : "text-text-muted hover:bg-bg-hover"
+                            }`}
+                            title="开启/关闭深度思考（对支持 reasoning 的模型生效；切换后随下一条消息下发）"
+                          >
+                            {p.enableThinking === true
+                              ? <Brain className="icon-sm shrink-0" aria-hidden="true" />
+                              : <BrainCircuit className="icon-sm shrink-0 opacity-50" aria-hidden="true" />}
+                            思考 {p.enableThinking === true ? "开" : "关"}
+                          </button>
+                        )}
+                      </div>
+                      {selectedInfo?.is_free && (
+                        <p className="mt-1 truncate text-[length:var(--text-meta)] text-text-faint">
+                          {selectedInfo.trains_on_prompts
+                            ? "免费源 · 提示词会被上游用于训练，敏感内容不要发送"
+                            : "免费源 · 可能随时失效"}
+                        </p>
                       )}
                     </div>
                   );

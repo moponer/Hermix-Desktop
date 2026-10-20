@@ -30,12 +30,13 @@ import { createPortal } from "react-dom";
  */
 export type PopoverAlign = "left" | "center" | "right";
 export type PopoverSide = "top" | "bottom";
-export type PopoverWidth = "sm" | "md" | "lg"; // 52 / 64 / 72 (Tailwind)
+export type PopoverWidth = "sm" | "md" | "lg" | "xl"; // 44 / 56 / 64 / 80 (Tailwind)
 
 const WIDTH_PX: Record<PopoverWidth, number> = {
   sm: 176, // w-44
   md: 224, // w-56
   lg: 256, // w-64
+  xl: 320, // w-80
 };
 
 const SIDE_GAP_PX = 6; // small gap between trigger and popover
@@ -125,7 +126,8 @@ export function PopoverShell({
   // the pos-null → pos-set transition (otherwise the popover collapses
   // to content width the moment useLayoutEffect sets the anchor rect,
   // making the panel look like a tiny sliver).
-  const widthClass = width === "sm" ? "w-44" : width === "lg" ? "w-64" : "w-56";
+  const widthClass =
+    width === "sm" ? "w-44" : width === "lg" ? "w-64" : width === "xl" ? "w-80" : "w-56";
 
   // Legacy class set used only when `triggerRef` isn't provided (i.e.
   // pos is null). When pos is set, we use `position: fixed` anchored to

@@ -2,6 +2,14 @@ import { useState, useEffect, useMemo } from "react";
 import { useCurrentModel, MODEL_CONFIG_CHANGED_EVENT } from "../hooks/useCurrentModel";
 import { storage, STORAGE_KEYS } from "../utils/storageCompat";
 import { getModelList, getProviderMeta, type ModelListEntryInfo } from "../api";
+import { PROVIDERS } from "./settings/settingsUtils";
+
+/** 分组标题用的供应商名：自定义 provider 用 display_name，内置厂商用品牌名
+ *  （`minimax` → `MiniMax`），都没有才退回 id。 */
+function providerLabel(pid: string, info?: ModelListEntryInfo): string {
+  if (info?.provider_name && info.provider_name !== pid) return info.provider_name;
+  return PROVIDERS.find((p) => p.id === pid)?.name ?? pid;
+}
 
 /** `192000` → `"192K"`、`1048576` → `"1M"`。未知返回 null（UI 直接不显示）。 */
 export function formatContextTokens(tokens?: number): string | null {
@@ -242,7 +250,7 @@ export function useModelSelector() {
       } else {
         map.set(m.provider, {
           provider: m.provider,
-          label: m.info?.provider_name || m.provider,
+          label: providerLabel(m.provider, m.info),
           models: [m],
           isCustom: isFree ? false : isCustom,
           isFree,
