@@ -78,6 +78,7 @@ impl SearchService {
             }
         };
 
+        let mut pending: Vec<(String, Arc<VolumeState>)> = Vec::new();
         for info in volumes_info {
             if let Some(only) = &only {
                 if !only.iter().any(|name| name.eq_ignore_ascii_case(&info.name)) {
@@ -100,12 +101,20 @@ impl SearchService {
             monitor::start(state.clone(), self.data_dir.clone(), filter.clone());
 
             if !has_snapshot {
-                let service = self.clone();
-                let volume = info.name.clone();
-                let state_for_build = state.clone();
-                tokio::spawn(async move {
+                pending.push((info.name.clone(), state));
+            }
+        }
+
+        // 串行建索引：每卷一次全盘 MFT 扫描，多卷并发会把磁盘队列占满
+        // （实测 C:+F: 同时扫 → 磁盘 100%、整机卡死）。
+        if !pending.is_empty() {
+            let service = self.clone();
+            tokio::spawn(async move {
+                for (volume, state) in pending {
+                    // 卷之间留间隙，让上一轮的脏页刷完再开下一个。
+                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
                     match ops::build_and_save(
-                        &state_for_build,
+                        &state,
                         service.data_dir(),
                         &volume,
                         &service.filter(),
@@ -114,8 +123,8 @@ impl SearchService {
                     {
                         Ok(summary) => {
                             eprintln!(
-                                "[filesearch] {} 建索引完成：{} 项",
-                                volume, summary.total_entries
+                                "[filesearch] {} 建索引完成：{} 项（{} ms）",
+                                volume, summary.total_entries, summary.elapsed_ms
                             );
                         }
                         Err(error) => {
@@ -123,8 +132,8 @@ impl SearchService {
                             service.record_skipped(&volume, error);
                         }
                     }
-                });
-            }
+                }
+            });
         }
     }
 
@@ -160,7 +169,10 @@ impl SearchService {
         }
 
         let limit = limit.unwrap_or(500).clamp(1, 5_000);
-        let results: Vec<FileEntry> = merged.into_iter().take(limit).collect();
+        let mut results: Vec<FileEntry> = merged.into_iter().take(limit).collect();
+        // 大小/修改时间在索引里是空的（构建期不做逐条 stat），只给最终
+        // 返回的这几百条补——有界，不会变成全盘 I/O。
+        crate::core::metadata::hydrate_result_metadata(&mut results);
         let returned = results.len();
         SearchResponse {
             query,

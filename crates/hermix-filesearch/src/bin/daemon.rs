@@ -56,6 +56,10 @@ fn main() {
         return;
     }
 
+    // 建索引是纯后台活：整机优先级压到 BelowNormal，避免和前台应用抢 CPU
+    // （全盘 MFT 扫描期间实测能吃满一个核，用户直接感到卡顿）。
+    lower_process_priority();
+
     eprintln!("[filesearch] 数据目录：{}", data_dir.display());
     let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
         Ok(runtime) => runtime,
@@ -263,6 +267,20 @@ fn print_snapshot_status(data_dir: &std::path::Path) {
         serde_json::json!({ "dataDir": data_dir.display().to_string(), "volumes": volumes })
     );
 }
+
+/// 把本进程降到 BelowNormal（Windows）。失败无所谓——只是少了层礼让。
+#[cfg(windows)]
+fn lower_process_priority() {
+    use windows_sys::Win32::System::Threading::{
+        GetCurrentProcess, SetPriorityClass, BELOW_NORMAL_PRIORITY_CLASS,
+    };
+    unsafe {
+        SetPriorityClass(GetCurrentProcess(), BELOW_NORMAL_PRIORITY_CLASS);
+    }
+}
+
+#[cfg(not(windows))]
+fn lower_process_priority() {}
 
 fn default_data_dir() -> PathBuf {
     if let Ok(local) = std::env::var("LOCALAPPDATA") {

@@ -19,7 +19,10 @@ use crate::{
 
 const POLL_INTERVAL_SECS: u64 = 1;
 const MAX_RETRY_DELAY_SECS: u64 = 30;
-const SNAPSHOT_INTERVAL_MS: u64 = 30_000;
+/// 落盘节流：快照是整卷重写，30s 一次在活跃机器上等于持续写盘
+/// （浏览器缓存每秒都在改 USN）。4 分钟足够缩短"崩溃丢失增量"的窗口，
+/// 又不会把磁盘占满。进程退出时还有一次强制刷盘。
+const SNAPSHOT_INTERVAL_MS: u64 = 240_000;
 const REBUILD_RETRY_DELAY_SECS: u64 = 60;
 
 enum MonitorReadiness {
@@ -273,7 +276,10 @@ pub fn flush_snapshot_on_exit(state: &VolumeState, data_dir: &std::path::Path) {
     }
 }
 
-async fn flush_snapshot_if_due(state: &VolumeState, data_dir: &std::path::Path) -> Result<bool, String> {
+async fn flush_snapshot_if_due(
+    state: &Arc<VolumeState>,
+    data_dir: &std::path::Path,
+) -> Result<bool, String> {
     let now = now_ms();
     if !snapshot_is_due(
         state.snapshot_dirty.load(Ordering::Acquire),
@@ -293,20 +299,23 @@ async fn flush_snapshot_if_due(state: &VolumeState, data_dir: &std::path::Path) 
         return Ok(false);
     }
 
-    let snapshot = {
-        let index = state
+    // 在阻塞任务里**借引用**序列化：既不用把整份索引 clone 出来，也不占着
+    // 读锁做内存复制（读锁是共享的，期间搜索照常可用）。
+    let state_owned = state.clone();
+    let data_dir_owned = data_dir.to_path_buf();
+    let saved_path = tokio::task::spawn_blocking(move || {
+        let index = state_owned
             .index
             .read()
             .map_err(|_| "搜索索引锁状态异常。".to_string())?;
-        index
-            .current_snapshot()
-            .ok_or_else(|| "索引状态为空，无法保存快照。".to_string())?
-    };
-    let data_dir_owned = data_dir.to_path_buf();
-    let saved_path = tokio::task::spawn_blocking(move || storage::save_snapshot(&data_dir_owned, &snapshot))
-        .await
-        .map_err(|error| format!("保存索引快照任务失败：{error}"))?
-        .map_err(|error| error.to_string())?;
+        let (volume_state, entries) = index
+            .snapshot_parts()
+            .ok_or_else(|| "索引状态为空，无法保存快照。".to_string())?;
+        storage::save_snapshot_parts(&data_dir_owned, volume_state, entries)
+            .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| format!("保存索引快照任务失败：{error}"))??;
 
     {
         let mut index = state
@@ -430,9 +439,9 @@ mod tests {
 
     #[test]
     fn snapshot_is_throttled_until_interval_elapsed() {
-        assert!(!snapshot_is_due(false, 60_000, 0));
-        assert!(!snapshot_is_due(true, 29_999, 0));
-        assert!(snapshot_is_due(true, 30_000, 0));
-        assert!(snapshot_is_due(true, 60_000, 30_000));
+        assert!(!snapshot_is_due(false, SNAPSHOT_INTERVAL_MS * 2, 0));
+        assert!(!snapshot_is_due(true, SNAPSHOT_INTERVAL_MS - 1, 0));
+        assert!(snapshot_is_due(true, SNAPSHOT_INTERVAL_MS, 0));
+        assert!(snapshot_is_due(true, SNAPSHOT_INTERVAL_MS * 2, SNAPSHOT_INTERVAL_MS));
     }
 }

@@ -37,23 +37,31 @@ pub async fn build_and_save(
         .map(|path| path.display().to_string())
         .ok();
 
-    let snapshot = {
+    {
         let mut index = state
             .index
             .write()
             .map_err(|_| "搜索索引锁状态异常。".to_string())?;
         index.set_filter(filter.clone());
         index.replace_volume(build.state, build.entries, summary.elapsed_ms, snapshot_path);
-        index
-            .current_snapshot()
-            .ok_or_else(|| "索引状态为空，无法保存快照。".to_string())?
-    };
+    }
 
+    // 借引用落盘（不 clone 整份索引），与 monitor 的周期刷盘同一路径。
+    let state_owned = state.clone();
     let data_dir_owned = data_dir.to_path_buf();
-    let saved_path = tokio::task::spawn_blocking(move || storage::save_snapshot(&data_dir_owned, &snapshot))
-        .await
-        .map_err(|error| format!("保存索引快照任务失败：{error}"))?
-        .map_err(|error| error.to_string())?;
+    let saved_path = tokio::task::spawn_blocking(move || {
+        let index = state_owned
+            .index
+            .read()
+            .map_err(|_| "搜索索引锁状态异常。".to_string())?;
+        let (volume_state, entries) = index
+            .snapshot_parts()
+            .ok_or_else(|| "索引状态为空，无法保存快照。".to_string())?;
+        storage::save_snapshot_parts(&data_dir_owned, volume_state, entries)
+            .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| format!("保存索引快照任务失败：{error}"))??;
 
     {
         let mut index = state

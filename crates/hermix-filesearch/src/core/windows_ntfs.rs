@@ -58,7 +58,6 @@ mod imp {
         NtfsRecord, UsnChanges, VolumeIndexState, VolumeInfo,
     };
 
-    use crate::core::metadata::hydrate_file_metadata;
     const BUFFER_SIZE: usize = 1024 * 1024;
 
     pub fn list_volumes() -> Result<Vec<VolumeInfo>> {
@@ -138,8 +137,11 @@ mod imp {
         let handle = VolumeHandle::open(&volume)?;
         let journal = query_usn_journal(handle.raw())?;
         let records = enum_mft_records(handle.raw(), journal.NextUsn)?;
-        let mut entries = build_entries_from_records(&volume, records, filter);
-        hydrate_file_metadata(&mut entries);
+        let entries = build_entries_from_records(&volume, records, filter);
+        // 这里**不做** `hydrate_file_metadata`：它对每个条目 fs::metadata，
+        // 全盘百万级文件就是百万次同步文件系统调用——实测把磁盘打到 100%、
+        // 单核 30%+、内存 1.4GB，整机卡死。大小/修改时间改为搜索时只对
+        // 返回的前 N 条（≤500）懒补齐（见 `SearchService::search`）。
         let files = entries.iter().filter(|entry| !entry.is_dir).count();
         let directories = entries.iter().filter(|entry| entry.is_dir).count();
         let now = now_ms();

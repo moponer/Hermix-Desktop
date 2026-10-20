@@ -34,20 +34,52 @@ pub fn load_snapshot(data_dir: &Path, volume: &str) -> Result<Option<LoadedSnaps
 }
 
 pub fn save_snapshot(data_dir: &Path, snapshot: &IndexSnapshot) -> Result<PathBuf> {
-    let path = snapshot_path(data_dir, &snapshot.volume_state.volume)?;
+    save_snapshot_parts(data_dir, &snapshot.volume_state, &snapshot.entries)
+}
+
+/// 借引用落盘：调用方无需把整份索引 clone 出来（百万级条目一次 clone
+/// 就是几百 MB 的瞬时峰值）。
+pub fn save_snapshot_parts(
+    data_dir: &Path,
+    volume_state: &super::model::VolumeIndexState,
+    entries: &[super::model::FileEntry],
+) -> Result<PathBuf> {
+    #[derive(serde::Serialize)]
+    struct SnapshotView<'a> {
+        version: u32,
+        volume_state: &'a super::model::VolumeIndexState,
+        entries: &'a [super::model::FileEntry],
+    }
+    let view = SnapshotView {
+        version: SNAPSHOT_VERSION,
+        volume_state,
+        entries,
+    };
+
+    let path = snapshot_path(data_dir, &volume_state.volume)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("创建索引目录失败：{}", parent.display()))?;
     }
 
     let tmp = path.with_extension("tmp");
-    let bytes = bincode::serialize(snapshot).context("序列化索引快照失败")?;
-    fs::write(&tmp, bytes).with_context(|| format!("写入临时快照失败：{}", tmp.display()))?;
+    // 流式写：`bincode::serialize` 会把整个索引再复制进一个 Vec<u8>，
+    // 百万级条目时峰值内存凭空翻倍（实测整机 1.4GB 常驻）。直接写文件。
+    {
+        use std::io::Write;
+        let file = fs::File::create(&tmp)
+            .with_context(|| format!("创建临时快照失败：{}", tmp.display()))?;
+        let mut writer = std::io::BufWriter::new(file);
+        bincode::serialize_into(&mut writer, &view).context("序列化索引快照失败")?;
+        writer
+            .flush()
+            .with_context(|| format!("刷新临时快照失败：{}", tmp.display()))?;
+    }
     if path.exists() {
         fs::remove_file(&path).with_context(|| format!("替换旧快照失败：{}", path.display()))?;
     }
     fs::rename(&tmp, &path).with_context(|| format!("保存索引快照失败：{}", path.display()))?;
-    save_last_volume(data_dir, &snapshot.volume_state.volume)?;
+    save_last_volume(data_dir, &volume_state.volume)?;
 
     Ok(path)
 }

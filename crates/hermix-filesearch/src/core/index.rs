@@ -86,6 +86,14 @@ impl SearchIndex {
         }
     }
 
+    /// 借引用取出快照原料（不 clone 条目）。落盘路径用这个：`current_snapshot`
+    /// 会把百万级条目整体复制一遍，周期性刷盘时等于每 30 秒制造一次内存尖峰。
+    pub fn snapshot_parts(&self) -> Option<(&VolumeIndexState, &[FileEntry])> {
+        self.volume_state
+            .as_ref()
+            .map(|state| (state, self.entries.as_slice()))
+    }
+
     pub fn current_snapshot(&self) -> Option<IndexSnapshot> {
         self.volume_state.as_ref().map(|state| IndexSnapshot {
             version: SNAPSHOT_VERSION,
