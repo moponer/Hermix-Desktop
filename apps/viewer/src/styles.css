@@ -190,6 +190,18 @@ html, body, #root {
 .tb-btn.is-active { background: var(--bg-accent-soft); color: var(--accent); }
 .tb-btn:disabled { opacity: 0.4; cursor: default; }
 
+/* 右上角视图选项组：三个开关/切换控件收在一块抬起的白面上。
+   分组是为了让它们看起来是"一组控件"而不是三个漂着的灰线条；
+   白面压在浅灰工具条上，层次靠底色差（不用描边）。 */
+.tb-group {
+  display: inline-flex; align-items: center; gap: 2px;
+  flex: none;
+  background: var(--bg-primary);
+  border-radius: 8px;
+  padding: 2px;
+}
+.tb-group .tb-btn { padding: 5px 9px; font-size: 12px; }
+
 .path-form {
   display: flex; flex: 1; align-items: center; gap: 4px;
   margin-left: 6px; min-width: 0;

@@ -776,22 +776,23 @@ export function App() {
     >
       {mode === "heavy" && (
       <header className="toolbar">
-        <button className="tb-btn" onClick={back} disabled={backStack.length === 0} title="后退">
-          <ArrowLeft />
+        <button className="tb-btn" onClick={back} disabled={backStack.length === 0} title="后退" aria-label="后退">
+          <ArrowLeft size={16} />
         </button>
         <button
           className="tb-btn"
           onClick={forward}
           disabled={forwardStack.length === 0}
           title="前进"
+          aria-label="前进"
         >
-          <ArrowRight />
+          <ArrowRight size={16} />
         </button>
-        <button className="tb-btn" onClick={up} disabled={!currentPath} title="上一级">
-          <ArrowUp />
+        <button className="tb-btn" onClick={up} disabled={!currentPath} title="上一级" aria-label="上一级">
+          <ArrowUp size={16} />
         </button>
-        <button className="tb-btn" onClick={refresh} title="刷新">
-          <RefreshCw />
+        <button className="tb-btn" onClick={refresh} title="刷新" aria-label="刷新">
+          <RefreshCw size={16} />
         </button>
         <form className="path-form" onSubmit={onPathSubmit}>
           <input
@@ -800,26 +801,42 @@ export function App() {
             onChange={(e) => setPathInput(e.target.value)}
             placeholder="路径（例如 C:\Users\…）"
           />
-          <button type="submit" className="tb-btn" title="跳转">→</button>
+          <button type="submit" className="tb-btn" title="跳转" aria-label="跳转">→</button>
         </form>
         <div className="toolbar-spacer" />
-        <button
-          className={`tb-btn ${showHidden ? "is-active" : ""}`}
-          onClick={() => setShowHidden((v) => !v)}
-          title="显示隐藏文件"
-        >
-          {showHidden ? <Eye /> : <EyeOff />}
-        </button>
-        <button
-          className={`tb-btn ${aiOpen ? "is-active" : ""}`}
-          onClick={() => setAiOpen((v) => !v)}
-          title={aiOpen ? "收起 AI 栏" : "展开 AI 栏"}
-        >
-          <Sparkles /> AI
-        </button>
-        <button className="tb-btn" onClick={cycleTheme} title={`主题：${THEME_LABEL[themeMode]}`}>
-          {themeMode === "system" ? <Monitor /> : themeMode === "light" ? <Sun /> : <Moon />}
-        </button>
+        {/* 视图选项组：三个都是「开关/切换」，光图标用户看不懂
+            （"那个眼睛是干啥的"）——一律配文字标签。 */}
+        <div className="tb-group">
+          <button
+            className={`tb-btn ${showHidden ? "is-active" : ""}`}
+            onClick={() => setShowHidden((v) => !v)}
+            title={
+              showHidden
+                ? "正在显示带「隐藏」属性的文件，点击改为隐藏"
+                : "正在隐藏带「隐藏」属性的文件，点击改为显示"
+            }
+          >
+            {showHidden ? <Eye size={16} /> : <EyeOff size={16} />}
+            隐藏文件
+          </button>
+          <button
+            className={`tb-btn ${aiOpen ? "is-active" : ""}`}
+            onClick={() => setAiOpen((v) => !v)}
+            title={aiOpen ? "收起 AI 栏" : "展开 AI 栏"}
+          >
+            <Sparkles size={16} /> AI
+          </button>
+          <button className="tb-btn" onClick={cycleTheme} title={`主题：${THEME_LABEL[themeMode]}`}>
+            {themeMode === "system" ? (
+              <Monitor size={16} />
+            ) : themeMode === "light" ? (
+              <Sun size={16} />
+            ) : (
+              <Moon size={16} />
+            )}
+            {THEME_LABEL[themeMode]}
+          </button>
+        </div>
       </header>
       )}
 
