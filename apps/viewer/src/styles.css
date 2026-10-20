@@ -1587,3 +1587,76 @@ html, body, #root {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font-size: var(--text-meta); color: var(--text-primary);
 }
+
+/* ─── 钉住的预览浮窗 ───────────────────────────────────────────────
+   浮窗有自己的工具条（标题 + 置顶 + 移到… + 关闭），拖动区用
+   data-tauri-drag-region。层次靠底色差 + 阴影，不描边。 */
+.pin-root {
+  display: flex; flex-direction: column;
+  height: 100vh; min-height: 0;
+  background: var(--bg-primary);
+}
+.pin-bar {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 8px;
+  flex: none;
+  background: var(--bg-tabbar);
+  color: var(--text-secondary);
+  font-size: var(--text-meta);
+}
+.pin-title {
+  font-weight: 600; color: var(--text-primary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  max-width: 40%;
+}
+.pin-path {
+  color: var(--text-muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  flex: 1 1 auto; min-width: 0;
+}
+.pin-preset {
+  border: none; outline: none;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border-radius: 6px;
+  padding: 3px 6px;
+  font-size: var(--text-meta);
+  font-family: inherit;
+}
+.pin-preset:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
+.pin-body {
+  flex: 1 1 auto; min-height: 0;
+  display: flex; flex-direction: column;
+  overflow: auto;
+  background: var(--bg-secondary);
+}
+.pin-list {
+  list-style: none; margin: 0; padding: 6px;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.pin-list li {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--bg-primary);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+  font-size: var(--text-meta);
+  color: var(--text-primary);
+}
+.pin-entry-name {
+  display: flex; align-items: center; gap: 6px;
+  flex: 1 1 auto; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.pin-empty {
+  justify-content: center;
+  color: var(--text-muted);
+  background: transparent;
+  box-shadow: none;
+}
+.preview-pin-error {
+  color: var(--danger);
+  font-size: var(--text-meta);
+  max-width: 220px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}

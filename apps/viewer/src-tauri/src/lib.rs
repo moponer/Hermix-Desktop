@@ -19,6 +19,7 @@ pub mod mcp_http;
 pub mod mcp_server;
 pub mod paths;
 pub mod pdf_ops;
+pub mod pin;
 pub mod settings;
 pub mod sysmon;
 
@@ -212,6 +213,12 @@ pub fn main() {
             commands::viewer_available_apps,
             commands::viewer_wordcraft_path,
             commands::viewer_pick_files,
+            pin::viewer_pin_open,
+            pin::viewer_pin_close,
+            pin::viewer_pin_list,
+            pin::viewer_pin_set_top,
+            pin::viewer_pin_move_preset,
+            pin::viewer_pin_presets,
             commands::viewer_copy_files,
             commands::viewer_paste_files,
             commands::viewer_copy_text,
@@ -266,6 +273,11 @@ pub fn main() {
                 if matches!(event, WindowEvent::Resized(_) | WindowEvent::Focused(true)) {
                     keep_resize_border(_w);
                 }
+            }
+            // 主窗口关闭 → 连带关掉所有钉住的浮窗（浮窗是主流程的例外，
+            // 不该在主窗口没了之后还留成孤儿窗口）。
+            if matches!(event, tauri::WindowEvent::CloseRequested { .. }) && _w.label() == "main" {
+                pin::close_all_pins(_w.app_handle());
             }
             #[cfg(not(windows))]
             let _ = event;
