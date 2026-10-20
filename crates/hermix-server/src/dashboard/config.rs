@@ -356,6 +356,13 @@ pub struct ModelListResponse {
     pub models: Vec<hermix_config::ModelSelectorEntry>,
     /// The chosen default `"provider:model"`, if any.
     pub default_model: Option<String>,
+    /// 已配置但**未启用**的模型（设置页的「可添加」清单）。
+    ///
+    /// 与 `models` 分开是硬要求：此前两者共用一个数组，设置页点一次
+    /// 「设为默认」就把整份自定义/免费清单写进 `enabled`，付费厂商的
+    /// 模型被挤出可见范围（用户实测事故）。这里只读，不进 enabled。
+    #[serde(default)]
+    pub catalog: Vec<hermix_config::ModelSelectorEntry>,
 }
 
 /// Request body for `PUT /api/model/list`.
@@ -393,74 +400,98 @@ fn build_model_list(cfg: &hermix_config::GatewayConfig) -> ModelListResponse {
     // 副本会把纯 env 配钥的内置 provider 全部误杀出下拉。
     let is_configured = |pid: &str| hermix_config::provider_has_key(cfg, pid);
 
-    if let Some(sel) = &cfg.model_selector {
-        if !sel.enabled.is_empty() || sel.default_model.is_some() {
-            let models: Vec<hermix_config::ModelSelectorEntry> = sel
-                .enabled
-                .iter()
-                .filter(|e| is_configured(&e.provider_id))
-                .cloned()
-                .collect();
-            // 全部条目都是孤儿（provider 改名/删钥）时不在这里返回：
-            // 落到下面的兜底，别把"实际在跑"的模型藏成"未配置"。
-            if !models.is_empty() {
-                let default_model = sel
-                    .default_model
-                    .as_ref()
-                    .filter(|d| {
-                        d.split_once(':')
-                            .map(|(p, _)| models.iter().any(|m| m.provider_id == p))
-                            .unwrap_or(false)
-                    })
-                    .cloned();
-                return ModelListResponse {
-                    models,
-                    default_model,
-                };
+    // 「可添加」清单原料：每个已配置 provider 的模型。
+    // `model` 为空时必须回落到该厂商的权威默认模型 —— 只配了 key 的
+    // 厂商（minimax 这种）此前在列表里彻底消失，用户以为配置丢了。
+    let mut catalog: Vec<hermix_config::ModelSelectorEntry> = Vec::new();
+    for (pid, pc) in &cfg.llm_providers {
+        if !is_configured(pid) {
+            continue;
+        }
+        let mut models: Vec<String> = pc
+            .model
+            .as_deref()
+            .unwrap_or_default()
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect();
+        if models.is_empty() {
+            let dm = hermix_config::default_model_for_provider(pid);
+            if dm != "default" {
+                models.push(dm.to_string());
             }
+        }
+        for model_id in models {
+            catalog.push(hermix_config::ModelSelectorEntry {
+                provider_id: pid.clone(),
+                model_id,
+            });
+        }
+    }
+    // 顶层 `model` 是"实际在跑的模型"，必须在清单里可见 —— 否则切换器
+    // 显示一个清单里不存在的名字，用户以为模型被换了。
+    if let Some((pid, mid)) = cfg.model.as_deref().and_then(|d| d.split_once(':')) {
+        if is_configured(pid)
+            && !catalog
+                .iter()
+                .any(|e| e.provider_id == pid && e.model_id == mid)
+        {
+            catalog.push(hermix_config::ModelSelectorEntry {
+                provider_id: pid.to_string(),
+                model_id: mid.to_string(),
+            });
         }
     }
 
-    // Fallback: builtin provider defaults.
-    let mut models = Vec::new();
-    for (pid, pc) in &cfg.llm_providers {
-        if let Some(m) = &pc.model {
-            if !is_configured(pid) {
-                continue;
-            }
-            // `model` 是逗号分隔的清单（自定义 provider / 内置免费渠道都写多值）。
-            // 整串当成一个模型 id 会造出 `a,b` 这种假条目——切换到它必失败。
-            for part in m.split(',').map(str::trim).filter(|s| !s.is_empty()) {
-                models.push(hermix_config::ModelSelectorEntry {
-                    provider_id: pid.clone(),
-                    model_id: part.to_string(),
-                });
-            }
-        }
-    }
-    let default_model = match &cfg.model {
-        Some(d) if d.split_once(':').map(|(p, _)| is_configured(p)).unwrap_or(false) => {
-            Some(d.clone())
-        }
-        _ => models
-            .first()
-            .map(|m| format!("{}:{}", m.provider_id, m.model_id)),
+    // `models` = 已启用（selector 权威；从未写过 selector 时退化为全量配置）。
+    let enabled = cfg
+        .model_selector
+        .as_ref()
+        .filter(|sel| !sel.enabled.is_empty() || sel.default_model.is_some())
+        .map(|sel| {
+            sel.enabled
+                .iter()
+                .filter(|e| is_configured(&e.provider_id))
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+        .filter(|models| !models.is_empty())
+        .unwrap_or_else(|| catalog.clone());
+
+    // 默认模型：selector 的默认 > 顶层 model（须在启用清单里）> 首项。
+    let in_enabled = |d: &str| {
+        d.split_once(':')
+            .map(|(p, m)| {
+                enabled
+                    .iter()
+                    .any(|e| e.provider_id == p && e.model_id == m)
+            })
+            .unwrap_or(false)
     };
-    // 顶层 `model` 兜底（2026-10-04 实测）：`model_selector` 从未写过、
-    // provider 条目又没填 `model` 字段时，对话一直按顶层 `model` 跑 ——
-    // 把它合成进清单，否则开关器显示"未配置"而聊天正常工作。
-    if models.is_empty() {
-        if let Some(d) = &default_model {
-            if let Some((pid, mid)) = d.split_once(':') {
-                models.push(hermix_config::ModelSelectorEntry {
-                    provider_id: pid.to_string(),
-                    model_id: mid.to_string(),
-                });
-            }
-        }
-    }
+    let default_model = cfg
+        .model_selector
+        .as_ref()
+        .and_then(|s| s.default_model.clone())
+        .filter(|d| in_enabled(d))
+        .or_else(|| cfg.model.clone().filter(|d| in_enabled(d)))
+        .or_else(|| {
+            enabled
+                .first()
+                .map(|m| format!("{}:{}", m.provider_id, m.model_id))
+        });
+
     ModelListResponse {
-        models,
+        catalog: catalog
+            .into_iter()
+            .filter(|c| {
+                !enabled
+                    .iter()
+                    .any(|e| e.provider_id == c.provider_id && e.model_id == c.model_id)
+            })
+            .collect(),
+        models: enabled,
         default_model,
     }
 }
@@ -600,6 +631,54 @@ mod model_list_tests {
         let resp = build_model_list(&cfg);
         assert!(resp.models.is_empty());
         assert!(resp.default_model.is_none());
+    }
+
+    /// 只配了 key、没写 `model` 的厂商必须出现在 `catalog` 里。
+    /// 用户实测事故：内置免费渠道接管后，minimax（config 只有 api_key）
+    /// 从模型页彻底消失，被当成"配置丢了"。
+    #[test]
+    fn catalog_lists_keyed_provider_without_model_field() {
+        let mut cfg = GatewayConfig::default();
+        cfg.llm_providers.insert(
+            "custom-free-kilo".to_string(),
+            LlmProviderConfig {
+                api_key: Some("none".to_string()),
+                model: Some("openrouter/free".to_string()),
+                ..Default::default()
+            },
+        );
+        cfg.llm_providers.insert(
+            "minimax".to_string(),
+            LlmProviderConfig {
+                api_key: Some("sk-test".to_string()),
+                ..Default::default()
+            },
+        );
+        cfg.model = Some("custom-free-kilo:openrouter/free".to_string());
+        cfg.model_selector = Some(hermix_config::ModelSelectorConfig {
+            enabled: vec![hermix_config::ModelSelectorEntry {
+                provider_id: "custom-free-kilo".to_string(),
+                model_id: "openrouter/free".to_string(),
+            }],
+            default_model: Some("custom-free-kilo:openrouter/free".to_string()),
+        });
+
+        let resp = build_model_list(&cfg);
+        assert_eq!(resp.models.len(), 1, "只有 selector 里那一条是启用的");
+        assert!(
+            resp.catalog
+                .iter()
+                .any(|e| e.provider_id == "minimax" && e.model_id == "MiniMax-M3"),
+            "未启用的付费厂商默认模型必须出现在可添加清单里，got {:?}",
+            resp.catalog
+        );
+        assert!(
+            !resp
+                .catalog
+                .iter()
+                .any(|e| e.provider_id == "custom-free-kilo"),
+            "已启用的模型不该重复出现在可添加清单"
+        );
     }
 
     /// `model` 是逗号分隔清单（内置免费渠道默认就写多条）。整串当成一个

@@ -912,6 +912,12 @@ pub struct FreeChannelConfig {
     /// 启动时后台刷新一次模型清单（best-effort，失败静默）。
     #[serde(default = "default_true")]
     pub refresh_on_start: bool,
+
+    /// 一次性修复标记：初版接管时，启用清单被整份上游免费清单塞满
+    /// （一次「设为默认」把 18 条免费模型全写进 enabled），付费厂商的
+    /// 模型被挤出可见范围。启动时清理一次后置真，不再反复干预用户选择。
+    #[serde(default)]
+    pub selector_cleaned: bool,
 }
 
 fn default_true() -> bool {
@@ -925,6 +931,7 @@ impl Default for FreeChannelConfig {
             base_url: None,
             models_url: None,
             refresh_on_start: true,
+            selector_cleaned: false,
         }
     }
 }

@@ -42,7 +42,8 @@ struct ModelEntry {
 }
 
 /// 一次刷新最多并入多少个模型：清单是给用户挑的，不是全量目录镜像。
-const MAX_REFRESH_MODELS: usize = 24;
+/// 首版写 24 条把设置页刷成了目录墙，收到 8 条（seed 2 + 补 6）。
+const MAX_REFRESH_MODELS: usize = 8;
 
 /// 合并模型清单：只增不删，保序去重。返回合并后的 CSV 与新增数量。
 pub fn merge_models(existing: Option<&str>, fetched: &[String]) -> (String, usize) {

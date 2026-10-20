@@ -643,6 +643,20 @@ export const ChatView = memo(function ChatView({
     }
   }, [session?.id, session?.workspace, session?.expert_id, session?.model, defaultModel, setWorkspaceRaw, setExpert, setSelectedModel]);
 
+  // 新会话落地时把"用户此刻选的模型"写进会话元数据。
+  // 不写的话，欢迎页的选择只活在本组件 state 里：一旦 ChatView 重挂载
+  // （切换页面/会话对象重建），selectedModel 会按默认模型重新初始化，
+  // 表现就是"选好的模型一进去又变回去了"。
+  const persistedModelRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!session?.id || session.model || !selectedModel) return;
+    if (persistedModelRef.current === session.id) return;
+    persistedModelRef.current = session.id;
+    updateSessionMetadata(session.id, { model: selectedModel }).catch((e) =>
+      console.warn("[ChatView] persist model for new session failed:", e),
+    );
+  }, [session?.id, session?.model, selectedModel]);
+
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
   // 真实磁盘路径附件（工作台文件树右键"加入对话"）——与 pendingDocs
   // （File 句柄，发送时才读字节）分属两条通道。

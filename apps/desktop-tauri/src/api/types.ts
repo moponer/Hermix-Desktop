@@ -118,6 +118,8 @@ export interface ModelListEntry {
 export interface ModelListResponse {
   models: ModelListEntry[];
   default_model: string | null;
+  /** 已配置但未启用的模型（设置页「可添加」），只读，不进 enabled。 */
+  catalog?: ModelListEntry[];
 }
 
 export interface SkillContent {

@@ -197,7 +197,120 @@ pub fn ensure_seeded(config: &mut GatewayConfig) -> bool {
         }
     }
 
+    if cleanup_legacy_selector(config) {
+        changed = true;
+    }
+
     changed
+}
+
+/// 初版接管留下的一次性清理（`free_channel.selector_cleaned` 置真后不再执行）。
+///
+/// 症状：设置页点一次「设为默认」会把当时整份上游免费清单写进
+/// `model_selector.enabled`（18 条），用户的付费模型被挤出可见范围；
+/// 免费 provider 的 `model` 同样被刷成十几种，列表噪音过大。
+///
+/// 清理做三件事：免费 provider 的清单收回 seed；enabled 里的免费条目
+/// 只保留**默认那一条**；若清理后一个付费模型都不剩，把已配钥的付费
+/// 厂商默认模型补回 enabled（事故把用户原有的付费模型挤了出去）。
+pub fn cleanup_legacy_selector(config: &mut GatewayConfig) -> bool {
+    if config.free_channel.selector_cleaned {
+        return false;
+    }
+    config.free_channel.selector_cleaned = true;
+
+    for channel in FREE_CHANNELS {
+        if let Some(entry) = config.llm_providers.get_mut(channel.id) {
+            let seed_csv = channel
+                .seed_models
+                .iter()
+                .map(|(m, _)| *m)
+                .collect::<Vec<_>>()
+                .join(",");
+            entry.model = Some(seed_csv);
+        }
+    }
+
+    // 被冲掉的付费模型补回启用清单：清理后如果一个付费模型都不剩，
+    // 说明用户的付费配置是被这次事故挤出去的（不是他主动取消勾选）。
+    // 一次性的，恢复后就归用户自己管。
+    //
+    // 必须在拿 `model_selector` 的可变借用之前算好——`provider_has_key`
+    // 要借整份 config。
+    let restore: Vec<crate::config::ModelSelectorEntry> = match config.model_selector.as_ref() {
+        Some(sel) if !sel.enabled.iter().any(|e| !is_free_provider(&e.provider_id)) => config
+            .llm_providers
+            .iter()
+            .filter(|(pid, _)| {
+                !is_free_provider(pid) && crate::loader::provider_has_key(config, pid)
+            })
+            .flat_map(|(pid, pc)| {
+                let mut models: Vec<String> = pc
+                    .model
+                    .as_deref()
+                    .unwrap_or_default()
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+                    .collect();
+                if models.is_empty() {
+                    let dm = crate::loader::default_model_for_provider(pid);
+                    if dm != "default" {
+                        models.push(dm.to_string());
+                    }
+                }
+                models
+                    .into_iter()
+                    .map(move |m| crate::config::ModelSelectorEntry {
+                        provider_id: pid.clone(),
+                        model_id: m,
+                    })
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+
+    if let Some(sel) = config.model_selector.as_mut() {
+        let free_count = sel
+            .enabled
+            .iter()
+            .filter(|e| is_free_provider(&e.provider_id))
+            .count();
+        if free_count > 2 {
+            let keep = sel
+                .default_model
+                .as_deref()
+                .and_then(|d| d.split_once(':'))
+                .filter(|(p, _)| is_free_provider(p))
+                .map(|(p, m)| crate::config::ModelSelectorEntry {
+                    provider_id: p.to_string(),
+                    model_id: m.to_string(),
+                });
+            sel.enabled.retain(|e| !is_free_provider(&e.provider_id));
+            if let Some(k) = keep {
+                if !sel
+                    .enabled
+                    .iter()
+                    .any(|e| e.provider_id == k.provider_id && e.model_id == k.model_id)
+                {
+                    sel.enabled.push(k);
+                }
+            }
+        }
+
+        for entry in restore {
+            if !sel
+                .enabled
+                .iter()
+                .any(|e| e.provider_id == entry.provider_id && e.model_id == entry.model_id)
+            {
+                sel.enabled.push(entry);
+            }
+        }
+    }
+
+    true
 }
 
 /// 兜底默认模型：按 [`FREE_CHANNELS`] 顺序取第一个有模型的渠道。
@@ -369,6 +482,100 @@ mod tests {
         assert_eq!(sel.enabled.len(), 1);
         assert_eq!(sel.enabled[0].provider_id, "openai");
         assert_eq!(sel.default_model, None);
+    }
+
+    /// 一次性清理：把首版写进 enabled 的整份免费清单收回到"默认那一条"，
+    /// 同时把免费 provider 的 model 清单收回 seed，付费条目原样保留。
+    #[test]
+    fn legacy_selector_is_cleaned_once() {
+        let mut cfg = seeded();
+        cfg.free_channel.selector_cleaned = false;
+        cfg.llm_providers
+            .get_mut("custom-free-kilo")
+            .unwrap()
+            .model = Some("flood-1,flood-2,flood-3,flood-4".to_string());
+        let mut enabled: Vec<crate::config::ModelSelectorEntry> = (0..18)
+            .map(|i| crate::config::ModelSelectorEntry {
+                provider_id: "custom-free-kilo".to_string(),
+                model_id: format!("flood-{i}"),
+            })
+            .collect();
+        enabled.push(crate::config::ModelSelectorEntry {
+            provider_id: "minimax".to_string(),
+            model_id: "MiniMax-M3".to_string(),
+        });
+        cfg.model_selector = Some(crate::config::ModelSelectorConfig {
+            enabled,
+            default_model: Some("custom-free-kilo:flood-0".to_string()),
+        });
+
+        assert!(cleanup_legacy_selector(&mut cfg));
+
+        let sel = cfg.model_selector.as_ref().unwrap();
+        let free: Vec<_> = sel
+            .enabled
+            .iter()
+            .filter(|e| e.provider_id == "custom-free-kilo")
+            .collect();
+        assert_eq!(free.len(), 1, "只保留默认那一条免费模型");
+        assert_eq!(free[0].model_id, "flood-0");
+        assert!(
+            sel.enabled.iter().any(|e| e.provider_id == "minimax"),
+            "付费条目不能被清理掉"
+        );
+
+        let model = cfg
+            .llm_providers
+            .get("custom-free-kilo")
+            .unwrap()
+            .model
+            .clone()
+            .unwrap();
+        assert!(model.contains("openrouter/free"));
+        assert!(!model.contains("flood-1"), "刷新灌进来的目录清单收回 seed");
+
+        assert!(!cleanup_legacy_selector(&mut cfg), "只执行一次");
+    }
+
+    /// 事故形态：enabled 全是免费条目 → 已配钥的付费厂商默认模型要被补回来。
+    #[test]
+    fn legacy_cleanup_restores_paid_providers() {
+        let mut cfg = seeded();
+        cfg.free_channel.selector_cleaned = false;
+        cfg.llm_providers.insert(
+            "minimax".to_string(),
+            crate::config::LlmProviderConfig {
+                api_key: Some("sk-test".to_string()),
+                ..Default::default()
+            },
+        );
+        cfg.model_selector = Some(crate::config::ModelSelectorConfig {
+            enabled: (0..10)
+                .map(|i| crate::config::ModelSelectorEntry {
+                    provider_id: "custom-free-kilo".to_string(),
+                    model_id: format!("flood-{i}"),
+                })
+                .collect(),
+            default_model: Some("custom-free-kilo:flood-0".to_string()),
+        });
+
+        assert!(cleanup_legacy_selector(&mut cfg));
+
+        let sel = cfg.model_selector.as_ref().unwrap();
+        assert!(
+            sel.enabled
+                .iter()
+                .any(|e| e.provider_id == "minimax" && e.model_id == "MiniMax-M3"),
+            "被挤掉的付费模型必须补回启用清单，got {:?}",
+            sel.enabled
+        );
+        assert_eq!(
+            sel.enabled
+                .iter()
+                .filter(|e| e.provider_id == "custom-free-kilo")
+                .count(),
+            1
+        );
     }
 
     #[test]

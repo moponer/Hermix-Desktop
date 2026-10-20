@@ -28,6 +28,13 @@ interface ModelRow {
   isDefault: boolean;
   /** 内置免费渠道：显示"免费源"标记（数据会流经第三方，见列表顶部说明）。 */
   isFree: boolean;
+  /**
+   * 是否已在后端的启用清单（`model_selector.enabled`）里。
+   *
+   * 与"可添加"行严格分开：此前两者混在一起，点一次「设为默认」就把整份
+   * 自定义/免费清单写进 enabled，付费厂商的模型被挤出可见范围。
+   */
+  isEnabled: boolean;
 }
 
 /** inline 测试的 `kind` → 中文。后端已做四分类，这里只做展示层翻译，
@@ -76,18 +83,34 @@ export function ModelListTab() {
       setEnvVars(envs);
       const metaNames = new Map(meta.map((m) => [m.id, m.id]));
       const def = list?.default_model ?? "";
-      const built: ModelRow[] = (list?.models ?? []).map((m) => ({
-        id: `${m.provider_id}:${m.model_id}`,
-        modelId: m.model_id,
-        providerId: m.provider_id,
-        providerName: metaNames.get(m.provider_id) ?? m.provider_id,
-        isBuiltin: !customIds.has(m.provider_id),
-        isDefault: `${m.provider_id}:${m.model_id}` === def,
-        isFree: freeIds.has(m.provider_id),
-      }));
-      // 自定义 provider 里登记了但还没进启用清单的模型也要露出来，
-      // 否则"建了却看不到"会被当成保存失败。
+      const toRow = (p: { provider_id: string; model_id: string }, isEnabled: boolean): ModelRow => {
+        const id = `${p.provider_id}:${p.model_id}`;
+        const name =
+          metaNames.get(p.provider_id) ??
+          customs.find((c) => c.id === p.provider_id)?.display_name ??
+          p.provider_id;
+        return {
+          id,
+          modelId: p.model_id,
+          providerId: p.provider_id,
+          providerName: name,
+          isBuiltin: !customIds.has(p.provider_id),
+          isDefault: id === def,
+          isFree: freeIds.has(p.provider_id),
+          isEnabled,
+        };
+      };
+      const built: ModelRow[] = (list?.models ?? []).map((m) => toRow(m, true));
       const seen = new Set(built.map((r) => r.id));
+      // 已配置但未启用（后端 catalog）：显式"可添加"，点星才进 enabled。
+      for (const m of list?.catalog ?? []) {
+        const row = toRow(m, false);
+        if (seen.has(row.id)) continue;
+        seen.add(row.id);
+        built.push(row);
+      }
+      // 自定义 provider 里登记了但后端没列出的模型也要露出来，
+      // 否则"建了却看不到"会被当成保存失败。
       for (const c of customs) {
         for (const model of c.models ?? []) {
           const id = `${c.id}:${model}`;
@@ -101,6 +124,7 @@ export function ModelListTab() {
             isBuiltin: false,
             isDefault: id === def,
             isFree: c.is_free_channel === true,
+            isEnabled: false,
           });
         }
       }
@@ -129,10 +153,11 @@ export function ModelListTab() {
   const setDefault = useCallback(async (id: string) => {
     try {
       // 统一写路径：localStorage 镜像 + 事件广播 + 后端落盘一次完成。
-      // 此前只调 saveModelList，镜像与事件都没动——聊天端选择器要等
-      // 下次挂载 reconcile 才能看到新默认模型。
+      // 只写「原本就启用」的行 + 本次点星的那一条：整份 rows 里混着
+      // 目录（catalog）行，一并写入会把用户没选过的模型全部启用。
+      const enabled = rows.filter((r) => r.isEnabled || r.id === id);
       await writeModelConfigAndNotify({
-        enabled: rows.map((r) => ({ providerId: r.providerId, modelId: r.modelId })),
+        enabled: enabled.map((r) => ({ providerId: r.providerId, modelId: r.modelId })),
         defaultModel: id,
       });
       await load();
@@ -144,10 +169,9 @@ export function ModelListTab() {
   const remove = useCallback(async (row: ModelRow) => {
     try {
       // 模型级删除后端没有端点，这里是"把这个模型从启用清单里摘掉"。
-      // 内置/自定义此前两分支行为一致，收敛成同一次统一写路径
-      // （localStorage 镜像 + 事件广播 + 后端落盘）。
-      const remaining = rows.filter((r) => r.id !== row.id);
-      const nextDefault = rows.find((r) => r.isDefault && r.id !== row.id)?.id ?? "";
+      // 未启用的目录行不参与写回——否则删除动作会顺手启用别的目录行。
+      const remaining = rows.filter((r) => r.isEnabled && r.id !== row.id);
+      const nextDefault = remaining.find((r) => r.isDefault)?.id ?? "";
       await writeModelConfigAndNotify({
         enabled: remaining.map((r) => ({ providerId: r.providerId, modelId: r.modelId })),
         defaultModel: nextDefault,
@@ -196,7 +220,12 @@ export function ModelListTab() {
   }, []);
 
   const sorted = useMemo(
-    () => [...rows].sort((a, b) => Number(b.isDefault) - Number(a.isDefault)),
+    () =>
+      [...rows].sort(
+        (a, b) =>
+          Number(b.isDefault) - Number(a.isDefault) ||
+          Number(b.isEnabled) - Number(a.isEnabled),
+      ),
     [rows],
   );
 
@@ -251,7 +280,10 @@ export function ModelListTab() {
                     <span className="px-1.5 py-0.5 rounded text-[length:var(--text-meta)] bg-accent/15 text-accent shrink-0">默认</span>
                   )}
                   {row.isFree && (
-                    <span className="px-1.5 py-0.5 rounded text-[length:var(--text-meta)] bg-bg-quaternary text-text-muted shrink-0">免费源</span>
+                    <span className="px-1.5 py-0.5 rounded text-[length:var(--text-meta)] bg-success-soft text-success shrink-0">免费源</span>
+                  )}
+                  {!row.isEnabled && (
+                    <span className="text-[length:var(--text-meta)] text-text-faint shrink-0">未启用</span>
                   )}
                 </div>
                 <div className="text-[length:var(--text-meta)] text-text-muted truncate">
@@ -261,7 +293,10 @@ export function ModelListTab() {
               </div>
 
               <div className="flex items-center gap-0.5 shrink-0">
-                <IconBtn title="设为默认" onClick={() => void setDefault(row.id)}>
+                <IconBtn
+                  title={row.isEnabled ? "设为默认" : "启用并设为默认"}
+                  onClick={() => void setDefault(row.id)}
+                >
                   <Star className={`icon-sm ${row.isDefault ? "fill-current text-accent" : ""}`} />
                 </IconBtn>
                 <IconBtn title="编辑" onClick={() => { setEditing({
@@ -282,9 +317,11 @@ export function ModelListTab() {
                 <IconBtn title="测试连接" onClick={() => void testRow(row)}>
                   {testingId === row.id ? <Loader2 className="icon-sm animate-spin" /> : <Zap className="icon-sm" />}
                 </IconBtn>
-                <IconBtn title="删除" onClick={() => void remove(row)}>
-                  <Trash2 className="icon-sm" />
-                </IconBtn>
+                {row.isEnabled && (
+                  <IconBtn title="从启用清单移除" onClick={() => void remove(row)}>
+                    <Trash2 className="icon-sm" />
+                  </IconBtn>
+                )}
               </div>
             </div>
           ))
