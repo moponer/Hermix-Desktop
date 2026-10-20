@@ -317,6 +317,95 @@ pub async fn viewer_search_global(
         .map_err(|error| format!("搜索任务失败：{error}"))?
 }
 
+/// MFT 目录体积节点（helper 的 `diskUsage` 返回）。
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct DiskUsageNode {
+    pub file_ref: u64,
+    pub parent_ref: u64,
+    pub name: String,
+    /// 子树总字节。
+    pub bytes: u64,
+    pub files: u64,
+    pub depth: usize,
+}
+
+/// MFT 目录体积结果。
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct DiskUsageResult {
+    pub volume: String,
+    pub nodes: Vec<DiskUsageNode>,
+    /// 全卷文件体积之和。
+    pub total_bytes: u64,
+    pub elapsed_ms: u64,
+}
+
+/// MFT 目录体积：秒级出结果（walkdir 要几十秒到几分钟）。
+///
+/// 走 helper：MFT 读取需要管理员权限，而 helper 已经是提权进程；索引里的
+/// 体积来自 file record 的 `$DATA`。
+pub fn disk_usage(
+    volume: &str,
+    parent_ref: Option<u64>,
+    limit: usize,
+) -> Result<DiskUsageResult, String> {
+    let endpoint = ensure_helper()?;
+    let result = request(
+        &endpoint,
+        "diskUsage",
+        json!({"volume": volume, "parentRef": parent_ref, "limit": limit}),
+    )?;
+    let nodes = result
+        .get("nodes")
+        .and_then(|value| value.as_array())
+        .map(|array| {
+            array
+                .iter()
+                .filter_map(|raw| {
+                    Some(DiskUsageNode {
+                        file_ref: raw.get("fileRef")?.as_u64()?,
+                        parent_ref: raw.get("parentRef")?.as_u64()?,
+                        name: raw.get("name")?.as_str()?.to_string(),
+                        bytes: raw.get("bytes")?.as_u64()?,
+                        files: raw.get("files")?.as_u64()?,
+                        depth: raw.get("depth")?.as_u64()? as usize,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(DiskUsageResult {
+        volume: result
+            .get("volume")
+            .and_then(|value| value.as_str())
+            .unwrap_or(volume)
+            .to_string(),
+        nodes,
+        total_bytes: result
+            .get("totalBytes")
+            .and_then(|value| value.as_u64())
+            .unwrap_or(0),
+        elapsed_ms: result
+            .get("elapsedMs")
+            .and_then(|value| value.as_u64())
+            .unwrap_or(0),
+    })
+}
+
+/// Tauri 命令：MFT 目录体积（清理页的 Treemap 数据源）。
+#[tauri::command(async)]
+pub async fn viewer_disk_usage(
+    volume: String,
+    parent_ref: Option<u64>,
+    limit: Option<usize>,
+) -> Result<DiskUsageResult, String> {
+    let limit = limit.unwrap_or(300).clamp(1, 2000);
+    tauri::async_runtime::spawn_blocking(move || disk_usage(&volume, parent_ref, limit))
+        .await
+        .map_err(|error| format!("磁盘体积分析失败：{error}"))?
+}
+
 /// 索引服务状态（给「搜索」面板显示是否已就绪）。
 #[tauri::command(async)]
 pub async fn viewer_filesearch_status() -> Result<Value, String> {

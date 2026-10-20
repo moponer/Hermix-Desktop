@@ -148,6 +148,39 @@ impl SearchService {
         }
     }
 
+    /// 目录体积（MFT 视角）：秒级出结果，不走 walkdir。
+    ///
+    /// 体积来自 MFT file record 的 `$DATA`（见 `core::mft_size`），目录体积
+    /// 按父子引用自底向上累加——与 `du` 同算法。`parent_ref` 为空表示卷根。
+    pub fn disk_usage(
+        &self,
+        volume: &str,
+        parent_ref: Option<u64>,
+        limit: Option<usize>,
+    ) -> Result<serde_json::Value, String> {
+        let start = std::time::Instant::now();
+        let volumes = self
+            .volumes
+            .read()
+            .map_err(|_| "索引锁状态异常。".to_string())?;
+        let state = volumes
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(volume))
+            .map(|(_, state)| state.clone())
+            .ok_or_else(|| format!("卷 {volume} 尚未索引（先搜索一次即可建索引）"))?;
+        let index = state
+            .index
+            .read()
+            .map_err(|_| "索引锁状态异常。".to_string())?;
+        let (nodes, total_bytes) = index.directory_usage(parent_ref, limit.unwrap_or(200).clamp(1, 2000));
+        Ok(serde_json::json!({
+            "volume": volume,
+            "nodes": nodes,
+            "totalBytes": total_bytes,
+            "elapsedMs": start.elapsed().as_millis() as u64,
+        }))
+    }
+
     /// 跨卷搜索：各卷独立检索后按统一排序（精确名 > 前缀 > 其他子串，目录优先）合并。
     pub fn search(&self, query: String, limit: Option<usize>) -> SearchResponse {
         let start = std::time::Instant::now();

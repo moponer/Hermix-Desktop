@@ -208,6 +208,20 @@ fn handle(service: &SearchService, line: &str, expected_token: Option<&str>) -> 
             json_response(id, &service.search(query, limit))
         }
         "status" => json_response(id, &service.status()),
+        "diskUsage" => {
+            let params = request.get("params").cloned().unwrap_or_default();
+            let volume = params
+                .get("volume")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let parent_ref = params.get("parentRef").and_then(|v| v.as_u64());
+            let limit = params.get("limit").and_then(|v| v.as_u64()).map(|n| n as usize);
+            match service.disk_usage(&volume, parent_ref, limit) {
+                Ok(value) => json_response(id, &value),
+                Err(error) => error_response(id, &error),
+            }
+        }
         "setFilter" => {
             let Some(params) = request.get("params") else {
                 return error_response(id, "setFilter 需要 params");

@@ -138,6 +138,26 @@ mod imp {
         let handle = VolumeHandle::open(&volume)?;
         let journal = query_usn_journal(handle.raw())?;
         let records = enum_mft_records(handle.raw(), journal.NextUsn)?;
+        // 体积：USN 记录里没有大小，逐个 FRN 读 file record 的 `$DATA`
+        // （多线程，每线程一个卷句柄）。拿不到就留 0——体积只影响"磁盘
+        // 占用"视图，不影响搜索，不能因此让整次建索引失败。
+        let file_refs: Vec<u64> = records
+            .iter()
+            .filter(|record| !crate::core::index::is_directory(record.attributes))
+            .map(|record| record.file_ref)
+            .collect();
+        let mut records = records;
+        let sizes = crate::core::mft_size::read_file_sizes(&volume, &file_refs, 8);
+        for record in &mut records {
+            if let Some(size) = sizes.get(&record.file_ref) {
+                record.size = size.bytes;
+            }
+        }
+        eprintln!(
+            "[filesearch] {volume} 体积：{}/{} 个文件取到大小",
+            sizes.len(),
+            file_refs.len()
+        );
         let entries = build_entries_from_records(&volume, records, filter);
         // 这里**不做** `hydrate_file_metadata`：它对每个条目 fs::metadata，
         // 全盘百万级文件就是百万次同步文件系统调用——实测把磁盘打到 100%、
@@ -401,6 +421,8 @@ mod imp {
                         usn: record.Usn,
                         timestamp: record.TimeStamp,
                         reason: record.Reason,
+                        // USN 记录里没有大小；体积另走 file record（见 mft_size）。
+                        size: 0,
                     });
                 }
             }

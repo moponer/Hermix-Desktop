@@ -14,6 +14,7 @@
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
+use serde::Serialize;
 use windows_sys::Win32::System::Ioctl::{USN_REASON_FILE_DELETE, USN_REASON_RENAME_OLD_NAME};
 
 use super::{
@@ -356,6 +357,9 @@ impl SearchIndex {
                         is_dir,
                         last_usn: record.usn,
                         attributes: record.attributes,
+                        // USN 增量里没有体积：改动过的文件大小先记 0，
+                        // 由"磁盘占用"视图按需重新读 file record 补齐。
+                        size: record.size,
                     });
                     stats.updated += 1;
                 }
@@ -414,6 +418,139 @@ impl SearchIndex {
 }
 
 /// 全量构建：MFT 记录 → 紧凑索引条目。**不拼路径**（Everything 也不拼）。
+/// 目录体积节点（MFT 视角）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirUsageNode {
+    /// MFT 文件引用号。
+    pub file_ref: u64,
+    pub parent_ref: u64,
+    pub name: String,
+    /// 子树总字节（自己 + 全部后代）。
+    pub bytes: u64,
+    /// 子树总文件数。
+    pub files: u64,
+    /// 相对卷根的层数（1 = 卷根的直接子目录）。
+    pub depth: usize,
+}
+
+/// 目录深度的记忆化递归（沿父链上溯）。`depth_cap` 防止坏数据成环时爆栈。
+fn dir_depth(
+    file_ref: u64,
+    dir_of: &HashMap<u64, u32>,
+    entries: &[IndexEntry],
+    cache: &mut HashMap<u64, usize>,
+    depth_cap: usize,
+) -> usize {
+    if let Some(depth) = cache.get(&file_ref) {
+        return *depth;
+    }
+    let Some(index) = dir_of.get(&file_ref) else {
+        return 1;
+    };
+    let parent = entries[*index as usize].parent_ref;
+    // 父是卷根本身（FRN 5）或不在索引里 → 顶层。
+    let depth = if parent == file_ref || !dir_of.contains_key(&parent) {
+        1
+    } else if depth_cap == 0 {
+        1
+    } else {
+        dir_depth(parent, dir_of, entries, cache, depth_cap - 1) + 1
+    };
+    cache.insert(file_ref, depth);
+    depth
+}
+
+impl SearchIndex {
+    /// 目录体积树：按父子引用聚合（`du` 语义），返回指定父目录的直接子目录。
+    ///
+    /// 数据来自 MFT file record 的 `$DATA` 大小（见 `core::mft_size`），
+    /// 百万文件下这是**秒级**的；walkdir 要几十秒到几分钟。
+    pub fn directory_usage(
+        &self,
+        parent_ref: Option<u64>,
+        max_nodes: usize,
+    ) -> (Vec<DirUsageNode>, u64) {
+        // 目录项：file_ref → 下标。
+        let mut dir_of: HashMap<u64, u32> = HashMap::new();
+        for (index, entry) in self.entries.iter().enumerate() {
+            if entry.is_dir {
+                dir_of.insert(entry.file_ref, index as u32);
+            }
+        }
+
+        // 直属文件体积 → 父目录。
+        let mut totals: HashMap<u64, (u64, u64)> = HashMap::new();
+        let mut total_bytes = 0u64;
+        for entry in &self.entries {
+            if entry.is_dir {
+                continue;
+            }
+            total_bytes += entry.size;
+            let slot = totals.entry(entry.parent_ref).or_insert((0, 0));
+            slot.0 += entry.size;
+            slot.1 += 1;
+        }
+
+        // 深度：记忆化沿父链上溯。
+        let mut depth_cache: HashMap<u64, usize> = HashMap::new();
+        let mut depths: HashMap<u64, usize> = HashMap::new();
+        for file_ref in dir_of.keys() {
+            let depth = dir_depth(*file_ref, &dir_of, &self.entries, &mut depth_cache, 64);
+            depths.insert(*file_ref, depth);
+        }
+
+        // 自底向上传播：深层目录先把体积加给父目录。
+        let max_depth = depths.values().copied().max().unwrap_or(1);
+        let mut by_depth: Vec<Vec<u64>> = vec![Vec::new(); max_depth + 1];
+        for (file_ref, depth) in &depths {
+            if *depth >= 1 && *depth <= max_depth {
+                by_depth[*depth].push(*file_ref);
+            }
+        }
+        for depth in (1..=max_depth).rev() {
+            for file_ref in &by_depth[depth] {
+                let Some(index) = dir_of.get(file_ref) else {
+                    continue;
+                };
+                let parent = self.entries[*index as usize].parent_ref;
+                let Some((bytes, files)) = totals.get(file_ref).copied() else {
+                    continue;
+                };
+                let slot = totals.entry(parent).or_insert((0, 0));
+                slot.0 += bytes;
+                slot.1 += files;
+            }
+        }
+
+        // 输出：指定父目录（缺省 = 卷根 FRN 5）的直接子目录。
+        let wanted_parent = parent_ref.unwrap_or(5);
+        let mut nodes: Vec<DirUsageNode> = Vec::new();
+        for (index, entry) in self.entries.iter().enumerate() {
+            if !entry.is_dir || entry.parent_ref != wanted_parent {
+                continue;
+            }
+            // 卷根自引用（parent == 自身）不是任何目录的子项。
+            if entry.parent_ref == entry.file_ref {
+                continue;
+            }
+            let (bytes, files) = totals.get(&entry.file_ref).copied().unwrap_or((0, 0));
+            nodes.push(DirUsageNode {
+                file_ref: entry.file_ref,
+                parent_ref: entry.parent_ref,
+                name: entry.name.clone(),
+                bytes,
+                files,
+                depth: depths.get(&entry.file_ref).copied().unwrap_or(1),
+            });
+            let _ = index;
+        }
+        nodes.sort_by(|a, b| b.bytes.cmp(&a.bytes).then_with(|| a.name.cmp(&b.name)));
+        nodes.truncate(max_nodes.max(1));
+        (nodes, total_bytes)
+    }
+}
+
 pub fn build_entries_from_records(
     _volume: &str,
     records: Vec<NtfsRecord>,
@@ -433,6 +570,7 @@ pub fn build_entries_from_records(
                 is_dir,
                 last_usn: record.usn,
                 attributes: record.attributes,
+                size: record.size,
             }
         })
         .collect();
@@ -485,7 +623,7 @@ fn volume_root(volume: &str) -> String {
     }
 }
 
-fn is_directory(attributes: u32) -> bool {
+pub fn is_directory(attributes: u32) -> bool {
     attributes & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_DIRECTORY != 0
 }
 
@@ -523,6 +661,7 @@ mod tests {
             is_dir,
             last_usn: 0,
             attributes: if is_dir { 16 } else { 0 },
+            size: 0,
         }
     }
 
@@ -580,6 +719,7 @@ mod tests {
                 usn: 10,
                 timestamp: 0,
                 reason: 0,
+                size: 0,
             }],
             10,
             1,
@@ -608,6 +748,41 @@ mod tests {
         assert_eq!(response.results[1].name, "app.log");
     }
 
+    /// 目录体积聚合：父目录 = 直属文件 + 全部后代（`du` 语义）。
+    /// Treemap 与"哪个目录吃掉整盘"都依赖这个不变量。
+    #[test]
+    fn directory_usage_aggregates_subtree_bytes() {
+        let mut index = index_with(vec![
+            entry(5, 5, "", true),
+            entry(6, 5, "code", true),
+            entry(7, 6, "app", true),
+            entry(8, 7, "a.bin", false),
+            entry(9, 7, "b.bin", false),
+            entry(10, 5, "media", true),
+            entry(11, 10, "c.bin", false),
+        ]);
+        // 给文件填体积。
+        for (file_ref, size) in [(8u64, 100u64), (9, 200), (11, 50)] {
+            let index_ref = *index.by_ref.get(&file_ref).expect("entry");
+            index.entries[index_ref as usize].size = size;
+        }
+
+        let (nodes, total) = index.directory_usage(None, 100);
+        assert_eq!(total, 350, "全卷文件体积之和");
+        assert_eq!(nodes.len(), 2, "卷根下两个目录");
+        assert_eq!(nodes[0].name, "code");
+        assert_eq!(nodes[0].bytes, 300, "code = app(100+200)");
+        assert_eq!(nodes[0].files, 2);
+        assert_eq!(nodes[1].name, "media");
+        assert_eq!(nodes[1].bytes, 50);
+
+        // 下钻：某个目录的直接子目录。
+        let (children, _) = index.directory_usage(Some(6), 100);
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0].name, "app");
+        assert_eq!(children[0].bytes, 300);
+    }
+
     #[test]
     fn delete_removes_subtree() {
         let mut index = index_with(vec![
@@ -624,6 +799,7 @@ mod tests {
                 usn: 11,
                 timestamp: 0,
                 reason: USN_REASON_FILE_DELETE,
+                size: 0,
             }],
             11,
             1,

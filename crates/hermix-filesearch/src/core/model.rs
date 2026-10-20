@@ -47,6 +47,10 @@ pub struct IndexEntry {
     pub is_dir: bool,
     pub last_usn: i64,
     pub attributes: u32,
+    /// 文件字节数（MFT file record 的 `$DATA`）。目录为 0——目录体积由
+    /// 父子引用累加得到。
+    #[serde(default)]
+    pub size: u64,
 }
 
 /// 搜索结果（JSON 契约不变：前端要 `path` 与 `size`）。
@@ -155,6 +159,9 @@ pub struct NtfsRecord {
     pub usn: i64,
     pub timestamp: i64,
     pub reason: u32,
+    /// 文件字节数（来自 MFT file record 的 `$DATA`；USN 增量里没有，0 = 未知）。
+    #[serde(default)]
+    pub size: u64,
 }
 
 /// 索引过滤规则：构建期与 USN 增量期共用同一谓词（防止被排除文件经增量回流）。
@@ -227,6 +234,8 @@ pub struct ChangeStats {
     pub deleted: usize,
 }
 
-/// 快照格式版本。v2：条目从 `FileEntry`（含 path/volume）换成紧凑的
-/// `IndexEntry`（只有名字与父引用）——旧快照直接判版本不匹配、触发重建。
-pub const SNAPSHOT_VERSION: u32 = 2;
+/// 快照格式版本。
+/// - v2：条目从 `FileEntry`（含 path/volume）换成紧凑的 `IndexEntry`
+///   （只有名字与父引用）——旧快照直接判版本不匹配、触发重建。
+/// - v3：`IndexEntry` 增加 `size`（MFT file record 的 `$DATA` 体积）。
+pub const SNAPSHOT_VERSION: u32 = 3;

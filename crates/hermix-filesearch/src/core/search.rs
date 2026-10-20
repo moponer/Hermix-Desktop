@@ -38,6 +38,7 @@ mod tests {
             is_dir,
             last_usn: 0,
             attributes: if is_dir { 16 } else { 0 },
+            size: 0,
         }
     }
 

@@ -251,6 +251,7 @@ mod tests {
             usn: 1,
             timestamp: 0,
             reason: 0,
+            size: 0,
         }
     }
 

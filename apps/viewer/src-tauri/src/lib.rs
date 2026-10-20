@@ -215,6 +215,7 @@ pub fn main() {
             commands::viewer_run_executable,
             filesearch::viewer_search_global,
             filesearch::viewer_filesearch_status,
+            filesearch::viewer_disk_usage,
             commands::viewer_take_pending,
             commands::ai_send,
             commands::viewer_ai_status,

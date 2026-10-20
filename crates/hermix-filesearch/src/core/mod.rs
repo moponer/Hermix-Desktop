@@ -1,4 +1,5 @@
 pub mod index;
+pub mod mft_size;
 pub mod metadata;
 pub mod model;
 pub mod scanner;

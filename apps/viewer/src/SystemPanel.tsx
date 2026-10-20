@@ -17,6 +17,7 @@ import {
   CheckCircle2,
   Copy,
   Cpu,
+  Gauge,
   HardDrive,
   Info,
   Keyboard,
@@ -155,6 +156,23 @@ interface DriveScanReport {
   dirsScanned: number;
   elapsedMs: number;
   truncated: boolean;
+}
+
+/** MFT 目录体积（helper 的 diskUsage）。 */
+interface DiskUsageNode {
+  fileRef: number;
+  parentRef: number;
+  name: string;
+  bytes: number;
+  files: number;
+  depth: number;
+}
+
+interface DiskUsageResult {
+  volume: string;
+  nodes: DiskUsageNode[];
+  totalBytes: number;
+  elapsedMs: number;
 }
 
 interface RemoveResult {
@@ -647,6 +665,11 @@ function CleanupPane() {
   const [deepConfirm, setDeepConfirm] = useState(false);
   /** Treemap 当前下钻到的目录（null = 盘根）。 */
   const [treemapPath, setTreemapPath] = useState<string | null>(null);
+  // —— MFT 快速分析（读 MFT，秒级；walkdir 要几十秒） ——
+  const [mft, setMft] = useState<DiskUsageResult | null>(null);
+  const [mftPath, setMftPath] = useState<{ ref: number; label: string }[]>([]);
+  const [mftBusy, setMftBusy] = useState(false);
+  const [mftError, setMftError] = useState<string | null>(null);
 
   useEffect(() => {
     void invoke<DiskRow[]>("sysmon_disks")
@@ -822,6 +845,39 @@ function CleanupPane() {
       });
   }, [treemapPath, drive]);
 
+  // MFT 快速分析：整卷体积树（helper 读 MFT）。
+  const loadMft = useCallback(
+    async (parentRef: number | null, stack: { ref: number; label: string }[]) => {
+      if (!drive) return;
+      setMftBusy(true);
+      setMftError(null);
+      try {
+        const result = await invoke<DiskUsageResult>("viewer_disk_usage", {
+          volume: drive,
+          parentRef,
+          limit: 300,
+        });
+        setMft(result);
+        setMftPath(stack);
+      } catch (cause) {
+        setMftError(errorText(cause));
+      } finally {
+        setMftBusy(false);
+      }
+    },
+    [drive],
+  );
+
+  const mftTreemapNodes = useMemo<TreemapNode[]>(
+    () =>
+      (mft?.nodes ?? []).map((node) => ({
+        path: `frn:${node.fileRef}`,
+        name: node.name,
+        bytes: node.bytes,
+      })),
+    [mft],
+  );
+
   const ageText = (modified: number) => {
     if (!modified) return "时间未知";
     const days = Math.floor((Date.now() / 1000 - modified) / 86400);
@@ -967,6 +1023,63 @@ function CleanupPane() {
                     ? "正在遍历磁盘…"
                     : "正在扫描…"}
           </span>
+        </div>
+      )}
+
+      {drive && (
+        <div className="deep-group">
+          <h5>
+            MFT 快速分析
+            <span className="dim">读 MFT，秒级（需管理员权限的索引服务）</span>
+          </h5>
+          <div className="treemap-bar">
+            <button
+              type="button"
+              className="treemap-crumb"
+              onClick={() => void loadMft(null, [])}
+              disabled={mftBusy}
+            >
+              盘根
+            </button>
+            {mftPath.map((crumb, position) => (
+              <button
+                type="button"
+                key={crumb.ref}
+                className="treemap-crumb"
+                onClick={() => void loadMft(crumb.ref, mftPath.slice(0, position + 1))}
+              >
+                {crumb.label}
+              </button>
+            ))}
+            <span className="dim">
+              {mft
+                ? `全卷 ${formatBytes(mft.totalBytes)} · 用时 ${mft.elapsedMs} ms`
+                : "未分析"}
+            </span>
+            <button
+              type="button"
+              className="pane-btn"
+              onClick={() => void loadMft(null, [])}
+              disabled={mftBusy}
+            >
+              {mftBusy ? <Loader2 size={14} className="spin" /> : <Gauge size={14} />}
+              MFT 分析
+            </button>
+          </div>
+          {mftError && <p className="pane-error">{mftError}</p>}
+          {mft && mftTreemapNodes.length > 0 && (
+            <Treemap
+              nodes={mftTreemapNodes}
+              onSelect={(node) => {
+                const ref = Number(node.path.replace("frn:", ""));
+                const crumb = mftTreemapNodes.find((item) => item.path === node.path);
+                void loadMft(ref, [...mftPath, { ref, label: crumb?.name ?? node.name }]);
+              }}
+            />
+          )}
+          {mft && mftTreemapNodes.length === 0 && (
+            <p className="pane-empty">这块盘没有可展示的目录（索引可能还没建好）。</p>
+          )}
         </div>
       )}
 
