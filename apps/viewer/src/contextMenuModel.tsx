@@ -22,7 +22,6 @@ import {
   Info,
   PenLine,
   Pencil,
-  Pin,
   RefreshCw,
   Sparkles,
   Star,
@@ -82,8 +81,6 @@ export interface MenuContext {
   editLabel: string;
   /** 打开当前文件的编辑器。 */
   edit: () => void;
-  /** 把某个路径钉成独立浮窗（文件或目录都行）。 */
-  pin: (path: string) => void;
 
   openEntry: (path: string, isDir: boolean) => void;
   openWith: (path: string, app: string) => void;
@@ -381,12 +378,6 @@ function previewMenu(
         hint: "Ctrl+E",
         disabled: !ctx.canEdit,
         onSelect: () => ctx.edit(),
-      },
-      {
-        id: "pin",
-        label: "钉住（独立浮窗）",
-        icon: <Pin size={15} />,
-        onSelect: () => ctx.pin(t.path),
       },
       {
         id: "open-default",

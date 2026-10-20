@@ -1608,11 +1608,6 @@ export function App() {
       canEdit: activeEditorKind !== "none",
       editLabel: editorLabel(activeEditorKind),
       edit: requestEdit,
-      pin: (path: string) => {
-        void invoke<string>("viewer_pin_open", { path }).catch((e) => {
-          notify(`钉住失败：${e instanceof Error ? e.message : String(e)}`);
-        });
-      },
       openEntry: (path: string, isDir: boolean) => {
         if (isDir) navigate(path, true);
         else openPath(path);

@@ -5,10 +5,9 @@
 // 渲染走共享包，与桌面 app 完全一致：viewer / desktop 用同一份解析器，
 // 共享一份样式 token。
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { lazy, Suspense } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { Pencil, Play, RotateCcw, Pin } from "lucide-react";
+import { Pencil, Play, RotateCcw } from "lucide-react";
 import {
   loadPreview,
   PreviewSurface,
@@ -182,23 +181,7 @@ export function PreviewHost({
   const [editor, setEditor] = useState<EditorKind>("none");
   /** Word / Excel：打开就是可编辑的文档/表格本体（Office 的样子）。 */
   const [officeReadonly, setOfficeReadonly] = useState(false);
-  const [pinError, setPinError] = useState<string | null>(null);
   const loadToken = useRef(0);
-
-  /**
-   * 把当前预览钉成独立浮窗。
-   *
-   * 浮窗是**只读**的（见 pin.rs 的模块说明）：主窗口已经在编辑同一个文件，
-   * 浮窗再来一份可编辑的 = 两个实例写同一个文件。
-   */
-  const pinPreview = useCallback(async () => {
-    setPinError(null);
-    try {
-      await invoke<string>("viewer_pin_open", { path });
-    } catch (e) {
-      setPinError(e instanceof Error ? e.message : String(e));
-    }
-  }, [path]);
 
   const kind: PreviewKind = useMemo(() => resolveKind(name), [name]);
   const effectiveKind = applyViewMode(kind, viewMode);
@@ -291,17 +274,6 @@ export function PreviewHost({
             编辑
           </button>
         )}
-        <button
-          type="button"
-          className="tb-btn"
-          onClick={() => void pinPreview()}
-          title="把当前预览钉成一个独立浮窗（可置顶、可挪到屏幕任意位置）"
-          aria-label="钉住预览"
-        >
-          <Pin className="icon-sm" />
-          钉住
-        </button>
-        {pinError && <span className="preview-pin-error">{pinError}</span>}
         {editing && (
           <button
             type="button"
