@@ -1,7 +1,29 @@
 import { useState, useEffect, useMemo } from "react";
 import { useCurrentModel, MODEL_CONFIG_CHANGED_EVENT } from "../hooks/useCurrentModel";
 import { storage, STORAGE_KEYS } from "../utils/storageCompat";
-import { getModelList, getProviderMeta } from "../api";
+import { getModelList, getProviderMeta, type ModelListEntryInfo } from "../api";
+
+/** `192000` → `"192K"`、`1048576` → `"1M"`。未知返回 null（UI 直接不显示）。 */
+export function formatContextTokens(tokens?: number): string | null {
+  if (!tokens || tokens <= 0) return null;
+  if (tokens >= 1_000_000) {
+    const m = tokens / 1_000_000;
+    return `${Number.isInteger(m) ? m : m.toFixed(1)}M`;
+  }
+  if (tokens >= 1000) return `${Math.round(tokens / 1000)}K`;
+  return String(tokens);
+}
+
+/**
+ * 模型 id → 展示名。免费池的 id 形如 `minimax/minimax-m3.1-flash:free`，
+ * 直接把整串塞进选择卡片会读成一串路径；去掉厂商前缀与 `:free` 后缀即可，
+ * 是否免费由「免费」标记表达，不必写在名字里。
+ */
+export function friendlyModelName(modelId: string): string {
+  const bare = modelId.replace(/:free$/i, "");
+  const tail = bare.includes("/") ? bare.slice(bare.lastIndexOf("/") + 1) : bare;
+  return tail || modelId;
+}
 
 /** 静态兜底清单——权威来源是后端 /api/providers/meta（BUILTIN_PROVIDER_ENV_VARS），
  *  拉取失败时才落到这里。禁止在此再增厂商：改 hermix-config。 */
@@ -14,6 +36,26 @@ export const BUILTIN_PROVIDER_IDS = new Set([
 
 const MODEL_CONFIG_KEY = STORAGE_KEYS.modelConfig;
 interface ModelConfigData { enabled: { providerId: string; modelId: string }[]; defaultModel: string }
+
+/** 选择卡片里的一个模型（`info` = 后端下发的上游能力，可能缺席）。 */
+export interface ModelChoice {
+  id: string;
+  display: string;
+  /** 人读的短名（去掉厂商前缀 / `:free`）。 */
+  name: string;
+  provider: string;
+  info?: ModelListEntryInfo;
+}
+
+/** 按供应商分组后的模型列表。 */
+export interface ModelGroup {
+  provider: string;
+  /** 供应商展示名（自定义 provider 用 display_name）。 */
+  label: string;
+  isCustom: boolean;
+  isFree: boolean;
+  models: ModelChoice[];
+}
 
 export function useModelSelector() {
   const { defaultModel } = useCurrentModel();
@@ -40,6 +82,8 @@ export function useModelSelector() {
   const [selectedModel, setSelectedModel] = useState(() =>
     config.defaultModel || (config.enabled[0] ? `${config.enabled[0].providerId}:${config.enabled[0].modelId}` : "")
   );
+  /** 后端下发的逐模型能力（上下文 / 模态 / reasoning / 免费标记）。 */
+  const [meta, setMeta] = useState<Record<string, ModelListEntryInfo>>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -97,6 +141,13 @@ export function useModelSelector() {
         } catch {}
 
         const rawBackend = backend?.models ?? [];
+        // 能力元数据按 `provider:model` 索引；catalog 里的也算上，
+        // 用户在设置页启用后卡片能立刻显示上下文与能力标签。
+        const metaMap: Record<string, ModelListEntryInfo> = {};
+        for (const m of [...rawBackend, ...(backend?.catalog ?? [])]) {
+          metaMap[`${m.provider_id}:${m.model_id}`] = m;
+        }
+        setMeta(metaMap);
         const backendIds = new Set(rawBackend.map((m) => `${m.provider_id}:${m.model_id}`));
         const backendEnabled = rawBackend.map((m) => ({ providerId: m.provider_id, modelId: m.model_id }));
         const intersected = local.enabled.filter((e) => backendIds.has(`${e.providerId}:${e.modelId}`));
@@ -167,19 +218,35 @@ export function useModelSelector() {
   }, []);
 
   const models = useMemo(() => {
-    return config.enabled.map((m) => ({ id: `${m.providerId}:${m.modelId}`, display: m.modelId, provider: m.providerId }));
-  }, [config]);
+    return config.enabled.map((m) => {
+      const id = `${m.providerId}:${m.modelId}`;
+      return {
+        id,
+        display: m.modelId,
+        name: friendlyModelName(m.modelId),
+        provider: m.providerId,
+        info: meta[id],
+      };
+    });
+  }, [config, meta]);
 
-  const byProvider = useMemo(() => {
+  const byProvider = useMemo<ModelGroup[]>(() => {
     const builtin = metaIds.size > 0 ? (id: string) => BUILTIN_PROVIDER_IDS.has(id) || metaIds.has(id) : (id: string) => BUILTIN_PROVIDER_IDS.has(id);
-    const map = new Map<string, { provider: string; models: typeof models; isCustom: boolean }>();
+    const map = new Map<string, ModelGroup>();
     for (const m of models) {
       const isCustom = !builtin(m.provider);
+      const isFree = m.info?.is_free === true;
       const entry = map.get(m.provider);
       if (entry) {
         entry.models.push(m);
       } else {
-        map.set(m.provider, { provider: m.provider, models: [m], isCustom });
+        map.set(m.provider, {
+          provider: m.provider,
+          label: m.info?.provider_name || m.provider,
+          models: [m],
+          isCustom: isFree ? false : isCustom,
+          isFree,
+        });
       }
     }
     return Array.from(map.values());
@@ -190,7 +257,7 @@ export function useModelSelector() {
       return "未配置，请先配置模型";
     }
     const found = models.find((m) => m.id === selectedModel);
-    return found ? found.display : (selectedModel || "未配置，请先配置模型");
+    return found ? found.name : (selectedModel ? friendlyModelName(selectedModel.split(":").slice(1).join(":")) : "未配置，请先配置模型");
   }, [models, selectedModel]);
 
   return { models, byProvider, selectedModel, setSelectedModel, currentDisplay, defaultModel };

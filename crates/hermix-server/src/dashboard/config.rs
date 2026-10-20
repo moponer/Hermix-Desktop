@@ -229,6 +229,14 @@ pub async fn get_model_info(State(state): State<HttpServerState>) -> Json<ModelI
         .and_then(|v| v.get("model").and_then(|m| m.as_str()).map(|s| s.to_string()))
         .or_else(|| state.config.model.clone());
 
+    // 能力/上下文必须读**运行中的**配置：免费渠道的 `model_meta` 是启动后
+    // 后台刷新写进 config.yaml + set_config 的，`state.config` 还是启动快照。
+    let live_cfg: hermix_config::GatewayConfig = state
+        .agent_service
+        .current_config_value()
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_else(|| state.config.as_ref().clone());
+
     match model.as_deref().filter(|s| !s.trim().is_empty()) {
         Some(m) => {
             let (provider, model_name) = m.split_once(':').unwrap_or(("openai", m));
@@ -243,23 +251,33 @@ pub async fn get_model_info(State(state): State<HttpServerState>) -> Json<ModelI
             // family = 1_000_000, gpt-5 = 128_000, etc.).
             let ctx_length: u32 = hermix_intelligence::model_metadata::get_model_context_length_with(
                 &m,
-                Some(&state.config.llm_providers),
+                Some(&live_cfg.llm_providers),
             ) as u32;
             // Pull reasoning / vision / tools capability bits from the static
             // catalog so the desktop model-info card can show "supports thinking"
             // instead of hardcoding `true`. `get_model_info` returns None for
             // unknown models — in that case default tools=true (every chat model
             // in this app is tool-calling), reasoning/vision=false.
+            // 静态目录没有的模型（免费池几乎都这样）→ 用刷新时探测到的
+            // `model_meta`。没有它的话，支持 reasoning 的模型也拿不到
+            // 思考开关（此前 unknown 一律 reporting 成 false）。
+            let meta = live_cfg
+                .llm_providers
+                .get(provider)
+                .and_then(|p| p.model_meta.get(model_name));
             let caps = hermix_intelligence::model_metadata::get_model_info(&m).unwrap_or_else(|| {
                 hermix_intelligence::model_metadata::ModelInfo {
                     name: model_name.to_string(),
                     provider: provider.to_string(),
                     context_window: ctx_length as u64,
-                    max_output_tokens: None,
-                    supports_vision: false,
-                    supports_tools: true,
+                    max_output_tokens: meta.and_then(|x| x.max_output_tokens),
+                    supports_vision: meta.and_then(|x| x.supports_vision).unwrap_or(false),
+                    // 没探测结果时保守按"支持工具"（本应用所有对话模型都要用工具）。
+                    supports_tools: meta.and_then(|x| x.supports_tools).unwrap_or(true),
                     supports_streaming: true,
-                    supports_reasoning: false,
+                    supports_reasoning: meta
+                        .and_then(|x| x.supports_reasoning)
+                        .unwrap_or(false),
                     input_cost_per_million: None,
                     output_cost_per_million: None,
                 }
@@ -275,6 +293,7 @@ pub async fn get_model_info(State(state): State<HttpServerState>) -> Json<ModelI
                     "supports_vision": caps.supports_vision,
                     "supports_reasoning": caps.supports_reasoning,
                     "context_window": ctx_length,
+                    "max_output_tokens": caps.max_output_tokens,
                 }),
             })
         }
@@ -349,11 +368,38 @@ pub async fn resolve_context_windows(
     Json(ContextWindowsResponse { windows })
 }
 
+/// `GET /api/model/list` 的单条模型（启用/可添加通用）。
+///
+/// 除标识外还带上上游声明的能力（上下文、最大输出、模态、reasoning），
+/// 让模型选择卡片不必再逐条向 `/api/model/info` 追问，也不至于只能显示
+/// 一个光秃秃的模型 id。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ModelInfoEntry {
+    pub provider_id: String,
+    pub model_id: String,
+    /// 供应商展示名（自定义 provider 用 `display_name`，否则 id）。
+    pub provider_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub supports_tools: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub supports_reasoning: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub supports_vision: Option<bool>,
+    /// 内置免费渠道的模型（UI 显示绿色「免费」标记）。
+    pub is_free: bool,
+    /// 上游声明会拿提示词训练（免责文案据此升级）。
+    pub trains_on_prompts: bool,
+}
+
 /// Response for `GET /api/model/list`.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ModelListResponse {
     /// Every model the user has enabled in the chat switcher.
-    pub models: Vec<hermix_config::ModelSelectorEntry>,
+    pub models: Vec<ModelInfoEntry>,
     /// The chosen default `"provider:model"`, if any.
     pub default_model: Option<String>,
     /// 已配置但**未启用**的模型（设置页的「可添加」清单）。
@@ -362,7 +408,7 @@ pub struct ModelListResponse {
     /// 「设为默认」就把整份自定义/免费清单写进 `enabled`，付费厂商的
     /// 模型被挤出可见范围（用户实测事故）。这里只读，不进 enabled。
     #[serde(default)]
-    pub catalog: Vec<hermix_config::ModelSelectorEntry>,
+    pub catalog: Vec<ModelInfoEntry>,
 }
 
 /// Request body for `PUT /api/model/list`.
@@ -392,6 +438,57 @@ pub async fn get_model_list(State(state): State<HttpServerState>) -> Json<ModelL
     Json(build_model_list(&cfg))
 }
 
+/// 解析单条模型的展示信息与能力。
+///
+/// 优先级：上游探测（`model_meta`）> 人维护的静态目录 > provider 级兜底。
+/// 静态目录排在后面是因为它只覆盖主流模型；免费池模型只可能来自探测。
+fn resolve_model_info(
+    cfg: &hermix_config::GatewayConfig,
+    pid: &str,
+    model: &str,
+) -> ModelInfoEntry {
+    let provider = cfg.llm_providers.get(pid);
+    let meta = provider.and_then(|p| p.model_meta.get(model));
+    let full = format!("{pid}:{model}");
+    let known = hermix_intelligence::model_metadata::get_model_info(&full);
+
+    let context_window = meta
+        .and_then(|m| m.context_window)
+        .or_else(|| provider.and_then(|p| p.model_contexts.get(model).copied()))
+        .or_else(|| known.as_ref().map(|k| k.context_window))
+        .filter(|v| *v > 0)
+        .or_else(|| provider.and_then(|p| p.context_window))
+        .unwrap_or_else(|| {
+            hermix_intelligence::model_metadata::get_model_context_length_with(
+                &full,
+                Some(&cfg.llm_providers),
+            )
+        });
+
+    ModelInfoEntry {
+        provider_id: pid.to_string(),
+        model_id: model.to_string(),
+        provider_name: provider
+            .and_then(|p| p.display_name.clone())
+            .unwrap_or_else(|| pid.to_string()),
+        context_window: Some(context_window),
+        max_output_tokens: meta
+            .and_then(|m| m.max_output_tokens)
+            .or_else(|| known.as_ref().and_then(|k| k.max_output_tokens)),
+        supports_tools: meta
+            .and_then(|m| m.supports_tools)
+            .or_else(|| known.as_ref().map(|k| k.supports_tools)),
+        supports_reasoning: meta
+            .and_then(|m| m.supports_reasoning)
+            .or_else(|| known.as_ref().map(|k| k.supports_reasoning)),
+        supports_vision: meta
+            .and_then(|m| m.supports_vision)
+            .or_else(|| known.as_ref().map(|k| k.supports_vision)),
+        is_free: hermix_config::free_channel::is_free_provider(pid),
+        trains_on_prompts: meta.map(|m| m.trains_on_prompts).unwrap_or(false),
+    }
+}
+
 /// 清单构建（`get_model_list` 的纯逻辑，独立出来可测）。
 fn build_model_list(cfg: &hermix_config::GatewayConfig) -> ModelListResponse {
     // 仅保留后端确实已配置的条目，避免下拉展示 provider 改名/删除后残留
@@ -403,7 +500,7 @@ fn build_model_list(cfg: &hermix_config::GatewayConfig) -> ModelListResponse {
     // 「可添加」清单原料：每个已配置 provider 的模型。
     // `model` 为空时必须回落到该厂商的权威默认模型 —— 只配了 key 的
     // 厂商（minimax 这种）此前在列表里彻底消失，用户以为配置丢了。
-    let mut catalog: Vec<hermix_config::ModelSelectorEntry> = Vec::new();
+    let mut catalog_ids: Vec<(String, String)> = Vec::new();
     for (pid, pc) in &cfg.llm_providers {
         if !is_configured(pid) {
             continue;
@@ -424,29 +521,23 @@ fn build_model_list(cfg: &hermix_config::GatewayConfig) -> ModelListResponse {
             }
         }
         for model_id in models {
-            catalog.push(hermix_config::ModelSelectorEntry {
-                provider_id: pid.clone(),
-                model_id,
-            });
+            catalog_ids.push((pid.clone(), model_id));
         }
     }
     // 顶层 `model` 是"实际在跑的模型"，必须在清单里可见 —— 否则切换器
     // 显示一个清单里不存在的名字，用户以为模型被换了。
     if let Some((pid, mid)) = cfg.model.as_deref().and_then(|d| d.split_once(':')) {
         if is_configured(pid)
-            && !catalog
+            && !catalog_ids
                 .iter()
-                .any(|e| e.provider_id == pid && e.model_id == mid)
+                .any(|(p, m)| p == pid && m == mid)
         {
-            catalog.push(hermix_config::ModelSelectorEntry {
-                provider_id: pid.to_string(),
-                model_id: mid.to_string(),
-            });
+            catalog_ids.push((pid.to_string(), mid.to_string()));
         }
     }
 
     // `models` = 已启用（selector 权威；从未写过 selector 时退化为全量配置）。
-    let enabled = cfg
+    let enabled_ids: Vec<(String, String)> = cfg
         .model_selector
         .as_ref()
         .filter(|sel| !sel.enabled.is_empty() || sel.default_model.is_some())
@@ -454,20 +545,16 @@ fn build_model_list(cfg: &hermix_config::GatewayConfig) -> ModelListResponse {
             sel.enabled
                 .iter()
                 .filter(|e| is_configured(&e.provider_id))
-                .cloned()
+                .map(|e| (e.provider_id.clone(), e.model_id.clone()))
                 .collect::<Vec<_>>()
         })
         .filter(|models| !models.is_empty())
-        .unwrap_or_else(|| catalog.clone());
+        .unwrap_or_else(|| catalog_ids.clone());
 
     // 默认模型：selector 的默认 > 顶层 model（须在启用清单里）> 首项。
     let in_enabled = |d: &str| {
         d.split_once(':')
-            .map(|(p, m)| {
-                enabled
-                    .iter()
-                    .any(|e| e.provider_id == p && e.model_id == m)
-            })
+            .map(|(p, m)| enabled_ids.iter().any(|(ep, em)| ep == p && em == m))
             .unwrap_or(false)
     };
     let default_model = cfg
@@ -477,22 +564,22 @@ fn build_model_list(cfg: &hermix_config::GatewayConfig) -> ModelListResponse {
         .filter(|d| in_enabled(d))
         .or_else(|| cfg.model.clone().filter(|d| in_enabled(d)))
         .or_else(|| {
-            enabled
+            enabled_ids
                 .first()
-                .map(|m| format!("{}:{}", m.provider_id, m.model_id))
+                .map(|(p, m)| format!("{p}:{m}"))
         });
 
     ModelListResponse {
-        catalog: catalog
-            .into_iter()
-            .filter(|c| {
-                !enabled
-                    .iter()
-                    .any(|e| e.provider_id == c.provider_id && e.model_id == c.model_id)
-            })
+        models: enabled_ids
+            .iter()
+            .map(|(p, m)| resolve_model_info(cfg, p, m))
             .collect(),
-        models: enabled,
         default_model,
+        catalog: catalog_ids
+            .into_iter()
+            .filter(|(p, m)| !enabled_ids.iter().any(|(ep, em)| ep == p && em == m))
+            .map(|(p, m)| resolve_model_info(cfg, &p, &m))
+            .collect(),
     }
 }
 
@@ -679,6 +766,46 @@ mod model_list_tests {
                 .any(|e| e.provider_id == "custom-free-kilo"),
             "已启用的模型不该重复出现在可添加清单"
         );
+    }
+
+    /// 上游探测到的能力必须原样带给前端：模型卡片据此显示上下文、
+    /// 「思考 / 视觉」标签，`supports_reasoning` 还决定思考开关是否露出。
+    #[test]
+    fn model_list_exposes_upstream_capabilities() {
+        let model = "minimax/minimax-m3.1-flash:free";
+        let mut meta = std::collections::HashMap::new();
+        meta.insert(
+            model.to_string(),
+            hermix_config::ModelCapabilities {
+                context_window: Some(1_000_000),
+                max_output_tokens: Some(524_288),
+                supports_tools: Some(true),
+                supports_reasoning: Some(true),
+                supports_vision: Some(true),
+                trains_on_prompts: true,
+            },
+        );
+        let mut cfg = GatewayConfig::default();
+        cfg.llm_providers.insert(
+            "custom-free-kilo".to_string(),
+            LlmProviderConfig {
+                api_key: Some("none".to_string()),
+                model: Some(model.to_string()),
+                model_meta: meta,
+                ..Default::default()
+            },
+        );
+        cfg.model = Some(format!("custom-free-kilo:{model}"));
+
+        let resp = build_model_list(&cfg);
+        let e = resp.models.first().expect("one enabled model");
+        assert_eq!(e.context_window, Some(1_000_000));
+        assert_eq!(e.max_output_tokens, Some(524_288));
+        assert_eq!(e.supports_reasoning, Some(true));
+        assert_eq!(e.supports_vision, Some(true));
+        assert_eq!(e.supports_tools, Some(true));
+        assert!(e.is_free, "免费渠道要带标记");
+        assert!(e.trains_on_prompts, "上游声明训练用途要透传");
     }
 
     /// `model` 是逗号分隔清单（内置免费渠道默认就写多条）。整串当成一个

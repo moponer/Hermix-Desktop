@@ -113,13 +113,29 @@ export interface ModelListEntry {
   model_id: string;
 }
 
+/** `GET /api/model/list` 的单条模型：标识 + 上游声明的能力。
+ *  能力字段全部可选（上游没报就是 `undefined`，不能当成"不支持"）。 */
+export interface ModelListEntryInfo extends ModelListEntry {
+  /** 供应商展示名（自定义 provider 用 display_name）。 */
+  provider_name?: string;
+  context_window?: number;
+  max_output_tokens?: number;
+  supports_tools?: boolean;
+  supports_reasoning?: boolean;
+  supports_vision?: boolean;
+  /** 内置免费渠道的模型。 */
+  is_free?: boolean;
+  /** 上游声明会拿提示词训练。 */
+  trains_on_prompts?: boolean;
+}
+
 /** Response from `GET /api/model/list` — the durable, backend-persisted
  *  enabled-model list (source of truth across restarts). */
 export interface ModelListResponse {
-  models: ModelListEntry[];
+  models: ModelListEntryInfo[];
   default_model: string | null;
   /** 已配置但未启用的模型（设置页「可添加」），只读，不进 enabled。 */
-  catalog?: ModelListEntry[];
+  catalog?: ModelListEntryInfo[];
 }
 
 export interface SkillContent {

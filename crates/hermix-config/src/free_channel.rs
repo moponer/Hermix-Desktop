@@ -178,6 +178,15 @@ pub fn ensure_seeded(config: &mut GatewayConfig) -> bool {
                 .model_contexts
                 .entry((*model).to_string())
                 .or_insert(*ctx);
+            // seed 模型的能力已实测，先写进去：否则首启要等 20s 的后台
+            // 刷新，模型卡片在这段时间里没有「思考 / 视觉」标签。
+            // `entry` 不覆盖已有值——刷新探测到的才是最新真相。
+            if !entry.model_meta.contains_key(*model) {
+                if let Some(caps) = seed_capabilities(model) {
+                    entry.model_meta.insert((*model).to_string(), caps);
+                    changed = true;
+                }
+            }
         }
 
         let (merged, added) = merge_model_csv(
@@ -311,6 +320,31 @@ pub fn cleanup_legacy_selector(config: &mut GatewayConfig) -> bool {
     }
 
     true
+}
+
+/// 已实测的 seed 模型能力（2026-10-20 对 Kilo `/models` 抓取）。
+/// 只用于首启兜底；后台刷新会用上游实时值覆盖。
+fn seed_capabilities(model: &str) -> Option<crate::config::ModelCapabilities> {
+    let caps = match model {
+        "openrouter/free" => crate::config::ModelCapabilities {
+            context_window: Some(200_000),
+            max_output_tokens: Some(32_768),
+            supports_tools: Some(true),
+            supports_reasoning: Some(true),
+            supports_vision: Some(false),
+            trains_on_prompts: true,
+        },
+        "minimax/minimax-m3.1-flash:free" => crate::config::ModelCapabilities {
+            context_window: Some(1_000_000),
+            max_output_tokens: Some(524_288),
+            supports_tools: Some(true),
+            supports_reasoning: Some(true),
+            supports_vision: Some(true),
+            trains_on_prompts: true,
+        },
+        _ => return None,
+    };
+    Some(caps)
 }
 
 /// 兜底默认模型：按 [`FREE_CHANNELS`] 顺序取第一个有模型的渠道。

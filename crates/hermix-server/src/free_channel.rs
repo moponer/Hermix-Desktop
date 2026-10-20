@@ -39,6 +39,54 @@ struct ModelEntry {
     /// 缺失 = 上游没标，按免费处理（其它网关的全部模型都是可用集合）。
     #[serde(default, rename = "isFree")]
     is_free: Option<bool>,
+    /// OpenRouter 风格的"支持的请求参数"清单（`tools` / `reasoning` …）。
+    #[serde(default)]
+    supported_parameters: Vec<String>,
+    /// 输入模态（`text` / `image` / `video` / `pdf`）。
+    #[serde(default)]
+    architecture: Option<Architecture>,
+    #[serde(default)]
+    top_provider: Option<TopProvider>,
+    /// 上游声明会拿提示词训练。免费池几乎全部为真，UI 免责据此升级。
+    #[serde(default, rename = "mayTrainOnYourPrompts")]
+    trains_on_prompts: bool,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct Architecture {
+    #[serde(default)]
+    input_modalities: Vec<String>,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct TopProvider {
+    #[serde(default)]
+    max_completion_tokens: Option<u64>,
+}
+
+/// 把上游条目翻译成持久化的能力描述。上游没报的字段一律留 `None`，
+/// 不能把"没报"当成"不支持"——UI 会据此显示错误的能力标签。
+fn capabilities_of(m: &ModelEntry) -> hermix_config::ModelCapabilities {
+    let modalities: &[String] = m
+        .architecture
+        .as_ref()
+        .map(|a| a.input_modalities.as_slice())
+        .unwrap_or_default();
+    let params_known = !m.supported_parameters.is_empty();
+    let has = |k: &str| m.supported_parameters.iter().any(|p| p == k);
+    hermix_config::ModelCapabilities {
+        context_window: m.context_window.filter(|v| *v > 0),
+        max_output_tokens: m
+            .top_provider
+            .as_ref()
+            .and_then(|t| t.max_completion_tokens)
+            .filter(|v| *v > 0),
+        supports_tools: params_known.then(|| has("tools")),
+        supports_reasoning: params_known.then(|| has("reasoning") || has("include_reasoning")),
+        supports_vision: (!modalities.is_empty())
+            .then(|| modalities.iter().any(|x| x == "image")),
+        trains_on_prompts: m.trains_on_prompts,
+    }
 }
 
 /// 一次刷新最多并入多少个模型：清单是给用户挑的，不是全量目录镜像。
@@ -69,7 +117,7 @@ async fn fetch_models(
     client: &reqwest::Client,
     models_url: &str,
     api_key: &str,
-) -> Result<Vec<(String, Option<u64>)>, String> {
+) -> Result<Vec<(String, hermix_config::ModelCapabilities)>, String> {
     let mut request = client.get(models_url);
     if let Some(value) = hermix_config::free_channel::auth_header(Some(api_key)) {
         request = request.header("Authorization", value);
@@ -82,10 +130,10 @@ async fn fetch_models(
     let parsed: ModelsResponse = serde_json::from_str(&text).map_err(|e| e.to_string())?;
     Ok(parsed
         .data
-        .into_iter()
+        .iter()
         .filter(|m| m.is_free != Some(false))
         .take(MAX_REFRESH_MODELS)
-        .map(|m| (m.id, m.context_window.filter(|v| *v > 0)))
+        .map(|m| (m.id.clone(), capabilities_of(m)))
         .collect())
 }
 
@@ -111,7 +159,8 @@ pub async fn refresh_and_persist(home: &std::path::Path, service: &Arc<dyn Agent
         .build()
         .unwrap_or_else(|_| reqwest::Client::new());
 
-    let mut fetched: Vec<(&'static str, Vec<(String, Option<u64>)>)> = Vec::new();
+    let mut fetched: Vec<(&'static str, Vec<(String, hermix_config::ModelCapabilities)>)> =
+        Vec::new();
     for channel in hermix_config::free_channel::FREE_CHANNELS {
         let models_url = hermix_config::free_channel::resolved_models_url(&cfg.free_channel, channel);
         match fetch_models(&client, &models_url, channel.api_key).await {
@@ -143,13 +192,18 @@ pub async fn refresh_and_persist(home: &std::path::Path, service: &Arc<dyn Agent
             entry.model = Some(merged);
             changed = true;
         }
-        for (model, ctx) in list {
-            if let Some(ctx) = ctx {
-                // 只在探测值变化时算改动：模型集合没变但 context 更准时
-                // 也要落盘，否则永远停留在旧值。
-                if entry.model_contexts.insert(model, ctx) != Some(ctx) {
+        for (model, caps) in list {
+            // 上下文继续写进老字段 `model_contexts`：压缩阈值/上下文卡片读它。
+            if let Some(ctx) = caps.context_window {
+                if entry.model_contexts.insert(model.clone(), ctx) != Some(ctx) {
                     changed = true;
                 }
+            }
+            // 其余能力（模态 / reasoning / tools / 最大输出）进 `model_meta`，
+            // 供 `/api/model/list` 与 `/api/model/info` 展示与兜底。
+            if entry.model_meta.get(&model) != Some(&caps) {
+                entry.model_meta.insert(model, caps);
+                changed = true;
             }
         }
         added_total += added;
@@ -207,8 +261,14 @@ mod tests {
 
         assert!(list.len() <= MAX_REFRESH_MODELS);
         assert!(
-            list.iter().any(|(id, _)| id == "openrouter/free"),
-            "seed model must be present upstream"
+            list.iter()
+                .any(|(id, _)| id == "minimax/minimax-m3.1-flash:free"),
+            "seed model must be present in the free slice; got {:?}",
+            list.iter().map(|(id, _)| id).collect::<Vec<_>>()
+        );
+        assert!(
+            list.iter().all(|(_, caps)| caps.context_window.is_some()),
+            "上下文必须解析出来"
         );
         assert!(
             !list.iter().any(|(id, _)| id.contains("claude-opus")),
@@ -259,6 +319,43 @@ mod tests {
                 assert_eq!(again.model.as_deref(), Some(model));
             }
         }
+    }
+
+    /// Kilo/OpenRouter 形状的 `/models` 条目 → 持久化能力。
+    /// 上游没报的字段必须是 `None`（"没报"≠"不支持"）。
+    #[test]
+    fn capabilities_parse_openrouter_style_metadata() {
+        let m: ModelEntry = serde_json::from_value(serde_json::json!({
+            "id": "minimax/minimax-m3.1-flash:free",
+            "context_length": 1_000_000,
+            "isFree": true,
+            "supported_parameters": ["max_tokens", "tools", "reasoning", "include_reasoning"],
+            "architecture": { "input_modalities": ["text", "image", "video"] },
+            "top_provider": { "max_completion_tokens": 524_288 },
+            "mayTrainOnYourPrompts": true
+        }))
+        .expect("parse");
+
+        let caps = capabilities_of(&m);
+        assert_eq!(caps.context_window, Some(1_000_000));
+        assert_eq!(caps.max_output_tokens, Some(524_288));
+        assert_eq!(caps.supports_tools, Some(true));
+        assert_eq!(caps.supports_reasoning, Some(true));
+        assert_eq!(caps.supports_vision, Some(true));
+        assert!(caps.trains_on_prompts);
+
+        // 只报文本模态 → 视觉 false，但 reasoning/tools 仍未知（None）。
+        let text_only: ModelEntry =
+            serde_json::from_value(serde_json::json!({
+                "id": "liquid/lfm-2.5-2.6b:free",
+                "architecture": { "input_modalities": ["text"] }
+            }))
+            .expect("parse");
+        let caps = capabilities_of(&text_only);
+        assert_eq!(caps.supports_vision, Some(false));
+        assert_eq!(caps.supports_reasoning, None);
+        assert_eq!(caps.supports_tools, None);
+        assert_eq!(caps.context_window, None);
     }
 
     #[test]

@@ -25,7 +25,7 @@ pub use config::{
     approval_timeout_secs, default_approval_timeout_secs, set_approval_timeout_secs,
     AdvancedSettingsConfig, AgentLoopBehaviorConfig, ApprovalConfig, CheapModelRouteConfig,
     CompactionConfig, FreeChannelConfig, GatewayConfig, LlmProviderConfig, McpServerEntry,
-    ModelSelectorConfig, ModelSelectorEntry, ProfileConfig,
+    ModelCapabilities, ModelSelectorConfig, ModelSelectorEntry, ProfileConfig,
     ProxyConfig, SecurityConfig, SkillsSettings, SmartModelRoutingConfig, TerminalBackendType,
     TerminalConfig, ToolCapabilityConfig,
 };

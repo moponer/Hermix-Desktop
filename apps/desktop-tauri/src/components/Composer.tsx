@@ -9,6 +9,11 @@ import { VoiceButton } from "./VoiceButton";
 import { VisionButton } from "./VisionButton";
 import { PolishButton } from "./PolishButton";
 import { ProviderIcon } from "./ProviderIcon";
+import {
+  formatContextTokens,
+  type ModelChoice,
+  type ModelGroup,
+} from "./ModelSelector";
 import type { ConfigCategory } from "./SettingsDialog";
 import { injectIntoComposer } from "../lib/composerInjection";
 import { AppMentionInput } from "./AppMentionInput";
@@ -35,11 +40,11 @@ export interface ComposerProps {
   onSelectWorkspace: (path: string | null) => void;
   onAddWorkspace: () => Promise<void>;
   onRemoveWorkspace: (id: string) => void;
-  models: Array<{ id: string; display: string; provider: string }>;
+  models: ModelChoice[];
   selectedModel: string;
   setSelectedModel: (id: string) => void;
   currentDisplay: string;
-  byProvider: Array<{ provider: string; isCustom: boolean; models: Array<{ id: string; display: string; provider: string }> }>;
+  byProvider: ModelGroup[];
   expert: ExpertDef | null;
   setExpert: (id: string | null) => void;
   recentExperts: ExpertDef[];
@@ -438,17 +443,21 @@ export function Composer(p: ComposerProps) {
                             type="button"
                             onClick={() => toggleProvider(group.provider)}
                             className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left transition-colors hover:bg-bg-hover"
-                            title={group.isCustom ? `自定义：${group.provider}（点击展开/折叠）` : `点击展开/折叠 ${group.provider}`}
+                            title={`${group.label}（点击展开/折叠）`}
                             aria-expanded={expanded}
                           >
                             <span className="truncate text-[length:var(--text-meta)] font-semibold tracking-wide text-text-faint">
-                              {group.provider}
+                              {group.label}
                             </span>
-                            {group.isCustom && (
+                            {group.isFree ? (
+                              <span className="shrink-0 rounded-sm bg-success-soft px-1 py-px text-[length:var(--text-tiny,11px)] text-success">
+                                免费源
+                              </span>
+                            ) : group.isCustom ? (
                               <span className="shrink-0 rounded-sm bg-bg-tertiary px-1 py-px text-[length:var(--text-tiny,11px)] text-text-faint">
                                 自定义
                               </span>
-                            )}
+                            ) : null}
                             <ChevronDown
                               className={`ml-auto icon-sm shrink-0 text-text-faint transition-transform ${expanded ? "" : "-rotate-90"}`}
                             />
@@ -457,6 +466,7 @@ export function Composer(p: ComposerProps) {
                             <div className="pb-0.5">
                               {group.models.map((m) => {
                                 const selected = p.selectedModel === m.id;
+                                const ctx = formatContextTokens(m.info?.context_window);
                                 return (
                                   <button
                                     key={m.id}
@@ -466,14 +476,34 @@ export function Composer(p: ComposerProps) {
                                       setModelOpen(false);
                                     }}
                                     aria-current={selected ? "true" : undefined}
-                                    className={`flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left transition-colors ${
+                                    title={m.id}
+                                    className={`flex w-full items-center gap-1.5 rounded-md px-2.5 py-1.5 text-left transition-colors ${
                                       selected
                                         ? "bg-[var(--color-accent-soft)] text-text-primary"
                                         : "text-text-secondary hover:bg-bg-hover hover:text-text-primary"
                                     }`}
                                   >
-                                    <span className="truncate text-[length:var(--text-ui)]">{m.display}</span>
-                                    {selected && <Check className="ml-auto icon-sm shrink-0 text-accent" />}
+                                    <span className="truncate text-[length:var(--text-ui)]">{m.name}</span>
+                                    {m.info?.supports_reasoning && (
+                                      <span className="shrink-0 rounded-sm bg-bg-tertiary px-1 py-px text-[length:var(--text-tiny,11px)] text-text-faint">
+                                        思考
+                                      </span>
+                                    )}
+                                    {m.info?.supports_vision && (
+                                      <span className="shrink-0 rounded-sm bg-bg-tertiary px-1 py-px text-[length:var(--text-tiny,11px)] text-text-faint">
+                                        视觉
+                                      </span>
+                                    )}
+                                    {ctx && (
+                                      <span className="ml-auto shrink-0 font-mono text-[length:var(--text-meta)] text-text-faint">
+                                        {ctx}
+                                      </span>
+                                    )}
+                                    {selected && (
+                                      <Check
+                                        className={`${ctx ? "" : "ml-auto"} icon-sm shrink-0 text-accent`}
+                                      />
+                                    )}
                                   </button>
                                 );
                               })}
@@ -499,11 +529,26 @@ export function Composer(p: ComposerProps) {
                           ? String(ctxTokens)
                           : "未知";
                   const showThinkingToggle = p.supportsReasoning === true;
+                  const selectedInfo = p.models.find((m) => m.id === currentModelId)?.info;
                   return (
                     <div className="mt-1 flex items-center gap-3 border-t border-border-primary px-2.5 py-1.5 text-[length:var(--text-meta)]">
-                      <span className="text-text-muted">
+                      <span className="shrink-0 text-text-muted">
                         上下文 <span className="font-mono text-text-secondary">{ctxLabel}</span>
                       </span>
+                      {selectedInfo?.is_free && (
+                        <span
+                          className="truncate text-text-faint"
+                          title={
+                            selectedInfo.trains_on_prompts
+                              ? "上游声明会拿提示词训练模型；敏感内容不要发给免费源"
+                              : "社区免费源可能随时失效"
+                          }
+                        >
+                          {selectedInfo.trains_on_prompts
+                            ? "提示词会被上游用于训练"
+                            : "随时可能失效"}
+                        </span>
+                      )}
                       {showThinkingToggle && (
                         <button
                           type="button"

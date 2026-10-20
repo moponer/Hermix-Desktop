@@ -553,6 +553,12 @@ pub struct LlmProviderConfig {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub provider_order: Vec<String>,
 
+    /// 逐模型能力，来自上游 `GET /models` 的探测结果（免费渠道刷新时写入）。
+    /// 只描述"上游声明的能力"，用于 UI 展示与 `/api/model/info` 兜底；
+    /// 静态模型目录优先——那里是人维护的、经过验证的值。
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub model_meta: HashMap<String, ModelCapabilities>,
+
     /// Optional context window override (tokens) used when a model served
     /// by this provider isn't covered by the static catalog and we have no
     /// per-model value (see `model_contexts`). When set, this value wins
@@ -883,6 +889,29 @@ pub struct ProxyConfig {
     /// SOCKS5 proxy URL (e.g. "socks5://proxy:1080").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub socks_proxy: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// ModelCapabilities（上游声明的逐模型能力）
+// ---------------------------------------------------------------------------
+
+/// 上游 `/models` 声明的模型能力。全部 `Option`：`None` = 上游没报，
+/// 不能当成"不支持"（那会让 UI 说谎）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ModelCapabilities {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supports_tools: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supports_reasoning: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supports_vision: Option<bool>,
+    /// 上游声明会拿提示词训练（免费池几乎都为真）。UI 免责文案据此升级。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub trains_on_prompts: bool,
 }
 
 // ---------------------------------------------------------------------------
