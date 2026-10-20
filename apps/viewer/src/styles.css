@@ -198,6 +198,9 @@ html, body, #root {
   flex: 1; min-width: 0;
   background: var(--bg-primary);
   color: var(--text-primary);
+  /* 输入框不描边：层次靠底色差（白底压在浅灰工具条上）。原来漏写
+     border，浏览器默认描边整个漏了出来。 */
+  border: none;
   border-radius: 6px; padding: 6px 10px; font-size: 13px;
   font-family: var(--font-mono);
 }
@@ -234,6 +237,7 @@ html, body, #root {
 .search-input {
   background: var(--bg-primary);
   color: var(--text-primary);
+  border: none;
   border-radius: 6px; padding: 5px 28px 5px 26px;
   font-size: 12px; width: 220px;
 }
@@ -258,6 +262,10 @@ html, body, #root {
 /* ─── 三栏主区 ────────────────────────────────────── */
 .body-row {
   display: flex; flex: 1; min-height: 0;
+  /* 三栏的最小宽度之和可能超过窗口（侧栏 200 + 列表 200 + AI 320），
+     不夹住的话最右的 AI 栏会被挤出窗口外，表现为"右侧被切掉"。
+     夹住之后是栏内挤压，不是窗口溢出。 */
+  overflow: hidden;
 }
 
 /* 栏宽拖拽条：常态隐形，悬停/聚焦才显形。
@@ -280,6 +288,7 @@ html, body, #root {
 @media (max-width: 1000px) {
   .sidebar { width: min(var(--sb-w, 200px), 26vw); }
   .ai-side { width: min(var(--ai-w, 320px), 30vw); }
+  .explorer { min-width: 180px; }
 }
 
 /* ─── 侧栏：书签 / 目录树（同一行结构） ────────────── */
@@ -365,14 +374,18 @@ html, body, #root {
      文件名不至于被拉得太长。 */
   flex: 0 1 auto;
   width: clamp(260px, calc(var(--ex-ratio, 0.3) * 100%), 1100px);
-  min-width: 220px;
+  min-width: 200px;
   overflow: auto; background: var(--bg-primary);
+  /* 容器查询的锚：列宽让位规则看的是「列表自己有多宽」，
+     不是窗口多宽（这一栏可以拖）。 */
+  container-type: inline-size;
+  container-name: explorer;
 }
 .explorer-error {
   padding: 24px; color: var(--danger); text-align: center;
 }
-/* 文件列表不可选中：双击文件名时浏览器会选中文本（高亮块），
-   表现为"双击后文件名后缀变色"。系统资源管理器同样不允许在列表里
+/* 文件列表不可选中：点击文件名时浏览器会选中文本（高亮块），
+   表现为"文件名后缀变色"。系统资源管理器同样不允许在列表里
    选文本，这里对齐系统行为。 */
 .entries { width: 100%; border-collapse: collapse; font-size: 13px; user-select: none; table-layout: fixed; }
 .entries thead th {
@@ -382,9 +395,16 @@ html, body, #root {
   font-size: 11px; color: var(--text-secondary);
   padding: 6px 12px;
 }
-.entries tbody td { padding: 5px 12px; vertical-align: middle; }
+/* 「大小」列的值是右对齐的，表头也得右对齐，否则标题飘在左边、
+   数字贴着右边，中间一大片空。 */
+.entries thead th.col-size { text-align: right; }
+.entries tbody td { padding: 6px 12px; vertical-align: middle; }
 .entries .entry-row { cursor: pointer; }
 .entries .entry-row:hover { background: var(--bg-hover); }
+/* 已打开的文件：单击即预览之后，"点了有反应"必须看得见，
+   否则用户会以为没点中又点一次。 */
+.entries .entry-row.is-active { background: var(--bg-accent-soft); }
+.entries .entry-row.is-active:hover { background: var(--bg-accent-soft); }
 .entries .entry-row.is-dir { font-weight: 500; }
 /* 名字列吃掉表格剩余宽度（table-layout: fixed 下由首行单元格定宽）——
    原先 `max-width: 240px` 让宽屏下表格右侧整片空白，这就是"全屏下
@@ -395,15 +415,31 @@ html, body, #root {
 .entry-icon {
   width: 16px; height: 16px; color: var(--text-secondary); flex: none;
 }
-.col-size { color: var(--text-secondary); width: 80px; text-align: right; font-variant-numeric: tabular-nums; }
-.col-mtime { color: var(--text-secondary); width: 130px; font-variant-numeric: tabular-nums; }
+.col-size { color: var(--text-secondary); width: 76px; text-align: right; font-variant-numeric: tabular-nums; }
+.col-mtime {
+  color: var(--text-secondary); width: 138px;
+  /* 「2026/09/28 09:19」在 13px 等宽数字下要 130px+，窄了就折成两行，
+     整列表的基线全乱。宁可给够宽度，不让它换行。 */
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
 .empty-cell {
   text-align: center; color: var(--text-muted); padding: 24px;
+}
+/* 窄栏时「修改时间」先让位：大小 + 时间两列是固定宽，窄栏下会把
+   名字列压到 0 宽（820px 窗口实测名字整列消失，只剩图标和数字）。
+   判断依据是**列表自己的宽度**（可拖拽，与视口宽度无关），
+   所以用容器查询，不用媒体查询。 */
+@container explorer (max-width: 340px) {
+  .entries .col-mtime { display: none; }
 }
 
 /* ─── 右侧：预览 ─────────────────────────────────── */
 .preview {
-  flex: 1 1 0%; min-width: 260px;
+  /* min-width 归零：预览是唯一该被压缩的栏（内容自己能滚）。
+     留着 260px 地板时，窄窗口下三栏撑破容器，右边的 AI 栏被推出
+     窗口外。 */
+  flex: 1 1 0%; min-width: 0;
   display: flex; flex-direction: column;
   background: var(--color-bg-code);
 }
@@ -411,7 +447,11 @@ html, body, #root {
   display: flex; align-items: stretch;
   background: var(--bg-tabbar); min-height: 32px;
   flex: none; overflow-x: auto;
+  /* 标签多到放不下时横向滚动，但不画滚动条：8px 的滚动条会把
+     标签条撑成两行高，看着像错位。滚轮/拖拽照常可用。 */
+  scrollbar-width: none;
 }
+.tabbar::-webkit-scrollbar { height: 0; }
 .tab {
   display: flex; align-items: center; gap: 6px;
   padding: 0 8px; cursor: pointer;
@@ -579,9 +619,16 @@ html, body, #root {
   padding: 4px 10px 0; line-height: 1.4; flex: none;
 }
 .ai-quick-btn {
-  background: var(--bg-secondary);
-  color: var(--text-primary); border-radius: 999px;
-  font-size: 12px; padding: 3px 10px; cursor: pointer;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border: none;
+  /* 不用 999px 胶囊：胶囊在这套语言里显得廉价且与方角控件不统一，
+     层次改由底色差承担。 */
+  border-radius: 6px;
+  font-size: 12px; padding: 4px 9px; cursor: pointer;
+}
+.ai-quick-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--bg-tertiary) 88%, var(--text-primary));
 }
 .ai-quick-btn:disabled { opacity: 0.5; cursor: default; }
 .ai-input-row {
@@ -590,6 +637,7 @@ html, body, #root {
 }
 .ai-input {
   flex: 1; resize: none;
+  border: none;
   border-radius: 8px;
   background: var(--bg-secondary);
   color: var(--text-primary);
@@ -654,7 +702,7 @@ html, body, #root {
 .ed-dirty {
   font-size: 11px; color: var(--accent);
   background: var(--bg-accent-soft);
-  border-radius: 999px;
+  border-radius: 4px;
   padding: 2px 8px;
 }
 .ed-encoding {
@@ -683,7 +731,9 @@ html, body, #root {
 .ed-side,
 .img-params {
   flex: none;
-  width: 248px;
+  /* 固定 248px 会在窄预览栏里把画布挤没（预览栏最小可到 0）。
+     取「248px 与容器 42% 的较小者」，宽栏不变、窄栏自动让位。 */
+  width: min(248px, 42%);
   overflow-y: auto;
   padding: 4px 0 12px;
   background: var(--bg-secondary);
@@ -956,4 +1006,10 @@ html, body, #root {
   padding: 12px;
   border-radius: 8px;
   box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+}
+/* 编辑区常态不描边，但键盘 Tab 进来必须看得见焦点在哪——否则
+   Tab 遍历时用户不知道光标落在哪个编辑区。 */
+.text-editor-area:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }

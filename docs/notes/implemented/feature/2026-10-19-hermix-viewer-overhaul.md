@@ -1,6 +1,6 @@
 # Decision Note: hermix-viewer 双模式化与全能力重构（超长任务总纲）
 
-Status: implemented — F0–F9 全部交付。双模式（纯净/重量）、彩色类型图标、启动卡顿根因修复、全屏平铺、图片处理内核、PDF/文本编辑、AI 一键入对话、常见文件类型覆盖矩阵均已落地并各自提交（`106bd5f2` → `08621066`）
+Status: implemented — F0–F9 全部交付。双模式（纯净/重量）、彩色类型图标、启动卡顿根因修复、全屏平铺、图片处理内核、PDF/文本编辑、AI 一键入对话、常见文件类型覆盖矩阵均已落地并各自提交（`106bd5f2` → `08621066`）；F10 交互与界面返修（列表改单击即预览 + 溢出/对齐/胶囊/描边清理）见「交互与界面返修」章节
 
 关联：[hermix-viewer 资源管理器化 + @hermix/preview 共享包](../feature/2026-10-13-hermix-viewer-resource-manager.md)、[独立文件浏览器（hermix-viewer）+ 可折叠 AI 右栏 + 文件关联接管](../feature/2026-10-09-standalone-file-viewer.md)、[共享预览层的样式归属与 Tailwind 边界](../architecture/2026-10-19-shared-preview-layer-ownership.md)、[前端内容指纹纳入编译指纹 —— 根治「exe 里是旧 UI」](../bug-fix/2026-10-20-frontend-fingerprint-in-build.md)
 
@@ -76,6 +76,7 @@ Status: implemented — F0–F9 全部交付。双模式（纯净/重量）、�
 | F7 | AI 协助：一键入对话 + 改图提示词 + 原图保留 | done | 23:52 | 16bbb5be |
 | F8 | 常见文件类型覆盖矩阵（预览 / 编辑下限） | done | 00:36 | df3c8f26（后端白名单 + 图标 + 元信息卡）+ 08621066（媒体预览） |
 | F9 | 收尾：一致性审查 + 全量门禁 + 笔记归档 + 总结 | done | 00:47 | 本篇归档提交 |
+| F10 | 交互与界面返修：列表单击即预览 + 溢出/对齐/胶囊/描边清理 | done | 15:20 | 本轮提交 |
 
 ## 交付现状
 
@@ -167,6 +168,44 @@ Rust `classify()` 的白名单与共享预览层分派表**逐项对齐**——�
 - PDF 文本替换只改内容流文本，不动字形、表格结构与 XObject。
 - GIF 动图编辑语义定为「取首帧并明示」。
 - EXIF 方向修正未做（`image` 不自动应用 EXIF orientation）。
+
+### 交互与界面返修（2026-10-20，用户实机反馈后）
+
+用户实机用过一轮后提了两条：**中间栏列表必须双击才出预览，浏览一批文件时每张都要双击一次，累**；**界面还有溢出、没对齐、胶囊按钮丑、输入框带描边**。这一轮据此返修，改动只落在 viewer 自己的 `apps/viewer/src/App.tsx` 与 `apps/viewer/src/styles.css`，**不碰 `packages/preview` 共享包**——避免波及 desktop 端；共享层实测本无描边/胶囊问题。
+
+**单击语义统一为「打开」**：文件 → 右侧预览标签，目录 → 进入该目录。理由有二：用户明确抱怨双击累；「单击打开」是资源管理器既有范式，侧栏树 + 面包屑 + 后退按钮已提供退路。
+
+**双击的第二次点击用 `ev.detail !== 1` 挡掉**，而不是加防抖延迟。防抖会给「快速连续浏览文件」这个主场景凭空加延迟；`detail` 天然区分单击与双击的第二次，零延迟且精确。标签按路径去重（`openedRef`），所以双击文件也不会开两个标签。已打开的文件在列表里给底色高亮（`is-active`）——单击即预览之后「点了有反应」必须看得见，否则用户会以为没点中又点一次。
+
+**界面返修**（逐条对应用户指出的现象）：
+
+| 现象 | 根因 | 处理 |
+|------|------|------|
+| 输入框有描边 | `.path-input` / `.search-input` / `.ai-input` 三处漏写 `border`，吃浏览器默认描边 | 统一 `border: none`，层次改由底色差承担；全文件仍只保留键盘 `focus-visible` 焦点环（无障碍必需） |
+| 胶囊按钮丑 | `.ai-quick-btn` / `.ed-dirty` 的 `border-radius: 999px` 与同屏方角控件语言不一致 | 改 6px / 4px |
+| 表头与数值不对齐 | 「大小」列表头左对齐而该列数值右对齐 | 表头跟随右对齐；表头/单元格 padding 统一 6px |
+| 窄窗口下 AI 栏被挤出 | 三栏 `min-width` 之和（200+200+320）超过窗口宽 | `.body-row` 加 `overflow: hidden`；`.preview` 的 `min-width` 归零（预览是唯一该被压缩的栏，内容自己能滚） |
+| 窄栏下名字列被压没 | 「大小 + 修改时间」两列固定宽，名字列被挤到 0 宽 | 改用**容器查询**按列表自身宽度让「修改时间」列先让位——这一栏可拖，与视口宽度无关，媒体查询跟踪不到 |
+| 编辑器侧栏挤掉画布 | 侧栏固定 248px | 改 `min(248px, 42%)` |
+| 标签条看着错位 | 横向溢出时 8px 滚动条把标签条撑成两行高 | 隐藏滚动条但保留滚动能力 |
+
+「修改时间」列先让位而不是「大小」列：时间信息价值最低、文件名价值最高，先保住名字。
+
+**detect 的绿灯必须自证**：`npx -y impeccable@4.1.0 detect src` 对**解析不了的文件会静默返回 0**，所以本轮另造了一个已知反模式的探针文件（`border-left:3px solid` + `transition:width` + `bounce` 动画），确认 detect 真的能检出（exit 2、3 条违规）之后，才认它对本目录的 exit 0 是有效绿灯。探针文件随即删除。
+
+**本轮验证证据**（真机 1216 / 820 / 640 三档宽度逐项截图核对）：
+
+| 门禁 | 结果 |
+|------|------|
+| `cargo test -p hermix-viewer --lib` | 28 passed / 0 failed |
+| `apps/viewer` `node_modules/.bin/tsc --noEmit` | exit 0 |
+| `check-design-guard.mjs`（cwd=apps/viewer） | `DesignGuard: clean` |
+| `node scripts/check-preview-layer.mjs` | OK |
+| `pwsh -NoProfile -File scripts/check-notes.ps1` | `notes: OK` |
+| `npx -y impeccable@4.1.0 detect src` | exit 0（探针自证见上） |
+| 真机 1216px | 单击 `config.json` → 右侧立即出 JSON 预览（带「编辑」/ JSON 徽标 / 复制），该行底色高亮；单击目录 `codebuddy-safe-delete` → 成功进入，面包屑变为 `F: > tmp-rustc > codebuddy-safe-delete`；长文件名省略号正常；路径框/搜索框/AI 输入框描边消失；表头「大小」右对齐且与数值对齐；「修改时间」不折行；AI 快捷按钮由胶囊变方角 |
+| 真机 820px（AI 栏打开） | 不再溢出；名字列保留；「修改时间」列自动让位 |
+| 真机 640px（应用最小宽） | 无横向溢出；路径框文字省略；AI 输入框 placeholder 断行位置略难看（不溢出，未动） |
 
 ## 各子任务要点
 

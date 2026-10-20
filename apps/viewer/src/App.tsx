@@ -2,7 +2,7 @@
 //
 // 决策笔记 2026-10-13：viewer 一期是「拖入文件 + 多 tab」，二期是
 // 「真实资源管理器」。这一版把两侧合并：左侧树 + 中部列表 + 右侧预览，
-// 文件双击进入预览 tab（PDF/图片/Office …），新 tab 不会持续再开窗口。
+// 单击文件进入预览 tab（PDF/图片/Office …），新 tab 不会持续再开窗口。
 //
 // 共享包走 @hermix/preview —— 与桌面 app 用同一份解析器、同一份样式层。
 
@@ -543,7 +543,7 @@ export function App() {
     [pathInput, currentPath, navigate],
   );
 
-  // — 双击：文件夹进、文件开 tab —
+  // — 单击：文件夹进、文件开 tab —
   const openEntry = useCallback(
     (e: DirEntryLike) => {
       if (e.isDir) {
@@ -991,12 +991,18 @@ export function App() {
                 {visibleEntries.map((e) => (
                   <tr
                     key={e.path}
-                    className={`entry-row ${e.isDir ? "is-dir" : ""}`}
-                    onDoubleClick={() => openEntry(e)}
-                    onContextMenu={(ev) => onContextMenu(ev, e)}
+                    className={`entry-row ${e.isDir ? "is-dir" : ""} ${
+                      active?.path === e.path ? "is-active" : ""
+                    }`}
                     onClick={(ev) => {
-                      if (ev.detail === 1) return; // 只响应双击
+                      // 单击即打开：文件开右侧预览标签，目录进入。
+                      // 只认第一次点击（detail === 1）：双击的第二次落在
+                      // 「已进入的新目录」里的某一行上时会被这里挡掉，否则
+                      // 双击目录会顺手把新目录里的文件误开一个。
+                      if (ev.detail !== 1) return;
+                      openEntry(e);
                     }}
+                    onContextMenu={(ev) => onContextMenu(ev, e)}
                     title={e.path}
                   >
                     <td className="col-name">
@@ -1049,7 +1055,7 @@ export function App() {
               </div>
             ))}
             {tabs.length === 0 && (
-              <div className="tabbar-hint">双击文件预览；拖入文件亦可</div>
+              <div className="tabbar-hint">单击文件即可在右侧预览；拖入文件亦可</div>
             )}
             <div className="tabbar-spacer" />
           </div>
@@ -1057,7 +1063,7 @@ export function App() {
             {!active ? (
               <div className="empty">
                 <div className="empty-icon">📂</div>
-                <p>从左侧资源管理器浏览；双击文件预览</p>
+                <p>在左侧文件列表单击文件即可预览</p>
                 <p className="empty-sub">
                   支持 Markdown / 文本 / 代码 / 图片 / PDF / Office / HTML
                 </p>
