@@ -546,13 +546,23 @@ html, body, #root {
   display: flex; flex-direction: column;
   background: var(--color-bg-code);
 }
+/* 标签条外层：滚动区 + **固定在右侧的列表按钮**。
+   列表按钮不能放进滚动区 —— 标签一多它就被卷到右边看不见了。 */
+.tabbar-wrap {
+  display: flex; align-items: stretch;
+  flex: none;
+  position: relative;
+  background: var(--bg-tabbar);
+  min-height: 32px;
+}
 .tabbar {
   display: flex; align-items: stretch;
   background: var(--bg-tabbar); min-height: 32px;
-  flex: none; overflow-x: auto;
+  flex: 1 1 auto; min-width: 0; overflow-x: auto;
   padding: 0 4px;
-  /* 标签多到放不下时横向滚动，但不画滚动条：8px 的滚动条会把
-     标签条撑成两行高，看着像错位。滚轮/拖拽照常可用。 */
+  /* 标签挤不下时往左压缩：标签是 flex 项，min-width 给到 92px，
+     再挤就省略标题（.tab-title 的 ellipsis）。活动标签不压缩，
+     保证当前文件的名字始终完整可读。 */
   scrollbar-width: none;
 }
 .tabbar::-webkit-scrollbar { height: 0; }
@@ -562,14 +572,60 @@ html, body, #root {
   color: var(--text-secondary); font-size: 12px;
   user-select: none;
   /* 标签之间留 4px：挤成一排字看不出哪个是哪个（原来完全无缝）。
-     flex:none 让标签多时横向滚动，而不是被压扁挤成一团。 */
-  flex: none; margin-right: 4px;
+     **可压缩**（flex: 0 1 auto）：标签多到放不下时往左压，最右边那个
+     不会被切成半截；压到 min-width 还不够才横向滚动（此时活动标签
+     会被自动滚进视野）。 */
+  flex: 0 1 auto; min-width: 92px; margin-right: 4px;
   border-radius: 6px 6px 0 0;
 }
 .tab.active { background: var(--bg-primary); color: var(--text-primary); }
+/* 活动标签不压缩：当前文件的名字必须完整可读。 */
+.tab.active { flex-shrink: 0; }
 .tab-icon { width: 14px; height: 14px; flex: none; }
 .tab-title {
+  flex: 1 1 auto; min-width: 0;
   max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* ─── 垂直标签列表（标签太多时点开挑） ─────────────────────────────
+   标签横向排不下时，"哪个是哪个"就得靠纵向列表来认：每行带图标、文件名
+   与完整路径。浮层靠底色差 + 阴影分层，不描边。 */
+.tab-list-btn {
+  display: flex; align-items: center; gap: 4px;
+  flex: none; align-self: center;
+  height: 22px; margin: 0 6px 0 2px; padding: 0 6px;
+  border: none; background: transparent;
+  color: var(--text-secondary);
+  border-radius: 6px; cursor: pointer;
+  font-size: 11px;
+}
+.tab-list-btn:hover, .tab-list-btn.is-active { background: var(--bg-hover); color: var(--text-primary); }
+.tab-list-count { font-variant-numeric: tabular-nums; }
+.tab-list-pop {
+  position: absolute; top: calc(100% + 2px); right: 6px;
+  z-index: 60;
+  width: min(420px, 60vw);
+  max-height: 60vh; overflow: auto;
+  padding: 4px;
+  border-radius: 8px;
+  background: var(--bg-primary);
+  box-shadow: 0 8px 28px rgba(15, 23, 42, 0.22);
+}
+.tab-list-row {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px; color: var(--text-primary);
+}
+.tab-list-row:hover { background: var(--bg-hover); }
+.tab-list-row.is-active { background: var(--bg-accent-soft); }
+.tab-list-name { flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tab-list-path {
+  flex: 1 1 auto; min-width: 0;
+  color: var(--text-muted); font-size: 11px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  direction: rtl; text-align: left;
 }
 /* 关闭图标平时不显示，只在「正在看的那个标签」上出现：
    hover / 激活 / 键盘聚焦任一即可见。只用 opacity（保留占位）→
@@ -1653,10 +1709,4 @@ html, body, #root {
   color: var(--text-muted);
   background: transparent;
   box-shadow: none;
-}
-.preview-pin-error {
-  color: var(--danger);
-  font-size: var(--text-meta);
-  max-width: 220px;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }

@@ -14,7 +14,7 @@ import {
   ArrowLeft, ArrowRight, ArrowUp, RefreshCw, Search,
   Funnel, FunnelX, FileSearch,
   ChevronRight, HardDrive, ExternalLink, Sparkles, X,
-  Monitor, Moon, Sun, Activity, Info, LogOut, Settings2, Pencil,
+  Monitor, Moon, Sun, Activity, Info, LogOut, Settings2, Pencil, List,
 } from "lucide-react";
 import { FileTypeIcon, FolderTypeIcon } from "@hermix/preview/FileTypeIcon";
 import { resolveKind } from "@hermix/preview";
@@ -376,8 +376,25 @@ export function App() {
   // —— 多 tab + 预览 ——
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeTabId, setActiveTabId] = useState<number | null>(null);
+  /** 垂直标签列表（标签太多时点开挑）。 */
+  const [tabListOpen, setTabListOpen] = useState(false);
+  const tabbarRef = useRef<HTMLDivElement | null>(null);
   /** 当前激活的标签（预览区、标题栏、菜单都要用）。 */
   const active = tabs.find((t) => t.id === activeTabId) ?? null;
+
+  /**
+   * 活动标签始终完整可见。
+   *
+   * 标签栏是横向滚动的（overflow-x: auto），但滚动条是隐藏的 —— 标签多到
+   * 右边那个被切掉一半时，用户既看不到它也不知道还能往右滚。所以：活动
+   * 标签一变就把它滚进视野（inline: "nearest"：已经可见就不动）。
+   */
+  useEffect(() => {
+    const bar = tabbarRef.current;
+    if (!bar || activeTabId === null) return;
+    const el = bar.querySelector<HTMLElement>(`[data-tab-id="${activeTabId}"]`);
+    el?.scrollIntoView({ inline: "nearest", block: "nearest" });
+  }, [activeTabId, tabs.length]);
 
   // —— AI 右栏 ——
   const [aiOpen, setAiOpen] = useState(false);
@@ -2071,33 +2088,77 @@ export function App() {
               "单击文件即可预览"，和下面的空状态说的是同一件事（同一屏
               说两遍）。空状态的文案已经覆盖了"单击"和"拖入"。 */}
           {tabs.length > 0 && (
-          <div className="tabbar">
-            {tabs.map((t) => (
-              <div
-                key={t.id}
-                className={`tab ${t.id === activeTabId ? "active" : ""}`}
-                onClick={() => setActiveTabId(t.id)}
-                title={t.path}
-                data-ctx="tab"
-                data-ctx-id={t.id}
-                data-ctx-path={t.path}
-                data-ctx-name={t.name}
-              >
-                <FileTypeIcon name={t.name} size={14} className="tab-icon" />
-                <span className="tab-title">{t.name}</span>
-                <button
-                  className="tab-close"
-                  onClick={(ev) => {
-                    ev.stopPropagation();
-                    closeTab(t.id);
-                  }}
-                  aria-label="关闭标签"
+          <div className="tabbar-wrap">
+            <div className="tabbar" ref={tabbarRef}>
+              {tabs.map((t) => (
+                <div
+                  key={t.id}
+                  data-tab-id={t.id}
+                  className={`tab ${t.id === activeTabId ? "active" : ""}`}
+                  onClick={() => setActiveTabId(t.id)}
+                  title={t.path}
+                  data-ctx="tab"
+                  data-ctx-id={t.id}
+                  data-ctx-path={t.path}
+                  data-ctx-name={t.name}
                 >
-                  ×
-                </button>
+                  <FileTypeIcon name={t.name} size={14} className="tab-icon" />
+                  <span className="tab-title">{t.name}</span>
+                  <button
+                    className="tab-close"
+                    onClick={(ev) => {
+                      ev.stopPropagation();
+                      closeTab(t.id);
+                    }}
+                    aria-label="关闭标签"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+              <div className="tabbar-spacer" onClick={() => setTabListOpen((v) => !v)} />
+            </div>
+            <button
+              type="button"
+              className={tabListOpen ? "tab-list-btn is-active" : "tab-list-btn"}
+              onClick={() => setTabListOpen((v) => !v)}
+              title="已打开的文件（垂直列表）"
+              aria-label="打开文件列表"
+              aria-expanded={tabListOpen}
+            >
+              <List className="icon-sm" />
+              <span className="tab-list-count">{tabs.length}</span>
+            </button>
+            {tabListOpen && (
+              <div className="tab-list-pop" role="menu" aria-label="已打开的文件">
+                {tabs.map((t) => (
+                  <div
+                    key={t.id}
+                    className={t.id === activeTabId ? "tab-list-row is-active" : "tab-list-row"}
+                    onClick={() => {
+                      setActiveTabId(t.id);
+                      setTabListOpen(false);
+                    }}
+                    title={t.path}
+                    role="menuitem"
+                  >
+                    <FileTypeIcon name={t.name} size={14} className="tab-icon" />
+                    <span className="tab-list-name">{t.name}</span>
+                    <span className="tab-list-path">{t.path}</span>
+                    <button
+                      className="tab-close"
+                      onClick={(ev) => {
+                        ev.stopPropagation();
+                        closeTab(t.id);
+                      }}
+                      aria-label="关闭标签"
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
               </div>
-            ))}
-            <div className="tabbar-spacer" />
+            )}
           </div>
           )}
           <div
