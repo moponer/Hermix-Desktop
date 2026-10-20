@@ -146,7 +146,7 @@ pub struct IndexStatus {
     pub last_sync_error: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NtfsRecord {
     pub file_ref: u64,
     pub parent_ref: u64,

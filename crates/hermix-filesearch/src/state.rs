@@ -48,8 +48,26 @@ impl VolumeState {
         index.set_filter(filter.clone());
         match storage::load_snapshot(data_dir, volume) {
             Ok(Some(loaded)) => {
-                let last_sync_at = Some(loaded.snapshot.volume_state.last_synced_at);
+                let snapshot_next_usn = loaded.snapshot.volume_state.next_usn;
+                let mut last_sync_at = Some(loaded.snapshot.volume_state.last_synced_at);
                 index.replace_snapshot(loaded.snapshot, loaded.path.display().to_string());
+
+                // 回放增量日志（等价 Everything 的「加载 db + 重放 journal」）。
+                // 只回放比快照更新的批次——压缩后日志会被清空，剩下的都是
+                // 快照之后发生的变更。
+                if let Ok(batches) = storage::load_deltas(data_dir, volume) {
+                    for (next_usn, records) in batches {
+                        if records.is_empty() || next_usn <= snapshot_next_usn {
+                            continue;
+                        }
+                        index.apply_changes(records, next_usn, 0);
+                    }
+                    if let Some(state) = index.volume_state() {
+                        last_sync_at = Some(state.last_synced_at.max(
+                            last_sync_at.unwrap_or(0),
+                        ));
+                    }
+                }
                 if let Ok(mut status) = self.monitor.write() {
                     *status = MonitorStatus {
                         monitor_state: MonitorState::Watching,

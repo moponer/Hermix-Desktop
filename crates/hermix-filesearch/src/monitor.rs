@@ -17,10 +17,12 @@ use crate::{
 
 const POLL_INTERVAL_SECS: u64 = 1;
 const MAX_RETRY_DELAY_SECS: u64 = 30;
-/// 落盘节流：快照是整卷重写，30s 一次在活跃机器上等于持续写盘
-/// （浏览器缓存每秒都在改 USN）。4 分钟足够缩短"崩溃丢失增量"的窗口，
-/// 又不会把磁盘占满。进程退出时还有一次强制刷盘。
-const SNAPSHOT_INTERVAL_MS: u64 = 240_000;
+/// 全量快照（compaction）的窗口。平时只追加 USN 增量日志，崩溃后靠
+/// 「快照 + 回放增量」恢复，所以不需要频繁重写整卷——30 分钟一次足够，
+/// 退出时还有一次强制刷盘。
+const SNAPSHOT_INTERVAL_MS: u64 = 30 * 60_000;
+/// 增量日志攒到这么大就做一次 compaction（避免启动回放太久）。
+const DELTA_COMPACT_BYTES: u64 = 32 * 1024 * 1024;
 const REBUILD_RETRY_DELAY_SECS: u64 = 60;
 
 enum MonitorReadiness {
@@ -73,7 +75,7 @@ pub fn start(state: Arc<VolumeState>, data_dir: PathBuf, filter: FilterRules) {
                         }
                     }
                 }
-                MonitorReadiness::Ready => match sync_once(&state).await {
+                MonitorReadiness::Ready => match sync_once(&state, &data_dir).await {
                     Ok(summary) => {
                         retry_delay_secs = POLL_INTERVAL_SECS;
                         if !summary.needs_rebuild {
@@ -93,7 +95,10 @@ pub fn start(state: Arc<VolumeState>, data_dir: PathBuf, filter: FilterRules) {
     });
 }
 
-pub async fn sync_once(state: &VolumeState) -> Result<SyncSummary, String> {
+pub async fn sync_once(
+    state: &VolumeState,
+    data_dir: &std::path::Path,
+) -> Result<SyncSummary, String> {
     let _operation = state.operation_gate.lock().await;
     let notify_on_success = mark_syncing(state);
 
@@ -172,11 +177,20 @@ pub async fn sync_once(state: &VolumeState) -> Result<SyncSummary, String> {
         }
         ChangeStats::default()
     } else {
-        let mut index = state
-            .index
-            .write()
-            .map_err(|_| sync_error(state, "搜索索引锁状态异常。".to_string()))?;
-        index.apply_changes(records, next_usn, synced_at)
+        // 先落一份增量日志再改内存：崩溃后重启时「快照 + 回放增量」即可，
+        // 不必因为丢掉几秒的变更就全盘重建（Everything 的 db+journal 同款）。
+        let delta = records.clone();
+        let stats = {
+            let mut index = state
+                .index
+                .write()
+                .map_err(|_| sync_error(state, "搜索索引锁状态异常。".to_string()))?;
+            index.apply_changes(records, next_usn, synced_at)
+        };
+        if let Err(error) = storage::append_delta(data_dir, &volume, next_usn, &delta) {
+            eprintln!("[filesearch] {volume} 追加增量日志失败：{error}");
+        }
+        stats
     };
 
     let changed = cursor_changed || stats.applied > 0 || stats.updated > 0 || stats.deleted > 0;
@@ -239,6 +253,7 @@ pub fn flush_snapshot_on_exit(state: &VolumeState, data_dir: &std::path::Path) {
         None => return,
     };
 
+    let volume = snapshot.volume_state.volume.clone();
     match storage::save_snapshot(data_dir, &snapshot) {
         Ok(path) => {
             if let Ok(mut index) = state.index.write() {
@@ -246,6 +261,10 @@ pub fn flush_snapshot_on_exit(state: &VolumeState, data_dir: &std::path::Path) {
             }
             state.snapshot_dirty.store(false, Ordering::Release);
             state.last_snapshot_saved_at.store(now_ms(), Ordering::Release);
+            // 快照已包含全部条目，增量日志可以丢掉（否则下次启动会重放两遍）。
+            if let Err(error) = storage::clear_delta(data_dir, &volume) {
+                eprintln!("退出前清空增量日志失败：{error}");
+            }
         }
         Err(error) => eprintln!("退出前保存索引快照失败：{error}"),
     }
@@ -255,22 +274,34 @@ async fn flush_snapshot_if_due(
     state: &Arc<VolumeState>,
     data_dir: &std::path::Path,
 ) -> Result<bool, String> {
-    let now = now_ms();
-    if !snapshot_is_due(
+    let volume = {
+        let Ok(index) = state.index.read() else {
+            return Ok(false);
+        };
+        match index.volume_state() {
+            Some(volume_state) => volume_state.volume,
+            None => return Ok(false),
+        }
+    };
+
+    // 压缩（compaction）条件：增量日志攒够大，或距上次全量快照超过窗口。
+    // 平时只追加增量，崩溃后靠「快照 + 回放增量」恢复——不必频繁重写整卷。
+    let due_by_time = snapshot_is_due(
         state.snapshot_dirty.load(Ordering::Acquire),
-        now,
+        now_ms(),
         state.last_snapshot_saved_at.load(Ordering::Acquire),
-    ) {
+    );
+    if !due_by_time && storage::delta_size(data_dir, &volume) < DELTA_COMPACT_BYTES {
         return Ok(false);
     }
 
     let _operation = state.operation_gate.lock().await;
-    let now = now_ms();
-    if !snapshot_is_due(
+    let due_by_time = snapshot_is_due(
         state.snapshot_dirty.load(Ordering::Acquire),
-        now,
+        now_ms(),
         state.last_snapshot_saved_at.load(Ordering::Acquire),
-    ) {
+    );
+    if !due_by_time && storage::delta_size(data_dir, &volume) < DELTA_COMPACT_BYTES {
         return Ok(false);
     }
 
@@ -301,6 +332,9 @@ async fn flush_snapshot_if_due(
     }
     state.snapshot_dirty.store(false, Ordering::Release);
     state.last_snapshot_saved_at.store(now_ms(), Ordering::Release);
+    if let Err(error) = storage::clear_delta(data_dir, &volume) {
+        eprintln!("[filesearch] {volume} 清空增量日志失败：{error}");
+    }
     Ok(true)
 }
 

@@ -85,38 +85,59 @@ impl SearchIndex {
         let normalized = query.trim().to_lowercase();
         let limit = limit.unwrap_or(500).clamp(1, 5_000);
 
-        let mut hits: Vec<u32> = Vec::new();
+        // 按排名分桶收集：精确名 / 前缀 / 子串。只保留"够用"的子串桶
+        // （上限 = limit），因此输入单字母也不会为几十万条命中分配 + 全量排序。
+        let mut exact: Vec<u32> = Vec::new();
+        let mut prefix: Vec<u32> = Vec::new();
+        let mut other: Vec<u32> = Vec::new();
+        let mut total_matches = 0usize;
+
         if normalized.is_empty() {
-            // 空查询不做全表排序：按索引顺序取前 N 条即可（调用方只要一页）。
-            for index in 0..self.entries.len() {
-                hits.push(index as u32);
-                if hits.len() >= limit {
-                    break;
-                }
-            }
+            total_matches = self.entries.len();
+            other.extend((0..self.entries.len().min(limit)).map(|index| index as u32));
         } else {
             for (index, entry) in self.entries.iter().enumerate() {
-                if entry.name_lower.contains(&normalized) {
-                    hits.push(index as u32);
+                if !entry.name_lower.contains(&normalized) {
+                    continue;
+                }
+                total_matches += 1;
+                if entry.name_lower == normalized {
+                    exact.push(index as u32);
+                } else if entry.name_lower.starts_with(&normalized) {
+                    prefix.push(index as u32);
+                } else if other.len() < limit {
+                    other.push(index as u32);
                 }
             }
         }
 
-        let total_matches = hits.len();
+        // 只对"会被返回"的这几桶排序，不再对全部命中排序。
         if !normalized.is_empty() {
-            hits.sort_by(|a, b| {
+            let order = |a: &u32, b: &u32| {
                 compare_hits(
                     &self.entries[*a as usize],
                     &self.entries[*b as usize],
                     &normalized,
                 )
-            });
+            };
+            exact.sort_by(order);
+            prefix.sort_by(order);
+            other.sort_by(order);
+        }
+
+        let mut picked: Vec<u32> = Vec::with_capacity(limit.min(total_matches));
+        for bucket in [&exact, &prefix, &other] {
+            for index in bucket {
+                if picked.len() >= limit {
+                    break;
+                }
+                picked.push(*index);
+            }
         }
 
         let mut memo: HashMap<u32, String> = HashMap::new();
-        let results: Vec<FileEntry> = hits
+        let results: Vec<FileEntry> = picked
             .iter()
-            .take(limit)
             .map(|index| self.to_file_entry(*index, &mut memo))
             .collect();
 
@@ -567,6 +588,24 @@ mod tests {
 
         let response = index.search("a.txt".to_string(), None);
         assert_eq!(response.results[0].path, r"C:\repo2\a.txt");
+    }
+
+    /// 分桶：精确名 > 前缀 > 子串；`total_matches` 仍然统计全部命中，
+    /// 只是不为子串桶分配/排序超过 limit 的条目。
+    #[test]
+    fn exact_and_prefix_win_and_total_counts_everything() {
+        let index = index_with(vec![
+            entry(5, 5, "", true),
+            entry(6, 5, "app", true),
+            entry(7, 5, "app.log", false),
+            entry(8, 5, "myapp.txt", false),
+        ]);
+
+        let response = index.search("app".to_string(), Some(2));
+        assert_eq!(response.total_matches, 3, "命中计数不截断");
+        assert_eq!(response.returned, 2);
+        assert_eq!(response.results[0].name, "app");
+        assert_eq!(response.results[1].name, "app.log");
     }
 
     #[test]
