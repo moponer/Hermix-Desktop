@@ -7,7 +7,9 @@
 
 pub mod commands;
 pub mod filesearch;
+pub mod gui;
 pub mod image_ops;
+pub mod mcp_server;
 pub mod paths;
 pub mod pdf_ops;
 
@@ -91,6 +93,15 @@ mod tests {
 /// 入口（main.rs 调用；pub 因为 bin 目标跨 crate 引用它）。
 pub fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+
+    // ── MCP 服务模式 ──
+    // stdin/stdout 就是协议通道，**不开窗口**。放在最前面判断：MCP 模式下
+    // 单实例互斥体、待开队列、监听端口全都不该起（外部 AI 要的是工具，
+    // 不是另一个查看器窗口）。
+    if args.iter().any(|a| a == "--mcp") {
+        mcp_server::serve_stdio();
+        return;
+    }
 
     #[cfg(windows)]
     {
