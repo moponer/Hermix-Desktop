@@ -7,6 +7,7 @@
 
 pub mod cleanup;
 pub mod clipboard;
+pub mod drive_scan;
 pub mod commands;
 pub mod filesearch;
 pub mod gui;
@@ -231,6 +232,8 @@ pub fn main() {
             sysmon::sysmon_disks,
             cleanup::cleanup_scan,
             cleanup::cleanup_execute,
+            drive_scan::cleanup_scan_drive,
+            drive_scan::cleanup_remove_entries,
         ])
         .plugin(tauri_plugin_dialog::init())
         .on_window_event(|_w, event| {

@@ -101,15 +101,56 @@ interface CleanResult {
 }
 
 interface CleanupProgress {
-  phase: "scan" | "clean";
-  ruleId: string;
-  title: string;
+  phase: "scan" | "clean" | "drive";
+  ruleId?: string;
+  title?: string;
   done: number;
   total: number;
   bytes?: number;
   files?: number;
   deleted?: number;
   freedBytes?: number;
+  /** phase=drive 时的当前目录与已发现的条目数。 */
+  path?: string;
+  artifacts?: number;
+  stale?: number;
+  big?: number;
+}
+
+/** 盘内深度扫描（kondo 式产物识别 + 残留/大文件）。 */
+interface ArtifactDir {
+  path: string;
+  kind: string;
+  marker: string;
+  bytes: number;
+  files: number;
+  modified: number;
+}
+
+interface FoundFile {
+  path: string;
+  bytes: number;
+  modified: number;
+  reason: string;
+}
+
+interface DriveScanReport {
+  drive: string;
+  artifacts: ArtifactDir[];
+  stale: FoundFile[];
+  big: FoundFile[];
+  emptyDirs: string[];
+  emptyDirCount: number;
+  dirsScanned: number;
+  elapsedMs: number;
+  truncated: boolean;
+}
+
+interface RemoveResult {
+  freedBytes: number;
+  removed: number;
+  failed: number;
+  messages: string[];
 }
 
 // ── 小工具 ────────────────────────────────────────────────────────────
@@ -588,6 +629,11 @@ function CleanupPane() {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<CleanResult | null>(null);
   const [confirming, setConfirming] = useState(false);
+  // —— 盘内深度扫描（kondo 式产物识别） ——
+  const [deep, setDeep] = useState<DriveScanReport | null>(null);
+  const [deepSel, setDeepSel] = useState<Set<string>>(new Set());
+  const [deepBusy, setDeepBusy] = useState(false);
+  const [deepConfirm, setDeepConfirm] = useState(false);
 
   useEffect(() => {
     void invoke<DiskRow[]>("sysmon_disks")
@@ -644,11 +690,106 @@ function CleanupPane() {
     return () => window.clearTimeout(timer);
   }, [confirming]);
 
+  useEffect(() => {
+    if (!deepConfirm) return;
+    const timer = window.setTimeout(() => setDeepConfirm(false), 5000);
+    return () => window.clearTimeout(timer);
+  }, [deepConfirm]);
+
+  // 换盘符后深扫结果作废：不同盘的路径混在一起会误导。
+  useEffect(() => {
+    setDeep(null);
+    setDeepSel(new Set());
+  }, [drive]);
+
+  const scanDeep = useCallback(async () => {
+    if (!drive) return;
+    setDeepBusy(true);
+    setError(null);
+    setProgress(null);
+    try {
+      const next = await invoke<DriveScanReport>("cleanup_scan_drive", { drive });
+      setDeep(next);
+      // 默认一个都不勾：这些是用户目录里的东西，必须由人明确选择。
+      setDeepSel(new Set());
+    } catch (cause) {
+      setError(errorText(cause));
+    } finally {
+      setDeepBusy(false);
+      setProgress(null);
+    }
+  }, [drive]);
+
+  const toggleDeep = (path: string) => {
+    setDeepSel((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  };
+
+  const cleanDeep = useCallback(async () => {
+    if (!deep || deepSel.size === 0) return;
+    if (!deepConfirm) {
+      setDeepConfirm(true);
+      return;
+    }
+    setDeepConfirm(false);
+    setDeepBusy(true);
+    try {
+      const picked = <T extends { path: string }>(list: T[]) =>
+        list.filter((item) => deepSel.has(item.path)).map((item) => item.path);
+
+      const batches: Array<[string, string[]]> = [
+        ["artifact", picked(deep.artifacts)],
+        ["file", [...picked(deep.stale), ...picked(deep.big)]],
+        ["empty-dir", deep.emptyDirs.filter((path) => deepSel.has(path))],
+      ];
+
+      let freed = 0;
+      let removed = 0;
+      let failed = 0;
+      for (const [kind, paths] of batches) {
+        if (paths.length === 0) continue;
+        const outcome = await invoke<RemoveResult>("cleanup_remove_entries", {
+          kind,
+          paths,
+          drive,
+        });
+        freed += outcome.freedBytes;
+        removed += outcome.removed;
+        failed += outcome.failed;
+      }
+      setResult({ freedBytes: freed, deleted: removed, skipped: failed, failed: 0, messages: [] });
+      await scanDeep();
+    } catch (cause) {
+      setError(errorText(cause));
+    } finally {
+      setDeepBusy(false);
+    }
+  }, [deep, deepSel, drive, deepConfirm, scanDeep]);
+
+  const ageText = (modified: number) => {
+    if (!modified) return "时间未知";
+    const days = Math.floor((Date.now() / 1000 - modified) / 86400);
+    if (days >= 365) return `${Math.floor(days / 365)} 年未修改`;
+    if (days >= 30) return `${Math.floor(days / 30)} 个月未修改`;
+    if (days >= 1) return `${days} 天未修改`;
+    return "今天修改";
+  };
+
   const items = report?.items ?? [];
   const selectedItems = items.filter((item) => selected.has(item.id));
   const selectedBytes = selectedItems.reduce((sum, item) => sum + item.bytes, 0);
   const animatedSelected = useAnimatedNumber(selectedBytes);
   const totalBytes = Math.max(1, report?.totalBytes ?? 0);
+  const deepSelBytes = useMemo(() => {
+    if (!deep) return 0;
+    return [...deep.artifacts, ...deep.stale, ...deep.big]
+      .filter((entry) => deepSel.has(entry.path))
+      .reduce((sum, entry) => sum + entry.bytes, 0);
+  }, [deep, deepSel]);
 
   const toggle = (id: string) => {
     setSelected((prev) => {
@@ -693,8 +834,13 @@ function CleanupPane() {
     return Array.from(map.entries());
   }, [items]);
 
-  const busy = scanning || cleaning;
-  const pct = progress ? Math.min(100, (progress.done / Math.max(1, progress.total)) * 100) : 0;
+  const busy = scanning || cleaning || deepBusy;
+  // 盘内扫描的 total 是"目录数上限"，拿它算百分比会永远贴近 0——那种进度
+  // 不如不显示，退回不定条 + 已扫目录数。
+  const determinate = progress !== null && progress.phase !== "drive";
+  const pct = determinate
+    ? Math.min(100, (progress!.done / Math.max(1, progress!.total)) * 100)
+    : 0;
 
   return (
     <div className="pane">
@@ -753,17 +899,21 @@ function CleanupPane() {
         </button>
       </div>
 
-      {(scanning || cleaning) && (
+      {(scanning || cleaning || deepBusy) && (
         <div className="progress-wrap">
-          <div className={`progress ${progress ? "is-determinate" : "is-indeterminate"}`}>
-            <div className="progress-fill" style={progress ? { width: `${pct}%` } : undefined} />
+          <div className={`progress ${determinate ? "is-determinate" : "is-indeterminate"}`}>
+            <div className="progress-fill" style={determinate ? { width: `${pct}%` } : undefined} />
           </div>
           <span className="progress-label">
-            {progress
-              ? `${cleaning ? "正在清理" : "正在扫描"}：${progress.title}（${progress.done}/${progress.total}）`
-              : cleaning
-                ? "正在清理…"
-                : "正在扫描…"}
+            {progress?.phase === "drive"
+              ? `已扫描 ${progress.done.toLocaleString()} 个目录 · 产物 ${progress.artifacts ?? 0} · 残留 ${progress.stale ?? 0} · 大文件 ${progress.big ?? 0}`
+              : progress
+                ? `${cleaning ? "正在清理" : "正在扫描"}：${progress.title}（${progress.done}/${progress.total}）`
+                : cleaning
+                  ? "正在清理…"
+                  : deepBusy
+                    ? "正在遍历磁盘…"
+                    : "正在扫描…"}
           </span>
         </div>
       )}
@@ -826,6 +976,182 @@ function CleanupPane() {
             })}
           </section>
         ))}
+        <section className="deep-scan">
+          <header className="deep-head">
+            <h4>盘内深度扫描</h4>
+            <span className="dim">构建产物 / 残留文件 / 大文件 / 空目录</span>
+            <button
+              type="button"
+              className="pane-btn"
+              onClick={() => void scanDeep()}
+              disabled={!drive || deepBusy}
+              title={drive ? `扫描 ${drive}（最久 45 秒）` : "先选一块具体磁盘"}
+            >
+              {deepBusy ? <Loader2 size={14} className="spin" /> : <Search size={14} />}
+              {deep ? "重新扫描" : "开始扫描"}
+            </button>
+          </header>
+
+          {!drive && (
+            <p className="pane-hint">深度扫描针对单块磁盘，请先在上方选 C: / D: 等具体盘符。</p>
+          )}
+
+          {deep && (
+            <>
+              <p className="deep-summary">
+                扫过 {deep.dirsScanned.toLocaleString()} 个目录，用时 {deep.elapsedMs} ms
+                {deep.truncated && "（已达预算上限，结果不完整）"}
+              </p>
+
+              {deep.artifacts.length > 0 && (
+                <div className="deep-group">
+                  <h5>
+                    构建产物
+                    <span className="dim">
+                      {deep.artifacts.length} 项 ·{" "}
+                      {formatBytes(deep.artifacts.reduce((sum, item) => sum + item.bytes, 0))}
+                    </span>
+                  </h5>
+                  {deep.artifacts.map((item) => (
+                    <label
+                      key={item.path}
+                      className={`deep-item${deepSel.has(item.path) ? " is-checked" : ""}`}
+                      title={`${item.path}\n由同级 ${item.marker} 认定为 ${item.kind} 产物`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={deepSel.has(item.path)}
+                        disabled={deepBusy}
+                        onChange={() => toggleDeep(item.path)}
+                      />
+                      <span className="deep-main">
+                        <span className="deep-path">{item.path}</span>
+                        <span className="deep-hint">
+                          {item.kind} · {item.files} 个文件 · {ageText(item.modified)}
+                        </span>
+                      </span>
+                      <span className="deep-size">{formatBytes(item.bytes)}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+
+              {deep.stale.length > 0 && (
+                <div className="deep-group">
+                  <h5>
+                    残留文件
+                    <span className="dim">
+                      {deep.stale.length} 项 ·{" "}
+                      {formatBytes(deep.stale.reduce((sum, item) => sum + item.bytes, 0))}
+                    </span>
+                  </h5>
+                  {deep.stale.map((item) => (
+                    <label
+                      key={item.path}
+                      className={`deep-item${deepSel.has(item.path) ? " is-checked" : ""}`}
+                      title={item.path}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={deepSel.has(item.path)}
+                        disabled={deepBusy}
+                        onChange={() => toggleDeep(item.path)}
+                      />
+                      <span className="deep-main">
+                        <span className="deep-path">{item.path}</span>
+                        <span className="deep-hint">
+                          {item.reason} · {ageText(item.modified)}
+                        </span>
+                      </span>
+                      <span className="deep-size">{formatBytes(item.bytes)}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+
+              {deep.big.length > 0 && (
+                <div className="deep-group">
+                  <h5>
+                    大文件 Top {deep.big.length}
+                    <span className="dim">
+                      共 {formatBytes(deep.big.reduce((sum, item) => sum + item.bytes, 0))}
+                    </span>
+                  </h5>
+                  {deep.big.map((item) => (
+                    <label
+                      key={item.path}
+                      className={`deep-item${deepSel.has(item.path) ? " is-checked" : ""}`}
+                      title={item.path}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={deepSel.has(item.path)}
+                        disabled={deepBusy}
+                        onChange={() => toggleDeep(item.path)}
+                      />
+                      <span className="deep-main">
+                        <span className="deep-path">{item.path}</span>
+                        <span className="deep-hint">
+                          超过 200 MB · {ageText(item.modified)}
+                        </span>
+                      </span>
+                      <span className="deep-size">{formatBytes(item.bytes)}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+
+              {deep.emptyDirCount > 0 && (
+                <div className="deep-group">
+                  <h5>
+                    空目录
+                    <span className="dim">共 {deep.emptyDirCount} 个</span>
+                  </h5>
+                  {deep.emptyDirs.map((path) => (
+                    <label
+                      key={path}
+                      className={`deep-item${deepSel.has(path) ? " is-checked" : ""}`}
+                      title={path}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={deepSel.has(path)}
+                        disabled={deepBusy}
+                        onChange={() => toggleDeep(path)}
+                      />
+                      <span className="deep-main">
+                        <span className="deep-path">{path}</span>
+                        <span className="deep-hint">空目录</span>
+                      </span>
+                      <span className="deep-size">0 B</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+
+              {deep.artifacts.length === 0 &&
+                deep.stale.length === 0 &&
+                deep.big.length === 0 &&
+                deep.emptyDirCount === 0 && <p className="pane-empty">这块盘没扫出可清理的内容。</p>}
+
+              <footer className="deep-foot">
+                <span className="dim">
+                  已选 {deepSel.size} 项 · {formatBytes(deepSelBytes)}
+                </span>
+                <button
+                  type="button"
+                  className={`pane-btn${deepConfirm ? " is-danger" : ""}`}
+                  onClick={() => void cleanDeep()}
+                  disabled={deepBusy || deepSel.size === 0}
+                >
+                  {deepBusy ? <Loader2 size={14} className="spin" /> : <Trash2 size={14} />}
+                  {deepConfirm ? "确认清理（不可恢复）" : "清理勾选项"}
+                </button>
+              </footer>
+            </>
+          )}
+        </section>
+
         {!report && !error && !scanning && <p className="pane-empty">尚未扫描。</p>}
       </div>
 
