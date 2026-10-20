@@ -14,9 +14,10 @@ import {
   ArrowLeft, ArrowRight, ArrowUp, RefreshCw, Search,
   Funnel, FunnelX, FileSearch,
   ChevronRight, HardDrive, ExternalLink, Sparkles, X,
-  Monitor, Moon, Sun, Activity, Info, LogOut,
+  Monitor, Moon, Sun, Activity, Info, LogOut, Settings2, Pencil,
 } from "lucide-react";
 import { FileTypeIcon, FolderTypeIcon } from "@hermix/preview/FileTypeIcon";
+import { resolveKind } from "@hermix/preview";
 import type { DirEntryLike, DriveRootLike } from "@hermix/preview";
 import { viewerFileSource } from "./fileSource";
 import { useTheme, type ThemeMode } from "./theme";
@@ -27,6 +28,9 @@ import { TitleBar } from "./TitleBar";
 import { AboutDialog, SystemPanel } from "./SystemPanel";
 import type { MenuGroup } from "./MenuBar";
 import { buildMenu, type MenuTarget, type SortKind } from "./contextMenuModel";
+import { SettingsDialog } from "./SettingsDialog";
+import { DEFAULT_SETTINGS, loadSettings, type ViewerSettings } from "./settings";
+import { editorFor, editorLabel } from "./editKind";
 
 // 预览引擎懒加载：PreviewHost → @hermix/preview barrel → satteri 的 3MB
 // WASM + ExcelJS + pdf.js + pptx。静态引入会让整条预览栈进首屏 bundle，
@@ -383,6 +387,11 @@ export function App() {
   // —— 标题栏菜单弹出的窗口 ——
   const [sysOpen, setSysOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  /** 设置（搜索行为 / AI 后端 / MCP / 通用偏好）。Rust 侧是权威源。 */
+  const [settings, setSettings] = useState<ViewerSettings>(DEFAULT_SETTINGS);
+  /** 打开编辑器的请求号（右键 / 菜单 / 快捷键共用同一个入口）。 */
+  const [editRequest, setEditRequest] = useState(0);
 
   // —— 导航历史 ——
   const [backStack, setBackStack] = useState<string[]>([]);
@@ -450,6 +459,18 @@ export function App() {
       });
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // 设置：Rust 侧是权威源（$hermix_home/viewer-settings.json）。
+  // 必须在 effect 里取一次：写在组件体里会**每次渲染都发一遍 IPC**，而且
+  // setSettings 每次生成新对象 → runSearch 每次重建 → 搜索的去抖定时器
+  // 每次被清掉，实时搜索永远触发不了。
+  useEffect(() => {
+    void loadSettings().then((s) => {
+      setSettings(s);
+      // 「启动时显示隐藏文件」是一次性偏好：落到当前会话状态上。
+      if (s.general.showHiddenByDefault) setShowHidden(true);
+    });
   }, []);
 
   // 驱动器列表：只请求一次，与首屏解耦。Rust 侧已不碰文件系统，但网络盘
@@ -635,6 +656,19 @@ export function App() {
 
   // ── 标题栏菜单 ─────────────────────────────────────────────────────
   // 菜单是"命令表 + 分发"，不放业务逻辑：每一项只映射到一个已有动作。
+
+  /**
+   * 当前文件能不能编辑 + 「编辑」这一项该怎么写。
+   *
+   * 判定只有一处（editKind.ts）：重量模式 + 该类型有编辑器。不能编辑时
+   * 菜单项置灰（而不是不显示）——用户看到「编辑」置灰才知道这个格式改不了。
+   */
+  const activeEditorKind = useMemo(() => {
+    if (mode !== "heavy" || !active) return "none";
+    return editorFor(resolveKind(active.name), active.name);
+  }, [active, mode]);
+  const requestEdit = useCallback(() => setEditRequest((n) => n + 1), []);
+
   const menus = useMemo<MenuGroup[]>(
     () => [
       {
@@ -684,11 +718,20 @@ export function App() {
         label: "工具",
         items: [
           {
+            id: "edit",
+            label: editorLabel(activeEditorKind),
+            shortcut: "Ctrl+E",
+            disabled: activeEditorKind === "none",
+            icon: <Pencil size={13} />,
+          },
+          {
             id: "sys-panel",
             label: "系统资源管理…",
             shortcut: "Ctrl+Shift+Esc",
             icon: <Activity size={13} />,
           },
+          "-",
+          { id: "settings", label: "设置…", icon: <Settings2 size={13} /> },
         ],
       },
       {
@@ -697,7 +740,7 @@ export function App() {
         items: [{ id: "about", label: "关于 Hermix 文件查看器", icon: <Info size={13} /> }],
       },
     ],
-    [showHidden, aiOpen, themeMode],
+    [showHidden, aiOpen, themeMode, activeEditorKind],
   );
 
   const onMenuCommand = useCallback(
@@ -730,6 +773,12 @@ export function App() {
           break;
         case "sys-panel":
           setSysOpen(true);
+          break;
+        case "edit":
+          requestEdit();
+          break;
+        case "settings":
+          setSettingsOpen(true);
           break;
         case "about":
           setAboutOpen(true);
@@ -767,12 +816,15 @@ export function App() {
   }, []);
 
   /**
-   * 搜索：先走全盘索引（类 Everything），索引服务不可用时退回当前目录。
+   * 搜索：默认先走全盘索引（类 Everything），索引服务不可用时退回当前目录。
    *
    * 为什么不只做目录搜索：目录搜索是「在这一层里翻一遍」，用户要找的
    * 文件多半不在当前层——那等于没有搜索。全盘索引跨卷、毫秒级返回，
    * 是 Everything 的体验。但索引服务可能没跑或没授权，这时**必须**退回
    * 目录搜索：一次索引失败不该让整条搜索链路断掉。
+   *
+   * 范围/条数/隐藏文件由设置决定（设置 → 搜索）：scope=local 时干脆不碰
+   * 全盘索引——用户明确选了「只搜当前目录」，再去请求一次全盘是白等。
    */
   const runSearch = useCallback(
     async (query: string) => {
@@ -781,24 +833,36 @@ export function App() {
         exitSearch();
         return;
       }
+      const limit = settings.search.limit;
+      const scope = settings.search.scope;
       setSearchQ(q);
       setSearching(true);
-      setSearchNote("正在搜索全盘索引（首次会请求管理员授权以建立索引）…");
       // 1. 全盘索引
-      const global = await viewerFileSource.searchGlobal?.(q, 300);
-      if (global?.ok) {
-        setSearchResults(global.entries);
-        setSearchScope("global");
-        setSearchNote(
-          global.totalMatches > global.entries.length
-            ? `全盘索引命中 ${global.totalMatches} 条，显示前 ${global.entries.length} 条`
-            : `全盘索引命中 ${global.totalMatches} 条`,
-        );
-        setSearching(false);
-        return;
+      if (scope !== "local") {
+        setSearchNote("正在搜索全盘索引（首次会请求管理员授权以建立索引）…");
+        const global = await viewerFileSource.searchGlobal?.(q, limit);
+        if (global?.ok) {
+          setSearchResults(global.entries);
+          setSearchScope("global");
+          setSearchNote(
+            global.totalMatches > global.entries.length
+              ? `全盘索引命中 ${global.totalMatches} 条，显示前 ${global.entries.length} 条`
+              : `全盘索引命中 ${global.totalMatches} 条`,
+          );
+          setSearching(false);
+          return;
+        }
+        if (scope === "global") {
+          // 用户选了「只搜全盘」：索引不可用就如实说，不偷偷换范围。
+          setSearchResults([]);
+          setSearchScope("global");
+          setSearchNote(global?.message ?? "全盘索引不可用");
+          setSearching(false);
+          return;
+        }
       }
-      const reason = global?.message ?? "全盘索引不可用";
-      // 2. 退回当前目录
+      const reason = "全盘索引不可用";
+      // 2. 当前目录
       if (!currentPath || !viewerFileSource.fs) {
         setSearchResults([]);
         setSearchScope("local");
@@ -806,11 +870,18 @@ export function App() {
         setSearching(false);
         return;
       }
-      const local = await viewerFileSource.fs.search(currentPath, q, showHidden, 300);
+      const local = await viewerFileSource.fs.search(
+        currentPath,
+        q,
+        settings.search.includeHidden || showHidden,
+        limit,
+      );
       if (local.ok) {
         setSearchResults(local.entries);
         setSearchScope("local");
-        setSearchNote(`仅在当前目录内搜索（${reason}）`);
+        setSearchNote(
+          scope === "local" ? "仅在当前目录内搜索" : `仅在当前目录内搜索（${reason}）`,
+        );
       } else {
         setSearchResults([]);
         setSearchScope("local");
@@ -818,8 +889,33 @@ export function App() {
       }
       setSearching(false);
     },
-    [currentPath, exitSearch, showHidden, viewerFileSource],
+    [currentPath, exitSearch, showHidden, settings.search, viewerFileSource],
   );
+
+  /**
+   * 输入即搜（live 模式）：去抖后自动搜，回车仍然立刻搜。
+   *
+   * 去抖是必须的：全盘索引虽然毫秒级，但每个键都打一次索引 + 一次
+   * Rust IPC 往返，手速稍快就会把索引服务打爆。条数/范围/隐藏文件
+   * 由设置决定（设置 → 搜索）。
+   */
+  const searchTimerRef = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    if (settings.search.mode !== "live") return undefined;
+    const q = searchQ.trim();
+    if (!q) return undefined;
+    if (searchTimerRef.current) window.clearTimeout(searchTimerRef.current);
+    searchTimerRef.current = window.setTimeout(() => {
+      searchTimerRef.current = undefined;
+      void runSearch(q);
+    }, settings.search.debounceMs);
+    return () => {
+      if (searchTimerRef.current) {
+        window.clearTimeout(searchTimerRef.current);
+        searchTimerRef.current = undefined;
+      }
+    };
+  }, [searchQ, settings.search.mode, settings.search.debounceMs, runSearch]);
 
   // — 单击：文件夹进、文件开 tab —
   const openEntry = useCallback(
@@ -1492,6 +1588,9 @@ export function App() {
       tabCount: tabs.length,
       selection,
       fieldSelection: menu?.fieldSelection ?? "",
+      canEdit: activeEditorKind !== "none",
+      editLabel: editorLabel(activeEditorKind),
+      edit: requestEdit,
       openEntry: (path: string, isDir: boolean) => {
         if (isDir) navigate(path, true);
         else openPath(path);
@@ -1602,11 +1701,16 @@ export function App() {
       } else if (e.ctrlKey && e.key.toLowerCase() === "v") {
         e.preventDefault();
         if (currentPath) pasteFiles(currentPath);
+      } else if (e.ctrlKey && e.key.toLowerCase() === "e") {
+        // 编辑当前文件：菜单里写着 Ctrl+E，就必须真能按。
+        e.preventDefault();
+        if (activeEditorKind !== "none") requestEdit();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [
+    activeEditorKind,
     activeTabId,
     back,
     closeTab,
@@ -1617,6 +1721,7 @@ export function App() {
     menu,
     pasteFiles,
     refresh,
+    requestEdit,
     searchScope,
     up,
   ]);
@@ -1651,6 +1756,14 @@ export function App() {
       />
       {sysOpen && <SystemPanel onClose={() => setSysOpen(false)} />}
       {aboutOpen && <AboutDialog onClose={() => setAboutOpen(false)} />}
+      <SettingsDialog
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        onSaved={(message) => {
+          void loadSettings().then(setSettings);
+          notify(message);
+        }}
+      />
       {mode === "heavy" && (
       <header className="toolbar">
         <button className="tb-btn" onClick={back} disabled={backStack.length === 0} title="后退" aria-label="后退">
@@ -2007,6 +2120,7 @@ export function App() {
                   source={viewerFileSource}
                   isDark={theme === "dark"}
                   canEdit={mode === "heavy"}
+                  editRequest={editRequest}
                 />
               </Suspense>
             )}

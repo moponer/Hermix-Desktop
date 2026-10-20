@@ -21,6 +21,7 @@ import {
   FolderSearch,
   Info,
   PenLine,
+  Pencil,
   RefreshCw,
   Sparkles,
   Star,
@@ -74,6 +75,12 @@ export interface MenuContext {
   selection: string;
   /** 输入框里选中的文字（空 = 没选——「复制选区」据此置灰）。 */
   fieldSelection: string;
+  /** 当前文件能不能编辑（重量模式 + 该类型有编辑器）。 */
+  canEdit: boolean;
+  /** 「编辑」这一项的文案（随文件类型变：图片 / PDF / 文本）。 */
+  editLabel: string;
+  /** 打开当前文件的编辑器。 */
+  edit: () => void;
 
   openEntry: (path: string, isDir: boolean) => void;
   openWith: (path: string, app: string) => void;
@@ -364,6 +371,14 @@ function previewMenu(
       },
     ],
     [
+      {
+        id: "edit",
+        label: ctx.editLabel,
+        icon: <Pencil size={15} />,
+        hint: "Ctrl+E",
+        disabled: !ctx.canEdit,
+        onSelect: () => ctx.edit(),
+      },
       {
         id: "open-default",
         label: "用系统默认程序打开",

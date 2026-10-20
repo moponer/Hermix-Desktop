@@ -21,8 +21,8 @@ import {
   type PreviewKind,
   type ViewMode,
 } from "@hermix/preview";
-import { isEditableImage } from "./image/imageOps";
 import { isMediaFile, MediaView } from "./media/MediaView";
+import { EDITOR_HINT, editorFor, type EditorKind } from "./editKind";
 
 // 编辑器懒加载：它们是重量模式的重量功能，纯净模式与文本预览都不该
 // 为它们付首屏 bundle 的钱。
@@ -38,26 +38,6 @@ const TextEditor = lazy(() =>
 
 const ZOOM_MIN = 50;
 const ZOOM_MAX = 200;
-
-/** 编辑器种类。文本类（含代码 / Markdown）走文本编辑器。 */
-type EditorKind = "none" | "image" | "pdf" | "text";
-
-/** 这个文件有没有对应的编辑器。SVG 是矢量，图片内核解不了 → 不给。 */
-function editorFor(kind: PreviewKind, name: string): EditorKind {
-  // 媒体走 asset 协议播放，不进文本编辑器。
-  if (isMediaFile(name)) return "none";
-  if (kind === "image") return isEditableImage(name) ? "image" : "none";
-  if (kind === "pdf") return "pdf";
-  if (kind === "text" || kind === "code" || kind === "markdown") return "text";
-  return "none";
-}
-
-/** 编辑按钮的提示文案（同时用作 aria-label）。 */
-const EDITOR_HINT: Record<Exclude<EditorKind, "none">, string> = {
-  image: "编辑图片（裁剪 / 调整 / 转换格式）",
-  pdf: "编辑 PDF（删页 / 排序 / 旋转 / 插空白页）",
-  text: "编辑文本（另存为新文件）",
-};
 
 /**
  * 「打不开」时的落点：不是一句红字，而是**元信息卡**。
@@ -176,6 +156,7 @@ export function PreviewHost({
   source,
   isDark,
   canEdit = false,
+  editRequest = 0,
 }: {
   path: string;
   name: string;
@@ -183,6 +164,11 @@ export function PreviewHost({
   isDark: boolean;
   /** 重量模式才给编辑能力（纯净模式是"双击就看"，不塞工具）。 */
   canEdit?: boolean;
+  /**
+   * 外部要求打开编辑器（右键菜单 / 菜单栏 / 快捷键）。用递增计数而不是
+   * 布尔量：布尔量「已经请求过了」就再也触发不了第二次。
+   */
+  editRequest?: number;
 }) {
   const [state, setState] = useState<PreviewState>({ status: "loading", kind: "text" });
   const [viewMode, setViewMode] = useState<ViewMode>("layout");
@@ -229,6 +215,14 @@ export function PreviewHost({
   // 分支（applyViewMode），那时不该再给页编辑器。
   const editorKind = canEdit ? editorFor(kind, name) : "none";
   const editing = editor !== "none";
+
+  // 外部（右键菜单 / 菜单栏 / 快捷键）要求打开编辑器。
+  useEffect(() => {
+    if (!editRequest || editorKind === "none") return;
+    setEditor(editorKind);
+    // 只在请求号变化时响应：editorKind 变化不该把人拽进编辑器。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editRequest]);
 
   return (
     <div className="preview-pane">
