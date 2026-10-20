@@ -1061,60 +1061,29 @@ pub struct AiReply {
 }
 
 // ---------------------------------------------------------------------------
-// AI 右栏 — 直连本地 server 的 /v1/ REST（非流式，一期预览级）。
-// viewer 是独立进程，不能用主程序前端的 stdio 桥（那根管道归主 app）；
-// 本地 HTTP 面无鉴权且仅 127.0.0.1 可达（server 默认 bind 127.0.0.1:3000）。
+// AI 右栏 — 直连 OpenAI 兼容端点（非流式）。
+//
+// 为什么不走本地 server 的 /v1/ REST：桌面端 sidecar 跑的是 `hermix --stdio`，
+// **不绑任何 TCP 端口**（crates/hermix-server/src/main.rs），所以旧实现
+// 连的 http://127.0.0.1:3000 在「只开主程序」时根本没人监听——AI 栏于是
+// 永远报「创建会话失败」，看上去就是个摆设。
+//
+// 现在的口径（见 ai.rs）：继承主程序 = 读同一份 config.yaml + .env，直连它
+// 的供应商；独立模型 = 查看器自己一套端点/模型/密钥。两种都是只往用户自己
+// 配的端点发，不经第三方中转。
 // ---------------------------------------------------------------------------
 
-/// API 基址：默认内置端口，env `HERMIX_VIEWER_API_BASE` 可覆写（与
-/// server 的 bind env 解耦——这里要的是完整 base，不是端口）。
-fn api_base() -> String {
-    std::env::var("HERMIX_VIEWER_API_BASE")
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| "http://127.0.0.1:3000".into())
-}
-
-/// 非流式问一轮：无 session_id 时建会话（标题带文件名），有则复用；
-/// 然后往同一会话 send_message。文件上下文拼进 prompt（服务器零改动；
-/// selection 为空只带路径）。
+/// 非流式问一轮。历史由前端带（直连模式下没有服务端会话可依赖）。
 #[tauri::command]
 pub async fn ai_send(
     text: String,
     file_path: Option<String>,
     selection: Option<String>,
+    history: Option<Vec<crate::ai::ChatTurn>>,
     session_id: Option<String>,
 ) -> Result<AiReply, String> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(180))
-        .build()
-        .map_err(|e| format!("HTTP client 构建失败: {e}"))?;
-    let base = api_base().trim_end_matches('/').to_string();
-
-    let sid = match session_id.filter(|s| !s.trim().is_empty()) {
-        Some(sid) => sid,
-        None => {
-            let title = file_path
-                .as_deref()
-                .and_then(|p| std::path::Path::new(p).file_name())
-                .map(|n| format!("查看器: {}", n.to_string_lossy()))
-                .unwrap_or_else(|| "查看器对话".into());
-            let created: serde_json::Value = client
-                .post(format!("{base}/v1/sessions"))
-                .json(&serde_json::json!({ "title": title }))
-                .send()
-                .await
-                .map_err(|e| format!("创建会话失败: {e}"))?
-                .json()
-                .await
-                .map_err(|e| format!("解析会话响应失败: {e}"))?;
-            created
-                .get("id")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| format!("会话响应缺 id: {created}"))?
-                .to_string()
-        }
-    };
+    let settings = crate::settings::ViewerSettings::load();
+    let endpoint = crate::ai::resolve(&settings)?;
 
     let mut prompt = String::new();
     if let Some(p) = &file_path {
@@ -1131,26 +1100,117 @@ pub async fn ai_send(
     }
     prompt.push_str(&text);
 
-    let resp = client
-        .post(format!("{base}/v1/sessions/{sid}/messages"))
-        .json(&serde_json::json!({ "text": prompt }))
-        .send()
-        .await
-        .map_err(|e| format!("发送失败: {e}"))?;
-    let status = resp.status().as_u16();
-    let body: serde_json::Value = resp.json().await.unwrap_or(serde_json::Value::Null);
-    if status != 200 {
-        return Err(format!(
-            "HTTP {status}: {}",
-            body.get("error").and_then(|v| v.as_str()).unwrap_or("(无详情)")
-        ));
+    let reply = crate::ai::chat(
+        &endpoint,
+        &settings.ai.system_prompt,
+        &history.unwrap_or_default(),
+        &prompt,
+        settings.ai.temperature,
+        settings.ai.max_tokens,
+    )
+    .await?;
+    Ok(AiReply {
+        reply,
+        session_id: session_id.unwrap_or_else(|| "local".into()),
+    })
+}
+
+/// 现在实际生效的 AI 后端（设置界面显示用）。
+#[tauri::command]
+pub fn viewer_ai_status() -> crate::ai::AiEndpointInfo {
+    let settings = crate::settings::ViewerSettings::load();
+    match crate::ai::resolve(&settings) {
+        Ok(ep) => ep.info,
+        Err(e) => crate::ai::AiEndpointInfo {
+            source: "主程序配置".into(),
+            provider: String::new(),
+            base_url: String::new(),
+            model: String::new(),
+            has_key: false,
+            ready: false,
+            problem: Some(e),
+        },
     }
-    let reply = body
-        .get("reply")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| format!("消息响应缺 reply: {body}"))?
-        .to_string();
-    Ok(AiReply { reply, session_id: sid })
+}
+
+// ---------------------------------------------------------------------------
+// 设置
+// ---------------------------------------------------------------------------
+
+/// 读查看器设置。
+#[tauri::command]
+pub fn viewer_get_settings() -> crate::settings::ViewerSettings {
+    crate::settings::ViewerSettings::load()
+}
+
+/// 存查看器设置（密钥不在这里，走 .env）。
+#[tauri::command]
+pub fn viewer_set_settings(
+    settings: crate::settings::ViewerSettings,
+) -> Result<crate::settings::ViewerSettings, String> {
+    settings.save()?;
+    Ok(crate::settings::ViewerSettings::load())
+}
+
+/// 写 / 清独立模型的 API Key（落在 .env，设置文件里不留明文）。
+#[tauri::command]
+pub fn viewer_set_ai_key(key: Option<String>) -> Result<bool, String> {
+    let v = key.map(|k| k.trim().to_string()).filter(|k| !k.is_empty());
+    crate::settings::write_env_value(crate::settings::AI_KEY_ENV, v.as_deref())?;
+    Ok(v.is_some())
+}
+
+// ---------------------------------------------------------------------------
+// MCP 服务（本地 HTTP 端点）
+// ---------------------------------------------------------------------------
+
+/// 当前 MCP 端点的状态（没起就是 null）。
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct McpHttpStatus {
+    pub running: bool,
+    pub endpoint: Option<String>,
+    pub port: Option<u16>,
+}
+
+/// 起本地 MCP 端点（已起且端口相同 → 直接返回现状）。
+#[tauri::command]
+pub fn viewer_mcp_start() -> Result<McpHttpStatus, String> {
+    let settings = crate::settings::ViewerSettings::load();
+    let st = crate::mcp_http::start(settings.mcp.port, settings.mcp.allow_remote)?;
+    Ok(McpHttpStatus {
+        running: true,
+        endpoint: Some(st.endpoint),
+        port: Some(st.port),
+    })
+}
+
+/// 停本地 MCP 端点。
+#[tauri::command]
+pub fn viewer_mcp_stop() -> McpHttpStatus {
+    crate::mcp_http::stop();
+    McpHttpStatus {
+        running: false,
+        endpoint: None,
+        port: None,
+    }
+}
+
+/// MCP 端点状态。
+#[tauri::command]
+pub fn viewer_mcp_status() -> McpHttpStatus {
+    match crate::mcp_http::status() {
+        Some(st) => McpHttpStatus {
+            running: true,
+            endpoint: Some(st.endpoint),
+            port: Some(st.port),
+        },
+        None => McpHttpStatus {
+            running: false,
+            endpoint: None,
+            port: None,
+        },
+    }
 }
 
 #[cfg(test)]

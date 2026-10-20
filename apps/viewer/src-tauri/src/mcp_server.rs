@@ -358,7 +358,7 @@ fn error(id: Value, code: i64, message: &str) -> Value {
 }
 
 /// 处理一条请求，返回 `Some(响应)` 或 `None`（通知，无需响应）。
-fn handle_request(request: &Value) -> Option<Value> {
+pub fn handle_request(request: &Value) -> Option<Value> {
     let id = request.get("id").cloned();
     let method = request.get("method").and_then(|v| v.as_str()).unwrap_or("");
     // 通知（无 id）不回复。

@@ -22,6 +22,8 @@
   --text-secondary: #64748b;
   --text-muted: #94a3b8;
   --text-faint: #cbd5e1;
+  /* 强调色底上的文字（主按钮）：色值只在 token 层出现，组件里一律 var()。 */
+  --text-on-accent: #ffffff;
 
   --accent: #3b82f6;
   --accent-strong: #2563eb;
@@ -1243,3 +1245,124 @@ html, body, #root {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
+
+/* ─── 设置对话框 ─────────────────────────────────────────────────
+   层次不靠描边：浮层用遮罩压暗，卡片用主背景 + 阴影，左侧分类列用
+   次级底色与正文列分开。整块只留底色差、阴影与间距。 */
+.set-overlay {
+  position: fixed; inset: 0; z-index: 140;
+  background: rgba(15, 23, 42, 0.34);
+  display: flex; align-items: center; justify-content: center;
+}
+.set-card {
+  width: min(760px, 92vw);
+  max-height: min(640px, 88vh);
+  display: flex; flex-direction: column;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.28);
+  overflow: hidden;
+}
+.set-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 14px 10px 18px;
+}
+.set-title { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+.set-close {
+  border: none; background: transparent; color: var(--text-secondary);
+  width: 26px; height: 26px; border-radius: var(--radius-sm);
+  display: inline-flex; align-items: center; justify-content: center; cursor: pointer;
+}
+.set-close:hover { background: var(--bg-hover); color: var(--text-primary); }
+.set-body { display: flex; min-height: 0; flex: 1 1 auto; }
+.set-nav {
+  flex: 0 0 148px; display: flex; flex-direction: column; gap: 2px;
+  padding: 4px 8px 12px 12px;
+  background: var(--bg-secondary);
+}
+.set-nav-item {
+  display: flex; align-items: center; gap: 8px;
+  border: none; background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--text-ui);
+  padding: 7px 9px; border-radius: var(--radius-sm);
+  cursor: pointer; text-align: left;
+}
+.set-nav-item:hover { background: var(--bg-hover); color: var(--text-primary); }
+.set-nav-item.is-active { background: var(--bg-card); color: var(--text-primary); font-weight: 600; }
+.set-pane {
+  flex: 1 1 auto; min-width: 0; overflow-y: auto;
+  padding: 14px 18px 18px;
+  display: flex; flex-direction: column; gap: 14px;
+}
+.set-field { display: flex; flex-direction: column; gap: 5px; }
+.set-label { font-size: var(--text-meta); color: var(--text-secondary); }
+.set-input, .set-select, .set-textarea {
+  font: inherit; font-size: var(--text-ui);
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+  border: none; border-radius: var(--radius-sm);
+  padding: 7px 9px;
+}
+.set-textarea { resize: vertical; min-height: 70px; line-height: 1.6; }
+.set-input:focus-visible, .set-select:focus-visible, .set-textarea:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: -2px;
+}
+.set-check { display: flex; align-items: center; gap: 8px; font-size: var(--text-ui); color: var(--text-primary); }
+.set-check input { accent-color: var(--accent); }
+.set-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.set-two { display: flex; gap: 12px; }
+.set-two .set-field { flex: 1 1 0; }
+.set-seg { display: inline-flex; gap: 2px; background: var(--bg-tertiary); padding: 2px; border-radius: var(--radius-sm); }
+.set-seg-btn {
+  border: none; background: transparent; color: var(--text-secondary);
+  font-size: var(--text-meta); padding: 5px 10px; border-radius: 4px; cursor: pointer;
+}
+.set-seg-btn.is-active { background: var(--bg-card); color: var(--text-primary); font-weight: 600; }
+.set-note {
+  font-size: var(--text-meta); color: var(--text-secondary);
+  background: var(--bg-secondary); border-radius: var(--radius-sm);
+  padding: 8px 10px; line-height: 1.6;
+}
+.set-note code, .set-code { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-primary); }
+.set-code {
+  flex: 1 1 auto; min-width: 0; overflow: auto; white-space: pre;
+  background: var(--bg-tertiary); border-radius: var(--radius-sm); padding: 8px 10px;
+}
+.set-key-row { display: flex; align-items: center; gap: 6px; }
+.set-key-row .set-input { flex: 1 1 auto; min-width: 0; }
+.set-icon-btn {
+  border: none; background: var(--bg-tertiary); color: var(--text-secondary);
+  width: 28px; height: 28px; border-radius: var(--radius-sm);
+  display: inline-flex; align-items: center; justify-content: center; cursor: pointer; flex: none;
+}
+.set-icon-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.set-btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  border: none; background: var(--bg-tertiary); color: var(--text-primary);
+  font-size: var(--text-meta); padding: 6px 11px; border-radius: var(--radius-sm); cursor: pointer;
+  flex: none;
+}
+.set-btn:hover { background: var(--bg-hover); }
+.set-btn.is-primary { background: var(--accent); color: var(--text-on-accent); }
+.set-btn:disabled { opacity: 0.5; cursor: default; }
+.set-error {
+  margin: 0 18px; padding: 8px 10px; border-radius: var(--radius-sm);
+  background: var(--bg-accent-soft); color: var(--danger); font-size: var(--text-meta);
+}
+.set-foot {
+  display: flex; justify-content: flex-end; gap: 8px;
+  padding: 10px 14px 12px;
+  background: var(--bg-secondary);
+}
+
+/* AI 栏顶部的后端标识：让人一眼看出在跟哪个模型说话。 */
+.ai-backend {
+  padding: 4px 12px 6px;
+  font-size: 11.5px; color: var(--text-muted);
+}
+.ai-backend.is-bad { color: var(--danger); }
+/* MCP 服务状态：运行中用强调色，未启动用淡色。 */
+.set-state { flex: 1 1 auto; min-width: 0; font-size: var(--text-meta); color: var(--text-muted); }
+.set-state.is-on { color: var(--accent); }

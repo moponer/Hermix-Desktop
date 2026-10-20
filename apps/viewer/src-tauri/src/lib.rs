@@ -5,16 +5,19 @@
 //!
 //! 组织：命令在 commands.rs（lib.rs 根定义会与 generate_handler 冲突）。
 
+pub mod ai;
 pub mod cleanup;
 pub mod clipboard;
-pub mod drive_scan;
 pub mod commands;
+pub mod drive_scan;
 pub mod filesearch;
 pub mod gui;
 pub mod image_ops;
+pub mod mcp_http;
 pub mod mcp_server;
 pub mod paths;
 pub mod pdf_ops;
+pub mod settings;
 pub mod sysmon;
 
 // 被嵌进二进制的前端内容指纹（build.rs 生成，见 build.rs 头注）。
@@ -214,6 +217,13 @@ pub fn main() {
             filesearch::viewer_filesearch_status,
             commands::viewer_take_pending,
             commands::ai_send,
+            commands::viewer_ai_status,
+            commands::viewer_get_settings,
+            commands::viewer_set_settings,
+            commands::viewer_set_ai_key,
+            commands::viewer_mcp_start,
+            commands::viewer_mcp_stop,
+            commands::viewer_mcp_status,
             image_ops::image_info,
             image_ops::image_rasterize,
             image_ops::image_apply,
@@ -253,6 +263,16 @@ pub fn main() {
         .setup(move |app| {
             seed_pending(app.handle(), &init_args);
             spawn_singleton_listener(app.handle().clone());
+            // 设置里开了「启动时拉起 MCP 服务」就地起（只监听回环）。
+            // 起不来不拦启动：查看器本身跟 MCP 无关，不该因为端口被占
+            // 就打不开。
+            let settings = settings::ViewerSettings::load();
+            if settings.mcp.enabled {
+                match mcp_http::start(settings.mcp.port, settings.mcp.allow_remote) {
+                    Ok(st) => eprintln!("[viewer-mcp] 本地 MCP 端点：{}", st.endpoint),
+                    Err(e) => eprintln!("[viewer-mcp] 本地 MCP 端点启动失败：{e}"),
+                }
+            }
             Ok(())
         })
         .run(tauri::generate_context!())

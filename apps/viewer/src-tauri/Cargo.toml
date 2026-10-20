@@ -37,9 +37,13 @@ tauri-plugin-dialog = "2"
 # 刻意不开 lopdf 的 embed_image feature：它会拉 image 0.25 的默认特性，
 # 传染 F5 的 image feature 集（bmp/exr/gif/ico/tiff/webp 全开）。
 lopdf = "0.34"
-# AI 右栏：直连本地 server 的 /v1/ REST（viewer 是独立进程，不走主程序
-# 的 stdio 桥——那根管道归主 app 的前端所有）。
+# AI 右栏：直连 OpenAI 兼容端点（继承主程序 = 读同一份 config.yaml + .env；
+# 独立模型 = 查看器自己一套）。不走本地 server 的 /v1/：桌面端 sidecar 是
+# --stdio，不绑端口，那条路在「只开主程序」时根本没人监听。
 reqwest = { workspace = true, features = ["json"] }
+# 主程序的配置层（config.yaml / .env / 路径解析）。viewer 要「继承主程序」
+# 的模型与供应商，就该读**同一份**文件，而不是自己存一份密钥。
+hermix-config = { path = "../../../crates/hermix-config" }
 # 系统资源管理（进程快照 / CPU 差分 / 磁盘容量）。工作区已锁定，
 # 无新增下载成本；它的 Windows 后端就是 SystemProcessInformation 全量快照。
 sysinfo = { workspace = true }
