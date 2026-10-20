@@ -2021,6 +2021,16 @@ setPage("chat");
         });
         return false;
       }
+      // 新会话沿用用户此刻选中的模型：先写进本地会话对象（否则 ChatView
+      // 的 restored 逻辑会按 session.model 回灌成后端默认模型，表现就是
+      // "欢迎页选好的模型一进去又变回去"），再 PATCH 到后端（重载后仍生效）。
+      if (overrides?.model) {
+        session = { ...session, model: overrides.model };
+        api
+          .updateSessionMetadata(session.id, { model: overrides.model })
+          .catch((e) => console.warn("[send] persist session model failed:", e));
+      }
+
       setSessions((prev) => [session, ...prev]);
       setActiveSessionId(session.id);
       sessionId = session.id;
