@@ -849,6 +849,49 @@ fn find_in_path(name: &str) -> Option<PathBuf> {
     None
 }
 
+/// 找本机装没装 WordCraft（开源的 Rust 文字处理器，MIT OR Apache-2.0）。
+///
+/// 查找顺序：环境变量显式指定 → PATH → 常见安装目录。找不到就返回 None
+/// ——查看器不依赖它，装了是加分项，没装也不影响任何功能。
+#[cfg(windows)]
+fn find_wordcraft() -> Option<PathBuf> {
+    if let Some(explicit) = std::env::var_os("HERMIX_WORDCRAFT") {
+        let p = PathBuf::from(explicit);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    if let Some(p) = find_in_path("wordcraft.exe") {
+        return Some(p);
+    }
+    let mut roots: Vec<PathBuf> = Vec::new();
+    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+        roots.push(PathBuf::from(local).join("Programs").join("WordCraft"));
+    }
+    if let Some(prog) = std::env::var_os("ProgramFiles") {
+        roots.push(PathBuf::from(prog).join("WordCraft"));
+    }
+    for root in roots {
+        let cand = root.join("wordcraft.exe");
+        if cand.is_file() {
+            return Some(cand);
+        }
+    }
+    None
+}
+
+/// 本机有没有 WordCraft。给前端决定要不要显示「用 WordCraft 编辑」。
+#[tauri::command]
+pub fn viewer_wordcraft_path() -> Option<String> {
+    #[cfg(windows)]
+    {
+        return find_wordcraft().map(|p| p.to_string_lossy().to_string());
+    }
+    #[cfg(not(windows))]
+    None
+}
+
+
 /// 用指定方式打开目标。`app` 取值：
 ///   - `default`    系统默认程序（等价双击）
 ///   - `notepad`    记事本
@@ -872,8 +915,15 @@ pub fn viewer_open_with(path: String, app: String) -> Result<(), String> {
                 let params = format!("\"{}\"", p.display());
                 shell_exec(Some("open"), &exe, Some(&params), p.parent())
             }
-            "properties" => shell_exec(Some("properties"), &p, None, None),
-            "reveal" => reveal_in_explorer(&p),
+            // WordCraft：开源的 Rust 文字处理器（MIT OR Apache-2.0），
+            // 真·Word 级能力（样式 / 表格 / 修订 / 目录 / 邮件合并）。
+            // 装了就能用它编辑当前文档；没装就如实说，不静默失败。
+            "wordcraft" => {
+                let exe = find_wordcraft().ok_or("wordcraft.exe not found in PATH")?;
+                let params = format!("\"{}\"", p.display());
+                shell_exec(Some("open"), &exe, Some(&params), p.parent())
+            }
+            "properties" => shell_exec(Some("properties"), &p, None, None),            "reveal" => reveal_in_explorer(&p),
             other => Err(format!("不支持的打开方式: {other}")),
         }
     }

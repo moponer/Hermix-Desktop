@@ -44,6 +44,11 @@ reqwest = { workspace = true, features = ["json"] }
 # 主程序的配置层（config.yaml / .env / 路径解析）。viewer 要「继承主程序」
 # 的模型与供应商，就该读**同一份**文件，而不是自己存一份密钥。
 hermix-config = { path = "../../../crates/hermix-config" }
+# Word paragraph editor kernel: docx = ZIP + OOXML.
+# zip / quick-xml are already in Cargo.lock (transitive deps of hermix-tools'
+# docx-rs / rust_xlsxwriter) -- adding them here adds zero new build units.
+zip = "8.6"
+quick-xml = "0.41"
 # 系统资源管理（进程快照 / CPU 差分 / 磁盘容量）。工作区已锁定，
 # 无新增下载成本；它的 Windows 后端就是 SystemProcessInformation 全量快照。
 sysinfo = { workspace = true }

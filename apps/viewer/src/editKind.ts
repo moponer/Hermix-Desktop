@@ -8,15 +8,26 @@ import { isMediaFile } from "./media/MediaView";
 import { isEditableImage } from "./image/imageOps";
 import type { PreviewKind } from "@hermix/preview";
 
-/** 编辑器种类。文本类（含代码 / Markdown）走文本编辑器。 */
+/**
+ * 编辑器种类。文本类（含代码 / Markdown）走文本编辑器。
+ *
+ * **不含 Word / Excel**：那两类不是「按一下编辑才进编辑态」，而是**打开
+ * 就是可编辑的文档/表格本体**（见 PreviewHost 的 officeInline 分支）——
+ * Office 软件本来就是这样，套一层「编辑模式」反而不像。
+ */
 export type EditorKind = "none" | "image" | "pdf" | "text";
 
 /** 这个文件有没有对应的编辑器。SVG 是矢量，图片内核解不了 → 不给。 */
 export function editorFor(kind: PreviewKind, name: string): EditorKind {
   // 媒体走 asset 协议播放，不进文本编辑器。
   if (isMediaFile(name)) return "none";
+  const ext = name.split(".").pop()?.toLowerCase() ?? "";
   if (kind === "image") return isEditableImage(name) ? "image" : "none";
   if (kind === "pdf") return "pdf";
+  // csv/tsv 是纯文本：按文本改最直接（也保得住编码与分隔符）。
+  // xlsx/xlsm 走表格编辑器，docx 走文档编辑器，两者都在预览层就地编辑，
+  // 不经过这里的「编辑模式」。
+  if (kind === "spreadsheet") return ext === "csv" || ext === "tsv" ? "text" : "none";
   if (kind === "text" || kind === "code" || kind === "markdown") return "text";
   return "none";
 }

@@ -74,11 +74,15 @@ export {
   parseXls,
   parseDelimited,
   sheetToCsv,
+  styleToCss,
+  colWidthPx,
+  rowHeightPx,
   type ParsedWorkbook,
   type SheetModel,
   type CellModel,
   type CellStyle,
   type ColorLike,
+  type SheetMerge,
 } from "./lib/workbook";
 
 export {

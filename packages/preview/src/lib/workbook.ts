@@ -20,6 +20,8 @@
 // 纯函数，与哪个引擎读出来的数据无关；把它们绑死在 ExcelJS 的类型上，
 // 引擎一换类型就全线飘。下面的结构类型只描述"我们真正会读的字段"。
 
+import type { CSSProperties } from "react";
+
 /**
  * Excel 的颜色写法。ExcelJS 自己的 `Color` 把 `argb` 与 `theme` 都标成必填，
  * 可运行时三者只会有一个，用它做参数类型既表达不了真实数据也不必要。
@@ -743,4 +745,50 @@ export async function sheetToCsv(sheet: SheetModel): Promise<string> {
     sheet.rows.map((row) => row.map((c) => c?.text ?? "")),
     { newline: "\r\n" },
   );
+}
+
+/* ── 单元格样式 → React 内联样式 ─────────────────────────────────────
+   住在 workbook.ts 而不是 SpreadsheetView 里：viewer 的**可编辑**表格
+   （apps/viewer/src/document/SheetEditor.tsx）也要同一份映射，两边各写
+   一份必然漂移——底色、字色、边框少一处就是"编辑态和预览态长得不一样"。 */
+
+function borderCss(e: { css: string; color?: string } | null | undefined): string | undefined {
+  if (!e) return undefined;
+  return e.color ? `${e.css} ${e.color}` : e.css;
+}
+
+/** CellStyle → 可直接铺到 DOM 上的内联样式。 */
+export function styleToCss(style: CellStyle | undefined): CSSProperties {
+  if (!style) return {};
+  const css: CSSProperties = {};
+  if (style.bg) css.backgroundColor = style.bg;
+  if (style.color) css.color = style.color;
+  if (style.bold) css.fontWeight = 700;
+  if (style.italic) css.fontStyle = "italic";
+  const deco = style.underline
+    ? style.strike
+      ? "underline line-through"
+      : "underline"
+    : style.strike
+      ? "line-through"
+      : undefined;
+  if (deco) css.textDecoration = deco;
+  if (style.size) css.fontSize = `${(style.size * 96) / 72}px`;
+  if (style.font) css.fontFamily = `"${style.font}", var(--font-sans)`;
+  if (style.align) css.textAlign = style.align;
+  if (style.valign) css.verticalAlign = style.valign;
+  css.whiteSpace = style.wrap ? "pre-wrap" : "nowrap";
+  if (style.indent) css.paddingLeft = `${4 + style.indent * 8}px`;
+  if (style.border) {
+    const { top, right, bottom, left } = style.border;
+    const t = borderCss(top);
+    const r = borderCss(right);
+    const b = borderCss(bottom);
+    const l = borderCss(left);
+    if (t) css.borderTop = t;
+    if (r) css.borderRight = r;
+    if (b) css.borderBottom = b;
+    if (l) css.borderLeft = l;
+  }
+  return css;
 }

@@ -1366,3 +1366,172 @@ html, body, #root {
 /* MCP 服务状态：运行中用强调色，未启动用淡色。 */
 .set-state { flex: 1 1 auto; min-width: 0; font-size: var(--text-meta); color: var(--text-muted); }
 .set-state.is-on { color: var(--accent); }
+
+/* ─── Word 段落编辑器（重量模式） ──────────────────────────────────
+   层次靠底色差 + 阴影：段落卡片用主背景浮在代码底色上，改过的段落换成
+   强调色浅底，一眼能看出"哪几段动过"。不描边。 */
+.dx-list {
+  display: flex; flex-direction: column; gap: 6px;
+}
+.dx-canvas { padding: 16px; }
+.dx-warn {
+  display: flex; align-items: flex-start; gap: 6px;
+  padding: 8px 10px; margin-bottom: 10px;
+  border-radius: 8px;
+  background: var(--bg-accent-soft);
+  color: var(--text-secondary);
+  font-size: var(--text-meta);
+  line-height: 1.5;
+}
+/* 就地编辑的段落：悬停给底色差（提示"这里能点"），键盘聚焦才给焦点环。 */
+.dx-doc .dx-editable { border-radius: 4px; }
+.dx-doc .dx-editable:hover { background: var(--bg-hover); }
+.dx-doc .dx-editable:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  background: var(--bg-primary);
+}
+.dx-row {
+  display: flex; align-items: flex-start; gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: var(--bg-primary);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.07);
+}
+.dx-row[data-changed="1"] { background: var(--bg-accent-soft); }
+.dx-meta {
+  flex: none; width: 92px;
+  display: flex; align-items: center; gap: 6px;
+  padding-top: 4px;
+  font-size: var(--text-meta); color: var(--text-muted);
+}
+.dx-idx { font-family: var(--font-mono); color: var(--text-faint); }
+.dx-kind {
+  padding: 1px 6px; border-radius: 999px;
+  background: var(--bg-tertiary); color: var(--text-secondary);
+  white-space: nowrap;
+}
+.dx-flag {
+  padding: 1px 5px; border-radius: 999px;
+  background: var(--bg-tertiary); color: var(--text-secondary);
+}
+.dx-text {
+  flex: 1 1 auto; min-width: 0;
+  resize: none; overflow: hidden;
+  border: none; outline: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--text-body);
+  line-height: 1.65;
+  padding: 2px 4px;
+  border-radius: 6px;
+}
+.dx-text:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 0;
+  background: var(--bg-primary);
+}
+.dx-row[data-kind="heading"] .dx-text { font-weight: 600; font-size: 16px; }
+.dx-row[data-kind="list"] .dx-text { padding-left: 16px; }
+.dx-row[data-kind="quote"] .dx-text { font-style: italic; color: var(--text-secondary); }
+.dx-more { align-self: center; margin: 10px auto; }
+.dx-filter {
+  display: flex; align-items: center; gap: 4px;
+  color: var(--text-muted);
+}
+.dx-filter input {
+  width: 130px;
+  border: none; outline: none;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border-radius: 6px;
+  padding: 3px 7px;
+  font-size: var(--text-meta);
+  font-family: inherit;
+}
+.dx-filter input:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
+
+/* ─── Excel 网格编辑器（重量模式） ──────────────────────────────────
+   表头 / 行号用次级底色与正文区分，网格线用极浅底色差代替描边（Excel
+   那种密集灰线在这个界面里太吵）。 */
+.sx-panel { padding: 0; overflow: hidden; display: flex; }
+.sx-scroll {
+  flex: 1 1 auto; min-width: 0; min-height: 0;
+  overflow: auto;
+  background: var(--bg-primary);
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+}
+.sx-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: fixed;
+  font-size: var(--text-meta);
+  color: var(--text-primary);
+}
+.sx-corner, .sx-col-head, .sx-row-head {
+  position: sticky;
+  background: var(--bg-secondary);
+  color: var(--text-muted);
+  font-weight: 500;
+  text-align: center;
+  padding: 4px 6px;
+  user-select: none;
+}
+.sx-col-head { top: 0; z-index: 3; }
+.sx-corner { top: 0; left: 0; z-index: 4; }
+.sx-row-head { left: 0; z-index: 2; width: 48px; }
+.sx-cell {
+  padding: 0;
+  background: var(--bg-primary);
+  box-shadow: inset 0 -1px 0 var(--border-subtle),
+              inset -1px 0 0 var(--border-subtle);
+  cursor: cell;
+  vertical-align: bottom;
+}
+.sx-cell.is-active {
+  background: var(--bg-accent-soft);
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+.sx-text {
+  display: block;
+  padding: 3px 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 18px;
+}
+.sx-input {
+  width: 100%; height: 100%;
+  border: none; outline: none;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: inherit;
+  padding: 3px 6px;
+}
+.sx-pad { background: var(--bg-primary); }
+.sx-empty {
+  padding: 16px; text-align: center;
+  color: var(--text-muted);
+}
+.sx-switch {
+  display: flex; align-items: center; gap: 2px;
+  background: var(--bg-tertiary);
+  border-radius: 6px;
+  padding: 1px 2px;
+}
+.sx-step {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px;
+  border: none; background: transparent;
+  color: var(--text-secondary);
+  border-radius: 4px; cursor: pointer;
+}
+.sx-step:hover { background: var(--bg-hover); color: var(--text-primary); }
+.sx-sheet-name {
+  max-width: 140px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: var(--text-meta); color: var(--text-primary);
+}

@@ -35,7 +35,12 @@ const PdfPageEditor = lazy(() =>
 const TextEditor = lazy(() =>
   import("./document/TextEditor").then((m) => ({ default: m.TextEditor })),
 );
-
+const DocxEditor = lazy(() =>
+  import("./document/DocxEditor").then((m) => ({ default: m.DocxEditor })),
+);
+const SheetEditor = lazy(() =>
+  import("./document/SheetEditor").then((m) => ({ default: m.SheetEditor })),
+);
 const ZOOM_MIN = 50;
 const ZOOM_MAX = 200;
 
@@ -174,12 +179,36 @@ export function PreviewHost({
   const [viewMode, setViewMode] = useState<ViewMode>("layout");
   const [zoom, setZoom] = useState(100);
   const [editor, setEditor] = useState<EditorKind>("none");
+  /** Word / Excel：打开就是可编辑的文档/表格本体（Office 的样子）。 */
+  const [officeReadonly, setOfficeReadonly] = useState(false);
   const loadToken = useRef(0);
 
   const kind: PreviewKind = useMemo(() => resolveKind(name), [name]);
   const effectiveKind = applyViewMode(kind, viewMode);
   /** 媒体走 asset 协议，不进共享预览管线（几百 MB 的文件不经 IPC 搬）。 */
   const isMedia = useMemo(() => isMediaFile(name), [name]);
+
+  /**
+   * Office 文档的**就地编辑**开关。
+   *
+   * docx / xlsx / xlsm 在重量模式下**默认就是可编辑的**（用户诉求：
+   * "打开 word 文档、excel 默认直接就可以编辑"），不套一层「编辑模式」——
+   * Office 软件本来就是这样。纯净模式（轻量）不给编辑能力，仍是只读预览。
+   */
+  const officeKind = useMemo<"docx" | "sheet" | null>(() => {
+    if (!canEdit) return null;
+    if (kind === "docx") return "docx";
+    if (kind === "spreadsheet") {
+      const ext = name.split(".").pop()?.toLowerCase() ?? "";
+      // xls 是 BIFF 二进制，没有可靠的写入器 → 只读预览。
+      return ext === "xlsx" || ext === "xlsm" ? "sheet" : null;
+    }
+    return null;
+  }, [canEdit, kind, name]);
+  /** 换了文件就回到「可编辑」默认态。 */
+  useEffect(() => {
+    setOfficeReadonly(false);
+  }, [path]);
 
   // 加载阶段：每次 path / viewMode 变了重读
   useEffect(() => {
@@ -215,6 +244,8 @@ export function PreviewHost({
   // 分支（applyViewMode），那时不该再给页编辑器。
   const editorKind = canEdit ? editorFor(kind, name) : "none";
   const editing = editor !== "none";
+  /** Office 就地编辑生效中（docx / xlsx，且用户没切到只读预览）。 */
+  const officeEditing = officeKind !== null && !officeReadonly;
 
   // 外部（右键菜单 / 菜单栏 / 快捷键）要求打开编辑器。
   useEffect(() => {
@@ -226,6 +257,8 @@ export function PreviewHost({
 
   return (
     <div className="preview-pane">
+      {/* Office 就地编辑有自己的工具条（导出 / 另存为 / 预览），不再叠一层预览工具条。 */}
+      {!officeEditing && (
       <div className="preview-toolbar">
         <span className="preview-toolbar-name" title={path}>{name}</span>
         <span className="preview-toolbar-spacer" />
@@ -307,6 +340,7 @@ export function PreviewHost({
           </div>
         )}
       </div>
+      )}
       <div className="preview-pane-inner">
         {isMedia ? (
           <MediaView
@@ -314,6 +348,23 @@ export function PreviewHost({
             name={name}
             onFallback={() => void source.openWithSystem?.(path)}
           />
+        ) : officeEditing && officeKind === "docx" ? (
+          <Suspense fallback={<div className="preview-state-center">正在准备编辑器…</div>}>
+            <DocxEditor
+              path={path}
+              name={name}
+              onPreview={() => setOfficeReadonly(true)}
+            />
+          </Suspense>
+        ) : officeEditing && officeKind === "sheet" ? (
+          <Suspense fallback={<div className="preview-state-center">正在准备编辑器…</div>}>
+            <SheetEditor
+              path={path}
+              name={name}
+              source={source}
+              onPreview={() => setOfficeReadonly(true)}
+            />
+          </Suspense>
         ) : editor === "image" ? (
           <Suspense fallback={<div className="preview-state-center">正在准备编辑器…</div>}>
             <ImageEditor

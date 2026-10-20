@@ -79,7 +79,7 @@ fn save_output(
 }
 
 /// 写盘并回报结果（没有源文件可比的场合：图片转 PDF / 文本另存）。
-fn save_bytes(
+pub(crate) fn save_bytes(
     out: &Path,
     bytes: &[u8],
     encoding_used: Option<String>,

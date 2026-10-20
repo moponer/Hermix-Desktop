@@ -3494,6 +3494,7 @@ dependencies = [
  "image",
  "indexmap 1.9.3",
  "lopdf",
+ "quick-xml",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -3502,6 +3503,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-dialog",
  "windows-sys 0.52.0",
+ "zip",
 ]
 
 [[package]]

@@ -14,7 +14,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { ChevronLeft, ChevronRight, Download, Search, X } from "lucide-react";
-import type { CellModel, CellStyle, ParsedWorkbook, SheetModel } from "../lib/workbook";
+import type { CellModel, ParsedWorkbook, SheetModel } from "../lib/workbook";
+import { styleToCss } from "../lib/workbook";
 import { colName } from "../lib/localAssets";
 
 const ROW_HEADER_W = 46;
@@ -63,48 +64,6 @@ function windowFromOffsets(
     topPad: offsets[start] ?? 0,
     bottomPad: total - (offsets[end] ?? total),
   };
-}
-
-/* ── 单元格样式 → React 内联样式 ───────────────────────────────── */
-
-function borderCss(e: { css: string; color?: string } | null | undefined): string | undefined {
-  if (!e) return undefined;
-  return e.color ? `${e.css} ${e.color}` : e.css;
-}
-
-function styleToCss(style: CellStyle | undefined): CSSProperties {
-  if (!style) return {};
-  const css: CSSProperties = {};
-  if (style.bg) css.backgroundColor = style.bg;
-  if (style.color) css.color = style.color;
-  if (style.bold) css.fontWeight = 700;
-  if (style.italic) css.fontStyle = "italic";
-  const deco = style.underline
-    ? style.strike
-      ? "underline line-through"
-      : "underline"
-    : style.strike
-      ? "line-through"
-      : undefined;
-  if (deco) css.textDecoration = deco;
-  if (style.size) css.fontSize = `${(style.size * 96) / 72}px`;
-  if (style.font) css.fontFamily = `"${style.font}", var(--font-sans)`;
-  if (style.align) css.textAlign = style.align;
-  if (style.valign) css.verticalAlign = style.valign;
-  css.whiteSpace = style.wrap ? "pre-wrap" : "nowrap";
-  if (style.indent) css.paddingLeft = `${4 + style.indent * 8}px`;
-  if (style.border) {
-    const { top, right, bottom, left } = style.border;
-    const t = borderCss(top);
-    const r = borderCss(right);
-    const b = borderCss(bottom);
-    const l = borderCss(left);
-    if (t) css.borderTop = t;
-    if (r) css.borderRight = r;
-    if (b) css.borderBottom = b;
-    if (l) css.borderLeft = l;
-  }
-  return css;
 }
 
 /* ── 搜索命中 ───────────────────────────────────────────────────── */

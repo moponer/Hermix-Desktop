@@ -6,9 +6,11 @@
 //! 组织：命令在 commands.rs（lib.rs 根定义会与 generate_handler 冲突）。
 
 pub mod ai;
+pub mod artifacts;
 pub mod cleanup;
 pub mod clipboard;
 pub mod commands;
+pub mod docx_edit;
 pub mod drive_scan;
 pub mod filesearch;
 pub mod gui;
@@ -208,6 +210,7 @@ pub fn main() {
             commands::viewer_open_with_system,
             commands::viewer_open_with,
             commands::viewer_available_apps,
+            commands::viewer_wordcraft_path,
             commands::viewer_copy_files,
             commands::viewer_paste_files,
             commands::viewer_copy_text,
@@ -226,6 +229,9 @@ pub fn main() {
             commands::viewer_mcp_start,
             commands::viewer_mcp_stop,
             commands::viewer_mcp_status,
+            artifacts::write_bytes,
+            docx_edit::docx_read,
+            docx_edit::docx_write,
             image_ops::image_info,
             image_ops::image_rasterize,
             image_ops::image_apply,
