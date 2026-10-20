@@ -56,6 +56,8 @@ pub enum ImageOp {
     Blur { sigma: f32 },
     /// 马赛克：block×block 像素块取平均色
     Mosaic { block: u32 },
+    /// 黑白二值化：亮度 ≥ threshold → 白，否则黑（threshold 0..255）
+    Binarize { threshold: u8 },
 }
 
 /// 按顺序执行 op 链。几何类 op 之后的坐标类 op（裁剪）语义由前端保证
@@ -104,9 +106,27 @@ pub fn apply_ops(mut img: DynamicImage, ops: &[ImageOp]) -> Result<DynamicImage,
                 DynamicImage::ImageRgba8(image::imageops::blur(&img, *sigma))
             }
             ImageOp::Mosaic { block } => mosaic(&img, (*block).max(1)),
+            ImageOp::Binarize { threshold } => binarize(&img, *threshold),
         };
     }
     Ok(img)
+}
+
+/// 黑白二值化：按 Rec.601 亮度过阈值。
+///
+/// 与「灰度」的区别：灰度保留层次，二值化只剩黑白两档——扫描件去灰底、
+/// 打印黑白稿时用得上。
+pub fn binarize(img: &DynamicImage, threshold: u8) -> DynamicImage {
+    let rgba = img.to_rgba8();
+    let (w, h) = (rgba.width(), rgba.height());
+    let mut out = RgbaImage::new(w, h);
+    let t = threshold as u32;
+    for (x, y, p) in rgba.enumerate_pixels() {
+        let lum = (p[0] as u32 * 77 + p[1] as u32 * 150 + p[2] as u32 * 29) >> 8;
+        let v = if lum >= t { 255u8 } else { 0u8 };
+        out.put_pixel(x, y, Rgba([v, v, v, p[3]]));
+    }
+    DynamicImage::ImageRgba8(out)
 }
 
 /// 饱和度：围绕灰度轴插值。
@@ -381,6 +401,83 @@ pub fn image_apply(
     }
     std::fs::write(&out, &bytes).map_err(|e| format!("写入失败: {e}"))?;
     let (w, h) = edited.dimensions();
+    Ok(ImageOutput {
+        path: out.to_string_lossy().to_string(),
+        bytes: bytes.len(),
+        width: w,
+        height: h,
+    })
+}
+
+/// 压到指定体积：JPEG 质量二分。
+///
+/// 「图片太大发不出去 / 邮箱超限」是最高频的诉求之一：给一个目标 KB，
+/// 二分找**仍然满足上限的最大质量**。PNG 是无损的压不动，所以产物一律
+/// JPEG（后缀也强制跟内容一致，不产出「写着 .png、其实是 JPEG」的文件）。
+///
+/// 目标不可达时如实报错（附最低质量下的实际体积），不静默产出超标文件。
+#[tauri::command(async)]
+pub fn image_compress_to(
+    src_path: String,
+    ops: Option<Vec<ImageOp>>,
+    target_kb: u32,
+    out_path: Option<String>,
+) -> Result<ImageOutput, String> {
+    let src = PathBuf::from(&src_path);
+    let base = decode(&src)?;
+    // 先走一遍 op 链：压缩的是**用户改完的图**，不是原图。
+    let img = match ops {
+        Some(list) if !list.is_empty() => apply_ops(base, &list)?,
+        _ => base,
+    };
+    let target = target_kb as u64 * 1024;
+    let (mut lo, mut hi) = (1u8, 100u8);
+    let mut best: Option<Vec<u8>> = None;
+    let mut smallest = u64::MAX;
+    while lo <= hi {
+        let mid = lo + (hi - lo) / 2;
+        let bytes = encode(&img, "jpg", Some(mid), &[])?;
+        let len = bytes.len() as u64;
+        smallest = smallest.min(len);
+        if len <= target {
+            best = Some(bytes);
+            lo = mid + 1;
+        } else if mid == 1 {
+            break;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    let bytes = best.ok_or_else(|| {
+        format!(
+            "压不到 {target_kb} KB：最低质量下仍有 {} KB",
+            (smallest / 1024).max(1)
+        )
+    })?;
+
+    // 产物后缀强制 .jpg：内容是 JPEG，名字也得是。
+    let requested = out_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from);
+    let requested = requested.map(|mut p| {
+        p.set_extension("jpg");
+        p
+    });
+    let out = safe_output_path(
+        &src,
+        requested.as_ref().map(|p| p.to_string_lossy().to_string()).as_deref(),
+        Some("jpg"),
+    )?;
+    if let Some(parent) = out.parent() {
+        if !parent.as_os_str().is_empty() && !parent.exists() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("无法创建输出目录: {e}"))?;
+        }
+    }
+    std::fs::write(&out, &bytes).map_err(|e| format!("写入失败: {e}"))?;
+    let (w, h) = img.dimensions();
     Ok(ImageOutput {
         path: out.to_string_lossy().to_string(),
         bytes: bytes.len(),
@@ -674,6 +771,51 @@ pub fn image_write_composite(
 mod tests {
     use super::*;
     use image::Rgba;
+
+    /// 压到指定体积：成功则必须真的在预算内，压不到就如实报错。
+    #[test]
+    fn compress_to_target_respects_budget_or_reports_actual() {
+        let dir = std::env::temp_dir().join(format!("hermix-viewer-compress-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("noise.png");
+        // 噪声图：大且难压——正是「压到目标体积」最该说实话的场景。
+        let mut img = RgbaImage::new(600, 600);
+        for (x, y, p) in img.enumerate_pixels_mut() {
+            let v = ((x * 7 + y * 13) % 256) as u8;
+            p.0 = [v, v.wrapping_add(37), v.wrapping_add(91), 255];
+        }
+        let png = encode(&DynamicImage::ImageRgba8(img), "png", None, &[]).unwrap();
+        std::fs::write(&src, png).unwrap();
+
+        const TARGET_KB: u32 = 40;
+        match image_compress_to(
+            src.to_string_lossy().to_string(),
+            None,
+            TARGET_KB,
+            None,
+        ) {
+            Ok(out) => {
+                let len = std::fs::metadata(&out.path).unwrap().len();
+                assert!(
+                    len <= (TARGET_KB as u64) * 1024,
+                    "压到 {TARGET_KB}KB 目标，实际 {len} 字节"
+                );
+                assert!(
+                    out.path.to_lowercase().ends_with(".jpg"),
+                    "产物必须是 JPEG（名字也得是）：{}",
+                    out.path
+                );
+            }
+            Err(e) => {
+                assert!(
+                    e.contains("压不到"),
+                    "压不到时应说明压不到并给实际体积：{e}"
+                );
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     fn solid(r: u8, g: u8, b: u8) -> DynamicImage {
         DynamicImage::ImageRgba8(RgbaImage::from_pixel(2, 2, Rgba([r, g, b, 255])))

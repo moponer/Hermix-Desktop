@@ -21,7 +21,8 @@ export type ImageOp =
   | { op: "contrast"; factor: number }
   | { op: "saturate"; factor: number }
   | { op: "blur"; sigma: number }
-  | { op: "mosaic"; block: number };
+  | { op: "mosaic"; block: number }
+  | { op: "binarize"; threshold: number };
 
 /**
  * 可编辑的栅格格式。
@@ -397,6 +398,16 @@ function applyPixelOp(canvas: HTMLCanvasElement, op: ImageOp): void {
         d[i] = clamp8(gray + (r - gray) * op.factor);
         d[i + 1] = clamp8(gray + (g - gray) * op.factor);
         d[i + 2] = clamp8(gray + (b - gray) * op.factor);
+      }
+      break;
+    case "binarize":
+      // 阈值用与 Rust 侧一致的整数亮度： (77R + 150G + 29B) >> 8
+      for (let i = 0; i < d.length; i += 4) {
+        const lum = (77 * d[i] + 150 * d[i + 1] + 29 * d[i + 2]) >> 8;
+        const v = lum >= op.threshold ? 255 : 0;
+        d[i] = v;
+        d[i + 1] = v;
+        d[i + 2] = v;
       }
       break;
     default:

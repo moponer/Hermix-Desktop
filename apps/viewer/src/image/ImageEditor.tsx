@@ -19,8 +19,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
-  Crop, FlipHorizontal, FlipVertical, Paintbrush, RotateCw, RotateCcw, Undo2, Redo2,
-  Save, FolderOpen, SlidersHorizontal, Type, Images, X,
+  Crop, FlipHorizontal, FlipVertical, FlipVertical2, Paintbrush, RotateCw, RotateCcw, Undo2, Redo2,
+  Save, FolderOpen, SlidersHorizontal, Type, Images, X, Gauge,
 } from "lucide-react";
 import type { FileSource } from "@hermix/preview";
 import {
@@ -481,6 +481,29 @@ export function ImageEditor({
     [path, ops, format, quality, texts, strokes, composeFull],
   );
 
+  // ── 压到指定体积 ───────────────────────────────────────────
+  const [targetKb, setTargetKb] = useState(200);
+
+  const doCompress = useCallback(async () => {
+    setBusy(true);
+    setNote(null);
+    try {
+      const r = await invoke<ExportResult>("image_compress_to", {
+        srcPath: path,
+        ops,
+        targetKb,
+        outPath: null,
+      });
+      setNote(
+        `已压到 ${r.path}（${r.width}×${r.height}，${Math.round(r.bytes / 1024)} KB，JPEG）`,
+      );
+    } catch (e) {
+      setNote(`压缩失败：${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }, [path, ops, targetKb]);
+
   // ── 拼接 ───────────────────────────────────────────────────
   const pickMontage = useCallback(async () => {
     try {
@@ -601,6 +624,7 @@ export function ImageEditor({
   const saturate = param("saturate") as Extract<ImageOp, { op: "saturate" }> | undefined;
   const blur = param("blur") as Extract<ImageOp, { op: "blur" }> | undefined;
   const mosaic = param("mosaic") as Extract<ImageOp, { op: "mosaic" }> | undefined;
+  const binarize = param("binarize") as Extract<ImageOp, { op: "binarize" }> | undefined;
   const resize = param("resize") as Extract<ImageOp, { op: "resize" }> | undefined;
   const isGray = !!param("grayscale");
   const activeLayer = useMemo(
@@ -625,6 +649,9 @@ export function ImageEditor({
         </button>
         <button type="button" className="tb-btn" onClick={() => applyOp({ op: "rotate", degrees: 270 })} title="向左旋转 90°" aria-label="向左旋转">
           <RotateCcw />
+        </button>
+        <button type="button" className="tb-btn" onClick={() => applyOp({ op: "rotate", degrees: 180 })} title="旋转 180°" aria-label="旋转 180 度">
+          <FlipVertical2 />
         </button>
         <button type="button" className="tb-btn" onClick={() => applyOp({ op: "flip", horizontal: true })} title="水平翻转" aria-label="水平翻转">
           <FlipHorizontal />
@@ -821,6 +848,24 @@ export function ImageEditor({
             />
             <b>{mosaic?.block ?? 0}</b>
           </label>
+          <label className="img-param">
+            <span>黑白二值化</span>
+            <input
+              type="range"
+              min={0}
+              max={255}
+              value={binarize?.threshold ?? 128}
+              onChange={(e) => {
+                const threshold = Number(e.target.value);
+                if (threshold === 128) {
+                  pushOps(ops.filter((o) => o.op !== "binarize"));
+                } else {
+                  applyOp({ op: "binarize", threshold });
+                }
+              }}
+            />
+            <b>{binarize?.threshold ?? 128}</b>
+          </label>
           <button
             type="button"
             className={`img-toggle ${isGray ? "is-active" : ""}`}
@@ -932,10 +977,30 @@ export function ImageEditor({
               />
             </label>
           </div>
+          <label className="img-num">
+            <span>压到体积</span>
+            <input
+              type="number"
+              min={10}
+              max={20000}
+              value={targetKb}
+              onChange={(e) =>
+                setTargetKb(Math.min(20000, Math.max(10, Number(e.target.value) || 200)))
+              }
+            />
+          </label>
+          <button
+            type="button"
+            className="img-toggle"
+            disabled={busy}
+            onClick={() => void doCompress()}
+            title="按目标体积自动选 JPEG 质量（压不动时如实报错）"
+          >
+            <Gauge className="icon-sm" /> 压到 {targetKb} KB
+          </button>
           <button type="button" className="img-toggle" onClick={() => void pickPdfImages()}>
             <Images className="icon-sm" /> 加入 PDF 的图片…
-          </button>
-          {pdfPaths.length > 0 && (
+          </button>          {pdfPaths.length > 0 && (
             <>
               <div className="img-text-list">
                 {pdfPaths.map((p) => (
