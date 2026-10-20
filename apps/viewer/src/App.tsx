@@ -22,6 +22,7 @@ import { useTheme, type ThemeMode } from "./theme";
 import { AiSidebar, type PendingSend } from "./AiSidebar";
 import { joinConversationPrompt } from "./aiPrompts";
 import { ContextMenu } from "./ContextMenu";
+import { TitleBar } from "./TitleBar";
 import { buildMenu, type MenuTarget, type SortKind } from "./contextMenuModel";
 
 // 预览引擎懒加载：PreviewHost → @hermix/preview barrel → satteri 的 3MB
@@ -1480,6 +1481,15 @@ export function App() {
     up,
   ]);
 
+  // 标题栏副标题：纯净模式看当前文件，重量模式看当前目录。
+  const titleSubject =
+    mode === "pure"
+      ? active?.name
+      : currentPath
+        ? (splitPath(currentPath).pop() ?? currentPath)
+        : undefined;
+  const titleSubjectFull = mode === "pure" ? active?.path : (currentPath ?? undefined);
+
   return (
     <div
       className="app"
@@ -1492,6 +1502,11 @@ export function App() {
       onDragLeave={() => setDragOver(false)}
       onDrop={onDrop}
     >
+      <TitleBar
+        title="Hermix 文件查看器"
+        subject={titleSubject}
+        subjectTitle={titleSubjectFull}
+      />
       {mode === "heavy" && (
       <header className="toolbar">
         <button className="tb-btn" onClick={back} disabled={backStack.length === 0} title="后退" aria-label="后退">

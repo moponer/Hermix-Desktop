@@ -91,6 +91,46 @@ mod tests {
     }
 }
 
+/// 无边框窗口会**连带丢掉「拖边缘缩放」**：tao 在 decorations=false 时
+/// 去掉 WS_CAPTION 与 WS_THICKFRAME（tao/src/platform_impl/windows/
+/// window_state.rs::to_adjusted_window_styles），窗口就变成固定大小——
+/// 自绘标题栏换来的干净外观，代价是不能再拉大小。
+///
+/// 修法：窗口建好后把 WS_THICKFRAME 加回去（**不动** WS_CAPTION，所以
+/// 系统仍不画原生标题栏），系统随即恢复边缘命中测试——窗口可以像
+/// 原生那样拖边缩放，只是边框不可见。
+#[cfg(windows)]
+fn keep_resize_border(window: &tauri::Window) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos, GWL_STYLE, SWP_FRAMECHANGED,
+        SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WS_THICKFRAME,
+    };
+    let Ok(hwnd) = window.hwnd() else {
+        return;
+    };
+    // tauri 用 `windows` crate 的 HWND（newtype），windows-sys 0.52 的
+    // HWND 是裸 isize —— 取 .0 换过去。
+    let hwnd = hwnd.0 as isize;
+    unsafe {
+        let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+        if style & WS_THICKFRAME as isize != 0 {
+            return; // 已经有边缘缩放，别重复改样式
+        }
+        SetWindowLongPtrW(hwnd, GWL_STYLE, style | WS_THICKFRAME as isize);
+        // SWP_FRAMECHANGED：样式改了要让系统重算非客户区，否则命中测试
+        // 仍按旧样式走（看起来就是「加了样式也不能拖」）。
+        SetWindowPos(
+            hwnd,
+            0,
+            0,
+            0,
+            0,
+            0,
+            SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+        );
+    }
+}
+
 /// 入口（main.rs 调用；pub 因为 bin 目标跨 crate 引用它）。
 pub fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -176,6 +216,20 @@ pub fn main() {
             pdf_ops::write_text,
         ])
         .plugin(tauri_plugin_dialog::init())
+        .on_window_event(|_w, event| {
+            // 无边框窗口要补回边缘缩放样式（见 keep_resize_border）。
+            // 事件里才拿得到 Window：AppHandle 侧只有 WebviewWindow，
+            // 而 hwnd() 在 Window 上。
+            #[cfg(windows)]
+            {
+                use tauri::WindowEvent;
+                if matches!(event, WindowEvent::Resized(_) | WindowEvent::Focused(true)) {
+                    keep_resize_border(_w);
+                }
+            }
+            #[cfg(not(windows))]
+            let _ = event;
+        })
         .setup(move |app| {
             seed_pending(app.handle(), &init_args);
             spawn_singleton_listener(app.handle().clone());

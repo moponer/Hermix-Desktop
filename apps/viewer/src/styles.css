@@ -173,7 +173,46 @@ html, body, #root {
 /* 纯净模式不显示标签条：只留预览本身 */
 .preview.is-pure .tabbar { display: none; }
 
-/* ─── App 容器：垂直栈 工具条 / breadcrumb / 三栏主区 ───── */
+/* ─── 窗口标题栏（自绘，隐藏了原生标题栏） ────────────────
+   层次不靠描边：标题栏用主背景（白 / 深蓝），与下面的工具条
+   （--bg-tabbar 灰）天然分出两段。窗口按钮 hover 换底色，
+   关闭按钮 hover 换危险色——都是底色差，没有一根线。 */
+.titlebar {
+  display: flex; align-items: center; gap: 8px;
+  height: 34px; flex: none;
+  padding: 0 4px 0 10px;
+  background: var(--bg-primary);
+  user-select: none;
+  /* 拖动窗口时不要选中标题文字 */
+  -webkit-user-drag: none;
+}
+.tb-brand {
+  display: flex; align-items: center; gap: 8px;
+  min-width: 0; flex: 1;
+}
+.tb-mark { width: 15px; height: 15px; color: var(--accent); flex: none; }
+.tb-title {
+  font-size: 12.5px; color: var(--text-secondary);
+  white-space: nowrap; flex: none;
+}
+/* 副标题（当前文件 / 目录）：与主标题靠**间距 + 颜色深浅**分开，
+   不用竖线分隔（描边一律不要）。 */
+.tb-subject {
+  font-size: 12.5px; color: var(--text-primary);
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.tb-window { display: flex; align-items: center; gap: 2px; flex: none; }
+.wb-btn {
+  border: none; background: transparent;
+  color: var(--text-secondary);
+  width: 40px; height: 26px;
+  border-radius: 6px; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.wb-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.wb-btn.is-close:hover { background: var(--bg-accent-soft); color: var(--danger); }
+
+/* ─── App 容器：垂直栈 标题栏 / 工具条 / breadcrumb / 三栏主区 ───── */
 .app { display: flex; flex-direction: column; height: 100%; }
 
 /* ─── 工具条 ─────────────────────────────────────── */
