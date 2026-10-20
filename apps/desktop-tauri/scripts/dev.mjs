@@ -56,6 +56,37 @@ function shOptional(cmd, args) {
   if (r.status !== 0) console.warn(`[${mode}] hx-shell 运行时同步已跳过（dev 模式不构建 hx-shell，不影响本体开发调试）`);
 }
 
+// viewer（第 5 个 sidecar）：dev 模式下主程序按「主程序 exe 同目录」找
+// hermix-viewer.exe —— 也就是 target/debug/。cargo 的产物正好落在这儿，
+// 不需要拷贝。**但前端是编译期嵌进 exe 的**（generate_context! 宏展开期
+// 读 dist），所以必须先 vite build 再 cargo build，顺序反了就嵌进旧 UI。
+//
+// 不构建的后果不是"报错"而是"更安静地跑旧版"：dev 模式此前完全不碰 viewer，
+// target/debug/hermix-viewer.exe 停在 cargo 随手留下的旧产物——用户从主程序
+// 打开查看器，看到的是几周前的界面，且没有任何提示。
+function buildViewer() {
+  const viewerDir = path.join(repoRoot, "apps", "viewer");
+  const viewerVite = path.join(viewerDir, "node_modules", "vite", "bin", "vite.js");
+  if (!existsSync(viewerVite)) {
+    console.warn("[dev] viewer 前端依赖未安装，跳过查看器构建（apps/viewer 跑 npm install）");
+    return;
+  }
+  stopRunningViewer();
+  sh("node", [viewerVite, "build"], viewerDir);
+  sh("cargo", ["build", "-p", "hermix-viewer"]);
+}
+
+/** 关掉正在运行的查看器：它锁着 target/debug/hermix-viewer.exe，Windows 文件锁
+ *  会让 cargo 报 "permission denied" 覆盖失败，旧二进制原地留下——用户随后从
+ *  主程序打开查看器，看到的还是旧界面，且没有任何提示。 */
+function stopRunningViewer() {
+  if (process.platform !== "win32") return;
+  const r = spawnSync("taskkill", ["/IM", "hermix-viewer.exe", "/F"], { encoding: "utf8" });
+  if (r.status === 0) {
+    console.log("[dev] 已结束正在运行的 hermix-viewer（同名 exe 被占用时 cargo 覆盖不掉）");
+  }
+}
+
 console.log(`[${mode}] 产物目录: ${targetDir}（单 workspace，仓库根 target/）`);
 
 if (mode === "dev") {
@@ -74,6 +105,7 @@ if (mode === "dev") {
   console.log(`[dev] Copying fresh binary to sidecar dir...`);
   copyFileSync(src, dst);
   console.log(`[dev] Sidecar updated: ${dst}`);
+  buildViewer();
   console.log(`[dev] Starting Tauri dev...`);
   shOptional(npmBin, ["run", "_:sync-shell-runtime"]);
   sh("cargo", ["tauri", "dev"]);

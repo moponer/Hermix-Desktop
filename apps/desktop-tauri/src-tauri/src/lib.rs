@@ -15,6 +15,10 @@ pub mod system_settings;
 pub mod updater;
 pub mod webview2_probe;
 
+// 被嵌进二进制的前端内容指纹（build.rs 生成，见 build.rs 头注）。
+// 前端产物变了它就变 → crate 必然重编 → 不会出现「exe 里是旧 UI」。
+include!(concat!(env!("OUT_DIR"), "/frontend_fingerprint.rs"));
+
 use sidecar::{HermixSidecar, WatchdogConfig};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};

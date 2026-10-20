@@ -2,7 +2,7 @@
 
 Status: implemented — F0–F9 全部交付。双模式（纯净/重量）、彩色类型图标、启动卡顿根因修复、全屏平铺、图片处理内核、PDF/文本编辑、AI 一键入对话、常见文件类型覆盖矩阵均已落地并各自提交（`106bd5f2` → `08621066`）
 
-关联：[hermix-viewer 资源管理器化 + @hermix/preview 共享包](../feature/2026-10-13-hermix-viewer-resource-manager.md)、[独立文件浏览器（hermix-viewer）+ 可折叠 AI 右栏 + 文件关联接管](../feature/2026-10-09-standalone-file-viewer.md)、[共享预览层的样式归属与 Tailwind 边界](../architecture/2026-10-19-shared-preview-layer-ownership.md)
+关联：[hermix-viewer 资源管理器化 + @hermix/preview 共享包](../feature/2026-10-13-hermix-viewer-resource-manager.md)、[独立文件浏览器（hermix-viewer）+ 可折叠 AI 右栏 + 文件关联接管](../feature/2026-10-09-standalone-file-viewer.md)、[共享预览层的样式归属与 Tailwind 边界](../architecture/2026-10-19-shared-preview-layer-ownership.md)、[前端内容指纹纳入编译指纹 —— 根治「exe 里是旧 UI」](../bug-fix/2026-10-20-frontend-fingerprint-in-build.md)
 
 ## Decision
 
@@ -136,14 +136,27 @@ Rust `classify()` 的白名单与共享预览层分派表**逐项对齐**——�
 | 音视频 | mp3 / wav / m4a / aac / flac / ogg / opus / wma / aiff / mid；mp4 / m4v / mov / webm / ogv / mkv / avi / wmv / flv / mpg / mpeg / 3gp | asset 协议原生播放（Range） | 无——浏览器解不了的容器触发 error 事件后落回「用系统程序打开」 |
 | 其它 | 未列扩展名 | 元信息卡（大小 / 修改时间 / 类型）+「用系统程序打开」 | 无 |
 
-### 已知限制与未验证项
+### 真机验证（2026-10-20 12:00 后补做）与由此暴露的缺陷
 
-**未做真机 GUI 验证**——本机没有可驱动 Tauri 窗口的自动化手段，以下全部是**代码级保证**而非**运行级证据**：
+本篇初稿写的是「未做真机 GUI 验证」。随后按用户要求真机跑了一次，**发现两处只有跑起来才会暴露的缺陷，均已修复**（提交见下）：
+
+1. **目录被当文件打开**。主程序「在查看器中打开」传目录进来时，Rust 的 `seed_pending` 只收 `p.is_file()` → 目录被静默丢弃；单实例投递那条路更是无条件 `emit("viewer-open-file")`，前端无条件 `openPath()` → 目录变成一个报「不是文件」的标签页。**F4 只修了启动路径的目录/文件判别，投递路径与拖放路径漏了。** 现在启动参数、单实例投递、拖放三条路共用前端同一条判别 `openTarget`。
+2. **图片编辑器画布永远空白**。`ImageEditor.tsx` 里 `const ctx = out.getContext("2d")` 取错了对象（out 是离屏画布），于是 `ctx.drawImage(out, 0, 0)` 是把画布画在自己身上。**导出的那条路取的是 out，所以导出结果其实正确——只有屏幕上看不到。** 这是最坏的一种缺陷形态：功能"能用"，但用户眼前的界面是错的。
+
+真机跑通的项（有截图证据）：重量模式三栏 + 彩色类型图标 + 驱动器异步列表；纯净模式（带文件启动 → 只渲染预览面，细工具条「系统打开 / 重量模式 / 关闭」）；目录投递 → 正确导航进目录；单实例投递文件 → 正确开预览标签；图片编辑器（裁剪/旋转/翻转/文字/参数滑杆/转黑白/尺寸/导出/拼接 +「原图 1200×800 · 当前 1200×800 · 原文件不…」）；AI 栏（8 个改图提示词模板 +「AI 的产物会另存为新文件，原文件不会被改动」）。
+
+**主程序 → 查看器 的端到端链路**（用户反馈「运行主程序找不到文件查看器」后专门验证）：
+
+主程序的「在查看器中打开」（`commands.rs::open_in_viewer` → `viewer_exe_path()` 取主程序 exe 同目录的 `hermix-viewer.exe`）在真机上完整走通：主程序右栏「工作区」→ 右键 `docs/DEEPSEEK_HARNESS_BORROWINGS.md` →「在查看器中打开」→ **从零拉起新的 viewer 进程**（不是投递到已有实例），打开的正是本次的新界面——纯净模式的细工具条「系统打开 / 重量模式 / 关闭」是本轮新增，旧产物根本没有，切「重量模式」后三栏、md 渲染、目录大纲、「编辑」入口全部就位。
+
+用户此前看到旧界面的根因链是三条叠加，缺一不可：**① dev 模式从不构建 viewer**（`dev.mjs` 只构建 hermix sidecar，exe 停在 cargo 随手留下的旧产物）；**② sccache 的缓存键不含宏展开期读取的文件**（`generate_context!` 读的 dist 变了，crate 指纹却没变 → 旧 rlib 被原样复用）；**③ 运行中的 exe 被 Windows 锁住**（cargo 覆盖失败，旧二进制原地留下）。三条分别由 `dev.mjs` 补构建、补前端指纹双写（`OUT_DIR` 的 .rs + `cargo:rustc-env`）、构建前结束同名进程收口，详见 [前端内容指纹纳入编译指纹](../bug-fix/2026-10-20-frontend-fingerprint-in-build.md)。
+
+**仍未验证**（本机无法复现所需条件，如实标注）：
 
 - 媒体 codec 支持：WebView2 的 H.264 / AAC 依赖 Edge 媒体组件，未实测。mkv / avi / wmv / flv / mpg 大概率不可解（已设计为落回「用系统程序打开」）。
 - asset 协议在 Windows 上的路径形态（`convertFileSrc` + Range）未在真实播放器里跑过。
 - PDF 产物在 pdf.js / Acrobat 中的实际渲染未验证。
-- 图片编辑 / 拼接 / 文字导出的视觉结果未验证。
+- 图片**导出产物**的像素结果未验证（画布渲染已验证，导出路径与画布同源但未落盘比对）。
 - 纯净 ↔ 重量模式的跨启动持久化未实测（代码已写）。
 - 启动卡顿的验收指标「断网映射盘下冷启动首屏 < 1.2s」**未实测**——本机没有断网映射盘可复现该条件；根因（同步命令 + 文件系统 IO）已消除，但指标本身无证据。
 
