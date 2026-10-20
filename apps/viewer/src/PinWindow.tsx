@@ -26,8 +26,7 @@ interface PinPreset {
   label: string;
 }
 
-export function PinWindow({ path: _unused }: { path?: string }) {
-  const [path, setPath] = useState(_unused ?? "");
+export function PinWindow({ path }: { path: string }) {
   const [payload, setPayload] = useState<PreviewPayload | null>(null);
   const [resolvedPath, setResolvedPath] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -38,16 +37,6 @@ export function PinWindow({ path: _unused }: { path?: string }) {
   const [busy, setBusy] = useState(false);
 
   const name = useMemo(() => path.split(/[\\/]/).pop() ?? path, [path]);
-
-  // 源路径问 Rust 拿（label → 路径的映射在 Rust 侧；路径不走 URL：
-  // query 会被 Tauri 当成文件名的一部分 → 建窗直接失败）。
-  useEffect(() => {
-    void invoke<string | null>("viewer_pin_path", { label: getCurrentLabel() })
-      .then((p) => {
-        if (p) setPath(p);
-      })
-      .catch(() => {});
-  }, []);
 
   useEffect(() => {
     void invoke<PinPreset[]>("viewer_pin_presets").then(setPresets).catch(() => {});

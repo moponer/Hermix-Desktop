@@ -199,7 +199,6 @@ pub fn main() {
 
     Builder::default()
         .manage(commands::ViewerState::default())
-        .manage(pin::PinPaths::default())
         .invoke_handler(tauri::generate_handler![
             commands::viewer_read_file,
             commands::viewer_list_dir,
@@ -215,7 +214,6 @@ pub fn main() {
             commands::viewer_wordcraft_path,
             commands::viewer_pick_files,
             pin::viewer_pin_open,
-            pin::viewer_pin_path,
             pin::viewer_pin_close,
             pin::viewer_pin_list,
             pin::viewer_pin_set_top,

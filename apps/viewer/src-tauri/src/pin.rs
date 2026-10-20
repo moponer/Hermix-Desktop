@@ -109,13 +109,59 @@ fn pin_key(path: &str) -> String {
     path.to_string()
 }
 
-/// 当前的浮窗 label 列表（按创建顺序）。
-fn pin_windows(app: &tauri::AppHandle) -> Vec<String> {
-    app.webview_windows()
-        .keys()
-        .filter(|label| label.starts_with(PIN_PREFIX))
-        .cloned()
-        .collect()
+/// 百分比编码（路径里的 `\ : 空格 # ?` 都不能裸奔进 query）。
+fn encode_query(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.as_bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(*b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+/// 当前的浮窗列表（按创建顺序）。
+fn pin_windows(app: &tauri::AppHandle) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for (label, w) in app.webview_windows() {
+        if label.starts_with(PIN_PREFIX) {
+            // 路径从窗口 URL 的 query 里取回来（前端也读同一个参数）。
+            let path = w
+                .url()
+                .ok()
+                .and_then(|u| u.query().map(|q| q.to_string()))
+                .and_then(|q| {
+                    q.split('&')
+                        .find_map(|kv| kv.strip_prefix("pin="))
+                        .map(|v| percent_decode(v))
+                })
+                .unwrap_or_default();
+            out.push((label, path));
+        }
+    }
+    out
+}
+
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or("");
+            if let Ok(v) = u8::from_str_radix(hex, 16) {
+                out.push(v);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// 落位恢复：原显示器不在了（或 DPI 变了）就落到主屏工作区。
@@ -159,19 +205,14 @@ fn resolve_placement(
 /// `path` 可以是文件（渲染预览）或目录（渲染列表）。同一路径重复调用 =
 /// 复用既有浮窗并把它带到前面。
 #[tauri::command]
-pub fn viewer_pin_open(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, PinPaths>,
-    path: String,
-) -> Result<String, String> {
+pub fn viewer_pin_open(app: tauri::AppHandle, path: String) -> Result<String, String> {
     let src = PathBuf::from(&path);
     if !src.exists() {
         return Err(format!("路径不存在: {path}"));
     }
     // 同一路径已有浮窗 → 聚焦它，不新开。
-    let existing_path = state.0.lock().ok().map(|m| m.clone()).unwrap_or_default();
-    for label in pin_windows(&app) {
-        if existing_path.get(&label).map(|p| p == &path).unwrap_or(false) {
+    for (label, p) in pin_windows(&app) {
+        if p == path {
             if let Some(w) = app.get_webview_window(&label) {
                 let _ = w.unminimize();
                 let _ = w.set_focus();
@@ -184,8 +225,8 @@ pub fn viewer_pin_open(
         // 超限：关掉最旧的那个（label 后缀是递增序号，最小即最旧）。
         if let Some(oldest) = pins
             .iter()
-            .min_by_key(|label| label[PIN_PREFIX.len()..].parse::<u64>().unwrap_or(0))
-            .cloned()
+            .min_by_key(|(label, _)| label[PIN_PREFIX.len()..].parse::<u64>().unwrap_or(0))
+            .map(|(label, _)| label.clone())
         {
             if let Some(w) = app.get_webview_window(&oldest) {
                 let _ = w.close();
@@ -199,7 +240,7 @@ pub fn viewer_pin_open(
     let (pos, size) = resolve_placement(&app, saved.as_ref());
     let top = saved.map(|s| s.always_on_top).unwrap_or(false);
 
-    let url = "index.html".to_string();
+    let url = format!("index.html?pin={}", encode_query(&path));
     let builder = WebviewWindowBuilder::new(&app, &label, WebviewUrl::App(url.into()))
         .title(title_for(&src))
         .inner_size(size.width as f64, size.height as f64)
@@ -209,10 +250,6 @@ pub fn viewer_pin_open(
     let window = builder
         .build()
         .map_err(|e| format!("创建浮窗失败: {e}"))?;
-    // 源路径登记在 Rust 侧（前端按 label 来问）。
-    if let Ok(mut map) = state.0.lock() {
-        map.insert(label.clone(), path.clone());
-    }
 
     // 移动/缩放后把新位置写回记忆（浮窗自己记，不用前端转手）。
     let app2 = app.clone();
@@ -247,7 +284,7 @@ pub fn viewer_pin_open(
 /// 浮窗序号（label 后缀）。
 fn next_seq(app: &tauri::AppHandle) -> u64 {
     let mut max = 0u64;
-    for label in pin_windows(app) {
+    for (label, _) in pin_windows(app) {
         if let Ok(v) = label[PIN_PREFIX.len()..].parse::<u64>() {
             max = max.max(v);
         }
@@ -277,20 +314,6 @@ fn title_for(path: &std::path::Path) -> String {
     format!("{name} · Hermix")
 }
 
-/// 浮窗 label → 源路径。
-///
-/// **路径不走 URL**：把 query 塞进 `WebviewUrl::App("index.html?pin=…")` 时，
-/// Tauri 会把 `?pin=…` 当成文件名的一部分去找资源 → 建窗直接失败。所以路径
-/// 放在 Rust 侧这张表里，前端用 label 来问。
-#[derive(Default)]
-pub struct PinPaths(pub std::sync::Mutex<std::collections::HashMap<String, String>>);
-
-/// 当前浮窗的源路径（前端按自己的 label 来问）。
-#[tauri::command]
-pub fn viewer_pin_path(state: tauri::State<'_, PinPaths>, label: String) -> Option<String> {
-    state.0.lock().ok()?.get(&label).cloned()
-}
-
 /// 关闭浮窗。
 #[tauri::command]
 pub fn viewer_pin_close(app: tauri::AppHandle, label: String) -> Result<(), String> {
@@ -302,12 +325,10 @@ pub fn viewer_pin_close(app: tauri::AppHandle, label: String) -> Result<(), Stri
 
 /// 浮窗列表。
 #[tauri::command]
-pub fn viewer_pin_list(app: tauri::AppHandle, state: tauri::State<'_, PinPaths>) -> Vec<PinInfo> {
-    let paths = state.0.lock().ok().map(|m| m.clone()).unwrap_or_default();
+pub fn viewer_pin_list(app: tauri::AppHandle) -> Vec<PinInfo> {
     pin_windows(&app)
         .into_iter()
-        .map(|label| {
-            let path = paths.get(&label).cloned().unwrap_or_default();
+        .map(|(label, path)| {
             let (x, y, w, h, top) = app
                 .get_webview_window(&label)
                 .map(|win| {
@@ -411,7 +432,7 @@ pub fn viewer_pin_presets() -> Vec<PinPreset> {
 
 /// 主窗口关闭时连带关掉所有浮窗（浮窗是主流程的"例外"，不该留成孤儿）。
 pub fn close_all_pins(app: &tauri::AppHandle) {
-    for label in pin_windows(app) {
+    for (label, _) in pin_windows(app) {
         if let Some(w) = app.get_webview_window(&label) {
             let _ = w.close();
         }
@@ -421,6 +442,15 @@ pub fn close_all_pins(app: &tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn query_encoding_round_trips() {
+        let raw = r"<USERPROFILE>\我的 文件\a#b?c.docx";
+        let enc = encode_query(raw);
+        assert!(!enc.contains(' '));
+        assert!(!enc.contains('#'));
+        assert_eq!(percent_decode(&enc), raw);
+    }
 
     #[test]
     fn preset_list_covers_eight_positions() {
