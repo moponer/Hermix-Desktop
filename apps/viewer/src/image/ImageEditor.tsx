@@ -174,7 +174,9 @@ export function ImageEditor({
     const out = renderOps(img, srcW, srcH, ops, MAX_SIDE);
     canvas.width = out.width;
     canvas.height = out.height;
-    const ctx = out.getContext("2d");
+    // 注意：ctx 必须取自**可见的 canvas**，不是 out。取 out 的话
+    // `drawImage(out, 0, 0)` 变成把画布画在自己身上，可见画布永远空白。
+    const ctx = canvas.getContext("2d");
     if (!ctx) return;
     ctx.drawImage(out, 0, 0);
     // 文字图层画在 op 结果之上（原图空间 × scale）。

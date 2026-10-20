@@ -10,10 +10,21 @@ pub mod image_ops;
 pub mod paths;
 pub mod pdf_ops;
 
+// 被嵌进二进制的前端内容指纹（build.rs 生成，见 build.rs 头注）。
+// dist 变了它就变 → crate 必然重编 → 不会出现「exe 里是旧 UI」。
+include!(concat!(env!("OUT_DIR"), "/dist_fingerprint.rs"));
+
 use std::io::{Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use tauri::{Builder, Emitter, Manager};
+
+/// 值得打开的目标：文件与目录都算。
+/// 目录必须收——主程序「在查看器中打开」传目录是常规动作，
+/// 只收文件的话目录会被静默丢弃，用户看到的是「点了没反应」。
+fn is_openable(p: &Path) -> bool {
+    p.is_file() || p.is_dir()
+}
 
 /// 用命令行参数里的文件路径初始化待开队列。
 fn seed_pending(app: &tauri::AppHandle, args: &[String]) {
@@ -21,7 +32,7 @@ fn seed_pending(app: &tauri::AppHandle, args: &[String]) {
     let mut pending = state.pending.lock().unwrap();
     for a in args {
         let p = PathBuf::from(a);
-        if p.is_file() {
+        if is_openable(&p) {
             pending.push(p);
         }
     }
@@ -54,6 +65,26 @@ fn spawn_singleton_listener(app: tauri::AppHandle) {
             let _ = app.emit("viewer-open-file", path);
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_openable;
+    use std::fs;
+
+    #[test]
+    fn openable_accepts_files_and_dirs_but_not_missing_paths() {
+        let dir = std::env::temp_dir().join(format!("hermix-viewer-openable-{}", std::process::id()));
+        fs::create_dir_all(&dir).expect("mkdir");
+        let file = dir.join("a.txt");
+        fs::write(&file, b"x").expect("write");
+
+        assert!(is_openable(&file), "文件应当可打开");
+        assert!(is_openable(&dir), "目录也必须可打开（主程序会传目录进来）");
+        assert!(!is_openable(&dir.join("missing.txt")), "不存在的路径不该进待开队列");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
 }
 
 /// 入口（main.rs 调用；pub 因为 bin 目标跨 crate 引用它）。

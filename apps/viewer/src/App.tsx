@@ -344,21 +344,15 @@ export function App() {
       // 用户显式切过的模式优先——显式选择永远压过默认推断。
       setMode(readMode() ?? (paths.length > 0 ? "pure" : "heavy"));
       const load = async () => {
-        for (const p of paths) {
-          const st = await viewerFileSource.fs?.stat(p);
-          if (st?.isDir) {
-            // 目录必须靠资源管理器看 → 切重量模式
-            setMode("heavy");
-            navigate(p, false);
-          } else {
-            openPath(p);
-          }
-        }
+        for (const p of paths) await openTarget(p);
       };
       void load();
     });
     import("@tauri-apps/api/event").then(({ listen }) =>
-      listen<string>("viewer-open-file", (e) => openPath(e.payload)).then((u) => u),
+      // 单实例投递：目录进资源管理器，文件开预览（与启动参数同一条判别）。
+      listen<string>("viewer-open-file", (e) => {
+        void openTarget(e.payload);
+      }).then((u) => u),
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -578,6 +572,23 @@ export function App() {
     setActiveTabId(id);
   }, []);
 
+  /** 打开一个路径：目录进资源管理器（切重量模式），文件开预览标签。
+   *  启动参数与单实例投递共用这一条判别——主程序「在查看器中打开」传目录
+   *  是常规动作，走错分支会得到一个报「不是文件」的标签页。 */
+  const openTarget = useCallback(
+    async (path: string) => {
+      const st = await viewerFileSource.fs?.stat(path);
+      if (st?.isDir) {
+        // 目录必须靠资源管理器看 → 切重量模式
+        setMode("heavy");
+        navigate(path, false);
+      } else {
+        openPath(path);
+      }
+    },
+    [navigate, openPath],
+  );
+
   const closeTab = useCallback((id: number) => {
     setTabs((ts) => {
       const closed = ts.find((t) => t.id === id);
@@ -597,10 +608,11 @@ export function App() {
       setDragOver(false);
       for (const f of Array.from(e.dataTransfer.files)) {
         const any = f as File & { path?: string };
-        if (any.path) openPath(any.path);
+        // 拖进来的可能是文件夹 —— 同样要走目录/文件判别，不能一律开成预览标签。
+        if (any.path) void openTarget(any.path);
       }
     },
-    [openPath],
+    [openTarget],
   );
 
   // 搜索
