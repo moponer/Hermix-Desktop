@@ -181,6 +181,26 @@ const pd = p.contentDocument;                   // 第 3 层
 - 反面教材：早先一轮在「破解混淆字体」上耗了 20 分钟，一题没做。
   **读不清就截图看图，别写代码猜。**
 
+### 3.9 查看器刚重启过：`webview_eval` 会报「连接被拒绝」—— 先 `web_open` 一个页面
+
+**症状**：`webview_eval` / `webview_text` / `webview_screenshot` 全部返回
+`远程计算机积极拒绝，无法连接 (os error 10061)`，但 MCP 端点本身是通的
+（`tools/list` 正常返回 30 个工具）。
+
+**根因**：这些工具走 **WebView2 的 CDP 端口**，端口号从
+`$hermix_home/webview-profile/EBWebView/DevToolsActivePort` 读。
+**查看器重启后如果还没有网页视图，WebView2 根本不会启用远程调试**，
+那个文件里留着上一个进程的旧端口号 → 连过去没人听 → 拒绝连接。
+（2026-10-21 22:38 实测：重启查看器后连开 4 次 `webview_eval` 全是这个错。）
+
+**解法（不需要用户动手）**：先用 **`web_open` 打开任意一个页面**
+（它走的是查看器 UI 层面，不依赖 CDP）→ 网页视图被创建 →
+`DevToolsActivePort` 被重写 → `webview_eval` 立刻可用。
+
+> 同样的道理：查看器重启后**登录态还在**（网页 profile 是持久化的，
+> `$hermix_home/webview-profile/` 不随进程消失），但**页面不在了**。
+> 所以重启后第一件事是 `web_open` 回到课程页，而不是让用户重新登录。
+
 ## 4. 形态 ②③：独立浏览器窗口 / 无头（`browser_*`）
 
 工具都带 `session`（会话 id，缺省 `default`）；每个 session 一个独立浏览器
