@@ -46,6 +46,7 @@ pub mod fallback;
 pub mod focus_stack_ops;
 pub mod gatherer;
 pub mod hardline;
+pub mod history_window;
 pub mod hook_dispatch;
 pub mod interrupt;
 pub mod local_agent_service;
@@ -117,6 +118,7 @@ pub mod long_horizon;
 //Researcher OS
 pub mod researcher_loop;
 pub mod researcher_queue;
+pub mod request_probe;
 
 // Re-export primary agent types
 pub use agent_loop::{

@@ -504,6 +504,25 @@ pub struct AgentOverrides {
     /// and ordinary conversations are unaffected.
     #[serde(default)]
     pub external_delivery: Option<ExternalDelivery>,
+    /// 只把**最近若干 token**的历史放进 LLM 上下文（`None` = 全部照送）。
+    ///
+    /// 给长跑任务用的：定时任务每轮都往同一个会话追加消息，会话在磁盘上
+    /// 完整留存（UI 时间线 / 归档 / 检索都不受影响），但**送给模型的那一份**
+    /// 必须有界 —— 否则历史会随轮次线性膨胀，每轮重发整段历史。
+    ///
+    /// 实测（2026-10-21，一条刷课任务跑 41 轮）：会话累积到 3,718 条消息 /
+    /// 6.1M 字符，单次请求长到 ~1M token（模型窗口的 1M），而系统提示只占
+    /// 其中 1%。上下文压缩要到逼近窗口才触发，所以前面每一轮都在为越来越长
+    /// 的历史付费。
+    ///
+    /// 语义：按**估算 token**从尾部往前保留（估算用
+    /// [`hermix_agent::context::estimate_message_tokens`] 那套 CJK 感知口径，
+    /// 不是 `chars/4`）。切点不会落在 tool 结果上，末尾悬空的 tool_call 也会
+    /// 被丢掉 —— 两者都会让上游拒收。
+    ///
+    /// `None` = 保持旧行为（整段历史照送），普通对话完全不受影响。
+    #[serde(default)]
+    pub history_token_budget: Option<usize>,
     /// Per-turn "thinking on/off" switch for providers that expose an
     /// `enable_thinking`-style request parameter (DeepSeek, some OpenAI-
     /// compatible endpoints, ...). `None` = leave the provider's default

@@ -270,6 +270,12 @@ async fn execute_automation_run(
             DeliveryTarget::Standalone { reason, .. } => Some(reason.clone()),
         },
     });
+    // **有界历史窗口**（与 JSON 引擎同一套语义）：只把最近若干 token 的历史
+    // 送给模型，磁盘上的会话照旧完整。理由见
+    // `dashboard::automation::AUTOMATION_HISTORY_TOKEN_BUDGET` 的注释。
+    overrides.history_token_budget = Some(
+        crate::dashboard::automation::AUTOMATION_HISTORY_TOKEN_BUDGET,
+    );
 
     if let Some(ref model) = auto.model_id {
         if !model.is_empty() {

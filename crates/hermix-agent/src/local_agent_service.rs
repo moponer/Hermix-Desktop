@@ -1729,6 +1729,25 @@ impl AgentService for LocalAgentService {
             .load_session(session_id)
             .unwrap_or_default();
 
+        // **有界历史窗口**（长跑任务专用）：磁盘上的会话照旧完整，但送给模型的
+        // 那一份按 token 预算裁到最近几轮。
+        //
+        // 为什么必须有界：定时任务每轮都往同一个会话追加消息，历史随轮次线性
+        // 膨胀，而压缩要等到逼近模型窗口才触发 —— 实测一条跑 41 轮的刷课任务，
+        // 单次请求长到 ~1M token（模型窗口 1M），而系统提示只占 1%。
+        // 没有这个闸门，每一轮都在为整段历史重新付费。
+        if let Some(budget) = overrides.history_token_budget {
+            let before = messages.len();
+            messages = crate::history_window::trim_to_token_budget(messages, budget);
+            tracing::info!(
+                session_id = %session_id,
+                kept_messages = messages.len(),
+                dropped_messages = before.saturating_sub(messages.len()),
+                budget_tokens = budget,
+                "bounded history window applied to the LLM payload"
+            );
+        }
+
         // O3.2: Gateway pre-compression safety net. Detect sessions that
         // have grown beyond 85% of a typical context window (200K tokens)
         // between agent runs. Compress by truncating old messages to prevent
@@ -2196,6 +2215,19 @@ impl AgentService for LocalAgentService {
             .session_persistence
             .load_session(session_id)
             .unwrap_or_default();
+        // **有界历史窗口**（长跑任务专用）—— 与 `send_message` 同一套语义，
+        // 两条路必须一致，否则流式与非流式的上下文长度会分叉。
+        if let Some(budget) = overrides.history_token_budget {
+            let before = messages.len();
+            messages = crate::history_window::trim_to_token_budget(messages, budget);
+            tracing::info!(
+                session_id = %session_id,
+                kept_messages = messages.len(),
+                dropped_messages = before.saturating_sub(messages.len()),
+                budget_tokens = budget,
+                "bounded history window applied to the LLM payload (stream)"
+            );
+        }
         tracing::debug!(
             session_id,
             loaded_messages_len = messages.len(),
@@ -4067,6 +4099,7 @@ mod override_tests {
             memory_dir: None,
             on_prefetch_intent: None,
             external_delivery: None,
+            history_token_budget: None,
             shutdown: None,
             attached_file_paths: None,
             enable_thinking: None,
@@ -4106,6 +4139,7 @@ mod override_tests {
             memory_dir: None,
             on_prefetch_intent: None,
             external_delivery: None,
+            history_token_budget: None,
             shutdown: None,
             attached_file_paths: None,
             enable_thinking: None,

@@ -41,6 +41,20 @@ use hermix_tools::tools::cronjob::CronjobBackend;
 
 // ── Storage path ────────────────────────────────────────
 
+/// 自动化每轮送给模型的**历史预算**（估算 token，不是 `chars/4`）。
+///
+/// 定时任务每轮都往同一个会话追加消息，而上下文压缩要等到逼近模型窗口
+/// （本项目用的 MiniMax 免费档窗口是 1M token）才触发 —— 于是前面每一轮都在
+/// 为越来越长的历史付费。实测一条跑 41 轮的刷课任务：历史累积到 3,718 条
+/// 消息 / 6.1M 字符，单次请求长到 ~1M token，而系统提示只占其中 1%。
+///
+/// 这个预算把「送进模型的历史」限制在最近约 4 轮：够 agent 接着上一轮的
+/// 状态往下做（它本来每轮就会重读课程目录），又不会随轮次线性膨胀。
+///
+/// 用**估算 token**而不是消息条数：工具调用参数（JSON）才是大头，按条数
+/// 裁不准。
+pub const AUTOMATION_HISTORY_TOKEN_BUDGET: usize = 60_000;
+
 fn automation_state_path(state: &HttpServerState) -> PathBuf {
     state.hermix_home.join("automation_tasks.json")
 }
@@ -943,6 +957,11 @@ fn spawn_run(state: HttpServerState, task: AutomationTask) {
         }
 
         let mut overrides = hermix_core::traits::AgentOverrides::default();
+        // **有界历史窗口**：这一轮只把最近若干 token 的历史送给模型。
+        // 磁盘上的会话照旧完整（UI 时间线 / 归档 / 检索不受影响），但不再每轮
+        // 重发整段历史 —— 实测一条跑 41 轮的刷课任务，历史累积到 3,718 条消息 /
+        // 6.1M 字符，单次请求长到 ~1M token（模型窗口就是 1M），系统提示只占 1%。
+        overrides.history_token_budget = Some(AUTOMATION_HISTORY_TOKEN_BUDGET);
         // 标成「外部触发」：这一轮的提示词与回复都以 `MessageRole::Automation`
         // 落库 —— 前端渲染成自动化卡片，而**不进 LLM 上下文**，模型不会在下一轮
         // 看到「用户说过这句话」的假象。

@@ -161,6 +161,7 @@ pub(crate) async fn handle_ws(
             // `None` here is what makes ordinary turns persist as a
             // real `user` message.
             external_delivery: None,
+            history_token_budget: None,
             approval_requester: None,
             on_event: None,
             pre_approval_checker: None,
@@ -1074,6 +1075,7 @@ pub(crate) async fn handle_ws_stream_send(
         // the automation scheduler, which calls `send_message`
         // in-process rather than over the socket.
         external_delivery: None,
+        history_token_budget: None,
     };
 
     let tx_clone = tx.clone();

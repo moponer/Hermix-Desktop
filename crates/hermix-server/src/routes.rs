@@ -1521,6 +1521,7 @@ pub(crate) async fn send_message(
         // `external_delivery`, and it calls `send_message` in-process,
         // never through HTTP.
         external_delivery: None,
+        history_token_budget: None,
     };
 
     // Call agent service

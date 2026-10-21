@@ -140,6 +140,8 @@ pub(crate) async fn call_llm_with_retry(
     }
 
     let api_messages = messages_for_api_call(config, ctx);
+    // 分段探针：把「哪一段字节在变」打进日志 —— 缓存失效的起点就在那一段。
+    crate::request_probe::observe(config.session_id.as_deref(), &api_messages, tool_schemas);
     let retry = &config.retry;
     let (effective_max_retries, effective_base_delay_ms) =
         (retry.max_retries, retry.base_delay_ms);

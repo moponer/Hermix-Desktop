@@ -1,31 +1,84 @@
 # Decision Note: Token 消耗结构分析与缓存命中率优化方案
 
-Status: proposed — 2026-10-21 完成全量盘点 + provider 级对照实验，方案待拍板后实施（实施要动 `crates/hermix-agent/*`，该 crate 此刻由并行线在改）
+Status: proposed — 2026-10-21 完成全量盘点 + provider 级对照实验；**2026-10-22 复核后重心更正**（见「事实 6」：真正的头号浪费不是 prompt 层，而是会话历史无界累积）。方案待拍板后实施
 
-## 实测基线（2026-10-21，41 轮无人值守任务，单会话）
+## ⚠️ 复核更正（2026-10-22）
 
-| 指标 | 实测值 |
-|---|---|
-| 缓存命中率（provider 口径） | **89.21%** |
-| 每轮未命中占比 | 中位 10.5%（最好 7.3%，最差 23.3%） |
-| prompt 累计 / 其中 cache_read | 284,415,406 / 253,728,720（**新鲜 30.7M**） |
-| completion 累计 | 752,171（**18,346/轮**，其中 reasoning 占 35%） |
-| LLM 调用次数 | 304 次 / 41 轮 = **7.4 次/章** |
+本篇初稿把「prompt 层的冗余与 churn」当成主项。复核后**这个重心是错的**：
 
-### 请求体的真实形状（一次 API 调用）
+- 初稿写「单次请求真实输入 ≈ 43K token / 每章 ≈ 320K」—— **错了**，那是拿
+  `prompt_cache` 日志里 `chars÷4` 的估算值当成真实 token。实测 provider 报的
+  单次请求是 **~1M token**，比系统提示大两个数量级。
+- 真正的构成：**会话历史占了 99%**，系统提示只占 1%。所以 P1 档（prompt 瘦身）
+  最多省 1%，**降级为锦上添花**；头号措施换成「有界历史窗口」（已实施，见下）。
 
-| 组成 | 字符 | 真实 token（估） | 缓存状态 |
-|---|---|---|---|
-| `tools` 参数（109 个工具 JSON schema） | 31,381 | ~10K | 整块可缓存，**但顺序不稳定** |
-| system = `stable` | 13,428 | ~6K | 缓存（key = model‖personality‖system_prompt‖workspace） |
-| system = `directions`（**每 turn 重算**） | ~19,628 | ~8K | **不稳定**（gating 含 `tool_call_count`） |
-| system = `context`（skills + 记忆 + context files） | 35,552 | ~16K | 缓存（key = epoch） |
-| system = `volatile`（时间戳 + Session ID） | 188 | ~90 | **每请求重算** |
-| `messages` 数组（活窗口） | ~7,400 | ~3K | 尾部每调用变化 |
+下面「事实 6」是复核时补的，「Decision」一节已按新重心重排。
 
-**单次请求真实输入 ≈ 43K token**；每章 7.4 次调用 → **≈ 320K token/章**。
+## 事实 6（复核补，最重要）：会话历史无界累积，占请求的 99%
 
-## 一、缓存到底怎么工作的（provider 级对照实验，2026-10-21 实测）
+### 6.1 provider 的 `prompt_tokens` 是「单次请求大小」，不是累计计数
+
+初稿怀疑它是累计计数器（会话第 7 分钟就报 2.8M）。实测排除：
+
+| 请求 | system 字符 | provider 报的 `prompt_tokens` |
+|---|---|---|
+| 1 | 12K | 3,816 |
+| 2 | 24K | 7,416 |
+| 3 | 36K | 11,016 |
+
+随 system 线性变化（比值 2.89 ≈ 设计值 3.0）→ **单次请求大小**。
+于是生产里的 `prompt_tokens = 8,027,881` 是**真的**：那一次请求带了 800 万 token。
+
+### 6.2 请求里 99% 是累积的会话历史
+
+该会话（41 轮）的 `messages` 表：
+
+| 列 | 字符 | 是否进 LLM 请求 |
+|---|---|---|
+| `content` | 561,460 | ✅ |
+| `tool_calls`（模型自己发起的工具调用的 JSON） | 2,051,896 | ✅ |
+| `extra`（自动化投递元数据：`automation_name` + 完整提示词） | 3,525,402 | ❌（`load_session` 过滤 `role='automation'`） |
+| 系统提示 | 68,796 | ✅ |
+| 工具 schema | 31,381 | ✅ |
+
+模型窗口（`minimax/minimax-m3.1-flash:free`）= **1,000,000 token**，实测请求 ~1M → **顶满整个窗口**。
+系统提示在其中占 **1%**。
+
+### 6.3 为什么压缩一直没救场
+
+压缩阈值 = `(max_context − output_reserve) × 0.8` ≈ **380K token**。
+压缩器是接了的（`local_agent_service.rs:1165`），`archive_context_section` 也无条件执行
+—— 但它只把中间内容**写到磁盘**（`ctx.get_messages()` 是不可变引用，**并不缩短活上下文**），
+真正会缩短的 LLM 压缩器要等到逼近阈值才动手。
+
+结果：**前 40 轮历史无界增长，第 41 轮才刚够到阈值**。压缩在这个任务上等于没有。
+
+### 6.4 「89.21% 命中率」的真实含义
+
+它是「**一个巨大的请求**里 89.21% 被缓存了」，不是「小请求被缓存了 89%」。
+新鲜部分 ~10.8% ≈ **800K token/轮** —— 这才是每轮真正在付的钱。
+
+## Decision（按复核后的重心重排）
+
+**先做「有界历史窗口」（已实施），再做「让字节稳定」，最后才是 prompt 层瘦身。**
+
+核心判断（provider 级对照实验，见下节）：**缓存是块级的，只有变了的字节重新计费。
+所以提命中率靠「让字节别变」，不靠「把 prompt 变小」；变小是为了省绝对量。**
+而绝对量的 99% 在会话历史里 → **先把历史管住，再谈别的。**
+
+### P0-新（头号，已实施）：自动化每轮的有界历史窗口
+
+- 新增 `AgentOverrides::history_token_budget`（`hermix-core`）+ `history_window` 模块
+  （`hermix-agent`）：按**估算 token**（CJK 感知口径，不是 `chars/4`）从尾部保留，
+  切点不落在 tool 结果上、末尾悬空的 tool_call 会被丢掉（两者都会让上游拒收）。
+- 两个自动化引擎（JSON 引擎 `dashboard/automation.rs`、SQLite 引擎
+  `automation_trigger.rs`）都设 `60,000` token 预算 ≈ 最近 3~4 轮。
+- 磁盘上的会话**照旧完整**（UI 时间线 / 归档 / 检索不受影响），只有「送进模型
+  的那一份」有界。
+- 预期：单次请求 ~1M → **≤100K token**（~10x），每轮 ~7M → **≤700K**。
+
+### P0：让字节稳定（命中率 → 98%+）
+
 
 对 `https://api.kilo.ai/api/gateway`（`minimax/minimax-m3.1-flash:free`）直接发请求，
 唯一变量是「请求体里哪一段的字节变了」：
@@ -98,7 +151,9 @@ Status: proposed — 2026-10-21 完成全量盘点 + provider 级对照实验，
 | **M5 stable 层 key 纳入工具集** | `compute_prompt_cache_key` 加入工具集哈希 | 修 P0-5 的正确性 bug（清单与实际不一致） |
 | **M6 directions 分层** | 把 always-on 的 10,313 字符移进 **stable 层**（它们与 turn 无关），只把真正 per-turn 的（domain.directive / tool-gated / project.conventions / workbench）留在变动区 | 19,628 字符的变动区缩到几百字符 |
 
-### P1 档：固定前缀瘦身（绝对量 −30~40%）| 措施 | 做法 | 省下 |
+### P1 档：固定前缀瘦身（**降级**：绝对量里只占 1%，做完 P0 再看）
+
+| 措施 | 做法 | 省下 |
 |---|---|---|
 | **M7 skill 索引预算下调** | 20,000 → 4,000（只留名字+一行摘要，命中后再取全文） | ~16,000 字符 |
 | **M8 skill 正文按需** | 正文注入改为「命中即注入，但每个 skill 只注入**当前任务相关**的章节」；或索引里带 `when_to_use`，由模型主动 `skill_read` 取 | ~8,000 字符/请求 |
@@ -120,17 +175,26 @@ Status: proposed — 2026-10-21 完成全量盘点 + provider 级对照实验，
 
 | 指标 | 现状 | 目标 | 怎么测 |
 |---|---|---|---|
-| **缓存命中率** | 89.21% | **≥98%** | `token_usage` 的 `cache_read_tokens/prompt_tokens` 按轮聚合（provider 口径） |
+| **单次请求真实 token** | **~1M**（顶满模型窗口） | **≤100K**（~10x） | `prefix_probe` 日志（见下）+ provider 报的 `prompt_tokens` |
+| **每轮 token** | **~6.94M** | **≤700K** | `token_usage` 按轮聚合 |
+| **缓存命中率** | 89.21% | **≥98%** | `token_usage` 的 `cache_read_tokens/prompt_tokens`（provider 口径） |
 | 每轮未命中占比（中位） | 10.5% | **≤2%** | 同上 |
-| 单次请求真实 token | ~43K | **≤28K** | `prompt_cache` 的 `*_est` 换成 CJK 感知估算（`context.rs:117` 已有 `estimate_tokens`，日志层却用 `len()/4`） |
-| 每章 token | ~320K | **≤180K** | 上述 × 调用次数 |
+| 历史进模型的 token | 无界（累积 3,718 条消息 / 6.1M 字符） | **≤60,000** | `bounded history window applied to the LLM payload` 日志行 |
 | 每章调用次数 | 7.4 | **≤5** | `messages` 表 assistant 行数 / 轮数 |
 | tools 数组跨重启稳定性 | 107/109 位置变化 | **0 变化** | `/v1/tools` 顺序哈希跨重启比对（`.git/vtest/probe-order.py` 可复用） |
-| 系统提示字符数 | 68,796 | **≤48,000** | `prompt_cache` 日志的 `out_chars` |
-| skill 正文注入量 | 16,008/请求 | **≤6,000 且按需** | 同上 |
+| 系统提示字符数 | 68,796 | ≤48,000（**P1 档，可选**） | `prefix_probe` 的 `system=` |
+| skill 正文注入量 | 16,008/请求 | ≤6,000 且按需（**P1 档，可选**） | 同上 |
 
-**验收方式**：在 `prompt_cache` 那条日志上加「本次 system 段的哈希」与「上次是否相同」两个
-span 字段，就能把「哪一段在变」变成**可观测**，而不是靠推断 —— 这是后续所有优化的地基。
+**验收方式（已实施）**：`prefix_probe` 日志行，每次 API 调用前打出三段的**真实字符数**
+与「相对同会话上次变了哪几段」：
+
+```text
+prefix_probe: #12 session=a04cab07 system=68796chars tools=31381chars
+              messages=7352chars | 变了: messages
+```
+
+「变了」那一列就是**缓存失效的起点** —— 从该段往后，之前建立的缓存全部失效。
+有了它，每条优化都能**当场验证**，而不是靠推断。
 
 ## Alternatives considered
 

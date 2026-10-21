@@ -426,6 +426,8 @@ pub(crate) async fn collect_stream_inner(
     on_chunk: &(dyn Fn(StreamChunk) + Send + Sync),
 ) -> Result<StreamCollectOutcome, AgentError> {
     let api_messages = messages_for_api_call(config, ctx);
+    // 分段探针：把「哪一段字节在变」打进日志 —— 缓存失效的起点就在那一段。
+    crate::request_probe::observe(config.session_id.as_deref(), &api_messages, tool_schemas);
     let default_extra_body = extra_body_for_api_mode(config, &config.api_mode);
     let (_, active_request_model) = extract_provider_and_model(config, active_model);
     let (_, primary_request_model) =
