@@ -160,6 +160,31 @@ const pd = p.contentDocument;                   // 第 3 层
   **每提交一份都回报**（提交了什么、得分多少），出错要能立刻看出来。
 - 提交后**复核**：读结果页的「我的答案」和得分，别把「点了提交」当成「交上去了」。
 
+### 3.8 要快：把登录态复制出去，**多会话并行**
+
+一个会话一次只能看一个页面，串行刷几十节课就是几十小时。**登录态是可以复制的**：
+
+- 查看器内嵌视图的 cookie 里，**真正决定登录态的那几颗是 HttpOnly**
+  （超星是 `p_auth_token` / `vc3` / `k8s`）→ `document.cookie` **读不到**，
+  必须走 CDP 的 `Network.getAllCookies`。
+- 查看器的 WebView2 调试端口在 `<profile>/EBWebView/DevToolsActivePort`；
+  每个 `browser_open` 会话也各有自己的 profile 与端口
+  （`<hermix-home>/browser-profiles/<session>/DevToolsActivePort`）。
+- 于是：**读**内嵌视图的全部 cookie → 对每个新会话用 CDP
+  `Network.setCookie`（**按原来的 domain/path 逐条设**）→ 会话即已登录。
+
+**坑（实测踩过）**：
+- `document.cookie` 只能拿到非 HttpOnly 的那几颗，**不够**（会跳登录页）。
+- `route` 这颗是**主机级**的（`mooc1.chaoxing.com`），别设成 `.chaoxing.com` ——
+  设成全域后 passport2 会拿到 mooc1 的 route，直接判定未登录。
+- 设 cookie 必须在**目标域下**用 `document.cookie` 设；用 CDP `Network.setCookie`
+  则可以精确指定 domain/path，**优先用后者**。
+
+并行到什么程度要看站点的**章节锁**：
+- 跨课程/跨站点：可以真并行（各开一个会话，各刷各的）。
+- **同一门课内部通常不行**：超星的锁定章节会直接回「章节未开放」，
+  必须一节做完下一节才开。→ 同一门课只能串行，**并行要开在课程之间**。
+
 ## 4. 形态 ②③：独立浏览器窗口 / 无头（`browser_*`）
 
 工具都带 `session`（会话 id，缺省 `default`）；每个 session 一个独立浏览器
