@@ -89,8 +89,18 @@ tags: ["超星", "学习通", "chaoxing", "课程", "作业", "测验", "浏览�
 （`iframe.src` 属性不随导航更新，**要读 `contentWindow.location.href`**）。
 
 - **题目文字被 `font-cxsecret` 混淆**：DOM 里是生僻字（`系统是由处于一定环懌中的…`），
-  **渲染出来是正常汉字** → 只能**截图看图**（`webview_screenshot` 带 `clip+scale`）。
-  别去破解那个字体。
+  **渲染出来是正常汉字**。两条路拿原文（详见 `browser-automation` §3.2）：
+  1. **canvas 反渲染解码（精确，优先）** —— 页面把混淆字体以 base64 TTF 内嵌在
+     `<style>` 的 `@font-face { font-family: font-cxsecret; src: url(data:application/font-ttf;base64,…) }`。
+     做法：`webview_eval` 里取那段 base64 → 在 canvas 上用 `font-family: font-cxsecret`
+     逐字渲染每个混淆字 → 与**题干正文字体**（页面里题干 span 的 `font-family`，
+     这次是 **Source Han Sans CN Normal**）逐个字形比像素 → 得到「混淆字 ↔ 真字」
+     对照表 → 用真字把题干重绘 → 拿到精确文本。
+     2026-10-21 实测：40 个字形全匹配，6 道题一字不差还原。
+  2. **截图看图（通用兜底）** —— `webview_screenshot` 带 `clip` + `scale=2`，
+     画面本来就是正常汉字。缺点是认字、复制不了，适合只读一两题。
+- **别在「DOM 读不出」上反复打转**：早先的 agent 在这条上空转了 20 分钟，
+  改用解码后十几分钟就还原了。
 - 题目块选择器 `.TiMu`，`data` 属性是题号（如 `400339218`）。
 - 选项：
   - 单选 → `input[type=radio][name="answer{题号}"]`，value = `A/B/C/D`
