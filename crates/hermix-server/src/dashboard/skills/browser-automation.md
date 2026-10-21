@@ -46,6 +46,11 @@ tags: ["software-development", "builtin", "browser", "浏览器", "自动化", "
    而不是只留查看器那几十个。抽掉 `tool_search` / `tool_describe` 之后，
    agent 会卡在「找工具」上反复失败（`Tool 'tool_search' does not exist`），
    一轮下来什么正事也没干。
+4. **`tool_describe` 调不动就别调**：2026-10-21 实测，agent 的可调度工具面里
+   有 `tool_search` / `tool_call`、**没有** `tool_describe`，而系统提示仍在宣传它
+   —— 模型会连着几轮调它、每轮都被校验器拒（`Tool 'tool_describe' does not exist`），
+   白烧好几轮。要看工具的完整参数就直接调 `list_tools`，
+   或直接用上面点名的 `hermix-viewer__webview_*`（它们的参数在本 skill 里已写全）。
 
 ## 2. 形态 ①：内嵌网页视图（主路径）
 
