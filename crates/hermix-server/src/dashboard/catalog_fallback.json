@@ -1,5 +1,5 @@
 {
-  "comment": "MCP 目录唯一数据源（2026-10-04 起取消远程拉取：官方 registry 与自建子注册中心两个源已删除，目录纯本地、由发版更新）。准入标准新增前两条硬约束：\n  1. 不得与内建工具重复 —— 内建已有 file/memory/web_extract/markitdown/read_pdf/terminal/browser+cua 等 34 个 toolset；重复项只会给 LLM 增加同义工具与 token 成本（旧版因此砍掉 filesystem/memory/fetch/markitdown/puppeteer/sequentialthinking/commands 共 11 条）。\n  2. 同一能力只留一个 —— 旧版有两个 notion、两个 postgres（且权限模型相反）、以及一个 reference test server，均已剔除。\n  3. 安装命令真实存在 + mcp_scan 全绿 + 中英文描述齐。\n注意：MCP 是外部服务的接入层，绝大多数条目需要用户提供自己的凭据，「内置」只能内置目录与二进制，内置不了开箱可用——因此不做 auto-seed。\n\n2026-10-05 追加「国内可用 + 零凭据」批次（bing-cn-mcp-enhanced / weather-china-mcp / i18n-mcp-server），起因是原 21 条几乎全是境外服务：GitHub / Slack / Notion / Brave / Exa / Firecrawl / AWS / Azure —— 在国内直连不可用或极慢，其中 13 条还要用户自备境外凭据，目录等于「看得见装不上」。\n  · 三条的版本号取自 npm registry 的 dist-tags.latest，已逐个核实包真实存在、license=MIT、README 明示无需 API key。**不写未经核实的包名**：目录会真的执行 `npx <pkg>@<version>`，编一个不存在的包名等于发一个装不上的按钮，比不发更糟。\n  · 检索位只留一条（约束 2）。同门的 `bing-cn-mcp`（1.0.2，作者 slcatwujian）能力与所选条目重复，按「同一能力只留一个」剔除；两者 MIT 且都免 key，要换回只需改这一条。\n  · 曾考虑 `baidu-search-mcp`（1.0.1，MIT）作为检索位，但 registry 无 readme 字段、npmjs.com 被 Cloudflare 拦截，**无法证实是否免 key**，故不入目录。证实后可替换。\n  · 曾考虑 `scmcp`（1.0.0，MIT，文档互转且完全离线），但与内建 markitdown / office-cli / file_converter 重复，按约束 1 剔除。\n  · id 用 `io.npm.<package>` 而非 `io.github.<org>/<pkg>`：这三条的来源就是 npm 仓库，凭空编一个 GitHub org 属于伪造出处。id 只作安装端点的查找键与中文名匹配的分词来源，不参与安装解析。",
+  "comment": "MCP 目录唯一数据源（2026-10-04 起取消远程拉取：官方 registry 与自建子注册中心两个源已删除，目录纯本地、由发版更新）。准入标准新增前两条硬约束：\n  1. 不得与内建工具重复 —— 内建已有 file/memory/web_extract/markitdown/read_pdf/terminal/browser+cua 等 34 个 toolset；重复项只会给 LLM 增加同义工具与 token 成本（旧版因此砍掉 filesystem/memory/fetch/markitdown/puppeteer/sequentialthinking/commands 共 11 条）。\n  2. 同一能力只留一个 —— 旧版有两个 notion、两个 postgres（且权限模型相反）、以及一个 reference test server，均已剔除。\n  3. 安装命令真实存在 + mcp_scan 全绿 + 中英文描述齐。\n注意：MCP 是外部服务的接入层，绝大多数条目需要用户提供自己的凭据，「内置」只能内置目录与二进制，内置不了开箱可用——因此不做 auto-seed。\n\n2026-10-05 追加「国内可用 + 零凭据」批次（bing-cn-mcp-enhanced / weather-china-mcp / i18n-mcp-server），起因是原 21 条几乎全是境外服务：GitHub / Slack / Notion / Brave / Exa / Firecrawl / AWS / Azure —— 在国内直连不可用或极慢，其中 13 条还要用户自备境外凭据，目录等于「看得见装不上」。\n  · 三条的版本号取自 npm registry 的 dist-tags.latest，已逐个核实包真实存在、license=MIT、README 明示无需 API key。**不写未经核实的包名**：目录会真的执行 `npx <pkg>@<version>`，编一个不存在的包名等于发一个装不上的按钮，比不发更糟。\n  · 检索位只留一条（约束 2）。同门的 `bing-cn-mcp`（1.0.2，作者 slcatwujian）能力与所选条目重复，按「同一能力只留一个」剔除；两者 MIT 且都免 key，要换回只需改这一条。\n  · 曾考虑 `baidu-search-mcp`（1.0.1，MIT）作为检索位，但 registry 无 readme 字段、npmjs.com 被 Cloudflare 拦截，**无法证实是否免 key**，故不入目录。证实后可替换。\n  · 曾考虑 `scmcp`（1.0.0，MIT，文档互转且完全离线），但与内建 markitdown / office-cli / file_converter 重复，按约束 1 剔除。\n  · id 用 `io.npm.<package>` 而非 `io.github.<org>/<pkg>`：这三条的来源就是 npm 仓库，凭空编一个 GitHub org 属于伪造出处。id 只作安装端点的查找键与中文名匹配的分词来源，不参与安装解析。\n\n2026-10-21 新增 hermix-viewer：本产品自带的**第一方**条目（不是第三方 registry 来源），走回环 http，因此标 official=true —— 它的安全性由本仓库保证，而不是靠 registry 背书。安装后在桌面端 agent 侧表现为 hermix-viewer__* 前缀的工具（web_open / webview_* / viewer_*），是「有头浏览器自动化」的主路径。",
   "items": [
     {
       "id": "io.github.modelcontextprotocol/server-github",
@@ -367,6 +367,19 @@
         "kind": "npm",
         "package": "i18n-mcp-server",
         "version": "0.0.2"
+      },
+      "required_env": []
+    },
+    {
+      "id": "hermix-viewer",
+      "title": "文件查看器（Hermix 自带）",
+      "description": "Hermix 文件查看器自带的 MCP 服务：在查看器的内嵌网页视图里打开网址、驱动页面、截图、按可见文字点击 —— 用户看得见、也能自己登录。需先在查看器 设置 → MCP 里开启本地服务（默认只监听回环）。",
+      "version": null,
+      "homepage": null,
+      "official": true,
+      "install": {
+        "kind": "remote",
+        "url": "http://127.0.0.1:3911/mcp"
       },
       "required_env": []
     }

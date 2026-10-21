@@ -179,6 +179,10 @@ const ZH: &[ZhEntry] = &[
     ZhEntry { match_key: "stripe", title: "Stripe", desc: "查询订单与订阅数据。", category: "数据" },
     ZhEntry { match_key: "supabase", title: "Supabase", desc: "管理数据库与鉴权配置。", category: "数据" },
     ZhEntry { match_key: "time", title: "时间", desc: "时区换算与当前时间查询。", category: "通用" },
+    // 2026-10-21 本产品自带的**第一方**条目：Hermix 文件查看器的 MCP 服务。
+    // 它是「有头浏览器自动化」的主路径 —— 页面渲染在用户看得见的预览区里，
+    // 用户能自己登录，agent 用 hermix-viewer__* 工具驱动同一块屏幕。
+    ZhEntry { match_key: "hermix", title: "文件查看器", desc: "驱动查看器的内嵌浏览器：开网址、按文字点击、截图 —— 用户看得见、也能自己登录。", category: "办公" },
 ];
 
 fn zh_for(item: &CatalogItem) -> Option<&'static ZhEntry> {

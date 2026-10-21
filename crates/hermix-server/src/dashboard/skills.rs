@@ -609,6 +609,14 @@ const BUILTIN_SKILLS: &[(&str, &str, &str)] = &[
         "document-authoring",
         include_str!("skills/document-authoring.md"),
     ),
+    // chaoxing-learning: 超星学习通刷课 + 交作业的站点知识。通用操作能力
+    // （怎么用 MCP 驱动查看器内嵌浏览器）在 browser-automation skill 里，
+    // 这里只留超星自己的门道（URL 形态 / 目录图标 / 播放器 API / 作业页 DOM）。
+    (
+        "lifestyle",
+        "chaoxing-learning",
+        include_str!("skills/chaoxing-learning.md"),
+    ),
 ];
 
 /// Sidecar next to a seeded `SKILL.md`, recording the SHA-256 of the

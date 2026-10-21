@@ -55,6 +55,36 @@ fn has_traceable_source(item: &CatalogItem) -> bool {
     item.official || item.homepage.is_some()
 }
 
+/// `http://` 地址是否指向**本机回环**（`localhost` / `127.x.x.x` / `::1`）。
+///
+/// 用来把「明文 HTTP 远程地址」这条红线**收窄**到真正会把内容送出本机的场景。
+/// 回环上的明文 HTTP 不经过网络（内容不出本机），但同机进程可以监听 ——
+/// 所以它被降级为「需确认」而不是被当成安全。
+fn is_loopback_url(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix("http://") else {
+        return false;
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    // 去掉 userinfo（http://user:pass@host）
+    let authority = authority.rsplit('@').next().unwrap_or(authority);
+    // 主机部分：IPv6 字面量 `[::1]:port` 与 `host:port` 两种写法
+    let host = if let Some(end) = authority.strip_prefix('[') {
+        end.split(']').next().unwrap_or("")
+    } else {
+        authority.split(':').next().unwrap_or("")
+    };
+    let host = host.trim();
+    if host.eq_ignore_ascii_case("localhost") || host == "::1" {
+        return true;
+    }
+    // 127.0.0.0/8 整段都是回环，但要排除 `127.0.0.1.evil.com` 这类
+    // 「以 127. 开头但其实是域名」的写法 → 必须是四段十进制。
+    let parts: Vec<&str> = host.split('.').collect();
+    parts.len() == 4
+        && parts[0] == "127"
+        && parts.iter().all(|p| !p.is_empty() && p.parse::<u8>().is_ok())
+}
+
 /// 提示注入特征：目录描述里塞指令，试图改写 agent 行为。目录正文会进
 /// 系统提示附近（agent 读得到自己的工具说明），这类文本等价于远程指令注入。
 fn injection_hits(text: &str) -> Vec<ScanHit> {
@@ -213,11 +243,22 @@ pub fn scan(item: &CatalogItem) -> ScanResult {
     // ── 硬红线 ──
     if let CatalogInstall::Remote { url } = &item.install {
         if url.starts_with("http://") {
-            block = true;
-            hits.push(ScanHit {
-                rule: "plain_http_remote",
-                detail: "远程地址是明文 HTTP：对话内容会裸奔在网络里。".into(),
-            });
+            if is_loopback_url(url) {
+                // 回环地址：流量不出本机，「内容裸奔在网络里」这个风险不成立
+                // —— 本产品自带的文件查看器 MCP 就走这条路（127.0.0.1:3911）。
+                // 但同机别的进程能听见，所以**降级为需确认**而不是直接放行，
+                // 也不豁免成 Pass：用户在 UI 上仍看得见这条提示。
+                hits.push(ScanHit {
+                    rule: "plain_http_loopback",
+                    detail: "本机回环地址上的明文 HTTP：内容不出本机，但同机进程可以读取。".into(),
+                });
+            } else {
+                block = true;
+                hits.push(ScanHit {
+                    rule: "plain_http_remote",
+                    detail: "远程地址是明文 HTTP：对话内容会裸奔在网络里。".into(),
+                });
+            }
         }
     }
     for h in injection_hits(&item.description) {
@@ -340,6 +381,40 @@ mod tests {
         let r = scan(&remote("http://x.example/mcp", "普通 server", true));
         assert_eq!(r.verdict, Verdict::Block);
         assert!(r.hits.iter().any(|h| h.rule == "plain_http_remote"));
+    }
+
+    /// **回环地址的明文 HTTP 不该被拒**：本产品自带的文件查看器 MCP 就走
+    /// `http://127.0.0.1:3911/mcp`——内容不出本机，红线的前提不成立。
+    /// 但同机进程能监听，所以是「需确认」而不是「安全」。
+    #[test]
+    fn plain_http_loopback_is_warn_not_block() {
+        for url in [
+            "http://127.0.0.1:3911/mcp",
+            "http://localhost:3911/mcp",
+            "http://127.0.0.2:9000/mcp",
+        ] {
+            let r = scan(&remote(url, "本机回环 server", true));
+            assert_eq!(r.verdict, Verdict::Warn, "{url} 应当是需要确认");
+            assert!(
+                r.hits.iter().any(|h| h.rule == "plain_http_loopback"),
+                "{url} 应当命中回环提示"
+            );
+            assert!(
+                !r.hits.iter().any(|h| h.rule == "plain_http_remote"),
+                "{url} 不该再命中远程红线"
+            );
+        }
+    }
+
+    /// 回环判定不能被「看起来像回环的域名」骗过去。
+    #[test]
+    fn loopback_detection_rejects_lookalike_hosts() {
+        assert!(!is_loopback_url("http://127.0.0.1.evil.com/mcp"));
+        assert!(!is_loopback_url("http://1270.0.0.1/mcp"));
+        assert!(!is_loopback_url("http://notlocalhost/mcp"));
+        assert!(!is_loopback_url("https://127.0.0.1/mcp"));
+        assert!(is_loopback_url("http://127.0.0.1/mcp"));
+        assert!(is_loopback_url("http://[::1]:3911/mcp"));
     }
 
     #[test]
