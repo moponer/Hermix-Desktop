@@ -1,7 +1,7 @@
 # Decision Note: 定时任务的「创建」与「执行」两半没接上 —— 面板/对话里建的任务永远不会跑
 
-Status: proposed — 2026-10-21 实测证实：经 `POST /api/automation/tasks` 建的任务，
-启用后 `next_run_at` 正常推进、`run_count` 恒为 0、会话里没有任何回投、页面无任何动作
+Status: implemented — 2026-10-21 落地：触发判定重写 + 单飞 + 锚点认领 + 示例任务改纯读公开信息；
+hermix-server 473 项单测全绿（新增 9 条）
 
 ## 事实（逐条核实，非推测）
 

@@ -35,6 +35,8 @@ use tokio::sync::{Mutex as AsyncMutex, RwLock};
 use crate::HttpServerState;
 
 use async_trait::async_trait;
+use hermix_automation::{decide_delivery_target, DeliveryGuardInput, DeliveryTarget};
+use hermix_core::traits::ExternalDelivery;
 use hermix_tools::tools::cronjob::CronjobBackend;
 
 // ── Storage path ────────────────────────────────────────
@@ -114,6 +116,16 @@ pub struct AutomationTask {
     /// Most recent 20 runs. Older runs collapse into `run_count` only.
     #[serde(default)]
     pub history: Vec<RunRecord>,
+    /// 正在跑的那一轮的**开始时刻**（RFC3339）。
+    ///
+    /// 用来做**单飞**：上一次跑还没结束（跑得比调度间隔还长）时，下一个槽
+    /// 不能接着再起一个 —— 两个 agent 同时驱动同一个目标会互相踩
+    /// （2026-10-21 超星刷课就踩过：一个 12 分钟的活配 15 分钟的间隔，
+    /// 中途的 tick 会再触发一次）。
+    ///
+    /// 设了超过 [`RUNNING_STALE_MINUTES`] 还没清，就当那次进程死了、允许重跑。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub running_since: Option<String>,
     #[serde(default)]
     pub created_at: String,
     #[serde(default)]
@@ -301,6 +313,7 @@ fn seed_default() -> AutomationState {
         next_run_at: None,
         run_count: 0,
         history: vec![],
+        running_since: None,
         created_at: now.clone(),
         updated_at: now.clone(),
         // 内置示例不属于任何对话，无锚点。
@@ -310,64 +323,64 @@ fn seed_default() -> AutomationState {
         seeded: true,
         tasks: vec![
             mk(
-                "demo-morning-brief",
-                "每日早报",
-                "每天早上 8 点把昨天的关键进展 + 今日待办整理成简报",
-                "请帮我整理一份工作简报：1) 昨天我做了哪些事（从最近会话里提取）2) 今天应该关注什么 3) 有什么阻塞或风险。",
+                "demo-daily-weather",
+                "每日天气",
+                "每天早上 8 点查一次公开天气信息，出一行简报",
+                "请查一下今天（{date}）的公开天气信息：城市、天气状况、最高/最低气温、是否有降水或大风预警。用两三句话说清楚，附上信息来源链接。只查询公开信息，不要读取或修改任何本地文件、会话历史或配置。",
                 "0 8 * * *",
                 "每天 08:00",
-                "工作",
+                "生活",
+                "🌤️",
+            ),
+            mk(
+                "demo-daily-news",
+                "每日要闻",
+                "每天中午 12 点汇总 5 条公开科技要闻",
+                "请汇总今天（{date}）公开可查的科技领域要闻 5 条，每条 1-2 句，附来源链接；重复的要合并。只查询公开信息，不要读取或修改任何本地文件、会话历史或配置。",
+                "0 12 * * *",
+                "每天 12:00",
+                "学习",
                 "📰",
             ),
             mk(
-                "demo-eod-review",
-                "每日复盘",
-                "每晚 21 点回顾当天会话，提取可改进的点",
-                "请基于今天的所有对话，做一个简短复盘：哪几轮最有效？哪几轮浪费了时间？明早可以怎么调整？",
+                "demo-daily-term",
+                "每日一词",
+                "每天晚上 21 点解释一个公开的计算机/管理领域名词",
+                "请挑一个计算机或管理领域的常用名词，用 3-4 句讲清楚它是什么、解决什么问题、举一个生活化的例子。只查询公开信息，不要读取或修改任何本地文件、会话历史或配置。",
                 "0 21 * * *",
                 "每天 21:00",
-                "工作",
-                "🌙",
+                "学习",
+                "📖",
             ),
             mk(
-                "demo-weekly-archive",
-                "每周归档",
-                "每周五 17 点把本周所有会话的关键产物路径整理到一份清单",
-                "请汇总本周所有会话里产出的文件路径（绝对路径），按项目分类，整理成可索引的清单。",
-                "0 17 * * 5",
-                "每周五 17:00",
-                "工作",
-                "🗂",
-            ),
-            mk(
-                "demo-error-watch",
-                "错误巡检",
-                "每个工作日 10 点扫描本机项目里的 build / lint 错误",
-                "请扫描当前工作目录里的 build / lint 错误（rust / typescript / go 都行），按严重度排序，列出前 10 个。",
-                "0 10 * * 1-5",
-                "工作日 10:00",
-                "运维",
-                "🛡",
-            ),
-            mk(
-                "demo-news-digest",
-                "行业动态",
-                "每周一 9 点抓取指定 RSS / 站点，整理成 5 条要点",
-                "请基于最近 7 天的对话上下文（或者我接下来给你的 RSS 源），整理出本周最值得关注的 5 条行业动态，每条 1-2 句。",
+                "demo-weekly-oss",
+                "每周开源速览",
+                "每周一 9 点汇总本周公开的热门开源项目",
+                "请汇总最近一周公开可查的热门开源项目 5 个：项目名、做什么的、star 数或热度、仓库链接。只查询公开信息，不要读取或修改任何本地文件、会话历史或配置。",
                 "0 9 * * 1",
                 "每周一 09:00",
                 "学习",
-                "📡",
+                "🧩",
             ),
             mk(
-                "demo-commit-reminder",
-                "未提交提醒",
-                "每个工作日 18 点检查 git 状态，没提交的代码就提醒我",
-                "请检查当前 git 仓库状态：有没有未提交的修改 / 未推送的 commit？如有，给我一段简短的提交信息草稿。",
-                "0 18 * * 1-5",
-                "工作日 18:00",
-                "工作",
-                "📌",
+                "demo-weekly-courses",
+                "每周公开课",
+                "每周五 17 点推荐 3 门公开的免费公开课",
+                "请推荐 3 门公开可免费旁听的优质公开课（大学课程或技术课程均可），说明讲什么、适合谁、在哪能上，附链接。只查询公开信息，不要读取或修改任何本地文件、会话历史或配置。",
+                "0 17 * * 5",
+                "每周五 17:00",
+                "学习",
+                "🎓",
+            ),
+            mk(
+                "demo-daily-fact",
+                "每日冷知识",
+                "每个工作日 10 点讲一个公开的常识/科普点",
+                "请讲一个有意思的常识或科普点：一个反直觉的事实、一个小知识、或者一件历史趣闻，讲清楚为什么反直觉。只查询公开信息，不要读取或修改任何本地文件、会话历史或配置。",
+                "0 10 * * 1-5",
+                "工作日 10:00",
+                "生活",
+                "💡",
             ),
         ],
     }
@@ -396,6 +409,71 @@ fn next_fire(schedule: &str, from: DateTime<Utc>) -> Option<DateTime<Utc>> {
     let sched = normalized.parse::<Schedule>().ok()?;
     let next = sched.after(&from).next()?;
     Some(next)
+}
+
+/// 一轮跑多久之后，`running_since` 就当成陈旧（进程死了）而允许重跑。
+///
+/// 取值要**明显大于一次正常运行的时长**（超星刷课一节 12 分钟），否则会把
+/// 还在跑的任务误判成死了、并发再起一个。
+const RUNNING_STALE_MINUTES: i64 = 120;
+
+/// 「从没跑过」时，锚点回退到「多久之前」（分钟）。
+///
+/// 必须大于调度 tick 的间隔（30s）并留出余量：tick 在槽位时刻之后到达才算
+/// 「已发生」。回退量太窄会漏掉刚过去的槽（表现为任务偶尔不跑），
+/// 太宽则可能把上一槽重复算成新槽（每槽一次的去重会挡住它，所以不致命）。
+const DUE_LOOKBACK_MINUTES: i64 = 2;
+
+/// 解析 RFC3339 字符串为 UTC 时间；解析不了返回 `None`（而不是 epoch——
+/// epoch 会让「比上次新」的比较永远成立，等于去重失效）。
+fn parse_rfc3339_utc(s: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(s)
+        .ok()
+        .map(|d| d.with_timezone(&Utc))
+}
+
+/// 「这一轮是不是还在跑」——单飞护栏的纯判定。
+///
+/// 上一轮没结束就不该再起一轮：跑得比调度间隔长时（超星刷课一节 12 分钟配
+/// 15 分钟的槽），中途的 tick 会再触发一次，两个 agent 同时驱动同一个目标。
+/// 超过 [`RUNNING_STALE_MINUTES`] 还没清，就当那次进程死了、允许重跑。
+fn is_run_in_flight(task: &AutomationTask, now: DateTime<Utc>) -> bool {
+    match task.running_since.as_deref().and_then(parse_rfc3339_utc) {
+        Some(since) => {
+            now.signed_duration_since(since) < chrono::Duration::minutes(RUNNING_STALE_MINUTES)
+        }
+        None => false,
+    }
+}
+
+/// 「这一槽该不该跑」的纯判定。
+///
+/// 返回 `Some(slot)` = 该跑了，`slot` 是本次要认领的时刻（**从上次跑完之后
+/// 起的第一个发生**）；`None` = 不该跑（还没到点 / 这一槽已经跑过）。
+///
+/// **为什么不能拿「下一个未来时刻」判**：cron 的 `after(&now)` 永远返回晚于
+/// `now` 的下一次发生，拿它跟 `now` 比恒为假 —— 旧实现就是这么写的，结果这个
+/// 调度器**从不触发任何任务**（2026-10-21 实测：任务启用后 `next_run_at` 正常
+/// 推进、`run_count` 恒 0、会话里零回投）。
+///
+/// 正确的锚点是**上次跑完之后**：`last_run_at` 之后的第一个发生时刻，就是
+/// 还没跑的那一槽。它 ≤ now 就该跑（顺带把进程停机期间错过的槽补掉一次
+/// ——补跑后 `last_run_at` 变成现在，下一槽自然重新对齐，不会连补三次）。
+/// 没有 `last_run_at`（从没跑过）时，锚点取「刚才」而不是无限远的过去：
+/// 否则一个刚启用的 09:00 任务会立刻补跑一个它启用前就该跑的槽。
+///
+/// LOOKBACK 是「从没跑过」时的锚点回退量，必须大于调度 tick 的间隔（30s），
+/// 否则刚过去的槽会被漏掉。
+fn due_slot(schedule: &str, last_run_at: Option<&str>, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
+    let sched = normalize_cron_expr(schedule).parse::<Schedule>().ok()?;
+    let since = last_run_at
+        .and_then(parse_rfc3339_utc)
+        .unwrap_or_else(|| now - chrono::Duration::minutes(DUE_LOOKBACK_MINUTES));
+    let slot = sched.after(&since).next()?;
+    if slot > now {
+        return None;
+    }
+    Some(slot)
 }
 
 fn ensure_next_run(task: &mut AutomationTask) {
@@ -678,6 +756,8 @@ pub async fn trigger_task(
     if let Some(slot) = snapshot.tasks.iter_mut().find(|t| t.id == id) {
         slot.last_status = Some("running".into());
         slot.last_error = None;
+        // 手动触发同样要占住「单飞」位：调度 tick 不该在这轮跑的时候又起一轮。
+        slot.running_since = Some(Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
     }
     save_state(&state, &snapshot).await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
     spawn_run(state, task);
@@ -707,6 +787,38 @@ pub async fn reset_to_official(
 /// Maximum number of history records retained per task.
 const MAX_HISTORY: usize = 20;
 
+/// 连续失败次数（护栏的第二个输入）：从最近一次成功往后数，连续失败的 run 数。
+///
+/// 与注入次数分开算，是因为失败模式不同：一个每天报错的任务，注入次数可能
+/// 还没到上限，但已经在往用户主对话里灌错误信息。
+fn consecutive_failures(history: &[RunRecord]) -> u64 {
+    let mut n = 0u64;
+    for r in history.iter().rev() {
+        if r.status == "ok" {
+            break;
+        }
+        n += 1;
+    }
+    n
+}
+
+/// 会话是否还存在。查不动 ≠ 不存在：查不动时按「不存在」处理，回退到独立会话
+/// 是唯一安全的方向 —— 投进一个已被删除的对话会把它复活成一条无标题的孤儿行。
+fn session_exists(state: &HttpServerState, session_id: &str) -> bool {
+    match state.session_persistence.get_session_title(session_id) {
+        Ok(Some(_)) => true,
+        Ok(None) => false,
+        Err(e) => {
+            tracing::warn!(
+                session_id = %session_id,
+                error = %e,
+                "automation: session existence check failed; treating as gone"
+            );
+            false
+        }
+    }
+}
+
 /// Spawn the agent call for a single automation task. Updates the
 /// persisted state with the outcome. Never panics — agent errors are
 /// recorded in the task's `last_error` and `history`.
@@ -716,13 +828,63 @@ fn spawn_run(state: HttpServerState, task: AutomationTask) {
         let agent_service = state.agent_service.clone();
         let task_id = task.id.clone();
         let prompt = task.prompt.clone();
-        let session_id = format!("automation:{}", task.id);
         let model = task.model.clone();
         let workspace_path = task.workspace_path.clone();
         let expert_id = task.expert_id.clone();
         let permission_level = task.permission_level.clone();
 
+        // ── 投递目标：有锚点就续跑原会话，否则落到独立会话 ──
+        //
+        // 旧实现写死 `automation:{id}`：**锚点被存了但没人读**，于是「对话里建
+        // 个定时任务、结果回到这个对话」这条最常见的用法拿不到。
+        // 现在把锚点交给与 SQLite 引擎同一套护栏
+        // （`hermix_automation::decide_delivery_target`）判定，判定规则不重写：
+        // 无锚点 / 锚点已删 / 连续失败达上限 / 注入次数达上限 → 独立会话。
+        let anchor = task
+            .anchor_session_id
+            .clone()
+            .filter(|s| !s.trim().is_empty());
+        let guard = DeliveryGuardInput {
+            anchor_session_id: anchor.clone(),
+            prior_injections: task.run_count as u64,
+            consecutive_failures: consecutive_failures(&task.history),
+            anchor_exists: match anchor.as_deref() {
+                Some(a) => session_exists(&state, a),
+                None => false,
+            },
+            // 回退会话按「任务 + 这次运行」分桶：同一任务的多次回退不混在一个
+            // 会话里，用户在侧栏里能分清是哪一次跑飞了。
+            fallback_session_id: format!(
+                "automation:{}:{}",
+                task.id,
+                chrono::Utc::now().timestamp_millis()
+            ),
+            max_injections: None,
+            max_consecutive_failures: None,
+        };
+        let target = decide_delivery_target(&guard);
+        let session_id = target.session_id().to_string();
+        let fallback_reason = match &target {
+            DeliveryTarget::Anchor(_) => None,
+            DeliveryTarget::Standalone { reason, .. } => Some(reason.clone()),
+        };
+        if let Some(reason) = &fallback_reason {
+            tracing::info!(
+                automation_id = %task_id,
+                reason = %reason,
+                "automation result falling back to a standalone session"
+            );
+        }
+
         let mut overrides = hermix_core::traits::AgentOverrides::default();
+        // 标成「外部触发」：这一轮的提示词与回复都以 `MessageRole::Automation`
+        // 落库 —— 前端渲染成自动化卡片，而**不进 LLM 上下文**，模型不会在下一轮
+        // 看到「用户说过这句话」的假象。
+        overrides.external_delivery = Some(ExternalDelivery {
+            source_label: task.name.clone(),
+            run_id: None,
+            fallback_reason,
+        });
         if let Some(m) = model {
             if let Some((prov, mdl)) = m.split_once(':') {
                 overrides.model = Some(format!("{}:{}", prov, mdl));
@@ -793,6 +955,8 @@ fn spawn_run(state: HttpServerState, task: AutomationTask) {
             slot.last_status = Some(status.clone());
             slot.last_error = error;
             slot.run_count = slot.run_count.saturating_add(1);
+            // 这一轮结束了 → 清掉「在跑」标记，单飞护栏放行下一槽。
+            slot.running_since = None;
             // 有限次任务：跑满 max_runs 自动停用（调度 tick 跳过停用任务，
             // 停用即终止；重新启用会继续消耗剩余额度）。必须在
             // ensure_next_run 之前判——停用后不再计算下次触发时间。
@@ -881,27 +1045,34 @@ async fn tick_once(
         if !t.enabled {
             continue;
         }
-        let next: Option<DateTime<Utc>> = match normalize_cron_expr(&t.schedule).parse::<Schedule>() {
-            Ok(sched) => sched.after(&now).next(),
+        // **单飞**：上一轮还在跑就别再起一个。跑得比调度间隔长时（超星刷课
+        // 一节 12 分钟 vs 15 分钟的槽），中途的 tick 会再触发一次 → 两个
+        // agent 同时驱动同一个目标。`running_since` 太久没清就当那次进程死了。
+        if is_run_in_flight(t, now) {
+            continue;
+        }
+        let sched = match normalize_cron_expr(&t.schedule).parse::<Schedule>() {
+            Ok(s) => s,
             Err(_) => {
                 t.next_run_at = None;
                 continue;
             }
         };
-        let next_str = next.map(|d: DateTime<Utc>| d.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
-        t.next_run_at = next_str.clone();
-        let should_fire = match (next, t.last_run_at.as_ref()) {
-            (Some(next_at), Some(last)) => {
-                let last_at = DateTime::parse_from_rfc3339(last)
-                    .map(|d| d.with_timezone(&Utc))
-                    .unwrap_or_else(|_| DateTime::<Utc>::from_timestamp(0, 0).unwrap());
-                next_at <= now && last_at < next_at
-            }
-            (Some(next_at), None) => next_at <= now,
-            _ => false,
-        };
-        if should_fire {
-            let key = format!("{}:{}", t.id, next_str.clone().unwrap_or_default());
+        // 「下一次什么时候跑」——纯展示用。
+        let next = sched.after(&now).next();
+        t.next_run_at = next.map(|d: DateTime<Utc>| d.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+
+        // 「这一次该不该跑」——判的是**最近一次已过去的发生时刻**。
+        //
+        // 旧实现取 `sched.after(&now).next()`（恒晚于 now）再判 `next_at <= now`：
+        // 恒假，于是这个调度器**从不触发任何任务**（2026-10-21 实测：任务启用后
+        // next_run_at 正常推进，run_count 恒 0，会话里零回投）。
+        //
+        // 现在改成：在 [now - LOOKBACK, now] 窗口里找最近一次发生（LOOKBACK 覆盖
+        // 一个 30s tick 的最大间隔 + 一次跳表），它比 `last_run_at` 新就说明这一槽
+        // 还没跑过。顺带得到「进程停机期间错过的槽会在下次 tick 补跑」。
+        if let Some(slot_at) = due_slot(&t.schedule, t.last_run_at.as_deref(), now) {
+            let key = format!("{}:{}", t.id, slot_at.to_rfc3339());
             {
                 let map = last_fired.read().await;
                 if let Some(prev) = map.get(&key) {
@@ -911,6 +1082,10 @@ async fn tick_once(
                 }
             }
             last_fired.write().await.insert(key, now);
+            // 标记「这一轮在跑」：单飞护栏靠它挡住中途 tick 的重复触发。
+            // **必须写在 snapshot 的条目上**（tick 结束时整个 snapshot 才落盘）——
+            // 只写进克隆体的话，下一个 tick 从盘上读回来还是「没在跑」，护栏失效。
+            t.running_since = Some(now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
             let task = t.clone();
             spawn_run(state.clone(), task);
         }
@@ -983,6 +1158,7 @@ impl CronjobBackend for DashboardCronjobBackend {
                 next_run_at: None,
                 run_count: 0,
                 history: Vec::new(),
+        running_since: None,
                 created_at: String::new(),
                 updated_at: String::new(),
                 anchor_session_id: anchor_session_id.map(str::to_string),
@@ -1064,5 +1240,143 @@ impl CronjobBackend for DashboardCronjobBackend {
             .await
             .map_err(|(_, e)| ToolError::ExecutionFailed(e))?;
         Ok(format!("已触发定时任务 {id} 立即运行"))
+    }
+}
+
+// ── Tests ───────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    fn at(h: u32, m: u32, s: u32) -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 10, 21, h, m, s).unwrap()
+    }
+
+    fn rfc(t: DateTime<Utc>) -> String {
+        t.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+    }
+
+    /// **回归钉子**：每分钟一次的任务，上次跑完在 13:29:30 → 下一槽是 13:30，
+    /// 到了就该触发。
+    /// 旧实现用「下一个未来时刻」判定，恒为假 → 调度器从不触发。
+    #[test]
+    fn due_slot_fires_for_a_schedule_whose_minute_just_passed() {
+        let now = at(13, 30, 5);
+        let last = rfc(at(13, 29, 30));
+        let slot = due_slot("* * * * *", Some(&last), now).expect("13:30 那一槽该触发");
+        assert_eq!(slot, at(13, 30, 0));
+    }
+
+    /// 同一槽跑过（`last_run_at` 落在下一次发生之后）→ 不该重复跑。
+    #[test]
+    fn due_slot_does_not_refire_a_slot_already_run() {
+        let now = at(13, 30, 5);
+        // 上次跑完在 13:30:02 → 下一个还没跑的槽是 13:31，还没到。
+        let last = rfc(at(13, 30, 2));
+        assert!(
+            due_slot("* * * * *", Some(&last), now).is_none(),
+            "这一槽已经跑过，不该再跑"
+        );
+    }
+
+    /// 还没到的槽不跑：09:00 的任务在 08:00 判定为「不该跑」。
+    #[test]
+    fn due_slot_is_none_before_the_slot_arrives() {
+        let now = at(8, 0, 0);
+        assert!(due_slot("0 9 * * *", None, now).is_none());
+    }
+
+    /// 停机期间错过的槽要**补跑一次**：`last_run_at` 停在 3 小时前，每小时一次
+    /// 的任务在 13:30 判定时认领「第一个没跑过的槽」（11:00）——
+    /// 补跑后 `last_run_at` 变成现在，下一槽自然对齐，不会连补三次。
+    #[test]
+    fn due_slot_catches_up_a_slot_missed_while_stopped() {
+        let now = at(13, 30, 5);
+        let last = rfc(at(10, 0, 0));
+        let slot = due_slot("0 * * * *", Some(&last), now).expect("错过的槽要补跑");
+        assert_eq!(slot, at(11, 0, 0), "补跑认领的是第一个没跑过的槽");
+        assert!(slot <= now, "补跑的槽必须已经过去");
+    }
+
+    /// 停用状态由 `tick_once` 跳过，不进这个判定。
+    #[test]
+    fn due_slot_ignores_unparseable_schedule() {
+        let now = at(13, 30, 5);
+        assert!(due_slot("不是 cron", None, now).is_none());
+    }
+
+    /// 连续失败只数**末尾**那一段：上一次成功之后的失败才计入。
+    #[test]
+    fn consecutive_failures_counts_only_the_trailing_streak() {
+        let rec = |status: &str| RunRecord {
+            at: "2026-10-21T00:00:00Z".into(),
+            status: status.into(),
+            duration_ms: 1,
+            summary: None,
+            error: None,
+        };
+        assert_eq!(consecutive_failures(&[]), 0);
+        assert_eq!(consecutive_failures(&[rec("ok")]), 0);
+        assert_eq!(consecutive_failures(&[rec("ok"), rec("failed")]), 1);
+        assert_eq!(
+            consecutive_failures(&[rec("failed"), rec("failed"), rec("ok"), rec("failed")]),
+            1
+        );
+        assert_eq!(consecutive_failures(&[rec("failed"), rec("failed")]), 2);
+    }
+
+    /// **单飞**：上一轮还在跑时，不能再起一轮。
+    ///
+    /// 跑得比调度间隔长是常态（超星刷课一节 12 分钟 vs 15 分钟的槽），
+    /// 没有这道闸，中途的 tick 会再触发一次 → 两个 agent 同时驱动同一个目标。
+    #[test]
+    fn a_task_already_running_is_not_fired_again() {
+        let now = at(13, 30, 0);
+        let mut task = seed_default().tasks.remove(0);
+        assert!(
+            !is_run_in_flight(&task, now),
+            "没有 running_since 时不该认为在跑"
+        );
+        task.running_since = Some(rfc(at(13, 18, 0)));
+        assert!(
+            is_run_in_flight(&task, now),
+            "12 分钟前起的那轮还在跑 → 挡住这一槽"
+        );
+    }
+
+    /// 跑太久（进程死了）就当它不在跑，允许重跑。
+    #[test]
+    fn a_stale_running_marker_stops_blocking() {
+        let now = at(13, 30, 0);
+        let mut task = seed_default().tasks.remove(0);
+        task.running_since = Some(rfc(at(9, 0, 0)));
+        assert!(
+            !is_run_in_flight(&task, now),
+            "陈旧的 running_since 不能永久挡住任务"
+        );
+    }
+
+    /// **内置示例必须是「不动用户数据」的纯信息任务。**    ///
+    /// 旧示例读会话历史、扫工作目录、看 git 状态 —— 一旦用户启用示例，它们就会
+    /// 去翻用户自己的数据。示例只该演示「定时任务能跑」，不该演示「能翻你的
+    /// 私房」。每条示例的提示词都必须带上这句约束。
+    #[test]
+    fn demo_tasks_are_harmless_and_disabled_by_default() {
+        let state = seed_default();
+        assert_eq!(state.tasks.len(), 6, "示例任务应当是 6 条");
+        for t in &state.tasks {
+            assert!(
+                !t.enabled,
+                "示例任务「{}」必须默认停用（用户明确启用才会跑）",
+                t.name
+            );
+            assert!(
+                t.prompt.contains("不要读取或修改任何本地文件、会话历史或配置"),
+                "示例任务「{}」的提示词必须写明不碰用户数据",
+                t.name
+            );
+        }
     }
 }
