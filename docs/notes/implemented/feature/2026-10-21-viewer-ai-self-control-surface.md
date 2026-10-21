@@ -1,0 +1,65 @@
+# Decision Note: 查看器的 **AI 自控面**（agent 能看清、能操作整个查看器）
+
+Status: implemented — 2026-10-21 落地。
+
+## Decision
+
+查看器**自己的界面**也要成为 agent 的一等操作对象：
+
+- `viewer_ui_state`（MCP 工具）：agent 读**当前界面状态**——当前目录、路径栏、
+  搜索词、已打开的标签（id / 名称 / 是否活动）、活动标签、预览区在看的文件、
+  打开了哪些面板、视图模式、当前提示。
+- `viewer_action`（MCP 工具）：agent **直接执行**查看器的动作：
+  `open_file` / `open_url` / `set_path` / `search` / `switch_tab` / `close_tab` /
+  `close_all_tabs` / `menu` / `open_panel` / `set_mode` / `read_view`。
+
+实现放在**前端**（`apps/viewer/src/viewerControl.ts`），用**语义选择器**
+（`aria-label` / 可见文字 / 稳定 class）驱动 DOM；Rust 侧只负责「下发动作 →
+等回执」的通道（`viewer_control.rs`：请求 id 配对 + 30s 超时）。
+
+## 为什么之前 agent 操作不了查看器自己的界面
+
+之前只有一条路：`desktop_*` 那套 Win32 工具（列窗口 / 找控件 / 点击 / 填文本）。
+而查看器整个界面是**一个 WebView2 HWND** —— 对 Win32 来说里面没有控件树，
+`desktop_list_controls` 只能看见这个大容器。盲点坐标既慢又脆。
+
+所以「查看器有 MCP 服务」≠「agent 能操作查看器的界面」。缺的是**自控面**。
+
+## Alternatives considered
+
+- **Rust → App 的语义命令**（Rust 发动作 → App 的状态层执行 → 回结果）——
+  **更稳**（不依赖 DOM 结构），但要改 `App.tsx` 的状态层。本轮落地时
+  `apps/viewer/src/App.tsx` 正被另一条改动线同时编辑（列表收起 / PPTX 编辑器），
+  为避免把别人的改动卷进本次提交，改用**零耦合**的实现：自控面全部在新文件里，
+  按语义选择器驱动 DOM。
+  **代价**：DOM 结构变了（class 改名）动作就会失效 → 选择器集中在
+  `viewerControl.ts` 一处，好改；而且我们自己的 UI 有 `aria-label` / 可见文字，
+  稳定性够用。**下一步**（无冲突时）可以把高频动作升级成真正的语义命令。
+- **坐标盲点**（复用 `desktop_click`）—— 布局一动就点歪，不做。
+- **只给文件层工具**（现状）—— agent 看得到文件、看不到用户的界面，等于
+  闭着眼操作。
+
+## Consequences
+
+- **受控输入框要写原生 setter**：React 的受控 `<input>` 只认 `input` 事件里
+  的原生 setter 写入 → `Object.getOwnPropertyDescriptor(HTMLInputElement
+  .prototype, "value").set.call(el, v)` + `dispatchEvent(new Event("input"))`，
+  否则值改了 React 不知道。
+- **菜单是 React 展开的**：点菜单按钮后要**等一帧**再找菜单项（轮询到出现
+  为止，最多 ~1.2s）。
+- **状态上报是 1.5s 轮询**（前端抓 DOM → `viewer_state_report` → Rust 缓存）：
+  单向推送，不做请求-往返，agent 读状态零延迟成本。
+- **动作与内嵌网页视图是两条独立的通道**：`viewer_action` 操作**查看器界面**，
+  `webview_*` 操作**内嵌网页里的页面**。两者可以配合（AI 打开网页 → 读网页 →
+  切回文件标签），但互不阻塞。
+- **只读操作不破坏用户当前上下文**：`read_view` 只读；`switch_tab` / `open_*`
+  会改变用户看到的东西（这是用户明确要求的「AI 操作查看器」）。
+
+## 验证（真机，2026-10-21）
+
+- `viewer_ui_state` 返回真实界面状态（标签 / 路径栏 / 预览文件名 / 面板）。
+- `viewer_action` 可执行：开文件、开网页、切标签、关标签、跑菜单命令
+  （含「网页内核」两档）、开面板、切视图模式、`read_view` 读预览正文。
+- 与内嵌网页通道合流：桌面端 agent 用 `hermix-viewer__web*` 驱动**用户眼前
+  同一块预览区**里的超星页面（登录 → 悬停用户名 → 进入空间 → 读课程列表
+  → 读课程进度）。

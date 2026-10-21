@@ -481,6 +481,11 @@ export function App() {
       await listen("viewer-open-explorer", () => {
         switchMode("heavy");
       });
+      // agent（经 MCP）在内嵌网页视图里开了个网址 → 开对应的网页标签，
+      // 否则用户看到的是一块没有标签的网页浮在界面上。
+      await listen<string>("web-opened", (e) => {
+        openWebTab(e.payload);
+      });
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

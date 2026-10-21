@@ -8,6 +8,7 @@
 pub mod ai;
 pub mod artifacts;
 pub mod browser;
+pub mod cdp;
 pub mod cleanup;
 pub mod clipboard;
 pub mod commands;
@@ -23,6 +24,8 @@ pub mod pdf_ops;
 pub mod pin_window;
 pub mod settings;
 pub mod sysmon;
+pub mod viewer_control;
+pub mod webview_cdp;
 pub mod webview_host;
 
 // 被嵌进二进制的前端内容指纹（build.rs 生成，见 build.rs 头注）。
@@ -270,6 +273,10 @@ pub fn main() {
             pin_window::pin_close,
             pin_window::pin_list,
             pin_window::pin_path,
+            viewer_control::viewer_state_report,
+            viewer_control::viewer_action_reply,
+            viewer_control::viewer_open_path,
+            viewer_control::viewer_open_url,
         ])
         .plugin(tauri_plugin_dialog::init())
         .on_window_event(|_w, event| {

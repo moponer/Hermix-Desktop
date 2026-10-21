@@ -22,6 +22,7 @@
 //! 单独恢复。补偿手段是上面三条（独立 profile / 无 IPC / 协议白名单）。
 
 use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
 
 use tauri::webview::WebviewBuilder;
 use tauri::{
@@ -84,13 +85,31 @@ pub async fn web_open(
     w: f64,
     h: f64,
 ) -> Result<(), String> {
-    let target = normalize_url(&url)?;
-    close_webview(&app);
+    open_sync(&app, &url, x, y, w, h)
+}
+
+/// 真正开视图的同步实现（异步命令与 MCP 工具共用）。
+///
+/// MCP 工具也在非主线程上跑（HTTP 端点每条连接一个线程），所以同样安全。
+pub fn open_sync(
+    app: &AppHandle,
+    url: &str,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+) -> Result<(), String> {
+    let target = normalize_url(url)?;
+    close_webview(app);
 
     let emitter = app.clone();
     let builder = WebviewBuilder::new(WEB_LABEL, WebviewUrl::External(target))
         // 独立 profile：远程站点不留痕，也不与主窗口共享 cookie。
         .data_directory(profile_dir())
+        // **开调试端口**（端口写 0 = 让浏览器进程自己挑，真实端口写进 profile 的
+        // DevToolsActivePort）：这是 agent 能驱动「用户正在看的那块预览区」的
+        // 关键 —— 用户与 agent 看到的是同一个页面、同一个登录态。
+        .additional_browser_args("--remote-debugging-port=0")
         // 页面内跳转同样只放行 http / https。
         .on_navigation(|url| matches!(url.scheme(), "http" | "https"))
         // 页面自己跳了别的地址 → 通知前端（标签标题要跟着变）。
@@ -108,7 +127,48 @@ pub async fn web_open(
             PhysicalSize::new(w.max(1.0) as u32, h.max(1.0) as u32),
         )
         .map_err(|e| format!("内嵌网页视图创建失败：{e}"))?;
+    remember_bounds(x, y, w, h);
+    // 告诉前端「有个网页视图开了」→ 前端开对应的网页标签（否则用户看到的是
+    // 一块没有标签的网页浮在界面上）。
+    let _ = app.emit("web-opened", url.to_string());
     Ok(())
+}
+
+/// 最近一次的视图位置（物理像素）——agent 侧开视图时用它摆位。
+fn last_bounds() -> (f64, f64, f64, f64) {
+    bounds_store()
+        .lock()
+        .unwrap()
+        .unwrap_or((0.0, 0.0, 900.0, 700.0))
+}
+
+/// 记住视图位置。
+fn remember_bounds(x: f64, y: f64, w: f64, h: f64) {
+    *bounds_store().lock().unwrap() = Some((x, y, w, h));
+}
+
+/// 视图位置（物理像素）。
+static BOUNDS: OnceLock<Mutex<Option<(f64, f64, f64, f64)>>> = OnceLock::new();
+
+fn bounds_store() -> &'static Mutex<Option<(f64, f64, f64, f64)>> {
+    BOUNDS.get_or_init(|| Mutex::new(None))
+}
+
+/// 应用句柄（登记在 `viewer_control`，这里是转发）。
+pub fn set_app(app: AppHandle) {
+    crate::viewer_control::set_app(app);
+}
+
+/// 取应用句柄。
+pub fn app() -> Result<AppHandle, String> {
+    crate::viewer_control::app()
+}
+
+/// 用**上次的位置**开一个网址（给 agent 用：它不知道预览区在哪）。
+pub fn open_at_last_bounds(url: &str) -> Result<(), String> {
+    let app = app()?;
+    let (x, y, w, h) = last_bounds();
+    open_sync(&app, url, x, y, w, h)
 }
 
 /// 位置 / 尺寸同步（前端在窗口缩放、面板开合时调用）。

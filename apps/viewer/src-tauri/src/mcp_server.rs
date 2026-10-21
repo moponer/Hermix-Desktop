@@ -233,6 +233,129 @@ fn tool_defs() -> Vec<ToolDef> {
             read_only: false,
             destructive: true,
         },
+        ToolDef {
+            name: "web_open",
+            description: "在**查看器内嵌的网页视图**里打开网址（不是系统浏览器）。\
+                          页面就显示在查看器的预览区里，用户能直接看见、也能自己登录；\
+                          之后用 webview_* 系列工具就能驱动这同一个页面。\
+                          需要查看器以窗口模式运行（MCP HTTP 端点）。",
+            properties: json!({
+                "url": {"type": "string", "description": "要打开的网址（http / https）"},
+            }),
+            required: &["url"],
+            read_only: false,
+            destructive: false,
+        },
+        ToolDef {
+            name: "web_close",
+            description: "关掉查看器内嵌的网页视图。",
+            properties: json!({}),
+            required: &[],
+            read_only: false,
+            destructive: false,
+        },
+        ToolDef {
+            name: "webview_state",
+            description: "内嵌网页视图当前页面的 URL 与标题。",
+            properties: json!({}),
+            required: &[],
+            read_only: true,
+            destructive: false,
+        },
+        ToolDef {
+            name: "webview_text",
+            description: "读取内嵌网页视图当前页面的可见文本。比截图省 token，读页面内容首选。",
+            properties: json!({}),
+            required: &[],
+            read_only: true,
+            destructive: false,
+        },
+        ToolDef {
+            name: "webview_eval",
+            description: "在内嵌网页视图当前页面里执行一段 JavaScript，返回其返回值。\
+                          **跨源 iframe 里的元素顶层求值够不到**（超星的视频播放器就在\
+                          `/ananas/modules/video/index.html` 这个跨源 iframe 里）——\
+                          这时用参数 frame 给一个 URL 片段（如 \"ananas\"），\
+                          就会在那个 iframe 的执行上下文里执行。",
+            properties: json!({
+                "expression": {"type": "string", "description": "要执行的 JavaScript 表达式"},
+                "frame": {"type": "string", "description": "目标 iframe 的 URL 片段（可选）"},
+            }),
+            required: &["expression"],
+            read_only: false,
+            destructive: false,
+        },
+        ToolDef {
+            name: "webview_click",
+            description: "点击内嵌网页视图当前页面的某个坐标（CSS 像素，相对视口左上角）。",
+            properties: json!({
+                "x": {"type": "number", "description": "横坐标"},
+                "y": {"type": "number", "description": "纵坐标"},
+            }),
+            required: &["x", "y"],
+            read_only: false,
+            destructive: true,
+        },
+        ToolDef {
+            name: "webview_hover",
+            description: "把**鼠标移动**到内嵌网页视图当前页面的某个坐标（悬停）。\
+                          有些站点的菜单是悬停才出现的（例如超星的用户名 →\
+                          「个人空间 / 进入空间」），这时要用它而不是 click。\
+                          坐标先取元素的位置（例如用 webview_eval 求 getBoundingClientRect）。",
+            properties: json!({
+                "x": {"type": "number", "description": "横坐标"},
+                "y": {"type": "number", "description": "纵坐标"},
+            }),
+            required: &["x", "y"],
+            read_only: false,
+            destructive: false,
+        },
+        ToolDef {
+            name: "webview_navigate",
+            description: "让内嵌网页视图跳到新网址。",
+            properties: json!({
+                "url": {"type": "string", "description": "目标网址"},
+            }),
+            required: &["url"],
+            read_only: false,
+            destructive: false,
+        },
+        ToolDef {
+            name: "webview_screenshot",
+            description: "给内嵌网页视图当前页面截图：返回缩略图（给模型看）与落盘路径。",
+            properties: json!({}),
+            required: &[],
+            read_only: true,
+            destructive: false,
+        },
+        ToolDef {
+            name: "viewer_ui_state",
+            description: "读取**查看器自己**的界面状态：当前目录、路径栏、搜索词、\
+                          已打开的标签（id / 名称 / 类型）、当前活动标签、打开了哪些\
+                          面板、视图模式。这是 agent 看清「用户面前是什么」的正路。",
+            properties: json!({}),
+            required: &[],
+            read_only: true,
+            destructive: false,
+        },
+        ToolDef {
+            name: "viewer_action",
+            description: "直接执行**查看器**的动作（不用去盲点坐标）。\
+                          支持的 action：open_file{path} / open_url{url} / set_path{path} / \
+                          search{query} / switch_tab{id} / close_tab{id} / close_all_tabs / \
+                          menu{command}（菜单栏命令 id，如 edit / settings / sys-panel / \
+                          browser-panel / kernel-embedded / kernel-system）/ \
+                          open_panel{panel: settings|sys-panel|browser|about} / \
+                          set_mode{mode: pure|heavy} / read_view。\
+                          返回执行结果与执行后的界面状态摘要。",
+            properties: json!({
+                "action": {"type": "string", "description": "动作名"},
+                "args": {"type": "object", "description": "动作参数（按动作名而定）"},
+            }),
+            required: &["action"],
+            read_only: false,
+            destructive: false,
+        },
     ]
 }
 
@@ -343,6 +466,14 @@ fn call_tool(name: &str, args: &Value) -> Result<ToolOutput, String> {
         let (path, data_base64, mime) = crate::browser::screenshot(&session)?;
         return Ok(ToolOutput::TextAndImage {
             text: format!("截图已保存：{path}"),
+            data_base64,
+            mime,
+        });
+    }
+    if name == "webview_screenshot" {
+        let (path, data_base64, mime) = crate::webview_cdp::screenshot()?;
+        return Ok(ToolOutput::TextAndImage {
+            text: format!("内嵌网页视图截图已保存：{path}"),
             data_base64,
             mime,
         });
@@ -531,6 +662,63 @@ fn call_tool_text(name: &str, args: &Value) -> Result<String, String> {
             let session = str_arg("session")?;
             crate::browser::close(&session)?;
             Ok(format!("会话 {session} 已关闭"))
+        }
+        // ── 内嵌网页视图（通道 A 的 agent 操控面）──
+        "web_open" => {
+            let url = str_arg("url")?;
+            // 浏览器自动化任务**默认纯净模式**：预览区最大、没有资源管理器 /
+            // AI 栏干扰，用户看的和 agent 操作的是同一块屏幕。切模式失败不
+            // 阻断（查看器可能没开窗口）。
+            if let Ok(app) = crate::viewer_control::app() {
+                let _ = crate::viewer_control::run_action(
+                    &app,
+                    "set_mode",
+                    json!({"mode": "pure"}),
+                );
+            }
+            crate::webview_host::open_at_last_bounds(&url)?;
+            Ok(format!("已在查看器的内嵌网页视图里打开 {url}（用户就在那块预览区里看它）"))
+        }
+        "web_close" => {
+            let app = crate::webview_host::app()?;
+            crate::webview_host::close_webview(&app);
+            Ok("内嵌网页视图已关闭".to_string())
+        }
+        "webview_state" => {
+            let state = crate::webview_cdp::state()?;
+            Ok(format!("{}\t{}", state.title, state.url))
+        }
+        "webview_text" => crate::webview_cdp::text(),
+        "webview_eval" => {
+            let expression = str_arg("expression")?;
+            let frame = args.get("frame").and_then(|v| v.as_str());
+            crate::webview_cdp::eval(&expression, frame)
+        }
+        "webview_click" => {
+            let x = args.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let y = args.get("y").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            crate::webview_cdp::click(x, y)
+        }
+        "webview_hover" => {
+            let x = args.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let y = args.get("y").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            crate::webview_cdp::hover(x, y)
+        }
+        "webview_navigate" => {
+            let url = str_arg("url")?;
+            crate::webview_cdp::navigate(&url)
+        }
+        // ── 查看器自控面（AI 直接操作查看器自己的界面）──
+        "viewer_ui_state" => {
+            let state = crate::viewer_control::ui_state();
+            Ok(serde_json::to_string_pretty(&state).unwrap_or_else(|_| state.to_string()))
+        }
+        "viewer_action" => {
+            let action = str_arg("action")?;
+            let args = args.get("args").cloned().unwrap_or(json!({}));
+            let app = crate::viewer_control::app()?;
+            let result = crate::viewer_control::run_action(&app, &action, args)?;
+            Ok(serde_json::to_string_pretty(&result).unwrap_or_else(|_| result.to_string()))
         }
         other => Err(format!("未知工具：{other}")),
     }

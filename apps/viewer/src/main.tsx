@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { PinWindow } from "./PinWindow";
 import { currentWindowLabel } from "./windowRole";
+import { startViewerControl } from "./viewerControl";
 import "./styles.css";
 // 菜单栏 + 系统资源管理弹窗的样式（须在 styles.css 之后：它覆盖 .tb-brand 布局）
 import "./system-panel.css";
@@ -16,6 +17,12 @@ import "./system-panel.css";
  * 不进 URL，自然没有这个问题。
  */
 const isPinWindow = currentWindowLabel().startsWith("pin-");
+
+// AI 自控面：听 MCP 下发的动作 + 定时上报界面状态（只在主窗口开；浮窗是
+// 轻量只读入口，不需要自控面）。
+if (!isPinWindow) {
+  startViewerControl();
+}
 
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>{isPinWindow ? <PinWindow /> : <App />}</React.StrictMode>,

@@ -19,24 +19,19 @@
 //! 查看器里用户显式选择的浏览模式。
 
 use std::collections::HashMap;
-use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use serde_json::{json, Value};
-use tungstenite::client::{client as ws_client, IntoClientRequest};
-use tungstenite::Message;
+use serde_json::json;
+
+use crate::cdp::Cdp;
 
 /// 同时最多几个浏览器会话（每个会话 = 一个 Edge 进程，内存线性增长）。
 const MAX_SESSIONS: usize = 8;
 /// 等浏览器调试端口就绪的上限。
 const LAUNCH_TIMEOUT: Duration = Duration::from_secs(20);
-/// CDP 单次读写的超时。
-const IO_TIMEOUT: Duration = Duration::from_secs(30);
-/// 截图缩放后的最大宽度（给模型看的图不能太大）。
-const SHOT_MAX_WIDTH: u32 = 1024;
 
 // ---------------------------------------------------------------------------
 // 会话
@@ -210,6 +205,8 @@ fn launch_browser(_exe: &PathBuf, _args: &str) -> Result<u32, String> {
 }
 
 /// 等 profile 里的 `DevToolsActivePort` 出现 → (端口, ws 路径)。
+/// 端口写死会撞用户自己的浏览器（hermix-tools 的 F1 教训），所以用
+/// `--remote-debugging-port=0`，真实端口由浏览器进程写进这个文件。
 fn wait_for_port(profile: &PathBuf) -> Result<(u16, String), String> {
     let file = profile.join("DevToolsActivePort");
     let deadline = Instant::now() + LAUNCH_TIMEOUT;
@@ -230,86 +227,8 @@ fn wait_for_port(profile: &PathBuf) -> Result<(u16, String), String> {
 }
 
 // ---------------------------------------------------------------------------
-// CDP 客户端（同步 WebSocket）
+// CDP 客户端在 `cdp.rs`（浏览器通道与内嵌网页视图共用同一份实现）
 // ---------------------------------------------------------------------------
-
-struct Cdp {
-    ws: tungstenite::WebSocket<TcpStream>,
-    next_id: u64,
-}
-
-impl Cdp {
-    /// 连到浏览器的 browser 级端点。
-    fn connect(port: u16, ws_path: &str) -> Result<Self, String> {
-        use std::net::{IpAddr, Ipv4Addr};
-        let addr = SocketAddr::from((IpAddr::V4(Ipv4Addr::LOCALHOST), port));
-        let stream = TcpStream::connect_timeout(&addr, Duration::from_secs(5))
-            .map_err(|e| format!("连接浏览器调试端口失败：{e}"))?;
-        let _ = stream.set_read_timeout(Some(IO_TIMEOUT));
-        let _ = stream.set_write_timeout(Some(IO_TIMEOUT));
-        let request = format!("ws://127.0.0.1:{port}{ws_path}")
-            .into_client_request()
-            .map_err(|e| format!("调试地址无法解析：{e}"))?;
-        let (ws, _resp) = ws_client(request, stream).map_err(|e| format!("浏览器握手失败：{e}"))?;
-        Ok(Self { ws, next_id: 0 })
-    }
-
-    /// 发一条命令并等它的响应（跳过事件消息）。
-    fn call(&mut self, method: &str, params: Value, session: Option<&str>) -> Result<Value, String> {
-        self.next_id += 1;
-        let id = self.next_id;
-        let mut message = json!({"id": id, "method": method, "params": params});
-        if let Some(sid) = session {
-            message["sessionId"] = json!(sid);
-        }
-        self.ws
-            .send(Message::Text(message.to_string().into()))
-            .map_err(|e| format!("发送 {method} 失败：{e}"))?;
-
-        let deadline = Instant::now() + IO_TIMEOUT;
-        loop {
-            if Instant::now() > deadline {
-                return Err(format!("等待 {method} 响应超时"));
-            }
-            let text = match self.ws.read() {
-                Ok(Message::Text(t)) => t.as_str().to_string(),
-                Ok(Message::Binary(b)) => String::from_utf8_lossy(&b).to_string(),
-                Ok(Message::Close(_)) => return Err("浏览器连接已关闭".to_string()),
-                Ok(_) => continue,
-                Err(e) => return Err(format!("读取 {method} 响应失败：{e}")),
-            };
-            let value: Value = match serde_json::from_str(&text) {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
-            if value.get("id").and_then(|v| v.as_u64()) != Some(id) {
-                continue; // 事件或其他命令的响应
-            }
-            if let Some(err) = value.get("error") {
-                let message = err
-                    .get("message")
-                    .and_then(|m| m.as_str())
-                    .unwrap_or("未知错误");
-                return Err(format!("浏览器报错：{message}"));
-            }
-            return Ok(value.get("result").cloned().unwrap_or(Value::Null));
-        }
-    }
-
-    /// 挂到某个页面 target 上，返回 sessionId（target 级隔离）。
-    fn attach(&mut self, target_id: &str) -> Result<String, String> {
-        let result = self.call(
-            "Target.attachToTarget",
-            json!({"targetId": target_id, "flatten": true}),
-            None,
-        )?;
-        result
-            .get("sessionId")
-            .and_then(|s| s.as_str())
-            .map(|s| s.to_string())
-            .ok_or_else(|| "挂接页面失败：浏览器没有返回 sessionId".to_string())
-    }
-}
 
 // ---------------------------------------------------------------------------
 // 对外的会话操作
@@ -552,28 +471,7 @@ pub fn eval(session: &str, expression: &str) -> Result<String, String> {
     let (port, ws_path, target_id) = endpoints(session)?;
     let mut cdp = Cdp::connect(port, &ws_path)?;
     let sid = cdp.attach(&target_id)?;
-    let result = cdp.call(
-        "Runtime.evaluate",
-        json!({
-            "expression": expression,
-            "returnByValue": true,
-            "awaitPromise": true
-        }),
-        Some(&sid),
-    )?;
-    if let Some(details) = result.get("exceptionDetails") {
-        let text = details
-            .get("text")
-            .and_then(|t| t.as_str())
-            .unwrap_or("脚本执行异常");
-        return Err(format!("脚本异常：{text}"));
-    }
-    let value = result.get("result").and_then(|r| r.get("value"));
-    Ok(match value {
-        Some(Value::String(s)) => s.clone(),
-        Some(other) => other.to_string(),
-        None => String::new(),
-    })
+    crate::cdp::evaluate(&mut cdp, &sid, expression)
 }
 
 /// 点击页面坐标（CSS 像素，相对视口左上角）。
@@ -615,40 +513,8 @@ pub fn screenshot(session: &str) -> Result<(String, String, String), String> {
     let png = crate::commands::base64_decode(data)
         .ok_or_else(|| "截图数据不是合法 base64".to_string())?;
 
-    // 落盘（用户能直接打开看）。
-    let dir = hermix_config::paths::hermix_home().join("browser-shots");
-    std::fs::create_dir_all(&dir).map_err(|e| format!("创建截图目录失败：{e}"))?;
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let path = dir.join(format!("{}-{}.png", sanitize(session), stamp));
-    std::fs::write(&path, &png).map_err(|e| format!("写入截图失败：{e}"))?;
-
-    // 给模型看的小图（原始 PNG 太大，直接塞进上下文就是上下文炸弹）。
-    let (thumb_b64, mime) = match thumbnail_jpeg(&png) {
-        Ok(v) => v,
-        Err(_) => (crate::commands::base64_encode(&png), "image/png".to_string()),
-    };
-    Ok((path.to_string_lossy().to_string(), thumb_b64, mime))
-}
-
-/// 缩略图：最长边缩到 `SHOT_MAX_WIDTH`，转 JPEG。
-fn thumbnail_jpeg(png: &[u8]) -> Result<(String, String), String> {
-    let img = image::load_from_memory(png).map_err(|e| format!("截图解码失败：{e}"))?;
-    let resized = img.thumbnail(SHOT_MAX_WIDTH, SHOT_MAX_WIDTH);
-    let rgb = resized.to_rgb8();
-    let mut buf: Vec<u8> = Vec::new();
-    let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, 72);
-    encoder
-        .encode(
-            rgb.as_raw(),
-            rgb.width(),
-            rgb.height(),
-            image::ExtendedColorType::Rgb8,
-        )
-        .map_err(|e| format!("截图压缩失败：{e}"))?;
-    Ok((crate::commands::base64_encode(&buf), "image/jpeg".to_string()))
+    // 落盘（用户能直接打开看）+ 给模型看的缩略图。
+    crate::cdp::save_and_thumbnail(&png, &sanitize(session))
 }
 
 /// 关闭会话（并删掉它的 profile：cookie / 缓存不留痕）。
