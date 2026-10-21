@@ -1071,7 +1071,19 @@ impl AutomationScheduler {
             Arc::new(RwLock::new(HashMap::new()));
         let state_for_tick = state.clone();
         let last_fired_for_tick = last_fired.clone();
+        let state_for_startup = state.clone();
         let handle = tokio::spawn(async move {
+            // **进程刚起来 = 没有任何在途运行**：上一进程留下的 `running_since`
+            // 标记一定是死的（它是在那个进程里被置上的，而那个进程已经没了）。
+            // 不清掉的话，单飞护栏会把这些任务当成「还在跑」，
+            // **整整 RUNNING_STALE_MINUTES（2 小时）都不触发**。
+            // 与 SQLite 引擎的 `reap_abandoned_runs` 是同一件事。
+            if let Err(e) = clear_stale_running_markers(&state_for_startup).await {
+                tracing::warn!(
+                    error = %e,
+                    "automation scheduler: failed to clear stale running markers",
+                );
+            }
             let mut tick = tokio::time::interval(Duration::from_secs(30));
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
@@ -1099,6 +1111,29 @@ impl AutomationScheduler {
     pub fn shutdown(&self) {
         let _ = self.shutdown.send(true);
     }
+}
+
+/// 清掉上一进程留下的 `running_since` 标记。
+///
+/// 进程刚启动时不可能有在途运行 —— 那些标记都是上一个进程置上的，而那个进程
+/// 已经死了。不清的话单飞护栏会认为任务「还在跑」，要等
+/// `RUNNING_STALE_MINUTES`（2 小时）才放行。
+async fn clear_stale_running_markers(state: &HttpServerState) -> Result<(), String> {
+    let mut snapshot = load_state(state);
+    let mut cleared = 0usize;
+    for task in snapshot.tasks.iter_mut() {
+        if task.running_since.take().is_some() {
+            cleared += 1;
+        }
+    }
+    if cleared > 0 {
+        save_state(state, &snapshot).await?;
+        tracing::info!(
+            cleared,
+            "automation scheduler: cleared stale running markers from the previous process"
+        );
+    }
+    Ok(())
 }
 
 async fn tick_once(
@@ -1421,6 +1456,28 @@ mod tests {
         assert!(
             !is_run_in_flight(&task, now),
             "陈旧的 running_since 不能永久挡住任务"
+        );
+    }
+
+    /// 进程重启后，上一进程留下的 `running_since` 标记必须被清掉。
+    ///
+    /// 不清的话，单飞护栏会把任务当成「还在跑」——要等
+    /// `RUNNING_STALE_MINUTES`（2 小时）才放行。实测：杀掉 sidecar 再拉起，
+    /// 那个任务整整两小时没跑一轮。
+    #[tokio::test]
+    async fn startup_clears_stale_running_markers() {
+        let state = crate::test_state::test_state_with_temp_home().await;
+        let mut snapshot = load_state(&state);
+        assert!(!snapshot.tasks.is_empty(), "示例任务应当已被播种");
+        snapshot.tasks[0].running_since = Some(rfc(Utc::now()));
+        save_state(&state, &snapshot).await.unwrap();
+
+        clear_stale_running_markers(&state).await.unwrap();
+
+        let after = load_state(&state);
+        assert!(
+            after.tasks.iter().all(|t| t.running_since.is_none()),
+            "上一进程留下的在途标记必须被清掉，否则任务会被当成还在跑"
         );
     }
 
