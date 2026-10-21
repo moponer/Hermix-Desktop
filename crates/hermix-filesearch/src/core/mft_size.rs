@@ -11,7 +11,7 @@
 //! **取哪个大小**：非驻留属性的 `RealSize`（文件真实字节数，稀疏/压缩文件
 //! 会小于占盘体积）；目录没有 `$DATA`，体积由上层按父子关系累加。
 
-use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::Result;
 use serde::Serialize;
@@ -51,42 +51,71 @@ const RECORD_BUFFER: usize = 4096;
 
 /// 批量读体积：多线程，每线程一个卷句柄。
 ///
-/// 失败一律降级（返回空 map），绝不因为拿不到体积就让整个索引失败——
+/// 失败一律降级（未读到的记 0），绝不因为拿不到体积就让整个索引失败——
 /// 体积只影响"磁盘占用"这个视图，不影响搜索。
-pub fn read_file_sizes(volume: &str, file_refs: &[u64], threads: usize) -> HashMap<u64, FileSize> {
-    let mut out = HashMap::new();
+///
+/// **返回与 `file_refs` 同序的体积数组**（0 = 没读到）。旧实现返回
+/// `HashMap<u64, FileSize>`：百万文件就是百万次哈希插入 + 百万次查找，
+/// 光这一项就是几百毫秒和 50MB 内存——而这里根本不需要按 FRN 查，
+/// 调用方的记录顺序与 `file_refs` 一致，按下标对齐即可。
+///
+/// `on_progress(done, bytes)` 每读一批就回调一次：建索引是分钟级长任务，
+/// UI 必须能看到"读到第几个文件 / 已经读了多少字节"。
+pub fn read_file_sizes(
+    volume: &str,
+    file_refs: &[u64],
+    threads: usize,
+    on_progress: impl Fn(u64, u64) + Sync,
+) -> Vec<u64> {
+    let mut sizes = vec![0u64; file_refs.len()];
     if file_refs.is_empty() {
-        return out;
+        return sizes;
     }
     let workers = threads.clamp(1, 16);
     let chunk = file_refs.len().div_ceil(workers);
+    let done = AtomicU64::new(0);
+    let bytes = AtomicU64::new(0);
 
+    // `chunks_mut` 切出的分片互不重叠——各线程直接写自己那段，无需加锁。
+    let mut out_chunks = sizes.chunks_mut(chunk);
     std::thread::scope(|scope| {
         let mut handles = Vec::new();
         for part in file_refs.chunks(chunk) {
             let volume = volume.to_string();
+            let done = &done;
+            let bytes = &bytes;
+            let on_progress = &on_progress;
+            let Some(out) = out_chunks.next() else { break };
             handles.push(scope.spawn(move || {
                 let Ok(handle) = open_volume(&volume) else {
-                    return Vec::new();
+                    return;
                 };
-                let mut local = Vec::with_capacity(part.len());
-                for file_ref in part {
+                let mut since_report = 0u64;
+                for (slot, file_ref) in part.iter().enumerate() {
                     if let Some(size) = read_one(handle, *file_ref) {
-                        local.push((*file_ref, size));
+                        out[slot] = size.bytes;
+                        bytes.fetch_add(size.bytes, Ordering::Relaxed);
+                    }
+                    done.fetch_add(1, Ordering::Relaxed);
+                    since_report += 1;
+                    if since_report >= PROGRESS_EVERY {
+                        since_report = 0;
+                        on_progress(done.load(Ordering::Relaxed), bytes.load(Ordering::Relaxed));
                     }
                 }
-                local
             }));
         }
         for handle in handles {
-            if let Ok(pairs) = handle.join() {
-                out.extend(pairs);
-            }
+            let _ = handle.join();
         }
     });
 
-    out
+    on_progress(done.load(Ordering::Relaxed), bytes.load(Ordering::Relaxed));
+    sizes
 }
+
+/// 进度回调粒度：每读这么多文件报一次（太多则回调本身成为负担）。
+const PROGRESS_EVERY: u64 = 8192;
 
 /// 单个 FRN → 体积。句柄是 `\\.\C:` 形式的卷句柄。
 fn read_one(handle: std::os::windows::raw::HANDLE, file_ref: u64) -> Option<FileSize> {

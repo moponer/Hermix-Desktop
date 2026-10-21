@@ -37,6 +37,9 @@ pub struct SearchIndex {
     snapshot_path: Option<String>,
     needs_rebuild: bool,
     status_message: Option<String>,
+    /// 已索引的文件体积之和（字节）。建表时一次算清，增量时按差值修正——
+    /// 每次都重算百万条会让"查状态"变成 O(N)。
+    indexed_bytes: u64,
 }
 
 impl SearchIndex {
@@ -51,6 +54,7 @@ impl SearchIndex {
         last_scan_ms: u64,
         snapshot_path: Option<String>,
     ) {
+        self.indexed_bytes = sum_sizes(&entries);
         self.volume_state = Some(volume_state);
         self.entries = entries;
         self.last_scan_ms = Some(last_scan_ms);
@@ -62,6 +66,7 @@ impl SearchIndex {
     }
 
     pub fn replace_snapshot(&mut self, snapshot: IndexSnapshot, snapshot_path: String) {
+        self.indexed_bytes = sum_sizes(&snapshot.entries);
         self.volume_state = Some(snapshot.volume_state);
         self.entries = snapshot.entries;
         self.last_scan_ms = None;
@@ -165,7 +170,15 @@ impl SearchIndex {
             name: entry.name.clone(),
             path: self.path_of(index, memo),
             extension: extension(&entry.name, entry.is_dir),
-            size: None,
+            // **体积来自索引，不是事后 stat**：MFT file record 的 `$DATA`
+            // 里就有真实字节数，旧实现这里写死 `None`，于是前端永远显示 0 B
+            // （用户可见缺陷）。索引里为 0（没读到 / 确实是空文件）时仍留
+            // `None`，让结果集补全那一步去 stat 兜底。
+            size: if entry.is_dir || entry.size == 0 {
+                None
+            } else {
+                Some(entry.size)
+            },
             modified: entry.modified,
             is_dir: entry.is_dir,
             last_usn: entry.last_usn,
@@ -216,6 +229,7 @@ impl SearchIndex {
                 .map(|state| format!("{}\\", state.volume)),
             volume: self.volume_state.as_ref().map(|state| state.volume.clone()),
             total_entries: self.entries.len(),
+            indexed_bytes: self.indexed_bytes,
             is_indexed: self.volume_state.is_some(),
             last_scan_ms: self.last_scan_ms,
             snapshot_loaded: self.snapshot_loaded,
@@ -228,6 +242,7 @@ impl SearchIndex {
             monitor_state: super::model::MonitorState::Idle,
             last_sync_at: None,
             last_sync_error: None,
+            build: None,
         }
     }
 
@@ -336,6 +351,17 @@ impl SearchIndex {
                     entry.is_dir = is_dir;
                     entry.last_usn = record.usn;
                     entry.attributes = record.attributes;
+                    // USN 记录通常不带体积；带了就按差值修正总量，
+                    // 不带就沿用旧值（体积对"磁盘占用"是近似值，够用）。
+                    if record.size > 0 && record.size != entry.size {
+                        if !entry.is_dir {
+                            self.indexed_bytes = self
+                                .indexed_bytes
+                                .saturating_sub(entry.size)
+                                .saturating_add(record.size);
+                        }
+                        entry.size = record.size;
+                    }
                     stats.updated += 1;
                 }
                 None => {
@@ -348,6 +374,9 @@ impl SearchIndex {
                     }
                     self.by_ref
                         .insert(record.file_ref, self.entries.len() as u32);
+                    if !is_dir {
+                        self.indexed_bytes = self.indexed_bytes.saturating_add(record.size);
+                    }
                     self.entries.push(IndexEntry {
                         file_ref: record.file_ref,
                         parent_ref: record.parent_ref,
@@ -382,6 +411,11 @@ impl SearchIndex {
         let Some(index) = self.by_ref.remove(&file_ref) else {
             return false;
         };
+        // 体积总量跟着减：删掉的文件不能继续占着"已索引体积"的数字。
+        let removed = &self.entries[index as usize];
+        if !removed.is_dir {
+            self.indexed_bytes = self.indexed_bytes.saturating_sub(removed.size);
+        }
         let last = self.entries.len() - 1;
         if index as usize != last {
             self.entries.swap_remove(index as usize);
@@ -625,6 +659,15 @@ fn volume_root(volume: &str) -> String {
 
 pub fn is_directory(attributes: u32) -> bool {
     attributes & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_DIRECTORY != 0
+}
+
+/// 文件体积之和（目录不计——目录体积由父子引用累加）。
+fn sum_sizes(entries: &[IndexEntry]) -> u64 {
+    entries
+        .iter()
+        .filter(|entry| !entry.is_dir)
+        .map(|entry| entry.size)
+        .sum()
 }
 
 fn extension(name: &str, is_dir: bool) -> Option<String> {

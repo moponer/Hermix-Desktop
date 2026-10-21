@@ -55,8 +55,8 @@ mod imp {
     };
 
     use super::{
-        build_entries_from_records, now_ms, BuildIndexSummary, FilterRules, Instant, NtfsIndexBuild,
-        NtfsRecord, UsnChanges, VolumeIndexState, VolumeInfo,
+        build_entries_from_records, now_ms, report, size_threads, BuildIndexSummary, FilterRules,
+        Instant, NtfsIndexBuild, NtfsRecord, UsnChanges, VolumeIndexState, VolumeInfo,
     };
 
     const BUFFER_SIZE: usize = 1024 * 1024;
@@ -131,34 +131,63 @@ mod imp {
         }
     }
 
-    pub fn build_volume_index(volume: String, filter: &FilterRules) -> Result<NtfsIndexBuild> {
+    pub fn build_volume_index(
+        volume: String,
+        filter: &FilterRules,
+        progress: Option<&crate::progress::BuildProgressFn>,
+    ) -> Result<NtfsIndexBuild> {
         let volume = normalize_volume(&volume)?;
         ensure_supported_volume(&volume)?;
         let start = Instant::now();
         let handle = VolumeHandle::open(&volume)?;
         let journal = query_usn_journal(handle.raw())?;
-        let records = enum_mft_records(handle.raw(), journal.NextUsn)?;
-        // 体积：USN 记录里没有大小，逐个 FRN 读 file record 的 `$DATA`
+
+        // 阶段一：枚举 MFT（内核侧遍历，只把名字拷出来，很快）。
+        let mut scanned = 0u64;
+        let scan_started = Instant::now();
+        let records = enum_mft_records(handle.raw(), journal.NextUsn, &mut scanned)?;
+        let scan_ms = scan_started.elapsed().as_millis() as u64;
+        report(progress, &volume, "scanning", scanned, 0, start);
+
+        // 阶段二：体积。USN 记录里没有大小，逐个 FRN 读 file record 的 `$DATA`
         // （多线程，每线程一个卷句柄）。拿不到就留 0——体积只影响"磁盘
         // 占用"视图，不影响搜索，不能因此让整次建索引失败。
-        let file_refs: Vec<u64> = records
-            .iter()
-            .filter(|record| !crate::core::index::is_directory(record.attributes))
-            .map(|record| record.file_ref)
-            .collect();
-        let mut records = records;
-        let sizes = crate::core::mft_size::read_file_sizes(&volume, &file_refs, 8);
-        for record in &mut records {
-            if let Some(size) = sizes.get(&record.file_ref) {
-                record.size = size.bytes;
+        //
+        // 记录下标与 file_refs 一一对应：体积数组按下标对齐写回，不再
+        // 经过 `HashMap<FRN, size>`（百万级哈希表是纯浪费）。
+        let mut file_refs: Vec<u64> = Vec::new();
+        let mut slots: Vec<usize> = Vec::new();
+        for (index, record) in records.iter().enumerate() {
+            if !crate::core::index::is_directory(record.attributes) {
+                file_refs.push(record.file_ref);
+                slots.push(index);
             }
         }
-        eprintln!(
-            "[filesearch] {volume} 体积：{}/{} 个文件取到大小",
-            sizes.len(),
-            file_refs.len()
+        let mut records = records;
+        let size_started = Instant::now();
+        let sizes = crate::core::mft_size::read_file_sizes(&volume, &file_refs, size_threads(), |done, bytes| {
+            report(progress, &volume, "sizing", done, bytes, start);
+        });
+        let size_ms = size_started.elapsed().as_millis() as u64;
+        let mut sized = 0usize;
+        for (slot, size) in slots.iter().zip(sizes.iter()) {
+            if *size > 0 {
+                records[*slot].size = *size;
+                sized += 1;
+            }
+        }
+        crate::log!(
+            "[filesearch] {volume} 体积：{sized}/{} 个文件取到大小（{} ms）",
+            file_refs.len(),
+            size_ms
         );
+
+        // 阶段三：建表（过滤 + 转紧凑条目）。
+        let index_started = Instant::now();
+        report(progress, &volume, "indexing", scanned, 0, start);
         let entries = build_entries_from_records(&volume, records, filter);
+        let index_ms = index_started.elapsed().as_millis() as u64;
+        report(progress, &volume, "indexing", entries.len() as u64, 0, start);
         // 这里**不做** `hydrate_file_metadata`：它对每个条目 fs::metadata，
         // 全盘百万级文件就是百万次同步文件系统调用——实测把磁盘打到 100%、
         // 单核 30%+、内存 1.4GB，整机卡死。大小/修改时间改为搜索时只对
@@ -184,6 +213,10 @@ mod imp {
             journal_id: state.journal_id,
             next_usn: state.next_usn,
             snapshot_saved: false,
+            scan_ms,
+            size_ms,
+            index_ms,
+            save_ms: 0,
         };
 
         Ok(NtfsIndexBuild {
@@ -266,7 +299,11 @@ mod imp {
         ))
     }
 
-    fn enum_mft_records(handle: HANDLE, high_usn: i64) -> Result<Vec<NtfsRecord>> {
+    fn enum_mft_records(
+        handle: HANDLE,
+        high_usn: i64,
+        scanned: &mut u64,
+    ) -> Result<Vec<NtfsRecord>> {
         let mut input = MFT_ENUM_DATA {
             StartFileReferenceNumber: 0,
             LowUsn: 0,
@@ -306,6 +343,7 @@ mod imp {
 
             let next_file_ref = unsafe { std::ptr::read_unaligned(buffer.as_ptr() as *const u64) };
             parse_records(&buffer[size_of::<u64>()..returned as usize], &mut records)?;
+            *scanned = records.len() as u64;
             input.StartFileReferenceNumber = next_file_ref;
         }
 
@@ -541,7 +579,11 @@ mod imp {
         Ok(Vec::new())
     }
 
-    pub fn build_volume_index(_volume: String, _filter: &FilterRules) -> Result<NtfsIndexBuild> {
+    pub fn build_volume_index(
+        _volume: String,
+        _filter: &FilterRules,
+        _progress: Option<&crate::progress::BuildProgressFn>,
+    ) -> Result<NtfsIndexBuild> {
         bail!("MFT/USN 索引仅支持 Windows。")
     }
 
@@ -552,9 +594,45 @@ mod imp {
 
 pub use imp::{build_volume_index, list_volumes, read_usn_changes};
 
+/// 推一次建索引进度（阶段 / 条目数 / 字节数 / 已用时）。
+///
+/// 进度是**真实数字**：条目数来自内核枚举的累计条数，字节数来自已读到的
+/// `$DATA` 大小。UI 拿它画确定进度条，而不是一个假装在动的转圈。
+fn report(
+    progress: Option<&crate::progress::BuildProgressFn>,
+    volume: &str,
+    phase: &str,
+    entries: u64,
+    bytes: u64,
+    start: Instant,
+) {
+    let Some(progress) = progress else {
+        return;
+    };
+    progress(crate::core::model::BuildProgress {
+        volume: volume.to_string(),
+        phase: phase.to_string(),
+        entries,
+        bytes,
+        elapsed_ms: start.elapsed().as_millis() as u64,
+        done: false,
+        error: None,
+    });
+}
+
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis() as u64)
         .unwrap_or(0)
+}
+
+/// 读体积的线程数。
+///
+/// `FSCTL_GET_NTFS_FILE_RECORD` 是内核态调用（拷 4KB 记录，不等磁盘），
+/// 所以按逻辑核数给线程就行；太多反而让内核调度成为瓶颈。上限 16。
+fn size_threads() -> usize {
+    std::thread::available_parallelism()
+        .map(|value| value.get().clamp(4, 16))
+        .unwrap_or(8)
 }

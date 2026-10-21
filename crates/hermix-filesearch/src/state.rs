@@ -7,7 +7,7 @@ use tokio::sync::{broadcast, Mutex};
 
 use crate::core::{
     index::SearchIndex,
-    model::{FileSearchEvent, FilterRules, MonitorState, MonitorStatus},
+    model::{BuildProgress, FileSearchEvent, FilterRules, MonitorState, MonitorStatus},
     storage,
 };
 
@@ -21,6 +21,8 @@ pub struct VolumeState {
     pub(crate) snapshot_dirty: AtomicBool,
     pub(crate) last_snapshot_saved_at: AtomicU64,
     pub(crate) events: broadcast::Sender<FileSearchEvent>,
+    /// 当前这卷的建索引进度（建完或没在建时为 None）。
+    pub(crate) build_progress: RwLock<Option<BuildProgress>>,
 }
 
 impl VolumeState {
@@ -33,7 +35,20 @@ impl VolumeState {
             snapshot_dirty: AtomicBool::new(false),
             last_snapshot_saved_at: AtomicU64::new(0),
             events,
+            build_progress: RwLock::new(None),
         })
+    }
+
+    /// 更新建索引进度（UI 轮询状态时读它）。
+    pub fn set_build_progress(&self, progress: Option<BuildProgress>) {
+        if let Ok(mut slot) = self.build_progress.write() {
+            *slot = progress;
+        }
+    }
+
+    /// 当前建索引进度（没在建时为 None）。
+    pub fn build_progress(&self) -> Option<BuildProgress> {
+        self.build_progress.read().ok().and_then(|slot| slot.clone())
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<FileSearchEvent> {

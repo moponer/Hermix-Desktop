@@ -4,6 +4,9 @@
  * 界面单元"，样式跟着组件走，删功能时能整块摘掉。token 全部复用
  * styles.css 里的 --bg-* / --text-* / --accent，深色主题自动跟随。
  *
+ * 层次规则：**不用描边**。靠底色差（primary / secondary / tertiary / card）
+ * + 阴影 + 间距分层。唯一的例外是键盘 focus-visible 的轮廓（无障碍必需）。
+ *
  * 动效原则：只让"数值变化"和"进度推进"可被看见（transition 200–400ms），
  * 不加循环装饰动画——面板每 3 秒刷新一次，循环动画会一直抖。 */
 
@@ -60,7 +63,7 @@
 @keyframes sys-fade { from { opacity: 0; } to { opacity: 1; } }
 
 .syspanel {
-  width: min(1060px, 93vw); height: min(740px, 88vh);
+  width: min(1060px, 93vw); height: min(760px, 88vh);
   display: flex; flex-direction: column;
   background: var(--bg-primary); border-radius: 12px;
   box-shadow: 0 24px 64px rgba(15, 23, 42, 0.28);
@@ -101,7 +104,7 @@
 .syspanel-body {
   flex: 1; min-height: 0; display: flex; flex-direction: column;
   padding: 10px 12px 12px; background: var(--bg-secondary);
-  border-top: 1px solid var(--border-subtle);
+  border-radius: 0 0 12px 12px;
 }
 .pane { display: flex; flex-direction: column; min-height: 0; flex: 1; gap: 8px; }
 .pane-bar { display: flex; align-items: center; gap: 10px; flex: none; }
@@ -133,8 +136,229 @@
 .pane-notice { font-size: 12px; color: var(--text-secondary); margin: 0; }
 .pane-hint { font-size: 11.5px; color: var(--text-muted); margin: 0; }
 .pane-empty { font-size: 12px; color: var(--text-muted); padding: 24px 0; text-align: center; margin: 0; }
+.pane-banner {
+  display: flex; align-items: center; gap: 8px; flex: none;
+  padding: 7px 11px; border-radius: 8px; font-size: 12px;
+  background: var(--bg-accent-soft); color: var(--text-primary);
+}
+.pane-banner .pane-btn { margin-left: auto; }
 .spin { animation: sys-spin 0.9s linear infinite; }
 @keyframes sys-spin { to { transform: rotate(360deg); } }
+
+/* ─── 页头（清理页 / 索引页共用） ─────────────────────────────────── */
+.clean-head, .index-head {
+  display: flex; align-items: flex-start; gap: 12px; flex: none;
+  padding: 10px 12px; border-radius: 10px;
+  background: var(--bg-primary);
+}
+.clean-head-main, .index-head-main {
+  display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1;
+}
+.clean-head-title { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.clean-head-sub { font-size: 11.5px; color: var(--text-secondary); }
+.clean-head-warn {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11px; color: var(--warning);
+}
+.clean-head .pane-btn, .index-head .pane-btn { flex: none; }
+.index-head-actions { display: flex; gap: 6px; flex: none; }
+.clean-back {
+  display: inline-flex; align-items: center; gap: 4px;
+  border: none; background: transparent; cursor: pointer;
+  padding: 0; font-size: 11.5px; color: var(--accent);
+  font-family: var(--font-sans);
+}
+.clean-back:hover { color: var(--accent-strong, var(--accent)); }
+.clean-toggle {
+  border: none; background: transparent; cursor: pointer;
+  font-size: 11.5px; color: var(--accent); font-family: var(--font-sans);
+  padding: 0;
+}
+
+/* ─── 磁盘条（进大文件清理视图的入口） ───────────────────────────── */
+.drive-strip {
+  display: flex; align-items: center; gap: 8px; flex: none;
+  flex-wrap: wrap;
+}
+.drive-strip-label { font-size: 11.5px; color: var(--text-muted); }
+.drive-chip {
+  display: inline-flex; align-items: center; gap: 7px;
+  border: none; cursor: pointer; padding: 5px 9px; border-radius: 8px;
+  background: var(--bg-primary); color: var(--text-primary);
+  font-family: var(--font-sans);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+  transition: background 140ms ease-out, transform 120ms ease-out;
+}
+.drive-chip:hover { background: var(--bg-card-hover); transform: translateY(-1px); }
+.drive-chip-letter {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 12px; font-weight: 600; font-family: var(--font-mono);
+}
+.drive-chip-bar {
+  display: block; width: 46px; height: 4px; border-radius: 999px;
+  background: var(--bg-tertiary); overflow: hidden;
+}
+.drive-chip-fill {
+  display: block; height: 100%; width: 100%; border-radius: 999px;
+  background: var(--accent);
+  transform: scaleX(0); transform-origin: left center;
+  transition: transform 400ms ease-out, background 300ms ease-out;
+}
+.drive-chip-fill.is-warn { background: var(--warning); }
+.drive-chip-fill.is-high { background: var(--danger); }
+.drive-chip-meta { font-size: 10.5px; color: var(--text-muted); font-family: var(--font-mono); }
+
+/* ─── 进度条 ───────────────────────────────────────────────────────── */
+.progress-wrap { flex: none; display: flex; flex-direction: column; gap: 4px; }
+.progress {
+  position: relative; height: 6px; border-radius: 999px;
+  background: var(--bg-tertiary); overflow: hidden;
+}
+/* 用 transform: scaleX 而不是 width —— 动 width 会每帧重排（impeccable
+   layout-transition 规则），进度条这种每 300ms 变一次的元素尤其明显。 */
+.progress-fill {
+  position: absolute; inset: 0; width: 100%;
+  transform: scaleX(0); transform-origin: left center;
+  border-radius: 999px; background: var(--accent);
+  transition: transform 320ms ease-out;
+}
+.progress.is-indeterminate .progress-fill {
+  transform: translateX(-32%) scaleX(0.32);
+  animation: sys-indeterminate 1.15s ease-in-out infinite;
+}
+@keyframes sys-indeterminate {
+  0% { transform: translateX(-32%) scaleX(0.32); }
+  100% { transform: translateX(100%) scaleX(0.32); }
+}
+.progress-label { font-size: 10.5px; color: var(--text-muted); }
+
+.result-banner {
+  flex: none; display: flex; align-items: center; gap: 8px;
+  padding: 7px 11px; border-radius: 8px;
+  background: rgba(22, 163, 74, 0.1); color: var(--text-primary);
+  font-size: 12px;
+  animation: sys-slide 180ms ease-out;
+}
+.result-banner svg { color: var(--success); flex: none; }
+
+/* ─── 清理清单 ─────────────────────────────────────────────────────── */
+.clean-list { flex: 1; overflow: auto; min-height: 0; display: flex; flex-direction: column; gap: 10px; }
+.clean-group {
+  background: var(--bg-primary); border-radius: 10px;
+  padding: 9px 11px 6px; display: flex; flex-direction: column;
+}
+.clean-group-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 3px; }
+.clean-group-title {
+  margin: 0; font-size: 11.5px; font-weight: 600;
+  color: var(--text-secondary); letter-spacing: 0.04em;
+}
+.clean-group-total { font-size: 11px; color: var(--text-muted); font-family: var(--font-mono); }
+.clean-note {
+  margin: 0 0 4px; font-size: 11px; color: var(--text-muted); line-height: 1.6;
+}
+.clean-item {
+  display: flex; align-items: flex-start; gap: 9px;
+  padding: 7px 6px; border-radius: 7px; cursor: pointer;
+  transition: background 120ms ease-out;
+}
+.clean-item:hover { background: var(--bg-secondary); }
+.clean-item.is-checked { background: var(--bg-accent-soft); }
+.clean-item.is-disabled { opacity: 0.45; cursor: default; }
+.clean-item input { margin-top: 2px; accent-color: var(--accent); }
+.clean-main { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+.clean-name {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12.5px; color: var(--text-primary);
+  max-width: 100%; min-width: 0;
+}
+.clean-path {
+  font-size: 12px; color: var(--text-primary);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: var(--font-mono);
+  /* 作为 flex 项必须允许收缩，否则长路径会把整行撑破 */
+  min-width: 0; flex: 0 1 auto;
+}
+/* 清理依据：这一行是本次重构的重点——用户必须知道"凭什么说它是垃圾"。 */
+.clean-reason { font-size: 11.5px; color: var(--text-secondary); line-height: 1.5; }
+.clean-source { font-size: 10.5px; color: var(--text-faint); }
+.clean-bar {
+  display: block; height: 3px; border-radius: 999px;
+  background: var(--bg-tertiary); overflow: hidden; margin-top: 3px;
+}
+.clean-bar-fill {
+  display: block; height: 100%; width: 100%; border-radius: 999px;
+  background: var(--accent);
+  opacity: 0.55;
+  transform: scaleX(0); transform-origin: left center;
+  transition: transform 400ms ease-out;
+}
+.clean-tag {
+  display: inline-flex; align-items: center; gap: 3px;
+  padding: 0 5px; border-radius: 4px; font-size: 10.5px;
+  background: var(--bg-tertiary); color: var(--text-secondary);
+  flex: none;
+}
+.clean-tag.is-warn { background: var(--warning-soft); color: var(--warning); }
+.clean-size {
+  font-size: 12px; color: var(--text-primary); white-space: nowrap;
+  font-family: var(--font-mono); padding-top: 1px;
+}
+.clean-total { font-family: var(--font-mono); color: var(--text-primary); }
+.clean-foot {
+  flex: none; display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; font-size: 12px;
+}
+
+/* ─── 目录体积（Treemap） ─────────────────────────────────────────── */
+.treemap-bar {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  margin: 2px 0 6px;
+}
+.treemap-crumb {
+  border: none; background: var(--bg-tertiary); cursor: pointer;
+  padding: 2px 8px; border-radius: 6px;
+  font-size: 11px; color: var(--text-secondary); font-family: var(--font-sans);
+}
+.treemap-crumb:disabled { color: var(--text-faint); cursor: default; }
+.treemap-crumb:not(:disabled):hover { background: var(--bg-hover); color: var(--text-primary); }
+
+/* ─── 文件索引页 ───────────────────────────────────────────────────── */
+.index-table {
+  flex: 1; min-height: 0; display: flex; flex-direction: column;
+  background: var(--bg-primary); border-radius: 10px; overflow: hidden;
+}
+.index-row {
+  display: grid;
+  grid-template-columns: minmax(72px, 0.6fr) minmax(90px, 0.8fr) minmax(90px, 0.8fr) minmax(80px, 0.7fr) minmax(150px, 1.2fr) 40px;
+  gap: 10px; align-items: center;
+  padding: 6px 11px; font-size: 12px; color: var(--text-secondary);
+}
+.index-head-row {
+  background: var(--bg-tabbar); color: var(--text-muted);
+  font-size: 11px; font-weight: 500; flex: none;
+}
+.index-scroll { overflow: auto; flex: 1; min-height: 0; }
+.index-scroll .index-row:hover { background: var(--bg-secondary); }
+.index-row .is-num { text-align: right; }
+.index-volume {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-family: var(--font-mono); color: var(--text-primary);
+}
+.index-state { display: inline-flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+.index-progress {
+  flex: none; display: flex; flex-direction: column; gap: 4px;
+  padding: 9px 12px; border-radius: 10px; background: var(--bg-primary);
+}
+.index-progress-head { display: flex; align-items: baseline; gap: 10px; }
+.index-skipped {
+  flex: none; display: flex; flex-direction: column; gap: 3px;
+  padding: 8px 11px; border-radius: 9px; background: var(--bg-primary);
+}
+.index-skip-row { display: flex; gap: 8px; font-size: 11.5px; }
+.index-foot-note {
+  flex: none; display: inline-flex; align-items: center; gap: 6px;
+  padding: 0 2px;
+}
 
 /* ─── 顶部实时仪表 ─────────────────────────────────────────────────── */
 .statbar {
@@ -148,7 +372,7 @@
   background: conic-gradient(var(--accent) var(--p, 0%), var(--bg-tertiary) 0);
   transition: background 400ms ease-out;
 }
-.stat-ring.is-warn .stat-ring-gauge { background: conic-gradient(var(--warning, #b45309) var(--p, 0%), var(--bg-tertiary) 0); }
+.stat-ring.is-warn .stat-ring-gauge { background: conic-gradient(var(--warning) var(--p, 0%), var(--bg-tertiary) 0); }
 .stat-ring.is-high .stat-ring-gauge { background: conic-gradient(var(--danger) var(--p, 0%), var(--bg-tertiary) 0); }
 .stat-ring-gauge::after {
   content: ""; position: absolute; inset: 7px; border-radius: 50%;
@@ -168,10 +392,11 @@
 .stat-mem-head .dim { margin-left: auto; font-family: var(--font-mono); }
 .stat-bar { height: 8px; border-radius: 999px; background: var(--bg-tertiary); overflow: hidden; }
 .stat-bar-fill {
-  height: 100%; border-radius: 999px; background: var(--accent);
-  transition: width 420ms cubic-bezier(0.2, 0.9, 0.3, 1), background 300ms ease-out;
+  height: 100%; width: 100%; border-radius: 999px; background: var(--accent);
+  transform: scaleX(0); transform-origin: left center;
+  transition: transform 420ms cubic-bezier(0.2, 0.9, 0.3, 1), background 300ms ease-out;
 }
-.stat-bar-fill.is-warn { background: var(--warning, #b45309); }
+.stat-bar-fill.is-warn { background: var(--warning); }
 .stat-bar-fill.is-high { background: var(--danger); }
 .stat-meta {
   flex: none; display: flex; flex-direction: column; gap: 2px;
@@ -181,7 +406,7 @@
 /* ─── 进程表 ──────────────────────────────────────────────────────── */
 .proc-table {
   flex: 1; min-height: 0; display: flex; flex-direction: column;
-  background: var(--bg-primary); border-radius: 8px; overflow: hidden;
+  background: var(--bg-primary); border-radius: 10px; overflow: hidden;
 }
 .proc-row {
   display: grid;
@@ -215,7 +440,7 @@
   display: inline-flex; align-items: center; gap: 4px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.proc-lock { color: var(--warning, #b45309); flex: none; }
+.proc-lock { color: var(--warning); flex: none; }
 
 /* 行内条形：CPU / 内存。数字在右，条在左，扫一眼就能看出谁在吃资源。 */
 .meter-cell { display: inline-flex; align-items: center; gap: 6px; justify-content: flex-end; }
@@ -224,9 +449,10 @@
   background: var(--bg-tertiary); overflow: hidden;
 }
 .meter-fill {
-  display: block; height: 100%; border-radius: 999px;
+  display: block; height: 100%; width: 100%; border-radius: 999px;
   background: var(--accent);
-  transition: width 400ms cubic-bezier(0.2, 0.9, 0.3, 1);
+  transform: scaleX(0); transform-origin: left center;
+  transition: transform 400ms cubic-bezier(0.2, 0.9, 0.3, 1);
 }
 .meter-fill.is-mem { background: var(--info, #0ea5e9); }
 .meter-value { width: 46px; text-align: right; font-family: var(--font-mono); }
@@ -246,7 +472,7 @@
 .inline-btn:hover { color: var(--accent); }
 
 .proc-detail {
-  flex: none; padding: 10px 12px; border-radius: 8px;
+  flex: none; padding: 10px 12px; border-radius: 10px;
   background: var(--bg-primary); max-height: 34%;
   overflow: auto;
   animation: sys-slide 160ms ease-out;
@@ -261,101 +487,6 @@
 }
 .proc-facts dt { color: var(--text-muted); }
 .proc-facts dd { margin: 0; color: var(--text-primary); }
-
-/* ─── 清理页 ──────────────────────────────────────────────────────── */
-.drive-cards { display: flex; flex-wrap: wrap; gap: 6px; flex: none; }
-.drive-card {
-  display: flex; flex-direction: column; gap: 3px;
-  min-width: 120px; padding: 7px 10px; border: none; cursor: pointer;
-  border-radius: 8px; background: var(--bg-primary);
-  font-family: var(--font-sans); text-align: left;
-  transition: box-shadow 140ms ease-out, transform 120ms ease-out;
-}
-.drive-card:hover { transform: translateY(-1px); box-shadow: 0 2px 8px rgba(15, 23, 42, 0.1); }
-.drive-card.is-active { outline: 2px solid var(--accent); outline-offset: -2px; }
-.drive-letter {
-  display: inline-flex; align-items: center; gap: 4px;
-  font-size: 12px; font-weight: 600; color: var(--text-primary);
-  font-family: var(--font-mono);
-}
-.drive-bar { display: block; height: 4px; border-radius: 999px; background: var(--bg-tertiary); overflow: hidden; }
-.drive-bar-fill {
-  display: block; height: 100%; border-radius: 999px; background: var(--accent);
-  transition: width 400ms ease-out, background 300ms ease-out;
-}
-.drive-bar-fill.is-warn { background: var(--warning, #b45309); }
-.drive-bar-fill.is-high { background: var(--danger); }
-.drive-meta { font-size: 10.5px; color: var(--text-muted); }
-
-/* 进度条：有进度事件时是确定条，否则是滑动的不定条。
-   文字放在条**下面**单独一行——绝对定位会压住下面的清单。 */
-.progress-wrap { flex: none; display: flex; flex-direction: column; gap: 4px; }
-.progress {
-  position: relative; height: 6px; border-radius: 999px;
-  background: var(--bg-tertiary); overflow: hidden;
-}
-.progress-fill {
-  position: absolute; inset: 0 auto 0 0; width: 0;
-  border-radius: 999px; background: var(--accent);
-  transition: width 320ms ease-out;
-}
-.progress.is-indeterminate .progress-fill {
-  width: 32%; animation: sys-indeterminate 1.15s ease-in-out infinite;
-}
-@keyframes sys-indeterminate {
-  0% { left: -32%; }
-  100% { left: 100%; }
-}
-.progress-label { font-size: 10.5px; color: var(--text-muted); }
-
-.result-banner {
-  flex: none; display: flex; align-items: center; gap: 8px;
-  padding: 7px 11px; border-radius: 8px;
-  background: rgba(22, 163, 74, 0.1); color: var(--text-primary);
-  font-size: 12px;
-  animation: sys-slide 180ms ease-out;
-}
-.result-banner svg { color: var(--success); flex: none; }
-
-.clean-list { flex: 1; overflow: auto; min-height: 0; display: flex; flex-direction: column; gap: 10px; }
-.clean-group { background: var(--bg-primary); border-radius: 8px; padding: 8px 10px 4px; }
-.clean-group-title {
-  margin: 0 0 4px; font-size: 11px; font-weight: 600;
-  color: var(--text-muted); letter-spacing: 0.04em;
-}
-.clean-item {
-  display: flex; align-items: flex-start; gap: 8px;
-  padding: 7px 6px; border-radius: 6px; cursor: pointer;
-  transition: background 120ms ease-out;
-}
-.clean-item:hover { background: var(--bg-secondary); }
-.clean-item.is-checked { background: var(--bg-accent-soft); }
-.clean-item.is-disabled { opacity: 0.45; cursor: default; }
-.clean-item input { margin-top: 2px; accent-color: var(--accent); }
-.clean-main { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
-.clean-name { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-primary); }
-.clean-hint { font-size: 11.5px; color: var(--text-muted); }
-.clean-bar { display: block; height: 3px; border-radius: 999px; background: var(--bg-tertiary); overflow: hidden; margin-top: 2px; }
-.clean-bar-fill {
-  display: block; height: 100%; border-radius: 999px; background: var(--accent);
-  opacity: 0.55;
-  transition: width 400ms ease-out;
-}
-.clean-tag {
-  display: inline-flex; align-items: center; gap: 3px;
-  padding: 0 5px; border-radius: 4px; font-size: 10.5px;
-  background: var(--bg-tertiary); color: var(--text-secondary);
-}
-.clean-tag.is-warn { background: rgba(180, 83, 9, 0.12); color: var(--warning, #b45309); }
-.clean-size {
-  font-size: 12px; color: var(--text-primary); white-space: nowrap;
-  font-family: var(--font-mono); padding-top: 1px;
-}
-.clean-total { font-family: var(--font-mono); color: var(--text-primary); }
-.clean-foot {
-  flex: none; display: flex; align-items: center; justify-content: space-between;
-  gap: 12px; font-size: 12px;
-}
 
 /* ─── 关于 ────────────────────────────────────────────────────────── */
 .about-card {
@@ -400,82 +531,4 @@
 .about-foot {
   display: flex; align-items: center; justify-content: space-between;
   gap: 12px; font-size: 11px; padding-top: 4px;
-  border-top: 1px solid var(--border-subtle);
 }
-/* ─── 盘内深度扫描（kondo 式产物识别 + 残留/大文件） ─────────────── */
-.deep-scan {
-  background: var(--bg-primary); border-radius: 8px;
-  padding: 10px 10px 8px; display: flex; flex-direction: column; gap: 8px;
-}
-.deep-head { display: flex; align-items: center; gap: 10px; }
-.deep-head h4 { margin: 0; font-size: 12.5px; color: var(--text-primary); }
-.deep-head .pane-btn { margin-left: auto; }
-.deep-summary { margin: 0; font-size: 11px; color: var(--text-muted); }
-.deep-group { display: flex; flex-direction: column; }
-.deep-group h5 {
-  margin: 2px 0; font-size: 11.5px; font-weight: 600;
-  color: var(--text-secondary); display: flex; gap: 8px; align-items: baseline;
-}
-.deep-item {
-  display: flex; align-items: flex-start; gap: 8px;
-  padding: 5px 4px; border-radius: 6px; cursor: pointer;
-  transition: background 120ms ease-out;
-}
-.deep-item:hover { background: var(--bg-secondary); }
-.deep-item.is-checked { background: var(--bg-accent-soft); }
-.deep-item input { margin-top: 3px; accent-color: var(--accent); }
-.deep-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
-.deep-path {
-  font-size: 12px; color: var(--text-primary); font-family: var(--font-mono);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.deep-hint { font-size: 10.5px; color: var(--text-muted); }
-.deep-size {
-  font-size: 11.5px; color: var(--text-primary);
-  font-family: var(--font-mono); white-space: nowrap;
-}
-.deep-foot {
-  display: flex; align-items: center; justify-content: space-between;
-  gap: 10px; font-size: 12px; padding-top: 6px;
-  border-top: 1px solid var(--border-subtle);
-}
-
-/* ─── Treemap（squarified） ─────────────────────────────────────── */
-.treemap { width: 100%; }
-.treemap svg { width: 100%; height: auto; display: block; }
-.treemap-cell { cursor: pointer; }
-.treemap-cell rect {
-  transition: filter 140ms ease-out, stroke 140ms ease-out;
-}
-.treemap-cell:hover rect { filter: brightness(1.1); }
-.treemap-cell.is-selected rect { stroke: var(--text-primary); stroke-width: 2; }
-.treemap-label {
-  font-size: 15px; fill: #fff; font-weight: 600;
-  font-family: var(--font-sans); pointer-events: none;
-}
-.treemap-size {
-  font-size: 12px; fill: rgba(255, 255, 255, 0.88);
-  font-family: var(--font-mono); pointer-events: none;
-}
-.treemap-bar {
-  display: flex; align-items: center; gap: 5px; flex-wrap: wrap;
-  margin-bottom: 6px;
-}
-.treemap-crumb {
-  border: none; background: var(--bg-tertiary); color: var(--text-secondary);
-  cursor: pointer; padding: 2px 8px; border-radius: 5px;
-  font-size: 11px; font-family: var(--font-sans);
-  transition: background 120ms ease-out;
-}
-.treemap-crumb:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-primary); }
-.treemap-crumb:disabled { opacity: 0.5; cursor: default; }
-
-/* 进程页里的提权服务提示条 */
-.pane-banner {
-  flex: none; display: flex; align-items: center; gap: 8px;
-  padding: 7px 11px; border-radius: 8px;
-  background: rgba(180, 83, 9, 0.1); color: var(--text-primary);
-  font-size: 12px; line-height: 1.5;
-}
-.pane-banner svg { color: var(--warning, #b45309); flex: none; }
-.pane-banner .pane-btn { margin-left: auto; flex: none; }

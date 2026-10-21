@@ -121,7 +121,7 @@ fn spawn_elevated(exe: &Path, args: &str) -> Result<(), String> {
     use windows_sys::Win32::UI::Shell::{
         ShellExecuteExW, SEE_MASK_FLAG_NO_UI, SHELLEXECUTEINFOW,
     };
-    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_HIDE;
 
     let exe_w: Vec<u16> = exe.as_os_str().encode_wide().chain(Some(0)).collect();
     let args_w: Vec<u16> = std::ffi::OsStr::new(args)
@@ -138,7 +138,11 @@ fn spawn_elevated(exe: &Path, args: &str) -> Result<(), String> {
     sei.lpVerb = verb_w.as_ptr();
     sei.lpFile = exe_w.as_ptr();
     sei.lpParameters = args_w.as_ptr();
-    sei.nShow = SW_SHOWNORMAL;
+    // `SW_HIDE`：helper 是控制台程序，正常启动会弹一个黑色命令行窗口。
+    // helper 本身已按 GUI 子系统编译（不会再申请控制台），这里再隐藏一次
+    // 是双保险——UAC 提权链路（consent.exe → CreateProcess）也会把
+    // wShowWindow 透传给目标进程。
+    sei.nShow = SW_HIDE;
     unsafe {
         // windows-sys 的 ShellExecuteExW 返回 BOOL（0 = 失败），不是 Result。
         if ShellExecuteExW(&mut sei) == 0 {
@@ -425,12 +429,53 @@ pub fn stop_service() -> Result<String, String> {
     }
 }
 
+/// Tauri 命令：启动索引服务（没在跑就提权拉起）。
+///
+/// 提权会弹一次 UAC——这是读 MFT 的硬性要求，普通权限拿不到 file record。
+#[tauri::command(async)]
+pub async fn viewer_filesearch_start() -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let endpoint = ensure_helper()?;
+        Ok(format!("索引服务已启动（PID {}）", endpoint.pid))
+    })
+    .await
+    .map_err(|error| format!("启动索引服务失败：{error}"))?
+}
+
 /// Tauri 命令：停止索引服务（释放它占的内存）。
 #[tauri::command(async)]
 pub async fn viewer_filesearch_stop() -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(stop_service)
         .await
         .map_err(|error| format!("停止索引服务失败：{error}"))?
+}
+
+/// Tauri 命令：请求重建索引（可选只重建某一卷）。
+///
+/// 重建是分钟级任务，这里只"下单"：helper 标记该卷需要重建，监听循环在
+/// 下一轮自己动手——期间旧索引继续可搜，UI 通过状态里的建索引进度看进展。
+#[tauri::command(async)]
+pub async fn viewer_filesearch_rebuild(volume: Option<String>) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let endpoint = ensure_helper()?;
+        let result = request(&endpoint, "rebuild", json!({ "volume": volume }))?;
+        let volumes = result
+            .get("volumes")
+            .and_then(|value| value.as_array())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.as_str().map(|name| name.to_string()))
+                    .collect::<Vec<String>>()
+            })
+            .unwrap_or_default();
+        if volumes.is_empty() {
+            return Err("没有可重建的卷（索引服务可能还没识别到该卷）。".to_string());
+        }
+        Ok(format!("已排队重建：{}", volumes.join("、")))
+    })
+    .await
+    .map_err(|error| format!("重建索引失败：{error}"))?
 }
 
 /// 索引服务状态（给「搜索」面板显示是否已就绪）。

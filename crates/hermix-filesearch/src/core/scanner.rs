@@ -79,6 +79,11 @@ pub fn scan_directory(root: PathBuf) -> Result<(Vec<FileEntry>, BuildIndexSummar
         journal_id: 0,
         next_usn: 0,
         snapshot_saved: false,
+        // 目录遍历回退路径没有分阶段耗时（MFT 路径才有）。
+        scan_ms: start.elapsed().as_millis() as u64,
+        size_ms: 0,
+        index_ms: 0,
+        save_ms: 0,
     };
 
     Ok((entries, summary))

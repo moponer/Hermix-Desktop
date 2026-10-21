@@ -54,7 +54,7 @@ pub fn start(state: Arc<VolumeState>, data_dir: PathBuf, filter: FilterRules) {
                         .map(|volume| volume.volume);
                     match volume {
                         Some(volume) => {
-                            match ops::build_and_save(&state, &data_dir, &volume, &filter).await {
+                            match ops::build_and_save(&state, &data_dir, &volume, &filter, None).await {
                                 Ok(_) => {
                                     retry_delay_secs = POLL_INTERVAL_SECS;
                                 }
@@ -188,7 +188,7 @@ pub async fn sync_once(
             index.apply_changes(records, next_usn, synced_at)
         };
         if let Err(error) = storage::append_delta(data_dir, &volume, next_usn, &delta) {
-            eprintln!("[filesearch] {volume} 追加增量日志失败：{error}");
+            crate::log!("[filesearch] {volume} 追加增量日志失败：{error}");
         }
         stats
     };
@@ -272,10 +272,10 @@ pub fn flush_snapshot_on_exit(state: &VolumeState, data_dir: &std::path::Path) {
             state.last_snapshot_saved_at.store(now_ms(), Ordering::Release);
             // 快照已包含全部条目，增量日志可以丢掉（否则下次启动会重放两遍）。
             if let Err(error) = storage::clear_delta(data_dir, &volume) {
-                eprintln!("退出前清空增量日志失败：{error}");
+                crate::log!("退出前清空增量日志失败：{error}");
             }
         }
-        Err(error) => eprintln!("退出前保存索引快照失败：{error}"),
+        Err(error) => crate::log!("退出前保存索引快照失败：{error}"),
     }
 }
 
@@ -342,7 +342,7 @@ async fn flush_snapshot_if_due(
     state.snapshot_dirty.store(false, Ordering::Release);
     state.last_snapshot_saved_at.store(now_ms(), Ordering::Release);
     if let Err(error) = storage::clear_delta(data_dir, &volume) {
-        eprintln!("[filesearch] {volume} 清空增量日志失败：{error}");
+        crate::log!("[filesearch] {volume} 清空增量日志失败：{error}");
     }
     Ok(true)
 }

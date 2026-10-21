@@ -28,6 +28,8 @@
   --accent: #3b82f6;
   --accent-strong: #2563eb;
   --danger: #dc2626;
+  --warning: #b45309;
+  --warning-soft: rgba(180, 83, 9, 0.12);
   --info: #0ea5e9;
   --success: #16a34a;
 
@@ -136,6 +138,8 @@
   --accent: #60a5fa;
   --accent-strong: #3b82f6;
   --danger: #f87171;
+  --warning: #fbbf24;
+  --warning-soft: rgba(251, 191, 36, 0.16);
   --info: #38bdf8;
   --success: #22c55e;
 

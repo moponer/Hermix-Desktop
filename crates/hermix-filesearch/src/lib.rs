@@ -5,10 +5,13 @@
 //! monitor（每卷 USN 监听循环）、ops（构建+落盘）、service（多卷聚合）。
 
 pub mod core;
+pub mod logger;
 mod monitor;
 mod ops;
+pub mod progress;
 pub mod service;
 mod state;
 
+pub use progress::BuildProgressFn;
 pub use service::SearchService;
 pub use state::VolumeState;

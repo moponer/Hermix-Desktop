@@ -85,6 +85,14 @@ pub struct BuildIndexSummary {
     pub journal_id: u64,
     pub next_usn: i64,
     pub snapshot_saved: bool,
+    /// 枚举 MFT 的耗时（毫秒）。
+    pub scan_ms: u64,
+    /// 逐文件读体积的耗时（毫秒）——建索引里最容易变成瓶颈的一段。
+    pub size_ms: u64,
+    /// 建表（过滤 + 转紧凑条目）的耗时（毫秒）。
+    pub index_ms: u64,
+    /// 落盘快照的耗时（毫秒）。
+    pub save_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -136,6 +144,8 @@ pub struct IndexStatus {
     pub root: Option<String>,
     pub volume: Option<String>,
     pub total_entries: usize,
+    /// 已索引的**文件体积之和**（字节）。目录体积由父子引用累加，不计入这里。
+    pub indexed_bytes: u64,
     pub is_indexed: bool,
     pub last_scan_ms: Option<u64>,
     pub snapshot_loaded: bool,
@@ -148,6 +158,31 @@ pub struct IndexStatus {
     pub monitor_state: MonitorState,
     pub last_sync_at: Option<u64>,
     pub last_sync_error: Option<String>,
+    /// 建索引进度（正在建时为 Some，建完为 None）。
+    pub build: Option<BuildProgress>,
+}
+
+/// 建索引进度。
+///
+/// **为什么要有它**：旧实现里"正在建索引"只有一句"请稍候"——UI 画不出
+/// 进度条，用户看到的现象是"卡住了"。这里把三个阶段都量化出来：
+/// 枚举 MFT（条目数）、读取体积（字节数）、落盘。UI 直接拿它画确定进度。
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildProgress {
+    pub volume: String,
+    /// `scanning`（枚举 MFT）/ `sizing`（读体积）/ `indexing`（建表）/ `saving`（落盘）。
+    pub phase: String,
+    /// 已处理的条目数（scanning / indexing 阶段有意义）。
+    pub entries: u64,
+    /// 已累计的字节数（sizing 阶段有意义）。
+    pub bytes: u64,
+    /// 本次已用时（毫秒）。
+    pub elapsed_ms: u64,
+    /// 是否已结束（成功或失败）。
+    pub done: bool,
+    /// 失败原因（成功时为空）。
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

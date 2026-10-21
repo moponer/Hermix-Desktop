@@ -109,7 +109,7 @@ fn spawn_elevated(exe: &Path, args: &str) -> Result<(), String> {
     use windows::Win32::UI::Shell::{
         ShellExecuteExW, SEE_MASK_FLAG_NO_UI, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW,
     };
-    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+    use windows::Win32::UI::WindowsAndMessaging::SW_HIDE;
 
     let exe_w: Vec<u16> = exe
         .as_os_str()
@@ -128,7 +128,9 @@ fn spawn_elevated(exe: &Path, args: &str) -> Result<(), String> {
         lpVerb: PCWSTR(verb_w.as_ptr()),
         lpFile: PCWSTR(exe_w.as_ptr()),
         lpParameters: PCWSTR(args_w.as_ptr()),
-        nShow: SW_SHOWNORMAL.0,
+        // SW_HIDE：helper 按 GUI 子系统编译（不申请控制台），这里再隐藏一次
+        // 是双保险，避免提权链路里任何一次"正常显示"漏出黑窗。
+        nShow: SW_HIDE.0,
         ..Default::default()
     };
     unsafe {

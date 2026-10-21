@@ -9,8 +9,13 @@
 //!   再统计产物目录体积，让用户按项目逐条决定。本模块照这个模型实现。
 //! - **WizTree / WinDirStat**：读 MFT 做全盘体积统计，快但只"看"不"删"。
 //!   我们已有 MFT 扫描器，但它住在 filesearch 守护进程里，跨进程拿结果反而
-//!   更慢；这里用**受预算约束的 walkdir**，配合一次目录列举复用（marker 判定
+//!   更慢；这里用**受预算约束的并行遍历**，配合一次目录列举复用（marker 判定
 //!   直接用子项名集合查表，不再额外 stat）。
+//!
+//! **结果分两块**（这正是主流清理工具的交互逻辑）：
+//! - [`DriveScanReport::suggested`]「建议清理」：**规则命中**的可删除项，
+//!   每条都带 `reason`（凭什么说它是垃圾）；默认全不勾选。
+//! - [`DriveScanReport::big`]「大文件」：**仅作参考**，按体积排序，不预判可删。
 //!
 //! 安全边界（比"删临时文件"更强，因为这里要删目录）：
 //! 1. 只删**产物目录本身**，且目录名必须在白名单里、父目录必须仍有对应 marker；
@@ -19,8 +24,13 @@
 //! 4. 大文件/残留文件同样只删「文件」，且必须仍在所选盘内。
 
 use std::{
+    collections::{HashMap, VecDeque},
     fs,
     path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc, Condvar, Mutex,
+    },
     time::{Duration, Instant, SystemTime},
 };
 
@@ -37,6 +47,8 @@ const BIG_FILE_BYTES: u64 = 200 * 1024 * 1024;
 /// 残留文件最多列这么多，超出只计数（避免一次列出几十万条把 UI 拖死）。
 const STALE_LIMIT: usize = 400;
 const STALE_MIN_AGE_DAYS: u64 = 7;
+/// 安装包残留的判定年龄：装完 30 天还在临时目录里，就是残留。
+const INSTALLER_MIN_AGE_DAYS: u64 = 30;
 const EMPTY_DIR_LIMIT: usize = 300;
 
 /// 目录名 → 所属项目类型。kondo 的核心表，只保留常见且**可安全重建**的产物。
@@ -60,8 +72,14 @@ const ARTIFACTS: &[(&str, &[&str])] = &[
 
 /// 残留文件后缀（BleachBit 的"临时/备份/断点"类目里适合按扩展名抓的部分）。
 const STALE_EXTS: &[&str] = &[
-    "tmp", "bak", "old", "chk", "crdownload", "part", "dmp", "log.old", "swp", "swo",
+    "tmp", "bak", "old", "chk", "crdownload", "part", "swp", "swo",
 ];
+
+/// 日志与转储后缀。
+const LOG_EXTS: &[&str] = &["log", "dmp", "mdmp", "etl", "tmp0"];
+
+/// 残留安装包后缀。`.exe` 不在其中——临时目录里的 exe 可能是正在跑的安装器。
+const INSTALLER_EXTS: &[&str] = &["msi", "msix", "cab"];
 
 /// 系统禁区：与 cleanup 模块同口径，另加整盘根与若干不可碰目录。
 const FORBIDDEN: &[&str] = &[
@@ -92,17 +110,20 @@ const MAX_TREE_DEPTH: usize = 4;
 /// 返回给前端的目录节点上限。
 const DIR_LIMIT: usize = 400;
 
+/// 建议清理项：规则命中的可删除项。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ArtifactDir {
+pub struct CleanupCandidate {
     pub path: String,
-    /// 产物目录名（target / node_modules / …）。
-    pub kind: String,
-    /// 所属项目的 marker 文件（展示"凭什么认定这是项目"）。
-    pub marker: String,
+    /// 展示类别：构建产物 / 临时残留 / 日志与转储 / 残留安装包。
+    pub category: String,
+    /// **清理依据**：凭什么说它可以删（UI 必须明示这一条）。
+    pub reason: String,
+    /// 删除方式：`artifact` = 删整个目录；`file` = 只删这个文件。
+    pub target: String,
     pub bytes: u64,
     pub files: u64,
-    /// 产物目录的最后修改时间（Unix 秒），UI 显示"多久没用"。
+    /// 最后修改时间（Unix 秒），UI 显示"多久没用"。
     pub modified: u64,
 }
 
@@ -132,10 +153,11 @@ pub struct DirUsage {
 #[serde(rename_all = "camelCase")]
 pub struct DriveScanReport {
     pub drive: String,
-    pub artifacts: Vec<ArtifactDir>,
-    /// 按体积降序的残留文件（*.tmp / *.bak / *.dmp …）。
-    pub stale: Vec<FoundFile>,
-    /// 按体积降序的大文件（> 200MB）。
+    /// 「建议清理」：规则命中的可删除项（按体积降序）。
+    pub suggested: Vec<CleanupCandidate>,
+    /// 「建议清理」命中总数（含未列出的）——列表有上限，计数没有。
+    pub suggested_total: u64,
+    /// 「大文件」：仅作参考，按体积降序，不预判可删。
     pub big: Vec<FoundFile>,
     pub empty_dirs: Vec<String>,
     pub empty_dir_count: u64,
@@ -149,19 +171,53 @@ pub struct DriveScanReport {
 
 struct Budget {
     deadline: Instant,
-    dirs: usize,
+    dirs: AtomicU64,
+    stopped: AtomicBool,
 }
 
 impl Budget {
     fn new() -> Self {
         Self {
             deadline: Instant::now() + SCAN_BUDGET,
-            dirs: 0,
+            dirs: AtomicU64::new(0),
+            stopped: AtomicBool::new(false),
         }
     }
+
     fn exhausted(&self) -> bool {
-        self.dirs >= MAX_DIRS || Instant::now() >= self.deadline
+        self.dirs.load(Ordering::Relaxed) >= MAX_DIRS as u64
+            || Instant::now() >= self.deadline
+            || self.stopped.load(Ordering::Relaxed)
     }
+
+    fn tick(&self) {
+        self.dirs.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// 单个目录的统计结果（体积聚合的载体）。
+#[derive(Debug, Clone, Copy, Default)]
+struct DirStat {
+    bytes: u64,
+    files: u64,
+}
+
+/// 扫描工作台：并行阶段各线程各写一份，最后合并。
+#[derive(Debug, Default)]
+struct ScanBucket {
+    /// 每个目录的直属文件体积（并行阶段填），第二阶段自底向上累加成子树体积。
+    dirs: HashMap<PathBuf, DirStat>,
+    /// 构建产物目录（第二阶段回填子树体积）。
+    artifacts: Vec<(PathBuf, String)>,
+    /// 文件级候选（临时残留 / 日志与转储 / 残留安装包）。
+    candidates: Vec<CleanupCandidate>,
+    /// 候选总数（含未列出的）——列表有上限，计数没有。
+    candidates_total: u64,
+    /// 大文件（仅参考）。
+    big: Vec<FoundFile>,
+    empty_dirs: Vec<String>,
+    empty_dir_count: u64,
+    dirs_scanned: u64,
 }
 
 /// 扫一块盘。`progress` 每扫描若干目录推一次，用于前端进度条。
@@ -171,11 +227,12 @@ pub fn scan_drive(
 ) -> DriveScanReport {
     let started = Instant::now();
     let root = PathBuf::from(format!("{drive}\\"));
-    let mut budget = Budget::new();
+    let budget = Arc::new(Budget::new());
+
     let mut report = DriveScanReport {
         drive: drive.to_string(),
-        artifacts: Vec::new(),
-        stale: Vec::new(),
+        suggested: Vec::new(),
+        suggested_total: 0,
         big: Vec::new(),
         empty_dirs: Vec::new(),
         empty_dir_count: 0,
@@ -190,176 +247,204 @@ pub fn scan_drive(
         return report;
     }
 
-    // 大文件榜用"保留前 N 大"的朴素做法：N=50，插入排序比堆更好读。
-    let mut big: Vec<FoundFile> = Vec::new();
-    let mut stale: Vec<FoundFile> = Vec::new();
-    let mut stale_total = 0u64;
-    let mut last_progress = Instant::now();
-    // 闭包里不能再借 `budget`（walk 已持有可变借用），自己数一份。
-    let mut scanned = 0u64;
+    let bucket = scan_parallel(&root, &budget, progress.clone(), started);
 
-    walk(
-        &root,
-        drive,
-        &mut budget,
-        &mut |dir, entries: &[DirItem], subtree_bytes, subtree_files| {
-            scanned += 1;
-            // ① 空目录（没有子项，且不是卷根）
-            if entries.is_empty() && dir != root {
-                report.empty_dir_count += 1;
-                if report.empty_dirs.len() < EMPTY_DIR_LIMIT {
-                    report.empty_dirs.push(dir.display().to_string());
-                }
-            }
+    // ── 第二阶段：自底向上聚合子树体积（`du` 语义） ──────────────────
+    let mut dirs = bucket.dirs;
+    let mut by_depth: Vec<PathBuf> = dirs.keys().cloned().collect();
+    by_depth.sort_by_key(|path| std::cmp::Reverse(dir_depth(path, drive)));
+    for path in &by_depth {
+        let Some(parent) = path.parent() else { continue };
+        let Some((bytes, files)) = dirs.get(path).map(|stat| (stat.bytes, stat.files)) else {
+            continue;
+        };
+        let slot = dirs.entry(parent.to_path_buf()).or_default();
+        slot.bytes += bytes;
+        slot.files += files;
+    }
 
-            // ② 项目产物：用「目录名 + 同级 marker」判定，marker 命中靠子项名集合查表
-            if let Some(name) = dir.file_name().and_then(|n| n.to_str()) {
-                let lower = name.to_ascii_lowercase();
-                for (artifact, markers) in ARTIFACTS {
-                    if lower != *artifact {
-                        continue;
-                    }
-                    // 产物目录自身的位置由父目录的 marker 决定，这里向上看一层。
-                    let Some(parent) = dir.parent() else { continue };
-                    let Some(marker) = markers.iter().find(|m| marker_present(parent, m)) else {
-                        continue;
-                    };
-                    let (bytes, files) = (subtree_bytes, subtree_files);
-                    report.artifacts.push(ArtifactDir {
-                        path: dir.display().to_string(),
-                        kind: (*artifact).to_string(),
-                        marker: (*marker).to_string(),
-                        bytes,
-                        files,
-                        modified: modified_secs(dir),
-                    });
-                    return;
-                }
-            }
+    // ── 建议清理：构建产物（补上子树体积） ─────────────────────────
+    let mut suggested: Vec<CleanupCandidate> = Vec::new();
+    for (path, marker) in &bucket.artifacts {
+        let stat = dirs.get(path).copied().unwrap_or_default();
+        suggested.push(CleanupCandidate {
+            path: path.display().to_string(),
+            category: "构建产物".to_string(),
+            reason: format!(
+                "同级存在 {marker}，可认定为项目构建产物；重新构建即可再生"
+            ),
+            target: "artifact".to_string(),
+            bytes: stat.bytes,
+            files: stat.files,
+            modified: modified_secs(path),
+        });
+    }
+    suggested.extend(bucket.candidates);
+    suggested.sort_by(|a, b| b.bytes.cmp(&a.bytes));
+    report.suggested = suggested;
+    report.suggested_total = bucket.candidates_total + bucket.artifacts.len() as u64;
 
-            // ④ 目录体积：深度 ≤ MAX_TREE_DEPTH 的节点进树（父目录总量已含后代）。
-            let depth = dir_depth(dir, drive);
-            if depth > 0 && depth <= MAX_TREE_DEPTH && subtree_bytes > 0 {
-                report.dirs.push(DirUsage {
-                    path: dir.display().to_string(),
-                    parent: dir
-                        .parent()
-                        .map(|p| p.display().to_string())
-                        .unwrap_or_default(),
-                    bytes: subtree_bytes,
-                    files: subtree_files,
-                    depth,
-                });
-            }
-
-            // ③ 残留文件 / 大文件：按单文件判定
-            let _ = subtree_bytes;
-            for item in entries {
-                if item.is_dir {
-                    continue;
-                }
-                let lower = item.name.to_ascii_lowercase();
-                let matched_ext = STALE_EXTS
-                    .iter()
-                    .find(|ext| lower.ends_with(&format!(".{ext}")));
-                let old_enough = item.modified > 0
-                    && SystemTime::now()
-                        .duration_since(SystemTime::UNIX_EPOCH)
-                        .map(|now| now.as_secs().saturating_sub(item.modified))
-                        .unwrap_or(0)
-                        >= STALE_MIN_AGE_DAYS * 86_400;
-
-                if let Some(ext) = matched_ext {
-                    if old_enough {
-                        stale_total += 1;
-                        if stale.len() < STALE_LIMIT {
-                            stale.push(FoundFile {
-                                path: item.path.clone(),
-                                bytes: item.bytes,
-                                modified: item.modified,
-                                reason: format!(".{ext} · 超过 {STALE_MIN_AGE_DAYS} 天未修改"),
-                            });
-                        }
-                    }
-                }
-                if item.bytes >= BIG_FILE_BYTES {
-                    big.push(FoundFile {
-                        path: item.path.clone(),
-                        bytes: item.bytes,
-                        modified: item.modified,
-                        reason: "大文件".to_string(),
-                    });
-                }
-            }
-            if big.len() > BIG_FILE_LIMIT * 4 {
-                big.sort_by(|a, b| b.bytes.cmp(&a.bytes));
-                big.truncate(BIG_FILE_LIMIT);
-            }
-
-            if let Some(progress) = &progress {
-                if last_progress.elapsed() >= Duration::from_millis(400) {
-                    last_progress = Instant::now();
-                    progress(serde_json::json!({
-                        "phase": "drive",
-                        "done": scanned,
-                        "total": MAX_DIRS,
-                        "path": dir.display().to_string(),
-                        "artifacts": report.artifacts.len(),
-                        "stale": stale_total,
-                        "big": big.len(),
-                    }));
-                }
-            }
-        },
-    );
-
+    // ── 大文件：仅参考，按体积排序 ───────────────────────────────
+    let mut big = bucket.big;
     big.sort_by(|a, b| b.bytes.cmp(&a.bytes));
     big.truncate(BIG_FILE_LIMIT);
-    stale.sort_by(|a, b| b.bytes.cmp(&a.bytes));
-
-    report.artifacts.sort_by(|a, b| b.bytes.cmp(&a.bytes));
-    report.stale = stale;
     report.big = big;
+
+    report.empty_dir_count = bucket.empty_dir_count;
+    report.empty_dirs = bucket.empty_dirs;
+
     // 目录体积：按体积降序，前端画 Treemap 时大块在前更符合直觉。
-    report.dirs.sort_by(|a, b| b.bytes.cmp(&a.bytes));
-    if report.dirs.len() > DIR_LIMIT {
-        report.dirs.truncate(DIR_LIMIT);
+    let mut tree: Vec<DirUsage> = Vec::new();
+    for (path, stat) in &dirs {
+        let depth = dir_depth(path, drive);
+        if depth > 0 && depth <= MAX_TREE_DEPTH && stat.bytes > 0 {
+            tree.push(DirUsage {
+                path: path.display().to_string(),
+                parent: path
+                    .parent()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default(),
+                bytes: stat.bytes,
+                files: stat.files,
+                depth,
+            });
+        }
     }
-    report.dirs_scanned = budget.dirs as u64;
+    tree.sort_by(|a, b| b.bytes.cmp(&a.bytes));
+    tree.truncate(DIR_LIMIT);
+    report.dirs = tree;
+
+    report.dirs_scanned = bucket.dirs_scanned;
     report.truncated = budget.exhausted();
     report.elapsed_ms = started.elapsed().as_millis() as u64;
     report
 }
 
-struct DirItem {
-    name: String,
-    path: String,
-    is_dir: bool,
-    bytes: u64,
-    modified: u64,
+/// 并行遍历：一批线程各自枚举目录树，最后合并结果。
+///
+/// **为什么要并行**：目录遍历是"海量小 IO"，单线程吃不满 NVMe 的队列深度
+/// （实测一块数据盘单线程要 40s+）。按目录分片给多个线程后，同样的遍历能
+/// 压到几秒——用户点开磁盘视图时最在意的就是这个等待。
+fn scan_parallel(
+    root: &Path,
+    budget: &Arc<Budget>,
+    progress: Option<crate::cleanup::Progress>,
+    started: Instant,
+) -> ScanBucket {
+    let workers = std::thread::available_parallelism()
+        .map(|value| value.get().clamp(2, 8))
+        .unwrap_or(4);
+
+    struct Shared {
+        queue: Mutex<(VecDeque<PathBuf>, usize)>,
+        signal: Condvar,
+    }
+    let shared = Arc::new(Shared {
+        queue: Mutex::new((VecDeque::from(vec![root.to_path_buf()]), 0)),
+        signal: Condvar::new(),
+    });
+
+    let mut handles = Vec::new();
+    for _ in 0..workers {
+        let shared = shared.clone();
+        let budget = budget.clone();
+        let progress = progress.clone();
+        handles.push(std::thread::spawn(move || {
+            let mut bucket = ScanBucket::default();
+            let mut last_report = Instant::now();
+            loop {
+                let dir = {
+                    let mut guard = shared.queue.lock().expect("queue lock");
+                    loop {
+                        if let Some(dir) = guard.0.pop_front() {
+                            guard.1 += 1;
+                            break Some(dir);
+                        }
+                        if guard.1 == 0 {
+                            // 队列空且没有活跃 worker → 全盘扫完。
+                            break None;
+                        }
+                        guard = shared.signal.wait(guard).expect("queue wait");
+                    }
+                };
+                let Some(dir) = dir else {
+                    // 唤醒其他也在等的工作线程，让它们一起收工（否则会死等）。
+                    shared.signal.notify_all();
+                    return bucket;
+                };
+                if budget.exhausted() {
+                    budget.stopped.store(true, Ordering::Release);
+                    let mut guard = shared.queue.lock().expect("queue lock");
+                    guard.1 -= 1;
+                    drop(guard);
+                    shared.signal.notify_all();
+                    return bucket;
+                }
+                let children = scan_one_dir(&dir, &budget, &mut bucket);
+                let mut guard = shared.queue.lock().expect("queue lock");
+                guard.1 -= 1;
+                guard.0.extend(children);
+                drop(guard);
+                shared.signal.notify_all();
+
+                // 进度：每 400ms 推一次真实数字（已扫目录数 / 已用时）。
+                if let Some(progress) = &progress {
+                    if last_report.elapsed() >= Duration::from_millis(400) {
+                        last_report = Instant::now();
+                        progress(serde_json::json!({
+                            "phase": "drive",
+                            "done": budget.dirs.load(Ordering::Relaxed),
+                            "total": MAX_DIRS,
+                            "path": dir.display().to_string(),
+                            "elapsedMs": started.elapsed().as_millis() as u64,
+                        }));
+                    }
+                }
+            }
+        }));
+    }
+
+    let mut merged = ScanBucket::default();
+    for handle in handles {
+        let Ok(bucket) = handle.join() else { continue };
+        merge_bucket(&mut merged, bucket);
+    }
+    merged
 }
 
-/// 深度优先遍历。回调拿到「当前目录 + 子项摘要」，一次列举同时喂给
-/// 空目录判定、marker 判定与单文件判定——避免为每个功能各 stat 一遍。
-fn walk(
-    dir: &Path,
-    drive: &str,
-    budget: &mut Budget,
-    on_dir: &mut dyn FnMut(&Path, &[DirItem], u64, u64),
-) -> (u64, u64) {
-    if budget.exhausted() {
-        return (0, 0);
+/// 合并两个工作台。
+fn merge_bucket(target: &mut ScanBucket, other: ScanBucket) {
+    for (path, stat) in other.dirs {
+        let slot = target.dirs.entry(path).or_default();
+        slot.bytes += stat.bytes;
+        slot.files += stat.files;
     }
-    budget.dirs += 1;
+    target.artifacts.extend(other.artifacts);
+    target.candidates.extend(other.candidates);
+    target.candidates_total += other.candidates_total;
+    target.big.extend(other.big);
+    target.empty_dir_count += other.empty_dir_count;
+    target.empty_dirs.extend(other.empty_dirs);
+    target.dirs_scanned += other.dirs_scanned;
+}
 
-    let Ok(reader) = fs::read_dir(dir) else {
-        return (0, 0);
-    };
-    let mut items: Vec<DirItem> = Vec::new();
-    let mut dirs: Vec<PathBuf> = Vec::new();
+/// 枚举一个目录：统计直属文件体积、识别候选、返回子目录列表。
+fn scan_one_dir(
+    dir: &Path,
+    budget: &Arc<Budget>,
+    bucket: &mut ScanBucket,
+) -> Vec<PathBuf> {
+    budget.tick();
+    bucket.dirs_scanned += 1;
+
+    let mut children: Vec<PathBuf> = Vec::new();
     let mut own_bytes = 0u64;
     let mut own_files = 0u64;
+    let mut file_count = 0usize;
 
+    let Ok(reader) = fs::read_dir(dir) else {
+        return children;
+    };
     for entry in reader.flatten() {
         if budget.exhausted() {
             break;
@@ -375,54 +460,129 @@ fn walk(
         if meta.file_type().is_symlink() {
             continue;
         }
-        if meta.is_dir() && SKIP_DIRS.iter().any(|skip| lower == *skip) {
-            // 系统地盘：整棵跳过，不计入体积排行（不是用户的决策对象）。
-            continue;
-        }
-        if !is_allowed(&path, drive) {
-            continue;
-        }
         if meta.is_dir() {
-            dirs.push(path.clone());
-            items.push(DirItem {
-                name,
+            if SKIP_DIRS.iter().any(|skip| lower == *skip) {
+                // 系统地盘：整棵跳过，不计入体积排行（不是用户的决策对象）。
+                continue;
+            }
+            children.push(path.clone());
+            // 产物目录：目录名 + 同级 marker 判定，命中就记下来。
+            if let Some(marker) = artifact_marker(&path) {
+                bucket.artifacts.push((path.clone(), marker));
+            }
+            continue;
+        }
+
+        // ── 文件级判定 ──────────────────────────────────────────
+        own_bytes += meta.len();
+        own_files += 1;
+        file_count += 1;
+        let modified = modified_from(&meta);
+        let bytes = meta.len();
+
+        if bytes >= BIG_FILE_BYTES {
+            bucket.big.push(FoundFile {
                 path: path.display().to_string(),
-                is_dir: true,
-                bytes: 0,
-                modified: modified_secs(&path),
+                bytes,
+                modified,
+                reason: "单个文件超过 200 MB，仅供参考".to_string(),
             });
-        } else {
-            own_bytes += meta.len();
-            own_files += 1;
-            items.push(DirItem {
-                name,
-                path: path.display().to_string(),
-                is_dir: false,
-                bytes: meta.len(),
-                modified: meta
-                    .modified()
-                    .ok()
-                    .and_then(|time| time.duration_since(SystemTime::UNIX_EPOCH).ok())
-                    .map(|duration| duration.as_secs())
-                    .unwrap_or(0),
-            });
+        }
+
+        if let Some(candidate) = classify_file(&path, &lower, bytes, modified) {
+            bucket.candidates_total += 1;
+            // 列表有上限：几十万条残留文件会把 UI 拖死，超出只计数。
+            if bucket.candidates.len() < STALE_LIMIT {
+                bucket.candidates.push(candidate);
+            }
         }
     }
 
-    let mut child_bytes = 0u64;
-    let mut child_files = 0u64;
-    for child in dirs {
-        let (bytes, files) = walk(&child, drive, budget, on_dir);
-        child_bytes += bytes;
-        child_files += files;
+    if file_count == 0 && dir.parent().is_some() {
+        bucket.empty_dir_count += 1;
+        if bucket.empty_dirs.len() < EMPTY_DIR_LIMIT {
+            bucket.empty_dirs.push(dir.display().to_string());
+        }
     }
 
-    // 自底向上：父目录总量 = 自己的文件 + 全部后代。`du` 的算法，
-    // 也是 Treemap 需要的输入。
-    let total_bytes = own_bytes + child_bytes;
-    let total_files = own_files + child_files;
-    on_dir(dir, &items, total_bytes, total_files);
-    (total_bytes, total_files)
+    let slot = bucket.dirs.entry(dir.to_path_buf()).or_default();
+    slot.bytes += own_bytes;
+    slot.files += own_files;
+
+    children
+}
+
+/// 文件级候选分类：临时残留 / 日志与转储 / 残留安装包。
+fn classify_file(path: &Path, lower_name: &str, bytes: u64, modified: u64) -> Option<CleanupCandidate> {
+    let extension = lower_name.rsplit_once('.').map(|(_, ext)| ext)?;
+    let age_days = age_days(modified);
+
+    let (category, reason, min_age) = if STALE_EXTS.contains(&extension) {
+        (
+            "临时残留",
+            format!("扩展名 .{extension} 属于临时/备份文件，且已超过 {STALE_MIN_AGE_DAYS} 天未修改"),
+            STALE_MIN_AGE_DAYS,
+        )
+    } else if LOG_EXTS.contains(&extension) {
+        (
+            "日志与转储",
+            format!("扩展名 .{extension} 属于日志或崩溃转储，排障期过后即可删除"),
+            STALE_MIN_AGE_DAYS,
+        )
+    } else if INSTALLER_EXTS.contains(&extension) && is_installer_location(path) {
+        (
+            "残留安装包",
+            format!("扩展名 .{extension} 的安装包落在临时/下载目录，已超过 {INSTALLER_MIN_AGE_DAYS} 天"),
+            INSTALLER_MIN_AGE_DAYS,
+        )
+    } else {
+        return None;
+    };
+
+    if age_days < min_age {
+        return None;
+    }
+
+    Some(CleanupCandidate {
+        path: path.display().to_string(),
+        category: category.to_string(),
+        reason,
+        target: "file".to_string(),
+        bytes,
+        files: 1,
+        modified,
+    })
+}
+
+/// 安装包只在临时/下载目录里才算残留——别处出现的 .msi 可能是用户自己存的。
+fn is_installer_location(path: &Path) -> bool {
+    let text = path.display().to_string().to_ascii_lowercase();
+    text.contains("\\temp\\")
+        || text.contains("\\tmp\\")
+        || text.contains("\\downloads\\")
+        || text.contains("\\download\\")
+}
+
+fn age_days(modified: u64) -> u64 {
+    if modified == 0 {
+        return 0;
+    }
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|now| now.as_secs())
+        .unwrap_or(0);
+    now.saturating_sub(modified) / 86_400
+}
+
+/// 产物目录的 marker 判定：目录名在白名单里，且**父目录**仍有对应 marker。
+fn artifact_marker(dir: &Path) -> Option<String> {
+    let name = dir.file_name().and_then(|n| n.to_str())?.to_ascii_lowercase();
+    let (_, markers) = ARTIFACTS.iter().find(|(artifact, _)| name == *artifact)?;
+    let parent = dir.parent()?;
+    markers
+        .iter()
+        .find(|marker| marker_present(parent, marker))
+        .map(|marker| marker.to_string())
 }
 
 /// 目录相对卷根的层数（1 = 卷根的直接子目录；卷根本身算 0）。
@@ -459,6 +619,14 @@ fn marker_present(dir: &Path, marker: &str) -> bool {
 fn modified_secs(path: &Path) -> u64 {
     fs::metadata(path)
         .and_then(|meta| meta.modified())
+        .ok()
+        .and_then(|time| time.duration_since(SystemTime::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
+}
+
+fn modified_from(meta: &fs::Metadata) -> u64 {
+    meta.modified()
         .ok()
         .and_then(|time| time.duration_since(SystemTime::UNIX_EPOCH).ok())
         .map(|duration| duration.as_secs())
@@ -578,17 +746,7 @@ pub fn remove_entries(kind: &str, paths: &[String], drive: &str) -> RemoveResult
 
 /// 产物目录的二次校验：名字在白名单里，且父目录仍有对应 marker。
 fn artifact_allowed(dir: &Path) -> bool {
-    let Some(name) = dir.file_name().and_then(|name| name.to_str()) else {
-        return false;
-    };
-    let lower = name.to_ascii_lowercase();
-    let Some((_, markers)) = ARTIFACTS.iter().find(|(artifact, _)| lower == *artifact) else {
-        return false;
-    };
-    let Some(parent) = dir.parent() else {
-        return false;
-    };
-    markers.iter().any(|marker| marker_present(parent, marker))
+    artifact_marker(dir).is_some()
 }
 
 /// 递归删除，但**不跟随** reparse point：遇到链接只删链接本身。
@@ -726,38 +884,39 @@ mod tests {
     /// 目录体积自底向上聚合：父目录总量 = 自己的文件 + 全部后代（`du` 语义）。
     /// Treemap 依赖这个不变量，否则父块会比子块加起来还小。
     #[test]
-    fn walk_aggregates_subtree_sizes() {
+    fn scan_aggregates_subtree_sizes() {
         let root = temp_drive_dir("agg");
         let nested = root.join("a").join("b");
         fs::create_dir_all(&nested).unwrap();
         fs::write(root.join("f1.bin"), vec![0u8; 100]).unwrap();
         fs::write(nested.join("f2.bin"), vec![0u8; 200]).unwrap();
 
-        let mut budget = Budget::new();
-        let mut totals: Vec<(String, u64, u64)> = Vec::new();
-        {
-            // 盘符从临时目录实际所在盘取（本机 %TEMP% 在 F:，写死 C: 会让
-            // 准入检查把整棵树拒掉，测试就变成"聚合恒为 0"）。
-            let drive: String = root.display().to_string().chars().take(2).collect();
-            let mut collect = |dir: &Path, _items: &[DirItem], bytes: u64, files: u64| {
-                totals.push((dir.display().to_string(), bytes, files));
+        // 盘符从临时目录实际所在盘取（本机 %TEMP% 在 F:，写死 C: 会让
+        // 准入检查把整棵树拒掉，测试就变成"聚合恒为 0"）。
+        let drive: String = root.display().to_string().chars().take(2).collect();
+        let budget = Arc::new(Budget::new());
+        let bucket = scan_parallel(&root, &budget, None, Instant::now());
+
+        let mut dirs = bucket.dirs;
+        let mut by_depth: Vec<PathBuf> = dirs.keys().cloned().collect();
+        by_depth.sort_by_key(|path| std::cmp::Reverse(dir_depth(path, &drive)));
+        for path in &by_depth {
+            let Some(parent) = path.parent() else { continue };
+            let Some((bytes, files)) = dirs.get(path).map(|stat| (stat.bytes, stat.files)) else {
+                continue;
             };
-            walk(&root, &drive, &mut budget, &mut collect);
+            let slot = dirs.entry(parent.to_path_buf()).or_default();
+            slot.bytes += bytes;
+            slot.files += files;
         }
 
-        let root_total = totals
-            .iter()
-            .find(|(path, _, _)| path == &root.display().to_string())
-            .expect("root visited");
-        assert_eq!(root_total.1, 300, "父目录总量 = 自己的文件 + 后代");
-        assert_eq!(root_total.2, 2);
+        let root_total = dirs.get(&root).copied().expect("root visited");
+        assert_eq!(root_total.bytes, 300, "父目录总量 = 自己的文件 + 后代");
+        assert_eq!(root_total.files, 2);
 
-        let nested_total = totals
-            .iter()
-            .find(|(path, _, _)| path.ends_with("a\\b"))
-            .expect("nested visited");
-        assert_eq!(nested_total.1, 200);
-        assert_eq!(nested_total.2, 1);
+        let nested_total = dirs.get(&nested).copied().expect("nested visited");
+        assert_eq!(nested_total.bytes, 200);
+        assert_eq!(nested_total.files, 1);
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -783,5 +942,43 @@ mod tests {
         assert_eq!(result.removed, 0);
         assert!(artifacts.exists(), "没有 marker 的 target 不允许删");
         let _ = fs::remove_dir_all(&root);
+    }
+
+    /// 候选分类：扩展名 + 年龄 + 位置三者共同决定，理由必须写清楚。
+    #[test]
+    fn classifies_candidates_with_reason() {
+        let old = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
+            - 40 * 86_400;
+
+        let stale = classify_file(
+            Path::new(r"C:\work\a.tmp"),
+            "a.tmp",
+            10,
+            old,
+        )
+        .expect("stale");
+        assert_eq!(stale.category, "临时残留");
+        assert!(stale.reason.contains(".tmp"), "依据里要写明扩展名");
+
+        let installer = classify_file(
+            Path::new(r"C:\Users\me\AppData\Local\Temp\setup.msi"),
+            "setup.msi",
+            10,
+            old,
+        )
+        .expect("installer");
+        assert_eq!(installer.category, "残留安装包");
+
+        // 不在临时/下载目录的 .msi 不算残留。
+        assert!(classify_file(Path::new(r"C:\docs\setup.msi"), "setup.msi", 10, old).is_none());
+        // 太新的文件不算。
+        let fresh = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        assert!(classify_file(Path::new(r"C:\work\a.tmp"), "a.tmp", 10, fresh).is_none());
     }
 }

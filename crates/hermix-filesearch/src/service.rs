@@ -84,7 +84,7 @@ impl SearchService {
         let volumes_info = match self.list_volumes_guarded() {
             Ok(list) => list,
             Err(error) => {
-                eprintln!("[filesearch] 卷枚举失败：{error}");
+                crate::log!("[filesearch] 卷枚举失败：{error}");
                 return;
             }
         };
@@ -129,17 +129,24 @@ impl SearchService {
                         service.data_dir(),
                         &volume,
                         &service.filter(),
+                        None,
                     )
                     .await
                     {
                         Ok(summary) => {
-                            eprintln!(
-                                "[filesearch] {} 建索引完成：{} 项（{} ms）",
-                                volume, summary.total_entries, summary.elapsed_ms
+                            crate::log!(
+                                "[filesearch] {} 建索引完成：{} 项（{} ms = 枚举 {} + 体积 {} + 建表 {} + 落盘 {}）",
+                                volume,
+                                summary.total_entries,
+                                summary.elapsed_ms,
+                                summary.scan_ms,
+                                summary.size_ms,
+                                summary.index_ms,
+                                summary.save_ms
                             );
                         }
                         Err(error) => {
-                            eprintln!("[filesearch] {volume} 建索引失败：{error}");
+                            crate::log!("[filesearch] {volume} 建索引失败：{error}");
                             service.record_skipped(&volume, error);
                         }
                     }
@@ -232,6 +239,31 @@ impl SearchService {
         }
     }
 
+    /// 请求重建索引（用户显式触发）。
+    ///
+    /// 走的是"标记 needs_rebuild → 监听循环自己重建"这条路，而不是在这里
+    /// 同步地跑一次全盘扫描：重建是分钟级任务，不能占着 IPC 线程。
+    /// 重建期间旧索引继续可搜（Everything 也是这个行为）。
+    pub fn request_rebuild(&self, volume: Option<&str>) -> Vec<String> {
+        let mut affected = Vec::new();
+        let Ok(volumes) = self.volumes.read() else {
+            return affected;
+        };
+        for (name, state) in volumes.iter() {
+            if let Some(target) = volume {
+                if !name.eq_ignore_ascii_case(target) {
+                    continue;
+                }
+            }
+            let Ok(mut index) = state.index.write() else {
+                continue;
+            };
+            index.mark_needs_rebuild("用户请求重建索引。".to_string());
+            affected.push(name.clone());
+        }
+        affected
+    }
+
     pub fn status(&self) -> ServiceStatus {
         let mut volumes = Vec::new();
         if let Ok(map) = self.volumes.read() {
@@ -242,8 +274,11 @@ impl SearchService {
                     };
                     index.status()
                 };
+                // 建索引进度挂在卷状态上（不在索引里）——建索引期间索引还没
+                // 换上去，索引状态是"空"的，进度必须单独带出来。
+                let mut status = status;
+                status.build = state.build_progress();
                 if let Ok(monitor) = state.monitor.read() {
-                    let mut status = status;
                     status.monitor_state = monitor.monitor_state;
                     status.last_sync_at = monitor.last_sync_at;
                     status.last_sync_error = monitor.last_sync_error.clone();
