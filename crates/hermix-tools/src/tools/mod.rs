@@ -65,6 +65,7 @@ pub mod vault;
 pub mod workbench_manager;
 pub mod video_gen;
 pub mod voice_mode;
+pub mod watch;
 pub mod web;
 pub mod os_auto;
 pub mod workflow;

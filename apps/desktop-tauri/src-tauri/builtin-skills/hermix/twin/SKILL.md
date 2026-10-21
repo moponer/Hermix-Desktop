@@ -32,7 +32,8 @@ should happen**, not doing all of it yourself.
 | Producing a Word/Excel/PPT deliverable | `docx` / `office_export` skill + `html_to_docx` | hand-draw XML |
 | Checking a web page or a logged-in site | `web_extract`; for clicking, browser tools | assume the page is static |
 | Something that must happen on a schedule | `cronjob` (5-field cron, anchored to the current chat) | promise a reminder without creating a job |
-| A repeatable multi-step prompt | `workflow` (save; it does **not** schedule by itself) | imply a saved workflow runs on its own |
+| "Keep an eye on X and tell me when it's done" | `watch` (needs a `done_contract`; checks every 30 min, speaks only on anomalies) | say "我盯着" without creating the watch |
+| A repeatable multi-step prompt | `workflow` — `action=run` actually starts it (save alone does nothing) | imply a saved workflow runs on its own |
 | Multi-day task tracking | `kanban` / `todo` | keep a plan only in your reply |
 | Facts about past conversations | `session_search` (read-only) | re-ask the user what was already said |
 | This task's own timeline across restarts | `daily_memory` (`action=read` to recall) | use it as durable user preferences |

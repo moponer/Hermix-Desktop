@@ -250,6 +250,37 @@ Status: proposed — 方案已定稿，阶段一（界面落地）已执行，�
 3. `Watch` 落进引擎 A 的 JSON 任务表（`serde(default)` 扩展 + 独立 `event_key` 去重）。
 4. 代批身份与审计（`PermissionLevel` 加身份维度 / `ApprovalOutcome` 带 actor / `ApprovalRecord` 加 `actor`）—— 唯一有架构风险的一批，建议单独评审。
 
+## 执行记录（2026-10-22，阶段四前三项）
+
+**做了什么**
+
+| 交付 | 文件 | 说明 |
+|---|---|---|
+| `workflow` 能真跑 | `tools/workflow.rs` + `dashboard/workflows.rs` + `state.rs` + `lib.rs`/`main.rs` | 新增 `action=run`。工具层不能依赖 server（只有 server 持有 `AgentService`），所以运行端做成回调注入：`set_workflow_runner` ← `with_workflow_runner()`。HTTP 端点与工具共用同一份 `spawn_workflow_run`，会话 id / overrides / 状态回写只有一处定义 |
+| `cronjob` 可指定投递目标 | `tools/cronjob.rs` | 新增 `anchor_session_id`，三档语义：不传=当前会话；空串=不锚定（结果落在任务自己的会话）；具体 id=投到那个会话。显式参数压过注册表注入值 |
+| `watch` 工具（点名才盯） | 新增 `tools/watch.rs` + `mod.rs` + `state.rs` | 语义封装，不是第五套机制：把 `target/intent/done_contract` 渲染成检查指令，调**同一个** `CronjobBackend::create`，因此任务在自动化页天然可见、可暂停、可删除。与 `cronjob` 共用后端实例 |
+| 能力地图补两行 | `builtin-skills/hermix/twin/SKILL.md` | 「盯着 X」→ `watch`（必须给完成判据）；「工作流」→ `action=run` 才真跑，只 save 什么都不会发生 |
+
+**关键取舍（写进工具描述，不藏着）**
+
+`watch` 的触发粒度是**每 N 分钟检查一次**，不是真事件流。看不到中间过程，只能看结果是否满足完成判据。所以：
+- `done_contract` 强烈建议给；不给时指令里明确要求「拿不准先问，不要猜」——宁可多问一次，也不要它编一个完成状态。
+- 检查指令里写死「一切正常就什么都不说」，否则每 30 分钟回投一条「无事发生」，三次之后就没人看这个任务了。
+
+**验证结果**
+
+| 检查 | 结果 |
+|---|---|
+| `cargo test -p hermix-tools --lib` | **788 passed / 0 failed**（新增 5 个用例：workflow run 解析/参数透传/未知目标报错、cronjob 显式锚点覆盖、显式空锚点抑制、watch 渲染契约/缺判据时要求反问/target 必填） |
+| `cargo check -p hermix-server --all-targets` | exit 0（49.20s） |
+| `cargo check -p hermix-desktop` | exit 0（前面那次 1m16s；本轮未改该 crate） |
+
+**下一批**
+
+1. 代批身份与审计（`PermissionLevel` 加身份维度 / `ApprovalOutcome` 带 actor / `ApprovalRecord` 加 `actor`）—— 唯一有架构风险的一批，建议单独评审。
+2. `watch` 在 TwinView 的「待你定夺」栏露出（现在只在自动化页可见；需要任务条目带 `watch` 标记才能区分「守望」与「普通定时」）。
+3. 情报源水位线（阶段三）—— 依赖订阅源模型，尚未开始。
+
 ## Alternatives considered
 
 1. **复用 Tailwind 原子类写页面，不建 CSS 文件** — 否决。用户明确要求「独立样式，方便以后单独调整」；且三栏仪表盘的密度控制需要精确的间距与发丝线，原子类会把它写成一屏 className 噪音。

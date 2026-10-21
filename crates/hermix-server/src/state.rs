@@ -1281,14 +1281,41 @@ impl HttpServerState {
         // cronjob 工具换上真实后端：Signal 占位实现只返回没人消费的请求
         // JSON。面板调度器已随本调用启动，对话里创建的定时任务由此真正
         // 落到自动化任务表并进入 30s 调度。
+        //
+        // `watch` 与它共用**同一个后端实例**：两条路写同一张任务表，
+        // 所以「盯着这件事」在自动化页天然可见、可暂停、可删除 ——
+        // 不新增第五套机制。
+        let cronjob_backend: Arc<dyn hermix_tools::tools::cronjob::CronjobBackend> = Arc::new(
+            crate::dashboard::automation::DashboardCronjobBackend::new(self.clone()),
+        );
         hermix_tools::tools::cronjob::register_with_backend(
             &self.tool_registry,
-            Arc::new(
-                crate::dashboard::automation::DashboardCronjobBackend::new(self.clone()),
-            ),
+            cronjob_backend.clone(),
         );
+        hermix_tools::tools::watch::register_with_backend(&self.tool_registry, cronjob_backend);
         self
     }
+    /// 给 `workflow` 工具的 `run` 动作接上运行通道。
+    ///
+    /// 依赖方向不允许工具 crate 反向依赖 server（只有 server 持有
+    /// `AgentService`），所以运行端做成回调注入。注入后跑起来仍是
+    /// `agent_service.send_message()`，与 HTTP 端点共用同一份
+    /// `dashboard::workflows::spawn_workflow_run` —— 会话 id、overrides、
+    /// 状态回写只有一处定义。
+    ///
+    /// 注入成功与否都不影响其它功能：未注入时工具的 `run` 会明确报
+    /// 「运行通道未接通」，而不是假装已启动。
+    pub fn with_workflow_runner(self) -> Self {
+        let state = self.clone();
+        let injected = hermix_tools::tools::workflow::set_workflow_runner(Arc::new(
+            move |entry, params| crate::dashboard::workflows::spawn_workflow_run(&state, entry, params),
+        ));
+        if !injected {
+            tracing::debug!("workflow runner 已在别处注入，跳过");
+        }
+        self
+    }
+
     /// 启动 relay 出站连接循环。
     ///
     /// ## 为什么必须显式调用

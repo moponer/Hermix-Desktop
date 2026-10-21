@@ -38,7 +38,8 @@ pub fn register_with_backend(registry: &ToolRegistry, backend: Arc<dyn CronjobBa
         Arc::new(|| true),
         vec![],
         false,
-        "Manage scheduled automations (cron jobs): create, list, update, pause, resume, remove, or run. 定时任务/自动化（如「每天早上自动…」「定时提醒…」）一律用此工具，不要为此创建自定义应用。",
+        "Manage scheduled automations (cron jobs): create, list, update, pause, resume, remove, or run. 定时任务/自动化（如「每天早上自动…」「定时提醒…」）一律用此工具，不要为此创建自定义应用。\
+        create 的 `anchor_session_id` 决定结果投到哪：不传=当前会话；空串=不锚定（结果落在任务自己的会话，不打扰任何对话）；具体 id=投到那个会话。",
         "⏰",
         None,
         RiskLevel::Safe,
@@ -130,12 +131,26 @@ impl ToolHandler for CronjobHandler {
                     .and_then(|v| v.as_str())
                     .ok_or_else(|| ToolError::InvalidParams("Missing 'task' parameter".into()))?;
                 let toolset = params.get("toolset").and_then(|v| v.as_str());
-                // 由 registry 注入的来源会话（`ToolRegistry::inject_session_id`）。
-                // 空串视为无锚点——headless 派发会注入空串。
-                let anchor = params
-                    .get("_session_id")
+                // 投递目标（会话锚点）三档：
+                //   不传 `anchor_session_id` → 用当前会话（注册表注入的
+                //     `_session_id`，空串视为无锚点，headless 派发就是这种）
+                //   传空串 ""              → 显式不锚定：结果落在任务自己的
+                //     会话里，不往任何人的对话里灌
+                //   传具体 id              → 投到那个会话（跨会话转投，或把
+                //     常驻任务钉在固定对话上）
+                // 显式参数优先于注入值——否则调用方无法覆盖默认行为。
+                let anchor = match params
+                    .get("anchor_session_id")
                     .and_then(|v| v.as_str())
-                    .filter(|s| !s.is_empty());
+                    .map(str::trim)
+                {
+                    Some(explicit) if explicit.is_empty() => None,
+                    Some(explicit) => Some(explicit),
+                    None => params
+                        .get("_session_id")
+                        .and_then(|v| v.as_str())
+                        .filter(|s| !s.is_empty()),
+                };
                 self.backend
                     .create(name, schedule, task, toolset, anchor)
                     .await
@@ -208,6 +223,13 @@ impl ToolHandler for CronjobHandler {
             }),
         );
         props.insert(
+            "anchor_session_id".into(),
+            json!({
+                "type": "string",
+                "description": "create 时的投递目标会话 id。不传=当前会话；传空串=不锚定（结果落在任务自己的会话，不打扰任何对话）；传具体 id=投到那个会话"
+            }),
+        );
+        props.insert(
             "name".into(),
             json!({
                 "type": "string",
@@ -245,7 +267,8 @@ impl ToolHandler for CronjobHandler {
 
         tool_schema(
             "cronjob",
-            "Manage scheduled automations (cron jobs): create, list, update, pause, resume, remove, or run. 定时任务/自动化（如「每天早上自动…」「定时提醒…」）一律用此工具，不要为此创建自定义应用。",
+            "Manage scheduled automations (cron jobs): create, list, update, pause, resume, remove, or run. 定时任务/自动化（如「每天早上自动…」「定时提醒…」）一律用此工具，不要为此创建自定义应用。\
+            create 的 `anchor_session_id` 决定结果投到哪：不传=当前会话；空串=不锚定；具体 id=投到那个会话。",
             JsonSchema::object(props, vec!["action".into()]),
         )
     }
@@ -406,6 +429,48 @@ mod tests {
                 "schedule": "0 9 * * *",
                 "task": "x",
                 "_session_id": "",
+            }))
+            .await
+            .unwrap();
+        assert_eq!(*backend.0.lock().expect("anchor mutex"), Some(None));
+    }
+
+    /// 显式 `anchor_session_id` 必须压过注册表注入的 `_session_id`：
+    /// 否则调用方无法把任务钉到别的会话，「跨会话转投」就做不了。
+    #[tokio::test]
+    async fn test_cronjob_explicit_anchor_overrides_injected_session() {
+        let (handler, backend) = anchored_backend();
+        handler
+            .execute(json!({
+                "action": "create",
+                "name": "pinned",
+                "schedule": "0 9 * * *",
+                "task": "x",
+                "_session_id": "sess-here",
+                "anchor_session_id": "sess-target",
+            }))
+            .await
+            .unwrap();
+        assert_eq!(
+            *backend.0.lock().expect("anchor mutex"),
+            Some(Some("sess-target".to_string())),
+            "显式锚点应覆盖注入值"
+        );
+    }
+
+    /// 显式传空串 = 主动要求不锚定（即使当前会话存在）。
+    /// 语义差别很关键：注入空串是"没有会话"，显式空串是"不要投给任何人"。
+    #[tokio::test]
+    async fn test_cronjob_explicit_empty_anchor_suppresses_injected_session() {
+        let (handler, backend) = anchored_backend();
+        handler
+            .execute(json!({
+                "action": "create",
+                "name": "quiet",
+                "schedule": "0 9 * * *",
+                "task": "x",
+                "_session_id": "sess-here",
+                "anchor_session_id": "",
             }))
             .await
             .unwrap();

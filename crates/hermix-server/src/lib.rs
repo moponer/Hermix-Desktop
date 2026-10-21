@@ -593,6 +593,9 @@ pub async fn run_server(addr: SocketAddr, config: GatewayConfig) -> Result<(), A
     let state = HttpServerState::build(config)
         .await?
         .with_automation_scheduler()
+        // 工具的 `workflow(action=run)` 需要 AgentService 才能真跑，
+        // 依赖方向不允许工具反向依赖 server ⇒ 在这里注入运行通道。
+        .with_workflow_runner()
         // 启动 relay 出站连接。未配地址时它自己直接返回，不产生任何流量。
         .with_relay_client();
     // §5.5 第 2 层：TLS 监听器由 HERMIX_TLS_ADDR 显式开启（可选双监听器：

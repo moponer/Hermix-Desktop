@@ -63,6 +63,41 @@ pub struct WorkflowRunRequest {
     pub params: BTreeMap<String, String>,
 }
 
+/// 渲染参数 → 标记 running → 后台跑一轮。
+///
+/// 两个入口共用：HTTP 的 `POST /api/workflows/{id}/run`，以及工具层
+/// `workflow(action=run)`（后者通过 `set_workflow_runner` 注入到这里）。
+/// 共用是为了只有一份运行语义 —— 会话 id、overrides、状态回写不会漂移。
+pub fn spawn_workflow_run(
+    state: &HttpServerState,
+    wf: hermix_tools::tools::workflow::WorkflowEntry,
+    params: BTreeMap<String, String>,
+) -> Result<(), String> {
+    let mut prompt = wf.prompt.clone();
+    for (k, v) in &params {
+        prompt = prompt.replace(&format!("{{{{{}}}}}", k), v);
+    }
+
+    // 工具可能在没有运行时的线程里被调用（例如测试）。宁可明确报错，
+    // 也不要在 `tokio::spawn` 里 panic。
+    let handle = tokio::runtime::Handle::try_current()
+        .map_err(|_| "没有可用的 async 运行时，无法启动工作流".to_string())?;
+
+    store::update_run_status(&wf.id, "running");
+    let agent = state.agent_service.clone();
+    handle.spawn(async move {
+        let mut overrides = AgentOverrides::default();
+        if let Some(ws) = &wf.workspace {
+            overrides.workspace = Some(ws.clone());
+        }
+        let session_id = format!("workflow:{}", wf.id);
+        let result = agent.send_message(&session_id, &prompt, overrides).await;
+        store::update_run_status(&wf.id, if result.is_ok() { "ok" } else { "failed" });
+    });
+
+    Ok(())
+}
+
 /// POST /api/workflows/{id}/run — 再跑一次。
 ///
 /// 在请求线程上只做参数替换 + 标记 running，真正的 agent 运行 spawn 到
@@ -80,26 +115,12 @@ pub async fn run_workflow(
             .into_response();
     };
 
-    let mut prompt = wf.prompt.clone();
-    for (k, v) in &body.params {
-        prompt = prompt.replace(&format!("{{{{{}}}}}", k), v);
+    match spawn_workflow_run(&state, wf, body.params) {
+        Ok(()) => Json(serde_json::json!({
+            "ok": true,
+            "hint": "已开始运行，完成后可在对话列表查看 workflow 会话。",
+        }))
+        .into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
     }
-
-    store::update_run_status(&id, "running");
-    let agent = state.agent_service.clone();
-    tokio::spawn(async move {
-        let mut overrides = AgentOverrides::default();
-        if let Some(ws) = &wf.workspace {
-            overrides.workspace = Some(ws.clone());
-        }
-        let session_id = format!("workflow:{}", wf.id);
-        let result = agent.send_message(&session_id, &prompt, overrides).await;
-        store::update_run_status(&wf.id, if result.is_ok() { "ok" } else { "failed" });
-    });
-
-    Json(serde_json::json!({
-        "ok": true,
-        "hint": "已开始运行，完成后可在对话列表查看 workflow 会话。",
-    }))
-    .into_response()
 }

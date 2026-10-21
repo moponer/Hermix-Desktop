@@ -33,6 +33,7 @@ async fn main() -> Result<(), AgentError> {
         let state = hermix_server::HttpServerState::build(config)
             .await?
             .with_automation_scheduler()
+            .with_workflow_runner()
             // relay 出站连接与 HTTP 面无关，桌面端（唯一 stdio 消费者）必须有它——
             // 此前只挂在 run_server()（HTTP 模式）上，桌面端从未连过中转，
             // 配对与手机同步整条链路因此失效（设置页显示「尚未接通中转」）。

@@ -9,6 +9,7 @@
 //! `agent_service.send_message()` 执行（与对话同路径，铁律 DD），
 //! 工具只负责保存 / 列出 / 删除。
 
+use std::collections::BTreeMap;
 use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -73,6 +74,23 @@ fn now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+// ── 运行通道（由宿主注入）────────────────────────────────
+//
+// 工具只负责「声明能跑」；真正的调度在 server —— 只有它持有 AgentService，
+// 而铁律 DD 要求跑工作流走 `agent_service.send_message()` 这条与对话相同的
+// 路径。未注入时 `action=run` 明确报「通道未接通」，不假装已启动。
+
+/// 渲染好参数后交给宿主的运行回调。
+pub type WorkflowRunner =
+    Arc<dyn Fn(WorkflowEntry, BTreeMap<String, String>) -> Result<(), String> + Send + Sync>;
+
+static RUNNER: OnceLock<WorkflowRunner> = OnceLock::new();
+
+/// 注入运行通道。返回 `false` 表示本进程已经注入过（只允许一个宿主）。
+pub fn set_workflow_runner(runner: WorkflowRunner) -> bool {
+    RUNNER.set(runner).is_ok()
 }
 
 /// 读全部工作流。文件缺失 / 损坏 = 空表（工作流是体验增强，不是正确性依赖）。
@@ -241,8 +259,77 @@ impl ToolHandler for WorkflowHandler {
                 let entry = remove_workflow(id).map_err(ToolError::ExecutionFailed)?;
                 Ok(json!({ "removed": true, "id": entry.id, "name": entry.name }).to_string())
             }
+            "run" => {
+                let entries = list_workflows();
+                let wanted_id = params
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty());
+                let wanted_name = params
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty());
+
+                let entry = match (wanted_id, wanted_name) {
+                    (Some(id), _) => entries.into_iter().find(|e| e.id == id),
+                    (None, Some(name)) => {
+                        let hits: Vec<WorkflowEntry> = entries
+                            .into_iter()
+                            .filter(|e| e.name == name)
+                            .collect();
+                        match hits.len() {
+                            0 => None,
+                            1 => hits.into_iter().next(),
+                            n => {
+                                return Err(ToolError::InvalidParams(format!(
+                                    "有 {n} 个同名工作流 '{name}'，请用 id 指定"
+                                )))
+                            }
+                        }
+                    }
+                    (None, None) => {
+                        return Err(ToolError::InvalidParams(
+                            "run 需要 'id' 或 'name' 指定目标".into(),
+                        ))
+                    }
+                };
+                let Some(entry) = entry else {
+                    return Err(ToolError::InvalidParams(
+                        "没有匹配的工作流（先 list 看看有哪些）".into(),
+                    ));
+                };
+
+                let mut args: BTreeMap<String, String> = BTreeMap::new();
+                if let Some(obj) = params.get("params").and_then(Value::as_object) {
+                    for (k, v) in obj {
+                        let text = match v {
+                            Value::String(s) => s.clone(),
+                            other => other.to_string(),
+                        };
+                        args.insert(k.clone(), text);
+                    }
+                }
+
+                let runner = RUNNER.get().ok_or_else(|| {
+                    ToolError::ExecutionFailed(
+                        "工作流运行通道未接通（宿主没有注入 runner）".into(),
+                    )
+                })?;
+                runner(entry.clone(), args).map_err(ToolError::ExecutionFailed)?;
+
+                Ok(json!({
+                    "started": true,
+                    "id": entry.id,
+                    "name": entry.name,
+                    "session": format!("workflow:{}", entry.id),
+                    "hint": "已在后台开始，完成后到对话列表看 workflow 会话。",
+                })
+                .to_string())
+            }
             other => Err(ToolError::InvalidParams(format!(
-                "未知 action: '{other}'。可选 save / list / remove。"
+                "未知 action: '{other}'。可选 save / list / remove / run。"
             ))),
         }
     }
@@ -254,7 +341,7 @@ impl ToolHandler for WorkflowHandler {
             json!({
                 "type": "string",
                 "description": "Action to perform",
-                "enum": ["save", "list", "remove"]
+                "enum": ["save", "list", "remove", "run"]
             }),
         );
         props.insert(
@@ -289,13 +376,21 @@ impl ToolHandler for WorkflowHandler {
             "id".into(),
             json!({
                 "type": "string",
-                "description": "工作流 ID（remove 时必填）"
+                "description": "工作流 ID（remove / run 时用；run 也可用 name 指定）"
+            }),
+        );
+        props.insert(
+            "params".into(),
+            json!({
+                "type": "object",
+                "description": "run 时替换 prompt 里的 {{参数}} 占位符（key = 参数名，value = 字符串）"
             }),
         );
 
         tool_schema(
             "workflow",
-            "Save, list, or remove reusable workflows: 把跑通的流程存成带参数的可重跑工作流（保存后在 自动化 → 工作流 页面再跑一次）。",
+            "Save, list, remove or run reusable workflows: 把跑通的流程存成带参数的可重跑工作流。\
+             `run` 会在后台起一个 `workflow:{id}` 会话执行（与对话同路径，可在对话列表继续聊）。",
             JsonSchema::object(props, vec!["action".into()]),
         )
     }
@@ -312,7 +407,8 @@ pub fn register(registry: &ToolRegistry) {
         Arc::new(|| true),
         vec![],
         false,
-        "Save, list, or remove reusable workflows: 把跑通的流程存成带参数的可重跑工作流。",
+        "Save, list, remove or run reusable workflows: 把跑通的流程存成带参数的可重跑工作流；\
+        `run` 在后台起一个 `workflow:{id}` 会话执行，与对话同路径。",
         "🔁",
         None,
         RiskLevel::Safe,
@@ -351,6 +447,47 @@ mod tests {
         assert_eq!(
             list_workflows().iter().filter(|e| e.name == "深度调研").count(),
             1
+        );
+
+        // run：按 name 解析目标，params 原样交给运行通道（占位符替换在宿主侧，
+        // 因为只有它知道渲染后的 prompt 要发给哪个会话）。
+        let seen: Arc<Mutex<Vec<(String, BTreeMap<String, String>)>>> =
+            Arc::new(Mutex::new(Vec::new()));
+        let sink = seen.clone();
+        let injected = set_workflow_runner(Arc::new(move |e, p| {
+            sink.lock().unwrap().push((e.id.clone(), p));
+            Ok(())
+        }));
+        assert!(injected, "runner 应注入成功（本进程首个用例）");
+
+        let out = WorkflowHandler
+            .execute(json!({
+                "action": "run",
+                "name": "深度调研",
+                "params": { "主题": "ACP 协议", "轮次": 3 }
+            }))
+            .await
+            .expect("run 应成功");
+        let payload: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(payload["started"], true);
+        assert_eq!(payload["session"], format!("workflow:{}", entry.id));
+
+        {
+            let got = seen.lock().unwrap();
+            assert_eq!(got.len(), 1, "运行通道应被调用一次");
+            assert_eq!(got[0].0, entry.id);
+            assert_eq!(got[0].1.get("主题").map(String::as_str), Some("ACP 协议"));
+            // 数字按文本传入：占位符替换只认字符串，不能丢类型也不该 panic
+            assert_eq!(got[0].1.get("轮次").map(String::as_str), Some("3"));
+        }
+
+        // 目标不存在时必须明确报错，不能静默什么都不做
+        assert!(
+            WorkflowHandler
+                .execute(json!({ "action": "run", "name": "不存在的流程" }))
+                .await
+                .is_err(),
+            "未知工作流应报错"
         );
 
         let removed = remove_workflow(&entry.id).expect("remove 应成功");
