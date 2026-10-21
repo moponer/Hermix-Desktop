@@ -156,9 +156,73 @@ fn load_state(state: &HttpServerState) -> AutomationState {
     let Ok(data) = std::fs::read_to_string(&path) else {
         return seed_default();
     };
-    match serde_json::from_str::<AutomationState>(&data) {
+    let mut parsed: AutomationState = match serde_json::from_str::<AutomationState>(&data) {
         Ok(v) => v,
         Err(_) => seed_default(),
+    };
+    refresh_builtin_demos(&mut parsed);
+    parsed
+}
+
+/// 升级映射：`(旧提示词, 新示例 id)`。
+///
+/// 示例是内置的（不是用户数据），升级后应当跟着换 —— 旧示例（读会话历史 /
+/// 扫工作目录 / 看 git 状态）即使被用户启用，也会去翻用户自己的数据。
+/// 提示词命中这里 = 用户没动过它 → 可以安全刷新成新定义；
+/// 不命中 = 用户自己改过 → 原样保留，不覆盖。
+///
+/// 按**旧提示词**而不是 id 匹配：这次换版连 id 一起换了（`demo-morning-brief`
+/// → `demo-daily-weather`），按 id 匹配会一条都刷不到。
+const RETIRED_DEMO_MAP: &[(&str, &str)] = &[
+    (
+        "请帮我整理一份工作简报：1) 昨天我做了哪些事（从最近会话里提取）2) 今天应该关注什么 3) 有什么阻塞或风险。",
+        "demo-daily-weather",
+    ),
+    (
+        "请基于今天的所有对话，做一个简短复盘：哪几轮最有效？哪几轮浪费了时间？明早可以怎么调整？",
+        "demo-daily-news",
+    ),
+    (
+        "请汇总本周所有会话里产出的文件路径（绝对路径），按项目分类，整理成可索引的清单。",
+        "demo-daily-term",
+    ),
+    (
+        "请扫描当前工作目录里的 build / lint 错误（rust / typescript / go 都行），按严重度排序，列出前 10 个。",
+        "demo-weekly-oss",
+    ),
+    (
+        "请基于最近 7 天的对话上下文（或者我接下来给你的 RSS 源），整理出本周最值得关注的 5 条行业动态，每条 1-2 句。",
+        "demo-weekly-courses",
+    ),
+    (
+        "请检查当前 git 仓库状态：有没有未提交的修改 / 未推送的 commit？如有，给我一段简短的提交信息草稿。",
+        "demo-daily-fact",
+    ),
+];
+
+/// 把内置示例任务刷新到当前定义。
+///
+/// 存量 JSON 里的示例是上一版留下的（读会话历史 / 扫工作目录 / 看 git 状态）
+/// —— 那些即使被启用也会去翻用户的数据。示例属于**内置内容**，不是用户数据，
+/// 所以升级时应当跟着换；只有用户**自己改过**提示词的示例才保留原样。
+///
+/// 用户的开关状态保留：用户把某个示例打开过，刷新不该把它关掉。
+fn refresh_builtin_demos(state: &mut AutomationState) {
+    let builtin = seed_default();
+    for task in state.tasks.iter_mut() {
+        let Some((_, new_id)) = RETIRED_DEMO_MAP
+            .iter()
+            .find(|(old_prompt, _)| *old_prompt == task.prompt)
+        else {
+            // 用户改过（或本来就不是内置示例）→ 不动。
+            continue;
+        };
+        let Some(def) = builtin.tasks.iter().find(|d| d.id == *new_id) else {
+            continue;
+        };
+        let enabled = task.enabled;
+        *task = def.clone();
+        task.enabled = enabled;
     }
 }
 
@@ -1355,6 +1419,36 @@ mod tests {
         assert!(
             !is_run_in_flight(&task, now),
             "陈旧的 running_since 不能永久挡住任务"
+        );
+    }
+
+    /// 存量 JSON 里的**旧示例**（读会话历史 / 扫工作目录 / 看 git 状态）会被刷新成
+    /// 纯读公开信息的版本；但**用户自己改过**提示词的示例必须原样保留。
+    #[test]
+    fn builtin_demos_are_refreshed_but_user_edits_are_kept() {
+        let mut state = seed_default();
+        // 模拟「上一版留下的旧示例」：提示词命中升级映射。
+        state.tasks[0].prompt = RETIRED_DEMO_MAP[0].0.to_string();
+        // 模拟「用户改过的示例」：提示词不在升级映射里。
+        let mut edited = state.tasks[1].clone();
+        edited.prompt = "我自己写的提示词".into();
+        state.tasks.push(edited);
+
+        refresh_builtin_demos(&mut state);
+
+        assert!(
+            state.tasks[0].prompt.contains("不要读取或修改任何本地文件"),
+            "旧示例应被刷新成不碰用户数据的版本，实际：{}",
+            state.tasks[0].prompt
+        );
+        assert_eq!(
+            state.tasks[0].id, "demo-daily-weather",
+            "旧示例应换到新定义（含新 id）"
+        );
+        assert_eq!(
+            state.tasks.last().unwrap().prompt,
+            "我自己写的提示词",
+            "用户改过的示例不能被覆盖"
         );
     }
 

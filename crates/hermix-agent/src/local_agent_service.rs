@@ -1610,6 +1610,38 @@ impl LocalAgentService {
     }
 }
 
+/// 把一轮「外部触发」的消息重新标回 [`MessageRole::Automation`]。
+///
+/// 提示词按**内容特征**定位（带着本次自动化的元信息 + 角色是 User），
+/// **不用固定下标**：agent 循环可能在本轮消息前面插入内容（系统消息、
+/// 瞬态提示的增删都会让下标错位），错位的后果是**提示词以 user 身份落库**
+/// → 下一轮 `load_session` 把它当成「用户说过的话」喂给模型（这正是
+/// Automation 角色要避免的），前端也会多渲染出一个用户气泡。
+///
+/// 2026-10-21 实测：定时任务刚修好会触发之后，这条路径立刻暴露出
+/// 「每轮落库多一条 user 角色的提示词」。
+///
+/// 本轮的回复（提示词之后的 assistant 行）一并改标；历史对话不动 ——
+/// 它们来自 `load_session`，是真人参与的轮次。
+fn relabel_automation_turn(messages: &mut [Message], meta: &AutomationMeta) {
+    let Some(idx) = messages.iter().position(|m| {
+        m.role == MessageRole::User && m.automation_meta.as_ref() == Some(meta)
+    }) else {
+        tracing::warn!(
+            "automation turn: prompt not found by automation marker — \
+             it may persist as a user message and pollute the next turn's context"
+        );
+        return;
+    };
+    messages[idx].role = MessageRole::Automation;
+    for msg in messages.iter_mut().skip(idx + 1) {
+        if msg.role == MessageRole::Assistant {
+            msg.role = MessageRole::Automation;
+            msg.automation_meta = Some(meta.clone());
+        }
+    }
+}
+
 #[async_trait]
 impl AgentService for LocalAgentService {
     /// Delegate to the inherent `interrupt_all` method so the server
@@ -1673,11 +1705,6 @@ impl AgentService for LocalAgentService {
             .session_persistence
             .load_session(session_id)
             .unwrap_or_default();
-
-        // How much of `messages` is pre-existing conversation, captured
-        // before this turn appends anything. Used below to scope the
-        // `Automation` relabelling to exactly the rows this turn adds.
-        let history_len = messages.len();
 
         // O3.2: Gateway pre-compression safety net. Detect sessions that
         // have grown beyond 85% of a typical context window (200K tokens)
@@ -1972,20 +1999,7 @@ impl AgentService for LocalAgentService {
         // dangling half-turn the next `load_session` hands the model as
         // something it apparently said unprompted.
         if let Some(meta) = automation_meta.as_ref() {
-            // The prompt sits at `history_len`: it was pushed before the
-            // run and restored to `User` for the loop's benefit, so it
-            // needs an explicit relabel back.
-            if let Some(prompt_msg) = messages.get_mut(history_len) {
-                if prompt_msg.automation_meta.as_ref() == Some(meta) {
-                    prompt_msg.role = MessageRole::Automation;
-                }
-            }
-            for msg in messages.iter_mut().skip(history_len) {
-                if msg.role == MessageRole::Assistant {
-                    msg.role = MessageRole::Automation;
-                    msg.automation_meta = Some(meta.clone());
-                }
-            }
+            relabel_automation_turn(&mut messages, meta);
         }
 
         // Persist updated session (with compressed summary + raw archive for cross-session continuity).
@@ -3634,6 +3648,75 @@ fn build_compression_snapshot(result: &hermix_core::AgentResult) -> Option<crate
         original_tokens,
         compressed_tokens,
     })
+}
+
+#[cfg(test)]
+mod automation_turn_tests {
+    use super::*;
+    use hermix_core::MessageRole;
+
+    fn meta() -> AutomationMeta {
+        AutomationMeta {
+            automation_name: "触发验证".into(),
+            run_id: None,
+            prompt: Some("只回复两个字".into()),
+            fallback_reason: None,
+        }
+    }
+
+    /// **回归钉子**：提示词必须被标回 `Automation`。
+    ///
+    /// 旧实现按固定下标（`history_len`）找提示词，而 agent 循环会在本轮消息
+    /// 前面插入内容 → 下标错位 → **提示词以 user 身份落库** → 下一轮
+    /// `load_session` 把它当「用户说过的话」喂给模型，前端也多一个用户气泡。
+    /// 2026-10-21 定时任务修好会触发之后，这条路径立刻暴露。
+    #[test]
+    fn prompt_is_relabelled_even_when_an_earlier_message_shifts_the_index() {
+        let m = meta();
+        // 循环在历史与提示词之间插了一条系统消息 → 下标整体后移。
+        let mut msgs = vec![
+            Message::user("真人的提问"),
+            Message::automation("旧的自动化结果"),
+            Message::system("循环插入的系统消息"),
+            {
+                let mut p = Message::user("自动化的指令");
+                p.automation_meta = Some(m.clone());
+                p
+            },
+            Message::assistant("自动化的回复"),
+        ];
+        relabel_automation_turn(&mut msgs, &m);
+        assert_eq!(
+            msgs[3].role,
+            MessageRole::Automation,
+            "提示词必须被标回 Automation，不能以 user 身份落库"
+        );
+        assert_eq!(
+            msgs[4].role,
+            MessageRole::Automation,
+            "本轮的回复也要标成 Automation"
+        );
+        assert_eq!(
+            msgs[0].role,
+            MessageRole::User,
+            "历史里的真人提问不能被改"
+        );
+        assert_eq!(
+            msgs[1].role,
+            MessageRole::Automation,
+            "历史的自动化结果保持不变"
+        );
+    }
+
+    /// 找不到提示词时**不能乱标**（否则会把真人消息改成自动化）。
+    #[test]
+    fn relabel_does_nothing_when_the_prompt_marker_is_absent() {
+        let m = meta();
+        let mut msgs = vec![Message::user("真人的提问"), Message::assistant("真人的回复")];
+        relabel_automation_turn(&mut msgs, &m);
+        assert_eq!(msgs[0].role, MessageRole::User);
+        assert_eq!(msgs[1].role, MessageRole::Assistant);
+    }
 }
 
 #[cfg(test)]
