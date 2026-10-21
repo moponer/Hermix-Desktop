@@ -2,6 +2,17 @@
 
 Status: implemented — 2026-10-04 逐层核实 cronjob 工具 → 宿主后端 → Automation 表 → 调度器全链路后的重写；修 1–5 已全部落地（修 4/修 5 于 2026-10-05，方案与实际代码的三处偏差见"实施进度"）。核实推翻了原提案的两处前提：hermix 用的不是 ZCode 的 `targetTaskId` 而是 `session_id`；且提案设想的"对话内创建"链路需要先补两个断点才成立。裁决见 [批次评审](../process/2026-10-04-proposed-batch-review.md)。
 
+> **2026-10-21 更正（本篇「事实 1」的链路描述已不成立）**：上面写「写入 automations 表 →
+> AutomationScheduler 每 30s tick」——**当时是这么写的，但面板/`cronjob` 工具的写入
+> 落到了 `$HERMIX_HOME/automation_tasks.json`（JSON），而调度器读的是 `sessions.db`
+> 的 `automations` 表（SQLite）**。两套存储从未接上；JSON 那台调度器自己的触发条件
+> （`sched.after(&now)` 后判 `next_at <= now`）恒为假，也从不触发。
+> 端到端实测与收敛方案见
+> [定时任务「创建-执行」接线断裂](../bug-fix/2026-10-21-automation-create-run-wiring-broken.md)。
+> **本篇的锚定投递机制（`decide_delivery_target` / `MessageRole::Automation` / run 表）
+> 本身是完好的，缺的是「谁把任务写进调度器读的那张表」**——
+> 换句话说：机制齐了，中间那根线没接上。
+
 ## 核实结论
 
 ### 事实 1：链路是通的，但终点是一个固定字符串
