@@ -194,6 +194,16 @@ pub fn web_close(app: AppHandle) {
     close_webview(&app);
 }
 
+/// 当前内嵌视图的地址。
+///
+/// CDP 那边要在「浏览器进程的多个 page target」里挑出**当前这个**（超星页 +
+/// about:blank 残留页）→ 用这个地址精确匹配。
+pub fn active_webview_url() -> Option<String> {
+    let app = app().ok()?;
+    let webview = active_webview(&app)?;
+    webview.url().ok().map(|u| u.to_string())
+}
+
 /// 在当前网页视图里跳转。
 #[tauri::command]
 pub fn web_navigate(app: AppHandle, url: String) -> Result<(), String> {

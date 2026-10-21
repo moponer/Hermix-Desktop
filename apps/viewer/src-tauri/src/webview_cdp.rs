@@ -15,7 +15,7 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use serde_json::json;
+use serde_json::{json, Value};
 
 use crate::cdp::{evaluate, Cdp};
 
@@ -55,14 +55,39 @@ fn devtools_endpoint() -> Result<(u16, String), String> {
 }
 
 /// 连上内嵌网页视图的页面 target，返回 (连接, 会话 id)。
+///
+/// **必须按 URL 匹配 target**：子 webview 的浏览器进程里可能有多个 page
+/// target（当前页 + about:blank 残留页），按「第一个」取会取到空页 →
+/// 页面级命令全落到错的 target 上（表现为「找不到 iframe」）。
 fn connect_page() -> Result<(Cdp, String), String> {
     let (port, ws_path) = devtools_endpoint()?;
     let mut cdp = Cdp::connect(port, &ws_path)?;
-    // 找页面 target：类型是 page 的那个（内嵌视图只有一个页面）。
     let targets = cdp.targets()?;
-    let page = targets
-        .iter()
-        .find(|t| t.get("type").and_then(|v| v.as_str()) == Some("page"))
+    let current = crate::webview_host::active_webview_url();
+
+    // 1) URL 完全匹配当前页面的 target；
+    // 2) 退而求其次：非 about:blank 的 page target；
+    // 3) 再退：第一个 page target。
+    let page = current
+        .as_ref()
+        .and_then(|url| {
+            targets.iter().find(|t| {
+                t.get("type").and_then(|v| v.as_str()) == Some("page")
+                    && t.get("url").and_then(|v| v.as_str()) == Some(url.as_str())
+            })
+        })
+        .or_else(|| {
+            targets.iter().find(|t| {
+                t.get("type").and_then(|v| v.as_str()) == Some("page")
+                    && !t.get("url").and_then(|v| v.as_str()).unwrap_or("about:blank").is_empty()
+                    && t.get("url").and_then(|v| v.as_str()) != Some("about:blank")
+            })
+        })
+        .or_else(|| {
+            targets
+                .iter()
+                .find(|t| t.get("type").and_then(|v| v.as_str()) == Some("page"))
+        })
         .ok_or_else(|| "内嵌网页视图里没有找到页面 target".to_string())?;
     let target_id = page
         .get("targetId")
@@ -130,6 +155,130 @@ pub fn click(x: f64, y: f64) -> Result<String, String> {
     }
     std::thread::sleep(Duration::from_millis(250));
     Ok(format!("已点击 ({x}, {y})"))
+}
+
+/// **按可见文字点击**，并**核对页面是否真的变了**。
+///
+/// 为什么要有这个原语（2026-10-21 实测踩坑）：agent 用坐标点超星目录里的
+/// 「1.2 信息的属性」时，**点击派发了但页面没跳**（点到的是标题 span 而不是
+/// 可点的祖先，或点到被遮挡的元素）。agent 如果不核对，就会以为点成功了 →
+/// 接着在错误的章节上干活，**而且不会自己发现**。
+///
+/// 所以这个工具自带闭环：
+/// 1. 按文字找候选（取**最深的**那个，通常才是真正可点的）；
+/// 2. 点它（先 `el.click()`，没变化再补一次真实鼠标事件序列）；
+/// 3. **比对点击前后的 URL + 正文指纹**，如实回报变了没有。
+///
+/// 返回 `{ clicked, changed, url, before, after }`——`changed: false` 就是
+/// 「没点上」，调用方据此换一种点法，而不是闷头往下走。
+pub fn click_text(text: &str, frame: Option<&str>) -> Result<Value, String> {
+    let (mut cdp, sid) = connect_page()?;
+    let needle = serde_json::to_string(text).unwrap_or_default();
+    let in_frame = frame.map(str::trim).filter(|f| !f.is_empty());
+
+    let eval_in = |cdp: &mut Cdp, js: &str| -> Result<String, String> {
+        match in_frame {
+            Some(needle_frame) => cdp.evaluate_in_frame(&sid, needle_frame, js),
+            None => evaluate(cdp, &sid, js),
+        }
+    };
+
+    // 1) 找候选：文字匹配、可见、取**最深的**（a/button 优先、子元素少优先）。
+    let find_js = format!(
+        r#"(() => {{
+          const want = {needle};
+          const all = Array.from(document.querySelectorAll('a,button,li,span,div,td'));
+          const hit = all.filter(e => {{
+            const t = (e.textContent || '').trim();
+            if (t !== want && !t.includes(want)) return false;
+            const r = e.getBoundingClientRect();
+            if (r.width < 2 || r.height < 2) return false;
+            const st = getComputedStyle(e);
+            return st.visibility !== 'hidden' && st.display !== 'none';
+          }});
+          if (!hit.length) return JSON.stringify({{ ok: false, why: 'no-match' }});
+          const score = (e) => (e.tagName === 'A' || e.tagName === 'BUTTON' ? 0 : 1) * 1000 + e.querySelectorAll('*').length;
+          hit.sort((a, b) => score(a) - score(b));
+          const el = hit[0];
+          const r = el.getBoundingClientRect();
+          return JSON.stringify({{ ok: true, tag: el.tagName, cls: String(el.className || ''), x: r.left + r.width/2, y: r.top + r.height/2, count: hit.length }});
+        }})()"#
+    );
+    let found_raw = eval_in(&mut cdp, &find_js)?;
+    let found: Value = serde_json::from_str(&found_raw)
+        .map_err(|e| format!("候选解析失败：{e}（原始：{found_raw}）"))?;
+    if found.get("ok").and_then(|v| v.as_bool()) != Some(true) {
+        return Ok(json!({
+            "clicked": false,
+            "changed": false,
+            "why": found.get("why").and_then(|v| v.as_str()).unwrap_or("no-match"),
+            "hint": "页面上没有这个文字；先用 webview_text 看清楚到底有什么文字",
+        }));
+    }
+    let x = found.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let y = found.get("y").and_then(|v| v.as_f64()).unwrap_or(0.0);
+
+    // 2) 点击前先记指纹（URL + 正文前 200 字 + 正文长度）。
+    const FINGERPRINT: &str =
+        r#"JSON.stringify({u: location.href, t: (document.body ? document.body.innerText : '').slice(0, 200), l: (document.body ? document.body.innerText.length : 0)})"#;
+    let before = eval_in(&mut cdp, FINGERPRINT)?;
+
+    // 3) 先用 DOM 点击（合成事件）。
+    let click_js = format!(
+        r#"(() => {{
+          const want = {needle};
+          const all = Array.from(document.querySelectorAll('a,button,li,span,div,td'));
+          const hit = all.filter(e => {{ const t = (e.textContent||'').trim(); if (t !== want && !t.includes(want)) return false; const r = e.getBoundingClientRect(); return r.width >= 2 && r.height >= 2; }});
+          const score = (e) => (e.tagName==='A'||e.tagName==='BUTTON'?0:1)*1000 + e.querySelectorAll('*').length;
+          hit.sort((a,b) => score(a)-score(b));
+          if (!hit.length) return 'no-match';
+          hit[0].click();
+          return 'clicked';
+        }})()"#
+    );
+    let dom_click = eval_in(&mut cdp, &click_js)?;
+
+    // 4) 等页面变化（最多 ~4s），变了就停。
+    let mut changed = false;
+    let mut after = before.clone();
+    for _ in 0..20 {
+        std::thread::sleep(Duration::from_millis(200));
+        after = eval_in(&mut cdp, FINGERPRINT)?;
+        if after != before {
+            changed = true;
+            break;
+        }
+    }
+    // 没变化 → 补一次真实鼠标点击（坐标）。
+    if !changed {
+        for pressed in [true, false] {
+            cdp.call(
+                "Input.dispatchMouseEvent",
+                json!({"type": if pressed { "mousePressed" } else { "mouseReleased" }, "x": x, "y": y, "button": "left", "clickCount": 1}),
+                Some(&sid),
+            )?;
+        }
+        for _ in 0..20 {
+            std::thread::sleep(Duration::from_millis(200));
+            after = eval_in(&mut cdp, FINGERPRINT)?;
+            if after != before {
+                changed = true;
+                break;
+            }
+        }
+    }
+
+    Ok(json!({
+        "clicked": dom_click != "no-match",
+        "changed": changed,
+        "url": serde_json::from_str::<Value>(&after)
+            .ok()
+            .and_then(|v| v.get("u").and_then(|u| u.as_str()).map(|s| s.to_string())),
+        "before": serde_json::from_str::<Value>(&before).ok(),
+        "after": serde_json::from_str::<Value>(&after).ok(),
+        "target": { "tag": found.get("tag"), "cls": found.get("cls"), "x": x, "y": y, "candidates": found.get("count") },
+        "hint": if changed { "已跳转" } else { "点了但页面没变：换一种点法（文字更精确，或先滚到可见）" },
+    }))
 }
 
 /// **移动鼠标**到页面坐标（悬停）。

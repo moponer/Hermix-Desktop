@@ -81,6 +81,11 @@ impl Cdp {
             };
             // 顺手收下执行上下文事件（跨源 iframe 的 contextId 就在里面）。
             if value.get("method").and_then(|m| m.as_str()) == Some("Runtime.executionContextCreated") {
+                let session = value
+                    .get("sessionId")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
                 if let (Some(frame_id), Some(context_id)) = (
                     value
                         .get("params")
@@ -94,7 +99,8 @@ impl Cdp {
                         .and_then(|c| c.get("id"))
                         .and_then(|v| v.as_u64()),
                 ) {
-                    self.contexts.insert(frame_id.to_string(), context_id);
+                    self.contexts
+                        .insert(format!("{session}:{frame_id}"), context_id);
                 }
             }
             if value.get("id").and_then(|v| v.as_u64()) != Some(id) {
@@ -158,8 +164,73 @@ impl Cdp {
         frame_needle: &str,
         expression: &str,
     ) -> Result<String, String> {
-        self.enable_runtime(page_session)?;
-        let tree = self.call("Page.getFrameTree", json!({}), Some(page_session))?;
+        // 1) 先在本页面的 frame tree 里找。
+        if let Some(session) = self.session_holding_frame(page_session, frame_needle)? {
+            return self.evaluate_with_context(&session, frame_needle, expression);
+        }
+        // 2) 跨 target 找（**跨源 iframe 可能是独立 target / 独立进程**：
+        //    超星的播放器就嵌在 `knowledge/cards` 这个同源 iframe 里，而
+        //    `knowledge/cards` 本身在某些情况下是独立 target → 本页面的
+        //    frame tree 里根本看不到它）。
+        let targets = self.targets()?;
+        for target in targets {
+            let Some(kind) = target.get("type").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            if kind != "page" && kind != "iframe" {
+                continue;
+            }
+            let Some(target_id) = target.get("targetId").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            if target_id == page_session {
+                continue;
+            }
+            let Ok(session) = self.attach(target_id) else {
+                continue;
+            };
+            self.enable_runtime(&session)?;
+            if let Some(found) = self.session_holding_frame(&session, frame_needle)? {
+                return self.evaluate_with_context(&found, frame_needle, expression);
+            }
+        }
+        Err(format!("页面里没有 URL 含「{frame_needle}」的 iframe"))
+    }
+
+    /// 在某个会话的 frame tree 里找 URL 含 needle 的 frame，返回它所在的会话。
+    fn session_holding_frame(
+        &mut self,
+        session: &str,
+        frame_needle: &str,
+    ) -> Result<Option<String>, String> {
+        let tree = self.call("Page.getFrameTree", json!({}), Some(session))?;
+        let mut stack: Vec<Value> = Vec::new();
+        if let Some(root) = tree.get("frameTree") {
+            stack.push(root.clone());
+        }
+        while let Some(node) = stack.pop() {
+            if let Some(url) = node.get("url").and_then(|v| v.as_str()) {
+                if url.contains(frame_needle) {
+                    return Ok(Some(session.to_string()));
+                }
+            }
+            if let Some(children) = node.get("childFrames").and_then(|v| v.as_array()) {
+                for child in children {
+                    stack.push(child.clone());
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    /// 在「已找到的 frame」所属会话里求值。
+    fn evaluate_with_context(
+        &mut self,
+        session: &str,
+        frame_needle: &str,
+        expression: &str,
+    ) -> Result<String, String> {
+        let tree = self.call("Page.getFrameTree", json!({}), Some(session))?;
         let mut frame_id: Option<String> = None;
         let mut stack: Vec<Value> = Vec::new();
         if let Some(root) = tree.get("frameTree") {
@@ -178,12 +249,10 @@ impl Cdp {
                 }
             }
         }
-        let frame_id = frame_id.ok_or_else(|| {
-            format!("页面里没有 URL 含「{frame_needle}」的 iframe")
-        })?;
+        let frame_id = frame_id.ok_or_else(|| format!("找不到 iframe：{frame_needle}"))?;
         let context_id = self
             .contexts
-            .get(&frame_id)
+            .get(&format!("{session}:{frame_id}"))
             .copied()
             .ok_or_else(|| format!("找不到该 iframe 的执行上下文（{frame_needle}）"))?;
         let result = self.call(
@@ -194,7 +263,7 @@ impl Cdp {
                 "awaitPromise": true,
                 "contextId": context_id,
             }),
-            Some(page_session),
+            Some(session),
         )?;
         if let Some(details) = result.get("exceptionDetails") {
             let text = details

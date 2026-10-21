@@ -296,6 +296,9 @@ pub fn main() {
         .setup(move |app| {
             seed_pending(app.handle(), &init_args);
             spawn_singleton_listener(app.handle().clone());
+            // 登记应用句柄：MCP 工具（web_open 等）要在没有前端参与的情况下
+            // 开关内嵌网页视图。
+            webview_host::set_app(app.handle().clone());
             // 设置里开了「启动时拉起 MCP 服务」就地起（只监听回环）。
             // 起不来不拦启动：查看器本身跟 MCP 无关，不该因为端口被占
             // 就打不开。

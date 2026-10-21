@@ -329,6 +329,22 @@ fn tool_defs() -> Vec<ToolDef> {
             destructive: false,
         },
         ToolDef {
+            name: "webview_click_text",
+            description: "**按可见文字点击**，并**自动核对页面是否真的变了**。\
+                          优先用这个而不是 webview_click（坐标）：它会按文字找到\
+                          真正可点的元素、点完比对 URL 与正文指纹，如实回报 \
+                          changed=true/false。changed=false 就是「没点上」，\
+                          要换一种点法（更精确的文字 / 先滚到可见），**别当成点成功了\
+                          继续往下干**。",
+            properties: json!({
+                "text": {"type": "string", "description": "要点击的可见文字（如「下一节」「1.3 系统的概念」）"},
+                "frame": {"type": "string", "description": "目标 iframe 的 URL 片段（可选）"},
+            }),
+            required: &["text"],
+            read_only: false,
+            destructive: true,
+        },
+        ToolDef {
             name: "viewer_ui_state",
             description: "读取**查看器自己**的界面状态：当前目录、路径栏、搜索词、\
                           已打开的标签（id / 名称 / 类型）、当前活动标签、打开了哪些\
@@ -698,6 +714,12 @@ fn call_tool_text(name: &str, args: &Value) -> Result<String, String> {
             let x = args.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0);
             let y = args.get("y").and_then(|v| v.as_f64()).unwrap_or(0.0);
             crate::webview_cdp::click(x, y)
+        }
+        "webview_click_text" => {
+            let text = str_arg("text")?;
+            let frame = args.get("frame").and_then(|v| v.as_str());
+            let result = crate::webview_cdp::click_text(&text, frame)?;
+            Ok(serde_json::to_string_pretty(&result).unwrap_or_else(|_| format!("{result:?}")))
         }
         "webview_hover" => {
             let x = args.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0);
