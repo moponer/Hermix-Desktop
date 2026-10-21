@@ -71,6 +71,13 @@ const WEB_GUI_TESTER_SKILL: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/builtin-skills/hermix/web-gui-tester/SKILL.md"
 ));
+// 助手阿黎的能力地图（12 类能力路由 + 三条硬规则 + 外部 CLI 任务书模板）。
+// 存在的理由：按关键词搜工具永远可能漏，而「她该知道你能做到什么」不能靠
+// system prompt 硬编码 —— 新工具上线后这里不用改代码。
+const TWIN_SKILL: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/builtin-skills/hermix/twin/SKILL.md"
+));
 // 自诊断方法论（日志位置、症状→关键字对照表、配置项、报告格式）。
 const SELF_DIAGNOSIS_SKILL: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -118,6 +125,7 @@ const BUILTIN_SKILLS: &[(&str, &str)] = &[
     ("hermix/docx", DOCX_SKILL),
     ("hermix/web-gui-tester", WEB_GUI_TESTER_SKILL),
     ("hermix/self-diagnosis", SELF_DIAGNOSIS_SKILL),
+    ("hermix/twin", TWIN_SKILL),
 ];
 
 /// Default `SOUL.md` (persona) shipped *inside the binary* via `include_str!`.

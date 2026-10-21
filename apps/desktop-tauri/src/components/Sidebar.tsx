@@ -5,6 +5,7 @@ import {
   // Popover icons
   Pencil, Pin, Archive, Trash2, FolderOpenDot, Copy, FolderMinus,
   Settings, PanelLeftClose, Search, LayoutDashboard, KeyRound, TabletSmartphone, Clock,
+  Sparkles,
   type LucideIcon,
 } from "lucide-react";
 import { clsx } from "clsx";
@@ -68,6 +69,7 @@ interface SidebarProps {
 // 「对话」页已从导航移除：新建对话按钮已承担入口职责，导航只剩真正
 // 的功能页。chat 仍是默认 page（App 侧），这里只是不再给它导航位。
 const NAV_ITEMS: { icon: React.ElementType; label: string; page: NavPage }[] = [
+  { icon: Sparkles, label: "助手阿黎", page: "twin" },
   { icon: Boxes,    label: "应用",    page: "customapps" },
   { icon: LayoutDashboard, label: "工作台", page: "workbench" },
   { icon: Clock,    label: "自动化",  page: "automation" },

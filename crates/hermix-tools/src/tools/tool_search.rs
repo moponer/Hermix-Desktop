@@ -158,22 +158,30 @@ pub(crate) fn bridge_tool_schemas(deferred_count: usize) -> Vec<ToolSchema> {
                 {
                     let mut m = IndexMap::new();
                     m.insert(
+                        "action".into(),
+                        serde_json::json!({
+                            "type": "string",
+                            "enum": ["search", "list"],
+                            "description": "`search` (default) matches keywords; `list` enumerates every tool in the registry — use it to see what the app can do before asking for keywords."
+                        }),
+                    );
+                    m.insert(
                         "query".into(),
                         serde_json::json!({
                             "type": "string",
-                            "description": "Keywords to search for (e.g. 'create github issue')"
+                            "description": "Keywords to search for (e.g. 'create github issue'). Required unless action=list."
                         }),
                     );
                     m.insert(
                         "limit".into(),
                         serde_json::json!({
                             "type": "integer",
-                            "description": "Max results. Default 5."
+                            "description": "Max results. Default 5 for search, 200 for list."
                         }),
                     );
                     m
                 },
-                vec!["query".into()],
+                vec![],
             ),
         ),
         ToolSchema::new(
@@ -225,6 +233,16 @@ pub(crate) fn bridge_tool_schemas(deferred_count: usize) -> Vec<ToolSchema> {
     ]
 }
 
+/// 截断描述到 200 字符（按 char 边界截，避免切坏 UTF-8 多字节）。
+fn short_description(desc: &str) -> String {
+    const MAX: usize = 200;
+    if desc.chars().count() <= MAX {
+        return desc.to_string();
+    }
+    let cut: String = desc.chars().take(MAX - 3).collect();
+    format!("{cut}...")
+}
+
 // ── ToolSearchHandler ───────────────────────────────────────────────
 
 pub struct ToolSearchHandler {
@@ -247,27 +265,75 @@ impl ToolHandler for ToolSearchHandler {
                 {
                     let mut m = IndexMap::new();
                     m.insert(
+                        "action".into(),
+                        serde_json::json!({
+                            "type": "string",
+                            "enum": ["search", "list"],
+                            "description": "`search` (default) or `list` (enumerate all tools)"
+                        }),
+                    );
+                    m.insert(
                         "query".into(),
                         serde_json::json!({
                             "type": "string",
-                            "description": "Keywords to search for"
+                            "description": "Keywords to search for. Required unless action=list."
                         }),
                     );
                     m.insert(
                         "limit".into(),
                         serde_json::json!({
                             "type": "integer",
-                            "description": "Max results. Default 5."
+                            "description": "Max results. Default 5 for search, 200 for list."
                         }),
                     );
                     m
                 },
-                vec!["query".into()],
+                vec![],
             ),
         )
     }
 
     async fn execute(&self, params: Value) -> Result<String, ToolError> {
+        let action = params
+            .get("action")
+            .and_then(|v| v.as_str())
+            .unwrap_or("search")
+            .trim()
+            .to_ascii_lowercase();
+
+        // `list` 分支：全量枚举工具名 + 描述（含常驻工具，不限于 deferred 桶）。
+        // 存在的理由：按关键词盲搜永远可能漏 —— 一个不知道自己有哪些工具
+        // 的助理，谈不上"知道你能做到什么"。
+        if action == "list" {
+            let limit = params
+                .get("limit")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(200) as usize;
+            let all_defs = self.registry.get_definitions();
+            let (resident, deferred) = classify_tools(&all_defs);
+            let tools: Vec<Value> = all_defs
+                .iter()
+                .take(limit)
+                .map(|s| {
+                    let deferred_bucket = deferred.iter().any(|d| d.name == s.name);
+                    serde_json::json!({
+                        "name": s.name,
+                        "description": short_description(&s.description),
+                        "bucket": if deferred_bucket { "deferred" } else { "resident" },
+                    })
+                })
+                .collect();
+            return Ok(serde_json::json!({
+                "action": "list",
+                "total": all_defs.len(),
+                "resident": resident.len(),
+                "deferred": deferred.len(),
+                "returned": tools.len(),
+                "tools": tools,
+            })
+            .to_string());
+        }
+
         let query = params
             .get("query")
             .and_then(|v| v.as_str())
@@ -275,7 +341,7 @@ impl ToolHandler for ToolSearchHandler {
             .trim();
         if query.is_empty() {
             return Err(ToolError::InvalidParams(
-                "query is required".into(),
+                "query is required unless action=list".into(),
             ));
         }
         let limit = params
@@ -317,14 +383,9 @@ impl ToolHandler for ToolSearchHandler {
             .into_iter()
             .take(limit)
             .map(|(s, score)| {
-                let short_desc = if s.description.len() > 200 {
-                    format!("{}...", &s.description[..s.description.floor_char_boundary(197)])
-                } else {
-                    s.description.clone()
-                };
                 serde_json::json!({
                     "name": s.name,
-                    "description": short_desc,
+                    "description": short_description(&s.description),
                     "relevance": score,
                 })
             })
@@ -672,6 +733,47 @@ mod tests {
         for want in ["tool_search", "tool_describe", "tool_call"] {
             assert!(names.contains(&want.to_string()), "missing from registry: {want}");
         }
+    }
+
+    /// `action=list` 必须能看到「常驻桶」里的工具 —— 这正是 search 分支
+    /// 的结构性盲区（它只扫 deferred 桶），也是「助理不知道自己会什么」的成因。
+    #[tokio::test]
+    async fn list_action_enumerates_resident_tools_too() {
+        let reg = Arc::new(crate::ToolRegistry::new());
+        register(&reg);
+        let handler = ToolSearchHandler::new(reg);
+
+        let out = handler
+            .execute(serde_json::json!({"action": "list"}))
+            .await
+            .expect("list 不该失败");
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+
+        assert_eq!(v["action"], "list");
+        let tools = v["tools"].as_array().expect("tools 必须是数组");
+        let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
+        for want in ["tool_search", "tool_describe", "tool_call"] {
+            assert!(names.contains(&want), "list 漏了常驻工具 {want}");
+        }
+        assert_eq!(v["returned"].as_u64().unwrap() as usize, tools.len());
+        assert!(v["total"].as_u64().unwrap() >= tools.len() as u64);
+        // 每个条目都必须带 bucket，调用方才分得清常驻/按需
+        assert!(tools
+            .iter()
+            .all(|t| t["bucket"] == "resident" || t["bucket"] == "deferred"));
+    }
+
+    /// 去掉 required 之后，search 分支仍要自己拒空 query（不能静默返回空）。
+    #[tokio::test]
+    async fn search_without_query_is_rejected() {
+        let reg = Arc::new(crate::ToolRegistry::new());
+        register(&reg);
+        let handler = ToolSearchHandler::new(reg);
+        let err = handler.execute(serde_json::json!({})).await.unwrap_err();
+        assert!(
+            matches!(err, ToolError::InvalidParams(_)),
+            "空 query 必须报 InvalidParams，实际: {err:?}"
+        );
     }
 
     /// The shared handle must alias the caller's live registry, not a

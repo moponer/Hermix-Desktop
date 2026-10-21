@@ -171,8 +171,41 @@ impl DailyMemoryStore {
     }
 }
 
+/// 把长文本裁到 `max` 字符（按 char 边界），并留一句可操作的提示。
+/// 目的是别让一次 `read` 把上下文吃满。
+fn clip_context(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let cut: String = s.chars().take(max).collect();
+    format!("{cut}\n…（已截断，用 `days` 缩小范围）")
+}
+
 fn today_local() -> String {
     Local::now().format("%Y-%m-%d").to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::clip_context;
+
+    /// 短文本原样返回，不加任何尾巴。
+    #[test]
+    fn clip_leaves_short_text_untouched() {
+        let s = "## 2026-10-21\n- conclusions: 做完了";
+        assert_eq!(clip_context(s, 16_000), s);
+    }
+
+    /// 截断必须落在 char 边界上（中文多字节，按字节切会 panic 或乱码）。
+    #[test]
+    fn clip_truncates_multibyte_at_char_boundary() {
+        let s = "汉".repeat(40);
+        let out = clip_context(&s, 10);
+        assert!(out.starts_with(&"汉".repeat(10)), "应保留前 10 个汉字");
+        assert!(out.contains("已截断"), "截断必须留一句可操作的提示");
+        // 不能出现替换字符（乱码的典型表现）
+        assert!(!out.contains('\u{FFFD}'));
+    }
 }
 
 fn now_ms() -> i64 {
@@ -188,6 +221,45 @@ struct DailyMemoryHandler;
 #[async_trait::async_trait]
 impl ToolHandler for DailyMemoryHandler {
     async fn execute(&self, params: Value) -> Result<String, ToolError> {
+        let action = params
+            .get("action")
+            .and_then(|v| v.as_str())
+            .unwrap_or("write")
+            .trim()
+            .to_ascii_lowercase();
+
+        // `read` 分支：把最近的日记读回来。此前这个工具只能写、不能读，
+        // 于是「跨天回忆任务进展」只能靠 memory_prefetch 的侧面注入 ——
+        // 助理型 agent 需要自己主动回看，这是它的输入源。
+        if action == "read" {
+            let days = params
+                .get("days")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(7)
+                .clamp(1, 30) as u32;
+            let store = DailyMemoryStore::open()?;
+            let entries = store.list_days(days)?;
+            if entries.is_empty() {
+                return Ok("daily_memory 还没有任何记录。".into());
+            }
+            let mut out = String::new();
+            for e in &entries {
+                out.push_str(&format!("## {}\n", e.date));
+                for (label, body) in [
+                    ("goals", &e.goals),
+                    ("progress", &e.progress),
+                    ("conclusions", &e.conclusions),
+                ] {
+                    let body = body.trim();
+                    if !body.is_empty() {
+                        out.push_str(&format!("- {label}: {body}\n"));
+                    }
+                }
+                out.push('\n');
+            }
+            return Ok(clip_context(&out.trim_end().to_string(), 16_000));
+        }
+
         let section = params
             .get("section")
             .and_then(|v| v.as_str())
@@ -211,28 +283,43 @@ impl ToolHandler for DailyMemoryHandler {
     fn schema(&self) -> ToolSchema {
         let mut props: IndexMap<String, Value> = IndexMap::new();
         props.insert(
+            "action".into(),
+            serde_json::json!({
+                "type": "string",
+                "enum": ["write", "read"],
+                "description": "`write` (default) appends a note to today; `read` returns the last `days` entries."
+            }),
+        );
+        props.insert(
             "section".into(),
             serde_json::json!({
                 "type": "string",
                 "enum": ["goals", "progress", "conclusions"],
-                "description": "Which part of the day's working log to append to."
+                "description": "Which part of the day's working log to append to. Required for action=write."
             }),
         );
         props.insert(
             "content".into(),
             serde_json::json!({
                 "type": "string",
-                "description": "The concise note to record (one bullet or short paragraph)."
+                "description": "The concise note to record (one bullet or short paragraph). Required for action=write."
+            }),
+        );
+        props.insert(
+            "days".into(),
+            serde_json::json!({
+                "type": "integer",
+                "description": "How many recent days to return (read only). Default 7, max 30."
             }),
         );
         tool_schema(
             "daily_memory",
-            "Append a structured note to today's daily working memory (SQLite). \
-             Use `goals` at the start of any substantive task to capture objectives, \
-             `progress` to record status/checkpoints as work proceeds, and \
-             `conclusions` at wrap-up for results and decisions. This makes task \
-             goals, progress and outcomes survive across turns and sessions.",
-            JsonSchema::object(props, vec!["section".into(), "content".into()]),
+            "Read or append the daily working memory (SQLite, one row per day). \
+             `action=write` (default): use `goals` at the start of any substantive task, \
+             `progress` as work proceeds, `conclusions` at wrap-up. \
+             `action=read` + `days`: read back the last N days — use it to recall what \
+             was in progress before a restart, or to review recent outcomes.",
+            JsonSchema::object(props, vec![]),
         )
     }
 }
@@ -249,11 +336,13 @@ pub fn register(registry: &ToolRegistry) {
         Arc::new(|| true),
         vec![],
         false,
-        "Append a structured note (goals|progress|conclusions) to today's daily working memory in SQLite. Required by the operating-principles workflow: record goals at task start, progress as you go, conclusions at wrap-up.\n\n\
-         BOUNDARY (three memory layers, pick one): `daily_memory` = this task's timeline \
-         (what I decided, what is left) — read back after a restart; `memory` = durable facts \
-         injected every turn (preferences/environment) — do not park task progress there; \
-         `session_search` = read-only search over past conversations, cannot write.",
+        "Read or append the daily working memory in SQLite (one row per day). \
+        `action=write` (default) records goals at task start, progress as you go, conclusions at wrap-up. \
+        `action=read` + `days` reads back the last N days — then you actually need it, not as a habit.\n\n\
+        BOUNDARY (three memory layers, pick one): `daily_memory` = this task's timeline \
+        (what I decided, what is left) — read it back after a restart; `memory` = durable facts \
+        injected every turn (preferences/environment) — do not park task progress there; \
+        `session_search` = read-only search over past conversations, cannot write.",
         "📅",
         None,
         RiskLevel::Safe,

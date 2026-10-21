@@ -13,6 +13,7 @@ const AnalyticsView = lazy(() => import("../components/AnalyticsView").then((m) 
 const CustomAppsView = lazy(() => import("../components/CustomAppsView").then((m) => ({ default: m.CustomAppsView })));
 const WorkbenchView = lazy(() => import("../components/WorkbenchView").then((m) => ({ default: m.WorkbenchView })));
 const VaultPanel = lazy(() => import("../components/VaultPanel").then((m) => ({ default: m.VaultPanel })));
+const TwinView = lazy(() => import("../components/TwinView").then((m) => ({ default: m.TwinView })));
 
 /** 渲染各非 chat 页面所需的 App 级依赖。chat 页面 props 复杂，
  *  由 App 预先渲染为 `chatNode` 元素传入，保持逻辑零改写。 */
@@ -45,6 +46,14 @@ export function renderRoutes(page: NavPage, ctx: RouteContext): ReactNode {
   switch (page) {
     case "chat":
       return ctx.chatNode;
+    case "twin":
+      // 阿黎吃宿主已有的会话表（避免再拉一次全量），会话通道未接通前
+      // 输入口降级为切回对话页 —— 见 TwinView 顶部注释。
+      return (
+        <Suspense fallback={<RouteLoading />}>
+          <TwinView sessions={ctx.sessions} onOpenChat={ctx.openChat} />
+        </Suspense>
+      );
     case "automation":
       return <Suspense fallback={<RouteLoading />}><AutomationView openChat={ctx.openChat} onCreateWorkflow={ctx.startCreateWorkflowFlow} /></Suspense>;
     case "experts":

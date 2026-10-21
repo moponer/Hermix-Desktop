@@ -1,0 +1,1002 @@
+/* ════════════════════════════════════════════════════════════════════
+   助手阿黎 · 主界面原型 —— 独立样式层（浅色 / 深色双主题）
+
+   与现有应用的关系（「不突兀」的落法）：
+     颜色不自己造，全部从应用的 --color-* 令牌派生；
+     差异只体现在**排布语言**上 —— 三栏仪表盘、等宽读数、发丝分隔、
+     2px 圆角、更紧的行距。所以它和对话页并排也不抢色。
+
+   命名空间：
+     .twin-*   本界面专属类名，不进全局 CSS
+     --twin-*  本界面的语义别名，值全部指向 --color-*
+
+   接入方式：删掉下面「模拟应用令牌层」整段，其余不动。
+   ════════════════════════════════════════════════════════════════════ */
+
+/* ── 模拟应用令牌层（仅原型用；接入时整段删除） ───────────────────── */
+:root {
+  --color-bg-app: #ececec;
+  --color-bg-primary: #ffffff;
+  --color-bg-card: #f6f6f6;
+  --color-bg-secondary: #f5f5f5;
+  --color-bg-tertiary: #ededed;
+  --color-bg-quaternary: #e3e3e3;
+  --color-bg-elevated: #ffffff;
+
+  --color-border-subtle: #f0f0f0;
+  --color-border-primary: #e5e5e5;
+  --color-border-secondary: #d4d4d4;
+  --color-border-strong: #7c7c7c;
+
+  --color-text-primary: #181818;
+  --color-text-secondary: #565656;
+  --color-text-tertiary: #5f5f5f;
+  --color-text-faint: #6a6a6a;
+
+  --color-accent: #1e4a3c;
+  --color-on-accent: #ffffff;
+
+  --color-text-success: #3a794e;
+  --color-text-warning: #7a5e0c;
+  --color-text-error: #bf4134;
+  --color-text-info: #467191;
+}
+
+:root[data-theme="dark"] {
+  --color-bg-app: #1a1a1a;
+  --color-bg-primary: #141414;
+  --color-bg-card: #1f1f1f;
+  --color-bg-secondary: #1f1f1f;
+  --color-bg-tertiary: #292929;
+  --color-bg-quaternary: #313131;
+  --color-bg-elevated: #262626;
+
+  --color-border-subtle: #242424;
+  --color-border-primary: #2e2e2e;
+  --color-border-secondary: #3d3d3d;
+  --color-border-strong: #6e6e6e;
+
+  --color-text-primary: #e9e9e9;
+  --color-text-secondary: #b9b9b9;
+  --color-text-tertiary: #a3a3a3;
+  --color-text-faint: #8f8f8f;
+
+  --color-accent: #6fae94;
+  --color-on-accent: #14201b;
+
+  --color-text-success: #84b383;
+  --color-text-warning: #d3a34c;
+  --color-text-error: #e06b52;
+  --color-text-info: #8a9aa8;
+}
+/* ── 模拟层结束 ─────────────────────────────────────────────────── */
+
+.twin-scope {
+  /* 表面：直接借用应用的四层 */
+  --twin-canvas: var(--color-bg-primary);
+  --twin-rail: var(--color-bg-secondary);
+  --twin-panel: var(--color-bg-card);
+  --twin-panel-2: var(--color-bg-secondary);
+  --twin-inset: var(--color-bg-tertiary);
+
+  /* 线 */
+  --twin-line: var(--color-border-primary);
+  --twin-line-soft: var(--color-border-subtle);
+  --twin-line-strong: var(--color-border-secondary);
+
+  /* 文字四档 */
+  --twin-fg: var(--color-text-primary);
+  --twin-fg-2: var(--color-text-secondary);
+  --twin-fg-3: var(--color-text-tertiary);
+  --twin-fg-4: var(--color-text-faint);
+
+  /* 强调：只给「活着的东西」用（在跑、待你定夺、主按钮） */
+  --twin-accent: var(--color-accent);
+  --twin-accent-hi: color-mix(in srgb, var(--color-accent) 82%, white);
+  --twin-accent-soft: color-mix(
+    in srgb,
+    var(--color-accent) 10%,
+    var(--color-bg-card)
+  );
+  --twin-accent-line: color-mix(
+    in srgb,
+    var(--color-accent) 32%,
+    var(--color-border-primary)
+  );
+  --twin-on-accent: var(--color-on-accent);
+
+  /* 语义四色：小字一律用「文字安全档」，底色在卡片面上派生 */
+  --twin-success: var(--color-text-success);
+  --twin-warning: var(--color-text-warning);
+  --twin-error: var(--color-text-error);
+  --twin-info: var(--color-text-info);
+
+  /* 字体 */
+  --twin-font: "Segoe UI Variable", "Segoe UI", -apple-system, "PingFang SC",
+    "HarmonyOS Sans SC", "Source Han Sans SC", "Noto Sans SC",
+    "Microsoft YaHei UI", system-ui, sans-serif;
+  --twin-mono: "JetBrains Mono", ui-monospace, "Cascadia Code", "Source Code Pro",
+    Consolas, Menlo, monospace;
+
+  /* 几何：比纸墨层更锐，这是本界面唯一"看得见"的风格差异 */
+  --twin-r: 2px;
+  --twin-r-lg: 3px;
+
+  color: var(--twin-fg);
+  background: var(--twin-canvas);
+  font-family: var(--twin-font);
+  font-size: 14px;
+  line-height: 1.5;
+  font-synthesis: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+.twin-scope *,
+.twin-scope *::before,
+.twin-scope *::after {
+  box-sizing: border-box;
+}
+
+/* ── 骨架 ─────────────────────────────────────────────────────────── */
+
+.twin-shell {
+  display: grid;
+  grid-template-columns: 208px minmax(0, 1fr);
+  height: 100vh;
+  min-height: 640px;
+  background: var(--color-bg-app);
+}
+
+.twin-side {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 14px 10px;
+  background: var(--twin-rail);
+  border-right: 1px solid var(--twin-line);
+}
+
+.twin-side__brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px 14px;
+  border-bottom: 1px solid var(--twin-line-soft);
+  margin-bottom: 10px;
+}
+
+.twin-side__mark {
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--twin-line-strong);
+  border-radius: var(--twin-r);
+  position: relative;
+  flex: none;
+}
+
+/* 内嵌小菱形 = 「阿黎」的双层记号 */
+.twin-side__mark::after {
+  content: "";
+  position: absolute;
+  inset: 4px;
+  border: 1px solid var(--twin-accent);
+  transform: rotate(45deg);
+}
+
+.twin-side__name {
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  color: var(--twin-fg-2);
+}
+
+.twin-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.twin-nav__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 9px;
+  border: 1px solid transparent;
+  border-radius: var(--twin-r);
+  font-size: 13px;
+  color: var(--twin-fg-3);
+  background: none;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: color 120ms ease-out, background-color 120ms ease-out;
+}
+
+.twin-nav__item:hover {
+  color: var(--twin-fg);
+  background: var(--twin-panel);
+}
+
+.twin-nav__item[aria-current="page"] {
+  color: var(--twin-fg);
+  background: var(--twin-panel);
+  border-color: var(--twin-line);
+}
+
+.twin-nav__item[aria-current="page"]::before {
+  content: "";
+  width: 4px;
+  height: 4px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--twin-accent);
+  box-shadow: 0 0 0 3px var(--twin-accent-soft);
+  flex: none;
+}
+
+.twin-nav__item > span:first-of-type {
+  flex: 1;
+}
+
+.twin-nav__count {
+  font-family: var(--twin-mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--twin-fg-4);
+}
+
+.twin-nav__item[aria-current="page"] .twin-nav__count {
+  color: var(--twin-accent);
+}
+
+.twin-side__foot {
+  margin-top: auto;
+  padding-top: 10px;
+  border-top: 1px solid var(--twin-line-soft);
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--twin-fg-4);
+}
+
+/* 原型专用：主题切换（接入后由应用外观设置接管，删除） */
+.twin-theme {
+  display: flex;
+  gap: 1px;
+  margin-top: 10px;
+  padding: 1px;
+  border: 1px solid var(--twin-line);
+  border-radius: var(--twin-r);
+  background: var(--twin-inset);
+}
+
+.twin-theme__btn {
+  flex: 1;
+  padding: 4px 0;
+  border: none;
+  border-radius: 1px;
+  background: none;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--twin-fg-3);
+  cursor: pointer;
+  transition: color 120ms ease-out, background-color 120ms ease-out;
+}
+
+.twin-theme__btn:hover {
+  color: var(--twin-fg);
+}
+
+.twin-theme__btn[aria-pressed="true"] {
+  color: var(--twin-fg);
+  background: var(--twin-panel);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+/* ── 主区 ─────────────────────────────────────────────────────────── */
+
+.twin-main {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  min-width: 0;
+}
+
+/* 顶栏：身份 + 读数 + 权限 */
+.twin-top {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--twin-line);
+  background: var(--twin-rail);
+}
+
+.twin-ident {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.twin-ident__avatar {
+  width: 30px;
+  height: 30px;
+  flex: none;
+  border-radius: 50%;
+  border: 1px solid var(--twin-line-strong);
+  background: radial-gradient(
+    circle at 50% 40%,
+    var(--twin-accent-soft) 0%,
+    var(--twin-panel) 70%
+  );
+  position: relative;
+}
+
+/* 静态内环：仪表记号，不脉冲 */
+.twin-ident__avatar::after {
+  content: "";
+  position: absolute;
+  inset: 9px;
+  border: 1px solid var(--twin-accent-line);
+  border-radius: 50%;
+}
+
+.twin-ident__text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+  min-width: 0;
+}
+
+.twin-ident__name {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.twin-ident__state {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--twin-fg-3);
+  letter-spacing: 0.02em;
+}
+
+.twin-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--twin-accent);
+}
+
+.twin-dot--idle {
+  background: var(--twin-fg-4);
+}
+
+.twin-dot--warn {
+  background: var(--twin-warning);
+}
+
+.twin-dot--error {
+  background: var(--twin-error);
+}
+
+.twin-readouts {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  margin-left: auto;
+}
+
+.twin-readout {
+  padding: 0 16px;
+  border-left: 1px solid var(--twin-line-soft);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 88px;
+}
+
+.twin-readout__label {
+  font-size: 12px;
+  color: var(--twin-fg-4);
+  letter-spacing: 0.06em;
+}
+
+.twin-readout__value {
+  font-family: var(--twin-mono);
+  font-size: 17px;
+  font-variant-numeric: tabular-nums;
+  color: var(--twin-fg);
+  letter-spacing: -0.01em;
+}
+
+.twin-readout__value small {
+  font-size: 12px;
+  color: var(--twin-fg-3);
+  margin-left: 2px;
+}
+
+.twin-perm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px 5px 9px;
+  border: 1px solid var(--twin-line);
+  border-radius: var(--twin-r);
+  background: var(--twin-panel);
+  cursor: pointer;
+  font-family: inherit;
+  color: var(--twin-fg-2);
+  transition: border-color 120ms ease-out, color 120ms ease-out;
+}
+
+.twin-perm:hover {
+  border-color: var(--twin-line-strong);
+  color: var(--twin-fg);
+}
+
+.twin-perm[data-level="full"] {
+  border-color: var(--twin-accent-line);
+  color: var(--twin-accent);
+  background: var(--twin-accent-soft);
+}
+
+.twin-perm__label {
+  font-size: 12px;
+  letter-spacing: 0.06em;
+}
+
+.twin-perm__value {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+/* ── 信息板：三栏，发丝线分隔 ─────────────────────────────────────── */
+
+.twin-board {
+  display: grid;
+  grid-template-columns: 1.25fr 1fr 0.88fr;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.twin-col {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  border-right: 1px solid var(--twin-line);
+}
+
+.twin-col:last-child {
+  border-right: none;
+}
+
+.twin-col__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 11px 14px 9px;
+  border-bottom: 1px solid var(--twin-line-soft);
+  flex: none;
+}
+
+.twin-col__title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  color: var(--twin-fg-2);
+}
+
+/* 区块前的小方块：仪表刻度感，不用色条 */
+.twin-col__title::before {
+  content: "";
+  width: 3px;
+  height: 3px;
+  background: var(--twin-fg-4);
+  flex: none;
+}
+
+.twin-col__meta {
+  font-family: var(--twin-mono);
+  font-size: 12px;
+  color: var(--twin-fg-4);
+  font-variant-numeric: tabular-nums;
+}
+
+.twin-col__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--twin-line-strong) transparent;
+}
+
+.twin-col__body::-webkit-scrollbar {
+  width: 6px;
+}
+
+.twin-col__body::-webkit-scrollbar-thumb {
+  background: var(--twin-line-strong);
+  border-radius: 3px;
+}
+
+/* ── 卡片 ─────────────────────────────────────────────────────────── */
+
+.twin-card {
+  border: 1px solid var(--twin-line);
+  border-radius: var(--twin-r);
+  background: var(--twin-panel);
+  padding: 10px 11px 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition: border-color 120ms ease-out;
+}
+
+.twin-card:hover {
+  border-color: var(--twin-line-strong);
+}
+
+.twin-card__top {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--twin-fg-3);
+  letter-spacing: 0.02em;
+}
+
+.twin-card__source {
+  font-family: var(--twin-mono);
+  font-size: 12px;
+  color: var(--twin-fg-3);
+}
+
+.twin-card__age {
+  margin-left: auto;
+  font-family: var(--twin-mono);
+  font-size: 12px;
+  color: var(--twin-fg-4);
+  font-variant-numeric: tabular-nums;
+}
+
+.twin-card__title {
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--twin-fg);
+  font-weight: 500;
+}
+
+.twin-card__note {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--twin-fg-3);
+}
+
+.twin-card__foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
+.twin-tag {
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  padding: 2px 6px;
+  border-radius: var(--twin-r);
+  border: 1px solid var(--twin-line);
+  color: var(--twin-fg-3);
+  background: var(--twin-panel-2);
+  white-space: nowrap;
+}
+
+.twin-tag--accent {
+  color: var(--twin-accent);
+  border-color: var(--twin-accent-line);
+  background: var(--twin-accent-soft);
+}
+
+/* 语义标签：底保持中性，语义只落在文字与描边。
+   染色底会把 12px 小字压到 4.1:1（浅色下实测），且四色并发显得花。 */
+.twin-tag--warn {
+  color: var(--twin-warning);
+  border-color: color-mix(in srgb, var(--twin-warning) 38%, transparent);
+  background: var(--twin-panel-2);
+}
+
+.twin-tag--error {
+  color: var(--twin-error);
+  border-color: color-mix(in srgb, var(--twin-error) 38%, transparent);
+  background: var(--twin-panel-2);
+}
+
+.twin-tag--info {
+  color: var(--twin-info);
+  border-color: color-mix(in srgb, var(--twin-info) 38%, transparent);
+  background: var(--twin-panel-2);
+}
+
+/* ── 正在执行 ─────────────────────────────────────────────────────── */
+
+.twin-task {
+  border: 1px solid var(--twin-line);
+  border-radius: var(--twin-r);
+  background: var(--twin-panel);
+  padding: 9px 11px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.twin-task__row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.twin-task__name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--twin-fg);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.twin-task__pct {
+  font-family: var(--twin-mono);
+  font-size: 12px;
+  color: var(--twin-accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.twin-task__sub {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--twin-fg-3);
+}
+
+.twin-task__sub code {
+  font-family: var(--twin-mono);
+  font-size: 12px;
+  color: var(--twin-fg-3);
+  background: var(--twin-inset);
+  padding: 1px 4px;
+  border-radius: 1px;
+}
+
+/* 进度：2px 轨 + transform 驱动（不触发布局） */
+.twin-bar {
+  position: relative;
+  height: 2px;
+  background: var(--twin-inset);
+  overflow: hidden;
+}
+
+.twin-bar__fill {
+  position: absolute;
+  inset: 0;
+  transform-origin: left center;
+  transform: scaleX(var(--p, 0));
+  background: var(--twin-accent);
+}
+
+/* 填充端头的亮线：精确读数，静态 */
+.twin-bar__fill::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  top: -1px;
+  width: 1px;
+  height: 4px;
+  background: var(--twin-accent);
+  opacity: 0.7;
+}
+
+/* ── 待你定夺 ─────────────────────────────────────────────────────── */
+
+.twin-ask {
+  border: 1px solid var(--twin-line-strong);
+  border-radius: var(--twin-r);
+  background: var(--twin-panel);
+  padding: 10px 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.twin-ask__q {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--twin-fg);
+}
+
+.twin-ask__why {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--twin-fg-3);
+  padding-left: 8px;
+  border-left: 1px solid var(--twin-line-strong);
+}
+
+.twin-ask__why code {
+  font-family: var(--twin-mono);
+  font-size: 12px;
+  color: var(--twin-fg-2);
+  background: var(--twin-inset);
+  padding: 0 3px;
+}
+
+.twin-ask__acts {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.twin-btn {
+  font-family: inherit;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  padding: 5px 10px;
+  border-radius: var(--twin-r);
+  border: 1px solid var(--twin-line-strong);
+  background: var(--twin-panel);
+  color: var(--twin-fg-2);
+  cursor: pointer;
+  transition: color 120ms ease-out, border-color 120ms ease-out;
+}
+
+.twin-btn:hover {
+  color: var(--twin-fg);
+  border-color: var(--color-border-strong);
+}
+
+.twin-btn--primary {
+  color: var(--twin-on-accent);
+  background: var(--twin-accent);
+  border-color: var(--twin-accent);
+  font-weight: 600;
+}
+
+.twin-btn--primary:hover {
+  background: var(--twin-accent-hi);
+  border-color: var(--twin-accent-hi);
+  color: var(--twin-on-accent);
+}
+
+/* ── 她最近学到 ───────────────────────────────────────────────────── */
+
+.twin-learn {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.twin-learn__item {
+  display: flex;
+  gap: 8px;
+  padding: 8px 2px;
+  border-bottom: 1px solid var(--twin-line-soft);
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--twin-fg-2);
+}
+
+.twin-learn__item:last-child {
+  border-bottom: none;
+}
+
+.twin-learn__ev {
+  font-family: var(--twin-mono);
+  font-size: 12px;
+  color: var(--twin-fg-4);
+  flex: none;
+  padding-top: 1px;
+  letter-spacing: 0.02em;
+}
+
+.twin-learn__conf {
+  flex: none;
+  font-size: 12px;
+  color: var(--twin-fg-4);
+  padding-top: 1px;
+  white-space: nowrap;
+}
+
+/* ── 底部输入口 ───────────────────────────────────────────────────── */
+
+.twin-dock {
+  border-top: 1px solid var(--twin-line);
+  background: var(--twin-rail);
+  padding: 10px 14px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.twin-dock__hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--twin-fg-4);
+  letter-spacing: 0.02em;
+}
+
+.twin-dock__hint kbd {
+  font-family: var(--twin-mono);
+  font-size: 12px;
+  border: 1px solid var(--twin-line);
+  border-radius: 1px;
+  padding: 0 4px;
+  color: var(--twin-fg-3);
+}
+
+.twin-dock__row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border: 1px solid var(--twin-line-strong);
+  border-radius: var(--twin-r-lg);
+  background: var(--twin-panel);
+  padding: 7px 8px 7px 11px;
+  transition: border-color 120ms ease-out;
+}
+
+.twin-dock__row:focus-within {
+  border-color: var(--twin-accent);
+}
+
+.twin-dock__caret {
+  font-family: var(--twin-mono);
+  font-size: 13px;
+  color: var(--twin-accent);
+  flex: none;
+}
+
+.twin-dock__input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: none;
+  font-family: inherit;
+  font-size: 13.5px;
+  color: var(--twin-fg);
+  caret-color: var(--twin-accent);
+}
+
+.twin-dock__input::placeholder {
+  color: var(--twin-fg-4);
+}
+
+.twin-dock__chips {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+}
+
+.twin-chip {
+  font-family: inherit;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  padding: 4px 8px;
+  border-radius: var(--twin-r);
+  border: 1px solid var(--twin-line);
+  background: var(--twin-panel-2);
+  color: var(--twin-fg-3);
+  cursor: pointer;
+  transition: color 120ms ease-out, border-color 120ms ease-out;
+}
+
+.twin-chip:hover {
+  color: var(--twin-fg);
+  border-color: var(--twin-line-strong);
+}
+
+.twin-chip[aria-pressed="true"] {
+  color: var(--twin-accent);
+  border-color: var(--twin-accent-line);
+  background: var(--twin-accent-soft);
+}
+
+.twin-send {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--twin-r);
+  border: 1px solid var(--twin-accent);
+  background: var(--twin-accent);
+  color: var(--twin-on-accent);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+/* ── 响应式 ───────────────────────────────────────────────────────── */
+
+@media (max-width: 1180px) {
+  .twin-board {
+    grid-template-columns: 1fr 1fr;
+  }
+  .twin-col--third {
+    grid-column: 1 / -1;
+    border-top: 1px solid var(--twin-line);
+    border-right: none;
+  }
+  .twin-col--third .twin-col__body {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+  .twin-col--third .twin-ask,
+  .twin-col--third .twin-learn {
+    flex: 1 1 320px;
+  }
+}
+
+@media (max-width: 900px) {
+  .twin-shell {
+    grid-template-columns: 1fr;
+  }
+  .twin-side {
+    display: none;
+  }
+  .twin-board {
+    grid-template-columns: 1fr;
+  }
+  .twin-col {
+    border-right: none;
+    border-bottom: 1px solid var(--twin-line);
+  }
+  .twin-readouts {
+    display: none;
+  }
+}
+
+/* ── 动效降级 ─────────────────────────────────────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  .twin-scope *,
+  .twin-scope *::before,
+  .twin-scope *::after {
+    transition-duration: 0.001ms !important;
+  }
+}
+
+/* ── 原型宿主基线（仅本原型页；接入桌面端时删除） ─────────────────── */
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--color-bg-app, #ececec);
+}
+
+body {
+  overflow: hidden;
+}
