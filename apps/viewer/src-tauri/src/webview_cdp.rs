@@ -298,13 +298,27 @@ pub fn hover(x: f64, y: f64) -> Result<String, String> {
 }
 
 /// 截图：返回 (落盘路径, 缩略图 base64, mime)。
-pub fn screenshot() -> Result<(String, String, String), String> {
+///
+/// `clip` = (x, y, width, height)，**顶层文档坐标**（CSS 像素，与 CDP 的
+/// `Page.captureScreenshot.clip` 语义一致：相对文档左上角，不受滚动影响）。
+/// 配合 `scale` 可以只截一小块并放大 —— agent 读页面上的小字（考试题、
+/// 表格单元格）时，**整视口截图会被压到 1024 宽，字就糊了**；裁一块 2 倍
+/// 放大，既清晰又不浪费上下文。
+pub fn screenshot(clip: Option<(f64, f64, f64, f64)>, scale: f64) -> Result<(String, String, String), String> {
     let (mut cdp, sid) = connect_page()?;
-    let result = cdp.call(
-        "Page.captureScreenshot",
-        json!({"format": "png", "captureBeyondViewport": false}),
-        Some(&sid),
-    )?;
+    let mut params = json!({"format": "png"});
+    match clip {
+        Some((x, y, width, height)) => {
+            let scale = if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
+            params["clip"] = json!({
+                "x": x, "y": y, "width": width, "height": height, "scale": scale,
+            });
+        }
+        None => {
+            params["captureBeyondViewport"] = json!(false);
+        }
+    }
+    let result = cdp.call("Page.captureScreenshot", params, Some(&sid))?;
     let data = result
         .get("data")
         .and_then(|d| d.as_str())

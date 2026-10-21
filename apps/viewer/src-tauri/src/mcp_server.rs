@@ -322,8 +322,24 @@ fn tool_defs() -> Vec<ToolDef> {
         },
         ToolDef {
             name: "webview_screenshot",
-            description: "给内嵌网页视图当前页面截图：返回缩略图（给模型看）与落盘路径。",
-            properties: json!({}),
+            description: "给内嵌网页视图当前页面截图：返回缩略图（给模型看）与落盘路径。\
+                          **要读页面上的小字（试题、表格）就用 clip + scale**：\
+                          clip 是 {x,y,width,height}（顶层文档 CSS 像素），\
+                          scale 是放大倍数（常用 2）。整视口截图会被压到 1024 宽，字会糊。\
+                          坐标用 webview_eval 量元素位置换算（注意是文档坐标，不是视口坐标）。",
+            properties: json!({
+                "clip": {
+                    "type": "object",
+                    "description": "可选裁剪区域 {x,y,width,height}，顶层文档 CSS 像素",
+                    "properties": {
+                        "x": {"type": "number", "description": "左上角 x"},
+                        "y": {"type": "number", "description": "左上角 y"},
+                        "width": {"type": "number", "description": "宽"},
+                        "height": {"type": "number", "description": "高"},
+                    },
+                },
+                "scale": {"type": "number", "description": "放大倍数，默认 1，配合 clip 用 2"},
+            }),
             required: &[],
             read_only: true,
             destructive: false,
@@ -472,6 +488,22 @@ fn arg_str(args: &Value, key: &str) -> Result<String, String> {
         .ok_or_else(|| format!("缺少参数 {key}"))
 }
 
+/// 取可选的数值参数。
+fn arg_num(args: &Value, key: &str) -> Option<f64> {
+    args.get(key).and_then(|v| v.as_f64())
+}
+
+/// 解析可选的裁剪区域：`{x, y, width, height}`，全为顶层文档 CSS 像素。
+fn arg_clip(args: &Value) -> Option<(f64, f64, f64, f64)> {
+    let c = args.get("clip")?;
+    let get = |k: &str| c.get(k).and_then(|v| v.as_f64());
+    let (x, y, w, h) = (get("x")?, get("y")?, get("width")?, get("height")?);
+    if w <= 0.0 || h <= 0.0 {
+        return None;
+    }
+    Some((x, y, w, h))
+}
+
 /// 执行一个工具调用。
 ///
 /// 截图类工具要同时给模型**文字**与**图片**（MCP 的 content 数组支持
@@ -487,9 +519,15 @@ fn call_tool(name: &str, args: &Value) -> Result<ToolOutput, String> {
         });
     }
     if name == "webview_screenshot" {
-        let (path, data_base64, mime) = crate::webview_cdp::screenshot()?;
+        let clip = arg_clip(args);
+        let scale = arg_num(args, "scale").unwrap_or(1.0);
+        let (path, data_base64, mime) = crate::webview_cdp::screenshot(clip, scale)?;
+        let note = match clip {
+            Some((x, y, w, h)) => format!("（裁剪 {x},{y} {w}x{h}，{scale} 倍）"),
+            None => String::new(),
+        };
         return Ok(ToolOutput::TextAndImage {
-            text: format!("内嵌网页视图截图已保存：{path}"),
+            text: format!("内嵌网页视图截图已保存：{path}{note}"),
             data_base64,
             mime,
         });
