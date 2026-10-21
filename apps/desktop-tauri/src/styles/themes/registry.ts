@@ -5,8 +5,8 @@
  * automatically in the ThemeToggle dropdown.
  *
  * 主题契约：<id>.json 必填字段 id / label / colorScheme("light"|"dark")。
- * colorScheme 是唯一暗色判定来源 —— useTheme 据此设置 .dark 类与
- * colorScheme，禁止再在任何组件里硬编码主题名单。
+ * colorScheme 是唯一暗色判定来源 —— useTheme 据此设置 `root.style.colorScheme`
+ * 与 `root.dataset.theme`，**不再挂 `.dark` 类**（该类已废除）。
  */
 import type { ThemeMode } from "../../hooks/useTheme";
 

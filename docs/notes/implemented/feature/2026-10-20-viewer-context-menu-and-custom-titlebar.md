@@ -63,6 +63,8 @@ el.dispatchEvent(new Event("input", { bubbles: true }));
 
 `tauri.conf.json` 加 `"decorations": false`。新组件 `apps/viewer/src/TitleBar.tsx`：应用名 + 当前文件/目录 + 最小化 / 最大化（还原）/ 关闭。拖拽移动窗口走 `getCurrentWindow().startDragging()`（在 `pointerdown` 里调），**不用** `data-tauri-drag-region`——后者靠 `closest()` 判定，标题栏里的按钮会被一起拖走，点「关闭」会变成拖窗口。标题栏底色用 `--bg-primary`，与下面工具条的 `--bg-tabbar` 自然分出两段，不画分隔线。
 
+> 2026-10-21 更新：标题栏不再显示当前文件/目录——文件名与网址归纯净模式顶栏的地址栏，文档名改走窗口标题（`setTitle`）。见 [viewer 顶栏改浏览器式地址栏](2026-10-21-viewer-topbar-address-bar.md)。
+
 **6.1 Tauri v2 权限：窗口操作必须显式授权。** `apps/viewer/src-tauri/capabilities/default.json` 原来只有 `core:window:allow-close` / `allow-set-title`，于是 `start_dragging` / `minimize` / `toggle_maximize` / `is_maximized` 全部被 ACL 拒绝（报错文案：`window.start_dragging not allowed. Permissions associated with this command: core:window:allow-start-dragging`）。自绘标题栏要用的这四个权限已补进 capability 文件。
 
 **7. `decorations: false` 会连窗口边缘缩放一起弄丢，必须补回来。**

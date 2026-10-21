@@ -172,6 +172,288 @@ impl AgentLoop {
         }
     }
 
+    /// 把本次会话跑通的工具序列沉淀成 auto skill。
+    ///
+    /// ## 为什么加这一行
+    ///
+    /// `should_auto_create_skill` / `write_auto_skill`（`skill_auto_create.rs`）
+    /// 早就写好，连 slug 清洗、不覆盖手动 skill、16KB 上限都有——但**从未被
+    /// run loop 调用**。于是"总结经验为 skill"完全依赖模型自愿调
+    /// `skill_manage auto_extract_from_conversation`，而它经常不调：用户明确
+    /// 要求沉淀时，会话结束了，什么都没留下。
+    ///
+    /// ## 为什么用确定性模板而不是再问一次 LLM
+    ///
+    /// 收尾阶段多一次 round-trip 直接加到用户等待上。而"按顺序调了哪些工具、
+    /// 关键参数是什么"本身就是可复用的操作手册——比一段 LLM 摘要更可靠
+    /// （不会被幻觉污染），也更适合当 runbook。想要更丰富的说明，模型仍可
+    /// 用 `skill_manage patch` 补写。
+    ///
+    /// ## 错误也是素材（Harness² 的教训分级）
+    ///
+    /// 门槛从「自然完成 **且** 全程无错」放宽为「自然完成」。理由：Harness²
+    /// 的核心是"对比同一任务的不同执行来提炼教训"，而**错误-恢复对**正是最
+    /// 有信息量的对比——顺利跑通只说明"这样做可以"，失败后绕通才说明"哪条
+    /// 路不通"。旧门槛把这类会话整条丢掉，恰好丢掉最有价值的部分。
+    /// 带错误的会话因此会多出一节「踩过的坑」，与「操作步骤」并列。
+    ///
+    /// 任何 IO 失败都只记 debug 日志——沉淀是赠品，不能让它弄坏会话。
+    fn maybe_record_experience(&self) {
+        let home = self.hermix_home_dir();
+
+        // The counter lives on the loop (one lock acquisition, released before
+        // any file IO so a slow disk cannot block the next turn's error
+        // bookkeeping).
+        let counter = match self.tool_error_counter.lock() {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+
+        // `run_self_edit` is the module's **complete** entry point — tool
+        // bursts, convergence and feedback in one pass, then experience +
+        // rule proposal. Calling the three helpers by hand (as an earlier
+        // revision of this method did) silently drops the feedback channel
+        // and the rule proposal, which is exactly the "half-wired integration"
+        // this change is closing.
+        let Ok(feedback) =
+            crate::feedback_loop::FeedbackLog::open_at(&home.join("feedback").join("agent.jsonl"))
+        else {
+            return;
+        };
+        let Ok(rules) =
+            crate::self_improvement::SelfRuleStore::open_at(&home.join("self_rules").join("rules.jsonl"))
+        else {
+            return;
+        };
+
+        // `convergence: None` — a convergence stop is detected inside the loop,
+        // not at finalize time. Wiring that path means passing the reason down;
+        // until then convergence-triggered lessons are absent, which is a gap
+        // recorded in the decision note rather than a silent no-op here.
+        let result = crate::harness_self_edit::run_self_edit(
+            &counter,
+            &feedback,
+            None,
+            &home.join("experience"),
+            &rules,
+        );
+        drop(counter);
+
+        if result.experience_written {
+            tracing::info!(
+                experience_id = result.experience_id.as_deref().unwrap_or("?"),
+                rule_proposed = result.rule_proposed,
+                "self-edit: failure patterns recorded for future sessions"
+            );
+            self.emit_status(
+                "lifecycle",
+                "已把本轮的失败模式记入经验档案，下次开工会先提醒",
+            );
+        }
+    }
+
+    /// App home, honouring the per-loop override (tests point it at a tempdir).
+    fn hermix_home_dir(&self) -> std::path::PathBuf {
+        self.config
+            .hermix_home
+            .as_deref()
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(hermix_config::paths::hermix_home)
+    }
+
+    /// 从上下文里提取「任务原文 + 按序的工具调用」。
+    ///
+    /// assistant 消息的 `tool_calls` 是唯一同时带有名字与原始参数的位置；
+    /// `execution_timeline` 只有预览。抽成独立函数是因为 auto skill 与
+    /// Harness² 探针两条路径都要这份 trace，各写一遍必然漂移。
+    fn collect_run_trace(ctx: &ContextManager) -> Option<(String, Vec<(String, String)>)> {
+        let mut calls: Vec<(String, String)> = Vec::new();
+        let mut task_hint = String::new();
+        for msg in ctx.get_messages() {
+            if msg.role == hermix_core::MessageRole::User && task_hint.is_empty() {
+                task_hint = msg
+                    .content
+                    .as_deref()
+                    .unwrap_or("")
+                    .chars()
+                    .take(160)
+                    .collect();
+            }
+            if msg.role != hermix_core::MessageRole::Assistant {
+                continue;
+            }
+            if let Some(tcs) = msg.tool_calls.as_ref() {
+                for tc in tcs {
+                    if !tc.function.name.is_empty() {
+                        calls.push((tc.function.name.clone(), tc.function.arguments.clone()));
+                    }
+                }
+            }
+        }
+        if calls.is_empty() {
+            return None;
+        }
+        Some((task_hint, calls))
+    }
+
+    /// Harness² 任务级递归的唯一编排点：Judge → Probe → Compose。
+    ///
+    /// - **Judge**：用可核验信号判定本次执行（`harness_probe::judge`）。用户
+    ///   重发同一请求是最强的失败证据，比 `finished_naturally` 更强。
+    /// - **Probe**：把这次执行记进 `probes/<sig>.jsonl`。**不自动重放**同一
+    ///   任务——它通常带副作用（写文件、提交表单），自动跑 K 次会真的执行
+    ///   两次。这里把用户的真实重试当作天然 probe，跨会话累积。
+    /// - **Compose**：同一签名有 ≥2 条记录时，对比成功与失败的行为差异，
+    ///   提炼成技能并**覆盖**同名文件（同一任务的迭代版本，不是新技能）。
+    ///
+    /// 首次执行（只有 1 条记录）时什么都不写——骨架 skill 由
+    /// `maybe_write_auto_skill` 负责，两者分工：一次执行给"步骤"，多次执行
+    /// 给"哪条路通、哪条不通"。
+    fn maybe_run_task_recursion(
+        &self,
+        ctx: &ContextManager,
+        finished_naturally: bool,
+        interrupted: bool,
+        tool_errors: &[hermix_core::ToolErrorRecord],
+        total_turns: u32,
+    ) {
+        let Some((task_hint, steps)) = Self::collect_run_trace(ctx) else {
+            return;
+        };
+        let sig = crate::harness_probe::task_signature(&task_hint);
+        let Ok(store) =
+            crate::harness_probe::ProbeStore::open(self.hermix_home_dir().join("probes"))
+        else {
+            return;
+        };
+
+        // 上一次同任务是否失败过 —— 这就是 `judge` 里的"用户重发"信号。
+        let repeated = matches!(
+            store.last_outcome(&sig),
+            Ok(Some(crate::harness_probe::TaskOutcome::Failed))
+        );
+        // 末轮是否仍有错：错误记录里出现过最后一轮的错误。
+        let last_turn_had_errors = tool_errors.iter().any(|e| e.turn >= total_turns);
+
+        let verdict = crate::harness_probe::judge(
+            finished_naturally,
+            interrupted,
+            tool_errors,
+            last_turn_had_errors,
+            repeated,
+        );
+
+        let composed = match crate::harness_probe::run_task_recursion(
+            &store, &sig, &verdict, steps, tool_errors, total_turns,
+        ) {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::debug!(error = %e, "probe record failed (non-fatal)");
+                return;
+            }
+        };
+
+        let Some(composed) = composed else {
+            return;
+        };
+
+        // 覆盖写：`probe-<sig>` 是**同一任务**的迭代产物，不适用
+        // `write_auto_skill` 的 AlreadyExists 保护（那保护的是"别覆盖手动
+        // 创建的技能"，而这里是覆盖自己上一版的提炼结果）。
+        let dir = self
+            .hermix_home_dir()
+            .join("skills")
+            .join(crate::skill_auto_create::AUTO_SKILL_DIR)
+            .join(&composed.slug);
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            tracing::debug!(error = %e, "composed skill dir failed (non-fatal)");
+            return;
+        }
+        let md = crate::skill_auto_create::render_skill_md(&composed.slug, &composed.body);
+        match std::fs::write(dir.join("SKILL.md"), md) {
+            Ok(()) => {
+                tracing::info!(
+                    slug = %composed.slug,
+                    outcome = verdict.outcome.as_str(),
+                    "Harness²: probe recorded and skill composed from execution history"
+                );
+                self.emit_status(
+                    "lifecycle",
+                    "已按多次执行对比更新技能（有效路径 + 失败分歧点）",
+                );
+            }
+            Err(e) => {
+                tracing::debug!(error = %e, "composed skill write failed (non-fatal)");
+            }
+        }
+    }
+
+    fn maybe_write_auto_skill(
+        &self,
+        ctx: &ContextManager,
+        success: bool,
+        tool_errors: &[hermix_core::ToolErrorRecord],
+    ) {
+        if !success {
+            return;
+        }
+        let Some((task_hint, calls)) = Self::collect_run_trace(ctx) else {
+            return;
+        };
+        let names: Vec<String> = calls.iter().map(|(n, _)| n.clone()).collect();
+        if !crate::skill_auto_create::should_auto_create_skill(&names) {
+            return;
+        }
+
+        // slug 优先取任务原文；但 `skill_slug` 只保留 ASCII，中文任务名会被
+        // 剥成空并退化成 "auto"——于是每个中文任务都叫 auto，第二个开始
+        // `write_auto_skill` 以 AlreadyExists 静默跳过，用户永远只看到一个
+        // 技能。退化时改用工具序列命名（ASCII、可区分、仍是操作手册的准确摘要）。
+        let slug = {
+            let from_task = crate::skill_auto_create::skill_slug(&task_hint);
+            if from_task == "auto" {
+                let mut distinct: Vec<&str> = Vec::new();
+                for (name, _) in &calls {
+                    if !distinct.contains(&name.as_str()) {
+                        distinct.push(name.as_str());
+                    }
+                }
+                crate::skill_auto_create::skill_slug(&distinct.join("-"))
+            } else {
+                from_task
+            }
+        };
+        let body = render_auto_skill_body(&slug, &task_hint, &calls, tool_errors);
+        let root = self.hermix_home_dir().join("skills");
+        match crate::skill_auto_create::write_auto_skill(&root, &slug, &body) {
+            Ok(path) => {
+                tracing::info!(
+                    slug = %slug,
+                    steps = calls.len(),
+                    path = %path.display(),
+                    "auto skill written from a successful tool sequence"
+                );
+                self.emit_status(
+                    "lifecycle",
+                    &format!(
+                        "已把本次 {steps} 步操作沉淀为技能 `/{slug}`，下次可直接复用",
+                        steps = calls.len()
+                    ),
+                );
+            }
+            Err(crate::skill_auto_create::AutoSkillError::Io(e))
+                if e.kind() == std::io::ErrorKind::AlreadyExists =>
+            {
+                // 同名 auto skill 已存在：`write_auto_skill` 刻意不覆盖，
+                // 避免一次会话里反复重写。安静跳过即可。
+                tracing::debug!(slug = %slug, "auto skill already exists; skipping");
+            }
+            Err(e) => {
+                tracing::debug!(slug = %slug, error = %e, "auto skill write failed (non-fatal)");
+            }
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn finalize_agent_result(
         &self,
@@ -189,11 +471,27 @@ impl AgentLoop {
         //wire: drain this run's tool errors into the cross-run
         // counter so the next prompt can surface the demotion block.
         self.drain_tool_errors_into_counter(tool_errors);
+        //经验档案的**写入侧**：本会话累积的失败模式 → 跨会话文件。
+        //放在 drain 之后，因为 `classify_tool_failures` 读的就是那个计数器。
+        self.maybe_record_experience();
         //emit Finalize phase boundary
         self.notify_phase(&LoopPhase::Finalize, total_turns);
         //notify upstream that the task is complete.
         // success = finished naturally without interruption.
         let success = finished_naturally && !interrupted;
+        //Harness² 任务级递归：判定 → 记录探针 → 多执行对比提炼。
+        //先跑它：它总是记录（成败都记），而 compose 只在有 ≥2 条同任务
+        //记录时才产出技能。
+        self.maybe_run_task_recursion(
+            ctx,
+            finished_naturally,
+            interrupted,
+            tool_errors,
+            total_turns,
+        );
+        //单次执行的骨架 skill：第一次跑通时给出"步骤"，等第二次同任务执行
+        //后由上面的 Compose 覆盖成"有效路径 + 分歧点"的对比版。
+        self.maybe_write_auto_skill(ctx, success, tool_errors);
         self.notify_task_complete(success, None);
         let result = crate::session_lifecycle::finalize_agent_result(
             &self.config,
@@ -842,5 +1140,138 @@ always_include: vec![
     /// `MAX_DELEGATE_DEPTH` (typically 5) in practice.
     pub fn current_focus_depth(&self) -> u8 {
         crate::focus_stack_ops::current_focus_depth(&self.focus_stack)
+    }
+}
+
+/// 渲染 auto skill 的正文：任务原文 + 按序的操作步骤 + 每条的关键参数 + 证据/教训。
+///
+/// 参数截断到 200 字符：步骤的顺序与工具名才是可复用信息，完整参数（可能
+/// 含几十 KB 的文件内容）只会把 skill 撑爆、把提示词预算吃光。
+///
+/// 「证据」节是 Harness² judge 的**最小形态**：不判断任务是否"做对了"
+/// （那需要 LLM 评判或人工反馈），只如实记录这次执行的可核验事实——几步、
+/// 几次错、是否在错误后继续跑通。读者（模型或人）据此决定要不要信这份 skill。
+fn render_auto_skill_body(
+    slug: &str,
+    task_hint: &str,
+    calls: &[(String, String)],
+    errors: &[hermix_core::ToolErrorRecord],
+) -> String {
+    let mut out = String::with_capacity(1024);
+    out.push_str(&format!(
+        "本技能由 agent 自动沉淀（`/{slug}`），来源是一次自然完成的任务。\n\n"
+    ));
+    out.push_str("## 当时的目标\n\n");
+    let hint = task_hint.trim();
+    if hint.is_empty() {
+        out.push_str("（未记录到用户原文）\n");
+    } else {
+        out.push_str(hint);
+        out.push('\n');
+    }
+    out.push_str("\n## 操作步骤\n\n");
+    for (i, (name, args)) in calls.iter().enumerate() {
+        let args_preview: String = args.chars().take(200).collect();
+        let ellipsis = if args.chars().count() > 200 { "…" } else { "" };
+        out.push_str(&format!("{}. `{name}` — `{args_preview}{ellipsis}`\n", i + 1));
+    }
+
+    out.push_str("\n## 证据\n\n");
+    out.push_str(&format!(
+        "- 工具调用 {} 次，其中失败 {} 次。\n",
+        calls.len(),
+        errors.len()
+    ));
+    if errors.is_empty() {
+        out.push_str("- 全程无工具错误：这是**顺利跑通**的路径。\n");
+    } else {
+        out.push_str(
+            "- 中途出错但最终自然完成：这是**试错后绕通**的路径，下面的坑要当真。\n",
+        );
+    }
+
+    if !errors.is_empty() {
+        out.push_str("\n## 踩过的坑\n\n");
+        for e in errors.iter().take(8) {
+            let snippet: String = e.error.chars().take(180).collect();
+            let ellipsis = if e.error.chars().count() > 180 { "…" } else { "" };
+            out.push_str(&format!(
+                "- 第 {} 轮 `{}` 失败：{}{}\n",
+                e.turn, e.tool_name, snippet, ellipsis
+            ));
+        }
+        if errors.len() > 8 {
+            out.push_str(&format!("- （另有 {} 条错误未列出）\n", errors.len() - 8));
+        }
+        out.push_str(
+            "\n照做时**优先避开上面这些失败形态**，而不是先重试再绕过——\
+             这是本技能最有价值的部分。\n",
+        );
+    }
+
+    out.push_str(
+        "\n## 使用注意\n\n\
+         - 步骤顺序与工具名来自实际执行路径，可直接照做；**参数必须按当前环境核对**\
+         （路径、ID、URL 会变）。\n\
+         - 这是自动生成的骨架。要补充背景、适用条件或失败处理，用 \
+         `skill_manage patch` 增量改写，不要整篇重写。\n\
+         - 若目标站点/工具的行为已变化，先 `skill_view` 读一遍再决定是否更新。\n",
+    );
+    out
+}
+
+#[cfg(test)]
+mod auto_skill_render_tests {
+    use super::render_auto_skill_body;
+
+    #[test]
+    fn body_lists_steps_in_order_with_truncated_args() {
+        let calls = vec![
+            ("browser_navigate".to_string(), r#"{"url":"https://x.com"}"#.to_string()),
+            ("browser_type".to_string(), format!("{{\"text\":\"{}\"}}", "x".repeat(500))),
+            ("browser_click".to_string(), r#"{"ref":"e12"}"#.to_string()),
+        ];
+        let body = render_auto_skill_body("demo", "登录超星并看课程", &calls, &[]);
+
+        assert!(body.contains("登录超星并看课程"));
+        assert!(body.contains("1. `browser_navigate`"));
+        assert!(body.contains("2. `browser_type`"));
+        assert!(body.contains("3. `browser_click`"));
+        // 500 字符的参数被截断，且不把整个 skill 撑爆。
+        assert!(body.contains('…'), "超长参数必须出现截断标记");
+        assert!(body.len() < 2000, "正文必须保持精简: {}", body.len());
+    }
+
+    #[test]
+    fn body_survives_an_empty_task_hint() {
+        let calls = vec![("read_file".to_string(), "{}".to_string())];
+        let body = render_auto_skill_body("demo", "", &calls, &[]);
+        assert!(body.contains("未记录到用户原文"));
+        assert!(body.contains("1. `read_file`"));
+    }
+
+    /// Harness² 的教训分级：错误-恢复对是最有价值的对比，必须进正文。
+    /// 旧门槛（"全程无错才沉淀"）会把这类会话整条丢掉。
+    #[test]
+    fn errors_become_a_pitfalls_section() {
+        let calls = vec![
+            ("terminal".to_string(), r#"{"command":"cargo build"}"#.to_string()),
+            ("read_file".to_string(), r#"{"path":"a.txt"}"#.to_string()),
+        ];
+        let errors = vec![hermix_core::ToolErrorRecord {
+            tool_name: "terminal".to_string(),
+            error: "per-call timeout after 600s: tool 'terminal' did not return in time".to_string(),
+            turn: 2,
+        }];
+        let body = render_auto_skill_body("demo", "构建项目", &calls, &errors);
+
+        assert!(body.contains("## 踩过的坑"), "错误必须成节: {body}");
+        assert!(body.contains("第 2 轮 `terminal` 失败"), "{body}");
+        assert!(body.contains("试错后绕通"), "证据节要标出这是错误-恢复路径: {body}");
+        assert!(body.contains("失败 1 次"), "{body}");
+        // 无错会话不应出现坑位节。
+        let clean = render_auto_skill_body("demo", "构建项目", &calls, &[]);
+        assert!(!clean.contains("## 踩过的坑"));
+        assert!(clean.contains("顺利跑通"));
     }
 }

@@ -290,9 +290,11 @@ impl SqliteSessionSearchBackend {
                 ToolError::ExecutionFailed(format!("Failed to create session db directory: {}", e))
             })?;
         }
-        let conn = Connection::open(db_path).map_err(|e| {
-            ToolError::ExecutionFailed(format!("Failed to open sessions DB: {}", e))
-        })?;
+        // Read mode: short busy timeout so a search never stalls the UI behind
+        // an in-flight turn's DELETE+INSERT.
+        let conn = hermix_store::open_connection(db_path, hermix_store::OpenMode::Read).map_err(
+            |e| ToolError::ExecutionFailed(format!("Failed to open sessions DB: {}", e)),
+        )?;
 
         // Align with session persistence schema used by the agent loop.
         conn.execute_batch(

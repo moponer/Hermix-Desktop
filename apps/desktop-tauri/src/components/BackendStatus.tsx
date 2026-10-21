@@ -26,7 +26,7 @@ export function BackendStatus() {
     <button
       onClick={() => void handleRestart()}
       disabled={restarting}
-      className="ml-1 shrink-0 px-2 h-6 rounded text-tiny font-medium text-text-secondary border border-border-secondary hover:bg-bg-tertiary transition-colors disabled:opacity-50"
+      className="ml-1 shrink-0 px-2 h-6 rounded text-tiny font-medium text-text-secondary bg-bg-secondary hover:bg-bg-hover transition-colors disabled:opacity-50"
       title="重新启动本地后端服务"
       aria-label="重新连接后端服务">
       重新连接
@@ -45,9 +45,9 @@ export function BackendStatus() {
     }
     if (restarting) {
       return (
-        <div className="flex items-center gap-1.5 px-2 py-1 rounded text-tiny text-zinc-400" title="后端正在重启...">
+        <div className="flex items-center gap-1.5 px-2 py-1 rounded text-tiny text-zinc-400" title="后端正在重启…">
           <RefreshCw className="icon-sm animate-spin text-zinc-400" />
-          <span>重启中...</span>
+          <span>重启中…</span>
         </div>
       );
     }
@@ -56,7 +56,7 @@ export function BackendStatus() {
       // OK. Don't lie with "离线" while the user can see the spinner
       // and trust that we're doing work.
       return (
-        <div className="flex items-center gap-1.5 px-2 py-1 rounded text-tiny text-text-muted" title="本地后端正在启动...">
+        <div className="flex items-center gap-1.5 px-2 py-1 rounded text-tiny text-text-muted" title="本地后端正在启动…">
           <Loader2 className="icon-sm animate-spin text-text-muted" />
           <span>正在连接</span>
         </div>
@@ -87,7 +87,7 @@ export function BackendStatus() {
           ? "已连接到后端"
           : state === "offline"
             ? "后端未连接"
-            : "正在连接后端..."
+            : "正在连接后端…"
       }
     >
       {state === "connecting" ? (

@@ -20,11 +20,12 @@
 import { Bot, Sparkles, Loader2, CheckCircle2, AlertCircle, ChevronRight } from "lucide-react";
 import { clsx } from "clsx";
 import type { SubAgentPhase, SubAgentState } from "../types";
+import { COMPLETED } from "./strings";
 
 const PHASE_CONFIG: Record<SubAgentPhase, { label: string; Icon: typeof Loader2 }> = {
   spawned: { label: "已启动", Icon: Bot },
   started: { label: "执行中", Icon: Loader2 },
-  done: { label: "已完成", Icon: CheckCircle2 },
+  done: { label: COMPLETED, Icon: CheckCircle2 },
   failed: { label: "失败", Icon: AlertCircle },
 };
 

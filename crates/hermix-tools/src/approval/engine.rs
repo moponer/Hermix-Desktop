@@ -432,6 +432,15 @@ impl ApprovalManager {
     /// pattern but is not in the allowlist.
     /// - `Approved` if no patterns match (implicit allowlist).
     pub fn check_approval(&self, command: &str) -> ApprovalDecision {
+        // 0. Permission-governing files. A shell can rewrite the approval
+        // allowlist (`echo ... > $HOME/.hermix/approval_allowlist.json`) just
+        // as easily as `write_file`, which would let the agent pre-approve its
+        // own future commands. Denied outright — an approval card cannot help
+        // here, because the party asking is the party that benefits.
+        if crate::permission_guard::command_touches_permission_config(command) {
+            return ApprovalDecision::Denied;
+        }
+
         // 1. Denied patterns — built-in then custom. NEVER overridden
         // by the user allowlist OR session approvals (catastrophic
         // operations stay catastrophic regardless of "always allow"
@@ -544,6 +553,12 @@ impl ApprovalManager {
     ) -> ApprovalDecision {
         if matches!(origin, Origin::Local) {
             return self.check_approval(command);
+        }
+
+        // Same permission-config veto as `check_approval` — a paired device
+        // must not be able to launder the write through a different origin.
+        if crate::permission_guard::command_touches_permission_config(command) {
+            return ApprovalDecision::Denied;
         }
 
         for re in DENIED_PATTERNS.iter() {

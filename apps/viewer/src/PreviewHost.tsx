@@ -42,6 +42,9 @@ const DocxEditor = lazy(() =>
 const SheetEditor = lazy(() =>
   import("./document/SheetEditor").then((m) => ({ default: m.SheetEditor })),
 );
+const PptxEditor = lazy(() =>
+  import("./document/PptxEditor").then((m) => ({ default: m.PptxEditor })),
+);
 const ZOOM_MIN = 50;
 const ZOOM_MAX = 200;
 
@@ -163,6 +166,7 @@ export function PreviewHost({
   isDark,
   canEdit = false,
   editRequest = 0,
+  showName = true,
 }: {
   path: string;
   name: string;
@@ -175,6 +179,11 @@ export function PreviewHost({
    * 布尔量：布尔量「已经请求过了」就再也触发不了第二次。
    */
   editRequest?: number;
+  /**
+   * 工具条里是否显示文件名。纯净模式下顶栏地址栏已经显示，这里再写一遍
+   * 就是同一串文件名隔 30px 出现两次。
+   */
+  showName?: boolean;
 }) {
   const [state, setState] = useState<PreviewState>({ status: "loading", kind: "text" });
   const [viewMode, setViewMode] = useState<ViewMode>("layout");
@@ -182,8 +191,6 @@ export function PreviewHost({
   const [editor, setEditor] = useState<EditorKind>("none");
   /** 钉住浮窗失败的原因（工具条里显示，别让「点了没反应」变成谜）。 */
   const [pinError, setPinError] = useState<string | null>(null);
-  /** Word / Excel：打开就是可编辑的文档/表格本体（Office 的样子）。 */
-  const [officeReadonly, setOfficeReadonly] = useState(false);
   const loadToken = useRef(0);
 
   const kind: PreviewKind = useMemo(() => resolveKind(name), [name]);
@@ -192,15 +199,20 @@ export function PreviewHost({
   const isMedia = useMemo(() => isMediaFile(name), [name]);
 
   /**
-   * Office 文档的**就地编辑**开关。
+   * Office 文档的**编辑 / 预览**切换。
    *
    * docx / xlsx / xlsm 在重量模式下**默认就是可编辑的**（用户诉求：
    * "打开 word 文档、excel 默认直接就可以编辑"），不套一层「编辑模式」——
    * Office 软件本来就是这样。纯净模式（轻量）不给编辑能力，仍是只读预览。
+   *
+   * 这里取代了原来的「排版 / 文本」开关：那两个词对 Office 文档没有意义
+   * （点「文本」什么都不会变，applyViewMode 对 docx/pptx 原样返回），
+   * 用户真正要的就是「能改 / 只看」这一个选择。
    */
-  const officeKind = useMemo<"docx" | "sheet" | null>(() => {
+  const officeKind = useMemo<"docx" | "sheet" | "pptx" | null>(() => {
     if (!canEdit) return null;
     if (kind === "docx") return "docx";
+    if (kind === "pptx") return "pptx";
     if (kind === "spreadsheet") {
       const ext = name.split(".").pop()?.toLowerCase() ?? "";
       // xls 是 BIFF 二进制，没有可靠的写入器 → 只读预览。
@@ -208,9 +220,10 @@ export function PreviewHost({
     }
     return null;
   }, [canEdit, kind, name]);
-  /** 换了文件就回到「可编辑」默认态。 */
+  /** Office 文档当前是「编辑」还是「预览」。默认编辑 —— 换了文件也回编辑。 */
+  const [officeMode, setOfficeMode] = useState<"edit" | "preview">("edit");
   useEffect(() => {
-    setOfficeReadonly(false);
+    setOfficeMode("edit");
   }, [path]);
 
   // 加载阶段：每次 path / viewMode 变了重读
@@ -248,7 +261,7 @@ export function PreviewHost({
   const editorKind = canEdit ? editorFor(kind, name) : "none";
   const editing = editor !== "none";
   /** Office 就地编辑生效中（docx / xlsx，且用户没切到只读预览）。 */
-  const officeEditing = officeKind !== null && !officeReadonly;
+  const officeEditing = officeKind !== null && officeMode === "edit";
 
   // 外部（右键菜单 / 菜单栏 / 快捷键）要求打开编辑器。
   useEffect(() => {
@@ -260,10 +273,15 @@ export function PreviewHost({
 
   return (
     <div className="preview-pane">
-      {/* Office 就地编辑有自己的工具条（导出 / 另存为 / 预览），不再叠一层预览工具条。 */}
-      {!officeEditing && (
+      {/* 预览工具条常驻：Office 的「编辑 / 预览」切换、缩放、钉住都在这里。
+          Office 编辑器自己那条工具条只管导出 / 另存为。 */}
       <div className="preview-toolbar">
-        <span className="preview-toolbar-name" title={path}>{name}</span>
+        {/* 编辑态下文件名由编辑器那条工具条显示，这里不再重复一遍。 */}
+        {showName && !officeEditing && (
+          <span className="preview-toolbar-name" title={path}>
+            {name}
+          </span>
+        )}
         <span className="preview-toolbar-spacer" />
         {editorKind !== "none" && !editing && (
           <button
@@ -305,7 +323,29 @@ export function PreviewHost({
             返回预览
           </button>
         )}
-        {!editing && supportsTextView(kind) && (
+        {/* Word / Excel：编辑 ↔ 预览。原先这里是「排版 / 文本」，对 Office
+            文档点了什么都不会变（applyViewMode 对 docx/pptx 原样返回）。 */}
+        {officeKind && (
+          <div className="seg" role="group" aria-label="编辑与预览">
+            <button
+              type="button"
+              className={officeMode === "edit" ? "is-active" : ""}
+              onClick={() => setOfficeMode("edit")}
+              aria-pressed={officeMode === "edit"}
+            >
+              编辑
+            </button>
+            <button
+              type="button"
+              className={officeMode === "preview" ? "is-active" : ""}
+              onClick={() => setOfficeMode("preview")}
+              aria-pressed={officeMode === "preview"}
+            >
+              预览
+            </button>
+          </div>
+        )}
+        {!officeKind && !editing && supportsTextView(kind) && (
           <div className="seg">
             <button
               type="button"
@@ -323,7 +363,7 @@ export function PreviewHost({
             </button>
           </div>
         )}
-        {!editing && supportsZoom(effectiveKind) && (
+        {!editing && !officeEditing && supportsZoom(effectiveKind) && (
           <div className="seg" role="group" aria-label="预览缩放">
             <button
               type="button"
@@ -360,7 +400,6 @@ export function PreviewHost({
           </div>
         )}
       </div>
-      )}
       <div className="preview-pane-inner">
         {isMedia ? (
           <MediaView
@@ -373,7 +412,7 @@ export function PreviewHost({
             <DocxEditor
               path={path}
               name={name}
-              onPreview={() => setOfficeReadonly(true)}
+              onPreview={() => setOfficeMode("preview")}
             />
           </Suspense>
         ) : officeEditing && officeKind === "sheet" ? (
@@ -382,7 +421,16 @@ export function PreviewHost({
               path={path}
               name={name}
               source={source}
-              onPreview={() => setOfficeReadonly(true)}
+              onPreview={() => setOfficeMode("preview")}
+            />
+          </Suspense>
+        ) : officeEditing && officeKind === "pptx" ? (
+          <Suspense fallback={<div className="preview-state-center">正在准备编辑器…</div>}>
+            <PptxEditor
+              path={path}
+              name={name}
+              source={source}
+              onPreview={() => setOfficeMode("preview")}
             />
           </Suspense>
         ) : editor === "image" ? (

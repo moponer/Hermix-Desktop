@@ -71,9 +71,19 @@ export type LoadOutcome =
 
 export type PreviewLoader = (req: LoadRequest) => Promise<LoadOutcome>;
 
-/** 需要「排版 / 文本」切换按钮的种类。 */
+/**
+ * 需要「排版 / 文本」切换按钮的种类。
+ *
+ * 只有**两种视图真的不同**的种类才配这个按钮：PDF（排版=页画布，文本=
+ * markitdown 抽出的 Markdown）与 HTML（排版=渲染页面，文本=源码）。
+ *
+ * docx / pptx 原来也在名单里，但 `applyViewMode` 对它们原样返回 —— 点了
+ * 什么都不会变，就是一个骗人的按钮。它们的"另一种视图"由别处承担：
+ * Word / Excel 在查看器里是「编辑 / 预览」切换（见 apps/viewer 的
+ * PreviewHost），不是排版 / 文本。
+ */
 export function supportsTextView(kind: PreviewKind): boolean {
-  return kind === "pdf" || kind === "docx" || kind === "pptx" || kind === "html";
+  return kind === "pdf" || kind === "html";
 }
 
 /**

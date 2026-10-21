@@ -5,6 +5,17 @@
 // 资源服务对带 query 的地址找不到前端资源 → 整窗空白（实测）。
 // **路径**由 Rust 侧按 label 查（`pin_path`）：Windows 路径带盘符与反斜杠，
 // 塞进 URL 要编码又要解码。
+//
+// 结构约定（外壳 → 内容）：
+//   .pin-root   整窗的 flex 列
+//     .pin-bar  顶部一条：文件名 + 路径 + 摆位按钮（贴左 / 贴右 / 居中）
+//     .pin-body 内容区
+//       .preview-pane  ← **共享渲染层的作用域**
+//
+// `.preview-pane` 这一层不能少：共享样式（Markdown 的目录列、表格的纸面
+// 样式、PDF/PPTX 的画布居中）全部写成 `.preview-pane .xxx` 的后代选择器，
+// 没有这个祖先就等于没有样式 —— 表现为"浮窗里的 md 目录排版全乱"
+// （目录与正文挤成一列、章节跑到最上面）。
 
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -28,6 +39,13 @@ interface DirEntry {
   mtime: string | null;
 }
 
+/** 摆位预设（对应 Rust 侧 pin_place 的 preset 参数）。 */
+const PLACEMENTS: { id: string; label: string; hint: string }[] = [
+  { id: "left", label: "贴左", hint: "把浮窗贴到屏幕左边缘" },
+  { id: "right", label: "贴右", hint: "把浮窗贴到屏幕右边缘" },
+  { id: "center", label: "居中", hint: "把浮窗放到屏幕中间" },
+];
+
 export function PinWindow() {
   const label = useMemo(() => currentWindowLabel(), []);
   const [path, setPath] = useState<string | null>(null);
@@ -35,6 +53,7 @@ export function PinWindow() {
   const [isDir, setIsDir] = useState(false);
   const [entries, setEntries] = useState<DirEntry[]>([]);
   const [preview, setPreview] = useState<Extract<LoadOutcome, { ok: true }> | null>(null);
+  const [placeError, setPlaceError] = useState<string | null>(null);
 
   // 1. 问 Rust 要被钉住的路径。
   useEffect(() => {
@@ -96,43 +115,76 @@ export function PinWindow() {
     };
   }, [path]);
 
-  if (error) {
-    return <div className="pin-empty">{error}</div>;
-  }
-  if (!path) {
-    return <div className="pin-empty">载入中…</div>;
-  }
-  if (isDir) {
-    return (
-      <div className="pin-dir">
-        <div className="pin-dir-title" title={path}>
-          {path.split(/[\\/]/).pop()}
-        </div>
-        <ul className="pin-dir-list">
-          {entries.map((e) => (
-            <li key={e.path} className="pin-dir-item">
-              <span className={e.isDir ? "is-dir" : ""}>{e.name}</span>
-              <span className="pin-dir-size">{e.isDir ? "—" : formatSize(e.size)}</span>
-            </li>
-          ))}
-          {entries.length === 0 && <li className="pin-dir-item pin-dir-empty">（空目录）</li>}
-        </ul>
-      </div>
-    );
-  }
-  if (!preview) {
-    return <div className="pin-empty">载入中…</div>;
-  }
+  const place = (preset: string) => {
+    setPlaceError(null);
+    void invoke("pin_place", { label, preset }).catch((e) => {
+      setPlaceError(String(e instanceof Error ? e.message : e));
+    });
+  };
+
+  const fileName = path ? path.split(/[\\/]/).pop() ?? path : "";
+  const dirName = path ? path.split(/[\\/]/).slice(0, -1).join("\\") : "";
+
   return (
-    <div className="pin-file">
-      <PreviewSurface
-        payload={preview.payload}
-        source={viewerFileSource}
-        isDark={document.documentElement.dataset.theme === "dark"}
-        fileName={path.split(/[\\/]/).pop() ?? path}
-        resolvedPath={preview.resolvedPath}
-        zoom={100}
-      />
+    <div className="pin-root">
+      <div className="pin-bar">
+        <span className="pin-title" title={path ?? ""}>
+          {fileName || "…"}
+        </span>
+        <span className="pin-path" title={path ?? ""}>
+          {dirName}
+        </span>
+        {!isDir && (
+          <>
+            {PLACEMENTS.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                className="pin-preset"
+                onClick={() => place(p.id)}
+                title={p.hint}
+                aria-label={p.hint}
+              >
+                {p.label}
+              </button>
+            ))}
+          </>
+        )}
+        {placeError && <span className="tb-error">{placeError}</span>}
+      </div>
+
+      <div className="pin-body">
+        {error ? (
+          <div className="pin-empty">{error}</div>
+        ) : !path ? (
+          <div className="pin-empty">载入中…</div>
+        ) : isDir ? (
+          <ul className="pin-list">
+            {entries.map((e) => (
+              <li key={e.path}>
+                <span className="pin-entry-name">
+                  <span className={e.isDir ? "is-dir" : ""}>{e.name}</span>
+                </span>
+                <span className="pin-dir-size">{e.isDir ? "—" : formatSize(e.size)}</span>
+              </li>
+            ))}
+            {entries.length === 0 && <li className="pin-empty">（空目录）</li>}
+          </ul>
+        ) : !preview ? (
+          <div className="pin-empty">载入中…</div>
+        ) : (
+          <div className="preview-pane">
+            <PreviewSurface
+              payload={preview.payload}
+              source={viewerFileSource}
+              isDark={document.documentElement.dataset.theme === "dark"}
+              fileName={fileName}
+              resolvedPath={preview.resolvedPath}
+              zoom={100}
+            />
+          </div>
+        )}
+      </div>
     </div>
   );
 }

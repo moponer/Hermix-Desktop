@@ -290,7 +290,7 @@ export function ComputerTab({
           </div>
         )}
         {error && (
-          <div className="flex items-start gap-2 px-3 py-4 text-xs text-error">
+          <div className="flex items-start gap-2 px-3 py-4 text-xs text-text-error">
             <AlertTriangle className="icon-md shrink-0 mt-0.5" />
             <span className="break-words [overflow-wrap:anywhere] whitespace-pre-wrap min-w-0 flex-1">{error}</span>
           </div>

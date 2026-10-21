@@ -91,7 +91,10 @@ function noteDefinition(name, file, line) {
 function collectFromText(text, file, isCss) {
   const clean = stripComments(text, isCss);
   // CSS 定义：`--name:`（允许前面有空白/属性上下文）
-  const reDef = /(?:^|[\s;{])(--[A-Za-z0-9_-]+)\s*:/g;
+  // 2026-10-21：前缀里补上引号 —— HTML 的内联 style 形如
+  // `style="--tc:var(--t1)"`，此前因为前面是 `"` 而没被认成定义，
+  // 引用侧 `var(--tc)` 就会被误报成「未定义」。
+  const reDef = /(?:^|[\s;{"'])(--[A-Za-z0-9_-]+)\s*:/g;
   let m;
   while ((m = reDef.exec(clean))) {
     const line = clean.slice(0, m.index).split("\n").length;
@@ -105,7 +108,10 @@ for (const f of htmlFiles) collectFromText(fs.readFileSync(f, "utf8"), f, true);
 // TS/TSX 里的运行时定义，两种形态：
 //   1. setProperty("--name", …)
 //   2. React 内联样式对象键：{ "--ab-left-w": `${w}px` }（App.tsx 的可拖列宽）
-for (const f of codeFiles) {
+// 2026-10-21：HTML 里的 <script> 同样会用 setProperty 注入主题变量
+// （design-previews 的 `win.style.setProperty("--tc", t.color)`），
+// 原先只扫 TS/TSX，HTML 内联脚本里的运行时定义被漏掉 → 误报。
+for (const f of [...codeFiles, ...htmlFiles]) {
   const clean = stripComments(fs.readFileSync(f, "utf8"), false);
   const patterns = [/setProperty\(\s*["'](--[A-Za-z0-9_-]+)["']/g, /["'](--[A-Za-z0-9_-]+)["']\s*:/g];
   for (const re of patterns) {
@@ -119,6 +125,50 @@ for (const f of codeFiles) {
 
 // ── 收集引用 ────────────────────────────────────────────────────────────
 const refs = [];
+
+/** 找到 body 里第一个「顶层」逗号（跳过嵌套括号内��逗号）。 */
+function topLevelComma(body) {
+  let depth = 0;
+  for (let i = 0; i < body.length; i++) {
+    const ch = body[i];
+    if (ch === "(") depth++;
+    else if (ch === ")") depth--;
+    else if (ch === "," && depth === 0) return i;
+  }
+  return -1;
+}
+
+/**
+ * 解析一个 var() 调用的内容，返回 { name, hasFallback, fallback }。
+ *
+ * 2026-10-21：此前只用正则抓 `var(--name`，**不看有没有 fallback**，
+ * 于是 `var(--tb-left, 280px)` 这类完全合法的写法被判成「未定义引用」——
+ * 仓库里 19 处全是这种误报（design-previews 的存档 HTML），硬门禁直接变红。
+ *
+ * CSS 规范里 `var(--x, fallback)` 在 --x 未定义时用 fallback，**声明不会失效**，
+ * 只有「未定义且无 fallback」才会让整条声明在计算值阶段掉链子 —— 那才是
+ * 本脚本要抓的 bug。带 fallback 的引用改为**递归检查 fallback 内部**：
+ * `var(--a, var(--b))` 若 --b 也未定义且无 fallback，声明同样会失效。
+ */
+function parseVarCall(clean, varStart) {
+  const open = clean.indexOf("(", varStart);
+  if (open < 0) return null;
+  let depth = 1;
+  let i = open + 1;
+  while (i < clean.length && depth > 0) {
+    const ch = clean[i];
+    if (ch === "(") depth++;
+    else if (ch === ")") depth--;
+    i++;
+  }
+  const body = clean.slice(open + 1, i - 1);
+  const comma = topLevelComma(body);
+  if (comma < 0) return { name: body.trim(), hasFallback: false, fallback: "" };
+  const name = body.slice(0, comma).trim();
+  const fallback = body.slice(comma + 1).trim();
+  return { name, hasFallback: fallback.length > 0, fallback };
+}
+
 function collectRefs(text, file, isCss) {
   const clean = stripComments(text, isCss);
   const reRef = /var\(\s*(--[A-Za-z0-9_-]+)/g;
@@ -127,7 +177,16 @@ function collectRefs(text, file, isCss) {
     const line = clean.slice(0, m.index).split("\n").length;
     // 只取该行，便于报告
     const lineText = clean.split("\n")[line - 1] || "";
-    refs.push({ name: m[1], file: path.relative(APP_ROOT, file), line, lineText: lineText.trim() });
+    const call = parseVarCall(clean, m.index);
+    if (!call) continue;
+    refs.push({
+      name: call.name,
+      hasFallback: call.hasFallback,
+      fallback: call.fallback,
+      file: path.relative(APP_ROOT, file),
+      line,
+      lineText: lineText.trim(),
+    });
   }
 }
 
@@ -137,7 +196,28 @@ for (const f of htmlFiles) collectRefs(fs.readFileSync(f, "utf8"), f, true);
 
 // ── 判定 ────────────────────────────────────────────────────────────────
 const allowed = (name) => ALLOW_PREFIXES.some((p) => name.startsWith(p));
-const missing = refs.filter((r) => !defined.has(r.name) && !allowed(r.name));
+
+/**
+ * 这条引用会不会让声明在计算值阶段失效？
+ *   未定义 + 无 fallback  → 失效（真 bug，本脚本要抓的就是这个）
+ *   未定义 + 有 fallback  → 声明不失效（合法写法），但要**递归看 fallback 内部**：
+ *                          `var(--a, var(--b))` 若 --b 未定义且无 fallback，整条仍然失效
+ */
+function isBroken(r, depth = 0) {
+  if (depth > 4) return false;
+  if (!r || !r.name) return false;
+  if (allowed(r.name) || defined.has(r.name)) return false;
+  if (!r.hasFallback) return true;
+  const inner = /var\(\s*(--[A-Za-z0-9_-]+)/g;
+  let m;
+  while ((m = inner.exec(r.fallback || ""))) {
+    const call = parseVarCall(r.fallback, m.index);
+    if (call && isBroken(call, depth + 1)) return true;
+  }
+  return false;
+}
+
+const missing = refs.filter((r) => isBroken(r));
 
 const uniq = new Map();
 for (const r of missing) {

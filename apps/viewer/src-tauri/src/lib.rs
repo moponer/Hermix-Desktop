@@ -20,8 +20,13 @@ pub mod image_ops;
 pub mod mcp_http;
 pub mod mcp_server;
 pub mod paths;
+pub mod pdf_font;
+pub mod pdf_ocr;
+
+/// 扫描件 OCR 的 Tauri 命令（纯逻辑在 pdf_ocr.rs 里）。
 pub mod pdf_ops;
 pub mod pin_window;
+pub mod markitdown;
 pub mod settings;
 pub mod sysmon;
 pub mod viewer_control;
@@ -251,6 +256,12 @@ pub fn main() {
             pdf_ops::pdf_info,
             pdf_ops::pdf_ops,
             pdf_ops::pdf_replace_text,
+            pdf_ops::pdf_add_annotation,
+            pdf_ops::pdf_add_annotations,
+
+            pdf_ops::pdf_replace_text_at,
+            pdf_ocr_cmd::pdf_ocr_page,
+            markitdown::document_to_markdown,
             pdf_ops::images_to_pdf,
             pdf_ops::write_text,
             sysmon::sysmon_processes,
@@ -263,6 +274,7 @@ pub fn main() {
             webview_host::web_open,
             webview_host::web_bounds,
             webview_host::web_close,
+            webview_host::web_set_visible,
             webview_host::web_navigate,
             webview_host::web_exec,
             webview_host::web_state,
@@ -273,6 +285,7 @@ pub fn main() {
             pin_window::pin_close,
             pin_window::pin_list,
             pin_window::pin_path,
+            pin_window::pin_place,
             viewer_control::viewer_state_report,
             viewer_control::viewer_action_reply,
             viewer_control::viewer_open_path,
@@ -314,3 +327,57 @@ pub fn main() {
         .run(tauri::generate_context!())
         .expect("viewer: failed to run tauri app");
 }
+
+/// 扫描件 OCR 的 Tauri 命令（纯逻辑在 `pdf_ocr.rs`，这里只是壳）。
+///
+/// ## 为什么命令体放在这个子模块里，而不是写在 crate 根
+///
+/// `#[tauri::command]` 会在**它所在的模块**里生成一个 `__cmd__<命令名>` 宏。
+/// 命令写在 crate 根时，`generate_handler!` 展开出来的同名 import 与这个宏
+/// 撞名 → `E0255: the name __cmd__pdf_ocr_page is defined multiple times`。
+/// 放进子模块就没有这个问题（其余命令都在各自模块里，也是这么过的）。
+///
+/// ## 为什么命令体不直接放进 `pdf_ocr.rs`
+///
+/// `pdf_ocr.rs` 刻意保持**零 tauri 依赖**：验证探针用 `#[path]` 直接编译**仓库
+/// 里这份真实代码**（而不是复制一份会漂移的逻辑）—— 见
+/// `docs/notes/implemented/feature/2026-10-21-windows-winrt-ocr-for-scanned-pdf.md`
+/// 的验证证据表。
+pub mod pdf_ocr_cmd {
+    use std::path::PathBuf;
+
+    use super::pdf_ocr;
+
+    /// 给 PDF 的某一页加**隐形文字层**（扫描件 OCR）。
+    ///
+    /// `png_base64` 是这一页渲染出来的位图（前端用 pdf.js 渲染）—— Rust 侧没有
+    /// 渲染器，渲染留在已经具备它的前端。
+    ///
+    /// 产物是新文件（原 PDF 不动），由 `safe_output_path` 守着。
+    #[tauri::command]
+    pub async fn pdf_ocr_page(
+        src_path: String,
+        out_path: Option<String>,
+        page: u32,
+        png_base64: String,
+    ) -> Result<pdf_ocr::OcrPageResult, String> {
+        let src = PathBuf::from(&src_path);
+        if !src.is_file() {
+            return Err(format!("不是文件: {src_path}"));
+        }
+        let raw = crate::commands::base64_decode(&png_base64)
+            .ok_or("页面图片不是合法的 base64")?;
+        if raw.is_empty() {
+            return Err("页面图片是空的".into());
+        }
+        let out = crate::paths::safe_output_path(&src, out_path.as_deref(), None)?;
+        // WinRT 的 COM apartment 是**每线程**的：整段 OCR 必须固定在一个线程上，
+        // 并在那个线程里初始化 apartment（见模块注释）。
+        tauri::async_runtime::spawn_blocking(move || {
+            pdf_ocr::ocr_page_to_pdf(&src, &out, page, &raw)
+        })
+        .await
+        .map_err(|e| format!("OCR 任务失败：{e}"))?
+    }
+}
+

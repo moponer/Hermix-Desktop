@@ -185,9 +185,9 @@ export function ApprovalDrawer({
     : "safe";
   const risk = single ? riskKey(single.riskLevel) : batchRisk;
   const riskCls =
-    risk === "dangerous" ? "text-error bg-error-soft"
-    : risk === "safe" ? "text-success bg-success-soft"
-    : "text-warning bg-warning-soft";
+    risk === "dangerous" ? "text-text-error bg-error-soft"
+    : risk === "safe" ? "text-text-success bg-success-soft"
+    : "text-text-warning bg-warning-soft";
 
   const diff = single?.diff ?? null;
   // toolVerb 对陌生工具会回退成工具名本身 —— 头部就会出现

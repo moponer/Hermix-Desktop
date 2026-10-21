@@ -6,6 +6,7 @@ description = "本地凭据保险库：AES-256-GCM 落盘 + 主密钥 Windows Cr
 license = "MIT"
 
 [dependencies]
+hermix-store = { workspace = true }
 rusqlite = { workspace = true }
 aes-gcm = { workspace = true }
 serde = { workspace = true }

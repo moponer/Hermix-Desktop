@@ -3,10 +3,11 @@
    ════════════════════════════════════════════════════════════════ */
 
 import { useState, useEffect, useRef } from "react";
-import { X, MessageSquare, ArrowRight } from "lucide-react";
+import { MessageSquare, ArrowRight } from "lucide-react";
 import { clsx } from "clsx";
 import { PALETTES, type AgentPersona } from "./types";
 import { resolveProviderConfig } from "./providerConfig";
+import { IconButton, Modal } from "../ui";
 
 interface TestDialogProps {
   agent: AgentPersona;
@@ -85,75 +86,77 @@ export function TestDialog({ agent, onClose }: TestDialogProps) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "var(--color-overlay-scrim)" }} onClick={onClose}>
-      <div
-        onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-md h-[600px] max-h-[80vh] rounded-xl bg-bg-card overflow-hidden flex flex-col shadow-2xl"
-      >
-        {/* Header */}
-        <div className="flex items-center gap-2.5 p-3.5">
-          <div
+    /* 弹窗壳收编到 ui/Modal：焦点陷阱 / Esc / 焦点归还 / role=dialog +
+       aria-modal 一次性补齐（此前这个弹窗连 role="dialog" 都没有）。 */
+    <Modal
+      open
+      onClose={onClose}
+      width="base"
+      scrim
+      height="600px"
+      title={
+        <span className="flex items-center gap-2.5">
+          <span
             className="w-9 h-9 rounded-lg flex items-center justify-center text-lg shrink-0"
             style={{ background: g.avatar }}
+            aria-hidden="true"
           >
             {agent.avatar}
-          </div>
-          <div className="min-w-0 flex-1">
-            <p className="text-[length:var(--text-ui)] font-semibold text-text-primary truncate">{agent.name}</p>
-            <p className="text-[length:var(--text-meta)] text-text-muted truncate">{agent.role}</p>
-          </div>
-          <button onClick={onClose} aria-label="关闭" className="p-1.5 rounded-md text-text-muted hover:text-text-primary hover:bg-bg-hover">
-            <X className="icon-md" />
-          </button>
-        </div>
-
-        {/* Messages */}
-        <div className="flex-1 overflow-y-auto p-3.5 space-y-2 min-h-0">
-          {messages.length === 0 ? (
-            <div className="h-full flex flex-col items-center justify-center text-center text-text-muted">
-              <MessageSquare size={28} className="mb-2 opacity-30" />
-              <p className="text-[length:var(--text-meta)]">开始和 {agent.name} 聊几句</p>
-            </div>
-          ) : (
-            messages.map((m, i) => (
-              <div key={`msg-${m.role}-${i}`} className={clsx("flex", m.role === "user" ? "justify-end" : "justify-start")}>
-                <div
-                  className={clsx(
-                    "max-w-[80%] rounded-xl px-3 py-2 text-[length:var(--text-ui)] leading-relaxed",
-                    m.role === "user"
-                      ? "bg-bg-tertiary text-text-primary"
-                      : "text-text-primary"
-                  )}
-                  style={m.role === "agent" ? { background: g.chip.bg } : undefined}
-                >
-                  {m.text || (streaming && i === messages.length - 1 ? "..." : "")}
-                </div>
-              </div>
-            ))
-          )}
-        </div>
-
-        {/* Input */}
-        <div className="p-3 flex gap-2">
+          </span>
+          <span className="flex min-w-0 flex-col gap-0.5">
+            <span className="truncate">{agent.name}</span>
+            <span className="truncate text-[length:var(--text-meta)] font-normal text-[var(--color-text-muted)]">
+              {agent.role}
+            </span>
+          </span>
+        </span>
+      }
+      bodyClassName="overflow-y-auto p-4 space-y-2"
+      footer={
+        <div className="flex w-full items-center gap-2">
           <input
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }}}
-            placeholder={`问 ${agent.name} 任何问题...`}
+            onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
+            placeholder={`问 ${agent.name} 任何问题…`}
             disabled={streaming}
+            aria-label={`问 ${agent.name} 任何问题`}
             className="flex-1 rounded-lg bg-bg-tertiary px-3 py-2 text-[length:var(--text-ui)] text-text-primary placeholder:text-text-faint outline-none"
           />
-          <button
+          <IconButton
+            icon={<ArrowRight className="icon-md" />}
+            label="发送"
+            shape="circle"
+            size="base"
+            variant="primary"
             onClick={send}
             disabled={!input.trim() || streaming}
-            aria-label="发送"
-            className="p-2 rounded-lg disabled:opacity-40"
-            style={{ background: "var(--color-btn-primary-bg)", color: "var(--color-btn-primary-text)" }}
-          >
-            <ArrowRight className="icon-md" />
-          </button>
+          />
         </div>
-      </div>
-    </div>
+      }
+    >
+      {messages.length === 0 ? (
+        <div className="h-full flex flex-col items-center justify-center text-center text-text-muted">
+          <MessageSquare size={28} className="mb-2 opacity-30" />
+          <p className="text-[length:var(--text-meta)]">开始和 {agent.name} 聊几句</p>
+        </div>
+      ) : (
+        messages.map((m, i) => (
+          <div key={`msg-${m.role}-${i}`} className={clsx("flex", m.role === "user" ? "justify-end" : "justify-start")}>
+            <div
+              className={clsx(
+                "max-w-[80%] rounded-xl px-3 py-2 text-[length:var(--text-ui)] leading-relaxed",
+                m.role === "user"
+                  ? "bg-bg-tertiary text-text-primary"
+                  : "text-text-primary"
+              )}
+              style={m.role === "agent" ? { background: g.chip.bg } : undefined}
+            >
+              {m.text || (streaming && i === messages.length - 1 ? "…" : "")}
+            </div>
+          </div>
+        ))
+      )}
+    </Modal>
   );
 }

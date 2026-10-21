@@ -1159,7 +1159,7 @@ mod tests {
         let (tx, mut rx) = mpsc::channel(8);
         let (transport, _inbound) = new_relay_transport("sid-a", tx);
         let (mut sink, _src) = transport.split();
-        sink.send(r#"{"type":"tool_call","session_id":"sid-a","tool":"read_file"}"#.into())
+        sink.send(r#"{"type":"tool_start","session_id":"sid-a","tool":"read_file"}"#.into())
             .await
             .unwrap();
 

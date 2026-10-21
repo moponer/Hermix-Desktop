@@ -12,6 +12,7 @@ import {
 import { SettingsGroup, SettingsRow, SegmentedControl, Switch } from "../ui";
 import { ChoiceCard } from "./ChoiceCard";
 import { toastError } from "../../hooks/useToast";
+import { COPIED, COPY_FAILED, failure } from "../strings";
 
 /**
  * 通用页：工作模式 + 快捷键 + 系统能力 + 数据位置。
@@ -260,7 +261,7 @@ function DataDirGroup() {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } else {
-      toastError("复制失败");
+      toastError(failure(COPY_FAILED, "请手动选中内容后复制。"));
     }
   };
 
@@ -286,7 +287,7 @@ function DataDirGroup() {
               className="flex h-7 items-center gap-1.5 rounded-[var(--radius-md)] bg-[var(--color-bg-tertiary)] px-2 text-[length:var(--text-meta)] text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-quaternary)] hover:text-[var(--color-text-primary)] disabled:opacity-40"
             >
               {copied ? <Check className="icon-sm" /> : <Copy className="icon-sm" />}
-              {copied ? "已复制" : "复制"}
+              {copied ? COPIED : "复制"}
             </button>
             <button
               onClick={() => {

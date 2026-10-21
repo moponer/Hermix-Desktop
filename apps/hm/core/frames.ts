@@ -12,6 +12,8 @@
 export type MobileEvent =
   | { kind: 'user.echo'; content: string }
   | { kind: 'assistant.delta'; content: string }
+  // 思考过程折叠块（与桌面端同一个 <think> 解析源）
+  | { kind: 'assistant.thinking'; content: string }
   | { kind: 'tool.start'; tool: string }
   | { kind: 'tool.end'; tool: string }
   | { kind: 'approval.request'; requestId: string; tool: string; canPersist: boolean }
@@ -19,7 +21,35 @@ export type MobileEvent =
   | { kind: 'turn.done' }
   | { kind: 'turn.error'; content: string }
   | { kind: 'turn.busy' }
+  // 上下文窗口占用（持久条）：used/max/threshold/percent
+  | { kind: 'context.usage'; used: number; max: number; threshold: number; percent: number }
+  // 单轮 token 用量（cache 命中率等）：prompt/completion/cacheRead/cacheCreation/reasoning
+  | {
+      kind: 'usage.update'
+      prompt: number
+      completion: number
+      cacheRead: number
+      cacheCreation: number
+      reasoning: number
+    }
+  // 待办列表（对方 To-dos 卡片）：snapshot 全量覆盖，upsert/removed 增量合并
+  | { kind: 'todo.snapshot'; items: TodoItem[] }
+  | { kind: 'todo.item_upserted'; item: TodoItem }
+  | { kind: 'todo.item_removed'; id: string }
+  | { kind: 'todo.group_started'; groupId: string; groupTitle: string | null }
   | { kind: 'unknown'; raw: string }
+
+export interface TodoItem {
+  id: string
+  title: string
+  status: string
+  priority?: string
+  description?: string
+  last_result?: string
+  execution_count?: number
+  group_id?: string
+  group_title?: string
+}
 
 /** 解析一帧。脏数据返回 `unknown` 而不是抛——一帧坏数据不该打断整条会话。 */
 export function dispatch(raw: string): MobileEvent {
@@ -37,6 +67,8 @@ export function dispatch(raw: string): MobileEvent {
       return { kind: 'user.echo', content: str(f.content) }
     case 'assistant.message':
       return { kind: 'assistant.delta', content: str(f.content) }
+    case 'assistant.thinking':
+      return { kind: 'assistant.thinking', content: str(f.content) }
     case 'tool.start':
       return { kind: 'tool.start', tool: str(f.tool) }
     case 'tool.end':
@@ -56,6 +88,35 @@ export function dispatch(raw: string): MobileEvent {
       return { kind: 'turn.error', content: str(f.content) }
     case 'turn.busy':
       return { kind: 'turn.busy' }
+    case 'context.usage':
+      return {
+        kind: 'context.usage',
+        used: num(f.used_tokens),
+        max: num(f.max_tokens),
+        threshold: num(f.threshold_tokens),
+        percent: num(f.percent),
+      }
+    case 'usage.update':
+      return {
+        kind: 'usage.update',
+        prompt: num(f.prompt_tokens),
+        completion: num(f.completion_tokens),
+        cacheRead: num(f.cache_read_tokens),
+        cacheCreation: num(f.cache_creation_tokens),
+        reasoning: num(f.reasoning_tokens),
+      }
+    case 'todo.snapshot':
+      return { kind: 'todo.snapshot', items: toTodos(f.items) }
+    case 'todo.item_upserted':
+      return { kind: 'todo.item_upserted', item: toTodo(f.item) }
+    case 'todo.item_removed':
+      return { kind: 'todo.item_removed', id: str(f.id) }
+    case 'todo.group_started':
+      return {
+        kind: 'todo.group_started',
+        groupId: str(f.group_id),
+        groupTitle: f.group_title == null ? null : str(f.group_title),
+      }
     default:
       return { kind: 'unknown', raw }
   }
@@ -63,6 +124,34 @@ export function dispatch(raw: string): MobileEvent {
 
 function str(v: unknown): string {
   return typeof v === 'string' ? v : ''
+}
+function num(v: unknown): number {
+  return typeof v === 'number' && isFinite(v) ? v : 0
+}
+function toTodo(raw: any): TodoItem {
+  return {
+    id: str(raw?.id),
+    title: str(raw?.title),
+    status: str(raw?.status) || 'pending',
+    priority: raw?.priority == null ? undefined : str(raw.priority),
+    description: raw?.description == null ? undefined : str(raw.description),
+    last_result: raw?.last_result == null ? undefined : str(raw.last_result),
+    execution_count:
+      typeof raw?.execution_count === 'number' ? raw.execution_count : undefined,
+    group_id: raw?.group_id == null ? undefined : str(raw.group_id),
+    group_title: raw?.group_title == null ? undefined : str(raw.group_title),
+  }
+}
+function toTodos(raw: any): TodoItem[] {
+  return Array.isArray(raw) ? raw.map(toTodo) : []
+}
+/** todo.item_upserted：按 id 合并（已存在则覆盖，否则追加） */
+function mergeTodo(list: TodoItem[], item: TodoItem): TodoItem[] {
+  const i = list.findIndex((t) => t.id === item.id)
+  if (i < 0) return [...list, item]
+  const next = list.slice()
+  next[i] = item
+  return next
 }
 
 // ---------------------------------------------------------------------------
@@ -73,12 +162,26 @@ export interface ChatState {
   /** 正在流的 assistant 气泡 id（首帧增量时创建，后续 append 到它） */
   streamingId: string | null
   streamingText: string
+  /** 思考过程（<think> 折叠块），按轮累积，turn 落定时随气泡带走并清空 */
+  thinking: string
   runningTools: string[]
   doneTools: string[]
   turnActive: boolean
   lastError: string | null
   /** 服务端说"上一轮还在跑"——用于提示用户别重复发 */
   busy: boolean
+  /** 上下文窗口占用（对方「上下文仪表」）：used/max/threshold/percent */
+  context: { used: number; max: number; threshold: number; percent: number } | null
+  /** 单轮 token 用量（对方助手操作条上的 cache 命中率等） */
+  usage: {
+    prompt: number
+    completion: number
+    cacheRead: number
+    cacheCreation: number
+    reasoning: number
+  } | null
+  /** 待办列表（对方 To-dos 卡片） */
+  todos: TodoItem[]
   /**
    * 正在等的工具审批。审批是**对话里的一条消息**：PC 发 `approval.request`
    * 停在这里等人点，点了发 `approval_response` 回 PC，agent 才继续。
@@ -101,11 +204,15 @@ export function initialChatState(): ChatState {
   return {
     streamingId: null,
     streamingText: '',
+    thinking: '',
     runningTools: [],
     doneTools: [],
     turnActive: false,
     lastError: null,
     busy: false,
+    context: null,
+    usage: null,
+    todos: [],
     pendingApproval: null,
   }
 }
@@ -133,6 +240,14 @@ export function reduce(state: ChatState, ev: MobileEvent): ChatState {
         runningTools: state.runningTools.filter((t) => !state.doneTools.includes(t)),
       }
     }
+    case 'assistant.thinking': {
+      if (!ev.content) return state
+      return {
+        ...state,
+        thinking: state.thinking + ev.content,
+        turnActive: true,
+      }
+    }
     case 'tool.start':
       return {
         ...state,
@@ -150,18 +265,61 @@ export function reduce(state: ChatState, ev: MobileEvent): ChatState {
           : [...state.doneTools, ev.tool],
       }
     case 'turn.done':
-      return { ...state, turnActive: false, busy: false, runningTools: [], pendingApproval: null }
+      return {
+        ...state,
+        turnActive: false,
+        busy: false,
+        runningTools: [],
+        // 一轮落定：思考过程已被气泡带走（页面在 doneAtTurnEnd 取走），清掉防串台
+        thinking: '',
+        pendingApproval: null,
+      }
     case 'turn.error':
       return {
         ...state,
         turnActive: false,
         busy: false,
         lastError: ev.content || '出错了',
+        thinking: '',
         // 这一轮已经结束，还挂着的审批没有人会等它了
         pendingApproval: null,
       }
     case 'turn.busy':
       return { ...state, busy: true }
+    case 'context.usage':
+      return {
+        ...state,
+        context: {
+          used: ev.used,
+          max: ev.max,
+          threshold: ev.threshold,
+          percent: ev.percent,
+        },
+      }
+    case 'usage.update':
+      return { ...state, usage: ev }
+    case 'todo.snapshot':
+      return { ...state, todos: ev.items }
+    case 'todo.item_upserted':
+      return {
+        ...state,
+        todos: mergeTodo(state.todos, ev.item),
+      }
+    case 'todo.item_removed':
+      return {
+        ...state,
+        todos: state.todos.filter((t) => t.id !== ev.id),
+      }
+    case 'todo.group_started': {
+      // 新计划组：把组标题刷到同组 item 上，UI 据此分组渲染
+      if (!ev.groupTitle) return state
+      return {
+        ...state,
+        todos: state.todos.map((t) =>
+          t.group_id === ev.groupId && !t.group_title ? { ...t, group_title: ev.groupTitle! } : t,
+        ),
+      }
+    }
     case 'approval.request':
       // 停在对话里等人点。`turnActive` 置真：agent 正卡在等这个回答。
       return {

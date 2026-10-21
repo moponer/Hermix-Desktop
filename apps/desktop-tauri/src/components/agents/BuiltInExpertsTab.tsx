@@ -10,14 +10,15 @@ import { useState, useMemo } from "react";
 import { Bot } from "lucide-react";
 import { clsx } from "clsx";
 import { BUILTIN_EXPERTS, EXPERT_CATEGORIES, type ExpertDef } from "../../data/builtinExperts";
+import { ALL } from "../strings";
 
 export function BuiltInExpertsTab() {
   const [search, setSearch] = useState("");
-  const [activeCategory, setActiveCategory] = useState<string>("全部");
+  const [activeCategory, setActiveCategory] = useState<string>(ALL);
 
   const filtered = useMemo(() => {
     let list: ExpertDef[] = BUILTIN_EXPERTS;
-    if (activeCategory !== "全部") {
+    if (activeCategory !== ALL) {
       list = list.filter((e) => e.category === activeCategory);
     }
     if (search.trim()) {
@@ -37,21 +38,21 @@ export function BuiltInExpertsTab() {
     <div className="p-6">
       <div className="max-w-7xl mx-auto">
         <p className="text-[length:var(--text-ui)] text-text-muted mb-4">
-          Hermix 内置的专家角色 — 涵盖产品、技术、金融、营销、内容创作等领域。在对话界面点击"专家"选择使用。
+          Hermix 内置的专家角色 — 涵盖产品、技术、金融、营销、内容创作等领域。在对话界面点击「专家」选择使用。
         </p>
         <div className="flex items-center gap-2 mb-3">
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="搜索专家、角色、类别..."
+            placeholder="搜索专家、角色、类别…"
             className="flex-1 px-3 py-1.5 rounded-md bg-bg-card text-[length:var(--text-ui)] text-text-primary placeholder-text-faint outline-none"
           />
         </div>
         <div className="flex items-center gap-1.5 mb-5 overflow-x-auto" style={{ scrollbarWidth: "none" }}>
           <CategoryChip
-            active={activeCategory === "全部"}
-            onClick={() => setActiveCategory("全部")}
-            label="全部"
+            active={activeCategory === ALL}
+            onClick={() => setActiveCategory(ALL)}
+            label={ALL}
             count={BUILTIN_EXPERTS.length}
           />
           {EXPERT_CATEGORIES.map((cat) => {

@@ -13,7 +13,7 @@ export interface CardProps {
   surface?: CardSurface;
   border?: CardBorder;
   padding?: CardPadding;
-  shadow?: "none" | "card" | "composer";
+  shadow?: "none" | "card" | "paper" | "composer";
   /** 整卡可点：悬停抬升 + 光标变化。 */
   interactive?: boolean;
   /** 抬升强度，仅 interactive 时有意义。 */
@@ -61,6 +61,7 @@ const PADDING: Record<CardPadding, string> = {
 const SHADOW = {
   none: "",
   card: "shadow-[var(--shadow-card)]",
+  paper: "shadow-[var(--shadow-paper)]",
   composer: "shadow-[var(--shadow-pop)]",
 } as const;
 
@@ -70,14 +71,20 @@ const SHADOW = {
  * `border="none"` + `surface="none"` 是「纸面」组合 —— 阅读区靠字号、行距、
  * 段距分层，不靠边框和底色。满屏盒子就是这么来的：层次读不出来时，
  * 唯一的手段就是画线。
+ *
+ * 2026-10-21：默认值从 `border="solid"` 改为 `border="none"` + `shadow="paper"`。
+ * 原默认值是全站「不要描边」偏好的**来源**（组件清单里就记着这一点），
+ * 而实际各处手写的卡片壳恰恰都是**无描边 + 纸面阴影**：
+ *   `rounded-[var(--radius-lg)] bg-bg-card p-4 shadow-[var(--shadow-paper)]`
+ * 默认值与真实用法对齐后，本原语才真正能替掉那批手写壳。
  */
 export function Card({
   children,
   radius = "lg",
   surface = "base",
-  border = "solid",
+  border = "none",
   padding = "md",
-  shadow = "none",
+  shadow = "paper",
   interactive = false,
   lift = "sm",
   as: Tag = "div",

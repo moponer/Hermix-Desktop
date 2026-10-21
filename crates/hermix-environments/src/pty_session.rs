@@ -520,8 +520,11 @@ impl PtySessionRegistry {
             String::new(),
         );
 
-        // 等 exit（预算内）；超时 kill 整树外的顶层子进程并返回已收输出。
+        // 等 exit（预算内）；超时先杀顶层进程，再清整棵进程树。
         let killer = child.clone_killer();
+        // 进程 id 必须在 `child` 被 move 进等待任务之前取出——超时后要靠它
+        // 清孙进程（见 `kill_process_tree`）。
+        let child_pid = child.process_id();
         let wait = tokio::task::spawn_blocking(move || child.wait());
         let status = match tokio::time::timeout(Duration::from_secs(timeout_secs), wait).await {
             Ok(Ok(Ok(status))) => Some(status),
@@ -534,6 +537,11 @@ impl PtySessionRegistry {
             Err(_) => {
                 let mut k = killer;
                 let _ = k.kill();
+                // `kill()` terminates only the top-level process. A timed-out
+                // `cargo build` leaves rustc.exe alive: it keeps burning CPU
+                // and holds the target-dir lock, which the user experiences as
+                // "the machine got slower after a while" rather than as a bug.
+                kill_process_tree(child_pid);
                 None
             }
         };
@@ -711,6 +719,35 @@ fn has_live_children(pid: Option<u32>) -> Option<bool> {
 #[cfg(not(windows))]
 fn has_live_children(_pid: Option<u32>) -> Option<bool> {
     None
+}
+
+/// 超时后清掉整棵进程树（不只是顶层 shell）。
+///
+/// `ChildKiller::kill()` 只终结顶层进程；`cargo build` / `pnpm install` 超时后
+/// rustc / node 仍在跑——继续吃 CPU、继续占 target 目录锁，用户看到的是
+/// "用久了机器变慢"，很难联想到某次超时。
+///
+/// 用 `taskkill /T /F`（与 `local.rs` 非 PTY 路径同一手段）。Job Object 更干净，
+/// 但需要进程句柄，portable-pty 只给 pid；为一次超时清理去改 PTY 抽象不值得。
+/// 尽力而为：调用失败只记日志，不影响返回已收集的输出。
+fn kill_process_tree(pid: Option<u32>) {
+    let Some(pid) = pid else { return };
+    #[cfg(windows)]
+    {
+        match std::process::Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            Ok(_) => tracing::warn!(pid, "PTY 超时：已请求终止整棵进程树"),
+            Err(e) => tracing::warn!(pid, error = %e, "PTY 超时：清进程树失败（孙进程可能残留）"),
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = pid;
+    }
 }
 
 #[cfg(test)]

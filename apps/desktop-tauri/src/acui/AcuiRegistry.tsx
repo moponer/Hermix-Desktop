@@ -233,7 +233,7 @@ const PathPreviewAcui: AcuiComponent = ({ show }) => {
   return (
     <div
       data-acui-kind="path_preview"
-      className="px-3 py-2 rounded-md bg-black/30 border border-white/[0.06] space-y-1.5"
+      className="px-3 py-2 rounded-md bg-black/30 border-white/[0.06] space-y-1.5"
     >
       {/* Line 1: path + size + modified */}
       <div className="flex items-center gap-2 min-w-0">
@@ -269,7 +269,7 @@ export const AcuiFallback: AcuiComponent = ({ show }) => (
   <div
     data-acui-kind={show.type}
     data-acui-fallback="true"
-    className="text-[length:var(--text-meta)] font-mono text-text-muted px-3 py-2 rounded border border-amber-500/30 bg-amber-500/5"
+    className="text-[length:var(--text-meta)] font-mono text-text-muted px-3 py-2 rounded border-amber-500/30 bg-amber-500/5"
     title="ACUI: unknown kind, showing raw JSON"
   >
     <div className="text-amber-300/80 mb-1">unknown acui kind: {show.type}</div>

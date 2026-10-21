@@ -11,6 +11,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Check, Loader2, RotateCcw, Save, Trash2 } from "lucide-react";
 import * as api from "../../api";
 import { Button, ConfirmDialog, SkeletonCard } from "../ui";
+import { DELETE, SAVED, SAVING, SAVE, SAVE_FAILED, failure } from "../strings";
 
 /** 内置人设的中文显示名；自定义人设直接展示文件名。 */
 const DISPLAY_NAMES: Record<string, string> = {
@@ -120,9 +121,10 @@ export function PersonasPanel() {
         await api.savePersonality(active, content);
       }
       setDirty(false);
-      setNotice("已保存，下一次对话生效。");
+      setNotice(SAVED);
     } catch (e) {
-      setNotice(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      setNotice(failure(SAVE_FAILED, "请重试。", msg));
     } finally {
       setSaving(false);
     }
@@ -142,7 +144,7 @@ export function PersonasPanel() {
     <div className="space-y-3">
       {error && (
         <p className="rounded-lg bg-[var(--color-bg-card)] shadow-[var(--shadow-paper)] px-4 py-3 text-[length:var(--text-meta)] text-[var(--color-text-secondary)]">
-          角色接口不可用（{error}）。
+          角色接口不可用（{error}），请重启后端后重试。
         </p>
       )}
       <div className="grid grid-cols-1 gap-3 md:grid-cols-[220px_1fr]">
@@ -187,7 +189,7 @@ export function PersonasPanel() {
         <div className="space-y-2 rounded-lg bg-[var(--color-bg-card)] shadow-[var(--shadow-paper)] p-3">
           {active == null ? (
             <p className="py-10 text-center text-[length:var(--text-meta)] text-[var(--color-text-muted)]">
-              选择左侧角色查看提示词全文。
+              在上方或左侧选择角色查看提示词全文。
             </p>
           ) : (
             <>
@@ -224,13 +226,13 @@ export function PersonasPanel() {
                   )}
                   {!builtin && active !== "SOUL.md" && (
                     <Button variant="danger-outline" size="sm" onClick={() => setConfirmDelete(active)}>
-                      <Trash2 className="size-3.5" /> 删除
+                      <Trash2 className="size-3.5" /> {DELETE}
                     </Button>
                   )}
                   {!builtin && (
                     <Button variant="primary" size="sm" onClick={save} disabled={saving || (!dirty && active !== "SOUL.md")}>
                       {saving ? <Loader2 className="size-3.5 animate-spin" /> : <Save className="size-3.5" />}
-                      保存
+                      {saving ? SAVING : SAVE}
                     </Button>
                   )}
                 </div>

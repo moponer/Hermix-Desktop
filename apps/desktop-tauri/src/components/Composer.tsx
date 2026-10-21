@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo } from "react";
-import { Send, Square, FolderOpen, ChevronDown, Sparkles, ShieldCheck, Image, X, Check, AlertTriangle, Lock, Clock, Code2, FileText, Brain, BrainCircuit, Settings2 } from "lucide-react";
+import { Send, Square, FolderOpen, ChevronDown, Sparkles, ShieldCheck, Image, X, Check, AlertTriangle, Lock, Clock, Code2, FileText, Brain, BrainCircuit, Settings } from "lucide-react";
 import type { DomainModeChoice } from "../hooks/useExpert";
 import { usePopover } from "../hooks/usePopover";
 import { PopoverShell, PopoverBody } from "./PopoverShell";
@@ -8,7 +8,9 @@ import { QueueItemRow } from "./ChatIndicators";
 import { VoiceButton } from "./VoiceButton";
 import { VisionButton } from "./VisionButton";
 import { PolishButton } from "./PolishButton";
+import { EnhanceButton } from "./EnhanceButton";
 import { ProviderIcon } from "./ProviderIcon";
+import { Badge } from "./ui";
 import {
   formatContextTokens,
   type ModelChoice,
@@ -208,10 +210,15 @@ export function Composer(p: ComposerProps) {
                 <button
                   type="button"
                   onClick={() => p.onRemoveImage?.(idx)}
-                  className="absolute top-0.5 right-0.5 p-0.5 rounded-md bg-bg-elevated/90 text-text-muted hover:text-error transition-colors"
+                  className="absolute top-0.5 right-0.5 grid h-6 w-6 place-items-center rounded-md text-text-muted transition-colors hover:text-text-error"
                   title="移除附件"
+                  aria-label="移除附件"
                 >
-                  <X className="icon-xs" />
+                  {/* 点击区 24×24（h-6 w-6），视觉仍是 14px 小方块 —— 贴角
+                      摆放靠内层绝对定位，不放大视觉体积。 */}
+                  <span className="absolute top-0.5 right-0.5 grid h-3.5 w-3.5 place-items-center rounded-md bg-bg-elevated/90">
+                    <X className="icon-xs" />
+                  </span>
                 </button>
               </div>
             ))}
@@ -252,10 +259,14 @@ export function Composer(p: ComposerProps) {
                 <button
                   type="button"
                   onClick={() => p.onRemoveDoc?.(idx)}
-                  className="absolute top-0.5 right-0.5 p-0.5 rounded-md bg-bg-elevated/90 text-text-muted hover:text-error transition-colors"
+                  className="absolute top-0.5 right-0.5 grid h-6 w-6 place-items-center rounded-md text-text-muted transition-colors hover:text-text-error"
                   title="移除附件"
+                  aria-label="移除附件"
                 >
-                  <X className="icon-xs" />
+                  {/* 点击区 24×24（h-6 w-6），视觉仍是 14px 小方块。 */}
+                  <span className="absolute top-0.5 right-0.5 grid h-3.5 w-3.5 place-items-center rounded-md bg-bg-elevated/90">
+                    <X className="icon-xs" />
+                  </span>
                 </button>
               </div>
             ))}
@@ -454,9 +465,9 @@ export function Composer(p: ComposerProps) {
                             {group.label}
                           </span>
                           {group.isFree && (
-                            <span className="shrink-0 rounded-sm bg-success-soft px-1 py-px text-[length:var(--text-tiny,11px)] text-success">
+                            <Badge tone="success" size="chip" pill={false}>
                               免费源
-                            </span>
+                            </Badge>
                           )}
                           {!group.isFree && group.isCustom && (
                             <span className="shrink-0 rounded-sm bg-bg-tertiary px-1 py-px text-[length:var(--text-tiny,11px)] text-text-faint">
@@ -564,7 +575,7 @@ export function Composer(p: ComposerProps) {
                     className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-[length:var(--text-ui)] text-text-secondary transition-colors hover:bg-bg-hover hover:text-text-primary"
                     onClick={() => { p.onOpenSettings?.("model"); setModelOpen(false); }}
                   >
-                    <Settings2 className="icon-sm shrink-0 opacity-70" />
+                    <Settings className="icon-sm shrink-0 opacity-70" />
                     管理模型
                   </button>
                 </div>
@@ -579,6 +590,15 @@ export function Composer(p: ComposerProps) {
             recentTurns={recentTurns}
             hasAttachments={hasAttachments}
             disabled={p.sending || p.isStreaming}
+            compact={toolbarCompact}
+          />
+          <EnhanceButton
+            draft={p.input}
+            onResult={(enhanced) => injectIntoComposer({ source: "enhance", text: enhanced, mode: "replace" })}
+            recentTurns={recentTurns}
+            hasAttachments={hasAttachments}
+            disabled={p.sending || p.isStreaming}
+            compact={toolbarCompact}
           />
 
           {(() => {
@@ -641,7 +661,7 @@ export function Composer(p: ComposerProps) {
                     style={{
                       background:
                         "color-mix(in srgb, var(--color-error) 14%, transparent)",
-                      color: "var(--color-error)",
+                      color: "var(--color-text-error)",
                     }}
                     aria-label="停止生成"
                     title="停止生成"

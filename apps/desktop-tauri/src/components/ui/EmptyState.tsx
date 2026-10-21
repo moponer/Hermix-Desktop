@@ -23,8 +23,11 @@ const SIZE: Record<EmptyStateSize, { box: string; icon: string; title: string; d
 };
 
 /**
- * 空态。`dashed` 是「这里应该有东西但还没有」；`plain` 用于纸面阅读区
- * （不要虚线框把正文切成一块块）；`inline` 只占一行，跟在正文后面。
+ * 空态。`plain`（默认）用于纸面阅读区 —— 层次靠底色差 + 阴影 + 间距，
+ * 不用描边（2026-10-21 用户偏好：UI 一律不用描边；此前默认 `dashed`，
+ * 而 5 个调用点里 3 个显式改回 `plain`，说明默认值与团队实际偏好相悖）。
+ * `dashed` 保留为显式可选项（确实需要「这里应该有东西但还没有」的框感时）；
+ * `inline` 只占一行，跟在正文后面。
  */
 export function EmptyState({
   icon,
@@ -32,7 +35,7 @@ export function EmptyState({
   description,
   action,
   size = "md",
-  variant = "dashed",
+  variant = "plain",
   as: Tag = "div",
   className,
 }: EmptyStateProps) {

@@ -19,6 +19,7 @@ export { supportsTextView, supportsZoom } from "./types";
 export { resolveKind, applyViewMode, type ArtifactKindHint } from "./resolveKind";
 
 export { buildLoaders, loadPreview } from "./loaders";
+export { standardFontDataUrl } from "./lib/standardFonts";
 export type { FileSource } from "./loaders";
 
 export type {
@@ -77,6 +78,8 @@ export {
   styleToCss,
   colWidthPx,
   rowHeightPx,
+  contrastInk,
+  DEFAULT_ROW_H,
   type ParsedWorkbook,
   type SheetModel,
   type CellModel,

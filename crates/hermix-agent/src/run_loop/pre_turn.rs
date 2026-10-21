@@ -151,6 +151,41 @@ impl AgentLoop {
             }
         }
 
+        //跨会话教训注入（Harness² 的 harnessing 级递归，读取侧）。
+        //
+        //`harness_self_edit` 的写入链与 `experience_archive` 的读取链都早已
+        //写好，但**两端都没有生产调用点**——`classify_convergence` 的注释
+        //自己写着 "once the harness self-edit integration is complete"。写入
+        //侧在 `finalize_agent_result`（`maybe_record_experience`），这里补
+        //读取侧：把"与本轮工具相关、且上次真的重复失败过"的教训提前摆到
+        //模型面前，避免同一个坑掉两次。
+        //
+        //预算 1200 字符（`experience_prompt_for_tools` 内部还会按 top-5 截断），
+        //因为这是"提醒"不是"教案"——它排在 skills 正文之前，不抢主任务的
+        //注意力。
+        {
+            let exp_root = hermix_config::paths::hermix_home().join("experience");
+            if exp_root.is_dir() {
+                if let Ok(archive) =
+                    crate::experience_archive::ExperienceArchive::open(&exp_root)
+                {
+                    let tool_names: Vec<String> =
+                        self.tool_registry.names().into_iter().collect();
+                    match crate::experience_archive::experience_prompt_for_tools(
+                        &archive,
+                        &tool_names,
+                        1200,
+                    ) {
+                        Ok(Some(block)) => ctx.add_message(Message::system(&block)),
+                        Ok(None) => {}
+                        Err(e) => {
+                            tracing::debug!(error = %e, "experience prompt skipped");
+                        }
+                    }
+                }
+            }
+        }
+
         //: auto-activate matching skills ---
         // Cheap keyword + subsequence-fuzzy match the user's message
         // against the skill directory and inject up to 3 skills'

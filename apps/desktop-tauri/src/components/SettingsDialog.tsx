@@ -28,7 +28,7 @@ export function SettingsDialog({ open, onClose, initialCategory }: SettingsDialo
       /* 不画头部条：标题与关闭按钮并入面板自身布局（关闭钮浮在内容
          右上角），省掉 56px 空白，对齐参考产品的设置面板。 */
       ariaLabel="设置"
-      width={1080}
+      width="panel"
       height="min(800px, calc(100vh - 3rem))"
       bodyClassName="min-h-0 flex-1 overflow-hidden p-0"
       /* Esc 交给 SettingsShell 做两级处理：先清空侧栏搜索，再关闭面板。 */

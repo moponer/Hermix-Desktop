@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Minus, Square, X, MessageSquare, Camera, Globe, FolderTree } from "lucide-react";
 import { useCallback } from "react";
 import { toastWarning } from "../hooks/useToast";
+import { CLOSE } from "./strings";
 
 /** 标题栏按**三栏**排布，与下方 .app-body 的三列共用同一组列宽变量
  *  （`--ab-left-w` / `--ab-right-w`），所以每一栏的边界都对齐到正下方那一列的
@@ -156,8 +157,8 @@ export function TitleBar({ title }: { title?: string }) {
           onClick={handleClose}
           className="titlebar-btn titlebar-btn-danger no-drag"
           data-tauri-no-drag
-          title="关闭"
-          aria-label="关闭"
+          title={CLOSE}
+          aria-label={CLOSE}
         >
           <X className="icon-md" />
         </button>

@@ -24,10 +24,12 @@ import { Check, Copy, X, ChevronDown, ListOrdered } from "lucide-react";
 import katex from "katex";
 import "katex/dist/katex.min.css";
 import { useSafeTimeout } from "../hooks/useSafeTimeout";
-import { highlightToReact, readIsDark } from "../lib/codeHighlight";
+import { useIsDarkTheme } from "../hooks/useTheme";
+import { highlightToReact } from "../lib/codeHighlight";
 import { autoCloseUnbalancedFences } from "../lib/markdownFence";
 import { hardenSoftLineBreaks } from "@hermix/preview";
 import { FileTypeIcon } from "@hermix/preview/FileTypeIcon";
+import { COPIED, COPY_FAILED } from "./strings";
 
 /**
  * 行内代码的语言猜测 —— CommonMark 的 `` `foo` `` 不带语言标记，
@@ -273,7 +275,7 @@ function CodeBlockImpl({ language, code, isDark = false }: { language: string; c
         }}
       >
         <div className="flex items-center gap-2">
-          <span className="font-mono uppercase tracking-wider">
+          <span className="font-mono">
             {LANG_LABEL[language] ?? "Code"}
           </span>
           {shouldCollapse && (
@@ -292,12 +294,13 @@ function CodeBlockImpl({ language, code, isDark = false }: { language: string; c
             <ListOrdered className="icon-sm" />
           </button>
           <button
+            type="button"
             onClick={handleCopy}
             className="flex items-center gap-1.5 rounded px-1.5 py-0.5 transition-colors hover:bg-bg-hover"
             style={{ color: "var(--color-text-muted)" }}
           >
             {copied ? <Check className="icon-sm" /> : failed ? <X className="icon-sm" /> : <Copy className="icon-sm" />}
-            <span className="font-medium">{copied ? "已复制" : failed ? "复制失败" : "复制"}</span>
+            <span className="font-medium">{copied ? COPIED : failed ? COPY_FAILED : "复制"}</span>
           </button>
         </div>
       </div>
@@ -388,13 +391,14 @@ function CodeBlockImpl({ language, code, isDark = false }: { language: string; c
             }}
           >
             <button
+              type="button"
               onClick={() => setExpanded(true)}
               style={{
                 background: "var(--color-bg-code-header)",
                 border: "1px solid var(--color-border-subtle)",
                 borderRadius: "4px",
                 padding: "3px 14px",
-                fontSize: "11px",
+                fontSize: "var(--text-meta)",
                 color: "var(--color-text-muted)",
                 cursor: "pointer",
                 pointerEvents: "auto",
@@ -414,10 +418,11 @@ function CodeBlockImpl({ language, code, isDark = false }: { language: string; c
             }}
           >
             <button
+              type="button"
               onClick={() => setExpanded(false)}
               style={{
                 background: "transparent", border: "none",
-                fontSize: "11px", color: "var(--color-text-muted)",
+                fontSize: "var(--text-meta)", color: "var(--color-text-muted)",
                 cursor: "pointer", fontFamily: "inherit",
               }}
             >
@@ -799,7 +804,10 @@ export const MarkdownBody = memo(function MarkdownBody({
   content, onPathClick, pathIcons = false, interactive = true,
 }: MarkdownBodyProps) {
   const handlePathClick = useCallback(onPathClick ?? (() => {}), [onPathClick]);
-  const isDark = readIsDark();
+  // 主题判定走 useIsDarkTheme（响应式 + 不读已废除的 `.dark` 类）。
+  // 早期版本用 readIsDark() 读 `.dark` 类，恒为 false —— 暗色主题下
+  // 聊天代码块恒用亮色语法配色（punctuation 在 #1a1a1a 上仅 1.53:1）。
+  const isDark = useIsDarkTheme();
   const displayContent = useThrottledValue(content, MARKDOWN_REPARSE_THROTTLE_MS);
   // 1. 不平衡 fence 关闭（与 react-markdown 时一致）
   // 2. 软换行 → 硬换行（satleri 不开 remarkBreaks，等价物在 strings 层）

@@ -13,6 +13,7 @@ import {
   applyTint,
   colName,
   colWidthPx,
+  contrastInk,
   parseRange,
   parseXlsx,
   resolveColor,
@@ -56,6 +57,33 @@ describe("颜色解析", () => {
     expect(applyTint("#000000", 0.5)).toBe("#808080");
     expect(applyTint("#FFFFFF", 0)).toBe("#FFFFFF");
     expect(applyTint("#FFFFFF", -0.5)).toBe("#808080");
+  });
+
+  it("带色主题色的 tint 走 HSL 亮度通道（与 Excel 一致）", () => {
+    // Excel 的「主题色 Accent1」= #4472C4。
+    // 逐通道线性插值（上一版的做法）会得到 #335693 / #203964 之外的偏差值，
+    // 深色档能差 4~6 个色阶 —— 肉眼就是"颜色发闷、不对味"。
+    // HSL 亮度通道与 Excel 对齐：深色档逐位相同，浅色档每通道差 ≤1
+    // （Excel 内部用 HLSMAX=240 的整数换算，舍入点在半整数上）。
+    expect(applyTint("#4472C4", -0.25)).toBe("#2F5597"); // Excel: Darker 25%
+    expect(applyTint("#4472C4", -0.5)).toBe("#203864"); // Excel: Darker 50%
+    expect(applyTint("#4472C4", 0.4)).toBe("#8FAADC"); // Excel: Lighter 40% #8EAADB
+    expect(applyTint("#4472C4", 0.8)).toBe("#DAE3F3"); // Excel: Lighter 80% #D9E2F3
+  });
+
+  it("主题色板缺项时逐个回退，而不是整张丢弃", () => {
+    // 只有 accent1 是文件自己的：其余索引退回 Office 默认色板。
+    const partial = [undefined, undefined, undefined, undefined, "123456"] as const;
+    expect(themeColor(4, 0, partial)).toBe("#123456");
+    expect(themeColor(0, 0, partial)).toBe("#FFFFFF");
+  });
+
+  it("按底色亮度选墨色：浅底黑字、深底白字", () => {
+    expect(contrastInk(undefined)).toBe("#000000");
+    expect(contrastInk("#FFFFFF")).toBe("#000000");
+    expect(contrastInk("#FFF2CC")).toBe("#000000");
+    expect(contrastInk("#1F497D")).toBe("#FFFFFF");
+    expect(contrastInk("#4472C4")).toBe("#FFFFFF");
   });
 
   it("空颜色返回 undefined 而不是黑", () => {

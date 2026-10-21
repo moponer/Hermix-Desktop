@@ -39,7 +39,7 @@ export function DailyMemoryPanel() {
   if (error) {
     return (
       <p className="rounded-lg bg-[var(--color-bg-card)] shadow-[var(--shadow-paper)] px-4 py-3 text-[length:var(--text-meta)] text-[var(--color-text-secondary)]">
-        每日记忆不可用（{error}）。
+        每日记忆不可用（{error}），请稍后重试。
       </p>
     );
   }
@@ -71,9 +71,9 @@ export function DailyMemoryPanel() {
         ))}
       </div>
       <div className="space-y-3 rounded-lg bg-[var(--color-bg-card)] shadow-[var(--shadow-paper)] p-3">
-        <Section title="目标（goals）" body={current.goals} />
-        <Section title="进展（progress）" body={current.progress} />
-        <Section title="结论（conclusions）" body={current.conclusions} />
+        <Section title="目标" body={current.goals} />
+        <Section title="进展" body={current.progress} />
+        <Section title="结论" body={current.conclusions} />
       </div>
     </div>
   );

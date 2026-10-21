@@ -1,9 +1,13 @@
 // 编辑本地用户档案弹窗。头像支持上传 PNG/JPG 并自动裁方 256×256；
 // 也可清除回退到首字母。整窗 100% 走主题 token，无硬编码颜色。
+//
+// 弹窗壳收编到 ui/Modal（焦点陷阱 / Esc / 焦点归还 / role=dialog +
+// aria-modal 一次性补齐）；关闭按钮原先是 24px 的「×」文字字形，
+// 现由 ui/Modal 统一提供（32px 方形 + 16px 图标）。
 
 import { useRef, useState, type CSSProperties, type ChangeEvent } from "react";
-import { createPortal } from "react-dom";
 import { UserAvatar } from "./UserAvatar";
+import { Button, Modal } from "./ui";
 import type { UserProfile } from "../hooks/useUserProfile";
 
 interface EditProfileDialogProps {
@@ -70,58 +74,43 @@ export function EditProfileDialog({ current, onSave, onClose }: EditProfileDialo
     });
   };
 
-  return createPortal(
-    <div
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 50,
-        background: "color-mix(in srgb, var(--color-overlay-scrim) 137%, transparent)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: 24,
-      }}
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      width="base"
+      scrim
+      /* 表单弹窗：点遮罩不该把填了一半的资料扔掉。 */
+      closeOnBackdrop={false} closeOnEscape={false}
+      title="编辑我的资料"
+      bodyClassName="px-5 pb-5"
+      footer={
+        <>
+          <Button variant="secondary" size="base" onClick={onClose}>
+            取消
+          </Button>
+          <Button variant="primary" size="base" onClick={save}>
+            保存
+          </Button>
+        </>
+      }
     >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label="编辑我的资料"
-        style={{
-          width: "100%",
-          maxWidth: 420,
-          background: "var(--color-bg-elevated)",
-          border: "1px solid var(--color-border-primary)",
-          borderRadius: "var(--radius-lg)",
-          padding: "20px 22px",
-          color: "var(--color-text-primary)",
-        }}
-      >
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-          <h3 style={{ margin: 0, fontSize: 15, fontWeight: 500 }}>编辑我的资料</h3>
-          <button onClick={onClose} aria-label="关闭" style={iconBtn}>
-            ×
-          </button>
-        </div>
-
         <div style={{ display: "flex", gap: 18, alignItems: "flex-start", marginBottom: 18 }}>
           <UserAvatar name={name || "Hermix"} avatarDataUrl={avatar} size={72} />
           <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 6 }}>
-            <button onClick={() => fileRef.current?.click()} style={primaryBtn}>
+            <Button variant="secondary" size="base" onClick={() => fileRef.current?.click()}>
               上传头像
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="ghost"
+              size="base"
               onClick={() => {
                 setAvatar(null);
                 setError(null);
               }}
-              style={ghostBtn}
             >
               用字母自动生成
-            </button>
+            </Button>
             <p style={{ margin: "4px 0 0", fontSize: 11, color: "var(--color-text-tertiary)", lineHeight: 1.5 }}>
               支持 PNG / JPG，≤2MB，自动裁剪为正方形
             </p>
@@ -167,60 +156,10 @@ export function EditProfileDialog({ current, onSave, onClose }: EditProfileDialo
           <p style={{ margin: "0 0 12px", fontSize: 12, color: "var(--color-text-warning)" }}>{error}</p>
         )}
 
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "flex-end",
-            gap: 8,
-            marginTop: 18,
-            paddingTop: 14,
-            borderTop: "1px solid var(--color-border-primary)",
-          }}
-        >
-          <button onClick={onClose} style={ghostBtn}>
-            取消
-          </button>
-          <button onClick={save} style={primaryBtn}>
-            保存
-          </button>
-        </div>
-      </div>
-    </div>,
-    document.body,
+    </Modal>
   );
 }
 
-const iconBtn: CSSProperties = {
-  width: 24,
-  height: 24,
-  border: 0,
-  background: "transparent",
-  cursor: "pointer",
-  borderRadius: "var(--radius-md)",
-  color: "var(--color-text-tertiary)",
-  fontSize: 18,
-  lineHeight: 1,
-};
-const primaryBtn: CSSProperties = {
-  height: 32,
-  padding: "0 14px",
-  borderRadius: "var(--radius-md)",
-  fontSize: 13,
-  cursor: "pointer",
-  background: "var(--color-bg-tertiary)",
-  color: "var(--color-text-primary)",
-  border: "1px solid var(--color-border-secondary)",
-};
-const ghostBtn: CSSProperties = {
-  height: 32,
-  padding: "0 14px",
-  borderRadius: "var(--radius-md)",
-  fontSize: 13,
-  cursor: "pointer",
-  background: "transparent",
-  color: "var(--color-text-primary)",
-  border: "1px solid var(--color-border-primary)",
-};
 const field: CSSProperties = { display: "flex", flexDirection: "column", gap: 6, marginBottom: 14 };
 const label: CSSProperties = { fontSize: 13, color: "var(--color-text-secondary)", fontWeight: 500 };
 const input: CSSProperties = {

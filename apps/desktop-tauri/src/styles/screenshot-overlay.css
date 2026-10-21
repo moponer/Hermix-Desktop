@@ -3,7 +3,10 @@
 
    配色说明：本窗恒为暗底（.so-root 压黑），所以强调色分两种取法——
    实色按钮底用 `--color-accent`（白字对比 9:1），落在暗底上的细线用
-   `--color-accent-soft-strong`（accent 18% + 白，暗底上才看得见）。
+   `--color-accent-line`（accent 18% + 白，暗底上才看得见）。
+   2026-10-21：原先这里引的是 `--color-accent-soft-strong`，而该档是
+   「纸面上的淡染色」语义，暗色主题必须把它改成「accent 混纸面底」才不
+   反色 —— 于是恒暗底的浮层就取不到那条亮线了。两种语义必须拆开。
    此前 7 处写的是 `var(--accent, #4c8dff)`：`--accent` 在本项目从不存在，
    实际渲染的是回退值 #4c8dff —— 一个饱和蓝（违反禁蓝紫）且不跟随主题，
    白字压在它上面只有约 2.6:1。 */
@@ -74,7 +77,7 @@
 /* 选区边框 */
 .so-selection {
   position: absolute;
-  border: 1px solid var(--color-accent-soft-strong);
+  border: 1px solid var(--color-accent-line);
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
   pointer-events: none;
 }
@@ -173,7 +176,7 @@
   padding: 1px 4px;
   background: rgba(255, 255, 255, 0.94);
   border: 1px dashed rgba(0, 0, 0, 0.55);
-  outline: 2px solid var(--color-accent-soft-strong);
+  outline: 2px solid var(--color-accent-line);
   font-weight: 700;
   font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
   z-index: 5;

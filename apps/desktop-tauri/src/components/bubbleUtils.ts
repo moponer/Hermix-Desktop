@@ -493,7 +493,7 @@ export function stdoutFallback(toolLower: string, stdout?: string): string | nul
   // First, peel off common JSON wrappers the backend uses for tool
   // results (`{"exit_code":0,"interpreter":"python","language":"python",
   // "stderr":"","stdout":"saved: D:\\qcc\\发票汇总.xls 5632 bytes\r\n"}`).
-  // Without this, the row reads as "已执行 {"exit_code":0,...}" —
+  // Without this, the row reads as "已执行 {"exit_code":0,…}" —
   // pure JSON noise that the user cannot act on. We pull the
   // human-readable `stdout` (or `result`) out and recurse so
   // `OK -> path` / `Saved path` patterns still match.

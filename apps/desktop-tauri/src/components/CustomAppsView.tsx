@@ -13,7 +13,7 @@ import {
 import { AppCard } from "./custom-apps/AppCard";
 import { AppDetailModal } from "./custom-apps/AppDetailModal";
 import { useSafeTimeout } from "../hooks/useSafeTimeout";
-import { EmptyState, PageHeader, SkeletonCard } from "./ui";
+import { EmptyState, PageHeader, SkeletonCard, ConfirmDialog } from "./ui";
 
 /** Auto-refresh interval (ms) — keeps the list in sync when apps are
  *  created/updated/deleted via the LLM tool while this page is open. */
@@ -205,7 +205,7 @@ export function CustomAppsView({ onStartCreateApp }: { onStartCreateApp?: () => 
           <Search className="icon-lg" />
           <input
             type="text"
-            placeholder="搜索应用..."
+            placeholder="搜索应用…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
@@ -254,49 +254,31 @@ export function CustomAppsView({ onStartCreateApp }: { onStartCreateApp?: () => 
         />
       )}
 
-      {deleteTarget && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center"
-          style={{ background: "var(--color-overlay-scrim)" }}
-          onClick={cancelDelete}
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="delete-confirm-title"
-        >
-          <div
-            className="rounded-xl p-5 max-w-md w-[90%] shadow-xl"
-            style={{ background: "var(--color-bg-elevated)", border: "1px solid var(--color-border-primary)" }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3 id="delete-confirm-title" className="text-[length:var(--text-body)] font-semibold text-text-primary mb-2">
-              删除应用
-            </h3>
-            <p className="text-[length:var(--text-ui)] text-text-secondary leading-relaxed">
-              确定要删除「<span className="font-medium text-text-primary">{deleteTarget.name}</span>」吗？
-            </p>
-            <p className="text-[length:var(--text-meta)] text-text-muted mt-2 leading-relaxed">
-              此操作会从 <code className="font-mono text-[length:var(--text-meta)] px-1 py-0.5 rounded">~/.hermix/custom-apps/{deleteTarget.id}/</code> 移到
-              <code className="font-mono text-[length:var(--text-meta)] px-1 py-0.5 rounded ml-1">%TEMP%/hermix-trash/{deleteTarget.id}-&lt;ts&gt;</code>。
-              <br />后悔可在回收站里恢复。
-            </p>
-            <div className="flex justify-end gap-2 mt-4">
-              <button
-                onClick={cancelDelete}
-                className="px-3 py-1.5 rounded-md text-[length:var(--text-ui)] text-text-secondary hover:bg-bg-hover"
-              >
-                取消
-              </button>
-              <button
-                onClick={confirmDelete}
-                className="px-3 py-1.5 rounded-md text-[length:var(--text-ui)] text-white transition-colors"
-                style={{ background: "var(--color-error, #dc2626)" }}
-              >
-                移到回收站
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* 删除确认：破坏性动作的唯一模式是 ui/ConfirmDialog（宪法 §九）。
+          此前是手写弹窗：自带 hex 兜底色（var(--color-error, #dc2626)）与
+          text-white 硬色，且无焦点陷阱 / 无 Esc / 无焦点归还。 */}
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        scrim
+        title="删除应用"
+        confirmLabel="移到回收站"
+        body={
+          deleteTarget ? (
+            <>
+              <p className="text-[length:var(--text-ui)] text-text-secondary leading-relaxed">
+                确定要删除「<span className="font-medium text-text-primary">{deleteTarget.name}</span>」吗？
+              </p>
+              <p className="mt-2 text-[length:var(--text-meta)] text-text-muted leading-relaxed">
+                此操作会从 <code className="font-mono text-[length:var(--text-meta)] px-1 py-0.5 rounded">~/.hermix/custom-apps/{deleteTarget.id}/</code> 移到
+                <code className="font-mono text-[length:var(--text-meta)] px-1 py-0.5 rounded ml-1">%TEMP%/hermix-trash/{deleteTarget.id}-&lt;ts&gt;</code>。
+                <br />后悔可在回收站里恢复。
+              </p>
+            </>
+          ) : null
+        }
+        onCancel={cancelDelete}
+        onConfirm={() => void confirmDelete()}
+      />
     </div>
   );
 }

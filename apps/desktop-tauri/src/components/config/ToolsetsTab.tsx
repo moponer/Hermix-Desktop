@@ -8,6 +8,7 @@ import { ToolCardIcon } from "./ToolCardIcon";
 import { MgmtTag } from "./MgmtTag";
 import { ToggleSwitch } from "../ToggleSwitch";
 import { SearchBar, Grid, EmptyHint, SkeletonGrid, SummaryBar } from "./toolTabsShared";
+import { ENABLED, SAVE_FAILED, failure } from "../strings";
 
 // ── Toolsets tab: backend tool registry (a.k.a. toolset groups) ──────
 
@@ -50,7 +51,7 @@ export function ToolsetsTab({ query, onQuery }: { query: string; onQuery: (q: st
         setEnabled(new Set(list.filter((t) => t.enabled).map((t) => t.name)));
       })
       .catch((e) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : "加载工具集失败");
+        if (!cancelled) setError(failure("加载工具集失败", "请重试。", e instanceof Error ? e.message : undefined));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -97,7 +98,7 @@ export function ToolsetsTab({ query, onQuery }: { query: string; onQuery: (q: st
         setEnabled(new Set(res.enabled));
         if (res.unknown.length > 0) {
           setWarning(
-            `以下工具集名称未被识别: ${res.unknown.join(", ")}`,
+            `以下工具集名称未被识别：${res.unknown.join("、")}`,
           );
         }
       } catch (e) {
@@ -110,8 +111,8 @@ export function ToolsetsTab({ query, onQuery }: { query: string; onQuery: (q: st
         });
         setError(
           e instanceof Error
-            ? `保存失败: ${e.message}`
-            : "保存失败：未知错误",
+            ? failure(SAVE_FAILED, "请重试。", e.message)
+            : failure(SAVE_FAILED, "请重试。"),
         );
       } finally {
         setSaving((prev) => {
@@ -141,13 +142,13 @@ export function ToolsetsTab({ query, onQuery }: { query: string; onQuery: (q: st
         <SummaryBar
           total={toolsets.length}
           enabled={enabledCount}
-          enabledLabel="已启用"
+          enabledLabel={ENABLED}
           totalLabel="个工具集"
         />
       )}
 
       {error && (
-        <div className="mb-4 px-3 py-2 rounded-lg bg-bg-card text-[length:var(--text-meta)] text-error flex items-start justify-between gap-2">
+        <div className="mb-4 px-3 py-2 rounded-lg bg-bg-card text-[length:var(--text-meta)] text-text-error flex items-start justify-between gap-2">
           <span>{error}</span>
           <button
             type="button"
@@ -160,7 +161,7 @@ export function ToolsetsTab({ query, onQuery }: { query: string; onQuery: (q: st
         </div>
       )}
       {warning && (
-        <div className="mb-4 px-3 py-2 rounded-lg bg-bg-card text-[length:var(--text-meta)] text-warning flex items-start justify-between gap-2">
+        <div className="mb-4 px-3 py-2 rounded-lg bg-bg-card text-[length:var(--text-meta)] text-text-warning flex items-start justify-between gap-2">
           <span>{warning}</span>
           <button
             type="button"

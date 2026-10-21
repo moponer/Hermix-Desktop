@@ -1038,7 +1038,7 @@ mod tests {
     /// the two reconcile paths (this function and `register_builtin_tools`
     /// step 6) drifting apart.
     #[test]
-    fn desktop_is_opt_in_but_browser_is_hard_floor() {
+    fn desktop_is_opt_in_but_essentials_survive_curated_lists() {
         let home = tempdir().unwrap();
         let _home_guard = crate::test_env::EnvGuard::set("HERMIX_HOME", home.path());
         let reg = hermix_tools::ToolRegistry::new();
@@ -1079,14 +1079,18 @@ mod tests {
                 "opt-in toolset `{ts}` must stay disabled under the wildcard default"
             );
         }
+        // `browser` left the hard floor on 2026-10-21 (the viewer's MCP server
+        // owns browser automation now), so the floor semantics this test
+        // pins are exercised with `terminal` instead — same class: essential
+        // toolsets survive a curated whitelist that omits them.
         assert!(
-            all_enabled(hermix_tools::BROWSER_TOOLSET),
-            "`browser` is on the essential hard floor — it must be enabled \
+            all_enabled("terminal"),
+            "`terminal` is on the essential hard floor — it must be enabled \
              under the wildcard default, not hidden behind an opt-in"
         );
 
-        // A curated list that omits `browser` is still overridden by the
-        // hard floor (same semantics as `terminal`/`vault`), while the
+        // A curated list that omits `terminal` is still overridden by the
+        // hard floor (same semantics `browser` used to have), while the
         // opt-in `desktop` stays off.
         std::fs::write(
             home.path().join("enabled_toolsets.json"),
@@ -1095,8 +1099,8 @@ mod tests {
         .unwrap();
         apply_persisted_toolset_state(&reg, home.path());
         assert!(
-            all_enabled(hermix_tools::BROWSER_TOOLSET),
-            "hard-floor toolset `browser` must be re-enabled even when the \
+            all_enabled("terminal"),
+            "hard-floor toolset `terminal` must be re-enabled even when the \
              curated whitelist omits it"
         );
         assert!(
@@ -1107,7 +1111,7 @@ mod tests {
         // Operator names `desktop` in Settings -> it comes back on.
         std::fs::write(
             home.path().join("enabled_toolsets.json"),
-            r#"{"enabled":["browser","desktop"]}"#,
+            r#"{"enabled":["desktop"]}"#,
         )
         .unwrap();
         apply_persisted_toolset_state(&reg, home.path());

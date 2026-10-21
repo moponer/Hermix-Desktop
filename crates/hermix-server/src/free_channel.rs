@@ -209,6 +209,13 @@ pub async fn refresh_and_persist(home: &std::path::Path, service: &Arc<dyn Agent
         added_total += added;
     }
 
+    // 开箱默认：把上下文最大的 N 个免费模型写进启用清单（一次性）。
+    // 此时已拿到上游真实上下文，能选出真正的前 N 个并锁定，避免覆盖
+    // 用户后续在设置页的手动启/停。
+    if hermix_config::free_channel::seed_default_free_models(&mut fresh, true) {
+        changed = true;
+    }
+
     if !changed {
         return 0;
     }

@@ -10,6 +10,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { fetchJSON } from "../api";
+import { SAVE } from "./strings";
 
 // ── 类型（对应 hermix-filesearch core/model.rs 的 serde camelCase 输出） ──
 
@@ -308,7 +309,7 @@ export function FileSearchWindow() {
           onChange={(e) => setQuery(e.target.value)}
           spellCheck={false}
         />
-        <span className="fsw-count">
+        <span className="fsw-count" aria-busy={searching}>
           {searching
             ? "搜索中…"
             : totalMatches > filtered.length
@@ -378,7 +379,7 @@ export function FileSearchWindow() {
           </label>
           <p className="fsw-setting-note">规则保存后立即下发；改目录/扩展名会让对应卷在下次启动时按新规则重建。</p>
           <button className="fsw-save-btn" onClick={() => void saveSettings()}>
-            保存
+            {SAVE}
           </button>
         </div>
       )}

@@ -57,6 +57,7 @@ export type { WorkflowEntry };
 //      front-end only ever has one parser.
 
 import { invoke } from "@tauri-apps/api/core";
+import { NEW_CHAT } from "../components/strings";
 
 /** Per-request timeout. The stdio bridge has its own 120s oneshot
  *  timeout; we add a client-side deadline so a hung request surfaces
@@ -335,7 +336,7 @@ function toSession(s: SessionSummary): Session {
   const now = new Date().toISOString();
   return {
     id: s.id,
-    title: s.title?.trim() || "新建对话",
+    title: s.title?.trim() || NEW_CHAT,
     created_at: s.created_at ?? now,
     updated_at: s.updated_at ?? now,
     messages: [],

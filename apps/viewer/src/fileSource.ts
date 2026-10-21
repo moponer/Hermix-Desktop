@@ -150,28 +150,25 @@ export const viewerFileSource: ViewerFileSource = {
   },
 
   async readMarkdown(path: string): Promise<ReadMarkdownResult> {
-    // viewer 自己没有 markitdown sidecar：退化到 readText + markdown 视角。
-    // 走共享的 readFile 而非 `this.readText` —— 解构方法后 `this` 会丢。
-    const r = await readFile(path);
-    if (!r.ok) return r;
-    const t = asReadText(r.content, path);
-    if (!t.ok) return { ok: false, message: t.message };
-    if ("isBinary" in t && t.isBinary) {
-      return { ok: false, message: "二进制文件无法渲染为 Markdown" };
-    }
-    if ("isEmpty" in t && t.isEmpty) {
-      return { ok: true, markdown: "", fileName: leafName(path), truncated: false, resolvedPath: path };
-    }
-    if ("content" in t) {
+    // 走 markitdown sidecar（它就在本 exe 旁边的 binaries/ 里，与桌面端
+    // 共用同一份二进制）。此前这里退化成 readText，于是 PDF 的「文本」视图
+    // 一点就报"二进制文件无法渲染为 Markdown"，epub / msg 更是完全打不开。
+    try {
+      const r = await invoke<{
+        markdown: string;
+        fileName: string;
+        truncated: boolean;
+      }>("document_to_markdown", { filePath: path });
       return {
         ok: true,
-        markdown: t.content,
-        fileName: leafName(path),
-        truncated: false,
+        markdown: r.markdown,
+        fileName: r.fileName || leafName(path),
+        truncated: r.truncated,
         resolvedPath: path,
       };
+    } catch (e) {
+      return { ok: false, message: String(e instanceof Error ? e.message : e) };
     }
-    return { ok: false, message: "读取失败" };
   },
 
   fs: {

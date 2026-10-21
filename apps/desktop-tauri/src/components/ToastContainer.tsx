@@ -11,6 +11,7 @@
 
 import { useToasts, dismissToast } from "../hooks/useToast";
 import { X } from "lucide-react";
+import { CLOSE } from "./strings";
 
 type ToastVariant = "error" | "warning" | "info" | "success";
 
@@ -41,10 +42,10 @@ export function ToastContainer() {
             <button
               type="button"
               className="toast__close"
-              aria-label="关闭"
+              aria-label={CLOSE}
               onClick={(e) => { e.stopPropagation(); dismissToast(t.id); }}
             >
-              <X className="icon-sm" strokeWidth={2.2} />
+              <X className="icon-sm" />
             </button>
           </div>
         );

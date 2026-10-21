@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Terminal, Globe, Wrench, Loader2,
   ChevronDown, ChevronRight,
-  AlertTriangle, AlertCircle, SearchX, Copy, CheckCheck, Check,
+  AlertTriangle, AlertCircle, SearchX, Copy, Check,
 } from "lucide-react";
 import { formatDuration } from "../utils/time";
 import type { ExecutionTimelineEvent } from "../types";
@@ -57,6 +57,7 @@ interface ToolGroup {
 // `Tool 'x' does not exist`，把失败渲染成「✓已完成」。抄两份注释维持的
 // 不是契约，是约定 —— 现在改成唯一入口。
 import { classifyToolOutcome } from "../utils/toolOutcome";
+import { COPIED, COPY_OUTPUT, EXECUTED_COMMAND, NO_OUTPUT } from "./strings";
 
 
 /**
@@ -313,10 +314,10 @@ const TOOL_VERB: Record<string, string> = {
   delete_file: "已删除",
   search_files: "已搜索",
   list_files: "已查看",
-  terminal: "已执行命令",
-  execute_command: "已执行命令",
-  bash: "已执行命令",
-  exec: "已执行命令",
+  terminal: EXECUTED_COMMAND,
+  execute_command: EXECUTED_COMMAND,
+  bash: EXECUTED_COMMAND,
+  exec: EXECUTED_COMMAND,
   browser: "已获取网页",
   web_fetch: "已获取网页",
   fetch_url: "已获取网页",
@@ -816,7 +817,7 @@ function LiveTerminal({ content, running }: { content: string; running: boolean 
   }, []);
 
   const handleCopy = async () => {
-    const text = displayContent || (running ? "" : "（无输出）");
+    const text = displayContent || (running ? "" : NO_OUTPUT);
     if (!text) return;
     try {
       if (navigator.clipboard?.writeText) {
@@ -855,16 +856,16 @@ function LiveTerminal({ content, running }: { content: string; running: boolean 
         className="tw-msg-output-copy"
         onClick={(e) => { e.stopPropagation(); handleCopy(); }}
         data-copied={copied ? "true" : "false"}
-        title={copied ? "已复制" : "复制输出"}
-        aria-label={copied ? "已复制" : "复制输出"}
+        title={copied ? COPIED : COPY_OUTPUT}
+        aria-label={copied ? COPIED : COPY_OUTPUT}
       >
-        {copied ? <CheckCheck className="icon-xs" /> : <Copy className="icon-xs" />}
+        {copied ? <Check className="icon-xs" /> : <Copy className="icon-xs" />}
       </button>
       {hasContent ? (
         <pre className="tw-msg-output-text">{displayContent}</pre>
       ) : (
         <span className="tw-msg-output-empty">
-          {running ? "等待输出…" : "（无输出）"}
+          {running ? "等待输出…" : NO_OUTPUT}
         </span>
       )}
     </div>

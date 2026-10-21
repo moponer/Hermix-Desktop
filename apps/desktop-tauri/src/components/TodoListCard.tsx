@@ -25,8 +25,10 @@ import * as api from "../api";
 import type { TodoItem } from "../api";
 import { toastError } from "../hooks/useToast";
 
+// 高优先级的底色走 warning 的淡染档（跟随主题，不写字面色值）。
+// 原来是 hsla(43, 96%, 56%, 0.07) —— 一条不跟主题走的固定黄。
 const PRIORITY_BG: Record<string, string> = {
-  high: "hsla(43, 96%, 56%, 0.07)",
+  high: "color-mix(in srgb, var(--color-warning) 7%, transparent)",
   medium: "transparent",
   low: "transparent",
 };

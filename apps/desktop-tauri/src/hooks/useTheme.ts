@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useSyncExternalStore } from "react";
 import { storage, STORAGE_KEYS } from "../utils/storageCompat";
 import { THEMES, isKnownTheme, isDarkTheme } from "../styles/themes/registry";
 import { onAccentFor } from "../styles/themes/accentPalette";
@@ -152,4 +152,54 @@ export function useTheme() {
     setAccentState(normalizeAccent(next));
   }, []);
   return { mode, resolved, setMode, cycle, accent, setAccent };
+}
+
+/* ── 暗色判定（响应式）──────────────────────────────────────────
+   主题的唯一来源是 `root.dataset.theme`（applyTheme 设置）——`.dark` 类
+   已废除，任何 `classList.contains("dark")` 恒为 false。历史上代码高亮
+   正是踩了这个坑：暗色主题下恒用亮色语法配色。
+
+   `useIsDarkTheme()` 订阅 THEME_CHANGED_EVENT，主题切换时让订阅者重绘
+   ——代码高亮的配色依赖它，否则切主题后代码块颜色停留在旧主题。
+
+   订阅是**共享**的：一个对话里可能有上百个 MarkdownBody（每个都调这个
+   hook），逐个挂 window 监听会在切主题时触发上百次重绘。用
+   useSyncExternalStore + 单一监听器，N 个消费者只挂一个监听。
+
+   只需取值、不需要跟随重绘的场合（例如初始化一次）用 lib/codeHighlight.ts
+   的 `readIsDark()`。 */
+
+function readIsDarkNow(): boolean {
+  if (typeof document === "undefined") return false;
+  const id = document.documentElement.dataset.theme;
+  if (id) return isDarkTheme(id);
+  return document.documentElement.style.colorScheme === "dark";
+}
+
+const darkListeners = new Set<() => void>();
+let darkBound = false;
+
+function onThemeChanged() {
+  // 快照每次从 DOM 现读（getSnapshot），这里只需通知订阅者重取。
+  for (const cb of darkListeners) cb();
+}
+
+function subscribeDark(cb: () => void): () => void {
+  if (!darkBound) {
+    darkBound = true;
+    window.addEventListener(THEME_CHANGED_EVENT, onThemeChanged);
+  }
+  darkListeners.add(cb);
+  return () => {
+    darkListeners.delete(cb);
+    if (darkListeners.size === 0) {
+      window.removeEventListener(THEME_CHANGED_EVENT, onThemeChanged);
+      darkBound = false;
+    }
+  };
+}
+
+/** 当前是否为暗色主题；主题切换时返回新值。 */
+export function useIsDarkTheme(): boolean {
+  return useSyncExternalStore(subscribeDark, readIsDarkNow, readIsDarkNow);
 }

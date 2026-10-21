@@ -355,10 +355,16 @@ export function highlightToReact(
   }
 }
 
-// Reads the active theme. `useTheme()` toggles a `.dark` class on
-// `<html>`, so the call is idempotent and re-runs whenever the
-// parent re-renders on theme change.
+// Reads the active theme.
+//
+// 主题的唯一来源是 `root.dataset.theme`（见 useTheme.ts 的 applyTheme）——
+// **`.dark` 类已废除**（globals.css:23-24），`classList.contains("dark")`
+// 恒为 false，早期版本因此让暗色主题下的代码块恒用亮色语法配色。
+// 判据改为 `colorScheme`（applyTheme 同步设置），与 PreviewPanel 一致。
+//
+// 注意：这是**非响应式**读取 —— 主题切换时组件不会自动重绘。
+// 需要跟随主题重绘的调用方请用 `useIsDarkTheme()`（hooks/useTheme.ts）。
 export function readIsDark(): boolean {
-  return typeof document !== "undefined" &&
-    document.documentElement.classList.contains("dark");
+  if (typeof document === "undefined") return false;
+  return document.documentElement.style.colorScheme === "dark";
 }

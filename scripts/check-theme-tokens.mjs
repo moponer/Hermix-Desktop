@@ -41,13 +41,19 @@ const ALIAS_NAMES = new Set([
   "--color-error-bg",
   "--color-warning-bg",
   "--color-error-text",
-  "--color-text-success",
   "--font-family-primary",
   "--color-accent-hover",
   "--color-accent-on-text",
   "--color-accent-soft",
   "--color-accent-soft-strong",
+  // 派生档：由 --color-bg-tertiary 混白得到，**与主题无关**（每套主题解析出的
+  // 值自动跟随它压的那张底），所以不进各主题的契约。
+  "--color-code-inline-bg",
 ]);
+// 注意：--color-text-success **不在**这个列表里 —— 它曾经是
+// 「success 当文字用」的别名（tokens.css 兼容层里 var(--color-success)），
+// 2026-10-21 起语义四色有了各自的文字安全档，它变成了**每套主题各给一个值**
+// 的真令牌，必须进契约，否则新主题漏声明会静默继承亮色值。
 const tokensCss = read(join(STYLES, "tokens.css"));
 const themeBlock = tokensCss.match(/@theme\s*\{([\s\S]*)\n\}/)?.[1] ?? "";
 const CONTRACT = [...new Set(
@@ -381,6 +387,212 @@ if (typeHits > 0) {
   );
 } else {
   console.log("[type-debt] 无任意字号 ✓（全部使用七档语义档位）");
+}
+
+/* ════════════════════════════════════════════════════════════════════
+ * Check 6 · contrast —— 前景/背景配对的 WCAG 对比度实测
+ * ────────────────────────────────────────────────────────────────────
+ * 契约校验只保证「三套主题都声明了同一批令牌」，**不保证这些取值可用**。
+ * 2026-10-21 审计实测出 8 处 FAIL，最严重的一处是 ink-green 的
+ * --color-text-hero: #ffffff 压在 #fdfefd 的纸面上 —— 对比度 1.01:1，
+ * 欢迎页标题完全看不见（注释还写着「暗底主题用白」，是从 dark 复制过来
+ * 忘了 ink-green 是浅色主题）。
+ *
+ * 这条检查把「取值必须真的能读」变成机械断言，而不是靠人眼发现。
+ * 背景色的 alpha 要**合成**到纸面上再算——半透明底的观感取决于它压在什么上。
+ * ════════════════════════════════════════════════════════════════════ */
+{
+  const hexRgb = (v) => {
+    const m = /^#([0-9a-f]{6})$/i.exec((v || "").trim());
+    if (!m) return null;
+    const x = m[1];
+    return [parseInt(x.slice(0, 2), 16), parseInt(x.slice(2, 4), 16), parseInt(x.slice(4, 6), 16)];
+  };
+  const lum = ([r, g, b]) => {
+    const f = (c) => { c /= 255; return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
+    return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
+  };
+  const ratio = (a, b) => {
+    if (!a || !b) return null;
+    const l1 = lum(a), l2 = lum(b);
+    return (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
+  };
+  /** 拆出尾部百分比：「var(--x) 14%」→ {expr:"var(--x)", pct:14}。 */
+  const splitPct = (v) => {
+    const m = /^(.*?)\s*([\d.]+)%\s*$/.exec(String(v || "").trim());
+    if (!m) return { expr: String(v || "").trim(), pct: null };
+    return { expr: m[1].trim(), pct: Number(m[2]) };
+  };
+  /**
+   * 解析颜色表达式 → [r,g,b,a]。
+   * 支持 #rrggbb / rgb() / rgba() / transparent / var(--x) 递归 /
+   * color-mix(in srgb, A p%, B p%)。
+   *
+   * 2026-10-21 补 color-mix：此前只认 hex 与 rgba()，于是所有以
+   * color-mix 派生的底色（accent-soft 两档）会被**静默跳过**——
+   * 门禁显示全绿，实际根本没测。加了这条能力后新配对才真的被测到。
+   */
+  const parseColor = (value, vars, depth = 0) => {
+    if (value === null || value === undefined || depth > 8) return null;
+    const v = String(value).trim();
+    if (!v) return null;
+    const hex = hexRgb(v);
+    if (hex) return [hex[0], hex[1], hex[2], 1];
+    if (/^transparent$/i.test(v)) return [0, 0, 0, 0];
+    // 具名色：只认 color-mix 里实际用到的这四个，其余返回 null（→ 报 WARN）
+    if (/^white$/i.test(v)) return [255, 255, 255, 1];
+    if (/^black$/i.test(v)) return [0, 0, 0, 1];
+    const m = /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*([\d.]+)\s*)?\)$/i.exec(v);
+    if (m) return [Number(m[1]), Number(m[2]), Number(m[3]), m[4] === undefined ? 1 : Number(m[4])];
+    const vm = /^var\(\s*--([a-z0-9-]+)\s*\)$/i.exec(v);
+    if (vm) return parseColor(vars[vm[1]], vars, depth + 1);
+    const cm = /^color-mix\(\s*in\s+srgb\s*,\s*(.+?)\s*,\s*(.+?)\s*\)$/i.exec(v);
+    if (cm) {
+      const pa = splitPct(cm[1]);
+      const pb = splitPct(cm[2]);
+      const a = parseColor(pa.expr, vars, depth + 1);
+      const b = parseColor(pb.expr, vars, depth + 1);
+      if (!a || !b) return null;
+      // 一端给了百分比则另一端自动补足；两端都没给 → 各 50%
+      const t = pa.pct !== null || pb.pct !== null
+        ? Math.min(1, Math.max(0, (pa.pct ?? 0) / 100))
+        : 0.5;
+      return [
+        a[0] * t + b[0] * (1 - t),
+        a[1] * t + b[1] * (1 - t),
+        a[2] * t + b[2] * (1 - t),
+        a[3] * t + b[3] * (1 - t),
+      ];
+    }
+    return null;
+  };
+  /** 把半透明底合成到 over 上，返回实色。 */
+  const resolveBg = (value, vars) => {
+    const c = parseColor(value, vars);
+    if (!c) return null;
+    if (c[3] >= 1) return [c[0], c[1], c[2]];
+    const over = hexRgb(vars["color-bg-primary"]);
+    if (!over) return null;
+    return [
+      c[0] * c[3] + over[0] * (1 - c[3]),
+      c[1] * c[3] + over[1] * (1 - c[3]),
+      c[2] * c[3] + over[2] * (1 - c[3]),
+    ];
+  };
+
+  const themeValues = (id) => {
+    if (id === "light") return parseThemeVars(themeBlock);
+    const file = join(STYLES, `themes/${id}.css`);
+    if (!existsSync(file)) return null;
+    return parseThemeVars(stripCssComments(read(file)));
+  };
+  const parseThemeVars = (css) => {
+    const out = {};
+    const re = /--([a-z0-9-]+)\s*:\s*([^;]+);/gi;
+    let m;
+    while ((m = re.exec(css))) out[m[1]] = m[2].trim();
+    return out;
+  };
+
+  // [前景, 背景, 最低对比度, 说明]
+  // 4.5 = 正文级（WCAG 1.4.3 AA）；3.0 = 控件边界等非文本（1.4.11）
+  const CONTRAST_PAIRS = [
+    ["color-text-primary", "color-bg-primary", 4.5, "正文 / 纸面"],
+    ["color-text-primary", "color-bg-card", 4.5, "正文 / 卡片"],
+    ["color-text-primary", "color-bg-secondary", 4.5, "正文 / 侧栏案面"],
+    ["color-text-primary", "color-bg-tertiary", 4.5, "正文 / chip 底"],
+    ["color-text-secondary", "color-bg-primary", 4.5, "次级 / 纸面"],
+    ["color-text-secondary", "color-bg-card", 4.5, "次级 / 卡片"],
+    ["color-text-secondary", "color-bg-tertiary", 4.5, "次级 / chip 底"],
+    ["color-text-tertiary", "color-bg-primary", 4.5, "三级 / 纸面"],
+    ["color-text-tertiary", "color-bg-card", 4.5, "三级 / 卡片"],
+    ["color-text-faint", "color-bg-primary", 4.5, "弱化 / 纸面"],
+    ["color-text-faint", "color-bg-secondary", 4.5, "弱化 / 侧栏"],
+    ["color-text-thinking", "color-bg-primary", 4.5, "思考 / 纸面"],
+    ["color-text-thinking", "color-bg-card", 4.5, "思考 / 卡片"],
+    ["color-text-hero", "color-bg-primary", 4.5, "hero 标题 / 纸面"],
+    ["color-link", "color-bg-primary", 4.5, "链接 / 纸面"],
+    ["color-link", "color-bg-tertiary", 4.5, "链接 / chip 底"],
+    ["color-link-soft", "color-bg-primary", 4.5, "弱链接 / 纸面"],
+    ["color-text-success", "color-bg-primary", 4.5, "success 文字 / 纸面"],
+    ["color-text-success", "color-success-soft", 4.5, "success 文字 / success-soft 底"],
+    ["color-text-warning", "color-bg-primary", 4.5, "warning 文字 / 纸面"],
+    ["color-text-warning", "color-warning-soft", 4.5, "warning 文字 / warning-soft 底"],
+    ["color-text-error", "color-bg-primary", 4.5, "error 文字 / 纸面"],
+    ["color-text-error", "color-error-soft", 4.5, "error 文字 / error-soft 底"],
+    ["color-text-info", "color-bg-primary", 4.5, "info 文字 / 纸面"],
+    ["color-text-info", "color-info-soft", 4.5, "info 文字 / info-soft 底"],
+    ["color-on-accent", "color-accent", 4.5, "accent 底上的文字"],
+    ["color-text-on-code", "color-bg-code", 4.5, "代码正文 / 代码底"],
+    ["color-border", "color-bg-primary", 3.0, "控件边界 / 纸面（1.4.11 的 3:1）"],
+    ["color-border", "color-bg-card", 3.0, "控件边界 / 卡片（1.4.11 的 3:1）"],
+    // 发丝分隔线的真实契约是「与所压底色的亮度比 ≥1.10」（tokens.css 的
+    // 分隔线一节），**不是** 3:1 —— 1.4.11 的 3:1 落在 --color-border 上。
+    // 2026-10-21 起 --color-border-secondary 的注释曾误写「WCAG 1.4.11 3:1」，
+    // 实测只有 1.37–1.70:1；注释已改正，规则也按真实契约判。
+    ["color-border-secondary", "color-bg-primary", 1.1, "发丝分隔线 / 纸面（≥1.10）"],
+    ["color-border-secondary", "color-bg-card", 1.1, "发丝分隔线 / 卡片（≥1.10）"],
+    // accent 的 soft 档（纸面淡染色）。2026-10-21 补测：暗色主题此前
+    // 完全没覆盖这两档，继承 tokens.css 的「accent 混白」—— 暗底上翻成
+    // 近白亮块，preview 的行内代码 / 引用块变成白底浅字（读不出来），
+    // 外观页选中的选择卡变成白卡。dark.css 已改为「accent 混纸面底」，
+    // 这几条配对就是防它再退化。
+    ["color-accent", "color-accent-soft", 4.5, "accent 文字 / accent-soft 底（Badge brand、Button tonal、选中卡）"],
+    ["color-accent", "color-accent-soft-strong", 4.5, "accent 文字 / accent-soft-strong 底（子代理状态、记忆标签）"],
+    ["color-text-primary", "color-accent-soft", 4.5, "正文 / accent-soft 底（preview 行内代码、引用块）"],
+    ["color-text-secondary", "color-accent-soft", 4.5, "次级 / accent-soft 底（preview 引用块）"],
+    ["color-text-primary", "color-accent-soft-strong", 4.5, "正文 / accent-soft-strong 底（preview 目录当前项）"],
+  ];
+
+  const contrastFailures = [];
+  const contrastSkipped = [];
+  for (const themeId of ["light", "dark", "ink-green"]) {
+    const vars = themeValues(themeId);
+    if (!vars) continue;
+    for (const [fgKey, bgKey, min, label] of CONTRAST_PAIRS) {
+      const fgRaw = vars[fgKey];
+      const bgRaw = vars[bgKey];
+      if (!fgRaw || !bgRaw) continue;
+      const fg = parseColor(fgRaw, vars);
+      // 背景可能是半透明 → 合成到本主题纸面上
+      const bg = resolveBg(bgRaw, vars);
+      if (!fg || !bg) {
+        // 解析不了就**报出来**，不能静默跳过 —— 静默跳过等于没测
+        contrastSkipped.push({ themeId, label, fgKey, bgKey, fgRaw, bgRaw });
+        continue;
+      }
+      const r = ratio(fg, bg);
+      if (r !== null && r < min) {
+        contrastFailures.push({ themeId, label, fgKey, bgKey, fgRaw, r, min });
+      }
+    }
+  }
+  if (contrastFailures.length > 0) {
+    failures++;
+    console.error(`[contrast] ${contrastFailures.length} 处配对未达 WCAG AA:`);
+    for (const f of contrastFailures) {
+      console.error(
+        `  ${f.themeId}: ${f.label} — ${f.fgKey}(${f.fgRaw}) × ${f.bgKey} = ` +
+          `${f.r.toFixed(2)}:1（需 ≥${f.min}）`,
+      );
+    }
+    console.error(
+      "  → 语义色的「文字安全档」用 --color-text-<hue>（保持色相、只压暗，\n" +
+        "    两处都 ≥4.5:1）；控件描边见 --color-border-secondary 的取值。",
+    );
+  } else {
+    console.log("[contrast] 全部配对达 WCAG AA ✓");
+  }
+  if (contrastSkipped.length > 0) {
+    console.warn(
+      `[contrast] WARN ${contrastSkipped.length} 处配对无法解析（未被测量）：`,
+    );
+    for (const s of contrastSkipped) {
+      console.warn(
+        `  ${s.themeId}: ${s.label} — ${s.fgKey}(${s.fgRaw}) × ${s.bgKey}(${s.bgRaw})`,
+      );
+    }
+  }
 }
 
 process.exit(failures > 0 ? 1 : 0);

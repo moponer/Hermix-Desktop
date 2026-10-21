@@ -4,7 +4,7 @@ import { cx } from "../../lib/cx";
 
 export type BadgeTone = "neutral" | "brand" | "success" | "warning" | "danger" | "info";
 export type BadgeVariant = "soft" | "outline";
-export type BadgeSize = "xs" | "sm" | "md";
+export type BadgeSize = "xs" | "sm" | "md" | "chip";
 
 export interface BadgeProps {
   children: ReactNode;
@@ -19,21 +19,26 @@ export interface BadgeProps {
   className?: string;
 }
 
+/**
+ * 徽标的文字色一律走**文字安全档**（--color-text-<hue>），不是原始语义色。
+ * 原始语义色是给图标/描边/填充的，12px 的小字用它在 ink-green 主题下只有
+ * 2.4–4.2:1（2026-10-21 审计问题 20）。文字安全档在纸面与各自 -soft 底上都 ≥4.5:1。
+ */
 const SOFT: Record<BadgeTone, string> = {
   neutral: "bg-[var(--color-bg-tertiary)] text-[var(--color-text-secondary)]",
   brand: "bg-[var(--color-accent-soft)] text-[var(--color-accent)]",
-  success: "bg-[var(--color-success-soft)] text-[var(--color-success)]",
-  warning: "bg-[var(--color-warning-soft)] text-[var(--color-warning)]",
-  danger: "bg-[var(--color-error-soft)] text-[var(--color-error)]",
+  success: "bg-[var(--color-success-soft)] text-[var(--color-text-success)]",
+  warning: "bg-[var(--color-warning-soft)] text-[var(--color-text-warning)]",
+  danger: "bg-[var(--color-error-soft)] text-[var(--color-text-error)]",
   info: "bg-[var(--color-bg-tertiary)] text-[var(--color-text-secondary)]",
 };
 
 const OUTLINE: Record<BadgeTone, string> = {
   neutral: "text-[var(--color-text-secondary)] border-[var(--color-border-secondary)]",
   brand: "text-[var(--color-accent)] border-[var(--color-primary-fixed-dim)]",
-  success: "text-[var(--color-success)] border-[var(--color-success)]",
-  warning: "text-[var(--color-warning)] border-[var(--color-warning)]",
-  danger: "text-[var(--color-error)] border-[var(--color-error)]",
+  success: "text-[var(--color-text-success)] border-[var(--color-text-success)]",
+  warning: "text-[var(--color-text-warning)] border-[var(--color-text-warning)]",
+  danger: "text-[var(--color-text-error)] border-[var(--color-text-error)]",
   info: "text-[var(--color-text-secondary)] border-[var(--color-border-secondary)]",
 };
 
@@ -41,6 +46,9 @@ const SIZE: Record<BadgeSize, string> = {
   xs: "px-2 py-0.5 text-[length:var(--text-meta)]",
   sm: "px-2 py-0.5 text-[length:var(--text-meta)]",
   md: "px-2.5 py-1 text-[length:var(--text-meta)]",
+  // 紧凑药丸：与各处手写的 `px-1.5 py-0.5 rounded` 药丸一一对应。
+  // 手写版里有一处用了 11px（低于 12px 功能文字下限），收编后自动回到 12px。
+  chip: "px-1.5 py-0.5 text-[length:var(--text-meta)]",
 };
 
 /** 状态点。`pulse` 用于「正在跑」—— 它是唯一该动的东西。 */

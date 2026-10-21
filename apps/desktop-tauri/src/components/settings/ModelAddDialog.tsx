@@ -12,12 +12,13 @@
 // 建一个 provider 再测、取消时留下垃圾"。
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { createPortal } from "react-dom";
-import { X, ChevronLeft, Loader2, CheckCircle2, AlertCircle } from "lucide-react";
+import { ChevronLeft, Loader2, CheckCircle2, AlertCircle } from "lucide-react";
 import * as api from "../../api";
 import { writeModelConfigAndNotify } from "../../hooks/useCurrentModel";
 import { PROVIDERS, catalogMismatchNote, type ProviderDef } from "./settingsUtils";
 import { ProviderIcon } from "../ProviderIcon";
+import { Button, Modal } from "../ui";
+import { SAVE, SAVING } from "../strings";
 
 type Choice =
   | { kind: "builtin"; def: ProviderDef }
@@ -230,191 +231,181 @@ export function ModelAddDialog({ onClose, onSaved, editing }: Props) {
       setSaving(false);
     }
   }, [choice, apiKey, displayName, effectiveBaseUrl, modelId, editing, onSaved, onClose]);
-  return createPortal(
-    <div
-      className="fixed inset-0 z-[110] flex items-center justify-center"
-      style={{ background: "var(--color-overlay-scrim)" }}
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label="添加模型"
-        className="flex flex-col rounded-[var(--radius-xl)] bg-bg-elevated shadow-modal overflow-hidden"
-        style={{ width: "min(94vw, 560px)", maxHeight: "86vh", background: "var(--color-bg-app)" }}
-      >
-        <div className="flex items-center gap-2 rounded-t-[var(--radius-xl)] bg-bg-secondary px-4 py-3 shrink-0">
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      width="base"
+      scrim
+      /* 表单弹窗：点遮罩不该把填了一半的表单扔掉。 */
+      closeOnBackdrop={false} closeOnEscape={false}
+      title={
+        <span className="flex items-center gap-2">
           {choice && (
             <button
+              type="button"
               onClick={() => { setChoice(null); setTest(null); setError(null); }}
-              className="h-7 w-7 rounded-md flex items-center justify-center text-text-muted hover:text-text-primary hover:bg-bg-hover"
+              className="grid size-8 shrink-0 place-items-center rounded-[var(--radius-md)] text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
               aria-label="返回上一步"
             >
-              <ChevronLeft className="icon-md" />
+              <ChevronLeft className="icon-lg" />
             </button>
           )}
-          <span className="text-sm font-semibold text-text-primary">
+          <span className="truncate">
             {editing
               ? `编辑 ${choice && choice.kind === "builtin" ? choice.def.name : "自定义"} 模型`
               : choice
                 ? `添加 ${choice.kind === "builtin" ? choice.def.name : "自定义"} 模型`
                 : "添加模型"}
           </span>
-          <button
-            onClick={onClose}
-            className="ml-auto h-7 w-7 rounded-md flex items-center justify-center text-text-muted hover:text-text-primary hover:bg-bg-hover"
-            aria-label="关闭"
-          >
-            <X className="icon-md" />
-          </button>
-        </div>
-
-        <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
-          {!choice && (
-            <>
-              <p className="text-xs text-text-muted">
-                内置供应商只需填 API Key；自定义用于任何 OpenAI 兼容端点。
-              </p>
-              <div className="space-y-1.5">
-                {PROVIDERS.map((p) => (
-                  <button
-                    key={p.id}
-                    onClick={() => setChoice({ kind: "builtin", def: p })}
-                    className="w-full flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] bg-bg-tertiary/50 transition-colors hover:bg-bg-quaternary text-left"
-                  >
-                    <ProviderIcon providerId={p.id} className="icon-lg" />
-                    <span className="flex-1 min-w-0">
-                      <span className="block text-[length:var(--text-ui)] text-text-primary truncate">{p.name}</span>
-                      <span className="block text-[length:var(--text-meta)] text-text-muted truncate">{p.description}</span>
-                    </span>
-                    <span className="text-[length:var(--text-meta)] text-text-faint shrink-0">内置</span>
-                  </button>
-                ))}
-                <button
-                  onClick={() => setChoice({ kind: "custom" })}
-                  className="w-full flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] bg-bg-tertiary/40 transition-colors hover:bg-bg-quaternary text-left"
-                >
-                  <span className="w-4 h-4 shrink-0 rounded-full bg-bg-quaternary" />
-                  <span className="flex-1 min-w-0">
-                    <span className="block text-[length:var(--text-ui)] text-text-primary">自定义</span>
-                    <span className="block text-[length:var(--text-meta)] text-text-muted">
-                      任何 OpenAI 兼容端点（LM Studio / Ollama / 中转）
-                    </span>
-                  </span>
-                  <span className="text-[length:var(--text-meta)] text-text-faint shrink-0">自定义</span>
-                </button>
-              </div>
-            </>
-          )}
-
-          {choice && (
-            <>
-              {choice.kind === "custom" && (
-                <Field label="显示名称">
-                  <input
-                    value={displayName}
-                    onChange={(e) => setDisplayName(e.target.value)}
-                    placeholder="例如 我的中转"
-                    className={inputCls}
-                  />
-                </Field>
-              )}
-
-              <Field
-                label="接口地址"
-                hint={choice.kind === "builtin" ? "已按官方端点预填，用中转/代理时可改" : undefined}
+        </span>
+      }
+      bodyClassName="overflow-y-auto px-4 py-4 space-y-4"
+      footer={
+        choice ? (
+          <>
+            <Button variant="secondary" size="base" onClick={onClose}>
+              取消
+            </Button>
+            <Button
+              variant="primary"
+              size="base"
+              onClick={() => void save()}
+              disabled={saving}
+              loading={saving}
+            >
+              {saving ? SAVING : SAVE}
+            </Button>
+          </>
+        ) : undefined
+      }
+    >
+      {!choice && (
+        <>
+          <p className="text-xs text-text-muted">
+            内置供应商只需填 API Key；自定义用于任何 OpenAI 兼容端点。
+          </p>
+          <div className="space-y-1.5">
+            {PROVIDERS.map((p) => (
+              <button
+                key={p.id}
+                onClick={() => setChoice({ kind: "builtin", def: p })}
+                className="w-full flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] bg-bg-tertiary/50 transition-colors hover:bg-bg-quaternary text-left"
               >
-                <input
-                  value={effectiveBaseUrl}
-                  onChange={(e) => setBaseUrl(e.target.value)}
-                  placeholder="https://api.example.com/v1"
-                  className={inputCls}
-                />
-              </Field>
-
-              <Field
-                label="API Key"
-                hint={
-                  hasKey
-                    ? `已配置。留空则保持当前密钥不变——改端点或模型名不必重输。${
-                        choice && choice.kind === "builtin"
-                          ? `（保存在 ${choice.def.keyEnvVar}）`
-                          : ""
-                      }`
-                    : "尚未配置。留空表示不设置；该供应商在配好密钥前不会出现在模型列表里。"
-                }
-              >
-                <input
-                  type="password"
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  placeholder={hasKey ? "留空保持不变" : "sk-..."}
-                  className={inputCls}
-                />
-              </Field>
-
-              <Field label="模型名称" hint="留空则用该端点的默认模型">
-                <input
-                  value={modelId}
-                  onChange={(e) => setModelId(e.target.value)}
-                  placeholder="例如 deepseek-chat"
-                  className={inputCls}
-                />
-              </Field>
-
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => void testNow()}
-                  disabled={testing}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-[var(--radius-md)] bg-bg-tertiary text-[length:var(--text-ui)] text-text-secondary transition-colors hover:bg-bg-quaternary hover:text-text-primary disabled:opacity-40"
-                >
-                  {testing && <Loader2 className="icon-sm animate-spin" />}
-                  测试连接
-                </button>
-                {test && <TestResult r={test} />}
-              </div>
-
-              <details className="rounded-[var(--radius-md)] bg-bg-tertiary/50 px-3 py-2">
-                <summary className="text-xs text-text-secondary cursor-pointer">高级配置</summary>
-                <div className="mt-2 space-y-1.5">
-                  <Cap label="支持工具调用" checked={caps.tools} onChange={(v) => setCaps((c) => ({ ...c, tools: v }))} />
-                  <Cap label="支持图片输入" checked={caps.images} onChange={(v) => setCaps((c) => ({ ...c, images: v }))} />
-                  <Cap label="支持思考模式" checked={caps.thinking} onChange={(v) => setCaps((c) => ({ ...c, thinking: v }))} />
-                </div>
-              </details>
-
-              {error && (
-                <div className="px-3 py-2 rounded-[var(--radius-md)] bg-red-500/12 text-[length:var(--text-ui)] text-red-400">
-                  {error}
-                </div>
-              )}
-            </>
-          )}
-        </div>
-
-        {choice && (
-          <div className="flex items-center justify-end gap-2 rounded-b-[var(--radius-xl)] bg-bg-secondary px-4 py-3 shrink-0">
-            <button onClick={onClose} className={btnGhost}>取消</button>
-            <button onClick={() => void save()} disabled={saving} className={btnPrimary}>
-              {saving && <Loader2 className="icon-sm animate-spin" />}
-              保存
+                <ProviderIcon providerId={p.id} className="icon-lg" />
+                <span className="flex-1 min-w-0">
+                  <span className="block text-[length:var(--text-ui)] text-text-primary truncate">{p.name}</span>
+                  <span className="block text-[length:var(--text-meta)] text-text-muted truncate">{p.description}</span>
+                </span>
+                <span className="text-[length:var(--text-meta)] text-text-faint shrink-0">内置</span>
+              </button>
+            ))}
+            <button
+              onClick={() => setChoice({ kind: "custom" })}
+              className="w-full flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] bg-bg-tertiary/40 transition-colors hover:bg-bg-quaternary text-left"
+            >
+              <span className="w-4 h-4 shrink-0 rounded-full bg-bg-quaternary" />
+              <span className="flex-1 min-w-0">
+                <span className="block text-[length:var(--text-ui)] text-text-primary">自定义</span>
+                <span className="block text-[length:var(--text-meta)] text-text-muted">
+                  任何 OpenAI 兼容端点（LM Studio / Ollama / 中转）
+                </span>
+              </span>
+              <span className="text-[length:var(--text-meta)] text-text-faint shrink-0">自定义</span>
             </button>
           </div>
-        )}
-      </div>
-    </div>,
-    document.body,
+        </>
+      )}
+
+      {choice && (
+        <>
+          {choice.kind === "custom" && (
+            <Field label="显示名称">
+              <input
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                placeholder="例如 我的中转"
+                className={inputCls}
+              />
+            </Field>
+          )}
+
+          <Field
+            label="接口地址"
+            hint={choice.kind === "builtin" ? "已按官方端点预填，用中转/代理时可改" : undefined}
+          >
+            <input
+              value={effectiveBaseUrl}
+              onChange={(e) => setBaseUrl(e.target.value)}
+              placeholder="https://api.example.com/v1"
+              className={inputCls}
+            />
+          </Field>
+
+          <Field
+            label="API Key"
+            hint={
+              hasKey
+                ? `已配置。留空则保持当前密钥不变——改端点或模型名不必重输。${
+                    choice && choice.kind === "builtin"
+                      ? `（保存在 ${choice.def.keyEnvVar}）`
+                      : ""
+                  }`
+                : "尚未配置。留空表示不设置；该供应商在配好密钥前不会出现在模型列表里。"
+            }
+          >
+            <input
+              type="password"
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              placeholder={hasKey ? "留空保持不变" : "sk-..."}
+              className={inputCls}
+            />
+          </Field>
+
+          <Field label="模型名称" hint="留空则用该端点的默认模型">
+            <input
+              value={modelId}
+              onChange={(e) => setModelId(e.target.value)}
+              placeholder="例如 deepseek-chat"
+              className={inputCls}
+            />
+          </Field>
+
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => void testNow()}
+              disabled={testing}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-[var(--radius-md)] bg-bg-tertiary text-[length:var(--text-ui)] text-text-secondary transition-colors hover:bg-bg-quaternary hover:text-text-primary disabled:opacity-40"
+            >
+              {testing && <Loader2 className="icon-sm animate-spin" />}
+              测试连接
+            </button>
+            {test && <TestResult r={test} />}
+          </div>
+
+          <details className="rounded-[var(--radius-md)] bg-bg-tertiary/50 px-3 py-2">
+            <summary className="text-xs text-text-secondary cursor-pointer">高级配置</summary>
+            <div className="mt-2 space-y-1.5">
+              <Cap label="支持工具调用" checked={caps.tools} onChange={(v) => setCaps((c) => ({ ...c, tools: v }))} />
+              <Cap label="支持图片输入" checked={caps.images} onChange={(v) => setCaps((c) => ({ ...c, images: v }))} />
+              <Cap label="支持思考模式" checked={caps.thinking} onChange={(v) => setCaps((c) => ({ ...c, thinking: v }))} />
+            </div>
+          </details>
+
+          {error && (
+            <div className="px-3 py-2 rounded-[var(--radius-md)] bg-[var(--color-error-soft)] text-[length:var(--text-ui)] text-[var(--color-error)]">
+              {error}
+            </div>
+          )}
+        </>
+      )}
+    </Modal>
   );
 }
 
 const inputCls =
   "mt-1 w-full rounded-[var(--radius-md)] bg-bg-tertiary px-3 py-2 text-[length:var(--text-ui)] text-text-primary outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/40";
-const btnPrimary =
-  "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs bg-accent text-on-accent hover:opacity-90 disabled:opacity-50";
-const btnGhost =
-  "px-3 py-1.5 rounded-[var(--radius-md)] bg-bg-tertiary text-[length:var(--text-ui)] text-text-secondary transition-colors hover:bg-bg-quaternary hover:text-text-primary";
 
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (

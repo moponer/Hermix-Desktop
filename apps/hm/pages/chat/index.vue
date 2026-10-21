@@ -42,6 +42,10 @@ interface Bubble {
   runningTools?: string[]
   /** 消息已发到网络层，等待桌面端开始处理（收到 turn.busy / assistant.delta 首帧时清除） */
   sending?: boolean
+  /** 这一轮跑了多久（秒），落定后冻结，用于气泡页脚的「时长」 */
+  duration?: number
+  /** 这一轮的思考过程（<think> 折叠块），落定时从会话状态带走 */
+  thinking?: string
 }
 
 const messages = ref<Bubble[]>([])
@@ -56,6 +60,71 @@ const chat = ref<ChatState>(initialChatState())
 const streaming = computed(() =>
   chat.value.streamingId ? { id: chat.value.streamingId, text: chat.value.streamingText } : null,
 )
+
+// ── 打字机 + 时长（抄 dsh-mobile 的「字符级逐字 + 实时执行可视化」）──
+//
+// 流式文本**逐字**显示：typedText 落后于 chat.streamingText，由定时器追平，
+// 最新一个字符带淡入 + 光标，读起来就是对方在「现场打字」。落定后气泡切回
+// markdown 渲染（见 onFrame）。时长与打字机共用一轮生命周期。
+const typedText = ref('')
+const turnStart = ref(0)
+const elapsed = ref(0)
+const lastDuration = ref<number | null>(null)
+let typer: ReturnType<typeof setInterval> | null = null
+let ticker: ReturnType<typeof setInterval> | null = null
+
+function startTyper() {
+  stopTyper()
+  // 每 tick 追几字符，长文本不至于跟不上流入；短文本也不会一顿一顿。
+  typer = setInterval(() => {
+    const full = chat.value.streamingText
+    const have = typedText.value.length
+    if (have < full.length) {
+      const step = Math.max(2, Math.ceil((full.length - have) / 12))
+      typedText.value = full.slice(0, have + step)
+    }
+  }, 24)
+}
+function stopTyper() {
+  if (typer !== null) {
+    clearInterval(typer)
+    typer = null
+  }
+}
+function startTicker() {
+  stopTicker()
+  ticker = setInterval(() => {
+    if (turnStart.value) elapsed.value = (Date.now() - turnStart.value) / 1000
+  }, 200)
+}
+function stopTicker() {
+  if (ticker !== null) {
+    clearInterval(ticker)
+    ticker = null
+  }
+}
+/** 秒 → "12.3s" 或 "1:05"（长任务用 m:ss，和对方 ContextMeter 同语气）。 */
+function fmtDur(s: number): string {
+  if (s >= 60) return `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`
+  return `${s.toFixed(1)}s`
+}
+/** 气泡页脚「复制」——助手气泡的操作条第一项（窄屏单行横滚）。 */
+function copy(text: string) {
+  uni.setClipboardData({
+    data: text,
+    success: () => uni.showToast({ title: '已复制', icon: 'none' }),
+  })
+}
+/** 上下文仪表文案：used/max 用 k 为单位，配百分比。 */
+function fmtCtx(c: { used: number; max: number; percent: number }): string {
+  return `${Math.round(c.used / 1000)}k / ${Math.round(c.max / 1000)}k (${Math.round(c.percent)}%)`
+}
+/** To-dos 卡片的状态图标。 */
+function todoIcon(status: string): string {
+  if (status === 'completed' || status === 'done') return '✓'
+  if (status === 'in_progress') return '●'
+  return '○'
+}
 
 /** 空态：还没有任何一轮对话。 */
 const isEmpty = computed(() => messages.value.length === 0 && !streaming.value)
@@ -188,13 +257,26 @@ function onFrame(raw: string) {
       receivedAt: Date.now(),
     })
   }
+  // 落定前要先把这一轮的思考过程从会话状态取走（reduce 的 turn.done 会清空它）
+  const thinking = chat.value.thinking
   const next = reduce(chat.value, ev)
   // 桌面开始处理的第一帧：清除所有用户消息的 sending 状态
   if (!prevTurnActive && next.turnActive) {
     messages.value.forEach((m) => { m.sending = false })
+    // 新一轮：重置打字机与计时（时长从这一刻起算）
+    typedText.value = ''
+    turnStart.value = Date.now()
+    elapsed.value = 0
+    startTyper()
+    startTicker()
   }
   // turn.done 是唯一的"一轮落定"信号；doneTools 在此时已达最终态
   const doneAtTurnEnd = !next.turnActive && prev && next.streamingId
+  if (doneAtTurnEnd) {
+    stopTyper()
+    stopTicker()
+    lastDuration.value = turnStart.value ? (Date.now() - turnStart.value) / 1000 : null
+  }
   chat.value = doneAtTurnEnd
     ? { ...next, streamingId: null, streamingText: '' }
     : next
@@ -204,7 +286,10 @@ function onFrame(raw: string) {
       role: 'assistant',
       text: next.streamingText,
       doneTools: [...next.doneTools],
+      duration: lastDuration.value ?? undefined,
+      thinking: thinking || undefined,
     })
+    typedText.value = ''
     persistSession()
   }
   scrollToTail()
@@ -353,6 +438,8 @@ async function stop() {
 
 onUnmounted(() => {
   draft.value = ''
+  stopTyper()
+  stopTicker()
   // 连接跟着页面走：留着会让一条没人读的 socket 常驻，退避重连也停不下来。
   session?.stop()
   session = null
@@ -396,6 +483,39 @@ onUnmounted(() => {
       <view v-if="linkRevoked" class="link-act" @tap="goSettings"><text>去处理</text></view>
     </view>
 
+    <!-- 运行胶囊：抄 dsh-mobile 的 ColorOS 流体云「胶囊态」——任务在跑时
+         顶部常驻一小条，切走再回来看得见状态（真·流体云需原生 UTS 插件，这里先做应用内近似）。 -->
+    <view v-if="paired && chat.turnActive" class="capsule">
+      <view class="cap-dot" />
+      <text class="cap-txt">任务运行中 · {{ fmtDur(elapsed) }}</text>
+    </view>
+
+    <!-- 上下文仪表：抄对方「上下文占用持久条」——模型窗口用掉几成，一眼可见 -->
+    <view v-if="chat.context" class="ctx">
+      <view class="ctx-bar">
+        <view
+          class="ctx-fill"
+          :class="{ over: chat.context.percent >= 80 }"
+          :style="{ width: Math.min(100, chat.context.percent) + '%' }"
+        />
+      </view>
+      <text class="ctx-t">{{ fmtCtx(chat.context) }}</text>
+    </view>
+
+    <!-- 待办列表：抄对方 To-dos 卡片——agent 的计划步骤实时跟进 -->
+    <view v-if="chat.todos.length" class="todos">
+      <text class="todos-h">待办</text>
+      <view
+        v-for="t in chat.todos"
+        :key="t.id"
+        class="todo"
+        :class="['st-' + t.status, t.status === 'completed' || t.status === 'done' ? 'done' : '']"
+      >
+        <text class="todo-ck">{{ todoIcon(t.status) }}</text>
+        <text class="todo-t">{{ t.title }}</text>
+      </view>
+    </view>
+
     <hm-empty
       v-else-if="isEmpty"
       title="还没有对话"
@@ -406,9 +526,15 @@ onUnmounted(() => {
 
     <view v-for="m in messages" :key="m.id" :class="['bub', m.role, m.sending ? 'sending' : '']">
       <hm-step v-if="m.role === 'assistant'" :running="m.runningTools ?? []" :done="m.doneTools ?? []" />
+      <hm-think v-if="m.role === 'assistant' && m.thinking" :text="m.thinking" />
       <rich-text v-if="m.role === 'assistant'" class="txt md" :nodes="renderMarkdown(m.text)" />
       <text v-else class="txt">{{ m.text }}</text>
       <text v-if="m.viaVoice" class="via">语音 · 长按可改</text>
+      <!-- 助手气泡操作条：窄屏单行、横向滚动（抄对方窄屏顺序+横滚）。复制即时可用；时长是这轮跑了多久。 -->
+      <view v-if="m.role === 'assistant'" class="acts">
+        <view class="act" @tap="copy(m.text)"><text>复制</text></view>
+        <text v-if="m.duration != null" class="dur">{{ fmtDur(m.duration) }}</text>
+      </view>
     </view>
 
     <view v-if="recording" class="bub user live">
@@ -418,11 +544,17 @@ onUnmounted(() => {
     <!-- 流式中的助手气泡：单独一个壳，收尾时转成正式气泡 -->
     <view v-if="streaming" class="bub assistant">
       <hm-step :running="chat.runningTools" :done="chat.doneTools" />
-      <rich-text class="txt md" :nodes="renderMarkdown(streaming.text)" />
+      <hm-think v-if="chat.thinking" :text="chat.thinking" />
+      <!-- 逐字打字机：稳定段 + 最新字符（带淡入）+ 光标。落定后由下方正式气泡渲染 markdown。 -->
+      <text class="txt typing">{{ typedText.slice(0, -1) }}</text><text
+        v-if="typedText.length"
+        :key="typedText.length"
+        class="txt typing fadin"
+      >{{ typedText.slice(-1) }}</text><text class="caret">▍</text>
     </view>
 
     <view v-if="chat.busy" class="hm-notice warn notice-line"><text>上一轮还在跑 · 你发的话会排队</text></view>
-    <view v-else-if="chat.turnActive" class="hm-notice notice-line"><text>还在想 · 下一条心跳 60s 后</text></view>
+    <view v-else-if="chat.turnActive" class="hm-notice notice-line"><text>还在想 · 已运行 {{ fmtDur(elapsed) }}</text></view>
     <view v-if="chat.lastError" class="hm-notice err notice-line"><text>{{ chat.lastError }}</text></view>
 
     <view id="tail" class="tail" />
@@ -598,6 +730,154 @@ onUnmounted(() => {
 }
 .tail {
   height: 8rpx;
+}
+
+/* 打字机：流式文本逐字显示。稳定段与最新字符都走 .txt 排版；最新字符带淡入，
+   末尾一个终端式光标。落定后气泡切回 markdown，不再用这套。 */
+.typing {
+  display: inline;
+  white-space: pre-wrap;
+}
+.fadin {
+  animation: charIn 0.16s ease-out;
+}
+@keyframes charIn {
+  from { opacity: 0.25; }
+  to { opacity: 1; }
+}
+.caret {
+  display: inline;
+  color: $accent;
+  font-weight: 600;
+  animation: blink 1s step-end infinite;
+}
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+/* 运行胶囊（近似 ColorOS 流体云胶囊态）：顶部常驻、单个、圆角药丸，靠底色差分界。 */
+.capsule {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+  margin: 16rpx $gutter 0;
+  padding: 12rpx 24rpx;
+  background: $card;
+  border-radius: $r-pill;
+  align-self: flex-start;
+}
+.cap-dot {
+  flex: none;
+  width: 14rpx;
+  height: 14rpx;
+  border-radius: 50%;
+  background: $ok;
+  animation: pulse 1.4s ease-in-out infinite;
+}
+.cap-txt {
+  font-size: $fs-mini;
+  color: $fg2;
+}
+
+/* 上下文仪表（抄对方「上下文占用持久条」）：细条 + 右侧文案，超过阈值转暖色。 */
+.ctx {
+  display: flex;
+  align-items: center;
+  gap: 14rpx;
+  margin: 12rpx $gutter 0;
+}
+.ctx-bar {
+  flex: 1;
+  min-width: 0;
+  height: 10rpx;
+  border-radius: $r-pill;
+  background: $raised;
+  overflow: hidden;
+}
+.ctx-fill {
+  height: 100%;
+  border-radius: $r-pill;
+  background: $accent;
+  transition: width 0.4s ease-out;
+}
+.ctx-fill.over {
+  background: $warn;
+}
+.ctx-t {
+  flex: none;
+  font-size: $fs-mini;
+  color: $fg4;
+}
+
+/* 待办列表（抄对方 To-dos 卡片）：组内步骤，完成态打勾、在跑态高亮。 */
+.todos {
+  margin: 14rpx $gutter 0;
+  padding: 18rpx 20rpx;
+  background: $card;
+  border-radius: $r-card;
+}
+.todos-h {
+  display: block;
+  font-size: $fs-mini;
+  color: $fg2;
+  margin-bottom: 10rpx;
+}
+.todo {
+  display: flex;
+  align-items: center;
+  gap: 14rpx;
+  padding: 8rpx 0;
+}
+.todo-ck {
+  flex: none;
+  width: 32rpx;
+  text-align: center;
+  font-size: 24rpx;
+  color: $fg4;
+}
+.todo.done .todo-ck {
+  color: $ok;
+}
+.todo.st-in_progress .todo-ck {
+  color: $accent;
+}
+.todo-t {
+  flex: 1;
+  min-width: 0;
+  font-size: $fs-sub;
+  color: $fg;
+}
+.todo.done .todo-t {
+  color: $fg4;
+  text-decoration: line-through;
+}
+
+/* 助手气泡操作条：窄屏单行、横向滚动（抄对方窄屏顺序+横滚）。 */
+.acts {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+  margin-top: 12rpx;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.act {
+  flex: none;
+  padding: 10rpx 24rpx;
+  border-radius: $r-pill;
+  background: $raised;
+  color: $fg2;
+  font-size: $fs-mini;
+}
+.act:active {
+  opacity: 0.7;
+}
+.dur {
+  flex: none;
+  margin-left: auto;
+  font-size: $fs-mini;
+  color: $fg4;
 }
 
 /* 发送中脉冲：用户消息右下角一个小圆点，收到回复后消失。 */

@@ -101,17 +101,7 @@ export const SelfCheckStepCard: AcuiComponent = ({ show }) => {
         aria-expanded={expanded}
       >
         <div
-          className={`shrink-0 w-6 h-6 rounded-full flex items-center justify-center bg-black/30 border font-mono text-[length:var(--text-meta)] ${
-            status === "ok"
-              ? "border-emerald-500/30 text-emerald-200"
-              : status === "fail"
-                ? "border-rose-500/40 text-rose-200"
-                : status === "warn"
-                  ? "border-amber-500/30 text-amber-200"
-                  : status === "skip"
-                    ? "border-white/10 text-text-faint"
-                    : "border-white/[0.08] text-text-secondary"
-          }`}
+          className={`shrink-0 w-6 h-6 rounded-full flex items-center justify-center bg-black/30 font-mono text-[length:var(--text-meta)] ${ status === "ok" ? "border-emerald-500/30 text-emerald-200" : status === "fail" ? "border-rose-500/40 text-rose-200" : status === "warn" ? "border-amber-500/30 text-amber-200" : status === "skip" ? "border-white/10 text-text-faint" : "border-white/[0.08] text-text-secondary" }`}
         >
           {step}
         </div>

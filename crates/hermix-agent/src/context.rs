@@ -60,6 +60,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use hermix_config::LlmProviderConfig;
+use hermix_core::types::ContentPart;
 use hermix_core::{BudgetConfig, Message, MessageRole, ToolSchema};
 use hermix_intelligence::model_metadata::{
     get_model_context_length, get_model_context_length_with, DEFAULT_FALLBACK_CONTEXT,
@@ -130,6 +131,48 @@ pub fn estimate_tokens(s: &str) -> usize {
     let cjk_tokens = (cjk_chars * 3 + 1) / 2;
     let ascii_tokens = (ascii_bytes + 3) / 4;
     cjk_tokens + ascii_tokens
+}
+
+/// Flat per-image token charge.
+///
+/// Vision billing is per tile, not per byte: a 200 KB PNG and a 2 MB PNG
+/// of the same dimensions cost the same, while their base64 lengths differ
+/// by 10x. Charging by length would either blow the budget or (as before)
+/// charge nothing at all.
+const IMAGE_TOKEN_ESTIMATE: usize = 1_500;
+
+/// Tokens a whole [`Message`] costs in the provider payload.
+///
+/// `estimate_tokens(&content)` alone was the old accounting, and it missed
+/// the two biggest payload contributors:
+///
+/// - **`tool_calls[].arguments`** — a `write_file` body or a 500-line patch
+///   is 25k+ tokens that scored **zero**. Sessions carrying large tool
+///   arguments therefore never tripped the pressure threshold and hit the
+///   provider's hard context limit instead of compressing.
+/// - **`content_parts`** — multimodal turns contributed nothing.
+///
+/// Both now count. Overhead constants cover the per-call envelope
+/// (`id` / `type` / braces), which is small but not free in bulk.
+#[inline]
+pub fn estimate_message_tokens(msg: &Message) -> usize {
+    let mut total = msg.content.as_deref().map(estimate_tokens).unwrap_or(0);
+    if let Some(calls) = msg.tool_calls.as_ref() {
+        for call in calls {
+            total += estimate_tokens(&call.function.name);
+            total += estimate_tokens(&call.function.arguments);
+            total += 4;
+        }
+    }
+    if let Some(parts) = msg.content_parts.as_ref() {
+        for part in parts {
+            total += match part {
+                ContentPart::Text { text } => estimate_tokens(text),
+                ContentPart::ImageUrl { .. } => IMAGE_TOKEN_ESTIMATE,
+            };
+        }
+    }
+    total
 }
 
 // ---------------------------------------------------------------------------
@@ -313,11 +356,7 @@ impl ContextManager {
     /// calls `total_tokens()` on every turn, so re-summing from scratch
     /// per call would be O(N) per turn for no good reason.
     pub fn add_message(&mut self, message: Message) {
-        let tokens = message
-            .content
-            .as_deref()
-            .map(estimate_tokens)
-            .unwrap_or(0);
+        let tokens = estimate_message_tokens(&message);
         self.cached_total_tokens = self.cached_total_tokens.saturating_add(tokens);
         self.messages.push(message);
     }
@@ -381,11 +420,7 @@ impl ContextManager {
         let mut tail_cost: usize = 0;
         let mut first_kept_from_tail = n;
         for i in (system_end..n).rev() {
-            let msg_cost = self.messages[i]
-                .content
-                .as_deref()
-                .map(estimate_tokens)
-                .unwrap_or(0);
+            let msg_cost = estimate_message_tokens(&self.messages[i]);
             if tail_cost + msg_cost > max_chars {
                 // Even one more message blows the budget; stop here.
                 break;
@@ -421,7 +456,7 @@ impl ContextManager {
         // Subtract evicted tokens from the cached running total.
         let evicted_tokens: usize = self.messages[system_end..cutoff]
             .iter()
-            .map(|m| m.content.as_deref().map(estimate_tokens).unwrap_or(0))
+            .map(estimate_message_tokens)
             .sum();
         self.cached_total_tokens = self.cached_total_tokens.saturating_sub(evicted_tokens);
 
@@ -467,10 +502,13 @@ impl ContextManager {
         self.cached_total_tokens = 0;
     }
 
-    /// Calculate the total token count of all message content.
-    /// Uses the 4-chars-per-token heuristic in [`estimate_tokens`] — for
-    /// CJK / emoji-heavy corpora this under-counts, which is the safe
-    /// direction (we never trigger compression too early).
+    /// Total estimated tokens of the conversation — what
+    /// [`Self::pressure_threshold_tokens`] is compared against.
+    /// Per-message accounting is [`estimate_message_tokens`]: content,
+    /// tool-call arguments and multimodal parts, not content alone.
+    /// Uses the heuristic in [`estimate_tokens`] — for CJK / emoji-heavy
+    /// corpora this under-counts, which is the safe direction (we never
+    /// trigger compression too early).
     /// **Performance**: O(1) since . The agent loop calls
     /// this on every turn (pressure check), so the previous O(N)
     /// re-summation was a hot-path tax. The cache is maintained by
@@ -492,7 +530,7 @@ impl ContextManager {
         let total: usize = self
             .messages
             .iter()
-            .map(|m| m.content.as_deref().map(estimate_tokens).unwrap_or(0))
+            .map(estimate_message_tokens)
             .sum();
         self.cached_total_tokens = total;
         total
@@ -2014,6 +2052,51 @@ let ctx = RouteContext {
 
         let cm = ContextManager::new(200_000).with_output_reserve(8192);
         assert_eq!(cm.output_reserve_tokens(), 8192);
+    }
+
+    /// A large `write_file` / `patch` body rides in `tool_calls[].arguments`.
+    /// The old counter only read `content`, so these messages were charged
+    /// zero tokens and the pressure threshold never fired — the session went
+    /// straight into the provider's hard context limit.
+    #[test]
+    fn tool_call_arguments_count_toward_the_budget() {
+        let body = "x".repeat(100_000);
+        let msg: Message = serde_json::from_value(serde_json::json!({
+            "role": "assistant",
+            "tool_calls": [{
+                "id": "call_1",
+                "name": "write_file",
+                "arguments": format!("{{\"path\":\"a.txt\",\"content\":\"{body}\"}}"),
+            }],
+        }))
+        .expect("well-formed message");
+
+        let tokens = estimate_message_tokens(&msg);
+        assert!(
+            tokens > 24_000,
+            "100 KB of tool arguments must count (~25k tokens), got {tokens}"
+        );
+        // And the running total must pick it up, since that is what the
+        // pressure check actually reads.
+        let mut cm = ContextManager::new(200_000);
+        cm.add_message(msg);
+        assert_eq!(cm.total_tokens(), tokens);
+    }
+
+    #[test]
+    fn image_parts_are_charged_a_flat_estimate() {
+        let msg: Message = serde_json::from_value(serde_json::json!({
+            "role": "user",
+            "content_parts": [{
+                "type": "image_url",
+                "image_url": { "url": "data:image/png;base64,AAAA" },
+            }],
+        }))
+        .expect("well-formed message");
+
+        // Byte length of base64 has no relation to vision token cost, so the
+        // charge is flat regardless of payload size.
+        assert_eq!(estimate_message_tokens(&msg), IMAGE_TOKEN_ESTIMATE);
     }
 
     #[test]

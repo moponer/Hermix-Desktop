@@ -15,13 +15,22 @@
 //! these constants govern the point where a tool decides to stop *building*
 //! a result, which is earlier and cheaper than truncating afterwards.
 
-/// `read_file` body cap. Large enough for a real source file, small enough
-/// that a paging loop stays affordable.
-pub const READ_FILE_CHARS: usize = 300_000;
+/// `read_file` body cap.
+///
+/// 80 K chars ≈ 20 K tokens. It used to be 300 K (≈ 75 K tokens): one read of
+/// a large lockfile or minified bundle could put a 128 K-token window at the
+/// compression threshold by itself, and the read that did it was invisible to
+/// the model's own planning. `read_file` pages (`next_offset`), so a big file
+/// costs one extra call instead of a third of the window — the paging path is
+/// cheaper than the truncation path was.
+pub const READ_FILE_CHARS: usize = 80_000;
 
-/// `terminal` output cap (stdout+stderr combined). Commands that dump more
-/// should be piped through `Select-String`/`head` — the truncation note says so.
-pub const TERMINAL_OUTPUT_CHARS: usize = 100_000;
+/// `terminal` output cap (stdout+stderr combined) — 60 K chars ≈ 15 K tokens.
+/// Commands that dump more should be piped through `Select-String`/`head`; the
+/// truncation note says so, and the head/tail split keeps a build failure's
+/// final status visible. Lowered from 100 K for the same reason as
+/// [`READ_FILE_CHARS`]: one result should not own a sixth of the window.
+pub const TERMINAL_OUTPUT_CHARS: usize = 60_000;
 
 /// `pdf` extracted-text cap per call.
 pub const PDF_TEXT_CHARS: usize = 50_000;

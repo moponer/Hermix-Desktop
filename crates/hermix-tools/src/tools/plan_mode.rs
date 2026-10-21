@@ -66,10 +66,31 @@ const PLAN_MODE_BLOCKED: &[&str] = &[
     "win_set_window_state",
     "win_close_window",
     "win_drag",
-    // Browser interactions with side effects (navigation/snapshot/screenshot
-    // remain allowed — they are read-only)
-    "browser_click",
-    "browser_type",
+    // (browser_click / browser_type were here when the headless browser line
+    // lived in hermix-tools; browser automation is viewer MCP territory now.
+    // The viewer's non-read-only actions are enumerated below — its read-only
+    // ones (`viewer__browser_text`, `viewer__webview_state`,
+    // `viewer__desktop_read_text`, …) stay available so plan mode can still
+    // inspect pages and windows. The list mirrors the `read_only: false`
+    // ToolDefs in the viewer's mcp_server.rs; new viewer write tools must be
+    // added here.)
+    "viewer__viewer_write_text",
+    "viewer__browser_open",
+    "viewer__browser_navigate",
+    "viewer__browser_click",
+    "viewer__browser_eval",
+    "viewer__browser_screenshot",
+    "viewer__browser_close",
+    "viewer__web_open",
+    "viewer__web_close",
+    "viewer__webview_navigate",
+    "viewer__webview_click",
+    "viewer__webview_hover",
+    "viewer__webview_eval",
+    "viewer__webview_screenshot",
+    "viewer__desktop_click",
+    "viewer__desktop_set_text",
+    "viewer__desktop_press_key",
     // Credential mutation
     "vault_import",
     "vault_update",
@@ -175,9 +196,14 @@ mod tests {
             "write_file",
             "patch",
             "cronjob",
-            "browser_click",
             "win_click",
             "disk_cleanup",
+            // Viewer MCP write actions (see PLAN_MODE_BLOCKED's viewer block).
+            "viewer__browser_click",
+            "viewer__browser_open",
+            "viewer__webview_eval",
+            "viewer__desktop_set_text",
+            "viewer__viewer_write_text",
         ] {
             assert!(is_blocked_in_plan_mode(blocked), "{blocked} must be blocked");
         }
@@ -187,13 +213,17 @@ mod tests {
             "read_image",
             "web_search",
             "web_extract",
-            "browser_snapshot",
-            "browser_navigate",
             "skills_list",
             "todo",
             "enter_plan_mode",
             "exit_plan_mode",
             "session_search",
+            // Viewer read-only inspection stays available in plan mode.
+            "viewer__browser_text",
+            "viewer__browser_sessions",
+            "viewer__webview_state",
+            "viewer__desktop_list_windows",
+            "viewer__desktop_read_text",
             // Read-only desktop inspection stays available (screenshot /
             // window list / element find); only the write actions are denied.
             "win_find_elements",

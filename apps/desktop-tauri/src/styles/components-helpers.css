@@ -1397,43 +1397,11 @@
   color: var(--color-error-text);
 }
 
-/* Detail Modal */
-.modal-overlay {
-  position: fixed;
-  inset: 0;
-  background: var(--color-overlay-scrim);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
-}
-
-.modal-content {
-  background: var(--color-bg-secondary);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg, 10px);
-  max-height: 85vh;
-  display: flex;
-  flex-direction: column;
-}
-
-.modal-content--wide {
-  width: 90%;
-  max-width: 800px;
-}
-
 .modal-loading,
 .modal-error {
   padding: 40px;
   text-align: center;
   color: var(--color-text-muted);
-}
-
-.modal-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 16px 20px;
 }
 
 .modal-header__title {
@@ -1475,23 +1443,6 @@
   color: var(--color-text-success);
 }
 
-.modal-close {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border: none;
-  border-radius: var(--radius-sm, 4px);
-  background: transparent;
-  color: var(--color-text-muted);
-  cursor: pointer;
-}
-
-.modal-close:hover {
-  background: var(--color-bg-tertiary);
-}
-
 .modal-tabs {
   display: flex;
   gap: 4px;
@@ -1514,12 +1465,6 @@
 .modal-tab--active {
   background: var(--color-bg-tertiary);
   color: var(--color-text-primary);
-}
-
-.modal-body {
-  flex: 1;
-  overflow-y: auto;
-  padding: 20px;
 }
 
 .modal-alert {
@@ -1569,26 +1514,6 @@
   color: var(--color-text-success);
 }
 
-
-
-
-
-
-
-
-
-
-.modal-footer {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 12px 20px;
-}
-
-.modal-footer__spacer {
-  flex: 1;
-}
-
 .btn {
   display: flex;
   align-items: center;
@@ -1604,26 +1529,6 @@
 .btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
-}
-
-
-
-
-
-/* ── App Detail Modal (redesigned 2026-07-27) ───────────────────────
-   Card-based overview, clearer tab semantics, code file switcher,
-   and a reorganized footer. Colors stay in gray/zinc family. */
-
-.app-detail-modal .modal-body {
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  /* flex item 默认 min-height:auto — 内容多高它就不肯矮于多高。长代码因此
-     把弹窗顶破 .modal-content 的 max-height:85vh：页脚被推出屏幕，代码区
-     也拿不到确定高度，height:100% 和内部滚动条一起失效（表现为"代码没法
-     滚动查看"）。归零后弹窗锁在 85vh，代码区靠 flex:1 + min-height:0 拿到
-     确定高度并在内部滚动；概览/说明两个 tab 仍由 modal-body 自己滚。 */
-  min-height: 0;
 }
 
 .app-detail-code__empty {
@@ -1815,92 +1720,10 @@
   border-color: var(--color-border-secondary);
 }
 
-
-
-/* Redesigned buttons */
-.app-detail-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 8px 14px;
-  border: none;
-  border-radius: var(--radius-md, 6px);
-  font-size: var(--text-ui);
-  font-weight: 500;
-  cursor: pointer;
-  transition: background 0.15s, opacity 0.15s, color 0.15s;
-  white-space: nowrap;
-}
-
-.app-detail-btn:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
-
-.app-detail-btn--primary {
-  background: var(--color-btn-primary-bg);
-  color: var(--color-btn-primary-text);
-}
-
-.app-detail-btn--primary:hover:not(:disabled) {
-  background: var(--color-btn-primary-hover);
-}
-
-.app-detail-btn--secondary {
-  background: var(--color-bg-tertiary);
-  color: var(--color-text-primary);
-}
-
-.app-detail-btn--secondary:hover:not(:disabled) {
-  background: var(--color-bg-hover);
-}
-
-.app-detail-btn--ghost {
-  background: transparent;
-  color: var(--color-text-secondary);
-}
-
-.app-detail-btn--ghost:hover:not(:disabled) {
-  background: var(--color-bg-hover);
-  color: var(--color-text-primary);
-}
-
-.app-detail-iconbtn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 34px;
-  height: 34px;
-  border: none;
-  border-radius: var(--radius-md, 6px);
-  background: transparent;
-  color: var(--color-text-muted);
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s;
-}
-
-.app-detail-iconbtn:hover:not(:disabled) {
-  background: var(--color-bg-hover);
-  color: var(--color-text-primary);
-}
-
-.app-detail-iconbtn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
 /* Header badge */
 .modal-header__badge--success {
   background: var(--color-success-soft);
   color: var(--color-success);
-}
-
-/* Footer layout for detail modal */
-.app-detail-modal .modal-footer__left {
-  display: flex;
-  align-items: center;
-  gap: 8px;
 }
 
 @keyframes spin {

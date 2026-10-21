@@ -29,6 +29,7 @@ import {
 } from "./bubbles/ToolOutputPreviews";
 import { parseMemoryResult, memoryActionLabel } from "../utils/memoryToolResult";
 import type { MemoryToolResult } from "../utils/memoryToolResult";
+import { COMPLETED } from "./strings";
 
 /** 与 `messageParser.ToolGroup.status` / `types.ToolMessageMeta.status` 同形。 */
 export type ProcessStatus = "running" | "done" | "error" | "skipped";
@@ -81,7 +82,7 @@ const STATUS_ICON = {
 } as const;
 
 const STATUS_LABEL: Record<ProcessStatus | "awaiting", string> = {
-  done: "已完成",
+  done: COMPLETED,
   error: "失败",
   running: "运行中",
   skipped: "已跳过",

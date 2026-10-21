@@ -76,6 +76,45 @@ pub(crate) fn tool_allowed_by_active_skill(
     set.contains(name) || SKILL_SCOPE_ALWAYS_ALLOWED.contains(&name)
 }
 
+/// Run one tool call through the registry and return its result envelope.
+///
+/// A free function so both the inline (interactive) path and the
+/// spawned (state-mutating) path share one body — the two used to be
+/// copy-pasted, and only one copy had a timeout.
+fn run_tool_handler(
+    registry: &crate::agent_helpers::ToolRegistry,
+    tool_name: &str,
+    tool_call_id: &str,
+    raw_args: &str,
+) -> ToolResult {
+    let Some(entry) = registry.get(tool_name) else {
+        let available = registry.names().join(", ");
+        return ToolResult::err(
+            tool_call_id,
+            format!("Unknown tool '{tool_name}'. Available tools: [{available}]"),
+        );
+    };
+    let params: Value = match serde_json::from_str(raw_args) {
+        Ok(v) => v,
+        Err(e) => {
+            return ToolResult::err(
+                tool_call_id,
+                format!(
+                    "Invalid JSON params for tool '{tool_name}': {e}. \
+                     Please check your parameters and retry with valid JSON."
+                ),
+            );
+        }
+    };
+    match (entry.handler)(params) {
+        Ok(output) => ToolResult::ok(tool_call_id, output),
+        Err(e) => ToolResult::err(
+            tool_call_id,
+            hermix_tools::registry::enrich_param_error(tool_name, Some(&entry.schema), &e),
+        ),
+    }
+}
+
 impl AgentLoop {
     /// Execute a batch of tool calls in parallel using a JoinSet.
     #[tracing::instrument(
@@ -479,7 +518,8 @@ impl AgentLoop {
             //  · 会改状态   —— 并行跑会互相踩（write_file / patch / terminal）
             // 第二条是后加的：调度器此前从不读 `RiskLevel`，于是同一轮里
             // 的写与读会被同时下发。判定见 agent_helpers 的文档串。
-            if !crate::agent_helpers::is_interactive_tool(&tc.function.name)
+            let interactive = crate::agent_helpers::is_interactive_tool(&tc.function.name);
+            if !interactive
                 && !crate::agent_helpers::is_state_mutating_tool(
                     self.tool_registry.as_ref(),
                     &tc.function.name,
@@ -500,38 +540,41 @@ impl AgentLoop {
             let tool_name = tc.function.name.clone();
             let raw_args = tc.function.arguments.clone();
             let registry = self.tool_registry.clone();
-            let result = match registry.get(&tool_name) {
-                Some(entry) => {
-                    let params: Value = match serde_json::from_str(&raw_args) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            let err = ToolResult::err(
-                                &tool_call_id,
-                                format!(
-                                    "Invalid JSON params for tool '{}': {}. \
-                                     Please check your parameters and retry with valid JSON.",
-                                    tool_name, e
-                                ),
-                            );
-                            orchestrated.push(err);
-                            continue;
-                        }
-                    };
-                    let handler_result = (entry.handler)(params);
-                    match handler_result {
-                        Ok(output) => ToolResult::ok(&tool_call_id, output),
-                        Err(e) => ToolResult::err(&tool_call_id, e.to_string()),
-                    }
-                }
-                None => {
-                    let available = registry.names().join(", ");
-                    ToolResult::err(
-                        &tool_call_id,
+            // Interactive tools (clarify) wait on the user, so their latency is
+            // legitimately unbounded — no budget applies. Everything else in
+            // this loop mutates state and must not be able to freeze the turn:
+            // it runs on its own task so the caller can time it out. Before
+            // this split the handler was called inline on the caller's task,
+            // which put write_file / patch / terminal entirely outside the
+            // per-call and batch budgets (both fire *after* this loop) — one
+            // hung write silently wedged the whole turn.
+            let result = if interactive {
+                run_tool_handler(registry.as_ref(), &tool_name, &tool_call_id, &raw_args)
+            } else {
+                let budget = hermix_tools::dispatch::per_tool_budget(&tool_name);
+                let handle = tokio::spawn(async move {
+                    run_tool_handler(registry.as_ref(), &tool_name, &tool_call_id, &raw_args)
+                });
+                match tokio::time::timeout(budget, handle).await {
+                    Ok(Ok(res)) => res,
+                    Ok(Err(join_err)) => ToolResult::err(
+                        &tc.id,
                         format!(
-                            "Unknown tool '{}'. Available tools: [{}]",
-                            tool_name, available
+                            "tool '{}' panicked or was cancelled: {join_err}. \
+                             [状态未知] 该工具可能在崩溃前已部分执行，继续前请先确认其影响。",
+                            tc.function.name
                         ),
-                    )
+                    ),
+                    Err(_) => ToolResult::err(
+                        &tc.id,
+                        format!(
+                            "per-call timeout after {}s: tool '{}' did not return in time. \
+                             [请勿盲目重试][状态未知] 该工具可能仍在后台执行且副作用可能已发生，\
+                             重试前请先读取目标文件/状态确认；建议改用其他方式或告知用户该操作暂不可用。",
+                            budget.as_secs(),
+                            tc.function.name
+                        ),
+                    ),
                 }
             };
             orchestrated.push(result);
@@ -660,7 +703,14 @@ impl AgentLoop {
                             // Execute the handler
                             match (entry.handler)(params) {
                                 Ok(output) => ToolResult::ok(&tool_call_id, output),
-                                Err(e) => ToolResult::err(&tool_call_id, e.to_string()),
+                                Err(e) => ToolResult::err(
+                                    &tool_call_id,
+                                    hermix_tools::registry::enrich_param_error(
+                                        &tool_name,
+                                        Some(&entry.schema),
+                                        &e,
+                                    ),
+                                ),
                             }
                         }
                         None => {
@@ -1114,5 +1164,79 @@ mod split_limit_tests {
                 "meta tool `{meta}` must never be scoped out"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod serial_pass_tests {
+    use super::*;
+    use crate::agent_helpers::ToolRegistry;
+    use hermix_core::tool_schema::JsonSchema;
+    use hermix_core::ToolError;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::{Duration, Instant};
+
+    type Handler = Arc<dyn Fn(Value) -> Result<String, ToolError> + Send + Sync>;
+
+    fn registry_with(name: &str, handler: Handler) -> ToolRegistry {
+        let mut reg = ToolRegistry::new();
+        reg.register(
+            name,
+            hermix_core::ToolSchema::new(name, "test", JsonSchema::new("object")),
+            handler,
+        );
+        reg
+    }
+
+    #[test]
+    fn unknown_tool_lists_what_is_available() {
+        let reg = registry_with("read_file", Arc::new(|_| Ok("ok".into())));
+        let res = run_tool_handler(&reg, "nope", "c1", "{}");
+        assert!(res.is_error);
+        assert!(res.content.contains("read_file"), "{}", res.content);
+    }
+
+    #[test]
+    fn malformed_json_is_rejected_before_the_handler_runs() {
+        let ran = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&ran);
+        let reg = registry_with(
+            "t",
+            Arc::new(move |_| {
+                flag.store(true, Ordering::SeqCst);
+                Ok("ok".into())
+            }),
+        );
+        let res = run_tool_handler(&reg, "t", "c1", "{not json");
+        assert!(res.is_error);
+        assert!(!ran.load(Ordering::SeqCst), "handler must not see bad params");
+    }
+
+    /// The serial pass runs state-mutating handlers inside `spawn` +
+    /// `timeout` (see `execute_bounded`). This pins the property it relies on:
+    /// a handler that never returns must not keep the caller waiting — before
+    /// the split it was called inline and put `write_file` / `patch` /
+    /// `terminal` outside every budget, so one hang froze the whole turn.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_hung_handler_is_abandoned_at_the_budget() {
+        let reg = Arc::new(registry_with(
+            "write_file",
+            Arc::new(|_| {
+                std::thread::sleep(Duration::from_secs(2));
+                Ok("late".into())
+            }),
+        ));
+        let started = Instant::now();
+        let handle = tokio::spawn(async move {
+            run_tool_handler(reg.as_ref(), "write_file", "c1", "{}")
+        });
+        let outcome = tokio::time::timeout(Duration::from_millis(150), handle).await;
+
+        assert!(outcome.is_err(), "budget must fire while the handler still runs");
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "caller must not wait for the handler: {:?}",
+            started.elapsed()
+        );
     }
 }

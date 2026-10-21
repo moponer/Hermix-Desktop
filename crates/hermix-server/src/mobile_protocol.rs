@@ -47,20 +47,37 @@ impl MobileApproval {
     }
 }
 
-/// hermix `ProtocolMessage` 的类型 → App 侧事件名。
+/// hermix `StreamEvent` 的类型 → App 侧事件名。
 ///
 /// 返回 `None` = 这类帧不推给手机（桌面端专属的内部事件），**不静默改名**。
+///
+/// **命名对齐 2026-10-21**：早期映射停留在旧 `ProtocolMessage` 命名
+///（`user_message` / `assistant_message` / `tool_call`），而中继实际转发的
+/// 是 `#[serde(tag="type", rename_all="snake_case")]` 的 `StreamEvent`
+///（`text` / `thinking` / `tool_start` / `tool_result` …）。旧名与线上输出
+/// 对不上，等于把所有 agent 事件都静默丢掉了——手机端此前收不到任何回复。
+/// 这里改回与 `StreamEvent` 真实 `type` 一一对应。
 pub fn to_mobile_event(msg_type: &str) -> Option<&'static str> {
     Some(match msg_type {
-        "user_message" => "user.message",
-        "assistant_message" | "text" => "assistant.message",
-        "tool_call" => "tool.start",
+        "text" => "assistant.message",
+        // 思考过程折叠块（与桌面端同一个 `<think>` 解析源）
+        "thinking" => "assistant.thinking",
+        "tool_start" => "tool.start",
         // 手机端语音识别配置（voice_stt.rs）：随 WS 会话建立下发
         "voice_stt_config" => "voice.stt_config",
         "tool_result" => "tool.end",
         "request_approval" => "approval.request",
         "done" => "turn.done",
         "error" => "turn.error",
+        // 上下文窗口占用（持久条）/ 单轮 token 用量（cache 命中率）
+        "context_usage" => "context.usage",
+        "usage_update" => "usage.update",
+        // 待办列表（对方 To-dos 卡片）
+        "todo_snapshot" => "todo.snapshot",
+        "todo_item_upserted" => "todo.item_upserted",
+        "todo_item_removed" => "todo.item_removed",
+        "todo_group_started" => "todo.group_started",
+        // 兼容旧命名（当前 StreamEvent 已无此变体，永不触发，保留以防回归）
         "task_in_flight" => "turn.busy",
         _ => return None,
     })
@@ -101,8 +118,16 @@ pub fn parse_sync_request(plain: &str) -> Option<u64> {
 ///
 /// 不可映射的类型返回 `None`（调用方跳过），**不产出半成品帧**——给 App 一个
 /// 它不认识的 `type`，UI 会静默忽略并留下"消息丢了"的假象。
+///
+/// **2026-10-21 关键修复**：中继实际收到的是嵌套 `WsEnvelope`
+///（`{"event": {"type": ...}, "seq": ...}`），桌面端读 `event` 那一层，而手机端
+/// 此前直接读顶层 `type` —— 顶层没有 `type`，于是**所有** agent 事件都被判成
+/// "不面向 App" 而丢弃，手机端收不到任何回复。这里先摊平到 `event` 再映射；
+/// 扁平帧（`voice_stt_config`）仍按原样处理。
 pub fn to_mobile_frame(frame: &Value) -> Option<Value> {
-    let ty = frame.get("type")?.as_str()?;
+    // 嵌套 WsEnvelope → 取 event 层；否则（扁平帧）用自身。
+    let inner = frame.get("event").filter(|v| v.is_object()).unwrap_or(frame);
+    let ty = inner.get("type")?.as_str()?;
     let event = to_mobile_event(ty)?;
     let mut out = json!({
         "type": event,
@@ -118,8 +143,29 @@ pub fn to_mobile_frame(frame: &Value) -> Option<Value> {
         "arguments",
         // voice.stt_config 的配置体（voice_stt.rs），仅该类型帧携带
         "voice_stt",
+        // 工具轨迹（tool.start / tool.end）
+        "tool_call_id",
+        "denial_kind",
+        "is_error",
+        // 上下文窗口占用（context.usage）
+        "used_tokens",
+        "max_tokens",
+        "threshold_tokens",
+        "percent",
+        // 单轮 token 用量（usage.update）
+        "prompt_tokens",
+        "completion_tokens",
+        "cache_read_tokens",
+        "cache_creation_tokens",
+        "reasoning_tokens",
+        // 待办列表（todo.*）
+        "items",
+        "item",
+        "id",
+        "group_id",
+        "group_title",
     ] {
-        if let Some(v) = frame.get(key) {
+        if let Some(v) = inner.get(key) {
             out[key] = v.clone();
         }
     }
@@ -149,13 +195,16 @@ mod tests {
     #[test]
     fn 事件名双向对齐() {
         for hermes in [
-            "user_message",
-            "assistant_message",
-            "tool_call",
+            "text",
+            "thinking",
+            "tool_start",
             "tool_result",
             "request_approval",
             "done",
             "error",
+            "context_usage",
+            "usage_update",
+            "todo_snapshot",
         ] {
             let ev = to_mobile_event(hermes).unwrap_or_else(|| panic!("{hermes} 未映射"));
             // 上行只覆盖客户端会发的三类；其余是纯下行，这里只验标签形状
@@ -175,7 +224,7 @@ mod tests {
     #[test]
     fn 帧转换带过已知字段() {
         let f = json!({
-            "type": "tool_call",
+            "type": "tool_start",
             "session_id": "s1",
             "tool": "read_file",
             "arguments": {"path": "a.rs"},
@@ -190,6 +239,57 @@ mod tests {
             m.get("secret_internal").is_none(),
             "未知内部字段不得外泄给手机端"
         );
+    }
+
+    #[test]
+    fn 嵌套_wsenvelope_被摊平再映射() {
+        // 中继真实收到的是 WsEnvelope：{event:{type:...}, seq, ...}。
+        // 此前直接读顶层 type（不存在）→ 全部丢弃，手机收不到任何回复。
+        // 这里验证嵌套帧能被正确摊平并映射。
+        let env = json!({
+            "version": 1,
+            "seq": 7,
+            "event": {
+                "type": "thinking",
+                "content": "让我先想想",
+            },
+        });
+        let m = to_mobile_frame(&env).expect("嵌套帧应可映射");
+        assert_eq!(m["type"], "assistant.thinking");
+        assert_eq!(m["content"], "让我先想想");
+
+        // 扁平帧（voice_stt_config）仍按原样处理
+        let flat = json!({"type": "voice_stt_config", "voice_stt": {"ok": true}});
+        let m2 = to_mobile_frame(&flat).expect("扁平帧应可映射");
+        assert_eq!(m2["type"], "voice.stt_config");
+    }
+
+    #[test]
+    fn context_usage_与_todo_字段被带过() {
+        let env = json!({
+            "event": {
+                "type": "context_usage",
+                "used_tokens": 48000,
+                "max_tokens": 200000,
+                "threshold_tokens": 160000,
+                "percent": 24.0,
+            },
+        });
+        let m = to_mobile_frame(&env).expect("应可映射");
+        assert_eq!(m["type"], "context.usage");
+        assert_eq!(m["used_tokens"], 48000);
+        assert_eq!(m["max_tokens"], 200000);
+        assert_eq!(m["percent"], 24.0);
+
+        let snap = json!({
+            "event": {
+                "type": "todo_snapshot",
+                "items": [{"id": "t1", "title": "写代码", "status": "in_progress"}],
+            },
+        });
+        let m2 = to_mobile_frame(&snap).expect("应可映射");
+        assert_eq!(m2["type"], "todo.snapshot");
+        assert_eq!(m2["items"][0]["title"], "写代码");
     }
 
     #[test]

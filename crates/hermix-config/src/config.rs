@@ -947,6 +947,11 @@ pub struct FreeChannelConfig {
     /// 模型被挤出可见范围。启动时清理一次后置真，不再反复干预用户选择。
     #[serde(default)]
     pub selector_cleaned: bool,
+
+    /// 开箱默认是否已把「上下文最大的 N 个免费模型」自动写进启用清单。
+    /// 置真后不再干预，尊重用户在设置页的手动启/停。
+    #[serde(default)]
+    pub defaults_seeded: bool,
 }
 
 fn default_true() -> bool {
@@ -961,6 +966,7 @@ impl Default for FreeChannelConfig {
             models_url: None,
             refresh_on_start: true,
             selector_cleaned: false,
+            defaults_seeded: false,
         }
     }
 }

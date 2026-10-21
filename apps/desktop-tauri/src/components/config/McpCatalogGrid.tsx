@@ -24,6 +24,8 @@ import {
 import * as api from "../../api/rest";
 import type { CatalogEntry } from "../../api/types";
 import { toastError, toastSuccess } from "../../hooks/useToast";
+import { Button, ConfirmDialog, Modal } from "../ui";
+import { LOADING } from "../strings";
 
 const CATEGORY_ICON: Record<string, React.ReactNode> = {
   办公: <Blocks className="icon-md" />,
@@ -122,7 +124,7 @@ export function McpCatalogGrid({ onInstalled }: { onInstalled: () => void }) {
     return (
       <div className="flex items-center gap-2 text-[length:var(--text-meta)] text-text-muted py-6 justify-center">
         <Loader2 className="icon-md animate-spin" />
-        正在读取内置目录…
+        {LOADING}
       </div>
     );
   }
@@ -241,7 +243,7 @@ export function McpCatalogGrid({ onInstalled }: { onInstalled: () => void }) {
                   {item.scan.hits
                     .filter((h) => h.rule !== "executes_local_code" && h.rule !== "community_source" && h.rule !== "untraceable_source" && h.rule !== "unpinned_version" && h.rule !== "requires_secrets")
                     .map((h) => (
-                      <li key={h.rule} className="text-[length:var(--text-tiny)] text-error leading-snug">
+                      <li key={h.rule} className="text-[length:var(--text-tiny)] text-text-error leading-snug">
                         · {h.detail}
                       </li>
                     ))}
@@ -252,10 +254,10 @@ export function McpCatalogGrid({ onInstalled }: { onInstalled: () => void }) {
                 <span
                   className={`text-[length:var(--text-tiny)] ${
                     item.scan.verdict === "pass"
-                      ? "text-success"
+                      ? "text-text-success"
                       : item.scan.verdict === "warn"
-                        ? "text-warning"
-                        : "text-error"
+                        ? "text-text-warning"
+                        : "text-text-error"
                   }`}
                 >
                   {item.scan.label}
@@ -276,110 +278,106 @@ export function McpCatalogGrid({ onInstalled }: { onInstalled: () => void }) {
 
       {/* 凭据对话框：MCP 是外部服务的接入层，绝大多数条目要用户自己的凭据。
           值只随 install 请求发往本机后端，写进 ~/.hermix/mcp_servers.json，
-          不出网、不进 localStorage。 */}
+          不出网、不进 localStorage。
+          弹窗壳收编到 ui/Modal：焦点陷阱 / Esc / 焦点归还 / role=dialog +
+          aria-modal 一次性补齐；遮罩由 Modal 的 scrim 提供（此前是裸
+          bg-black/30，black 不在令牌重定向清单里，是真裸黑）。 */}
       {envTarget && (
-        <div
-          className="fixed inset-0 z-50 grid place-items-center bg-black/30 p-4"
-          onClick={() => setEnvTarget(null)}
-        >
-          <div
-            className="w-full max-w-md rounded-xl bg-bg-elevated p-4 shadow-pop"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center gap-2">
-              <Terminal className="icon-md text-text-muted" />
-              <span className="text-[length:var(--text-ui)] font-semibold text-text-primary">
-                配置「{envTarget.titleZh ?? envTarget.title}」
-              </span>
-            </div>
-            <p className="mt-2 text-[length:var(--text-meta)] text-text-secondary leading-snug">
-              该 server 需要以下配置才能连上第三方服务。值保存在本机配置文件里，不会上传到任何地方。
-            </p>
-            <div className="mt-3 space-y-2">
-              {envTarget.requiredEnv.map((k) => (
-                <label key={k} className="block">
-                  <span className="text-[length:var(--text-tiny)] text-text-muted font-mono">{k}</span>
-                  <input
-                    type="password"
-                    value={envDraft[k] ?? ""}
-                    onChange={(e) => setEnvDraft((d) => ({ ...d, [k]: e.target.value }))}
-                    placeholder="粘贴你的密钥"
-                    className="mt-0.5 w-full h-8 px-2.5 rounded-md bg-bg-tertiary text-[length:var(--text-meta)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] font-mono"
-                  />
-                </label>
-              ))}
-            </div>
-            <div className="mt-3 flex items-center gap-2 justify-end">
-              <button
-                onClick={() => setEnvTarget(null)}
-                className="h-7 px-2.5 rounded-md text-[length:var(--text-meta)] bg-bg-tertiary text-text-secondary hover:bg-bg-hover"
-              >
+        <Modal
+          open
+          onClose={() => setEnvTarget(null)}
+          width="base"
+          scrim
+          closeOnBackdrop={false} closeOnEscape={false}
+          title={
+            <span className="flex items-center gap-2">
+              <Terminal className="icon-md text-text-muted" aria-hidden="true" />
+              配置「{envTarget.titleZh ?? envTarget.title}」
+            </span>
+          }
+          bodyClassName="overflow-y-auto px-5 pb-5"
+          footer={
+            <>
+              <Button variant="secondary" size="base" onClick={() => setEnvTarget(null)}>
                 取消
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="primary"
+                size="base"
+                disabled={!envComplete(envTarget)}
                 onClick={() => {
                   const t = envTarget;
                   setEnvTarget(null);
                   void doInstall(t, false, envDraft);
                 }}
-                disabled={!envComplete(envTarget)}
-                className="h-7 px-2.5 rounded-md text-[length:var(--text-meta)] bg-[var(--color-btn-primary-bg)] text-[var(--color-btn-primary-text)] disabled:opacity-40"
               >
                 下一步
-              </button>
-            </div>
+              </Button>
+            </>
+          }
+        >
+          <p className="text-[length:var(--text-meta)] text-text-secondary leading-snug">
+            该 server 需要以下配置才能连上第三方服务。值保存在本机配置文件里，不会上传到任何地方。
+          </p>
+          <div className="mt-3 space-y-2">
+            {envTarget.requiredEnv.map((k) => (
+              <label key={k} className="block">
+                <span className="text-[length:var(--text-tiny)] text-text-muted font-mono">{k}</span>
+                <input
+                  type="password"
+                  value={envDraft[k] ?? ""}
+                  onChange={(e) => setEnvDraft((d) => ({ ...d, [k]: e.target.value }))}
+                  placeholder="粘贴你的密钥"
+                  className="mt-0.5 w-full h-8 px-2.5 rounded-md bg-bg-tertiary text-[length:var(--text-meta)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] font-mono"
+                />
+              </label>
+            ))}
           </div>
-        </div>
+        </Modal>
       )}
 
-      {confirming && (
-        <div
-          className="fixed inset-0 z-50 grid place-items-center bg-black/30 p-4"
-          onClick={() => setConfirming(null)}
-        >
-          <div
-            className="w-full max-w-md rounded-xl bg-bg-elevated p-4 shadow-pop"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center gap-2">
-              <ShieldAlert className="icon-md text-warning" />
-              <span className="text-[length:var(--text-ui)] font-semibold text-text-primary">
-                安装前请确认
-              </span>
-            </div>
-            <p className="mt-2 text-[length:var(--text-meta)] text-text-secondary">
-              「{confirming.titleZh ?? confirming.title}」需要确认后才能安装。
-            </p>
-            {confirming.scan.commandPreview && (
-              <pre className="mt-2 px-2.5 py-2 rounded-md bg-bg-tertiary text-[length:var(--text-tiny)] font-mono text-text-secondary whitespace-pre-wrap break-all">
-                {confirming.scan.commandPreview}
-              </pre>
-            )}
-            <ul className="mt-2 space-y-1">
-              {confirming.scan.hits.map((h) => (
-                <li key={h.rule} className="text-[length:var(--text-tiny)] text-text-muted leading-snug">
-                  · {h.detail}
-                </li>
-              ))}
-            </ul>
-            <div className="mt-3 flex items-center gap-2 justify-end">
-              <button
-                onClick={() => setConfirming(null)}
-                className="h-7 px-2.5 rounded-md text-[length:var(--text-meta)] bg-bg-tertiary text-text-secondary hover:bg-bg-hover"
-              >
-                取消
-              </button>
-              <button
-                onClick={() => void doInstall(confirming, true, lastEnv)}
-                disabled={busyId === confirming.id}
-                className="h-7 px-2.5 rounded-md text-[length:var(--text-meta)] bg-[var(--color-btn-primary-bg)] text-[var(--color-btn-primary-text)] disabled:opacity-50"
-              >
-                {busyId === confirming.id ? "安装中…" : "我已知悉，继续安装"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* 安装前确认：破坏性/有风险动作的唯一模式是 ui/ConfirmDialog
+          （宪法 §九）。此前是手写弹窗：无 role=dialog、无 aria-modal、
+          无焦点陷阱、无 Esc。 */}
+      <ConfirmDialog
+        open={confirming !== null}
+        scrim
+        title={
+          <span className="flex items-center gap-2">
+            <ShieldAlert className="icon-md text-warning" aria-hidden="true" />
+            安装前请确认
+          </span>
+        }
+        confirmLabel="我已知悉，继续安装"
+        confirmVariant="primary"
+        busy={busyId === confirming?.id}
+        body={
+          confirming ? (
+            <>
+              <p className="text-[length:var(--text-ui)] text-text-secondary">
+                「{confirming.titleZh ?? confirming.title}」需要确认后才能安装。
+              </p>
+              {confirming.scan.commandPreview && (
+                <pre className="mt-2 px-2.5 py-2 rounded-md bg-bg-tertiary text-[length:var(--text-tiny)] font-mono text-text-secondary whitespace-pre-wrap break-all">
+                  {confirming.scan.commandPreview}
+                </pre>
+              )}
+              <ul className="mt-2 space-y-1">
+                {confirming.scan.hits.map((h) => (
+                  <li key={h.rule} className="text-[length:var(--text-tiny)] text-text-muted leading-snug">
+                    · {h.detail}
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : null
+        }
+        onCancel={() => setConfirming(null)}
+        onConfirm={() => {
+          if (!confirming) return;
+          void doInstall(confirming, true, lastEnv);
+        }}
+      />
     </div>
   );
 }

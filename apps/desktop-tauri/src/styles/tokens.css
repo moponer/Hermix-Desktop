@@ -131,6 +131,29 @@
   --space-6: 24px;
   --space-8: 32px;
 
+  /* ── 控件高度档（2026-10-21）────────────────────────────────
+     宪法 §五定的控件高度是 24/30/32/40/44 五档，但实测同屏能出现 6 种
+     （.modal-input ≈36、AdvancedSettingsTab px-3 py-2 ≈37、ConnectorsTab
+     px-2.5 py-1.5 ≈30、ui/Input 28/32/40/44…）。收敛成**三档**：
+     sm=24（chip / 小钮）/ md=32（默认表单与按钮）/ lg=40（大输入区）。
+     结构性令牌，跨主题恒定，主题文件不得覆盖。 */
+  --control-h-sm: 24px;
+  --control-h-md: 32px;
+  --control-h-lg: 40px;
+
+  /* 弹窗最大高度 —— 此前 85/90/80/70/60/40vh 六种并存（ui/Modal 85vh、
+     AutomationView 90vh、TestDialog 80vh、.modal-form 70vh…）。统一成一档。 */
+  --dialog-max-h: 85vh;
+
+  /* 行内代码底色 —— 从 components-prose.css 里那个手调的 45% 魔数提上来。
+     45% 是「上一版实测选的档位」，既不是令牌也不是 spacing 档，换主题后
+     未再验证过。 */
+  --color-code-inline-bg: color-mix(in srgb, var(--color-bg-tertiary) 45%, transparent);
+
+  /* 正文字距 —— 中文正文例外（0.01em）。中文不需要负字距，0.01em 是拉丁
+     为主的设计里对中文也能接受的一点点间隔。 */
+  --tracking-body: 0.01em;
+
   /* Radius scale */
   /* 圆角标度，抄 cc-haha（其注释：6–7 角标 / 9–11 控件 / 12–14 内卡 /
      16–18 卡片 / 20 输入框 / 24 弹窗 / 999 药丸）。
@@ -178,6 +201,11 @@
      page=672 常规设置页；wide-page=896 数据/宽页。 */
   --width-page: 672px;
   --width-wide-page: 896px;
+  /* 宽面板（设置主面板这类「几乎全屏但仍是浮层」的容器）。
+     此前是 SettingsDialog 的裸数字 1080 —— 弹窗宽度不走令牌，
+     就等于宽度这件事永远不受约束（审计问题 42）。
+     窄屏由 ui/Modal 的 maxWidth: calc(100vw - 2rem) 兜住。 */
+  --width-panel: 1080px;
   /* 2026-10-16（R1-1）：起排线 —— 助手消息续条与首条正文共用的缩进。
      头像 22px + gap 10px = 32px，废止散落的 30px。 */
   --indent-thread: 32px;
@@ -264,7 +292,9 @@
      的重采样里会被削成半透明，必须留出余量才不至于整条消失。 */
   --color-border-subtle: #f0f0f0;
   --color-border-primary: #e5e5e5;
-  --color-border-secondary: #d4d4d4;  /* 控件描边（WCAG 1.4.11 3:1） */
+  --color-border-secondary: #d4d4d4;  /* 发丝分隔线：与所压底色亮度比 ≥1.10。
+     **不是** 3:1 —— WCAG 1.4.11 的 3:1 落在 --color-border 上（控件边界）。
+     原注释写「WCAG 1.4.11 3:1」是错的（实测仅 1.48:1），已改正。 */
   --color-border: #7c7c7c;             /* 强描边 / focus 参照 */
   --color-border-strong: #7c7c7c;
   /* 2026-09-29：此前的 --color-border-strong 在暗色下会翻成近白（#e9eaee），
@@ -347,10 +377,19 @@
      字面量而非 color-mix 派生，值随主题在 themes/dark.css 覆写。 */
   --color-accent-hover: color-mix(in srgb, var(--color-accent) 88%, black);
   --color-accent-on-text: color-mix(in srgb, var(--color-accent) 16%, transparent);
-  /* soft 档：accent 极淡的底。混白而非降低 alpha——半透明叠在不同底色
-     上会算出不同观感，token 就失去「唯一定义」的意义。 */
+  /* soft 档：accent 极淡的底（纸面语义）。混白而非降低 alpha——半透明叠在
+     不同底色上会算出不同观感，token 就失去「唯一定义」的意义。
+
+     2026-10-21：暗色主题必须覆盖这两档（见 themes/dark.css）。这里的
+     「混白」是**为白纸面调的**，暗底上混白 = 近白亮块：preview 的行内代码
+     底 + text-primary 字会变成白底浅字、引用块同样读不出来。暗色改成
+     「accent 混纸面底」，保持同样的极淡染色而不反色。 */
   --color-accent-soft: color-mix(in srgb, var(--color-accent) 10%, white);
   --color-accent-soft-strong: color-mix(in srgb, var(--color-accent) 18%, white);
+  /* accent-line：给「恒暗底浮层」用的可见强调线（截图覆盖窗的选区边框、
+     标注输入框 outline）。与 soft 档语义相反 —— soft 是纸面上的淡染色，
+     line 是暗底上的亮线，因此**不随暗色主题变暗**，恒为 accent 混白。 */
+  --color-accent-line: color-mix(in srgb, var(--color-accent) 18%, white);
   /* 渠道品牌色（2026-09-30）：只用于渠道徽标小圆牌，让 QQ / 企业微信
      一眼可辨。亮色用品牌原色，暗色在 themes/dark.css 提亮一档。 */
   --color-brand-qq: #12b7f5;
@@ -392,11 +431,21 @@
   /* 芥黄：与陶土红强调色拉开色相，避免「品牌」与「注意」互相稀释。 */
   --color-warning: #a8751f;
   --color-warning-soft: #f8f0dc;
-  --color-text-warning: #7a5e0c;
   --color-error: #c74436;
   --color-error-soft: #faece8;
   --color-info: #4f7fa3;
   --color-info-soft: rgba(79, 127, 163, 0.12);
+
+  /* ── 语义四色的「文字安全档」────────────────────────────────
+     原始语义色（--color-success 等）是为**图标 / 描边 / 填充**设计的，
+     直接拿来当 12px 小字并不总是够对比度。实测（WCAG，纸面 + 各自 -soft 底）：
+       success 4.70/4.10 · warning 4.02/3.54 · error 4.87/4.23 · info 4.29/3.72
+     下面四个是**保持色相、只压暗**解出来的文字档，两处都 ≥4.5:1。
+     用法：12px 以下的语义文字一律走 `text-text-*`；原始档留给图标与描边。 */
+  --color-text-success: #3a794e;   /* 5.20 / 4.53 */
+  --color-text-warning: #7a5e0c;   /* 6.12 / 4.75 */
+  --color-text-error: #bf4134;     /* 5.22 / 4.53 */
+  --color-text-info: #467191;      /* 5.21 / 4.52 */
 
   /* ── Tailwind 原生色槽 → 语义令牌重定向（L0，2026-10-01）──────────
      101 处组件写着 `text-red-400` / `bg-emerald-500` 这类 Tailwind
@@ -501,5 +550,17 @@
   --color-error-bg: var(--color-error-soft);
   --color-warning-bg: var(--color-warning-soft);
   --color-error-text: var(--color-error);
-  --color-text-success: var(--color-success);
+  /* 旧名的 --color-text-success 曾是「success 当文字用」的别名。语义四色
+     有了自己的文字安全档（见上方 @theme 里的 --color-text-*），这个别名
+     删掉——否则它作为**未分层**的 :root 声明会盖掉 @theme 里的新值
+     （未分层样式永远赢过 @layer theme）。现有 5 处
+     `color: var(--color-text-success)` 引用自动改用新档。 */
+  /* 纸面令牌：表格是一张白纸（白底黑字 + 灰色网格线），与 Office 一致。
+     界面主题不渗进表格里 —— 深色界面配白纸浅字，内容会直接看不见。
+     共享预览层（@hermix/preview）只使用这些令牌，定义权在应用侧。 */
+  --sheet-bg: #ffffff;
+  --sheet-ink: #000000;
+  --sheet-grid: #d0d0d0;
+  --sheet-head-bg: #f0f0f0;
+  --sheet-head-fg: #5a5a5a;
 }

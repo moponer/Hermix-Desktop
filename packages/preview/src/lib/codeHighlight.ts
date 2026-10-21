@@ -355,10 +355,16 @@ export function highlightToReact(
   }
 }
 
-// Reads the active theme. `useTheme()` toggles a `.dark` class on
-// `<html>`, so the call is idempotent and re-runs whenever the
-// parent re-renders on theme change.
+// Reads the active theme.
+//
+// 主题的唯一来源是 `root.dataset.theme` / `root.style.colorScheme`
+// （桌面端 useTheme.ts 的 applyTheme 设置）——**`.dark` 类已废除**，
+// `classList.contains("dark")` 恒为 false。
+//
+// 本包内的渲染路径实际都走显式传入的 `isDark` prop
+// （CodeBlock.tsx / PreviewSurface.tsx / MarkdownView.tsx），
+// 这个导出目前无调用点，保留仅为避免下一个调用方再踩 `.dark` 的坑。
 export function readIsDark(): boolean {
-  return typeof document !== "undefined" &&
-    document.documentElement.classList.contains("dark");
+  if (typeof document === "undefined") return false;
+  return document.documentElement.style.colorScheme === "dark";
 }

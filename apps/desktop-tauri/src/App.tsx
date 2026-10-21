@@ -60,6 +60,7 @@ import type {
 import { storage, STORAGE_KEYS, sessionKey } from "./utils/storageCompat";
 import { sendNotification, setKeepAwake, KEEP_AWAKE_CHANGED_EVENT, setTrayTaskCount } from "./desktopBridge";
 import { applyScale, readScale, UI_SCALE_EVENT } from "./utils/uiScale";
+import { CLOSE, NEW_CHAT } from "./components/strings";
 
 const LEFT_KEY = STORAGE_KEYS.sidebarWidth;
 
@@ -85,7 +86,7 @@ const LEFT_MAX = 360;
 // 当时是"收窄实验"的起点，现在是"对齐参考"的终点）。侧栏可拖，上限 360。
 const LEFT_DEFAULT = 280;
 // 右列默认 640，拖动范围 360-840；vw=1440 时主列 = 1440 - 200 - 640 = 800。
-// 640 足以完整显示中文长标题分类（如"节假日危险品重大危险源..."），
+// 640 足以完整显示中文长标题分类（如"节假日危险品重大危险源…"），
 // 480 会让这类标题被截断；640 也不挤压主列。
 const RIGHT_MIN = 360;
 const RIGHT_MAX = 840;
@@ -1305,7 +1306,7 @@ setPage("chat");
    */
   const computeAutoTitle = (s: Session, fallbackContent: string): string => {
     const isPlaceholder =
-      !s.title || s.title === "新建对话" || s.title === "新对话" || s.title === "New chat";
+      !s.title || s.title === NEW_CHAT || s.title === "新对话" || s.title === "New chat";
     if (!isPlaceholder) return s.title;
     const firstUserMsg = s.messages.find((m) => m.role === "user");
     const raw = firstUserMsg?.content ?? fallbackContent;
@@ -4011,7 +4012,7 @@ return {
             </div>
             <button
               className="denial-banner__close"
-              aria-label="关闭"
+              aria-label={CLOSE}
               onClick={(e) => { e.stopPropagation(); dismissDenialBanner(); }}
             >×</button>
           </div>

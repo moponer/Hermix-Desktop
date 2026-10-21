@@ -255,7 +255,39 @@ pub fn write_auto_skill(
     fs::create_dir_all(target.parent().unwrap())?;
     let rendered = render_skill_md(&slug, body);
     fs::write(&target, rendered)?;
+    warn_if_auto_skills_pile_up(&dir);
     Ok(target.canonicalize().unwrap_or(target))
+}
+
+/// 沉淀技能数量超过这个数就提示一次。
+///
+/// 每个沉淀技能都会进路由匹配池（受 `AUTO_SKILL_SCORE_FACTOR` 降权与
+/// `AUTO_SKILL_MIN_SCORE` 门槛约束，但仍会参与）。降权解决了"抢名额"，
+/// 数量本身只影响扫描成本（每个 ~2KB）与目录可读性。
+///
+/// **不自动删除**：删掉的可能正是下次要复用的那条，而磁盘代价很小。
+/// 提示一次（进程内 `OnceLock`）足够——反复刷日志没有额外价值。
+pub const AUTO_SKILL_SOFT_LIMIT: usize = 80;
+
+fn warn_if_auto_skills_pile_up(dir: &Path) {
+    static WARNED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    if WARNED.get().is_some() {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    let count = entries.flatten().filter(|e| e.path().is_dir()).count();
+    if count > AUTO_SKILL_SOFT_LIMIT {
+        let _ = WARNED.set(());
+        tracing::warn!(
+            count,
+            limit = AUTO_SKILL_SOFT_LIMIT,
+            dir = %dir.display(),
+            "自动沉淀的技能数量已超过软上限：它们参与路由匹配（已降权 + 更高的门槛），\
+             但数量过多会拖慢扫描。可手动清理不再需要的目录。"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

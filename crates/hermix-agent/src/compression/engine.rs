@@ -4,74 +4,77 @@ use hermix_core::{Message, MessageRole};
 
 use super::*;
 
-impl ContextCompressor {
-    // ------------------------------------------------------------------
-
-    /// Fix orphaned tool_call / tool_result pairs after compression.
-    pub fn sanitize_tool_pairs(&self, messages: Vec<Message>) -> Vec<Message> {
-        let mut surviving_call_ids = std::collections::HashSet::new();
-        for msg in &messages {
-            if msg.role == MessageRole::Assistant {
-                if let Some(tcs) = msg.tool_calls.as_ref() {
-                    for tc in tcs {
-                        if !tc.id.is_empty() {
-                            surviving_call_ids.insert(tc.id.clone());
-                        }
+/// Fix orphaned tool_call / tool_result pairs after compression.
+///
+/// A free function rather than only a compressor method: the gateway's
+/// oversized-session safety net trims history *before* the first LLM call,
+/// when no compressor instance exists, and it needs exactly this repair — a
+/// tail slice can begin in the middle of a `tool_use` group, and a dropped
+/// middle leaves `tool_use` blocks with no matching `tool_result`.
+pub fn sanitize_tool_pairs(messages: Vec<Message>, quiet: bool) -> Vec<Message> {
+    let mut surviving_call_ids = std::collections::HashSet::new();
+    for msg in &messages {
+        if msg.role == MessageRole::Assistant {
+            if let Some(tcs) = msg.tool_calls.as_ref() {
+                for tc in tcs {
+                    if !tc.id.is_empty() {
+                        surviving_call_ids.insert(tc.id.clone());
                     }
                 }
             }
         }
+    }
 
-        let mut result_call_ids = std::collections::HashSet::new();
-        for msg in &messages {
-            if msg.role == MessageRole::Tool {
-                if let Some(cid) = msg.tool_call_id.as_ref() {
-                    result_call_ids.insert(cid.clone());
-                }
+    let mut result_call_ids = std::collections::HashSet::new();
+    for msg in &messages {
+        if msg.role == MessageRole::Tool {
+            if let Some(cid) = msg.tool_call_id.as_ref() {
+                result_call_ids.insert(cid.clone());
             }
         }
+    }
 
-        let orphaned_results: std::collections::HashSet<_> = result_call_ids
-            .difference(&surviving_call_ids)
-            .cloned()
-            .collect();
-        let missing_results: std::collections::HashSet<_> = surviving_call_ids
-            .difference(&result_call_ids)
-            .cloned()
-            .collect();
+    let orphaned_results: std::collections::HashSet<_> = result_call_ids
+        .difference(&surviving_call_ids)
+        .cloned()
+        .collect();
+    let missing_results: std::collections::HashSet<_> = surviving_call_ids
+        .difference(&result_call_ids)
+        .cloned()
+        .collect();
 
-        let messages: Vec<Message> = messages
-            .into_iter()
-            .filter(|m| {
-                !(m.role == MessageRole::Tool
-                    && m.tool_call_id
-                        .as_ref()
-                        .map(|cid| orphaned_results.contains(cid))
-                        .unwrap_or(false))
-            })
-            .collect();
+    let messages: Vec<Message> = messages
+        .into_iter()
+        .filter(|m| {
+            !(m.role == MessageRole::Tool
+                && m.tool_call_id
+                    .as_ref()
+                    .map(|cid| orphaned_results.contains(cid))
+                    .unwrap_or(false))
+        })
+        .collect();
 
-        if !orphaned_results.is_empty() && !self.config.quiet_mode {
-            tracing::info!(
-                "Compression sanitiser: removed {} orphaned tool result(s)",
-                orphaned_results.len()
-            );
-        }
+    if !orphaned_results.is_empty() && !quiet {
+        tracing::info!(
+            "Compression sanitiser: removed {} orphaned tool result(s)",
+            orphaned_results.len()
+        );
+    }
 
-        if missing_results.is_empty() {
-            return messages;
-        }
+    if missing_results.is_empty() {
+        return messages;
+    }
 
-        let mut patched = Vec::with_capacity(messages.len() + missing_results.len());
-        for msg in messages.into_iter() {
-            let role = msg.role;
-            let tool_calls = msg.tool_calls.clone();
-            patched.push(msg);
-            if role == MessageRole::Assistant {
-                if let Some(tcs) = tool_calls {
-                    for tc in tcs {
-                        if missing_results.contains(&tc.id) {
-                            patched.push(Message {
+    let mut patched = Vec::with_capacity(messages.len() + missing_results.len());
+    for msg in messages.into_iter() {
+        let role = msg.role;
+        let tool_calls = msg.tool_calls.clone();
+        patched.push(msg);
+        if role == MessageRole::Assistant {
+            if let Some(tcs) = tool_calls {
+                for tc in tcs {
+                    if missing_results.contains(&tc.id) {
+                        patched.push(Message {
                                 role: MessageRole::Tool,
                                 content: Some(
                                     "[ALREADY EXECUTED] [Result from earlier conversation — see context summary above]"
@@ -88,20 +91,26 @@ impl ContextCompressor {
                                 ephemeral: false,
                                 automation_meta: None,
                             });
-                        }
                     }
                 }
             }
         }
+    }
 
-        if !self.config.quiet_mode {
-            tracing::info!(
-                "Compression sanitiser: added {} stub tool result(s)",
-                missing_results.len()
-            );
-        }
+    if !quiet {
+        tracing::info!(
+            "Compression sanitiser: added {} stub tool result(s)",
+            missing_results.len()
+        );
+    }
 
-        patched
+    patched
+}
+
+impl ContextCompressor {
+    /// Fix orphaned tool_call / tool_result pairs after compression.
+    pub fn sanitize_tool_pairs(&self, messages: Vec<Message>) -> Vec<Message> {
+        sanitize_tool_pairs(messages, self.config.quiet_mode)
     }
 
     // ------------------------------------------------------------------
@@ -416,7 +425,8 @@ impl ContextCompressor {
         // summarised away. If it falls inside the middle slice that
         // would be condensed, pull the tail boundary back so it stays
         // verbatim in the protected tail (it is recent and task-critical).
-        if let Some(task_idx) = crate::compression_pipeline::last_task_instruction_index(&messages) {
+        if let Some(task_idx) = crate::compression_pipeline::last_task_instruction_index(&messages)
+        {
             if task_idx < compress_end {
                 compress_end = task_idx;
             }
@@ -667,7 +677,11 @@ impl ContextCompressor {
                 saved,
                 savings_pct,
             );
-            tracing::info!("Compression #{} complete: {}", self.compression_count, self.last_metrics);
+            tracing::info!(
+                "Compression #{} complete: {}",
+                self.compression_count,
+                self.last_metrics
+            );
         }
 
         // emit the structured
@@ -701,8 +715,12 @@ impl ContextCompressor {
             } else {
                 self.last_trigger_reason.clone()
             },
-            per_role_pre: crate::compression_pipeline::CompressionReport::compute_per_role(&messages),
-            per_role_post: crate::compression_pipeline::CompressionReport::compute_per_role(&compressed),
+            per_role_pre: crate::compression_pipeline::CompressionReport::compute_per_role(
+                &messages,
+            ),
+            per_role_post: crate::compression_pipeline::CompressionReport::compute_per_role(
+                &compressed,
+            ),
         };
         if !self.config.quiet_mode {
             tracing::info!("{}", report.format_line());
@@ -722,7 +740,8 @@ impl ContextCompressor {
         // single archive path persists them too. Previously these
         // were lost (dropped before the boundary cut, so in neither
         // the summarised slice nor the compressed tail).
-        self.last_archived_turns.extend(self.last_dropped_turns.clone());
+        self.last_archived_turns
+            .extend(self.last_dropped_turns.clone());
 
         // Post-compression restoration: inject guidance about recently
         // accessed files to help the model recover context.
@@ -764,7 +783,14 @@ impl ContextCompressor {
                     // Look for file path patterns in tool results
                     if content.contains("path:") || content.contains("file:") {
                         // Extract file paths (simplified)
-                        Some(content.lines().filter(|l| l.contains("path:")).take(3).collect::<Vec<_>>().join(", "))
+                        Some(
+                            content
+                                .lines()
+                                .filter(|l| l.contains("path:"))
+                                .take(3)
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                        )
                     } else {
                         None
                     }
@@ -784,7 +810,11 @@ impl ContextCompressor {
         let restoration_msg = Message::system(&format!(
             "[POST-COMPRESSION RESTORE] Recently accessed files that may be relevant:\n{}\n\n\
              If you need to reference these files, use read_file to load them again.",
-            recent_files.iter().map(|f| format!("- {}", f)).collect::<Vec<_>>().join("\n")
+            recent_files
+                .iter()
+                .map(|f| format!("- {}", f))
+                .collect::<Vec<_>>()
+                .join("\n")
         ));
 
         // Insert after the first message (system prompt)

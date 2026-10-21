@@ -69,7 +69,7 @@ impl SessionPersistence {
         workspace: Option<&str>,
         expert_id: Option<&str>,
     ) -> Result<(), AgentError> {
-        self.save_session_atomic(session_id, messages, model, platform, title, system_prompt, parent_session_id, workspace, expert_id, None, None, false)
+        self.save_session_atomic(session_id, messages, model, platform, title, system_prompt, parent_session_id, workspace, expert_id, None, None, false, true)
     }
 
     /// Persist a session's messages to SQLite, optionally including a
@@ -114,6 +114,7 @@ impl SessionPersistence {
             snapshot_ref,
             None,
             false,
+            true,
         )
     }
 
@@ -154,6 +155,7 @@ impl SessionPersistence {
             compression,
             None,
             false,
+            true,
         )
     }
 
@@ -179,6 +181,12 @@ impl SessionPersistence {
     /// route could write them.
     /// `user_query` and `completed` are only needed for the trajectory
     /// file; pass `(None, false)` to skip trajectory.
+    ///
+    /// `write_session_log` gates the human-readable `<id>.md` export. Callers
+    /// that persist twice in one turn (pre-save then post-run) pass `false`
+    /// for the first one: the file is re-rendered in full from the same
+    /// timeline a moment later, so writing it twice only doubles the remaining
+    /// per-turn full-file write.
     #[allow(clippy::too_many_arguments)]
     pub fn save_session_atomic(
         &self,
@@ -194,6 +202,7 @@ impl SessionPersistence {
         compression: Option<&CompressionSnapshot>,
         user_query: Option<&str>,
         completed: bool,
+        write_session_log: bool,
     ) -> Result<(), AgentError> {
         self.ensure_db()?;
 
@@ -205,6 +214,7 @@ impl SessionPersistence {
                 system_prompt, parent_session_id, workspace, expert_id,
                 compression,
                 user_query, completed,
+                write_session_log,
             ) {
                 Ok(()) => return Ok(()),
                 Err(e) if is_busy_error(&e) && attempt < WRITE_MAX_RETRIES => {
@@ -222,6 +232,29 @@ impl SessionPersistence {
             }
         }
         Err(last_err.unwrap_or_else(|| AgentError::Io("save_session_atomic: exhausted retries".into())))
+    }
+
+    /// Persist the user's message *before* the agent runs, without the `.md`
+    /// export.
+    ///
+    /// The pre-save exists so that a failed run (provider error / network
+    /// timeout / `?` short-circuit) cannot lose what the user typed: the DB
+    /// row is the part that must survive. The markdown log is re-rendered in
+    /// full from the same timeline by the post-run persist, so producing it
+    /// here writes the whole conversation to disk twice per turn for a file
+    /// that is superseded within seconds.
+    pub fn persist_pre_turn(
+        &self,
+        session_id: &str,
+        messages: &[Message],
+        model: Option<&str>,
+        platform: Option<&str>,
+    ) -> Result<(), AgentError> {
+        self.save_session_atomic(
+            session_id, messages, model, platform, None, None, None, None, None, None, None, false,
+            // No `.md` export — see the doc comment.
+            false,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -278,6 +311,7 @@ impl SessionPersistence {
         compression: Option<&CompressionSnapshot>,
         user_query: Option<&str>,
         completed: bool,
+        write_session_log: bool,
     ) -> Result<(), AgentError> {
         let conn = open_with_wal(&self.db_path)?;
 
@@ -292,10 +326,16 @@ impl SessionPersistence {
             // 1. UPSERT the session row FIRST so the messages.session_id →
             // sessions.id FOREIGN KEY holds for the INSERT in step 2.
             // We can't stamp the real `message_count` here — it depends on
-            // how many rows `flush_messages` actually inserts (system rows
-            // are filtered out, so `messages.len()` over-counts). We use a
-            // 0 placeholder and patch it in step 3 with the real count
+            // how many timeline rows survive the flush. We use a 0 placeholder
+            // for a brand-new row and patch it in step 3 with the real count
             // returned by `flush_messages`.
+            //
+            // `message_count` is deliberately NOT in the ON CONFLICT SET
+            // clause: on an existing session the previous turn's value must
+            // survive until step 3, because `flush_messages` reads it as the
+            // incremental-flush watermark ("the stored timeline had N rows").
+            // Adding it here would reset the watermark to 0 and silently
+            // demote every turn to a full history scan.
             conn.execute(
                 "INSERT INTO sessions (id, model, platform, created_at, updated_at, title, message_count, system_prompt, compressed_summary, parent_session_id, workspace, expert_id, last_context_usage)
                  VALUES (?1, ?2, ?3, ?4, ?4, ?5, 0, ?6, ?7, ?8, ?9, ?10, ?11)
@@ -325,19 +365,21 @@ impl SessionPersistence {
             )
             .map_err(|e| AgentError::Io(format!("Failed to upsert session: {e}")))?;
 
-            // 2. Incrementally replace messages (transaction-protected DELETE+INSERT).
-            // Returns the actual rowcount so step 3 can stamp the on-disk count
-            // onto `sessions.message_count` instead of the over-counting
-            // `messages.len()`.
-            let inserted = self.flush_messages(&conn, session_id, messages, &now)?;
+            // 2. Merge the timeline into storage incrementally (unchanged
+            // prefix kept, only the changed tail rewritten — see
+            // `flush_messages`). Returns the timeline length, not the number
+            // of rows this call inserted.
+            let timeline_len = self.flush_messages(&conn, session_id, messages, &now)?;
 
-            // 3. Patch `message_count` to match the real INSERT count. This
-            // also corrects any drift from prior versions that used
-            // `messages.len()` and over-counted by N (where N is the
-            // number of system-role rows in the in-memory array).
+            // 3. Stamp the timeline length onto `sessions.message_count`.
+            // It doubles as the incremental flush's watermark: the next turn
+            // reads it back to decide whether the stored rows are still a
+            // verbatim prefix (see `flush_messages`' fast path). Writing a
+            // partial count here would silently disable that fast path, so the
+            // value must be the whole timeline.
             conn.execute(
                 "UPDATE sessions SET message_count = ?1 WHERE id = ?2",
-                rusqlite::params![inserted as i64, session_id],
+                rusqlite::params![timeline_len as i64, session_id],
             )
             .map_err(|e| AgentError::Io(format!("Failed to patch session message_count: {e}")))?;
 
@@ -436,8 +478,10 @@ impl SessionPersistence {
                     .map_err(|e| AgentError::Io(format!("Failed to commit transaction: {e}")))?;
 
                 // 3. File writes (best-effort after DB COMMIT)
-                if let Err(e) = self.save_session_log(session_id, messages, model) {
-                    tracing::warn!("Failed to save session log (non-fatal): {e}");
+                if write_session_log {
+                    if let Err(e) = self.save_session_log(session_id, messages, model) {
+                        tracing::warn!("Failed to save session log (non-fatal): {e}");
+                    }
                 }
                 // JSONL 镜像（Codex rollout 双轨 analog）：DB 损坏时可按行
                 // 重建时间线。增量 append，成本 O(delta)。

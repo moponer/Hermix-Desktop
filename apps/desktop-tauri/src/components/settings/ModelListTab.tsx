@@ -18,6 +18,8 @@ import { ProviderIcon } from "../ProviderIcon";
 import { ModelAddDialog, type EditingTarget } from "./ModelAddDialog";
 import { PROVIDERS, catalogMismatchNote } from "./settingsUtils";
 import type { CustomProviderSummary } from "../../api";
+import { DELETE, FAILED, LOADING, failure } from "../strings";
+import { Badge } from "../ui";
 
 interface ModelRow {
   id: string; // `${providerId}:${modelId}`
@@ -203,17 +205,18 @@ export function ModelListTab() {
           ...n,
           [row.id]: r.ok
             ? `连接正常 · ${r.latency_ms} ms${r.model_found === false ? catalogMismatchNote(r.models) : ""}`
-            : `失败：${inlineErrorText(r)}`,
+            : failure(FAILED, "请检查模型配置后重试。", inlineErrorText(r)),
         }));
       } else {
         const r = await api.testCustomProviderConnection(row.providerId);
         setTestNote((n) => ({
           ...n,
-          [row.id]: r.ok ? "连接正常" : `失败：${r.error ?? "未知原因"}`,
+          [row.id]: r.ok ? "连接正常" : failure(FAILED, "请检查供应商配置后重试。", r.error ?? "未知原因"),
         }));
       }
     } catch (e) {
-      setTestNote((n) => ({ ...n, [row.id]: `测试失败：${e instanceof Error ? e.message : String(e)}` }));
+      const msg = e instanceof Error ? e.message : String(e);
+      setTestNote((n) => ({ ...n, [row.id]: failure("测试失败", "请检查网络后重试。", msg) }));
     } finally {
       setTestingId(null);
     }
@@ -246,7 +249,7 @@ export function ModelListTab() {
 
       {error && (
         <div className="mt-3 px-3 py-2 rounded-[var(--radius-md)] bg-red-500/12 text-[length:var(--text-ui)] text-red-400">
-          {error}
+          {error}，请重试。
         </div>
       )}
 
@@ -258,9 +261,9 @@ export function ModelListTab() {
 
       <div className="mt-4 overflow-hidden rounded-[var(--radius-lg)] bg-bg-card shadow-[var(--shadow-paper)]">
         {loading ? (
-          <div className="flex items-center gap-2 px-4 py-6 text-xs text-text-muted">
+          <div className="flex items-center gap-2 px-4 py-6 text-xs text-text-muted" aria-busy="true">
             <Loader2 className="icon-sm animate-spin" />
-            正在读取模型配置…
+            {LOADING}
           </div>
         ) : sorted.length === 0 ? (
           <div className="px-4 py-8 text-center text-xs text-text-muted">
@@ -280,7 +283,7 @@ export function ModelListTab() {
                     <span className="px-1.5 py-0.5 rounded text-[length:var(--text-meta)] bg-accent/15 text-accent shrink-0">默认</span>
                   )}
                   {row.isFree && (
-                    <span className="px-1.5 py-0.5 rounded text-[length:var(--text-meta)] bg-success-soft text-success shrink-0">免费源</span>
+                    <Badge tone="success" size="chip" pill={false}>免费源</Badge>
                   )}
                   {!row.isEnabled && (
                     <span className="text-[length:var(--text-meta)] text-text-faint shrink-0">未启用</span>
@@ -318,7 +321,7 @@ export function ModelListTab() {
                   {testingId === row.id ? <Loader2 className="icon-sm animate-spin" /> : <Zap className="icon-sm" />}
                 </IconBtn>
                 {row.isEnabled && (
-                  <IconBtn title="从启用清单移除" onClick={() => void remove(row)}>
+                  <IconBtn title={`${DELETE}模型`} onClick={() => void remove(row)}>
                     <Trash2 className="icon-sm" />
                   </IconBtn>
                 )}

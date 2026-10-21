@@ -40,13 +40,12 @@ export class ErrorBoundary extends Component<Props, State> {
     if (this.state.hasError) {
       return (
         <div className="error-boundary-fallback">
-          <div className="error-boundary-fallback__icon"><AlertTriangle size={26} /></div>
+          <div className="error-boundary-fallback__icon"><AlertTriangle size={24} /></div>
           <h2 className="error-boundary-fallback__title">
             {this.props.name ? `${this.props.name} 发生错误` : "页面发生错误"}
           </h2>
           <p className="error-boundary-fallback__desc">
-            应用遇到了一个意外错误。请尝试点击下方按钮重新加载此区域。
-            如果问题持续出现，请重启应用。
+            应用遇到了一个意外错误。点「重试」重新加载此区域；问题持续请点「重新加载应用」重启。
           </p>
           <div className="error-boundary-fallback__actions">
             <button

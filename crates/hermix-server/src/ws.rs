@@ -1740,8 +1740,19 @@ pub(crate) async fn handle_ws_stream_send(
                     &msg,
                     &recent_messages,
                 );
+                // Not `ToolExecution`'s fault by default: this catch_unwind
+                // wraps the whole agent task, so a panic in `apply_overrides`,
+                // prompt assembly or persistence lands here too and used to be
+                // reported as "Tool execution error" — which sends the reader
+                // hunting through the tool layer for a bug that is not there.
+                // 2026-10-21: a real `serde_json::Map` IndexMut panic in
+                // `apply_overrides` was chased as an MCP problem for three
+                // rounds because of that wording.
                 Err(hermix_core::AgentError::ToolExecution(format!(
-                    "internal error (panic): {msg}"
+                    "internal error (panic) in the agent pipeline: {msg}. \
+                     This is an agent-side bug and NOT necessarily a tool \
+                     failure — check the panic/crash dump under \
+                     <hermix_home>/logs/ for the exact location."
                 )))
             }
         };

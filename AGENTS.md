@@ -27,6 +27,13 @@ cargo check --workspace --all-targets # compile check
 cd apps/desktop-tauri && ./node_modules/.bin/tsc --noEmit  # frontend types (~25s)
 ```
 
+**Windows 上跑 tauri crate 的 Rust 测试**：`cargo test -p hermix-viewer --lib` 会报
+`0xC0000139`（测试二进制没有 comctl32 v6 的 SxS 清单 → 静态导入
+`comctl32.dll!TaskDialogIndirect` 解析不到）。改成「`cargo test --no-run` → 用 SDK 的
+`mt.exe` 给测试二进制注入清单 → 直接跑 exe」，步骤见
+`docs/notes/implemented/process/2026-10-21-tauri-rust-test-binary-comctl32-v6.md`。
+（**别当成代码坏了**；也别试图拷 DLL —— comctl32 在 KnownDLLs 里，只认清单。）
+
 `tsc` 必须直接调二进制。`pnpm tsc --noEmit` 不会真正执行类型检查——它只跑 pnpm
 自己的 install 流程就返回（~0.8s、输出 `Already up to date`、exit 0），是一个
 看起来全绿的假信号。
@@ -58,7 +65,9 @@ Key crates:
 - **Parity fixtures** — `hermix-parity-tests/fixtures/` has golden JSON; `pending/` is excluded from test runs
 - **Desktop app frontend** — `apps/desktop-tauri/src/`, uses `@` alias for `src/`
 - **界面改动必读内置设计 skill** — `crates/hermix-server/src/dashboard/skills/impeccable-design.md`（仓库里唯一的界面设计规范）。改完 UI 必跑 `npx -y impeccable@4.1.0 detect <路径>`，退出码 0 才算干净；报告「已修好」之前检测结果就是证据。令牌层规范另见 `docs/TYPOGRAPHY_SYSTEM.md` + `npm run check:tokens`。注意 detect 对**解析不了的文件会静默返回 0**，所以先跑 `tsc --noEmit` 再信它的绿灯。
-- **前端 UI 纪律（DesignGuard，2026-10-18）** — `scripts/check-design-guard.mjs`（`npm run check:design`，进 ci-gate）把 impeccable/typography 的硬约束做成 grep 门禁：TSX 禁字面色值/禁 `dark:` 变体/图标按钮必须 `aria-label`/视图文件禁 `加载中…` 字面量与 `window.confirm`。此前同类规则只写在文档里，CSS 层与既有组件的违规从未被检出。新增约束优先写进门禁而不是靠自觉。
+- **前端 UI 纪律（DesignGuard，2026-10-18）** — `scripts/check-design-guard.mjs`（`npm run check:design`，进 ci-gate 的 `[4c/14]`）把 impeccable/typography 的硬约束做成 grep 门禁：TSX 禁字面色值/禁 `dark:` 变体/视图文件禁 `加载中…` 字面量与 `window.confirm`。此前同类规则只写在文档里，CSS 层与既有组件的违规从未被检出。新增约束优先写进门禁而不是靠自觉。**「图标按钮必须 `aria-label`」一条已从本脚本移出**（全量扫 `<button>` 的正则误报率过高而移除），改由 `scripts/check-design-primitives.mjs` 以**限定 class 名**（`icon-btn`/`titlebar-btn`/`icon-button`/`modal-close`）的方式恢复。
+- **前端 UI 纪律（DesignPrimitives，2026-10-21）** — `scripts/check-design-primitives.mjs`（进 ci-gate 的 `[4e/14]`，**阻断**）管「不许漏什么」：G3 图标按钮无障碍名 / G6a 虚线描边 / G6b 单侧色条 side-tab / G7 图标尺寸偏离 `--icon-size-*` 档位 / G8 表单控件高度偏离档位 / G9 原始语义色当文字色 / P0 `ui/` 原语零调用。路径从脚本自身位置推导（不像 guard 那样按 `cwd` 拼 `src/`），任何目录跑结果一致。依据：`docs/notes/proposed/architecture/2026-10-21-frontend-design-audit.md`。
+- **对比度是硬约束（2026-10-21）** — `check-theme-tokens.mjs` 的 `contrast` 规则实测 29 组前景/背景配对的 WCAG 比值（半透明底**合成**到纸面上再算），<4.5:1 退出 1。语义四色因此各有一个「文字安全档」`--color-text-{success,warning,error,info}`（保持色相、只压暗解出，纸面与各自 `-soft` 底都 ≥4.5:1）—— 12px 以下的小字一律走它，别用原始语义色。
 - **共享预览层纪律（preview-layer gate，2026-10-19）** — `scripts/check-preview-layer.mjs`（进 ci-gate 的 `[4d/14]`）守 `@hermix/preview` 的一致性：共享组件的类名必须在 `packages/preview/src/styles/preview-doc.css` 里有规则（**禁 Tailwind 原子类**——viewer 刻意不装 Tailwind，原子类在那边是空操作），共享 CSS 用到的每个 `var(--token)` 两侧都要定义（`var()` 解析失败 = 整条声明被丢弃）。渲染器样式（image/pdf/pptx/纯文本/状态/头部按钮）必须住在共享包里，桌面端 `code-view.css` 只留 `.code-*` 与桌面外壳。依据：`docs/notes/implemented/architecture/2026-10-19-shared-preview-layer-ownership.md`。
 
 ## Core principles (2026-07-23, applies to all work — code, design, bug fix, doc)

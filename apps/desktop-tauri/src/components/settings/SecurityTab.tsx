@@ -4,7 +4,8 @@ import * as api from "../../api";
 import { openInExplorer } from "../../desktopBridge";
 import { toastError } from "../../hooks/useToast";
 import { useSafeTimeout } from "../../hooks/useSafeTimeout";
-import { SkeletonCard } from "../ui";
+import { Button, Card, Input, SkeletonCard, Switch } from "../ui";
+import { SAVE, SAVED } from "../strings";
 
 interface SecurityState {
   auto_backup: boolean;
@@ -86,7 +87,11 @@ export function SecurityTab() {
       void refreshStatus();
     } catch (e) {
       console.error("Failed to save security config:", e);
-      toastError("保存安全设置失败");
+      /* 真实原因不能只写 console：用户要知道是后端没起来还是配置被拒，
+         以及下一步做什么。 */
+      toastError(
+        `保存安全设置失败：${e instanceof Error ? e.message : String(e)}。请确认后端服务已启动，然后重试。`,
+      );
       setSaved(false);
     }
   };
@@ -102,7 +107,7 @@ export function SecurityTab() {
   return (
     <div className="space-y-5">
       {/* 自动备份开关 */}
-      <div className="rounded-[var(--radius-lg)] bg-bg-card p-4 space-y-4 shadow-[var(--shadow-paper)]">
+      <Card className="space-y-4">
         <div className="flex items-center justify-between">
           <div>
             <div className="text-sm text-text-primary">启用自动备份</div>
@@ -110,50 +115,35 @@ export function SecurityTab() {
               覆盖写前复制旧版本（best-effort，不影响正常写入）。
             </div>
           </div>
-          <button
-            role="switch"
-            aria-checked={sec.auto_backup}
-            onClick={() => update({ auto_backup: !sec.auto_backup })}
-            className={`relative h-6 w-11 rounded-full transition-colors ${
-              sec.auto_backup ? "bg-success" : "bg-bg-tertiary"
-            }`}
-          >
-            <span
-              className={`absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white transition-transform ${
-                sec.auto_backup ? "translate-x-5" : "translate-x-0"
-              }`}
-            />
-          </button>
+          <Switch
+            checked={sec.auto_backup}
+            onChange={(v) => update({ auto_backup: v })}
+            label="启用自动备份"
+          />
         </div>
 
-        <div>
-          <label className="text-[length:var(--text-meta)] text-text-secondary">备份目录（留空 = 默认）</label>
-          <input
-            value={sec.backup_dir}
-            onChange={(e) => update({ backup_dir: e.target.value })}
-            placeholder="留空使用 <数据目录>/backups"
-            className="mt-1 w-full rounded-[var(--radius-md)] bg-bg-tertiary px-3 py-2 text-[length:var(--text-ui)] text-text-primary outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/40"
-          />
-          <p className="mt-1 text-[length:var(--text-meta)] text-text-muted">
-            默认位于 Hermix 数据目录下的 backups 文件夹。
-          </p>
-        </div>
+        <Input
+          size="lg"
+          label="备份目录（留空 = 默认）"
+          hint="默认位于 Hermix 数据目录下的 backups 文件夹。"
+          value={sec.backup_dir}
+          onChange={(e) => update({ backup_dir: e.target.value })}
+          placeholder="留空使用 <数据目录>/backups"
+        />
 
-        <div>
-          <label className="text-[length:var(--text-meta)] text-text-secondary">备份占用上限（MB）</label>
-          <input
-            type="number"
-            min={1}
-            value={sec.backup_max_mb}
-            onChange={(e) => update({ backup_max_mb: Math.max(1, Number(e.target.value) || 1) })}
-            className="mt-1 w-full rounded-[var(--radius-md)] bg-bg-tertiary px-3 py-2 text-[length:var(--text-ui)] text-text-primary outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/40"
-          />
-          <p className="mt-1 text-[length:var(--text-meta)] text-text-muted">超过后按时间删除最旧的备份。</p>
-        </div>
-      </div>
+        <Input
+          type="number"
+          size="lg"
+          min={1}
+          label="备份占用上限（MB）"
+          hint="超过后按时间删除最旧的备份。"
+          value={sec.backup_max_mb}
+          onChange={(e) => update({ backup_max_mb: Math.max(1, Number(e.target.value) || 1) })}
+        />
+      </Card>
 
       {/* 备份状态 */}
-      <div className="rounded-[var(--radius-lg)] bg-bg-card p-4 space-y-3 shadow-[var(--shadow-paper)]">
+      <Card className="space-y-3">
         <div className="text-sm font-medium text-text-primary">备份状态</div>
         {!loaded ? (
           <SkeletonCard lines={2} />
@@ -176,22 +166,15 @@ export function SecurityTab() {
             </button>
           </div>
         )}
-      </div>
+      </Card>
 
-      <button
+      <Button
+        variant="accent"
         onClick={handleSave}
-        className="flex items-center gap-2 px-4 py-2 rounded-lg bg-accent text-on-accent text-sm font-medium hover:opacity-90 transition-opacity"
+        icon={saved ? <Check className="icon-md" /> : <Save className="icon-md" />}
       >
-        {saved ? (
-          <>
-            <Check className="icon-md" /> 已保存
-          </>
-        ) : (
-          <>
-            <Save className="icon-md" /> 保存设置
-          </>
-        )}
-      </button>
+        {saved ? SAVED : SAVE}
+      </Button>
     </div>
   );
 }

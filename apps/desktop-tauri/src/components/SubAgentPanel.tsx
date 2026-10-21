@@ -1,5 +1,6 @@
 import { Bot, Sparkles, Loader2, CheckCircle2, AlertCircle } from "lucide-react";
 import type { SubAgentState, SubAgentPhase } from "../types";
+import { COMPLETED } from "./strings";
 
 /**
  * Real-time "子代理" status panel. Renders one row per delegated
@@ -26,8 +27,8 @@ const PHASE_CONFIG: Record<
 > = {
   spawned: { label: "已启动", bg: "var(--color-accent-soft-strong)", text: "var(--color-accent)", icon: Bot },
   started: { label: "执行中", bg: "var(--color-accent-soft-strong)", text: "var(--color-accent)", icon: Loader2 },
-  done: { label: "已完成", bg: "var(--color-success-soft)", text: "var(--color-success)", icon: CheckCircle2 },
-  failed: { label: "失败", bg: "var(--color-error-soft)", text: "var(--color-error)", icon: AlertCircle },
+  done: { label: COMPLETED, bg: "var(--color-success-soft)", text: "var(--color-text-success)", icon: CheckCircle2 },
+  failed: { label: "失败", bg: "var(--color-error-soft)", text: "var(--color-text-error)", icon: AlertCircle },
 };
 
 const ROLE_LABEL: Record<string, string> = {
@@ -169,7 +170,7 @@ export function SubAgentPanel({ subAgents }: { subAgents: Record<string, SubAgen
                   style={{
                     marginTop: 5,
                     fontSize: 11,
-                    color: "var(--color-error)",
+                    color: "var(--color-text-error)",
                     overflow: "hidden",
                     textOverflow: "ellipsis",
                     whiteSpace: "nowrap",

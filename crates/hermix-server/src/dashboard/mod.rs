@@ -254,6 +254,10 @@ pub fn router() -> Router<HttpServerState> {
             "/api/polish/automation",
             post(polish::post_polish_automation),
         )
+        // 增强提示词：把一句模糊需求扩写成六段结构的提示词。
+        // 与上面两个「改写」端点的区别是**扩写**而非同义替换，
+        // 场景模板随请求下发（前端目录 src/data/enhanceScenarios.ts）。
+        .route("/api/polish/enhance", post(polish::post_polish_enhance))
         // Custom agent (persona) persistence — read/write JSON files
         // under `$HERMIX_HOME/agents/*.json`. The front-end `AgentsView`
         // calls these endpoints instead of (or alongside) localStorage

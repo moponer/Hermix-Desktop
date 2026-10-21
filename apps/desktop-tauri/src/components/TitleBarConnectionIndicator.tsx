@@ -27,7 +27,7 @@ export function TitleBarConnectionIndicator() {
       title={
         isOnline   ? "后端已连接"
         : isOffline ? (gaveUp ? "重启失败，点击重试" : "后端离线，点击重启")
-        : "正在连接..."
+        : "正在连接…"
       }
       aria-label="连接状态"
       className="titlebar-conn-indicator"

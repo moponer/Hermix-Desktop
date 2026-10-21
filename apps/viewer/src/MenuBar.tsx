@@ -39,9 +39,17 @@ export interface MenuGroup {
 export interface MenuBarProps {
   menus: MenuGroup[];
   onCommand: (id: string) => void;
+  /**
+   * 展开 / 收起时通知外部。
+   *
+   * 用途：网页是**独立的子 webview（独立 HWND）**，永远盖在 DOM 之上 ——
+   * 菜单展开到内容区时会被它整个挡住（z-index 管不到，不是同一层）。
+   * 外部据此把网页藏起来。
+   */
+  onOpenChange?: (open: boolean) => void;
 }
 
-export function MenuBar({ menus, onCommand }: MenuBarProps) {
+export function MenuBar({ menus, onCommand, onOpenChange }: MenuBarProps) {
   const [open, setOpen] = useState<string | null>(null);
   const [flip, setFlip] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
@@ -97,6 +105,11 @@ export function MenuBar({ menus, onCommand }: MenuBarProps) {
       document.removeEventListener("keydown", onKeyDown, true);
     };
   }, [open, activeIndex]);
+
+  // 展开状态变化时通知外部（网页子 webview 要让位）。
+  useEffect(() => {
+    onOpenChange?.(open !== null);
+  }, [open, onOpenChange]);
 
   const run = useCallback(
     (item: MenuItem) => {

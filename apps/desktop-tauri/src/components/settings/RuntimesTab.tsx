@@ -14,6 +14,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { FileCode2, GitBranch, RefreshCw } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
+import { LOADING } from "../strings";
 
 type RuntimeKind = "node" | "python" | "git";
 
@@ -72,7 +73,8 @@ export function RuntimesTab() {
       setProbes((p) => ({ ...p, [kind]: res }));
       setError(null);
     } catch (e) {
-      setError(`${kind} 探测失败：${e instanceof Error ? e.message : String(e)}`);
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(`${kind} 探测失败：${msg}，请点「重新检测」重试。`);
     } finally {
       setLoading((p) => ({ ...p, [kind]: false }));
     }
@@ -111,10 +113,11 @@ export function RuntimesTab() {
                 <button
                   onClick={() => void probe(kind)}
                   disabled={!!loading[kind]}
+                  aria-busy={!!loading[kind]}
                   className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-[var(--radius-md)] bg-bg-tertiary text-[length:var(--text-ui)] text-text-secondary transition-colors hover:bg-bg-quaternary hover:text-text-primary disabled:opacity-40 shrink-0"
                 >
                   <RefreshCw className={`icon-sm ${loading[kind] ? "animate-spin" : ""}`} />
-                  {loading[kind] ? "检测中" : "重新检测"}
+                  {loading[kind] ? LOADING : "重新检测"}
                 </button>
               </div>
 

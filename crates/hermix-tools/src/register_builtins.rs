@@ -574,6 +574,30 @@ mod tests {
         }
     }
 
+    /// Diagnostic: the three bridge tools must be present **and enabled** in
+    /// the registry, not merely injected as synthetic schemas by
+    /// `assemble_tool_schemas`. When they diverge, the model sees
+    /// `tool_describe` in its tools array, calls it, and the validator answers
+    /// `Tool 'tool_describe' does not exist` — burning turns.
+    #[test]
+    #[ignore]
+    fn dump_bridge_state() {
+        let registry = registry_with_builtins();
+        for name in ["tool_search", "tool_describe", "tool_call"] {
+            match registry.list_tools().into_iter().find(|e| e.name == name) {
+                Some(e) => eprintln!(
+                    "{name}: present toolset={} enabled={}",
+                    e.toolset, e.is_enabled
+                ),
+                None => eprintln!("{name}: MISSING from list_tools"),
+            }
+            eprintln!(
+                "  in_definitions={}",
+                registry.get_definitions().iter().any(|d| d.name == name)
+            );
+        }
+    }
+
     #[test]
     fn essential_toolset_floor_aligns_with_runtime_registration() {
         //P1.8 : regression guard for a class of bugs

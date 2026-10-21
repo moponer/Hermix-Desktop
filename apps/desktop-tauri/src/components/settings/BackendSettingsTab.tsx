@@ -4,7 +4,9 @@ import * as api from "../../api";
 import { storage, STORAGE_KEYS } from "../../utils/storageCompat";
 import { useCurrentModel } from "../../hooks/useCurrentModel";
 import { toastError } from "../../hooks/useToast";
+import { Card, Input, Switch } from "../ui";
 import { type PythonProbeResult } from "./settingsUtils";
+import { LOADING, SAVE, SAVE_FAILED, SAVING, failure } from "../strings";
 
 // ── Backend Tab ────────────────────────────────────
 
@@ -19,27 +21,33 @@ export function BackendTab() {
     api.getTickLoopStatus().then((s) => setTickLoopRunning(s.running)).catch((e) => { console.warn("[SettingsView] tickloop status failed:", e); });
   }, []);
 
-  const handleToggleTickLoop = useCallback(async () => {
-    const next = !tickLoopRunning;
-    setTickLoopLoading(true);
-    try {
-      const status = await api.toggleTickLoop(next);
-      setTickLoopRunning(status.running);
-    } catch (e) {
-      console.error("TickLoop toggle failed", e);
-      toastError("TickLoop 切换失败");
-    } finally {
-      setTickLoopLoading(false);
-    }
-  }, [tickLoopRunning]);
+  const handleToggleTickLoop = useCallback(
+    async (next: boolean) => {
+      setTickLoopLoading(true);
+      try {
+        const status = await api.toggleTickLoop(next);
+        setTickLoopRunning(status.running);
+      } catch (e) {
+        console.error("TickLoop toggle failed", e);
+        /* 真实原因不能只写 console：用户要知道是后端没起来还是被拒，
+           以及下一步做什么。 */
+        toastError(
+          `TickLoop 切换失败：${e instanceof Error ? e.message : String(e)}。请确认后端服务已启动，然后重试。`,
+        );
+      } finally {
+        setTickLoopLoading(false);
+      }
+    },
+    [],
+  );
 
   return (
     <div className="space-y-6">
-      <div className="rounded-[var(--radius-lg)] bg-bg-card p-4 shadow-[var(--shadow-paper)]">
+      <Card>
         <div className="text-sm font-medium text-text-primary mb-2">后端状态</div>
         <div className="flex items-center gap-2">
           <div className={`w-2 h-2 rounded-full ${health ? "bg-green-400" : health === false ? "bg-red-400" : "bg-yellow-400"}`} />
-          <span className="text-xs text-text-muted">{health === null ? "检测中..." : health ? "运行正常" : "未连接"}</span>
+          <span className="text-xs text-text-muted">{health === null ? LOADING : health ? "运行正常" : "未连接"}</span>
         </div>
         {defaultModel
           ? <div className="mt-3 text-xs text-text-muted">当前模型：<span className="text-text-primary font-medium">{defaultModel}</span></div>
@@ -47,8 +55,8 @@ export function BackendTab() {
         <button onClick={async () => { const ok = await api.checkBackendHealth(); setHealth(ok); }} className="mt-3 flex items-center gap-1.5 px-3 py-1.5 rounded-[var(--radius-md)] bg-bg-tertiary text-[length:var(--text-ui)] text-text-secondary transition-colors hover:bg-bg-quaternary hover:text-text-primary">
           <RefreshCw className="icon-sm" /> 刷新状态
         </button>
-      </div>
-      <div className="rounded-[var(--radius-lg)] bg-bg-card p-4 shadow-[var(--shadow-paper)]">
+      </Card>
+      <Card>
         <div className="flex items-center justify-between">
           <div>
             <div className="text-sm font-medium text-text-primary">TickLoop 后台心跳</div>
@@ -62,24 +70,14 @@ export function BackendTab() {
               </span>
             )}
           </div>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={tickLoopRunning}
+          <Switch
+            checked={tickLoopRunning}
             disabled={tickLoopLoading}
-            onClick={handleToggleTickLoop}
-            className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
-              tickLoopRunning ? "bg-success" : "bg-bg-tertiary"
-            } ${tickLoopLoading ? "opacity-60 cursor-wait" : "cursor-pointer"}`}
-          >
-            <span
-              className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform ${
-                tickLoopRunning ? "translate-x-5" : "translate-x-1"
-              }`}
-            />
-          </button>
+            onChange={(v) => void handleToggleTickLoop(v)}
+            label="TickLoop 后台心跳"
+          />
         </div>
-      </div>
+      </Card>
       <PythonRuntimePanel />
     </div>
   );
@@ -147,7 +145,7 @@ export function PythonRuntimePanel() {
       setOverrideStatus(value ? "已保存覆盖路径，下次 `execute_code` 调用立即生效" : "已清除覆盖路径，恢复默认探测顺序");
       await runProbe();
     } catch (e) {
-      setOverrideStatus(`保存失败: ${e instanceof Error ? e.message : String(e)}`);
+      setOverrideStatus(failure(SAVE_FAILED, "请重试。", e instanceof Error ? e.message : String(e)));
     } finally {
       setOverrideSaving(false);
     }
@@ -156,7 +154,7 @@ export function PythonRuntimePanel() {
   const selectedRow = probe?.entries.find((e) => e.path === probe.selected);
 
   return (
-    <div className="rounded-[var(--radius-lg)] bg-bg-card p-4 shadow-[var(--shadow-paper)]">
+    <Card>
       <div className="flex items-start justify-between gap-4">
         <div className="flex-1">
           <div className="text-sm font-medium text-text-primary">Python 运行时</div>
@@ -171,7 +169,7 @@ export function PythonRuntimePanel() {
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-[var(--radius-md)] bg-bg-tertiary text-[length:var(--text-ui)] text-text-secondary transition-colors hover:bg-bg-quaternary hover:text-text-primary disabled:opacity-40 shrink-0"
         >
           <RefreshCw className={`icon-sm ${probeLoading ? "animate-spin" : ""}`} />
-          {probeLoading ? "检测中" : "重新检测"}
+          {probeLoading ? LOADING : "重新检测"}
         </button>
       </div>
 
@@ -218,15 +216,21 @@ export function PythonRuntimePanel() {
 
       {/* Override input */}
       <div className="mt-5 space-y-2">
-        <label className="block text-xs font-medium text-text-primary">
+        <label
+          htmlFor="python-override"
+          className="block text-[length:var(--text-ui)] font-medium text-text-primary"
+        >
           自定义 Python 路径（可选）
         </label>
-        <div className="flex gap-2">
-          <input
+        <div className="flex gap-2 items-end">
+          <Input
+            id="python-override"
+            size="md"
+            containerClassName="flex-1"
+            className="font-mono"
             value={overrideInput}
             onChange={(e) => setOverrideInput(e.target.value)}
             placeholder="例如 C:\Python311\python.exe"
-            className="flex-1 rounded-[var(--radius-md)] bg-bg-tertiary px-3 py-1.5 font-mono text-[length:var(--text-ui)] text-text-primary outline-none transition-shadow placeholder:text-[var(--color-text-muted)] focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/40"
           />
           <button
             onClick={handleSaveOverride}
@@ -234,13 +238,13 @@ export function PythonRuntimePanel() {
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs bg-accent hover:bg-accent-hover text-on-accent disabled:opacity-40 shrink-0"
           >
             <Save className="icon-sm" />
-            {overrideSaving ? "保存中" : "保存"}
+            {overrideSaving ? SAVING : SAVE}
           </button>
         </div>
         {overrideStatus && (
           <div className="text-[length:var(--text-meta)] text-text-muted">{overrideStatus}</div>
         )}
       </div>
-    </div>
+    </Card>
   );
 }

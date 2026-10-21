@@ -1,12 +1,16 @@
 /* ════════════════════════════════════════════════════════════════════
    § 18.  PROSE & MESSAGE FLOW
    ════════════════════════════════════════════════════════════════════ */
+/* impeccable-disable side-tab: 引用块是 2px **中性**轨（非 3px 实色条、非语义色）+ 淡底 + 缩进；层次由底色承担，正文里的引用仍需要一处「这是引用」的形状提示。 */
 
 .prose {
   color: var(--color-text-primary);
   font-size: var(--text-body);
   line-height: var(--leading-reading);
   font-weight: var(--font-weight-regular);
+  /* 0.01em 是**中文正文例外**：中文方块字在 14px 下笔画贴得偏紧，加一丝
+     字距更透气（latin 段落同值无害）。中文不加负字距。
+     待提为令牌 --tracking-body（tokens.css 不在本批次归属，见移交项）。 */
   letter-spacing: 0.01em;
   /* 中文专属：避免行尾出现单字成行（孤字），并按中文断行规则处理标点。 */
   text-wrap: pretty;
@@ -23,12 +27,13 @@
   text-decoration: none;
   border-bottom: 1px solid var(--color-link);
   padding-bottom: 0.5px;
-  transition: color var(--duration-fast) ease, border-color var(--duration-fast) ease, opacity var(--duration-fast) ease;
+  /* 不放 opacity：opacity 恒为 1（.prose a 没有半透明态），transition 里
+     带它是死声明。 */
+  transition: color var(--duration-fast) ease, border-color var(--duration-fast) ease;
 }
 .prose a:hover {
   text-decoration: underline;
   border-bottom-color: transparent;
-  opacity: 1;
 }
 /* 标题：与正文拉开一档尺度。此前 h2 只比正文大 4px，层级全靠字重撑着。 */
 .prose h1,
@@ -38,7 +43,7 @@
   color: var(--color-text-primary);
   font-weight: 600;
   margin: 1.6em 0 0.5em;
-  line-height: 1.35;
+  line-height: var(--leading-heading);
   letter-spacing: 0;
 }
 .prose > :first-child { margin-top: 0; }
@@ -158,10 +163,13 @@
   outline: none;
   box-shadow: 0 0 0 2px var(--color-accent);
 }
-.prose h1 { font-size: 1.55em; }
-.prose h2 { font-size: 1.33em; }
-.prose h3 { font-size: 1.14em; }
-.prose h4 { font-size: 1em; color: var(--color-text-secondary); }
+/* 标题字号走 --text-* 七档（此前是 1.55em/1.33em/1.14em/1em 的影子刻度：
+   21.7/18.6/16/14px 全是半档，越过了 tokens.css:32「禁半档」纪律）。
+   层级改由字重 600 + 颜色承担，不再靠偷偷放大的字号。 */
+.prose h1 { font-size: var(--text-display); }
+.prose h2 { font-size: var(--text-title); }
+.prose h3 { font-size: var(--text-title); }
+.prose h4 { font-size: var(--text-body); color: var(--color-text-secondary); }
 .prose ul,
 .prose ol { 
   padding-left: 1.4em; 
@@ -197,27 +205,33 @@
   color: var(--color-on-accent);
 }
 
-/* 引用：中文斜体是浏览器合成倾斜（歪且脏），改为中性色 + 实底 */
+/* 引用：中文斜体是浏览器合成倾斜（歪且脏），改为中性色 + 实底。
+   2026-10-21：原来的 `border-left: 3px solid` 命中仓库自己的头号反模式
+   （impeccable-design.md:36「side-tab：卡片单侧 3px 实色彩条」）。改为
+   「淡底 + 左侧 2px 中性轨 + 缩进」：轨是中性色不是语义色，宽度 2px
+   不是 3px，且层次由底色承担 —— 引用块不再像一张贴了色条的卡片。 */
 .prose blockquote {
-  padding: 0.55em 0.85em;
+  padding: 0.55em 0.85em 0.55em 1em;
   margin: 0.8em 0;
   color: var(--color-text-secondary);
   font-style: normal;
   background: var(--color-bg-secondary);
   border-radius: var(--radius-sm);
-  border-left: 3px solid var(--color-border-secondary);
+  border-left: 2px solid var(--color-border-primary);
 }
 .prose blockquote p:last-child { margin-bottom: 0; }
 
-/* 提示块（> [!NOTE] / [!TIP] / [!WARNING] / [!CAUTION]） */
+/* 提示块（> [!NOTE] / [!TIP] / [!WARNING] / [!CAUTION]）
+   2026-10-21：去掉整圈描边，改淡底 + 圆角（用户偏好：UI 一律不用描边，
+   层次靠底色差 + 阴影 + 间距）。语义由标题与图标色承担。 */
 .prose .md-callout {
   display: flex;
   gap: 10px;
   margin: 0.9em 0;
   padding: 0.7em 0.9em;
-  border: 1px solid var(--color-border-primary);
+  border: 0;
   border-radius: var(--radius-md);
-  background: var(--color-bg-secondary);
+  background: var(--color-bg-tertiary);
   font-style: normal;
   color: var(--color-text-secondary);
 }
@@ -248,7 +262,7 @@
 .prose table {
   border-collapse: collapse;
   margin: 0;
-  font-size: 0.95em;
+  font-size: var(--text-ui);
   width: 100%;
 }
 .prose th,
@@ -260,7 +274,9 @@
 }
 .prose th {
   background: transparent;
-  font-size: var(--text-meta);
+  /* 表头与表体同档（--text-ui）：此前 th 是 --text-meta(12px) 而 td 是
+     0.95em(13.3px) —— 表头比表体小，层级倒置。 */
+  font-size: var(--text-ui);
   font-weight: 600;
   color: var(--color-text-secondary);
   text-align: left;
@@ -291,11 +307,13 @@
    所以不存在「一段中文被切成 5 个芯片」的情况。 */
 .prose code {
   /* 2026-10-12 用户修正:芯片一多(表格里尤甚)实色底糊成一片脏感。
-     降到 45% 半透明 —— 单枚仍可扫读,成片时不再抢焦点。 */
+     降到 45% 半透明 —— 单枚仍可扫读,成片时不再抢焦点。
+     2026-10-21:45% 是手调魔数,应提为 --color-code-inline-bg 令牌
+     (tokens.css 不在本批次归属,见移交项);此处值不变,只做标注。 */
   background: color-mix(in srgb, var(--color-bg-tertiary) 45%, transparent);
   padding: 1px 5px;
   border-radius: 4px;
-  font-size: 0.9em;
+  font-size: var(--text-ui);
   color: var(--color-text-primary);
   font-family: var(--font-mono);
   /* 不加粗：2026-10-01 用户修正。芯片已经有底色，再叠一层粗体
@@ -388,10 +406,11 @@
   border: 0;
   border-radius: var(--radius-2xl) var(--radius-2xl) var(--radius-sm) var(--radius-2xl);
   padding: 10px 14px;
-  font-size: var(--font-size-body);
-  line-height: 1.72;
+  /* --font-size-body 是已废弃别名（tokens.css:54 明禁新代码使用），
+     正文统一走 --text-body；行高与 .prose 对齐到 --leading-reading。 */
+  font-size: var(--text-body);
+  line-height: var(--leading-reading);
   color: var(--color-text-primary);
-  max-width: 80%;
   transition: background var(--duration-fast) ease, border-color var(--duration-fast) ease;
 }
 .msg-bubble-user:hover {
@@ -403,6 +422,7 @@
   align-items: flex-end;
   margin-left: auto;
 }
+/* 有效宽度约束（此前上面那条 `max-width: 80%` 被本规则覆盖，是死声明，已删）。 */
 .msg-bubble-user {
   max-width: 100%;
 }
@@ -539,8 +559,11 @@
    22px + gap 10px = 32px），宽度同步减去 32px，使左、右两边都落
    在文本列内，视觉上与气泡正文同列。 */
 .footer-block {
+  /* 宽度跟随父容器（.msg-stream-list.max-w-reading = min(780px, 100%)）。
+     2026-10-21：删掉两条 @media (min-width: 1024px / 1280px) 的
+     max-width 688 → 768 → 888 —— 祖先已把可用宽度卡在 780px，子元素
+     再写一条够不着的上限只会让下一个人以为它在生效。 */
   width: calc(100% - 32px);
-  max-width: 688px;
   margin-left: 32px;
   margin-right: 0;
   box-sizing: border-box;
@@ -549,12 +572,6 @@
    FileChangeSummary 一起删掉 —— 汇总条不再挂 `.footer-block`，它渲染在
    `.tl-text-inner--meta` 里，宽度由那一层给，avatar 偏移已经到位，
    再叠一次 32px 会双重缩进。 */
-@media (min-width: 1024px) {
-  .footer-block { max-width: 768px; }
-}
-@media (min-width: 1280px) {
-  .footer-block { max-width: 888px; }
-}
 /* ════════════════════════════════════════════════════════════════════
    本轮文件变更汇总条（.fcx，2026-10-02）
    ════════════════════════════════════════════════════════════════════
@@ -765,7 +782,7 @@
 .md-path-link--bare {
   color: var(--color-text-primary);
   font-family: var(--font-mono);
-  font-size: 0.94em;
+  font-size: var(--text-ui);
 }
 .md-path-link--bare:hover {
   color: var(--color-text-primary);

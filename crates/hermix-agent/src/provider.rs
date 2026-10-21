@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use parking_lot::{Mutex as PLMutex, RwLock};
 
 use hermix_core::{
-    AgentError, CacheControl, FunctionCall, FunctionCallDelta, LlmProvider, LlmResponse, Message,
+    AgentError, FunctionCall, FunctionCallDelta, LlmProvider, LlmResponse, Message,
     MessageRole, StreamChunk, StreamDelta, ToolCall, ToolCallDelta, ToolSchema, UsageStats,
 };
 
@@ -1382,27 +1382,44 @@ impl AnthropicProvider {
     /// system content carries `cache_control`, we emit it as an array of text
     /// blocks (Anthropic API requirement) with the marker on the first block;
     /// otherwise we fall back to the legacy plain string.
+    ///
+    /// ## Why each system message is its own block
+    ///
+    /// Concatenating every `System` message into one string destroyed the
+    /// prompt cache. The agent loop appends a `System` message for recall,
+    /// skills, plan-mode reminders, prefetch and tool-approval notes on
+    /// nearly every turn; with concatenation, the `system` parameter changed
+    /// each turn, so the break-point on it never hit and — because Anthropic
+    /// matches caches by *prefix* — every later break-point missed too.
+    /// Whole-conversation cache hit rate went to zero on Anthropic.
+    ///
+    /// One block per message keeps the invariant: the first block (the
+    /// stable layer: soul + directions + tool docs) is byte-identical every
+    /// turn and is the only one carrying `cache_control`. Later blocks grow,
+    /// but they sit *after* the cached prefix and cost nothing extra.
     fn convert_messages(messages: &[Message]) -> (Option<Value>, Vec<Value>) {
-        let mut system_text: Option<String> = None;
-        let mut system_cache_control: Option<CacheControl> = None;
+        let mut system_blocks: Vec<Value> = Vec::new();
         let mut anthropic_messages: Vec<Value> = Vec::new();
 
         for msg in messages {
             match msg.role {
                 MessageRole::System => {
-                    // Anthropic: system goes in a separate `system` parameter
-                    let content = msg.content.as_deref().unwrap_or("");
-                    system_text = Some(match system_text {
-                        Some(existing) => format!("{existing}\n\n{content}"),
-                        None => content.to_string(),
+                    // Anthropic: system goes in a separate `system` parameter.
+                    let mut block = serde_json::json!({
+                        "type": "text",
+                        "text": msg.content.as_deref().unwrap_or(""),
                     });
-                    // Capture cache_control from the first system message that
-                    // sets one — multiple system messages get concatenated but
-                    // only the marker on the first chunk matters for the
-                    // provider's prefix-cache break point.
-                    if system_cache_control.is_none() {
-                        system_cache_control = msg.cache_control.clone();
+                    // Only the first system block is a cache break-point: it
+                    // is the stable prefix. A marker on a volatile block would
+                    // waste one of the four allowed break-points.
+                    if system_blocks.is_empty() {
+                        if let Some(ref cc) = msg.cache_control {
+                            block["cache_control"] = serde_json::json!({
+                                "type": format!("{:?}", cc.cache_type).to_lowercase()
+                            });
+                        }
                     }
+                    system_blocks.push(block);
                 }
                 MessageRole::User => {
                     let mut content_blocks = Vec::new();
@@ -1467,16 +1484,18 @@ impl AnthropicProvider {
             }
         }
 
-        let system_value = system_text.map(|text| match system_cache_control {
-            Some(cc) => {
-                let mut block = serde_json::json!({"type": "text", "text": text});
-                block["cache_control"] = serde_json::json!({
-                    "type": format!("{:?}", cc.cache_type).to_lowercase()
-                });
-                Value::Array(vec![block])
-            }
-            None => Value::String(text),
-        });
+        let system_value = if system_blocks.is_empty() {
+            None
+        } else if system_blocks.len() == 1 && system_blocks[0].get("cache_control").is_none() {
+            // Legacy shape for the single, uncached system prompt: some
+            // gateways in front of the API still expect a plain string.
+            system_blocks
+                .pop()
+                .and_then(|b| b.get("text").and_then(Value::as_str).map(str::to_string))
+                .map(Value::String)
+        } else {
+            Some(Value::Array(system_blocks))
+        };
 
         (system_value, anthropic_messages)
     }
@@ -2616,6 +2635,49 @@ mod tests {
         // User message follows normally.
         assert_eq!(msgs.len(), 1);
         assert_eq!(msgs[0]["role"], "user");
+    }
+
+    /// Regression: recall / skill / plan-mode / prefetch blocks are appended
+    /// as `System` messages on nearly every turn. Concatenating them into the
+    /// `system` string made that parameter change every turn, so the cached
+    /// prefix never matched and Anthropic's prompt cache hit rate went to
+    /// zero. Each message must stay its own block, with the marker only on
+    /// the first (stable) one.
+    #[test]
+    fn test_anthropic_dynamic_system_blocks_do_not_break_cached_prefix() {
+        use hermix_core::types::{CacheControl, CacheType};
+        let mut stable = Message::system("Stable soul + directions");
+        stable.cache_control = Some(CacheControl {
+            cache_type: CacheType::Ephemeral,
+        });
+
+        let turn1 = vec![
+            stable.clone(),
+            Message::user("hi"),
+            Message::system("[RECALL] a"),
+        ];
+        let turn2 = vec![
+            stable,
+            Message::user("hi"),
+            Message::system("[RECALL] a"),
+            Message::system("[PLAN MODE] read-only"),
+        ];
+
+        let blocks1 = AnthropicProvider::convert_messages(&turn1).0.unwrap();
+        let blocks2 = AnthropicProvider::convert_messages(&turn2).0.unwrap();
+        let b1 = blocks1.as_array().expect("multi-block system array");
+        let b2 = blocks2.as_array().expect("multi-block system array");
+
+        assert_eq!(b1.len(), 2);
+        assert_eq!(b2.len(), 3);
+        // The break-point block is byte-identical across turns — this is the
+        // property the whole fix exists to preserve.
+        assert_eq!(b1[0], b2[0]);
+        assert_eq!(b1[0]["cache_control"]["type"], "ephemeral");
+        // Volatile blocks never carry a marker: that would burn one of the
+        // four allowed break-points on content that changes every turn.
+        assert!(b2[1].get("cache_control").is_none());
+        assert!(b2[2].get("cache_control").is_none());
     }
 
     #[test]

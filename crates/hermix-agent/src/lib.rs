@@ -104,6 +104,8 @@ pub mod recall_scheduler;
 pub mod flush_memories;
 pub mod tool_error_demotion;
 pub mod harness_self_edit;
+/// Harness² 的任务级递归：Judge → Probe → Compose（多次执行对比提炼技能）。
+pub mod harness_probe;
 pub mod acceptance_gate;
 pub mod experience_archive;
 

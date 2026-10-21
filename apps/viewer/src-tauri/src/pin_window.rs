@@ -37,7 +37,8 @@ use std::sync::{Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
 use tauri::{
-    AppHandle, LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent,
+    AppHandle, LogicalPosition, LogicalSize, Manager, PhysicalPosition, WebviewUrl,
+    WebviewWindow, WebviewWindowBuilder, WindowEvent,
 };
 
 /// 浮窗 label 前缀（capability 用 `pin-*` 通配放行）。
@@ -46,6 +47,12 @@ const PIN_PREFIX: &str = "pin-";
 const MAX_PINS: usize = 6;
 /// 浮窗默认尺寸（逻辑像素）。
 const DEFAULT_SIZE: (f64, f64) = (760.0, 600.0);
+/// 贴边吸附阈值（逻辑像素）：拖到离边这么近就吸上去。
+const SNAP_EDGE: f64 = 28.0;
+/// 自动排版时工作区四周留的边距（逻辑像素）。
+const LAYOUT_MARGIN: f64 = 16.0;
+/// 自动排版时格子之间的缝（逻辑像素）。
+const LAYOUT_GAP: f64 = 12.0;
 
 /// 一个钉住的预览。
 #[derive(Clone, Debug)]
@@ -163,12 +170,13 @@ pub async fn pin_open(app: AppHandle, path: String) -> Result<String, String> {
 
     let label = format!("{PIN_PREFIX}{}", seq().fetch_add(1, Ordering::Relaxed) + 1);
 
-    // 落位：有记忆就用记忆的（显示器还在且 DPI 没变才用），否则默认摆位。
+    // 落位：有记忆就用记忆的（显示器还在且 DPI 没变才用），否则自动排版。
     let mut records = load_records();
     let record = records.get(&path).cloned();
+    let pinned_count = pins().lock().unwrap().len();
     let (x, y, w, h) = match record {
         Some(rec) if monitor_still_valid(&app, &rec) => (rec.x, rec.y, rec.w, rec.h),
-        _ => default_position(&app),
+        _ => tiled_position(&app, pinned_count, pinned_count + 1),
     };
 
     // 浮窗加载**应用自己的资源**，走 `WebviewUrl::App`（与主窗口同一条路）。
@@ -183,14 +191,18 @@ pub async fn pin_open(app: AppHandle, path: String) -> Result<String, String> {
     //
     // 浮窗的身份（被钉住的是谁）**不进 URL**：前端按自己的窗口 label 去 Rust
     // 侧查（`pin_path`）。
+    //
+    // **不设 always_on_top**：置顶浮窗会把别的程序压在下面 —— 用户手动激活
+    // 另一个程序时它应该能盖上来（"连查看器自己都被遮住了"）。浮窗靠
+    // "后开的窗口在上"这一默认 z 序与主窗口共存即可。
     let window = WebviewWindowBuilder::new(&app, &label, WebviewUrl::App("index.html".into()))
         .title(format!("{} · Hermix", display_name(&path)))
         .inner_size(w, h)
         .position(x, y)
-        .always_on_top(true)
         .resizable(true)
         .build()
         .map_err(|e| format!("浮窗创建失败：{e}"))?;
+    let _ = window.set_focus();
 
     // 移动 / 缩放后立刻记住落位（拖动过程中会连着来很多事件 → 写文件很
     // 频繁，所以这里只更新内存里的记录，落盘由 `save_records` 在松手后
@@ -199,8 +211,14 @@ pub async fn pin_open(app: AppHandle, path: String) -> Result<String, String> {
     let tracked = window.clone();
     let tracked_label = label.clone();
     window.on_window_event(move |event| {
-        if !matches!(event, WindowEvent::Moved(_) | WindowEvent::Resized(_)) {
-            return;
+        match event {
+            WindowEvent::Moved(pos) => {
+                // 贴边吸附：拖到屏幕边缘附近就吸上去（Windows 11 的贴靠、
+                // macOS 的窗口贴边都是同一套交互）。
+                snap_to_edge(&tracked, *pos);
+            }
+            WindowEvent::Resized(_) => {}
+            _ => return,
         }
         let (Ok(pos), Ok(size)) = (tracked.outer_position(), tracked.outer_size()) else {
             return;
@@ -361,22 +379,120 @@ fn current_scale(app: &AppHandle) -> f64 {
         .unwrap_or(1.0)
 }
 
-/// 默认摆位：主屏工作区里错开摆放，避免叠在一起。
-fn default_position(app: &AppHandle) -> (f64, f64, f64, f64) {
-    let (w, h) = DEFAULT_SIZE;
-    let offset = (pins().lock().unwrap().len() as f64) * 28.0;
-    let (x, y) = match app.primary_monitor().ok().flatten() {
-        Some(monitor) => {
-            let area = monitor.work_area();
-            // work_area 是物理像素 → 逻辑像素（按缩放换算）。
-            let scale = monitor.scale_factor();
-            let x = (area.position.x as f64 / scale + 60.0 + offset) as f64;
-            let y = (area.position.y as f64 / scale + 60.0 + offset) as f64;
-            (x, y)
-        }
-        None => (80.0 + offset, 80.0 + offset),
+/// 默认摆位：多个浮窗按网格自动排版，互不重叠。
+///
+/// 上一版是"每开一个就斜着错开 28px"—— 三个窗口叠在一起，谁也看不见谁，
+/// 等于没有排版。桌面端成熟的做法（Windows 贴靠分屏、macOS Stage Manager、
+/// PowerToys FancyZones）是**把工作区切成格子，每个窗口占一格**：这里取
+/// 最朴素的一种：按 √n 切成近似正方的网格，按开启顺序依次填格。
+fn tiled_position(app: &AppHandle, index: usize, total: usize) -> (f64, f64, f64, f64) {
+    let Some(monitor) = app.primary_monitor().ok().flatten() else {
+        return (80.0, 80.0, DEFAULT_SIZE.0, DEFAULT_SIZE.1);
     };
+    let area = monitor.work_area();
+    let scale = monitor.scale_factor();
+    let ox = area.position.x as f64 / scale;
+    let oy = area.position.y as f64 / scale;
+    let work_w = area.size.width as f64 / scale;
+    let work_h = area.size.height as f64 / scale;
+
+    let total = total.max(1);
+    let cols = (total as f64).sqrt().ceil().max(1.0) as usize;
+    let rows = total.div_ceil(cols).max(1);
+    let cell_w = (work_w - LAYOUT_MARGIN * 2.0 - LAYOUT_GAP * (cols as f64 - 1.0)) / cols as f64;
+    let cell_h = (work_h - LAYOUT_MARGIN * 2.0 - LAYOUT_GAP * (rows as f64 - 1.0)) / rows as f64;
+
+    // 窗口不超过格子（也不小于一个可用的下限）。
+    let w = cell_w.clamp(320.0, DEFAULT_SIZE.0);
+    let h = cell_h.clamp(240.0, DEFAULT_SIZE.1);
+    let col = index % cols;
+    let row = index / cols;
+    let x = ox + LAYOUT_MARGIN + col as f64 * (cell_w + LAYOUT_GAP);
+    let y = oy + LAYOUT_MARGIN + row as f64 * (cell_h + LAYOUT_GAP);
     (x, y, w, h)
+}
+
+/// 贴边吸附：窗口离屏幕工作区某条边在阈值内就把它推上去。
+///
+/// 拖动过程中 Windows 会用自己的位置覆盖我们设的值，但**拖动结束后的最后
+/// 一次 Moved 事件**会再走一遍这里 —— 那时吸附就生效了。已吸到边上的
+/// 窗口再次收到事件时算出的目标位置与当前位置相同，不会再触发移动，
+/// 因此不会自激。
+fn snap_to_edge(window: &WebviewWindow, pos: PhysicalPosition<i32>) {
+    let Ok(Some(monitor)) = window.current_monitor() else {
+        return;
+    };
+    let scale = window.scale_factor().unwrap_or(1.0);
+    let area = monitor.work_area();
+    let ax = area.position.x as f64 / scale;
+    let ay = area.position.y as f64 / scale;
+    let aw = area.size.width as f64 / scale;
+    let ah = area.size.height as f64 / scale;
+    let Ok(size) = window.outer_size() else {
+        return;
+    };
+    let w = size.width as f64 / scale;
+    let h = size.height as f64 / scale;
+    let lx = pos.x as f64 / scale;
+    let ly = pos.y as f64 / scale;
+
+    let mut nx = lx;
+    let mut ny = ly;
+    if (lx - ax).abs() <= SNAP_EDGE {
+        nx = ax;
+    } else if ((lx + w) - (ax + aw)).abs() <= SNAP_EDGE {
+        nx = ax + aw - w;
+    }
+    if (ly - ay).abs() <= SNAP_EDGE {
+        ny = ay;
+    } else if ((ly + h) - (ay + ah)).abs() <= SNAP_EDGE {
+        ny = ay + ah - h;
+    }
+    if nx == lx && ny == ly {
+        return;
+    }
+    let target = PhysicalPosition::new((nx * scale) as i32, (ny * scale) as i32);
+    let _ = window.set_position(target);
+}
+
+/// 把浮窗摆到工作区的某个方位（工具条上的「贴左 / 贴右 / 居中」）。
+#[tauri::command]
+pub fn pin_place(app: AppHandle, label: String, preset: String) -> Result<(), String> {
+    let Some(window) = app.get_webview_window(&label) else {
+        return Err("浮窗不存在".into());
+    };
+    let Ok(Some(monitor)) = window.current_monitor() else {
+        return Err("找不到当前显示器".into());
+    };
+    let scale = window.scale_factor().unwrap_or(1.0);
+    let area = monitor.work_area();
+    let ax = area.position.x as f64 / scale;
+    let ay = area.position.y as f64 / scale;
+    let aw = area.size.width as f64 / scale;
+    let ah = area.size.height as f64 / scale;
+    let Ok(size) = window.outer_size() else {
+        return Err("读不到浮窗尺寸".into());
+    };
+    let w = size.width as f64 / scale;
+    let h = size.height as f64 / scale;
+    let Ok(pos) = window.outer_position() else {
+        return Err("读不到浮窗位置".into());
+    };
+    let lx = pos.x as f64 / scale;
+    let ly = pos.y as f64 / scale;
+
+    let (nx, ny) = match preset.as_str() {
+        "left" => (ax, (ly - ay).clamp(0.0, (ah - h).max(0.0))),
+        "right" => (ax + aw - w, (ly - ay).clamp(0.0, (ah - h).max(0.0))),
+        "top" => ((lx - ax).clamp(0.0, (aw - w).max(0.0)), ay),
+        "bottom" => ((lx - ax).clamp(0.0, (aw - w).max(0.0)), ay + ah - h),
+        "center" => (ax + (aw - w) / 2.0, ay + (ah - h) / 2.0),
+        _ => return Err(format!("未知的摆位：{preset}")),
+    };
+    let target = PhysicalPosition::new((nx * scale) as i32, (ny * scale) as i32);
+    window
+        .set_position(target)
+        .map_err(|e| format!("移动浮窗失败：{e}"))
 }
 
 /// 把逻辑坐标换算回物理像素（落位记忆用物理像素存更稳）。

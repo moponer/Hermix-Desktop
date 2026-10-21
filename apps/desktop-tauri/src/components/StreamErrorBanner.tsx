@@ -1,5 +1,6 @@
 import { useState, useCallback } from "react";
-import { X, ChevronDown, Copy, CheckCheck, ServerCrash, Coins, KeyRound, WifiOff, Clock, AlertTriangle } from "lucide-react";
+import { X, ChevronDown, Copy, Check, ServerCrash, Coins, KeyRound, WifiOff, Clock, AlertTriangle } from "lucide-react";
+import { CLOSE } from "./strings";
 
 /** Stream error taxonomy — mirrors `App.classifyStreamErrorKind`. */
 export type ErrorKind =
@@ -129,17 +130,17 @@ export function StreamErrorCard({
       <div className="stream-error-card__main">
         <div className="stream-error-card__head">
           <span className="stream-error-card__icon" aria-hidden="true">
-            <meta.Icon className="icon-md" strokeWidth={2} />
+            <meta.Icon className="icon-md" />
           </span>
           <span className="stream-error-card__title">{meta.title}</span>
           <button
             type="button"
             className="stream-error-card__dismiss"
             onClick={() => onDismiss?.()}
-            title="关闭"
+            title={CLOSE}
             aria-label="关闭错误提示"
           >
-            <X className="icon-md" strokeWidth={2} />
+            <X className="icon-md" />
           </button>
         </div>
         <div className="stream-error-card__message">{message}</div>
@@ -151,7 +152,7 @@ export function StreamErrorCard({
             onToggle={(e) => setExpanded((e.target as HTMLDetailsElement).open)}
           >
             <summary>
-              <ChevronDown strokeWidth={2}
+              <ChevronDown
                 className={`icon-sm ${`stream-error-card__chev ${expanded ? "is-open" : ""}`}`}
               />
               技术详情
@@ -179,12 +180,12 @@ export function StreamErrorCard({
               >
                 {copied ? (
                   <>
-                    <CheckCheck className="icon-sm" strokeWidth={2} />
+                    <Check className="icon-sm" />
                     <span>已复制</span>
                   </>
                 ) : (
                   <>
-                    <Copy className="icon-sm" strokeWidth={2} />
+                    <Copy className="icon-sm" />
                     <span>复制错误码</span>
                   </>
                 )}

@@ -210,7 +210,122 @@ pub fn ensure_seeded(config: &mut GatewayConfig) -> bool {
         changed = true;
     }
 
+    // 开箱默认：把上下文最大的 N 个免费模型写进启用清单（一次性）。
+    // 离线兜底用 `set_flag=false` 只做增量加法、不置标记，等在线刷新用
+    // `set_flag=true` 按真实上下文选出真正的前 N 个并锁定。
+    if seed_default_free_models(config, false) {
+        changed = true;
+    }
+
     changed
+}
+
+/// 开箱默认启用的免费模型数量（按上下文窗口降序取前 N 个）。
+pub const DEFAULT_FREE_ENABLED: usize = 5;
+
+/// 把免费渠道里上下文最大的 N 个模型写进 `model_selector.enabled`。
+///
+/// 一次性（`set_flag=true` 且 `defaults_seeded` 已真后不再干预），因此尊重
+/// 用户后续在设置页的手动启/停。
+///
+/// - `set_flag=true`（在线刷新路径）：直接用 Top-N **替换**免费条目，但保留
+///   付费条目，并把指向被移除免费模型的默认模型重设到 Top-N 首项。
+/// - `set_flag=false`（离线兜底）：只把尚未启用的 Top-N **增量加入**，不置标记，
+///   等在线刷新再按真实上下文锁定真正的 Top-N。
+pub fn seed_default_free_models(config: &mut GatewayConfig, set_flag: bool) -> bool {
+    if !config.free_channel.enabled {
+        return false;
+    }
+    // 一次性：标记置真后两种路径都不干预，尊重用户在设置页的手动启/停。
+    if config.free_channel.defaults_seeded {
+        return false;
+    }
+
+    // 收集每个免费渠道的候选（provider, model, 上下文窗口）。
+    let mut candidates: Vec<(String, String, u64)> = Vec::new();
+    for channel in FREE_CHANNELS {
+        let Some(entry) = config.llm_providers.get(channel.id) else {
+            continue;
+        };
+        let models: Vec<String> = entry
+            .model
+            .as_deref()
+            .unwrap_or_default()
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect();
+        for m in models {
+            let ctx = entry
+                .model_contexts
+                .get(&m)
+                .copied()
+                .or_else(|| entry.model_meta.get(&m).and_then(|c| c.context_window))
+                .unwrap_or(0);
+            candidates.push((channel.id.to_string(), m, ctx));
+        }
+    }
+    if candidates.is_empty() {
+        if set_flag {
+            config.free_channel.defaults_seeded = true;
+        }
+        return false;
+    }
+
+    // 按上下文窗口降序，取前 N（上下文相同时保持稳定顺序）。
+    candidates.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.1.cmp(&b.1)));
+    let top: Vec<(String, String)> = candidates
+        .into_iter()
+        .take(DEFAULT_FREE_ENABLED)
+        .map(|(p, m, _)| (p, m))
+        .collect();
+
+    let sel = config.model_selector.get_or_insert_with(Default::default);
+
+    if set_flag {
+        // 在线刷新路径：用 Top-N 替换免费条目（保留付费条目）。
+        sel.enabled
+            .retain(|e| !is_free_provider(&e.provider_id));
+        for (p, m) in &top {
+            sel.enabled.push(crate::config::ModelSelectorEntry {
+                provider_id: p.clone(),
+                model_id: m.clone(),
+            });
+        }
+        // 默认模型若指向被移除的免费模型，重设到 Top-N 首项。
+        if let Some(def) = sel.default_model.as_ref() {
+            if let Some((dp, _)) = def.split_once(':') {
+                if is_free_provider(dp)
+                    && !top.iter().any(|(p, m)| format!("{p}:{m}") == *def)
+                {
+                    sel.default_model = Some(format!("{}:{}", top[0].0, top[0].1));
+                }
+            }
+        }
+        if sel.default_model.is_none() {
+            sel.default_model = Some(format!("{}:{}", top[0].0, top[0].1));
+        }
+        config.free_channel.defaults_seeded = true;
+        true
+    } else {
+        // 离线兜底：增量加入尚未启用的 Top-N。
+        let mut changed = false;
+        for (p, m) in &top {
+            if !sel
+                .enabled
+                .iter()
+                .any(|e| e.provider_id == *p && e.model_id == *m)
+            {
+                sel.enabled.push(crate::config::ModelSelectorEntry {
+                    provider_id: p.clone(),
+                    model_id: m.clone(),
+                });
+                changed = true;
+            }
+        }
+        changed
+    }
 }
 
 /// 初版接管留下的一次性清理（`free_channel.selector_cleaned` 置真后不再执行）。
@@ -635,5 +750,154 @@ mod tests {
         let cfg = FreeChannelConfig::default();
         let channel = &FREE_CHANNELS[0];
         assert!(resolved_models_url(&cfg, channel).ends_with("/models"));
+    }
+
+    /// 开箱默认：按上下文窗口降序取前 N 个免费模型写进 enabled。
+    #[test]
+    fn seed_default_picks_top_n_by_context() {
+        let mut cfg = seeded();
+        // 注入 8 个候选模型，上下文各不相同（含 0 兜底值）。
+        let entry = cfg.llm_providers.get_mut("custom-free-kilo").unwrap();
+        entry.model = Some("a,b,c,d,e,f,g,h".to_string());
+        let ctxs = [
+            ("a", 10_000u64),
+            ("b", 200_000),
+            ("c", 1_000_000),
+            ("d", 0),
+            ("e", 128_000),
+            ("f", 500_000),
+            ("g", 0),
+            ("h", 32_000),
+        ];
+        for (m, c) in ctxs {
+            entry.model_contexts.insert(m.to_string(), c);
+        }
+
+        assert!(seed_default_free_models(&mut cfg, true), "must seed on first run");
+        assert!(cfg.free_channel.defaults_seeded, "flag must be set");
+
+        let free: Vec<_> = cfg
+            .model_selector
+            .as_ref()
+            .unwrap()
+            .enabled
+            .iter()
+            .filter(|e| e.provider_id == "custom-free-kilo")
+            .map(|e| e.model_id.clone())
+            .collect();
+        assert_eq!(free.len(), DEFAULT_FREE_ENABLED, "exactly N free models");
+        // 上下文降序：c(1M) f(500k) b(200k) e(128k) h(32k)
+        assert_eq!(
+            free,
+            vec!["c", "f", "b", "e", "h"],
+            "must be the top-N by context, got {:?}",
+            free
+        );
+    }
+
+    /// 一次性标记置真后不再干预——即使用户还没选过也不重跑。
+    #[test]
+    fn seed_default_is_one_time() {
+        let mut cfg = GatewayConfig::default();
+        cfg.free_channel.enabled = true;
+        cfg.free_channel.defaults_seeded = true;
+        cfg.llm_providers.insert(
+            "custom-free-kilo".to_string(),
+            crate::config::LlmProviderConfig {
+                model: Some("x,y,z".to_string()),
+                model_contexts: {
+                    let mut m = std::collections::HashMap::new();
+                    m.insert("x".to_string(), 9_000_000);
+                    m
+                },
+                ..Default::default()
+            },
+        );
+
+        assert!(
+            !seed_default_free_models(&mut cfg, true),
+            "must be a no-op once seeded"
+        );
+        assert!(!cfg.model_selector.as_ref().map_or(false, |s| s
+            .enabled
+            .iter()
+            .any(|e| e.provider_id == "custom-free-kilo")));
+    }
+
+    /// 替换免费条目时必须保留付费条目，不污染用户已配的厂商。
+    #[test]
+    fn seed_default_preserves_paid_entries() {
+        let mut cfg = seeded();
+        cfg.llm_providers.insert(
+            "minimax".to_string(),
+            crate::config::LlmProviderConfig {
+                api_key: Some("sk-test".to_string()),
+                model: Some("MiniMax-M3".to_string()),
+                ..Default::default()
+            },
+        );
+        cfg.model_selector = Some(crate::config::ModelSelectorConfig {
+            enabled: vec![crate::config::ModelSelectorEntry {
+                provider_id: "minimax".to_string(),
+                model_id: "MiniMax-M3".to_string(),
+            }],
+            default_model: Some("minimax:MiniMax-M3".to_string()),
+        });
+
+        let entry = cfg.llm_providers.get_mut("custom-free-kilo").unwrap();
+        entry.model = Some("a,b,c,d,e,f,g,h".to_string());
+        entry.model_contexts.insert("c".to_string(), 1_000_000);
+
+        assert!(seed_default_free_models(&mut cfg, true));
+
+        let sel = cfg.model_selector.as_ref().unwrap();
+        assert!(
+            sel.enabled
+                .iter()
+                .any(|e| e.provider_id == "minimax" && e.model_id == "MiniMax-M3"),
+            "paid entry must survive"
+        );
+        // 默认模型指向付费，不应被改成免费。
+        assert_eq!(sel.default_model.as_deref(), Some("minimax:MiniMax-M3"));
+        // 免费条目恰好 N 个。
+        assert_eq!(
+            sel.enabled
+                .iter()
+                .filter(|e| e.provider_id == "custom-free-kilo")
+                .count(),
+            DEFAULT_FREE_ENABLED
+        );
+    }
+
+    /// 离线兜底（set_flag=false）只增量加入、不置标记。
+    #[test]
+    fn seed_default_offline_is_additive_and_unflagged() {
+        let mut cfg = GatewayConfig::default();
+        cfg.free_channel.enabled = true;
+        cfg.llm_providers.insert(
+            "custom-free-kilo".to_string(),
+            crate::config::LlmProviderConfig {
+                model: Some("a,b,c".to_string()),
+                model_contexts: {
+                    let mut m = std::collections::HashMap::new();
+                    m.insert("c".to_string(), 1_000_000);
+                    m
+                },
+                ..Default::default()
+            },
+        );
+
+        assert!(seed_default_free_models(&mut cfg, false));
+        assert!(!cfg.free_channel.defaults_seeded, "offline path must not flag");
+        let free: Vec<_> = cfg
+            .model_selector
+            .as_ref()
+            .unwrap()
+            .enabled
+            .iter()
+            .filter(|e| e.provider_id == "custom-free-kilo")
+            .map(|e| e.model_id.clone())
+            .collect();
+        assert_eq!(free, vec!["c", "a", "b"]);
     }
 }

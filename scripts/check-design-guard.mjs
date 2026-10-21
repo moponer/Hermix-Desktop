@@ -83,9 +83,13 @@ for (const file of walk(ROOT)) {
       continue;
     }
     // G1 — TSX 字面色值（只扫 .tsx；.ts 数据色板豁免）
+    // 字面色有四种写法：#hex / rgb() / rgba() / hsl()。2026-10-21 补 hsl() ——
+    // 此前只拦 #hex 与 rgb(，Sidebar.tsx 的 4 处 hsl() 字面色一路漏网。
+    // 只拦**字面量**（数字开头）；`hsl(${计算})` 是程序化派生（MemoryGraph 的
+    // 色相环），不是写死的颜色。
     if (
       /\.tsx$/.test(file) &&
-      /#[0-9a-fA-F]{3,8}\b|rgba?\(/.test(ln) &&
+      /#[0-9a-fA-F]{3,8}\b|rgba?\(|(?<![$\w])hsla?\(\s*[\d.]/.test(ln) &&
       !TOKEN_LINE.test(ln)
     ) {
       const hasToken = /var\(--/.test(ln);

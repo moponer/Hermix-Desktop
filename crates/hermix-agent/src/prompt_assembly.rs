@@ -456,7 +456,7 @@ pub fn messages_for_api_call(config: &AgentConfig, ctx: &ContextManager) -> Vec<
     messages
 }
 
-/// Anthropic-specific: mark the system message and the last 4 user/assistant
+/// Anthropic-specific: mark the system message and the last 3 user/assistant
 /// messages as `Ephemeral` cache. The system message gets the marker so the
 /// provider-side prompt cache (Anthropic's `cache_control: {type: "ephemeral"}`)
 /// can reuse the stable prefix across turns — the largest, most invariant
@@ -464,6 +464,12 @@ pub fn messages_for_api_call(config: &AgentConfig, ctx: &ContextManager) -> Vec<
 /// rendered into the system message. Other providers do not consume these
 /// markers, so the function is a no-op when `config.provider` is not
 /// Anthropic/Claude.
+///
+/// The system marker lands on the **first** `System` message only, and the
+/// provider emits one system block per message (see
+/// `AnthropicProvider::convert_messages`) — that is what keeps the cached
+/// prefix byte-identical while recall/skill/plan-mode blocks keep growing
+/// behind it.
 pub fn apply_prompt_cache_markers(config: &AgentConfig, messages: &mut [Message]) {
     use hermix_core::types::{CacheControl, CacheType, MessageRole};
     if messages.is_empty() {
@@ -486,7 +492,11 @@ pub fn apply_prompt_cache_markers(config: &AgentConfig, messages: &mut [Message]
             break;
         }
     }
-    let ephemeral_budget = 4;
+    // Anthropic accepts at most 4 cache break-points per request, and the
+    // stable system block above already consumes one. Five markers used to
+    // be emitted (1 + 4), so the last one was silently dropped — or, on
+    // stricter paths, the whole request 400'd.
+    let ephemeral_budget = 3;
     let mut marked = 0;
     for msg in messages.iter_mut().rev() {
         if marked >= ephemeral_budget {

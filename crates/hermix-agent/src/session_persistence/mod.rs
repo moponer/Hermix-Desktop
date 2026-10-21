@@ -36,6 +36,36 @@ pub(crate) fn open_with_wal(path: &Path) -> Result<rusqlite::Connection, AgentEr
         .map_err(|e| AgentError::Io(format!("Failed to open sessions db: {e}")))
 }
 
+/// Run a blocking persistence call without parking a runtime worker.
+///
+/// `save_session_atomic` is synchronous SQLite + file IO, and on write
+/// contention it `thread::sleep`s through up to 15 retries (~2 s+). Called
+/// inline from an async handler that holds a worker for seconds — long enough
+/// to miss the front-end's WS heartbeat and surface as `ws_disconnected`
+/// (the same failure already fixed for sub-session creation in
+/// `local_agent_service`).
+///
+/// `block_in_place` hands the current worker to the blocking pool so the
+/// runtime keeps serving other tasks. It panics on a current-thread runtime
+/// (which `#[tokio::test]` uses), hence the flavour check and the direct
+/// fallback — there is no worker pool to starve in that case.
+pub(crate) fn run_blocking<F, R>(f: F) -> R
+where
+    F: FnOnce() -> R,
+{
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle)
+            if matches!(
+                handle.runtime_flavor(),
+                tokio::runtime::RuntimeFlavor::MultiThread
+            ) =>
+        {
+            tokio::task::block_in_place(f)
+        }
+        _ => f(),
+    }
+}
+
 /// 会话 id → 文件名主体。`im:device:*`、`im:qq:*` 这类 id 带冒号，而
 /// Windows 禁用 `: * ? " < > | / \`——直接拼路径必然 `os error 123`
 /// （「文件名、目录名或卷标语法不正确」），日志落盘全部失败（2026-10-16 案）。

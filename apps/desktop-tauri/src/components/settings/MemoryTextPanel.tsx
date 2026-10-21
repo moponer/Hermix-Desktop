@@ -9,6 +9,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Loader2, Save } from "lucide-react";
 import * as api from "../../api";
 import { Button, SkeletonCard } from "../ui";
+import { LOAD_FAILED, SAVED, SAVING, SAVE, SAVE_FAILED, failure } from "../strings";
 
 interface TextMemoryProps {
   title: string;
@@ -33,7 +34,11 @@ function TextMemoryEditor({ title, description, load, save }: TextMemoryProps) {
         setContent(file.content ?? "");
         setPath(file.path);
       })
-      .catch((e) => alive && setNotice(String(e)))
+      .catch((e) => {
+        if (!alive) return;
+        const msg = e instanceof Error ? e.message : String(e);
+        setNotice(failure(LOAD_FAILED, "请重试。", msg));
+      })
       .finally(() => alive && setLoading(false));
     return () => { alive = false; };
   }, [load]);
@@ -44,9 +49,10 @@ function TextMemoryEditor({ title, description, load, save }: TextMemoryProps) {
     try {
       await save(content);
       setDirty(false);
-      setNotice("已保存，下一次对话生效。");
+      setNotice(SAVED);
     } catch (e) {
-      setNotice(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      setNotice(failure(SAVE_FAILED, "请重试。", msg));
     } finally {
       setSaving(false);
     }
@@ -62,7 +68,8 @@ function TextMemoryEditor({ title, description, load, save }: TextMemoryProps) {
           </span>
         )}
         <Button variant="primary" size="sm" onClick={onSave} disabled={saving || loading || !dirty} className="ml-auto">
-          {saving ? <Loader2 className="size-3.5 animate-spin" /> : <Save className="size-3.5" />} 保存
+          {saving ? <Loader2 className="size-3.5 animate-spin" /> : <Save className="size-3.5" />}
+          {saving ? SAVING : SAVE}
         </Button>
       </div>
       <p className="mt-1 text-[length:var(--text-meta)] text-[var(--color-text-muted)]">{description}</p>
@@ -88,13 +95,13 @@ export function MemoryTextPanel() {
     <div className="space-y-3">
       <TextMemoryEditor
         title="MEMORY.md（全局长期记忆）"
-        description="agent 通过 memory 工具显式写入的记忆文件，会注入系统提示。桌面私聊默认按会话隔离写入，会话结束时自动晋升到记忆库；这里的全局文件对所有会话可见。"
+        description="agent 通过 memory 工具显式写入的记忆文件，会注入系统提示。桌面私聊默认按会话隔离写入，会话结束时自动晋升到记忆库；这里的全局文件对所有会话可见。保存后下一次对话生效。"
         load={loadMemory}
         save={api.savePersonaMemory}
       />
       <TextMemoryEditor
         title="USER.md（用户画像）"
-        description="对用户偏好的结构化画像，随系统提示注入。"
+        description="对用户偏好的结构化画像，随系统提示注入。保存后下一次对话生效。"
         load={loadUser}
         save={api.savePersonaUser}
       />

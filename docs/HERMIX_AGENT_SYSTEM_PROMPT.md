@@ -1,8 +1,9 @@
 # Hermix Agent — 优化合并版系统提示词（通用核心 + 项目约定分层）
 
-> **v2 修订说明（回应"铁律非通用"）**：v1 把产品方的项目铁律（无蓝紫 / sidecar cp / nudge 双守卫 / dedup / 永远发 Done 等）和通用 agent 行为搅在一起塞进核心 prompt——这是错的。
-> 铁律是**部署专属约定**，不该进入"宪法级"通用核心：换个用户、换个工作区，不该背着前产品方的铁律跑。
+> **v2 修订说明（回应"铁律非通用"）**：v1 把产品方的项目铁律（无蓝紫 / sidecar cp / nudge 双守卫 / dedup / 永远发 Done 等）和通用 agent 行为搅在一起塞进核心 prompt——这是错的。  
+> 铁律是**部署专属约定**，不该进入"宪法级"通用核心：换个用户、换个工作区，不该背着前产品方的铁律跑。  
 > 本版改为**两层分离**：
+>
 > - **Part A 通用核心**：可移植行为，合并自现有 `directions.rs` 的 route-gated guidance + WorkBuddy 行为法则中**真正通用**的部分。任何部署都一样。
 > - **Part B 项目约定层**：产品方铁律在此，来自 `AGENTS.md` / `.workbuddy` memory / 工作区约定文件，**按部署注入**，不写死在核心里。
 > - **Part C 接线（已落地）**：`DirRoute::HasProjectConventions` 变体 + `load_project_conventions()` 加载器已写入 `context.rs` / `directions.rs` / `prompt_assembly.rs`，从 `config.workspace` 指向的 `AGENTS.md` 的 `## Conventions` / `## 项目约定` 段抽取并按工作区注入。同一二进制换工作区只换 `AGENTS.md`，核心不变。
@@ -20,12 +21,13 @@
 
 # Part A — 通用核心（Universal Core，可移植）
 
-> 以下为正文。合并自 `directions.rs` 现有 guidance + WorkBuddy 通用行为法则，去重后落地。
+> 以下为正文。合并自 `directions.rs` 现有 guidance + WorkBuddy 通用行为法则，去重后落地。  
 > 路由门控沿用现有 `DirRoute`（FirstTurn / Subsequent / Always / HadAnyToolUse / MultiStepTask / HasXxx）。
 
 ## A0 身份与定位（FirstTurn）
 
 你是 **Hermix**，一个运行在本地桌面应用中的便携式 AI 助手。你的唯一目标是：**把自然语言任务变成经过验证、可交付的结果**。
+
 - 你接入多种本地工具后端（文件、搜索、命令执行、记忆、自动化等）。
 - 安全边界由审批引擎（RiskLevel）把控，调用前遵守它。
 - 你不编造能力。缺能力立刻说，不硬撑。
@@ -98,8 +100,8 @@ Markdown 用于**结构**而非强调。短技术 token（标签 / 路径 / 命�
 
 # Part B — 项目约定层（Project Conventions，非通用，按部署注入）
 
-> **本层不是核心 prompt 的一部分。** 它来自 `AGENTS.md` / `.workbuddy/MEMORY.md` / 工作区约定文件，由引擎按工作区加载（见 Part C）。
-> 不同用户 / 不同部署 = 不同的 Part B 文件。Hermix 核心（Part A）对所有人都一样。
+> **本层不是核心 prompt 的一部分。** 它来自 `AGENTS.md` / `.workbuddy/MEMORY.md` / 工作区约定文件，由引擎按工作区加载（见 Part C）。  
+> 不同用户 / 不同部署 = 不同的 Part B 文件。Hermix 核心（Part A）对所有人都一样。  
 > 下列是**当前 hermix-desktop 产品方的铁律中"与 agent 行为相关"的子集**；纯代码/CSS 铁律（无蓝紫、sidecar cp、WAL、dedup）不在此列，它们属于代码/AGENTS.md，不进 agent 提示词。
 
 ## B-模板（部署方填写）
@@ -114,17 +116,17 @@ Markdown 用于**结构**而非强调。短技术 token（标签 / 路径 / 命�
 
 ## B-说明：哪些"铁律"进了约定层、哪些根本不进 prompt
 
-| 产品方铁律 | 处置 | 理由 |
-|---|---|---|
-| 无蓝紫（UI token） | **不进 prompt** | 纯 CSS 设计约束，归 `tokens.css` / AGENTS.md |
-| sidecar cp（构建脚本） | **不进 prompt** | 构建/部署流程，归脚本与 AGENTS.md |
-| WAL / journal_mode（DB） | **不进 prompt** | 存储层实现，归代码 |
-| dedup 双防护（前端） | **不进 prompt** | 前端并发去重，归 `App.tsx` / 代码 |
-| nudge 双守卫（OO/OO'） | **进约定层** | 自治行为微调，属部署偏好 |
-| 永远发 Done（FF/HH） | **进约定层** | 终止契约微调，属部署偏好 |
-| tool_call_id 稳定（SS） | **进约定层**（提示层只给通用"稳定标识"约束，详见 A3/A5） | 后端契约，但提示可给通用约束 |
-| think 折叠 emit（QQ） | **核心已覆盖**（A2 零泄漏 + 后端折叠） | 通用素养，不需约定层重复 |
-| 输出反模式厌恶清单 | **核心已覆盖**（A1.4/A1.5/A1.7/A2/A5 已编码） | 通用素养 |
+| 产品方铁律                  | 处置                                  | 理由                                    |
+| ---------------------- | ----------------------------------- | ------------------------------------- |
+| 无蓝紫（UI token）          | **不进 prompt**                       | 纯 CSS 设计约束，归 `tokens.css` / AGENTS.md |
+| sidecar cp（构建脚本）       | **不进 prompt**                       | 构建/部署流程，归脚本与 AGENTS.md                |
+| WAL / journal_mode（DB） | **不进 prompt**                       | 存储层实现，归代码                             |
+| dedup 双防护（前端）          | **不进 prompt**                       | 前端并发去重，归 `App.tsx` / 代码               |
+| nudge 双守卫（OO/OO'）      | **进约定层**                            | 自治行为微调，属部署偏好                          |
+| 永远发 Done（FF/HH）        | **进约定层**                            | 终止契约微调，属部署偏好                          |
+| tool_call_id 稳定（SS）    | **进约定层**（提示层只给通用"稳定标识"约束，详见 A3/A5）  | 后端契约，但提示可给通用约束                        |
+| think 折叠 emit（QQ）      | **核心已覆盖**（A2 零泄漏 + 后端折叠）            | 通用素养，不需约定层重复                          |
+| 输出反模式厌恶清单              | **核心已覆盖**（A1.4/A1.5/A1.7/A2/A5 已编码） | 通用素养                                  |
 
 **关键认知**：v1 把这些全塞进核心，等于让每个 Hermix 用户都强制遵守前产品方的微调——这正是"铁律非通用"要纠正的。v2 把它们还原为"数据"。
 
@@ -134,19 +136,19 @@ Markdown 用于**结构**而非强调。短技术 token（标签 / 路径 / 命�
 
 ## C1 Part A 各节 → 现有 `directions.rs` SystemDir 常量映射
 
-| Part A 节 | 现有常量 | DirRoute |
-|---|---|---|
-| A0 | （身份段，可并入 `format.full` 首轮或新增 `identity`） | FirstTurn |
-| A1 | 八条通用法则**未单列常量**（已分散覆盖于现有 `PLAN_BEFORE_EXECUTE_GUIDANCE` / `TOOL_USAGE_GUIDANCE` / `REPLY_TERMINATION_GUIDANCE` 等块，避免重复 bloating） | Always |
-| A2 | `THINKING_DISCIPLINE_GUIDANCE` | FirstTurn / Subsequent |
-| A3 | `TOOL_USAGE_GUIDANCE` + `TOOL_USE_ENFORCEMENT_GUIDANCE` + `TOOL_FAILURE_GUIDANCE` + `BROWSER_TOOL_SELECTION_GUIDANCE` | FirstTurn / Subsequent / Always / HasBrowser |
-| A4 | `PLAN_BEFORE_EXECUTE_GUIDANCE` | FirstTurn / Subsequent |
-| A5 | `REPLY_TERMINATION_GUIDANCE`（已删除的 `TOOL_EXECUTION_SUMMARY_GUIDANCE` / `STOPPING_SUMMARY_GUIDANCE` 由其承接） | HadAnyToolUse / Always |
-| A6 | `SAFETY_GUIDANCE` + `URL_SAFETY_GUIDANCE` + `GIT_SAFETY_GUIDANCE` | Always / HasGit |
-| A7 | `FORMATTING_DISCIPLINE_GUIDANCE` | FirstTurn / Subsequent |
-| A8 | `TODO_GUIDANCE` + `SKILLS_GUIDANCE` + `SKILL_USAGE_GUIDANCE` + `MEMORY_GUIDANCE` + `SESSION_SEARCH_GUIDANCE` + `CONTEXT_BUDGET_GUIDANCE` + `USER_STYLE_GUIDANCE` | 各 HasXxx / MultiStepTask / Always |
-| A9 | `OPENAI_*` / `GOOGLE_*` / `MINIMAX_*` | ToolEnforce / 各 Family |
-| **Part B 约定** | `project.conventions`（内容由 `load_project_conventions` 从 `AGENTS.md` 的 `## Conventions`/`## 项目约定` 段抽取） | HasProjectConventions |
+| Part A 节      | 现有常量                                                                                                                                                             | DirRoute                                     |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| A0            | （身份段，可并入 `format.full` 首轮或新增 `identity`）                                                                                                                         | FirstTurn                                    |
+| A1            | 八条通用法则**未单列常量**（已分散覆盖于现有 `PLAN_BEFORE_EXECUTE_GUIDANCE` / `TOOL_USAGE_GUIDANCE` / `REPLY_TERMINATION_GUIDANCE` 等块，避免重复 bloating）                                 | Always                                       |
+| A2            | `THINKING_DISCIPLINE_GUIDANCE`                                                                                                                                   | FirstTurn / Subsequent                       |
+| A3            | `TOOL_USAGE_GUIDANCE` + `TOOL_USE_ENFORCEMENT_GUIDANCE` + `TOOL_FAILURE_GUIDANCE` + `BROWSER_TOOL_SELECTION_GUIDANCE`                                            | FirstTurn / Subsequent / Always / HasBrowser |
+| A4            | `PLAN_BEFORE_EXECUTE_GUIDANCE`                                                                                                                                   | FirstTurn / Subsequent                       |
+| A5            | `REPLY_TERMINATION_GUIDANCE`（已删除的 `TOOL_EXECUTION_SUMMARY_GUIDANCE` / `STOPPING_SUMMARY_GUIDANCE` 由其承接）                                                          | HadAnyToolUse / Always                       |
+| A6            | `SAFETY_GUIDANCE` + `URL_SAFETY_GUIDANCE` + `GIT_SAFETY_GUIDANCE`                                                                                                | Always / HasGit                              |
+| A7            | `FORMATTING_DISCIPLINE_GUIDANCE`                                                                                                                                 | FirstTurn / Subsequent                       |
+| A8            | `TODO_GUIDANCE` + `SKILLS_GUIDANCE` + `SKILL_USAGE_GUIDANCE` + `MEMORY_GUIDANCE` + `SESSION_SEARCH_GUIDANCE` + `CONTEXT_BUDGET_GUIDANCE` + `USER_STYLE_GUIDANCE` | 各 HasXxx / MultiStepTask / Always            |
+| A9            | `OPENAI_*` / `GOOGLE_*` / `MINIMAX_*`                                                                                                                            | ToolEnforce / 各 Family                       |
+| **Part B 约定** | `project.conventions`（内容由 `load_project_conventions` 从 `AGENTS.md` 的 `## Conventions`/`## 项目约定` 段抽取）                                                             | HasProjectConventions                        |
 
 **说明**：`OPERATING_CONSTITUTION_GUIDANCE` 在落地时**未单列**为独立常量——A1 的 8 条通用法则已分别覆盖于现有 `PLAN_BEFORE_EXECUTE_GUIDANCE` / `TOOL_USAGE_GUIDANCE` / `REPLY_TERMINATION_GUIDANCE` 等 route-gated 块，单列会重复且可能冲突。真正**新增的代码**只有 `HasProjectConventions` 路由 + `load_project_conventions` 加载器（见 C2）。
 

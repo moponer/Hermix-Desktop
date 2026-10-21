@@ -92,7 +92,7 @@ export function ThemeToggle({ compact = false }: { compact?: boolean }) {
         ref={triggerRef}
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex h-7 items-center gap-1.5 rounded-md border border-[color:var(--color-border-primary)] bg-[color:var(--color-bg-elevated)] px-2 text-[var(--color-text-secondary)] transition-colors hover:bg-[color:var(--color-bg-hover)]"
+        className="flex h-7 items-center gap-1.5 rounded-md border-[color:var(--color-border-primary)] bg-[color:var(--color-bg-elevated)] px-2 text-[var(--color-text-secondary)] transition-colors hover:bg-[color:var(--color-bg-hover)]"
         title={`主题: ${label}`}
         aria-expanded={open}
       >

@@ -3,6 +3,10 @@
 // 行为：点击后调 polishChat() API，**覆盖**当前 inputValue；再次点击可撤销。
 // 上下文策略：润色前的原文只活在 React state 里，发送时被 state 覆写，
 // 因此**润色前原文自然不计入对话上下文**——零额外字段。
+//
+// 分工：这里只做**同义替换**（更清楚、长度不放大、不加结构）。
+// 「把一句话扩写成结构化提示词」是兄弟组件 EnhanceButton 的活
+// （/api/polish/enhance），两者提示词模板互不共用。
 
 import { useCallback, useEffect, useState } from "react";
 import { Sparkles, Loader2, RotateCcw } from "lucide-react";
@@ -21,6 +25,8 @@ interface PolishButtonProps {
   hasAttachments?: boolean;
   /** 选填：禁用条件 */
   disabled?: boolean;
+  /** 工具条过窄时把文字收掉，只留图标（同「自动/编码模式」的做法） */
+  compact?: boolean;
 }
 
 export function PolishButton({
@@ -29,6 +35,7 @@ export function PolishButton({
   recentTurns,
   hasAttachments,
   disabled,
+  compact,
 }: PolishButtonProps) {
   const [loading, setLoading] = useState(false);
   const [lastOriginal, setLastOriginal] = useState<string | null>(null);
@@ -99,15 +106,18 @@ export function PolishButton({
       onClick={handleClick}
       disabled={!canAct}
       title={title}
-      className="flex items-center justify-center w-8 h-8 rounded-lg transition-[color,background-color,border-color,opacity] disabled:opacity-30 disabled:cursor-not-allowed text-text-muted hover:text-text-primary hover:bg-bg-tertiary"
+      className="flex items-center gap-1 px-2 py-1 rounded transition-colors text-[length:var(--text-meta)] text-text-muted hover:text-text-primary hover:bg-bg-tertiary disabled:opacity-30 disabled:cursor-not-allowed"
     >
       {loading ? (
-        <Loader2 className="icon-md animate-spin" />
+        <Loader2 className="icon-sm animate-spin" />
       ) : showingPolished ? (
-        <RotateCcw className="icon-md" />
+        <RotateCcw className="icon-sm" />
       ) : (
-        <Sparkles className="icon-md" />
+        <Sparkles className="icon-sm" />
       )}
+      <span className={compact ? "max-w-0 overflow-hidden whitespace-nowrap" : "truncate"}>
+        {showingPolished ? "还原" : "润色"}
+      </span>
     </button>
   );
 }

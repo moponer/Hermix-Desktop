@@ -52,7 +52,7 @@ const VARIANT_CLASSES: Record<ButtonVariant, string> = {
   // 主题各自的 hover 档。
   primary: `bg-[var(--color-btn-primary-bg)] text-[var(--color-btn-primary-text)] shadow-[var(--shadow-button-primary)] hover:bg-[var(--color-btn-primary-hover)] hover:-translate-y-px active:translate-y-0 active:scale-[0.97] ${DISABLED_FILL}`,
   accent: `bg-[var(--color-accent)] text-[var(--color-on-primary)] shadow-[var(--shadow-button-primary)] hover:bg-[var(--color-accent-hover)] hover:-translate-y-px active:translate-y-0 active:scale-[0.97] ${DISABLED_FILL}`,
-  secondary: `bg-[var(--color-bg-card)] text-[var(--color-text-primary)] border border-[var(--color-border-primary)] hover:border-[var(--color-border-secondary)] hover:bg-[var(--color-bg-hover)] active:scale-[0.98] ${DISABLED_FILL}`,
+  secondary: `bg-[var(--color-bg-card)] text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] active:scale-[0.98] ${DISABLED_FILL}`,
   tonal: `bg-[var(--color-accent-soft)] text-[var(--color-accent)] hover:bg-[var(--color-accent-soft-strong)] active:scale-[0.98] ${DISABLED_FILL}`,
   "tonal-outline": `bg-transparent text-[var(--color-accent)] border border-[var(--color-primary-fixed-dim)] hover:bg-[var(--color-accent)] hover:border-[var(--color-accent)] hover:text-[var(--color-on-primary)] active:scale-[0.98] ${DISABLED_FADE}`,
   ghost: `bg-transparent text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)] active:scale-[0.98] ${DISABLED_FADE}`,
@@ -94,7 +94,9 @@ const BASE_CLASSES = [
   // hover 的抬升动作「弹」一下。
   "transition-[background-color,color,border-color,box-shadow,transform,opacity] duration-150 ease-out",
   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]",
-  "focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-bg-card)]",
+  /* 偏移用透明色：缝隙透出按钮所处的表面色。此前写死 --color-bg-card，
+     按钮坐在 --color-bg-primary（白）上时会出现一道浅灰接缝。 */
+  "focus-visible:ring-offset-2 focus-visible:ring-offset-transparent",
   "disabled:cursor-not-allowed disabled:pointer-events-none disabled:translate-y-0",
   "motion-reduce:transition-none motion-reduce:hover:translate-y-0 motion-reduce:active:scale-100",
 ].join(" ");

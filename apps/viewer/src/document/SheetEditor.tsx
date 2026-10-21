@@ -20,9 +20,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { Save, FolderOpen, ChevronLeft, ChevronRight } from "lucide-react";
 import {
   colName,
-  colWidthPx,
+  contrastInk,
   parseXlsx,
-  rowHeightPx,
   styleToCss,
   type FileSource,
   type ParsedWorkbook,
@@ -36,8 +35,8 @@ interface SaveResult {
 }
 
 const ROW_HEADER_W = 48;
-const DEFAULT_ROW_H = 22;
-const DEFAULT_COL_W = 88;
+const DEFAULT_ROW_H = 20;
+const DEFAULT_COL_W = 64;
 const MIN_COL_W = 40;
 const OVERSCAN = 8;
 
@@ -335,8 +334,9 @@ function SheetGrid({
   const rowHeights = useMemo(
     () =>
       Array.from({ length: sheet.rowCount }, (_, r) => {
-        const h = sheet.rowHeights[r];
-        return h ? (rowHeightPx(h) ?? DEFAULT_ROW_H) : DEFAULT_ROW_H;
+        // 共享层给出的行高**已经是像素**（解析时已换算过）。这里再换算
+        // 一次就是 1.33 倍的错行高 —— 编辑态与预览态长得不一样。
+        return sheet.rowHeights[r] ?? DEFAULT_ROW_H;
       }),
     [sheet],
   );
@@ -371,8 +371,9 @@ function SheetGrid({
   const widths = useMemo(
     () =>
       Array.from({ length: sheet.colCount }, (_, c) => {
+        // 同上：共享层的列宽已经是像素。
         const w = sheet.colWidths[c];
-        return w ? Math.max(MIN_COL_W, colWidthPx(w) ?? DEFAULT_COL_W) : DEFAULT_COL_W;
+        return w ? Math.max(MIN_COL_W, w) : DEFAULT_COL_W;
       }),
     [sheet],
   );
@@ -449,7 +450,10 @@ function SheetGrid({
                 const span = merges.spans.get(`${r}:${c}`);
                 const css: CSSProperties = {
                   ...styleToCss(cell?.style),
-                  ...(cell?.style?.color ? {} : { color: "var(--color-text-primary)" }),
+                  // 默认墨色按底色亮度定：白纸黑字、深底白字。沿用界面主题
+                  // 的字色会出两种事故：深色界面下白纸浅字（看不见）、
+                  // 浅色底纹上浅字（也看不见）。
+                  ...(cell?.style?.color ? {} : { color: contrastInk(cell?.style?.bg) }),
                   ...(cell?.style?.valign ? {} : { verticalAlign: "bottom" as const }),
                 };
                 return (

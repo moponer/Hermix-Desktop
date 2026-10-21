@@ -3,18 +3,59 @@ import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 
 import { cx } from "../../lib/cx";
+import { useFocusTrap } from "../../hooks/useFocusTrap";
 import { Button } from "./Button";
+import { CANCEL, CLOSE, CONFIRM } from "../strings";
+
+/**
+ * 弹窗宽度档。**必须取自 `--width-*`**（tokens.css:170-176）：
+ * narrow 240 / base 420 / wide 720 / full 100%。
+ *
+ * 此前 8 种裸数字宽度（420/448/460/560/720/800/1080）并存，是"每个文件
+ * 自己写一个弹窗"的直接后果 —— 同一屏里两个弹窗不一样宽，看起来就像两个产品。
+ */
+export type ModalWidth = "narrow" | "base" | "wide" | "panel" | "full";
+
+const WIDTH_VAR: Record<ModalWidth, string> = {
+  narrow: "var(--width-narrow)",
+  base: "var(--width-base)",
+  wide: "var(--width-wide)",
+  panel: "var(--width-panel)",
+  full: "100%",
+};
+
+/**
+ * 弹窗面板高度上限（全站统一档）。
+ *
+ * 此前 6 档并存：85vh（ui/Modal）/ 90vh（AutomationView×3）/ 80vh（TestDialog）/
+ * 70vh（.modal-form）/ 60vh / 40vh（DiagnosticsTab）。收编后一律走这一档。
+ *
+ * 建议主控 agent 后续把它提升为全局令牌 `--dialog-max-h`（tokens.css），
+ * 届时本文件改为消费 var(--dialog-max-h)。此处暂用常量而不是 var()，是因为
+ * `scripts/check-theme-tokens.mjs` 的孤儿引用检查要求每个 var() 引用都能在
+ * `src/styles/*.css` 里找到定义，而 tokens.css 不在本批次的可改文件内。
+ *
+ * 2026-10-21：`--dialog-max-h` 令牌已落地到 tokens.css，这里改为消费它 ——
+ * 弹窗最大高度此前散着 85/90/80/70/60/40vh 六种，现在只有一档。
+ */
+export const DIALOG_MAX_H = "var(--dialog-max-h)";
 
 export interface ModalProps {
   open: boolean;
   onClose: () => void;
   title?: ReactNode;
   children: ReactNode;
-  width?: number;
+  /**
+   * 宽度档。**必须取自 `--width-*`**：`narrow` / `base` / `wide` / `full`。
+   * 裸数字只作迁移期兼容（存量调用方归其他批次所有），新代码一律用档位名。
+   */
+  width?: ModalWidth | number;
   footer?: ReactNode;
   className?: string;
-  /** 面板高度；缺省只受 max-h-[85vh] 约束。整幅面板（设置）传具体高度。 */
+  /** 面板高度；缺省只受 max-h（DIALOG_MAX_H）约束。整幅面板（设置）传具体高度。 */
   height?: number | string;
+  /** 遮罩层 z 阶。默认 60；「强制更新」这类必须盖住一切的场景传更大值。 */
+  zIndex?: number;
   /** 内容区类名覆盖。整幅面板需要贴边布局时传 `p-0 overflow-hidden`。 */
   bodyClassName?: string;
   /** 无 title 时的可访问名（设置这类自绘头部的面板用）。 */
@@ -24,6 +65,22 @@ export interface ModalProps {
    * 传 false 自行处理（否则第一下 Esc 就把面板关了）。
    */
   closeOnEscape?: boolean;
+  /**
+   * 遮罩点击是否关闭。默认 true。
+   *
+   * **表单类弹窗（有未保存改动）传 false** —— 点一下遮罩内容就没了，
+   * 是最难复现也最招人恨的一种丢数据。Esc 有 `closeOnEscape` 可关，
+   * 遮罩此前没有对应开关（问题 45）。
+   */
+  closeOnBackdrop?: boolean;
+  /**
+   * 可见遮罩。默认 false —— 墨与纸 v4 的弹层纪律是「不用遮罩」：背景保持
+   * 原亮度，浮层靠自身亮度差 + 底部单向投影"坐"在页面上；遮罩只保留点击
+   * 外部关闭的命中区。需要把背景压暗的模态（确认框 / 命令面板）显式传 true。
+   */
+  scrim?: boolean;
+  /** 垂直对齐：center（默认）/ top（命令面板式贴顶）。 */
+  align?: "center" | "top";
   /**
    * 面板可拖动：内容里带 `data-modal-drag-handle` 的元素作为拖拽把手
    * （按钮/输入框上的按下不算）。默认 false —— 小确认框不需要挪位置。
@@ -43,11 +100,17 @@ export interface ModalProps {
  * 全部价值；少了前两项就是个能聚焦到后面去的 div。
  */
 export function Modal({
-  open, onClose, title, children, width = 560, footer, className,
-  height, bodyClassName, ariaLabel, closeOnEscape = true, draggable = false,
+  open, onClose, title, children, width = "base", footer, className,
+  height, zIndex, bodyClassName, ariaLabel, closeOnEscape = true, closeOnBackdrop = true,
+  scrim = false, align = "center", draggable = false,
 }: ModalProps) {
   const panelRef = useRef<HTMLDivElement>(null);
-  const restoreRef = useRef<HTMLElement | null>(null);
+
+  /* onClose 走 ref：调用方几乎都传内联箭头函数（`onClose={() => setX(null)}`），
+     每次父组件渲染都是新函数。若把它放进下面那个 effect 的依赖里，effect 会
+     在父组件每次渲染时重跑 —— cleanup 会把焦点抢回"打开前的元素"，
+     搜索框这类需要持续输入的控件会被反复夺走焦点。 */
+  const onCloseRef = useRef(onClose);
   const titleId = useId();
 
   // 拖动位移只作用在外层包装上：面板本身的入场动画也吃 transform，
@@ -62,40 +125,27 @@ export function Modal({
   }, [open]);
 
   useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
+  useEffect(() => {
     if (!open) return;
-    restoreRef.current = document.activeElement as HTMLElement | null;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         if (!closeOnEscape) return;
         e.stopPropagation();
-        onClose();
-        return;
-      }
-      if (e.key !== "Tab" || !panelRef.current) return;
-      const focusables = Array.from(
-        panelRef.current.querySelectorAll<HTMLElement>(
-          'button, [href], input, select, textarea, details, summary, [contenteditable="true"], [tabindex]:not([tabindex="-1"])',
-        ),
-      ).filter((el) => !el.hasAttribute("disabled") && el.offsetParent !== null);
-      if (focusables.length === 0) return;
-      const first = focusables[0]!;
-      const last = focusables[focusables.length - 1]!;
-      if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault();
-        last.focus();
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault();
-        first.focus();
+        onCloseRef.current();
       }
     };
     document.addEventListener("keydown", onKey, true);
-    const t = window.setTimeout(() => panelRef.current?.querySelector<HTMLElement>("button, input")?.focus(), 0);
     return () => {
       document.removeEventListener("keydown", onKey, true);
-      window.clearTimeout(t);
-      restoreRef.current?.focus?.();
     };
-  }, [open, onClose, closeOnEscape]);
+  }, [open, closeOnEscape]);
+
+  // 焦点陷阱（Tab 循环 / 初始落焦 / 关闭后归还）由 hook 提供 ——
+  // PreviewPanel 的全屏覆盖层同样声明 aria-modal="true"，两处共用同一份实现。
+  useFocusTrap(panelRef, open, "[data-modal-autofocus]");
 
   /** 拖拽：只在 `[data-modal-drag-handle]` 上按下时启动，按钮/输入框不接管。 */
   const onHandlePointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
@@ -131,12 +181,22 @@ export function Modal({
 
   if (!open) return null;
 
+  const panelWidth = typeof width === "number" ? width : WIDTH_VAR[width];
+
   return createPortal(
-    /* 墨与纸 v4 · 弹层纪律（WorkBuddy 设置弹层逐像素采样）：不用遮罩 ——
+    /* 墨与纸 v4 · 弹层纪律（WorkBuddy 设置弹层逐像素采样）：默认不用遮罩 ——
        背景保持原亮度，浮层靠自身亮度差 + 底部单向投影"坐"在页面上；
-       无描边；圆角 17px（radius-xl）。backdrop 仅保留点击外部关闭的
-       命中区，视觉全透明。 */
-    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" onClick={onClose}>
+       无描边；圆角 17px（radius-xl）。需要压暗背景的模态传 scrim，遮罩用
+       `--color-overlay-scrim` 令牌。 */
+    <div
+      className={cx(
+        "fixed inset-0 flex justify-center p-4",
+        align === "top" ? "items-start pt-[12vh]" : "items-center",
+        scrim && "bg-[var(--color-overlay-scrim)] backdrop-blur-sm",
+      )}
+      style={{ zIndex: zIndex ?? 60 }}
+      onClick={closeOnBackdrop ? onClose : undefined}
+    >
       {/* 拖动位移挂在外层：面板自身有 scale-in 动画，同样占用 transform。 */}
       <div
         style={{
@@ -156,9 +216,14 @@ export function Modal({
         aria-labelledby={title ? titleId : undefined}
         aria-label={title ? undefined : ariaLabel}
         onClick={(e) => e.stopPropagation()}
-        style={{ width, maxWidth: "calc(100vw - 2rem)", height }}
+        style={{
+          width: panelWidth,
+          maxWidth: "calc(100vw - 2rem)",
+          height,
+          maxHeight: DIALOG_MAX_H,
+        }}
         className={cx(
-          "flex max-h-[85vh] flex-col overflow-hidden rounded-[var(--radius-xl)]",
+          "flex flex-col overflow-hidden rounded-[var(--radius-xl)]",
           "bg-[var(--color-bg-elevated)]",
           "shadow-[var(--shadow-modal)]",
           "[animation:modal-scale-in_var(--duration-base,160ms)_var(--ease-out,cubic-bezier(0.16,1,0.3,1))_both]",
@@ -169,16 +234,18 @@ export function Modal({
           <div className="flex shrink-0 items-center justify-between gap-3 px-5 py-4">
             <h2
               id={titleId}
-              className="text-[length:var(--text-title)] font-semibold leading-tight text-[var(--color-text-primary)]"
+              className="min-w-0 text-[length:var(--text-title)] font-semibold leading-tight text-[var(--color-text-primary)]"
             >
               {title}
             </h2>
+            {/* 关闭按钮尺寸全站统一：32px 方形 + 16px 图标（问题 44 —— 此前
+                同一动作有 36/28/24px 三种尺寸）。 */}
             <button
               onClick={onClose}
-              aria-label="关闭"
-              className="grid size-9 shrink-0 place-items-center rounded-full text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]"
+              aria-label={CLOSE}
+              className="grid size-8 shrink-0 place-items-center rounded-full text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
             >
-              <X className="size-[18px]" />
+              <X className="icon-lg" />
             </button>
           </div>
         )}
@@ -205,7 +272,8 @@ export function Modal({
 
 export interface ConfirmDialogProps {
   open: boolean;
-  title: string;
+  /** 标题（可含图标等节点；图标请加 `aria-hidden`）。 */
+  title: ReactNode;
   body: ReactNode;
   confirmLabel?: string;
   cancelLabel?: string;
@@ -215,6 +283,8 @@ export interface ConfirmDialogProps {
   /** 异步确认进行中：双按钮禁用，确认键显示「处理中…」。
    *  （R2-2：从 ToolTabs 私有 ConfirmDialog 收编的能力） */
   busy?: boolean;
+  /** 可见遮罩（默认 false，与 ui/Modal 一致）。 */
+  scrim?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -223,10 +293,11 @@ export function ConfirmDialog({
   open,
   title,
   body,
-  confirmLabel = "确认",
-  cancelLabel = "取消",
+  confirmLabel = CONFIRM,
+  cancelLabel = CANCEL,
   confirmVariant = "danger",
   busy = false,
+  scrim = false,
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
@@ -235,7 +306,8 @@ export function ConfirmDialog({
       open={open}
       onClose={onCancel}
       title={title}
-      width={460}
+      width="base"
+      scrim={scrim}
       footer={
         <>
           <Button variant="secondary" onClick={onCancel} disabled={busy}>

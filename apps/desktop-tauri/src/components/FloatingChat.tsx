@@ -29,12 +29,13 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
-import { History, MessageCircle, Plus, X } from "lucide-react";
+import { Check, History, MessageCircle, Plus, X } from "lucide-react";
 import { useStreamChatContext } from "../context/StreamChatContext";
 import { getSessions } from "../api/rest";
 import type { Session } from "../types";
 import { formatSidebarTime } from "../utils/time";
 import { SkeletonCard } from "./ui";
+import { NEW_CHAT } from "./strings";
 
 const ORB_SIZE = 48;
 const WIN_MIN_W = 320;
@@ -413,10 +414,7 @@ export function FloatingChat({
           <span className="wb-orb__ring" aria-hidden="true" />
           <MessageCircle className="wb-orb__icon icon-lg" aria-hidden="true" />
           {phase === "done" && (
-            <svg className="wb-orb__check" viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" strokeWidth="2.5"
-                strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
+            <Check className="wb-orb__check icon-lg" aria-hidden="true" />
           )}
         </button>
       )}
@@ -430,6 +428,9 @@ export function FloatingChat({
             className={`wb-float ${docked ? "wb-float--docked" : ""}`}
             style={docked ? dockStyle : floatStyle}
             role="dialog"
+            /* 浮动面板不是模态：显式声明 aria-modal="false"，
+               读屏才不会把它当成遮罩层里的模态对话框。 */
+            aria-modal="false"
             aria-label={`${manifestName} 对话`}
           >
             <div
@@ -502,7 +503,7 @@ export function FloatingChat({
                     onPointerDown={(e) => e.stopPropagation()}
                     onClick={() => { setMenuOpen(false); onSelectSession(sess.id); }}
                   >
-                    <span className="wb-float__menu-title">{sess.title || "新建对话"}</span>
+                    <span className="wb-float__menu-title">{sess.title || NEW_CHAT}</span>
                     <span className="wb-float__menu-time">{formatSidebarTime(sess.updated_at)}</span>
                   </button>
                 ))}

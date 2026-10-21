@@ -52,7 +52,7 @@ export function PageHeader({
         {title}
       </Tag>
       {count != null && count !== "" && (
-        <span className="rounded-full border border-[var(--color-border-primary)] bg-[var(--color-bg-card)] px-2 py-px font-mono text-[length:var(--text-meta)] text-[var(--color-text-faint)]">
+        <span className="rounded-full border-[var(--color-border-primary)] bg-[var(--color-bg-card)] px-2 py-px font-mono text-[length:var(--text-meta)] text-[var(--color-text-faint)]">
           {count}
         </span>
       )}

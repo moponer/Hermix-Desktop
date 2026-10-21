@@ -9,6 +9,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ScreenshotEditor } from "./ScreenshotEditor";
+import { CANCEL, CLOSE, CONFIRM } from "./strings";
 
 interface FramePayload {
   data_url: string;
@@ -211,9 +212,9 @@ export function ScreenshotOverlay() {
     return (
       <div className="so-loading">
         <div className="so-error">
-          <div>截图初始化失败：{loadError}</div>
+          <div>截图初始化失败：{loadError}，请重新截图。</div>
           <button type="button" onClick={cancel}>
-            关闭（ESC）
+            {CLOSE}（ESC）
           </button>
         </div>
       </div>
@@ -221,7 +222,7 @@ export function ScreenshotOverlay() {
   }
 
   if (!frame) {
-    return <div className="so-loading">正在截取屏幕…</div>;
+    return <div className="so-loading" aria-busy="true">正在截取屏幕…</div>;
   }
 
   // 编辑态：选区已确认，交给编辑器（覆盖全窗，选区 UI 不再渲染）。
@@ -290,11 +291,11 @@ export function ScreenshotOverlay() {
           ⛶ 窗口
         </button>
         {rect && (
-          <button className="so-confirm" title="确认（Enter），进入编辑" onClick={() => beginEdit(rect)}>
+          <button className="so-confirm" title={`${CONFIRM}（Enter），进入编辑`} onClick={() => beginEdit(rect)}>
             ✓
           </button>
         )}
-        <button className="so-cancel" title="取消（ESC）" onClick={cancel}>
+        <button className="so-cancel" title={`${CANCEL}（ESC）`} onClick={cancel}>
           ✕
         </button>
       </div>

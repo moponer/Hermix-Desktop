@@ -4,8 +4,9 @@
 // 所有"某种文件长什么样"的知识都在 PreviewSurface / viewers 里，
 // 且面板与全屏共用同一份渲染，不存在第二处 switch。
 
-import { useEffect, useMemo, useState, type RefObject } from "react";
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
+import { useFocusTrap } from "../hooks/useFocusTrap";
 import {
   X, Copy, ExternalLink, FolderOpen, MoreHorizontal,
   Loader2, AlertTriangle, WrapText, FileText, Code2, Maximize2, Minimize2,
@@ -33,6 +34,7 @@ import { CodeView } from "./CodeView";
 import { openImageViewer } from "./imageViewer";
 import { FileTypeIcon } from "@hermix/preview/FileTypeIcon";
 import { formatBytes, fileTypeLabel, totalRows, modelLabel } from "./rightSidebarUtils";
+import { COPIED, COPY_FAILED, LOADING, failure } from "./strings";
 
 const ZOOM_MIN = 50;
 const ZOOM_MAX = 200;
@@ -132,8 +134,8 @@ function PreviewMenu({
     if (copyText === null) return;
     void navigator.clipboard
       .writeText(copyText)
-      .then(() => toastSuccess("已复制到剪贴板"))
-      .catch(() => toastError("复制失败，剪贴板不可用"));
+      .then(() => toastSuccess(COPIED))
+      .catch(() => toastError(failure(COPY_FAILED, "请手动选中内容后复制。")));
   };
 
   return (
@@ -198,6 +200,7 @@ export function PreviewPanel({
   const [state, setState] = useState<PreviewState>({ status: "idle" });
   const [resolvedPath, setResolvedPath] = useState<string | null>(null);
   const [fullscreen, setFullscreen] = useState(false);
+  const fullscreenRef = useRef<HTMLDivElement>(null);
   const [wrap, setWrap] = useState(true);
   const [viewMode, setViewMode] = useState<ViewMode>("layout");
   const [zoom, setZoom] = useState(100);
@@ -270,6 +273,10 @@ export function PreviewPanel({
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [fullscreen]);
+
+  // 全屏覆盖层声明了 aria-modal="true"，就必须有焦点陷阱 ——
+  // 否则 Tab 一下焦点就跑到全屏层背后的内容上。与 ui/Modal 共用同一份实现。
+  useFocusTrap(fullscreenRef, fullscreen);
 
   // 深色判定走 colorScheme（useTheme 设置）；.dark 类已废除，contains 检测永远 false
   const isDark =
@@ -397,9 +404,9 @@ export function PreviewPanel({
   const renderBody = () => {
     if (state.status === "loading" || state.status === "idle") {
       return (
-        <div className="preview-state-center">
+        <div className="preview-state-center" aria-busy="true">
           <Loader2 className="icon-md animate-spin" />
-          正在读取文件…
+          {LOADING}
         </div>
       );
     }
@@ -488,6 +495,7 @@ export function PreviewPanel({
       {fullscreen &&
         createPortal(
           <div
+            ref={fullscreenRef}
             className="preview-fullscreen preview-pane"
             role="dialog"
             aria-modal="true"

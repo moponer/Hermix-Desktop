@@ -68,7 +68,11 @@ done
 # `sdk/` and `skills/` are pre-existing tracked trees (protocol
 # fixtures + TypeScript SDK, and the skill packages) — they are part of
 # the baseline, not something a work session introduced.
-TOP_ALLOWED="^(crates|apps|docs|scripts|sdk|skills|assets|release|target|node_modules|\.git|\.github|\.vscode|\.idea|\.worktrees|third_party)$"
+# 2026-10-21：`packages/` 同理 —— 它是 monorepo 的既定结构（`@hermix/preview`
+# 等内部包），与 `crates/`（Rust crate）、`apps/`（应用）同级，是 2026-10-13
+# 起就在的基线树，不是某次工作引入的「新建顶层目录」。漏掉它会让这条门禁
+# 在干净仓库上恒红，久而久之大家就学会忽略它的输出。
+TOP_ALLOWED="^(crates|apps|packages|docs|scripts|sdk|skills|assets|release|target|node_modules|\.git|\.github|\.vscode|\.idea|\.worktrees|third_party)$"
 for d in */; do
   [ -e "$d" ] || continue
   name=$(basename "$d")

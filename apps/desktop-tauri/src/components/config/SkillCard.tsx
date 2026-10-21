@@ -1,14 +1,13 @@
 // SkillCard.tsx —— 技能卡 + 内容阅读弹窗（R2-4 拆分第三步，从 ToolTabs 抽出）。
-import { useState, useCallback, useEffect } from "react";
-import { Wand2, ArrowUpRight, Sparkles, X } from "lucide-react";
+import { useState, useCallback } from "react";
+import { Wand2, ArrowUpRight, Sparkles } from "lucide-react";
 import * as api from "../../api";
 import type { SkillInfo } from "../../api";
 import { ToolCardIcon } from "./ToolCardIcon";
 import { MgmtTag } from "./MgmtTag";
-import { SkeletonCard } from "../ui";
+import { ConfirmDialog, Modal, SkeletonCard } from "../ui";
 import { ToggleSwitch } from "../ToggleSwitch";
 import { MarkdownBody } from "../MarkdownBody";
-import { ConfirmDialog } from "../ui";
 
 export function SkillCard({ skill, catLabel, onToggle }: {
   skill: SkillInfo;
@@ -127,65 +126,49 @@ export function SkillContentModal({ skill, catLabel, content, loading, onClose }
   loading: boolean;
   onClose: () => void;
 }) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div
-        className="modal-card modal-card-lg"
-        onClick={(e) => e.stopPropagation()}
-        style={{ maxHeight: "80vh", display: "flex", flexDirection: "column" }}
-      >
-        {/* 头部自带一层底色，与正文分开 —— 层次靠底色差，不靠描边。
-            标题与描述都限高：此前两者都不限，一段长描述会把整个头撑成十几行、
-            把关闭按钮顶到视线之外（"过长的标题会改变显示"就是这个）。 */}
-        <div
-          className="modal-header"
-          style={{ flexShrink: 0, background: "var(--color-bg-secondary)" }}
-        >
+    /* 弹窗壳收编到 ui/Modal：焦点陷阱 / Esc / 焦点归还 / role=dialog +
+       aria-modal 一次性补齐（此前这个弹窗只有手写的 Esc 监听）。
+       头部不再自带一层底色 —— 头部/正文的层次由共享壳统一给出。 */
+    <Modal
+      open
+      onClose={onClose}
+      width="wide"
+      scrim
+      title={
+        <span className="flex items-center gap-3">
           {/* 图标与列表卡共用 ToolCardIcon —— 此前这里用的是 .modal-icon-info
               的灰色块，与卡片里的主色图标对不上，"图标没有颜色"。那个组件存在的
               全部意义就是让四页图标必然一致，弹窗没走它就又漂了一处。 */}
           <ToolCardIcon>
             <Sparkles className="icon-lg" />
           </ToolCardIcon>
-          <div className="modal-title-block">
-            <h3 className="modal-title truncate" title={skill.display_name || skill.name}>
-              {skill.display_name || skill.name}
-            </h3>
-            <p className="modal-subtitle line-clamp-2">
+          <span className="flex min-w-0 flex-col gap-0.5">
+            <span className="truncate">{skill.display_name || skill.name}</span>
+            <span className="line-clamp-2 text-[length:var(--text-meta)] font-normal text-[var(--color-text-muted)]">
               {catLabel(skill.category)}
               {skill.description ? ` · ${skill.description}` : ""}
-            </p>
-          </div>
-          <button onClick={onClose} className="modal-close shrink-0" aria-label="关闭">
-            <X className="icon-lg" />
-          </button>
+            </span>
+          </span>
+        </span>
+      }
+      bodyClassName="overflow-y-auto bg-[var(--color-bg-elevated)] px-5 py-4"
+    >
+      {/* 正文走 MarkdownBody：SKILL.md 本来就是 markdown，用 <pre> 平铺等于
+          把标题层级、有序列表、行内代码全部抹平——「界面没有层次」的一半在
+          这里，另一半在头部那层底色。 */}
+      {loading ? (
+        <SkeletonCard lines={6} />
+      ) : content ? (
+        <MarkdownBody content={content} />
+      ) : (
+        <div className="text-[length:var(--text-meta)] text-text-muted">
+          <p>无法加载技能内容</p>
+          <p className="mt-2 opacity-60 break-all">
+            存放路径：~/.hermix/skills/{skill.category}/{skill.name}/SKILL.md
+          </p>
         </div>
-        {/* 正文走 MarkdownBody：SKILL.md 本来就是 markdown，用 <pre> 平铺等于
-            把标题层级、有序列表、行内代码全部抹平——「界面没有层次」的一半在
-            这里，另一半在头部那层底色。 */}
-        <div className="flex-1 overflow-auto bg-bg-elevated px-5 py-4">
-          {loading ? (
-            <SkeletonCard lines={6} />
-          ) : content ? (
-            <MarkdownBody content={content} />
-          ) : (
-            <div className="text-[length:var(--text-meta)] text-text-muted">
-              <p>无法加载技能内容</p>
-              <p className="mt-2 opacity-60 break-all">
-                存放路径：~/.hermix/skills/{skill.category}/{skill.name}/SKILL.md
-              </p>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
+      )}
+    </Modal>
   );
 }

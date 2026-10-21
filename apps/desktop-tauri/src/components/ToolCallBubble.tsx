@@ -22,6 +22,7 @@ import { ThinkingDots, ReasoningBlock } from "./ThinkingBubble";
 import { ProcessLine, type ProcessLineVM, type ProcessStatus } from "./ProcessLine";
 import { FileChangeSummary } from "./FileChangeSummary";
 import { useDisclosure } from "./chat/activitySummary";
+import { COMPLETED } from "./strings";
 
 /**
  * 运行态的一行过程。只负责把 `ToolGroup` 映射成 `ProcessLineVM`，
@@ -284,9 +285,9 @@ export function ProcessTimeline({
       } else if (durationPart) {
         parts.push(`已完成 ${durationPart}`);
       } else if (resolvedApprovals > 0) {
-        parts.push("已完成");
+        parts.push(COMPLETED);
       } else {
-        parts.push("已完成");
+        parts.push(COMPLETED);
       }
       if (reasoningSteps.length > 0 && thinkSec) {
         parts.push(`思考 ${thinkSec}`);
@@ -347,6 +348,7 @@ export function ProcessTimeline({
           结束后多段思考 + 全部执行过程收成这一行，下面只剩正文。 */}
       {settled && hasProcessContent && (
         <button
+          type="button"
           onClick={() => setUserOverride(!expanded)}
           className="reasoning-header tl-process-header"
           data-has-failure={summary.failed > 0 ? "true" : undefined}
@@ -395,6 +397,13 @@ export function ProcessTimeline({
                          工具结果 / 更新日志复用同一个 MarkdownBody，默认
                          不画图标（见 MarkdownBodyProps.pathIcons）。 */
                       pathIcons
+                      /* 小节交互（复制本节 / 折叠）只在正文定型后挂。
+                         流式期间每个 chunk 都会重组小节树 → 展开态反复
+                         重建、按钮反复挂载，产生可见跳变
+                         （MarkdownBodyProps.interactive 的契约）。
+                         ProcessTimeline 同时服务流式与定稿两条路径，
+                         所以按 isStreaming 区分。 */
+                      interactive={!isStreaming}
                       onPathClick={onPathClick ?? (() => {})}
                     />
                   </div>
@@ -887,8 +896,9 @@ export function MemoryConsolidationCard({ updates }: { updates: MemoryUpdateEntr
   if (updates.length === 0) return null;
   const total = updates.reduce((n, u) => n + (typeof u.count === "number" && u.count > 0 ? u.count : 1), 0);
   return (
-    <div className="mt-1.5 rounded-lg border border-[var(--color-border-primary)] bg-[var(--color-bg-card)]">
+    <div className="mt-1.5 rounded-lg border-[var(--color-border-primary)] bg-[var(--color-bg-card)]">
       <button
+        type="button"
         onClick={() => setExpanded((v) => !v)}
         className="flex w-full items-center gap-2 rounded-lg px-3 py-1.5 text-left text-[length:var(--text-meta)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]"
         aria-expanded={expanded}

@@ -121,12 +121,12 @@ pub const HARD_ESSENTIAL_TOOLSETS: &[&str] = &[
     "cronjob",
     // browser：opt-in 的原始理由是「驱动用户的真实浏览器」，但 2026-10-14
     // 虚拟窗口 P0（docs/notes/implemented/feature/2026-10-14-browser-
-    // virtual-window-p0.md）落地后该理由已消失：恒 headless 虚拟渲染、
-    // 一次性 profile（永非用户自己的浏览器）、CDP 合成事件不进系统输入
-    // 队列、screencast 只进应用内小窗。副作用面与 terminal 同级（Caution
-    // 逐调用过审批闸）。留在 opt-in 的实际效果是整条产品线被藏死：LLM
-    // 不知道它存在，自然也不会引导用户去 Settings 开启。进硬地板。
-    "browser",
+    // (`browser` was retired from the floor on 2026-10-21: the headless
+    // browser line moved to the viewer's MCP server — `viewer__browser_*`,
+    // with `browser_open(headed=false)` covering the headless case. Keeping
+    // both registrations meant the model saw two same-named tools with
+    // different parameter shapes. Web *data* still has a first choice:
+    // `web_extract`, which needs no browser at all.)
     // 2026-10-16 盘点（第四批，同型坑一次清完）。以下 toolset 都是无条件
     // 注册的头牌能力，但不在地板上、且系统提示曝光是 `tool_names.contains`
     // 门控的——toolset 被旧白名单快照关掉时提示一起消失，LLM 连「我本可以
@@ -177,7 +177,6 @@ pub const ESSENTIAL_TOOLSETS: &[&str] = &[
     "workbench",
     "vault",
     "cronjob",
-    "browser",
     "session_search",
     "todo",
     "clarify",
@@ -244,7 +243,6 @@ mod tests {
                 "workbench",
                 "vault",
                 "cronjob",
-                "browser",
                 "session_search",
                 "todo",
                 "clarify",
@@ -327,11 +325,12 @@ mod tests {
             HARD_ESSENTIAL_TOOLSETS.contains(&"cronjob"),
             "cronjob (scheduled automation) must remain in the hard essential floor"
         );
-        // 浏览器自动化：虚拟窗口 P0 落地后副作用面已收敛（headless 虚拟
-        // 渲染 + 一次性 profile），被 opt-in 藏死过一次。钉住它。
+        // 浏览器自动化不再在 floor 里：2026-10-21 起由查看器 MCP 承载
+        // （`viewer__browser_*`，`headed=false` 即无头）。这里钉住它的
+        // *缺席*，防止有人把两套浏览器工具再同时注册回去。
         assert!(
-            HARD_ESSENTIAL_TOOLSETS.contains(&"browser"),
-            "browser (headless virtual-window automation) must remain in the hard essential floor"
+            !HARD_ESSENTIAL_TOOLSETS.contains(&"browser"),
+            "browser must stay out of the hard floor — the viewer MCP owns browser automation now"
         );
         // 第四批（2026-10-16 盘点）：跨会话召回 / 任务规划 / 用户提问通道 /
         // 子代理派单，全是「缺了产品残废」级能力，曾被旧白名单快照静默关闭。

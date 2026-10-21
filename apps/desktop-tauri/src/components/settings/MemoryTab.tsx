@@ -14,6 +14,7 @@ import { MemoryGraph, KIND_LABELS } from "./MemoryGraph";
 import { PersonasPanel } from "./PersonasPanel";
 import { MemoryTextPanel } from "./MemoryTextPanel";
 import { DailyMemoryPanel } from "./DailyMemoryPanel";
+import { DELETE } from "../strings";
 
 type View = "graph" | "personas" | "text" | "daily";
 
@@ -249,7 +250,7 @@ function GraphView() {
               )}
               {selected.id.startsWith("fact:") || selected.id.startsWith("frame:") || selected.id.startsWith("refl:") ? (
                 <Button variant="danger" size="sm" onClick={() => setConfirmDelete(true)} disabled={actionBusy}>
-                  <Trash2 className="size-3.5" /> 删除
+                  <Trash2 className="size-3.5" /> {DELETE}
                 </Button>
               ) : null}
               <span className="ml-auto text-[length:var(--text-meta)] text-[var(--color-text-muted)]">
@@ -267,7 +268,7 @@ function GraphView() {
           </pre>
         ) : (
           <p className="py-6 text-center text-[length:var(--text-meta)] text-[var(--color-text-muted)]">
-            内容加载失败，可能已被删除或仍在写入。
+            内容加载失败，可能已被删除或仍在写入，请稍后重试。
           </p>
         )}
       </Modal>

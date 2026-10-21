@@ -1,6 +1,6 @@
 // 助手消息底部的操作行：复制 / 赞 / 踩 / 重新生成 / 时间戳。
 //
-// 2026-10-01 起替��原��只有「复制」一个按钮的 `MessageCopyAction`。
+// 2026-10-01 起替换原先只有「复制」一个按钮的 `MessageCopyAction`。
 //
 // ⚠ 关于赞 / 踩的诚实说明：项目里**没有** feedback 接口（后端 `ws.rs`
 // 里那几处 "feedback" 是审批拒绝时的备注文案，与此无关）。所以这里
@@ -8,7 +8,7 @@
 // 本机记录（刷新后仍在，可改可撤）。
 //
 // 为什么不干脆不做：两个点了没反应的按钮比没有更糟 —— 用户以为反馈
-// 提交了���没有。本地记录至少是「真的记下了」，而且不假装上报。要让它
+// 提交了也没有。本地记录至少是「真的记下了」，而且不假装上报。要让它
 // 真的上报是另一件事（需要新端点 + 存储），不在本次范围内。
 import { useEffect, useState } from "react";
 import {
@@ -17,6 +17,7 @@ import {
 import { useSafeTimeout } from "../hooks/useSafeTimeout";
 import { injectIntoComposer } from "../lib/composerInjection";
 import { storage, STORAGE_KEYS } from "../utils/storageCompat";
+import { COPIED, COPY_MESSAGE } from "./strings";
 
 type Vote = "up" | "down";
 const VOTE_KEY = STORAGE_KEYS.messageVotes;
@@ -104,11 +105,11 @@ export function MessageActions({
           type="button"
           onClick={copyMessage}
           className="message-action-btn"
-          title="复制消息"
-          aria-label="复制消息"
+          title={COPY_MESSAGE}
+          aria-label={COPY_MESSAGE}
         >
           {copied ? <Check className="icon-md" /> : <Copy className="icon-md" />}
-          <span>{copied ? "已复制" : "复制"}</span>
+          <span>{copied ? COPIED : "复制"}</span>
         </button>
       )}
 

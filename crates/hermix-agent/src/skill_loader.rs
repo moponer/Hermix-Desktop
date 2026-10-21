@@ -68,11 +68,52 @@ pub struct SkillLoader {
     /// Over-cap bodies degrade to a section SKELETON (see `load_body`),
     /// not a truncated half-article.
     max_body_lines: usize,
-    /// Vector-recall threshold (cosine over the description, default 0.18).
+    /// Vector-recall threshold for **non-CJK** queries (cosine over the
+    /// description).
+    ///
+    /// Default 0.52. History of the number, both steps measured:
+    ///
+    /// - 0.18 → 0.45 (2026-10-21, synthetic corpus in
+    ///   `tests/skill_routing_bench.rs`): every observed false activation came
+    ///   from this layer at cosines 0.19–0.38.
+    /// - 0.45 → 0.52 (same day, real library — `bench_against_real_library`,
+    ///   36 skills): the noise band widens with library size —
+    ///   "the printer is not responding" hit `frontend-architecture` at
+    ///   **0.50** on real descriptions. The keyword / CJK / fuzzy passes
+    ///   produced zero false positives on both corpora, which is why the fix
+    ///   is a threshold and not a scoring rewrite.
+    ///
+    /// The hashing bigram embedder hands *any* English short text a broad
+    /// cosine band against *any* English description; the bar must sit above
+    /// whatever the current library's worst noise is, so re-measure via
+    /// `bench_against_real_library` whenever the library grows substantially.
+    /// What is deliberately NOT known: the score floor of genuine
+    /// vector-only positives on the real library (none observed yet). If one
+    /// ever misses, lower *this* number — do not touch the CJK one.
+    ///
+    /// CJK queries use [`Self::semantic_min_score_cjk`] instead — see there
+    /// for why one number cannot serve both scripts.
     /// Only governs skills matching exclusively via vector; keyword matches
     /// keep their score. An operator raising `min_score` above its 0.3
     /// default raises this bar too.
     semantic_min_score: f32,
+
+    /// Vector-recall threshold for **CJK** queries.
+    ///
+    /// Stays at 0.18 while the English bar moved to 0.45, because the two
+    /// scripts do not share a noise floor. The 0.19–0.38 false positives that
+    /// forced the English bar up were all English; CJK bigram hashing produces
+    /// a different distribution where a real paraphrase and an unrelated
+    /// sentence *are* separable — proven by the two pre-existing tests
+    /// `vector_recall_matches_cjk_paraphrase_keyword_misses` (「帮我美化一下
+    /// 界面配色」 → impeccable-design) and `vector_recall_does_not_fire_on_
+    /// unrelated_query` (「帮我清理C盘垃圾文件」 → 不命中). Killing that
+    /// capability to fix English noise would trade a working feature for a
+    /// measurement we never took.
+    ///
+    /// If a CJK false positive ever appears, measure its cosine and raise
+    /// *this* number — do not lower the English one to compensate.
+    semantic_min_score_cjk: f32,
 }
 
 impl SkillLoader {
@@ -83,7 +124,8 @@ impl SkillLoader {
             min_score: 0.3,
             max_matches: 3,
             max_body_lines: 500,
-            semantic_min_score: 0.18,
+            semantic_min_score: 0.52,
+            semantic_min_score_cjk: 0.18,
         }
     }
 
@@ -94,7 +136,8 @@ impl SkillLoader {
             min_score: 0.3,
             max_matches: 3,
             max_body_lines: 500,
-            semantic_min_score: 0.18,
+            semantic_min_score: 0.52,
+            semantic_min_score_cjk: 0.18,
         }
     }
 
@@ -249,9 +292,29 @@ impl SkillLoader {
                 matched_tokens as f32 / msg_tokens.len() as f32
             };
             let fuzzy_score = description_fuzzy_score(&msg_tokens, &desc_lower);
-            let score = keyword_score.max(fuzzy_score);
+            let raw = keyword_score.max(fuzzy_score);
+            let auto = is_auto_generated(info);
+            // 沉淀产物降权**在阈值判断之前**：降权后不足阈值的就淘汰，
+            // 否则它仍会占着 top-N 的名额把真正的手写技能挤出去。
+            let score = if auto {
+                raw * AUTO_SKILL_SCORE_FACTOR
+            } else {
+                raw
+            };
 
-            if score < effective_min {
+            // 第二层：沉淀产物**不走软化阈值**。
+            //
+            // `effective_min` 对多词查询会软化到 0.15（为了保住释义召回）。
+            // 那个软化对"人手挑出来的几十个技能"是合理的，对"跑几十个任务
+            // 就多几十个、质量参差"的沉淀产物则是灾难：2/10 词命中即可入池。
+            // 单靠 0.75 的降权只改变排序、不改变门槛——实测证实了这点
+            // （raw 0.25 → 0.1875 依然 > 0.15 而入池）。
+            let threshold = if auto {
+                effective_min.max(AUTO_SKILL_MIN_SCORE)
+            } else {
+                effective_min
+            };
+            if score < threshold {
                 continue;
             }
 
@@ -300,11 +363,27 @@ impl SkillLoader {
         // strict operator must not get vector matches the keyword layer
         // would reject). The 0.3 default itself does NOT leak into the
         // semantic layer — CJK paraphrase cosines sit around 0.15-0.25.
-        let semantic_threshold = if self.min_score > 0.3 {
+        //
+        // `max`, not a conditional swap: the old `if min_score > 0.3 {
+        // min_score } else { semantic_min_score }` **lowered** the vector bar
+        // for any operator in the 0.30–0.45 window (min_score=0.35 →
+        // semantic threshold 0.35, below the 0.45 default). The 2026-10-20
+        // threshold sweep caught it as a one-point false-positive rebound at
+        // 0.35. Strictness can only ever add, never subtract.
+        let operator_bar = if self.min_score > 0.3 {
             self.min_score
+        } else {
+            0.0
+        };
+        // 按查询语言选底噪：英文短文本在该 embedder 下有 ~0.2–0.4 的固有余弦
+        // （见 `semantic_min_score` 的实测），CJK 没有这个问题（见
+        // `semantic_min_score_cjk` 的两条测试）。operator 严格度对两者都只加不减。
+        let base = if has_cjk(&msg_lower) {
+            self.semantic_min_score_cjk
         } else {
             self.semantic_min_score
         };
+        let semantic_threshold = base.max(operator_bar);
         for (cmd_key, info) in commands {
             if scored.iter().any(|m| m.name == info.name) {
                 continue;
@@ -327,7 +406,22 @@ impl SkillLoader {
                 &query_vec,
                 &embedder.embed_sync(&desc_for_vec),
             );
-            if sim < semantic_threshold {
+            // 沉淀产物同样降权，且同样在阈值判断之前 —— 向量层的底噪本来就
+            // 是"恰好过线"的性质，降权后应当直接落选而不是占名额。
+            let auto = is_auto_generated(info);
+            let sim = if auto {
+                sim * AUTO_SKILL_SCORE_FACTOR
+            } else {
+                sim
+            };
+            // 中文向量阈值（0.18）低于沉淀产物的门槛下限（0.3），所以这里也
+            // 要抬——否则中文查询下沉淀技能仍能从最松的那道门进来。
+            let threshold = if auto {
+                semantic_threshold.max(AUTO_SKILL_MIN_SCORE)
+            } else {
+                semantic_threshold
+            };
+            if sim < threshold {
                 continue;
             }
             let Some(body) = self.load_body(&info.skill_md_path) else {
@@ -504,6 +598,44 @@ impl Default for SkillLoader {
 // strict about activating skills, and any word on this list would
 // false-positive virtually every skill with prose descriptions).
 // ---------------------------------------------------------------------------
+
+/// 沉淀产物的降权系数（`skills/auto/`）。
+///
+/// ## 为什么要有这个
+///
+/// `skills/auto/` 是 agent 自己写的：成功序列的骨架、多次执行的对比提炼。
+/// 它有复用价值，但和手写技能有两点本质不同：
+///
+/// 1. **数量随使用线性增长**——跑几十个任务就多几十个技能，而手写技能是
+///    人挑出来的少数几个；匹配池变大，误激活概率随之上升。
+/// 2. **质量参差**——它是"这次跑通了"的记录，不是"这是最佳实践"的断言。
+///
+/// 降权让两者**同场不同价**：同一个查询命中时手写技能优先；只有沉淀技能
+/// 真正相关且分数足够高时才进 top-N。0.75 的取法：手写 0.5 仍能压过沉淀
+/// 0.6（→0.45），但沉淀 0.8（→0.6）依然能独立胜出——不把沉淀技能一棍打死，
+/// 因为"下次复用"正是它存在的理由。
+const AUTO_SKILL_SCORE_FACTOR: f32 = 0.75;
+
+/// 沉淀产物的**门槛下限**（不参与软化）。
+///
+/// 手写技能在多词查询下可以用到 0.15 的软化阈值（保释义召回）；沉淀产物必须
+/// 达到 0.3 —— 也就是"默认门槛、不软化"。两层治理缺一不可：只有降权时，
+/// raw 0.25 → 0.1875 仍然越过 0.15 入池（实测），把 top-3 名额占掉。
+const AUTO_SKILL_MIN_SCORE: f32 = 0.3;
+
+/// `true` 当这个技能是 agent 自动沉淀的。
+///
+/// 同时判 `category` 与路径：`category` 来自 frontmatter（可能缺失或被手改），
+/// 路径里的 `auto` 段则是 `skill_auto_create::AUTO_SKILL_DIR` 的硬约定。
+/// 任一命中即算——宁可多降权一个手写技能，也不要漏掉一个沉淀产物。
+fn is_auto_generated(info: &crate::skill_orchestrator::SkillCommandInfo) -> bool {
+    let auto_dir = crate::skill_auto_create::AUTO_SKILL_DIR;
+    info.category.eq_ignore_ascii_case(auto_dir)
+        || info
+            .skill_md_path
+            .components()
+            .any(|c| c.as_os_str() == auto_dir)
+}
 
 const STOPWORDS: &[&str] = &[
     // Pure function / grammatical glue — never a domain concept.
@@ -1195,6 +1327,100 @@ mod tests {
         tmp
     }
 
+    /// 沉淀产物（`skills/auto/`）降权的三条性质。
+    ///
+    /// 动机：auto 技能由 run loop 自动写入，数量随使用线性增长，质量参差；
+    /// 若不降权，它们会和手写技能抢同一个 top-N 名额，把误激活率重新推高
+    /// （阈值扫描刚把它从 3/10 修到 0/10）。
+    fn seed_manual_and_auto(dir: &std::path::Path) {
+        // 同样的 description 与 tag —— 唯一差别是分类目录。
+        for (category, name) in [("manual", "deploy"), ("auto", "deploy-auto")] {
+            let d = dir.join(category).join(name);
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(
+                d.join("SKILL.md"),
+                format!(
+                    "---\nname: {name}\ndescription: Deploy the application to production servers.\n\
+                     tags: [deploy, production]\n---\n# {name}\n"
+                ),
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn hand_written_skill_outranks_an_equally_matching_auto_skill() {
+        let tmp = tempfile::tempdir().unwrap();
+        seed_manual_and_auto(tmp.path());
+        let mut loader = SkillLoader::with_dir(tmp.path());
+        loader.scan();
+
+        let matches = loader.match_message("deploy the application to production");
+        let names: Vec<&str> = matches.iter().map(|m| m.name.as_str()).collect();
+        assert!(names.contains(&"deploy"), "手写技能必须命中: {names:?}");
+        assert_eq!(
+            matches[0].name, "deploy",
+            "同分时手写技能必须排第一（沉淀产物降权 0.75）: {names:?}"
+        );
+        // 被降权的那个分数必须严格更低。
+        let auto = matches.iter().find(|m| m.name == "deploy-auto");
+        if let Some(auto) = auto {
+            assert!(
+                auto.score < matches[0].score,
+                "沉淀技能分数 {} 必须低于手写 {}",
+                auto.score,
+                matches[0].score
+            );
+        }
+    }
+
+    /// 降权不是封杀：只有沉淀技能相关时，它照样要能被激活——
+    /// "下次复用"正是自动沉淀存在的理由。
+    #[test]
+    fn an_auto_skill_alone_still_activates() {
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp.path().join("auto").join("rotate-logs");
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(
+            d.join("SKILL.md"),
+            "---\nname: rotate-logs\ndescription: Rotate application logs and archive them.\n\
+             tags: [logs, rotate]\n---\n# rotate-logs\n",
+        )
+        .unwrap();
+        let mut loader = SkillLoader::with_dir(tmp.path());
+        loader.scan();
+
+        let matches = loader.match_message("rotate the logs please");
+        assert!(
+            matches.iter().any(|m| m.name == "rotate-logs"),
+            "唯一的沉淀技能必须仍可激活: {:?}",
+            matches.iter().map(|m| m.name.as_str()).collect::<Vec<_>>()
+        );
+    }
+
+    /// 降权后达不到阈值的沉淀技能必须**落选**，而不是以低分占住 top-N 名额。
+    #[test]
+    fn a_weak_auto_match_is_dropped_by_the_discount() {
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp.path().join("auto").join("weak");
+        std::fs::create_dir_all(&d).unwrap();
+        // 只有 1/4 的词命中，raw 0.25 → 降权 0.1875 < 0.3 阈值。
+        std::fs::write(
+            d.join("SKILL.md"),
+            "---\nname: weak\ndescription: archive servers quarterly\n---\n# weak\n",
+        )
+        .unwrap();
+        let mut loader = SkillLoader::with_dir(tmp.path());
+        loader.scan();
+
+        let matches = loader.match_message("archive something unrelated entirely");
+        assert!(
+            !matches.iter().any(|m| m.name == "weak"),
+            "降权后低于阈值的沉淀技能不应入池: {:?}",
+            matches.iter().map(|m| (m.name.as_str(), m.score)).collect::<Vec<_>>()
+        );
+    }
+
     #[test]
     fn vector_recall_matches_cjk_paraphrase_keyword_misses() {
         let tmp = setup_semantic_test_skill();
@@ -1294,3 +1520,4 @@ mod tests {
         assert!(tools.is_none(), "no declaration → no restriction");
     }
 }
+

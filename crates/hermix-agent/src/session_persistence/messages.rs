@@ -6,19 +6,239 @@ use hermix_core::{AgentError, AutomationMeta, Message, MessageRole};
 
 use super::*;
 
+/// How many leading chars of a message body take part in the mirror
+/// fingerprint. Long enough to distinguish consecutive turns, short enough
+/// that a tool result never has to be fully re-read to compare.
+const FINGERPRINT_PREFIX_CHARS: usize = 96;
+
+fn mirror_role(role: MessageRole) -> &'static str {
+    match role {
+        MessageRole::System => "system",
+        MessageRole::User => "user",
+        MessageRole::Assistant => "assistant",
+        MessageRole::Tool => "tool",
+        MessageRole::Automation => "automation",
+    }
+}
+
+/// Identity of a live message for mirror resumption.
+///
+/// Prefix + char length + call id — not a hash: collisions produce a wrong
+/// resume point, and a hash buys nothing here (the comparison is one line).
+fn message_fingerprint(msg: &Message) -> String {
+    let content = msg.content.as_deref().unwrap_or("");
+    fingerprint_parts(
+        mirror_role(msg.role),
+        msg.tool_call_id.as_deref().unwrap_or(""),
+        content,
+    )
+}
+
+fn fingerprint_parts(role: &str, tool_call_id: &str, content: &str) -> String {
+    let prefix: String = content.chars().take(FINGERPRINT_PREFIX_CHARS).collect();
+    format!("{role}|{}|{tool_call_id}|{prefix}", content.chars().count())
+}
+
+/// Same fingerprint, computed from one already-serialized mirror line.
+fn line_fingerprint(line: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(line).ok()?;
+    Some(fingerprint_parts(
+        v.get("role").and_then(|r| r.as_str())?,
+        v.get("tool_call_id").and_then(|t| t.as_str()).unwrap_or(""),
+        v.get("content").and_then(|c| c.as_str()).unwrap_or(""),
+    ))
+}
+
+/// Last complete line of a JSONL file, dropping a torn tail first.
+///
+/// A process killed mid-`writeln!` leaves a fragment without its trailing
+/// newline. Left in place it corrupts every later append (and any reader that
+/// counts lines), so it is truncated away here — the fragment is by
+/// construction a message the DB still owns.
+///
+/// Only a 16 KB tail window is read: the anchor is the last line, so the
+/// front of the file is irrelevant (this was a full `read_to_string` per turn).
+fn read_last_complete_line(path: &Path) -> std::io::Result<Option<String>> {
+    use std::io::{Read as _, Seek as _, SeekFrom};
+
+    const TAIL_PROBE: u64 = 16 * 1024;
+
+    let mut f = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    let len = f.metadata()?.len();
+    if len == 0 {
+        return Ok(None);
+    }
+    let probe = TAIL_PROBE.min(len);
+    f.seek(SeekFrom::Start(len - probe))?;
+    let mut buf = Vec::with_capacity(probe as usize);
+    f.read_to_end(&mut buf)?;
+
+    let Some(last_nl) = buf.iter().rposition(|b| *b == b'\n') else {
+        // No newline in the window. If the whole file is one fragment, drop it;
+        // if the file is simply longer than the window, the last line is huge
+        // and cannot be anchored — the caller falls back to a full rewrite.
+        if len <= probe {
+            let _ = std::fs::OpenOptions::new().write(true).open(path)?.set_len(0);
+        }
+        return Ok(None);
+    };
+
+    // Torn tail → cut it off so appends resume at a line boundary.
+    let keep = len - probe + last_nl as u64 + 1;
+    if keep < len {
+        std::fs::OpenOptions::new().write(true).open(path)?.set_len(keep)?;
+    }
+
+    let line_start = buf[..last_nl]
+        .iter()
+        .rposition(|b| *b == b'\n')
+        .map(|p| p + 1)
+        .unwrap_or(0);
+    let line = String::from_utf8_lossy(&buf[line_start..last_nl])
+        .trim_end()
+        .to_string();
+    Ok(if line.is_empty() { None } else { Some(line) })
+}
+
+/// One stored row, reduced to the columns the incremental flush compares.
+///
+/// Deliberately not `SELECT *`: the presentation columns
+/// (`execution_timeline`, `unified_steps`, `extra`, `reasoning_content`) never
+/// take part in "is this still the same message?", so reading them back every
+/// turn would be pure cost.
+struct StoredMessageRow {
+    id: i64,
+    role: String,
+    content: Option<String>,
+    tool_call_id: Option<String>,
+    tool_calls: Option<String>,
+}
+
+impl StoredMessageRow {
+    /// `true` when the stored row still represents this in-memory message.
+    ///
+    /// Only the fields that identify a turn are compared. A `NULL`/empty
+    /// mismatch is treated as "different" — the safe direction, because it
+    /// costs a re-insert rather than silently keeping a stale row.
+    fn same_as(&self, msg: &Message) -> bool {
+        if self.role != mirror_role(msg.role) {
+            return false;
+        }
+        if self.content.as_deref() != msg.content.as_deref() {
+            return false;
+        }
+        if self.tool_call_id.as_deref() != msg.tool_call_id.as_deref() {
+            return false;
+        }
+        match (self.tool_calls.as_deref(), msg.tool_calls.as_ref()) {
+            (None, None) => true,
+            (Some(stored), Some(calls)) => {
+                serde_json::to_string(calls).is_ok_and(|s| s == stored)
+            }
+            _ => false,
+        }
+    }
+}
+
+/// One timeline row at `offset` (0-based, id order), or `None`.
+///
+/// Used by the fast path to verify the two ends of the stored timeline without
+/// reading all of it.
+fn stored_row_at(
+    conn: &rusqlite::Connection,
+    session_id: &str,
+    offset: usize,
+) -> Option<StoredMessageRow> {
+    conn.query_row(
+        "SELECT id, role, content, tool_call_id, tool_calls FROM messages \
+         WHERE session_id = ?1 AND role NOT IN ('automation', 'approval') \
+         ORDER BY id ASC LIMIT 1 OFFSET ?2",
+        rusqlite::params![session_id, offset as i64],
+        |row| {
+            Ok(StoredMessageRow {
+                id: row.get(0)?,
+                role: row.get(1)?,
+                content: row.get(2)?,
+                tool_call_id: row.get(3)?,
+                tool_calls: row.get(4)?,
+            })
+        },
+    )
+    .ok()
+}
+
+/// Timeline rows for a session, in id order, excluding the append-only
+/// `automation` side channel.
+fn stored_message_rows(
+    conn: &rusqlite::Connection,
+    session_id: &str,
+) -> Result<Vec<StoredMessageRow>, AgentError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, role, content, tool_call_id, tool_calls \
+             FROM messages \
+             WHERE session_id = ?1 AND role NOT IN ('automation', 'approval') \
+             ORDER BY id ASC",
+        )
+        .map_err(|e| AgentError::Io(format!("Failed to prepare message scan: {e}")))?;
+    let rows = stmt
+        .query_map(rusqlite::params![session_id], |row| {
+            Ok(StoredMessageRow {
+                id: row.get(0)?,
+                role: row.get(1)?,
+                content: row.get(2)?,
+                tool_call_id: row.get(3)?,
+                tool_calls: row.get(4)?,
+            })
+        })
+        .map_err(|e| AgentError::Io(format!("Failed to scan messages: {e}")))?;
+    rows.collect::<Result<Vec<_>, rusqlite::Error>>()
+        .map_err(|e| AgentError::Io(format!("Failed to read messages: {e}")))
+}
+
 impl SessionPersistence {
-    /// Batch insert messages into the database for FTS5 indexing.
-    /// **Transaction-protected**: the caller (e.g. `save_session_atomic`)
-    /// is responsible for wrapping this in `BEGIN IMMEDIATE` / `COMMIT`.
-    /// This inner helper only does the DELETE + INSERT.
-    /// Persist `messages` for `session_id` after first wiping the existing
-    /// rows. Returns the number of rows actually INSERTed (i.e. the count
-    /// that `save_session_atomic` should stamp onto `sessions.message_count`).
-    /// System-role rows are filtered out — they're rebuilt per-turn by
-    /// `agent_loop` and never belong in the persisted timeline.
-    /// **Transaction-protected**: the caller (e.g. `save_session_atomic`)
-    /// is responsible for wrapping this in `BEGIN IMMEDIATE` / `COMMIT`.
-    /// This inner helper only does the DELETE + INSERT.
+    /// Persist the session's message timeline, incrementally.
+    ///
+    /// **Transaction-protected**: the caller (`save_session_atomic`) wraps
+    /// this in `BEGIN IMMEDIATE` / `COMMIT`.
+    ///
+    /// ## Incremental, not rewrite
+    ///
+    /// The old implementation deleted every non-`automation` row and
+    /// re-inserted the whole timeline on every turn. That is O(n) rows per
+    /// turn, each firing two FTS5 triggers (6 triggers in total), so a
+    /// 500-message session rewrote ~3000 index entries every turn and total
+    /// IO grew O(n²) over a conversation. This is the main reason long
+    /// sessions get progressively slower.
+    ///
+    /// Turns are append-only in the common case, so the right unit of work is
+    /// "the rows that changed". This computes the **common prefix** between
+    /// the stored rows and the in-memory timeline and rewrites only the tail:
+    ///
+    /// - steady state → prefix covers the whole history, tail = this turn
+    ///   (2–6 rows);
+    /// - compression → the prefix stops where the folded turns began, the
+    ///   remnants are deleted and the summary + kept tail re-inserted;
+    /// - `/undo` → the in-memory timeline is shorter, the undone rows fall out
+    ///   of the prefix and are deleted, exactly as the blanket DELETE did.
+    ///
+    /// Rows inside the prefix keep their `id`. That matters because the wire
+    /// id the front-end keys on is positional (`{session_id}-{idx}`): keeping
+    /// the prefix in place keeps the order — and therefore those ids — stable.
+    /// It also means a client-written `unified_steps` blob on a prefix row is
+    /// never clobbered, which is why the old ordinal carry-forward hack is
+    /// gone rather than ported.
+    ///
+    /// `automation` rows stay exempt (never compared, never deleted, always
+    /// appended) exactly as before: they arrive via a separate delivery path
+    /// and never round-trip through `load_session`.
+    ///
+    /// Returns the number of timeline rows the session now has, which
+    /// `save_session_atomic` stamps onto `sessions.message_count`.
     pub(crate) fn flush_messages(
         &self,
         conn: &rusqlite::Connection,
@@ -26,89 +246,104 @@ impl SessionPersistence {
         messages: &[Message],
         now: &str,
     ) -> Result<usize, AgentError> {
-        // Capture the existing `unified_steps` blobs (in row id order)
-        // BEFORE the DELETE below. `flush_messages` does a full
-        // DELETE+INSERT, so without this carry-forward any value the
-        // desktop client persisted via the `…/messages/unified_steps`
-        // endpoint would be wiped on the very next turn's flush and the
-        // inline tool interleaving would be lost on reload. We re-apply
-        // the captured value to the same ordinal message during the
-        // re-insert. Guard: only carry forward when the captured count
-        // exactly matches the number of rows we're about to (re)insert,
-        // otherwise skip — better to drop the cached timeline than to
-        // misalign it onto the wrong message (e.g. after a compression
-        // reorder).
-        let carry_unified_steps: Vec<Option<String>> = conn
-            .prepare(
-                // `role != 'automation'` keeps this capture aligned with
-                // the rows the flush re-inserts *into the carry
-                // sequence* — the loop below writes automation rows but
-                // does not give them a carry slot. Counting them here
-                // would offset every later ordinal by the number of
-                // automation results in the session.
-                //
-                // This is an alignment fix, not a rescue: in practice
-                // `use_carry` is false on the dispatch path (see the
-                // note on `persistable_count`), so the values below are
-                // usually unused. It matters for callers that flush a
-                // freshly built vector instead of a loaded one.
-                "SELECT unified_steps FROM messages \
-                 WHERE session_id = ?1 AND active = 1 \
-                   AND role != 'system' AND role != 'automation' \
-                 ORDER BY id ASC",
-            )
-            .and_then(|mut stmt| {
-                stmt.query_map(rusqlite::params![session_id], |row| {
-                    let v: Option<String> = row.get(0)?;
-                    Ok(v)
-                })
-                .map(|rows| rows.filter_map(|r| r.ok()).collect::<Vec<_>>())
-            })
-            .unwrap_or_default();
-        // Count how many rows this flush will actually (re)insert so we
-        // can compare against `carry_unified_steps.len()` below.
-        //
-        // `automation` is excluded to match the capture query above, so
-        // the two sequences stay comparable: an automation row is
-        // written but carries no `unified_steps` slot, and counting it
-        // here while the capture skips it would make the lengths differ
-        // by exactly the number of automation rows.
-        //
-        // Measured caveat: on the real dispatch path this equality is
-        // almost never true — the caller passes the whole in-memory
-        // history plus the new turn, while the capture only sees what
-        // the previous flush wrote, so `captured < persistable_count`
-        // and `use_carry` is false. Nothing breaks, because `load_session`
-        // returns `unified_steps` on every message and the fallback
-        // below re-writes the in-memory value; `carried` only matters
-        // when a caller flushes a vector it did not just load. Keeping
-        // the two sides consistent is still the right invariant — it is
-        // what makes `use_carry` meaningful if that path ever changes.
-        let persistable_count = messages
+        // Messages that occupy a tracked DB row, in timeline order.
+        // `automation` is excluded — those rows are an append-only side
+        // channel, so including them would break the prefix on the first
+        // automation delivery of every session.
+        let tracked: Vec<&Message> = messages
             .iter()
             .filter(|m| {
                 !m.ephemeral
-                    && !matches!(
-                        m.role,
-                        MessageRole::System | MessageRole::Automation
-                    )
+                    && !matches!(m.role, MessageRole::System | MessageRole::Automation)
             })
-            .count();
-        let use_carry = carry_unified_steps.len() == persistable_count;
+            .collect();
 
-        // `automation` rows are excluded from the DELETE because
-        // `load_session` never returns them: they are stored and
-        // rendered, but not part of the LLM payload. A blanket
-        // `DELETE ... WHERE session_id = ?1` would therefore silently
-        // erase every automation result the moment the user sent their
-        // next message — the one turn that must not destroy them.
-        // `approval` rows already survive for the same reason: they are
-        // written by a separate INSERT and never round-tripped here.
-        conn.execute(
-            "DELETE FROM messages WHERE session_id = ?1 AND role != 'automation'",
-            rusqlite::params![session_id],
-        )
-        .map_err(|e| AgentError::Io(format!("Failed to clear old messages: {e}")))?;
+        // ## Fast path
+        //
+        // The previous flush stamped `sessions.message_count` with the number
+        // of timeline rows it wrote. If that count still describes the stored
+        // rows and the last of them is still the same message, then the stored
+        // timeline is a verbatim prefix of what we are about to write and
+        // nothing needs trimming — no need to read the history back at all.
+        //
+        // This is what makes the steady state O(1) in IO instead of O(n): on a
+        // 500-message session the slow path still reads ~1 MB of content every
+        // turn, which is the half of the old cost that deleting doesn't fix.
+        //
+        // Everything the fast path cannot prove falls through to the full scan
+        // below, which is always correct on its own.
+        //
+        // The invariant it relies on: **between flushes the timeline only
+        // changes by truncation or by rewriting from a prefix**. Every
+        // transformation the loop applies — compression folding, transient
+        // nudges stripped, adjacent assistant messages merged, `/undo` — changes
+        // the number of tracked messages, so the count check catches it. A
+        // middle row rewritten in place with the same neighbours and the same
+        // total would slip through; nothing in the loop does that today.
+        let mut prefix = 0usize;
+        let mut scanned = false;
+        let watermark: i64 = conn
+            .query_row(
+                "SELECT message_count FROM sessions WHERE id = ?1",
+                rusqlite::params![session_id],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        if watermark > 0 && (watermark as usize) <= tracked.len() {
+            let stored_total: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM messages \
+                     WHERE session_id = ?1 AND role NOT IN ('automation', 'approval')",
+                    rusqlite::params![session_id],
+                    |row| row.get(0),
+                )
+                .unwrap_or(-1);
+            // Three anchors — head, middle, tail — instead of the count alone.
+            // A count match is not enough: compression can shrink the timeline
+            // and later turns can grow it back to the same length, in which
+            // case the stored middle would be stale while both ends still
+            // match (compression always preserves the first messages and the
+            // current last one). Sampling the middle catches exactly that.
+            let w = watermark as usize;
+            let anchors = if w >= 3 { [0, w / 2, w - 1] } else { [0, 0, w - 1] };
+            let anchors_ok = anchors
+                .iter()
+                .all(|&off| stored_row_at(conn, session_id, off).is_some_and(|row| row.same_as(tracked[off])));
+            if stored_total == watermark && anchors_ok {
+                prefix = w;
+            } else {
+                scanned = true;
+            }
+        } else {
+            scanned = true;
+        }
+
+        if scanned {
+            let stored = stored_message_rows(conn, session_id)?;
+            prefix = stored
+                .iter()
+                .zip(tracked.iter())
+                .take_while(|(row, msg)| row.same_as(msg))
+                .count();
+            // Drop only the stored tail that no longer matches. Prefix rows are
+            // left untouched — no DELETE, no re-INSERT, no FTS churn.
+            //
+            // `approval` rows are exempt alongside `automation`: they are
+            // written by a separate INSERT for the UI timeline and never
+            // round-trip through `load_session`, so they must neither take
+            // part in the prefix comparison nor be deleted here. (The old
+            // blanket DELETE did destroy them; the doc comment claimed they
+            // survived — the claim was wrong until this filter existed.)
+            if prefix < stored.len() {
+                conn.execute(
+                    "DELETE FROM messages \
+                     WHERE session_id = ?1 \
+                       AND role NOT IN ('automation', 'approval') AND id >= ?2",
+                    rusqlite::params![session_id, stored[prefix].id],
+                )
+                .map_err(|e| AgentError::Io(format!("Failed to trim changed messages: {e}")))?;
+            }
+        }
 
         let mut stmt = conn
             .prepare(
@@ -117,8 +352,7 @@ impl SessionPersistence {
             )
             .map_err(|e| AgentError::Io(format!("Failed to prepare insert: {e}")))?;
 
-        let mut inserted: usize = 0;
-        let mut carry_idx: usize = 0;
+        let mut tracked_idx: usize = 0;
         for msg in messages {
             // ephemeral messages (e.g. replay-path
             // tool_result) exist only in the in-memory context and
@@ -128,6 +362,17 @@ impl SessionPersistence {
             }
             if matches!(msg.role, MessageRole::System) {
                 continue;
+            }
+            // A row already present at this position keeps its identity:
+            // skipping it here is what makes the write incremental, and what
+            // preserves both its `id` (positional wire id downstream) and any
+            // client-written `unified_steps`.
+            if !matches!(msg.role, MessageRole::Automation) {
+                let ordinal = tracked_idx;
+                tracked_idx += 1;
+                if ordinal < prefix {
+                    continue;
+                }
             }
             let role = match msg.role {
                 MessageRole::System => "system",
@@ -151,30 +396,14 @@ impl SessionPersistence {
                 .execution_timeline
                 .as_ref()
                 .map(|tl| serde_json::to_string(tl).unwrap_or_default());
-            // Re-flush safety: prefer the `unified_steps` we captured
-            // from the DB before the DELETE above so a client-persisted
-            // timeline survives the next turn's flush. Fall back to
-            // whatever the in-memory message carries — which is the path
-            // that actually runs today, since `load_session` restores
-            // the column and `use_carry` rarely holds (see the note on
-            // `persistable_count`).
-            //
-            // Automation rows don't consume a carry slot: the capture
-            // query above skips them, so advancing `carry_idx` for one
-            // would shift every later row's blob onto the wrong message.
-            let carried = if use_carry && !matches!(msg.role, MessageRole::Automation) {
-                carry_unified_steps.get(carry_idx).cloned().flatten()
-            } else {
-                None
-            };
-            if !matches!(msg.role, MessageRole::Automation) {
-                carry_idx += 1;
-            }
-            let unified_steps_json = carried.or_else(|| {
-                msg.unified_steps
-                    .as_ref()
-                    .map(|us| serde_json::to_string(us).unwrap_or_default())
-            });
+            // No carry-forward needed any more: rows inside the prefix are
+            // never rewritten, so a client-persisted `unified_steps` stays on
+            // its row. Rows past the prefix are being (re)created, and the
+            // in-memory value is the only truth for them.
+            let unified_steps_json = msg
+                .unified_steps
+                .as_ref()
+                .map(|us| serde_json::to_string(us).unwrap_or_default());
 
             let safe_content = msg
                 .content
@@ -209,10 +438,9 @@ impl SessionPersistence {
                 extra_json.as_deref(),
             ])
             .map_err(|e| AgentError::Io(format!("Failed to insert message: {e}")))?;
-            inserted += 1;
         }
 
-        Ok(inserted)
+        Ok(tracked.len())
     }
 
     /// Persist the desktop client's frontend-built `unified_steps`
@@ -251,39 +479,58 @@ impl SessionPersistence {
     /// on first write; see `recover_orphan_session_logs`.
     /// Append-only JSONL mirror of the persisted timeline — Codex rollout
     /// 双轨 analog：`sessions.db` 损坏时可按行重建对话。每行一个 JSON
-    /// 对象（role/content/tool_calls/reasoning），只 append 新增消息：
-    /// 现有行数即高水位（flush 每轮重写 DB，但时间线顺序稳定），
-    /// 每轮成本 O(delta)。
+    /// 对象（role/content/tool_calls/reasoning）。
+    ///
+    /// ## High-water mark is a fingerprint, not a line count
+    ///
+    /// The old implementation read the whole file, counted lines and appended
+    /// from that index. Two ways that breaks:
+    /// - **Compression / `/undo` shrink the timeline.** `persistable.len() <=
+    ///   already` then returned early, so the mirror stopped recording *new*
+    ///   turns forever, silently — the one situation (long session, damaged
+    ///   DB) where the mirror is supposed to matter.
+    /// - **A torn tail** (killed mid-`writeln!`) was counted as a line, so the
+    ///   next append started at the wrong offset.
+    ///
+    /// Now the anchor is the *identity of the last mirrored message*: read the
+    /// last complete line (tail probe, not whole file), repair a torn tail,
+    /// and resume right after the matching message. No match ⇒ rewrite the
+    /// file. Every failure mode is self-healing, which also makes the rewrite
+    /// deliberately non-atomic: the DB is the source of truth, and a partial
+    /// rewrite is repaired on the next call.
     pub fn save_message_mirror(
         &self,
         session_id: &str,
         messages: &[Message],
     ) -> Result<(), AgentError> {
+        use std::io::Write as _;
+
         std::fs::create_dir_all(&self.sessions_dir)
             .map_err(|e| AgentError::Io(format!("Failed to create sessions dir: {e}")))?;
         let path = self
             .sessions_dir
             .join(format!("{}.jsonl", crate::session_persistence::session_stem(session_id)));
 
-        let already = std::fs::read_to_string(&path)
-            .map(|s| s.lines().filter(|l| !l.trim().is_empty()).count())
-            .unwrap_or(0);
         let persistable: Vec<&Message> = messages
             .iter()
             .filter(|m| !m.ephemeral && !matches!(m.role, MessageRole::System))
             .collect();
-        if persistable.len() <= already {
+        if persistable.is_empty() {
             return Ok(());
         }
 
-        use std::io::Write as _;
-        let mut f = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .map_err(|e| AgentError::Io(format!("Failed to open JSONL mirror: {e}")))?;
-        for m in &persistable[already..] {
-            let line = serde_json::json!({
+        let start = read_last_complete_line(&path)
+            .map_err(|e| AgentError::Io(format!("Failed to read JSONL mirror: {e}")))?
+            .and_then(|line| line_fingerprint(&line))
+            .and_then(|fp| {
+                persistable
+                    .iter()
+                    .rposition(|m| message_fingerprint(m) == fp)
+                    .map(|i| i + 1)
+            });
+
+        let render = |m: &Message| {
+            serde_json::json!({
                 "ts": Utc::now().to_rfc3339(),
                 "role": match m.role {
                     MessageRole::System => "system",
@@ -297,11 +544,43 @@ impl SessionPersistence {
                 "tool_calls": m.tool_calls,
                 "tool_call_id": m.tool_call_id,
                 "name": m.name,
-            });
-            writeln!(f, "{line}")
-                .map_err(|e| AgentError::Io(format!("Failed to append JSONL mirror: {e}")))?;
+            })
+            .to_string()
+        };
+
+        match start {
+            // Anchor found and nothing new since: the common steady state.
+            Some(start) if start == persistable.len() => Ok(()),
+            Some(start) => {
+                let mut f = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&path)
+                    .map_err(|e| AgentError::Io(format!("Failed to open JSONL mirror: {e}")))?;
+                for m in &persistable[start..] {
+                    writeln!(f, "{}", render(m)).map_err(|e| {
+                        AgentError::Io(format!("Failed to append JSONL mirror: {e}"))
+                    })?;
+                }
+                // Survive a kill: without this the file keeps a torn tail that
+                // the next run has to repair (and that a naive reader would
+                // count as a message).
+                f.sync_all()
+                    .map_err(|e| AgentError::Io(format!("Failed to sync JSONL mirror: {e}")))?;
+                Ok(())
+            }
+            // No anchor (missing file, shrunk timeline, torn-beyond-repair):
+            // rebuild from the in-memory timeline.
+            None => {
+                let body: String = persistable
+                    .iter()
+                    .map(|m| format!("{}\n", render(m)))
+                    .collect();
+                std::fs::write(&path, body)
+                    .map_err(|e| AgentError::Io(format!("Failed to rewrite JSONL mirror: {e}")))?;
+                Ok(())
+            }
         }
-        Ok(())
     }
 
     pub fn save_session_log(

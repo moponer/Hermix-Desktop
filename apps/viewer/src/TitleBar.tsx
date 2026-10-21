@@ -9,6 +9,11 @@
 //
 // 边缘缩放：tauri.conf.json 里 decorations=false 会连 WS_THICKFRAME 一起去掉
 // （窗口就不能拖边缩放了），Rust 侧 setup 时把它加回来了（见 lib.rs）。
+//
+// 分工（2026-10-21）：标题栏只放**窗口身份**（应用名 + 菜单 + 窗口按钮），
+// 当前文件 / 网址归下面那条地址栏。两处都显示同一串地址就是重复——用户
+// 一眼看到两遍，却分不清哪一处是该看的。窗口标题（任务栏 / Alt+Tab）由
+// App 通过 setTitle 维护，不靠这条自绘栏承载。
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { UnlistenFn } from "@tauri-apps/api/event";
@@ -19,16 +24,14 @@ import { MenuBar, type MenuGroup } from "./MenuBar";
 export interface TitleBarProps {
   /** 主标题（应用名）。 */
   title: string;
-  /** 副标题：当前文件或目录名。 */
-  subject?: string;
-  /** 副标题的完整值（悬停提示）。 */
-  subjectTitle?: string;
   /** 菜单栏菜单（文件/视图/工具/帮助）。 */
   menus?: MenuGroup[];
   onMenuCommand?: (id: string) => void;
+  /** 菜单展开 / 收起时通知外部（网页子 webview 要给菜单让位）。 */
+  onMenuOpenChange?: (open: boolean) => void;
 }
 
-export function TitleBar({ title, subject, subjectTitle, menus, onMenuCommand }: TitleBarProps) {
+export function TitleBar({ title, menus, onMenuCommand, onMenuOpenChange }: TitleBarProps) {
   const [maximized, setMaximized] = useState(false);
   const win = getCurrentWindow();
 
@@ -139,18 +142,15 @@ export function TitleBar({ title, subject, subjectTitle, menus, onMenuCommand }:
       <div className="tb-brand">
         <Eye className="tb-mark" aria-hidden="true" />
         <span className="tb-title">{title}</span>
-        {subject && (
-          <span className="tb-subject" title={subjectTitle ?? subject}>
-            {subject}
-          </span>
-        )}
       </div>
       {menus && menus.length > 0 && (
-        <>
-          <MenuBar menus={menus} onCommand={onMenuCommand ?? (() => undefined)} />
-          <div className="tb-spacer" />
-        </>
+        <MenuBar
+          menus={menus}
+          onCommand={onMenuCommand ?? (() => undefined)}
+          onOpenChange={onMenuOpenChange}
+        />
       )}
+      <div className="tb-spacer" />
       <div className="tb-window">
         <button
           type="button"
@@ -159,7 +159,7 @@ export function TitleBar({ title, subject, subjectTitle, menus, onMenuCommand }:
           aria-label="最小化"
           title="最小化"
         >
-          <Minus size={14} />
+          <Minus size={15} />
         </button>
         <button
           type="button"
@@ -168,7 +168,7 @@ export function TitleBar({ title, subject, subjectTitle, menus, onMenuCommand }:
           aria-label={maximized ? "还原窗口" : "最大化窗口"}
           title={maximized ? "还原" : "最大化"}
         >
-          {maximized ? <Copy size={12} /> : <Square size={12} />}
+          {maximized ? <Copy size={13} /> : <Square size={12} />}
         </button>
         <button
           type="button"
@@ -177,7 +177,7 @@ export function TitleBar({ title, subject, subjectTitle, menus, onMenuCommand }:
           aria-label="关闭窗口"
           title="关闭"
         >
-          <X size={14} />
+          <X size={15} />
         </button>
       </div>
     </div>

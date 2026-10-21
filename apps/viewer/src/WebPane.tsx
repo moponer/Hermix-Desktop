@@ -8,6 +8,10 @@
 // 应用界面上（挡住工具条、AI 栏）。
 //
 // 坐标是**物理像素**：子 webview 是独立 HWND，CSS 像素定位会随 DPI 偏。
+//
+// `chrome`：是否自带「后退 / 前进 / 刷新 + 网址 + 系统浏览器」工具条。
+// 纯净模式关掉它——那些控件与网址已经在顶栏地址栏里（见 App.tsx 的
+// .pure-bar），两处都画等于同一串地址出现两遍。
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -26,7 +30,7 @@ function physicalRect(el: HTMLElement): { x: number; y: number; w: number; h: nu
   };
 }
 
-export function WebPane({ url }: { url: string }) {
+export function WebPane({ url, chrome = true }: { url: string; chrome?: boolean }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const [current, setCurrent] = useState(url);
   const [error, setError] = useState<string | null>(null);
@@ -97,49 +101,53 @@ export function WebPane({ url }: { url: string }) {
 
   return (
     <div className="preview-pane web-pane">
-      <div className="preview-toolbar">
-        <button
-          type="button"
-          className="tb-btn tb-icon"
-          onClick={() => run("history.back();")}
-          title="后退"
-          aria-label="后退"
-        >
-          <ArrowLeft size={14} className="icon-sm" />
-        </button>
-        <button
-          type="button"
-          className="tb-btn tb-icon"
-          onClick={() => run("history.forward();")}
-          title="前进"
-          aria-label="前进"
-        >
-          <ArrowRight size={14} className="icon-sm" />
-        </button>
-        <button
-          type="button"
-          className="tb-btn tb-icon"
-          onClick={() => run("location.reload();")}
-          title="刷新"
-          aria-label="刷新网页"
-        >
-          <RefreshCw size={14} className="icon-sm" />
-        </button>
-        <span className="web-pane-url" title={current}>
-          {current}
-        </span>
-        <span className="preview-toolbar-spacer" />
-        <button
-          type="button"
-          className="tb-btn"
-          onClick={openExternally}
-          title="在系统默认浏览器中打开"
-          aria-label="在系统默认浏览器中打开"
-        >
-          <ExternalLink size={14} className="icon-sm" />
-          系统浏览器
-        </button>
-      </div>
+      {/* 纯净模式把这条工具条交给顶栏（地址栏 + 导航按钮），这里不再画第二份：
+          两行都显示同一个网址、两个「用系统打开」，正是用户提的"重复"。 */}
+      {chrome && (
+        <div className="preview-toolbar">
+          <button
+            type="button"
+            className="tb-btn tb-icon"
+            onClick={() => run("history.back();")}
+            title="后退"
+            aria-label="后退"
+          >
+            <ArrowLeft size={14} className="icon-sm" />
+          </button>
+          <button
+            type="button"
+            className="tb-btn tb-icon"
+            onClick={() => run("history.forward();")}
+            title="前进"
+            aria-label="前进"
+          >
+            <ArrowRight size={14} className="icon-sm" />
+          </button>
+          <button
+            type="button"
+            className="tb-btn tb-icon"
+            onClick={() => run("location.reload();")}
+            title="刷新"
+            aria-label="刷新网页"
+          >
+            <RefreshCw size={14} className="icon-sm" />
+          </button>
+          <span className="web-pane-url" title={current}>
+            {current}
+          </span>
+          <span className="preview-toolbar-spacer" />
+          <button
+            type="button"
+            className="tb-btn"
+            onClick={openExternally}
+            title="在系统默认浏览器中打开"
+            aria-label="在系统默认浏览器中打开"
+          >
+            <ExternalLink size={14} className="icon-sm" />
+            系统浏览器
+          </button>
+        </div>
+      )}
       <div className="preview-pane-inner web-pane-host">
         {/* 占位：子 webview 正好盖在这个矩形上。 */}
         <div className="web-pane-slot" ref={hostRef} />

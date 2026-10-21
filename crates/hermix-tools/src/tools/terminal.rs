@@ -16,11 +16,17 @@ use crate::approval::{ApprovalDecision, ApprovalManager, TerminalApprovalContext
 use crate::context::{ContextAware, ToolCallContext};
 use crate::ToolRegistry;
 
-/// A 修复: terminal 工具的硬超时上限 (秒)。
+/// terminal 工具的硬超时上限 (秒)。
 /// LLM 不传 `timeout` 时兜底到此值; 也防止 backend `default_timeout`
 /// 被改大后, powershell/cmd 去无限等外部 API 而卡死整个对话。
-/// 与 `LocalBackend::default()` 的 120s 对齐。
-const TERMINAL_HARD_TIMEOUT_SECS: u64 = 120;
+///
+/// 2026-10-21：120 → 600，与 `hermix_tools::dispatch::per_tool_budget`
+/// 给 terminal 的外部预算（600s）对齐。此前内部 120s 比外部 600s 先到期，
+/// 于是"跑构建/装依赖/长测试"这类合法前台任务总在第 120 秒被掐断——
+/// 外层预算还有 480s 余量却用不上，是"长任务无法执行"的结构性原因。
+/// 更长的任务仍应走 `background: true` + 轮询（提示词已引导），
+/// 600s 只覆盖"合理的单次同步等待"。
+const TERMINAL_HARD_TIMEOUT_SECS: u64 = 600;
 
 // ---------------------------------------------------------------------------
 // Registration
@@ -311,7 +317,7 @@ impl ToolHandler for TerminalHandler {
             "timeout".into(),
             json!({
                 "type": "integer",
-                "description": "Timeout in seconds. Default and hard cap: 120 (commands are killed at the cap)."
+                "description": "Timeout in seconds. Default and hard cap: 600. Long builds/tests beyond that should run with background: true and be polled."
             }),
         );
         props.insert(

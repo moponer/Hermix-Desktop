@@ -438,24 +438,44 @@
   overflow: auto;
   background: var(--color-bg-primary);
 }
-/* 单元格底色/字色/边框全部来自源文件，这里只给没有样式的格子兜底字体。
-   网格线用 sRGB 叠加：既保留了"表格就是表格"的可读性，又不用给每个
-   单元格塞一条 DOM 描边（源文件自带边框时以源文件为准）。 */
+/* 表格是"一张白纸"，有自己的颜色世界：白底 + 黑字。
+   界面主题（尤其深色）不该渗进表格里 —— 深色界面把字色换成浅色后，
+   白纸上就是浅字：内容直接看不见，背景与文字糊成一片白。
+   单元格自己带底色时，墨色由底色亮度决定（见 workbook.ts 的 contrastInk）。
+
+   纸面这套令牌（--sheet-*）由**两端应用**定义（viewer 的 styles.css、
+   desktop 的 tokens.css）—— 共享 CSS 只用不定义，避免同一事实三处各写
+   一份（见 scripts/check-preview-layer.mjs 的 token 规则）。 */
 .preview-pane .sheet-table {
-  border-collapse: separate;
+  /* collapse：相邻格子的边框合成一条（Excel 的网格线就是一条），
+     separate 模式下每格各画各的 → 线变双倍、还会错位。 */
+  border-collapse: collapse;
   border-spacing: 0;
   table-layout: fixed;
   font-family: var(--font-sans);
   font-size: var(--text-ui);
-  line-height: var(--leading-compact);
-  background: #ffffff;
-  color: var(--color-text-primary);
+  line-height: 1.15;
+  background: var(--sheet-bg);
+  color: var(--sheet-ink);
+}
+.preview-pane .sheet-table td,
+.preview-pane .sheet-table th {
+  box-sizing: border-box;
 }
 .preview-pane .sheet-cell {
-  padding: 2px 5px;
-  overflow: hidden;
-  box-shadow: inset -1px -1px 0 0 rgb(0 0 0 / 8%);
+  padding: 1px 5px;
+  /* 网格线用**真边框**画，不用 box-shadow 假线：假线在有色底上几乎看不见，
+     而且搜索高亮一加就把整片线抹掉（"表格线有的丢失"）。源文件自带的边框
+     是内联样式，会盖掉这里的网格线 —— 与 Excel 一致（源文件优先）。 */
+  border-right: 1px solid var(--sheet-grid);
+  border-bottom: 1px solid var(--sheet-grid);
   white-space: nowrap;
+}
+/* 表格外沿不画线：Excel 只在数据区里画网格线。 */
+.preview-pane .sheet-table td:last-child { border-right: 0; }
+.preview-pane .sheet-link {
+  color: #0563c1;
+  text-decoration: underline;
 }
 .preview-pane .sheet-cell.is-hit {
   /* 命中只加内描边，不动底色 —— 底色是源文件的，一改就看不出命中的是哪块 */
@@ -472,15 +492,16 @@
   z-index: 3;
   height: 26px;
   padding: 0 5px;
-  background: var(--color-bg-tertiary);
-  color: var(--color-text-secondary);
+  background: var(--sheet-head-bg);
+  color: var(--sheet-head-fg);
   font-family: var(--font-sans);
   font-size: var(--text-tiny);
   font-weight: var(--font-weight-medium);
   line-height: 26px;
   text-align: center;
   white-space: nowrap;
-  box-shadow: inset -1px -1px 0 0 rgb(0 0 0 / 8%);
+  border-right: 1px solid var(--sheet-grid);
+  border-bottom: 1px solid var(--sheet-grid);
 }
 .preview-pane .sheet-row-head { left: 0; width: 46px; }
 .preview-pane .sheet-col-head { top: 0; }
@@ -498,7 +519,7 @@
   margin: 0 auto;
   border-style: solid;
   border-width: 0 0 9px 9px;
-  border-color: transparent transparent var(--color-text-faint) transparent;
+  border-color: transparent transparent var(--sheet-head-fg) transparent;
 }
 .preview-pane .sheet-pad { padding: 0; border: 0; }
 .preview-pane .sheet-empty-cell {

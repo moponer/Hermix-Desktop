@@ -239,7 +239,7 @@ function AppMentionInputImpl({
             onFocus={handleFocus}
             onBlur={handleBlur}
             disabled={disabled}
-            placeholder={isStreaming ? "输入消息加入队列..." : placeholder}
+            placeholder={isStreaming ? "输入消息加入队列…" : placeholder}
             data-no-border
             className="relative z-[1] w-full bg-transparent resize-none outline-none px-4 pt-3.5 pb-1.5 min-h-[72px]"
             style={{
@@ -272,7 +272,7 @@ function AppMentionInputImpl({
           }}
         >
           <div
-            className="px-3 py-2 text-[length:var(--text-meta)] font-medium uppercase tracking-wide"
+            className="px-3 py-2 text-[length:var(--text-meta)] font-medium"
             style={{ color: "var(--color-text-muted)", borderBottom: "1px solid var(--color-border-primary)" }}
           >
             {panelTitle}

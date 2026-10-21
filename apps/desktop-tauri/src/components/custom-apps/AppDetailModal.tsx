@@ -36,7 +36,8 @@ import {
 import { formatCategory, formatPermission, permHint } from "./labels";
 import { resolveAppIconEl } from "./iconResolver";
 import { CodeView } from "../CodeView";
-import { SkeletonCard } from "../ui";
+import { Button, IconButton, Modal, SkeletonCard } from "../ui";
+import { PACKAGING, SAVE, SAVED, SAVING } from "../strings";
 
 interface AppDetailModalProps {
   appId: string;
@@ -95,7 +96,7 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
       const updated = await updateCustomApp(appId, updates);
       setApp(updated);
       setEditing(false);
-      setSuccess("保存成功");
+      setSuccess(SAVED);
       onChanged();
       setTimeout(() => setSuccess(null), 2000);
     } catch (e) {
@@ -151,21 +152,31 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
 
   if (loading) {
     return (
-      <div className="modal-overlay" onClick={onClose}>
-        <div className="modal-content modal-content--wide modal-content--loading" onClick={(e) => e.stopPropagation()}>
-          <SkeletonCard lines={5} />
-        </div>
-      </div>
+      <Modal
+        open
+        onClose={onClose}
+        width="wide"
+        scrim
+        title="应用详情"
+        bodyClassName="p-5"
+      >
+        <SkeletonCard lines={5} />
+      </Modal>
     );
   }
 
   if (!app) {
     return (
-      <div className="modal-overlay" onClick={onClose}>
-        <div className="modal-content modal-content--wide" onClick={(e) => e.stopPropagation()}>
-          <div className="modal-error">应用不存在</div>
-        </div>
-      </div>
+      <Modal
+        open
+        onClose={onClose}
+        width="wide"
+        scrim
+        title="应用详情"
+        bodyClassName="p-5"
+      >
+        <div className="modal-error">应用不存在</div>
+      </Modal>
     );
   }
 
@@ -174,27 +185,117 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
   // 主题跟随，与聊天/预览两处共用同一套渲染，不另起一套 <pre>。
   const codeSource = codeFile === "app_source" ? appSource : indexHtml;
   const codeLanguage = codeFile === "app_source" ? "tsx" : "html";
+  /** 编辑态只在「代码」页存在 —— 底栏的主按钮归属按它判断。 */
+  const codeEditing = tab === "code" && editing;
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content modal-content--wide app-detail-modal" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-header">
-          <div className="modal-header__title">
-            {resolveAppIconEl(manifest, {
-              spanClassName: "modal-header__icon",
-              imgClassName: "modal-header__icon-img",
-              size: 24,
-            })}
-            <h2>{manifest.name}</h2>
-            <span className="modal-header__version">v{manifest.version}</span>
-            {is_packaged && <span className="modal-header__badge modal-header__badge--success">已打包</span>}
-          </div>
-          <button className="modal-close" onClick={onClose} aria-label="关闭">
-            <X className="icon-lg" />
-          </button>
+    /* 弹窗壳收编到 ui/Modal：焦点陷阱 / Esc / 焦点归还 / role=dialog +
+       aria-modal 一次性补齐（此前这个弹窗连 role="dialog" 都没有）。 */
+    <Modal
+      open
+      onClose={onClose}
+      width="wide"
+      scrim
+      title={
+        <span className="modal-header__title">
+          {resolveAppIconEl(manifest, {
+            spanClassName: "modal-header__icon",
+            imgClassName: "modal-header__icon-img",
+            size: 24,
+          })}
+          <span className="truncate">{manifest.name}</span>
+          <span className="modal-header__version">v{manifest.version}</span>
+          {is_packaged && <span className="modal-header__badge modal-header__badge--success">已打包</span>}
+        </span>
+      }
+      bodyClassName="flex flex-col overflow-y-auto p-0"
+      footer={
+        /* 一个底栏只允许一个主按钮（问题 47）：此前「保存」与「运行」都是
+           实心主按钮，且左右两套方向。主按钮恒在最右，其余降级
+           secondary / ghost。 */
+        <div className="flex w-full items-center justify-end gap-2">
+          {codeEditing && (
+            <Button variant="ghost" size="base" onClick={cancelEdit}>
+              取消
+            </Button>
+          )}
+          {tab === "code" && !editing && (
+            <Button
+              variant="secondary"
+              size="base"
+              icon={<Pencil className="icon-md" />}
+              onClick={() => setEditing(true)}
+            >
+              编辑代码
+            </Button>
+          )}
+          <IconButton
+            icon={<RefreshCw className={`icon-md ${loading ? "spin" : ""}`} />}
+            label="刷新"
+            shape="circle"
+            size="base"
+            variant="ghost"
+            onClick={loadApp}
+            disabled={loading}
+          />
+          {is_packaged ? (
+            <>
+              <Button
+                variant="secondary"
+                size="base"
+                icon={<RefreshCw className="icon-md" />}
+                onClick={handlePackage}
+                disabled={packaging}
+                title="重新打包为可分发到其他电脑的独立 EXE"
+              >
+                {packaging ? PACKAGING : "重新打包"}
+              </Button>
+              <Button
+                variant="secondary"
+                size="base"
+                icon={<FolderOpen className="icon-md" />}
+                onClick={handleOpenDist}
+                title="打开打包后的应用目录"
+              >
+                打开目录
+              </Button>
+            </>
+          ) : (
+            <Button
+              variant="secondary"
+              size="base"
+              icon={<Package className="icon-md" />}
+              onClick={handlePackage}
+              disabled={packaging}
+            >
+              {packaging ? PACKAGING : "打包"}
+            </Button>
+          )}
+          {/* 主按钮恒在最后一位：编辑态是「保存」，只读态是「运行」，
+              同一时刻只存在一个实心主按钮。 */}
+          <Button
+            variant={codeEditing ? "secondary" : "primary"}
+            size="base"
+            icon={<Play className="icon-md" />}
+            onClick={handleRun}
+          >
+            运行
+          </Button>
+          {codeEditing && (
+            <Button
+              variant="primary"
+              size="base"
+              icon={<Save className="icon-md" />}
+              onClick={handleSave}
+              disabled={saving}
+            >
+              {saving ? SAVING : SAVE}
+            </Button>
+          )}
         </div>
-
-        <div className="modal-tabs">
+      }
+    >
+        <div className="modal-tabs shrink-0">
           <button
             className={`modal-tab ${tab === "overview" ? "modal-tab--active" : ""}`}
             onClick={() => setTab("overview")}
@@ -218,7 +319,6 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
           </button>
         </div>
 
-        <div className="modal-body">
           {error && (
             <div className="modal-alert modal-alert--error" role="alert">
               <span className="modal-alert__text">{error}</span>
@@ -229,7 +329,7 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
                 title="关闭"
                 aria-label="关闭错误提示"
               >
-                <X className="icon-sm" strokeWidth={2} />
+                <X className="icon-sm" />
               </button>
             </div>
           )}
@@ -456,76 +556,6 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
               </section>
             </div>
           )}
-        </div>
-
-        <div className="modal-footer">
-          {tab === "code" && (
-            <div className="modal-footer__left">
-              {editing ? (
-                <>
-                  <button
-                    className="app-detail-btn app-detail-btn--primary"
-                    onClick={handleSave}
-                    disabled={saving}
-                  >
-                    <Save className="icon-md" />
-                    {saving ? "保存中..." : "保存"}
-                  </button>
-                  <button className="app-detail-btn app-detail-btn--ghost" onClick={cancelEdit}>
-                    取消
-                  </button>
-                </>
-              ) : (
-                <button className="app-detail-btn app-detail-btn--secondary" onClick={() => setEditing(true)}>
-                  <Pencil className="icon-md" /> 编辑代码
-                </button>
-              )}
-            </div>
-          )}
-          <div className="modal-footer__spacer" />
-          <button
-            className="app-detail-iconbtn"
-            onClick={loadApp}
-            disabled={loading}
-            title="刷新"
-            aria-label="刷新"
-          >
-            <RefreshCw className={`icon-md ${loading ? "spin" : ""}`} />
-          </button>
-          <button className="app-detail-btn app-detail-btn--primary" onClick={handleRun}>
-            <Play className="icon-md" /> 运行
-          </button>
-          {is_packaged ? (
-            <>
-              <button
-                className="app-detail-btn app-detail-btn--secondary"
-                onClick={handlePackage}
-                disabled={packaging}
-                title="重新打包为可分发到其他电脑的独立 EXE"
-              >
-                <RefreshCw className="icon-md" />
-                {packaging ? "打包中..." : "重新打包"}
-              </button>
-              <button
-                className="app-detail-btn app-detail-btn--secondary"
-                onClick={handleOpenDist}
-                title="打开打包后的应用目录"
-              >
-                <FolderOpen className="icon-md" /> 打开目录
-              </button>
-            </>
-          ) : (
-            <button
-              className="app-detail-btn app-detail-btn--secondary"
-              onClick={handlePackage}
-              disabled={packaging}
-            >
-              <Package className="icon-md" />
-              {packaging ? "打包中..." : "打包"}
-            </button>
-          )}
-        </div>
-      </div>
-    </div>
+    </Modal>
   );
 }

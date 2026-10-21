@@ -11,10 +11,9 @@
  */
 
 import { useEffect } from "react";
-import { createPortal } from "react-dom";
-import { clsx } from "clsx";
-import { Download, RefreshCw, AlertTriangle, CheckCircle2, X } from "lucide-react";
+import { Download, RefreshCw, AlertTriangle, CheckCircle2 } from "lucide-react";
 import { MarkdownBody } from "./MarkdownBody";
+import { Button, Modal } from "./ui";
 import type { Updater } from "../hooks/useUpdater";
 
 function fmtBytes(n: number): string {
@@ -60,131 +59,100 @@ export function UpdatePanel({ updater }: { updater: Updater }) {
     phaseLabel = "即将重启应用以完成更新…";
   }
 
-  const body = (
-    <div
-      className={clsx(
-        forced ? "fixed inset-0 z-[10000] flex items-center justify-center bg-black/60" : "fixed inset-0 z-[9999] flex items-center justify-center bg-black/40",
-      )}
-      onMouseDown={(e) => {
-        // 点遮罩关闭仅限可选更新；busy 中不关（下载别打断）。
-        if (!forced && !busy && e.target === e.currentTarget) setPanelOpen(false);
-      }}
-    >
-      <div
-        role="dialog"
-        aria-modal="true"
-        className={clsx(
-          "bg-bg-primary border border-border-secondary rounded-xl shadow-2xl w-[420px] max-w-[90vw] max-h-[80vh] flex flex-col",
-          forced && "w-[460px]",
-        )}
-      >
-        {/* 头部 */}
-        <div className="flex items-center gap-2 px-5 pt-4 pb-3">
+  const title = forced
+    ? "必须更新后才能继续使用"
+    : isLatest
+      ? "已是最新"
+      : status
+        ? `有新版本 ${status.latest_version}`
+        : "软件更新";
+
+  return (
+    <Modal
+      open
+      onClose={() => setPanelOpen(false)}
+      width={forced ? "wide" : "base"}
+      zIndex={10000}
+      scrim
+      /* 强制更新不可关；可选更新在下载中也不该被遮罩点击打断。 */
+      closeOnBackdrop={!forced && !busy}
+      closeOnEscape={!forced && !busy}
+      title={
+        <span className="flex items-center gap-2">
           {forced ? (
-            <AlertTriangle className="icon-md text-amber-500 shrink-0" />
+            <AlertTriangle className="icon-md text-[var(--color-warning)] shrink-0" />
           ) : (
             <Download className="icon-md text-accent shrink-0" />
           )}
-          <span className="flex-1 font-semibold text-text-primary">
-            {forced
-              ? "必须更新后才能继续使用"
-              : isLatest
-                ? "已是最新"
-                : status
-                  ? `有新版本 ${status.latest_version}`
-                  : "软件更新"}
-          </span>
-          {!forced && !busy && (
-            <button
-              type="button"
-              onClick={() => setPanelOpen(false)}
-              className="p-1 rounded hover:bg-bg-tertiary text-text-muted"
-              aria-label="关闭"
-            >
-              <X className="icon-sm" />
-            </button>
-          )}
-        </div>
-
-        {/* 内容 */}
-        <div className="px-5 pb-4 overflow-y-auto min-h-0 flex-1">
-          {status ? (
-            isLatest ? (
-              <div className="text-sm text-text-secondary">
-                当前版本 {status.current_version} 已是最新发布版。
+          {title}
+        </span>
+      }
+      bodyClassName="px-5 pb-4 overflow-y-auto min-h-0 flex-1"
+    >
+      {status ? (
+        isLatest ? (
+          <div className="text-sm text-text-secondary">
+            当前版本 {status.current_version} 已是最新发布版。
+          </div>
+        ) : (
+          <>
+            <div className="text-[length:var(--text-meta)] text-text-faint mb-3">
+              当前版本 {status.current_version}
+              {status.pub_date ? ` · 发布于 ${status.pub_date.slice(0, 10)}` : ""}
+            </div>
+            {status.notes ? (
+              <div className="text-sm text-text-secondary leading-[1.75] border-t border-border-secondary pt-3 [&_li]:marker:text-text-faint">
+                <MarkdownBody content={status.notes} />
               </div>
-            ) : (
-              <>
-                <div className="text-[length:var(--text-meta)] text-text-faint mb-3">
-                  当前版本 {status.current_version}
-                  {status.pub_date ? ` · 发布于 ${status.pub_date.slice(0, 10)}` : ""}
-                </div>
-                {status.notes ? (
-                  <div className="text-sm text-text-secondary leading-[1.75] border-t border-border-secondary pt-3 [&_li]:marker:text-text-faint">
-                    <MarkdownBody content={status.notes} />
-                  </div>
-                ) : null}
-              </>
-            )
-          ) : checkFailed ? (
-            <div className="text-sm text-text-secondary">
-              检查更新失败，具体原因见下方提示。
+            ) : null}
+          </>
+        )
+      ) : checkFailed ? (
+        <div className="text-sm text-text-secondary">
+          检查更新失败，具体原因见下方提示。
+        </div>
+      ) : (
+        <div className="text-sm text-text-secondary">正在检查更新…</div>
+      )}
+
+      {/* 进度区 */}
+      {busy && (
+        <div className="mt-4">
+          {phase === "downloading" && pct !== null ? (
+            <div className="h-1.5 rounded-full bg-bg-tertiary overflow-hidden">
+              <div className="h-full bg-accent transition-all" style={{ width: `${pct}%` }} />
             </div>
           ) : (
-            <div className="text-sm text-text-secondary">正在检查更新…</div>
+            <RefreshCw className="icon-sm animate-spin text-accent" />
           )}
-
-          {/* 进度区 */}
-          {busy && (
-            <div className="mt-4">
-              {phase === "downloading" && pct !== null ? (
-                <div className="h-1.5 rounded-full bg-bg-tertiary overflow-hidden">
-                  <div className="h-full bg-accent transition-all" style={{ width: `${pct}%` }} />
-                </div>
-              ) : (
-                <RefreshCw className="icon-sm animate-spin text-accent" />
-              )}
-              <div className="text-[length:var(--text-meta)] text-text-muted mt-2">{phaseLabel}</div>
-            </div>
-          )}
-
-          {error && (
-            <div className="mt-3 flex items-start gap-1.5 text-sm text-red-400">
-              <AlertTriangle className="icon-sm shrink-0 mt-0.5" />
-              <span className="min-w-0 break-words">{error}</span>
-            </div>
-          )}
+          <div className="text-[length:var(--text-meta)] text-text-muted mt-2">{phaseLabel}</div>
         </div>
+      )}
 
-        {/* 底部动作 */}
-        <div className="px-5 py-3 border-t border-border-secondary flex justify-end gap-2">
+      {error && (
+        <div className="mt-3 flex items-start gap-1.5 text-sm text-text-error">
+          <AlertTriangle className="icon-sm shrink-0 mt-0.5" />
+          <span className="min-w-0 break-words">{error}</span>
+        </div>
+      )}
+      footer={
+        <>
           {!forced && !busy && !isLatest && (
-            <button
-              type="button"
-              onClick={() => setPanelOpen(false)}
-              className="px-3 h-8 rounded text-sm text-text-secondary hover:bg-bg-tertiary"
-            >
+            <Button variant="secondary" size="base" onClick={() => setPanelOpen(false)}>
               以后再说
-            </button>
+            </Button>
           )}
           {isLatest && !busy ? (
             // 已是最新：不存在可执行的更新动作，给关闭而不是可点的下载钮。
-            <button
-              type="button"
-              onClick={() => setPanelOpen(false)}
-              className="px-4 h-8 rounded text-sm font-medium flex items-center gap-1.5 border border-border-secondary text-text-secondary hover:bg-bg-tertiary"
-            >
+            <Button variant="secondary" size="base" onClick={() => setPanelOpen(false)}>
               <CheckCircle2 className="icon-sm text-text-muted" /> 关闭
-            </button>
+            </Button>
           ) : (
-            <button
-              type="button"
+            <Button
+              variant="accent"
+              size="base"
               disabled={!status || busy || isLatest}
               onClick={() => void startUpdate()}
-              className={clsx(
-                "px-4 h-8 rounded text-sm font-medium flex items-center gap-1.5",
-                "bg-accent text-on-accent hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed",
-              )}
             >
               {busy ? (
                 <>
@@ -195,12 +163,10 @@ export function UpdatePanel({ updater }: { updater: Updater }) {
                   <Download className="icon-sm" /> 立即更新
                 </>
               )}
-            </button>
+            </Button>
           )}
-        </div>
-      </div>
-    </div>
+        </>
+      }
+    </Modal>
   );
-
-  return createPortal(body, document.body);
 }

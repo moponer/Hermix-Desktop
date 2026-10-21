@@ -1,5 +1,6 @@
 import { AlertTriangle, CheckCircle2, Loader2, ShieldAlert, ShieldCheck, TimerReset, Wrench } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { CLOSE } from "./strings";
 
 /**
  * CompactionStatus — what the agent_loop compaction pipeline is doing
@@ -136,13 +137,13 @@ const PHASE_COPY: Record<
   },
   complete: {
     icon: CheckCircle2,
-    tone: "text-success bg-success-soft border-success-soft",
+    tone: "text-text-success bg-success-soft border-success-soft",
     title: "上下文压缩：已完成",
     body: "本轮压缩已结束，新一轮对话可以继续正常进行。",
   },
   failed: {
     icon: TimerReset,
-    tone: "text-warning bg-warning-soft border-warning-soft",
+    tone: "text-text-warning bg-warning-soft border-warning-soft",
     title: "上下文压缩：本轮失败",
     body: "压缩未成功，已记录失败原因;下次触发时会再次尝试。",
   },
@@ -154,7 +155,7 @@ const STATE_COPY: Record<
 > = {
   closed: {
     icon: ShieldCheck,
-    tone: "text-success bg-success-soft border-success-soft",
+    tone: "text-text-success bg-success-soft border-success-soft",
     title: "上下文自动压缩：正常",
     body: "达到阈值时，自动用 LLM 总结中间对话以腾出空间。",
   },
@@ -166,19 +167,19 @@ const STATE_COPY: Record<
   },
   open: {
     icon: ShieldAlert,
-    tone: "text-error bg-error-soft border-error-soft",
+    tone: "text-text-error bg-error-soft border-error-soft",
     title: "上下文自动压缩：已熔断",
     body: "压缩连续失败，已停止尝试，以免继续烧 token。",
   },
   fallback: {
     icon: Wrench,
-    tone: "text-warning bg-warning-soft border-warning-soft",
+    tone: "text-text-warning bg-warning-soft border-warning-soft",
     title: "上下文自动压缩：已切换轻量裁剪",
     body: "熔断器断开，改为只删 tool_result 块以省 token,不调 LLM。",
   },
   pressure: {
     icon: AlertTriangle,
-    tone: "text-warning bg-warning-soft border-warning-soft",
+    tone: "text-text-warning bg-warning-soft border-warning-soft",
     title: "上下文使用率偏高",
     body: "即将触发自动压缩，对话脉络保留，工具输出可能丢失。",
   },
@@ -282,7 +283,7 @@ export function CompactionStatusBanner({ status, onDismiss }: CompactionStatusBa
         <button
           onClick={onDismiss}
           className="shrink-0 ml-1 p-0.5 rounded-md hover:bg-bg-active transition-colors opacity-70 hover:opacity-100"
-          title="关闭"
+          title={CLOSE}
           aria-label="关闭压缩状态提示"
         >
           ×

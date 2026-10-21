@@ -228,7 +228,7 @@ export function MemoryGraph({ nodes, edges, loading, onSelectNode }: MemoryGraph
 
   if (loading && nodes.length === 0) {
     return (
-      <div className="flex items-center justify-center h-[420px]">
+      <div className="flex items-center justify-center h-[420px]" aria-busy="true">
         <Spinner />
       </div>
     );

@@ -36,7 +36,11 @@ pub fn open_db(path: &Path) -> Result<Connection, VaultError> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| VaultError::Io(format!("创建数据目录失败: {e}")))?;
     }
-    let conn = Connection::open(path)?;
+    // Same pragmas as every other SQLite handle in the app (WAL + busy
+    // timeout) — a bare `Connection::open` here was a journal-mode drift
+    // source: two handles on one file with different journal modes.
+    let conn = hermix_store::open_connection(path, hermix_store::OpenMode::Write)
+        .map_err(|e| VaultError::Io(format!("打开 vault 数据库失败: {e}")))?;
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS vault_entries (
             id         TEXT PRIMARY KEY,

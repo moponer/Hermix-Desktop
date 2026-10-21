@@ -239,14 +239,47 @@ are verified and safe to use.";
 const WEB_AUTOMATION_GUIDANCE: &str = "\
 # 网页与自动化能力地图
 - `url_safety` — 只做链接安全策略检查，不访问页面。
-- `web_search` / `web_extract` — 搜索 + 抓取**公开**网页正文（无登录态、无 JS 交互）。
-- `browser_navigate / browser_snapshot / browser_click / browser_type / browser_screenshot / browser_close` — 完整浏览器自动化（无头虚拟窗口，用户可在应用内小窗旁观）：打开页面、点按钮、填表单、**登录网站**、截图。用户要访问/登录/操作网站时用这条线，不要只让用户手动截图。
+- `web_search` / `web_extract` — 搜索 + 抓取**公开**网页正文。**读网页内容的首选**：\
+不启动浏览器、最快、零审批；只有页面需要 JS 渲染或登录态时才降级到浏览器线。
+- 浏览器自动化由**查看器**提供（MCP 工具名带 `viewer__` 前缀，如 `viewer__browser_open`）：\
+`browser_open(url, session, headed)` — `headed=false` 无头（抓数据，默认）、`headed=true` 有头\
+（弹真实浏览器窗口，用户看得见、能接管、能自己登录）。每个 session 独立进程 + 独立 profile。\
+配套：`browser_text`（读页面文本，比截图省 token）、`browser_eval`（执行 JS）、\
+`browser_click`（坐标）、`browser_screenshot`。**需要登录的站点一律 headed=true**。
+- 桌面自动化由查看器提供：`desktop_list_windows / desktop_list_controls / desktop_click / \
+desktop_set_text / desktop_read_text / desktop_press_key`。
 - `cronjob` — 定时任务/自动化（「每天自动…」「定时提醒…」）。用户要自动化时用 cronjob，不要为此创建自定义应用。
 - `workflow` — 把跑通的流程存成带参数的可重跑工作流（用户在「自动化 → 工作流」页面一键重跑）。用户要「保存/复用这套流程」时用 workflow；跨会话的经验沉淀才用 skill。
-- **验证码**：`browser_screenshot` 截图后用 `read_image` 亲眼看图（你有原生视觉）——\
-普通字符码读出填入并让用户核对；滑块/点选类请用户看小窗口头报码。\
+- **验证码**：有头浏览器打开后 `viewer__browser_screenshot` 截图，用 `read_image` 亲眼看图（你有原生视觉）——\
+普通字符码读出填入并让用户核对；滑块/点选类请用户在浏览器窗口里自己操作。\
 不要声称「视觉识别失败」就放弃，也不要尝试绕过验证码。\
-若你的工具列表里看不到任何 browser_* 工具，说明浏览器工具集未开启——如实告知用户去 设置 → 工具集 开启 browser，不要声称「我没有浏览器能力」。";
+若你的工具列表里没有任何 `viewer__browser_*` / `viewer__webview_*`，说明查看器未运行或 MCP 未连接——\
+先用 `web_extract` 兜底，并如实告知用户打开查看器应用。";
+
+/// 渐进式工具披露（progressive disclosure）的使用规则。
+///
+/// 当 deferred 工具数 ≥ 25 时，`hermix_tools::assemble_tool_schemas` 会把
+/// 非常用工具从本轮 `tools` 数组里撤下，只留 `tool_search` /
+/// `tool_describe` / `tool_call` 三个桥。上面的能力地图仍然**点名**这些工具
+/// （产品确实有这能力），于是模型看得见名字、看不见 schema——2026-10-20 的
+/// 实测里它因此连续凭猜调用 `web_search` / `url_safety` / `browser_*`，每次
+/// 都缺必填参数，重试还是猜，整轮空转。
+///
+/// 这段规则把那条死胡同变成一条明路：先 describe 再 call，参数以 schema
+/// 为准，不猜。
+const TOOL_DISCOVERY_GUIDANCE: &str = "\
+# 工具发现规则（tools 数组里没有的工具）
+你的 `tools` 数组只包含本轮的一部分工具。**名字出现在系统提示或能力地图里、
+但不在 tools 数组里的工具，用下面的桥调用，不要凭猜参数**：
+
+1. `tool_search(query=\"关键词\")` — 按关键词找工具，返回名字与简介。
+2. `tool_describe(name=\"<工具名>\")` — 加载该工具的**完整参数 schema**（必填/可选/类型）。
+3. `tool_call(name=\"<工具名>\", arguments={...})` — 用第 2 步看到的参数名调用。
+
+硬规则：
+- **调用任何工具前，如果它不在你的 tools 数组里，先 `tool_describe`**。参数名必须来自 schema，猜的必填参数会被判 `Missing '...' parameter`。
+- 一次找不到就换关键词再 `tool_search`（中英文都可试），不要连续用同一个错参数重试。
+- 桥本身也是工具：`tool_search` / `tool_describe` / `tool_call` 不在 tools 数组里时，说明本轮没有任何工具被桥接，全部工具都已直接可见。";
 
 /// Inform the model that context compression may occur.
 const COMPRESSION_AWARENESS_GUIDANCE: &str = "\
@@ -494,6 +527,81 @@ use hermix_intelligence::{preset_for, DomainMode};
 /// system prompt. Each direction is one inline `if/else` branch
 /// extracted from the previous monolith of `build_system_prompt` —
 /// see `context::DirRoute` for the gate logic.
+/// Replace guidance bodies from `$HERMIX_HOME/guidance/<name>.md`.
+///
+/// ## Why this exists (Harness² alignment)
+///
+/// Google Research's Harness² treats **tool guidance** as one of eight
+/// harness components that the optimiser may edit (model weights stay fixed).
+/// Ours lived only in `const &str` — the single component in the set that had
+/// content but no way to change it, so the "propose an edit" step had nothing
+/// to write to. This makes the blocks editable without touching the compiled
+/// defaults.
+///
+/// ## Contract
+///
+/// - A file that exists **replaces** the block wholesale. No merging: half
+///   compiled, half file is unbounded text with no way to reason about what
+///   the model actually saw.
+/// - Missing file → compiled default, so a fresh install is byte-identical to
+///   before and deleting the file is a complete rollback.
+/// - Tag → filename drops the route suffix: `web_automation.always` →
+///   `guidance/web_automation.md`. The suffix is an *injection condition*, not
+///   part of the block's identity.
+/// - Empty/whitespace file is ignored (never silently blanks a guidance block).
+///
+/// ## Cost
+///
+/// One `stat` per injected block per turn (~20 microsecond-scale syscalls).
+/// Only a hit pays for a read. This runs once per turn as part of prompt
+/// assembly, and the alternative — a cache — would need mtime invalidation to
+/// stay correct, which costs the same syscalls.
+fn apply_guidance_overrides(dirs: &mut [SystemDir]) {
+    apply_guidance_overrides_in(&hermix_config::paths::hermix_home().join("guidance"), dirs);
+}
+
+/// The root-explicit form, so the override rules are testable without
+/// mutating the process-wide `HERMIX_HOME` (which would leak into tests
+/// running in parallel).
+fn apply_guidance_overrides_in(root: &std::path::Path, dirs: &mut [SystemDir]) {
+    if !root.is_dir() {
+        return;
+    }
+    for dir in dirs.iter_mut() {
+        let name = dir.tag.split('.').next().unwrap_or(dir.tag);
+        let path = root.join(format!("{name}.md"));
+        // stat first: the common case is a file that does not exist.
+        if !path.is_file() {
+            continue;
+        }
+        match std::fs::read_to_string(&path) {
+            Ok(body) if !body.trim().is_empty() => {
+                tracing::debug!(
+                    tag = dir.tag,
+                    path = %path.display(),
+                    "guidance block overridden from disk"
+                );
+                dir.body = body;
+            }
+            Ok(_) => {
+                tracing::warn!(
+                    tag = dir.tag,
+                    path = %path.display(),
+                    "guidance override is empty; keeping the compiled default"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    tag = dir.tag,
+                    path = %path.display(),
+                    error = %e,
+                    "guidance override unreadable; keeping the compiled default"
+                );
+            }
+        }
+    }
+}
+
 pub fn collect_directions(
     route_ctx: &RouteContext<'_>,
     project_conventions: Option<&str>,
@@ -740,6 +848,27 @@ Always close `</think>` before visible text. The think block is for reasoning, n
         DirRoute::Always,
         WEB_AUTOMATION_GUIDANCE,
     ));
+    // Progressive-disclosure bridge usage — **gated on actual visibility**.
+    //
+    // This block names `tool_search` → `tool_describe` → `tool_call`, and those
+    // three only enter the `tools` array when `assemble_tool_schemas` activates
+    // the bridge (deferred ≥ `DEFERRED_THRESHOLD`) — or when the router happens
+    // to keep them. Advertising the procedure unconditionally made the model
+    // call `tool_describe` in turns where it was not in the schema at all: on
+    // 2026-10-21 one session burned four turns on
+    // `Tool 'tool_describe' does not exist`, each rejection followed by a
+    // retry. The prompt must never describe a procedure whose steps are not
+    // callable this turn.
+    //
+    // `tool_describe` is the right probe: it is the middle step, so its absence
+    // means the chain is broken even if the other two survived routing.
+    if tool_names.contains("tool_describe") {
+        dirs.push(SystemDir::new(
+            "tool_discovery.bridge",
+            DirRoute::Always,
+            TOOL_DISCOVERY_GUIDANCE,
+        ));
+    }
     // Parallel execution discipline — model-family-agnostic. Previously the only
     // "parallel when safe" nudge lived inside GOOGLE_MODEL_OPERATIONAL_GUIDANCE
     // (gated on GoogleFamily + tool-enforcement whitelist), so non-Google models
@@ -818,6 +947,9 @@ Always close `</think>` before visible text. The think block is for reasoning, n
             }
         }
     }
+    // Last step, so every block — including ones pushed conditionally above —
+    // is eligible for an on-disk override. See `apply_guidance_overrides`.
+    apply_guidance_overrides(&mut dirs);
     dirs
 }
 
@@ -997,6 +1129,95 @@ fn build_workbench_data_summary(workbench_id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The bridge procedure must only be described when its steps are actually
+    /// callable this turn. Advertising it unconditionally made the model call
+    /// `tool_describe` where it was not in the tools array — 2026-10-21, four
+    /// turns lost to `Tool 'tool_describe' does not exist`.
+    #[test]
+    fn tool_discovery_guidance_only_appears_when_the_bridge_is_visible() {
+        let absent = std::collections::HashSet::new();
+        let ctx = RouteContext {
+            user_message: "整理一下这个目录",
+            tool_names: &absent,
+            model_name: "gpt-4o",
+            autonomous_mode: false,
+            tool_call_count: 0,
+            domain_mode: None,
+            workbench_id: None,
+        };
+        let dirs = collect_directions(&ctx, None);
+        assert!(
+            !dirs.iter().any(|d| d.tag == "tool_discovery.bridge"),
+            "桥不在本轮工具面里时不能宣传三步流程"
+        );
+
+        let mut present = std::collections::HashSet::new();
+        present.insert("tool_describe");
+        let ctx2 = RouteContext {
+            user_message: "整理一下这个目录",
+            tool_names: &present,
+            model_name: "gpt-4o",
+            autonomous_mode: false,
+            tool_call_count: 0,
+            domain_mode: None,
+            workbench_id: None,
+        };
+        let dirs2 = collect_directions(&ctx2, None);
+        assert!(
+            dirs2.iter().any(|d| d.tag == "tool_discovery.bridge"),
+            "桥可见时必须给出三步流程"
+        );
+    }
+
+    /// Harness² alignment: a guidance block must be replaceable from
+    /// `$HERMIX_HOME/guidance/<name>.md` — the one component that used to be
+    /// compiled-only. Three properties matter and are all pinned here:
+    /// the file wins outright, a missing file keeps the compiled default, and
+    /// the route suffix is not part of the filename.
+    #[test]
+    fn guidance_blocks_can_be_overridden_from_disk() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::write(root.join("web_automation.md"), "CUSTOM TOOL GUIDANCE").unwrap();
+
+        let mut dirs = vec![
+            SystemDir::new("web_automation.always", DirRoute::Always, "compiled default"),
+            SystemDir::new("memory.always", DirRoute::Always, "compiled default"),
+        ];
+        apply_guidance_overrides_in(root, &mut dirs);
+
+        assert_eq!(
+            dirs[0].body, "CUSTOM TOOL GUIDANCE",
+            "存在文件必须整体替换，且 tag 的 `.{{route}}` 后缀不进文件名"
+        );
+        assert_eq!(
+            dirs[1].body, "compiled default",
+            "没有对应文件时必须保持编译期默认——这是完整回滚路径"
+        );
+    }
+
+    /// An empty file must never blank a guidance block: a stray `touch` would
+    /// otherwise silently delete a behavioural directive.
+    #[test]
+    fn empty_guidance_file_keeps_the_compiled_default() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("memory.md"), "   \n\n").unwrap();
+
+        let mut dirs = vec![SystemDir::new("memory.always", DirRoute::Always, "compiled")];
+        apply_guidance_overrides_in(tmp.path(), &mut dirs);
+        assert_eq!(dirs[0].body, "compiled");
+    }
+
+    /// A guidance directory that does not exist is the fresh-install shape:
+    /// nothing changes, and no warning is emitted.
+    #[test]
+    fn missing_guidance_dir_is_a_no_op() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut dirs = vec![SystemDir::new("memory.always", DirRoute::Always, "compiled")];
+        apply_guidance_overrides_in(&tmp.path().join("nope"), &mut dirs);
+        assert_eq!(dirs[0].body, "compiled");
+    }
 
     #[test]
     fn extracts_conventions_section_by_heading() {

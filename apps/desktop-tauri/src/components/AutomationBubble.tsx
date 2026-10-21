@@ -35,7 +35,7 @@ export function AutomationBubble({ message }: { message: ChatMessage }) {
 
   return (
     <div className="my-2 h-enter">
-      <div className="rounded-lg border border-border-subtle bg-surface-raised/40">
+      <div className="rounded-lg bg-surface-raised/40">
         <button
           type="button"
           onClick={() => hasBody && setOpen((v) => !v)}

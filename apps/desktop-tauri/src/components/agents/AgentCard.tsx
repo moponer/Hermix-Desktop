@@ -1,5 +1,6 @@
 import { Play, Edit3, Trash2 } from "lucide-react";
 import type { AgentPersona } from "./types";
+import { DELETE } from "../strings";
 
 interface AgentCardProps {
   agent: AgentPersona;
@@ -89,10 +90,10 @@ export function AgentCard({ agent, onEdit, onDelete, onTest }: AgentCardProps) {
         </button>
         <button
           onClick={onDelete}
-          title="删除"
+          title={DELETE}
           className="p-1.5 rounded-lg hover:bg-error-soft"
           style={{ color: "var(--color-btn-ghost-text)" }}
-          aria-label="删除">
+          aria-label={DELETE}>
           <Trash2 className="icon-sm" />
         </button>
       </div>

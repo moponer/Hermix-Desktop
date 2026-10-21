@@ -15,6 +15,7 @@ import {
   Funnel, FunnelX, FileSearch,
   ChevronRight, HardDrive, ExternalLink, Sparkles, X,
   Monitor, Moon, Sun, Activity, Info, LogOut, Settings2, Pencil, List, Globe,
+  PanelLeftClose, PanelLeftOpen, PanelsTopLeft, Copy,
 } from "lucide-react";
 import { FileTypeIcon, FolderTypeIcon } from "@hermix/preview/FileTypeIcon";
 import { resolveKind } from "@hermix/preview";
@@ -70,6 +71,8 @@ const LAST_PATH_KEY = "hermix.viewer.lastPath";
 const DRIVES_TIMEOUT_MS = 1500;
 /** 栏宽持久化键。 */
 const LAYOUT_KEY = "hermix.viewer.layout";
+/** 中部文件列表收起状态（预览放大用）。 */
+const LIST_COLLAPSED_KEY = "hermix.viewer.listCollapsed";
 /** 列表排序方式持久化键（右键菜单可切）。 */
 const SORT_KEY = "hermix.viewer.sort";
 /** 视图模式：纯净（只预览）/ 重量（资源管理器 + 预览 + AI + 工具）。 */
@@ -220,6 +223,29 @@ function splitPath(p: string): string[] {
 }
 
 /**
+ * 地址栏两段式拆分：主标识（保留）+ 余下部分（先省略）。
+ *
+ * 浏览器把「主机」加重、路径压暗，因为主机决定「这是谁」；文件同理，
+ * 文件名比它所在的目录重要。窄窗口里两段都放不下时，先牺牲次要那段，
+ * 主标识用省略号保宽度。
+ */
+function splitAddress(value: string, web: boolean): { lead: string; tail: string } {
+  if (web) {
+    try {
+      const u = new URL(value);
+      const rest = `${u.pathname}${u.search}${u.hash}`;
+      return { lead: u.host, tail: rest === "/" ? "" : rest };
+    } catch {
+      return { lead: value, tail: "" };
+    }
+  }
+  const cut = Math.max(value.lastIndexOf("\\"), value.lastIndexOf("/"));
+  return cut >= 0
+    ? { lead: value.slice(cut + 1), tail: value.slice(0, cut + 1) }
+    : { lead: value, tail: "" };
+}
+
+/**
  * 从 DOM 元素的 data-ctx 系列属性还原右键落点。
  *
  * 组件只负责标属性（data-ctx / data-ctx-path / data-ctx-name /
@@ -354,6 +380,29 @@ export function App() {
   // —— 栏宽布局（可拖拽；文件列表按比例，窗口变大自动铺满） ——
   const [layout, setLayout] = useState<Layout>(readLayout);
 
+  /**
+   * 中部文件列表是否收起。
+   *
+   * 收起后预览区独占剩余宽度、内容居中 —— 文档、表格、PDF 这类需要"看得
+   * 清楚"的东西在两侧夹着列表时永远嫌小。这个开关放在预览区上沿（标签栏
+   * 那一行），就是"预览模块"的一部分。
+   */
+  const [listCollapsed, setListCollapsed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(LIST_COLLAPSED_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(LIST_COLLAPSED_KEY, listCollapsed ? "1" : "0");
+    } catch {
+      /* 记不住也就下次不记住，不阻塞 */
+    }
+  }, [listCollapsed]);
+
   // —— 视图模式：纯净（只预览）/ 重量（资源管理器 + 预览 + AI + 工具） ——
   const [mode, setMode] = useState<ViewerMode>("heavy");
   const [showHidden, setShowHidden] = useState(false);
@@ -385,8 +434,15 @@ export function App() {
   /** 垂直标签列表（标签太多时点开挑）。 */
   const [tabListOpen, setTabListOpen] = useState(false);
   const tabbarRef = useRef<HTMLDivElement | null>(null);
-  /** 当前激活的标签（预览区、标题栏、菜单都要用）。 */
+  /** 当前激活的标签（预览区、顶栏地址栏、菜单都要用）。 */
   const active = tabs.find((t) => t.id === activeTabId) ?? null;
+  /**
+   * 网页标签的**实时**地址。
+   *
+   * 标签的 path 是「打开时那个地址」；页面里点链接跳走后，Rust 侧会推
+   * `web-navigated`。地址栏必须跟着变——否则显示的是已经不在的页面。
+   */
+  const [webUrl, setWebUrl] = useState<string | null>(null);
 
   /**
    * 活动标签始终完整可见。
@@ -422,6 +478,27 @@ export function App() {
   const [forwardStack, setForwardStack] = useState<string[]>([]);
 
   // —— 右键菜单（全局拦截原生右键，落点由 data-ctx 属性决定） ——
+  /**
+   * 菜单展开计数 → 网页子 webview 让位。
+   *
+   * 网页是**独立的子 webview（独立 HWND）**，永远画在父 webview 的 DOM
+   * 之上 —— 不是同一层的东西，CSS 的 z-index 根本管不到它。菜单一旦展开
+   * 到内容区（标题栏菜单、右键菜单都会），就被这块网页整个盖住。
+   *
+   * 所以：菜单展开时把网页 **hide**（不是 close —— 关掉会丢页面状态、
+   * 滚动位置、表单内容），全部收起后再 show 回来。用计数而不是布尔：
+   * 两个菜单可能同时开着。
+   */
+  const menuDepthRef = useRef(0);
+  const setMenuOpen = useCallback((open: boolean) => {
+    const next = Math.max(0, menuDepthRef.current + (open ? 1 : -1));
+    const changed = next !== menuDepthRef.current;
+    menuDepthRef.current = next;
+    if (changed) {
+      void invoke("web_set_visible", { visible: next === 0 }).catch(() => undefined);
+    }
+  }, []);
+
   const [menu, setMenu] = useState<{
     x: number;
     y: number;
@@ -485,6 +562,10 @@ export function App() {
       // 否则用户看到的是一块没有标签的网页浮在界面上。
       await listen<string>("web-opened", (e) => {
         openWebTab(e.payload);
+      });
+      // 页面内跳转 → 顶栏地址栏同步（否则地址栏停在打开时那个网址）。
+      await listen<string>("web-navigated", (e) => {
+        setWebUrl(e.payload);
       });
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1251,8 +1332,9 @@ export function App() {
         ? f.value.slice(f.selectionStart ?? 0, f.selectionEnd ?? 0)
         : "";
       setMenu({ x, y, target, viaKeyboard, fieldSelection });
+      setMenuOpen(true);
     },
-    [],
+    [setMenuOpen],
   );
 
   useEffect(() => {
@@ -1347,7 +1429,10 @@ export function App() {
   // 菜单开着时滚动页面：菜单是固定定位的，不跟着走——直接关掉。
   useEffect(() => {
     if (!menu) return undefined;
-    const close = () => setMenu(null);
+    const close = () => {
+    setMenu(null);
+    setMenuOpen(false);
+  };
     document.addEventListener("scroll", close, true);
     return () => document.removeEventListener("scroll", close, true);
   }, [menu]);
@@ -1360,11 +1445,11 @@ export function App() {
   }, []);
 
   const copyPath = useCallback(
-    (path: string) => {
+    (path: string, okText = "路径已复制") => {
       if (!path) return;
       void viewerFileSource.copyText?.(path).then((r) => {
         if (!r) return;
-        if (r.ok) notify("路径已复制");
+        if (r.ok) notify(okText);
         else notify(r.message ?? "复制失败", "err");
       });
     },
@@ -1833,14 +1918,37 @@ export function App() {
     up,
   ]);
 
-  // 标题栏副标题：纯净模式看当前文件，重量模式看当前目录。
-  const titleSubject =
-    mode === "pure"
-      ? active?.name
-      : currentPath
-        ? (splitPath(currentPath).pop() ?? currentPath)
-        : undefined;
-  const titleSubjectFull = mode === "pure" ? active?.path : (currentPath ?? undefined);
+  // 窗口标题（任务栏 / Alt+Tab）承载当前文件，自绘标题栏只放应用名：
+  // 标题栏是「窗口身份」，地址栏是「你在哪」，同一串地址不该出现两遍。
+  const windowSubject =
+    mode === "pure" ? active?.name : currentPath ? (splitPath(currentPath).pop() ?? currentPath) : undefined;
+  useEffect(() => {
+    void getCurrentWindow()
+      .setTitle(windowSubject ? `${windowSubject} — Hermix 文件查看器` : "Hermix 文件查看器")
+      .catch(() => undefined);
+  }, [windowSubject]);
+
+  // 切标签 → 网页地址回到该标签自己的地址（之后由 web-navigated 更新）。
+  useEffect(() => {
+    setWebUrl(active?.web ? active.path : null);
+  }, [active?.id, active?.path, active?.web]);
+
+  /** 顶栏地址栏显示的完整地址（网页取实时地址，文件取路径）。 */
+  const addressValue = active ? (active.web ? (webUrl ?? active.path) : active.path) : null;
+  const address = useMemo(
+    () => (addressValue ? splitAddress(addressValue, !!active?.web) : null),
+    [addressValue, active?.web],
+  );
+
+  const copyAddress = useCallback(() => {
+    if (!addressValue) return;
+    copyPath(addressValue, active?.web ? "网址已复制" : "路径已复制");
+  }, [addressValue, active?.web, copyPath]);
+
+  /** 顶栏导航按钮：与 WebPane 里同一条通道（操作那个子 webview）。 */
+  const runWeb = useCallback((script: string) => {
+    void invoke("web_exec", { script }).catch(() => undefined);
+  }, []);
 
   return (
     <div
@@ -1856,10 +1964,9 @@ export function App() {
     >
       <TitleBar
         title="Hermix 文件查看器"
-        subject={titleSubject}
-        subjectTitle={titleSubjectFull}
         menus={menus}
         onMenuCommand={onMenuCommand}
+        onMenuOpenChange={setMenuOpen}
       />
       {sysOpen && <SystemPanel onClose={() => setSysOpen(false)} />}
       {browserOpen && <BrowserPanel onClose={() => setBrowserOpen(false)} />}
@@ -1996,36 +2103,91 @@ export function App() {
 
       {mode === "pure" && (
         <header className="pure-bar">
-          {active ? (
-            <>
-              <FileTypeIcon name={active.name} size={16} />
-              <span className="pure-name" title={active.path}>
-                {active.name}
-              </span>
-            </>
+          {/* 左：网页导航。文件预览没有历史栈，这一格留空（网格保证地址栏仍居中）。 */}
+          {active?.web ? (
+            <div className="pure-nav">
+              <button
+                type="button"
+                className="tb-btn tb-icon"
+                onClick={() => runWeb("history.back();")}
+                title="后退"
+                aria-label="后退"
+              >
+                <ArrowLeft className="icon-sm" />
+              </button>
+              <button
+                type="button"
+                className="tb-btn tb-icon"
+                onClick={() => runWeb("history.forward();")}
+                title="前进"
+                aria-label="前进"
+              >
+                <ArrowRight className="icon-sm" />
+              </button>
+              <button
+                type="button"
+                className="tb-btn tb-icon"
+                onClick={() => runWeb("location.reload();")}
+                title="刷新"
+                aria-label="刷新网页"
+              >
+                <RefreshCw className="icon-sm" />
+              </button>
+            </div>
           ) : (
-            <span className="pure-name">未打开文件</span>
+            <span className="pure-nav" aria-hidden="true" />
           )}
-          <div className="toolbar-spacer" />
-          <button
-            className="tb-btn"
-            disabled={!active}
-            onClick={() => {
-              if (active) void viewerFileSource.openWithSystem?.(active.path);
-            }}
-            title="用系统默认程序打开"
-          >
-            <ExternalLink />
-            系统打开
-          </button>
-          <button
-            className="tb-btn"
-            onClick={() => switchMode("heavy")}
-            title="切到重量模式（资源管理器 + AI 协助）"
-          >
-            <HardDrive />
-            重量模式
-          </button>
+
+          {/* 中：地址栏。只读地址 → 整颗药丸就是「复制地址」。 */}
+          {active && address ? (
+            <button
+              type="button"
+              className="pure-location"
+              onClick={copyAddress}
+              title={`${addressValue}\n点击复制${active.web ? "网址" : "路径"}`}
+              aria-label={`复制地址：${addressValue}`}
+            >
+              {active.web ? (
+                <Globe className="loc-icon icon-sm" aria-hidden="true" />
+              ) : (
+                <FileTypeIcon name={active.name} size={14} className="loc-icon" />
+              )}
+              <span className="loc-lead">{address.lead}</span>
+              {address.tail && <span className="loc-tail">{address.tail}</span>}
+              <Copy className="loc-copy icon-sm" aria-hidden="true" />
+            </button>
+          ) : (
+            <span className="pure-location is-empty">
+              <FileSearch className="loc-icon icon-sm" aria-hidden="true" />
+              未打开文件
+            </span>
+          )}
+
+          {/* 右：动作。图标与文字同重（14px），不是把 24px 图标硬塞进 28px 按钮。 */}
+          <div className="pure-actions">
+            <button
+              className="tb-btn"
+              disabled={!active}
+              onClick={() => {
+                // 网页标签要打开**当前**这一页，不是打开时那一页。
+                if (addressValue) void viewerFileSource.openWithSystem?.(addressValue);
+              }}
+              title="用系统默认程序打开"
+              aria-label="用系统默认程序打开"
+            >
+              <ExternalLink className="icon-sm" />
+              系统打开
+            </button>
+            <button
+              className="tb-btn"
+              onClick={() => switchMode("heavy")}
+              title="切到重量模式（资源管理器 + AI 协助）"
+              aria-label="切到重量模式"
+            >
+              <PanelsTopLeft className="icon-sm" />
+              重量模式
+            </button>
+          </div>
         </header>
       )}
 
@@ -2099,6 +2261,8 @@ export function App() {
 
         <Resizer onDelta={onSbDelta} label="调整侧栏宽度" />
 
+        {!listCollapsed && (
+        <>
         <section className="explorer" data-ctx="explorer">
           {error ? (
             <div className="explorer-error">
@@ -2168,12 +2332,16 @@ export function App() {
         <Resizer onDelta={onExDelta} label="调整文件列表宽度" />
         </>
         )}
+        </>
+        )}
 
         <section className={`preview ${mode === "pure" ? "is-pure" : ""}`}>
           {/* 标签条只在有标签时出现：空着的时候留一条灰条 + 一句
               "单击文件即可预览"，和下面的空状态说的是同一件事（同一屏
-              说两遍）。空状态的文案已经覆盖了"单击"和"拖入"。 */}
-          {tabs.length > 0 && (
+              说两遍）。空状态的文案已经覆盖了"单击"和"拖入"。
+              例外：文件列表已收起时这一行仍然要留着 —— 收起/展开的按钮
+              在这一行，没有它用户就被困在"看不到列表也点不回来"的状态。 */}
+          {(tabs.length > 0 || listCollapsed) && (
           <div className="tabbar-wrap">
             <div className="tabbar" ref={tabbarRef}>
               {tabs.map((t) => (
@@ -2245,6 +2413,23 @@ export function App() {
                 ))}
               </div>
             )}
+            {/* 收起 / 展开中部文件列表：预览区因此能占满宽度、内容居中。
+                放在标签栏这一行 —— 它服务的是预览区，就该长在预览区的边上，
+                而不是藏在某个菜单里。 */}
+            <button
+              type="button"
+              className={listCollapsed ? "tab-list-btn is-active" : "tab-list-btn"}
+              onClick={() => setListCollapsed((v) => !v)}
+              title={
+                listCollapsed
+                  ? "展开文件列表（预览区恢复三栏）"
+                  : "收起文件列表（预览区占满宽度、居中显示）"
+              }
+              aria-label={listCollapsed ? "展开文件列表" : "收起文件列表"}
+              aria-pressed={listCollapsed}
+            >
+              {listCollapsed ? <PanelLeftOpen className="icon-sm" /> : <PanelLeftClose className="icon-sm" />}
+            </button>
           </div>
           )}
           <div
@@ -2264,7 +2449,8 @@ export function App() {
                 </p>
               </div>
             ) : active.web ? (
-              <WebPane key={active.id} url={active.path} />
+              // 纯净模式的导航与网址在顶部地址栏里，网页不再自带一条工具条。
+              <WebPane key={active.id} url={active.path} chrome={mode !== "pure"} />
             ) : (
               <Suspense fallback={<div className="preview-pane" />}>
                 <PreviewHost
@@ -2275,6 +2461,7 @@ export function App() {
                   isDark={theme === "dark"}
                   canEdit={mode === "heavy"}
                   editRequest={editRequest}
+                  showName={mode !== "pure"}
                 />
               </Suspense>
             )}

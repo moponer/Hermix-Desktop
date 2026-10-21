@@ -62,6 +62,20 @@
   /* Accent — 主行动专用（松墨绿暗色提亮档） */
   --color-accent: #6fae94;
   --color-on-accent: #14201b;
+  /* accent 的 soft 档（2026-10-21 补齐，此前完全漏覆盖）：
+     tokens.css 里是「accent 混白」——那是为白纸面调的。暗底上混白会翻成
+     近白亮块，实测表现为：外观页选中的选择卡变成白底、preview 的行内代码
+     与引用块变成白底浅字（直接读不出来）、::selection 选区变成白底浅字。
+     这里改为「accent 混纸面底」：同样的极淡染色语义，在暗底上不反色。
+     对比度（WCAG，accent 文字 #6fae94 落在 soft 底上）：
+       soft        #2a332f → 5.0:1
+       soft-strong #2d3934 → 4.6:1
+     均过 4.5:1（check-theme-tokens 的 contrast 规则按此判定）。 */
+  --color-accent-soft: color-mix(in srgb, var(--color-accent) 14%, var(--color-bg-input));
+  --color-accent-soft-strong: color-mix(in srgb, var(--color-accent) 18%, var(--color-bg-input));
+  /* accent-line：恒暗底浮层的可见强调线。三套主题取值一致 —— 它的语义
+     就是「暗底上的亮线」，不随暗色主题反色。 */
+  --color-accent-line: color-mix(in srgb, var(--color-accent) 18%, white);
 
   /* Link — 回归品牌绿系（陶土红残留清零） */
   --color-link: #86c0a8;
@@ -76,7 +90,13 @@
   --color-error-soft: #262020;
   --color-warning: #d3a34c;
   --color-warning-soft: #2b2519;
-  --color-text-warning: #d3a34c;
+
+  /* 语义四色的「文字安全档」——原始档给图标/描边/填充，12px 以下的小字
+     一律用这些。暗色主题下原始值本身已达标，故与原始档同值。 */
+  --color-text-success: #84b383;   /* 7.68 / 6.30 */
+  --color-text-warning: #d3a34c;   /* 7.99 / 6.60 */
+  --color-text-error: #e06b52;     /* 5.61 / 4.88 */
+  --color-text-info: #8a9aa8;      /* 6.38 / 5.21 */
 
   /* Tailwind 原生色槽 → 语义令牌重定向（保持，跟随本主题四色组） */
   --color-red-200:      color-mix(in srgb, var(--color-error) 65%, transparent);

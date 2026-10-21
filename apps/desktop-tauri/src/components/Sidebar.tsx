@@ -38,6 +38,7 @@ import { UserMenuPopover } from "./UserMenuPopover";
 import { UpdatePanel } from "./UpdatePanel";
 import { useUpdater } from "../hooks/useUpdater";
 import { useChannelsStatus } from "../hooks/useChannelsStatus";
+import { CANCEL, COPY_FAILED, NEW_CHAT, failure } from "./strings";
 
 interface SidebarProps {
   page: NavPage;
@@ -295,10 +296,10 @@ export function Sidebar({
   /* ── 子项 / 项目组菜单构造器 ── */
   // 单条会话菜单（参考图 5）：重命名 / 置顶 / 归档 / 删除 — 无分割线
   const sessionMenu = (s: Session): MenuItemSpec[] => [
-    { key: "rename", label: "重命名", icon: Pencil, onClick: () => promptRenameSession(s.id, s.title || "新建对话") },
+    { key: "rename", label: "重命名", icon: Pencil, onClick: () => promptRenameSession(s.id, s.title || NEW_CHAT) },
     { key: "pin", label: isPinned(s.id, "session") ? "取消置顶" : "置顶", icon: Pin, onClick: () => togglePin(s.id, "session") },
     { key: "archive", label: isArchived(s.id, "session") ? "取消归档" : "归档", icon: Archive, onClick: () => toggleArchive(s.id, "session") },
-    { key: "delete", label: "删除", icon: Trash2, onClick: () => requestDelete(s.id, s.title || "新建对话", "将清理该对话的全部消息记录。", () => onDeleteSession(s.id)), danger: true },
+    { key: "delete", label: "删除", icon: Trash2, onClick: () => requestDelete(s.id, s.title || NEW_CHAT, "将清理该对话的全部消息记录。", () => onDeleteSession(s.id)), danger: true },
   ];
 
   // 项目组容器行菜单（参考图 4）：新建会话 / 重命名项目 / 置顶项目 / 移除 / 在文件资源管理器中打开 / 复制路径 — 无分割线
@@ -316,7 +317,7 @@ export function Sidebar({
   const handleCopy = useCallback(async (text: string, successMsg: string) => {
     const ok = await copyText(text);
     if (ok) toastSuccess(successMsg);
-    else toastError("复制失败，请检查剪贴板权限");
+    else toastError(failure(COPY_FAILED, "请手动选中内容后复制。"));
   }, []);
 
   const promptRenameSession = useCallback((id: string, current: string) => {
@@ -327,10 +328,10 @@ export function Sidebar({
         try {
           const ok = await api.renameSession(id, next);
           if (ok) toastSuccess("已重命名");
-          else toastError("重命名失败");
+          else toastError(failure("重命名失败", "请重试。"));
         } catch (e) {
           console.error("[Sidebar] rename session failed", e);
-          toastError("重命名失败");
+          toastError(failure("重命名失败", "请重试。"));
         }
       },
     });
@@ -381,11 +382,11 @@ export function Sidebar({
           type="button"
           onClick={onNewChat}
           className="nav-item nav-item-primary"
-          title="新建对话"
-          aria-label="新建对话"
+          title={NEW_CHAT}
+          aria-label={NEW_CHAT}
         >
           <Plus className="icon-md" />
-          <span>新建对话</span>
+          <span>{NEW_CHAT}</span>
         </button>
       </nav>
 
@@ -423,7 +424,7 @@ export function Sidebar({
         <div className="sidebar-section" style={{ flexShrink: 0, marginBottom: 0 }}>
           <div className="flex items-center gap-1.5 px-3 pb-1 pt-2">
             <Bot className="icon-sm shrink-0 text-text-faint" />
-            <span className="text-[length:var(--text-tiny,11px)] font-medium uppercase tracking-wide text-text-faint">
+            <span className="text-[length:var(--text-tiny,11px)] font-medium text-text-faint">
               远程助手
             </span>
             {onOpenSettings && (
@@ -559,7 +560,7 @@ export function Sidebar({
                                 {IM_SOURCE_LABEL[imSourceOf(s.id)!]}
                               </span>
                             )}
-                            <span className={clsx("truncate-1", isRemoving && "opacity-60")}>{s.title || "新建对话"}</span>
+                            <span className={clsx("truncate-1", isRemoving && "opacity-60")}>{s.title || NEW_CHAT}</span>
                             <span className="sidebar-row-meta">{formatSidebarTime(s.updated_at)}</span>
                             {isPinned(s.id, "session") && <Pin className="icon-xs sidebar-row-pin" />}
                           </button>
@@ -653,7 +654,7 @@ export function Sidebar({
                                     {IM_SOURCE_LABEL[imSourceOf(s.id)!]}
                                   </span>
                                 )}
-                                  <span className={clsx("truncate-1", psRemoving && "opacity-60")}>{s.title || "新建对话"}</span>
+                                  <span className={clsx("truncate-1", psRemoving && "opacity-60")}>{s.title || NEW_CHAT}</span>
                                   <span className="sidebar-row-meta">{formatSidebarTime(s.updated_at)}</span>
                                   {isPinned(s.id, "session") && <Pin className="icon-xs sidebar-row-pin" />}
                                 </button>
@@ -1000,7 +1001,7 @@ function RenameDialog({
     <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
       <button
         type="button"
-        aria-label="取消"
+        aria-label={CANCEL}
         onClick={onCancel}
         className="absolute inset-0 bg-black/40 backdrop-blur-sm"
       />
@@ -1014,9 +1015,9 @@ function RenameDialog({
         <div className="flex items-start gap-3 px-5 py-4 border-b border-border-subtle">
           <div
             className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
-            style={{ background: "hsla(210, 70%, 55%, 0.12)" }}
+            style={{ background: "var(--color-accent-soft)" }}
           >
-            <Pencil className="icon-md" style={{ color: "hsl(210, 70%, 50%)" }} />
+            <Pencil className="icon-md" style={{ color: "var(--color-accent)" }} />
           </div>
           <div className="flex-1 min-w-0">
             <h2 className="text-body font-bold text-text-primary">{state.title}</h2>
@@ -1083,7 +1084,7 @@ function DeleteConfirmDialog({
     <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
       <button
         type="button"
-        aria-label="取消"
+        aria-label={CANCEL}
         onClick={onCancel}
         className="absolute inset-0 bg-black/40 backdrop-blur-sm"
       />
@@ -1097,9 +1098,9 @@ function DeleteConfirmDialog({
         <div className="flex items-start gap-3 px-5 py-4 border-b border-border-subtle">
           <div
             className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
-            style={{ background: "hsla(150, 60%, 50%, 0.12)" }}
+            style={{ background: "var(--color-success-soft)" }}
           >
-            <Trash2 className="icon-md" style={{ color: "hsl(150, 60%, 45%)" }} />
+            <Trash2 className="icon-md" style={{ color: "var(--color-text-success)" }} />
           </div>
           <div className="flex-1 min-w-0">
             <h2 className="text-body font-bold text-text-primary">{state.title}</h2>
@@ -1127,9 +1128,9 @@ function DeleteConfirmDialog({
             onClick={onConfirm}
             className={clsx(
               "flex items-center gap-1.5 px-4 py-2 rounded-lg text-ui font-bold",
-              "text-white transition-opacity hover:opacity-90",
+              "transition-opacity hover:opacity-90",
             )}
-            style={{ background: "hsl(0, 70%, 50%)" }}
+            style={{ background: "var(--color-error)", color: "var(--color-on-error)" }}
           >
             删除
           </button>

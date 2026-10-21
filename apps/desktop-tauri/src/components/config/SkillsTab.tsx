@@ -7,6 +7,7 @@ import { CATEGORY_LABELS } from "./toolTabsData";
 import { SkillCard } from "./SkillCard";
 import { MgmtTag } from "./MgmtTag";
 import { SearchBar, EmptyHint, SkeletonGrid, SummaryBar } from "./toolTabsShared";
+import { ALL, ENABLED, failure } from "../strings";
 
 // ── Skills tab: GET /api/skills + toggle ────────────────────────────
 
@@ -24,7 +25,7 @@ export function SkillsTab({ query, onQuery }: { query: string; onQuery: (q: stri
       const list = await api.getSkills();
       setSkills(list);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "加载技能失败");
+      setError(failure("加载技能失败", "请重试。", e instanceof Error ? e.message : undefined));
     } finally {
       setLoading(false);
     }
@@ -115,7 +116,7 @@ export function SkillsTab({ query, onQuery }: { query: string; onQuery: (q: stri
             }`}
             style={catFilter === null ? { background: "var(--color-btn-primary-bg)" } : undefined}
           >
-            全部 <span className="ml-0.5 tabular-nums opacity-65">{byQuery.length}</span>
+            {ALL} <span className="ml-0.5 tabular-nums opacity-65">{byQuery.length}</span>
           </button>
           {categoryOrder.map((c) => (
             <button
@@ -139,12 +140,12 @@ export function SkillsTab({ query, onQuery }: { query: string; onQuery: (q: stri
         <SummaryBar
           total={skills.length}
           enabled={enabledCount}
-          enabledLabel="已启用"
+          enabledLabel={ENABLED}
           totalLabel="个技能"
         />      )}
 
       {error && (
-        <div className="mb-4 px-3 py-2 rounded-lg bg-bg-card text-[length:var(--text-meta)] text-error">
+        <div className="mb-4 px-3 py-2 rounded-lg bg-bg-card text-[length:var(--text-meta)] text-text-error">
           {error}
         </div>
       )}

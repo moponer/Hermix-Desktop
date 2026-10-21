@@ -10,11 +10,26 @@
 //      rotate（用**最终页号**）。
 //   3. 「最终页号」= 该项在列表里的下标 + 1。
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { ChevronUp, ChevronDown, RotateCw, Save, FolderOpen, FilePlus2, Wrench } from "lucide-react";
+import { ChevronUp, ChevronDown, RotateCw, Save, FolderOpen, FilePlus2, Wrench, MessageSquarePlus } from "lucide-react";
+import * as pdfjsLib from "pdfjs-dist";
+import type { PDFDocumentProxy, PDFPageProxy, PageViewport } from "pdfjs-dist";
+import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
+import { standardFontDataUrl } from "@hermix/preview";
 import type { FileSource } from "@hermix/preview";
 import { PdfToolsDialog } from "./PdfToolsDialog";
+import { SignaturePad } from "./SignaturePad";
+import { PdfTextPicker, type PickedText } from "./PdfTextPicker";
+import {
+  AnnotCanvas,
+  AnnotTools,
+  toWirePayload,
+  type AnnotTool,
+  type PendingAnnot,
+} from "./PdfAnnotEditor";
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
 
 /** 一个页面项：原页号（1-based）或空白页（source = null）。 */
 interface PageEntry {
@@ -37,6 +52,8 @@ interface SaveResult {
   encodingUsed: string | null;
   /** 实际替换的处数（仅文本替换有值）。 */
   replaced?: number | null;
+  /** 需要如实告诉用户的话（例如"旧字未能真删除"）。 */
+  note?: string | null;
 }
 
 /** 与 Rust `PdfOp` 对应（serde tag = "op"，camelCase 变体名）。 */
@@ -72,8 +89,152 @@ export function PdfPageEditor({
   const [replacePage, setReplacePage] = useState(1);
   const [replaceFrom, setReplaceFrom] = useState("");
   const [replaceTo, setReplaceTo] = useState("");
+  // ── 批注（便签）──
+  const [annotText, setAnnotText] = useState("");
+  const [annotPoint, setAnnotPoint] = useState<{ x: number; y: number } | null>(null);
+  // ── 页面标注（自由文字 / 高亮 / 墨迹）──
+  const [editMode, setEditMode] = useState<"pages" | "annot" | "text">("pages");
+  /** 「改字」模式：当前选中的文本项。 */
+  const [picked, setPicked] = useState<(PickedText & { id: string }) | null>(null);
+  const [newText, setNewText] = useState("");
+  const [tool, setTool] = useState<AnnotTool>("text");
+  const [annots, setAnnots] = useState<PendingAnnot[]>([]);
+  const [selectedAnnot, setSelectedAnnot] = useState<string | null>(null);
+  /** 已选的图章图片（路径给 Rust，URL 给前端预览）。 */
+  const [stampImage, setStampImage] = useState<{ path: string; url: string } | null>(null);
+  /** 手写好的签名（base64 给 Rust，URL 给前端预览）。 */
+  const [signature, setSignature] = useState<{ base64: string; url: string } | null>(null);
+  /** 签名域的名字（写进 PDF 的 /T）。 */
+  const [fieldName, setFieldName] = useState("签名");
+  const [padOpen, setPadOpen] = useState(false);
+  /** OCR 产出的文件路径（可打开）。 */
+  const [ocrOut, setOcrOut] = useState<string | null>(null);
+  // ── 本页文字清单（点一下就能填进「原文」，不用手打全串）──
+  const [textItems, setTextItems] = useState<string[]>([]);
+  const [pdfDoc, setPdfDoc] = useState<PDFDocumentProxy | null>(null);
+  const docRef = useRef<PDFDocumentProxy | null>(null);
+  const taskRef = useRef<ReturnType<typeof pdfjsLib.getDocument> | null>(null);
+  const pageRef = useRef<PDFPageProxy | null>(null);
+  const viewportRef = useRef<PageViewport | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
   // ── 文档工具（合并 / 裁剪 / 水印 / 页码 / 信息 / 密码）──
   const [toolsOpen, setToolsOpen] = useState(false);
+
+  // 读一份 PDF 到 pdf.js：批注要"点哪放哪"，文字清单也要靠它的文本层。
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const res = await source.readBytes(path);
+      if (!res.ok || cancelled) return;
+      try {
+        const task = pdfjsLib.getDocument({
+          data: new Uint8Array(res.bytes).buffer,
+          ...(standardFontDataUrl ? { standardFontDataUrl } : {}),
+        });
+        taskRef.current = task;
+        const doc = await task.promise;
+        if (cancelled) {
+          void task.destroy();
+          return;
+        }
+        docRef.current = doc;
+        setPdfDoc(doc);
+      } catch {
+        /* 解析不了就不给批注功能，其余编辑照旧 */
+      }
+    })();
+    return () => {
+      cancelled = true;
+      void taskRef.current?.destroy();
+      taskRef.current = null;
+      docRef.current = null;
+      setPdfDoc(null);
+    };
+  }, [path, source]);
+
+  // 当前页：画预览 + 取文字清单。
+  useEffect(() => {
+    const doc = docRef.current;
+    if (!doc) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const page = await doc.getPage(replacePage);
+        if (cancelled) return;
+        pageRef.current = page;
+        const viewport = page.getViewport({ scale: 1 });
+        const canvas = canvasRef.current;
+        if (canvas) {
+          const fit = 300 / viewport.width;
+          const dpr = window.devicePixelRatio || 1;
+          const vp = page.getViewport({ scale: fit * dpr });
+          canvas.width = Math.floor(vp.width);
+          canvas.height = Math.floor(vp.height);
+          canvas.style.width = `${Math.floor(vp.width / dpr)}px`;
+          canvas.style.height = `${Math.floor(vp.height / dpr)}px`;
+          viewportRef.current = page.getViewport({ scale: fit });
+          await page.render({ canvas, viewport: vp }).promise;
+        }
+        const content = await page.getTextContent();
+        if (cancelled) return;
+        const seen = new Set<string>();
+        const items: string[] = [];
+        for (const item of content.items) {
+          const s = "str" in item ? item.str : "";
+          const t = s.trim();
+          if (!t || seen.has(t)) continue;
+          seen.add(t);
+          items.push(t);
+          if (items.length >= 200) break;
+        }
+        setTextItems(items);
+      } catch {
+        setTextItems([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [replacePage, info]);
+
+  /** 点页面 → 记下 PDF 用户空间坐标（左下原点）。 */
+  const onCanvasClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    const vp = viewportRef.current;
+    if (!vp) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const pt = vp.convertToPdfPoint(e.clientX - rect.left, e.clientY - rect.top);
+    if (pt) setAnnotPoint({ x: pt[0], y: pt[1] });
+  }, []);
+
+  /** 加一条便签批注：坐标与文字都交给 Rust 写进 PDF 的 /Annots。 */
+  const doAnnotate = useCallback(async () => {
+    if (!annotPoint) {
+      setNote("先在下面的页面预览上点一下要放批注的位置");
+      return;
+    }
+    if (!annotText.trim()) {
+      setNote("请填写批注内容");
+      return;
+    }
+    setBusy(true);
+    setNote(null);
+    try {
+      const r = await invoke<SaveResult>("pdf_add_annotation", {
+        srcPath: path,
+        outPath: null,
+        page: replacePage,
+        x: annotPoint.x,
+        y: annotPoint.y,
+        text: annotText,
+      });
+      setNote(`已加批注并导出 ${r.path}（${Math.round(r.bytes / 1024)} KB）`);
+      setAnnotText("");
+    } catch (e) {
+      setNote(`加批注失败：${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }, [path, replacePage, annotPoint, annotText]);
 
   useEffect(() => {
     let cancelled = false;
@@ -269,6 +430,154 @@ export function PdfPageEditor({
     }
   }, [path, replacePage, replaceFrom, replaceTo]);
 
+  /**
+   * 按位置改字：盖住原字 + 写新字。
+   *
+   * 走的是"位置"而不是"内容流里的那串字节"—— 文本被拆成 TJ 数组、
+   * 用自定义编码或子集字体时，字符串匹配会失配，位置匹配不会。
+   */
+  /**
+   * 让扫描件可搜索：把这一页渲染成位图 → 调系统 OCR → 产出带隐形文字层的
+   * 新 PDF。
+   *
+   * 渲染留在前端（Rust 侧没有渲染器，而 pdf.js 已经在渲染同一页了）；
+   * 识别与写回在 Rust 侧（WinRT OCR + 隐形文字层）。
+   */
+  const doOcrPage = useCallback(async () => {
+    if (!pdfDoc) {
+      setNote("文档还没加载好");
+      return;
+    }
+    setBusy(true);
+    setNote(null);
+    try {
+      // 2 倍渲染：OCR 对小字更准，坐标换算也够细。
+      const page = await pdfDoc.getPage(replacePage);
+      const viewport = page.getViewport({ scale: 2 });
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.floor(viewport.width);
+      canvas.height = Math.floor(viewport.height);
+      const ctx = canvas.getContext("2d");
+      if (!ctx) throw new Error("拿不到画布上下文");
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      await page.render({ canvas, viewport } as never).promise;
+      const dataUrl = canvas.toDataURL("image/png");
+      const base64 = dataUrl.split(",")[1] ?? "";
+      const r = await invoke<{
+        path: string;
+        words: number;
+        text: string;
+        language: string;
+      }>("pdf_ocr_page", {
+        srcPath: path,
+        outPath: null,
+        page: replacePage,
+        pngBase64: base64,
+      });
+      setNote(
+        `已识别 ${r.words} 个词（${r.language}），产物：${r.path}。打开它就能搜索、复制这些文字。`,
+      );
+      setOcrOut(r.path);
+    } catch (e) {
+      setNote(`OCR 失败：${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }, [pdfDoc, replacePage, path]);
+
+  const doReplaceAt = useCallback(async () => {
+    if (!picked) {
+      setNote("先在页面上点一句要改的字");
+      return;
+    }
+    if (!newText.trim()) {
+      setNote("新文字为空");
+      return;
+    }
+
+    setBusy(true);
+    setNote(null);
+    try {
+      const r = await invoke<SaveResult>("pdf_replace_text_at", {
+        srcPath: path,
+        outPath: null,
+        req: {
+          page: replacePage,
+          rect: picked.rect,
+          x: picked.x,
+          y: picked.y,
+          text: newText,
+          fontSize: picked.size,
+          // 真删除：把旧字的绘制算子从内容流里删掉（复制不出来）。
+          removeText: picked.text,
+        },
+      });
+      setNote(
+        `${r.note ? r.note + "；" : ""}已替换并导出 ${r.path}（${Math.round(r.bytes / 1024)} KB）`,
+      );
+      setPicked(null);
+    } catch (e) {
+      setNote(`替换失败：${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }, [path, replacePage, picked, newText]);
+
+  /** 选图章图片：系统文件对话框 → 读字节 → 预览用的 object URL。 */
+  const pickStamp = useCallback(async () => {
+    try {
+      const paths = await invoke<string[] | null>("image_open_dialog");
+      if (!paths || paths.length === 0) return;
+      const p = paths[0];
+      const res = await source.readBytes(p);
+      if (!res.ok) {
+        setNote(`读取图章图片失败：${res.message}`);
+        return;
+      }
+      // 复制成 ArrayBuffer 支撑的 Uint8Array：现代 TS 的 BlobPart 收紧到
+      // ArrayBufferView<ArrayBuffer>，直接传 Uint8Array<ArrayBufferLike> 会被拒。
+      const copy = new Uint8Array(res.bytes.byteLength);
+      copy.set(res.bytes);
+      const url = URL.createObjectURL(new Blob([copy]));
+      setStampImage((old) => {
+        if (old) URL.revokeObjectURL(old.url);
+        return { path: p, url };
+      });
+      setTool("stamp");
+      setNote("图章已选好：在页面上拖一个框把它放上去");
+    } catch (e) {
+      setNote(`选择图章图片失败：${e instanceof Error ? e.message : String(e)}`);
+    }
+  }, [source]);
+
+  /** 把待写入的标注写进 PDF（自由文字 / 高亮 / 墨迹 / 图章）。 */
+  const doWriteAnnots = useCallback(async () => {
+    if (annots.length === 0) {
+      setNote("还没有标注");
+      return;
+    }
+    setBusy(true);
+    setNote(null);
+    try {
+      const r = await invoke<SaveResult>("pdf_add_annotations", {
+        srcPath: path,
+        outPath: null,
+        page: replacePage,
+        annotations: toWirePayload(annots),
+      });
+      setNote(
+        `已写入 ${annots.length} 条标注并导出 ${r.path}（${Math.round(r.bytes / 1024)} KB）`,
+      );
+      setAnnots([]);
+      setSelectedAnnot(null);
+    } catch (e) {
+      setNote(`写入标注失败：${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }, [path, replacePage, annots]);
+
   const summary = useMemo(() => {
     const blanks = pages.filter((p) => p.source === null).length;
     const rotated = pages.filter((p) => p.rotation !== 0).length;
@@ -283,6 +592,33 @@ export function PdfPageEditor({
       <div className="ed-toolbar">
         <span className="ed-toolbar-name" title={path}>{name}</span>
         <div className="toolbar-spacer" />
+        {/* 两个模式：管页面（增删排序）与在页面上画标注。 */}
+        <div className="seg" role="group" aria-label="编辑模式">
+          <button
+            type="button"
+            className={editMode === "pages" ? "is-active" : ""}
+            onClick={() => setEditMode("pages")}
+            aria-pressed={editMode === "pages"}
+          >
+            页面
+          </button>
+          <button
+            type="button"
+            className={editMode === "annot" ? "is-active" : ""}
+            onClick={() => setEditMode("annot")}
+            aria-pressed={editMode === "annot"}
+          >
+            标注
+          </button>
+          <button
+            type="button"
+            className={editMode === "text" ? "is-active" : ""}
+            onClick={() => setEditMode("text")}
+            aria-pressed={editMode === "text"}
+          >
+            改字
+          </button>
+        </div>
         <button
           type="button"
           className="tb-btn"
@@ -318,6 +654,18 @@ export function PdfPageEditor({
         </button>
       </div>
 
+      {padOpen && (
+        <SignaturePad
+          onCancel={() => setPadOpen(false)}
+          onConfirm={(data) => {
+            setSignature({ base64: data.base64, url: data.url });
+            setPadOpen(false);
+            setTool("signature");
+            setNote("签名已写好：在页面上拖一个框把它放上去");
+          }}
+        />
+      )}
+
       <div className="ed-body">
         <div className="ed-panel">
           {error ? (
@@ -327,6 +675,29 @@ export function PdfPageEditor({
                 <small>{path}</small>
               </div>
             </div>
+          ) : editMode === "text" ? (
+            <PdfTextPicker
+              doc={pdfDoc}
+              page={replacePage}
+              pickedId={picked?.id ?? null}
+              onPick={(it) => {
+                setPicked(it);
+                setNewText(it.text);
+              }}
+            />
+          ) : editMode === "annot" ? (
+            <AnnotCanvas
+              doc={pdfDoc}
+              page={replacePage}
+              tool={tool}
+              annots={annots}
+              selectedId={selectedAnnot}
+              stampImage={stampImage}
+              signature={signature}
+              fieldName={fieldName}
+              onAdd={(a) => setAnnots((list) => [...list, a])}
+              onSelect={setSelectedAnnot}
+            />
           ) : (
             <ol className="pdf-pages">
               {pages.map((p, i) => (
@@ -384,6 +755,172 @@ export function PdfPageEditor({
         </div>
 
         <aside className="ed-side">
+          {editMode === "text" && (
+            <>
+              <div className="sb-head">改字</div>
+              <div className="ed-actions">
+                <label className="ed-field">
+                  <span>页码</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={info?.pages ?? 1}
+                    value={replacePage}
+                    onChange={(e) =>
+                      setReplacePage(Math.max(1, Number(e.target.value) || 1))
+                    }
+                  />
+                </label>
+              </div>
+              <div className="ed-status">
+                在左边页面上**点一句字**（不用手打原文），然后在这里改它。
+              </div>
+              {picked ? (
+                <>
+                  <div className="ed-field">
+                    <span>原文</span>
+                    <div className="ed-picked">{picked.text}</div>
+                  </div>
+                  <label className="ed-field">
+                    <span>新文字</span>
+                    <input
+                      value={newText}
+                      onChange={(e) => setNewText(e.target.value)}
+                      placeholder="改成…"
+                    />
+                  </label>
+                  <div className="ed-status">字号 {Math.round(picked.size)}pt（取自原文字）</div>
+                  <div className="ed-actions">
+                    <button
+                      type="button"
+                      className="ed-btn"
+                      disabled={busy || !!error}
+                      onClick={() => void doReplaceAt()}
+                    >
+                      替换并导出
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <div className="ed-status">还没选中文字。</div>
+              )}
+              <div className="ed-status">
+                改字 = **删掉旧字 + 写新字**：旧字不再存在于文件里（复制不出来）。
+                中文暂不支持（要嵌字体），中文请用「标注」里的文字。
+              </div>
+            </>
+          )}
+
+          {editMode === "annot" && (
+            <>
+              <div className="sb-head">页面标注</div>
+              <div className="ed-actions">
+                <label className="ed-field">
+                  <span>页码</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={info?.pages ?? 1}
+                    value={replacePage}
+                    onChange={(e) =>
+                      setReplacePage(Math.max(1, Number(e.target.value) || 1))
+                    }
+                  />
+                </label>
+                <label className="ed-field">
+                  <span>域名称</span>
+                  <input
+                    type="text"
+                    value={fieldName}
+                    placeholder="签名"
+                    onChange={(e) => setFieldName(e.target.value)}
+                  />
+                </label>
+              </div>
+              <AnnotTools
+                tool={tool}
+                onTool={(t) => {
+                  // 签名要先在签名板上写，写完才切工具。
+                  if (t === "signature") {
+                    setPadOpen(true);
+                    return;
+                  }
+                  setTool(t);
+                }}
+                onPickStamp={() => void pickStamp()}
+                stampName={stampImage ? (stampImage.path.split(/[\\/]/).pop() ?? null) : null}
+                canDelete={!!selectedAnnot}
+                onDelete={() => {
+                  if (!selectedAnnot) return;
+                  setAnnots((list) => list.filter((a) => a.id !== selectedAnnot));
+                  setSelectedAnnot(null);
+                }}
+              />
+              <div className="ed-status">
+                文字：点一下页面直接写；高亮：拖一个框；墨迹：按住画；图章：先「选图章」再拖框放置；签名域：拖一个框留给别人签（不替人签）。选「选择」工具可点中已有标注后删除。
+              </div>
+              <div className="ed-status">
+                已画 {annots.length} 条。写进 PDF 的是**标准注释**（FreeText / Highlight / Ink），
+                Acrobat、福昕、Edge 都能看见并继续编辑。
+              </div>
+              <div className="ed-actions">
+                <button
+                  type="button"
+                  className="ed-btn"
+                  disabled={busy || !!error || annots.length === 0}
+                  onClick={() => void doWriteAnnots()}
+                >
+                  写入并导出（{annots.length}）
+                </button>
+                <button
+                  type="button"
+                  className="ed-btn"
+                  disabled={annots.length === 0}
+                  onClick={() => {
+                    setAnnots([]);
+                    setSelectedAnnot(null);
+                  }}
+                >
+                  清空
+                </button>
+              </div>
+            </>
+          )}
+
+          <div className="sb-head">扫描件</div>
+          <div className="ed-status">
+            扫描件（图片型 PDF）没有文字层，既搜不到也复制不了。用系统自带的 OCR
+            给这一页补一层**看不见的文字**（产物是新文件，原文件不动）。
+          </div>
+          <div className="ed-actions">
+            <button
+              type="button"
+              className="ed-btn"
+              disabled={busy || !!error || !pdfDoc}
+              onClick={() => void doOcrPage()}
+            >
+              让第 {replacePage} 页可搜索
+            </button>
+          </div>
+          {ocrOut && (
+            <div className="ed-actions">
+              <button
+                type="button"
+                className="ed-btn"
+                onClick={() => void source.openWithSystem?.(ocrOut)}
+              >
+                打开 OCR 产物
+              </button>
+              <button
+                type="button"
+                className="ed-btn"
+                onClick={() => void source.revealInExplorer?.(ocrOut)}
+              >
+                在资源管理器中显示
+              </button>
+            </div>
+          )}
+
           <div className="sb-head">页面</div>
           <div className="ed-status">{summary}</div>
           <div className="ed-actions">
@@ -447,6 +984,63 @@ export function PdfPageEditor({
           </div>
           <div className="ed-status">
             只处理文本层里的整串文字（扫描件与 TJ 数组排版会明确报「未找到」）。
+          </div>
+
+          {/* 本页文字清单：点一下就填进「原文」。
+              之前只能手打整串原文 —— 实际没人能一字不差地打完一个长句，
+              于是这个功能等于没有。 */}
+          {textItems.length > 0 && (
+            <>
+              <div className="sb-head">本页文字（点一下填入原文）</div>
+              <div className="pdf-text-items">
+                {textItems.map((t, i) => (
+                  <button
+                    key={`${i}-${t.slice(0, 12)}`}
+                    type="button"
+                    className={replaceFrom === t ? "pdf-text-item is-active" : "pdf-text-item"}
+                    onClick={() => setReplaceFrom(t)}
+                    title={t}
+                  >
+                    {t}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+
+          {/* 批注：点页面选位置 + 写内容 → 写进 PDF 的 /Annots。 */}
+          <div className="sb-head">便签批注</div>
+          <div className="ed-actions">
+            <canvas
+              ref={canvasRef}
+              className="pdf-annot-canvas"
+              onClick={onCanvasClick}
+              title="点一下要放批注的位置"
+            />
+            <div className="ed-status">
+              {annotPoint
+                ? `位置已选：x=${Math.round(annotPoint.x)} y=${Math.round(annotPoint.y)}（PDF 坐标）`
+                : "在上面的页面预览里点一下，选批注的落点。"}
+            </div>
+            <label className="ed-field">
+              <span>批注</span>
+              <input
+                value={annotText}
+                placeholder="要写的话"
+                onChange={(e) => setAnnotText(e.target.value)}
+              />
+            </label>
+            <button
+              type="button"
+              className="ed-btn"
+              disabled={busy || !!error || !annotPoint || !annotText.trim()}
+              onClick={() => void doAnnotate()}
+            >
+              <MessageSquarePlus className="icon-sm" /> 加批注并导出
+            </button>
+          </div>
+          <div className="ed-status">
+            批注写进 PDF 的注释层（Acrobat / 福昕 / Edge 都能看），不是画在图片上的假字。
           </div>
           {note && (
             <div className="ed-note">

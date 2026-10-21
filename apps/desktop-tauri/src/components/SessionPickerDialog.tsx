@@ -1,9 +1,10 @@
 import { useEffect, useRef } from "react";
-import { createPortal } from "react-dom";
-import { Search, MessageSquare, Clock, X } from "lucide-react";
+import { Search, MessageSquare, Clock } from "lucide-react";
 import { clsx } from "clsx";
 import type { Session } from "../types";
 import { useSessionSearch } from "../hooks/useSessionSearch";
+import { Modal } from "./ui";
+import { NEW_CHAT } from "./strings";
 
 /**
  * 会话搜索面板 —— 标题栏搜索图标与侧栏"查看全部"共用的浮层。
@@ -40,114 +41,90 @@ export function SessionPickerDialog({
   useEffect(() => {
     if (!open) return;
     setQuery("");
-    inputRef.current?.focus();
   }, [open, setQuery]);
-
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
-
-  if (!open) return null;
 
   // 无关键词时展示完整列表；有关键词时展示命中结果。
   const rows: { session: Session; snippet: string | null }[] = trimmed
     ? hits.map((h) => ({ session: h.session, snippet: h.snippet }))
     : sessions.map((session) => ({ session, snippet: null }));
 
-  return createPortal(
-    <div className="fixed inset-0 z-[200] flex items-start justify-center p-4 pt-[12vh]">
-      <button
-        type="button"
-        aria-label="关闭"
-        onClick={onClose}
-        className="absolute inset-0 bg-black/40 backdrop-blur-sm"
-      />
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label={title}
-        className={clsx(
-          "relative z-10 w-full max-w-wide flex flex-col",
-          "rounded-xl border shadow-2xl",
-          "bg-bg-secondary border-border-subtle",
-          "max-h-[70vh]",
-        )}
-      >
-        {/* 头部：标题 + 搜索框 */}
-        <div className="flex items-center gap-3 px-4 py-3 border-b border-border-subtle shrink-0">
-          <Search className="icon-md text-text-muted shrink-0" />
-          <input
-            ref={inputRef}
-            type="text"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="搜索对话标题或消息内容…"
-            className="flex-1 bg-transparent text-ui text-text-primary placeholder:text-text-faint outline-none"
-          />
-          <span className="text-tiny text-text-faint shrink-0">
-            {trimmed ? `${hits.length} 条命中` : `${sessions.length} 条`}
-          </span>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="关闭"
-            className="icon-btn shrink-0"
-          >
-            <X className="icon-md" />
-          </button>
-        </div>
-
-        {/* 列表 */}
-        <div className="overflow-y-auto p-1.5">
-          {rows.length === 0 ? (
-            <p className="text-meta text-text-muted text-center py-10">
-              {trimmed ? "没有找到匹配的对话" : "暂无对话"}
-            </p>
-          ) : (
-            rows.map(({ session, snippet }) => (
-              <button
-                key={session.id}
-                type="button"
-                onClick={() => {
-                  onSelect(session.id);
-                  onClose();
-                }}
-                className={clsx(
-                  "w-full text-left px-3 py-2 rounded-lg",
-                  "hover:bg-bg-tertiary transition-colors",
-                )}
-              >
-                <div className="flex items-center gap-2">
-                  <MessageSquare className="icon-sm text-text-muted shrink-0" />
-                  <span className="flex-1 truncate-1 text-ui font-medium text-text-primary">
-                    {session.title || "新建对话"}
-                  </span>
-                </div>
-                {snippet && (
-                  <p className="text-tiny text-text-muted line-clamp-2 mt-0.5 ml-5">
-                    {snippet}
-                  </p>
-                )}
-                <div className="flex items-center gap-1 mt-1 ml-5">
-                  <Clock className="icon-xs text-text-faint" />
-                  <span className="text-tiny text-text-faint">
-                    {new Date(session.updated_at).toLocaleDateString("zh-CN")}
-                  </span>
-                  <span className="text-tiny text-text-faint ml-2">
-                    {session.messages.length} 条消息
-                  </span>
-                </div>
-              </button>
-            ))
-          )}
-        </div>
+  return (
+    /* 弹窗壳收编到 ui/Modal：焦点陷阱 / Esc / 焦点归还 / role=dialog +
+       aria-modal 一次性补齐（此前这个面板只有手写的 Esc 监听）。
+       面板贴顶（align="top"）—— 搜索是"动作"，浮在顶部像命令面板，
+       视线不用从页面底部挪到屏幕中央。 */
+    <Modal
+      open={open}
+      onClose={onClose}
+      width="wide"
+      scrim
+      align="top"
+      title={title}
+      bodyClassName="flex flex-col overflow-hidden p-0"
+    >
+      {/* 搜索框：data-modal-autofocus 让弹窗打开时焦点直接落在这里，
+          而不是默认的头部关闭按钮。 */}
+      <div className="flex items-center gap-3 px-4 py-3 border-b border-border-subtle shrink-0">
+        <Search className="icon-md text-text-muted shrink-0" />
+        <input
+          ref={inputRef}
+          data-modal-autofocus
+          type="text"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="搜索对话标题或消息内容…"
+          aria-label="搜索对话"
+          className="flex-1 bg-transparent text-ui text-text-primary placeholder:text-text-faint outline-none"
+        />
+        <span className="text-tiny text-text-faint shrink-0">
+          {trimmed ? `${hits.length} 条命中` : `${sessions.length} 条`}
+        </span>
       </div>
-    </div>,
-    document.body,
+
+      {/* 列表 */}
+      <div className="min-h-0 flex-1 overflow-y-auto p-1.5">
+        {rows.length === 0 ? (
+          <p className="text-meta text-text-muted text-center py-10">
+            {trimmed ? "没有找到匹配的对话" : "暂无对话"}
+          </p>
+        ) : (
+          rows.map(({ session, snippet }) => (
+            <button
+              key={session.id}
+              type="button"
+              onClick={() => {
+                onSelect(session.id);
+                onClose();
+              }}
+              className={clsx(
+                "w-full text-left px-3 py-2 rounded-lg",
+                "hover:bg-bg-tertiary transition-colors",
+              )}
+            >
+              <div className="flex items-center gap-2">
+                <MessageSquare className="icon-sm text-text-muted shrink-0" />
+                <span className="flex-1 truncate-1 text-ui font-medium text-text-primary">
+                  {session.title || NEW_CHAT}
+                </span>
+              </div>
+              {snippet && (
+                <p className="text-tiny text-text-muted line-clamp-2 mt-0.5 ml-5">
+                  {snippet}
+                </p>
+              )}
+              <div className="flex items-center gap-1 mt-1 ml-5">
+                <Clock className="icon-xs text-text-faint" />
+                <span className="text-tiny text-text-faint">
+                  {new Date(session.updated_at).toLocaleDateString("zh-CN")}
+                </span>
+                <span className="text-tiny text-text-faint ml-2">
+                  {session.messages.length} 条消息
+                </span>
+              </div>
+            </button>
+          ))
+        )}
+      </div>
+    </Modal>
   );
 }

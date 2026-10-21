@@ -135,7 +135,7 @@ export function AssistantMessage({
    * never display it, even if their tool list happens to be fully
    * done with empty body. Without this guard, every historical
    * assistant turn in a long conversation that called tools would
-   * render a "等待回复..." line below it.
+   * render a "等待回复…" line below it.
    */
   isStreaming?: boolean;
   /**

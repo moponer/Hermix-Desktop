@@ -3,7 +3,13 @@
    ════════════════════════════════════════════════════════════════ */
 
 import { useState, useEffect, useRef } from "react";
-import { ArrowLeft, ArrowRight, Check, Sparkle, Wand2, RefreshCw, Copy, MessageSquare, Layers, Lightbulb } from "lucide-react";
+import {
+  ArrowLeft, ArrowRight, Check, Sparkle, Wand2, RefreshCw, Copy, MessageSquare, Layers, Lightbulb,
+  // 2026-10-21：模板 / 领域标记从 emoji 换成 Lucide（emoji 是身份，
+  // 标记是 chrome —— 身份留在 avatar 字段，见 generateFromTemplate）。
+  Code2, PenLine, BarChart3, Palette, GraduationCap, TrendingUp, Languages,
+  type LucideIcon,
+} from "lucide-react";
 import { clsx } from "clsx";
 import {
   PALETTES, TEMPLATES, pickColor,
@@ -30,16 +36,34 @@ interface GeneratedAgent extends Partial<AgentPersona> {
   colorTheme: AgentColorTheme;
 }
 
-const DOMAIN_OPTIONS = [
-  { id: "creative",   label: "创意写作",   emoji: "✍️" },
-  { id: "code",       label: "编程开发",   emoji: "💻" },
-  { id: "analysis",   label: "数据分析",   emoji: "📊" },
-  { id: "design",     label: "设计辅助",   emoji: "🎨" },
-  { id: "learning",   label: "学习答疑",   emoji: "🎓" },
-  { id: "biz",        label: "商业战略",   emoji: "📈" },
-  { id: "translate",  label: "翻译",       emoji: "🌐" },
-  { id: "chat",       label: "日常对话",   emoji: "💬" },
+const DOMAIN_OPTIONS: { id: string; label: string; icon: LucideIcon }[] = [
+  { id: "creative",   label: "创意写作",   icon: PenLine },
+  { id: "code",       label: "编程开发",   icon: Code2 },
+  { id: "analysis",   label: "数据分析",   icon: BarChart3 },
+  { id: "design",     label: "设计辅助",   icon: Palette },
+  { id: "learning",   label: "学习答疑",   icon: GraduationCap },
+  { id: "biz",        label: "商业战略",   icon: TrendingUp },
+  { id: "translate",  label: "翻译",       icon: Languages },
+  { id: "chat",       label: "日常对话",   icon: MessageSquare },
 ];
+
+/** 模板 id → Lucide 图标。模板的 emoji 仍留在数据里当**身份**（新专家的
+ *  头像），这里只把「选择器里的标记」换成统一字形。未登记的模板回落到 emoji。 */
+const TEMPLATE_ICONS: Record<string, LucideIcon> = {
+  "tpl-engineer": Code2,
+  "tpl-writer": PenLine,
+  "tpl-translator": Languages,
+  "tpl-analyst": BarChart3,
+  "tpl-product": Lightbulb,
+  "tpl-tutor": GraduationCap,
+  "tpl-counselor": MessageSquare,
+  "tpl-bizdev": TrendingUp,
+};
+
+function TemplateIcon({ id, emoji, className }: { id: string; emoji: string; className?: string }) {
+  const Icon = TEMPLATE_ICONS[id];
+  return Icon ? <Icon className={className} /> : <span aria-hidden="true">{emoji}</span>;
+}
 
 const STYLE_OPTIONS = [
   { id: "professional", label: "专业严谨" },
@@ -273,9 +297,9 @@ ${selectedTpl ? `- 用户从模板「${selectedTpl.name}」开始，可参考其
                   >
                     <div className="flex items-center gap-2 mb-1">
                       <div
-                        className="w-8 h-8 rounded-full flex items-center justify-center text-base shrink-0 bg-bg-tertiary"
+                        className="w-8 h-8 rounded-full flex items-center justify-center text-base shrink-0 bg-bg-tertiary text-text-secondary"
                       >
-                        {tpl.emoji}
+                        <TemplateIcon id={tpl.id} emoji={tpl.emoji} className="icon-lg" />
                       </div>
                       <div className="min-w-0 flex-1">
                         <p className="text-[length:var(--text-ui)] font-semibold text-text-primary truncate">{tpl.name}</p>
@@ -304,9 +328,12 @@ ${selectedTpl ? `- 用户从模板「${selectedTpl.name}」开始，可参考其
               <div className="flex items-center gap-2.5 p-3 rounded-lg bg-bg-primary">
                 <div
                   className="w-8 h-8 rounded-lg flex items-center justify-center text-base shrink-0"
-                  style={{ background: PALETTES[selectedTpl.colorTheme].avatar }}
+                  style={{
+                    background: PALETTES[selectedTpl.colorTheme].avatar,
+                    color: PALETTES[selectedTpl.colorTheme].chip.fg,
+                  }}
                 >
-                  {selectedTpl.emoji}
+                  <TemplateIcon id={selectedTpl.id} emoji={selectedTpl.emoji} className="icon-lg" />
                 </div>
                 <div className="min-w-0 flex-1">
                   <p className="text-[length:var(--text-meta)] text-text-muted">基于模板</p>
@@ -318,7 +345,7 @@ ${selectedTpl ? `- 用户从模板「${selectedTpl.name}」开始，可参考其
               </div>
             )}
             <div>
-              <label className="block text-[length:var(--text-meta)] text-text-muted uppercase tracking-wider mb-1.5 font-semibold">
+              <label className="block text-[length:var(--text-meta)] text-text-muted mb-1.5 font-semibold">
                 描述你想要的专家
               </label>
               <textarea
@@ -363,23 +390,26 @@ ${selectedTpl ? `- 用户从模板「${selectedTpl.name}」开始，可参考其
 
             <div>
               <p className="text-[length:var(--text-meta)] font-medium text-text-secondary mb-2">
-                1. 这个专家主要在哪个领域？ <span className="text-error">*</span>
+                1. 这个专家主要在哪个领域？ <span className="text-text-error">*</span>
               </p>
               <div className="flex flex-wrap gap-1.5">
-                {DOMAIN_OPTIONS.map((o) => (
-                  <button
-                    key={o.id}
-                    onClick={() => setClarify((c) => ({ ...c, domain: o.id }))}
-                    className={clsx(
-                      "px-2.5 py-1.5 rounded-full text-[length:var(--text-meta)] font-medium transition-colors",
-                      clarify.domain === o.id
-                        ? "bg-bg-active text-text-primary"
-                        : "bg-bg-tertiary text-text-secondary hover:bg-bg-hover"
-                    )}
-                  >
-                    <span className="mr-1">{o.emoji}</span>{o.label}
-                  </button>
-                ))}
+                {DOMAIN_OPTIONS.map((o) => {
+                  const Icon = o.icon;
+                  return (
+                    <button
+                      key={o.id}
+                      onClick={() => setClarify((c) => ({ ...c, domain: o.id }))}
+                      className={clsx(
+                        "inline-flex items-center gap-1 rounded-full px-2.5 py-1.5 text-[length:var(--text-meta)] font-medium transition-colors",
+                        clarify.domain === o.id
+                          ? "bg-bg-active text-text-primary"
+                          : "bg-bg-tertiary text-text-secondary hover:bg-bg-hover"
+                      )}
+                    >
+                      <Icon className="icon-sm shrink-0" />{o.label}
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
@@ -429,7 +459,7 @@ ${selectedTpl ? `- 用户从模板「${selectedTpl.name}」开始，可参考其
               </div>
             </div>
 
-            {error && <p className="text-[length:var(--text-meta)] text-error">{error}</p>}
+            {error && <p className="text-[length:var(--text-meta)] text-text-error">{error}</p>}
 
             <div className="flex justify-end gap-2 pt-2">
               <button
@@ -456,7 +486,7 @@ ${selectedTpl ? `- 用户从模板「${selectedTpl.name}」开始，可参考其
             {generating ? (
               <div className="rounded-xl bg-bg-card p-12 flex flex-col items-center justify-center">
                 <div className="w-10 h-10 rounded-full border-2 border-bg-tertiary" style={{ borderTopColor: "var(--color-text-primary)" }} />
-                <p className="text-[length:var(--text-ui)] text-text-secondary">AI 正在为你设计专家...</p>
+                <p className="text-[length:var(--text-ui)] text-text-secondary">AI 正在为你设计专家…</p>
                 <p className="text-[length:var(--text-meta)] text-text-faint mt-1">推理 + 生成人设 + 写 system prompt + 想样例对话</p>
               </div>
             ) : generated ? (
@@ -466,7 +496,7 @@ ${selectedTpl ? `- 用户从模板「${selectedTpl.name}」开始，可参考其
                   <div className="rounded-lg bg-info-soft p-3.5 flex gap-2.5">
                     <div className="shrink-0"><Lightbulb className="icon-md" /></div>
                     <div className="flex-1 min-w-0">
-                      <p className="text-[length:var(--text-meta)] text-text-muted uppercase tracking-wider mb-0.5 font-semibold">设计思路</p>
+                      <p className="text-[length:var(--text-meta)] text-text-muted mb-0.5 font-semibold">设计思路</p>
                       <p className="text-[length:var(--text-ui)] text-text-secondary leading-relaxed">{generated.reasoning}</p>
                     </div>
                   </div>
@@ -531,7 +561,7 @@ ${selectedTpl ? `- 用户从模板「${selectedTpl.name}」开始，可参考其
                 {/* Sample dialog */}
                 {generated.sampleDialog && (
                   <div className="rounded-xl bg-bg-card p-4 space-y-2">
-                    <p className="text-[length:var(--text-meta)] text-text-muted uppercase tracking-wider font-semibold flex items-center gap-1.5">
+                    <p className="text-[length:var(--text-meta)] text-text-muted font-semibold flex items-center gap-1.5">
                       <MessageSquare className="icon-sm" /> 样例对话预览
                     </p>
                     <div className="bg-bg-tertiary rounded-lg px-3 py-2 text-[length:var(--text-ui)] text-text-primary">
@@ -545,7 +575,7 @@ ${selectedTpl ? `- 用户从模板「${selectedTpl.name}」开始，可参考其
                   </div>
                 )}
 
-                {error && <p className="text-[length:var(--text-meta)] text-warning bg-warning-soft p-2 rounded">{error}</p>}
+                {error && <p className="text-[length:var(--text-meta)] text-text-warning bg-warning-soft p-2 rounded">{error}</p>}
 
                 <div className="flex justify-between items-center pt-2">
                   <button

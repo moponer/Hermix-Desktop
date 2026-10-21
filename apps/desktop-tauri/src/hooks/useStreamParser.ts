@@ -35,7 +35,7 @@ export interface UsageSnapshot {
  * a single mutable object so the parsing + connection logic can live in
  * their own modules without rewriting the closure shape.
  *
- * Per-send mutable locals (fullText / phase / hasContent / …) are plain
+ * Per-send mutable locals (fullText / phase / hasContent / ...) are plain
  * fields on this object and are mutated in place by the handlers.
  */
 export interface StreamChatSendContext {
@@ -231,7 +231,7 @@ export function createMessageHandler(
         if (ctx.getPhase() === "slow") ctx.updatePhase("streaming");
         const piece = typeof evtContent === "string" ? evtContent : "";
         // Defense-in-depth: if the old backend still injects
-        // [activity: …] / [status: …] as Text events (before the lib.rs fix
+        // [activity: ...] / [status: ...] as Text events (before the lib.rs fix
         // was compiled), silently drop them so they never pollute message body.
         if (piece && !/^\[(?:activity|status):\s*/.test(piece)) {
           ctx.hasContent = true;
@@ -579,7 +579,7 @@ export function createMessageHandler(
       }
 
       // Backend status / activity notifications (e.g. "Still waiting for the
-      // model…"). Displayed as a chip in StreamingBubble, NOT injected into
+      // model..."). Displayed as a chip in StreamingBubble, NOT injected into
       // message text.
       if (evtType === "status" || evtType === "activity") {
         const content =
@@ -785,7 +785,7 @@ export function createMessageHandler(
           reason: typeof it?.reason === "string" ? (it.reason as string) : null,
           expiresAt: typeof it?.expires_at === "number" ? (it.expires_at as number) : null,
           // Backend pre-computed unified diff for file-mutating items;
-          // non-file tools (run_command / http / …) leave it absent.
+          // non-file tools (run_command / http / ...) leave it absent.
           diff: typeof it?.diff === "string" ? (it.diff as string) : null,
         }));
         if (ctx.callbacks.onApprovalBatchRequest) {

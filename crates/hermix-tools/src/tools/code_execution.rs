@@ -217,12 +217,34 @@ impl ExecuteCodeHandler {
 #[async_trait]
 impl ToolHandler for ExecuteCodeHandler {
     async fn execute(&self, params: Value) -> Result<String, ToolError> {
-        let code = params
-            .get("code")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| ToolError::InvalidParams("Missing 'code' parameter".into()))?;
+        let inline = params.get("code").and_then(|v| v.as_str());
+        let script = params.get("script").and_then(|v| v.as_str());
 
-        let language = params.get("language").and_then(|v| v.as_str());
+        // Harness² alignment: "scripts" is one of the eight editable harness
+        // components. We only had inline code, so a proven snippet could be
+        // re-used solely by pasting it into a skill's body. `script` names a
+        // file under `$HERMIX_HOME/scripts/` instead — the agent can write
+        // those with `write_file`, and every later session can call them by
+        // name.
+        let (code, script_ext) = match (inline, script) {
+            (Some(code), _) => (code.to_string(), None),
+            (None, Some(name)) => (load_script(name)?, extension_of(name)),
+            (None, None) => {
+                return Err(ToolError::InvalidParams(
+                    "Provide either 'code' (inline snippet) or 'script' (a file name under \
+                     $HERMIX_HOME/scripts/)."
+                        .into(),
+                ));
+            }
+        };
+        let code = code.as_str();
+
+        // Extension infers the language when the caller did not say; an
+        // explicit `language` always wins.
+        let language = params
+            .get("language")
+            .and_then(|v| v.as_str())
+            .or(script_ext);
         let timeout = params.get("timeout").and_then(|v| v.as_u64());
 
         // Internal security check — mirrors TerminalHandler's
@@ -261,7 +283,19 @@ impl ToolHandler for ExecuteCodeHandler {
             "code".into(),
             json!({
                 "type": "string",
-                "description": "The code to execute"
+                "description": "The code to execute. Mutually exclusive with `script`."
+            }),
+        );
+        props.insert(
+            "script".into(),
+            json!({
+                "type": "string",
+                "description": "Run a saved script by file name from $HERMIX_HOME/scripts/ \
+                                (e.g. 'summarize.py'). The language is inferred from the extension. \
+                                Use this instead of re-pasting a snippet you have already saved, and \
+                                prefer it for anything longer than a few lines — a named script is \
+                                reusable across sessions, an inline blob is not. Mutually exclusive \
+                                with `code`."
             }),
         );
         props.insert(
@@ -292,18 +326,103 @@ impl ToolHandler for ExecuteCodeHandler {
             "execute_code",
             &format!(
                 "Execute code in a local interpreter. Available languages on this host: [{}]. \
-                 The `language` enum reflects the live probe (sync), so picking an unavailable \
-                 language at call-time will fail with an error listing the searched paths.",
+                 Pass `code` for an inline snippet or `script` to run a saved file from \
+                 $HERMIX_HOME/scripts/. The `language` enum reflects the live probe (sync), so \
+                 picking an unavailable language at call-time will fail with an error listing \
+                 the searched paths.",
                 lang_labels.join(", ")
             ),
-            JsonSchema::object(props, vec!["code".into()]),
+            // No `required`: `code` and `script` are mutually exclusive, and a
+            // JSON-Schema `oneOf` here would be the only place in the tool
+            // surface using it. The handler rejects "neither given" with a
+            // message that names both parameters.
+            JsonSchema::object(props, vec![]),
         )
+    }
+}
+
+/// Read a named script from `$HERMIX_HOME/scripts/`.
+///
+/// The name must be a **bare file name**: no separators, no `..`, no absolute
+/// path. Scripts are a flat namespace on purpose — a nested tree would need a
+/// browse tool to be usable, and the agent already has `list_files`.
+fn load_script(name: &str) -> Result<String, ToolError> {
+    let bare = !name.is_empty()
+        && !name.contains("..")
+        && !name.contains('/')
+        && !name.contains('\\')
+        && std::path::Path::new(name).components().count() == 1;
+    if !bare {
+        return Err(ToolError::InvalidParams(format!(
+            "`script` must be a bare file name under $HERMIX_HOME/scripts/ \
+             (no directories, no '..'), got: {name}"
+        )));
+    }
+    let dir = hermix_config::paths::hermix_home().join("scripts");
+    let path = dir.join(name);
+    std::fs::read_to_string(&path).map_err(|e| {
+        ToolError::ExecutionFailed(format!(
+            "cannot read script '{}': {e}. Saved scripts live in {} — \
+             list them with list_files, or pass `code` for an inline snippet.",
+            path.display(),
+            dir.display()
+        ))
+    })
+}
+
+/// Language inferred from a script's extension. Unknown extensions return
+/// `None`, which leaves the backend's default (python) in charge.
+fn extension_of(name: &str) -> Option<&'static str> {
+    match std::path::Path::new(name)
+        .extension()
+        .and_then(|e| e.to_str())?
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "py" => Some("python"),
+        "js" | "mjs" => Some("node"),
+        "sh" => Some("bash"),
+        "ps1" => Some("powershell"),
+        _ => None,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `script` must be a bare file name — a nested path would let the caller
+    /// reach outside the scripts directory, which is the whole point of the
+    /// rejection. These cases fail before any file is touched, so no home
+    /// directory is needed.
+    #[test]
+    fn script_name_must_be_bare() {
+        for bad in [
+            "../escape.py",
+            "sub/dir.py",
+            "..\\escape.py",
+            "/abs/path.py",
+            "",
+        ] {
+            let err = load_script(bad).expect_err("must be rejected");
+            assert!(
+                err.to_string().contains("bare file name"),
+                "{bad:?} produced an unhelpful error: {err}"
+            );
+        }
+    }
+
+    /// The extension decides the language when the caller omits it; an
+    /// unknown extension leaves the backend default alone.
+    #[test]
+    fn script_extension_infers_language() {
+        assert_eq!(extension_of("a.py"), Some("python"));
+        assert_eq!(extension_of("a.JS"), Some("node"));
+        assert_eq!(extension_of("a.ps1"), Some("powershell"));
+        assert_eq!(extension_of("a.sh"), Some("bash"));
+        assert_eq!(extension_of("a.rb"), None);
+        assert_eq!(extension_of("noext"), None);
+    }
 
     struct MockCodeBackend;
     #[async_trait]

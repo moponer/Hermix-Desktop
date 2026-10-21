@@ -107,7 +107,7 @@ export function InlineExpertPanel({
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="搜索专家名称、角色、类别..."
-            className="w-full pl-8 pr-3 py-1.5 rounded-lg bg-bg-card text-[length:var(--text-ui)] text-text-primary placeholder-text-faint outline-none border border-border-subtle focus:border-accent/40 transition-colors"
+            className="w-full pl-8 pr-3 py-1.5 rounded-lg bg-bg-card text-[length:var(--text-ui)] text-text-primary placeholder-text-faint outline-none focus:border-accent/40 transition-colors"
           />
           {search && (
             <button
@@ -134,7 +134,7 @@ export function InlineExpertPanel({
         <div
           role="status"
           aria-live="polite"
-          className="mx-4 mb-1 flex items-center gap-1.5 px-2 py-1 rounded-md bg-bg-tertiary text-[length:var(--text-meta)] text-warning"
+          className="mx-4 mb-1 flex items-center gap-1.5 px-2 py-1 rounded-md bg-bg-tertiary text-[length:var(--text-meta)] text-text-warning"
         >
           <AlertTriangle aria-hidden="true" className="icon-sm shrink-0" />
           <span>未能连接专家服务，当前显示内置清单</span>

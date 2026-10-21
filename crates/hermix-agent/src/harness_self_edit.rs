@@ -192,9 +192,11 @@ pub fn classify_tool_failures(counter: &ToolErrorCounter) -> Vec<FailurePattern>
 }
 
 /// Classify convergence signals into failure patterns.
-/// Wire-up note: called from the agent loop's convergence detection path
-/// once the harness self-edit integration is complete.
-#[allow(dead_code)]
+///
+/// Reached through [`run_self_edit`] (its `convergence` argument). That
+/// argument is `None` from the finalize path today, because a convergence stop
+/// is detected *inside* the loop — so this branch is complete but not yet fed.
+/// Passing the reason down is the remaining half of that integration.
 pub(crate) fn classify_convergence(
     reason: &ConvergenceReason,
     consecutive_count: u32,
@@ -370,9 +372,13 @@ pub fn propose_rule(
 /// Top-level entry point: detect failures, generate experiences, propose rules.
 /// Call this at the end of each agent turn (or on convergence detection).
 /// It's safe to call repeatedly — deduplication is handled internally.
-/// Wire-up note: will be called from `run_loop.rs` once the harness
-/// self-edit integration is complete.
-#[allow(dead_code)]
+///
+/// Wired up on 2026-10-21 from `AgentLoop::maybe_record_experience`, which
+/// runs at the single finalize point of both `run()` and `run_stream()`. Before
+/// that this function carried a `#[allow(dead_code)]` and a note saying it
+/// would be called "once the harness self-edit integration is complete" — it
+/// never was, so both the experience archive and the self-improvement rules
+/// were written by nobody. Do not add another entry point; extend this one.
 pub(crate) fn run_self_edit(
     tool_errors: &ToolErrorCounter,
     feedback: &FeedbackLog,

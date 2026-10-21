@@ -7,14 +7,30 @@ import { X } from "lucide-react";
 import { clsx } from "clsx";
 import {
   AVATARS, COLOR_KEYS, PALETTES, pickColor,
+  type AgentColorTheme,
   type AgentPersona,
 } from "./types";
+import { Button, Input, TextArea } from "../ui";
+import { CANCEL, SAVE } from "../strings";
 
 interface AgentFormProps {
   initial?: Partial<AgentPersona>;
   onSave: (agent: Partial<AgentPersona>) => void;
   onCancel: () => void;
 }
+
+/** 色键是历史数据键（violet 实际画出来是陶土红）。可访问名要说人话：
+ *  读屏用户看到的是颜色，不是内部键名。 */
+const COLOR_LABELS: Record<AgentColorTheme, string> = {
+  violet: "陶土红",
+  rose: "玫红",
+  cyan: "青绿",
+  emerald: "翠绿",
+  amber: "琥珀",
+  teal: "墨青",
+  indigo: "橄榄绿",
+  fuchsia: "紫红",
+};
 
 export function AgentForm({ initial, onSave, onCancel }: AgentFormProps) {
   const [form, setForm] = useState<Partial<AgentPersona>>({
@@ -79,6 +95,7 @@ export function AgentForm({ initial, onSave, onCancel }: AgentFormProps) {
               <button
                 key={a}
                 type="button"
+                aria-label={`选择头像 ${a}`}
                 onClick={() => setForm((p) => ({ ...p, avatar: a }))}
                 className={clsx("w-6 h-6 rounded text-sm flex items-center justify-center", form.avatar === a ? "bg-bg-active" : "hover:bg-bg-hover")}
               >
@@ -88,37 +105,34 @@ export function AgentForm({ initial, onSave, onCancel }: AgentFormProps) {
           </div>
         </div>
         <div className="space-y-2.5">
-          <div>
-            <label className="block text-[length:var(--text-meta)] text-text-muted uppercase tracking-wider mb-1 font-semibold">名称 *</label>
-            <input
-              required
-              value={form.name || ""}
-              onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
-              className="w-full rounded-lg bg-bg-tertiary px-3 py-2 text-[length:var(--text-ui)] text-text-primary placeholder:text-text-faint outline-none"
-              placeholder="如：代码助手"
-            />
-          </div>
-          <div>
-            <label className="block text-[length:var(--text-meta)] text-text-muted uppercase tracking-wider mb-1 font-semibold">角色 *</label>
-            <input
-              required
-              value={form.role || ""}
-              onChange={(e) => setForm((p) => ({ ...p, role: e.target.value }))}
-              className="w-full rounded-lg bg-bg-tertiary px-3 py-2 text-[length:var(--text-ui)] text-text-primary placeholder:text-text-faint outline-none"
-              placeholder="如：高级全栈工程师"
-            />
-          </div>
+          <Input
+            required
+            size="lg"
+            label="名称"
+            value={form.name || ""}
+            onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
+            placeholder="如：代码助手"
+          />
+          <Input
+            required
+            size="lg"
+            label="角色"
+            value={form.role || ""}
+            onChange={(e) => setForm((p) => ({ ...p, role: e.target.value }))}
+            placeholder="如：高级全栈工程师"
+          />
         </div>
         <div>
-          <label className="block text-[length:var(--text-meta)] text-text-muted uppercase tracking-wider mb-1 font-semibold">颜色</label>
+          <div className="block text-[length:var(--text-ui)] font-medium text-text-primary mb-1">颜色</div>
           <div className="grid grid-cols-2 gap-1">
             {COLOR_KEYS.map((k) => (
               <button
                 key={k}
                 type="button"
+                aria-label={`选择${COLOR_LABELS[k]}配色`}
                 onClick={() => setForm((p) => ({ ...p, colorTheme: k }))}
                 className={clsx("w-6 h-6 rounded-md transition-[transform,opacity]", form.colorTheme === k ? "scale-125" : "opacity-50 hover:opacity-100")}
-                title={k}
+                title={COLOR_LABELS[k]}
                 style={{ background: PALETTES[k].avatar }}
               />
             ))}
@@ -127,117 +141,111 @@ export function AgentForm({ initial, onSave, onCancel }: AgentFormProps) {
       </div>
 
       {/* Identity */}
-      <div>
-        <label className="block text-[length:var(--text-meta)] text-text-muted uppercase tracking-wider mb-1 font-semibold">身份标语 (1 句话)</label>
-        <input
-          value={form.identity || ""}
-          onChange={(e) => setForm((p) => ({ ...p, identity: e.target.value }))}
-          className="w-full rounded-lg bg-bg-tertiary px-3 py-2 text-[length:var(--text-ui)] text-text-primary placeholder:text-text-faint outline-none"
-          placeholder="如：帮你把模糊的产品需求，调成可执行的设计语言"
-        />
-      </div>
+      <Input
+        size="lg"
+        label="身份标语 (1 句话)"
+        value={form.identity || ""}
+        onChange={(e) => setForm((p) => ({ ...p, identity: e.target.value }))}
+        placeholder="如：帮你把模糊的产品需求，调成可执行的设计语言"
+      />
 
       {/* Soul */}
-      <div>
-        <label className="block text-[length:var(--text-meta)] text-text-muted uppercase tracking-wider mb-1 font-semibold">核心理念</label>
-        <textarea
-          rows={2}
-          value={form.soul || ""}
-          onChange={(e) => setForm((p) => ({ ...p, soul: e.target.value }))}
-          className="w-full rounded-lg bg-bg-tertiary px-3 py-2 text-[length:var(--text-ui)] text-text-primary placeholder:text-text-faint outline-none resize-none"
-          placeholder="专家的核心价值观和工作理念..."
-        />
-      </div>
+      <TextArea
+        rows={2}
+        label="核心理念"
+        value={form.soul || ""}
+        onChange={(e) => setForm((p) => ({ ...p, soul: e.target.value }))}
+        placeholder="专家的核心价值观和工作理念…"
+      />
 
       {/* Skills */}
       <div>
-        <label className="block text-[length:var(--text-meta)] text-text-muted uppercase tracking-wider mb-1 font-semibold">技能</label>
-        <div className="flex gap-1.5 mb-1.5">
-          <input
+        <div className="block text-[length:var(--text-ui)] font-medium text-text-primary mb-1">技能</div>
+        <div className="flex gap-1.5 mb-1.5 items-end">
+          <Input
+            size="md"
+            label="添加技能"
+            labelHidden
+            containerClassName="flex-1"
             value={skillInput}
             onChange={(e) => setSkillInput(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addToList("skills", skillInput); }}}
-            className="flex-1 rounded-lg bg-bg-tertiary px-3 py-1.5 text-[length:var(--text-ui)] text-text-primary placeholder:text-text-faint outline-none"
+            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addToList("skills", skillInput); } }}
             placeholder="添加技能"
           />
-          <button type="button" onClick={() => addToList("skills", skillInput)} className="px-2.5 py-1.5 rounded-lg text-[length:var(--text-meta)] font-medium" style={{ background: "var(--color-btn-secondary-bg)", color: "var(--color-btn-secondary-text)" }}>
+          <Button type="button" variant="ghost" size="sm" onClick={() => addToList("skills", skillInput)}>
             添加
-          </button>
+          </Button>
         </div>
         <div className="flex flex-wrap gap-1">
           {(form.skills || []).map((s) => (
             <span key={s} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[length:var(--text-meta)] font-medium bg-bg-tertiary text-text-secondary">
               {s}
-              <button type="button" onClick={() => removeFromList("skills", s)} className="text-text-faint hover:text-error"><X className="icon-xs" /></button>
+              <button type="button" aria-label={`移除技能 ${s}`} onClick={() => removeFromList("skills", s)} className="text-text-faint hover:text-text-error"><X className="icon-xs" /></button>
             </span>
           ))}
         </div>
       </div>
 
       <div className="grid grid-cols-2 gap-3">
-        <div>
-          <label className="block text-[length:var(--text-meta)] text-text-muted uppercase tracking-wider mb-1 font-semibold">专长领域</label>
-          <input
-            value={form.specialty || ""}
-            onChange={(e) => setForm((p) => ({ ...p, specialty: e.target.value }))}
-            className="w-full rounded-lg bg-bg-tertiary px-3 py-2 text-[length:var(--text-ui)] text-text-primary placeholder:text-text-faint outline-none"
-            placeholder="如:Web 开发"
-          />
-        </div>
-        <div>
-          <label className="block text-[length:var(--text-meta)] text-text-muted uppercase tracking-wider mb-1 font-semibold">对话风格</label>
-          <input
-            value={form.dialogStyle || ""}
-            onChange={(e) => setForm((p) => ({ ...p, dialogStyle: e.target.value }))}
-            className="w-full rounded-lg bg-bg-tertiary px-3 py-2 text-[length:var(--text-ui)] text-text-primary placeholder:text-text-faint outline-none"
-            placeholder="如：简洁专业"
-          />
-        </div>
+        <Input
+          size="lg"
+          label="专长领域"
+          value={form.specialty || ""}
+          onChange={(e) => setForm((p) => ({ ...p, specialty: e.target.value }))}
+          placeholder="如：Web 开发"
+        />
+        <Input
+          size="lg"
+          label="对话风格"
+          value={form.dialogStyle || ""}
+          onChange={(e) => setForm((p) => ({ ...p, dialogStyle: e.target.value }))}
+          placeholder="如：简洁专业"
+        />
       </div>
 
       {/* Personality */}
       <div>
-        <label className="block text-[length:var(--text-meta)] text-text-muted uppercase tracking-wider mb-1 font-semibold">性格特点</label>
-        <div className="flex gap-1.5 mb-1.5">
-          <input
+        <div className="block text-[length:var(--text-ui)] font-medium text-text-primary mb-1">性格特点</div>
+        <div className="flex gap-1.5 mb-1.5 items-end">
+          <Input
+            size="md"
+            label="添加性格特点"
+            labelHidden
+            containerClassName="flex-1"
             value={personalityInput}
             onChange={(e) => setPersonalityInput(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addToList("personality", personalityInput); }}}
-            className="flex-1 rounded-lg bg-bg-tertiary px-3 py-1.5 text-[length:var(--text-ui)] text-text-primary placeholder:text-text-faint outline-none"
+            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addToList("personality", personalityInput); } }}
             placeholder="如：严谨、注重细节"
           />
-          <button type="button" onClick={() => addToList("personality", personalityInput)} className="px-2.5 py-1.5 rounded-lg text-[length:var(--text-meta)] font-medium" style={{ background: "var(--color-btn-secondary-bg)", color: "var(--color-btn-secondary-text)" }}>
+          <Button type="button" variant="ghost" size="sm" onClick={() => addToList("personality", personalityInput)}>
             添加
-          </button>
+          </Button>
         </div>
         <div className="flex flex-wrap gap-1">
           {(form.personality || []).map((p) => (
             <span key={p} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[length:var(--text-meta)] font-medium bg-bg-tertiary text-text-secondary">
               {p}
-              <button type="button" onClick={() => removeFromList("personality", p)} className="text-text-faint hover:text-error"><X className="icon-xs" /></button>
+              <button type="button" aria-label={`移除性格特点 ${p}`} onClick={() => removeFromList("personality", p)} className="text-text-faint hover:text-text-error"><X className="icon-xs" /></button>
             </span>
           ))}
         </div>
       </div>
 
-      <div>
-        <label className="block text-[length:var(--text-meta)] text-text-muted uppercase tracking-wider mb-1 font-semibold">背景故事</label>
-        <textarea
-          rows={2}
-          value={form.background || ""}
-          onChange={(e) => setForm((p) => ({ ...p, background: e.target.value }))}
-          className="w-full rounded-lg bg-bg-tertiary px-3 py-2 text-[length:var(--text-ui)] text-text-primary placeholder:text-text-faint outline-none resize-none"
-          placeholder="专家的背景故事..."
-        />
-      </div>
+      <TextArea
+        rows={2}
+        label="背景故事"
+        value={form.background || ""}
+        onChange={(e) => setForm((p) => ({ ...p, background: e.target.value }))}
+        placeholder="专家的背景故事…"
+      />
 
       <div className="flex justify-end gap-2 pt-2">
-        <button type="button" onClick={onCancel} className="rounded-lg px-4 py-2 text-[length:var(--text-ui)] font-medium" style={{ background: "var(--color-btn-secondary-bg)", color: "var(--color-btn-secondary-text)" }}>
-          取消
-        </button>
-        <button type="submit" className="rounded-lg px-4 py-2 text-[length:var(--text-ui)] font-medium" style={{ background: "var(--color-btn-primary-bg)", color: "var(--color-btn-primary-text)" }}>
-          保存
-        </button>
+        <Button type="button" variant="ghost" onClick={onCancel}>
+          {CANCEL}
+        </Button>
+        <Button type="submit" variant="primary">
+          {SAVE}
+        </Button>
       </div>
     </form>
   );

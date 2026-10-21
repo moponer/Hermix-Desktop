@@ -6,8 +6,13 @@ export interface SwitchProps {
   checked: boolean;
   onChange: (checked: boolean) => void;
   disabled?: boolean;
-  /** 无可见标签时的无障碍名。 */
-  label?: string;
+  /**
+   * 无障碍名。**必填**。
+   *
+   * 此前是可选 prop、默认值「切换设置」——设置页文件关联那一栏每一行
+   * （.md / .pdf / .png …）在读屏里都叫同一句话，等于没有名字。
+   */
+  label: string;
   size?: SwitchSize;
   className?: string;
 }
@@ -40,7 +45,7 @@ export function Switch({
   checked,
   onChange,
   disabled,
-  label = "切换设置",
+  label,
   size = "md",
   className,
 }: SwitchProps) {
@@ -54,7 +59,8 @@ export function Switch({
       onClick={() => onChange(!checked)}
       className={cx(
         "relative shrink-0 rounded-full transition-colors duration-150",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/40",
+        /* 焦点态全 app 唯一形态：2px accent 环 + 2px 偏移（宪法 §七.2）。 */
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-transparent",
         "disabled:cursor-not-allowed disabled:opacity-50",
         TRACK[size],
         checked ? "bg-[var(--color-accent)]" : "bg-[var(--color-bg-tertiary)]",

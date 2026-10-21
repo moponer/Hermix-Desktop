@@ -5,7 +5,7 @@ import { PinWindow } from "./PinWindow";
 import { currentWindowLabel } from "./windowRole";
 import { startViewerControl } from "./viewerControl";
 import "./styles.css";
-// 菜单栏 + 系统资源管理弹窗的样式（须在 styles.css 之后：它覆盖 .tb-brand 布局）
+// 菜单栏 + 系统资源管理弹窗的样式（须在 styles.css 之后）
 import "./system-panel.css";
 
 /**

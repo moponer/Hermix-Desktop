@@ -697,6 +697,29 @@ impl AgentLoop {
                     consecutive = consecutive_count,
                     "convergence detected (hard stop) — concluding run"
                 );
+                // Harness²：**收敛停止本身就是最值得跨会话留存的教训**
+                // （"这条路走不通"）。在这里就地记录，而不是等 finalize——
+                // finalize 的入参里没有 convergence reason，要传它得改
+                // `finalize_agent_result` 的签名与两处调用点；而"发生地记录"
+                // 语义更准，也不会因为将来多一条停止路径而漏传。
+                if let Some(pattern) = crate::harness_self_edit::classify_convergence(
+                    &reason,
+                    consecutive_count,
+                    "hard stop",
+                ) {
+                    let entry = crate::harness_self_edit::generate_experience(&pattern);
+                    let dir = hermix_config::paths::hermix_home().join("experience");
+                    match crate::harness_self_edit::persist_experience(&dir, &entry) {
+                        Ok(()) => tracing::info!(
+                            kind = pattern.kind.label(),
+                            count = consecutive_count,
+                            "convergence lesson written to the experience archive"
+                        ),
+                        Err(e) => {
+                            tracing::debug!(error = %e, "convergence experience not persisted");
+                        }
+                    }
+                }
                 self.persist_session_terminal(
                     ctx,
                     session_id,

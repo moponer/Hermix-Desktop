@@ -289,6 +289,417 @@
         assert!(body.lines().last().unwrap().contains("第二问"));
     }
 
+    /// Compression and `/undo` shrink the in-memory timeline. The old line-count
+    /// high-water mark then said "nothing new" forever, so the mirror silently
+    /// stopped recording — exactly when a damaged DB would need it.
+    #[test]
+    fn jsonl_mirror_rewrites_after_the_timeline_shrinks() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sp = SessionPersistence::new(tmp.path());
+        let path = sp.sessions_dir.join("mirror-shrink.jsonl");
+
+        let long = vec![
+            Message::user("a"),
+            Message::assistant("b"),
+            Message::user("c"),
+            Message::assistant("d"),
+        ];
+        sp.save_message_mirror("mirror-shrink", &long).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap().lines().count(), 4);
+
+        // Compression replaced the middle with a summary: 2 messages, neither of
+        // which is the old tail. Must rewrite, not return early.
+        let compressed = vec![
+            Message::user("[summary] a..d"),
+            Message::assistant("continuing"),
+        ];
+        sp.save_message_mirror("mirror-shrink", &compressed).unwrap();
+        let body = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(body.lines().count(), 2, "mirror must be rebuilt: {body}");
+        assert!(body.contains("[summary] a..d"));
+
+        // And it keeps recording afterwards.
+        let mut more = compressed;
+        more.push(Message::user("new turn"));
+        sp.save_message_mirror("mirror-shrink", &more).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap().lines().count(), 3);
+    }
+
+    /// A kill mid-`writeln!` leaves a fragment without a newline. Left alone it
+    /// both inflates the line count and corrupts the next append.
+    #[test]
+    fn jsonl_mirror_repairs_a_torn_tail_before_appending() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sp = SessionPersistence::new(tmp.path());
+        let path = sp.sessions_dir.join("mirror-torn.jsonl");
+        std::fs::create_dir_all(&sp.sessions_dir).unwrap();
+
+        std::fs::write(
+            &path,
+            "{\"role\":\"user\",\"content\":\"one\",\"tool_call_id\":null}\n\
+             {\"role\":\"assistant\",\"content\":\"two\",\"tool_call_id\":null}\n\
+             {\"role\":\"assistant\",\"content\":\"tor",
+        )
+        .unwrap();
+
+        let msgs = vec![
+            Message::user("one"),
+            Message::assistant("two"),
+            Message::user("three"),
+        ];
+        sp.save_message_mirror("mirror-torn", &msgs).unwrap();
+
+        let body = std::fs::read_to_string(&path).unwrap();
+        assert!(body.ends_with('\n'), "no torn fragment may remain: {body}");
+        assert_eq!(body.lines().count(), 3, "fragment must not count as a line");
+        assert!(body.contains("\"three\""));
+        // The fragment's bytes are gone, not merely shadowed.
+        assert!(!body.contains("\"tor"));
+    }
+
+    // -- incremental flush -------------------------------------------------
+    // Every test here pins "rows that did not change keep their id". That is
+    // not an implementation detail: the wire id the front-end keys on is
+    // positional (`{session_id}-{idx}`), so a reordered row set renames every
+    // message after it.
+
+    fn flush(sp: &SessionPersistence, sid: &str, msgs: &[Message]) {
+        sp.persist_session_with_compression(
+            sid, msgs, Some("m"), Some("local"), None, None, None, None, None, None,
+        )
+        .expect("flush");
+    }
+
+    fn stored_count(sp: &SessionPersistence, sid: &str) -> i64 {
+        let conn = super::open_with_wal(&sp.db_path).unwrap();
+        conn.query_row(
+            "SELECT message_count FROM sessions WHERE id = ?1",
+            rusqlite::params![sid],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    fn row_ids(sp: &SessionPersistence, sid: &str) -> Vec<i64> {
+        let conn = super::open_with_wal(&sp.db_path).unwrap();
+        let mut stmt = conn
+            .prepare("SELECT id FROM messages WHERE session_id = ?1 ORDER BY id ASC")
+            .unwrap();
+        let ids = stmt
+            .query_map(rusqlite::params![sid], |r| r.get::<_, i64>(0))
+            .unwrap()
+            .filter_map(Result::ok)
+            .collect();
+        ids
+    }
+
+    /// `sessions.message_count` doubles as the incremental flush's watermark.
+    /// If it ever records "rows written this call" instead of "timeline
+    /// length", the fast path silently degrades to a full scan on every turn —
+    /// no error, just the old O(n) IO back.
+    #[test]
+    fn flush_keeps_message_count_equal_to_the_timeline() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sp = SessionPersistence::new(tmp.path());
+        let mut msgs = vec![Message::user("q1"), Message::assistant("a1")];
+        flush(&sp, "inc-count", &msgs);
+        assert_eq!(stored_count(&sp, "inc-count"), 2);
+
+        msgs.push(Message::user("q2"));
+        flush(&sp, "inc-count", &msgs);
+        assert_eq!(
+            stored_count(&sp, "inc-count"),
+            3,
+            "count must be the timeline length, not the 1 row this call wrote"
+        );
+    }
+
+    /// A drifted watermark must not corrupt storage: the fast path fails its
+    /// anchor check and the full scan takes over.
+    #[test]
+    fn flush_recovers_from_a_drifted_watermark() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sp = SessionPersistence::new(tmp.path());
+        let msgs = vec![Message::user("q1"), Message::assistant("a1")];
+        flush(&sp, "inc-drift", &msgs);
+
+        {
+            let conn = super::open_with_wal(&sp.db_path).unwrap();
+            conn.execute(
+                "UPDATE sessions SET message_count = 99 WHERE id = 'inc-drift'",
+                [],
+            )
+            .unwrap();
+        }
+
+        let mut changed = msgs.clone();
+        changed.push(Message::user("q2"));
+        flush(&sp, "inc-drift", &changed);
+
+        let loaded = sp.load_session("inc-drift").unwrap();
+        assert_eq!(loaded.len(), 3);
+        assert_eq!(stored_count(&sp, "inc-drift"), 3, "watermark self-heals");
+    }
+
+    /// The dangerous collision for the fast path: the timeline is rewritten in
+    /// the middle while keeping the same length and the same first/last
+    /// messages. A count+ends check would wave it through and leave the stale
+    /// middle in storage; the middle anchor must catch it.
+    #[test]
+    fn flush_detects_a_rewritten_middle_at_constant_length() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sp = SessionPersistence::new(tmp.path());
+        let before = vec![
+            Message::user("q1"),
+            Message::assistant("a1"),
+            Message::user("q2"),
+            Message::assistant("a2"),
+            Message::user("q3"),
+            Message::assistant("a3"),
+        ];
+        flush(&sp, "inc-mid", &before);
+        assert_eq!(stored_count(&sp, "inc-mid"), 6);
+
+        // Same length, same head, same tail — only the middle differs.
+        let after = vec![
+            Message::user("q1"),
+            Message::assistant("a1"),
+            Message::user("q2"),
+            Message::assistant("[summary] a2 rewritten"),
+            Message::user("q3"),
+            Message::assistant("a3"),
+        ];
+        flush(&sp, "inc-mid", &after);
+
+        let loaded = sp.load_session("inc-mid").unwrap();
+        assert_eq!(loaded.len(), 6);
+        assert_eq!(
+            loaded[3].content.as_deref(),
+            Some("[summary] a2 rewritten"),
+            "the middle must be refreshed, not assumed unchanged"
+        );
+    }
+
+    /// A turn persists twice: once before the agent runs (so a failed run
+    /// cannot lose the user's message) and once after. The markdown export is
+    /// a full re-render of the whole conversation, so producing it in the
+    /// pre-save means writing the file twice per turn for content that is
+    /// replaced seconds later.
+    #[test]
+    fn pre_turn_persist_skips_the_markdown_export() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sp = SessionPersistence::new(tmp.path());
+        let msgs = vec![Message::user("q1")];
+
+        sp.persist_pre_turn("pre-turn", &msgs, Some("m"), Some("local"))
+            .unwrap();
+        assert_eq!(
+            sp.load_session("pre-turn").unwrap().len(),
+            1,
+            "the row must exist even though the export is skipped"
+        );
+        let md = sp.sessions_dir.join("pre-turn.md");
+        assert!(
+            !md.exists(),
+            "pre-save must not render the full markdown export"
+        );
+
+        flush(&sp, "pre-turn", &msgs);
+        assert!(md.exists(), "the post-run persist owns the export");
+    }
+
+    #[test]
+    fn flush_appends_without_rewriting_history() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sp = SessionPersistence::new(tmp.path());
+        let mut msgs = vec![Message::user("q1"), Message::assistant("a1")];
+        flush(&sp, "inc-append", &msgs);
+        let before = row_ids(&sp, "inc-append");
+        assert_eq!(before.len(), 2);
+
+        msgs.push(Message::user("q2"));
+        msgs.push(Message::assistant("a2"));
+        flush(&sp, "inc-append", &msgs);
+
+        let after = row_ids(&sp, "inc-append");
+        assert_eq!(after.len(), 4);
+        assert_eq!(
+            &after[..2],
+            &before[..],
+            "the unchanged prefix must keep its row ids — those ids are the \
+             positional identity the UI renders"
+        );
+        assert!(after[2] > after[1] && after[3] > after[2], "appends move forward");
+    }
+
+    #[test]
+    fn flush_is_idempotent_for_an_unchanged_timeline() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sp = SessionPersistence::new(tmp.path());
+        let msgs = vec![
+            Message::user("q1"),
+            Message::assistant("a1"),
+            Message::user("q2"),
+        ];
+        flush(&sp, "inc-idem", &msgs);
+        let first = row_ids(&sp, "inc-idem");
+        flush(&sp, "inc-idem", &msgs);
+        assert_eq!(row_ids(&sp, "inc-idem"), first, "no churn when nothing changed");
+    }
+
+    /// Compression folds the middle: the in-memory timeline shrinks and no
+    /// longer matches the stored rows. The prefix must stop at the divergence
+    /// point and the remnants must be deleted — otherwise the model would be
+    /// fed the turns compression was meant to remove.
+    #[test]
+    fn flush_truncates_after_compression() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sp = SessionPersistence::new(tmp.path());
+        let long = vec![
+            Message::user("q1"),
+            Message::assistant("a1"),
+            Message::user("q2"),
+            Message::assistant("a2"),
+            Message::user("q3"),
+            Message::assistant("a3"),
+        ];
+        flush(&sp, "inc-压缩", &long);
+        assert_eq!(row_ids(&sp, "inc-压缩").len(), 6);
+
+        // head kept, middle replaced by a summary, tail kept
+        let compressed = vec![
+            Message::user("q1"),
+            Message::assistant("a1"),
+            Message::user("[summary] q2..a3"),
+            Message::assistant("continuing"),
+        ];
+        flush(&sp, "inc-压缩", &compressed);
+
+        assert_eq!(
+            row_ids(&sp, "inc-压缩").len(),
+            4,
+            "folded turns must be removed from storage"
+        );
+        let loaded = sp.load_session("inc-压缩").unwrap();
+        assert_eq!(loaded.len(), 4);
+        assert!(
+            loaded.iter().all(|m| m.content.as_deref() != Some("q3")),
+            "compressed content must not come back on reload"
+        );
+    }
+
+    /// The client writes `unified_steps` onto the latest assistant row after a
+    /// stream ends. The next turn's flush must not clobber it — the old
+    /// DELETE+INSERT needed an ordinal carry-forward hack for this, which the
+    /// incremental write makes unnecessary.
+    #[test]
+    fn flush_preserves_client_written_unified_steps() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sp = SessionPersistence::new(tmp.path());
+        let mut msgs = vec![Message::user("q1"), Message::assistant("a1")];
+        flush(&sp, "inc-steps", &msgs);
+
+        sp.update_latest_assistant_unified_steps("inc-steps", r#"[{"kind":"text"}]"#)
+            .unwrap();
+
+        msgs.push(Message::user("q2"));
+        flush(&sp, "inc-steps", &msgs);
+
+        let conn = super::open_with_wal(&sp.db_path).unwrap();
+        let steps: Option<String> = conn
+            .query_row(
+                "SELECT unified_steps FROM messages \
+                 WHERE session_id = 'inc-steps' AND role = 'assistant' ORDER BY id ASC LIMIT 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            steps.as_deref(),
+            Some(r#"[{"kind":"text"}]"#),
+            "prefix rows must not be rewritten"
+        );
+    }
+
+    /// `approval` rows are UI-timeline entries written by a separate INSERT.
+    /// The old blanket DELETE destroyed them on every turn while the doc
+    /// comment claimed they survived; the incremental flush must exempt them
+    /// the same way it exempts `automation` — neither compared nor deleted.
+    #[test]
+    fn flush_preserves_approval_rows() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sp = SessionPersistence::new(tmp.path());
+        let msgs = vec![Message::user("q1"), Message::assistant("a1")];
+        flush(&sp, "inc-approval", &msgs);
+
+        {
+            let conn = super::open_with_wal(&sp.db_path).unwrap();
+            conn.execute(
+                "INSERT INTO messages (session_id, role, content, created_at, active) \
+                 VALUES ('inc-approval', 'approval', '{\"kind\":\"card\"}', '2026-01-01T00:00:00Z', 1)",
+                [],
+            )
+            .unwrap();
+        }
+
+        // Turn 2: a normal follow-up must neither delete the approval row nor
+        // let it stall the incremental fast path for later turns.
+        let mut next = msgs;
+        next.push(Message::user("q2"));
+        next.push(Message::assistant("a2"));
+        flush(&sp, "inc-approval", &next);
+
+        let conn = super::open_with_wal(&sp.db_path).unwrap();
+        let approvals: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM messages \
+                 WHERE session_id = 'inc-approval' AND role = 'approval'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(approvals, 1, "approval row must survive flush");
+        // row_ids counts every row (no role filter): 4 timeline + 1 approval.
+        assert_eq!(row_ids(&sp, "inc-approval").len(), 5);
+
+        // And the LLM payload still filters approvals out.
+        let loaded = sp.load_session("inc-approval").unwrap();
+        assert_eq!(loaded.len(), 4, "approvals stay out of the LLM timeline");
+    }
+
+    /// `automation` rows are an append-only side channel written by the
+    /// scheduler. They are not part of the in-memory timeline, so they must
+    /// never be deleted — and must not break the prefix computation either.
+    #[test]
+    fn flush_leaves_automation_rows_alone() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sp = SessionPersistence::new(tmp.path());
+        let msgs = vec![Message::user("q1"), Message::assistant("a1")];
+        flush(&sp, "inc-auto", &msgs);
+
+        {
+            let conn = super::open_with_wal(&sp.db_path).unwrap();
+            conn.execute(
+                "INSERT INTO messages (session_id, role, content, created_at, active) \
+                 VALUES ('inc-auto', 'automation', 'scheduled result', '2026-01-01T00:00:00Z', 1)",
+                [],
+            )
+            .unwrap();
+        }
+
+        flush(&sp, "inc-auto", &msgs);
+        let conn = super::open_with_wal(&sp.db_path).unwrap();
+        let auto: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM messages WHERE session_id = 'inc-auto' AND role = 'automation'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(auto, 1, "automation rows survive flush");
+        assert_eq!(row_ids(&sp, "inc-auto").len(), 3);
+    }
+
     #[test]
     fn test_save_session_log() {
         let tmp = tempfile::tempdir().unwrap();

@@ -8,9 +8,6 @@
  * 不加循环装饰动画——面板每 3 秒刷新一次，循环动画会一直抖。 */
 
 /* ─── 标题栏菜单栏 ────────────────────────────────────────────────── */
-/* 品牌区不再吃掉整条剩余空间，让菜单跟在标题后面；剩余空隙交给 spacer。 */
-.tb-brand { flex: 0 1 auto; min-width: 0; }
-.tb-spacer { flex: 1; }
 
 .menubar { display: flex; align-items: center; gap: 1px; flex: none; }
 .menubar-slot { position: relative; }

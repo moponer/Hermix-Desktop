@@ -45,15 +45,11 @@ fn is_sql_identifier(s: &str) -> bool {
 }
 
 fn open_with_wal(path: &Path) -> Result<rusqlite::Connection, AutomationRepositoryError> {
-    let conn = rusqlite::Connection::open(path)
+    // WAL + busy_timeout come from the shared opener so they cannot drift from
+    // the rest of the app. `foreign_keys` stays local: it is per-connection
+    // state this crate's schema actually depends on.
+    let conn = hermix_store::open_connection(path, hermix_store::OpenMode::Write)
         .map_err(|e| AutomationRepositoryError::Io(format!("Failed to open automations db: {e}")))?;
-    if let Err(e) =
-        conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;")
-    {
-        tracing::warn!(
-            "automation_repository: WAL/busy_timeout PRAGMA failed ({e}); continuing"
-        );
-    }
     let _ = conn.execute_batch("PRAGMA foreign_keys = ON;");
     Ok(conn)
 }

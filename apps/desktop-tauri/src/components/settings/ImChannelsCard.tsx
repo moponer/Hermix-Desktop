@@ -16,6 +16,8 @@ import {
 import QRCode from "qrcode";
 import { fetchJSON } from "../../api/rest";
 import { toastError, toastSuccess } from "../../hooks/useToast";
+import { Input } from "../ui";
+import { COPY_FAILED, LOADING, SAVE, SAVE_FAILED, SAVING, failure } from "../strings";
 
 /** 后端 `channels::provision::BindStatusItem`。 */
 interface BindStatusItem {
@@ -142,7 +144,7 @@ const fmtSec = (sec: number | null): string => (sec ? new Date(sec * 1000).toLoc
 /** 面板里的小节标题。 */
 function SubHead({ children }: { children: React.ReactNode }) {
   return (
-    <div className="text-[length:var(--text-tiny)] font-medium uppercase tracking-wide text-text-muted pt-1">
+    <div className="text-[length:var(--text-tiny)] font-medium text-text-muted pt-1">
       {children}
     </div>
   );
@@ -321,7 +323,7 @@ export function ImChannelsCard({
       await refreshRelay();
       toastSuccess("relay 配置已保存，重连会在下一次退避后自动生效");
     } catch (e) {
-      toastError(`保存失败：${e instanceof Error ? e.message : String(e)}`);
+      toastError(failure(SAVE_FAILED, "请重试。", e instanceof Error ? e.message : String(e)));
     } finally {
       setRelayBusy(false);
     }
@@ -617,7 +619,7 @@ export function ImChannelsCard({
       await navigator.clipboard.writeText(pairCode.pairing_code);
       toastSuccess("配对码已复制");
     } catch {
-      toastError("复制失败，请手动选中复制");
+      toastError(failure(COPY_FAILED, "请手动选中内容后复制。"));
     }
   }, [pairCode]);
 
@@ -629,7 +631,7 @@ export function ImChannelsCard({
       await navigator.clipboard.writeText(qr.payload.pairing_url);
       toastSuccess("配对链接已复制，去手机配对页粘贴");
     } catch {
-      toastError("复制失败，请手动选中复制");
+      toastError(failure(COPY_FAILED, "请手动选中内容后复制。"));
     }
   }, [qr]);
 
@@ -642,20 +644,20 @@ export function ImChannelsCard({
   /** 左栏每个渠道的状态摘要 —— 扫一眼就知道哪个通了、哪个没配。 */
   const railStatus = (c: ChannelDef): { text: string; tone: string; dot: string } => {
     if (c.id === "mobile") {
-      if (relayErr) return { text: "relay 配置读取失败", tone: "text-error", dot: "bg-error" };
+      if (relayErr) return { text: "relay 配置读取失败", tone: "text-text-error", dot: "bg-error" };
       // 已配对：这一行报的是**谁**连着，不是「能不能再连一个」。中转断了照样要
       // 说断——绿灯配手机名会让人以为消息能过去。
       if (mobileDevice)
         return relay?.state === "connected"
-          ? { text: mobileDevice.device_name, tone: "text-success", dot: "bg-success" }
-          : { text: "手机已配对 · 中转未接通", tone: "text-warning", dot: "bg-warning" };
+          ? { text: mobileDevice.device_name, tone: "text-text-success", dot: "bg-success" }
+          : { text: "手机已配对 · 中转未接通", tone: "text-text-warning", dot: "bg-warning" };
       if (relay?.state === "connected")
-        return { text: "跨网络已接通", tone: "text-success", dot: "bg-success" };
+        return { text: "跨网络已接通", tone: "text-text-success", dot: "bg-success" };
       if (relay?.state === "connecting")
-        return { text: "正在连接中转", tone: "text-warning", dot: "bg-warning" };
+        return { text: "正在连接中转", tone: "text-text-warning", dot: "bg-warning" };
       if (relay?.enabled)
-        return { text: "中转未接通", tone: "text-warning", dot: "bg-warning" };
-      if (qrError) return { text: "二维码生成失败", tone: "text-error", dot: "bg-error" };
+        return { text: "中转未接通", tone: "text-text-warning", dot: "bg-warning" };
+      if (qrError) return { text: "二维码生成失败", tone: "text-text-error", dot: "bg-error" };
       return qr
         ? { text: "可扫码配对", tone: "text-text-secondary", dot: "bg-bg-active" }
         : { text: "正在准备…", tone: "text-text-muted", dot: "bg-bg-active" };
@@ -663,8 +665,8 @@ export function ImChannelsCard({
     const s = status?.find((x) => x.platform === c.id);
     if (status === null) return { text: "读取中…", tone: "text-text-muted", dot: "bg-bg-active" };
     if (!s?.bound) return { text: "未绑定", tone: "text-text-muted", dot: "bg-bg-active" };
-    if (live[c.id]) return { text: "通道已连接", tone: "text-success", dot: "bg-success" };
-    return { text: "网关未连接", tone: "text-warning", dot: "bg-warning" };
+    if (live[c.id]) return { text: "通道已连接", tone: "text-text-success", dot: "bg-success" };
+    return { text: "网关未连接", tone: "text-text-warning", dot: "bg-warning" };
   };
 
   const current = CHANNELS.find((c) => c.id === active)!;
@@ -910,7 +912,7 @@ export function ImChannelsCard({
                     </ActionBtn>
                   </div>
                 ) : !relay ? (
-                  <div className="text-[length:var(--text-ui)] text-text-muted">正在读取…</div>
+                  <div className="text-[length:var(--text-ui)] text-text-muted">{LOADING}</div>
                 ) : (
                   <>
                     {/* 状态一行说清，其余内容都从这个前提展开 */}
@@ -981,25 +983,22 @@ export function ImChannelsCard({
                         <code className="block break-all rounded-md bg-bg-tertiary px-3 py-2 font-mono text-[length:var(--text-meta)] text-accent select-all">
                           node src/relayctl.js add-node {relay.node_id}
                         </code>
-                        <label className="block">
-                          <span className="block text-[length:var(--text-meta)] text-text-muted mb-1.5">
-                            电脑侧凭据（hrel_*）
-                          </span>
-                          <input
-                            value={relayToken}
-                            onChange={(e) => setRelayToken(e.target.value)}
-                            placeholder="relayctl add-node 的输出"
-                            type="password"
-                            spellCheck={false}
-                            className="w-full h-9 px-3 rounded-lg bg-bg-tertiary text-[length:var(--text-ui)] text-text-primary placeholder:text-text-faint focus:outline-none focus:ring-1 focus:ring-accent"
-                          />
-                        </label>
+                        <Input
+                          size="lg"
+                          type="password"
+                          label="电脑侧凭据（hrel_*）"
+                          hint="粘贴 relayctl add-node 的输出"
+                          value={relayToken}
+                          onChange={(e) => setRelayToken(e.target.value)}
+                          placeholder="relayctl add-node 的输出"
+                          spellCheck={false}
+                        />
                         <ActionBtn
                           onClick={() => void saveRelay()}
                           disabled={relayBusy || !relayToken.trim()}
                           tone="primary"
                         >
-                          {relayBusy ? "保存中…" : "保存并连接"}
+                          {relayBusy ? SAVING : "保存并连接"}
                         </ActionBtn>
                         {/* 提示反复出现的 E2EE 身份错误时用：DPAPI 主密钥丢失后
                             手填凭据救不了（新凭据也解不开旧身份的锁），只有换身份。 */}
@@ -1040,25 +1039,22 @@ export function ImChannelsCard({
                             默认走官方中转，不用管这一节。只有你自己部署了 relay 服务才需要改：
                             填上你的地址（留空 = 改回官方）。
                           </div>
-                          <label className="block">
-                            <span className="block text-[length:var(--text-meta)] text-text-muted mb-1.5">
-                              自建中转地址（可选）
-                            </span>
-                            <input
-                              value={relayUrl}
-                              onChange={(e) => setRelayUrl(e.target.value)}
-                              placeholder={relay.url || "wss://relay.example.com"}
-                              spellCheck={false}
-                              className="w-full h-9 px-3 rounded-lg bg-bg-tertiary text-[length:var(--text-ui)] text-text-primary placeholder:text-text-faint focus:outline-none focus:ring-1 focus:ring-accent"
-                            />
-                          </label>
+                          <Input
+                            size="lg"
+                            label="自建中转地址（可选）"
+                            hint="留空 = 改回官方中转"
+                            value={relayUrl}
+                            onChange={(e) => setRelayUrl(e.target.value)}
+                            placeholder={relay.url || "wss://relay.example.com"}
+                            spellCheck={false}
+                          />
                           <div className="flex items-center gap-3 flex-wrap">
                             <ActionBtn
                               onClick={() => void saveRelay()}
                               disabled={relayBusy}
                               tone="primary"
                             >
-                              {relayBusy ? "保存中…" : "保存"}
+                              {relayBusy ? SAVING : SAVE}
                             </ActionBtn>
                             <span className="text-[length:var(--text-meta)] text-text-muted">
                               本机 id：<span className="font-mono">{relay.node_id || "（未生成）"}</span>
@@ -1202,7 +1198,7 @@ function ImPane(props: {
         </ActionBtn>
       </div>
     ) : (
-      <div className="mt-5 text-[length:var(--text-meta)] text-text-muted">正在读取绑定状态…</div>
+      <div className="mt-5 text-[length:var(--text-meta)] text-text-muted">{LOADING}</div>
     );
   }
 
@@ -1218,13 +1214,13 @@ function ImPane(props: {
               {s?.source === "env" && <span className="text-text-muted">（环境变量）</span>}
             </span>
             {live[platform] ? (
-              <span className="inline-flex items-center gap-1.5 text-[length:var(--text-meta)] text-success">
+              <span className="inline-flex items-center gap-1.5 text-[length:var(--text-meta)] text-text-success">
                 <span className="inline-block h-1.5 w-1.5 rounded-full bg-success" />
                 通道已连接
               </span>
             ) : liveLoaded ? (
               <span
-                className="inline-flex items-center gap-1.5 text-[length:var(--text-meta)] text-warning"
+                className="inline-flex items-center gap-1.5 text-[length:var(--text-meta)] text-text-warning"
                 title="凭据在，但网关没连上（网络不通 / 凭据过期 / 机器人被停用）。机器人此时不会回消息。"
               >
                 <AlertTriangle className="icon-sm" />

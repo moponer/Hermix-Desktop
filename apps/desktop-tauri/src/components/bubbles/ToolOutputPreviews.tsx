@@ -64,7 +64,7 @@ function ScreenshotPreview({ output }: { output?: string }) {
       : convertFileSrc(parsed.saved_to);
   const label = w && h ? `桌面截图 ${w}×${h}` : "桌面截图";
   return (
-    <div className="mt-1.5 rounded-md overflow-hidden border border-border-primary/40 bg-bg-secondary/20">
+    <div className="mt-1.5 rounded-md overflow-hidden border-border-primary/40 bg-bg-secondary/20">
       <img
         src={src}
         alt={label}
@@ -127,7 +127,7 @@ function WindowListPreview({ output }: { output?: string }) {
   if (!parsed) return null;
   const { matched, truncated, windows } = parsed;
   return (
-    <div className="mt-1.5 rounded-md overflow-hidden border border-border-primary/40 bg-bg-secondary/20">
+    <div className="mt-1.5 rounded-md overflow-hidden border-border-primary/40 bg-bg-secondary/20">
       <div className="px-2 py-1 text-[length:var(--text-meta)] text-text-faint bg-bg-secondary/40 flex items-center justify-between">
         <span>顶层窗口</span>
         <span className="font-mono">
@@ -223,7 +223,7 @@ function WindowAtPointPreview({ output }: { output?: string }) {
   if (!parsed) return null;
   const { x, y, window: w } = parsed;
   return (
-    <div className="mt-1.5 rounded-md overflow-hidden border border-border-primary/40 bg-bg-secondary/20">
+    <div className="mt-1.5 rounded-md overflow-hidden border-border-primary/40 bg-bg-secondary/20">
       <div className="px-2.5 py-1.5 text-[length:var(--text-meta)] flex items-center gap-2">
         <span className="text-text-faint">点</span>
         <span className="font-mono text-text-secondary">({x}, {y})</span>
@@ -296,7 +296,7 @@ function UiTreePreview({ output }: { output?: string }) {
   if (!parsed) return null;
   const { max_depth, elements, element_count } = parsed;
   return (
-    <div className="mt-1.5 rounded-md overflow-hidden border border-border-primary/40 bg-bg-secondary/20">
+    <div className="mt-1.5 rounded-md overflow-hidden border-border-primary/40 bg-bg-secondary/20">
       <div className="px-2 py-1 text-[length:var(--text-meta)] text-text-faint bg-bg-secondary/40 flex items-center justify-between">
         <span>UI 树（UIA control view）</span>
         <span className="font-mono">
@@ -404,7 +404,7 @@ function UiFindPreview({ output }: { output?: string }) {
   if (!parsed) return null;
   const { count, truncated, elements } = parsed;
   return (
-    <div className="mt-1.5 rounded-md overflow-hidden border border-border-primary/40 bg-bg-secondary/20">
+    <div className="mt-1.5 rounded-md overflow-hidden border-border-primary/40 bg-bg-secondary/20">
       <div className="px-2 py-1 text-[length:var(--text-meta)] text-text-faint bg-bg-secondary/40 flex items-center justify-between">
         <span>UIA 查找结果</span>
         <span className="font-mono">
@@ -484,7 +484,7 @@ function UiClickPreview({ output }: { output?: string }) {
   if (!parsed) return null;
   const { name, clicked_at } = parsed;
   return (
-    <div className="mt-1.5 rounded-md overflow-hidden border border-border-primary/40 bg-bg-secondary/20">
+    <div className="mt-1.5 rounded-md overflow-hidden border-border-primary/40 bg-bg-secondary/20">
       <div className="px-2.5 py-1.5 text-[length:var(--text-meta)] flex items-center gap-2">
         <span className="text-text-faint">点击</span>
         <span className="text-text-primary truncate" title={name}>{name}</span>
@@ -520,7 +520,7 @@ function UiSingleNamePreview({ output, verb }: { output?: string; verb: string }
   }, [output]);
   if (parsed === null) return null;
   return (
-    <div className="mt-1.5 rounded-md overflow-hidden border border-border-primary/40 bg-bg-secondary/20">
+    <div className="mt-1.5 rounded-md overflow-hidden border-border-primary/40 bg-bg-secondary/20">
       <div className="px-2.5 py-1.5 text-[length:var(--text-meta)] flex items-center gap-2">
         <span className="text-text-faint">{verb}</span>
         <span className="text-text-primary truncate" title={parsed}>{parsed}</span>

@@ -6,25 +6,17 @@
 use hermix_core::{BudgetConfig, ToolResult};
 
 /// Truncate a single result string to `max_chars`.
-/// Counts **characters** (not bytes) so that CJK / emoji payloads are
-/// safe — `content.len() <= max_chars` and `&content[..max_chars]` would
-/// panic on multi-byte boundaries. If the content exceeds `max_chars`,
-/// it is truncated and a sentinel message is appended indicating how
-/// many characters were removed.
+///
+/// Delegates to [`hermix_tools::registry::truncate_middle_chars`] so there is
+/// **one** truncation rule in the codebase: keep head *and* tail, char-safe.
+/// The old head-only cut here discarded the tail — which for command output is
+/// where the exit status, the failing assertion and the final error line live.
+/// Same reasoning as the Codex `truncate_middle` contract.
+///
+/// Counts **characters** (not bytes) so CJK / emoji payloads cannot panic on a
+/// multi-byte boundary.
 pub fn truncate_result(content: &str, max_chars: usize) -> String {
-    if content.chars().count() <= max_chars {
-        return content.to_string();
-    }
-    // char_indices yields (byte_offset, char); the (max_chars)th entry's
-    // byte_offset is the safe slice end.
-    let end_byte = content
-        .char_indices()
-        .nth(max_chars)
-        .map(|(byte, _)| byte)
-        .unwrap_or(content.len());
-    let truncated = &content[..end_byte];
-    let removed = content.chars().count() - max_chars;
-    format!("{truncated}\n\n[... truncated {removed} characters ...]")
+    hermix_tools::registry::truncate_middle_chars(content, max_chars)
 }
 
 /// Enforce budget on a batch of tool results.
@@ -99,17 +91,31 @@ mod tests {
         let truncated = truncate_result(&content, 100);
         assert!(truncated.len() < 300); // original + suffix
         assert!(truncated.contains("truncated"));
-        assert!(truncated.starts_with(&"a".repeat(100)));
+        // Head **and** tail survive: a pure head cut dropped the tail, which
+        // is where command summaries, exit codes and stack frames live.
+        assert!(truncated.starts_with("aaaaaaaa"));
+        assert!(truncated.ends_with(&"a".repeat(20)));
+    }
+
+    #[test]
+    fn test_truncate_result_keeps_the_tail() {
+        let mut content = "x".repeat(10_000);
+        content.push_str("FINAL: exit code 1");
+        let truncated = truncate_result(&content, 1_000);
+        assert!(
+            truncated.contains("FINAL: exit code 1"),
+            "the tail carries the verdict for command output"
+        );
     }
 
     #[test]
     fn test_truncate_result_cjk_does_not_panic() {
-        // Each Chinese char is 3 bytes in UTF-8. Truncating at byte offset
-        // 100 used to panic (mid-character). Now we count chars so it's safe.
+        // Each Chinese char is 3 bytes in UTF-8. Truncating at a byte offset
+        // used to panic (mid-character). Now we count chars so it's safe.
         let content: String = "中".repeat(200); // 600 bytes, 200 chars
         let truncated = truncate_result(&content, 100);
-        assert_eq!(truncated.chars().filter(|c| *c == '中').count(), 100);
-        assert!(truncated.contains("truncated 100 characters"));
+        assert!(truncated.contains('中'));
+        assert!(truncated.contains("truncated"));
     }
 
     #[test]
@@ -117,7 +123,8 @@ mod tests {
         // 4-byte chars. Old code would have panicked.
         let content: String = "🎉".repeat(50);
         let truncated = truncate_result(&content, 10);
-        assert_eq!(truncated.chars().filter(|c| *c == '🎉').count(), 10);
+        assert!(truncated.starts_with('🎉'));
+        assert!(truncated.contains("truncated"));
     }
 
     #[test]
@@ -132,10 +139,11 @@ mod tests {
             max_aggregate_chars: 600, // forces aggregate truncation
         };
         enforce_budget(&mut results, &budget);
-        // Total chars after enforce should be ≤ 600 (slight overshoot from
-        // footer) and no panic on byte-vs-char mismatch.
+        // ≤ 600 plus the per-result truncation footer (the middle-truncation
+        // marker is longer than the old head-only one: it names what was cut
+        // and states that head and tail survived).
         let total_chars: usize = results.iter().map(|r| r.content.chars().count()).sum();
-        assert!(total_chars <= 700, "aggregate overshoot too large: {total_chars}");
+        assert!(total_chars <= 800, "aggregate overshoot too large: {total_chars}");
     }
 
     #[test]
@@ -149,7 +157,13 @@ mod tests {
             max_aggregate_chars: 1_000_000,
         };
         enforce_budget(&mut results, &budget);
-        assert!(results[0].content.len() <= 350);
+        // cap + marker; the marker is ~70 chars and must not be counted as
+        // content the budget failed to enforce.
+        assert!(
+            results[0].content.chars().count() <= 400,
+            "{}",
+            results[0].content.chars().count()
+        );
         assert_eq!(results[1].content.len(), 200);
     }
 

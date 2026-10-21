@@ -9,6 +9,7 @@ description = "Automation engine — three-table scheduling (definition/runtime/
 [dependencies]
 hermix-core = { workspace = true }
 hermix-config = { workspace = true }
+hermix-store = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 rusqlite = { workspace = true }

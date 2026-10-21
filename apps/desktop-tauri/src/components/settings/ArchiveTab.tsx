@@ -4,6 +4,7 @@ import { ArchiveRestore, Loader2 } from "lucide-react";
 import { getSessions } from "../../api/rest";
 import { usePinnedArchived } from "../../hooks/usePinnedArchived";
 import { SettingsGroup, SettingsRow } from "../ui";
+import { LOADING } from "../strings";
 
 interface ArchivedSession {
   id: string;
@@ -51,8 +52,8 @@ export function ArchiveTab() {
 
   if (rows === null) {
     return (
-      <div className="flex items-center gap-2 py-6 text-[length:var(--text-ui)] text-[var(--color-text-muted)]">
-        <Loader2 className="icon-sm animate-spin" /> 正在读取归档…
+      <div className="flex items-center gap-2 py-6 text-[length:var(--text-ui)] text-[var(--color-text-muted)]" aria-busy="true">
+        <Loader2 className="icon-sm animate-spin" /> {LOADING}
       </div>
     );
   }

@@ -10,7 +10,8 @@
 // 回归守卫：apps/desktop-tauri/scripts/check-css-var-refs.cjs
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ShieldCheck } from "lucide-react";
+import { ShieldCheck, Eye, EyeOff, User, KeyRound, Check, Globe, X } from "lucide-react";
+import { COPY_FAILED, SAVE, SAVING, failure } from "./strings";
 import {
   vaultList,
   vaultCreate,
@@ -46,148 +47,6 @@ const EMPTY_FORM: FormState = {
   notes: "",
 };
 
-/** lucide 风格内联图标（界面禁用 emoji，见 P-40）。 */
-function IconEye() {
-  return (
-    <svg
-      width="14"
-      height="14"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7Z" />
-      <circle cx="12" cy="12" r="3" />
-    </svg>
-  );
-}
-
-function IconEyeOff() {
-  return (
-    <svg
-      width="14"
-      height="14"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M10.7 5.1A11 11 0 0 1 12 5c6.4 0 10 7 10 7a18 18 0 0 1-3 4.1" />
-      <path d="M6.6 6.6A18 18 0 0 0 2 12s3.6 7 10 7a10.7 10.7 0 0 0 5.3-1.4" />
-      <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" />
-      <path d="M2 2l20 20" />
-    </svg>
-  );
-}
-
-/** 复制用户名：人像图标（两个按钮用同一复制图标无法区分用途，故按语义取形）。 */
-function IconUser() {
-  return (
-    <svg
-      width="14"
-      height="14"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" />
-      <circle cx="12" cy="7" r="4" />
-    </svg>
-  );
-}
-
-/** 复制密码：钥匙图标。 */
-function IconKey() {
-  return (
-    <svg
-      width="14"
-      height="14"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <circle cx="7.5" cy="15.5" r="5.5" />
-      <path d="m21 2-9.6 9.6" />
-      <path d="m15.5 7.5 3 3L22 7l-3-3" />
-    </svg>
-  );
-}
-
-/** 复制成功对勾。 */
-function IconCheck() {
-  return (
-    <svg
-      width="14"
-      height="14"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2.5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M20 6 9 17l-5-5" />
-    </svg>
-  );
-}
-
-/** 中性地球图标：无网址 / 域名非法 / favicon 加载失败时的兜底。 */
-function IconGlobe({ size = 16 }: { size?: number }) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <circle cx="12" cy="12" r="9" />
-      <path d="M3 12h18" />
-      <path d="M12 3a15 15 0 0 1 0 18 15 15 0 0 1 0-18Z" />
-    </svg>
-  );
-}
-
-/** 清除搜索 / 关闭详情的 X 图标。 */
-function IconX() {
-  return (
-    <svg
-      width="14"
-      height="14"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M18 6 6 18" />
-      <path d="m6 6 12 12" />
-    </svg>
-  );
-}
-
 /** 图标按钮的 hover 说明浮层。
  *  不用原生 title：WebView2 里约 1s 才弹出且样式不可控。
  *  浮层向左上溢出，但列表容器是 `overflow-y-auto p-6`，上溢只落在 24px 内边距里
@@ -195,7 +54,7 @@ function IconX() {
 function Tip({ label }: { label: string }) {
   return (
     <span
-      className="pointer-events-none absolute bottom-full left-1/2 z-20 mb-1 -translate-x-1/2 whitespace-nowrap rounded-md border border-border-primary bg-bg-elevated px-2 py-1 text-xs text-text-primary opacity-0 shadow-pop transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100"
+      className="pointer-events-none absolute bottom-full left-1/2 z-20 mb-1 -translate-x-1/2 whitespace-nowrap rounded-md bg-bg-elevated px-2 py-1 text-xs text-text-primary opacity-0 shadow-pop transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100"
       role="tooltip"
     >
       {label}
@@ -204,7 +63,8 @@ function Tip({ label }: { label: string }) {
 }
 
 /** 网站图标：按域名从 favicon.im 现取（https://favicon.im/<domain>）。
- *  URL 非法或无域名时回落地球图标；加载失败（404 / 网络）同样回落。 */
+ *  URL 非法或无域名时回落地球图标；加载失败（404 / 网络）同样回落。
+ *  地球兜底走图标档位（14 → icon-md，16 → icon-lg），不再用裸 size={N}。 */
 function Favicon({ url, size = 16 }: { url: string; size?: number }) {
   const [failed, setFailed] = useState(false);
   const domain = useMemo(() => {
@@ -217,7 +77,7 @@ function Favicon({ url, size = 16 }: { url: string; size?: number }) {
   if (!domain || failed) {
     return (
       <span className="flex shrink-0 text-text-faint" aria-hidden="true">
-        <IconGlobe size={size} />
+        <Globe className={size <= 14 ? "icon-md" : "icon-lg"} />
       </span>
     );
   }
@@ -332,7 +192,7 @@ export function VaultPanel() {
           1500,
         );
       })
-      .catch(() => setError("复制失败（剪贴板不可用）"));
+      .catch(() => setError(failure(COPY_FAILED, "请手动选中内容后复制。")));
   }, []);
 
   const save = useCallback(async () => {
@@ -439,7 +299,7 @@ export function VaultPanel() {
         <section className="flex min-w-0 flex-1 flex-col gap-3" aria-label="凭据列表">
           <div className="relative">
             <input
-              className="w-full rounded-lg border border-border-secondary bg-bg-secondary py-2 pl-3 pr-9 text-sm text-text-primary outline-none focus:border-accent"
+              className="w-full rounded-lg bg-bg-secondary py-2 pl-3 pr-9 text-sm text-text-primary outline-none focus:border-accent"
               placeholder="搜索名称 / 拼音 / 网址 / 用户名…"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
@@ -456,14 +316,14 @@ export function VaultPanel() {
                 aria-label="清除搜索"
                 onClick={() => setQuery("")}
               >
-                <IconX />
+                <X className="icon-md" />
                 <Tip label="清除搜索" />
               </button>
             )}
           </div>
 
           {error && (
-            <div className="rounded-lg bg-error-soft px-3 py-2 text-sm text-error">{error}</div>
+            <div className="rounded-lg bg-error-soft px-3 py-2 text-sm text-text-error">{error}</div>
           )}
 
           {!loading && entries.length > 0 && (
@@ -485,7 +345,7 @@ export function VaultPanel() {
                 )}
               </p>
               <select
-                className="rounded-lg border border-border-secondary bg-bg-secondary px-2 py-1 text-[length:var(--text-meta)] text-text-primary outline-none focus:border-accent"
+                className="rounded-lg bg-bg-secondary px-2 py-1 text-[length:var(--text-meta)] text-text-primary outline-none focus:border-accent"
                 value={sortKey}
                 onChange={(e) => setSortKey(e.target.value as VaultSortKey)}
                 aria-label="排序方式"
@@ -517,11 +377,7 @@ export function VaultPanel() {
                   <div
                     key={e.id}
                     onClick={() => setSelectedId(e.id)}
-                    className={`flex cursor-pointer items-center gap-2 rounded-xl border px-4 py-3 transition-colors hover:bg-bg-card-hover ${
-                      isSelected
-                        ? "border-accent bg-bg-card-hover"
-                        : "border-border-primary bg-bg-card"
-                    }`}
+                    className={`flex cursor-pointer items-center gap-2 rounded-xl px-4 py-3 transition-colors hover:bg-bg-card-hover ${ isSelected ? "border-accent bg-bg-card-hover" : "border-border-primary bg-bg-card" }`}
                   >
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
@@ -551,7 +407,7 @@ export function VaultPanel() {
                           else void reveal(e.id);
                         }}
                       >
-                        {shown ? <IconEyeOff /> : <IconEye />}
+                        {shown ? <EyeOff className="icon-md" /> : <Eye className="icon-md" />}
                         {shown ? "掩回" : "显示"}
                       </button>
                       <button
@@ -562,7 +418,7 @@ export function VaultPanel() {
                           copy(e.username, `${e.id}:user`);
                         }}
                       >
-                        {copiedKey === `${e.id}:user` ? <IconCheck /> : <IconUser />}
+                        {copiedKey === `${e.id}:user` ? <Check className="icon-md" /> : <User className="icon-md" />}
                         <Tip label="复制用户名" />
                       </button>
                       {shown && (
@@ -574,7 +430,7 @@ export function VaultPanel() {
                             copy(revealed[e.id], `${e.id}:secret`);
                           }}
                         >
-                          {copiedKey === `${e.id}:secret` ? <IconCheck /> : <IconKey />}
+                          {copiedKey === `${e.id}:secret` ? <Check className="icon-md" /> : <KeyRound className="icon-md" />}
                           <Tip label="复制密码" />
                         </button>
                       )}
@@ -589,7 +445,7 @@ export function VaultPanel() {
                       </button>
                       {/* R3-6：删除确认统一走 ui/ConfirmDialog，行内两步按钮废止 */}
                       <button
-                        className="rounded-lg px-2 py-1 text-xs text-error transition-colors hover:bg-error-soft"
+                        className="rounded-lg px-2 py-1 text-xs text-text-error transition-colors hover:bg-error-soft"
                         onClick={(ev) => {
                           ev.stopPropagation();
                           setConfirmTarget({ id: e.id, name: e.name || e.username || e.id });
@@ -607,11 +463,11 @@ export function VaultPanel() {
 
         {selected && (
           <aside
-            className="flex w-80 shrink-0 flex-col overflow-y-auto rounded-xl border border-border-primary bg-bg-card"
+            className="flex w-80 shrink-0 flex-col overflow-y-auto rounded-xl bg-bg-card"
             aria-label="凭据详情"
           >
             <div className="flex items-start gap-2 border-b border-border-primary p-4">
-              <Favicon url={selected.url} size={20} />
+              <Favicon url={selected.url} size={16} />
               <div className="min-w-0 flex-1">
                 <h3 className="truncate text-[length:var(--text-ui)] font-semibold text-text-primary">
                   {selected.name}
@@ -625,7 +481,7 @@ export function VaultPanel() {
                 aria-label="关闭详情"
                 onClick={() => setSelectedId(null)}
               >
-                <IconX />
+                <X className="icon-md" />
                 <Tip label="关闭详情" />
               </button>
             </div>
@@ -653,7 +509,7 @@ export function VaultPanel() {
                       aria-label="复制用户名"
                       onClick={() => copy(selected.username, `${selected.id}:user`)}
                     >
-                      {copiedKey === `${selected.id}:user` ? <IconCheck /> : <IconUser />}
+                      {copiedKey === `${selected.id}:user` ? <Check className="icon-md" /> : <User className="icon-md" />}
                       <Tip label="复制用户名" />
                     </button>
                   )}
@@ -671,7 +527,7 @@ export function VaultPanel() {
                       aria-label="掩回密码"
                       onClick={() => maskReveal(selected.id)}
                     >
-                      <IconEyeOff />
+                      <EyeOff className="icon-md" />
                       <Tip label="掩回密码" />
                     </button>
                     <button
@@ -679,7 +535,7 @@ export function VaultPanel() {
                       aria-label="复制密码"
                       onClick={() => copy(revealed[selected.id], `${selected.id}:secret`)}
                     >
-                      {copiedKey === `${selected.id}:secret` ? <IconCheck /> : <IconKey />}
+                      {copiedKey === `${selected.id}:secret` ? <Check className="icon-md" /> : <KeyRound className="icon-md" />}
                       <Tip label="复制密码" />
                     </button>
                   </div>
@@ -694,7 +550,7 @@ export function VaultPanel() {
                       aria-label="显示密码"
                       onClick={() => void reveal(selected.id)}
                     >
-                      <IconEye />
+                      <Eye className="icon-md" />
                       显示
                     </button>
                   </div>
@@ -710,13 +566,13 @@ export function VaultPanel() {
               )}
               <div className="flex gap-2 border-t border-border-primary pt-4">
                 <button
-                  className="flex-1 rounded-lg border border-border-secondary px-3 py-1.5 text-[length:var(--text-meta)] text-text-primary transition-colors hover:bg-bg-secondary"
+                  className="flex-1 rounded-lg bg-bg-tertiary px-3 py-1.5 text-[length:var(--text-meta)] text-text-primary transition-colors hover:bg-bg-hover"
                   onClick={() => startEdit(selected)}
                 >
                   编辑
                 </button>
                 <button
-                  className="flex-1 rounded-lg border border-border-secondary px-3 py-1.5 text-[length:var(--text-meta)] text-error transition-colors hover:bg-error-soft"
+                  className="flex-1 rounded-lg bg-bg-tertiary px-3 py-1.5 text-[length:var(--text-meta)] text-text-error transition-colors hover:bg-error-soft"
                   onClick={() => setConfirmTarget({ id: selected.id, name: selected.name || selected.username || selected.id })}
                 >
                   删除
@@ -732,7 +588,7 @@ export function VaultPanel() {
           open
           onClose={() => setForm(null)}
           title={form.id ? "编辑凭据" : "新增凭据"}
-          width={480}
+          width="base"
           footer={
             <>
               <button
@@ -746,7 +602,7 @@ export function VaultPanel() {
                 disabled={saving}
                 onClick={() => void save()}
               >
-                {saving ? "保存中…" : "保存"}
+                {saving ? SAVING : SAVE}
               </button>
             </>
           }
@@ -768,7 +624,7 @@ export function VaultPanel() {
                       </span>
                       <input
                         type={type}
-                        className="w-full rounded-lg border border-border-secondary bg-bg-secondary py-2 pl-8 pr-3 text-sm text-text-primary outline-none focus:border-accent"
+                        className="w-full rounded-lg bg-bg-secondary py-2 pl-8 pr-3 text-sm text-text-primary outline-none focus:border-accent"
                         value={form[key]}
                         onChange={(ev) => setForm((f) => (f ? { ...f, [key]: ev.target.value } : f))}
                         autoComplete="off"
@@ -777,7 +633,7 @@ export function VaultPanel() {
                   ) : (
                     <input
                       type={type}
-                      className="rounded-lg border border-border-secondary bg-bg-secondary px-3 py-2 text-sm text-text-primary outline-none focus:border-accent"
+                      className="rounded-lg bg-bg-secondary px-3 py-2 text-sm text-text-primary outline-none focus:border-accent"
                       value={form[key]}
                       onChange={(ev) => setForm((f) => (f ? { ...f, [key]: ev.target.value } : f))}
                       autoComplete="off"
@@ -792,7 +648,7 @@ export function VaultPanel() {
                 <div className="relative">
                   <input
                     type={showSecret ? "text" : "password"}
-                    className="w-full rounded-lg border border-border-secondary bg-bg-secondary px-3 py-2 pr-10 text-sm text-text-primary outline-none focus:border-accent"
+                    className="w-full rounded-lg bg-bg-secondary px-3 py-2 pr-10 text-sm text-text-primary outline-none focus:border-accent"
                     value={form.secret}
                     onChange={(ev) =>
                       setForm((f) => (f ? { ...f, secret: ev.target.value } : f))
@@ -806,7 +662,7 @@ export function VaultPanel() {
                     aria-pressed={showSecret}
                     onClick={() => setShowSecret((s) => !s)}
                   >
-                    {showSecret ? <IconEyeOff /> : <IconEye />}
+                    {showSecret ? <EyeOff className="icon-md" /> : <Eye className="icon-md" />}
                     <Tip label={showSecret ? "隐藏密码" : "显示密码"} />
                   </button>
                 </div>
@@ -815,7 +671,7 @@ export function VaultPanel() {
                 <span className="text-xs text-text-secondary">备注</span>
                 <textarea
                   rows={2}
-                  className="resize-none rounded-lg border border-border-secondary bg-bg-secondary px-3 py-2 text-sm text-text-primary outline-none focus:border-accent"
+                  className="resize-none rounded-lg bg-bg-secondary px-3 py-2 text-sm text-text-primary outline-none focus:border-accent"
                   value={form.notes}
                   onChange={(ev) => setForm((f) => (f ? { ...f, notes: ev.target.value } : f))}
                 />

@@ -61,6 +61,9 @@ pub struct SaveResult {
     pub encoding_used: Option<String>,
     /// 实际替换的处数（仅文本替换有值，其余为 null）
     pub replaced: Option<usize>,
+    /// 需要如实告诉用户的话（例如"旧字未能真删除"）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 // ── 产物路径：原文件保护 ─────────────────────────────────────────────
@@ -98,6 +101,7 @@ pub(crate) fn save_bytes(
         bytes: bytes.len(),
         encoding_used,
         replaced: None,
+        note: None,
     })
 }
 
@@ -686,12 +690,171 @@ pub fn pdf_ops(
 ///
 /// 与 lopdf 的 `replace_text` 用**同一套**编码解析（页字体 → 字体编码 →
 /// `decode_text`），所以命中数与实际会不会被替换是一致的——不会出现
-/// 「报告替换了 N 处，其实一处没改」。
-fn count_text_hits(doc: &Document, page: u32, from: &str) -> Result<usize, String> {
+/// 页内文本替换：认 `Tj` / `'` / `"` 以及 `TJ` 数组里的每个字符串项。
+///
+/// **为什么自己写而不用 lopdf 的 `replace_text`**：那只处理 `Tj` 算子。而
+/// Word / LaTeX / 各类报表工具生成的 PDF 大量使用 `TJ` 数组做字距微调
+/// （一句话被拆成十几段），于是旧实现会报"明明看得见那行字，却没找到"。
+///
+/// 替换时用**同一字体的编码**把新文写回（`Document::encode_text`）——
+/// 直接塞 UTF-8 字节是非法的，阅读器会按字体编码解出乱码。
+///
+/// 返回命中数；0 表示这一页没有可整串替换的文字（调用方据此报错）。
+fn replace_text_in_page(
+    doc: &mut Document,
+    page: u32,
+    from: &str,
+    to: &str,
+) -> Result<usize, String> {
     let page_id = doc
         .page_iter()
         .nth(page.saturating_sub(1) as usize)
         .ok_or_else(|| format!("页码 {page} 超出范围"))?;
+
+    // 这一段借用 doc（编码表与页面内容都是只读），结束后才写回。
+    let (new_data, hits) = {
+        let encodings: BTreeMap<Vec<u8>, Encoding<'_>> = doc
+            .get_page_fonts(page_id)
+            .map_err(|e| format!("读取页字体失败: {e}"))?
+            .into_iter()
+            .map(|(name, font)| font.get_font_encoding(doc).map(|it| (name, it)))
+            .collect::<std::result::Result<BTreeMap<Vec<u8>, Encoding<'_>>, lopdf::Error>>()
+            .map_err(|e| format!("读取字体编码失败: {e}"))?;
+        let data = doc
+            .get_page_content(page_id)
+            .map_err(|e| format!("读取页内容失败: {e}"))?;
+        let mut content =
+            Content::decode(&data).map_err(|e| format!("解析页内容失败: {e}"))?;
+
+        let mut current: Option<&Encoding<'_>> = None;
+        let mut hits = 0usize;
+        for op in content.operations.iter_mut() {
+            match op.operator.as_ref() {
+                "Tf" => {
+                    current = op
+                        .operands
+                        .first()
+                        .and_then(|o| o.as_name().ok())
+                        .and_then(|n| encodings.get(n));
+                }
+                // 直接显示文字的三个算子：Tj / ' / "
+                "Tj" | "'" | "\"" => {
+                    if let (Some(enc), Some(obj)) = (current, op.operands.first_mut()) {
+                        if let Object::String(bytes, _) = obj {
+                            if let Ok(text) = Document::decode_text(enc, bytes) {
+                                if text == from {
+                                    *bytes = Document::encode_text(enc, to);
+                                    hits += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+                // TJ 数组：逐项检查（字距微调会把一句话拆成多段）
+                "TJ" => {
+                    if let (Some(enc), Some(Object::Array(items))) =
+                        (current, op.operands.first_mut())
+                    {
+                        for item in items.iter_mut() {
+                            if let Object::String(bytes, _) = item {
+                                if let Ok(text) = Document::decode_text(enc, bytes) {
+                                    if text == from {
+                                        *bytes = Document::encode_text(enc, to);
+                                        hits += 1;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        let encoded = content
+            .encode()
+            .map_err(|e| format!("编码页内容失败: {e}"))?;
+        (encoded, hits)
+    };
+
+    if hits == 0 {
+        return Ok(0);
+    }
+    // 写回页面内容流。多数页只有一个内容流；多个时合并进第一个并只留它。
+    let ids = doc.get_page_contents(page_id);
+    if let Some(&first) = ids.first() {
+        if let Ok(Object::Stream(stream)) = doc.get_object_mut(first) {
+            stream.set_content(new_data);
+            let _ = stream.compress();
+        }
+        if ids.len() > 1 {
+            if let Ok(dict) = doc.get_dictionary_mut(page_id) {
+                dict.set(b"Contents", Object::Reference(first));
+            }
+        }
+    }
+    Ok(hits)
+}
+
+/// 2D 仿射矩阵 `[a b c d e f]`（PDF 的矩阵记法）。
+#[derive(Clone, Copy, Debug)]
+struct Mat {
+    a: f64,
+    b: f64,
+    c: f64,
+    d: f64,
+    e: f64,
+    f: f64,
+}
+
+impl Mat {
+    fn identity() -> Self {
+        Mat { a: 1.0, b: 0.0, c: 0.0, d: 1.0, e: 0.0, f: 0.0 }
+    }
+
+    /// `self × m`（PDF 里 `cm` 是把新矩阵乘在左边）。
+    fn mul(&self, m: &Mat) -> Mat {
+        Mat {
+            a: self.a * m.a + self.b * m.c,
+            b: self.a * m.b + self.b * m.d,
+            c: self.c * m.a + self.d * m.c,
+            d: self.c * m.b + self.d * m.d,
+            e: self.e * m.a + self.f * m.c + m.e,
+            f: self.e * m.b + self.f * m.d + m.f,
+        }
+    }
+
+    fn translate(tx: f64, ty: f64) -> Mat {
+        Mat { a: 1.0, b: 0.0, c: 0.0, d: 1.0, e: tx, f: ty }
+    }
+}
+
+/// 在页面上找出并**删除**显示某段文字的算子（真删除：旧字不再存在于文件里）。
+///
+/// ## 判据：字符串精确匹配 + 位置消歧
+///
+/// PDFBox 的做法是逐字形追踪（`showGlyph` 给出每个字形的文本矩阵），靠
+/// **位置**判断"这是不是我要删的那段"。但逐字形需要字体的 advance width
+/// ——标准 14 号字没有 /Widths、CID 字体的 /W 又是另一套结构，取宽度这件事
+/// 在纯 Rust 里代价不小。
+///
+/// 我们换一个等价判据：前端已经知道用户点了哪句字（**原文**），后端把
+/// 每一处显示算子的字符串按**当前字体的编码**解出来，与原文精确比对；
+/// 若同一页有多处相同文字，再用**位置**（文本矩阵 × CTM，精确可算）消歧。
+/// 位置不可信时（同一 BT 块里的第二段文字且字体宽度未知）宁可不动 ——
+/// 删错地方比没删更糟。
+///
+/// 返回删掉的处数；找不到返回 0。
+fn remove_text_ops_at(
+    doc: &mut Document,
+    page: u32,
+    rect: [f64; 4],
+    target: &str,
+) -> Result<usize, String> {
+    let page_id = doc
+        .page_iter()
+        .nth(page.saturating_sub(1) as usize)
+        .ok_or_else(|| format!("页码 {page} 超出范围"))?;
+
     let encodings: BTreeMap<Vec<u8>, Encoding<'_>> = doc
         .get_page_fonts(page_id)
         .map_err(|e| format!("读取页字体失败: {e}"))?
@@ -699,37 +862,210 @@ fn count_text_hits(doc: &Document, page: u32, from: &str) -> Result<usize, Strin
         .map(|(name, font)| font.get_font_encoding(doc).map(|it| (name, it)))
         .collect::<std::result::Result<BTreeMap<Vec<u8>, Encoding<'_>>, lopdf::Error>>()
         .map_err(|e| format!("读取字体编码失败: {e}"))?;
+
     let data = doc
         .get_page_content(page_id)
         .map_err(|e| format!("读取页内容失败: {e}"))?;
-    let content =
+    let mut content =
         Content::decode(&data).map_err(|e| format!("解析页内容失败: {e}"))?;
-    let mut current: Option<&Encoding> = None;
-    let mut hits = 0usize;
-    for op in &content.operations {
+
+    // ── 追踪矩阵状态，找出候选 ──
+    let mut ctm = Mat::identity();
+    let mut stack: Vec<Mat> = Vec::new();
+    let mut tm = Mat::identity();
+    let mut tlm = Mat::identity();
+    let mut leading = 0.0f64;
+    let mut current_font: Option<&Encoding<'_>> = None;
+    // 同一 BT 块里，上一串显示之后位置是否还可信（宽度未知 → 不可信）
+    let mut origin_reliable = true;
+
+    // 候选：(算子下标, TJ 数组里的元素下标 Option, 起点)
+    let mut candidates: Vec<(usize, Option<usize>, f64, f64, bool)> = Vec::new();
+
+    for (idx, op) in content.operations.iter().enumerate() {
         match op.operator.as_ref() {
+            "q" => stack.push(ctm),
+            "Q" => {
+                if let Some(m) = stack.pop() {
+                    ctm = m;
+                }
+            }
+            "cm" => {
+                if let Some(m) = read_matrix(op.operands.as_slice()) {
+                    ctm = m.mul(&ctm);
+                }
+            }
+            "BT" => {
+                tm = Mat::identity();
+                tlm = Mat::identity();
+                origin_reliable = true;
+            }
+            "Tm" => {
+                if let Some(m) = read_matrix(op.operands.as_slice()) {
+                    tm = m;
+                    tlm = m;
+                }
+            }
+            "TL" => {
+                if let Some(v) = op.operands.first().and_then(|o| o.as_float().ok().map(|v| v as f64)) {
+                    leading = v;
+                }
+            }
+            "Td" | "TD" => {
+                if let (Some(tx), Some(ty)) = (
+                    op.operands.first().and_then(|o| o.as_float().ok().map(|v| v as f64)),
+                    op.operands.get(1).and_then(|o| o.as_float().ok().map(|v| v as f64)),
+                ) {
+                    if op.operator == "TD" {
+                        leading = -ty;
+                    }
+                    tlm = Mat::translate(tx, ty).mul(&tlm);
+                    tm = tlm;
+                    origin_reliable = true;
+                }
+            }
+            "T*" => {
+                tlm = Mat::translate(0.0, -leading).mul(&tlm);
+                tm = tlm;
+                origin_reliable = true;
+            }
             "Tf" => {
-                current = op
+                current_font = op
                     .operands
                     .first()
                     .and_then(|o| o.as_name().ok())
                     .and_then(|n| encodings.get(n));
             }
-            "Tj" => {
+            "Tj" | "'" | "\"" => {
+                let t = tm.mul(&ctm);
                 if let (Some(enc), Some(Object::String(bytes, _))) =
-                    (current, op.operands.first())
+                    (current_font, op.operands.first())
                 {
                     if let Ok(text) = Document::decode_text(enc, bytes) {
-                        if text == from {
-                            hits += 1;
+                        if text == target {
+                            candidates.push((idx, None, t.e, t.f, origin_reliable));
                         }
                     }
                 }
+                origin_reliable = false;
+            }
+            "TJ" => {
+                let t = tm.mul(&ctm);
+                if let (Some(enc), Some(Object::Array(items))) =
+                    (current_font, op.operands.first())
+                {
+                    for (i, item) in items.iter().enumerate() {
+                        if let Object::String(bytes, _) = item {
+                            if let Ok(text) = Document::decode_text(enc, bytes) {
+                                if text == target {
+                                    candidates.push((idx, Some(i), t.e, t.f, origin_reliable));
+                                }
+                            }
+                        }
+                    }
+                }
+                origin_reliable = false;
             }
             _ => {}
         }
     }
-    Ok(hits)
+
+    if candidates.is_empty() {
+        return Ok(0);
+    }
+
+    // 多处相同文字 → 用位置消歧（位置不可信就不删，宁可让用户再点一次）
+    let chosen: Vec<(usize, Option<usize>)> = if candidates.len() == 1 {
+        vec![(candidates[0].0, candidates[0].1)]
+    } else {
+        let (lx, ly, hx, hy) = (
+            rect[0].min(rect[2]),
+            rect[1].min(rect[3]),
+            rect[0].max(rect[2]),
+            rect[1].max(rect[3]),
+        );
+        let tol = 3.0f64; // 位置容差（pt）
+        let inside: Vec<(usize, Option<usize>)> = candidates
+            .iter()
+            .filter(|c| c.4 && c.2 >= lx - tol && c.2 <= hx + tol && c.3 >= ly - tol && c.3 <= hy + tol)
+            .map(|c| (c.0, c.1))
+            .collect();
+        if inside.len() != 1 {
+            return Err(format!(
+                "这一页有 {} 处相同的文字，无法确定要改哪一处；请点更完整的一段文字",
+                candidates.len()
+            ));
+        }
+        inside
+    };
+
+    // ── 真正删掉 ──
+    let mut removed = 0usize;
+    let mut drop_ops: Vec<usize> = Vec::new();
+    for (op_idx, elem) in &chosen {
+        let op = &mut content.operations[*op_idx];
+        match elem {
+            None => drop_ops.push(*op_idx),
+            Some(i) => {
+                // TJ 数组：把命中的那一项换成空串（保留其余项与字距）
+                if let Some(Object::Array(items)) = op.operands.first_mut() {
+                    if let Some(slot) = items.get_mut(*i) {
+                        *slot = Object::String(Vec::new(), lopdf::StringFormat::Literal);
+                        removed += 1;
+                    }
+                }
+            }
+        }
+    }
+    if !drop_ops.is_empty() {
+        drop_ops.sort_unstable();
+        drop_ops.dedup();
+        let mut i = 0usize;
+        content.operations.retain(|_| {
+            let keep = !drop_ops.contains(&i);
+            i += 1;
+            keep
+        });
+        removed += drop_ops.len();
+    }
+
+    if removed == 0 {
+        return Ok(0);
+    }
+
+    // 写回页面内容流（多流时合并进第一个并只留它）。
+    let encoded = content
+        .encode()
+        .map_err(|e| format!("编码页内容失败: {e}"))?;
+    let ids = doc.get_page_contents(page_id);
+    if let Some(&first) = ids.first() {
+        if let Ok(Object::Stream(stream)) = doc.get_object_mut(first) {
+            stream.set_content(encoded);
+            let _ = stream.compress();
+        }
+        if ids.len() > 1 {
+            if let Ok(dict) = doc.get_dictionary_mut(page_id) {
+                dict.set(b"Contents", Object::Reference(first));
+            }
+        }
+    }
+    Ok(removed)
+}
+
+/// 从算子的操作数里读一个 6 元矩阵（`cm` / `Tm`）。
+fn read_matrix(operands: &[Object]) -> Option<Mat> {
+    if operands.len() < 6 {
+        return None;
+    }
+    let g = |i: usize| operands[i].as_float().ok().map(|v| v as f64);
+    Some(Mat {
+        a: g(0)?,
+        b: g(1)?,
+        c: g(2)?,
+        d: g(3)?,
+        e: g(4)?,
+        f: g(5)?,
+    })
 }
 
 /// PDF 文本层替换。
@@ -754,21 +1090,799 @@ pub fn pdf_replace_text(
     let out = safe_output_path(&src, out_path.as_deref(), None)?;
     let mut doc = Document::load(&src).map_err(|e| format!("无法打开 PDF: {e}"))?;
     reject_encrypted(&doc)?;
-    let hits = count_text_hits(&doc, page, &from)?;
+    let hits = replace_text_in_page(&mut doc, page, &from, &to)?;
     if hits == 0 {
         return Err(format!(
             "第 {page} 页没有找到可整串替换的文本「{from}」\
-             （该 PDF 可能没有文本层、文本用 TJ 数组显示，或被拆成多段）"
+             （该 PDF 可能没有文本层、文字被拆成多段，或字体编码解不出来）"
         ));
     }
-    doc.replace_text(page, &from, &to)
-        .map_err(|e| format!("文本替换失败: {e}"))?;
     let mut buf = Vec::new();
     doc.save_to(&mut buf)
         .map_err(|e| format!("写入 PDF 失败: {e}"))?;
     let mut r = save_bytes(&out, &buf, None)?;
     r.replaced = Some(hits);
     Ok(r)
+}
+
+/// 在指定页加一条**便签批注**（`/Text` 注释）。
+///
+/// 坐标是 **PDF 用户空间**（左下为原点，单位 pt）—— 前端用 pdf.js 的
+/// `viewport.convertToPdfPoint()` 从屏幕坐标换算过来。
+///
+/// 为什么用批注而不是把字"烧"进页面内容流：往内容流里插字要自己带字体
+/// 资源，标准 14 号字没有中文字形（中文会渲染成空白），而批注把文字原样
+/// 存进 `/Contents`，由阅读器用自己的字体渲染 —— 中文、emoji 都不丢。
+///
+/// 批注是**追加**语义：每次调用产出一份新文件（源文件仍受守卫保护）。
+#[tauri::command(async)]
+pub fn pdf_add_annotation(
+    src_path: String,
+    out_path: Option<String>,
+    page: u32,
+    x: f64,
+    y: f64,
+    text: String,
+) -> Result<SaveResult, String> {
+    let src = PathBuf::from(&src_path);
+    if !src.is_file() {
+        return Err(format!("不是文件: {src_path}"));
+    }
+    let note = text.trim();
+    if note.is_empty() {
+        return Err("批注内容为空".into());
+    }
+    let out = safe_output_path(&src, out_path.as_deref(), None)?;
+    let mut doc = Document::load(&src).map_err(|e| format!("无法打开 PDF: {e}"))?;
+    reject_encrypted(&doc)?;
+    let page_id = doc
+        .page_iter()
+        .nth(page.saturating_sub(1) as usize)
+        .ok_or_else(|| format!("页码 {page} 超出范围"))?;
+
+    let mut annot = Dictionary::new();
+    annot.set(b"Type", Object::Name(b"Annot".to_vec()));
+    annot.set(b"Subtype", Object::Name(b"Text".to_vec()));
+    // 便签图标 18×18 pt，锚在点击处（左下角）。
+    annot.set(
+        b"Rect",
+        Object::Array(vec![
+            Object::Real(x as f32),
+            Object::Real(y as f32),
+            Object::Real((x + 18.0) as f32),
+            Object::Real((y + 18.0) as f32),
+        ]),
+    );
+    annot.set(b"Contents", Object::string_literal(note));
+    annot.set(b"T", Object::string_literal("Hermix"));
+    annot.set(b"Name", Object::Name(b"Note".to_vec()));
+    // F = 4：打印时可见。
+    annot.set(b"F", Object::Integer(4));
+    annot.set(b"Open", Object::Boolean(false));
+    let annot_id = doc.add_object(annot);
+
+    // 挂到页面的 /Annots：原来有就直接追加，没有就新建一个数组。
+    append_annots(&mut doc, page_id, vec![annot_id]);
+
+    let mut buf = Vec::new();
+    doc.save_to(&mut buf)
+        .map_err(|e| format!("写入 PDF 失败: {e}"))?;
+    save_bytes(&out, &buf, None)
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   标注（FreeText / Highlight / Ink）—— 画在页面上、写进 PDF 的注释层
+   ══════════════════════════════════════════════════════════════════ */
+
+/// 一条标注（前端画好的 → 这里写成 PDF 注释）。
+///
+/// 坐标一律是 **PDF 用户空间**（左下为原点，单位 pt）：前端用 pdf.js 的
+/// `viewport.convertToPdfPoint()` 换算过来。
+///
+/// 为什么是标准注释而不是往页面内容流里插字：内容流插字要自带字体资源，
+/// 标准 14 号字没有中文字形（中文渲染成空白）；注释把内容存在
+/// `/Contents` / `/InkList` 里，由阅读器用自己的字体渲染 —— 中文、emoji
+/// 都不丢，而且 Acrobat / 福昕 / Edge / pdf.js 都能正常显示与继续编辑。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum PdfAnnotation {
+    /// 自由文字：矩形 + 内容 + 字号 + 颜色。
+    FreeText {
+        rect: [f64; 4],
+        contents: String,
+        #[serde(default)]
+        font_size: Option<f64>,
+        #[serde(default)]
+        color: Option<[f64; 3]>,
+    },
+    /// 高亮：矩形 + 四边形组（PDF 的 QuadPoints）。
+    Highlight {
+        rect: [f64; 4],
+        #[serde(default)]
+        quad_points: Vec<[f64; 8]>,
+        #[serde(default)]
+        color: Option<[f64; 3]>,
+    },
+    /// 墨迹：矩形 + 若干笔画（每条笔画是一串点）。
+    Ink {
+        rect: [f64; 4],
+        #[serde(default)]
+        ink_list: Vec<Vec<[f64; 2]>>,
+        #[serde(default)]
+        color: Option<[f64; 3]>,
+        #[serde(default)]
+        width: Option<f64>,
+    },
+    /// 图章：矩形 + 一张本地图片（路径是用户在系统文件对话框里自己选的）。
+    Stamp {
+        rect: [f64; 4],
+        image_path: String,
+    },
+    /// 手写签名：矩形 + 签名位图（base64 PNG）+ 签名域名字。
+    ///
+    /// 写成 **AcroForm 的 /Sig 域**（不是普通注释）：Acrobat / 福昕 会把它
+    /// 显示成"签名"（可双击重签、可校验），而普通 Stamp 只是"贴了张图"。
+    Signature {
+        rect: [f64; 4],
+        image_base64: String,
+        field_name: String,
+    },
+    /// **空签名域**：只放一个框，**不签名**，留给以后别人去签。
+    ///
+    /// 和 `Signature` 的区别：没有签名位图、没有内容，只有域本身。Acrobat /
+    /// 福昕 会把它显示成可点击的「签名」字段，双击即进入签名流程；没装这类
+    /// 阅读器的用户看到的是一个带边框的占位框。用途是「合同留一个签字栏发给
+    /// 对方」——自己的手写签名那条路径做不到这个（那是替人签好了）。
+    SignatureField {
+        rect: [f64; 4],
+        field_name: String,
+    },
+}
+
+/// 把若干注释对象挂到某页的 /Annots（原来有就追加，没有就新建数组）。
+fn append_annots(doc: &mut Document, page_id: ObjectId, annots: Vec<ObjectId>) {
+    let existing = doc
+        .get_dictionary(page_id)
+        .ok()
+        .and_then(|d| d.get(b"Annots").ok().cloned());
+    match existing {
+        Some(Object::Reference(id)) => {
+            if let Ok(Object::Array(items)) = doc.get_object_mut(id) {
+                for a in annots {
+                    items.push(Object::Reference(a));
+                }
+            }
+        }
+        Some(Object::Array(mut items)) => {
+            for a in annots {
+                items.push(Object::Reference(a));
+            }
+            if let Ok(dict) = doc.get_dictionary_mut(page_id) {
+                dict.set(b"Annots", Object::Array(items));
+            }
+        }
+        _ => {
+            let items = annots
+                .into_iter()
+                .map(Object::Reference)
+                .collect::<Vec<_>>();
+            let id = doc.add_object(Object::Array(items));
+            if let Ok(dict) = doc.get_dictionary_mut(page_id) {
+                dict.set(b"Annots", Object::Reference(id));
+            }
+        }
+    }
+}
+
+/// 页面资源里补一个标准 Helvetica 字体。
+///
+/// FreeText 的 `/DA` 要引用一个字体名；页面资源里没有它时，严格的阅读器
+/// 可能不画字。补一个 /Helv（非嵌入的标准字体，各阅读器自带的替代字体
+/// 即可渲染）是最省事也最兼容的做法。
+fn ensure_helvetica(doc: &mut Document, page_id: ObjectId) {
+    let resources_id = match doc
+        .get_dictionary(page_id)
+        .ok()
+        .and_then(|d| d.get(b"Resources").ok().cloned())
+    {
+        Some(Object::Reference(id)) => id,
+        _ => {
+            let id = doc.add_object(Object::Dictionary(Dictionary::new()));
+            if let Ok(dict) = doc.get_dictionary_mut(page_id) {
+                dict.set(b"Resources", Object::Reference(id));
+            }
+            id
+        }
+    };
+    let font_id = match doc
+        .get_dictionary(resources_id)
+        .ok()
+        .and_then(|d| d.get(b"Font").ok().cloned())
+    {
+        Some(Object::Reference(id)) => id,
+        _ => {
+            let id = doc.add_object(Object::Dictionary(Dictionary::new()));
+            if let Ok(dict) = doc.get_dictionary_mut(resources_id) {
+                dict.set(b"Font", Object::Reference(id));
+            }
+            id
+        }
+    };
+    let has_helv = doc
+        .get_dictionary(font_id)
+        .ok()
+        .and_then(|d| d.get(b"Helv").ok().cloned())
+        .is_some();
+    if has_helv {
+        return;
+    }
+    let helv_id = make_helvetica(doc);
+    if let Ok(dict) = doc.get_dictionary_mut(font_id) {
+        dict.set(b"Helv", Object::Reference(helv_id));
+    }
+}
+
+/// 造一个标准 Helvetica 字体对象（非嵌入，读者自带替代字体即可渲染）。
+fn make_helvetica(doc: &mut Document) -> ObjectId {
+    let mut font = Dictionary::new();
+    font.set(b"Type", Object::Name(b"Font".to_vec()));
+    font.set(b"Subtype", Object::Name(b"Type1".to_vec()));
+    font.set(b"BaseFont", Object::Name(b"Helvetica".to_vec()));
+    font.set(b"Encoding", Object::Name(b"WinAnsiEncoding".to_vec()));
+    doc.add_object(Object::Dictionary(font))
+}
+
+fn real_array(values: impl IntoIterator<Item = f64>) -> Object {
+    Object::Array(values.into_iter().map(|v| Object::Real(v as f32)).collect())
+}
+
+/// 文本 → PDF 字符串。
+///
+/// PDF 的字符串只有两种合法编码：PDFDocEncoding（ASCII）或 **UTF-16BE + BOM**。
+/// 直接把 UTF-8 字节塞进字面串是**非法**的 —— 阅读器会按 PDFDocEncoding 解，
+/// 中文变成乱码（pdf.js 直接解不出内容）。
+fn pdf_text(s: &str) -> Object {
+    if s.is_ascii() {
+        return Object::string_literal(s);
+    }
+    let mut bytes = vec![0xFE, 0xFF];
+    for unit in s.encode_utf16() {
+        bytes.extend_from_slice(&unit.to_be_bytes());
+    }
+    Object::String(bytes, lopdf::StringFormat::Hexadecimal)
+}
+
+fn color_array(color: Option<[f64; 3]>) -> Object {
+    let c = color.unwrap_or([1.0, 0.92, 0.23]); // 默认高亮黄
+    real_array(c)
+}
+
+/// 把一条标注变成 PDF 注释对象。
+fn build_annot(
+    doc: &mut Document,
+    ann: &PdfAnnotation,
+    page_id: ObjectId,
+) -> Result<ObjectId, String> {
+    let mut d = Dictionary::new();
+    d.set(b"Type", Object::Name(b"Annot".to_vec()));
+    d.set(b"F", Object::Integer(4)); // 打印时可见
+    match ann {
+        PdfAnnotation::FreeText {
+            rect,
+            contents,
+            font_size,
+            color,
+        } => {
+            d.set(b"Subtype", Object::Name(b"FreeText".to_vec()));
+            d.set(b"Rect", real_array(rect.to_vec()));
+            d.set(b"Contents", pdf_text(contents));
+            let size = font_size.unwrap_or(14.0);
+            // /DA：默认外观串（字体名 + 字号 + 颜色）
+            let da = format!("/Helv {} Tf 0 g", size.round() as i64);
+            d.set(b"DA", Object::string_literal(da.as_str()));
+            d.set(b"C", color_array(color.map(|c| [c[0], c[1], c[2]])));
+        }
+        PdfAnnotation::Highlight {
+            rect,
+            quad_points,
+            color,
+        } => {
+            d.set(b"Subtype", Object::Name(b"Highlight".to_vec()));
+            d.set(b"Rect", real_array(rect.to_vec()));
+            // /QuadPoints 是**扁平**的 8n 个数（不是数组的数组）—— 写成嵌套
+            // 数组时 pdf.js 会直接把这面高亮丢掉（静默失败，最难查的一种）。
+            let mut quads: Vec<f64> = Vec::with_capacity(quad_points.len() * 8);
+            for q in quad_points {
+                quads.extend_from_slice(&q[..]);
+            }
+            if !quads.is_empty() {
+                d.set(b"QuadPoints", real_array(quads));
+            }
+            d.set(b"C", color_array(*color));
+        }
+        PdfAnnotation::Ink {
+            rect,
+            ink_list,
+            color,
+            width,
+        } => {
+            d.set(b"Subtype", Object::Name(b"Ink".to_vec()));
+            d.set(b"Rect", real_array(rect.to_vec()));
+            let strokes: Vec<Object> = ink_list
+                .iter()
+                .map(|s| {
+                    let mut nums: Vec<f64> = Vec::with_capacity(s.len() * 2);
+                    for p in s {
+                        nums.push(p[0]);
+                        nums.push(p[1]);
+                    }
+                    real_array(nums)
+                })
+                .collect();
+            if !strokes.is_empty() {
+                d.set(b"InkList", Object::Array(strokes));
+            }
+            d.set(b"C", color_array(*color));
+            let mut bs = Dictionary::new();
+            bs.set(b"W", Object::Real(width.unwrap_or(2.0) as f32));
+            d.set(b"BS", Object::Dictionary(bs));
+        }
+        PdfAnnotation::Stamp { rect, image_path } => {
+            d.set(b"Subtype", Object::Name(b"Stamp".to_vec()));
+            d.set(b"Rect", real_array(rect.to_vec()));
+            d.set(b"Name", Object::Name(b"Stamp".to_vec()));
+            // 图章要有**外观流**（/AP）才会被画出来：注释本身只存位置，
+            // 真正"长什么样"在 /AP /N 里。
+            let ap = build_stamp_appearance(doc, rect, image_path)?;
+            let mut apd = Dictionary::new();
+            apd.set(b"N", Object::Reference(ap));
+            d.set(b"AP", Object::Dictionary(apd));
+        }
+        PdfAnnotation::Signature {
+            rect,
+            image_base64,
+            field_name,
+        } => {
+            // 签名域是 AcroForm 的 widget：/Subtype /Widget + /FT /Sig。
+            // 这样 Acrobat / 福昕 把它显示成"签名"（可双击重签），而不是
+            // 一张贴上去的图。
+            d.set(b"Subtype", Object::Name(b"Widget".to_vec()));
+            d.set(b"FT", Object::Name(b"Sig".to_vec()));
+            d.set(b"T", pdf_text(field_name));
+            d.set(b"Rect", real_array(rect.to_vec()));
+            d.set(b"F", Object::Integer(4)); // 打印时可见
+            d.set(b"P", Object::Reference(page_id));
+            let (jpeg, w, h) = decode_signature_png(image_base64)?;
+            let ap = build_image_appearance(doc, rect, &jpeg, w, h);
+            let mut apd = Dictionary::new();
+            apd.set(b"N", Object::Reference(ap));
+            d.set(b"AP", Object::Dictionary(apd));
+        }
+        PdfAnnotation::SignatureField { rect, field_name } => {
+            // 空签名域：结构与上面那个手写签名**完全一样**（Widget + /FT /Sig），
+            // 区别只是**没有签名位图** —— 域是空的，等别人来签。
+            d.set(b"Subtype", Object::Name(b"Widget".to_vec()));
+            d.set(b"FT", Object::Name(b"Sig".to_vec()));
+            d.set(b"T", pdf_text(field_name));
+            // /TU = 悬停提示（Acrobat 里鼠标停上去显示）。
+            d.set(b"TU", pdf_text(&format!("{field_name}（双击签名）")));
+            d.set(b"Rect", real_array(rect.to_vec()));
+            d.set(b"F", Object::Integer(4)); // 打印时可见
+            d.set(b"P", Object::Reference(page_id));
+            // 外观流：只画一个空框（0.7pt 灰边）。没有 /AP 的话，部分阅读器
+            // 会把域画成「什么都没有」，用户根本不知道这里能签。
+            let ap = build_empty_signature_appearance(doc, rect);
+            let mut apd = Dictionary::new();
+            apd.set(b"N", Object::Reference(ap));
+            d.set(b"AP", Object::Dictionary(apd));
+            // /MK = 域外观（Acrobat「域选项」里看到的就是它）。
+            let mut mk = Dictionary::new();
+            mk.set(b"BC", real_array(vec![0.45, 0.45, 0.45]));
+            d.set(b"MK", Object::Dictionary(mk));
+        }
+    }
+    Ok(doc.add_object(d))
+}
+
+/// 空签名域的外观流：一个空心矩形边框。
+///
+/// 结构与图片外观同源，只是内容流画的是边框而不是位图：
+///   /XObject /Subtype /Form，BBox = 注释矩形尺寸
+///   内容：`0.7 w 0.45 G 0.5 0.5 (w-1) (h-1) re S`
+fn build_empty_signature_appearance(doc: &mut Document, rect: &[f64; 4]) -> ObjectId {
+    let (x0, y0, x1, y1) = (rect[0], rect[1], rect[2], rect[3]);
+    let w = (x1 - x0).abs().max(2.0);
+    let h = (y1 - y0).abs().max(2.0);
+    let content = format!("q 0.7 w 0.45 G 0.5 0.5 {iw} {ih} re S Q", iw = w - 1.0, ih = h - 1.0);
+    let mut fd = Dictionary::new();
+    fd.set(b"Type", Object::Name(b"XObject".to_vec()));
+    fd.set(b"Subtype", Object::Name(b"Form".to_vec()));
+    fd.set(b"BBox", real_array(vec![0.0, 0.0, w, h]));
+    fd.set(b"Resources", Object::Dictionary(Dictionary::new()));
+    doc.add_object(Stream::new(fd, content.into_bytes()))
+}
+
+/// 图章的外观流：把图片按矩形铺满。
+///
+/// 结构（PDF 规范）：
+///   图片   → /XObject /Subtype /Image（DCTDecode 的 JPEG）
+///   外观   → /XObject /Subtype /Form，BBox = 注释矩形，内容里 `cm` 缩放后 `Do`
+fn build_stamp_appearance(
+    doc: &mut Document,
+    rect: &[f64; 4],
+    image_path: &str,
+) -> Result<ObjectId, String> {
+    let path = PathBuf::from(image_path);
+    let raw = std::fs::read(&path).map_err(|e| format!("读取图章图片失败：{e}"))?;
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "stamp".into());
+    let img = decode_image(&raw, &name)?.to_rgb8();
+    let (w, h) = img.dimensions();
+    let jpeg = encode_jpeg(&img, "图章图片")?;
+    Ok(build_image_appearance(doc, rect, &jpeg, w, h))
+}
+
+/// 图片 → JPEG（PDF 里直接用 DCTDecode，少一层解压）。
+fn encode_jpeg(img: &image::RgbImage, label: &str) -> Result<Vec<u8>, String> {
+    let (w, h) = img.dimensions();
+    if w == 0 || h == 0 {
+        return Err(format!("{label}尺寸为 0"));
+    }
+    let mut jpeg: Vec<u8> = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 90)
+        .encode_image(img)
+        .map_err(|e| format!("{label}编码失败：{e}"))?;
+    Ok(jpeg)
+}
+
+/// 前端手写签名（PNG，base64）→ (JPEG 字节, 宽, 高)。
+fn decode_signature_png(image_base64: &str) -> Result<(Vec<u8>, u32, u32), String> {
+    let raw = crate::commands::base64_decode(image_base64)
+        .ok_or("签名图片不是合法的 base64")?;
+    let img = image::load_from_memory(&raw)
+        .map_err(|e| format!("签名图片解码失败：{e}"))?
+        .to_rgb8();
+    let (w, h) = img.dimensions();
+    let jpeg = encode_jpeg(&img, "签名图片")?;
+    Ok((jpeg, w, h))
+}
+
+/// 图片外观流（签名与图章共用）：把一张 JPEG 按矩形铺满。
+fn build_image_appearance(
+    doc: &mut Document,
+    rect: &[f64; 4],
+    jpeg: &[u8],
+    iw: u32,
+    ih: u32,
+) -> ObjectId {
+    let mut sd = Dictionary::new();
+    sd.set(b"Type", Object::Name(b"XObject".to_vec()));
+    sd.set(b"Subtype", Object::Name(b"Image".to_vec()));
+    sd.set(b"Width", Object::Integer(iw as i64));
+    sd.set(b"Height", Object::Integer(ih as i64));
+    sd.set(b"ColorSpace", Object::Name(b"DeviceRGB".to_vec()));
+    sd.set(b"BitsPerComponent", Object::Integer(8));
+    sd.set(b"Filter", Object::Name(b"DCTDecode".to_vec()));
+    let image_id = doc.add_object(Stream::new(sd, jpeg.to_vec()));
+
+    let (x0, y0, x1, y1) = (rect[0], rect[1], rect[2], rect[3]);
+    let rw = (x1 - x0).abs().max(1.0);
+    let rh = (y1 - y0).abs().max(1.0);
+    // 内容流：把单位正方形拉成矩形大小，再贴到矩形左下角。
+    let content = format!(
+        "q {rw} 0 0 {rh} {x0} {y0} cm /Im0 Do Q",
+        rw = rw,
+        rh = rh,
+        x0 = x0,
+        y0 = y0
+    );
+
+    let mut resources = Dictionary::new();
+    let mut xobjects = Dictionary::new();
+    xobjects.set(b"Im0", Object::Reference(image_id));
+    resources.set(b"XObject", Object::Dictionary(xobjects));
+
+    let mut fd = Dictionary::new();
+    fd.set(b"Type", Object::Name(b"XObject".to_vec()));
+    fd.set(b"Subtype", Object::Name(b"Form".to_vec()));
+    fd.set(b"FormType", Object::Integer(1));
+    fd.set(
+        b"BBox",
+        real_array([x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)]),
+    );
+    fd.set(b"Resources", Object::Dictionary(resources));
+    doc.add_object(Stream::new(fd, content.into_bytes()))
+}
+
+/// 按位置替换页面里的一段文字（**遮盖 + 插入**）。
+///
+/// 与 `pdf_replace_text`（内容流整串匹配）是**两条不同的路**：
+///   - `pdf_replace_text`：在内容流里找一模一样的字节串。遇到 TJ 拆段、
+///     自定义编码、子集字体就失配 —— PDFBox 2.0 为此删掉了官方示例。
+///   - 本命令：**由调用方给位置**（前端用 pdf.js 的文本层算出目标文字的
+///     矩形与基线），这里只管"盖住那块 + 用受控字体写新字"。
+///     与原文字怎么编码、怎么拆段完全无关。
+///
+/// **写法**：不动原有内容流 —— 新算子写进一个**新的内容流**，页面的
+/// `/Contents` 变成 `[原流…, 新流]`（PDF 规范允许多个流顺序拼接）。
+/// 这样原内容一个字节都不动，零风险。
+///
+/// **已知代价**：旧字仍在文件里（被矩形盖住），复制仍可能带出。要真正
+/// 删掉要走"丢弃绘制算子"那条路（见决策笔记的 P1）。
+#[derive(Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct TextReplaceAt {
+    /// 页码（1-based）。
+    pub page: u32,
+    /// 要盖住的矩形（PDF 用户空间）：[x0, y0, x1, y1]。
+    pub rect: [f64; 4],
+    /// 新文字的基线起点（PDF 用户空间）。
+    pub x: f64,
+    pub y: f64,
+    /// 新文字。
+    pub text: String,
+    /// 字号（pt）。
+    pub font_size: f64,
+    /// 盖住原字用的底色（RGB 0..1）。默认白。
+    #[serde(default)]
+    pub background: Option<[f64; 3]>,
+    /// 要**真删除**的原文（前端知道用户点了哪句）。
+    ///
+    /// 给了就先把内容流里显示这段文字的算子删掉（真删除：复制不出来），
+    /// 再盖 + 写新字；不给就只做"遮盖 + 写入"（旧字仍在文件里）。
+    #[serde(default)]
+    pub remove_text: Option<String>,
+}
+
+/// PDF 字面串的转义 + WinAnsi 编码（标准 14 号字只认单字节编码）。
+fn latin1_literal(s: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(s.len() + 8);
+    for ch in s.chars() {
+        match ch {
+            '(' => out.extend_from_slice(b"\\("),
+            ')' => out.extend_from_slice(b"\\)"),
+            '\\' => out.extend_from_slice(b"\\\\"),
+            '\n' => out.extend_from_slice(b"\\n"),
+            '\r' => out.extend_from_slice(b"\\r"),
+            '\t' => out.extend_from_slice(b"\\t"),
+            c if (c as u32) < 256 => out.push(c as u8),
+            // 编码表里没有的字符用 '?' 代替（与"中文走注释层"的策略一致）。
+            _ => out.push(b'?'),
+        }
+    }
+    out
+}
+
+/// 按位置替换页面里的一段文字：盖住原字 + 用标准 14 号字写新字。
+#[tauri::command(async)]
+pub fn pdf_replace_text_at(
+    src_path: String,
+    out_path: Option<String>,
+    req: TextReplaceAt,
+) -> Result<SaveResult, String> {
+    let src = PathBuf::from(&src_path);
+    if !src.is_file() {
+        return Err(format!("不是文件: {src_path}"));
+    }
+    if req.text.is_empty() {
+        return Err("新文字为空".into());
+    }
+    let out = safe_output_path(&src, out_path.as_deref(), None)?;
+    let mut doc = Document::load(&src).map_err(|e| format!("无法打开 PDF: {e}"))?;
+    reject_encrypted(&doc)?;
+    let page_id = doc
+        .page_iter()
+        .nth(req.page.saturating_sub(1) as usize)
+        .ok_or_else(|| format!("页码 {} 超出范围", req.page))?;
+
+    // ① 先真删除旧字的绘制算子（可选）。
+    //
+    // 尽力而为：页面内容解不出来时（lopdf 的内容流解析器**不支持内联图像
+    // BI/ID/EI**，含内联图的页会解析失败）就只做"遮盖 + 写入"，并如实
+    // 告诉用户"旧字没能真删除"—— 不能因为删不掉就让整条命令失败。
+    let mut removal_note: Option<String> = None;
+    let removed = match req.remove_text.as_deref().filter(|s| !s.is_empty()) {
+        Some(text) => match remove_text_ops_at(&mut doc, req.page, req.rect, text) {
+            Ok(n) => n,
+            Err(e) => {
+                removal_note = Some(format!("旧字未能真删除（{e}）；已做遮盖 + 写入"));
+                0
+            }
+        },
+        None => 0,
+    };
+
+    // ② 选字体：优先用**文档自己嵌的字体**（同款、保真最好、产物不涨体积）。
+    //
+    // 文档里的中文字体是**子集**（Identity-H + ToUnicode），不含的字写不出来 ——
+    // 这种情况如实报错，不静默写乱码。拉丁文则可以退回标准 14 号 Helvetica。
+    let font_name: String;
+    let text_op: Vec<u8>;
+    match crate::pdf_font::pick_font_for_text(&doc, page_id, &req.text) {
+        Some(choice) => {
+            font_name = crate::pdf_font::font_ref(&choice.name);
+            text_op = crate::pdf_font::text_operator(&choice);
+        }
+        None => {
+            if !req.text.is_ascii() {
+                return Err(
+                    "这份 PDF 的字体里写不了这些字（页面里的字体是子集，不含这些字）。\
+                     换一个文中出现过的字，或用支持中文嵌入字体的 PDF。"
+                        .into(),
+                );
+            }
+            ensure_helvetica(&mut doc, page_id);
+            font_name = "/Helv".to_string();
+            let mut op = Vec::new();
+            op.extend_from_slice(b"(");
+            op.extend_from_slice(&latin1_literal(&req.text));
+            op.extend_from_slice(b") Tj\n");
+            text_op = op;
+        }
+    }
+
+    let (rx0, ry0, rx1, ry1) = (req.rect[0], req.rect[1], req.rect[2], req.rect[3]);
+    let w = (rx1 - rx0).abs().max(1.0);
+    let h = (ry1 - ry0).abs().max(1.0);
+    let bg = req.background.unwrap_or([1.0, 1.0, 1.0]);
+    let size = req.font_size.clamp(1.0, 200.0);
+
+    // ③ 盖住原字：填一个与背景同色的矩形。
+    // ④ 写新字：以基线 (x, y) 为起点。
+    let mut ops: Vec<u8> = Vec::new();
+    ops.extend_from_slice(
+        format!(
+            "{r} {g} {b} rg\n{x0} {y0} {w} {h} re\nf\n",
+            r = bg[0],
+            g = bg[1],
+            b = bg[2],
+            x0 = rx0.min(rx1),
+            y0 = ry0.min(ry1),
+            w = w,
+            h = h
+        )
+        .as_bytes(),
+    );
+    ops.extend_from_slice(b"BT\n");
+    ops.extend_from_slice(format!("{font_name} {size} Tf\n").as_bytes());
+    ops.extend_from_slice(format!("{x} {y} Td\n", x = req.x, y = req.y).as_bytes());
+    ops.extend_from_slice(&text_op);
+    ops.extend_from_slice(b"ET\n");
+
+
+    // 新内容流 + 页面的 /Contents 变成 [原流…, 新流]（原内容零改动）。
+    let new_stream_id = doc.add_object(Stream::new(Dictionary::new(), ops));
+    let mut contents: Vec<Object> = doc
+        .get_page_contents(page_id)
+        .into_iter()
+        .map(Object::Reference)
+        .collect();
+    contents.push(Object::Reference(new_stream_id));
+    if let Ok(dict) = doc.get_dictionary_mut(page_id) {
+        dict.set(b"Contents", Object::Array(contents));
+    }
+
+    let mut buf = Vec::new();
+    doc.save_to(&mut buf)
+        .map_err(|e| format!("写入 PDF 失败: {e}"))?;
+    let mut r = save_bytes(&out, &buf, None)?;
+    r.replaced = Some(removed);
+    r.note = removal_note;
+    Ok(r)
+}
+
+/// 批量写入标注（自由文字 / 高亮 / 墨迹），产出新文件。
+#[tauri::command(async)]
+pub fn pdf_add_annotations(
+    src_path: String,
+    out_path: Option<String>,
+    page: u32,
+    annotations: Vec<PdfAnnotation>,
+) -> Result<SaveResult, String> {
+    let src = PathBuf::from(&src_path);
+    if !src.is_file() {
+        return Err(format!("不是文件: {src_path}"));
+    }
+    if annotations.is_empty() {
+        return Err("没有要写入的标注".into());
+    }
+    let out = safe_output_path(&src, out_path.as_deref(), None)?;
+    let mut doc = Document::load(&src).map_err(|e| format!("无法打开 PDF: {e}"))?;
+    reject_encrypted(&doc)?;
+    let page_id = doc
+        .page_iter()
+        .nth(page.saturating_sub(1) as usize)
+        .ok_or_else(|| format!("页码 {page} 超出范围"))?;
+
+    let needs_font = annotations
+        .iter()
+        .any(|a| matches!(a, PdfAnnotation::FreeText { .. }));
+    if needs_font {
+        ensure_helvetica(&mut doc, page_id);
+    }
+    let ids = annotations
+        .iter()
+        .map(|a| build_annot(&mut doc, a, page_id))
+        .collect::<std::result::Result<Vec<_>, String>>()?;
+    append_annots(&mut doc, page_id, ids.clone());
+
+    // 签名域要额外登记到 **AcroForm**（catalog 的 /AcroForm）：只挂 /Annots
+    // 的话，Acrobat 会把它当普通注释，而不是可签名的域。
+    let sig_ids = ids
+        .iter()
+        .zip(annotations.iter())
+        .filter(|(_, a)| {
+            matches!(
+                a,
+                PdfAnnotation::Signature { .. } | PdfAnnotation::SignatureField { .. }
+            )
+        })
+        .map(|(id, _)| *id)
+        .collect::<Vec<_>>();
+    if !sig_ids.is_empty() {
+        register_signature_fields(&mut doc, &sig_ids);
+    }
+
+    let mut buf = Vec::new();
+    doc.save_to(&mut buf)
+        .map_err(|e| format!("写入 PDF 失败: {e}"))?;
+    save_bytes(&out, &buf, None)
+}
+
+/// 把签名 widget 登记进文档的 AcroForm。
+///
+/// 结构（PDF 规范）：
+///   catalog /AcroForm ← { /Fields [widget…], /DA, /DR, /SigFlags }
+///   /SigFlags = 1：文档里存在签名域。
+fn register_signature_fields(doc: &mut Document, sig_ids: &[ObjectId]) {
+    // /DR（默认资源）里放一个 /Helv —— 表单的默认外观串要引用它。
+    let helv_id = make_helvetica(doc);
+    let mut fonts = Dictionary::new();
+    fonts.set(b"Helv", Object::Reference(helv_id));
+    let mut dr = Dictionary::new();
+    dr.set(b"Font", Object::Dictionary(fonts));
+
+    // 复用已有的 /AcroForm（文件里本来就可能有表单）。
+    let acro_id = match doc
+        .catalog()
+        .ok()
+        .and_then(|c| c.get(b"AcroForm").ok().cloned())
+    {
+        Some(Object::Reference(id)) => id,
+        _ => {
+            let id = doc.add_object(Object::Dictionary(Dictionary::new()));
+            if let Ok(cat) = doc.catalog_mut() {
+                cat.set(b"AcroForm", Object::Reference(id));
+            }
+            id
+        }
+    };
+
+    let mut fields: Vec<Object> = match doc
+        .get_dictionary(acro_id)
+        .ok()
+        .and_then(|d| d.get(b"Fields").ok().cloned())
+    {
+        Some(Object::Array(items)) => items,
+        Some(Object::Reference(id)) => doc
+            .get_object(id)
+            .ok()
+            .and_then(|o| o.as_array().ok().cloned())
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    };
+    for id in sig_ids {
+        fields.push(Object::Reference(*id));
+    }
+
+    if let Ok(dict) = doc.get_dictionary_mut(acro_id) {
+        dict.set(b"Fields", Object::Array(fields));
+        dict.set(b"DA", Object::string_literal("/Helv 0 Tf 0 g"));
+        dict.set(b"DR", Object::Dictionary(dr));
+        dict.set(b"SigFlags", Object::Integer(1));
+    }
 }
 
 /// 图片转 PDF：每张图一页。
@@ -1182,6 +2296,226 @@ mod tests {
         let res = images_to_pdf(vec![src.clone(), src], out.to_string_lossy().to_string(), None).unwrap();
         assert!(res.bytes > 0);
         assert_eq!(Document::load(&out).unwrap().get_pages().len(), 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 批注要真的挂到**指定那一页**的 /Annots 上，内容原样保留。
+    #[test]
+    fn annotation_is_appended_to_the_target_page() {
+        let dir = tmp_dir("annot");
+        let src = dir.join("a.pdf");
+        build_sample_pdf(&src, 2);
+        let res = pdf_add_annotation(
+            src.to_string_lossy().to_string(),
+            None,
+            2,
+            100.0,
+            200.0,
+            "hello note".into(),
+        )
+        .unwrap();
+        let doc = Document::load(&res.path).unwrap();
+        let page = doc.page_iter().nth(1).unwrap(); // 第 2 页
+        let annots_id = doc
+            .get_dictionary(page)
+            .unwrap()
+            .get(b"Annots")
+            .unwrap()
+            .as_reference()
+            .unwrap();
+        let items = doc.get_object(annots_id).unwrap().as_array().unwrap();
+        assert_eq!(items.len(), 1);
+        let annot = doc
+            .get_dictionary(items[0].as_reference().unwrap())
+            .unwrap();
+        assert_eq!(
+            annot.get(b"Subtype").unwrap().as_name().unwrap(),
+            b"Text".as_slice()
+        );
+        match annot.get(b"Contents").unwrap() {
+            Object::String(bytes, _) => assert_eq!(bytes, b"hello note"),
+            other => panic!("批注内容不是字符串：{other:?}"),
+        }
+        // 另一页不该被牵连。
+        let other = doc.page_iter().nth(0).unwrap();
+        assert!(doc.get_dictionary(other).unwrap().get(b"Annots").is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 自由文字 / 高亮 / 墨迹三种标注写进 PDF 后，注释层结构要对。
+    ///
+    /// 这是"别的阅读器能不能看见"的地基：类型名（/FreeText / /Highlight /
+    /// /Ink）、矩形、QuadPoints、InkList、/DA 与 /C 都是 PDF 规范里的标准
+    /// 字段 —— 写对了，Acrobat / 福昕 / Edge / pdf.js 才会认。
+    #[test]
+    fn three_annotation_kinds_are_written_as_standard_annots() {
+        let dir = tmp_dir("annots");
+        let src = dir.join("a.pdf");
+        build_sample_pdf(&src, 2);
+        let res = pdf_add_annotations(
+            src.to_string_lossy().to_string(),
+            None,
+            1,
+            vec![
+                PdfAnnotation::FreeText {
+                    rect: [100.0, 200.0, 300.0, 240.0],
+                    contents: "签字处".into(),
+                    font_size: Some(18.0),
+                    color: Some([0.1, 0.2, 0.8]),
+                },
+                PdfAnnotation::Highlight {
+                    rect: [50.0, 400.0, 250.0, 420.0],
+                    quad_points: vec![[50.0, 420.0, 250.0, 420.0, 50.0, 400.0, 250.0, 400.0]],
+                    color: Some([1.0, 0.92, 0.23]),
+                },
+                PdfAnnotation::Ink {
+                    rect: [10.0, 10.0, 60.0, 60.0],
+                    ink_list: vec![vec![[10.0, 10.0], [30.0, 40.0], [60.0, 20.0]]],
+                    color: Some([0.9, 0.1, 0.1]),
+                    width: Some(2.0),
+                },
+            ],
+        )
+        .unwrap();
+        let out = PathBuf::from(&res.path);
+        // 留一份给外部解析器（pdf.js）交叉验证用。
+        let probe = std::env::temp_dir().join("hermix-annots-probe.pdf");
+        let _ = std::fs::copy(&out, &probe);
+
+        let doc = Document::load(&out).unwrap();
+        let page = doc.page_iter().nth(0).unwrap();
+        let annots_id = doc
+            .get_dictionary(page)
+            .unwrap()
+            .get(b"Annots")
+            .unwrap()
+            .as_reference()
+            .unwrap();
+        let items = doc.get_object(annots_id).unwrap().as_array().unwrap();
+        assert_eq!(items.len(), 3);
+
+        let subtypes = items
+            .iter()
+            .map(|it| {
+                doc.get_dictionary(it.as_reference().unwrap())
+                    .unwrap()
+                    .get(b"Subtype")
+                    .unwrap()
+                    .as_name()
+                    .unwrap()
+                    .to_vec()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(subtypes, vec![b"FreeText".to_vec(), b"Highlight".to_vec(), b"Ink".to_vec()]);
+
+        // 自由文字：内容与默认外观串（/DA）要在。
+        let ft = doc
+            .get_dictionary(items[0].as_reference().unwrap())
+            .unwrap();
+        match ft.get(b"Contents").unwrap() {
+            // 非 ASCII 文本按 PDF 规范必须是 **UTF-16BE + BOM**，不是 UTF-8 原始字节
+            // （把 UTF-8 直接塞进字面串，阅读器按 PDFDocEncoding 解 → 中文乱码）。
+            Object::String(bytes, _) => {
+                let mut expect = vec![0xFE, 0xFF];
+                for unit in "签字处".encode_utf16() {
+                    expect.extend_from_slice(&unit.to_be_bytes());
+                }
+                assert_eq!(bytes, expect.as_slice());
+            }
+            other => panic!("Contents 不是字符串：{other:?}"),
+        }
+        match ft.get(b"DA").unwrap() {
+            Object::String(bytes, _) => {
+                assert!(String::from_utf8_lossy(bytes).contains("18 Tf"));
+            }
+            other => panic!("DA 不是字符串：{other:?}"),
+        }
+
+        // 高亮：QuadPoints 必须是**扁平的 8n 个数**（四个数一组）。
+        // 写成数组的数组时 pdf.js 会静默丢弃这条高亮 —— 这就是断言要盯的。
+        let hl = doc
+            .get_dictionary(items[1].as_reference().unwrap())
+            .unwrap();
+        let quads = hl.get(b"QuadPoints").unwrap().as_array().unwrap();
+        assert_eq!(quads.len(), 8, "QuadPoints 必须是扁平的 8 个数");
+        assert!(
+            quads.iter().all(|q| q.as_float().is_ok()),
+            "QuadPoints 的每一项都应是数字（不是嵌套数组）：{quads:?}"
+        );
+
+        // 墨迹：InkList 一条笔画六个数。
+        let ink = doc
+            .get_dictionary(items[2].as_reference().unwrap())
+            .unwrap();
+        let strokes = ink.get(b"InkList").unwrap().as_array().unwrap();
+        assert_eq!(strokes.len(), 1);
+        assert_eq!(strokes[0].as_array().unwrap().len(), 6);
+
+        // 页面资源里补了 Helvetica（FreeText 的 /DA 要引用它）。
+        let resources = doc.get_dictionary(page).unwrap().get(b"Resources").unwrap();
+        let res_dict = doc
+            .get_dictionary(resources.as_reference().unwrap())
+            .unwrap();
+        let fonts = res_dict.get(b"Font").unwrap().as_reference().unwrap();
+        assert!(doc
+            .get_dictionary(fonts)
+            .unwrap()
+            .get(b"Helv")
+            .is_ok());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 空签名域：AcroForm 的 /Sig 域，**没有 /V**（= 还没人签）。
+    ///
+    /// 「替人签好」和「留个框让人签」是两件事：后者必须有 /AcroForm 登记，
+    /// 否则 Acrobat 只把它当普通注释，双击不会进入签名流程。
+    #[test]
+    fn empty_signature_field_is_an_unsigned_acroform_sig_widget() {
+        let dir = tmp_dir("sigfield");
+        let src = dir.join("a.pdf");
+        build_sample_pdf(&src, 1);
+        let res = pdf_add_annotations(
+            src.to_string_lossy().to_string(),
+            None,
+            1,
+            vec![PdfAnnotation::SignatureField {
+                rect: [100.0, 700.0, 300.0, 740.0],
+                field_name: "甲方签名".into(),
+            }],
+        )
+        .unwrap();
+        let doc = Document::load(&res.path).unwrap();
+        let page = doc.page_iter().next().unwrap();
+        let annots_id = doc
+            .get_dictionary(page)
+            .unwrap()
+            .get(b"Annots")
+            .unwrap()
+            .as_reference()
+            .unwrap();
+        let items = doc.get_object(annots_id).unwrap().as_array().unwrap();
+        assert_eq!(items.len(), 1);
+        let w = doc.get_dictionary(items[0].as_reference().unwrap()).unwrap();
+        assert_eq!(w.get(b"Subtype").unwrap().as_name().unwrap(), b"Widget".as_slice());
+        assert_eq!(w.get(b"FT").unwrap().as_name().unwrap(), b"Sig".as_slice());
+        // 没人签过 → 不能有 /V（有 /V 就是「已经签了」）。
+        assert!(w.get(b"V").is_err());
+        // 外观流要在（否则阅读器把它画成什么都没有）。
+        assert!(w.get(b"AP").is_ok());
+
+        // catalog /AcroForm /Fields 里登记了它，/SigFlags = 1（文档含签名域）。
+        let acro_id = doc
+            .catalog()
+            .unwrap()
+            .get(b"AcroForm")
+            .unwrap()
+            .as_reference()
+            .unwrap();
+        let acro = doc.get_dictionary(acro_id).unwrap();
+        let fields = acro.get(b"Fields").unwrap().as_array().unwrap();
+        assert_eq!(fields.len(), 1);
+        assert_eq!(acro.get(b"SigFlags").unwrap().as_i64().unwrap(), 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

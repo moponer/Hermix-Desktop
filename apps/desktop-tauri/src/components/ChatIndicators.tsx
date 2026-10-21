@@ -9,6 +9,7 @@
  */
 import { useState, useRef, useEffect } from "react";
 import { Loader2, X, Pencil, Send } from "lucide-react";
+import { DELETE } from "./strings";
 
 /**
  * AgentActivityIndicator — single source of truth for "agent is still
@@ -161,24 +162,23 @@ export function QueueItemRow({
   };
 
   return (
-    <li className="group flex items-start gap-1.5 rounded px-2 py-1 hover:bg-bg-tertiary/50 transition-colors">
-      <span
-        className={`mt-1.5 size-1.5 shrink-0 rounded-full ${
-          status === "failed"
-            ? "bg-[var(--color-error)]"
-            : status === "sending"
-              ? "bg-[var(--color-accent)] animate-pulse"
-              : "bg-[var(--color-border-secondary)]"
-        }`}
-        title={
-          status === "failed"
-            ? `发送失败${error ? `：${error}` : ""}`
-            : status === "sending"
-              ? "正在发送"
-              : `第 ${index + 1} 条，等待发送`
-        }
-        aria-label={status === "failed" ? "发送失败" : status === "sending" ? "正在发送" : "等待发送"}
-      />
+    <li
+      className="group flex items-start gap-2 rounded-md px-2 py-1.5 transition-colors hover:bg-bg-tertiary/50"
+      aria-label={`第 ${index + 1} 条排队消息`}
+    >
+      {/* 只有"正在发送 / 失败"才需要状态点。等待中的每行都点一颗灰点，
+          会让列表读起来像调试输出，而不是待发消息。 */}
+      {(status === "sending" || status === "failed") && (
+        <span
+          className={`mt-1.5 size-1.5 shrink-0 rounded-full ${
+            status === "failed"
+              ? "bg-[var(--color-error)]"
+              : "bg-[var(--color-accent)] animate-pulse"
+          }`}
+          title={status === "failed" ? `发送失败${error ? `：${error}` : ""}` : "正在发送"}
+          aria-label={status === "failed" ? "发送失败" : "正在发送"}
+        />
+      )}
 
       {editing ? (
         <div className="flex-1 min-w-0">
@@ -196,7 +196,7 @@ export function QueueItemRow({
               }
             }}
             rows={2}
-            className="w-full text-meta bg-bg-primary text-text-primary border border-border-subtle rounded px-1.5 py-1 outline-none resize-none focus:border-accent"
+            className="w-full text-meta bg-bg-primary text-text-primary rounded px-1.5 py-1 outline-none resize-none focus:border-accent"
           />
           <div className="flex items-center gap-1.5 mt-1">
             <button
@@ -222,15 +222,22 @@ export function QueueItemRow({
         </div>
       ) : (
         <>
-          <button
-            type="button"
-            onClick={() => canEdit && setEditing(true)}
-            disabled={!canEdit}
-            title={text}
-            className={`flex-1 min-w-0 text-left text-meta text-text-primary whitespace-pre-wrap break-words leading-snug ${canEdit ? "cursor-text" : "cursor-default"}`}
-          >
-            {text.length > 80 ? text.slice(0, 80) + "…" : text}
-          </button>
+          <div className="min-w-0 flex-1">
+            <button
+              type="button"
+              onClick={() => canEdit && setEditing(true)}
+              disabled={!canEdit}
+              title={text}
+              className={`block w-full text-left text-[length:var(--text-ui)] leading-relaxed text-text-primary line-clamp-2 whitespace-pre-wrap break-words ${canEdit ? "cursor-text" : "cursor-default"}`}
+            >
+              {text}
+            </button>
+            {status === "failed" && error && (
+              <div className="mt-0.5 text-[length:var(--text-tiny,11px)] text-[var(--color-error)]">
+                {error}
+              </div>
+            )}
+          </div>
 
           <div className="shrink-0 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
             {canEdit && (
@@ -256,7 +263,7 @@ export function QueueItemRow({
             {canRemove && (
               <button
                 onClick={onRemove}
-                title="删除"
+                title={DELETE}
                 aria-label="删除此条"
                 className="p-1 rounded text-text-muted hover:text-red-400 hover:bg-bg-tertiary"
               >

@@ -55,7 +55,8 @@
   /* ── 分隔线：与所压底色亮度比 ≥1.10（缩放重采样余量） ── */
   --color-border-subtle: #edf2ef;
   --color-border-primary: #e0e9e4;
-  --color-border-secondary: #c6d2cb;  /* 控件描边（WCAG 1.4.11 3:1） */
+  --color-border-secondary: #c6d2cb;  /* 发丝分隔线：与所压底色亮度比 ≥1.10。
+     **不是** 3:1 —— 1.4.11 的 3:1 落在 --color-border 上（控件边界）。 */
   --color-border: #7b8b83;            /* 强描边 / focus 参照 */
   --color-border-strong: #7b8b83;
 
@@ -67,17 +68,22 @@
   --color-text-faint: #5e6c64;
   --color-text-on-code: #323c36;
   --color-text-thinking: #5c6a62;   /* 过程文字 = tertiary，不与结论抢通道 */
-  /* hero 满对比（暗底主题用白）：空态大标题专用（墨与纸 v4） */
-  --color-text-hero: #ffffff;
+  /* hero 满对比（浅色主题用黑，与 light 基线一致）：空态大标题专用
+     （墨与纸 v4）。**不是**白色 —— ink-green 是浅色主题，白字压在
+     #fdfefd 的纸面上只有 1.01:1，标题会完全看不见。 */
+  --color-text-hero: #000000;
 
   /* ── 墨：主色墨绿 #2f6b4f（新造品牌色，与亮色基线的青碧 #1e4a3c 分叉） ── */
   --color-accent: #2f6b4f;
   --color-on-accent: #ffffff;       /* #2f6b4f 底上白字 ≈ 5.9:1 */
+  /* 恒暗底浮层用的可见强调线（截图覆盖窗等）。语义是「暗底上的亮线」，
+     与纸面淡染色的 soft 档相反，故三套主题取值一致，不随主题反色。 */
+  --color-accent-line: color-mix(in srgb, var(--color-accent) 18%, white);
 
   /* Link */
   --color-link: #2f6b4f;
   --color-link-hover: #255641;      /* 派生：主色压深一档 */
-  --color-link-soft: #7d838b;
+  --color-link-soft: #70767e;         /* 4.53:1 —— #7d838b 只有 3.78:1 */
   --color-link-soft-hover: #2f6b4f;
 
   /* ── 按钮语义对 ── */
@@ -104,9 +110,16 @@
   --color-success-soft: #e3f3e8;      /* 派生：success 8% 混白 */
   --color-warning: #e8920c;
   --color-warning-soft: #fdf1dc;      /* 派生 */
-  --color-text-warning: #9c6206;      /* 派生：#e8920c 直接作文字仅 2.5:1，加深到 4.6:1 */
   --color-error: #e5484d;
   --color-error-soft: #fdecec;        /* 派生 */
+
+  /* 语义四色的「文字安全档」——原始档给图标/描边/填充，12px 以下的小字
+     一律用这些。原始值直接作文字只有 2.4–4.2:1，下面是**保持色相、只压暗**
+     解出来的值（纸面 + 各自 -soft 底都 ≥4.5:1）。 */
+  --color-text-success: #1f7b37;      /* 5.26 / 4.62 */
+  --color-text-warning: #9c6206;      /* 4.99 / 4.54 */
+  --color-text-error: #d51e24;        /* 5.12 / 4.53 */
+  --color-text-info: #467090;         /* 5.19 / 4.51 */
   --color-info: #4f7fa3;
   --color-info-soft: rgba(79, 127, 163, 0.12);
 

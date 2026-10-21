@@ -65,7 +65,7 @@ export function FileExplorerContextMenu({
   return (
     <div
       ref={menuRef}
-      className="file-explorer-menu fixed z-[70] rounded-lg border border-border-primary shadow-xl py-1 min-w-[180px]"
+      className="file-explorer-menu fixed z-[70] rounded-lg bg-bg-elevated shadow-xl py-1 min-w-[180px]"
       style={{
         left: pos.left,
         top: pos.top,

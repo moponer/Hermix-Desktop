@@ -7,6 +7,7 @@ import {
   type AnalyticsDebugResponse,
 } from "../api";
 import { EmptyState, PageHeader, SkeletonCard } from "./ui";
+import { LOADING, CLOSE } from "./strings";
 
 // Cache hit rate proxy: of all prompt tokens (freshly-written `input`
 // + cache-served `cache_read`), what fraction came from the cache.
@@ -109,7 +110,7 @@ export function AnalyticsView() {
             <select
               value={days}
               onChange={(e) => setDays(Number(e.target.value))}
-              className="px-3 py-1.5 rounded-lg bg-bg-secondary border border-border-primary text-sm"
+              className="px-3 py-1.5 rounded-lg bg-bg-secondary text-sm"
             >
               <option value={7}>近 7 天</option>
               <option value={30}>近 30 天</option>
@@ -117,9 +118,9 @@ export function AnalyticsView() {
             </select>
           }
         />
-        <div className="rounded-xl border border-red-500/40 bg-red-500/5 p-4">
+        <div className="rounded-xl border-red-500/40 bg-red-500/5 p-4">
           <div className="flex items-start gap-3">
-            <AlertTriangle className="w-5 h-5 text-red-400 mt-0.5 shrink-0" />
+            <AlertTriangle className="icon-lg text-red-400 mt-0.5 shrink-0" />
             <div className="min-w-0">
               <div className="text-sm font-medium text-red-300">统计数据加载失败</div>
               <div className="mt-1 text-xs text-red-200/80 break-words whitespace-pre-wrap font-mono">
@@ -127,7 +128,7 @@ export function AnalyticsView() {
               </div>
               <button
                 onClick={() => setDebugOpen(true)}
-                className="mt-3 inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg bg-bg-secondary border border-border-primary hover:border-red-500/40"
+                className="mt-3 inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg bg-bg-secondary hover:border-red-500/40"
               >
                 <Bug className="w-3.5 h-3.5" /> 打开诊断面板
               </button>
@@ -197,14 +198,14 @@ export function AnalyticsView() {
               }}
               title="诊断统计数据库"
               aria-label="诊断统计数据库"
-              className="p-1.5 rounded-lg bg-bg-secondary border border-border-primary hover:border-accent/50"
+              className="p-1.5 rounded-lg bg-bg-secondary hover:border-accent/50"
             >
-              <Bug className="w-4 h-4 text-text-secondary" />
+              <Bug className="icon-lg text-text-secondary" />
             </button>
             <select
               value={days}
               onChange={(e) => setDays(Number(e.target.value))}
-              className="px-3 py-1.5 rounded-lg bg-bg-secondary border border-border-primary text-sm"
+              className="px-3 py-1.5 rounded-lg bg-bg-secondary text-sm"
             >
               <option value={7}>近 7 天</option>
               <option value={30}>近 30 天</option>
@@ -215,7 +216,7 @@ export function AnalyticsView() {
       >
         {!hasRealTokens && totals.total_sessions > 0 && (
           <span className="text-[length:var(--text-meta)] text-text-faint">
-            (token 数据从 起收集)
+            （token 数据从 起收集）
           </span>
         )}
       </PageHeader>
@@ -225,37 +226,37 @@ export function AnalyticsView() {
       {/* Totals Cards */}
       <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
         <StatCard
-          icon={<Cpu className="w-4 h-4" />}
+          icon={<Cpu className="icon-lg" />}
           label="输入 Token"
           value={formatNumber(totals.total_input)}
           color="text-zinc-400"
         />
         <StatCard
-          icon={<Zap className="w-4 h-4" />}
+          icon={<Zap className="icon-lg" />}
           label="输出 Token"
           value={formatNumber(totals.total_output)}
           color="text-green-400"
         />
         <StatCard
-          icon={<TrendingUp className="w-4 h-4" />}
+          icon={<TrendingUp className="icon-lg" />}
           label="会话数"
           value={totals.total_sessions.toString()}
           color="text-amber-400"
         />
         <StatCard
-          icon={<DollarSign className="w-4 h-4" />}
+          icon={<DollarSign className="icon-lg" />}
           label="预估费用"
           value={formatCost(totals.total_estimated_cost)}
           color="text-yellow-400"
         />
         <StatCard
-          icon={<Database className="w-4 h-4" />}
+          icon={<Database className="icon-lg" />}
           label="缓存命中 Token"
           value={formatNumber(totals.total_cache_read)}
           color="text-green-400"
         />
         <StatCard
-          icon={<Percent className="w-4 h-4" />}
+          icon={<Percent className="icon-lg" />}
           label="缓存命中率"
           value={hitRateLabel(totalsHit)}
           color={totalsHit == null ? "text-text-faint" : hitRateColor(totalsHit)}
@@ -271,7 +272,7 @@ export function AnalyticsView() {
 
       {/* Model Usage */}
       {by_model.length > 0 && (
-        <div className="bg-bg-secondary rounded-xl p-4 border border-border-primary">
+        <div className="bg-bg-secondary rounded-xl p-4">
           <h3 className="text-sm font-medium mb-3">模型使用</h3>
           <div className="space-y-2">
             {by_model.map((m) => {
@@ -284,15 +285,17 @@ export function AnalyticsView() {
                 ? " （估算）"
                 : "";
               return (
-                <div key={m.model} className="flex items-center justify-between text-sm">
-                  <span className="text-text-secondary truncate max-w-[200px]">{m.model}</span>
-                  <div className="flex items-center gap-4">
-                    <span className="text-text-faint">{formatNumber(m.input_tokens + m.output_tokens)} tok</span>
-                    <span className="text-text-faint">{m.sessions} 次</span>
-                    <span className={hit == null ? "text-text-faint" : hitRateColor(hit)}>
+                <div key={m.model} className="flex items-center justify-between gap-4 text-sm">
+                  <span className="text-text-secondary truncate max-w-narrow">{m.model}</span>
+                  {/* 数值列用等宽栅格 + 右对齐 + tabular-nums：
+                      位数一变就左右跳、左边缘不共线（审计问题 56）。 */}
+                  <div className="grid grid-cols-4 gap-4 text-right">
+                    <span className="text-text-faint tabular-nums">{formatNumber(m.input_tokens + m.output_tokens)} tok</span>
+                    <span className="text-text-faint tabular-nums">{m.sessions} 次</span>
+                    <span className={`tabular-nums ${hit == null ? "text-text-faint" : hitRateColor(hit)}`}>
                       {hitRateLabel(hit)}{estNote}
                     </span>
-                    <span className="text-accent">{formatCost(m.estimated_cost)}</span>
+                    <span className="text-accent tabular-nums">{formatCost(m.estimated_cost)}</span>
                   </div>
                 </div>
               );
@@ -302,22 +305,22 @@ export function AnalyticsView() {
       )}
 
       {by_tool.length > 0 && (
-        <div className="bg-bg-secondary rounded-xl p-4 border border-border-primary">
+        <div className="bg-bg-secondary rounded-xl p-4">
           <div className="flex items-center gap-2 mb-3">
-            <Wrench className="w-4 h-4 text-text-secondary" />
-            <h3 className="text-sm font-medium">工具调用 Top 10</h3>
+            <Wrench className="icon-lg text-text-secondary" />
+            <h3 className="text-sm font-medium">工具调用前十</h3>
             <span className="text-xs text-text-faint">
-              ({by_tool.reduce((acc, t) => acc + t.call_count, 0)} 总调用)
+              （{by_tool.reduce((acc, t) => acc + t.call_count, 0)} 总调用）
             </span>
           </div>
           <div className="space-y-2">
             {by_tool.slice(0, 10).map((t) => (
-              <div key={t.tool} className="flex items-center justify-between text-sm">
-                <span className="text-text-secondary truncate max-w-[200px]">{t.tool}</span>
-                <div className="flex items-center gap-4">
-                  <span className="text-text-faint">{formatNumber(t.call_count)} 次</span>
-                  <span className="text-text-faint">{t.session_count} 会话</span>
-                  <span className="text-accent">{t.daily_avg.toFixed(1)}/天</span>
+              <div key={t.tool} className="flex items-center justify-between gap-4 text-sm">
+                <span className="text-text-secondary truncate max-w-narrow">{t.tool}</span>
+                <div className="grid grid-cols-3 gap-4 text-right">
+                  <span className="text-text-faint tabular-nums">{formatNumber(t.call_count)} 次</span>
+                  <span className="text-text-faint tabular-nums">{t.session_count} 会话</span>
+                  <span className="text-accent tabular-nums">{t.daily_avg.toFixed(1)}/天</span>
                 </div>
               </div>
             ))}
@@ -327,15 +330,15 @@ export function AnalyticsView() {
 
       {/* Skills Usage */}
       {skills.top_skills.length > 0 && (
-        <div className="bg-bg-secondary rounded-xl p-4 border border-border-primary">
+        <div className="bg-bg-secondary rounded-xl p-4">
           <h3 className="text-sm font-medium mb-3">技能使用</h3>
           <div className="space-y-2">
             {skills.top_skills.map((s) => (
-              <div key={s.skill} className="flex items-center justify-between text-sm">
+              <div key={s.skill} className="flex items-center justify-between gap-4 text-sm">
                 <span className="text-text-secondary">{s.skill}</span>
-                <div className="flex items-center gap-4">
-                  <span className="text-text-faint">{s.total_count} 次</span>
-                  <span className="text-accent">{s.percentage.toFixed(1)}%</span>
+                <div className="grid grid-cols-2 gap-4 text-right">
+                  <span className="text-text-faint tabular-nums">{s.total_count} 次</span>
+                  <span className="text-accent tabular-nums">{s.percentage.toFixed(1)}%</span>
                 </div>
               </div>
             ))}
@@ -349,9 +352,9 @@ export function AnalyticsView() {
           preserved (folded into summaries), not discarded. The
           underlying mechanism keeps every archived turn as a real
           message row in a compression child-session, so 0 loss. */}
-      <div className="bg-bg-secondary rounded-xl p-4 border border-border-primary">
+      <div className="bg-bg-secondary rounded-xl p-4">
         <div className="flex items-center gap-2 mb-3">
-          <Archive className="w-4 h-4 text-text-secondary" />
+          <Archive className="icon-lg text-text-secondary" />
           <h3 className="text-sm font-medium">上下文压缩</h3>
         </div>
         <div className="grid grid-cols-2 gap-3">
@@ -425,28 +428,28 @@ function DebugPanel({
   onReload: () => void;
 }) {
   return (
-    <div className="rounded-xl border border-border-primary bg-bg-secondary p-4 space-y-3">
+    <div className="rounded-xl bg-bg-secondary p-4 space-y-3">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Bug className="w-4 h-4 text-text-secondary" />
+          <Bug className="icon-lg text-text-secondary" />
           <h3 className="text-sm font-medium">统计诊断</h3>
         </div>
         <div className="flex items-center gap-2">
           <button
             onClick={onReload}
-            className="text-xs px-2.5 py-1 rounded-lg border border-border-primary hover:border-accent/50"
+            className="text-xs px-2.5 py-1 rounded-lg bg-bg-secondary hover:bg-bg-hover"
           >
             刷新
           </button>
           <button
             onClick={onClose}
-            className="text-xs px-2.5 py-1 rounded-lg border border-border-primary hover:border-accent/50"
+            className="text-xs px-2.5 py-1 rounded-lg bg-bg-secondary hover:bg-bg-hover"
           >
-            关闭
+            {CLOSE}
           </button>
         </div>
       </div>
-      {loading && <div className="text-xs text-text-faint">读取数据库...</div>}
+      {loading && <div className="text-xs text-text-faint" aria-busy="true">{LOADING}</div>}
       {error && (
         <div className="text-xs text-red-300 font-mono break-words whitespace-pre-wrap">{error}</div>
       )}
@@ -459,10 +462,10 @@ function DebugPanel({
             {(["sessions", "messages", "token_usage"] as const).map((name) => {
               const t = debug.tables[name];
               return (
-                <div key={name} className="rounded-lg border border-border-primary p-2.5 text-xs">
+                <div key={name} className="rounded-lg bg-bg-card p-2.5 text-xs">
                   <div className="font-medium text-text-secondary mb-1">{name}</div>
                   <div className="text-text-faint">
-                    存在: {t.exists ? "是" : "否"} · 行数: {t.row_count ?? "—"}
+                    存在：{t.exists ? "是" : "否"} · 行数：{t.row_count ?? "—"}
                   </div>
                   {t.error && <div className="text-red-300 mt-1 break-words">{t.error}</div>}
                   {t.sample.length > 0 && (
@@ -475,7 +478,7 @@ function DebugPanel({
             })}
           </div>
           <div className="text-xs">
-            <div className="font-medium text-text-secondary mb-1">迁移 (schema_migrations)</div>
+            <div className="font-medium text-text-secondary mb-1">迁移记录</div>
             {debug.migrations.length === 0 ? (
               <div className="text-text-faint">无记录</div>
             ) : (
@@ -536,7 +539,7 @@ function DailyCurve({ daily }: { daily: import("../api").AnalyticsDailyEntry[] }
   const labelEvery = barCount > 30 ? 7 : barCount > 14 ? 3 : 1;
 
   return (
-    <div className="bg-bg-secondary rounded-xl p-4 border border-border-primary">
+    <div className="bg-bg-secondary rounded-xl p-4">
       <div className="flex items-center justify-between mb-3">
         <h3 className="text-sm font-medium">Token 用量时间曲线</h3>
         <div className="flex items-center gap-3 text-xs text-text-faint">
@@ -686,7 +689,7 @@ function StatCard({
   color: string;
 }) {
   return (
-    <div className="bg-bg-secondary rounded-xl p-3 border border-border-primary">
+    <div className="bg-bg-secondary rounded-xl p-3">
       <div className="flex items-center gap-2 mb-1">
         <span className={color}>{icon}</span>
         <span className="text-xs text-text-faint">{label}</span>

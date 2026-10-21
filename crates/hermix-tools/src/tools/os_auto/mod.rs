@@ -63,10 +63,19 @@ pub const DESKTOP_TOOLSET: &str = "desktop";
 /// to the essential hard floor — see `essential::HARD_ESSENTIAL_TOOLSETS`.
 pub const OPT_IN_TOOLSETS: &[&str] = &[DESKTOP_TOOLSET];
 
-/// Register both lines. Individual handlers own their own risk levels;
-/// this only wires the toolsets into the registry.
+/// Register the OS-automation lines. Individual handlers own their own risk
+/// levels; this only wires the toolsets into the registry.
+///
+/// The headless `browser` line was retired on 2026-10-21: the viewer's MCP
+/// server now owns browser automation (`viewer__browser_*`), including a
+/// `headed` switch (`browser_open(headed=false)` = headless, same throwaway
+/// profiles and CDP semantics this module had). Running both registrations
+/// gave the model two same-named tools with different parameter shapes —
+/// `browser_click(ref)` vs `viewer__browser_click(x, y)` — which is the
+/// parameter-guessing failure mode we keep getting burned by. The module code
+/// stays: the viewer's browser module documents the same three pitfalls and
+/// can borrow from here, and re-enabling is one line.
 pub fn register(registry: &ToolRegistry) {
-    browser::register(registry);
     desktop::register(registry);
 }
 
@@ -132,10 +141,11 @@ mod tests {
 
     #[test]
     fn opt_in_toolsets_are_the_desktop_line_only() {
-        // `browser` left the opt-in list in 2026-10-16: the virtual-window
-        // P0 removed the "drives the user's real browser" concern, so it
-        // moved to the essential hard floor. Only `desktop` (real keyboard
-        // injection into whatever window is focused) still ships off.
+        // `browser` left the opt-in list in 2026-10-16 (virtual-window P0),
+        // then left the essential floor entirely on 2026-10-21: the viewer's
+        // MCP server owns browser automation now, and this module no longer
+        // registers it. Only `desktop` (real keyboard injection into whatever
+        // window is focused) still ships off.
         assert_eq!(OPT_IN_TOOLSETS, &[DESKTOP_TOOLSET]);
         assert!(!OPT_IN_TOOLSETS.contains(&BROWSER_TOOLSET));
         // A wildcard must never be mistaken for a real toolset name.

@@ -12,7 +12,7 @@ import {
 import { cx } from "../../lib/cx";
 import { FileTypeIcon } from "@hermix/preview/FileTypeIcon";
 import { storage, STORAGE_KEYS } from "../../utils/storageCompat";
-import { Switch, SettingsGroup, SettingsRow, SegmentedControl } from "../ui";
+import { Switch, SettingsGroup, SettingsRow, SegmentedControl, Input } from "../ui";
 import { toastWarning } from "../../hooks/useToast";
 import {
   PluginsTab, SkillsTab, ConnectorsTab, ToolsetsTab,
@@ -85,7 +85,7 @@ const GROUPS: GroupDef[] = [
     items: [
       { id: "plugins", label: "插件", hint: "内置插件开关", icon: Plug, keywords: "plugin 插件" },
       { id: "skills", label: "技能", hint: "技能库与启停", icon: Sparkles, keywords: "skill 技能" },
-      { id: "connectors", label: "连接器", hint: "MCP server 接入与社区目录", icon: Network, keywords: "mcp connector 连接器 服务器" },
+      { id: "connectors", label: "连接器", hint: "MCP 服务端接入与社区目录", icon: Network, keywords: "mcp connector 连接器 服务器" },
       { id: "toolsets", label: "工具集", hint: "工具白名单", icon: Boxes, keywords: "toolset 工具 工具集" },
     ],
   },
@@ -192,13 +192,14 @@ export function SettingsShell({ onBack, initialPage, variant = "page" }: Setting
       <div className="px-3 pb-1 pt-3">
         <div className="relative">
           <Search className="icon-md pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)]" />
-          <input
+          <Input
             ref={searchRef}
+            size="md"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="搜索设置…"
             aria-label="搜索设置"
-            className="w-full rounded-[var(--radius-md)] bg-[var(--color-bg-tertiary)] py-2 pl-8 pr-2 text-[length:var(--text-ui)] text-[var(--color-text-primary)] outline-none transition-colors placeholder:text-[var(--color-text-muted)] focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
+            className="pl-8"
           />
         </div>
       </div>
@@ -477,7 +478,7 @@ function FileAssocTab() {
   return (
     <div>
       {error && (
-        <p className="mb-3 text-[length:var(--text-meta)] text-error">{error}</p>
+        <p className="mb-3 text-[length:var(--text-meta)] text-text-error">{error}</p>
       )}
       <SettingsGroup
         title="由 Hermix 文件查看器打开"
@@ -498,6 +499,7 @@ function FileAssocTab() {
                 checked={owned}
                 disabled={busy === ext}
                 onChange={(v) => toggle(ext, v)}
+                label={`由 Hermix 文件查看器打开 .${ext} 文件`}
               />
             }
           />

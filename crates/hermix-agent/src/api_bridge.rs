@@ -277,6 +277,11 @@ impl LlmProvider for CodexProvider {
             "input": Self::convert_input(messages),
         });
 
+        // `body` is a `serde_json::Value`, whose `IndexMut` is
+        // `index_or_insert` (inserts Null when the key is absent) — NOT the
+        // `Map<String, Value>` impl that panics with "no entry found for
+        // key". So bracket-assignment is safe here. Do not "fix" these into
+        // `.insert(...)`: `Value` has no such method.
         if let Some(mt) = max_tokens {
             body["max_output_tokens"] = serde_json::json!(mt);
         }

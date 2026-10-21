@@ -332,7 +332,22 @@ impl ToolHandler for ReadFileHandler {
                     return Err(ToolError::from_message(e));
                 }
             };
-            let full = String::from_utf8_lossy(&bytes).into_owned();
+            // Same contract as the backend path (which relies on
+            // `read_to_string` failing): never hand binary content to the
+            // model. `from_utf8_lossy` here silently turned a PNG or a .docx
+            // into a wall of U+FFFD, which costs real tokens and tells the
+            // model nothing — worse than a clear rejection that names the
+            // right tool.
+            let full = match String::from_utf8(bytes) {
+                Ok(text) => text,
+                Err(e) => {
+                    return Err(ToolError::from_message(format!(
+                        "Failed to read file '{path}': the file is binary (not valid UTF-8). \
+                         Images → `read_image`; PDFs → `read_pdf`; Office documents → \
+                         `file_converter`. Original error: {e}"
+                    )));
+                }
+            };
             match (offset, limit) {
                 (None, None) => full,
                 _ => slice_lines(&full, offset, limit),
@@ -447,6 +462,15 @@ impl ToolHandler for WriteFileHandler {
             .ok_or_else(|| ToolError::InvalidParams("Missing 'content' parameter".into()))?;
 
         CredentialGuard::new().check_write_access(Path::new(path), content)?;
+        // Permission-governing files (approval allowlist / session approvals /
+        // app config): a tool that can write them can grant itself every
+        // future approval. Hard deny — see `permission_guard`.
+        crate::permission_guard::check_write(Path::new(path))?;
+        // Harness components (SOUL.md / personalities / agents / guidance /
+        // scripts / skills / memories) stay **editable** — Harness² requires
+        // the optimiser to be able to edit them — but every overwrite keeps
+        // the previous version in `harness-history/`.
+        crate::permission_guard::snapshot_harness_component(Path::new(path));
         // 同 read：与 terminal / memory 同一口径硬拒。
         check_traversal_component(path)?;
 
@@ -576,6 +600,11 @@ impl ToolHandler for PatchHandler {
             .get("path")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidParams("Missing 'path' parameter".into()))?;
+
+        // Same escalation guard as write_file: patch can otherwise rewrite the
+        // approval allowlist just as easily as a full write.
+        crate::permission_guard::check_write(Path::new(path))?;
+        crate::permission_guard::snapshot_harness_component(Path::new(path));
 
         // Read-before-edit gate（ZCode read-file-state 机制级移植）：仅对
         // 携带 `_session_id` 的 agent 派发生效；dashboard/API 直调不注入
@@ -1252,6 +1281,9 @@ impl ToolHandler for MoveFileHandler {
         // Credential guard — same as read_file/write_file
         CredentialGuard::new().check_read_access(src_path)?;
         CredentialGuard::new().check_read_access(dst_path)?;
+        // A move/copy can overwrite the approval allowlist just like a write.
+        crate::permission_guard::check_write(dst_path)?;
+        crate::permission_guard::snapshot_harness_component(dst_path);
 
         // Source must exist
         if !src_path.exists() {
@@ -1622,6 +1654,30 @@ mod tests {
         let handler = ReadFileHandler::new(Arc::new(MockBackend), Some(fs.clone()));
         let result = handler.execute(json!({"path": "/virtual/foo.txt"})).await.unwrap();
         assert!(result.contains("hello seam"), "got: {result}");
+    }
+
+    /// Binary bytes must be rejected, not lossily decoded. `from_utf8_lossy`
+    /// used to hand the model a wall of U+FFFD — real tokens, no information,
+    /// and no hint that the file was the wrong kind.
+    #[tokio::test]
+    async fn read_file_seam_rejects_binary_content() {
+        let fs: Arc<dyn Fs> = Arc::new(hermix_core::InMemoryFs::default());
+        fs.write(Path::new("/virtual/blob.bin"), b"\x00\x01\x02PNG\xff\xfe\x00")
+            .await
+            .unwrap();
+
+        let handler = ReadFileHandler::new(Arc::new(MockBackend), Some(fs));
+        let err = handler
+            .execute(json!({"path": "/virtual/blob.bin"}))
+            .await
+            .expect_err("binary content must be rejected");
+
+        let msg = err.to_string();
+        assert!(msg.contains("binary"), "error must say why: {msg}");
+        assert!(
+            msg.contains("read_image"),
+            "error must name the right tool: {msg}"
+        );
     }
 
     // ---- H1 behaviour contract: read_file pagination ---------------

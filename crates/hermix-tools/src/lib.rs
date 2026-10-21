@@ -36,6 +36,9 @@ pub mod result_budget;
 // future drift between declared interface and runtime behavior.
 
 pub mod param_coercion;
+/// Write protection for the files that govern agent permissions
+/// (`approval_allowlist.json`, `session_approvals.json`, app `config.yaml`).
+pub mod permission_guard;
 pub mod tool_meta;
 pub mod tools;
 pub mod toolset;

@@ -898,10 +898,13 @@ impl LocalAgentService {
     /// session reaches the point where every turn triggers compaction
     /// retries.
     fn gateway_token_warn(&self, session_id: &str, messages: &mut Vec<Message>) {
-        // Rough estimate: 1 token ≈ 4 UTF-8 bytes for English text.
+        // Same accounting the agent loop's pressure check uses
+        // (`content` + tool-call arguments + multimodal parts). The old
+        // `len / 4` on `content` alone scored a 100 KB tool payload as zero,
+        // so an oversized session could sail past this canary too.
         let est_tokens: u64 = messages
             .iter()
-            .map(|m| m.content.as_deref().unwrap_or("").len() as u64 / 4)
+            .map(|m| crate::context::estimate_message_tokens(m) as u64)
             .sum();
         // Resolve the model's context window from metadata. Pass
         // `llm_providers` so per-provider overrides (e.g.
@@ -931,19 +934,31 @@ impl LocalAgentService {
                 msg_count = messages.len(),
                 "Gateway safety net: session above 85% context window, compressing."
             );
-            // Simple truncation: keep first 3 messages + last 10 messages
-            let head: Vec<Message> = messages[..3].to_vec();
-            let tail: Vec<Message> = messages[messages.len()-10..].to_vec();
-            let dropped = messages.len() - 13;
-            let marker = Message::system(format!(
+            // Keep the leading system messages plus the recent tail; the
+            // middle becomes a marker. Head was previously a blind
+            // `messages[..3]`, which could cut a `tool_use` group in half —
+            // and the tail slice could *start* inside one, leaving orphaned
+            // `tool_result` blocks that Anthropic rejects outright. The
+            // sanitiser repairs both directions (drops orphans, stubs the
+            // missing results), so this net can no longer produce a payload
+            // the provider refuses.
+            let head_end = messages
+                .iter()
+                .take_while(|m| m.role == MessageRole::System)
+                .count()
+                .max(1)
+                .min(messages.len());
+            let mut rest = messages.split_off(head_end);
+            let tail_len = 10.min(rest.len());
+            let dropped = rest.len() - tail_len;
+            let mut rebuilt = std::mem::take(messages);
+            rebuilt.push(Message::system(format!(
                 "[GATEWAY COMPACTION] {} earlier messages were removed to prevent context overflow. \
                  Continue from the recent messages below.",
                 dropped
-            ));
-            *messages = Vec::new();
-            messages.extend(head);
-            messages.push(marker);
-            messages.extend(tail);
+            )));
+            rebuilt.extend(rest.split_off(dropped));
+            *messages = crate::compression::engine::sanitize_tool_pairs(rebuilt, true);
         }
     }
 
@@ -1289,7 +1304,15 @@ impl LocalAgentService {
         if let Some(v) = overrides.enable_thinking {
             let mut eb = config.extra_body.unwrap_or(serde_json::json!({}));
             if let serde_json::Value::Object(ref mut map) = eb {
-                map["enable_thinking"] = serde_json::json!(v);
+                // `insert`, not `map["enable_thinking"] = …`: serde_json's
+                // `IndexMut` panics with "no entry found for key" when the key
+                // is absent (it is `get_mut(key).expect(...)`, NOT an
+                // entry-or-insert like `BTreeMap::entry`). An `extra_body`
+                // that already carries other keys — e.g. `reasoning_effort` —
+                // therefore panicked every single time a caller turned
+                // thinking on. Real panic logs: 2026-10-21 08:46, three in a
+                // row, all at this line.
+                map.insert("enable_thinking".to_string(), serde_json::json!(v));
             }
             config.extra_body = Some(eb);
         }
@@ -1914,21 +1937,15 @@ impl AgentService for LocalAgentService {
         // below never executes, and the session stays empty forever (the
         // frontend reuses it for every "新建对话" click because message_count===0).
         // This is exactly what produced the zombie "访问https://..." session.
-        if let Err(e) = self.session_persistence.persist_session_with_compression(
-            session_id,
-            &messages,
-            Some(&effective_model),
-            Some("local"),
-            None,
-            None,
-            None,
-            None,
-            // workspace / expert_id: leave unchanged on early persist;
-            // save_session_atomic's COALESCE will preserve whatever
-            // createSession / PATCH already wrote.
-            None,
-            None,
-        ) {
+        if let Err(e) = crate::session_persistence::run_blocking(|| {
+            // `persist_pre_turn` (not the full persist): same DB transaction —
+            // the row must exist even if `run()` fails — but it skips the
+            // markdown export, which the post-run persist re-renders in full a
+            // few seconds later. `workspace` / `expert_id` are left untouched
+            // by the COALESCE, so createSession / PATCH values survive.
+            self.session_persistence
+                .persist_pre_turn(session_id, &messages, Some(&effective_model), Some("local"))
+        }) {
             tracing::warn!(
                 session_id = %session_id,
                 error = %e,
@@ -1993,7 +2010,7 @@ impl AgentService for LocalAgentService {
 
         // Relabel both halves of an externally-triggered turn for
         // storage, undoing the temporary role restore above. Scoped to
-        // rows this turn added — everything before `history_len` came
+        // rows this turn added — everything before the prompt came
         // from `load_session` and is real conversation. Without this the
         // reply would persist as a genuine assistant message, leaving a
         // dangling half-turn the next `load_session` hands the model as
@@ -2006,20 +2023,22 @@ impl AgentService for LocalAgentService {
         // Log on failure (do NOT silently swallow: a DB write failure means the
         // reload view will be stale; the user must see a warning so they don't
         // assume a "saved" turn will be there on next page-load).
-        if let Err(e) = self.session_persistence.persist_session_with_compression(
-            session_id,
-            &messages,
-            Some(&effective_model),
-            Some("local"),
-            None,
-            None,
-            snapshot.as_ref().map(|_| session_id),
-            // workspace / expert_id: leave unchanged on post-run persist
-            // so the user's binding survives a session reload.
-            None,
-            None,
-            snapshot.as_ref(),
-        ) {
+        if let Err(e) = crate::session_persistence::run_blocking(|| {
+            self.session_persistence.persist_session_with_compression(
+                session_id,
+                &messages,
+                Some(&effective_model),
+                Some("local"),
+                None,
+                None,
+                snapshot.as_ref().map(|_| session_id),
+                // workspace / expert_id: leave unchanged on post-run persist
+                // so the user's binding survives a session reload.
+                None,
+                None,
+                snapshot.as_ref(),
+            )
+        }) {
             tracing::warn!(
                 session_id = %session_id,
                 error = %e,
@@ -3343,20 +3362,22 @@ impl AgentService for LocalAgentService {
             }
         }
 
-        if let Err(e) = self.session_persistence.persist_session_with_compression(
-            session_id,
-            &messages,
-            Some(&effective_model),
-            Some("local"),
-            None,
-            None,
-            snapshot.as_ref().map(|_| session_id),
-            // workspace / expert_id: leave unchanged on post-run persist
-            // so the user's binding survives a session reload.
-            None,
-            None,
-            snapshot.as_ref(),
-        ) {
+        if let Err(e) = crate::session_persistence::run_blocking(|| {
+            self.session_persistence.persist_session_with_compression(
+                session_id,
+                &messages,
+                Some(&effective_model),
+                Some("local"),
+                None,
+                None,
+                snapshot.as_ref().map(|_| session_id),
+                // workspace / expert_id: leave unchanged on post-run persist
+                // so the user's binding survives a session reload.
+                None,
+                None,
+                snapshot.as_ref(),
+            )
+        }) {
             tracing::warn!(
                 session_id = %session_id,
                 error = %e,
@@ -3996,6 +4017,29 @@ mod override_tests {
         let resolved = resolved.unwrap();
         // canonicalize should produce an absolute path
         assert!(resolved.is_absolute());
+    }
+
+    /// `enable_thinking` 写进 `extra_body` 时必须走 `Map::insert`。
+    ///
+    /// `serde_json::Map` 的 `IndexMut` 是 `get_mut(k).expect("no entry found
+    /// for key")`——**key 不存在就 panic**（与 `Value` 的 or_insert 语义相反）。
+    /// 只要 `extra_body` 里已有别的键（`reasoning_effort` 之类），旧写法
+    /// `map["enable_thinking"] = …` 就 100% 崩。真实 panic 日志：
+    /// 2026-10-21 08:46，连续三次，全在 `local_agent_service.rs:1307`。
+    #[test]
+    fn apply_overrides_merges_enable_thinking_into_existing_extra_body() {
+        let base = AgentConfig {
+            extra_body: Some(serde_json::json!({"reasoning_effort": "high"})),
+            ..AgentConfig::default()
+        };
+        let overrides = AgentOverrides {
+            enable_thinking: Some(true),
+            ..AgentOverrides::default()
+        };
+        let (cfg, _) = LocalAgentService::apply_overrides(base, &overrides);
+        let eb = cfg.extra_body.expect("extra_body must survive");
+        assert_eq!(eb["reasoning_effort"], "high", "原有键不能被丢掉");
+        assert_eq!(eb["enable_thinking"], true, "新键必须被合并进去");
     }
 
     #[test]

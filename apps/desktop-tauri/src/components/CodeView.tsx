@@ -11,13 +11,15 @@ import { useMemo, useRef, useState, useEffect, useLayoutEffect, useCallback } fr
 import { clsx } from "clsx";
 import { Check, Copy, X } from "lucide-react";
 import { useSafeTimeout } from "../hooks/useSafeTimeout";
-import { highlightToReact, readIsDark } from "../lib/codeHighlight";
+import { highlightToReact } from "../lib/codeHighlight";
+import { useIsDarkTheme } from "../hooks/useTheme";
+import { COPIED, COPY_FAILED } from "./strings";
 
 interface CodeViewProps {
   source: string;
   language: string | null;
   wrap?: boolean;
-  /** 是否暗色主题。未传时自动从 DOM .dark class 读取。
+  /** 是否暗色主题。不传则跟随当前主题（响应式）。
    *  控制使用 ONE_DARK 还是 ONE_LIGHT 配色。 */
   isDark?: boolean;
   activeLine?: number;
@@ -212,9 +214,11 @@ export function CodeView({
   const [copied, setCopied] = useState(false);
   const [failed, setFailed] = useState(false);
 
-  // 未传 isDark 时自动从 DOM 读取主题。
-  // useMemo 依赖 isDark，主题切换时会重新 tokenize。
-  const dark = isDark ?? readIsDark();
+  // 未传 isDark 时跟随当前主题。useIsDarkTheme 是响应式的：主题切换后
+  // 重新取值 → useMemo 依赖 dark 变 → 重新 tokenize（换配色）。
+  // 旧的 `isDark ?? readIsDark()` 读的是已废除的 `.dark` 类，恒为 false。
+  const themeIsDark = useIsDarkTheme();
+  const dark = isDark ?? themeIsDark;
 
   // 同步渲染：高亮 token 树。refractor 是同步 API，useMemo 缓存。
   // 切文件 → source/language 变 → 自动重新 tokenize。
@@ -279,8 +283,8 @@ export function CodeView({
           e.stopPropagation();
           handleCopy();
         }}
-        title={copied ? "已复制" : failed ? "复制失败" : "复制全部代码"}
-        aria-label={copied ? "已复制" : failed ? "复制失败" : "复制全部代码"}
+        title={copied ? COPIED : failed ? COPY_FAILED : "复制全部代码"}
+        aria-label={copied ? COPIED : failed ? COPY_FAILED : "复制全部代码"}
       >
         {copied ? <Check className="icon-md" /> : failed ? <X className="icon-md" /> : <Copy className="icon-md" />}
       </button>

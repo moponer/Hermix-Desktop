@@ -9,6 +9,8 @@ import {
 } from "../../desktopBridge";
 import { fetchJSON } from "../../api/rest";
 import { toastError, toastSuccess } from "../../hooks/useToast";
+import { Card, EmptyState, Skeleton } from "../ui";
+import { COPIED, COPY_FAILED, failure } from "../strings";
 
 const TAIL_LINE_OPTIONS: number[] = [200, 500, 2000, 10000];
 
@@ -114,7 +116,7 @@ export function DiagnosticsTab() {
       toastSuccess(`日志目录已打开：${dir}`);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      toastError(`无法打开日志目录：${msg}`);
+      toastError(failure("无法打开日志目录", "请检查目录权限后重试。", msg));
     }
   }, []);
 
@@ -122,17 +124,17 @@ export function DiagnosticsTab() {
     if (!tail) return;
     try {
       await navigator.clipboard.writeText(tail.lines.join("\n"));
-      toastSuccess(`已复制日志（${tail.lines.length} 行）`);
+      toastSuccess(`${COPIED}日志（${tail.lines.length} 行）`);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      toastError(`复制失败：${msg}`);
+      toastError(failure(COPY_FAILED, "请手动选中日志后复制。", msg));
     }
   }, [tail]);
 
   return (
     <div className="space-y-4">
       {/* Path + actions */}
-      <div className="rounded-[var(--radius-lg)] bg-bg-card shadow-[var(--shadow-paper)] p-4 space-y-3">
+      <Card className="space-y-3">
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <div className="flex items-center gap-2 min-w-0">
             <FileText className="icon-md text-text-muted shrink-0" />
@@ -183,7 +185,7 @@ export function DiagnosticsTab() {
             )}
           </div>
         )}
-      </div>
+      </Card>
 
       {error && (
         <div className="rounded-[var(--radius-lg)] bg-bg-card p-3 flex items-start gap-2 shadow-[var(--shadow-paper)]">
@@ -253,14 +255,48 @@ export function DiagnosticsTab() {
         </div>
 
         {auditError ? (
-          <div className="px-3 py-2 text-[length:var(--text-meta)] text-text-muted">
-            审计不可用：{auditError}（设备注册库未装配时无审计数据）
+          <div className="px-3 py-3 text-[length:var(--text-meta)] text-text-muted">
+            <p>
+              审计不可用：{auditError}。设备注册库未装配时没有审计数据，请稍后重试。
+            </p>
+            <button
+              onClick={() => void refreshAudit()}
+              className="mt-2 h-7 px-2.5 rounded-[var(--radius-md)] flex items-center gap-1 bg-bg-tertiary text-[length:var(--text-meta)] text-text-secondary transition-colors hover:bg-bg-quaternary hover:text-text-primary"
+            >
+              <RefreshCw className="icon-sm" />
+              重试
+            </button>
           </div>
-        ) : audit && audit.length > 0 ? (
+        ) : audit === null ? (
+          /* 加载中不能显示成空态：audit 为 null 时既没有数据也还没读完。 */
+          <div className="space-y-2 px-3 py-3" aria-busy="true">
+            <Skeleton className="h-4 w-full" />
+            <Skeleton className="h-4 w-11/12" />
+            <Skeleton className="h-4 w-10/12" />
+          </div>
+        ) : audit.length === 0 ? (
+          <EmptyState
+            variant="plain"
+            size="sm"
+            icon={<ShieldCheck className="size-7" />}
+            title="暂无审计事件"
+            description="设备配对、认证与授权记录会出现在这里。"
+            action={
+              <button
+                onClick={() => void refreshAudit()}
+                className="h-7 px-2.5 rounded-[var(--radius-md)] flex items-center gap-1 bg-bg-tertiary text-[length:var(--text-meta)] text-text-secondary transition-colors hover:bg-bg-quaternary hover:text-text-primary"
+              >
+                <RefreshCw className="icon-sm" />
+                刷新
+              </button>
+            }
+          />
+        ) : (
           <div className="max-h-[40vh] overflow-auto">
             <table className="w-full text-[length:var(--text-meta)]">
-              <thead>
-                <tr className="text-text-muted text-left">
+              {/* 表头吸顶：外层是 max-h-[40vh] overflow-auto，不吸顶滚动后表头立即消失。 */}
+              <thead className="sticky top-0 z-10 bg-bg-card">
+                <tr className="text-text-muted text-left bg-bg-card">
                   <th className="px-3 py-1.5 font-normal">时间</th>
                   <th className="px-3 py-1.5 font-normal">事件</th>
                   <th className="px-3 py-1.5 font-normal">设备</th>
@@ -283,8 +319,6 @@ export function DiagnosticsTab() {
               </tbody>
             </table>
           </div>
-        ) : (
-          <div className="px-3 py-2 text-[length:var(--text-meta)] text-text-muted">暂无审计事件。</div>
         )}
       </div>
     </div>

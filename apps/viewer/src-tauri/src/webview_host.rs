@@ -72,6 +72,26 @@ pub fn close_webview(app: &AppHandle) {
     }
 }
 
+/// 显示 / 隐藏当前子 webview。
+///
+/// **为什么菜单展开时必须把它藏起来**：网页是**独立的 HWND**（子 webview），
+/// 它永远画在父 webview 的 DOM **之上** —— 不是同一层的东西，CSS 的
+/// z-index 根本管不到它。于是标题栏下拉菜单 / 右键菜单一旦展开到内容区
+/// 的范围，就被这块网页整个盖住（"菜单被内容区域遮挡"）。
+///
+/// 菜单收起后要**恢复显示**：直接关掉会丢页面状态（重新加载、滚动位置、
+/// 表单内容全没了），hide/show 只动可见性，页面原样还在。
+#[tauri::command]
+pub fn web_set_visible(app: AppHandle, visible: bool) {
+    if let Some(webview) = active_webview(&app) {
+        let _ = if visible {
+            webview.show()
+        } else {
+            webview.hide()
+        };
+    }
+}
+
 /// 打开网页：新建（或替换）子 webview。
 ///
 /// **必须在非主线程调用**：Windows 上 WebView2 的环境创建在主线程调用会死锁

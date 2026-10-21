@@ -15,13 +15,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { ChevronLeft, ChevronRight, Download, Search, X } from "lucide-react";
 import type { CellModel, ParsedWorkbook, SheetModel } from "../lib/workbook";
-import { styleToCss } from "../lib/workbook";
+import { contrastInk, DEFAULT_ROW_H, styleToCss } from "../lib/workbook";
 import { colName } from "../lib/localAssets";
 
 const ROW_HEADER_W = 46;
 const HEADER_H = 26;
-/** Excel 默认行高 15pt = 20px；没有显式行高时用它。 */
-const DEFAULT_ROW_H = 20;
 /** Excel 默认列宽 8.43 字符 ≈ 64px。 */
 const DEFAULT_COL_W = 64;
 const MIN_COL_W = 36;
@@ -418,11 +416,12 @@ function SheetCell({
 }) {
   const style = cell?.style;
   const css: CSSProperties = {
-    // 没有显式颜色的格子用界面墨色，避免继承到表头/交替底色的颜色。
-    ...(style?.color ? {} : { color: "var(--color-text-primary)" }),
+    // 没有显式颜色的格子：按底色亮度选墨色（白底黑字 / 深底白字）。
+    // 沿用界面主题的字色会出事：深色界面下浅色字压在浅色底上 = 看不见。
+    ...(style?.color ? {} : { color: contrastInk(style?.bg) }),
     // 冻结列会横向滚动，没有底色的格子会让下层单元格透出来。源文件给了
-    // 填充色就用它，没给就补面板底色。
-    ...(frozenCol && !style?.bg ? { backgroundColor: "var(--color-bg-primary)" } : null),
+    // 填充色就用它，没给就补纸面底色。
+    ...(frozenCol && !style?.bg ? { backgroundColor: "var(--sheet-bg, #ffffff)" } : null),
     // Excel 的默认垂直对齐是底对齐，不是浏览器的中间对齐。
     ...(style?.valign ? {} : { verticalAlign: "bottom" as const }),
     ...styleToCss(style),
@@ -436,11 +435,33 @@ function SheetCell({
   if (style?.wrap || !spill) {
     css.overflow = "hidden";
     css.textOverflow = "ellipsis";
+  } else {
+    // 文字要真的铺到邻居身上：overflow 必须显式回到 visible，位置也要
+    // 提一层（否则后一个格子的底色会盖住铺过来的字 —— Excel 里是盖不住的）。
+    css.overflow = "visible";
+    if (!frozenCol) {
+      css.position = "relative";
+      css.zIndex = 1;
+    }
   }
 
   const title = cell?.formula
     ? `= ${cell.formula}${cell.text ? `\n${cell.text}` : ""}`
     : cell?.text || undefined;
+
+  const content = cell?.href ? (
+    <a
+      className="sheet-link"
+      href={cell.href}
+      target="_blank"
+      rel="noopener noreferrer"
+      title={cell.href}
+    >
+      {cell.text}
+    </a>
+  ) : (
+    cell?.text
+  );
 
   return (
     <td
@@ -450,7 +471,7 @@ function SheetCell({
       rowSpan={merge?.rs}
       title={title}
     >
-      {cell?.text}
+      {content}
     </td>
   );
 }

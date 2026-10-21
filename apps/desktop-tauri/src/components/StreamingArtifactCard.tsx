@@ -138,7 +138,7 @@ function StreamingArtifactCardImpl({ text, isStreaming }: StreamingArtifactCardP
   const openCount = artifacts.filter((a) => a.open).length;
 
   return (
-    <div className="my-2 rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-bg-secondary)] p-2.5">
+    <div className="my-2 rounded-md border-[var(--color-border-subtle)] bg-[var(--color-bg-secondary)] p-2.5">
       <div className="flex items-center gap-1.5 mb-1.5 text-text-faint">
         <Box className="icon-md shrink-0" />
         <span className="h-tiny">

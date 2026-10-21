@@ -102,6 +102,10 @@ const MemoMessageBubble = memo(MessageBubble, (prev, next) => {
   if (prev.onPathClick !== next.onPathClick) return false;
   if (prev.expertCutoffAt !== next.expertCutoffAt) return false;
   if (prev.keepOpen !== next.keepOpen) return false;
+  // 这两个 prop 之前漏比：hasRunningTool 变化时折叠态不更新（工具在跑
+  // 却仍显示为已完成），onRetryLastMessage 变化时「重新生成」按钮不出现。
+  if (prev.hasRunningTool !== next.hasRunningTool) return false;
+  if (prev.onRetryLastMessage !== next.onRetryLastMessage) return false;
   return true;
 });
 
@@ -358,7 +362,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
                 type="button"
                 onClick={historyPaging.onLoadMore}
                 disabled={historyPaging.loading}
-                className="text-xs px-3 py-1 rounded-md border border-[color:var(--color-border-secondary)] text-[color:var(--color-text-secondary)] hover:text-[color:var(--color-text-primary)] hover:border-[color:var(--color-border-primary)] disabled:opacity-50 transition-colors"
+                className="text-xs px-3 py-1 rounded-md bg-bg-secondary text-[color:var(--color-text-secondary)] hover:text-[color:var(--color-text-primary)] hover:bg-bg-hover disabled:opacity-50 transition-colors"
               >
                 {historyPaging.loading ? "正在加载更早的消息…" : "加载更早的消息"}
               </button>

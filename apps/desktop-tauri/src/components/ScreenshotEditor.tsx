@@ -139,11 +139,11 @@ export function ScreenshotEditor({
           redraw();
         };
         img.onerror = () => {
-          if (!cancelled) setErr("截图图像加载失败");
+          if (!cancelled) setErr("截图图像加载失败，请重新截图。");
         };
         img.src = dataUrl;
       } catch (e) {
-        if (!cancelled) setErr(String(e));
+        if (!cancelled) setErr(`截图处理失败：${e instanceof Error ? e.message : String(e)}，请重新截图。`);
       }
     })();
     return () => {
@@ -386,7 +386,7 @@ export function ScreenshotEditor({
     setErr(null);
     const dataUrl = canvas.toDataURL("image/png");
     invoke("screenshot_commit_edited", { dataUrl }).catch((e) => {
-      setErr(String(e));
+      setErr(`提交失败：${e instanceof Error ? e.message : String(e)}，请重试。`);
       setCommitting(false);
     });
   };
@@ -402,7 +402,7 @@ export function ScreenshotEditor({
 
   return (
     <div className="se-root" onMouseMove={onMouseMove} onMouseUp={onMouseUp}>
-      {dims.w === 0 && !err && <div className="so-loading">正在准备图像…</div>}
+      {dims.w === 0 && !err && <div className="so-loading" aria-busy="true">正在准备图像…</div>}
       <div className="se-canvas-wrap" style={{ width: disp.w || undefined }}>
         <canvas
           ref={canvasRef}
@@ -427,12 +427,12 @@ export function ScreenshotEditor({
             }}
             onBlur={commitTextBox}
             onMouseDown={(e) => e.stopPropagation()}
-            placeholder="输入文字，Enter 确定"
+            placeholder="输入文字，Enter 确认"
           />
         )}
       </div>
 
-      {err && <div className="se-err">提交失败：{err}</div>}
+      {err && <div className="se-err">{err}</div>}
 
       <div className="se-toolbar" onMouseDown={(e) => e.stopPropagation()}>
         {tools.map((t) => (

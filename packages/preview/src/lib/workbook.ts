@@ -47,6 +47,9 @@ type FillLike = {
   type?: string;
   pattern?: string;
   fgColor?: ColorLike;
+  bgColor?: ColorLike;
+  /** 渐变填充的色标（ExcelJS 把 gradientFill 存成 stops 数组）。 */
+  stops?: Array<{ position?: number; color?: ColorLike }>;
 };
 
 type BorderLike = { style?: string; color?: ColorLike };
@@ -148,6 +151,38 @@ export const COL_LIMIT = 512;
 /** 表格默认字号（磅），与 Excel 默认工作簿一致；无显式字号的格子用它。 */
 export const DEFAULT_FONT_PT = 11;
 
+/** Excel 默认行高 15pt = 20px；没有显式行高时用它。 */
+export const DEFAULT_ROW_H = 20;
+
+/**
+ * 纸面墨色：表格是"一张白纸"，正文默认黑字。
+ *
+ * 界面主题（尤其深色）不该渗进表格里：深色界面 + 白纸 + 浅色字 = 白底
+ * 浅字，内容直接看不见。表格有自己的颜色世界，跟 Office 一样。
+ */
+export const SHEET_INK = "#000000";
+
+/**
+ * 给定格子底色，选一个看得清的墨色。
+ *
+ * Excel 里字体色总是显式写死的，缺省只出现在"只有底色、没有字色"的
+ * 格子（表头底色行最常见）。这时若沿用界面主题的浅色字，落在黄色 /
+ * 浅色底上就等于隐形 —— 按底色亮度决定黑白才是稳的。
+ */
+export function contrastInk(bg: string | undefined): string {
+  if (!bg) return SHEET_INK;
+  const m = /^#([0-9a-f]{6})$/i.exec(bg);
+  if (!m) return SHEET_INK;
+  const num = parseInt(m[1], 16);
+  const r = ((num >> 16) & 255) / 255;
+  const g = ((num >> 8) & 255) / 255;
+  const b = (num & 255) / 255;
+  // 感知亮度（sRGB → 线性 → 加权）
+  const lin = (c: number) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+  const lum = 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+  return lum > 0.45 ? SHEET_INK : "#FFFFFF";
+}
+
 /* ══════════════════════════════════════════════════════════════════
    颜色：argb / theme(+tint) / indexed 三种写法 → #RRGGBB
    ══════════════════════════════════════════════════════════════════ */
@@ -179,33 +214,85 @@ function clamp255(n: number): number {
 }
 
 function toHex(r: number, g: number, b: number): string {
-  return `#${[r, g, b].map((v) => clamp255(v).toString(16).padStart(2, "0")).join("")}`;
+  // 大写：与 resolveColor / themeColor 的输出一致（同一个颜色不能有两种大小写）。
+  return `#${[r, g, b]
+    .map((v) => clamp255(v).toString(16).padStart(2, "0"))
+    .join("")
+    .toUpperCase()}`;
+}
+
+/* ── HSL：Excel 的 tint 走的是 HSL 亮度通道，不是 sRGB 逐通道 ────── */
+
+function rgbToHsl(r: number, g: number, b: number): [number, number, number] {
+  const rr = r / 255;
+  const gg = g / 255;
+  const bb = b / 255;
+  const max = Math.max(rr, gg, bb);
+  const min = Math.min(rr, gg, bb);
+  const l = (max + min) / 2;
+  const d = max - min;
+  if (d === 0) return [0, 0, l];
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+  let h: number;
+  if (max === rr) h = ((gg - bb) / d) % 6;
+  else if (max === gg) h = (bb - rr) / d + 2;
+  else h = (rr - gg) / d + 4;
+  h *= 60;
+  if (h < 0) h += 360;
+  return [h, s, l];
+}
+
+function hslToRgb(h: number, s: number, l: number): [number, number, number] {
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const hp = (((h % 360) + 360) % 360) / 60;
+  const x = c * (1 - Math.abs((hp % 2) - 1));
+  let r = 0;
+  let g = 0;
+  let b = 0;
+  if (hp < 1) [r, g, b] = [c, x, 0];
+  else if (hp < 2) [r, g, b] = [x, c, 0];
+  else if (hp < 3) [r, g, b] = [0, c, x];
+  else if (hp < 4) [r, g, b] = [0, x, c];
+  else if (hp < 5) [r, g, b] = [x, 0, c];
+  else [r, g, b] = [c, 0, x];
+  const m = l - c / 2;
+  return [(r + m) * 255, (g + m) * 255, (b + m) * 255];
 }
 
 /**
- * ECMA-376 的 tint：正数往白提、负数往黑压，两种情况都是逐通道线性插值。
- * Excel 默认主题里 accent1 加 tint 0.4 得到的浅蓝就是这条公式。
+ * ECMA-376 的 tint：在 **HSL 的亮度通道**上改，色相与饱和度不动。
+ *
+ * 这一条不能简化成"逐通道线性插值"——那是上一版的做法，对纯灰色碰巧
+ * 对，对带色主题色就是错的：accent1 (#4472C4) 加 tint 0.4，逐通道插值
+ * 得到 #8FAADC，而 Excel 真正画出来的是 #8EAADB；tint -0.25 逐通道得到
+ * #335693，Excel 是 #2F5597。用户看到的"颜色发闷/不对味"就是这里。
+ *
+ * 公式（ECMA-376 §18.8.27）：
+ *   tint < 0：L' = L × (1 + tint)
+ *   tint > 0：L' = L × (1 - tint) + tint
  */
 export function applyTint(hex: string, tint: number): string {
   if (!tint) return hex;
   const num = parseInt(hex.slice(1), 16);
-  let r = (num >> 16) & 255;
-  let g = (num >> 8) & 255;
-  let b = num & 255;
-  if (tint < 0) {
-    r *= 1 + tint;
-    g *= 1 + tint;
-    b *= 1 + tint;
-  } else {
-    r = r * (1 - tint) + 255 * tint;
-    g = g * (1 - tint) + 255 * tint;
-    b = b * (1 - tint) + 255 * tint;
-  }
+  const [h, s, l] = rgbToHsl((num >> 16) & 255, (num >> 8) & 255, num & 255);
+  const nl = tint < 0 ? l * (1 + tint) : l * (1 - tint) + tint;
+  const [r, g, b] = hslToRgb(h, s, Math.min(1, Math.max(0, nl)));
   return toHex(r, g, b);
 }
 
-/** 主题索引 → #RRGGBB（带 tint）。越界返回 undefined，不猜。 */
-export function themeColor(index: number, tint: number, theme?: readonly string[]): string | undefined {
+/**
+ * 主题索引 → #RRGGBB（带 tint）。越界返回 undefined，不猜。
+ *
+ * `theme` 是**文件自带**的色板；某个索引在文件里缺失时，逐个回退到
+ * Office 默认色板——不是整张色板一起作废（上一版要求 12 个色全齐，
+ * 少一个就把整份主题丢掉，所有主题色都退成默认蓝，是"颜色大面积不对"
+ * 的直接原因）。
+ */
+export function themeColor(
+  index: number,
+  tint: number,
+  theme?: readonly (string | undefined)[],
+): string | undefined {
   const raw = (theme && theme[index]) || OFFICE_THEME[index];
   if (!raw) return undefined;
   const base = raw.startsWith("#") ? raw.slice(1) : raw;
@@ -220,7 +307,7 @@ export function themeColor(index: number, tint: number, theme?: readonly string[
  */
 export function resolveColor(
   color: ColorLike | undefined,
-  theme?: readonly string[],
+  theme?: readonly (string | undefined)[],
 ): string | undefined {
   if (!color) return undefined;
   const c = color;
@@ -262,7 +349,7 @@ const BORDER_CSS: Record<string, string> = {
 
 export function borderEdge(
   side: BorderLike | undefined,
-  theme?: readonly string[],
+  theme?: readonly (string | undefined)[],
 ): BorderEdge {
   if (!side || !side.style) return null;
   const css = BORDER_CSS[side.style];
@@ -365,7 +452,7 @@ type ExcelCell = {
 
 function cellStyle(
   cell: ExcelCell,
-  theme: readonly string[] | undefined,
+  theme: readonly (string | undefined)[] | undefined,
 ): CellStyle | undefined {
   const style: CellStyle = {};
   const font = cell.font;
@@ -383,9 +470,29 @@ function cellStyle(
   // 只有 solid 实心填充才落成背景色。OOXML 里 patternType="none" 与
   // "gray125"（Excel 的"无填充"默认值）表示透明，不该画任何底。
   const fill = cell.fill;
-  if (fill && fill.type === "pattern" && fill.pattern === "solid") {
-    const bg = resolveColor(fill.fgColor, theme);
-    if (bg) style.bg = bg;
+  if (fill) {
+    if (fill.type === "pattern" && fill.pattern === "solid") {
+      const bg = resolveColor(fill.fgColor, theme) ?? resolveColor(fill.bgColor, theme);
+      if (bg) style.bg = bg;
+    } else if (fill.type === "gradient" && fill.stops?.length) {
+      // 渐变填充：CSS 没有渐变单元格背景，取各色标的平均色近似。
+      // 不处理的话这类格子会退回白底 —— 白底 + 白字 = "表格内容看不见"。
+      const rgb = fill.stops
+        .map((s) => resolveColor(s.color, theme))
+        .filter((c): c is string => !!c)
+        .map((c) => parseInt(c.slice(1), 16));
+      if (rgb.length) {
+        let r = 0;
+        let g = 0;
+        let b = 0;
+        for (const v of rgb) {
+          r += (v >> 16) & 255;
+          g += (v >> 8) & 255;
+          b += v & 255;
+        }
+        style.bg = toHex(r / rgb.length, g / rgb.length, b / rgb.length);
+      }
+    }
   }
 
   const align = cell.alignment;
@@ -494,11 +601,20 @@ function displayText(cell: ExcelCell, ssf: Ssf | null): string {
   return String(value);
 }
 
-/** 从工作簿里抽主题色板；抽不到就用 Office 默认值。 */
-function readTheme(wb: unknown): string[] | undefined {
+/**
+ * 从工作簿里抽主题色板；抽不到就用 Office 默认值。
+ *
+ * 逐个索引回退：文件里的主题少写了 hlink / folHlink 之类时，只有那几个
+ * 索引退到默认值，其余仍然用文件自己的色板。上一版是"12 个色必须齐全，
+ * 否则整张丢弃"，结果一个不常见的缺项就把全文的主题色打成默认蓝。
+ */
+function readTheme(wb: unknown): (string | undefined)[] | undefined {
   // ExcelJS 把 xl/theme/theme1.xml 原样存成字符串，没有解析成对象。
   const themes = (wb as { model?: { themes?: Record<string, string> } }).model?.themes;
-  const xml = themes?.theme1;
+  if (!themes) return undefined;
+  // 键名通常是 theme1，但规范允许 theme2…；按前缀找而不是写死 theme1。
+  const key = Object.keys(themes).find((k) => /^theme\d+$/.test(k));
+  const xml = key ? themes[key] : undefined;
   if (!xml || typeof DOMParser === "undefined") return undefined;
   try {
     const doc = new DOMParser().parseFromString(xml, "application/xml");
@@ -513,7 +629,7 @@ function readTheme(wb: unknown): string[] | undefined {
     };
     // clrScheme 的书写顺序是 dk1/lt1/lt2/dk2…，但 styles.xml 的 theme
     // 索引把前两位换成了 lt1/dk1，所以这里按索引表重排。
-    const ordered = [
+    const ordered: (string | undefined)[] = [
       hex("lt1") ?? hex("dk1"),
       hex("dk1") ?? hex("lt1"),
       hex("lt2"),
@@ -522,7 +638,7 @@ function readTheme(wb: unknown): string[] | undefined {
       hex("hlink"),
       hex("folHlink"),
     ];
-    return ordered.every((v) => typeof v === "string") ? (ordered as string[]) : undefined;
+    return ordered.some((v) => typeof v === "string") ? ordered : undefined;
   } catch {
     return undefined;
   }
@@ -574,7 +690,9 @@ async function sheetFromWorksheet(ws: SheetSource): Promise<SheetModel> {
   for (let r = 1; r <= rowCount; r++) {
     const row = ws.getRow(r);
     if (row.hidden) hiddenRows.add(r - 1);
-    rowHeights.push(rowHeightPx(row.height as number | undefined));
+    const explicitHeight = rowHeightPx(row.height as number | undefined);
+    /** 本行最大字号（像素）——行高要装得下它，否则大字被裁掉。 */
+    let maxFontPx = 0;
 
     const cells: Array<CellModel | null> = [];
     for (let c = 1; c <= colCount; c++) {
@@ -595,6 +713,8 @@ async function sheetFromWorksheet(ws: SheetSource): Promise<SheetModel> {
       }
       const text = displayText(cell, ssf ?? null);
       const style = cellStyle(cell, theme);
+      const fontPx = ((style?.size ?? DEFAULT_FONT_PT) * 96) / 72;
+      if (fontPx > maxFontPx) maxFontPx = fontPx;
       const hasValue = text !== "" || cell.formula || cell.hyperlink;
       if (!hasValue && !style) {
         cells.push(null);
@@ -607,6 +727,14 @@ async function sheetFromWorksheet(ws: SheetSource): Promise<SheetModel> {
       cells.push(model);
     }
     rows.push(cells);
+    // 行高 = 源文件行高与"装得下本行最大字号"的高度取大。
+    //
+    // 只用源文件行高的话，标题行（14pt 粗体）配默认 20px 行高会被裁掉
+    // 半个字 —— 表现就是"表格内容看不见"。Excel 自己也会把行撑高，所以这
+    // 不是改样式，是补上 Excel 的自动行高。
+    const needed = maxFontPx ? Math.ceil(maxFontPx * 1.15) + 3 : 0;
+    const height = Math.max(explicitHeight ?? 0, needed);
+    rowHeights.push(height || null);
   }
 
   const colWidths: Array<number | null> = [];

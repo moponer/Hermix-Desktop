@@ -14,6 +14,7 @@ import {
 import type { CustomAppSummary } from "../../lib/customAppApi";
 import { formatCategory } from "./labels";
 import { resolveAppIconEl } from "./iconResolver";
+import { PACKAGING } from "../strings";
 
 interface AppCardProps {
   app: CustomAppSummary;
@@ -75,7 +76,7 @@ export function AppCard({ app, onView, onPackage, onOpenDist, onRun, onDelete, p
               title="重新打包为可分发到其他电脑的独立 EXE"
             >
               <RefreshCw className="icon-md" />
-              {packaging ? "打包中..." : "打包"}
+              {packaging ? PACKAGING : "打包"}
             </button>
             <button
               className="custom-app-card__btn custom-app-card__btn--secondary"
@@ -94,7 +95,7 @@ export function AppCard({ app, onView, onPackage, onOpenDist, onRun, onDelete, p
             title="打包为可分发到其他电脑的独立 EXE"
           >
             <Package className="icon-md" />
-            {packaging ? "打包中..." : "打包"}
+            {packaging ? PACKAGING : "打包"}
           </button>
         )}
         <button

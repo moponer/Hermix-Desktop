@@ -119,8 +119,10 @@ echo ""
 
 #-----------------------------------------------------------------------
 # 4c. DesignGuard (hard gate) — impeccable/typography 硬约束的 grep 门禁。
-#     TSX 字面色值 / dark: 变体 / 图标按钮缺 aria-label / 「加载中…」
-#     字面量 / window.confirm。规则史与豁免见脚本头注释。
+#     TSX 字面色值 / dark: 变体 / 「加载中…」字面量 / window.confirm。
+#     图标按钮 aria-label 规则（G3）曾在此，因全量扫 <button> 误报率过高
+#     被移除；后改由 4e 的 check-design-primitives.mjs 以**限定 class 名**
+#     的方式恢复。规则史与豁免见脚本头注释。
 #-----------------------------------------------------------------------
 echo "=== [4c/14] design guard (TSX) ==="
 if [ -f apps/desktop-tauri/src ]; then
@@ -130,6 +132,29 @@ elif [ -d apps/desktop-tauri/src ]; then
     echo "  OK: design guard clean"
   else
     echo "  FAIL: design guard violations — fix before commit"
+    exit 1
+  fi
+else
+  echo "  SKIP: apps/desktop-tauri not found"
+fi
+echo ""
+
+#-----------------------------------------------------------------------
+# 4e. DesignPrimitives (hard gate)
+#     guard 管「不许写什么」，本门禁管「不许漏什么」：
+#       G3  图标按钮缺无障碍名      G6a 虚线描边      G6b side-tab
+#       G7  图标尺寸偏离 --icon-size-* 档位
+#       G8  表单控件高度偏离档位    G9  原始语义色当文字色
+#       P0  ui/ 原语零调用（假装体系里有统一做法、实际没人用）
+#     2026-10-21 起由 advisory 转为**阻断** —— 存量已清零。依据：
+#     docs/notes/proposed/architecture/2026-10-21-frontend-design-audit.md
+#-----------------------------------------------------------------------
+echo "=== [4e/14] design primitives ==="
+if [ -d apps/desktop-tauri/src ]; then
+  if node scripts/check-design-primitives.mjs --strict; then
+    echo "  OK: design primitives clean"
+  else
+    echo "  FAIL: design primitives violations — fix before commit"
     exit 1
   fi
 else

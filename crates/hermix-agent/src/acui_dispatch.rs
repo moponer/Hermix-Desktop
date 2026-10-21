@@ -111,10 +111,21 @@ pub fn default_tool_router(user_always_include: &[String]) -> Arc<dyn ToolSchema
         // files without resorting to terminal `mv`/`Rename-Item`
         // (which has quoting issues on Windows paths with CJK).
         "move_file".to_string(),
-        // list_tools must be always-forwarded so the LLM can
-        // discover tools not in its initial schema set (e.g.
-        // file_converter, task_manager) without wasting turns
-        // on tool_search (which doesn't exist as a callable tool).
+        // list_tools must be always-forwarded so the LLM can see the whole
+        // roster in **one** call (names + one-line descriptions) instead of
+        // paying the two-hop bridge (`tool_search` → `tool_describe`). It
+        // scores ≈ 0 under KeywordRouter for CJK-heavy queries ("把图片按内容
+        // 重命名" contains none of its name tokens), so without this entry the
+        // router truncates it and the model falls back to guessing tool names.
+        //
+        // History — this comment used to claim `tool_search` "doesn't exist
+        // as a callable tool". That was true when the entry was added
+        // (2026-07-27) and stopped being true on 2026-10-05, when `f4820122`
+        // ("接通 10 个死工具") registered the bridge. `list_tools` keeps its
+        // slot because it is still the cheapest full-roster view, **not**
+        // because the bridge is missing. Do not cite the bridge's absence as
+        // the reason again — it exists (`tool_search.rs::register`, called
+        // from `tools/mod.rs`).
         "list_tools".to_string(),
         // workbench_manager must be always-forwarded so workbench-bound
         // sessions (skill pinned every turn, MODULE_DESIGN §13 layer 3)
@@ -124,6 +135,17 @@ pub fn default_tool_router(user_always_include: &[String]) -> Arc<dyn ToolSchema
         // it — same failure shape that read_pdf / delegate_task were
         // whitelisted for.
         "workbench_manager".to_string(),
+        // The deferred-tool bridge is atomic: `tool_search` → `tool_describe`
+        // → `tool_call` is one procedure, so a turn that keeps two of them and
+        // drops the third is strictly worse than keeping none — the model sees
+        // the workflow advertised (the system prompt names all three) but one
+        // step is unreachable. Without this entry the router's keyword scoring
+        // decides: a query containing "search"/"call" keeps those two by name
+        // while `tool_describe` scores ~0 and is truncated by `max_tools` — the
+        // exact shape of the 2026-10-21 "four wasted turns" report.
+        "tool_search".to_string(),
+        "tool_describe".to_string(),
+        "tool_call".to_string(),
     ];
     // Dedupe + append user whitelist. De-dup with system-level so the
     // user-supplied names don't appear twice in `AlwaysInclude::route()`

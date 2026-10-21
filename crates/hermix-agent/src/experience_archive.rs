@@ -494,6 +494,67 @@ mod tests {
         assert_eq!(summary.top_failing_tools[0].0, "shell");
     }
 
+    /// 完整闭环：计数器 → 分类 → 生成 → 落盘 → 读取 → 渲染进提示词。
+    ///
+    /// 这条链的每一段早就有单测，但**没有任何测试把两端连起来**——正因如此
+    /// 两头都写着、却都不在生产路径上（`classify_convergence` 的注释自己写
+    /// 着 "once the harness self-edit integration is complete"）。本测试钉
+    /// 住的是"接线后它真的能通"：同一工具失败达到 `SELF_EDIT_TRIGGER` 次，
+    /// 经过 `maybe_record_experience` 相同的四个调用，最终能在
+    /// `experience_prompt_for_tools` 的输出里读到该工具名。
+    #[test]
+    fn failure_counter_reaches_the_prompt_block_via_the_archive() {
+        use crate::harness_self_edit::{
+            classify_tool_failures, generate_experience, SELF_EDIT_TRIGGER,
+        };
+        use crate::tool_error_demotion::ToolErrorCounter;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mut counter = ToolErrorCounter::new();
+        for _ in 0..SELF_EDIT_TRIGGER {
+            counter.record_error("terminal");
+        }
+
+        let patterns = classify_tool_failures(&counter);
+        assert_eq!(patterns.len(), 1, "达到阈值必须产出一个失败模式");
+
+        let archive = ExperienceArchive::open(tmp.path()).unwrap();
+        for p in &patterns {
+            archive.record(&generate_experience(p)).unwrap();
+        }
+
+        let block = experience_prompt_for_tools(
+            &archive,
+            &["terminal".to_string(), "read_file".to_string()],
+            1200,
+        )
+        .unwrap()
+        .expect("刚写入的教训必须能被读出来");
+        assert!(block.contains("terminal"), "块里必须点名工具: {block}");
+        assert!(block.contains("Relevant Past Experience"), "{block}");
+
+        // 未参与失败的工具不应把这条教训带出来（按工具过滤是刻意的）。
+        let other = experience_prompt_for_tools(&archive, &["web_search".to_string()], 1200)
+            .unwrap();
+        assert!(other.is_none(), "无关工具不该收到这条教训: {other:?}");
+    }
+
+    /// 阈值以下不写：一次手滑不值得跨会话留痕。
+    #[test]
+    fn below_threshold_failures_are_not_archived() {
+        use crate::harness_self_edit::classify_tool_failures;
+        use crate::tool_error_demotion::ToolErrorCounter;
+
+        let mut counter = ToolErrorCounter::new();
+        counter.record_error("terminal");
+        counter.record_error("terminal");
+        assert!(
+            classify_tool_failures(&counter).is_empty(),
+            "阈值（{}）之前不应产生模式",
+            crate::harness_self_edit::SELF_EDIT_TRIGGER
+        );
+    }
+
     #[test]
     fn experience_prompt_for_tools_hook() {
         let tmp = tempfile::tempdir().unwrap();

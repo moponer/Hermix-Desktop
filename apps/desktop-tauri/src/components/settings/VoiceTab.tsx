@@ -12,6 +12,8 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import { fetchJSON } from "../../api/rest";
+import { Button, Input, Switch } from "../ui";
+import { SAVE, SAVED, SAVING } from "../strings";
 
 interface SttConfig {
   enabled: boolean;
@@ -43,7 +45,12 @@ export function VoiceTab() {
     const ac = new AbortController();
     fetchJSON<SttConfig>("/api/voice/stt", { signal: ac.signal })
       .then((c) => setCfg({ ...EMPTY, ...c }))
-      .catch(() => setMsg({ ok: false, text: "读取配置失败" }))
+      .catch((e) =>
+        setMsg({
+          ok: false,
+          text: `读取语音识别配置失败：${e instanceof Error ? e.message : String(e)}。请确认后端服务已启动后重试。`,
+        }),
+      )
       .finally(() => setLoaded(true));
     return () => ac.abort();
   }, []);
@@ -57,9 +64,13 @@ export function VoiceTab() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify(cfg),
       });
-      setMsg({ ok: true, text: "已保存。手机端下次连接会话时生效。" });
+      setMsg({ ok: true, text: `${SAVED}。手机端下次连接会话时生效。` });
     } catch (e) {
-      setMsg({ ok: false, text: e instanceof Error ? e.message : "保存失败" });
+      /* 真实原因不能只写「保存失败」：用户要知道是端点不合法还是网络不通。 */
+      setMsg({
+        ok: false,
+        text: `保存失败：${e instanceof Error ? e.message : String(e)}。请检查端点 URL 与 API Key 后重试。`,
+      });
     } finally {
       setBusy(false);
     }
@@ -71,86 +82,78 @@ export function VoiceTab() {
   return (
     <div className="space-y-4">
       <div className="space-y-4">
-        <label className="flex items-center gap-3">
-          <input
-            type="checkbox"
+        <div className="flex items-center gap-3">
+          <Switch
             checked={cfg.enabled}
-            onChange={(e) => setCfg({ ...cfg, enabled: e.target.checked })}
+            onChange={(v) => setCfg({ ...cfg, enabled: v })}
+            label="开启手机端语音识别"
           />
           <span className="text-sm font-medium">
             开启手机端语音识别（识别在云 provider 上，音频不经 relay）
           </span>
-        </label>
-
-        <label className="block space-y-1">
-          <span className="text-sm opacity-70">识别端点 URL（必须 https）</span>
-          <input
-            className="modal-input"
-            placeholder="https://api.minimax.chat/v1/audio/transcriptions"
-            value={cfg.endpoint}
-            onChange={(e) => setCfg({ ...cfg, endpoint: e.target.value })}
-          />
-        </label>
-
-        <label className="block space-y-1">
-          <span className="text-sm opacity-70">API Key（仅存本机与手机端，经端到端加密下发）</span>
-          <input
-            className="modal-input"
-            type="password"
-            value={cfg.api_key}
-            onChange={(e) => setCfg({ ...cfg, api_key: e.target.value })}
-          />
-        </label>
-
-        <div className="grid grid-cols-2 gap-3">
-          <label className="block space-y-1">
-            <span className="text-sm opacity-70">模型（可选）</span>
-            <input
-              className="modal-input"
-              value={cfg.model ?? ""}
-              onChange={(e) => setCfg({ ...cfg, model: e.target.value || null })}
-            />
-          </label>
-          <label className="block space-y-1">
-            <span className="text-sm opacity-70">语言（如 zh）</span>
-            <input
-              className="modal-input"
-              value={cfg.language ?? ""}
-              onChange={(e) => setCfg({ ...cfg, language: e.target.value || null })}
-            />
-          </label>
         </div>
 
-        <label className="block space-y-1">
-          <span className="text-sm opacity-70">音频 MIME（与手机端录音格式配套，默认 audio/mpeg）</span>
-          <input
-            className="modal-input"
-            value={cfg.audio_mime}
-            onChange={(e) => setCfg({ ...cfg, audio_mime: e.target.value || "audio/mpeg" })}
-          />
-        </label>
+        <Input
+          size="lg"
+          label="识别端点 URL（必须 https）"
+          hint="指向云 provider 的转写接口，例如 https://api.minimax.chat/v1/audio/transcriptions"
+          placeholder="https://api.minimax.chat/v1/audio/transcriptions"
+          value={cfg.endpoint}
+          onChange={(e) => setCfg({ ...cfg, endpoint: e.target.value })}
+        />
 
-        <label className="block space-y-1">
-          <span className="text-sm opacity-70">附加请求头（JSON，可选；如 provider 要求特殊鉴权头）</span>
-          <input
-            className="modal-input"
-            placeholder='{"x-custom":"value"}'
-            value={cfg.extra_headers ? JSON.stringify(cfg.extra_headers) : ""}
-            onChange={(e) => {
-              try {
-                setCfg({ ...cfg, extra_headers: e.target.value ? JSON.parse(e.target.value) : null });
-              } catch {
-                // 输入中的半截 JSON 不报错，保存时才校验
-                setCfg({ ...cfg, extra_headers: { "x-invalid-json": e.target.value } });
-              }
-            }}
+        <Input
+          size="lg"
+          type="password"
+          label="API Key（仅存本机与手机端，经端到端加密下发）"
+          value={cfg.api_key}
+          onChange={(e) => setCfg({ ...cfg, api_key: e.target.value })}
+        />
+
+        <div className="grid grid-cols-2 gap-3">
+          <Input
+            size="lg"
+            label="模型（可选）"
+            hint="留空 = 用 provider 默认模型"
+            value={cfg.model ?? ""}
+            onChange={(e) => setCfg({ ...cfg, model: e.target.value || null })}
           />
-        </label>
+          <Input
+            size="lg"
+            label="语言（如 zh）"
+            hint="留空 = 由 provider 自动识别"
+            value={cfg.language ?? ""}
+            onChange={(e) => setCfg({ ...cfg, language: e.target.value || null })}
+          />
+        </div>
+
+        <Input
+          size="lg"
+          label="音频 MIME（与手机端录音格式配套，默认 audio/mpeg）"
+          value={cfg.audio_mime}
+          onChange={(e) => setCfg({ ...cfg, audio_mime: e.target.value || "audio/mpeg" })}
+        />
+
+        <Input
+          size="lg"
+          label="附加请求头（JSON，可选；如 provider 要求特殊鉴权头）"
+          hint={'形如 {"x-custom":"value"}；JSON 不合法时保存会被拒绝'}
+          placeholder='{"x-custom":"value"}'
+          value={cfg.extra_headers ? JSON.stringify(cfg.extra_headers) : ""}
+          onChange={(e) => {
+            try {
+              setCfg({ ...cfg, extra_headers: e.target.value ? JSON.parse(e.target.value) : null });
+            } catch {
+              // 输入中的半截 JSON 不报错，保存时才校验
+              setCfg({ ...cfg, extra_headers: { "x-invalid-json": e.target.value } });
+            }
+          }}
+        />
 
         <div className="flex items-center gap-3">
-          <button className="modal-btn modal-btn-primary" disabled={busy} onClick={save}>
-            {busy ? "保存中…" : "保存"}
-          </button>
+          <Button variant="accent" loading={busy} onClick={() => void save()}>
+            {busy ? SAVING : SAVE}
+          </Button>
           {msg && (
             <span
               className="text-sm"

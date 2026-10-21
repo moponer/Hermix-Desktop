@@ -114,7 +114,7 @@ fn run_async_in_blocking_with_context(
 /// keep head (60%) and tail (40%) of the char budget with an explicit
 /// removed-count marker — command summaries and final status usually live
 /// in the tail, which a pure head cut discards. Char-safe on CJK/emoji.
-fn truncate_middle_chars(output: &str, max_chars: usize) -> String {
+pub fn truncate_middle_chars(output: &str, max_chars: usize) -> String {
     const MIN_HEAD: usize = 200; // tiny budgets still get a usable head
     let total = output.chars().count();
     if total <= max_chars {
@@ -133,6 +133,76 @@ fn truncate_middle_chars(output: &str, max_chars: usize) -> String {
     ));
     out.extend(output.chars().skip(total - tail));
     out
+}
+
+/// Render a tool's parameter contract as compact text for an error message.
+///
+/// Required parameters first (those are what a bare "missing parameter" error
+/// is about), then optional ones with their declared types.
+pub fn params_contract(schema: &ToolSchema) -> String {
+    let required = schema
+        .parameters
+        .required
+        .as_ref()
+        .map(|r| r.iter().filter(|s| !s.is_empty()).cloned().collect::<Vec<_>>())
+        .unwrap_or_default();
+    let mut out = String::new();
+    if !required.is_empty() {
+        out.push_str(&format!("必填参数: {}\n", required.join("`, `")));
+    }
+    if let Some(props) = schema.parameters.properties.as_ref() {
+        let optional: Vec<&str> = props
+            .keys()
+            .map(|k| k.as_str())
+            .filter(|k| !required.iter().any(|r| r == k))
+            .collect();
+        if !optional.is_empty() {
+            out.push_str(&format!("可选参数: {}\n", optional.join("`, `")));
+        }
+    }
+    if out.is_empty() {
+        out.push_str("该工具没有声明参数（调用时传 {{}} 即可）。\n");
+    }
+    out
+}
+
+/// Turn a bare `Missing 'x' parameter` into something the model can act on.
+///
+/// ## Why this exists
+///
+/// Real session (2026-10-20, 超星学习通 task): the agent called `web_search`,
+/// `url_safety`, `web_extract` and the `browser_*` family over and over, each
+/// time without parameters, and never corrected itself. Two causes compound:
+///
+/// 1. `assemble_tool_schemas` puts those tools **behind the
+///    `tool_search` / `tool_describe` / `tool_call` bridge** once ≥ 25 tools
+///    are deferred, so the model can see the *names* (the system prompt names
+///    them) but never their schemas. It has to guess parameter names.
+/// 2. The failure it got back was `Missing 'query' parameter` — no contract,
+///    no example, no pointer to the bridge. A dead end: retrying means guessing
+///    again.
+///
+/// Appending the contract converts the dead end into a correction the model
+/// can apply on the very next call, and the bridge hint tells it where the
+/// full schema lives when the tool is not in this turn's `tools` array.
+pub fn enrich_param_error(
+    tool_name: &str,
+    schema: Option<&ToolSchema>,
+    err: &hermix_core::ToolError,
+) -> String {
+    match err {
+        hermix_core::ToolError::InvalidParams(msg) => {
+            let contract = schema.map(params_contract).unwrap_or_default();
+            format!(
+                "{msg}\n\n{contract}\
+                 正确调用形如: {tool_name}({{\"<参数名>\": \"<值>\"}})。\n\
+                 如果 `{tool_name}` 没有出现在你本轮的 tools 列表里，\
+                 先调用 tool_describe(name=\"{tool_name}\") 获取它的完整参数 schema，\
+                 再用 tool_call 调用——不要凭猜测重试。"
+            )
+        }
+        other => other.to_string(),
+    }
 }
 
 /// Thread-safe registry of all available tools.
@@ -545,7 +615,7 @@ impl ToolRegistry {
                     Self::tool_result(&output)
                 }
             }
-            Err(e) => Self::tool_error(&e.to_string()),
+            Err(e) => Self::tool_error(&enrich_param_error(name, Some(&schema), &e)),
         }
     }
 
@@ -584,12 +654,10 @@ impl ToolRegistry {
         let result = match handler.execute(params).await {
             Ok(output) => {
                 if output.chars().count() > max_chars {
-                    let head = truncate_chars(&output, max_chars);
-                    let removed = output.chars().count() - max_chars;
-                    let truncated = Self::tool_result(&format!(
-                        "{}\n\n[... truncated {} characters ...]",
-                        head, removed
-                    ));
+                    // Head-and-tail, same rule as the sync path. A pure head
+                    // cut discarded exactly the part that matters most: the
+                    // exit status, the assertion, the stack frame.
+                    let truncated = Self::tool_result(&truncate_middle_chars(&output, max_chars));
                     (truncated, "truncated", output.chars().count())
                 } else {
                     let len = output.chars().count();
@@ -601,7 +669,13 @@ impl ToolRegistry {
                 // subscriber can correlate failures with the
                 // originating tool call.
                 tracing::Span::current().record("error", tracing::field::display(&e));
-                (Self::tool_error(&e.to_string()), "error", 0)
+                // Enriched: see `enrich_param_error` — a bare "Missing 'x'"
+                // sends the model into a guess-and-retry loop.
+                (
+                    Self::tool_error(&enrich_param_error(name, Some(&schema), &e)),
+                    "error",
+                    0,
+                )
             }
         };
         let elapsed = started.elapsed();
@@ -678,17 +752,13 @@ impl ToolRegistry {
         match result {
             Ok(output) => {
                 if output.chars().count() > max_chars {
-                    let head = truncate_chars(&output, max_chars);
-                    let removed = output.chars().count() - max_chars;
-                    Self::tool_result(&format!(
-                        "{}\n\n[... truncated {} characters ...]",
-                        head, removed
-                    ))
+                    // Head-and-tail, same rule as `dispatch` / `dispatch_async`.
+                    Self::tool_result(&truncate_middle_chars(&output, max_chars))
                 } else {
                     Self::tool_result(&output)
                 }
             }
-            Err(e) => Self::tool_error(&e.to_string()),
+            Err(e) => Self::tool_error(&enrich_param_error(&name, Some(&schema), &e)),
         }
     }
 
@@ -732,17 +802,12 @@ impl ToolRegistry {
         match raw {
             Ok(output) => {
                 if output.chars().count() > max_chars {
-                    let head = truncate_chars(&output, max_chars);
-                    let removed = output.chars().count() - max_chars;
-                    Self::tool_result(&format!(
-                        "{}\n\n[... truncated {} characters ...]",
-                        head, removed
-                    ))
+                    Self::tool_result(&truncate_middle_chars(&output, max_chars))
                 } else {
                     Self::tool_result(&output)
                 }
             }
-            Err(e) => Self::tool_error(&e.to_string()),
+            Err(e) => Self::tool_error(&enrich_param_error(name, Some(&schema), &e)),
         }
     }
 
@@ -1359,6 +1424,122 @@ mod tests {
             let out = ToolRegistry::inject_session_id(params.clone(), "sess-1");
             assert_eq!(out, params, "非 object 参数必须原样返回");
         }
+    }
+
+    /// A bare "missing parameter" error is a dead end for the model: it knows
+    /// the call failed but not what a correct call looks like, so it retries
+    /// with another guess. The 2026-10-20 超星 session did exactly that with
+    /// `web_search` / `url_safety` / `browser_*` — same wrong call, over and
+    /// over. The error must carry the contract and the bridge pointer.
+    #[test]
+    fn invalid_params_error_carries_the_contract_and_bridge_hint() {
+        use hermix_core::{tool_schema, JsonSchema};
+        let mut props = indexmap::IndexMap::new();
+        props.insert(
+            "query".to_string(),
+            serde_json::json!({"type": "string", "description": "The search query"}),
+        );
+        props.insert(
+            "num_results".to_string(),
+            serde_json::json!({"type": "integer", "default": 10}),
+        );
+        let schema = tool_schema(
+            "web_search",
+            "Search the web",
+            JsonSchema::object(props, vec!["query".to_string()]),
+        );
+
+        let err = hermix_core::ToolError::InvalidParams("Missing 'query' parameter".into());
+        let msg = enrich_param_error("web_search", Some(&schema), &err);
+
+        assert!(msg.contains("Missing 'query' parameter"), "原文必须保留: {msg}");
+        assert!(msg.contains("query"), "必填参数必须点名: {msg}");
+        assert!(msg.contains("num_results"), "可选参数也要给: {msg}");
+        assert!(
+            msg.contains("tool_describe(name=\"web_search\")"),
+            "必须指向桥，否则模型只能继续猜: {msg}"
+        );
+    }
+
+    /// Non-parameter errors must pass through untouched — enriching an
+    /// execution failure with a parameter list is noise.
+    #[test]
+    fn non_param_errors_are_not_decorated() {
+        let err = hermix_core::ToolError::ExecutionFailed("disk on fire".into());
+        assert_eq!(
+            enrich_param_error("x", None, &err),
+            err.to_string(),
+            "非参数错误必须原样透传"
+        );
+    }
+
+    /// End-to-end through the registry: a handler that rejects a missing
+    /// parameter must produce the enriched text, because that is the string
+    /// the model actually reads.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dispatch_surfaces_the_enriched_param_error() {
+        struct UrlRequiredHandler;
+
+        #[async_trait]
+        impl hermix_core::ToolHandler for UrlRequiredHandler {
+            async fn execute(&self, params: serde_json::Value) -> Result<String, hermix_core::ToolError> {
+                let url = params
+                    .get("url")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| {
+                        hermix_core::ToolError::InvalidParams("Missing 'url' parameter".into())
+                    })?;
+                Ok(format!("fetched {url}"))
+            }
+            fn schema(&self) -> hermix_core::ToolSchema {
+                use hermix_core::{tool_schema, JsonSchema};
+                let mut props = indexmap::IndexMap::new();
+                props.insert(
+                    "url".to_string(),
+                    serde_json::json!({"type": "string", "description": "Absolute URL"}),
+                );
+                tool_schema(
+                    "web_extract",
+                    "Extract a page",
+                    JsonSchema::object(props, vec!["url".to_string()]),
+                )
+            }
+        }
+
+        let schema = {
+            use hermix_core::{tool_schema, JsonSchema};
+            let mut props = indexmap::IndexMap::new();
+            props.insert(
+                "url".to_string(),
+                serde_json::json!({"type": "string", "description": "Absolute URL"}),
+            );
+            tool_schema(
+                "web_extract",
+                "Extract a page",
+                JsonSchema::object(props, vec!["url".to_string()]),
+            )
+        };
+        let registry = ToolRegistry::new();
+        let handler: Arc<dyn ToolHandler> = Arc::new(UrlRequiredHandler);
+        registry.register(
+            "web_extract",
+            "test",
+            schema,
+            handler,
+            Arc::new(|| true),
+            vec![],
+            true,
+            "Extract a page",
+            "🌐",
+            None,
+        );
+
+        let out = registry
+            .dispatch_async("web_extract", serde_json::json!({}))
+            .await;
+        assert!(out.contains("Missing 'url' parameter"), "{out}");
+        assert!(out.contains("url"), "{out}");
+        assert!(out.contains("tool_describe"), "{out}");
     }
 
     /// 注入必须发生在 `coerce_args` **之后**：若某个 schema 恰好声明了

@@ -4,7 +4,6 @@ import {
   Trash2,
   Play,
   Power,
-  X,
   Pencil,
 
   AlertTriangle,
@@ -18,7 +17,8 @@ import { storage, STORAGE_KEYS } from "../utils/storageCompat";
 import { setKeepAwake, KEEP_AWAKE_CHANGED_EVENT } from "../desktopBridge";
 import { useWorkspaces } from "../hooks/useWorkspaces";
 import { toastInfo, toastError, toastSuccess } from "../hooks/useToast";
-import { ConfirmDialog, EmptyState, PageHeader, SkeletonCard } from "./ui";
+import { Button, ConfirmDialog, EmptyState, Input, Modal, PageHeader, SelectField, SkeletonCard, TextArea } from "./ui";
+import { DELETE, SAVE, SAVED, SAVING } from "./strings";
 
 /** A small set of cron presets the editor offers as quick-pick chips.
  *  Each entry: [label, cronExpression, humanDescription]. */
@@ -270,7 +270,7 @@ export function AutomationView({ openChat, onCreateWorkflow }: { openChat: () =>
                 <button
                   onClick={() => setConfirmReset(true)}
                   disabled={tasks.length === 0}
-                  className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-text-secondary text-[length:var(--text-ui)] hover:text-error hover:bg-error-soft disabled:opacity-40"
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-text-secondary text-[length:var(--text-ui)] hover:text-text-error hover:bg-error-soft disabled:opacity-40"
                   title="恢复为内置官方任务清单（丢弃全部现有任务）"
                 >
                   恢复官方清单
@@ -284,7 +284,7 @@ export function AutomationView({ openChat, onCreateWorkflow }: { openChat: () =>
               </div>
             </div>
             {error && (
-              <p className="text-[length:var(--text-ui)] text-error -mt-4 mb-4 flex items-start gap-1.5">
+              <p className="text-[length:var(--text-ui)] text-text-error -mt-4 mb-4 flex items-start gap-1.5">
                 <AlertTriangle className="icon-md shrink-0 mt-0.5" />
                 <span>{error}</span>
               </p>
@@ -330,7 +330,7 @@ export function AutomationView({ openChat, onCreateWorkflow }: { openChat: () =>
             R1-4：从滚动根下移入同一 max-w 容器，消除两层宽度体系。 */}
         {tab === "auto" && (
           <>
-        <div className="flex items-center justify-between rounded-xl border border-border-primary bg-bg-card px-4 py-3 mb-5">
+        <div className="flex items-center justify-between rounded-xl bg-bg-card px-4 py-3 mb-5">
           <div className="flex items-center gap-2 text-[length:var(--text-ui)] text-text-secondary">
             <Info className="icon-md text-text-muted shrink-0" />
             <span>Hermix 有任务在跑时保持电脑唤醒（对话进行中或定时任务执行中）。</span>
@@ -351,7 +351,7 @@ export function AutomationView({ openChat, onCreateWorkflow }: { openChat: () =>
             <button
               key={t.name}
               onClick={() => setCreating(templateToTask(t))}
-              className="text-left rounded-xl border border-border-primary bg-bg-card p-3.5 hover:bg-bg-hover transition-colors"
+              className="text-left rounded-xl bg-bg-card p-3.5 hover:bg-bg-hover transition-colors"
             >
               <div className="flex items-center gap-2">
                 <span className="text-base shrink-0">{t.icon}</span>
@@ -463,12 +463,12 @@ function TaskCard({
               {task.name}
             </p>
             {task.last_status === "running" && (
-              <span className="text-[length:var(--text-ui)] text-info animate-pulse">
+              <span className="text-[length:var(--text-ui)] text-text-info animate-pulse">
                 运行中
               </span>
             )}
             {task.last_status === "failed" && (
-              <span className="text-[length:var(--text-ui)] text-error">失败</span>
+              <span className="text-[length:var(--text-ui)] text-text-error">失败</span>
             )}
           </div>
           {task.description && (
@@ -519,9 +519,9 @@ function TaskCard({
         </button>
         <button
           onClick={onDelete}
-          className="flex items-center gap-1 px-2 py-1 text-[length:var(--text-ui)] text-text-faint hover:text-error hover:bg-bg-hover rounded"
-          title="删除"
-          aria-label="删除">
+          className="flex items-center gap-1 px-2 py-1 text-[length:var(--text-ui)] text-text-faint hover:text-text-error hover:bg-bg-hover rounded"
+          title={DELETE}
+          aria-label={DELETE}>
           <Trash2 className="icon-xs" />
         </button>
         <div className="flex-1" />
@@ -529,7 +529,7 @@ function TaskCard({
           onClick={onToggle}
           className={`flex items-center gap-1 px-2 py-1 text-[length:var(--text-ui)] rounded ${
             task.enabled
-              ? "text-success hover:bg-bg-hover"
+              ? "text-text-success hover:bg-bg-hover"
               : "text-text-faint hover:text-text-secondary hover:bg-bg-hover"
           }`}
           title={task.enabled ? "点击停用" : "点击启用"}
@@ -557,8 +557,15 @@ function TaskEditor({
   const [availableSkills, setAvailableSkills] = useState<
     Array<{ name: string; description: string; category: string }>
   >([]);
-  const update = <K extends keyof AutomationTask>(k: K, v: AutomationTask[K]) =>
+  /** 表单校验错误（内联展示，不用原生 alert —— 原生弹窗不跟随主题，
+   *  且与全仓「确认/校验一律走应用内组件」的约定冲突）。 */
+  const [formError, setFormError] = useState<string | null>(null);
+  const update = <K extends keyof AutomationTask>(k: K, v: AutomationTask[K]) => {
+    // 字段一改就撤掉上一次的校验错误 —— 否则错误横幅会一直挂着，
+    // 用户已经补好了却还被告知「必填」。
+    setFormError(null);
     setDraft((p) => ({ ...p, [k]: v }));
+  };
 
   // fetch skill list for cron-job assignment.
   useEffect(() => {
@@ -579,247 +586,233 @@ function TaskEditor({
   };
 
   const submit = () => {
-    if (!draft.name.trim() || !draft.prompt.trim() || !draft.schedule.trim()) {
-      alert("名称、prompt 和 schedule 都是必填的");
+    const missing: string[] = [];
+    if (!draft.name.trim()) missing.push("名称");
+    if (!draft.prompt.trim()) missing.push("Prompt");
+    if (!draft.schedule.trim()) missing.push("Schedule");
+    if (missing.length > 0) {
+      setFormError(`${missing.join("、")}是必填的。补齐后即可保存。`);
       return;
     }
+    setFormError(null);
     onSave(draft);
   };
 
   return (
-    <div
-      className="modal-backdrop"
-      onClick={onCancel}
+    <Modal
+      open
+      onClose={onCancel}
+      width="wide"
+      scrim
+      /* 表单弹窗：点遮罩不该把填了一半的任务扔掉。 */
+      closeOnBackdrop={false} closeOnEscape={false}
+      title={isCreate ? "新建自动化" : `编辑 · ${draft.name || "未命名"}`}
+      bodyClassName="flex flex-col gap-3.5 overflow-y-auto px-5 pb-5"
+      footer={
+        <>
+          <Button variant="secondary" size="base" onClick={onCancel}>
+            取消
+          </Button>
+          <Button variant="primary" size="base" onClick={submit}>
+            保存
+          </Button>
+        </>
+      }
     >
-      <div
-        className="modal-card modal-card-lg flex flex-col max-h-[90vh]"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="modal-header">
-          <div className="modal-title-block">
-            <h3 className="modal-title">
-              {isCreate ? "新建自动化" : `编辑 · ${draft.name || "未命名"}`}
-            </h3>
+        {formError && (
+          <div
+            role="alert"
+            className="mb-3 flex items-start gap-2 rounded-lg bg-[var(--color-error-soft)] px-3 py-2 text-[length:var(--text-ui)] text-[var(--color-error)]"
+          >
+            <AlertTriangle className="icon-sm mt-0.5 shrink-0" aria-hidden="true" />
+            <span>{formError}</span>
           </div>
-          <button
-            onClick={onCancel}
-            className="modal-close"
-            aria-label="关闭"
-          >
-            <X className="icon-lg" />
-          </button>
-        </div>
-
-        <div className="modal-form">
-          <Field label="名称" hint="给任务起个名字（卡片标题）">
-            <input
-              type="text"
-              value={draft.name}
-              onChange={(e) => update("name", e.target.value)}
-              className="modal-input"
-              placeholder="每日早报"
+        )}
+        <Input
+          label="名称"
+          hint="给任务起个名字（卡片标题）"
+          value={draft.name}
+          onChange={(e) => update("name", e.target.value)}
+          placeholder="每日早报"
+        />
+        <Input
+          label="描述"
+          hint="（可选）一句话讲清任务目的"
+          value={draft.description ?? ""}
+          onChange={(e) => update("description", e.target.value)}
+          placeholder="每天早上整理昨天的工作进展"
+        />
+        <TextArea
+          label="Prompt"
+          hint="到点会原样发给 agent 的内容"
+          rightAction={
+            <AiGenerateButton
+              draft={draft.prompt}
+              onResult={(generated) => update("prompt", generated)}
+              triggerKind="cron"
+              scheduleHint={draft.schedule}
             />
-          </Field>
-          <Field label="描述" hint="（可选）一句话讲清任务目的">
-            <input
-              type="text"
-              value={draft.description ?? ""}
-              onChange={(e) => update("description", e.target.value)}
-              className="modal-input"
-              placeholder="每天早上整理昨天的工作进展"
-            />
-          </Field>
-          <Field
-            label="Prompt"
-            hint="到点会原样发给 agent 的内容"
-            rightAction={
-              <AiGenerateButton
-                draft={draft.prompt}
-                onResult={(generated) => update("prompt", generated)}
-                triggerKind="cron"
-                scheduleHint={draft.schedule}
-              />
-            }
-          >
-            <textarea
-              value={draft.prompt}
-              onChange={(e) => update("prompt", e.target.value)}
-              rows={6}
-              className="modal-textarea"
-              placeholder="请帮我整理昨天的工作进展：&#10;1) 关键成果&#10;2) 阻塞项&#10;3) 今日建议"
-            />
-          </Field>
-          <Field
+          }
+          value={draft.prompt}
+          onChange={(e) => update("prompt", e.target.value)}
+          rows={6}
+          placeholder={"请帮我整理昨天的工作进展：\n1) 关键成果\n2) 阻塞项\n3) 今日建议"}
+        />
+        <div className="flex flex-col gap-1">
+          <span className="text-[length:var(--text-ui)] font-medium text-[var(--color-text-primary)]">
+            Schedule（cron 表达式）
+          </span>
+          <div className="flex flex-wrap gap-1 mb-1">
+            {CRON_PRESETS.map(([label, expr, desc]) => (
+              <button
+                key={expr}
+                onClick={() => update("schedule", expr)}
+                className={`px-2 py-0.5 text-[length:var(--text-ui)] rounded ${
+                  draft.schedule === expr
+                    ? "bg-bg-active text-text-primary font-medium"
+                    : "bg-bg-secondary text-text-secondary hover:bg-bg-hover border border-border-primary"
+                }`}
+                title={desc}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <Input
+            size="lg"
+            labelHidden
             label="Schedule（cron 表达式）"
             hint="5 字段：分 时 日 月 周。例：0 9 * * 1-5 = 工作日 9 点"
-          >
-            <div className="flex flex-wrap gap-1 mb-2">
-              {CRON_PRESETS.map(([label, expr, desc]) => (
-                <button
-                  key={expr}
-                  onClick={() => update("schedule", expr)}
-                  className={`px-2 py-0.5 text-[length:var(--text-ui)] rounded ${
-                    draft.schedule === expr
-                      ? "bg-bg-active text-text-primary font-medium"
-                      : "bg-bg-secondary text-text-secondary hover:bg-bg-hover border border-border-primary"
-                  }`}
-                  title={desc}
-                >
-                  {label}
-                </button>
-              ))}
+            value={draft.schedule}
+            onChange={(e) => update("schedule", e.target.value)}
+            className="font-mono"
+            placeholder="0 9 * * 1-5"
+          />
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <Input
+            label="分类"
+            hint="（可选）用于卡片分组"
+            value={draft.category ?? ""}
+            onChange={(e) => update("category", e.target.value)}
+            placeholder="工作"
+          />
+          <Input
+            label="图标"
+            hint="（可选）emoji"
+            value={draft.icon ?? ""}
+            onChange={(e) => update("icon", e.target.value)}
+            maxLength={2}
+            placeholder="✨"
+          />
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <Input
+            label="模型"
+            hint="（可选）provider:model"
+            value={draft.model ?? ""}
+            onChange={(e) => update("model", e.target.value || undefined)}
+            className="font-mono"
+            placeholder="openai:gpt-4o"
+          />
+          {/* 界面上说概念，不说字段名（问题 14）：后端仍收 default / full，
+              落库契约不变；用户看到的是「标准 / 完全」。 */}
+          <SelectField
+            label="权限"
+            hint="标准：危险工具需审批；完全：自动批准"
+            value={draft.permission_level ?? "default"}
+            onChange={(e) =>
+              update(
+                "permission_level",
+                e.target.value as "default" | "full",
+              )
+            }
+            options={[
+              { value: "default", label: "标准（危险工具需审批）" },
+              { value: "full", label: "完全（自动批准）" },
+            ]}
+          />
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <Input
+            label="运行次数上限"
+            hint="（可选）累计跑满 N 次后自动停用；留空 = 无限循环"
+            type="number"
+            min={1}
+            value={draft.max_runs ?? ""}
+            onChange={(e) =>
+              update(
+                "max_runs",
+                e.target.value.trim() === "" ? undefined : Math.max(1, Number(e.target.value)),
+              )
+            }
+            placeholder="无限"
+          />
+          <div />
+        </div>
+        {/* skills multi-select for cron-job execution */}
+        {availableSkills.length > 0 && (
+          <FieldGroup label="技能（可选）" hint="勾选的技能会在任务执行时自动加载">
+            <div className="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto">
+              {availableSkills.map((sk) => {
+                const selected = (draft.skills ?? []).includes(sk.name);
+                return (
+                  <button
+                    key={sk.name}
+                    type="button"
+                    onClick={() => toggleSkill(sk.name)}
+                    title={sk.description}
+                    className={`px-2 py-1 text-[length:var(--text-ui)] rounded border transition-colors ${
+                      selected
+                        ? "bg-bg-active text-text-primary border-border-secondary font-medium"
+                        : "bg-bg-secondary text-text-secondary border-border-primary hover:bg-bg-hover"
+                    }`}
+                  >
+                    {sk.name}
+                    {sk.category ? <span className="ml-1 text-[length:var(--text-ui)] opacity-60">({sk.category})</span> : null}
+                  </button>
+                );
+              })}
             </div>
-            <input
-              type="text"
-              value={draft.schedule}
-              onChange={(e) => update("schedule", e.target.value)}
-              className="modal-input font-mono"
-              placeholder="0 9 * * 1-5"
-            />
-          </Field>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <Field label="分类" hint="（可选）用于卡片分组">
-              <input
-                type="text"
-                value={draft.category ?? ""}
-                onChange={(e) => update("category", e.target.value)}
-                className="modal-input"
-                placeholder="工作"
-              />
-            </Field>
-            <Field label="图标" hint="（可选）emoji">
-              <input
-                type="text"
-                value={draft.icon ?? ""}
-                onChange={(e) => update("icon", e.target.value)}
-                maxLength={2}
-                className="modal-input"
-                placeholder="✨"
-              />
-            </Field>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <Field label="模型" hint="（可选）provider:model">
-              <input
-                type="text"
-                value={draft.model ?? ""}
-                onChange={(e) => update("model", e.target.value || undefined)}
-                className="modal-input font-mono"
-                placeholder="openai:gpt-4o"
-              />
-            </Field>
-            <Field label="权限" hint="default 触发审批 / full 自动批准">
-              <select
-                value={draft.permission_level ?? "default"}
-                onChange={(e) =>
-                  update(
-                    "permission_level",
-                    e.target.value as "default" | "full",
-                  )
-                }
-                className="modal-input"
-              >
-                <option value="default">default（危险工具需审批）</option>
-                <option value="full">full（自动批准）</option>
-              </select>
-            </Field>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <Field
-              label="运行次数上限"
-              hint="（可选）累计跑满 N 次后自动停用；留空 = 无限循环"
-            >
-              <input
-                type="number"
-                min={1}
-                value={draft.max_runs ?? ""}
-                onChange={(e) =>
-                  update(
-                    "max_runs",
-                    e.target.value.trim() === "" ? undefined : Math.max(1, Number(e.target.value)),
-                  )
-                }
-                className="modal-input"
-                placeholder="无限"
-              />
-            </Field>
-            <div />
-          </div>
-          {/* skills multi-select for cron-job execution */}
-          {availableSkills.length > 0 && (
-            <Field label="技能（可选）" hint="勾选的技能会在任务执行时自动加载">
-              <div className="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto">
-                {availableSkills.map((sk) => {
-                  const selected = (draft.skills ?? []).includes(sk.name);
-                  return (
-                    <button
-                      key={sk.name}
-                      type="button"
-                      onClick={() => toggleSkill(sk.name)}
-                      title={sk.description}
-                      className={`px-2 py-1 text-[length:var(--text-ui)] rounded border transition-colors ${
-                        selected
-                          ? "bg-bg-active text-text-primary border-border-secondary font-medium"
-                          : "bg-bg-secondary text-text-secondary border-border-primary hover:bg-bg-hover"
-                      }`}
-                    >
-                      {sk.name}
-                      {sk.category ? <span className="ml-1 text-[length:var(--text-ui)] opacity-60">({sk.category})</span> : null}
-                    </button>
-                  );
-                })}
-              </div>
-            </Field>
-          )}
-          <label className="flex items-center gap-2 text-[length:var(--text-ui)] text-text-secondary cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={draft.enabled}
-              onChange={(e) => update("enabled", e.target.checked)}
-              className="rounded border-border-primary"
-            />
-            创建后立即启用
-          </label>
-        </div>
-
-        <div className="modal-footer">
-          <button
-            onClick={onCancel}
-            className="modal-btn modal-btn-secondary"
-          >
-            取消
-          </button>
-          <button
-            onClick={submit}
-            className="modal-btn modal-btn-primary"
-          >
-            保存
-          </button>
-        </div>
-      </div>
-    </div>
+          </FieldGroup>
+        )}
+        <label className="flex items-center gap-2 text-[length:var(--text-ui)] text-text-secondary cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={draft.enabled}
+            onChange={(e) => update("enabled", e.target.checked)}
+            className="rounded border-border-primary"
+          />
+          创建后立即启用
+        </label>
+    </Modal>
   );
 }
 
-function Field({
+/**
+ * 字段分组壳 —— 只给「一组控件」用（技能多选这种没有单一输入框的场合）。
+ * 单个输入框一律走 `ui/Input` / `ui/TextArea` / `ui/SelectField`，
+ * 那里自带 label↔控件的 `htmlFor`/`id` 关联与 `aria-describedby`。
+ * 这里没有控件可关联，所以只给视觉分组 + 说明文字。
+ */
+function FieldGroup({
   label,
   hint,
   children,
-  rightAction,
 }: {
   label: string;
   hint?: string;
   children: React.ReactNode;
-  rightAction?: React.ReactNode;
 }) {
   return (
-    <div className="modal-field">
-      <div className="flex items-center justify-between mb-1.5">
-        <label className="modal-field-label" style={{ marginBottom: 0 }}>{label}</label>
-        {rightAction}
-      </div>
+    <div className="flex flex-col gap-1">
+      <span className="text-[length:var(--text-ui)] font-medium text-[var(--color-text-primary)]">
+        {label}
+      </span>
       {children}
-      {hint && <p className="modal-field-hint">{hint}</p>}
+      {hint && (
+        <p className="text-[length:var(--text-meta)] text-[var(--color-text-tertiary)]">{hint}</p>
+      )}
     </div>
   );
 }
@@ -895,7 +888,7 @@ function WorkflowPanel({ openChat, onCreateWorkflow }: { openChat: () => void; o
           </button>
           <button
             onClick={onCreateWorkflow}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-primary text-[length:var(--text-ui)] font-medium hover:bg-bg-hover"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-bg-secondary text-[length:var(--text-ui)] font-medium hover:bg-bg-hover"
           >
             通过对话创建
           </button>
@@ -906,7 +899,7 @@ function WorkflowPanel({ openChat, onCreateWorkflow }: { openChat: () => void; o
           <SkeletonCard lines={2} />
         </div>
       ) : global.length === 0 ? (
-        <p className="rounded-xl border border-border-primary bg-bg-card px-4 py-6 text-center text-[length:var(--text-ui)] text-text-muted">
+        <p className="rounded-xl bg-bg-card px-4 py-6 text-center text-[length:var(--text-ui)] text-text-muted">
           还没有全局工作流。适合放不依赖某个项目的流程，例如深度调研。
         </p>
       ) : (
@@ -1009,7 +1002,7 @@ function WorkflowEditorDialog({
     });
     setSaving(false);
     if (saved) {
-      toastInfo("已保存");
+      toastInfo(SAVED);
       await onSaved();
     } else {
       setError("保存失败，请检查后端日志");
@@ -1017,77 +1010,62 @@ function WorkflowEditorDialog({
   };
 
   return (
-    <div className="modal-backdrop" onClick={onCancel}>
-      <div className="modal-card flex flex-col max-h-[90vh]" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-header">
-          <div className="modal-title-block">
-            <h3 className="modal-title">{isNew ? "新建工作流" : `编辑 · ${wf.name}`}</h3>
-          </div>
-          <button onClick={onCancel} className="modal-close" aria-label="关闭">
-            <X className="icon-lg" />
-          </button>
-        </div>
-        <div className="modal-form">
-          <div className="modal-field">
-            <label className="modal-field-label">名称</label>
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              className="modal-input"
-              placeholder="例如：竞品调研"
-            />
-          </div>
-          <div className="modal-field">
-            <label className="modal-field-label">说明（可选）</label>
-            <input
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              className="modal-input"
-              placeholder="一句话说明这个流程做什么"
-            />
-          </div>
-          <div className="modal-field">
-            <label className="modal-field-label">可见范围</label>
-            <select
-              value={workspace}
-              onChange={(e) => setWorkspace(e.target.value)}
-              className="modal-input"
-            >
-              <option value="">全局（对所有项目可见）</option>
-              {workspaces.map((w) => (
-                <option key={w.path} value={w.path}>
-                  {w.name}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="modal-field">
-            <label className="modal-field-label">提示词</label>
-            <textarea
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              className="modal-input min-h-40"
-              placeholder={"跑起来后发给 agent 的指令。可用 {{参数}} 作为占位符，运行时再填。"}
-            />
-          </div>
-          {error && (
-            <p className="text-[length:var(--text-ui)] text-error">{error}</p>
-          )}
-        </div>
-        <div className="modal-footer">
-          <button onClick={onCancel} className="modal-btn modal-btn-secondary">
+    <Modal
+      open
+      onClose={onCancel}
+      width="base"
+      scrim
+      closeOnBackdrop={false} closeOnEscape={false}
+      title={isNew ? "新建工作流" : `编辑 · ${wf.name}`}
+      bodyClassName="flex flex-col gap-3.5 overflow-y-auto px-5 pb-5"
+      footer={
+        <>
+          <Button variant="secondary" size="base" onClick={onCancel}>
             取消
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="primary"
+            size="base"
             onClick={() => void onSave()}
             disabled={saving}
-            className="modal-btn modal-btn-primary"
           >
-            {saving ? "保存中…" : "保存"}
-          </button>
-        </div>
-      </div>
-    </div>
+            {saving ? SAVING : SAVE}
+          </Button>
+        </>
+      }
+    >
+        <Input
+          label="名称"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="例如：竞品调研"
+        />
+        <Input
+          label="说明（可选）"
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          placeholder="一句话说明这个流程做什么"
+        />
+        <SelectField
+          label="可见范围"
+          value={workspace}
+          onChange={(e) => setWorkspace(e.target.value)}
+          options={[
+            { value: "", label: "全局（对所有项目可见）" },
+            ...workspaces.map((w) => ({ value: w.path, label: w.name })),
+          ]}
+        />
+        <TextArea
+          label="提示词"
+          value={prompt}
+          onChange={(e) => setPrompt(e.target.value)}
+          className="min-h-40"
+          placeholder={"跑起来后发给 agent 的指令。可用 {{参数}} 作为占位符，运行时再填。"}
+        />
+        {error && (
+          <p className="text-[length:var(--text-ui)] text-text-error">{error}</p>
+        )}
+    </Modal>
   );
 }
 
@@ -1113,10 +1091,10 @@ function WorkflowCard({
               {wf.name}
             </p>
             {running && (
-              <span className="text-[length:var(--text-ui)] text-info animate-pulse">运行中</span>
+              <span className="text-[length:var(--text-ui)] text-text-info animate-pulse">运行中</span>
             )}
             {wf.last_status === "failed" && (
-              <span className="text-[length:var(--text-ui)] text-error">上次失败</span>
+              <span className="text-[length:var(--text-ui)] text-text-error">上次失败</span>
             )}
           </div>
           {wf.description && (
@@ -1149,9 +1127,9 @@ function WorkflowCard({
         <div className="flex-1" />
         <button
           onClick={onDelete}
-          className="px-2 py-1 rounded text-text-faint hover:text-error hover:bg-bg-hover"
-          aria-label="删除"
-          title="删除"
+          className="px-2 py-1 rounded text-text-faint hover:text-text-error hover:bg-bg-hover"
+          aria-label={DELETE}
+          title={DELETE}
         >
           <Trash2 className="icon-xs" />
         </button>
@@ -1174,38 +1152,34 @@ function ParamDialog({
   ];
   const [values, setValues] = useState<Record<string, string>>({});
   return (
-    <div className="modal-backdrop" onClick={onCancel}>
-      <div className="modal-card flex flex-col max-h-[90vh]" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-header">
-          <div className="modal-title-block">
-            <h3 className="modal-title">填参数 · {wf.name}</h3>
-          </div>
-          <button onClick={onCancel} className="modal-close" aria-label="关闭">
-            <X className="icon-lg" />
-          </button>
-        </div>
-        <div className="modal-form">
-          {tokens.map((t) => (
-            <div key={t} className="modal-field">
-              <label className="modal-field-label">{t}</label>
-              <input
-                value={values[t] ?? ""}
-                onChange={(e) => setValues((p) => ({ ...p, [t]: e.target.value }))}
-                className="modal-input"
-                placeholder={`填写 ${t}`}
-              />
-            </div>
-          ))}
-        </div>
-        <div className="modal-footer">
-          <button onClick={onCancel} className="modal-btn modal-btn-secondary">
+    <Modal
+      open
+      onClose={onCancel}
+      width="base"
+      scrim
+      closeOnBackdrop={false} closeOnEscape={false}
+      title={`填参数 · ${wf.name}`}
+      bodyClassName="flex flex-col gap-3.5 overflow-y-auto px-5 pb-5"
+      footer={
+        <>
+          <Button variant="secondary" size="base" onClick={onCancel}>
             取消
-          </button>
-          <button onClick={() => onRun(values)} className="modal-btn modal-btn-primary">
+          </Button>
+          <Button variant="primary" size="base" onClick={() => onRun(values)}>
             开始运行
-          </button>
-        </div>
-      </div>
-    </div>
+          </Button>
+        </>
+      }
+    >
+      {tokens.map((t) => (
+        <Input
+          key={t}
+          label={t}
+          value={values[t] ?? ""}
+          onChange={(e) => setValues((p) => ({ ...p, [t]: e.target.value }))}
+          placeholder={`填写 ${t}`}
+        />
+      ))}
+    </Modal>
   );
 }

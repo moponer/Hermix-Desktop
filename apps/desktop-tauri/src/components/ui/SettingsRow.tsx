@@ -40,7 +40,7 @@ export function SettingsRow({
       className={cx(
         "flex w-full items-center gap-4 px-5 py-3.5 text-left",
         interactive &&
-          "transition-colors hover:bg-[var(--color-bg-card-hover)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[var(--color-accent)]",
+          "transition-colors hover:bg-[var(--color-bg-card-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-transparent",
         className,
       )}
     >

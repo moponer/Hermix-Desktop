@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useMemo, useCallback, memo } from "react";
 import { useStreamChatContext } from "../context/StreamChatContext";
 import { IM_SOURCE_LABEL, imSourceOf } from "../utils/time";
-import { PanelRight, PanelLeftOpen, Search, ArrowUp, AlertTriangle, AppWindow, Workflow, Code2, FileText, PenLine, Image as ImageIcon, Briefcase } from "lucide-react";
+import { PanelRight, PanelLeftOpen, Search, ArrowUp, ArrowUpRight, AlertTriangle, AppWindow, Workflow, Code2, FileText, PenLine, Image as ImageIcon, Briefcase } from "lucide-react";
 import { SidebarRevealRow } from "./SidebarRevealRow";
 import { resolveSessionSelectedModel } from "../utils/sessionModel";
 import type {
@@ -53,6 +53,7 @@ import { pickDirectory } from "../desktopBridge";
 import { getAvailableTools, waitForBackendReady, updateSessionMetadata, warmUpProvider, getModelInfo, type ToolDescriptor } from "../api";
 import { storage, STORAGE_KEYS } from "../utils/storageCompat";
 import { compressImage, skipCompression, type CompressResult } from "../utils/imageCompressor";
+import { NEW_CHAT } from "./strings";
 
 // ── ModelStatusBar — 聊天列头部的动作行 ─────────────────────
 //
@@ -1134,7 +1135,7 @@ export const ChatView = memo(function ChatView({
               color: "var(--color-warning, #d97706)",
             }}
           >
-            <AlertTriangle size={26} />
+            <AlertTriangle size={24} />
           </div>
           <h2 className="text-lg font-semibold text-text-primary mb-2">
             加载对话失败
@@ -1163,7 +1164,7 @@ export const ChatView = memo(function ChatView({
               className="btn btn-secondary"
               type="button"
             >
-              <span>新建对话</span>
+              <span>{NEW_CHAT}</span>
             </button>
           </div>
         </div>
@@ -1187,7 +1188,7 @@ export const ChatView = memo(function ChatView({
             className="w-9 h-9 rounded-full border-2 border-border-primary border-t-text-muted animate-spin"
             aria-hidden="true"
           />
-          <p className="text-[length:var(--text-ui)] text-text-muted">正在恢复对话...</p>
+          <p className="text-[length:var(--text-ui)] text-text-muted">正在恢复对话…</p>
         </div>
         </div>
       </div>
@@ -1249,7 +1250,7 @@ export const ChatView = memo(function ChatView({
                       setInput(c.prompt);
                       textareaRef.current?.focus();
                     }}
-                    className="flex items-center gap-1.5 h-7 px-3.5 rounded-full border border-[var(--color-border-secondary)] bg-[var(--color-bg-tertiary)] text-[length:var(--text-ui)] text-[var(--color-text-secondary)] transition-colors hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-card-hover)]"
+                    className="flex items-center gap-1.5 h-7 px-3.5 rounded-full border-[var(--color-border-secondary)] bg-[var(--color-bg-tertiary)] text-[length:var(--text-ui)] text-[var(--color-text-secondary)] transition-colors hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-card-hover)]"
                     title={`填入「${c.label}」能力模板`}
                   >
                     <c.icon className="icon-sm" /> {c.label}
@@ -1301,7 +1302,7 @@ export const ChatView = memo(function ChatView({
               onFilesAttach={handleFilesAttach}
               keepOriginalImage={keepOriginalImage}
               setKeepOriginalImage={setKeepOriginalImage}
-              placeholder={isWorkbenchChat ? "告诉这台工作台要加什么、改什么、查什么..." : "Hermix帮你做事 — 写作、规划、分析、学习、开发..."}
+              placeholder={isWorkbenchChat ? "告诉这台工作台要加什么、改什么、查什么…" : "Hermix帮你做事 — 写作、规划、分析、学习、开发…"}
               session={session}
             />
             {streamError && (
@@ -1332,13 +1333,10 @@ export const ChatView = memo(function ChatView({
                   <span className="text-[length:var(--text-ui)] text-[var(--color-text-secondary)] group-hover:text-[var(--color-text-primary)]">
                     {s}
                   </span>
-                  <svg
+                  <ArrowUpRight
                     className="icon-sm shrink-0 text-[var(--color-text-faint)] group-hover:text-[var(--color-text-secondary)]"
-                    viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
-                    strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"
-                  >
-                    <path d="M7 17 17 7M8 7h9v9" />
-                  </svg>
+                    aria-hidden="true"
+                  />
                 </button>
               ))}
             </div>
@@ -1453,7 +1451,7 @@ export const ChatView = memo(function ChatView({
                 const fmt = (n: number) => n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1_000 ? `${Math.round(n / 1_000)}k` : String(n);
                 const pct = Math.min(100, (stream.contextUsage.usedTokens / stream.contextUsage.maxTokens) * 100);
                 const dotColor = pct >= 95 ? "bg-error" : pct >= 85 ? "bg-warning" : "bg-success";
-                const textColor = pct >= 95 ? "text-error" : pct >= 85 ? "text-warning" : "text-text-secondary";
+                const textColor = pct >= 95 ? "text-text-error" : pct >= 85 ? "text-text-warning" : "text-text-secondary";
                 let cacheInfo = "";
                 if (stream.usageSnapshot) {
                   const cacheRead = stream.usageSnapshot.cacheReadTokens;
@@ -1532,7 +1530,7 @@ export const ChatView = memo(function ChatView({
             onFilesAttach={handleFilesAttach}
             keepOriginalImage={keepOriginalImage}
             setKeepOriginalImage={setKeepOriginalImage}
-            placeholder={isWorkbenchChat ? "告诉这台工作台要加什么、改什么..." : "输入消息..."}
+            placeholder={isWorkbenchChat ? "告诉这台工作台要加什么、改什么…" : "输入消息…"}
             session={session}
             messageQueue={messageQueue}
             onAddToQueue={onAddToQueue}

@@ -12,7 +12,7 @@
 //! 用户自己的浏览器）。子 webview 用**独立的 WebView2 数据目录** → 它就是
 //! 独立的浏览器进程 → 端口天然跟主窗口隔离。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
@@ -33,9 +33,18 @@ fn profile_dir() -> PathBuf {
 /// （`DevToolsActivePort` 在那里面），而系统浏览器（Edge/Chrome）是把文件
 /// 直接写在 UDF 根下。两处都找，才不会因为引擎不同而读不到端口。
 fn devtools_endpoint() -> Result<(u16, String), String> {
-    let base = profile_dir();
-    let candidates = [base.join("DevToolsActivePort"), base.join("EBWebView").join("DevToolsActivePort")];
-    let deadline = Instant::now() + PORT_TIMEOUT;
+    devtools_endpoint_in(&profile_dir(), PORT_TIMEOUT)
+}
+
+/// 同上，但**基目录与超时都显式传入** —— 测试要用一个空的临时目录，
+/// 否则本机只要开着内嵌视图，真实 profile 里就有 `DevToolsActivePort`，
+/// 测试的前提（"没开视图"）根本不成立。
+fn devtools_endpoint_in(base: &Path, timeout: Duration) -> Result<(u16, String), String> {
+    let candidates = [
+        base.join("DevToolsActivePort"),
+        base.join("EBWebView").join("DevToolsActivePort"),
+    ];
+    let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         for file in &candidates {
             if let Ok(text) = std::fs::read_to_string(file) {
@@ -344,7 +353,14 @@ mod tests {
     fn missing_port_file_reports_clearly() {
         // 没有打开内嵌视图时，端口文件不存在 → 必须给一句能看懂的错误，
         // 而不是 panic 或空串。
-        let err = devtools_endpoint().unwrap_err();
+        //
+        // 用**空的临时目录**：真实 profile 目录是机器全局状态（本机开着内嵌
+        // 视图时文件就在），拿它当"缺失"的样本会让测试随机红。
+        let dir = std::env::temp_dir().join("hermix-cdp-missing-port-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let err = devtools_endpoint_in(&dir, Duration::from_millis(50)).unwrap_err();
         assert!(err.contains("调试端口"), "实际错误：{err}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

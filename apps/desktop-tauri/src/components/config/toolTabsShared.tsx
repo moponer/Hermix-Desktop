@@ -57,7 +57,7 @@ export function SummaryBar({
       <div className="flex flex-col shrink-0">
         <span
           className="text-xl font-bold leading-none tracking-tight"
-          style={{ color: "var(--color-success)" }}
+          style={{ color: "var(--color-text-success)" }}
         >
           {enabled}
         </span>

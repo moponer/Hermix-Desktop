@@ -8,6 +8,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import * as pdfjsLib from "pdfjs-dist";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
+import { standardFontDataUrl } from "../lib/standardFonts";
 import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut } from "lucide-react";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
@@ -36,7 +37,12 @@ export function PdfView({ bytes }: { bytes: Uint8Array }) {
     const copy = new Uint8Array(bytes).buffer;
     // 持有 loadingTask 而不是只拿 doc：销毁入口在 task 上，它同时会
     // 结束 worker。只丢 doc 引用会让解析线程留着直到 GC。
-    const loadingTask = pdfjsLib.getDocument({ data: copy });
+    const loadingTask = pdfjsLib.getDocument({
+      data: copy,
+      // 标准 14 号字的度量：不给的话字宽算不出来（文本层点不中）、
+      // 标准字体的渲染也会走回退字体。
+      ...(standardFontDataUrl ? { standardFontDataUrl } : {}),
+    });
     taskRef.current = loadingTask;
     loadingTask.promise
       .then((doc) => {

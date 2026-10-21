@@ -60,7 +60,6 @@ import {
   Wand2,
   Hammer,
   Wrench,
-  Cog,
   Plug,
   Lightbulb,
   GraduationCap,
@@ -177,7 +176,7 @@ const ICON_MAP: Record<string, IconCmp> = {
   settings: Settings, config: Settings, preference: Settings,
   tool: Wrench, tools: Hammer,
   build: Hammer, project: Briefcase,
-  cog: Cog, gear: Cog, options: Settings,
+  cog: Settings, gear: Settings, options: Settings,
   plug: Plug, integrate: Plug, integration: Plug,
   // 数据可视化
   chart: PieChart, graph: PieChart, plot: BarChart3,
@@ -240,11 +239,19 @@ export interface ResolveIconOpts {
   spanClassName?: string;
   // 给 img 形态的 class
   imgClassName?: string;
-  // lucide 图标尺寸 (默认 20, 详情头部可能想更大)
+  // lucide 图标尺寸 (px)。落在档位内的 (10/12/14/16) 走 --icon-size-*,
+  // 档位外的一次性资产 (如详情头部的 24) 保留行内尺寸。
   size?: number;
-  // lucide 描边粗细
-  strokeWidth?: number;
 }
+
+/** 档位值 → Tailwind 图标工具类。档位外（24 等一次性资产）不查表，
+ *  直接用行内尺寸 —— 24 属 tokens.css 明确允许的特殊尺寸，不进档位体系。 */
+const ICON_TIER_CLASS: Record<number, string> = {
+  10: "icon-xs",
+  12: "icon-sm",
+  14: "icon-md",
+  16: "icon-lg",
+};
 
 /**
  * 最终的 lucide 形态渲染 — emoji 与 PNG 之后的兜底。
@@ -252,8 +259,9 @@ export interface ResolveIconOpts {
  * (图标背景必须不透明，行为应该稳定); 不存在时回退到 CSS 默认灰底。
  */
 function renderLucideFallback(app: IconLike, opts: ResolveIconOpts): ReactNode {
-  const { spanClassName, size = 20, strokeWidth = 1.75 } = opts;
+  const { spanClassName, size = 16 } = opts;
   const LucideIcon = lookupIcon(app) ?? CATEGORY_DEFAULT[app.category ?? ""] ?? Boxes;
+  const tierClass = ICON_TIER_CLASS[size];
   const tile = app.tile_color?.trim();
   const spanStyle: React.CSSProperties | undefined = tile
     // 用户自定义 tile 底色上恒用白前景——固定搭配，不随主题
@@ -263,7 +271,11 @@ function renderLucideFallback(app: IconLike, opts: ResolveIconOpts): ReactNode {
     : undefined;
   return (
     <span className={spanClassName} style={spanStyle} aria-hidden="true">
-      <LucideIcon size={size} strokeWidth={strokeWidth} />
+      {/* 描边粗细一律交给 Lucide 默认（strokeWidth=2）：全 app 曾经有 9 种
+          笔画粗细，这里写死 1.75 会让「同一个对勾」在不同页面不一样重。 */}
+      {tierClass
+        ? <LucideIcon className={tierClass} />
+        : <LucideIcon style={{ width: size, height: size }} />}
     </span>
   );
 }

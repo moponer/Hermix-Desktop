@@ -5,6 +5,7 @@ import { toastError, toastSuccess } from "../../hooks/useToast";
 import { ImChannelsCard } from "./ImChannelsCard";
 import { channelOf, type ChannelId, type PairedDevice, type RevokeOutcome } from "./channelOf";
 import { ConfirmDialog } from "../ui";
+import { LOADING, failure } from "../strings";
 
 /** 列表标题跟着选中渠道走——固定写「已配对设备」会让人以为看到的是全局表。 */
 const CHANNEL_TITLES: Record<ChannelId, string> = {
@@ -107,7 +108,8 @@ export function DevicesTab() {
         }
         await refreshDevices();
       } catch (e) {
-        toastError(`撤销失败：${e instanceof Error ? e.message : String(e)}`);
+        const msg = e instanceof Error ? e.message : String(e);
+        toastError(failure("撤销失败", "请重试。", msg));
       } finally {
         setRevoking(null);
       }
@@ -148,10 +150,10 @@ export function DevicesTab() {
         {listError ? (
           <div className="px-4 py-3 flex items-start gap-2 text-[length:var(--text-meta)] text-text-secondary">
             <AlertTriangle className="icon-md mt-0.5 shrink-0" />
-            读取设备列表失败：<span className="font-mono">{listError}</span>
+            读取设备列表失败：<span className="font-mono">{listError}</span>，请点「刷新」重试。
           </div>
         ) : devices === null ? (
-          <div className="px-4 py-3 text-[length:var(--text-meta)] text-text-muted">正在读取…</div>
+          <div className="px-4 py-3 text-[length:var(--text-meta)] text-text-muted" aria-busy="true">{LOADING}</div>
         ) : activeDevices.length === 0 ? (
           <div className="px-4 py-3 text-[length:var(--text-meta)] text-text-muted">
             {CHANNEL_EMPTY[active]}
@@ -177,7 +179,7 @@ export function DevicesTab() {
                 <button
                   onClick={() => setConfirmRevoke(d)}
                   disabled={revoking === d.device_id}
-                  className="h-7 px-2.5 rounded-md flex items-center gap-1 text-[length:var(--text-meta)] text-text-secondary hover:text-error hover:bg-error-soft transition-colors disabled:opacity-50 shrink-0"
+                  className="h-7 px-2.5 rounded-md flex items-center gap-1 text-[length:var(--text-meta)] text-text-secondary hover:text-text-error hover:bg-error-soft transition-colors disabled:opacity-50 shrink-0"
                   title="撤销此设备的访问权限"
                 >
                   <Trash2 className="icon-sm" />

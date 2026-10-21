@@ -4,8 +4,9 @@
 // 组件本身与拆分前逐字一致，class 名（`tw-msg-output*`）也保持不变，
 // 所以 CSS 无需跟着改。
 import { useEffect, useMemo, useRef, useState } from "react";
-import { CheckCheck, Copy } from "lucide-react";
+import { Check, Copy } from "lucide-react";
 import { unwrapToolOutput } from "./bubbleUtils";
+import { COPIED, COPY_OUTPUT, NO_OUTPUT } from "./strings";
 
 export function LiveTerminal({ content, running }: { content: string; running: boolean }) {
   // Unwrap JSON result wrappers so the user sees clean terminal output.
@@ -22,7 +23,7 @@ export function LiveTerminal({ content, running }: { content: string; running: b
   }, []);
 
   const handleCopy = async () => {
-    const text = displayContent || (running ? "" : "（无输出）");
+    const text = displayContent || (running ? "" : NO_OUTPUT);
     if (!text) return;
     try {
       if (navigator.clipboard?.writeText) {
@@ -60,16 +61,16 @@ export function LiveTerminal({ content, running }: { content: string; running: b
         className="tw-msg-output-copy"
         onClick={(e) => { e.stopPropagation(); handleCopy(); }}
         data-copied={copied ? "true" : "false"}
-        title={copied ? "已复制" : "复制输出"}
-        aria-label={copied ? "已复制" : "复制输出"}
+        title={copied ? COPIED : COPY_OUTPUT}
+        aria-label={copied ? COPIED : COPY_OUTPUT}
       >
-        {copied ? <CheckCheck className="icon-xs" /> : <Copy className="icon-xs" />}
+        {copied ? <Check className="icon-xs" /> : <Copy className="icon-xs" />}
       </button>
       {hasContent ? (
         <pre className="tw-msg-output-text">{displayContent}</pre>
       ) : (
         <span className="tw-msg-output-empty">
-          {running ? "等待输出…" : "（无输出）"}
+          {running ? "等待输出…" : NO_OUTPUT}
         </span>
       )}
     </div>
