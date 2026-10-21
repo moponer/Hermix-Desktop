@@ -916,13 +916,15 @@ fn spawn_run(state: HttpServerState, task: AutomationTask) {
                 Some(a) => session_exists(&state, a),
                 None => false,
             },
-            // 回退会话按「任务 + 这次运行」分桶：同一任务的多次回退不混在一个
-            // 会话里，用户在侧栏里能分清是哪一次跑飞了。
-            fallback_session_id: format!(
-                "automation:{}:{}",
-                task.id,
-                chrono::Utc::now().timestamp_millis()
-            ),
+            // 回退会话**按任务固定**（不是按运行分桶）：注入次数达到上限后，
+            // 结果要继续有地方去，而用户的主对话必须保持干净 —— 任务自己的
+            // 会话正是那个地方。
+            //
+            // 为什么不能按 run 分桶（`automation:{id}:{run_id}`）：那会让每一轮
+            // 回退都是**全新会话**，agent 每轮都要从零重新摸清「刷到哪了」。
+            // 实测一个 630 节的刷课任务会连续跑几百轮 —— 每轮重摸状态就是
+            // 几百轮 × 1~2 分钟的纯浪费。
+            fallback_session_id: format!("automation:{}", task.id),
             max_injections: None,
             max_consecutive_failures: None,
         };
