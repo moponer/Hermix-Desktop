@@ -101,6 +101,20 @@ tags: ["超星", "学习通", "chaoxing", "课程", "作业", "测验", "浏览�
      画面本来就是正常汉字。缺点是认字、复制不了，适合只读一两题。
 - **别在「DOM 读不出」上反复打转**：早先的 agent 在这条上空转了 20 分钟，
   改用解码后十几分钟就还原了。
+- **选项要按 `input[value="X"]` 选，不要按 `.TiMu` 的 DOM 顺序推**：
+  实测有些题（2.2）里**选项 input 的 `value` 是空串**，真实选项在
+  `label.before` 的文本里。判断题（对/错）的 input value 才是 `true`/`false`。
+  稳妥做法：先 dump 出 `input[name=…]` 的 name/value/checked 列表再决定怎么点。
+- **提交按钮在 work 那个 iframe 里**（`a.Btn_blue_1.workBtnIndex`），
+  不在顶层页面；顶层只放「上一节 / 下一节」。
+- **结果页在顶层页面**：`document.body.innerText` 直接读就能拿到
+  「正确答案 / 我的答案 / 得分」，不必再下钻。
+- **视频重开后进度归零、倍速与自动播放都不恢复** → 必须重新
+  `v.player.playbackRate(2); v.play()`（`v.muted = true` 也要重设）。
+- **长等待不要用 terminal 的 `Start-Sleep`**：它会阻塞 IO。
+  在 `webview_eval` 里 `await` 一个 Promise 即可。
+- **`webview_screenshot` 的 clip 偶尔会截到同一帧**（多张图 MD5 相同）——
+  那是页面没动，不是工具坏了；等页面变化再截。
 - 题目块选择器 `.TiMu`，`data` 属性是题号（如 `400339218`）。
 - 选项：
   - 单选 → `input[type=radio][name="answer{题号}"]`，value = `A/B/C/D`

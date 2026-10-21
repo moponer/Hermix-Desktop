@@ -18,7 +18,7 @@ Status: proposed — 2026-10-21 实测证实：经 `POST /api/automation/tasks` 
 
 ### 事实 2：引擎 A 的触发条件恒为假
 
-`dashboard/automation.rs:884-902`：
+`dashboard/automation.rs` 的 `tick_once` 旧实现：
 
 ```rust
 let next = sched.after(&now).next();          // 下一个**未来**时刻，恒 > now
@@ -37,7 +37,7 @@ let should_fire = match (next, t.last_run_at.as_ref()) {
 
 `spawn_run` 里写死 `let session_id = format!("automation:{}", task.id);` ——
 `AutomationTask.anchor_session_id` 存了但没人读。引擎 B 才读锚点
-（`automation_trigger.rs:246 decide_delivery` → `DeliveryTarget::Anchor`），
+（`automation_trigger.rs` 的 `decide_delivery` → `DeliveryTarget::Anchor`），
 并且引擎 B 才有护栏（`decide_delivery_target`：注入上限 50 次、连续失败 3 次回退）
 与 run 表（幂等 / 单飞 / 退避 / `abandoned` 收割）。
 
@@ -53,6 +53,13 @@ let should_fire = match (next, t.last_run_at.as_ref()) {
 
 → 面板/对话里建的定时任务是**空头支票**。
 
+### 事实 5：引擎 A 没有单飞，两轮会并发
+
+引擎 A 的去重只有「同一个槽 60 秒内不重复」（`last_fired` map，key = 任务 + 槽）。
+**运行时间超过调度间隔时，下一槽会再起一轮** —— 超星刷课实测：一节 12 分钟配
+15 分钟的槽，中途的 tick 就会再触发一次，两个 agent 同时驱动同一个查看器页面。
+引擎 B 有 run 表 + 单飞（`try_begin_run` / `is_in_flight`）挡这一下，引擎 A 没有。
+
 ### 对旧笔记的事实更正
 
 `docs/notes/proposed/feature/2026-10-04-automation-session-anchored-delivery.md`
@@ -63,43 +70,61 @@ let should_fire = match (next, t.last_run_at.as_ref()) {
 
 ## Decision
 
-**把自动化收敛到引擎 B（SQLite 那套），让面板/工具的写入直接落到它读的地方。**
+**就地修好引擎 A（面板/工具真正在用的那条路），把「合并成一台引擎」记为后续项。**
 
-1. `dashboard/automation.rs` 的 create / update / delete / run **写穿**到
-   `state.automation_service`（`AutomationService`）：面板与 `cronjob` 工具
-   走的是同一批 handler，所以**一处改动，两处同时生效**。
-2. **删掉引擎 A 的 tick 循环**（`AutomationScheduler::start` + `tick_once`），
-   避免两台调度器抢同一个任务。
-3. 面板的 `GET /api/automation/tasks` 仍返回 `AutomationTask` 形状（前端契约不动），
-   但运行态字段（`run_count` / `last_run_at` / `last_status` / `next_run_at` / `history`）
-   改为从 `automation_runtime_state` + `automation_runs` **投影**出来，
-   不再由 JSON 自己记账。
-4. `automation_tasks.json` 降级为**一次性导入源**：启动时把存量 JSON 里的任务
-   迁进 `automations` 表，迁完不再作为权威存储。
+1. **修触发判定**：判「最近一次**已经过去**的发生时刻」，而不是「下一个未来
+   时刻」。实现为纯函数 `due_slot(schedule, last_run_at, now)`：在
+   `[now - 2min, now]` 窗口里找第一次发生，它比 `last_run_at` 新就说明这一槽
+   还没跑过。附带收益：进程停机期间错过的槽会在下次 tick 补跑。
+2. **加单飞**：新增 `AutomationTask.running_since`（JSON 内字段，不动 SQLite
+   schema）。`tick_once` 跳过仍在跑的任务；`running_since` 超过 120 分钟没清
+   就当那次进程死了、允许重跑。
+3. **让锚点真正生效**：`spawn_run` 不再写死 `automation:{id}`，而是把
+   `anchor_session_id` 交给与引擎 B **同一套**护栏
+   （`hermix_automation::decide_delivery_target`）判定 —— 无锚点 / 锚点已删 /
+   连续失败 3 次 / 注入次数达 50 次 → 独立会话（带可见原因）。
+   判定规则不重写，两台引擎共用一份。
+4. **按自动化身份落库**：派发时带 `ExternalDelivery`，这一轮的提示词与回复都以
+   `MessageRole::Automation` 落库 —— 前端渲染成自动化卡片，而**不进 LLM 上下文**，
+   模型不会在下一轮看到「用户说过这句话」的假象。
+5. **内置示例换成纯读公开信息的任务**（天气 / 要闻 / 名词 / 开源 / 公开课 /
+   常识），并给每条提示词加「不要读取或修改任何本地文件、会话历史或配置」的约束。
+   旧示例（读会话历史、扫工作目录、看 git 状态）即使被启用也会去翻用户的数据；
+   示例只该演示「定时任务能跑」，不该演示「能翻你的私房」。
 
 ## Alternatives considered
 
-- **只修引擎 A 的触发条件（`including(&now)` 之类）+ 让 `spawn_run` 认锚点**：
-  改动最小、也能让功能跑起来。但**留下两台引擎**——而两台引擎并存正是这个 bug 的成因
-  （同一个概念两个权威存储，迟早再分叉）；且引擎 A 没有 run 表、没有幂等单飞、
-  没有退避、没有连续失败护栏。否决。
+- **把面板/工具的写入改为落到引擎 B 读的那张表（合并成一台引擎）**：
+  这是终态，但**不能现在做**：引擎 B 的领域模型比面板的 `AutomationTask` **窄**
+  ——没有 `skills` / `max_runs` / `description` / `category` / `icon`，
+  合并要么改 `automations` 表（加列 + `ensure_column` 迁移），要么把这些字段
+  搬进 SQLite 领域模型；前者要动 `hermix-automation/src/repository.rs`，
+  而并行线此刻正在同一个 crate 上改（`open_with_wal` 换共享 opener）。
+  在共享 target 的锁被占、磁盘又在涨的时候插进去改同一个 crate 风险太高。
+  → 记为后续项，本篇先把功能恢复。
+- **只修触发条件，不加单飞**：跑一轮的时长可能超过调度间隔 → 下一槽再起一轮，
+  两个 agent 同时驱动同一个目标。**实测踩过**（12 分钟的活配 15 分钟的槽）。
+  否决。
+- **让 `spawn_run` 认锚点但不接护栏**：注入次数/连续失败没有闸，
+  一个每天报错的任务会一直往用户主对话里灌错误信息。护栏是现成的
+  （`decide_delivery_target`），没有理由不用。否决。
 - **继续用「会话 HTTP 接口 + 外部脚本」驱动长任务**（2026-10-21 超星刷课就是这么跑的）：
   能跑，但那是**产品外面**的手工接线，不解决「产品自己能不能无人值守」。
   作为**本轮的超星任务**继续用它（它是唯一现在就通的路径），但**不作为长期方案**。
-- **什么都不做**：面板里那 6 条内置示例任务永远不触发，用户会以为是自己的配置问题。
-  否决。
 
 ## Consequences
 
 - 修完后，产品**原生**支持无人值守长任务：对话里一句「每 15 分钟继续刷下一节」，
-  定时任务落到 `automations` 表 → 引擎 B 认领 → 有锚点就续跑原会话 →
-  结果以 `MessageRole::Automation` 落库（前端有 `AutomationBubble` 卡片，
-  且**不进 LLM 上下文**，不会把「用户说过的话」伪造进对话）→
+  定时任务锚定到本会话 → 调度器认领 → 续跑原会话 → 结果以自动化卡片回投，
   护栏在注入 50 次 / 连续失败 3 次时自动回退独立会话。
 - 超星刷课的驱动可以从外部脚本迁到产品内建机制（本轮先继续用脚本，
-  因为引擎 A/B 的接线要改 `hermix-server`，与并行线在同一 crate）。
-- 前端契约不变（`AutomationTask` 形状），但「运行历史」的真值从 JSON 移到 run 表——
-  面板上那 6 条内置示例会从「永远不触发」变成「真的会跑」，**这本身是行为变化**，
-  种子示例的 schedule 需要复核（演示任务突然开始跑用户会措手不及）。
+  因为这轮改动还没验证完、且脚本已经在跑）。
+- 引擎 A 仍缺 run 表那套幂等/退避/`abandoned` 收割；它的去重是
+  「槽 + 60 秒」+ 这次的 `running_since` 单飞，够用但比引擎 B 弱。
+  **后续合并到引擎 B 时要把这套护栏一起带过去**，别只搬调度。
+- 引擎 B（SQLite 那套）在本篇之后仍是**无写入方**的空转引擎。
+  合并时它才是终态落点（护栏 / run 表 / 锚定都在那边）。
+- 内置示例的语义变了：从「演示自动化面板长什么样」变成「演示一个真的能跑的
+  公开信息任务」。用户可随手删；**它们默认停用**，启用也只是查公开信息。
 - 旧笔记的「不是空头支票」结论被本篇更正；实施时应同时归档那篇
   （或在其中标注端到端未通）。
