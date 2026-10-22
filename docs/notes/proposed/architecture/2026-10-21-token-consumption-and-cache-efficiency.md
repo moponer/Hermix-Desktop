@@ -89,6 +89,56 @@ Status: proposed — 2026-10-21 完成全量盘点 + provider 级对照实验；
 内容与新的相同就不重复追加（不是「任意一份」，否则换了用户消息、命中集合变了
 就不会注入新的）。
 
+## 事实 8（2026-10-22 补，最隐蔽的一个）：MCP 掉线 → 工具整批缺失 → 25% 的调用在「摸工具」
+
+P2 档的实测把「摸工具」这件事拆开了，结论比预想的重要得多：
+
+| | 次数 | 占比 |
+|---|---|---|
+| `list_tools` | 73 | 8% |
+| `tool_describe` | 49 | 5% |
+| `search_files` | 45 | 5% |
+| `terminal` | 27 | 3% |
+| `tool_search` | 42 | 5% |
+| **摸工具合计** | **236** | **25%** |
+| 真正干活的 `tool_call` → 查看器工具 | 644 | 70% |
+
+**根因不是模型笨、也不是 skill 写得不好** —— 是**那批工具压根不在注册表里**：
+
+```
+08:27:41 INFO [hermix_mcp::client] Connecting to MCP server: hermix-viewer
+08:27:41 INFO [hermix_server::state] MCP server connected
+08:33:25 INFO [hermix_server::state] MCP server connected
+10:20:43 WARN [hermix_server::state] MCP server connect failed at startup; skipping   ← 视图器进程中途死了
+10:30:52 WARN [hermix_server::state] MCP server connect failed at startup; skipping
+```
+
+MCP 客户端**只在 sidecar 启动时连一次**，连不上就 `skipping` —— 于是那 30 个
+`hermix-viewer__*` 永远不进注册表。佐证：
+
+- `/v1/tools` 从 110 个掉到 **80 个**（查看器工具归零）；
+- `tool_search` 搜 "webview" → `{"matches":[],"total_deferred":25}`；
+- agent 直接调 `hermix-viewer__webview_eval` → 报
+  `'hermix-viewer__webview_eval' not found`（这条来自桥接处理器，
+  `tool_search.rs:586`）。
+
+**而每次摸工具的调用都带着整个上下文** —— 5 次摸工具 ≈ 白烧 5 个完整请求。
+这是长跑任务最大的单项浪费，比系统提示里的冗余大一个数量级。
+
+### 修法
+
+1. **MCP 掉线自动重连**（`state.rs`）：连接改成后台循环，每 30s 重读配置、给
+   「启用但未连上」的 server 重连。覆盖「启动时 server 还没起」（桌面端先起
+   sidecar、再拉查看器）与「新加的 server 不用重启 sidecar」。
+   端到端验证：sidecar 先起、查看器后起 → 工具 0 → 拉起查看器 45s 后自动变回
+   30，**全程无需手动操作**（以前得去「连接器 → MCP」把服务器关一次再开一次）。
+2. **skill 纠正**：查看器工具是**常驻**的（这批只有 25 个延迟工具，而桥接阈值是
+   `>25`，桥接根本不激活）→ **直接点名调** `hermix-viewer__webview_eval`，
+   不要绕 `tool_call`（绕了会多一层，而且桥接在注册表缺它时直接报 not found）。
+   实测直接调返回 `{"result":"2"}` ✓。
+   并加一句「摸了也没用 → 先怀疑 MCP 没连上」，让 agent 报告真实原因而不是
+   继续找替代路径。
+
 ## Decision（按复核后的重心重排）
 
 **先做「有界历史窗口」（已实施），再做「让字节稳定」，最后才是 prompt 层瘦身。**
@@ -196,12 +246,39 @@ Status: proposed — 2026-10-21 完成全量盘点 + provider 级对照实验；
 | **M13 工具 schema 瘦身** | 未路由到的工具用 `tool_search` 的渐进披露桥（阈值 25 现在永远触发不了，因为 50-39=11 < 25）→ 调低阈值或改成「只发路由子集 + 一个检索入口」 | ~10,000 字符 |
 | **M14 记忆单点注入** | 三处记忆合并成一处（选 context 层那份，它有 epoch 缓存） | ~3,000 字符 + 少一次前缀变动 |
 
-### P2 档：减少调用次数（压墙钟）
+### P2 档：减少调用次数（压墙钟）—— 已在做
 
-| 措施 | 做法 |
-|---|---|
-| **M15 固定剧本** | 把「视频节 / 视频+测验 / 纯测验」三种章节类型的调用序列写进 `chaoxing-learning` skill，每章照剧本走（目标 7.4 → 5 次/章） |
-| **M16 批量化** | 一次 eval 完成「量坐标 + 点完全部题」，一次 eval 完成「读隐藏域 + 核对」，合并调用 |
+| 措施 | 做法 | 状态 |
+|---|---|---|
+| **M15 固定剧本** | 把「视频节 / 视频+测验 / 纯测验」三种章节类型的调用序列写进 `chaoxing-learning` skill，每章照剧本走 | ✅ 已实施（skill §0.5） |
+| **M16 批量化** | 一次 eval 完成「量坐标 + 点完全部题」，一次 eval 完成「读隐藏域 + 核对」 | ✅ 已写进剧本 |
+| **M18 工具名写全前缀 + 写明桥接调用形式** | 见下 | ✅ 已实施 |
+| **M19 并回 agent 实测发现** | agent 自己回写进运行时 skill 的 6 条发现（目录状态读法、work iframe 的 `_src`、确认框 4 个隐藏副本怎么挑可见的、参数名是 `expression` 不是 `code`、判断题 value 是 `true`/`false`、提交后等 2.5s 再读结果页）——它靠试错学到的，每轮仍要烧调用 | ✅ 已实施 |
+
+#### M18：实测一轮里有 5 次调用在「摸工具」
+
+统计最近 300 条助手消息的工具调用：
+
+| | 次数 | 占比 |
+|---|---|---|
+| `list_tools` | 73 | 8% |
+| `tool_describe` | 49 | 5% |
+| `search_files` | 45 | 5% |
+| `terminal` | 27 | 3% |
+| `tool_search` | 42 | 5% |
+| **摸工具合计** | **236** | **25%** |
+| 真正干活的（`tool_call` → 查看器工具） | 644 | 70% |
+
+**根因**：两个 skill 都假设 `hermix-viewer__webview_eval` 能**直接**调，但这些工具是
+**延迟加载**的（不在 `DEFAULT_RESIDENT_TOOLS` 里），必须走桥接工具：
+
+```
+tool_call(name="hermix-viewer__webview_eval", arguments={"expression": "..."})
+```
+
+模型照着 skill 点名调会被校验器拒 → 就去摸工具 → 每轮 5 次。
+**而每次调用的请求都带着整个上下文** —— 5 次摸工具 ≈ 白烧 5 个完整请求。
+这是长跑任务最大的单项浪费（比系统提示的冗余大一个数量级）。
 
 ## 四、可衡量目标指标
 
@@ -213,6 +290,8 @@ Status: proposed — 2026-10-21 完成全量盘点 + provider 级对照实验；
 | 每轮未命中占比（中位） | 10.5% | **≤2%** | 同上 |
 | 历史进模型的 token | 无界（累积 3,718 条消息 / 6.1M 字符） | **≤60,000** | `bounded history window applied to the LLM payload` 日志行 |
 | 每章调用次数 | 7.4 | **≤5** | `messages` 表 assistant 行数 / 轮数 |
+| **摸工具调用占比** | **25%**（236/920） | **≤2%** | 按工具名统计 `list_tools`/`tool_search`/`tool_describe`/`search_files`/`terminal` 占比 |
+| MCP 掉线后工具自动回归 | 不会（要手动重连） | **≤60s 自动恢复** | 杀掉查看器 → 拉起 → 轮询 `/v1/tools` 里 `hermix-viewer__*` 的数量 |
 | tools 数组跨重启稳定性 | 107/109 位置变化 | **0 变化** | `/v1/tools` 顺序哈希跨重启比对（`.git/vtest/probe-order.py` 可复用） |
 | 系统提示字符数 | 68,796 | ≤48,000（**P1 档，可选**） | `prefix_probe` 的 `system=` |
 | skill 正文注入量 | 16,008/请求 | ≤6,000 且按需（**P1 档，可选**） | 同上 |
