@@ -47,11 +47,16 @@ export function renderRoutes(page: NavPage, ctx: RouteContext): ReactNode {
     case "chat":
       return ctx.chatNode;
     case "twin":
-      // 阿黎吃宿主已有的会话表（避免再拉一次全量），会话通道未接通前
-      // 输入口降级为切回对话页 —— 见 TwinView 顶部注释。
+      // 阿黎吃宿主已有的会话表（避免再拉一次全量）；会话登记与切换走
+      // 工作台同款机制（upsertSessions + selectSessionOnly）。
       return (
         <Suspense fallback={<RouteLoading />}>
-          <TwinView sessions={ctx.sessions} onOpenChat={ctx.openChat} />
+          <TwinView
+            sessions={ctx.sessions}
+            onOpenChat={ctx.openChat}
+            upsertSessions={ctx.upsertSessions}
+            selectSessionOnly={ctx.selectSessionOnly}
+          />
         </Suspense>
       );
     case "automation":

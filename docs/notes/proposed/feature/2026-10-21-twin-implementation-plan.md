@@ -301,6 +301,28 @@ Status: proposed — 方案已定稿，阶段一（界面落地）已执行，�
 
 **验证结果**：`tsc --noEmit` exit 0；`check-design-guard` / `check-design-primitives --strict` exit 0；`impeccable detect`（TwinView）exit 0。本轮未触碰 Rust。
 
+## 执行记录（2026-10-22，N1 会话通道）
+
+**做了什么**
+
+| 交付 | 文件 | 说明 |
+|---|---|---|
+| `POST /api/twin/message` | 新增 `dashboard/twin.rs` + `mod.rs` 路由 | 输入口提交的文字 → 后台 `agent_service.send_message()` 跑一轮 → 回复写进专属会话。与 automation / workflow 同模式（铁律 DD） |
+| 并发闸 | `dashboard/twin.rs` | 同一时刻至多一轮。用 `Drop` guard 放闸而不是任务尾部手动 store —— `send_message` 若 panic，尾行不执行，闸就永远关上了 |
+| 前端发送与轮询 | `api/rest.ts` + `components/TwinView.tsx` | 提交 → 找到/创建标题为「助手阿黎」的会话 → `upsertSessions` 登记（工作台同款机制，不登记 ChatView 渲染不出来）→ `sendTwinMessage` → 轮询 `totalMessages`（3s × 至多 3 分钟）→ 回复摘要在在场位 + 「打开对话」按钮（登记 → 切激活会话 → 跳对话页，后续轮次直接在对话里聊） |
+
+**两个关键决策**
+
+1. **会话 id 由前端解析，不在后端固定**。`send_message` 会 UPSERT 会话行，固定 id 一旦被用户删掉就会静默复活成无标题孤儿 —— `decide_delivery_target` 的注释里有同一条教训。按标题找到或创建，被删了就重建一条。
+2. **回复不在阿黎页流式显示**。ChatView 是宿主单例、绑定激活会话；要在三栏板旁边内嵌对话，就得把信息台和 chatNode 塞进同一屏 —— 那是一个独立的布局决策，不该顺手做。第一版：摘要 + 一键打开。
+
+**验证结果**：`cargo check -p hermix-server --all-targets` exit 0；`tsc --noEmit` exit 0；`check-design-guard` / `check-design-primitives --strict` / `check-theme-tokens` / `impeccable detect` 全部 exit 0。
+
+**并行会话干扰实录（记录在此防误判）**
+
+- 中途 `cargo check -p hermix-server` 连续报错：先是指向 `crates/hermix-agent/src/run_loop/pre_turn.rs` 的两个 E0425（**另一条工作线正在编辑的文件**，我从未碰过 hermix-agent），后是 `dashboard/twin.rs` 的 E0308（这是我自己的：`.into_response()` 加在了元组内部而不是调用处）。前者等对方修好即消失，后者我修。
+- 上一批的教训再次应验：ripgrep 会跳过 gitignored 目录，核对构建产物不能用 `search_content`。
+
 ## Alternatives considered
 
 1. **复用 Tailwind 原子类写页面，不建 CSS 文件** — 否决。用户明确要求「独立样式，方便以后单独调整」；且三栏仪表盘的密度控制需要精确的间距与发丝线，原子类会把它写成一屏 className 噪音。

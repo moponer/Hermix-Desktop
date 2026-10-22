@@ -1398,6 +1398,22 @@ export const pinMemory = async (id: string, pinned: boolean): Promise<void> => {
 export const getDailyMemoryList = async (limit = 60): Promise<DailyMemoryDay[]> =>
   fetchJSON(`/api/memory/daily?limit=${limit}`);
 
+// ── 助手阿黎（Twin）────────────────────────────────────────────
+//
+// 会话 id 由前端解析（找到/创建标题为「助手阿黎」的会话）后传入；
+// 后台跑一轮 `agent_service.send_message()`，回复写进该会话。
+
+export const sendTwinMessage = async (
+  sessionId: string,
+  text: string,
+): Promise<boolean> => {
+  await fetchJSON("/api/twin/message", {
+    method: "POST",
+    body: JSON.stringify({ session_id: sessionId, text }),
+  });
+  return true;
+};
+
 // ── Persona API（角色提示词 / SOUL / 全局记忆文本）────────────
 
 export interface PersonalitySummary {

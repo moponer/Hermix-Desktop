@@ -27,6 +27,10 @@ interface TwinViewProps {
   sessions: Session[];
   /** 会话通道接通前的降级：把用户送去对话页。 */
   onOpenChat: () => void;
+  /** 把阿黎的专属会话登记进宿主表（工作台同款机制）——不登记 ChatView 渲染不出来。 */
+  upsertSessions: (list: Session[]) => void;
+  /** 只切激活会话、不动当前页面：点「打开对话」时用。 */
+  selectSessionOnly: (id: string) => void;
 }
 
 type Mode = "watch" | "dispatch" | "summary";
@@ -46,7 +50,19 @@ const STATUS_TEXT: Record<string, string> = {
 /** `watch` 工具建的任务名前缀（见 tools/watch.rs 的 default_name）。 */
 const WATCH_NAME_PREFIX = "守望：";
 
-export function TwinView({ sessions, onOpenChat }: TwinViewProps) {
+/** 阿黎专属会话的标题。提交时按标题找到或创建（服务端生成 id）。 */
+const ALI_SESSION_TITLE = "助手阿黎";
+
+type TwinPhase = "idle" | "sending" | "running" | "done" | "error";
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+export function TwinView({
+  sessions,
+  onOpenChat,
+  upsertSessions,
+  selectSessionOnly,
+}: TwinViewProps) {
   const [tasks, setTasks] = useState<AutomationTask[]>([]);
   const [activeRuns, setActiveRuns] = useState(0);
   /** 最近的工作日志（daily_memory）—— 三栏右侧的真实数据源之一。 */
@@ -58,6 +74,12 @@ export function TwinView({ sessions, onOpenChat }: TwinViewProps) {
   const [draft, setDraft] = useState("");
   /** 上次成功核对的时刻（ms）。给在场位显示「多久没看过了」。 */
   const [checkedAt, setCheckedAt] = useState<number | null>(null);
+
+  // ── 会话通道状态 ──
+  const [twinPhase, setTwinPhase] = useState<TwinPhase>("idle");
+  const [twinReply, setTwinReply] = useState<string | null>(null);
+  const [twinError, setTwinError] = useState<string | null>(null);
+  const [aliSession, setAliSession] = useState<Session | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -108,23 +130,38 @@ export function TwinView({ sessions, onOpenChat }: TwinViewProps) {
       : `静默观察 · ${enabledTasks.length} 个任务待触发`;
 
   // 角色姿态与"她在干什么"是同一件事的两个表达，必须同源。
-  const aliState: AliState = error
+  // 角色姿态：会话通道的状态优先（她在处理时是"思考"，出错了是警觉）。
+  const aliState: AliState = twinPhase === "error"
     ? "alert"
-    : loading
+    : twinPhase === "sending" || twinPhase === "running"
       ? "thinking"
-      : activeRuns > 0
-        ? "running"
-        : "idle";
+      : twinPhase === "done"
+        ? "done"
+        : error
+          ? "alert"
+          : loading
+            ? "thinking"
+            : activeRuns > 0
+              ? "running"
+              : "idle";
 
-  const presenceLine = error
-    ? "核对任务状态时出错，右侧「正在执行」里是原始报错"
-    : loading
-      ? "正在核对任务状态"
-      : activeRuns > 0
-        ? `盯着 ${activeRuns} 个在跑的任务，异常才出声`
-        : enabledTasks.length > 0
-          ? `${enabledTasks.length} 个任务待触发，暂时没有要打扰你的事`
-          : "还没有启用的任务，我这儿暂时没什么可盯的";
+  const presenceLine = twinPhase === "sending"
+    ? "正在把话带给她…"
+    : twinPhase === "running"
+      ? "她在处理，回复写进「助手阿黎」会话"
+      : twinPhase === "done" && twinReply
+        ? `她：${twinReply}`
+        : twinPhase === "error"
+          ? (twinError ?? "出了点问题")
+          : error
+            ? "核对任务状态时出错，右侧「正在执行」里是原始报错"
+            : loading
+              ? "正在核对任务状态"
+              : activeRuns > 0
+                ? `盯着 ${activeRuns} 个在跑的任务，异常才出声`
+                : enabledTasks.length > 0
+                  ? `${enabledTasks.length} 个任务待触发，暂时没有要打扰你的事`
+                  : "还没有启用的任务，我这儿暂时没什么可盯的";
 
   const checkedText =
     checkedAt == null
@@ -155,13 +192,66 @@ export function TwinView({ sessions, onOpenChat }: TwinViewProps) {
     [refresh],
   );
 
-  const submit = (e: React.FormEvent) => {
+  const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    // 阿黎的会话通道尚未接通：先降级到对话页，不假装发出去。
-    if (draft.trim().length > 0) {
-      setDraft("");
-      onOpenChat();
+    const text = draft.trim();
+    if (!text || twinPhase === "sending" || twinPhase === "running") return;
+    setDraft("");
+    setTwinError(null);
+    setTwinReply(null);
+    setTwinPhase("sending");
+    try {
+      // 找到或创建阿黎的专属会话（标题匹配；服务端生成 id）。
+      const all = await api.getSessions();
+      let ali = all.find((s) => s.title === ALI_SESSION_TITLE);
+      if (!ali) ali = await api.createSession(ALI_SESSION_TITLE);
+      setAliSession(ali);
+      upsertSessions([ali]);
+
+      await api.sendTwinMessage(ali.id, text);
+      setTwinPhase("running");
+      void pollReply(ali.id);
+    } catch (err) {
+      setTwinError(err instanceof Error ? err.message : String(err));
+      setTwinPhase("error");
     }
+  };
+
+  /** 轮询等她的回复落库。3s 一次、至多 3 分钟 —— 不做 WebSocket 订阅，
+   *  因为这里唯一要等的就是「那一条 assistant 消息」。 */
+  const pollReply = useCallback(async (sessionId: string) => {
+    let baseTotal = 0;
+    try {
+      const base = await api.getSessionMessages(sessionId, { limit: 5 });
+      baseTotal = base.totalMessages ?? base.messages.length;
+    } catch {
+      // 读不到基线就只看「最后一条是不是 assistant」。
+    }
+    for (let i = 0; i < 60; i++) {
+      await sleep(3_000);
+      try {
+        const res = await api.getSessionMessages(sessionId, { limit: 5 });
+        const total = res.totalMessages ?? res.messages.length;
+        const last = res.messages[res.messages.length - 1];
+        if ((total > baseTotal || baseTotal === 0) && last?.role === "assistant") {
+          setTwinReply(firstLine(last.content) || "（她回了，但内容是空的）");
+          setTwinPhase("done");
+          return;
+        }
+      } catch {
+        // 网络抖动：下一轮再试。
+      }
+    }
+    setTwinError("等了很久还没有回复。去对话页看看——可能后台出问题了。");
+    setTwinPhase("error");
+  }, []);
+
+  /** 打开阿黎的会话（登记 → 切激活 → 跳对话页），后续轮次直接在对话里聊。 */
+  const openAliChat = () => {
+    if (!aliSession) return;
+    upsertSessions([aliSession]);
+    selectSessionOnly(aliSession.id);
+    onOpenChat();
   };
 
   return (
@@ -224,6 +314,11 @@ export function TwinView({ sessions, onOpenChat }: TwinViewProps) {
           <span className="twin-presence__name">阿黎</span>
           <span className="twin-presence__line">{presenceLine}</span>
         </div>
+        {aliSession ? (
+          <button type="button" className="twin-btn" onClick={openAliChat}>
+            打开对话
+          </button>
+        ) : null}
         <span className="twin-presence__checked">{checkedText}</span>
       </div>
 
@@ -452,10 +547,13 @@ export function TwinView({ sessions, onOpenChat }: TwinViewProps) {
 
       <form className="twin-dock" onSubmit={submit}>
         <div className="twin-dock__hint">
-          <span>阿黎的对话通道待接通</span>
-          <span>·</span>
+          <span>回车发送</span>
+          <kbd>Shift</kbd>
+          <span>+</span>
           <kbd>Enter</kbd>
-          <span>先切到对话页</span>
+          <span>换行</span>
+          <span>·</span>
+          <span>回复写进「助手阿黎」会话，随时可打开继续聊</span>
         </div>
         <div className="twin-dock__row">
           <span className="twin-dock__caret" aria-hidden>

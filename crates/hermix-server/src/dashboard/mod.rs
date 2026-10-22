@@ -11,6 +11,7 @@ pub mod automation;
 pub mod config;
 pub mod env;
 pub mod vault_api;
+pub mod twin;
 pub mod workflows;
 pub mod mcp;
 pub mod mcp_catalog;
@@ -182,6 +183,9 @@ pub fn router() -> Router<HttpServerState> {
             "/api/workflows/{id}",
             delete(workflows::remove_workflow).post(workflows::run_workflow),
         )
+        // 助手阿黎的会话通道：输入口提交的文字后台跑一轮，回复落在
+        // 一条专属会话里。并发闸 = 同一时刻至多一轮。
+        .route("/api/twin/message", post(twin::send_twin_message))
         // Plugin inspection: which official-manifest plugins are wired
         // into the in-process ToolRegistry. Drives the "已挂接 N 工具"
         // badges in the desktop PluginsView.
