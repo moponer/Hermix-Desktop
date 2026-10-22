@@ -189,12 +189,36 @@ Status: proposed — 2026-10-21 完成全量盘点 + provider 级对照实验；
 与「相对同会话上次变了哪几段」：
 
 ```text
-prefix_probe: #12 session=a04cab07 system=68796chars tools=31381chars
-              messages=7352chars | 变了: messages
+prefix_probe: #8 session=a04cab07 system=67900chars tools=33977chars
+              messages=236289chars | 变了: messages
 ```
 
 「变了」那一列就是**缓存失效的起点** —— 从该段往后，之前建立的缓存全部失效。
 有了它，每条优化都能**当场验证**，而不是靠推断。
+
+### 实测结果（2026-10-22 07:51，一轮真跑）
+
+探针输出（`~/.hermix/logs/agent.log`）：
+
+```text
+prefix_probe: #1  system=67900chars tools=33977chars messages=236289chars | 变了: messages
+prefix_probe: #19 system=67900chars tools=33977chars messages=310287chars | 变了: messages
+```
+
+| 指标 | 修复前 | 修复后 | 变化 |
+|---|---|---|---|
+| **单次请求真实 token** | ~1M | **~101K** | **~10x ↓** |
+| 每轮 prompt（provider 口径） | 13,078,433 | **2,728,089** | 4.8x ↓ |
+| 每调用新鲜 token | ~120K | **~16.5K** | 7.3x ↓ |
+| **缓存命中率** | 88.0% | **83.6%** | **↓ 4.4 点** |
+
+单次请求 101K = 窗口 60K + 系统提示 30K + 工具 10K —— **与设计完全吻合**。
+
+**命中率为什么反而降了**（这是诚实要说清楚的）：请求小了 10 倍，「每轮新追加的消息」
+这个**变量部分**在总请求里的占比就变大 —— 绝对消耗降了 10 倍，比率却被稀释。
+这是「变小」与「变稳」两条路的此消彼长：**要回到 98%，得靠 P0 的字节稳定那一档**
+（reasoning 剥离单调化 / 工具顺序确定化 / 工具集合稳定化 / 时间戳冻结），
+那些改动在请求变小之后**相对更重要**。
 
 ## Alternatives considered
 
